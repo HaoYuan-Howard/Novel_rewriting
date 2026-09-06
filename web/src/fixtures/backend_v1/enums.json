@@ -835,6 +835,7 @@
   "--retain-pretrim-batch": "按显式 manifest 一次销账多章 trim；整批预检、按章幂等写hash-bound resolution，0 次 LLM 调用",
   "--emit-edit-template": "向 stdout 输出带当前 schema version 的人工编辑骨架；适用于 Stage2 GlobalEdit、Blueprint 与 Stage7，不写盘",
   "--emit-edit-correction-workpack": "向 stdout 输出被 HARD 拒绝且仍绑定当前 INVALID 的 reviewed Stage2 GlobalEdit、精确失败事实与字节身份；只用于中断后的最后一次 Commander 纠正，不写盘",
+  "--recover-repair-aggregate": "按 source run 与 repair aggregate 的 raw/self 双 SHA 零调用补完 Stage4A repair/replan prepared 提交尾窗；不解析旧 review token、不续旧 provider session",
   "--validate-edit": "按所属节点 apply-edit 的同一编译/判定链预检人工编辑，不写盘",
   "--emit-review-template": "向 stdout 输出绑定当前 stage2 全局复核项 hash/evidence 的安全 UNVER 决策骨架，不写盘",
   "--emit-review-workpack": "向 stdout 输出 Stage2 Global 逐项证据包，或 Blueprint 异常优先全章包；只辅助人工核验，不自动做决定",
@@ -872,6 +873,9 @@
   "--apply-binding": "完整人工 Stage4 EvidenceBinding 路径（必填；相对路径相对书目录，也接受书目录内的绝对路径）",
   "--emit-prepared-recovery-workpack": "要审计的旧 Stage5 source run_id；输出绑定当前 target run/code 的只读工作包",
   "--recover-prepared": "要零调用收口的旧 Stage5 source run_id；范围固定为其中全部 unresolved prepared",
+  "--recover-repair-aggregate": "要零调用收口的旧 Stage4A repair/replan source run_id；只能消费唯一 prepared repair aggregate",
+  "--source-journal-sha256": "Stage4A repair/replan prepared journal 的完整原始字节 SHA-256；与 source run 共同锁定本次恢复输入",
+  "--source-commit-sha256": "Stage4A repair/replan prepared journal 内的 self/commit SHA-256；不得拿恢复后 journal 的新 hash 代替",
   "--validate-edit": "要预检的 Stage2 关系集、Stage4A 完整章或 Stage7 人工稿路径（与所属节点 --apply-edit 同路径规则，不写盘）",
   "--retain-pretrim-batch": "批量销账 manifest 路径（必填；相对路径相对书目录，也接受书目录内的绝对路径）；actor/reason 在 manifest 内",
   "--apply-edit-plan": "审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）",
@@ -902,6 +906,7 @@
   "--emit-review-workpack": "",
   "--emit-prepared-recovery-workpack": "",
   "--preview-edit": "",
+  "--recover-repair-aggregate": "必要时把 sealed stage4/blind_candidate.json 从 journal 基线补到目标；幂等补 source-run adoption 与 recovery-run→source-run 审计，最后只把 source repair/replan aggregate journal 从 prepared 提升为 committed",
   "--adopt-residual": "重写 stage7/name_map.json，清旧审批并退休现有成书",
   "--recheck": "按当前判据刷新已有成稿的派生指标，并对账 trim 状态",
   "--revalidate": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
@@ -1155,6 +1160,9 @@
     "--adopt-rejected",
     "--validate-edit",
     "--apply-edit",
+    "--recover-repair-aggregate",
+    "--source-journal-sha256",
+    "--source-commit-sha256",
     "--actor",
     "--reason",
     "--response-repair"
@@ -1933,6 +1941,28 @@
    "writes_disk": true,
    "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**；绝对路径由节点校验，Stage5 额外接受服务上传的 _service/edits 路径）",
    "required_inputs": []
+  },
+  {
+   "kind": "stage4.design",
+   "label": "stage4 盲场景设计 --recover-repair-aggregate",
+   "extra": [
+    "--recover-repair-aggregate"
+   ],
+   "paid": false,
+   "free_flag": "--recover-repair-aggregate",
+   "writes": "必要时把 sealed stage4/blind_candidate.json 从 journal 基线补到目标；幂等补 source-run adoption 与 recovery-run→source-run 审计，最后只把 source repair/replan aggregate journal 从 prepared 提升为 committed",
+   "writes_disk": true,
+   "needs_value": "要零调用收口的旧 Stage4A repair/replan source run_id；只能消费唯一 prepared repair aggregate",
+   "required_inputs": [
+    {
+     "flag": "--source-journal-sha256",
+     "description": "Stage4A repair/replan prepared journal 的完整原始字节 SHA-256；与 source run 共同锁定本次恢复输入"
+    },
+    {
+     "flag": "--source-commit-sha256",
+     "description": "Stage4A repair/replan prepared journal 内的 self/commit SHA-256；不得拿恢复后 journal 的新 hash 代替"
+    }
+   ]
   },
   {
    "kind": "stage4.design",

@@ -523,6 +523,50 @@ def _candidate_at(book: Path, ctx: RunContext) -> Any:
     return ArtifactStore(ctx).read(BlindCandidate, STAGE4_BLIND_CANDIDATE)
 
 
+def test_strategy_replan_refuses_source_equal_target_before_any_wire(
+        tmp_path: Path, monkeypatch) -> None:
+    """旧 producer run 不能承接自己的 replan；拒绝发生在 strategy wire 之前。"""
+    book = _book(tmp_path)
+    blueprints = _seed_current_stage2(book)
+    parent_ctx, _parent = _land_design(
+        book, blueprints.model_dump(by_alias=True, mode='json'))
+    candidate_path = book / STAGE4_BLIND_CANDIDATE
+    before = candidate_path.read_bytes()
+    scope = DesignRepairScope.model_validate({
+        'candidate_sha256': hashlib.sha256(before).hexdigest(),
+        'aggregate_subject_sha256': 'a' * 64,
+        'decision_sha256': 'b' * 64,
+        'repair_capability': {
+            'repairable': True, 'reason_code': 'ready',
+            'chapters': [{
+                'output_ordinal': 1, 'committed_rounds': 0,
+                'request_repair_available': True,
+            }],
+        },
+        'strategy_replan': True,
+        'target_chapters': [],
+        'chapters': [],
+    })
+    same_run = _ctx(
+        book, 'stage4.design', run_id=parent_ctx.run_id,
+        code=parent_ctx.code)
+    wire_calls: list[object] = []
+
+    def must_not_wire(*args, **kwargs):
+        wire_calls.append((args, kwargs))
+        raise AssertionError('source==target replan 不得进入 strategy wire')
+
+    monkeypatch.setattr(plan, '_request_design_strategy', must_not_wire)
+
+    with pytest.raises(
+            ProvenanceRefused,
+            match='strategy replan 必须创建新 run，不得原 run 续写'):
+        plan.run_design(same_run, SimpleNamespace(), repair_scope=scope)
+
+    assert wire_calls == []
+    assert candidate_path.read_bytes() == before
+
+
 def test_targeted_design_repair_reruns_only_target_and_reuses_parent_checkpoints(
         tmp_path: Path,
 ) -> None:

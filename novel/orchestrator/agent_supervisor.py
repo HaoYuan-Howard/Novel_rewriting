@@ -4,8 +4,10 @@
 
 Supervisor 不理解小说节点，也不直接调用任何模型 SDK。真正的一轮 Commander
 由调用方注入；本类只决定普通 turn 何时保持同一 provider session 精确续会、何时因身份
-漂移滚动 execution epoch，以及 pause / resume / stop 应落在哪个安全边界。Stage2
-reviewer 的 fresh-session 策略由注入回调自行实现。
+漂移滚动 execution epoch，以及 pause / resume / stop 应落在哪个安全边界。少数已登记
+的 deterministic recovery 本身就是新 producer 边界：它们在执行前同样关闭旧
+epoch，但不启动 Commander。Stage2 reviewer 的 fresh-session 策略由注入回调自行
+实现。
 
 pause 不是“杀进程后猜它停了”：请求只关闭当前 Commander turn 的 admission，
 阻止它再 claim 新节点；已经取得 claim 的节点自然完成、release 并 drain，最后才写
@@ -24,6 +26,18 @@ from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentRunEvent, ExecutionEpoch,
 )
 from novel.orchestrator.jobs import JobConflict
+
+
+class PrelaunchIdentityDrift(RuntimeError):
+    """callback 在 launch ticket commit 前证明 execution identity 已漂移。"""
+
+
+class _LaunchDeferredByControl(JobConflict):
+    """pause/stop 先于 launch ticket 取得线性化点。
+
+    它是 ``RunSupervisor.run`` 内部捕获的控制信号，既不属于
+    Supervisor 崩溃，也不越过 HTTP 边界；公开控制路由只回 202。
+    """
 
 
 @dataclass(frozen=True)
@@ -151,6 +165,7 @@ class RunSupervisor:
         run_ready_action: RunReadyAction | None = None,
         run_blocked_action: RunBlockedAction | None = None,
         deterministic_blockers: frozenset[str] = frozenset(),
+        fresh_epoch_blockers: frozenset[str] = frozenset(),
         run_reviewer: RunReviewer | None = None,
         finalize_run: FinalizeRun | None = None,
     ) -> None:
@@ -176,10 +191,14 @@ class RunSupervisor:
         if (run_blocked_action is None) != (not deterministic_blockers):
             raise ValueError(
                 'run_blocked_action 与 deterministic_blockers 必须成对提供')
+        if not fresh_epoch_blockers.issubset(deterministic_blockers):
+            raise ValueError(
+                'fresh_epoch_blockers 必须是 deterministic_blockers 的子集')
         self._read_next = read_operator_next
         self._run_ready = run_ready_action
         self._run_blocked = run_blocked_action
         self._deterministic_blockers = deterministic_blockers
+        self._fresh_epoch_blockers = fresh_epoch_blockers
         self._run_reviewer = run_reviewer
         self._finalize = finalize_run
         self._condition = threading.Condition()
@@ -275,9 +294,11 @@ class RunSupervisor:
         """只在无控制请求的窗口发放一枚单次 launch ticket。"""
         with self._condition:
             if self._stop_requested:
-                raise JobConflict(f'run_id={self.run_id!r} 已请求 stop')
+                raise _LaunchDeferredByControl(
+                    f'run_id={self.run_id!r} 已请求 stop')
             if self._pause_requested:
-                raise JobConflict(f'run_id={self.run_id!r} 已请求 pause')
+                raise _LaunchDeferredByControl(
+                    f'run_id={self.run_id!r} 已请求 pause')
             if self._launching:
                 raise RuntimeError('Supervisor 同时存在两枚 launch ticket')
             self._launching = True
@@ -477,6 +498,10 @@ class RunSupervisor:
         active_epoch: ExecutionEpoch | None = None
         active_epoch_last: CommanderTurnResult | None = None
         active_epoch_closed = True
+        # 同一 typed action 在一个 parent 内只建一次 producer 边界。
+        # 要先记后关：若 close/open 中途崩溃，本 parent 不会在内存中
+        # 热循环；新 outer parent 有自己的空集合，会再建一次新边界。
+        freshened_actions: set[tuple[str, str]] = set()
         if self._initial_epoch is not None:
             # initial epoch 已由 parent 在 worker 启动前 durable append；stop 若
             # 恰在首循环前受理，也必须由 finally 关闭，不能留下孤儿 opened。
@@ -652,9 +677,90 @@ class RunSupervisor:
                         if (current.action.waiting_on
                                 in self._deterministic_blockers):
                             assert self._run_blocked is not None
-                            recovered = self._launch(
-                                lambda ticket: self._run_blocked(
-                                    epoch, current, ticket))
+                            action_identity = (
+                                current.action.waiting_on,
+                                current.action.action_sha256,
+                            )
+                            if (
+                                current.action.waiting_on
+                                in self._fresh_epoch_blockers
+                                and action_identity not in freshened_actions
+                            ):
+                                # typed Stage4 repair/replan 不是原 producer 的
+                                # same-run resume。边界必须在 permit/Popen 之前，
+                                # 并由下一 epoch 重读 next；不把旧快照直接
+                                # 搬过去执行。
+                                freshened_actions.add(action_identity)
+                                boundary_turn = epoch_last or CommanderTurnResult(
+                                    exit_code=0,
+                                    provider_session_id=provider_session_id,
+                                    continue_ready=True,
+                                    outcome=AgentDeliveryOutcome(
+                                        state='unknown',
+                                        checked_at=int(time.time()),
+                                        reason=(
+                                            'typed recovery 已进入新 producer '
+                                            'execution epoch 边界'),
+                                    ),
+                                )
+                                close_epoch(epoch, boundary_turn)
+                                provider_session_id = None
+                                reason = 'continue'
+                                break
+                            try:
+                                recovered = self._launch(
+                                    lambda ticket: self._run_blocked(
+                                        epoch, current, ticket))
+                            except _LaunchDeferredByControl:
+                                # next 已返回、ticket 尚未发放的窄窗里，控制请求
+                                # 赢得线性化点是正常 barrier，不是 70。pause 后
+                                # 必须重读 next/CAS，不能执行暂停前的旧快照。
+                                if self._pause_barrier(
+                                        note=(
+                                            '用户请求 pause；当前 execution '
+                                            '尚未启动动作')):
+                                    stopped_turn = epoch_last or CommanderTurnResult(
+                                        exit_code=2,
+                                        provider_session_id=provider_session_id,
+                                        continue_ready=False,
+                                        outcome=AgentDeliveryOutcome(
+                                            state='stopped',
+                                            checked_at=int(time.time()),
+                                            reason=(
+                                                '操作员在动作启动前请求 stop；'
+                                                '未发放 launch ticket'),
+                                        ),
+                                    )
+                                    last = active_epoch_last = stopped_turn
+                                    close_epoch(epoch, stopped_turn)
+                                    return SupervisorResult(
+                                        turn=stopped_turn, stopped=True)
+                                # resume 后也从循环顶重新核 identity 并重读 next；
+                                # 若此时已经漂移，顶部会用明确的 0/unknown 边界
+                                # 关闭，而不是把无 action 的 epoch 误记成 70。
+                                continue
+                            except PrelaunchIdentityDrift:
+                                # 只接受 callback 显式证明的 pre-Popen 信号；
+                                # 已 commit 后的任意异常仍由外层按 70 处理，不能
+                                # 借一次同时发生的 code drift 洗白真实执行故障。
+                                if self._identity_current(epoch):
+                                    raise
+                                identity_turn = epoch_last or CommanderTurnResult(
+                                    exit_code=0,
+                                    provider_session_id=provider_session_id,
+                                    continue_ready=True,
+                                    outcome=AgentDeliveryOutcome(
+                                        state='unknown',
+                                        checked_at=int(time.time()),
+                                        reason=(
+                                            'deterministic permit 形成前 '
+                                            'execution identity 已变化'),
+                                    ),
+                                )
+                                close_epoch(epoch, identity_turn)
+                                provider_session_id = None
+                                reason = 'code_change'
+                                break
                             assert isinstance(recovered, SupervisorActionResult)
                             turn = action_turn(recovered)
                             last = epoch_last = active_epoch_last = turn
@@ -730,6 +836,7 @@ class RunSupervisor:
 
 
 __all__ = [
-    'CommanderTurnResult', 'LaunchTicket', 'RunSupervisor',
+    'CommanderTurnResult', 'LaunchTicket', 'PrelaunchIdentityDrift',
+    'RunSupervisor',
     'SupervisorActionResult', 'SupervisorResult',
 ]

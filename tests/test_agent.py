@@ -1512,6 +1512,185 @@ def test_unregistered_deterministic_blocker_keeps_epoch_and_parent_end_in_sync(
     assert '没有登记' in ended.outcome.reason
 
 
+@pytest.mark.parametrize('flags', [
+    ['--review-token', 's4rr1_' + '1' * 64],
+    ['--replan', '--review-token', 's4rr1_' + '2' * 64],
+], ids=['targeted-repair', 'strategy-replan'])
+def test_stage4_design_action_child_uses_fresh_epoch_as_producer_run(
+        base, corpus, monkeypatch, flags):
+    """生产 Supervisor 主路先换 epoch、重读/CAS，再把新 session_run_id 交给子进程。"""
+    marker = Path(base) / 'stage4-producer-run.txt'
+    reads: list[str] = []
+    permits: list[tuple[str, tuple[str, ...]]] = []
+    runner_epochs: list[ExecutionEpoch] = []
+    live = {'recovered': False}
+    action = SimpleNamespace(
+        node='stage4.design', flags=flags,
+        waiting_on=agent.queue.WAITING_ON_STAGE4_DESIGN_ACTION,
+        action_sha256='a' * 64)
+
+    def next_action(_base, _sid, *, code):
+        assert code == 'test-code-version'
+        reads.append('after' if live['recovered'] else 'before')
+        if live['recovered']:
+            return SimpleNamespace(
+                state='blocked', code_version=code,
+                surface_seal='d' * 64, execution_token=None,
+                action=SimpleNamespace(
+                    waiting_on='manual-after-stage4-action',
+                    action_sha256='e' * 64))
+        return SimpleNamespace(
+            state='blocked', code_version=code,
+            surface_seal='c' * 64, execution_token=None, action=action)
+
+    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
+
+    def permit_from_next(current, node, actual_flags):
+        # 第一次只发现旧 epoch 的 action；换代后必须重读，才允许铸权。
+        assert reads == ['before', 'before']
+        assert current.action is action
+        assert node == 'stage4.design'
+        assert actual_flags == flags
+        permits.append((node, tuple(actual_flags)))
+        return SimpleNamespace(node=node, flags=list(actual_flags))
+
+    monkeypatch.setattr(
+        agent.execution_permit, 'permit_from_next', permit_from_next)
+
+    def run_step_argv(_base, _sid, epoch, permit, *, stem):
+        assert stem == 'recovery-stage4.design'
+        assert permit.node == 'stage4.design'
+        runner_epochs.append(epoch)
+        live['recovered'] = True
+        script = (
+            "from pathlib import Path; "
+            "from novel import prov; "
+            "prov.code_version=lambda: 'test-code-version'; "
+            "from novel import commander_context; "
+            f"ctx=commander_context.load_from_environment({base!r}, '42'); "
+            "assert ctx is not None; "
+            f"Path({str(marker)!r}).write_text(ctx.producer_run_id, "
+            "encoding='utf-8')"
+        )
+        return [agent.sys.executable, '-c', script]
+
+    monkeypatch.setattr(agent, '_run_step_argv', run_step_argv)
+    monkeypatch.setattr(
+        agent, '_delivery_pause_note', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        agent.reviewer_tasks, 'build_task', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        agent, '_default_spawn',
+        lambda *_args, **_kwargs: pytest.fail('deterministic action 不得启动 Commander'))
+    stopped = AgentDeliveryOutcome(
+        state='stopped', reason='Stage4 recovery 主路测试停点', checked_at=1)
+    monkeypatch.setattr(
+        agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    events = [row for row in agent.read_events(base) if row.run_id == rec.run_id]
+    opened = [row.epoch for row in events if row.kind == 'epoch_opened']
+    assert len(opened) == 2 and all(epoch is not None for epoch in opened)
+    initial, fresh = opened
+    assert initial.session_run_id != fresh.session_run_id
+    assert fresh.reason == 'continue'
+    assert runner_epochs == [fresh]
+    assert marker.read_text(encoding='utf-8') == fresh.session_run_id
+    assert reads == ['before', 'before', 'after']
+    assert permits == [('stage4.design', tuple(flags))]
+    assert agent_session_audit.read_events(base) == []
+
+
+def test_stage4_permit_code_drift_rolls_and_freshens_new_exact_action(
+        base, corpus, monkeypatch):
+    """permit 的 pre-Popen CAS 漂移滚 code_change；H1/H2 各自只建一次 fresh 边界。"""
+    code = {'value': 'stage4-code-1'}
+    live = {'recovered': False}
+    h1, h2 = '1' * 64, '2' * 64
+    reads: list[tuple[str, str]] = []
+    permit_attempts: list[str] = []
+    runner_epochs: list[ExecutionEpoch] = []
+    monkeypatch.setattr(agent.prov, 'code_version', lambda: code['value'])
+
+    def next_action(_base, _sid, *, code: str):
+        if live['recovered']:
+            reads.append((code, 'terminal'))
+            return SimpleNamespace(
+                state='blocked', code_version=code,
+                surface_seal='d' * 64, execution_token=None,
+                action=SimpleNamespace(
+                    waiting_on='manual-after-stage4-drift',
+                    action_sha256='e' * 64))
+        action_sha = h1 if code == 'stage4-code-1' else h2
+        reads.append((code, action_sha))
+        return SimpleNamespace(
+            state='blocked', code_version=code,
+            surface_seal='c' * 64, execution_token=None,
+            action=SimpleNamespace(
+                node='stage4.design',
+                flags=['--review-token', 's4rr1_' + '3' * 64],
+                waiting_on=agent.queue.WAITING_ON_STAGE4_DESIGN_ACTION,
+                action_sha256=action_sha))
+
+    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
+
+    def permit_from_next(current, node, flags):
+        del node
+        permit_attempts.append(current.action.action_sha256)
+        if current.action.action_sha256 == h1:
+            code['value'] = 'stage4-code-2'
+            raise RuntimeError('模拟 permit CAS 期间代码漂移')
+        return SimpleNamespace(node='stage4.design', flags=list(flags))
+
+    monkeypatch.setattr(
+        agent.execution_permit, 'permit_from_next', permit_from_next)
+
+    def run_step_argv(_base, _sid, epoch, _permit, *, stem):
+        assert stem == 'recovery-stage4.design'
+        runner_epochs.append(epoch)
+        live['recovered'] = True
+        return [agent.sys.executable, '-c', 'raise SystemExit(0)']
+
+    monkeypatch.setattr(agent, '_run_step_argv', run_step_argv)
+    monkeypatch.setattr(
+        agent, '_delivery_pause_note', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        agent.reviewer_tasks, 'build_task', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        agent, '_default_spawn',
+        lambda *_args, **_kwargs: pytest.fail('permit 漂移恢复不得启动 Commander'))
+    monkeypatch.setattr(
+        agent, '_assess_delivery',
+        lambda *_args, **_kwargs: AgentDeliveryOutcome(
+            state='stopped', reason='Stage4 drift 测试停点', checked_at=1))
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+
+    events = [row for row in agent.read_events(base) if row.run_id == rec.run_id]
+    epochs = [row.epoch for row in events if row.kind == 'epoch_opened']
+    assert [epoch.reason for epoch in epochs] == [
+        'initial', 'continue', 'code_change', 'continue']
+    assert len({epoch.session_run_id for epoch in epochs}) == 4
+    assert permit_attempts == [h1, h2]
+    assert reads == [
+        ('stage4-code-1', h1),
+        ('stage4-code-1', h1),
+        ('stage4-code-2', h2),
+        ('stage4-code-2', h2),
+        ('stage4-code-2', 'terminal'),
+    ]
+    assert len(runner_epochs) == 1
+    assert runner_epochs[0] == epochs[-1]
+    assert agent_session_audit.read_events(base) == []
+
+
 def test_non_stage2_invalid_reviewer_request_and_exit2_resume_same_commander_session(
         base, corpus, monkeypatch):
     """非 Stage2 reviewer 仍可紧凑纠错；两轮硬预算只属于 global。"""

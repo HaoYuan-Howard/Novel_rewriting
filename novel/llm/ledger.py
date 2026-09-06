@@ -1624,27 +1624,45 @@ class CostLedger:
                     == {key: value for key, value in stamped.items() if key != 'at'})
 
         with self._lock, _AUDIT_IDEMPOTENT_APPEND_LOCK:
-            for event in self.audit_events:
-                if event.get(identity_key) != identity:
-                    continue
-                if require_equal and not same_event(event):
-                    raise ProvenanceRefused(
-                        f'{identity_key}={identity} 已绑定另一条审计事实')
-                return
             if self.path is None:
+                for event in self.audit_events:
+                    if event.get(identity_key) != identity:
+                        continue
+                    if require_equal and not same_event(event):
+                        raise ProvenanceRefused(
+                            f'{identity_key}={identity} 已绑定另一条审计事实')
+                    return
                 self.audit_events.append(stamped)
                 return
 
             target = self.path.with_name(AUDIT_REL[-1])
-            with process_append_lock(target):
-                if target.is_file():
-                    lines = target.read_text(encoding='utf-8').splitlines()
-                    for index, line in enumerate(lines):
-                        if not line.strip():
+            try:
+                with process_append_lock(target):
+                    raw = target.read_bytes() if target.is_file() else b''
+                    # LF 是 append-only JSONL 的提交标记。无论末尾恰好是
+                    # 可解析 JSON，还是 kill 留下的 partial，都不能在其后
+                    # 补换行或续写；必须由更高层先裁决这个未提交尾。
+                    if raw and not raw.endswith(b'\n'):
+                        raise ProvenanceRefused(
+                            'LLM audit 存在未闭合末行，禁止补齐或续写')
+
+                    # path-backed ledger 的内存镜像不是真相源：即使它已见
+                    # 这个 identity，也要先在同一进程锁下读完盘上尾。
+                    # 尾部完整后仍保留原有内存幂等语义。
+                    for event in self.audit_events:
+                        if event.get(identity_key) != identity:
+                            continue
+                        if require_equal and not same_event(event):
+                            raise ProvenanceRefused(
+                                f'{identity_key}={identity} 已绑定另一条审计事实')
+                        return
+
+                    for index, encoded in enumerate(raw.split(b'\n')):
+                        if not encoded.strip():
                             continue
                         try:
-                            existing = json.loads(line)
-                        except json.JSONDecodeError as exc:
+                            existing = json.loads(encoded.decode('utf-8'))
+                        except (UnicodeError, json.JSONDecodeError) as exc:
                             raise ProvenanceRefused(
                                 f'LLM audit 第 {index + 1} 行损坏，'
                                 '不能在无法确认 adoption_id 时重复追加') from exc
@@ -1652,11 +1670,15 @@ class CostLedger:
                                 and existing.get(identity_key) == identity):
                             if require_equal and not same_event(existing):
                                 raise ProvenanceRefused(
-                                    f'{identity_key}={identity} 已由另一 target/action 使用')
+                                    f'{identity_key}={identity} '
+                                    '已由另一 target/action 使用')
                             return
-                append_line_under_process_lock(
-                    target,
-                    json.dumps(stamped, ensure_ascii=False, sort_keys=True))
+                    append_line_under_process_lock(
+                        target,
+                        json.dumps(stamped, ensure_ascii=False, sort_keys=True))
+            except OSError as exc:
+                raise ProvenanceRefused(
+                    f'LLM audit 读取或追加失败：{exc}') from exc
             self.audit_events.append(stamped)
 
     def _append_audit(self, row: dict) -> None:

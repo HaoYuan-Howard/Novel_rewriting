@@ -410,6 +410,7 @@ def actions() -> list[dict[str, Any]]:
         '--expected-revision-id',
         '--current-chapter-sha256', '--preview-subject-sha256',
         '--edit-confirmation',
+        '--source-journal-sha256', '--source-commit-sha256',
     }
 
     def required_inputs(node: str, flags: Sequence[str]) -> list[dict[str, str]]:

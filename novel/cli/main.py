@@ -1032,6 +1032,21 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     if ctx.node == 'stage4.design':
+        if '--recover-repair-aggregate' in tokens:
+            artifact = plan.run_design_repair_aggregate_recovery(
+                ctx,
+                source_run_id=(
+                    _valued(flags, '--recover-repair-aggregate') or ''),
+                source_journal_sha256=(
+                    _valued(flags, '--source-journal-sha256') or ''),
+                source_commit_sha256=(
+                    _valued(flags, '--source-commit-sha256') or ''),
+            )
+            print(
+                '  ✓ Stage4A repair/replan prepared 提交尾窗已按 '
+                f'raw/self 双 SHA 补齐：{len(artifact.output_chapters)} 章'
+                '（0 次模型调用，未解析旧 review token）')
+            return X.OK
         if '--validate-edit' in tokens:
             evaluation = plan.validate_design_chapter_edit(
                 ctx, _valued(flags, '--validate-edit') or '')

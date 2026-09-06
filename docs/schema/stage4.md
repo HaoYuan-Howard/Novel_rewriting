@@ -115,6 +115,35 @@ execution epoch 的 target run 在首个 wire 前，可采用唯一最大历史 
 `origin=historical_checkpoint` 同时绑定 source attempt 与 manifest SHA。source revision 始终只读，不复制
 到 target、不续旧 provider session；usage 按 source/target run 分段从 ledger 精确合并。
 
+repair/replan 的整书 aggregate 另有一条不发 wire 的提交尾窗。source producer 在改动
+`stage4/blind_candidate.json` 前先写 `design/design-repair-aggregate.json` v3
+prepared；journal 冻结 producer parent、code、repair/replan scope、parent/decision/targets、
+完整 unit sources、candidate baseline/target 与 finalization，并同时保存完整原始字节 SHA
+与 prepared self/commit SHA。原 producer 已 ended 后，operator 只在全书物理历史根下恢复
+唯一、无其他 Stage4/Stage2 prepared 冲突的这一份；service/legacy 同相对路径双副本、
+多份 prepared 或任一物理副本漂移都不猜 winner。唯一入口为：
+
+```text
+stage4.design --recover-repair-aggregate <source_run_id> \
+  --source-journal-sha256 <raw_sha256> \
+  --source-commit-sha256 <prepared_self_sha256>
+```
+
+该路是 FREE/0-wire deterministic producer：不解析已 stale review token，不构造 executor
+profile/client/provider session/checkpoint，不续旧 provider。Agent source 必须能由 strict-LF
+`agent_runs.jsonl` 证明唯一 epoch 已 `drained` 关闭、parent ended 且 owner-stopped lease
+持续覆盖本次 commit；direct CLI 只在 journal 明记 producer parent 就是 source run 时成立。
+恢复先逐格复验 source checkpoint/session/attempt/ledger/code/request，再用当前 compiler
+从已验响应重建候选，要求整份 typed candidate（含 usage、model、prompts、inputs、root/truth、
+unit lineage 与 adoption provenance）与 journal sealed payload 完全相等，并重跑当前
+truth/input/schema/HARD。live candidate 只能是 journal baseline 或 target；baseline 才写目标，
+target 只验证，第三态拒绝。首个候选写之前必须对 source adoption、source-stable
+recovery 关系和当前 target run/parent attempt 做全局 0-or-exact preclaim；事件尾非 LF、
+重复、多余字段或归因漂移都要在写候选前拒绝。候选验收后幂等补 source adoption
+和 recovery-run→source-run audit，最后才原位将 source journal 提为 committed。重杀于
+candidate/adoption/audit/mark 各点由下一个新 recovery run 继续；committed 之后的下游
+仍必须复核 journal 记录的 canonical/target-attempt/adoption audit，删账不能被当成已提交。
+
 unit checkpoint 不是正式 artifact。只有策略和全部章节齐全，代码才能把 local alias 映回正式 alias、
 注入章号/权重/`candidate_scene_id`、按章排序并组装完整 `BlindCandidate`；聚合物必须再过 strict schema、
 单章动态闸与整书全部 HARD。通过后才由 commit journal 原子写 `blind_candidate.json`；中断、缺章、
@@ -352,8 +381,9 @@ accept/request_replan；服务端在同书锁内重建 current subject 与全部
 | 状态 | 允许的恢复 | 禁止的捷径 | 证据 |
 |---|---|---|---|
 | A 的策略或单章响应暂停/拒收 | 同一 `run_id` 恢复，只补失败/缺失 unit；旧 whole-book validator 拒稿才可走 `--adopt-rejected` | 重发已验 unit、公开 `--chapters`、拿旧整书入口冒充 unit adoption、补字段或部分聚合冒充正式候选 | 码·契 |
-| A 正式审阅逐章拒绝 | 当前 opaque `--review-token` 由服务端展开决定，只返修 request_repair 章；每个 repair epoch 最多两轮，累计约束不可遗忘；耗尽后可新开同策略 repair epoch或走完整章 preview/apply | 把单章耗尽自动升级成整书 replan、把默认模板理由当真实反馈、字段 patch、无决定随机重采整书 | 码·契 |
-| A 正式审阅策略拒绝 | `--replan` 携 typed 累计策略/章节失败反馈和 accepted 章约束；只重跑 effective 输入变化的章 | 丢掉失败史重新采样、让未变已验章重发 wire、把自由文本 reason 当执行约束 | 码·契 |
+| A 正式审阅逐章拒绝 | 当前 opaque `--review-token` 由服务端展开决定；Supervisor 在执行前打开 fresh producer epoch、重读 exact action 且不再调用 Reviewer，只返修 request_repair 章；每个 repair epoch 最多两轮，累计约束不可遗忘；耗尽后可新开同策略 repair epoch或走完整章 preview/apply | 在修前 producer run 内续写、把单章耗尽自动升级成整书 replan、把默认模板理由当真实反馈、字段 patch、无决定随机重采整书 | 码·契 |
+| A 正式审阅策略拒绝 | 同样先切 fresh producer epoch；`--replan` 携 typed 累计策略/章节失败反馈和 accepted 章约束，只重跑 effective 输入变化的章 | 在原 aggregate 的 producer run 内 replan、丢掉失败史重新采样、让未变已验章重发 wire、把自由文本 reason 当执行约束 | 码·契 |
+| A repair/replan aggregate 已 prepared，source producer 已结束 | operator 只发布 raw/self 双 SHA 绑定的 `--recover-repair-aggregate`；新 recovery run 在任一写前复核 source 生命周期/账/响应与当前 compiler/HARD，幂等补 candidate/adoption/audit/committed | 重解 stale review token、重唤 Reviewer/Executor、续旧 provider、按 newest 挑 journal、从多份/双副本/第三态中猜 winner、先改候选再验账 | 码·契 |
 | B 章池遇到可恢复交付失败 | 当前 run 由严格 `delivery_recovery.json` 系统暂停并只补 pending；已 ended 的旧 run 只允许新 run 经 immutable historical adoption 采用唯一、严格复验的不完整 checkpoint 集合 | 预提交全部章节、把普通 exit 2 洗成 paused、复活 ended parent、复制 checkpoint、续旧 provider session、在多个最大来源间猜一个、漏记历史 usage | 码·契 |
 | 模型声称 B `infeasible` | 同 session 结构化反馈要求 bound；真实代码 witness 可落正式终态；亦可提交 `--apply-binding` 或完整 v4 人工计划 | 信任模型自证、B 私改 A、自动生成 A2、要求已有 Plan 才给首次恢复 | 码·契 |
 | 计划落 `.INVALID` | 修订 v4 `plan_edit.json` 后 `--apply-edit`，或 `--revalidate --actor --reason` | 改名提升、绕过 schema/判据/归档 | 三源 |

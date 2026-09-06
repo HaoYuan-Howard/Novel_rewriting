@@ -173,6 +173,70 @@ def _stage2_commit_recovery_surface(
     return lane, inbox
 
 
+def _stage4_design_repair_commit_recovery_surface(
+    snapshot: OperatorReadSnapshot,
+) -> tuple[_LanePlan, InboxView] | None:
+    """repair/replan prepared 尾窗优先于 stale token 与新 Stage4 审阅。"""
+    from novel.llm import stage4_runs
+
+    ctx = state.readonly_ctx(
+        snapshot.novel_dir, 'stage4.design', snapshot.code)
+    recovery = stage4_runs.inspect_prepared_design_repair_aggregate_recovery(ctx)
+    if recovery is None:
+        return None
+    flags = [
+        '--recover-repair-aggregate', recovery.source_run_id,
+        '--source-journal-sha256', recovery.journal_sha256,
+        '--source-commit-sha256', recovery.commit_sha256,
+    ]
+    item = QueueItem(
+        sid=snapshot.sid,
+        node='stage4.design',
+        flags=flags,
+        steps=[],
+        why=(
+            'Stage4 repair/replan 已封存候选，但 source producer 在 aggregate '
+            'committed 前结束；只允许新 run 0-wire 幂等补尾'),
+        waiting_on=queue.WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT,
+    )
+    lane = _LanePlan(
+        state='blocked',
+        action=_action(
+            base=os.fspath(snapshot.base), sid=snapshot.sid,
+            code=snapshot.code, surface_seal=snapshot.surface_seal,
+            overview=snapshot.overview, item=item),
+        verified_skipped_nodes=(),
+    )
+    inbox_item = InboxItem(
+        kind='repairable', stage='stage4', chapter=None,
+        rule='design_repair_aggregate_prepared_commit',
+        what=(
+            f'source run {recovery.source_run_id} 的 repair/replan aggregate '
+            f'停在 prepared，正式候选当前为 {recovery.target_state}'),
+        how=(
+            'Supervisor 将用 journal 中 sealed candidate 补齐验证、adoption 与 '
+            'committed；不启动 reviewer 或模型会话'),
+    )
+    counts = {kind: 0 for kind in INBOX_KIND}
+    counts['repairable'] = 1
+    return lane, InboxView(
+        items=[inbox_item], counts=counts, total=1, wontfix=0)
+
+
+def _prepared_commit_recovery_surface(
+    snapshot: OperatorReadSnapshot,
+) -> tuple[_LanePlan, InboxView] | None:
+    """先同时探测 Stage2/Stage4 prepared ownership，不按节点顺序猜一份。"""
+    stage2 = _stage2_commit_recovery_surface(snapshot)
+    stage4 = _stage4_design_repair_commit_recovery_surface(snapshot)
+    if stage2 is not None and stage4 is not None:
+        raise ArtifactUnreadable(
+            'operator 同时发现 Stage2 与 Stage4 prepared 提交尾窗；'
+            '两者都可能改写 sealed/current input，不能按节点'
+            '顺序选一份执行')
+    return stage2 if stage2 is not None else stage4
+
+
 def _lane_from_snapshot(
     snapshot: OperatorReadSnapshot, approval_doc: ApprovalDoc,
 ) -> _LanePlan:
@@ -224,7 +288,7 @@ def _require_snapshot_current(snapshot: OperatorReadSnapshot) -> None:
 def _next_from_snapshot(snapshot: OperatorReadSnapshot) -> OperatorNext:
     """只消费一份已冻结快照规划 next，并为 ready 同次铸 execution token。"""
     sid = snapshot.sid
-    recovery = _stage2_commit_recovery_surface(snapshot)
+    recovery = _prepared_commit_recovery_surface(snapshot)
     if recovery is not None:
         # partial bundle 上的 approvals/inbox/reviewer workpack 本来就可能因
         # source mismatch 关闭；prepared journal 是更早、且唯一可执行的事实。
@@ -323,7 +387,7 @@ def progress_snapshot(
     novel_dir = paths.resolve_novel_dir(base, sid).resolve()
     with readonly_snapshot_memo(novel_dir):
         snapshot = capture_operator_snapshot(base, sid)
-        recovery = _stage2_commit_recovery_surface(snapshot)
+        recovery = _prepared_commit_recovery_surface(snapshot)
         if recovery is not None:
             lane, _inbox = recovery
         else:

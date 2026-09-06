@@ -300,7 +300,7 @@ agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它
 | `argv / prompt_sha256` | `str[] / SHA-256` | **epoch 必填** | 本 epoch 的 Commander invocation 与 stdin prompt 身份；prompt 正文不复制进 epoch | **契·码** |
 | `code_version / skill_sha256 / protocol_version` | `str` | **epoch 必填** | 本 epoch 的代码、skill 与协议身份；无法证明不得打开 epoch | **契·码** |
 | `cli_version` | `str \| null` | **epoch 必填（可空）** | provider CLI 未观测时为 null，不用请求值倒填 | **契·码** |
-| `session_run_id / resume_provider_session_id` | `str / str \| null` | **epoch 必填** | Commander session run 与同 epoch exact resume 身份；新 epoch 因代码/skill 漂移时禁止复用旧 provider context | **契·码** |
+| `session_run_id / resume_provider_session_id` | `str / str \| null` | **epoch 必填** | Commander session run 与本 epoch 的 producer 身份；同 epoch exact resume 才可复用 provider context。代码/skill 漂移或 Stage4 typed repair/replan 的 producer 边界都必须换 fresh `session_run_id`，不得续旧 provider | **契·码** |
 
 两项授权不能相互推定。preview 可在任一项为 false 时只读展示；start/batch 在任何 probe/spawn/wire
 前同时要求二者为 true。API 请求可以有 wire 默认，但核心 prompt 构造与 `started` 事件必须显式取得
@@ -314,7 +314,9 @@ agent state 闭集独立为 `pending / running / paused / ok / landed_red / stop
 `failed`，浏览器不得从裸退出码补算。公开 pause/resume/stop 路由统一返回 202，只确认 Supervisor 已受理，不同步等待生命周期
 终态：pause 先关新 admission，后台等待当前 claim/beacon 闭合后才追加 paused，且不 cancel 正常付费
 节点；resume 在后台同身份续当前 epoch 和 provider session，代码/skill 漂移则同 parent run 开新 epoch、
-免费复检并新建 provider session；stop 在后台 cancel 全进程树并 drain，闭合后才永久 ended，且不可
+免费复检并新建 provider session。另一个有意的滚动点是 hash-bound Stage4 typed repair/replan：Supervisor
+在执行 `recovery:stage4-design-action` 前按 exact action 身份只滚一次 `reason=continue` 的 fresh epoch，
+随后重读 operator next/CAS，且不重启 Reviewer；stop 在后台 cancel 全进程树并 drain，闭合后才永久 ended，且不可
 resume。Stage2 blueprint 与 Stage4B plan 各有一条生产者举证的系统暂停：仅当 exit 2 同时留下绑定当前
 epoch/run/code、完整请求章集合和可恢复交付失败的 `delivery_recovery.json`，Supervisor 才追加带缺章
 摘要的 paused；前端继续消费同一 `allowed_controls=resume`，恢复时保持 parent/epoch 并只补 checkpoint
@@ -361,6 +363,16 @@ RunSupervisor 随后重读 `operator next`：仍 ready 时由确定性主路直�
 recovery permit 并直接交 Executor，同样不启动 Commander；只有命中关闭 `reviewer_tasks` 注册表的
 blocker 才以 immutable workpack 进入同 epoch 的 Commander exact-resume turn。只有显式、hash-bound
 的孤儿恢复才追加 `reconciled`。
+
+其中 `recovery:stage4-design-repair-aggregate-commit` 是一条 FREE/0-wire 的确定性
+producer 补尾：编排上的 `next_handler=executor` 只表示由 child execution 消费，并不构造模型
+Executor profile、client、provider session、checkpoint 或 wire。operator 必须在普通 approval、inbox
+和付费 planner 之前探测它；若 Stage2 edit commit 与 Stage4 repair aggregate 两类 prepared 同时存在，
+这是双重提交所有权，必须关闭式报 unknown，不能按探测顺序挑一份。单独命中 Stage4 时 action 固定为
+`stage4.design --recover-repair-aggregate <source_run_id> --source-journal-sha256 <raw_sha> --source-commit-sha256 <self_sha>`。
+permit 把 source run 映射到固定 journal 路径，并把原始字节 SHA 作为唯一动态 external input；签发和
+claim 后各重读一次，journal self SHA、live candidate baseline/target 与 source 生命周期仍由 producer
+再次闭合。它不把所有历史 run 纳入 active surface seal，也不为这次补尾再滚一个 paid repair epoch。
 
 `CommanderAdmissionEvent` 的 v1 wire 为：
 
@@ -657,6 +669,10 @@ stale。producer 输出汇总为 `file_changed`、策略未登记或参数不唯
 `approval:stage4-structure-replan / commander`，形成新的 typed A 决定后再显示
 `stage4.design / recovery:stage4-design-action / executor`。它不会把 Stage0～Stage2 的历史 pending
 信标画成“必须从头执行”，也不会把既有 typed 决定误报成再次调用 Commander。
+
+若 Stage4 repair/replan aggregate 已 prepared 而 source producer 已结束，前沿必须先显示
+`stage4.design / recovery:stage4-design-repair-aggregate-commit / executor`。这条 0-wire 补尾
+committed 后，才允许恢复普通 approval、inbox 或后续节点；已经 stale 的 review token 不再进入前沿。
 
 ---
 
@@ -1044,13 +1060,29 @@ SHA，不保存错误正文。下一轮同 run 启动先撤销旧等待标记，
 可恢复交付失败后停止接纳新章并 drain 已在途章，因此尚未发 wire 的 deferred 章可以在恢复后再请求。
 该 sidecar 不是正式 artifact、缓存或跨代码迁移面。
 
-Stage4A 的普通 live checkpoint 恢复同样只认当前 run。代码/skill 漂移打开新 epoch 后，只有 typed
-targeted repair 的目标章可以走显式 historical response adoption：target 先创建自己的 immutable run
+Stage4A 的普通 live checkpoint 恢复同样只认当前 run。每份 typed targeted repair/replan 都先打开
+fresh producer epoch；代码/skill 漂移也会打开新 epoch。只有 targeted repair 的目标章可以走显式
+historical response adoption：target 先创建自己的 immutable run
 identity，再逐字段对证 source/target profile、完整请求、schema、input、ceiling 与恢复协议，并用 source
 自己的 code/session/checkpoint/attempt/ledger 加当前动态 validator 复验响应。只有唯一最大来源可写
 target `design/historical-checkpoint-adoption.json`；并列或零来源直接不采用、由 target 新发 wire。旧
 provider session 不注册进 target pool，source revision 不复制，正式 lineage 和 usage 分别保留 manifest
 指针与 source/target 分账。策略 unit、普通首轮和 strategy replan 不在该桥内。
+
+repair/replan aggregate 的 prepared 提交尾窗是另一条显式跨 ended-producer 边界，不是 historical
+response adoption。source v3 journal 先封存 producer parent、repair/replan scope、完整 unit sources、
+候选 baseline/target 与 full typed provenance；新 recovery run 只能在唯一物理 prepared、source
+drained/ended、当前 truth/input/code/compiler/HARD 与 source checkpoint/session/attempt/ledger 全部闭合时，
+以 baseline→写 sealed target、target→只验证、第三态→拒绝的两态协议补尾。任何候选写之前，先对 source
+`artifact_adoption`、source-stable canonical relation 与当前 recovery run/parent attempt 做全局
+0-or-exact preclaim；JSONL 无 LF 尾、重复身份、额外字段或另一 Stage4 prepared 都关闭式拒绝。
+审计事件固定为 `kind=stage4_repair_aggregate_recovery` 与
+`kind=stage4_repair_aggregate_recovery_attempt`：共同绑定 stable recovery id、source run、source journal
+raw/self SHA、artifact/fingerprint、target file SHA 与 delivery kind；attempt 另绑定实际 recovery
+`run_id/parent_run_id`。候选验收后先幂等补 source adoption，再追加两层 recovery audit，最后才把 source
+journal 标为 committed；committed 下游每次仍逐字要求 journal 所记 adoption/canonical/attempt 三类账。
+补尾不复制 source checkpoint，不续 provider，也不放宽 strategy replan 禁止 historical response
+adoption 的边界。
 
 若 Stage4B 旧 run 已经 ended、无法保持原 parent/epoch，则新 run 可在发 wire 前扫描历史章 checkpoint；
 只有某一个历史 run 提供唯一最大的**不完整**章集合，并且 source run/profile/request/schema/checkpoint/

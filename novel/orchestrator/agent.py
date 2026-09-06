@@ -95,7 +95,8 @@ from novel.orchestrator import (
     stage2_review_ledger, stage2_reviewer_wire, state, uploads,
 )
 from novel.orchestrator.agent_supervisor import (
-    CommanderTurnResult, LaunchTicket, RunSupervisor, SupervisorActionResult,
+    CommanderTurnResult, LaunchTicket, PrelaunchIdentityDrift, RunSupervisor,
+    SupervisorActionResult,
 )
 from novel.orchestrator.jobs import JobConflict, JobRegistry, service_dir
 from novel.orchestrator.nodes import shell_line
@@ -4502,8 +4503,17 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         if (current.state != 'blocked' or action is None
                 or action.waiting_on not in queue.DETERMINISTIC_RECOVERY_WAITING_ON):
             raise RuntimeError('Supervisor 交入了未登记的 deterministic blocker')
-        permit = execution_permit.permit_from_next(
-            current, action.node, action.flags)
+        try:
+            permit = execution_permit.permit_from_next(
+                current, action.node, action.flags)
+        except Exception as exc:
+            # permit 是 Popen 前的末端 live CAS。只有这里能证明 ticket 尚未
+            # commit；身份已漂移时通知 Supervisor 换 epoch 重读。身份仍 current
+            # 的 schema/surface 错误必须原样成为故障，不能泛化成 rollover。
+            if not _epoch_identity_current(epoch):
+                raise PrelaunchIdentityDrift(
+                    'deterministic permit 形成前 execution identity 已漂移') from exc
+            raise
         recovered = _run_token(
             epoch, permit, launch_ticket,
             stem=f'recovery-{permit.node}')
@@ -6061,6 +6071,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         'run_ready_action': _run_ready_action,
         'run_blocked_action': _run_blocked_action,
         'deterministic_blockers': queue.DETERMINISTIC_RECOVERY_WAITING_ON,
+        'fresh_epoch_blockers': frozenset({
+            queue.WAITING_ON_STAGE4_DESIGN_ACTION,
+        }),
         'run_reviewer': _run_reviewer,
         'finalize_run': _finalize_run,
     } if spawn is None else {})

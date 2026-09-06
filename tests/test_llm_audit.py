@@ -178,6 +178,94 @@ def test_prepared_recovery_current_parent_is_strict_but_historical_lineage_reads
     historical_reader.require_prepared_recovery_lineage(expected_row=expected)
 
 
+@pytest.mark.parametrize('tail_kind', ['valid_json_without_lf', 'partial_json'])
+def test_idempotent_audit_refuses_unclosed_tail_before_memory_shortcut(
+        tmp_path: Path, tail_kind: str):
+    """内存已见 identity 也不能把盘上未提交尾洗成幂等成功。"""
+    ledger = CostLedger(
+        path=tmp_path / '_service' / 'ledger.jsonl',
+        run_id='audit-tail-target')
+    row = {
+        'kind': 'test_idempotent_audit',
+        'audit_test_id': 'stable-audit-identity',
+        'value': 'same-event',
+    }
+    ledger._append_audit_idempotent(  # noqa: SLF001 - 精确守私有追加边界
+        row, identity_key='audit_test_id', require_equal=True)
+    target = audit_path(tmp_path)
+    committed = target.read_bytes()
+    assert committed.endswith(b'\n')
+    if tail_kind == 'valid_json_without_lf':
+        target.write_bytes(committed[:-1])
+    else:
+        target.write_bytes(committed + b'{"kind":')
+    before = target.read_bytes()
+
+    with pytest.raises(ProvenanceRefused, match='未闭合末行'):
+        ledger._append_audit_idempotent(  # noqa: SLF001
+            row, identity_key='audit_test_id', require_equal=True)
+
+    assert target.read_bytes() == before
+    assert len(ledger.audit_events) == 1
+
+
+def test_idempotent_audit_keeps_complete_lf_and_memory_only_semantics(
+        tmp_path: Path):
+    row = {
+        'kind': 'test_idempotent_audit',
+        'audit_test_id': 'stable-audit-identity',
+        'value': 'same-event',
+    }
+    disk = CostLedger(
+        path=tmp_path / '_service' / 'ledger.jsonl',
+        run_id='audit-complete-target')
+    disk._append_audit_idempotent(  # noqa: SLF001
+        row, identity_key='audit_test_id', require_equal=True)
+    target = audit_path(tmp_path)
+    before = target.read_bytes()
+    disk._append_audit_idempotent(  # noqa: SLF001
+        row, identity_key='audit_test_id', require_equal=True)
+    assert target.read_bytes() == before
+    assert before.endswith(b'\n')
+    assert len(disk.audit_events) == 1
+
+    memory = CostLedger(path=None, run_id='audit-memory-target')
+    memory._append_audit_idempotent(  # noqa: SLF001
+        row, identity_key='audit_test_id', require_equal=True)
+    memory._append_audit_idempotent(  # noqa: SLF001
+        row, identity_key='audit_test_id', require_equal=True)
+    assert len(memory.audit_events) == 1
+
+
+def test_idempotent_audit_closes_read_oserror_before_memory_shortcut(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    ledger = CostLedger(
+        path=tmp_path / '_service' / 'ledger.jsonl',
+        run_id='audit-oserror-target')
+    row = {
+        'kind': 'test_idempotent_audit',
+        'audit_test_id': 'stable-audit-identity',
+    }
+    ledger._append_audit_idempotent(  # noqa: SLF001
+        row, identity_key='audit_test_id', require_equal=True)
+    target = audit_path(tmp_path)
+    original_read_bytes = Path.read_bytes
+    before = original_read_bytes(target)
+
+    def fail_audit_read(path: Path) -> bytes:
+        if path == target:
+            raise OSError('audit storage unavailable')
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, 'read_bytes', fail_audit_read)
+    with pytest.raises(ProvenanceRefused, match='LLM audit 读取或追加失败'):
+        ledger._append_audit_idempotent(  # noqa: SLF001
+            row, identity_key='audit_test_id', require_equal=True)
+
+    assert original_read_bytes(target) == before
+    assert len(ledger.audit_events) == 1
+
+
 def test_legacy_ledger_without_run_id_is_claimed_without_backfill():
     """旧成本行可用于恢复，但读取绝不能把当前 run_id 猜写回历史字节。"""
     d = Path(tempfile.mkdtemp())

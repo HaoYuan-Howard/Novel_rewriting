@@ -19,6 +19,7 @@ from contracts.schema.api import (
     OperatorNextDecision,
 )
 from contracts.schema.orchestration import NovelOverview, OverviewSummary
+from novel import paths
 from novel.cli import exit_codes as X
 from novel.cli.main import main
 from novel.errors import ArtifactUnreadable, TerminalState, UnsupportedRunMode
@@ -27,6 +28,7 @@ from novel.orchestrator import operator as O
 from novel.orchestrator import queue as Q
 from novel.orchestrator.nodes import EXECUTOR_PROFILED_RUNS
 from novel.orchestrator import nodes as NODE_POLICY
+from novel.llm import stage4_runs
 
 
 SID = 'book-1'
@@ -69,6 +71,25 @@ def _next(
 def _stable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(P.prov, 'code_version', lambda: 'code-v1')
     monkeypatch.setattr(P, 'read_surface_seal', lambda *_args, **_kwargs: 'a' * 64)
+
+
+def _stage4_repair_journal(source_run: str) -> dict[str, object]:
+    """只造 permit 所需的真实 v3 envelope；业务 contents 留给 producer 复验。"""
+    record: dict[str, object] = {
+        field: None
+        for field in stage4_runs._DESIGN_REPAIR_AGGREGATE_FIELDS  # noqa: SLF001
+    }
+    record.update({
+        'version': stage4_runs._DESIGN_REPAIR_AGGREGATE_VERSION,  # noqa: SLF001
+        'kind': stage4_runs._DESIGN_REPAIR_AGGREGATE_KIND,  # noqa: SLF001
+        'state': 'prepared',
+        'run_id': source_run,
+        'sid': SID,
+        'node': 'stage4.design',
+    })
+    record['commit_sha256'] = stage4_runs._design_repair_aggregate_hash(  # noqa: SLF001
+        record)
+    return record
 
 
 def test_ready_permit_accepts_only_the_exact_current_action(monkeypatch, tmp_path):
@@ -348,6 +369,7 @@ def test_policy_tables_are_closed_and_paid_rows_are_exactly_profiled():
         ('stage2.blueprint', '--apply-edit'),
         ('stage4.design', '--validate-edit'),
         ('stage4.design', '--apply-edit'),
+        ('stage4.design', '--recover-repair-aggregate'),
         ('stage4.plan', '--apply-edit'),
         ('stage4.plan', '--apply-binding'),
         ('stage5.write', '--preview-edit'),
@@ -661,6 +683,115 @@ def test_stage2_edit_commit_permit_recovers_before_canonical_input_exists(
     P.revalidate_active_execution_surface(
         got, base=tmp_path, sid=SID, node='stage2.global',
         flags=['--apply-edit', 'stage2/global_edit.json'])
+
+
+def test_stage4_repair_commit_permit_binds_exact_source_journal_bytes(
+        monkeypatch, tmp_path):
+    _stable(monkeypatch)
+    novel_dir = tmp_path / f'平台_测试书_{SID}'
+    novel_dir.mkdir()
+    source_run = 'stage4-source-run'
+    journal_path = (
+        paths.stage4_run_path(
+            novel_dir, source_run, 'stage4.design')
+        / stage4_runs.DESIGN_REPAIR_AGGREGATE_COMMIT_FILE)
+    journal_path.parent.mkdir(parents=True)
+    journal = _stage4_repair_journal(source_run)
+    commit_sha = str(journal['commit_sha256'])
+    journal_path.write_text(
+        json.dumps(journal, ensure_ascii=False, sort_keys=True), encoding='utf-8')
+    journal_sha = hashlib.sha256(journal_path.read_bytes()).hexdigest()
+    exact = [
+        '--recover-repair-aggregate', source_run,
+        '--source-journal-sha256', journal_sha,
+        '--source-commit-sha256', commit_sha,
+    ]
+    current = _next(
+        tmp_path, state='blocked', node='stage4.design', flags=exact,
+        waiting_on=Q.WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT)
+
+    permit = P.permit_from_next(current, 'stage4.design', exact)
+
+    assert permit.kind == 'recovery'
+    assert permit.paid is False
+    assert permit.flags == exact
+    assert len(permit.external_inputs) == 1
+    assert Path(permit.external_inputs[0].resolved_path) == journal_path.resolve()
+    assert permit.external_inputs[0].sha256 == journal_sha
+    P.revalidate_active_execution_surface(
+        permit, base=tmp_path, sid=SID,
+        node='stage4.design', flags=exact)
+
+    journal_path.write_bytes(journal_path.read_bytes() + b'\n')
+    with pytest.raises(ArtifactUnreadable, match='外部输入|SHA'):
+        P.revalidate_active_execution_surface(
+            permit, base=tmp_path, sid=SID,
+            node='stage4.design', flags=exact)
+
+
+def test_stage4_repair_commit_permit_refuses_stale_journal_self_hash(
+        monkeypatch, tmp_path):
+    """raw flag 与字段自报都匹配，也不能放过内部已篡改 journal。"""
+    _stable(monkeypatch)
+    novel_dir = tmp_path / f'平台_测试书_{SID}'
+    novel_dir.mkdir()
+    source_run = 'stage4-source-run'
+    journal_path = (
+        paths.stage4_run_path(
+            novel_dir, source_run, 'stage4.design')
+        / stage4_runs.DESIGN_REPAIR_AGGREGATE_COMMIT_FILE)
+    journal_path.parent.mkdir(parents=True)
+    journal = _stage4_repair_journal(source_run)
+    commit_sha = str(journal['commit_sha256'])
+    journal['primary_artifact'] = 'stage4/tampered.json'
+    journal_path.write_text(
+        json.dumps(journal, ensure_ascii=False, sort_keys=True), encoding='utf-8')
+    journal_sha = hashlib.sha256(journal_path.read_bytes()).hexdigest()
+    exact = [
+        '--recover-repair-aggregate', source_run,
+        '--source-journal-sha256', journal_sha,
+        '--source-commit-sha256', commit_sha,
+    ]
+    current = _next(
+        tmp_path, state='blocked', node='stage4.design', flags=exact,
+        waiting_on=Q.WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT)
+
+    with pytest.raises(ArtifactUnreadable, match='哈希|SHA'):
+        P.permit_from_next(current, 'stage4.design', exact)
+
+
+@pytest.mark.parametrize('field', ['source', 'journal', 'commit'])
+def test_stage4_repair_commit_permit_refuses_non_exact_operator_identity(
+        field, monkeypatch, tmp_path):
+    _stable(monkeypatch)
+    novel_dir = tmp_path / f'平台_测试书_{SID}'
+    novel_dir.mkdir()
+    source_run = 'stage4-source-run'
+    journal_path = (
+        paths.stage4_run_path(
+            novel_dir, source_run, 'stage4.design')
+        / stage4_runs.DESIGN_REPAIR_AGGREGATE_COMMIT_FILE)
+    journal_path.parent.mkdir(parents=True)
+    journal = _stage4_repair_journal(source_run)
+    commit_sha = str(journal['commit_sha256'])
+    journal_path.write_text(
+        json.dumps(journal, ensure_ascii=False, sort_keys=True), encoding='utf-8')
+    journal_sha = hashlib.sha256(journal_path.read_bytes()).hexdigest()
+    exact = [
+        '--recover-repair-aggregate', source_run,
+        '--source-journal-sha256', journal_sha,
+        '--source-commit-sha256', commit_sha,
+    ]
+    changed = list(exact)
+    index = {'source': 1, 'journal': 3, 'commit': 5}[field]
+    changed[index] = (
+        'other-source-run' if field == 'source' else 'd' * 64)
+    current = _next(
+        tmp_path, state='blocked', node='stage4.design', flags=exact,
+        waiting_on=Q.WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT)
+
+    with pytest.raises(UnsupportedRunMode, match='逐字重放|不能处理'):
+        P.permit_from_next(current, 'stage4.design', changed)
 
 
 @pytest.mark.parametrize('flags', [

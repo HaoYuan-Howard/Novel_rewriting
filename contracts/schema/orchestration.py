@@ -809,6 +809,12 @@ class ExecutionEpoch(FrozenModel):
     一个 epoch 可以包含多个 provider turn；只要代码、skill 与 Commander
     profile 身份没有变化，Supervisor 就在同一 epoch 内精确续会。发生代码或
     skill 漂移时关闭旧 epoch、另开新 epoch，但仍保留同一个 parent run。
+    Stage4 typed repair/replan 还是显式的 producer 边界：即使身份未漂移，也要在
+    执行动作前以 ``reason=continue`` 打开 fresh epoch，不能让修前与修后 aggregate
+    共用同一 ``session_run_id``。
+    已结束 producer 留下的 prepared aggregate **提交补尾**不是新的模型 repair/replan：
+    它在当前 recovery epoch 内执行 FREE/0-wire deterministic action，不续 source
+    provider，也不得把 source run 填进 ``resume_provider_session_id``。
     """
 
     epoch_id: str = Field(pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')

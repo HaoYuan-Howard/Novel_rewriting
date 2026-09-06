@@ -71,8 +71,10 @@ _R_SECTION_SIZES = {
     # 2026-09-03：R-5 新增 exact-SHA reason 分流、Stage4 reviewer 单快照/delta
     # 与 targeted-repair historical adoption；R-11 新增 clean execution identity
     # 和运行页三事实分层；R-12 明确跨 run adoption 不属于 live restore。
+    # 2026-09-06：R-5.26c 冻结 Stage4 repair/replan aggregate 跨 ended-producer
+    # 的 prepared 提交补尾，不把旧 checkpoint/provider 冒充 live resume。
     'R-0': 16, 'R-1': 16, 'R-2': 29, 'R-3': 34, 'R-4': 18,
-    'R-5': 37, 'R-6': 12, 'R-7': 47, 'R-8': 23, 'R-9': 28,
+    'R-5': 38, 'R-6': 12, 'R-7': 47, 'R-8': 23, 'R-9': 28,
     # 2026-09-04：R-11.25 冻结 Commander approval 决定的内容寻址持久化与零模型重放；
     # R-12.2a 冻结 Claude/Codex 公共严格响应 schema 与动态映射 wire。
     'R-10': 34, 'R-11': 27, 'R-12': 15, 'R-13': 9, 'R-14': 8,

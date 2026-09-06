@@ -165,6 +165,10 @@ UNREACHABLE_OVER_HTTP: dict[str, str] = {
     '_Stage2ReviewerPreflightRejected': (
         'Agent Supervisor 已持久化 Reviewer action 后的内部预检控制流；只在同一 AgentRun '
         '内转成 Stage2 canonical_action 拒因或 unknown，不会穿过 HTTP 边界'),
+    '_LaunchDeferredByControl': (
+        'RunSupervisor 在 launch ticket 线性化前发现 pause/stop 的内部控制信号；'
+        '它只在 Supervisor.run 内被捕获并转成 paused/stopped lifecycle，'
+        '不会从公开 pause/stop HTTP 路由作为异常对象返回'),
     '_PostEditReviewRejected': (
         'Stage2 reviewed-edit 修后复核的 producer 私有控制流；只在 canonical '
         'CLI 子进程内抛出，并由 run_apply_edit 先落 typed GlobalEditFailure 后'

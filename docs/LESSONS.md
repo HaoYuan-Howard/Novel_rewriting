@@ -178,6 +178,9 @@ pytest 固定复用仓内短根 `.tr` / `.test_cache`，长路径也只复用一
 
 下一动作必须由生产 planner 在冻结 snapshot 上给出，执行前绑定 exact token/claim；父进程关闭新 claim
 后仍等 active claim 与 execution 闭合，超时只报警不释放锁。故障只走 hash-bound reconcile。
+当 typed 动作按契约必须跨 producer run（Stage4 repair/replan）时，这也是 execution epoch 边界：
+Supervisor 先封存旧 epoch，以 exact action 身份只滚一次 fresh epoch，再重读 planner/CAS 后执行。
+不能在同一 epoch 下另造未登记的 child run，也不能删除 producer 的 same-run 防腐守卫来迁就编排。
 
 ## 33. 模型轮次上限要数真实调用；最后一次返工必须把修复与自审绑成一个原子动作
 
@@ -236,3 +239,21 @@ planner 已登记另一条可直接消费的 INVALID 投影路径，就应在读
 collection/category/count 与完整诊断摘要 SHA，不回显任意 ID、正文、loc 或 repr。最后，ledger 的
 `purpose` 只是“这次调用为何发生”的审计标签，不是业务基线；merge/drop 必须同时由 planner 的 current
 waiting_on 与 durable failed edit 证明，不能看到 `purpose=correction` 就把初始 sparse 空值改读成“保留旧失败”。
+
+## 34. 两相 journal 的 producer 已结束时，same-run 恢复会与 foreign guard 互锁
+
+prepared journal 只证明“目标与提交意图已经封存”，不证明创建它的 producer 还能合法续写。若 source
+execution epoch 已结束，普通重跑会被 foreign reservation 拒绝，而 stale action token 又无法回到原
+same-run finalizer；这时恢复必须是高于 approval、inbox 与付费 planner 的唯一 deterministic action。
+
+跨 ended-producer 补尾不采用新模型响应，也不续旧 provider。action 同时锁 source run、journal 原始
+字节 SHA、自哈希 commit SHA 与 live target；只接受 baseline 或 sealed target 两态，多份 journal、物理
+双副本、其他 prepared、第三态与不完整 source 生命周期一律关闭。新 run 必须从已验 checkpoint/session/
+attempt/ledger 用当前 compiler 重建**完整 typed payload 与 provenance**，不能只比较业务正文或相信 journal
+自己的 hash。
+
+所有可能失败的账面条件都要在首个 artifact 写之前做 0-or-exact preclaim：source adoption、source-stable
+canonical relation、实际 recovery run/parent attempt、JSONL LF 尾与全局身份唯一性。baseline 才写 sealed
+target，target 只复验；adoption/audit 幂等补齐后，最后一步才把 source journal 标成 committed。这样在
+候选、adoption、audit 或 mark 后再杀，下一枚 recovery run 仍能精确接管，而不会借旧 committer 的审计、
+重发模型 wire，或把删失的账洗成已经提交。

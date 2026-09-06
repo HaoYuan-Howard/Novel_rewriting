@@ -164,6 +164,8 @@ RETENTION_CANDIDATE_KINDS: Final = (
 
 #: v2 parent run 的 append-only 事件域。一个 execution epoch 可以包含多次
 #: 身份完全相同的 Commander 精确续会；代码或 skill 漂移只滚动 epoch，不创建新 parent run。
+#: ``continue`` 还承载 Stage4 typed repair/replan 的显式 producer 边界：parent 不变，
+#: 但修订不得与修前 aggregate 共用 session_run_id。
 AGENT_RUN_EVENT_V2_KINDS: Final = (
     'started', 'epoch_opened', 'paused', 'resumed',
     'epoch_closed', 'ended', 'reconciled',
@@ -1825,6 +1827,9 @@ FREE_ENTRIES: Final = {
     '--emit-edit-correction-workpack': (
         '向 stdout 输出被 HARD 拒绝且仍绑定当前 INVALID 的 reviewed Stage2 GlobalEdit、'
         '精确失败事实与字节身份；只用于中断后的最后一次 Commander 纠正，不写盘'),
+    '--recover-repair-aggregate': (
+        '按 source run 与 repair aggregate 的 raw/self 双 SHA 零调用补完 Stage4A '
+        'repair/replan prepared 提交尾窗；不解析旧 review token、不续旧 provider session'),
     '--validate-edit': ('按所属节点 apply-edit 的同一编译/判定链预检'
                         '人工编辑，不写盘'),
     '--emit-review-template': ('向 stdout 输出绑定当前 stage2 全局复核项 hash/evidence 的'
@@ -1949,6 +1954,15 @@ VALUED_FLAGS: Final = {
         '要审计的旧 Stage5 source run_id；输出绑定当前 target run/code 的只读工作包'),
     '--recover-prepared': (
         '要零调用收口的旧 Stage5 source run_id；范围固定为其中全部 unresolved prepared'),
+    '--recover-repair-aggregate': (
+        '要零调用收口的旧 Stage4A repair/replan source run_id；只能消费唯一 prepared '
+        'repair aggregate'),
+    '--source-journal-sha256': (
+        'Stage4A repair/replan prepared journal 的完整原始字节 SHA-256；与 source run '
+        '共同锁定本次恢复输入'),
+    '--source-commit-sha256': (
+        'Stage4A repair/replan prepared journal 内的 self/commit SHA-256；不得拿恢复后 '
+        'journal 的新 hash 代替'),
     '--validate-edit': ('要预检的 Stage2 关系集、Stage4A 完整章或 '
                         'Stage7 人工稿路径'
                         '（与所属节点 --apply-edit 同路径规则，不写盘）'),
@@ -2036,6 +2050,10 @@ WRITE_EFFECTS: Final = {
     '--emit-review-workpack': '',
     '--emit-prepared-recovery-workpack': '',
     '--preview-edit': '',
+    '--recover-repair-aggregate': (
+        '必要时把 sealed stage4/blind_candidate.json 从 journal 基线补到目标；'
+        '幂等补 source-run adoption 与 recovery-run→source-run 审计，最后只把 source '
+        'repair/replan aggregate journal 从 prepared 提升为 committed'),
     '--adopt-residual': '重写 stage7/name_map.json，清旧审批并退休现有成书',
     # ── 免费但**会写盘**的那些：原型那 8 条注释点名的正是它们 ──
     '--recheck': '按当前判据刷新已有成稿的派生指标，并对账 trim 状态',
@@ -2247,10 +2265,13 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   架构改变本身不静默翻默认；后续须在同一 unit 契约下比较首交率、
     #   HARD、token 与墙钟再裁决。
     'stage4.design':    NodeSpec('stage4', 'R-5',  True,  'stage4 盲场景设计',
-                                  flags=('--dry-run', '--replan', '--review-token',
-                                         '--adopt-rejected', '--validate-edit',
-                                         '--apply-edit',
-                                         '--actor', '--reason', '--response-repair'),
+                                   flags=('--dry-run', '--replan', '--review-token',
+                                          '--adopt-rejected', '--validate-edit',
+                                          '--apply-edit',
+                                          '--recover-repair-aggregate',
+                                          '--source-journal-sha256',
+                                          '--source-commit-sha256',
+                                          '--actor', '--reason', '--response-repair'),
                                   produces=(artifact_paths.STAGE4_BLIND_CANDIDATE,),
                                   model='deepseek-v4-pro',
                                   operator_redo='canonical'),
@@ -2429,6 +2450,8 @@ CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
     ('stage2.blueprint', '--revalidate'): ('--actor', '--reason'),
     ('stage4.plan', '--revalidate'): ('--actor', '--reason'),
     ('stage4.design', '--adopt-rejected'): ('--actor', '--reason'),
+    ('stage4.design', '--recover-repair-aggregate'): (
+        '--source-journal-sha256', '--source-commit-sha256'),
     ('stage5.write', '--revalidate'): ('--actor', '--reason'),
     ('stage5.write', '--apply-edit'): (
         '--actor', '--reason', '--current-chapter-sha256',

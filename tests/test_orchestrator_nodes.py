@@ -98,6 +98,22 @@ def _stage5_edit_flags() -> list[str]:
     ]
 
 
+_STAGE4_REPAIR_RECOVERY_FLAGS = frozenset({
+    '--recover-repair-aggregate',
+    '--source-journal-sha256',
+    '--source-commit-sha256',
+})
+
+
+def _stage4_repair_recovery_flags() -> list[str]:
+    """物化唯一合法的 Stage4A repair/replan prepared 补交 argv。"""
+    return [
+        '--recover-repair-aggregate', 'source-run-1',
+        '--source-journal-sha256', 'a' * 64,
+        '--source-commit-sha256', 'b' * 64,
+    ]
+
+
 _FOLLOW_CHECK_EXECUTORS = frozenset({
     'stage2.blueprint', 'stage4.plan', 'stage6.hook', 'stage7.rename',
 })
@@ -117,6 +133,8 @@ UNMIGRATED_EXECUTOR_FLAG_CASES = [
         node,
         (_stage5_edit_flags()
          if node == 'stage5.write' and flag in _STAGE5_EDIT_FLAGS
+         else _stage4_repair_recovery_flags()
+         if node == 'stage4.design' and flag in _STAGE4_REPAIR_RECOVERY_FLAGS
          else _args(flag, node)),
         id=f'{node}:{flag}',
     )
@@ -245,7 +263,9 @@ def test_every_registered_run_mode_builds_a_command(node, flag):
     # ``--subject-sha256`` 是 recovery 的 hash-bound 参数，不是独立入口；
     # 单独出现必须继续关闭式拒绝，这张正向矩阵则物化它所属的完整合法组合。
     flags = (
-        [
+        _stage4_repair_recovery_flags()
+        if node == 'stage4.design' and flag in _STAGE4_REPAIR_RECOVERY_FLAGS
+        else [
             '--recover-prepared', 'source-run-1',
             '--actor', 'operator', '--reason', '逐项核对',
             '--subject-sha256', 'a' * 64,
@@ -299,6 +319,57 @@ def test_stage2_global_resample_is_paid_and_cannot_hide_another_action():
     with pytest.raises(UnsupportedRunMode, match='必须单独执行'):
         N.build_argv(
             'stage2.global', SID, ['--resample', '--purge-role'], base=BASE)
+
+
+def test_stage4_repair_aggregate_recovery_is_one_exact_free_unprofiled_action():
+    flags = _stage4_repair_recovery_flags()
+    argv = N.build_argv('stage4.design', SID, flags, base=BASE)
+
+    assert N.validate_run('stage4.design', flags) == (
+        '--recover-repair-aggregate',
+        '--source-journal-sha256',
+        '--source-commit-sha256',
+    )
+    assert N.is_paid('stage4.design', flags) is False
+    assert '--yes' not in argv
+    assert not any(token.startswith('--executor-') for token in argv)
+    with pytest.raises(UnsupportedRunMode, match='尚未迁移 flag 组合'):
+        N.build_argv(
+            'stage4.design', SID, flags, base=BASE,
+            executor_profile=EXECUTOR_PROFILE,
+        )
+
+
+@pytest.mark.parametrize('flags', [
+    ['--recover-repair-aggregate', 'source-run-1'],
+    [
+        '--recover-repair-aggregate', 'source-run-1',
+        '--source-journal-sha256', 'a' * 64,
+    ],
+    ['--source-journal-sha256', 'a' * 64],
+    ['--source-commit-sha256', 'b' * 64],
+    [
+        *_stage4_repair_recovery_flags(),
+        '--review-token', 's4rr1_' + 'c' * 64,
+    ],
+    [*_stage4_repair_recovery_flags(), 'junk'],
+])
+def test_stage4_repair_aggregate_recovery_refuses_partial_or_mixed_flags(flags):
+    with pytest.raises(UnsupportedRunMode):
+        N.build_argv('stage4.design', SID, flags, base=BASE)
+
+
+@pytest.mark.parametrize(('index', 'value', 'message'), [
+    (1, '../source-run', 'source run_id 非法'),
+    (3, 'A' * 64, '64 位小写十六进制'),
+    (5, 'bad', '64 位小写十六进制'),
+])
+def test_stage4_repair_aggregate_recovery_validates_all_identity_values(
+        index, value, message):
+    flags = _stage4_repair_recovery_flags()
+    flags[index] = value
+    with pytest.raises(UnsupportedRunMode, match=message):
+        N.build_argv('stage4.design', SID, flags, base=BASE)
 
 
 @pytest.mark.parametrize(('node', 'flags', 'step_count'), EXECUTOR_RUN_CASES)
@@ -588,6 +659,27 @@ def test_preview_fills_required_flags_with_placeholders_that_never_run():
         base=BASE, placeholders=True, follow_check=False)[0]
     assert revalidate.argv[revalidate.argv.index('--actor') + 1] == '待填·actor'
     assert revalidate.argv[revalidate.argv.index('--reason') + 1] == '待填·reason'
+
+    stage4_recovery = N.build_steps(
+        'stage4.design', SID,
+        ['--recover-repair-aggregate', 'source-run-1'],
+        base=BASE, placeholders=True, follow_check=False)[0]
+    assert stage4_recovery.argv[
+        stage4_recovery.argv.index('--source-journal-sha256') + 1
+    ] == '待填·source-journal-sha256'
+    assert stage4_recovery.argv[
+        stage4_recovery.argv.index('--source-commit-sha256') + 1
+    ] == '待填·source-commit-sha256'
+    with pytest.raises(UnsupportedRunMode, match='占位符'):
+        N.build_argv(
+            'stage4.design', SID,
+            [
+                '--recover-repair-aggregate', 'source-run-1',
+                '--source-journal-sha256', '待填·source-journal-sha256',
+                '--source-commit-sha256', '待填·source-commit-sha256',
+            ],
+            base=BASE,
+        )
 
 
 def test_placeholders_do_not_change_a_command_that_needs_nothing():

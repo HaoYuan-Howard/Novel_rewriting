@@ -37,7 +37,7 @@ from contracts.schema.orchestration import (
     AgentExecutorBackend, AgentProfile, ExecutorBackend, LegacyExecutorBackend,
     Step,
 )
-from novel import paths as novel_paths
+from novel import paths as novel_paths, run_identity
 from novel.agent_capabilities import (
     AgentProfileRefused, validate_executor_backend, validate_profile,
 )
@@ -109,7 +109,7 @@ _PRIMARY_OPERATIONS = {
     }),
     'stage4.design': frozenset({
         '--dry-run', '--replan', '--adopt-rejected',
-        '--validate-edit', '--apply-edit',
+        '--validate-edit', '--apply-edit', '--recover-repair-aggregate',
     }),
     'stage4.plan': frozenset({
         '--dry-run', '--check-only', '--revalidate', '--names-only',
@@ -278,6 +278,39 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
         raise UnsupportedRunMode(
             'stage5.write --subject-sha256 只绑定 --recover-prepared 工作包；'
             '不能把孤立 subject 静默忽略后落到默认付费写作')
+    stage4_recovery_credentials = {
+        '--source-journal-sha256', '--source-commit-sha256',
+    }
+    if node == 'stage4.design' and '--recover-repair-aggregate' in tokens:
+        expected = {'--recover-repair-aggregate', *stage4_recovery_credentials}
+        # 三个 valued flag 必须各出现一次、各消费一个值；flag-token 集合相同
+        # 仍不能让尾随裸值越过 preview/start，等 child argparse 才失败。
+        if set(tokens) != expected or len(flags) != 2 * len(expected):
+            raise UnsupportedRunMode(
+                'stage4.design --recover-repair-aggregate 只接受 source run_id '
+                '与必填的 journal raw/self 两枚 SHA；不得与 review-token/'
+                'replan、executor/profile、人工写回或其他操作混用')
+        source_run_id = flag_value(flags, '--recover-repair-aggregate') or ''
+        try:
+            run_identity.check_run_id(source_run_id)
+        except ValueError as exc:
+            raise UnsupportedRunMode(
+                f'Stage4 repair aggregate source run_id 非法：{exc}') from exc
+        for credential in sorted(stage4_recovery_credentials):
+            value = flag_value(flags, credential) or ''
+            # 精确的 preview 占位符要留给下方通用分支统一处理：
+            # preview 可展示，真跑则以“占位符”而不是误导性的 SHA 格式错误拒绝。
+            value_is_placeholder = value == placeholder_for(credential)
+            if (not value_is_placeholder
+                    and re.fullmatch(r'[0-9a-f]{64}', value) is None):
+                raise UnsupportedRunMode(
+                    f'{credential} 必须是 64 位小写十六进制 SHA-256')
+    if (node == 'stage4.design'
+            and set(tokens) & stage4_recovery_credentials
+            and '--recover-repair-aggregate' not in tokens):
+        raise UnsupportedRunMode(
+            'Stage4 repair aggregate journal raw/self SHA 只绑定 '
+            '--recover-repair-aggregate；不得被默认付费设计静默忽略')
 
     bad = [f for f in tokens if f not in spec.flags]
     if bad:

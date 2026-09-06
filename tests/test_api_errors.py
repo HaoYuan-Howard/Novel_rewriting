@@ -56,6 +56,7 @@ def _load_unreachable_families() -> None:
         'novel.llm.client',
         'novel.llm.transport',
         'novel.orchestrator.agent',
+        'novel.orchestrator.agent_supervisor',
         'novel.stages.stage2.extract',
     ):
         importlib.import_module(m)
@@ -68,9 +69,10 @@ def test_every_error_class_lands_in_exactly_one_table():
       · `STATUS`               —— 它经 HTTP 冒出来时是几号
       · `UNREACHABLE_OVER_HTTP` —— 它**越不过 HTTP 边界**，以及为什么
 
-    ⚠ 第二张表不是豁免表。它今天只装 LLM 那一族，而理由是结构性的：
-    `R-11.3` 规定一切花钱的操作走子进程 ⇒ 那一族只在子进程里抛，
-    父进程看到的是一个退出码。给它们配一个状态码等于**声称一件不会发生的事**。
+    ⚠ 第二张表不是豁免表。它只装有结构边界证据的两类异常：
+    `R-11.3` 的付费子进程异常，以及在同一 CLI/Supervisor 调用栈内已捕获的
+    私有控制流。HTTP 父进程前者只看到退出码，后者只看到已转换的 typed
+    lifecycle/终态。给它们配状态码等于**声称一件结构上不会发生的事**。
     """
     _load_unreachable_families()
     concrete = _all_subclasses(E.NovelError) - _ABSTRACT
@@ -95,6 +97,19 @@ def test_the_unreachable_table_says_why():
     blank = sorted(k for k, why in H.UNREACHABLE_OVER_HTTP.items() if not (why or '').strip())
     assert not blank, f'这些条目没写理由：{blank}'
     assert H.UNREACHABLE_OVER_HTTP, '表是空的——本文件的对账多半在扫一个空表'
+
+
+def test_launch_deferred_control_signal_is_explicitly_http_unreachable():
+    """pause/stop 的 launch barrier 由 Supervisor 内部收口，不伪造 HTTP 409。"""
+    from novel.orchestrator import agent_supervisor as supervisor
+
+    name = supervisor._LaunchDeferredByControl.__name__  # noqa: SLF001
+    assert name == '_LaunchDeferredByControl'
+    assert supervisor._LaunchDeferredByControl not in H.STATUS  # noqa: SLF001
+    reason = H.UNREACHABLE_OVER_HTTP[name]
+    assert 'Supervisor.run' in reason
+    assert 'pause/stop' in reason
+    assert 'HTTP' in reason
 
 
 def test_the_unreachable_table_names_real_classes():

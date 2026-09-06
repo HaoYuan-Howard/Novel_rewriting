@@ -68,6 +68,75 @@ def _blocked(node: str, waiting_on: str) -> QueueItem:
         why=f'在等 {waiting_on}', waiting_on=waiting_on)
 
 
+@pytest.mark.parametrize(
+    ('has_stage2', 'has_stage4', 'expected'),
+    [
+        (True, False, 'stage2'),
+        (False, True, 'stage4'),
+        (False, False, None),
+    ],
+)
+def test_prepared_recovery_probe_selects_only_the_unique_owner(
+        monkeypatch, tmp_path, has_stage2, has_stage4, expected):
+    snapshot = _snapshot(tmp_path)
+    stage2 = object() if has_stage2 else None
+    stage4 = object() if has_stage4 else None
+    monkeypatch.setattr(
+        O, '_stage2_commit_recovery_surface', lambda _snapshot: stage2)
+    monkeypatch.setattr(
+        O, '_stage4_design_repair_commit_recovery_surface',
+        lambda _snapshot: stage4)
+
+    got = O._prepared_commit_recovery_surface(snapshot)
+
+    assert got is ({'stage2': stage2, 'stage4': stage4}.get(expected))
+
+
+def test_prepared_recovery_probe_refuses_stage2_and_stage4_dual_ownership(
+        monkeypatch, tmp_path):
+    snapshot = _snapshot(tmp_path)
+    monkeypatch.setattr(
+        O, '_stage2_commit_recovery_surface', lambda _snapshot: object())
+    monkeypatch.setattr(
+        O, '_stage4_design_repair_commit_recovery_surface',
+        lambda _snapshot: object())
+
+    with pytest.raises(ArtifactUnreadable, match='同时发现 Stage2 与 Stage4'):
+        O._prepared_commit_recovery_surface(snapshot)
+
+
+def test_stage4_prepared_recovery_operator_action_is_exact_free_blocker(
+        monkeypatch, tmp_path):
+    snapshot = _snapshot(tmp_path)
+    recovery = SimpleNamespace(
+        source_run_id='stage4-source-run',
+        journal_sha256='1' * 64,
+        commit_sha256='2' * 64,
+        target_state='baseline',
+    )
+    monkeypatch.setattr(O.state, 'readonly_ctx', lambda *_args: object())
+    monkeypatch.setattr(
+        O.state, 'resume_verdict', lambda *_args: ('run', 'repair tail'))
+    monkeypatch.setattr(
+        'novel.llm.stage4_runs.inspect_prepared_design_repair_aggregate_recovery',
+        lambda _ctx: recovery)
+
+    found = O._stage4_design_repair_commit_recovery_surface(snapshot)
+
+    assert found is not None
+    lane, inbox = found
+    assert lane.state == 'blocked'
+    assert lane.action is not None
+    assert lane.action.flags == [
+        '--recover-repair-aggregate', recovery.source_run_id,
+        '--source-journal-sha256', recovery.journal_sha256,
+        '--source-commit-sha256', recovery.commit_sha256,
+    ]
+    assert lane.action.waiting_on == Q.WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT
+    assert lane.action.paid is False
+    assert inbox.counts['repairable'] == inbox.total == 1
+
+
 def test_precomputed_approval_projection_rejects_cross_book_reuse(tmp_path):
     snapshot = _snapshot(tmp_path)
     wrong = SimpleNamespace(sid='other-book')

@@ -114,8 +114,11 @@ def test_every_action_is_unique_and_buildable(paid_payload):
             index = next(i for i, flag in enumerate(flags) if flag in VALUED_FLAGS)
             value = ('1' if flags[index] == '--chapters'
                      else 'formal' if flags[index] == '--edit-confirmation'
+                     else 'source-run-1'
+                     if flags[index] == '--recover-repair-aggregate'
                      else 'a' * 64 if flags[index] in {
-                         '--current-chapter-sha256', '--preview-subject-sha256'}
+                         '--current-chapter-sha256', '--preview-subject-sha256',
+                         '--source-journal-sha256', '--source-commit-sha256'}
                      else 'C:/placeholder.json')
             flags.insert(index + 1, value)
         # ⚠ 必填项由**点下去的那个人**给（同 `needs_value` 那一格的理由）：
@@ -125,7 +128,8 @@ def test_every_action_is_unique_and_buildable(paid_payload):
         for extra in N.missing_required(action['kind'], flags):
             value = ('formal' if extra == '--edit-confirmation'
                      else 'a' * 64 if extra in {
-                         '--current-chapter-sha256', '--preview-subject-sha256'}
+                         '--current-chapter-sha256', '--preview-subject-sha256',
+                         '--source-journal-sha256', '--source-commit-sha256'}
                      else 'C:/placeholder.json')
             flags += [extra, value] if extra in VALUED_FLAGS else [extra]
         argv = N.build_argv(action['kind'], 'sid123', flags, base=BASE)
@@ -178,6 +182,27 @@ def test_stage5_edit_publishes_one_complete_action_not_three_credential_actions(
     assert not [
         action for action in actions
         if set(action['extra'] or ()) & credential_only
+    ]
+
+
+def test_stage4_repair_recovery_publishes_one_action_with_two_sha_credentials(
+        paid_payload):
+    actions = paid_payload['actions']
+    recovery = next(
+        action for action in actions
+        if action['kind'] == 'stage4.design'
+        and action['extra'] == ['--recover-repair-aggregate'])
+
+    assert recovery['paid'] is False
+    assert recovery['needs_value'] == \
+        VALUED_FLAGS['--recover-repair-aggregate']
+    assert [row['flag'] for row in recovery['required_inputs']] == [
+        '--source-journal-sha256', '--source-commit-sha256',
+    ]
+    credentials = {'--source-journal-sha256', '--source-commit-sha256'}
+    assert not [
+        action for action in actions
+        if set(action['extra'] or ()) & credentials
     ]
 
 

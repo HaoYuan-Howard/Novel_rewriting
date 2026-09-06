@@ -68,6 +68,7 @@ _STAGE4_DESIGN = queue.WAITING_ON_STAGE4_DESIGN_REVIEW
 _STAGE4_BINDING = queue.WAITING_ON_STAGE4_BINDING_RESOLUTION
 _STAGE4_STRUCTURE_REPLAN = queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN
 _STAGE4_DESIGN_ACTION = queue.WAITING_ON_STAGE4_DESIGN_ACTION
+_STAGE4_DESIGN_REPAIR_COMMIT = queue.WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT
 _STAGE4_STRUCTURE = queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW
 _STAGE5_REVIEW = queue.WAITING_ON_REVIEW
 _STAGE5_CLOSURE = queue.WAITING_ON_STAGE5_CLOSURE
@@ -150,6 +151,12 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
         'stage4.design', _t('--adopt-rejected', '--actor', '--reason'), _W4),
     RecoveryRunPolicy('stage4.design', _t('--validate-edit'), _W4),
     RecoveryRunPolicy('stage4.design', _t('--apply-edit'), _W4),
+    RecoveryRunPolicy(
+        'stage4.design',
+        _t('--recover-repair-aggregate', '--source-journal-sha256',
+           '--source-commit-sha256'),
+        frozenset({_STAGE4_DESIGN_REPAIR_COMMIT}),
+    ),
     RecoveryRunPolicy('stage4.plan', _t('--check-only'), _W4),
     RecoveryRunPolicy('stage4.plan', _t('--names-only'), _W4),
     RecoveryRunPolicy('stage4.plan', _t('--identity'), _W4),
@@ -242,7 +249,8 @@ def _policy_index() -> dict[tuple[str, frozenset[str]], RecoveryRunPolicy]:
 RECOVERY_RUN_POLICY_INDEX: Final = _policy_index()
 
 
-ExternalPathScope = Literal['repo', 'book', 'book_or_service_edit']
+ExternalPathScope = Literal[
+    'repo', 'book', 'book_or_service_edit', 'stage4_repair_journal']
 
 #: 会把**文件字节**送进 producer 的 valued flag。actor/reason/hash/run_id 等纯值
 #: 不在这里；漏登记一个文件 flag 会让许可只绑定路径字符串而没绑定真正输入。
@@ -262,6 +270,7 @@ EXTERNAL_INPUT_POLICIES: Final[
     # producer 必然拒绝的伪恢复路。
     ('stage4.design', '--validate-edit'): 'book',
     ('stage4.design', '--apply-edit'): 'book',
+    ('stage4.design', '--recover-repair-aggregate'): 'stage4_repair_journal',
     ('stage4.plan', '--apply-edit'): 'book',
     ('stage4.plan', '--apply-binding'): 'book',
     ('stage5.write', '--preview-edit'): 'book_or_service_edit',
@@ -287,6 +296,18 @@ def _resolve_external_path_at(
     base_path = Path(base).resolve()
     novel_dir = paths.resolve_novel_dir(base_path, sid).resolve()
     scope = EXTERNAL_INPUT_POLICIES[(node, flag)]
+    if scope == 'stage4_repair_journal':
+        from novel.llm import stage4_runs
+        from novel.run_identity import check_run_id
+        run_id = check_run_id(raw)
+        candidates = tuple(
+            root / run_id / 'design'
+            / stage4_runs.DESIGN_REPAIR_AGGREGATE_COMMIT_FILE
+            for root in paths.stage_run_read_roots(novel_dir, 'stage4'))
+        return next(
+            (target.resolve() for target in candidates if target.is_file()),
+            candidates[0].resolve(),
+        )
     candidate = Path(raw)
     if scope == 'repo':
         return (candidate if candidate.is_absolute() else REPO_ROOT / candidate).resolve()
@@ -348,14 +369,32 @@ def _external_inputs(
             current=current, node=node, flag=flag, raw=raw)
         if not target.is_file():
             raise UpstreamMissing(f'{node} {flag} 外部输入不在盘上：{target}')
+        journal: Mapping[str, Any] | None = None
+        if node == 'stage4.design' and flag == '--recover-repair-aggregate':
+            # repair aggregate 是 Stage4 内部 journal，不是 artifact；permit 层
+            # 只绑 raw bytes，不在这里复制它的版本/字段/self-hash 契约。
+            # 先走 journal owner 的现役 envelope 读路，随后再读同一路径
+            # 铸 raw SHA；两次之间若有漂移，只有返回的 exact raw bytes
+            # 同时通过下面的 SHA 锁才能签发，claim 后还会再读一次。
+            from novel.llm import stage4_runs
+            journal = stage4_runs.validate_design_repair_aggregate_journal_envelope(
+                target, run_id=raw, sid=current.sid)
         try:
             payload = target.read_bytes()
         except OSError as exc:
             raise ArtifactUnreadable(
                 f'读不了 {node} {flag} 外部输入 {target}: {exc!r}') from exc
+        digest = hashlib.sha256(payload).hexdigest()
+        if journal is not None:
+            expected_raw = flag_value(flags, '--source-journal-sha256')
+            expected_commit = flag_value(flags, '--source-commit-sha256')
+            if (digest != expected_raw
+                    or journal.get('commit_sha256') != expected_commit):
+                raise ArtifactUnreadable(
+                    'Stage4 repair recovery 的 journal raw/commit SHA 与 flags 不等')
         out.append(ExecutionPermitInput(
             flag=flag, argument=raw, resolved_path=os.fspath(target),
-            bytes=len(payload), sha256=hashlib.sha256(payload).hexdigest(),
+            bytes=len(payload), sha256=digest,
         ))
     return out
 
@@ -389,6 +428,12 @@ def _require_recovery_policy(
         raise UnsupportedRunMode(
             'Stage2 revalidate 补尾只允许逐字重放 operator 冻结的 '
             'exact actor/reason')
+    if (waiting_on == _STAGE4_DESIGN_REPAIR_COMMIT
+            and (node != 'stage4.design'
+                 or flags != tuple(current.action.flags))):
+        raise UnsupportedRunMode(
+            'Stage4 repair aggregate 补尾只允许逐字重放 operator 冻结的 '
+            'source run/journal raw/commit SHA')
 
     # 恢复不能越过 blocker 去动更晚层。两个显式例外都是产品链上的真实恢复：
     # Stage0 批准前先编辑；Stage5 Review currentness 由后一个 review 节点重算。

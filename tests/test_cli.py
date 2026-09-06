@@ -675,6 +675,53 @@ def test_stage4_design_and_plan_are_two_independent_paid_dispatches(
     assert authorizations[-1] == ('plan', tmp_path, '123')
 
 
+def test_stage4_repair_aggregate_recovery_dispatches_before_any_model_surface(
+        monkeypatch, tmp_path, capsys):
+    """prepared 补交是 FREE producer；不解析旧票，不构造 agent/client。"""
+    from novel import node_agents
+    from novel.cli import main as M
+    from novel.orchestrator import approvals
+    from novel.stages.stage4 import plan
+
+    source = 'source-run-1'
+    journal_sha = 'a' * 64
+    commit_sha = 'b' * 64
+    flags = [
+        '--recover-repair-aggregate', source,
+        '--source-journal-sha256', journal_sha,
+        '--source-commit-sha256', commit_sha,
+    ]
+    ctx = SimpleNamespace(
+        node='stage4.design', novel_dir=tmp_path / 'book', sid='123',
+        executor_backend=None, executor_profile=None,
+    )
+    captured = []
+
+    monkeypatch.setattr(
+        M, '_llm_client',
+        lambda _ctx: pytest.fail('prepared 补交不得构造 LLM client'))
+    monkeypatch.setattr(
+        node_agents, 'build_node_agent',
+        lambda *_args, **_kwargs: pytest.fail('prepared 补交不得构造 executor agent'))
+    monkeypatch.setattr(
+        approvals, 'resolve_design_action',
+        lambda *_args, **_kwargs: pytest.fail('prepared 补交不得解析旧 review token'))
+    monkeypatch.setattr(
+        plan, 'run_design_repair_aggregate_recovery',
+        lambda got_ctx, **kwargs: captured.append((got_ctx, kwargs))
+        or SimpleNamespace(output_chapters=[object(), object()]),
+    )
+
+    assert M._dispatch('stage4.design', ctx, flags) == X.OK
+    assert captured == [(ctx, {
+        'source_run_id': source,
+        'source_journal_sha256': journal_sha,
+        'source_commit_sha256': commit_sha,
+    })]
+    out = capsys.readouterr().out
+    assert '0 次模型调用' in out and '未解析旧 review token' in out
+
+
 def test_stage4_two_dry_runs_preview_only_their_own_prompt(monkeypatch):
     """两次付费调用要分别 preview；dry-run 不构造 client，更不串行下一相。"""
     from novel.cli import main as M

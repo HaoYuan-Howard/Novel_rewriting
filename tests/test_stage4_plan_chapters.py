@@ -823,6 +823,43 @@ def test_mixed_batch_failure_does_not_hide_non_delivery_error() -> None:
             [(1, delivery), (2, integrity)], delivery_paused=False)
 
 
+@pytest.mark.parametrize(
+    ('source_context', 'source_lineage', 'source_run_id'),
+    (
+        (SimpleNamespace(run_id='historical-run'), None, 'target-run'),
+        (None, {'source_checkpoint_sha256': 'a' * 64}, 'target-run'),
+        (None, None, 'historical-run'),
+    ),
+)
+def test_b_owner_reask_refuses_non_target_unit_before_wire_or_checkpoint(
+        source_context, source_lineage, source_run_id,
+) -> None:
+    calls = {'wire': 0, 'checkpoint': 0}
+
+    class Pool:
+        def ask_chapter(self, *_args, **_kwargs):
+            calls['wire'] += 1
+            raise AssertionError('target-owned guard 必须先于 wire')
+
+        def write_chapter_checkpoint(self, *_args, **_kwargs):
+            calls['checkpoint'] += 1
+            raise AssertionError('target-owned guard 拒绝后不得写 checkpoint')
+
+    previous = plan._PlanChapterUnit(
+        chapter_ordinal=1, request=object(), response=None,
+        issue=SimpleNamespace(), rows=[], attempt_id='a' * 16,
+        models=('test-model',), restored=True,
+        acceptance={'attempt_id': 'a' * 16},
+        source_run_id=source_run_id,
+        source_context=source_context,
+        source_lineage=source_lineage,
+    )
+    with pytest.raises(ProvenanceRefused, match='historical unit.*fresh'):
+        plan._reask_plan_chapter_unit(
+            SimpleNamespace(run_id='target-run'), Pool(), None, None, previous)
+    assert calls == {'wire': 0, 'checkpoint': 0}
+
+
 def test_delivery_limit_stops_new_admission_and_same_run_only_fills_pending(
         tmp_path, monkeypatch,
 ) -> None:
@@ -1030,6 +1067,128 @@ def test_new_run_adopts_unique_valid_partial_history_without_copying_checkpoint(
         'source_checkpoint_sha256')
     with pytest.raises(ValueError, match='historical unit_lineage'):
         EvidenceBinding.model_validate(malformed)
+
+
+def test_historical_unit_is_fresh_owned_before_reask_and_restart_commit(
+        tmp_path, monkeypatch,
+) -> None:
+    """historical 只作首轮采用；返问、checkpoint、usage 与 anchor 都归 target。"""
+    book = _delivery_recovery_book(tmp_path, monkeypatch)
+    source_ctx = _ctx(book, 'stage4.plan')
+    source_drivers = {
+        1: _DeliveryRecoveryDriver(1),
+        2: _DeliveryRecoveryDriver(2, outcome='usage_limit'),
+        3: _DeliveryRecoveryDriver(3, outcome='forbid'),
+    }
+    source_pool = Stage4PlanSessionPool(
+        source_ctx,
+        driver_factory=lambda _purpose, chapter: source_drivers[int(chapter)],
+        concurrency=1)
+    with pytest.raises(AgentDeliveryUnavailable) as source_stopped:
+        plan.run_plan(source_ctx, source_pool)
+    source_pool.finish(
+        process_state='failed', delivery_state='unknown',
+        error_kind=source_stopped.value.error_kind)
+    source_pool.close()
+    stage4_runs.clear_plan_delivery_recovery(source_ctx)
+
+    real_evaluate = plan.evaluate_plan_candidate
+    observed_origins: list[str] = []
+
+    def inject_three_b_failures(*args, **kwargs):
+        evaluation = real_evaluate(*args, **kwargs)
+        ch1 = next(
+            row for row in evaluation.unit_lineage
+            if row['chapter_ordinal'] == 1)
+        observed_origins.append(str(ch1['origin']))
+        if len(observed_origins) > 3:
+            return evaluation
+        failure = typed_failures.make(
+            candidate_sha256=evaluation.binding_sha256,
+            code='fact_ref.stage', rule='fact_ref.stage',
+            chapter_ordinal=1,
+            refs=[f'test-only-{len(observed_origins)}'],
+            surfacing='stage4.plan')
+        return replace(
+            evaluation, hard_hits=('fact_ref.stage',),
+            typed_failures=(failure,),
+            feedback=({'rule': 'fact_ref.stage'},))
+
+    monkeypatch.setattr(
+        plan, 'evaluate_plan_candidate', inject_three_b_failures)
+    target_ctx = _ctx(book, 'stage4.plan')
+    target_drivers = {
+        1: _DeliveryRecoveryDriver(
+            1, outcome='resume_usage_limit',
+            session_id='provider-target-first-1'),
+        2: _DeliveryRecoveryDriver(2),
+        3: _DeliveryRecoveryDriver(3),
+    }
+    target_pool = Stage4PlanSessionPool(
+        target_ctx,
+        driver_factory=lambda _purpose, chapter: target_drivers[int(chapter)],
+        concurrency=1)
+    with pytest.raises(AgentDeliveryUnavailable) as target_stopped:
+        plan.run_plan(target_ctx, target_pool)
+    target_pool.finish(
+        process_state='failed', delivery_state='unknown',
+        error_kind=target_stopped.value.error_kind)
+    target_pool.close()
+
+    ch1_checkpoint_dir = paths.stage4_plan_chapter_checkpoint_dir(
+        book, target_ctx.run_id, 1)
+    assert len(list(ch1_checkpoint_dir.glob('*.json'))) == 1
+    assert target_drivers[1].start_calls == 1
+    assert target_drivers[1].resume_calls == 1
+    recovery = stage4_runs.read_plan_delivery_recovery(
+        book, target_ctx.run_id, sid=target_ctx.sid, code=target_ctx.code)
+    assert recovery is not None and recovery['pending_chapters'] == [1]
+
+    resumed_drivers = {
+        1: _DeliveryRecoveryDriver(
+            1, fixed_response=target_drivers[1].last_response,
+            session_id='provider-target-restarted-1'),
+        2: _DeliveryRecoveryDriver(2, outcome='forbid'),
+        3: _DeliveryRecoveryDriver(3, outcome='forbid'),
+    }
+    resumed_ctx = _ctx(
+        book, 'stage4.plan', run_id=target_ctx.run_id, code=target_ctx.code)
+    resumed_pool = Stage4PlanSessionPool(
+        resumed_ctx,
+        driver_factory=lambda _purpose, chapter: resumed_drivers[int(chapter)],
+        concurrency=1)
+    report = plan.run_plan(resumed_ctx, resumed_pool)
+    resumed_pool.finish(process_state='ok', delivery_state='delivered')
+    resumed_pool.close()
+
+    assert report.passed
+    assert observed_origins[0] == 'historical_checkpoint'
+    assert observed_origins[1:] == ['current_run'] * (
+        len(observed_origins) - 1)
+    assert resumed_drivers[1].start_calls == 1
+    assert resumed_drivers[1].resume_calls == 0
+    assert resumed_drivers[2].calls == resumed_drivers[3].calls == 0
+    checkpoints = sorted(ch1_checkpoint_dir.glob('*.json'))
+    assert len(checkpoints) == 2, 'restart 只追加 reask，不重复 fresh 首轮'
+    latest = json.loads(checkpoints[-1].read_text(encoding='utf-8'))
+
+    binding, _raw = ArtifactStore(resumed_ctx).read_own(
+        EvidenceBinding, STAGE4_EVIDENCE_BINDING)
+    provenance = binding.provenance.model_dump(by_alias=True, mode='json')
+    lineage = {row['chapter_ordinal']: row
+               for row in provenance['unit_lineage']}
+    assert lineage[1]['origin'] == 'current_run'
+    assert lineage[1]['source_run_id'] == target_ctx.run_id
+    assert not any(key.startswith('source_checkpoint_') for key in lineage[1])
+    assert provenance['usage']['calls_made'] == 5
+
+    anchor = stage4_runs.plan_chapter_commit_spec(1).commit_path(resumed_ctx)
+    committed = json.loads(anchor.read_text(encoding='utf-8'))
+    assert committed['state'] == 'committed'
+    assert committed['run_id'] == target_ctx.run_id
+    assert committed['attempt_id'] == latest['attempt_id']
+    assert not stage4_runs.plan_chapter_commit_spec(1).commit_path(
+        source_ctx).exists()
 
 
 def test_dynamic_validator_tail_window_submit_and_same_run_zero_wire_resume(
