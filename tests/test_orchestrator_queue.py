@@ -961,6 +961,9 @@ def test_stage4_structure_replan_routes_back_to_a_resolution_not_same_b_review(
     assert blocked[0].waiting_on != Q.WAITING_ON_STAGE4_STRUCTURE_REVIEW
     assert blocked[0].steps == []
     assert '不能再次审同一份 B' in blocked[0].why
+    assert 'non-all-accept typed' in blocked[0].why
+    assert 'typed stop' in blocked[0].why
+    assert '不写审批、不铸 permit、不调用 Executor' in blocked[0].why
 
     # 老的批量 queue 调用方不会传 operator 的冻结 approval_doc；它也必须
     # 读取 typed B 状态并走同一条 A resolution，不能退化成重复 B 审阅。

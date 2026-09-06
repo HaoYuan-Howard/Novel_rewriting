@@ -779,9 +779,11 @@ def _blocked_why(
     if waiting_on == WAITING_ON_STAGE4_STRUCTURE_REPLAN:
         return (
             'Stage4B 当前最终结构决定已有 request_replan；不能再次审同一份 B，'
-            '也不能把结构理由直接当模型指令。先由 Commander 在当前 A 工作包上'
-            '提交新的 typed request_repair/request_replan 决定；决定落盘后只由 '
-            'Executor 按 opaque token 精确恢复 Stage4A；'
+            '也不能把结构理由直接当模型指令。先由 Commander 在当前 A 工作包上交叉核证：'
+            '若能独立确认具体 scene/fact/goal 结构损害，提交新的 non-all-accept typed '
+            'request_repair/request_replan 决定，之后只由 Executor 按 opaque token 精确恢复 '
+            'Stage4A；若只有 read-only INFO/metric/UNVER/binding concern，提交同包 typed '
+            'stop 并以 exit 2 停机，不写审批、不铸 permit、不调用 Executor；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE4_DESIGN_ACTION:
         return (

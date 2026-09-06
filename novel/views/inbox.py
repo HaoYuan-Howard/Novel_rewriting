@@ -911,8 +911,9 @@ def _stage4_approval_items(
             rule='stage4.plan',
             what=f'Stage4B 当前结构决定要求重规划章 {chapters}',
             how=(
-                '回到 Stage4A 显式提交 request_replan 并另行启动；'
-                '当前清单不从决定自动 spawn'),
+                '先由独立 structure-replan resolution blocker 交叉核证：有具体结构损害时'
+                '提交 non-all-accept typed A repair/replan；只有 read-only 依据时提交 typed stop。'
+                '当前清单不自动 spawn，stop 也不授权执行'),
         ))
 
     if (

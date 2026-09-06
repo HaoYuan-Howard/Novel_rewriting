@@ -8,13 +8,16 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.artifacts import STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS
-from contracts.invariants import APPROVAL_GATES, APPROVAL_SEEN
+from contracts.invariants import (
+    APPROVAL_GATES, APPROVAL_SEEN, STRUCTURE_REVIEW_CONTRACT,
+)
 from contracts.schema.api import (
     ApprovalDoc, StructureApprovalRequest, StructureApprovalView,
     WritingApprovalRequest,
 )
 from novel.errors import ApprovalRequired, HumanEditProtected, UpstreamMissing
 from novel.orchestrator import approvals
+from novel.stages.stage4 import measure
 
 
 SID = '123'
@@ -121,6 +124,42 @@ def test_request_is_strict_and_requires_sorted_unique_chapters_and_real_reasons(
         StructureApprovalRequest(
             actor='reviewer', reason='book', review_token=f's4sr1_{SUBJECT_A}',
             chapters=[{'output_ordinal': 1, 'decision': 'maybe', 'reason': 'no'}])
+
+
+def test_structure_review_contract_is_in_whole_book_and_chapter_subjects(
+        monkeypatch: pytest.MonkeyPatch):
+    assert STRUCTURE_REVIEW_CONTRACT == 'stage4-structure-review-v2'
+    plan = {'output_chapters': []}
+    expected_book = approvals._decision_sha256({
+        'kind': 'stage4_structure_review_subject',
+        'review_contract': STRUCTURE_REVIEW_CONTRACT,
+        'plan_subject_sha256': measure.structure_subject_sha256(plan),
+        'binding_concerns': [],
+    })
+    assert measure.structure_review_subject_sha256(plan, []) == expected_book
+    legacy_book = approvals._decision_sha256({
+        'kind': 'stage4_structure_review_subject',
+        'plan_subject_sha256': measure.structure_subject_sha256(plan),
+        'binding_concerns': [],
+    })
+    assert legacy_book != expected_book, 'v1 B token 必须因 review contract 自然过期'
+
+    projected = {'output_chapters': [{
+        'output_ordinal': 1, 'business': 'same-plan-bytes',
+    }]}
+    monkeypatch.setattr(measure, 'structure_subject', lambda _plan: projected)
+    fake_plan = SimpleNamespace(output_chapters=[
+        SimpleNamespace(output_ordinal=1),
+    ])
+    expected_chapter = approvals._decision_sha256({
+        'kind': 'stage4_structure_chapter_review_subject',
+        'review_contract': STRUCTURE_REVIEW_CONTRACT,
+        'chapter': projected['output_chapters'][0],
+        'binding_concerns': [],
+    })
+    assert approvals._structure_chapter_subject_sha256(fake_plan, []) == {
+        1: expected_chapter,
+    }
 
 
 def test_old_v5_record_without_typed_writing_fields_remains_migratable():
@@ -230,9 +269,60 @@ def test_all_accept_opens_s4_persists_v6_history_and_is_idempotent(isolated):
     assert len(state['record'].structure_history) == 1
 
 
+def test_same_structure_subject_rejects_a_different_typed_payload(isolated):
+    base, _book, state = isolated
+    accepted = _request('accept', 'accept')
+    approvals.approve_structure(base, SID, accepted)
+
+    with pytest.raises(HumanEditProtected, match='只接受 exact replay'):
+        approvals.approve_structure(
+            base, SID, _request('accept', 'request_replan'))
+
+    assert len(state['record'].structure_history) == 1
+    assert state['record'].structure_decision.chapters == accepted.chapters
+    assert state['record'].gate['s4']
+
+
+@pytest.mark.parametrize(
+    ('last_decision', 'expected_gate'),
+    [('accept', True), ('request_replan', False)],
+)
+def test_same_structure_business_subject_rebinds_exact_payload_after_proof_drift(
+        isolated, last_decision: str, expected_gate: bool):
+    base, _book, state = isolated
+    request = _request('accept', last_decision)
+    approvals.approve_structure(base, SID, request)
+    original = state['record'].structure_decision
+    assert original is not None
+
+    # Plan/B 的人审业务投影未变，只有完整 artifact provenance 字节变化。
+    state['plan'] = 'e' * 64
+    assert approvals._structure_view(
+        _book, state['record']).state == 'expired'
+
+    rebound = approvals.approve_structure(base, SID, request)
+    assert len(state['record'].structure_history) == 2
+    assert state['record'].structure_history[0] == original
+    latest = state['record'].structure_decision
+    assert latest is not None and latest != original
+    assert latest.proof.artifacts[STAGE4_PLAN_CHAPTERS] == 'e' * 64
+    assert rebound.gate['s4'] is expected_gate
+    assert (state['record'].gate_proofs['s4'] is not None) is expected_gate
+    assert rebound.structure.state == (
+        'accepted' if expected_gate else 'replan_requested')
+
+    changed = request.model_copy(update={'reason': '借旧 token 改写决定'})
+    with pytest.raises(HumanEditProtected, match='只接受 exact replay'):
+        approvals.approve_structure(base, SID, changed)
+    assert len(state['record'].structure_history) == 2
+
+
 def test_request_replan_suspends_but_does_not_erase_raw_downstream_facts(isolated):
     base, _book, state = isolated
     approvals.approve_structure(base, SID, _request('accept', 'accept'))
+    # 新的结构主体才允许形成下一轮裁决；同主体改票由单独反例关闭。
+    state['subject'] = SUBJECT_B
+    state['chapter_subjects'] = {1: '3' * 64, 2: '4' * 64}
     record = state['record']
     gates = dict(record.gate)
     proofs = dict(record.gate_proofs)
@@ -255,7 +345,8 @@ def test_request_replan_suspends_but_does_not_erase_raw_downstream_facts(isolate
     })
 
     doc = approvals.approve_structure(
-        base, SID, _request('accept', 'request_replan'))
+        base, SID, _request(
+            'accept', 'request_replan', subject=SUBJECT_B))
     assert doc.structure.state == 'replan_requested'
     assert not doc.gate['s4'] and not doc.writing
     assert not any(doc.gate[gate] for gate in ('s5', 's6', 's7'))

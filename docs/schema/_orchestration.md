@@ -351,8 +351,9 @@ runner/wire 前按 UTF-16 上限预检，超限以零 wire 配置失败返回。
 #### 2.4a `commander_admissions.jsonl` —— 顶层退出与子执行之间的持久准入账
 
 只扫 `agent_progress.jsonl` 抓不到“已经决定启动、尚未来得及写 start beacon”的窗口；顶层 Commander
-若在这时退出，空扫描会过早验盘并释放书锁。每条新 run 因此在写 `opened` 前先取得 per-parent OS
-byte-lock owner lease，并持有到 ended/书锁收口的最外层 finally；headless
+若在这时退出，空扫描会过早验盘并释放书锁。每条外层 AgentRun 因此先取得 per-lifecycle OS
+byte-lock owner lease，并持有到 ended/书锁收口的最外层 finally；每个 execution action 再以独立
+admission id 写 `opened`，并在 v2 行中把 `lifecycle_run_id` 固化为该 outer AgentRun；headless
 `run_step.py --execute` 在 evidence、beacon 与节点子进程前写 `claimed`，完整 Step 序列结束后写
 `released`；typed approval、response-repair、终审与 operator telemetry 等非 node writer 也用
 `write:<operation>` claim 覆盖自己的完整 currentness＋write 窗口。一次 execution turn 返回或异常后
@@ -374,28 +375,41 @@ permit 把 source run 映射到固定 journal 路径，并把原始字节 SHA �
 claim 后各重读一次，journal self SHA、live candidate baseline/target 与 source 生命周期仍由 producer
 再次闭合。它不把所有历史 run 纳入 active surface seal，也不为这次补尾再滚一个 paid repair epoch。
 
-`CommanderAdmissionEvent` 的 v1 wire 为：
+`CommanderAdmissionEvent` 同文件兼容读 v1、当前只写 v2：
 
 | 字段 | 类型 | 必填 | 内容 | 证据 |
 |---|---|---|---|---|
-| `wire_version` | `1` | **是** | 当前只写 v1 | **契·码** |
-| `parent_run_id` | `str` | **是** | 所属 Commander run；同一 gate 的六态只认这一格 | **契·码** |
+| `wire_version` | `1 \| 2` | **是** | v1 只读兼容；当前写 v2 | **契·码** |
+| `parent_run_id` | `str` | **是** | admission gate 自身 id（历史字段名保留）；同一 gate 的六态只认这一格 | **契·码** |
+| `lifecycle_run_id` | `str \| null` | **是（可空）** | v2 每行必填：持有 owner lease、写 beacon、接收 AgentRun 投影的 outer lifecycle；v1 必须为空 | **契·码** |
 | `sid` | `str` | **是** | 所属书；同 parent run 漂移即坏账 | **契·码** |
 | `kind` | `str` | **是** | `opened / claimed / released / closed / drained / reconciled` 六态；opened 只能一次，closed 最多一次且可幂等重试 | **契·码** |
 | `ts` | `int` | **是** | epoch 秒 | **契·码** |
 | `claim_id` | `str \| null` | **是（可空）** | claimed/released 必填且成对唯一；其余态为空 | **契·码** |
 | `node` | `str \| null` | **是（可空）** | claimed/released 绑定真实 node，或非 node writer 的 `write:<operation>`；两态必须逐字相同，其余态为空 | **契·码** |
 | `claim_sha256` | `str \| null` | **是（可空）** | claimed/released 绑定 execution permit 或 generic write payload 的 64 位小写 SHA；两态必须逐字相同，其余态为空 | **契·码** |
-| `actor / reason / subject_sha256 / force` | `str / str / str / bool \| null` | **是（可空）** | 仅 reconciled 四格同时非空；subject 绑定同 parent 的 admission 与完整 beacon 生命周期 | **契·码** |
+| `actor / reason / subject_sha256 / force` | `str / str / str / bool \| null` | **是（可空）** | 仅 reconciled 四格同时非空；v3 subject 同时绑定 admission/lifecycle id、opened/claimed/released 全量事实与 outer 完整 beacon 生命周期 | **契·码** |
 
-父 worker 在 close 后必须同时等 active claims 与该 run 的 open beacon executions 两面归零，才可
+父 worker 在 close 后必须同时等 active claims 与该 lifecycle run 的 open beacon executions 两面归零，才可
 做 delivery、写 ended 和释放书锁/并发槽。300 秒只是报警与尝试 cancel 的阈值；越线后继续持锁等待，
 最终闭合也只能 unknown。服务重启后，没有 current `drained` 或 `reconciled` seal 的 gate 由
 `admission.unresolved` 继续阻断同书 agent/job/trash/API writer；这份 durable 身份不能由进程内 live
 表替代，queue startup 也必须整 lane 跳过而不读产物、不追加状态、不启动；typed reconcile 后才允许
-操作员显式 resume。reconcile apply 全程先 nonblocking 取得同一 owner lease 的 stopped 证明，`force`
-不能越过 live owner；崩溃由内核自动释放，残留 `.lock` 文件不作为存活依据。reconcile subject 同时绑定 parent 的完整 admission 事件与完整 beacon 生命周期；terminal 后
+操作员显式 resume。reconcile apply 全程先 nonblocking 取得 `lifecycle_run_id` 对应 owner lease 的
+stopped 证明，`force` 不能越过 live owner；崩溃由内核自动释放，残留 `.lock` 文件不作为存活依据。
+reconcile subject 同时绑定 admission/lifecycle 两枚 id、opened/claimed/released 全量事实与 outer
+beacon 生命周期；terminal 后
 出现迟到 release/start/end 等任一事件都会令旧 seal 失效并重新 unresolved，不能让一张旧人工票继续放行。
+
+旧 v1 gate 没有 lifecycle 联结。typed reconcile 只可扫描 append-only AgentRun 账中的
+`epoch_opened`：admission id 必须逐字等于 epoch id，或是无前导零且从 2 开始的 canonical `-tN`。
+先按这条 canonical id 判据找结构命中；任一命中的唯一 v2 started、contract、sid 或可折叠 record
+不闭合都直接拒绝，不能丢掉坏候选再降级 generic self。结构上唯一且各格闭合才映射 outer，多条拒绝；
+只有完全没有 canonical epoch-id 命中才按 generic self gate。v3 subject 的协议与双 id 会让
+历史 v1/v2 reconcile seal 在升级后自然失效，因此 `admission.unresolved` 继续挡住服务 startup/new
+writer，直到操作员按新 preview 重新落 v2 seal。AgentRun 投影只追加 `reconciled`、清 active epoch
+指针并保持 unknown；它不补造 `epoch_closed`、`ended`、exit、drain 或 delivery 事实。若崩在 admission
+seal 与 AgentRun 事件之间，只允许同 subject 且同 actor/reason/force 幂等补尾。
 
 admission 与 beacon 都只把 LF 结尾行视为 committed；读侧忽略被 kill 截断的最后一行，写侧遇到
 non-LF 尾关闭式拒绝续写。零成本恢复先只读给出 committed prefix 与 tail 的 size/SHA 双身份；apply
@@ -666,9 +680,11 @@ stale。producer 输出汇总为 `file_changed`、策略未登记或参数不唯
 
 运行页默认折叠 `verified_skipped_nodes`，但允许展开审计；这只是呈现压缩，不删除步骤和信标历史。
 例如 Stage4B 的 `request_replan` 会先显示 `stage4.context` 上的
-`approval:stage4-structure-replan / commander`，形成新的 typed A 决定后再显示
-`stage4.design / recovery:stage4-design-action / executor`。它不会把 Stage0～Stage2 的历史 pending
-信标画成“必须从头执行”，也不会把既有 typed 决定误报成再次调用 Commander。
+`approval:stage4-structure-replan / commander`。若交叉核证得到具体结构损害，形成新的 non-all-accept
+typed A 决定后才显示 `stage4.design / recovery:stage4-design-action / executor`；若只有 read-only
+INFO/metric/UNVER/binding concern，则同包 typed stop 以 exit 2 结束本轮，不出现 execution permit 或
+Executor。它不会把 Stage0～Stage2 的历史 pending 信标画成“必须从头执行”，也不会把既有 typed
+决定误报成再次调用 Commander。
 
 若 Stage4 repair/replan aggregate 已 prepared 而 source producer 已结束，前沿必须先显示
 `stage4.design / recovery:stage4-design-repair-aggregate-commit / executor`。这条 0-wire 补尾

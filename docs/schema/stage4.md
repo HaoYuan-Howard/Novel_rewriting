@@ -153,7 +153,8 @@ unit checkpoint 不是正式 artifact。只有策略和全部章节齐全，代�
 
 A 的 schema/HARD 通过只说明候选可读、引用闭合，不替人判断它是否实现了足够的结构重构。审批服务对
 当前 A 构造完整 review subject：全局 basis 绑定 root/truth/alias/review contract；策略 subject 绑定
-重构策略与章权重；`stage4-design-review-v3` 另把宏观策略冻结为 strategy epoch，并让每章只绑定
+重构策略与章权重；`stage4-design-review-v4` 延续 v3 的 split-capability 形状，把宏观策略冻结为
+strategy epoch，并让每章只绑定
 该 epoch 与**本章自己的 weight**，其他章权重变化不再污染本章 checkpoint。每章 subject 绑定
 安全的本章盲真相、候选业务面，以及服务端调用
 `structure_metrics_of` 现场计算的声明/实际/已实现/未实现/未声明变化和无 id 标量读数。formal fact/person
@@ -181,8 +182,14 @@ Executor 的 repair prompt 与 Commander 工作包 `submission_options.allowed_v
 | `scene_goal` | 1 / 1 | 只调整 scene_refs 指向场景的目标，必须覆盖给定 opaque_aliases |
 | `binding_constraint_unsat` | 1 / 0 | 调整 scene_refs 指向场景的结构，使其可在后续关闭式证据绑定中实现 |
 | `narrative_relation` | 0 / 0 | 必须满足 typed HARD relation effect，不得用自由文本改写其端点或语义 |
-全局 basis 或策略变化使全章旧决定过期；单章业务变化只使该章过期。同一策略下、subject 完全相同的
-历史 accept 可由模板带 `source_decision_sha256` 复用，但仍须对当前整书重新提交一次，不静默代签。
+全局 basis、策略或 `DESIGN_REVIEW_CONTRACT` 变化使全章旧决定过期；单章业务变化只使该章过期。
+同一策略下、subject 完全相同的历史 accept 可由模板带 `source_decision_sha256` 复用，但仍须对当前
+整书重新提交一次，不静默代签。v3 split-capability 历史仍可严格解码，却不取得 v4 current authority。
+同一 current A 业务 subject 的决定一经落盘只允许 exact typed replay：proof 未变时不写；只有候选
+业务面未变、外部 payload 逐字段相同而完整 provenance proof 漂移时，才追加同语义 history 绑定新
+proof，且不改 B 或 s4。唯一不同 payload 的后续写入是 current A 已 accept 且 current B 为
+`replan_requested` 时，提交一份非 all-accept A resolution。它必须指出独立、具体的 scene/fact/goal
+结构损害并闭合为 typed constraint，不能把 B 的自由 reason 或只读读数直接交给模型。
 
 逐章拒绝只允许 `stage4.design --review-token <opaque>`：服务端现场展开当前决定，重跑 request_repair 章，其他章
 引用既有已验 checkpoint；正式 provenance 记录 parent candidate、决定摘要与逐 unit lineage。
@@ -313,8 +320,10 @@ validator、聚合 compiler 与全书 HARD；它只消费已封存且绑定原 r
 
 计划业务主体绑定同号章、`from_source_ordinals`、三个 goal、brief、预算、全部场景执行字段和人工结构
 声明；不包含来源账、已删除字段或现场派生向量。最终人审 subject 再把该 plan subject 与当前 B 的
-完整 `binding_concerns` 合成唯一 SHA-256。改变实际计划或 concerns 都会使决定过期；只改变算法读数
-不会改写计划字节。审批 proof 另外绑定 `plan_chapters.json` 与 `evidence_binding.json` 完整字节，缺一不可。
+完整 `binding_concerns`、`STRUCTURE_REVIEW_CONTRACT` 合成唯一 SHA-256。改变实际计划、concerns 或
+review contract 都会使决定过期；只改变算法读数不会改写计划字节。逐章 subject 同样绑定该 contract，
+因此 v1 决定保留 history 但不能在 v2 下继续 current。审批 proof 另外绑定 `plan_chapters.json` 与
+`evidence_binding.json` 完整字节，缺一不可。
 
 ### 4.4 `PlanProvenance`
 
@@ -364,17 +373,30 @@ coverage 行；它不是第二个判官，也不进 subject/token/proof。`metri
 精确性仍由 HARD 守卫关闭。
 
 公开 `ApprovalDoc` 是 v6；服务盘上 `_service/approvals/<sid>.json` 是 v7。旧 v6 只经显式
-`backfill_from_disk` 收进 v7：保留仍能按现役同一 proof 逐项对证的 s0～s4、seen 与
-design/structure/writing typed 历史，清除 s5～s7，绝不伪造 Stage5 closure。旧 read proof 未绑定
+`backfill_from_disk` 收进 v7：保留仍能按现役同一 proof（包括 current review contract）逐项对证的
+s0～s4、seen 与 design/structure/writing typed 历史，清除 s5～s7，绝不伪造 Stage5 closure。旧 read proof 未绑定
 完整 Blueprint 工作包，不能升级成现役 `seen.read`；backfill 也不因产物齐备制造 read/global 或越过
 未审的 s2。更早版本同样只经显式逐项对证，普通 GET / 启动不静默迁移；
-其中旧 v5 的 design history 恒空，绝不从既有 A/B/Plan 或付费记录伪造 A 审阅。只有同时 current 的 Plan v4
-与 bound EvidenceBinding v3（含其 INVALID Plan 的零成本恢复）可继续最终结构审批，未来再次运行 B
-才要求 current A accept。旧 v2 Binding 不迁移、不补字段，须按 A 审阅 → B producer 重建。一次最终结构决定只提交
+其中旧 v5 的 design history 恒空，绝不从既有 A/B/Plan 或付费记录伪造 A 审阅；任何 Structure subject
+未携 current `STRUCTURE_REVIEW_CONTRACT` 的旧 typed 决定只保留 history，不重签、不 backfill s4，须用
+current Structure workpack 重新审阅。只有同时 current 的 Plan v4 与 bound EvidenceBinding v3（含其
+INVALID Plan 的零成本恢复）可继续最终结构审批，未来再次运行 B 才要求 current A accept。旧 v2 Binding
+不迁移、不补字段，须按 A 审阅 → B producer 重建。一次最终结构决定只提交
 Structure workpack 的 opaque `review_token`、actor、全书理由及与计划章集精确相等的逐章
 accept/request_replan；服务端在同书锁内重建 current subject 与全部内部 SHA。全章 accept 才
 打开 s4；任何 request_replan 都关闭 s4、保留 typed 决定并撤销旧 writing/下游证明，但不自动启动
-付费 A/B。计划变化后旧决定进入 history，当前态变 expired。
+付费 A/B。coverage 是独立人审槽，可以指出工作包未预登记的真实语义缺陷；但拒绝理由必须落到
+具体 scene/fact/goal 的结构损害。`structure_alignment` 等 metric、INFO、UNVER、binding concern 与
+其他 `allowed_actions=[]` 行只供阅读定位，不能单独成为 request_replan 或付费 A 修订的权限来源。
+同一 current Structure 业务 subject 决定只允许 exact typed replay，不得用同 token 的 all-accept
+覆盖旧拒绝；proof 未变时纯幂等，只有计划/B 业务投影未变、外部 payload 逐字段相同而完整 provenance
+proof 漂移时，才保留旧 history 并按原逐章决定重签当前 proof 与 s4。计划业务面、concerns 或
+`STRUCTURE_REVIEW_CONTRACT` 改变后才重新审阅；旧决定进入 history，当前态变 expired。
+
+Structure replan blocker 不强迫 Reviewer 发明付费 A 动作：交叉阅读若能独立确认具体结构损害，就提交
+非 all-accept typed A resolution；若现有 B 拒绝仅由 INFO/metric/UNVER/binding concern 等只读材料支撑，
+则选择同一 immutable workpack 的 hash-bound typed stop。stop 只结束本轮，不写 A/B 审批、不改 gate、
+不签 execution token、也不调用 Executor；它更不能用来把同一 B subject 改写成 accept。
 
 ## 七、失败与恢复
 
@@ -386,6 +408,7 @@ accept/request_replan；服务端在同书锁内重建 current subject 与全部
 | A repair/replan aggregate 已 prepared，source producer 已结束 | operator 只发布 raw/self 双 SHA 绑定的 `--recover-repair-aggregate`；新 recovery run 在任一写前复核 source 生命周期/账/响应与当前 compiler/HARD，幂等补 candidate/adoption/audit/committed | 重解 stale review token、重唤 Reviewer/Executor、续旧 provider、按 newest 挑 journal、从多份/双副本/第三态中猜 winner、先改候选再验账 | 码·契 |
 | B 章池遇到可恢复交付失败 | 当前 run 由严格 `delivery_recovery.json` 系统暂停并只补 pending；已 ended 的旧 run 只允许新 run 经 immutable historical adoption 采用唯一、严格复验的不完整 checkpoint 集合 | 预提交全部章节、把普通 exit 2 洗成 paused、复活 ended parent、复制 checkpoint、续旧 provider session、在多个最大来源间猜一个、漏记历史 usage | 码·契 |
 | 模型声称 B `infeasible` | 同 session 结构化反馈要求 bound；真实代码 witness 可落正式终态；亦可提交 `--apply-binding` 或完整 v4 人工计划 | 信任模型自证、B 私改 A、自动生成 A2、要求已有 Plan 才给首次恢复 | 码·契 |
+| 最终 Structure 人审 `request_replan` | 独立 resolution Reviewer 交叉读 B 决定与 current A；有具体 coverage 语义损害才提交非 all-accept typed A resolution，仅有 read-only 理由则 typed stop 安全停机；review contract/subject 变化后再审 | 用同 token 覆盖 B、把 metric/INFO/UNVER/binding concern 变成 A constraint、强迫 all-accept 或无依据付费返工 | 人·契 |
 | 计划落 `.INVALID` | 修订 v4 `plan_edit.json` 后 `--apply-edit`，或 `--revalidate --actor --reason` | 改名提升、绕过 schema/判据/归档 | 三源 |
 | Context 缺失或 stale | 最终结构全章 accept 后用 `stage4.context` 免费重建 | B/计划修复时提前代写，或用旧上下文继续写 | 三源 |
 | 旧版本 | 从 producer 重建；人工稿重写为 v4 | 迁移、猜字段、手补版本号 | 码·契 |

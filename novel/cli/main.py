@@ -2113,14 +2113,26 @@ def _cmd_reconcile(a: argparse.Namespace) -> int:
               f'{done.quarantine_path}')
         return X.OK
     if a.admission_parent_run_id is not None:
-        parent_run_id = a.admission_parent_run_id
-        current = admission.snapshot(a.base, parent_run_id)
-        subject = admission.reconcile_subject(a.base, parent_run_id)
-        opened = beacon.open_executions(a.base, parent_run_id)
+        admission_id = a.admission_parent_run_id
+        from novel.orchestrator import agent as agent_runner
+        binding = agent_runner.resolve_admission_lifecycle(
+            a.base, admission_id)
+        current = admission.snapshot(a.base, admission_id)
+        subject = admission.reconcile_subject(
+            a.base, admission_id,
+            lifecycle_run_id=binding.lifecycle_run_id)
+        opened = beacon.open_executions(
+            a.base, binding.lifecycle_run_id)
         supplied = (a.actor, a.reason, a.subject_sha256)
         if not any(value is not None for value in supplied) and not a.force:
             print(json.dumps({
-                'parent_run_id': parent_run_id,
+                # 旧 CLI flag/字段名保留兼容；新字段明确拆开 gate 与 outer。
+                'parent_run_id': admission_id,
+                'admission_id': admission_id,
+                'lifecycle_run_id': binding.lifecycle_run_id,
+                'agent_run_id': (
+                    binding.agent_run.run_id
+                    if binding.agent_run is not None else None),
                 'sid': current.sid,
                 'closed': current.closed,
                 'terminal_kind': current.terminal_kind,
@@ -2139,22 +2151,21 @@ def _cmd_reconcile(a: argparse.Namespace) -> int:
         # AgentRun v2 的 lifecycle 投影必须来自同一份 admission owner/CAS，
         # 不能另造一条“看起来像 reconcile”的平行状态。非 AgentRun 的历史
         # admission 仍走原核心兼容口。
-        from novel.orchestrator import agent as agent_runner
-        run_record = next((
-            item for item in agent_runner.records(a.base)
-            if item.run_id == parent_run_id and item.contract is not None), None)
-        if run_record is None:
+        if binding.agent_run is None:
             done = admission.reconcile_gate(
-                a.base, parent_run_id, actor=a.actor, reason=a.reason,
-                subject_sha256=a.subject_sha256, force=bool(a.force))
+                a.base, admission_id, actor=a.actor, reason=a.reason,
+                subject_sha256=a.subject_sha256, force=bool(a.force),
+                lifecycle_run_id=binding.lifecycle_run_id)
         else:
             reconciled = agent_runner.reconcile_run(
-                a.base, parent_run_id, actor=a.actor, reason=a.reason,
+                a.base, binding.agent_run.run_id,
+                admission_id=admission_id,
+                actor=a.actor, reason=a.reason,
                 subject_sha256=a.subject_sha256, force=bool(a.force))
-            done = admission.snapshot(a.base, parent_run_id)
+            done = admission.snapshot(a.base, admission_id)
             if reconciled.note is None:
                 raise RuntimeError('AgentRun reconciled 后没有 lifecycle note')
-        print(f'✓ admission {parent_run_id} 已由 {a.actor} 显式收口'
+        print(f'✓ admission {admission_id} 已由 {a.actor} 显式收口'
               f'（force={bool(a.force)}，sid={done.sid}）')
         return X.OK
     if any((a.actor, a.reason, a.subject_sha256, a.force)):

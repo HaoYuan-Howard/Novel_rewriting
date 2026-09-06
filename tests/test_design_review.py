@@ -14,7 +14,8 @@ from contracts.schema.api import (
     ApprovalDoc, DesignChapterSubject, DesignPreflightFailure,
     DesignPreflightSummary, DesignRepairConstraint, DesignReviewHistoryEntry,
     DesignReviewRequest, DesignReviewTemplate,
-    DesignStrategySubject, DesignStructureEvidence, StructureApprovalView,
+    DesignStrategySubject, DesignStructureEvidence, StructureApprovalRequest,
+    StructureApprovalView,
 )
 from contracts.schema.stage4 import BlindCandidateChapter, BlindChapterEditRequest
 from novel.errors import ApprovalRequired, HumanEditProtected, UpstreamMissing
@@ -292,7 +293,7 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     )
     state = {'record': base_record.model_copy(update={
         'gate': gates, 'gate_proofs': gate_proofs,
-    }), 'subjects': _subjects()}
+    }), 'subjects': _subjects(), 'candidate_proof_sha256': 'd' * 64}
     monkeypatch.setattr(
         approvals.paths, 'resolve_novel_dir', lambda _base, _sid: book)
     monkeypatch.setattr(
@@ -307,8 +308,22 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         approvals, '_make_proof',
         lambda _dir, _artifacts, payload: approvals._ApprovalProof(
             root_clean_sha1='a' * 40,
-            artifacts={'stage4/blind_candidate.json': 'd' * 64},
+            artifacts={
+                'stage4/blind_candidate.json': state['candidate_proof_sha256'],
+            },
             decision_sha256=approvals._decision_sha256(payload),
+        ),
+    )
+    monkeypatch.setattr(
+        approvals, '_proof_for_structure',
+        lambda _dir, decision: approvals._ApprovalProof(
+            root_clean_sha1='a' * 40,
+            artifacts={
+                'stage4/plan_chapters.json': 'f' * 64,
+                'stage4/evidence_binding.json': '1' * 64,
+            },
+            decision_sha256=approvals._decision_sha256(
+                approvals._structure_decision_payload(decision)),
         ),
     )
     monkeypatch.setattr(approvals, '_spawns', lambda _base, _sid: {})
@@ -400,6 +415,168 @@ def test_design_apply_decided_view_and_plan_authorization_are_current(isolated):
     assert approvals.authorize_plan(base, SID) == doc.design_review.current_decision
     # 回归：decided 分支必须实际 return 一个 view，不能掉进后续 helper 定义。
     assert approvals._view(base, state['record']).design_review.state == 'accepted'
+
+
+def test_same_design_subject_only_accepts_exact_replay(isolated):
+    base, state = isolated
+    template = _template(base)
+    accepted = _accept_all(template)
+    first = approvals.approve_design(base, SID, accepted)
+    second = approvals.approve_design(base, SID, accepted)
+    assert second == first
+    assert len(state['record'].design_history) == 1
+
+    changed = _compact_request(template.model_copy(update={
+        'strategy': template.strategy.model_copy(update={
+            'placeholder': False, 'template_token': None,
+            'decision': 'accept', 'reason': '策略不变但尝试改票',
+            'replan_constraints': [], 'source_decision_sha256': None,
+        }),
+        'chapters': [template.chapters[0].model_copy(update={
+            'placeholder': False, 'template_token': None,
+            'decision': 'request_repair', 'reason': '同主体追加不同决定',
+            'constraints': [DesignRepairConstraint(
+                code='scene_goal', scene_refs=['c01s01'],
+                opaque_aliases=[FACT])],
+            'source_decision_sha256': None,
+        })],
+    }))
+    with pytest.raises(HumanEditProtected, match='只接受 exact replay'):
+        approvals.approve_design(base, SID, changed)
+    assert len(state['record'].design_history) == 1
+
+
+def test_same_design_business_subject_rebinds_only_the_exact_payload_after_proof_drift(
+        isolated):
+    base, state = isolated
+    accepted = _accept_all(_template(base))
+    approvals.approve_design(base, SID, accepted)
+    original = state['record'].design_decision
+    assert original is not None
+
+    # 模拟确定性重写只更新 candidate provenance：人可见 A 业务主体、预检、
+    # capability 与外部 token 均不变，完整文件 SHA 则必须重新落 proof。
+    state['subjects'] = state['subjects'].model_copy(update={
+        'candidate_sha256': 'e' * 64,
+    })
+    state['candidate_proof_sha256'] = 'e' * 64
+    assert approvals._view(base, state['record']).design_review.state == 'expired'
+
+    changed = accepted.model_copy(update={'general_reason': '借旧 token 改写决定'})
+    with pytest.raises(HumanEditProtected, match='不能用旧 token 改票'):
+        approvals.approve_design(base, SID, changed)
+    assert len(state['record'].design_history) == 1
+
+    rebound = approvals.approve_design(base, SID, accepted)
+    assert rebound.design_review.state == 'accepted'
+    assert len(state['record'].design_history) == 2
+    assert state['record'].design_history[0] == original
+    latest = state['record'].design_decision
+    assert latest is not None and latest != original
+    assert latest.candidate_sha256 == 'e' * 64
+    assert latest.proof.artifacts['stage4/blind_candidate.json'] == 'e' * 64
+
+    with pytest.raises(HumanEditProtected, match='只接受 exact replay'):
+        approvals.approve_design(base, SID, changed)
+    assert len(state['record'].design_history) == 2
+
+def test_v3_split_capability_decision_decodes_but_is_expired_under_v4(isolated):
+    base, state = isolated
+    state['subjects'] = _subjects(review_contract='stage4-design-review-v3')
+    approvals.approve_design(base, SID, _accept_all(_template(base)))
+    assert state['record'].design_decision is not None
+
+    state['subjects'] = _subjects()
+    view = approvals._view(base, state['record']).design_review
+    assert view.state == 'expired'
+    assert view.current_decision is None
+    assert view.action_review_token is None
+    assert len(view.history) == 1
+
+
+def test_current_b_replan_allows_one_non_accept_design_resolution_only(
+        isolated, monkeypatch: pytest.MonkeyPatch):
+    base, state = isolated
+    accepted = _accept_all(_template(base))
+    approvals.approve_design(base, SID, accepted)
+
+    structure_subject = '9' * 64
+    chapter_subject = '8' * 64
+    monkeypatch.setattr(
+        approvals, '_current_structure_subject_and_chapters',
+        lambda _novel_dir: (structure_subject, [1]))
+    monkeypatch.setattr(
+        approvals, '_current_structure_chapter_subject_sha256',
+        lambda _novel_dir: {1: chapter_subject})
+    monkeypatch.setattr(
+        approvals, '_current_binding_concerns', lambda _novel_dir: [])
+    approvals.approve_structure(base, SID, StructureApprovalRequest(
+        actor='structure-reviewer', reason='本章需要结构重规划',
+        review_token=f's4sr1_{structure_subject}',
+        chapters=[{
+            'output_ordinal': 1, 'decision': 'request_replan',
+            'reason': '当前结构语义未闭合',
+        }],
+    ))
+
+    replayed = approvals.approve_design(base, SID, accepted)
+    assert replayed.design_review.state == 'accepted'
+    assert replayed.structure.state == 'replan_requested'
+    assert len(state['record'].design_history) == 1
+
+    # B 已拒绝时，A 的 provenance-only proof 漂移也只能重绑最新 accept；
+    # 这一步不得覆盖 B、打开 s4 或直接跳过 resolution blocker。
+    state['subjects'] = state['subjects'].model_copy(update={
+        'candidate_sha256': 'e' * 64,
+    })
+    state['candidate_proof_sha256'] = 'e' * 64
+    assert approvals._view(base, state['record']).design_review.state == 'expired'
+    rebound = approvals.approve_design(base, SID, accepted)
+    assert rebound.design_review.state == 'accepted'
+    assert rebound.structure.state == 'replan_requested'
+    assert not rebound.gate['s4']
+    assert len(state['record'].design_history) == 2
+
+    changed_accept = _compact_request(_template(base).model_copy(update={
+        'strategy': _template(base).strategy.model_copy(update={
+            'placeholder': False, 'template_token': None,
+            'decision': 'accept', 'reason': '改写理由伪装成新的 all-accept',
+            'replan_constraints': [], 'source_decision_sha256': None,
+        }),
+        'chapters': [_template(base).chapters[0].model_copy(update={
+            'placeholder': False, 'template_token': None,
+            'decision': 'accept', 'reason': '改写章理由伪装成新的 all-accept',
+            'constraints': [], 'source_decision_sha256': None,
+        })],
+    }))
+    with pytest.raises(HumanEditProtected, match='direct all-accept'):
+        approvals.approve_design(base, SID, changed_accept)
+
+    template = _template(base)
+    resolution = _compact_request(template.model_copy(update={
+        'strategy': template.strategy.model_copy(update={
+            'placeholder': False, 'template_token': None,
+            'decision': 'accept', 'reason': '策略保留，定向修订本章',
+            'replan_constraints': [], 'source_decision_sha256': None,
+        }),
+        'chapters': [template.chapters[0].model_copy(update={
+            'placeholder': False, 'template_token': None,
+            'decision': 'request_repair',
+            'reason': '按最终结构裁决修正场景目标',
+            'constraints': [DesignRepairConstraint(
+                code='scene_goal', scene_refs=['c01s01'],
+                opaque_aliases=[FACT])],
+            'source_decision_sha256': None,
+        })],
+    }))
+    decided = approvals.approve_design(base, SID, resolution)
+    assert decided.design_review.state == 'repair_requested'
+    assert len(state['record'].design_history) == 3
+
+    # resolution 落下后，同一 A 主体重新回到 exact-replay-only。
+    replayed = approvals.approve_design(base, SID, resolution)
+    assert replayed == decided
+    assert len(state['record'].design_history) == 3
 
 
 def test_frozen_v6_raw_all_accept_is_suspended_without_any_action_token(
@@ -748,7 +925,7 @@ def test_repair_resolver_requires_exact_current_sha_and_returns_only_constraints
 
 def test_repair_constraints_accumulate_and_complete_edit_uses_one_opaque_token(
         isolated):
-    base, _state = isolated
+    base, state = isolated
     first_template = _template(base)
     first_request = _compact_request(
         first_template.model_copy(update={
@@ -767,6 +944,9 @@ def test_repair_constraints_accumulate_and_complete_edit_uses_one_opaque_token(
         }))
     approvals.approve_design(base, SID, first_request)
 
+    # 真实第二轮发生在首次 repair 已产出新候选之后；策略 epoch 不变，章业务
+    # subject 改变。v4 禁止在同一未变化主体上靠重复 POST 累加决定。
+    state['subjects'] = _subjects(brief='首次返修后的新候选业务字节')
     second_template = _template(base)
     second_request = _compact_request(
         second_template.model_copy(update={

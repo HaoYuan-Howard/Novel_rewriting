@@ -71,7 +71,7 @@ from novel.commander_context import (
     COMMANDER_ADMISSION_ID_ENV, COMMANDER_CONTRACT_SHA256_ENV,
     COMMANDER_EPOCH_ID_ENV,
     COMMANDER_EPOCH_SHA256_ENV, COMMANDER_RUN_ID_ENV, env_with_context,
-    stage2_prereview_admission_id,
+    action_admission_id_belongs_to_epoch, stage2_prereview_admission_id,
 )
 from novel.commanders import (
     CommanderConfigurationError, CommanderDriver, CommanderInvocation,
@@ -294,7 +294,8 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
 你只会在一个已登记的 reviewer blocker 上被唤醒。每一轮实际提示都会内嵌同一时点冻结的
 immutable workpack 与唯一 typed request 落点。先逐项审阅，再做一次跨项复核，最后只提交
 一份 typed 判断。不得启动任何小说节点或 Executor，不得修改正式产物、服务账或 Markdown，
-不得从目录存在性、旧对话或退出码猜测 PASS；证据不足时保留 UNVER 或拒绝。
+不得从目录存在性、旧对话或退出码猜测 PASS；schema 提供 UNVER 时保持 UNVER，
+否则只走当前 blocker 明示的关闭式出口，read-only 或材料不足不得制造付费动作。
 
 本次 parent contract 的审计起点：code_version=`{code_version}`；成书目标=`{book_target}`；
 终审包目标=`{review_target}`。这些目标仅供识别对象，不授予写权限。
@@ -496,6 +497,11 @@ def fold(events: list[AgentRunEvent], *, live: set[str] | None = None) -> list[A
             slot.update(
                 ended=e.ts, exit_code=e.exit_code, outcome=e.outcome,
                 active_epoch_id=None)
+        elif e.kind == 'reconciled':
+            # 人工恢复只能证明 admission owner 已停并封住旧执行，不能补造
+            # epoch_closed/ended 的退出码、drain 或 delivery 结论；只清除会误导
+            # UI/恢复路的 active 指针，整条 parent lifecycle 继续保持 unknown。
+            slot.update(note=e.note, active_epoch_id=None)
         else:
             slot['note'] = e.note
         slot['last_kind'] = e.kind
@@ -516,6 +522,8 @@ def fold(events: list[AgentRunEvent], *, live: set[str] | None = None) -> list[A
                 slot['outcome'] = AgentDeliveryOutcome(
                     state='unknown', checked_at=slot['ended'],
                     reason='历史 ended 事件没有交付终验载荷，不能从进程退出码补推可交付')
+        elif slot['last_kind'] == 'reconciled':
+            state = 'unknown'
         elif run_id in live:
             if slot['last_kind'] == 'paused':
                 state = 'paused'
@@ -550,45 +558,180 @@ def records(base: str | os.PathLike[str], *, registry: JobRegistry = REGISTRY,
     return fold(read_events(base), live=registry.live())
 
 
+class AdmissionLifecycleBinding(NamedTuple):
+    """一枚 gate 的 outer lifecycle，以及它是否属于 AgentRun。"""
+
+    admission_id: str
+    lifecycle_run_id: str
+    agent_run: AgentRunRecord | None
+
+
+def resolve_admission_lifecycle(
+        base: str | os.PathLike[str], admission_id: str,
+) -> AdmissionLifecycleBinding:
+    """解析 admission→outer 的唯一、精确且关闭式联结。
+
+    新 v2 admission 自带 durable ``lifecycle_run_id``。旧 v1 只允许用同 sid
+    的唯一 ``AgentRunEvent(kind=epoch_opened)`` 补证，且 gate id 必须是该
+    epoch 的 canonical action id（exact epoch 或合法 ``-tN``）；零条才按
+    generic self gate 兼容，多条或账间漂移一律拒绝。
+    """
+    checked = run_identity.check_run_id(admission_id)
+    gate = admission.snapshot(base, checked)
+    if not gate.opened:
+        raise UpstreamMissing(f'没有 admission_id={checked!r} 的 Commander gate')
+
+    run_events = read_events(base)
+    folded = {record.run_id: record for record in fold(run_events, live=set())}
+    candidates: list[tuple[str, str, AgentRunRecord]] = []
+    for event in run_events:
+        if event.wire_version != 2 or event.kind != 'epoch_opened':
+            continue
+        assert event.epoch is not None
+        if not action_admission_id_belongs_to_epoch(
+                checked, event.epoch.epoch_id):
+            continue
+        starts = [
+            item for item in run_events
+            if item.wire_version == 2 and item.kind == 'started'
+            and item.run_id == event.run_id
+        ]
+        if len(starts) != 1:
+            raise TerminalState(
+                f'admission {checked!r} 命中的 AgentRun {event.run_id!r} '
+                f'必须恰有一条 wire v2 started，实得 {len(starts)} 条')
+        start = starts[0]
+        assert start.contract is not None
+        if start.contract.sid != gate.sid:
+            raise TerminalState(
+                f'admission {checked!r} 精确命中 AgentRun '
+                f'{event.run_id!r} 的 epoch_opened，但 sid 从 '
+                f'{start.contract.sid!r} 漂移为 {gate.sid!r}；'
+                '不得降级为 generic self gate')
+        record = folded.get(event.run_id)
+        if record is None or record.contract is None:
+            raise TerminalState(
+                f'admission {checked!r} 命中的 AgentRun {event.run_id!r} '
+                '无法折叠为 wire v2 lifecycle')
+        candidates.append((event.run_id, event.epoch.epoch_id, record))
+
+    if len(candidates) > 1:
+        identities = ', '.join(
+            f'{run_id}/{epoch_id}'
+            for run_id, epoch_id, _record in candidates)
+        raise TerminalState(
+            f'admission {checked!r} 命中多条 AgentRun epoch_opened：'
+            f'{identities}；拒绝猜测 outer lifecycle')
+
+    candidate_run_id = candidates[0][0] if candidates else None
+    if gate.lifecycle_linked:
+        if candidate_run_id is not None:
+            if gate.lifecycle_run_id != candidate_run_id:
+                raise TerminalState(
+                    f'admission {checked!r} 的 durable lifecycle_run_id='
+                    f'{gate.lifecycle_run_id!r} 与唯一 epoch owner '
+                    f'{candidate_run_id!r} 不一致')
+            return AdmissionLifecycleBinding(
+                checked, gate.lifecycle_run_id, candidates[0][2])
+        if gate.lifecycle_run_id != checked:
+            raise TerminalState(
+                f'admission {checked!r} 指向 outer lifecycle '
+                f'{gate.lifecycle_run_id!r}，但找不到同 sid 的精确 epoch_opened')
+        return AdmissionLifecycleBinding(checked, checked, None)
+
+    if candidates:
+        return AdmissionLifecycleBinding(
+            checked, candidate_run_id, candidates[0][2])
+    return AdmissionLifecycleBinding(checked, checked, None)
+
+
 def reconcile_run(
-        base: str | os.PathLike[str], run_id: str, *, actor: str,
+        base: str | os.PathLike[str], run_id: str, *, admission_id: str,
+        actor: str,
         reason: str, subject_sha256: str, force: bool = False,
 ) -> AgentRunRecord:
-    """复用 admission 的 owner/CAS 收口，并为同一 v2 AgentRun 落真实事件。
+    """收口一枚 action admission，并投影到它所属的 outer AgentRun。
 
     ``reconciled`` 不是第二套恢复判定：admission seal 才是权威。这里仅在 seal
     当前仍绑定同一 subject 时追加生命周期投影；若进程恰死在两账之间，重试会
     识别已提交 seal 并幂等补上 AgentRun 事件。
     """
     checked = run_identity.check_run_id(run_id)
-    rec = next((item for item in records(base) if item.run_id == checked), None)
-    if rec is None:
-        raise UpstreamMissing(f'没有 run_id={checked!r} 的 agent 代跑记录')
+    checked_admission = run_identity.check_run_id(admission_id)
+    binding = resolve_admission_lifecycle(base, checked_admission)
+    if binding.lifecycle_run_id != checked or binding.agent_run is None \
+            or binding.agent_run.run_id != checked:
+        raise JobConflict(
+            f'admission {checked_admission!r} 不唯一属于 AgentRun {checked!r}')
+    rec = binding.agent_run
     if rec.contract is None:
         raise JobConflict('只有 wire v2 AgentRun 可与 Commander admission 联合 reconcile')
-    if not actor.strip() or not reason.strip():
+    normalized_actor = actor.strip()
+    normalized_reason = reason.strip()
+    if not normalized_actor or not normalized_reason:
         raise TerminalState('AgentRun reconcile 的 actor/reason 不得为空')
     note = (
-        f'{actor.strip()}：{reason.strip()} '
-        f'[admission_subject={subject_sha256}]')
+        f'{normalized_actor}：{normalized_reason} '
+        f'[admission_id={checked_admission} '
+        f'admission_subject={subject_sha256}]')
+    lifecycle_events = [
+        event for event in read_events(base) if event.run_id == checked]
+    if not lifecycle_events:
+        raise UpstreamMissing(f'AgentRun {checked!r} 没有 lifecycle 事件')
+    last_lifecycle = lifecycle_events[-1]
+    if rec.ended is not None or last_lifecycle.kind == 'ended':
+        raise JobConflict(
+            f'AgentRun {checked!r} 已正常 ended；孤儿 gate 不得改写其终态')
+    if last_lifecycle.kind == 'paused':
+        raise JobConflict(
+            f'AgentRun {checked!r} 已明确 paused；不得以崩溃 reconcile 覆盖')
+    if last_lifecycle.kind == 'reconciled':
+        gate = admission.snapshot(base, checked_admission)
+        if (gate.terminal_kind == 'reconciled'
+                and last_lifecycle.note != note):
+            raise JobConflict(
+                f'AgentRun {checked!r} 已由另一枚 reconcile 投影收口；'
+                'actor/reason/force 或 subject 漂移，只允许 exact 补尾重试')
+        if (gate.terminal_kind != 'reconciled'
+                and not gate.reconcile_invalidated):
+            raise JobConflict(
+                f'AgentRun {checked!r} 已由另一枚 reconcile 投影收口；'
+                '当前 admission 没有迟到事实反证，不得另开恢复决定')
+    elif rec.state != 'unknown':
+        raise JobConflict(
+            f'AgentRun {checked!r} 当前 state={rec.state!r}；'
+            '只有重启后 unknown lifecycle 可人工 reconcile')
     try:
         admission.reconcile_gate(
-            base, checked, actor=actor, reason=reason,
-            subject_sha256=subject_sha256, force=force)
+            base, checked_admission, actor=normalized_actor,
+            reason=normalized_reason, subject_sha256=subject_sha256,
+            force=force, lifecycle_run_id=checked)
     except TerminalState:
-        current = admission.snapshot(base, checked)
+        current = admission.snapshot(base, checked_admission)
         if (current.terminal_kind != 'reconciled'
                 or current.reconcile_invalidated
                 or current.terminal_subject_sha256 != subject_sha256):
             raise
+        if (current.terminal_actor != normalized_actor
+                or current.terminal_reason != normalized_reason
+                or current.terminal_force != bool(force)):
+            raise TerminalState(
+                'admission reconcile 已提交，但 actor/reason/force 与本次补尾请求漂移')
 
     # retry 补尾也必须重新证明 owner 已停；force 从不越过这枚 OS lease。
     with admission.require_owner_stopped(base, checked):
-        current = admission.snapshot(base, checked)
+        current = admission.snapshot(base, checked_admission)
         if (current.terminal_kind != 'reconciled'
                 or current.reconcile_invalidated
                 or current.terminal_subject_sha256 != subject_sha256):
             raise TerminalState('admission reconcile seal 已变化，拒绝补 AgentRun 事件')
+        if (current.lifecycle_run_id != checked
+                or current.terminal_actor != normalized_actor
+                or current.terminal_reason != normalized_reason
+                or current.terminal_force != bool(force)):
+            raise TerminalState(
+                'admission reconcile 的 lifecycle/actor/reason/force 漂移，'
+                '拒绝补 AgentRun 事件')
         event = AgentRunEvent(
             wire_version=2, run_id=checked, kind='reconciled',
             ts=int(time.time()), note=note)
@@ -3234,7 +3377,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         admission_id = (
             epoch.epoch_id if count == 1 else f'{epoch.epoch_id}-t{count}')
         try:
-            admission.open_gate(base, admission_id, sid)
+            admission.open_gate(
+                base, admission_id, sid, lifecycle_run_id=run_id)
         except BaseException as original:
             _close_failed_start_gate(base, admission_id, original)
             raise
@@ -5290,7 +5434,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     continue_ready=False,
                     outcome=latest_outcome)
             if isinstance(action, reviewer_tasks.ReviewerStopAction):
-                # Stage0 reviewer 的 typed non-approval 是明确终态，不是
+                # 登记 reviewer 的 typed non-approval 是明确终态，不是
                 # approval，也不是待 Executor 执行的 node。它不产生任何
                 # canonical 子进程/正式写盘，只把模型给出的证据性拒绝理由
                 # 原样投影为本次 AgentRun stop。

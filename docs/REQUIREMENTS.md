@@ -102,9 +102,11 @@ checkpoint 的重复 wire 为 0。若 frozen-v6 当前候选经真实复核为�
 如实落账而 effective 投影保持 `suspended`：不伪造 `request_repair` 换 edit 票，不重复唤 Commander，
 不发布 Structure approval、`s4rr1`、`s4er1`、付费 repair/replan/B 或 execution token；需要新 B 时只在
 clean v7 base 继续。只有真实 `request_repair` 才保留该章零 wire 完整章 edit。current Stage4B
-`request_replan` 必须先进入不同的 Stage4A resolution blocker，由 Commander 结合 B 证据形成新的 typed
-A 修订决定；不得重审同一 B。决定落盘后只由确定性 Supervisor 交 exact action 给 Executor，不再重复
-调用 Commander；运行页须把该真实前沿和下一处理角色直接展示，而不是用空 beacon 营造从 Stage0 重跑。
+`request_replan` 必须先进入不同的 Stage4A resolution blocker，不得重审同一 B。Commander 结合 B 证据
+交叉核证：有具体 scene/fact/goal 结构损害才形成新的 non-all-accept typed A 修订决定；若只有 read-only
+INFO/metric/UNVER/binding concern，则提交同包 typed stop，以 exit 2 停机且不写审批、不铸 permit、不调用
+Executor。只有 A 决定落盘后才由确定性 Supervisor 交 exact action 给 Executor，不再重复调用 Commander；
+运行页须把该真实前沿和下一处理角色直接展示，而不是用空 beacon 营造从 Stage0 重跑。
 
 **批次三：一次 clean v7 agent-only 全链。** 新建 clean base，用冻结提交、固定 profile、冷缓存和
 完整 lifecycle/admission/beacon/ledger/session/unit 记录，从 producer 跑 Stage0～Stage7。legacy
@@ -135,8 +137,9 @@ epoch 交付；服务崩溃、坏尾、迟到 child 与并发 resume 必须继�
   202 异步受理，后台 drain 后才分别落 paused/ended，stop 永久；第二轮 repair 继承第一轮未关闭约束；人工完整章替换零 wire且非目标章字节恒等；真策略
   replan 有累计反馈并只重跑 effective input 变化章；Stage4B 首个用量窗口失败停止新章 admission、同 run
   只补 pending，ended 历史 run 只经严格且唯一的只读 checkpoint adoption 接续；INFO/metric/UNVER
-  不产生付费动作；Stage4B `request_replan` 不重审同一 B，新的 typed A 决定只触发一次 exact Executor
-  recovery，运行页的跳过前缀/续跑点/下一角色必须全部来自 operator 同一快照。
+  不产生付费动作；Stage4B `request_replan` 不重审同一 B，有具体结构损害时新的 non-all-accept typed A
+  决定只触发一次 exact Executor recovery，只有 read-only 依据时 typed stop 必须 exit 2 且零审批/permit/
+  Executor；运行页的跳过前缀/续跑点/下一角色必须全部来自 operator 同一快照。
 
 **性能验收（相同模型、effort、并发与冷缓存）**：
 

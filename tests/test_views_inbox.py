@@ -153,6 +153,35 @@ def test_frozen_v6_design_suspension_does_not_publish_repeat_a_or_b_approval():
         '.', 'book-1', object(), approval_doc=doc) == []
 
 
+def test_structure_replan_inbox_publishes_typed_resolution_or_stop(monkeypatch):
+    """B 拒绝后的清单必须同时呈现真实修订与安全停机两条出口。"""
+    from novel.errors import ApprovalRequired
+    from novel.views import inbox as I
+
+    doc = SimpleNamespace(
+        design_review=SimpleNamespace(
+            state='accepted', current_decision=SimpleNamespace()),
+        structure=SimpleNamespace(
+            state='replan_requested',
+            current_decision=SimpleNamespace(chapters=[SimpleNamespace(
+                output_ordinal=3, decision='request_replan')])),
+    )
+    monkeypatch.setattr(
+        I.approvals, 'structure_workpack',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ApprovalRequired('测试在状态清单后停止')),
+    )
+
+    rows = I._stage4_approval_items(
+        '.', 'book-1', object(), approval_doc=doc)
+
+    assert len(rows) == 1
+    assert rows[0].what == 'Stage4B 当前结构决定要求重规划章 [3]'
+    assert 'non-all-accept typed A repair/replan' in rows[0].how
+    assert 'typed stop' in rows[0].how
+    assert 'stop 也不授权执行' in rows[0].how
+
+
 def test_conflict_stage_coverage_inbox_points_to_typed_edit_not_paid_resample():
     from contracts.rules import REGISTRY
     from novel.report.builder import remediation_of

@@ -214,8 +214,14 @@ _WITHHELD: dict[str, str] = {
                                   '消费投影。发给前端会诱导第二个过期判官',
     'STRUCTURE_METRIC_CONTRACT': 'Stage4 结构指标算法版本；实例值已随计划来源账与结构审批主体落盘，'
                                  '前端只展示当前计划的决定与审批态，不自行判断算法新旧',
+    'STRUCTURE_REVIEW_CONTRACT': (
+        'Stage4B 人审证据权威的 subject 版本；后端已折入整书与逐章 '
+        'hash，前端不选择版本或自行判断旧票是否有效'),
     'DESIGN_REVIEW_CONTRACT': 'Stage4A 正式审阅 subject 的算法版本；后端已把它折进完整 hash，'
                               '前端只提交模板给出的 subject，不自行判断审阅是否过期',
+    'LEGACY_V3_DESIGN_REVIEW_CONTRACT': (
+        'Stage4A v3 split-capability 历史解码版本；只供后端无损读旧决定，'
+        '不发布给前端、不取得 current 审阅或执行权'),
     'FROZEN_V6_DESIGN_REVIEW_CONTRACT': (
         '两本冻结 v6 旧书的只读恢复契约；只供后端证明旧候选与旧 Blueprint '
         '精确绑定，前端不得选择该版本或据此放行付费恢复'),

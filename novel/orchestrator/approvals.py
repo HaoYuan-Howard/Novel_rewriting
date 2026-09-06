@@ -33,6 +33,7 @@ from contracts.invariants import (
     FROZEN_V6_DESIGN_REVIEW_CONTRACT,
     STRUCTURE_CHANGE_KINDS,
     STRUCTURE_METRIC_CONTRACT,
+    STRUCTURE_REVIEW_CONTRACT,
     STYLE_MEASUREMENT_CONTRACT,
 )
 from contracts.rules import REGISTRY
@@ -1663,9 +1664,24 @@ def _design_request_matches_subjects(
     request: DesignReviewMaterialized | DesignReviewDecision,
     current: _DesignSubjects,
 ) -> bool:
+    return (
+        request.candidate_sha256 == current.candidate_sha256
+        and _design_request_matches_business_subjects(request, current)
+    )
+
+
+def _design_request_matches_business_subjects(
+    request: DesignReviewMaterialized | DesignReviewDecision,
+    current: _DesignSubjects,
+) -> bool:
+    """比较人审业务主体，故意不把候选 provenance 文件 SHA 当成新内容。
+
+    完整文件 SHA 仍由 ``proof`` 绑定。确定性重写若只改变 provenance，旧决定先
+    投影为 expired，随后只允许同一外部 typed payload 重绑新 proof；不能把旧
+    token 用来改票。把这两类身份拆开，才不会在 subject 未变时形成永久复批死锁。
+    """
     if (
-        request.candidate_sha256 != current.candidate_sha256
-        or request.aggregate_subject_sha256 != current.aggregate_subject_sha256
+        request.aggregate_subject_sha256 != current.aggregate_subject_sha256
         or request.binding_infeasibility != current.binding_infeasibility
         or request.preflight != current.preflight
         or request.repair_capability != current.repair_capability
@@ -1681,6 +1697,56 @@ def _design_request_matches_subjects(
         == current.chapter_subject_sha256[row.output_ordinal]
         for row, subject in zip(request.chapters, current.chapters, strict=True)
     )
+
+
+def _stored_design_matches_business_subject(
+    decision: _StoredDesignHistory,
+    current: _DesignSubjects,
+) -> bool:
+    """判断 raw 最新 A 决定是否仍属于当前人真正看过的同一业务主体。"""
+    if isinstance(decision, _StoredDesignDecisionSlim):
+        return (
+            decision.aggregate_subject_sha256 == current.aggregate_subject_sha256
+            and decision.strategy_subject_sha256 == current.strategy_subject_sha256
+            and decision.strategy_epoch_sha256 == current.strategy_epoch_sha256
+            and decision.chapter_subject_sha256 == current.chapter_subject_sha256
+            and decision.repair_capability == current.repair_capability
+            and decision.binding_infeasibility == current.binding_infeasibility
+        )
+    return _design_request_matches_business_subjects(
+        _public_design_decision(decision), current)
+
+
+def _stored_design_external_payload(
+    decision: _StoredDesignHistory,
+) -> dict[str, Any]:
+    """还原唯一外部 typed payload；不把服务端展开的 subject 混入改票比较。"""
+    if isinstance(decision, _StoredDesignDecisionSlim):
+        return decision.request.model_dump(mode='json')
+    return {
+        'actor': decision.actor,
+        'reviewer_kind': decision.reviewer_kind,
+        'review_run_id': decision.review_run_id,
+        'general_reason': decision.general_reason,
+        'review_token': _design_review_token(decision.aggregate_subject_sha256),
+        'strategy': {
+            'decision': decision.strategy.decision,
+            'reason': decision.strategy.reason,
+            'replan_constraints': [{
+                'kind': row.kind,
+                'chapter_ordinals': row.chapter_ordinals,
+            } for row in decision.strategy.replan_constraints],
+        },
+        'chapters': [{
+            'output_ordinal': row.output_ordinal,
+            'decision': row.decision,
+            'reason': row.reason,
+            'constraints': [
+                constraint.model_dump(mode='json')
+                for constraint in row.constraints
+            ],
+        } for row in decision.chapters],
+    }
 
 
 def _structure_decision_payload(
@@ -1795,7 +1861,8 @@ def _structure_chapter_subject_sha256(
             if concern.chapter_ordinal in (None, ordinal)
         ]
         hashes[ordinal] = _decision_sha256({
-            'kind': 'stage4_structure_chapter_review_subject_v1',
+            'kind': 'stage4_structure_chapter_review_subject',
+            'review_contract': STRUCTURE_REVIEW_CONTRACT,
             'chapter': projected_by[ordinal],
             'binding_concerns': applicable,
         })
@@ -1889,74 +1956,6 @@ def _proof_for_legacy_structure(
         novel_dir, (STAGE4_PLAN_CHAPTERS,),
         _structure_decision_payload(decision),
     )
-
-
-def _migrate_current_legacy_structure(
-    novel_dir: Path,
-    legacy_decision: _StoredStructureDecision,
-    legacy_gate_proof: _ApprovalProof | None,
-) -> _StoredStructureDecision | None:
-    """把显式 backfill 的旧 Plan-only 决定重铸到当前 Plan+B v3 主体。
-
-    旧决定确实审过的 actor/reason/逐章决定/时间一字不改；只在旧 Plan
-    subject、旧 proof、当前 Plan 章集及当前 bound EvidenceBinding 全部可逐项
-    对证时，重算 v6 的 subject/proof。任一格不闭合就返回 ``None``，调用方
-    保持 s4 关闭，绝不拿一张旧 proof 冒充新主体。
-    """
-    public = _public_structure_decision(legacy_decision)
-    try:
-        store = _store_for(novel_dir)
-        _require_fresh_json(store, STAGE4_PLAN_CHAPTERS)
-        plan, _raw = store.read_own(PlanChapters, STAGE4_PLAN_CHAPTERS)
-        from novel.stages.stage4.measure import structure_subject_sha256
-        legacy_subject = structure_subject_sha256(plan)
-        current_subject, current_chapters = \
-            _current_structure_subject_and_chapters(novel_dir)
-        current_chapter_subjects = \
-            _current_structure_chapter_subject_sha256(novel_dir)
-        legacy_proof = _proof_for_legacy_structure(novel_dir, public)
-    except NovelError:
-        return None
-    decided = [row.output_ordinal for row in public.chapters]
-    if (
-        legacy_decision.subject_sha256 != legacy_subject
-        or decided != current_chapters
-        or any(row.decision != 'accept' for row in public.chapters)
-        or not _same_proof(legacy_decision.proof, legacy_proof)
-        or not _same_proof(legacy_gate_proof, legacy_proof)
-    ):
-        return None
-
-    migrated_public = StructureApprovalDecision(
-        actor=public.actor,
-        reason=public.reason,
-        review_token=f's4sr1_{current_subject}',
-        chapters=public.chapters,
-        decided_at=public.decided_at,
-    )
-    try:
-        migrated_proof = _proof_for_structure(novel_dir, migrated_public)
-        after_subject, after_chapters = \
-            _current_structure_subject_and_chapters(novel_dir)
-        after_chapter_subjects = \
-            _current_structure_chapter_subject_sha256(novel_dir)
-        after_legacy_proof = _proof_for_legacy_structure(novel_dir, public)
-        after_migrated_proof = _proof_for_structure(
-            novel_dir, migrated_public)
-    except NovelError:
-        return None
-    if (
-        (after_subject, after_chapters) != (current_subject, current_chapters)
-        or after_chapter_subjects != current_chapter_subjects
-        or after_legacy_proof != legacy_proof
-        or after_migrated_proof != migrated_proof
-    ):
-        return None
-    return _StoredStructureDecision(
-        actor=migrated_public.actor, reason=migrated_public.reason,
-        subject_sha256=current_subject, chapters=migrated_public.chapters,
-        decided_at=migrated_public.decided_at, proof=migrated_proof,
-        chapter_subject_sha256=current_chapter_subjects)
 
 
 def _writing_subject_sha256(proof: _ApprovalProof) -> str:
@@ -4166,6 +4165,9 @@ def approve_design(
             raise ApprovalRequired('Stage4A design review requires current gate.s2')
         novel_dir = paths.resolve_novel_dir(base, sid)
         current = _current_design_subjects(novel_dir)
+        prior_design = _design_review_view(
+            novel_dir, record, current=current)
+        prior_structure_state = _structure_view(novel_dir, record).state
         materialized = _materialize_design_request(request, current)
         _require_design_template_materialized(materialized)
         _require_design_repair_capability(materialized)
@@ -4185,17 +4187,67 @@ def approve_design(
         if after.binding_infeasibility is not None:
             after_artifacts.append(STAGE4_EVIDENCE_BINDING)
         after_proof = _make_proof(novel_dir, after_artifacts, after_payload)
-        if current != after or proof != after_proof:
+        after_structure_state = _structure_view(novel_dir, record).state
+        if (
+            current != after
+            or proof != after_proof
+            or prior_structure_state != after_structure_state
+        ):
             raise HumanEditProtected(
-                'Stage4A 候选在盲审提交期间发生变化；请刷新后重审')
+                'Stage4A 候选或最终结构裁决在盲审提交期间发生变化；'
+                '请刷新后重审')
 
         latest = raw.design_decision
-        if (
+        same_business_subject = bool(
             latest is not None
-            and latest.decision_sha256 == digest
-            and _same_proof(latest.proof, proof)
-        ):
-            return _view(base, record)
+            and _stored_design_matches_business_subject(latest, current)
+        )
+        same_external_payload = bool(
+            latest is not None
+            and _stored_design_external_payload(latest)
+            == request.model_dump(mode='json')
+        )
+        exact_replay = bool(
+            prior_design.current_decision is not None
+            and _design_decision_payload(prior_design.current_decision)
+            == _design_decision_payload(materialized)
+        )
+        if prior_design.current_decision is not None:
+            # 同一 typed 决定的逐字重放始终是幂等读，不形成第二张票，
+            # 也不会改写随后出现的 B replan。只有不同 payload 才进入
+            # resolution 例外或同主体改票拒绝。
+            if exact_replay:
+                return _view(base, record)
+            resolving_structure_replan = (
+                prior_design.state == 'accepted'
+                and prior_structure_state == 'replan_requested'
+            )
+            all_accept = (
+                materialized.strategy.decision == 'accept'
+                and all(
+                    row.decision == 'accept'
+                    for row in materialized.chapters
+                )
+            )
+            if resolving_structure_replan:
+                if all_accept:
+                    raise HumanEditProtected(
+                        '当前 Stage4A 已接受但最终结构要求 replan；'
+                        '同主体 direct all-accept 不能关闭 resolution blocker')
+                # 这是同一 A 主体唯一允许的新决定：把当前 B 的正式负结论
+                # 解析成非 all-accept 的 typed A resolution。落盘后该决定成为
+                # current，后续同主体又恢复为 exact-replay-only。
+            else:
+                raise HumanEditProtected(
+                    '当前 Stage4A 主体已有 typed 决定；同主体只接受 exact replay')
+        elif same_business_subject:
+            if not same_external_payload:
+                raise HumanEditProtected(
+                    '当前 Stage4A 业务主体已有 typed 决定；proof 漂移时只接受'
+                    '同一外部 payload 重绑，不能用旧 token 改票')
+            # 人真正审阅的业务主体和完整 typed 回执均未变；只有服务端 proof
+            # （通常是 provenance 文件 SHA）变化。保留旧历史，下面追加一条绑定
+            # 当前完整字节的 slim 记录。A 重绑绝不改写现存 B 决定或 s4 gate。
         stored = _StoredDesignDecisionSlim(
             request=request,
             candidate_sha256=current.candidate_sha256,
@@ -4645,14 +4697,20 @@ def approve_structure(
             raise HumanEditProtected('Stage4 计划在结构裁决提交期间发生变化；请刷新后重审')
 
         latest = raw.structure_decision
-        if (
+        same_payload = bool(
             latest is not None
             and _structure_decision_payload(
                 _public_structure_decision(latest)) == _structure_decision_payload(request)
-            and _same_proof(latest.proof, proof)
-            and latest.chapter_subject_sha256 == current_chapter_subjects
-        ):
-            return _view(base, record)
+        )
+        if latest is not None and latest.subject_sha256 == current_subject:
+            if not same_payload:
+                raise HumanEditProtected(
+                    '当前 Stage4 最终结构主体已有 typed 决定；'
+                    '同主体只接受 exact replay')
+            if _same_proof(latest.proof, proof):
+                return _view(base, record)
+            # subject 与外部 typed payload 均逐字未变，仅完整计划/B provenance
+            # proof 漂移。旧历史不可改写；下面追加同语义决定并只重绑当前 proof。
 
         public = StructureApprovalDecision(
             actor=request.actor,
@@ -4888,16 +4946,9 @@ def _migrate_legacy_v4(
 
     structure_history = list(record.structure_history)
     structure_decision = record.structure_decision
-    if legacy.gate.get('s4') and gates['s2'] and legacy.structure_decision is not None:
-        migrated_structure = _migrate_current_legacy_structure(
-            novel_dir, legacy.structure_decision,
-            legacy.gate_proofs.get('s4'))
-        if migrated_structure is not None:
-            structure_history.append(migrated_structure)
-            structure_decision = migrated_structure
-            gates['s4'] = True
-            gate_proofs['s4'] = migrated_structure.proof
-            backfilled.append('s4')
+    # Plan-only 旧票没有 STRUCTURE_REVIEW_CONTRACT 证据权威。即使
+    # plan/proof 字节仍可对证，显式 backfill 也只保留历史，
+    # 不得以当前 v2 subject 代人重签并打开 s4。
 
     writing = False
     writing_proof = None
@@ -4996,16 +5047,8 @@ def _migrate_legacy_v5(
             gate_proofs[gate] = current
             backfilled.append(gate)
 
-    if legacy.gate.get('s4') and gates['s2'] and legacy.structure_decision is not None:
-        migrated_structure = _migrate_current_legacy_structure(
-            novel_dir, legacy.structure_decision,
-            legacy.gate_proofs.get('s4'))
-        if migrated_structure is not None:
-            structure_history.append(migrated_structure)
-            structure_decision = migrated_structure
-            gates['s4'] = True
-            gate_proofs['s4'] = migrated_structure.proof
-            backfilled.append('s4')
+    # 与 v4 迁移相同：旧 Plan-only 结构票只留历史，不以
+    # 当前 STRUCTURE_REVIEW_CONTRACT 静默重签。
 
     return record.model_copy(update={
         'gate': gates,

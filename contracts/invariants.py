@@ -450,6 +450,10 @@ STRUCTURE_APPROVAL_DECISIONS: Final = ('accept', 'request_replan')
 STRUCTURE_APPROVAL_STATES: Final = (
     'unavailable', 'missing', 'accepted', 'replan_requested', 'expired',
 )
+#: 最终结构审批的证据权威契约。它独立于结构度量契约：度量算法不变时，
+#: 审批能否把一项读数解释为行动依据仍可能变化。该值必须进入整书与逐章
+#: subject，使旧裁决只留历史而不能在新批准边界下继续铸造执行权。
+STRUCTURE_REVIEW_CONTRACT: Final = 'stage4-structure-review-v2'
 
 #: Stage4A 的正式设计审阅与 B 后最终计划审批是两张不同的票。前者只决定
 #: 当前盲候选能否进入付费 B，绝不打开 ``gate.s4``。决定与修复码都必须是
@@ -462,11 +466,14 @@ DESIGN_REVIEWER_KINDS: Final = ('human', 'delegated_operator')
 REVIEWER_APPROVAL_SURFACES: Final = (
     'design', 'structure', 'writing', 'stage5', 'stage2_final_review',
 )
-#: 2026-09-01 升 v3：策略与章 subject 改绑稳定 strategy epoch /
+#: v3：策略与章 subject 改绑稳定 strategy epoch /
 #: chapter strategy；逐章 repair 显式区分本轮与累计 typed 约束，并把
 #: agent repair 与零模型完整章替换分成两个 capability。v1/v2 只作历史证据
-#: 保持可解码，不能铸造新的 v3 执行 scope。
-DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v3'
+#: 保持可解码，不能铸造新的 v3 执行 scope。v4 再把同主体重复裁决关闭为
+#: exact replay；旧 v3 仍须按 split-capability/strategy-epoch 形状解码，但不再
+#: 是 current review contract。
+LEGACY_V3_DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v3'
+DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v4'
 #: 精确 v6 Blueprint ↔ 既有 Stage4A v1 truth 的人工作包契约。它沿用 v3
 #: typed edit 载体，却明确没有 narrative_relations 权威，不能进入 paid lane。
 FROZEN_V6_DESIGN_REVIEW_CONTRACT: Final = \

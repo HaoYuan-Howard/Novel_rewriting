@@ -14,7 +14,8 @@ from contracts.invariants import (
     CHAPTER_WEIGHT_RATIO, PLAN_BUDGET_BAND, RESPONSE_CHAPTER_WEIGHTS,
     RESPONSE_DELIVERY_MODES, RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES,
     RESPONSE_TEMPORAL_LINKS, RESPONSE_UNIT_WEIGHTS, STRUCTURE_CHANGE_KINDS,
-    STRUCTURE_METRIC_CONTRACT, UNIT_WEIGHT_FACTOR, VERBATIM_BUDGET_FACTOR,
+    STRUCTURE_METRIC_CONTRACT, STRUCTURE_REVIEW_CONTRACT,
+    UNIT_WEIGHT_FACTOR, VERBATIM_BUDGET_FACTOR,
 )
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.beats import beat_index, verbatim_pieces
@@ -272,6 +273,7 @@ def structure_review_subject_sha256(
     ]
     payload = {
         'kind': 'stage4_structure_review_subject',
+        'review_contract': STRUCTURE_REVIEW_CONTRACT,
         'plan_subject_sha256': structure_subject_sha256(plan),
         'binding_concerns': concerns,
     }

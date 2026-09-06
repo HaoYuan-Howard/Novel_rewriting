@@ -1,7 +1,7 @@
 # 工程原则索引
 
 本文只保留可迁移的工程原则和现役落点，不保存施工日志。历史事故、实验读数和产品裁决见
-`docs/DECISIONS.md`；活动事项见 `docs/REQUIREMENTS.md`。编号 1～33 是稳定引用，代码和测试可按
+`docs/DECISIONS.md`；活动事项见 `docs/REQUIREMENTS.md`。编号 1～35 是稳定引用，代码和测试可按
 “LESSONS 第 N 条”指向这里。
 
 ## 按任务读取
@@ -12,7 +12,7 @@
 |---|---|
 | 判据、测试、fixture、覆盖率 | 1～4、7、12、21、23、24 |
 | artifact、schema、路径、provenance | 4、5、8～12、22、23、28～30 |
-| LLM、语义评审、实验、成本 | 1、2、16～18、25、33 |
+| LLM、语义评审、实验、成本 | 1、2、16～18、25、33、35 |
 | 编排、队列、恢复、AgentRun | 4、18、19、24、26～33 |
 | API、前端、审校界面 | 4、6、13～15、19 |
 | 纯跑书与流水线代批 | 不读本文；遵循 `.workflow/skills/novel-pipeline-operator/SKILL.md` |
@@ -257,3 +257,16 @@ canonical relation、实际 recovery run/parent attempt、JSONL LF 尾与全局�
 target，target 只复验；adoption/audit 幂等补齐后，最后一步才把 source journal 标成 committed。这样在
 候选、adoption、audit 或 mark 后再杀，下一枚 recovery run 仍能精确接管，而不会借旧 committer 的审计、
 重发模型 wire，或把删失的账洗成已经提交。
+
+## 35. 阅读信号没有行动权，不能经自由理由洗成付费修订
+
+人工 coverage 可以独立发现程序未标定的语义缺陷，但这不等于所有呈现给 Reviewer 的行都能授权动作。
+INFO、metric、UNVER、binding concern 与 `allowed_actions=[]` 只帮助定位；若 Reviewer 只把它们的文字抄进
+自由 reason，下一层又无条件要求生成 typed repair，就会把只读证据“洗”成真实付费权并形成返工循环。
+
+完整闭合需要三层同时守住：prompt 明说读数不是答案；审批 subject 把 evidence-authority contract 纳入
+身份，升级后旧票只留历史；同一业务 subject 的决定只允许 exact typed replay，不能靠同 token 改票逃生。
+若只是完整 provenance proof 漂移，允许保留旧 history 后把同一 payload 重绑到新 proof，但绝不改决定。
+后继 resolution 只有在能独立指出具体 scene/fact/goal 损害时才形成 typed 约束；否则提供只停机、不写审批、
+不签 token、不执行模型的 typed stop。这样既保留人工发现新问题的权力，也不让“材料不足”自动变成
+request_replan/request_repair。

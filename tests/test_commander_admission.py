@@ -3,7 +3,9 @@
 """Commander admission 的原子顺序、坏尾与重启关闭式边界。"""
 from __future__ import annotations
 
+import hashlib
 import importlib
+import json
 import subprocess
 import sys
 import threading
@@ -692,6 +694,85 @@ def test_any_new_parent_beacon_lifecycle_invalidates_reconciled_seal(tmp_path):
         subject_sha256=rebound).terminal_kind == 'reconciled'
 
 
+def test_linked_gate_seal_tracks_outer_beacons_not_admission_id(tmp_path):
+    base = str(tmp_path)
+    admission_id = 'fresh-epoch-linked-t2'
+    outer_run_id = 'agent-outer-linked'
+    admission.open_gate(
+        base, admission_id, '42', lifecycle_run_id=outer_run_id)
+    subject = admission.reconcile_subject(base, admission_id)
+    admission.reconcile_gate(
+        base, admission_id, actor='恢复值守员', reason='首次确认无残留进程',
+        subject_sha256=subject)
+
+    # admission id 下的无关 beacon 不属于这条 outer lifecycle，不能污染 seal。
+    for phase, ts in (('start', 10), ('end', 11)):
+        beacon.append(base, ProgressEvent(
+            ts=ts, sid='42', run_id=admission_id,
+            execution_id='wrong-child-beacon', node='stage4.design',
+            phase=phase, exit_code=0 if phase == 'end' else None))
+    assert admission.snapshot(
+        base, admission_id).terminal_kind == 'reconciled'
+
+    # outer 下哪怕迟到的是完整 start/end，也会反证旧人工核查。
+    for phase, ts in (('start', 12), ('end', 13)):
+        beacon.append(base, ProgressEvent(
+            ts=ts, sid='42', run_id=outer_run_id,
+            execution_id='outer-late-beacon', node='stage4.design',
+            phase=phase, exit_code=0 if phase == 'end' else None))
+    invalidated = admission.snapshot(base, admission_id)
+    assert invalidated.terminal_kind is None
+    assert invalidated.reconcile_invalidated is True
+    assert admission.unresolved(base, '42') == (invalidated,)
+
+
+def test_old_v1_reconcile_seal_is_invalidated_by_v3_subject_and_can_reseal(
+        tmp_path):
+    """升级不能继续信任只看 admission id beacon 的历史 v2 subject。"""
+    base = str(tmp_path)
+    admission_id = 'legacy-v1-reconcile'
+    common = {
+        'wire_version': 1, 'parent_run_id': admission_id, 'sid': '42',
+        'claim_id': None, 'node': None, 'claim_sha256': None,
+        'actor': None, 'reason': None, 'subject_sha256': None, 'force': None,
+    }
+    opened = {**common, 'kind': 'opened', 'ts': 1}
+    old_payload = {
+        'protocol': 'novel-commander-admission-reconcile/v2',
+        'parent_run_id': admission_id, 'sid': '42',
+        'events': [opened], 'beacon_lifecycle': [],
+    }
+    old_subject = hashlib.sha256(json.dumps(
+        old_payload, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':')).encode('utf-8')).hexdigest()
+    closed = {**common, 'kind': 'closed', 'ts': 2}
+    reconciled = {
+        **common, 'kind': 'reconciled', 'ts': 3,
+        'actor': '旧值守员', 'reason': '旧协议核查',
+        'subject_sha256': old_subject, 'force': False,
+    }
+    path = admission.admission_path(base)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(''.join(
+        json.dumps(row, ensure_ascii=False, sort_keys=True,
+                   separators=(',', ':')) + '\n'
+        for row in (opened, closed, reconciled)), encoding='utf-8')
+
+    invalidated = admission.snapshot(base, admission_id)
+    assert invalidated.terminal_kind is None
+    assert invalidated.reconcile_invalidated is True
+    assert admission.unresolved(base, '42') == (invalidated,)
+    current_subject = admission.reconcile_subject(base, admission_id)
+    assert current_subject != old_subject
+
+    done = admission.reconcile_gate(
+        base, admission_id, actor='新值守员', reason='按 v3 重新核查',
+        subject_sha256=current_subject)
+    assert done.terminal_kind == 'reconciled'
+    assert done.lifecycle_run_id == admission_id
+    assert admission.read_events(base)[-1].wire_version == 2
+
+
 def test_hash_bound_tail_repair_quarantines_original_and_fsyncs_prefix(tmp_path):
     base = str(tmp_path)
     admission.open_gate(base, 'parent-tail-repair', '42')
@@ -805,6 +886,9 @@ def test_reconcile_cli_has_read_only_template_then_typed_apply(
         '--admission-parent-run-id', 'parent-cli-reconcile']) == 0
     shown = __import__('json').loads(capsys.readouterr().out)
     assert shown['sid'] == '42'
+    assert shown['admission_id'] == 'parent-cli-reconcile'
+    assert shown['lifecycle_run_id'] == 'parent-cli-reconcile'
+    assert shown['agent_run_id'] is None
     assert shown['apply_requires'] == [
         '--actor', '--reason', '--subject-sha256']
 

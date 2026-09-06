@@ -66,6 +66,7 @@ from contracts.invariants import (
     DESIGN_REPAIR_CODES,
     DESIGN_REVIEW_CONTRACT,
     FROZEN_V6_DESIGN_REVIEW_CONTRACT,
+    LEGACY_V3_DESIGN_REVIEW_CONTRACT,
     DESIGN_REVIEWER_KINDS,
     DESIGN_REVIEW_STATES,
     DESIGN_STRATEGY_REPLAN_CONSTRAINTS,
@@ -1269,8 +1270,8 @@ class DesignStrategyReview(FrozenModel):
         default=None, pattern=r'^[0-9a-f]{64}$')
     decision: DesignStrategyDecisionKind
     reason: str = Field(min_length=1)
-    #: v3 的 request_replan 必须带非空 typed 约束；v1/v2 历史缺字段
-    #: 仍可解码，但不能直接变成新的 replan scope。
+    #: v3 起 request_replan 必须带非空 typed 约束；v1/v2 历史缺字段
+    #: 仍可解码，但不能直接变成新的 replan scope。v4 沿用该载体。
     replan_constraints: list[DesignStrategyReplanConstraint] = Field(
         default_factory=list)
     source_decision_sha256: str | None = Field(
@@ -1293,14 +1294,16 @@ class DesignStrategyReview(FrozenModel):
         ) for row in self.replan_constraints]
         if keys != sorted(set(keys)):
             raise ValueError('strategy replan constraints 必须规范排序且不重复')
-        current = self.subject.basis.review_contract in {
-            DESIGN_REVIEW_CONTRACT, FROZEN_V6_DESIGN_REVIEW_CONTRACT,
+        split_capability = self.subject.basis.review_contract in {
+            DESIGN_REVIEW_CONTRACT, LEGACY_V3_DESIGN_REVIEW_CONTRACT,
+            FROZEN_V6_DESIGN_REVIEW_CONTRACT,
         }
         if self.decision == 'accept' and self.replan_constraints:
             raise ValueError('accept 策略不得夹带 replan constraints')
-        if current and self.decision == 'request_replan' \
+        if split_capability and self.decision == 'request_replan' \
                 and not self.replan_constraints:
-            raise ValueError('v3 request_replan 必须给出 typed strategy constraint')
+            raise ValueError(
+                'split-capability request_replan 必须给出 typed strategy constraint')
         return self
 
 
@@ -1423,23 +1426,24 @@ class DesignReviewMaterialized(StrictModel):
             raise ValueError('design review 章集必须与策略章权重表精确一致')
         if [row.output_ordinal for row in self.repair_capability.chapters] != ordinals:
             raise ValueError('design repair capability 必须精确覆盖本次审阅章集')
-        current = self.strategy.subject.basis.review_contract in {
-            DESIGN_REVIEW_CONTRACT, FROZEN_V6_DESIGN_REVIEW_CONTRACT,
+        split_capability = self.strategy.subject.basis.review_contract in {
+            DESIGN_REVIEW_CONTRACT, LEGACY_V3_DESIGN_REVIEW_CONTRACT,
+            FROZEN_V6_DESIGN_REVIEW_CONTRACT,
         }
-        if current:
+        if split_capability:
             if not self.repair_capability.is_v3:
-                raise ValueError('v3 design review 必须发布分离的 repair/edit capability')
+                raise ValueError('split-capability design review 必须发布分离的 repair/edit capability')
             epochs = {
                 row.subject.strategy_epoch_sha256 for row in self.chapters
             }
             if None in epochs or len(epochs) != 1:
-                raise ValueError('v3 每章 subject 必须绑定同一 strategy epoch')
+                raise ValueError('split-capability 每章 subject 必须绑定同一 strategy epoch')
             if any(
                 row.subject.chapter_strategy_sha256 is None
                 or row.subject.strategy_subject_sha256 is not None
                 for row in self.chapters
             ):
-                raise ValueError('v3 每章 subject 必须只使用 chapter strategy 身份')
+                raise ValueError('split-capability 每章 subject 必须只使用 chapter strategy 身份')
             if any(
                 self.strategy.subject_sha256 != constraint.subject_sha256
                 for constraint in self.strategy.replan_constraints

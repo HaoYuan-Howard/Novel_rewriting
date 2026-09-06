@@ -228,9 +228,12 @@ concerns 的完整逐章 typed 最终结构决定。工作包里 INFO/metric/UNV
 通用 s4 gate 不是兼容入口；计划或 concerns 变化后旧决定立即过期。只有全部章 `accept`，才可单独
 运行 0 成本 `stage4.context`；Context current/fresh 后再生成并提交 Stage5 writing 授权，才可执行
 `stage5.write`。若任一章为 `request_replan`，这份 B 决定本身仍只落账、不启动作业；下一次 operator
-必须发布不同的 `approval:stage4-structure-replan`。Commander 交叉读取该 B 决定/证据与当前 A 工作包，
-形成一份新的 current typed A `request_repair / request_replan`，不得再次审同一份 B，也不得全量
-accept 来绕开 B 的拒绝。新 A 决定落盘后，确定性恢复按 opaque token 只交 Executor 精确执行。
+必须发布不同的 `approval:stage4-structure-replan`。Commander 交叉读取该 B 决定/证据与当前 A 工作包：
+若能独立确认具体 scene/fact/goal 的结构损害，提交新的 non-all-accept current typed A
+`request_repair / request_replan`；若拒绝仅由 INFO/metric/UNVER/binding concern 等只读材料支撑，提交
+同包 `stop:stage4-structure-replan` 并以 exit 2 安全停机。stop 不写 A/B 审批、不签 token、不调用
+Executor；两条出口都不得再次审同一份 B，也不得用全量 accept 改写 B。只有新 A 决定落盘后，
+确定性恢复才按 opaque token 只交 Executor 精确执行。
 
 Stage2 有两条可重叠的支路，而不是一条全串行链：最新 Global 候选只要通过当前 schema，并物化出
 current/fresh 称名投影，就可立即启动 blueprint；不必等待 Global 正式稿。Global HARD 可以把候选

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Stage4 design review v3 的纯契约回归。
+"""Stage4 design review v4 与 v3 历史兼容的纯契约回归。
 
 本文件不读审批盘、不起 provider，只钉住新旧决定的可读边界、typed
 relation feedback、累计 repair scope 与完整章外部请求的注册形状。
@@ -12,7 +12,10 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.artifacts import STAGE4_BLIND_CHAPTER_EDIT
-from contracts.invariants import BLIND_ALIAS_ALGORITHM, DESIGN_REVIEW_CONTRACT
+from contracts.invariants import (
+    BLIND_ALIAS_ALGORITHM, DESIGN_REVIEW_CONTRACT,
+    LEGACY_V3_DESIGN_REVIEW_CONTRACT,
+)
 from contracts.schema import ARTIFACT_SPECS
 from contracts.schema.api import (
     DesignAcceptedChapterConstraint,
@@ -126,8 +129,8 @@ def _v3_capability() -> DesignReviewRepairCapability:
     )
 
 
-def test_design_review_contract_is_v3_and_chapter_subject_identity_is_exclusive():
-    assert DESIGN_REVIEW_CONTRACT == 'stage4-design-review-v3'
+def test_design_review_contract_is_v4_and_chapter_subject_identity_is_exclusive():
+    assert DESIGN_REVIEW_CONTRACT == 'stage4-design-review-v4'
     assert _v3_subject().strategy_subject_sha256 is None
 
     legacy = DesignChapterSubject(
@@ -143,7 +146,7 @@ def test_design_review_contract_is_v3_and_chapter_subject_identity_is_exclusive(
             blind_truth=_truth(), chapter=_chapter(), structure_evidence=_evidence())
 
 
-def test_v2_complete_decision_shape_remains_readable_but_v3_uses_new_identities():
+def test_v2_and_v3_decisions_remain_readable_but_v4_uses_split_identities():
     legacy_strategy = DesignStrategySubject.model_validate({
         'basis': {
             'review_contract': 'stage4-design-review-v2',
@@ -187,7 +190,7 @@ def test_v2_complete_decision_shape_remains_readable_but_v3_uses_new_identities(
         }),
     })
     current = DesignReviewMaterialized(
-        actor='reviewer', reviewer_kind='human', review_run_id='current-v3',
+        actor='reviewer', reviewer_kind='human', review_run_id='current-v4',
         general_reason='当前决定使用章级策略身份。',
         candidate_sha256='4' * 64, aggregate_subject_sha256='5' * 64,
         repair_capability=_v3_capability(),
@@ -202,6 +205,15 @@ def test_v2_complete_decision_shape_remains_readable_but_v3_uses_new_identities(
         )],
     )
     assert current.chapters[0].subject.chapter_strategy_sha256 == '2' * 64
+
+    # v4 只改变 currentness / 同主体批准语义；已经持久化的 v3 使用的是
+    # 同一 split-capability + strategy-epoch 家族，不能被误送进 v1/v2 decoder。
+    old_v3 = current.model_dump(mode='json')
+    old_v3['strategy']['subject']['basis']['review_contract'] = \
+        LEGACY_V3_DESIGN_REVIEW_CONTRACT
+    restored_v3 = DesignReviewMaterialized.model_validate(old_v3)
+    assert restored_v3.repair_capability.is_v3
+    assert restored_v3.chapters[0].subject.strategy_epoch_sha256 == '1' * 64
 
 
 def test_narrative_relation_repair_effect_is_typed_and_always_hard():

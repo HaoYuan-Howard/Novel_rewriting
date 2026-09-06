@@ -51,7 +51,7 @@ from novel.commanders import (
 from novel.cli.main import main as cli_main
 from novel.errors import TerminalState
 from novel.orchestrator import (
-    admission, agent, beacon, execution_permit, jobs, nodes,
+    admission, agent, beacon, execution_permit, jobs, nodes, queue,
     stage2_review_ledger,
 )
 from novel.orchestrator.jobs import JobConflict
@@ -350,7 +350,8 @@ def test_prompt_is_reviewer_only_and_contains_no_control_plane_instructions(base
     assert '不得启动任何小说节点或 Executor' in text
     assert '不得修改正式产物、服务账或 Markdown' in text
     assert 'expected-code-version' in text
-    assert '证据不足时保留 UNVER' in text
+    assert 'schema 提供 UNVER 时保持 UNVER' in text
+    assert 'read-only 或材料不足不得制造付费动作' in text
     assert 'reviewer 契约' in text and '不读取该 skill' in text
     assert 'run_step' not in text
     assert 'operator next' not in text
@@ -1850,14 +1851,21 @@ def test_reviewer_workpack_stopped_reaches_agent_outcome_without_seat_or_wire(
     assert not ledger.exists() or '"role": "commander"' not in ledger.read_text('utf-8')
 
 
-def test_stage0_reviewer_stop_is_terminal_without_canonical_action(
-        base, corpus, monkeypatch):
+@pytest.mark.parametrize('waiting_on', [
+    'stage0.approve',
+    queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
+])
+def test_reviewer_stop_is_terminal_without_canonical_action(
+        base, corpus, monkeypatch, waiting_on):
     """typed stop 是 Supervisor 终态，不误落入 approval/node 执行。"""
+    approval_path = Path(base) / '_service' / 'approvals' / '42.json'
+    approval_before = (
+        approval_path.read_bytes() if approval_path.is_file() else None)
     current = SimpleNamespace(
         state='blocked', code_version='test-code-version',
         surface_seal='c' * 64, execution_token=None,
         action=SimpleNamespace(
-            waiting_on='stage0.approve', action_sha256='d' * 64))
+            waiting_on=waiting_on, action_sha256='d' * 64))
     monkeypatch.setattr(
         agent.operator, 'next_action_at_code',
         lambda _base, _sid, *, code: current)
@@ -1866,7 +1874,7 @@ def test_stage0_reviewer_stop_is_terminal_without_canonical_action(
     def build_task(_base, _sid, _current, request_path, *, epoch_id):
         del epoch_id
         task = agent.reviewer_tasks.ReviewerTask(
-            waiting_on='stage0.approve', surface_seal=current.surface_seal,
+            waiting_on=waiting_on, surface_seal=current.surface_seal,
             business_sha256='e' * 64, request_path=Path(request_path),
             prompt='STAGE0 IMMUTABLE WORKPACK', submission_options=())
         task_box['task'] = task
@@ -1885,6 +1893,9 @@ def test_stage0_reviewer_stop_is_terminal_without_canonical_action(
     monkeypatch.setattr(
         agent, '_reviewer_approval_argv',
         lambda *_args, **_kwargs: canonical_calls.append('approval'))
+    monkeypatch.setattr(
+        agent.execution_permit, 'permit_from_next',
+        lambda *_args, **_kwargs: pytest.fail('typed stop 不得铸 permit'))
     invocations = []
 
     def default_spawn(_run_id, *, on_registered=None):
@@ -1913,10 +1924,15 @@ def test_stage0_reviewer_stop_is_terminal_without_canonical_action(
 
     assert len(invocations) == 1
     assert canonical_calls == []
+    assert (
+        approval_path.read_bytes() if approval_path.is_file() else None
+    ) == approval_before
+    assert _reviewer_action_files(base) == []
     [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
     assert done.exit_code == 2
     assert done.outcome is not None and done.outcome.state == 'stopped'
     assert stop_reason in done.outcome.reason
+    assert waiting_on in done.outcome.reason
     [seat] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
     assert [row['outcome'] for row in seat['turns']] == ['ok']
     assert seat['pending_correction'] is False

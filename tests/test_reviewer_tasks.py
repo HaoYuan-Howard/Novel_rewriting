@@ -594,6 +594,94 @@ def test_stage4_structure_replan_is_a_design_resolution_task() -> None:
         queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN] == {'design'}
 
 
+def test_stage4_structure_replan_offers_bound_stop_without_weakening_design(
+        tmp_path, monkeypatch) -> None:
+    """只读 B 拒因可安全停机；真实 coverage 缺陷仍走 typed A resolution。"""
+    current = _current(queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN)
+    monkeypatch.setattr(
+        reviewer_tasks, 'DesignReviewTemplate',
+        SimpleNamespace(model_validate=lambda raw: raw))
+    monkeypatch.setattr(
+        reviewer_tasks, '_compact_design_payload',
+        lambda _source: {
+            'review_token': 's4dr1_' + 'a' * 64,
+            'strategy': {}, 'chapters': [],
+        })
+
+    options = reviewer_tasks._submission_options(
+        {'_design_template': {}}, current,
+        queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN)
+
+    assert [option['id'] for option in options] == [
+        'approval:design', 'stop:stage4-structure-replan']
+    design_values = options[0]['allowed_values']
+    assert '具体的 scene/fact/goal' in design_values['resolution_requirement']
+    assert 'INFO、metric、UNVER' in design_values['resolution_requirement']
+    stop_request = copy.deepcopy(options[1]['exact_request'])
+    assert stop_request['surface_seal'] == current.surface_seal
+    stop_request['action']['reason'] = (
+        '逐章交叉阅读后，现有拒绝只引用 alignment metric 与 causal INFO；'
+        '未发现任何可指向 scene、fact 或 goal 的结构损害')
+    path = tmp_path / 'structure-replan-stop.json'
+    path.write_text(json.dumps(stop_request, ensure_ascii=False), encoding='utf-8')
+
+    action = reviewer_tasks.load_action(
+        path, current, submission_options=options)
+
+    assert isinstance(action, reviewer_tasks.ReviewerStopAction)
+    assert 'alignment metric' in action.reason
+
+    wrong = _current(queue.WAITING_ON_STAGE4_BINDING_RESOLUTION)
+    stop_request['surface_seal'] = wrong.surface_seal
+    stop_request['waiting_on'] = queue.WAITING_ON_STAGE4_BINDING_RESOLUTION
+    path.write_text(json.dumps(stop_request, ensure_ascii=False), encoding='utf-8')
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='不允许 reviewer stop'):
+        reviewer_tasks.load_action(
+            path, wrong, submission_options=[options[1]])
+
+
+def test_structure_replan_prompt_never_turns_read_only_rows_into_paid_action(
+        tmp_path, monkeypatch) -> None:
+    current = _current(queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN)
+    monkeypatch.setattr(
+        reviewer_tasks.paths, 'scratch_session_dir',
+        lambda _base, _sid, _epoch_id: tmp_path)
+    monkeypatch.setattr(
+        reviewer_tasks, '_workpack',
+        lambda *_args, **_kwargs: {
+            'design': {}, 'structure': {},
+            'structure_replan_decision': {}, '_design_template': {},
+        })
+    monkeypatch.setattr(
+        reviewer_tasks, '_review_materials', lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        reviewer_tasks, 'DesignReviewTemplate',
+        SimpleNamespace(model_validate=lambda raw: raw))
+    monkeypatch.setattr(
+        reviewer_tasks, '_compact_design_payload',
+        lambda _source: {
+            'review_token': 's4dr1_' + 'a' * 64,
+            'strategy': {}, 'chapters': [],
+        })
+    from novel.orchestrator import inspection
+    monkeypatch.setattr(
+        inspection, 'read_surface_seal',
+        lambda *_args, **_kwargs: current.surface_seal)
+
+    task = reviewer_tasks.build_task(
+        tmp_path, '42', current, tmp_path / 'request.json',
+        epoch_id='epoch-1')
+
+    assert task is not None
+    assert [row['id'] for row in task.submission_options] == [
+        'approval:design', 'stop:stage4-structure-replan']
+    assert '声明—实算差异' in task.prompt
+    assert '都只有阅读定位权' in task.prompt
+    assert '不能单独制造付费返工' in task.prompt
+    assert '不写 A/B 审批、不改 gate、不签 execution' in task.prompt
+    assert '材料不足而被改写成 request_replan/request_repair' in task.prompt
+
+
 def test_stage4_structure_replan_workpack_uses_one_frozen_in_process_snapshot(
         tmp_path, monkeypatch) -> None:
     current_b = {
@@ -725,7 +813,9 @@ def test_stage4_resolution_loader_rejects_noop_accept_and_accepts_typed_replan(
         'editable_fields': [], 'binding_fields': [], 'allowed_values': {},
     }]
 
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='all-accept'):
+    with pytest.raises(
+            reviewer_tasks.ReviewerTaskError,
+            match='stop:stage4-structure-replan'):
         reviewer_tasks.load_action(
             path, current, submission_options=options)
 

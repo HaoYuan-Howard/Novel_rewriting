@@ -837,7 +837,7 @@ CommanderAdmissionEventKind = Literal[COMMANDER_ADMISSION_EVENT_KINDS]
 
 
 class CommanderAdmissionEvent(FrozenModel):
-    """Commander execution admission 的一行持久 wire（v1）。
+    """Commander execution admission 的一行持久 wire（v1 / v2）。
 
     ``opened/closed`` 管父 run 是否还能接纳新执行；``claimed/released`` 精确
     标识一个 ``run_step --execute`` 的完整 Step 序列；``drained/reconciled``
@@ -845,8 +845,13 @@ class CommanderAdmissionEvent(FrozenModel):
     事务锁，close 和 claim 因而有唯一、可重放的先后关系。
     """
 
-    wire_version: Literal[1] = 1
+    wire_version: Literal[1, 2] = 1
     parent_run_id: str = Field(pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    #: gate 自身身份与持有 OS owner lease、写 progress beacon 的外层生命周期
+    #: 可以不同。v2 把这条联结逐行固化；v1 缺失时只能由恢复层依据唯一
+    #: AgentRun ``epoch_opened`` 事实显式解析，绝不能按时间或字符串前缀猜。
+    lifecycle_run_id: str | None = Field(
+        default=None, pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
     sid: str = Field(min_length=1, max_length=128)
     kind: CommanderAdmissionEventKind
     ts: int = Field(ge=0)
@@ -863,6 +868,11 @@ class CommanderAdmissionEvent(FrozenModel):
 
     @model_validator(mode='after')
     def _payload_matches_kind(self) -> CommanderAdmissionEvent:
+        if self.wire_version == 1:
+            if self.lifecycle_run_id is not None:
+                raise ValueError('wire v1 不得携带 lifecycle_run_id')
+        elif self.lifecycle_run_id is None:
+            raise ValueError('wire v2 必须携带 lifecycle_run_id')
         claim_payload = (self.claim_id, self.node, self.claim_sha256)
         audit_payload = (self.actor, self.reason, self.subject_sha256, self.force)
         if self.kind in ('opened', 'closed', 'drained'):

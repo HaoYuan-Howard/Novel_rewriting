@@ -323,6 +323,11 @@ coverage 行 `reading` 中的安全盲真相、候选场景与服务端现场复
    preview/确认，但不得自行改 node、flags 或 token。typed approval 决定一经 loader 通过就按内容寻址
    持久化到 `_service/edits/<sid>/`；代码/skill 漂移、崩溃或重启后，同一 blocker 先零模型重放该
    决定，不重复唤起 Commander。
+5. 当本轮用于收敛 Stage4B 的 `request_replan` 时，只有交叉阅读后能独立指出具体的 scene/fact/goal
+   结构损害，才把它翻译成 typed A constraint。INFO、metric、UNVER、`binding_concern`、
+   声明—实算差异或 `allowed_actions=[]` 的行只有阅读定位权，不得改写成 Executor 指令；若现有 B
+   拒绝仅由这些只读材料支撑且没有具体结构损害，选择工作包提供的 typed stop，安全结束本轮，
+   不写 A/B 审批、不改 gate、不签 execution token，也不调用 Executor。
 <!-- reviewer-contract:stage4-design:end -->
 
 exact legacy-frozen 主体是唯一例外：真实全章 accept 仍必须提交 raw typed 决定，但公开 Design workpack 与
@@ -343,17 +348,19 @@ edit token 伪造问题，frozen 路也始终不得生成 `s4rr1` 或 paid spawn
 不再读取 `plan_chapters.json`、蓝图或正文原始字节：
 
 <!-- reviewer-contract:stage4-structure:begin -->
-1. `retain` 章的声明变化必须为空；人工理由要能指出强线性、因果锁定、证据受限或本章本就没有可靠
-   重组空间中的具体一种，不能只写“保留更稳”。
-2. `reconstruct` 章先核对声明的变化种类，再读代码复算的分区、披露顺序、非连续重组和首尾锚点。
-   至少能明确指出场景入口、事实组合或揭示顺序中的真实变化；低文字重合、场数变化或 goal 的自报
-   不能单独充当结构变化证据。
+1. coverage 是独立的人审动作槽，可以发现工作包未预登记的真实语义缺陷；`request_replan` 理由必须
+   指出本章具体 scene/fact/goal 的结构损害及其后果，不能只写“保留更稳”、标签不符或读数变化。
+2. `retain / reconstruct`、声明变化种类与代码复算的分区、披露顺序、非连续重组、首尾锚点都是
+   阅读导航，不是验收答案。声明—实算不一致、低文字重合、场数变化或 goal 自报本身都不能单独
+   充当 `request_replan` 依据；只有它们帮助定位出的具体语义损害才可进入 coverage 裁决。
 3. 不为顺叙、倒叙或距离读数发明自动阈值。因果边约束故事成立，不等于必须按因果顺序披露；
    `unver`、零分母或不可比较 span 保持原态，不能洗成通过。
 4. 核对 B 只给冻结的 A 候选绑定 stage/material/participant 证据，没有改场景顺序、事实分组、
    开尾目标或 retain/reconstruct 决定；该不变量若被破坏，应由正式计划闸关闭式拒绝，不靠人工宽免。
-5. 逐条阅读 `binding_concerns`。它们是非阻断语义担忧，不是自动失败或正式 infeasible proof；接受章的
-   理由应说明 concern 为何不破坏本章结构，无法确认时保留 `request_replan`，不得把 concern 隐藏掉。
+5. 逐条阅读 `binding_concerns`，但它们和 INFO、metric、UNVER、skipped、phase-deferred 一样只有披露与
+   定位权，不能单独制造付费动作；“无法确认”必须保持其原状态，绝不能因此保留或发明
+   `request_replan`。接受章的理由可说明 concern 为何不破坏结构；拒绝章则必须另行给出第一条要求的
+   具体 coverage 语义缺陷。
 <!-- reviewer-contract:stage4-structure:end -->
 
 提交时必须使用服务端当前完整 subject SHA-256、actor、总理由，以及恰好覆盖全部计划章的逐章
@@ -378,11 +385,14 @@ novel.cli approval apply structure <SID> --base <BASE> --input <决定文件或 
 
 若 current Structure 决定含 `request_replan`，下一次 operator 的 blocker 必须是
 `approval:stage4-structure-replan`，不是再次派发 `approval:stage4-structure-review`。Commander 此时
-交叉读取已拒绝 B 的逐章理由/证据和当前 Design 工作包，只能提交一份新的 current typed A
-`request_repair / request_replan`；全量 accept 会被 loader 拒绝，B 的自然语言理由也不能直接变成
-Executor prompt。决定落盘后 operator 转为 `recovery:stage4-design-action`，RunSupervisor 不再调用
-Commander，只把 action 的 opaque token 与 exact flags 交给 Executor。A 修订完成并重新全书审阅后，
-B 仍需新的独立付费授权与最终结构裁决。
+交叉读取已拒绝 B 的逐章理由/证据和当前 Design 工作包。若能独立指出具体 scene/fact/goal 的
+coverage 结构损害，提交一份新的 non-all-accept current typed A `request_repair / request_replan`；
+全量 accept 会被 loader 拒绝，B 的自然语言理由也不能直接变成 Executor prompt。若拒绝理由只来自
+INFO/metric/UNVER/binding concern 等 read-only 材料且没有具体结构损害，必须选择同包
+`stop:stage4-structure-replan`：它只让本次 AgentRun 安全停止，不写 A/B 审批、不改 gate、不签 token、
+不调用 Executor，也不能用同一 B token 改票。只有 A 决定真实落盘时，operator 才转为
+`recovery:stage4-design-action`，RunSupervisor 不再调用 Commander，只把 action 的 opaque token 与
+exact flags 交给 Executor。A 修订完成并重新全书审阅后，B 仍需新的独立付费授权与最终结构裁决。
 
 ## Stage5 写作授权
 

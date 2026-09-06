@@ -165,10 +165,10 @@ def test_current_writing_proof_binds_stage1_plan_and_context_without_s3(
     assert 'mode' not in todo[0].model_dump()
 
 
-def test_explicit_v6_backfill_preserves_typed_histories_but_clears_stage5_authority(
+def test_explicit_v6_backfill_preserves_current_typed_histories_but_clears_stage5(
     current_book,
 ):
-    """v6→v7 只迁可逐项对证的历史，不伪造写后 closure 权限。"""
+    """v6 内已绑 current 契约的 typed 票可对证，但不伪造 Stage5 权限。"""
     base, _book = current_book
     _approve_writing(base)
     request = approvals.writing_template(
@@ -206,9 +206,9 @@ def test_explicit_v6_backfill_preserves_typed_histories_but_clears_stage5_author
     assert landed.closure_history == [] and landed.closure_decision is None
 
 
-def test_explicit_v5_backfill_recasts_current_s4_decision_and_lands_v6(
+def test_explicit_v5_backfill_preserves_old_s4_as_expired_history(
         current_book, monkeypatch):
-    """旧 Plan-only 决定只能显式重铸；落盘 proof/decision 必须同为新主体。"""
+    """旧 Plan-only 决定不得借显式 backfill 获得 v2 证据权威。"""
     from novel.stages.stage4.measure import structure_subject_sha256
 
     base, book = current_book
@@ -286,13 +286,12 @@ def test_explicit_v5_backfill_recasts_current_s4_decision_and_lands_v6(
     result = approvals.backfill_from_disk(base, SID)
     raw = json.loads(path.read_text(encoding='utf-8'))
 
-    assert result.approvals.v == 6 and result.approvals.gate['s4']
-    assert 's4' in result.backfilled and raw['v'] == 7
-    assert raw['structure_decision']['subject_sha256'] == \
-        result.approvals.structure.review_token.removeprefix('s4sr1_')
-    assert raw['gate_proofs']['s4'] == raw['structure_decision']['proof']
-    assert set(raw['structure_decision']['proof']['artifacts']) == {
-        PLAN_REL, STAGE4_EVIDENCE_BINDING}
+    assert result.approvals.v == 6 and not result.approvals.gate['s4']
+    assert result.approvals.structure.state == 'expired'
+    assert 's4' not in result.backfilled and raw['v'] == 7
+    assert raw['structure_decision']['subject_sha256'] == legacy_subject
+    assert raw['gate_proofs']['s4'] is None
+    assert set(raw['structure_decision']['proof']['artifacts']) == {PLAN_REL}
     assert raw['structure_decision']['actor'] == 'legacy-reviewer'
     assert raw['structure_decision']['decided_at'] == '2026-08-26T00:00:00+00:00'
 

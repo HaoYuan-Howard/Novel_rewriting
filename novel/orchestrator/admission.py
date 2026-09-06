@@ -173,13 +173,21 @@ class AdmissionClaim:
 
 @dataclass(frozen=True)
 class AdmissionSnapshot:
+    #: 历史字段名保留 wire/API 兼容；它实际是这枚 admission gate 的身份。
     parent_run_id: str
+    #: 持有 owner lease、写 progress beacon、接收 AgentRun lifecycle 投影的
+    #: 外层 run。新 v2 opened 直接固化；旧 v1 在 typed reconcile 时才升级。
+    lifecycle_run_id: str
     sid: str
     opened: bool
     closed: bool
     active_claims: tuple[AdmissionClaim, ...]
+    lifecycle_linked: bool = False
     terminal_kind: str | None = None
     terminal_subject_sha256: str | None = None
+    terminal_actor: str | None = None
+    terminal_reason: str | None = None
+    terminal_force: bool | None = None
     reconcile_invalidated: bool = False
 
 
@@ -205,14 +213,20 @@ def _fold(events: list[CommanderAdmissionEvent], parent_run_id: str,
     selected = [event for event in events if event.parent_run_id == checked]
     if not selected:
         return AdmissionSnapshot(
-            parent_run_id=checked, sid='', opened=False, closed=False,
+            parent_run_id=checked, lifecycle_run_id=checked,
+            sid='', opened=False, closed=False,
             active_claims=(), terminal_kind=None)
 
     sid = selected[0].sid
+    lifecycle_run_id: str | None = None
+    lifecycle_linked = False
     opened = False
     closed = False
     terminal_kind: str | None = None
     terminal_subject_sha256: str | None = None
+    terminal_actor: str | None = None
+    terminal_reason: str | None = None
+    terminal_force: bool | None = None
     reconcile_invalidated = False
     claims: dict[str, AdmissionClaim] = {}
     active_order: list[str] = []
@@ -221,6 +235,15 @@ def _fold(events: list[CommanderAdmissionEvent], parent_run_id: str,
             raise ValueError(
                 f'parent run {checked!r} 的 admission sid 从 {sid!r} '
                 f'漂移为 {event.sid!r}')
+        if event.wire_version == 2:
+            assert event.lifecycle_run_id is not None
+            if (lifecycle_run_id is not None
+                    and lifecycle_run_id != event.lifecycle_run_id):
+                raise ValueError(
+                    f'admission {checked!r} 的 lifecycle_run_id 从 '
+                    f'{lifecycle_run_id!r} 漂移为 {event.lifecycle_run_id!r}')
+            lifecycle_run_id = event.lifecycle_run_id
+            lifecycle_linked = True
         if event.kind == 'opened':
             if opened or claims or closed:
                 raise ValueError(f'parent run {checked!r} 重复或迟到 opened')
@@ -243,6 +266,9 @@ def _fold(events: list[CommanderAdmissionEvent], parent_run_id: str,
                 raise ValueError('drained 时仍有 active claim')
             terminal_kind = 'drained'
             terminal_subject_sha256 = None
+            terminal_actor = None
+            terminal_reason = None
+            terminal_force = None
             continue
         if event.kind == 'reconciled':
             if not closed or terminal_kind == 'drained':
@@ -257,6 +283,9 @@ def _fold(events: list[CommanderAdmissionEvent], parent_run_id: str,
             # reconcile 仍复用同一事件种类，以新主体替换旧 seal。
             terminal_kind = 'reconciled'
             terminal_subject_sha256 = event.subject_sha256
+            terminal_actor = event.actor
+            terminal_reason = event.reason
+            terminal_force = event.force
             reconcile_invalidated = False
             continue
         claim = _claim_of(event)
@@ -282,14 +311,43 @@ def _fold(events: list[CommanderAdmissionEvent], parent_run_id: str,
         if terminal_kind == 'reconciled':
             terminal_kind = None
             terminal_subject_sha256 = None
+            terminal_actor = None
+            terminal_reason = None
+            terminal_force = None
             reconcile_invalidated = True
         active_order.remove(claim.claim_id)
     return AdmissionSnapshot(
-        parent_run_id=checked, sid=sid, opened=opened, closed=closed,
+        parent_run_id=checked, lifecycle_run_id=lifecycle_run_id or checked,
+        sid=sid, opened=opened, closed=closed,
         active_claims=tuple(claims[item] for item in active_order),
+        lifecycle_linked=lifecycle_linked,
         terminal_kind=terminal_kind,
         terminal_subject_sha256=terminal_subject_sha256,
+        terminal_actor=terminal_actor,
+        terminal_reason=terminal_reason,
+        terminal_force=terminal_force,
         reconcile_invalidated=reconcile_invalidated)
+
+
+def _with_reconcile_lifecycle(
+        current: AdmissionSnapshot, lifecycle_run_id: str | None,
+) -> AdmissionSnapshot:
+    """给旧 v1 gate 套用已由上层精确证明的 lifecycle 联结。
+
+    新 v2 账中的联结是 durable truth，调用方不得覆盖；旧 v1 没有这格时，
+    ``None`` 维持历史 self-run 语义，显式值则只在本次 subject/CAS 使用，并由
+    后续 v2 close/reconciled 行固化。
+    """
+    if lifecycle_run_id is None:
+        return current
+    checked = run_identity.check_run_id(lifecycle_run_id)
+    if current.lifecycle_linked and current.lifecycle_run_id != checked:
+        raise TerminalState(
+            f'admission {current.parent_run_id!r} 已绑定 lifecycle_run_id='
+            f'{current.lifecycle_run_id!r}，拒绝覆盖为 {checked!r}')
+    if current.lifecycle_run_id == checked:
+        return current
+    return replace(current, lifecycle_run_id=checked)
 
 
 def _parent_beacon_events(
@@ -311,6 +369,7 @@ def _validate_reconcile_seal(
         return current
     return replace(
         current, terminal_kind=None, terminal_subject_sha256=None,
+        terminal_actor=None, terminal_reason=None, terminal_force=None,
         reconcile_invalidated=True)
 
 
@@ -326,7 +385,7 @@ def snapshot(base: str | os.PathLike[str], parent_run_id: str,
             events = _read_events(path)
             current = _fold(events, checked)
             beacon_events = _parent_beacon_events(
-                beacon.read_events(base), checked)
+                beacon.read_events(base), current.lifecycle_run_id)
             return _validate_reconcile_seal(
                 current, events, beacon_events)
 
@@ -356,7 +415,8 @@ def unresolved(base: str | os.PathLike[str], sid: str | None = None,
                 current = _fold(events, parent_run_id)
                 current = _validate_reconcile_seal(
                     current, events,
-                    _parent_beacon_events(all_beacons, parent_run_id))
+                    _parent_beacon_events(
+                        all_beacons, current.lifecycle_run_id))
                 if sid is not None and current.sid != sid:
                     continue
                 if current.opened and current.terminal_kind is None:
@@ -483,9 +543,13 @@ def repair_tail(
         )
 
 
-def open_gate(base: str | os.PathLike[str], parent_run_id: str, sid: str,
-              ) -> AdmissionSnapshot:
+def open_gate(
+        base: str | os.PathLike[str], parent_run_id: str, sid: str, *,
+        lifecycle_run_id: str | None = None,
+) -> AdmissionSnapshot:
     checked = run_identity.check_run_id(parent_run_id)
+    checked_lifecycle = run_identity.check_run_id(
+        lifecycle_run_id or checked)
     if not isinstance(sid, str) or not sid:
         raise ValueError('admission sid 不得为空')
     path = admission_path(base)
@@ -495,29 +559,39 @@ def open_gate(base: str | os.PathLike[str], parent_run_id: str, sid: str,
         if current.opened:
             raise TerminalState(f'parent run {checked!r} 已建立 admission gate')
         _append_locked(path, CommanderAdmissionEvent(
-            parent_run_id=checked, sid=sid, kind='opened', ts=int(time.time())))
+            wire_version=2, parent_run_id=checked,
+            lifecycle_run_id=checked_lifecycle,
+            sid=sid, kind='opened', ts=int(time.time())))
         return AdmissionSnapshot(
-            parent_run_id=checked, sid=sid, opened=True, closed=False,
+            parent_run_id=checked, lifecycle_run_id=checked_lifecycle,
+            lifecycle_linked=True, sid=sid, opened=True, closed=False,
             active_claims=(), terminal_kind=None)
 
 
-def close_gate(base: str | os.PathLike[str], parent_run_id: str,
-               ) -> AdmissionSnapshot:
+def close_gate(
+        base: str | os.PathLike[str], parent_run_id: str, *,
+        lifecycle_run_id: str | None = None,
+) -> AdmissionSnapshot:
     """原子关闭新 claim；已经 active 的 claim 继续保留到 release。"""
     checked = run_identity.check_run_id(parent_run_id)
     path = admission_path(base)
     with append_transaction(path):
         _require_appendable(path)
-        current = _fold(_read_events(path), checked)
+        current = _with_reconcile_lifecycle(
+            _fold(_read_events(path), checked), lifecycle_run_id)
         if not current.opened:
             raise TerminalState(f'parent run {checked!r} 尚未建立 admission gate')
         if current.closed:
             return current                         # 重试幂等，不追加第二条 close
         _append_locked(path, CommanderAdmissionEvent(
-            parent_run_id=checked, sid=current.sid,
+            wire_version=2, parent_run_id=checked,
+            lifecycle_run_id=current.lifecycle_run_id, sid=current.sid,
             kind='closed', ts=int(time.time())))
         return AdmissionSnapshot(
-            parent_run_id=checked, sid=current.sid, opened=True, closed=True,
+            parent_run_id=checked,
+            lifecycle_run_id=current.lifecycle_run_id,
+            lifecycle_linked=True,
+            sid=current.sid, opened=True, closed=True,
             active_claims=current.active_claims,
             terminal_kind=current.terminal_kind)
 
@@ -549,7 +623,9 @@ def claim(base: str | os.PathLike[str], parent_run_id: str, sid: str, *,
         if any(item.claim_id == checked_claim for item in current.active_claims):
             raise TerminalState(f'claim_id {checked_claim!r} 已在使用')
         event = CommanderAdmissionEvent(
-            parent_run_id=checked, sid=sid, kind='claimed',
+            wire_version=2, parent_run_id=checked,
+            lifecycle_run_id=current.lifecycle_run_id,
+            sid=sid, kind='claimed',
             ts=int(time.time()), claim_id=checked_claim,
             node=node, claim_sha256=claim_sha256)
         _append_locked(path, event)
@@ -570,7 +646,8 @@ def release(base: str | os.PathLike[str], claim: AdmissionClaim) -> None:
         if matches[0] != claim:
             raise TerminalState(f'claim_id {claim.claim_id!r} 的 release 载荷漂移')
         _append_locked(path, CommanderAdmissionEvent(
-            parent_run_id=claim.parent_run_id, sid=claim.sid,
+            wire_version=2, parent_run_id=claim.parent_run_id,
+            lifecycle_run_id=current.lifecycle_run_id, sid=claim.sid,
             kind='released', ts=int(time.time()), claim_id=claim.claim_id,
             node=claim.node, claim_sha256=claim.claim_sha256))
 
@@ -590,7 +667,7 @@ def mark_drained(base: str | os.PathLike[str], parent_run_id: str,
             current = _fold(events, checked)
             current = _validate_reconcile_seal(
                 current, events, _parent_beacon_events(
-                    beacon.read_events(base), checked))
+                    beacon.read_events(base), current.lifecycle_run_id))
             if current.terminal_kind == 'drained':
                 return current
             if current.terminal_kind is not None:
@@ -602,15 +679,19 @@ def mark_drained(base: str | os.PathLike[str], parent_run_id: str,
                     '必须重新 typed reconcile，不能洗成正常 drained')
             if not current.closed or current.active_claims:
                 raise TerminalState('只有 closed 且 active claims 归零后才能标记 drained')
-            opened = beacon.open_executions(base, checked)
+            opened = beacon.open_executions(base, current.lifecycle_run_id)
             if opened:
                 raise TerminalState(
                     f'仍有 {len(opened)} 个 open execution，不能标记 drained')
             _append_locked(path, CommanderAdmissionEvent(
-                parent_run_id=checked, sid=current.sid,
+                wire_version=2, parent_run_id=checked,
+                lifecycle_run_id=current.lifecycle_run_id, sid=current.sid,
                 kind='drained', ts=int(time.time())))
             return AdmissionSnapshot(
-                parent_run_id=checked, sid=current.sid, opened=True, closed=True,
+                parent_run_id=checked,
+                lifecycle_run_id=current.lifecycle_run_id,
+                lifecycle_linked=True,
+                sid=current.sid, opened=True, closed=True,
                 active_claims=(), terminal_kind='drained')
 
 
@@ -624,8 +705,9 @@ def _reconcile_subject_of(
                 and event.kind in ('opened', 'claimed', 'released')]
     lifecycle = [event.model_dump(mode='json') for event in beacon_events]
     payload = {
-        'protocol': 'novel-commander-admission-reconcile/v2',
-        'parent_run_id': checked,
+        'protocol': 'novel-commander-admission-reconcile/v3',
+        'admission_id': checked,
+        'lifecycle_run_id': current.lifecycle_run_id,
         'sid': current.sid,
         'events': selected,
         'beacon_lifecycle': lifecycle,
@@ -636,8 +718,11 @@ def _reconcile_subject_of(
     return hashlib.sha256(raw).hexdigest()
 
 
-def reconcile_subject(base: str | os.PathLike[str], parent_run_id: str) -> str:
-    """绑定当前 gate 历史与父 run 全量 beacon 生命周期的原子恢复主体。"""
+def reconcile_subject(
+        base: str | os.PathLike[str], parent_run_id: str, *,
+        lifecycle_run_id: str | None = None,
+) -> str:
+    """绑定 gate 历史与外层 lifecycle 全量 beacon 的原子恢复主体。"""
     from novel.orchestrator import beacon
 
     checked = run_identity.check_run_id(parent_run_id)
@@ -649,38 +734,50 @@ def reconcile_subject(base: str | os.PathLike[str], parent_run_id: str) -> str:
         with append_transaction(beacon.beacon_path(base)):
             beacon.require_appendable_under_transaction(base)
             events = _read_events(path)
-            current = _fold(events, checked)
+            current = _with_reconcile_lifecycle(
+                _fold(events, checked), lifecycle_run_id)
             if not current.opened:
                 raise TerminalState(f'parent run {checked!r} 没有 admission gate')
             all_beacons = beacon.read_events(base)
             # 形成模板时同时关闭式验证 start/end 配对；subject 则保留全生命周期，
             # 因而 reconciled 后哪怕新增一对已经闭合的 start/end 也会反证旧 seal。
-            beacon.open_executions(base, checked)
+            beacon.open_executions(base, current.lifecycle_run_id)
             return _reconcile_subject_of(
                 checked, current, events,
-                _parent_beacon_events(all_beacons, checked))
+                _parent_beacon_events(
+                    all_beacons, current.lifecycle_run_id))
 
 
 def reconcile_gate(
     base: str | os.PathLike[str], parent_run_id: str, *, actor: str,
     reason: str, subject_sha256: str, force: bool = False,
+    lifecycle_run_id: str | None = None,
 ) -> AdmissionSnapshot:
     """显式人工收口服务崩溃遗留 gate；零模型、hash-bound、append-only。"""
     if not actor.strip() or not reason.strip():
         raise TerminalState('admission reconcile 的 actor/reason 不得为空')
     checked = run_identity.check_run_id(parent_run_id)
+    path = admission_path(base)
+    # v2 直接读 durable link；旧 v1 的 override 必须由上层先以唯一
+    # AgentRun epoch_opened 证明。先解析 owner 身份，再持有它直到最终 CAS 返回。
+    with append_transaction(path):
+        current = _with_reconcile_lifecycle(
+            _fold(_read_events(path), checked), lifecycle_run_id)
+    if not current.opened:
+        raise TerminalState(f'parent run {checked!r} 没有 admission gate')
     # owner absence 不是一次瞬时布尔检查：同一枚 OS lease 一直持到 close、
     # admission+beacon 最终 CAS 和返回快照全部完成，force 也不能绕过 live owner。
-    with require_owner_stopped(base, checked):
-        expected = reconcile_subject(base, checked)
+    with require_owner_stopped(base, current.lifecycle_run_id):
+        expected = reconcile_subject(
+            base, checked, lifecycle_run_id=current.lifecycle_run_id)
         if subject_sha256 != expected:
             raise TerminalState(
                 f'admission reconcile subject SHA 已变化；current={expected}')
         # 先原子 close，阻止核查期间再产生新 claim。close 不进入 subject，故不改变
         # 上面那枚 hash；release/beacon end 会改变，下面仍会重算一次。
-        close_gate(base, checked)
+        close_gate(
+            base, checked, lifecycle_run_id=current.lifecycle_run_id)
         from novel.orchestrator import beacon
-        path = admission_path(base)
         # apply 的最终判断与 reconciled 追加必须是 admission + beacon 联合 CAS。
         # 固定 admission -> beacon 锁序，避免 release/end 在重算主体后、追加前漂移。
         with append_transaction(path):
@@ -688,15 +785,18 @@ def reconcile_gate(
             with append_transaction(beacon.beacon_path(base)):
                 beacon.require_appendable_under_transaction(base)
                 events = _read_events(path)
-                current = _fold(events, checked)
+                current = _with_reconcile_lifecycle(
+                    _fold(events, checked), lifecycle_run_id)
                 all_beacons = beacon.read_events(base)
-                parent_beacons = _parent_beacon_events(all_beacons, checked)
+                parent_beacons = _parent_beacon_events(
+                    all_beacons, current.lifecycle_run_id)
                 current = _validate_reconcile_seal(
                     current, events, parent_beacons)
                 if current.terminal_kind is not None:
                     raise TerminalState(
                         f'admission 已由 {current.terminal_kind} 收口，不重复 reconcile')
-                opened = beacon.open_executions(base, checked)
+                opened = beacon.open_executions(
+                    base, current.lifecycle_run_id)
                 current_subject = _reconcile_subject_of(
                     checked, current, events, parent_beacons)
                 if current_subject != subject_sha256:
@@ -708,7 +808,9 @@ def reconcile_gate(
                         f'{len(opened)} 个 open execution；默认拒绝 reconcile。'
                         '确认操作系统中相关进程均已停止后，重取 subject 并显式 --force')
                 _append_locked(path, CommanderAdmissionEvent(
-                    parent_run_id=checked, sid=current.sid, kind='reconciled',
+                    wire_version=2, parent_run_id=checked,
+                    lifecycle_run_id=current.lifecycle_run_id,
+                    sid=current.sid, kind='reconciled',
                     ts=int(time.time()), actor=actor.strip(), reason=reason.strip(),
                     subject_sha256=subject_sha256, force=bool(force)))
         return snapshot(base, checked)

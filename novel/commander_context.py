@@ -46,13 +46,33 @@ def stage2_prereview_admission_id(epoch_id: str) -> str:
         checked_epoch + _STAGE2_PREREVIEW_ADMISSION_SUFFIX)
 
 
+def action_admission_id_belongs_to_epoch(
+        admission_id: str, epoch_id: str,
+) -> bool:
+    """校验可写 action admission 的 canonical epoch 归属。
+
+    首次 action 恰用 ``epoch_id``，后续才是无前导零且从 2 开始的 ``-tN``。
+    这里不能用 ``startswith``：恢复层会拿这项判据把旧 v1 gate 联结到外层
+    AgentRun，宽松前缀会把无关 run 错认成同一生命周期。
+    """
+    if admission_id == epoch_id:
+        return True
+    prefix = epoch_id + '-t'
+    if not admission_id.startswith(prefix):
+        return False
+    ordinal = admission_id[len(prefix):]
+    return (
+        ordinal.isascii() and ordinal.isdecimal()
+        and not ordinal.startswith('0') and int(ordinal) >= 2
+    )
+
+
 def _admission_id_belongs_to_epoch(
         admission_id: str, epoch_id: str,
 ) -> bool:
     """统一校验 action admission 与只读预审哨兵的 epoch 归属。"""
     return (
-        admission_id == epoch_id
-        or admission_id.startswith(epoch_id + '-t')
+        action_admission_id_belongs_to_epoch(admission_id, epoch_id)
         or admission_id == epoch_id + _STAGE2_PREREVIEW_ADMISSION_SUFFIX
     )
 
@@ -400,6 +420,7 @@ __all__ = [
     'COMMANDER_EPOCH_SHA256_ENV', 'COMMANDER_RUN_ID_ENV',
     'CONTRACT_PROTOCOL', 'CONTRACT_V2_PROTOCOL', 'CommanderContext',
     'CommanderExecutionCloseContext',
+    'action_admission_id_belongs_to_epoch',
     'contract_payload', 'contract_sha256', 'contract_v2_payload',
     'contract_v2_sha256', 'epoch_sha256', 'env_with_context', 'load_from_environment',
     'load_for_execution_close_from_environment',

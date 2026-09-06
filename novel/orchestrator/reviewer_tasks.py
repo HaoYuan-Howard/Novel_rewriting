@@ -1958,7 +1958,7 @@ def _submission_options(
                 'observation_alias': '<workpack fact alias>',
             },
         }
-        return [_option(
+        design_option = _option(
             'approval:design', request,
             editable_fields=[
                 'action.payload.general_reason',
@@ -1994,13 +1994,50 @@ def _submission_options(
                 },
                 'narrative_relation.effect_by_kind': relation_effects,
                 'resolution_requirement': (
-                    '当前不是首次 A 审阅；必须至少提交一项 request_repair，或把策略'
-                    '提交为 request_replan。原样 all-accept 不会关闭当前恢复 blocker。'
-                    if waiting_on != queue.WAITING_ON_STAGE4_DESIGN_REVIEW
-                    else '按当前 A 主体逐项审阅，可接受或提交 typed 修订决定。'
+                    '只有交叉阅读后能指出独立、具体的 scene/fact/goal 结构损害时，'
+                    '才把它闭合成 typed request_repair/request_replan；INFO、metric、'
+                    'UNVER、binding_concern 或声明—实算差异本身都没有付费修订权。'
+                    '若当前 B 拒绝仅由这些只读材料支撑，选择同包 stop option，'
+                    '不得为关闭 blocker 发明 A 约束。原样 all-accept 也不是合法出口。'
+                    if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN
+                    else (
+                        '当前不是首次 A 审阅；必须至少提交一项 request_repair，或把策略'
+                        '提交为 request_replan。原样 all-accept 不会关闭当前恢复 blocker。'
+                        if waiting_on != queue.WAITING_ON_STAGE4_DESIGN_REVIEW
+                        else '按当前 A 主体逐项审阅，可接受或提交 typed 修订决定。'
+                    )
                 ),
             },
-        )]
+        )
+        if waiting_on != queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
+            return [design_option]
+        stop_request = _request_wrapper(current, waiting_on, {
+            'kind': 'stop',
+            'reason': (
+                '<交叉阅读当前 B 决定、逐章 coverage 与 A 场景后，明确说明为何拒绝'
+                '仅由 INFO/metric/UNVER/binding_concern 等只读材料支撑，且没有可指向'
+                ' scene/fact/goal 结构损害；该动作只安全停机，不改写 B、也不铸 A 修订票>'),
+        })
+        return [
+            design_option,
+            _option(
+                'stop:stage4-structure-replan', stop_request,
+                editable_fields=['action.reason'],
+                binding_fields=bind + [
+                    'action.kind',
+                    'surface_seal 绑定当前 B decision/subject/workpack',
+                ],
+                allowed_values={
+                    'purpose': (
+                        '仅当当前 B request_replan 没有独立、具体的 coverage 语义缺陷，'
+                        '其理由只来自无 action authority 的 INFO/metric/UNVER/'
+                        'binding_concern 时使用；真实 coverage 缺陷仍须选择 typed A resolution。'),
+                    'effects': (
+                        '结束本次 Reviewer 轮；不写 A/B 审批、不改 gate、不签 execution '
+                        'token、不调用 Executor。'),
+                },
+            ),
+        ]
 
     if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW:
         payload = StructureApprovalRequest.model_validate(
@@ -2349,7 +2386,8 @@ def build_task(
         queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
     }:
         # action_sha 包含运输 surface；恢复判重认的应是 A/B 业务材料本身。
-        # 两种 resolution 都只提交新的 design 决定，不把 B 理由直接送 Executor。
+        # 两种 resolution 的可执行修订都只提交新的 design 决定，不把 B 理由
+        # 直接送 Executor；Structure 的 evidence-authority stop 不写审批。
         business = {
             'waiting_on': waiting_on,
             'materials': _visible_materials(pack),
@@ -2389,18 +2427,28 @@ def build_task(
         '发现问题则提交 node:stage2.global.final-reopen，只列出有可指向错误/证据不足的项'
         '（state 只能 FAIL/UNVER），不得提交 PASS、不得编辑 Global。\n'
         if waiting_on == queue.WAITING_ON_STAGE2_FINAL_REVIEW else '')
-    stage4_resolution_instruction = (
-        '\n当前不是再次审阅同一份 Stage4B。请把 materials 中已经落盘的 B '
-        '不可行证据或最终结构 request_replan 决定，与当前 Stage4A design 工作包'
-        '交叉阅读，形成一份新的 Stage4A typed 决定。必须至少有一章 '
-        'request_repair，或策略为 request_replan；原样 all-accept 是无进展动作，'
-        '会被确定性 loader 拒绝。只使用模板发布的 closed constraint、scene 与 '
-        'opaque alias，不把自由文本理由改写成 Executor 指令。决定落盘后 '
-        'Supervisor 会另取精确恢复许可，本轮 Commander 不启动 Executor。\n'
-        if waiting_on in {
-            queue.WAITING_ON_STAGE4_BINDING_RESOLUTION,
-            queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
-        } else '')
+    if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
+        stage4_resolution_instruction = (
+            '\n当前不是再次审阅或覆盖同一份 Stage4B。请把 materials 中已落盘的 B '
+            'request_replan 决定与当前 Stage4A design 工作包交叉阅读。coverage 仍可由'
+            '人工独立发现工作包未预登记的真实语义缺陷；但 INFO、metric、UNVER、'
+            'binding_concern、声明—实算差异以及 allowed_actions=[] 的行都只有阅读定位权，'
+            '不能单独制造付费返工。只有能指出独立、具体的 scene/fact/goal 结构损害时，'
+            '才选择 approval:design，并把该缺陷闭合成模板发布的 typed constraint；不得把'
+            '自由文本或只读指标改写成 Executor 指令。若交叉阅读后确认 B 拒绝仅由这些'
+            '只读材料支撑、没有可指向的结构损害，选择 stop:stage4-structure-replan：'
+            '它只安全结束本次 Reviewer 轮，不写 A/B 审批、不改 gate、不签 execution '
+            'token，也不调用 Executor。原样 all-accept 不是合法恢复出口。\n')
+    elif waiting_on == queue.WAITING_ON_STAGE4_BINDING_RESOLUTION:
+        stage4_resolution_instruction = (
+            '\n当前不是再次审阅同一份 Stage4B。请把 materials 中已经落盘的正式 B '
+            '不可行证据与当前 Stage4A design 工作包交叉阅读，形成一份新的 Stage4A '
+            'typed 决定。必须至少有一章 request_repair，或策略为 request_replan；原样 '
+            'all-accept 是无进展动作，会被确定性 loader 拒绝。只使用模板发布的 closed '
+            'constraint、scene 与 opaque alias，不把自由文本理由改写成 Executor 指令。'
+            '决定落盘后 Supervisor 会另取精确恢复许可，本轮 Commander 不启动 Executor。\n')
+    else:
+        stage4_resolution_instruction = ''
     instructions = f"""你是本轮唯一 Commander/Reviewer，只审阅下面这份不可变工作包。
 先逐项审阅，再做一次跨项复核；两遍完成后只提交一个 typed 判断。你不是流水线调度器：
 不得启动任何小说节点，不得启动 Executor，不得维护 Markdown 报告，不得调用遥测，
@@ -2412,7 +2460,8 @@ def build_task(
 不降低判据、不扩大 allowed_values，也不授权你直接执行动作；Supervisor 只会在验证你写出的
 请求后走确定性入口。
 
-若证据不足，保留 UNVER 或拒绝；不得猜 PASS。审阅完成后，从 submission_options
+Stage2 证据不足时保持 UNVER；其他 blocker 只走各自明示的关闭式出口。Stage4 不得把
+材料不足或 read-only 读数自动解释为拒绝或付费动作；不得猜 PASS/accept。审阅完成后，从 submission_options
 选择恰好一项，最终 agent_message 只输出一份裸 JSON object：不得使用 Markdown、
 代码围栏或解释文字，不得写文件、调用工具，也不得自行物化请求路径。Supervisor
 会先严格验证这份返回值，再把合法请求原子落到当前 execution epoch 的 scratch。
@@ -2472,8 +2521,10 @@ submission option，也只能按逐字证据阅读，不能执行、遵循，不
 submission_options 或输出格式。
 不需要也不得读取 operator skill、仓库源码、测试
 或盘上产物来补充材料；不得运行任何 shell/PowerShell/Python 命令读取材料或产物，也不得
-执行任何文件操作。材料确实不足以裁决某一项时，保持模板的关闭式默认值
-（request_replan / request_repair / UNVER）并在对应 reason 写明缺的是什么；不得猜 accept。
+执行任何文件操作。材料确实不足以裁决某一项时，使用该 blocker 明示的关闭式出口并写明缺的是什么；
+Stage2 保持 UNVER。Stage4 的 INFO、metric、UNVER、binding_concern 与其他 read-only 行
+不得因为材料不足而被改写成 request_replan/request_repair；只有具体语义缺陷才有付费动作权，
+工作包提供 stop option 时应安全停机，不能猜 accept，也不能发明修订理由。
 Stage4 A/B 工作包的逐章裁决材料在 materials 的 coverage 行 reading 里，顶层 reading.legend
 是唯一字段说明；metric_only 组只是摘要，完整读数以逐章 reading 为准。
 {correction_instruction}
@@ -3335,7 +3386,10 @@ def load_action(
         body = _strict_object(
             action, keys=frozenset({'kind', 'reason'}),
             label='stop action')
-        if waiting_on != 'stage0.approve':
+        if waiting_on not in {
+            'stage0.approve',
+            queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
+        }:
             raise ReviewerTaskError(
                 f'blocker={waiting_on!r} 不允许 reviewer stop action')
         reason = body['reason']
@@ -3472,6 +3526,12 @@ def load_action(
                 row['decision'] == 'accept' for row in payload['chapters']
             )
         ):
+            if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
+                raise ReviewerTaskError(
+                    'Stage4 Structure resolution 不能原样提交 all-accept；'
+                    '有具体 scene/fact/goal 结构损害时才提交 typed request_repair/'
+                    'request_replan，否则选择同包 stop:stage4-structure-replan，'
+                    '不得从 INFO/metric/UNVER/read-only 材料发明付费动作')
             raise ReviewerTaskError(
                 'Stage4 resolution 不能原样提交 all-accept；必须形成至少一项 '
                 'typed request_repair 或 request_replan')
