@@ -1,7 +1,7 @@
 # 工程原则索引
 
 本文只保留可迁移的工程原则和现役落点，不保存施工日志。历史事故、实验读数和产品裁决见
-`docs/DECISIONS.md`；活动事项见 `docs/REQUIREMENTS.md`。编号 1～35 是稳定引用，代码和测试可按
+`docs/DECISIONS.md`；活动事项见 `docs/REQUIREMENTS.md`。编号 1～36 是稳定引用，代码和测试可按
 “LESSONS 第 N 条”指向这里。
 
 ## 按任务读取
@@ -12,8 +12,8 @@
 |---|---|
 | 判据、测试、fixture、覆盖率 | 1～4、7、12、21、23、24 |
 | artifact、schema、路径、provenance | 4、5、8～12、22、23、28～30 |
-| LLM、语义评审、实验、成本 | 1、2、16～18、25、33、35 |
-| 编排、队列、恢复、AgentRun | 4、18、19、24、26～33 |
+| LLM、语义评审、实验、成本 | 1、2、16～18、25、33、35、36 |
+| 编排、队列、恢复、AgentRun | 4、18、19、24、26～34、36 |
 | API、前端、审校界面 | 4、6、13～15、19 |
 | 纯跑书与流水线代批 | 不读本文；遵循 `.workflow/skills/novel-pipeline-operator/SKILL.md` |
 
@@ -270,3 +270,25 @@ INFO、metric、UNVER、binding concern 与 `allowed_actions=[]` 只帮助定位
 后继 resolution 只有在能独立指出具体 scene/fact/goal 损害时才形成 typed 约束；否则提供只停机、不写审批、
 不签 token、不执行模型的 typed stop。这样既保留人工发现新问题的权力，也不让“材料不足”自动变成
 request_replan/request_repair。
+
+## 36. 批量人审回答必须先耐崩溃，再开始逐项写
+
+同一个人工 blocker 里有多项同类决定时，逐项开席并不更安全：每落一项都会改变 workpack，下一项就会
+获得一个新业务身份和新付费席位；而先把整批交给 Commander、再逐项落盘，又会产生“人已经答完、席位
+已经扣账，但 batch 只写一半”的新尾窗。完整设计必须把**人审原子**与**产物原子**分开：一席提交覆盖
+完整 current 集合的 typed manifest，Supervisor 在席位成功闭账和 canonical 执行前先把原 provider 回答
+及 manifest 内容寻址地 durable；producer 再在自己的书锁内按项幂等提交。
+
+稳定业务不能绑定会被本批写入逐项改变的 workpack/token，而应绑定批次开始时不会自变的证据：动作模式、
+上游 Review、原始全量有序 item 身份与审阅契约。断点续接也不能只看“某些项已经存在”：它必须证明盘面
+恰为原 manifest 的连续 exact 已落前缀加 current unresolved 完整后缀，前缀的 actor/reason/双 SHA 与原决定
+相同，后缀不漏、不夹、不重排；首写前以及每一笔后继未落项写入前，都要在同一所有权内复采完整
+frontier 与当前项，避免首项落盘后的盘外漂移或 foreign 决定被旧 facts 覆盖。证据冲突时保留 durable
+record 并停止，不能把它删掉后再买一席。
+
+席位账的顺序同样属于提交协议：先把 provider response digest 绑定到具体 turn，再保存 action record，
+最后 finish 席位。恢复必须在原 parent 已停止的所有权窗口内，把 seat attempt、logical session、成本账、
+模型/代码/协议与 response digest 逐项闭合；原 turn 留在 started/open 时只能据这些证据幂等补尾。更晚的
+typed/canonical 拒因可以压过旧 action，但必须由 seat ordinal 和同样强的 session/cost/response 证据证明，
+不能靠秒级时间戳或文件名猜“最新”。若决定只写旁路处置而不改正文，上游 Review 仍可保持 fresh；只重建
+消费该处置面的下游 workpack，避免把零成本处置误写成一次新的审阅或生成。

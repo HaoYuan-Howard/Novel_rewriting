@@ -239,6 +239,60 @@ def test_stage6_waits_for_the_production_stage5_closure_view(
     assert 'typed closure' in blocked[0].why
 
 
+def test_stage5_trim_then_closure_uses_one_state_aware_frontier_without_rerun(
+        queue_base, monkeypatch):
+    """纯 trim 只换 closure workpack；Review stale 时才先排免费 review。"""
+    monkeypatch.setattr(
+        Q, 'nodes_up_to', lambda _until: ['stage5.review', 'stage6.hook'])
+    overview = SimpleNamespace(stages=[SimpleNamespace(
+        stage='stage5', artifacts=[], review_state='fresh')])
+    monkeypatch.setattr(
+        Q.st, 'stage2_frozen_v6_subject_validated', lambda _ov: False)
+    monkeypatch.setattr(Q.st, 'live_invalid_artifacts', lambda *_args: [])
+    monkeypatch.setattr(Q, '_upstream_invalid', lambda *_args: [])
+    review_verdict = {'value': Q.st.RESUME_SKIP}
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, node: (
+            (review_verdict['value'], 'Stage5 Review currentness')
+            if node == 'stage5.review'
+            else (Q.st.RESUME_RUN, 'Stage6 尚未生成')))
+
+    def plan(closure_state):
+        return Q.plan_book_from_overview(
+            queue_base, 'book-a', overview,
+            until_stage='stage6', follow_check=False,
+            approval_doc=SimpleNamespace(
+                sid='book-a', closure=SimpleNamespace(state=closure_state)))
+
+    # fresh Review + unresolved trim：队列不制造一次冗余 Review；同一顶部卡先由
+    # reviewer task 按 blocked state 提供 batch，而 Stage6 仍不可执行。
+    todo, blocked = plan('blocked')
+    assert todo == []
+    assert [row.node for row in blocked] == ['stage6.hook']
+    assert blocked[0].waiting_on == Q.WAITING_ON_STAGE5_CLOSURE
+    assert blocked[0].steps == []
+
+    # batch resolution 不改正文/Review 判据。同一 fresh Review 下新 workpack ready，
+    # 顶部卡改为 closure option；仍没有 stage5.review todo。
+    todo, blocked = plan('ready')
+    assert todo == []
+    assert [row.node for row in blocked] == ['stage6.hook']
+    assert blocked[0].waiting_on == Q.WAITING_ON_STAGE5_CLOSURE
+
+    # 只有 Review 自身不 current 时，免费 Review 排在 closure blocker 之前。
+    review_verdict['value'] = Q.st.RESUME_RUN
+    todo, blocked = plan('review_required')
+    assert [row.node for row in todo] == ['stage5.review']
+    assert [row.node for row in blocked] == ['stage6.hook']
+    assert blocked[0].waiting_on == Q.WAITING_ON_STAGE5_CLOSURE
+
+    review_verdict['value'] = Q.st.RESUME_SKIP
+    todo, blocked = plan('closed')
+    assert [row.node for row in todo] == ['stage6.hook']
+    assert blocked == []
+
+
 def test_closed_stage5_closure_allows_stage6_planning(queue_base, monkeypatch):
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage6.hook'])
     monkeypatch.setattr(

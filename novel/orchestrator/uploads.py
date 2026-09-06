@@ -344,7 +344,14 @@ def save_stage5_trim_batch(
         os.replace(tmp, target)
     except OSError as exc:
         raise ArtifactUnreadable(f'写不了批量销账 manifest：{exc!r}') from exc
-    return target
+    finally:
+        # 保存失败发生在 contextmanager yield 之前，不能指望调用方 finally
+        # 清理这份含人工逐章理由的临时文件。
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return target.resolve()
 
 
 def save_reviewer_action(
@@ -356,7 +363,12 @@ def save_reviewer_action(
     一次已完成模型审阅的可重放半边，必须活过 epoch 关闭与 scratch 清理，只在
     canonical approval/node action 已 landed 或得到显式 exit 2 拒因后由
     调用方删除；exit 70 结论未知时必须保留。Stage2 node 记录额外保存
-    workpack、原 logical session 与 provider 原始回答 digest，其中不写回答正文。
+    workpack、原 logical session 与 provider 原始回答 digest，其中不写回答正文；
+    Stage5 batch 额外保存原 Review、reviewer contract 及原 seat turn/
+    logical session/provider 回答摘要，结合 payload 内完整有序双 SHA，
+    供 partial-write 后自证旧 business、补完 durable-first 席位，再区分
+    stale / replay / evidence conflict。trim 记录不绑定会随处置面重构的
+    closure token。
     """
     try:
         paths.check_sid(sid)
@@ -473,10 +485,11 @@ def load_stage2_prereviews(
 def load_reviewer_actions(
     base: str | os.PathLike[str], sid: str,
 ) -> list[tuple[Path, ReviewerActionRecord]]:
-    """只读列出同 SID 的可重放 Commander 决定，按文件名稳定排序。
+    """关闭式列出同 SID 的可重放 Commander 决定，按文件名稳定排序。
 
-    坏文件、符号链接与 sid 不符的记录一律跳过并告警，不猜内容；这里不删任何
-    东西——失效与否只有拿着当前 workpack 的调用方能判。
+    记录是一次已付费席位的唯一恢复凭据；坏文件、符号链接、sid 串书或内容地址
+    不匹配都不能装成“没有记录”后再买一席。业务是否过期仍由拿着 current
+    workpack 的调用方判，这里只验证持久载体完整性。
     """
     try:
         paths.check_sid(sid)
@@ -488,19 +501,22 @@ def load_reviewer_actions(
     out: list[tuple[Path, ReviewerActionRecord]] = []
     for path in sorted(root.glob('reviewer-action-*.json')):
         if path.is_symlink() or not path.is_file():
-            continue
+            raise ArtifactUnreadable(
+                f'reviewer 决定记录不是普通文件：{path.name}')
         try:
-            record = ReviewerActionRecord.model_validate_json(path.read_bytes())
+            raw = path.read_bytes()
+            record = ReviewerActionRecord.model_validate_json(raw)
         except (OSError, ValueError, ValidationError) as exc:
-            warnings.warn(
-                f'跳过无法解析的 reviewer 决定记录 {path.name}：{type(exc).__name__}',
-                RuntimeWarning, stacklevel=2)
-            continue
+            raise ArtifactUnreadable(
+                f'reviewer 决定记录无法解析：{path.name}：'
+                f'{type(exc).__name__}') from exc
+        expected_name = f'reviewer-action-{hashlib.sha256(raw).hexdigest()}.json'
+        if path.name != expected_name:
+            raise ArtifactUnreadable(
+                f'reviewer 决定记录内容地址不匹配：{path.name}')
         if record.sid != sid:
-            warnings.warn(
-                f'跳过 sid 不符的 reviewer 决定记录 {path.name}',
-                RuntimeWarning, stacklevel=2)
-            continue
+            raise ArtifactUnreadable(
+                f'reviewer 决定记录 {path.name} 的 sid 不匹配')
         out.append((path.resolve(), record))
     return out
 

@@ -287,6 +287,44 @@ def finish(
         return _replace(path, ledger, index, finished)
 
 
+def bind_response(
+    base: str | os.PathLike[str], sid: str, *,
+    waiting_on: str, business_sha256: str, turn_id: str,
+    provider_response_sha256: str,
+) -> ReviewerSeatTurn:
+    """在 action record 或 typed 拒因前把 provider 回答绑定到原 turn。
+
+    这是 durable-first 的第一笔原子写：同 digest 幂等，异 digest 或已闭席后
+    才尝试首次绑定一律拒绝。这样 record 不能只靠自身字段伪造来源回答。
+    """
+    if (
+        len(provider_response_sha256) != 64
+        or any(ch not in '0123456789abcdef'
+               for ch in provider_response_sha256)
+    ):
+        raise ReviewerSeatRefused(
+            'reviewer provider_response_sha256 不是 64 位小写 SHA-256')
+    path = ledger_path(
+        base, sid, waiting_on=waiting_on, business_sha256=business_sha256)
+    with path_transaction_lock(path):
+        ledger = _read(path)
+        if ledger is None:
+            raise ReviewerSeatRefused('reviewer response 没有对应 seat ledger')
+        index, prior = _locate(ledger, turn_id)
+        if prior.provider_response_sha256 is not None:
+            if prior.provider_response_sha256 == provider_response_sha256:
+                return prior
+            raise ReviewerSeatRefused('reviewer seat turn 已绑定不同 provider 回答')
+        if prior.outcome != 'started':
+            raise ReviewerSeatRefused(
+                'reviewer seat turn 已闭账，不能首次补绑 provider 回答')
+        bound = ReviewerSeatTurn.model_validate({
+            **prior.model_dump(mode='json'),
+            'provider_response_sha256': provider_response_sha256,
+        })
+        return _replace(path, ledger, index, bound)
+
+
 def record_attempt(
     base: str | os.PathLike[str], sid: str, *,
     waiting_on: str, business_sha256: str, turn_id: str,
@@ -393,7 +431,7 @@ def list_ledgers(base: str | os.PathLike[str], sid: str) -> list[dict[str, Any]]
 
 
 __all__ = [
-    'MAX_CORRECTIONS', 'ReviewerSeatRefused', 'corrections_used',
+    'MAX_CORRECTIONS', 'ReviewerSeatRefused', 'bind_response', 'corrections_used',
     'clear_pending_correction', 'finish', 'finish_attempt', 'ledger_path',
     'list_ledgers', 'mark_pending_correction', 'read', 'record_attempt',
     'reserve',

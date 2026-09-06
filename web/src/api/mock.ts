@@ -359,6 +359,8 @@ function mockStage5Workpack(): Stage5ClosureWorkpack {
     hard_findings: [],
     unresolved_trim_chapters: [],
     unresolved_trim_items: [],
+    trim_subjects: [],
+    wontfix_sha256: null,
     must_appear: [],
     fact_group: null,
     unver_group: null,

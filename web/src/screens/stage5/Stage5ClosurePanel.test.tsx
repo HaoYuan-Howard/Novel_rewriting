@@ -35,6 +35,11 @@ function workpack({ trim = false, mustAppear = false } = {}): Stage5ClosureWorkp
       { output_ordinal: 1, audit_sha256: sha('a'), chapter_sha256: sha('1') },
       { output_ordinal: 2, audit_sha256: sha('b'), chapter_sha256: sha('2') },
     ] : [],
+    trim_subjects: trim ? [
+      { output_ordinal: 1, audit_sha256: sha('a'), chapter_sha256: sha('1'), resolution_sha256: null },
+      { output_ordinal: 2, audit_sha256: sha('b'), chapter_sha256: sha('2'), resolution_sha256: null },
+    ] : [],
+    wontfix_sha256: null,
     must_appear: mustAppear ? [{
       chapter_ordinal: 1,
       evidence_key: 'ch1:must-appear',

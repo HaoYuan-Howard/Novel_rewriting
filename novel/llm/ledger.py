@@ -212,7 +212,8 @@ def append_commander_call(
         outcome: str, exit_code: int,
         error_kind: str | None = None,
         latency_ms: int | None = None,
-        activity: str | None = None) -> None:
+        activity: str | None = None,
+        response_sha256: str | None = None) -> None:
     """追加一次整书 Commander 调用的成本事实。
 
     Commander 不是 ``NODES`` 的成员，故意以 ``role='commander'``、``node=null``
@@ -257,6 +258,11 @@ def append_commander_call(
             isinstance(latency_ms, bool) or not isinstance(latency_ms, int)
             or latency_ms < 0):
         raise ProvenanceRefused('commander ledger latency_ms 必须是非负整数或 null')
+    if response_sha256 is not None and (
+            len(response_sha256) != 64
+            or any(ch not in '0123456789abcdef' for ch in response_sha256)):
+        raise ProvenanceRefused(
+            'commander ledger response_sha256 必须是 64 位小写 SHA-256 或 null')
 
     usage_values: dict[str, int | None] = {
         'prompt_tokens': None,
@@ -318,7 +324,7 @@ def append_commander_call(
         'backoff_ms': None,
         'attempt_id': attempt_id,
         'request_fingerprint': None,
-        'response_sha256': None,
+        'response_sha256': response_sha256,
         'provider_session_id': provider_session_id,
         'protocol_version': protocol_version,
         'cli_version': cli_version,

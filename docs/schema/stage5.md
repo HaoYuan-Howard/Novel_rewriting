@@ -212,8 +212,10 @@ currentness 出口。状态取值：
 `require_accepted_review` 在此之上拒绝活动 `.INVALID`、缺正式章和任何当前 HARD，是闭合回执
 可以提交的产物级前置。Stage6、Stage7 与最终交付还必须经过 `require_stage5_closed`，证明
 `gate.s5` 来自一份绑定当前 workpack 的 typed closure；accepted Review 不能替代人工回执。
-旧报告不得驱动新付费动作；恢复命令是所有改稿/trim 完成后，在 canonical 章集合上零成本只跑
-一次最终 `stage5.review`，再重新生成闭合模板。旧 Review v1 仍含
+旧报告不得驱动新付费动作。正文、HARD 或 canonical 章集合真的改变后，必须在全部改稿完成时
+零成本重跑一次最终 `stage5.review`，再重新生成闭合模板；`retain_pretrim` 只落 hash-bound
+人工处置、不改正文或 Review 主体，因此纯 trim 销账保留同一份 fresh Review，只重建当前 closure
+workpack/token，不能为“保险”再买一席或重跑 Review。旧 Review v1 仍含
 `mode/mode_dir`；现役 v2 删除这两格，由 producer 免费重建，不做迁移。
 
 ## 四、审批与人工服务账：HTTP v6，盘上 v7
@@ -253,6 +255,14 @@ workpack/decision，但不擦除 history。fresh Review 下先看 blockers：任
 构包前后重走唯一 Review freshness，并对 Review 字节、全部 canonical 章、活动
 `.INVALID`、trim/wontfix 处置面做完整双采样；两次不同就拒绝返回混合工作包，由读方重试。
 
+`approval:stage5-closure` 是一张状态感知的顶部卡，不是永远只收 closure 回执。fresh Review 下若
+唯一 blocker 是 `unresolved_trim_items[]`，同一卡只发布一份覆盖全部待销账章的
+`stage5.review --retain-pretrim-batch @reviewer-input` node 选项和一份 typed stop；它不发布 closure
+approval，也不替 Commander 默认选择 retain。若缺章、活动 `.INVALID` 或 HARD 与 trim 并存，构包前
+直接 stopped/2 并指向各自正式恢复面，不为必然不可执行的批次开席。只有 `ready/expired` 才发布
+closure receipt。两种动作以 `action_mode=trim_resolution｜closure_receipt` 分开业务身份，旧 closure
+席位/回答不得复用成 trim 决定。
+
 | 字段 | 类型 | 必填 | 取值面 / 语义 | 证据 |
 |---|---|---:|---|---|
 | `state` | str | 是 | `missing｜review_required｜blocked｜ready｜closed｜expired`；页面只展示，不按 counts 重判 | **契·码** |
@@ -269,6 +279,8 @@ workpack/decision，但不擦除 history。fresh Review 下先看 blockers：任
 | `invalid_chapters/hard_findings` | int[] / str[] | 是 | 任一非空都使 workpack blocked | **契·码** |
 | `unresolved_trim_chapters` | int[] | 是 | 待销账 trim 的升序章号投影 | **契·码** |
 | `unresolved_trim_items[]` | `{output_ordinal,audit_sha256,chapter_sha256}` | 是 | 与上一格章号精确同集；chapter SHA 是 trim audit 绑定的 canonical **正文**摘要，是浏览器批量提交的唯一合法 identity 来源 | **契·码** |
+| `trim_subjects[]` | `{output_ordinal,audit_sha256,chapter_sha256,resolution_sha256}` | 是 | 升序精确覆盖全部 current trim audit；`resolution_sha256` 为完整 resolution 文件摘要或 null，null 子集必须恰等 unresolved。已销账决定改 actor/reason 也会换 workpack/token | **契·码** |
+| `wontfix_sha256` | SHA-256 / null | 是 | current `stage5/wontfix.json` 完整文件摘要；即使命中计数不变，理由或身份字节变化也使旧 closure 过期 | **契·码** |
 | `must_appear[]` | `Stage5MustAppearRow[]` | 是 | 每项带章号、evidence key、detail、finding SHA 与完整 chapter file SHA | **契·码** |
 | `fact_group/unver_group` | `Stage5FindingGroup` / null | 是 | 各绑定组名、完整 finding-set SHA、条数与规则闭集；确认不把 UNVER 改成 PASS | **契·码** |
 | `disclosure/resolved` | `{rule:int}` | 是 | INFO/metric 披露计数与 wontfix/typed 已处置计数，不是放行判定 | **契·码** |
@@ -284,6 +296,31 @@ template token 只属于只读材料，不作为 Request 字段；`Stage5Closure
 `decision_sha256/decided_at`，盘上审计继续保存完整 materialized 身份。
 缺章、`.INVALID`、HARD 或 unresolved trim 任一非空都不得提交。历史 must-appear 预填只在 finding
 SHA 与 chapter SHA 同时不变时复用；`gate.s5`、Stage6/7 写效果与 assemble 都消费同一 current closure。
+
+`BatchTrimResolutionRequest` 是整批唯一的人审回答：顶层 actor/reason 非空，`items[]` 必须按章序
+精确覆盖 workpack 的全部 `unresolved_trim_items[]`，逐项原样绑定 audit SHA 与正文 SHA，并给出
+非空 reason（可显式继承顶层 reason）。Supervisor 只把这份已通过 typed loader 的请求物化到
+`_service/edits/<sid>/`，再经 permit 的外部输入字节 CAS 交给 0-LLM producer；typed stop 表示需要
+改写正文，不落 resolution、permit 或 node。
+
+| Batch 字段 | 类型 | 必填 | 取值面 / 语义 | 证据 |
+|---|---|---:|---|---|
+| `actor/reason` | str / str | 是 | 均不可只含空白；reason 是整批共享理由 | **契·码** |
+| `items[]` | `BatchTrimResolutionItem[]` | 是 | 至少一项，按 `output_ordinal` 升序且去重；fresh 提交必须精确覆盖 current unresolved 全集 | **契·码** |
+| `items[].output_ordinal` | int | 是 | current workpack 中对应待销账章 | **契·码** |
+| `items[].audit_sha256/chapter_sha256` | SHA-256 / SHA-256 | 是 | 逐字复制 workpack 双 SHA，Commander 与 Supervisor 都不得重算或替换 | **契·码** |
+| `items[].reason` | str | 是 | 空串表示显式继承顶层 reason；非空时作为该章理由，effective reason 始终非空 | **契·码** |
+
+trim 人审的稳定业务身份只含同一 fresh Review 完整 SHA、原始全量有序 audit/chapter 双 SHA、
+reviewer contract 与 `action_mode=trim_resolution`，刻意不含会随逐章落盘变化的 closure token/workpack。
+进程在批次中被 kill 后，只在盘面仍严格等于“原 manifest 的已落连续前缀 + current unresolved 完整
+后缀”时重放原 actor/reason/items；已落前缀逐章按同一决定核验，后缀不得遗漏、夹入或重排，活动
+trim audit inventory 的坏文件、路径/章号不一致或任一 SHA 漂移都关闭式停止。重放不再调用
+Commander；producer 在同书锁内全量预检、首写前复采，并按章幂等补尾。每一笔后继未落项写入前还要
+重验完整 exact prefix/current suffix frontier、该项 audit/正文与既有 resolution，首项落盘后的盘外漂移、
+删除或 foreign 决定不得被旧 facts 覆盖。全部 retain 落盘后仍使用原 fresh Review，只因 current
+audit/resolution/wontfix 处置摘要变化重建 closure workpack/token；不得
+把纯处置写成一次新的 Review。
 
 ### 4.3 `_service/human_actions.jsonl`（wire v1）
 
@@ -325,7 +362,8 @@ trim 与 closure submit 另共用 `_service/stage5_writer_locks/<book>/book.lock
   和 1～2 份 `{chars,text}` 尝试；旧正式稿不被退化候选覆盖。
 - `TrimAudit`（v2）只保存 ordinal、pretrim 正文 SHA-256 与 reason。没有候选、没有 adopted。
 - `TrimResolution`（v2）唯一 action 是 `retain_pretrim`；同时绑定 audit SHA-256、当前
-  `stage5/chNN.json` 路径与正文 SHA-256、actor/reason 和免费来源账。
+  `stage5/chNN.json` 路径与正文 SHA-256、actor/reason 和免费来源账。单章 CLI 与顶部卡 full-batch
+  共用这一个 canonical writer；batch 不是第二种 resolution，也不改变正文或 Review。
 - `wontfix.json`（v1）按 `(stage, chapter|book, rule, evidence_key)` 绑定人工理由；豁免不删结论。
 - `_rounds/` 是审计历史，不计活动 `.INVALID` / rejected / stalled 余额；反推 schema 时仍必须读。
 

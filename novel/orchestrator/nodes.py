@@ -121,7 +121,7 @@ _PRIMARY_OPERATIONS = {
         '--emit-prepared-recovery-workpack', '--recover-prepared',
     }),
     'stage5.review': frozenset({
-        '--retain-pretrim', '--wontfix', '--check-only',
+        '--retain-pretrim', '--retain-pretrim-batch', '--wontfix', '--check-only',
     }),
     'stage6.hook': frozenset({
         '--dry-run', '--check-only', '--identity', '--recheck', '--revalidate',

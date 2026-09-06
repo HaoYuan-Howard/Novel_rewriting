@@ -690,6 +690,14 @@ Executor。它不会把 Stage0～Stage2 的历史 pending 信标画成“必须�
 `stage4.design / recovery:stage4-design-repair-aggregate-commit / executor`。这条 0-wire 补尾
 committed 后，才允许恢复普通 approval、inbox 或后续节点；已经 stale 的 review token 不再进入前沿。
 
+Stage5 继续只使用 `stage5.review / approval:stage5-closure / commander` 这一张顶部卡，`waiting_on`
+名称不代表当前一定提交 closure。current view 为纯 unresolved trim 时，workpack 只给 full-batch
+`stage5.review --retain-pretrim-batch @reviewer-input` 与 typed stop；ready/expired 时只给 closure
+approval；缺章、活动 `.INVALID` 或 HARD 与 trim 并存时在开席前 stopped/2。batch 是一席人审后的
+0-LLM node，不是 deterministic recovery，也不构造 Executor profile。部分落盘重启时，同一 durable
+record 在 exact prefix/current suffix 证明下零 Commander 补尾；全部 resolution 落稳后仍使用原 fresh
+Review，只因 `trim_subjects/wontfix_sha256` 变化重建 closure workpack/token。
+
 ---
 
 ## 五、`QueueItem` / `QueuePlan` —— 一批书（`R-13`，新增能力）
@@ -860,9 +868,9 @@ Output/_service/*.jsonl.lock      上面九类 JSONL 各自的追加锁载体（
 Output/_service/uploads/…         浏览器上传的原始小说字节
 Output/_service/edits/<sid>/…     交给 CLI 的一次性 typed 编辑稿、人工决定或批处理 manifest
 Output/_service/edits/<sid>/stage2-prereview-<sha>.json Blueprint 尚未完成、无 live surface 时已经通过 typed loader 的 Stage2 预审回答；它只保存重新绑定所需身份，不是假 action
-Output/_service/edits/<sid>/reviewer-action-<sha>.json 已通过 typed loader 的 Commander 可执行决定：approval 或 Stage0/2/6/7 node 二选一内容寻址、可零模型重放（R-11.25）；Stage2 在 full action 上额外绑定 workpack/source/main/effective progress/blocker、原 logical session 与 provider 原始回答 SHA，pause/stop/进程重启后仍重走当前 loader + permit，不用 assembled request SHA 冒充 no-progress/拒因身份
+Output/_service/edits/<sid>/reviewer-action-<sha>.json 已通过 typed loader 的 Commander 可执行决定：approval 或 Stage0/2/5/6/7 node 二选一内容寻址、可零模型重放（R-11.25）；Stage2 在 full action 上额外绑定 workpack/source/main/effective progress/blocker、原 logical session 与 provider 原始回答 SHA；Stage5 trim batch 绑定同一 Review/原始全量有序 audit+chapter 双 SHA/reviewer contract、原 logical session/seat turn/provider 原始回答 SHA，不携 closure token，pause/stop/进程重启后仍重走当前 loader + permit，不用 assembled request SHA 冒充 no-progress/拒因身份
 Output/_service/runs/<sid>/stage2/global_review_ledgers/<sha>.json Stage2 Global/MainText 审阅的四席 Commander 账（v2：席 1～3 审阅/订正、席 4 只读终审；每席下记 launch/resume attempts，以及 process 成功后被 typed loader/canonical 边界拒绝的 request SHA、拒因摘要与拒因 SHA）、fresh session 与单调进展账；待纠错拒因只在 current business/workpack 与最后一席匹配时恢复，后续席一经预留即把旧拒因留作审计历史；旧 pre-spawn 假预留只经 hash-bound reconcile 移入带 actor/reason/负证据 hash 的 reconciliations；旧 v1 三席账或冻结 reviewer contract/output shape 已由后续提交证明失效的终态 v2 账，只能经 `reconcile --stage2-review-reopen` 带 actor/reason 和锁内复验的 original SHA 整体移入 `archived_ledgers` 后开空账，普通答错、运输失败或单纯预算耗尽不得重置；不含正文
-Output/_service/runs/<sid>/reviewer_seats/<blocker>/<business_sha256>.json 非 Stage2 reviewer blocker 的席位账（`ReviewerSeatLedger`）：同一稳定业务主体上只准一轮 review + 至多 `COMMANDER_REVIEWER_MAX_CORRECTIONS` 轮 correction，持久保存 pending 拒因/请求 identity/provider session 与每轮 attempts；重启或纯 code/surface 运输漂移不返还/不新开首审，真实 token/Stage0 revision/全文主体变化才开新账
+Output/_service/runs/<sid>/reviewer_seats/<blocker>/<business_sha256>.json 非 Stage2 reviewer blocker 的席位账（`ReviewerSeatLedger`）：同一稳定业务主体上只准一轮 review + 至多 `COMMANDER_REVIEWER_MAX_CORRECTIONS` 轮 correction，持久保存 pending 拒因/请求 identity/provider session、provider response SHA 与每轮 attempts；重启或纯 code/surface 运输漂移不返还/不新开首审，真实 token/Stage0 revision/全文主体变化才开新账。Stage5 trim 例外以 action mode + Review SHA + 原始 full ordered audit/chapter 双 SHA + reviewer contract 换业务，不把自变 closure token/workpack 当身份
 Output/_service/runs/<sid>/sessions/<session_run_id>.json Commander 一席的在线 provider session 指针（`CommanderSessionPointer`）：首个协议事件到达即写，同席 resume 原地覆盖；hash-bound 到本次 prompt/schema/profile，只是运维事实，不是审计账也不是预算（R-11.26）
 Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical 写作授权（原子替换）
 ```
@@ -887,8 +895,10 @@ session/provider-answer SHA 落入席位账，成功后才删除 prereview 并�
 
 `ReviewerActionRecord` 不是执行授权，也不替代 Supervisor 的 live permit。通用字段为
 `kind / sid / run_id / epoch_id / waiting_on / surface_seal / business_sha256 / recorded_at`；
-approval 形状携带 `surface / payload / review_token`，node 形状携带
-`node / flags / input_payload / review_token`。Stage2 `node=stage2.global` 与
+approval 形状携带 `surface / payload / review_token`，node 形状通常携带
+`node / flags / input_payload / review_token`。Stage5 trim batch 是唯一不带 closure token 的现役 node
+形状；它以专用 Review/contract/seat/response 字段和 payload 内完整有序双 SHA 自证。
+Stage2 `node=stage2.global` 与
 `surface=stage2_final_review` 的新记录还必须成组携带：
 
 | 字段 | 类型 | 新 Stage2 action/approval | 含义 |
@@ -900,6 +910,18 @@ approval 形状携带 `surface / payload / review_token`，node 形状携带
 | `reviewer_session_run_id` | 非空字符串 | **是** | 产出 typed-valid 回答的 Stage2 logical Commander 席位；重放动作 exit 2 时拒因仍回写该原席 |
 | `provider_response_sha256` | 64 位小写十六进制 SHA-256 | **是** | provider 原始 compact JSON 的规范字节身份；不是 trusted assembler 展开的 full request SHA |
 
+Stage5 `node=stage5.review` 且 flags 恰为
+`--retain-pretrim-batch @reviewer-input` 时，下面五格必须成组出现，`review_token` 必须为 null；其他
+reviewer action 不得借用这组形状：
+
+| 字段 | 类型 | Stage5 trim batch | 含义 |
+|---|---|---|---|
+| `stage5_review_sha256` | 64 位小写十六进制 SHA-256 | **是** | batch 开始时同一 fresh Review 的完整文件身份；纯 retain 不重跑或改写它 |
+| `stage5_reviewer_contract_sha256` | 64 位小写十六进制 SHA-256 | **是** | 生成并验证本席 immutable workpack 的 reviewer contract 摘要 |
+| `reviewer_session_run_id` | 非空字符串 | **是** | 产出 typed-valid batch 的 logical Commander session |
+| `reviewer_seat_turn_id` | 非空字符串 | **是** | 同 session 内具体 review/correction turn；不能仅靠 session 猜轮次 |
+| `provider_response_sha256` | 64 位小写十六进制 SHA-256 | **是** | provider 原始 typed batch 回答摘要，同时先绑定到 seat turn 与成本行 |
+
 旧 v1 Stage2 action 的 `workpack_sha256 / reviewer_session_run_id /
 provider_response_sha256` 三元组继续可读；只要三元组出现就必须齐全，新增四格也只能全有或全无。
 新 writer 一律写满七格；缺扩展组的历史记录仍须以能证明的字段关闭式复验，不能反推不存在的值。
@@ -907,6 +929,26 @@ live/correction/final-review action 都必须**先保存 record，再 finish 席
 恢复仅可在原 parent 不活动且 attempt、session audit、成本账三证一致时幂等补 finish，之后才重走 loader
 与当前 permit。原 turn 已有 typed/canonical rejection 时，拒因是更晚事实，残留 action 必须删除且绝不
 重放；Stage2 ledger 也禁止把空 turns 或任一非 `ok/exit0` turn 标成 `complete`。
+
+Stage5 trim batch 的顺序更具体：成功 provider 回答先把 response SHA 绑定到本 seat turn，再内容寻址
+保存完整 action record，之后才可把席位 finish 为 ok/0、物化 `@reviewer-input` 并取得 permit。宿主死在
+record→finish 窗时，跨 parent 恢复须在原 parent 的 owner-stopped OS lease 内重读并闭合唯一 seat turn、
+最终 wire+exit0 attempt、logical-session start/attempt/turn、成本行的 code/model/effort/protocol/response
+摘要；open session 只可诚实补 `process_state=ok / delivery_state=unknown`，started seat 才可幂等 finish。
+同 parent 换 epoch也要走同一证据尺，record 自身不能证明付费席已经成功。
+
+批次开始前的稳定 business 是 `action_mode=trim_resolution + stage5_review_sha256 + 原始 full ordered
+audit/chapter 双 SHA + reviewer contract`，刻意不含会随 prefix 落盘变化的 closure token/workpack。
+重启先区分三态：Review/contract 已知换代则安全退休旧 record；同主体且盘面恰为原 manifest 的连续 exact
+已落前缀 + current unresolved 完整后缀时，只重放原 actor/reason/items 且不再调用 Commander；坏 audit
+inventory、前缀决定不等、后缀遗漏/夹入/重排或身份不可读则保留 record 并以 unknown 停止。更晚的
+pending/canonical 拒因只有以 seat ordinal 及同样完整的 session/attempt/cost/response 证据证明时，才可
+压过并严格退休旧 action。fresh/correction action 的 exit 2/no-progress 必须先 durable 新拒因，再删
+record，不能用秒级时间或 best-effort 清理猜先后；partial batch replay 的 exit 2 没有独立替代拒因账，
+须保留唯一 record 并以 stopped 收口，后续只准零模型重验，或在 Review/contract 已证明换代时退休。
+producer 最终仍在 Stage5 书锁内做完整 frontier 预检与首写前复采；每一笔后继
+未落项写入前还须重验完整 exact prefix/current suffix frontier、该项 audit/正文与既有 resolution，
+首项落盘后的盘外漂移、删除或 foreign 决定必须在下一写前停止，不能按批次起点的旧 facts 继续覆盖。
 
 canonical 返回 landed exit（0/1）后删除记录；exit 2 先按 Stage2 现役拒因/席位策略落账再删除，并让
 planner 重读 live correction blocker/workpack；拒因写失败或 exit 70 结论未知时保留记录并停止执行，

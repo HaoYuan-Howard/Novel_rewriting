@@ -563,6 +563,18 @@ def test_stage5_rebuild_draft_is_retired():
         '--wontfix', 'book|draft_missing=人工接受', '--retain-pretrim',
         '--chapters', '3', '--actor', '复核员', '--reason', '保留原稿',
     ]),
+    ('stage5.review', [
+        '--check-only', '--retain-pretrim-batch', 'manifest.json',
+    ]),
+    ('stage5.review', [
+        '--wontfix', 'book|draft_missing=人工接受',
+        '--retain-pretrim-batch', 'manifest.json',
+    ]),
+    ('stage5.review', [
+        '--retain-pretrim', '--chapters', '3', '--actor', '复核员',
+        '--reason', '保留原稿',
+        '--retain-pretrim-batch', 'manifest.json',
+    ]),
     ('stage5.write', ['--recheck', '--revise']),
     ('stage5.write', [
         '--revalidate', '--actor', '复核员', '--reason', '按当前闸门重判',
@@ -573,6 +585,21 @@ def test_stage5_primary_operations_are_mutually_exclusive(node, flags):
     """CLI 按分支优先级只会执行一个；preview 不得把另一个 flag 的效果算进去。"""
     with pytest.raises(UnsupportedRunMode, match='主操作互斥'):
         N.build_argv(node, SID, flags, base=BASE)
+
+
+def test_stage5_trim_batch_is_free_writing_and_has_no_executor_profile() -> None:
+    flags = ['--retain-pretrim-batch', 'manifest.json']
+    argv = N.build_argv('stage5.review', SID, flags, base=BASE)
+
+    assert '--retain-pretrim-batch' in argv
+    assert N.is_paid('stage5.review', flags) is False
+    assert N.would_write('stage5.review', flags) is True
+    assert N.write_effect('stage5.review', flags) == \
+        WRITE_EFFECTS['--retain-pretrim-batch']
+    with pytest.raises(UnsupportedRunMode, match='executor agent|profile'):
+        N.build_steps(
+            'stage5.review', SID, flags, base=BASE,
+            executor_profile=EXECUTOR_PROFILE)
 
 
 def test_valued_flags_must_carry_a_value_and_bare_flags_must_not():

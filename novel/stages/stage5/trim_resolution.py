@@ -59,26 +59,65 @@ def matches_current_audit(
     audit_sha256: str,
 ) -> bool:
     """True only for a readable resolution bound to every current identity."""
+    return matching_current_resolution(store, audit, audit_sha256) is not None
+
+
+def matching_current_resolution(
+    store: ArtifactStore,
+    audit: TrimAudit,
+    audit_sha256: str,
+) -> tuple[TrimResolution, str] | None:
+    """返回绑定该 current audit/正文/root 的 resolution 及完整文件 SHA。
+
+    ``None`` 只表示文件物理不存在，或一份**可读**回执绑定的是旧 audit/正文。
+    现存但不可读的回执不能洗成“尚待人工决定”，否则 closure 会在已知坏盘上
+    打开新的付费 Reviewer 席位；这类证据损坏必须原样向上关闭式传播。
+    """
     rel = resolution_rel(audit.output_ordinal)
     if not store.exists(rel):
-        return False
-    try:
-        resolution, _raw = store.read_own(TrimResolution, rel)
-    except ArtifactUnreadable:
-        return False
+        return None
+    resolution, resolution_sha256 = store.read_own_with_sha256(
+        TrimResolution, rel)
+    expected_chapter_rel = artifact_rel(
+        'stage5.chapter', nn=audit.output_ordinal)
+    identity_errors: list[str] = []
+    if resolution.output_ordinal != audit.output_ordinal:
+        identity_errors.append(
+            f'ordinal={resolution.output_ordinal}，期望 {audit.output_ordinal}')
+    if resolution.chapter_rel != expected_chapter_rel:
+        identity_errors.append(
+            f'chapter_rel={resolution.chapter_rel!r}，期望 {expected_chapter_rel!r}')
+    if resolution.before_sha256 != resolution.chapter_sha256:
+        identity_errors.append('before_sha256 与 chapter_sha256 自相矛盾')
+    if resolution.provenance.root_clean_sha1 != store.ctx.root_clean_sha1:
+        identity_errors.append('root_clean_sha1 不属于当前书根')
+    if identity_errors:
+        raise ProvenanceRefused(
+            f'{rel} 的 live trim resolution 身份损坏：'
+            + '；'.join(identity_errors)
+            + '；不得把坏回执洗成 unresolved 后启动 Reviewer')
+
+    # 基本自洽、同根但绑定旧 audit 的回执是合法历史：当前 Commander 可以
+    # 针对新 audit 形成下一 round。只有它自称绑定**当前 exact audit** 时，
+    # before 仍对不上才是不可解释的矛盾，而不是可覆盖的旧轮。
+    if resolution.audit_sha256 != audit_sha256:
+        return None
+    if resolution.before_sha256 != audit.before_sha256:
+        raise ProvenanceRefused(
+            f'{rel} 声称绑定当前 audit SHA，但 before/chapter SHA 与 audit 不一致；'
+            '不得把自相矛盾的 live 回执洗成 unresolved')
     chapter = _current_pretrim(store, audit)
     if chapter is None:
-        return False
+        return None
     chapter_rel, chapter_sha256 = chapter
-    return (
-        resolution.output_ordinal == audit.output_ordinal
-        and resolution.action == 'retain_pretrim'
-        and resolution.audit_sha256 == audit_sha256
+    if not (
+        resolution.audit_sha256 == audit_sha256
         and resolution.before_sha256 == audit.before_sha256
-        and resolution.chapter_rel == chapter_rel
+        and resolution.chapter_rel == chapter_rel == expected_chapter_rel
         and resolution.chapter_sha256 == chapter_sha256 == audit.before_sha256
-        and resolution.provenance.root_clean_sha1 == store.ctx.root_clean_sha1
-    )
+    ):
+        return None
+    return resolution, resolution_sha256
 
 
 def needs_human_resolution(
@@ -101,6 +140,8 @@ def needs_human_resolution(
 
 def current_trim_audits(
     store: ArtifactStore,
+    *,
+    strict_inventory: bool = False,
 ) -> dict[int, tuple[TrimAudit, str]]:
     """Return exact-current trim facts, even after human resolution.
 
@@ -121,9 +162,16 @@ def current_trim_audits(
         rel = f'{directory}/{path.name}'
         try:
             audit, audit_sha256 = store.read_with_sha256(TrimAudit, rel)
-        except ArtifactUnreadable:
+        except ArtifactUnreadable as exc:
+            if strict_inventory:
+                raise TerminalState(
+                    f'Stage5 trim audit inventory 含不可读现役文件：{rel}') from exc
             continue
         if rel != artifact_rel('stage5.trim_audit', nn=audit.output_ordinal):
+            if strict_inventory:
+                raise TerminalState(
+                    'Stage5 trim audit inventory 的路径与声明章号不一致：'
+                    f'{rel} / output_ordinal={audit.output_ordinal}')
             continue
         if ((chapter := _current_pretrim(store, audit)) is not None
                 and chapter[1] == audit.before_sha256):
@@ -133,13 +181,141 @@ def current_trim_audits(
 
 def current_unresolved_audits(
     store: ArtifactStore,
+    *,
+    strict_inventory: bool = False,
 ) -> dict[int, tuple[TrimAudit, str]]:
     """Current trim facts that still need a hash-bound human decision."""
     return {
         ordinal: row
-        for ordinal, row in current_trim_audits(store).items()
+        for ordinal, row in current_trim_audits(
+            store, strict_inventory=strict_inventory).items()
         if needs_human_resolution(store, row[0], row[1])
     }
+
+
+def same_retain_pretrim_decision(
+    resolution: TrimResolution,
+    *,
+    output_ordinal: int,
+    actor: str,
+    reason: str,
+    audit_sha256: str,
+    chapter_rel: str,
+    chapter_sha256: str,
+    root_clean_sha1: str,
+) -> bool:
+    """比较 batch 重放的业务决定，而不是新旧执行 epoch 的来源账字节。
+
+    同一 manifest 的前缀可能由上一进程写完；新进程的 code/inputs/usage 来源账
+    天然可能不同。audit/chapter 双 SHA、actor/reason 与根正文都相同时，人类决定
+    已经精确落地，重写一轮既不幂等也会制造伪造的新产地。
+    """
+    return (
+        resolution.output_ordinal == output_ordinal
+        and resolution.action == 'retain_pretrim'
+        and resolution.actor == actor
+        and resolution.reason == reason
+        and resolution.audit_sha256 == audit_sha256
+        and resolution.before_sha256 == chapter_sha256
+        and resolution.chapter_rel == chapter_rel
+        and resolution.chapter_sha256 == chapter_sha256
+        and resolution.provenance.root_clean_sha1 == root_clean_sha1
+    )
+
+
+def _validate_batch_frontier(
+    store: ArtifactStore,
+    request: 'BatchTrimResolutionRequest',
+    facts: list[tuple[int, TrimAudit, str, str, str]],
+    *,
+    minimum_resolved_prefix: int = 0,
+    require_fully_resolved: bool = False,
+) -> None:
+    """证明 manifest 是 exact 已落前缀加 exact current unresolved 后缀。
+
+    ``minimum_resolved_prefix`` 还把验证绑定到调用循环已经越过的 index：
+    一个此前已写完的 prefix 即使被盘外删除/换旧，也不能退回成“仍合法的更短
+    prefix”后让循环从后面的 item 继续。正常返回前再用
+    ``require_fully_resolved`` 证明整批没有留下尾项或被末笔写后篡改。
+    """
+    if not 0 <= minimum_resolved_prefix <= len(request.items):
+        raise ValueError('batch frontier 的 minimum_resolved_prefix 越界')
+    current = current_trim_audits(store, strict_inventory=True)
+    unresolved = {
+        ordinal: row for ordinal, row in current.items()
+        if needs_human_resolution(store, row[0], row[1])
+    }
+    current_suffix = [
+        (ordinal, audit_sha256, audit.before_sha256)
+        for ordinal, (audit, audit_sha256) in sorted(unresolved.items())
+    ]
+    states: list[str] = []
+    for (
+        (ordinal, audit, audit_sha256, chapter_rel, reason), item,
+    ) in zip(facts, request.items, strict=True):
+        current_audit = current.get(ordinal)
+        if current_audit is None or (
+            current_audit[0] != audit
+            or current_audit[1] != audit_sha256
+            or current_audit[0].before_sha256 != item.chapter_sha256
+        ):
+            raise TerminalState(
+                f'批量销账 frontier 失败：第 {ordinal} 章原 manifest audit/正文'
+                '已不再是 exact current 主体')
+        rel = resolution_rel(ordinal)
+        if store.exists(rel):
+            resolution, _raw = store.read_own(TrimResolution, rel)
+            if same_retain_pretrim_decision(
+                resolution,
+                output_ordinal=ordinal,
+                actor=request.actor,
+                reason=reason,
+                audit_sha256=audit_sha256,
+                chapter_rel=chapter_rel,
+                chapter_sha256=audit.before_sha256,
+                root_clean_sha1=store.ctx.root_clean_sha1,
+            ):
+                if ordinal in unresolved:
+                    raise TerminalState(
+                        f'批量销账 frontier 自相矛盾：第 {ordinal} 章同时为已落与 unresolved')
+                states.append('resolved')
+                continue
+        unresolved_row = unresolved.get(ordinal)
+        if unresolved_row is None or (
+            unresolved_row[1] != item.audit_sha256
+            or unresolved_row[0].before_sha256 != item.chapter_sha256
+        ):
+            raise TerminalState(
+                f'批量销账 frontier 失败：第 {ordinal} 章既非 exact 已落决定，'
+                '也非 exact current unresolved')
+        states.append('unresolved')
+
+    first_unresolved = next(
+        (index for index, state in enumerate(states) if state == 'unresolved'),
+        len(states),
+    )
+    if any(state != 'resolved' for state in states[:first_unresolved]) or any(
+            state != 'unresolved' for state in states[first_unresolved:]):
+        raise TerminalState(
+            '批量销账 frontier 失败：manifest 不是连续的 exact 已落前缀 + '
+            'current unresolved 后缀')
+    if first_unresolved < minimum_resolved_prefix:
+        raise TerminalState(
+            '批量销账 frontier 失败：已遍历的 exact resolution 前缀发生回退'
+            f'（至少应落 {minimum_resolved_prefix} 项，当前仅 {first_unresolved} 项）；'
+            '不得从后续章继续写入')
+    if require_fully_resolved and first_unresolved != len(request.items):
+        raise TerminalState(
+            '批量销账 frontier 失败：写循环结束后 manifest 未全部 exact 落地；'
+            f'已落前缀={first_unresolved}/{len(request.items)}')
+    manifest_suffix = [
+        (item.output_ordinal, item.audit_sha256, item.chapter_sha256)
+        for item in request.items[first_unresolved:]
+    ]
+    if manifest_suffix != current_suffix:
+        raise TerminalState(
+            '批量销账 frontier 失败：manifest unresolved 后缀不等于当前待销账全集；'
+            '不得遗漏、夹入或重排章节')
 
 
 def retain_pretrim_batch(
@@ -197,6 +373,8 @@ def _retain_pretrim_batch_locked(
         facts.append((item.output_ordinal, audit, audit_sha256, chapter_rel,
                       item.reason.strip() or request.reason))
 
+    _validate_batch_frontier(store, request, facts)
+
     # 第二次完整采样落在第一笔 resolution 之前。共享书锁会拦住所有现役
     # Stage5 writer；这次复核再把误接线/盘外改字节造成的混合预检关闭式挡住。
     for ordinal, expected_audit, expected_audit_sha, chapter_rel, _reason in facts:
@@ -212,10 +390,17 @@ def _retain_pretrim_batch_locked(
             raise TerminalState(
                 f'批量销账首写前复核失败：第 {ordinal} 章 audit/正文在预检后漂移；'
                 '整批不开始，请重新抓取当前 trim 状态')
+    _validate_batch_frontier(store, request, facts)
 
-    # ── 按章序幂等写入。 ──
+    # ── 按章序幂等写入。每一笔前都重新证明完整 frontier。 ──
     written: list[TrimResolution] = []
-    for ordinal, audit, audit_sha256, chapter_rel, reason in facts:
+    for index, (ordinal, audit, audit_sha256, chapter_rel, reason) in enumerate(
+            facts):
+        # 书锁覆盖现役 writer，但盘外写入/漏接线不能被当作不可能。首章落盘后，
+        # 下一章写前必须重新证明「exact 已落前缀 + current unresolved 后缀」；
+        # 否则旧 facts 会覆盖一份 foreign 人审或把 audit/正文漂移洗白。
+        _validate_batch_frontier(
+            store, request, facts, minimum_resolved_prefix=index)
         resolution = TrimResolution(
             output_ordinal=ordinal,
             action='retain_pretrim',
@@ -230,11 +415,23 @@ def _retain_pretrim_batch_locked(
         rel = resolution_rel(ordinal)
         if store.exists(rel):
             current, _raw = store.read_own(TrimResolution, rel)
-            if current == resolution:
+            if same_retain_pretrim_decision(
+                current,
+                output_ordinal=ordinal,
+                actor=request.actor,
+                reason=reason,
+                audit_sha256=audit_sha256,
+                chapter_rel=chapter_rel,
+                chapter_sha256=audit.before_sha256,
+                root_clean_sha1=ctx.root_clean_sha1,
+            ):
                 written.append(current)
                 continue
         store.write_round(rel, resolution)
         written.append(resolution)
+    _validate_batch_frontier(
+        store, request, facts,
+        minimum_resolved_prefix=len(facts), require_fully_resolved=True)
     return written
 
 

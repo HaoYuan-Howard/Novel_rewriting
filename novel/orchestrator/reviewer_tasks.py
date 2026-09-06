@@ -23,7 +23,9 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field, TypeAdapter, ValidationError, create_model
 
-from contracts.artifacts import STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS
+from contracts.artifacts import (
+    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS, artifact_rel,
+)
 from contracts.invariants import (
     DESIGN_CHAPTER_DECISIONS,
     DESIGN_REPAIR_CODE_INSTRUCTIONS,
@@ -41,6 +43,7 @@ from contracts.invariants import (
 )
 from contracts.schema import ArtifactVersionError, decode_artifact, encode_artifact
 from contracts.schema.api import (
+    BatchTrimResolutionRequest,
     BlueprintSeenRequest, Stage2FinalReviewRequest,
     DesignRepairConstraint,
     DesignReviewRequest,
@@ -49,10 +52,11 @@ from contracts.schema.api import (
     OperatorNext,
     Stage5ClosureRequest,
     Stage5ClosureTemplate,
+    Stage5ClosureView,
     StructureApprovalRequest,
     WritingApprovalRequest,
 )
-from contracts.schema.evaluation import GlobalReviewDecisionSet
+from contracts.schema.evaluation import GlobalReviewDecisionSet, TrimAudit, TrimResolution
 from contracts.schema.orchestration import ReviewerActionRecord
 from contracts.schema.stage2 import (
     CharacterCollectionItem,
@@ -64,8 +68,12 @@ from contracts.schema.stage2 import (
     SecretResponse,
     WorldRuleResponse,
 )
+from contracts.schema.stage5 import Chapter
 from novel import paths
-from novel.errors import PathRefused
+from novel.errors import (
+    ArtifactUnreadable, PathRefused, ProvenanceRefused, TerminalState,
+    UpstreamMissing, UpstreamStale,
+)
 from novel.orchestrator import queue, reviewer_contract, service_lifecycle
 
 
@@ -134,6 +142,8 @@ class ReviewerTask:
     main_text_sha256: str | None = None
     progress_sha256: str | None = None
     blocker_count: int | None = None
+    stage5_review_sha256: str | None = None
+    stage5_reviewer_contract_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -177,12 +187,24 @@ class ReviewerStopAction:
 ReviewerAction = ReviewerNodeAction | ReviewerApprovalAction | ReviewerStopAction
 
 
+@dataclass(frozen=True)
+class Stage5TrimReplayBinding:
+    """一份 durable batch 决定相对 current frontier 的闭集状态。"""
+
+    state: Literal['replayable', 'fully_landed', 'stale']
+    submission_options: tuple[dict[str, Any], ...] = ()
+
+
 _NODE_FOR_BLOCKER: dict[str, frozenset[str]] = {
     'stage0.approve': frozenset({'stage0.approve'}),
     queue.WAITING_ON_STAGE2_REVIEW: frozenset({'stage2.global'}),
     queue.WAITING_ON_STAGE2_EDIT_CORRECTION: frozenset({'stage2.global'}),
     # 终审 reopen 走同一 producer：以终审者为 actor 把指定项改回 FAIL/UNVER。
     queue.WAITING_ON_STAGE2_FINAL_REVIEW: frozenset({'stage2.global'}),
+    # 同一 Stage5 顶部卡按 closure state 互斥：blocked+trim 时 Commander
+    # 只能填写 hash-bound batch manifest，Supervisor 只执行 0 成本 node action；
+    # ready/expired 时才由下方 approval 注册表开放闭合回执。
+    queue.WAITING_ON_STAGE5_CLOSURE: frozenset({'stage5.review'}),
     'stage6.approve': frozenset({'stage6.approve'}),
     'stage7.approve': frozenset({'stage7.approve'}),
 }
@@ -356,6 +378,100 @@ def _stage4_workpack(
     return pack
 
 
+def _stage5_trim_workpack(
+    base: str,
+    sid: str,
+    current: OperatorNext,
+    closure_value: Mapping[str, Any],
+) -> dict[str, Any]:
+    """把 closure 的 trim 身份展开成足够作人工决定的逐章材料。
+
+    closure workpack 只含章号与双 SHA，足以让浏览器复制提交，却不足以让
+    Commander 判断是否应保留超限正文。这里在同一 operator surface CAS 内重读
+    canonical Chapter、完整 TrimAudit 与现算目标区间；任何一格和 closure 身份
+    对不上都在开席前拒绝，不能让模型只看 ``[2, 11, 14]`` 代签。
+    """
+    try:
+        closure_view = Stage5ClosureView.model_validate(closure_value)
+    except ValidationError as exc:
+        raise ReviewerTaskError(
+            'Stage5 trim recovery 的 closure view 形状漂移') from exc
+    if (closure_view.state != 'blocked'
+            or closure_view.workpack is None
+            or not closure_view.workpack.unresolved_trim_items):
+        raise ReviewerTaskError(
+            'Stage5 trim recovery 只接受 blocked 且确有未销账 trim 的 current view')
+    if (closure_view.workpack.missing_chapters
+            or closure_view.workpack.invalid_chapters
+            or closure_view.workpack.hard_findings):
+        raise ReviewerTaskStopped(
+            queue.WAITING_ON_STAGE5_CLOSURE,
+            'Stage5 trim recovery 不得越过缺章/.INVALID/HARD；'
+            '须先走已知确定性恢复或 hash-bound 改稿')
+
+    from novel.orchestrator import state
+    from novel.stages.stage5 import trim_resolution
+    from novel.store import ArtifactStore
+
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    ctx = state.readonly_ctx(
+        novel_dir, 'stage5.review', current.code_version)
+    store = ArtifactStore(ctx)
+    chapters: list[dict[str, Any]] = []
+    for item in closure_view.workpack.unresolved_trim_items:
+        ordinal = item.output_ordinal
+        audit_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
+        chapter_rel = artifact_rel('stage5.chapter', nn=ordinal)
+        try:
+            audit, audit_sha256 = store.read_with_sha256(TrimAudit, audit_rel)
+            chapter, _raw = store.read_own(
+                Chapter, chapter_rel, require_current=True)
+        except (
+            ArtifactUnreadable, ProvenanceRefused, TerminalState,
+            UpstreamMissing, UpstreamStale,
+        ) as exc:
+            raise ReviewerTaskError(
+                f'Stage5 trim 第 {ordinal} 章当前材料读不了：{type(exc).__name__}') from exc
+        chapter_text = chapter.text
+        chapter_sha256 = hashlib.sha256(
+            chapter_text.encode('utf-8')).hexdigest()
+        if (
+            audit.output_ordinal != ordinal
+            or chapter.output_ordinal != ordinal
+            or audit.before_sha256 != item.chapter_sha256
+            or audit_sha256 != item.audit_sha256
+            or chapter_sha256 != item.chapter_sha256
+        ):
+            raise ReviewerTaskError(
+                f'Stage5 trim 第 {ordinal} 章正文/Audit 与 closure 双 SHA 不一致')
+        context = trim_resolution.verification_context(store, audit)
+        if '目标 ' not in context or '超上限 ' not in context:
+            raise ReviewerTaskError(
+                f'Stage5 trim 第 {ordinal} 章缺可裁决的目标区间或超额读数')
+        chapters.append({
+            'output_ordinal': ordinal,
+            'audit_rel': audit_rel,
+            'audit_sha256': audit_sha256,
+            'audit': audit.model_dump(mode='json'),
+            'chapter_rel': chapter_rel,
+            'chapter_sha256': chapter_sha256,
+            'chapter': {
+                'chars': chapter.chars,
+                'budget_chars': chapter.budget_chars,
+                'segments': [
+                    segment.model_dump(mode='json') for segment in chapter.segments],
+                'rendered_text': chapter_text,
+            },
+            'verification_context': context,
+        })
+    return {
+        'stage5_trim': {
+            'closure': closure_view.model_dump(mode='json'),
+            'chapters': chapters,
+        },
+    }
+
+
 def _workpack(
     base: str,
     sid: str,
@@ -527,8 +643,32 @@ def _workpack(
                 '--actor', _ACTOR, '--reason', _REASON]),
         }
     if waiting_on == queue.WAITING_ON_STAGE5_CLOSURE:
+        closure_value = _approval_view(cli, base, sid, 'closure')
+        try:
+            closure_view = Stage5ClosureView.model_validate(closure_value)
+        except ValidationError as exc:
+            raise ReviewerTaskError('Stage5 closure view 形状漂移') from exc
+        if closure_view.state == 'blocked' and closure_view.workpack is not None:
+            machine_blockers = (
+                closure_view.workpack.missing_chapters
+                or closure_view.workpack.invalid_chapters
+                or closure_view.workpack.hard_findings)
+            if machine_blockers:
+                raise ReviewerTaskStopped(
+                    queue.WAITING_ON_STAGE5_CLOSURE,
+                    'Stage5 closure 同时存在缺章/.INVALID/HARD；不得先开 trim '
+                    'Reviewer，须先走确定性恢复或 hash-bound 改稿')
+        if (closure_view.state == 'blocked'
+                and closure_view.workpack is not None
+                and closure_view.workpack.unresolved_trim_items):
+            if current is None:
+                raise ReviewerTaskError('Stage5 trim recovery 缺 operator 冻结快照')
+            return _stage5_trim_workpack(base, sid, current, closure_value)
+        if closure_view.state not in {'ready', 'expired'}:
+            raise ReviewerTaskError(
+                'Stage5 closure 当前不可提交；不得为 blocked/review_required 面启动 Reviewer')
         return {
-            'stage5': _approval_view(cli, base, sid, 'closure'),
+            'stage5': closure_value,
             '_stage5_template': _json_command([
                 *cli, 'approval', 'template', 'stage5', sid, '--base', base,
                 '--actor', _ACTOR, '--reason', _REASON]),
@@ -619,6 +759,181 @@ def replay_request_document(
             'payload': copy.deepcopy(record.payload),
         }
     return _request_wrapper(current, waiting_on, action)
+
+
+def stage5_trim_partial_replay_options(
+    base: str,
+    sid: str,
+    record: ReviewerActionRecord,
+    current: OperatorNext,
+    submission_options: Sequence[dict[str, Any]],
+    *,
+    current_review_sha256: str | None,
+) -> Stage5TrimReplayBinding | None:
+    """为已落 exact prefix 的 Stage5 batch 决定重建一次性 replay binding。
+
+    batch producer 在首写前完整预检，但多文件落盘仍可能在某章后被 kill。此时
+    current trim business 已只剩 suffix，普通 replay identity 必然改变；若把
+    旧记录直接汰掉，就会为同一份已付费人工决定再开 Commander。本函数只接受
+    ``已落且逐字相等的 prefix + current unresolved 的逐字 suffix``，禁止集合匹配
+    洗掉中间空洞或重排；真正执行仍重交原 manifest，并由 producer 在书锁内再次
+    完整预检。
+    """
+    if (record.node != 'stage5.review'
+            or record.flags != (
+                '--retain-pretrim-batch', '@reviewer-input')):
+        return None
+    if (record.input_payload is None
+            or current.state != 'blocked'
+            or current.action is None
+            or current.action.waiting_on != queue.WAITING_ON_STAGE5_CLOSURE):
+        raise ReviewerTaskError(
+            'Stage5 durable batch record 缺 payload 或已脱离原 blocker；'
+            '拒绝删除恢复凭据后另开 Commander')
+    try:
+        request = BatchTrimResolutionRequest.model_validate(record.input_payload)
+    except ValidationError as exc:
+        raise ReviewerTaskError(
+            'Stage5 durable batch record 的 typed payload 已损坏；拒绝自动汰除') from exc
+    if any(not row.reason.strip() for row in request.items):
+        # 公共 batch schema 允许逐项沿用共享理由；delegated Commander 契约更窄，
+        # 每章都必须留下亲自裁决的独立理由。
+        raise ReviewerTaskError(
+            'Stage5 durable batch record 缺逐章独立理由；拒绝自动汰除')
+    recorded_review_sha256 = record.stage5_review_sha256
+    recorded_contract_sha256 = record.stage5_reviewer_contract_sha256
+    if (not isinstance(recorded_review_sha256, str)
+            or not isinstance(recorded_contract_sha256, str)
+            or not isinstance(current_review_sha256, str)):
+        raise ReviewerTaskError(
+            'Stage5 durable batch record 缺原 Review/contract 稳定身份；'
+            '拒绝自动汰除')
+    current_contract_sha256 = hashlib.sha256(
+        reviewer_contract.for_blocker(
+            queue.WAITING_ON_STAGE5_CLOSURE).encode('utf-8')).hexdigest()
+    original_business = {
+        'kind': 'stage5-top-review-business-v2',
+        'waiting_on': queue.WAITING_ON_STAGE5_CLOSURE,
+        'action_mode': 'trim_resolution',
+        'review_sha256': recorded_review_sha256,
+        'unresolved_trim_items': [
+            {
+                'output_ordinal': row.output_ordinal,
+                'audit_sha256': row.audit_sha256,
+                'chapter_sha256': row.chapter_sha256,
+            }
+            for row in request.items
+        ],
+        'reviewer_contract_sha256': recorded_contract_sha256,
+    }
+    if _canonical_json_sha256(original_business) != record.business_sha256:
+        raise ReviewerTaskError(
+            'Stage5 durable batch record 的内部 business 身份自相矛盾；'
+            '保留记录并停止，不得另开 Commander')
+    if (recorded_review_sha256 != current_review_sha256
+            or recorded_contract_sha256 != current_contract_sha256):
+        return Stage5TrimReplayBinding(state='stale')
+
+    current_actions: list[dict[str, Any]] = []
+    for option in submission_options:
+        exact = option.get('exact_request') if isinstance(option, dict) else None
+        action = exact.get('action') if isinstance(exact, dict) else None
+        if (
+            isinstance(action, dict)
+            and action.get('kind') == 'node'
+            and action.get('node') == 'stage5.review'
+            and action.get('flags') == [
+                '--retain-pretrim-batch', '@reviewer-input']
+        ):
+            current_actions.append(action)
+    if len(current_actions) > 1:
+        raise ReviewerTaskError('Stage5 current trim 卡出现多个 batch immutable 骨架')
+    current_payload = (
+        current_actions[0].get('input_payload') if current_actions else None)
+    if current_payload is None:
+        current_rows: list[Any] = []
+    elif isinstance(current_payload, dict) and isinstance(
+            current_payload.get('items'), list):
+        current_rows = current_payload['items']
+    else:
+        raise ReviewerTaskError('Stage5 current trim 卡的 batch payload 形状漂移')
+
+    def identity(row: Any) -> tuple[Any, Any, Any] | None:
+        if not isinstance(row, Mapping):
+            return None
+        return (
+            row.get('output_ordinal'), row.get('audit_sha256'),
+            row.get('chapter_sha256'))
+
+    recorded_identities = [
+        (row.output_ordinal, row.audit_sha256, row.chapter_sha256)
+        for row in request.items
+    ]
+    current_identities = [identity(row) for row in current_rows]
+    prefix_size = len(recorded_identities) - len(current_identities)
+    current_actor = (
+        current_payload.get('actor') if isinstance(current_payload, dict)
+        else request.actor)
+    if (prefix_size < 0
+            or current_actor != request.actor
+            or current_identities != recorded_identities[prefix_size:]):
+        raise ReviewerTaskError(
+            'Stage5 durable batch record 不是 exact 已落前缀 + current unresolved '
+            '后缀；保留记录并停止，不得另开 Commander')
+    if prefix_size == 0:
+        # 尚未落任何一章时仍走普通 business identity；这里不绕过 contract。
+        return None
+
+    from novel.orchestrator import state
+    from novel.stages.stage5 import trim_resolution
+    from novel.store import ArtifactStore
+
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    ctx = state.readonly_ctx(novel_dir, 'stage5.review', current.code_version)
+    store = ArtifactStore(ctx)
+    for row in request.items[:prefix_size]:
+        rel = artifact_rel('stage5.trim_resolution', nn=row.output_ordinal)
+        try:
+            resolution, _raw = store.read_own(TrimResolution, rel)
+        except (
+            ArtifactUnreadable, ProvenanceRefused, TerminalState,
+            UpstreamMissing, UpstreamStale,
+        ) as exc:
+            raise ReviewerTaskError(
+                f'Stage5 durable batch 已落前缀第 {row.output_ordinal} 章不可证明；'
+                '保留记录并停止') from exc
+        if not trim_resolution.same_retain_pretrim_decision(
+            resolution,
+            output_ordinal=row.output_ordinal,
+            actor=request.actor,
+            reason=row.reason.strip(),
+            audit_sha256=row.audit_sha256,
+            chapter_rel=artifact_rel('stage5.chapter', nn=row.output_ordinal),
+            chapter_sha256=row.chapter_sha256,
+            root_clean_sha1=ctx.root_clean_sha1,
+        ):
+            raise ReviewerTaskError(
+                f'Stage5 durable batch 已落前缀第 {row.output_ordinal} 章与原决定'
+                '不一致；保留记录并停止')
+
+    if not current_rows:
+        return Stage5TrimReplayBinding(state='fully_landed')
+
+    # replay option 不是新的人类选项，只把原 typed-valid action 重新绑定到 current
+    # transport wrapper；上方 prefix/suffix 证明和下游 loader/producer 仍会再次验它。
+    replay = replay_request_document(record, current)
+    return Stage5TrimReplayBinding(
+        state='replayable',
+        submission_options=(_option(
+            'replay:stage5.review.retain-pretrim-batch', replay,
+            editable_fields=[],
+            binding_fields=[
+                '原 Review/完整有序 trim 双 SHA/contract business identity',
+                '已落 TrimResolution exact prefix',
+                'current unresolved audit/chapter exact suffix',
+            ],
+        ),),
+    )
 
 
 def _option(
@@ -2079,6 +2394,77 @@ def _submission_options(
                 'action.surface', 'action.payload.actor/review_token'],
         )]
 
+    if (waiting_on == queue.WAITING_ON_STAGE5_CLOSURE
+            and 'stage5_trim' in pack):
+        trim_pack = pack.get('stage5_trim')
+        closure_value = (
+            trim_pack.get('closure') if isinstance(trim_pack, Mapping) else None)
+        try:
+            closure_view = Stage5ClosureView.model_validate(closure_value)
+        except ValidationError as exc:
+            raise ReviewerTaskError(
+                'Stage5 trim submission 缺 current closure binding') from exc
+        if (closure_view.state != 'blocked'
+                or closure_view.workpack is None
+                or not closure_view.workpack.unresolved_trim_items):
+            raise ReviewerTaskError('Stage5 trim submission 已无待销账项')
+        stop_request = _request_wrapper(current, waiting_on, {
+            'kind': 'stop',
+            'reason': (
+                '<指出应整章改写而不能 retain 的章号、当前正文证据与超限风险；'
+                '该动作不写 trim resolution，后续须走 hash-bound Stage5 人工改稿>'),
+        })
+        payload = {
+            'actor': _ACTOR,
+            'reason': '<概括本批 trim retain 的跨章判断与共同依据>',
+            'items': [
+                {
+                    'output_ordinal': row.output_ordinal,
+                    'audit_sha256': row.audit_sha256,
+                    'chapter_sha256': row.chapter_sha256,
+                    'reason': (
+                        f'<第 {row.output_ordinal} 章：结合正文、TrimAudit、'
+                        '目标区间与超额读数填写独立 retain 理由>'),
+                }
+                for row in closure_view.workpack.unresolved_trim_items
+            ],
+        }
+        batch_request = _request_wrapper(current, waiting_on, {
+            'kind': 'node', 'node': 'stage5.review',
+            'flags': ['--retain-pretrim-batch', '@reviewer-input'],
+            'input_payload': payload,
+        })
+        return [
+            _option(
+                'node:stage5.review.retain-pretrim-batch', batch_request,
+                editable_fields=[
+                    'action.input_payload.reason',
+                    'action.input_payload.items[].reason',
+                ],
+                binding_fields=bind + [
+                    'action.node', 'action.flags', 'action.input_payload.actor',
+                    'action.input_payload.items[].output_ordinal/audit_sha256/'
+                    'chapter_sha256 及行顺序',
+                ],
+                allowed_values={
+                    'purpose': (
+                        '只在亲自通读全部 current canonical 正文、TrimAudit 与目标区间后，'
+                        '逐章确认确应保留当前超限正文时整批使用；Supervisor 不生成或'
+                        '补写决定，只物化该 typed manifest 并执行 0 成本写入。'),
+                    'items[].reason': '每章必须各自填写非空理由，不得沿用共享理由代签',
+                },
+            ),
+            _option(
+                'stop:stage5-trim-rewrite-required', stop_request,
+                editable_fields=['action.reason'],
+                binding_fields=bind + ['action.kind'],
+                allowed_values={
+                    'purpose': (
+                        '任一章需要整章改写时停止，不得为关闭 blocker 机械 retain。'),
+                },
+            ),
+        ]
+
     if waiting_on == queue.WAITING_ON_STAGE5_CLOSURE:
         template = Stage5ClosureTemplate.model_validate(pack['_stage5_template'])
         payload = _compact_stage5_payload(template)
@@ -2305,6 +2691,41 @@ def _non_stage2_business_identity(
             'removed': removed_identity,
             'reviewer_contract_sha256': contract_sha256,
         }
+    if waiting_on == queue.WAITING_ON_STAGE5_CLOSURE:
+        action_mode = (
+            'trim_resolution' if 'stage5_trim' in pack else 'closure_receipt')
+        if action_mode == 'closure_receipt':
+            return {
+                'kind': 'stage5-top-review-business-v2',
+                'waiting_on': waiting_on,
+                'action_mode': action_mode,
+                'review_token': _single_submission_review_token(
+                    submission_options),
+                'reviewer_contract_sha256': contract_sha256,
+            }
+        trim_pack = pack.get('stage5_trim')
+        closure_value = (
+            trim_pack.get('closure') if isinstance(trim_pack, Mapping) else None)
+        try:
+            closure_view = Stage5ClosureView.model_validate(closure_value)
+        except ValidationError as exc:
+            raise ReviewerTaskError(
+                'Stage5 trim reviewer business 缺 closure workpack') from exc
+        workpack = closure_view.workpack
+        if closure_view.state != 'blocked' or workpack is None:
+            raise ReviewerTaskError(
+                'Stage5 trim reviewer business 已不是 blocked current workpack')
+        return {
+            'kind': 'stage5-top-review-business-v2',
+            'waiting_on': waiting_on,
+            'action_mode': action_mode,
+            'review_sha256': workpack.review_sha256,
+            'unresolved_trim_items': [
+                row.model_dump(mode='json')
+                for row in workpack.unresolved_trim_items
+            ],
+            'reviewer_contract_sha256': contract_sha256,
+        }
     return {
         'kind': 'review-token-business-v1',
         'waiting_on': waiting_on,
@@ -2368,6 +2789,22 @@ def build_task(
     options = _submission_options(pack, current, waiting_on)
     if not options:
         raise ReviewerTaskError(f'{waiting_on} 没有 typed submission option')
+    stage5_review_sha256: str | None = None
+    stage5_reviewer_contract_sha256: str | None = None
+    if waiting_on == queue.WAITING_ON_STAGE5_CLOSURE:
+        trim_pack = pack.get('stage5_trim')
+        closure_value = (
+            trim_pack.get('closure') if isinstance(trim_pack, Mapping)
+            else pack.get('stage5'))
+        try:
+            closure_view = Stage5ClosureView.model_validate(closure_value)
+        except ValidationError as exc:  # pragma: no cover —— _workpack 已验证
+            raise ReviewerTaskError('Stage5 reviewer task 缺 closure 稳定身份') from exc
+        if closure_view.workpack is None:  # pragma: no cover —— 可审状态均有 workpack
+            raise ReviewerTaskError('Stage5 reviewer task 缺 current workpack')
+        stage5_review_sha256 = closure_view.workpack.review_sha256
+        stage5_reviewer_contract_sha256 = hashlib.sha256(
+            reviewer_contract.for_blocker(waiting_on).encode('utf-8')).hexdigest()
     envelope = {
         'schema': 'novel-reviewer-workpack-v1',
         'sid': sid,
@@ -2427,6 +2864,20 @@ def build_task(
         '发现问题则提交 node:stage2.global.final-reopen，只列出有可指向错误/证据不足的项'
         '（state 只能 FAIL/UNVER），不得提交 PASS、不得编辑 Global。\n'
         if waiting_on == queue.WAITING_ON_STAGE2_FINAL_REVIEW else '')
+    trim_instruction = (
+        '\n当前 blocker 不是 Stage5 closure 审批，而是其前置 trim 人工裁决。'
+        'materials.stage5_trim.chapters 对每个 unresolved item 提供 current canonical '
+        'rendered_text/segments、完整 TrimAudit、现算目标区间与超额读数，并与 closure '
+        'workpack 的 audit/chapter 双 SHA 绑定。必须通读全部待办以做跨章复核，本轮只'
+        '提交一份整批 manifest，并为每章分别填写非空 retain 理由；Supervisor 不替你'
+        '生成、补写或选择决定，只在 typed loader 通过后执行这份 0 成本 manifest。'
+        '整批首写前会复核全部 SHA；中断后只有已落 exact prefix + current unresolved '
+        'exact suffix 的同一 durable 决定可零模型续接。'
+        '任一章应整章改写，就选择 stop 并指出章号、正文证据和风险，不得机械 retain。'
+        '全部 trim 销账后重新构造 closure workpack 并再过 fresh/accepted Review 守卫；'
+        '当前轮绝不提交 closure。\n'
+        if (waiting_on == queue.WAITING_ON_STAGE5_CLOSURE
+            and 'stage5_trim' in pack) else '')
     if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
         stage4_resolution_instruction = (
             '\n当前不是再次审阅或覆盖同一份 Stage4B。请把 materials 中已落盘的 B '
@@ -2529,6 +2980,7 @@ Stage4 A/B 工作包的逐章裁决材料在 materials 的 coverage 行 reading 
 是唯一字段说明；metric_only 组只是摘要，完整读数以逐章 reading 为准。
 {correction_instruction}
 {final_review_instruction}
+{trim_instruction}
 {stage4_resolution_instruction}
 """
     # 只守我们自己的静态能力边界；正文/证据是不可信数据，不能因其合法出现
@@ -2567,7 +3019,10 @@ Stage4 A/B 工作包的逐章裁决材料在 materials 的 coverage 行 reading 
             if stage2_identity is not None else None),
         blocker_count=(
             int(stage2_identity['blocker_count'])
-            if stage2_identity is not None else None))
+            if stage2_identity is not None else None),
+        stage5_review_sha256=stage5_review_sha256,
+        stage5_reviewer_contract_sha256=stage5_reviewer_contract_sha256,
+    )
 
 
 def build_stage2_prereview_task(
@@ -2830,6 +3285,81 @@ def _stage2_bound_submission_template(
         raise ReviewerTaskError(
             'Stage2 reviewer action 未唯一匹配 immutable submission option 的完整 binding')
     return bound[0]
+
+
+def _stage5_trim_submission_template(
+    action: dict[str, Any],
+    submission_options: Sequence[dict[str, Any]] | None,
+) -> tuple[dict[str, Any], bool]:
+    """取 current Stage5 trim 卡唯一的 batch immutable 骨架。"""
+    matches: list[tuple[dict[str, Any], bool]] = []
+    for option in submission_options or ():
+        exact = option.get('exact_request') if isinstance(option, dict) else None
+        expected = exact.get('action') if isinstance(exact, dict) else None
+        if (
+            isinstance(expected, dict)
+            and expected.get('kind') == 'node'
+            and expected.get('node') == 'stage5.review'
+            and expected.get('flags') == action.get('flags')
+        ):
+            matches.append((
+                expected,
+                option.get('id') ==
+                'replay:stage5.review.retain-pretrim-batch',
+            ))
+    if len(matches) != 1:
+        raise ReviewerTaskError(
+            '当前 immutable workpack 未唯一提供 Stage5 batch trim action')
+    return matches[0]
+
+
+def _validate_stage5_trim_binding(
+    submitted: dict[str, Any], expected: dict[str, Any], *,
+    exact_replay: bool,
+) -> None:
+    """fresh 只开放理由；replay 的原决定则全量逐字冻结。"""
+    if exact_replay and submitted != expected:
+        raise ReviewerTaskError(
+            'Stage5 partial replay 必须逐字重交原 batch action/payload')
+    if frozenset(submitted) != frozenset({
+        'kind', 'node', 'flags', 'input_payload',
+    }):
+        raise ReviewerTaskError('Stage5 batch trim action 字段集合必须逐字保留模板')
+    if submitted.get('flags') != expected.get('flags'):
+        raise ReviewerTaskError('Stage5 batch trim flags 必须逐字保留模板')
+    payload = submitted.get('input_payload')
+    expected_payload = expected.get('input_payload')
+    if not isinstance(payload, dict) or not isinstance(expected_payload, dict):
+        raise ReviewerTaskError('Stage5 batch trim 缺 typed input_payload')
+    if frozenset(payload) != frozenset({'actor', 'reason', 'items'}):
+        raise ReviewerTaskError('Stage5 batch trim payload 字段集合必须逐字保留模板')
+    if payload.get('actor') != expected_payload.get('actor'):
+        raise ReviewerTaskError('Stage5 batch trim actor 必须逐字保留模板')
+    reason = payload.get('reason')
+    if not isinstance(reason, str) or not reason.strip():
+        raise ReviewerTaskError('Stage5 batch trim 共享 reason 必须是非空人工理由')
+    rows = payload.get('items')
+    expected_rows = expected_payload.get('items')
+    if not isinstance(rows, list) or not isinstance(expected_rows, list):
+        raise ReviewerTaskError('Stage5 batch trim items 必须是数组')
+    if len(rows) != len(expected_rows):
+        raise ReviewerTaskError('Stage5 batch trim 必须覆盖 current unresolved 全集')
+    identity_fields = ('output_ordinal', 'audit_sha256', 'chapter_sha256')
+    for index, (row, expected_row) in enumerate(zip(
+            rows, expected_rows, strict=True)):
+        if not isinstance(row, dict) or not isinstance(expected_row, dict):
+            raise ReviewerTaskError(f'Stage5 batch trim items[{index}] 必须是 object')
+        if frozenset(row) != frozenset({*identity_fields, 'reason'}):
+            raise ReviewerTaskError(
+                f'Stage5 batch trim items[{index}] 字段集合必须逐字保留模板')
+        if any(row.get(field) != expected_row.get(field)
+               for field in identity_fields):
+            raise ReviewerTaskError(
+                'Stage5 batch trim 的章号/audit SHA/chapter SHA 与行顺序必须逐字保留')
+        item_reason = row.get('reason')
+        if not isinstance(item_reason, str) or not item_reason.strip():
+            raise ReviewerTaskError(
+                f'Stage5 batch trim items[{index}].reason 必须逐章非空填写')
 
 
 def _non_stage2_node_submission_template(
@@ -3389,6 +3919,7 @@ def load_action(
         if waiting_on not in {
             'stage0.approve',
             queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
+            queue.WAITING_ON_STAGE5_CLOSURE,
         }:
             raise ReviewerTaskError(
                 f'blocker={waiting_on!r} 不允许 reviewer stop action')
@@ -3474,6 +4005,22 @@ def load_action(
             # Reviewer 编辑的是业务字段；真正交给 CLI 的外部文件仍须使用注册表
             # 版本信封。版本标记由可信 loader 重建，不交给 Commander 手搬或修改。
             input_payload = encode_artifact(artifact, logical_payload)
+        elif node == 'stage5.review':
+            if (flags != ['--retain-pretrim-batch', '@reviewer-input']
+                    or input_payload is None):
+                raise ReviewerTaskError(
+                    'stage5.review reviewer action 只接受 batch trim typed payload')
+            try:
+                logical_payload = BatchTrimResolutionRequest.model_validate(
+                    input_payload).model_dump(mode='json')
+            except ValidationError as exc:
+                raise ReviewerTaskError(_typed_validation_reason(
+                    'Stage5 batch trim 不符合 typed 契约', exc)) from exc
+            expected_action, exact_replay = _stage5_trim_submission_template(
+                body, submission_options)
+            _validate_stage5_trim_binding(
+                body, expected_action, exact_replay=exact_replay)
+            input_payload = logical_payload
         else:
             expected_action = _non_stage2_node_submission_template(
                 body, submission_options)
@@ -3546,7 +4093,8 @@ __all__ = [
     'ReviewerAction', 'ReviewerApprovalAction', 'ReviewerNodeAction',
     'ReviewerStopAction', 'ReviewerTaskStopped',
     'ReviewerTask', 'ReviewerTaskError', 'Stage2PrereviewTask',
+    'Stage5TrimReplayBinding',
     'action_business_sha256', 'bind_stage2_prereview', 'build_stage2_prereview_task',
     'build_task', 'correction_prompt', 'is_registered', 'load_action',
-    'load_stage2_prereview',
+    'load_stage2_prereview', 'stage5_trim_partial_replay_options',
 ]

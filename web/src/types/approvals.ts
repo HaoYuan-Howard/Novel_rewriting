@@ -624,6 +624,12 @@ export interface Stage5ClosureWorkpack {
   unresolved_trim_chapters: number[]
   /** 批量 trim 的唯一合法 identity 来源；前端不得重算 audit/chapter SHA。 */
   unresolved_trim_items: Omit<BatchTrimResolutionItem, 'reason'>[]
+  /** 全部 current audit 与可选当前 resolution 的完整字节身份。 */
+  trim_subjects: (Omit<BatchTrimResolutionItem, 'reason'> & {
+    resolution_sha256: string | null
+  })[]
+  /** 当前 wontfix 完整文件身份；缺文件与空账分开。 */
+  wontfix_sha256: string | null
   must_appear: Stage5MustAppearRow[]
   fact_group: Stage5FindingGroup | null
   unver_group: Stage5FindingGroup | null

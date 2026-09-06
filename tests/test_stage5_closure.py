@@ -16,13 +16,20 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from contracts.schema.stage5 import Review, ReviewChapter
+from contracts.schema.api import (
+    BatchTrimResolutionRequest, Stage5ClosureDecision,
+)
+from contracts.schema.evaluation import TrimAudit, TrimResolution
+from contracts.schema.stage5 import Chapter, Review, ReviewChapter
 from novel import paths, prov
-from novel.errors import ApprovalRequired, GateBlocked, ProvenanceRefused, TerminalState
+from novel.errors import (
+    ApprovalRequired, ArtifactUnreadable, GateBlocked, ProvenanceRefused,
+    TerminalState,
+)
 from novel.orchestrator import approvals
 from novel.llm import stage5_runs
 from novel.run import RunContext
-from novel.stages.stage5 import closure, review
+from novel.stages.stage5 import closure, review, trim_resolution
 from novel.store import ArtifactStore
 
 _GATES = ('s0', 's1', 's2', 's4', 's5', 's6', 's7')
@@ -256,6 +263,16 @@ def _ruling_request(store, *, actor='commander', reason='整书闭合'):
     })
 
 
+def _current_closure_decision(store) -> Stage5ClosureDecision:
+    """给 direct closure view 铸一份绑定当前 token 的 schema-valid 决定。"""
+    request = _ruling_request(store)
+    return Stage5ClosureDecision.model_validate({
+        **request.model_dump(mode='json'),
+        'decision_sha256': 'd' * 64,
+        'decided_at': '2026-09-06T00:00:00+00:00',
+    })
+
+
 # ── 工作包：分类闭集与确定性 ────────────────────────────────────────────────
 
 def test_workpack_classifies_the_closed_rule_set(rig):
@@ -278,6 +295,319 @@ def test_workpack_classifies_the_closed_rule_set(rig):
     again = closure.closure_workpack(store)
     assert again.workpack_sha256 == pack.workpack_sha256
     assert again.review_sha256 == pack.review_sha256
+
+
+def test_trim_batch_rebuilds_closure_under_the_same_review_without_paid_work(
+        rig, monkeypatch):
+    """retain 只销账 audit；旧 closure token 失效，但 Review seq/raw 完全不动。"""
+    ctx, store = rig
+    from contracts.artifacts import artifact_rel
+    from contracts.schema import encode_artifact
+
+    root_raw = store.path('stage0/clean_text.txt').read_bytes()
+    root_fp = prov.fingerprint_bytes(root_raw)
+    chapter_text_sha256: dict[int, str] = {}
+    audit_sha256: dict[int, str] = {}
+    for ordinal in (1, 2):
+        text = f'第{ordinal}章必须完整保留的超限因果正文。' * 20
+        chapter = Chapter.model_validate({
+            'output_ordinal': ordinal,
+            'from_source_ordinals': [ordinal],
+            'source_chars': 100,
+            'budget_chars': 90,
+            'chars': len(text),
+            'overlap_excl_verbatim': 0.01,
+            'segments': [{'slot': 's01', 'text': text}],
+            'warns': [],
+            '_provenance': {
+                'code': ctx.code,
+                'root_clean_sha1': ctx.root_clean_sha1,
+                'inputs': {'stage0/clean_text.txt': {
+                    'file': root_fp, 'consumed': None}},
+                'origin': 'human',
+                'round': 1,
+                'prompts': {'SYS': 'a' * 10},
+                'model': 'test-model',
+                'adopted_models': ['test-model'],
+            },
+        })
+        chapter_rel = artifact_rel('stage5.chapter', nn=ordinal)
+        payload = chapter.model_dump(by_alias=True, exclude_none=True)
+        payload['_provenance'] = chapter.provenance.to_disk()
+        store.path(chapter_rel).write_bytes((json.dumps(
+            encode_artifact(chapter_rel, payload),
+            ensure_ascii=False, indent=2,
+        ) + '\n').encode('utf-8'))
+        chapter_text_sha256[ordinal] = hashlib.sha256(
+            chapter.text.encode('utf-8')).hexdigest()
+        audit_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
+        store.write(audit_rel, TrimAudit(
+            output_ordinal=ordinal,
+            before_sha256=chapter_text_sha256[ordinal],
+            reason='当前正文超过冻结目标上限'))
+        audit_sha256[ordinal] = store.read_with_sha256(
+            TrimAudit, audit_rel)[1]
+
+    review_path = store.path('stage5/review_1.json')
+    review_raw = review_path.read_bytes()
+    review_sha256 = hashlib.sha256(review_raw).hexdigest()
+    before = closure.closure_workpack(store)
+    assert before.review_seq == 1
+    assert before.review_sha256 == review_sha256
+    assert before.unresolved_trim_chapters == [1, 2]
+    assert closure.closure_view(store).state == 'blocked'
+
+    # 若 pure retain 偷跑 Review，这个探针会当场失败；batch 本身只走 0 成本 producer。
+    monkeypatch.setattr(
+        review, 'run_review',
+        lambda *_args, **_kwargs: pytest.fail('纯 trim 销账不得重跑 stage5.review'))
+    request = BatchTrimResolutionRequest.model_validate({
+        'actor': 'agent:novel-pipeline-operator',
+        'reason': '通读全批后确认超限内容都承载必要因果',
+        'items': [{
+            'output_ordinal': ordinal,
+            'audit_sha256': audit_sha256[ordinal],
+            'chapter_sha256': chapter_text_sha256[ordinal],
+            'reason': f'第{ordinal}章已核正文与超额，保留段不可删',
+        } for ordinal in (1, 2)],
+    })
+    trim_resolution.retain_pretrim_batch(ctx, request)
+
+    after = closure.closure_workpack(store)
+    view = closure.closure_view(store)
+    assert view.state == 'ready'
+    assert after.unresolved_trim_items == []
+    assert [row.output_ordinal for row in after.trim_subjects] == [1, 2]
+    assert all(row.resolution_sha256 for row in after.trim_subjects)
+    assert after.review_seq == before.review_seq == 1
+    assert after.review_rel == before.review_rel == 'stage5/review_1.json'
+    assert after.review_sha256 == before.review_sha256 == review_sha256
+    assert review_path.read_bytes() == review_raw
+    assert after.workpack_sha256 != before.workpack_sha256
+    assert after.review_token != before.review_token
+    assert not (ctx.novel_dir.parent / '_service' / 'ledger.jsonl').exists(), (
+        '0 成本 trim/closure 重构不得伪造任何 paid Executor/LLM 账')
+
+    # 相同 audit/正文上重新填写 actor/reason 仍是一份新的人工处置字节；
+    # unresolved/count 不变也必须让旧 closure 过期。
+    decision = _current_closure_decision(store)
+    assert closure.closure_view(
+        store, record_history=[decision], record_current=decision,
+        record_current_workpack_sha256=after.workpack_sha256,
+    ).state == 'closed'
+    before_resolution_sha = after.trim_subjects[0].resolution_sha256
+    from novel.llm.cache import CachePolicy
+    from novel.llm.ledger import CostLedger
+    second_ctx = RunContext(
+        novel_dir=ctx.novel_dir, node='stage5.review', paid=False,
+        code=ctx.code, cache=CachePolicy.default(), ledger=CostLedger(),
+        observer=lambda _event: None,
+    )
+    trim_resolution.retain_pretrim(
+        second_ctx, 1, actor='second-commander',
+        reason='复核同一 audit 后改写本章保留理由')
+    changed = closure.closure_workpack(store)
+    assert changed.unresolved_trim_items == []
+    assert changed.review_sha256 == review_sha256
+    assert changed.trim_subjects[0].resolution_sha256 != before_resolution_sha
+    assert changed.workpack_sha256 != after.workpack_sha256
+    assert closure.closure_view(
+        store, record_history=[decision], record_current=decision,
+        record_current_workpack_sha256=after.workpack_sha256,
+    ).state == 'expired'
+
+
+def test_review_length_over_requires_the_same_chapter_current_trim_audit(
+        rig, monkeypatch):
+    """删 audit 不能把仍 fresh 的 length_over 静默洗成 ready/closed。"""
+    ctx, store = rig
+    from contracts.artifacts import artifact_rel
+    from contracts.schema import encode_artifact
+
+    text = '第二章仍然超过冻结上限且必须保留的完整因果正文。' * 20
+    root_raw = store.path('stage0/clean_text.txt').read_bytes()
+    chapter = Chapter.model_validate({
+        'output_ordinal': 2,
+        'from_source_ordinals': [2],
+        'source_chars': 100,
+        'budget_chars': 90,
+        'chars': len(text),
+        'overlap_excl_verbatim': 0.01,
+        'segments': [{'slot': 's01', 'text': text}],
+        'warns': [],
+        '_provenance': {
+            'code': ctx.code,
+            'root_clean_sha1': ctx.root_clean_sha1,
+            'inputs': {'stage0/clean_text.txt': {
+                'file': prov.fingerprint_bytes(root_raw), 'consumed': None}},
+            'origin': 'human',
+            'round': 1,
+            'prompts': {'SYS': 'a' * 10},
+            'model': 'test-model',
+            'adopted_models': ['test-model'],
+        },
+    })
+    chapter_rel = artifact_rel('stage5.chapter', nn=2)
+    chapter_payload = chapter.model_dump(by_alias=True, exclude_none=True)
+    chapter_payload['_provenance'] = chapter.provenance.to_disk()
+    store.path(chapter_rel).write_bytes((json.dumps(
+        encode_artifact(chapter_rel, chapter_payload),
+        ensure_ascii=False, indent=2,
+    ) + '\n').encode('utf-8'))
+    chapter_text_sha256 = hashlib.sha256(
+        chapter.text.encode('utf-8')).hexdigest()
+    audit_rel = artifact_rel('stage5.trim_audit', nn=2)
+    store.write(audit_rel, TrimAudit(
+        output_ordinal=2,
+        before_sha256=chapter_text_sha256,
+        reason='当前正文超过冻结目标上限',
+    ))
+
+    current = review.require_fresh_review(ctx, store)
+    assert current.review is not None and current.review_rel is not None
+    review_payload = current.review.model_dump(by_alias=True, mode='json')
+    review_payload['chapters'][1]['findings'] = [
+        _finding_payload(
+            'length_over', ordinal=2,
+            evidence=('第二章仍超限',), detail='超出冻结上限'),
+    ]
+    revised = Review.model_validate(review_payload)
+    revised_payload = revised.model_dump(by_alias=True, mode='json')
+    revised_payload['_provenance'] = revised.provenance.to_disk()
+    store.path(current.review_rel).write_bytes((json.dumps(
+        encode_artifact(current.review_rel, revised_payload),
+        ensure_ascii=False, indent=2,
+    ) + '\n').encode('utf-8'))
+    revised_status = review.ReviewStatus(
+        'fresh', (), review_rel=current.review_rel, seq=current.seq,
+        review=revised)
+    monkeypatch.setattr(
+        review, 'review_status', lambda _ctx, _store=None: revised_status)
+    monkeypatch.setattr(
+        review, 'require_fresh_review', lambda _ctx, _store=None: revised_status)
+
+    before = closure.closure_workpack(store)
+    assert [row.output_ordinal for row in before.trim_subjects] == [2]
+    assert before.unresolved_trim_chapters == [2]
+    assert closure.closure_view(store).state == 'blocked'
+
+    store.path(audit_rel).unlink()
+    with pytest.raises(
+            ProvenanceRefused,
+            match=r'length_over.*current TrimAudit/trim_subject'):
+        closure.closure_view(store)
+
+
+def test_unreadable_existing_trim_resolution_refuses_closure_before_review(
+        rig, monkeypatch):
+    """坏回执是已知证据损坏，不能洗成 unresolved 后再开付费 Reviewer。"""
+    _ctx, store = rig
+    audit = TrimAudit(
+        output_ordinal=2,
+        before_sha256='c' * 64,
+        reason='合成 current trim audit',
+    )
+    monkeypatch.setattr(
+        closure.trim_resolution, 'current_trim_audits',
+        lambda _store, **_kwargs: {2: (audit, 'd' * 64)})
+    store.path(trim_resolution.resolution_rel(2)).write_text(
+        '{broken-json', encoding='utf-8')
+
+    with pytest.raises(ArtifactUnreadable):
+        closure.closure_view(store)
+
+
+@pytest.mark.parametrize(
+    'corruption', [
+        'wrong-root', 'wrong-ordinal', 'wrong-chapter-rel', 'inconsistent-sha'])
+def test_readable_corrupt_trim_resolution_refuses_closure_before_review(
+        rig, monkeypatch, corruption):
+    """只有基本自洽的旧 audit 回执可换轮；可读 foreign 回执仍须关闭。"""
+    ctx, store = rig
+    from contracts.schema import encode_artifact
+
+    audit = TrimAudit(
+        output_ordinal=2,
+        before_sha256='c' * 64,
+        reason='合成 current trim audit',
+    )
+    monkeypatch.setattr(
+        closure.trim_resolution, 'current_trim_audits',
+        lambda _store, **_kwargs: {2: (audit, 'd' * 64)})
+    provenance = ctx.free_provenance().model_dump(mode='json')
+    output_ordinal = 2
+    chapter_rel = 'stage5/ch02.json'
+    chapter_sha256 = 'c' * 64
+    if corruption == 'wrong-root':
+        provenance['root_clean_sha1'] = '0' * 40
+    elif corruption == 'wrong-ordinal':
+        output_ordinal = 1
+        chapter_rel = 'stage5/ch01.json'
+    resolution = TrimResolution.model_validate({
+        'output_ordinal': output_ordinal,
+        'action': 'retain_pretrim',
+        'actor': 'foreign-commander',
+        'reason': '盘外可读但身份损坏的回执',
+        'audit_sha256': 'd' * 64,
+        'before_sha256': 'c' * 64,
+        'chapter_rel': chapter_rel,
+        'chapter_sha256': chapter_sha256,
+        '_provenance': provenance,
+    })
+    rel = trim_resolution.resolution_rel(2)
+    payload = resolution.model_dump(by_alias=True, exclude_none=True)
+    payload['_provenance'] = resolution.provenance.to_disk()
+    if corruption == 'wrong-chapter-rel':
+        # schema 本身会拒；直接摆盘模拟损坏的现存 artifact envelope。
+        payload['chapter_rel'] = 'stage5/ch01.json'
+    elif corruption == 'inconsistent-sha':
+        payload['chapter_sha256'] = 'e' * 64
+    store.path(rel).write_bytes((json.dumps(
+        encode_artifact(rel, payload), ensure_ascii=False, indent=2,
+    ) + '\n').encode('utf-8'))
+
+    with pytest.raises((ArtifactUnreadable, ProvenanceRefused)):
+        closure.closure_view(store)
+
+
+def test_wontfix_reason_bytes_expire_closed_workpack_even_when_counts_match(rig):
+    """同一 finding 的 wontfix 理由覆写必须撤销旧 closure token。"""
+    _ctx, store = rig
+    from novel import wontfix
+
+    fresh = review.require_fresh_review(store.ctx, store)
+    assert fresh.review is not None
+
+    def pool_of(ordinal):
+        assert ordinal == 1
+        return list(fresh.review.chapters[0].findings)
+
+    spec = '1|must_appear_missing|材料句={}'
+    wontfix.mark(
+        store, 'stage5', spec.format('第一次通读后决定保留'),
+        pool_of=pool_of, at='review_1')
+    before = closure.closure_workpack(store)
+    decision = _current_closure_decision(store)
+    assert before.resolved == {
+        'wontfix': 1, 'wontfix:must_appear_missing': 1}
+    assert before.wontfix_sha256 is not None
+    assert closure.closure_view(
+        store, record_history=[decision], record_current=decision,
+        record_current_workpack_sha256=before.workpack_sha256,
+    ).state == 'closed'
+
+    wontfix.mark(
+        store, 'stage5', spec.format('第二次通读后修订审计理由'),
+        pool_of=pool_of, at='review_1')
+    after = closure.closure_workpack(store)
+    assert after.resolved == before.resolved
+    assert after.review_sha256 == before.review_sha256
+    assert after.wontfix_sha256 != before.wontfix_sha256
+    assert after.workpack_sha256 != before.workpack_sha256
+    assert closure.closure_view(
+        store, record_history=[decision], record_current=decision,
+        record_current_workpack_sha256=before.workpack_sha256,
+    ).state == 'expired'
 
 
 def test_workpack_sha_changes_when_chapter_or_findings_change(rig):
@@ -417,13 +747,13 @@ def test_workpack_refuses_trim_surface_drift_during_construction(
     )
     calls = 0
 
-    def drifting_trim(_store):
+    def drifting_trim(_store, **_kwargs):
         nonlocal calls
         calls += 1
         return {} if calls == 1 else {2: (audit, 'd' * 64)}
 
     monkeypatch.setattr(
-        closure.trim_resolution, 'current_unresolved_audits', drifting_trim)
+        closure.trim_resolution, 'current_trim_audits', drifting_trim)
 
     with pytest.raises(TerminalState, match='INVALID/trim/wontfix.*构造期间变化'):
         closure.closure_workpack(store)
@@ -752,8 +1082,8 @@ def test_new_blocker_takes_priority_over_an_expired_old_decision(
             before_sha256='c' * 64,
             reason='合成未销账 trim')
         monkeypatch.setattr(
-            closure.trim_resolution, 'current_unresolved_audits',
-            lambda _store: {2: (audit, 'd' * 64)})
+            closure.trim_resolution, 'current_trim_audits',
+                lambda _store, **_kwargs: {2: (audit, 'd' * 64)})
 
     view = approvals.stage5_closure_view(base, sid)
 

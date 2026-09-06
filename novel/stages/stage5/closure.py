@@ -22,9 +22,10 @@ Commander 面对的是十几处分散操作。
 1. **闭合分类是闭集**。每条 actionable finding 必须落入
    :data:`_CLOSURE_BUCKETS` 登记的桶；新增 actionable 规则而没登记 ⇒ 工作包
    生成失败，绝不静默遗漏。
-2. **hash-bound**。回执绑定 workpack SHA、Review 文件 SHA、每条 must_appear
-   的 finding SHA 与当章 canonical 正文 SHA。任何一处漂移 ⇒ 过期，只能重新
-   生成模板重新裁决；旧批准永不静默继承。
+2. **hash-bound**。回执绑定 workpack SHA、Review/wontfix 完整文件 SHA、全部
+   current trim audit/resolution SHA、每条 must_appear finding SHA 与当章
+   canonical 正文 SHA。任何一处漂移 ⇒ 过期，只能重新生成模板重新裁决；
+   旧批准永不静默继承。
 3. **「需要修改」不是终态**。它只跳转到逐章改稿；改完重算 Review 后再裁决。
 4. **确认不改写结论**。整组确认不会把 UNVER 变成 PASS，也不会删任何条目；
    wontfix 豁免照旧只降 ``actionable``。
@@ -39,7 +40,7 @@ from contracts.schema.api import (
     Stage5ChapterSubject, Stage5ClosureMaterialized, Stage5ClosureRequest,
     Stage5ClosureTemplate,
     Stage5ClosureView, Stage5ClosureWorkpack, Stage5FindingGroup,
-    Stage5MustAppearRow, Stage5TrimWorkItem,
+    Stage5MustAppearRow, Stage5TrimSubject, Stage5TrimWorkItem,
 )
 from contracts.schema.common import Finding
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
@@ -63,8 +64,8 @@ _MUST_APPEAR_RULES = frozenset({'must_appear_missing'})
 #: fact landing 的整组确认桶（含它的 unver 投影）。
 _FACT_GROUP_RULES = frozenset({'fact_landing', 'fact_landing_unver'})
 
-#: ``length_over`` 不再单独裁决：它被 ``trim_resolution`` 的 hash-bound
-#: 销账/改稿收口，回执里只反映 unresolved trim 计数。
+#: ``length_over`` finding 不再单独裁决：完整处置面由 ``trim_subjects``
+#: 绑定 audit/resolution SHA，其中缺 current resolution 的子集才形成 blocker。
 _TRIM_RULES = frozenset({'length_over'})
 
 #: 其余 ``unver`` 判据进整组披露桶。
@@ -158,18 +159,33 @@ def _invalid_chapters(store: ArtifactStore) -> list[int]:
     )
 
 
-def _unresolved_trim_items(store: ArtifactStore) -> list[Stage5TrimWorkItem]:
-    """由当前 audit + canonical 精确生成批量 trim 的双 SHA 工作面。"""
-    unresolved = trim_resolution.current_unresolved_audits(store)
-    return [
-        Stage5TrimWorkItem(
+def _trim_surface(
+    store: ArtifactStore,
+) -> tuple[list[Stage5TrimSubject], list[Stage5TrimWorkItem]]:
+    """返回全部 current audit/resolution 身份与其中待销账的精确子集。"""
+    current = trim_resolution.current_trim_audits(
+        store, strict_inventory=True)
+    subjects: list[Stage5TrimSubject] = []
+    unresolved: list[Stage5TrimWorkItem] = []
+    for ordinal, (audit, audit_sha256) in sorted(current.items()):
+        matching = trim_resolution.matching_current_resolution(
+            store, audit, audit_sha256)
+        resolution_sha256 = None if matching is None else matching[1]
+        subject = Stage5TrimSubject(
             output_ordinal=ordinal,
-            audit_sha256=unresolved[ordinal][1],
-            # current_unresolved_audits 已精确证明 canonical text SHA == audit.before。
-            chapter_sha256=unresolved[ordinal][0].before_sha256,
+            audit_sha256=audit_sha256,
+            # current_trim_audits 已精确证明 canonical text SHA == audit.before。
+            chapter_sha256=audit.before_sha256,
+            resolution_sha256=resolution_sha256,
         )
-        for ordinal in sorted(unresolved)
-    ]
+        subjects.append(subject)
+        if resolution_sha256 is None:
+            unresolved.append(Stage5TrimWorkItem(
+                output_ordinal=subject.output_ordinal,
+                audit_sha256=subject.audit_sha256,
+                chapter_sha256=subject.chapter_sha256,
+            ))
+    return subjects, unresolved
 
 
 def _optional_file_sha256(store: ArtifactStore, rel: str) -> str | None:
@@ -214,8 +230,10 @@ def closure_workpack(
         return chapter_sha_cache[ordinal]
 
     invalid_chapters = _invalid_chapters(store)
-    unresolved_trim_items = _unresolved_trim_items(store)
+    trim_subjects, unresolved_trim_items = _trim_surface(store)
     unresolved_trim = [item.output_ordinal for item in unresolved_trim_items]
+    trim_subject_ordinals = {
+        subject.output_ordinal for subject in trim_subjects}
 
     must_appear: list[Stage5MustAppearRow] = []
     fact_findings: list[Finding] = []
@@ -225,6 +243,22 @@ def closure_workpack(
     resolved: dict[str, int] = {'wontfix': 0}
 
     def classify(finding: Finding, ordinal: int | None) -> None:
+        # Review currentness 故意不观察 TrimAudit；因此不能只把 ``length_over``
+        # 从普通 finding 裁决面排除，还必须证明同章 audit 已进入本工作包绑定的
+        # 完整 trim 处置面。否则删掉 audit 会把仍 fresh 的超限结论静默洗成 ready。
+        # 这条证据不接受 wontfix 绕过：超限的唯一关闭面仍是 hash-bound
+        # TrimResolution 或重写正文后重跑 Review。
+        if finding.rule in _TRIM_RULES:
+            if (ordinal is None
+                    or finding.output_ordinal != ordinal
+                    or ordinal not in trim_subject_ordinals):
+                raise ProvenanceRefused(
+                    'Stage5 fresh Review 的 length_over 结论缺少同章 current '
+                    'TrimAudit/trim_subject：'
+                    f'chapter={ordinal!r} / finding.output_ordinal='
+                    f'{finding.output_ordinal!r}；不得把超限静默视为已闭合，'
+                    '请恢复 current trim audit 或零成本重跑 stage5.review')
+            return
         if finding.wontfix is not None:
             resolved['wontfix'] += 1
             resolved[f"wontfix:{finding.rule}"] = (
@@ -251,7 +285,7 @@ def closure_workpack(
         elif bucket == 'unver_group':
             unver_findings.append(finding)
         elif bucket == 'trim':
-            return  # 由 unresolved_trim 单独计数
+            raise AssertionError('trim finding 必须先验证 current trim subject')
         else:
             disclosure[finding.rule] = disclosure.get(finding.rule, 0) + 1
 
@@ -283,6 +317,8 @@ def closure_workpack(
         hard_findings=sorted(set(hard_rules)),
         unresolved_trim_chapters=unresolved_trim,
         unresolved_trim_items=unresolved_trim_items,
+        trim_subjects=trim_subjects,
+        wontfix_sha256=bound_wontfix_sha256,
         must_appear=must_appear,
         fact_group=_group_of(fact_findings, group='fact_landing', rules=fact_rules),
         unver_group=_group_of(unver_findings, group='unver', rules=unver_rules),
@@ -329,7 +365,8 @@ def closure_workpack(
     # Review currentness 不观察 `.INVALID`、trim resolution/audit 与 wontfix；这些
     # 又都直接进入工作包判定。首尾完整复采，任何一格变化都关闭式拒绝混合快照。
     if (_invalid_chapters(store) != invalid_chapters
-            or _unresolved_trim_items(store) != unresolved_trim_items
+            or _trim_surface(store)
+            != (trim_subjects, unresolved_trim_items)
             or _optional_file_sha256(store, review.WONTFIX)
             != bound_wontfix_sha256):
         raise TerminalState(
@@ -385,7 +422,8 @@ def _require_submittable(
     if blockers:
         raise GateBlocked(
             'Stage5 闭合回执当前不可提交：' + '；'.join(blockers)
-            + '。先销账 trim / 修复阻断级并零成本重跑 stage5.review，再重新生成模板',
+            + '。纯 trim 先销账并按同一份 fresh Review 重新生成模板；'
+            '正文/HARD 修复才须零成本重跑 stage5.review 后再生成模板',
             invalid_path=str(store.path('stage5')))
 
 
@@ -531,9 +569,21 @@ def closure_view(
     # blocker 是当前盘面事实，优先级高于任何历史/异常决定。即使旧盘坏记录或
     # 人工篡改碰巧声称绑定同一 workpack，也不能把 INVALID/trim/HARD 画成 closed。
     if pack.blockers():
+        pure_trim = bool(
+            pack.unresolved_trim_items
+            and not pack.missing_chapters
+            and not pack.invalid_chapters
+            and not pack.hard_findings)
+        next_step = (
+            '通读全部待销账章的 current 正文与 TrimAudit，提交一份 hash-bound '
+            'retain-pretrim batch；销账后沿用同一份 fresh Review 重新生成 closure'
+            if pure_trim else
+            '先修复缺章、.INVALID 或 HARD 等正文阻断；正文主体改变后零成本重跑 '
+            'stage5.review，再生成 closure（并存 trim 留待新章/新 Review 后重算）'
+        )
         return Stage5ClosureView(
             state='blocked', workpack=pack,
-            next_step='销账 trim / 修复阻断级后零成本重跑 stage5.review',
+            next_step=next_step,
             history=list(record_history or []))
     if (record_current is not None
             and record_current_workpack_sha256 == pack.workpack_sha256):

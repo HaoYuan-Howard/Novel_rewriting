@@ -126,3 +126,36 @@ def test_attempts_live_under_the_turn_and_finish_is_idempotent(tmp_path):
                  turn_id='t1', exit_code=2)
     with pytest.raises(L.ReviewerSeatRefused, match='已终态'):
         L.record_attempt(tmp_path, '42', attempt_id='a3', kind='launch', **identity)
+
+
+def test_provider_response_is_bound_before_finish_and_cannot_be_rewritten(
+        tmp_path):
+    _reserve(tmp_path, purpose='review', turn_id='t1')
+    identity = dict(
+        waiting_on=BLOCKER, business_sha256=BUSINESS, turn_id='t1')
+    bound = L.bind_response(
+        tmp_path, '42', provider_response_sha256='a' * 64, **identity)
+    assert bound.provider_response_sha256 == 'a' * 64
+    assert L.bind_response(
+        tmp_path, '42', provider_response_sha256='a' * 64,
+        **identity) == bound
+    with pytest.raises(L.ReviewerSeatRefused, match='不同 provider'):
+        L.bind_response(
+            tmp_path, '42', provider_response_sha256='b' * 64, **identity)
+
+    L.finish(
+        tmp_path, '42', waiting_on=BLOCKER, business_sha256=BUSINESS,
+        turn_id='t1', exit_code=0, now=2)
+    L.mark_pending_correction(
+        tmp_path, '42', waiting_on=BLOCKER, business_sha256=BUSINESS,
+        session_run_id='seat-1', provider_session_id='provider-seat-1',
+        request_sha256='a' * 64, reason='需要一轮订正', now=2)
+    _reserve(tmp_path, purpose='correction', turn_id='c1')
+    L.finish(
+        tmp_path, '42', waiting_on=BLOCKER, business_sha256=BUSINESS,
+        turn_id='c1', exit_code=0, now=3)
+    with pytest.raises(L.ReviewerSeatRefused, match='已闭账'):
+        L.bind_response(
+            tmp_path, '42', waiting_on=BLOCKER,
+            business_sha256=BUSINESS, turn_id='c1',
+            provider_response_sha256='c' * 64)

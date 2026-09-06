@@ -33,7 +33,9 @@ from contracts.artifacts import (
 )
 from contracts.invariants import AGENT_EXECUTOR_NODES
 from contracts.schema import decode_artifact, encode_artifact
-from contracts.schema.api import ExecutionPermit
+from contracts.schema.api import (
+    BatchTrimResolutionRequest, ExecutionPermit, Stage5ClosureView,
+)
 from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema.stage2 import GlobalEdit
 from contracts.schema.orchestration import (
@@ -49,7 +51,7 @@ from novel.commanders import (
     CommanderProcessResult, CommanderProtocolError,
 )
 from novel.cli.main import main as cli_main
-from novel.errors import TerminalState
+from novel.errors import ArtifactUnreadable, ProvenanceRefused, TerminalState
 from novel.orchestrator import (
     admission, agent, beacon, execution_permit, jobs, nodes, queue,
     stage2_review_ledger,
@@ -558,6 +560,65 @@ def test_stage2_reviewer_global_edit_uses_the_same_typed_service_transport(
         decoded = decode_artifact(STAGE2_GLOBAL_EDIT, json.loads(path.read_bytes()))
         assert GlobalEdit.model_validate(decoded.payload) == edit
     assert not path.exists(), '完整同步执行结束后只清理本次 UUID service edit'
+
+
+def test_stage5_reviewer_batch_uses_typed_service_transport_and_cleans_it(
+        base, book):
+    request = BatchTrimResolutionRequest.model_validate({
+        'actor': 'agent:novel-pipeline-operator',
+        'reason': '跨章复核后整批保留',
+        'items': [{
+            'output_ordinal': 2,
+            'audit_sha256': 'a' * 64,
+            'chapter_sha256': 'b' * 64,
+            'reason': '第2章超限内容承载不可删的因果证据',
+        }],
+    })
+    action = agent.reviewer_tasks.ReviewerNodeAction(
+        kind='node', node='stage5.review',
+        flags=('--retain-pretrim-batch', '@reviewer-input'),
+        input_payload=request.model_dump(mode='json'))
+
+    with agent._reviewer_node_flags(base, '42', action) as flags:
+        path = Path(flags[1])
+        assert flags[0] == '--retain-pretrim-batch'
+        assert path.is_relative_to(
+            (Path(base) / '_service' / 'edits' / '42').resolve())
+        assert BatchTrimResolutionRequest.model_validate_json(
+            path.read_bytes()) == request
+    assert not path.exists(), '完整同步执行结束后只清理本次 UUID batch manifest'
+
+    with pytest.raises(RuntimeError, match='模拟 runner 异常'):
+        with agent._reviewer_node_flags(base, '42', action) as failed_flags:
+            failed_path = Path(failed_flags[1])
+            assert failed_path.is_file()
+            raise RuntimeError('模拟 runner 异常')
+    assert not failed_path.exists(), 'runner 异常也必须清掉一次性 batch manifest'
+
+
+def test_stage5_batch_manifest_save_failure_leaves_no_payload_tmp(
+        base, book, monkeypatch):
+    request = BatchTrimResolutionRequest.model_validate({
+        'actor': 'agent:novel-pipeline-operator',
+        'reason': '跨章复核后整批保留',
+        'items': [{
+            'output_ordinal': 2,
+            'audit_sha256': 'a' * 64,
+            'chapter_sha256': 'b' * 64,
+            'reason': '第2章超限内容承载不可删的因果证据',
+        }],
+    })
+    root = Path(base) / '_service' / 'edits' / '42'
+
+    def fail_replace(_source, _target):
+        raise OSError('模拟原子替换失败')
+
+    monkeypatch.setattr(agent.uploads.os, 'replace', fail_replace)
+    with pytest.raises(Exception, match='写不了批量销账 manifest'):
+        agent.uploads.save_stage5_trim_batch(base, '42', request)
+
+    assert not list(root.glob('stage5-trim-batch-*'))
+    assert not list(root.glob('*.tmp')), '保存失败不得残留含人工理由的临时字节'
 
 
 @pytest.mark.parametrize(
@@ -2169,7 +2230,6 @@ def test_initial_reviewer_prewire_refusal_does_not_write_an_orphan_attempt(
 
     assert len(invocations) == 1
     assert agent_session_audit.read_events(base) == []
-    assert agent_session_audit.fold(agent_session_audit.read_events(base)) == []
     [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
     assert done.exit_code == 2
     assert done.outcome is not None and 'reconcile' in done.outcome.reason
@@ -7135,6 +7195,1195 @@ def test_reviewer_turn_write_surface_is_the_epoch_scratch_session(
     assert reviewer_base != Path(base).resolve()
     assert reviewer_base.parent == (paths.scratch_dir(base) / '42').resolve()
     assert existed, 'driver 构造 invocation 时 scratch session 必须已在盘上'
+
+
+def _stage5_partial_view(
+        chapter_sha256: dict[int, str], audit_sha256: dict[int, str],
+        unresolved: tuple[int, ...], *, workpack_sha256: str,
+        review_sha256: str = 'f' * 64) -> Stage5ClosureView:
+    """铸 queue/reviewer 共用的最小 current closure 投影。"""
+    return Stage5ClosureView.model_validate({
+        'state': 'blocked',
+        'next_step': '先完成 current trim batch',
+        'workpack': {
+            'review_seq': 1,
+            'review_rel': 'stage5/review_1.json',
+            'review_sha256': review_sha256,
+            'planned_chapters': [1, 2],
+            'missing_chapters': [],
+            'chapter_subjects': [{
+                'output_ordinal': ordinal,
+                'chapter_sha256': chapter_sha256[ordinal],
+            } for ordinal in (1, 2)],
+            'invalid_chapters': [],
+            'hard_findings': [],
+            'unresolved_trim_chapters': list(unresolved),
+            'unresolved_trim_items': [{
+                'output_ordinal': ordinal,
+                'audit_sha256': audit_sha256[ordinal],
+                'chapter_sha256': chapter_sha256[ordinal],
+            } for ordinal in unresolved],
+            'trim_subjects': [{
+                'output_ordinal': ordinal,
+                'audit_sha256': audit_sha256[ordinal],
+                'chapter_sha256': chapter_sha256[ordinal],
+                'resolution_sha256': (
+                    None if ordinal in unresolved else f'{ordinal + 5:x}' * 64),
+            } for ordinal in (1, 2)],
+            'wontfix_sha256': None,
+            'must_appear': [],
+            'disclosure': {},
+            'resolved': {},
+            'workpack_sha256': workpack_sha256,
+            'review_token': f's5cr1_{workpack_sha256}',
+        },
+    })
+
+
+def _seed_stage5_partial_batch(base: str):
+    """真 Chapter/Audit/首章 resolution + 原整批 durable business。"""
+    from contracts.artifacts import artifact_rel
+    from contracts.schema.evaluation import TrimAudit
+    from contracts.schema.stage5 import Chapter
+    from novel import prov
+    from novel.llm.cache import CachePolicy
+    from novel.llm.ledger import CostLedger
+    from novel.orchestrator import reviewer_contract, reviewer_tasks
+    from novel.run import RunContext
+    from novel.stages.stage5 import trim_resolution
+    from novel.store import ArtifactStore
+
+    book = Path(base) / 'FQ_测试书_42'
+    (book / 'stage0').mkdir(parents=True, exist_ok=True)
+    (book / 'stage5').mkdir(parents=True, exist_ok=True)
+    clean = book / 'stage0' / 'clean_text.txt'
+    clean.write_text('固定测试根。\n', encoding='utf-8', newline='')
+    root_raw = clean.read_bytes()
+    root_fp = prov.fingerprint_bytes(root_raw)
+    root_sha1 = prov.content_sha1(root_raw)
+    ctx = RunContext(
+        novel_dir=book, node='stage5.review', paid=False,
+        code='test-code-version', cache=CachePolicy.default(),
+        ledger=CostLedger(), observer=lambda _event: None)
+    store = ArtifactStore(ctx)
+    chapter_sha256: dict[int, str] = {}
+    audit_sha256: dict[int, str] = {}
+    for ordinal in (1, 2):
+        text = f'第{ordinal}章超限正文。' * 24
+        chapter = Chapter.model_validate({
+            'output_ordinal': ordinal,
+            'from_source_ordinals': [ordinal],
+            'source_chars': 100,
+            'budget_chars': 90,
+            'chars': len(text),
+            'overlap_excl_verbatim': 0.01,
+            'segments': [{'slot': 's01', 'text': text}],
+            'warns': [],
+            '_provenance': {
+                'code': 'test-code-version',
+                'root_clean_sha1': root_sha1,
+                'inputs': {'stage0/clean_text.txt': {
+                    'file': root_fp, 'consumed': None}},
+                'origin': 'human',
+                'round': 1,
+                'prompts': {'SYS': 'a' * 10},
+                'model': 'test-model',
+                'adopted_models': ['test-model'],
+            },
+        })
+        rel = artifact_rel('stage5.chapter', nn=ordinal)
+        payload = chapter.model_dump(by_alias=True, exclude_none=True)
+        payload['_provenance'] = chapter.provenance.to_disk()
+        store.path(rel).write_bytes((json.dumps(
+            encode_artifact(rel, payload), ensure_ascii=False, indent=2,
+        ) + '\n').encode('utf-8'))
+        chapter_sha256[ordinal] = hashlib.sha256(
+            chapter.text.encode('utf-8')).hexdigest()
+        audit_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
+        store.write(audit_rel, TrimAudit(
+            output_ordinal=ordinal,
+            before_sha256=chapter_sha256[ordinal],
+            reason='超上限，登记 current pretrim identity'))
+        audit_sha256[ordinal] = store.read_with_sha256(
+            TrimAudit, audit_rel)[1]
+
+    request = BatchTrimResolutionRequest.model_validate({
+        'actor': 'agent:novel-pipeline-operator',
+        'reason': '跨章通读后确认两章都应保留',
+        'items': [{
+            'output_ordinal': ordinal,
+            'audit_sha256': audit_sha256[ordinal],
+            'chapter_sha256': chapter_sha256[ordinal],
+            'reason': f'第{ordinal}章超限段承载不可删除的因果证据',
+        } for ordinal in (1, 2)],
+    })
+    first_reason = request.items[0].reason
+    assert first_reason is not None
+    trim_resolution.retain_pretrim(
+        ctx, 1, actor=request.actor, reason=first_reason)
+
+    original_view = _stage5_partial_view(
+        chapter_sha256, audit_sha256, (1, 2),
+        workpack_sha256='1' * 64)
+    suffix_view = _stage5_partial_view(
+        chapter_sha256, audit_sha256, (2,),
+        workpack_sha256='2' * 64)
+    original_pack = {'stage5_trim': {
+        'closure': original_view.model_dump(mode='json'), 'chapters': []}}
+    original_current = SimpleNamespace(
+        state='blocked', surface_seal='0' * 64,
+        code_version='test-code-version',
+        action=SimpleNamespace(
+            waiting_on=queue.WAITING_ON_STAGE5_CLOSURE,
+            action_sha256='0' * 64))
+    original_options = reviewer_tasks._submission_options(
+        original_pack, original_current, queue.WAITING_ON_STAGE5_CLOSURE)
+    original_business = reviewer_tasks._non_stage2_business_identity(
+        original_pack, queue.WAITING_ON_STAGE5_CLOSURE, original_options)
+    contract_sha256 = hashlib.sha256(reviewer_contract.for_blocker(
+        queue.WAITING_ON_STAGE5_CLOSURE).encode('utf-8')).hexdigest()
+    payload = request.model_dump(mode='json')
+    provider_response_sha256 = hashlib.sha256(json.dumps({
+        'schema': reviewer_tasks.REQUEST_SCHEMA,
+        'surface_seal': original_current.surface_seal,
+        'waiting_on': queue.WAITING_ON_STAGE5_CLOSURE,
+        'action': {
+            'kind': 'node', 'node': 'stage5.review',
+            'flags': ['--retain-pretrim-batch', '@reviewer-input'],
+            'input_payload': payload,
+        },
+    }, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+        allow_nan=False).encode('utf-8') + b'\n').hexdigest()
+    record = ReviewerActionRecord(
+        sid='42', run_id='old-stage5-parent', epoch_id='old-stage5-epoch',
+        waiting_on=queue.WAITING_ON_STAGE5_CLOSURE,
+        surface_seal=original_current.surface_seal,
+        business_sha256=reviewer_tasks._canonical_json_sha256(
+            original_business),
+        node='stage5.review',
+        flags=('--retain-pretrim-batch', '@reviewer-input'),
+        input_payload=payload,
+        stage5_review_sha256=original_view.workpack.review_sha256,
+        stage5_reviewer_contract_sha256=contract_sha256,
+        reviewer_session_run_id='old-stage5-trim-session',
+        reviewer_seat_turn_id='old-stage5-trim-turn',
+        provider_response_sha256=provider_response_sha256,
+        recorded_at=1,
+    )
+    return SimpleNamespace(
+        request=request, record=record, suffix_view=suffix_view,
+        suffix_pack={'stage5_trim': {
+            'closure': suffix_view.model_dump(mode='json'), 'chapters': []}},
+        contract_sha256=contract_sha256,
+    )
+
+
+def _install_stage5_partial_agent_harness(
+        base: str, monkeypatch, *, process_exit_code: int,
+        end_old_session: bool = True):
+    """真实 queue 分类、replay loader、permit 与一次性外部输入的纵切。"""
+    seeded = _seed_stage5_partial_batch(base)
+    phase = {'done': False}
+    queue_items = []
+    current_box = {}
+    overview = SimpleNamespace(
+        sid='42', stages=[SimpleNamespace(
+            stage='stage5', artifacts=[], review_state='fresh')])
+    monkeypatch.setattr(
+        agent.queue, 'nodes_up_to',
+        lambda _until: ['stage5.review', 'stage6.hook'])
+    monkeypatch.setattr(
+        agent.queue.st, 'resume_verdict',
+        lambda _overview, node: (
+            (agent.queue.st.RESUME_SKIP, 'fresh Review 已落')
+            if node == 'stage5.review'
+            else (agent.queue.st.RESUME_RUN, 'Stage6 尚未生成')))
+    monkeypatch.setattr(
+        agent.queue.st, 'stage2_frozen_v6_subject_validated',
+        lambda _overview: False)
+    monkeypatch.setattr(
+        agent.queue.st, 'live_invalid_artifacts', lambda *_args: [])
+    monkeypatch.setattr(agent.queue, '_upstream_invalid', lambda *_args: [])
+
+    def next_action(_base, _sid, *, code):
+        assert code == 'test-code-version'
+        if phase['done']:
+            return SimpleNamespace(
+                base=os.path.abspath(base), sid='42', state='blocked',
+                code_version=code, surface_seal='9' * 64,
+                overview=overview, inbox=SimpleNamespace(),
+                execution_token=None,
+                action=SimpleNamespace(
+                    waiting_on='manual-unregistered-blocker',
+                    node='stage6.hook', flags=[], paid=False, writes='',
+                    resume_verdict='run', action_sha256='9' * 64))
+        todo, blocked = agent.queue.plan_book_from_overview(
+            base, '42', overview, until_stage='stage6', follow_check=False,
+            approval_doc=SimpleNamespace(
+                sid='42', closure=seeded.suffix_view))
+        assert todo == [] and len(blocked) == 1
+        item = blocked[0]
+        assert item.node == 'stage6.hook'
+        assert item.waiting_on == agent.queue.WAITING_ON_STAGE5_CLOSURE
+        assert item.steps == []
+        queue_items.append(item)
+        current = SimpleNamespace(
+            base=os.path.abspath(base), sid='42', state='blocked',
+            code_version=code, surface_seal='3' * 64,
+            overview=overview, inbox=SimpleNamespace(), execution_token=None,
+            action=SimpleNamespace(
+                waiting_on=item.waiting_on, node=item.node,
+                flags=list(item.flags), paid=False, writes='',
+                resume_verdict='run', action_sha256='4' * 64))
+        current_box['value'] = current
+        return current
+
+    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
+    stopped = AgentDeliveryOutcome(
+        state='stopped', reason='Stage5 trim 测试停点', checked_at=1)
+    monkeypatch.setattr(
+        agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
+    monkeypatch.setattr(
+        agent, '_delivery_pause_note', lambda *_args, **_kwargs: None)
+
+    def build_task(_base, _sid, current, request_path, *, epoch_id):
+        del epoch_id
+        if current.action.waiting_on != agent.queue.WAITING_ON_STAGE5_CLOSURE:
+            return None
+        options = tuple(agent.reviewer_tasks._submission_options(
+            seeded.suffix_pack, current,
+            agent.queue.WAITING_ON_STAGE5_CLOSURE))
+        business = agent.reviewer_tasks._non_stage2_business_identity(
+            seeded.suffix_pack, agent.queue.WAITING_ON_STAGE5_CLOSURE,
+            options)
+        workpack = seeded.suffix_view.workpack
+        assert workpack is not None
+        return agent.reviewer_tasks.ReviewerTask(
+            waiting_on=agent.queue.WAITING_ON_STAGE5_CLOSURE,
+            surface_seal=current.surface_seal,
+            business_sha256=agent.reviewer_tasks._canonical_json_sha256(
+                business),
+            request_path=Path(request_path),
+            prompt='STAGE5 PARTIAL TRIM IMMUTABLE WORKPACK',
+            submission_options=options,
+            stage5_review_sha256=workpack.review_sha256,
+            stage5_reviewer_contract_sha256=seeded.contract_sha256,
+        )
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+    monkeypatch.setattr(
+        agent.execution_permit, 'read_surface_seal',
+        lambda *_args, **_kwargs: current_box['value'].surface_seal)
+
+    permits = []
+
+    def permit(_base, _sid, node, flags):
+        current = current_box['value']
+        got = agent.execution_permit.permit_from_next(current, node, flags)
+        permits.append(got)
+        return got
+
+    monkeypatch.setattr(agent.operator, 'permit', permit)
+    materialized_paths = []
+
+    def run_step_argv(_base, _sid, _epoch, permit, *, stem):
+        assert stem == 'reviewer-stage5.review'
+        assert permit.node == 'stage5.review'
+        assert permit.flags[0] == '--retain-pretrim-batch'
+        assert len(permit.external_inputs) == 1
+        external = permit.external_inputs[0]
+        path = Path(external.resolved_path)
+        assert path == Path(permit.flags[1]).resolve()
+        assert external.sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+        assert BatchTrimResolutionRequest.model_validate_json(
+            path.read_bytes()) == seeded.request
+        materialized_paths.append(path)
+        if process_exit_code == 0:
+            phase['done'] = True
+        return [
+            agent.sys.executable, '-c',
+            f'raise SystemExit({process_exit_code})',
+        ]
+
+    monkeypatch.setattr(agent, '_run_step_argv', run_step_argv)
+    commander_spawns = []
+
+    def no_commander(*_args, **_kwargs):
+        commander_spawns.append(True)
+        raise AssertionError('partial Stage5 batch 不得再创建 Commander spawn')
+
+    monkeypatch.setattr(agent, '_default_spawn', no_commander)
+    # durable action 必须指向一席已成功闭账且 response/attempt/session/cost
+    # 四证闭合的原 Commander；本 harness 测的是新 parent 只补 deterministic
+    # 尾，不是让 action record 自证来源或席位成功。
+    attempt_id = 'old-stage5-trim-attempt'
+    provider_session_id = 'old-stage5-provider-session'
+    prompt_sha256 = 'a' * 64
+    schema_sha256 = 'b' * 64
+    subject_sha256 = 'c' * 64
+    agent.reviewer_seat_ledger.reserve(
+        base, '42', waiting_on=seeded.record.waiting_on,
+        business_sha256=seeded.record.business_sha256,
+        purpose='review',
+        session_run_id=seeded.record.reviewer_session_run_id,
+        turn_id=seeded.record.reviewer_seat_turn_id,
+        parent_run_id=seeded.record.run_id,
+        epoch_id=seeded.record.epoch_id, now=1)
+    agent.reviewer_seat_ledger.record_attempt(
+        base, '42', waiting_on=seeded.record.waiting_on,
+        business_sha256=seeded.record.business_sha256,
+        turn_id=seeded.record.reviewer_seat_turn_id,
+        attempt_id=attempt_id, kind='launch', now=2)
+    agent.reviewer_seat_ledger.finish_attempt(
+        base, '42', waiting_on=seeded.record.waiting_on,
+        business_sha256=seeded.record.business_sha256,
+        turn_id=seeded.record.reviewer_seat_turn_id,
+        attempt_id=attempt_id, exit_code=0, error_kind=None,
+        provider_session_id=provider_session_id, wire_evidence=True, now=3)
+    agent.reviewer_seat_ledger.bind_response(
+        base, '42', waiting_on=seeded.record.waiting_on,
+        business_sha256=seeded.record.business_sha256,
+        turn_id=seeded.record.reviewer_seat_turn_id,
+        provider_response_sha256=seeded.record.provider_response_sha256)
+    agent.reviewer_seat_ledger.finish(
+        base, '42', waiting_on=seeded.record.waiting_on,
+        business_sha256=seeded.record.business_sha256,
+        turn_id=seeded.record.reviewer_seat_turn_id,
+        exit_code=0, now=4)
+    session_common = dict(
+        session_run_id=seeded.record.reviewer_session_run_id,
+        parent_run_id=seeded.record.run_id,
+        role='commander', node=None, chapter=None,
+        subject_sha256=subject_sha256, profile=_CODEX,
+        requested_model=_CODEX.model,
+        requested_effort=_CODEX.reasoning_effort,
+        cli_version='test-cli-v1', protocol_version='test-protocol-v1',
+        start_code_version='test-code-version', skill_sha256='d' * 64,
+        prompt_sha256=prompt_sha256, schema_sha256=schema_sha256,
+    )
+    agent.agent_session_audit.append_event(
+        base, agent.agent_session_audit.AgentSessionEvent(
+            **session_common, kind='started', ts=1))
+    agent.agent_session_audit.append_event(
+        base, agent.agent_session_audit.AgentSessionEvent(
+            **session_common,
+            provider_session_id=provider_session_id,
+            attempt_id=attempt_id, actual_model=_CODEX.model,
+            actual_effort=_CODEX.reasoning_effort,
+            delivery_attempts=1, kind='attempt', ts=2))
+    agent.agent_session_audit.append_commander_turn(
+        base, agent.agent_session_audit.AgentSessionEvent(
+            **session_common,
+            provider_session_id=provider_session_id,
+            attempt_id=attempt_id, turn_index=1,
+            actual_model=_CODEX.model,
+            actual_effort=_CODEX.reasoning_effort,
+            kind='turn', ts=3))
+    if end_old_session:
+        agent.agent_session_audit.append_event(
+            base, agent.agent_session_audit.AgentSessionEvent(
+                **session_common,
+                provider_session_id=provider_session_id,
+                actual_model=_CODEX.model,
+                actual_effort=_CODEX.reasoning_effort,
+                end_code_version='test-code-version',
+                process_state='ok', delivery_state='blocked',
+                kind='ended', ts=4))
+    agent.append_commander_call(
+        base, run_id=seeded.record.run_id,
+        session_run_id=seeded.record.reviewer_session_run_id,
+        sid='42', attempt_id=attempt_id,
+        request_model=_CODEX.model,
+        requested_effort=_CODEX.reasoning_effort,
+        code='test-code-version', protocol_version='test-protocol-v1',
+        actual_model=_CODEX.model,
+        actual_effort=_CODEX.reasoning_effort,
+        provider_session_id=provider_session_id,
+        cli_version='test-cli-v1', outcome='ok', exit_code=0,
+        activity=f'reviewer:{seeded.record.waiting_on}',
+        response_sha256=seeded.record.provider_response_sha256)
+    record_path = agent.uploads.save_reviewer_action(
+        base, '42', seeded.record)
+    return SimpleNamespace(
+        seeded=seeded, phase=phase, queue_items=queue_items,
+        permits=permits, materialized_paths=materialized_paths,
+        commander_spawns=commander_spawns, record_path=record_path,
+        current_box=current_box, build_task=build_task,
+        session_common=session_common,
+    )
+
+
+def _seed_old_stage5_closure_seat(base: str) -> str:
+    """模拟真实旧盘：同 waiter 的 closure business 已用完三轮并留拒因。"""
+    business = 'e' * 64
+    waiting_on = agent.queue.WAITING_ON_STAGE5_CLOSURE
+    for index, purpose in enumerate(('review', 'correction', 'correction')):
+        turn_id = f'old-closure-{index}'
+        agent.reviewer_seat_ledger.reserve(
+            base, '42', waiting_on=waiting_on, business_sha256=business,
+            purpose=purpose, session_run_id='old-closure-session',
+            turn_id=turn_id, parent_run_id='old-closure-parent',
+            epoch_id='old-closure-epoch', now=index * 3)
+        agent.reviewer_seat_ledger.finish(
+            base, '42', waiting_on=waiting_on, business_sha256=business,
+            turn_id=turn_id, exit_code=0, now=index * 3 + 1)
+        agent.reviewer_seat_ledger.mark_pending_correction(
+            base, '42', waiting_on=waiting_on, business_sha256=business,
+            session_run_id='old-closure-session',
+            provider_session_id='old-closure-provider',
+            request_sha256=f'{index + 1:x}' * 64,
+            reason=(
+                'Stage5 闭合回执当前不可提交：trim 待销账 [1,2]；'
+                '先销账 trim 后重新生成 closure'),
+            now=index * 3 + 2)
+    return business
+
+
+def _find_seeded_stage5_partial(
+        base: str, harness, *, current_parent_run_id: str | None = None):
+    """直走 durable scanner，不启动 Agent worker/Commander。"""
+    current = agent.operator.next_action_at_code(
+        base, '42', code='test-code-version')
+    task = harness.build_task(
+        base, '42', current,
+        Path(base) / '_service' / 'stage5-partial-find.json',
+        epoch_id='new-stage5-epoch')
+    assert task is not None
+    epoch = ExecutionEpoch(
+        epoch_id='new-stage5-epoch', ordinal=1, reason='initial',
+        argv=['codex', 'headless'], prompt_sha256='a' * 64,
+        protocol_version='test-protocol-v1', cli_version='test-cli-v1',
+        code_version='test-code-version', skill_sha256='b' * 64,
+        session_run_id='new-stage5-session')
+    return agent._find_replayable_reviewer_action(
+        base, '42', epoch=epoch, current=current, task=task,
+        current_parent_run_id=current_parent_run_id)
+
+
+def _install_stage5_live_batch_harness(base: str, monkeypatch):
+    """一轮真 Stage5 typed loader + durable callback，canonical 用假执行口。"""
+    current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='6' * 64, execution_token=None,
+        action=SimpleNamespace(
+            waiting_on=agent.queue.WAITING_ON_STAGE5_CLOSURE,
+            action_sha256='7' * 64))
+    view = _stage5_partial_view(
+        {1: 'a' * 64, 2: 'b' * 64},
+        {1: 'c' * 64, 2: 'd' * 64},
+        (1, 2), workpack_sha256='5' * 64)
+    pack = {'stage5_trim': {
+        'closure': view.model_dump(mode='json'),
+        'chapters': [],
+    }}
+    options = tuple(agent.reviewer_tasks._submission_options(
+        pack, current, agent.queue.WAITING_ON_STAGE5_CLOSURE))
+    business = agent.reviewer_tasks._canonical_json_sha256(
+        agent.reviewer_tasks._non_stage2_business_identity(
+            pack, agent.queue.WAITING_ON_STAGE5_CLOSURE, options))
+    contract_sha256 = hashlib.sha256(
+        agent.reviewer_tasks.reviewer_contract.for_blocker(
+            agent.queue.WAITING_ON_STAGE5_CLOSURE).encode('utf-8')
+    ).hexdigest()
+    response = copy.deepcopy(options[0]['exact_request'])
+    payload = response['action']['input_payload']
+    payload['reason'] = '已逐章通读并确认整批保留'
+    for row in payload['items']:
+        row['reason'] = (
+            f'第{row["output_ordinal"]}章超限段承载不可删的因果证据')
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda _base, _sid, *, code: current)
+    stopped = AgentDeliveryOutcome(
+        state='stopped', reason='Stage5 batch 测试停点', checked_at=1)
+    monkeypatch.setattr(
+        agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
+
+    task_box = {}
+
+    def build_task(_base, _sid, got, request_path, *, epoch_id):
+        del epoch_id
+        assert got is current
+        task = agent.reviewer_tasks.ReviewerTask(
+            waiting_on=agent.queue.WAITING_ON_STAGE5_CLOSURE,
+            surface_seal=current.surface_seal,
+            business_sha256=business,
+            request_path=Path(request_path),
+            prompt='STAGE5 LIVE BATCH IMMUTABLE WORKPACK',
+            submission_options=options,
+            stage5_review_sha256=view.workpack.review_sha256,
+            stage5_reviewer_contract_sha256=contract_sha256,
+        )
+        task_box['task'] = task
+        return task
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+    invocations = []
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            assert on_registered is not None
+            on_registered()
+            return CommanderProcessResult(
+                exit_code=0,
+                observation=CommanderObservation(
+                    provider_session_id='provider-stage5-live-batch',
+                    actual_model=invocation.profile.model,
+                    actual_effort=invocation.profile.reasoning_effort,
+                    usage=None),
+                wire_evidence=True,
+                final_response=json.dumps(response, ensure_ascii=False))
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    executions = []
+
+    def execute(_base, _sid, action, _run_token):
+        executions.append(action)
+        return agent.SupervisorActionResult(
+            exit_code=0, outcome=stopped, continue_ready=False)
+
+    monkeypatch.setattr(agent, '_execute_reviewer_node_action', execute)
+    return SimpleNamespace(
+        current=current, view=view, options=options, response=response,
+        task_box=task_box, invocations=invocations, executions=executions,
+    )
+
+
+def _append_seeded_stage5_correction_evidence(
+        base: str, harness, *, response_sha256: str,
+        mark_latest_pending: bool) -> str:
+    """在 harness 的 open logical session 内追加一轮完整 correction 四证。"""
+    record = harness.seeded.record
+    identity = dict(
+        waiting_on=record.waiting_on,
+        business_sha256=record.business_sha256)
+    agent.reviewer_seat_ledger.mark_pending_correction(
+        base, '42', session_run_id=record.reviewer_session_run_id,
+        provider_session_id='old-stage5-provider-session',
+        request_sha256=record.provider_response_sha256,
+        reason='首轮拒绝，授权紧邻 correction', now=5,
+        **identity)
+    turn_id = 'later-stage5-trim-turn'
+    attempt_id = 'later-stage5-trim-attempt'
+    provider = 'old-stage5-provider-session'
+    agent.reviewer_seat_ledger.reserve(
+        base, '42', purpose='correction',
+        session_run_id=record.reviewer_session_run_id,
+        turn_id=turn_id, parent_run_id=record.run_id,
+        epoch_id=record.epoch_id, now=6, **identity)
+    agent.reviewer_seat_ledger.record_attempt(
+        base, '42', turn_id=turn_id, attempt_id=attempt_id,
+        kind='launch', now=7, **identity)
+    agent.reviewer_seat_ledger.finish_attempt(
+        base, '42', turn_id=turn_id, attempt_id=attempt_id,
+        exit_code=0, error_kind=None, provider_session_id=provider,
+        wire_evidence=True, now=8, **identity)
+    agent.reviewer_seat_ledger.bind_response(
+        base, '42', turn_id=turn_id,
+        provider_response_sha256=response_sha256, **identity)
+    agent.reviewer_seat_ledger.finish(
+        base, '42', turn_id=turn_id, exit_code=0, now=9, **identity)
+    common = {
+        **harness.session_common,
+        'parent_run_id': record.run_id,
+    }
+    agent.agent_session_audit.append_event(
+        base, agent.agent_session_audit.AgentSessionEvent(
+            **common, provider_session_id=provider,
+            attempt_id=attempt_id, actual_model=_CODEX.model,
+            actual_effort=_CODEX.reasoning_effort,
+            delivery_attempts=1, kind='attempt', ts=7))
+    agent.agent_session_audit.append_commander_turn(
+        base, agent.agent_session_audit.AgentSessionEvent(
+            **common, provider_session_id=provider,
+            attempt_id=attempt_id, turn_index=2,
+            actual_model=_CODEX.model,
+            actual_effort=_CODEX.reasoning_effort,
+            kind='turn', ts=8))
+    agent.append_commander_call(
+        base, run_id=record.run_id,
+        session_run_id=record.reviewer_session_run_id,
+        sid='42', attempt_id=attempt_id,
+        request_model=_CODEX.model,
+        requested_effort=_CODEX.reasoning_effort,
+        code='test-code-version', protocol_version='test-protocol-v1',
+        actual_model=_CODEX.model,
+        actual_effort=_CODEX.reasoning_effort,
+        provider_session_id=provider, cli_version='test-cli-v1',
+        outcome='ok', exit_code=0,
+        activity=f'reviewer:{record.waiting_on}',
+        response_sha256=response_sha256)
+    if mark_latest_pending:
+        agent.reviewer_seat_ledger.mark_pending_correction(
+            base, '42', session_run_id=record.reviewer_session_run_id,
+            provider_session_id=provider,
+            request_sha256=response_sha256,
+            reason='订正轮仍被明确拒绝', now=10,
+            **identity)
+    return turn_id
+
+
+def test_stage5_durable_record_repairs_hard_kill_before_seat_finish(
+        base, corpus, monkeypatch):
+    """bind+record 已落后硬杀：新 parent 补 open session/started seat 后零 wire。"""
+    harness = _install_stage5_live_batch_harness(base, monkeypatch)
+    original_finish = agent.reviewer_seat_ledger.finish
+    original_append = agent.agent_session_audit.append_event
+    block_tail = {'value': True}
+    skipped_end = []
+
+    def crash_before_finish(*args, **kwargs):
+        if (block_tail['value']
+                and kwargs.get('waiting_on') ==
+                agent.queue.WAITING_ON_STAGE5_CLOSURE):
+            raise OSError('synthetic hard kill before Stage5 seat.finish')
+        return original_finish(*args, **kwargs)
+
+    def skip_hard_killed_end(base_arg, event):
+        if (block_tail['value'] and event.kind == 'ended'
+                and event.role == 'commander'):
+            skipped_end.append(event.session_run_id)
+            return None
+        return original_append(base_arg, event)
+
+    monkeypatch.setattr(agent.reviewer_seat_ledger, 'finish', crash_before_finish)
+    monkeypatch.setattr(
+        agent.agent_session_audit, 'append_event', skip_hard_killed_end)
+    first = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(first.run_id, 20)
+
+    [record_path] = _reviewer_action_files(base)
+    record = ReviewerActionRecord.model_validate_json(record_path.read_bytes())
+    assert record.run_id == first.run_id
+    assert record.review_token is None
+    [before] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
+    assert [row['outcome'] for row in before['turns']] == ['started']
+    [open_session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert open_session.end is None and skipped_end
+    assert harness.executions == []
+    [first_done] = [
+        row for row in agent.records(base) if row.run_id == first.run_id]
+    assert first_done.exit_code == 70
+
+    block_tail['value'] = False
+    monkeypatch.setattr(agent.reviewer_seat_ledger, 'finish', original_finish)
+    monkeypatch.setattr(agent.agent_session_audit, 'append_event', original_append)
+    second = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(second.run_id, 20)
+
+    assert len(harness.invocations) == 1
+    assert len(harness.executions) == 1
+    assert not record_path.exists()
+    [after] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
+    assert [row['outcome'] for row in after['turns']] == ['ok']
+    [restored_session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert restored_session.process_state == 'ok'
+    assert restored_session.delivery_state == 'unknown'
+    assert '[reviewer-replay]' in agent.run_log_path(
+        base, second.run_id).read_text('utf-8')
+
+
+def test_stage5_record_save_failure_fails_seat_before_any_canonical_action(
+        base, corpus, monkeypatch):
+    """record 未 durable 时不得把席位记成 success 或执行 batch。"""
+    harness = _install_stage5_live_batch_harness(base, monkeypatch)
+
+    def fail_save(*_args, **_kwargs):
+        raise OSError('synthetic Stage5 durable record failure')
+
+    monkeypatch.setattr(agent.uploads, 'save_reviewer_action', fail_save)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 20)
+
+    assert len(harness.invocations) == 1
+    assert harness.executions == []
+    assert _reviewer_action_files(base) == []
+    [seat] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
+    assert [row['outcome'] for row in seat['turns']] == ['failed']
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 70
+
+
+def test_stage5_promote_failure_keeps_record_and_failed_seat_replays_zero_wire(
+        base, corpus, monkeypatch):
+    """record→promote 窗失败记 70；强四证仍可用原回答零模型补执行。"""
+    harness = _install_stage5_live_batch_harness(base, monkeypatch)
+    original_promote = agent._promote_reviewer_candidate
+
+    def fail_promote(*_args, **_kwargs):
+        raise OSError('synthetic Stage5 canonical scratch promotion failure')
+
+    monkeypatch.setattr(agent, '_promote_reviewer_candidate', fail_promote)
+    first = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(first.run_id, 20)
+
+    [record_path] = _reviewer_action_files(base)
+    [failed] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
+    assert [row['outcome'] for row in failed['turns']] == ['failed']
+    assert harness.executions == []
+    [first_done] = [
+        row for row in agent.records(base) if row.run_id == first.run_id]
+    assert first_done.exit_code == 70
+
+    monkeypatch.setattr(agent, '_promote_reviewer_candidate', original_promote)
+    second = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(second.run_id, 20)
+
+    assert len(harness.invocations) == 1
+    assert len(harness.executions) == 1
+    assert not record_path.exists()
+    [after] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
+    assert [row['outcome'] for row in after['turns']] == ['failed']
+    assert '[reviewer-replay]' in agent.run_log_path(
+        base, second.run_id).read_text('utf-8')
+
+
+def test_stage5_partial_batch_restarts_through_real_queue_without_commander(
+        base, corpus, monkeypatch):
+    """旧 closure 席不接管 trim；durable 整批经 queue→Agent 只补 deterministic 尾。"""
+    old_business = _seed_old_stage5_closure_seat(base)
+    harness = _install_stage5_partial_agent_harness(
+        base, monkeypatch, process_exit_code=0)
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 20)
+
+    assert harness.queue_items, '必须由真实 queue 分类出 Stage5 顶部 blocker'
+    assert len(harness.permits) == 1
+    assert harness.commander_spawns == []
+    assert not harness.record_path.exists()
+    assert harness.materialized_paths and all(
+        not path.exists() for path in harness.materialized_paths)
+    assert '[reviewer-replay]' in agent.run_log_path(
+        base, rec.run_id).read_text('utf-8')
+    ledgers = agent.reviewer_seat_ledger.list_ledgers(base, '42')
+    assert len(ledgers) == 2
+    old_ledger = next(
+        row for row in ledgers if row['business_sha256'] == old_business)
+    trim_ledger = next(
+        row for row in ledgers
+        if row['business_sha256'] == harness.seeded.record.business_sha256)
+    assert [row['purpose'] for row in old_ledger['turns']] == [
+        'review', 'correction', 'correction']
+    assert old_ledger['pending_correction'] is True
+    assert [row['purpose'] for row in trim_ledger['turns']] == ['review']
+    assert trim_ledger['turns'][0]['outcome'] == 'ok'
+    assert trim_ledger['pending_correction'] is False
+    [old_session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert old_session.session_run_id == 'old-stage5-trim-session'
+    ledger_path = Path(base) / '_service' / 'ledger.jsonl'
+    rows = [json.loads(line) for line in (
+        ledger_path.read_text('utf-8').splitlines()
+        if ledger_path.exists() else []) if line.strip()]
+    commander_rows = [row for row in rows if row.get('role') == 'commander']
+    assert len(commander_rows) == 1
+    assert commander_rows[0]['run_id'] == 'old-stage5-parent'
+
+
+def test_stage5_same_turn_pending_strictly_retires_rejected_action(
+        base, corpus, monkeypatch):
+    """pending→record 删除窗重启：同 turn 拒因必须压过 action。"""
+    harness = _install_stage5_partial_agent_harness(
+        base, monkeypatch, process_exit_code=0)
+    record = harness.seeded.record
+    agent.reviewer_seat_ledger.mark_pending_correction(
+        base, '42', waiting_on=record.waiting_on,
+        business_sha256=record.business_sha256,
+        session_run_id=record.reviewer_session_run_id,
+        provider_session_id='old-stage5-provider-session',
+        request_sha256=record.provider_response_sha256,
+        reason='canonical batch 已明确拒绝，待订正', now=5)
+
+    replay = _find_seeded_stage5_partial(base, harness)
+
+    assert replay is None
+    assert not harness.record_path.exists()
+    assert harness.permits == [] and harness.commander_spawns == []
+    [closed] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert closed.process_state == 'ok'
+    assert closed.delivery_state in {'blocked', 'unknown'}
+
+
+def test_stage5_same_parent_epoch_rollover_replays_finished_seat_without_owner_stop(
+        base, corpus, monkeypatch):
+    """同 outer parent 换 code/skill epoch 后可沿用已闭席位，不误作旁路恢复。"""
+    harness = _install_stage5_partial_agent_harness(
+        base, monkeypatch, process_exit_code=0)
+    record = harness.seeded.record
+    monkeypatch.setattr(
+        agent.REGISTRY, 'live', lambda: {record.run_id})
+    monkeypatch.setattr(
+        agent.admission, 'require_owner_stopped',
+        lambda *_args, **_kwargs: pytest.fail(
+            '同 parent epoch rollover 不得要求 owner-stopped'))
+
+    replay = _find_seeded_stage5_partial(
+        base, harness, current_parent_run_id=record.run_id)
+
+    assert replay is not None
+    assert replay.record == record
+    assert replay.action.node == 'stage5.review'
+    assert harness.record_path.is_file()
+    assert harness.permits == [] and harness.commander_spawns == []
+
+
+def test_stage5_cross_parent_owner_lease_refusal_preserves_action_without_wire(
+        base, corpus, monkeypatch):
+    """外进程 owner 尚活时不能旁补席位，也不能删唯一 durable 回答。"""
+    harness = _install_stage5_partial_agent_harness(
+        base, monkeypatch, process_exit_code=0, end_old_session=False)
+
+    def reject_live_owner(*_args, **_kwargs):
+        raise TerminalState('synthetic foreign owner lease is live')
+
+    monkeypatch.setattr(
+        agent.admission, 'require_owner_stopped', reject_live_owner)
+
+    with pytest.raises(
+            agent.reviewer_tasks.ReviewerTaskError,
+            match='无法确定性补完|owner lease'):
+        _find_seeded_stage5_partial(base, harness)
+
+    assert harness.record_path.is_file()
+    assert harness.permits == [] and harness.commander_spawns == []
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert session.end is None
+
+
+def test_stage5_correction_record_replays_while_predecessor_pending_remains(
+        base, corpus, monkeypatch):
+    """record2 已落、旧 pending1 尚未清的 kill 窗应选 ordinal2，不重放 record1。"""
+    harness = _install_stage5_partial_agent_harness(
+        base, monkeypatch, process_exit_code=0, end_old_session=False)
+    first_record = harness.seeded.record
+    second_turn_id = _append_seeded_stage5_correction_evidence(
+        base, harness,
+        response_sha256=first_record.provider_response_sha256,
+        mark_latest_pending=False)
+    second_record = first_record.model_copy(update={
+        'reviewer_seat_turn_id': second_turn_id,
+        # 故意同秒：排序只能使用 seat ordinal。
+        'recorded_at': first_record.recorded_at,
+    })
+    second_path = agent.uploads.save_reviewer_action(
+        base, '42', second_record)
+
+    replay = _find_seeded_stage5_partial(base, harness)
+
+    assert replay is not None
+    assert replay.record.reviewer_seat_turn_id == second_turn_id
+    assert not harness.record_path.exists()
+    assert second_path.is_file()
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert session.process_state == 'ok'
+    assert session.delivery_state == 'unknown'
+    assert harness.permits == [] and harness.commander_spawns == []
+
+
+@pytest.mark.parametrize('tamper', ['response', 'provider'])
+def test_stage5_forged_same_turn_pending_cannot_consume_durable_action(
+        base, corpus, monkeypatch, tamper):
+    """schema-valid 伪 pending 没有 seat/session/cost 四证，留 record 关闭。"""
+    harness = _install_stage5_partial_agent_harness(
+        base, monkeypatch, process_exit_code=0)
+    record = harness.seeded.record
+    agent.reviewer_seat_ledger.mark_pending_correction(
+        base, '42', waiting_on=record.waiting_on,
+        business_sha256=record.business_sha256,
+        session_run_id=record.reviewer_session_run_id,
+        provider_session_id=(
+            'forged-provider' if tamper == 'provider'
+            else 'old-stage5-provider-session'),
+        request_sha256=(
+            '9' * 64 if tamper == 'response'
+            else record.provider_response_sha256),
+        reason='盘外伪造拒因', now=5)
+
+    with pytest.raises(
+            agent.reviewer_tasks.ReviewerTaskError,
+            match='pending|response|provider'):
+        _find_seeded_stage5_partial(base, harness)
+
+    assert harness.record_path.is_file()
+    assert harness.permits == [] and harness.commander_spawns == []
+
+
+def test_stage5_later_turn_pending_wins_old_record_by_seat_ordinal(
+        base, corpus, monkeypatch):
+    """同秒时间不猜新旧；最后 correction 的四证 pending 压过旧 action。"""
+    harness = _install_stage5_partial_agent_harness(
+        base, monkeypatch, process_exit_code=0, end_old_session=False)
+    record = harness.seeded.record
+    agent.reviewer_seat_ledger.mark_pending_correction(
+        base, '42', waiting_on=record.waiting_on,
+        business_sha256=record.business_sha256,
+        session_run_id=record.reviewer_session_run_id,
+        provider_session_id='old-stage5-provider-session',
+        request_sha256=record.provider_response_sha256,
+        reason='首轮 canonical 拒绝', now=5)
+    later_turn_id = 'later-stage5-trim-turn'
+    later_attempt_id = 'later-stage5-trim-attempt'
+    later_parent = record.run_id
+    later_provider = 'old-stage5-provider-session'
+    later_response = '8' * 64
+    identity = dict(
+        waiting_on=record.waiting_on,
+        business_sha256=record.business_sha256)
+    agent.reviewer_seat_ledger.reserve(
+        base, '42', purpose='correction',
+        session_run_id=record.reviewer_session_run_id,
+        turn_id=later_turn_id, parent_run_id=later_parent,
+        epoch_id=record.epoch_id, now=6, **identity)
+    agent.reviewer_seat_ledger.record_attempt(
+        base, '42', turn_id=later_turn_id,
+        attempt_id=later_attempt_id, kind='launch', now=7, **identity)
+    agent.reviewer_seat_ledger.finish_attempt(
+        base, '42', turn_id=later_turn_id,
+        attempt_id=later_attempt_id, exit_code=0, error_kind=None,
+        provider_session_id=later_provider, wire_evidence=True, now=8,
+        **identity)
+    agent.reviewer_seat_ledger.bind_response(
+        base, '42', turn_id=later_turn_id,
+        provider_response_sha256=later_response, **identity)
+    agent.reviewer_seat_ledger.finish(
+        base, '42', turn_id=later_turn_id, exit_code=0, now=9,
+        **identity)
+    later_common = {
+        **harness.session_common,
+        'parent_run_id': later_parent,
+    }
+    agent.agent_session_audit.append_event(
+        base, agent.agent_session_audit.AgentSessionEvent(
+            **later_common, provider_session_id=later_provider,
+            attempt_id=later_attempt_id, actual_model=_CODEX.model,
+            actual_effort=_CODEX.reasoning_effort,
+            delivery_attempts=1, kind='attempt', ts=7))
+    agent.agent_session_audit.append_commander_turn(
+        base, agent.agent_session_audit.AgentSessionEvent(
+            **later_common, provider_session_id=later_provider,
+            attempt_id=later_attempt_id, turn_index=2,
+            actual_model=_CODEX.model,
+            actual_effort=_CODEX.reasoning_effort,
+            kind='turn', ts=8))
+    agent.append_commander_call(
+        base, run_id=later_parent,
+        session_run_id=record.reviewer_session_run_id,
+        sid='42', attempt_id=later_attempt_id,
+        request_model=_CODEX.model,
+        requested_effort=_CODEX.reasoning_effort,
+        code='test-code-version', protocol_version='test-protocol-v1',
+        actual_model=_CODEX.model,
+        actual_effort=_CODEX.reasoning_effort,
+        provider_session_id=later_provider, cli_version='test-cli-v1',
+        outcome='ok', exit_code=0,
+        activity=f'reviewer:{record.waiting_on}',
+        response_sha256=later_response)
+    agent.reviewer_seat_ledger.mark_pending_correction(
+        base, '42', session_run_id=record.reviewer_session_run_id,
+        provider_session_id=later_provider,
+        request_sha256=later_response,
+        reason='订正轮仍被 canonical 拒绝', now=10,
+        **identity)
+
+    replay = _find_seeded_stage5_partial(base, harness)
+
+    assert replay is None
+    assert not harness.record_path.exists()
+    assert harness.permits == [] and harness.commander_spawns == []
+    [closed] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert closed.process_state == 'ok'
+    assert closed.delivery_state == 'unknown'
+
+
+def test_stage5_partial_replay_exit2_keeps_record_across_parents_and_zero_wire(
+        base, corpus, monkeypatch):
+    """同 binding 的 deterministic 拒绝不消费完整 manifest，下一 parent 也不买席。"""
+    harness = _install_stage5_partial_agent_harness(
+        base, monkeypatch, process_exit_code=2)
+
+    run_ids = []
+    for _ in range(2):
+        rec = agent.start(
+            base, '42', authorized=True, egress_authorized=True,
+            profiles=_PROFILES, spawn=None)
+        assert agent.wait(rec.run_id, 20)
+        run_ids.append(rec.run_id)
+        assert harness.record_path.is_file()
+        [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+        assert done.exit_code == 2
+        assert done.outcome is not None
+        assert '完整 manifest 记录已保留' in done.outcome.reason
+
+    assert len(harness.permits) == 2
+    assert harness.commander_spawns == []
+    assert all('[reviewer-replay]' in agent.run_log_path(
+        base, run_id).read_text('utf-8') for run_id in run_ids)
+    assert harness.materialized_paths and all(
+        not path.exists() for path in harness.materialized_paths)
+    [trim_ledger] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
+    assert [row['outcome'] for row in trim_ledger['turns']] == ['ok']
+    [old_session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert old_session.session_run_id == 'old-stage5-trim-session'
+
+
+def test_tampered_reviewer_action_content_address_closes_before_commander(
+        base, corpus, monkeypatch):
+    """盘上改写 actor/reason 但保留旧文件名，不能冒充已付费决定或消失。"""
+    harness = _install_stage5_partial_agent_harness(
+        base, monkeypatch, process_exit_code=0)
+    document = json.loads(harness.record_path.read_text('utf-8'))
+    document['input_payload']['items'][1]['reason'] = '盘外篡改后的伪人审理由'
+    harness.record_path.write_text(
+        json.dumps(document, ensure_ascii=False) + '\n', encoding='utf-8')
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 20)
+
+    assert harness.commander_spawns == []
+    assert harness.permits == []
+    assert harness.record_path.is_file(), 'unknown 完整性异常必须保留恢复凭据'
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 70
+    assert done.outcome is not None and done.outcome.state in {'failed', 'unknown'}
+    [trim_ledger] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
+    assert [row['outcome'] for row in trim_ledger['turns']] == ['ok']
+
+
+def test_stage5_mixed_machine_blockers_stop_before_seat_or_permit(
+        base, corpus, monkeypatch):
+    """trim 与 INVALID/HARD 并存是已知恢复态：exit2，而不是 unknown 或人审。"""
+    view = _stage5_partial_view(
+        {1: 'a' * 64, 2: 'b' * 64},
+        {1: 'c' * 64, 2: 'd' * 64},
+        (1, 2), workpack_sha256='5' * 64)
+    assert view.workpack is not None
+    view = view.model_copy(update={
+        'workpack': view.workpack.model_copy(update={
+            'invalid_chapters': [1],
+            'hard_findings': ['some_registered_hard'],
+        }),
+    })
+    current = SimpleNamespace(
+        base=os.path.abspath(base), sid='42', state='blocked',
+        code_version='test-code-version', surface_seal='6' * 64,
+        overview=SimpleNamespace(sid='42', stages=[]),
+        inbox=SimpleNamespace(), execution_token=None,
+        action=SimpleNamespace(
+            waiting_on=agent.queue.WAITING_ON_STAGE5_CLOSURE,
+            node='stage6.hook', flags=[], paid=False, writes='',
+            resume_verdict='run', action_sha256='7' * 64))
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda _base, _sid, *, code: current)
+    monkeypatch.setattr(
+        agent.reviewer_tasks, '_approval_view',
+        lambda *_args, **_kwargs: view.model_dump(mode='json'))
+    monkeypatch.setattr(
+        agent, '_assess_delivery',
+        lambda *_args, **_kwargs: AgentDeliveryOutcome(
+            state='stopped', reason='mixed blocker', checked_at=1))
+    commander = []
+    permits = []
+    monkeypatch.setattr(
+        agent, '_default_spawn',
+        lambda *_args, **_kwargs: commander.append(True) or pytest.fail(
+            'mixed blocker 不得开 Commander'))
+    monkeypatch.setattr(
+        agent.operator, 'permit',
+        lambda *_args, **_kwargs: permits.append(True) or pytest.fail(
+            'mixed blocker 不得铸 permit'))
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 20)
+
+    assert commander == [] and permits == []
+    assert agent.reviewer_seat_ledger.list_ledgers(base, '42') == []
+    assert agent_session_audit.fold(agent_session_audit.read_events(base)) == []
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 2
+    assert done.outcome is not None and done.outcome.state == 'stopped'
+    assert '缺章/.INVALID/HARD' in done.outcome.reason
+
+
+@pytest.mark.parametrize('evidence_error', [
+    ProvenanceRefused(
+        'Stage5 fresh Review 的 length_over 缺同章 current TrimAudit'),
+    ArtifactUnreadable('Stage5 current TrimResolution 不可读'),
+])
+def test_stage5_closure_evidence_error_stops_before_seat_or_permit(
+        base, corpus, monkeypatch, evidence_error):
+    """closure 证据缺失/损坏须在 Reviewer seat 与模型 wire 之前关闭。"""
+    current = SimpleNamespace(
+        base=os.path.abspath(base), sid='42', state='blocked',
+        code_version='test-code-version', surface_seal='6' * 64,
+        overview=SimpleNamespace(sid='42', stages=[]),
+        inbox=SimpleNamespace(), execution_token=None,
+        action=SimpleNamespace(
+            waiting_on=agent.queue.WAITING_ON_STAGE5_CLOSURE,
+            node='stage6.hook', flags=[], paid=False, writes='',
+            resume_verdict='run', action_sha256='7' * 64))
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda _base, _sid, *, code: current)
+
+    def fail_closure_view(*_args, **_kwargs):
+        raise evidence_error
+
+    monkeypatch.setattr(
+        agent.reviewer_tasks, '_approval_view', fail_closure_view)
+    monkeypatch.setattr(
+        agent, '_assess_delivery',
+        lambda *_args, **_kwargs: AgentDeliveryOutcome(
+            state='stopped', reason='Stage5 closure 待恢复', checked_at=1))
+    commander = []
+    permits = []
+    monkeypatch.setattr(
+        agent, '_default_spawn',
+        lambda *_args, **_kwargs: commander.append(True) or pytest.fail(
+            'closure 证据异常不得开 Commander'))
+    monkeypatch.setattr(
+        agent.operator, 'permit',
+        lambda *_args, **_kwargs: permits.append(True) or pytest.fail(
+            'closure 证据异常不得铸 permit'))
+
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 20)
+
+    assert commander == [] and permits == []
+    assert agent.reviewer_seat_ledger.list_ledgers(base, '42') == []
+    assert agent_session_audit.fold(agent_session_audit.read_events(base)) == []
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.exit_code == 70
+    assert done.outcome is not None and done.outcome.state == 'unknown'
 
 
 def test_recorded_reviewer_decision_replays_without_a_commander_turn(

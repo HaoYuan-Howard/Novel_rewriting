@@ -547,16 +547,18 @@ def plan_book_from_overview(
             # 全部关闭式停在 Stage6 之前。若本次 lane 还会写 Stage5，盘上旧 closed
             # 也必然会被新主体作废，不能拿来提前放行同一批下游。
             if approval_doc is not None:
-                closure_state = approval_doc.closure.state
+                closure_view = approval_doc.closure
             else:
                 try:
-                    closure_state = approvals.stage5_closure_view(base, sid).state
+                    closure_view = approvals.stage5_closure_view(base, sid)
                 except (
                     ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
                     GateBlocked, UpstreamStale, UpstreamUnproven,
                     BlockingFindingsUnresolved,
                 ):
-                    closure_state = 'unreadable'
+                    closure_view = None
+            closure_state = (
+                'unreadable' if closure_view is None else closure_view.state)
             if stage5_write_will_run or closure_state != 'closed':
                 why_blocked = WAITING_ON_STAGE5_CLOSURE
         review_follows_planned_write = (
@@ -737,9 +739,10 @@ def _blocked_why(
                 f'队列不会从默认路径反推同意花钱；{verdict_why}')
     if waiting_on == WAITING_ON_STAGE5_CLOSURE:
         return (
-            'Stage5 当前 typed closure 尚未 closed：缺回执、Review/章稿漂移或工作包仍有'
-            '阻断项都会停在这里。先经 `approval template stage5` 与审批提交收口；'
-            '需要改稿/重判时只走登记的 0 成本恢复入口，再重算 Review；'
+            'Stage5 顶部闭合卡尚未 closed：Review/章稿漂移、工作包阻断或缺回执都会'
+            '停在这里。blocked 且只有 trim 时先人工通读整批正文与超限事实，再走登记的 '
+            '0 成本 retain-pretrim batch；其他 blocker 先走各自恢复面。只有重新构造的 '
+            'closure workpack 已 ready/expired 时才提供 typed closure 回执；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE2_FINAL_REVIEW:
         return (

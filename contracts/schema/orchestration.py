@@ -1088,6 +1088,12 @@ class ReviewerSeatTurn(FrozenModel):
     finished_at: int | None = Field(default=None, ge=0)
     exit_code: int | None = None
     outcome: Literal['started', 'ok', 'failed'] = 'started'
+    # structured Reviewer 的 provider 回答在 full action 或 typed 拒因
+    # durable 前先把 canonical JSON 摘要绑到原 seat turn。它关闭
+    # ``record 自己携 digest 又自己证明 digest`` 的循环，也让
+    # record-save -> seat-finish 硬崩可以由独立席位事实恢复。
+    provider_response_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
     attempts: list[Stage2ReviewAttempt] = Field(default_factory=list)
 
     @model_validator(mode='after')
@@ -1300,6 +1306,14 @@ class ReviewerActionRecord(FrozenModel):
     flags: tuple[str, ...] | None = None
     input_payload: dict[str, Any] | None = None
     review_token: str | None = None
+    # Stage5 batch 额外保存原 Review 与 reviewer contract 摘要；再结合
+    # payload 的完整有序 trim 双 SHA，可先自证 durable business 未损坏，
+    # 再区分“current 主体已换可安全退休”和“同主体 partial
+    # frontier 冲突须保留停止”。closure token 不是 trim 人审主体。
+    stage5_review_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    stage5_reviewer_contract_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
     workpack_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
     source_sha256: str | None = Field(
@@ -1312,6 +1326,10 @@ class ReviewerActionRecord(FrozenModel):
         default=None, pattern=r'^[0-9a-f]{64}$')
     blocker_count: int | None = Field(default=None, ge=0)
     reviewer_session_run_id: str | None = Field(default=None, min_length=1)
+    # 非 Stage2 durable-first 回放用它定位同一 logical session
+    # 内的原 reviewer turn；correction 共用 session，只靠 session id
+    # 无法证明是哪一轮。
+    reviewer_seat_turn_id: str | None = Field(default=None, min_length=1)
     provider_response_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
     recorded_at: int = Field(ge=0)
@@ -1331,18 +1349,28 @@ class ReviewerActionRecord(FrozenModel):
                 raise ValueError('node reviewer record 字段组合不成立')
             if any(not isinstance(flag, str) or not flag for flag in self.flags):
                 raise ValueError('node reviewer record flags 必须是非空字符串')
+        is_stage2_node = node and self.node == 'stage2.global'
+        is_stage2_final = approval and self.surface == 'stage2_final_review'
+        is_stage2 = bool(is_stage2_node or is_stage2_final)
+        is_stage5_batch = bool(
+            node
+            and self.node == 'stage5.review'
+            and self.flags == (
+                '--retain-pretrim-batch', '@reviewer-input'))
         stage2_legacy_identity = (
-            self.workpack_sha256,
-            self.reviewer_session_run_id,
-            self.provider_response_sha256,
-        )
+            self.workpack_sha256, self.reviewer_session_run_id,
+            self.provider_response_sha256)
         stage2_extended_identity = (
             self.source_sha256,
             self.main_text_sha256,
             self.progress_sha256,
             self.blocker_count,
         )
-        if any(value is not None for value in stage2_legacy_identity):
+        if (any(value is not None for value in (
+                self.workpack_sha256, *stage2_extended_identity))
+                or is_stage2 and any(value is not None for value in (
+                    self.reviewer_session_run_id,
+                    self.provider_response_sha256))):
             if not all(value is not None for value in stage2_legacy_identity):
                 raise ValueError('Stage2 reviewer record 恢复身份必须成组出现')
             # v1 早期记录只有 legacy 三元组；新增 effective progress 后仍须可读，
@@ -1351,14 +1379,34 @@ class ReviewerActionRecord(FrozenModel):
                     and not all(
                         value is not None for value in stage2_extended_identity)):
                 raise ValueError('Stage2 reviewer record 扩展恢复身份必须成组出现')
-            is_stage2_node = node and self.node == 'stage2.global'
-            is_stage2_final = approval and self.surface == 'stage2_final_review'
-            if not (is_stage2_node or is_stage2_final):
+            if not is_stage2:
                 raise ValueError(
                     'Stage2 reviewer record 恢复身份只属于 stage2.global node '
                     '或 stage2_final_review approval')
-        elif any(value is not None for value in stage2_extended_identity):
-            raise ValueError('Stage2 reviewer record 扩展身份不能脱离原三元组')
+            if self.reviewer_seat_turn_id is not None:
+                raise ValueError('Stage2 reviewer record 不使用通用 seat turn id')
+        elif is_stage5_batch:
+            stage5_identity = (
+                self.stage5_review_sha256,
+                self.stage5_reviewer_contract_sha256,
+                self.reviewer_session_run_id,
+                self.reviewer_seat_turn_id,
+                self.provider_response_sha256,
+            )
+            if not all(value is not None for value in stage5_identity):
+                raise ValueError(
+                    'Stage5 batch durable record 的 Review/contract/session/'
+                    'turn/provider 身份必须成组出现')
+            if self.review_token is not None:
+                raise ValueError('Stage5 trim durable record 不得绑定 closure token')
+        elif any(value is not None for value in (
+                self.stage5_review_sha256,
+                self.stage5_reviewer_contract_sha256,
+                self.reviewer_session_run_id,
+                self.reviewer_seat_turn_id,
+                self.provider_response_sha256,
+        )):
+            raise ValueError('ReviewerActionRecord 持久恢复身份与动作形状不一致')
         return self
 
 

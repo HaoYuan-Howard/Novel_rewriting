@@ -2536,6 +2536,12 @@ class Stage5TrimWorkItem(FrozenModel):
     chapter_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
 
 
+class Stage5TrimSubject(Stage5TrimWorkItem):
+    """闭合工作包里一条 current trim audit 及其可选当前销账回执。"""
+
+    resolution_sha256: str | None = Field(pattern=r'^[0-9a-f]{64}$')
+
+
 class Stage5ClosureMaterialized(StrictModel):
     """只读模板使用的完整 Stage5 闭合材料；不是外部提交载荷。"""
 
@@ -2649,8 +2655,9 @@ class Stage5ClosureWorkpack(FrozenModel):
 
     ``blocking`` 回答「现在能不能提交回执」；``must_appear`` / ``fact_group`` /
     ``unver_group`` 回答「Commander 还要看什么」；已由 wontfix / typed resolution
-    处置的条目不进任何待办，只在 ``resolved`` 里留计数。``disclosure`` 是
-    INFO/metric 的只读披露计数（规则 → 条数），不需要裁决。
+    处置的条目不进任何待办，但完整文件身份分别留在 ``wontfix_sha256`` 与
+    ``trim_subjects``，``resolved`` 只作计数。``disclosure`` 是 INFO/metric 的
+    只读披露计数（规则 → 条数），不需要裁决。
     """
 
     review_seq: int
@@ -2663,6 +2670,8 @@ class Stage5ClosureWorkpack(FrozenModel):
     hard_findings: list[str]
     unresolved_trim_chapters: list[int]
     unresolved_trim_items: list[Stage5TrimWorkItem]
+    trim_subjects: list[Stage5TrimSubject]
+    wontfix_sha256: str | None = Field(pattern=r'^[0-9a-f]{64}$')
     must_appear: list[Stage5MustAppearRow]
     fact_group: Stage5FindingGroup | None = None
     unver_group: Stage5FindingGroup | None = None
@@ -2679,6 +2688,8 @@ class Stage5ClosureWorkpack(FrozenModel):
         missing = set(self.missing_chapters)
         subjects = [row.output_ordinal for row in self.chapter_subjects]
         trims = [row.output_ordinal for row in self.unresolved_trim_items]
+        trim_subject_ordinals = [
+            row.output_ordinal for row in self.trim_subjects]
         if self.planned_chapters != sorted(planned):
             raise ValueError('planned_chapters 必须升序、去重')
         if not missing <= planned:
@@ -2689,6 +2700,28 @@ class Stage5ClosureWorkpack(FrozenModel):
             raise ValueError('unresolved_trim_items 必须按章升序、去重')
         if self.unresolved_trim_chapters != trims:
             raise ValueError('unresolved_trim_chapters 必须是 trim 工作面的精确章号投影')
+        if trim_subject_ordinals != sorted(set(trim_subject_ordinals)):
+            raise ValueError('trim_subjects 必须按章升序、去重')
+        trim_subject_by_ordinal = {
+            row.output_ordinal: row for row in self.trim_subjects}
+        unresolved_subjects = [
+            row.output_ordinal for row in self.trim_subjects
+            if row.resolution_sha256 is None]
+        if unresolved_subjects != trims:
+            raise ValueError(
+                'trim_subjects 中缺当前 resolution 的章必须精确等于 unresolved trim')
+        mismatched_trim_items = [
+            row.output_ordinal for row in self.unresolved_trim_items
+            if (
+                (subject := trim_subject_by_ordinal.get(row.output_ordinal)) is None
+                or subject.audit_sha256 != row.audit_sha256
+                or subject.chapter_sha256 != row.chapter_sha256
+            )
+        ]
+        if mismatched_trim_items:
+            raise ValueError(
+                'unresolved_trim_items 必须与完整 trim_subjects 双 SHA 投影一致：'
+                f'{sorted(set(mismatched_trim_items))}')
         subject_sha = {
             row.output_ordinal: row.chapter_sha256 for row in self.chapter_subjects}
         mismatched_findings = [
