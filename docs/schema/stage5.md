@@ -15,6 +15,8 @@ stage5/_rounds/...               被替代正式稿、INVALID、rejected 与 Rev
 stage5/review_<n>.json           全书确定性验收（schema v2，0 LLM 调用）
 stage5/trim_audit_chNN.json      超上限但未自动裁剪的事实（schema v2）
 stage5/trim_resolution_chNN.json 人工保留 pretrim 的 hash-bound 决定（schema v2）
+stage5/reviewer_rewrite_request.json
+                                 Reviewer 明确授权的一章 LLM 改写请求（v1）
 stage5/wontfix.json              人工豁免账（v1）
 ```
 
@@ -43,6 +45,10 @@ stage5/wontfix.json              人工豁免账（v1）
 | 生成最新 Review | `run stage5.review <sid> --base <base>` | 0 |
 | 读取已有 Review | `run stage5.review <sid> --check-only --base <base>` | 0 |
 | 批量保留 pretrim | `stage5.review --retain-pretrim-batch <BatchTrimResolutionRequest.json>` | 0 |
+| Supervisor 把 Reviewer 改写回答正式化（内部） | `stage5.review --request-reviewer-rewrite @reviewer-input` | 0；`@reviewer-input` 只能由 Supervisor 从已验证的 ReviewerActionRecord 与 seat/session/cost 证据注入，不能手写或经 HTTP jobs 提交 |
+| 消费 current 正式改写请求 | `stage5.write --reviewer-rewrite stage5/reviewer_rewrite_request.json --yes` | 付费；恰好一章 |
+| 补完 Reviewer 改写 checkpoint/prepared 尾窗 | `stage5.write --recover-reviewer-rewrite-prepared <SOURCE_RUN_ID> --reviewer-rewrite-request-sha256 <SHA256>`；已有 target WAL 时再原样携 `--reviewer-rewrite-recovery-target-run-id <TARGET_RUN_ID> --reviewer-rewrite-recovery-journal-sha256 <SHA256>` | 0 wire；不新建 provider/session/cache |
+| 退休从未开始且已过期的 Reviewer 改写请求 | `stage5.write --retire-reviewer-rewrite-request stage5/reviewer_rewrite_request.json --reviewer-rewrite-request-sha256 <SHA256>` | 0 wire；只在全根零执行证据闭合时可用 |
 | 生成 / 提交闭合回执 | `approval template stage5 ...` / `approval apply stage5 ... --input <决定文件>` | 0 |
 
 不带 `--chapters` 就是全书，不需要也不接受 `--deep`、`--shallow-rest` 或 `--mode`。
@@ -68,6 +74,29 @@ target 的 `_service/runs/<sid>/stage5/<TARGET>/prepared_recovery.json` 冻结�
 `prepared_recovery.json` 走 `prepared → committed`；只有 replacement journal、全局 adoption
 audit 与 live canonical 三者精确闭合，旧 foreign reservation 才算 superseded。写回会令旧
 Review stale，因此恢复成功后必须**另跑** `stage5.review`。旧书内 `_stage5_runs` 仅作只读恢复来源。
+
+上面两步人工工作包只服务 initial write 的通用 foreign prepared；Reviewer LLM 改写有另一条更窄的
+自动恢复。顶部卡回答先经 FREE `--request-reviewer-rewrite` 写 current canonical request，queue 再以
+`recovery:stage5-reviewer-rewrite` 滚新 execution epoch，唯一允许 PAID `--reviewer-rewrite` 消费它。
+若旧 source run 已留下同 request 的 matching checkpoint/prepared，queue 改发上述
+`--recover-reviewer-rewrite-prepared` 精确 FREE 动作，不要求第二次人工审批，也不续旧 provider session；
+若 target recovery WAL 已经存在，后继 run 必须复用其 target run 与 WAL 原始 SHA，不能另造一份 WAL。
+执行状态关闭为九态：`ready_paid / in_flight_or_unknown / recoverable_checkpoint /
+recoverable_prepared / landed_formal / landed_invalid / landed_rejected / expired_unstarted /
+consumed_resolved`。首轮 `started` 是首轮 wire intent；每次后续 writer turn 都先把 `retry_started` 和
+上一 checkpoint 追加到 request 专属自哈希 journal。只有最新 turn 的 matching checkpoint 且其后没有新
+session/cost/wire 迹象才可恢复。仅有 pre-wire started、原 parent 已 stopped 且全根
+session/cost/checkpoint/commit/WAL/wire 均为空时，才可在 request 专属跨进程执行 lease 内写
+`reclaimed_unstarted` 后重新 claim；其余有 wire 而无可验 checkpoint、身份不唯一、坏件或任一原字节
+漂移都保持 unknown，禁止自动重发模型请求。
+
+formal、`.INVALID` 或 rejected 均以 journal + exact typed carrier 的 terminal 事实消费本次意图；把文件手工
+移进 `_rounds/` 不算已解决。`--recheck`、`--revalidate`、`--apply-edit` 先冻结 request-specific
+successor WAL 与 terminal 原字节，再执行各自既有 0-wire 事务，最后才提交 immutable successor receipt；
+硬杀后只可按 exact landed successor 补尾。receipt 把 exact terminal、动作证据与 exact successor 连成
+`consumed_resolved`。formal 正文改变后旧 Review/closure 过期，下一步只能免费重跑 Review；旧请求只有
+已正式落稿或已有合法 successor/expiry receipt 时才可被新的 fixed-path request 替换。`landed_invalid /
+landed_rejected / in_flight_or_unknown / recoverable_* / ready_paid` 都不能被覆盖。
 
 ### 1.1 Stage5 从 Stage1 即时计算正文机械基线
 
@@ -152,8 +181,9 @@ slot 至少一段，余量按场景预算作 largest-remainder 分配，slot 顺
 `paragraph_slot_report` 只消费这一份计划。`reflow_shadow` 只增删换行，强制非空白字符 SHA
 不变、不跨对白合并、只在句末拆分；它只向 observer 报可行性与 HARD 前后差，不写产物、
 不改变候选或 Review 结论，TODO-21 三书标定前不得默认采用。
-超上限不触发模型自动裁剪：正文原样保留，落 identity `TrimAudit`，由人工
-`retain_pretrim` 或整章 `--apply-edit` 收口。
+超上限不触发模型自动裁剪：正文原样保留，落 identity `TrimAudit`，再由人选择
+`retain_pretrim`、整章 `--apply-edit`，或让受托 Reviewer 以 §4.2 的关闭式 request 授权写手重写
+一份完整章。最后一种仍是明确的人审决定，不是 `length_over` 自动触发或采用短候选。
 
 所有 canonical 正文落盘入口共用同一个提交口：付费生成、重采、`--apply-edit`、
 `--revalidate` 与 `--recheck` 都在章与 trim sidecar 的同一提交事务中对账。正文变化且超上限时，
@@ -256,12 +286,14 @@ workpack/decision，但不擦除 history。fresh Review 下先看 blockers：任
 `.INVALID`、trim/wontfix 处置面做完整双采样；两次不同就拒绝返回混合工作包，由读方重试。
 
 `approval:stage5-closure` 是一张状态感知的顶部卡，不是永远只收 closure 回执。fresh Review 下若
-唯一 blocker 是 `unresolved_trim_items[]`，同一卡只发布一份覆盖全部待销账章的
-`stage5.review --retain-pretrim-batch @reviewer-input` node 选项和一份 typed stop；它不发布 closure
-approval，也不替 Commander 默认选择 retain。若缺章、活动 `.INVALID` 或 HARD 与 trim 并存，构包前
+唯一 blocker 是 `unresolved_trim_items[]`，同一卡的一席 Reviewer 只发布三类互斥出口：覆盖全部待销账
+章的 `stage5.review --retain-pretrim-batch @reviewer-input`、每章各一份但回答只能选择其中一份的
+`stage5.review --request-reviewer-rewrite @reviewer-input`、以及 typed stop；它不发布 closure approval，
+也不替 Commander 默认选择 retain/rewrite。若缺章、活动 `.INVALID` 或 HARD 与 trim 并存，构包前
 直接 stopped/2 并指向各自正式恢复面，不为必然不可执行的批次开席。只有 `ready/expired` 才发布
-closure receipt。两种动作以 `action_mode=trim_resolution｜closure_receipt` 分开业务身份，旧 closure
-席位/回答不得复用成 trim 决定。
+closure receipt。trim 两出口共用 `action_mode=trim_disposition` 和同一席位，closure receipt 独立使用
+`action_mode=closure_receipt`；旧 closure 席位/回答不得复用成 trim 决定，retain/rewrite 也不得按同一
+Review/frontier 拆成两席。
 
 | 字段 | 类型 | 必填 | 取值面 / 语义 | 证据 |
 |---|---|---:|---|---|
@@ -297,11 +329,11 @@ template token 只属于只读材料，不作为 Request 字段；`Stage5Closure
 缺章、`.INVALID`、HARD 或 unresolved trim 任一非空都不得提交。历史 must-appear 预填只在 finding
 SHA 与 chapter SHA 同时不变时复用；`gate.s5`、Stage6/7 写效果与 assemble 都消费同一 current closure。
 
-`BatchTrimResolutionRequest` 是整批唯一的人审回答：顶层 actor/reason 非空，`items[]` 必须按章序
+`BatchTrimResolutionRequest` 是 retain 出口的整批人审回答：顶层 actor/reason 非空，`items[]` 必须按章序
 精确覆盖 workpack 的全部 `unresolved_trim_items[]`，逐项原样绑定 audit SHA 与正文 SHA，并给出
 非空 reason（可显式继承顶层 reason）。Supervisor 只把这份已通过 typed loader 的请求物化到
 `_service/edits/<sid>/`，再经 permit 的外部输入字节 CAS 交给 0-LLM producer；typed stop 表示需要
-改写正文，不落 resolution、permit 或 node。
+但无法安全形成登记的一章改写请求，不落 resolution/request、permit 或 node。
 
 | Batch 字段 | 类型 | 必填 | 取值面 / 语义 | 证据 |
 |---|---|---:|---|---|
@@ -312,7 +344,8 @@ SHA 与 chapter SHA 同时不变时复用；`gate.s5`、Stage6/7 写效果与 as
 | `items[].reason` | str | 是 | 空串表示显式继承顶层 reason；非空时作为该章理由，effective reason 始终非空 | **契·码** |
 
 trim 人审的稳定业务身份只含同一 fresh Review 完整 SHA、原始全量有序 audit/chapter 双 SHA、
-reviewer contract 与 `action_mode=trim_resolution`，刻意不含会随逐章落盘变化的 closure token/workpack。
+reviewer contract 与 `action_mode=trim_disposition`，刻意不含会随逐章落盘变化的 closure token/workpack；
+retain 与 rewrite 是这份业务的一席互斥回答。
 进程在批次中被 kill 后，只在盘面仍严格等于“原 manifest 的已落连续前缀 + current unresolved 完整
 后缀”时重放原 actor/reason/items；已落前缀逐章按同一决定核验，后缀不得遗漏、夹入或重排，活动
 trim audit inventory 的坏文件、路径/章号不一致或任一 SHA 漂移都关闭式停止。重放不再调用
@@ -321,6 +354,35 @@ Commander；producer 在同书锁内全量预检、首写前复采，并按章�
 删除或 foreign 决定不得被旧 facts 覆盖。全部 retain 落盘后仍使用原 fresh Review，只因 current
 audit/resolution/wontfix 处置摘要变化重建 closure workpack/token；不得
 把纯处置写成一次新的 Review。
+
+`Stage5ReviewerRewriteRequest` 是 Commander/provider 回答的公开运输形状，不是
+`--request-reviewer-rewrite` 所读的 CLI 文件。Supervisor 验证回答和 durable ReviewerActionRecord 后，
+才生成私有 `ReviewerRewriteTrustedInput` 信封并以一次性 `@reviewer-input` 交给 FREE producer；
+该信封不能由人工、HTTP jobs 或普通 operator 输入自报。公开回答仍完整携原有序
+`unresolved_trim_items[]`，但只以 `target_ordinal` 选择其中恰好一章；其中每项既有
+`chapter_sha256` 始终是 `rendered_text` 的正文 SHA，target 另带从 closure
+`chapter_subjects[target]` 冻结的 `target_chapter_file_sha256` 完整文件 SHA，两者不得互换。
+actor/reason 非空，`directives[]`
+至少一项，code 只能是 `remove_repetition｜compress_exposition｜repair_wording｜smooth_transition`，
+`current_text_evidence` 必须是该章 current `rendered_text` 中恰好唯一命中、非空且不超过 240 字的片段，
+同一 code/evidence 不得重复。Review SHA、frontier、target 与 actor 从 immutable option 逐字保留，只有
+reason 和 directive code/evidence 是本次允许填写的字段。reason/evidence 不会直接拼进 writer prompt；
+可信 producer 按 code 注入固定指令，并总是附加预算、plan slots、事实、时序与逐字材料约束。
+
+回答先按“provider response 绑定 seat turn → 内容寻址 `ReviewerActionRecord` → seat finish → 一次性
+`@reviewer-input`”耐崩溃持久化，再由 FREE producer 构造并 typed readback 正式
+`ReviewerRewriteRequest`。正式 request 另绑定 target 完整文件 SHA、原 ReviewerActionRecord 摘要、
+logical session、seat turn、provider response、自身 subject 与 self hash；仅它是后续 paid writer 的 durable intent，运输 payload、
+action record、旧 stop 或手写同形 JSON 都不是执行权。request 落稳后 queue 必须先收口其执行态，不能因
+正文尚未改变、Review 仍 fresh 而重新开顶部卡。
+
+request typed readback 后不能直接删除唯一来源。Supervisor 先把原 action 原始字节复制到
+`_service/runs/<sid>/reviewer_action_authorities/reviewer-action-<sha>.json`，再写同 stem 的
+`.receipt.json`；receipt 绑定 request 原始文件与 self SHA、stable business/current-then contract、
+session/seat/provider response 及 seat/session/cost 三份证据摘要并自哈希。receipt 是 seal 的 commit point；
+其后才退休 active action。active request 恢复可在 old-owner-stopped 证明下补 seat/session 与 seal，
+sealed authority 的 queue/permit/writer 复核则严格只读。历史 terminal/expiry 只要求当时已封存的 contract，
+新的 paid claim 与 active checkpoint recovery 还必须要求 Reviewer contract current。
 
 ### 4.3 `_service/human_actions.jsonl`（wire v1）
 

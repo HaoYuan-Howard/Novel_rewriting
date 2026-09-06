@@ -21,7 +21,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Literal
 
-from contracts.artifacts import STAGE2_GLOBAL_EDIT
+from contracts.artifacts import (
+    STAGE2_GLOBAL_EDIT, STAGE5_REVIEWER_REWRITE_REQUEST,
+)
 from contracts.invariants import NODES
 from contracts.schema.api import (
     ExecutionPermit, ExecutionPermitInput, OperatorNext, OperatorNextDecision,
@@ -72,6 +74,7 @@ _STAGE4_DESIGN_REPAIR_COMMIT = queue.WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT
 _STAGE4_STRUCTURE = queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW
 _STAGE5_REVIEW = queue.WAITING_ON_REVIEW
 _STAGE5_CLOSURE = queue.WAITING_ON_STAGE5_CLOSURE
+_STAGE5_REVIEWER_REWRITE = queue.WAITING_ON_STAGE5_REVIEWER_REWRITE
 _STAGE0_APPROVE = 'stage0.approve'
 _STAGE6_APPROVE = 'stage6.approve'
 _STAGE7_APPROVE = 'stage7.approve'
@@ -194,6 +197,26 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
         'stage5.review',
         _t('--retain-pretrim', '--chapters', '--actor', '--reason'), _W5),
     RecoveryRunPolicy('stage5.review', _t('--retain-pretrim-batch'), _W5),
+    RecoveryRunPolicy(
+        'stage5.review', _t('--request-reviewer-rewrite'),
+        frozenset({_STAGE5_CLOSURE})),
+    RecoveryRunPolicy(
+        'stage5.write',
+        _t('--recover-reviewer-rewrite-prepared',
+           '--reviewer-rewrite-request-sha256'),
+        frozenset({_STAGE5_REVIEWER_REWRITE})),
+    RecoveryRunPolicy(
+        'stage5.write',
+        _t('--recover-reviewer-rewrite-prepared',
+           '--reviewer-rewrite-request-sha256',
+           '--reviewer-rewrite-recovery-target-run-id',
+           '--reviewer-rewrite-recovery-journal-sha256'),
+        frozenset({_STAGE5_REVIEWER_REWRITE})),
+    RecoveryRunPolicy(
+        'stage5.write',
+        _t('--retire-reviewer-rewrite-request',
+           '--reviewer-rewrite-request-sha256'),
+        frozenset({_STAGE5_REVIEWER_REWRITE})),
 
     RecoveryRunPolicy('stage6.hook', _t('--check-only'), _W6),
     RecoveryRunPolicy('stage6.hook', _t('--identity'), _W6),
@@ -233,6 +256,9 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     RecoveryRunPolicy('stage5.write', _t('--revise'), _W5, paid=True),
     RecoveryRunPolicy(
         'stage5.write', _t('--revise', '--chapters'), _W5, paid=True),
+    RecoveryRunPolicy(
+        'stage5.write', _t('--reviewer-rewrite'),
+        frozenset({_STAGE5_REVIEWER_REWRITE}), paid=True),
 )
 
 
@@ -276,6 +302,8 @@ EXTERNAL_INPUT_POLICIES: Final[
     ('stage5.write', '--preview-edit'): 'book_or_service_edit',
     ('stage5.write', '--apply-edit'): 'book_or_service_edit',
     ('stage5.review', '--retain-pretrim-batch'): 'book_or_service_edit',
+    ('stage5.review', '--request-reviewer-rewrite'): 'book_or_service_edit',
+    ('stage5.write', '--reviewer-rewrite'): 'book',
     ('stage6.hook', '--apply-edit'): 'book',
     ('stage7.rename', '--apply-edit'): 'book',
     ('stage7.rename', '--validate-edit'): 'book',
@@ -396,6 +424,34 @@ def _external_inputs(
             flag=flag, argument=raw, resolved_path=os.fspath(target),
             bytes=len(payload), sha256=digest,
         ))
+    if (
+        node == 'stage5.write'
+        and bool({
+            '--recover-reviewer-rewrite-prepared',
+            '--retire-reviewer-rewrite-request',
+        } & set(flag_tokens(flags)))
+    ):
+        # recovery 的 argv 携 source run 与 request self-hash，真正被恢复器
+        # 消费的 canonical request 原始字节仍须进入 permit CAS。
+        target = paths.artifact_path(
+            paths.resolve_novel_dir(current.base, current.sid),
+            STAGE5_REVIEWER_REWRITE_REQUEST).resolve()
+        if not target.is_file():
+            raise UpstreamMissing(
+                f'Stage5 Reviewer rewrite canonical request 不在盘上：{target}')
+        try:
+            payload = target.read_bytes()
+        except OSError as exc:
+            raise ArtifactUnreadable(
+                f'读不了 Stage5 Reviewer rewrite canonical request：{exc!r}') from exc
+        out.append(ExecutionPermitInput(
+            flag='--reviewer-rewrite-request-sha256',
+            argument=flag_value(
+                flags, '--reviewer-rewrite-request-sha256') or '',
+            resolved_path=os.fspath(target),
+            bytes=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(),
+        ))
     return out
 
 
@@ -434,6 +490,58 @@ def _require_recovery_policy(
         raise UnsupportedRunMode(
             'Stage4 repair aggregate 补尾只允许逐字重放 operator 冻结的 '
             'source run/journal raw/commit SHA')
+    if waiting_on == _STAGE5_REVIEWER_REWRITE:
+        if node != 'stage5.write' or flags != tuple(current.action.flags):
+            raise UnsupportedRunMode(
+                'Stage5 Reviewer rewrite 只允许逐字执行 operator 按 current '
+                'execution journal 冻结的 paid/recovery argv')
+        from novel.stages.stage5 import reviewer_rewrite
+        from novel.orchestrator import state
+
+        novel_dir = paths.resolve_novel_dir(current.base, current.sid)
+        ctx = state.readonly_ctx(
+            novel_dir, 'stage5.write', current.code_version)
+        execution = reviewer_rewrite.reviewer_rewrite_execution_state(ctx)
+        if execution is None:
+            raise UpstreamMissing('Stage5 Reviewer rewrite canonical request 已缺失')
+        if execution.state == 'ready_paid':
+            expected: tuple[str, ...] | None = (
+                '--reviewer-rewrite', execution.request_rel)
+        elif execution.state == 'recoverable_checkpoint':
+            expected = (
+                '--recover-reviewer-rewrite-prepared',
+                execution.source_run_id or '',
+                '--reviewer-rewrite-request-sha256',
+                execution.request_sha256,
+            )
+        elif execution.state == 'recoverable_prepared':
+            if (execution.recovery_target_run_id is None
+                    or execution.recovery_journal_sha256 is None):
+                raise ArtifactUnreadable(
+                    'Stage5 Reviewer rewrite prepared recovery 缺 target WAL identity')
+            expected = (
+                '--recover-reviewer-rewrite-prepared',
+                execution.source_run_id or '',
+                '--reviewer-rewrite-request-sha256',
+                execution.request_sha256,
+                '--reviewer-rewrite-recovery-target-run-id',
+                execution.recovery_target_run_id,
+                '--reviewer-rewrite-recovery-journal-sha256',
+                execution.recovery_journal_sha256,
+            )
+        elif execution.state == 'expired_unstarted':
+            expected = (
+                '--retire-reviewer-rewrite-request',
+                execution.request_rel,
+                '--reviewer-rewrite-request-sha256',
+                execution.request_sha256,
+            )
+        else:
+            expected = None
+        if expected is None or flags != expected:
+            raise UnsupportedRunMode(
+                'Stage5 Reviewer rewrite execution state 已变化；'
+                '不得沿用旧 paid/recovery argv')
 
     # 恢复不能越过 blocker 去动更晚层。两个显式例外都是产品链上的真实恢复：
     # Stage0 批准前先编辑；Stage5 Review currentness 由后一个 review 节点重算。
@@ -501,6 +609,26 @@ def _require_paid_recovery_authorized(
                 raise UnsupportedRunMode(
                     f'--revise --chapters 必须是当前 picked 章的非空子集；'
                     f'可选={sorted(available)}，越界={outside}')
+        return
+    if node == 'stage5.write' and '--reviewer-rewrite' in tokens:
+        request_rel = flag_value(flags, '--reviewer-rewrite')
+        if request_rel != STAGE5_REVIEWER_REWRITE_REQUEST:
+            raise UnsupportedRunMode(
+                'Stage5 Reviewer rewrite paid 入口只接受 current canonical request')
+        from novel.orchestrator import state
+        from novel.stages.stage5 import reviewer_rewrite
+
+        novel_dir = paths.resolve_novel_dir(current.base, current.sid)
+        ctx = state.readonly_ctx(
+            novel_dir, 'stage5.write', current.code_version)
+        probe = reviewer_rewrite.current_reviewer_rewrite_request(
+            ctx, request_rel)
+        if probe is None or probe.execution.state != 'ready_paid':
+            raise UnsupportedRunMode(
+                'Stage5 Reviewer rewrite request 当前不是可付费首发态')
+        approvals.authorize_writing(
+            current.base, current.sid, [probe.request.target_ordinal],
+            requires_fresh_review=True)
         return
     raise UnsupportedRunMode(
         f'{node} {sorted(tokens)} 不是已登记的 typed paid recovery')
@@ -689,6 +817,39 @@ def _current_external_inputs(permit: ExecutionPermit) -> list[ExecutionPermitInp
         out.append(ExecutionPermitInput(
             flag=flag, argument=raw, resolved_path=os.fspath(target),
             bytes=len(payload), sha256=hashlib.sha256(payload).hexdigest(),
+        ))
+    if (
+        permit.node == 'stage5.write'
+        and bool({
+            '--recover-reviewer-rewrite-prepared',
+            '--retire-reviewer-rewrite-request',
+        } & set(flag_tokens(exact_flags)))
+    ):
+        target = paths.artifact_path(
+            paths.resolve_novel_dir(permit.base, permit.sid),
+            STAGE5_REVIEWER_REWRITE_REQUEST).resolve()
+        if not target.is_file():
+            raise ArtifactUnreadable(
+                f'execution permit 的 Reviewer rewrite request 已缺失：{target}')
+        try:
+            before = target.stat()
+            payload = target.read_bytes()
+            after = target.stat()
+        except OSError as exc:
+            raise ArtifactUnreadable(
+                f'execution permit 的 Reviewer rewrite request 不可读：{exc!r}') from exc
+        coordinate = lambda stat: (
+            stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+        if coordinate(before) != coordinate(after) or len(payload) != after.st_size:
+            raise ArtifactUnreadable(
+                'execution permit 的 Reviewer rewrite request 读取期间变化')
+        out.append(ExecutionPermitInput(
+            flag='--reviewer-rewrite-request-sha256',
+            argument=flag_value(
+                exact_flags, '--reviewer-rewrite-request-sha256') or '',
+            resolved_path=os.fspath(target),
+            bytes=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(),
         ))
     return out
 

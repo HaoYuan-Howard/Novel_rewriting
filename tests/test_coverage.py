@@ -74,7 +74,8 @@ _R_SECTION_SIZES = {
     # 2026-09-06：R-5.26c 冻结 Stage4 repair/replan aggregate 跨 ended-producer
     # 的 prepared 提交补尾，不把旧 checkpoint/provider 冒充 live resume。
     'R-0': 16, 'R-1': 16, 'R-2': 29, 'R-3': 34, 'R-4': 18,
-    'R-5': 38, 'R-6': 12, 'R-7': 47, 'R-8': 23, 'R-9': 28,
+    # R-7.31 冻结 Reviewer 单章改写请求、执行身份和零模型恢复。
+    'R-5': 38, 'R-6': 12, 'R-7': 48, 'R-8': 23, 'R-9': 28,
     # 2026-09-04：R-11.25 冻结 Commander approval 决定的内容寻址持久化与零模型重放；
     # R-12.2a 冻结 Claude/Codex 公共严格响应 schema 与动态映射 wire。
     'R-10': 34, 'R-11': 27, 'R-12': 15, 'R-13': 9, 'R-14': 8,

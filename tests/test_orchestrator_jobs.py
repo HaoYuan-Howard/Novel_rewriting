@@ -42,6 +42,8 @@ def _executor_flags(node: str, tokens: frozenset[str]) -> list[str]:
     for flag in ordered:
         if flag == '--chapters':
             out += [flag, '1,3']
+        elif flag == '--reviewer-rewrite':
+            out += [flag, 'stage5/reviewer_rewrite_request.json']
         elif flag == '--review-token':
             out += [flag, 's4rr1_' + 'a' * 64]
         else:

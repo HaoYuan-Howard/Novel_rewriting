@@ -1313,20 +1313,20 @@ _PROFILED_RUN_CASES = (
     pytest.param(
         'stage5.write', [], {
             'concurrency': DEFAULT_CONCURRENCY,
-            'chapters': None, 'revise': False},
+            'chapters': None, 'revise': False, 'reviewer_rewrite': None},
         id='stage5-default'),
     pytest.param(
         'stage5.write', ['--chapters', '5,2,5'],
         {'concurrency': DEFAULT_CONCURRENCY,
-         'chapters': '5,2,5', 'revise': False}, id='stage5-chapters'),
+         'chapters': '5,2,5', 'revise': False, 'reviewer_rewrite': None}, id='stage5-chapters'),
     pytest.param(
         'stage5.write', ['--revise'],
         {'concurrency': DEFAULT_CONCURRENCY,
-         'chapters': None, 'revise': True}, id='stage5-revise'),
+         'chapters': None, 'revise': True, 'reviewer_rewrite': None}, id='stage5-revise'),
     pytest.param(
         'stage5.write', ['--chapters', '5,2,5', '--revise'],
         {'concurrency': DEFAULT_CONCURRENCY,
-         'chapters': '5,2,5', 'revise': True},
+         'chapters': '5,2,5', 'revise': True, 'reviewer_rewrite': None},
         id='stage5-revise-chapters'),
     pytest.param('stage6.hook', [], {}, id='stage6-hook'),
     pytest.param('stage6.semantic', [], {}, id='stage6-semantic'),
@@ -1576,7 +1576,7 @@ def test_profiled_dispatch_renders_report_and_maps_passed_false_to_exit_one(
     assert rc == X.CHECK_FAILED and X.landed(rc)
     assert built == [{
         'concurrency': DEFAULT_CONCURRENCY,
-        'chapters': None, 'revise': False}]
+        'chapters': None, 'revise': False, 'reviewer_rewrite': None}]
     assert rendered == [report]
     out = capsys.readouterr().out
     assert 'SYNTHETIC REPORT' in out

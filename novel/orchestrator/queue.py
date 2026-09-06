@@ -107,6 +107,7 @@ WAITING_ON_STAGE4_REPLAN = WAITING_ON_STAGE4_BINDING_RESOLUTION
 WAITING_ON_WRITING_APPROVAL = 'approval:stage5-writing'
 WAITING_ON_REVIEW = 'stage5:review-currentness'
 WAITING_ON_STAGE5_CLOSURE = 'approval:stage5-closure'
+WAITING_ON_STAGE5_REVIEWER_REWRITE = 'recovery:stage5-reviewer-rewrite'
 WAITING_ON_LEGACY = 'legacy_incompatible'
 WAITING_ON_RESUME_DECISION = 'resume:manual-decision'
 WAITING_ON_RESTART_CONFIRMATION = 'queue:restart-confirmation'
@@ -120,6 +121,7 @@ DETERMINISTIC_RECOVERY_WAITING_ON: frozenset[str] = frozenset({
     WAITING_ON_STAGE2_EDIT_REVALIDATE,
     WAITING_ON_STAGE4_DESIGN_ACTION,
     WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT,
+    WAITING_ON_STAGE5_REVIEWER_REWRITE,
 })
 
 
@@ -275,6 +277,22 @@ def plan_book_from_overview(
     # blocked writer 仍由 ``stuck`` 传递，不伪装成会在本次改变主体。
     stage5_write_will_run = False
     planned_nodes = nodes_up_to(until_stage)
+    reviewer_rewrite_execution = None
+    if 'stage5.write' in planned_nodes:
+        # canonical request 是已完成 Commander 决定的唯一消费入口。它必须在
+        # stage5.write 的普通 SKIP、旧 Review currentness 与写作授权之前读取；
+        # 否则完整章集会把待执行 request 吞成“已经写完”，或旧 Review 会把
+        # 精确恢复反向堵住。不存在 request 才返回 None；坏文件一律上抛。
+        from novel.stages.stage5 import reviewer_rewrite
+
+        novel_dir = paths.find_novel_dir(base, sid)
+        # 尚未摄入的书没有 request；仍让冻结 overview 给出最早缺失节点。
+        # 已有书的坏 request 继续由 producer 上抛，不能当成不存在。
+        if novel_dir is not None:
+            reviewer_rewrite_execution = (
+                reviewer_rewrite.reviewer_rewrite_execution_state(
+                    st.readonly_ctx(
+                        novel_dir, 'stage5.write', approvals.projection_code())))
     planning_stage2_global = 'stage2.global' in planned_nodes
     naming_projection_blocked = (
         planning_stage2_global and st.stage2_global_projection_blocked(ov)
@@ -308,6 +326,8 @@ def plan_book_from_overview(
     for node in planned_nodes:
         spec = NODES[node]
         stage4_design_action_flags: tuple[str, ...] | None = None
+        stage5_reviewer_rewrite_flags: tuple[str, ...] | None = None
+        stage5_reviewer_rewrite_no_action = False
         projection_recovery = (
             node == 'stage2.global'
             and st.stage2_projection_recovery_needed(ov)
@@ -396,6 +416,63 @@ def plan_book_from_overview(
         verdict, why = st.resume_verdict(ov, node)
         deterministic_redo_flags: tuple[str, ...] | None = None
         frozen_v6 = st.stage2_frozen_v6_subject_validated(ov)
+        if (why_blocked is None and node == 'stage5.write'
+                and reviewer_rewrite_execution is not None):
+            execution = reviewer_rewrite_execution
+            if execution.state == 'ready_paid':
+                stage5_reviewer_rewrite_flags = (
+                    '--reviewer-rewrite', execution.request_rel)
+                why_blocked = WAITING_ON_STAGE5_REVIEWER_REWRITE
+            elif execution.state in {
+                    'recoverable_checkpoint', 'recoverable_prepared'}:
+                if execution.source_run_id is None:
+                    raise ArtifactUnreadable(
+                        'Reviewer rewrite 可恢复态缺 source run_id')
+                recovery_flags = (
+                    '--recover-reviewer-rewrite-prepared',
+                    execution.source_run_id,
+                    '--reviewer-rewrite-request-sha256',
+                    execution.request_sha256,
+                )
+                if execution.state == 'recoverable_prepared':
+                    if (execution.recovery_target_run_id is None
+                            or execution.recovery_journal_sha256 is None):
+                        raise ArtifactUnreadable(
+                            'Reviewer rewrite prepared recovery 缺 exact target WAL identity')
+                    recovery_flags += (
+                        '--reviewer-rewrite-recovery-target-run-id',
+                        execution.recovery_target_run_id,
+                        '--reviewer-rewrite-recovery-journal-sha256',
+                        execution.recovery_journal_sha256,
+                    )
+                stage5_reviewer_rewrite_flags = recovery_flags
+                why_blocked = WAITING_ON_STAGE5_REVIEWER_REWRITE
+            elif execution.state == 'expired_unstarted':
+                stage5_reviewer_rewrite_flags = (
+                    '--retire-reviewer-rewrite-request',
+                    execution.request_rel,
+                    '--reviewer-rewrite-request-sha256',
+                    execution.request_sha256,
+                )
+                why_blocked = WAITING_ON_STAGE5_REVIEWER_REWRITE
+            elif execution.state == 'in_flight_or_unknown':
+                # 旧 owner/执行状态尚不能证明可重放；没有任何诚实 argv。
+                # 仍保持在 rewrite 专属 waiter，且显式 steps=[]；不能退回 stale
+                # Review、默认 writer 或新 Reviewer，也不能把空 flags 误作 paid argv。
+                why_blocked = WAITING_ON_STAGE5_REVIEWER_REWRITE
+                stage5_reviewer_rewrite_no_action = True
+            elif execution.state in {'landed_invalid', 'landed_rejected'}:
+                # request 已消费，绝不能再发同一 paid rewrite。现役 inbox 同时
+                # 展示 .INVALID 与 rejected revision，并提供各自人工恢复面。
+                why_blocked = WAITING_ON_INBOX
+            elif execution.state == 'consumed_resolved':
+                # request 已由 immutable terminal/expiry receipt 消费；它不再
+                # 挡住正常 Stage5 currentness，下一格会按 stale Review 发布
+                # 0 成本 stage5.review，而不是再次打开 Writer 或 Reviewer。
+                pass
+            elif execution.state != 'landed_formal':
+                raise ArtifactUnreadable(
+                    f'未知 Reviewer rewrite execution state：{execution.state!r}')
         if (why_blocked is None and node == 'stage4.design'
                 and verdict == st.RESUME_SKIP):
             # A 候选仍 current 不代表 A 相已经结束：若最新 typed 决定要求 repair /
@@ -605,12 +682,16 @@ def plan_book_from_overview(
             if node == 'stage2.global' and reviewed_edit_revalidate
             else list(stage4_design_action_flags)
             if stage4_design_action_flags is not None
+            else list(stage5_reviewer_rewrite_flags)
+            if stage5_reviewer_rewrite_flags is not None
             else list(deterministic_redo_flags)
             if deterministic_redo_flags is not None
             else ['--renormalize']
             if projection_recovery or legacy_blueprint_recovery else []
         )
         steps = None
+        if stage5_reviewer_rewrite_no_action:
+            steps = []
         if (projection_blocked
                 or (blueprint_invalid_recovery
                     and not legacy_blueprint_recovery)
@@ -652,7 +733,10 @@ def plan_book_from_overview(
                 # Stage5 v2 只有一条全书 canonical 闭卷写作命令。授权是独立人工决定；
                 # 队列不从「默认全书」反推出同意花钱。
                 why_blocked = WAITING_ON_WRITING_APPROVAL
-            if has_live_invalid or review_blocks_paid_write or writing_not_current:
+            if (stage5_reviewer_rewrite_flags is None
+                    and (has_live_invalid
+                         or review_blocks_paid_write
+                         or writing_not_current)):
                 steps = []
 
         if why_blocked in (
@@ -676,6 +760,11 @@ def plan_book_from_overview(
                 and node != 'stage4.design'):
             # 只有当前 A 恢复动作本身携带 exact argv；同一 blocker 向下游传播时
             # 仍不得提前冻结 B/写作等命令或把它们计入本轮付费面。
+            steps = []
+        if (why_blocked == WAITING_ON_STAGE5_REVIEWER_REWRITE
+                and node != 'stage5.write'):
+            # 只有当前 writer 携 exact request/recovery argv；同一 blocker
+            # 向下游传播时不得冻结任何后续付费命令。
             steps = []
         if (why_blocked == WAITING_ON_STAGE2_EDIT_COMMIT
                 and node != 'stage2.global'):
@@ -741,9 +830,15 @@ def _blocked_why(
         return (
             'Stage5 顶部闭合卡尚未 closed：Review/章稿漂移、工作包阻断或缺回执都会'
             '停在这里。blocked 且只有 trim 时先人工通读整批正文与超限事实，再走登记的 '
-            '0 成本 retain-pretrim batch；其他 blocker 先走各自恢复面。只有重新构造的 '
+            '由 Commander 选择整批保留、冻结单章改写请求或停止；其他 blocker 先走各自恢复面。只有重新构造的 '
             'closure workpack 已 ready/expired 时才提供 typed closure 回执；'
             f'{verdict_why}')
+    if waiting_on == WAITING_ON_STAGE5_REVIEWER_REWRITE:
+        return (
+            'Stage5 顶部 Commander 已把一章关闭式 rewrite 决定落成 current '
+            'hash-bound request；当前只允许按 execution journal 发布 exact paid '
+            'writer 或 0-wire prepared recovery，不再调用 Commander，也不退回默认'
+            f'写作。执行终态后重新规划并免费重算 Review；{verdict_why}')
     if waiting_on == WAITING_ON_STAGE2_FINAL_REVIEW:
         return (
             'Stage2 Global 复核已 generation-safe，但 current seen/gate.s2 proof 尚未'
@@ -1850,7 +1945,9 @@ __all__ = [
     'WAITING_ON_STAGE4_DESIGN_ACTION',
     'WAITING_ON_STAGE4_STRUCTURE_REVIEW',
     'WAITING_ON_STAGE4_PHASE_APPROVAL', 'WAITING_ON_STAGE4_REPLAN',
-    'WAITING_ON_WRITING_APPROVAL', 'WAITING_ON_REVIEW', 'WAITING_ON_LEGACY',
+    'WAITING_ON_WRITING_APPROVAL', 'WAITING_ON_REVIEW',
+    'WAITING_ON_STAGE5_CLOSURE', 'WAITING_ON_STAGE5_REVIEWER_REWRITE',
+    'WAITING_ON_LEGACY',
     'WAITING_ON_RESUME_DECISION', 'WAITING_ON_RESTART_CONFIRMATION', 'WAITING_ON_REPLAN',
     'DETERMINISTIC_RECOVERY_WAITING_ON',
     'QueueRegistry', 'append_event', 'cancel', 'confirm', 'create', 'fold',

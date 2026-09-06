@@ -1,7 +1,7 @@
 # 工程原则索引
 
 本文只保留可迁移的工程原则和现役落点，不保存施工日志。历史事故、实验读数和产品裁决见
-`docs/DECISIONS.md`；活动事项见 `docs/REQUIREMENTS.md`。编号 1～36 是稳定引用，代码和测试可按
+`docs/DECISIONS.md`；活动事项见 `docs/REQUIREMENTS.md`。编号 1～37 是稳定引用，代码和测试可按
 “LESSONS 第 N 条”指向这里。
 
 ## 按任务读取
@@ -12,8 +12,8 @@
 |---|---|
 | 判据、测试、fixture、覆盖率 | 1～4、7、12、21、23、24 |
 | artifact、schema、路径、provenance | 4、5、8～12、22、23、28～30 |
-| LLM、语义评审、实验、成本 | 1、2、16～18、25、33、35、36 |
-| 编排、队列、恢复、AgentRun | 4、18、19、24、26～34、36 |
+| LLM、语义评审、实验、成本 | 1、2、16～18、25、33、35～37 |
+| 编排、队列、恢复、AgentRun | 4、18、19、24、26～34、36、37 |
 | API、前端、审校界面 | 4、6、13～15、19 |
 | 纯跑书与流水线代批 | 不读本文；遵循 `.workflow/skills/novel-pipeline-operator/SKILL.md` |
 
@@ -292,3 +292,31 @@ record 并停止，不能把它删掉后再买一席。
 typed/canonical 拒因可以压过旧 action，但必须由 seat ordinal 和同样强的 session/cost/response 证据证明，
 不能靠秒级时间戳或文件名猜“最新”。若决定只写旁路处置而不改正文，上游 Review 仍可保持 fresh；只重建
 消费该处置面的下游 workpack，避免把零成本处置误写成一次新的审阅或生成。
+
+## 37. 会让授权主体失效的付费动作，必须先把意图正式化
+
+一次人审回答若会触发付费写入，而写入第一份 canonical 产物后又会让原 Review/workpack 自然 stale，
+不能把临时 response、service input 或 `ReviewerActionRecord` 直接当长期执行权。它们只证明“这一席答过”，
+不提供 queue-visible 的 pending/consumed 状态；宿主若在首个模型响应、checkpoint、prepared commit 或
+canonical 写回任一窗口死亡，planner 会离开原 blocker，剩余动作既可能丢失，也可能重新付费。
+
+完整路由要先用 0 成本 producer 把人审意图落成 current、内容寻址的正式 request；typed readback 后还要
+把临时 action record 原始字节和 seat/session/cost 三账摘要封成 immutable authority receipt，receipt 成为
+commit point 后才退休 active record。否则“request 已在、唯一授权刚删”仍是一个无法恢复的硬杀窗口。
+frontier 的正文 SHA 与 canonical JSON 完整文件 SHA 也是两个不同域：前者证明 trim/audit 指向哪段正文，
+后者承担目标文件 CAS；同一字段复用两种语义会让正路永远拒绝，或让历史恢复对错文件。
+
+queue 再让该 request 的 pending/unknown/recoverable/terminal 状态优先于已经 stale 的
+上游审阅和普通新席。真正付费的 producer 必须在独立 fresh epoch 取得一次性 permit，并在首个 driver/
+probe/wire 前写 request execution journal；同一 provider session 的后续业务 turn 也必须先追加 retry intent，
+不能让旧 checkpoint 在“下一轮已 wire、但新 checkpoint 未落”的窗口里冒充最新可恢复稿。request 专属
+跨进程 lease 要覆盖 paid preclaim 至 terminal，也要覆盖 FREE recovery/retirement，direct CLI 不能成为并发
+旁路。有 wire而无可验**最新** checkpoint 就是 unknown，不能重发；全根确证零执行的 stopped owner 才可
+写 reclaim 证据后重开。
+
+checkpoint/prepared 只能按 exact request 做零 wire恢复，formal/INVALID/rejected 都要留下 terminal consumption。
+但 terminal 文件后来进入 history 不能自行表示“问题解决”：recheck/revalidate/apply-edit 需先写
+request-specific successor WAL、保存 terminal 原字节，既有 0-wire 动作落稳后再提交 exact successor receipt。
+这也覆盖“产物已换、receipt 未写”的硬杀窗，并防止手工移动文件冒充合法后继。
+这把“人决定什么”与“模型是否已执行到哪里”拆成两份可恢复事实，也阻止手写 JSON、旧 stop 或孤儿 CLI
+借相同外形取得付费权限。

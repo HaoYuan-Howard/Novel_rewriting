@@ -68,6 +68,9 @@ _CONSUMED: dict[str, str] = {
 #: ⚠ 这张表**必须逐个列名**，不许写成「所有标量一律不发」那种规则：
 #: 那样新加一个标量会被**静默**挡住，而静默正是本模块要防的方向。
 _WITHHELD: dict[str, str] = {
+    'STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES': (
+        '只随 Commander immutable submission option 与 Stage5 writer 固定 prompt 下发；'
+        '当前浏览器没有该 delegated rewrite 表单，单独发布会制造未接线的第二消费面'),
     'STAGE2_LEGACY_REVALIDATE_ACTOR': (
         'legacy reviewed INVALID 自动提升的后端审计凭据；只由状态机生成并由'
         '确定性 Executor 原样重放，前端不得选择或改写 actor'),
@@ -417,6 +420,14 @@ def actions() -> list[dict[str, Any]]:
         '--current-chapter-sha256', '--preview-subject-sha256',
         '--edit-confirmation',
         '--source-journal-sha256', '--source-commit-sha256',
+        '--reviewer-rewrite-request-sha256',
+        '--reviewer-rewrite-recovery-target-run-id',
+        '--reviewer-rewrite-recovery-journal-sha256',
+        # Supervisor 的内部 hash-bound action 不能由普通作业表单发起；
+        # HTTP job 入口也明确拒绝，不能把它们发布成不可执行的按钮。
+        '--request-reviewer-rewrite', '--reviewer-rewrite',
+        '--recover-reviewer-rewrite-prepared',
+        '--retire-reviewer-rewrite-request',
     }
 
     def required_inputs(node: str, flags: Sequence[str]) -> list[dict[str, str]]:

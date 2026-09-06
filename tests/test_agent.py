@@ -20,6 +20,7 @@ import os
 import re
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,14 +31,20 @@ import pytest
 from contracts.artifacts import (
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW_DECISIONS,
+    STAGE5_REVIEWER_REWRITE_REQUEST,
 )
 from contracts.invariants import AGENT_EXECUTOR_NODES
 from contracts.schema import decode_artifact, encode_artifact
 from contracts.schema.api import (
     BatchTrimResolutionRequest, ExecutionPermit, Stage5ClosureView,
+    Stage5ReviewerRewriteRequest,
 )
 from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema.stage2 import GlobalEdit
+from contracts.schema.stage5 import (
+    ReviewerRewriteRequest, ReviewerRewriteTrustedInput,
+    reviewer_rewrite_request_sha256,
+)
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentProfile, AgentRunEvent, AgentRunStart,
     ExecutionEpoch, LegacyExecutorBackend, LegacyLlmProfile,
@@ -596,6 +603,65 @@ def test_stage5_reviewer_batch_uses_typed_service_transport_and_cleans_it(
     assert not failed_path.exists(), 'runner 异常也必须清掉一次性 batch manifest'
 
 
+def test_stage5_reviewer_rewrite_transport_injects_only_durable_authority(
+        base, book):
+    """HTTP/Commander payload 不自报席位；Agent 从内容寻址 record 注入受信四账。"""
+    request = Stage5ReviewerRewriteRequest.model_validate({
+        'actor': 'agent:novel-pipeline-operator',
+        'reason': '第2章可按关闭式重复压缩重写',
+        'review_sha256': 'a' * 64,
+        'unresolved_trim_items': [{
+            'output_ordinal': 2,
+            'audit_sha256': 'b' * 64,
+            'chapter_sha256': 'c' * 64,
+        }],
+        'target_ordinal': 2,
+        'target_chapter_file_sha256': 'd' * 64,
+        'directives': [{
+            'code': 'remove_repetition',
+            'current_text_evidence': '重复的当前正文',
+        }],
+    })
+    action = agent.reviewer_tasks.ReviewerNodeAction(
+        kind='node', node='stage5.review',
+        flags=('--request-reviewer-rewrite', '@reviewer-input'),
+        input_payload=request.model_dump(mode='json'))
+    record = ReviewerActionRecord(
+        sid='42', run_id='review-parent', epoch_id='review-epoch',
+        waiting_on=agent.queue.WAITING_ON_STAGE5_CLOSURE,
+        surface_seal='d' * 64, business_sha256='e' * 64,
+        node=action.node, flags=action.flags,
+        input_payload=action.input_payload,
+        stage5_review_sha256=request.review_sha256,
+        stage5_reviewer_contract_sha256='f' * 64,
+        reviewer_session_run_id='review-session',
+        reviewer_seat_turn_id='review-turn',
+        provider_response_sha256='1' * 64, recorded_at=1)
+    record_path = agent.uploads.save_reviewer_action(base, '42', record)
+
+    with agent._reviewer_node_flags(
+            base, '42', action,
+            reviewer_action_record_path=record_path) as flags:
+        trusted_path = Path(flags[1])
+        assert flags[0] == '--request-reviewer-rewrite'
+        trusted = ReviewerRewriteTrustedInput.model_validate_json(
+            trusted_path.read_bytes())
+        assert Stage5ReviewerRewriteRequest.model_validate(
+            trusted.model_dump(mode='json', exclude={
+                'reviewer_action_record_sha256', 'business_sha256',
+                'reviewer_contract_sha256', 'reviewer_session_run_id',
+                'reviewer_seat_turn_id', 'provider_response_sha256',
+            })) == request
+        assert trusted.reviewer_action_record_sha256 == hashlib.sha256(
+            record_path.read_bytes()).hexdigest()
+        assert trusted.business_sha256 == record.business_sha256
+        assert trusted.reviewer_session_run_id == record.reviewer_session_run_id
+        assert trusted.reviewer_seat_turn_id == record.reviewer_seat_turn_id
+        assert trusted.provider_response_sha256 == record.provider_response_sha256
+    assert not trusted_path.exists()
+    assert record_path.is_file(), '一次性 transport 清理不得删除唯一 active authority'
+
+
 def test_stage5_batch_manifest_save_failure_leaves_no_payload_tmp(
         base, book, monkeypatch):
     request = BatchTrimResolutionRequest.model_validate({
@@ -1037,7 +1103,7 @@ def _install_stage2_prereview_replay_harness(
     executions = []
     remaining_codes = list(action_exit_codes)
 
-    def execute(_base, _sid, action, _run_token):
+    def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
         formal = decode_artifact(
             STAGE2_GLOBAL_REVIEW_DECISIONS, action.input_payload).payload
         executions.append(formal['blocking_scope']['state'])
@@ -1809,7 +1875,7 @@ def test_non_stage2_invalid_reviewer_request_and_exit2_resume_same_commander_ses
     monkeypatch.setattr(agent.reviewer_tasks, 'load_action', load_action)
     executed = 0
 
-    def execute(_base, _sid, action, _run_token):
+    def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
         nonlocal executed
         assert action is actions[executed]
         executed += 1
@@ -2056,7 +2122,7 @@ def _stage4_review_harness(monkeypatch, seals):
             flags=('--review-token', 's4dr_' + 'a' * 64)))
     monkeypatch.setattr(
         agent, '_execute_reviewer_node_action',
-        lambda _base, _sid, _action, _run_token: agent.SupervisorActionResult(
+        lambda _base, _sid, _action, _run_token, reviewer_action_record_path=None: agent.SupervisorActionResult(
             exit_code=0, outcome=outcome, continue_ready=True))
     return task_box
 
@@ -2412,7 +2478,7 @@ def test_stage2_exit2_corrects_before_invalid_surface_can_replace_reviewer(
     monkeypatch.setattr(agent.reviewer_tasks, 'load_action', load_action)
     executed = 0
 
-    def execute(_base, _sid, action, _run_token):
+    def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
         nonlocal executed
         assert action is actions[executed]
         executed += 1
@@ -2624,7 +2690,7 @@ def test_durable_stage2_correction_uses_only_the_remaining_commander_turn(
         lambda _path, _current, *, submission_options: action)
     executed = 0
 
-    def execute(_base, _sid, got, _run_token):
+    def execute(_base, _sid, got, _run_token, *, reviewer_action_record_path=None):
         nonlocal executed
         assert got is action
         executed += 1
@@ -5079,7 +5145,7 @@ def test_stage0_surface_change_before_permit_replays_durable_action_without_wire
     monkeypatch.setattr(agent, '_default_spawn', default_spawn)
     executions = []
 
-    def execute(_base, _sid, got, _run_token):
+    def execute(_base, _sid, got, _run_token, *, reviewer_action_record_path=None):
         assert got is action
         executions.append(live['current'].surface_seal)
         if len(executions) == 1:
@@ -5452,7 +5518,7 @@ def test_stage2_producer_preflight_rejects_before_executor_then_corrects(
     monkeypatch.setattr(agent, '_preflight_stage2_reviewer_action', preflight)
     executions: list[str] = []
 
-    def execute(_base, _sid, action, _run_token):
+    def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
         decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
         executions.append(
             decoded.payload['characters'][0]['name_distinctiveness'])
@@ -5841,7 +5907,7 @@ def test_restart_replay_current_loader_rejects_old_action_then_corrects(
     monkeypatch.setattr(agent, '_default_spawn', default_spawn)
     executions: list[dict[str, object]] = []
 
-    def execute(_base, _sid, action, _run_token):
+    def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
         decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
         executions.append(decoded.payload)
         return agent.SupervisorActionResult(
@@ -5919,7 +5985,7 @@ def test_stage2_typed_action_survives_pause_stop_and_new_parent_replay(
     monkeypatch.setattr(agent, '_default_spawn', default_spawn)
     executions: list[str] = []
 
-    def execute(_base, _sid, action, _run_token):
+    def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
         decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
         executions.append(decoded.payload['characters'][0]['name_distinctiveness'])
         return agent.SupervisorActionResult(
@@ -6052,7 +6118,7 @@ def test_stage2_live_initial_action_exit70_is_retained_for_replay(
     monkeypatch.setattr(agent, '_default_spawn', default_spawn)
     executions: list[str] = []
 
-    def execute(_base, _sid, action, _run_token):
+    def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
         decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
         executions.append(decoded.payload['characters'][0]['name_distinctiveness'])
         if len(executions) == 1:
@@ -6138,7 +6204,7 @@ def test_stage2_action_record_repairs_started_turn_after_finish_crash(
     monkeypatch.setattr(agent, '_default_spawn', default_spawn)
     executions: list[str] = []
 
-    def execute(_base, _sid, action, _run_token):
+    def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
         decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
         executions.append(decoded.payload['characters'][0]['name_distinctiveness'])
         return agent.SupervisorActionResult(
@@ -6234,7 +6300,7 @@ def test_stage2_feedback_correction_records_effective_progress_before_finish(
     executions: list[str] = []
     monkeypatch.setattr(
         agent, '_execute_reviewer_node_action',
-        lambda _base, _sid, action, _run_token: (
+        lambda _base, _sid, action, _run_token, reviewer_action_record_path=None: (
             executions.append(decode_artifact(
                 STAGE2_GLOBAL_EDIT,
                 action.input_payload).payload['characters'][0][
@@ -7012,7 +7078,7 @@ def test_stage2_wal_only_exit2_replans_to_exact_executor_without_second_commande
     monkeypatch.setattr(
         agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
 
-    def execute(base_, sid_, action_, _run_token):
+    def execute(base_, sid_, action_, _run_token, *, reviewer_action_record_path=None):
         decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action_.input_payload)
         supplied = agent.uploads.save_global_edit(
             base_, sid_, GlobalEdit.model_validate(decoded.payload))
@@ -7200,8 +7266,11 @@ def test_reviewer_turn_write_surface_is_the_epoch_scratch_session(
 def _stage5_partial_view(
         chapter_sha256: dict[int, str], audit_sha256: dict[int, str],
         unresolved: tuple[int, ...], *, workpack_sha256: str,
-        review_sha256: str = 'f' * 64) -> Stage5ClosureView:
+        review_sha256: str = 'f' * 64,
+        chapter_file_sha256: dict[int, str] | None = None,
+        ) -> Stage5ClosureView:
     """铸 queue/reviewer 共用的最小 current closure 投影。"""
+    file_sha256 = chapter_file_sha256 or chapter_sha256
     return Stage5ClosureView.model_validate({
         'state': 'blocked',
         'next_step': '先完成 current trim batch',
@@ -7213,7 +7282,7 @@ def _stage5_partial_view(
             'missing_chapters': [],
             'chapter_subjects': [{
                 'output_ordinal': ordinal,
-                'chapter_sha256': chapter_sha256[ordinal],
+                'chapter_sha256': file_sha256[ordinal],
             } for ordinal in (1, 2)],
             'invalid_chapters': [],
             'hard_findings': [],
@@ -7267,6 +7336,7 @@ def _seed_stage5_partial_batch(base: str):
         ledger=CostLedger(), observer=lambda _event: None)
     store = ArtifactStore(ctx)
     chapter_sha256: dict[int, str] = {}
+    chapter_file_sha256: dict[int, str] = {}
     audit_sha256: dict[int, str] = {}
     for ordinal in (1, 2):
         text = f'第{ordinal}章超限正文。' * 24
@@ -7297,6 +7367,8 @@ def _seed_stage5_partial_batch(base: str):
         store.path(rel).write_bytes((json.dumps(
             encode_artifact(rel, payload), ensure_ascii=False, indent=2,
         ) + '\n').encode('utf-8'))
+        chapter_file_sha256[ordinal] = hashlib.sha256(
+            store.path(rel).read_bytes()).hexdigest()
         chapter_sha256[ordinal] = hashlib.sha256(
             chapter.text.encode('utf-8')).hexdigest()
         audit_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
@@ -7324,10 +7396,12 @@ def _seed_stage5_partial_batch(base: str):
 
     original_view = _stage5_partial_view(
         chapter_sha256, audit_sha256, (1, 2),
-        workpack_sha256='1' * 64)
+        workpack_sha256='1' * 64,
+        chapter_file_sha256=chapter_file_sha256)
     suffix_view = _stage5_partial_view(
         chapter_sha256, audit_sha256, (2,),
-        workpack_sha256='2' * 64)
+        workpack_sha256='2' * 64,
+        chapter_file_sha256=chapter_file_sha256)
     original_pack = {'stage5_trim': {
         'closure': original_view.model_dump(mode='json'), 'chapters': []}}
     original_current = SimpleNamespace(
@@ -7660,8 +7734,9 @@ def _find_seeded_stage5_partial(
         current_parent_run_id=current_parent_run_id)
 
 
-def _install_stage5_live_batch_harness(base: str, monkeypatch):
-    """一轮真 Stage5 typed loader + durable callback，canonical 用假执行口。"""
+def _install_stage5_live_batch_harness(
+        base: str, monkeypatch, *, reviewer_rewrite: bool = False):
+    """一轮真 Stage5 typed loader + durable callback；可选 rewrite authority 纵切。"""
     current = SimpleNamespace(
         state='blocked', code_version='test-code-version',
         surface_seal='6' * 64, execution_token=None,
@@ -7671,10 +7746,21 @@ def _install_stage5_live_batch_harness(base: str, monkeypatch):
     view = _stage5_partial_view(
         {1: 'a' * 64, 2: 'b' * 64},
         {1: 'c' * 64, 2: 'd' * 64},
-        (1, 2), workpack_sha256='5' * 64)
+        (1, 2), workpack_sha256='5' * 64,
+        chapter_file_sha256={1: 'e' * 64, 2: 'f' * 64})
     pack = {'stage5_trim': {
         'closure': view.model_dump(mode='json'),
-        'chapters': [],
+        'chapters': [{
+            **row.model_dump(mode='json'),
+            'chapter': {
+                'segments': [{
+                    'slot': 's01',
+                    'text': f'第{row.output_ordinal}章重复的当前正文',
+                }],
+                'rendered_text': f'第{row.output_ordinal}章重复的当前正文',
+            },
+            'verification_context': '当前正文超过预算上限',
+        } for row in view.workpack.unresolved_trim_items],
     }}
     options = tuple(agent.reviewer_tasks._submission_options(
         pack, current, agent.queue.WAITING_ON_STAGE5_CLOSURE))
@@ -7685,12 +7771,23 @@ def _install_stage5_live_batch_harness(base: str, monkeypatch):
         agent.reviewer_tasks.reviewer_contract.for_blocker(
             agent.queue.WAITING_ON_STAGE5_CLOSURE).encode('utf-8')
     ).hexdigest()
-    response = copy.deepcopy(options[0]['exact_request'])
+    response_option = (
+        next(row for row in options if row['id'].endswith(
+             'request-reviewer-rewrite.ch1'))
+        if reviewer_rewrite else options[0])
+    response = copy.deepcopy(response_option['exact_request'])
     payload = response['action']['input_payload']
-    payload['reason'] = '已逐章通读并确认整批保留'
-    for row in payload['items']:
-        row['reason'] = (
-            f'第{row["output_ordinal"]}章超限段承载不可删的因果证据')
+    if reviewer_rewrite:
+        payload['reason'] = '第1章可按关闭式指令移除重复且保留全部冻结事实'
+        payload['directives'] = [{
+            'code': 'remove_repetition',
+            'current_text_evidence': '第1章重复的当前正文',
+        }]
+    else:
+        payload['reason'] = '已逐章通读并确认整批保留'
+        for row in payload['items']:
+            row['reason'] = (
+                f'第{row["output_ordinal"]}章超限段承载不可删的因果证据')
     monkeypatch.setattr(
         agent.operator, 'next_action_at_code',
         lambda _base, _sid, *, code: current)
@@ -7740,8 +7837,39 @@ def _install_stage5_live_batch_harness(base: str, monkeypatch):
     monkeypatch.setattr(agent, '_default_spawn', default_spawn)
     executions = []
 
-    def execute(_base, _sid, action, _run_token):
+    def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
         executions.append(action)
+        if reviewer_rewrite:
+            [record_path] = _reviewer_action_files(base)
+            record_raw = record_path.read_bytes()
+            record = ReviewerActionRecord.model_validate_json(record_raw)
+            request_payload = dict(action.input_payload or {})
+            request_payload.update({
+                'version': 1,
+                'kind': 'stage5-reviewer-rewrite-request-v1',
+                'review_rel': view.workpack.review_rel,
+                'reviewer_action_record_sha256': hashlib.sha256(
+                    record_raw).hexdigest(),
+                'business_sha256': record.business_sha256,
+                'reviewer_contract_sha256': (
+                    record.stage5_reviewer_contract_sha256),
+                'reviewer_session_run_id': record.reviewer_session_run_id,
+                'reviewer_seat_turn_id': record.reviewer_seat_turn_id,
+                'provider_response_sha256': record.provider_response_sha256,
+                'request_sha256': '0' * 64,
+            })
+            request_payload['request_sha256'] = (
+                reviewer_rewrite_request_sha256(request_payload))
+            request = ReviewerRewriteRequest.model_validate(request_payload)
+            request_path = (
+                Path(base) / 'FQ_测试书_42'
+                / STAGE5_REVIEWER_REWRITE_REQUEST)
+            request_path.parent.mkdir(parents=True, exist_ok=True)
+            request_path.write_text(json.dumps(
+                encode_artifact(
+                    STAGE5_REVIEWER_REWRITE_REQUEST,
+                    request.model_dump(mode='json')),
+                ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
         return agent.SupervisorActionResult(
             exit_code=0, outcome=stopped, continue_ready=False)
 
@@ -7749,6 +7877,7 @@ def _install_stage5_live_batch_harness(base: str, monkeypatch):
     return SimpleNamespace(
         current=current, view=view, options=options, response=response,
         task_box=task_box, invocations=invocations, executions=executions,
+        reviewer_rewrite=reviewer_rewrite,
     )
 
 
@@ -7890,6 +8019,487 @@ def test_stage5_durable_record_repairs_hard_kill_before_seat_finish(
     assert restored_session.delivery_state == 'unknown'
     assert '[reviewer-replay]' in agent.run_log_path(
         base, second.run_id).read_text('utf-8')
+
+
+@contextmanager
+def _assert_stage5_cross_parent_seal_guard(monkeypatch, evidence_module):
+    """断言首次/半组 seal 的 old-owner-stopped lease 覆盖完整提交链。"""
+    real_guard = evidence_module.record_owner_guard
+    real_binding = evidence_module._require_record_binding
+    real_validate = evidence_module.validate_stage5_action_record_ledger
+    real_evidence = evidence_module._closed_evidence_hashes
+    real_write_once = evidence_module._atomic_write_once
+    real_active = evidence_module._active_authority
+    real_discard = evidence_module.uploads.discard_edit_plan
+    state = {'enabled': False, 'depth': 0}
+    events: list[str] = []
+
+    @contextmanager
+    def tracked_guard(*args, **kwargs):
+        if state['enabled']:
+            assert state['depth'] == 0
+        with real_guard(*args, **kwargs) as same_parent:
+            if state['enabled']:
+                assert same_parent is False
+                state['depth'] = 1
+                events.append('guard:enter')
+            try:
+                yield same_parent
+            finally:
+                if state['enabled']:
+                    events.append('guard:exit')
+                    state['depth'] = 0
+
+    def checked_binding(*args, **kwargs):
+        if state['enabled'] and kwargs.get('require_current_contract'):
+            assert state['depth'] == 1
+            events.append('binding:current')
+        return real_binding(*args, **kwargs)
+
+    def checked_validate(*args, **kwargs):
+        if state['enabled']:
+            assert state['depth'] == 1
+            if not kwargs.get('read_only', False):
+                assert kwargs.get('_owner_guard_same_parent') is False
+                events.append('ledger:current')
+        return real_validate(*args, **kwargs)
+
+    def checked_evidence(*args, **kwargs):
+        if state['enabled']:
+            assert state['depth'] == 1
+            events.append('evidence')
+        return real_evidence(*args, **kwargs)
+
+    def checked_write_once(base_arg, sid_arg, path, raw, *, label):
+        if state['enabled']:
+            assert state['depth'] == 1
+            events.append(f'write:{label}')
+        return real_write_once(
+            base_arg, sid_arg, path, raw, label=label)
+
+    def checked_active(*args, **kwargs):
+        result = real_active(*args, **kwargs)
+        if state['enabled']:
+            events.append(f"active:depth-{state['depth']}")
+        return result
+
+    def checked_discard(*args, **kwargs):
+        if state['enabled']:
+            assert state['depth'] == 1
+            events.append('active:discard')
+        return real_discard(*args, **kwargs)
+
+    monkeypatch.setattr(evidence_module, 'record_owner_guard', tracked_guard)
+    monkeypatch.setattr(evidence_module, '_require_record_binding', checked_binding)
+    monkeypatch.setattr(
+        evidence_module, 'validate_stage5_action_record_ledger',
+        checked_validate)
+    monkeypatch.setattr(evidence_module, '_closed_evidence_hashes', checked_evidence)
+    monkeypatch.setattr(evidence_module, '_atomic_write_once', checked_write_once)
+    monkeypatch.setattr(evidence_module, '_active_authority', checked_active)
+    monkeypatch.setattr(
+        evidence_module.uploads, 'discard_edit_plan', checked_discard)
+
+    state['enabled'] = True
+    try:
+        yield events
+    finally:
+        state['enabled'] = False
+    assert state['depth'] == 0
+    assert events.count('guard:enter') == 1
+    assert events.count('guard:exit') == 1
+    assert events.count('active:depth-0') == 1
+    assert events.count('active:depth-1') >= 3
+    for required in (
+        'binding:current', 'ledger:current', 'evidence',
+        'write:reviewer rewrite authority archive',
+        'write:reviewer rewrite authority receipt', 'active:discard',
+    ):
+        assert required in events
+    assert events.index('guard:enter') < events.index('binding:current')
+    assert events.index('binding:current') < events.index('ledger:current')
+    assert events.index('ledger:current') < events.index('evidence')
+    assert events.index('evidence') < events.index(
+        'write:reviewer rewrite authority receipt')
+    assert events.index('active:discard') < events.index('guard:exit')
+
+
+@pytest.mark.parametrize(
+    'linked_part', ('service', 'runs', 'sid', 'authority'))
+def test_stage5_reviewer_rewrite_authority_rejects_ancestor_symlinks(
+        tmp_path, linked_part):
+    """永久 authority 的目录链任一级都不能把普通 leaf 引到 service 外。"""
+    from novel.orchestrator import reviewer_action_evidence
+
+    run_base = tmp_path / f'base-{linked_part}'
+    external = tmp_path / f'external-{linked_part}'
+    run_base.mkdir()
+    external.mkdir()
+    service = run_base / '_service'
+    runs = service / 'runs'
+    sid_root = runs / '42'
+    authority = sid_root / 'reviewer_action_authorities'
+    linked = {
+        'service': service,
+        'runs': runs,
+        'sid': sid_root,
+        'authority': authority,
+    }[linked_part]
+    linked.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        linked.symlink_to(external, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        pytest.skip('当前 Windows 账户不能创建目录 symlink')
+
+    target = authority / f"reviewer-action-{'a' * 64}.json"
+    with pytest.raises(
+            agent.reviewer_tasks.ReviewerTaskError,
+            match='路径目录不得是符号链接'):
+        reviewer_action_evidence._atomic_write_once(
+            run_base, '42', target, b'outside\n',
+            label='reviewer rewrite authority archive')
+    assert list(external.iterdir()) == []
+
+
+def test_stage5_reviewer_rewrite_normal_agent_path_seals_permanent_authority(
+        base, corpus, monkeypatch):
+    """FREE request 成功后先闭 session/seat 再 seal；active 不再参与 replay。"""
+    from novel.orchestrator import reviewer_action_evidence
+    from novel.orchestrator import state as state_module
+    from novel.stages.stage5 import reviewer_rewrite
+
+    harness = _install_stage5_live_batch_harness(
+        base, monkeypatch, reviewer_rewrite=True)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 20)
+
+    assert len(harness.invocations) == 1
+    assert len(harness.executions) == 1
+    assert _reviewer_action_files(base) == []
+    novel_dir = Path(base) / 'FQ_测试书_42'
+    ctx = state_module.readonly_ctx(
+        novel_dir, 'stage5.write', 'test-code-version')
+    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_request(
+        ctx)
+    authority_dir = (
+        Path(base) / '_service' / 'runs' / '42'
+        / 'reviewer_action_authorities')
+    archive = authority_dir / (
+        f'reviewer-action-{request.reviewer_action_record_sha256}.json')
+    receipt = authority_dir / (
+        f'reviewer-action-{request.reviewer_action_record_sha256}.receipt.json')
+    assert archive.is_file() and receipt.is_file()
+    record = reviewer_action_evidence.require_sealed_reviewer_rewrite_authority(
+        base, '42', request, request_file_sha256)
+    assert record.run_id == rec.run_id
+    [seat] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
+    assert [row['outcome'] for row in seat['turns']] == ['ok']
+    [session] = agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+    assert session.process_state == 'ok'
+    assert session.end is not None
+
+    # contract 换代只让 current 执行失效；历史 terminal/expiry 仍能识别原权威，
+    # 不能因无法复述旧 contract 原文而把 request 永久卡成 unknown。
+    monkeypatch.setattr(
+        reviewer_action_evidence.reviewer_contract, 'for_blocker',
+        lambda _waiting_on: 'new-reviewer-contract')
+    assert reviewer_action_evidence.require_sealed_reviewer_rewrite_authority(
+        base, '42', request, request_file_sha256) == record
+    with pytest.raises(
+            agent.reviewer_tasks.ReviewerTaskError,
+            match='contract 已非 current'):
+        reviewer_action_evidence.require_current_sealed_reviewer_rewrite_authority(
+            base, '42', request, request_file_sha256)
+
+    # planner 前的 reconcile 会无条件重入 seal。完整 seal 必须按历史契约
+    # 幂等返回，且不得借重入改写 receipt；随后九态 probe 才能诚实投影 expiry。
+    receipt_path = authority_dir / (
+        f'reviewer-action-{request.reviewer_action_record_sha256}.receipt.json')
+    receipt_raw = receipt_path.read_bytes()
+    monkeypatch.setattr(
+        reviewer_action_evidence, '_atomic_write_once',
+        lambda *_args, **_kwargs: pytest.fail('完整 seal 重入不得写任何永久字节'))
+    reviewer_action_evidence.seal_reviewer_rewrite_authority(
+        base, '42', request, request_file_sha256,
+        current_parent_run_id='replacement-parent')
+    assert receipt_path.read_bytes() == receipt_raw
+    assert reviewer_rewrite.reviewer_rewrite_execution_state(ctx).state == \
+        'expired_unstarted'
+
+
+def test_stage5_reviewer_rewrite_receipt_active_tail_reconciles_zero_commander(
+        base, corpus, monkeypatch):
+    """receipt 已提交但 active 删除失败：新 parent 幂等 seal，不再买 Reviewer。"""
+    from novel.orchestrator import reviewer_action_evidence
+    from novel.orchestrator import state as state_module
+    from novel.stages.stage5 import reviewer_rewrite
+
+    harness = _install_stage5_live_batch_harness(
+        base, monkeypatch, reviewer_rewrite=True)
+    real_discard = reviewer_action_evidence.uploads.discard_edit_plan
+    fail_active_delete = {'value': True}
+
+    def fail_once_for_action(run_base, path):
+        path = Path(path)
+        if (fail_active_delete['value']
+                and path.name.startswith('reviewer-action-')):
+            fail_active_delete['value'] = False
+            raise ArtifactUnreadable('synthetic receipt→active delete hard kill')
+        return real_discard(run_base, path)
+
+    monkeypatch.setattr(
+        reviewer_action_evidence.uploads, 'discard_edit_plan',
+        fail_once_for_action)
+    first = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(first.run_id, 20)
+
+    [active] = _reviewer_action_files(base)
+    assert len(harness.invocations) == 1
+    novel_dir = Path(base) / 'FQ_测试书_42'
+    ctx = state_module.readonly_ctx(
+        novel_dir, 'stage5.write', 'test-code-version')
+    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_request(
+        ctx)
+    authority_dir = (
+        Path(base) / '_service' / 'runs' / '42'
+        / 'reviewer_action_authorities')
+    assert (authority_dir / (
+        f'reviewer-action-{request.reviewer_action_record_sha256}.json')).is_file()
+    assert (authority_dir / (
+        f'reviewer-action-{request.reviewer_action_record_sha256}.receipt.json')).is_file()
+
+    # receipt 已提交后 contract 换代不能阻断 exact active 尾的免费退休。
+    monkeypatch.setattr(
+        reviewer_action_evidence.reviewer_contract, 'for_blocker',
+        lambda _waiting_on: 'new-reviewer-contract')
+    reviewer_action_evidence.seal_reviewer_rewrite_authority(
+        base, '42', request, request_file_sha256,
+        current_parent_run_id='replacement-parent')
+
+    assert not active.exists()
+    assert len(harness.invocations) == 1
+    assert reviewer_action_evidence.require_sealed_reviewer_rewrite_authority(
+        base, '42', request, request_file_sha256).run_id == first.run_id
+
+
+def test_stage5_reviewer_rewrite_request_landed_active_reconciles_to_seal(
+        base, corpus, monkeypatch):
+    """request 已落、seal 尚未开始：active 足以零 Commander 补成永久权威。"""
+    from novel.orchestrator import reviewer_action_evidence
+    from novel.orchestrator import state as state_module
+    from novel.stages.stage5 import reviewer_rewrite
+
+    harness = _install_stage5_live_batch_harness(
+        base, monkeypatch, reviewer_rewrite=True)
+    real_seal = reviewer_action_evidence.seal_reviewer_rewrite_authority
+    fail_once = {'value': True}
+
+    def crash_before_seal(*args, **kwargs):
+        if fail_once['value']:
+            fail_once['value'] = False
+            raise ArtifactUnreadable('synthetic request→seal hard kill')
+        return real_seal(*args, **kwargs)
+
+    monkeypatch.setattr(
+        reviewer_action_evidence, 'seal_reviewer_rewrite_authority',
+        crash_before_seal)
+    first = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(first.run_id, 20)
+
+    [active] = _reviewer_action_files(base)
+    assert len(harness.invocations) == 1
+    novel_dir = Path(base) / 'FQ_测试书_42'
+    ctx = state_module.readonly_ctx(
+        novel_dir, 'stage5.write', 'test-code-version')
+    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_request(
+        ctx)
+    authority_dir = (
+        Path(base) / '_service' / 'runs' / '42'
+        / 'reviewer_action_authorities')
+    assert not authority_dir.exists()
+
+    original_contract = reviewer_action_evidence.reviewer_contract.for_blocker(
+        agent.queue.WAITING_ON_STAGE5_CLOSURE)
+    monkeypatch.setattr(
+        reviewer_action_evidence.reviewer_contract, 'for_blocker',
+        lambda _waiting_on: 'new-reviewer-contract')
+    with pytest.raises(
+            agent.reviewer_tasks.ReviewerTaskError,
+            match='contract 已非 current'):
+        real_seal(
+            base, '42', request, request_file_sha256,
+            current_parent_run_id='replacement-parent')
+    assert active.is_file() and not authority_dir.exists()
+
+    monkeypatch.setattr(
+        reviewer_action_evidence.reviewer_contract, 'for_blocker',
+        lambda _waiting_on: original_contract)
+    with _assert_stage5_cross_parent_seal_guard(
+            monkeypatch, reviewer_action_evidence):
+        real_seal(
+            base, '42', request, request_file_sha256,
+            current_parent_run_id='replacement-parent')
+
+    assert not active.exists()
+    assert len(harness.invocations) == 1
+    assert reviewer_action_evidence.require_sealed_reviewer_rewrite_authority(
+        base, '42', request, request_file_sha256).run_id == first.run_id
+
+
+def test_stage5_reviewer_rewrite_archive_without_receipt_reconciles_exactly(
+        base, corpus, monkeypatch):
+    """archive 已复制、receipt 未写：active 仍是唯一恢复凭据，不重买审阅。"""
+    from novel.orchestrator import reviewer_action_evidence
+    from novel.orchestrator import state as state_module
+    from novel.stages.stage5 import reviewer_rewrite
+
+    harness = _install_stage5_live_batch_harness(
+        base, monkeypatch, reviewer_rewrite=True)
+    real_write_once = reviewer_action_evidence._atomic_write_once
+    fail_receipt = {'value': True}
+
+    def crash_on_receipt(base_arg, sid_arg, path, raw, *, label):
+        if fail_receipt['value'] and label == 'reviewer rewrite authority receipt':
+            fail_receipt['value'] = False
+            raise ArtifactUnreadable('synthetic archive→receipt hard kill')
+        return real_write_once(
+            base_arg, sid_arg, path, raw, label=label)
+
+    monkeypatch.setattr(
+        reviewer_action_evidence, '_atomic_write_once', crash_on_receipt)
+    first = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(first.run_id, 20)
+
+    [active] = _reviewer_action_files(base)
+    novel_dir = Path(base) / 'FQ_测试书_42'
+    ctx = state_module.readonly_ctx(
+        novel_dir, 'stage5.write', 'test-code-version')
+    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_request(
+        ctx)
+    authority_dir = (
+        Path(base) / '_service' / 'runs' / '42'
+        / 'reviewer_action_authorities')
+    archive = authority_dir / (
+        f'reviewer-action-{request.reviewer_action_record_sha256}.json')
+    receipt = authority_dir / (
+        f'reviewer-action-{request.reviewer_action_record_sha256}.receipt.json')
+    assert archive.is_file() and not receipt.exists() and active.is_file()
+
+    real_write_once_fn = real_write_once
+    monkeypatch.setattr(
+        reviewer_action_evidence, '_atomic_write_once', real_write_once_fn)
+    original_contract = reviewer_action_evidence.reviewer_contract.for_blocker(
+        agent.queue.WAITING_ON_STAGE5_CLOSURE)
+    monkeypatch.setattr(
+        reviewer_action_evidence.reviewer_contract, 'for_blocker',
+        lambda _waiting_on: 'new-reviewer-contract')
+    with pytest.raises(
+            agent.reviewer_tasks.ReviewerTaskError,
+            match='contract 已非 current'):
+        reviewer_action_evidence.seal_reviewer_rewrite_authority(
+            base, '42', request, request_file_sha256,
+            current_parent_run_id='replacement-parent')
+    assert archive.is_file() and not receipt.exists() and active.is_file()
+
+    monkeypatch.setattr(
+        reviewer_action_evidence.reviewer_contract, 'for_blocker',
+        lambda _waiting_on: original_contract)
+    with _assert_stage5_cross_parent_seal_guard(
+            monkeypatch, reviewer_action_evidence):
+        reviewer_action_evidence.seal_reviewer_rewrite_authority(
+            base, '42', request, request_file_sha256,
+            current_parent_run_id='replacement-parent')
+
+    assert receipt.is_file() and not active.exists()
+    assert len(harness.invocations) == 1
+    assert reviewer_action_evidence.require_sealed_reviewer_rewrite_authority(
+        base, '42', request, request_file_sha256).run_id == first.run_id
+
+
+def test_stage5_reviewer_rewrite_seal_revalidates_seat_session_and_cost(
+        base, corpus, monkeypatch):
+    """永久 receipt 不是快照捷径；三本来源账任一漂移都必须关闭式拒绝。"""
+    from novel.orchestrator import reviewer_action_evidence
+    from novel.orchestrator import reviewer_seat_ledger
+    from novel.orchestrator import state as state_module
+    from novel.stages.stage5 import reviewer_rewrite
+
+    _install_stage5_live_batch_harness(
+        base, monkeypatch, reviewer_rewrite=True)
+    run = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(run.run_id, 20)
+    ctx = state_module.readonly_ctx(
+        Path(base) / 'FQ_测试书_42',
+        'stage5.write', 'test-code-version')
+    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_request(
+        ctx)
+    record = reviewer_action_evidence.require_sealed_reviewer_rewrite_authority(
+        base, '42', request, request_file_sha256)
+
+    seat_path = reviewer_seat_ledger.ledger_path(
+        base, '42', waiting_on=record.waiting_on,
+        business_sha256=record.business_sha256)
+    session_path = agent_session_audit.audit_path(base)
+    cost_path = Path(base) / '_service' / 'ledger.jsonl'
+    originals = {
+        seat_path: seat_path.read_bytes(),
+        session_path: session_path.read_bytes(),
+        cost_path: cost_path.read_bytes(),
+    }
+
+    seat_payload = json.loads(originals[seat_path])
+    seat_payload['max_corrections'] += 1
+    seat_path.write_text(
+        json.dumps(seat_payload, ensure_ascii=False, indent=2) + '\n',
+        encoding='utf-8')
+    with pytest.raises(agent.reviewer_tasks.ReviewerTaskError):
+        reviewer_action_evidence.require_sealed_reviewer_rewrite_authority(
+            base, '42', request, request_file_sha256)
+    seat_path.write_bytes(originals[seat_path])
+
+    session_rows = [
+        json.loads(line) for line in originals[session_path].decode('utf-8').splitlines()
+        if line.strip()
+    ]
+    started = next(
+        row for row in session_rows
+        if row.get('session_run_id') == record.reviewer_session_run_id
+        and row.get('kind') == 'started')
+    started['ts'] += 1
+    session_path.write_text(
+        ''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in session_rows),
+        encoding='utf-8')
+    with pytest.raises(agent.reviewer_tasks.ReviewerTaskError):
+        reviewer_action_evidence.require_sealed_reviewer_rewrite_authority(
+            base, '42', request, request_file_sha256)
+    session_path.write_bytes(originals[session_path])
+
+    cost_rows = [
+        json.loads(line) for line in originals[cost_path].decode('utf-8').splitlines()
+        if line.strip()
+    ]
+    cost = next(
+        row for row in cost_rows
+        if row.get('run_id') == record.run_id
+        and row.get('session_run_id') == record.reviewer_session_run_id)
+    cost['latency_ms'] = int(cost.get('latency_ms') or 0) + 1
+    cost_path.write_text(
+        ''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in cost_rows),
+        encoding='utf-8')
+    with pytest.raises(agent.reviewer_tasks.ReviewerTaskError):
+        reviewer_action_evidence.require_sealed_reviewer_rewrite_authority(
+            base, '42', request, request_file_sha256)
 
 
 def test_stage5_record_save_failure_fails_seat_before_any_canonical_action(
@@ -8665,7 +9275,7 @@ def test_stage2_compact_schema_identity_is_stable_across_transient_resume(
     monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
     applied = []
 
-    def execute(_base, _sid, action, _run_token):
+    def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
         payload = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload).payload
         applied.append(payload['characters'][0]['name_distinctiveness'])
         return agent.SupervisorActionResult(
@@ -8777,7 +9387,7 @@ def test_stage2_canonical_rejection_keeps_compact_digest_for_no_progress(
         return task
 
     monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
-    def reject_action(_base, _sid, _action, _run_token):
+    def reject_action(_base, _sid, _action, _run_token, *, reviewer_action_record_path=None):
         nonlocal executed
         executed += 1
         if executed == 1:

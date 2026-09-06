@@ -29,7 +29,7 @@ rg -n "stage6|hook_para_sep|exit 70" .workflow/skills/novel-pipeline-operator/re
 | FN-011 | stage7 映射编辑后必须重批重拼 | contract-confirmed | `approved`, `book_txt` | 重跑 `stage7.approve` + `stage7.assemble` |
 | FN-012 | `consumed_changed` 可能是诊断噪声 | observed | `consumed_changed`, stale | 逐项指纹全同才披露诊断边，否则按真 stale 处理 |
 | FN-013 | 语义审判的结论恒是带证据的 `UNVER` | contract-confirmed | `stage6.semantic`, `UNVER`, `judges` | 读 `judges` 两侧再人工收口 |
-| FN-014 | 超限章有一条 0 成本销账路 | contract-confirmed | `trim_audit_chNN`, verification | `--retain-pretrim --chapters` 或 `--apply-edit` |
+| FN-014 | 超限章先转人工处置；LLM 改写必须先落正式 request | contract-confirmed | `trim_audit_chNN`, verification, `reviewer_rewrite_request` | retain batch、Reviewer rewrite request、stop 或 `--apply-edit` |
 | FN-015 | 落盘闸拦下后，finding 细节的读法逐层不同 | contract-confirmed | `.INVALID`, exit 2 | 先 `--check-only` 取逐条，再 `--revalidate` 提升 |
 | FN-016 | `--apply-edit` 的路径语义逐层不同 | contract-confirmed | `edit_rel`, 产物目录之外, exit 2 | `--apply-edit`，编辑文件写进书目录内 |
 | FN-017 | `--revise` 只吃 UNIQUE，FREE/NONE 转人工 | contract-confirmed | `--revise`, `repair`, 没有可自救的条目 | 按 finding 的免费路修；没有唯一修法时 `--apply-edit` 或 `--wontfix` |
@@ -207,24 +207,33 @@ rg -n "stage6|hook_para_sep|exit 70" .workflow/skills/novel-pipeline-operator/re
 - 依据：`novel/quality/evaluator.py::double_blind_decision`（合并恒 `UNVER`，并给出四选一的
   人读 reason）；`novel/stages/stage6/semantic.py::require_human_resolution`。
 
-### FN-014 · 超限章有一条 0 成本销账路
+### FN-014 · 超限章先转人工处置；LLM 改写必须先落正式 request
 
 - 状态：`contract-confirmed`
 - 触发：`inbox` 出现 `[verification] stage5 chNN trim_audit_chNN`，文案含
   “保留 pretrim，转 verification”。
-- 判断：这不是失败，是**唯一**的出路——本仓没有任何「自动生成收缩候选并采用」的路径
-  （收缩臂随 evaluator profile 一并整臂下线），超上限章一律零调用落 identity
-  `TrimAudit` 并转人工。与 semantic 节点不是一回事：那一层会真的调用判官，这一层零调用。
-  逐条读“超限根因附注”里的实际幅度再决定。
+- 判断：这不是写作失败，而是自动路由的终点——本仓仍没有任何「由 `length_over` 自动生成并采用
+  收缩候选」的路径（旧收缩臂随 evaluator profile 整臂下线）。超上限章一律先零调用落 identity
+  `TrimAudit` 并转人工；人可以保留、人工改完整章，或让受托 Reviewer 明确授权一章 LLM 重写。
+  后者是新的人审写作路，不是判据自行触发。
 - 处置：接受当前原稿时跑
   `stage5.review --retain-pretrim --chapters <N> --actor <ACTOR> --reason <理由>`
-  （0 次 LLM，只写 hash-bound resolution，恰好一章）。判断该章确需改写时用
-  `stage5.write --apply-edit <绝对路径>` 提交该章全部 producer-owned slot 的完整
-  `ChapterResponse`（同样 0 次 LLM）。**两条都不要留着不销账**——留着它们会让终审包的
-  verification 余额里混进已经看过的项。
-- 验证：`trim_resolution_chNN.json` 落盘且 hash 绑定当前正文；`inbox` 该条离开 verification。
+  （0 次 LLM，只写 hash-bound resolution，恰好一章）；headless 顶部卡有多章时由一席 Reviewer 在
+  full-batch retain、其中一章 typed rewrite request、typed stop 三者中互斥选择。判断该章需要人工全文时，
+  仍可用 `stage5.write --apply-edit <绝对路径>` 提交全部 producer-owned slot 的完整
+  `ChapterResponse`（0 次 LLM）。选择 LLM rewrite 时不要手敲 `--reviewer-rewrite` 或自造 JSON；先让
+  Supervisor 把回答零成本落成 `stage5/reviewer_rewrite_request.json`，并把原 action + 三账封成
+  immutable authority receipt，再消费 `operator next` 给出的 recovery action。该动作只允许四个登记
+  code 与 current 正文中**恰好唯一命中**的逐字 evidence，且一次只改一章；frontier 的正文 SHA 与
+  target 完整文件 SHA 是两格，不得互换。
+- 验证：retain 时 `trim_resolution_chNN.json` 绑定当前正文；rewrite 时 request 先 current，随后唯一 paid
+  writer 的九态 execution journal、首轮/重试 intent 与 formal/INVALID/rejected exact terminal 可对证且
+  不会重复扣费。matching checkpoint/prepared 只走 operator 给出的零 wire recovery；有 target WAL 时
+  target run 与 WAL SHA 也必须原样携带。INVALID/rejected 经 revalidate/apply-edit 修好后还须有
+  request-specific successor receipt，手工挪入历史不算解决。formal 改稿后旧 Review stale，免费重跑
+  `stage5.review` 后再核 verification/closure；两种路径都不能把待办留成“已看但未销账”。
 - 依据：`novel/stages/stage5/trim_resolution.py::retain_pretrim`；
-  `contracts/invariants.py::CONDITIONAL_REQUIRED_FLAGS['stage5.review', '--retain-pretrim']`。
+  `novel/stages/stage5/reviewer_rewrite.py`；`docs/BACKEND_CONTRACT.md` 的 `R-7.31` / `R-8.17`。
 
 ### FN-015 · 落盘闸拦下后，finding 细节的读法逐层不同
 
@@ -281,11 +290,12 @@ rg -n "stage6|hook_para_sep|exit 70" .workflow/skills/novel-pipeline-operator/re
   「这一轮没有可自救的条目」，并列出被跳过的条数。
 - 判断：**这不是付费调用失败，而是修复分流在请求发出前关闭式退出。** `--revise` 只消费
   `repair == 'UNIQUE'` 且尚未超过轮次上限的条目。现役 51 条中 repair 分布为
-  **12 UNIQUE、12 FREE、27 NONE**：FREE 必须按 finding 指名的 0 成本入口修，NONE 表示满足路径
-  不唯一、必须人工判断。`remediation` 与 `repair` 是两格，前者说“归谁修”，后者才是付费自救
+  **12 UNIQUE、12 FREE、27 NONE**：FREE 先进入 finding 指名的人审/0 成本处置面；其中
+  `length_over` 只有经顶部 Reviewer 明确落一章关闭式 request 后，才可能另启一次 paid writer，不能由
+  `--revise` 自行消费。NONE 表示满足路径不唯一、必须人工判断。`remediation` 与 `repair` 是两格，前者说“归谁修”，后者才是付费自救
   的准入（见[修复状态机](recovery.md)）。
 - 处置：先按 Review 中的 `repair` 分桶；UNIQUE 才运行 `--revise`，FREE 跑 finding 指名的
-  deterministic 路径，NONE 则二选一：`--apply-edit` 提交该章完整 `ChapterResponse`
+  deterministic/Reviewer 路径，NONE 则二选一：`--apply-edit` 提交该章完整 `ChapterResponse`
   （0 次调用，会让下游 stale 需重跑），或 `--wontfix` 记带 actor/reason 的不修裁决。
   如果误跑 `--revise` 命中“没有可自救的条目”，先确认 ledger 没有新增调用，再回到上述分流。
   ⚠ 代笔整章正文是**授权范围内**的，但这条路**没有任何守卫替你兜**：文风、保真材料与在场集

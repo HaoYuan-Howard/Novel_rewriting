@@ -289,3 +289,17 @@ def test_job_kinds_is_keyed_by_current_node_id(paid_payload):
     for node, spec in NODES.items():
         assert job_kinds[node]['label'] == spec.label
         assert job_kinds[node]['paid'] == spec.paid
+
+
+def test_reviewer_rewrite_internal_actions_are_not_job_form_buttons(paid_payload):
+    internal = {
+        '--request-reviewer-rewrite', '--reviewer-rewrite',
+        '--recover-reviewer-rewrite-prepared', '--retire-reviewer-rewrite-request',
+        '--reviewer-rewrite-request-sha256',
+        '--reviewer-rewrite-recovery-target-run-id',
+        '--reviewer-rewrite-recovery-journal-sha256',
+    }
+    assert not [action for action in paid_payload['actions']
+                if internal.intersection(action['extra'] or ())]
+    assert internal <= {flag for spec in paid_payload['job_kinds'].values()
+                        for flag in spec['flags']}

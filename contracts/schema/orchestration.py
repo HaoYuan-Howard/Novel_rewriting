@@ -20,6 +20,8 @@ orchestration.py —— 对应 `docs/schema/_orchestration.md`。作业 · 完�
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
@@ -1306,7 +1308,7 @@ class ReviewerActionRecord(FrozenModel):
     flags: tuple[str, ...] | None = None
     input_payload: dict[str, Any] | None = None
     review_token: str | None = None
-    # Stage5 batch 额外保存原 Review 与 reviewer contract 摘要；再结合
+    # Stage5 trim disposition 额外保存原 Review 与 reviewer contract 摘要；再结合
     # payload 的完整有序 trim 双 SHA，可先自证 durable business 未损坏，
     # 再区分“current 主体已换可安全退休”和“同主体 partial
     # frontier 冲突须保留停止”。closure token 不是 trim 人审主体。
@@ -1352,11 +1354,13 @@ class ReviewerActionRecord(FrozenModel):
         is_stage2_node = node and self.node == 'stage2.global'
         is_stage2_final = approval and self.surface == 'stage2_final_review'
         is_stage2 = bool(is_stage2_node or is_stage2_final)
-        is_stage5_batch = bool(
+        is_stage5_disposition = bool(
             node
             and self.node == 'stage5.review'
-            and self.flags == (
-                '--retain-pretrim-batch', '@reviewer-input'))
+            and self.flags in {
+                ('--retain-pretrim-batch', '@reviewer-input'),
+                ('--request-reviewer-rewrite', '@reviewer-input'),
+            })
         stage2_legacy_identity = (
             self.workpack_sha256, self.reviewer_session_run_id,
             self.provider_response_sha256)
@@ -1385,7 +1389,7 @@ class ReviewerActionRecord(FrozenModel):
                     '或 stage2_final_review approval')
             if self.reviewer_seat_turn_id is not None:
                 raise ValueError('Stage2 reviewer record 不使用通用 seat turn id')
-        elif is_stage5_batch:
+        elif is_stage5_disposition:
             stage5_identity = (
                 self.stage5_review_sha256,
                 self.stage5_reviewer_contract_sha256,
@@ -1395,7 +1399,7 @@ class ReviewerActionRecord(FrozenModel):
             )
             if not all(value is not None for value in stage5_identity):
                 raise ValueError(
-                    'Stage5 batch durable record 的 Review/contract/session/'
+                    'Stage5 trim disposition durable record 的 Review/contract/session/'
                     'turn/provider 身份必须成组出现')
             if self.review_token is not None:
                 raise ValueError('Stage5 trim durable record 不得绑定 closure token')
@@ -1407,6 +1411,59 @@ class ReviewerActionRecord(FrozenModel):
                 self.provider_response_sha256,
         )):
             raise ValueError('ReviewerActionRecord 持久恢复身份与动作形状不一致')
+        return self
+
+
+def reviewer_rewrite_authority_receipt_sha256(
+        payload: Mapping[str, object],
+) -> str:
+    """Stage5 Reviewer rewrite 永久 authority receipt 的唯一自摘要。"""
+    canonical = {
+        key: value for key, value in dict(payload).items()
+        if key != 'receipt_sha256'
+    }
+    try:
+        raw = json.dumps(
+            canonical, ensure_ascii=False, sort_keys=True,
+            separators=(',', ':'), allow_nan=False,
+        ).encode('utf-8')
+    except (TypeError, ValueError) as exc:
+        raise ValueError('reviewer rewrite authority receipt 不能 canonicalize') from exc
+    return hashlib.sha256(raw).hexdigest()
+
+
+class ReviewerRewriteAuthorityReceipt(FrozenModel):
+    """canonical rewrite request 已消费一份 Commander action 的永久封印。
+
+    active ``ReviewerActionRecord`` 仍是崩溃恢复凭据；只有 request typed
+    readback、原席位/session/attempt/cost/response 全闭合后，Agent 才能把原字节
+    复制到 authority archive 并写本 receipt。后续 queue/permit/producer 只读这份
+    seal，不借 live outer owner 身份，也不补写任何账。
+    """
+
+    kind: Literal['novel-stage5-reviewer-rewrite-authority-v1'] = (
+        'novel-stage5-reviewer-rewrite-authority-v1')
+    sid: str = Field(min_length=1)
+    reviewer_action_record_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    request_rel: str = Field(min_length=1)
+    request_file_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    request_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    business_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    reviewer_contract_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    reviewer_session_run_id: str = Field(min_length=1)
+    reviewer_seat_turn_id: str = Field(min_length=1)
+    provider_response_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    seat_evidence_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    session_evidence_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    cost_evidence_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    sealed_at: int = Field(ge=0)
+    receipt_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+    @model_validator(mode='after')
+    def _self_hash_is_closed(self) -> 'ReviewerRewriteAuthorityReceipt':
+        if self.receipt_sha256 != reviewer_rewrite_authority_receipt_sha256(
+                self.model_dump(mode='json')):
+            raise ValueError('reviewer rewrite authority receipt SHA 不闭合')
         return self
 
 

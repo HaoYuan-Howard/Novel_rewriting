@@ -8,7 +8,7 @@
 - [允许写入面](#允许写入面)
 - [Stage4A repair/replan prepared 的 0-wire 提交补尾](#stage4a-repairreplan-prepared-的-0-wire-提交补尾)
 - [结构化响应修复](#结构化响应修复)
-- [Stage5 顶部卡的批量 trim 决定与断点续接](#stage5-顶部卡的批量-trim-决定与断点续接)
+- [Stage5 顶部卡的 trim 处置与 LLM 改写恢复](#stage5-顶部卡的-trim-处置与-llm-改写恢复)
 - [Stage5 foreign prepared 的显式 0-wire 收口](#stage5-foreign-prepared-的显式-0-wire-收口)
 - [付费修复与缓存](#付费修复与缓存)
 - [活动终态文件](#活动终态文件)
@@ -151,8 +151,8 @@ schema version 写），不按记忆手抄。
 | `stage2.blueprint` | `--renormalize` · `--revalidate` · `--apply-edit` | 先把 `--emit-edit-template` 的输出另存为当前书内 `stage2/blueprint_relation_edit.json`，填写 actor/reason 与目标章完整 `narrative_relations` 集合 | `--apply-edit` 是 Blueprint 新关系契约的 hash-bound 0-wire 完整集合替换，不是任意字段 patch：review token、关系端点闭引用、时序 DAG、观察者、schema、Stage2/全书 HARD 与非目标章业务字节恒等全部重判。旧 Blueprint 不手补字段、不自动迁移；其普通内容仍走 `--chapters <N>` 定向重生成（付费）或回 `stage2.global` |
 | `stage4.design` | `--adopt-rejected` · `--apply-edit` · `--recover-repair-aggregate` | legacy 采用只编辑终态点名的 `_llm_rejected/<chain>/<attempt>/candidate.json`；完整章替换先准备书内 `stage4/blind_chapter_edit.json`，内含 actor/reason、current candidate/aggregate/decision/章/strategy/constraint 身份和完整 `BlindChapterResponse`；prepared 补尾不写人工输入，三项值只原样消费当前 operator action | `--adopt-rejected` 只重判 legacy whole-book 原字节，不能冒充正式 A repair。`--apply-edit` 是单章两轮模型 repair 耗尽前后的 0-wire 路：先 preview 再 apply，两次共享同一 compiler/schema/dynamic validator/全书 HARD；只替换目标章，非目标章业务字节恒等，provenance 记 `origin=human`，不伪造模型/prompt/usage。`--recover-repair-aggregate` 是新 recovery run 对 ended source producer 已封存 aggregate 的确定性提交补尾：只在 baseline 时写 sealed candidate，随后幂等补 adoption/recovery audit，并最后把 source journal 提为 committed；它不解析旧 review token，不启动 Commander/Reviewer 或模型 Executor。单章耗尽不得自动 replan；真正策略驳回才允许携带累计反馈重规划 |
 | `stage4.plan` | `--apply-binding` · `--apply-edit` · `--revalidate` · B unit `response-repair` | 当前 `EvidenceBindingResponse` 业务 JSON；`<novel-dir>/stage4/plan_edit.json`；终态明确允许时可修活动 `.INVALID`；B 终态点名的 `_llm_rejected/<chain>/<attempt>/candidate.json` | `--apply-binding` 只在当前 A 正式审阅全 accepted 时开放，服务端铸 `origin=human` 并走与 B 相同 compiler/HARD；B unit replacement 只接受终态给出的 attempt，封存后以原 run 重跑，同一章 validator、整书 compiler/HARD 全部重判且 0 wire。`--revalidate` 与 `--apply-edit` 也只落 Plan。各入口都**不生成 writer context**，须在最终结构全 accepted 后单独运行 `stage4.context`。`--identity` 只作内存诊断 |
-| `stage5.write` | `--apply-edit` · `--recheck` · `--revalidate` · `--recover-prepared` | **`<base>/_service/edits/` 下**、文件名含 `chNN` 的完整 `ChapterResponse`：`{"segments":[{"slot":"s01","text":"…"},…]}`；prepared recovery 则消费前一步 emit 的 hash-bound workpack | **0 LLM 调用。** `--apply-edit` 必须提交该章全部 producer-owned slot 的全文；`--recheck` 不改正文或写作 provenance，只刷新当前契约的派生指标并对账 trim；`--revalidate` 原字节重判 `.INVALID` segments。`--recover-prepared` 只收口旧 run 已完成且完整复验通过的 initial-write checkpoint，写 canonical 章稿、target recovery manifest/两相 journal 与 append-only adoption lineage，旧 source sidecar 始终只读；完整顺序见下文专节。不直接改正式 chapter JSON 或其他章。⚠⚠ **编辑文件落点不要按上面四层类比写进 `<novel-dir>/stage5/`**：那四层的编辑文件登记在 `ARTIFACTS` 里（所以必须在书目录内），本层**刻意没有登记**（`novel/paths.py::edit_rel` 的例外一段），写进书目录会让 `tests/corpus.py::_classify` 关闭式失败 ⇒ **这本书从此当不成语料底座**，而报错文案还会把人引向「加进 ARTIFACTS」那条错路（真发生过）|
-| `stage5.review` | `--retain-pretrim` · `--retain-pretrim-batch` · `--wontfix` | 单章交互决定本身就是输入；headless batch 只消费 Supervisor 物化的 `@reviewer-input` | `--retain-pretrim --chapters <N> --actor <ACTOR> --reason <text>` 恰好一章，写 hash-bound `trim_resolution_chNN.json`，不改正文、不采用收缩候选（见 FN-014）；顶部卡的 `--retain-pretrim-batch @reviewer-input` 由一席 Commander 对 workpack 全部 unresolved trim 作一份 typed batch 决定，Supervisor 只负责验证、持久化和运输，不能代选 retain 或手改 manifest。producer 整批预检，首写前任一漂移都保持零写入；已有 exact 前缀时，任一漂移必须在下一笔写入前关闭，且不得覆盖 foreign 决定。kill 后只重放原 manifest 的 exact 已落前缀 + current unresolved 后缀，不再买 Commander 席。`--wontfix` 只把豁免记进 `stage5/wontfix.json`，**一份验收报告都不产** |
+| `stage5.write` | `--apply-edit` · `--recheck` · `--revalidate` · `--recover-prepared` · `--recover-reviewer-rewrite-prepared` · `--retire-reviewer-rewrite-request` | **`<base>/_service/edits/` 下**、文件名含 `chNN` 的完整 `ChapterResponse`：`{"segments":[{"slot":"s01","text":"…"},…]}`；通用 prepared recovery 消费前一步 emit 的 hash-bound workpack；Reviewer rewrite recovery/retirement 只原样消费 operator 给出的 source/request/recovery WAL 身份 | **0 LLM 调用。** `--apply-edit` 必须提交该章全部 producer-owned slot 的全文；`--recheck` 不改正文或写作 provenance，只刷新当前契约的派生指标并对账 trim；`--revalidate` 原字节重判 `.INVALID` segments。`--recover-prepared` 只收口 initial-write；`--recover-reviewer-rewrite-prepared` 只收口同一正式 request 的最新 matching checkpoint/prepared，若已有 target WAL 必须同时原样携 target run 与 WAL SHA；`--retire-reviewer-rewrite-request` 只退休全根零执行且已过期的 request。三者都不续 provider、不再次审批或付费。旧 source sidecar 始终只读；完整顺序见下文专节。不直接改正式 chapter JSON 或其他章。⚠⚠ **编辑文件落点不要按上面四层类比写进 `<novel-dir>/stage5/`**：那四层的编辑文件登记在 `ARTIFACTS` 里（所以必须在书目录内），本层**刻意没有登记**（`novel/paths.py::edit_rel` 的例外一段），写进书目录会让 `tests/corpus.py::_classify` 关闭式失败 ⇒ **这本书从此当不成语料底座**，而报错文案还会把人引向「加进 ARTIFACTS」那条错路（真发生过）|
+| `stage5.review` | `--retain-pretrim` · `--retain-pretrim-batch` · `--request-reviewer-rewrite` · `--wontfix` | 单章交互决定本身就是输入；headless retain/rewrite 只消费 Supervisor 物化的 `@reviewer-input` | `--retain-pretrim --chapters <N> --actor <ACTOR> --reason <text>` 恰好一章，写 hash-bound `trim_resolution_chNN.json`；顶部卡的一席 Commander 在 full-batch retain、恰好一章的 typed rewrite request 与 stop 之间互斥选择。Supervisor 只验证、持久化和运输，不能代选或把自由理由拼进 prompt。retain producer 维持 exact prefix/current suffix；rewrite producer 先零调用落 `stage5/reviewer_rewrite_request.json`，再由 queue 独立触发唯一 paid `stage5.write --reviewer-rewrite`。`--wontfix` 只把豁免记进 `stage5/wontfix.json`，**一份验收报告都不产** |
 | `stage6.hook` | `--apply-edit` · `--recheck` · `--revalidate` · `--wontfix` · `--rebind-review` | `<novel-dir>/stage6/hook_edit.json` | 一次只改目标候选；随后重跑机械与语义审判。`--rebind-review` 只用于旧审批的 review subject/contract 与当前可见内容/finding 完全相同、免费机械复检已通过的兼容恢复：保留原 actor/reason/所选文本，不重新签字；任一可见主体变化都拒绝并回正常 workpack 审阅 |
 | `stage6.approve` | `--review-token` | 无额外输入文件；token 来自刚完整读过的 current immutable workpack | 与 `--pick / --actor / --reason` 同次提交。opaque token 内部绑定 review subject/contract；Commander 不搬运内容 SHA、规则 SHA 或 workpack SHA。validation seal/epoch 变化先免费复检，不覆写 raw 人工决定 |
 | `stage7.rename` | `--apply-edit` · `--adopt-residual` · `--identity` · `--recheck` · `--revalidate` · `--rebind-review` | `<novel-dir>/stage7/name_map_edit.json` | 先用 `--emit-edit-template` 取当前注册骨架，改后用只读 `--validate-edit <路径>` 走同一构建/判定链，确认后才 `--apply-edit`。⚠ `--adopt-residual high` **重写 `stage7/name_map.json`、清旧审批、退休现有成书**。`--identity` / `--recheck` 也重写 map 并退休旧成书，但会在覆盖 provenance 前先核旧消费输入。旧 Stage7 盘只存混入 code/rules 的 workpack SHA，没有旧 immutable workpack 或 stable evidence digest；因此 `--rebind-review` 对这类 legacy 关闭式拒绝，必须读取 current workpack 后用 `--review-token` 做一次 0 模型重审。任何真正清批分支都须重新 approve、assemble 与逐字对账 |
@@ -366,21 +366,23 @@ batch，只走 Stage2 定向恢复与 Pro 重建；
 `response-repair` 是 legacy DeepSeek 的零 LLM CLI sidecar，不是 node，不另造 preview。账本会恢复中断前已发生的
 调用与 accepted-attempt 联结；不能删隔离目录、Stage2 checkpoint、换参数或清缓存来“重新开始”。
 
-## Stage5 顶部卡的批量 trim 决定与断点续接
+## Stage5 顶部卡的 trim 处置与 LLM 改写恢复
 
 `operator next` 显示 `approval:stage5-closure` 时，先看 immutable workpack 的动作，不要从 waiter 名字
 猜“现在一定要提交 closure”。同一顶部卡有三个互斥终态：
 
 - fresh Review 下仅有 unresolved trim：唯一 Commander 席同时读取全部目标章正文、TrimAudit、目标区间
-  与 audit/chapter 双 SHA，只能提交覆盖全部 unresolved 项的 typed batch，或提交 typed stop 表示需要
-  改写；此时没有 closure approval 选项。
+  与 audit/chapter 双 SHA，只能互斥提交：覆盖全部 unresolved 项的 typed retain batch；对其中恰好一章
+  提交 typed LLM rewrite request；或在不能安全 retain、也不能用登记指令收成一章时提交 typed stop。
+  此时没有 closure approval 选项。
 - 缺章、活动 `.INVALID` 或 HARD 与 trim 并存：Supervisor 在开席前 stopped/2，先走对应正式恢复面，
   不把一份注定不能闭合的工作包交给 Commander。
 - `ready/expired`：只提交 closure receipt，不出现 trim node。
 
-不要手工拼 `@reviewer-input`，也不要把旧 `s5cr1_` closure token 塞进 batch。trim 席位的稳定业务只绑
-`action_mode=trim_resolution`、同一 fresh Review 的完整 SHA、原始全量有序 audit/chapter 双 SHA 与
-reviewer contract；closure receipt 才绑定 opaque token。合法回答按“provider response 绑定席位 →
+不要手工拼 `@reviewer-input`，也不要把旧 `s5cr1_` closure token 塞进任何 trim disposition。trim 席位的
+稳定业务只绑 `action_mode=trim_disposition`、同一 fresh Review 的完整 SHA、原始全量有序 audit/chapter
+双 SHA 与 reviewer contract；retain/rewrite 共用这一席，closure receipt 才绑定 opaque token。合法回答按
+“provider response 绑定席位 →
 内容寻址 ReviewerActionRecord → 席位成功闭账 → permit/producer”持久化。若宿主在 record 或批次中被
 kill，新 parent 先复核原席 attempt、logical session、成本账、provider response 与 owner-stopped，随后
 只在盘面是原 manifest 的连续 exact 已落前缀加 current unresolved 完整后缀时零模型重放；任一缺项、
@@ -391,6 +393,31 @@ audit/正文/resolution，首项落盘后的漂移或 foreign 决定必须停止
 `retain_pretrim` 不改正文，也不改变 Review 主体。全批落完后不要重跑 Stage5 Review；让 Supervisor 用
 同一份仍 fresh 的 Review 与 current audit/resolution/wontfix 处置摘要重建 closure workpack/token，再走
 closure receipt。只有正文/HARD/canonical 章集合发生真实变化时才重跑 Review。
+
+选择 rewrite 时，只能使用 workpack 给出的某一章 option；directive code 只取
+`remove_repetition / compress_exposition / repair_wording / smooth_transition`，每条 evidence 从该章
+current `rendered_text` 逐字复制且须恰好唯一命中、不超过 240 字。frontier 的 chapter SHA 是正文 SHA，
+target option 另有完整章文件 SHA；两者不得互换。actor/reason/evidence 只用于审计和定位，不是自由 prompt；
+写手固定还要压回预算上限，并保留全部 plan slots、事实、时序与必须逐字内容。问题跨章、需要新增剧情
+判断或不属于这个闭集时必须 stop，不能勉强选 code。
+
+rewrite 回答不会直接启动模型：Supervisor 先用 FREE `stage5.review --request-reviewer-rewrite` 落 current
+`stage5/reviewer_rewrite_request.json`，typed readback 后先把 durable action 原字节与绑定 request、原席位/
+session/cost 三账的 self-hashed receipt 封进 `_service/runs/<SID>/reviewer_action_authorities/`，再退休 active
+record。之后只按
+`operator next` 给出的 `recovery:stage5-reviewer-rewrite` 执行，不手拼 paid 命令；正常状态会在 fresh
+epoch 运行唯一 `stage5.write --reviewer-rewrite`，matching checkpoint/prepared 则改为
+`--recover-reviewer-rewrite-prepared <SOURCE_RUN_ID> --reviewer-rewrite-request-sha256 <SHA256>` 零 wire补尾；
+若 action 另带 `--reviewer-rewrite-recovery-target-run-id` 与
+`--reviewer-rewrite-recovery-journal-sha256`，两项必须逐字保留。过期且从未 started 的请求只执行 action
+给出的 `--retire-reviewer-rewrite-request ... --reviewer-rewrite-request-sha256 ...`。paid 与 FREE 收口都由
+request 专属执行 lease 串行；首轮 started、后续 retry_started 与最新 checkpoint 必须形成完整链。
+
+有 wire 却无可验最新 checkpoint、journal/request/Review/audit/chapter 任一身份不闭合、坏件或并发 owner
+不闭合时停止，不删 request、不再买 Writer。formal、`.INVALID` 或 rejected 都消费这份 request；人工修好
+必须由 recheck/revalidate/apply-edit 的 request-specific successor WAL/receipt 把 exact terminal 与 exact
+后继闭合，手工移动历史不算消费。formal 改稿后必须先免费重跑 `stage5.review`，再回到新的 closure
+workpack；只有 landed formal 或已有合法 successor/expiry receipt 的旧 request 才可被新 request 换代。
 
 ## Stage5 foreign prepared 的显式 0-wire 收口
 

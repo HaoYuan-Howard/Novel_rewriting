@@ -31,9 +31,11 @@ from contracts.artifacts import (
     STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
-from contracts.schema.api import BatchTrimResolutionRequest
+from contracts.schema.api import (
+    BatchTrimResolutionRequest, Stage5ReviewerRewriteRequest,
+)
 from contracts.schema.stage2 import BlueprintRelationEdit, GlobalEdit
-from contracts.schema.stage5 import ChapterResponse
+from contracts.schema.stage5 import ChapterResponse, ReviewerRewriteTrustedInput
 from novel import paths
 from novel.errors import (
     ArtifactUnreadable,
@@ -347,6 +349,54 @@ def save_stage5_trim_batch(
     finally:
         # 保存失败发生在 contextmanager yield 之前，不能指望调用方 finally
         # 清理这份含人工逐章理由的临时文件。
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return target.resolve()
+
+
+def save_stage5_reviewer_rewrite_input(
+    base: str | os.PathLike[str],
+    sid: str,
+    request: Stage5ReviewerRewriteRequest,
+    *,
+    reviewer_action_record_sha256: str,
+    business_sha256: str,
+    reviewer_contract_sha256: str,
+    reviewer_session_run_id: str,
+    reviewer_seat_turn_id: str,
+    provider_response_sha256: str,
+) -> Path:
+    """把 API 决定与服务端 durable 身份合成 producer 受信输入。"""
+    try:
+        paths.check_sid(sid)
+    except PathRefused as exc:
+        raise SourcePathRejected(
+            f'Reviewer rewrite request 的书 id 不合法：{exc}') from exc
+    root = service_dir(base) / EDITS_DIRNAME / sid
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f'stage5-reviewer-rewrite-{uuid.uuid4().hex}.json'
+    tmp = target.with_suffix('.tmp')
+    try:
+        trusted = ReviewerRewriteTrustedInput.model_validate({
+            **request.model_dump(mode='json'),
+            'reviewer_action_record_sha256': reviewer_action_record_sha256,
+            'business_sha256': business_sha256,
+            'reviewer_contract_sha256': reviewer_contract_sha256,
+            'reviewer_session_run_id': reviewer_session_run_id,
+            'reviewer_seat_turn_id': reviewer_seat_turn_id,
+            'provider_response_sha256': provider_response_sha256,
+        })
+        payload = trusted.model_dump(mode='json', by_alias=True)
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + NL,
+            encoding='utf-8')
+        os.replace(tmp, target)
+    except OSError as exc:
+        raise ArtifactUnreadable(
+            f'写不了 Stage5 Reviewer rewrite request：{exc!r}') from exc
+    finally:
         try:
             tmp.unlink(missing_ok=True)
         except OSError:

@@ -452,14 +452,32 @@ class PreparedCheckpointAdoption(HumanApproval):
     source_code: str = Field(min_length=1)
     source_run_identity_sha256: Sha256
     source_run_file_sha256: Sha256
-    source_commit_sha256: Sha256
-    source_commit_file_sha256: Sha256
+    # Initial-write 的人工 prepared recovery 必须带 source commit；formal
+    # reviewer rewrite 则可能恰好硬杀在 accepted checkpoint 与 commit prepare
+    # 之间。后者由 request execution journal 证明其专属用途，不能伪造一份
+    # 尚不存在的 source commit。
+    source_commit_sha256: Sha256 | None
+    source_commit_file_sha256: Sha256 | None
     source_checkpoint_sha256: Sha256
     source_checkpoint_file_sha256: Sha256
     source_attempt_id: str = Field(pattern=r'^[0-9a-f]{16}$')
     source_response_sha256: Sha256
     source_adoption_id: Sha256
     action_subject_sha256: Sha256
+
+    #: 缺席 = 既有 initial-write prepared recovery；存在 = 精确 formal reviewer
+    #: rewrite request 的自动 0-wire checkpoint 收口。
+    reviewer_rewrite_request_sha256: Sha256 | None = None
+
+    @model_validator(mode='after')
+    def _closed_adoption_kind(self) -> 'PreparedCheckpointAdoption':
+        commit_fields = (
+            self.source_commit_sha256, self.source_commit_file_sha256)
+        if (commit_fields[0] is None) != (commit_fields[1] is None):
+            raise ValueError('prepared checkpoint adoption 的 source commit 双 SHA 必须同有同无')
+        if commit_fields[0] is None and self.reviewer_rewrite_request_sha256 is None:
+            raise ValueError('无 source commit 的 adoption 必须绑定 reviewer rewrite request')
+        return self
 
 
 class RoundLlmProvenance(LlmProvenance, _RoundFields):
@@ -475,6 +493,30 @@ class RoundLlmProvenance(LlmProvenance, _RoundFields):
     #: checkpoint/ledger/session/commit 全闭合，本次在新 run/current code 下 0 wire
     #: 重铸 canonical。兼容加法，不把旧 v2 章伪造成一次恢复。
     prepared_checkpoint_adoption: PreparedCheckpointAdoption | None = None
+
+    #: formal reviewer rewrite 唯一 request 的自摘要。普通 write/revise 与字段
+    #: 引入前的历史章缺席；存在时，正文、`.INVALID` 与恢复采用均可反查同一请求。
+    reviewer_rewrite_request_sha256: Sha256 | None = None
+
+    @model_validator(mode='after')
+    def _reviewer_rewrite_identity_is_closed(self) -> 'RoundLlmProvenance':
+        adoption = self.prepared_checkpoint_adoption
+        adopted_request = (
+            None if adoption is None
+            else adoption.reviewer_rewrite_request_sha256)
+        if self.reviewer_rewrite_request_sha256 is not None:
+            if self.revision_of is None:
+                raise ValueError('reviewer rewrite provenance 必须绑定旧正文 revision_of')
+            if self.review is not None or self.fixes is not None:
+                raise ValueError(
+                    'reviewer rewrite 不得冒充普通 --revise 的 review/fixes 来源账')
+            if adoption is not None and adopted_request != self.reviewer_rewrite_request_sha256:
+                raise ValueError(
+                    'reviewer rewrite adoption 与 provenance request SHA 漂移')
+        elif adopted_request is not None:
+            raise ValueError(
+                'reviewer rewrite adoption 必须同时写入 provenance request SHA')
+        return self
 
 
 class RoundFreeProvenance(FreeProvenance, _RoundFields):

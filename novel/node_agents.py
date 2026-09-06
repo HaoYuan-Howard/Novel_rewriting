@@ -2137,6 +2137,7 @@ class Stage5SessionPool:
         driver_factory: Stage5DriverFactory | None = None,
         max_turns: int = 4,
         concurrency: int = MAX_CONCURRENCY,
+        reviewer_rewrite: bool = False,
     ) -> None:
         self._sessions = UnitSessionPool[int](
             ctx,
@@ -2151,6 +2152,7 @@ class Stage5SessionPool:
         self.model = self._sessions.model
         self.max_turns = self._sessions.max_turns
         self.concurrency = self._sessions.concurrency
+        self._reviewer_rewrite = reviewer_rewrite
         self._driver_factory = driver_factory or (
             lambda _chapter: create_driver(self.profile, role='executor'))
         self._clients = self._sessions.clients
@@ -2172,9 +2174,15 @@ class Stage5SessionPool:
                 f'stage5.write session 章号必须是正整数，实得 {chapter!r}')
         return chapter
 
-    @classmethod
-    def _chapter_of_purpose(cls, purpose: str) -> int:
-        prefix = 'stage5.write·ch'
+    def _purpose_of(self, chapter: int) -> str:
+        return (
+            f'stage5.reviewer_rewrite·ch{chapter}'
+            if self._reviewer_rewrite else stage5_runs.purpose_of(chapter))
+
+    def _chapter_of_purpose(self, purpose: str) -> int:
+        prefix = (
+            'stage5.reviewer_rewrite·ch'
+            if self._reviewer_rewrite else 'stage5.write·ch')
         if not isinstance(purpose, str) or not purpose.startswith(prefix):
             raise ProvenanceRefused(
                 f'stage5.write 逐章 purpose 非法：{purpose!r}')
@@ -2182,8 +2190,8 @@ class Stage5SessionPool:
         if not raw.isdigit():
             raise ProvenanceRefused(
                 f'stage5.write 逐章 purpose 缺合法章号：{purpose!r}')
-        chapter = cls._chapter(int(raw))
-        if purpose != stage5_runs.purpose_of(chapter):
+        chapter = self._chapter(int(raw))
+        if purpose != self._purpose_of(chapter):
             raise ProvenanceRefused(
                 f'stage5.write 逐章 purpose 不是 canonical 形状：{purpose!r}')
         return chapter
@@ -2323,7 +2331,9 @@ class Stage5SessionPool:
                 f'{purpose}: 每次请求必须带本章独享的 RequestProgress')
         if kwargs.get('max_tokens') != write.MAX_TOKENS:
             raise ProvenanceRefused(f'{purpose}: requested ceiling 与 Stage5 契约漂移')
-        if kwargs.get('recovery_policy') != stage5_runs.RECOVERY_POLICY:
+        expected_recovery_policy = stage5_runs.recovery_policy_of(
+            'reviewer_rewrite' if self._reviewer_rewrite else 'write')
+        if kwargs.get('recovery_policy') != expected_recovery_policy:
             raise ProvenanceRefused(f'{purpose}: recovery policy 漂移')
         client = self._client_for(chapter)
         with self._lock:
@@ -2377,9 +2387,11 @@ class Stage5SessionPool:
         if unsupported:
             raise ProvenanceRefused(
                 f'{purpose}: checkpoint 恢复含未登记参数 {sorted(unsupported)}')
+        expected_recovery_policy = stage5_runs.recovery_policy_of(
+            'reviewer_rewrite' if self._reviewer_rewrite else 'write')
         if (not isinstance(system, str) or not isinstance(user, str)
                 or max_tokens != write.MAX_TOKENS
-                or recovery_policy != stage5_runs.RECOVERY_POLICY):
+                or recovery_policy != expected_recovery_policy):
             raise ProvenanceRefused(
                 f'{purpose}: checkpoint 恢复缺当前 subject/ceiling/policy')
         self._sessions.validate_checkpoint_acceptance(
@@ -2438,7 +2450,7 @@ class Stage5SessionPool:
     def accepted_models(self, *purposes: str) -> tuple[str, ...]:
         with self._lock:
             selected = purposes or tuple(
-                stage5_runs.purpose_of(chapter)
+                self._purpose_of(chapter)
                 for chapter in (self._prepared_chapters or ()))
         return tuple(sorted({
             model for purpose in selected
@@ -2496,7 +2508,9 @@ class Stage5SessionPool:
                     system=system,
                     user=user,
                     max_tokens=max_tokens,
-                    recovery_policy=stage5_runs.RECOVERY_POLICY,
+                    recovery_policy=stage5_runs.recovery_policy_of(
+                        'reviewer_rewrite'
+                        if self._reviewer_rewrite else 'write'),
                 )
                 queued = client.queue_restored_code_validation_feedback(
                     rows, purpose=purpose)
@@ -2620,7 +2634,7 @@ class Stage5SessionPool:
 
 
 class Stage5WriteAgent(NodeExecutorAgent[CheckReport]):
-    """默认、定向章节与 revise 共用同一个逐章 executor 入口。"""
+    """默认、定向、Review revise 与 Commander 单章 request 共用的 executor。"""
 
     node = 'stage5.write'
 
@@ -2633,6 +2647,7 @@ class Stage5WriteAgent(NodeExecutorAgent[CheckReport]):
         concurrency: int = MAX_CONCURRENCY,
         chapters: str | None = None,
         revise: bool = False,
+        reviewer_rewrite: str | None = None,
     ) -> None:
         if ctx.node != self.node:
             raise ValueError(
@@ -2643,14 +2658,22 @@ class Stage5WriteAgent(NodeExecutorAgent[CheckReport]):
             raise ValueError('stage5.write chapters 必须是字符串或 None')
         if not isinstance(revise, bool):
             raise ValueError('stage5.write revise 必须是 bool')
+        if reviewer_rewrite is not None and not isinstance(
+                reviewer_rewrite, str):
+            raise ValueError('stage5.write reviewer_rewrite 必须是字符串或 None')
+        if reviewer_rewrite is not None and (revise or chapters is not None):
+            raise ValueError(
+                'stage5.write reviewer_rewrite 不得与 revise/chapters 混用')
         self.ctx = ctx
         self.chapters = chapters
         self.revise = revise
+        self.reviewer_rewrite = reviewer_rewrite
         self.pool = Stage5SessionPool(
             ctx,
             driver_factory=driver_factory,
             max_turns=max_turns,
             concurrency=concurrency,
+            reviewer_rewrite=reviewer_rewrite is not None,
         )
 
     @staticmethod
@@ -2669,11 +2692,13 @@ class Stage5WriteAgent(NodeExecutorAgent[CheckReport]):
         result: NodeAgentResult[CheckReport] | None = None
         primary: BaseException | None = None
         try:
-            report = (
-                write.run_revise(self.ctx, self.pool, self.chapters)
-                if self.revise
-                else write.run_write(self.ctx, self.pool, self.chapters)
-            )
+            if self.reviewer_rewrite is not None:
+                report = write.run_reviewer_rewrite(
+                    self.ctx, self.pool, self.reviewer_rewrite)
+            elif self.revise:
+                report = write.run_revise(self.ctx, self.pool, self.chapters)
+            else:
+                report = write.run_write(self.ctx, self.pool, self.chapters)
             result = NodeAgentResult(
                 artifact=report, turns=self.pool.turns_used,
                 passed=report.passed, report=report)
@@ -3207,6 +3232,7 @@ def build_node_agent(
     semantic_driver_factory: SemanticDriverFactory | None = None,
     chapters: str | None = None,
     revise: bool = False,
+    reviewer_rewrite: str | None = None,
     repair_decision_sha256: str | None = None,
     repair_scope: plan.DesignRepairScope | None = None,
     max_turns: int = 4,
@@ -3232,8 +3258,9 @@ def build_node_agent(
                 'stage2.blueprint 不接受 stage4_design_driver_factory')
         if stage5_driver_factory is not None:
             raise ValueError('stage2.blueprint 不接受 stage5_driver_factory')
-        if chapters is not None or revise:
-            raise ValueError('stage2.blueprint 不接受 Stage5 chapters/revise 参数')
+        if chapters is not None or revise or reviewer_rewrite is not None:
+            raise ValueError(
+                'stage2.blueprint 不接受 Stage5 chapters/revise/reviewer_rewrite 参数')
         return factory(
             ctx, driver_factory=driver_factory, max_turns=max_turns,
             concurrency=concurrency)
@@ -3247,8 +3274,9 @@ def build_node_agent(
             raise ValueError(
                 'stage4.design 只接受 stage4_design_driver_factory，'
                 '不接受其他 pool factory')
-        if chapters is not None or revise:
-            raise ValueError('stage4.design 不接受 Stage5 chapters/revise 参数')
+        if chapters is not None or revise or reviewer_rewrite is not None:
+            raise ValueError(
+                'stage4.design 不接受 Stage5 chapters/revise/reviewer_rewrite 参数')
         return factory(
             ctx,
             driver_factory=stage4_design_driver_factory,
@@ -3273,6 +3301,7 @@ def build_node_agent(
             concurrency=concurrency,
             chapters=chapters,
             revise=revise,
+            reviewer_rewrite=reviewer_rewrite,
         )
     if ctx.node == 'stage6.semantic':
         if driver is not None:
@@ -3288,8 +3317,9 @@ def build_node_agent(
         if stage4_design_driver_factory is not None:
             raise ValueError(
                 'stage6.semantic 不接受 stage4_design_driver_factory')
-        if chapters is not None or revise:
-            raise ValueError('stage6.semantic 不接受 Stage5 chapters/revise 参数')
+        if chapters is not None or revise or reviewer_rewrite is not None:
+            raise ValueError(
+                'stage6.semantic 不接受 Stage5 chapters/revise/reviewer_rewrite 参数')
         return factory(
             ctx, driver_factory=semantic_driver_factory, max_turns=max_turns)
     if semantic_driver_factory is not None:
@@ -3301,8 +3331,9 @@ def build_node_agent(
             f'{ctx.node} 不接受 stage4_design_driver_factory')
     if stage5_driver_factory is not None:
         raise ValueError(f'{ctx.node} 不接受 stage5_driver_factory')
-    if chapters is not None or revise:
-        raise ValueError(f'{ctx.node} 不接受 Stage5 chapters/revise 参数')
+    if chapters is not None or revise or reviewer_rewrite is not None:
+        raise ValueError(
+            f'{ctx.node} 不接受 Stage5 chapters/revise/reviewer_rewrite 参数')
     return factory(ctx, driver=driver, max_turns=max_turns)
 
 

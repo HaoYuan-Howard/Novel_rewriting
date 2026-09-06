@@ -42,8 +42,20 @@ def _chapter_selection(flags: list[str]) -> list[int] | None:
 
 
 def _refuse_prepared_recovery_api(node: str, flags: list[str]) -> None:
-    """prepared recovery 必须复用 target run；通用 HTTP job 做不到这件事。"""
+    """拒绝必须由 Supervisor 绑定内部证据/复用 target 的 orchestration action。"""
     tokens = set(nodes.flag_tokens(flags))
+    reviewer_rewrite = tokens & {
+        '--request-reviewer-rewrite',
+        '--reviewer-rewrite',
+        '--recover-reviewer-rewrite-prepared',
+        '--retire-reviewer-rewrite-request',
+    }
+    if reviewer_rewrite:
+        selected = ', '.join(sorted(reviewer_rewrite))
+        raise UnsupportedRunMode(
+            f'{selected} 是 approval:stage5-closure / '
+            'recovery:stage5-reviewer-rewrite 的内部 hash-bound action；'
+            'POST /api/jobs/preview 与 POST /api/jobs 不接受客户端旁路提交')
     recovery = tokens & {
         '--emit-prepared-recovery-workpack', '--recover-prepared'}
     if node == 'stage5.write' and recovery:

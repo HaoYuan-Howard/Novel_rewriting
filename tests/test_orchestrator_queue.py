@@ -27,6 +27,7 @@ from contracts.schema.orchestration import (
     ArtifactState, JobEvent, QueueCounts, QueueEntry, QueueEvent, QueueItem,
     QueuePlan, QueueStart, StageState, Step,
 )
+from contracts.schema.stage5 import ReviewerRewriteExecutionState
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, BlockingFindingsUnresolved,
     GateBlocked, QueueConflict, UpstreamMissing, UpstreamStale,
@@ -1054,6 +1055,155 @@ def test_stage5_plan_uses_one_authorized_whole_book_command(
     assert len(item.steps) == 1
     argv = item.steps[0].argv
     assert '--mode' not in argv and '--deep' not in argv and '--shallow-rest' not in argv
+
+
+def _reviewer_rewrite_state(
+        state: str, *, request_sha: str = 'a' * 64,
+) -> ReviewerRewriteExecutionState:
+    prepared = state == 'recoverable_prepared'
+    terminal = state.startswith('landed_') or state == 'consumed_resolved'
+    return ReviewerRewriteExecutionState(
+        request_rel='stage5/reviewer_rewrite_request.json',
+        request_file_sha256='b' * 64,
+        request_sha256=request_sha,
+        target_ordinal=2,
+        state=state,
+        source_run_id=(
+            'source-reviewer-run'
+            if state in {'recoverable_checkpoint', 'recoverable_prepared'}
+            else None),
+        checkpoint_sha256=(
+            'c' * 64
+            if state in {'recoverable_checkpoint', 'recoverable_prepared'}
+            else None),
+        journal_sha256=(
+            'd' * 64
+            if state in {'recoverable_checkpoint', 'recoverable_prepared'}
+            else None),
+        recovery_target_run_id=(
+            'target-recovery-run' if prepared else None),
+        recovery_journal_sha256=('e' * 64 if prepared else None),
+        terminal_current=(
+            False if state == 'consumed_resolved' else True
+            if terminal else None),
+    )
+
+
+@pytest.mark.parametrize(('state', 'expected_flags', 'paid', 'has_steps'), [
+    ('ready_paid', (
+        '--reviewer-rewrite', 'stage5/reviewer_rewrite_request.json'),
+     True, True),
+    ('recoverable_checkpoint', (
+        '--recover-reviewer-rewrite-prepared', 'source-reviewer-run',
+        '--reviewer-rewrite-request-sha256', 'a' * 64),
+     False, True),
+    ('recoverable_prepared', (
+        '--recover-reviewer-rewrite-prepared', 'source-reviewer-run',
+        '--reviewer-rewrite-request-sha256', 'a' * 64,
+        '--reviewer-rewrite-recovery-target-run-id', 'target-recovery-run',
+        '--reviewer-rewrite-recovery-journal-sha256', 'e' * 64),
+     False, True),
+    ('expired_unstarted', (
+        '--retire-reviewer-rewrite-request',
+        'stage5/reviewer_rewrite_request.json',
+        '--reviewer-rewrite-request-sha256', 'a' * 64),
+     False, True),
+    ('in_flight_or_unknown', (), False, False),
+])
+def test_reviewer_rewrite_execution_preempts_stale_review_and_freezes_exact_action(
+        queue_base, monkeypatch, state, expected_flags, paid, has_steps):
+    """pending/unknown/recovery 必须先于普通 SKIP 与 stale Review 进入专属 waiter。"""
+    from novel.stages.stage5 import reviewer_rewrite
+
+    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])
+    monkeypatch.setattr(Q.paths, 'find_novel_dir', lambda *_args: queue_base)
+    monkeypatch.setattr(Q.st, 'readonly_ctx', lambda *_args: object())
+    monkeypatch.setattr(
+        reviewer_rewrite, 'reviewer_rewrite_execution_state',
+        lambda _ctx: _reviewer_rewrite_state(state))
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, _node: (Q.st.RESUME_SKIP, 'canonical 章已存在'))
+    monkeypatch.setattr(Q.approvals, 'writing_is_current', lambda *_args: True)
+    overview = SimpleNamespace(stages=[SimpleNamespace(
+        stage='stage5', artifacts=[], review_state='stale')])
+
+    todo, blocked = Q.plan_book_from_overview(
+        queue_base, 'book-a', overview,
+        until_stage='stage5', follow_check=False)
+
+    assert todo == [] and len(blocked) == 1
+    item = blocked[0]
+    assert item.waiting_on == Q.WAITING_ON_STAGE5_REVIEWER_REWRITE
+    assert tuple(item.flags) == expected_flags
+    assert bool(item.steps) is has_steps
+    if has_steps:
+        assert any(step.paid for step in item.steps) is paid
+
+
+@pytest.mark.parametrize('terminal_state', [
+    'landed_formal', 'consumed_resolved',
+])
+def test_consumed_reviewer_rewrite_returns_to_free_stage5_review(
+        queue_base, monkeypatch, terminal_state):
+    """已消费 request 不再 Writer/inbox；只让 normal Stage5 Review 重算新主体。"""
+    from novel.stages.stage5 import reviewer_rewrite
+
+    monkeypatch.setattr(
+        Q, 'nodes_up_to', lambda _until: ['stage5.write', 'stage5.review'])
+    monkeypatch.setattr(Q.paths, 'find_novel_dir', lambda *_args: queue_base)
+    monkeypatch.setattr(Q.st, 'readonly_ctx', lambda *_args: object())
+    monkeypatch.setattr(
+        reviewer_rewrite, 'reviewer_rewrite_execution_state',
+        lambda _ctx: _reviewer_rewrite_state(terminal_state))
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, node: (
+            (Q.st.RESUME_SKIP, 'canonical 已存在')
+            if node == 'stage5.write'
+            else (Q.st.RESUME_RUN, '正文主体已更新，Review stale')))
+    monkeypatch.setattr(Q.approvals, 'writing_is_current', lambda *_args: True)
+    overview = SimpleNamespace(stages=[SimpleNamespace(
+        stage='stage5', artifacts=[], review_state='stale')])
+
+    todo, blocked = Q.plan_book_from_overview(
+        queue_base, 'book-a', overview,
+        until_stage='stage5', follow_check=False)
+
+    assert blocked == []
+    assert [item.node for item in todo] == ['stage5.review']
+    assert todo[0].flags == []
+    assert all(not step.paid for step in todo[0].steps)
+
+
+@pytest.mark.parametrize('terminal_state', [
+    'landed_invalid', 'landed_rejected',
+])
+def test_negative_reviewer_rewrite_routes_to_inbox_without_second_paid_action(
+        queue_base, monkeypatch, terminal_state):
+    """负终态已消费 request，只开放各自 0-wire 人工恢复面。"""
+    from novel.stages.stage5 import reviewer_rewrite
+
+    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])
+    monkeypatch.setattr(Q.paths, 'find_novel_dir', lambda *_args: queue_base)
+    monkeypatch.setattr(Q.st, 'readonly_ctx', lambda *_args: object())
+    monkeypatch.setattr(
+        reviewer_rewrite, 'reviewer_rewrite_execution_state',
+        lambda _ctx: _reviewer_rewrite_state(terminal_state))
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, _node: (Q.st.RESUME_SKIP, '已有旧 formal'))
+    monkeypatch.setattr(Q.approvals, 'writing_is_current', lambda *_args: True)
+    overview = SimpleNamespace(stages=[SimpleNamespace(
+        stage='stage5', artifacts=[], review_state='stale')])
+
+    todo, blocked = Q.plan_book_from_overview(
+        queue_base, 'book-a', overview,
+        until_stage='stage5', follow_check=False)
+
+    assert todo == [] and len(blocked) == 1
+    assert blocked[0].waiting_on == Q.WAITING_ON_INBOX
+    assert blocked[0].flags == [] and blocked[0].steps == []
 
 
 def test_runnable_stage5_write_keeps_zero_cost_review_in_the_same_snapshot(

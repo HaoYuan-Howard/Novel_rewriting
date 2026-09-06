@@ -195,6 +195,9 @@ def _runtime_files() -> tuple[str, ...]:
 
 #: 允许裸读 JSON 的白名单。每一条都要写得出理由。
 _JSON_READ_ALLOWED = {
+    'novel/stages/stage5/reviewer_rewrite.py': (
+        '只解码 Commander 决定的临时 trusted transport，并拒绝重复键/NaN；'
+        '该输入不是产物，canonical request 与章稿仍全部经 ArtifactStore 读取'),
     'novel/store.py': '它就是那条唯一的读路，记账在这里发生',
     'novel/commanders/base.py': (
         'Commander output schema 的 JSON 解码只规范化调用方已在内存中的传输契约；'
@@ -298,6 +301,9 @@ def test_only_the_store_reads_json_directly():
 #: 原型没有写口守卫，于是落盘闸门的失败支用**裸 `json.dump`** 写 `.INVALID`
 #: ——那份稿从此没有来源账，而提升路又「沿用原稿里那一份」。盘上留下 1 份铁证。
 _WRITE_ALLOWED = {
+    'novel/orchestrator/reviewer_action_evidence.py': (
+        '只在 _service/runs 下写内容寻址的不可变 Reviewer authority receipt；'
+        '以跨进程锁、原字节 CAS 和正式证据复核封口，不写 canonical 小说产物'),
     'novel/store.py': '它就是那条唯一的写路，两道闸在这里',
     'novel/appendlog.py': (
         'append-only 事件流的**唯一追加口**：五份 `_service/*.jsonl`（账本、作业、队列、'

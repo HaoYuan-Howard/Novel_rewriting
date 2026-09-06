@@ -97,6 +97,15 @@ def test_stage2_contract_closes_collection_operations_and_surviving_review():
     assert '无 disposition 时也必须显式提交 `null`' in stage2
 
 
+def test_stage5_rewrite_contract_distinguishes_text_file_sha_and_unique_evidence():
+    stage5 = reviewer_contract.CONTRACT_TEXT['stage5-closure']
+    assert 'frontier 的\n`chapter_sha256` 是 rendered text SHA' in stage5
+    assert '`chapter_subjects[].chapter_sha256` 是 canonical Chapter\n完整文件 SHA' in stage5
+    assert '`target_chapter_file_sha256` 锁定目标完整文件' in stage5
+    assert '两域不得互换' in stage5
+    assert '在 target current 正文中逐字恰好唯一命中' in stage5
+
+
 def test_anchor_parser_fails_closed_on_broken_blocks():
     with pytest.raises(ValueError):
         reviewer_contract.parse_anchored_blocks(

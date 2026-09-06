@@ -19,6 +19,7 @@ from contracts.schema.api import (
     OperatorNextDecision,
 )
 from contracts.schema.orchestration import NovelOverview, OverviewSummary
+from contracts.schema.stage5 import ReviewerRewriteExecutionState
 from novel import paths
 from novel.cli import exit_codes as X
 from novel.cli.main import main
@@ -357,6 +358,7 @@ def test_policy_tables_are_closed_and_paid_rows_are_exactly_profiled():
         ('stage4.design', frozenset({'--review-token'})),
         ('stage5.write', frozenset({'--revise'})),
         ('stage5.write', frozenset({'--revise', '--chapters'})),
+        ('stage5.write', frozenset({'--reviewer-rewrite'})),
     }
     assert all(tokens in EXECUTOR_PROFILED_RUNS[node] for node, tokens in paid)
     expected_files = {
@@ -375,6 +377,8 @@ def test_policy_tables_are_closed_and_paid_rows_are_exactly_profiled():
         ('stage5.write', '--preview-edit'),
         ('stage5.write', '--apply-edit'),
         ('stage5.review', '--retain-pretrim-batch'),
+        ('stage5.review', '--request-reviewer-rewrite'),
+        ('stage5.write', '--reviewer-rewrite'),
         ('stage6.hook', '--apply-edit'),
         ('stage7.rename', '--apply-edit'),
         ('stage7.rename', '--validate-edit'),
@@ -588,6 +592,70 @@ def test_stage5_trim_batch_manifest_is_bound_only_in_book_or_service_edit(
         current, 'stage5.review',
         ['--retain-pretrim-batch', str(service)])
     assert Path(got.external_inputs[0].resolved_path) == service.resolve()
+
+
+def test_stage5_prepared_rewrite_permit_binds_target_wal_and_request_raw_bytes(
+        monkeypatch, tmp_path):
+    """prepared recovery 逐字绑定旧 target WAL；不能换 run 重建第二份。"""
+    _stable(monkeypatch)
+    novel_dir = tmp_path / f'平台_测试书_{SID}'
+    request_path = novel_dir / 'stage5' / 'reviewer_rewrite_request.json'
+    request_path.parent.mkdir(parents=True)
+    request_raw = b'{"typed":"request"}\n'
+    request_path.write_bytes(request_raw)
+    flags = [
+        '--recover-reviewer-rewrite-prepared', 'source-run',
+        '--reviewer-rewrite-request-sha256', 'a' * 64,
+        '--reviewer-rewrite-recovery-target-run-id', 'target-run',
+        '--reviewer-rewrite-recovery-journal-sha256', 'b' * 64,
+    ]
+    current = _next(
+        tmp_path, state='blocked', node='stage5.write', flags=flags,
+        waiting_on=Q.WAITING_ON_STAGE5_REVIEWER_REWRITE)
+    from novel.stages.stage5 import reviewer_rewrite
+    from novel.orchestrator import state as state_module
+
+    execution = ReviewerRewriteExecutionState(
+        request_rel='stage5/reviewer_rewrite_request.json',
+        request_file_sha256=hashlib.sha256(request_raw).hexdigest(),
+        request_sha256='a' * 64,
+        target_ordinal=2,
+        state='recoverable_prepared',
+        source_run_id='source-run',
+        checkpoint_sha256='c' * 64,
+        journal_sha256='d' * 64,
+        recovery_target_run_id='target-run',
+        recovery_journal_sha256='b' * 64,
+    )
+    monkeypatch.setattr(P.paths, 'resolve_novel_dir', lambda *_args: novel_dir)
+    monkeypatch.setattr(state_module, 'readonly_ctx', lambda *_args: object())
+    monkeypatch.setattr(
+        reviewer_rewrite, 'reviewer_rewrite_execution_state',
+        lambda _ctx: execution)
+
+    permit = P.permit_from_next(current, 'stage5.write', flags)
+
+    assert permit.paid is False
+    assert permit.flags == flags
+    [external] = permit.external_inputs
+    assert external.flag == '--reviewer-rewrite-request-sha256'
+    assert external.sha256 == hashlib.sha256(request_raw).hexdigest()
+    P.revalidate_active_execution_surface(
+        permit, base=tmp_path, sid=SID,
+        node='stage5.write', flags=flags)
+
+    request_path.write_bytes(b'{"typed":"changed"}\n')
+    with pytest.raises(ArtifactUnreadable, match='外部输入'):
+        P.revalidate_active_execution_surface(
+            permit, base=tmp_path, sid=SID,
+            node='stage5.write', flags=flags)
+    request_path.write_bytes(request_raw)
+
+    execution = execution.model_copy(update={
+        'recovery_journal_sha256': 'e' * 64,
+    })
+    with pytest.raises(UnsupportedRunMode, match='execution state 已变化'):
+        P.permit_from_next(current, 'stage5.write', flags)
 
 
 def test_stage2_review_decisions_bind_service_edit_but_reject_scratch(

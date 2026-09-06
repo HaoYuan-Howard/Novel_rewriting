@@ -46,6 +46,9 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage4.writer_context': 'stage4/writer_context.json',
     'stage5.chapter': 'stage5/ch{nn}.json',
     'stage5.rejected_revision': 'stage5/ch{nn}.rejected.json',
+    # Commander 先以 free reviewer node 落一份单章、hash-bound 的正式改写请求；
+    # paid writer 只消费这一条 canonical 路径，不能把自由文本指令塞进 argv。
+    'stage5.reviewer_rewrite_request': 'stage5/reviewer_rewrite_request.json',
     'stage5.review': 'stage5/review_{n}.json',
     'stage5.trim_audit': 'stage5/trim_audit_ch{nn}.json',
     'stage5.trim_resolution': 'stage5/trim_resolution_ch{nn}.json',
@@ -127,6 +130,8 @@ STAGE4_PLAN_EDIT = artifact_rel('stage4.plan_edit')
 STAGE4_WRITER_CONTEXT = artifact_rel('stage4.writer_context')
 STAGE5_CHAPTER = artifact_rel('stage5.chapter')
 STAGE5_REJECTED_REVISION = artifact_rel('stage5.rejected_revision')
+STAGE5_REVIEWER_REWRITE_REQUEST = artifact_rel(
+    'stage5.reviewer_rewrite_request')
 STAGE5_REVIEW = artifact_rel('stage5.review')
 STAGE5_TRIM_AUDIT = artifact_rel('stage5.trim_audit')
 STAGE5_TRIM_RESOLUTION = artifact_rel('stage5.trim_resolution')

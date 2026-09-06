@@ -116,6 +116,7 @@ from contracts.invariants import (
     STAGE5_CLOSURE_GROUPS, STAGE5_CLOSURE_STATES,
     STAGE5_EDIT_CONFIRMATIONS,
     STAGE5_MUST_APPEAR_RULINGS,
+    STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES,
 )
 
 from contracts.schema.base import FrozenModel, StrictModel
@@ -2534,6 +2535,53 @@ class Stage5TrimWorkItem(FrozenModel):
     output_ordinal: int = Field(ge=1)
     audit_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     chapter_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
+class Stage5ReviewerRewriteDirectiveInput(StrictModel):
+    """Commander 对单章 current 正文给出的一条关闭式改写定位。"""
+
+    code: Literal[STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES]
+    current_text_evidence: str = Field(min_length=1, max_length=240)
+
+    @model_validator(mode='after')
+    def _evidence_is_concrete(self) -> 'Stage5ReviewerRewriteDirectiveInput':
+        if not self.current_text_evidence.strip():
+            raise ValueError('reviewer rewrite evidence 不能只含空白')
+        return self
+
+
+class Stage5ReviewerRewriteRequest(StrictModel):
+    """Stage5 顶部卡的一章 LLM 改写请求运输形状。
+
+    ``unresolved_trim_items`` 是 Commander 所见的原完整有序 frontier，不是目标
+    选择器；``target_ordinal`` 恰好选择其中一章。真正落盘的正式 request 会由
+    producer 再注入固定执行约束与 provenance，外部不能提交自由 prompt。
+    """
+
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    review_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    unresolved_trim_items: list[Stage5TrimWorkItem] = Field(min_length=1)
+    target_ordinal: int = Field(ge=1)
+    # ``Stage5TrimWorkItem.chapter_sha256`` 延续 retain 契约，绑定的是
+    # rendered text；付费覆盖还必须另绑目标 canonical Chapter JSON 的完整字节。
+    target_chapter_file_sha256: Sha256
+    directives: list[Stage5ReviewerRewriteDirectiveInput] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _closed_rewrite_request(self) -> 'Stage5ReviewerRewriteRequest':
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('reviewer rewrite actor/reason 不能只含空白')
+        ordinals = [row.output_ordinal for row in self.unresolved_trim_items]
+        if ordinals != sorted(set(ordinals)):
+            raise ValueError('reviewer rewrite frontier 必须按章升序、去重')
+        if self.target_ordinal not in ordinals:
+            raise ValueError('reviewer rewrite target 必须属于原完整 unresolved frontier')
+        directive_keys = [
+            (row.code, row.current_text_evidence) for row in self.directives]
+        if len(directive_keys) != len(set(directive_keys)):
+            raise ValueError('reviewer rewrite directive 的 code/evidence 不得重复')
+        return self
 
 
 class Stage5TrimSubject(Stage5TrimWorkItem):

@@ -278,6 +278,9 @@ def test_exhausted_revision_writes_only_rejected_evidence(
             self.docs = {'stage5/ch01.json': SimpleNamespace(text=old_text)}
             self.writes = []
 
+        def exists(self, rel):
+            return rel in self.docs
+
         def write_round(self, rel, artifact):
             self.writes.append(rel)
             self.docs[rel] = artifact
@@ -372,7 +375,7 @@ def test_dirty_checkpoint_queues_safe_feedback_before_new_candidate(monkeypatch)
 
 
 def test_formal_journal_preflight_covers_every_transaction_path(monkeypatch):
-    prepared = SimpleNamespace(ordinal=4)
+    prepared = SimpleNamespace(ordinal=4, mode='write')
     store = SimpleNamespace()
     monkeypatch.setattr(
         write, '_journal_landed_primary',
@@ -393,13 +396,13 @@ def test_formal_journal_preflight_covers_every_transaction_path(monkeypatch):
 
     formal = write._rel(4)
     assert calls == [
-        (4, formal, {'expected_file_sha256': None}),
-        (4, write.paths.invalid_of(formal), {'expected_absent': True}),
-        (4, write._rejected_rel(4), {'expected_absent': True}),
+        (4, formal, {'mode': 'write', 'expected_file_sha256': None}),
+        (4, write.paths.invalid_of(formal), {'mode': 'write', 'expected_absent': True}),
+        (4, write._rejected_rel(4), {'mode': 'write', 'expected_absent': True}),
         (4, write.artifact_rel('stage5.trim_audit', nn=4), {
-            'expected_file_sha256': None, 'expected_absent': True}),
+            'mode': 'write', 'expected_file_sha256': None, 'expected_absent': True}),
         (4, write.artifact_rel('stage5.trim_resolution', nn=4), {
-            'expected_file_sha256': None, 'expected_absent': True}),
+            'mode': 'write', 'expected_file_sha256': None, 'expected_absent': True}),
     ]
 
 

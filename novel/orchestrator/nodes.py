@@ -28,6 +28,7 @@ import sys
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
+from contracts.artifacts import STAGE5_REVIEWER_REWRITE_REQUEST
 from contracts.invariants import (
     CONDITIONAL_REQUIRED_FLAGS, FREE_ENTRIES, NODES, NODE_WRITE_EFFECTS,
     REQUIRED_PLACEHOLDER_PREFIX, STAGE5_EDIT_CONFIRMATIONS, VALUED_FLAGS,
@@ -79,6 +80,7 @@ EXECUTOR_PROFILED_RUNS: dict[str, tuple[frozenset[str], ...]] = {
         frozenset({'--chapters'}),
         frozenset({'--revise'}),
         frozenset({'--revise', '--chapters'}),
+        frozenset({'--reviewer-rewrite'}),
     ),
     'stage6.hook': (frozenset(),),
     'stage6.semantic': (frozenset(),),
@@ -117,11 +119,14 @@ _PRIMARY_OPERATIONS = {
     }),
     'stage5.write': frozenset({
         '--dry-run', '--recheck', '--revalidate', '--preview-edit',
-        '--apply-edit', '--revise',
+        '--apply-edit', '--revise', '--reviewer-rewrite',
         '--emit-prepared-recovery-workpack', '--recover-prepared',
+        '--recover-reviewer-rewrite-prepared',
+        '--retire-reviewer-rewrite-request',
     }),
     'stage5.review': frozenset({
-        '--retain-pretrim', '--retain-pretrim-batch', '--wontfix', '--check-only',
+        '--retain-pretrim', '--retain-pretrim-batch',
+        '--request-reviewer-rewrite', '--wontfix', '--check-only',
     }),
     'stage6.hook': frozenset({
         '--dry-run', '--check-only', '--identity', '--recheck', '--revalidate',
@@ -273,11 +278,109 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
                 'stage5.write --recover-prepared 只接受 source run_id 与必填的 '
                 '--actor/--reason/--subject-sha256；不得与 chapters/revise/'
                 'response-repair 或其他操作混用')
+    if node == 'stage5.write' and '--reviewer-rewrite' in tokens:
+        if set(tokens) != {'--reviewer-rewrite'}:
+            raise UnsupportedRunMode(
+                'stage5.write --reviewer-rewrite 只接受 current canonical request 路径；'
+                '不得与 chapters/revise/人工编辑或恢复参数混用')
+    reviewer_rewrite_recovery_credentials = {
+        '--reviewer-rewrite-request-sha256',
+        '--reviewer-rewrite-recovery-target-run-id',
+        '--reviewer-rewrite-recovery-journal-sha256',
+    }
+    if (node == 'stage5.write'
+            and '--recover-reviewer-rewrite-prepared' in tokens):
+        base_expected = {
+            '--recover-reviewer-rewrite-prepared',
+            '--reviewer-rewrite-request-sha256',
+        }
+        prepared_expected = {
+            *base_expected,
+            '--reviewer-rewrite-recovery-target-run-id',
+            '--reviewer-rewrite-recovery-journal-sha256',
+        }
+        token_set = set(tokens)
+        if (token_set not in (base_expected, prepared_expected)
+                or len(flags) != 2 * len(token_set)):
+            raise UnsupportedRunMode(
+                'stage5.write --recover-reviewer-rewrite-prepared 只接受 source run_id '
+                '与 canonical request SHA；prepared WAL 已存在时还必须同时携 exact '
+                'target run_id/journal SHA。不得与 paid rewrite、chapters/revise、'
+                'executor/profile 或其他操作混用')
+        source_run_id = flag_value(
+            flags, '--recover-reviewer-rewrite-prepared') or ''
+        try:
+            run_identity.check_run_id(source_run_id)
+        except ValueError as exc:
+            raise UnsupportedRunMode(
+                f'Stage5 Reviewer rewrite source run_id 非法：{exc}') from exc
+        request_sha256 = flag_value(
+            flags, '--reviewer-rewrite-request-sha256') or ''
+        if (request_sha256
+                != placeholder_for('--reviewer-rewrite-request-sha256')
+                and re.fullmatch(r'[0-9a-f]{64}', request_sha256) is None):
+            raise UnsupportedRunMode(
+                '--reviewer-rewrite-request-sha256 必须是 64 位小写十六进制 SHA-256')
+        if token_set == prepared_expected:
+            target_run_id = flag_value(
+                flags, '--reviewer-rewrite-recovery-target-run-id') or ''
+            try:
+                run_identity.check_run_id(target_run_id)
+            except ValueError as exc:
+                raise UnsupportedRunMode(
+                    f'Stage5 Reviewer rewrite recovery target run_id 非法：{exc}') from exc
+            journal_sha256 = flag_value(
+                flags, '--reviewer-rewrite-recovery-journal-sha256') or ''
+            if (journal_sha256
+                    != placeholder_for(
+                        '--reviewer-rewrite-recovery-journal-sha256')
+                    and re.fullmatch(r'[0-9a-f]{64}', journal_sha256) is None):
+                raise UnsupportedRunMode(
+                    '--reviewer-rewrite-recovery-journal-sha256 必须是 '
+                    '64 位小写十六进制 SHA-256')
+    if (node == 'stage5.write'
+            and '--retire-reviewer-rewrite-request' in tokens):
+        expected = {
+            '--retire-reviewer-rewrite-request',
+            '--reviewer-rewrite-request-sha256',
+        }
+        if set(tokens) != expected or len(flags) != 2 * len(expected):
+            raise UnsupportedRunMode(
+                'stage5.write --retire-reviewer-rewrite-request 只接受 canonical '
+                'request 路径与 request self SHA；不得与 paid/recovery/写作参数混用')
+        if flag_value(
+                flags, '--retire-reviewer-rewrite-request'
+        ) not in {
+            STAGE5_REVIEWER_REWRITE_REQUEST,
+            placeholder_for('--retire-reviewer-rewrite-request'),
+        }:
+            raise UnsupportedRunMode(
+                'stage5.write --retire-reviewer-rewrite-request 只接受 canonical request')
+        request_sha256 = flag_value(
+            flags, '--reviewer-rewrite-request-sha256') or ''
+        if (request_sha256
+                != placeholder_for('--reviewer-rewrite-request-sha256')
+                and re.fullmatch(r'[0-9a-f]{64}', request_sha256) is None):
+            raise UnsupportedRunMode(
+                '--reviewer-rewrite-request-sha256 必须是 64 位小写十六进制 SHA-256')
+    if (node == 'stage5.write'
+            and set(tokens) & reviewer_rewrite_recovery_credentials
+            and '--recover-reviewer-rewrite-prepared' not in tokens
+            and '--retire-reviewer-rewrite-request' not in tokens):
+        raise UnsupportedRunMode(
+            'Reviewer rewrite recovery credentials 只绑定 '
+            '--recover-reviewer-rewrite-prepared 或 '
+            '--retire-reviewer-rewrite-request；不得被其他写作跑法静默忽略')
     if (node == 'stage5.write' and '--subject-sha256' in tokens
             and '--recover-prepared' not in tokens):
         raise UnsupportedRunMode(
             'stage5.write --subject-sha256 只绑定 --recover-prepared 工作包；'
             '不能把孤立 subject 静默忽略后落到默认付费写作')
+    if node == 'stage5.review' and '--request-reviewer-rewrite' in tokens:
+        if set(tokens) != {'--request-reviewer-rewrite'}:
+            raise UnsupportedRunMode(
+                'stage5.review --request-reviewer-rewrite 只接受一份 typed request；'
+                '不得与 retain/wontfix/check 或人工 flag 混用')
     stage4_recovery_credentials = {
         '--source-journal-sha256', '--source-commit-sha256',
     }

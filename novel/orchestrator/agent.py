@@ -40,6 +40,7 @@ from typing import Any, BinaryIO, Iterator, NamedTuple
 from contracts.artifacts import (
     STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT,
     STAGE2_GLOBAL_EDIT_FAILURE, STAGE2_GLOBAL_REVIEW_DECISIONS,
+    STAGE5_REVIEWER_REWRITE_REQUEST,
 )
 from contracts.invariants import (
     AGENT_EXECUTOR_NODES, COMMANDER_MAX_ATTEMPTS_PER_SEAT,
@@ -49,7 +50,7 @@ from contracts.invariants import (
 from contracts.schema import decode_artifact
 from contracts.schema.api import (
     BatchTrimResolutionRequest, ExecutionPermit, OperatorNext,
-    Stage2FinalReviewRequest,
+    Stage2FinalReviewRequest, Stage5ReviewerRewriteRequest,
 )
 from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema.stage2 import GlobalEdit, GlobalEditCommit, GlobalEditFailure
@@ -92,8 +93,9 @@ from novel.model_slots import (
 )
 from novel.orchestrator import (
     admission, commander_completion, execution_permit, jobs, operator, queue,
-    review_seats, reviewer_seat_ledger, reviewer_tasks, service_lifecycle,
-    stage2_review_ledger, stage2_reviewer_wire, state, uploads,
+    review_seats, reviewer_action_evidence, reviewer_seat_ledger,
+    reviewer_tasks, service_lifecycle, stage2_review_ledger,
+    stage2_reviewer_wire, state, uploads,
 )
 from novel.orchestrator.agent_supervisor import (
     CommanderTurnResult, LaunchTicket, PrelaunchIdentityDrift, RunSupervisor,
@@ -999,8 +1001,70 @@ def _stage5_trim_reviewer_input(
 
 
 @contextmanager
+def _stage5_reviewer_rewrite_input(
+        base: str, sid: str, action: reviewer_tasks.ReviewerNodeAction,
+        *, reviewer_action_record_path: Path | None,
+) -> Iterator[Path]:
+    """把 Commander 决定与已验证 durable 身份合成 producer 受信输入。"""
+    payload = action.input_payload
+    if payload is None:  # pragma: no cover —— 调用方只在有 payload 时进入
+        raise RuntimeError('Stage5 reviewer rewrite 缺 typed payload')
+    if reviewer_action_record_path is None:
+        raise RuntimeError('Stage5 reviewer rewrite 缺 durable action record')
+    request = Stage5ReviewerRewriteRequest.model_validate(payload)
+    target = reviewer_action_record_path.resolve()
+    matched = [
+        record for path, record in uploads.load_reviewer_actions(base, sid)
+        if path == target
+    ]
+    if len(matched) != 1:
+        raise RuntimeError(
+            'Stage5 reviewer rewrite durable action record 不唯一或已缺失')
+    record = matched[0]
+    if (
+        record.node != action.node
+        or record.flags != action.flags
+        or record.input_payload != request.model_dump(mode='json')
+        or record.stage5_reviewer_contract_sha256 is None
+        or record.reviewer_session_run_id is None
+        or record.reviewer_seat_turn_id is None
+        or record.provider_response_sha256 is None
+    ):
+        raise RuntimeError(
+            'Stage5 reviewer rewrite durable action 与待执行 typed payload/席位不闭合')
+    try:
+        raw = target.read_bytes()
+    except OSError as exc:
+        raise RuntimeError(
+            f'Stage5 reviewer rewrite durable action record 不可读：{exc!r}') from exc
+    record_sha256 = hashlib.sha256(raw).hexdigest()
+    if target.name != f'reviewer-action-{record_sha256}.json':
+        raise RuntimeError(
+            'Stage5 reviewer rewrite durable action record 内容地址不闭合')
+    path = uploads.save_stage5_reviewer_rewrite_input(
+        base, sid, request,
+        reviewer_action_record_sha256=record_sha256,
+        business_sha256=record.business_sha256,
+        reviewer_contract_sha256=record.stage5_reviewer_contract_sha256,
+        reviewer_session_run_id=record.reviewer_session_run_id,
+        reviewer_seat_turn_id=record.reviewer_seat_turn_id,
+        provider_response_sha256=record.provider_response_sha256,
+    )
+    try:
+        yield path
+    finally:
+        try:
+            uploads.discard_edit_plan(base, path)
+        except NovelError as exc:
+            warnings.warn(
+                f'reviewer 节点已结束，但一次性 Stage5 rewrite request 清理失败：{exc}',
+                RuntimeWarning, stacklevel=2)
+
+
+@contextmanager
 def _reviewer_node_flags(
         base: str, sid: str, action: reviewer_tasks.ReviewerNodeAction,
+        *, reviewer_action_record_path: Path | None = None,
 ) -> Iterator[list[str]]:
     """把可信 typed payload 物化成 permit 与真实 CLI 共用的 exact flags。"""
     flags = list(action.flags)
@@ -1014,6 +1078,14 @@ def _reviewer_node_flags(
         and action.flags == ('--retain-pretrim-batch', '@reviewer-input')
     ):
         input_context = _stage5_trim_reviewer_input(base, sid, action)
+    elif (
+        action.node == 'stage5.review'
+        and action.flags == (
+            '--request-reviewer-rewrite', '@reviewer-input')
+    ):
+        input_context = _stage5_reviewer_rewrite_input(
+            base, sid, action,
+            reviewer_action_record_path=reviewer_action_record_path)
     else:
         raise RuntimeError(f'{action.node} 尚未登记 reviewer 外部输入物化入口')
     with input_context as payload_path:
@@ -1029,9 +1101,12 @@ def _reviewer_node_flags(
 def _execute_reviewer_node_action(
         base: str, sid: str, action: reviewer_tasks.ReviewerNodeAction,
         run_token: Callable[[ExecutionPermit], SupervisorActionResult],
+        *, reviewer_action_record_path: Path | None = None,
 ) -> SupervisorActionResult:
     """在一次性输入仍存活时铸 permit 并同步跑完整 canonical runner。"""
-    with _reviewer_node_flags(base, sid, action) as flags:
+    with _reviewer_node_flags(
+            base, sid, action,
+            reviewer_action_record_path=reviewer_action_record_path) as flags:
         permit = operator.permit(base, sid, action.node, flags)
         return run_token(permit)
 
@@ -1204,8 +1279,10 @@ def _record_reviewer_action(
         if (
             token is None
             and action.node == 'stage5.review'
-            and action.flags == (
-                '--retain-pretrim-batch', '@reviewer-input')
+            and action.flags in {
+                ('--retain-pretrim-batch', '@reviewer-input'),
+                ('--request-reviewer-rewrite', '@reviewer-input'),
+            }
         ):
             # trim 人审主体只认 Review + 原完整有序双 SHA + contract。
             # closure token 会随 resolution/wontfix/disclosure 重构，不得带入
@@ -1216,7 +1293,7 @@ def _record_reviewer_action(
                     or reviewer_seat_turn_id is None
                     or provider_response_sha256 is None):
                 raise RuntimeError(
-                    'Stage5 batch durable action 缺原 Review/contract/'
+                    'Stage5 trim disposition durable action 缺原 Review/contract/'
                     '席位/provider 回答身份')
             stage5_fields = {
                 'stage5_review_sha256': task.stage5_review_sha256,
@@ -1569,26 +1646,7 @@ def _validate_stage2_action_record_ledger(
 
 
 def _stage5_recorded_response_sha256(record: ReviewerActionRecord) -> str:
-    """从 durable full action 复原 Commander 原回答的 canonical digest。"""
-    if record.node is None:
-        raise reviewer_tasks.ReviewerTaskError(
-            'Stage5 durable batch record 缺 node action')
-    action: dict[str, object] = {
-        'kind': 'node', 'node': record.node,
-        'flags': list(record.flags or ()),
-    }
-    if record.input_payload is not None:
-        action['input_payload'] = record.input_payload
-    document = {
-        'schema': reviewer_tasks.REQUEST_SCHEMA,
-        'surface_seal': record.surface_seal,
-        'waiting_on': record.waiting_on,
-        'action': action,
-    }
-    return _sha256_bytes(json.dumps(
-        document, ensure_ascii=False, sort_keys=True,
-        separators=(',', ':'), allow_nan=False,
-    ).encode('utf-8') + b'\n')
+    return reviewer_action_evidence.recorded_response_sha256(record)
 
 
 @contextmanager
@@ -1596,285 +1654,22 @@ def _stage5_record_owner_guard(
         base: str, *, record_parent_run_id: str,
         current_parent_run_id: str | None,
         ) -> Iterator[bool]:
-    """同 parent 可继续自己的已闭席位；跨 parent 必须先证明 owner 已停。"""
-    same_parent = record_parent_run_id == current_parent_run_id
-    if same_parent:
-        yield True
-        return
-    with admission.require_owner_stopped(base, record_parent_run_id):
-        yield False
+    with reviewer_action_evidence.record_owner_guard(
+            base, record_parent_run_id=record_parent_run_id,
+            current_parent_run_id=current_parent_run_id) as same_parent:
+        yield same_parent
 
 
 def _validate_stage5_action_record_ledger(
         base: str, sid: str, *, record: ReviewerActionRecord,
         current_parent_run_id: str | None = None) -> None:
-    """Stage5 batch replay 前复核并幂等补完 durable-first 席位。
-
-    顺序固定为 seat response bind -> record save -> seat finish。宿主若死在
-    任一缝里，只有原 turn 的 finished wire attempt、logical-session turn、
-    成本账、seat-bound response digest 与已结束 parent 同时闭合，才能消费
-    durable record。缺一证都保留 record 并关闭；record 本身不是来源或席位
-    成功证明。owner-stopped OS lease 覆盖全部重读、补 session end 与补席事务。
-    """
-    if (record.node != 'stage5.review'
-            or record.flags != (
-                '--retain-pretrim-batch', '@reviewer-input')
-            or record.waiting_on != queue.WAITING_ON_STAGE5_CLOSURE
-            or record.reviewer_session_run_id is None
-            or record.reviewer_seat_turn_id is None
-            or record.provider_response_sha256 is None):
+    if (record.run_id in REGISTRY.live()
+            and record.run_id != current_parent_run_id):
         raise reviewer_tasks.ReviewerTaskError(
-            'Stage5 durable batch record 缺完整席位恢复身份')
-    if (_stage5_recorded_response_sha256(record)
-            != record.provider_response_sha256):
-        raise reviewer_tasks.ReviewerTaskError(
-            'Stage5 durable batch record 与 provider 原回答 digest 不一致')
-    same_parent = record.run_id == current_parent_run_id
-    if record.run_id in REGISTRY.live() and not same_parent:
-        raise reviewer_tasks.ReviewerTaskError(
-            'Stage5 durable batch 原 parent 仍在本进程活动，不能从旁恢复')
-    try:
-        with _stage5_record_owner_guard(
-                base, record_parent_run_id=record.run_id,
-                current_parent_run_id=current_parent_run_id):
-            ledger = reviewer_seat_ledger.read(
-                base, sid, waiting_on=record.waiting_on,
-                business_sha256=record.business_sha256)
-            if ledger is None:
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage5 durable batch record 找不到原 reviewer 席位账')
-            turns = [
-                turn for turn in ledger.turns
-                if turn.turn_id == record.reviewer_seat_turn_id]
-            if len(turns) != 1:
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage5 durable batch record 找不到唯一原 seat turn')
-            turn = turns[0]
-            if (
-                turn.session_run_id != record.reviewer_session_run_id
-                or turn.parent_run_id != record.run_id
-                or turn.epoch_id != record.epoch_id
-                or turn.purpose not in {'review', 'correction'}
-                or ledger.waiting_on != record.waiting_on
-                or ledger.business_sha256 != record.business_sha256
-                or ledger.turns[-1].turn_id != turn.turn_id
-                or turn.provider_response_sha256
-                != record.provider_response_sha256
-            ):
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage5 durable batch record 与原 seat/response 身份不闭合，'
-                    '或已有更新 turn')
-            pending = ledger.pending_correction
-            if pending is not None:
-                source_rows = [
-                    row for row in ledger.turns
-                    if row.turn_id == pending.source_turn_id]
-                if len(source_rows) != 1:
-                    raise reviewer_tasks.ReviewerTaskError(
-                        'Stage5 durable batch pending correction 来源不唯一')
-                source = source_rows[0]
-                # correction 预留时旧 pending 尚未清除；只有它恰好指向紧邻
-                # 的上一轮，才是 record 之前的事实。指向本轮/更新轮则说明
-                # typed/canonical 拒因已经消费了 record，绝不能重放旧动作。
-                if not (
-                    turn.purpose == 'correction'
-                    and source.ordinal + 1 == turn.ordinal
-                    and source.session_run_id == turn.session_run_id
-                ):
-                    raise reviewer_tasks.ReviewerTaskError(
-                        'Stage5 durable batch 已有不早于原 action 的 pending '
-                        'correction，拒绝重放旧回答')
-            if not turn.attempts:
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage5 durable batch 原 turn 缺进程 attempt 证据')
-            last_attempt = turn.attempts[-1]
-            if (
-                last_attempt.finished_at is None
-                or last_attempt.exit_code != 0
-                or last_attempt.error_kind is not None
-                or not last_attempt.wire_evidence
-                or not last_attempt.provider_session_id
-            ):
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage5 durable batch 原 turn 没有 wire+exit0 attempt')
-
-            sessions = [
-                session for session in agent_session_audit.fold(
-                    agent_session_audit.read_events(base))
-                if session.session_run_id == record.reviewer_session_run_id]
-            if len(sessions) != 1:
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage5 durable batch 没有唯一 logical session 审计')
-            session = sessions[0]
-            audit_attempts = [
-                attempt for attempt in session.attempts
-                if attempt.attempt_id == last_attempt.attempt_id]
-            audit_turns = [
-                audit_turn for audit_turn in session.turns
-                if audit_turn.attempt_id == last_attempt.attempt_id]
-            if (
-                session.start.parent_run_id != record.run_id
-                or session.start.role != 'commander'
-                or session.start.node is not None
-                or len(audit_attempts) != 1
-                or len(audit_turns) != 1
-            ):
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage5 durable batch logical session/attempt/turn 不唯一')
-            audit_attempt = audit_attempts[0]
-            audit_turn = audit_turns[0]
-            if (
-                session.attempts[-1].attempt_id != last_attempt.attempt_id
-                or session.turns[-1].attempt_id != last_attempt.attempt_id
-                or audit_attempt.error_kind is not None
-                or audit_turn.error_kind is not None
-                or audit_attempt.parent_run_id != record.run_id
-                or audit_turn.parent_run_id != record.run_id
-                or audit_attempt.provider_session_id
-                != last_attempt.provider_session_id
-                or audit_turn.provider_session_id
-                != last_attempt.provider_session_id
-                or audit_attempt.prompt_sha256 != audit_turn.prompt_sha256
-                or audit_attempt.schema_sha256 != audit_turn.schema_sha256
-                or audit_attempt.profile != audit_turn.profile
-                or audit_attempt.requested_model != audit_turn.requested_model
-                or audit_attempt.requested_effort != audit_turn.requested_effort
-            ):
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage5 durable batch attempt 与 provider turn 身份不闭合')
-
-            cost_rows = [
-                row for row in read_jsonl_rows(cost_ledger_path(base))
-                if row.get('run_id') == record.run_id
-                and row.get('session_run_id') == record.reviewer_session_run_id
-                and row.get('sid') == sid
-                and row.get('role') == 'commander'
-                and row.get('attempt_id') == last_attempt.attempt_id
-                and row.get('activity') ==
-                f'reviewer:{queue.WAITING_ON_STAGE5_CLOSURE}'
-            ]
-            if (
-                len(cost_rows) != 1
-                or cost_rows[0].get('outcome') != 'ok'
-                or cost_rows[0].get('exit_code') != 0
-                or cost_rows[0].get('error_kind') is not None
-                or cost_rows[0].get('response_sha256')
-                != record.provider_response_sha256
-                or cost_rows[0].get('provider_session_id')
-                != last_attempt.provider_session_id
-                or cost_rows[0].get('code') != audit_turn.start_code_version
-                or cost_rows[0].get('request_model')
-                != audit_turn.requested_model
-                or cost_rows[0].get('model') != audit_turn.actual_model
-                or cost_rows[0].get('reasoning_effort')
-                != audit_turn.requested_effort
-                or cost_rows[0].get('actual_reasoning_effort')
-                != audit_turn.actual_effort
-                or cost_rows[0].get('protocol_version')
-                != audit_turn.protocol_version
-                or cost_rows[0].get('cli_version') != audit_turn.cli_version
-            ):
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage5 durable batch 成本账未证明同 attempt/response exit 0')
-
-            if session.end is None and not same_parent:
-                if (
-                    audit_turn.turn_index is None
-                    or audit_turn.provider_session_id is None
-                    or session.start.subject_sha256 is None
-                    or session.start.profile is None
-                    or audit_turn.actual_model is None
-                    or audit_turn.prompt_sha256 is None
-                    or audit_turn.schema_sha256 is None
-                    or session.start.start_code_version is None
-                ):
-                    raise reviewer_tasks.ReviewerTaskError(
-                        'Stage5 durable batch open session 缺补尾所需真实 turn 身份')
-                agent_session_audit.finish_restored_session(
-                    base, {
-                        'session_run_id': record.reviewer_session_run_id,
-                        'attempt_id': last_attempt.attempt_id,
-                        'provider_session_id': audit_turn.provider_session_id,
-                        'accepted_turn_index': audit_turn.turn_index,
-                        'subject_sha256': session.start.subject_sha256,
-                        'profile': session.start.profile.model_dump(mode='json'),
-                        'model': audit_turn.actual_model,
-                        'accepted_prompt_sha256': audit_turn.prompt_sha256,
-                        'accepted_schema_sha256': audit_turn.schema_sha256,
-                    },
-                    process_state='ok', delivery_state='unknown',
-                    end_code_version=session.start.start_code_version,
-                    only_if_open=True)
-                sessions = [
-                    row for row in agent_session_audit.fold(
-                        agent_session_audit.read_events(base))
-                    if row.session_run_id == record.reviewer_session_run_id]
-                if len(sessions) != 1:
-                    raise reviewer_tasks.ReviewerTaskError(
-                        'Stage5 durable batch session 补尾后不唯一')
-                session = sessions[0]
-            if session.end is not None and (
-                session.process_state != 'ok'
-                or session.error_kind is not None
-                or session.delivery_state not in {'unknown', 'blocked'}
-            ):
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage5 durable batch logical session 未证明 process ok')
-            if session.end is None and not same_parent:
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage5 durable batch 跨 parent 恢复后 session 仍未闭合')
-
-            recoverable_failed = (
-                turn.outcome == 'failed' and turn.exit_code == CRASH)
-            if turn.outcome == 'started' and same_parent:
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage5 durable batch 同 parent 仍有 started turn，不得从旁补席')
-            if turn.outcome == 'started':
-                turn = reviewer_seat_ledger.finish(
-                    base, sid, waiting_on=record.waiting_on,
-                    business_sha256=record.business_sha256,
-                    turn_id=record.reviewer_seat_turn_id, exit_code=0)
-            elif not (
-                turn.outcome == 'ok' and turn.exit_code == 0
-                or recoverable_failed
-            ):
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage5 durable batch 原 seat turn 既非成功闭账，也非'
-                    '有独立 wire 成功证据的 durable/promote 故障')
-
-            after = reviewer_seat_ledger.read(
-                base, sid, waiting_on=record.waiting_on,
-                business_sha256=record.business_sha256)
-            if after is None or any(
-                    row.outcome == 'started' for row in after.turns):
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage5 durable batch 恢复后仍有 started turn')
-            final_rows = [
-                row for row in after.turns
-                if row.turn_id == record.reviewer_seat_turn_id]
-            if (
-                len(final_rows) != 1
-                or final_rows[0].provider_response_sha256
-                != record.provider_response_sha256
-                or not (
-                    final_rows[0].outcome == 'ok'
-                    and final_rows[0].exit_code == 0
-                    or final_rows[0].outcome == 'failed'
-                    and final_rows[0].exit_code == CRASH
-                )
-            ):
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage5 durable batch 恢复后原 seat 终态不闭合')
-    except reviewer_tasks.ReviewerTaskError:
-        raise
-    except (
-        NovelError, OSError, ValueError,
-        reviewer_seat_ledger.ReviewerSeatRefused,
-    ) as exc:
-        raise reviewer_tasks.ReviewerTaskError(
-            'Stage5 durable batch 原席位账无法确定性补完：'
-            f'{type(exc).__name__}: {exc}') from exc
-
+            'Stage5 durable disposition 原 parent 仍在本进程活动，不能从旁恢复')
+    reviewer_action_evidence.validate_stage5_action_record_ledger(
+        base, sid, record=record,
+        current_parent_run_id=current_parent_run_id)
 
 def _stage5_pending_supersedes_record(
         base: str, sid: str, *,
@@ -2400,6 +2195,27 @@ def _reconcile_landed_stage2_final_actions(base: str, sid: str) -> None:
         _discard_reviewer_action_record(base, stale_path)
 
 
+def _reconcile_landed_stage5_reviewer_rewrite_action(
+        base: str, sid: str, *, code: str,
+        current_parent_run_id: str | None = None) -> None:
+    """typed/current request 成功后把 active action 原字节移入 authority archive。
+
+    归档而非删除，保证 queue/permit/paid/recovery 始终能重验 Commander 来源；
+    active→archive 任一硬杀窗都可由下一 parent 幂等补完，scanner 不会把已被
+    canonical request 精确引用的回答再次当作未执行 action。
+    """
+    from novel.stages.stage5 import reviewer_rewrite
+
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    ctx = state.readonly_ctx(novel_dir, 'stage5.write', code)
+    if not ArtifactStore(ctx).exists(STAGE5_REVIEWER_REWRITE_REQUEST):
+        return
+    request, request_file_sha256 = (
+        reviewer_rewrite.load_reviewer_rewrite_request(ctx))
+    reviewer_action_evidence.seal_reviewer_rewrite_authority(
+        base, sid, request, request_file_sha256,
+        current_parent_run_id=current_parent_run_id or '')
+
 def _find_replayable_reviewer_action(
         base: str, sid: str, *, epoch: ExecutionEpoch,
         current: OperatorNext,
@@ -2432,6 +2248,17 @@ def _find_replayable_reviewer_action(
             'node:stage5.review.retain-pretrim-batch'
             for option in task.submission_options)
     )
+    consumed_rewrite_record_sha256: str | None = None
+    if waiting_on == queue.WAITING_ON_STAGE5_CLOSURE:
+        from novel.stages.stage5 import reviewer_rewrite
+
+        probe = reviewer_rewrite.current_reviewer_rewrite_request(
+            state.readonly_ctx(
+                paths.resolve_novel_dir(base, sid),
+                'stage5.write', current.code_version))
+        if probe is not None:
+            consumed_rewrite_record_sha256 = (
+                probe.request.reviewer_action_record_sha256)
     candidates: list[tuple[
         tuple[int, int, str], Path, ReviewerActionRecord,
         tuple[dict[str, Any], ...] | None, str | None,
@@ -2441,9 +2268,22 @@ def _find_replayable_reviewer_action(
             continue
         is_stage5_batch = (
             record.node == 'stage5.review'
-            and record.flags == (
-                '--retain-pretrim-batch', '@reviewer-input')
+            and record.flags in {
+                ('--retain-pretrim-batch', '@reviewer-input'),
+                ('--request-reviewer-rewrite', '@reviewer-input'),
+            }
         )
+        if (
+            consumed_rewrite_record_sha256 is not None
+            and record.flags == (
+                '--request-reviewer-rewrite', '@reviewer-input')
+            and path.name == (
+                'reviewer-action-'
+                f'{consumed_rewrite_record_sha256}.json')
+        ):
+            raise reviewer_tasks.ReviewerTaskError(
+                'canonical reviewer rewrite request 已存在但 active authority '
+                '尚未由 Agent reconcile/seal；拒绝重放或另开 Commander')
         if current_stage5_trim and not is_stage5_batch:
             # 同一顶部卡的 closure 与 trim 是互斥 action mode；当前纯 trim
             # workpack 不得因旧 surface seal 恰相同而重放 closure-only 回答。
@@ -2515,8 +2355,10 @@ def _find_replayable_reviewer_action(
     _order, path, record, replay_options, stage5_state = candidates[-1]
     selected_is_stage5_batch = (
         record.node == 'stage5.review'
-        and record.flags == (
-            '--retain-pretrim-batch', '@reviewer-input'))
+        and record.flags in {
+            ('--retain-pretrim-batch', '@reviewer-input'),
+            ('--request-reviewer-rewrite', '@reviewer-input'),
+        })
     if selected_is_stage5_batch:
         same_ordinal = [row for row in candidates if row[0][1] == _order[1]]
         if len(same_ordinal) != 1:
@@ -5041,6 +4883,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         # 尚未来得及封 Stage2 席位账。先用 durable action + current approval/seen
         # 补完服务账并退休记录；不重复执行 approval，也不伪造一个 blocker。
         _reconcile_landed_stage2_final_actions(base, sid)
+        _reconcile_landed_stage5_reviewer_rewrite_action(
+            base, sid, code=epoch.code_version,
+            current_parent_run_id=run_id)
         return operator.next_action_at_code(
             base, sid, code=epoch.code_version)
 
@@ -5392,12 +5237,15 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     def _run_node_review_action(
             epoch: ExecutionEpoch,
             action: reviewer_tasks.ReviewerNodeAction,
-            launch_ticket: LaunchTicket) -> SupervisorActionResult:
+            launch_ticket: LaunchTicket,
+            *, reviewer_action_record_path: Path | None = None,
+            ) -> SupervisorActionResult:
         return _execute_reviewer_node_action(
             base, sid, action,
             lambda permit: _run_token(
                 epoch, permit, launch_ticket,
-                stem=f'reviewer-{action.node}'))
+                stem=f'reviewer-{action.node}'),
+            reviewer_action_record_path=reviewer_action_record_path)
 
     open_reviewer_seats: dict[tuple[str, str], _ReviewerSeat] = {}
 
@@ -5560,11 +5408,14 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
 
         def is_stage5_trim_task(
                 task: reviewer_tasks.ReviewerTask) -> bool:
-            """Stage5 顶部卡当前是 trim batch，而不是 closure 回执。"""
+            """Stage5 顶部卡当前是 trim disposition，而不是 closure 回执。"""
             return any(
                 isinstance(option, dict)
-                and option.get('id') ==
-                'node:stage5.review.retain-pretrim-batch'
+                and (
+                    option.get('id') ==
+                    'node:stage5.review.retain-pretrim-batch'
+                    or str(option.get('id', '')).startswith(
+                        'node:stage5.review.request-reviewer-rewrite.'))
                 for option in task.submission_options)
 
         def prepare_stage5_trim_action_before_finish(
@@ -5572,7 +5423,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 turn: CommanderTurnResult, session_run_id: str,
                 seat_turn_id: str,
                 holder: dict[str, object]) -> None:
-            """Stage5 batch 先 durable full action，再把 Commander 席位闭账。
+            """Stage5 trim disposition 先 durable full action，再闭 Commander 席。
 
             typed-invalid 回答仍属于已成功交付的本席 turn，因此只把
             loader 拒因交给现役纠错路。typed-valid 后的任何持久化/晋升
@@ -5585,8 +5436,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 if (
                     isinstance(action, reviewer_tasks.ReviewerNodeAction)
                     and action.node == 'stage5.review'
-                    and action.flags == (
-                        '--retain-pretrim-batch', '@reviewer-input')
+                    and action.flags in {
+                        ('--retain-pretrim-batch', '@reviewer-input'),
+                        ('--request-reviewer-rewrite', '@reviewer-input'),
+                    }
                 ):
                     # response bind 是独立于 action record 的来源证明；顺序固定为
                     # seat.bind_response -> action record -> seat.finish。
@@ -5622,7 +5475,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 if (isinstance(action, reviewer_tasks.ReviewerNodeAction)
                         and record_path is None):
                     raise RuntimeError(
-                        'Stage5 typed-valid batch 没有形成 durable action record')
+                        'Stage5 typed-valid disposition 没有形成 durable action record')
                 holder.update({
                     'action': action,
                     'response_sha256': response_sha256,
@@ -6253,8 +6106,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     waiting_on == queue.WAITING_ON_STAGE5_CLOSURE
                     and isinstance(action, reviewer_tasks.ReviewerNodeAction)
                     and action.node == 'stage5.review'
-                    and action.flags == (
-                        '--retain-pretrim-batch', '@reviewer-input')
+                    and action.flags in {
+                        ('--retain-pretrim-batch', '@reviewer-input'),
+                        ('--request-reviewer-rewrite', '@reviewer-input'),
+                    }
                 ):
                     # 当前 turn 的 durable action 已被 no-progress 判据消费。
                     # 先把拒因推进到这一 turn，再严格退休 record；若删除失败，
@@ -6305,7 +6160,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             if isinstance(action, reviewer_tasks.ReviewerNodeAction):
                 try:
                     result = _run_node_review_action(
-                        epoch, action, launch_ticket)
+                        epoch, action, launch_ticket,
+                        reviewer_action_record_path=record_path)
                 except Exception:  # noqa: BLE001 —— 先区分 surface 竞态
                     if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
                         raise
@@ -6438,6 +6294,13 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 and waiting_on == queue.WAITING_ON_STAGE2_FINAL_REVIEW
                 and isinstance(action, reviewer_tasks.ReviewerApprovalAction)
             )
+            stage5_rewrite_action = (
+                waiting_on == queue.WAITING_ON_STAGE5_CLOSURE
+                and isinstance(action, reviewer_tasks.ReviewerNodeAction)
+                and action.node == 'stage5.review'
+                and action.flags == (
+                    '--request-reviewer-rewrite', '@reviewer-input')
+            )
             stage5_batch_replay = (
                 replayed
                 and waiting_on == queue.WAITING_ON_STAGE5_CLOSURE
@@ -6446,12 +6309,14 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 and action.flags == (
                     '--retain-pretrim-batch', '@reviewer-input')
             )
-            stage5_batch_action = (
+            stage5_disposition_action = (
                 waiting_on == queue.WAITING_ON_STAGE5_CLOSURE
                 and isinstance(action, reviewer_tasks.ReviewerNodeAction)
                 and action.node == 'stage5.review'
-                and action.flags == (
-                    '--retain-pretrim-batch', '@reviewer-input')
+                and action.flags in {
+                    ('--retain-pretrim-batch', '@reviewer-input'),
+                    ('--request-reviewer-rewrite', '@reviewer-input'),
+                }
             )
             if (record_path is not None and landed(result.exit_code)
                     and not final_stage2_approval_landed):
@@ -6460,7 +6325,17 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 # 不能在这里提前删掉；结论未知则一律保留。
                 # final approval exit0 还要先封 Stage2 review ledger；它在下方
                 # 单独按 landed → mark_complete → retire 顺序处理。
-                _discard_reviewer_action_record(base, record_path)
+                if stage5_rewrite_action and result.exit_code == 0:
+                    # canonical request typed readback 成功后，先把原 action 原字节
+                    # 对应 Reviewer logical session 正常闭合，再把全套来源证据
+                    # seal 成永久 authority。seal 前绝不让 readonly queue 把 active
+                    # record 当成付费授权；任一硬杀窗由 planner 前 reconcile 补完。
+                    _close_reviewer_seat(binding)
+                    _reconcile_landed_stage5_reviewer_rewrite_action(
+                        base, sid, code=epoch.code_version,
+                        current_parent_run_id=run_id)
+                else:
+                    _discard_reviewer_action_record(base, record_path)
             if (result.exit_code == 2
                     and waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON):
                 # canonical 动作执行期间，人工 edit/adopt 可能已经
@@ -6507,7 +6382,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 # 解释为这份 durable 决定在当前 surface 上真正
                 # 被 canonical 拒绝并消费。binding 变化分支已在上方
                 # 返回，记录必须留给新窗口按 business identity 复验。
-                if record_path is not None and not stage5_batch_action:
+                if record_path is not None and not stage5_disposition_action:
                     _discard_reviewer_action_record(base, record_path)
             elif result.exit_code == 2 and record_path is not None:
                 # Stage2 的决定有独立书内 durable/correction 路，
@@ -6612,7 +6487,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 persist_pending_correction(
                     source_task, reason=correction_reason,
                     request_sha256=correction_request_sha256)
-                if stage5_batch_action and record_path is not None:
+                if stage5_disposition_action and record_path is not None:
                     # Stage5 durable-first 交接必须是 pending(newer fact) ->
                     # strict record retirement。反序会在两写窗口重放被拒回答。
                     uploads.discard_edit_plan(base, record_path)
@@ -7129,6 +7004,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         'deterministic_blockers': queue.DETERMINISTIC_RECOVERY_WAITING_ON,
         'fresh_epoch_blockers': frozenset({
             queue.WAITING_ON_STAGE4_DESIGN_ACTION,
+            queue.WAITING_ON_STAGE5_REVIEWER_REWRITE,
         }),
         'run_reviewer': _run_reviewer,
         'finalize_run': _finalize_run,

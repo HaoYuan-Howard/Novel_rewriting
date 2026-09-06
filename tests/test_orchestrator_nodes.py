@@ -263,7 +263,25 @@ def test_every_registered_run_mode_builds_a_command(node, flag):
     # ``--subject-sha256`` 是 recovery 的 hash-bound 参数，不是独立入口；
     # 单独出现必须继续关闭式拒绝，这张正向矩阵则物化它所属的完整合法组合。
     flags = (
-        _stage4_repair_recovery_flags()
+        [
+            '--recover-reviewer-rewrite-prepared', 'source-run-1',
+            '--reviewer-rewrite-request-sha256', 'a' * 64,
+            '--reviewer-rewrite-recovery-target-run-id', 'target-run-1',
+            '--reviewer-rewrite-recovery-journal-sha256', 'b' * 64,
+        ]
+        if node == 'stage5.write' and flag in {
+            '--recover-reviewer-rewrite-prepared',
+            '--reviewer-rewrite-request-sha256',
+            '--reviewer-rewrite-recovery-target-run-id',
+            '--reviewer-rewrite-recovery-journal-sha256',
+        }
+        else [
+            '--retire-reviewer-rewrite-request',
+            'stage5/reviewer_rewrite_request.json',
+            '--reviewer-rewrite-request-sha256', 'a' * 64,
+        ]
+        if (node, flag) == ('stage5.write', '--retire-reviewer-rewrite-request')
+        else _stage4_repair_recovery_flags()
         if node == 'stage4.design' and flag in _STAGE4_REPAIR_RECOVERY_FLAGS
         else [
             '--recover-prepared', 'source-run-1',
@@ -474,7 +492,7 @@ def test_executor_runtime_registries_close_over_the_same_eight_nodes():
 
     expected = set(AGENT_EXECUTOR_NODES)
     assert len(expected) == len(N.EXECUTOR_PROFILED_RUNS) == 8
-    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 13
+    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 14
     assert set(EXECUTOR_FACTORIES) == set(N.EXECUTOR_PROFILED_RUNS) == expected
 
 
@@ -600,6 +618,44 @@ def test_stage5_trim_batch_is_free_writing_and_has_no_executor_profile() -> None
         N.build_steps(
             'stage5.review', SID, flags, base=BASE,
             executor_profile=EXECUTOR_PROFILE)
+
+
+def test_stage5_reviewer_rewrite_routes_are_closed_paid_and_free_actions() -> None:
+    request_rel = 'stage5/reviewer_rewrite_request.json'
+    request_sha = 'a' * 64
+    checkpoint_flags = [
+        '--recover-reviewer-rewrite-prepared', 'source-run',
+        '--reviewer-rewrite-request-sha256', request_sha,
+    ]
+    prepared_flags = [
+        *checkpoint_flags,
+        '--reviewer-rewrite-recovery-target-run-id', 'target-run',
+        '--reviewer-rewrite-recovery-journal-sha256', 'b' * 64,
+    ]
+    retire_flags = [
+        '--retire-reviewer-rewrite-request', request_rel,
+        '--reviewer-rewrite-request-sha256', request_sha,
+    ]
+
+    paid = ['--reviewer-rewrite', request_rel]
+    assert N.is_paid('stage5.write', paid) is True
+    assert '--yes' in N.build_argv('stage5.write', SID, paid, base=BASE)
+    for flags in (checkpoint_flags, prepared_flags, retire_flags):
+        argv = N.build_argv('stage5.write', SID, flags, base=BASE)
+        assert N.is_paid('stage5.write', flags) is False
+        assert '--yes' not in argv
+        assert not any(token.startswith('--executor-') for token in argv)
+
+    for broken in (
+        checkpoint_flags + [
+            '--reviewer-rewrite-recovery-target-run-id', 'target-run'],
+        checkpoint_flags + [
+            '--reviewer-rewrite-recovery-journal-sha256', 'b' * 64],
+        prepared_flags[:-1],
+        prepared_flags + ['--chapters', '2'],
+    ):
+        with pytest.raises(UnsupportedRunMode):
+            N.build_argv('stage5.write', SID, broken, base=BASE)
 
 
 def test_valued_flags_must_carry_a_value_and_bare_flags_must_not():

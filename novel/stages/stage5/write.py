@@ -37,7 +37,7 @@ Pydantic 边界被拒绝，不能形成正常或 `.INVALID` 章产物。
 """
 from __future__ import annotations
 
-from contracts.artifacts import artifact_rel
+from contracts.artifacts import STAGE5_REVIEWER_REWRITE_REQUEST, artifact_rel
 
 import copy
 import glob
@@ -54,7 +54,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from contracts.invariants import (
-    STAGE5_COMMIT_PHASES, STAGE5_EDIT_CONFIRMATIONS, STOP_REWRITE_AFTER,
+    STAGE5_COMMIT_PHASES, STAGE5_EDIT_CONFIRMATIONS,
+    STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES, STOP_REWRITE_AFTER,
 )
 from novel.agent_session_audit import sanitize_failure_detail
 from novel.config import MAX_CONCURRENCY
@@ -71,6 +72,7 @@ from contracts.schema.stage5 import (
     Chapter, ChapterResponse, ChapterSegment, PreparedRecoveryAction,
     PreparedRecoveryChapter, PreparedRecoveryJournal,
     PreparedRecoveryManifest, PreparedRecoveryWorkpack, RejectedRevision,
+    ReviewerRewriteRecoveryJournal, ReviewerRewriteRequest,
 )
 from novel import human_actions, paths, prov
 from novel.errors import (
@@ -89,10 +91,26 @@ from novel.run import RunContext
 from novel.stages.stage5 import checks
 from novel.stages.stage5 import measure as M
 from novel.stages.stage5 import prompts, review
+from novel.stages.stage5 import reviewer_rewrite
 from novel.store import ArtifactStore
 
 #: 一次逐章调用的上限。⚠ 它进 `_provenance.params`——换了这个数，产物里说得出来。
 MAX_TOKENS = 16000
+
+# formal reviewer rewrite 的 code→指令只在这里渲染一次；schema/transport 的取值
+# 域均直接消费 invariant 常量。actor/reason 是审计信息，刻意不进入任何 prompt。
+_REVIEWER_REWRITE_DIRECTIVE_INSTRUCTIONS = {
+    'remove_repetition': '通读全章并删去语义重复，不得删除只出现一次的事实或义务。',
+    'compress_exposition': '压缩全章的解释性铺陈，用更短正文保留全部事实与因果。',
+    'repair_wording': '修正全章不自然或不准确的措辞，不改变逐字义务与事实含义。',
+    'smooth_transition': '平滑全章动作、场景或时间转换的衔接，不得改变既定时序。',
+}
+if tuple(_REVIEWER_REWRITE_DIRECTIVE_INSTRUCTIONS) != tuple(
+        STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES):
+    raise RuntimeError('Stage5 reviewer rewrite 指令映射与 invariant 取值域漂移')
+_REVIEWER_REWRITE_PROMPT_CONTRACT = json.dumps(
+    _REVIEWER_REWRITE_DIRECTIVE_INSTRUCTIONS,
+    ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 # ``RunContext.validation_reads`` 保存/恢复实例上的三张来源账，不是线程局部。
 # Stage5 各章模型请求仍可并发；只有极短的正式上游 currentness 重读必须串行。
@@ -261,12 +279,17 @@ class ChapterCandidateContext:
     user: str
     given: str
     purpose: str
+    mode: str
     revision: bool
     _entry: dict[str, Any] = field(repr=False)
     _book: M.Book = field(repr=False)
     _prev_text: str = field(default='', repr=False)
     _fixes: tuple[tuple[str, str], ...] = field(default=(), repr=False)
     _review_fp: str = field(default='', repr=False)
+    _reviewer_rewrite_request: ReviewerRewriteRequest | None = field(
+        default=None, repr=False)
+    _reviewer_rewrite_request_file_sha256: str = field(
+        default='', repr=False)
     _input_sha256: str = field(default='', repr=False)
 
 
@@ -785,8 +808,11 @@ def _chapter_input_sha256(
     prev_text: str,
     fixes: Sequence[Sequence[str]],
     review_fp: str,
+    mode: str = 'write',
+    reviewer_rewrite_request_sha256: str | None = None,
+    reviewer_rewrite_request_file_sha256: str | None = None,
 ) -> str:
-    return _canonical_sha256({
+    payload: dict[str, object] = {
         'entry': dict(entry),
         'book': _book_validation_projection(book),
         'system_sha256': _sha256_text(system),
@@ -795,7 +821,43 @@ def _chapter_input_sha256(
         'revision_of': _sha256_text(prev_text) if prev_text else None,
         'fixes': [list(item) for item in fixes],
         'review': review_fp or None,
-    })
+    }
+    # 保留 initial write/revise 历史 input digest 字节；新 mode 才扩展身份面。
+    if mode == 'reviewer_rewrite':
+        payload.update({
+            'mode': mode,
+            'reviewer_rewrite_request_sha256':
+                reviewer_rewrite_request_sha256,
+            'reviewer_rewrite_request_file_sha256':
+                reviewer_rewrite_request_file_sha256,
+        })
+    return _canonical_sha256(payload)
+
+
+def _reviewer_rewrite_user(
+        mat: prompts.Material, prev_text: str,
+        request: ReviewerRewriteRequest, *, budget_chars: int,
+) -> str:
+    """正式单章语义改写 prompt；审计定位与内部枚举永不外发。"""
+    directive_lines = [
+        f'· {_REVIEWER_REWRITE_DIRECTIVE_INSTRUCTIONS[row.code]}'
+        for row in request.directives
+    ]
+    obligations = (
+        '【formal reviewer rewrite 固定义务】\n'
+        '- 输出完整本章的全部 producer slots，不得输出 diff、说明或额外字段；\n'
+        f'- 归一后的整章字数不得超过冻结预算上限 {budget_chars} 字；\n'
+        '- 保留计划中的 slot 集合与顺序，保留全部 required facts、因果、人物状态与时序；\n'
+        '- 逐字保留任务材料中标成必须逐字出现的文本，不得改写、缩写或挪作别义；\n'
+        '- 只围绕下列关闭式指令做语义整章改写，不得借压缩删掉唯一事实。'
+    )
+    return '\n\n'.join([
+        prompts.build_user(mat),
+        '── 当前正式章正文（本轮必须输出改写后的完整一章）──\n' + prev_text,
+        obligations,
+        '── 本轮关闭式自然语言指令 ──\n'
+        + '\n'.join(directive_lines),
+    ])
 
 
 def prepare_chapter_candidate(
@@ -803,6 +865,9 @@ def prepare_chapter_candidate(
     book: M.Book,
     *,
     revision: tuple[str, list[list[str]], str] | None,
+    reviewer_rewrite_request: tuple[
+        ReviewerRewriteRequest, str, str,
+    ] | None = None,
     system: str | None = None,
 ) -> ChapterCandidateContext:
     """冻结一章闭卷任务；不调用模型、不铸 provenance、不写盘。
@@ -815,15 +880,37 @@ def prepare_chapter_candidate(
     ordinal = int(entry_snapshot['output_ordinal'])
     book_snapshot = copy.deepcopy(book)
     mat = prompts.build_material(entry_snapshot, book_snapshot)
-    if revision is None:
+    if revision is not None and reviewer_rewrite_request is not None:
+        raise ValueError('普通 revise 与 formal reviewer rewrite 不能同时启用')
+    request: ReviewerRewriteRequest | None = None
+    request_file_sha256 = ''
+    if reviewer_rewrite_request is not None:
+        request, request_file_sha256, prev_text = reviewer_rewrite_request
+        if request.target_ordinal != ordinal:
+            raise ProvenanceRefused(
+                f'reviewer rewrite request target={request.target_ordinal} '
+                f'不能用于第 {ordinal} 章')
+        # request SHA 已冻结 code/evidence/actor/reason 的审计身份；writer 输入只消费
+        # code 对应的自然语言指令。这里保持空，避免内部枚举或定位证据经 input/context
+        # 的 legacy ``fixes`` 面二次泄漏给写手。
+        raw_fixes = []
+        review_fp = request.review_sha256
+        rendered_system = system if system is not None else prompts.write_system()
+        user = _reviewer_rewrite_user(
+            mat, prev_text, request,
+            budget_chars=M.target_range(entry_snapshot)[1])
+        mode = 'reviewer_rewrite'
+    elif revision is None:
         prev_text, raw_fixes, review_fp = '', [], ''
         rendered_system = system if system is not None else prompts.write_system()
         user = prompts.build_user(mat)
+        mode = 'write'
     else:
         prev_text, raw_fixes, review_fp = revision
         rendered_system = (
             system if system is not None else prompts.write_system(revise=True))
         user = prompts.revise_user(mat, prev_text, _fix_lines(raw_fixes))
+        mode = 'revise'
     fixes = tuple((str(item[0]), str(item[1])) for item in raw_fixes)
     assert_prompt_private_absent(
         typed_entry, system=rendered_system, user=user)
@@ -836,19 +923,27 @@ def prepare_chapter_candidate(
         prev_text=prev_text,
         fixes=fixes,
         review_fp=review_fp,
+        mode=mode,
+        reviewer_rewrite_request_sha256=(
+            None if request is None else request.request_sha256),
+        reviewer_rewrite_request_file_sha256=(
+            None if request is None else request_file_sha256),
     )
     return ChapterCandidateContext(
         ordinal=ordinal,
         system=rendered_system,
         user=user,
         given=mat.given,
-        purpose=ctx_purpose(entry_snapshot),
-        revision=revision is not None,
+        purpose=stage5_runs.purpose_of(ordinal, mode),
+        mode=mode,
+        revision=mode != 'write',
         _entry=entry_snapshot,
         _book=book_snapshot,
         _prev_text=prev_text,
         _fixes=fixes,
         _review_fp=review_fp,
+        _reviewer_rewrite_request=request,
+        _reviewer_rewrite_request_file_sha256=request_file_sha256,
         _input_sha256=input_sha256,
     )
 
@@ -864,6 +959,12 @@ def _assert_chapter_context_memory(prepared: ChapterCandidateContext) -> None:
         prev_text=prepared._prev_text,
         fixes=prepared._fixes,
         review_fp=prepared._review_fp,
+        mode=prepared.mode,
+        reviewer_rewrite_request_sha256=(
+            None if prepared._reviewer_rewrite_request is None
+            else prepared._reviewer_rewrite_request.request_sha256),
+        reviewer_rewrite_request_file_sha256=(
+            prepared._reviewer_rewrite_request_file_sha256 or None),
     )
     if actual != prepared._input_sha256:
         raise ProvenanceRefused(
@@ -895,7 +996,40 @@ def assert_chapter_candidate_current(
                 raise ProvenanceRefused(
                     f'Stage5 第 {prepared.ordinal} 章在 executor session 期间已离开当前计划')
             revision: tuple[str, list[list[str]], str] | None = None
-            if prepared.revision:
+            rewrite_input: tuple[ReviewerRewriteRequest, str, str] | None = None
+            if prepared.mode == 'reviewer_rewrite':
+                request = prepared._reviewer_rewrite_request
+                if request is None:
+                    raise ProvenanceRefused(
+                        f'Stage5 第 {prepared.ordinal} 章 reviewer rewrite '
+                        '冻结任务缺 formal request')
+                if after_formal_commit:
+                    # 正文/Review/trim 正应因 successful rewrite 失效；这里只允许
+                    # 同一 request 原字节 + 冻结旧正文重构原 prompt，不能误要求重跑 Review。
+                    current_request, current_request_file_sha256 = (
+                        reviewer_rewrite.load_reviewer_rewrite_request(
+                            ctx, STAGE5_REVIEWER_REWRITE_REQUEST))
+                else:
+                    current_request, current_request_file_sha256 = (
+                        reviewer_rewrite.require_current_reviewer_rewrite_request(
+                            ctx, STAGE5_REVIEWER_REWRITE_REQUEST))
+                if (current_request != request
+                        or current_request_file_sha256
+                        != prepared._reviewer_rewrite_request_file_sha256):
+                    raise ProvenanceRefused(
+                        f'Stage5 第 {prepared.ordinal} 章 reviewer rewrite request '
+                        '在 executor session 期间漂移')
+                if current_request.target_ordinal != prepared.ordinal:
+                    raise ProvenanceRefused('reviewer rewrite request target 漂移')
+                if after_formal_commit:
+                    previous_text = prepared._prev_text
+                else:
+                    old, _raw = store.read_own(
+                        Chapter, _rel(prepared.ordinal), require_current=True)
+                    previous_text = old.text
+                rewrite_input = (
+                    current_request, current_request_file_sha256, previous_text)
+            elif prepared.revision:
                 # 提交前旧 Review 必须仍能代表旧正式稿；正式替换后它按既有业务语义
                 # 必然 stale，此时只要求同一份 Review 字节仍在，不能拿“应当 stale”
                 # 反过来否定刚完成的 revision delivery。
@@ -925,6 +1059,7 @@ def assert_chapter_candidate_current(
                 current_entry,
                 current_book,
                 revision=revision,
+                reviewer_rewrite_request=rewrite_input,
                 system=prepared.system,
             )
     if current._input_sha256 != prepared._input_sha256:
@@ -1099,7 +1234,7 @@ def _chapter_checkpoint_state(
     regressions = list(evaluation.regressions)
     return {
         'version': 1,
-        'mode': 'revise' if prepared.revision else 'write',
+        'mode': prepared.mode,
         'outcome': _checkpoint_outcome(
             hard_rules=hard_rules, regressions=regressions),
         'input_sha256': prepared._input_sha256,
@@ -1113,6 +1248,12 @@ def _chapter_checkpoint_state(
         ],
         'hard_rules': hard_rules,
         'regressions': regressions,
+        **({
+            'reviewer_rewrite_request_sha256':
+                prepared._reviewer_rewrite_request.request_sha256,
+            'reviewer_rewrite_request_file_sha256':
+                prepared._reviewer_rewrite_request_file_sha256,
+        } if prepared._reviewer_rewrite_request is not None else {}),
     }
 
 
@@ -1135,7 +1276,7 @@ def _write_chapter_checkpoint(
     evaluation: ChapterCandidateEvaluation,
 ) -> None:
     turn, acceptance = _accepted_turn_index(source, prepared.purpose)
-    stage5_runs.write_checkpoint(
+    target = stage5_runs.write_checkpoint(
         ctx,
         chapter=prepared.ordinal,
         input_sha256=prepared._input_sha256,
@@ -1148,7 +1289,25 @@ def _write_chapter_checkpoint(
         acceptance=acceptance,
         state_payload=_chapter_checkpoint_state(
             prepared, evaluation, accepted_turn_index=turn),
+        mode=prepared.mode,
+        reviewer_rewrite_request_sha256=(
+            None if prepared._reviewer_rewrite_request is None
+            else prepared._reviewer_rewrite_request.request_sha256),
+        reviewer_rewrite_request_file_sha256=(
+            prepared._reviewer_rewrite_request_file_sha256 or None),
     )
+    if prepared.mode == 'reviewer_rewrite':
+        digest = stage5_runs.read_checkpoint_sha256(target)
+        request = prepared._reviewer_rewrite_request
+        assert request is not None
+        stage5_runs.record_reviewer_rewrite_execution(
+            ctx, chapter=prepared.ordinal,
+            request_rel=STAGE5_REVIEWER_REWRITE_REQUEST,
+            request_file_sha256=prepared._reviewer_rewrite_request_file_sha256,
+            request_sha256=request.request_sha256,
+            input_sha256=prepared._input_sha256,
+            event='checkpointed', checkpoint_sha256=digest,
+        )
 
 
 def _restore_chapter_checkpoint(
@@ -1167,6 +1326,12 @@ def _restore_chapter_checkpoint(
         max_tokens=MAX_TOKENS,
         validator=lambda obj, wire: _response_problem(
             obj, wire, prepared._entry),
+        mode=prepared.mode,
+        reviewer_rewrite_request_sha256=(
+            None if prepared._reviewer_rewrite_request is None
+            else prepared._reviewer_rewrite_request.request_sha256),
+        reviewer_rewrite_request_file_sha256=(
+            prepared._reviewer_rewrite_request_file_sha256 or None),
     )
     if restored is None:
         return None
@@ -1180,7 +1345,7 @@ def _restore_chapter_checkpoint(
         system=prepared.system,
         user=prepared.user,
         max_tokens=MAX_TOKENS,
-        recovery_policy=stage5_runs.RECOVERY_POLICY,
+        recovery_policy=stage5_runs.recovery_policy_of(prepared.mode),
     )
     prior_attempts = tuple(
         (int(item['chars']), str(item['text']))
@@ -1200,7 +1365,113 @@ def _restore_chapter_checkpoint(
     if expected_state != restored.state_payload:
         raise ProvenanceRefused(
             f'Stage5 第 {prepared.ordinal} 章恢复候选的当前业务判定与 checkpoint 漂移')
+    if prepared.mode == 'reviewer_rewrite':
+        request = prepared._reviewer_rewrite_request
+        assert request is not None
+        stage5_runs.record_reviewer_rewrite_execution(
+            ctx, chapter=prepared.ordinal,
+            request_rel=STAGE5_REVIEWER_REWRITE_REQUEST,
+            request_file_sha256=prepared._reviewer_rewrite_request_file_sha256,
+            request_sha256=request.request_sha256,
+            input_sha256=prepared._input_sha256,
+            event='checkpointed',
+            checkpoint_sha256=restored.checkpoint_sha256,
+        )
     return evaluation
+
+
+def _record_reviewer_retry_started(
+        ctx: RunContext, prepared: ChapterCandidateContext,
+) -> None:
+    """在每次后续 ask 前 durable 标出“旧 checkpoint 已不能自动采用”。"""
+    if prepared.mode != 'reviewer_rewrite':
+        return
+    request = prepared._reviewer_rewrite_request
+    if request is None:
+        raise ProvenanceRefused('reviewer rewrite retry intent 缺 formal request')
+    chain = stage5_runs.reviewer_rewrite_execution_chain(
+        ctx, run_id=ctx.run_id, chapter=prepared.ordinal)
+    if not chain or chain[-1].event != 'checkpointed':
+        raise ProvenanceRefused(
+            'reviewer rewrite 后续 wire 只能从 exact checkpointed tail 开始')
+    checkpoint_sha256 = chain[-1].checkpoint_sha256
+    if checkpoint_sha256 is None:
+        raise ProvenanceRefused('reviewer rewrite retry intent 缺 checkpoint SHA')
+    stage5_runs.record_reviewer_rewrite_execution(
+        ctx, chapter=prepared.ordinal,
+        request_rel=STAGE5_REVIEWER_REWRITE_REQUEST,
+        request_file_sha256=prepared._reviewer_rewrite_request_file_sha256,
+        request_sha256=request.request_sha256,
+        input_sha256=prepared._input_sha256,
+        event='retry_started', checkpoint_sha256=checkpoint_sha256,
+    )
+
+
+def _latest_reviewer_execution_checkpoint(
+        ctx: RunContext, prepared: ChapterCandidateContext,
+) -> str:
+    request = prepared._reviewer_rewrite_request
+    if request is None or prepared.mode != 'reviewer_rewrite':
+        raise ProvenanceRefused('当前 candidate 不是 reviewer rewrite')
+    chain = stage5_runs.reviewer_rewrite_execution_chain(
+        ctx, run_id=ctx.run_id, chapter=prepared.ordinal)
+    if not chain or chain[-1].checkpoint_sha256 is None:
+        raise ProvenanceRefused(
+            f'Stage5 第 {prepared.ordinal} 章 reviewer rewrite 终态前缺 checkpoint journal')
+    return chain[-1].checkpoint_sha256
+
+
+def _record_reviewer_delivery_prepared(
+        ctx: RunContext, prepared: ChapterCandidateContext, *,
+        commit_sha256: str | None,
+) -> None:
+    request = prepared._reviewer_rewrite_request
+    if request is None:
+        return
+    stage5_runs.record_reviewer_rewrite_execution(
+        ctx, chapter=prepared.ordinal,
+        request_rel=STAGE5_REVIEWER_REWRITE_REQUEST,
+        request_file_sha256=prepared._reviewer_rewrite_request_file_sha256,
+        request_sha256=request.request_sha256,
+        input_sha256=prepared._input_sha256,
+        event='delivery_prepared',
+        checkpoint_sha256=_latest_reviewer_execution_checkpoint(ctx, prepared),
+        commit_sha256=commit_sha256,
+    )
+
+
+def _record_reviewer_terminal(
+        ctx: RunContext, prepared: ChapterCandidateContext, *,
+        outcome: str, rel: str, artifact: Chapter | RejectedRevision,
+        commit_sha256: str | None = None,
+) -> None:
+    request = prepared._reviewer_rewrite_request
+    if request is None:
+        return
+    event = {
+        'formal': 'landed_formal',
+        'invalid': 'landed_invalid',
+        'rejected': 'landed_rejected',
+    }[outcome]
+    landed_file_sha256 = stage5_runs.file_sha256(ctx, rel)
+    if landed_file_sha256 is None:
+        raise ProvenanceRefused(
+            f'reviewer rewrite {outcome} terminal 文件在记账前消失')
+    stage5_runs.record_reviewer_rewrite_execution(
+        ctx, chapter=prepared.ordinal,
+        request_rel=STAGE5_REVIEWER_REWRITE_REQUEST,
+        request_file_sha256=prepared._reviewer_rewrite_request_file_sha256,
+        request_sha256=request.request_sha256,
+        input_sha256=prepared._input_sha256,
+        event=event,
+        checkpoint_sha256=_latest_reviewer_execution_checkpoint(ctx, prepared),
+        commit_sha256=commit_sha256,
+        outcome=outcome,
+        landed_rel=rel,
+        landed_file_sha256=landed_file_sha256,
+        landed_payload_sha256=_canonical_sha256(
+            artifact.model_dump(by_alias=True, mode='json')),
+    )
 
 
 def evaluate_chapter_candidate(
@@ -1240,6 +1511,16 @@ def evaluate_chapter_candidate(
         checks.trim_regressions(
             prepared._prev_text, text, prepared._entry, prepared._book)
         if prepared.revision else [])
+    if (prepared.mode == 'reviewer_rewrite'
+            and text == prepared._prev_text
+            and 'formal reviewer rewrite 未改变正文' not in regressions):
+        regressions.append('formal reviewer rewrite 未改变正文')
+    if prepared.mode == 'reviewer_rewrite':
+        upper = M.target_range(prepared._entry)[1]
+        chars = M.chars_of(text)
+        if chars > upper:
+            regressions.append(
+                f'formal reviewer rewrite 仍超冻结上限：{chars}>{upper}')
     purpose = accepted_purpose or prepared.purpose
     attempts = (*tuple(prior_attempts), (M.chars_of(text), text))
     provisional = ChapterCandidateEvaluation(
@@ -1484,19 +1765,33 @@ def _formal_artifact(
         'round': round_number,
         'request_fingerprint': evaluation.request_fingerprint,
     }
-    if prepared.revision:
+    if prepared.mode == 'reviewer_rewrite':
+        request = prepared._reviewer_rewrite_request
+        if request is None:
+            raise ProvenanceRefused('reviewer rewrite formal 缺 request')
+        extra.update(
+            revision_of=prov.fingerprint(prepared._prev_text),
+            review=None,
+            fixes=None,
+            reviewer_rewrite_request_sha256=request.request_sha256,
+        )
+    elif prepared.revision:
         extra.update(
             revision_of=prov.fingerprint(prepared._prev_text),
             review=prepared._review_fp,
             fixes=[list(item) for item in prepared._fixes],
         )
     prompt_record = {'SYS': prepared.system}
+    prompt_evidence = (
+        {**prompt_record,
+         'REVIEWER_REWRITE': _REVIEWER_REWRITE_PROMPT_CONTRACT}
+        if prepared.mode == 'reviewer_rewrite'
+        else ({**prompt_record, 'REVISE': prompts.REVISE_TAIL}
+              if prepared.revision else prompt_record))
     provenance = ctx.llm_provenance_for_chapter(
         prepared.ordinal,
         RoundLlmProvenance,
-        prompts=(
-            {**prompt_record, 'REVISE': prompts.REVISE_TAIL}
-            if prepared.revision else prompt_record),
+        prompts=prompt_evidence,
         model=evaluation.requested_model,
         adopted_models=[evaluation.adopted_model],
         resume_claim=resume_claim,
@@ -1527,7 +1822,7 @@ def _formal_finalization_payload(
         'version': 1,
         'artifact': _rel(prepared.ordinal),
         'chapter': prepared.ordinal,
-        'mode': 'revise' if prepared.revision else 'write',
+        'mode': prepared.mode,
         'input_sha256': prepared._input_sha256,
         'candidate_sha256': evaluation._candidate_sha256,
         'source_attempt_id': evaluation.source_attempt_id,
@@ -1538,6 +1833,10 @@ def _formal_finalization_payload(
         'fixes': (
             None if source.fixes is None
             else [list(item) for item in source.fixes]),
+        'reviewer_rewrite_request_sha256':
+            source.reviewer_rewrite_request_sha256,
+        'reviewer_rewrite_request_file_sha256': (
+            prepared._reviewer_rewrite_request_file_sha256 or None),
         'trim_audit': (
             None if desired_audit is None
             else desired_audit.model_dump(by_alias=True, mode='json')),
@@ -1643,19 +1942,21 @@ def _preflight_formal_commit_targets_locked(
         ctx, store, prepared, artifact)
     stage5_runs.target_state(
         ctx, prepared.ordinal, record, rel,
-        expected_file_sha256=primary_sha)
+        expected_file_sha256=primary_sha, mode=prepared.mode)
     stage5_runs.target_state(
-        ctx, prepared.ordinal, record, invalid_rel, expected_absent=True)
+        ctx, prepared.ordinal, record, invalid_rel, expected_absent=True,
+        mode=prepared.mode)
     stage5_runs.target_state(
-        ctx, prepared.ordinal, record, rejected_rel, expected_absent=True)
+        ctx, prepared.ordinal, record, rejected_rel, expected_absent=True,
+        mode=prepared.mode)
     stage5_runs.target_state(
         ctx, prepared.ordinal, record, audit_rel,
         expected_file_sha256=audit_sha,
-        expected_absent=desired_audit is None)
+        expected_absent=desired_audit is None, mode=prepared.mode)
     stage5_runs.target_state(
         ctx, prepared.ordinal, record, resolution_rel,
         expected_file_sha256=resolution_sha,
-        expected_absent=resolution_sha is None)
+        expected_absent=resolution_sha is None, mode=prepared.mode)
 
 
 def _verify_formal_commit_targets(
@@ -1692,21 +1993,21 @@ def _verify_formal_commit_targets_locked(
     states = [
         stage5_runs.target_state(
             ctx, prepared.ordinal, record, rel,
-            expected_file_sha256=primary_sha),
+            expected_file_sha256=primary_sha, mode=prepared.mode),
         stage5_runs.target_state(
             ctx, prepared.ordinal, record, invalid_rel,
-            expected_absent=True),
+            expected_absent=True, mode=prepared.mode),
         stage5_runs.target_state(
             ctx, prepared.ordinal, record, rejected_rel,
-            expected_absent=True),
+            expected_absent=True, mode=prepared.mode),
         stage5_runs.target_state(
             ctx, prepared.ordinal, record, audit_rel,
             expected_file_sha256=audit_sha,
-            expected_absent=desired_audit is None),
+            expected_absent=desired_audit is None, mode=prepared.mode),
         stage5_runs.target_state(
             ctx, prepared.ordinal, record, resolution_rel,
             expected_file_sha256=resolution_sha,
-            expected_absent=resolution_sha is None),
+            expected_absent=resolution_sha is None, mode=prepared.mode),
     ]
     if any(state != 'expected' for state in states):
         raise ProvenanceRefused(
@@ -1761,10 +2062,13 @@ def _finalize_formal_agent_candidate(
     with stage5_runs.commit_ownership(ctx.novel_dir, prepared.ordinal):
         with _commit_phase(diagnostics, 'prepare_commit'):
             assert_chapter_candidate_current(ctx, prepared)
-            stage5_runs.refuse_foreign_commit_reservations(ctx, prepared.ordinal)
+            stage5_runs.refuse_foreign_commit_reservations(
+                ctx, prepared.ordinal, mode=prepared.mode)
             record = (
-                stage5_runs.committed(ctx, prepared.ordinal)
-                or stage5_runs.prepared(ctx, prepared.ordinal))
+                stage5_runs.committed(
+                    ctx, prepared.ordinal, mode=prepared.mode)
+                or stage5_runs.prepared(
+                    ctx, prepared.ordinal, mode=prepared.mode))
             artifact = (
                 None if record is None
                 else _journal_landed_primary(store, record, rel=rel))
@@ -1787,19 +2091,26 @@ def _finalize_formal_agent_candidate(
                     primary_payload=payload,
                     finalization_payload=finalization,
                     attempt_id=evaluation.source_attempt_id,
+                    mode=prepared.mode,
                 )
             elif (not stage5_runs.verify_commit_primary(record, payload)
                   or not stage5_runs.verify_commit_finalization(
                       record, finalization)):
                 raise ProvenanceRefused(
                     f'Stage5 第 {prepared.ordinal} 章 prepared journal 已绑定另一份候选')
+            if prepared.mode == 'reviewer_rewrite':
+                commit_sha256 = record.get('commit_sha256')
+                if not isinstance(commit_sha256, str):
+                    raise ProvenanceRefused('reviewer rewrite commit 缺 self SHA')
+                _record_reviewer_delivery_prepared(
+                    ctx, prepared, commit_sha256=commit_sha256)
         # 候选与 provenance 此刻已完全铸定；从这里到提交结束，来源边不得再变。
         edges_snapshot = ctx.edges
 
         if record.get('state') == 'committed':
             with _commit_phase(diagnostics, 'adoption'):
                 purpose, attempt_id = stage5_runs.restore_commit_adoption(
-                    ctx, prepared.ordinal, record)
+                    ctx, prepared.ordinal, record, mode=prepared.mode)
                 if (purpose != prepared.purpose
                         or attempt_id != evaluation.source_attempt_id):
                     raise ProvenanceRefused(
@@ -1817,6 +2128,7 @@ def _finalize_formal_agent_candidate(
                     primary_payload=landed.model_dump(
                         by_alias=True, mode='json'),
                     finalization_payload=finalization,
+                    mode=prepared.mode,
                 )
                 trim_notes, _desired = _over_length_audit(
                     [segment.model_dump() for segment in landed.segments],
@@ -1826,6 +2138,10 @@ def _finalize_formal_agent_candidate(
                     ctx, prepared.ordinal, evaluation._account)
                 _assert_commit_edges_stable(
                     ctx, edges_snapshot, prepared.ordinal, 'committed 恢复收尾')
+                _record_reviewer_terminal(
+                    ctx, prepared, outcome='formal', rel=rel,
+                    artifact=landed,
+                    commit_sha256=str(record['commit_sha256']))
             return ChapterCandidateDelivery(
                 outcome='formal', where=str(store.path(rel)), artifact=landed,
                 findings=evaluation.findings,
@@ -1894,9 +2210,11 @@ def _finalize_formal_agent_candidate(
                 chapter=prepared.ordinal,
                 primary_payload=landed_payload,
                 finalization_payload=finalization,
+                mode=prepared.mode,
             )
         with _commit_phase(diagnostics, 'committed_verify'):
-            committed = stage5_runs.committed(ctx, prepared.ordinal)
+            committed = stage5_runs.committed(
+                ctx, prepared.ordinal, mode=prepared.mode)
             if committed is None:
                 raise ProvenanceRefused(
                     f'Stage5 第 {prepared.ordinal} 章 mark committed 后 journal 消失')
@@ -1906,9 +2224,14 @@ def _finalize_formal_agent_candidate(
                 committed,
                 primary_payload=landed_payload,
                 finalization_payload=finalization,
+                mode=prepared.mode,
             )
             _assert_commit_edges_stable(
                 ctx, edges_snapshot, prepared.ordinal, 'committed 终验')
+            _record_reviewer_terminal(
+                ctx, prepared, outcome='formal', rel=rel,
+                artifact=landed,
+                commit_sha256=str(committed['commit_sha256']))
     return ChapterCandidateDelivery(
         outcome='formal', where=str(where_path), artifact=landed,
         findings=evaluation.findings,
@@ -1961,12 +2284,26 @@ def finalize_chapter_candidate(
             why=why,
             fixes=[list(item) for item in prepared._fixes],
             attempts=_rejected_attempts(evaluation.attempts),
+            reviewer_rewrite_request_sha256=(
+                None if prepared._reviewer_rewrite_request is None
+                else prepared._reviewer_rewrite_request.request_sha256),
         )
         rel = _rejected_rel(prepared.ordinal)
         with stage5_runs.commit_ownership(ctx.novel_dir, prepared.ordinal):
-            where = str(store.write_round(rel, artifact))
+            _record_reviewer_delivery_prepared(
+                ctx, prepared, commit_sha256=None)
+            if store.exists(rel):
+                prior, _sha = store.read_own(RejectedRevision, rel)
+            else:
+                prior = None
+            where = str(
+                store.path(rel) if prior == artifact
+                else store.write_round(rel, artifact))
             landed = verify_rejected_revision_delivery(
                 ctx, prepared, artifact, rel=rel)
+            _record_reviewer_terminal(
+                ctx, prepared, outcome='rejected', rel=rel,
+                artifact=landed)
         return ChapterCandidateDelivery(
             outcome='rejected_revision', where=where, artifact=landed,
             errors=tuple(evaluation.regressions),
@@ -1984,19 +2321,33 @@ def finalize_chapter_candidate(
         'round': round_number,
         'request_fingerprint': evaluation.request_fingerprint,
     }
-    if prepared.revision:
+    if prepared.mode == 'reviewer_rewrite':
+        request = prepared._reviewer_rewrite_request
+        if request is None:
+            raise ProvenanceRefused('reviewer rewrite INVALID 缺 request')
+        extra.update(
+            revision_of=prov.fingerprint(prepared._prev_text),
+            review=None,
+            fixes=None,
+            reviewer_rewrite_request_sha256=request.request_sha256,
+        )
+    elif prepared.revision:
         extra.update(
             revision_of=prov.fingerprint(prepared._prev_text),
             review=prepared._review_fp,
             fixes=[list(item) for item in prepared._fixes],
         )
     prompt_record = {'SYS': prepared.system}
+    prompt_evidence = (
+        {**prompt_record,
+         'REVIEWER_REWRITE': _REVIEWER_REWRITE_PROMPT_CONTRACT}
+        if prepared.mode == 'reviewer_rewrite'
+        else ({**prompt_record, 'REVISE': prompts.REVISE_TAIL}
+              if prepared.revision else prompt_record))
     provenance = ctx.llm_provenance_for_chapter(
         prepared.ordinal,
         RoundLlmProvenance,
-        prompts=(
-            {**prompt_record, 'REVISE': prompts.REVISE_TAIL}
-            if prepared.revision else prompt_record),
+        prompts=prompt_evidence,
         model=evaluation.requested_model,
         adopted_models=[evaluation.adopted_model],
         resume_claim=same_run_replay,
@@ -2016,13 +2367,25 @@ def finalize_chapter_candidate(
     audit_rel = artifact_rel('stage5.trim_audit', nn=prepared.ordinal)
     resolution_rel = artifact_rel('stage5.trim_resolution', nn=prepared.ordinal)
     with stage5_runs.commit_ownership(ctx.novel_dir, prepared.ordinal):
+        _record_reviewer_delivery_prepared(
+            ctx, prepared, commit_sha256=None)
         with store.history_transaction(
                 rel, rejected_rel, audit_rel, resolution_rel):
             if store.exists(rejected_rel):
                 store.archive_round(rejected_rel)
-            where = str(store.write_invalid(rel, artifact, gates_skipped=[]))
+            invalid_rel = paths.invalid_of(rel)
+            if store.exists(invalid_rel):
+                prior, _sha = store.read_own(Chapter, invalid_rel)
+            else:
+                prior = None
+            where = str(
+                store.path(invalid_rel) if prior == artifact
+                else store.write_invalid(rel, artifact, gates_skipped=[]))
             landed = verify_chapter_delivery(
-                ctx, prepared, artifact, rel=paths.invalid_of(rel))
+                ctx, prepared, artifact, rel=invalid_rel)
+        _record_reviewer_terminal(
+            ctx, prepared, outcome='invalid', rel=invalid_rel,
+            artifact=landed)
     return ChapterCandidateDelivery(
         outcome='invalid', where=where, artifact=landed,
         findings=evaluation.findings,
@@ -2682,6 +3045,7 @@ def _generate_chapter_with_agent(
         user=prepared.user,
         response_model=ChapterResponse,
         max_tokens=MAX_TOKENS,
+        mode=prepared.mode,
     )
     restored = _restore_chapter_checkpoint(ctx, source, prepared)
     last_rejected: ChapterCandidateEvaluation | None = None
@@ -2712,6 +3076,8 @@ def _generate_chapter_with_agent(
         # 输入漂移不能再花一轮后才发现。SessionAgentClient 另会在 wire 前复核代码/root；
         # 这里补的是 Stage5 私有判据真正消费的正文、secret、Review 与旧正式稿。
         assert_chapter_candidate_current(ctx, prepared)
+        if last_rejected is not None:
+            _record_reviewer_retry_started(ctx, prepared)
         try:
             response = source.ask_json(
                 prepared.system,
@@ -2722,7 +3088,7 @@ def _generate_chapter_with_agent(
                 validator=lambda obj, wire: _response_problem(
                     obj, wire, prepared._entry),
                 progress=progress,
-                recovery_policy=stage5_runs.RECOVERY_POLICY,
+                recovery_policy=stage5_runs.recovery_policy_of(prepared.mode),
             )
         except ResponseRepairRequired as exc:
             return {'response_repair_required': exc}
@@ -2730,7 +3096,8 @@ def _generate_chapter_with_agent(
             # 业务坏候选已经是 wire/schema 合格且已 checkpoint 的事实。后续
             # parse/schema/dynamic 返工耗尽时，用它走一次既有 INVALID/rejected
             # 终态；driver/protocol 失败仍保留为未知，不能拿旧候选掩盖进程失败。
-            if (last_rejected is not None
+            if (prepared.mode != 'reviewer_rewrite'
+                    and last_rejected is not None
                     and not source.purpose_driver_failed(prepared.purpose)
                     and not source.purpose_can_resume(prepared.purpose)):
                 return {
@@ -2738,6 +3105,9 @@ def _generate_chapter_with_agent(
                     'evaluation': last_rejected,
                     'response_validation_exhausted': True,
                 }
+            # reviewer rewrite 已在本轮 wire 前 durable 落 ``retry_started``；
+            # 没有随后 exact checkpoint 就可能已经外发/扣费。即便客户端认为
+            # 返工耗尽，也不能拿上一候选落终态掩盖这一未知窗。
             return {'error': str(exc).splitlines()[0]}
         evaluation = evaluate_chapter_candidate(
             source,
@@ -2773,14 +3143,21 @@ def _generate_chapter(
     progress: RequestProgress,
     ctx: RunContext | None = None,
     agent_sessions: bool = False,
+    prepared_context: ChapterCandidateContext | None = None,
 ) -> dict[str, Any]:
     ordinal = int(entry['output_ordinal'])
     if agent_sessions:
         if ctx is None:
             raise ValueError('Stage5 agent 逐章候选循环缺 RunContext')
-        revision = None if revise is None else revise[ordinal]
-        prepared = prepare_chapter_candidate(
-            entry, book, revision=revision, system=system)
+        if prepared_context is None:
+            revision = None if revise is None else revise[ordinal]
+            prepared = prepare_chapter_candidate(
+                entry, book, revision=revision, system=system)
+        else:
+            prepared = prepared_context
+            if prepared.ordinal != ordinal:
+                raise ProvenanceRefused(
+                    '预建 Stage5 candidate context 与目标章号漂移')
         return _generate_chapter_with_agent(
             ctx, prepared, client, progress=progress)
 
@@ -2868,6 +3245,7 @@ def _run_group_parallel(
     client: LlmClient,
     *,
     revise: dict[int, tuple[str, list[list[str]], str]] | None,
+    prepared_contexts: Mapping[int, ChapterCandidateContext] | None = None,
 ) -> CheckReport:
     system = prompts.write_system(revise=revise is not None)
     agent_sessions = _uses_agent_sessions(ctx)
@@ -2880,6 +3258,34 @@ def _run_group_parallel(
     ordinals = [int(entry['output_ordinal']) for entry in todo]
     tracker = ChapterProgressTracker(ctx.observe, ordinals)
     if agent_sessions:
+        # reviewer rewrite 的 durable ``started`` 必须先于 driver factory/probe/wire。
+        # run.json 同样在这里先闭合；工作线程里的 ensure_run 仅作幂等复验。
+        for ordinal in ordinals:
+            prepared = (
+                None if prepared_contexts is None
+                else prepared_contexts.get(ordinal))
+            if prepared is None:
+                continue
+            assert_chapter_candidate_current(ctx, prepared)
+            stage5_runs.ensure_run(
+                ctx, chapter=ordinal,
+                input_sha256=prepared._input_sha256,
+                system=prepared.system, user=prepared.user,
+                response_model=ChapterResponse, max_tokens=MAX_TOKENS,
+                mode=prepared.mode,
+            )
+            if prepared.mode == 'reviewer_rewrite':
+                request = prepared._reviewer_rewrite_request
+                assert request is not None
+                stage5_runs.record_reviewer_rewrite_execution(
+                    ctx, chapter=ordinal,
+                    request_rel=STAGE5_REVIEWER_REWRITE_REQUEST,
+                    request_file_sha256=(
+                        prepared._reviewer_rewrite_request_file_sha256),
+                    request_sha256=request.request_sha256,
+                    input_sha256=prepared._input_sha256,
+                    event='started',
+                )
         prepare_sessions = getattr(client, 'prepare_initial_sessions', None)
         if not callable(prepare_sessions):
             raise ProvenanceRefused(
@@ -2933,6 +3339,9 @@ def _run_group_parallel(
                 progress=tracker.request(int(entry['output_ordinal'])),
                 ctx=ctx,
                 agent_sessions=agent_sessions,
+                prepared_context=(
+                    None if prepared_contexts is None
+                    else prepared_contexts.get(int(entry['output_ordinal']))),
             ): int(entry['output_ordinal'])
             for entry in todo
         }
@@ -3210,9 +3619,12 @@ def _run_group_parallel(
 
 def _run_group(ctx: RunContext, store: ArtifactStore, book: M.Book,
                todo: list[dict[str, Any]], client: LlmClient, *,
-               revise: dict[int, tuple[str, list[list[str]], str]] | None
+               revise: dict[int, tuple[str, list[list[str]], str]] | None,
+               prepared_contexts: Mapping[int, ChapterCandidateContext] | None = None,
                ) -> CheckReport:
-    return _run_group_parallel(ctx, store, book, todo, client, revise=revise)
+    return _run_group_parallel(
+        ctx, store, book, todo, client, revise=revise,
+        prepared_contexts=prepared_contexts)
 
 
 def _fix_lines(fixes: list[list[str]]) -> list[str]:
@@ -3319,6 +3731,614 @@ def run_revise(ctx: RunContext, client: LlmClient,
         for message in skipped:
             print(f'    · 跳过：{message}', flush=True)
         return _run_group(ctx, store, book, todo, client, revise=revise)
+
+
+def run_reviewer_rewrite(
+        ctx: RunContext, client: LlmClient,
+        request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
+) -> CheckReport:
+    """以 request 专属 OS lease 串行 preclaim、driver、session、wire 与提交。"""
+    request, request_file_sha256 = (
+        reviewer_rewrite.load_reviewer_rewrite_request(ctx, request_rel))
+    with stage5_runs.reviewer_rewrite_execution_ownership(
+            ctx.novel_dir, request.request_sha256):
+        locked, locked_file_sha256 = (
+            reviewer_rewrite.load_reviewer_rewrite_request(ctx, request_rel))
+        if locked != request or locked_file_sha256 != request_file_sha256:
+            raise ProvenanceRefused(
+                'reviewer rewrite request 在 execution lease 获取前漂移；拒绝用旧锁执行新请求')
+        return _run_reviewer_rewrite_owned(
+            ctx, client, request_rel,
+            expected_request_file_sha256=request_file_sha256)
+
+
+def _run_reviewer_rewrite_owned(
+        ctx: RunContext, client: LlmClient,
+        request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
+        *, expected_request_file_sha256: str | None = None,
+) -> CheckReport:
+    """执行一份 sealed formal reviewer request；独立 mode，恰好一章一次席位。"""
+    if not ctx.paid:
+        raise ProvenanceRefused('reviewer rewrite paid runner 必须持显式付费授权')
+    if request_rel != STAGE5_REVIEWER_REWRITE_REQUEST:
+        raise ProvenanceRefused('reviewer rewrite writer 只接受 canonical request rel')
+    store = ArtifactStore(ctx)
+    require_canonical_layout(store)
+    # ready -> started 是这条 paid authority 的唯一 claim point。书/章共享锁覆盖
+    # current request、sealed authority、foreign reservation、全 roots absence 与
+    # append-only started；释放锁之后才允许碰 client/session/cost/wire。
+    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_request(
+        ctx, request_rel)
+    if (expected_request_file_sha256 is not None
+            and request_file_sha256 != expected_request_file_sha256):
+        raise ProvenanceRefused(
+            'reviewer rewrite request 在 execution lease 内 CAS 重读漂移')
+    with stage5_runs.commit_ownership(
+            ctx.novel_dir, request.target_ordinal):
+        state = reviewer_rewrite.reviewer_rewrite_execution_state(
+            ctx, request_rel)
+        if (state is None or state.state != 'ready_paid'
+                or state.request_sha256 != request.request_sha256
+                or state.request_file_sha256 != request_file_sha256):
+            actual = 'absent' if state is None else state.state
+            raise TerminalState(
+                'reviewer rewrite request 当前执行态是 '
+                f'{actual}；拒绝新建第二次 paid execution')
+        if state.source_run_id is not None and state.source_run_id != ctx.run_id:
+            matching = stage5_runs.reviewer_rewrite_execution_lineage(
+                stage5_runs.reviewer_rewrite_execution_chains(
+                    ctx, chapter=request.target_ordinal,
+                    request_sha256=request.request_sha256,
+                    request_file_sha256=request_file_sha256))
+            active = tuple(
+                chain for chain in matching
+                if chain[-1].event != 'reclaimed_unstarted')
+            if (len(active) != 1
+                    or active[0][0].run_id != state.source_run_id):
+                raise ProvenanceRefused(
+                    'reviewer rewrite zero-execution reclaim 主体漂移')
+            stage5_runs.reclaim_reviewer_rewrite_unstarted(ctx, active[0])
+            reclaimed = reviewer_rewrite.reviewer_rewrite_execution_state(
+                ctx, request_rel)
+            if (reclaimed is None or reclaimed.state != 'ready_paid'
+                    or reclaimed.source_run_id is not None):
+                raise ProvenanceRefused(
+                    'reviewer rewrite zero-execution reclaim 后未回到唯一 ready')
+        request, request_file_sha256 = (
+            reviewer_rewrite.require_current_reviewer_rewrite_request(
+                ctx, request_rel))
+        stage5_runs.refuse_foreign_commit_reservations(
+            ctx, request.target_ordinal, mode='reviewer_rewrite')
+        book = review.load_book(ctx, store)
+        entry = book.chapters.get(request.target_ordinal)
+        if entry is None:
+            raise ProvenanceRefused('reviewer rewrite target 已不在 current plan')
+        old, old_file_sha256 = store.read_own_with_sha256(
+            Chapter, _rel(request.target_ordinal), require_current=True)
+        target = next(
+            row for row in request.unresolved_trim_items
+            if row.output_ordinal == request.target_ordinal)
+        if old_file_sha256 != request.target_chapter_file_sha256:
+            raise ProvenanceRefused('reviewer rewrite target old chapter 完整文件 SHA 漂移')
+        if hashlib.sha256(old.text.encode('utf-8')).hexdigest() \
+                != target.chapter_sha256:
+            raise ProvenanceRefused('reviewer rewrite target old chapter 正文 SHA 漂移')
+        prepared = prepare_chapter_candidate(
+            entry, book, revision=None,
+            reviewer_rewrite_request=(
+                request, request_file_sha256, old.text),
+        )
+        stage5_runs.ensure_run(
+            ctx, chapter=request.target_ordinal,
+            input_sha256=prepared._input_sha256,
+            system=prepared.system, user=prepared.user,
+            response_model=ChapterResponse, max_tokens=MAX_TOKENS,
+            mode='reviewer_rewrite')
+        lineage = stage5_runs.reviewer_rewrite_execution_lineage(
+            stage5_runs.reviewer_rewrite_execution_chains(
+                ctx, chapter=request.target_ordinal,
+                request_sha256=request.request_sha256,
+                request_file_sha256=request_file_sha256))
+        claim_predecessor = None
+        if lineage:
+            tail = lineage[-1][-1]
+            if tail.event != 'reclaimed_unstarted':
+                raise ProvenanceRefused(
+                    'reviewer rewrite 新 claim 前仍存在未退休 execution tail')
+            claim_predecessor = tail.journal_sha256
+        stage5_runs.record_reviewer_rewrite_execution(
+            ctx, chapter=request.target_ordinal,
+            request_rel=request_rel,
+            request_file_sha256=request_file_sha256,
+            request_sha256=request.request_sha256,
+            input_sha256=prepared._input_sha256,
+            event='started',
+            claim_predecessor_journal_sha256=claim_predecessor)
+    return _run_group(
+        ctx, store, book, [entry], client, revise=None,
+        prepared_contexts={request.target_ordinal: prepared},
+    )
+
+
+def _reviewer_recovery_unit(
+        ctx: RunContext, request: ReviewerRewriteRequest,
+        request_file_sha256: str, source_run_id: str,
+) -> tuple[
+        ChapterCandidateContext, ChapterCandidateEvaluation,
+        stage5_runs.HistoricalReviewerRewrite,
+]:
+    """从 frozen request 历史原字节重建 prompt，并在当前代码下重判 checkpoint。"""
+    restored, prepared = reviewer_rewrite._restore_frozen_checkpoint(
+        ctx, request, request_file_sha256, source_run_id)
+    acceptance = restored.historical.checkpoint.acceptance
+    profile = restored.historical.run_record['request_policy']['profile']
+    source = _HistoricalCheckpointSource(
+        model=str(profile['model']), purpose=prepared.purpose,
+        acceptance=acceptance)
+    prior = tuple(
+        (int(item['chars']), str(item['text']))
+        for item in restored.state_payload['prior_attempts'])
+    evaluation = evaluate_chapter_candidate(
+        source, prepared, restored.historical.checkpoint.value,
+        accepted_purpose=prepared.purpose, prior_attempts=prior)
+    _assert_chapter_evaluation_identity(source, prepared, evaluation)
+    return prepared, evaluation, restored
+
+
+def _reviewer_recovery_adoption(
+        ctx: RunContext, request: ReviewerRewriteRequest,
+        restored: stage5_runs.HistoricalReviewerRewrite,
+) -> PreparedCheckpointAdoption:
+    checkpoint = restored.historical.checkpoint
+    acceptance = checkpoint.acceptance
+    run_record = restored.historical.run_record
+    source_run_id = restored.historical.context.run_id
+    checkpoint_path = stage5_runs.reviewer_rewrite_checkpoint_file(
+        ctx, run_id=source_run_id, chapter=request.target_ordinal,
+        checkpoint_sha256=checkpoint.checkpoint_sha256)
+    checkpoint_file_sha = _path_sha256(checkpoint_path)
+    commit_sha: str | None = None
+    commit_file_sha: str | None = None
+    if restored.commit is not None:
+        commit_sha = str(restored.commit['commit_sha256'])
+        commit_file_sha = stage5_runs.reviewer_rewrite_source_file_sha256(
+            ctx, run_id=source_run_id, chapter=request.target_ordinal,
+            filename='committed.json')
+    response_sha = str(acceptance['ledger_response_sha256'])
+    adoption_id = stage5_runs.reviewer_rewrite_source_adoption_id(
+        sid=ctx.sid, source_run_id=source_run_id,
+        chapter=request.target_ordinal,
+        request_sha256=request.request_sha256,
+        source_run_identity_sha256=str(run_record['identity_sha256']),
+        source_run_file_sha256=restored.historical.run_sha256,
+        source_checkpoint_sha256=checkpoint.checkpoint_sha256,
+        source_checkpoint_file_sha256=checkpoint_file_sha,
+        source_commit_sha256=commit_sha,
+        source_commit_file_sha256=commit_file_sha,
+        source_response_sha256=response_sha,
+    )
+    return PreparedCheckpointAdoption(
+        actor=request.actor,
+        reason=request.reason,
+        source_run_id=source_run_id,
+        target_run_id=ctx.run_id,
+        source_code=str(run_record['code']),
+        source_run_identity_sha256=str(run_record['identity_sha256']),
+        source_run_file_sha256=restored.historical.run_sha256,
+        source_commit_sha256=commit_sha,
+        source_commit_file_sha256=commit_file_sha,
+        source_checkpoint_sha256=checkpoint.checkpoint_sha256,
+        source_checkpoint_file_sha256=checkpoint_file_sha,
+        source_attempt_id=str(acceptance['attempt_id']),
+        source_response_sha256=response_sha,
+        source_adoption_id=adoption_id,
+        action_subject_sha256=request.request_sha256,
+        reviewer_rewrite_request_sha256=request.request_sha256,
+    )
+
+
+def _reviewer_recovered_chapter(
+        ctx: RunContext, request: ReviewerRewriteRequest,
+        prepared: ChapterCandidateContext,
+        evaluation: ChapterCandidateEvaluation,
+        restored: stage5_runs.HistoricalReviewerRewrite,
+        *, errors: tuple[str, ...] | None,
+) -> Chapter:
+    adoption = _reviewer_recovery_adoption(ctx, request, restored)
+    prompt_evidence = {
+        'SYS': prepared.system,
+        'REVIEWER_REWRITE': _REVIEWER_REWRITE_PROMPT_CONTRACT,
+    }
+    provenance = ctx.recovered_llm_provenance(
+        RoundLlmProvenance,
+        prompts=prompt_evidence,
+        model=evaluation.requested_model,
+        adopted_models=[evaluation.adopted_model],
+        round=ArtifactStore(ctx).next_round(_rel(prepared.ordinal)),
+        request_fingerprint=evaluation.request_fingerprint,
+        prepared_checkpoint_adoption=adoption,
+        revision_of=prov.fingerprint(prepared._prev_text),
+        review=None,
+        fixes=None,
+        reviewer_rewrite_request_sha256=request.request_sha256,
+    )
+    return _chapter_record(
+        prepared._entry,
+        [segment.model_dump() for segment in evaluation.segments],
+        prepared._book,
+        warns=list(evaluation.warnings),
+        errs=None if errors is None else list(errors),
+        provenance=provenance,
+    )
+
+
+def _reviewer_recovery_artifact(
+        ctx: RunContext, request: ReviewerRewriteRequest,
+        prepared: ChapterCandidateContext,
+        evaluation: ChapterCandidateEvaluation,
+        restored: stage5_runs.HistoricalReviewerRewrite,
+) -> tuple[str, str, Chapter | RejectedRevision]:
+    if evaluation.regressions:
+        return 'rejected', _rejected_rel(prepared.ordinal), RejectedRevision(
+            output_ordinal=prepared.ordinal,
+            why=list(evaluation.regressions),
+            fixes=[list(item) for item in prepared._fixes],
+            attempts=_rejected_attempts(evaluation.attempts),
+            reviewer_rewrite_request_sha256=request.request_sha256,
+        )
+    if evaluation.errors:
+        return 'invalid', paths.invalid_of(_rel(prepared.ordinal)), \
+            _reviewer_recovered_chapter(
+                ctx, request, prepared, evaluation, restored,
+                errors=evaluation.errors)
+    return 'formal', _rel(prepared.ordinal), _reviewer_recovered_chapter(
+        ctx, request, prepared, evaluation, restored, errors=None)
+
+
+def _reviewer_recovery_finalization(
+        prepared: ChapterCandidateContext,
+        evaluation: ChapterCandidateEvaluation,
+        outcome: str,
+        artifact: Chapter | RejectedRevision,
+) -> dict[str, object]:
+    if isinstance(artifact, Chapter):
+        return {
+            **_formal_finalization_payload(prepared, evaluation, artifact),
+            'delivery_outcome': outcome,
+        }
+    return {
+        'version': 1,
+        'artifact': _rejected_rel(prepared.ordinal),
+        'chapter': prepared.ordinal,
+        'mode': 'reviewer_rewrite',
+        'delivery_outcome': 'rejected',
+        'input_sha256': prepared._input_sha256,
+        'candidate_sha256': evaluation._candidate_sha256,
+        'source_attempt_id': evaluation.source_attempt_id,
+        'request_fingerprint': evaluation.request_fingerprint,
+        'reviewer_rewrite_request_sha256': (
+            prepared._reviewer_rewrite_request.request_sha256
+            if prepared._reviewer_rewrite_request is not None else None),
+    }
+
+
+def _existing_reviewer_recovery_delivery(
+        store: ArtifactStore, request: ReviewerRewriteRequest,
+        outcome: str, rel: str,
+) -> Chapter | RejectedRevision | None:
+    if not store.exists(rel):
+        return None
+    model = RejectedRevision if outcome == 'rejected' else Chapter
+    artifact, _sha = store.read_own(model, rel, require_current=False)
+    digest = (
+        artifact.reviewer_rewrite_request_sha256
+        if isinstance(artifact, RejectedRevision)
+        else getattr(artifact.provenance, 'reviewer_rewrite_request_sha256', None))
+    return artifact if digest == request.request_sha256 else None
+
+
+def _reviewer_recovery_preflight(
+        ctx: RunContext, wal: ReviewerRewriteRecoveryJournal,
+        artifact: Chapter | RejectedRevision,
+) -> None:
+    store = ArtifactStore(ctx)
+    delivery_sha = store.prospective_sha256(wal.delivery_rel, artifact)
+    absent_after = {
+        'formal': set(wal.touched_paths) - {wal.delivery_rel},
+        'invalid': {_rejected_rel(wal.output_ordinal)},
+        'rejected': set(),
+    }[wal.delivery_outcome]
+    for rel in wal.touched_paths:
+        stage5_runs.reviewer_rewrite_recovery_target_state(
+            ctx, wal, rel,
+            expected_file_sha256=(
+                delivery_sha if rel == wal.delivery_rel else None),
+            expected_absent=rel in absent_after,
+        )
+
+
+def _reviewer_recovery_artifact_from_wal(
+        request: ReviewerRewriteRequest,
+        wal: ReviewerRewriteRecoveryJournal,
+) -> Chapter | RejectedRevision:
+    """把 foreign prepared WAL 的 frozen payload 读成 typed exact delivery。"""
+    model = RejectedRevision if wal.delivery_outcome == 'rejected' else Chapter
+    try:
+        artifact = model.model_validate(wal.delivery_payload)
+    except Exception as exc:
+        raise ArtifactUnreadable(
+            f'reviewer rewrite recovery WAL delivery payload 不可 typed：{exc}') from exc
+    payload = artifact.model_dump(by_alias=True, mode='json')
+    if (payload != wal.delivery_payload
+            or stage5_runs.agent_runs.canonical_sha256(payload)
+               != wal.delivery_payload_sha256):
+        raise ProvenanceRefused('reviewer rewrite recovery WAL typed payload 漂移')
+    digest = (
+        artifact.reviewer_rewrite_request_sha256
+        if isinstance(artifact, RejectedRevision)
+        else artifact.provenance.reviewer_rewrite_request_sha256)
+    if digest != request.request_sha256:
+        raise ProvenanceRefused('reviewer rewrite recovery WAL payload 未绑定 request')
+    finalization = wal.finalization_payload
+    expected_common = {
+        'artifact': wal.delivery_rel,
+        'chapter': wal.output_ordinal,
+        'mode': 'reviewer_rewrite',
+        'delivery_outcome': wal.delivery_outcome,
+        'input_sha256': wal.input_sha256,
+        'source_attempt_id': wal.source_attempt_id,
+        'request_fingerprint': wal.source_request_fingerprint,
+        'reviewer_rewrite_request_sha256': wal.request_sha256,
+    }
+    if any(finalization.get(key) != value for key, value in expected_common.items()):
+        raise ProvenanceRefused(
+            'reviewer rewrite recovery WAL finalization/source/request 漂移')
+    candidate_sha = finalization.get('candidate_sha256')
+    if not isinstance(candidate_sha, str) or len(candidate_sha) != 64:
+        raise ProvenanceRefused('reviewer rewrite recovery WAL 缺 candidate SHA')
+    if isinstance(artifact, Chapter):
+        adoption = artifact.provenance.prepared_checkpoint_adoption
+        if (adoption is None
+                or adoption.source_run_id != wal.source_run_id
+                or adoption.target_run_id != wal.target_run_id
+                or adoption.source_code != wal.source_code
+                or adoption.source_run_identity_sha256
+                   != wal.source_run_identity_sha256
+                or adoption.source_run_file_sha256 != wal.source_run_file_sha256
+                or adoption.source_commit_sha256 != wal.source_commit_sha256
+                or adoption.source_commit_file_sha256
+                   != wal.source_commit_file_sha256
+                or adoption.source_checkpoint_sha256
+                   != wal.source_checkpoint_sha256
+                or adoption.source_checkpoint_file_sha256
+                   != wal.source_checkpoint_file_sha256
+                or adoption.source_attempt_id != wal.source_attempt_id
+                or adoption.source_response_sha256 != wal.source_response_sha256
+                or adoption.source_adoption_id != wal.source_adoption_id
+                or adoption.action_subject_sha256 != wal.request_sha256
+                or adoption.reviewer_rewrite_request_sha256
+                   != wal.request_sha256):
+            raise ProvenanceRefused(
+                'reviewer rewrite recovery WAL Chapter adoption/source 身份漂移')
+        if artifact.provenance.code != wal.target_code:
+            raise ProvenanceRefused(
+                'reviewer rewrite recovery WAL Chapter target code 漂移')
+    return artifact
+
+
+def _finalize_reviewer_rewrite_recovery(
+        ctx: RunContext, request: ReviewerRewriteRequest,
+        request_file_sha256: str,
+        prepared: ChapterCandidateContext,
+        evaluation: ChapterCandidateEvaluation,
+        restored: stage5_runs.HistoricalReviewerRewrite,
+        *, existing_wal: ReviewerRewriteRecoveryJournal | None = None,
+) -> ChapterCandidateDelivery:
+    store = ArtifactStore(ctx)
+    if existing_wal is None:
+        outcome, rel, proposed = _reviewer_recovery_artifact(
+            ctx, request, prepared, evaluation, restored)
+        existing = _existing_reviewer_recovery_delivery(
+            store, request, outcome, rel)
+        if existing is not None:
+            expected_raw_sha256 = store.prospective_sha256(rel, proposed)
+            actual_raw_sha256 = _path_sha256(store.path(rel))
+            if existing != proposed or actual_raw_sha256 != expected_raw_sha256:
+                raise ProvenanceRefused(
+                    'reviewer rewrite recovery 既有 carrier 虽自报同 request，'
+                    '但不等于 checkpoint 确定性推导的 exact typed/raw payload')
+        artifact = proposed if existing is None else existing
+        payload = artifact.model_dump(by_alias=True, mode='json')
+        finalization = _reviewer_recovery_finalization(
+            prepared, evaluation, outcome, artifact)
+    else:
+        if (existing_wal.state != 'prepared'
+                or existing_wal.source_run_id
+                   != restored.historical.context.run_id
+                or existing_wal.request_file_sha256 != request_file_sha256
+                or existing_wal.request_sha256 != request.request_sha256
+                or existing_wal.input_sha256 != prepared._input_sha256):
+            raise ProvenanceRefused(
+                'foreign reviewer rewrite WAL 与 source/request/current recovery 漂移')
+        outcome = existing_wal.delivery_outcome
+        rel = existing_wal.delivery_rel
+        artifact = _reviewer_recovery_artifact_from_wal(request, existing_wal)
+        payload = artifact.model_dump(by_alias=True, mode='json')
+        finalization = dict(existing_wal.finalization_payload)
+    with stage5_runs.commit_ownership(ctx.novel_dir, prepared.ordinal):
+        if existing_wal is None:
+            wal = stage5_runs.prepare_reviewer_rewrite_recovery(
+                ctx,
+                source=restored,
+                request_rel=STAGE5_REVIEWER_REWRITE_REQUEST,
+                request_file_sha256=request_file_sha256,
+                request_sha256=request.request_sha256,
+                reviewer_action_record_sha256=request.reviewer_action_record_sha256,
+                business_sha256=request.business_sha256,
+                reviewer_contract_sha256=request.reviewer_contract_sha256,
+                input_sha256=prepared._input_sha256,
+                delivery_outcome=outcome,
+                delivery_rel=rel,
+                delivery_payload=payload,
+                finalization_payload=finalization,
+            )
+        else:
+            wal = stage5_runs.require_reviewer_rewrite_recovery_identity(
+                ctx, target_run_id=existing_wal.target_run_id,
+                chapter=prepared.ordinal,
+                journal_sha256=existing_wal.journal_sha256)
+        stage5_runs.verify_reviewer_rewrite_recovery_payload(
+            wal, delivery_payload=payload,
+            finalization_payload=finalization)
+        _reviewer_recovery_preflight(ctx, wal, artifact)
+        formal_rel = _rel(prepared.ordinal)
+        rejected_rel = _rejected_rel(prepared.ordinal)
+        audit_rel = artifact_rel('stage5.trim_audit', nn=prepared.ordinal)
+        resolution_rel = artifact_rel(
+            'stage5.trim_resolution', nn=prepared.ordinal)
+        if outcome == 'formal':
+            assert isinstance(artifact, Chapter)
+            with store.history_transaction(
+                    formal_rel, rejected_rel, audit_rel, resolution_rel):
+                if store.exists(rejected_rel):
+                    store.archive_round(rejected_rel)
+
+                def commit(canonical_rel: str, candidate: Chapter) -> Any:
+                    current = _existing_reviewer_recovery_delivery(
+                        store, request, 'formal', canonical_rel)
+                    return (
+                        store.path(canonical_rel) if current == candidate
+                        else store.write_round(canonical_rel, candidate))
+
+                where, trim_notes = _commit_canonical_chapter(
+                    store, artifact, expected_ordinal=prepared.ordinal,
+                    commit=commit)
+            landed = verify_chapter_delivery(
+                ctx, prepared, artifact, rel=formal_rel)
+        elif outcome == 'invalid':
+            assert isinstance(artifact, Chapter)
+            with store.history_transaction(
+                    formal_rel, rejected_rel, audit_rel, resolution_rel):
+                if store.exists(rejected_rel):
+                    store.archive_round(rejected_rel)
+                current = _existing_reviewer_recovery_delivery(
+                    store, request, 'invalid', rel)
+                where = (
+                    store.path(rel) if current == artifact
+                    else store.write_invalid(
+                        formal_rel, artifact, gates_skipped=[]))
+                landed = verify_chapter_delivery(
+                    ctx, prepared, artifact, rel=rel)
+            trim_notes = []
+        else:
+            assert isinstance(artifact, RejectedRevision)
+            current = _existing_reviewer_recovery_delivery(
+                store, request, 'rejected', rel)
+            where = (
+                store.path(rel) if current == artifact
+                else store.write_round(rel, artifact))
+            landed = verify_rejected_revision_delivery(
+                ctx, prepared, artifact, rel=rel)
+            trim_notes = []
+        _record_normalization_account(
+            ctx, prepared.ordinal, evaluation._account)
+        landed_payload = landed.model_dump(by_alias=True, mode='json')
+        finalization = (
+            dict(wal.finalization_payload)
+            if existing_wal is not None
+            else _reviewer_recovery_finalization(
+                prepared, evaluation, outcome, landed))
+        committed = stage5_runs.mark_reviewer_rewrite_recovery_committed(
+            ctx, journal=wal,
+            delivery_payload=landed_payload,
+            finalization_payload=finalization)
+        stage5_runs.verify_reviewer_rewrite_recovery_committed(
+            ctx, journal=committed,
+            delivery_payload=landed_payload,
+            finalization_payload=finalization)
+    return ChapterCandidateDelivery(
+        outcome=('rejected_revision' if outcome == 'rejected' else outcome),
+        where=str(where), artifact=landed,
+        findings=evaluation.findings,
+        errors=(evaluation.regressions if outcome == 'rejected'
+                else evaluation.errors),
+        trim_notes=tuple(trim_notes),
+    )
+
+
+def run_reviewer_rewrite_prepared_recovery(
+        ctx: RunContext, source_run_id: str,
+        request_sha256: str,
+        recovery_target_run_id: str | None = None,
+        recovery_journal_sha256: str | None = None,
+        request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
+) -> CheckReport:
+    """跨 run 0-wire 收口 exact formal reviewer rewrite checkpoint。"""
+    if (recovery_target_run_id is None) != (recovery_journal_sha256 is None):
+        raise ProvenanceRefused(
+            'reviewer rewrite recovery target run/WAL SHA 必须同有同无')
+    request, initial_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_request(
+        ctx, request_rel)
+    if request.request_sha256 != request_sha256:
+        raise ProvenanceRefused(
+            'reviewer rewrite recovery request SHA 与 canonical 漂移')
+    # 锁序：request execution → book/chapter。lease 贯穿 state/source/WAL、
+    # 每一件 delivery 写入与 committed 尾写，两个 direct recovery 不可交错。
+    with stage5_runs.reviewer_rewrite_execution_ownership(
+            ctx.novel_dir, request.request_sha256):
+        current, request_file_sha256 = (
+            reviewer_rewrite.load_reviewer_rewrite_request(ctx, request_rel))
+        if current != request or request_file_sha256 != initial_file_sha256:
+            raise ProvenanceRefused(
+                'reviewer rewrite recovery 取 execution lease 后 request 漂移')
+        stage5_runs.require_prepared_recovery_target_clean(ctx)
+        state = reviewer_rewrite.reviewer_rewrite_execution_state(ctx, request_rel)
+        if (state is None
+                or state.state not in (
+                    'recoverable_checkpoint', 'recoverable_prepared')
+                or state.source_run_id != source_run_id
+                or state.request_sha256 != request_sha256
+                or state.request_file_sha256 != request_file_sha256):
+            raise ProvenanceRefused(
+                'reviewer rewrite recovery 参数与 current exact recoverable state 不闭合')
+        existing_wal: ReviewerRewriteRecoveryJournal | None = None
+        if state.state == 'recoverable_prepared':
+            if (recovery_target_run_id != state.recovery_target_run_id
+                    or recovery_journal_sha256 != state.recovery_journal_sha256
+                    or recovery_target_run_id is None
+                    or recovery_journal_sha256 is None):
+                raise ProvenanceRefused(
+                    'reviewer rewrite prepared recovery 必须续 queue 给出的 exact target WAL')
+            existing_wal = stage5_runs.require_reviewer_rewrite_recovery_identity(
+                ctx, target_run_id=recovery_target_run_id,
+                chapter=request.target_ordinal,
+                journal_sha256=recovery_journal_sha256)
+            if existing_wal.state != 'prepared':
+                raise ProvenanceRefused(
+                    'reviewer rewrite recovery 指定 WAL 已非 prepared')
+            stage5_runs.require_prepared_recovery_target_clean(
+                ctx, target_run_id=existing_wal.target_run_id)
+        elif recovery_target_run_id is not None:
+            raise ProvenanceRefused(
+                'recoverable_checkpoint 不得伪传既有 recovery WAL')
+        prepared, evaluation, restored = _reviewer_recovery_unit(
+            ctx, request, request_file_sha256, source_run_id)
+        delivery = _finalize_reviewer_rewrite_recovery(
+            ctx, request, request_file_sha256,
+            prepared, evaluation, restored, existing_wal=existing_wal)
+        book = prepared._book
+        blocked = [] if delivery.outcome == 'formal' else [
+            f'第 {prepared.ordinal} 章 reviewer rewrite 0-wire 恢复落为 '
+            f'{delivery.outcome}：{delivery.where}']
+        written = ([f'第 {prepared.ordinal} 章 → {delivery.where}']
+                   if delivery.outcome == 'formal' else [])
+        report = _report(
+            ctx, ArtifactStore(ctx), written=written, blocked=blocked,
+            book=book, judged={prepared.ordinal: list(delivery.findings)})
+        if blocked:
+            raise GateBlocked(
+                blocked[0], invalid_path=delivery.where)
+        return report
 
 
 # ─────────────────────────────────────────────────────────────────────────────

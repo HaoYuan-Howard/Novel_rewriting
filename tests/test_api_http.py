@@ -541,6 +541,8 @@ def test_executor_backend_http_matrix_covers_current_run_registry():
     covered: dict[str, list[frozenset[str]]] = {}
     for node, flags, _step_count in _EXECUTOR_PROFILE_HTTP_CASES:
         covered.setdefault(node, []).append(frozenset(flag_tokens(flags)))
+    # Supervisor 专属改写由 HTTP 拒绝测试覆盖；与正向组合共同闭合注册表。
+    covered['stage5.write'].append(frozenset({'--reviewer-rewrite'}))
     assert {node: tuple(token_sets) for node, token_sets in covered.items()} == \
         EXECUTOR_PROFILED_RUNS
 
@@ -800,6 +802,41 @@ def test_http_jobs_refuse_cli_only_prepared_recovery(
     assert response.json()['kind'] == 'UnsupportedRunMode'
     assert 'CLI runner' in response.json()['message']
     assert '同一 target run_id' in response.json()['message']
+
+
+@pytest.mark.parametrize('path', ['/api/jobs/preview', '/api/jobs'])
+@pytest.mark.parametrize(('node', 'flags'), [
+    ('stage5.review', [
+        '--request-reviewer-rewrite', 'reviewer-input.json']),
+    ('stage5.write', [
+        '--reviewer-rewrite', 'stage5/reviewer_rewrite_request.json']),
+    ('stage5.write', [
+        '--recover-reviewer-rewrite-prepared', 'source-run',
+        '--reviewer-rewrite-request-sha256', 'a' * 64]),
+    ('stage5.write', [
+        '--retire-reviewer-rewrite-request',
+        'stage5/reviewer_rewrite_request.json',
+        '--reviewer-rewrite-request-sha256', 'a' * 64]),
+])
+def test_http_jobs_refuse_internal_reviewer_rewrite_actions(
+        client, monkeypatch, path, node, flags):
+    """Reviewer rewrite 只由 Supervisor 的 exact queue action 承载。"""
+    monkeypatch.setattr(
+        JOB_API.jobs, 'plan_start',
+        lambda *_args, **_kwargs: pytest.fail(
+            '内部 reviewer rewrite API 边界必须先于 argv/job 构造'))
+    monkeypatch.setattr(
+        JOB_API.jobs, 'start',
+        lambda *_args, **_kwargs: pytest.fail(
+            '内部 reviewer rewrite API 边界不得启动 job'))
+
+    response = client.post(path, json={
+        'sid': '42', 'node': node, 'flags': flags,
+    })
+
+    assert response.status_code == 400
+    assert response.json()['kind'] == 'UnsupportedRunMode'
+    assert '内部 hash-bound action' in response.json()['message']
 
 
 def test_paid_blueprint_can_start_while_global_review_is_pending(

@@ -431,13 +431,21 @@ novel.cli approval show <SID> --base <BASE>
 <!-- reviewer-contract:stage5-closure:begin -->
 `closure.workpack` 精确绑定 fresh Review、全部 canonical 章、当前规则指纹、must-appear finding、
 fact/unver 分组与未销账 trim。`review_required` 时先免费恢复 Review，不能填写 closure 模板硬过。
-`blocked` 且只有 trim 待销账时，同一 Stage5 顶部卡只提供一份 batch `retain_pretrim` 与 typed stop，
-不提供 closure 审批：工作包必须同时给出每章 current canonical 完整正文、TrimAudit、现算目标区间/
-超额与 closure 双 SHA；先通读全部待办作跨章复核，再为 manifest 每章填写具体非空理由并整批提交。
-任何一章需要整章改写时选择 stop，指出章号、正文证据与风险，不能为关闭待办机械保留超限稿。
-Supervisor 不生成、补写或选择人类决定，只运输并执行已验证的 0 成本 batch；进程中断只可按
-exact 已落前缀 + current unresolved 后缀零模型续接。全部 trim 销账后重新构造 closure workpack
-并再次通过同一份 fresh/accepted Review 守卫。缺章、`.INVALID` 或 HARD 与 trim 并存时先走机器已知
+`blocked` 且只有 trim 待销账时，同一 Stage5 顶部卡互斥提供：一份 full-batch `retain_pretrim`、
+每章一份 typed LLM rewrite request 与 typed stop；不提供 closure 审批。工作包必须同时给出每章
+current canonical 完整正文、TrimAudit、现算目标区间/超额与 closure 身份：frontier 的
+`chapter_sha256` 是 rendered text SHA，`chapter_subjects[].chapter_sha256` 是 canonical Chapter
+完整文件 SHA；rewrite request 另以 `target_chapter_file_sha256` 锁定目标完整文件，两域不得互换。
+先通读全部待办作跨章复核。全部章节都确应保留时，为 retain manifest 每章填写具体非空理由后整批提交；恰有一章
+可用登记的 `remove_repetition / compress_exposition / repair_wording / smooth_transition` 安全改写时，
+选择该章 request；每条 evidence 必须非空、不超过 240 字，并在 target current 正文中逐字恰好唯一命中。
+actor/reason 与 evidence 只用于审计和定位，不得作为自由 prompt；固定执行约束另行要求压回本章预算、
+保留全部 plan slots、事实、时序与必须逐字内容。问题超出该闭集，或不能把一次动作安全收成一章时，
+选择 stop 并指出章号、正文证据与风险，不能为关闭待办机械 retain 或发明写手指令。
+Supervisor 不生成、补写或选择人类决定：retain 只运输并执行已验证的 0 成本 batch；rewrite 先把
+hash-bound request 以 0 成本 canonical node 落盘，再由确定性 queue 触发唯一 paid writer，崩溃恢复
+只消费同一 request，绝不重新购买 Commander 或 Writer。全部 trim 处置后重新构造 closure workpack
+并通过 current Review 守卫；正文一旦改写，必须先免费重算 Review。缺章、`.INVALID` 或 HARD 与 trim 并存时先走机器已知
 恢复/改稿面，不开 Reviewer；其他 `blocked` 状态也没有可提交 closure option。
 `ready` 模板仍是关闭式起点：逐条核对 must-appear，只有正文证据确实存在时选
 `confirmed_present`；需要人工接受例外时选 `accepted_exception` 并写出可复核理由。fact/unver 整组

@@ -511,11 +511,17 @@ def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
             # foreign prepared 又必须比 ``build_node_agent``（driver factory）更早
             # 拒绝；legacy `_run_stage5` 另调同一 guard，两个真实入口都不留缝。
             from novel.llm import stage5_runs
-            stage5_runs.refuse_foreign_prepared_before_wire(
-                ctx, _valued(flags, '--chapters'))
+            reviewer_rewrite_rel = _valued(flags, '--reviewer-rewrite')
+            if reviewer_rewrite_rel is not None:
+                _require_stage5_reviewer_rewrite_ready(
+                    ctx, reviewer_rewrite_rel)
+            else:
+                stage5_runs.refuse_foreign_prepared_before_wire(
+                    ctx, _valued(flags, '--chapters'))
             kwargs.update({
                 'chapters': _valued(flags, '--chapters'),
                 'revise': '--revise' in N.flag_tokens(flags),
+                'reviewer_rewrite': _valued(flags, '--reviewer-rewrite'),
             })
         result = build_node_agent(ctx, **kwargs).run()
         artifact = result.artifact
@@ -1203,6 +1209,25 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
     return X.OK if report.passed else X.CHECK_FAILED
 
 
+def _require_stage5_reviewer_rewrite_ready(
+        ctx: RunContext, request_rel: str,
+        ) -> int:
+    """在任何 Stage5 writer client/driver 构造前复核 current request。"""
+    from contracts.artifacts import STAGE5_REVIEWER_REWRITE_REQUEST
+    from novel.stages.stage5 import reviewer_rewrite
+
+    if request_rel != STAGE5_REVIEWER_REWRITE_REQUEST:
+        raise TerminalState(
+            'Stage5 Reviewer rewrite 只接受 current canonical request 路径')
+    probe = reviewer_rewrite.current_reviewer_rewrite_request(
+        ctx, request_rel)
+    if probe is None or probe.execution.state != 'ready_paid':
+        raise TerminalState(
+            'Stage5 Reviewer rewrite request 当前不是可付费首发态；'
+            '请按 queue 发布的 exact recovery/outcome 继续')
+    return probe.request.target_ordinal
+
+
 def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
     """Stage5 的 canonical 闭卷写作与全书验收入口。
 
@@ -1218,6 +1243,22 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
     chapters = _valued(flags, '--chapters')
 
     if ctx.node == 'stage5.review':
+        if '--request-reviewer-rewrite' in tokens:
+            request_path = _valued(flags, '--request-reviewer-rewrite')
+            if not request_path:
+                raise TerminalState(
+                    '--request-reviewer-rewrite 必须给 trusted input JSON 路径')
+            input_arg = Path(request_path)
+            input_abs = (
+                input_arg if input_arg.is_absolute()
+                else Path(ctx.novel_dir) / input_arg
+            ).resolve()
+            from novel.stages.stage5 import reviewer_rewrite
+            request = reviewer_rewrite.record_reviewer_rewrite_request(
+                ctx, input_abs)
+            print('  ✓ Stage5 Reviewer 单章改写 request 已落盘并 typed readback：'
+                  f'ch{request.target_ordinal} · {request.request_sha256}')
+            return X.OK
         if '--retain-pretrim' in tokens:
             selected = _chapters_of(chapters)
             if len(selected) != 1:
@@ -1349,9 +1390,69 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
               '请单独运行 `stage5.review` 做全书验收')
         return X.OK if report.passed else X.CHECK_FAILED
 
+    if '--recover-reviewer-rewrite-prepared' in tokens:
+        from novel.stages.stage5 import reviewer_rewrite
+        source_run_id = (
+            _valued(flags, '--recover-reviewer-rewrite-prepared') or '')
+        request_sha256 = (
+            _valued(flags, '--reviewer-rewrite-request-sha256') or '')
+        recovery_target_run_id = _valued(
+            flags, '--reviewer-rewrite-recovery-target-run-id')
+        recovery_journal_sha256 = _valued(
+            flags, '--reviewer-rewrite-recovery-journal-sha256')
+        execution = reviewer_rewrite.reviewer_rewrite_execution_state(ctx)
+        if (
+            execution is None
+            or execution.state not in {
+                'recoverable_checkpoint', 'recoverable_prepared'}
+            or execution.source_run_id != source_run_id
+            or execution.request_sha256 != request_sha256
+            or execution.recovery_target_run_id != recovery_target_run_id
+            or execution.recovery_journal_sha256 != recovery_journal_sha256
+        ):
+            raise TerminalState(
+                'Stage5 Reviewer rewrite prepared recovery 与 current '
+                'request/execution journal 不一致')
+        report = write.run_reviewer_rewrite_prepared_recovery(
+            ctx, source_run_id, request_sha256,
+            recovery_target_run_id=recovery_target_run_id,
+            recovery_journal_sha256=recovery_journal_sha256)
+        print(render(report))
+        print('  ✓ Stage5 Reviewer 单章改写已 0-wire 补完提交尾窗；'
+              '请单独运行 stage5.review 重算全书验收')
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--retire-reviewer-rewrite-request' in tokens:
+        from novel.stages.stage5 import reviewer_rewrite
+        request_rel = (
+            _valued(flags, '--retire-reviewer-rewrite-request') or '')
+        request_sha256 = (
+            _valued(flags, '--reviewer-rewrite-request-sha256') or '')
+        execution = reviewer_rewrite.reviewer_rewrite_execution_state(
+            ctx, request_rel)
+        if (
+            execution is None
+            or execution.state != 'expired_unstarted'
+            or execution.request_rel != request_rel
+            or execution.request_sha256 != request_sha256
+        ):
+            raise TerminalState(
+                'Stage5 Reviewer rewrite expiry retire 与 current sealed '
+                'request/execution 状态不一致')
+        disposition = (
+            reviewer_rewrite.retire_expired_reviewer_rewrite_request(
+                ctx, request_rel, request_sha256))
+        print('  ✓ Stage5 Reviewer rewrite 过期且未启动的 request 已 0-wire '
+              f'消费：{disposition.disposition_sha256}')
+        return X.OK
+
     # 付费两条路。⚠ 本仓第一次真花钱要先说一声（README）。
     from novel.llm import stage5_runs
-    stage5_runs.refuse_foreign_prepared_before_wire(ctx, chapters)
+    reviewer_rewrite_rel = _valued(flags, '--reviewer-rewrite')
+    if reviewer_rewrite_rel is not None:
+        _require_stage5_reviewer_rewrite_ready(ctx, reviewer_rewrite_rel)
+    else:
+        stage5_runs.refuse_foreign_prepared_before_wire(ctx, chapters)
     if chapters:
         # 定向重生成必须真的重新采样；否则 prompt 不变会静默命中旧问题稿的缓存。
         selected = _chapters_of(chapters)
@@ -1359,7 +1460,10 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
         from novel.llm.cache import CachePolicy
         ctx.cache = CachePolicy.refresh()
     client = _llm_client(ctx)
-    if '--revise' in tokens:
+    if reviewer_rewrite_rel is not None:
+        report = write.run_reviewer_rewrite(
+            ctx, client, reviewer_rewrite_rel)
+    elif '--revise' in tokens:
         report = write.run_revise(ctx, client, chapters)
     else:
         report = write.run_write(ctx, client, chapters)
@@ -1760,11 +1864,21 @@ def _cmd_run(a: argparse.Namespace) -> int:
             a.base, a.sid, source_chapters)
     elif paid and a.node == 'stage5.write':
         from novel.orchestrator import approvals
+        reviewer_rewrite_rel = _valued(flags, '--reviewer-rewrite')
+        reviewer_rewrite_target = (
+            _require_stage5_reviewer_rewrite_ready(
+                ctx, reviewer_rewrite_rel)
+            if reviewer_rewrite_rel is not None else None
+        )
         approvals.authorize_writing(
             a.base,
             a.sid,
-            list(_chapters_of(_valued(flags, '--chapters'))) or None,
-            requires_fresh_review='--revise' in N.flag_tokens(flags),
+            ([reviewer_rewrite_target]
+             if reviewer_rewrite_target is not None
+             else list(_chapters_of(_valued(flags, '--chapters'))) or None),
+            requires_fresh_review=(
+                reviewer_rewrite_target is not None
+                or '--revise' in N.flag_tokens(flags)),
         )
     # Stage5 闭合闸落在**所有真实执行最终汇合的运行边界**（手敲 CLI、API jobs、
     # headless agent 子 CLI 都经过这里）：stage6/stage7 的任何写效果跑法都要求

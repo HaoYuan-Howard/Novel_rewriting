@@ -316,8 +316,14 @@ contract，跳过重复批准；代码/机械规则变化只滚动 validation se
 不要让 runner 把旧快照解释成新命令。
 
 写作授权只允许开始写，不证明成稿已闭合。全部 canonical 章完成后运行最终 `stage5.review`，按
-remediation 收口 HARD，并完成所有 edit、trim resolution 与 wontfix；随后先用 `approval show` 读取
-current closure workpack，再以 `approval template stage5` 取得逐项关闭式模板。必须真实核对
+remediation 收口 HARD，并完成所有 edit、trim disposition 与 wontfix。pure-trim 顶部卡的一席 Reviewer
+只可互斥选择 full-batch retain、恰好一章的关闭式 LLM rewrite request 或 typed stop；rewrite 回答先
+零成本落正式 request 并封存 Reviewer authority，再由 queue 的 fresh epoch 唯一触发 paid writer。
+正式 request 的九态收口优先于 stale Review/closure/new Reviewer；只运行 `operator next` 给出的 paid、
+checkpoint/prepared recovery 或 expired retirement 动作，已有 recovery target/WAL 时逐字复用其身份。
+unknown 不重买 Writer；INVALID/rejected 只有 revalidate/apply-edit 的 request-specific successor receipt
+闭合后才算已解决。正文改变后必须免费重跑 Review。
+全部处置完成后先用 `approval show` 读取 current closure workpack，再以 `approval template stage5` 取得逐项关闭式模板。必须真实核对
 must-appear 与 fact/unver 分组，填 actor/reason，清除每项 placeholder/token 后，才可
 `approval apply stage5`。只有 current `closure.state=closed` / `gate.s5=true` 才能进入 Stage6/7 或
 assemble；旧 s5、写作前授权、机械 exit 0 与 Commander 身份都不能替代这张写后回执。

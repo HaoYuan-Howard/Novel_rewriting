@@ -213,6 +213,18 @@ STAGE5_CLOSURE_STATES: Final = (
     'missing', 'review_required', 'blocked', 'ready', 'closed', 'expired',
 )
 
+#: Stage5 顶部 Reviewer 可交给写手的**唯一**局部改写指令闭集。
+#:
+#: 这些 code 只描述已经在 current 正文中逐字举证的压缩手段；执行端另行固定
+#: “压回预算、保留 plan slots / 事实 / 时序 / 必须逐字内容”等不可编辑约束。
+#: Commander 的 actor/reason 与证据只作审计和定位，绝不能被拼成自由 prompt。
+STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES: Final = (
+    'remove_repetition',
+    'compress_exposition',
+    'repair_wording',
+    'smooth_transition',
+)
+
 STAGE5_CLOSED_EXEMPT_FLAGS: Final = (
     '--dry-run', '--check-only', '--identity', '--recheck',
     '--revalidate', '--apply-edit', '--wontfix',
@@ -1829,6 +1841,9 @@ FREE_ENTRIES: Final = {
                          '0 次 LLM 调用（不是 0 人工成本）'),
     '--retain-pretrim-batch': ('按显式 manifest 一次销账多章 trim；整批预检、按章幂等写'
                                'hash-bound resolution，0 次 LLM 调用'),
+    '--request-reviewer-rewrite': (
+        '把 Commander 对 current pure-trim frontier 的单章关闭式改写决定写成 '
+        'hash-bound canonical request；不调用写手模型'),
     '--emit-edit-template': ('向 stdout 输出带当前 schema version 的人工编辑骨架；'
                              '适用于 Stage2 GlobalEdit、Blueprint 与 Stage7，不写盘'),
     '--emit-edit-correction-workpack': (
@@ -1860,11 +1875,19 @@ FREE_ENTRIES: Final = {
     '--recover-prepared': (
         '把旧 Stage5 run 中全部尚未收口的 prepared checkpoint 按当前代码重新验证并'
         '提交为 canonical；0 次模型调用，必须带 hash-bound 人工凭据'),
+    '--recover-reviewer-rewrite-prepared': (
+        '按 canonical reviewer rewrite request 与旧 prepared checkpoint 的精确身份，'
+        '零调用补完单章提交尾窗'),
+    '--retire-reviewer-rewrite-request': (
+        '把尚未启动执行且已被 current 主体证明过期的 Reviewer rewrite request '
+        '写成 hash-bound consumed receipt；不调用写手、不移动 request'),
 }
 
 #: 挂在**付费**动作上的 flag。它们不是 0 成本入口，登记在这里免得被当成漏项。
 PAID_FLAGS: Final = {
     '--revise': 'stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手',
+    '--reviewer-rewrite': (
+        '消费 Stage5 顶部 Commander 已落盘的单章关闭式改写 request，调用写手重写正文'),
     # ⚠ 原型 `FREE_FLAGS['n2_global']` 那一行的注释明写着
     #   「`--purge-role` 是一次真实调用，**不在这里**」——它是语义判官那条臂
     #   （`ROLE_SPLIT_SYS`，2008 字），`role`/`fate` 双向重划分。
@@ -1975,6 +1998,21 @@ VALUED_FLAGS: Final = {
                         '（与所属节点 --apply-edit 同路径规则，不写盘）'),
     '--retain-pretrim-batch': ('批量销账 manifest 路径（必填；相对路径相对书目录，'
                                '也接受书目录内的绝对路径）；actor/reason 在 manifest 内'),
+    '--request-reviewer-rewrite': (
+        'Stage5 Reviewer 单章改写 typed request 路径（必填；相对路径相对书目录，'
+        '也接受服务进程物化的 _service/edits 路径）'),
+    '--reviewer-rewrite': (
+        'current canonical Stage5 Reviewer 改写 request 路径（必填；只接受书目录内路径）'),
+    '--recover-reviewer-rewrite-prepared': (
+        '持有匹配 Reviewer 改写 prepared checkpoint 的旧 source run_id'),
+    '--retire-reviewer-rewrite-request': (
+        '要零调用退休的 canonical Reviewer 改写 request 路径'),
+    '--reviewer-rewrite-request-sha256': (
+        'Reviewer 改写 canonical request 的完整原始字节 SHA-256'),
+    '--reviewer-rewrite-recovery-target-run-id': (
+        '已落 prepared recovery WAL 的 exact target run_id；checkpoint 首次恢复不带'),
+    '--reviewer-rewrite-recovery-journal-sha256': (
+        '已落 prepared recovery WAL 的 immutable self SHA-256；必须与 target run_id 同有同无'),
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--review-decisions': 'stage2/global_review 的人工决策集（相对当前书目录）',
     # ⚠ 它只裁剪**只读输出面**，不裁剪评测面本身：`global_review.json` 仍枚举全部
@@ -2081,9 +2119,20 @@ WRITE_EFFECTS: Final = {
                          '不改正文、不采用收缩候选'),
     '--retain-pretrim-batch': ('按 manifest 逐章写 trim_resolution；已销账章幂等跳过，'
                                '不改正文、不采用收缩候选'),
+    '--request-reviewer-rewrite': (
+        '写 stage5/reviewer_rewrite_request.json；只登记 Commander 的 hash-bound '
+        '单章改写决定，不调用写手、不改正文'),
+    '--reviewer-rewrite': (
+        '按 canonical request 调写手，写目标 stage5/chNN.json 或其 INVALID/拒稿终态、'
+        'trim audit 与 append-only reviewer rewrite execution journal'),
     '--recover-prepared': (
         '写 stage5/chNN.json、target run recovery manifest/两相 replacement journal 与'
         'append-only adoption lineage；不改旧 source sidecar'),
+    '--recover-reviewer-rewrite-prepared': (
+        '零调用写回 request 所指单章 canonical，并补全 prepared recovery/adoption 审计'),
+    '--retire-reviewer-rewrite-request': (
+        '写 Reviewer rewrite request 的 self-hash consumed/expiry receipt；'
+        '不改正文、不移动 canonical request'),
     # ── stage2 那两条 0 成本但**会写盘**的路（F5-1 补）──
     # ⚠ 它们与上面 `--recheck` 那几条是同一类：**免费，但写盘**。
     #   本表存在的全部理由就是这一类（原型那句「`FREE_FLAGS` 只管钱不管写」
@@ -2306,8 +2355,14 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage5.write':     NodeSpec('stage5', 'R-7',  True,  'stage5 全书闭卷写作',
                                   flags=('--dry-run', '--recheck', '--revalidate',
                                          '--preview-edit', '--apply-edit', '--revise',
+                                         '--reviewer-rewrite',
                                          '--chapters', '--actor', '--reason',
                                          '--subject-sha256',
+                                         '--recover-reviewer-rewrite-prepared',
+                                         '--retire-reviewer-rewrite-request',
+                                         '--reviewer-rewrite-request-sha256',
+                                         '--reviewer-rewrite-recovery-target-run-id',
+                                         '--reviewer-rewrite-recovery-journal-sha256',
                                          '--current-chapter-sha256',
                                          '--preview-subject-sha256',
                                          '--edit-confirmation',
@@ -2323,6 +2378,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage5.review':    NodeSpec('stage5', 'R-8',  False, 'stage5 全书验收',
                                  flags=('--check-only', '--wontfix', '--retain-pretrim',
                                         '--retain-pretrim-batch',
+                                        '--request-reviewer-rewrite',
                                         '--chapters', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE5_REVIEW,),
                                  operator_redo='review'),

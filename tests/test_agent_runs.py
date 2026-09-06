@@ -488,3 +488,28 @@ def test_stage4_plan_commit_declares_three_exact_terminal_bundles() -> None:
         )),
     }
     assert spec.nonformal_paths == (invalid,)
+
+
+@pytest.mark.parametrize('damage', ['state', 'digest', 'missing_digest'])
+def test_checkpoint_readback_refuses_corruption_before_execution_journal(
+        tmp_path: Path, damage: str,
+) -> None:
+    ctx = _ctx(tmp_path)
+    _ensure(ctx)
+    client = SessionAgentClient(
+        ctx, _profile(), _Driver(['{"value":1}']), max_semantic_turns=4)
+    value, acceptance = _accept(ctx, client)
+    target = _write(ctx, value, acceptance, state_value='first')
+    client.finish(process_state='ok', delivery_state='delivered')
+    client.close()
+    record = json.loads(target.read_text(encoding='utf-8'))
+    assert agent_runs.read_checkpoint_sha256(target) == record['checkpoint_sha256']
+    if damage == 'state':
+        record['state_payload']['progress_state'] = 'forged'
+    elif damage == 'digest':
+        record['checkpoint_sha256'] = '0' * 64
+    else:
+        record.pop('checkpoint_sha256')
+    target.write_text(json.dumps(record), encoding='utf-8')
+    with pytest.raises(ArtifactUnreadable, match='self SHA 不闭合'):
+        agent_runs.read_checkpoint_sha256(target)

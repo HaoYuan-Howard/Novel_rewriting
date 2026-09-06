@@ -55,8 +55,10 @@ def _stage5_trim_pack(ordinals: tuple[int, ...] = (2, 11)) -> dict:
             'missing_chapters': [],
             'chapter_subjects': [{
                 'output_ordinal': row['output_ordinal'],
-                'chapter_sha256': row['chapter_sha256'],
-            } for row in items],
+                # closure subject 是 canonical Chapter JSON 的完整文件 SHA；
+                # trim item 则是 rendered text SHA，测试刻意让两者不同。
+                'chapter_sha256': f'{index + 8:x}' * 64,
+            } for index, row in enumerate(items, start=1)],
             'invalid_chapters': [],
             'hard_findings': [],
             'unresolved_trim_chapters': list(ordinals),
@@ -617,7 +619,7 @@ def test_stage5_business_separates_trim_frontier_from_closure_and_next_suffix() 
         pack, current, queue.WAITING_ON_STAGE5_CLOSURE)
     first = reviewer_tasks._non_stage2_business_identity(
         pack, queue.WAITING_ON_STAGE5_CLOSURE, options)
-    assert first['action_mode'] == 'trim_resolution'
+    assert first['action_mode'] == 'trim_disposition'
     assert [row['output_ordinal'] for row in first['unresolved_trim_items']] == [2, 11]
 
     # closure workpack 会因 wontfix/disclosure/resolved 或已落 prefix 改 SHA；
@@ -644,7 +646,7 @@ def test_stage5_business_separates_trim_frontier_from_closure_and_next_suffix() 
         suffix, current, queue.WAITING_ON_STAGE5_CLOSURE)
     second = reviewer_tasks._non_stage2_business_identity(
         suffix, queue.WAITING_ON_STAGE5_CLOSURE, suffix_options)
-    assert second['action_mode'] == 'trim_resolution'
+    assert second['action_mode'] == 'trim_disposition'
     assert reviewer_tasks._canonical_json_sha256(first) != \
         reviewer_tasks._canonical_json_sha256(second)
 
@@ -1083,9 +1085,9 @@ def test_stage5_template_projects_only_current_targets_and_human_rulings(
                 path, current, submission_options=options)
 
 
-def test_stage5_trim_card_offers_one_bound_batch_or_stop_and_never_closure(
+def test_stage5_trim_card_offers_retain_rewrite_or_stop_and_never_closure(
         tmp_path) -> None:
-    """Commander 逐项写理由；Supervisor 不代选、不开放 closure-only 动作。"""
+    """同一卡只开放 full retain、单章关闭式 rewrite 或 typed stop。"""
     current = _current(queue.WAITING_ON_STAGE5_CLOSURE)
     pack = _stage5_trim_pack()
     options = reviewer_tasks._submission_options(
@@ -1093,7 +1095,9 @@ def test_stage5_trim_card_offers_one_bound_batch_or_stop_and_never_closure(
 
     assert [option['id'] for option in options] == [
         'node:stage5.review.retain-pretrim-batch',
-        'stop:stage5-trim-rewrite-required',
+        'node:stage5.review.request-reviewer-rewrite.ch2',
+        'node:stage5.review.request-reviewer-rewrite.ch11',
+        'stop:stage5-trim-no-safe-disposition',
     ]
     assert all(
         option['exact_request']['action']['kind'] != 'approval'
@@ -1150,7 +1154,7 @@ def test_stage5_trim_card_offers_one_bound_batch_or_stop_and_never_closure(
             reviewer_tasks.load_action(
                 path, current, submission_options=options)
 
-    stop = copy.deepcopy(options[1]['exact_request'])
+    stop = copy.deepcopy(options[-1]['exact_request'])
     stop['action']['reason'] = (
         '第11章当前正文有重复对证段，应先走 hash-bound 整章改写，不能 retain')
     path.write_text(json.dumps(stop, ensure_ascii=False), encoding='utf-8')
@@ -1161,6 +1165,88 @@ def test_stage5_trim_card_offers_one_bound_batch_or_stop_and_never_closure(
     path.write_text(json.dumps(stop), encoding='utf-8')
     with pytest.raises(reviewer_tasks.ReviewerTaskError, match='reason'):
         reviewer_tasks.load_action(path, current, submission_options=options)
+
+
+def test_stage5_reviewer_rewrite_loader_binds_one_target_and_exact_evidence(
+        tmp_path) -> None:
+    """无效/跨章 evidence 在 durable record 与席位成功闭账之前即被拒绝。"""
+    current = _current(queue.WAITING_ON_STAGE5_CLOSURE)
+    pack = _stage5_trim_pack()
+    options = reviewer_tasks._submission_options(
+        pack, current, queue.WAITING_ON_STAGE5_CLOSURE)
+    option = next(
+        row for row in options
+        if row['id'].endswith('request-reviewer-rewrite.ch2'))
+    request = copy.deepcopy(option['exact_request'])
+    payload = request['action']['input_payload']
+    payload['reason'] = '第2章重复说明可由关闭式压缩安全修复'
+    payload['directives'] = [{
+        'code': 'compress_exposition',
+        'current_text_evidence': '第 2 章正文',
+    }]
+    path = tmp_path / 'stage5-reviewer-rewrite.json'
+    path.write_text(json.dumps(request, ensure_ascii=False), encoding='utf-8')
+
+    action = reviewer_tasks.load_action(
+        path, current, submission_options=options)
+    assert isinstance(action, reviewer_tasks.ReviewerNodeAction)
+    assert action.node == 'stage5.review'
+    assert action.flags == ('--request-reviewer-rewrite', '@reviewer-input')
+    assert action.input_payload == payload
+    assert payload['target_chapter_file_sha256'] == '9' * 64
+
+    changed_file_subject = copy.deepcopy(request)
+    changed_file_subject['action']['input_payload'][
+        'target_chapter_file_sha256'] = '7' * 64
+    path.write_text(
+        json.dumps(changed_file_subject, ensure_ascii=False), encoding='utf-8')
+    with pytest.raises(
+            reviewer_tasks.ReviewerTaskError,
+            match='target_chapter_file_sha256'):
+        reviewer_tasks.load_action(
+            path, current, submission_options=options)
+
+    for evidence in ('盘上不存在的句子', '第 11 章正文'):
+        altered = copy.deepcopy(request)
+        altered['action']['input_payload']['directives'][0][
+            'current_text_evidence'] = evidence
+        path.write_text(json.dumps(altered, ensure_ascii=False), encoding='utf-8')
+        with pytest.raises(reviewer_tasks.ReviewerTaskError, match='恰好命中一次'):
+            reviewer_tasks.load_action(
+                path, current, submission_options=options)
+
+    duplicate_options = copy.deepcopy(options)
+    duplicate_option = next(
+        row for row in duplicate_options
+        if row['id'].endswith('request-reviewer-rewrite.ch2'))
+    duplicate_option['_validation_context']['target_rendered_text'] = (
+        '第 2 章正文……第 2 章正文')
+    path.write_text(json.dumps(request, ensure_ascii=False), encoding='utf-8')
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='实得 2 次'):
+        reviewer_tasks.load_action(
+            path, current, submission_options=duplicate_options)
+
+    for directives in (
+        [{
+            'code': 'compress_exposition',
+            'current_text_evidence': '字' * 241,
+        }],
+        [payload['directives'][0], payload['directives'][0]],
+    ):
+        altered = copy.deepcopy(request)
+        altered['action']['input_payload']['directives'] = directives
+        path.write_text(json.dumps(altered, ensure_ascii=False), encoding='utf-8')
+        with pytest.raises(reviewer_tasks.ReviewerTaskError, match='typed 契约'):
+            reviewer_tasks.load_action(
+                path, current, submission_options=options)
+
+    other_target = copy.deepcopy(request)
+    other_target['action']['input_payload']['target_ordinal'] = 11
+    path.write_text(json.dumps(other_target, ensure_ascii=False), encoding='utf-8')
+    with pytest.raises(
+            reviewer_tasks.ReviewerTaskError, match='target_chapter_file_sha256'):
+        reviewer_tasks.load_action(
+            path, current, submission_options=options)
 
 
 @pytest.mark.parametrize('missing', ['wontfix', 'resolution'])
@@ -1220,12 +1306,14 @@ def test_stage5_trim_workpack_contains_current_full_text_audit_and_measurement(
 
     text = '第2章不可删的完整因果正文。' * 8
     chapter_sha256 = hashlib.sha256(text.encode('utf-8')).hexdigest()
+    chapter_file_sha256 = hashlib.sha256(b'chapter').hexdigest()
     audit = TrimAudit(
         output_ordinal=2, before_sha256=chapter_sha256,
         reason='当前正文超过冻结目标上限')
     audit_sha256 = '7' * 64
     closure = _stage5_trim_pack((2,))['stage5_trim']['closure']
-    closure['workpack']['chapter_subjects'][0]['chapter_sha256'] = chapter_sha256
+    closure['workpack']['chapter_subjects'][0][
+        'chapter_sha256'] = chapter_file_sha256
     closure['workpack']['unresolved_trim_items'][0].update({
         'audit_sha256': audit_sha256,
         'chapter_sha256': chapter_sha256,
@@ -1249,9 +1337,9 @@ def test_stage5_trim_workpack_contains_current_full_text_audit_and_measurement(
             assert rel.endswith('trim_audit_ch02.json')
             return audit, audit_sha256
 
-        def read_own(self, model, rel, *, require_current=False):
+        def read_own_with_sha256(self, model, rel, *, require_current=False):
             assert rel.endswith('ch02.json') and require_current is True
-            return chapter, b'chapter'
+            return chapter, chapter_file_sha256
 
     monkeypatch.setattr(
         reviewer_tasks.paths, 'resolve_novel_dir',
@@ -1272,13 +1360,57 @@ def test_stage5_trim_workpack_contains_current_full_text_audit_and_measurement(
     assert material['audit'] == audit.model_dump(mode='json')
     assert material['audit_sha256'] == audit_sha256
     assert material['chapter_sha256'] == chapter_sha256
+    assert material['chapter_file_sha256'] == chapter_file_sha256
     assert '目标 80~100' in material['verification_context']
     assert '超上限 124' in material['verification_context']
 
+    # 同一份真实 material 继续投影成 immutable option；loader 必须保留
+    # trim text SHA 与 target canonical full-file SHA 两条不同的身份轴。
+    current = _current(queue.WAITING_ON_STAGE5_CLOSURE)
+    options = reviewer_tasks._submission_options(
+        result, current, queue.WAITING_ON_STAGE5_CLOSURE)
+    rewrite = copy.deepcopy(next(
+        row['exact_request'] for row in options
+        if row['id'].endswith('request-reviewer-rewrite.ch2')))
+    rewrite_payload = rewrite['action']['input_payload']
+    assert rewrite_payload['unresolved_trim_items'][0][
+        'chapter_sha256'] == chapter_sha256
+    assert rewrite_payload[
+        'target_chapter_file_sha256'] == chapter_file_sha256
+    rewrite_payload['reason'] = '完整材料证明本章可在保留冻结事实后压回预算'
+    rewrite_payload['directives'] = [{
+        'code': 'remove_repetition',
+        'current_text_evidence': text,
+    }]
+    request_path = tmp_path / 'real-stage5-reviewer-rewrite.json'
+    request_path.write_text(
+        json.dumps(rewrite, ensure_ascii=False), encoding='utf-8')
+    loaded = reviewer_tasks.load_action(
+        request_path, current, submission_options=options)
+    assert loaded.input_payload == rewrite_payload
+
     closure['workpack']['unresolved_trim_items'][0]['chapter_sha256'] = '8' * 64
     closure['workpack']['trim_subjects'][0]['chapter_sha256'] = '8' * 64
+    with pytest.raises(
+            reviewer_tasks.ReviewerTaskError,
+            match='text/audit/file SHA'):
+        reviewer_tasks._stage5_trim_workpack(
+            str(tmp_path), '42',
+            _current(queue.WAITING_ON_STAGE5_CLOSURE), closure)
+
+    closure = _stage5_trim_pack((2,))['stage5_trim']['closure']
+    closure['workpack']['unresolved_trim_items'][0].update({
+        'audit_sha256': audit_sha256,
+        'chapter_sha256': chapter_sha256,
+    })
+    closure['workpack']['trim_subjects'][0].update({
+        'audit_sha256': audit_sha256,
+        'chapter_sha256': chapter_sha256,
+    })
     closure['workpack']['chapter_subjects'][0]['chapter_sha256'] = '8' * 64
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='双 SHA'):
+    with pytest.raises(
+            reviewer_tasks.ReviewerTaskError,
+            match='text/audit/file SHA'):
         reviewer_tasks._stage5_trim_workpack(
             str(tmp_path), '42',
             _current(queue.WAITING_ON_STAGE5_CLOSURE), closure)

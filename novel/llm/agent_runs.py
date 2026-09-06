@@ -917,6 +917,15 @@ def _checkpoint_hash(payload: Mapping[str, Any]) -> str:
     })
 
 
+def read_checkpoint_sha256(path: Path) -> str:
+    """复读刚写入的 checkpoint 摘要；不能把坏字节挂到后续 execution journal。"""
+    record = _read_json(path, label='checkpoint 写后复读')
+    digest = record.get('checkpoint_sha256')
+    if not is_sha256(digest) or digest != _checkpoint_hash(record):
+        raise ArtifactUnreadable(f'{path} checkpoint 写后 self SHA 不闭合')
+    return digest
+
+
 # 写口使用至少四位零填充（rev-0001.json）；读口先提取数字，再由下方
 # ``expected_path`` 精确核 canonical 文件名。这里若禁止前导零，会把自己刚写的
 # 第一份 checkpoint 当成“未登记 JSON”，导致任何二轮/恢复/commit 都永久失败。
