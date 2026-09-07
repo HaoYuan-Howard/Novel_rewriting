@@ -460,6 +460,49 @@ def test_codex_terminal_error_after_completed_keeps_partial_observation(tmp_path
     assert exc.wire_evidence is True
 
 
+@pytest.mark.parametrize('variant', [
+    'recovered', 'after_completed', 'unknown_message', 'extra_tool_field',
+    'missing_id', 'updated_tool', 'failed_turn',
+])
+def test_codex_structured_transport_notice_requires_known_shape_and_success(
+        tmp_path, variant):
+    """真实 CLI 的传输切换通知不能误伤审阅；不放开 error/工具的一般通行权。"""
+    events = [json.loads(line) for line in _codex_structured_stream().splitlines()]
+    notice = {'type': 'item.completed', 'item': {
+        'id': 'item_0', 'type': 'error',
+        'message': ('Falling back from WebSockets to HTTPS transport. '
+                    'stream disconnected before completion: tls handshake eof'),
+    }}
+    if variant == 'unknown_message':
+        notice['item']['message'] = 'private unknown failure'
+    elif variant == 'extra_tool_field':
+        notice['item']['command'] = 'Get-Content secret'
+    elif variant == 'missing_id':
+        del notice['item']['id']
+    elif variant == 'updated_tool':
+        notice = {'type': 'item.updated', 'item': {'type': 'command_execution'}}
+    events.insert(len(events) if variant == 'after_completed' else 2, notice)
+    if variant == 'failed_turn':
+        events[-1]['type'] = 'turn.failed'
+    driver = CodexCommanderDriver(
+        executable='codex.exe',
+        runner=lambda argv, **_kwargs: _completed(
+            argv, '\n'.join(json.dumps(event) for event in events)))
+    invocation = driver.build_invocation(
+        _profile('codex'), 'review', repo=tmp_path, base=tmp_path,
+        structured_response=True)
+    if variant != 'recovered':
+        with pytest.raises(CommanderProtocolError):
+            driver.run(invocation, log=io.BytesIO(), run_id='notice-refused')
+        return
+    result = driver.run(invocation, log=io.BytesIO(), run_id='notice-recovered')
+    assert result.exit_code == 0
+    assert result.final_response == '{"schema":"review-v1"}'
+    assert result.observation.usage.prompt_tokens == 43_944
+    assert result.observation.usage.completion_tokens == 1_549
+    assert result.observation.provider_session_id == 'codex-thread-structured'
+
+
 def test_structured_success_without_final_message_is_protocol_error(tmp_path):
     repo = tmp_path / 'repo'
     scratch = tmp_path / 'scratch'

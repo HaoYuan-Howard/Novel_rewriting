@@ -294,18 +294,33 @@ class CodexCommanderDriver(CliCommanderDriver):
         Reviewer 的 cwd 已收窄到空 scratch、sandbox 为 read-only 且网络关闭。
         这里再从 provider 协议验证本轮只发生了推理与最终回答；即便不可信
         正文诱导了命令、文件、MCP 或搜索，Supervisor 也不会消费其 typed 结果。
-        未识别的新 item 类型同样关闭式拒绝，不能默认当成无工具。
+        Codex 0.153 的 WebSocket→HTTPS 切换通知是 error item，不是工具。
+        仅接受已知闭合形状且随后成功完成的切换通知；其余 error 与未知 item
+        仍关闭式拒绝，不能默认当成无工具。
         """
         allowed = frozenset({'agent_message', 'reasoning'})
+        last_completed = max(
+            (index for index, event in enumerate(events)
+             if event.get('type') == 'turn.completed'), default=-1)
         used: set[str] = set()
-        for event in events:
-            if event.get('type') not in {'item.started', 'item.completed'}:
+        for index, event in enumerate(events):
+            if event.get('type') not in {
+                    'item.started', 'item.updated', 'item.completed'}:
                 continue
             item = event.get('item')
             if not isinstance(item, Mapping):
                 used.add('<malformed>')
                 continue
             item_type = item.get('type')
+            if (event.get('type') == 'item.completed'
+                    and index < last_completed
+                    and set(item) == {'id', 'type', 'message'}
+                    and item_type == 'error'
+                    and isinstance(item.get('id'), str) and item['id'].strip()
+                    and isinstance(item.get('message'), str)
+                    and item['message'].startswith(
+                        'Falling back from WebSockets to HTTPS transport.')):
+                continue
             if not isinstance(item_type, str) or item_type not in allowed:
                 used.add(str(item_type) if item_type is not None else '<missing>')
         if used:
