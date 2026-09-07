@@ -93,28 +93,25 @@ def rig(tmp_path, monkeypatch):
     rev = rev.model_copy(update={'provenance': review_ctx.free_provenance(type(rev.provenance))})
     _dump(store, 'stage5/review_1.json', rev)
 
-    def workpack(artifacts):
-        _rev, review_sha = artifacts.read_own_with_sha256(Review, 'stage5/review_1.json', require_current=True)
-        subjects = []
-        for ordinal in (1, 2):
-            chapter, _sha = artifacts.read_own_with_sha256(Chapter, write._rel(ordinal), require_current=True)
-            _audit, audit_sha = artifacts.read_own_with_sha256(TrimAudit, f'stage5/trim_audit_ch{ordinal:02d}.json')
-            subjects.append(rewrite.ReviewerRewriteSubject(
-                output_ordinal=ordinal, audit_sha256=audit_sha,
-                chapter_sha256=hashlib.sha256(chapter.text.encode()).hexdigest()))
-        return SimpleNamespace(review_rel='stage5/review_1.json', review_sha256=review_sha,
-                               unresolved_trim_items=tuple(subjects))
+    def fresh_review(run, artifacts=None):
+        # 合成 Review 只替代上游判据报告；仍检查真实章文件的输入边，工作包和
+        # trim inventory 必须走生产读取，才能观察授权校验向 writer 来源账串入假边。
+        artifacts = artifacts or ArtifactStore(run)
+        current, _sha = artifacts.read_own_with_sha256(
+            Review, 'stage5/review_1.json', require_current=True)
+        return write.review.ReviewStatus(
+            'fresh', (), review_rel='stage5/review_1.json', seq=1, review=current)
 
-    monkeypatch.setattr(rewrite.closure, 'closure_workpack', workpack)
+    monkeypatch.setattr(write.review, 'require_fresh_review', fresh_review)
     # Commander 四账封存另由 test_agent 真运输验证；此处隔离其上游权限来源。
     monkeypatch.setattr(reviewer_action_evidence, 'require_reviewer_rewrite_authority', lambda *_a, **_kw: None)
     monkeypatch.setattr(reviewer_action_evidence, 'reviewer_rewrite_authority_sealed', lambda *_a, **_kw: True)
     monkeypatch.setattr(rewrite, '_require_request_authority', lambda *_a, **_kw: None)
     monkeypatch.setattr(admission, 'require_owner_stopped', lambda *_a, **_kw: nullcontext())
-    pack = workpack(store)
+    pack = rewrite.closure.closure_workpack(store)
     trusted = ReviewerRewriteBatchTrustedInput(
         actor='合成 Commander', reason='两章独立重复，同批修改', review_sha256=pack.review_sha256,
-        unresolved_trim_items=pack.unresolved_trim_items,
+        unresolved_trim_items=[row.model_dump() for row in pack.unresolved_trim_items],
         targets=[{
             'target_ordinal': ordinal,
             'target_chapter_file_sha256': store.read_own_with_sha256(Chapter, write._rel(ordinal))[1],
@@ -159,6 +156,9 @@ def test_two_rewrites_run_concurrently_and_then_close_one_batch(rig):
     assert [row.execution.state for row in probes] == ['landed_formal', 'landed_formal']
     assert rig.store.freshness('stage5/review_1.json').state == 'stale'
     for unit in rig.batch.requests:
+        chapter, _raw = rig.store.read_own(Chapter, write._rel(unit.target_ordinal))
+        assert set(chapter.provenance.inputs) == {STAGE4_WRITER_CONTEXT}
+        assert rig.store.freshness(write._rel(unit.target_ordinal)).state == 'fresh'
         chain = stage5_runs.reviewer_rewrite_execution_chain(rig.paid, run_id=rig.paid.run_id, chapter=unit.target_ordinal)
         assert [row.event for row in chain] == ['started', 'checkpointed', 'delivery_prepared', 'landed_formal']
         assert chain[-1].request_sha256 == unit.request_sha256
@@ -204,6 +204,36 @@ def test_external_sibling_edit_does_not_expand_batch_authority(rig):
     with pytest.raises(ProvenanceRefused):
         rewrite.require_current_reviewer_rewrite_request(
             rig.paid, request_sha256=rig.batch.requests[1].request_sha256)
+
+
+def test_old_contaminated_prepared_delivery_recovers_without_new_model_calls(rig, monkeypatch):
+    """旧代码把授权 audit 串入来源账后提交回滚，新代码仍可接管已有付费候选。"""
+    pool, entered = _pool(rig)
+    # 精确模拟旧版在生成前留下的假依赖；不得更改生产消费投影来承认这条边。
+    ArtifactStore(rig.paid).read(TrimAudit, 'stage5/trim_audit_ch01.json')
+    old_bytes = {ordinal: rig.store.path(write._rel(ordinal)).read_bytes() for ordinal in (1, 2)}
+    with pytest.raises(ProvenanceRefused, match='consumed_undeclared'):
+        write.run_reviewer_rewrite(rig.paid, pool)
+    assert all(rig.store.path(write._rel(ordinal)).read_bytes() == raw
+               for ordinal, raw in old_bytes.items())
+    assert len(entered) == 2
+    monkeypatch.setattr(prov, 'code_version', lambda: 'recovery-code-version')
+    free = replace(rig.ctx, node='stage5.write', code=prov.code_version(),
+                   run_id='batch-recovery', parent_run_id='recovery-parent',
+                   _edges={}, _judged={}, _accounting={}, _usage_mark=None,
+                   ledger=CostLedger(path=ledger_path(rig.base), run_id='batch-recovery', parent_run_id='recovery-parent'))
+    for unit in rig.batch.requests:
+        pending = rewrite.current_reviewer_rewrite_request(free)
+        assert pending.execution.state == 'recoverable_checkpoint'
+        assert pending.request.request_sha256 == unit.request_sha256
+        write.run_reviewer_rewrite_prepared_recovery(free, rig.paid.run_id, unit.request_sha256)
+    assert len(entered) == 2
+    assert [row.execution.state for row in rewrite.reviewer_rewrite_batch_probes(free)] == [
+        'landed_formal', 'landed_formal']
+    for ordinal in (1, 2):
+        chapter, _raw = rig.store.read_own(Chapter, write._rel(ordinal))
+        assert set(chapter.provenance.inputs) == {STAGE4_WRITER_CONTEXT}
+        assert rig.store.freshness(write._rel(ordinal)).state == 'fresh'
 
 
 def test_v1_unit_is_not_a_current_canonical_artifact(rig):

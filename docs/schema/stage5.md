@@ -81,6 +81,10 @@ Review stale，因此恢复成功后必须**另跑** `stage5.review`。旧书内
 若旧 source run 已留下同 request 的 matching checkpoint/prepared，queue 改发上述
 `--recover-reviewer-rewrite-prepared` 精确 FREE 动作，不要求第二次人工审批，也不续旧 provider session；
 若 target recovery WAL 已经存在，后继 run 必须复用其 target run 与 WAL 原始 SHA，不能另造一份 WAL。
+source 的 generic prepared commit 仍归 `recoverable_checkpoint`，作为原 accepted checkpoint 的恢复材料；
+只有 target recovery WAL 已实际创建并能绑定 target run/SHA，才归 `recoverable_prepared`。
+复验 request 的 Review/trim/frontier 是授权校验，必须隔离在 `RunContext.validation_reads()`；这些读取
+不得进入 writer 正文的普通来源边，冻结 request、旧正文与语义指令仍由 prompt/执行 journal 的 SHA 绑定。
 执行状态关闭为九态：`ready_paid / in_flight_or_unknown / recoverable_checkpoint /
 recoverable_prepared / landed_formal / landed_invalid / landed_rejected / expired_unstarted /
 consumed_resolved`。首轮 `started` 是首轮 wire intent；每次后续 writer turn 都先把 `retry_started` 和

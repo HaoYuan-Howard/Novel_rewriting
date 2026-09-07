@@ -835,7 +835,7 @@ def _blocked_why(
             f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE5_REVIEWER_REWRITE:
         return (
-            'Stage5 顶部 Commander 已把一章关闭式 rewrite 决定落成 current '
+            'Stage5 顶部 Commander 已把批量关闭式 rewrite 决定落成 current '
             'hash-bound request；当前只允许按 execution journal 发布 exact paid '
             'writer 或 0-wire prepared recovery，不再调用 Commander，也不退回默认'
             f'写作。执行终态后重新规划并免费重算 Review；{verdict_why}')

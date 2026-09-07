@@ -182,6 +182,18 @@ def require_current_reviewer_rewrite_request(
         *, request_sha256: str | None = None,
 ) -> tuple[ReviewerRewriteRequest, str]:
     """目标 CAS 不变；兄弟章变化仅接受同批 exact formal execution 证明。"""
+    # closure 的 trim inventory 会读取 audit 上游；这里仅验证既有 request 的
+    # 授权，不能把这些读取混入 writer 的正文生成依赖。request 自身及旧正文
+    # 仍由冻结 prompt、request SHA 和执行 journal 绑定，不因此放宽 current 闸。
+    with ctx.validation_reads():
+        return _require_current_reviewer_rewrite_request(
+            ctx, request_rel, request_sha256=request_sha256)
+
+
+def _require_current_reviewer_rewrite_request(
+        ctx: RunContext, request_rel: str,
+        *, request_sha256: str | None,
+) -> tuple[ReviewerRewriteRequest, str]:
     request, digest = load_reviewer_rewrite_request(
         ctx, request_rel, request_sha256=request_sha256)
     batch, batch_digest = load_reviewer_rewrite_batch(ctx, request_rel)
@@ -1121,10 +1133,9 @@ def _unit_execution_state(
         _recovery_wal_closes(
             ctx, request, request_file_sha256, wal,
             restored, prepared_frozen, terminal_artifact)
-    status = (
-        'recoverable_prepared'
-        if recoveries or (commit is not None and commit.get('state') == 'prepared')
-        else 'recoverable_checkpoint')
+    # source 的 generic prepared 仍是已有 checkpoint 的恢复材料，尚不存在可续的
+    # target recovery WAL。只有后者已创建才发布其 target run/SHA 并进入 prepared 态。
+    status = 'recoverable_prepared' if recoveries else 'recoverable_checkpoint'
     return ReviewerRewriteExecutionState(
         request_rel=request_rel,
         request_file_sha256=request_file_sha256,
