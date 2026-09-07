@@ -2282,8 +2282,12 @@ export const mockApi: Api = {
     const acceptedChapter = enumAt(enums().design_chapter_decisions, 0, 'A 逐章审阅决定')
     const requestRepair = enumAt(enums().design_chapter_decisions, 1, 'A 逐章审阅决定')
     const invalidChapter = request.chapters.some((chapter) => (
-      (chapter.decision === acceptedChapter && chapter.constraints.length > 0)
-      || (chapter.decision === requestRepair && chapter.constraints.length === 0)
+      (chapter.decision === acceptedChapter && (chapter.constraints.length > 0
+        || chapter.constraint_operations?.items.some((item) => item.kind === 'supersede')))
+      || (chapter.decision === requestRepair && chapter.constraints.length === 0
+        && !chapter.constraint_operations?.items.some((item) => (
+          item.kind === 'keep' || (item.kind === 'supersede' && item.replacements.length > 0)
+        )))
       || (
         chapter.decision === requestRepair
         && !materialized.repair_capability.chapters.find(
@@ -2324,6 +2328,7 @@ export const mockApi: Api = {
           decision: ruling.decision,
           reason: ruling.reason,
           constraints: ruling.constraints,
+          ...(ruling.constraint_operations ? { constraint_operations: ruling.constraint_operations } : {}),
         }
       }),
       decision_sha256: '8'.repeat(64),

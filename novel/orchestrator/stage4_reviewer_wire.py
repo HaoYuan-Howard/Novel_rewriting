@@ -19,13 +19,17 @@ import json
 from collections.abc import Mapping, Sequence
 from functools import reduce
 from operator import or_
-from typing import Any, Literal, Protocol, get_args
+from typing import Annotated, Any, Literal, Protocol, get_args
 
 from pydantic import Field, ValidationError, create_model
 from pydantic_core import PydanticUndefined
 from typing_extensions import TypeAliasType
 
+from contracts.invariants import DESIGN_REPAIR_CODE_INSTRUCTIONS
 from contracts.schema.api import (
+    DesignConstraintCatalog,
+    DesignConstraintOperation,
+    DesignConstraintOperations,
     DesignChapterRuling,
     DesignRepairConstraint,
     DesignRepairObserves,
@@ -45,6 +49,7 @@ from novel.orchestrator import queue
 
 WIRE_SCHEMA = 'novel-stage4-reviewer-rulings-v1'
 REFERENCE_CLOSURE = 'chapters[].constraints[].reference_closure'
+CONSTRAINT_OPERATION_CATALOG = 'chapters[].constraint_operations.active'
 _DESIGN_BLOCKERS = frozenset({
     queue.WAITING_ON_STAGE4_DESIGN_REVIEW,
     queue.WAITING_ON_STAGE4_BINDING_RESOLUTION,
@@ -196,6 +201,55 @@ def _constraint_model(option: Mapping[str, Any], ordinal: int, digest: str) -> t
     )
 
 
+def _constraint_operation_scopes(
+    option: Mapping[str, Any], rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Mapping[str, Any]]:
+    """目录缺失不是零条义务；新 task 必须显式绑定全章 active 集。"""
+    allowed = option.get('allowed_values')
+    catalog = allowed.get(CONSTRAINT_OPERATION_CATALOG) if isinstance(allowed, Mapping) else None
+    if not isinstance(catalog, Mapping) or set(catalog) != {
+            str(row['output_ordinal']) for row in rows}:
+        raise Stage4ReviewerWireError('Stage4 历史约束目录必须完整绑定当前章集')
+    for scope in catalog.values():
+        if not isinstance(scope, Mapping):
+            raise Stage4ReviewerWireError('Stage4 历史约束目录不是 object')
+        items = scope.get('items')
+        if (not isinstance(items, list)
+                or any(not isinstance(item, Mapping) for item in items)):
+            raise Stage4ReviewerWireError('Stage4 历史约束目录缺显式 items 分母')
+        try:
+            parsed = DesignConstraintCatalog.model_validate(scope)
+        except ValidationError as exc:
+            raise Stage4ReviewerWireError('Stage4 历史约束目录未继承现役 typed 形状') from exc
+        identities = [item.constraint_sha256 for item in parsed.items]
+        if identities != sorted(set(identities)):
+            raise Stage4ReviewerWireError('Stage4 历史约束目录身份必须升序不重复')
+    return dict(catalog)
+
+
+def _constraint_operations_model(
+    scope: Mapping[str, Any], constraint: type[StrictModel], ordinal: int, digest: str,
+) -> type[StrictModel]:
+    """把 active SHA 提升成固定键；canonical 身份与集合 SHA 由组装器注入。"""
+    choices = []
+    for kind in get_args(DesignConstraintOperation.model_fields['kind'].annotation):
+        # canonical 的 kind/replacements 条件在原生 schema 中也收窄为局部分支。
+        # 组装后仍复用同一 canonical model，不让运输层成为第二个审批判官。
+        replacements = Annotated[list[constraint], (
+            Field(min_length=1) if kind == 'supersede' else Field(max_length=0))]
+        choices.append(create_model(
+            f'Stage4ConstraintOperation_{kind}_{ordinal}_{digest}', __base__=StrictModel,
+            kind=_field(DesignConstraintOperation, 'kind', Literal[kind]),
+            reason=_field(DesignConstraintOperation, 'reason'),
+            replacements=_field(DesignConstraintOperation, 'replacements', replacements),
+        ))
+    return create_model(
+        f'Stage4ConstraintOperations_{ordinal}_{digest}', __base__=StrictModel,
+        **{item['constraint_sha256']: (reduce(or_, choices), ...)
+           for item in scope['items']},
+    )
+
+
 def _payload_model(option: Mapping[str, Any], digest: str) -> type[StrictModel]:
     exact = option['exact_request']
     action = exact['action']
@@ -209,6 +263,7 @@ def _payload_model(option: Mapping[str, Any], digest: str) -> type[StrictModel]:
     chapter_source = DesignChapterRuling if design else StructureChapterDecision
     chapter_fields = {}
     if design:
+        operation_scopes = _constraint_operation_scopes(option, rows)
         closure = option.get('allowed_values', {}).get(REFERENCE_CLOSURE)
         if not isinstance(closure, Mapping) or set(closure) != {
                 str(row['output_ordinal']) for row in rows}:
@@ -221,9 +276,14 @@ def _payload_model(option: Mapping[str, Any], digest: str) -> type[StrictModel]:
             'reason': _field(chapter_source, 'reason'),
         }
         if design:
+            constraint = _constraint_model(option, ordinal, digest)
             fields['constraints'] = _field(
-                DesignChapterRuling, 'constraints',
-                list[_constraint_model(option, ordinal, digest)])
+                DesignChapterRuling, 'constraints', list[constraint])
+            operation_scope = operation_scopes[str(ordinal)]
+            if operation_scope['items']:
+                fields['constraint_operations'] = (
+                    _constraint_operations_model(
+                        operation_scope, constraint, ordinal, digest), ...)
         chapter_fields[str(ordinal)] = (create_model(
             f'Stage4ReviewerChapter_{ordinal}_{digest}',
             __base__=StrictModel, **fields,
@@ -291,6 +351,9 @@ def prompt_for(task: object, base_prompt: str) -> str:
         'option_id': option['id'],
         'expected_exact_request_sha256': _sha256(option['exact_request']),
     } for option in _options(task)]  # type: ignore[arg-type]
+    directions = json.dumps({code: DESIGN_REPAIR_CODE_INSTRUCTIONS[code]
+                             for code in ('scene_goal', 'scene_goal_exclude')},
+                            ensure_ascii=False, separators=(',', ':'))
     return f'''{base_prompt.rstrip()}
 
 【Stage4 Reviewer 原生裁决输出】
@@ -302,11 +365,23 @@ selection 必须完整选择一个合法 option，不得把 id 写到 JSON 末�
 
 design payload 只交 general_reason、strategy 和 chapters；strategy 交
 decision/reason/replan_constraints，chapters 是按 output_ordinal 的十进制字符串
-固定键组成的 object，每章交 decision/reason/constraints。structure payload 只交
+固定键组成的 object，每章交 decision/reason/constraints；原生 schema 开放了
+constraint_operations 的章还必须逐项填写该 object。structure payload 只交
 reason 和同样固定键的 chapters，每章交 decision/reason。stop payload 只交 reason。
 全部章节键及全部字段都必须出现，空约束交 []，无 relation effect 交 null。不要回抄
 actor、reviewer_kind、review_run_id、review_token、output_ordinal 或 surface_seal；
 Supervisor 只从该 immutable option 注入这些身份，随后仍走现役 typed loader 和审批。
+未审模板里的占位决定不是历史裁决，空 constraints 也不表示已无历史义务；
+真实历史只认工作包的 design_constraint_catalog。constraints 只添加本次新约束。
+对 active 非空的章，constraint_operations 按原生 schema 的每个固定 SHA 键逐项交
+kind/reason/replacements：keep 与 withdraw 必须交 replacements: []，supersede 必须
+交非空 typed replacements。全键必填，不能遗漏、重复、添加其他章身份或交 null。
+Supervisor 从同一目录注入 expected_constraint_set_sha256 和 canonical items 的
+constraint_sha256；模型不回抄这些绑定字段。无 active 约束的章不添加该 object。
+撤销和替代必须是你针对真实历史义务作出的明确决定，不能把修后主体变化当作自动关闭。
+场景目标方向使用已登记语义：{directions}
+选择的 code 必须表达你要 Executor 执行的方向；reason 只作审计，不能反转 code 的含义。
+
 typed 约束使用原生 schema 的当前章 scene/alias 闭集；引用数组顺序表达真实修订意图，
 不得拿空数组或理由代替实际决定。INFO/metric/UNVER 的阅读权与修订行动权保持原契约。
 '''
@@ -352,12 +427,42 @@ def assemble(task: _ReviewerTaskLike, response_document: Mapping[str, Any] | str
     chapter_map = supplied.pop('chapters')
     for field, value in supplied.items():
         payload[field] = value
+    operation_scopes = (
+        _constraint_operation_scopes(option, payload['chapters'])
+        if action['surface'] == 'design' else {})
     for row in payload['chapters']:
-        row.update(chapter_map[str(row['output_ordinal'])])
+        ordinal = str(row['output_ordinal'])
+        ruling = chapter_map[ordinal]
+        if action['surface'] == 'design':
+            # 所有模型判断都从本次回答取；不继承 exact_request 的语义脚手架。
+            row.pop('constraint_operations', None)
+            operations = ruling.pop('constraint_operations', None)
+            if operations is not None:
+                scope = operation_scopes[ordinal]
+                items = []
+                for item in scope['items']:
+                    operation = dict(operations[item['constraint_sha256']],
+                                     constraint_sha256=item['constraint_sha256'])
+                    # 约束集合可规范排序，内部 refs 的业务顺序原样保留；重复仍交
+                    # canonical validator 拒绝，不能去重后改写模型的实际回答。
+                    operation['replacements'] = sorted(
+                        operation['replacements'], key=lambda value: json.dumps(
+                            value, ensure_ascii=False, sort_keys=True, separators=(',', ':')))
+                    items.append(operation)
+                try:
+                    canonical = DesignConstraintOperations.model_validate({
+                        'expected_constraint_set_sha256': scope['expected_constraint_set_sha256'],
+                        'items': items,
+                    })
+                except ValidationError as exc:
+                    raise Stage4ReviewerWireError('Stage4 历史约束处置未通过现役 typed 校验') from exc
+                ruling['constraint_operations'] = canonical.model_dump(mode='json')
+        row.update(ruling)
     return assembled
 
 
 __all__ = [
-    'WIRE_SCHEMA', 'REFERENCE_CLOSURE', 'Stage4ReviewerWireError',
+    'WIRE_SCHEMA', 'REFERENCE_CLOSURE', 'CONSTRAINT_OPERATION_CATALOG',
+    'Stage4ReviewerWireError',
     'uses_compact_wire', 'output_schema_for', 'response_model', 'prompt_for', 'assemble',
 ]

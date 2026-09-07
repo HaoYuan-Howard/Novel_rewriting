@@ -35,6 +35,7 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_reviewer_protocol_recovery.py',
     'tests/test_reviewer_suffix_recovery.py',
     'tests/test_stage4_reviewer_integration.py',
+    'tests/test_stage4_review_constraint_context.py',
     'tests/test_reviewer_schema_recovery_integration.py',
     'tests/test_agent.py',
     'tests/test_skill_operator.py',

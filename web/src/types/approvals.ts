@@ -94,11 +94,28 @@ export interface DesignBlindFact {
   participant_aliases: string[]
 }
 
+/** 后端当前章 typed 关系；端点按 kind 原样保留，页面不生成关系。 */
+export interface DesignNarrativeRelation {
+  kind: string
+  enforcement: string
+  before_alias?: string
+  after_alias?: string
+  stimulus_alias?: string
+  response_alias?: string
+  left_alias?: string
+  right_alias?: string
+  observer_alias?: string
+  observed_alias?: string
+  observation_alias?: string
+}
+
 export interface DesignBlindChapterTruth {
   chapter_ordinal: number
   chapter_function: string
   facts: DesignBlindFact[]
   causal_edges: { before_alias: string; after_alias: string }[]
+  /** 历史材料可能缺席；缺席没有关系修订选择权。 */
+  narrative_relations?: DesignNarrativeRelation[]
   entry_state_aliases: string[]
   ending_state_aliases: string[]
 }
@@ -127,6 +144,28 @@ export interface DesignRepairConstraint {
   scene_refs: string[]
   opaque_aliases: string[]
   effect?: unknown | null
+}
+
+/** 操作种类来自服务端 design_constraint_operation_kinds，页面不定义第二套枚举。 */
+export interface DesignConstraintOperation {
+  kind: string
+  constraint_sha256: string
+  reason: string
+  replacements: DesignRepairConstraint[]
+}
+
+export interface DesignConstraintOperations {
+  expected_constraint_set_sha256: string
+  items: DesignConstraintOperation[]
+}
+
+export interface DesignConstraintCatalog {
+  expected_constraint_set_sha256: string
+  items: {
+    constraint_sha256: string
+    constraint: DesignRepairConstraint
+    source_decision_sha256s: string[]
+  }[]
 }
 
 export interface DesignStrategyReplanConstraint {
@@ -165,6 +204,7 @@ export interface DesignChapterReview {
   decision: string
   reason: string
   constraints: DesignRepairConstraint[]
+  constraint_operations?: DesignConstraintOperations
   /** 复用旧 accept 时由服务端填；前端原样回传。 */
   source_decision_sha256: string | null
 }
@@ -218,6 +258,7 @@ export interface DesignChapterRuling {
   decision: string
   reason: string
   constraints: DesignRepairConstraint[]
+  constraint_operations?: DesignConstraintOperations
 }
 
 /** POST 只搬一枚 opaque token 与 typed 裁决；subject 由服务端现场重建。 */
@@ -234,6 +275,7 @@ export interface DesignReviewRequest {
 /** GET 返回完整只读材料；它不是可原样 POST 的写入载荷。 */
 export interface DesignReviewTemplate extends DesignReviewMaterialized {
   review_token: string
+  constraint_catalog?: Record<string, DesignConstraintCatalog>
 }
 
 /** GET template 的四个必填审阅会话参数；reason 会投影为响应 general_reason。 */

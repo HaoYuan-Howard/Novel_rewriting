@@ -563,6 +563,8 @@ APPROVAL_WORKPACK_GROUP_EFFECTS: Final[Mapping[str, tuple[str, ...]]] = {
     'phase_deferred': ('phase_deferred',),
     'coverage': ('coverage',),
 }
+#: Reviewer 对同策略章级历史约束的逐项处置；API 与模型载体共用取值面。
+DESIGN_CONSTRAINT_OPERATION_KINDS: Final = ('keep', 'withdraw', 'supersede')
 DESIGN_REPAIR_CODES: Final = (
     'entry_anchor',
     'ending_anchor',
@@ -570,6 +572,7 @@ DESIGN_REPAIR_CODES: Final = (
     'disclosure_order',
     'noncontiguous_regroup',
     'scene_goal',
+    'scene_goal_exclude',
     'binding_constraint_unsat',
     'narrative_relation',
 )
@@ -588,6 +591,7 @@ DESIGN_REPAIR_CONSTRAINT_ARITY: Final = {
     'disclosure_order': (0, 2),
     'noncontiguous_regroup': (0, 2),
     'scene_goal': (1, 1),
+    'scene_goal_exclude': (1, 1),
     'binding_constraint_unsat': (1, 0),
     # typed effect 承担精确端点；不再往两个无类型数组里重复搬运。
     'narrative_relation': (0, 0),
@@ -602,6 +606,9 @@ DESIGN_REPAIR_CODE_INSTRUCTIONS: Final[Mapping[str, str]] = {
     'disclosure_order': '按 opaque_aliases 列表的目标顺序重排披露。',
     'noncontiguous_regroup': '将给定 opaque_aliases 做非相邻重组，并保持因果/状态边界。',
     'scene_goal': '只调整 scene_refs 指向场景的目标，必须覆盖给定 opaque_aliases。',
+    'scene_goal_exclude': (
+        '只调整 scene_refs 指向场景的目标，不得把给定 opaque_aliases 对应事实'
+        '写成这些场景的当前目标或已经进入当前场景的事件；不删除事实，也不改变其落地场景。'),
     'binding_constraint_unsat': (
         '调整 scene_refs 指向场景的结构，使其可在后续关闭式证据绑定中实现。'),
     'narrative_relation': (
@@ -629,6 +636,9 @@ DESIGN_REPAIR_CONSTRAINT_EXAMPLES: Final[Mapping[str, Mapping[str, object]]] = {
         'opaque_aliases': ['a_00000000000000a1', 'a_00000000000000a2']},
     'scene_goal': {
         'code': 'scene_goal', 'scene_refs': ['<本章 workpack scene_ref>'],
+        'opaque_aliases': ['a_00000000000000a1']},
+    'scene_goal_exclude': {
+        'code': 'scene_goal_exclude', 'scene_refs': ['<本章 workpack scene_ref>'],
         'opaque_aliases': ['a_00000000000000a1']},
     'binding_constraint_unsat': {
         'code': 'binding_constraint_unsat',

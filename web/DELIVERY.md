@@ -268,7 +268,11 @@ components/
 
 Stage4 屏另有两块专用审批面板。`screens/stage4/DesignReviewPanel` 对当前 Stage4A 候选提交
 hash-bound 的策略级与逐章裁决；候选、证据、允许的 repair code 及约束最小基数都来自后端，默认
-关闭式拒绝，前端不替人补拒绝理由。只有后端返回 `design_review.state=accepted`，才呈现
+关闭式拒绝，前端不替人补拒绝理由。历史约束直接展示 template 的全章 `constraint_catalog`；
+有活动项时，每项必须由审阅者显式选择保留、撤回或替代并填写理由，表单不默认保留。替代项与
+新增约束共用后端 code、基数与本章引用校验；关系约束只能显式选择当前本章已有的 review 关系，
+保持端点并提升为 hard，缺材料或枚举时禁用。任何修改都会使旧确认失效；完整处置身份原样 POST，
+最终有效集合与授权仍由后端判定。只有后端返回 `design_review.state=accepted`，才呈现
 `screens/stage4/StructureApprovalPanel`。后者替代通用 `GateBar(s4)`，对完整 Plan + concerns 主体
 逐章裁决；`request_replan` 不顺手拉起重规划，写作授权仍只在 Stage5 的付费确认流中单独授予。
 两面共用 `screens/stage4/ApprovalWorkpackPanel`，但各走自己的 GET 与 query key：六组按服务端顺序

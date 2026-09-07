@@ -6,6 +6,10 @@ import { useAskJob, useChrome } from '@/hooks/useChrome'
 import { useEnums } from '@/hooks/useEnums'
 import type {
   DesignChapterReview,
+  DesignConstraintCatalog,
+  DesignConstraintOperation,
+  DesignConstraintOperations,
+  DesignNarrativeRelation,
   DesignReviewMaterialized,
   DesignRepairConstraint,
   DesignStrategyReview,
@@ -20,6 +24,49 @@ import { GateMark } from '@/components/vocab/Badges'
 import { useDesignReview } from './useDesignReview'
 import { ApprovalWorkpackEvidence } from './ApprovalWorkpackPanel'
 import { useApprovalWorkpack } from '@/hooks/useApprovalWorkpack'
+
+interface ConstraintInputDomain {
+  arity: Record<string, [number, number]>
+  relationKinds: string[]
+  relationEnforcements: string[]
+}
+
+function reviewRelationChoices(
+  chapter: DesignChapterReview, domain: ConstraintInputDomain,
+): DesignNarrativeRelation[] {
+  const review = domain.relationEnforcements.find((value) => value === 'review')
+  const hard = domain.relationEnforcements.find((value) => value === 'hard')
+  if (!review || !hard) return []
+  return (chapter.subject.blind_truth.narrative_relations ?? [])
+    .filter((relation) => relation.enforcement === review && domain.relationKinds.includes(relation.kind))
+    .map((relation) => ({ ...relation, enforcement: hard }))
+}
+
+function sameRelation(effect: unknown, relation: DesignNarrativeRelation): boolean {
+  if (!effect || typeof effect !== 'object' || Array.isArray(effect)) return false
+  const actual = effect as Record<string, unknown>
+  return Object.keys(actual).length === Object.keys(relation).length
+    && Object.entries(relation).every(([key, value]) => actual[key] === value)
+}
+
+function constraintComplete(
+  constraint: DesignRepairConstraint, chapter: DesignChapterReview,
+  codes: string[], domain: ConstraintInputDomain,
+): boolean {
+  const arity = domain.arity[constraint.code]
+  if (!codes.includes(constraint.code) || !arity || arity.length !== 2
+    || !arity.every((value) => Number.isInteger(value) && value >= 0)) return false
+  const scenes = chapter.subject.chapter.scenes.map((scene) => scene.candidate_scene_id)
+  const aliases = chapter.subject.blind_truth.facts.flatMap((fact) => [fact.fact_alias, ...fact.participant_aliases])
+  if (constraint.scene_refs.length < arity[0] || constraint.opaque_aliases.length < arity[1]
+    || new Set(constraint.scene_refs).size !== constraint.scene_refs.length
+    || new Set(constraint.opaque_aliases).size !== constraint.opaque_aliases.length
+    || !constraint.scene_refs.every((scene) => scenes.includes(scene))
+    || !constraint.opaque_aliases.every((alias) => aliases.includes(alias))) return false
+  if (constraint.code !== 'narrative_relation') return constraint.effect == null
+  return constraint.scene_refs.length === 0 && constraint.opaque_aliases.length === 0
+    && reviewRelationChoices(chapter, domain).some((relation) => sameRelation(constraint.effect, relation))
+}
 
 function reviewRunId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -251,6 +298,12 @@ export function DesignReviewPanel() {
           strategyDecisions={enums.data?.design_strategy_decisions ?? []}
           chapterDecisions={enums.data?.design_chapter_decisions ?? []}
           repairCodes={enums.data?.design_repair_codes ?? []}
+          operationKinds={enums.data?.design_constraint_operation_kinds ?? []}
+          constraintDomain={{
+            arity: enums.data?.design_repair_constraint_arity ?? {},
+            relationKinds: enums.data?.narrative_relation_kinds ?? [],
+            relationEnforcements: enums.data?.narrative_relation_enforcements ?? [],
+          }}
           submit={review.submit}
           onReset={reset}
           workpackReviewable={workpackReviewable}
@@ -266,6 +319,8 @@ function DesignReviewForm({
   strategyDecisions,
   chapterDecisions,
   repairCodes,
+  operationKinds,
+  constraintDomain,
   submit,
   onReset,
   workpackReviewable,
@@ -275,6 +330,8 @@ function DesignReviewForm({
   strategyDecisions: string[]
   chapterDecisions: string[]
   repairCodes: string[]
+  operationKinds: string[]
+  constraintDomain: ConstraintInputDomain
   submit: ReturnType<typeof useDesignReview>['submit']
   onReset: () => void
   workpackReviewable: boolean
@@ -403,12 +460,22 @@ function DesignReviewForm({
       && chapter.reason.trim()
       && !chapter.placeholder
       && chapter.template_token === null
+      && constraintOperationsComplete(
+        chapter.constraint_operations, template.constraint_catalog?.[chapter.output_ordinal], operationKinds,
+        chapter, repairCodes, constraintDomain,
+      )
       && (chapter.decision === acceptedChapter
-        ? chapter.constraints.length === 0
+        ? chapter.constraints.length === 0 && !chapter.constraint_operations?.items.some(
+          (item) => item.kind === 'supersede',
+        )
         : chapter.decision === repairChapter
           && repairByOrdinal.get(chapter.output_ordinal)?.request_repair_available === true
-          && chapter.constraints.length > 0
-          && chapter.constraints.every((constraint) => repairCodes.includes(constraint.code)))
+          && (chapter.constraints.length > 0 || chapter.constraint_operations?.items.some(
+            (item) => item.kind === 'keep' || (item.kind === 'supersede' && item.replacements.length > 0),
+          ))
+          && chapter.constraints.every((constraint) => constraintComplete(
+            constraint, chapter, repairCodes, constraintDomain,
+          )))
     )),
   )
 
@@ -480,6 +547,13 @@ function DesignReviewForm({
               chapter={chapter}
               chapterDecisions={chapterDecisions}
               repairCodes={repairCodes}
+              operationKinds={operationKinds}
+              constraintDomain={constraintDomain}
+              constraintCatalog={template.constraint_catalog?.[chapter.output_ordinal]}
+              onOperations={(operations) => setChapter(
+                chapter.output_ordinal,
+                (current) => ({ ...current, constraint_operations: operations }),
+              )}
               acceptedDecision={acceptedChapter}
               repairDecision={repairChapter}
               repairCapability={repairCapability}
@@ -504,6 +578,12 @@ function DesignReviewForm({
               onConstraint={(code, checked) => setChapter(
                 chapter.output_ordinal,
                 (current) => toggleConstraint(current, code, checked),
+              )}
+              onEffect={(code, effect) => setChapter(
+                chapter.output_ordinal,
+                (current) => ({ ...current, constraints: current.constraints.map((constraint) => (
+                  constraint.code === code ? { ...constraint, scene_refs: [], opaque_aliases: [], effect } : constraint
+                )) }),
               )}
               onScope={(code, field, value, checked, options) => setChapter(
                 chapter.output_ordinal,
@@ -536,7 +616,7 @@ function DesignReviewForm({
                 : !enumsReady
                   ? '服务端 Stage4A 审阅取值面未就绪'
                 : !complete
-                  ? '策略与每章都必须修改真实反馈后显式核对；request_repair 至少选择一个返修码'
+                  ? '策略与每章须显式核对；历史约束须逐条处置，request_repair 须有有效约束'
                   : ''
             }
             onClick={() => submit.mutate({
@@ -558,6 +638,7 @@ function DesignReviewForm({
                 decision: chapter.decision,
                 reason: chapter.reason.trim(),
                 constraints: chapter.constraints,
+                ...(chapter.constraint_operations ? { constraint_operations: chapter.constraint_operations } : {}),
               })),
             }, {
               onSuccess: (next) => notify(
@@ -585,6 +666,10 @@ function ChapterReviewEditor({
   chapter,
   chapterDecisions,
   repairCodes,
+  operationKinds,
+  constraintDomain,
+  constraintCatalog,
+  onOperations,
   acceptedDecision,
   repairDecision,
   repairCapability,
@@ -595,11 +680,16 @@ function ChapterReviewEditor({
   onDecision,
   onReason,
   onConstraint,
+  onEffect,
   onScope,
 }: {
   chapter: DesignChapterReview
   chapterDecisions: string[]
   repairCodes: string[]
+  operationKinds: string[]
+  constraintDomain: ConstraintInputDomain
+  constraintCatalog: DesignConstraintCatalog | undefined
+  onOperations: (operations: DesignConstraintOperations) => void
   acceptedDecision: string
   repairDecision: string
   repairCapability: DesignReviewMaterialized['repair_capability']['chapters'][number] | null
@@ -610,6 +700,7 @@ function ChapterReviewEditor({
   onDecision: (decision: string) => void
   onReason: (reason: string) => void
   onConstraint: (code: string, checked: boolean) => void
+  onEffect: (code: string, effect: DesignNarrativeRelation | null) => void
   onScope: (
     code: string,
     field: 'scene_refs' | 'opaque_aliases',
@@ -619,6 +710,7 @@ function ChapterReviewEditor({
   ) => void
 }) {
   const candidate = chapter.subject.chapter
+  const relationOptions = reviewRelationChoices(chapter, constraintDomain)
   const sceneOptions = candidate.scenes.map((scene) => scene.candidate_scene_id).sort()
   const aliasDescriptions = new Map<string, string>()
   chapter.subject.blind_truth.facts.forEach((fact) => {
@@ -747,11 +839,27 @@ function ChapterReviewEditor({
         <StructureEvidence evidence={chapter.subject.structure_evidence} />
       </div>
 
+      {constraintCatalog && constraintCatalog.items.length > 0 ? (
+        <ConstraintHistoryEditor
+          ordinal={chapter.output_ordinal}
+          catalog={constraintCatalog}
+          operations={chapter.constraint_operations}
+          operationKinds={operationKinds}
+          relationOptions={relationOptions}
+          repairCodes={repairCodes}
+          sceneOptions={sceneOptions}
+          aliasEntries={aliasEntries}
+          aliasOptions={aliasOptions}
+          disabled={disabled}
+          onChange={onOperations}
+        />
+      ) : null}
+
       <div className="flex flex-col gap-8 rounded-block border border-line-row px-14 py-12">
         <div className="flex flex-wrap items-baseline gap-8">
           <span className="text-body font-semibold">定向返修约束</span>
           <span className="text-tag text-ink-4">
-            accept 必须为空；request_repair 至少选择一个服务端 repair code
+            以下只填写本次新增约束；保留或替换的历史约束也会进入本轮返修
           </span>
         </div>
         {chapter.decision === acceptedDecision ? (
@@ -765,13 +873,16 @@ function ChapterReviewEditor({
                     type="checkbox"
                     aria-label={'第 ' + chapter.output_ordinal + ' 章返修码 ' + code}
                     checked={constraints.has(code)}
-                    disabled={disabled}
+                    disabled={disabled || (code === 'narrative_relation' && !relationOptions.length)}
                     onChange={(event) => onConstraint(code, event.target.checked)}
                   />
                   <Mono>{code}</Mono>
                 </label>
               ))}
             </div>
+            {!relationOptions.length && repairCodes.includes('narrative_relation') ? (
+              <span className="text-sm2 text-ink-4">本章没有可选择的 review 关系，关系返修保持禁用。</span>
+            ) : null}
             {chapter.constraints.map((constraint) => (
               <ConstraintScope
                 key={constraint.code}
@@ -781,12 +892,169 @@ function ChapterReviewEditor({
                 aliasEntries={aliasEntries}
                 aliasOptions={aliasOptions}
                 disabled={disabled}
+                relationOptions={relationOptions}
+                relationLabel={'第 ' + chapter.output_ordinal + ' 章新增关系约束'}
+                onEffect={(effect) => onEffect(constraint.code, effect)}
                 onScope={onScope}
               />
             ))}
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+function constraintOperationsComplete(
+  operations: DesignConstraintOperations | undefined,
+  catalog: DesignConstraintCatalog | undefined,
+  kinds: string[],
+  chapter: DesignChapterReview, codes: string[], domain: ConstraintInputDomain,
+): boolean {
+  if (!catalog?.items.length) return true
+  return Boolean(operations
+    && operations.expected_constraint_set_sha256 === catalog.expected_constraint_set_sha256
+    && operations.items.length === catalog.items.length
+    && catalog.items.every((source) => {
+      const rows = operations.items.filter((item) => item.constraint_sha256 === source.constraint_sha256)
+      return rows.length === 1 && kinds.includes(rows[0].kind) && rows[0].reason.trim()
+        && (rows[0].kind === 'supersede'
+          ? rows[0].replacements.length > 0 && rows[0].replacements.every(
+            (constraint) => constraintComplete(constraint, chapter, codes, domain),
+          )
+          : rows[0].replacements.length === 0)
+    }))
+}
+
+function ConstraintHistoryEditor({
+  ordinal, catalog, operations, operationKinds, repairCodes, relationOptions,
+  sceneOptions, aliasEntries, aliasOptions, disabled, onChange,
+}: {
+  ordinal: number
+  catalog: DesignConstraintCatalog
+  relationOptions: DesignNarrativeRelation[]
+  operations: DesignConstraintOperations | undefined
+  operationKinds: string[]
+  repairCodes: string[]
+  sceneOptions: string[]
+  aliasEntries: [string, string][]
+  aliasOptions: string[]
+  disabled: boolean
+  onChange: (operations: DesignConstraintOperations) => void
+}) {
+  const update = (sha: string, patch: Partial<DesignConstraintOperation>) => {
+    const previous = operations?.items.find((item) => item.constraint_sha256 === sha)
+    const next: DesignConstraintOperation = {
+      kind: '', constraint_sha256: sha, reason: '', replacements: [], ...previous, ...patch,
+    }
+    const bySha = new Map((operations?.items ?? []).map((item) => [item.constraint_sha256, item]))
+    if (next.kind) bySha.set(sha, next)
+    else bySha.delete(sha)
+    onChange({
+      expected_constraint_set_sha256: catalog.expected_constraint_set_sha256,
+      items: catalog.items.flatMap((item) => {
+        const chosen = bySha.get(item.constraint_sha256)
+        return chosen ? [chosen] : []
+      }),
+    })
+  }
+  const labels: Record<string, string> = { keep: '保留', withdraw: '撤销', supersede: '替换' }
+  return (
+    <div className="flex flex-col gap-10 rounded-block border border-line-row bg-sunken-2 px-14 py-12">
+      <span className="text-body font-semibold">历史返修约束</span>
+      <p className="text-sm2 text-ink-3">
+        逐条核对实际执行过的要求，明确保留、撤销或替换并填写理由。接受本章会结束本章的返修义务。
+      </p>
+      {catalog.items.map((source, index) => {
+        const operation = operations?.items.find((item) => item.constraint_sha256 === source.constraint_sha256)
+        const prefix = '第 ' + ordinal + ' 章历史约束 ' + (index + 1)
+        return (
+          <div key={source.constraint_sha256} className="flex flex-col gap-8 rounded-btn bg-card px-12 py-10">
+            <span className="text-sm2 text-ink-2">
+              <Mono>{source.constraint.code}</Mono> · 场景 {source.constraint.scene_refs.join('、') || '（无）'}
+            </span>
+            <span className="text-sm2 text-ink-3">
+              {source.constraint.opaque_aliases.map((alias) => (
+                aliasEntries.find(([value]) => value === alias)?.[1] ?? alias
+              )).join('；')}
+            </span>
+            <details className="text-micro text-ink-4">
+              <summary>查看约束与来源</summary>
+              <pre className="whitespace-pre-wrap break-all">{JSON.stringify(source, null, 2)}</pre>
+            </details>
+            <label className="flex flex-col gap-4 text-tag text-ink-3">
+              处置
+              <select
+                aria-label={prefix + '处置'}
+                value={operation?.kind ?? ''}
+                disabled={disabled || !operationKinds.length}
+                onChange={(event) => update(source.constraint_sha256, {
+                  kind: event.target.value, replacements: [],
+                })}
+                className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body text-ink"
+              >
+                <option value="">请选择</option>
+                {operationKinds.map((kind) => <option key={kind} value={kind}>{labels[kind] ?? kind}</option>)}
+              </select>
+            </label>
+            <label className="flex flex-col gap-4 text-tag text-ink-3">
+              处置理由
+              <input
+                aria-label={prefix + '理由'}
+                value={operation?.reason ?? ''}
+                disabled={disabled || !operation?.kind}
+                onChange={(event) => update(source.constraint_sha256, { reason: event.target.value })}
+                className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body text-ink"
+              />
+            </label>
+            {operation?.kind === 'supersede' ? (
+              <>
+                <span className="text-tag text-ink-3">填写替代约束</span>
+                <div className="flex flex-wrap gap-9">
+                  {repairCodes.map((code) => (
+                    <label key={code} className="flex items-center gap-5 text-sm2 text-ink-2">
+                      <input type="checkbox" aria-label={prefix + '替代码 ' + code}
+                        checked={operation.replacements.some((item) => item.code === code)}
+                        disabled={disabled || (code === 'narrative_relation' && !relationOptions.length)}
+                        onChange={(event) => update(source.constraint_sha256, {
+                          replacements: (event.target.checked
+                            ? [...operation.replacements, { code, scene_refs: [], opaque_aliases: [] }]
+                            : operation.replacements.filter((item) => item.code !== code))
+                            .sort((left, right) => left.code.localeCompare(right.code)),
+                        })}
+                      />
+                      <Mono>{code}</Mono>
+                    </label>
+                  ))}
+                </div>
+                {!relationOptions.length && repairCodes.includes('narrative_relation') ? (
+                  <span className="text-sm2 text-ink-4">本章没有可选择的 review 关系，关系替换保持禁用。</span>
+                ) : null}
+                {operation.replacements.map((constraint) => (
+                  <ConstraintScope
+                    key={constraint.code} ordinal={ordinal} constraint={constraint}
+                    sceneOptions={sceneOptions} aliasEntries={aliasEntries} aliasOptions={aliasOptions} disabled={disabled}
+                    relationOptions={relationOptions} relationLabel={prefix + '替代关系约束'}
+                    onEffect={(effect) => update(source.constraint_sha256, {
+                      replacements: operation.replacements.map((item) => item.code === constraint.code
+                        ? { ...item, scene_refs: [], opaque_aliases: [], effect } : item),
+                    })}
+                    onScope={(code, field, value, checked, options) => update(source.constraint_sha256, {
+                      replacements: operation.replacements.map((item) => {
+                        if (item.code !== code) return item
+                        const selected = new Set(item[field])
+                        if (checked) selected.add(value)
+                        else selected.delete(value)
+                        return { ...item, [field]: options.filter((option) => selected.has(option)) }
+                      }),
+                    })}
+                  />
+                ))}
+              </>
+            ) : null}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -1038,6 +1306,9 @@ function ConstraintScope({
   aliasOptions,
   disabled,
   onScope,
+  relationOptions,
+  relationLabel,
+  onEffect,
 }: {
   ordinal: number
   constraint: DesignRepairConstraint
@@ -1045,6 +1316,9 @@ function ConstraintScope({
   aliasEntries: [string, string][]
   aliasOptions: string[]
   disabled: boolean
+  relationOptions: DesignNarrativeRelation[]
+  relationLabel: string
+  onEffect: (effect: DesignNarrativeRelation | null) => void
   onScope: (
     code: string,
     field: 'scene_refs' | 'opaque_aliases',
@@ -1053,6 +1327,29 @@ function ConstraintScope({
     canonicalOptions: string[],
   ) => void
 }) {
+  if (constraint.code === 'narrative_relation') {
+    const selected = relationOptions.findIndex((relation) => sameRelation(constraint.effect, relation))
+    return (
+      <label className="flex flex-col gap-5 border-t border-line-row pt-9 text-tag text-ink-3">
+        选择本章 review 关系；端点原样提交，仅将 enforcement 设为服务端允许的 hard。
+        <select aria-label={relationLabel} value={selected < 0 ? '' : String(selected)}
+          disabled={disabled || !relationOptions.length}
+          onChange={(event) => {
+            const choice = event.target.value === '' ? undefined : relationOptions[Number(event.target.value)]
+            onEffect(choice ? { ...choice } : null)
+          }}
+          className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body text-ink"
+        >
+          <option value="">请选择关系</option>
+          {relationOptions.map((relation, index) => (
+            <option key={index} value={String(index)}>{relation.kind} · {Object.entries(relation)
+              .filter(([key]) => key.endsWith('_alias')).map(([key, value]) => key + '=' + value).join('；')}</option>
+          ))}
+        </select>
+        {!relationOptions.length ? <span>本章没有可选择的 review 关系。</span> : null}
+      </label>
+    )
+  }
   return (
     <div className="grid gap-10 border-t border-line-row pt-9 md:grid-cols-2">
       <div className="flex flex-col gap-5">

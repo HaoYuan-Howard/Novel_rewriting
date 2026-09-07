@@ -31,7 +31,7 @@ import re
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal, TypeAlias
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_serializer, model_validator
 
 from contracts.invariants import (
     WORKPACK_CLOSED_REF_KINDS, WORKPACK_READING_KINDS,
@@ -52,6 +52,7 @@ from contracts.invariants import (
     CHAPTER_LABEL_ANOMALY,
     DELIVERY_MODES,
     DESIGN_CHAPTER_DECISIONS,
+    DESIGN_CONSTRAINT_OPERATION_KINDS,
     APPROVAL_WORKPACK_ACTIONS,
     APPROVAL_WORKPACK_DISPOSITIONS,
     APPROVAL_WORKPACK_EFFECTS,
@@ -188,6 +189,7 @@ FinalApprovalWorkpackKind = Literal[FINAL_APPROVAL_WORKPACK_KINDS]
 HookSemanticState = Literal[HOOK_SEMANTIC_STATES]
 # 退役码仍在 Literal 里：盘上历史决定要能解码；新决定在 approve 闸关闭式拒绝。
 DesignRepairCode = Literal[(*DESIGN_REPAIR_CODES, *DESIGN_REPAIR_CODES_RETIRED)]
+DesignConstraintOperationKind = Literal[DESIGN_CONSTRAINT_OPERATION_KINDS]
 DesignReviewState = Literal[DESIGN_REVIEW_STATES]
 
 
@@ -1361,6 +1363,51 @@ class DesignRepairConstraint(FrozenModel):
         return self
 
 
+class DesignConstraintOperation(FrozenModel):
+    """对一条真实历史义务的显式处置；理由只作审计，不进入执行指令。"""
+
+    kind: DesignConstraintOperationKind
+    constraint_sha256: Sha256
+    reason: str = Field(min_length=1)
+    replacements: list[DesignRepairConstraint] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _operation_is_closed(self) -> DesignConstraintOperation:
+        if not self.reason.strip():
+            raise ValueError('约束处置理由不能只含空白')
+        if (self.kind == 'supersede') != bool(self.replacements):
+            raise ValueError('只有 supersede 必须且只能携带非空 replacements')
+        keys = [json.dumps(row.model_dump(mode='json'), ensure_ascii=False,
+                           sort_keys=True, separators=(',', ':'))
+                for row in self.replacements]
+        if keys != sorted(set(keys)):
+            raise ValueError('replacements 必须规范排序且不重复')
+        return self
+
+
+class DesignConstraintOperations(FrozenModel):
+    expected_constraint_set_sha256: Sha256
+    items: list[DesignConstraintOperation] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _targets_are_canonical(self) -> DesignConstraintOperations:
+        targets = [row.constraint_sha256 for row in self.items]
+        if targets != sorted(set(targets)):
+            raise ValueError('约束处置目标必须按 SHA 升序且不重复')
+        return self
+
+
+class DesignActiveConstraint(FrozenModel):
+    constraint_sha256: Sha256
+    constraint: DesignRepairConstraint
+    source_decision_sha256s: list[Sha256] = Field(min_length=1)
+
+
+class DesignConstraintCatalog(FrozenModel):
+    expected_constraint_set_sha256: Sha256
+    items: list[DesignActiveConstraint] = Field(default_factory=list)
+
+
 class DesignChapterReview(FrozenModel):
     output_ordinal: int = Field(ge=1)
     subject: DesignChapterSubject
@@ -1372,8 +1419,18 @@ class DesignChapterReview(FrozenModel):
     decision: DesignChapterDecisionKind
     reason: str = Field(min_length=1)
     constraints: list[DesignRepairConstraint] = Field(default_factory=list)
+    constraint_operations: DesignConstraintOperations | None = None
     source_decision_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
+
+    @model_serializer(mode='wrap')
+    def _omit_absent_operations(self, handler: Any) -> dict[str, Any]:
+        # 新字段缺席必须逐字保留已发行外部 payload/历史/proof 投影；
+        # 不能全局 exclude_none，旧字段中的 null 本来就属于身份。
+        data = handler(self)
+        if self.constraint_operations is None:
+            data.pop('constraint_operations', None)
+        return data
 
     @model_validator(mode='after')
     def _decision_has_a_canonical_scope(self) -> DesignChapterReview:
@@ -1390,9 +1447,13 @@ class DesignChapterReview(FrozenModel):
         ]
         if len(fingerprints) != len(set(fingerprints)):
             raise ValueError('design chapter constraints 不得包含完全重复的约束')
+        if self.decision == 'accept' and self.constraint_operations is not None \
+                and any(item.kind == 'supersede' for item in self.constraint_operations.items):
+            raise ValueError('accept 章不得新增替代修复要求')
         if self.decision == 'accept' and self.constraints:
             raise ValueError('accept 章不得夹带 repair scope')
-        if self.decision == 'request_repair' and not self.constraints:
+        if self.decision == 'request_repair' and not self.constraints \
+                and self.constraint_operations is None:
             raise ValueError('request_repair 章必须给出至少一条 constraint')
         if self.output_ordinal != self.subject.chapter.output_ordinal:
             raise ValueError('design chapter 章号必须与 subject.chapter 一致')
@@ -1510,6 +1571,16 @@ class DesignChapterRuling(StrictModel):
     decision: DesignChapterDecisionKind
     reason: str = Field(min_length=1)
     constraints: list[DesignRepairConstraint] = Field(default_factory=list)
+    constraint_operations: DesignConstraintOperations | None = None
+
+    @model_serializer(mode='wrap')
+    def _omit_absent_operations(self, handler: Any) -> dict[str, Any]:
+        # 新字段缺席必须逐字保留已发行外部 payload/历史/proof 投影；
+        # 不能全局 exclude_none，旧字段中的 null 本来就属于身份。
+        data = handler(self)
+        if self.constraint_operations is None:
+            data.pop('constraint_operations', None)
+        return data
 
     @model_validator(mode='after')
     def _ruling_is_closed(self) -> DesignChapterRuling:
@@ -1521,9 +1592,13 @@ class DesignChapterRuling(StrictModel):
         ) for row in self.constraints]
         if keys != sorted(set(keys)):
             raise ValueError('Stage4A 逐章 constraints 必须规范排序且不重复')
+        if self.decision == 'accept' and self.constraint_operations is not None \
+                and any(item.kind == 'supersede' for item in self.constraint_operations.items):
+            raise ValueError('accept 章不得新增替代修复要求')
         if self.decision == 'accept' and self.constraints:
             raise ValueError('accept 章不得夹带 repair constraint')
-        if self.decision == 'request_repair' and not self.constraints:
+        if self.decision == 'request_repair' and not self.constraints \
+                and self.constraint_operations is None:
             raise ValueError('request_repair 章必须给出至少一条 constraint')
         return self
 
@@ -1552,6 +1627,7 @@ class DesignReviewRequest(StrictModel):
 class DesignReviewTemplate(DesignReviewMaterialized):
     """服务端只读关闭式材料；POST 时只投影 token 与 typed rulings。"""
 
+    constraint_catalog: dict[int, DesignConstraintCatalog] = Field(default_factory=dict)
     review_token: str = Field(pattern=r'^s4dr1_[0-9a-f]{64}$')
 
 
@@ -1669,6 +1745,17 @@ class DesignRepairChapterScope(FrozenModel):
     constraint_set_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
 
+    constraint_operations: DesignConstraintOperations | None = None
+
+    @model_serializer(mode='wrap')
+    def _omit_absent_operations(self, handler: Any) -> dict[str, Any]:
+        # 新字段缺席必须逐字保留已发行外部 payload/历史/proof 投影；
+        # 不能全局 exclude_none，旧字段中的 null 本来就属于身份。
+        data = handler(self)
+        if self.constraint_operations is None:
+            data.pop('constraint_operations', None)
+        return data
+
     @property
     def is_v3(self) -> bool:
         """这行是否使用累计约束族；供外围 scope 的世代闭合校验复用。"""
@@ -1677,7 +1764,8 @@ class DesignRepairChapterScope(FrozenModel):
     @model_validator(mode='after')
     def _constraint_family_is_closed(self) -> DesignRepairChapterScope:
         current = bool(
-            self.new_constraints or self.accumulated_constraints
+            self.constraint_operations is not None
+            or self.new_constraints or self.accumulated_constraints
             or self.constraint_set_sha256 is not None
         )
         if self.constraints and current:
@@ -1685,7 +1773,8 @@ class DesignRepairChapterScope(FrozenModel):
         if not self.constraints and not current:
             raise ValueError('repair chapter scope 必须携带一种约束形状')
         if current:
-            if not self.new_constraints or not self.accumulated_constraints \
+            if (not self.new_constraints and self.constraint_operations is None) \
+                    or not self.accumulated_constraints \
                     or self.constraint_set_sha256 is None:
                 raise ValueError(
                     'v3 repair chapter scope 必须同时携带 new/accumulated/constraint_set')

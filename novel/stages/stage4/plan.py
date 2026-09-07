@@ -2142,6 +2142,10 @@ def _prepare_design_replan_candidate(
         _existing_candidate_authorized=True,
         _allowed_design_repair_run_id=allowed_design_repair_run_id)
     feedback = scope.replan_feedback.model_dump(mode='json')
+    # 历史处置理由属于 Reviewer 审计，Executor 只读最终有效的累计约束。
+    # 原无处置字段的发行 feedback 保持逐字不变，不能重解释旧 scope 身份。
+    for chapter_failure in feedback['chapter_failures']:
+        chapter_failure.pop('constraint_operations', None)
     prompt_feedback = {
         'previous_strategy': previous.model_dump(mode='json'),
         'typed_feedback': feedback,

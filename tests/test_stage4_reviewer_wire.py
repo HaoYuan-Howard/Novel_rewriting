@@ -70,6 +70,10 @@ def _task(waiting_on: str = queue.WAITING_ON_STAGE4_DESIGN_REVIEW) -> SimpleName
             'strategy.decision': list(DESIGN_STRATEGY_DECISIONS),
             'strategy.replan_constraints[].kind': list(DESIGN_STRATEGY_REPLAN_CONSTRAINTS),
             'chapters[].constraints[].code': list(DESIGN_REPAIR_CODES),
+            wire.CONSTRAINT_OPERATION_CATALOG: {
+                str(ordinal): {'expected_constraint_set_sha256': 'c' * 64, 'items': []}
+                for ordinal in (2, 10)
+            },
             wire.REFERENCE_CLOSURE: {
                 str(ordinal): {
                     'scene_refs': [f'c{ordinal:04d}_s001', f'c{ordinal:04d}_s002'],
@@ -360,6 +364,10 @@ def test_nineteen_chapter_closed_domains_fit_native_enum_budget_without_losing_a
                                     for index in range(4 if ordinal <= 14 else 3)],
         }
     option['allowed_values'][wire.REFERENCE_CLOSURE] = closure
+    option['allowed_values'][wire.CONSTRAINT_OPERATION_CATALOG] = {
+        ordinal: {'expected_constraint_set_sha256': 'c' * 64, 'items': []}
+        for ordinal in closure
+    }
     assert sum(len(row['fact_aliases']) for row in closure.values()) == 640
     assert sum(len(row['participant_aliases']) for row in closure.values()) == 71
     assert sum(len(row['scene_refs']) for row in closure.values()) == 97

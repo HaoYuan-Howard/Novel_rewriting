@@ -42,6 +42,11 @@
 > 理由是消费方不同：产物的读者是下一层代码（键不在 ⇒ 它没发生过）；
 > 响应的读者是**界面**，而界面要区分「这个字段是 null」与「后端这版根本没有这个字段」。
 
+Stage4A 已发行外部回执及审批历史同时承担内容寻址身份。新增逐章
+`constraint_operations` 是精确兼容例外：缺省只省略这个新字段，不改变原有字段的 null；
+非空处置必须完整保留。GET template 单独发布 `constraint_catalog` 全章目录，不能把旧回执的
+字段缺席推断成当前没有历史义务。
+
 **② `by_alias=True` 不许关。**
 `_provenance` 是 alias 字段（模型里叫 `provenance`）。FastAPI 的
 `response_model_by_alias` 一旦被关掉，响应里那个键会**静悄悄**变成 `provenance`，
@@ -370,7 +375,7 @@ current writing 授权、Review 状态与旧布局，不存在另一个按臂的
 | `Stage5ClosureView / Workpack` | `state` · `workpack?` · `next_step?` · `current_decision?` · `history[]`；工作包含 Review 身份、`planned/missing`、`chapter_subjects[]`、`.INVALID` / HARD、`unresolved_trim_items[]`、逐项 must-appear、fact/unver 组、披露/已处置计数与 `workpack_sha256` | `state ∈ missing｜review_required｜blocked｜ready｜closed｜expired`，只由服务端重算，页面不得按计数重判。`review_required` 表示没有可接受的 current 最终 Review，不能携 current workpack/decision，且 `next_step` 必须指出重跑；`chapter_subjects[]` 精确覆盖全部当前 canonical 计划章；`unresolved_trim_items[]` 是章号、audit SHA 与正文 SHA 的精确批量提交面，章号投影必须等于 `unresolved_trim_chapters`。决定或正文漂移后旧决定只留 history，不能继续充当 current |
 | `Stage5ClosureTemplate / Request / Decision` | Template 是服务端完整 materialized workpack + `review_token`；Request 只有 `actor/reason/review_token/must_appear[]/group_acks[]`；Decision 在 Request 上加 `decision_sha256/decided_at` | must-appear 与 group 的 finding/chapter/review/workpack SHA 只在模板和盘上完整决定中物化；调用方只提交 token 与 typed ruling。服务端展开 current workpack 后要求 ruling 精确覆盖；模板 placeholder/token 不进入 Request，确认不会把 UNVER 改写成 PASS |
 | `BatchTrimResolutionRequest` | `actor` · 共享 `reason` · `items[{output_ordinal,audit_sha256,chapter_sha256,reason}]` | actor/共享理由非空，章号升序去重；单项空理由沿用共享理由。服务端在任何写入前重读并核完整批次，按章幂等落 hash-bound resolution；浏览器只复制当前 closure workpack 的 exact item，不自行计算 SHA |
-| `DesignReviewTemplate / Request` | Template 是服务端完整 materialized subject + `review_token`；Request 只有 `actor/reviewer_kind/review_run_id/general_reason/review_token/strategy/chapters[]` | 一次提交必须覆盖当前完整策略与升序全章集。策略决定为 `accept / request_replan`；逐章决定为 `accept / request_repair`，关系 repair 使用 typed relation effect。candidate/aggregate/chapter subject、binding infeasibility、repair capability、placeholder 与历史 reuse 只在 Template 展示并由服务端重建，不让 caller 回传。subject 只公开 opaque alias 的盲真相与现场结构证据；自然语言 reason 只作审计，不进入修订 prompt |
+| `DesignReviewTemplate / Request` | Template 是服务端完整 materialized subject + `review_token` + 全章 `constraint_catalog`；Request 只有 `actor/reviewer_kind/review_run_id/general_reason/review_token/strategy/chapters[]` | 一次提交必须覆盖当前完整策略与升序全章集。策略决定为 `accept / request_replan`；逐章决定为 `accept / request_repair`，关系 repair 使用 typed relation effect。历史目录逐章给当前集合摘要，以及每条约束的 SHA、typed payload 和来源决定列表；新裁决用可选 `constraint_operations` 绑定 expected_constraint_set_sha256，并对全部 active SHA 明确 keep/withdraw/supersede，替代项携 typed replacements。旧回执缺省省略该新字段；新候选有 active 时不得省略处置。candidate/aggregate/chapter subject、binding infeasibility、repair capability、placeholder 与历史 reuse 只在 Template 展示并由服务端重建，不让 caller 回传。subject 只公开 opaque alias 的盲真相与现场结构证据；自然语言 reason 只作审计，不进入修订 prompt |
 | `DesignReviewDecision / View` | Decision 是服务端 materialized 的完整 candidate/aggregate/chapter subject、review contract、typed rulings、actor/reviewer/run/reason + `decision_sha256/decided_at`；View 另含 state/current hashes/`binding_infeasibility?`/current/history | POST 的 opaque token 只用于找到并复验本次 exact materialized subject，不能删减盘上审计。历史 accept 只有在全局 basis、strategy epoch、本章主体及可见 B 证据仍相同时才可显式复用；拒绝不会自动变 accept |
 | `JobList` | `jobs[]`（`JobRecord`） | 抓包 `jobs.json` 就是 `{"jobs":[]}`——**一个样本都没有**，所以元素形状只能从 `_orchestration.md` 来 |
 | `LogChunk` | `text` · `next_byte` | 按**字节**续读。⚠ 中文一字跨 3 字节，**只在读的一侧解码**（写的一侧按字节追加，见 `_orchestration.md`）。`next_byte` 原样回传给下一次 `?offset=` |

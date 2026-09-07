@@ -4873,6 +4873,9 @@ def _design_review_task(current, request_path, *, review_token=_REPLAY_TOKEN):
             'strategy.replan_constraints[].kind': list(DESIGN_STRATEGY_REPLAN_CONSTRAINTS),
             'chapters[].decision': list(DESIGN_CHAPTER_DECISIONS),
             'chapters[].constraints[].code': list(DESIGN_REPAIR_CODES),
+            agent.stage4_reviewer_wire.CONSTRAINT_OPERATION_CATALOG: {
+                '1': {'expected_constraint_set_sha256': 'a' * 64, 'items': []},
+            },
             agent.stage4_reviewer_wire.REFERENCE_CLOSURE: {
                 '1': {
                     'scene_refs': ['c0001_s001'],

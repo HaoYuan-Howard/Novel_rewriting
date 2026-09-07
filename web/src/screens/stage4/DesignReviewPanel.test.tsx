@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, realApi } from '@/api/endpoints'
@@ -8,9 +8,11 @@ import { renderRoute } from '@/test/render'
 import type {
   ApprovalDoc,
   DesignReviewDecision,
+  DesignNarrativeRelation,
   DesignReviewRequest,
   DesignReviewTemplate,
 } from '@/types/approvals'
+import type { EnumsResponse } from '@/types/enums'
 import { DesignReviewPanel } from './DesignReviewPanel'
 
 const CANDIDATE = 'e'.repeat(64)
@@ -49,6 +51,7 @@ function materializeDecision(
         decision: ruling.decision,
         reason: ruling.reason,
         constraints: ruling.constraints,
+        ...(ruling.constraint_operations ? { constraint_operations: ruling.constraint_operations } : {}),
       }
     }),
     decision_sha256: decisionSha,
@@ -128,9 +131,9 @@ afterEach(() => {
   localStorage.clear()
 })
 
-async function mount(state = 'missing') {
+async function mount(state = 'missing', enumOverrides: Partial<EnumsResponse> = {}) {
   const doc = approval(state)
-  vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())
+  vi.spyOn(api, 'getEnums').mockResolvedValue({ ...await mockApi.getEnums(), ...enumOverrides })
   vi.spyOn(api, 'getApprovals').mockResolvedValue(doc)
   if (!vi.isMockFunction(api.getDesignApprovalWorkpack)) {
     vi.spyOn(api, 'getDesignApprovalWorkpack').mockResolvedValue(
@@ -159,7 +162,274 @@ async function startReview() {
   return user
 }
 
+const REVIEW_RELATIONS: DesignNarrativeRelation[] = [
+  { kind: 'story_before', enforcement: 'review', before_alias: 'a_' + '1'.repeat(16), after_alias: 'a_' + '3'.repeat(16) },
+  { kind: 'response_to', enforcement: 'review', stimulus_alias: 'a_' + '1'.repeat(16), response_alias: 'a_' + '3'.repeat(16) },
+  { kind: 'same_scene', enforcement: 'review', left_alias: 'a_' + '1'.repeat(16), right_alias: 'a_' + '3'.repeat(16) },
+  { kind: 'observes', enforcement: 'review', observer_alias: 'a_' + '4'.repeat(16),
+    observed_alias: 'a_' + '1'.repeat(16), observation_alias: 'a_' + '3'.repeat(16) },
+]
+
+function withActiveConstraint(template: DesignReviewTemplate): DesignReviewTemplate {
+  return { ...template, constraint_catalog: {
+    '3': { expected_constraint_set_sha256: 'b'.repeat(64), items: [{
+      constraint_sha256: 'a'.repeat(64), source_decision_sha256s: ['c'.repeat(64)],
+      constraint: { code: 'scene_goal', scene_refs: ['c03s01'], opaque_aliases: ['a_' + '1'.repeat(16)] },
+    }] },
+  } }
+}
+
+async function writeReviewReasons(user: ReturnType<typeof userEvent.setup>) {
+  await user.clear(screen.getByLabelText('Stage4A 整书策略裁决理由'))
+  await user.type(screen.getByLabelText('Stage4A 整书策略裁决理由'), '核对本轮策略与证据')
+  await user.clear(screen.getByLabelText('第 3 章 Stage4A 裁决理由'))
+  await user.type(screen.getByLabelText('第 3 章 Stage4A 裁决理由'), '根据本章证据明确填写返修要求')
+  await user.click(screen.getByLabelText('Stage4A 整书策略已核对'))
+}
+
 describe('Stage4A 正式设计审阅', () => {
+
+  it.each(['新增', '替代'])('%s scene_goal_exclude 缺少任一引用时不能保存', async (mode) => {
+    const { template, approve } = await mount('expired')
+    if (mode === '替代') template.mockImplementation(async (sid, query) => withActiveConstraint(
+      await mockApi.getDesignReviewTemplate(sid, query),
+    ))
+    const user = await startReview()
+    await writeReviewReasons(user)
+    if (mode === '替代') {
+      await user.selectOptions(screen.getByLabelText('第 3 章历史约束 1处置'), 'supersede')
+      await user.type(screen.getByLabelText('第 3 章历史约束 1理由'), '明确替换旧方向')
+    }
+    await user.click(screen.getByLabelText(mode === '替代'
+      ? '第 3 章历史约束 1替代码 scene_goal_exclude' : '第 3 章返修码 scene_goal_exclude'))
+    // ActionButton 切换禁用态时会更换包装层，必须断言当前挂载按钮。
+    const save = () => screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })
+    await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
+    expect(save()).toBeDisabled()
+    await user.click(screen.getByLabelText('第 3 章 scene_goal_exclude 场景 c03s01'))
+    expect(screen.getByLabelText('第 3 章 Stage4A 已核对')).not.toBeChecked()
+    await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
+    expect(save()).toBeDisabled()
+    await user.click(screen.getByLabelText('第 3 章 scene_goal_exclude alias a_' + '1'.repeat(16)))
+    await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
+    expect(screen.getByLabelText('第 3 章 scene_goal_exclude 场景 c03s01')).toBeChecked()
+    expect(screen.getByLabelText('第 3 章 scene_goal_exclude alias a_' + '1'.repeat(16))).toBeChecked()
+    expect(save()).toBeInTheDocument()
+    expect(save()).toBeEnabled()
+    expect(approve).not.toHaveBeenCalled()
+  })
+
+  describe.each(['新增', '替代'])('%s关系约束', (mode) => {
+    it.each(REVIEW_RELATIONS)('显式选择 $kind 后真实 HTTP POST 保留端点并提升为hard', async (source) => {
+      const approveOverHttp = realApi.approveDesignReview.bind(realApi)
+      const { template, approve, doc } = await mount('expired')
+      const original = structuredClone(source)
+      template.mockImplementation(async (sid, query) => {
+        const base = await mockApi.getDesignReviewTemplate(sid, query)
+        const current = mode === '替代' ? withActiveConstraint(base) : base
+        current.chapters[0].subject.blind_truth.narrative_relations = [
+          source,
+          { kind: 'same_scene', enforcement: 'hard', left_alias: 'a_' + '1'.repeat(16), right_alias: 'a_' + '2'.repeat(16) },
+          { kind: 'unknown_relation', enforcement: 'review', before_alias: 'a_' + '1'.repeat(16), after_alias: 'a_' + '2'.repeat(16) },
+        ]
+        return current
+      })
+      approve.mockImplementation(approveOverHttp)
+      const send = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(doc), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      }))
+      const user = await startReview()
+      await writeReviewReasons(user)
+      if (mode === '替代') {
+        await user.selectOptions(screen.getByLabelText('第 3 章历史约束 1处置'), 'supersede')
+        await user.type(screen.getByLabelText('第 3 章历史约束 1理由'), '用本章已登记关系替换旧要求')
+      }
+      await user.click(screen.getByLabelText(mode === '替代'
+        ? '第 3 章历史约束 1替代码 narrative_relation' : '第 3 章返修码 narrative_relation'))
+      const select = screen.getByLabelText(mode === '替代'
+        ? '第 3 章历史约束 1替代关系约束' : '第 3 章新增关系约束')
+      expect(select).toHaveValue('')
+      expect(within(select).getAllByRole('option')).toHaveLength(2)
+      await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
+      expect(screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })).toBeDisabled()
+      await user.selectOptions(select, '0')
+      expect(screen.getByLabelText('第 3 章 Stage4A 已核对')).not.toBeChecked()
+      await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
+      const save = screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })
+      expect(save).toBeEnabled()
+      await user.click(save)
+      await waitFor(() => expect(send.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true))
+      const [url, init] = send.mock.calls.find(([, value]) => value?.method === 'POST')!
+      expect(String(url)).toContain('/novels/book-1/approvals/design')
+      const posted = JSON.parse(String(init?.body)) as DesignReviewRequest
+      const constraints = mode === '替代'
+        ? posted.chapters[0].constraint_operations!.items[0].replacements : posted.chapters[0].constraints
+      expect(constraints.find((value) => value.code === 'narrative_relation')).toEqual({
+        code: 'narrative_relation', scene_refs: [], opaque_aliases: [], effect: { ...source, enforcement: 'hard' },
+      })
+      expect(source).toEqual(original)
+    })
+  })
+
+  it.each(['无关系', '缺hard枚举'])('%s时不会提供或伪造关系修订', async (failure) => {
+    const { template } = await mount('expired', failure === '缺hard枚举'
+      ? { narrative_relation_enforcements: ['review'] } : {})
+    template.mockImplementation(async (sid, query) => {
+      const base = withActiveConstraint(await mockApi.getDesignReviewTemplate(sid, query))
+      if (failure === '缺hard枚举') base.chapters[0].subject.blind_truth.narrative_relations = REVIEW_RELATIONS
+      return base
+    })
+    const user = await startReview()
+    expect(screen.getByLabelText('第 3 章返修码 narrative_relation')).toBeDisabled()
+    await user.selectOptions(screen.getByLabelText('第 3 章历史约束 1处置'), 'supersede')
+    expect(screen.getByLabelText('第 3 章历史约束 1替代码 narrative_relation')).toBeDisabled()
+    expect(screen.getByText('本章没有可选择的 review 关系，关系替换保持禁用。')).toBeVisible()
+  })
+
+  it('已有非法effect不能因勾选确认而提交', async () => {
+    const { template, approve } = await mount('expired')
+    template.mockImplementation(async (sid, query) => {
+      const base = await mockApi.getDesignReviewTemplate(sid, query)
+      base.chapters[0].subject.blind_truth.narrative_relations = REVIEW_RELATIONS
+      base.chapters[0].constraints = [{ code: 'narrative_relation', scene_refs: [], opaque_aliases: [],
+        effect: { ...REVIEW_RELATIONS[0], enforcement: 'hard', after_alias: 'a_' + 'f'.repeat(16) } }]
+      return base
+    })
+    const user = await startReview()
+    await writeReviewReasons(user)
+    await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
+    expect(screen.getByLabelText('第 3 章新增关系约束')).toHaveValue('')
+    expect(screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })).toBeDisabled()
+    expect(approve).not.toHaveBeenCalled()
+  })
+
+  it.each(['未知code', '缺arity'])('%s不能因引用非空而保存', async (failure) => {
+    const { template, approve } = await mount('expired', failure === '缺arity'
+      ? { design_repair_constraint_arity: {} } : {})
+    template.mockImplementation(async (sid, query) => {
+      const base = await mockApi.getDesignReviewTemplate(sid, query)
+      if (failure === '未知code') base.chapters[0].constraints = [{
+        code: 'unknown_constraint', scene_refs: ['c03s01'], opaque_aliases: ['a_' + '1'.repeat(16)],
+      }]
+      return base
+    })
+    const user = await startReview()
+    await writeReviewReasons(user)
+    await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
+    expect(screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })).toBeDisabled()
+    expect(approve).not.toHaveBeenCalled()
+  })
+
+  it('supersede后切换accept仍不能保存，显式改为withdraw并重新确认才可提交', async () => {
+    const { template, approve, doc } = await mount('expired')
+    template.mockImplementation(async (sid, query) => withActiveConstraint(
+      await mockApi.getDesignReviewTemplate(sid, query),
+    ))
+    approve.mockResolvedValue(doc)
+    const user = await startReview()
+    await writeReviewReasons(user)
+    await user.selectOptions(screen.getByLabelText('第 3 章历史约束 1处置'), 'supersede')
+    await user.type(screen.getByLabelText('第 3 章历史约束 1理由'), '明确替换旧方向')
+    await user.click(screen.getByLabelText('第 3 章历史约束 1替代码 scene_goal_exclude'))
+    await user.click(screen.getByLabelText('第 3 章 scene_goal_exclude 场景 c03s01'))
+    await user.click(screen.getByLabelText('第 3 章 scene_goal_exclude alias a_' + '1'.repeat(16)))
+    await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
+    // 每次读当前按钮；禁用与启用之间旧 DOM 节点已经卸载。
+    const save = () => screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })
+    expect(save()).toBeEnabled()
+    await user.selectOptions(screen.getByLabelText('第 3 章 Stage4A 设计裁决'), 'accept')
+    expect(screen.getByLabelText('第 3 章 Stage4A 已核对')).not.toBeChecked()
+    await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
+    expect(screen.getByLabelText('第 3 章 Stage4A 设计裁决')).toHaveValue('accept')
+    expect(screen.getByLabelText('第 3 章历史约束 1处置')).toHaveValue('supersede')
+    expect(save()).toBeInTheDocument()
+    expect(save()).toBeDisabled()
+    await user.click(save())
+    expect(approve).not.toHaveBeenCalled()
+    await user.selectOptions(screen.getByLabelText('第 3 章历史约束 1处置'), 'withdraw')
+    expect(screen.getByLabelText('第 3 章 Stage4A 已核对')).not.toBeChecked()
+    await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
+    expect(save()).toBeEnabled()
+    await user.click(save())
+    await waitFor(() => expect(approve).toHaveBeenCalledTimes(1))
+    expect(approve.mock.calls[0][1].chapters[0]).toMatchObject({
+      decision: 'accept', constraints: [],
+      constraint_operations: { items: [{ kind: 'withdraw', replacements: [] }] },
+    })
+  })
+
+  it('mock与正式schema一致拒绝accept携带supersede', async () => {
+    const template = await mockApi.getDesignReviewTemplate('book-1', {
+      actor: 'reviewer-a', reviewer_kind: 'human', review_run_id: 'review-operations', reason: '明确逐章审阅',
+    })
+    const request: DesignReviewRequest = {
+      actor: template.actor, reviewer_kind: template.reviewer_kind, review_run_id: template.review_run_id,
+      general_reason: '明确逐章审阅', review_token: template.review_token,
+      strategy: { decision: 'accept', reason: '策略已核对', replan_constraints: [] },
+      chapters: template.chapters.map((chapter) => ({
+        output_ordinal: chapter.output_ordinal, decision: 'accept', reason: '本章已核对', constraints: [],
+        constraint_operations: { expected_constraint_set_sha256: 'b'.repeat(64), items: [{
+          kind: 'supersede', constraint_sha256: 'a'.repeat(64), reason: '仍要求替代修复',
+          replacements: [{ code: 'scene_goal_exclude', scene_refs: ['c03s01'], opaque_aliases: ['a_' + '1'.repeat(16)] }],
+        }] },
+      })),
+    }
+    await expect(mockApi.approveDesignReview('book-1', request)).rejects.toThrow()
+  })
+
+  it.each(['keep', 'withdraw', 'supersede'])('历史约束必须显式选择%s并原样提交来源绑定', async (kind) => {
+    const { template, approve, doc } = await mount('expired')
+    const sourceSha = 'a'.repeat(64)
+    const setSha = 'b'.repeat(64)
+    template.mockImplementation(async (sid, query) => ({
+      ...await mockApi.getDesignReviewTemplate(sid, query),
+      constraint_catalog: {
+        '3': {
+          expected_constraint_set_sha256: setSha,
+          items: [{
+            constraint_sha256: sourceSha,
+            constraint: {
+              code: 'scene_goal', scene_refs: ['c03s01'], opaque_aliases: ['a_' + '1'.repeat(16)],
+            },
+            source_decision_sha256s: ['c'.repeat(64)],
+          }],
+        },
+      },
+    }))
+    approve.mockResolvedValue(doc)
+    const user = await startReview()
+    expect(screen.getByLabelText('第 3 章历史约束 1处置')).toHaveValue('')
+    await user.clear(screen.getByLabelText('Stage4A 整书策略裁决理由'))
+    await user.type(screen.getByLabelText('Stage4A 整书策略裁决理由'), '核对本轮策略')
+    await user.clear(screen.getByLabelText('第 3 章 Stage4A 裁决理由'))
+    await user.type(screen.getByLabelText('第 3 章 Stage4A 裁决理由'), '根据当前场景核对历史指令')
+    await user.click(screen.getByLabelText('Stage4A 整书策略已核对'))
+    await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
+    expect(screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })).toBeDisabled()
+    await user.selectOptions(screen.getByLabelText('第 3 章历史约束 1处置'), kind)
+    expect(screen.getByLabelText('第 3 章 Stage4A 已核对')).not.toBeChecked()
+    await user.type(screen.getByLabelText('第 3 章历史约束 1理由'), '基于当前候选明确更正历史约束')
+    if (kind === 'supersede') {
+      await user.click(screen.getByLabelText('第 3 章历史约束 1替代码 scene_goal_exclude'))
+      await user.click(screen.getByLabelText('第 3 章 scene_goal_exclude 场景 c03s01'))
+      await user.click(screen.getByLabelText('第 3 章 scene_goal_exclude alias a_' + '1'.repeat(16)))
+    }
+    await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
+    const save = screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })
+    await waitFor(() => expect(save).toBeEnabled())
+    await user.click(save)
+    await waitFor(() => expect(approve).toHaveBeenCalledTimes(1))
+    expect(approve.mock.calls[0][1].chapters[0].constraint_operations).toEqual({
+      expected_constraint_set_sha256: setSha,
+      items: [{
+        kind, constraint_sha256: sourceSha, reason: '基于当前候选明确更正历史约束',
+        replacements: kind === 'supersede' ? [{
+          code: 'scene_goal_exclude', scene_refs: ['c03s01'], opaque_aliases: ['a_' + '1'.repeat(16)],
+        }] : [],
+      }],
+    })
+  })
+
   it('用同一 human run id 读取关闭式模板，逐项写入真实反馈并显式确认后提交', async () => {
     const { template, approve, doc } = await mount()
     approve.mockImplementation(async (_sid, request) => {

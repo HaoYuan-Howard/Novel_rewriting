@@ -36,6 +36,27 @@ def _current(waiting_on: str) -> SimpleNamespace:
     )
 
 
+def _design_template_fixture(monkeypatch):
+    """真实 template producer 的首审夹具，明确提供全章空历史目录。"""
+    from novel.orchestrator import approvals
+    from tests.test_design_review import _subjects
+
+    subjects = _subjects()
+    record = approvals._fresh_record('42')
+    record = record.model_copy(update={'gate': {**record.gate, 's2': True}})
+    with monkeypatch.context() as patch:
+        patch.setattr(approvals, '_read_current', lambda *_args: record)
+        patch.setattr(approvals, '_current_design_subjects', lambda *_args: subjects)
+        patch.setattr(approvals.paths, 'resolve_novel_dir', lambda *_args: Path('unused'))
+        template = approvals.design_template(
+            'unused', '42', actor='fixture', reviewer_kind='delegated_operator',
+            review_run_id='fixture-first-review', reason='首审夹具尚未裁决')
+    catalog = template.model_dump(mode='json')['constraint_catalog']
+    assert set(catalog) == {str(row.output_ordinal) for row in template.chapters}
+    assert all(scope['items'] == [] for scope in catalog.values())
+    return template
+
+
 def _stage5_trim_pack(ordinals: tuple[int, ...] = (2, 11)) -> dict:
     """一份 schema-valid blocked closure；每章双 SHA 都有独立身份。"""
     workpack_sha256 = 'a' * 64
@@ -520,17 +541,14 @@ def test_design_option_publishes_constraint_semantics_and_validated_shapes(
     )
 
     current = _current(queue.WAITING_ON_STAGE4_DESIGN_REVIEW)
-    monkeypatch.setattr(
-        reviewer_tasks, 'DesignReviewTemplate',
-        SimpleNamespace(model_validate=lambda raw: SimpleNamespace(chapters=[])))
-    monkeypatch.setattr(
-        reviewer_tasks, '_compact_design_payload',
-        lambda _source: {
-            'review_token': 's4dr1_' + 'a' * 64, 'strategy': {}, 'chapters': []})
+    template = _design_template_fixture(monkeypatch)
     [option] = reviewer_tasks._submission_options(
-        {'_design_template': {}}, current, queue.WAITING_ON_STAGE4_DESIGN_REVIEW)
+        {'_design_template': template.model_dump(mode='json')}, current,
+        queue.WAITING_ON_STAGE4_DESIGN_REVIEW)
     values = option['allowed_values']
-    token = 's4dr1_' + 'a' * 64
+    assert values['chapters[].constraint_operations.active'] == (
+        template.model_dump(mode='json')['constraint_catalog'])
+    token = template.review_token
     expected_run_id = 'supervisor-' + hashlib.sha256(
         f'{queue.WAITING_ON_STAGE4_DESIGN_REVIEW}\0{token}'.encode(
             'utf-8')).hexdigest()[:20]
@@ -694,6 +712,10 @@ def test_design_template_projects_to_compact_single_token_request() -> None:
         'output_ordinal', 'decision', 'reason', 'constraints'}
     assert payload['actor'] == 'agent:novel-pipeline-operator'
     assert payload['general_reason'] == reviewer_tasks._REASON
+    assert payload['strategy']['decision'] == reviewer_tasks._DECISION
+    assert payload['strategy']['replan_constraints'] == []
+    assert payload['chapters'][0]['decision'] == reviewer_tasks._DECISION
+    assert payload['chapters'][0]['constraints'] == []
     assert 'candidate_sha256' not in json.dumps(payload)
 
 
@@ -708,18 +730,9 @@ def test_stage4_structure_replan_offers_bound_stop_without_weakening_design(
         tmp_path, monkeypatch) -> None:
     """只读 B 拒因可安全停机；真实 coverage 缺陷仍走 typed A resolution。"""
     current = _current(queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN)
-    monkeypatch.setattr(
-        reviewer_tasks, 'DesignReviewTemplate',
-        SimpleNamespace(model_validate=lambda raw: SimpleNamespace(chapters=[])))
-    monkeypatch.setattr(
-        reviewer_tasks, '_compact_design_payload',
-        lambda _source: {
-            'review_token': 's4dr1_' + 'a' * 64,
-            'strategy': {}, 'chapters': [],
-        })
-
+    template = _design_template_fixture(monkeypatch)
     options = reviewer_tasks._submission_options(
-        {'_design_template': {}}, current,
+        {'_design_template': template.model_dump(mode='json')}, current,
         queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN)
 
     assert [option['id'] for option in options] == [
@@ -756,23 +769,17 @@ def test_structure_replan_prompt_never_turns_read_only_rows_into_paid_action(
     monkeypatch.setattr(
         reviewer_tasks.paths, 'scratch_session_dir',
         lambda _base, _sid, _epoch_id: tmp_path)
+    template = _design_template_fixture(monkeypatch)
     monkeypatch.setattr(
         reviewer_tasks, '_workpack',
         lambda *_args, **_kwargs: {
             'design': {}, 'structure': {},
-            'structure_replan_decision': {}, '_design_template': {},
+            'structure_replan_decision': {},
+            '_design_template': template.model_dump(mode='json'),
+            'design_constraint_catalog': template.model_dump(mode='json')['constraint_catalog'],
         })
     monkeypatch.setattr(
         reviewer_tasks, '_review_materials', lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(
-        reviewer_tasks, 'DesignReviewTemplate',
-        SimpleNamespace(model_validate=lambda raw: SimpleNamespace(chapters=[])))
-    monkeypatch.setattr(
-        reviewer_tasks, '_compact_design_payload',
-        lambda _source: {
-            'review_token': 's4dr1_' + 'a' * 64,
-            'strategy': {}, 'chapters': [],
-        })
     from novel.orchestrator import inspection
     monkeypatch.setattr(
         inspection, 'read_surface_seal',
@@ -806,6 +813,7 @@ def test_stage4_structure_replan_workpack_uses_one_frozen_in_process_snapshot(
     from novel.orchestrator import approvals, inspection, state
     from novel.stages.stage4 import plan as stage4_plan
 
+    catalog = _design_template_fixture(monkeypatch).model_dump(mode='json')['constraint_catalog']
     seals: list[str] = []
     monkeypatch.setattr(
         reviewer_tasks.paths, 'resolve_novel_dir',
@@ -821,7 +829,8 @@ def test_stage4_structure_replan_workpack_uses_one_frozen_in_process_snapshot(
     monkeypatch.setattr(
         approvals, 'design_template',
         lambda *_args, **_kwargs: SimpleNamespace(
-            model_dump=lambda **_dump: {'kind': 'design-template'}))
+            model_dump=lambda **_dump: {
+                'kind': 'design-template', 'constraint_catalog': catalog}))
     monkeypatch.setattr(state, 'readonly_ctx', lambda *_args: 'stage4-read-ctx')
     monkeypatch.setattr(stage4_plan, 'run_check_only', lambda ctx: {'ctx': ctx})
     monkeypatch.setattr(
@@ -849,6 +858,7 @@ def test_stage4_structure_replan_workpack_uses_one_frozen_in_process_snapshot(
     assert pack['structure'] == {'kind': 'structure-workpack'}
     assert pack['structure_replan_decision'] == current_b
     assert '_design_template' in pack
+    assert pack['design_constraint_catalog'] == catalog
     assert seals == ['read', 'read']
 
 

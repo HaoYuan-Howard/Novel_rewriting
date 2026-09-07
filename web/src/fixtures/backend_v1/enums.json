@@ -370,6 +370,7 @@
   "disclosure_order",
   "noncontiguous_regroup",
   "scene_goal",
+  "scene_goal_exclude",
   "binding_constraint_unsat",
   "narrative_relation"
  ],
@@ -412,6 +413,10 @@
   "narrative_relation": [
    0,
    0
+  ],
+  "scene_goal_exclude": [
+   1,
+   1
   ]
  },
  "binding_concern_codes": [
@@ -2840,5 +2845,10 @@
    "needs_value": null,
    "required_inputs": []
   }
+ ],
+ "design_constraint_operation_kinds": [
+  "keep",
+  "withdraw",
+  "supersede"
  ]
 }

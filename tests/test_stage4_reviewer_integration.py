@@ -115,6 +115,21 @@ def _response(task, decision):
                 'replan_constraints': [{'kind': 'replace_reconstruction_strategy',
                                         'chapter_ordinals': []}],
             })
+        # 模拟 Reviewer 也必须读实际 task 的完整历史目录并明确处置；
+        # 接受新候选时核对旧义务已满足，不借缺字段触发额外订正轮。
+        catalog = option['allowed_values'][wire.CONSTRAINT_OPERATION_CATALOG]
+        for ordinal, ruling in payload['chapters'].items():
+            active = catalog[ordinal]['items']
+            if active:
+                ruling['constraint_operations'] = {
+                    item['constraint_sha256']: {
+                        'kind': 'keep',
+                        'reason': ('已核对并接受本章，确认这项历史义务已满足'
+                                   if ruling['decision'] == 'accept' else
+                                   '已核对这项历史义务，本轮明确保留'),
+                        'replacements': [],
+                    } for item in active
+                }
     else:
         payload = {'reason': '已逐章核对结构与因果', 'chapters': {
             str(row['output_ordinal']): {

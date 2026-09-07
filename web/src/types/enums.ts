@@ -51,7 +51,10 @@ export interface EnumsResponse {
   design_chapter_decisions: string[]
   design_reviewer_kinds: string[]
   design_repair_codes: string[]
-  /** code -> [minScenes, minOpaqueAliases]；只用于表单提示，最终合法性仍由后端判定。 */
+  design_constraint_operation_kinds: string[]
+  narrative_relation_kinds: string[]
+  narrative_relation_enforcements: string[]
+  /** code -> [minScenes, minOpaqueAliases]；用于表单完整性检查，最终合法性仍由后端判定。 */
   design_repair_constraint_arity: Record<string, [number, number]>
   design_review_states: string[]
   design_preflight_statuses: string[]

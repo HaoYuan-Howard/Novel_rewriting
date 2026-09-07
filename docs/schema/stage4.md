@@ -180,6 +180,7 @@ Executor 的 repair prompt 与 Commander 工作包 `submission_options.allowed_v
 | `disclosure_order` | 0 / 2 | 按 opaque_aliases 列表的目标顺序重排披露 |
 | `noncontiguous_regroup` | 0 / 2 | 将给定 opaque_aliases 做非相邻重组，并保持因果/状态边界 |
 | `scene_goal` | 1 / 1 | 只调整 scene_refs 指向场景的目标，必须覆盖给定 opaque_aliases |
+| `scene_goal_exclude` | 1 / 1 | 只调整指定场景目标，不得把给定事实写成此场的当前目标或已进入此场的事件；保留事实及其原落地场景 |
 | `binding_constraint_unsat` | 1 / 0 | 调整 scene_refs 指向场景的结构，使其可在后续关闭式证据绑定中实现 |
 | `narrative_relation` | 0 / 0 | 必须满足 typed HARD relation effect，不得用自由文本改写其端点或语义 |
 全局 basis、策略或 `DESIGN_REVIEW_CONTRACT` 变化使全章旧决定过期；单章业务变化只使该章过期。
@@ -193,7 +194,22 @@ proof，且不改 B 或 s4。唯一不同 payload 的后续写入是 current A �
 
 逐章拒绝只允许 `stage4.design --review-token <opaque>`：服务端现场展开当前决定，重跑 request_repair 章，其他章
 引用既有已验 checkpoint；正式 provenance 记录 parent candidate、决定摘要与逐 unit lineage。
-每轮 Executor 输入同时携本轮新增约束和该 strategy epoch 下尚未关闭的**累计 typed constraints**，
+每轮 Executor 输入同时携本轮新增约束和该 strategy epoch 下尚未关闭的**累计 typed constraints**。
+每次 A 初审、返修后复审与 B 返回 A 的 resolution 都下发独立的历史约束目录；其身份绑定章号、
+strategy epoch、约束原始 typed payload 的 SHA、来源决定和当前集合 SHA。目录从正式历史重建，
+不依赖旧决定是否已因候选变化而 expired。未审占位模板不向模型预填 repair、replan 或 accept 判断；
+合法 code 示例独立标明，实际历史 accept 只按其来源与可复用状态呈现。
+
+逐章裁决可携 `constraint_operations`：`expected_constraint_set_sha256` 绑定所读集合，`items` 对每个
+active 约束恰有一项 `keep / withdraw / supersede`，用 `constraint_sha256` 指向旧约束并填写审计理由；
+`supersede` 另给非空 typed `replacements`。保留不更改旧指令，撤销或替代必须由本轮正式 Reviewer
+明确决定，工程代码不从 reason 猜方向。新增 `constraints` 与经操作折叠的历史集合共同形成执行义务；
+request_repair 的最终集合必须非空，accept 仍表示 Reviewer 确认本章并关闭累计义务。场景目标排除码
+不删除事实、不移动落地场景，也不把未标定的目的文字判断伪装成语义 HARD；修后仍须正式复审。
+
+旧 `scene_goal` 保持正向覆盖原义。无操作的历史按原并集语义重建，新字段缺省只省略自身，旧请求、
+决定、proof 与约束集摘要不改。已有 current typed repair 仍走原授权修复，生成候选后自然复审并显式
+更正历史约束；不清账、不改 strategy epoch，也不以输入协议变化返还 Reviewer 或 Executor 预算。
 只消费最新一轮而遗忘旧失败会被 constraint-set hash 拒绝。一个 repair epoch 最多两次模型 content
 turn；耗尽只结束该 epoch，不把一章失败升级成整书策略失败。新 hash-bound typed 决定可在同一
 strategy epoch 打开新的单章 repair epoch，也可直接走下述 0-wire 完整章替换。

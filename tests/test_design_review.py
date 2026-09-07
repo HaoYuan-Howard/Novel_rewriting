@@ -11,7 +11,7 @@ from contracts.invariants import (
     DESIGN_REVIEW_CONTRACT, FROZEN_V6_DESIGN_REVIEW_CONTRACT,
 )
 from contracts.schema.api import (
-    ApprovalDoc, DesignChapterSubject, DesignPreflightFailure,
+    ApprovalDoc, DesignChapterSubject, DesignConstraintOperations, DesignPreflightFailure,
     DesignPreflightSummary, DesignRepairConstraint, DesignReviewHistoryEntry,
     DesignReviewRequest, DesignReviewTemplate,
     DesignStrategySubject, DesignStructureEvidence, StructureApprovalRequest,
@@ -376,6 +376,8 @@ def _compact_request(template: DesignReviewTemplate) -> DesignReviewRequest:
                 'constraints': [
                     item.model_dump(mode='json') for item in row.constraints
                 ],
+                **({'constraint_operations': row.constraint_operations.model_dump(mode='json')}
+                   if row.constraint_operations is not None else {}),
             }
             for row in template.chapters
         ],
@@ -953,6 +955,14 @@ def test_repair_constraints_accumulate_and_complete_edit_uses_one_opaque_token(
             'chapters': [second_template.chapters[0].model_copy(update={
                 'placeholder': False, 'template_token': None,
                 'reason': '第二轮补充事实组合，第一轮约束仍未关闭',
+                'constraint_operations': DesignConstraintOperations(
+                    expected_constraint_set_sha256=(second_template.constraint_catalog[1]
+                                                    .expected_constraint_set_sha256),
+                    items=[{'kind': 'keep', 'constraint_sha256': item.constraint_sha256,
+                            'reason': '第一轮场景目标要求仍有效，第二轮继续明确保留',
+                            'replacements': []}
+                           for item in second_template.constraint_catalog[1].items],
+                ),
                 'constraints': [DesignRepairConstraint(
                     code='fact_grouping', scene_refs=[],
                     opaque_aliases=[FACT, PERSON])],

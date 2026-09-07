@@ -66,7 +66,18 @@ def landed_source(request):
     def append_history():
         if surface == 'design':
             state['subjects'] = _subjects(brief='修后场景已改变，旧审批只属于历史')
-            next_request = _accept_all(_template(base))
+            template = _template(base)
+            payload = _accept_all(template).model_dump(mode='json')
+            for row in payload['chapters']:
+                catalog = template.constraint_catalog[row['output_ordinal']]
+                if catalog.items:
+                    row['constraint_operations'] = {
+                        'expected_constraint_set_sha256': catalog.expected_constraint_set_sha256,
+                        'items': [{'kind': 'keep', 'constraint_sha256': item.constraint_sha256,
+                                   'reason': '原义务仍有效，已核对修后候选满足，可明确接受',
+                                   'replacements': []} for item in catalog.items],
+                    }
+            next_request = DesignReviewRequest.model_validate(payload)
             approvals.approve_design(base, SID, next_request)
         else:
             state['subject'] = SUBJECT_B

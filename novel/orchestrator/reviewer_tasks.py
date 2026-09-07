@@ -85,6 +85,7 @@ _ACTOR = 'agent:novel-pipeline-operator'
 # 这是 prompt 内的不可提交 sentinel。简单审批（尤其 writing）没有业务
 # decision 枚举可替它关闭式兜底，因此 loader 也必须拒绝原样复制。
 _REASON = '<逐项审阅并跨项复核后填写精确理由>'
+_DECISION = '<依据本轮证据明确填写允许的决定>'
 _JSON_OBJECT = TypeAdapter(dict[str, Any])
 
 # ``GlobalCollectionEdit`` 在生产 schema 里必须先看 ``collection``，才能判定
@@ -349,6 +350,8 @@ def _stage4_workpack(
                 'design': design,
                 # 只供确定性封装层投影 compact POST；不重复进入阅读面。
                 '_design_template': template,
+                # 同一次 typed template 已冻结历史 scope；不在模型构包时重读第二次账。
+                'design_constraint_catalog': copy.deepcopy(template['constraint_catalog']),
             }
             if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
                 report = run_check_only(state.readonly_ctx(
@@ -973,18 +976,58 @@ def _option(
 def _compact_design_payload(template: Any) -> dict[str, Any]:
     """用外部 POST model 从生产 template 投影单 token 紧凑载荷。
 
-    ``from_attributes`` 使目标 model 只读自己的字段：完整
-    subject / preflight / 多枚 SHA 不会进 Commander 的输出脚手架；
-    Pydantic 仍会当场抓住生产 template 与 POST 形状的漂移。
+    ``from_attributes`` 使目标 model 只读自己的字段；随后清空全部待裁决值。
+    公开 template 的关闭式预填值是编辑界面脚手架，不能带着真实 scene/alias
+    冒充已发生的修复决定。历史 accept 只在有来源的工作包材料中复用；本轮
+    仍须明确提交完整判断，不能把清除默认 repair 偷换成默认 accept。
     """
     request = DesignReviewRequest.model_validate(template, from_attributes=True)
     payload = request.model_dump(mode='json')
     payload['actor'] = _ACTOR
     payload['general_reason'] = _REASON
-    payload['strategy']['reason'] = _REASON
+    payload['strategy'].update(
+        decision=_DECISION, reason=_REASON, replan_constraints=[])
     for row in payload['chapters']:
-        row['reason'] = _REASON
+        row.update(decision=_DECISION, reason=_REASON, constraints=[])
     return payload
+
+
+def _design_active_constraint_catalog(
+    template: DesignReviewTemplate,
+) -> dict[str, Any]:
+    """只消费正式审批发布的历史目录；不从占位约束或自由理由猜历史。"""
+    source = template.model_dump(mode='json')
+    catalog = source.get('constraint_catalog')
+    ordinals = {str(row.output_ordinal) for row in template.chapters}
+    if not isinstance(catalog, dict) or set(catalog) != ordinals:
+        raise ReviewerTaskError('Stage4 design template 缺全章 constraint_catalog')
+    for ordinal, scope in catalog.items():
+        if not isinstance(scope, dict) or not isinstance(scope.get('items'), list):
+            raise ReviewerTaskError(f'Stage4 第 {ordinal} 章历史约束目录形状漂移')
+        if not isinstance(scope.get('expected_constraint_set_sha256'), str):
+            raise ReviewerTaskError(f'Stage4 第 {ordinal} 章历史约束目录缺 set 身份')
+    return copy.deepcopy(catalog)
+
+
+def _bind_design_constraint_operations(
+    payload: dict[str, Any], catalog: Mapping[str, Any],
+) -> None:
+    """完整冻结 active 身份分母，但每项处置仍必须由 Reviewer 明确填写。"""
+    for row in payload['chapters']:
+        scope = catalog[str(row['output_ordinal'])]
+        # 公开旧 payload 的 None 继续省略；新活动 scope 不能借它隐式继承。
+        row.pop('constraint_operations', None)
+        if not scope['items']:
+            continue
+        row['constraint_operations'] = {
+            'expected_constraint_set_sha256': scope['expected_constraint_set_sha256'],
+            'items': [{
+                'constraint_sha256': item['constraint_sha256'],
+                'kind': '<逐项填写 keep、withdraw 或 supersede>',
+                'reason': _REASON,
+                'replacements': [],
+            } for item in scope['items']],
+        }
 
 
 def _design_constraint_reference_closure(
@@ -1160,6 +1203,17 @@ def _typed_validation_reason(prefix: str, exc: ValidationError) -> str:
         f'details_sha256={detail_sha256}')
 
 
+def _stage4_resolution_budget_materials_v1(pack: dict[str, Any]) -> dict[str, Any]:
+    """冻结已发行 B→A 预算投影：新增历史目录不能给同一业务另开轮次。
+
+    只排除本次新增的顶层目录；原 A/B 工作包、typed 否决、完整阅读材料的
+    任一字节变化仍进入原 business hash。实际模型输入绝不经过此函数。
+    """
+    visible = _visible_materials(pack)
+    visible.pop('design_constraint_catalog', None)
+    return visible
+
+
 def _stage4_structure_replan_materials(
     pack: dict[str, Any],
 ) -> dict[str, Any]:
@@ -1224,6 +1278,8 @@ def _stage4_structure_replan_materials(
     }
     return {
         'design': copy.deepcopy(design),
+        **({'design_constraint_catalog': copy.deepcopy(pack['design_constraint_catalog'])}
+           if 'design_constraint_catalog' in pack else {}),
         'structure_replan': {
             'kind': 'stage4-structure-replan-delta-v1',
             'full_workpack_sha256': _canonical_json_sha256(structure),
@@ -1443,6 +1499,16 @@ def _canonicalize_design_review_payload(value: Any) -> Any:
             if isinstance(chapter, dict) and isinstance(
                     chapter.get('constraints'), list):
                 chapter['constraints'] = canonical_rows(chapter['constraints'])
+            operations = chapter.get('constraint_operations') if isinstance(chapter, dict) else None
+            items = operations.get('items') if isinstance(operations, dict) else None
+            if isinstance(items, list):
+                for operation in items:
+                    if isinstance(operation, dict) and isinstance(operation.get('replacements'), list):
+                        operation['replacements'] = canonical_rows(operation['replacements'])
+                # 处置项按 SHA 成集合；场景/alias 引用数组仍保留真实业务顺序。
+                operations['items'] = sorted(items, key=lambda item: (
+                    str(item.get('constraint_sha256', '')) if isinstance(item, dict)
+                    else json.dumps(item, ensure_ascii=False, sort_keys=True)))
 
         def chapter_key(row: Any) -> tuple[int, Any]:
             ordinal = row.get('output_ordinal') if isinstance(row, dict) else None
@@ -2301,6 +2367,11 @@ def _submission_options(
     if waiting_on in _STAGE4_DESIGN_DECISION_BLOCKERS:
         source = DesignReviewTemplate.model_validate(pack['_design_template'])
         payload = _compact_design_payload(source)
+        catalog = _design_active_constraint_catalog(source)
+        visible_catalog = pack.get('design_constraint_catalog')
+        if visible_catalog is not None and visible_catalog != catalog:
+            raise ReviewerTaskError('Stage4 可见历史约束目录与 typed template 不一致')
+        _bind_design_constraint_operations(payload, catalog)
         token = payload.get('review_token')
         if not isinstance(token, str):
             raise ReviewerTaskError('Stage4 design template 缺 review_token')
@@ -2341,11 +2412,14 @@ def _submission_options(
                 'action.payload.general_reason',
                 'action.payload.strategy.decision/reason/replan_constraints',
                 'action.payload.chapters[].decision/reason/constraints',
+                'action.payload.chapters[].constraint_operations.items[].kind/reason/replacements',
             ],
             binding_fields=bind + [
                 'action.surface', 'action.payload.actor/reviewer_kind/review_run_id',
                 'action.payload.review_token',
                 'action.payload.chapters[].output_ordinal',
+                'action.payload.chapters[].constraint_operations.expected_constraint_set_sha256',
+                'action.payload.chapters[].constraint_operations.items[].constraint_sha256/完整有序分母',
             ],
             allowed_values={
                 'strategy.decision': list(DESIGN_STRATEGY_DECISIONS),
@@ -2355,6 +2429,7 @@ def _submission_options(
                 'chapters[].constraints[].code': list(DESIGN_REPAIR_CODES),
                 'chapters[].constraints[].reference_closure': (
                     _design_constraint_reference_closure(source)),
+                'chapters[].constraint_operations.active': catalog,
                 # 语义与示例随包下发，reviewer 不必翻源码/测试猜字段；示例只在
                 # 这里，不进 exact_request，占位 alias 仍须换成工作包里的真 alias。
                 'chapters[].constraints[].semantics': dict(
@@ -2424,7 +2499,8 @@ def _submission_options(
         payload['actor'] = _ACTOR
         payload['reason'] = _REASON
         for row in payload['chapters']:
-            row['reason'] = _REASON
+            # B 的关闭式 request_replan 同样只是模板，不是已发生的结构否决。
+            row.update(decision=_DECISION, reason=_REASON)
         request = _request_wrapper(current, waiting_on, {
             'kind': 'approval', 'surface': 'structure', 'payload': payload,
         })
@@ -2966,7 +3042,7 @@ def build_task(
         # 直接送 Executor；Structure 的 evidence-authority stop 不写审批。
         business = {
             'waiting_on': waiting_on,
-            'materials': _visible_materials(pack),
+            'materials': _stage4_resolution_budget_materials_v1(pack),
             'reviewer_contract_sha256': hashlib.sha256(
                 reviewer_contract.for_blocker(waiting_on).encode(
                     'utf-8')).hexdigest(),
@@ -3123,6 +3199,12 @@ Stage2 保持 UNVER。Stage4 的 INFO、metric、UNVER、binding_concern 与其�
 工作包提供 stop option 时应安全停机，不能猜 accept，也不能发明修订理由。
 Stage4 A/B 工作包的逐章裁决材料在 materials 的 coverage 行 reading 里，顶层 reading.legend
 是唯一字段说明；metric_only 组只是摘要，完整读数以逐章 reading 为准。
+Stage4 submission_options 的 exact_request 是未填写的提交脚手架，不能把它当作
+已经发生的批准、否决或修复历史。decision/reason 的尖括号值必须依据本轮材料填写，
+空 constraints/replan_constraints 只表示模板没有预填修复意图，不代表已接受或已撤销。
+allowed_values 的 shapes/示例只解释字段格式，不是本书的历史义务。历史接受与约束
+只认 materials 中有明确来源、主体身份及状态的记录；复用 accept 仍须原子提交
+当前整书的完整决定，不得把占位示例补成历史，也不得默默删除真实尚未关闭的约束。
 {correction_instruction}
 {final_review_instruction}
 {trim_instruction}
@@ -3650,6 +3732,24 @@ def _validate_approval_binding(
         if got != wanted:
             raise ReviewerTaskError(
                 f'{surface} approval 章号、行数与顺序必须逐字绑定 workpack')
+        if surface == 'design':
+            for row, frozen in zip(submitted['chapters'], expected['chapters'], strict=True):
+                frozen_operations = frozen.get('constraint_operations')
+                if frozen_operations is None:
+                    # 旧 issued scaffold 没有此域，保持既有完整请求的重放语义。
+                    continue
+                operations = row.get('constraint_operations')
+                if not isinstance(operations, dict):
+                    raise ReviewerTaskError('Stage4 当前 active 约束必须逐项显式处置')
+                if operations.get('expected_constraint_set_sha256') != (
+                        frozen_operations['expected_constraint_set_sha256']):
+                    raise ReviewerTaskError('Stage4 constraint_operations 的 set 身份不可改')
+                actual_items = _identity_rows(
+                    operations, 'items', ('constraint_sha256',), label='constraint_operations')
+                expected_items = _identity_rows(
+                    frozen_operations, 'items', ('constraint_sha256',), label='constraint_operations')
+                if actual_items != expected_items:
+                    raise ReviewerTaskError('Stage4 active 约束必须完整、有序且逐字绑定历史 SHA')
     elif surface == 'stage5':
         got_items = _identity_rows(
             submitted, 'must_appear', ('chapter_ordinal', 'evidence_key'),

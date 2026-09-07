@@ -50,6 +50,9 @@ from contracts.schema.api import (
     DesignAcceptedChapterConstraint,
     DesignBlindChapterTruth,
     DesignChapterReview,
+    DesignActiveConstraint,
+    DesignConstraintCatalog,
+    DesignConstraintOperations,
     DesignChapterSubject,
     DesignPreflightFailure,
     DesignPreflightSummary,
@@ -1571,6 +1574,7 @@ def _materialize_design_request(
             decision=row.decision,
             reason=row.reason,
             constraints=row.constraints,
+            constraint_operations=row.constraint_operations,
             source_decision_sha256=None,
         ) for row in request.chapters],
     )
@@ -1750,6 +1754,8 @@ def _stored_design_external_payload(
                 constraint.model_dump(mode='json')
                 for constraint in row.constraints
             ],
+            **({'constraint_operations': row.constraint_operations.model_dump(mode='json')}
+               if row.constraint_operations is not None else {}),
         } for row in decision.chapters],
     }
 
@@ -2045,6 +2051,18 @@ def _design_review_view(
             current_decision=None,
             history=[],
         )
+    # 新处置的当前权利依赖整条历史解释链。中央 view 在发布 current 之前
+    # 复验同 epoch 含 operations 的链，让 GET/operator/B 授权使用同一边界。
+    # 失败保留 typed unknown 异常，不能伪装为可用批准或普通没有候选。
+    if any(
+        (stored.strategy_epoch_sha256 == current.strategy_epoch_sha256
+         and any(row.constraint_operations is not None for row in stored.request.chapters))
+        if isinstance(stored, _StoredDesignDecisionSlim) else any(
+            row.subject.strategy_epoch_sha256 == current.strategy_epoch_sha256
+            and row.constraint_operations is not None for row in stored.chapters)
+        for stored in record.design_history
+    ):
+        _design_constraint_catalog(record, current)
     try:
         public = _public_design_decision(latest, current)
     except HumanEditProtected:
@@ -4072,6 +4090,7 @@ def design_template(
             repair_capability=current.repair_capability,
             strategy=strategy,
             chapters=chapters,
+            constraint_catalog=_design_constraint_catalog(record, current),
         )
 
 
@@ -4109,9 +4128,13 @@ def _require_design_template_materialized(request: DesignReviewMaterialized) -> 
                 'template sentinel；须给出真实决定、理由或约束')
 
 
-def _require_design_codes_active(request: DesignReviewMaterialized) -> None:
+def _require_design_codes_active(
+    request: DesignReviewMaterialized,
+    effective: dict[int, list[DesignRepairConstraint]] | None = None,
+) -> None:
     """新决定只接受 active 修复码；退役码历史可解码，但不再可提交（批次 2）。"""
-    retired = [row.output_ordinal for row in request.chapters for constraint in row.constraints
+    retired = [row.output_ordinal for row in request.chapters
+               for constraint in (row.constraints if effective is None else effective[row.output_ordinal])
                if constraint.code in DESIGN_REPAIR_CODES_RETIRED]
     if retired:
         raise HumanEditProtected(
@@ -4183,6 +4206,7 @@ def _require_design_repair_capability(request: DesignReviewMaterialized) -> None
 
 def _require_design_constraint_refs(
     request: DesignReviewMaterialized, current: _DesignSubjects | None = None,
+    effective: dict[int, list[DesignRepairConstraint]] | None = None,
 ) -> None:
     for row in request.chapters:
         scenes = {
@@ -4195,7 +4219,7 @@ def _require_design_constraint_refs(
             for fact in row.subject.blind_truth.facts
             for alias in fact.participant_aliases
         }
-        for constraint in row.constraints:
+        for constraint in (row.constraints if effective is None else effective[row.output_ordinal]):
             unknown_scenes = [
                 ref for ref in constraint.scene_refs if ref not in scenes
             ]
@@ -4208,7 +4232,7 @@ def _require_design_constraint_refs(
                     f'scenes={unknown_scenes}, aliases={unknown_aliases}')
         relation_effects = [
             constraint.effect.model_dump(mode='json')
-            for constraint in row.constraints
+            for constraint in (row.constraints if effective is None else effective[row.output_ordinal])
             if constraint.effect is not None
         ]
         if relation_effects:
@@ -4247,7 +4271,7 @@ def _require_design_constraint_refs(
         if not witness_present:
             offenders = [
                 row.output_ordinal for row in request.chapters
-                for constraint in row.constraints
+                for constraint in (row.constraints if effective is None else effective[row.output_ordinal])
                 if constraint.code == 'binding_constraint_unsat'
             ]
             if offenders:
@@ -4273,8 +4297,6 @@ def approve_design(
         materialized = _materialize_design_request(request, current)
         _require_design_template_materialized(materialized)
         _require_design_repair_capability(materialized)
-        _require_design_constraint_refs(materialized, current)
-        _require_design_codes_active(materialized)
         _require_design_preflight_clear(materialized, current)
         payload = _slim_design_payload(request, current)
         digest = _decision_sha256(payload)
@@ -4319,6 +4341,7 @@ def approve_design(
             # 也不会改写随后出现的 B replan。只有不同 payload 才进入
             # resolution 例外或同主体改票拒绝。
             if exact_replay:
+                _design_constraint_catalog(record, current)
                 return _view(base, record)
             resolving_structure_replan = (
                 prior_design.state == 'accepted'
@@ -4350,6 +4373,17 @@ def approve_design(
             # 人真正审阅的业务主体和完整 typed 回执均未变；只有服务端 proof
             # （通常是 provenance 文件 SHA）变化。保留旧历史，下面追加一条绑定
             # 当前完整字节的 slim 记录。A 重绑绝不改写现存 B 决定或 s4 gate。
+        proof_only_rebind = bool(
+            prior_design.current_decision is None
+            and same_business_subject and same_external_payload)
+        if proof_only_rebind:
+            # 重绑不重新裁决义务，却仍须证明原票和整条来源链真实自洽。
+            _design_constraint_catalog(record, current)
+        effective = (
+            None if proof_only_rebind
+            else _effective_design_submission_constraints(record, materialized))
+        _require_design_constraint_refs(materialized, current, effective)
+        _require_design_codes_active(materialized, effective)
         stored = _StoredDesignDecisionSlim(
             request=request,
             candidate_sha256=current.candidate_sha256,
@@ -4452,12 +4486,216 @@ def _canonical_design_constraints(
     return [by_key[key] for key in sorted(by_key)]
 
 
+def _design_constraint_sha256(
+    epoch: str, ordinal: int, constraint: DesignRepairConstraint,
+) -> str:
+    return _decision_sha256({
+        'kind': 'stage4-design-active-constraint-v1',
+        'strategy_epoch_sha256': epoch,
+        'output_ordinal': ordinal,
+        'constraint': constraint.model_dump(mode='json'),
+    })
+
+
+def _constraint_catalog_from_active(
+    epoch: str, ordinal: int, active: dict[str, DesignActiveConstraint],
+) -> DesignConstraintCatalog:
+    items = [active[key] for key in sorted(active)]
+    return DesignConstraintCatalog(
+        expected_constraint_set_sha256=_decision_sha256({
+            'kind': 'stage4-design-constraint-catalog-v1',
+            'strategy_epoch_sha256': epoch,
+            'output_ordinal': ordinal,
+            'items': [item.model_dump(mode='json') for item in items],
+        }),
+        items=items,
+    )
+
+
+def _apply_design_constraint_operations(
+    active: dict[str, DesignActiveConstraint],
+    operations: DesignConstraintOperations | None,
+    *, epoch: str, ordinal: int,
+) -> tuple[dict[str, DesignActiveConstraint], list[DesignRepairConstraint]]:
+    """唯一处置解释器：只认精确历史目录，不解析 reason，也不隐式撤销。"""
+    if operations is None:
+        return dict(active), []
+    catalog = _constraint_catalog_from_active(epoch, ordinal, active)
+    if operations.expected_constraint_set_sha256 != catalog.expected_constraint_set_sha256:
+        raise HumanEditProtected(f'Stage4A 第 {ordinal} 章历史约束集合已漂移')
+    if [item.constraint_sha256 for item in operations.items] != sorted(active):
+        raise HumanEditProtected(
+            f'Stage4A 第 {ordinal} 章 constraint_operations 必须精确覆盖每条 active SHA')
+    retained = dict(active)
+    replacements: list[DesignRepairConstraint] = []
+    for operation in operations.items:
+        if operation.kind != 'keep':
+            del retained[operation.constraint_sha256]
+        if operation.kind == 'supersede':
+            replacements.extend(operation.replacements)
+    return retained, _canonical_design_constraints(replacements)
+
+
+def _design_constraint_history_business(
+    stored: _StoredDesignHistory,
+) -> dict[str, Any]:
+    """冻结在人实际看过的主体与完整决定上，识别紧邻的 proof-only 重绑。"""
+    slim = isinstance(stored, _StoredDesignDecisionSlim)
+    return {
+        'request': _stored_design_external_payload(stored),
+        'aggregate_subject_sha256': stored.aggregate_subject_sha256,
+        'strategy_subject_sha256': (stored.strategy_subject_sha256 if slim
+                                    else stored.strategy.subject_sha256),
+        'strategy_epoch_sha256': (stored.strategy_epoch_sha256 if slim
+                                 else stored.chapters[0].subject.strategy_epoch_sha256),
+        'chapter_subject_sha256': (stored.chapter_subject_sha256 if slim else {
+            row.output_ordinal: row.subject_sha256 for row in stored.chapters}),
+        'repair_capability': stored.repair_capability.model_dump(mode='json'),
+        'binding_infeasibility': (stored.binding_infeasibility.model_dump(mode='json')
+                                 if stored.binding_infeasibility is not None else None),
+    }
+
+
+def _fold_design_constraints(
+    history: list[_StoredDesignHistory], *, epoch: str, ordinal: int,
+    through_decision_sha256: str | None = None,
+) -> DesignConstraintCatalog:
+    """纯历史 fold；expired 候选仍读到同 epoch 的真实未关闭义务。
+
+    无 operations 的发行历史保持原有“最近 accept 后并集”语义。proof-only
+    重绑不再次执行同一处置；相同决定 SHA 却出现不同事实必须关闭式拒绝。
+    """
+    active: dict[str, DesignActiveConstraint] = {}
+    seen: dict[str, str] = {}
+    previous_business: dict[str, Any] | None = None
+    found = through_decision_sha256 is None
+    for stored in history:
+        if not _stored_design_is_self_consistent(stored):
+            raise HumanEditProtected('Stage4A 历史决定/proof 摘要不闭合，不能铸造约束目录')
+        stored_sha = stored.decision_sha256
+        identity = json.dumps(stored.model_dump(
+            mode='json', exclude={'proof', 'decided_at'}), ensure_ascii=False,
+            sort_keys=True, separators=(',', ':'))
+        business = _design_constraint_history_business(stored)
+        if stored_sha in seen and seen[stored_sha] != identity:
+            raise HumanEditProtected('Stage4A 历史决定 SHA 对应的事实发生漂移')
+        seen[stored_sha] = identity
+        if business != previous_business:
+            if isinstance(stored, _StoredDesignDecisionSlim):
+                candidate = next((item for item in stored.request.chapters
+                                  if item.output_ordinal == ordinal
+                                  and stored.strategy_epoch_sha256 == epoch), None)
+            else:
+                candidate = next((item for item in stored.chapters
+                                  if item.output_ordinal == ordinal
+                                  and item.subject.strategy_epoch_sha256 == epoch), None)
+            if candidate is not None:
+                active, replacements = _apply_design_constraint_operations(
+                    active, candidate.constraint_operations, epoch=epoch, ordinal=ordinal)
+                if candidate.decision == 'accept':
+                    active = {}
+                else:
+                    for constraint in _canonical_design_constraints(
+                            [*candidate.constraints, *replacements]):
+                        key = _design_constraint_sha256(epoch, ordinal, constraint)
+                        prior = active.get(key)
+                        sources = [] if prior is None else prior.source_decision_sha256s
+                        active[key] = DesignActiveConstraint(
+                            constraint_sha256=key, constraint=constraint,
+                            source_decision_sha256s=sorted({*sources, stored_sha}),
+                        )
+                    if not active:
+                        raise HumanEditProtected(
+                            f'Stage4A 第 {ordinal} 章 request_repair 处置后没有有效约束')
+        previous_business = business
+        if stored_sha == through_decision_sha256:
+            found = True
+            break
+    if not found:
+        raise HumanEditProtected('Stage4A 当前 decision 不在 raw history 中')
+    return _constraint_catalog_from_active(epoch, ordinal, active)
+
+
+def _design_constraint_catalog(
+    record: _ApprovalRecordV7, current: _DesignSubjects,
+) -> dict[int, DesignConstraintCatalog]:
+    return {
+        row.chapter.output_ordinal: _fold_design_constraints(
+            record.design_history, epoch=current.strategy_epoch_sha256,
+            ordinal=row.chapter.output_ordinal)
+        for row in current.chapters
+    }
+
+
+def design_constraint_catalog(
+    base: str | os.PathLike[str], sid: str,
+) -> dict[str, dict[str, Any]]:
+    """当前候选的完整历史义务目录；与 GET template 共用一把纯历史尺子。"""
+    with _LOCK:
+        record = _read_current(base, sid)
+        current = _current_design_subjects(paths.resolve_novel_dir(base, sid))
+        return {str(key): value.model_dump(mode='json') for key, value in
+                _design_constraint_catalog(record, current).items()}
+
+
+def _require_design_constraint_directions(
+    constraints: list[DesignRepairConstraint], *, ordinal: int,
+) -> None:
+    """只关闭机械可证的方向矛盾，不把多场景集合猜成逐场全称要求。"""
+    excluded: dict[str, set[str]] = {}
+    for constraint in constraints:
+        if constraint.code == 'scene_goal_exclude':
+            for alias in constraint.opaque_aliases:
+                excluded.setdefault(alias, set()).update(constraint.scene_refs)
+    for constraint in constraints:
+        if constraint.code != 'scene_goal':
+            continue
+        impossible = [alias for alias in constraint.opaque_aliases
+                      if set(constraint.scene_refs).issubset(excluded.get(alias, set()))]
+        if impossible:
+            raise HumanEditProtected(
+                f'Stage4A 第 {ordinal} 章 scene_goal 的所有指定场景同时排除 {impossible}；'
+                '须显式 withdraw/supersede 原义务，不能交给 Executor 猜方向')
+
+
+def _effective_design_submission_constraints(
+    record: _ApprovalRecordV7, request: DesignReviewMaterialized,
+) -> dict[int, list[DesignRepairConstraint]]:
+    """新票必须显式处置完整 active 目录；旧票重放在调用本函数前处理。"""
+    effective: dict[int, list[DesignRepairConstraint]] = {}
+    for row in request.chapters:
+        epoch = row.subject.strategy_epoch_sha256
+        if epoch is None:
+            if row.constraint_operations is not None:
+                raise HumanEditProtected('legacy Stage4A 约束没有 strategy epoch，不能处置历史义务')
+            effective[row.output_ordinal] = list(row.constraints)
+            continue
+        catalog = _fold_design_constraints(
+            record.design_history, epoch=epoch, ordinal=row.output_ordinal)
+        active = {item.constraint_sha256: item for item in catalog.items}
+        if active and row.constraint_operations is None:
+            raise HumanEditProtected(
+                f'Stage4A 第 {row.output_ordinal} 章必须显式提交 constraint_operations')
+        retained, replacements = _apply_design_constraint_operations(
+            active, row.constraint_operations, epoch=epoch, ordinal=row.output_ordinal)
+        constraints = _canonical_design_constraints([
+            *(item.constraint for item in retained.values()),
+            *row.constraints, *replacements,
+        ])
+        _require_design_constraint_directions(constraints, ordinal=row.output_ordinal)
+        if row.decision == 'request_repair' and not constraints:
+            raise HumanEditProtected(
+                f'Stage4A 第 {row.output_ordinal} 章 request_repair 处置后没有有效约束')
+        effective[row.output_ordinal] = constraints
+    return effective
+
+
 def _chapter_constraint_scope(
     record: _ApprovalRecordV7,
     decision: DesignReviewDecision,
     row: DesignChapterReview,
 ) -> DesignRepairChapterScope:
-    """收集同 strategy epoch 自最近 accept 后的全部尚未关闭约束。"""
+    """Executor 只消费同一纯历史 fold 产出的有效累计范围。"""
     epoch = row.subject.strategy_epoch_sha256
     if epoch is None:
         return DesignRepairChapterScope(
@@ -4465,52 +4703,24 @@ def _chapter_constraint_scope(
             subject_sha256=row.subject_sha256,
             constraints=row.constraints,
         )
-    accumulated: list[DesignRepairConstraint] = []
-    found = False
-    for stored in record.design_history:
-        if isinstance(stored, _StoredDesignDecisionSlim):
-            candidate = next((
-                item for item in stored.request.chapters
-                if item.output_ordinal == row.output_ordinal
-                and stored.strategy_epoch_sha256 == epoch
-            ), None)
-            stored_sha = stored.decision_sha256
-        else:
-            public = _public_design_decision(stored)
-            candidate = next((
-                item for item in public.chapters
-                if item.output_ordinal == row.output_ordinal
-                and item.subject.strategy_epoch_sha256 == epoch
-            ), None)
-            stored_sha = public.decision_sha256
-        if candidate is not None:
-            if candidate.decision == 'accept':
-                accumulated = []
-            else:
-                accumulated.extend(candidate.constraints)
-        if stored_sha == decision.decision_sha256:
-            found = True
-            break
-    if not found:
-        raise HumanEditProtected('Stage4A 当前 decision 不在 raw history 中')
-    canonical = _canonical_design_constraints(accumulated)
-    incoming = _canonical_design_constraints(row.constraints)
-    if not canonical or not set(
-        json.dumps(item.model_dump(mode='json'), ensure_ascii=False,
-                   sort_keys=True, separators=(',', ':'))
-        for item in incoming
-    ).issubset({
-        json.dumps(item.model_dump(mode='json'), ensure_ascii=False,
-                   sort_keys=True, separators=(',', ':'))
-        for item in canonical
-    }):
-        raise HumanEditProtected(
-            f'Stage4A 第 {row.output_ordinal} 章累计约束断链')
+    catalog = _fold_design_constraints(
+        record.design_history, epoch=epoch, ordinal=row.output_ordinal,
+        through_decision_sha256=decision.decision_sha256)
+    canonical = _canonical_design_constraints([item.constraint for item in catalog.items])
+    incoming = _canonical_design_constraints([
+        *row.constraints,
+        *(replacement for operation in (
+            row.constraint_operations.items if row.constraint_operations else [])
+          for replacement in operation.replacements),
+    ])
+    if not canonical or any(item not in canonical for item in incoming):
+        raise HumanEditProtected(f'Stage4A 第 {row.output_ordinal} 章累计约束断链')
     return DesignRepairChapterScope(
         output_ordinal=row.output_ordinal,
         subject_sha256=row.subject_sha256,
         new_constraints=incoming,
         accumulated_constraints=canonical,
+        constraint_operations=row.constraint_operations,
         constraint_set_sha256=_decision_sha256({
             'kind': 'stage4-design-repair-constraint-set-v1',
             'strategy_epoch_sha256': epoch,

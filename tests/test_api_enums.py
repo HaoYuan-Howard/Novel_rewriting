@@ -37,6 +37,7 @@ def test_frontend_domains_are_published_from_current_invariants(paid_payload):
         'time_layers': inv.TIME_LAYERS,
         'style_words': inv.STYLE_WORDS,
         'nonbody_kinds': inv.NONBODY_KINDS,
+        'design_constraint_operation_kinds': inv.DESIGN_CONSTRAINT_OPERATION_KINDS,
     }
     for key, values in published.items():
         assert paid_payload[key] == list(values)
