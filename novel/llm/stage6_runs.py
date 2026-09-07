@@ -36,7 +36,7 @@ from novel.agent_model_identity import (
 )
 from novel.agents.base import render_structured_agent_stdin_bytes
 from novel.agents.session_client import (
-    SESSION_PROTOCOL_VERSION, SessionAgentClient,
+    SESSION_PROTOCOL_VERSION, SessionAgentClient, agent_json_schema,
     validate_agent_session_request_binding,
 )
 from novel.appendlog import process_append_lock
@@ -365,7 +365,7 @@ def _request_rows(
 ) -> list[dict[str, Any]]:
     if set(users) != set(JUDGE_ROLES):
         raise ProvenanceRefused('Stage6 judge users 必须恰好提供 A/B，不能缺失或多出')
-    schema_sha = _sha(response_model.model_json_schema(by_alias=True))
+    schema_sha = _sha(agent_json_schema(response_model))
     rows: list[dict[str, Any]] = []
     for role in JUDGE_ROLES:
         user = users[role]
@@ -390,7 +390,7 @@ def _expected_role_request(
 ) -> dict[str, Any]:
     if not isinstance(system, str) or not isinstance(user, str):
         raise ProvenanceRefused('Stage6 judge system/user 必须是字符串')
-    schema_sha = _sha(response_model.model_json_schema(by_alias=True))
+    schema_sha = _sha(agent_json_schema(response_model))
     return {
         'role': _role(role),
         'purpose': _purpose(role),
@@ -707,7 +707,7 @@ def _validate_acceptance(
     links = acceptance.get('attempt_links')
     recovery = acceptance.get('recovery_from_attempts')
     turn_index = acceptance.get('accepted_turn_index')
-    schema_sha = _sha(response_model.model_json_schema(by_alias=True))
+    schema_sha = _sha(agent_json_schema(response_model))
     binding = acceptance.get('accepted_request')
     if (not _is_attempt_id(attempt_id)
             or not _is_sha256(request_fingerprint)

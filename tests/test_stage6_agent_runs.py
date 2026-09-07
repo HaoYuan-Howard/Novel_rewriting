@@ -11,12 +11,13 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from contracts.schema.orchestration import AgentProfile
+from contracts.schema.stage6 import HookSemanticResponse
 from novel import paths, prov
 from novel.agents import (
     AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
     render_structured_agent_stdin,
 )
-from novel.agents.session_client import SessionAgentClient
+from novel.agents.session_client import SessionAgentClient, agent_json_schema
 from novel.errors import ProvenanceRefused
 from novel.llm import stage6_runs
 from novel.llm.cache import CachePolicy
@@ -266,6 +267,66 @@ def test_each_role_checkpoint_restores_typed_payload_ledger_and_session(tmp_path
     assert restarted.ledger.calls_made == 2
     assert restarted.ledger.attempt_ids_for_purpose('stage6.semantic.A') == (
         restored_a[1]['attempt_id'],)
+
+
+def test_real_semantic_schema_accepts_and_restores_both_judge_responses(tmp_path):
+    """真实响应含默认值与联合类型，必须以实际发送的 schema 贯穿接收和恢复。"""
+    answer = HookSemanticResponse.model_validate({
+        'reviews': [{
+            'label': 'T1', 'coverage': 'complete',
+            'uncertainty_reason': None, 'contradictions': [],
+            'quality': {
+                'read_on_desire': 8, 'body_voice_match': 8,
+                'concrete_scene_and_specificity': 8,
+                'curiosity_and_payoff_promise': 8,
+                'hook_craft': 8, 'synopsis_penalty': 1,
+            },
+            'concise_reason': '具体场面与最后一击都成立。',
+        }],
+        'ranking': ['T1'],
+    })
+    wire_schema_sha = stage6_runs._sha(agent_json_schema(HookSemanticResponse))
+    assert wire_schema_sha != stage6_runs._sha(
+        HookSemanticResponse.model_json_schema(by_alias=True))
+    ctx = _ctx(tmp_path)
+    record = stage6_runs.ensure_run(
+        ctx, input_sha256=_INPUT_SHA, system=_SYSTEM, users=_USERS,
+        response_model=HookSemanticResponse, max_tokens=_MAX_TOKENS)
+    for role in ('A', 'B'):
+        purpose = f'stage6.semantic.{role}'
+        client = SessionAgentClient(
+            ctx, _profile(),
+            _Driver(answer.model_dump_json(), f'real-schema-session-{role}'),
+            max_semantic_turns=3)
+        result = client.ask_json(
+            _SYSTEM, _USERS[role], model_cls=HookSemanticResponse,
+            purpose=purpose, max_tokens=_MAX_TOKENS,
+            recovery_policy=stage6_runs.RECOVERY_POLICY)
+        acceptance = client.accepted_checkpoint(purpose)
+        stage6_runs.write_checkpoint(
+            ctx, role=role, input_sha256=_INPUT_SHA,
+            system=_SYSTEM, user=_USERS[role],
+            response_model=HookSemanticResponse, max_tokens=_MAX_TOKENS,
+            response_payload=result.model_dump(by_alias=True),
+            acceptance=acceptance)
+        client.finish(process_state='ok', delivery_state='delivered')
+        client.close()
+    assert all(row['response_schema_sha256'] == wire_schema_sha
+               for row in record['requests'])
+    ledger_before = ctx.ledger.path.read_bytes()
+    restarted = _ctx(tmp_path, run_id=ctx.run_id, code=ctx.code)
+    stage6_runs.ensure_run(
+        restarted, input_sha256=_INPUT_SHA, system=_SYSTEM, users=_USERS,
+        response_model=HookSemanticResponse, max_tokens=_MAX_TOKENS)
+    for role in ('A', 'B'):
+        restored = stage6_runs.restore_checkpoint(
+            restarted, role=role, input_sha256=_INPUT_SHA,
+            system=_SYSTEM, user=_USERS[role],
+            response_model=HookSemanticResponse, max_tokens=_MAX_TOKENS)
+        assert restored is not None and restored[0] == answer
+        assert restored[1]['accepted_schema_sha256'] == wire_schema_sha
+    assert restarted.ledger.calls_made == 2
+    assert ctx.ledger.path.read_bytes() == ledger_before
 
 
 def test_independent_judge_ledger_keeps_provider_cache_hit_observation(tmp_path):

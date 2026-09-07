@@ -52,6 +52,10 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
   未进入判官 prompt 的后半书稿塞进 `judged`；全书 Stage5 accepted Review 仍是既有前置门，
   后半书改字先令 Review 暂不可用，零成本重跑 Review 后若实际 prompt 输入未变，旧 v2
   semantic 可以重新成为 current，不白做 A/B。
+  Agent 的 run、A/B acceptance 与 checkpoint 恢复共用
+  `novel/agents/session_client.py::agent_json_schema` 归一后的实际发送 schema 指纹；
+  不得用 Pydantic 原始 schema 另算一套身份。旧 run 的指纹不改写、不冒充当前请求；
+  未能落下有效 checkpoint 的历史调用保留成本证据，由前端 Agent 在当前输入上重新执行该节点。
 - v1 档（当前只有 `wontfix.json`）——**都是 schema v1**。
 
 ### 2.1 `hook.json`
