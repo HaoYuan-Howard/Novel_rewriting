@@ -79,6 +79,7 @@ from novel.commanders import (
     CommanderConfigurationError, CommanderDriver, CommanderInvocation,
     CommanderObservation, CommanderProcessResult, create_commander_driver,
 )
+from novel.commanders.base import _prepare_output_schema
 from novel.config import load_config
 from novel.agents.base import _signal_process_tree
 from novel.errors import (
@@ -96,7 +97,7 @@ from novel.orchestrator import (
     review_seats, reviewer_action_evidence, reviewer_seat_ledger,
     reviewer_protocol_recovery,
     reviewer_tasks, service_lifecycle, stage2_review_ledger,
-    stage2_reviewer_wire, state, uploads,
+    stage2_reviewer_wire, stage4_reviewer_wire, state, uploads,
 )
 from novel.orchestrator.agent_supervisor import (
     CommanderTurnResult, LaunchTicket, PrelaunchIdentityDrift, RunSupervisor,
@@ -1165,6 +1166,7 @@ class _ReviewerSeat:
     prompt_sha256: str
     waiting_on: str
     business_sha256: str
+    output_schema_sha256: str | None = None
     provider_session_id: str | None = None
     turns_recorded: int = 0
     started: bool = False
@@ -2220,6 +2222,7 @@ def _reconcile_landed_stage5_reviewer_rewrite_action(
 def _protocol_recovery_sources(
         base: str, sid: str, *, ledger: ReviewerSeatLedger,
         current_parent_run_id: str | None, validation_code: str,
+        submission_options: tuple[dict[str, Any], ...] = (),
         ) -> reviewer_protocol_recovery.RecoveredReviewerResponse | None:
     """调用方持原 owner-stopped lease；纯读重验原协议误拒的全部来源。"""
     if not ledger.turns:
@@ -2233,10 +2236,13 @@ def _protocol_recovery_sources(
     recovered = reviewer_protocol_recovery.inspect_response(
         base, sid, ledger=ledger, parent=source,
         log_path=run_log_path(base, source_run_id),
-        profile=target.contract.profiles.commander, validation_code=validation_code)
+        profile=target.contract.profiles.commander, validation_code=validation_code,
+        submission_options=submission_options)
     if recovered is not None:
-        # 原字符串先经过唯一键解析；不能先重新序列化，把重复键的 last-wins 洗掉。
-        strict_document, _digest = _reviewer_response_document(recovered.raw_response)
+        # 按登记 policy 重验原字符串。尾部 option 包装恢复也必须先拒绝重复键，
+        # 不能先重新序列化，或把任意 Extra data 当成可忽略文本。
+        strict_document = reviewer_protocol_recovery.decode_recovered_response(
+            recovered, submission_options)
         if strict_document != recovered.document:
             raise reviewer_tasks.ReviewerTaskError('协议恢复的原始回答解析不一致')
     return recovered
@@ -2254,27 +2260,35 @@ def _recover_protocol_reviewer_action(
         return None
     ledger = reviewer_seat_ledger.read(
         base, sid, waiting_on=task.waiting_on, business_sha256=task.business_sha256)
-    if (ledger is None or len(ledger.turns) != 1
-            or ledger.turns[0].outcome != 'failed'
-            or len(ledger.turns[0].attempts) != 1
-            or ledger.turns[0].attempts[0].error_kind != 'protocol'):
+    if ledger is None or not reviewer_protocol_recovery.is_recovery_candidate(ledger):
         return None
     source = ledger.turns[0]
     if source.parent_run_id == current_parent_run_id:
         return None
     with admission.require_owner_stopped(base, source.parent_run_id):
-        if not reviewer_protocol_recovery.has_registered_rejection(
-                base, run_log_path(base, source.parent_run_id)):
+        sealed_ledger = reviewer_seat_ledger.read(
+            base, sid, waiting_on=task.waiting_on, business_sha256=task.business_sha256)
+        if sealed_ledger != ledger:
+            raise reviewer_tasks.ReviewerTaskError('协议恢复的原席位在取得 owner lease 前后漂移')
+        if (ledger.pending_correction is None
+                and not reviewer_protocol_recovery.has_registered_rejection(
+                    base, run_log_path(base, source.parent_run_id))):
             return None
         recovered = _protocol_recovery_sources(
             base, sid, ledger=ledger, current_parent_run_id=current_parent_run_id,
-            validation_code=epoch.code_version)
+            validation_code=epoch.code_version,
+            submission_options=task.submission_options)
         if recovered is None:
             return None
         original = recovered.document
         raw_action = original['action']
         if raw_action['payload'].get('review_token') != token:
             raise reviewer_tasks.ReviewerTaskError('协议恢复的原 review token 已变化')
+        source_turns = [row for row in ledger.turns
+                        if row.turn_id == recovered.proof.turn_id]
+        if len(source_turns) != 1:
+            raise reviewer_tasks.ReviewerTaskError('协议恢复的原席位轮次不唯一')
+        source = source_turns[0]
         record = ReviewerActionRecord(
             sid=sid, run_id=source.parent_run_id, epoch_id=source.epoch_id,
             waiting_on=task.waiting_on, business_sha256=task.business_sha256,
@@ -2291,14 +2305,62 @@ def _recover_protocol_reviewer_action(
             reviewer_protocol_recovery.archive_record(base, sid, record)
             return uploads.save_reviewer_action(base, sid, record)
 
-        action, _digest, path = _materialize_reviewer_response(
-            task, current, json.dumps(document, ensure_ascii=False),
+        action, _digest, path = _materialize_reviewer_document(
+            task, current, document,
+            response_digest=_reviewer_response_document(
+                json.dumps(document, ensure_ascii=False))[1],
             persist_validated=persist,
             preserve_validated=lambda candidate, digest: (
                 _preserve_validated_reviewer_residue(base, sid, candidate, digest)))
         if path is None:
             raise RuntimeError('协议恢复未产生 durable action')
         return _ReplayableReviewerAction(path=path, action=action, record=record)
+
+
+def _retire_landed_protocol_reviewer_action(
+        base: str, sid: str, *, path: Path, record: ReviewerActionRecord,
+        ) -> bool:
+    """审批已落而活动记录未退休的崩溃窗，只凭正式原决定和原来源补尾。"""
+    from novel.orchestrator import approvals
+
+    if (record.protocol_recovery is None
+            or record.surface not in {'design', 'structure'}
+            or record.payload is None
+            or not approvals.stage4_review_payload_landed(
+                base, sid, surface=record.surface, payload=record.payload)):
+        return False
+    with admission.require_owner_stopped(base, record.run_id):
+        ledger = reviewer_seat_ledger.read(
+            base, sid, waiting_on=record.waiting_on,
+            business_sha256=record.business_sha256)
+        if ledger is None:
+            raise reviewer_tasks.ReviewerTaskError('已落协议恢复决定的原席位账缺失')
+        # 原主体可能已返修换代。这份 option 只用于重验原公开回答与 proof，
+        # 不交当前 loader、不铸 permit；退休权来自上面正式审批的 exact payload。
+        original_options = ({
+            'id': f'approval:{record.surface}',
+            'exact_request': {
+                'schema': reviewer_tasks.REQUEST_SCHEMA,
+                'waiting_on': record.waiting_on,
+                'surface_seal': record.surface_seal,
+                'action': {'kind': 'approval', 'surface': record.surface,
+                           'payload': record.payload},
+            },
+        },)
+        recovered = _protocol_recovery_sources(
+            base, sid, ledger=ledger,
+            # 这里只补已提交决定的退休；新 run 换模型不能推翻旧提交事实。
+            # 复验原 parent 冻结 profile，不把当前配置当作旧证据的一部分。
+            current_parent_run_id=record.run_id,
+            validation_code=record.protocol_recovery.validation_code_version,
+            submission_options=original_options)
+        if recovered is None:
+            raise reviewer_tasks.ReviewerTaskError('已落协议恢复决定的原来源不闭合')
+        reviewer_protocol_recovery.validate_record(record, recovered)
+        reviewer_protocol_recovery.archive_record(base, sid, record)
+        # 删除失败须保持 unknown，不能吞成 warning 后另开模型。
+        uploads.discard_edit_plan(base, path)
+    return True
 
 
 def _find_replayable_reviewer_action(
@@ -2349,6 +2411,9 @@ def _find_replayable_reviewer_action(
         tuple[dict[str, Any], ...] | None, str | None,
     ]] = []
     for path, record in uploads.load_reviewer_actions(base, sid):
+        if _retire_landed_protocol_reviewer_action(
+                base, sid, path=path, record=record):
+            continue
         if record.waiting_on != waiting_on:
             continue
         is_stage5_batch = (
@@ -2454,7 +2519,8 @@ def _find_replayable_reviewer_action(
                 raise reviewer_tasks.ReviewerTaskError('协议恢复 record 的原席位账缺失')
             recovered = _protocol_recovery_sources(
                 base, sid, ledger=ledger, current_parent_run_id=current_parent_run_id,
-                validation_code=record.protocol_recovery.validation_code_version)
+                validation_code=record.protocol_recovery.validation_code_version,
+                submission_options=task.submission_options)
             if recovered is None:
                 raise reviewer_tasks.ReviewerTaskError('协议恢复 record 的来源已不适用')
             reviewer_protocol_recovery.validate_record(record, recovered)
@@ -3010,20 +3076,35 @@ def _materialize_reviewer_response(
         document, response_digest = _reviewer_response_document(response)
     except reviewer_tasks.ReviewerTaskError as exc:
         raise _ReviewerResponseTypedInvalid(str(exc)) from exc
-    candidate_digest = response_digest
-    if stage2_reviewer_wire.uses_compact_wire(task):
+    wire = (stage4_reviewer_wire if stage4_reviewer_wire.uses_compact_wire(task)
+            else stage2_reviewer_wire)
+    if wire.uses_compact_wire(task):
         try:
-            document = stage2_reviewer_wire.assemble(task, document)
-        except stage2_reviewer_wire.Stage2ReviewerWireError as exc:
+            document = wire.assemble(task, document)
+        except (stage2_reviewer_wire.Stage2ReviewerWireError,
+                stage4_reviewer_wire.Stage4ReviewerWireError) as exc:
             # compact wire 只是运输层；所有拒绝仍进入现役 ReviewerTaskError
             # 的有界纠错/持久拒因路径，不能越级变成 Supervisor runtime crash。
             raise _ReviewerResponseTypedInvalid(str(exc)) from exc
-        # provider compact 回答的 digest 负责拒因/no-progress 身份；residue 名称
-        # 则必须继续是它实际保存的 assembled full request 的内容地址。
-        candidate_digest = _sha256_bytes(json.dumps(
-            document, ensure_ascii=False, sort_keys=True,
-            separators=(',', ':'), allow_nan=False,
-        ).encode('utf-8') + b'\n')
+    return _materialize_reviewer_document(
+        task, current, document, response_digest=response_digest,
+        persist_validated=persist_validated, preserve_validated=preserve_validated)
+
+
+def _materialize_reviewer_document(
+        task: reviewer_tasks.ReviewerTask, current: OperatorNext,
+        document: dict[str, object], *, response_digest: str,
+        persist_validated: Callable[
+            [reviewer_tasks.ReviewerAction, str], Path | None] | None = None,
+        preserve_validated: Callable[[Path, str], Path] | None = None,
+        ) -> tuple[reviewer_tasks.ReviewerAction, str, Path | None]:
+    """可信组装与已验协议恢复共用最终 loader/durable/promote，不宽免 provider wire。"""
+    # provider 原回答摘要用于拒因/no-progress；residue 的内容地址只属于实际
+    # 保存的 canonical request。恢复已验 full request 不再套入新的 compact wire。
+    candidate_digest = _sha256_bytes(json.dumps(
+        document, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'), allow_nan=False,
+    ).encode('utf-8') + b'\n')
     candidate = _reviewer_candidate_path(task.request_path)
     validated = False
     promoted = False
@@ -3577,6 +3658,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     # 已通过 loader 的 approval 决定在盘上的记录；重放来的动作被拒时不得走纠错。
     pending_reviewer_record_path: Path | None = None
     pending_reviewer_replayed = False
+    pending_reviewer_protocol_recovery = False
     reviewer_correction_task: reviewer_tasks.ReviewerTask | None = None
     reviewer_correction_binding: tuple[str, str] | None = None
     reviewer_correction_reason: str | None = None
@@ -3809,6 +3891,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         nonlocal pending_reviewer_stage2_session_run_id
         nonlocal pending_reviewer_response_sha256
         nonlocal pending_reviewer_record_path, pending_reviewer_replayed
+        nonlocal pending_reviewer_protocol_recovery
         nonlocal reviewer_correction_task, reviewer_correction_binding
         nonlocal reviewer_correction_reason, reviewer_correction_request_sha256
         nonlocal reviewer_correction_attempts, stage2_commander_turns
@@ -3865,6 +3948,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             pending_reviewer_response_sha256 = None
             pending_reviewer_record_path = None
             pending_reviewer_replayed = False
+            pending_reviewer_protocol_recovery = False
             reviewer_correction_task = None
             reviewer_correction_binding = None
             reviewer_correction_reason = None
@@ -4129,6 +4213,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             seat_provider_session_id: str | None = None,
             seat_turns_recorded: int = 0,
             seat_subject_sha256: str | None = None,
+            seat_output_schema_sha256: str | None = None,
             close_seat: bool = True,
             ) -> CommanderTurnResult:
         nonlocal turn_index, latest_observation, latest_outcome
@@ -4188,7 +4273,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         if reviewer_prompt is not None:
             turn_invocation = _review_invocation(
                 epoch, reviewer_prompt, effective_provider_session_id,
-                output_schema=reviewer_output_schema)
+                output_schema=reviewer_output_schema,
+                expected_output_schema_sha256=(
+                    seat_output_schema_sha256 if seat_continuation else None))
         elif effective_provider_session_id is None:
             turn_invocation = epoch_invocations[epoch.epoch_id]
         else:
@@ -4909,7 +4996,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         else prov.CODE_UNKNOWN),
                     skill_sha256=current_session_skill_sha256,
                     prompt_sha256=seat.prompt_sha256,
-                    schema_sha256=schema_sha256,
+                    schema_sha256=seat.output_schema_sha256 or schema_sha256,
                     process_state=('ok' if seat.last_rc == 0 else 'failed'),
                     delivery_state=_session_delivery(outcome),
                     error_kind=error_kind or seat.last_error_kind,
@@ -5002,6 +5089,11 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         # 尚未来得及封 Stage2 席位账。先用 durable action + current approval/seen
         # 补完服务账并退休记录；不重复执行 approval，也不伪造一个 blocker。
         _reconcile_landed_stage2_final_actions(base, sid)
+        # Stage4 协议恢复审批也可能先落盘、再于活动记录退休前硬杀。
+        # 必须在 planner 越过旧 blocker 前后都能补尾，不能等旧 token 再出现。
+        for path, record in uploads.load_reviewer_actions(base, sid):
+            _retire_landed_protocol_reviewer_action(
+                base, sid, path=path, record=record)
         _reconcile_landed_stage5_reviewer_rewrite_action(
             base, sid, code=epoch.code_version,
             current_parent_run_id=run_id)
@@ -5388,6 +5480,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         nonlocal pending_reviewer_stage2_session_run_id
         nonlocal pending_reviewer_response_sha256
         nonlocal pending_reviewer_record_path, pending_reviewer_replayed
+        nonlocal pending_reviewer_protocol_recovery
         nonlocal reviewer_correction_task, reviewer_correction_binding
         nonlocal reviewer_correction_reason, reviewer_correction_request_sha256
         nonlocal reviewer_correction_attempts, stage2_commander_turns
@@ -5641,8 +5734,11 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             """Stage2 的模型调用预算是产品边界；确定性动作不占轮次。"""
             nonlocal latest_outcome, latest_rc, latest_error_kind
             nonlocal stage2_turn_session_run_id
-            reviewer_prompt = stage2_reviewer_wire.prompt_for(task, prompt)
-            reviewer_output_schema = stage2_reviewer_wire.output_schema_for(task)
+            wire = (stage4_reviewer_wire
+                    if stage4_reviewer_wire.uses_compact_wire(task)
+                    else stage2_reviewer_wire)
+            reviewer_prompt = wire.prompt_for(task, prompt)
+            reviewer_output_schema = wire.output_schema_for(task)
             if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
                 review_session_id = jobs.new_job_id()
                 stage2_turn_session_run_id = review_session_id
@@ -5757,13 +5853,19 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             # 同一 binding 内的纠错续用该席，纠错次数按 (sid, blocker, business)
             # 持久记账。surface 变化（如返修落盘）即新 binding、新席。
             seat = open_reviewer_seats.get(binding)
+            output_schema_digest = _prepare_output_schema(reviewer_output_schema)[2]
             if seat is None:
                 seat = _ReviewerSeat(
                     session_run_id=jobs.new_job_id(),
                     prompt_sha256=_sha256_bytes(reviewer_prompt.encode('utf-8')),
                     waiting_on=waiting_on,
-                    business_sha256=task.business_sha256)
+                    business_sha256=task.business_sha256,
+                    output_schema_sha256=output_schema_digest)
                 open_reviewer_seats[binding] = seat
+            elif seat.output_schema_sha256 != output_schema_digest:
+                # 纠正只改 prompt，不能在同一 provider session 偷换输出协议。
+                # 这一步在 reserve/Popen/wire 前，不消耗一个不可返还的席位。
+                raise UnsupportedRunMode('同一 Reviewer 席位的原生输出 schema 已变化')
             seat_turn_id = jobs.new_job_id()
             seat_reserved = False
             seat_reservation_error: BaseException | None = None
@@ -5813,6 +5915,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     seat_provider_session_id=seat.provider_session_id,
                     seat_turns_recorded=seat.turns_recorded,
                     seat_subject_sha256=seat.prompt_sha256,
+                    seat_output_schema_sha256=seat.output_schema_sha256,
                     close_seat=False,
                     launch_ticket=launch_ticket,
                     after_spawn_before_wire=reserve_seat_turn,
@@ -6107,6 +6210,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 pending_reviewer_stage2_session_run_id = None
                 pending_reviewer_record_path = None
                 pending_reviewer_replayed = False
+                pending_reviewer_protocol_recovery = False
                 return None
             action = pending_reviewer_action
             business_sha256 = pending_reviewer_business_sha256
@@ -6122,8 +6226,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             pending_reviewer_stage2_session_run_id = None
             record_path = pending_reviewer_record_path
             replayed = pending_reviewer_replayed
+            protocol_recovered = pending_reviewer_protocol_recovery
             pending_reviewer_record_path = None
             pending_reviewer_replayed = False
+            pending_reviewer_protocol_recovery = False
             if business_sha256 is None or source_task is None:
                 raise RuntimeError('pending reviewer action 缺业务主体或 workpack')
             if (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
@@ -6464,6 +6570,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     _reconcile_landed_stage5_reviewer_rewrite_action(
                         base, sid, code=epoch.code_version,
                         current_parent_run_id=run_id)
+                elif protocol_recovered:
+                    uploads.discard_edit_plan(base, record_path)
                 else:
                     _discard_reviewer_action_record(base, record_path)
             if (result.exit_code == 2
@@ -6512,7 +6620,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 # 解释为这份 durable 决定在当前 surface 上真正
                 # 被 canonical 拒绝并消费。binding 变化分支已在上方
                 # 返回，记录必须留给新窗口按 business identity 复验。
-                if record_path is not None and not stage5_disposition_action:
+                if (record_path is not None and not stage5_disposition_action
+                        and not protocol_recovered):
                     _discard_reviewer_action_record(base, record_path)
             elif result.exit_code == 2 and record_path is not None:
                 # Stage2 的决定有独立书内 durable/correction 路，
@@ -6520,7 +6629,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 _discard_reviewer_action_record(base, record_path)
             if landed(result.exit_code):
                 completed_reviewer_business_actions.add(business_action)
-                clear_pending_correction(source_task)
+                if not protocol_recovered:
+                    # 协议恢复 proof 绑定原席位全字节；成功也不能改写旧 pending。
+                    clear_pending_correction(source_task)
                 _close_reviewer_seat(binding)
             elif result.exit_code == 2 and replayed:
                 # Stage2 的纠错包自足且每轮本来就开新会话，所以重放决定被拒后可
@@ -6895,6 +7006,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 replay.record.reviewer_session_run_id)
             pending_reviewer_record_path = replay.path
             pending_reviewer_replayed = True
+            pending_reviewer_protocol_recovery = (
+                replay.record.protocol_recovery is not None)
             return CommanderTurnResult(
                 exit_code=0, provider_session_id=provider_session_id,
                 continue_ready=True, outcome=latest_outcome)

@@ -373,7 +373,18 @@ batch，只走 Stage2 定向恢复与 Pro 重建；
 它持原 parent 的 owner-stopped lease，核对原席位、会话、费用、代码/schema/profile 与完整公开协议
 日志，再走当前严格 decoder 和 typed loader；原判断不改写，失败账与已用席位不返还。
 合法回答先永久保存复验凭据，再按现有 durable action → canonical approval 主路恢复。
-仅登记 `codex-recovered-transport-notice-v1`，不适用于 Stage2、node、typed stop、未完成响应或真实工具调用。
+传输通知恢复登记为 `codex-recovered-transport-notice-v1`。
+
+旧 Stage4 已完成的 design/structure 审阅若因完整 JSON 后多出同一 option 的
+`,"id":"approval:<surface>"}` 耗尽订正，另由 `codex-redundant-option-suffix-v1` 自动恢复。
+Supervisor 只取最新 pending 拒因绑定的那一轮，严格核对完整原回答、重复键、精确尾部与当前
+option，以及 seat/session/cost 的原始证据；不挑更早的回答、不补字段、不更改决定。
+原席位、拒因与费用记录不变，恢复后由正式审批和 operator 调度后续 repair/replan。
+审批后崩溃留下的活动记录，由下次 Supervisor 根据正式审批历史中的同一完整决定和原来源自动退休，
+无需人工删除；来源或正式回执不闭合时继续保留证据。
+新 Stage4 审阅使用原生结构化输出与可信组装；这条旧响应恢复不放宽普通 JSON 解析。
+
+两条政策都不适用于 Stage2、node、typed stop、未完成响应或真实工具调用。
 材料缺失、冲突或审批主体已变时仍安全停止。交互式 root 只修复代码并从前端继续，不复制日志回答
 手工代批、不读取 CLI 私有 rollout、不删除席位，也不续接已结束 epoch 的 provider session。
 

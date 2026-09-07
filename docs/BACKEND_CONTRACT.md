@@ -941,7 +941,7 @@ Stage5/6 从各自已经读取的 Stage1 文本即时计算确定性机械读数
 > `if/else` 选先遇到的一份。
 >
 > **`R-11.22` 有两层响应载体，不能把 transport 当 canonical action。** `submission_options[].exact_request`
-> 始终是 Supervisor 最终交给现役 loader 的完整 canonical request；只有 headless Stage2 immutable task
+> 始终是 Supervisor 最终交给现役 loader 的完整 canonical request；对 Stage2，只有 headless immutable task
 > 的唯一 submission option 恰为 `stage2.global --apply-edit` 时，provider response 才使用
 > `novel-stage2-reviewer-delta-v2` compact wire。同一 task 还开放 review-decisions、隔离或其他合法
 > option 时必须继续使用完整 action response，transport 优化不得让任何可执行分支失去可达性。
@@ -979,6 +979,27 @@ Stage5/6 从各自已经读取的 Stage1 文本即时计算确定性机械读数
 > `::preflight_global_edit` 这一 producer 判据生成。Agent 必须先保存 full ReviewerActionRecord 并把原席
 > finish 为 ok/0，再在 canonical Executor 前调用预检；业务拒绝以原 session/provider-response digest
 > 持久化后退休 action，预检读盘/身份/审计异常则 exit 70 并保留 action，不能丢回答或启动 Executor。
+>
+> **`R-11.21` / `R-11.25` 的 Stage4 审阅运输与恢复。**Stage4A design、binding-resolution、
+> B→A structure-replan 与 Stage4B structure 的所有合法 submission option，统一由现役 typed model
+> 和当前 immutable template 构造 `novel-stage4-reviewer-rulings-v1` 原生输出 schema。模型只提交
+> option 选择、理由、决定和 typed constraints；actor、review token、run 身份、章全集与顺序由
+> Supervisor 从同一 exact request 注入。逐章决定使用固定章号键，不得漏章或重复；stop 出口仍
+> 保留。schema SHA 贯穿真实 CLI invocation、同席 resume 与 session 账；最终仍经同一
+> `reviewer_tasks.load_action`、durable action、canonical approval 和 producer 守卫，不兼容
+> provider 返回的旧 full wrapper。已验 durable/canonical request 的重放不再次经过 compact wire。
+>
+> 对旧 Stage4 Codex 已结束审阅，另登记 `codex-redundant-option-suffix-v1` 零模型恢复政策：
+> 仅接受完整且无重复键的 canonical JSON object 后，恰好多出当前同一 approval option 的
+> `,"id":"approval:<surface>"}`；不补字段、不修判断、不接受任意尾文或第二动作。必须按
+> seat ordinal 选最新 pending 拒因对应的唯一完整回答，逐项闭合 owner-stopped、parent/epoch、
+> seat/session/cost、provider/profile/code/schema、原回答 digest 和服务公开协议日志；当前
+> business/review token 与原决定不变才可采用。原席位、拒因、成本账与模型判断全部保留，
+> 不返还预算、不续旧 provider；当前 typed loader 通过后，恢复 proof 先永久归档、再 durable、
+> 最后交 canonical approval。审批成功也不清原席位的 pending 拒因；若崩在正式审批落盘与活动
+> 记录退休之间，planner 前以正式审批当前或历史中的 exact payload 与原来源 proof 复验后
+> 严格退休，不得仅按 token 变化删记录。重启或晋升失败后重验原来源，冲突保留证据并停止。该政策只补充已登记
+> 的传输通知误拒恢复，不放宽普通 JSON parser，也不把模型新判断放进确定性恢复。
 >
 > **`R-11.22` 的整账归档不是普通预算重置。**只有已经终态、且其冻结 reviewer contract / output
 > shape 被后来已提交的契约证明无法表达现役 typed request 的旧账，才可由 Commander 上下文之外的

@@ -1277,7 +1277,10 @@ class Stage2PrereviewRecord(FrozenModel):
 class ReviewerProtocolRecoveryProof(FrozenModel):
     """已结束 Commander 的已知协议误拒经零模型复验后留下的来源证明。"""
 
-    policy: Literal['codex-recovered-transport-notice-v1'] = (
+    policy: Literal[
+        'codex-recovered-transport-notice-v1',
+        'codex-redundant-option-suffix-v1',
+    ] = (
         'codex-recovered-transport-notice-v1')
     session_run_id: str = Field(min_length=1)
     turn_id: str = Field(min_length=1)

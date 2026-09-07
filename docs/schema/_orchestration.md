@@ -906,15 +906,22 @@ approval 形状携带 `surface / payload / review_token`，node 形状通常携�
 形状；retain batch 与 reviewer rewrite request 都以专用 Review/contract/seat/response 字段和 payload 内
 完整有序双 SHA 自证。
 
-普通 token-bound approval 可额外携带 `protocol_recovery`；缺省为 null，现役唯一策略为
-`codex-recovered-transport-notice-v1`。它绑定原 session/turn/attempt/provider、parent/seat/session/cost/
+普通 token-bound approval 可额外携带 `protocol_recovery`；缺省为 null，现役策略为
+`codex-recovered-transport-notice-v1` 与 `codex-redundant-option-suffix-v1`。
+它们绑定原 session/turn/attempt/provider、parent/seat/session/cost/
 public log/stdout/raw response/canonical response 的 SHA，以及执行机械复验的干净代码 SHA。
-仅恢复被旧驱动误当成工具的已知传输切换通知：原单次首审必须已失败闭账，服务日志却有唯一完整
+前者仅恢复被旧驱动误当成工具的已知传输切换通知：原单次首审必须已失败闭账，服务日志却有唯一完整
 成功终态，当前无工具 decoder、同业务与同 review token、现役 typed loader 全部通过。
+后者只恢复旧 Stage4 design/structure 完整 canonical JSON 后恰好多出的同一 option 尾部
+`,"id":"approval:<surface>"}`；只取最新 pending 拒因对应的原回答，关闭式核对每轮
+seat/session/cost 与完整公开日志，不接受重复键、任意尾文、补字段或选择更早裁决。
 原 actor/reason/typed 判断不变，仅重铸运输 seal；Stage2、node 与 typed stop 不走此路。
-复验先把完整 record 内容寻址归档到 `_service/runs/<sid>/reviewer_protocol_recoveries/`，再保存活动
+当前 typed loader 通过后，先把完整 record 内容寻址归档到 `_service/runs/<sid>/reviewer_protocol_recoveries/`，再保存活动
 action 并交 canonical approval。归档不授予执行权，也不参与自动重放扫描；活动记录退休后它仍保留。
 重放必须再读原始来源核对 proof；证据缺失、变动或当前主体不符时保留记录并停止，不清席位或重开模型。
+canonical approval 成功也不改原席位或 pending 拒因。若活动记录尚未退休即崩溃，planner 前只凭正式
+Stage4 审批当前/历史中的完整 exact payload 和原来源 proof 复验后严格退休；正式审批未知、决定不同
+或删除失败均保留记录并停止，不能让残留记录反过来阻塞已证明的新主体，也不能凭新 token 推测已落盘。
 
 Stage2 `node=stage2.global` 与
 `surface=stage2_final_review` 的新记录还必须成组携带：

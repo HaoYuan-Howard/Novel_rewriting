@@ -723,10 +723,14 @@ def _planned(base: str | os.PathLike[str], sid: str) -> list[int] | None:
     return state.planned_chapters(ArtifactStore(ctx))
 
 
-def _read_raw(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV7:
+def _read_raw(
+    base: str | os.PathLike[str], sid: str, *, require_existing: bool = False,
+) -> _ApprovalRecordV7:
     paths.resolve_novel_dir(base, sid)
     p = _path(base, sid)
     if not p.is_file():
+        if require_existing:
+            raise HumanEditProtected('正式审批在已提交回执复验期间消失，不能推断未提交')
         return _fresh_record(sid, _planned(base, sid))
     try:
         record = _ApprovalRecordV7.model_validate_json(p.read_text(encoding='utf-8'))
@@ -2841,6 +2845,67 @@ def _stored_design_is_self_consistent(decision: _StoredDesignHistory) -> bool:
         decision.decision_sha256 == digest
         and decision.proof.decision_sha256 == digest
     )
+
+
+def stage4_review_payload_landed(
+    base: str | os.PathLike[str], sid: str, *,
+    surface: Literal['design', 'structure'], payload: dict[str, Any],
+) -> bool:
+    """只读证明完整外部 Stage4 回执曾正式落盘，供运输记录确定性退休。
+
+    这是历史提交事实，不是当前批准：修后候选、token 或 code 改变都不会抹去
+    已提交回执。逐值比较原 token、actor、理由、完整章集与全部 typed 约束，
+    并重验正式记录自己的 decision/proof 联结；不能只按摘要展示行或新主体推测。
+    缺文件、没有 exact 回执返回 False；盘面或匹配证据损坏仍抛出异常，不能把
+    unknown 当成未提交。此入口不读当前小说产物、不补审批、不创建锁文件。
+    """
+    model = {'design': DesignReviewRequest, 'structure': StructureApprovalRequest}.get(surface)
+    if model is None:
+        raise HumanEditProtected('只接受 Stage4 design/structure 已落盘回执查询')
+    try:
+        request = model.model_validate(payload, strict=True)
+    except ValidationError as exc:
+        raise HumanEditProtected('待核 Stage4 外部回执不是现役 typed payload') from exc
+    expected = request.model_dump(mode='json')
+    if _decision_sha256(expected) != _decision_sha256(payload):
+        raise HumanEditProtected('待核 Stage4 回执需要补字段或归一，不能冒充 exact 提交')
+    with _LOCK:
+        target = _path(base, paths.check_sid(sid))
+        if target.is_symlink():
+            raise HumanEditProtected('Stage4 正式审批来源不得是符号链接')
+        if not target.exists():
+            return False
+        if not target.is_file():
+            raise HumanEditProtected('Stage4 正式审批来源不是普通文件')
+        record = _read_raw(base, sid, require_existing=True)
+        if surface == 'design':
+            matched = [stored for stored in record.design_history
+                       if _stored_design_external_payload(stored) == expected]
+            for stored in matched:
+                expected_artifacts = {STAGE4_BLIND_CANDIDATE}
+                if stored.binding_infeasibility is not None:
+                    expected_artifacts.add(STAGE4_EVIDENCE_BINDING)
+                if (not _stored_design_is_self_consistent(stored)
+                        or expected['review_token'] != _design_review_token(
+                            stored.aggregate_subject_sha256)
+                        or set(stored.proof.artifacts) != expected_artifacts
+                        or stored.proof.artifacts.get(STAGE4_BLIND_CANDIDATE)
+                        != stored.candidate_sha256):
+                    raise HumanEditProtected('匹配的 Stage4A 已落盘回执与原主体/proof 不闭合')
+            return bool(matched)
+        matched_structure = [stored for stored in record.structure_history
+                             if _structure_decision_payload(stored)
+                             == _structure_decision_payload(request)]
+        for stored in matched_structure:
+            # 已显式迁入 v7 的旧 plan-only proof 仍能证明历史提交，绝不因此
+            # 获得当前 B 放行权；当前批准仍由 _structure_view 的 freshness 决定。
+            if (set(stored.proof.artifacts) not in (
+                    {STAGE4_PLAN_CHAPTERS},
+                    {STAGE4_PLAN_CHAPTERS, STAGE4_EVIDENCE_BINDING})
+                    or stored.proof.decision_sha256 != _decision_sha256(
+                        _structure_decision_payload(stored))):
+                raise HumanEditProtected('匹配的 Stage4B 已落盘回执与原主体/proof 不闭合')
+        return bool(matched_structure)
 
 
 def _accepted_design_strategy_source(

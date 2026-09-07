@@ -522,7 +522,7 @@ def test_design_option_publishes_constraint_semantics_and_validated_shapes(
     current = _current(queue.WAITING_ON_STAGE4_DESIGN_REVIEW)
     monkeypatch.setattr(
         reviewer_tasks, 'DesignReviewTemplate',
-        SimpleNamespace(model_validate=lambda raw: raw))
+        SimpleNamespace(model_validate=lambda raw: SimpleNamespace(chapters=[])))
     monkeypatch.setattr(
         reviewer_tasks, '_compact_design_payload',
         lambda _source: {
@@ -710,7 +710,7 @@ def test_stage4_structure_replan_offers_bound_stop_without_weakening_design(
     current = _current(queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN)
     monkeypatch.setattr(
         reviewer_tasks, 'DesignReviewTemplate',
-        SimpleNamespace(model_validate=lambda raw: raw))
+        SimpleNamespace(model_validate=lambda raw: SimpleNamespace(chapters=[])))
     monkeypatch.setattr(
         reviewer_tasks, '_compact_design_payload',
         lambda _source: {
@@ -766,7 +766,7 @@ def test_structure_replan_prompt_never_turns_read_only_rows_into_paid_action(
         reviewer_tasks, '_review_materials', lambda *_args, **_kwargs: {})
     monkeypatch.setattr(
         reviewer_tasks, 'DesignReviewTemplate',
-        SimpleNamespace(model_validate=lambda raw: raw))
+        SimpleNamespace(model_validate=lambda raw: SimpleNamespace(chapters=[])))
     monkeypatch.setattr(
         reviewer_tasks, '_compact_design_payload',
         lambda _source: {

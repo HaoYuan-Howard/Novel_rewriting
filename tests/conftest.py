@@ -33,6 +33,8 @@ _WINDOWS_MAX_PATH = 260
 # 反向扫描调用面，新增模块漏登记会直接失败。
 _SERIAL_TEST_MODULES = frozenset({
     'tests/test_reviewer_protocol_recovery.py',
+    'tests/test_reviewer_suffix_recovery.py',
+    'tests/test_stage4_reviewer_integration.py',
     'tests/test_agent.py',
     'tests/test_agent_drivers.py',
     'tests/test_agent_supervisor.py',

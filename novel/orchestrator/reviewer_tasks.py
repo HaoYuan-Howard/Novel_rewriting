@@ -987,6 +987,25 @@ def _compact_design_payload(template: Any) -> dict[str, Any]:
     return payload
 
 
+def _design_constraint_reference_closure(
+    template: DesignReviewTemplate,
+) -> dict[str, dict[str, list[str]]]:
+    """只投影同一 typed subject 的引用域，不改变业务 token 或审批判据。"""
+    return {
+        str(row.output_ordinal): {
+            'scene_refs': [scene.candidate_scene_id
+                           for scene in row.subject.chapter.scenes],
+            'fact_aliases': sorted({fact.fact_alias
+                                    for fact in row.subject.blind_truth.facts}),
+            'participant_aliases': sorted({
+                alias for fact in row.subject.blind_truth.facts
+                for alias in fact.participant_aliases
+            }),
+        }
+        for row in template.chapters
+    }
+
+
 def _compact_stage5_payload(template: Stage5ClosureTemplate) -> dict[str, Any]:
     """只投影 closure POST 的 token/targets/rulings，不复制 finding SHA。"""
     # 先用真正写入 model 铸出一份合法键集，再把人审值
@@ -1409,9 +1428,14 @@ def _canonicalize_design_review_payload(value: Any) -> Any:
                         constraint.get('chapter_ordinals'), list):
                     constraint['chapter_ordinals'] = sorted(
                         constraint['chapter_ordinals'],
-                        key=lambda item: json.dumps(
-                            item, ensure_ascii=False, sort_keys=True,
-                            separators=(',', ':'), allow_nan=False))
+                        # 章号按阅读序排序；字符串序会把合法 [2, 10]
+                        # 变为 [10, 2]，在 typed loader 上永久拒绝 replan。
+                        # 非整数仍保留给 model 拒绝，不把它们强制转成章号。
+                        key=lambda item: (
+                            (0, item) if isinstance(item, int)
+                            and not isinstance(item, bool) else (1, json.dumps(
+                                item, ensure_ascii=False, sort_keys=True,
+                                separators=(',', ':'), allow_nan=False))))
             strategy['replan_constraints'] = canonical_rows(constraints)
     chapters = payload.get('chapters')
     if isinstance(chapters, list):
@@ -2329,6 +2353,8 @@ def _submission_options(
                     DESIGN_STRATEGY_REPLAN_CONSTRAINTS),
                 'chapters[].decision': list(DESIGN_CHAPTER_DECISIONS),
                 'chapters[].constraints[].code': list(DESIGN_REPAIR_CODES),
+                'chapters[].constraints[].reference_closure': (
+                    _design_constraint_reference_closure(source)),
                 # 语义与示例随包下发，reviewer 不必翻源码/测试猜字段；示例只在
                 # 这里，不进 exact_request，占位 alias 仍须换成工作包里的真 alias。
                 'chapters[].constraints[].semantics': dict(

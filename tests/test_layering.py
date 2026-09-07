@@ -203,6 +203,9 @@ _JSON_READ_ALLOWED = {
         'Commander output schema 的 JSON 解码只规范化调用方已在内存中的传输契约；'
         '它不读取盘上小说产物、不会形成 provenance 输入，真正 schema 仍由现役 '
         'Pydantic/portable validator 复验'),
+    'novel/orchestrator/stage4_reviewer_wire.py': (
+        '只解析内存中的 Reviewer 传输回答并拒绝重复键，不读取盘上小说产物；'
+        '按冻结模板组装的 canonical request 仍由现役 typed loader 复验并经 store 落盘'),
     'novel/orchestrator/jobs.py': (
         '作业记录**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它。'
         '它是 append-only 的事件流（`_service/jobs.jsonl`），'

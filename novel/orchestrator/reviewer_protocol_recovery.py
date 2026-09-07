@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""复验已完成却被旧 Codex 工具守卫误拒的传输切换响应。
+"""零模型复验已结束 Commander 的登记协议故障。
 
 只读取本服务保留的协议日志，不读取 CLI 私有 rollout，不调用模型、不改旧账。
-这不是一般的失败重试：唯一允许的旧拒因是 error item 误判，且当前驱动必须
-重新证明单次已完成、无工具的响应。调用方还须持 source owner-stopped lease，
+这不是一般的失败重试：只接受传输 error item 误判，或 Stage4 完整请求后精确
+重复 option id 的尾部包装错误。当前驱动必须重新证明已完成、无工具的响应。
+后者按席位顺序复验全部计费轮，只采用最新轮，绝不挑选历史有利决定或返还预算。
+调用方还须持 source owner-stopped lease，
 按当前业务/token 走 typed loader，先 durable 再交 canonical approval。
 """
 from __future__ import annotations
@@ -15,8 +17,11 @@ import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
+from pydantic import ValidationError
+
+from contracts.schema.api import DesignReviewRequest, StructureApprovalRequest
 from contracts.schema.orchestration import (
     AgentProfile, AgentRunRecord, ReviewerActionRecord,
     ReviewerProtocolRecoveryProof, ReviewerSeatLedger,
@@ -25,12 +30,20 @@ from novel import agent_session_audit, paths
 from novel.agents.base import decode_wire_json
 from novel.commanders.codex import CodexCommanderDriver
 from novel.llm.ledger import ledger_path as cost_ledger_path, read_jsonl_rows
-from novel.orchestrator import reviewer_seat_ledger, reviewer_tasks
+from novel.orchestrator import queue, reviewer_seat_ledger, reviewer_tasks
 
 
 _LEGACY_REJECTION = (
     'novel.commanders.base.CommanderProtocolError: '
     'Codex structured reviewer 触发了禁止的工具/未知 item：error')
+_SUFFIX_REJECTION = 'Commander 最终回答不是合法的裸 JSON object'
+_SUFFIX_POLICY = 'codex-redundant-option-suffix-v1'
+_STAGE4_SURFACES = {
+    queue.WAITING_ON_STAGE4_DESIGN_REVIEW: 'design',
+    queue.WAITING_ON_STAGE4_BINDING_RESOLUTION: 'design',
+    queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN: 'design',
+    queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW: 'structure',
+}
 
 
 def _digest(raw: bytes) -> str:
@@ -63,6 +76,78 @@ def has_registered_rejection(base: str, log_path: Path) -> bool:
     if not log_path.exists():
         return False
     return _LEGACY_REJECTION in _plain_bytes(base, log_path).decode('utf-8').splitlines()
+
+
+def is_recovery_candidate(ledger: ReviewerSeatLedger) -> bool:
+    """只做无 I/O 路由；命中后仍须检查原日志、审计、成本与当前 typed option。"""
+    pending = ledger.pending_correction
+    if (ledger.waiting_on in _STAGE4_SURFACES and ledger.turns
+            and pending is not None and pending.reason == _SUFFIX_REJECTION):
+        latest = ledger.turns[-1]
+        return (pending.source_turn_id == latest.turn_id
+                and latest.outcome == 'ok' and latest.exit_code == 0)
+    if len(ledger.turns) != 1 or pending is not None:
+        return False
+    turn = ledger.turns[0]
+    return (turn.purpose == 'review' and turn.outcome == 'failed'
+            and turn.exit_code == 70 and turn.provider_response_sha256 is None
+            and len(turn.attempts) == 1 and turn.attempts[0].error_kind == 'protocol')
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    document: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in document:
+            _refuse('原 JSON 包含重复 object key')
+        document[key] = value
+    return document
+
+
+def _suffix_document(
+    response: str, submission_options: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    """只去掉精确登记的冗余 option 尾巴，不补字段、不修语义、不截取候选。"""
+    source = response.strip()
+    try:
+        document, end = json.JSONDecoder(object_pairs_hook=_unique_object).raw_decode(source)
+    except (ValueError, TypeError) as exc:
+        _refuse(f'原回答没有唯一完整 JSON 前缀（{type(exc).__name__}）')
+    if (not isinstance(document, dict)
+            or set(document) != {'schema', 'waiting_on', 'surface_seal', 'action'}
+            or document.get('schema') != reviewer_tasks.REQUEST_SCHEMA
+            or not isinstance(document.get('surface_seal'), str)
+            or not document['surface_seal']):
+        _refuse('原回答前缀不是完整 typed wrapper')
+    waiting_on = document.get('waiting_on')
+    surface = _STAGE4_SURFACES.get(waiting_on) if isinstance(waiting_on, str) else None
+    action = document.get('action')
+    if (surface is None or not isinstance(action, dict)
+            or set(action) != {'kind', 'surface', 'payload'}
+            or action.get('kind') != 'approval' or action.get('surface') != surface):
+        _refuse('冗余 option 恢复只接受 Stage4 当前 approval')
+    option_id = f'approval:{surface}'
+    if source[end:] != ',"id":' + json.dumps(option_id) + '}':
+        _refuse('原回答尾部不是精确登记的冗余 option id')
+    options = [option for option in submission_options if option.get('id') == option_id]
+    if len(options) != 1:
+        _refuse('当前 Stage4 approval option 不唯一')
+    expected = options[0].get('exact_request')
+    if (not isinstance(expected, dict)
+            or expected.get('schema') != document['schema']
+            or expected.get('waiting_on') != document['waiting_on']
+            or not isinstance(expected.get('action'), dict)
+            or expected['action'].get('kind') != 'approval'
+            or expected['action'].get('surface') != surface):
+        _refuse('冗余 option 与当前 exact request 不匹配')
+    try:
+        model = DesignReviewRequest if surface == 'design' else StructureApprovalRequest
+        canonical_payload = model.model_validate(action['payload']).model_dump(mode='json')
+        if _canonical(canonical_payload) != _canonical(action['payload']):
+            _refuse('原回答 payload 需要补字段或改变值，超出尾部包装恢复范围')
+        _canonical(document)  # NaN/Infinity 等非 JSON 取值同样不得恢复。
+    except (ValidationError, TypeError, ValueError) as exc:
+        _refuse(f'原回答前缀没有通过现役 Stage4 typed 形状（{type(exc).__name__}）')
+    return document
 
 
 def _single_attempt_stream(raw: bytes, provider_id: str) -> str:
@@ -112,12 +197,214 @@ class RecoveredReviewerResponse:
     raw_response: str
 
 
+def decode_recovered_response(
+    recovered: RecoveredReviewerResponse,
+    submission_options: Sequence[dict[str, Any]] = (),
+) -> dict[str, Any]:
+    """durable 重放时从原 wire 再解码，不把已恢复 document 当独立证据。"""
+    if recovered.proof.policy == _SUFFIX_POLICY:
+        document = _suffix_document(recovered.raw_response, submission_options)
+    else:
+        try:
+            document = json.JSONDecoder(object_pairs_hook=_unique_object).decode(
+                recovered.raw_response)
+        except (TypeError, ValueError) as exc:
+            _refuse(f'原回答不是严格 JSON（{type(exc).__name__}）')
+        if not isinstance(document, dict):
+            _refuse('原回答不是 JSON object')
+    if (_canonical(document) != recovered.proof.response_sha256
+            or document != recovered.document
+            or _digest(recovered.raw_response.encode('utf-8'))
+            != recovered.proof.raw_response_sha256):
+        _refuse('重新解码的回答与恢复 proof 不一致')
+    return document
+
+
+def _seat_streams(raw: bytes, provider_id: str, count: int) -> list[str]:
+    """同 provider 的全部调用必须与席位轮次一一对应，不能按内容挑选回答。"""
+    blocks: list[list[str]] = [[]]
+    for line in raw.decode('utf-8').splitlines():
+        if not line.strip():
+            continue
+        if line.startswith('$ '):
+            blocks.append([])
+        blocks[-1].append(line)
+    streams: list[str] = []
+    for block in blocks:
+        lines = [block[i + 1] for i, line in enumerate(block[:-1])
+                 if line == '[stdout protocol]' and block[i + 1] != '[stdout protocol]']
+        events = [decode_wire_json(line) for line in lines]
+        if not any(isinstance(event, dict)
+                   and event.get('type') == 'thread.started'
+                   and event.get('thread_id') == provider_id for event in events):
+            continue
+        # 先按可观察 provider 选调用块，再严格复验整个块的每一行。
+        try:
+            events = [json.JSONDecoder(object_pairs_hook=_unique_object).decode(line)
+                      for line in lines]
+        except (TypeError, ValueError) as exc:
+            _refuse(f'原协议事件不是严格 JSON（{type(exc).__name__}）')
+        if (sum(isinstance(e, dict) and e.get('type') == 'thread.started'
+                for e in events) != 1
+                or sum(isinstance(e, dict) and e.get('type') == 'turn.completed'
+                       for e in events) != 1
+                or sum(isinstance(e, dict) and e.get('type') == 'item.completed'
+                       and isinstance(e.get('item'), dict)
+                       and e['item'].get('type') == 'agent_message'
+                       for e in events) != 1):
+            _refuse('原调用缺唯一 provider、完成终态或最终回答')
+        streams.append('\n'.join(lines) + '\n')
+    if len(streams) != count:
+        _refuse('原 provider 调用数与 reviewer 席位轮数不相等')
+    return streams
+
+
+def _inspect_suffix_response(
+    base: str, sid: str, *, ledger: ReviewerSeatLedger,
+    parent: AgentRunRecord, log_path: Path, profile: AgentProfile,
+    validation_code: str, submission_options: Sequence[dict[str, Any]],
+) -> RecoveredReviewerResponse:
+    pending = ledger.pending_correction
+    assert pending is not None
+    turn = ledger.turns[-1]
+    if (ledger.sid != sid or parent.start.sid != sid
+            or parent.ended is None or parent.active_epoch_id is not None
+            or parent.exit_code != 2 or parent.contract is None
+            or parent.contract.profiles.commander != profile or profile.driver != 'codex'
+            or pending.source_turn_id != turn.turn_id
+            or pending.session_run_id != turn.session_run_id
+            or any(row.parent_run_id != parent.run_id or row.epoch_id != turn.epoch_id
+                   or row.outcome != 'ok' or row.exit_code != 0
+                   or row.finished_at is None or len(row.attempts) != 1
+                   or row.provider_response_sha256 is not None for row in ledger.turns)):
+        _refuse('原 Stage4 parent/epoch/席位未证明已结束的裸 JSON 拒绝')
+    epochs = [epoch for epoch in parent.epochs if epoch.epoch_id == turn.epoch_id]
+    if len(epochs) != 1:
+        _refuse('原 epoch 不唯一')
+    epoch = epochs[0]
+    events = [event for event in agent_session_audit.read_events(base)
+              if event.session_run_id == turn.session_run_id]
+    expected_kinds = ['started', *['attempt', 'turn'] * len(ledger.turns), 'ended']
+    if [event.kind for event in events] != expected_kinds:
+        _refuse('原 session 事件与完整席位轮次不一一对应')
+    sessions = agent_session_audit.fold(events)
+    if len(sessions) != 1:
+        _refuse('原 logical session 不唯一')
+    session = sessions[0]
+    start, end = session.start, session.end
+    if (end is None or end.process_state != 'ok' or end.delivery_state != 'blocked'
+            or end.error_kind != 'commander_reviewer_request'
+            or end.provider_session_id != pending.provider_session_id
+            or end.end_code_version != epoch.code_version
+            or start.prompt_sha256 is None or start.schema_sha256 is None
+            or end.prompt_sha256 != start.prompt_sha256):
+        _refuse('原 session 缺完整已结束的 typed 拒绝终态')
+    for event in events:
+        if (event.parent_run_id != parent.run_id or event.role != 'commander'
+                or event.node is not None or event.profile != profile
+                or event.requested_model != profile.model
+                or event.requested_effort != profile.reasoning_effort
+                or event.protocol_version != 'codex-jsonl-v1'
+                or event.start_code_version != epoch.code_version
+                or event.skill_sha256 != epoch.skill_sha256
+                or event.subject_sha256 != start.prompt_sha256
+                or event.schema_sha256 != start.schema_sha256):
+            _refuse('原 session 请求、schema、代码或 profile 身份漂移')
+    attempt_ids = {row.attempts[0].attempt_id for row in ledger.turns}
+    costs = [row for row in read_jsonl_rows(cost_ledger_path(base))
+             if row.get('session_run_id') == turn.session_run_id
+             or row.get('attempt_id') in attempt_ids]
+    if len(costs) != len(ledger.turns):
+        _refuse('原成本与席位轮数不一一对应')
+    raw = _plain_bytes(base, log_path)
+    streams = _seat_streams(raw, pending.provider_session_id, len(ledger.turns))
+    responses: list[str] = []
+    ordered_costs: list[dict[str, Any]] = []
+    driver = CodexCommanderDriver(executable='codex.exe')
+    for index, (seat, stdout) in enumerate(zip(ledger.turns, streams, strict=True)):
+        attempt = seat.attempts[0]
+        audit_attempt, audit_turn = session.attempts[index], session.turns[index]
+        if (attempt.exit_code != 0 or attempt.error_kind is not None
+                or attempt.finished_at is None or not attempt.wire_evidence
+                or attempt.provider_session_id != pending.provider_session_id
+                or audit_attempt.attempt_id != attempt.attempt_id
+                or audit_turn.attempt_id != attempt.attempt_id
+                or audit_attempt.provider_session_id != pending.provider_session_id
+                or audit_turn.provider_session_id != pending.provider_session_id
+                or audit_turn.turn_index != seat.ordinal
+                or audit_attempt.error_kind is not None or audit_turn.error_kind is not None
+                or audit_attempt.usage is None or audit_attempt.usage != audit_turn.usage
+                or audit_attempt.prompt_sha256 is None
+                or audit_attempt.prompt_sha256 != audit_turn.prompt_sha256
+                or audit_attempt.schema_sha256 != audit_turn.schema_sha256
+                or audit_attempt.ts != attempt.finished_at
+                or audit_turn.ts > seat.finished_at):
+            _refuse('原 attempt/turn/provider/请求/计量与席位不一致')
+        matching_costs = [cost for cost in costs if cost.get('attempt_id') == attempt.attempt_id]
+        if len(matching_costs) != 1:
+            _refuse('原成本 attempt 不唯一')
+        cost = matching_costs[0]
+        # 调用纯 decoder；它复验无工具与成功终态，不触碰 probe/run/resume。
+        observation, response = driver._decode(
+            stdout, profile=profile, exit_code=0,
+            expected_provider_session_id=pending.provider_session_id,
+            structured_response=True)
+        if response is None or observation.usage is None:
+            _refuse('原调用没有完整回答与计量')
+        expected = {
+            'run_id': parent.run_id, 'sid': sid, 'role': 'commander', 'node': None,
+            'session_run_id': turn.session_run_id,
+            'activity': f'reviewer:{ledger.waiting_on}',
+            'provider_session_id': pending.provider_session_id,
+            'outcome': 'ok', 'error_kind': None, 'exit_code': 0,
+            'response_sha256': _digest(response.encode('utf-8')),
+            'code': epoch.code_version, 'request_model': profile.model,
+            'reasoning_effort': profile.reasoning_effort,
+            'model': audit_turn.actual_model,
+            'actual_reasoning_effort': audit_turn.actual_effort,
+            'protocol_version': audit_turn.protocol_version,
+            'cli_version': audit_turn.cli_version, **audit_turn.usage.to_dict(),
+        }
+        usage = {key: getattr(observation.usage, key) for key in audit_turn.usage.to_dict()}
+        if (any(key not in cost or cost[key] != value for key, value in expected.items())
+                or usage != audit_turn.usage.to_dict()
+                or observation.actual_model != audit_turn.actual_model
+                or observation.actual_effort != audit_turn.actual_effort):
+            _refuse('原日志回答/计量与成本及 session 观测不一致')
+        responses.append(response)
+        ordered_costs.append(cost)
+    response = responses[-1]
+    if _digest(response.strip().encode('utf-8')) != pending.request_sha256:
+        _refuse('最新原始回答与 pending 拒因身份不一致')
+    document = _suffix_document(response, submission_options)
+    if document['waiting_on'] != ledger.waiting_on:
+        _refuse('原回答不是当前 blocker')
+    seat_path = reviewer_seat_ledger.ledger_path(
+        base, sid, waiting_on=ledger.waiting_on, business_sha256=ledger.business_sha256)
+    return RecoveredReviewerResponse(document, ReviewerProtocolRecoveryProof(
+        policy=_SUFFIX_POLICY, session_run_id=turn.session_run_id, turn_id=turn.turn_id,
+        attempt_id=turn.attempts[0].attempt_id,
+        provider_session_id=pending.provider_session_id,
+        parent_sha256=_canonical(parent.model_dump(mode='json')),
+        seat_sha256=_digest(_plain_bytes(base, seat_path)),
+        session_sha256=_canonical([event.to_dict() for event in events]),
+        cost_sha256=_canonical(ordered_costs), log_sha256=_digest(raw),
+        stdout_sha256=_canonical(streams), raw_response_sha256=_digest(response.encode('utf-8')),
+        response_sha256=_canonical(document), validation_code_version=validation_code), response)
+
+
 def inspect_response(
     base: str, sid: str, *, ledger: ReviewerSeatLedger,
     parent: AgentRunRecord, log_path: Path, profile: AgentProfile,
-    validation_code: str,
+    validation_code: str, submission_options: Sequence[dict[str, Any]] = (),
 ) -> RecoveredReviewerResponse | None:
     """已知失败入口返回可复验原回答；无此类失败返回 None，证据矛盾则关闭。"""
+    if not is_recovery_candidate(ledger):
+        return None
+    if ledger.pending_correction is not None:
+        return _inspect_suffix_response(
+            base, sid, ledger=ledger, parent=parent, log_path=log_path, profile=profile,
+            validation_code=validation_code, submission_options=submission_options)
     if (len(ledger.turns) != 1 or ledger.pending_correction is not None
             or ledger.turns[0].purpose != 'review'):
         return None
