@@ -94,6 +94,7 @@ from novel.model_slots import (
 from novel.orchestrator import (
     admission, commander_completion, execution_permit, jobs, operator, queue,
     review_seats, reviewer_action_evidence, reviewer_seat_ledger,
+    reviewer_protocol_recovery,
     reviewer_tasks, service_lifecycle, stage2_review_ledger,
     stage2_reviewer_wire, state, uploads,
 )
@@ -2216,6 +2217,90 @@ def _reconcile_landed_stage5_reviewer_rewrite_action(
         base, sid, request, request_file_sha256,
         current_parent_run_id=current_parent_run_id or '')
 
+def _protocol_recovery_sources(
+        base: str, sid: str, *, ledger: ReviewerSeatLedger,
+        current_parent_run_id: str | None, validation_code: str,
+        ) -> reviewer_protocol_recovery.RecoveredReviewerResponse | None:
+    """调用方持原 owner-stopped lease；纯读重验原协议误拒的全部来源。"""
+    if not ledger.turns:
+        return None
+    source_run_id = ledger.turns[0].parent_run_id
+    parents = {row.run_id: row for row in records(base)}
+    source = parents.get(source_run_id)
+    target = parents.get(current_parent_run_id or '')
+    if source is None or target is None or target.contract is None:
+        raise reviewer_tasks.ReviewerTaskError('协议恢复缺 source/target parent contract')
+    recovered = reviewer_protocol_recovery.inspect_response(
+        base, sid, ledger=ledger, parent=source,
+        log_path=run_log_path(base, source_run_id),
+        profile=target.contract.profiles.commander, validation_code=validation_code)
+    if recovered is not None:
+        # 原字符串先经过唯一键解析；不能先重新序列化，把重复键的 last-wins 洗掉。
+        strict_document, _digest = _reviewer_response_document(recovered.raw_response)
+        if strict_document != recovered.document:
+            raise reviewer_tasks.ReviewerTaskError('协议恢复的原始回答解析不一致')
+    return recovered
+
+
+def _recover_protocol_reviewer_action(
+        base: str, sid: str, *, epoch: ExecutionEpoch,
+        current: OperatorNext, task: reviewer_tasks.ReviewerTask,
+        current_parent_run_id: str | None,
+        ) -> _ReplayableReviewerAction | None:
+    if task.waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
+        return None
+    token = reviewer_tasks.approval_review_token(task.submission_options)
+    if token is None:
+        return None
+    ledger = reviewer_seat_ledger.read(
+        base, sid, waiting_on=task.waiting_on, business_sha256=task.business_sha256)
+    if (ledger is None or len(ledger.turns) != 1
+            or ledger.turns[0].outcome != 'failed'
+            or len(ledger.turns[0].attempts) != 1
+            or ledger.turns[0].attempts[0].error_kind != 'protocol'):
+        return None
+    source = ledger.turns[0]
+    if source.parent_run_id == current_parent_run_id:
+        return None
+    with admission.require_owner_stopped(base, source.parent_run_id):
+        if not reviewer_protocol_recovery.has_registered_rejection(
+                base, run_log_path(base, source.parent_run_id)):
+            return None
+        recovered = _protocol_recovery_sources(
+            base, sid, ledger=ledger, current_parent_run_id=current_parent_run_id,
+            validation_code=epoch.code_version)
+        if recovered is None:
+            return None
+        original = recovered.document
+        raw_action = original['action']
+        if raw_action['payload'].get('review_token') != token:
+            raise reviewer_tasks.ReviewerTaskError('协议恢复的原 review token 已变化')
+        record = ReviewerActionRecord(
+            sid=sid, run_id=source.parent_run_id, epoch_id=source.epoch_id,
+            waiting_on=task.waiting_on, business_sha256=task.business_sha256,
+            surface_seal=original['surface_seal'], surface=raw_action['surface'],
+            payload=raw_action['payload'], review_token=token,
+            protocol_recovery=recovered.proof,
+            recorded_at=source.finished_at or source.started_at)
+        document = reviewer_tasks.replay_request_document(record, current)
+
+        def persist(action: reviewer_tasks.ReviewerAction, _digest: str) -> Path:
+            if not isinstance(action, reviewer_tasks.ReviewerApprovalAction):
+                raise reviewer_tasks.ReviewerTaskError('协议恢复不得变更为另一类动作')
+            reviewer_protocol_recovery.validate_record(record, recovered)
+            reviewer_protocol_recovery.archive_record(base, sid, record)
+            return uploads.save_reviewer_action(base, sid, record)
+
+        action, _digest, path = _materialize_reviewer_response(
+            task, current, json.dumps(document, ensure_ascii=False),
+            persist_validated=persist,
+            preserve_validated=lambda candidate, digest: (
+                _preserve_validated_reviewer_residue(base, sid, candidate, digest)))
+        if path is None:
+            raise RuntimeError('协议恢复未产生 durable action')
+        return _ReplayableReviewerAction(path=path, action=action, record=record)
+
+
 def _find_replayable_reviewer_action(
         base: str, sid: str, *, epoch: ExecutionEpoch,
         current: OperatorNext,
@@ -2331,7 +2416,12 @@ def _find_replayable_reviewer_action(
             record.review_token is not None and current_token is not None
             and record.review_token == current_token)
         business_match = record.business_sha256 == task.business_sha256
-        if record.workpack_sha256 is not None:
+        if record.protocol_recovery is not None:
+            if not (business_match and token_match):
+                raise reviewer_tasks.ReviewerTaskError(
+                    '协议恢复 record 的当前业务/token 已变化；保留证据并停止')
+            matches = True
+        elif record.workpack_sha256 is not None:
             matches = (
                 business_match
                 and task.workpack_sha256 is not None
@@ -2350,9 +2440,25 @@ def _find_replayable_reviewer_action(
         else:
             _discard_reviewer_action_record(base, path)
     if not candidates:
-        return None
+        return _recover_protocol_reviewer_action(
+            base, sid, epoch=epoch, current=current, task=task,
+            current_parent_run_id=current_parent_run_id)
     candidates.sort(key=lambda item: item[0])
     _order, path, record, replay_options, stage5_state = candidates[-1]
+    if record.protocol_recovery is not None:
+        with admission.require_owner_stopped(base, record.run_id):
+            ledger = reviewer_seat_ledger.read(
+                base, sid, waiting_on=record.waiting_on,
+                business_sha256=record.business_sha256)
+            if ledger is None:
+                raise reviewer_tasks.ReviewerTaskError('协议恢复 record 的原席位账缺失')
+            recovered = _protocol_recovery_sources(
+                base, sid, ledger=ledger, current_parent_run_id=current_parent_run_id,
+                validation_code=record.protocol_recovery.validation_code_version)
+            if recovered is None:
+                raise reviewer_tasks.ReviewerTaskError('协议恢复 record 的来源已不适用')
+            reviewer_protocol_recovery.validate_record(record, recovered)
+            reviewer_protocol_recovery.archive_record(base, sid, record)
     selected_is_stage5_batch = (
         record.node == 'stage5.review'
         and record.flags in {
@@ -2443,6 +2549,9 @@ def _find_replayable_reviewer_action(
         task.request_path.parent.mkdir(parents=True, exist_ok=True)
         task.request_path.write_bytes(payload)
     except reviewer_tasks.ReviewerTaskError as exc:
+        if record.protocol_recovery is not None:
+            raise reviewer_tasks.ReviewerTaskError(
+                '协议恢复的原判断未通过当前 typed loader；保留来源并停止') from exc
         if record.workpack_sha256 is None:
             warnings.warn(
                 f'盘上 reviewer 决定记录 {path.name} 未通过当前 loader，已删除：{exc}',

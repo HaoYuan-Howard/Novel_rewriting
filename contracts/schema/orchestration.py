@@ -1274,6 +1274,26 @@ class Stage2PrereviewRecord(FrozenModel):
     recorded_at: int = Field(ge=0)
 
 
+class ReviewerProtocolRecoveryProof(FrozenModel):
+    """已结束 Commander 的已知协议误拒经零模型复验后留下的来源证明。"""
+
+    policy: Literal['codex-recovered-transport-notice-v1'] = (
+        'codex-recovered-transport-notice-v1')
+    session_run_id: str = Field(min_length=1)
+    turn_id: str = Field(min_length=1)
+    attempt_id: str = Field(min_length=1)
+    provider_session_id: str = Field(min_length=1)
+    parent_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    seat_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    session_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    cost_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    log_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    stdout_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    raw_response_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    response_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    validation_code_version: str = Field(pattern=r'^[0-9a-f]{40}$')
+
+
 class ReviewerActionRecord(FrozenModel):
     """Commander 已通过 typed loader 的可重放决定，按内容寻址落盘。
 
@@ -1308,6 +1328,7 @@ class ReviewerActionRecord(FrozenModel):
     flags: tuple[str, ...] | None = None
     input_payload: dict[str, Any] | None = None
     review_token: str | None = None
+    protocol_recovery: ReviewerProtocolRecoveryProof | None = None
     # Stage5 trim disposition 额外保存原 Review 与 reviewer contract 摘要；再结合
     # payload 的完整有序 trim 双 SHA，可先自证 durable business 未损坏，
     # 再区分“current 主体已换可安全退休”和“同主体 partial
@@ -1338,6 +1359,10 @@ class ReviewerActionRecord(FrozenModel):
 
     @model_validator(mode='after')
     def _one_replayable_action_shape(self) -> ReviewerActionRecord:
+        if self.protocol_recovery is not None and (
+                self.node is not None or self.surface is None
+                or self.surface == 'stage2_final_review' or not self.review_token):
+            raise ValueError('协议误拒恢复只接受绑定 review token 的普通 approval')
         approval = self.surface is not None
         node = self.node is not None
         if approval == node:

@@ -629,6 +629,11 @@ def service_runs_dir(base: str | os.PathLike[str]) -> Path:
     return service_dir(base) / RUNS_DIRNAME
 
 
+def reviewer_protocol_recoveries_dir(base: str | os.PathLike[str], sid: str) -> Path:
+    """协议误拒复验的永久审计副本；不是活动 action 或执行授权。"""
+    return service_runs_dir(base) / check_sid(sid) / 'reviewer_protocol_recoveries'
+
+
 def scratch_dir(base: str | os.PathLike[str]) -> Path:
     """`<base>/_service/scratch/`；会话临时空间的唯一根。"""
     return service_dir(base) / SCRATCH_DIRNAME

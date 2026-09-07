@@ -905,6 +905,17 @@ approval 形状携带 `surface / payload / review_token`，node 形状通常携�
 `node / flags / input_payload / review_token`。Stage5 trim disposition 是唯一不带 closure token 的现役 node
 形状；retain batch 与 reviewer rewrite request 都以专用 Review/contract/seat/response 字段和 payload 内
 完整有序双 SHA 自证。
+
+普通 token-bound approval 可额外携带 `protocol_recovery`；缺省为 null，现役唯一策略为
+`codex-recovered-transport-notice-v1`。它绑定原 session/turn/attempt/provider、parent/seat/session/cost/
+public log/stdout/raw response/canonical response 的 SHA，以及执行机械复验的干净代码 SHA。
+仅恢复被旧驱动误当成工具的已知传输切换通知：原单次首审必须已失败闭账，服务日志却有唯一完整
+成功终态，当前无工具 decoder、同业务与同 review token、现役 typed loader 全部通过。
+原 actor/reason/typed 判断不变，仅重铸运输 seal；Stage2、node 与 typed stop 不走此路。
+复验先把完整 record 内容寻址归档到 `_service/runs/<sid>/reviewer_protocol_recoveries/`，再保存活动
+action 并交 canonical approval。归档不授予执行权，也不参与自动重放扫描；活动记录退休后它仍保留。
+重放必须再读原始来源核对 proof；证据缺失、变动或当前主体不符时保留记录并停止，不清席位或重开模型。
+
 Stage2 `node=stage2.global` 与
 `surface=stage2_final_review` 的新记录还必须成组携带：
 

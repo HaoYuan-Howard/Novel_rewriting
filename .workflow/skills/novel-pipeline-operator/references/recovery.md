@@ -366,6 +366,17 @@ batch，只走 Stage2 定向恢复与 Pro 重建；
 `response-repair` 是 legacy DeepSeek 的零 LLM CLI sidecar，不是 node，不另造 preview。账本会恢复中断前已发生的
 调用与 accepted-attempt 联结；不能删隔离目录、Stage2 checkpoint、换参数或清缓存来“重新开始”。
 
+## Commander 已完成回答的协议误拒恢复
+
+已知 Codex WebSockets → HTTPS 传输切换通知若被旧版工具守卫误拒，而服务协议日志仍有唯一完整
+`turn.completed`，新版 Supervisor 会在同业务、同 review token 的审批 blocker 下自动零 wire 复验。
+它持原 parent 的 owner-stopped lease，核对原席位、会话、费用、代码/schema/profile 与完整公开协议
+日志，再走当前严格 decoder 和 typed loader；原判断不改写，失败账与已用席位不返还。
+合法回答先永久保存复验凭据，再按现有 durable action → canonical approval 主路恢复。
+仅登记 `codex-recovered-transport-notice-v1`，不适用于 Stage2、node、typed stop、未完成响应或真实工具调用。
+材料缺失、冲突或审批主体已变时仍安全停止。交互式 root 只修复代码并从前端继续，不复制日志回答
+手工代批、不读取 CLI 私有 rollout、不删除席位，也不续接已结束 epoch 的 provider session。
+
 ## Stage5 顶部卡的 trim 处置与 LLM 改写恢复
 
 `operator next` 显示 `approval:stage5-closure` 时，先看 immutable workpack 的动作，不要从 waiter 名字

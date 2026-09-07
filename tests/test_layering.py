@@ -301,6 +301,10 @@ def test_only_the_store_reads_json_directly():
 #: 原型没有写口守卫，于是落盘闸门的失败支用**裸 `json.dump`** 写 `.INVALID`
 #: ——那份稿从此没有来源账，而提升路又「沿用原稿里那一份」。盘上留下 1 份铁证。
 _WRITE_ALLOWED = {
+    'novel/orchestrator/reviewer_protocol_recovery.py': (
+        '仅在 _service/runs/<sid>/reviewer_protocol_recoveries 写内容寻址的复验审计副本；'
+        '调用方持原 owner-stopped lease，来源四证与当前 typed loader 通过后才写，'
+        '不修改历史失败账或小说产物，副本不被活动 action 扫描器消费'),
     'novel/orchestrator/reviewer_action_evidence.py': (
         '只在 _service/runs 下写内容寻址的不可变 Reviewer authority receipt；'
         '以跨进程锁、原字节 CAS 和正式证据复核封口，不写 canonical 小说产物'),
