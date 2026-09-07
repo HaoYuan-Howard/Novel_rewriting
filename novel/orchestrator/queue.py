@@ -829,8 +829,8 @@ def _blocked_why(
     if waiting_on == WAITING_ON_STAGE5_CLOSURE:
         return (
             'Stage5 顶部闭合卡尚未 closed：Review/章稿漂移、工作包阻断或缺回执都会'
-            '停在这里。blocked 且只有 trim 时先人工通读整批正文与超限事实，再走登记的 '
-            '由 Commander 选择整批保留、冻结单章改写请求或停止；其他 blocker 先走各自恢复面。只有重新构造的 '
+            '停在这里。blocked 且只有 trim 时先通读整批正文与超限事实，再由 Commander '
+            '选择整批保留、冻结多章改写批请求或停止；未选章仍待处理。其他 blocker 先走各自恢复面。只有重新构造的 '
             'closure workpack 已 ready/expired 时才提供 typed closure 回执；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE5_REVIEWER_REWRITE:

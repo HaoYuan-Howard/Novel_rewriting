@@ -42,7 +42,7 @@ from contracts.schema.api import (
 from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema.stage2 import GlobalEdit
 from contracts.schema.stage5 import (
-    ReviewerRewriteRequest, ReviewerRewriteTrustedInput,
+    ReviewerRewriteRequest, ReviewerRewriteBatchRequest, ReviewerRewriteBatchTrustedInput,
     reviewer_rewrite_request_sha256,
 )
 from contracts.schema.orchestration import (
@@ -615,12 +615,12 @@ def test_stage5_reviewer_rewrite_transport_injects_only_durable_authority(
             'audit_sha256': 'b' * 64,
             'chapter_sha256': 'c' * 64,
         }],
-        'target_ordinal': 2,
+        'targets': [{'target_ordinal': 2,
         'target_chapter_file_sha256': 'd' * 64,
         'directives': [{
             'code': 'remove_repetition',
             'current_text_evidence': '重复的当前正文',
-        }],
+        }]}],
     })
     action = agent.reviewer_tasks.ReviewerNodeAction(
         kind='node', node='stage5.review',
@@ -644,7 +644,7 @@ def test_stage5_reviewer_rewrite_transport_injects_only_durable_authority(
             reviewer_action_record_path=record_path) as flags:
         trusted_path = Path(flags[1])
         assert flags[0] == '--request-reviewer-rewrite'
-        trusted = ReviewerRewriteTrustedInput.model_validate_json(
+        trusted = ReviewerRewriteBatchTrustedInput.model_validate_json(
             trusted_path.read_bytes())
         assert Stage5ReviewerRewriteRequest.model_validate(
             trusted.model_dump(mode='json', exclude={
@@ -7773,13 +7773,14 @@ def _install_stage5_live_batch_harness(
     ).hexdigest()
     response_option = (
         next(row for row in options if row['id'].endswith(
-             'request-reviewer-rewrite.ch1'))
+             'request-reviewer-rewrite'))
         if reviewer_rewrite else options[0])
     response = copy.deepcopy(response_option['exact_request'])
     payload = response['action']['input_payload']
     if reviewer_rewrite:
         payload['reason'] = '第1章可按关闭式指令移除重复且保留全部冻结事实'
-        payload['directives'] = [{
+        payload['targets'] = payload['targets'][:1]
+        payload['targets'][0]['directives'] = [{
             'code': 'remove_repetition',
             'current_text_evidence': '第1章重复的当前正文',
         }]
@@ -7844,6 +7845,7 @@ def _install_stage5_live_batch_harness(
             record_raw = record_path.read_bytes()
             record = ReviewerActionRecord.model_validate_json(record_raw)
             request_payload = dict(action.input_payload or {})
+            targets = request_payload.pop('targets')
             request_payload.update({
                 'version': 1,
                 'kind': 'stage5-reviewer-rewrite-request-v1',
@@ -7858,9 +7860,14 @@ def _install_stage5_live_batch_harness(
                 'provider_response_sha256': record.provider_response_sha256,
                 'request_sha256': '0' * 64,
             })
-            request_payload['request_sha256'] = (
-                reviewer_rewrite_request_sha256(request_payload))
-            request = ReviewerRewriteRequest.model_validate(request_payload)
+            units = []
+            for target in targets:
+                unit = {**request_payload, **target}
+                unit['request_sha256'] = reviewer_rewrite_request_sha256(unit)
+                units.append(ReviewerRewriteRequest.model_validate(unit).model_dump(mode='json'))
+            raw_batch = {'version': 2, 'kind': 'stage5-reviewer-rewrite-batch-v2', 'requests': units}
+            raw_batch['request_sha256'] = reviewer_rewrite_request_sha256(raw_batch)
+            request = ReviewerRewriteBatchRequest.model_validate(raw_batch)
             request_path = (
                 Path(base) / 'FQ_测试书_42'
                 / STAGE5_REVIEWER_REWRITE_REQUEST)
@@ -8181,15 +8188,15 @@ def test_stage5_reviewer_rewrite_normal_agent_path_seals_permanent_authority(
     novel_dir = Path(base) / 'FQ_测试书_42'
     ctx = state_module.readonly_ctx(
         novel_dir, 'stage5.write', 'test-code-version')
-    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_request(
+    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_batch(
         ctx)
     authority_dir = (
         Path(base) / '_service' / 'runs' / '42'
         / 'reviewer_action_authorities')
     archive = authority_dir / (
-        f'reviewer-action-{request.reviewer_action_record_sha256}.json')
+        f'reviewer-action-{request.requests[0].reviewer_action_record_sha256}.json')
     receipt = authority_dir / (
-        f'reviewer-action-{request.reviewer_action_record_sha256}.receipt.json')
+        f'reviewer-action-{request.requests[0].reviewer_action_record_sha256}.receipt.json')
     assert archive.is_file() and receipt.is_file()
     record = reviewer_action_evidence.require_sealed_reviewer_rewrite_authority(
         base, '42', request, request_file_sha256)
@@ -8217,7 +8224,7 @@ def test_stage5_reviewer_rewrite_normal_agent_path_seals_permanent_authority(
     # planner 前的 reconcile 会无条件重入 seal。完整 seal 必须按历史契约
     # 幂等返回，且不得借重入改写 receipt；随后九态 probe 才能诚实投影 expiry。
     receipt_path = authority_dir / (
-        f'reviewer-action-{request.reviewer_action_record_sha256}.receipt.json')
+        f'reviewer-action-{request.requests[0].reviewer_action_record_sha256}.receipt.json')
     receipt_raw = receipt_path.read_bytes()
     monkeypatch.setattr(
         reviewer_action_evidence, '_atomic_write_once',
@@ -8263,15 +8270,15 @@ def test_stage5_reviewer_rewrite_receipt_active_tail_reconciles_zero_commander(
     novel_dir = Path(base) / 'FQ_测试书_42'
     ctx = state_module.readonly_ctx(
         novel_dir, 'stage5.write', 'test-code-version')
-    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_request(
+    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_batch(
         ctx)
     authority_dir = (
         Path(base) / '_service' / 'runs' / '42'
         / 'reviewer_action_authorities')
     assert (authority_dir / (
-        f'reviewer-action-{request.reviewer_action_record_sha256}.json')).is_file()
+        f'reviewer-action-{request.requests[0].reviewer_action_record_sha256}.json')).is_file()
     assert (authority_dir / (
-        f'reviewer-action-{request.reviewer_action_record_sha256}.receipt.json')).is_file()
+        f'reviewer-action-{request.requests[0].reviewer_action_record_sha256}.receipt.json')).is_file()
 
     # receipt 已提交后 contract 换代不能阻断 exact active 尾的免费退休。
     monkeypatch.setattr(
@@ -8318,7 +8325,7 @@ def test_stage5_reviewer_rewrite_request_landed_active_reconciles_to_seal(
     novel_dir = Path(base) / 'FQ_测试书_42'
     ctx = state_module.readonly_ctx(
         novel_dir, 'stage5.write', 'test-code-version')
-    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_request(
+    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_batch(
         ctx)
     authority_dir = (
         Path(base) / '_service' / 'runs' / '42'
@@ -8383,15 +8390,15 @@ def test_stage5_reviewer_rewrite_archive_without_receipt_reconciles_exactly(
     novel_dir = Path(base) / 'FQ_测试书_42'
     ctx = state_module.readonly_ctx(
         novel_dir, 'stage5.write', 'test-code-version')
-    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_request(
+    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_batch(
         ctx)
     authority_dir = (
         Path(base) / '_service' / 'runs' / '42'
         / 'reviewer_action_authorities')
     archive = authority_dir / (
-        f'reviewer-action-{request.reviewer_action_record_sha256}.json')
+        f'reviewer-action-{request.requests[0].reviewer_action_record_sha256}.json')
     receipt = authority_dir / (
-        f'reviewer-action-{request.reviewer_action_record_sha256}.receipt.json')
+        f'reviewer-action-{request.requests[0].reviewer_action_record_sha256}.receipt.json')
     assert archive.is_file() and not receipt.exists() and active.is_file()
 
     real_write_once_fn = real_write_once
@@ -8442,7 +8449,7 @@ def test_stage5_reviewer_rewrite_seal_revalidates_seat_session_and_cost(
     ctx = state_module.readonly_ctx(
         Path(base) / 'FQ_测试书_42',
         'stage5.write', 'test-code-version')
-    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_request(
+    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_batch(
         ctx)
     record = reviewer_action_evidence.require_sealed_reviewer_rewrite_authority(
         base, '42', request, request_file_sha256)

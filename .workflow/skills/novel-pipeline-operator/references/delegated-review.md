@@ -432,15 +432,18 @@ novel.cli approval show <SID> --base <BASE>
 `closure.workpack` 精确绑定 fresh Review、全部 canonical 章、当前规则指纹、must-appear finding、
 fact/unver 分组与未销账 trim。`review_required` 时先免费恢复 Review，不能填写 closure 模板硬过。
 `blocked` 且只有 trim 待销账时，同一 Stage5 顶部卡互斥提供：一份 full-batch `retain_pretrim`、
-每章一份 typed LLM rewrite request 与 typed stop；不提供 closure 审批。工作包必须同时给出每章
+一份可选择多章的 typed LLM rewrite batch request 与 typed stop；不提供 closure 审批。工作包必须同时给出每章
 current canonical 完整正文、TrimAudit、现算目标区间/超额与 closure 身份：frontier 的
 `chapter_sha256` 是 rendered text SHA，`chapter_subjects[].chapter_sha256` 是 canonical Chapter
 完整文件 SHA；rewrite request 另以 `target_chapter_file_sha256` 锁定目标完整文件，两域不得互换。
-先通读全部待办作跨章复核。全部章节都确应保留时，为 retain manifest 每章填写具体非空理由后整批提交；恰有一章
-可用登记的 `remove_repetition / compress_exposition / repair_wording / smooth_transition` 安全改写时，
-选择该章 request；每条 evidence 必须非空、不超过 240 字，并在 target current 正文中逐字恰好唯一命中。
+先通读全部待办作跨章复核。全部章节都确应保留时，为 retain manifest 每章填写具体非空理由后整批提交。
+存在可用登记的 `remove_repetition / compress_exposition / repair_wording / smooth_transition` 独立安全改写的章节时，
+本轮在 `targets[]` 中选择需要改写的非空有序子集，每章分别填写指令。多章可独立修复时一起提交，
+Executor 按章节并发上限 4 改写；每章使用独立 session、checkpoint 和执行身份。整批完成后统一免费
+Review；部分中断先恢复未收口章，不重复生成已完成章。未选章节继续保持 unresolved，不批准保留或销账。
+每条 evidence 必须非空、不超过 240 字，并在 target current 正文中逐字恰好唯一命中。
 actor/reason 与 evidence 只用于审计和定位，不得作为自由 prompt；固定执行约束另行要求压回本章预算、
-保留全部 plan slots、事实、时序与必须逐字内容。问题超出该闭集，或不能把一次动作安全收成一章时，
+保留全部 plan slots、事实、时序与必须逐字内容。存在超出该闭集的问题，或修复必须同时改动多章才能安全成立时，
 选择 stop 并指出章号、正文证据与风险，不能为关闭待办机械 retain 或发明写手指令。
 Supervisor 不生成、补写或选择人类决定：retain 只运输并执行已验证的 0 成本 batch；rewrite 先把
 hash-bound request 以 0 成本 canonical node 落盘，再由确定性 queue 触发唯一 paid writer，崩溃恢复

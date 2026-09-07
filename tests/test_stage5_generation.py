@@ -2077,8 +2077,8 @@ def test_real_production_write_binds_provenance_to_the_accepted_pro_fallback(
     assert ctx.ledger.calls_made == 2
 
 
-@pytest.mark.parametrize(('chapters', 'expected_peak'), [(19, 19), (40, 32)])
-def test_stage5_chapters_run_together_up_to_32(
+@pytest.mark.parametrize(('chapters', 'expected_peak'), [(2, 2), (19, 4), (40, 4)])
+def test_stage5_chapters_run_together_up_to_four(
         monkeypatch, chapters, expected_peak):
     all_entered = threading.Event()
     lock = threading.Lock()

@@ -54,6 +54,7 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_stage4_plan_chapters.py',
     'tests/test_stage5_closure.py',
     'tests/test_stage5_generation.py',
+    'tests/test_stage5_reviewer_rewrite_batch.py',
     'tests/test_stage6_prompt_experiments.py',
     'tests/test_stage6_semantic_agent.py',
     'tests/test_stage6_semantic_agent_boundary.py',

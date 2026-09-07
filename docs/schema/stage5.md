@@ -16,7 +16,7 @@ stage5/review_<n>.json           全书确定性验收（schema v2，0 LLM 调�
 stage5/trim_audit_chNN.json      超上限但未自动裁剪的事实（schema v2）
 stage5/trim_resolution_chNN.json 人工保留 pretrim 的 hash-bound 决定（schema v2）
 stage5/reviewer_rewrite_request.json
-                                 Reviewer 明确授权的一章 LLM 改写请求（v1）
+                                 Reviewer 明确授权的多章 LLM 改写批请求（v2）
 stage5/wontfix.json              人工豁免账（v1）
 ```
 
@@ -46,7 +46,7 @@ stage5/wontfix.json              人工豁免账（v1）
 | 读取已有 Review | `run stage5.review <sid> --check-only --base <base>` | 0 |
 | 批量保留 pretrim | `stage5.review --retain-pretrim-batch <BatchTrimResolutionRequest.json>` | 0 |
 | Supervisor 把 Reviewer 改写回答正式化（内部） | `stage5.review --request-reviewer-rewrite @reviewer-input` | 0；`@reviewer-input` 只能由 Supervisor 从已验证的 ReviewerActionRecord 与 seat/session/cost 证据注入，不能手写或经 HTTP jobs 提交 |
-| 消费 current 正式改写请求 | `stage5.write --reviewer-rewrite stage5/reviewer_rewrite_request.json --yes` | 付费；恰好一章 |
+| 消费 current 正式改写请求 | `stage5.write --reviewer-rewrite stage5/reviewer_rewrite_request.json --yes` | 付费；仅执行批内 ready 章，并发上限 4 |
 | 补完 Reviewer 改写 checkpoint/prepared 尾窗 | `stage5.write --recover-reviewer-rewrite-prepared <SOURCE_RUN_ID> --reviewer-rewrite-request-sha256 <SHA256>`；已有 target WAL 时再原样携 `--reviewer-rewrite-recovery-target-run-id <TARGET_RUN_ID> --reviewer-rewrite-recovery-journal-sha256 <SHA256>` | 0 wire；不新建 provider/session/cache |
 | 退休从未开始且已过期的 Reviewer 改写请求 | `stage5.write --retire-reviewer-rewrite-request stage5/reviewer_rewrite_request.json --reviewer-rewrite-request-sha256 <SHA256>` | 0 wire；只在全根零执行证据闭合时可用 |
 | 生成 / 提交闭合回执 | `approval template stage5 ...` / `approval apply stage5 ... --input <决定文件>` | 0 |
@@ -333,7 +333,7 @@ SHA 与 chapter SHA 同时不变时复用；`gate.s5`、Stage6/7 写效果与 as
 精确覆盖 workpack 的全部 `unresolved_trim_items[]`，逐项原样绑定 audit SHA 与正文 SHA，并给出
 非空 reason（可显式继承顶层 reason）。Supervisor 只把这份已通过 typed loader 的请求物化到
 `_service/edits/<sid>/`，再经 permit 的外部输入字节 CAS 交给 0-LLM producer；typed stop 表示需要
-但无法安全形成登记的一章改写请求，不落 resolution/request、permit 或 node。
+但无法安全形成登记的批量改写请求，不落 resolution/request、permit 或 node。
 
 | Batch 字段 | 类型 | 必填 | 取值面 / 语义 | 证据 |
 |---|---|---:|---|---|
@@ -357,24 +357,32 @@ audit/resolution/wontfix 处置摘要变化重建 closure workpack/token；不�
 
 `Stage5ReviewerRewriteRequest` 是 Commander/provider 回答的公开运输形状，不是
 `--request-reviewer-rewrite` 所读的 CLI 文件。Supervisor 验证回答和 durable ReviewerActionRecord 后，
-才生成私有 `ReviewerRewriteTrustedInput` 信封并以一次性 `@reviewer-input` 交给 FREE producer；
+才生成私有 `ReviewerRewriteBatchTrustedInput` 信封并以一次性 `@reviewer-input` 交给 FREE producer；
 该信封不能由人工、HTTP jobs 或普通 operator 输入自报。公开回答仍完整携原有序
-`unresolved_trim_items[]`，但只以 `target_ordinal` 选择其中恰好一章；其中每项既有
+`unresolved_trim_items[]`，以有序非空 `targets[]` 选择独立改写的子集，各项分别携
+`target_ordinal/target_chapter_file_sha256/directives`。未选章保持待处理，不形成 retain。
+多个章节可独立修复时按上限 4 并发生成，整批正式落盘后统一免费重算 Review。
+其中每项既有
 `chapter_sha256` 始终是 `rendered_text` 的正文 SHA，target 另带从 closure
 `chapter_subjects[target]` 冻结的 `target_chapter_file_sha256` 完整文件 SHA，两者不得互换。
 actor/reason 非空，`directives[]`
 至少一项，code 只能是 `remove_repetition｜compress_exposition｜repair_wording｜smooth_transition`，
 `current_text_evidence` 必须是该章 current `rendered_text` 中恰好唯一命中、非空且不超过 240 字的片段，
-同一 code/evidence 不得重复。Review SHA、frontier、target 与 actor 从 immutable option 逐字保留，只有
-reason 和 directive code/evidence 是本次允许填写的字段。reason/evidence 不会直接拼进 writer prompt；
+同一 code/evidence 不得重复。Review SHA、frontier、target 与 actor 从 immutable option 逐字保留，本次只可选择
+targets 非空有序子集、填写 reason 和各章 directive code/evidence。reason/evidence 不会直接拼进 writer prompt；
 可信 producer 按 code 注入固定指令，并总是附加预算、plan slots、事实、时序与逐字材料约束。
 
 回答先按“provider response 绑定 seat turn → 内容寻址 `ReviewerActionRecord` → seat finish → 一次性
 `@reviewer-input`”耐崩溃持久化，再由 FREE producer 构造并 typed readback 正式
-`ReviewerRewriteRequest`。正式 request 另绑定 target 完整文件 SHA、原 ReviewerActionRecord 摘要、
+`ReviewerRewriteBatchRequest` v2。批内 `requests[]` 为逐章自哈希的内部
+`ReviewerRewriteRequest` 单元，执行账、checkpoint 和恢复参数继续按单元 SHA 定位；
+批信封及 authority receipt 共同绑定全部目标。正式 request 另绑定 target 完整文件 SHA、原 ReviewerActionRecord 摘要、
 logical session、seat turn、provider response、自身 subject 与 self hash；仅它是后续 paid writer 的 durable intent，运输 payload、
 action record、旧 stop 或手写同形 JSON 都不是执行权。request 落稳后 queue 必须先收口其执行态，不能因
-正文尚未改变、Review 仍 fresh 而重新开顶部卡。
+正文尚未改变、Review 仍 fresh 而重新开顶部卡。部分交付先恢复未收口章，
+不得重复购买已完成章；同批 exact formal 才能豁免对应兄弟章的旧 Review 输入边，外部漂移仍拒绝。
+旧 canonical v1 不自动转换或手补；先在原版本按原执行账收口，再由 fresh Commander
+决定与 FREE producer 重建 v2。未知执行不得借升版重新授权。
 
 request typed readback 后不能直接删除唯一来源。Supervisor 先把原 action 原始字节复制到
 `_service/runs/<sid>/reviewer_action_authorities/reviewer-action-<sha>.json`，再写同 stem 的

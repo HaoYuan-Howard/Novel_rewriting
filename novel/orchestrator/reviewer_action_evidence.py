@@ -26,7 +26,7 @@ from contracts.schema.orchestration import (
     reviewer_rewrite_authority_receipt_sha256,
 )
 from contracts.schema.stage5 import (
-    ReviewerRewriteRequest, ReviewerRewriteTrustedInput,
+    ReviewerRewriteBatchRequest, ReviewerRewriteBatchTrustedInput,
 )
 from novel import agent_session_audit, paths, prov
 from novel.appendlog import path_transaction_lock
@@ -401,20 +401,10 @@ def validate_stage5_action_record_ledger(
             f'{type(exc).__name__}: {exc}') from exc
 
 
-def _public_request(trusted: ReviewerRewriteTrustedInput) -> Stage5ReviewerRewriteRequest:
-    return Stage5ReviewerRewriteRequest.model_validate({
-        'actor': trusted.actor,
-        'reason': trusted.reason,
-        'review_sha256': trusted.review_sha256,
-        'unresolved_trim_items': [
-            row.model_dump(mode='json') for row in trusted.unresolved_trim_items
-        ],
-        'target_ordinal': trusted.target_ordinal,
-        'target_chapter_file_sha256': trusted.target_chapter_file_sha256,
-        'directives': [
-            row.model_dump(mode='json') for row in trusted.directives
-        ],
-    })
+def _public_request(trusted: ReviewerRewriteBatchTrustedInput) -> Stage5ReviewerRewriteRequest:
+    return Stage5ReviewerRewriteRequest.model_validate(trusted.model_dump(
+        mode='json', include={'actor', 'reason', 'review_sha256',
+                             'unresolved_trim_items', 'targets'}))
 
 
 _AUTHORITY_DIRNAME = 'reviewer_action_authorities'
@@ -581,28 +571,14 @@ def _atomic_write_once(
 
 
 def _trusted_from_request(
-    request: ReviewerRewriteRequest,
-) -> ReviewerRewriteTrustedInput:
-    return ReviewerRewriteTrustedInput(
-        actor=request.actor,
-        reason=request.reason,
-        review_sha256=request.review_sha256,
-        unresolved_trim_items=request.unresolved_trim_items,
-        target_ordinal=request.target_ordinal,
-        target_chapter_file_sha256=request.target_chapter_file_sha256,
-        directives=request.directives,
-        reviewer_action_record_sha256=request.reviewer_action_record_sha256,
-        business_sha256=request.business_sha256,
-        reviewer_contract_sha256=request.reviewer_contract_sha256,
-        reviewer_session_run_id=request.reviewer_session_run_id,
-        reviewer_seat_turn_id=request.reviewer_seat_turn_id,
-        provider_response_sha256=request.provider_response_sha256,
-    )
+    request: ReviewerRewriteBatchRequest,
+) -> ReviewerRewriteBatchTrustedInput:
+    return request.trusted()
 
 
 def _require_record_binding(
     record: ReviewerActionRecord,
-    trusted: ReviewerRewriteTrustedInput,
+    trusted: ReviewerRewriteBatchTrustedInput,
     *,
     require_current_contract: bool,
 ) -> None:
@@ -721,7 +697,7 @@ def _closed_evidence_hashes(
 
 def _require_request_file(
     base: str | os.PathLike[str], sid: str,
-    request: ReviewerRewriteRequest, request_file_sha256: str,
+    request: ReviewerRewriteBatchRequest, request_file_sha256: str,
 ) -> None:
     from novel.orchestrator.state import readonly_ctx
     from novel.store import ArtifactStore
@@ -734,7 +710,7 @@ def _require_request_file(
                 'canonical reviewer rewrite request 不是普通文件')
         store = ArtifactStore(readonly_ctx(novel_dir, 'stage5.review', prov.code_version()))
         current, digest = store.read_own_with_sha256(
-            ReviewerRewriteRequest, STAGE5_REVIEWER_REWRITE_REQUEST)
+            ReviewerRewriteBatchRequest, STAGE5_REVIEWER_REWRITE_REQUEST)
         if digest != request_file_sha256:
             raise reviewer_tasks.ReviewerTaskError(
                 'canonical reviewer rewrite request raw SHA 漂移')
@@ -752,7 +728,7 @@ def _require_receipt_matches(
     receipt: ReviewerRewriteAuthorityReceipt,
     record: ReviewerActionRecord,
     *, seat_sha256: str, session_sha256: str, cost_sha256: str,
-    request: ReviewerRewriteRequest | None = None,
+    request: ReviewerRewriteBatchRequest | None = None,
     request_file_sha256: str | None = None,
 ) -> None:
     if (
@@ -780,16 +756,16 @@ def _require_receipt_matches(
         or receipt.request_file_sha256 != request_file_sha256
         or receipt.request_sha256 != request.request_sha256
         or receipt.reviewer_action_record_sha256
-        != request.reviewer_action_record_sha256
-        or receipt.business_sha256 != request.business_sha256
+        != request.requests[0].reviewer_action_record_sha256
+        or receipt.business_sha256 != request.requests[0].business_sha256
         or receipt.reviewer_contract_sha256
-        != request.reviewer_contract_sha256
+        != request.requests[0].reviewer_contract_sha256
         or receipt.reviewer_session_run_id
-        != request.reviewer_session_run_id
+        != request.requests[0].reviewer_session_run_id
         or receipt.reviewer_seat_turn_id
-        != request.reviewer_seat_turn_id
+        != request.requests[0].reviewer_seat_turn_id
         or receipt.provider_response_sha256
-        != request.provider_response_sha256
+        != request.requests[0].provider_response_sha256
     ):
         raise reviewer_tasks.ReviewerTaskError(
             'reviewer rewrite authority receipt 与 canonical request 不闭合')
@@ -843,11 +819,11 @@ def reviewer_rewrite_authority_sealed(
 
 def require_sealed_reviewer_rewrite_authority(
     base: str | os.PathLike[str], sid: str,
-    request: ReviewerRewriteRequest, request_file_sha256: str,
+    request: ReviewerRewriteBatchRequest, request_file_sha256: str,
 ) -> ReviewerActionRecord:
     """付费、恢复、terminal probe 共用的 immutable authority 读闸。"""
     _require_request_file(base, sid, request, request_file_sha256)
-    digest = request.reviewer_action_record_sha256
+    digest = request.requests[0].reviewer_action_record_sha256
     if not reviewer_rewrite_authority_sealed(base, sid, digest):
         raise ReviewerRewriteAuthorityPending(
             'canonical reviewer rewrite request 尚未完成来源 authority seal')
@@ -869,7 +845,7 @@ def require_sealed_reviewer_rewrite_authority(
 
 def require_current_sealed_reviewer_rewrite_authority(
     base: str | os.PathLike[str], sid: str,
-    request: ReviewerRewriteRequest, request_file_sha256: str,
+    request: ReviewerRewriteBatchRequest, request_file_sha256: str,
 ) -> ReviewerActionRecord:
     """执行层 authority：历史 seal 完整，且 Reviewer contract 仍 current。"""
     record = require_sealed_reviewer_rewrite_authority(
@@ -882,7 +858,7 @@ def require_current_sealed_reviewer_rewrite_authority(
 
 def seal_reviewer_rewrite_authority(
     base: str | os.PathLike[str], sid: str,
-    request: ReviewerRewriteRequest, request_file_sha256: str, *,
+    request: ReviewerRewriteBatchRequest, request_file_sha256: str, *,
     current_parent_run_id: str,
 ) -> ReviewerRewriteAuthorityReceipt:
     """在真实 Agent parent 内把 active action 两相封成永久 authority。"""
@@ -890,7 +866,7 @@ def seal_reviewer_rewrite_authority(
         raise reviewer_tasks.ReviewerTaskError(
             'reviewer rewrite authority seal 缺真实 current parent')
     _require_request_file(base, sid, request, request_file_sha256)
-    digest = request.reviewer_action_record_sha256
+    digest = request.requests[0].reviewer_action_record_sha256
     active = _active_authority(base, sid, digest)
     archive_path = _authority_path(base, sid, digest)
     receipt_path = _authority_receipt_path(base, sid, digest)
@@ -1007,11 +983,11 @@ def seal_reviewer_rewrite_authority(
                         'request_rel': STAGE5_REVIEWER_REWRITE_REQUEST,
                         'request_file_sha256': request_file_sha256,
                         'request_sha256': request.request_sha256,
-                        'business_sha256': request.business_sha256,
-                        'reviewer_contract_sha256': request.reviewer_contract_sha256,
-                        'reviewer_session_run_id': request.reviewer_session_run_id,
-                        'reviewer_seat_turn_id': request.reviewer_seat_turn_id,
-                        'provider_response_sha256': request.provider_response_sha256,
+                        'business_sha256': request.requests[0].business_sha256,
+                        'reviewer_contract_sha256': request.requests[0].reviewer_contract_sha256,
+                        'reviewer_session_run_id': request.requests[0].reviewer_session_run_id,
+                        'reviewer_seat_turn_id': request.requests[0].reviewer_seat_turn_id,
+                        'provider_response_sha256': request.requests[0].provider_response_sha256,
                         'seat_evidence_sha256': evidence[0],
                         'session_evidence_sha256': evidence[1],
                         'cost_evidence_sha256': evidence[2],
@@ -1046,7 +1022,7 @@ def seal_reviewer_rewrite_authority(
 
 def require_reviewer_rewrite_authority(
     base: str | os.PathLike[str], sid: str,
-    trusted: ReviewerRewriteTrustedInput, *,
+    trusted: ReviewerRewriteBatchTrustedInput, *,
     current_parent_run_id: str | None = None,
 ) -> ReviewerActionRecord:
     """phase A：证明 trusted envelope 来自 active typed Commander action。

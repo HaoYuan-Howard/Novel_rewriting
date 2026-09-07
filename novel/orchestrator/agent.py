@@ -2211,7 +2211,7 @@ def _reconcile_landed_stage5_reviewer_rewrite_action(
     if not ArtifactStore(ctx).exists(STAGE5_REVIEWER_REWRITE_REQUEST):
         return
     request, request_file_sha256 = (
-        reviewer_rewrite.load_reviewer_rewrite_request(ctx))
+        reviewer_rewrite.load_reviewer_rewrite_batch(ctx))
     reviewer_action_evidence.seal_reviewer_rewrite_authority(
         base, sid, request, request_file_sha256,
         current_parent_run_id=current_parent_run_id or '')

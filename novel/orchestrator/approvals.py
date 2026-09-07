@@ -5514,6 +5514,7 @@ def authorize_writing(
     chapters: list[int] | None,
     *,
     requires_fresh_review: bool = False,
+    reviewer_rewrite_request_rel: str | None = None,
 ) -> None:
     """启动付费 Stage5 作业前的只读授权校验；不替人自动签字。"""
     with _LOCK:
@@ -5544,7 +5545,20 @@ def authorize_writing(
         from novel.stages.stage5.review import require_fresh_review
         # 首轮写作时 Review 本来尚未产生，missing 可通行；一旦盘上有报告，
         # 它必须 fresh。revise 则连 missing 也关闭式拒绝。
-        if requires_fresh_review or current_review.state != 'missing':
+        if reviewer_rewrite_request_rel is not None:
+            from novel.stages.stage5 import reviewer_rewrite
+            ready = reviewer_rewrite.ready_reviewer_rewrite_targets(
+                store.ctx, reviewer_rewrite_request_rel)
+            if list(ready) != requested_list:
+                raise HumanEditProtected('reviewer rewrite 只能授权整批尚未执行的精确章节')
+            batch, _digest = reviewer_rewrite.load_reviewer_rewrite_batch(
+                store.ctx, reviewer_rewrite_request_rel)
+            for unit in batch.requests:
+                if unit.target_ordinal in ready:
+                    reviewer_rewrite.require_current_reviewer_rewrite_request(
+                        store.ctx, reviewer_rewrite_request_rel,
+                        request_sha256=unit.request_sha256)
+        elif requires_fresh_review or current_review.state != 'missing':
             require_fresh_review(store.ctx, store)
 
 

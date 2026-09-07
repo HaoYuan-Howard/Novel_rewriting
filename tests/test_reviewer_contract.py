@@ -115,3 +115,13 @@ def test_anchor_parser_fails_closed_on_broken_blocks():
     with pytest.raises(ValueError):
         reviewer_contract.parse_anchored_blocks(
             '<!-- reviewer-contract:a:begin -->\n\n<!-- reviewer-contract:a:end -->\n')
+
+
+def test_stage5_batch_scope_preserves_independent_chapter_authority():
+    stage5 = reviewer_contract.CONTRACT_TEXT['stage5-closure']
+    assert '未选章节继续保持 unresolved' in stage5
+    assert '本轮在 `targets[]` 中选择' in stage5
+    assert '并发上限 4' in stage5
+    assert '整批完成后统一免费' in stage5
+    assert '修复必须同时改动多章才能安全成立时' in stage5
+    assert '恰有一章' not in stage5

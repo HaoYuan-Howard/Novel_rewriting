@@ -627,8 +627,9 @@ def _require_paid_recovery_authorized(
             raise UnsupportedRunMode(
                 'Stage5 Reviewer rewrite request 当前不是可付费首发态')
         approvals.authorize_writing(
-            current.base, current.sid, [probe.request.target_ordinal],
-            requires_fresh_review=True)
+            current.base, current.sid,
+            list(reviewer_rewrite.ready_reviewer_rewrite_targets(ctx, request_rel)),
+            reviewer_rewrite_request_rel=request_rel)
         return
     raise UnsupportedRunMode(
         f'{node} {sorted(tokens)} 不是已登记的 typed paid recovery')

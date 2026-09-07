@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from contracts.invariants import (
     STAGE2_BLUEPRINT_MAX_CONCURRENCY,
     STAGE4_DESIGN_MAX_CONCURRENCY, STAGE4_PLAN_MAX_CONCURRENCY,
+    STAGE5_WRITE_MAX_CONCURRENCY,
 )
 from contracts.schema.report import CheckReport
 from contracts.schema.stage2 import (
@@ -2136,7 +2137,7 @@ class Stage5SessionPool:
         *,
         driver_factory: Stage5DriverFactory | None = None,
         max_turns: int = 4,
-        concurrency: int = MAX_CONCURRENCY,
+        concurrency: int = STAGE5_WRITE_MAX_CONCURRENCY,
         reviewer_rewrite: bool = False,
     ) -> None:
         self._sessions = UnitSessionPool[int](
@@ -2145,7 +2146,7 @@ class Stage5SessionPool:
             pool_name='Stage5SessionPool',
             max_turns=max_turns,
             concurrency=concurrency,
-            concurrency_cap=MAX_CONCURRENCY,
+            concurrency_cap=STAGE5_WRITE_MAX_CONCURRENCY,
         )
         self.ctx = self._sessions.ctx
         self.profile = self._sessions.profile
@@ -2644,7 +2645,7 @@ class Stage5WriteAgent(NodeExecutorAgent[CheckReport]):
         *,
         driver_factory: Stage5DriverFactory | None = None,
         max_turns: int = 4,
-        concurrency: int = MAX_CONCURRENCY,
+        concurrency: int = STAGE5_WRITE_MAX_CONCURRENCY,
         chapters: str | None = None,
         revise: bool = False,
         reviewer_rewrite: str | None = None,

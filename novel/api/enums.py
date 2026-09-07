@@ -242,6 +242,7 @@ _WITHHELD: dict[str, str] = {
     'STAGE2_BLUEPRINT_MAX_CONCURRENCY': (
         'Stage2 Blueprint 逐章 Agent session 的供应商稳定性护栏；'
         '它是后端编排参数，不是前端可调取值面'),
+    'STAGE5_WRITE_MAX_CONCURRENCY': 'Stage5 写作与受托批量改写共用的后端章节并发上限，前端不另行判定',
     'STAGE4_PLAN_MAX_CONCURRENCY': (
         'Stage4B 章级池的供应商稳定性护栏（批次 4），与 A 的逐章池同因不发：'
         '它是后端编排参数，不是前端可调取值面'),

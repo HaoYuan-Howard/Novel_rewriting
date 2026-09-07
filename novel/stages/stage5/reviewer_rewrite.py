@@ -26,6 +26,7 @@ from contracts.schema.stage5 import (
     ReviewerRewriteDisposition, ReviewerRewriteExecutionState,
     ReviewerRewriteProbe,
     ReviewerRewriteRequest, ReviewerRewriteSubject,
+    ReviewerRewriteBatchRequest, ReviewerRewriteBatchTrustedInput,
     ReviewerRewriteSuccessorJournal, ReviewerRewriteTrustedInput,
     reviewer_rewrite_request_sha256,
 )
@@ -47,7 +48,7 @@ def _file_sha256(path: Path, *, label: str) -> str:
         raise ArtifactUnreadable(f'{label} {path} 不可读：{exc}') from exc
 
 
-def _load_trusted_input(path: Path) -> ReviewerRewriteTrustedInput:
+def _load_trusted_input(path: Path) -> ReviewerRewriteBatchTrustedInput:
     """外部临时输入也拒绝 duplicate keys/NaN，不让 JSON parser 静默覆盖身份。"""
     def reject_constant(value: str) -> None:
         raise ValueError(f'JSON 不接受 {value}')
@@ -66,7 +67,7 @@ def _load_trusted_input(path: Path) -> ReviewerRewriteTrustedInput:
             parse_constant=reject_constant,
             object_pairs_hook=reject_duplicate,
         )
-        return ReviewerRewriteTrustedInput.model_validate(payload)
+        return ReviewerRewriteBatchTrustedInput.model_validate(payload)
     except FileNotFoundError:
         raise ProvenanceRefused(f'reviewer rewrite trusted input 不存在：{path}') from None
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError,
@@ -75,17 +76,29 @@ def _load_trusted_input(path: Path) -> ReviewerRewriteTrustedInput:
             f'reviewer rewrite trusted input 不符合 typed 契约：{exc}') from exc
 
 
+def load_reviewer_rewrite_batch(
+        ctx: RunContext,
+        request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
+) -> tuple[ReviewerRewriteBatchRequest, str]:
+    """一次 Store 读取绑定整个 current v2 批次与精确文件 SHA。"""
+    if request_rel != STAGE5_REVIEWER_REWRITE_REQUEST:
+        raise ProvenanceRefused('reviewer rewrite 只接受 canonical request 路径')
+    return ArtifactStore(ctx).read_own_with_sha256(ReviewerRewriteBatchRequest, request_rel)
+
+
 def load_reviewer_rewrite_request(
         ctx: RunContext,
         request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
+        *, request_sha256: str | None = None, target_ordinal: int | None = None,
 ) -> tuple[ReviewerRewriteRequest, str]:
-    """读取 canonical request 与同一次读取得到的完整文件 SHA。"""
-    if request_rel != STAGE5_REVIEWER_REWRITE_REQUEST:
-        raise ProvenanceRefused(
-            'reviewer rewrite 只接受 canonical '
-            f'{STAGE5_REVIEWER_REWRITE_REQUEST}，实得 {request_rel!r}')
-    store = ArtifactStore(ctx)
-    return store.read_own_with_sha256(ReviewerRewriteRequest, request_rel)
+    """显式定位批次中的单元；多目标时不得暗选第一章。"""
+    batch, digest = load_reviewer_rewrite_batch(ctx, request_rel)
+    matches = [row for row in batch.requests
+               if (request_sha256 is None or row.request_sha256 == request_sha256)
+               and (target_ordinal is None or row.target_ordinal == target_ordinal)]
+    if len(matches) != 1:
+        raise ProvenanceRefused('reviewer rewrite 单章读取必须唯一绑定批内目标或 SHA')
+    return matches[0], digest
 
 
 def _current_request_from_input(
@@ -165,28 +178,66 @@ def _current_request_from_input(
 
 
 def require_current_reviewer_rewrite_request(
-        ctx: RunContext,
-        request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
+        ctx: RunContext, request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
+        *, request_sha256: str | None = None,
 ) -> tuple[ReviewerRewriteRequest, str]:
-    """开 driver/wire 与每次提交前的共同 currentness 闸。"""
-    request, file_sha256 = load_reviewer_rewrite_request(ctx, request_rel)
-    # 先以 historical 口深验 immutable action/seat/session/cost 闭集；损坏必须
-    # 原样 hard-fail。current contract 只是一条可分类的 freshness 轴，不能把
-    # ReviewerTaskError 的其它证据错误一并吞成 expired。
-    _require_request_authority(ctx, request, file_sha256)
+    """目标 CAS 不变；兄弟章变化仅接受同批 exact formal execution 证明。"""
+    request, digest = load_reviewer_rewrite_request(
+        ctx, request_rel, request_sha256=request_sha256)
+    batch, batch_digest = load_reviewer_rewrite_batch(ctx, request_rel)
+    if batch_digest != digest:
+        raise ProvenanceRefused('reviewer rewrite 批次读取期间漂移')
+    _require_request_authority(ctx, request, digest)
     from novel.orchestrator import queue, reviewer_contract
-    current_contract_sha256 = hashlib.sha256(
-        reviewer_contract.for_blocker(
-            queue.WAITING_ON_STAGE5_CLOSURE).encode('utf-8')).hexdigest()
-    if request.reviewer_contract_sha256 != current_contract_sha256:
-        raise UpstreamStale(
-            'reviewer rewrite authority 所绑 Reviewer contract 已非 current')
-    trusted = _trusted_from_request(request)
-    current = _current_request_from_input(ctx, trusted)
-    if current != request:
-        raise ProvenanceRefused(
-            'canonical reviewer rewrite request 与 current Review/frontier/正文漂移')
-    return request, file_sha256
+    contract = hashlib.sha256(reviewer_contract.for_blocker(
+        queue.WAITING_ON_STAGE5_CLOSURE).encode('utf-8')).hexdigest()
+    if request.reviewer_contract_sha256 != contract:
+        raise UpstreamStale('reviewer rewrite authority 所绑 Reviewer contract 已非 current')
+    store = ArtifactStore(ctx)
+    replaced: set[str] = set()
+    for sibling in batch.requests:
+        rel = artifact_rel('stage5.chapter', nn=sibling.target_ordinal)
+        _chapter, current_sha = store.read_own_with_sha256(Chapter, rel, require_current=True)
+        if current_sha == sibling.target_chapter_file_sha256:
+            continue
+        if sibling.target_ordinal == request.target_ordinal:
+            raise ProvenanceRefused('reviewer rewrite 当前目标已变化，不能按原授权重新写作')
+        terminal = _unit_execution_state(ctx, sibling, digest, request_rel, terminal_only=True)
+        if terminal.state != 'landed_formal' or not terminal.terminal_current:
+            raise ProvenanceRefused('兄弟章变化不是同批已正式交付的改写')
+        replaced.add(rel)
+    if not replaced:
+        if _current_request_from_input(ctx, _trusted_from_request(request)) != request:
+            raise ProvenanceRefused('canonical reviewer rewrite request 与 current frontier 漂移')
+        return request, digest
+    # 同批 formal 只使这些确证兄弟章的 Review 输入边过期；其余 upstream/规则、
+    # Review 原字节及所有未改章节的 audit/text 都必须仍与冻结批次相同。
+    latest = review.latest_review(store)
+    if latest is None or review.REVIEW_TPL.format(n=latest[0]) != request.review_rel:
+        raise UpstreamStale('reviewer rewrite 批次未收口前 Review 已换代')
+    _review, review_sha = store.read_own_with_sha256(
+        Review, request.review_rel, require_current=True, replaced_input_keys=replaced)
+    if review_sha != request.review_sha256:
+        raise ProvenanceRefused('reviewer rewrite 批次的原 Review 字节变化')
+    _frozen_request_evidence(ctx, request)
+    for subject in request.unresolved_trim_items:
+        rel = artifact_rel('stage5.chapter', nn=subject.output_ordinal)
+        if rel in replaced:
+            continue
+        chapter, chapter_sha = store.read_own_with_sha256(Chapter, rel, require_current=True)
+        audit, audit_sha = store.read_own_with_sha256(
+            TrimAudit, artifact_rel('stage5.trim_audit', nn=subject.output_ordinal),
+            require_current=True)
+        text_sha = hashlib.sha256(chapter.text.encode('utf-8')).hexdigest()
+        if (text_sha != subject.chapter_sha256 or audit_sha != subject.audit_sha256
+                or audit.before_sha256 != text_sha):
+            raise ProvenanceRefused('reviewer rewrite 未改章节的正文/audit frontier 漂移')
+        if subject.output_ordinal == request.target_ordinal:
+            if chapter_sha != request.target_chapter_file_sha256:
+                raise ProvenanceRefused('reviewer rewrite 目标完整文件 SHA 漂移')
+            if any(chapter.text.count(row.current_text_evidence) != 1 for row in request.directives):
+                raise ProvenanceRefused('reviewer rewrite 目标逐字 evidence 漂移')
+    return request, digest
 
 
 def _trusted_from_request(
@@ -215,8 +266,11 @@ def _require_request_authority(
 ) -> None:
     """即使正文已落使 request stale，仍逐次复验其人审/席位原始证据。"""
     from novel.orchestrator import reviewer_action_evidence
+    batch, digest = load_reviewer_rewrite_batch(ctx)
+    if digest != request_file_sha256 or batch.by_sha256(request.request_sha256) != request:
+        raise ProvenanceRefused('reviewer rewrite 单元不属于 canonical 原批次')
     reviewer_action_evidence.require_sealed_reviewer_rewrite_authority(
-        Path(ctx.novel_dir).parent, ctx.sid, request, request_file_sha256)
+        Path(ctx.novel_dir).parent, ctx.sid, batch, digest)
 
 
 def _terminal_locations(
@@ -436,7 +490,8 @@ def _restore_active_checkpoint(
     # 先把 Review/frontier/action/current old chapter 全闭合，才允许把历史响应
     # 标成 recoverable；否则即使 checkpoint 原字节完整也只能停在 unknown。
     checked, checked_file_sha256 = require_current_reviewer_rewrite_request(
-        ctx, STAGE5_REVIEWER_REWRITE_REQUEST)
+        ctx, STAGE5_REVIEWER_REWRITE_REQUEST,
+        request_sha256=request.request_sha256)
     if checked != request or checked_file_sha256 != request_file_sha256:
         raise ProvenanceRefused('reviewer rewrite recovery 前 canonical request 漂移')
     restored, _prepared = _restore_frozen_checkpoint(
@@ -805,16 +860,13 @@ def _require_successor_wal_closes(
                 'reviewer rewrite committed successor WAL/live target 漂移')
 
 
-def reviewer_rewrite_execution_state(
-        ctx: RunContext,
+def _unit_execution_state(
+        ctx: RunContext, request: ReviewerRewriteRequest, request_file_sha256: str,
         request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
-) -> ReviewerRewriteExecutionState | None:
-    """返回 queue 唯一消费的关闭式九态；request 缺失仅返回 ``None``。"""
+        *, terminal_only: bool = False,
+) -> ReviewerRewriteExecutionState:
+    """每章仍按独立九态证明执行；整批只聚合，不压平未知与部分成功。"""
     store = ArtifactStore(ctx)
-    if not store.exists(request_rel):
-        return None
-    request, request_file_sha256 = load_reviewer_rewrite_request(
-        ctx, request_rel)
     from novel.orchestrator import reviewer_action_evidence
     if not reviewer_action_evidence.reviewer_rewrite_authority_sealed(
             Path(ctx.novel_dir).parent, ctx.sid,
@@ -951,10 +1003,13 @@ def reviewer_rewrite_execution_state(
     if terminal_artifact is not None and not chains:
         raise ProvenanceRefused(
             'reviewer rewrite terminal artifact 缺 paid source execution evidence')
+    if terminal_only:
+        raise ProvenanceRefused('同批兄弟章已变化但没有 exact terminal execution 证据')
     active = [chain[-1] for chain in chains]
     if not active:
         try:
-            require_current_reviewer_rewrite_request(ctx, request_rel)
+            require_current_reviewer_rewrite_request(
+                ctx, request_rel, request_sha256=request.request_sha256)
         except ArtifactUnreadable:
             raise
         except (ProvenanceRefused, UpstreamMissing, UpstreamStale,
@@ -1000,7 +1055,8 @@ def reviewer_rewrite_execution_state(
             reclaimable = False
         if reclaimable:
             try:
-                require_current_reviewer_rewrite_request(ctx, request_rel)
+                require_current_reviewer_rewrite_request(
+                ctx, request_rel, request_sha256=request.request_sha256)
             except (ProvenanceRefused, UpstreamMissing, UpstreamStale,
                     UpstreamUnproven):
                 reclaim_state = 'expired_unstarted'
@@ -1030,7 +1086,7 @@ def reviewer_rewrite_execution_state(
         # 只有 active checkpoint/prepared recovery 才用今天的 plan/prompt/schema/
         # validator 重新判定；historical terminal 已在上方完全绕开当前编译器。
         checked, checked_sha = require_current_reviewer_rewrite_request(
-            ctx, request_rel)
+            ctx, request_rel, request_sha256=request.request_sha256)
         if checked != request or checked_sha != request_file_sha256:
             raise ProvenanceRefused('reviewer rewrite active recovery request 漂移')
         restored, prepared_frozen = _restore_frozen_checkpoint(
@@ -1085,18 +1141,64 @@ def reviewer_rewrite_execution_state(
     )
 
 
-def current_reviewer_rewrite_request(
-        ctx: RunContext,
-        request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
-) -> ReviewerRewriteProbe | None:
-    """给 queue/permit 的 canonical typed request + execution 单次入口。"""
-    execution = reviewer_rewrite_execution_state(ctx, request_rel)
-    if execution is None:
+def reviewer_rewrite_batch_probes(
+        ctx: RunContext, request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
+) -> tuple[ReviewerRewriteProbe, ...]:
+    store = ArtifactStore(ctx)
+    if not store.exists(request_rel):
+        return ()
+    batch, digest = load_reviewer_rewrite_batch(ctx, request_rel)
+    probes = tuple(ReviewerRewriteProbe(
+        request=request, execution=_unit_execution_state(ctx, request, digest, request_rel),
+    ) for request in batch.requests)
+    after, after_digest = load_reviewer_rewrite_batch(ctx, request_rel)
+    if after != batch or after_digest != digest:
+        raise ProvenanceRefused('reviewer rewrite 批次探测期间 canonical 漂移')
+    return probes
+
+
+def _next_batch_probe(probes: tuple[ReviewerRewriteProbe, ...]) -> ReviewerRewriteProbe | None:
+    if not probes:
         return None
-    request, file_sha256 = load_reviewer_rewrite_request(ctx, request_rel)
-    if file_sha256 != execution.request_file_sha256:
-        raise ProvenanceRefused('reviewer rewrite probe 两次读取之间 request 漂移')
-    return ReviewerRewriteProbe(request=request, execution=execution)
+    # 先补已付费的已知 checkpoint；随后未知/负结论挡新 wire。
+    # 全部终结前不会把单个成功单元当成整批已完成而放行 Review。
+    priority = (
+        'recoverable_prepared', 'recoverable_checkpoint', 'in_flight_or_unknown',
+        'landed_invalid', 'landed_rejected', 'expired_unstarted', 'ready_paid',
+        'landed_formal', 'consumed_resolved',
+    )
+    return min(probes, key=lambda row: (
+        priority.index(row.execution.state), row.request.target_ordinal))
+
+
+def current_reviewer_rewrite_request(
+        ctx: RunContext, request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
+) -> ReviewerRewriteProbe | None:
+    """整批下一步的唯一投影；paid 动作消费同批全部 ready 单元。"""
+    return _next_batch_probe(reviewer_rewrite_batch_probes(ctx, request_rel))
+
+
+def reviewer_rewrite_execution_state(
+        ctx: RunContext, request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
+        *, request_sha256: str | None = None,
+) -> ReviewerRewriteExecutionState | None:
+    if request_sha256 is not None:
+        request, digest = load_reviewer_rewrite_request(
+            ctx, request_rel, request_sha256=request_sha256)
+        return _unit_execution_state(ctx, request, digest, request_rel)
+    probe = current_reviewer_rewrite_request(ctx, request_rel)
+    return None if probe is None else probe.execution
+
+
+def ready_reviewer_rewrite_targets(
+        ctx: RunContext, request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
+) -> tuple[int, ...]:
+    probes = reviewer_rewrite_batch_probes(ctx, request_rel)
+    selected = _next_batch_probe(probes)
+    if selected is None or selected.execution.state != 'ready_paid':
+        raise ProvenanceRefused('reviewer rewrite 批次当前不可新建付费执行')
+    return tuple(row.request.target_ordinal for row in probes
+                 if row.execution.state == 'ready_paid')
 
 
 def matching_reviewer_rewrite_recovery_source(
@@ -1113,85 +1215,72 @@ def matching_reviewer_rewrite_recovery_source(
     return state.source_run_id
 
 
+def _current_batch_from_input(
+        ctx: RunContext, trusted: ReviewerRewriteBatchTrustedInput,
+) -> ReviewerRewriteBatchRequest:
+    requests = tuple(_current_request_from_input(
+        ctx, trusted.for_target(target.target_ordinal)) for target in trusted.targets)
+    raw = {'version': 2, 'kind': 'stage5-reviewer-rewrite-batch-v2',
+           'requests': [row.model_dump(mode='json') for row in requests]}
+    raw['request_sha256'] = reviewer_rewrite_request_sha256(raw)
+    return ReviewerRewriteBatchRequest.model_validate(raw)
+
+
 def _record_trusted_request(
-        ctx: RunContext, trusted: ReviewerRewriteTrustedInput,
-) -> ReviewerRewriteRequest:
+        ctx: RunContext, trusted: ReviewerRewriteBatchTrustedInput,
+) -> ReviewerRewriteBatchRequest:
     if ctx.paid:
         raise ProvenanceRefused('formal reviewer rewrite request 必须由 free node 物化')
-    # 不能把受信临时文件里的四个字符串当作来源证明；在任何 canonical 写盘
-    # 之前，回到 content-addressed action record 与 seat/session/cost 三账对证。
     from novel.orchestrator import reviewer_action_evidence
     reviewer_action_evidence.require_reviewer_rewrite_authority(
         Path(ctx.novel_dir).parent, ctx.sid, trusted,
         current_parent_run_id=ctx.parent_run_id)
     store = ArtifactStore(ctx)
-    existing_before: tuple[ReviewerRewriteRequest, str] | None = None
-    if store.exists(STAGE5_REVIEWER_REWRITE_REQUEST):
-        existing_before = store.read_own_with_sha256(
-            ReviewerRewriteRequest, STAGE5_REVIEWER_REWRITE_REQUEST)
-    execution_lease = (
-        nullcontext()
-        if existing_before is None
-        else stage5_runs.reviewer_rewrite_execution_ownership(
-            ctx.novel_dir, existing_before[0].request_sha256))
-    with execution_lease:
-      with stage5_runs.book_commit_ownership(ctx.novel_dir):
-        proposed = _current_request_from_input(ctx, trusted)
-        rel = STAGE5_REVIEWER_REWRITE_REQUEST
+    rel = STAGE5_REVIEWER_REWRITE_REQUEST
+    existing = load_reviewer_rewrite_batch(ctx) if store.exists(rel) else None
+    lease = (nullcontext() if existing is None
+             else stage5_runs.reviewer_rewrite_execution_ownership(
+                 ctx.novel_dir, existing[0].request_sha256))
+    with lease, stage5_runs.book_commit_ownership(ctx.novel_dir):
+        proposed = _current_batch_from_input(ctx, trusted)
         if store.exists(rel):
-            current, _sha = store.read_own_with_sha256(
-                ReviewerRewriteRequest, rel)
-            if (existing_before is None or current != existing_before[0]
-                    or _sha != existing_before[1]):
-                raise ProvenanceRefused(
-                    '旧 reviewer rewrite request 在 execution/book 取锁之间漂移')
-            if current == proposed:
-                return current
-            state = reviewer_rewrite_execution_state(ctx, rel)
-            if (state is not None and state.state not in (
-                    'landed_formal', 'consumed_resolved')):
-                raise ProvenanceRefused(
-                    '旧 reviewer rewrite request 尚未形成 terminal consumed 证据；'
-                    '拒绝覆盖唯一 paid intent/恢复主体')
+            current = load_reviewer_rewrite_batch(ctx)
+            if existing != current:
+                raise ProvenanceRefused('旧 reviewer rewrite 批次在取锁期间漂移')
+            if current[0] == proposed:
+                return proposed
+            probes = reviewer_rewrite_batch_probes(ctx)
+            if any(row.execution.state not in ('landed_formal', 'consumed_resolved')
+                   for row in probes):
+                raise ProvenanceRefused('旧 reviewer rewrite 批次仍有未解决单元；拒绝覆盖')
         store.write_round(rel, proposed)
-        landed, _landed_sha = store.read_own_with_sha256(
-            ReviewerRewriteRequest, rel)
-        if landed != proposed:
-            raise ProvenanceRefused('reviewer rewrite request 写后 typed readback 漂移')
-        # 写入与 currentness 终验同在全书写锁内，避免交出一份瞬间过期的新 request。
-        checked = _current_request_from_input(ctx, trusted)
-        if checked != proposed:
-            raise ProvenanceRefused('reviewer rewrite request 写后 currentness 漂移')
+        landed, _sha = load_reviewer_rewrite_batch(ctx)
+        if landed != proposed or _current_batch_from_input(ctx, trusted) != proposed:
+            raise ProvenanceRefused('reviewer rewrite 批次写后 typed/current readback 漂移')
         return landed
 
 
 def record_reviewer_rewrite_request(
         ctx: RunContext, input_path: Path,
-) -> ReviewerRewriteRequest:
-    """从受信临时 envelope 物化 canonical request。"""
+) -> ReviewerRewriteBatchRequest:
     return _record_trusted_request(ctx, _load_trusted_input(Path(input_path)))
 
 
 def request_reviewer_rewrite(
         ctx: RunContext, value: Stage5ReviewerRewriteRequest, *,
-        reviewer_action_record_sha256: str,
-        business_sha256: str,
-        reviewer_contract_sha256: str,
-        reviewer_session_run_id: str,
-        reviewer_seat_turn_id: str,
-        provider_response_sha256: str,
-) -> ReviewerRewriteRequest:
-    """编排层持有 durable identity 时的 typed 直调入口。"""
+        reviewer_action_record_sha256: str, business_sha256: str,
+        reviewer_contract_sha256: str, reviewer_session_run_id: str,
+        reviewer_seat_turn_id: str, provider_response_sha256: str,
+) -> ReviewerRewriteBatchRequest:
     typed = Stage5ReviewerRewriteRequest.model_validate(value)
-    trusted = ReviewerRewriteTrustedInput(
+    trusted = ReviewerRewriteBatchTrustedInput(
         **typed.model_dump(mode='json'),
         reviewer_action_record_sha256=reviewer_action_record_sha256,
         business_sha256=business_sha256,
         reviewer_contract_sha256=reviewer_contract_sha256,
         reviewer_session_run_id=reviewer_session_run_id,
         reviewer_seat_turn_id=reviewer_seat_turn_id,
-        provider_response_sha256=provider_response_sha256,
-    )
+        provider_response_sha256=provider_response_sha256)
     return _record_trusted_request(ctx, trusted)
 
 
@@ -1202,19 +1291,22 @@ def retire_expired_reviewer_rewrite_request(
     if ctx.paid or ctx.node != 'stage5.write' or ctx.executor_profile is not None:
         raise ProvenanceRefused(
             'retire reviewer rewrite request 必须是无 executor 的 free stage5.write')
-    request, initial_file_sha256 = load_reviewer_rewrite_request(ctx, request_rel)
+    request, initial_file_sha256 = load_reviewer_rewrite_request(ctx, request_rel, request_sha256=request_sha256)
     if request.request_sha256 != request_sha256:
         raise ProvenanceRefused('retire reviewer rewrite request SHA 与 canonical 漂移')
-    with stage5_runs.reviewer_rewrite_execution_ownership(
-            ctx.novel_dir, request.request_sha256):
+    batch, _digest = load_reviewer_rewrite_batch(ctx, request_rel)
+    with (stage5_runs.reviewer_rewrite_execution_ownership(
+            ctx.novel_dir, batch.request_sha256),
+          stage5_runs.reviewer_rewrite_execution_ownership(
+            ctx.novel_dir, request.request_sha256)):
         with stage5_runs.book_commit_ownership(ctx.novel_dir):
             current, request_file_sha256 = load_reviewer_rewrite_request(
-                ctx, request_rel)
+                ctx, request_rel, request_sha256=request_sha256)
             if (current != request
                     or request_file_sha256 != initial_file_sha256):
                 raise ProvenanceRefused(
                     'retire reviewer rewrite request 取 execution/book 锁后漂移')
-            state = reviewer_rewrite_execution_state(ctx, request_rel)
+            state = reviewer_rewrite_execution_state(ctx, request_rel, request_sha256=request_sha256)
             if state is None or state.state != 'expired_unstarted':
                 actual = 'absent' if state is None else state.state
                 raise ProvenanceRefused(
@@ -1240,7 +1332,7 @@ def retire_expired_reviewer_rewrite_request(
                     request.reviewer_action_record_sha256),
                 target_ordinal=request.target_ordinal,
                 unstarted_evidence=evidence)
-            after = reviewer_rewrite_execution_state(ctx, request_rel)
+            after = reviewer_rewrite_execution_state(ctx, request_rel, request_sha256=request_sha256)
             if after is None or after.state != 'consumed_resolved':
                 raise ProvenanceRefused(
                     'reviewer rewrite disposition 写后未形成 consumed_resolved')
@@ -1248,6 +1340,9 @@ def retire_expired_reviewer_rewrite_request(
 
 
 __all__ = [
+    'load_reviewer_rewrite_batch',
+    'reviewer_rewrite_batch_probes',
+    'ready_reviewer_rewrite_targets',
     'current_reviewer_rewrite_request',
     'load_reviewer_rewrite_request',
     'matching_reviewer_rewrite_recovery_source',

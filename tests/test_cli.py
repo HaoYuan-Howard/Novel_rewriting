@@ -969,7 +969,7 @@ def test_every_paid_stage5_cli_path_authorizes_before_dispatch(
         M, 'RunContext', SimpleNamespace(open=lambda *_args, **_kwargs: ctx))
     monkeypatch.setattr(global_review, 'require_approved', lambda _ctx: None)
 
-    def refuse(_base, _sid, selected, *, requires_fresh_review=False):
+    def refuse(_base, _sid, selected, *, requires_fresh_review=False, reviewer_rewrite_request_rel=None):
         authorized.append((selected, requires_fresh_review))
         raise ApprovalRequired('合成授权拒绝')
 

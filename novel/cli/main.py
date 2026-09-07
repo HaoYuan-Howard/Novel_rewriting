@@ -1211,7 +1211,7 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
 
 def _require_stage5_reviewer_rewrite_ready(
         ctx: RunContext, request_rel: str,
-        ) -> int:
+        ) -> tuple[int, ...]:
     """在任何 Stage5 writer client/driver 构造前复核 current request。"""
     from contracts.artifacts import STAGE5_REVIEWER_REWRITE_REQUEST
     from novel.stages.stage5 import reviewer_rewrite
@@ -1225,7 +1225,7 @@ def _require_stage5_reviewer_rewrite_ready(
         raise TerminalState(
             'Stage5 Reviewer rewrite request 当前不是可付费首发态；'
             '请按 queue 发布的 exact recovery/outcome 继续')
-    return probe.request.target_ordinal
+    return reviewer_rewrite.ready_reviewer_rewrite_targets(ctx, request_rel)
 
 
 def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
@@ -1256,8 +1256,8 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
             from novel.stages.stage5 import reviewer_rewrite
             request = reviewer_rewrite.record_reviewer_rewrite_request(
                 ctx, input_abs)
-            print('  ✓ Stage5 Reviewer 单章改写 request 已落盘并 typed readback：'
-                  f'ch{request.target_ordinal} · {request.request_sha256}')
+            print('  ✓ Stage5 Reviewer 批量改写 request 已落盘并 typed readback：'
+                  f'{request.target_ordinals} · {request.request_sha256}')
             return X.OK
         if '--retain-pretrim' in tokens:
             selected = _chapters_of(chapters)
@@ -1400,7 +1400,8 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
             flags, '--reviewer-rewrite-recovery-target-run-id')
         recovery_journal_sha256 = _valued(
             flags, '--reviewer-rewrite-recovery-journal-sha256')
-        execution = reviewer_rewrite.reviewer_rewrite_execution_state(ctx)
+        execution = reviewer_rewrite.reviewer_rewrite_execution_state(
+            ctx, request_sha256=request_sha256)
         if (
             execution is None
             or execution.state not in {
@@ -1429,7 +1430,7 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
         request_sha256 = (
             _valued(flags, '--reviewer-rewrite-request-sha256') or '')
         execution = reviewer_rewrite.reviewer_rewrite_execution_state(
-            ctx, request_rel)
+            ctx, request_rel, request_sha256=request_sha256)
         if (
             execution is None
             or execution.state != 'expired_unstarted'
@@ -1873,12 +1874,11 @@ def _cmd_run(a: argparse.Namespace) -> int:
         approvals.authorize_writing(
             a.base,
             a.sid,
-            ([reviewer_rewrite_target]
+            (list(reviewer_rewrite_target)
              if reviewer_rewrite_target is not None
              else list(_chapters_of(_valued(flags, '--chapters'))) or None),
-            requires_fresh_review=(
-                reviewer_rewrite_target is not None
-                or '--revise' in N.flag_tokens(flags)),
+            requires_fresh_review='--revise' in N.flag_tokens(flags),
+            reviewer_rewrite_request_rel=reviewer_rewrite_rel,
         )
     # Stage5 闭合闸落在**所有真实执行最终汇合的运行边界**（手敲 CLI、API jobs、
     # headless agent 子 CLI 都经过这里）：stage6/stage7 的任何写效果跑法都要求

@@ -2428,7 +2428,7 @@ def _submission_options(
         stop_request = _request_wrapper(current, waiting_on, {
             'kind': 'stop',
             'reason': (
-                '<指出不能安全 retain、也不能收成一章关闭式 rewrite request 的章号、'
+                '<指出超出登记指令闭集、或必须跨章联动才可安全修复的章号、'
                 '当前正文证据与风险；该动作不写 resolution/request、不调用写手>'),
         })
         frontier = [
@@ -2488,72 +2488,70 @@ def _submission_options(
             row.output_ordinal: row.chapter_sha256
             for row in closure_view.workpack.chapter_subjects
         }
+        targets = []
         for row in closure_view.workpack.unresolved_trim_items:
             target_file_sha256 = chapter_file_sha256.get(row.output_ordinal)
             if target_file_sha256 is None:
-                raise ReviewerTaskError(
-                    'Stage5 reviewer rewrite target 缺 canonical 完整文件 SHA')
-            rewrite_payload = {
-                'actor': _ACTOR,
-                'reason': (
-                    f'<说明为何第 {row.output_ordinal} 章可由关闭式指令安全改写，'
-                    '并概括跨章复核结论>'),
-                'review_sha256': closure_view.workpack.review_sha256,
-                'unresolved_trim_items': copy.deepcopy(frontier),
+                raise ReviewerTaskError('Stage5 reviewer rewrite target 缺完整文件 SHA')
+            targets.append({
                 'target_ordinal': row.output_ordinal,
                 'target_chapter_file_sha256': target_file_sha256,
                 'directives': [{
                     'code': STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES[0],
                     'current_text_evidence': (
                         f'<从第 {row.output_ordinal} 章 current rendered_text '
-                        '逐字复制不超过 240 字的定位证据>'),
+                        '逐字复制不超过 240 字的唯一定位证据>'),
                 }],
-            }
-            rewrite_request = _request_wrapper(current, waiting_on, {
-                'kind': 'node', 'node': 'stage5.review',
-                'flags': [
-                    '--request-reviewer-rewrite', '@reviewer-input'],
-                'input_payload': rewrite_payload,
             })
-            options.append(_option(
-                'node:stage5.review.request-reviewer-rewrite.'
-                f'ch{row.output_ordinal}',
-                rewrite_request,
-                editable_fields=[
-                    'action.input_payload.reason',
-                    'action.input_payload.directives[] 的 code/current_text_evidence',
+        rewrite_request = _request_wrapper(current, waiting_on, {
+            'kind': 'node', 'node': 'stage5.review',
+            'flags': ['--request-reviewer-rewrite', '@reviewer-input'],
+            'input_payload': {
+                'actor': _ACTOR,
+                'reason': '<说明所选各章为何可独立安全改写，并概括跨章复核结论>',
+                'review_sha256': closure_view.workpack.review_sha256,
+                'unresolved_trim_items': copy.deepcopy(frontier),
+                'targets': targets,
+            },
+        })
+        options.append(_option(
+            'node:stage5.review.request-reviewer-rewrite', rewrite_request,
+            editable_fields=[
+                'action.input_payload.reason',
+                'action.input_payload.targets 的非空有序子集',
+                'action.input_payload.targets[].directives[] 的 code/current_text_evidence',
+            ],
+            binding_fields=bind + [
+                'action.node', 'action.flags', 'action.input_payload.actor',
+                'action.input_payload.review_sha256',
+                'action.input_payload.targets[].target_ordinal/target_chapter_file_sha256',
+                'action.input_payload.unresolved_trim_items 的完整双 SHA 与行顺序',
+            ],
+            allowed_values={
+                'targets[].directives[].code': list(STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES),
+                'targets[].directives[].current_text_evidence': (
+                    '必须在该章 current rendered_text 中逐字恰好命中一次，最长 240 字；'
+                    '同章同一 code/evidence 不得重复'),
+                'scope': (
+                    '选择本轮需要且可独立安全改写的全部章节，保留有序非空子集；'
+                    '未选章节保持 unresolved，不被批准保留或销账。各章并发上限 4，'
+                    '整批完成后统一免费 Review；必须跨章联动才能成立的修复仍须 stop。'),
+                'fixed_writer_constraints': [
+                    '每章压回自己的 budget_chars 上限',
+                    '保留全部 plan slots、事实、时序与必须逐字内容',
+                    'actor/reason/evidence 只作审计与定位，不拼成自由 prompt',
                 ],
-                binding_fields=bind + [
-                    'action.node', 'action.flags', 'action.input_payload.actor',
-                    'action.input_payload.review_sha256/target_ordinal/'
-                    'target_chapter_file_sha256',
-                    'action.input_payload.unresolved_trim_items 的完整双 SHA 与行顺序',
-                ],
-                allowed_values={
-                    'directives[].code': list(
-                        STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES),
-                    'directives[].current_text_evidence': (
-                        '每条必须在 target current rendered_text 中逐字恰好命中一次，'
-                        '最长 240 字；同一 code/evidence 不得重复'),
-                    'fixed_writer_constraints': [
-                        '压回本章 budget_chars 上限',
-                        '保留全部 plan slots、事实、时序与必须逐字内容',
-                        'actor/reason/evidence 只作审计与定位，不拼成自由 prompt',
-                    ],
-                },
-                validation_context={
-                    'target_ordinal': row.output_ordinal,
-                    'target_rendered_text': chapter_texts.get(
-                        row.output_ordinal),
-                },
-            ))
+            },
+            validation_context={'chapter_texts': chapter_texts},
+        ))
         options.append(_option(
             'stop:stage5-trim-no-safe-disposition', stop_request,
             editable_fields=['action.reason'],
             binding_fields=bind + ['action.kind'],
             allowed_values={
                 'purpose': (
-                    '存在不能安全 retain、或问题超出单章关闭式 rewrite code 的项时使用；'
+                    '问题超出登记 code，或必须同时改动多章才能安全成立时使用；'
+                    '多章分别可独立修复本身不是 stop 理由，应在同一批 targets 中列出。'
                     '不得为关闭 blocker 机械留稿或发明自由 prompt。'),
             },
         ))
@@ -2964,7 +2962,9 @@ def build_task(
         'rendered_text/segments、完整 TrimAudit、现算目标区间与超额读数，并与 closure '
         'workpack 的 audit/chapter 双 SHA 绑定。必须通读全部待办以做跨章复核，本轮只'
         '选择一个互斥出口：全部可保留时提交一份 full-batch manifest，并为每章分别填写'
-        '非空 retain 理由；恰有一章可由登记的 rewrite code 安全处理时，选择该章 option，'
+        '非空 retain 理由；存在可独立安全改写的章时，在一份 rewrite option 的 targets 中'
+        '选择需要改写的非空有序子集，各章填写独立指令；未选章节继续保持 unresolved，'
+        '不批准保留、不销账。并发上限 4，整批正式落盘后统一免费重算 Review；'
         '按 current rendered_text 逐字填写每条 evidence；超出闭集则选择 typed stop。'
         'actor/reason/evidence 只作审计和定位，不得变成自由 prompt。Supervisor 不替你'
         '生成、补写或选择决定；rewrite 会先落一份 0 成本 hash-bound canonical request，'
@@ -3391,28 +3391,14 @@ def _stage5_trim_submission_template(
 ) -> tuple[dict[str, Any], bool, dict[str, Any]]:
     """取 current Stage5 trim 卡唯一的 immutable node 骨架。"""
     matches: list[tuple[dict[str, Any], bool, dict[str, Any]]] = []
-    submitted_payload = action.get('input_payload')
-    submitted_target = (
-        submitted_payload.get('target_ordinal')
-        if isinstance(submitted_payload, Mapping) else None)
     for option in submission_options or ():
         exact = option.get('exact_request') if isinstance(option, dict) else None
         expected = exact.get('action') if isinstance(exact, dict) else None
-        expected_payload = (
-            expected.get('input_payload') if isinstance(expected, dict) else None)
-        expected_target = (
-            expected_payload.get('target_ordinal')
-            if isinstance(expected_payload, Mapping) else None)
         if (
             isinstance(expected, dict)
             and expected.get('kind') == 'node'
             and expected.get('node') == 'stage5.review'
             and expected.get('flags') == action.get('flags')
-            and (
-                action.get('flags') != [
-                    '--request-reviewer-rewrite', '@reviewer-input']
-                or submitted_target == expected_target
-            )
         ):
             matches.append((
                 expected,
@@ -3479,7 +3465,7 @@ def _validate_stage5_reviewer_rewrite_binding(
     submitted: dict[str, Any], expected: dict[str, Any], *,
     option: Mapping[str, Any],
 ) -> None:
-    """只开放关闭式 directive 与理由；Review/frontier/单 target 全部冻结。"""
+    """只开放关闭式 directive 与理由；Review/frontier 与所选目标身份全部冻结。"""
     if frozenset(submitted) != frozenset({
             'kind', 'node', 'flags', 'input_payload'}):
         raise ReviewerTaskError(
@@ -3491,57 +3477,36 @@ def _validate_stage5_reviewer_rewrite_binding(
     expected_payload = expected.get('input_payload')
     if not isinstance(payload, dict) or not isinstance(expected_payload, dict):
         raise ReviewerTaskError('Stage5 reviewer rewrite 缺 typed input_payload')
-    expected_keys = frozenset({
-        'actor', 'reason', 'review_sha256', 'unresolved_trim_items',
-        'target_ordinal', 'target_chapter_file_sha256', 'directives',
-    })
-    if frozenset(payload) != expected_keys:
-        raise ReviewerTaskError(
-            'Stage5 reviewer rewrite payload 字段集合必须逐字保留模板')
-    for field in (
-        'actor', 'review_sha256', 'unresolved_trim_items', 'target_ordinal',
-        'target_chapter_file_sha256',
-    ):
+    if frozenset(payload) != frozenset({
+            'actor', 'reason', 'review_sha256', 'unresolved_trim_items', 'targets'}):
+        raise ReviewerTaskError('Stage5 reviewer rewrite payload 字段集合必须保留模板')
+    for field in ('actor', 'review_sha256', 'unresolved_trim_items'):
         if payload.get(field) != expected_payload.get(field):
             raise ReviewerTaskError(
-                f'Stage5 reviewer rewrite {field} 必须逐字保留 current workpack binding')
-    reason = payload.get('reason')
-    if not isinstance(reason, str) or not reason.strip():
-        raise ReviewerTaskError(
-            'Stage5 reviewer rewrite reason 必须是非空人工理由')
-    directives = payload.get('directives')
-    if not isinstance(directives, list) or not directives:
-        raise ReviewerTaskError(
-            'Stage5 reviewer rewrite 至少需要一条关闭式 directive')
-    for index, directive in enumerate(directives):
-        if not isinstance(directive, dict) or frozenset(directive) != frozenset({
-                'code', 'current_text_evidence'}):
-            raise ReviewerTaskError(
-                f'Stage5 reviewer rewrite directives[{index}] 字段集合不合法')
+                f'Stage5 reviewer rewrite {field} 必须保留 current workpack binding')
+    try:
+        typed = Stage5ReviewerRewriteRequest.model_validate(payload)
+    except ValidationError as exc:
+        raise ReviewerTaskError(f'Stage5 reviewer rewrite targets/directives 不合法：{exc}') from exc
+    available = {row['target_ordinal']: row['target_chapter_file_sha256']
+                 for row in expected_payload['targets']}
     validation = option.get('_validation_context')
-    target_text = (
-        validation.get('target_rendered_text')
-        if isinstance(validation, Mapping) else None
-    )
-    if (
-        not isinstance(validation, Mapping)
-        or validation.get('target_ordinal') != payload.get('target_ordinal')
-        or not isinstance(target_text, str)
-        or not target_text
-    ):
-        raise ReviewerTaskError(
-            'Stage5 reviewer rewrite option 缺 target current 正文验证材料')
-    for index, directive in enumerate(directives):
-        evidence = directive.get('current_text_evidence')
-        matches = (
-            target_text.count(evidence)
-            if isinstance(evidence, str) and evidence else 0
-        )
-        if matches != 1:
-            raise ReviewerTaskError(
-                'Stage5 reviewer rewrite directives'
-                f'[{index}].current_text_evidence 必须在 target current 正文中'
-                f'恰好命中一次，实得 {matches} 次')
+    texts = validation.get('chapter_texts') if isinstance(validation, Mapping) else None
+    for target in typed.targets:
+        if available.get(target.target_ordinal) != target.target_chapter_file_sha256:
+            raise ReviewerTaskError('Stage5 reviewer rewrite target 不是 current workpack 的精确子集')
+        target_text = texts.get(target.target_ordinal) if isinstance(texts, Mapping) else None
+        # durable JSON 的 key 会转成字符串。
+        if target_text is None and isinstance(texts, Mapping):
+            target_text = texts.get(str(target.target_ordinal))
+        if not isinstance(target_text, str) or not target_text:
+            raise ReviewerTaskError('Stage5 reviewer rewrite 缺 target current 正文验证材料')
+        for directive in target.directives:
+            matches = target_text.count(directive.current_text_evidence)
+            if matches != 1:
+                raise ReviewerTaskError(
+                    'Stage5 reviewer rewrite current_text_evidence 必须在对应章正文中'
+                    f'恰好命中一次，实得 {matches} 次')
 
 
 def _non_stage2_node_submission_template(

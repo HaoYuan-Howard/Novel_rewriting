@@ -196,6 +196,12 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '主体改绑 canonical 章集合',
         '`stage5.review` 在 canonical 成稿上免费重跑；旧 Review 不得驱动付费 `--revise`',
     ),
+    'stage5/reviewer_rewrite_request.json': (
+        2,
+        '2026-09-07 受托改写从独立单章 request 改为有序非空批信封，章执行单元仍独立自哈希',
+        '旧 v1 不自动转换；原版本按原执行账先收口，再由 fresh Commander 决定与 '
+        'FREE stage5.review --request-reviewer-rewrite 重建 v2。未知执行不得删除或手补为新授权',
+    ),
     'stage5/trim_audit_ch{nn}.json': (
         2,
         '2026-08-24 Stage5 单臂折平：TrimAudit 删除 `mode`，章身份只由 ordinal '

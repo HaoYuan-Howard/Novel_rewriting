@@ -458,6 +458,8 @@ STAGE4_DESIGN_MAX_CONCURRENCY: Final = 4
 #: Stage4B 章级 session 的并发上限（批次 4）：与 A 的逐章池同一供应商稳定性
 #: 边界，配置可以调低不能调高。
 STAGE4_PLAN_MAX_CONCURRENCY: Final = 4
+#: Stage5 普通写作与受托批量改写共享的章节并发上限。
+STAGE5_WRITE_MAX_CONCURRENCY: Final = 4
 STRUCTURE_APPROVAL_DECISIONS: Final = ('accept', 'request_replan')
 STRUCTURE_APPROVAL_STATES: Final = (
     'unavailable', 'missing', 'accepted', 'replan_requested', 'expired',

@@ -320,3 +320,15 @@ request-specific successor WAL、保存 terminal 原字节，既有 0-wire 动�
 这也覆盖“产物已换、receipt 未写”的硬杀窗，并防止手工移动文件冒充合法后继。
 这把“人决定什么”与“模型是否已执行到哪里”拆成两份可恢复事实，也阻止手写 JSON、旧 stop 或孤儿 CLI
 借相同外形取得付费权限。
+
+
+2026-09-07 前端实跑中，Commander 识别出两章独立重复，却被“恰有一章”误导为必须 stop。
+用户要求按写作并发 4 同批改写、统一 Review；R-7.31 因而改为批信封绑定有序目标子集，
+每章仍有独立 execution/checkpoint/恢复身份，未选章保持 unresolved，不暗中代签 retain。
+并发不代表两个章节可以共同依赖未完成的改稿：必须跨章联动才能成立或超出关闭式指令时仍 stop。
+
+批量故障测试必须跨过真 session 和正式提交。仅验证 option/request 构造会漏掉：producer 写
+`rev-0001.json` 而 reader 不接受补零编号；恢复 policy 未进 SessionAgentClient 登记；主线程 lease
+未在 worker 取得；提交前先移除旧 audit 导致自身 currentness 校验失败；prepared/committed 的合法
+摘要变化被误认成漂移；正式文件已落盘却在 sweep 中再次强求旧目标 SHA。用双章 barrier、第二章
+提交失败、committed 后硬杀模拟与零模型恢复断言覆盖这些消费链，不能靠删闸或重买模型解决。

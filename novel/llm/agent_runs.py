@@ -1396,6 +1396,17 @@ def _commit_hash(payload: Mapping[str, Any]) -> str:
     })
 
 
+def prepared_commit_sha256(record: Mapping[str, Any]) -> str:
+    """从已校验 commit 恢复不可变的 prepared 身份；不改盘上状态或来源账。"""
+    if (set(record) != _COMMIT_FIELDS or record.get('state') not in ('prepared', 'committed')
+            or record.get('commit_sha256') != _commit_hash(record)):
+        raise ProvenanceRefused('commit 无法闭合 prepared 身份')
+    return _commit_hash({
+        **record, 'state': 'prepared', 'committed_at': None,
+        'landed_payload_sha256s': None, 'post_file_sha256s': None,
+    })
+
+
 def file_sha256(ctx: Any, rel: str) -> str | None:
     target = Path(ctx.novel_dir) / rel
     try:

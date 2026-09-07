@@ -212,6 +212,21 @@ class ReviewerRewriteSubject(FrozenModel):
     chapter_sha256: Sha256
 
 
+class ReviewerRewriteTarget(FrozenModel):
+    """一批人审请求中由 Commander 选择的一个独立写作单元。"""
+
+    target_ordinal: int = Field(ge=1)
+    target_chapter_file_sha256: Sha256
+    directives: tuple[ReviewerRewriteDirective, ...] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _unique_directives(self) -> 'ReviewerRewriteTarget':
+        keys = [(row.code, row.current_text_evidence) for row in self.directives]
+        if len(keys) != len(set(keys)):
+            raise ValueError('reviewer rewrite directive code/evidence 不得重复')
+        return self
+
+
 class ReviewerRewriteTrustedInput(FrozenModel):
     """free reviewer action 写给 producer 的受信 envelope。
 
@@ -250,6 +265,40 @@ class ReviewerRewriteTrustedInput(FrozenModel):
         return self
 
 
+class ReviewerRewriteBatchTrustedInput(FrozenModel):
+    """同一 Commander 决定的完整批次运输 envelope。"""
+
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    review_sha256: Sha256
+    unresolved_trim_items: tuple[ReviewerRewriteSubject, ...] = Field(min_length=1)
+    targets: tuple[ReviewerRewriteTarget, ...] = Field(min_length=1)
+    reviewer_action_record_sha256: Sha256
+    business_sha256: Sha256
+    reviewer_contract_sha256: Sha256
+    reviewer_session_run_id: str = Field(min_length=1, max_length=128)
+    reviewer_seat_turn_id: str = Field(min_length=1, max_length=256)
+    provider_response_sha256: Sha256
+
+    @model_validator(mode='after')
+    def _closed_batch(self) -> 'ReviewerRewriteBatchTrustedInput':
+        ordinals = [row.target_ordinal for row in self.targets]
+        if ordinals != sorted(set(ordinals)):
+            raise ValueError('reviewer rewrite targets 必须按章升序、去重')
+        for target in self.targets:
+            self.for_target(target.target_ordinal)
+        return self
+
+    def for_target(self, ordinal: int) -> ReviewerRewriteTrustedInput:
+        target = next((row for row in self.targets if row.target_ordinal == ordinal), None)
+        if target is None:
+            raise ValueError('reviewer rewrite 目标未被本批授权')
+        return ReviewerRewriteTrustedInput.model_validate({
+            **self.model_dump(mode='json', exclude={'targets'}),
+            **target.model_dump(mode='json'),
+        })
+
+
 def reviewer_rewrite_request_sha256(payload: Mapping[str, object]) -> str:
     """正式 request 自摘要的契约层唯一算法。"""
     canonical = {
@@ -267,7 +316,7 @@ def reviewer_rewrite_request_sha256(payload: Mapping[str, object]) -> str:
 
 
 class ReviewerRewriteRequest(FrozenModel):
-    """canonical ``stage5/reviewer_rewrite_request.json``（artifact v1）。"""
+    """批次内独立自哈希的单章执行单元；不再独立登记为 canonical artifact。"""
 
     version: Literal[1] = 1
     kind: Literal['stage5-reviewer-rewrite-request-v1'] = \
@@ -304,6 +353,51 @@ class ReviewerRewriteRequest(FrozenModel):
         if self.request_sha256 != reviewer_rewrite_request_sha256(payload):
             raise ValueError('reviewer rewrite request SHA 不闭合')
         return self
+
+
+class ReviewerRewriteBatchRequest(FrozenModel):
+    """canonical 改写批次 v2：单章恢复身份独立，整批审阅授权一起封存。"""
+
+    version: Literal[2] = 2
+    kind: Literal['stage5-reviewer-rewrite-batch-v2'] = 'stage5-reviewer-rewrite-batch-v2'
+    requests: tuple[ReviewerRewriteRequest, ...] = Field(min_length=1)
+    request_sha256: Sha256
+
+    @model_validator(mode='after')
+    def _closed_batch(self) -> 'ReviewerRewriteBatchRequest':
+        ordinals = [row.target_ordinal for row in self.requests]
+        if ordinals != sorted(set(ordinals)):
+            raise ValueError('reviewer rewrite batch 必须按章升序、去重')
+        variable = {'target_ordinal', 'target_chapter_file_sha256', 'directives', 'request_sha256'}
+        common = self.requests[0].model_dump(mode='json', exclude=variable)
+        if any(row.model_dump(mode='json', exclude=variable) != common for row in self.requests):
+            raise ValueError('reviewer rewrite batch 所有单元必须属于同一审阅授权与 frontier')
+        if self.request_sha256 != reviewer_rewrite_request_sha256(self.model_dump(mode='json')):
+            raise ValueError('reviewer rewrite batch SHA 不闭合')
+        return self
+
+    @property
+    def target_ordinals(self) -> tuple[int, ...]:
+        return tuple(row.target_ordinal for row in self.requests)
+
+    def by_sha256(self, digest: str) -> ReviewerRewriteRequest:
+        matches = [row for row in self.requests if row.request_sha256 == digest]
+        if len(matches) != 1:
+            raise ValueError('reviewer rewrite 单元 SHA 未唯一属于 current 批次')
+        return matches[0]
+
+    def trusted(self) -> ReviewerRewriteBatchTrustedInput:
+        shared = self.requests[0].model_dump(mode='json', exclude={
+            'version', 'kind', 'review_rel', 'target_ordinal',
+            'target_chapter_file_sha256', 'directives', 'request_sha256'})
+        return ReviewerRewriteBatchTrustedInput.model_validate({
+            **shared,
+            'targets': [{
+                'target_ordinal': row.target_ordinal,
+                'target_chapter_file_sha256': row.target_chapter_file_sha256,
+                'directives': [item.model_dump(mode='json') for item in row.directives],
+            } for row in self.requests],
+        })
 
 
 def reviewer_rewrite_execution_journal_sha256(payload: Mapping[str, object]) -> str:

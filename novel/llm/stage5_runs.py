@@ -673,7 +673,7 @@ def _strict_typed_json(
 
 
 _REVIEWER_EXECUTION_DIR = 'reviewer_rewrite_execution'
-_REVIEWER_EXECUTION_FILE_RE = re.compile(r'^rev-([1-9][0-9]*)\.json$')
+_REVIEWER_EXECUTION_FILE_RE = re.compile(r'^rev-([0-9]{4,})\.json$')
 _REVIEWER_RECOVERY_FILE = 'reviewer_rewrite_recovery.json'
 _REVIEWER_DISPOSITION_DIR = 'reviewer_rewrite_dispositions'
 _REVIEWER_SUCCESSOR_DIR = 'reviewer_rewrite_successors'
@@ -693,7 +693,8 @@ def _validated_reviewer_execution_revision(
         path, ReviewerRewriteExecutionJournal,
         label='Stage5 reviewer rewrite execution', root=path.parents[3])
     match = _REVIEWER_EXECUTION_FILE_RE.fullmatch(path.name)
-    if match is None or int(match.group(1)) != row.sequence:
+    if (match is None or int(match.group(1)) != row.sequence
+            or path.name != f'rev-{row.sequence:04d}.json'):
         raise ArtifactUnreadable(
             f'{path} reviewer rewrite execution revision/path 漂移')
     run_dir = path.parent.parent.parent
@@ -805,7 +806,9 @@ def reviewer_rewrite_execution_chain(
                 raise ArtifactUnreadable(
                     'reviewer rewrite execution checkpoint SHA 中途漂移')
         if (previous is not None and previous.commit_sha256 is not None
-                and row.commit_sha256 != previous.commit_sha256):
+                and row.commit_sha256 != previous.commit_sha256
+                and not (previous.event == 'delivery_prepared'
+                         and row.event == 'landed_formal')):
             raise ArtifactUnreadable(
                 'reviewer rewrite execution commit SHA 中途漂移')
         if terminal_seen:
@@ -823,9 +826,16 @@ def reviewer_rewrite_execution_chain(
     if latest.commit_sha256 is not None:
         commit = reviewer_rewrite_commit_envelope(
             ctx, run_id=latest.run_id, chapter=latest.output_ordinal)
-        if commit is None or commit.get('commit_sha256') != latest.commit_sha256:
-            raise ArtifactUnreadable(
-                'reviewer rewrite execution commit SHA 无法闭合原字节')
+        if commit is None:
+            raise ArtifactUnreadable('reviewer rewrite execution 缺 commit 原字节')
+        prepared_sha = agent_runs.prepared_commit_sha256(commit)
+        for row in rows:
+            if row.commit_sha256 is None:
+                continue
+            expected = (commit['commit_sha256'] if row.event == 'landed_formal'
+                        else prepared_sha)
+            if row.commit_sha256 != expected:
+                raise ArtifactUnreadable('reviewer rewrite execution commit SHA 无法闭合原字节')
     return rows
 
 
@@ -954,6 +964,10 @@ def record_reviewer_rewrite_execution(
         chain = reviewer_rewrite_execution_chain(
             ctx, run_id=ctx.run_id, chapter=ordinal)
         latest = chain[-1] if chain else None
+        # predecessor 属于整条 claim，后续 checkpoint/terminal 继承已验证首行；
+        # 不要求每个消费者再传一份同义参数，也不允许显式换成别的 predecessor。
+        if latest is not None and claim_predecessor_journal_sha256 is None:
+            claim_predecessor_journal_sha256 = latest.claim_predecessor_journal_sha256
         identity = {
             'request_rel': request_rel,
             'request_file_sha256': request_file_sha256,
@@ -1009,8 +1023,13 @@ def record_reviewer_rewrite_execution(
                     'reviewer rewrite execution checkpoint SHA 不得漂移')
         if latest is not None and latest.commit_sha256 is not None:
             if commit_sha256 != latest.commit_sha256:
-                raise ProvenanceRefused(
-                    'reviewer rewrite execution commit SHA 不得漂移')
+                commit = reviewer_rewrite_commit_envelope(
+                    ctx, run_id=ctx.run_id, chapter=ordinal)
+                if (latest.event != 'delivery_prepared' or event != 'landed_formal'
+                        or commit is None or commit.get('state') != 'committed'
+                        or commit_sha256 != commit['commit_sha256']
+                        or latest.commit_sha256 != agent_runs.prepared_commit_sha256(commit)):
+                    raise ProvenanceRefused('reviewer rewrite execution commit SHA 不得漂移')
         sequence = 1 if latest is None else latest.sequence + 1
         raw: dict[str, Any] = {
             'version': 1,

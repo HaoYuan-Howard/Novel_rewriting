@@ -57,6 +57,7 @@ from contracts.schema.api import (
     BatchTrimResolutionItem,
     BatchTrimResolutionRequest,
     Stage5ReviewerRewriteDirectiveInput,
+    Stage5ReviewerRewriteTarget,
     Stage5ReviewerRewriteRequest,
     DraftEditPreview,
     DraftEditPreviewRequest,
@@ -177,6 +178,7 @@ from contracts.schema.stage5 import (
     ReviewerRewriteSuccessorJournal,
     ReviewerRewriteExecutionState, ReviewerRewriteProbe,
     ReviewerRewriteRequest, ReviewerRewriteSubject,
+    ReviewerRewriteBatchRequest, ReviewerRewriteBatchTrustedInput, ReviewerRewriteTarget,
     ReviewerRewriteTrustedInput, reviewer_rewrite_execution_journal_sha256,
     reviewer_rewrite_disposition_sha256,
     reviewer_rewrite_recovery_journal_sha256,
@@ -320,7 +322,7 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     #   current 产物由 `stage5.write` 重建。
     STAGE5_CHAPTER: ArtifactSpec(Chapter, 2),
     STAGE5_REJECTED_REVISION: ArtifactSpec(RejectedRevision),
-    STAGE5_REVIEWER_REWRITE_REQUEST: ArtifactSpec(ReviewerRewriteRequest),
+    STAGE5_REVIEWER_REWRITE_REQUEST: ArtifactSpec(ReviewerRewriteBatchRequest, 2),
     # ⚠ Review 的章行同步删除 `mode/mode_dir`；由 `stage5.review`
     #   零成本重建，旧报告不伪装成当前判据产地。
     STAGE5_REVIEW: ArtifactSpec(Review, 2),
@@ -473,7 +475,7 @@ __all__ = [
     'ApprovalAction', 'ApprovalBackfillResult', 'ApprovalDoc',
     'InboxItem', 'InboxView', 'TrimResolutionRequest', 'NameMapApproveRequest',
     'BatchTrimResolutionItem', 'BatchTrimResolutionRequest',
-    'Stage5ReviewerRewriteDirectiveInput', 'Stage5ReviewerRewriteRequest',
+    'Stage5ReviewerRewriteDirectiveInput', 'Stage5ReviewerRewriteTarget', 'Stage5ReviewerRewriteRequest',
     'DraftEditRequest', 'DraftEditPreviewRequest', 'DraftEditPreview',
     'Stage5ChapterSubject', 'Stage5TrimWorkItem',
     'ResidualAdoptionRequest',
@@ -516,6 +518,7 @@ __all__ = [
     'RejectedAttempt', 'RejectedRevision',
     'ReviewerRewriteDirective', 'ReviewerRewriteSubject',
     'ReviewerRewriteTrustedInput', 'ReviewerRewriteRequest',
+    'ReviewerRewriteBatchRequest', 'ReviewerRewriteBatchTrustedInput', 'ReviewerRewriteTarget',
     'ReviewerRewriteExecutionJournal', 'ReviewerRewriteRecoveryJournal',
     'ReviewerRewriteSuccessorJournal',
     'ReviewerRewriteDisposition',

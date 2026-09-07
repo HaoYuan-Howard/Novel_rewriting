@@ -317,8 +317,9 @@ contract，跳过重复批准；代码/机械规则变化只滚动 validation se
 
 写作授权只允许开始写，不证明成稿已闭合。全部 canonical 章完成后运行最终 `stage5.review`，按
 remediation 收口 HARD，并完成所有 edit、trim disposition 与 wontfix。pure-trim 顶部卡的一席 Reviewer
-只可互斥选择 full-batch retain、恰好一章的关闭式 LLM rewrite request 或 typed stop；rewrite 回答先
+只可互斥选择 full-batch retain、可选多章的关闭式 LLM rewrite batch request 或 typed stop；rewrite 回答先
 零成本落正式 request 并封存 Reviewer authority，再由 queue 的 fresh epoch 唯一触发 paid writer。
+多章可独立改写时同批提交并按上限 4 并发执行，未选章仍保持 unresolved；整批收口后统一免费 Review。
 正式 request 的九态收口优先于 stale Review/closure/new Reviewer；只运行 `operator next` 给出的 paid、
 checkpoint/prepared recovery 或 expired retirement 动作，已有 recovery target/WAL 时逐字复用其身份。
 unknown 不重买 Writer；INVALID/rejected 只有 revalidate/apply-edit 的 request-specific successor receipt

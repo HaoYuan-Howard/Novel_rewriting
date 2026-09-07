@@ -54,7 +54,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from contracts.invariants import (
-    STAGE5_COMMIT_PHASES, STAGE5_EDIT_CONFIRMATIONS,
+    STAGE5_COMMIT_PHASES, STAGE5_EDIT_CONFIRMATIONS, STAGE5_WRITE_MAX_CONCURRENCY,
     STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES, STOP_REWRITE_AFTER,
 )
 from novel.agent_session_audit import sanitize_failure_detail
@@ -420,6 +420,10 @@ def _commit_canonical_chapter(
                 matching_audit = current_audit, current_sha256
 
     with store.history_transaction(chapter_rel, audit_rel, resolution_rel):
+        # 正文 CAS/授权终验仍消费旧 audit；先替换正文，再退休旧 trim 状态。
+        # 全部仍在同一回滚域。硬杀时 old/new 路径组合由 prepared WAL 收口，
+        # 不能先删旧 audit 再让 commit 回调验证一份已经被自己拆掉的授权。
+        where = commit(chapter_rel, chapter)
         if desired_audit is None:
             _retire_trim_state(store, ordinal)
         elif matching_audit is None:
@@ -431,8 +435,6 @@ def _commit_canonical_chapter(
                 store.archive_round(audit_rel, keep=True)
             if store.exists(resolution_rel):
                 store.archive_round(resolution_rel)
-
-        where = commit(chapter_rel, chapter)
 
         if desired_audit is not None and matching_audit is None:
             store.write(audit_rel, desired_audit)
@@ -1008,11 +1010,13 @@ def assert_chapter_candidate_current(
                     # 同一 request 原字节 + 冻结旧正文重构原 prompt，不能误要求重跑 Review。
                     current_request, current_request_file_sha256 = (
                         reviewer_rewrite.load_reviewer_rewrite_request(
-                            ctx, STAGE5_REVIEWER_REWRITE_REQUEST))
+                            ctx, STAGE5_REVIEWER_REWRITE_REQUEST,
+                            request_sha256=request.request_sha256))
                 else:
                     current_request, current_request_file_sha256 = (
                         reviewer_rewrite.require_current_reviewer_rewrite_request(
-                            ctx, STAGE5_REVIEWER_REWRITE_REQUEST))
+                            ctx, STAGE5_REVIEWER_REWRITE_REQUEST,
+                            request_sha256=request.request_sha256))
                 if (current_request != request
                         or current_request_file_sha256
                         != prepared._reviewer_rewrite_request_file_sha256):
@@ -2061,7 +2065,7 @@ def _finalize_formal_agent_candidate(
     resolution_rel = artifact_rel('stage5.trim_resolution', nn=prepared.ordinal)
     with stage5_runs.commit_ownership(ctx.novel_dir, prepared.ordinal):
         with _commit_phase(diagnostics, 'prepare_commit'):
-            assert_chapter_candidate_current(ctx, prepared)
+            _assert_finalization_current(ctx, prepared)
             stage5_runs.refuse_foreign_commit_reservations(
                 ctx, prepared.ordinal, mode=prepared.mode)
             record = (
@@ -2084,7 +2088,7 @@ def _finalize_formal_agent_candidate(
             finalization = _formal_finalization_payload(
                 prepared, evaluation, artifact)
             if record is None:
-                assert_chapter_candidate_current(ctx, prepared)
+                _assert_finalization_current(ctx, prepared)
                 record = stage5_runs.prepare_commit(
                     ctx,
                     chapter=prepared.ordinal,
@@ -2098,7 +2102,7 @@ def _finalize_formal_agent_candidate(
                       record, finalization)):
                 raise ProvenanceRefused(
                     f'Stage5 第 {prepared.ordinal} 章 prepared journal 已绑定另一份候选')
-            if prepared.mode == 'reviewer_rewrite':
+            if prepared.mode == 'reviewer_rewrite' and record.get('state') == 'prepared':
                 commit_sha256 = record.get('commit_sha256')
                 if not isinstance(commit_sha256, str):
                     raise ProvenanceRefused('reviewer rewrite commit 缺 self SHA')
@@ -2151,7 +2155,7 @@ def _finalize_formal_agent_candidate(
         with _commit_phase(diagnostics, 'formal_write'):
             _preflight_formal_commit_targets(
                 ctx, store, prepared, artifact, record)
-            assert_chapter_candidate_current(ctx, prepared)
+            _assert_finalization_current(ctx, prepared)
             with store.history_transaction(
                     rel, rejected_rel, audit_rel, resolution_rel):
                 if store.exists(rejected_rel):
@@ -2166,7 +2170,7 @@ def _finalize_formal_agent_candidate(
                         if store.exists(paths.invalid_of(canonical_rel)):
                             store.retire_invalid(canonical_rel)
                         return store.path(canonical_rel)
-                    assert_chapter_candidate_current(ctx, prepared)
+                    _assert_finalization_current(ctx, prepared)
                     return store.write_round(canonical_rel, candidate)
 
                 where_path, trim_notes = _commit_canonical_chapter(
@@ -2255,11 +2259,47 @@ def finalize_chapter_candidate(
     有界重放（usage 结算接续、归一记账去重），不是一次新的生成尝试。
     本函数零 wire，重放不会产生任何模型请求。
     """
+    with _reviewer_unit_ownership(ctx, prepared):
+        return _finalize_chapter_candidate_owned(
+            ctx, source, prepared, evaluation,
+            diagnostics=diagnostics, same_run_replay=same_run_replay)
+
+
+def _reviewer_unit_ownership(ctx: RunContext, prepared: ChapterCandidateContext):
+    """线程本地 lease 不继承；worker/提交线程分别持有本章执行身份。"""
+    request = prepared._reviewer_rewrite_request
+    return (nullcontext() if request is None
+            else stage5_runs.reviewer_rewrite_execution_ownership(
+                ctx.novel_dir, request.request_sha256))
+
+
+def _assert_finalization_current(ctx: RunContext, prepared: ChapterCandidateContext) -> None:
+    """同 run sweep 可收口自己已替换的 exact WAL 主稿，不能接受外部改稿。"""
+    after_formal = False
+    if prepared.mode == 'reviewer_rewrite':
+        record = (stage5_runs.committed(ctx, prepared.ordinal, mode=prepared.mode)
+                  or stage5_runs.prepared(ctx, prepared.ordinal, mode=prepared.mode))
+        if record is not None:
+            landed = _journal_landed_primary(ArtifactStore(ctx), record, rel=_rel(prepared.ordinal))
+            if landed is not None:
+                request = prepared._reviewer_rewrite_request
+                if (request is None or not isinstance(landed.provenance, RoundLlmProvenance)
+                        or landed.provenance.reviewer_rewrite_request_sha256 != request.request_sha256):
+                    raise ProvenanceRefused('reviewer rewrite WAL 主稿不属于当前执行单元')
+                after_formal = True
+    assert_chapter_candidate_current(ctx, prepared, after_formal_commit=after_formal)
+
+
+def _finalize_chapter_candidate_owned(
+    ctx: RunContext, source: _ChapterResponseSource,
+    prepared: ChapterCandidateContext, evaluation: ChapterCandidateEvaluation, *,
+    diagnostics: _CommitDiagnostics | None = None, same_run_replay: bool = False,
+) -> ChapterCandidateDelivery:
     if ctx.node != 'stage5.write':
         raise ValueError(
             f'finalize_chapter_candidate 只接受 stage5.write，实得 {ctx.node!r}')
     _assert_chapter_evaluation_identity(source, prepared, evaluation)
-    assert_chapter_candidate_current(ctx, prepared)
+    _assert_finalization_current(ctx, prepared)
     # 同一 response 再走一次纯函数链，先证明判据确定，再推进 chapter usage settlement。
     repeated = evaluate_chapter_candidate(
         source,
@@ -3266,26 +3306,27 @@ def _run_group_parallel(
                 else prepared_contexts.get(ordinal))
             if prepared is None:
                 continue
-            assert_chapter_candidate_current(ctx, prepared)
-            stage5_runs.ensure_run(
-                ctx, chapter=ordinal,
-                input_sha256=prepared._input_sha256,
-                system=prepared.system, user=prepared.user,
-                response_model=ChapterResponse, max_tokens=MAX_TOKENS,
-                mode=prepared.mode,
-            )
-            if prepared.mode == 'reviewer_rewrite':
-                request = prepared._reviewer_rewrite_request
-                assert request is not None
-                stage5_runs.record_reviewer_rewrite_execution(
+            with _reviewer_unit_ownership(ctx, prepared):
+                assert_chapter_candidate_current(ctx, prepared)
+                stage5_runs.ensure_run(
                     ctx, chapter=ordinal,
-                    request_rel=STAGE5_REVIEWER_REWRITE_REQUEST,
-                    request_file_sha256=(
-                        prepared._reviewer_rewrite_request_file_sha256),
-                    request_sha256=request.request_sha256,
                     input_sha256=prepared._input_sha256,
-                    event='started',
+                    system=prepared.system, user=prepared.user,
+                    response_model=ChapterResponse, max_tokens=MAX_TOKENS,
+                    mode=prepared.mode,
                 )
+                if prepared.mode == 'reviewer_rewrite':
+                    request = prepared._reviewer_rewrite_request
+                    assert request is not None
+                    stage5_runs.record_reviewer_rewrite_execution(
+                        ctx, chapter=ordinal,
+                        request_rel=STAGE5_REVIEWER_REWRITE_REQUEST,
+                        request_file_sha256=(
+                            prepared._reviewer_rewrite_request_file_sha256),
+                        request_sha256=request.request_sha256,
+                        input_sha256=prepared._input_sha256,
+                        event='started',
+                    )
         prepare_sessions = getattr(client, 'prepare_initial_sessions', None)
         if not callable(prepare_sessions):
             raise ProvenanceRefused(
@@ -3293,8 +3334,8 @@ def _run_group_parallel(
                 '不能在部分章节已 start 后才发现跨章 driver 复用')
         prepare_sessions(tuple(ordinals))
     workers = min(
-        MAX_CONCURRENCY,
-        max(1, int(getattr(client, 'concurrency', MAX_CONCURRENCY))),
+        STAGE5_WRITE_MAX_CONCURRENCY,
+        max(1, int(getattr(client, 'concurrency', STAGE5_WRITE_MAX_CONCURRENCY))),
         len(todo),
     )
     fatal: Exception | None = None
@@ -3327,22 +3368,21 @@ def _run_group_parallel(
                 f'{type(exc).__name__}: {str(exc).splitlines()[0]}',
             )
 
+    def generate(entry: dict[str, Any]) -> dict[str, Any]:
+        ordinal = int(entry['output_ordinal'])
+        prepared = (None if prepared_contexts is None
+                    else prepared_contexts.get(ordinal))
+        lease = (nullcontext() if prepared is None
+                 else _reviewer_unit_ownership(ctx, prepared))
+        with lease:
+            return _generate_chapter(
+                entry, book, client, revise=revise, system=system,
+                progress=tracker.request(ordinal), ctx=ctx,
+                agent_sessions=agent_sessions, prepared_context=prepared)
+
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
-            pool.submit(
-                _generate_chapter,
-                entry,
-                book,
-                client,
-                revise=revise,
-                system=system,
-                progress=tracker.request(int(entry['output_ordinal'])),
-                ctx=ctx,
-                agent_sessions=agent_sessions,
-                prepared_context=(
-                    None if prepared_contexts is None
-                    else prepared_contexts.get(int(entry['output_ordinal']))),
-            ): int(entry['output_ordinal'])
+            pool.submit(generate, entry): int(entry['output_ordinal'])
             for entry in todo
         }
         for future in as_completed(futures):
@@ -3737,46 +3777,43 @@ def run_reviewer_rewrite(
         ctx: RunContext, client: LlmClient,
         request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
 ) -> CheckReport:
-    """以 request 专属 OS lease 串行 preclaim、driver、session、wire 与提交。"""
-    request, request_file_sha256 = (
-        reviewer_rewrite.load_reviewer_rewrite_request(ctx, request_rel))
-    with stage5_runs.reviewer_rewrite_execution_ownership(
-            ctx.novel_dir, request.request_sha256):
-        locked, locked_file_sha256 = (
-            reviewer_rewrite.load_reviewer_rewrite_request(ctx, request_rel))
-        if locked != request or locked_file_sha256 != request_file_sha256:
-            raise ProvenanceRefused(
-                'reviewer rewrite request 在 execution lease 获取前漂移；拒绝用旧锁执行新请求')
-        return _run_reviewer_rewrite_owned(
-            ctx, client, request_rel,
-            expected_request_file_sha256=request_file_sha256)
-
-
-def _run_reviewer_rewrite_owned(
-        ctx: RunContext, client: LlmClient,
-        request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
-        *, expected_request_file_sha256: str | None = None,
-) -> CheckReport:
-    """执行一份 sealed formal reviewer request；独立 mode，恰好一章一次席位。"""
+    """整批持有 lease；逐章先 claim，再按写作并发上限生成，全部完成后统一审阅。"""
     if not ctx.paid:
         raise ProvenanceRefused('reviewer rewrite paid runner 必须持显式付费授权')
-    if request_rel != STAGE5_REVIEWER_REWRITE_REQUEST:
-        raise ProvenanceRefused('reviewer rewrite writer 只接受 canonical request rel')
-    store = ArtifactStore(ctx)
-    require_canonical_layout(store)
-    # ready -> started 是这条 paid authority 的唯一 claim point。书/章共享锁覆盖
-    # current request、sealed authority、foreign reservation、全 roots absence 与
-    # append-only started；释放锁之后才允许碰 client/session/cost/wire。
-    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_request(
-        ctx, request_rel)
-    if (expected_request_file_sha256 is not None
-            and request_file_sha256 != expected_request_file_sha256):
-        raise ProvenanceRefused(
-            'reviewer rewrite request 在 execution lease 内 CAS 重读漂移')
+    batch, digest = reviewer_rewrite.load_reviewer_rewrite_batch(ctx, request_rel)
+    with stage5_runs.reviewer_rewrite_execution_ownership(
+            ctx.novel_dir, batch.request_sha256):
+        if reviewer_rewrite.load_reviewer_rewrite_batch(ctx, request_rel) != (batch, digest):
+            raise ProvenanceRefused('reviewer rewrite 批 request 在取锁前漂移')
+        targets = reviewer_rewrite.ready_reviewer_rewrite_targets(ctx, request_rel)
+        store = ArtifactStore(ctx)
+        require_canonical_layout(store)
+        book = review.load_book(ctx, store)
+        entries: list[dict[str, Any]] = []
+        prepared_contexts: dict[int, ChapterCandidateContext] = {}
+        for request in batch.requests:
+            if request.target_ordinal not in targets:
+                continue
+            with stage5_runs.reviewer_rewrite_execution_ownership(
+                    ctx.novel_dir, request.request_sha256):
+                entry, prepared = _preclaim_reviewer_rewrite_unit(
+                    ctx, store, book, request, digest, request_rel)
+            entries.append(entry)
+            prepared_contexts[request.target_ordinal] = prepared
+        return _run_group(
+            ctx, store, book, entries, client, revise=None,
+            prepared_contexts=prepared_contexts)
+
+
+def _preclaim_reviewer_rewrite_unit(
+        ctx: RunContext, store: ArtifactStore, book: M.Book,
+        request: ReviewerRewriteRequest, request_file_sha256: str, request_rel: str,
+) -> tuple[dict[str, Any], ChapterCandidateContext]:
+    """全批 preclaim 完成之前不创建 driver；章执行链各自封存。"""
     with stage5_runs.commit_ownership(
             ctx.novel_dir, request.target_ordinal):
         state = reviewer_rewrite.reviewer_rewrite_execution_state(
-            ctx, request_rel)
+            ctx, request_rel, request_sha256=request.request_sha256)
         if (state is None or state.state != 'ready_paid'
                 or state.request_sha256 != request.request_sha256
                 or state.request_file_sha256 != request_file_sha256):
@@ -3799,17 +3836,16 @@ def _run_reviewer_rewrite_owned(
                     'reviewer rewrite zero-execution reclaim 主体漂移')
             stage5_runs.reclaim_reviewer_rewrite_unstarted(ctx, active[0])
             reclaimed = reviewer_rewrite.reviewer_rewrite_execution_state(
-                ctx, request_rel)
+                ctx, request_rel, request_sha256=request.request_sha256)
             if (reclaimed is None or reclaimed.state != 'ready_paid'
                     or reclaimed.source_run_id is not None):
                 raise ProvenanceRefused(
                     'reviewer rewrite zero-execution reclaim 后未回到唯一 ready')
         request, request_file_sha256 = (
             reviewer_rewrite.require_current_reviewer_rewrite_request(
-                ctx, request_rel))
+                ctx, request_rel, request_sha256=request.request_sha256))
         stage5_runs.refuse_foreign_commit_reservations(
             ctx, request.target_ordinal, mode='reviewer_rewrite')
-        book = review.load_book(ctx, store)
         entry = book.chapters.get(request.target_ordinal)
         if entry is None:
             raise ProvenanceRefused('reviewer rewrite target 已不在 current plan')
@@ -3854,10 +3890,7 @@ def _run_reviewer_rewrite_owned(
             input_sha256=prepared._input_sha256,
             event='started',
             claim_predecessor_journal_sha256=claim_predecessor)
-    return _run_group(
-        ctx, store, book, [entry], client, revise=None,
-        prepared_contexts={request.target_ordinal: prepared},
-    )
+    return entry, prepared
 
 
 def _reviewer_recovery_unit(
@@ -4278,21 +4311,24 @@ def run_reviewer_rewrite_prepared_recovery(
         raise ProvenanceRefused(
             'reviewer rewrite recovery target run/WAL SHA 必须同有同无')
     request, initial_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_request(
-        ctx, request_rel)
+        ctx, request_rel, request_sha256=request_sha256)
     if request.request_sha256 != request_sha256:
         raise ProvenanceRefused(
             'reviewer rewrite recovery request SHA 与 canonical 漂移')
     # 锁序：request execution → book/chapter。lease 贯穿 state/source/WAL、
     # 每一件 delivery 写入与 committed 尾写，两个 direct recovery 不可交错。
-    with stage5_runs.reviewer_rewrite_execution_ownership(
-            ctx.novel_dir, request.request_sha256):
+    batch, _digest = reviewer_rewrite.load_reviewer_rewrite_batch(ctx, request_rel)
+    with (stage5_runs.reviewer_rewrite_execution_ownership(
+            ctx.novel_dir, batch.request_sha256),
+          stage5_runs.reviewer_rewrite_execution_ownership(
+            ctx.novel_dir, request.request_sha256)):
         current, request_file_sha256 = (
-            reviewer_rewrite.load_reviewer_rewrite_request(ctx, request_rel))
+            reviewer_rewrite.load_reviewer_rewrite_request(ctx, request_rel, request_sha256=request_sha256))
         if current != request or request_file_sha256 != initial_file_sha256:
             raise ProvenanceRefused(
                 'reviewer rewrite recovery 取 execution lease 后 request 漂移')
         stage5_runs.require_prepared_recovery_target_clean(ctx)
-        state = reviewer_rewrite.reviewer_rewrite_execution_state(ctx, request_rel)
+        state = reviewer_rewrite.reviewer_rewrite_execution_state(ctx, request_rel, request_sha256=request_sha256)
         if (state is None
                 or state.state not in (
                     'recoverable_checkpoint', 'recoverable_prepared')

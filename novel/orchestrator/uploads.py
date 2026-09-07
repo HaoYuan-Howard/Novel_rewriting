@@ -35,7 +35,7 @@ from contracts.schema.api import (
     BatchTrimResolutionRequest, Stage5ReviewerRewriteRequest,
 )
 from contracts.schema.stage2 import BlueprintRelationEdit, GlobalEdit
-from contracts.schema.stage5 import ChapterResponse, ReviewerRewriteTrustedInput
+from contracts.schema.stage5 import ChapterResponse, ReviewerRewriteBatchTrustedInput
 from novel import paths
 from novel.errors import (
     ArtifactUnreadable,
@@ -379,7 +379,7 @@ def save_stage5_reviewer_rewrite_input(
     target = root / f'stage5-reviewer-rewrite-{uuid.uuid4().hex}.json'
     tmp = target.with_suffix('.tmp')
     try:
-        trusted = ReviewerRewriteTrustedInput.model_validate({
+        trusted = ReviewerRewriteBatchTrustedInput.model_validate({
             **request.model_dump(mode='json'),
             'reviewer_action_record_sha256': reviewer_action_record_sha256,
             'business_sha256': business_sha256,
