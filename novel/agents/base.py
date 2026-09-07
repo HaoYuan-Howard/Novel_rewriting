@@ -376,7 +376,9 @@ def classify_agent_command_failure(
             'connection reset', 'connection refused', 'connection aborted',
             'network error', 'network request failed', 'failed to fetch',
             'socket hang up', 'econnreset', 'econnrefused', 'enotfound',
-            'dns lookup', 'name resolution', 'tls handshake timeout')):
+            'dns lookup', 'name resolution', 'tls handshake timeout',
+            'stream disconnected before completion',
+            'stream closed before response.completed')):
         return 'connection', status, True
     if 'timed out' in text or 'timeout' in text:
         return 'timeout', status, True

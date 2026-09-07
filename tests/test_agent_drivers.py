@@ -729,6 +729,52 @@ def test_codex_failed_turn_usage_is_counted_without_claiming_completion(tmp_path
     assert caught.value.partial_turn.usage.total_tokens == 15
 
 
+@pytest.mark.parametrize(('detail', 'kind', 'retryable'), [
+    ('private-prefix' * 400 + ' connection reset', 'connection', True),
+    ('private-prefix' * 400 + ' usage limit', 'usage_limit', False),
+    ('stream disconnected before completion', 'connection', True),
+    ('stream closed before response.completed', 'connection', True),
+    ('private-unknown-failure', 'agent_command', False),
+])
+def test_codex_classifies_complete_error_without_publishing_private_detail(
+        tmp_path, detail, kind, retryable):
+    stdout = '\n'.join((
+        json.dumps({'type': 'thread.started', 'thread_id': 'failed-thread'}),
+        json.dumps({'type': 'turn.failed', 'error': {'message': detail}}),
+    ))
+    driver = CodexDriver(
+        executable='codex.exe',
+        runner=lambda argv, **_kwargs: _completed(argv, stdout, returncode=1))
+    with pytest.raises(AgentCommandError) as caught:
+        driver.start(_profile('codex'), _request(tmp_path, prompt='开始'))
+    assert caught.value.error_kind == kind
+    assert caught.value.retryable is retryable
+    assert detail not in str(caught.value)
+    assert 'private-' not in str(caught.value)
+    assert f'detail_chars={len(detail)}' in str(caught.value)
+    assert 'detail_sha256=' in str(caught.value)
+    assert caught.value.partial_turn.content == ''
+
+
+def test_codex_does_not_classify_agent_message_or_stale_error_as_failure_cause(
+        tmp_path):
+    stdout = '\n'.join((
+        json.dumps({'type': 'thread.started', 'thread_id': 'failed-thread'}),
+        json.dumps({'type': 'error', 'message': 'connection reset'}),
+        json.dumps({'type': 'item.completed', 'item': {
+            'type': 'agent_message', 'text': 'stream disconnected before completion'}}),
+        json.dumps({'type': 'turn.failed', 'error': {'message': 'unknown-failure'}}),
+    ))
+    driver = CodexDriver(
+        executable='codex.exe',
+        runner=lambda argv, **_kwargs: _completed(argv, stdout, returncode=1))
+    with pytest.raises(AgentCommandError) as caught:
+        driver.start(_profile('codex'), _request(tmp_path, prompt='开始'))
+    assert caught.value.error_kind == 'agent_command'
+    assert caught.value.retryable is False
+    assert caught.value.partial_turn.content == ''
+
+
 def test_profiles_are_closed_failures_not_cross_vendor_fallbacks(tmp_path):
     never_called = False
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from novel.agents import (
     CLAUDE_STRUCTURED_DELIVERY_V1,
     AgentCommandError, AgentConfigurationError, AgentDriver, AgentProbe,
     AgentRequest, AgentTurn, AgentUsage,
+    CodexDriver,
 )
 from novel.agents.session_client import (
     AgentDeliveryUnavailable, SessionAgentClient,
@@ -593,6 +595,59 @@ def test_transient_delivery_retry_is_separate_from_semantic_turn_budget(tmp_path
         agent_session_audit.read_events(tmp_path))
     assert [turn.turn_index for turn in session.turns] == [1]
     assert session.turns[0].attempt_id == rows[1]['attempt_id']
+
+
+def test_codex_stream_failure_retries_through_real_session_and_keeps_cost(
+        tmp_path):
+    """真正消费 driver 分类；失败流计费但不能进入 accepted checkpoint lineage。"""
+    calls: list[list[str]] = []
+
+    def runner(argv, **_kwargs):
+        if '--version' in argv:
+            return subprocess.CompletedProcess(argv, 0, 'codex-cli 0.test', '')
+        calls.append(list(argv))
+        failed = len(calls) == 1
+        events = [
+            {'type': 'thread.started',
+             'thread_id': 'failed-provider' if failed else 'accepted-provider'},
+            {'type': 'item.completed', 'item': {
+                'type': 'agent_message', 'text': '{"value":99}' if failed else '{"value":7}'}},
+            {'type': 'turn.failed' if failed else 'turn.completed',
+             'usage': {'input_tokens': 10, 'output_tokens': 3}},
+        ]
+        if failed:
+            events[-1]['error'] = {
+                'message': '私密前缀' * 600 + ' stream disconnected before completion'}
+        return subprocess.CompletedProcess(
+            argv, 1 if failed else 0,
+            '\n'.join(json.dumps(event) for event in events), '')
+
+    ctx = _ctx(tmp_path, node='stage4.plan')
+    sleeps: list[float] = []
+    client = SessionAgentClient(
+        ctx, _profile(), CodexDriver(executable='codex.exe', runner=runner),
+        max_semantic_turns=1, max_delivery_retries=3,
+        delivery_backoff_base=2, sleep=sleeps.append)
+    result = client.ask_json(
+        'SYS', 'subject', model_cls=_Answer, purpose='stage4.plan:ch0003')
+    checkpoint = client.accepted_checkpoint('stage4.plan:ch0003')
+    client.finish(process_state='ok', delivery_state='delivered')
+    client.close()
+
+    assert result.value == 7
+    assert len(calls) == 2 and all('resume' not in argv for argv in calls)
+    assert sleeps == [2] and client.turns_used == 1
+    rows = _rows(ledger_path(tmp_path))
+    assert [row['error_kind'] for row in rows] == ['connection', None]
+    assert [row['will_retry'] for row in rows] == [True, False]
+    assert [row['prompt_tokens'] for row in rows] == [10, 10]
+    assert [row['completion_tokens'] for row in rows] == [3, 3]
+    assert rows[0]['response_sha256'] is None
+    assert rows[0]['request_fingerprint'] == rows[1]['request_fingerprint']
+    assert [row['attempt_id'] for row in checkpoint['attempt_links']] == [
+        rows[1]['attempt_id']]
+    assert checkpoint['provider_session_id'] == 'accepted-provider'
+    assert '私密前缀' not in ledger_path(tmp_path).read_text(encoding='utf-8')
 
 
 def test_transient_delivery_stops_after_initial_plus_three_retries(tmp_path):

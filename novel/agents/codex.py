@@ -10,6 +10,7 @@ Codex 的 stdout 在 ``--json`` 下是一条事件流，不是一份最终 JSON�
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -185,21 +186,25 @@ def _agent_message(events: Sequence[Mapping[str, Any]]) -> str:
 
 
 def _failure_detail(event: Mapping[str, Any] | None) -> str:
-    """只读取失败事件登记的错误格，不扫描 agent message / tool 输出。"""
+    """只读失败事件登记的错误格；完整内容仅在内存中分类，不回显正文。
+
+    provider 常把多层错误序列化进 message，根因可能在长前缀之后。不能先按
+    日志显示长度截断再分类，否则明确的连接/限额错误会退化为未知命令失败。
+    """
     if event is None:
         return ''
     values: list[str] = []
     for key in ('error', 'message', 'code', 'status'):
         value = event.get(key)
         if isinstance(value, str) and value.strip():
-            values.append(value[:2048])
+            values.append(value)
         elif isinstance(value, int) and not isinstance(value, bool):
             values.append(str(value))
         elif isinstance(value, Mapping):
             for nested in ('type', 'code', 'message', 'status'):
                 item = value.get(nested)
                 if isinstance(item, (str, int)) and not isinstance(item, bool):
-                    values.append(str(item)[:512])
+                    values.append(str(item))
     return ' '.join(values)
 
 
@@ -375,14 +380,16 @@ class CodexDriver(CliAgentDriver):
             kind = None if failed_event is None else failed_event.get('type')
             failure_detail = (
                 _failure_detail(failed_event)
-                if failed_event is not None else (completed.stderr or '')[:2048]
+                if failed_event is not None else (completed.stderr or '')
             )
             error_kind, status, retryable = classify_agent_command_failure(
                 failure_detail, usage=usage,
                 status=_failure_status(failed_event))
             raise AgentCommandError(
                 f'Codex CLI 失败（exit={completed.returncode}，event={kind!r}，'
-                f'kind={error_kind!r}，status={status!r}）',
+                f'kind={error_kind!r}，status={status!r}，'
+                f'detail_chars={len(failure_detail)}，'
+                f'detail_sha256={hashlib.sha256(failure_detail.encode("utf-8")).hexdigest()}）',
                 returncode=completed.returncode,
                 # 失败事件前可能已经吐过 agent_message；只保留 usage/session 供结算。
                 partial_turn=(None if turn is None else replace(turn, content='')),
