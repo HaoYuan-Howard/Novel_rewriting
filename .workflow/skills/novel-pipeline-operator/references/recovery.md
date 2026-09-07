@@ -7,6 +7,7 @@
 - [四类 remediation](#四类-remediation)
 - [允许写入面](#允许写入面)
 - [Stage4A repair/replan prepared 的 0-wire 提交补尾](#stage4a-repairreplan-prepared-的-0-wire-提交补尾)
+- [Stage4B 旧章输入契约恢复](#stage4b-旧章输入契约恢复)
 - [结构化响应修复](#结构化响应修复)
 - [Stage5 顶部卡的 trim 处置与 LLM 改写恢复](#stage5-顶部卡的-trim-处置与-llm-改写恢复)
 - [Stage5 foreign prepared 的显式 0-wire 收口](#stage5-foreign-prepared-的显式-0-wire-收口)
@@ -283,6 +284,21 @@ live candidate 只允许等于 journal 的 baseline 或 target：baseline 时才
 最后才把 source journal 原位提升为 committed。若进程杀在 prepare、candidate、adoption、audit 或 mark 任一
 窗口，下一次仍由**新的 recovery run**拿新的 exact permit 继续 0-wire 收敛；不得续旧 provider、重启
 Commander/Reviewer、删除账本或手改 journal。
+
+## Stage4B 旧章输入契约恢复
+
+章级 B 的新输入契约为 `stage4-chapter-binding-input-v2`，包含完整冻结设计和本章 alias 映射。
+只读 state/preview 若明确报告 `binding_input_contract_obsolete`，表示 Store 已同时核实旧章模型
+架构、完整逐章来源与已发行的缺图 system 指纹；这不是仅凭缺一个字段推断失效。
+当前 A 的正式设计批准、付费/正文外发与 execution epoch 仍由原状态机核验，条件闭合后
+canonical `stage4.plan` 重建 B 和 Plan，再进入独立结构审阅。前端重新启动 AgentRun 走相同路径，
+操作员不编辑产物或决定，也不另拼恢复命令。
+
+`binding_input_contract_unproven` 保持 unknown，不能按上述已知过时分支付费重采。
+真实上游已经变化时仍保留既有 `consumed_changed` 路由；输入不变而只改代码或 prompt 不构成
+重开审阅的许可。新真实输入契约参与结构审阅身份，因此新 B 即使结果恰与旧 B 相同也要正式
+重审，旧裁决保留历史。既有 `--apply-binding` 是 0 成本 typed 恢复面；不得手补来源回执，
+也不得把 `--revalidate` 的机械复检说成模型已收到修好的输入。
 
 ## 结构化响应修复
 

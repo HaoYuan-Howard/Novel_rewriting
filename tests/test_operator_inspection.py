@@ -161,8 +161,15 @@ def test_structure_workpack_reuses_the_snapshot_stage4_report_and_code(
         chapter_subject_sha256={1: 'b' * 64},
         plan=SimpleNamespace(output_chapters=[]),
         concerns=[],
+        binding_input_contract=None,
         blueprints=SimpleNamespace(blueprints=[]),
+        plan_payload_sha256='c' * 64,
+        binding_payload_sha256='d' * 64,
+        blueprint_payload_sha256='e' * 64,
     )
+    # 这里只隔离快照编排，完整业务载荷由 Stage4 纵切覆盖；替身仍须明确
+    # 携带全部快照身份，避免新增字段时绕过真实快照的前后比较面。
+    assert set(vars(subject)) == set(A._StructureWorkpackSnapshot.model_fields)
     reports: list[object] = []
 
     monkeypatch.setattr(A, '_read_current', lambda *_args: object())

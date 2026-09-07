@@ -44,6 +44,7 @@ from contracts.schema.stage2 import (
     GlobalEdit, GlobalEditCommit, GlobalEditFailure, GlobalEditInputCommit,
     GlobalGrounding,
 )
+from contracts.schema.stage4 import EvidenceBinding
 from novel import paths, prov
 from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing, UpstreamStale
 from novel.llm.cache import CachePolicy
@@ -212,10 +213,18 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
     ):
         try:
             require_frozen_v6_downstream_subject(store, rel)
+            restored = prov.FreshnessReport('fresh', 'match')
+            if rel in {STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS}:
+                binding, _binding_raw = store.read_own(
+                    EvidenceBinding, STAGE4_EVIDENCE_BINDING)
+                # v6 桥只修复 Blueprint 旧 consumed 形状，不能把独立的 B
+                # 输入契约问题一起洗成 fresh；仍复用 Store 的唯一检查。
+                restored = ArtifactStore._stage4_binding_input_freshness(
+                    binding, restored)
         except (ArtifactUnreadable, UpstreamMissing, UpstreamStale, OSError, ValueError):
             pass
         else:
-            fresh, reason, ghosts = 'fresh', 'match', []
+            fresh, reason, ghosts = restored.state, restored.reason, []
 
     return ArtifactState(
         rel=rel, exists=True, bytes=st.st_size, mtime=int(st.st_mtime),
@@ -1156,6 +1165,11 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
     mine = artifacts_for_node(ov, node)
     stale = [a for a in mine if a.freshness == 'stale']
     if stale:
+        if any(a.reason == 'binding_input_contract_obsolete' for a in stale):
+            return RESUME_REDO, (
+                '已证明旧章级 Stage4B 缺场景与事实/材料的输入映射契约；'
+                '在当前 Stage4A 全章接受与有效付费授权下只重建 B，'
+                '旧结构决定与原模型账保留历史，不把该问题转成 A 修订。')
         return RESUME_REDO, (
             f'上游变过：{", ".join(a.rel for a in stale)} 已陈旧 '
             f'（{", ".join(sorted({a.reason for a in stale}))}）。'
@@ -1254,6 +1268,17 @@ def operator_redo_flags(ov: NovelOverview, node: str) -> tuple[str, ...] | None:
         return () if stage is not None and stage.review_state == 'stale' else None
 
     artifacts = artifacts_for_node(ov, node)
+    if (node == 'stage4.plan'
+            and any(a.reason == 'binding_input_contract_obsolete' for a in artifacts)
+            and all(
+                not a.invalid and a.readable
+                and (not a.exists or a.freshness == 'fresh'
+                     or a.freshness == 'stale' and a.reason in {
+                         'binding_input_contract_obsolete', 'consumed_changed'})
+                for a in artifacts)):
+        # Store 已证明旧章级输入契约，A all-accept、paid/permit 与并发身份
+        # 仍由原 queue/CLI/producer 守卫；这里只允许 canonical B 重建。
+        return ()
     if not _consumed_redo_surface(artifacts):
         return None
     if strategy == 'canonical':

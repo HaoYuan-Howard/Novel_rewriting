@@ -391,18 +391,41 @@ def test_queue_and_operator_skip_paid_blueprint_for_exact_frozen_subject(
     assert planned.execution_token is None
 
 
+@pytest.mark.parametrize('rel', (STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS))
+@pytest.mark.parametrize(('contract', 'expected'), [
+    ('legacy', ('fresh', 'match')),
+    ('known_obsolete', ('stale', 'binding_input_contract_obsolete')),
+    ('unproven', ('unknown', 'binding_input_contract_unproven')),
+])
 def test_state_only_promotes_exact_frozen_v6_downstream_proof(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rel: str,
+    contract: str, expected: tuple[str, str],
 ) -> None:
-    artifact_path = tmp_path / STAGE4_PLAN_CHAPTERS
+    artifact_path = tmp_path / rel
     artifact_path.parent.mkdir(parents=True)
     artifact_path.write_text('{}', encoding='utf-8')
+    binding = {
+        'status': 'bound', 'chapters': [{'output_ordinal': 1}],
+        '_provenance': {
+            'origin': 'llm', 'architecture': 'chapter_baseline_v1',
+            'prompts': {'CHAPTER_BIND_SYS': 'a3c0d541d9'},
+            'unit_lineage': [{
+                'chapter_ordinal': 1, 'kind': 'chapter_session',
+                'attempt_id': 'a' * 16, 'models': ['fixture'],
+                'revision': 0, 'ambiguities': 1,
+            }],
+        },
+    }
+    if contract == 'legacy':
+        binding['_provenance']['architecture'] = 'whole_book_v1'
+    elif contract == 'unproven':
+        binding['_provenance']['architecture'] = 'chapter_baseline_v999'
     store = SimpleNamespace(
         path=lambda _rel: artifact_path,
         exists=lambda _rel: False,
         freshness=lambda _rel: FreshnessReport(
             'unknown', 'consumed_unresolved'),
-        read_own=lambda _model, _rel: (object(), {}),
+        read_own=lambda _model, _rel: (binding, {}),
     )
     monkeypatch.setattr(
         state, 'artifact_spec', lambda _rel: SimpleNamespace(model=object))
@@ -411,10 +434,10 @@ def test_state_only_promotes_exact_frozen_v6_downstream_proof(
         state, 'require_frozen_v6_downstream_subject',
         lambda _store, rel: proven.append(rel) or 'a' * 64)
 
-    current = state.artifact_state(store, STAGE4_PLAN_CHAPTERS)
+    current = state.artifact_state(store, rel)
 
-    assert proven == [STAGE4_PLAN_CHAPTERS]
-    assert (current.freshness, current.reason) == ('fresh', 'match')
+    assert proven == [rel]
+    assert (current.freshness, current.reason) == expected
 
 
 def test_existing_exact_frozen_b_uses_current_structure_without_rebinding_a(

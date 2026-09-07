@@ -37,6 +37,7 @@ from typing import Any, NoReturn
 from contracts.invariants import (
     BLIND_ALIAS_ALGORITHM, DESIGN_REPAIR_CODE_INSTRUCTIONS,
     DESIGN_REVIEW_CONTRACT, FAILURE_STOP_OWNERS,
+    STAGE4_BINDING_INPUT_CONTRACT, STAGE4_BINDING_INPUT_RECEIPT_KEY,
 )
 from contracts.schema import artifact_spec
 from contracts.schema.api import (
@@ -46,7 +47,8 @@ from contracts.schema.report import CheckReport
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
 from contracts.schema.stage4 import (
-    BlindBookStrategyResponse, BlindCandidate, BlindCandidateHumanProvenance,
+    BlindBookStrategyResponse, BlindCandidate, BlindCandidateChapter,
+    BlindCandidateHumanProvenance,
     BlindCandidateProvenance, BlindChapterEditRequest,
     BlindChapterDesignResponse, BlindPlanResponse, BindingConcern,
     ChapterBindingResponse,
@@ -1343,31 +1345,86 @@ def _chapter_binding_issue(
         (row for row in (candidate_raw.get('output_chapters') or [])
          if int(row.get('output_ordinal') or 0) == chapter_ordinal - 1), None)
 
+    # B 要按已审 A 的真实语义选材料；opaque alias 本身没有词义，不能只给
+    # 场景 alias 列表和另一张无法联结的正式 fact 表。映射来自同一冻结候选，
+    # 只投影本章证据，绝不凭编号/场序猜关联或重新铸 alias。
+    alias_to_formal: dict[str, str] = {}
     formal_to_alias: dict[str, str] = {}
+    alias_tables: dict[str, dict[str, str]] = {}
     for field_name in ('fact_aliases', 'participant_aliases'):
         table = candidate_raw.get(field_name)
         if not isinstance(table, Mapping):
             raise ProvenanceRefused(
                 f'stage4.plan ch{chapter_ordinal} 候选缺 {field_name} 映射')
-        for alias_raw, formal_raw in table.items():
-            alias, formal = str(alias_raw), str(formal_raw)
+        alias_tables[field_name] = {}
+        for alias, formal in table.items():
+            if (not isinstance(alias, str) or not alias
+                    or not isinstance(formal, str) or not formal):
+                raise ProvenanceRefused(
+                    f'stage4.plan ch{chapter_ordinal} {field_name} 映射身份为空或非文本')
             previous = formal_to_alias.get(formal)
-            if previous is not None and previous != alias:
+            if previous is not None:
                 raise ProvenanceRefused(
                     f'stage4.plan ch{chapter_ordinal} 正式引用 {formal} '
                     f'映到多个 opaque alias：{previous}, {alias}')
+            previous_formal = alias_to_formal.get(alias)
+            if previous_formal is not None:
+                raise ProvenanceRefused(
+                    f'stage4.plan ch{chapter_ordinal} opaque alias {alias} '
+                    f'映到多个正式引用：{previous_formal}, {formal}')
+            alias_to_formal[alias] = formal
             formal_to_alias[formal] = alias
+            alias_tables[field_name][alias] = formal
 
-    candidate_payload = {
-        'weight': chapter.get('weight'),
-        'scenes': [
-            {'candidate_scene_id': scene.get('candidate_scene_id'),
-             'land_fact_aliases': scene.get('land_fact_aliases') or [],
-             'context_fact_aliases': scene.get('context_fact_aliases') or []}
-            for scene in (chapter.get('scenes') or [])],
-    }
+    chapter_participants = {
+        ref for atom in atoms.values()
+        for ref in (atom.get('participant_char_ids') or [])}
+    present_participants = {
+        ref for beat in beats.values()
+        for ref in (beat.get('present_char_ids') or [])}
+    local_alias_tables: dict[str, dict[str, str]] = {}
+    for field_name, required_refs in (
+            ('fact_aliases', set(atoms)),
+            ('participant_aliases', chapter_participants)):
+        table = alias_tables[field_name]
+        missing = sorted(required_refs - set(table.values()))
+        if missing:
+            raise ProvenanceRefused(
+                f'stage4.plan ch{chapter_ordinal} {field_name} 缺本章映射：{missing}')
+        local_refs = required_refs
+        if field_name == 'participant_aliases':
+            # A 的 participant 表只保证 fact 参与者；纯舞台到场者可合法无
+            # opaque alias，仍以正式 char_id 阅读，不能为此发明映射/业务闸。
+            local_refs = local_refs | present_participants
+        local_alias_tables[field_name] = {
+            alias: formal for alias, formal in table.items()
+            if formal in local_refs}
+
+    candidate_payload = BlindCandidateChapter.model_validate(chapter).model_dump(
+        mode='json')
+    scene_fact_fields = (
+        'land_fact_aliases', 'context_fact_aliases',
+        'entry_state_aliases', 'exit_state_aliases')
+    referenced_aliases = {
+        alias for scene in candidate_payload['scenes']
+        for field_name in scene_fact_fields for alias in scene[field_name]}
+    referenced_aliases.update(
+        scene['turn_fact_alias'] for scene in candidate_payload['scenes'])
+    for field_name in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
+        referenced_aliases.update(candidate_payload[field_name]['fact_aliases'])
+    unknown = sorted(referenced_aliases - set(local_alias_tables['fact_aliases']))
+    if unknown:
+        raise ProvenanceRefused(
+            f'stage4.plan ch{chapter_ordinal} 冻结候选含非本章事实 alias：{unknown}')
+    # concern 的规范化也用这张实际送达的局部表，不能持有全书映射后另猜范围。
+    formal_to_alias = {
+        formal: alias for table in local_alias_tables.values()
+        for alias, formal in table.items()}
+
     fact_payload = [
         {'fact_id': atom.get('fact_id'), 'claim': atom.get('claim'),
+         'kind': atom.get('kind'),
+         'participant_char_ids': atom.get('participant_char_ids') or [],
          'obligation': atom.get('obligation'),
          'source_beat_ref': atom.get('source_beat_ref'),
          'source_text': (
@@ -1408,13 +1465,12 @@ def _chapter_binding_issue(
         if isinstance(value, str) and value:
             issued_refs.add(value)
 
-    for scene in candidate_payload['scenes']:
-        for field_name in ('land_fact_aliases', 'context_fact_aliases'):
-            for ref in scene[field_name]:
-                issue(ref)
+    issued_refs.update(referenced_aliases)
     for atom in fact_payload:
         issue(atom.get('fact_id'))
         issue(atom.get('source_beat_ref'))
+        for ref in atom['participant_char_ids']:
+            issue(ref)
     for stage in stage_payload:
         issue(stage.get('stage_ref'))
         for ref in stage['present_char_ids']:
@@ -1466,7 +1522,9 @@ def _chapter_binding_issue(
         for ref in tuple(issued_refs)
         if ref in formal_to_alias)
     evidence_payload = {
+        'binding_input_contract': STAGE4_BINDING_INPUT_CONTRACT,
         'chapter_source_text': source_text,
+        **local_alias_tables,
         'issued_ref_allowlist': sorted(issued_refs),
         'fact_atoms': fact_payload,
         'stages': stage_payload,
@@ -4748,6 +4806,9 @@ def _materialize_binding(
         prompts.chapter_binding_system()
         if architecture == 'chapter_baseline_v1'
         else prepared.system)
+    binding_prompts = {prompt_name: prompt_text}
+    if architecture == 'chapter_baseline_v1':
+        binding_prompts[STAGE4_BINDING_INPUT_RECEIPT_KEY] = STAGE4_BINDING_INPUT_CONTRACT
     provenance_kwargs: dict[str, Any] = {}
     aggregate_usage = getattr(source, 'aggregate_usage', None)
     if architecture == 'chapter_baseline_v1':
@@ -4757,7 +4818,7 @@ def _materialize_binding(
         provenance_kwargs['usage_override'] = aggregate_usage()
     provenance = ctx.llm_provenance(
         EvidenceBindingProvenance,
-        prompts={prompt_name: prompt_text},
+        prompts=binding_prompts,
         model=source.model,
         adopted_models=adopted_models,
         settle=settle,
@@ -5331,7 +5392,9 @@ def finalize_plan_candidate(
             # 结算边界，不发 wire。
             if evaluation.hard_hits and source.provider_session_id is None:
                 expected_binding, restored_compiled = _materialize_binding(
-                    ctx, source, prepared, evaluation.response, settle=True)
+                    ctx, source, prepared, evaluation.response, settle=True,
+                    architecture=evaluation.architecture,
+                    unit_lineage=evaluation.unit_lineage)
                 if (restored_compiled is None
                         or _canonical_sha256(restored_compiled)
                         != evaluation.compiled_sha256
@@ -5768,6 +5831,7 @@ def _chapter_input_sha(ctx: RunContext, prepared: PlanCandidateContext,
         'candidate_subject_sha256': prepared.subject_sha256,
         'input_sha256': prepared.input_sha256,
         'chapter_ordinal': chapter_ordinal,
+        'binding_input_contract': STAGE4_BINDING_INPUT_CONTRACT,
     })
 
 

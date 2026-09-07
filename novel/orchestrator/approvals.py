@@ -963,6 +963,7 @@ class _StructureWorkpackSnapshot(StrictModel):
     chapter_subject_sha256: dict[int, str]
     plan: PlanChapters
     concerns: list[BindingConcern]
+    binding_input_contract: str | None = None
     #: v2 逐章 reading 的 claim/舞台/材料来源；与 plan/binding 同一次快照读出。
     blueprints: ChapterBlueprints
     plan_payload_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
@@ -1820,13 +1821,16 @@ def _current_structure_subject_and_chapters(
     store = _store_for(novel_dir)
     _require_fresh_json(store, STAGE4_PLAN_CHAPTERS)
     plan, _raw = store.read_own(PlanChapters, STAGE4_PLAN_CHAPTERS)
-    concerns = _current_binding_concerns(novel_dir, store=store)
+    binding = _current_structure_binding(novel_dir, store=store)
+    concerns = _binding_concerns(binding)
+    binding_input_contract = _binding_input_contract_identity(binding)
     try:
         from novel.stages.stage4.measure import structure_review_subject_sha256
     except ImportError as exc:
         raise ArtifactUnreadable(
             'stage4 structure subject helper is unavailable') from exc
-    subject = structure_review_subject_sha256(plan, concerns)
+    subject = structure_review_subject_sha256(
+        plan, concerns, binding_input_contract=binding_input_contract)
     if (
         not isinstance(subject, str) or len(subject) != 64
         or any(char not in '0123456789abcdef' for char in subject)
@@ -1841,7 +1845,8 @@ def _current_structure_subject_and_chapters(
 
 
 def _structure_chapter_subject_sha256(
-    plan: PlanChapters, concerns: list[BindingConcern],
+    plan: PlanChapters, concerns: list[BindingConcern], *,
+    binding_input_contract: str | None = None,
 ) -> dict[int, str]:
     """结构人审的逐章复用主体；业务 Plan 投影复用生产唯一尺子。
 
@@ -1869,6 +1874,8 @@ def _structure_chapter_subject_sha256(
             'review_contract': STRUCTURE_REVIEW_CONTRACT,
             'chapter': projected_by[ordinal],
             'binding_concerns': applicable,
+            **({'binding_input_contract': binding_input_contract}
+               if binding_input_contract is not None else {}),
         })
     return hashes
 
@@ -1880,8 +1887,10 @@ def _current_structure_chapter_subject_sha256(
     store = _store_for(novel_dir)
     _require_fresh_json(store, STAGE4_PLAN_CHAPTERS)
     plan, _raw = store.read_own(PlanChapters, STAGE4_PLAN_CHAPTERS)
-    concerns = _current_binding_concerns(novel_dir, store=store)
-    return _structure_chapter_subject_sha256(plan, concerns)
+    binding = _current_structure_binding(novel_dir, store=store)
+    return _structure_chapter_subject_sha256(
+        plan, _binding_concerns(binding),
+        binding_input_contract=_binding_input_contract_identity(binding))
 
 
 def _structure_workpack_snapshot(
@@ -1898,12 +1907,14 @@ def _structure_workpack_snapshot(
     blueprints, blueprints_raw = store.read_own(
         ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)
     concerns = _binding_concerns(binding)
+    binding_input_contract = _binding_input_contract_identity(binding)
     try:
         from novel.stages.stage4.measure import structure_review_subject_sha256
     except ImportError as exc:
         raise ArtifactUnreadable(
             'stage4 structure subject helper is unavailable') from exc
-    subject = structure_review_subject_sha256(plan, concerns)
+    subject = structure_review_subject_sha256(
+        plan, concerns, binding_input_contract=binding_input_contract)
     ordinals = [row.output_ordinal for row in plan.output_chapters]
     if ordinals != sorted(set(ordinals)) or any(value < 1 for value in ordinals):
         raise ArtifactUnreadable(
@@ -1911,9 +1922,11 @@ def _structure_workpack_snapshot(
     return _StructureWorkpackSnapshot(
         subject_sha256=subject,
         chapter_ordinals=ordinals,
-        chapter_subject_sha256=_structure_chapter_subject_sha256(plan, concerns),
+        chapter_subject_sha256=_structure_chapter_subject_sha256(
+            plan, concerns, binding_input_contract=binding_input_contract),
         plan=plan,
         concerns=concerns,
+        binding_input_contract=binding_input_contract,
         blueprints=blueprints,
         plan_payload_sha256=_decision_sha256(plan_raw),
         binding_payload_sha256=_decision_sha256(binding_raw),
@@ -1929,15 +1942,32 @@ def _binding_concerns(binding: EvidenceBinding) -> list[BindingConcern]:
     return list(binding.binding_concerns)
 
 
-def _current_binding_concerns(
+def _current_structure_binding(
     novel_dir: Path, *, store: ArtifactStore | None = None,
-) -> list[BindingConcern]:
-    """发布当前 bound B 的非阻断担忧；不把它们重新判成机械失败。"""
+) -> EvidenceBinding:
     current_store = store or _store_for(novel_dir)
     _require_fresh_json(current_store, STAGE4_EVIDENCE_BINDING)
     binding, _raw = current_store.read_own(
         EvidenceBinding, STAGE4_EVIDENCE_BINDING)
-    return _binding_concerns(binding)
+    _binding_concerns(binding)
+    return binding
+
+
+def _binding_input_contract_identity(binding: EvidenceBinding) -> str | None:
+    from novel.stages.stage4.binding_input_contract import inspect_binding_input_contract
+
+    verdict = inspect_binding_input_contract(binding)
+    if verdict.state not in {'legacy', 'current'}:
+        raise UpstreamUnproven(
+            f'Stage4B 输入契约没有当前审阅权威：{verdict.state}')
+    return verdict.identity
+
+
+def _current_binding_concerns(
+    novel_dir: Path, *, store: ArtifactStore | None = None,
+) -> list[BindingConcern]:
+    """发布当前 bound B 的非阻断担忧；不把它们重新判成机械失败。"""
+    return _binding_concerns(_current_structure_binding(novel_dir, store=store))
 
 
 def _proof_for_structure(
@@ -3822,7 +3852,14 @@ def structure_workpack(
                     blueprint_by_ordinal=blueprint_by_ordinal,
                 ),
                 reading=WorkpackReading(
-                    legend=workpack_legend('structure'),
+                    legend={
+                        **workpack_legend('structure'),
+                        **({'binding_input_contract': (
+                            snapshot.binding_input_contract
+                            + '：本次章级 B 收到场景 alias 与事实/材料的完整映射；'
+                            '该真实输入契约参与本次结构审阅主体。')}
+                           if snapshot.binding_input_contract is not None else {}),
+                    },
                     global_binding_concerns=[
                         concern_reading(concern, blueprints=blueprint_by_ordinal)
                         for concern in snapshot.concerns

@@ -34,7 +34,9 @@ from contracts.schema import (
     decode_artifact, encode_artifact,
 )
 from contracts.invariants import STYLE_MEASUREMENT_CONTRACT, STRUCTURE_METRIC_CONTRACT
-from contracts.schema.stage4 import PlanChapters, PlanProvenance
+from contracts.schema.stage4 import (
+    EvidenceBinding, EvidenceBindingHumanProvenance, PlanChapters, PlanProvenance,
+)
 from novel.consumption import (
     CONSUMED_PROJECTIONS, legacy_stage3_projection_for, legacy_stage5_style,
     producer_node, project_consumed, projection_for,
@@ -263,13 +265,26 @@ def _plan(ctx: RunContext, *, marker: str = '计划一',
 
 
 def _seed_phase_bytes(store: ArtifactStore) -> None:
-    for rel, payload in (
-        (STAGE4_BLIND_CANDIDATE, b'test blind candidate bytes\n'),
-        (STAGE4_EVIDENCE_BINDING, b'test evidence binding bytes\n'),
-    ):
-        path = store.path(rel)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(payload)
+    # A 在这些事务用例中只参与完整字节绑定；B 还会被真实输入契约判定读取，
+    # 必须是当前 typed artifact，不能再拿非 JSON 占位字节冒充正式来源。
+    candidate = store.path(STAGE4_BLIND_CANDIDATE)
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_bytes(b'test blind candidate bytes\n')
+    candidate_sha = store.full_sha256_or_none(STAGE4_BLIND_CANDIDATE)
+    assert candidate_sha is not None
+    store.write(STAGE4_EVIDENCE_BINDING, EvidenceBinding(
+        status='bound', candidate_sha256=candidate_sha,
+        chapters=[{
+            'output_ordinal': 1,
+            'scenes': [{
+                'candidate_scene_id': 'c01s01',
+                'material_refs': [], 'stage_refs': ['b01_01'],
+            }],
+        }],
+        _provenance=store.ctx.free_provenance(
+            EvidenceBindingHumanProvenance, origin='human',
+            candidate_sha256=candidate_sha),
+    ))
 
 
 def _prov_on_disk(p: Path) -> dict:

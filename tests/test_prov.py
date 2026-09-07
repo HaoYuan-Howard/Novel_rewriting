@@ -198,7 +198,8 @@ def test_every_reason_in_the_enum_is_reachable():
     ``global_naming_blocked`` 与 ``legacy_blueprint_inputs`` 都不是通用
     provenance 比对结果；前者由 store 的称名闸生成，后者只有 store 亲见
     Blueprint 原始 inputs 的精确旧键形才铸造，故不要求 ``prov.freshness``
-    伪造可达路径。
+    伪造可达路径。章级 B 的两条输入契约原因同样只由 Store 的登记检查产出，
+    其真实输入边与恢复正反例另由 binding input contract 集成测试闭合。
     """
     seen = set()
     for r in (prov.freshness(None, file_now=lambda _k: None),
@@ -211,7 +212,10 @@ def test_every_reason_in_the_enum_is_reachable():
               _fresh(_edge(consumed=PROJ_A), now=FP_V1, consumed=PROJ_A)):
         seen.add(r.reason)
         seen |= {e.reason for e in r.edges}
-    store_only = {'global_naming_blocked', 'legacy_blueprint_inputs'}
+    store_only = {
+        'global_naming_blocked', 'legacy_blueprint_inputs',
+        'binding_input_contract_obsolete', 'binding_input_contract_unproven',
+    }
     generic_reasons = set(FRESHNESS_REASON) - store_only
     assert store_only <= set(FRESHNESS_REASON)
     assert seen == generic_reasons, (

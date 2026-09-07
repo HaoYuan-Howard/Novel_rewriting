@@ -263,9 +263,10 @@ def structure_subject_sha256(plan: Any) -> str:
 
 
 def structure_review_subject_sha256(
-    plan: Any, binding_concerns: list[Any],
+    plan: Any, binding_concerns: list[Any], *,
+    binding_input_contract: str | None = None,
 ) -> str:
-    """最终结构人审的唯一主体：Plan 业务面 + 当前 B 非阻断担忧。"""
+    """最终结构主体：Plan、B 担忧与实际章级输入契约；旧非章模型保留原 hash。"""
     concerns = [
         value.model_dump(mode='json')
         if hasattr(value, 'model_dump') else value
@@ -276,6 +277,8 @@ def structure_review_subject_sha256(
         'review_contract': STRUCTURE_REVIEW_CONTRACT,
         'plan_subject_sha256': structure_subject_sha256(plan),
         'binding_concerns': concerns,
+        **({'binding_input_contract': binding_input_contract}
+           if binding_input_contract is not None else {}),
     }
     return hashlib.sha256(json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'),

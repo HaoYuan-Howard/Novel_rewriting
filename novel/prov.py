@@ -228,6 +228,8 @@ _REASON_STATE: dict[str, Freshness] = {
     'ghost': 'unknown',
     'file_changed': 'stale',
     'consumed_changed': 'stale',
+    'binding_input_contract_obsolete': 'stale',
+    'binding_input_contract_unproven': 'unknown',
     'consumed_undeclared': 'unknown',
     'consumed_unresolved': 'unknown',
     'legacy_blueprint_inputs': 'unknown',
@@ -264,7 +266,9 @@ class FreshnessReport:
     """
 
     state: Freshness
-    reason: str                          # 汇总结论的**代表**原因（取最坏那条边的）
+    # 通常取最坏输入边；登记的 producer 输入契约可独立否定当前性，
+    # 此时保留真实输入边并明示契约 reason，不伪造文件或 consumed 变化。
+    reason: str
     edges: tuple[EdgeVerdict, ...] = ()
 
     @property

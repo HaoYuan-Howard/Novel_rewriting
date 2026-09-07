@@ -11,12 +11,16 @@ import pytest
 from contracts.schema import encode_artifact
 from contracts.schema.api import StructureApprovalRequest
 from contracts.schema.stage1 import MainText
-from contracts.schema.stage4 import PlanChapters, PlanProvenance
+from contracts.schema.stage4 import (
+    EvidenceBinding, EvidenceBindingHumanProvenance, PlanChapters, PlanProvenance,
+)
 from contracts.artifacts import STAGE4_EVIDENCE_BINDING, STAGE4_WRITER_CONTEXT
 from novel.orchestrator import approvals
 from novel.orchestrator import queue as Q
 from novel.run import RunContext
 from novel.store import ArtifactStore
+from novel.stages.stage4.blind import candidate_subject_sha256
+from tests.test_design_review import FACT, PERSON, _subjects
 
 
 SID = '123'
@@ -72,6 +76,35 @@ def _plan(ctx: RunContext) -> PlanChapters:
     )
 
 
+def _binding(ctx: RunContext) -> EvidenceBinding:
+    """绑定合成 A 的真实业务摘要；human 来源只记录本夹具实际读取的输入。"""
+    subjects = _subjects()
+    chapter = subjects.chapters[0]
+    candidate = {
+        'alias_algorithm': subjects.strategy.basis.alias_algorithm,
+        'truth_sha256': approvals._decision_sha256(
+            chapter.blind_truth.model_dump(mode='json')),
+        'fact_aliases': {FACT: 'f01_001'},
+        'participant_aliases': {PERSON: 'char_fixture'},
+        'reconstruction_strategy': subjects.strategy.reconstruction_strategy,
+        'output_chapters': [chapter.chapter.model_dump(mode='json')],
+    }
+    candidate_sha = candidate_subject_sha256(candidate)
+    provenance = ctx.free_provenance(
+        EvidenceBindingHumanProvenance, candidate_sha256=candidate_sha)
+    return EvidenceBinding(
+        status='bound', candidate_sha256=candidate_sha,
+        chapters=[{
+            'output_ordinal': 1,
+            'scenes': [{
+                'candidate_scene_id': chapter.chapter.scenes[0].candidate_scene_id,
+                'stage_refs': ['b01_01'], 'material_refs': [],
+            }],
+        }],
+        binding_concerns=[], _provenance=provenance,
+    )
+
+
 @pytest.fixture
 def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     book = tmp_path / f'审批证明_{SID}'
@@ -89,20 +122,21 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     plan_store = ArtifactStore(plan_ctx)
     plan_store.read(MainText, MAIN_REL)
     plan_store.write(PLAN_REL, _plan(plan_ctx))
-    for rel in (STAGE4_EVIDENCE_BINDING, STAGE4_WRITER_CONTEXT):
-        path = book / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('{}', encoding='utf-8')
+    # B 是结构审批的真实 typed 输入；不能用裸 {} 配合 concerns 替身绕过它。
+    plan_store.write(STAGE4_EVIDENCE_BINDING, _binding(plan_ctx))
+    binding, _raw = plan_store.read_own(EvidenceBinding, STAGE4_EVIDENCE_BINDING)
+    assert binding.provenance.inputs
+    assert plan_store.freshness(STAGE4_EVIDENCE_BINDING).state == 'fresh'
+    context_path = book / STAGE4_WRITER_CONTEXT
+    context_path.write_text('{}', encoding='utf-8')
 
     monkeypatch.setitem(approvals._GATE_REQUIREMENTS, 's4', ())
     monkeypatch.setattr(approvals.prov, 'code_version', lambda: 'fixture-readonly-code')
     monkeypatch.setattr(approvals, '_spawns', lambda _base, _sid: {})
-    monkeypatch.setattr(
-        approvals, '_current_binding_concerns', lambda _novel_dir, **_kwargs: [])
     require_fresh_json = approvals._require_fresh_json
 
     def require_synthetic_stage1(store, rel):
-        if rel in (MAIN_REL, STAGE4_EVIDENCE_BINDING, STAGE4_WRITER_CONTEXT):
+        if rel in (MAIN_REL, STAGE4_WRITER_CONTEXT):
             return hashlib.sha256(store.path(rel).read_bytes()).hexdigest()
         return require_fresh_json(store, rel)
 

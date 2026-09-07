@@ -244,6 +244,11 @@ CHAPTER_BINDING_SYS = """\
 
 规则：每个 ambiguity_id 恰好解析一次；选择只能来自该歧义下发的候选集合；
 不得改变任何已由机械基线确定的归属；不得请求或猜测其他章的任何内容。
+本章冻结候选包含完整 goal、brief 与每场 purpose/role/delivery/transition、事实和首尾状态。
+证据块的 fact_aliases / participant_aliases 是本章 opaque alias 到正式 fact_id / char_id
+的唯一映射；先用它联结场景、事实 claim/source_text、参与者与舞台，再结合材料原文及
+冻结的披露安排解析歧义。alias 无顺序含义，不从编号猜事实，也不以源文顺序覆盖 A。
+这些字段只供理解，不能改写 A；发现结构疑虑仍只能提交下述非阻断 concern。
 如果你对因果、舞台、材料或未来泄漏有语义担忧，写入 binding_concerns（非阻断
 证据）。每条 concern 的 scenes 只能取本章 candidate_scene_id，closed_refs 只能取
 本章证据块显式给出的 issued_ref_allowlist；相邻章边界摘要是只读信息，不属于该列表。

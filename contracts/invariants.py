@@ -74,6 +74,10 @@ RUN_NEXT_HANDLERS: Final = (
 #: 两者必须分开：blocked action 的 hash 只描述“为什么停”，不能冒充恢复命令授权。
 EXECUTION_PERMIT_KINDS: Final = ('ready', 'recovery')
 
+#: 只登记本次章级 B 场景 alias→事实/材料证据 join；不随任意代码或提示词变化。
+STAGE4_BINDING_INPUT_CONTRACT: Final = 'stage4-chapter-binding-input-v2'
+STAGE4_BINDING_INPUT_RECEIPT_KEY: Final = 'CHAPTER_BIND_INPUT_CONTRACT'
+
 #: 一条来源边**为什么**得到那个结论。**用 id 不用措辞**（同 `STAGE0_WARNINGS` 的理由）：
 #: 它要进校验报告的第一节（`Q-4`：来源在前判定在后），而报告不在逐字节验收范围内——
 #: 拿字符串前缀认原因会随一次措辞改动静默断掉。算法唯一落点 `novel/prov.py::freshness`。
@@ -94,6 +98,8 @@ FRESHNESS_REASON: Final = (
     'ghost',                # 边指向的文件不在盘上 ⇒ unknown ＋ 点名报出
     'file_changed',         # 整份文件的指纹对不上 ⇒ stale
     'consumed_changed',     # 本节点真正读到的那部分变了 ⇒ stale
+    'binding_input_contract_obsolete',  # 已证明的旧章级 B 缺输入映射契约 ⇒ stale
+    'binding_input_contract_unproven',  # 章级 B 输入契约/来源形状未知 ⇒ unknown
     'consumed_undeclared',  # 边上 consumed=null ⇒ 该边 unknown
     'consumed_unresolved',  # 声明过投影，但这次算不出来（没登记投影函数）⇒ 该边 unknown
     # 只有 store 亲见 Blueprint 原始 inputs 精确等于 {MainText, Global} 才铸造；

@@ -164,6 +164,14 @@ producer 的上游边；`judged` 还要同时保存完整文件指纹与正文�
 | 某条边 `consumed` 是 `null` | **`unknown`**（该边） | 「没声明读了什么」不是「读的东西没变」 |
 | 全部边都取到且相等 | **`fresh`** | |
 
+Stage4 的章级 B 另有登记的 producer 输入契约结论：`binding_input_contract_obsolete`
+表示已证明旧章模型缺少场景 alias 与事实的映射，为 `stale`；`binding_input_contract_unproven`
+表示回执、架构或来源无法证明，为 `unknown`。唯一判定在
+`novel/stages/stage4/binding_input_contract.py::inspect_binding_input_contract`，Store 只在普通边已
+`fresh` 时附加该结论；原有上游漂移、缺失与未知原因不被覆盖。compiled Plan 在完整 A/B 字节
+关系闭合后继承 B 的该结论。真实输入边和对照保留，不伪装成 `consumed_changed`。
+具体识别、授权与恢复边界见 `docs/BACKEND_CONTRACT.md::R-5.10f`。
+
 > ### ⚠ 幽灵边必须点名，这是 `Q-4` 亲自点过的一个 bug
 >
 > 原型的比对函数对「取不到指纹」的条目**静默跳过**——

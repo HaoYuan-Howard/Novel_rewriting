@@ -23,6 +23,9 @@ import pytest
 from contracts.artifacts import (
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS,
 )
+from contracts.invariants import (
+    STAGE4_BINDING_INPUT_CONTRACT, STAGE4_BINDING_INPUT_RECEIPT_KEY,
+)
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage4 import EvidenceBinding
 from novel import paths, prov
@@ -34,7 +37,7 @@ from novel.agents.session_client import AgentDeliveryUnavailable
 from novel.llm import agent_runs, stage4_runs
 from novel.llm import response_repair
 from novel.llm import typed_failures
-from novel.errors import ProvenanceRefused, TerminalState
+from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
 from novel.node_agents import Stage4PlanSessionPool
 from novel.store import ArtifactStore
 from novel.stages.stage4 import baseline as baseline_mod
@@ -67,6 +70,8 @@ def test_fully_mechanical_book_is_zero_wire(tmp_path) -> None:
     assert binding.status == 'bound'
     prov_payload = binding.provenance.model_dump(by_alias=True, mode='json')
     assert prov_payload['origin'] == 'compiled'
+    assert (prov_payload.get('prompts') is None
+            or STAGE4_BINDING_INPUT_RECEIPT_KEY not in prov_payload['prompts'])
     assert prov_payload['architecture'] == 'chapter_baseline_v1'
     ordinals = sorted(row['chapter_ordinal'] for row in prov_payload['unit_lineage'])
     assert ordinals == list(range(1, len(blueprints_raw['blueprints']) + 1))
@@ -152,8 +157,24 @@ def test_mixed_book_wires_only_the_ambiguous_chapter(
             ambiguities = json.loads(lines[marker + 1])
             evidence_marker = lines.index(plan.prompts.BLOCK_CHAPTER_EVIDENCE)
             evidence = json.loads(lines[evidence_marker + 1])
+            assert evidence['binding_input_contract'] == STAGE4_BINDING_INPUT_CONTRACT
             candidate_marker = lines.index(plan.prompts.BLOCK_CHAPTER_CANDIDATE)
             candidate_chapter = json.loads(lines[candidate_marker + 1])
+            # 钉真正交给 AgentDriver 的载荷，不能只证明构造器内存在映射。
+            frozen_chapter = candidate.output_chapters[0].model_dump(mode='json')
+            assert candidate_chapter == frozen_chapter
+            atoms = {row['fact_id']: row for row in evidence['fact_atoms']}
+            assert set(evidence['fact_aliases'].values()) == set(atoms)
+            for scene in candidate_chapter['scenes']:
+                for alias in scene['land_fact_aliases'] + scene['context_fact_aliases']:
+                    formal = evidence['fact_aliases'][alias]
+                    assert candidate.fact_aliases[alias] == formal
+                    assert atoms[formal]['claim']
+                    assert atoms[formal]['source_text']
+            participants = set(evidence['participant_aliases'].values())
+            assert all(set(atom['participant_char_ids']) <= participants
+                       for atom in atoms.values())
+            assert '唯一映射' in request.system
             resolutions = []
             for row in ambiguities:
                 resolution: dict[str, Any] = {'ambiguity_id': row['ambiguity_id']}
@@ -254,6 +275,8 @@ def test_mixed_book_wires_only_the_ambiguous_chapter(
     assert all(kind == 'baseline'
                for ordinal, kind in kinds.items() if ordinal != 1)
     assert prov_payload['origin'] == 'llm'
+    assert prov_payload['prompts'][STAGE4_BINDING_INPUT_RECEIPT_KEY] == (
+        prov.fingerprint(STAGE4_BINDING_INPUT_CONTRACT))
     assert store.exists(STAGE4_PLAN_CHAPTERS)
 
 
@@ -1522,3 +1545,163 @@ def test_b_owner_reasks_only_target_chapter_and_rewrites_anchor_checkpoint(
     assert ch1['attempt_id'] == latest_ch1['attempt_id']
     anchor_spec = stage4_runs.plan_chapter_commit_spec(1)
     assert anchor_spec.commit_path(ctx).is_file()
+
+
+@pytest.mark.parametrize('old_surface', ['system', 'user', 'input_contract'])
+def test_new_binding_receipt_cannot_adopt_checkpoint_from_incomplete_input(
+        tmp_path, monkeypatch, old_surface,
+) -> None:
+    """旧回答即使动态校验合法，也不能用新 receipt 冒充看过完整映射的回答。"""
+    book = _delivery_recovery_book(tmp_path, monkeypatch)
+    source_ctx = _ctx(book, 'stage4.plan')
+    source_drivers = {
+        1: _DeliveryRecoveryDriver(1),
+        2: _DeliveryRecoveryDriver(2, outcome='usage_limit'),
+        3: _DeliveryRecoveryDriver(3, outcome='forbid'),
+    }
+    real_request = plan._plan_chapter_request
+
+    def old_request(*args, **kwargs):
+        request = real_request(*args, **kwargs)
+        if old_surface == 'system':
+            return replace(request, system='旧章级绑定规则：' + request.system)
+        if old_surface == 'input_contract':
+            return replace(request, input_sha256='0' * 64)
+        lines = request.user.splitlines()
+        candidate_index = lines.index(plan.prompts.BLOCK_CHAPTER_CANDIDATE) + 1
+        chapter = json.loads(lines[candidate_index])
+        lines[candidate_index] = json.dumps({
+            'weight': chapter['weight'],
+            'scenes': [{key: scene[key] for key in (
+                'candidate_scene_id', 'land_fact_aliases', 'context_fact_aliases')}
+                for scene in chapter['scenes']],
+        }, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        evidence_index = lines.index(plan.prompts.BLOCK_CHAPTER_EVIDENCE) + 1
+        evidence = json.loads(lines[evidence_index])
+        evidence.pop('fact_aliases')
+        evidence.pop('participant_aliases')
+        evidence.pop('binding_input_contract')
+        lines[evidence_index] = json.dumps(
+            evidence, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        return replace(request, user=chr(10).join(lines))
+
+    with monkeypatch.context() as old_code:
+        old_code.setattr(plan, '_plan_chapter_request', old_request)
+        source_pool = Stage4PlanSessionPool(
+            source_ctx,
+            driver_factory=lambda _purpose, chapter: source_drivers[int(chapter)],
+            concurrency=1)
+        with pytest.raises(AgentDeliveryUnavailable) as stopped:
+            plan.run_plan(source_ctx, source_pool)
+        source_pool.finish(
+            process_state='failed', delivery_state='unknown',
+            error_kind=stopped.value.error_kind)
+        source_pool.close()
+    stage4_runs.clear_plan_delivery_recovery(source_ctx)
+    checkpoints = list(paths.stage4_plan_chapter_checkpoint_dir(
+        book, source_ctx.run_id, 1).glob('*.json'))
+    assert len(checkpoints) == 1
+    source_checkpoint = checkpoints[0].read_bytes()
+
+    target_ctx = _ctx(book, 'stage4.plan')
+    target_drivers = {
+        chapter: _DeliveryRecoveryDriver(
+            chapter, session_id=f'provider-current-binding-{chapter}')
+        for chapter in (1, 2, 3)
+    }
+    target_pool = Stage4PlanSessionPool(
+        target_ctx,
+        driver_factory=lambda _purpose, chapter: target_drivers[int(chapter)],
+        concurrency=1)
+    report = plan.run_plan(target_ctx, target_pool)
+    target_pool.finish(process_state='ok', delivery_state='delivered')
+    target_pool.close()
+    assert report.passed
+    assert [target_drivers[ch].calls for ch in (1, 2, 3)] == [1, 1, 1]
+    assert checkpoints[0].read_bytes() == source_checkpoint
+    assert not (paths.stage4_run_path(book, target_ctx.run_id, 'stage4.plan')
+                / stage4_runs.PLAN_HISTORICAL_ADOPTION_FILE).exists()
+    binding, _ = ArtifactStore(target_ctx).read_own(
+        EvidenceBinding, STAGE4_EVIDENCE_BINDING)
+    provenance = binding.provenance.model_dump(mode='json', by_alias=True)
+    assert {row['origin'] for row in provenance['unit_lineage']} == {'current_run'}
+    assert provenance['prompts'][STAGE4_BINDING_INPUT_RECEIPT_KEY] == (
+        prov.fingerprint(STAGE4_BINDING_INPUT_CONTRACT))
+
+
+def test_committed_chapter_hard_recovery_preserves_input_receipt_zero_wire(
+        tmp_path, monkeypatch,
+) -> None:
+    """真实章 checkpoint→HARD commit→新进程零 wire 收尾，不能丢章架构回执。"""
+    book = _delivery_recovery_book(tmp_path, monkeypatch)
+    real_verdict = plan._candidate_bundle_verdict
+    real_evaluate = plan.evaluate_plan_candidate
+    post_model_evaluation = False
+
+    def evaluate_after_acceptance(*args, **kwargs):
+        nonlocal post_model_evaluation
+        # run_plan 只有在章响应验收/checkpoint 后才进入此处；前置检查
+        # 始终跑原判据，恢复进程也重新从这个边界启用故障。
+        post_model_evaluation = True
+        return real_evaluate(*args, **kwargs)
+
+    def injected_code_failure(data, up, *, witness=None):
+        # 只注入已登记的 code-owner HARD 以进入落盘分支；compiler、章池、
+        # checkpoint、来源账、commit 与恢复比较全部走生产实路。
+        hits, feedback = real_verdict(data, up, witness=witness)
+        assert not hits
+        if not post_model_evaluation:
+            return hits, feedback
+        if witness is not None:
+            witness.add(code='phase_artifact_link', rule='phase_artifact_link')
+        return ('phase_artifact_link',), (*feedback, {'rule': 'phase_artifact_link'})
+
+    monkeypatch.setattr(plan, '_candidate_bundle_verdict', injected_code_failure)
+    monkeypatch.setattr(plan, 'evaluate_plan_candidate', evaluate_after_acceptance)
+    first_ctx = _ctx(book, 'stage4.plan')
+    first_drivers = {chapter: _DeliveryRecoveryDriver(chapter)
+                     for chapter in (1, 2, 3)}
+    first_pool = Stage4PlanSessionPool(
+        first_ctx,
+        driver_factory=lambda _purpose, chapter: first_drivers[int(chapter)],
+        concurrency=1)
+    with pytest.raises(GateBlocked, match='phase_artifact_link'):
+        plan.run_plan(first_ctx, first_pool)
+    first_pool.finish(process_state='ok', delivery_state='blocked',
+                      error_kind='checkpoint_business_rejected')
+    first_pool.close()
+    assert [first_drivers[ch].calls for ch in (1, 2, 3)] == [1, 1, 1]
+    commit_spec = stage4_runs.plan_chapter_commit_spec(3)
+    committed = stage4_runs.committed(first_ctx, commit_spec)
+    assert committed is not None
+    assert committed['touched_paths'] == sorted((
+        STAGE4_EVIDENCE_BINDING, plan._INVALID))
+    binding_before = (book / STAGE4_EVIDENCE_BINDING).read_bytes()
+    invalid_before = (book / plan._INVALID).read_bytes()
+    before = ArtifactStore(first_ctx).read_own(
+        EvidenceBinding, STAGE4_EVIDENCE_BINDING)[0].provenance
+    assert before.architecture == 'chapter_baseline_v1'
+    assert before.prompts[STAGE4_BINDING_INPUT_RECEIPT_KEY] == prov.fingerprint(
+        STAGE4_BINDING_INPUT_CONTRACT)
+
+    post_model_evaluation = False
+    restarted = _ctx(book, 'stage4.plan', run_id=first_ctx.run_id, code=first_ctx.code)
+    forbidden = {chapter: _DeliveryRecoveryDriver(chapter, outcome='forbid')
+                 for chapter in (1, 2, 3)}
+    resumed_pool = Stage4PlanSessionPool(
+        restarted,
+        driver_factory=lambda _purpose, chapter: forbidden[int(chapter)],
+        concurrency=1)
+    assert resumed_pool.provider_session_id is None
+    with pytest.raises(GateBlocked, match='phase_artifact_link'):
+        plan.run_plan(restarted, resumed_pool)
+    resumed_pool.close()
+    assert [forbidden[ch].calls for ch in (1, 2, 3)] == [0, 0, 0]
+    assert (book / STAGE4_EVIDENCE_BINDING).read_bytes() == binding_before
+    assert (book / plan._INVALID).read_bytes() == invalid_before
+    assert not (book / STAGE4_PLAN_CHAPTERS).exists()
+    after = ArtifactStore(restarted).read_own(
+        EvidenceBinding, STAGE4_EVIDENCE_BINDING)[0].provenance
+    assert after.prompts == before.prompts
+    assert after.unit_lineage == before.unit_lineage
+    assert after.usage == before.usage

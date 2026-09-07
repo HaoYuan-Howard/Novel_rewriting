@@ -249,11 +249,28 @@ run 给出唯一最大的**不完整**可用章集合，且旧 run/profile/reque
 正式 lineage 保留来源 run/checkpoint/attempt/model 哈希，aggregate usage 精确合并 source 与 target ledger。
 并列最大来源、完整但无 target commit anchor 的来源或任一身份漂移都不采用，改由当前 run 正常请求。
 
-章 prompt 只含本章候选、相关原文/hinge 文本、本章 blueprint 与关闭目录、机械歧义，以及相邻章一行
-边界摘要；不得携带其他章正文。时间层冲突无法闭合时不选任意 fallback，保留其他章 checkpoint，转
+章 prompt 保留完整本章冻结候选（goal、brief、结构决定、每场 purpose/role/delivery/transition、
+turn/首尾状态和权重），并显式下发本章 `fact_aliases / participant_aliases`，把 opaque 引用与正式
+fact/char、claim、参与者和原文证据联结。映射沿用候选身份，缺失、非单射或跨表冲突在请求构造时
+拒绝；纯舞台到场但未进入 A 原子参与者表的人物仍只给正式 char_id，不发明 alias。材料选择仍由
+模型按机械歧义闭集完成，代码不按场序或原文次序代选。章 prompt 只含本章相关原文/hinge 文本、
+blueprint 证据目录、机械歧义及相邻章一行边界摘要；邻章摘要没有本章 concern 行动权，不能携带
+其他章正文或映射。时间层冲突无法闭合时不选任意 fallback，保留其他章 checkpoint，转
 hash-bound unit replacement。人工 replacement 与模型章响应复用同一个 `ChapterBindingResponse`
 validator、聚合 compiler 与全书 HARD；它只消费已封存且绑定原 run/request/code/subject 的 resolution，
 不新增 provider wire。整份人工 `--apply-binding` 继续作为另一条明确入口，不与 unit replacement 混用。
+
+`STAGE4_BINDING_INPUT_CONTRACT=stage4-chapter-binding-input-v2` 作为明确字段实际进入章请求，
+同值进入章 input SHA 和请求恢复比较。新章模型 B 在既有 provenance 的 prompts 映射写
+`CHAPTER_BIND_INPUT_CONTRACT=prov.fingerprint(契约值)`，不新增 artifact 字段或升版；纯机械、
+人工与旧整书路径不写该模型输入回执。只有当前完整来源能证明实际使用新契约时，回执才有效。
+
+Store 以唯一纯 helper 识别已发行的缺图旧 B：LLM `chapter_baseline_v1`、完整逐章 lineage、
+精确旧 `CHAPTER_BIND_SYS` 指纹且无新回执，合取才报 `binding_input_contract_obsolete`。
+未知架构、回执值或来源形状报 `binding_input_contract_unproven`，不从缺值猜测可恢复。
+普通上游 freshness 优先保留；compiled Plan 在 exact A/B 关系闭合后继承 B 的输入契约结论。
+已证明过时且其它前置闭合时，原状态机允许已授权的 `stage4.plan` 重建；`--revalidate` 不能
+伪造输入回执，0 成本人工 `--apply-binding` 仍走相同 schema/compiler/HARD。
 
 | 字段 | `bound` | `infeasible` | 证据 |
 |---|---|---|---|
@@ -320,8 +337,12 @@ validator、聚合 compiler 与全书 HARD；它只消费已封存且绑定原 r
 
 计划业务主体绑定同号章、`from_source_ordinals`、三个 goal、brief、预算、全部场景执行字段和人工结构
 声明；不包含来源账、已删除字段或现场派生向量。最终人审 subject 再把该 plan subject 与当前 B 的
-完整 `binding_concerns`、`STRUCTURE_REVIEW_CONTRACT` 合成唯一 SHA-256。改变实际计划、concerns 或
-review contract 都会使决定过期；只改变算法读数不会改写计划字节。逐章 subject 同样绑定该 contract，
+完整 `binding_concerns`、`STRUCTURE_REVIEW_CONTRACT` 及经有效章模型回执证明的
+`binding_input_contract` 合成唯一 SHA-256。该输入身份同步进入逐章复用 hash、immutable snapshot、
+实际 workpack reading 与 API view；旧非章模型路径省略它并保留旧 hash。修好输入后即使 B 结果
+恰好相同也须正式重审，旧决定保留历史；任意 code/prompt/run/provenance 漂移不能冒充输入契约
+变化。改变实际计划、concerns 或 review contract 同样会使决定过期；只改变算法读数不会改写
+计划字节。逐章 subject 同样绑定该 contract，
 因此 v1 决定保留 history 但不能在 v2 下继续 current。审批 proof 另外绑定 `plan_chapters.json` 与
 `evidence_binding.json` 完整字节，缺一不可。
 

@@ -51,6 +51,8 @@
   "ghost",
   "file_changed",
   "consumed_changed",
+  "binding_input_contract_obsolete",
+  "binding_input_contract_unproven",
   "consumed_undeclared",
   "consumed_unresolved",
   "legacy_blueprint_inputs",

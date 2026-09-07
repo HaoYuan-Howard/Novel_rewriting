@@ -217,6 +217,11 @@ _WITHHELD: dict[str, str] = {
                                   '消费投影。发给前端会诱导第二个过期判官',
     'STRUCTURE_METRIC_CONTRACT': 'Stage4 结构指标算法版本；实例值已随计划来源账与结构审批主体落盘，'
                                  '前端只展示当前计划的决定与审批态，不自行判断算法新旧',
+    'STAGE4_BINDING_INPUT_CONTRACT': (
+        '章级 B 实际输入映射的固定契约；后端已折入 freshness 与结构审阅主体，'
+        '前端只展示后端结论，不能自行决定是否重采'),
+    'STAGE4_BINDING_INPUT_RECEIPT_KEY': (
+        '章级 B 来源 prompts 的内部回执键；不是前端可选或可写的业务字段'),
     'STRUCTURE_REVIEW_CONTRACT': (
         'Stage4B 人审证据权威的 subject 版本；后端已折入整书与逐章 '
         'hash，前端不选择版本或自行判断旧票是否有效'),

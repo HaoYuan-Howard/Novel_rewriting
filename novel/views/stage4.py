@@ -75,8 +75,15 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
         if binding.status != 'bound':
             raise ArtifactUnreadable(
                 '正式 Plan 的最终结构审阅面要求 status=bound EvidenceBinding')
+        from novel.stages.stage4.binding_input_contract import inspect_binding_input_contract
+
+        binding_contract = inspect_binding_input_contract(binding)
+        # 屏仍展示这份正式 Plan 的同快照主体；它不是审阅许可。旧/未知
+        # 输入契约保持原业务 hash，审批服务会因 B 非 fresh 拒发 current token；
+        # 新回执才产生新的契约身份。不可把历史计划伪装为 identity 基线。
         structure_subject = structure_review_subject_sha256(
-            plan_art, binding.binding_concerns)
+            plan_art, binding.binding_concerns,
+            binding_input_contract=binding_contract.identity)
         plan_raw = plan_art.model_dump(by_alias=True)
         identity = False
         plan_prov = plan_art.provenance

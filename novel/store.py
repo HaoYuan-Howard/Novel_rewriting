@@ -47,13 +47,15 @@ from contracts.artifacts import (
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
     RETIRED_STAGE3_STYLE_GROUNDING,
-    STAGE4_BLIND_CANDIDATE, STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
+    STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
+    STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
     STAGE7_NAME_MAP,
 )
 from contracts.schema import (
     ArtifactVersionError, HumanApproval, InputEdge, Provenance, RevalidationAudit,
     artifact_spec, decode_artifact, encode_artifact,
 )
+from contracts.schema.stage4 import EvidenceBinding
 from contracts.schema.legacy_stage3 import LegacyStyleGrounding, decode_legacy_stage3_v2
 from contracts.schema.legacy_stage2 import (
     FrozenChapterBlueprintsV6, decode_frozen_stage2_blueprints_v6,
@@ -1624,6 +1626,8 @@ class ArtifactStore:
                         now_consumed=now_consumed,
                     )
                     return FreshnessReport('fresh', 'match', (edge,))
+        if canonical_rel(rel) == STAGE4_EVIDENCE_BINDING:
+            return self._stage4_binding_input_freshness(data, report)
         if canonical_rel(rel) == STAGE4_PLAN_CHAPTERS and isinstance(data, dict):
             return self._stage4_plan_phase_freshness(data, report)
         return report
@@ -1695,6 +1699,29 @@ class ArtifactStore:
             consumed_now=lambda key: self._consumed_fp_of_key(node, key, lookup),
         )
 
+    @staticmethod
+    def _stage4_binding_input_freshness(
+        binding: object, ordinary: FreshnessReport,
+    ) -> FreshnessReport:
+        """仅在真实输入可证 fresh 后附加登记的章级 B 输入契约尺。
+
+        上游已真实 consumed_changed 时沿原 REDO 权威重建；那份授权不是
+        未知 receipt 带来的。只有下方 known_obsolete 才进入本次专用恢复。
+        """
+        if ordinary.state != 'fresh':
+            return ordinary
+        from novel.stages.stage4.binding_input_contract import (
+            inspect_binding_input_contract,
+        )
+        verdict = inspect_binding_input_contract(binding)
+        if verdict.state == 'known_obsolete':
+            return FreshnessReport(
+                'stale', 'binding_input_contract_obsolete', ordinary.edges)
+        if verdict.state == 'unproven':
+            return FreshnessReport(
+                'unknown', 'binding_input_contract_unproven', ordinary.edges)
+        return ordinary
+
     def _stage4_plan_phase_freshness(
         self, plan: dict[str, Any], ordinary: FreshnessReport,
     ) -> FreshnessReport:
@@ -1744,7 +1771,13 @@ class ArtifactStore:
                 edges.append(exact)
             else:
                 edges[positions[link.key]] = exact
-        return self._content_report(tuple(edges)) if edges else ordinary
+        report = self._content_report(tuple(edges)) if edges else ordinary
+        if report.state != 'fresh' or any(link.state != 'match' for link in links):
+            return report
+        # 完整 A/B SHA 已对证；Plan 只能继承这份真实 B 的输入契约，
+        # 不能对另一版 B 的 receipt 作推断。human Plan 上方 links=() 已返回。
+        binding, _raw = self.read_own(EvidenceBinding, STAGE4_EVIDENCE_BINDING)
+        return self._stage4_binding_input_freshness(binding, report)
 
     def _deterministic_freshness(self, rel: str) -> FreshnessReport | None:
         """没有通用来源块的产物，用其既有确定性指纹回答同一个问题。
