@@ -63,6 +63,8 @@ conda run -n novel_refactor python -X utf8 tools/verify_agent_e2e.py `
 不能据此宣称八个节点在本轮重新执行。两种模式均逐 attempt 核对独立 Commander 席位；
 Stage6/7 定稿复用 production current proof，不把 API 审批检查单当第二套人工决定。
 v2 生命周期核对持久 epoch 开闭和 drain，旧 host phase 遥测仅用于 v1。
+零模型调用的续跑从 durable started/epoch 核对唯一干净代码身份，报告仍明确
+`experiment_valid=false`；没有模型执行不能冒充一次性能实验，也不要求伪造成本账行。
 
 ### Stage2 五次冷缓存性能与质量验收
 

@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -487,6 +488,30 @@ def epoch_lifecycle_check(events: Sequence[Any], run_id: str) -> dict[str, Any]:
         closed_epochs=len(closed), ended=ended, valid_sequence=valid)
 
 
+def execution_identity_check(identity: Mapping[str, Any], outer: Any, *,
+                             resume: bool, ledger_lines: int) -> dict[str, Any]:
+    """零 wire 续跑仍有 durable 代码身份，但不是一次模型性能实验。"""
+    if resume and ledger_lines == 0 and not identity['code_identities']:
+        codes = set()
+        if outer is not None:
+            codes.add(outer.start.code_version)
+            codes.update(epoch.code_version for epoch in outer.epochs)
+        valid = (outer is not None and bool(outer.epochs) and len(codes) == 1
+                 and all(isinstance(code, str)
+                         and re.fullmatch(r'[0-9a-f]{40}', code) for code in codes))
+        return _check(
+            'experiment_identity_clean', 'pass' if valid else 'fail',
+            scope='zero_wire_run_identity', execution_identity_valid=valid,
+            experiment_valid=False, code_identity_count=len(codes),
+            source='agent_run_start_and_epochs', ledger_lines=0)
+    return _check(
+        'experiment_identity_clean',
+        'pass' if identity['experiment_valid'] else 'fail',
+        experiment_valid=identity['experiment_valid'],
+        code_identity_count=len(identity['code_identities']),
+        invalid_reason_count=len(identity['experiment_invalid_reasons']))
+
+
 def _workflow_metrics_for_run(
     base: str | Path, sid: str, run_id: str,
 ) -> dict[str, Any]:
@@ -577,12 +602,8 @@ def collect(base: str | Path, sid: str, run_id: str, *,
             row['version_state'] != 'unregistered'
             for row in metrics['artifacts']['artifacts'])))
     identity = metrics['identity']
-    checks.append(_check(
-        'experiment_identity_clean',
-        'pass' if identity['experiment_valid'] else 'fail',
-        experiment_valid=identity['experiment_valid'],
-        code_identity_count=len(identity['code_identities']),
-        invalid_reason_count=len(identity['experiment_invalid_reasons'])))
+    checks.append(execution_identity_check(
+        identity, outer, resume=resume, ledger_lines=metrics['ledger']['lines']))
 
     if outer is None:
         checks.append(_check(

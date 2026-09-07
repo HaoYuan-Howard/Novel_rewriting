@@ -216,6 +216,28 @@ def test_typed_approvals_are_checked_even_when_service_checklist_disagrees(monke
     assert result['facts']['missing_gates'] == ['s6', 's7']
 
 
+@pytest.mark.parametrize('start_code, epoch_code, expected', [
+    ('a' * 40, 'a' * 40, 'pass'),
+    ('unknown', 'unknown', 'fail'),
+    ('a' * 40 + '-dirty.123', 'a' * 40 + '-dirty.123', 'fail'),
+    ('a' * 40, 'b' * 40, 'fail'),
+])
+def test_zero_wire_resume_uses_durable_code_without_inventing_an_experiment(
+        start_code, epoch_code, expected):
+    identity = dict(code_identities=[], experiment_valid=False,
+                    experiment_invalid_reasons=['没有模型调用'])
+    outer = SimpleNamespace(start=SimpleNamespace(code_version=start_code),
+                            epochs=[SimpleNamespace(code_version=epoch_code)])
+    result = verifier.execution_identity_check(
+        identity, outer, resume=True, ledger_lines=0)
+    assert result['state'] == expected
+    assert result['facts']['experiment_valid'] is False
+    assert verifier.execution_identity_check(
+        identity, outer, resume=False, ledger_lines=0)['state'] == 'fail'
+    assert verifier.execution_identity_check(
+        identity, outer, resume=True, ledger_lines=1)['state'] == 'fail'
+
+
 @pytest.mark.parametrize('failure', [None, 'missing_close', 'duplicate_close',
                                      'undrained', 'end_before_close'])
 def test_v2_epoch_lifecycle_checks_real_sequence_without_legacy_telemetry(failure):
