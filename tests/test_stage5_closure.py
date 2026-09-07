@@ -273,6 +273,24 @@ def _current_closure_decision(store) -> Stage5ClosureDecision:
     })
 
 
+def _replace_current_review(store, monkeypatch, payload):
+    """更新本文件的 fresh 夹具和其真实文件，避免工作包绑定旧字节。"""
+    from contracts.schema import encode_artifact
+
+    current = review.require_fresh_review(store.ctx, store)
+    revised = Review.model_validate(payload)
+    encoded = revised.model_dump(by_alias=True, mode='json')
+    encoded['_provenance'] = revised.provenance.to_disk()
+    store.path(current.review_rel).write_bytes((json.dumps(
+        encode_artifact(current.review_rel, encoded), ensure_ascii=False,
+        indent=2) + '\n').encode('utf-8'))
+    status = review.ReviewStatus(
+        'fresh', (), review_rel=current.review_rel, seq=current.seq, review=revised)
+    monkeypatch.setattr(review, 'review_status', lambda *_args, **_kwargs: status)
+    monkeypatch.setattr(review, 'require_fresh_review', lambda *_args, **_kwargs: status)
+    return status
+
+
 # ── 工作包：分类闭集与确定性 ────────────────────────────────────────────────
 
 def test_workpack_classifies_the_closed_rule_set(rig):
@@ -295,6 +313,46 @@ def test_workpack_classifies_the_closed_rule_set(rig):
     again = closure.closure_workpack(store)
     assert again.workpack_sha256 == pack.workpack_sha256
     assert again.review_sha256 == pack.review_sha256
+
+
+@pytest.mark.parametrize('scope', ['chapter', 'book'])
+def test_nonactionable_must_appear_stays_disclosed_without_a_ruling(
+        rig, monkeypatch, scope):
+    """真实 Review 降级形状可闭合；其他 actionable 物件仍须逐项裁决。"""
+    _ctx, store = rig
+    current = review.require_fresh_review(store.ctx, store)
+    payload = current.review.model_dump(by_alias=True, mode='json')
+    from contracts.schema.common import Finding
+    original = Finding.model_validate(_finding_payload(
+        'must_appear_missing', ordinal=2 if scope == 'chapter' else None,
+        evidence=('独立基线线索',)))
+    downgraded = review._downgrade(original, actionable=False, identity_hit=True)
+    target = payload['chapters'][1]['findings'] if scope == 'chapter' else payload['book']
+    target.append(downgraded.model_dump(mode='json'))
+    status = _replace_current_review(store, monkeypatch, payload)
+    raw_before = store.path(status.review_rel).read_bytes()
+
+    view = approvals.stage5_closure_view(store.ctx.novel_dir.parent, store.ctx.sid)
+    assert view.state == 'ready'
+    pack = view.workpack
+    assert [row.chapter_ordinal for row in pack.must_appear] == [1]
+    assert pack.disclosure['must_appear_missing'] == 1
+    assert pack.resolved == {'wontfix': 0}
+    assert pack.review_sha256 == hashlib.sha256(raw_before).hexdigest()
+    assert closure.validate_closure_request(store, _ruling_request(store)) == pack
+    assert store.path(status.review_rel).read_bytes() == raw_before
+    assert downgraded.sev == 'info' and downgraded.actionable is False
+
+
+def test_actionable_book_must_appear_still_refuses_missing_chapter_identity(
+        rig, monkeypatch):
+    _ctx, store = rig
+    current = review.require_fresh_review(store.ctx, store)
+    payload = current.review.model_dump(by_alias=True, mode='json')
+    payload['book'].append(_finding_payload('must_appear_missing', ordinal=None))
+    _replace_current_review(store, monkeypatch, payload)
+    with pytest.raises(ProvenanceRefused, match='书级可执行条目缺少逐章裁决身份'):
+        closure.closure_workpack(store)
 
 
 def test_trim_batch_rebuilds_closure_under_the_same_review_without_paid_work(
@@ -348,6 +406,15 @@ def test_trim_batch_rebuilds_closure_under_the_same_review_without_paid_work(
         audit_sha256[ordinal] = store.read_with_sha256(
             TrimAudit, audit_rel)[1]
 
+    # 同一本书可同时有合法的不可执行物件线索和待销账 trim；前者不能挡住
+    # 后者的工作包，也不能在 trim 处置后丢失披露或重新要求逐项裁决。
+    current = review.require_fresh_review(ctx, store)
+    payload = current.review.model_dump(by_alias=True, mode='json')
+    payload['chapters'][1]['findings'] = [{
+        **_finding_payload('must_appear_missing', ordinal=2),
+        'actionable': False, 'identity_hit': True,
+    }]
+    _replace_current_review(store, monkeypatch, payload)
     review_path = store.path('stage5/review_1.json')
     review_raw = review_path.read_bytes()
     review_sha256 = hashlib.sha256(review_raw).hexdigest()
@@ -355,6 +422,7 @@ def test_trim_batch_rebuilds_closure_under_the_same_review_without_paid_work(
     assert before.review_seq == 1
     assert before.review_sha256 == review_sha256
     assert before.unresolved_trim_chapters == [1, 2]
+    assert before.disclosure['must_appear_missing'] == 1
     assert closure.closure_view(store).state == 'blocked'
 
     # 若 pure retain 偷跑 Review，这个探针会当场失败；batch 本身只走 0 成本 producer。
@@ -377,6 +445,8 @@ def test_trim_batch_rebuilds_closure_under_the_same_review_without_paid_work(
     view = closure.closure_view(store)
     assert view.state == 'ready'
     assert after.unresolved_trim_items == []
+    assert after.disclosure['must_appear_missing'] == 1
+    assert [row.chapter_ordinal for row in after.must_appear] == [1]
     assert [row.output_ordinal for row in after.trim_subjects] == [1, 2]
     assert all(row.resolution_sha256 for row in after.trim_subjects)
     assert after.review_seq == before.review_seq == 1

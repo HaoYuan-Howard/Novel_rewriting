@@ -326,7 +326,7 @@ Review/frontier 拆成两席。
 | `unresolved_trim_items[]` | `{output_ordinal,audit_sha256,chapter_sha256}` | 是 | 与上一格章号精确同集；chapter SHA 是 trim audit 绑定的 canonical **正文**摘要，是浏览器批量提交的唯一合法 identity 来源 | **契·码** |
 | `trim_subjects[]` | `{output_ordinal,audit_sha256,chapter_sha256,resolution_sha256}` | 是 | 升序精确覆盖全部 current trim audit；`resolution_sha256` 为完整 resolution 文件摘要或 null，null 子集必须恰等 unresolved。已销账决定改 actor/reason 也会换 workpack/token | **契·码** |
 | `wontfix_sha256` | SHA-256 / null | 是 | current `stage5/wontfix.json` 完整文件摘要；即使命中计数不变，理由或身份字节变化也使旧 closure 过期 | **契·码** |
-| `must_appear[]` | `Stage5MustAppearRow[]` | 是 | 每项带章号、evidence key、detail、finding SHA 与完整 chapter file SHA | **契·码** |
+| `must_appear[]` | `Stage5MustAppearRow[]` | 是 | 只含 actionable 章级条目；每项带章号、evidence key、detail、finding SHA 与完整 chapter file SHA。基线已降为不可执行的同类 finding 留在原 Review，并计入 disclosure，不重新强制裁决、不销账 | **契·码** |
 | `fact_group/unver_group` | `Stage5FindingGroup` / null | 是 | 各绑定组名、完整 finding-set SHA、条数与规则闭集；确认不把 UNVER 改成 PASS | **契·码** |
 | `disclosure/resolved` | `{rule:int}` | 是 | INFO/metric 披露计数与 wontfix/typed 已处置计数，不是放行判定 | **契·码** |
 | `workpack_sha256` | SHA-256 | 是 | 绑定除自身外全部当前工作包字段；模板、提交与过期判定共用 | **契·码** |

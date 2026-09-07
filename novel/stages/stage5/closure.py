@@ -269,9 +269,14 @@ def closure_workpack(
             return
         bucket = _bucket_of(finding)
         if bucket == 'must_appear':
-            if ordinal is None or not finding.actionable:
+            if not finding.actionable:
+                # 恒等基线可把合法章级线索降为不可执行；闭合消费者必须保留
+                # 这个结论及其披露，不能把它重新变成强制裁决，更不能拒绝整包。
+                disclosure[finding.rule] = disclosure.get(finding.rule, 0) + 1
+                return
+            if ordinal is None:
                 raise ProvenanceRefused(
-                    f'{finding.rule} 的书级/不可执行条目不在闭合裁决面：'
+                    f'{finding.rule} 的书级可执行条目缺少逐章裁决身份：'
                     f'evidence_key={finding.evidence_key!r}')
             must_appear.append(Stage5MustAppearRow(
                 chapter_ordinal=ordinal,
