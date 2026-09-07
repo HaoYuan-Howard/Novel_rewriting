@@ -8214,6 +8214,72 @@ def test_stage5_reviewer_rewrite_unknown_stops_without_permit_or_commander(
     assert not beacon.open_executions(base, started.run_id)
 
 
+@pytest.mark.parametrize('old_encoding', ['missing_optional_default', 'indented_json'])
+def test_stage5_sealed_authority_uses_original_bytes_after_decoder_upgrade(
+        base, corpus, monkeypatch, old_encoding):
+    """旧 writer 真正封印后换 decoder：新增默认格/JSON 排版都不改原始身份。"""
+    from contracts.schema.orchestration import ReviewerActionRecord
+    from novel.orchestrator import reviewer_action_evidence as evidence
+    from novel.orchestrator import state as state_module
+    from novel.stages.stage5 import reviewer_rewrite
+
+    harness = _install_stage5_live_batch_harness(
+        base, monkeypatch, reviewer_rewrite=True)
+    current_dump = ReviewerActionRecord.model_dump_json
+
+    def old_dump(self, *args, **kwargs):
+        value = json.loads(current_dump(self, *args, **kwargs))
+        if old_encoding == 'missing_optional_default':
+            assert value.pop('protocol_recovery') is None
+            return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+        return json.dumps(value, ensure_ascii=False, indent=2)
+
+    # 模拟旧 producer，从真实 Agent→request→archive→receipt 整条链生成证据，
+    # 不在封印后手补摘要，也不替换 authority/三账校验。
+    with monkeypatch.context() as old_writer:
+        old_writer.setattr(ReviewerActionRecord, 'model_dump_json', old_dump)
+        run = agent.start(
+            base, '42', authorized=True, egress_authorized=True,
+            profiles=_PROFILES, spawn=None)
+        assert agent.wait(run.run_id, 20)
+
+    ctx = state_module.readonly_ctx(
+        Path(base) / 'FQ_测试书_42', 'stage5.write', 'test-code-version')
+    request, request_file_sha256 = reviewer_rewrite.load_reviewer_rewrite_batch(ctx)
+    digest = request.requests[0].reviewer_action_record_sha256
+    archive = evidence._authority_path(base, '42', digest)
+    receipt = evidence._authority_receipt_path(base, '42', digest)
+    raw = archive.read_bytes()
+    record = evidence._read_archived_authority(archive, digest)
+    assert hashlib.sha256(raw).hexdigest() == digest
+    assert hashlib.sha256(
+        (record.model_dump_json() + '\n').encode('utf-8')).hexdigest() != digest
+    if old_encoding == 'missing_optional_default':
+        assert 'protocol_recovery' not in json.loads(raw)
+        assert record.protocol_recovery is None
+
+    protected = [archive, receipt,
+                 Path(base) / '_service' / 'ledger.jsonl',
+                 agent_session_audit.audit_path(base)]
+    before = {path: path.read_bytes() for path in protected}
+    assert evidence.require_current_sealed_reviewer_rewrite_authority(
+        base, '42', request, request_file_sha256) == record
+    agent._reconcile_landed_stage5_reviewer_rewrite_action(
+        str(base), '42', code='test-code-version',
+        current_parent_run_id='replacement-parent')
+    assert evidence.require_sealed_reviewer_rewrite_authority(
+        base, '42', request, request_file_sha256) == record
+    assert {path: path.read_bytes() for path in protected} == before
+    assert len(harness.invocations) == 1
+
+    # typed 内容完全相同也不能放过原文件被改；原字节内容地址仍是硬闸。
+    archive.write_bytes(raw + b' ')
+    with pytest.raises(
+            agent.reviewer_tasks.ReviewerTaskError, match='内容地址不闭合'):
+        evidence.require_sealed_reviewer_rewrite_authority(
+            base, '42', request, request_file_sha256)
+
+
 def test_stage5_reviewer_rewrite_normal_agent_path_seals_permanent_authority(
         base, corpus, monkeypatch):
     """FREE request 成功后先闭 session/seat 再 seal；active 不再参与 replay。"""

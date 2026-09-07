@@ -401,6 +401,8 @@ request typed readback 后不能直接删除唯一来源。Supervisor 先把原 
 `_service/runs/<sid>/reviewer_action_authorities/reviewer-action-<sha>.json`，再写同 stem 的
 `.receipt.json`；receipt 绑定 request 原始文件与 self SHA、stable business/current-then contract、
 session/seat/provider response 及 seat/session/cost 三份证据摘要并自哈希。receipt 是 seal 的 commit point；
+action 摘要恒对 archive 原字节复验，再与 receipt/request 比较；typed decode 补入可选默认字段或
+JSON 排版差异不得用重新序列化后的摘要追认或否定原文件。原字节变更、typed 身份或三账漂移仍拒绝。
 其后才退休 active action。active request 恢复可在 old-owner-stopped 证明下补 seat/session 与 seal，
 sealed authority 的 queue/permit/writer 复核则严格只读。历史 terminal/expiry 只要求当时已封存的 contract，
 新的 paid claim 与 active checkpoint recovery 还必须要求 Reviewer contract current。

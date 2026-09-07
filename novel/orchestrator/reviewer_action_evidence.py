@@ -727,15 +727,17 @@ def _require_request_file(
 def _require_receipt_matches(
     receipt: ReviewerRewriteAuthorityReceipt,
     record: ReviewerActionRecord,
-    *, seat_sha256: str, session_sha256: str, cost_sha256: str,
+    *, record_sha256: str,
+    seat_sha256: str, session_sha256: str, cost_sha256: str,
     request: ReviewerRewriteBatchRequest | None = None,
     request_file_sha256: str | None = None,
 ) -> None:
+    # record_sha256 已由 _read_archived_authority 对原文件字节复验。typed
+    # decode 会补新增可选字段，JSON 格式也不必等于今天的 serializer；重序列化
+    # 摘要不能冒充历史文件摘要，否则合法 sealed authority 在升级后会永久误拒。
     if (
         receipt.sid != record.sid
-        or receipt.reviewer_action_record_sha256
-        != hashlib.sha256(
-            (record.model_dump_json() + '\n').encode('utf-8')).hexdigest()
+        or receipt.reviewer_action_record_sha256 != record_sha256
         or receipt.business_sha256 != record.business_sha256
         or receipt.reviewer_contract_sha256
         != record.stage5_reviewer_contract_sha256
@@ -811,7 +813,7 @@ def reviewer_rewrite_authority_sealed(
             raise reviewer_tasks.ReviewerTaskError(
                 'reviewer rewrite authority 三账双采之间漂移')
     _require_receipt_matches(
-        receipt, record,
+        receipt, record, record_sha256=record_sha256,
         seat_sha256=evidence[0], session_sha256=evidence[1],
         cost_sha256=evidence[2])
     return True
@@ -836,7 +838,7 @@ def require_sealed_reviewer_rewrite_authority(
         _authority_receipt_path(base, sid, digest))
     evidence = _closed_evidence_hashes(base, sid, record)
     _require_receipt_matches(
-        receipt, record,
+        receipt, record, record_sha256=digest,
         seat_sha256=evidence[0], session_sha256=evidence[1],
         cost_sha256=evidence[2], request=request,
         request_file_sha256=request_file_sha256)
@@ -1002,7 +1004,7 @@ def seal_reviewer_rewrite_authority(
                         (receipt.model_dump_json() + '\n').encode('utf-8'),
                         label='reviewer rewrite authority receipt')
                 _require_receipt_matches(
-                    receipt, record,
+                    receipt, record, record_sha256=digest,
                     seat_sha256=evidence[0], session_sha256=evidence[1],
                     cost_sha256=evidence[2], request=request,
                     request_file_sha256=request_file_sha256)

@@ -320,6 +320,8 @@ canonical 写回任一窗口死亡，planner 会离开原 blocker，剩余动作
 commit point 后才退休 active record。否则“request 已在、唯一授权刚删”仍是一个无法恢复的硬杀窗口。
 frontier 的正文 SHA 与 canonical JSON 完整文件 SHA 也是两个不同域：前者证明 trim/audit 指向哪段正文，
 后者承担目标文件 CAS；同一字段复用两种语义会让正路永远拒绝，或让历史恢复对错文件。
+内容寻址原文件的 SHA 必须从原字节复验，不能从今天的 typed model 重序列化再算。新增可选默认字段
+或 serializer 排版变化不改变历史文件；typed 校验、原字节内容地址及 receipt/三账关联应分别完整检查。
 
 queue 再让该 request 的 pending/unknown/recoverable/terminal 状态优先于已经 stale 的
 上游审阅和普通新席。真正付费的 producer 必须在独立 fresh epoch 取得一次性 permit，并在首个 driver/
