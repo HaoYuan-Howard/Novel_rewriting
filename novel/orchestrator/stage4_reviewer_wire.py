@@ -172,7 +172,7 @@ def _constraint_model(option: Mapping[str, Any], ordinal: int, digest: str) -> t
         if closure['participant_aliases'] else None)
     aliases = TypeAliasType(
         f'Stage4OpaqueAlias_{ordinal}_{digest}',
-        _literal(sorted(set(closure['fact_aliases']) | set(closure['participant_aliases']))))
+        facts if participants is None else facts | participants)
     effects = []
     for model in _EFFECT_MODELS:
         if model is DesignRepairObserves and participants is None:

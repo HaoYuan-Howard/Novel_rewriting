@@ -340,6 +340,11 @@ schema SHA 进入本 logical session 的 `started / attempt / turn / ended` 四�
 `agent_sessions.jsonl` 事件和在线 `CommanderSessionPointer`；只有 schema-less 请求才继续用
 provider observation protocol hash，不能在同一席位混用两种身份。
 
+公共 schema 编译器只移除 `$ref` 的 `title / description` 注解；仍有验证关键词的引用在 wire 前
+关闭式拒绝，不能把 `pattern / minLength` 等业务约束一起丢掉。完全同形的枚举可共享 `$defs`，
+Stage4 的通用 alias 通过 fact/participant 两类已关闭引用组成 union，避免把同一闭集重复展开。
+预检同时检查服务支持的 schema 资源上限；压缩只改变运输，不扩大合法回答集合。
+
 两家 CLI 只在运输方式上不同。Codex invocation 的 `--output-schema` 路径按 schema SHA 固定在本 epoch
 scratch 直属目录，但文件在 build/preview 时不存在：driver 只于实际 runner 生命周期以独占普通文件创建、
 逐字回读，结束后清理。硬杀留下的孤儿只在非 symlink、普通文件且内容与本轮冻结字节完全相同时回收；
@@ -905,6 +910,21 @@ approval 形状携带 `surface / payload / review_token`，node 形状通常携�
 `node / flags / input_payload / review_token`。Stage5 trim disposition 是唯一不带 closure token 的现役 node
 形状；retain batch 与 reviewer rewrite request 都以专用 Review/contract/seat/response 字段和 payload 内
 完整有序双 SHA 自证。
+
+`ReviewerSeatLedger` 的 `schema_recovery` 是 Stage4 原生审阅同 session 纠错的关闭式例外：
+`codex-output-schema-rejection-v1` 的来源 proof 绑定原 parent/turn/session/attempt、旧 schema 与公开
+协议/成本证据。仅当原 parent 已结束且取得 owner-stopped lease、完整日志明确拒绝
+`text.format.schema` 并没有回答、当前干净代码已变化且不同 schema 通过公共预检时，才可开 fresh
+session 重发完整包；只有 epoch/运输 SHA 自变不构成恢复资格。
+`review` 后的所有轮次共同消耗最多两轮预算，恢复失败不退款；原失败轮与未知 usage 保留，
+不能伪造一个成功回答的 pending correction。真正有 typed 拒因后，只可续恢复轮的新 session。
+恢复后的 Stage4 approval record 还保存可选 `schema_recovery_response={response, exact_request}`：
+原生回答与原不可变 option 请求组成绑定包，并完整绑定
+`reviewer_session_run_id / reviewer_seat_turn_id / provider_response_sha256`；旧记录缺省为 null，
+新 serializer 省略该空字段以保留既有内容地址。重放先按原生回答内的 SHA 复验 exact request，
+再从它重建原 actor/token/review_run_id 与完整章节决定，逐值核对正式 payload、
+原 schema 转换 proof 及成功 session/seat/cost 证据；record→finish 硬杀只能据这些证据补闭原轮，
+不能把旧失败会话当成成功回答，也不能凭 record 自身跳过审计。
 
 普通 token-bound approval 可额外携带 `protocol_recovery`；缺省为 null，现役策略为
 `codex-recovered-transport-notice-v1` 与 `codex-redundant-option-suffix-v1`。

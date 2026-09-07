@@ -195,6 +195,9 @@ def _runtime_files() -> tuple[str, ...]:
 
 #: 允许裸读 JSON 的白名单。每一条都要写得出理由。
 _JSON_READ_ALLOWED = {
+    'novel/orchestrator/reviewer_schema_recovery.py': (
+        '只解析 service 公开协议日志的完整失败信封并拒绝重复键，不读取小说产物；'
+        '没有响应恢复或人工决定，来源证明只供有界席位预留 CAS'),
     'novel/stages/stage5/reviewer_rewrite.py': (
         '只解码 Commander 决定的临时 trusted transport，并拒绝重复键/NaN；'
         '该输入不是产物，canonical request 与章稿仍全部经 ArtifactStore 读取'),

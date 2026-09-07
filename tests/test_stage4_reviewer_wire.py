@@ -341,6 +341,52 @@ def test_schema_reuses_alias_definitions_and_absent_participant_has_no_observes(
     assert model.model_validate(_response(task)).selection.payload.chapters
 
 
+def test_nineteen_chapter_closed_domains_fit_native_enum_budget_without_losing_aliases():
+    """独立合成实跑同量级分母，防止修完$ref后又撞1000枚举上限。"""
+    task = _task()
+    option = task.submission_options[0]
+    payload = option['exact_request']['action']['payload']
+    prototype = payload['chapters'][0]
+    payload['chapters'] = [dict(copy.deepcopy(prototype), output_ordinal=ordinal)
+                           for ordinal in range(1, 20)]
+    closure = {}
+    for ordinal in range(1, 20):
+        closure[str(ordinal)] = {
+            'scene_refs': [f'c{ordinal:04d}_s{index:03d}'
+                           for index in range(1, 7 if ordinal <= 2 else 6)],
+            'fact_aliases': [_alias(ordinal * 1000 + index)
+                             for index in range(34 if ordinal <= 13 else 33)],
+            'participant_aliases': [_alias(100000 + ordinal * 10 + index)
+                                    for index in range(4 if ordinal <= 14 else 3)],
+        }
+    option['allowed_values'][wire.REFERENCE_CLOSURE] = closure
+    assert sum(len(row['fact_aliases']) for row in closure.values()) == 640
+    assert sum(len(row['participant_aliases']) for row in closure.values()) == 71
+    assert sum(len(row['scene_refs']) for row in closure.values()) == 97
+
+    def enums(node):
+        if isinstance(node, dict):
+            return len(node.get('enum', [])) + sum(enums(value) for value in node.values())
+        if isinstance(node, list):
+            return sum(enums(value) for value in node)
+        return 0
+
+    raw = wire.response_model(task).model_json_schema(by_alias=True)
+    assert enums(raw) > 1000, '共享转换前必须能重现整份schema枚举超限'
+    sent = wire.output_schema_for(task)
+    assert sent is not None and 800 <= enums(sent) <= 1000
+    rendered = json.dumps(sent)
+    for row in closure.values():
+        for values in row.values():
+            assert all(value in rendered for value in values)
+    # opaque只是fact/participant闭集的联合引用，没有另一份重复枚举。
+    for name, definition in sent['$defs'].items():
+        if name.startswith('Stage4OpaqueAlias_'):
+            assert 'enum' not in definition
+            assert all(set(branch) == {'$ref'} for branch in definition['anyOf'])
+    assert len(wire.assemble(task, _response(task))['action']['payload']['chapters']) == 19
+
+
 def test_prompt_covers_initial_correction_and_unrelated_task():
     task = _task(queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN)
     for base in ('主提示：复制 exact_request', '订正提示：仅交回完整 JSON'):

@@ -140,6 +140,14 @@ _PORTABLE_AGENT_SCHEMA_KEYWORDS = frozenset({
     'pattern', 'properties', 'required', 'title', 'type',
 })
 _SCHEMA_NAME_CONTAINERS = frozenset({'$defs', 'properties'})
+# OpenAI Structured Outputs 当前公开的整份 schema 上限；Claude/Codex 共用
+# 同一关闭式入口。数组本身不计 object nesting，避免发明未经标定的新限制。
+_AGENT_SCHEMA_MAX_PROPERTIES = 5000
+_AGENT_SCHEMA_MAX_OBJECT_DEPTH = 10
+_AGENT_SCHEMA_MAX_STRING_CHARACTERS = 120000
+_AGENT_SCHEMA_MAX_ENUM_VALUES = 1000
+_AGENT_SCHEMA_LARGE_ENUM_VALUES = 250
+_AGENT_SCHEMA_MAX_LARGE_ENUM_STRING_CHARACTERS = 15000
 
 
 def validate_agent_output_schema(schema: Mapping[str, Any]) -> None:
@@ -148,13 +156,25 @@ def validate_agent_output_schema(schema: Mapping[str, Any]) -> None:
     公共边界选择已接入 provider 的交集：根必须是 object；每一层 object 都要
     ``additionalProperties=false``，并显式要求全部 properties。动态键映射必须由
     业务模型先改成键值行数组，不能在这里猜键字段后静默改变响应语义。
+    ``$ref`` 节点必须是纯引用；注解归一只属于 ``agent_json_schema``，driver
+    收到未经归一的引用或不可保留的约束 sibling 时必须在 runner 前拒绝。
     """
     if schema.get('type') != 'object' or 'anyOf' in schema:
         raise AgentConfigurationError(
             'agent output_schema 根必须是 object，且根层不得使用 anyOf')
+    property_count = 0
+    enum_count = 0
+    string_characters = 0
+    references: list[object] = []
 
     def visit(node: object, path: str, *, names: bool = False) -> None:
+        nonlocal property_count, enum_count, string_characters
         if isinstance(node, Mapping):
+            if names:
+                if any(not isinstance(key, str) for key in node):
+                    raise AgentConfigurationError(
+                        f'agent output_schema {path} 含非字符串定义/属性名')
+                string_characters += sum(len(key) for key in node)
             if not names:
                 for key in node:
                     if not isinstance(key, str):
@@ -164,6 +184,27 @@ def validate_agent_output_schema(schema: Mapping[str, Any]) -> None:
                         raise AgentConfigurationError(
                             f'agent output_schema {path}.{key} 不属于 '
                             'Claude/Codex 公共严格 JSON Schema 子集')
+                if '$ref' in node and set(node) != {'$ref'}:
+                    raise AgentConfigurationError(
+                        f'agent output_schema {path} 的 $ref 必须独占 schema object；'
+                        '引用旁注解须在公共构造口归一，业务约束不得静默删除')
+                if '$ref' in node:
+                    references.append(node['$ref'])
+                properties = node.get('properties')
+                if isinstance(properties, Mapping):
+                    property_count += len(properties)
+                enum = node.get('enum')
+                if isinstance(enum, list):
+                    enum_count += len(enum)
+                    enum_string_characters = sum(
+                        len(value) for value in enum if isinstance(value, str))
+                    string_characters += enum_string_characters
+                    if (len(enum) > _AGENT_SCHEMA_LARGE_ENUM_VALUES
+                            and enum_string_characters > _AGENT_SCHEMA_MAX_LARGE_ENUM_STRING_CHARACTERS):
+                        raise AgentConfigurationError(
+                            f'agent output_schema {path} 单枚举有 {len(enum)} 个值，'
+                            f'字符串总长 {enum_string_characters} 超过公共上限 '
+                            f'{_AGENT_SCHEMA_MAX_LARGE_ENUM_STRING_CHARACTERS}；不能发起 CLI')
 
                 type_value = node.get('type')
                 is_object = (
@@ -202,6 +243,59 @@ def validate_agent_output_schema(schema: Mapping[str, Any]) -> None:
                 visit(item, f'{path}[{index}]')
 
     visit(schema, '$')
+
+    def reference_target(value: object) -> Mapping[str, Any]:
+        if not isinstance(value, str) or not (value == '#' or value.startswith('#/')):
+            raise AgentConfigurationError('agent output_schema 只接受本地 JSON Pointer 引用')
+        target: object = schema
+        for part in value[2:].split('/') if value != '#' else ():
+            key = part.replace('~1', '/').replace('~0', '~')
+            if not isinstance(target, Mapping) or key not in target:
+                raise AgentConfigurationError('agent output_schema 的 $ref 目标不存在')
+            target = target[key]
+        if not isinstance(target, Mapping):
+            raise AgentConfigurationError('agent output_schema 的 $ref 目标不是 schema object')
+        return target
+
+    def object_depth(node: object, active: frozenset[str] = frozenset()) -> int:
+        if not isinstance(node, Mapping):
+            return 0
+        if '$ref' in node:
+            ref = node['$ref']
+            target = reference_target(ref)
+            if ref in active:
+                # provider 明示支持递归 schema；只截止同一展开路径上的回边，
+                # 不把合法自引用当无限嵌套，也不跳过其他不同引用分支。
+                return 0
+            return object_depth(target, active | {ref})
+        type_value = node.get('type')
+        own = int(type_value == 'object' or (
+            isinstance(type_value, list) and 'object' in type_value))
+        children: list[object] = []
+        properties = node.get('properties')
+        if isinstance(properties, Mapping):
+            children.extend(properties.values())
+        if 'items' in node:
+            children.append(node['items'])
+        branches = node.get('anyOf')
+        if isinstance(branches, list):
+            children.extend(branches)
+        return own + max((object_depth(child, active) for child in children), default=0)
+
+    # provider会校验整份$defs；未被root引用的定义也不能携悬空/外部引用。
+    for reference in references:
+        reference_target(reference)
+    depth = object_depth(schema, frozenset({'#'}))
+    for label, actual, limit in (
+        ('属性总数', property_count, _AGENT_SCHEMA_MAX_PROPERTIES),
+        ('枚举值总数', enum_count, _AGENT_SCHEMA_MAX_ENUM_VALUES),
+        ('属性/定义/枚举字符串总长', string_characters, _AGENT_SCHEMA_MAX_STRING_CHARACTERS),
+        ('object 嵌套层数', depth, _AGENT_SCHEMA_MAX_OBJECT_DEPTH),
+    ):
+        if actual > limit:
+            raise AgentConfigurationError(
+                f'agent output_schema {label} {actual} 超过公共上限 {limit}；'
+                '必须保留业务约束并调整 wire，不能发起 CLI')
 
 
 class AgentBusyError(AgentError):
@@ -347,8 +441,7 @@ def classify_agent_command_failure(
     # 普通命令失败，更不能热重试。即便公共 preflight 漏了未来 schema 形状，
     # 外层也应得到可行动的稳定分类，而不是 event='error'/status=None。
     if ('invalid_json_schema' in text
-            or 'invalid schema for response_format' in text
-            or ('text.format.schema' in text and status == 400)):
+            or 'invalid schema for response_format' in text):
         return 'agent_schema', status, False
 
     # 账号窗口耗尽要等外部状态变化；秒级热重试只会制造四次相同失败。

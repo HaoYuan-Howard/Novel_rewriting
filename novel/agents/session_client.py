@@ -309,6 +309,66 @@ def validate_agent_session_request_binding(
     return record
 
 
+def _share_agent_enum_definitions(schema: dict[str, Any]) -> dict[str, Any]:
+    """完全相同的枚举载体只声明一次，保留全部约束与注解。
+
+    provider 的枚举数上限按整份 schema 累计。同一个 code/decision/kind 在每章
+    复制一次也会耗尽上限；这里按完整载体内容寻址复用，只替换叶子枚举节点，
+    不合并不同 pattern/范围/描述，也不把 enum 扩成自由字符串或内联引用目标。
+    """
+    counts: dict[str, int] = {}
+    bodies: dict[str, dict[str, Any]] = {}
+
+    def enum_key(node: object, *, names: bool) -> str | None:
+        if (names or not isinstance(node, dict) or 'enum' not in node
+                or any(key in node for key in (
+                    '$ref', '$defs', 'properties', 'items', 'anyOf'))):
+            return None
+        return json.dumps(node, ensure_ascii=False, sort_keys=True,
+                          separators=(',', ':'), allow_nan=False)
+
+    def collect(node: object, *, names: bool = False) -> None:
+        key = enum_key(node, names=names)
+        if key is not None:
+            counts[key] = counts.get(key, 0) + 1
+            assert isinstance(node, dict)
+            bodies[key] = node
+        if isinstance(node, dict):
+            for name, value in node.items():
+                collect(value, names=not names and name in ('$defs', 'properties'))
+        elif isinstance(node, list):
+            for value in node:
+                collect(value)
+
+    collect(schema)
+    shared = {
+        key: 'AgentSharedEnum_' + hashlib.sha256(key.encode('utf-8')).hexdigest()
+        for key, count in counts.items() if count > 1
+    }
+    if not shared:
+        return schema
+    existing = schema.get('$defs', {})
+    if not isinstance(existing, dict) or any(name in existing for name in shared.values()):
+        raise AgentConfigurationError('agent 枚举共享定义与原 $defs 身份冲突')
+
+    def replace(node: object, *, names: bool = False) -> Any:
+        key = enum_key(node, names=names)
+        if key in shared:
+            return {'$ref': '#/$defs/' + shared[key]}
+        if isinstance(node, dict):
+            return {
+                name: replace(value, names=not names and name in ('$defs', 'properties'))
+                for name, value in node.items()
+            }
+        if isinstance(node, list):
+            return [replace(value) for value in node]
+        return node
+
+    result = replace(schema)
+    result.setdefault('$defs', {}).update({name: bodies[key] for key, name in shared.items()})
+    return result
+
+
 def agent_json_schema(model_cls: type) -> dict:
     """交给 agent CLI 的响应 JSON Schema。**全仓唯一构造口。**
 
@@ -327,6 +387,13 @@ def agent_json_schema(model_cls: type) -> dict:
     provider 侧——响应回来仍要过 `novel/llm/client.py::judge_payload` 的四道闸，
     其中 schema 那一道用的是 pydantic 模型本身，不是这份下发的 schema。
     ⇒ 这里改的是「怎么把契约讲给 CLI 听」，不是「契约是什么」。
+
+    ``$ref`` 必须独占它所在的 schema object。Pydantic 会为命名类型引用补
+    ``title`` / ``description``，这在 JSON Schema 中合法，却会被 Codex 原生
+    strict schema 拒绝。只删除引用旁的这两种注解，保留命名 ``$defs`` 和引用，
+    不展开大闭集；其余 sibling 可能是业务约束，必须由公共预检关闭式拒绝，
+    不能跟着注解一起丢掉。完全相同的叶子枚举经内容寻址共用一份定义，避免
+    逐章重复的 code/decision/kind 膨胀成超过 provider 上限的枚举总数。
 
     动态键 object 不能靠删关键字修成合法 schema：调用点必须先把 provider wire 设计成
     显式键值行数组，再由 Pydantic 确定性还原为内部映射。归一完成后还要经过公共严格
@@ -351,6 +418,8 @@ def agent_json_schema(model_cls: type) -> dict:
             out: dict[str, object] = {}
             for key, value in node.items():
                 if key in ('default', 'discriminator'):
+                    continue
+                if '$ref' in node and key in ('title', 'description'):
                     continue
                 if key == 'const':
                     # OpenAI 的公开严格子集登记 enum，不登记 const；单值枚举与
@@ -378,6 +447,7 @@ def agent_json_schema(model_cls: type) -> dict:
 
     schema = normalize(model_cls.model_json_schema(by_alias=True))
     assert isinstance(schema, dict)
+    schema = _share_agent_enum_definitions(schema)
     validate_agent_output_schema(schema)
     return schema
 

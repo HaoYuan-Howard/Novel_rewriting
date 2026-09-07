@@ -25,11 +25,20 @@ pydantic 给 discriminated union 发 `discriminator`，而 Claude CLI 的 `--jso
 from __future__ import annotations
 
 import json
+from typing import Literal
 
 import pytest
-from pydantic import ValidationError
+from pydantic import Field, ValidationError, create_model
+from typing_extensions import TypeAliasType
 
+from contracts.schema.base import StrictModel
+from contracts.schema.orchestration import AgentProfile
+from novel.agents import AgentConfigurationError, AgentRequest
+from novel.agents.base import validate_agent_output_schema
 from novel.agents.session_client import agent_json_schema
+from novel.commanders import (
+    ClaudeCodeCommanderDriver, CodexCommanderDriver, CommanderConfigurationError,
+)
 
 #: 已接入 Claude AJV strict 与 OpenAI Structured Outputs 的公共关键字子集。
 #: ⚠ 测试独立维护白名单，不导入生产常量，否则两边一起误放宽会继续假绿。
@@ -123,6 +132,49 @@ def _object_contract_errors(node: object, path: str = '$') -> list[str]:
     return errors
 
 
+def _ref_siblings(node: object) -> list[set[str]]:
+    if isinstance(node, dict):
+        own = [set(node) - {'$ref'}] if '$ref' in node and len(node) > 1 else []
+        return own + [extra for value in node.values() for extra in _ref_siblings(value)]
+    if isinstance(node, list):
+        return [extra for value in node for extra in _ref_siblings(value)]
+    return []
+
+
+def _schema_assertions(node, root, *, names=False, active=()):
+    """独立展开引用比较业务约束，允许注解归一、全required和无损enum共享。"""
+    if isinstance(node, dict):
+        if names:
+            return {key: _schema_assertions(value, root, active=active)
+                    for key, value in node.items()}
+        if '$ref' in node:
+            ref = node['$ref']
+            if ref in active:
+                return {'recursive_ref': ref}
+            target = root
+            for part in ref[2:].split('/'):
+                target = target[part.replace('~1', '/').replace('~0', '~')]
+            return _schema_assertions(target, root, active=(*active, ref))
+        return {
+            ('anyOf' if key == 'oneOf' else 'enum' if key == 'const' else key):
+            (_schema_assertions([value], root, active=active) if key == 'const'
+             else _schema_assertions(value, root, names=key == 'properties', active=active))
+            for key, value in node.items()
+            if key not in {'$defs', 'title', 'description', 'default', 'discriminator', 'required'}
+        }
+    if isinstance(node, list):
+        return [_schema_assertions(value, root, active=active) for value in node]
+    return node
+
+
+def _enum_values(node: object) -> int:
+    if isinstance(node, dict):
+        return len(node.get('enum', [])) + sum(_enum_values(value) for value in node.values())
+    if isinstance(node, list):
+        return sum(_enum_values(value) for value in node)
+    return 0
+
+
 def test_every_agent_response_schema_only_uses_json_schema_keywords():
     """任何词表外的关键字都会让 CLI 整份拒收 ⇒ 真跑时一次模型都调不到。"""
     models = _models()
@@ -155,11 +207,9 @@ def test_normalization_preserves_union_branches_and_equivalent_constraints():
     assert sent_text.count('"anyOf"') == (
         raw_text.count('"anyOf"') + raw_text.count('"oneOf"'))
     assert raw_text.count('"const"') > 0 and '"const"' not in sent_text
-    assert sent_text.count('"enum"') == (
-        raw_text.count('"enum"') + raw_text.count('"const"'))
-    for keyword in ('properties', '$ref'):
-        assert sent_text.count(f'"{keyword}"') == raw_text.count(
-            f'"{keyword}"'), keyword
+    assert _schema_assertions(raw, raw) == _schema_assertions(sent, sent)
+    assert sent_text.count('"properties"') == raw_text.count('"properties"')
+    assert not _ref_siblings(sent)
 
 
 def test_every_agent_object_is_closed_and_requires_every_declared_key():
@@ -169,6 +219,164 @@ def test_every_agent_object_is_closed_and_requires_every_declared_key():
         assert schema.get('type') == 'object', label
         assert 'anyOf' not in schema, label
         assert not (errors := _object_contract_errors(schema)), (label, errors)
+        assert not _ref_siblings(schema), label
+        raw = model_cls.model_json_schema(by_alias=True)
+        assert _schema_assertions(raw, raw) == _schema_assertions(schema, schema), label
+
+
+def test_named_alias_ref_annotations_are_removed_without_expanding_the_closed_domain():
+    """复现 observation_alias 的原生400；不只修某一个字段或某一种模型。"""
+    alias = TypeAliasType('NativeClosedAlias', Literal[tuple(f'a_{index:016x}' for index in range(200))])
+    model = create_model(
+        'NativeAliasReferences', __base__=StrictModel,
+        **{f'alias_{index}': (alias, Field(..., title=f'端点 {index}', description='当前章闭集端点'))
+           for index in range(20)},
+    )
+    raw = model.model_json_schema(by_alias=True)
+    assert _ref_siblings(raw), '必须真的重现 Pydantic 的 $ref sibling'
+    sent = agent_json_schema(model)
+    assert not _ref_siblings(sent)
+    assert _enum_values(sent) == 200
+    assert all(set(prop) == {'$ref'} for prop in sent['properties'].values())
+    assert _schema_assertions(raw, raw) == _schema_assertions(sent, sent)
+    valid = {f'alias_{index}': 'a_0000000000000001' for index in range(20)}
+    model.model_validate(valid)
+    with pytest.raises(ValidationError):
+        model.model_validate({**valid, 'alias_0': 'foreign-alias'})
+
+
+def test_identical_enum_definitions_are_shared_but_distinct_constraints_are_not():
+    values = Literal[tuple(f'choice_{index}' for index in range(10))]
+    model = create_model(
+        'RepeatedClosedVocabulary', __base__=StrictModel,
+        **{f'field_{index}': (values, Field(..., title='共享选择')) for index in range(120)},
+    )
+    raw = model.model_json_schema(by_alias=True)
+    assert _enum_values(raw) == 1200
+    sent = agent_json_schema(model)
+    assert _enum_values(sent) == 10
+    assert _schema_assertions(raw, raw) == _schema_assertions(sent, sent)
+    assert len({prop['$ref'] for prop in sent['properties'].values()}) == 1
+
+    class narrowed:
+        @classmethod
+        def model_json_schema(cls, **_kwargs):
+            return _closed_object({
+                key: {'type': 'string', 'enum': ['aa', 'bb'], 'pattern': pattern}
+                for key, pattern in (
+                    ('a', '^a'), ('another_a', '^a'), ('b', '^b'), ('another_b', '^b'))
+            })
+    converted = agent_json_schema(narrowed)
+    assert converted['properties']['a'] == converted['properties']['another_a']
+    assert converted['properties']['b'] == converted['properties']['another_b']
+    assert converted['properties']['a'] != converted['properties']['b']
+    raw_narrowed = narrowed.model_json_schema(by_alias=True)
+    assert _schema_assertions(raw_narrowed, raw_narrowed) == _schema_assertions(converted, converted)
+
+
+@pytest.mark.parametrize('sibling,value', [('pattern', '^a'), ('minLength', 2), ('enum', ['a'])])
+def test_reference_assertion_siblings_are_refused_instead_of_silently_dropped(sibling, value):
+    class CustomSchema:
+        @classmethod
+        def model_json_schema(cls, **_kwargs):
+            return {
+                'type': 'object', 'additionalProperties': False,
+                '$defs': {'Alias': {'type': 'string', 'enum': ['a', 'b']}},
+                'properties': {'value': {'$ref': '#/$defs/Alias', sibling: value}},
+                'required': ['value'],
+            }
+
+    with pytest.raises(AgentConfigurationError, match=r'\$ref 必须独占'):
+        agent_json_schema(CustomSchema)
+
+
+@pytest.mark.parametrize('driver_cls,driver_name,model_name', [
+    (ClaudeCodeCommanderDriver, 'claude-code', 'claude-opus-5'),
+    (CodexCommanderDriver, 'codex', 'gpt-5.6-sol'),
+])
+def test_raw_ref_sibling_is_rejected_at_executor_and_commander_before_runner(
+        tmp_path, driver_cls, driver_name, model_name):
+    schema = {
+        'type': 'object', 'additionalProperties': False,
+        '$defs': {'Alias': {'type': 'string', 'enum': ['a', 'b']}},
+        'properties': {'observation_alias': {'$ref': '#/$defs/Alias', 'title': 'Observation Alias'}},
+        'required': ['observation_alias'],
+    }
+    with pytest.raises(AgentConfigurationError, match=r'\$ref 必须独占'):
+        AgentRequest(prompt='只读探针', execution_policy='executor-isolated',
+                     output_schema=schema, cwd=tmp_path)
+    calls = []
+    driver = driver_cls(executable=driver_name, runner=lambda *_args, **_kwargs: calls.append(True))
+    with pytest.raises(CommanderConfigurationError, match=r'\$ref 必须独占'):
+        driver.build_invocation(
+            AgentProfile(driver=driver_name, model=model_name, reasoning_effort='high'),
+            '只读审阅', repo=tmp_path, base=tmp_path, structured_response=True, output_schema=schema)
+    assert calls == []
+
+
+def _closed_object(properties):
+    return {'type': 'object', 'properties': properties, 'required': list(properties),
+            'additionalProperties': False}
+
+
+@pytest.mark.parametrize('resource,limit,label', [
+    ('properties', 5000, '属性总数'), ('enum', 1000, '枚举值总数'),
+    ('characters', 120000, '字符串总长'), ('depth', 10, 'object 嵌套层数'),
+])
+def test_public_native_schema_resource_boundaries_fail_before_wire(resource, limit, label):
+    def schema_for(count):
+        if resource == 'properties':
+            return _closed_object({f'p{index}': {'type': 'string'} for index in range(count)})
+        if resource == 'enum':
+            return _closed_object({'x': {'type': 'integer', 'enum': list(range(count))}})
+        if resource == 'characters':
+            return _closed_object({'x': {'type': 'string', 'enum': ['a' * (count - 1)]}})
+        result = {'type': 'string'}
+        for _ in range(count):
+            result = _closed_object({'x': result})
+        return result
+
+    validate_agent_output_schema(schema_for(limit))
+    with pytest.raises(AgentConfigurationError, match=label):
+        validate_agent_output_schema(schema_for(limit + 1))
+
+
+def test_object_depth_follows_local_refs_without_rejecting_recursive_or_array_schemas():
+    definitions = {'Last': _closed_object({'value': {'type': 'string'}})}
+    for index in reversed(range(9)):
+        target = 'Last' if index == 8 else f'Level{index + 1}'
+        definitions[f'Level{index}'] = _closed_object({'nested': {'$ref': '#/$defs/' + target}})
+    too_deep = _closed_object({'start': {'$ref': '#/$defs/Level0'}})
+    too_deep['$defs'] = definitions
+    with pytest.raises(AgentConfigurationError, match='object 嵌套层数 11'):
+        validate_agent_output_schema(too_deep)
+    recursive = _closed_object({'next': {'anyOf': [{'$ref': '#'}, {'type': 'null'}]}})
+    validate_agent_output_schema(recursive)
+    arrays = {'type': 'string'}
+    for _ in range(20):
+        arrays = {'type': 'array', 'items': arrays}
+    validate_agent_output_schema(_closed_object({'arrays': arrays}))
+
+
+def test_large_single_enum_string_budget_applies_only_above_250_values():
+    values = [str(index) for index in range(251)]
+    values[0] += 'x' * (15000 - sum(map(len, values)))
+    schema = _closed_object({'x': {'type': 'string', 'enum': values}})
+    validate_agent_output_schema(schema)
+    values[0] += 'x'
+    with pytest.raises(AgentConfigurationError, match='单枚举.*15001.*15000'):
+        validate_agent_output_schema(schema)
+    # 正好250项只受整份schema的总长限制，不套用>250项的专属上限。
+    at_threshold = [str(index).ljust(100, 'x') for index in range(250)]
+    validate_agent_output_schema(_closed_object({'x': {'type': 'string', 'enum': at_threshold}}))
+
+
+@pytest.mark.parametrize('reference', ['#/$defs/missing', 'https://example.test/external-schema', 7])
+def test_unreferenced_definitions_still_require_valid_local_reference_targets(reference):
+    schema = _closed_object({'x': {'type': 'string'}})
+    schema['$defs'] = {'unused': {'$ref': reference}}
+    with pytest.raises(AgentConfigurationError, match='引用|目标不存在'):
+        validate_agent_output_schema(schema)
 
 
 def test_dynamic_business_maps_use_keyed_rows_on_wire_and_round_trip_to_dict():

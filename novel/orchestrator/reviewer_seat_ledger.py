@@ -28,7 +28,7 @@ from pydantic import TypeAdapter
 
 from contracts.invariants import COMMANDER_REVIEWER_MAX_CORRECTIONS
 from contracts.schema.orchestration import (
-    ReviewerSeatLedger, ReviewerSeatPendingCorrection, ReviewerSeatTurn,
+    ReviewerSchemaRecoveryProof, ReviewerSeatLedger, ReviewerSeatPendingCorrection, ReviewerSeatTurn,
     Stage2ReviewAttempt,
 )
 from novel import paths, run_identity
@@ -130,7 +130,7 @@ def _replace(
 def corrections_used(ledger: ReviewerSeatLedger | None) -> int:
     if ledger is None:
         return 0
-    return sum(1 for row in ledger.turns if row.purpose == 'correction')
+    return max(0, len(ledger.turns) - 1)
 
 
 def mark_pending_correction(
@@ -203,6 +203,7 @@ def reserve(
     turn_id: str,
     parent_run_id: str,
     epoch_id: str,
+    schema_recovery: ReviewerSchemaRecoveryProof | None = None,
     now: int | None = None,
 ) -> ReviewerSeatTurn:
     """原子预留一轮 reviewer turn；纠错超过上限或账不闭合时关闭式拒绝。"""
@@ -217,12 +218,14 @@ def reserve(
             raise ReviewerSeatRefused('reviewer seat ledger 身份冲突')
         if any(row.turn_id == turn_id for row in ledger.turns):
             raise ReviewerSeatRefused('reviewer seat turn_id 重复')
-        if purpose not in ('review', 'correction'):
+        if purpose not in ('review', 'correction', 'schema_recovery'):
             raise ReviewerSeatRefused(
                 f'未登记的 reviewer seat purpose：{purpose!r}')
         if any(row.outcome == 'started' for row in ledger.turns):
             raise ReviewerSeatRefused('reviewer seat 尚有未闭合 turn，拒绝再开一轮')
-        if purpose == 'correction':
+        if (purpose == 'schema_recovery') != (schema_recovery is not None):
+            raise ReviewerSeatRefused('schema recovery 必须携带独立已验来源 proof')
+        if purpose in ('correction', 'schema_recovery'):
             used = corrections_used(ledger)
             if used >= ledger.max_corrections:
                 raise ReviewerSeatRefused(
@@ -230,13 +233,22 @@ def reserve(
                     f'（{used}/{ledger.max_corrections}），重启不返还')
             if not ledger.turns:
                 raise ReviewerSeatRefused('没有首次审阅席位就不能预留纠错')
-            pending = ledger.pending_correction
-            if pending is None:
-                raise ReviewerSeatRefused(
-                    '没有持久化的 typed 拒因就不能预留纠错')
-            if pending.session_run_id != checked_session:
-                raise ReviewerSeatRefused(
-                    '纠错必须续用首次审阅席位的 logical session')
+            if purpose == 'schema_recovery':
+                from novel.orchestrator.reviewer_schema_recovery import canonical_sha256
+
+                if (ledger.pending_correction is not None
+                        or schema_recovery is None
+                        or canonical_sha256(ledger.model_dump(mode='json'))
+                        != schema_recovery.source_ledger_sha256):
+                    raise ReviewerSeatRefused('schema recovery 来源账已漂移或存在真实待纠错回答')
+            else:
+                pending = ledger.pending_correction
+                if pending is None:
+                    raise ReviewerSeatRefused(
+                        '没有持久化的 typed 拒因就不能预留纠错')
+                if pending.session_run_id != checked_session:
+                    raise ReviewerSeatRefused(
+                        '纠错必须续用最后成功审阅轮的 logical session')
         elif purpose == 'review':
             if ledger.turns:
                 raise ReviewerSeatRefused(
@@ -250,6 +262,7 @@ def reserve(
             parent_run_id=run_identity.check_run_id(parent_run_id),
             epoch_id=epoch_id,
             started_at=int(time.time()) if now is None else now,
+            schema_recovery=schema_recovery,
         )
         updated = ReviewerSeatLedger.model_validate({
             **ledger.model_dump(mode='json'),

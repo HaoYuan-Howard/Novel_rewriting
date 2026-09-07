@@ -80,6 +80,10 @@ def has_registered_rejection(base: str, log_path: Path) -> bool:
 
 def is_recovery_candidate(ledger: ReviewerSeatLedger) -> bool:
     """只做无 I/O 路由；命中后仍须检查原日志、审计、成本与当前 typed option。"""
+    # 旧响应恢复证明覆盖一条 logical session；配置拒绝后的混合账不能
+    # 删掉原失败轮再借这条策略恢复。它只走自己的新会话与 typed 交付链。
+    if any(row.schema_recovery is not None for row in ledger.turns):
+        return False
     pending = ledger.pending_correction
     if (ledger.waiting_on in _STAGE4_SURFACES and ledger.turns
             and pending is not None and pending.reason == _SUFFIX_REJECTION):

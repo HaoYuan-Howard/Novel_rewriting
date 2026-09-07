@@ -25,7 +25,7 @@ import json
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, StrictInt, model_validator
+from pydantic import Field, StrictInt, model_serializer, model_validator
 
 from contracts.invariants import (
     AGENT_DELIVERY_OUTCOME,
@@ -1077,12 +1077,41 @@ class Stage2ReviewLedgerReconciliation(FrozenModel):
         return self
 
 
+class ReviewerSchemaRecoveryProof(FrozenModel):
+    """供应商在生成回答前拒绝输出 schema；以剩余轮次换新会话的来源证明。"""
+
+    policy: Literal['codex-output-schema-rejection-v1'] = 'codex-output-schema-rejection-v1'
+    source_turn_id: str = Field(min_length=1)
+    source_session_run_id: str = Field(min_length=1)
+    source_attempt_id: str = Field(min_length=1)
+    source_parent_run_id: str = Field(min_length=1)
+    source_epoch_id: str = Field(min_length=1)
+    provider_session_id: str = Field(min_length=1)
+    source_schema_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    replacement_schema_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    replacement_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    source_code_version: str = Field(min_length=1)
+    validation_code_version: str = Field(pattern=r'^[0-9a-f]{40}$')
+    source_ledger_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    source_parent_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    source_session_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    source_cost_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    source_log_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+    @model_validator(mode='after')
+    def _requires_changed_configuration(self) -> ReviewerSchemaRecoveryProof:
+        if (self.source_schema_sha256 == self.replacement_schema_sha256
+                or self.source_code_version == self.validation_code_version):
+            raise ValueError('schema recovery 必须使用已修正的不同代码与输出 schema')
+        return self
+
+
 class ReviewerSeatTurn(FrozenModel):
     """非 Stage2 reviewer 席位内的一轮 Commander turn（首次审阅或纠错）。"""
 
     turn_id: str = Field(min_length=1)
     ordinal: int = Field(ge=1)
-    purpose: Literal['review', 'correction']
+    purpose: Literal['review', 'correction', 'schema_recovery']
     session_run_id: str = Field(min_length=1)
     parent_run_id: str = Field(min_length=1)
     epoch_id: str = Field(min_length=1)
@@ -1097,9 +1126,20 @@ class ReviewerSeatTurn(FrozenModel):
     provider_response_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
     attempts: list[Stage2ReviewAttempt] = Field(default_factory=list)
+    schema_recovery: ReviewerSchemaRecoveryProof | None = None
+
+    @model_serializer(mode='wrap')
+    def _preserve_legacy_shape(self, handler: Any) -> dict[str, Any]:
+        # additive service 契约不改旧轮的 canonical 内容地址或历史封存摘要。
+        result = handler(self)
+        if self.schema_recovery is None:
+            result.pop('schema_recovery', None)
+        return result
 
     @model_validator(mode='after')
     def _finish_fields_agree(self) -> ReviewerSeatTurn:
+        if (self.purpose == 'schema_recovery') != (self.schema_recovery is not None):
+            raise ValueError('schema_recovery 轮必须且只能携带配置拒绝来源证明')
         if self.outcome == 'started':
             if self.finished_at is not None or self.exit_code is not None:
                 raise ValueError('started reviewer seat turn 不得携带 finished/exit')
@@ -1126,8 +1166,9 @@ class ReviewerSeatLedger(FrozenModel):
     """按 ``(sid, blocker, business_sha256)`` 持久化的非 Stage2 reviewer 席位账。
 
     同一业务主体上：首轮必须是 ``review``，其后最多 ``max_corrections`` 轮
-    ``correction``；所有轮共用同一席（同一 logical/provider session），账跨
-    重启持久、纠错不返还。业务主体（surface）变化即新账新席。
+    ``correction / schema_recovery``；配置拒绝恢复保留失败轮并消耗剩余轮次，
+    只有该 typed proof 能授权 fresh session，普通纠错仍续同一会话。账跨重启
+    持久、纠错不返还。业务主体（surface）变化即新账新席。
     """
 
     schema_version: Literal[1] = 1
@@ -1151,13 +1192,26 @@ class ReviewerSeatLedger(FrozenModel):
         reviews = [row for row in self.turns if row.purpose == 'review']
         if self.turns and (
                 self.turns[0].purpose != 'review' or len(reviews) != 1
-                or any(row.purpose != 'correction'
+                or any(row.purpose not in {'correction', 'schema_recovery'}
                        for row in self.turns[1:])):
             raise ValueError('reviewer seat ledger 只能有一轮首审，其后只能纠错')
-        sessions = {row.session_run_id for row in self.turns}
-        if len(sessions) > 1:
-            raise ValueError('同一 reviewer 席位的所有轮必须共用 logical session')
-        corrections = sum(1 for row in self.turns if row.purpose == 'correction')
+        for previous, current in zip(self.turns, self.turns[1:]):
+            proof = current.schema_recovery
+            if proof is None:
+                if current.session_run_id != previous.session_run_id:
+                    raise ValueError('普通 reviewer 纠错必须共用 logical session')
+            elif (previous.outcome != 'failed' or previous.exit_code != 1
+                    or previous.provider_response_sha256 is not None
+                    or len(previous.attempts) != 1
+                    or proof.source_turn_id != previous.turn_id
+                    or proof.source_session_run_id != previous.session_run_id
+                    or proof.source_parent_run_id != previous.parent_run_id
+                    or proof.source_epoch_id != previous.epoch_id
+                    or proof.source_attempt_id != previous.attempts[0].attempt_id
+                    or current.session_run_id in {
+                        row.session_run_id for row in self.turns[:current.ordinal - 1]}):
+                raise ValueError('schema recovery 必须绑定相邻失败轮并开启全新 logical session')
+        corrections = max(0, len(self.turns) - 1)
         if corrections > self.max_corrections:
             raise ValueError('reviewer seat ledger 纠错轮数超出 max_corrections')
         pending = self.pending_correction
@@ -1332,6 +1386,7 @@ class ReviewerActionRecord(FrozenModel):
     input_payload: dict[str, Any] | None = None
     review_token: str | None = None
     protocol_recovery: ReviewerProtocolRecoveryProof | None = None
+    schema_recovery_response: dict[str, Any] | None = None
     # Stage5 trim disposition 额外保存原 Review 与 reviewer contract 摘要；再结合
     # payload 的完整有序 trim 双 SHA，可先自证 durable business 未损坏，
     # 再区分“current 主体已换可安全退休”和“同主体 partial
@@ -1360,8 +1415,20 @@ class ReviewerActionRecord(FrozenModel):
         default=None, pattern=r'^[0-9a-f]{64}$')
     recorded_at: int = Field(ge=0)
 
+    @model_serializer(mode='wrap')
+    def _preserve_legacy_record_shape(self, handler: Any) -> dict[str, Any]:
+        result = handler(self)
+        if self.schema_recovery_response is None:
+            result.pop('schema_recovery_response', None)
+        return result
+
     @model_validator(mode='after')
     def _one_replayable_action_shape(self) -> ReviewerActionRecord:
+        if self.schema_recovery_response is not None and (
+                self.surface not in {'design', 'structure'}
+                or self.protocol_recovery is not None
+                or self.reviewer_seat_turn_id is None):
+            raise ValueError('schema recovery 原回答只属于绑定实际 turn 的 Stage4 approval')
         if self.protocol_recovery is not None and (
                 self.node is not None or self.surface is None
                 or self.surface == 'stage2_final_review' or not self.review_token):
@@ -1431,6 +1498,17 @@ class ReviewerActionRecord(FrozenModel):
                     'turn/provider 身份必须成组出现')
             if self.review_token is not None:
                 raise ValueError('Stage5 trim durable record 不得绑定 closure token')
+        elif approval and self.surface in {'design', 'structure'} and any(
+                value is not None for value in (
+                    self.reviewer_session_run_id, self.reviewer_seat_turn_id,
+                    self.provider_response_sha256)):
+            if (not all(value is not None for value in (
+                    self.reviewer_session_run_id, self.reviewer_seat_turn_id,
+                    self.provider_response_sha256))
+                    or self.schema_recovery_response is None
+                    or self.stage5_review_sha256 is not None
+                    or self.stage5_reviewer_contract_sha256 is not None):
+                raise ValueError('Stage4 schema recovery 决定的 session/turn/response 必须成组出现')
         elif any(value is not None for value in (
                 self.stage5_review_sha256,
                 self.stage5_reviewer_contract_sha256,

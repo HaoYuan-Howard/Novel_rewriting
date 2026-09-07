@@ -59,7 +59,7 @@ from contracts.schema.orchestration import (
     AgentExecutorBackend, AgentProfile, AgentRunRecord, AgentRunStart,
     CommanderSessionPointer, ExecutionEpoch, ExecutorBackend,
     PipelineAgentProfiles, ReviewerActionRecord, RunContractV2,
-    ReviewerSeatLedger, ReviewerSeatTurn, Stage2PrereviewRecord,
+    ReviewerSchemaRecoveryProof, ReviewerSeatLedger, ReviewerSeatTurn, Stage2PrereviewRecord,
 )
 from novel import agent_session_audit, paths, prov, run_identity, skill_contract
 from novel.agent_capabilities import (
@@ -95,7 +95,7 @@ from novel.model_slots import (
 from novel.orchestrator import (
     admission, commander_completion, execution_permit, jobs, operator, queue,
     review_seats, reviewer_action_evidence, reviewer_seat_ledger,
-    reviewer_protocol_recovery,
+    reviewer_protocol_recovery, reviewer_schema_recovery,
     reviewer_tasks, service_lifecycle, stage2_review_ledger,
     stage2_reviewer_wire, stage4_reviewer_wire, state, uploads,
 )
@@ -1225,6 +1225,7 @@ def _record_reviewer_action(
         reviewer_session_run_id: str | None = None,
         reviewer_seat_turn_id: str | None = None,
         provider_response_sha256: str | None = None,
+        schema_recovery_response: dict[str, Any] | None = None,
         reviewer_progress_sha256: str | None = None) -> Path | None:
     """typed loader 一通过就按内容寻址持久化可执行决定（R-11.25）。
 
@@ -1264,6 +1265,32 @@ def _record_reviewer_action(
             'provider_response_sha256': provider_response_sha256,
         }
     if isinstance(action, reviewer_tasks.ReviewerApprovalAction):
+        if task.waiting_on in reviewer_schema_recovery.WAITING_ON:
+            ledger = reviewer_seat_ledger.read(
+                base, sid, waiting_on=task.waiting_on,
+                business_sha256=task.business_sha256)
+            if ledger is not None and any(row.schema_recovery is not None for row in ledger.turns):
+                turn = ledger.turns[-1]
+                if (turn.parent_run_id != run_id or turn.epoch_id != epoch.epoch_id
+                        or provider_response_sha256 is None
+                        or schema_recovery_response is None
+                        or turn.provider_response_sha256 != provider_response_sha256):
+                    raise reviewer_tasks.ReviewerTaskError('schema recovery 决定与实际最新轮/回答不闭合')
+                selection = schema_recovery_response.get('selection')
+                options = [option for option in task.submission_options
+                           if isinstance(selection, dict)
+                           and option.get('id') == selection.get('option_id')]
+                if len(options) != 1:
+                    raise reviewer_tasks.ReviewerTaskError('schema recovery 原回答没有唯一 immutable option')
+                stage2_fields = {
+                    'reviewer_session_run_id': turn.session_run_id,
+                    'reviewer_seat_turn_id': turn.turn_id,
+                    'provider_response_sha256': provider_response_sha256,
+                    'schema_recovery_response': {
+                        'response': schema_recovery_response,
+                        'exact_request': options[0]['exact_request'],
+                    },
+                }
         token = action.payload.get('review_token')
         record = ReviewerActionRecord(
             **common,
@@ -2248,6 +2275,39 @@ def _protocol_recovery_sources(
     return recovered
 
 
+def _schema_recovery_sources(
+        base: str, sid: str, *, ledger: ReviewerSeatLedger,
+        current_parent_run_id: str, validation_code: str,
+        replacement_schema_sha256: str, replacement_subject_sha256: str,
+        ) -> ReviewerSchemaRecoveryProof | None:
+    """由真实 ended parent 和当前授权 profile 形成技术拒绝证明，不生成审阅决定。"""
+    if not reviewer_schema_recovery.is_recovery_candidate(ledger):
+        return None
+    source_run_id = ledger.turns[-1].parent_run_id
+    if source_run_id == current_parent_run_id:
+        return None
+    parents = {row.run_id: row for row in records(base)}
+    source, target = parents.get(source_run_id), parents.get(current_parent_run_id)
+    if source is None or target is None or target.contract is None:
+        raise reviewer_tasks.ReviewerTaskError('schema recovery 缺 source/target parent 契约')
+    reviewer_schema_recovery.validate_recovery_chain(
+        base, sid, ledger=ledger, parents=parents,
+        log_path_for=lambda identity: run_log_path(base, identity))
+    with admission.require_owner_stopped(base, source_run_id):
+        current = reviewer_seat_ledger.read(
+            base, sid, waiting_on=ledger.waiting_on,
+            business_sha256=ledger.business_sha256)
+        if current != ledger:
+            raise reviewer_tasks.ReviewerTaskError('schema recovery 来源账在 owner lease 前后漂移')
+        return reviewer_schema_recovery.inspect_rejection(
+            base, sid, ledger=ledger, parent=source,
+            log_path=run_log_path(base, source_run_id),
+            profile=target.contract.profiles.commander,
+            replacement_schema_sha256=replacement_schema_sha256,
+            validation_code_version=validation_code,
+            replacement_subject_sha256=replacement_subject_sha256)
+
+
 def _recover_protocol_reviewer_action(
         base: str, sid: str, *, epoch: ExecutionEpoch,
         current: OperatorNext, task: reviewer_tasks.ReviewerTask,
@@ -2416,6 +2476,15 @@ def _find_replayable_reviewer_action(
             continue
         if record.waiting_on != waiting_on:
             continue
+        if (record.waiting_on in reviewer_schema_recovery.WAITING_ON
+                and record.business_sha256 == task.business_sha256):
+            mixed_ledger = reviewer_seat_ledger.read(
+                base, sid, waiting_on=record.waiting_on,
+                business_sha256=record.business_sha256)
+            if (mixed_ledger is not None
+                    and any(row.schema_recovery is not None for row in mixed_ledger.turns)
+                    and record.schema_recovery_response is None):
+                raise reviewer_tasks.ReviewerTaskError('混合席位账的决定缺实际新 session/原回答证明')
         is_stage5_batch = (
             record.node == 'stage5.review'
             and record.flags in {
@@ -2510,6 +2579,15 @@ def _find_replayable_reviewer_action(
             current_parent_run_id=current_parent_run_id)
     candidates.sort(key=lambda item: item[0])
     _order, path, record, replay_options, stage5_state = candidates[-1]
+    if record.schema_recovery_response is not None:
+        if (record.business_sha256 != task.business_sha256
+                or record.review_token != current_token):
+            raise reviewer_tasks.ReviewerTaskError('schema recovery 决定的业务/token 已变化')
+        reviewer_schema_recovery.validate_action_record(
+            base, sid, record=record,
+            parents={row.run_id: row for row in records(base)},
+            log_path_for=lambda identity: run_log_path(base, identity),
+            current_parent_run_id=current_parent_run_id)
     if record.protocol_recovery is not None:
         with admission.require_owner_stopped(base, record.run_id):
             ledger = reviewer_seat_ledger.read(
@@ -5723,11 +5801,46 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 holder['error'] = exc
                 raise
 
+        def is_stage4_recovery_task(task: reviewer_tasks.ReviewerTask) -> bool:
+            if task.waiting_on not in reviewer_schema_recovery.WAITING_ON:
+                return False
+            ledger = reviewer_seat_ledger.read(
+                base, sid, waiting_on=task.waiting_on,
+                business_sha256=task.business_sha256)
+            return ledger is not None and any(row.schema_recovery is not None for row in ledger.turns)
+
+        def prepare_stage4_recovery_action(
+                task: reviewer_tasks.ReviewerTask, current: OperatorNext,
+                turn: CommanderTurnResult, session_id: str, seat_turn_id: str | None,
+                holder: dict[str, object]) -> None:
+            """新会话真实决定先 bind/durable，后 finish；与未知写盘异常分开。"""
+            holder['stage4_recovery'] = True
+            if seat_turn_id is None or turn.final_response is None:
+                raise reviewer_tasks.ReviewerTaskError('Stage4 schema recovery 缺原始响应或实际席位')
+            response_sha256 = _reviewer_turn_response_sha256(turn, task.request_path)
+            reviewer_seat_ledger.bind_response(
+                base, sid, waiting_on=task.waiting_on, business_sha256=task.business_sha256,
+                turn_id=seat_turn_id, provider_response_sha256=response_sha256)
+            try:
+                action, digest, record_path = _materialize_reviewer_response(
+                    task, current, turn.final_response,
+                    persist_validated=lambda action, digest: _record_reviewer_action(
+                        base, sid, run_id=run_id, epoch=epoch, task=task, action=action,
+                        reviewer_session_run_id=session_id, reviewer_seat_turn_id=seat_turn_id,
+                        provider_response_sha256=digest,
+                        schema_recovery_response=_reviewer_response_document(turn.final_response)[0]),
+                    preserve_validated=lambda candidate, digest: _preserve_validated_reviewer_residue(
+                        base, sid, candidate, digest))
+                holder.update(action=action, response_sha256=digest, record_path=record_path)
+            except _ReviewerResponseTypedInvalid as exc:
+                holder.update(error=exc, response_sha256=response_sha256)
+
         def run_reviewer_turn(
                 task: reviewer_tasks.ReviewerTask,
                 prompt: str, *, purpose: str = 'review',
                 progress_sha256: str | None = None,
                 activity: str | None = None,
+                schema_recovery: ReviewerSchemaRecoveryProof | None = None,
                 before_success_finish: Callable[
                     [CommanderTurnResult, str, str | None], None] | None = None,
                 ) -> CommanderTurnResult:
@@ -5854,6 +5967,13 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             # 持久记账。surface 变化（如返修落盘）即新 binding、新席。
             seat = open_reviewer_seats.get(binding)
             output_schema_digest = _prepare_output_schema(reviewer_output_schema)[2]
+            if schema_recovery is not None:
+                if (seat is not None or purpose != 'schema_recovery'
+                        or schema_recovery.replacement_schema_sha256 != output_schema_digest
+                        or schema_recovery.replacement_subject_sha256
+                        != _sha256_bytes(reviewer_prompt.encode('utf-8'))
+                        or schema_recovery.validation_code_version != epoch.code_version):
+                    raise UnsupportedRunMode('schema recovery 的新会话/当前请求身份已漂移')
             if seat is None:
                 seat = _ReviewerSeat(
                     session_run_id=jobs.new_job_id(),
@@ -5876,11 +5996,41 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             def reserve_seat_turn() -> None:
                 nonlocal seat_reserved, seat_reservation_error
                 try:
-                    reviewer_seat_ledger.reserve(
-                        base, sid, purpose=purpose,
-                        session_run_id=seat.session_run_id,
-                        turn_id=seat_turn_id, parent_run_id=run_id,
-                        epoch_id=epoch.epoch_id, **seat_identity)
+                    def reserve() -> None:
+                        reviewer_seat_ledger.reserve(
+                            base, sid, purpose=purpose,
+                            session_run_id=seat.session_run_id,
+                            turn_id=seat_turn_id, parent_run_id=run_id,
+                            epoch_id=epoch.epoch_id, schema_recovery=schema_recovery,
+                            **seat_identity)
+
+                    if schema_recovery is None:
+                        reserve()
+                    else:
+                        # 在原 owner lease 内重验所有来源，并把同一账快照 CAS
+                        # 追加为耗额恢复轮；不能让 preview 的旧证明直接授权 wire。
+                        with admission.require_owner_stopped(
+                                base, schema_recovery.source_parent_run_id):
+                            ledger = reviewer_seat_ledger.read(base, sid, **seat_identity)
+                            parents = {row.run_id: row for row in records(base)}
+                            source = parents.get(schema_recovery.source_parent_run_id)
+                            if ledger is None or source is None:
+                                raise reviewer_seat_ledger.ReviewerSeatRefused(
+                                    'schema recovery 来源账或 parent 消失')
+                            reviewer_schema_recovery.validate_recovery_chain(
+                                base, sid, ledger=ledger, parents=parents,
+                                log_path_for=lambda identity: run_log_path(base, identity))
+                            checked = reviewer_schema_recovery.inspect_rejection(
+                                base, sid, ledger=ledger, parent=source,
+                                log_path=run_log_path(base, source.run_id),
+                                profile=plan.profiles.commander,
+                                replacement_schema_sha256=str(output_schema_digest),
+                                validation_code_version=epoch.code_version,
+                                replacement_subject_sha256=seat.prompt_sha256)
+                            if checked != schema_recovery:
+                                raise reviewer_seat_ledger.ReviewerSeatRefused(
+                                    'schema recovery 来源 proof 在发送前漂移')
+                            reserve()
                 except BaseException as exc:  # noqa: BLE001 —— 转成 typed stop
                     seat_reservation_error = exc
                     raise
@@ -5977,6 +6127,22 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             previous_request_sha256 = reviewer_correction_request_sha256
             if reason is None or previous_request_sha256 is None:
                 raise RuntimeError('pending reviewer correction 缺拒绝事实')
+            if waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON:
+                correction_ledger = reviewer_seat_ledger.read(
+                    base, sid, waiting_on=task.waiting_on,
+                    business_sha256=task.business_sha256)
+                reviewer_correction_attempts = reviewer_seat_ledger.corrections_used(correction_ledger)
+                if (correction_ledger is None
+                        or reviewer_correction_attempts >= correction_ledger.max_corrections):
+                    _close_reviewer_seat(binding, error_kind='reviewer_seat_budget')
+                    latest_rc = 2
+                    latest_error_kind = 'reviewer_seat_budget'
+                    latest_outcome = AgentDeliveryOutcome(
+                        state='stopped', checked_at=int(time.time()),
+                        reason=f'Reviewer 纠错预算已用尽；原拒因：{reason}')
+                    return CommanderTurnResult(
+                        exit_code=2, provider_session_id=None,
+                        continue_ready=False, outcome=latest_outcome)
             attempt = reviewer_correction_attempts + 1
             correction_progress = (
                 stage2_review_ledger.progress_with_feedback(
@@ -6004,6 +6170,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         prepared_before_finish)
 
                 before_success_finish = prepare_stage5_correction
+            elif is_stage4_recovery_task(task):
+                before_success_finish = lambda got, session_id, seat_turn_id: (
+                    prepare_stage4_recovery_action(
+                        task, current, got, session_id, seat_turn_id, prepared_before_finish))
             turn = run_reviewer_turn(
                 task,
                 reviewer_tasks.correction_prompt(
@@ -6036,7 +6206,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         # 拒因写盘失败，上面的异常会保留 record 并以 unknown 收口。
                         _discard_reviewer_action_record(
                             base, durable_no_progress)
-                elif is_stage5_trim_task(task):
+                elif is_stage5_trim_task(task) or is_stage4_recovery_task(task):
                     durable_no_progress = prepared_before_finish.get(
                         'record_path')
                     persist_pending_correction(
@@ -6064,7 +6234,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             try:
                 validated_record_path: Path | None = None
                 if (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                        or is_stage5_trim_task(task)):
+                        or is_stage5_trim_task(task)
+                        or prepared_before_finish.get('stage4_recovery')):
                     prepared_error = prepared_before_finish.get('error')
                     if isinstance(prepared_error, BaseException):
                         raise prepared_error
@@ -7016,6 +7187,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             if replay_rejection is not None:
                 return resume_stage2_pending_rejection(
                     task, replay_rejection)
+        schema_recovery_proof: ReviewerSchemaRecoveryProof | None = None
         if waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON:
             try:
                 prior_seat = reviewer_seat_ledger.read(
@@ -7033,7 +7205,28 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 return CommanderTurnResult(
                     exit_code=CRASH, provider_session_id=None,
                     continue_ready=False, outcome=latest_outcome)
-            if prior_seat is not None and prior_seat.turns:
+            if (prior_seat is not None
+                    and reviewer_schema_recovery.is_recovery_candidate(prior_seat)):
+                native_schema = stage4_reviewer_wire.output_schema_for(task)
+                schema_digest = _prepare_output_schema(native_schema)[2]
+                if schema_digest is not None:
+                    try:
+                        schema_recovery_proof = _schema_recovery_sources(
+                            base, sid, ledger=prior_seat,
+                            current_parent_run_id=run_id, validation_code=epoch.code_version,
+                            replacement_schema_sha256=schema_digest,
+                            replacement_subject_sha256=_sha256_bytes(
+                                stage4_reviewer_wire.prompt_for(task, task.prompt).encode('utf-8')))
+                    except (reviewer_tasks.ReviewerTaskError, NovelError, ValueError, OSError) as exc:
+                        reviewed_blockers.add(binding)
+                        latest_rc = 2
+                        latest_error_kind = 'reviewer_schema_recovery'
+                        latest_outcome = AgentDeliveryOutcome(
+                            state='stopped', checked_at=int(time.time()), reason=str(exc))
+                        return CommanderTurnResult(
+                            exit_code=2, provider_session_id=None,
+                            continue_ready=False, outcome=latest_outcome)
+            if prior_seat is not None and prior_seat.turns and schema_recovery_proof is None:
                 reviewed_blockers.add(binding)
                 pending = prior_seat.pending_correction
                 if pending is not None:
@@ -7060,7 +7253,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     exit_code=2, provider_session_id=None,
                     continue_ready=False, outcome=latest_outcome)
         reviewed_blockers.add(binding)
-        seat_purpose = 'review'
+        seat_purpose = 'schema_recovery' if schema_recovery_proof is not None else 'review'
         if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
             seat_purpose = review_seats.seat_for(
                 waiting_on,
@@ -7084,8 +7277,13 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     prepared_before_finish)
 
             before_success_finish = prepare_stage5_initial
+        elif schema_recovery_proof is not None:
+            before_success_finish = lambda got, session_id, seat_turn_id: (
+                prepare_stage4_recovery_action(
+                    task, current, got, session_id, seat_turn_id, prepared_before_finish))
         turn = run_reviewer_turn(
             task, task.prompt, purpose=seat_purpose,
+            schema_recovery=schema_recovery_proof,
             activity=_reviewer_activity(task),
             before_success_finish=before_success_finish)
         if turn.exit_code != 0:
@@ -7093,7 +7291,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         try:
             validated_record_path: Path | None = None
             if (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                    or is_stage5_trim_task(task)):
+                    or is_stage5_trim_task(task)
+                    or prepared_before_finish.get('stage4_recovery')):
                 prepared_error = prepared_before_finish.get('error')
                 if isinstance(prepared_error, BaseException):
                     raise prepared_error

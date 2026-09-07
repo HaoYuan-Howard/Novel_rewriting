@@ -366,6 +366,17 @@ batch，只走 Stage2 定向恢复与 Pro 重建；
 `response-repair` 是 legacy DeepSeek 的零 LLM CLI sidecar，不是 node，不另造 preview。账本会恢复中断前已发生的
 调用与 accepted-attempt 联结；不能删隔离目录、Stage2 checkpoint、换参数或清缓存来“重新开始”。
 
+## Commander 请求 schema 拒绝后的有界恢复
+
+Codex 明确以 HTTP 400 `invalid_json_schema` 拒绝输出 schema 且没有模型回答时，先修复代码中的
+schema 编译与预检，再从前端原书卡「授权并开始跑书」。Supervisor 自动核对原 parent 已结束、
+owner 已停止，以及原席位、会话、费用和完整公开协议日志；当前干净代码与 schema 都必须不同于
+被拒版本，单纯重启造成的运输身份变化不触发重试。
+`codex-output-schema-rejection-v1` 保留原失败与未知 usage，在剩余纠错预算内开一轮
+`schema_recovery`，使用 fresh session 与完整当前工作包。它不返还首审、不生成人工决定，
+后续仍由正常 Reviewer 和确定性状态机继续。相同 schema、普通 400、未知错误或证据缺失均不重试；
+不要手工清账、删除席位或续用携带旧 schema 的 provider session。
+
 ## Commander 已完成回答的协议误拒恢复
 
 已知 Codex WebSockets → HTTPS 传输切换通知若被旧版工具守卫误拒，而服务协议日志仍有唯一完整

@@ -727,8 +727,23 @@ class CliCommanderDriver(CommanderDriver):
                 exit_code=exit_code, observation=observation,
                 wire_evidence=wire_evidence,
                 final_response=final_response)
+        # Codex 的 provider 拒绝在 stdout 的结构化 error/turn.failed 中，stderr
+        # 可以完全为空；仅取 stderr 会把不可热重试的 schema 错误洗成 agent_command。
+        failure_messages = [_text(completed.stderr)]
+        for line in _text(completed.stdout).splitlines():
+            try:
+                event = decode_wire_json(line)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get('type') == 'error' and isinstance(event.get('message'), str):
+                failure_messages.append(event['message'])
+            if (event.get('type') == 'turn.failed' and isinstance(event.get('error'), dict)
+                    and isinstance(event['error'].get('message'), str)):
+                failure_messages.append(event['error']['message'])
         kind, status, retryable = classify_agent_command_failure(
-            _text(completed.stderr), usage=observation.usage)
+            '\n'.join(failure_messages), usage=observation.usage)
         return CommanderProcessResult(
             exit_code=exit_code, observation=observation,
             failure_kind=kind, status=status, retryable=retryable,
