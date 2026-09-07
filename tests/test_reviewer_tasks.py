@@ -1522,7 +1522,8 @@ def test_stage2_options_bind_real_workpack_sha_and_blueprint_token(
     options = reviewer_tasks._submission_options({
         'global': {
             'workpack_sha256': '7' * 64,
-            'items': [{'current_state': 'pending'}],
+            'items': [{'current_state': 'pending', 'item_id': 'item-1',
+                       'subject_sha256': '1' * 64}],
         },
         # 生产 ``--emit-review-template`` 交付的是注册表版本化信封；
         # 直接塞逻辑 payload 会漏掉本次真实 UI/Supervisor 边界回归。
@@ -1547,6 +1548,7 @@ def test_stage2_options_bind_real_workpack_sha_and_blueprint_token(
     # Commander 只编辑逻辑 payload；可信 loader 必须在交给 CLI 前恢复同一份
     # v2 信封，否则下一步 ``store.read_external`` 会因缺版本标记再次停机。
     scope['reason'] = '已逐章核对当前 blocking workpack，证据不足项保留 UNVER'
+    options[0]['exact_request']['action']['input_payload']['decisions'] = []
     request_path = tmp_path / 'stage2-reviewer-request.json'
     request_path.write_text(
         json.dumps(options[0]['exact_request'], ensure_ascii=False),
@@ -1776,6 +1778,7 @@ def test_stage2_prereview_is_read_only_compact_and_rebinds_live_surface(
     assert 'subject_cards' in prereview.prompt
     assert 'claim_evidence_index' in prereview.prompt
     payload = copy.deepcopy(prereview.input_template)
+    payload['decisions'] = []
     payload['blocking_scope']['state'] = 'PASS'
     payload['blocking_scope']['reason'] = '已逐章逐项阅读完整正文并复核'
     prereview.request_path.write_text(json.dumps({

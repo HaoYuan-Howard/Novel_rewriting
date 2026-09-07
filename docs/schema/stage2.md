@@ -417,6 +417,19 @@ collection→member 映射，以及继承现役 operation model、专门化当�
 
 ### Headless Reviewer compact wire 与稀疏 canonical edit
 
+完整 blocking scope 的预审与唯一 `--review-decisions` task 使用
+`novel-stage2-scope-review-delta-v1`。Supervisor 从同一 workpack 为 canonical 模板补齐
+允许提交的 item/hash 行；这些行是例外闭集，不能把 CLI 原始空例外数组误解为禁止例外。
+wire 只含 schema、exact-request digest、scope 的 state/reason/evidence 与逐项例外的
+item_id/state/reason/evidence。actor、wrapper、scope 身份和逐项 SHA 可信注入；例外必须是
+模板的无重复有序子序列，允许为空，scope 默认 PASS 不覆盖任何例外 FAIL/UNVER。没有
+scope 的逐项订正仍要求提交全部指定行；多选与独立终审不被该运输协议接管。正式
+`GlobalReviewDecisionSet` 与 artifact 版本不变，所有判断仍由原 loader 和 producer 复验。
+预审原始 response digest 与组装后候选 digest 分别用于审计和内容寻址，durable 成功后
+才晋升 scratch。旧瞬时输出形状不迁移；冻结空 scope 模板导致合法例外无法提交的已终态
+席位账，在修复提交后按现有 `reconcile --stage2-review-reopen` 的 CAS 归档入口恢复，保留
+完整旧席位与拒因；不把普通模型答错当成重开理由。
+
 `submission_options[].exact_request` 仍保存 `novel-reviewer-action-v1` 的完整 canonical request；公开
 typed action、CLI producer 与书内 `global_edit.json` 的形状均未改变。只有 headless AgentRun 当前
 immutable task 的唯一 submission option 恰为 `stage2.global --apply-edit` 时，Commander response 才使用运输协议

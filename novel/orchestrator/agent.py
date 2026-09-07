@@ -2966,6 +2966,16 @@ def _materialize_stage2_prereview_response(
         ) -> tuple[dict[str, object], str, Path | None]:
     """预审由 Supervisor typed-load，并在 scratch 晋升前先 durable。"""
     document, digest = _reviewer_response_document(response)
+    candidate_digest = digest
+    if stage2_reviewer_wire.uses_compact_wire(task):
+        try:
+            document = stage2_reviewer_wire.assemble(task, document)
+        except stage2_reviewer_wire.Stage2ReviewerWireError as exc:
+            raise _ReviewerResponseTypedInvalid(str(exc)) from exc
+        candidate_digest = _sha256_bytes(json.dumps(
+            document, ensure_ascii=False, sort_keys=True,
+            separators=(',', ':'), allow_nan=False,
+        ).encode('utf-8') + b'\n')
     candidate = _reviewer_candidate_path(task.request_path)
     validated = False
     promoted = False
@@ -2986,7 +2996,7 @@ def _materialize_stage2_prereview_response(
         if (validated and record_path is None and not promoted
                 and preserve_validated is not None):
             try:
-                preserved = preserve_validated(candidate, digest)
+                preserved = preserve_validated(candidate, candidate_digest)
                 if hasattr(exc, 'add_note'):
                     exc.add_note(f'typed-valid Stage2 预审已隔离保留：{preserved}')
             except BaseException as preserve_error:  # noqa: BLE001
@@ -5006,7 +5016,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     stage2_reviewer_wire.output_schema_for(prereview_task))
                 turn = _run_commander_turn(
                     epoch, None,
-                    reviewer_prompt=prereview_task.prompt,
+                    reviewer_prompt=stage2_reviewer_wire.prompt_for(
+                        prereview_task, prereview_task.prompt),
                     reviewer_output_schema=prereview_output_schema,
                     fresh_session_run_id=review_session_id,
                     read_only=True,

@@ -1444,6 +1444,26 @@ def _global_review_template(raw: Any) -> dict[str, Any]:
             'Stage2 global review template 不符合当前版本 typed 契约') from exc
 
 
+def _bind_global_scope_decisions(
+    template: dict[str, Any], rows: list[dict[str, Any]],
+) -> None:
+    """scope 默认裁决之外仍须允许逐项例外；模板行是闭集，不是必填答案。
+
+    CLI 的 scope 模板故意没有例外。不能把那个空数组当成 Reviewer 无权指出
+    FAIL/UNVER：这里从同一不可变 workpack 补齐可选择的 item/hash 身份，接收器
+    只允许提交该闭集的有序子序列，运输层再省去重复输出固定 SHA。
+    """
+    scope = template.get('blocking_scope')
+    if not isinstance(scope, dict) or scope.get('expected_item_count') != len(rows):
+        raise ReviewerTaskError('Stage2 blocking scope 与 workpack 行数不一致')
+    template['decisions'] = [{
+        'item_id': row['item_id'],
+        'expected_subject_sha256': row['subject_sha256'],
+        'state': 'UNVER', 'reason': _REASON, 'evidence': [],
+        'generation_disposition': None,
+    } for row in rows]
+
+
 def _stage2_final_review_options(
     pack: dict[str, Any],
     current: OperatorNext,
@@ -2109,6 +2129,7 @@ def _submission_options(
                     raise ReviewerTaskError('Stage2 global workpack 缺 workpack_sha256')
                 scope['expected_workpack_sha256'] = workpack_sha
                 scope['reason'] = _REASON
+                _bind_global_scope_decisions(template, rows)
             else:
                 # GlobalEdit 后只重审 subject hash 已变化的 pending 行；已继承的 PASS /
                 # UNVER 决定不能被一个新的 scope 默认值覆盖。
@@ -3178,6 +3199,7 @@ def build_stage2_prereview_task(
         raise ReviewerTaskError('Stage2 预审 workpack 缺 workpack_sha256')
     scope['expected_workpack_sha256'] = workpack_sha
     scope['reason'] = _REASON
+    _bind_global_scope_decisions(template, rows)
     input_template = GlobalReviewDecisionSet.model_validate(
         template).model_dump(mode='json')
     business_sha256 = _stage2_business_sha256(pack, waiting_on)
@@ -3833,12 +3855,23 @@ def _validate_global_review_binding(
         (row.get('item_id'), row.get('expected_subject_sha256'))
         for row in submitted_rows
     ]
-    if submitted_ids != expected_ids:
+    if expected.get('blocking_scope') is not None:
+        # scope 已绑定完整主体；例外数组可以为空，也可以逐项覆盖默认裁决。
+        # 任意 ID、错 hash、重复项或乱序都不属于这个冻结闭集。
+        selected = set(submitted_ids)
+        matched = [row for row in expected_rows if (
+            row.get('item_id'), row.get('expected_subject_sha256')) in selected]
+        bound_ids = [(row.get('item_id'), row.get('expected_subject_sha256'))
+                     for row in matched]
+    else:
+        matched = expected_rows
+        bound_ids = expected_ids
+    if submitted_ids != bound_ids:
         raise ReviewerTaskError(
             'Stage2 review-decisions 的 item_id/expected_subject_sha256 '
             '必须逐字保留模板')
     for index, (submitted_row, expected_row) in enumerate(
-            zip(submitted_rows, expected_rows, strict=True)):
+            zip(submitted_rows, matched, strict=True)):
         if frozenset(submitted_row) != frozenset(expected_row):
             raise ReviewerTaskError(
                 f'Stage2 review-decisions.decisions[{index}] 字段集合必须逐字保留模板')
@@ -3909,7 +3942,7 @@ def load_stage2_prereview(task: Stage2PrereviewTask) -> dict[str, Any]:
     except ValidationError as exc:
         raise ReviewerTaskError(_typed_validation_reason(
             'Stage2 预审决定不符合 typed 契约', exc)) from exc
-    _validate_global_review_binding(payload, task.input_template)
+    _validate_global_review_binding(logical, task.input_template)
     return logical
 
 
@@ -4133,7 +4166,7 @@ def load_action(
                         _stage2_submission_option(body, submission_options))
                 else:
                     _stage2_bound_submission_template(
-                        body, submission_options, input_payload,
+                        body, submission_options, logical_payload,
                         _validate_global_review_binding)
                 artifact = STAGE2_GLOBAL_REVIEW_DECISIONS
             else:

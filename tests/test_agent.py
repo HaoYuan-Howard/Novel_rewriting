@@ -1016,6 +1016,16 @@ def _install_stage2_prereview_replay_harness(
         'workpack_sha256': identity['workpack_sha256'],
         'input_payload': decision,
     }
+    from novel.orchestrator import stage2_scope_wire
+    canonical_response = response
+    response = {
+        'schema': stage2_scope_wire.WIRE_SCHEMA,
+        'expected_exact_request_sha256': stage2_scope_wire._sha({
+            **canonical_response, 'input_payload': template}),
+        'blocking_scope': {key: decision['blocking_scope'][key]
+                           for key in ('state', 'reason', 'evidence')},
+        'decisions': [],
+    }
     ready = SimpleNamespace(
         code_version='test-code-version', state='ready', action=None,
         surface_seal='a' * 64,
@@ -1119,6 +1129,7 @@ def _install_stage2_prereview_replay_harness(
     monkeypatch.setattr(agent, '_execute_reviewer_node_action', execute)
     return SimpleNamespace(
         identity=identity, template=template, response=response,
+        canonical_response=canonical_response,
         ready=ready, blocked=blocked, reads=reads,
         prereview_paths=prereview_paths, live_paths=live_paths,
         blueprint_runs=blueprint_runs, invocations=invocations,
@@ -1291,7 +1302,7 @@ def test_stage2_prereview_ledger_identity_mismatch_closes_without_wire(
             sid='42', run_id=old_run, epoch_id='old-epoch',
             reviewer_session_run_id=old_session,
             provider_response_sha256='9' * 64,
-            input_payload=copy.deepcopy(harness.response['input_payload']),
+            input_payload=copy.deepcopy(harness.canonical_response['input_payload']),
             recorded_at=1, **harness.identity))
 
     rec = agent.start(

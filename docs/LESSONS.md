@@ -216,6 +216,8 @@ wire 可以只承载最小 delta，但 Supervisor 必须从同一 exact request 
 不得把 exact request 里的 no-op 骨架带进业务 edit；已提交行必须是模板的无重复有序子序列。
 不可编辑字段、已提交行的乐观锁 SHA 和主体 SHA 一律注入，不靠模型复述。transport
 原始 digest 用来识别模型是否重复回答，assembled content digest 用来寻址真正保存的候选，两者用途不同。
+默认裁决加逐项例外的协议尤其不能把空例外模板误当成不可增行的空闭集；必须从同一
+workpack 绑定允许的例外身份，并验证完整 producer→模板→wire→loader 消费链能保留 FAIL。
 
 付费 Reviewer 回答一旦通过 typed loader，就必须在 canonical scratch 晋升之前按内容寻址持久化；
 Stage2 node 也不例外。pause/stop/重启后可按同一 business + workpack binding 零模型重放，只有

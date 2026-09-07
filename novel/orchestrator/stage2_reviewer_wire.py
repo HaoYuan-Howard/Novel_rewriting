@@ -64,7 +64,7 @@ from contracts.schema.stage2 import (
     WorldRuleResponse,
 )
 from novel.agents.session_client import agent_json_schema
-from novel.orchestrator import queue
+from novel.orchestrator import queue, stage2_scope_wire
 
 
 WIRE_SCHEMA = 'novel-stage2-reviewer-delta-v2'
@@ -340,7 +340,9 @@ def wire_binding(task: _ReviewerTaskLike) -> Stage2ReviewerWireBinding:
 
 
 def uses_compact_wire(task: object) -> bool:
-    """只按真实 option 形状判断本轮是否属于 compact apply-edit。"""
+    """只按真实模板判断本轮是否属于 compact scope 或 apply-edit。"""
+    if stage2_scope_wire.exact_request(task) is not None:
+        return True
     options = getattr(task, 'submission_options', None)
     if (not isinstance(options, Sequence)
             or isinstance(options, (str, bytes, bytearray))):
@@ -540,6 +542,8 @@ def _post_review_wire_type(value: Any, digest: str) -> type[StrictModel]:
 
 def response_model(task: _ReviewerTaskLike) -> type[StrictModel]:
     """从当前 exact request 铸一份 portable、关闭式的动态响应模型。"""
+    if stage2_scope_wire.exact_request(task) is not None:
+        return stage2_scope_wire.response_model(task)
     option_id, exact = _apply_edit_option(task)
     exact_sha = _canonical_sha256(exact)
     digest = exact_sha[:12]
@@ -615,6 +619,8 @@ def output_schema_for(task: object) -> dict[str, Any] | None:
     不能反向 import 它们，否则调用方接线会形成环。这里按两种冻结 dataclass 的
     必要字段辨认，最终的本地 loader 仍会校验真实 task 类型与全部身份。
     """
+    if stage2_scope_wire.exact_request(task) is not None:
+        return agent_json_schema(stage2_scope_wire.response_model(task))
     if (hasattr(task, 'input_template')
             and hasattr(task, 'business_sha256')
             and hasattr(task, 'workpack_sha256')
@@ -631,6 +637,8 @@ def prompt_addendum(task: object) -> str:
     不嵌 response schema；同一份 schema 会由 CLI 原生 structured-output 参数发送。
     示例只说明 envelope 与保留语义，业务行的精确闭集以该原生 schema 为准。
     """
+    if stage2_scope_wire.exact_request(task) is not None:
+        return stage2_scope_wire.prompt_addendum(task)
     if not uses_compact_wire(task):
         return ''
     option_id, exact = _apply_edit_option(task)  # type: ignore[arg-type]
@@ -1160,6 +1168,11 @@ def assemble(
     让 wrapper binding、GlobalEdit 业务 schema、sentinel、HARD 与 producer completeness
     保持唯一判定源。
     """
+    if stage2_scope_wire.exact_request(task) is not None:
+        try:
+            return stage2_scope_wire.assemble(task, response_document)
+        except ValueError as exc:
+            raise Stage2ReviewerWireError(str(exc)) from exc
     option_id, exact = _apply_edit_option(task)
     expected_sha = _canonical_sha256(exact)
     compact = _parsed_document(task, response_document)
