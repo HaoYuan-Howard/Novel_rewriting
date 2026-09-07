@@ -85,6 +85,9 @@ source 的 generic prepared commit 仍归 `recoverable_checkpoint`，作为原 a
 只有 target recovery WAL 已实际创建并能绑定 target run/SHA，才归 `recoverable_prepared`。
 复验 request 的 Review/trim/frontier 是授权校验，必须隔离在 `RunContext.validation_reads()`；这些读取
 不得进入 writer 正文的普通来源边，冻结 request、旧正文与语义指令仍由 prompt/执行 journal 的 SHA 绑定。
+queue/permit 的只读恢复探针显式读取本书 `<base>/_service/ledger.jsonl` 的历史成本证据，不要求或替换
+`readonly_ctx` 的内存账；查询不得追加成本。`in_flight_or_unknown` 没有执行 argv，Supervisor 保留 unknown
+并正常关闭本次运行，不申请空参数许可、不启动默认 writer 或新 Commander。
 执行状态关闭为九态：`ready_paid / in_flight_or_unknown / recoverable_checkpoint /
 recoverable_prepared / landed_formal / landed_invalid / landed_rejected / expired_unstarted /
 consumed_resolved`。首轮 `started` 是首轮 wire intent；每次后续 writer turn 都先把 `retry_started` 和

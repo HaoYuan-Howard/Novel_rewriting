@@ -24,7 +24,7 @@ from novel.llm import stage5_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.node_agents import Stage5SessionPool
-from novel.orchestrator import admission, reviewer_action_evidence, reviewer_contract, queue
+from novel.orchestrator import admission, reviewer_action_evidence, reviewer_contract, queue, state
 from novel.run import RunContext
 from novel.stages.stage5 import reviewer_rewrite as rewrite, write
 from novel.store import ArtifactStore
@@ -147,12 +147,23 @@ def _pool(rig):
     return Stage5SessionPool(rig.paid, driver_factory=factory, concurrency=32, reviewer_rewrite=True), entered
 
 
+def _readonly_probes(rig):
+    """按 queue/permit 的真实只读上下文查账，查询前后不能追加费用或更换内存账。"""
+    ctx = state.readonly_ctx(rig.ctx.novel_dir, 'stage5.write', prov.code_version())
+    path = ledger_path(rig.base)
+    before = path.read_bytes()
+    probes = rewrite.reviewer_rewrite_batch_probes(ctx)
+    assert ctx.ledger.path is None
+    assert path.read_bytes() == before
+    return probes
+
+
 def test_two_rewrites_run_concurrently_and_then_close_one_batch(rig):
     pool, entered = _pool(rig)
     assert pool.concurrency == 4
     write.run_reviewer_rewrite(rig.paid, pool)
     assert sorted(entered) == ['provider-batch-1', 'provider-batch-2']
-    probes = rewrite.reviewer_rewrite_batch_probes(rig.paid)
+    probes = _readonly_probes(rig)
     assert [row.execution.state for row in probes] == ['landed_formal', 'landed_formal']
     assert rig.store.freshness('stage5/review_1.json').state == 'stale'
     for unit in rig.batch.requests:
@@ -208,6 +219,11 @@ def test_external_sibling_edit_does_not_expand_batch_authority(rig):
 
 def test_old_contaminated_prepared_delivery_recovers_without_new_model_calls(rig, monkeypatch):
     """旧代码把授权 audit 串入来源账后提交回滚，新代码仍可接管已有付费候选。"""
+    from contracts.schema.api import OperatorNextDecision
+    from contracts.schema.orchestration import QueueItem
+    from novel.orchestrator import execution_permit, operator
+    from tests.test_operator_next import _inbox, _overview
+
     pool, entered = _pool(rig)
     # 精确模拟旧版在生成前留下的假依赖；不得更改生产消费投影来承认这条边。
     ArtifactStore(rig.paid).read(TrimAudit, 'stage5/trim_audit_ch01.json')
@@ -223,9 +239,25 @@ def test_old_contaminated_prepared_delivery_recovers_without_new_model_calls(rig
                    _edges={}, _judged={}, _accounting={}, _usage_mark=None,
                    ledger=CostLedger(path=ledger_path(rig.base), run_id='batch-recovery', parent_run_id='recovery-parent'))
     for unit in rig.batch.requests:
-        pending = rewrite.current_reviewer_rewrite_request(free)
+        pending = rewrite._next_batch_probe(_readonly_probes(rig))
         assert pending.execution.state == 'recoverable_checkpoint'
         assert pending.request.request_sha256 == unit.request_sha256
+        flags = ['--recover-reviewer-rewrite-prepared', rig.paid.run_id,
+                 '--reviewer-rewrite-request-sha256', unit.request_sha256]
+        overview = _overview(rig.ctx.sid)
+        item = QueueItem(sid=rig.ctx.sid, node='stage5.write', flags=flags,
+                         steps=[], why='合成旧提交回滚后恢复',
+                         waiting_on=queue.WAITING_ON_STAGE5_REVIEWER_REWRITE)
+        decision = OperatorNextDecision(
+            base=str(rig.base), sid=rig.ctx.sid, code_version=prov.code_version(),
+            surface_seal='a' * 64, state='blocked', overview=overview, inbox=_inbox(),
+            action=operator._action(base=str(rig.base), sid=rig.ctx.sid,
+                                    code=prov.code_version(), surface_seal='a' * 64,
+                                    overview=overview, item=item))
+        monkeypatch.setattr(execution_permit, 'read_surface_seal', lambda *_a, **_k: 'a' * 64)
+        permit = execution_permit.permit_from_next(decision, 'stage5.write', flags)
+        assert permit.flags == flags and permit.paid is False
+        assert len(permit.external_inputs) == 1
         write.run_reviewer_rewrite_prepared_recovery(free, rig.paid.run_id, unit.request_sha256)
     assert len(entered) == 2
     assert [row.execution.state for row in rewrite.reviewer_rewrite_batch_probes(free)] == [

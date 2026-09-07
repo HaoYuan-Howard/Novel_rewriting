@@ -5190,6 +5190,16 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         if (current.state != 'blocked' or action is None
                 or action.waiting_on not in queue.DETERMINISTIC_RECOVERY_WAITING_ON):
             raise RuntimeError('Supervisor 交入了未登记的 deterministic blocker')
+        if (action.waiting_on == queue.WAITING_ON_STAGE5_REVIEWER_REWRITE
+                and not action.flags):
+            # queue 的 unknown 分支明确没有可执行 argv；它仍占住专属 waiter，
+            # 但不能被空 flags 解释成默认付费写作，也不能转交 Commander 重买一席。
+            return SupervisorActionResult(
+                exit_code=2, continue_ready=False, provider_session_id=None,
+                outcome=AgentDeliveryOutcome(
+                    state='unknown', checked_at=int(time.time()),
+                    reason=('Stage5 Reviewer 改写执行证据尚不能证明可恢复；'
+                            '当前没有可执行动作，保留原候选与执行账等待恢复')))
         try:
             permit = execution_permit.permit_from_next(
                 current, action.node, action.flags)

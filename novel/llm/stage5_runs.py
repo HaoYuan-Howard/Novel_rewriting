@@ -407,6 +407,7 @@ def restore_historical_reviewer_rewrite(
         input_sha256=input_sha256, system=system, user=user,
         response_model=response_model, max_tokens=max_tokens,
         validator=validator,
+        ledger_source_path=ledger_module.ledger_path(Path(ctx.novel_dir).parent),
     )
     state = _validate_state_payload(
         historical.checkpoint.state_payload,
@@ -1491,9 +1492,9 @@ def verify_historical_reviewer_rewrite_terminal(
     except (ValidationError, ValueError, TypeError) as exc:
         raise ProvenanceRefused(
             f'reviewer rewrite historical profile 不可验证：{exc}') from exc
-    ledger_path = getattr(ctx.ledger, 'path', None)
-    if ledger_path is None:
-        raise ProvenanceRefused('reviewer rewrite historical terminal 需要 ledger.jsonl')
+    # terminal/probe 是只读事实查询，不能要求 readonly_ctx 的内存账带生产写路径。
+    # 沿 Stage4 同类恢复口从本书 base 读取持久成本证据，绝不替换调用方 ledger。
+    ledger_path = ledger_module.ledger_path(Path(ctx.novel_dir).parent)
     spec = _run_spec(first.output_ordinal, 'reviewer_rewrite')
     historical = agent_runs._HistoricalContext(
         novel_dir=Path(ctx.novel_dir), node='stage5.write',

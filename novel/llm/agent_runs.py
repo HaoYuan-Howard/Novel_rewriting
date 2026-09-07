@@ -1312,13 +1312,15 @@ def restore_historical_run(
         input_sha256: str, system: str, user: str,
         response_model: type[M], max_tokens: int,
         validator: Callable[[M, ChatResponse], str | None] | None = None,
+        ledger_source_path: Path | None = None,
 ) -> RestoredHistoricalRun[M]:
     """只读复验一个旧 run，且不放宽普通 exact-code 恢复语义。
 
     先从 hash-closed ``run.json`` 取得旧 code/profile，再用它们和 source-run
     ``CostLedger`` 构造隔离 context；后续直接复用本模块现有的 run/request/
     checkpoint/session/ledger validators。current prompt/schema/input 仍由参数提供，
-    因而旧响应只能在当前 producer 恰好仍接受同一请求时被采用。
+    因而旧响应只能在当前 producer 恰好仍接受同一请求时被采用。只读规划上下文
+    使用内存账；业务恢复探针须显式给出持久成本证据路径，不替换调用方的账本。
     """
     source = check_run_id(source_run_id)
     if source == check_run_id(current_ctx.run_id):
@@ -1356,7 +1358,8 @@ def restore_historical_run(
         raise ProvenanceRefused(f'{run_path} 历史 executor profile 不可执行：{exc}') from exc
     if profile.model_dump(mode='json') != profile_payload:
         raise ProvenanceRefused(f'{run_path} 历史 profile 尚未完整物化')
-    ledger_path = getattr(current_ctx.ledger, 'path', None)
+    ledger_path = (ledger_source_path if ledger_source_path is not None
+                   else getattr(current_ctx.ledger, 'path', None))
     if ledger_path is None:
         raise ProvenanceRefused('historical adoption 需要盘上 ledger.jsonl')
     historical = _HistoricalContext(

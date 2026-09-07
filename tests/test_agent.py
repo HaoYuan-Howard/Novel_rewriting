@@ -8168,6 +8168,41 @@ def test_stage5_reviewer_rewrite_authority_rejects_ancestor_symlinks(
     assert list(external.iterdir()) == []
 
 
+def test_stage5_reviewer_rewrite_unknown_stops_without_permit_or_commander(
+        base, corpus, monkeypatch):
+    """专属 waiter 的空动作来自 unknown，不能变成默认 writer 或许可层崩溃。"""
+    current = SimpleNamespace(
+        state='blocked', code_version='test-code-version',
+        surface_seal='6' * 64, execution_token=None,
+        action=SimpleNamespace(
+            node='stage5.write', flags=[], action_sha256='7' * 64,
+            waiting_on=queue.WAITING_ON_STAGE5_REVIEWER_REWRITE))
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code', lambda *_a, **_k: current)
+    monkeypatch.setattr(
+        execution_permit, 'permit_from_next',
+        lambda *_a, **_k: pytest.fail('unknown 无动作不得申请执行许可'))
+    monkeypatch.setattr(
+        agent, '_assess_delivery', lambda *_a, **_k: AgentDeliveryOutcome(
+            state='unknown', reason='合成执行证据未知', checked_at=1))
+
+    def no_commander(*_args, **_kwargs):
+        pytest.fail('unknown 无动作不得重新购买 Commander')
+
+    monkeypatch.setattr(agent, '_default_spawn', lambda *_a, **_k: no_commander)
+    started = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(started.run_id, 10)
+    done = next(row for row in agent.records(base) if row.run_id == started.run_id)
+    assert done.exit_code == 2
+    assert done.outcome is not None and done.outcome.state == 'unknown'
+    assert '没有可执行动作' in done.outcome.reason
+    gate = admission.snapshot(base, started.run_id)
+    assert (not gate.opened or gate.closed) and not gate.active_claims
+    assert not beacon.open_executions(base, started.run_id)
+
+
 def test_stage5_reviewer_rewrite_normal_agent_path_seals_permanent_authority(
         base, corpus, monkeypatch):
     """FREE request 成功后先闭 session/seat 再 seal；active 不再参与 replay。"""
