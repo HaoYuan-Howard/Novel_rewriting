@@ -57,6 +57,13 @@ conda run -n novel_refactor python -X utf8 tools/verify_agent_e2e.py `
   --base <Output目录> --sid <sid> --run-id <Commander-run-id>
 ```
 
+默认 `fresh` 验收仍要求八个付费 Agent 节点均在指定 run 中有完整采纳证据。
+续跑可加 `--resume`：七层 current 产物、强闸、typed 定稿与交付检查不变，
+费用/session/adoption 只核本轮实际调用，报告显式标为 `mode=resume`，
+不能据此宣称八个节点在本轮重新执行。两种模式均逐 attempt 核对独立 Commander 席位；
+Stage6/7 定稿复用 production current proof，不把 API 审批检查单当第二套人工决定。
+v2 生命周期核对持久 epoch 开闭和 drain，旧 host phase 遥测仅用于 v1。
+
 ### Stage2 五次冷缓存性能与质量验收
 
 这不是模型 A/B。操作者可以在第一次跑数前从设置界面更换一次默认 Agent profile；同一批五次

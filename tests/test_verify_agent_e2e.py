@@ -4,6 +4,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from types import SimpleNamespace
+
+import pytest
 
 from contracts.invariants import AGENT_EXECUTOR_NODES
 from contracts.schema.orchestration import ProgressEvent
@@ -133,6 +137,106 @@ def test_epoch_producer_rows_link_through_explicit_agent_parent():
     assert result['state'] == 'pass'
     assert result['facts']['adoption_unlinked'] == 0
     assert result['facts']['turn_mismatches'] == 0
+
+
+def test_independent_commander_seats_close_without_claiming_book_delivery():
+    ledger, adoptions, sessions = _closed_chain()
+    first = sessions[0]
+    sessions[0] = replace(first, end=replace(first.end, delivery_state='blocked'))
+    second = _session(
+        session_id='reviewer-two', role='commander',
+        attempt_id='commander-two', node=None)
+    sessions.append(replace(second, end=replace(second.end, delivery_state='blocked')))
+    ledger.append({**ledger[0], 'attempt_id': 'commander-two',
+                   'session_run_id': 'reviewer-two'})
+    result = verifier.linkage_check(
+        run_id=_RUN_ID, sid=_SID, ledger_rows=ledger,
+        audit_rows=adoptions, sessions=sessions)
+    assert result['state'] == 'pass'
+    ledger.pop()
+    assert verifier.linkage_check(
+        run_id=_RUN_ID, sid=_SID, ledger_rows=ledger,
+        audit_rows=adoptions, sessions=sessions)['state'] == 'fail'
+
+
+@pytest.mark.parametrize('cli_version, model, expected', [
+    ('codex-cli 0.test', 'unknown', 'pass'),
+    (None, 'unknown', 'fail'),
+    ('codex-cli 0.test', 'different-model', 'fail'),
+])
+def test_unreported_actual_model_uses_registered_driver_evidence(
+        cli_version, model, expected):
+    ledger, adoptions, sessions = _closed_chain()
+    record = sessions[1]
+    record = replace(record, turns=(replace(
+        record.turns[0], actual_model=None, cli_version=cli_version),))
+    sessions[1] = record
+    ledger[1]['model'] = model
+    ledger[1]['request_model'] = _PROFILE['model']
+    result = verifier.linkage_check(
+        run_id=_RUN_ID, sid=_SID, ledger_rows=ledger,
+        audit_rows=adoptions, sessions=sessions)
+    assert result['state'] == expected
+    assert record.turns[0].actual_model is None
+    assert ledger[1]['model'] == model
+
+
+def test_resume_mode_discloses_scope_and_still_requires_each_executed_adoption():
+    ledger, adoptions, sessions = _closed_chain()
+    ledger, adoptions, sessions = ledger[:2], adoptions[:1], sessions[:2]
+    kwargs = dict(run_id=_RUN_ID, sid=_SID, ledger_rows=ledger,
+                  audit_rows=adoptions, sessions=sessions)
+    assert verifier.linkage_check(**kwargs)['state'] == 'fail'
+    resumed = verifier.linkage_check(**kwargs, resume=True)
+    assert resumed['state'] == 'pass'
+    assert resumed['facts']['scope'] == 'current_run_attempts'
+    kwargs['audit_rows'] = []
+    assert verifier.linkage_check(**kwargs, resume=True)['state'] == 'fail'
+
+
+def test_typed_approvals_are_checked_even_when_service_checklist_disagrees(monkeypatch):
+    approval = SimpleNamespace(
+        gate=dict.fromkeys(('s0', 's1', 's2', 's4', 's5', 's6', 's7'), True),
+        seen={'read': True, 'global': True})
+    approval.gate.update(s6=False, s7=False)
+    seen_nodes = []
+
+    def current(_base, _sid, node):
+        seen_nodes.append(node)
+        return True
+
+    monkeypatch.setattr(verifier.queue, '_human_gate_satisfied', current)
+    assert verifier.current_approval_check(None, _SID, approval)['state'] == 'pass'
+    assert seen_nodes == ['stage6.approve', 'stage7.approve']
+    assert approval.gate['s6'] is False
+    approval.gate.update(s6=True, s7=True)
+    monkeypatch.setattr(verifier.queue, '_human_gate_satisfied', lambda *_: False)
+    result = verifier.current_approval_check(None, _SID, approval)
+    assert result['state'] == 'fail'
+    assert result['facts']['missing_gates'] == ['s6', 's7']
+
+
+@pytest.mark.parametrize('failure', [None, 'missing_close', 'duplicate_close',
+                                     'undrained', 'end_before_close'])
+def test_v2_epoch_lifecycle_checks_real_sequence_without_legacy_telemetry(failure):
+    def event(kind, **values):
+        return SimpleNamespace(run_id=_RUN_ID, kind=kind, **values)
+
+    opened = event('epoch_opened', epoch=SimpleNamespace(epoch_id='epoch-1'))
+    closed = event('epoch_closed', epoch_id='epoch-1', drain_state='drained', exit_code=0)
+    ended = event('ended', exit_code=0)
+    events = [opened, closed, ended]
+    if failure == 'missing_close':
+        events = [opened, ended]
+    elif failure == 'duplicate_close':
+        events = [opened, closed, closed, ended]
+    elif failure == 'undrained':
+        closed.drain_state = 'reconciled'
+    elif failure == 'end_before_close':
+        events = [opened, ended, closed]
+    result = verifier.epoch_lifecycle_check(events, _RUN_ID)
+    assert result['state'] == ('pass' if failure is None else 'fail')
+    assert result['facts']['source'] == 'agent_run_v2_epochs'
 
 
 def test_missing_one_paid_node_adoption_is_not_a_complete_agent_only_book():

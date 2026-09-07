@@ -46,8 +46,12 @@ from novel import (                                                  # noqa: E40
 from novel.llm.ledger import (                                       # noqa: E402
     audit_path, ledger_path, read_jsonl_rows,
 )
+from novel.agent_model_identity import (                             # noqa: E402
+    resolve_agent_model_identity, resolve_ledger_model_identity,
+)
+from novel.errors import AgentModelIdentityRefused                    # noqa: E402
 from novel.orchestrator import (                                    # noqa: E402
-    admission, agent, approvals, beacon, delivery,
+    admission, agent, approvals, beacon, delivery, queue,
 )
 from novel.orchestrator.inspection import (                          # noqa: E402
     capture_operator_snapshot, read_surface_seal,
@@ -235,15 +239,25 @@ def _turn_matches_ledger(
     row: Mapping[str, Any],
 ) -> bool:
     profile = record.start.profile
+    if profile is None:
+        return False
+    try:
+        actual = resolve_agent_model_identity(
+            profile, turn.actual_model, cli_version=turn.cli_version,
+            require_driver_version=True)
+        recorded = resolve_ledger_model_identity(
+            profile, row.get('model'), cli_version=turn.cli_version,
+            require_driver_version=True)
+    except AgentModelIdentityRefused:
+        return False
     return (
         record.start.parent_run_id == row.get('run_id')
         and record.start.role == 'executor'
         and record.start.node == row.get('node')
         and record.start.chapter == row.get('chapter')
         and turn.attempt_id == row.get('attempt_id')
-        and turn.actual_model == row.get('model')
-        and profile is not None
-        and profile.model == turn.actual_model
+        and actual == recorded
+        and row.get('request_model', profile.model) == profile.model
         and profile.reasoning_effort == row.get('reasoning_effort')
         # 供应商未回显 effort 是明确的 unknown，不拿 requested
         # 回填 actual；一旦回显，就必须与冻结 profile 精确相等。
@@ -258,6 +272,7 @@ def linkage_check(
     audit_rows: Sequence[Mapping[str, Any]],
     sessions: Sequence[agent_session_audit.AgentSessionRecord],
     producer_run_ids: set[str] | None = None,
+    resume: bool = False,
 ) -> dict[str, Any]:
     """ledger ↔ session turn ↔ adoption 的逐 attempt 关闭式对账。"""
     run_ledger = [
@@ -319,17 +334,32 @@ def linkage_check(
     commander_rows = [
         row for row in run_ledger if row.get('role') == 'commander'
     ]
-    commander_linked = (
-        len(commander) == len(commander_rows) == len(commander_turns) == 1
-        and commander[0].end is not None
-        and commander[0].end.process_state == 'ok'
-        and commander[0].end.delivery_state == 'delivered'
-        and commander_rows[0].get('attempt_id') == commander_turns[0][1].attempt_id
-        and commander_rows[0].get('session_run_id') == commander[0].session_run_id
-        and commander_rows[0].get('model') == commander_turns[0][1].actual_model
-        and commander_rows[0].get('actual_reasoning_effort')
-        == commander_turns[0][1].actual_effort
-    )
+    # 现役 Commander 按审阅席位启动，提交决定时全书通常仍为 blocked；
+    # 全书交付由 outer/delivery 单独证明，不要求每一席自己完成全书。
+    commander_linked = bool(commander_turns) or resume
+    for record, turn in commander_turns:
+        row = ledger_by_attempt.get(str(turn.attempt_id or ''))
+        commander_linked &= (
+            row is not None and row.get('role') == 'commander'
+            and row.get('outcome') == 'ok'
+            and record.end is not None
+            and record.end.process_state == 'ok'
+            and record.end.delivery_state in ('delivered', 'blocked')
+            and row.get('session_run_id') == record.session_run_id
+            and row.get('model') == turn.actual_model
+            and record.start.profile is not None
+            and row.get('request_model', record.start.profile.model)
+            == record.start.profile.model
+            and row.get('reasoning_effort') == record.start.profile.reasoning_effort
+            and (turn.actual_model is None
+                 or turn.actual_model == record.start.profile.model)
+            and row.get('actual_reasoning_effort') == turn.actual_effort
+            and (turn.actual_effort is None
+                 or turn.actual_effort == record.start.profile.reasoning_effort)
+        )
+    commander_linked &= (
+        len(commander_rows) == len(commander_turns)
+        and all(record.turns for record in commander))
 
     successful_executor_rows = [
         row for row in run_ledger
@@ -371,13 +401,16 @@ def linkage_check(
                 or linked[0].end.delivery_state != 'delivered'):
             adoption_not_delivered += 1
 
-    missing_adoption_nodes = sorted(
-        set(AGENT_EXECUTOR_NODES) - set(adoption_counts))
+    required_nodes = (
+        {str(row['node']) for row in successful_executor_rows}
+        | {str(record.start.node) for record in executors}
+        if resume else set(AGENT_EXECUTOR_NODES))
+    missing_adoption_nodes = sorted(required_nodes - set(adoption_counts))
     passed = (
         commander_linked
         and not open_sessions
         and not unknown_sessions
-        and bool(executors)
+        and (bool(executors) or resume)
         and successful_without_turn == 0
         and turn_mismatches == 0
         and orphan_executor_turns == 0
@@ -400,7 +433,58 @@ def linkage_check(
         adoption_not_delivered=adoption_not_delivered,
         adoptions_by_node=dict(sorted(adoption_counts.items())),
         missing_adoption_nodes=missing_adoption_nodes,
+        scope='current_run_attempts' if resume else 'all_agent_nodes_in_run',
     )
+
+
+def current_approval_check(base: Path, sid: str, approval: Any) -> dict[str, Any]:
+    """服务检查单不能替代 Stage6/7 producer 的当前 typed 定稿证明。"""
+    gates = dict(approval.gate)
+    for gate, node in (('s6', 'stage6.approve'), ('s7', 'stage7.approve')):
+        gates[gate] = queue._human_gate_satisfied(base, sid, node)
+    closed = sorted(key for key, value in gates.items() if value)
+    missing = sorted(set(APPROVAL_GATES) - set(closed))
+    seen = sorted(key for key, value in approval.seen.items() if value)
+    missing_seen = sorted(set(APPROVAL_SEEN) - set(seen))
+    return _check(
+        'current_hash_bound_approvals',
+        'pass' if not missing and not missing_seen else 'fail',
+        closed_gates=closed, missing_gates=missing,
+        seen=seen, missing_seen=missing_seen)
+
+
+def epoch_lifecycle_check(events: Sequence[Any], run_id: str) -> dict[str, Any]:
+    """v2 状态机认 durable epoch 开闭；没有旧 host 遥测不等于没有执行。"""
+    active: str | None = None
+    opened: set[str] = set()
+    closed: set[str] = set()
+    valid = True
+    ended = False
+    for event in events:
+        if event.run_id != run_id:
+            continue
+        if event.kind == 'epoch_opened':
+            epoch = event.epoch
+            valid &= (not ended and active is None and epoch is not None
+                      and epoch.epoch_id not in opened)
+            if epoch is not None:
+                active = epoch.epoch_id
+                opened.add(active)
+        elif event.kind == 'epoch_closed':
+            valid &= (not ended and event.epoch_id == active
+                      and event.epoch_id not in closed
+                      and event.drain_state == 'drained'
+                      and event.exit_code in (0, 1, 2))
+            closed.add(event.epoch_id)
+            active = None
+        elif event.kind == 'ended':
+            valid &= not ended and active is None and event.exit_code == 0
+            ended = True
+    passed = valid and ended and bool(opened) and opened == closed and active is None
+    return _check(
+        'operator_phase_lifecycle', 'pass' if passed else 'fail',
+        source='agent_run_v2_epochs', opened_epochs=len(opened),
+        closed_epochs=len(closed), ended=ended, valid_sequence=valid)
 
 
 def _workflow_metrics_for_run(
@@ -410,7 +494,8 @@ def _workflow_metrics_for_run(
     return workflow_metrics.collect(base, sid, run_id=run_id)
 
 
-def collect(base: str | Path, sid: str, run_id: str) -> dict[str, Any]:
+def collect(base: str | Path, sid: str, run_id: str, *,
+            resume: bool = False) -> dict[str, Any]:
     """收集一份不含书身份的机读验收报告。"""
     base_path = Path(base).resolve()
     service_before = _service_seal(base_path)
@@ -479,15 +564,7 @@ def collect(base: str | Path, sid: str, run_id: str) -> dict[str, Any]:
 
     approval = approvals.get(
         base_path, sid, overview=snapshot.overview, code=snapshot.code)
-    closed_gates = sorted(key for key, value in approval.gate.items() if value)
-    missing_gates = sorted(set(APPROVAL_GATES) - set(closed_gates))
-    seen = sorted(key for key, value in approval.seen.items() if value)
-    missing_seen = sorted(set(APPROVAL_SEEN) - set(seen))
-    checks.append(_check(
-        'current_hash_bound_approvals',
-        'pass' if not missing_gates and not missing_seen else 'fail',
-        closed_gates=closed_gates, missing_gates=missing_gates,
-        seen=seen, missing_seen=missing_seen))
+    checks.append(current_approval_check(base_path, sid, approval))
 
     metrics = _workflow_metrics_for_run(base_path, sid, run_id)
     drifted = sorted(
@@ -529,7 +606,7 @@ def collect(base: str | Path, sid: str, run_id: str) -> dict[str, Any]:
     checks.append(linkage_check(
         run_id=run_id, sid=sid, ledger_rows=ledger_rows,
         audit_rows=audit_rows, sessions=session_records,
-        producer_run_ids=producer_run_ids))
+        producer_run_ids=producer_run_ids, resume=resume))
 
     started_at = None if outer is None else outer.started
     telemetry = operator_telemetry.summarize(
@@ -546,7 +623,7 @@ def collect(base: str | Path, sid: str, run_id: str) -> dict[str, Any]:
         and all(all(phase['ended_at_ms'] is not None for phase in row['phases'])
                 for row in parent_sessions)
     )
-    checks.append(_check(
+    phase_check = _check(
         'operator_phase_lifecycle',
         'pass' if telemetry_passed else 'fail',
         parent_sessions=len(parent_sessions),
@@ -554,7 +631,10 @@ def collect(base: str | Path, sid: str, run_id: str) -> dict[str, Any]:
             row['state'] == 'completed' for row in parent_sessions),
         unfinished_parent_phases=sum(
             phase['ended_at_ms'] is None
-            for row in parent_sessions for phase in row['phases'])))
+            for row in parent_sessions for phase in row['phases']))
+    checks.append(
+        epoch_lifecycle_check(agent.read_events(base_path), run_id)
+        if outer is not None and outer.contract is not None else phase_check)
 
     full_surface_after = read_surface_seal(
         base_path, sid, code=snapshot.code,
@@ -589,6 +669,7 @@ def collect(base: str | Path, sid: str, run_id: str) -> dict[str, Any]:
         'schema': 'novel-agent-e2e-verification-v1',
         'sid': sid,
         'run_id': run_id,
+        'mode': 'resume' if resume else 'fresh',
         'result': _overall(checks),
         'checks': checks,
         # 目标值不在这里自动 go/no-go；只把 TODO-32 P3 要求的
@@ -602,9 +683,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument('--base', required=True)
     parser.add_argument('--sid', required=True)
     parser.add_argument('--run-id', required=True)
+    parser.add_argument('--resume', action='store_true',
+                        help='验收续跑：既有产物仍查 current，本轮费用只查实际调用，不宣称八个付费节点均在本轮执行')
     args = parser.parse_args(argv)
     try:
-        report = collect(args.base, args.sid, args.run_id)
+        report = collect(args.base, args.sid, args.run_id, resume=args.resume)
     except Exception as exc:  # noqa: BLE001 —— 验收器崩溃不能冒充业务 fail/pass
         report = {
             'schema': 'novel-agent-e2e-verification-v1',
