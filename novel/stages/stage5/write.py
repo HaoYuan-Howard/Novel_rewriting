@@ -238,8 +238,9 @@ class _ChapterResponseSource(Protocol):
 class ChapterCandidateFeedback:
     """可安全交回同一写手 session 的代码拒因。
 
-    Stage5 的机械 findings 可能包含未下发的源文字节；因此这里只给稳定规则元数据、
-    数量和注册表里的通用指令，绝不把 ``Finding.detail/evidence`` 原样发给 executor。
+    Stage5 的机械 findings 可能包含未下发的源文字节；通常只给稳定规则元数据、
+    数量和注册表里的通用指令。逐字义务缺失仅可回指当前不可变 given 中确实已下发的
+    原串；不能把整个 ``Finding.detail/evidence`` 当作反馈，扩张闭卷暴露面。
     revision regression 的 ``changes`` 只描述旧稿/新稿的规则计数变化；旧稿本来就在
     revise prompt 中，不增加闭卷暴露面。
     """
@@ -253,6 +254,8 @@ class ChapterCandidateFeedback:
     #: 只给数字/槽位账的补充行（如段落计划的对账读数）。它们来自代码确定性
     #: 计算，不含源文字节，与 privacy 边界一致。
     details: tuple[str, ...] = ()
+    #: 仅 verbatim_missing 使用；每项须逐字存在于本章已下发材料，顺序稳定且不重复。
+    required_materials: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         out: dict[str, object] = {
@@ -267,6 +270,8 @@ class ChapterCandidateFeedback:
             out['changes'] = list(self.changes)
         if self.details:
             out['details'] = list(self.details)
+        if self.required_materials:
+            out['required_materials'] = list(self.required_materials)
         return out
 
 
@@ -1155,6 +1160,7 @@ def _chapter_feedback(
     regressions: Sequence[str],
     *,
     paragraph_details: Sequence[str] = (),
+    given: str = '',
 ) -> tuple[ChapterCandidateFeedback, ...]:
     counts: dict[str, int] = {}
     for finding in findings:
@@ -1170,6 +1176,14 @@ def _chapter_feedback(
             instruction=rule.directive or rule.item,
             count=counts[rule_id],
             details=tuple(paragraph_details) if rule_id == 'paragraph_budget_missed' else (),
+            # 校验器的完整原文不属于写手输入。只回指已下发的精确原串，既让
+            # 有界修订知道具体缺了什么，也不靠 norm/近似匹配放进新文字。
+            required_materials=tuple(dict.fromkeys(
+                evidence
+                for finding in findings if finding.rule == rule_id
+                for evidence in finding.evidence
+                if evidence.strip() and evidence in given
+            )) if rule_id == 'verbatim_missing' else (),
         ))
     if regressions:
         rows.append(ChapterCandidateFeedback(
@@ -1542,6 +1556,7 @@ def evaluate_chapter_candidate(
         regressions=tuple(regressions),
         feedback=_chapter_feedback(
             findings, regressions,
+            given=prepared.given,
             paragraph_details=_paragraph_budget_details(
                 findings,
                 [ChapterSegment.model_validate(item) for item in segments],

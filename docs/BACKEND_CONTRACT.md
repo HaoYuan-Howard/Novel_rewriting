@@ -571,7 +571,7 @@ Stage5/6 从各自已经读取的 Stage1 文本即时计算确定性机械读数
 | R-7.1 | 全书只有一条 canonical **闭卷**写作路：写手收到写作上下文与保真材料，源章原文只供确定性校验、绝不进入 prompt；每章正式产物唯一落 `stage5/chNN.json`，正文由 producer-owned `segments` 按计划 slot 顺序确定性拼出 | `结构`（`novel/stages/stage5/prompts.py::build_material` / `write_system` + `novel/stages/stage5/write.py::_rel` / `_ordered_segments`） |
 | R-7.2 | 人只批准「按当前 Stage1 正文与 Stage4 计划启动全书闭卷写作」，不再逐章选择写作臂。授权落 `_service/approvals/<sid>.json` 的 `writing/writing_proof`，不是小说产物、不进 provenance，且不能替代 `R-5.20` 的当前 typed s4 结构批准；任何 Stage5 付费写作在首个 LLM 调用前必须两证齐全。默认按全书计划补齐所有缺章，已有章不重写，`--chapters` 才明确指定要重写的章 | `结构`（`novel/orchestrator/approvals.py::begin_writing` / `authorize_writing` + Stage5 付费最低边界 + `novel/stages/stage5/write.py::_chapters_of`）+ **`人`**（是否授权本轮付费写作，见 `B-19`） |
 | R-7.2b | 目标章在一个并发池内逐章起跑，硬上限 32；一章失败不取消其他已经起跑的章，结果仍按阅读序落盘和报告。`ResponseRepairRequired` 是该章停在下一采之前，不是全批网络故障：不得取消尚待起跑的其他章，同批成功章先落各自 canonical，再把修复终态交给外层 agent。40 章时同时在途峰值只能是 32；不再生成全书 Markdown 投影 | `结构`（`novel/stages/stage5/write.py::_run_group_parallel`）+ 并发、失败隔离、修复暂停与顺序回归测试 |
-| R-7.3 | 必须逐字写入的原话，逐条回写校验 | `闸门` |
+| R-7.3 | 必须逐字写入的原话，逐条回写校验。Agent 的缺失反馈必须精确回指已下发材料：只有原串完整包含于本章不可变 given 的缺失片段才可进入 required_materials，不能用近似匹配放进未下发原文，不回传 raw detail 或其他规则的 evidence；具体片段只进入模型 stdin，持久审计仍只留规则与数量 | `闸门`（`novel/stages/stage5/checks.py::fidelity_findings` + `novel/stages/stage5/write.py::_chapter_feedback` + `novel/agents/session_client.py::SessionAgentClient.queue_code_validation_feedback`）；原话回写、已下发精确反馈、闭卷边界与审计隔离回归查 |
 | R-7.3b | 原话允许**被一处提示语切开**（`「…，」我说，「…」`）——中文小说的标准写法。插入必须在原文字节上长成「收引号 + ≤12 内容字 + 开引号」；改词、插动作描写、只写半句照旧判缺失。放行单独留痕 | `闸门` + `INFO` |
 | R-7.4 | 必须保住的硬数字，**按数值比不按字面比**：下发面「30岁」、成稿「三十岁」= 满足 | `闸门` |
 | R-7.5 | 发明越界的**两个探针**：新数字（下发面以外的「数字+单位」逐个列出）· 新人物（只抓「本书已有的名字用字 + 称谓后缀」造出来的人，召回有缺口） | `INFO` |

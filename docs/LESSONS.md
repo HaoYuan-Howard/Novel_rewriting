@@ -225,6 +225,11 @@ wire 可以只承载最小 delta，但 Supervisor 必须从同一 exact request 
 默认裁决加逐项例外的协议尤其不能把空例外模板误当成不可增行的空闭集；必须从同一
 workpack 绑定允许的例外身份，并验证完整 producer→模板→wire→loader 消费链能保留 FAIL。
 
+闭卷修订反馈要区分“未下发原文”和“写手已见、却漏写的具体材料”。只给规则名会让有界修订
+变成反复猜测；明确的逐字义务可以把当前 finding 与不可变 given 做原串包含校验，只回指已下发的
+缺失片段。不要直接放开整份 finding，也不要用归一或近似匹配扩大暴露面；具体片段只到模型 stdin，
+持久审计继续只留规则、数量与身份。测试同时守住可修性、私有原文不外泄和恢复后的同一消费链。
+
 付费 Reviewer 回答一旦通过 typed loader，就必须在 canonical scratch 晋升之前按内容寻址持久化；
 Stage2 node 也不例外。pause/stop/重启后可按同一 business + workpack binding 零模型重放，只有
 canonical action 真正 landed 后才由书内 typed 产物接管恢复；不能在两者之间的崩溃窗丢掉已付费决定。

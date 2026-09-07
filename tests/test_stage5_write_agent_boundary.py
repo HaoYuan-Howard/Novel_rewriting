@@ -198,6 +198,39 @@ def test_evaluate_has_no_write_or_settle_and_feedback_does_not_leak_source(
     assert 'detail' not in encoded and 'evidence' not in encoded
 
 
+def test_verbatim_feedback_only_points_to_exact_material_already_given(monkeypatch):
+    _patch_prompt_boundary(monkeypatch)
+    _identity_normalization(monkeypatch)
+    given = '本章已下发的原话甲。\n本章已下发的原话乙。'
+    monkeypatch.setattr(write.prompts, 'build_material',
+                        lambda *_args: SimpleNamespace(given=given))
+    prepared = write.prepare_chapter_candidate(_entry(), _book(), revision=None)
+    private = '未下发原文里的完整句子'
+    hard = finding('verbatim_missing', detail=f'私有诊断：{private}', evidence=[
+        '本章已下发的原话甲。', private, '本章已下发的原话乙。',
+        '本章已下发的原话甲。', '本章 已下发的原话甲。',
+    ])
+    monkeypatch.setattr(write, '_judge', lambda *_args, **_kwargs: ([hard], ['缺原话'], []))
+    evaluation = write.evaluate_chapter_candidate(
+        _Source(), prepared, write.ChapterResponse(
+            segments=[write.ChapterSegment(slot='s01', text='候选正文。')]))
+    rows = evaluation.feedback_rows()
+    assert rows[0]['required_materials'] == [
+        '本章已下发的原话甲。', '本章已下发的原话乙。']
+    assert all(item in prepared.user for item in rows[0]['required_materials'])
+    assert private not in json.dumps(rows, ensure_ascii=False)
+    assert '私有诊断' not in json.dumps(rows, ensure_ascii=False)
+    assert '本章 已下发的原话甲。' not in json.dumps(rows, ensure_ascii=False)
+
+
+def test_material_feedback_does_not_open_other_rules_or_missing_given():
+    hard = finding('verbatim_missing', detail='不应发送', evidence=['原话'])
+    assert 'required_materials' not in write._chapter_feedback([hard], ())[0].to_dict()
+    other = finding('secret_leak', detail='不应发送', evidence=['原话'])
+    assert 'required_materials' not in write._chapter_feedback(
+        [other], (), given='原话')[0].to_dict()
+
+
 def test_agent_hard_resumes_same_chapter_purpose_without_refresh(monkeypatch):
     _patch_prompt_boundary(monkeypatch)
     _identity_normalization(monkeypatch)

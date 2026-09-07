@@ -257,6 +257,29 @@ def test_business_rejection_only_sends_feedback_on_resume(tmp_path):
     assert '证据片段' not in json.dumps(rejected, ensure_ascii=False)
 
 
+def test_stage5_attested_material_feedback_reaches_resume_but_not_audit(tmp_path):
+    from contracts.schema.report import finding
+    from novel.stages.stage5.write import _chapter_feedback
+
+    ctx = _ctx(tmp_path)
+    driver = _FakeDriver(['{"value":1}', '{"value":2}'])
+    client = SessionAgentClient(ctx, _profile(), driver, max_semantic_turns=2)
+    given, private = '本章已下发原话。', '不在下发材料里的源文'
+    client.ask_json('稳定约束', given, model_cls=_Answer, purpose='stage2.global')
+    rows = [r.to_dict() for r in _chapter_feedback([
+        finding('verbatim_missing', detail=private, evidence=[given, private]),
+    ], (), given=given)]
+    assert client.queue_code_validation_feedback(rows)
+    client.ask_json('稳定约束', given, model_cls=_Answer, purpose='stage2.global')
+    client.finish(process_state='ok', delivery_state='delivered')
+    client.close()
+    resume = driver.calls[1][2]
+    assert 'required_materials' in resume.prompt and given in resume.prompt
+    assert private not in resume.prompt
+    audit_text = json.dumps(_rows(tmp_path.joinpath(*AUDIT_REL)), ensure_ascii=False)
+    assert given not in audit_text and private not in audit_text
+
+
 def test_claude_structured_footer_is_once_and_hashes_exact_final_stdin(tmp_path):
     profile = _claude_profile()
     ctx = _ctx(tmp_path, profile=profile)

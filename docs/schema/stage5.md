@@ -173,6 +173,12 @@ v1 → v2 是破坏形状：删除 `mode`，路径从 `stage5/{mode}/chNN.json` 
 
 ### 2.2 正文归一、篇幅与来源账
 
+Agent 的机械拒因默认只回传稳定规则、数量和注册指令。`verbatim_missing` 可额外携带
+`required_materials`：从当前 finding 中稳定去重，只保留逐字完整包含于该章不可变 `given`
+的缺失片段，使同会话修订知道具体应补哪句。缺少 given、近似匹配、未下发原文与其他规则的
+evidence 均不能走此出口；不回显原始 detail，不增加闭卷材料。具体片段只进入后续模型 stdin，
+session/费用审计仍只记录规则与数量。普通生成、人工修订和 checkpoint 恢复共用纯候选评估链。
+
 `normalize_chapter` 在落盘前改标点、引号体和段落分隔；正式 `segments[].text` 记归一后的
 字节。归一计数进入报告，不另落一份 `mech`；异常引号以 INFO `quote_unbalanced` 出线。
 
