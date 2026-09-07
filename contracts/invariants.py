@@ -156,6 +156,10 @@ AGENT_RUN_STATE: Final = (
 #: 没有 Supervisor，因此只能 stop；v2 pending/running 才有 pause，paused 才有 resume。
 AGENT_RUN_CONTROLS: Final = ('pause', 'resume', 'stop')
 
+#: parent ended 所保留退出码的来源；外部 CLI 的同值数字不继承小说产物语义。
+#: 旧事件缺来源时保持未知，不从理由或诊断文字补推。
+AGENT_RUN_EXIT_ORIGINS: Final = ('novel_cli', 'commander', 'supervisor')
+
 #: 服务空间 retention preview 返回的候选类别。它描述的是服务端已经判定出的
 #: 清理对象，不是浏览器可自行选择或重算的维护策略；schema 只引用这一处取值面。
 RETENTION_CANDIDATE_KINDS: Final = (

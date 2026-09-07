@@ -424,9 +424,20 @@ lock 内截回 committed prefix、fsync，并分别追加 `authorized / applied`
 `CommanderAdmissionTailRepairRecord` 或 `BeaconTailRepairRecord`。记录另带
 `wire_version / ts / quarantine_name`；不得解析、补全、补 LF 或猜测半条 JSON/end。
 
-`ended` 事件在 `exit_code` 外另带 `outcome`（旧事件缺失时折叠成 `unknown`）。
-`AgentRunRecord.state` 由外层 ended 事实与同一事件的服务端终验共同折叠：0 为 `ok`、1 为
-`landed_red`、仅 `2 + outcome.stopped` 为 `stopped`，其余非零为 `failed`。运行页信标的
+`ended` 事件在原始 `exit_code` 外另带 `exit_origin` 与 `outcome`。来源闭集由
+`AGENT_RUN_EXIT_ORIGINS` 登记为 `novel_cli / commander / supervisor`，只允许 ended producer 明确填写；
+事件和 `AgentRunRecord` 在来源为 None 时省略该新字段，保持旧账的序列化形状，`wire_version` 不变。
+外部 CLI 的 raw 退出码、parent 进程状态、独立盘面交付终验是三条轴：parent 保留收到的原始数字，
+不把供应商 exit 1 改写成小说 CLI 的“已落盘”。`AgentRunRecord.state` 中 0 为 `ok`，仅
+`1 + exit_origin=novel_cli` 为 `landed_red`；Commander、Supervisor 或历史缺来源的 1 均为 `failed`，
+不从诊断、理由或旧 note 推断来源，也不为未知来源补“已经落盘”说明。旧 note 原样保留。
+`run_step.py` 透传正式 CLI 的退出码，但自身未捕异常统一为 70；显式控制异常保持原语义。
+`finalize_review.py` 的 1 也可能发生在终审包提交前，归 `supervisor` 来源，不能承诺落盘。
+已发行恢复 policy 的 parent 摘要经 `reviewer_protocol_recovery.parent_proof_projection_v1`
+复现发行时的完整投影，只隔离新增字段和已变更的派生 state/note；源事件、授权、epoch、outcome
+等事实仍逐字进入原摘要，session/attempt/cost/log 仍按原策略交叉校验。该投影不回写旧账，
+不用于 UI 或执行授权，也不因旧投影含 `landed_red` 而放宽恢复条件。
+仅 `2 + outcome.stopped` 为 `stopped`，其余非零为 `failed`；旧事件缺 outcome 时折叠成 `unknown`。运行页信标的
 `RunStepView.beacon` 与 `events_tail[].beacon` 也由后端同一折叠口给出；exit 2 是 `stopped`，浏览器
 只呈现，不从 `exit_code` 重建状态。`outcome.state` 的唯一取值面是
 `AGENT_DELIVERY_OUTCOME`：`ready` / `ready_with_disclosures` / `stopped` / `failed` /

@@ -34,7 +34,7 @@ from contracts.artifacts import (
     STAGE5_REVIEWER_REWRITE_REQUEST,
 )
 from contracts.invariants import (
-    AGENT_EXECUTOR_NODES, DESIGN_CHAPTER_DECISIONS, DESIGN_REPAIR_CODES,
+    AGENT_EXECUTOR_NODES, AGENT_RUN_EXIT_ORIGINS, DESIGN_CHAPTER_DECISIONS, DESIGN_REPAIR_CODES,
     DESIGN_STRATEGY_DECISIONS, DESIGN_STRATEGY_REPLAN_CONSTRAINTS,
 )
 from contracts.schema import decode_artifact, encode_artifact
@@ -49,7 +49,7 @@ from contracts.schema.stage5 import (
     reviewer_rewrite_request_sha256,
 )
 from contracts.schema.orchestration import (
-    AgentDeliveryOutcome, AgentProfile, AgentRunEvent, AgentRunStart,
+    AgentDeliveryOutcome, AgentProfile, AgentRunEvent, AgentRunRecord, AgentRunStart,
     ExecutionEpoch, LegacyExecutorBackend, LegacyLlmProfile,
     PipelineAgentProfiles, ProgressEvent, ReviewerActionRecord, RunContractV2,
     Stage2PrereviewRecord, Step,
@@ -1469,13 +1469,93 @@ def test_append_read_fold_roundtrip(base):
     assert '历史 ended 事件' in rec.outcome.reason
 
 
-def test_exit_one_is_landed_red_not_agent_process_failure(base):
+def test_novel_cli_exit_one_is_landed_red_not_agent_process_failure(base):
     agent.append(base, AgentRunEvent(run_id='red', kind='started', ts=10,
                                      start=_start()))
-    agent.append(base, AgentRunEvent(run_id='red', kind='ended', ts=20, exit_code=1))
+    agent.append(base, AgentRunEvent(
+        run_id='red', kind='ended', ts=20, exit_code=1, exit_origin='novel_cli'))
     [rec] = agent.fold(agent.read_events(base))
     assert rec.state == 'landed_red' and rec.exit_code == 1
     assert rec.note and '已经落盘' in rec.note
+
+
+@pytest.mark.parametrize('wire_version', [1, 2])
+@pytest.mark.parametrize('origin', [None, *AGENT_RUN_EXIT_ORIGINS])
+def test_parent_exit_one_requires_explicit_novel_cli_origin(base, wire_version, origin):
+    start = _start()
+    started = dict(run_id='exit-origin', kind='started', ts=10, start=start,
+                   wire_version=wire_version)
+    if wire_version == 2:
+        started['contract'] = RunContractV2(**start.model_dump(mode='json'))
+    agent.append(base, AgentRunEvent(**started))
+    agent.append(base, AgentRunEvent(
+        run_id='exit-origin', kind='ended', ts=20, wire_version=wire_version,
+        exit_code=1, exit_origin=origin,
+        outcome=AgentDeliveryOutcome(
+            state='ready', checked_at=20, reason='独立交付终验不改进程事实')))
+
+    [record] = agent.fold(agent.read_events(base))
+
+    assert record.exit_code == 1 and record.exit_origin == origin
+    assert record.state == ('landed_red' if origin == 'novel_cli' else 'failed')
+    assert record.note == (jobs.LANDED_RED_NOTE if origin == 'novel_cli' else None)
+    assert record.outcome.state == 'ready'
+    assert record.allowed_controls == []
+    serialized = record.model_dump(mode='json')
+    assert ('exit_origin' in serialized) == (origin is not None)
+    if origin != 'novel_cli':
+        with pytest.raises(ValueError):
+            AgentRunRecord.model_validate({**serialized, 'state': 'landed_red'})
+
+
+def test_legacy_exit_one_preserves_note_without_inferring_its_origin():
+    original_note = '历史记录声称产物已经落盘，但来源未被结构化记录'
+    events = [
+        AgentRunEvent(run_id='old', kind='started', ts=1, start=_start()),
+        AgentRunEvent(run_id='old', kind='reconciled', ts=2, note=original_note),
+        AgentRunEvent(run_id='old', kind='ended', ts=3, exit_code=1),
+    ]
+    [record] = agent.fold(events)
+    assert record.state == 'failed' and record.exit_code == 1
+    assert record.note == original_note
+    assert record.exit_origin is None
+
+
+@pytest.mark.parametrize('origin', AGENT_RUN_EXIT_ORIGINS)
+def test_exit_origin_is_ended_only_and_requires_a_terminal_record(origin):
+    with pytest.raises(ValueError, match='只有 ended'):
+        AgentRunEvent(run_id='r', kind='started', ts=1, start=_start(), exit_origin=origin)
+    with pytest.raises(ValueError, match='只有 ended'):
+        AgentRunEvent(run_id='r', kind='reconciled', ts=1, note='未知', exit_origin=origin)
+    [record] = agent.fold([
+        AgentRunEvent(run_id='r', kind='started', ts=1, start=_start())], live={'r'})
+    with pytest.raises(ValueError, match='exit_origin'):
+        AgentRunRecord.model_validate({**record.model_dump(mode='json'), 'exit_origin': origin})
+
+
+def test_exit_origin_is_additive_without_reserializing_legacy_event_fields():
+    event = AgentRunEvent(run_id='legacy', kind='ended', ts=20, exit_code=1)
+    raw = event.model_dump(mode='json')
+    assert 'exit_origin' not in raw
+    assert 'outcome' in raw and raw['outcome'] is None
+    assert AgentRunEvent.model_validate({**raw, 'exit_origin': None}).model_dump_json() == event.model_dump_json()
+    [record] = agent.fold([
+        AgentRunEvent(run_id='legacy', kind='started', ts=10, start=_start()), event])
+    assert 'exit_origin' not in record.model_dump(mode='json')
+    assert AgentRunRecord.model_validate_json(record.model_dump_json()).model_dump_json() == record.model_dump_json()
+    with pytest.raises(ValueError):
+        AgentRunEvent.model_validate({**raw, 'exit_origin': 'external'})
+
+
+def test_exit_origin_typescript_and_json_schema_use_the_registered_closed_domain():
+    schema = AgentRunEvent.model_json_schema()['properties']['exit_origin']
+    assert schema['anyOf'][0]['enum'] == list(AGENT_RUN_EXIT_ORIGINS)
+    assert schema['anyOf'][1] == {'type': 'null'}
+    source = (Path(__file__).resolve().parents[1] / 'web/src/types/agent.ts').read_text('utf-8')
+    declaration = re.search(r'export type AgentRunExitOrigin = ([^\n]+)', source)
+    assert declaration is not None
+    assert tuple(re.findall(r"'([^']+)'", declaration.group(1))) == AGENT_RUN_EXIT_ORIGINS
+    assert 'exit_origin?: AgentRunExitOrigin' in source
 
 
 def test_exit_two_with_stopped_outcome_is_an_explicit_safe_stop(base):
@@ -1616,6 +1696,7 @@ def test_start_with_fake_spawn(base, corpus, monkeypatch):
     assert agent.wait(rec.run_id, 10)
     [done] = agent.records(base)
     assert done.state == 'ok' and done.exit_code == 0
+    assert done.exit_origin == 'commander'
     assert done.start.authorized is True
     assert done.start.egress_authorized is True
     assert done.start.profiles == _PROFILES
@@ -4158,6 +4239,8 @@ def test_spawn_exception_traceback_redacts_the_stdin_prompt(base, corpus):
     assert done.start.prompt not in log
     assert '任务：把 sid=42' not in log
     assert '<commander-prompt-redacted>' in log
+    assert done.exit_code == 70 and done.exit_origin == 'supervisor'
+    assert done.state == 'failed' and done.outcome.state == 'unknown'
 
 
 def test_one_agent_per_book(base, corpus):
@@ -9746,3 +9829,31 @@ def test_session_pointer_is_written_from_the_first_protocol_event(
     assert {row.parent_run_id for row in loaded} == {rec.run_id}
     assert {pointer.stem for pointer in pointers} == {
         session.session_run_id for session in sessions}
+
+
+def test_canonical_exit1_keeps_its_source_when_execution_drain_is_unknown(
+        base, corpus, monkeypatch):
+    """进程来源与 drain 分属两轴；后者未知不得改写实际子进程的退出事实。"""
+    ready = SimpleNamespace(
+        state='ready', code_version='test-code-version', action=None,
+        execution_token=SimpleNamespace(node='stage0.remove'))
+    monkeypatch.setattr(agent.operator, 'next_action_at_code',
+                        lambda *_args, **_kwargs: ready)
+    monkeypatch.setattr(agent, '_run_step_argv', lambda *_args, **_kwargs: [
+        agent.sys.executable, '-B', '-c', 'raise SystemExit(1)'])
+    original_drain = agent._wait_for_execution_closure
+
+    def unknown_after_drain(*args, **kwargs):
+        original_drain(*args, **kwargs)
+        return agent._ExecutionDrainResult(timed_out=True)
+
+    monkeypatch.setattr(agent, '_wait_for_execution_closure', unknown_after_drain)
+    rec = agent.start(base, '42', authorized=True, egress_authorized=True,
+                      profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+    [done] = agent.records(base)
+    assert done.exit_code == 1 and done.exit_origin == 'novel_cli'
+    assert done.state == 'landed_red'
+    assert done.outcome.state == 'unknown'
+    assert 'drain' in done.outcome.reason
+    assert '已经落盘' in done.note

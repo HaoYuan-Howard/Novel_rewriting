@@ -343,6 +343,11 @@ stage2 的 `event_early_name` / `present_early_named` / `present_names_late` 在
 
 ## 结果判定
 
+以下退出码含义限于小说生产 CLI。`run_step.py` 原样透传节点退出码，自身未捕异常统一为 70；
+`KeyboardInterrupt` / `SystemExit` 保留显式控制语义。外部 Commander 的 1 与 finalizer 的 1
+都不承诺正式结果落盘，AgentRun 以明确的退出码来源区分；来源缺失的旧账保持未知来源。
+
+
 退出码只回答进程发生了什么：
 
 | exit | 含义 | 动作 |

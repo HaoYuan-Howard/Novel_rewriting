@@ -1244,3 +1244,44 @@ def test_commander_resume_argv_and_returned_session_are_exact(
         assert invocation.argv[-3:] == ('resume', expected, '-')
     with pytest.raises(CommanderProtocolError, match='不同'):
         driver.run(invocation, log=__import__('io').BytesIO(), run_id='run-1')
+
+
+@pytest.mark.parametrize('route', ['ready', 'blocked', 'finalize'])
+def test_canonical_action_exit_origin_survives_supervisor_conversion(route):
+    """三个确定性消费入口都保留 action 的退出域，关闭 epoch 不覆盖来源。"""
+    events = []
+    closed = []
+    current = SimpleNamespace(
+        state={'ready': 'ready', 'blocked': 'blocked',
+               'finalize': 'pipeline_complete'}[route],
+        code_version='code-1', surface_seal='a' * 64,
+        execution_token=SimpleNamespace(node='stage4.design'),
+        action=SimpleNamespace(waiting_on='test-recovery', action_sha256='b' * 64))
+
+    def execute(*args):
+        args[-1].commit()
+        return SupervisorActionResult(
+            exit_code=1, outcome=_outcome('unknown'), continue_ready=False,
+            exit_origin='novel_cli')
+
+    def close(_epoch, turn):
+        closed.append(turn)
+        return 'drained'
+
+    supervisor = RunSupervisor(
+        run_id='origin-run', append_event=events.append,
+        make_epoch=lambda *_args: pytest.fail('无需滚 epoch'),
+        open_epoch=lambda _epoch: None, close_epoch=close,
+        run_commander_turn=lambda *_args: pytest.fail('不应启动 Commander'),
+        epoch_identity_current=lambda _epoch: True,
+        cancel_commander=lambda: True,
+        initial_epoch=_epoch('origin-epoch', 1, 'initial'),
+        read_operator_next=lambda _epoch: current,
+        run_ready_action=execute, run_blocked_action=execute,
+        deterministic_blockers=frozenset({'test-recovery'}),
+        run_reviewer=lambda *_args: pytest.fail('不应启动 Reviewer'),
+        finalize_run=execute)
+    result = supervisor.run()
+    assert result.turn.exit_code == 1 and result.turn.exit_origin == 'novel_cli'
+    assert result.turn.outcome.state == 'unknown'
+    assert len(closed) == 1 and closed[0] == result.turn

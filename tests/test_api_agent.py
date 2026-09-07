@@ -247,6 +247,34 @@ def test_run_list_exposes_exit_two_with_stopped_outcome_as_stopped(client):
     assert record['allowed_controls'] == []
 
 
+@pytest.mark.parametrize('origin', [None, 'novel_cli', 'commander', 'supervisor'])
+def test_run_list_preserves_exit_origin_and_only_projects_novel_cli_one_as_landed(client, origin):
+    c, base = client
+    agent.append(base, AgentRunEvent(
+        run_id='origin', kind='started', ts=10,
+        start=AgentRunStart(
+            sid='42', base=base, argv=['codex', 'exec'], prompt='test',
+            authorized=True, egress_authorized=True, profiles=_PIPELINE_PROFILES)))
+    agent.append(base, AgentRunEvent(
+        run_id='origin', kind='ended', ts=20, exit_code=1, exit_origin=origin,
+        outcome=AgentDeliveryOutcome(state='unknown', checked_at=20, reason='独立终验未知')))
+
+    response = c.get('/api/agent/runs?sid=42')
+
+    assert response.status_code == 200
+    [record] = response.json()['runs']
+    assert record['exit_code'] == 1
+    assert record['state'] == ('landed_red' if origin == 'novel_cli' else 'failed')
+    assert record['outcome']['state'] == 'unknown'
+    assert record['allowed_controls'] == []
+    if origin is None:
+        assert 'exit_origin' not in record
+    else:
+        assert record['exit_origin'] == origin
+    if origin != 'novel_cli':
+        assert record['note'] is None
+
+
 def test_pause_resume_stop_are_async_202_and_stop_ends_in_background(
         client, monkeypatch):
     """HTTP 只受理控制请求；节点自然闭合/取消后的 ended 由 worker 独占。"""

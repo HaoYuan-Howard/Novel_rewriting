@@ -238,6 +238,8 @@ def _seat(harness):
 def _first_failure(harness, *, expected_error='agent_schema'):
     first = harness.run()
     assert first.exit_code == 1
+    assert first.exit_origin == 'commander' and first.state == 'failed'
+    assert first.outcome.state == 'unknown' and first.note is None
     assert harness.live['applied'] == [] and harness.live['repairs'] == []
     assert len(harness.live['invocations']) == 1
     ledger = _seat(harness)
@@ -472,3 +474,22 @@ def test_durable_schema_recovery_action_replays_after_finish_crash_only_with_int
     assert ledger.turns[1].outcome == 'ok' and ledger.turns[1].exit_code == 0
     assert ledger.turns[1].parent_run_id == interrupted.run_id
     _assert_original_preserved(h, source)
+
+
+def test_finalizer_precommit_failure_does_not_claim_a_landed_result(
+        schema_run, monkeypatch):
+    """真实 finalizer 在缺输入时可 exit 1，父运行不得套 novel CLI 的落盘承诺。"""
+    h = schema_run
+    monkeypatch.setattr(agent.operator, 'next_action_at_code',
+                        lambda _base, _sid, *, code: SimpleNamespace(
+                            state='pipeline_complete', code_version=code))
+    done = h.run()
+    assert done.exit_code == 1
+    assert done.exit_origin == 'supervisor' and done.state == 'failed'
+    assert done.outcome.state == 'unknown' and done.note is None
+    assert h.live['invocations'] == [] and h.live['applied'] == []
+    assert h.live['repairs'] == []
+    assert not agent.paths.review_package_path(
+        agent.paths.resolve_novel_dir(h.base, SID)).exists()
+    log = agent.run_log_path(h.base, done.run_id).read_text('utf-8')
+    assert '$ [finalize-review]' in log

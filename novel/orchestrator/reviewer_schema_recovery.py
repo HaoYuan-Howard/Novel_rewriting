@@ -25,6 +25,7 @@ from novel import agent_session_audit, paths
 from novel.agents.base import decode_wire_json
 from novel.llm.ledger import ledger_path as cost_ledger_path, read_jsonl_rows
 from novel.orchestrator import queue, reviewer_tasks
+from novel.orchestrator.reviewer_protocol_recovery import parent_proof_projection_v1
 
 
 WAITING_ON = frozenset({
@@ -273,7 +274,7 @@ def inspect_rejection(
         replacement_subject_sha256=replacement_subject_sha256,
         source_code_version=epoch.code_version, validation_code_version=validation_code_version,
         source_ledger_sha256=canonical_sha256(ledger.model_dump(mode='json')),
-        source_parent_sha256=canonical_sha256(parent.model_dump(mode='json')),
+        source_parent_sha256=canonical_sha256(parent_proof_projection_v1(parent)),
         source_session_sha256=canonical_sha256([event.to_dict() for event in events]),
         source_cost_sha256=canonical_sha256(costs),
         source_log_sha256=hashlib.sha256(raw).hexdigest())

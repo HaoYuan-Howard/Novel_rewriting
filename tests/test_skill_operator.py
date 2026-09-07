@@ -185,8 +185,9 @@ def test_skill_leaves_control_accounting_to_deterministic_supervisor():
         assert manual not in skill
 
 
+@pytest.mark.parametrize('node_exit', [0, 1, 2, 70])
 def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
-        monkeypatch, tmp_path):
+        monkeypatch, tmp_path, node_exit):
     """复用 runner 不手拼节点 argv；start/end 信标必须包住同一条生产命令。"""
     runner = _operator_script('run_step')
     step_argv = [
@@ -203,7 +204,7 @@ def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
 
     def fake_run(argv, **kwargs):
         calls.append((list(argv), kwargs))
-        return SimpleNamespace(returncode=0)
+        return SimpleNamespace(returncode=0 if 'mark' in argv else node_exit)
 
     monkeypatch.setattr(runner.subprocess, 'run', fake_run)
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
@@ -221,7 +222,7 @@ def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
         'stage2.global', '--execute', '--run-id', 'resume-42',
     ])
 
-    assert rc == 0
+    assert rc == node_exit
     assert len(cas) == 1
     assert built and built[0][1]['placeholders'] is False
     assert 'mark' in calls[0][0] and '--phase' in calls[0][0]
@@ -229,7 +230,7 @@ def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
     assert calls[1][0] == step_argv
     assert 'mark' in calls[2][0]
     assert calls[2][0][calls[2][0].index('--phase') + 1] == 'end'
-    assert calls[2][0][calls[2][0].index('--exit') + 1] == '0'
+    assert calls[2][0][calls[2][0].index('--exit') + 1] == str(node_exit)
     start_execution = calls[0][0][calls[0][0].index('--execution-id') + 1]
     end_execution = calls[2][0][calls[2][0].index('--execution-id') + 1]
     assert start_execution == end_execution
@@ -273,12 +274,11 @@ def test_run_step_closes_execution_with_crash_when_node_spawn_raises(
 
     monkeypatch.setattr(runner.subprocess, 'run', fake_run)
 
-    with pytest.raises(OSError, match='synthetic spawn failure'):
-        runner.main([
-            '--base', 'E:/outputs', '--sid', '42',
-            '--expect-code-version', 'code-v1', '--execute',
-            '--operator-permit-file', str(permit_file), 'stage2.global',
-        ])
+    assert runner.main([
+        '--base', 'E:/outputs', '--sid', '42',
+        '--expect-code-version', 'code-v1', '--execute',
+        '--operator-permit-file', str(permit_file), 'stage2.global',
+    ]) == runner.X.CRASH
 
     start, _node, end = calls
     assert start[start.index('--execution-id') + 1] == (
@@ -668,11 +668,10 @@ def test_headless_execute_releases_claim_when_node_spawn_raises(
         raise OSError('synthetic admitted spawn failure')
 
     monkeypatch.setattr(runner.subprocess, 'run', fake_run)
-    with pytest.raises(OSError, match='synthetic admitted spawn failure'):
-        runner.main([
-            '--base', str(tmp_path), '--sid', '42',
-            '--expect-code-version', 'code-v1', '--execute',
-            '--operator-permit-file', str(permit_file), 'stage2.global'])
+    assert runner.main([
+        '--base', str(tmp_path), '--sid', '42',
+        '--expect-code-version', 'code-v1', '--execute',
+        '--operator-permit-file', str(permit_file), 'stage2.global']) == runner.X.CRASH
     assert runner.admission.snapshot(
         str(tmp_path), context.run_id).active_claims == ()
 
@@ -1549,3 +1548,47 @@ def test_the_skill_actor_is_a_single_landing_point():
     assert placeholders == {'<ACTOR>'}, (
         f'`--actor` 在 skill 里出现了不止一种占位形态：{sorted(placeholders)}。\n'
         f'盘上产物已经因此并存两种 actor 写法；形态只能在 SKILL.md 定一次')
+
+
+@pytest.mark.parametrize(('fault', 'exit_code'), [
+    ('RuntimeError("runner failed")', 70),
+    ('SystemExit(1)', 1),
+    ('TerminalState("explicit stop")', 2),
+])
+def test_runner_process_distinguishes_own_exception_from_explicit_exit(
+        tmp_path, fault, exit_code):
+    """通过真实 Python 子进程验证 runner 最外层退出域，不由 pytest 截住异常。"""
+    import subprocess
+
+    script = tmp_path / 'runner-boundary.py'
+    script.write_text(
+        "import importlib.util, sys\n"
+        "from pathlib import Path\n"
+        f"sys.path.insert(0, {str(REPO_ROOT)!r})\n"
+        "from novel.errors import TerminalState\n"
+        f"spec = importlib.util.spec_from_file_location('runner', "
+        f"{str(SKILL_DIR / 'scripts' / 'run_step.py')!r})\n"
+        "runner = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(runner)\n"
+        "def fail(_argv):\n"
+        f"    raise {fault}\n"
+        "runner._main = fail\n"
+        "raise SystemExit(runner.main([]))\n", encoding='utf-8')
+    result = subprocess.run(
+        [sys.executable, '-B', str(script)], cwd=REPO_ROOT,
+        capture_output=True, check=False, text=True, encoding='utf-8')
+    assert result.returncode == exit_code, result.stderr
+    if exit_code == 70:
+        assert 'RuntimeError: runner failed' in result.stderr
+        assert 'exit 70' in result.stderr
+
+
+def test_runner_keeps_keyboard_interrupt_control_semantics(monkeypatch):
+    runner = _operator_script('run_step')
+
+    def interrupt(_argv):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(runner, '_main', interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        runner.main([])

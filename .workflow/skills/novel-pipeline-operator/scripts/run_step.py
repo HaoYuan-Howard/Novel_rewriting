@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -223,7 +224,7 @@ def _write_evidence(path: str, data: bytes) -> None:
             f'--evidence-json 原子写入失败 {destination}：{exc!r}') from exc
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description='调用生产 build_steps；默认只预览，加 --execute 才逐步执行')
     parser.add_argument('--base', required=True)
@@ -486,6 +487,22 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr)
             return X.CRASH
     return result
+
+
+def main(argv: list[str] | None = None) -> int:
+    """只透传生产 CLI 的 1；runner 自身异常不能冒充正式结果已落盘。"""
+    try:
+        return _main(argv)
+    except TerminalState as exc:
+        print(f'✗ 显式终态：{exc}', file=sys.stderr)
+        return X.TERMINAL_STATE
+    except Exception as exc:
+        # 不捕 KeyboardInterrupt/SystemExit：它们保留原有显式控制语义。
+        # admission/beacon 的异常收尾仍由 _main 负责；这里仅统一退出域。
+        print(f'✗ runner 未捕获异常（exit {X.CRASH}，结论未知）：{exc}',
+              file=sys.stderr)
+        traceback.print_exc()
+        return X.CRASH
 
 
 if __name__ == '__main__':

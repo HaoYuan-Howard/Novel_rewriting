@@ -30,7 +30,7 @@ from pydantic import Field, StrictInt, model_serializer, model_validator
 from contracts.invariants import (
     AGENT_DELIVERY_OUTCOME,
     AGENT_EXECUTOR_NODES, AGENT_RUN_CONTROLS, AGENT_RUN_EVENT_KINDS,
-    AGENT_RUN_EVENT_V2_KINDS, AGENT_RUN_STATE,
+    AGENT_RUN_EVENT_V2_KINDS, AGENT_RUN_EXIT_ORIGINS, AGENT_RUN_STATE,
     ARTIFACT_CONDITION, ARTIFACT_DISPLAY, BEACON_STATES,
     COMMANDER_ADMISSION_EVENT_KINDS, COMMANDER_ADMISSION_TAIL_REPAIR_KINDS,
     AgentDriver, AgentExecutionMode, AgentReasoningEffort,
@@ -61,6 +61,7 @@ ProgressPhase = Literal[PROGRESS_PHASES]
 BeaconState = Literal[BEACON_STATES]
 AgentDeliveryState = Literal[AGENT_DELIVERY_OUTCOME]
 AgentRunState = Literal[AGENT_RUN_STATE]
+AgentRunExitOrigin = Literal[AGENT_RUN_EXIT_ORIGINS]
 AgentRunControl = Literal[AGENT_RUN_CONTROLS]
 AgentRunEventV2Kind = Literal[AGENT_RUN_EVENT_V2_KINDS]
 ExecutionEpochReason = Literal[EXECUTION_EPOCH_REASONS]
@@ -1618,8 +1619,11 @@ class AgentRunEvent(FrozenModel):
     #: 该 epoch 最后一次成功观测到的供应商 session id，供下一 turn 精确续会。
     provider_session_id: str | None = Field(default=None, min_length=1)
 
-    #: `kind == 'ended'`：agent 进程的退出码。
+    #: `kind == 'ended'`：agent 进程保留的原始退出码。
     exit_code: int | None = None
+
+    #: 只由 ended producer 明确记录；旧账缺失不是 novel_cli。
+    exit_origin: AgentRunExitOrigin | None = None
 
     #: `kind == 'reconciled'`：为什么改判（服务重启那一族）。
     note: str | None = None
@@ -1627,9 +1631,18 @@ class AgentRunEvent(FrozenModel):
     #: 新版 `ended` 事件随退出码一起带；旧事件缺失时折叠为 outcome=unknown。
     outcome: AgentDeliveryOutcome | None = None
 
+    @model_serializer(mode='wrap')
+    def _preserve_legacy_exit_shape(self, handler: Any) -> dict[str, Any]:
+        result = handler(self)
+        if self.exit_origin is None:
+            result.pop('exit_origin', None)
+        return result
+
     @model_validator(mode='after')
     def _payload_matches_the_kind(self) -> AgentRunEvent:
         """一种事件只携带自己的载荷；v1 旧行仍逐字兼容。"""
+        if self.exit_origin is not None and self.kind != 'ended':
+            raise ValueError('只有 ended 事件可以带 exit_origin')
         if self.wire_version == 1:
             if self.kind not in AGENT_RUN_EVENT_KINDS:
                 raise ValueError(f'wire v1 不认识 kind={self.kind!r}')
@@ -1704,6 +1717,7 @@ class AgentRunRecord(StrictModel):
     #: 必填但可为 `null`——`null` = 还没结束、或不知道，不是 0。
     ended: int | None
     exit_code: int | None
+    exit_origin: AgentRunExitOrigin | None = None
 
     #: 整书外层进程状态。**`unknown` 是真状态，不是缺省值**（`R-11.11` 同构）：
     #: 服务重启后，子进程是死是活我们真的不知道。
@@ -1718,9 +1732,18 @@ class AgentRunRecord(StrictModel):
     #: 控制能力由服务端按 wire/liveness 投影；前端不得从相似的状态名猜。
     allowed_controls: list[AgentRunControl] = Field(default_factory=list)
 
+    @model_serializer(mode='wrap')
+    def _preserve_legacy_exit_shape(self, handler: Any) -> dict[str, Any]:
+        result = handler(self)
+        if self.exit_origin is None:
+            result.pop('exit_origin', None)
+        return result
+
     @model_validator(mode='after')
     def _state_matches_the_events(self) -> AgentRunRecord:
         """折叠规则只认 ended 事实与服务端终验，不让前端补推。"""
+        if self.exit_origin is not None and (self.ended is None or self.exit_code is None):
+            raise ValueError('exit_origin 必须绑定 ended 与原始退出码')
         if self.exit_code is None:
             if self.state in ('ok', 'landed_red', 'stopped', 'failed'):
                 raise ValueError(
@@ -1728,7 +1751,8 @@ class AgentRunRecord(StrictModel):
                     f'「跑完了」这个结论只能从退出码来')
         else:
             want = ('ok' if self.exit_code == 0 else
-                    'landed_red' if self.exit_code == 1 else
+                    'landed_red' if self.exit_code == 1
+                    and self.exit_origin == 'novel_cli' else
                     'stopped' if self.exit_code == 2
                     and self.outcome is not None
                     and self.outcome.state == 'stopped' else 'failed')

@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 from contracts.schema.api import OperatorNext
 from contracts.schema.orchestration import (
-    AgentDeliveryOutcome, AgentRunEvent, ExecutionEpoch,
+    AgentDeliveryOutcome, AgentRunEvent, AgentRunExitOrigin, ExecutionEpoch,
 )
 from novel.orchestrator.jobs import JobConflict
 
@@ -61,6 +61,9 @@ class CommanderTurnResult:
     # 只有最后一次成功 provider attempt 可交付该文本；Supervisor
     # 必须先走 reviewer typed loader，不得把它直接当成动作。
     final_response: str | None = None
+    # 数字退出码只在其 producer 域内有意义；外部 Commander 的 1 不是
+    # novel CLI 的“正式结果已落盘”。合成终态默认由 Supervisor 负责。
+    exit_origin: AgentRunExitOrigin = 'supervisor'
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,7 @@ class SupervisorActionResult:
     # 只有 action 已经自行落下可验证的同 run 恢复凭据时才出现。Supervisor
     # 据此保持当前 epoch/书锁并开放 resume；普通 exit 2 仍永久结束本次 parent。
     pause_note: str | None = None
+    exit_origin: AgentRunExitOrigin = 'supervisor'
 
     def __post_init__(self) -> None:
         if self.pause_note is not None:
@@ -511,6 +515,7 @@ class RunSupervisor:
         def action_turn(result: SupervisorActionResult) -> CommanderTurnResult:
             return CommanderTurnResult(
                 exit_code=result.exit_code,
+                exit_origin=result.exit_origin,
                 provider_session_id=(
                     result.provider_session_id or provider_session_id),
                 continue_ready=result.continue_ready,

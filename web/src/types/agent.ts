@@ -183,6 +183,9 @@ export type AgentRunState =
 
 export type AgentRunControl = 'pause' | 'resume' | 'stop'
 
+/** 保留退出码的来源；缺失表示历史未知，不能推断已落盘。 */
+export type AgentRunExitOrigin = 'novel_cli' | 'commander' | 'supervisor'
+
 export type AgentDeliveryState =
   | 'ready'
   | 'ready_with_disclosures'
@@ -212,6 +215,7 @@ export interface AgentRunRecord {
   started: number
   ended: number | null
   exit_code: number | null
+  exit_origin?: AgentRunExitOrigin
   state: AgentRunState
   note: string | null
   /** 与进程 state 正交；null 只会出现在仍运行/被 reconcile 的记录。 */

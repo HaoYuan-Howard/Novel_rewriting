@@ -55,7 +55,8 @@ from contracts.schema.api import (
 from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema.stage2 import GlobalEdit, GlobalEditCommit, GlobalEditFailure
 from contracts.schema.orchestration import (
-    AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected, AgentRunEvent,
+    AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected,
+    AgentRunEvent, AgentRunExitOrigin,
     AgentExecutorBackend, AgentProfile, AgentRunRecord, AgentRunStart,
     CommanderSessionPointer, ExecutionEpoch, ExecutorBackend,
     PipelineAgentProfiles, ReviewerActionRecord, RunContractV2,
@@ -470,7 +471,7 @@ def fold(events: list[AgentRunEvent], *, live: set[str] | None = None) -> list[A
         slot = acc.setdefault(e.run_id, {
             'start': None, 'contract': None, 'epochs': [],
             'active_epoch_id': None, 'last_kind': None,
-            'started': None, 'ended': None, 'exit_code': None,
+            'started': None, 'ended': None, 'exit_code': None, 'exit_origin': None,
             'note': None, 'outcome': None,
         })
         if e.run_id not in order:
@@ -500,7 +501,7 @@ def fold(events: list[AgentRunEvent], *, live: set[str] | None = None) -> list[A
             # 不能继续向外投影一个“已结束但仍有 active epoch”的不可能状态；
             # 丢失的 drain 证据仍由 outcome/note 保持 unknown，而不是伪造关闭事件。
             slot.update(
-                ended=e.ts, exit_code=e.exit_code, outcome=e.outcome,
+                ended=e.ts, exit_code=e.exit_code, exit_origin=e.exit_origin, outcome=e.outcome,
                 active_epoch_id=None)
         elif e.kind == 'reconciled':
             # 人工恢复只能证明 admission owner 已停并封住旧执行，不能补造
@@ -517,7 +518,8 @@ def fold(events: list[AgentRunEvent], *, live: set[str] | None = None) -> list[A
             continue                            # 半截 started 事件：没有载荷就无法成记录
         if slot['exit_code'] is not None:
             state = ('ok' if slot['exit_code'] == 0 else
-                     'landed_red' if slot['exit_code'] == 1 else
+                     'landed_red' if slot['exit_code'] == 1
+                     and slot['exit_origin'] == 'novel_cli' else
                      'stopped' if slot['exit_code'] == 2
                      and slot['outcome'] is not None
                      and slot['outcome'].state == 'stopped' else 'failed')
@@ -553,6 +555,7 @@ def fold(events: list[AgentRunEvent], *, live: set[str] | None = None) -> list[A
             contract=slot['contract'], epochs=slot['epochs'],
             active_epoch_id=slot['active_epoch_id'],
             ended=slot['ended'], exit_code=slot['exit_code'],
+            exit_origin=slot['exit_origin'],
             state=state, note=slot['note'], outcome=slot['outcome'],
             allowed_controls=allowed_controls))
     return out
@@ -3669,7 +3672,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     append(base, AgentRunEvent(
                         wire_version=2, run_id=run_id, kind='ended',
                         ts=int(time.time()),
-                        exit_code=CRASH,
+                        exit_code=CRASH, exit_origin='supervisor',
                         outcome=AgentDeliveryOutcome(
                             state='failed', checked_at=int(time.time()),
                             reason=(
@@ -3709,6 +3712,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         state='unknown', checked_at=int(time.time()),
         reason='Supervisor 尚未完成 Commander turn')
     latest_rc = CRASH
+    latest_exit_origin = 'supervisor'
     latest_error_kind: str | None = None
     latest_commander_outcome = latest_outcome
     latest_commander_rc = CRASH
@@ -4372,6 +4376,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             if read_only else _open_action_admission(epoch))
         attempt_id = jobs.new_job_id()
         rc = CRASH
+        raw_exit_known = False
         observation = CommanderObservation(
             provider_session_id=None, actual_model=None,
             actual_effort=None, usage=None)
@@ -4529,6 +4534,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 with _COMMANDERS_LOCK:
                     _COMMANDER_EVENT_SINKS[run_id] = session_pointer_sink
                 while True:
+                    raw_exit_known = False
                     attempt_no += 1
                     if attempt_no > 1:
                         attempt_id = jobs.new_job_id()
@@ -4600,6 +4606,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                                 'CommanderProcessResult.observation 必须是 '
                                 'CommanderObservation，不能传自由 dict')
                         attempt_rc = result.exit_code
+                        raw_exit_known = True
                         attempt_observation = result.observation
                         attempt_failure = result.failure_kind
                         attempt_retryable = bool(result.retryable)
@@ -4610,6 +4617,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         known_rc = getattr(exc, 'returncode', None)
                         if isinstance(known_rc, int) and not isinstance(known_rc, bool):
                             attempt_rc = known_rc
+                            raw_exit_known = True
                         partial = getattr(exc, 'partial_observation', None)
                         if isinstance(partial, CommanderObservation):
                             attempt_observation = partial
@@ -4761,8 +4769,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     _retry_sleep(backoff)
         except BaseException as exc:  # noqa: BLE001 —— 崩了也要闭合本 turn
             known_rc = getattr(exc, 'returncode', None)
+            raw_exit_known = False
             if isinstance(known_rc, int) and not isinstance(known_rc, bool):
                 rc = known_rc
+                raw_exit_known = True
             runtime_error_kind = 'commander_runtime'
             _append_safe_traceback(base, run_id, prompt=turn_invocation.stdin_text)
         finally:
@@ -5026,6 +5036,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         latest_commander_error_kind = error_kind
         return CommanderTurnResult(
             exit_code=reported_rc,
+            exit_origin=(
+                'commander' if raw_exit_known and reported_rc == rc else 'supervisor'),
             provider_session_id=(
                 observation.provider_session_id
                 if this_turn_recorded and not fresh_reviewer_session else None),
@@ -5101,7 +5113,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             epoch: ExecutionEpoch, rc: int, timed_out: bool,
             *, label: str,
             failure_detail: str | None = None,
-            pause_note: str | None = None) -> SupervisorActionResult:
+            pause_note: str | None = None,
+            exit_origin: AgentRunExitOrigin = 'novel_cli') -> SupervisorActionResult:
         nonlocal latest_outcome, latest_rc, latest_error_kind
         latest_rc = rc
         if timed_out:
@@ -5111,8 +5124,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 reason=f'{label} 的 admission/beacon drain 无法证明闭合')
             return SupervisorActionResult(
                 exit_code=rc, outcome=latest_outcome, continue_ready=False,
-                failure_detail=failure_detail)
-        if landed(rc):
+                exit_origin=exit_origin, failure_detail=failure_detail)
+        action_landed = exit_origin == 'novel_cli' and landed(rc)
+        if rc == 0 or action_landed:
             latest_outcome = _assess_delivery(
                 base, sid, code_version=epoch.code_version)
             latest_error_kind = None
@@ -5131,11 +5145,11 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     f'{label} 子进程 exit {rc}，执行结论未知'
                     + (f'；{failure_detail}' if failure_detail else '')))
         return SupervisorActionResult(
-            exit_code=rc, outcome=latest_outcome,
-            # 只有 0/1 能证明本次正式动作已经落盘，才允许重新规划下一步。
+            exit_code=rc, outcome=latest_outcome, exit_origin=exit_origin,
+            # 正常成功或 novel CLI 的已落盘负结论才允许重新规划下一步。
             # 2 是显式终态、3 是结构拒绝、70 是崩溃；继续循环会在盘面
             # 未变化时重复执行同一个 ready token，付费节点尤其危险。
-            continue_ready=landed(rc), failure_detail=failure_detail,
+            continue_ready=(rc == 0 or action_landed), failure_detail=failure_detail,
             pause_note=pause_note)
 
     def _run_token(
@@ -6341,6 +6355,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 reviewer_correction_attempts = attempt
                 return CommanderTurnResult(
                     exit_code=turn.exit_code,
+                    exit_origin=turn.exit_origin,
                     provider_session_id=turn.provider_session_id,
                     continue_ready=True, outcome=turn.outcome,
                     continue_reviewer=True)
@@ -6364,6 +6379,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             pending_reviewer_replayed = False
             return CommanderTurnResult(
                 exit_code=turn.exit_code,
+                exit_origin=turn.exit_origin,
                 provider_session_id=turn.provider_session_id,
                 continue_ready=True, outcome=turn.outcome,
                 continue_reviewer=True)
@@ -6785,6 +6801,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     # 不落 pending correction，也不复用旧 provider 席。
                     return CommanderTurnResult(
                         exit_code=result.exit_code,
+                        exit_origin=result.exit_origin,
                         provider_session_id=provider_session_id,
                         continue_ready=True, outcome=result.outcome)
                 # 只有 live transport binding 仍稳定，才能把 exit 2
@@ -6821,6 +6838,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     reviewer_correction_attempts = 0
                     return CommanderTurnResult(
                         exit_code=result.exit_code,
+                        exit_origin=result.exit_origin,
                         provider_session_id=None,
                         continue_ready=True, outcome=result.outcome,
                         continue_reviewer=True)
@@ -6908,6 +6926,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 reviewer_correction_attempts = 0
                 return CommanderTurnResult(
                     exit_code=result.exit_code,
+                    exit_origin=result.exit_origin,
                     provider_session_id=provider_session_id,
                     continue_ready=True, outcome=result.outcome,
                     continue_reviewer=True)
@@ -6922,6 +6941,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     _discard_reviewer_action_record(base, record_path)
             return CommanderTurnResult(
                 exit_code=result.exit_code,
+                exit_origin=result.exit_origin,
                 provider_session_id=provider_session_id,
                 continue_ready=result.continue_ready,
                 outcome=result.outcome)
@@ -7405,6 +7425,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             reviewer_correction_attempts = 0
             return CommanderTurnResult(
                 exit_code=turn.exit_code,
+                exit_origin=turn.exit_origin,
                 provider_session_id=turn.provider_session_id,
                 continue_ready=True, outcome=turn.outcome,
                 continue_reviewer=True)
@@ -7419,6 +7440,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         pending_reviewer_replayed = False
         return CommanderTurnResult(
             exit_code=turn.exit_code,
+            exit_origin=turn.exit_origin,
             provider_session_id=turn.provider_session_id,
             continue_ready=True, outcome=turn.outcome)
 
@@ -7437,7 +7459,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             epoch, argv, launch_ticket, label='finalize-review')
         return _action_outcome(
             epoch, rc, timed_out, label='finalize-review',
-            failure_detail=failure_detail)
+            # finalizer 的 1 包括提交前失败，属于其自身状态域；只有
+            # novel CLI 的 1 才承诺正式结果落盘，不能仅按 canonical 身份套用。
+            failure_detail=failure_detail, exit_origin='supervisor')
 
     deterministic_callbacks = ({
         'read_operator_next': _read_operator_next,
@@ -7469,7 +7493,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         _SUPERVISORS[run_id] = supervisor
 
     def worker() -> None:
-        nonlocal latest_outcome, latest_rc, latest_error_kind
+        nonlocal latest_outcome, latest_rc, latest_error_kind, latest_exit_origin
         try:
             supervised = supervisor.run()
             # Supervisor 的最后 typed 事实是 parent ended 的权威输入。
@@ -7477,6 +7501,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             # epoch_closed=2/stopped 会与 ended=70/unknown 串账。
             if supervised.turn is not None:
                 latest_rc = supervised.turn.exit_code
+                latest_exit_origin = supervised.turn.exit_origin
                 latest_outcome = supervised.turn.outcome
             if supervised.stopped:
                 latest_outcome = AgentDeliveryOutcome(
@@ -7487,6 +7512,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     latest_rc = CRASH
         except BaseException:  # noqa: BLE001 —— Supervisor 崩溃也必须写 ended
             latest_rc = CRASH
+            latest_exit_origin = 'supervisor'
             latest_error_kind = latest_error_kind or 'commander_supervisor'
             latest_outcome = AgentDeliveryOutcome(
                 state='unknown', checked_at=int(time.time()),
@@ -7536,7 +7562,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 append(base, AgentRunEvent(
                     wire_version=2, run_id=run_id, kind='ended',
                     ts=int(time.time()), exit_code=latest_rc,
-                    outcome=latest_outcome))
+                    exit_origin=latest_exit_origin, outcome=latest_outcome))
             finally:
                 try:
                     _close_commander_owner(run_id)
@@ -7582,7 +7608,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 provider_session_id=None))
             append(base, AgentRunEvent(
                 wire_version=2, run_id=run_id, kind='ended',
-                ts=int(time.time()), exit_code=CRASH, outcome=failed))
+                ts=int(time.time()), exit_code=CRASH,
+                exit_origin='supervisor', outcome=failed))
         finally:
             try:
                 release_owner_lease()

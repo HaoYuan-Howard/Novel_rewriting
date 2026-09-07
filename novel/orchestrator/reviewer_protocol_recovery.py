@@ -56,6 +56,36 @@ def _canonical(value: Any) -> str:
         allow_nan=False).encode('utf-8'))
 
 
+# 已发行三项恢复 policy 的 parent 证明使用当时的视图字节。这个常量冻结
+# v1 默认 note，不能引用会随 UI 文案演进的 jobs.LANDED_RED_NOTE。
+_PARENT_PROOF_V1_LANDED_RED_NOTE = (
+    '正式结果**已经落盘**，但结论不通过（exit 1）。'
+    '⚠ 这不是「没跑成」：该做的是打开对应层的屏查看负结论并按'
+    '它给出的恢复路裁决，不是把它当成进程失败盲目重跑')
+
+
+_PARENT_PROOF_V1_FIELDS = frozenset({
+    'run_id', 'start', 'contract', 'epochs', 'active_epoch_id',
+    'started', 'ended', 'exit_code', 'state', 'note', 'outcome', 'allowed_controls',
+})
+
+
+def parent_proof_projection_v1(parent: AgentRunRecord) -> dict[str, Any]:
+    """只复现已发行 proof 的旧 parent 投影，不参与 UI、退出码或授权判断。
+
+    exit_origin 属于新增事件事实，旧证明尚未携带；其来源仍由每项 policy 的
+    session/attempt/cost/log 交叉验证。新 fold 对 exit 1 保留原 note，故这里能
+    无损重建旧 state/note；其它真实身份、时间、outcome 和显式 note 原样入 hash。
+    不调用新模型验证这份旧视图，也不把它写回 parent 或原事件账。
+    """
+    # 显式列出发行字段，未来新增可选 API 字段也不得悄悄改变旧证明的输入。
+    payload = parent.model_dump(mode='json', include=_PARENT_PROOF_V1_FIELDS)
+    if payload['exit_code'] == 1:
+        payload['state'] = 'landed_red'
+        payload['note'] = payload['note'] or _PARENT_PROOF_V1_LANDED_RED_NOTE
+    return payload
+
+
 def _refuse(reason: str) -> None:
     raise reviewer_tasks.ReviewerTaskError(f'Commander 协议恢复证据不闭合：{reason}')
 
@@ -389,7 +419,7 @@ def _inspect_suffix_response(
         policy=_SUFFIX_POLICY, session_run_id=turn.session_run_id, turn_id=turn.turn_id,
         attempt_id=turn.attempts[0].attempt_id,
         provider_session_id=pending.provider_session_id,
-        parent_sha256=_canonical(parent.model_dump(mode='json')),
+        parent_sha256=_canonical(parent_proof_projection_v1(parent)),
         seat_sha256=_digest(_plain_bytes(base, seat_path)),
         session_sha256=_canonical([event.to_dict() for event in events]),
         cost_sha256=_canonical(ordered_costs), log_sha256=_digest(raw),
@@ -523,7 +553,7 @@ def inspect_response(
     return RecoveredReviewerResponse(document, ReviewerProtocolRecoveryProof(
         session_run_id=turn.session_run_id, turn_id=turn.turn_id,
         attempt_id=attempt.attempt_id, provider_session_id=attempt.provider_session_id,
-        parent_sha256=_canonical(parent.model_dump(mode='json')),
+        parent_sha256=_canonical(parent_proof_projection_v1(parent)),
         seat_sha256=_digest(_plain_bytes(base, seat_path)),
         session_sha256=_canonical([event.to_dict() for event in session_events]),
         cost_sha256=_canonical(cost), log_sha256=_digest(raw),

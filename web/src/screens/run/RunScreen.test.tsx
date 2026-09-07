@@ -232,6 +232,62 @@ describe('RunScreen 交付终验', () => {
     expect(screen.queryByTestId('stopped-stage-link')).not.toBeInTheDocument()
   })
 
+  it.each(['commander', 'supervisor', undefined] as const)(
+    '父运行 exit1 来源=%s 时保持服务端失败与交付未知，不推断已落盘',
+    async (exitOrigin) => {
+      const run = await mockApi.getRunProgress(SAMPLE_SID)
+      vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
+      vi.spyOn(api, 'getCheck').mockResolvedValue(null)
+      vi.spyOn(api, 'getAgentRuns').mockResolvedValue({
+        runs: [{
+          run_id: 'run-external-exit-one',
+          start: {
+            sid: SAMPLE_SID,
+            argv: ['codex', 'exec', '--json'],
+            prompt: 'x',
+            authorized: true,
+            egress_authorized: true,
+            code_version: 'abc',
+            profiles: null,
+          },
+          contract: null,
+          epochs: [],
+          active_epoch_id: null,
+          started: 1,
+          ended: 2,
+          exit_code: 1,
+          ...(exitOrigin === undefined ? {} : { exit_origin: exitOrigin }),
+          state: 'failed',
+          note: null,
+          outcome: {
+            state: 'unknown',
+            reason: '外部进程失败，未形成可信交付结论',
+            checked_at: 3,
+          },
+          allowed_controls: [],
+        }],
+      })
+
+      renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+
+      expect(await screen.findByText('failed 失败')).toBeVisible()
+      expect(screen.getByText(/起于.*exit 1/)).toBeVisible()
+      const delivery = screen.getByRole('button', {
+        name: '查看交付终验依据：交付未知',
+      })
+      expect(delivery).toBeVisible()
+      fireEvent.click(delivery)
+      expect(screen.getByTestId('delivery-reason')).toHaveTextContent(
+        '外部进程失败，未形成可信交付结论',
+      )
+      expect(screen.queryByText('landed_red 已落盘但有红项')).not.toBeInTheDocument()
+      expect(screen.queryByText(/正式结果.*已经落盘/)).not.toBeInTheDocument()
+      expect(screen.queryByTestId('agent-run-note')).not.toBeInTheDocument()
+      expect(screen.queryByText('stopped 安全停点')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('stopped-stage-link')).not.toBeInTheDocument()
+    },
+  )
+
   it('展示每次运行已冻结的 commander/default/override 精确配置', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
