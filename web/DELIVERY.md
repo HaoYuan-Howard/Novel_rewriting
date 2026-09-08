@@ -219,6 +219,14 @@ Stage4A 表单一次提交当前完整 subject、策略 `accept|request_replan` 
 `sid` 来自 `useParams()` → 进 query key → 进持久化 key。
 换书就是换一条缓存记录，不存在 A 书的 ✓ 能漏到 B 书的代码路径。
 
+运行中的自动节点和 typed 审批也会改变书级读模型。真实进度、AgentRun 生命周期或手动审批
+成功后，共享 hook 按 sid 刷新 check、overview、approvals、inbox 与已挂载的相关读屏；
+不依赖通用 Job 终态，也不要求用户刷新页面。首次挂载在首个真实进度快照后完整复验一次，
+包含取消同批未返回的旧材料请求；成功版本不依赖毫秒时间推断。之后相同快照及 elapsed
+等时间噪声不反复失效，
+run、AgentRun、日志和动作预览不进入这份读缓存失效面，避免轮询循环。刷新仍只展示
+各后端端点给出的判定，失败或 unknown 不由运行进度推算为通过。
+
 ---
 
 ## 3. 路由

@@ -9,19 +9,7 @@ import { api, splitLog } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import type { JobLogResponse, JobRequest } from '@/types/jobs'
 import { useSid } from './useRouteParams'
-
-/**
- * 作业终态会改变的不只是一张作业表。按 sid 失效整本书的读模型，才能让当前屏、
- * inbox、校验面与首页摘要都从落盘后的服务端状态重读；`jobs` 自己由终态那次
- * refetch/SSE 驱动，排除它可避免失效循环。
- */
-function invalidateBookAfterTerminal(qc: QueryClient, sid: string) {
-  void qc.invalidateQueries({
-    predicate: (query) =>
-      query.queryKey[0] !== 'jobs' && query.queryKey.some((part) => part === sid),
-  })
-  void qc.invalidateQueries({ queryKey: qk.novels() })
-}
+import { invalidateBookReadModels } from './bookReadModels'
 
 // AppShell、确认框和具体屏可能同时观察同一个 jobs query。终态刷新是书级副作用，
 // 同一个 QueryClient / sid / job 只做一次，避免三个 observer 把同一批读模型重复拉取。
@@ -36,7 +24,7 @@ function refreshTerminalOnce(qc: QueryClient, sid: string, jobId: string) {
   }
   if (bySid.get(sid) === jobId) return
   bySid.set(sid, jobId)
-  invalidateBookAfterTerminal(qc, sid)
+  void invalidateBookReadModels(qc, sid)
 }
 
 function rememberStartedRunning(qc: QueryClient, sid: string, jobId: string) {

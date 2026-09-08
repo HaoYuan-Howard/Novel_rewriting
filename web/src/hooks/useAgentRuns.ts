@@ -8,6 +8,7 @@ import type {
   AgentRunRequest,
 } from '@/types/agent'
 import { useSid } from './useRouteParams'
+import { agentReadIdentity, useBookReadModelsRefresh } from './useBookReadModelsRefresh'
 
 /**
  * capability 含这台机器此刻的 CLI/登录探针结果。HTTP 是 Cache-Control: no-store，
@@ -60,10 +61,11 @@ export function useAgentRuns(
   const routeSid = useSid()
   const sid = sidOverride ?? routeSid
 
-  return useQuery({
+  const query = useQuery({
     queryKey: qk.agentRuns(sid),
     queryFn: () => api.getAgentRuns(sid),
     enabled: !!sid,
+    refetchOnMount: 'always',
     refetchInterval: (q) => {
       const runs = q.state.data?.runs ?? []
       const active = runs.some(
@@ -73,6 +75,11 @@ export function useAgentRuns(
       return runs.some((run) => run.state === 'paused') ? 5000 : false
     },
   })
+  useBookReadModelsRefresh(
+    sid, 'agentRuns', query.isSuccess ? agentReadIdentity(query.data) : null,
+    query.isFetchedAfterMount, query.isFetching,
+  )
+  return query
 }
 
 /** 一次代跑的日志。照 useJobLog：每轮从头取，running 时 800ms 一轮，停了不再取。 */

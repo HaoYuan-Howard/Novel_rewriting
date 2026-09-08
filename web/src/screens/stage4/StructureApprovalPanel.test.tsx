@@ -6,11 +6,23 @@ import { mockApi } from '@/api/mock'
 import { qk } from '@/api/queryKeys'
 import { ConfirmDialog } from '@/components/job/ConfirmDialog'
 import { renderRoute } from '@/test/render'
+import { useChrome } from '@/hooks/useChrome'
 import type { ApprovalDoc } from '@/types/approvals'
 import type { Stage4IndexRow } from '@/types/stages'
 import { StructureApprovalPanel } from './StructureApprovalPanel'
 
 const SUBJECT = 'a'.repeat(64)
+
+function NoticeReadout() {
+  const { notices } = useChrome()
+  return <output data-testid="structure-notices">{notices.length}</output>
+}
+
+async function finishNotices() {
+  // 成功回包还会展示 3 秒通知；等真实消费者归零再结束，避免环境销毁后遗留回调。
+  await waitFor(() => expect(screen.getByTestId('structure-notices')).not.toHaveTextContent('0'))
+  await waitFor(() => expect(screen.getByTestId('structure-notices')).toHaveTextContent('0'), { timeout: 4000 })
+}
 
 const rows: Stage4IndexRow[] = [
   {
@@ -228,7 +240,7 @@ describe('Stage4 typed 结构审批', () => {
         identity={false}
         viewSubject={SUBJECT}
         onRefreshView={vi.fn()}
-      /><ConfirmDialog /></>,
+      /><ConfirmDialog /><NoticeReadout /></>,
       '/n/book-1/stage4/1',
     )
 
@@ -270,7 +282,8 @@ describe('Stage4 typed 结构审批', () => {
     await waitFor(() => expect(job).toHaveBeenCalledWith({
       ...replan, required_inputs: [], sid: 'book-1', ordinal: null,
     }))
-  })
+    await finishNotices()
+  }, 10000)
 
   it('B infeasible 没有正式 subject 时不造假审批，但仍可另行确认重跑 A', async () => {
     const doc = undecided()

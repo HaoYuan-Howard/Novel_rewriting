@@ -10,6 +10,7 @@ import type {
 } from '@/types/approvals'
 import type { BlueprintSeenRequest, Stage2GlobalSeenRequest } from '@/types/stages'
 import { useSid } from './useRouteParams'
+import { invalidateBookReadModels } from './bookReadModels'
 
 /**
  * 人工验收记录。走 Query 而不是 Context+useReducer：
@@ -28,14 +29,18 @@ export function useApprovals(sidOverride?: string) {
     staleTime: Infinity,
   })
 
-  const cache = (doc: ApprovalDoc) => {
-    qc.setQueryData(qk.approvals(sid), doc)
+  const cache = async (doc: ApprovalDoc) => {
+    // 请求在途时路由可能已换书；完整回包只更新它自己的书，不能使用新页面的 sid。
+    const bookSid = doc.sid
+    await qc.cancelQueries({ queryKey: qk.approvals(bookSid), exact: true })
+    qc.setQueryData(qk.approvals(bookSid), doc)
+    await invalidateBookReadModels(qc, bookSid, { currentKeys: [qk.approvals(bookSid)] })
   }
 
-  const put = (doc: ApprovalDoc) => {
-    cache(doc)
+  const put = async (doc: ApprovalDoc) => {
+    await cache(doc)
     // 确认会发起下游作业 —— 让抽屉立刻看得见
-    void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
+    void qc.invalidateQueries({ queryKey: qk.jobs(doc.sid) })
   }
 
   const approve = useMutation({
@@ -50,19 +55,14 @@ export function useApprovals(sidOverride?: string) {
     mutationFn: (request: StructureApprovalRequest) => api.approveStructure(sid, request),
     onSuccess: (doc) => {
       // 专用结构裁决只写 `_service/approvals`，明确不触发作业。
-      cache(doc)
-      void qc.invalidateQueries({ queryKey: qk.approvalWorkpack(sid, 'structure') })
-      void qc.invalidateQueries({ queryKey: qk.inbox(sid) })
+      return cache(doc)
     },
   })
   const approveStage5Closure = useMutation({
     mutationFn: (request: Stage5ClosureRequest) => api.approveStage5Closure(sid, request),
     onSuccess: (doc) => {
       // 回执只写审批账；成功后 Stage5/下游与 inbox 必须重读服务端当前结论。
-      cache(doc)
-      void qc.invalidateQueries({ queryKey: qk.inbox(sid) })
-      void qc.invalidateQueries({ queryKey: qk.stage6(sid) })
-      void qc.invalidateQueries({ queryKey: qk.stage7(sid) })
+      return cache(doc)
     },
   })
   const markGlobalSeen = useMutation({
@@ -80,7 +80,7 @@ export function useApprovals(sidOverride?: string) {
 
   return {
     sid,
-    doc: q.data ?? null,
+    doc: q.isError ? null : q.data ?? null,
     isLoading: q.isLoading,
     isError: q.isError,
     error: q.error,

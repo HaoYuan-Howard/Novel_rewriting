@@ -39,7 +39,8 @@ sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from contracts.invariants import (                                  # noqa: E402
-    AGENT_EXECUTOR_NODES, APPROVAL_GATES, APPROVAL_SEEN, STAGES,
+    AGENT_EXECUTOR_NODES, APPROVAL_GATES, APPROVAL_SEEN,
+    COMMANDER_MAX_ATTEMPTS_PER_SEAT, STAGES,
 )
 from novel import (                                                  # noqa: E402
     agent_session_audit, operator_telemetry, prov, skill_contract,
@@ -267,6 +268,171 @@ def _turn_matches_ledger(
     )
 
 
+# 这是 R-11.26 已发行同席重试的验收表，不追溯重分类历史日志；
+# authentication/usage_limit 虽可等待外部恢复，却不属于秒级同席热重试。
+_COMMANDER_RECOVERABLE_FAILURES = frozenset({
+    'connection', 'timeout', 'server_error', 'rate_limit', 'provider_transient',
+})
+_COMMANDER_USAGE_FIELDS = (
+    'prompt_tokens', 'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens',
+    'completion_tokens', 'reasoning_tokens', 'total_tokens',
+)
+
+
+def _commander_attempt_index(
+    records: Sequence[agent_session_audit.AgentSessionRecord],
+    turns: Mapping[str, tuple[agent_session_audit.AgentSessionRecord,
+                             agent_session_audit.AgentSessionEvent]],
+) -> dict[str, agent_session_audit.AgentSessionEvent]:
+    result: dict[str, agent_session_audit.AgentSessionEvent] = {}
+    for record in records:
+        for event in record.attempts:
+            key = event.attempt_id
+            if key is None or key in result:
+                raise ValueError('session audit attempt 事件身份缺失或重复')
+            linked = turns.get(key)
+            if linked is not None and linked[0].session_run_id != record.session_run_id:
+                raise ValueError('同一 attempt 的 turn 与 attempt 事件属于不同 session')
+            result[key] = event
+    return result
+
+
+def _commander_event_matches_start(
+    record: agent_session_audit.AgentSessionRecord,
+    event: agent_session_audit.AgentSessionEvent,
+) -> bool:
+    start = record.start
+    profile = start.profile
+    return bool(
+        profile is not None
+        and event.session_run_id == record.session_run_id == start.session_run_id
+        and event.parent_run_id == start.parent_run_id
+        and event.role == start.role == 'commander'
+        and event.node is None and event.chapter is None
+        and start.node is None and start.chapter is None
+        and event.profile == profile
+        and event.subject_sha256 == start.subject_sha256
+        and event.requested_model == start.requested_model == profile.model
+        and event.requested_effort == start.requested_effort == profile.reasoning_effort
+        and event.start_code_version == start.start_code_version
+        and event.protocol_version == start.protocol_version
+        and event.cli_version == start.cli_version
+        and event.skill_sha256 == start.skill_sha256
+        and event.schema_sha256 == start.schema_sha256
+    )
+
+
+def _commander_delivery_chain(
+    record: agent_session_audit.AgentSessionRecord,
+    rows: Sequence[Mapping[str, Any]],
+) -> tuple[bool, int, int, int]:
+    """只证明同席运输与成本闭合；不删失败、不把未知用量补零。
+
+    delivery_attempts 按每次 Commander 逻辑调用从 1 重计。成本账的通用
+    attempt/retryable 格是 Commander 历史占位，不能拿它替代这份原生序号。
+    ended.error_kind 可记运输成功之后的 typed 拒因或正常 binding_changed；
+    它不是本项的批准判据。原值在联结 facts 披露，整书仍由 outer_run、
+    current_hash_bound_approvals 和当前交付独立判断，不能据本项代批。
+    """
+    start, end = record.start, record.end
+    if (start.kind != 'started' or end is None or end.kind != 'ended'
+            or end.process_state != 'ok'
+            or end.delivery_state not in ('delivered', 'blocked')
+            or not _commander_event_matches_start(record, end)
+            or end.end_code_version != start.start_code_version
+            or start.start_code_version in (None, prov.CODE_UNKNOWN)
+            or not start.subject_sha256 or not start.prompt_sha256 or not start.schema_sha256):
+        return False, 0, 0, 0
+    events = record.attempts
+    row_by = {row.get('attempt_id'): row for row in rows}
+    if (not events or events[0].prompt_sha256 != start.prompt_sha256
+            or len(row_by) != len(rows) or len(events) != len(rows)
+            or {event.attempt_id for event in events} != set(row_by)):
+        return False, 0, 0, 0
+    turns = {turn.attempt_id: turn for turn in record.turns}
+    expected_turn_ids = [event.attempt_id for event in events
+                         if event.provider_session_id is not None]
+    if (not record.turns or record.turns[0].prompt_sha256 != start.prompt_sha256
+            or [turn.attempt_id for turn in record.turns] != expected_turn_ids
+            or len(turns) != len(record.turns)):
+        return False, 0, 0, 0
+    provider_ids = {event.provider_session_id for event in events
+                    if event.provider_session_id is not None}
+    if (len(provider_ids) != 1 or set(record.provider_session_ids) != provider_ids
+            or end.provider_session_id not in provider_ids):
+        return False, 0, 0, 0
+    required = {
+        'run_id', 'sid', 'session_run_id', 'role', 'node', 'chapter',
+        'attempt_id', 'request_model', 'reasoning_effort', 'model',
+        'actual_reasoning_effort', 'code', 'protocol_version', 'cli_version',
+        'provider_session_id', 'outcome', 'exit_code', 'error', 'error_kind',
+        'response_sha256', *_COMMANDER_USAGE_FIELDS,
+    }
+    expected_ordinal = 1
+    failed = without_provider = unknown_usage = 0
+    previous_ts = start.ts
+    last_turn_index = 0
+    for event in events:
+        row = row_by[event.attempt_id]
+        usage = (dict.fromkeys(_COMMANDER_USAGE_FIELDS) if event.usage is None
+                 else event.usage.to_dict())
+        if (event.kind != 'attempt' or not _commander_event_matches_start(record, event)
+                or not required.issubset(row)
+                or not start.ts <= previous_ts <= event.ts <= end.ts
+                or event.delivery_attempts != expected_ordinal
+                or not 1 <= expected_ordinal <= COMMANDER_MAX_ATTEMPTS_PER_SEAT
+                or row['run_id'] != start.parent_run_id
+                or row['session_run_id'] != record.session_run_id
+                or row['role'] != 'commander' or row['node'] is not None or row['chapter'] is not None
+                or row['request_model'] != start.profile.model
+                or row['reasoning_effort'] != start.profile.reasoning_effort
+                or row['model'] != event.actual_model
+                or row['actual_reasoning_effort'] != event.actual_effort
+                or (event.actual_model is not None and event.actual_model != start.profile.model)
+                or (event.actual_effort is not None and event.actual_effort != start.profile.reasoning_effort)
+                or row['code'] != event.start_code_version
+                or row['protocol_version'] != event.protocol_version
+                or row['cli_version'] != event.cli_version
+                or row['provider_session_id'] != event.provider_session_id
+                or row['error_kind'] != event.error_kind or row['error'] != event.error_kind
+                or any(row[name] is not None and (
+                    type(row[name]) is not int or row[name] < 0)
+                    for name in _COMMANDER_USAGE_FIELDS)
+                or any(row[name] != usage[name] for name in _COMMANDER_USAGE_FIELDS)
+                or isinstance(row['exit_code'], bool) or not isinstance(row['exit_code'], int)
+                or not event.prompt_sha256):
+            return False, 0, 0, 0
+        previous_ts = event.ts
+        unknown_usage += int(event.usage is None)
+        turn = turns.get(event.attempt_id)
+        if turn is not None:
+            if (turn.kind != 'turn' or not _commander_event_matches_start(record, turn)
+                    or turn.provider_session_id != event.provider_session_id
+                    or turn.prompt_sha256 != event.prompt_sha256
+                    or turn.actual_model != event.actual_model
+                    or turn.actual_effort != event.actual_effort
+                    or turn.usage != event.usage or turn.error_kind != event.error_kind
+                    or turn.turn_index is None or turn.turn_index <= last_turn_index
+                    or not event.ts <= turn.ts <= end.ts):
+                return False, 0, 0, 0
+            last_turn_index = turn.turn_index
+        if row['outcome'] == 'ok':
+            if row['exit_code'] != 0 or event.error_kind is not None or turn is None:
+                return False, 0, 0, 0
+            expected_ordinal = 1
+        elif row['outcome'] == 'error':
+            if (row['exit_code'] == 0 or event.error_kind not in _COMMANDER_RECOVERABLE_FAILURES
+                    or row['response_sha256'] is not None):
+                return False, 0, 0, 0
+            failed += 1
+            without_provider += int(event.provider_session_id is None)
+            expected_ordinal += 1
+        else:
+            return False, 0, 0, 0
+    # 每一组的最后一项必须确实成功；ended-ok 本身不能替一笔失败补回答。
+    return expected_ordinal == 1 and bool(events), failed, without_provider, unknown_usage
+
+
 def linkage_check(
     *, run_id: str, sid: str,
     ledger_rows: Sequence[Mapping[str, Any]],
@@ -323,6 +489,7 @@ def linkage_check(
     try:
         ledger_by_attempt = _attempt_index(run_ledger)
         sessions_by_attempt = _session_index(relevant_sessions)
+        _commander_attempt_index(relevant_sessions, sessions_by_attempt)
     except ValueError:
         return _check(
             'ledger_session_adoption_linkage', 'unknown',
@@ -335,32 +502,46 @@ def linkage_check(
     commander_rows = [
         row for row in run_ledger if row.get('role') == 'commander'
     ]
-    # 现役 Commander 按审阅席位启动，提交决定时全书通常仍为 blocked；
-    # 全书交付由 outer/delivery 单独证明，不要求每一席自己完成全书。
+    # 无 attempt 事件的发行成功账保留原判据；失败恢复必须有新的完整尝试链。
     commander_linked = bool(commander_turns) or resume
-    for record, turn in commander_turns:
-        row = ledger_by_attempt.get(str(turn.attempt_id or ''))
-        commander_linked &= (
-            row is not None and row.get('role') == 'commander'
-            and row.get('outcome') == 'ok'
-            and record.end is not None
-            and record.end.process_state == 'ok'
-            and record.end.delivery_state in ('delivered', 'blocked')
-            and row.get('session_run_id') == record.session_run_id
-            and row.get('model') == turn.actual_model
-            and record.start.profile is not None
-            and row.get('request_model', record.start.profile.model)
-            == record.start.profile.model
-            and row.get('reasoning_effort') == record.start.profile.reasoning_effort
-            and (turn.actual_model is None
-                 or turn.actual_model == record.start.profile.model)
-            and row.get('actual_reasoning_effort') == turn.actual_effort
-            and (turn.actual_effort is None
-                 or turn.actual_effort == record.start.profile.reasoning_effort)
-        )
-    commander_linked &= (
-        len(commander_rows) == len(commander_turns)
-        and all(record.turns for record in commander))
+    recovered_attempts = relaunch_failures = unknown_usage_attempts = 0
+    commander_attempt_rows = sum(len(record.attempts) for record in commander)
+    for record in commander:
+        rows = [row for row in commander_rows
+                if row.get('session_run_id') == record.session_run_id]
+        if record.attempts:
+            linked, recovered, relaunched, usage_unknown = _commander_delivery_chain(record, rows)
+            commander_linked &= linked
+            if linked:
+                recovered_attempts += recovered
+                relaunch_failures += relaunched
+                unknown_usage_attempts += usage_unknown
+            continue
+        # legacy 只能证明其原有全成功 turn，绝不以缺 attempt 为理由放过失败。
+        commander_linked &= len(rows) == len(record.turns) and bool(record.turns)
+        for turn in record.turns:
+            row = ledger_by_attempt.get(str(turn.attempt_id or ''))
+            commander_linked &= (
+                row is not None and row.get('role') == 'commander'
+                and row.get('outcome') == 'ok'
+                and record.end is not None
+                and record.end.process_state == 'ok'
+                and record.end.delivery_state in ('delivered', 'blocked')
+                and row.get('session_run_id') == record.session_run_id
+                and row.get('model') == turn.actual_model
+                and record.start.profile is not None
+                and row.get('request_model', record.start.profile.model)
+                == record.start.profile.model
+                and row.get('reasoning_effort') == record.start.profile.reasoning_effort
+                and (turn.actual_model is None
+                     or turn.actual_model == record.start.profile.model)
+                and row.get('actual_reasoning_effort') == turn.actual_effort
+                and (turn.actual_effort is None
+                     or turn.actual_effort == record.start.profile.reasoning_effort)
+            )
+    commander_linked &= all(
+        row.get('session_run_id') in {record.session_run_id for record in commander}
+        for row in commander_rows)
 
     successful_executor_rows = [
         row for row in run_ledger
@@ -422,6 +603,14 @@ def linkage_check(
     return _check(
         'ledger_session_adoption_linkage', 'pass' if passed else 'fail',
         commander_linked=commander_linked,
+        commander_attempt_rows=commander_attempt_rows,
+        recovered_commander_attempts=recovered_attempts,
+        commander_failures_without_provider_turn=relaunch_failures,
+        commander_unknown_usage_attempts=unknown_usage_attempts,
+        # 后续业务拒因独立披露；运输对账不能将它抹掉，也不能代替正式审批。
+        commander_end_error_kinds=dict(sorted(Counter(
+            record.end.error_kind for record in commander
+            if record.end is not None and record.end.error_kind is not None).items())),
         executor_sessions=len(executors),
         open_sessions=len(open_sessions),
         unknown_sessions=len(unknown_sessions),

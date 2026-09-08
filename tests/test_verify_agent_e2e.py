@@ -3,6 +3,7 @@
 """Agent E2E 验收器的零模型身份联结测试。"""
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import replace
 from types import SimpleNamespace
@@ -10,9 +11,12 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.invariants import AGENT_EXECUTOR_NODES
-from contracts.schema.orchestration import ProgressEvent
+from contracts.schema.orchestration import (
+    AgentDeliveryOutcome, AgentRunEvent, AgentRunStart, ProgressEvent,
+)
 from novel import agent_session_audit as audit
 from novel.orchestrator import admission, beacon
+from novel.llm.ledger import append_commander_call, ledger_path, read_jsonl_rows
 from tools import verify_agent_e2e as verifier
 
 
@@ -413,3 +417,258 @@ def test_workflow_readings_are_scoped_to_the_requested_run(tmp_path):
     assert metrics['cli']['per_node']['stage2.global']['exit_codes'] == {'0': 1}
     assert metrics['identity']['code_identities'] == ['clean-code']
     assert metrics['identity']['experiment_valid'] is True
+
+
+
+def _commander_retry_chain(tmp_path, *, failures=(1,), failure_kind='timeout',
+                           first_provider=True, usage_without_provider=False,
+                           known_prompt_tokens=10, end_error_kind=None):
+    """用正式成本/会话 writer 铸造 R-11.26 尝试账；不发模型、不运行验收 CLI。"""
+    ledger, adoptions, sessions = _closed_chain()
+    common = {
+        'session_run_id': 'session-commander', 'parent_run_id': _RUN_ID,
+        'role': 'commander', 'node': None, 'chapter': None,
+        'subject_sha256': _SHA, 'profile': _PROFILE,
+        'requested_model': _PROFILE['model'], 'requested_effort': _PROFILE['reasoning_effort'],
+        'protocol_version': 'codex-jsonl-v1', 'start_code_version': 'clean-code',
+        'skill_sha256': 'c' * 64, 'schema_sha256': 'd' * 64,
+    }
+    start = audit.AgentSessionEvent(**common, prompt_sha256=_SHA, kind='started', ts=1)
+    audit.append_event(tmp_path, start)
+    invocation = 0
+    turn_index = 0
+    for failures_in_group in failures:
+        for ordinal in range(1, failures_in_group + 2):
+            invocation += 1
+            succeeds = ordinal == failures_in_group + 1
+            provider = None if invocation == 1 and not first_provider else 'provider-commander'
+            usage = (audit.AgentSessionUsage(prompt_tokens=known_prompt_tokens, completion_tokens=3)
+                     if succeeds or (provider is None and usage_without_provider) else None)
+            # 未获 provider 时下一次是原请求 relaunch；有 provider 后使用独立
+            # resume prompt。只有本次 attempt 与本次 turn 的 prompt 必须相同。
+            prompt = _SHA if turn_index == 0 else f'{invocation:064x}'
+            attempt_id = f'retry-attempt-{invocation}'
+            error = None if succeeds else failure_kind
+            event = audit.AgentSessionEvent(
+                **common, prompt_sha256=prompt, attempt_id=attempt_id,
+                provider_session_id=provider, usage=usage, error_kind=error,
+                delivery_attempts=ordinal, kind='attempt', ts=2 * invocation)
+            audit.append_event(tmp_path, event)
+            append_commander_call(
+                tmp_path, run_id=_RUN_ID, sid=_SID, session_run_id='session-commander',
+                attempt_id=attempt_id, request_model=_PROFILE['model'],
+                requested_effort=_PROFILE['reasoning_effort'], code='clean-code',
+                protocol_version='codex-jsonl-v1', provider_session_id=provider,
+                usage=None if usage is None else usage.to_dict(),
+                outcome='ok' if succeeds else 'error', exit_code=0 if succeeds else 1,
+                error_kind=error, response_sha256='b' * 64 if succeeds else None)
+            if provider is not None:
+                turn_index += 1
+                audit.append_commander_turn(tmp_path, audit.AgentSessionEvent(
+                    **common, prompt_sha256=prompt, attempt_id=attempt_id,
+                    provider_session_id=provider, usage=usage, error_kind=error,
+                    turn_index=turn_index, kind='turn', ts=2 * invocation + 1))
+    audit.append_event(tmp_path, audit.AgentSessionEvent(
+        **common, prompt_sha256=_SHA, provider_session_id='provider-commander',
+        end_code_version='clean-code', process_state='ok', delivery_state='blocked',
+        error_kind=end_error_kind, kind='ended', ts=2 * invocation + 2))
+    [sessions[0]] = audit.fold(audit.read_events(tmp_path))
+    ledger = [*read_jsonl_rows(ledger_path(tmp_path)), *ledger[1:]]
+    return ledger, adoptions, sessions
+
+
+def _retry_check(values):
+    ledger, adoptions, sessions = values
+    before = copy.deepcopy(values)
+    result = verifier.linkage_check(
+        run_id=_RUN_ID, sid=_SID, ledger_rows=ledger, audit_rows=adoptions, sessions=sessions)
+    assert values == before, '验收只能读取，原失败与未知用量不能被归一改写'
+    return result
+
+
+@pytest.mark.parametrize('failure_kind', [
+    'timeout', 'connection', 'server_error', 'rate_limit', 'provider_transient',
+])
+def test_recovered_commander_attempts_close_without_erasing_the_failure(tmp_path, failure_kind):
+    values = _commander_retry_chain(tmp_path, failure_kind=failure_kind)
+    result = _retry_check(values)
+    assert result['state'] == 'pass'
+    assert result['facts']['recovered_commander_attempts'] == 1
+    assert result['facts']['commander_attempt_rows'] == 2
+    assert result['facts']['commander_unknown_usage_attempts'] == 1
+    failure, success = values[0][:2]
+    assert failure['outcome'] == 'error' and success['outcome'] == 'ok'
+    assert failure['prompt_tokens'] is None and failure['completion_tokens'] is None
+    # 现役 Commander 通用成本格不是交付计数，不得据它们否定真实 1→2 attempt。
+    assert failure['attempt'] == success['attempt'] == 1
+    assert failure['max_attempts'] == success['max_attempts'] == 1
+    assert failure['retryable'] is success['retryable'] is False
+
+
+@pytest.mark.parametrize('usage_known', [False, True])
+def test_relaunch_failure_without_provider_has_cost_and_attempt_but_no_turn(tmp_path, usage_known):
+    values = _commander_retry_chain(
+        tmp_path, first_provider=False, usage_without_provider=usage_known)
+    result = _retry_check(values)
+    assert result['state'] == 'pass'
+    assert result['facts']['commander_failures_without_provider_turn'] == 1
+    assert result['facts']['recovered_commander_attempts'] == 1
+    assert result['facts']['commander_unknown_usage_attempts'] == int(not usage_known)
+    assert len(values[2][0].attempts) == 2 and len(values[2][0].turns) == 1
+    assert values[0][0]['provider_session_id'] is None
+    assert values[0][0]['prompt_tokens'] == (10 if usage_known else None)
+
+
+@pytest.mark.parametrize('groups', [(2,), (1, 0, 1), (0, 1)])
+def test_delivery_attempt_ordinals_restart_only_after_a_completed_group(tmp_path, groups):
+    values = _commander_retry_chain(tmp_path, failures=groups)
+    result = _retry_check(values)
+    assert result['state'] == 'pass'
+    assert result['facts']['recovered_commander_attempts'] == sum(groups)
+    assert result['facts']['commander_attempt_rows'] == sum(groups) + len(groups)
+
+
+@pytest.mark.parametrize('kind', [
+    'authentication', 'usage_limit', 'permission', 'agent_schema', 'protocol',
+    'provider_session_reused', 'agent_command', 'unknown',
+])
+def test_later_success_never_launders_nonretryable_commander_failure(tmp_path, kind):
+    # provider_session_reused 是 fold 专用所有权反例；这里在已完整折叠的
+    # 夹具上改两账为同一分类，专门验证验收白名单仍不能接受它。
+    values = _commander_retry_chain(tmp_path)
+    ledger, _adoptions, sessions = values
+    ledger[0].update(error_kind=kind, error=kind)
+    record = sessions[0]
+    sessions[0] = replace(record,
+        attempts=(replace(record.attempts[0], error_kind=kind), *record.attempts[1:]),
+        turns=(replace(record.turns[0], error_kind=kind), *record.turns[1:]))
+    assert _retry_check(values)['state'] == 'fail'
+
+
+@pytest.mark.parametrize('change', [
+    'missing_cost', 'missing_attempt', 'missing_failure_turn', 'extra_turn',
+    'wrong_session', 'wrong_parent', 'wrong_code', 'wrong_model', 'wrong_effort',
+    'wrong_provider', 'wrong_schema', 'wrong_skill', 'wrong_prompt',
+    'usage_zero_fill', 'turn_usage', 'failed_response', 'ordinal_gap',
+    'ordinal_reset_before_success', 'unrecovered', 'end_failed', 'end_unknown',
+])
+def test_commander_recovery_requires_every_original_identity_and_terminal_success(tmp_path, change):
+    values = _commander_retry_chain(tmp_path)
+    ledger, _adoptions, sessions = values
+    record = sessions[0]
+    if change == 'missing_cost':
+        ledger.pop(0)
+    elif change == 'missing_attempt':
+        sessions[0] = replace(record, attempts=record.attempts[1:])
+    elif change == 'missing_failure_turn':
+        sessions[0] = replace(record, turns=record.turns[1:])
+    elif change == 'extra_turn':
+        sessions[0] = replace(record, turns=(*record.turns,
+            replace(record.turns[-1], attempt_id='unissued', turn_index=3)))
+    elif change == 'wrong_session':
+        ledger[0]['session_run_id'] = 'another-logical-session'
+    elif change == 'wrong_parent':
+        ledger[0]['run_id'] = 'another-parent'
+    elif change in {'wrong_code', 'wrong_model', 'wrong_effort', 'wrong_provider'}:
+        field = {'wrong_code': 'code', 'wrong_model': 'model',
+                 'wrong_effort': 'actual_reasoning_effort',
+                 'wrong_provider': 'provider_session_id'}[change]
+        ledger[0][field] = 'different-identity'
+    elif change in {'wrong_schema', 'wrong_skill', 'wrong_prompt'}:
+        field = {'wrong_schema': 'schema_sha256', 'wrong_skill': 'skill_sha256',
+                 'wrong_prompt': 'prompt_sha256'}[change]
+        sessions[0] = replace(record, attempts=(
+            replace(record.attempts[0], **{field: '9' * 64}), *record.attempts[1:]))
+    elif change == 'usage_zero_fill':
+        ledger[0]['prompt_tokens'] = 0
+    elif change == 'turn_usage':
+        sessions[0] = replace(record, turns=(replace(
+            record.turns[0], usage=audit.AgentSessionUsage(prompt_tokens=0)), *record.turns[1:]))
+    elif change == 'failed_response':
+        ledger[0]['response_sha256'] = 'a' * 64
+    elif change == 'ordinal_gap':
+        sessions[0] = replace(record, attempts=(record.attempts[0],
+            replace(record.attempts[1], delivery_attempts=3)))
+    elif change == 'ordinal_reset_before_success':
+        sessions[0] = replace(record, attempts=(record.attempts[0],
+            replace(record.attempts[1], delivery_attempts=1)))
+    elif change == 'unrecovered':
+        ledger.pop(1)
+        sessions[0] = replace(record, attempts=record.attempts[:1], turns=record.turns[:1])
+    elif change == 'end_failed':
+        sessions[0] = replace(record, end=replace(record.end, process_state='failed'))
+    else:
+        sessions[0] = replace(record, end=replace(record.end, delivery_state='unknown'))
+    assert _retry_check(values)['state'] == 'fail'
+
+
+def test_commander_retry_above_the_registered_limit_stays_failed(tmp_path):
+    assert _retry_check(_commander_retry_chain(tmp_path, failures=(3,)))['state'] == 'fail'
+
+
+@pytest.mark.parametrize('which', ['cost', 'attempt', 'cross_session'])
+def test_commander_attempt_collisions_remain_unknown(tmp_path, which):
+    values = _commander_retry_chain(tmp_path)
+    ledger, _adoptions, sessions = values
+    if which == 'cost':
+        ledger.append(dict(ledger[0]))
+    elif which == 'attempt':
+        sessions[0] = replace(sessions[0], attempts=(
+            *sessions[0].attempts, sessions[0].attempts[0]))
+    else:
+        sessions[1] = replace(sessions[1], attempts=(replace(
+            sessions[0].attempts[0], session_run_id=sessions[1].session_run_id),))
+    result = _retry_check(values)
+    assert result['state'] == 'unknown'
+    assert result['facts']['identity_collision'] is True
+
+
+def test_legacy_success_history_is_compatible_but_missing_attempt_failure_is_not(tmp_path):
+    legacy = _closed_chain()
+    assert _retry_check(legacy)['state'] == 'pass'
+    values = _commander_retry_chain(tmp_path)
+    values[2][0] = replace(values[2][0], attempts=())
+    assert _retry_check(values)['state'] == 'fail'
+
+
+@pytest.mark.parametrize('raw_value', [True, 1.0])
+def test_raw_usage_cannot_equal_typed_integer_by_python_numeric_coercion(tmp_path, raw_value):
+    values = _commander_retry_chain(tmp_path, known_prompt_tokens=1)
+    values[0][1]['prompt_tokens'] = raw_value
+    assert _retry_check(values)['state'] == 'fail'
+
+
+@pytest.mark.parametrize('end_error_kind, stopped', [
+    ('commander_reviewer_binding_changed', False),
+    ('commander_reviewer_no_progress', True),
+    ('reviewer_seat_budget', True),
+    ('commander_reviewer_request', True),
+])
+def test_transport_linkage_discloses_end_reason_but_cannot_override_stopped_outer_run(
+        tmp_path, end_error_kind, stopped):
+    values = _commander_retry_chain(tmp_path, end_error_kind=end_error_kind)
+    linkage = _retry_check(values)
+    assert linkage['state'] == 'pass'
+    assert linkage['facts']['commander_end_error_kinds'] == {end_error_kind: 1}
+    # 正式 producer 分开记录两轴：上述终止拒因会使 parent 停止；binding
+    # 变化则允许 planner 换窗继续。这里通过真实事件 reader/fold 消费对应终态。
+    start = AgentRunStart(
+        sid=_SID, base=str(tmp_path), argv=['novel', 'agent'],
+        prompt='零模型测试的授权记录', authorized=True, egress_authorized=True,
+        code_version='clean-code',
+        skill_sha256=verifier.skill_contract.package_sha256(verifier.REPO_ROOT),
+        profiles={'commander': _PROFILE, 'executor_default': _PROFILE})
+    verifier.agent.append(tmp_path, AgentRunEvent(
+        run_id=_RUN_ID, kind='started', ts=1, start=start))
+    verifier.agent.append(tmp_path, AgentRunEvent(
+        run_id=_RUN_ID, kind='ended', ts=20, exit_code=2 if stopped else 0,
+        exit_origin='supervisor', outcome=AgentDeliveryOutcome(
+            state='stopped' if stopped else 'ready', reason=end_error_kind, checked_at=20)))
+    _row, outer = verifier._one_outer_run(tmp_path, _RUN_ID)
+    assert outer['state'] == ('fail' if stopped else 'pass')
+    assert verifier._overall([linkage, outer]) == ('fail' if stopped else 'pass')
+    # 即使运输与父运行已闭合，缺正式 typed 审批仍不可能聚合为整书通过。
+    approval = SimpleNamespace(gate={}, seen={})
+    approvals = verifier.current_approval_check(tmp_path, _SID, approval)
+    assert approvals['state'] == 'fail'
+    assert verifier._overall([linkage, outer, approvals]) == 'fail'
