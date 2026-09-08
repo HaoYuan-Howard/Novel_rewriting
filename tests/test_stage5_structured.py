@@ -302,20 +302,26 @@ def test_within_the_target_band_produces_no_audit_at_all():
     assert write._over_length_audit(short, entry) == ([], None)
 
 
-def test_over_length_audit_stays_in_verification():
+def test_over_length_audit_stays_in_verification(tmp_path):
     from contracts.artifacts import artifact_rel
     from novel import prov
-    from novel.orchestrator.state import readonly_ctx
+    from novel.llm.cache import CachePolicy
+    from novel.llm.ledger import CostLedger
+    from novel.run import RunContext
+    from novel.work_units import initialize_workflow
     from novel.store import ArtifactStore
     from novel.views.inbox import _trim_verification_items
 
     audit = TrimAudit(
         output_ordinal=4, before_sha256='a' * 64,
         reason='超上限 120 字（620/500）；本仓没有自动收缩路径，保留 pretrim，转 verification')
-    root = Path(tempfile.mkdtemp(prefix='trim-inbox-'))
+    initialize_workflow(tmp_path)
+    root = tmp_path / '收缩审计_42'
     try:
-        store = ArtifactStore(readonly_ctx(
-            root, 'stage5.write', prov.code_version()))
+        writer = RunContext(
+            novel_dir=root, node='stage5.write', paid=False,
+            code=prov.code_version(), cache=CachePolicy.default(), ledger=CostLedger())
+        store = ArtifactStore(writer)
         store.write(artifact_rel('stage5.trim_audit', nn=4), audit)
         # Rendering is tested with an explicitly current audit set; discovery
         # itself intentionally rejects an audit that has no matching formal chapter.

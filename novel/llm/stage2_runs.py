@@ -28,7 +28,7 @@ from typing import Any, Iterable, Mapping, NamedTuple, Sequence
 from pydantic import BaseModel, ValidationError
 
 from contracts.schema.orchestration import AgentProfile
-from novel import agent_session_audit, paths
+from novel import agent_session_audit, paths, work_units
 from novel.agent_capabilities import validate_profile
 from novel.agent_model_identity import (
     resolve_ledger_model_identity, validate_checkpoint_model_identity,
@@ -1188,8 +1188,11 @@ def _persist_checkpoint(
                         != _sha({k: v for k, v in record.items() if k != 'created_at'}):
                     raise ProvenanceRefused(
                         f'{target} 已有与本次 accepted attempt 不同的检查点；拒绝覆盖')
-                return target
-            _atomic_json(target, record)
+            else:
+                _atomic_json(target, record)
+    if 'acceptance_protocol' in record:
+        work_units.budget_for(ctx, scope=f'chapter:{chapter}').mark_adopted_for_attempt(
+            str(record['attempt_id']))
     return target
 
 

@@ -48,6 +48,8 @@ def _chapter(ordinal: int, text: str, root_fp: str, root_sha1: str) -> Chapter:
 
 @pytest.fixture
 def rig(tmp_path):
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
     book_dir = tmp_path / '批量销账_001'
     (book_dir / 'stage5').mkdir(parents=True)
     (book_dir / 'stage0').mkdir(parents=True)

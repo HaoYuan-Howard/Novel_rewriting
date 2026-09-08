@@ -210,14 +210,15 @@ def _adoption_for_chapter(
 def _typed_chapter(
     *, text: str, round_no: int,
     adoption: PreparedCheckpointAdoption | None,
+    root_clean_sha1: str = 'a' * 40,
 ) -> Chapter:
     if adoption is None:
         provenance = RoundFreeProvenance(
-            code='current-code', root_clean_sha1='a' * 40, inputs={},
+            code='current-code', root_clean_sha1=root_clean_sha1, inputs={},
             round=round_no, origin='human')
     else:
         provenance = RoundLlmProvenance(
-            code='current-code', root_clean_sha1='a' * 40,
+            code='current-code', root_clean_sha1=root_clean_sha1,
             inputs={
                 'stage4/writer_context.json': InputEdge(
                     file='b' * 10, consumed=None),
@@ -493,6 +494,22 @@ def _recovery_ctx(book: Path, run_id: str):
         paid=False,
         executor_profile=None,
     )
+
+
+def _recovery_store_ctx(book: Path, run_id: str) -> RunContext:
+    """真实写盘夹具使用可写运行上下文；来源采用账仍单独隔离测试。"""
+    from novel.work_units import initialize_workflow
+    initialize_workflow(book.parent)
+    clean = book / 'stage0' / 'clean_text.txt'
+    if not clean.exists():
+        clean.parent.mkdir(parents=True, exist_ok=True)
+        clean.write_text('prepared 恢复的固定源正文。\n', encoding='utf-8')
+    ctx = RunContext(
+        novel_dir=book, run_id=run_id, code='current-code',
+        node='stage5.write', paid=False, cache=CachePolicy.default(),
+        ledger=CostLedger(path=ledger_path(book.parent), run_id=run_id))
+    ctx.ledger = _RecoveryLedger()
+    return ctx
 
 
 def test_recovery_flags_are_free_valued_and_keep_read_write_effects_distinct():
@@ -1208,13 +1225,13 @@ def test_committed_recovery_lineage_survives_retain_recheck_and_archived_rewrite
 
     book = tmp_path / 'prepared后继改写_2007780338055790990'
     book.mkdir()
-    recovery_ctx = _recovery_ctx(book, TARGET_RUN_ID)
-    recovery_ctx.root_clean_sha1 = 'a' * 40
+    recovery_ctx = _recovery_store_ctx(book, TARGET_RUN_ID)
     chapter_row = PreparedRecoveryChapter.model_validate(_chapter_payload())
     _manifest, action = _manifest_for_chapter(recovery_ctx, chapter_row)
     adoption = _adoption_for_chapter(chapter_row, action)
     recovered = _typed_chapter(
-        text='恢复后的正文', round_no=1, adoption=adoption)
+        text='恢复后的正文', round_no=1, adoption=adoption,
+        root_clean_sha1=recovery_ctx.root_clean_sha1)
     journal = _committed_journal_for(chapter_row, action, recovered)
     journal_path = stage5_runs.paths.stage5_chapter_recovery_journal_path(
         book, TARGET_RUN_ID, 2)
@@ -1237,8 +1254,7 @@ def test_committed_recovery_lineage_survives_retain_recheck_and_archived_rewrite
 
     store = store_module.ArtifactStore(recovery_ctx)
     store.write(journal.primary_artifact, recovered)
-    later_ctx = _recovery_ctx(book, 'later-paid-run')
-    later_ctx.root_clean_sha1 = 'a' * 40
+    later_ctx = _recovery_store_ctx(book, 'later-paid-run')
 
     # retain：live 仍是当初 exact recovery；后继 guard 不再要求旧 post 仍 live。
     assert stage5_runs._committed_recovery_closes_live(
@@ -1259,7 +1275,8 @@ def test_committed_recovery_lineage_survives_retain_recheck_and_archived_rewrite
 
     # rewrite：归档的是 rechecked bytes（不是 journal 原稿），但 typed adoption 仍闭合。
     rewritten = _typed_chapter(
-        text='后续合法人工改写', round_no=2, adoption=None)
+        text='后续合法人工改写', round_no=2, adoption=None,
+        root_clean_sha1=recovery_ctx.root_clean_sha1)
     store.write_round(journal.primary_artifact, rewritten)
     archived_path = rounds_dir / 'ch02.r1.json'
     archived, _raw = store.read_own(
@@ -1284,13 +1301,13 @@ def test_committed_recovery_requires_exact_target_manifest_for_now_and_later(
 
     book = tmp_path / f'prepared_manifest_{damage}_2007780338055790990'
     book.mkdir()
-    ctx = _recovery_ctx(book, TARGET_RUN_ID)
-    ctx.root_clean_sha1 = 'a' * 40
+    ctx = _recovery_store_ctx(book, TARGET_RUN_ID)
     chapter_row = PreparedRecoveryChapter.model_validate(_chapter_payload())
     manifest, action = _manifest_for_chapter(ctx, chapter_row)
     adoption = _adoption_for_chapter(chapter_row, action)
     recovered = _typed_chapter(
-        text='带完整恢复来源的正文', round_no=1, adoption=adoption)
+        text='带完整恢复来源的正文', round_no=1, adoption=adoption,
+        root_clean_sha1=ctx.root_clean_sha1)
 
     monkeypatch.setattr(
         store_module.ArtifactStore, '_assert_self_fresh',

@@ -30,7 +30,7 @@ from novel.llm import agent_runs, stage4_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.run import RunContext
-from novel.node_agents import Stage4DesignSessionPool
+from novel.node_agents import Stage4DesignSessionPool, Stage4PlanSessionPool
 from novel.stages.stage4 import plan
 from novel.stages.stage4.blind import build_blind_projection
 from novel.store import ArtifactStore
@@ -169,6 +169,36 @@ def _client(
 ) -> SessionAgentClient:
     return SessionAgentClient(
         ctx, _profile(), driver, max_semantic_turns=max_turns)
+
+
+def _plan_pool(ctx: RunContext, monkeypatch, *, first_response=None,
+               max_turns: int = 4, session_id: str = 'provider-plan-chapter'):
+    """真实章池：只让第一章有歧义，续修沿用同章请求与物理 session。"""
+    from tests.test_stage4_plan_chapters import _inject_stage_ambiguities
+    monkeypatch.setattr(
+        plan, 'build_mechanical_baseline',
+        _inject_stage_ambiguities(plan.build_mechanical_baseline, (1,)))
+    response = None
+    requests = 0
+
+    def answer(request):
+        nonlocal response, requests
+        requests += 1
+        if response is None:
+            lines = request.prompt.splitlines()
+            ambiguities = json.loads(lines[
+                lines.index(plan.prompts.BLOCK_CHAPTER_AMBIGUITIES) + 1])
+            response = {'resolutions': [
+                {'ambiguity_id': row['ambiguity_id'],
+                 ('stage_ref' if row['kind'] == 'stage_signature_conflict'
+                  else 'candidate_scene_id'): row['candidates'][0]}
+                for row in ambiguities], 'binding_concerns': []}
+        return first_response if requests == 1 and first_response is not None else response
+
+    driver = _RequestDriver(answer, session_id=session_id)
+    return Stage4PlanSessionPool(
+        ctx, driver_factory=lambda _purpose, chapter: driver,
+        max_turns=max_turns, concurrency=1), driver
 
 
 def _design_pool(
@@ -1147,21 +1177,16 @@ def test_legacy_adopter_refuses_foreign_prepared_design_aggregate(
 
 
 def test_plan_false_infeasible_is_repaired_to_bound_in_same_session(
-        tmp_path: Path,
+        tmp_path: Path, monkeypatch,
 ) -> None:
     book = _book(tmp_path)
     blueprints = _seed_current_stage2(book)
     _design_ctx, candidate = _land_design(
         book, blueprints.model_dump(by_alias=True))
     plan_ctx = _ctx(book, 'stage4.plan')
-    answers = iter((
-        _infeasible_b_response(candidate),
-        _bound_b_response(
-            candidate, blueprints.model_dump(by_alias=True, mode='json')),
-    ))
-    driver = _RequestDriver(
-        lambda _request: next(answers), session_id='provider-plan-one-session')
-    client = _client(plan_ctx, driver, max_turns=2)
+    client, driver = _plan_pool(
+        plan_ctx, monkeypatch, first_response=_infeasible_b_response(candidate),
+        session_id='provider-plan-one-session', max_turns=2)
     report = plan.run_plan(plan_ctx, client)
     client.finish(process_state='ok', delivery_state='delivered')
     client.close()
@@ -1172,14 +1197,16 @@ def test_plan_false_infeasible_is_repaired_to_bound_in_same_session(
     assert landed.status == 'bound'
     assert store.exists(STAGE4_PLAN_CHAPTERS)
     assert not store.exists(STAGE4_WRITER_CONTEXT)
-    assert stage4_runs.committed(plan_ctx) is not None
+    assert stage4_runs.committed(
+        plan_ctx, stage4_runs.plan_chapter_commit_spec(1)) is not None
     assert driver.calls == 2
     assert len(driver.requests) == 2
     assert driver.requests[0].system is not None
     assert driver.requests[1].system is None
-    assert '构造出了完整 bound' in driver.requests[1].prompt
+    # 章级协议不接受整书 infeasible；明确 schema 反馈回同一章 Executor 自修。
+    assert 'schema' in driver.requests[1].prompt
     plan_checkpoint_path = (
-        paths.stage4_checkpoint_dir(book, plan_ctx.run_id, 'stage4.plan')
+        paths.stage4_plan_chapter_checkpoint_dir(book, plan_ctx.run_id, 1)
         / 'rev-0001.json')
     plan_checkpoint = json.loads(plan_checkpoint_path.read_text(encoding='utf-8'))
     assert plan_checkpoint['provider_session_id'] == 'provider-plan-one-session'
@@ -1187,21 +1214,10 @@ def test_plan_false_infeasible_is_repaired_to_bound_in_same_session(
     assert len(plan_checkpoint['attempt_links']) == 2
 
 
-def _hard_bound_response(
-        candidate: BlindCandidate, blueprints_raw: dict,
-) -> dict:
-    """构造一份可编译、但材料覆盖必然 HARD 的 B 响应。"""
-    payload = _bound_b_response(candidate, blueprints_raw)
-    for chapter in payload['chapters']:
-        for scene in chapter['scenes']:
-            scene['material_refs'] = []
-    return payload
-
-
-def test_plan_agent_exhaustion_commits_binding_and_invalid_then_recovers_zero_wire(
+def test_plan_code_owned_hard_commits_binding_and_invalid_then_recovers_zero_wire(
         tmp_path: Path, monkeypatch,
 ) -> None:
-    """业务 HARD 先续同 session；耗尽才落一次 INVALID，旧正式 bundle 不动。"""
+    """code-owner HARD 立即封存 INVALID；章 checkpoint 恢复保留旧正式 bundle。"""
     import pytest
 
     book = _book(tmp_path)
@@ -1212,10 +1228,7 @@ def test_plan_agent_exhaustion_commits_binding_and_invalid_then_recovers_zero_wi
     # Plan 落盘后由独立 context producer 组装一次；随后 HARD
     # run 必须逐字保留这两份下游当前仍消费的字节。
     clean_ctx = _ctx(book, 'stage4.plan')
-    clean_driver = _OneTurnDriver(
-        _bound_b_response(candidate, blueprints.model_dump(by_alias=True)),
-        session_id='provider-plan-clean')
-    clean_client = _client(clean_ctx, clean_driver)
+    clean_client = Stage4PlanSessionPool(clean_ctx)
     assert plan.run_plan(clean_ctx, clean_client).passed
     clean_client.finish(process_state='ok', delivery_state='delivered')
     clean_client.close()
@@ -1231,10 +1244,27 @@ def test_plan_agent_exhaustion_commits_binding_and_invalid_then_recovers_zero_wi
     prior_invalid = (book / plan._INVALID).read_bytes()
 
     hard_ctx = _ctx(book, 'stage4.plan')
-    hard_driver = _OneTurnDriver(
-        _hard_bound_response(candidate, blueprints.model_dump(by_alias=True)),
-        session_id='provider-plan-hard')
-    hard_client = _client(hard_ctx, hard_driver, max_turns=2)
+    hard_client, hard_driver = _plan_pool(
+        hard_ctx, monkeypatch, session_id='provider-plan-hard')
+    real_evaluate = plan.evaluate_plan_candidate
+    real_verdict = plan._candidate_bundle_verdict
+    post_model = False
+
+    def evaluate(*args, **kwargs):
+        nonlocal post_model
+        post_model = True
+        return real_evaluate(*args, **kwargs)
+
+    def code_failure(data, up, *, witness=None):
+        hits, feedback = real_verdict(data, up, witness=witness)
+        if not post_model:
+            return hits, feedback
+        if witness is not None:
+            witness.add(code='phase_artifact_link', rule='phase_artifact_link')
+        return (*hits, 'phase_artifact_link'), (*feedback, {'rule': 'phase_artifact_link'})
+
+    monkeypatch.setattr(plan, 'evaluate_plan_candidate', evaluate)
+    monkeypatch.setattr(plan, '_candidate_bundle_verdict', code_failure)
     original_write_immutable = ArtifactStore._write_immutable
     crashed = False
 
@@ -1253,20 +1283,19 @@ def test_plan_agent_exhaustion_commits_binding_and_invalid_then_recovers_zero_wi
     monkeypatch.setattr(
         ArtifactStore, '_write_immutable', original_write_immutable)
 
-    assert hard_driver.calls == 2
-    assert len(hard_driver.requests) == 2
-    assert hard_driver.requests[1].system is None
-    assert 'code_validation_failed' in hard_driver.requests[1].prompt
-    checkpoint_dir = paths.stage4_checkpoint_dir(
-        book, hard_ctx.run_id, 'stage4.plan')
+    assert hard_driver.calls == 1
+    assert len(hard_driver.requests) == 1
+    checkpoint_dir = paths.stage4_plan_chapter_checkpoint_dir(
+        book, hard_ctx.run_id, 1)
     assert [path.name for path in checkpoint_dir.glob('*.json')] == [
-        'rev-0001.json', 'rev-0002.json']
-    latest_checkpoint = json.loads((checkpoint_dir / 'rev-0002.json').read_text(
+        'rev-0001.json']
+    latest_checkpoint = json.loads((checkpoint_dir / 'rev-0001.json').read_text(
         encoding='utf-8'))
     assert _session_record(
         book, latest_checkpoint['session_run_id']).end is None
     assert (book / plan._INVALID).read_bytes() == prior_invalid
-    assert stage4_runs.committed(hard_ctx) is None
+    commit_spec = stage4_runs.plan_chapter_commit_spec(1)
+    assert stage4_runs.committed(hard_ctx, commit_spec) is None
 
     store = ArtifactStore(hard_ctx)
     binding = store.read_own(EvidenceBinding, STAGE4_EVIDENCE_BINDING)[0]
@@ -1276,14 +1305,20 @@ def test_plan_agent_exhaustion_commits_binding_and_invalid_then_recovers_zero_wi
 
     restarted = _ctx(
         book, 'stage4.plan', run_id=hard_ctx.run_id, code=hard_ctx.code)
-    no_wire = _client(restarted, _NoWireDriver(), max_turns=2)
-    with pytest.raises(GateBlocked, match='预算耗尽'):
+    post_model = False
+    from tests.test_stage4_plan_chapters import _DeliveryRecoveryDriver
+    # 章池预建时校验本地 driver 隔离；原回答恢复不得 start/resume。
+    forbidden = _DeliveryRecoveryDriver(1, outcome='forbid')
+    no_wire = Stage4PlanSessionPool(
+        restarted, driver_factory=lambda _purpose, _chapter: forbidden)
+    with pytest.raises(GateBlocked, match='phase_artifact_link'):
         plan.run_plan(restarted, no_wire)
     no_wire.close()
     invalid = ArtifactStore(restarted).read_own(
         PlanChapters, plan._INVALID)[0]
     assert invalid.output_chapters
-    committed = stage4_runs.committed(restarted)
+    assert forbidden.calls == 0
+    committed = stage4_runs.committed(restarted, commit_spec)
     assert committed is not None
     assert committed['touched_paths'] == sorted((
         STAGE4_EVIDENCE_BINDING, plan._INVALID))

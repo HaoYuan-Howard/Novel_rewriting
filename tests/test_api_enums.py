@@ -116,10 +116,10 @@ def test_every_action_is_unique_and_buildable(paid_payload):
             value = ('1' if flags[index] == '--chapters'
                      else 'formal' if flags[index] == '--edit-confirmation'
                      else 'source-run-1'
-                     if flags[index] == '--recover-repair-aggregate'
+                     if flags[index] in {'--recover-repair-aggregate', '--recover-prepared'}
                      else 'a' * 64 if flags[index] in {
                          '--current-chapter-sha256', '--preview-subject-sha256',
-                         '--source-journal-sha256', '--source-commit-sha256'}
+                         '--source-journal-sha256', '--source-commit-sha256', '--subject-sha256'}
                      else 'C:/placeholder.json')
             flags.insert(index + 1, value)
         # ⚠ 必填项由**点下去的那个人**给（同 `needs_value` 那一格的理由）：
@@ -130,7 +130,7 @@ def test_every_action_is_unique_and_buildable(paid_payload):
             value = ('formal' if extra == '--edit-confirmation'
                      else 'a' * 64 if extra in {
                          '--current-chapter-sha256', '--preview-subject-sha256',
-                         '--source-journal-sha256', '--source-commit-sha256'}
+                         '--source-journal-sha256', '--source-commit-sha256', '--subject-sha256'}
                      else 'C:/placeholder.json')
             flags += [extra, value] if extra in VALUED_FLAGS else [extra]
         argv = N.build_argv(action['kind'], 'sid123', flags, base=BASE)
@@ -290,6 +290,7 @@ def test_job_kinds_is_keyed_by_current_node_id(paid_payload):
     for node, spec in NODES.items():
         assert job_kinds[node]['label'] == spec.label
         assert job_kinds[node]['paid'] == spec.paid
+        assert job_kinds[node]['lifecycle'] == json.loads(json.dumps(spec.lifecycle._asdict()))
 
 
 def test_reviewer_rewrite_internal_actions_are_not_job_form_buttons(paid_payload):

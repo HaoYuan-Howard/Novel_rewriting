@@ -24,12 +24,14 @@ from typing import Any
 sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from contracts.invariants import BLUEPRINT_ARCHITECTURE  # noqa: E402
+from contracts.invariants import (  # noqa: E402
+    BLUEPRINT_ARCHITECTURE, WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS,
+)
 
 
-REPORT_SCHEMA = 'novel-stage2-acceptance-v1'
+REPORT_SCHEMA = 'novel-stage2-acceptance-v2'
 MANUAL_SCHEMA = 'novel-stage2-manual-quality-v1'
-WORKFLOW_SCHEMA = 'novel-workflow-metrics-v1'
+WORKFLOW_SCHEMA = 'novel-workflow-metrics-v2'
 DEFAULT_MIN_RUNS = 5
 DEFAULT_TARGET_SECONDS = 30 * 60
 DEFAULT_MIN_SAMPLED_CHAPTERS = 5
@@ -100,7 +102,7 @@ def _run_observation(report: dict[str, Any]) -> dict[str, Any]:
     blueprint = _mapping(stage2.get('blueprint_wire'))
     commander = _mapping(stage2.get('commander'))
     cold = _mapping(stage2.get('cold_cache'))
-    overlap = _mapping(stage2.get('overlap'))
+    lifecycle = _mapping(stage2.get('role_lifecycle'))
     wall = _mapping(stage2.get('wall_clock'))
 
     failures: list[str] = []
@@ -181,22 +183,29 @@ def _run_observation(report: dict[str, Any]) -> dict[str, Any]:
             unknowns.append(f'{label}_identity_unknown')
         elif value:
             unknowns.append(f'{label}_identity_unknown')
-    calls = commander.get('calls')
-    if isinstance(calls, int) and not isinstance(calls, bool):
-        if not 1 <= calls <= 3:
-            failures.append('stage2_commander_call_budget')
-    else:
-        unknowns.append('stage2_commander_calls_unknown')
+    # ledger 的 calls 是传输尝试数，预算只认稳定工作单元的内容轮。
+    if lifecycle.get('state') == 'fail':
+        failures.append('stage2_role_lifecycle_failed')
+    elif lifecycle.get('state') != 'ok':
+        unknowns.append('stage2_role_lifecycle_unknown')
+    commanders = _mapping(lifecycle.get('commanders'))
+    for node in ('stage2.global', 'stage2.blueprint'):
+        budget = _mapping(commanders.get(node))
+        used, limit = budget.get('content_used'), budget.get('content_limit')
+        if type(used) is not int or type(limit) is not int:
+            unknowns.append(f'{node}_content_budget_unknown')
+        elif limit != WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS or not 1 <= used <= limit:
+            failures.append(f'{node}_content_budget_exceeded')
     commander_errors = commander.get('errors')
     if isinstance(commander_errors, int) and not isinstance(commander_errors, bool):
         if commander_errors:
             failures.append('stage2_commander_error')
     else:
         unknowns.append('stage2_commander_errors_unknown')
-    if overlap.get('state') == 'missed':
-        failures.append('prereview_did_not_overlap_blueprint')
-    elif overlap.get('state') != 'ok':
-        unknowns.append('prereview_overlap_unknown')
+    if lifecycle.get('sequence') == 'fail':
+        failures.append('stage2_acceptance_sequence_failed')
+    elif lifecycle.get('sequence') != 'ok':
+        unknowns.append('stage2_acceptance_sequence_unknown')
 
     seconds = wall.get('seconds')
     if wall.get('state') != 'ok' or isinstance(seconds, bool) \

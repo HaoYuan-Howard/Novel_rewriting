@@ -152,6 +152,21 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
 
     node = 'stage2.global'
 
+    def __init__(
+        self, ctx: RunContext, *, driver: AgentDriver | None = None,
+        max_turns: int = 4, review_token: str | None = None,
+    ) -> None:
+        super().__init__(ctx, driver=driver, max_turns=max_turns)
+        self.review_token = review_token
+
+    def run(self) -> NodeAgentResult[GlobalGrounding]:
+        result = self._run_candidate()
+        if self.review_token is not None:
+            from novel.orchestrator.approvals import mark_stage2_rework_landed
+            mark_stage2_rework_landed(
+                self.ctx.novel_dir.parent, self.ctx.sid, self.node, self.review_token)
+        return result
+
     def _finish_restored(
             self, acceptance: Mapping[str, object], *,
             delivery_state: str, error_kind: str | None = None,
@@ -212,14 +227,14 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
 
         fresh 路与 checkpoint 恢复路必须共用这一只 reducer；否则进程恰好死在
         accepted checkpoint 后，会因为走了另一套分支而跳过首个窄修、额外开放
-        第三次 patch，或把 mixed HARD 重新扩大成整书 full candidate。
+        重发内容预算，或把 mixed HARD 重新扩大成整书 full candidate。
 
         返回 ``(feedback, next_base, next_kind, terminal_role_failure)``。
         """
         if role_patch_started:
             role_scope = extract.global_role_fate_patch_scope(
                 prepared, evaluation)
-            if role_scope is not None and accepted_role_patch_count < 2:
+            if role_scope is not None:
                 return (
                     extract.global_role_fate_patch_feedback_rows(
                         evaluation, role_scope),
@@ -227,8 +242,8 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
                     'role_fate_patch',
                     False,
                 )
-            # role patch 一旦开始即 sticky。第二份 accepted patch 仍红，或 patch
-            # 引入 mixed/其它 HARD，都必须原样终态化；通用剩余轮次不能重新扩大
+            # role patch 一旦开始即 sticky。patch 引入 mixed/其它 HARD 必须
+            # 原样终态化；内容轮数统一交工作单元预算，剩余轮次不能重新扩大
             # 改写面。终态仍返回完整反馈，供 rejected gate 留无正文计数。
             return evaluation.feedback_rows(), None, None, True
         role_scope = extract.global_role_fate_patch_scope(
@@ -248,7 +263,7 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
             False,
         )
 
-    def run(self) -> NodeAgentResult[GlobalGrounding]:
+    def _run_candidate(self) -> NodeAgentResult[GlobalGrounding]:
         last_rejected: extract.GlobalCandidateEvaluation | None = None
         patch_base: extract.GlobalCandidateEvaluation | None = None
         patch_kind: GlobalPatchKind | None = None
@@ -256,7 +271,7 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
         accepted_role_patch_count = 0
         try:
             prepared = extract.prepare_global_candidate(
-                self.ctx, agent_envelope=True)
+                self.ctx, agent_envelope=True, review_token=self.review_token)
             extract.ensure_global_agent_run(self.ctx, prepared)
             extract.adopt_global_validator_resolution_checkpoint(
                 self.ctx, prepared)
@@ -386,9 +401,6 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
                         prepared, base_evaluation, turn.payload)
                     response = applied.response
                     accepted_role_patch_count += 1
-                    if accepted_role_patch_count > 2:
-                        raise ProvenanceRefused(
-                            'stage2.global role/fate patch accepted 次数超过 2')
                     role_patch_started = True
                     patch_audit = applied
                 else:
@@ -561,7 +573,7 @@ class BlueprintSessionPool:
         return self._sessions.session_count
 
     def _phase_of(self, purpose: str) -> str:
-        if ':boundaries:' in purpose:
+        if ':boundaries:' in purpose or ':repair-boundaries:' in purpose:
             return 'boundaries'
         if self._contract.topology == 'boundary_then_detail':
             return 'detail'
@@ -1023,12 +1035,14 @@ class Stage2BlueprintAgent(NodeExecutorAgent[ChapterBlueprints]):
         driver_factory: BlueprintDriverFactory | None = None,
         max_turns: int = 4,
         concurrency: int = STAGE2_BLUEPRINT_MAX_CONCURRENCY,
+        review_token: str | None = None,
     ) -> None:
         if ctx.node != self.node:
             raise ValueError(f'{type(self).__name__} 只接受 {self.node}，实得 {ctx.node}')
         if ctx.executor_profile is None:
             raise ValueError(f'{self.node} executor 缺 resolved profile')
         self.ctx = ctx
+        self.review_token = review_token
         self.pool = BlueprintSessionPool(
             ctx,
             driver_factory=driver_factory,
@@ -1217,6 +1231,16 @@ class Stage2BlueprintAgent(NodeExecutorAgent[ChapterBlueprints]):
 
     def run(self) -> NodeAgentResult[ChapterBlueprints]:
         try:
+            if self.review_token is not None:
+                report = extract.run_blueprint(
+                    self.ctx, self.pool, review_token=self.review_token)
+                artifact = ArtifactStore(self.ctx).read(
+                    ChapterBlueprints, extract.BLUEPRINT_REL)
+                self.pool.finish_all(
+                    process_state='ok', delivery_state='delivered', error_kind=None)
+                return NodeAgentResult(
+                    artifact=artifact, turns=self.pool.turns_used,
+                    passed=report.passed, report=report)
             self.pool.prepare_initial_sessions()
             batch = extract.request_blueprints(self.ctx, self.pool)
             evaluation = extract.evaluate_blueprint_candidate(
@@ -1719,16 +1743,14 @@ class Stage4DesignAgent(NodeExecutorAgent[BlindCandidate]):
             raise ValueError(f'{type(self).__name__} 只接受 {self.node}，实得 {ctx.node}')
         if ctx.executor_profile is None:
             raise ValueError(f'{self.node} executor 缺 resolved profile')
-        repair_mode = (
-            repair_scope is not None and not repair_scope.strategy_replan)
         self.ctx = ctx
         self.repair_decision_sha256 = repair_decision_sha256
         self.repair_scope = repair_scope
         self.pool = Stage4DesignSessionPool(
             ctx,
             driver_factory=driver_factory,
-            # targeted repair 的 content budget 是产品契约，不受通用默认值放大。
-            max_turns=2 if repair_mode else max_turns,
+            # 生成与 targeted repair 共用工作单元的四轮内容预算。
+            max_turns=max_turns,
             concurrency=concurrency,
         )
 
@@ -3234,6 +3256,7 @@ def build_node_agent(
     chapters: str | None = None,
     revise: bool = False,
     reviewer_rewrite: str | None = None,
+    review_token: str | None = None,
     repair_decision_sha256: str | None = None,
     repair_scope: plan.DesignRepairScope | None = None,
     max_turns: int = 4,
@@ -3243,6 +3266,8 @@ def build_node_agent(
     if factory is None:
         raise ValueError(
             f'{ctx.node} 尚未按迁移顺序接入 executor agent；拒绝静默回退 DeepSeek')
+    if review_token is not None and ctx.node not in {'stage2.global', 'stage2.blueprint'}:
+        raise ValueError(f'{ctx.node} 不接受 Stage2 review_token 参数')
     if (ctx.node != 'stage4.design'
             and (repair_decision_sha256 is not None
                  or repair_scope is not None)):
@@ -3264,7 +3289,7 @@ def build_node_agent(
                 'stage2.blueprint 不接受 Stage5 chapters/revise/reviewer_rewrite 参数')
         return factory(
             ctx, driver_factory=driver_factory, max_turns=max_turns,
-            concurrency=concurrency)
+            concurrency=concurrency, review_token=review_token)
     if ctx.node == 'stage4.design':
         if driver is not None:
             raise ValueError(
@@ -3335,6 +3360,9 @@ def build_node_agent(
     if chapters is not None or revise or reviewer_rewrite is not None:
         raise ValueError(
             f'{ctx.node} 不接受 Stage5 chapters/revise/reviewer_rewrite 参数')
+    if ctx.node == 'stage2.global':
+        return factory(
+            ctx, driver=driver, max_turns=max_turns, review_token=review_token)
     return factory(ctx, driver=driver, max_turns=max_turns)
 
 

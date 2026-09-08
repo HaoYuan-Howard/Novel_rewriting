@@ -235,32 +235,35 @@ concerns 的完整逐章 typed 最终结构决定。工作包里 INFO/metric/UNV
 Executor；两条出口都不得再次审同一份 B，也不得用全量 accept 改写 B。只有新 A 决定落盘后，
 确定性恢复才按 opaque token 只交 Executor 精确执行。
 
-Stage2 有两条可重叠的支路，而不是一条全串行链：最新 Global 候选只要通过当前 schema，并物化出
-current/fresh 称名投影，就可立即启动 blueprint；不必等待 Global 正式稿。Global HARD 可以把候选
-留在 `.INVALID`，其修复与逐章计算重叠；若后续修订真的改变投影，freshness 会让旧 blueprint 失效。
-Global 正式落盘后，
-生成并完整阅读 `--emit-review-workpack`，记下顶层 `workpack_sha256`；再用
-`--emit-review-template` 取得决策骨架，把模板中全零的 `expected_workpack_sha256` 手工换成刚读过的
-hash（不得靠重发模板刷新阅读凭证），同时阅读原文、填写 decisions。这里的“并行”不放宽同书写盘
-互斥：真正的 `--review-decisions`、typed edit 与 producer 落盘仍应错峰提交。review 若无需改 global，
-提交后以 `stage2.blueprint --check-only` 做全局 + 逐章唯一联合复检；只有 current 正式 global、
-current/fresh 投影与 blueprint、联合 HARD 无命中且 review current/**blocking 面 generation-safe**，才能
-preview Stage4A；disclosure 未决项继续披露但不阻断。review 若发现 FAIL 或未隔离 UNVER，后续最多
-两席 Commander 订正轮只接收仍未闭合或依赖变化重开的 subject cards；PASS/已隔离项只留摘要，不再
-重发。blocking 面安全后，第四席只读终审读全量 blocking 行、整书正文与 Blueprint 工作包，confirm 才
-经 `approval close-stage2` 收口 `seen.read`/`seen.global`/`s2`，reopen 则以终审者为 actor 把指定项改回
-FAIL/UNVER 并回到订正席（若仍有席位）。每轮使用 fresh logical/provider session，并从生产模板取得 hash-bound typed 骨架；集合成员新增、
-删除、拆分只填 `collection_edits.operations`，经 `--apply-edit` 同时提交事实修改与
-`post_edit_review` 自审。producer 对本 edit 新打开项使用默认证明，仍保持同一 hash 的旧 FAIL/UNVER
+Stage2 依次执行 Global E → Global C 接受 → 逐章并发 Blueprint E → 独立 Blueprint C 全章交叉接受。
+Global 必须是当前有效正式产物，称名投影 current/fresh，逐项决定 generation-safe，且当前 Global 节点
+已明确接受；`.INVALID`、pending 或仅有称名投影都不能启动 Blueprint。Blueprint 内部章并发不放宽
+同书正式写盘互斥，也不允许 Global 修复与首次 Blueprint 生产重叠。
+
+Global 审阅先完整阅读 `--emit-review-workpack` 并记录顶层 `workpack_sha256`，再从
+`--emit-review-template` 取得骨架，用实际读取的 SHA 替换全零占位，同时阅读原文并逐项填写决定。
+当前 typed Global 接受只覆盖绑定的事实与审阅主体；返修导致主体变化后由同一 Global Commander
+检查修订，内容预算不重置。每个 Global E/C 工作单元各最多 4 次内容调用，Blueprint E 按章各 4 次，
+独立 Blueprint C 按整书 4 次，均包含首次和模型纠错；确定性复验、重放与补提交不占内容额度。
+
+全章 Blueprint 落盘后先运行唯一联合 `stage2.blueprint --check-only`。Blueprint Commander 核验完整
+跨章事实及变化范围，接受绑定当前 `bpr4_` 工作包；发现 Global 事实问题时可用 typed owner 指回
+`stage2.global`，由对应 producer 修订并让状态机重新计算依赖。只有两份当前节点接受同时成立，
+`stage2.blueprint --close-review` 才能零模型补齐 `seen.read`/`seen.global`/`gate.s2` 并释放 Stage4A。
+本链不执行预审、第四席终审或额外全局终审；disclosure 未决项仍披露，不自动写成 PASS。
+
+Commander 局部订正从生产模板取得 hash-bound typed 骨架；集合成员新增、删除、拆分只填
+`collection_edits.operations`，经 `--apply-edit` 同时提交事实修改与 `post_edit_review`。
+producer 对本 edit 新打开项使用默认证明，仍保持同一 hash 的旧 FAIL/UNVER
 必须列入 `review_scope` 内的 `decisions`；可删的 secret/relation/world_rule 完整组可显式
 `quarantine_group`，但状态仍是 UNVER，写作视图删除该组且
 最终交付只能 `ready_with_disclosures`。人物、setting、arc、集合完整性不能隔离。
 若这份 reviewed edit 通过 schema 却被 canonical HARD 拦成当前 `.INVALID`，队列先暴露
 `recovery:stage2-global-reviewed-edit`：最终 correction workpack 绑定失败 edit/INVALID 原始字节，只反馈
-具体 HARD，不重新载入 Blueprint 或整份无关材料；下一轮另开 fresh Commander session，持久 ledger
+具体 HARD，不重新载入 Blueprint 或整份无关材料；下一轮续用本工作单元 Commander，持久 ledger
 在调用前记 `started`，重启不返还席位。修正通过后才重新计算 Blueprint freshness。
 共享人物称名 inventory 改变时 blueprint 会 stale，必须重建，未消费字段变化则按 freshness 结果复用。
-提前完成的 review 可以保存，但缺 blueprint 时 Stage2 仍未收口。机械测量不是独立节点：Stage5/6
+Global 当前接受先于 Blueprint 生成；Blueprint 完成后由独立 Commander 交叉接受。机械测量不是独立节点：Stage5/6
 会从各自已读的 Stage1 文本即时计算，operator
 不需要预跑、确认或修复机械缓存。
 
@@ -411,17 +414,15 @@ CLI `state` 会显示共享的 deterministic freshness badge；这个 badge 才�
 去绕过刷新。改变其他参数同样意味着新调用语义，必须重新 preview 和记账。
 
 正式 headless run 的 `pause` 只停止接纳新节点并等待当前 claim/beacon 安全闭合，不取消正在正常执行的
-付费节点；普通 reviewer 每个 blocker binding 开一席 fresh Commander session，同一 binding 内的 typed 纠错
-续用该席，surface 变化（返修落盘）后必然换席，纠错次数按 blocker/business 持久记账。Commander 子进程的
-网络/瞬态失败由 Supervisor 在同一席位内自动 resume/relaunch（有次数上限与退避），不新开 logical
-session、不扣新席；不可重试的失败（认证、额度、权限、协议错、模型漂移）才停止。Stage2 global
-固定为一席审阅、至多两席订正、一席只读终审，每个主体最多四席真实 Commander 且每席开 fresh session；
-0-wire typed 动作不占轮次。Executor 的候选→反馈
-修复继续复用各节点 logical/provider session 与 checkpoint；Stage2 人工 GlobalEdit
-是 0-wire 确定性动作，不另起一个模型 Executor。代码或 skill 身份变化时，
-RunSupervisor 在同一 parent run 内关闭旧 epoch、打开新 epoch、先免费复检并创建新的 Commander
-provider session；旧 provider context 与 execution token 均不得复用，但盘上 Stage2 typed ledger 的
-已用轮次与 progress fingerprint 不重置。`stop` 是永久终止：取消该 run
+付费节点；Commander 按登记的工作单元持续审阅，候选或 surface 变化不重新发放内容预算。
+Stage4 A/B 的工作单元和会话始终各自隔离；Stage6 双盲 judge 也不共享会话。Commander 子进程的
+网络/瞬态失败按独立有界网络预算 resume/relaunch，模型格式或内容纠错才占下一次内容请求。
+Executor 的候选→反馈修复复用本单元 logical/provider session 与持久工作包；GlobalEdit 的确定性
+提交本身不另起模型 Executor，但请求模型产生补丁仍计 Commander 内容额度。
+代码或 skill 身份变化时，RunSupervisor 在同一 parent run 内关闭旧 epoch、打开新 epoch，先免费
+复检并拒绝旧 execution token；物理会话可按当前 schema/profile 重新建立，原工作单元已用轮次不变。
+服务重启先恢复已保存回答、决定、prepared journal 与原尾账，业务恢复不依赖旧模型会话一定可用。
+`stop` 是永久终止：取消该 run
 拥有的 Commander/Executor 进程树、drain 后写 ended，不能 resume。服务重启后无法证明进程状态时保持
 `unknown`，不得自动洗成 paused 或自行恢复。
 

@@ -12,7 +12,8 @@ from pydantic import ValidationError
 
 from contracts.invariants import INBOX_KIND, NODES, OPERATOR_NEXT_STATES, RESUME_VERDICTS
 from contracts.schema.api import (
-    InboxView, OperatorAction, OperatorNext, OperatorNextDecision,
+    ApprovalDoc, InboxView, OperatorAction, OperatorNext, OperatorNextDecision,
+    StructureApprovalView,
 )
 from contracts.schema.orchestration import (
     NovelOverview, OverviewSummary, QueueItem, RunResumeFrontierView, Step,
@@ -101,7 +102,7 @@ def test_prepared_recovery_probe_refuses_stage2_and_stage4_dual_ownership(
         O, '_stage4_design_repair_commit_recovery_surface',
         lambda _snapshot: object())
 
-    with pytest.raises(ArtifactUnreadable, match='同时发现 Stage2 与 Stage4'):
+    with pytest.raises(ArtifactUnreadable, match='同时发现多个阶段'):
         O._prepared_commit_recovery_surface(snapshot)
 
 
@@ -116,7 +117,7 @@ def test_stage4_prepared_recovery_operator_action_is_exact_free_blocker(
     )
     monkeypatch.setattr(O.state, 'readonly_ctx', lambda *_args: object())
     monkeypatch.setattr(
-        O.state, 'resume_verdict', lambda *_args: ('run', 'repair tail'))
+        O.state, 'resume_verdict', lambda *_args, **_kwargs: ('run', 'repair tail'))
     monkeypatch.setattr(
         'novel.llm.stage4_runs.inspect_prepared_design_repair_aggregate_recovery',
         lambda _ctx: recovery)
@@ -155,7 +156,10 @@ def _wire(
     *, todo: list[QueueItem], blocked: list[QueueItem],
 ) -> list[object]:
     calls: list[object] = []
-    frozen_approval_doc = object()
+    raw = A._fresh_record(snapshot.sid)
+    frozen_approval_doc = ApprovalDoc(
+        sid=snapshot.sid, gate=raw.gate, seen=raw.seen,
+        structure=StructureApprovalView(state='unavailable'))
     monkeypatch.setattr(
         O.paths, 'resolve_novel_dir',
         lambda base, sid: snapshot.novel_dir)
@@ -209,7 +213,7 @@ def _wire(
         lambda base, sid, *, code: calls.append(('seal', base, sid, code))
         or snapshot.surface_seal)
     monkeypatch.setattr(
-        O.state, 'resume_verdict', lambda _overview, node: ('run', f'{node} 缺失'))
+        O.state, 'resume_verdict', lambda _overview, node, *, flags=(): ('run', f'{node} 缺失'))
     return calls
 
 
@@ -287,7 +291,7 @@ def test_ready_redo_keeps_its_verdict_and_gets_an_execution_token(
     _wire(monkeypatch, snapshot, todo=[item], blocked=[])
     monkeypatch.setattr(
         O.state, 'resume_verdict',
-        lambda _overview, _node: ('redo', 'Global 的实际消费投影已更新'))
+        lambda _overview, _node, *, flags=(): ('redo', 'Global 的实际消费投影已更新'))
 
     got = O.next_action(tmp_path, 'book-1')
 

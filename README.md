@@ -1,5 +1,7 @@
 # Novel rewriting
 
+现役工作流职责统一推进与完整节点表见 [工作流职责统一](docs/WORKFLOW_ROLE_BOUNDARIES.md)。新 clean base 严格先接受 Global，再生成并独立接受 Blueprint；E/C 各工作单元最多 4 次内容调用，恢复不重置预算。
+
 把一部中文网络小说处理成一本新书：保留情节骨架，全文重写，替换人名，最终交付
 `stage7/<书名>_rewriting.txt`。现役链路包含 stage0、stage1、stage2、stage4～stage7；Stage3 编号保留
 为空洞，不对应产物层。

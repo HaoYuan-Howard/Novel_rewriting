@@ -26,7 +26,7 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
-from contracts.invariants import COMMANDER_REVIEWER_MAX_CORRECTIONS
+from contracts.invariants import LEGACY_COMMANDER_REVIEWER_MAX_CORRECTIONS
 from contracts.schema.orchestration import (
     ReviewerSchemaRecoveryProof, ReviewerSeatLedger, ReviewerSeatPendingCorrection, ReviewerSeatTurn,
     Stage2ReviewAttempt,
@@ -36,7 +36,7 @@ from novel.appendlog import path_transaction_lock
 from novel.errors import PathRefused
 
 
-MAX_CORRECTIONS = COMMANDER_REVIEWER_MAX_CORRECTIONS
+MAX_CORRECTIONS = LEGACY_COMMANDER_REVIEWER_MAX_CORRECTIONS
 _RAW_LEDGER = TypeAdapter(dict[str, Any])
 
 

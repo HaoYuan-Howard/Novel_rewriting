@@ -30,7 +30,7 @@ from typing import Any, Generic, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from contracts.schema.orchestration import AgentProfile
-from novel import agent_session_audit, prov
+from novel import agent_session_audit, prov, work_units
 from novel.agent_capabilities import validate_profile
 from novel.agent_model_identity import (
     resolve_ledger_model_identity, validate_checkpoint_model_identity,
@@ -1226,6 +1226,10 @@ def write_checkpoint(
                     raise ProvenanceRefused(
                         f'{records[-1][0]} 的 accepted attempt 已绑定另一份 '
                         'response/state；拒绝改写')
+                work_units.budget_for(
+                    ctx, scope=work_units.executor_scope(
+                        spec.node, spec.purpose, {'chapter': spec.chapter}),
+                ).mark_adopted_for_attempt(str(semantic['attempt_id']))
                 return records[-1][0]
             if latest is not None:
                 old_turn = latest.get('accepted_turn_index')
@@ -1257,6 +1261,10 @@ def write_checkpoint(
                 raise ProvenanceRefused(
                     f'{target} 在链外已存在；拒绝覆盖')
             _atomic_json(target, record)
+    work_units.budget_for(
+        ctx, scope=work_units.executor_scope(
+            spec.node, spec.purpose, {'chapter': spec.chapter}),
+    ).mark_adopted_for_attempt(str(semantic['attempt_id']))
     return target
 
 
@@ -1559,8 +1567,8 @@ def validate_foreign_commit_envelope(
 ) -> dict[str, Any]:
     """跨 run reservation 扫描只验证不依赖当前 profile/ledger 的不可变外壳。
 
-    业务 adapter 仍须在自己的全书所有权锁内调用，并决定 foreign prepared
-    究竟阻止哪些节点。损坏记录不能当作“不存在”跳过。
+    只读投影可核验当前快照；实际提交仍须在业务 adapter 的全书所有权锁内
+    重新扫描，并决定 foreign prepared 阻止哪些节点。损坏记录不能当作“不存在”跳过。
     """
     checked_run_id = check_run_id(run_id)
     record = _read_json(path, label=label)

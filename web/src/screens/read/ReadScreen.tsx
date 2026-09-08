@@ -4,6 +4,7 @@ import { errorBody } from '@/api/errors'
 import { FRESH, SEV } from '@/constants/vocabulary'
 import { useSampleCoverage } from '@/hooks/useSample'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
+import { Stage2NodeReviewPanel } from '@/components/gate/Stage2NodeReviewPanel'
 import { ComparePanes, PaneScroll } from '@/components/compare/ComparePanes'
 import { QueryStates } from '@/components/state/QueryStates'
 import { ErrorHint } from '@/components/state/States'
@@ -71,6 +72,7 @@ export function ReadScreen() {
                 onOpenChapter={(chapter) => nav('/n/' + vm.sid + '/read/' + chapter)}
               />
               <BlueprintReviewConfirmation review={vm.blueprintReview} ordinal={vm.ordinal} />
+              <Stage2NodeReviewPanel sid={vm.sid} node="stage2.blueprint" token={vm.reviewWorkpack.data?.review_token ?? null} />
               <div className="flex flex-wrap items-center gap-10">
                 <span
                   className="rounded-chip px-10 py-3 text-body font-semibold"
@@ -205,6 +207,18 @@ function BlueprintReviewWorkpackSummary({
         先看服务端标出的异常章；beat/fact/hinge 结构 ID、字符坐标与引用闭合等机械字段仍由完整 CheckReport 守卫，
         这里只隐藏，不从产物或评测面删除。语义是否忠于原文仍需人判断。
       </div>
+      {pack.review_delta ? (
+        <details className="rounded-block border border-line-2 px-10 py-8 text-sm2 text-ink-3">
+          <summary>本次复核范围：{pack.review_delta.mode}</summary>
+          <p>{pack.review_delta.reason}</p>
+          <p>受影响章：{pack.review_delta.affected_chapter_ordinals.join('、') || '无'}；
+            可复用接受依据的章：{pack.review_delta.reusable_accepted_chapter_ordinals.join('、') || '无'}</p>
+          {pack.review_delta.changed_global_items.map((change) => (
+            <p key={change.item_id + change.subject_path}>{change.subject_path} · {change.change} ·
+              {change.changed_fields.join('、')} · {change.affected_references.join('、')}：{change.scope_reason}</p>
+          ))}
+        </details>
+      ) : null}
       <div className="flex flex-wrap items-center gap-7">
         {review.anomalyChapters.length ? (
           review.anomalyChapters.map((chapter) => (
@@ -415,7 +429,7 @@ function Beat({ b, onClick }: { b: BeatView; onClick: () => void }) {
       {b.facts.map((fact) => (
         <div key={fact.id} className="rounded-btn bg-sunken-2 px-12 py-8">
           <div className="flex gap-8 text-micro text-ink-4">
-            <span>事实 · {fact.meta}</span>
+            <span>{fact.id} · {fact.meta}</span>
           </div>
           <div className="prose-cn text-section text-ink-2">{fact.claim}</div>
           <div className="text-tag text-ink-4">

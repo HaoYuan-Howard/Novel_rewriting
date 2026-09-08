@@ -33,9 +33,10 @@ def test_gate_spawns_follow_the_same_disk_resume_verdict(monkeypatch, tmp_path):
 
     verdicts['stage2.global'] = approvals.state.RESUME_SKIP
     global_done = approvals.get(tmp_path, '123')
-    assert [action.kind for action in global_done.spawns['s1']] == [
-        'stage2.blueprint',
-    ], 'global 一落盘就应下发 blueprint，不等待全局人工复核'
+    assert global_done.spawns['s1'] == [], 'Global 落盘尚未接受不能下发 Blueprint'
+    monkeypatch.setattr(approvals, 'require_stage2_review', lambda *_args: None)
+    accepted = approvals.get(tmp_path, '123')
+    assert [action.kind for action in accepted.spawns['s1']] == ['stage2.blueprint']
 
     verdicts['stage2.blueprint'] = approvals.state.RESUME_SKIP
     stage2_done = approvals.get(tmp_path, '123')
@@ -57,6 +58,8 @@ def test_gate_spawns_follow_the_same_disk_resume_verdict(monkeypatch, tmp_path):
 
 def test_default_approval_value_is_not_mistaken_for_a_saved_human_choice(
         monkeypatch, tmp_path):
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
     novel_dir = tmp_path / 'book_123'
     novel_dir.mkdir()
     monkeypatch.setattr(

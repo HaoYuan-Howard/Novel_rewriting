@@ -87,6 +87,8 @@ def _claude_profile() -> AgentProfile:
 def _ctx(base: Path, *, run_id: str | None = None,
          code: str | None = None,
          profile: AgentProfile | None = None) -> RunContext:
+    from novel.work_units import require_workflow
+    require_workflow(base)
     novel_dir = base / '双盲测试_42'
     novel_dir.mkdir(exist_ok=True)
     ledger = (CostLedger(path=ledger_path(base)) if run_id is None else

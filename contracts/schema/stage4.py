@@ -799,12 +799,24 @@ class EvidenceBindingProvenance(LlmProvenance):
                 # 一律写出明确 origin，不能由缺字段反推历史采用。
                 continue
             source_run_id = row.get('source_run_id')
-            if (origin not in {'current_run', 'historical_checkpoint'}
+            if (origin not in {'current_run', 'historical_checkpoint', 'work_unit_response'}
                     or not isinstance(source_run_id, str)
                     or re.fullmatch(
                         r'[a-z0-9][a-z0-9_-]{0,127}', source_run_id) is None):
                 raise ValueError('unit_lineage source origin/run_id 不合法')
             if origin == 'current_run':
+                continue
+            if origin == 'work_unit_response':
+                if (not isinstance(row.get('content_turn_id'), str)
+                        or re.fullmatch(r'[0-9a-f]{32}', row['content_turn_id']) is None):
+                    raise ValueError('work_unit_response 缺合法 content_turn_id')
+                for field in ('work_unit_id', 'source_request_fingerprint', 'source_response_sha256'):
+                    if (not isinstance(row.get(field), str)
+                            or re.fullmatch(r'[0-9a-f]{64}', row[field]) is None):
+                        raise ValueError(f'work_unit_response 缺精确 {field}')
+                if (not isinstance(row.get('attempt_id'), str)
+                        or re.fullmatch(r'[0-9a-f]{16}', row['attempt_id']) is None):
+                    raise ValueError('work_unit_response 缺真实 attempt_id')
                 continue
             sha_fields = (
                 'source_run_identity_sha256', 'source_run_file_sha256',

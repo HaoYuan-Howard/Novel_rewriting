@@ -84,6 +84,12 @@ function mount(screenName: 'stage5' | 'stage4' | 'global', approval: ApprovalDoc
 }
 
 describe('GateBar 的动作分类', () => {
+  it('Stage2 即使两屏都已读，缺当前节点接受仍禁止推进', async () => {
+    const approve = vi.spyOn(api, 'approveGate')
+    mount('global', { ...doc, gate: { ...doc.gate, s2: false } })
+    expect(await screen.findByRole('button', { name: /两个节点都接受后才能继续/ })).toBeDisabled()
+    expect(approve).not.toHaveBeenCalled()
+  })
   it('没有 spawn 的闸门不画成「未标注」——它只写 _service 的审批记录', async () => {
     mount('stage5', {
       ...doc,
@@ -108,6 +114,10 @@ describe('GateBar 的动作分类', () => {
     const done: ApprovalDoc = {
       ...doc,
       gate: { ...doc.gate, s2: true },
+      stage2_reviews: {
+        'stage2.global': { state: 'accepted', current_decision: null, history: [] },
+        'stage2.blueprint': { state: 'accepted', current_decision: null, history: [] },
+      },
       spawns: { s2: [next] },
     }
     const liveEnums = {

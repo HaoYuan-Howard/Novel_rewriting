@@ -215,7 +215,7 @@ class _Store:
     def __init__(self, main, blueprints) -> None:
         self.ctx = SimpleNamespace(
             sid='1234567890123456789', code='test-code', readonly=True,
-            node='stage2.blueprint')
+            node='stage2.blueprint', novel_dir=Path('平台_测试书_1234567890123456789'))
         self.rules_fingerprint = 'rules-fp'
         self.main = main
         self.blueprints = blueprints
@@ -239,6 +239,7 @@ class _Store:
 
 def _install(monkeypatch, store: _Store, report: CheckReport):
     calls: list[object] = []
+    monkeypatch.setattr(approvals, 'stage2_cross_review_scope', lambda *_args: None)
     monkeypatch.setattr(
         view.paths, 'resolve_novel_dir',
         lambda _base, _sid: Path('平台_测试书_1234567890123456789'))
@@ -254,6 +255,11 @@ def _install(monkeypatch, store: _Store, report: CheckReport):
         return report
 
     monkeypatch.setattr(extract, 'run_check_only', check)
+    from novel.stages.stage2 import global_review
+    monkeypatch.setattr(global_review, 'review_workpack', lambda *_args, **_kwargs: {
+        'scope': 'all', 'rows': [], 'source_sha256': 'c' * 64,
+        'main_text_chapters': [],
+    })
     return calls
 
 
@@ -332,10 +338,10 @@ def test_workpack_is_complete_exception_first_and_semantic_not_id_first(
     assert len(calls) == 2, '首尾重算生产 CheckReport 才能拒绝混合快照'
     assert all(ctx.readonly for ctx in calls), '工作包必须只读，不能借复检写盘'
     assert pack.read_only is True and pack.auto_decisions is False
-    assert pack.review_contract_version == 'stage2-blueprint-review-v4'
+    assert pack.review_contract_version == 'stage2-blueprint-review-v5'
     assert pack.subject_sha256 == view._canonical_sha256(
         blueprints.model_dump(exclude={'provenance'}))
-    assert pack.review_token == 'bpr3_' + pack.binding_sha256
+    assert pack.review_token == 'bpr4_' + pack.binding_sha256
     assert len(pack.review_identity_sha256) == 64
     assert len(pack.validation_seal_sha256) == 64
     assert pack.binding.main_text_artifact_sha256 == store.main_sha
@@ -374,8 +380,7 @@ def test_workpack_is_complete_exception_first_and_semantic_not_id_first(
             'observed_claim': '甲已在门外', 'observation_claim': '甲进城',
         },
     ]
-    assert 'f01_001' not in chapter1.model_dump_json(), \
-        '人读关系必须直接展开 claim，不能让审阅者回查机械 fact id'
+    assert chapter1.beats[0].facts[0].fact_id == 'f01_001'
 
     # 非 ok 与 unver 原行全留，正常 metric 原行全留，分母/四态不丢。
     assert [row.rule for row in pack.check.attention] == [
@@ -398,11 +403,13 @@ def test_workpack_is_complete_exception_first_and_semantic_not_id_first(
 
     body = pack.model_dump(by_alias=True, mode='json')
     rendered = str(body)
-    assert 'b01_01' not in rendered and 'f01_001' not in rendered
-    assert 'blueprints[].beats[].beat_id' in pack.mechanical_fields_hidden
+    assert 'b01_01' in rendered and 'f01_001' in rendered
+    assert 'blueprints[].beats[].beat_id' not in pack.mechanical_fields_hidden
+    assert pack.global_review['scope'] == 'all'
     unsigned = dict(body)
     unsigned.pop('binding_sha256')
     unsigned.pop('review_token')
+    unsigned.pop('review_delta')
     assert pack.binding_sha256 == view._canonical_sha256(unsigned)
 
 
@@ -597,7 +604,7 @@ def test_seen_read_rechecks_the_workpack_subject_before_writing(
 ) -> None:
     sid = '1234567890123456789'
     binding_sha = 'f' * 64
-    review_token = 'bpr3_' + binding_sha
+    review_token = 'bpr4_' + binding_sha
     review_identity = 'b' * 64
     validation_seal = 'c' * 64
     record = approvals._fresh_record(sid)
@@ -617,7 +624,7 @@ def test_seen_read_rechecks_the_workpack_subject_before_writing(
         review_token=review_token,
         review_identity_sha256=review_identity,
         validation_seal_sha256=validation_seal,
-        review_contract_version='stage2-blueprint-review-v4',
+        review_contract_version='stage2-blueprint-review-v5',
         binding=SimpleNamespace(subject_kind='formal'),
     )
     monkeypatch.setattr(
@@ -643,7 +650,7 @@ def test_seen_read_rechecks_the_workpack_subject_before_writing(
     assert updated.seen['read'] is True
     assert len(writes) == 1
 
-    stale = request.model_copy(update={'review_token': 'bpr3_' + 'd' * 64})
+    stale = request.model_copy(update={'review_token': 'bpr4_' + 'd' * 64})
     with pytest.raises(ApprovalRequired, match='工作包已过期'):
         approvals.mark_seen('base', sid, 'read', blueprint_subject=stale)
     assert len(writes) == 1, '主体漂移时审批账必须零写入'
@@ -656,10 +663,10 @@ def test_seen_read_persistent_proof_ignores_validation_epoch_but_not_visible_ide
         token_body: str,
         *,
         identity: str = 'b' * 64,
-        contract: str = 'stage2-blueprint-review-v4',
+        contract: str = 'stage2-blueprint-review-v5',
     ):
         return SimpleNamespace(
-            review_token='bpr3_' + token_body,
+            review_token='bpr4_' + token_body,
             review_identity_sha256=identity,
             validation_seal_sha256=token_body,
             review_contract_version=contract,
@@ -688,7 +695,7 @@ def test_seen_read_rejects_the_workpack_to_first_proof_race(
     monkeypatch,
 ) -> None:
     sid = '1234567890123456789'
-    request = BlueprintSeenRequest(review_token='bpr3_' + 'f' * 64)
+    request = BlueprintSeenRequest(review_token='bpr4_' + 'f' * 64)
     workpack = SimpleNamespace(
         review_token=request.review_token,
         binding=SimpleNamespace(subject_kind='formal'),
@@ -711,7 +718,7 @@ def test_seen_read_rejects_the_workpack_to_first_proof_race(
     monkeypatch.setattr(
         approvals, '_blueprint_seen_proof',
         lambda *_args: (changed_proof, {
-            'review_token': 'bpr3_' + 'e' * 64,
+            'review_token': 'bpr4_' + 'e' * 64,
             'review_identity': 'c' * 64,
             'validation_seal': 'd' * 64,
         }))

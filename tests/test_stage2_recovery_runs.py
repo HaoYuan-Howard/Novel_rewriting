@@ -10,6 +10,7 @@ import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +21,7 @@ from contracts.schema.base import StrictModel
 from contracts.schema.orchestration import AgentProfile
 from novel import agent_session_audit, paths
 from novel.agents.base import render_structured_agent_stdin
+from novel.agents import AgentTurn, AgentUsage
 from novel.agents.session_client import (
     AgentDeliveryUnavailable, agent_json_schema, agent_request_fingerprint,
 )
@@ -192,6 +194,8 @@ def _ctx(
         code: str = 'test-stage2-runs',
         parent_run_id: str | None = None,
 ) -> RunContext:
+    from novel.work_units import require_workflow
+    require_workflow(tmp_path)
     book = tmp_path / '恢复测试_123'
     clean = book / 'stage0' / 'clean_text.txt'
     clean.parent.mkdir(parents=True, exist_ok=True)
@@ -315,6 +319,8 @@ def _agent_checkpoint_acceptance(
             start_code_version=ctx.code, prompt_sha256=initial_prompt_sha,
             schema_sha256=schema_sha, kind='started', ts=1)),
     links: list[dict[str, object]] = []
+    from novel.work_units import budget_for
+    budget = budget_for(ctx, scope='chapter:1')
     for index, (attempt_id, text) in enumerate(texts, 1):
         fingerprint = agent_request_fingerprint(
             profile=profile,
@@ -326,6 +332,10 @@ def _agent_checkpoint_acceptance(
             purpose=purpose,
             turn_index=index,
         )
+        reservation = budget.reserve(
+            fingerprint, run_id=ctx.run_id, session_run_id=session_run_id)
+        budget.record_attempt(reservation.turn_id, attempt_id=attempt_id,
+                              outcome='started', request_fingerprint=fingerprint)
         ctx.ledger.record(
             node=ctx.node, sid=ctx.sid,
             model=(reported_model if isinstance(reported_model, str)
@@ -357,6 +367,21 @@ def _agent_checkpoint_acceptance(
                 protocol_version='node-executor/v1',
                 start_code_version=ctx.code, prompt_sha256=prompt_shas[index - 1],
                 schema_sha256=schema_sha, kind='turn', ts=index + 1))
+        budget.save_response(reservation.turn_id, {
+            'kind': 'executor-content-response-v1', 'attempt_id': attempt_id,
+            'run_id': ctx.run_id, 'session_run_id': session_run_id,
+            'turn': asdict(AgentTurn(
+                session_id=provider_session_id, content=text,
+                model=reported_model if isinstance(reported_model, str) else None,
+                actual_reasoning_effort=ctx.executor_profile.reasoning_effort,
+                usage=AgentUsage(prompt_tokens=10, completion_tokens=20, reasoning_tokens=15),
+                turn_count=1))})
+        budget.record_attempt(reservation.turn_id, attempt_id=attempt_id,
+                              outcome='ok', request_fingerprint=fingerprint)
+        budget.finish(reservation.turn_id)
+        if index < len(texts):
+            budget.save_feedback(reservation.turn_id, {
+                'kind': 'synthetic-response-repair', 'turn': index})
     links.sort(key=lambda row: (
         str(row['attempt_id']), str(row['request_fingerprint'])))
     accepted = links[-1]
@@ -2186,6 +2211,10 @@ def test_eight_pending_resume_once_then_all_checkpoints_replay_with_zero_wire(tm
 def test_v2_detail_failure_after_boundary_batch_cannot_pause_a_second_time(
         tmp_path, monkeypatch):
     """v2 两相共享一次人工额度；第二相失败只能自动升级或明确终态。"""
+    from novel.stages.stage2 import global_review
+    # 本例专门测试退役两相响应恢复，不构造正文/Global；其语义准入在
+    # node lifecycle 纵切验证，这里把已满足的前置隔离在唯一调用点。
+    monkeypatch.setattr(global_review, 'require_global_accepted', lambda _ctx: None)
     run_id = new_run_id()
     first = _ctx(tmp_path, run_id, repair=True)
     main_text = [{'chapter_ordinal': 1, 'text': '第一段正文'}]
@@ -2271,12 +2300,15 @@ def test_v2_detail_failure_after_boundary_batch_cannot_pause_a_second_time(
         resumed, resumed_transport, model=FLASH_MODEL, max_retries=0,
         concurrency=1, sleep=lambda _seconds: None,
         budget_checker=lambda *_args, **_kwargs: None)
-    with pytest.raises(LlmFailed):
+    from novel.work_units import WorkUnitBudgetExhausted
+    with pytest.raises(WorkUnitBudgetExhausted, match='4/4'):
         extract.request_blueprints(resumed, resumed_client)
 
     assert [request.model for request in resumed_transport.calls] == [
-        FLASH_MODEL, FLASH_MODEL, FLASH_MODEL, PRO_FALLBACK_MODEL,
+        FLASH_MODEL, FLASH_MODEL, FLASH_MODEL,
     ]
+    from novel.work_units import budget_for
+    assert budget_for(resumed, scope='chapter:1').used == 4
     assert stage2_runs.paths.stage2_blueprint_checkpoint_path(
         resumed.novel_dir, run_id, 'boundaries', 1).is_file()
     assert not stage2_runs.paths.stage2_blueprint_checkpoint_path(
@@ -2292,7 +2324,8 @@ def test_v2_detail_failure_after_boundary_batch_cannot_pause_a_second_time(
         if json.loads(path.read_text(encoding='utf-8')).get('purpose')
         == 'stage2.blueprint:ch1'
     ]
-    assert len(detail_rejections) == 3
+    # 边界失败与恢复各占一轮，detail 只剩两轮；第三轮不得绕开同章 4 次上限。
+    assert len(detail_rejections) == 2
     assert all(row.get('repair_eligible') is False for row in detail_rejections)
 
 

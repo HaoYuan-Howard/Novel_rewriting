@@ -94,11 +94,15 @@ def _task(waiting_on: str = queue.WAITING_ON_STAGE4_DESIGN_REVIEW) -> SimpleName
             'id': 'stop:stage4-structure-replan', 'exact_request': stop,
             'allowed_values': {}, 'editable_fields': [], 'binding_fields': [],
         })
+    current = SimpleNamespace(surface_seal='b' * 64)
+    options = reviewer_tasks._terminal_review_options(options, current, waiting_on)
     return SimpleNamespace(waiting_on=waiting_on, submission_options=tuple(options))
 
 
 def _response(task: SimpleNamespace, *, stop: bool = False) -> dict[str, Any]:
-    option = task.submission_options[-1 if stop else 0]
+    option = (next(option for option in task.submission_options
+                   if option['exact_request']['action']['kind'] == 'stop')
+              if stop else task.submission_options[0])
     action = option['exact_request']['action']
     if stop:
         payload = {'reason': '只读差异未证明 scene/fact/goal 结构损害，无法形成 typed 修订。'}
@@ -167,7 +171,8 @@ def test_all_stage4_blockers_receive_portable_native_schema(waiting_on):
     rendered = json.dumps(schema)
     for option in task.submission_options:
         assert option['id'] in rendered
-        assert _sha(option['exact_request']) in rendered
+        assert _sha(option['exact_request']) not in rendered
+        assert _sha(option['exact_request']) in wire.prompt_for(task, '审阅当前工作包')
     assert 'review_token' not in rendered and 'output_ordinal' not in rendered
 
 
@@ -423,3 +428,15 @@ def test_reference_closure_is_projection_of_typed_subject():
         '7': {'scene_refs': ['c0007_s001'], 'fact_aliases': [_alias(7), _alias(107)],
               'participant_aliases': [_alias(1007)]},
     }
+
+
+def test_subject_revision_keeps_schema_but_stale_binding_is_rejected():
+    original = _task()
+    revised = copy.deepcopy(original)
+    revised.submission_options[0]['exact_request']['surface_seal'] = 'f' * 64
+    assert wire.output_schema_for(original) == wire.output_schema_for(revised)
+    with pytest.raises(wire.Stage4ReviewerWireError, match='stale'):
+        wire.assemble(revised, _response(original))
+    changed = copy.deepcopy(revised)
+    changed.submission_options[0]['allowed_values'][wire.REFERENCE_CLOSURE]['2']['scene_refs'].append('c0002_s003')
+    assert wire.output_schema_for(revised) != wire.output_schema_for(changed)

@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage2 Global Commander 席位 reducer：blocker + 工作包形状 → 本席 purpose。
+"""Stage2 两位 Commander 的动作分类；真实四次内容预算由 work_units 持久化。
 
-席位语义只在这里定义一次，``agent.py`` 的预留调用、``reviewer_tasks`` 的组包
-分支与 ``stage2_review_ledger.reserve`` 的席位规则都消费同一张表。这样
-“第四席只读终审”“订正不得占第四席”不会在三处各长出一套条件分支。
-
-它是纯函数：不读盘、不调用模型、不知道 provider session。
+Global 与 Blueprint 分属独立工作单元，每个工作单元可以连续审阅和订正。
+这里不读盘、不调用模型，也不依据候选版本或 blocker 重新授予预算。
 """
 from __future__ import annotations
 
@@ -49,36 +46,22 @@ def seat_for(
     *,
     prereview: bool = False,
 ) -> SeatDecision:
-    """按当前 blocker 与可提交项决定这一席的 purpose。
-
-    - Blueprint 期间的只读预审恒为 ``prereview``；
-    - 终审 blocker 恒为 ``final_review``（只能 confirm 或 reopen，不能编辑）；
-    - 中断恢复的 reviewed-edit 纠正恒为 ``correction``；
-    - 普通 review blocker 下，只有当唯一提交项是完整 ``blocking_scope`` 审阅时才是
-      ``review``；任何 GlobalEdit / UNVER 处置 / 隔离选项都意味着订正席。
-    """
+    """分类现役动作；第四次仍可订正，不存在预审或额外只读终审。"""
     if prereview:
-        if waiting_on != queue.WAITING_ON_STAGE2_REVIEW:
-            raise ValueError('Stage2 只读预审只服务 approval:stage2-global-review')
-        return SeatDecision(
-            purpose='prereview', read_only=True,
-            max_ordinal=STAGE2_COMMANDER_MAX_EDIT_SEAT)
+        raise ValueError('Stage2 预审已退役；必须先接受 Global 再生产 Blueprint')
     if waiting_on == queue.WAITING_ON_STAGE2_FINAL_REVIEW:
+        raise ValueError('Stage2 额外只读终审已退役；close-stage2 只核验已有的两份接受')
+    if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
         return SeatDecision(
-            purpose='final_review', read_only=True,
+            purpose='blueprint_review', read_only=False,
             max_ordinal=STAGE2_COMMANDER_MAX_SEATS)
     if waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION:
         return SeatDecision(
             purpose='correction', read_only=False,
             max_ordinal=STAGE2_COMMANDER_MAX_EDIT_SEAT)
     if waiting_on == queue.WAITING_ON_STAGE2_REVIEW:
-        ids = tuple(submission_option_ids)
-        if ids == (FULL_REVIEW_OPTION_ID,):
-            return SeatDecision(
-                purpose='review', read_only=True,
-                max_ordinal=STAGE2_COMMANDER_MAX_EDIT_SEAT)
         return SeatDecision(
-            purpose='correction', read_only=False,
+            purpose='review', read_only=False,
             max_ordinal=STAGE2_COMMANDER_MAX_EDIT_SEAT)
     raise ValueError(f'{waiting_on!r} 不是 Stage2 Commander 席位 blocker')
 

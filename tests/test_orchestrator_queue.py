@@ -52,7 +52,9 @@ def _NO_CORPUS(test):
 
 
 @pytest.fixture
-def queue_base(tmp_path):
+def queue_base(tmp_path, monkeypatch):
+    # 本组使用合成 overview；涉及审阅闸的用例另行替换当前接受判定。
+    monkeypatch.setattr(Q.approvals, 'require_stage2_review', lambda *_args: None)
     return tmp_path
 
 
@@ -349,9 +351,9 @@ def test_live_invalid_blocks_default_paid_rerun_without_freezing_argv(
     assert blocked[0].steps == []
 
 
-def test_queue_runs_blueprint_then_stops_at_stage4_for_global_review(
+def test_queue_blocks_blueprint_and_downstream_until_global_acceptance(
         queue_base, monkeypatch):
-    """人可边审 global 边跑 blueprint；最低消费边界仍关闭。"""
+    """Global 接受是 Blueprint 生产及后续节点的严格前置。"""
     monkeypatch.setattr(
         Q, 'nodes_up_to',
         lambda _until: [
@@ -375,14 +377,14 @@ def test_queue_runs_blueprint_then_stops_at_stage4_for_global_review(
     todo, blocked = Q.plan_book(
         queue_base, 'book-a', until_stage='stage4', follow_check=False)
 
-    assert [item.node for item in todo] == ['stage2.blueprint']
+    assert todo == []
     assert [item.node for item in blocked] == [
-        'stage4.design', 'stage4.plan', 'stage4.context',
+        'stage2.blueprint', 'stage4.design', 'stage4.plan', 'stage4.context',
     ]
-    assert checked == ['stage4.design']
+    assert checked == ['stage2.blueprint']
     assert all(item.waiting_on == Q.WAITING_ON_STAGE2_REVIEW for item in blocked)
     assert all(item.steps == [] for item in blocked)
-    assert 'global 与 blueprint' in blocked[0].why
+    assert 'Global' in blocked[0].why
 
 
 def test_operator_projection_routes_expired_s2_proof_back_before_stage4_review(
@@ -412,11 +414,11 @@ def test_operator_projection_routes_expired_s2_proof_back_before_stage4_review(
 
     assert todo == []
     assert [item.node for item in blocked] == ['stage4.design', 'stage4.plan']
-    # review 已 generation-safe：缺的不是再一轮 review，而是独立只读终审。
+    # 下游不可凭已存在候选跳过当前 Blueprint 交叉接受或免费审批恢复。
     assert all(
-        item.waiting_on == Q.WAITING_ON_STAGE2_FINAL_REVIEW for item in blocked)
+        item.waiting_on == Q.WAITING_ON_STAGE2_BLUEPRINT_REVIEW for item in blocked)
     assert all(item.steps == [] for item in blocked)
-    assert '独立只读终审' in blocked[0].why
+    assert 'Blueprint' in blocked[0].why
 
 
 @pytest.mark.parametrize('invalid', [False, True])

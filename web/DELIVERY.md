@@ -446,3 +446,10 @@ src/mocks/ 与 scripts/mock-baseline.json 的 20 份 bytes + SHA-256 一致
 ```
 
 `npm run typecheck`：mock 与真实实现都满足 `Api`。
+
+## 工作单元与 Stage2 节点接受
+
+运行页从 `/api/novels/:sid/run.work_units` 原样呈现当前单元、角色、状态、内容已用/上限/剩余与恢复动作。
+null/缺失保持未知，空数组表示尚无已登记单元；界面不计算剩余预算。Global 与 Blueprint 页面
+分别提交 `/approvals/stage2-review` 的 current token、actor/reason 和 typed 决定；已读不会打开节点接受。
+决定和返工属主选项只来自 `/api/enums`。Global 未接受不能启动 Blueprint，Blueprint 未接受不能进入 Stage4。

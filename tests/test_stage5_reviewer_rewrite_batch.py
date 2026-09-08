@@ -45,6 +45,8 @@ def _dump(store, rel, artifact):
 @pytest.fixture
 def rig(tmp_path, monkeypatch):
     """上游材料固定；请求、执行 journal、候选恢复及正式章仍全部走生产代码。"""
+    from novel.work_units import require_workflow
+    require_workflow(tmp_path)
     monkeypatch.setattr(prov, 'code_version', lambda: 'test-code-version')
     novel_dir = tmp_path / '批量改写_851'
     root = novel_dir / 'stage0' / 'clean_text.txt'

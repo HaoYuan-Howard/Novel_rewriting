@@ -57,44 +57,18 @@ def test_agent_run_delegation_is_explicit_without_weakening_stage0_review():
     assert '不在 Stage0 判断章号顺序或连续性' in stage0
 
 
-def test_stage2_contract_closes_collection_operations_and_surviving_review():
-    stage2 = reviewer_contract.CONTRACT_TEXT['stage2']
-    assert '`add` 只含 `op + item`' in stage2
-    assert '`delete` 只含 `op + subject_id`' in stage2
-    assert '`split` 只含 `op + subject_id + items`' in stage2
-    assert '没有 `value` 字段' in stage2
-    assert '按当前 collection 下发的成员 model 与局部 Pydantic schema' in stage2
-    assert '`existing_subject_ids_by_collection` 对应冻结 current collection enum' in stage2
-    assert '合法 `add.item` 的新 ID 不受该 enum 限制' in stage2
-    assert '直接 patch 的现存主体也不从 enum 中剔除' in stage2
-    assert '模板已有行的无重复有序子序列' in stage2
-    assert '`split` 输出不得复用该 `subject_id`' in stage2
-    assert '`delete/split` 触及的输入 ID 不得重复' in stage2
-    assert '`add/split` 产生的输出 ID 不得重复' in stage2
-    assert '全部输入 ID 与输出 ID 必须不相交' in stage2
-    assert '直接字段 patch 的主体必须仍存在' in stage2
-    assert '外键必须在修后主体集合中存在' in stage2
-    assert '`novel-stage2-reviewer-delta-v2`' in stage2
-    assert '按模板开放集合固定键的 object' in stage2
-    assert '不得输出旧 row-list transport' in stage2
-    assert '其他 patch 数组的空数组与 setting/replacement 的 `null`' in stage2
-    assert 'task 与 exact_request 的 `waiting_on` 同为' in stage2
-    assert '`WAITING_ON_STAGE2_EDIT_CORRECTION` 且携 durable failed edit' in stage2
-    assert '此时空 collection 键保留 failed baseline' in stage2
-    assert 'ledger `purpose=correction` 本身不能启用该语义' in stage2
-    assert '全部 collection 一次聚合诊断，再应用任何 operation' in stage2
-    assert '安全拒因只暴露可信 `collection/category/count` 与 `diagnostic_sha256`' in stage2
-    assert '普通 sparse retry 应删去或纠正对应失败 operations' in stage2
-    assert '也可用空数组取消本次 collection 提交' in stage2
-    assert '只有上述 durable edit correction 才替换或 drop failed operations' in stage2
-    assert '且空数组保留 failed baseline' in stage2
-    assert '相同 `item_id + subject_sha256` 存活' in stage2
-    assert '不能因逻辑上已随 edit 修好就省略' in stage2
-    assert '`relation_set_complete` 的主体 hash 不变，仍须显式决定' in stage2
-    assert 'canonical full-action 每行必须显式提交' in stage2
-    assert 'compact transport 每行则提交' in stage2
-    assert '`expected_subject_sha256` 由 Supervisor 可信注入' in stage2
-    assert '无 disposition 时也必须显式提交 `null`' in stage2
+def test_stage2_contract_closes_two_commanders_and_owner_repair():
+    global_contract = reviewer_contract.CONTRACT_TEXT['stage2']
+    blueprint = reviewer_contract.CONTRACT_TEXT['stage2-blueprint']
+    assert '最多四次内容调用' in global_contract and '最多四次内容调用' in blueprint
+    assert '换候选、会话或进程不补预算' in global_contract
+    assert 'collection delta 只使用 add/delete/split 的现役 schema' in global_contract
+    assert '外键必须在修后全集闭合' in global_contract
+    assert '仍存活的旧 FAIL/UNVER 要显式复判' in global_contract
+    assert '没有预审，也没有额外 Global-only 终审' in global_contract
+    assert 'owner 只可为 stage2.global' in global_contract
+    assert 'owner=stage2.blueprint' in blueprint and '回源 owner=stage2.global' in blueprint
+    assert 'seen 只是阅读事实，不授予接受' in blueprint
 
 
 def test_stage5_rewrite_contract_distinguishes_text_file_sha_and_unique_evidence():

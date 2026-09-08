@@ -14,7 +14,7 @@ import hashlib
 import json
 import os
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -37,7 +37,7 @@ from contracts.invariants import (
     STYLE_MEASUREMENT_CONTRACT,
 )
 from contracts.rules import REGISTRY
-from contracts.schema import artifact_spec
+from contracts.schema import artifact_key, artifact_spec
 from contracts.schema.api import (
     ApprovalAction,
     ApprovalBackfillResult,
@@ -46,6 +46,7 @@ from contracts.schema.api import (
     BlueprintReviewWorkpack,
     BlueprintSeenRequest,
     Stage2FinalReviewRequest, Stage2GlobalSeenRequest,
+    Stage2NodeReviewRequest, Stage2NodeReviewDecision, Stage2NodeReviewView,
     DesignBindingInfeasibility,
     DesignAcceptedChapterConstraint,
     DesignBlindChapterTruth,
@@ -104,9 +105,10 @@ from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
 from contracts.schema.base import StrictModel
 from novel import paths, prov
+from novel.stages.stage2.review_delta import CrossReviewScope
 from novel.errors import (
     ApprovalFrozen, ApprovalRequired, ArtifactUnreadable, GateBlocked, HumanEditProtected,
-    NovelError, UpstreamMissing,
+    NovelError, UpstreamMissing, UpstreamUnproven,
 )
 from novel.llm import stage5_runs
 from novel.orchestrator import state
@@ -339,6 +341,16 @@ class _StoredClosureDecision(StrictModel):
     proof: _ApprovalProof
 
 
+class _Stage2PatchReceipt(StrictModel):
+    """局部补丁提交前冻结的身份；正式产物仍只有 producer 的书内落点。"""
+
+    request_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    before_token: str = Field(min_length=1)
+    result_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    global_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    decision_timestamp: str | None = None
+
+
 class _ApprovalRecordV4Legacy(StrictModel):
     """只为显式 backfill 读取的旧 v4；它仍含退役的 s3 闸门。"""
 
@@ -476,6 +488,11 @@ class _ApprovalRecordV7(_ApprovalRecordV6Legacy):
     design_decision: _StoredDesignHistory | None = None
     closure_history: list[_StoredClosureDecision] = Field(default_factory=list)
     closure_decision: _StoredClosureDecision | None = None
+    stage2_review_history: list[Stage2NodeReviewDecision] = Field(default_factory=list)
+    stage2_reviews: dict[str, Stage2NodeReviewDecision] = Field(default_factory=dict)
+    stage2_rework_completed: list[str] = Field(default_factory=list)
+    stage2_patch_receipts: dict[str, _Stage2PatchReceipt] = Field(default_factory=dict)
+    stage2_blueprint_scope: CrossReviewScope | None = None
 
     @model_validator(mode='after')
     def _closure_history_has_one_current_tail(self) -> _ApprovalRecordV7:
@@ -505,7 +522,7 @@ def _lock_path(base: str | os.PathLike[str], sid: str) -> Path:
 
 
 @contextmanager
-def approval_file_lock(
+def approval_exclusion_lock(
     base: str | os.PathLike[str], sid: str,
 ) -> Iterator[None]:
     """串行化一份审批文件的完整 read-modify-write 与回收站移动。
@@ -540,6 +557,25 @@ def approval_file_lock(
                     yield
                 finally:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def approval_file_lock(
+    base: str | os.PathLike[str], sid: str,
+) -> Iterator[None]:
+    """新审批的写准入先于互斥副作用；删除只使用 exclusion lock。"""
+    _require_approval_workflow(base)
+    with approval_exclusion_lock(base, sid):
+        yield
+
+
+def _require_approval_workflow(base: str | os.PathLike[str]) -> None:
+    """审批只消费已初始化工作流身份；错误请求不能创建任务或重发预算。"""
+    from novel.work_units import WorkUnitRefused, workflow_manifest
+    if workflow_manifest(base) is None:
+        raise WorkUnitRefused(
+            '新审批要求已有当前工作流 manifest；旧 base 请用冻结版本恢复，'
+            '新任务先经 Stage0 入口创建 clean 工作流')
 
 
 @contextmanager
@@ -617,17 +653,21 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
                if state.resume_verdict(overview, action.kind)[0] != state.RESUME_SKIP]
         for gate, actions in candidates.items()
     }
-    # Stage2 两份付费生成各自确认、顺序落盘，但 global 的人工阅读不再挡住
-    # blueprint。global 已当前有效时，已完成的 s1 直接下发唯一 continuation；
-    # 浏览器只渲染服务端动作，不从页面是否看过/复核是否 PASS 反推产物状态。
+    # Stage2 两份付费生成各自确认；只有 Global 当前接受才可发布 Blueprint。
+    # 浏览器只渲染服务端动作，不从已读或逐项 PASS 反推节点接受。
     global_action = ApprovalAction(
         kind='stage2.global', label='生成 stage2 全局底座；完成后逐项人工复核')
     blueprint_action = ApprovalAction(
-        kind='stage2.blueprint', label='生成 stage2 逐章骨架；可与全局人工复核并行')
+        kind='stage2.blueprint', label='Global 接受后生成 stage2 逐章骨架')
     if state.resume_verdict(overview, global_action.kind)[0] != state.RESUME_SKIP:
         spawns['s1'] = [global_action]
     elif state.resume_verdict(overview, blueprint_action.kind)[0] != state.RESUME_SKIP:
-        spawns['s1'] = [blueprint_action]
+        try:
+            require_stage2_review(base, sid, 'stage2.blueprint')
+        except (NovelError, OSError, ValueError):
+            spawns['s1'] = []
+        else:
+            spawns['s1'] = [blueprint_action]
     else:
         spawns['s1'] = []
     # Stage4 是两次互相独立的付费确认，不是一个按钮里塞两项作业。A 尚未完成时
@@ -711,6 +751,8 @@ def _view(
         spawns = {**spawns, 's2': [], 's4': []}
     return ApprovalDoc(
         sid=record.sid, gate=record.gate, seen=record.seen,
+        stage2_reviews={node: _stage2_review_view(novel_dir, record, node)
+                        for node in ('stage2.global', 'stage2.blueprint')},
         writing=record.writing,
         design_review=design_review,
         structure=structure,
@@ -818,6 +860,7 @@ def _write(
     base: str | os.PathLike[str], record: _ApprovalRecordV7,
 ) -> ApprovalDoc:
     """审批 raw fact 的唯一落点；返回值始终是落盘后的 effective 投影。"""
+    _require_approval_workflow(base)
     record = _ApprovalRecordV7.model_validate(record.model_dump())
     _refuse_if_frozen(record.sid)
     p = _path(base, record.sid)
@@ -885,7 +928,231 @@ def require_stage2_review(
         require_stage2_delivery_approved(ctx)
         return
     from novel.stages.stage2 import global_review
-    global_review.require_approved(ctx)
+    if node == 'stage2.blueprint':
+        global_review.require_global_accepted(ctx)
+    else:
+        global_review.require_approved(ctx)
+
+
+def _stage2_review_identity(novel_dir: Path, node: str) -> tuple[str, str, str]:
+    """token 守提交竞态，subject/contract 守长期接受；不读取审批 effective 投影。"""
+    if node == 'stage2.global':
+        token = _stage2_global_review_token(novel_dir)
+        return token, token.removeprefix('s2gr1_'), 'stage2-global-acceptance-v1'
+    if node != 'stage2.blueprint':
+        raise ApprovalRequired(f'未登记 Stage2 审阅节点：{node}')
+    from novel.views.stage2 import blueprint_review_workpack
+    sid, _title, _platform = paths.derive_source_meta(novel_dir.name)
+    pack = blueprint_review_workpack(novel_dir.parent, sid, code=_projection_code())
+    return pack.review_token, pack.review_identity_sha256, pack.review_contract_version
+
+
+def _stage2_review_view(
+    novel_dir: Path, record: _ApprovalRecordV7, node: str,
+) -> Stage2NodeReviewView:
+    history = [row for row in record.stage2_review_history if row.node == node]
+    decision = record.stage2_reviews.get(node)
+    if decision is None:
+        return Stage2NodeReviewView(history=history)
+    try:
+        _token, subject, contract = _stage2_review_identity(novel_dir, node)
+        current = (subject == decision.review_subject_sha256
+                   and contract == decision.review_contract_version)
+        if node == 'stage2.blueprint':
+            current = current and _stage2_review_view(
+                novel_dir, record, 'stage2.global').state == 'accepted'
+    except (NovelError, OSError, ValueError):
+        current = False
+    if not current:
+        return Stage2NodeReviewView(state='expired', history=history)
+    status = {'accept': 'accepted', 'stop': 'stopped'}.get(
+        decision.decision, decision.decision)
+    return Stage2NodeReviewView(
+        state=status, current_decision=decision, history=history)
+
+
+def require_stage2_node_accepted(
+    base: str | os.PathLike[str], sid: str, node: str,
+) -> None:
+    """只从 raw typed 决定计算当前性，避免完整 gate 的递归依赖。"""
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    view = _stage2_review_view(novel_dir, _read_raw(base, sid), node)
+    if view.state != 'accepted':
+        raise ApprovalRequired(f'{node} 尚无当前独立 Commander 接受：{view.state}')
+
+
+def approve_stage2_review(
+    base: str | os.PathLike[str], sid: str, request: Stage2NodeReviewRequest,
+) -> ApprovalDoc:
+    """Stage2 两个节点共用的 typed 提交边界；接受绝不来自 seen 布尔值。"""
+    from novel.stages.stage2 import global_review
+    _require_approval_workflow(base)
+    with approval_file_lock(base, sid):
+        raw = _read_raw(base, sid)
+        novel_dir = paths.resolve_novel_dir(base, sid)
+        ctx = state.readonly_ctx(novel_dir, request.node, _projection_code())
+        if request.chapter_ordinals:
+            from contracts.schema.stage1 import MainText
+            main = ArtifactStore(ctx).read(MainText, STAGE1_MAIN_TEXT)
+            known = {chapter.chapter_ordinal for chapter in main.root}
+            if not set(request.chapter_ordinals) <= known:
+                raise HumanEditProtected('Stage2 返工范围包含当前正文不存在的章')
+        if request.decision == 'accept':
+            if request.node == 'stage2.global':
+                global_review.require_global_valid(ctx)
+            else:
+                global_review.require_global_accepted(ctx)
+                global_review.require_approved(ctx, require_acceptance=False)
+        before = _stage2_review_identity(novel_dir, request.node)
+        if request.review_token != before[0]:
+            raise HumanEditProtected('Stage2 审阅包已经变化；旧 token 不落盘')
+        if before != _stage2_review_identity(novel_dir, request.node):
+            raise HumanEditProtected('Stage2 提交期间主体变化；拒绝混合快照')
+        prior = raw.stage2_reviews.get(request.node)
+        if prior is not None and request.model_dump() == {
+                key: value for key, value in prior.model_dump().items()
+                if key in type(request).model_fields}:
+            result = _view(base, _effective_record(novel_dir, raw))
+        else:
+            cross_scope = raw.stage2_blueprint_scope
+            if request.node == 'stage2.blueprint' and request.decision == 'accept':
+                from novel.views.stage2 import blueprint_review_workpack
+                from novel.stages.stage2.review_delta import snapshot
+                current_pack = blueprint_review_workpack(base, sid, code=ctx.code)
+                if current_pack.review_token != request.review_token:
+                    raise HumanEditProtected('交叉范围快照已变化；拒绝保存混合接受')
+                cross_scope = snapshot(current_pack)
+            decision = Stage2NodeReviewDecision(
+                **request.model_dump(), review_subject_sha256=before[1],
+                review_contract_version=before[2], decided_at=_now(),
+                review_scope_sha256=(
+                    _decision_sha256(cross_scope.model_dump(mode='json'))
+                    if request.node == 'stage2.blueprint' and request.decision == 'accept'
+                    and cross_scope is not None else None))
+            result = _write(base, raw.model_copy(update={
+                'stage2_reviews': {**raw.stage2_reviews, request.node: decision},
+                'stage2_review_history': [*raw.stage2_review_history, decision],
+                'stage2_blueprint_scope': cross_scope,
+            }))
+    # 接受先独立耐久；各审批服务重新核验当前身份并各取自己的 OS 文件锁。
+    # Windows 文件锁不可重入，不能持本锁递归调用 approve_gate/mark_seen。
+    if request.node == 'stage2.blueprint' and request.decision == 'accept':
+        return close_stage2_accepted(base, sid)
+    return result
+
+
+def pending_stage2_rework(
+    base: str | os.PathLike[str], sid: str, node: str,
+) -> Stage2NodeReviewDecision | None:
+    if paths.find_novel_dir(base, sid) is None:
+        return None
+    raw = _read_raw(base, sid)
+    if not raw.stage2_review_history:
+        return None
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    for decision in reversed(raw.stage2_review_history):
+        if (decision.decision != 'rework' or decision.owner != node
+                or decision.review_token in raw.stage2_rework_completed
+                or raw.stage2_reviews.get(decision.node) != decision):
+            continue
+        view = _stage2_review_view(novel_dir, raw, decision.node)
+        if view.state == 'rework' and view.current_decision == decision:
+            return decision
+    return None
+
+
+def stage2_rework_request(
+    base: str | os.PathLike[str], sid: str, node: str, review_token: str,
+) -> Stage2NodeReviewDecision:
+    """执行者只能消费状态机已登记的当前返工，不能从自由理由推导动作。"""
+    request = pending_stage2_rework(base, sid, node)
+    if request is None or request.review_token != review_token:
+        raise HumanEditProtected('Stage2 返工请求缺失、已消费或主体过期')
+    return request
+
+
+def mark_stage2_rework_landed(
+    base: str | os.PathLike[str], sid: str, node: str, review_token: str,
+) -> None:
+    """producer 完成当前返工后的零模型回执；原请求与决定永久保留。"""
+    with approval_file_lock(base, sid):
+        raw = _read_raw(base, sid)
+        matches = [row for row in raw.stage2_review_history
+                   if row.review_token == review_token and row.owner == node
+                   and row.decision == 'rework']
+        if not matches:
+            raise ApprovalRequired('Stage2 返工完成回执没有对应 typed 请求')
+        if review_token not in raw.stage2_rework_completed:
+            _write(base, raw.model_copy(update={
+                'stage2_rework_completed': [*raw.stage2_rework_completed, review_token]}))
+
+
+def stage2_patch_receipt(
+    base: str | os.PathLike[str], sid: str, request_sha256: str,
+) -> _Stage2PatchReceipt | None:
+    return _read_raw(base, sid).stage2_patch_receipts.get(request_sha256)
+
+
+def stage2_cross_review_scope(base: str | os.PathLike[str], sid: str) -> CrossReviewScope | None:
+    raw = _read_raw(base, sid)
+    scope = raw.stage2_blueprint_scope
+    if scope is None:
+        return None
+    digest = _decision_sha256(scope.model_dump(mode='json'))
+    if not any(row.node == 'stage2.blueprint' and row.decision == 'accept'
+               and row.review_subject_sha256 == scope.review_subject_sha256
+               and row.review_scope_sha256 == digest for row in raw.stage2_review_history):
+        raise HumanEditProtected('Blueprint 已接受范围缺精确 typed 决定证明')
+    return scope
+
+
+def stage2_review_payload_landed(
+    base: str | os.PathLike[str], sid: str, payload: dict[str, Any],
+) -> bool:
+    """已发布的精确 typed 决定就是提交事实；后续换主体不撤销历史提交。"""
+    request = Stage2NodeReviewRequest.model_validate(payload)
+    expected = request.model_dump(mode='json')
+    return any({key: value for key, value in row.model_dump(mode='json').items()
+                if key in Stage2NodeReviewRequest.model_fields} == expected
+               for row in _read_raw(base, sid).stage2_review_history)
+
+
+def stage2_review_halt(
+    base: str | os.PathLike[str], sid: str,
+) -> tuple[str, str, str] | None:
+    """当前不确定/停止决定是持久人工出口，不能被下一次调度当作新审阅。"""
+    if paths.find_novel_dir(base, sid) is None:
+        return None
+    raw = _read_raw(base, sid)
+    if not raw.stage2_review_history:
+        return None
+    for node in ('stage2.global', 'stage2.blueprint'):
+        view = _stage2_review_view(paths.resolve_novel_dir(base, sid), raw, node)
+        if view.state in ('uncertain', 'stopped') and view.current_decision is not None:
+            return node, view.state, view.current_decision.reason
+    return None
+
+
+def prepare_stage2_patch_receipt(
+    base: str | os.PathLike[str], sid: str, *, request_sha256: str,
+    before_token: str, result_subject_sha256: str, global_sha256: str,
+    decision_timestamp: str | None = None,
+) -> None:
+    """首个正式写副作用前保存可重放补丁身份，不能拿事后内容推断曾审阅。"""
+    _require_approval_workflow(base)
+    receipt = _Stage2PatchReceipt(
+        request_sha256=request_sha256, before_token=before_token,
+        result_subject_sha256=result_subject_sha256, global_sha256=global_sha256,
+        decision_timestamp=decision_timestamp)
+    with approval_file_lock(base, sid):
+        raw = _read_raw(base, sid)
+        existing = raw.stage2_patch_receipts.get(request_sha256)
+        if existing is not None:
+            if existing != receipt:
+                raise HumanEditProtected('同一 Stage2 补丁请求出现不一致的恢复身份')
+            return
+        _write(base, raw.model_copy(update={'stage2_patch_receipts': {
+            **raw.stage2_patch_receipts, request_sha256: receipt}}))
 
 
 _GATE_ARTIFACTS = {
@@ -913,7 +1180,7 @@ _GATE_REQUIREMENTS = {
 _SEEN_ARTIFACTS = {
     'read': (STAGE2_CHAPTER_BLUEPRINTS,),
     # ``seen.global`` 绑定 Global 主体**与 review 完整字节**：review 任何一格
-    # 状态/理由变化都让旧阅读事实过期，独立终审必须重读。
+    # 状态/理由变化都让旧阅读事实过期；节点接受仍由独立的 typed 决定绑定。
     'global': (STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW),
 }
 
@@ -2643,17 +2910,22 @@ def _proof_for_legacy_writing(novel_dir: Path, deep: list[int]) -> _ApprovalProo
     )
 
 
+def _writing_proof_payload() -> dict[str, str]:
+    """写作授权主体的固定契约投影；历史证明与新提交共用同一登记。"""
+    return {
+        'kind': 'writing',
+        'scope': 'all_planned_chapters',
+        'contract': 'stage5-v3',
+        'measurement_contract': STYLE_MEASUREMENT_CONTRACT,
+    }
+
+
 def _proof_for_writing(novel_dir: Path) -> _ApprovalProof:
     return _make_proof(
         novel_dir, (
             STAGE1_MAIN_TEXT, STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
         ),
-        {
-            'kind': 'writing',
-            'scope': 'all_planned_chapters',
-            'contract': 'stage5-v3',
-            'measurement_contract': STYLE_MEASUREMENT_CONTRACT,
-        },
+        _writing_proof_payload(),
     )
 
 
@@ -2979,6 +3251,99 @@ def stage4_review_payload_landed(
                         _structure_decision_payload(stored))):
                 raise HumanEditProtected('匹配的 Stage4B 已落盘回执与原主体/proof 不闭合')
         return bool(matched_structure)
+
+
+def reviewer_approval_payload_landed(
+    base: str | os.PathLike[str], sid: str, *, surface: str, payload: dict[str, Any],
+) -> bool:
+    """只读证明原 Commander 的完整 typed 审批已提交，供内容账补尾。
+
+    历史中的 exact 回执与原主体 proof 才是提交事实。当前 gate、当前产物或
+    新 token 均不参与；损坏证据必须暴露，不能被解释成尚未提交再购买模型。
+    此查询不创建审批锁，也不授予当前主体任何新接受。
+    """
+    models = {
+        'stage2_global_review': Stage2NodeReviewRequest,
+        'stage2_blueprint_review': Stage2NodeReviewRequest,
+        'design': DesignReviewRequest,
+        'structure': StructureApprovalRequest,
+        'writing': WritingApprovalRequest,
+        'stage5': Stage5ClosureRequest,
+    }
+    model = models.get(surface)
+    if model is None:
+        raise HumanEditProtected('未登记的 Commander 审批提交证明面')
+    try:
+        request = model.model_validate(payload, strict=True)
+    except ValidationError as exc:
+        raise HumanEditProtected('待核 Commander 回执不是完整的现役 typed payload') from exc
+    expected = request.model_dump(mode='json')
+    if _decision_sha256(expected) != _decision_sha256(payload):
+        raise HumanEditProtected('待核 Commander 回执需要补字段或归一，不能冒充 exact 提交')
+    if surface.startswith('stage2_'):
+        expected_node = ('stage2.global' if surface == 'stage2_global_review'
+                         else 'stage2.blueprint')
+        if request.node != expected_node:
+            raise HumanEditProtected('Stage2 回执的节点与审批面不一致')
+
+    with _LOCK:
+        target = _path(base, paths.check_sid(sid))
+        try:
+            if target.is_symlink():
+                raise HumanEditProtected('正式审批来源不得是符号链接')
+            target.stat()
+            if not target.is_file():
+                raise HumanEditProtected('正式审批来源不是普通文件')
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise HumanEditProtected('正式审批来源不可读，不能推断未提交') from exc
+        raw = _read_raw(base, sid, require_existing=True)
+
+        if surface in ('stage2_global_review', 'stage2_blueprint_review'):
+            return stage2_review_payload_landed(base, sid, expected)
+        if surface in ('design', 'structure'):
+            return stage4_review_payload_landed(base, sid, surface=surface, payload=expected)
+        if surface == 'writing':
+            matched = [stored for stored in raw.writing_history
+                       if _public_writing_decision(stored).model_dump(
+                           mode='json', exclude={'decided_at'}) == expected]
+            for stored in matched:
+                subject_proof = stored.proof.model_copy(update={
+                    'decision_sha256': _decision_sha256(_writing_proof_payload()),
+                })
+                if (set(stored.proof.artifacts) != {
+                        STAGE1_MAIN_TEXT, STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT}
+                        or stored.proof.decision_sha256 != _decision_sha256(
+                            _writing_decision_payload(stored))
+                        or _writing_subject_sha256(subject_proof) != stored.subject_sha256):
+                    raise HumanEditProtected('匹配的写作授权回执与原主体/proof 不闭合')
+            return bool(matched)
+
+        matched = [stored for stored in raw.closure_history
+                   if _public_closure_decision(stored).model_dump(
+                       mode='json', exclude={'decision_sha256', 'decided_at'}) == expected]
+        for stored in matched:
+            # 对外载荷不包含模板标记，必须另核 materialize 后的正式终态；
+            # 否则带相同裁决内容的未完成模板可能被误当成原请求已提交。
+            if any(row.placeholder or row.template_token is not None
+                   for row in (*stored.must_appear, *stored.group_acks)):
+                raise HumanEditProtected('匹配的 Stage5 闭合历史含未完成模板，不能证明正式提交')
+            subjects = stored.proof.artifacts
+            reviews = [rel for rel in subjects
+                       if artifact_key(rel) == artifact_rel('stage5.review')]
+            chapters = [rel for rel in subjects
+                        if artifact_key(rel) == artifact_rel('stage5.chapter')]
+            if (stored.decision_sha256 != _decision_sha256(expected)
+                    or stored.proof.decision_sha256 != _decision_sha256(
+                        _closure_proof_payload(stored.workpack_sha256))
+                    or len(reviews) != 1 or not chapters
+                    or len(subjects) != len(reviews) + len(chapters)
+                    or subjects[reviews[0]] != stored.review_sha256
+                    or any(subjects.get(artifact_rel('stage5.chapter', nn=row.chapter_ordinal))
+                           != row.chapter_sha256 for row in stored.must_appear)):
+                raise HumanEditProtected('匹配的 Stage5 闭合回执与原主体/proof 不闭合')
+        return bool(matched)
 
 
 def _accepted_design_strategy_source(
@@ -5609,7 +5974,7 @@ def mark_seen(
 
     ``seen.read`` 绑定 Blueprint 工作包 token；``seen.global`` 绑定 Global 审阅
     面 token（Global 主体 + review 完整字节 + MainText 主体 + blocking scope）
-    并记录 actor。headless 路由下两枚 token 都来自第四席只读终审的回执，
+    并记录 actor。headless 路由下两枚 token 来自两个已接受的节点当前工作包，
     交互界面则由人读完当前 review 后显式提交，不再“打开页面即已读”。
     """
     if key not in _SEEN_ARTIFACTS:
@@ -5688,19 +6053,43 @@ def close_stage2_review(
     base: str | os.PathLike[str], sid: str,
     request: Stage2FinalReviewRequest,
 ) -> ApprovalDoc:
-    """按公开审批服务的固定顺序收口一次 headless Stage2 独立终审。
+    """只核验两份已经落盘的节点接受，并顺序补齐审批链。
 
-    第四席只读终审提交它实际读过的两枚 opaque token（Global 审阅面 + Blueprint
-    工作包）与 actor/reason；本函数不生成 review 决定，也不碰小说 artifact。
+    请求两枚 token 只绑定本次恢复快照；本函数不产生审阅决定、不调用模型。
     五步各自仍执行原有 currentness、typed review 与 TOCTOU 校验。若中途失败，
     已经落下的 raw proof 也是可审计、可幂等恢复的事实，最后的 ``s2`` 不会在
     前置项失效时被误开。
     """
+    require_stage2_node_accepted(base, sid, 'stage2.global')
+    require_stage2_node_accepted(base, sid, 'stage2.blueprint')
+    raw = _read_raw(base, sid)
+    global_decision = raw.stage2_reviews['stage2.global']
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    global_token = _stage2_review_identity(novel_dir, 'stage2.global')[0]
+    blueprint_token = _stage2_review_identity(novel_dir, 'stage2.blueprint')[0]
+    if (request.global_review_token != global_token
+            or request.blueprint_review_token != blueprint_token):
+        raise HumanEditProtected('Stage2 收口 token 已过期；零模型刷新收口请求')
     approve_gate(base, sid, 's0')
     approve_gate(base, sid, 's1')
-    mark_seen(base, sid, 'read', blueprint_subject=request.blueprint_subject)
-    mark_seen(base, sid, 'global', global_subject=request.global_subject)
+    mark_seen(base, sid, 'read', blueprint_subject=BlueprintSeenRequest(
+        review_token=blueprint_token))
+    mark_seen(base, sid, 'global', global_subject=Stage2GlobalSeenRequest(
+        review_token=global_token, actor=global_decision.actor))
     return approve_gate(base, sid, 's2')
+
+
+def close_stage2_accepted(base: str | os.PathLike[str], sid: str) -> ApprovalDoc:
+    """两接受已经落盘时的可重复、零模型收口入口。"""
+    require_stage2_node_accepted(base, sid, 'stage2.global')
+    require_stage2_node_accepted(base, sid, 'stage2.blueprint')
+    raw = _read_raw(base, sid)
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    decision = raw.stage2_reviews['stage2.blueprint']
+    return close_stage2_review(base, sid, Stage2FinalReviewRequest(
+        actor=decision.actor, reason=decision.reason,
+        global_review_token=_stage2_review_identity(novel_dir, 'stage2.global')[0],
+        blueprint_review_token=_stage2_review_identity(novel_dir, 'stage2.blueprint')[0]))
 
 
 def _has_stage5_work(novel_dir: Path) -> bool:

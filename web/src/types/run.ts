@@ -57,8 +57,23 @@ export interface RunResumeFrontier {
   paid: boolean | null
   writes: string | null
   next_handler: RunNextHandler
+  review_states?: Array<{ node: string; scope: string; state: string }> | null
   verified_skipped_nodes: string[]
   verified_skipped_count: number
+}
+
+export interface RunWorkUnit {
+  unit_id: string
+  node: string
+  role: string
+  scope: string
+  content_used: number
+  content_limit: number
+  content_remaining: number
+  state: string
+  latest_request_sha256: string | null
+  latest_response_sha256: string | null
+  recovery_action: string | null
 }
 
 export interface RunProgress {
@@ -71,4 +86,6 @@ export interface RunProgress {
   stage_done: Record<string, boolean | null>
   /** 最近约 20 条信标事件，人读时间线 */
   events_tail: RunEvent[]
+  work_units?: RunWorkUnit[] | null
+  current_recovery_actions?: string[] | null
 }

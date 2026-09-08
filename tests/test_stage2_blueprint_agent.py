@@ -27,7 +27,8 @@ from novel.stages.stage2 import extract
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
 from tests.test_stage2_generation import (
-    _client, _ctx as _legacy_ctx, _ok, _response_blueprints, _response_global,
+    _accept_fixture_global, _client, _ctx as _legacy_ctx, _ok,
+    _response_blueprints, _response_global,
 )
 
 
@@ -52,6 +53,13 @@ def _land_global(book: Path) -> None:
     client, _transport = _client(
         ctx, lambda _request, _index: _ok(_response_global()))
     extract.run_global(ctx, client)
+    _accept_fixture_global(ctx)
+
+
+@pytest.fixture(autouse=True)
+def _workflow_epoch(tmp_path):
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
 
 
 def _ctx(base: Path, book: Path, *, run_id: str | None = None) -> RunContext:
@@ -195,6 +203,44 @@ class _Factory:
 
 def _records(base: Path):
     return agent_session_audit.fold(agent_session_audit.read_events(base))
+
+
+def test_commander_rework_only_revises_requested_chapter_and_preserves_others(tmp_path):
+    from contracts.schema.api import Stage2NodeReviewRequest
+    from novel import work_units
+    from novel.node_agents import build_node_agent
+    from novel.orchestrator import approvals
+    from tests.test_stage2_review_decisions import _approve_all_review
+
+    book = tmp_path / '蓝图定向返工_690'
+    book.mkdir()
+    _land_global(book)
+    _approve_all_review(book)
+    global_token = approvals._stage2_review_identity(book, 'stage2.global')[0]
+    approvals.approve_stage2_review(tmp_path, '690', Stage2NodeReviewRequest(
+        node='stage2.global', review_token=global_token, decision='accept',
+        actor='test-commander', reason='全局必需事实已核验'))
+    good = _response_blueprints()
+    initial = _ctx(tmp_path, book)
+    first = Stage2BlueprintAgent(initial, driver_factory=_Factory(
+        book, {(chapter, 1): [good[chapter]] for chapter in (1, 2, 3)})).run()
+    token = approvals._stage2_review_identity(book, initial.node)[0]
+    approvals.approve_stage2_review(tmp_path, initial.sid, Stage2NodeReviewRequest(
+        node=initial.node, review_token=token, decision='rework', owner=initial.node,
+        actor='test-commander', reason='仅核对第 2 章因果依据', chapter_ordinals=[2]))
+    repaired = _ctx(tmp_path, book)
+    factory = _Factory(book, {(2, 1): [good[2]]}, session_namespace='commander-')
+    result = build_node_agent(repaired, driver_factory=factory, review_token=token).run()
+    assert result.passed
+    assert [row[2] for row in factory.created] == [2]
+    assert '仅核对第 2 章因果依据' in factory.created[0][-1].calls[0][1].prompt
+    before = {row.chapter_ordinal: row for row in first.artifact.blueprints}
+    after = {row.chapter_ordinal: row for row in result.artifact.blueprints}
+    assert before[1] == after[1] and before[3] == after[3]
+    assert [work_units.budget_for(repaired, scope=f'chapter:{chapter}').used
+            for chapter in (1, 2, 3)] == [1, 2, 1]
+    assert repaired.cache == CachePolicy.default()
+    assert approvals.pending_stage2_rework(tmp_path, initial.sid, initial.node) is None
 
 
 def test_live_hard_resumes_only_target_chapter_then_delivers(tmp_path):

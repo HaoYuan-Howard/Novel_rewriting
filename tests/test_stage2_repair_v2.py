@@ -138,6 +138,9 @@ def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
     global_client, _t = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    from tests.test_stage2_review_decisions import _approve_all_review, _accept_global_node
+    _approve_all_review(book)
+    _accept_global_node(book)
 
     spec = CONTRACTS[architecture]
     if spec.topology == 'boundary_then_detail':

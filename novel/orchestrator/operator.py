@@ -53,7 +53,7 @@ def _action(
     overview: NovelOverview, item: QueueItem,
 ) -> OperatorAction:
     resume_verdict, _resume_why = state.resume_verdict(
-        overview, item.node)
+        overview, item.node, flags=tuple(item.flags))
     paid = is_paid(item.node, item.flags)
     writes = write_effect(item.node, item.flags)
     payload = {
@@ -223,18 +223,45 @@ def _stage4_design_repair_commit_recovery_surface(
         items=[inbox_item], counts=counts, total=1, wontfix=0)
 
 
+def _prepared_delivery_recovery_surface(
+    snapshot: OperatorReadSnapshot,
+) -> tuple[_LanePlan, InboxView] | None:
+    """原组提交尾窗先于审批投影；正式文件存在不能掩盖未闭采纳。"""
+    item = queue.prepared_delivery_recovery_item(snapshot.base, snapshot.sid, code=snapshot.code)
+    if item is None:
+        return None
+    lane = _LanePlan(
+        state='blocked',
+        action=_action(
+            base=os.fspath(snapshot.base), sid=snapshot.sid, code=snapshot.code,
+            surface_seal=snapshot.surface_seal, overview=snapshot.overview, item=item),
+        verified_skipped_nodes=())
+    kind = ('repairable' if item.waiting_on == queue.WAITING_ON_PREPARED_DELIVERY
+            else 'human_only')
+    counts = {key: 0 for key in INBOX_KIND}
+    counts[kind] = 1
+    return lane, InboxView(items=[InboxItem(
+        kind=kind, stage=NODES[item.node].stage, chapter=None, rule='prepared_delivery',
+        what=item.why,
+        how=('执行原 source run 与 proof SHA 锁定的 --recover-prepared；不构造模型客户端'
+             if kind == 'repairable' else '保留原完成组、成本与采纳记录，核对未知证据；不能重新生成'))],
+        counts=counts, total=1, wontfix=0)
+
+
 def _prepared_commit_recovery_surface(
     snapshot: OperatorReadSnapshot,
 ) -> tuple[_LanePlan, InboxView] | None:
-    """先同时探测 Stage2/Stage4 prepared ownership，不按节点顺序猜一份。"""
+    """同时检查已登记的 prepared ownership，不按节点顺序猜一份。"""
     stage2 = _stage2_commit_recovery_surface(snapshot)
     stage4 = _stage4_design_repair_commit_recovery_surface(snapshot)
-    if stage2 is not None and stage4 is not None:
+    delivery = _prepared_delivery_recovery_surface(snapshot)
+    pending = [entry for entry in (stage2, stage4, delivery) if entry is not None]
+    if len(pending) > 1:
         raise ArtifactUnreadable(
-            'operator 同时发现 Stage2 与 Stage4 prepared 提交尾窗；'
+            'operator 同时发现多个阶段的 prepared 提交尾窗；'
             '两者都可能改写 sealed/current input，不能按节点'
             '顺序选一份执行')
-    return stage2 if stage2 is not None else stage4
+    return pending[0] if pending else None
 
 
 def _lane_from_snapshot(
@@ -332,13 +359,33 @@ def _next_from_snapshot(snapshot: OperatorReadSnapshot) -> OperatorNext:
     )
 
 
-def _frontier_view(lane: _LanePlan) -> RunResumeFrontierView:
+def _review_state_projection(approval_doc: ApprovalDoc | None) -> list[dict[str, str]] | None:
+    """同一 operator 快照的有效审批原状态；节点路径只从 NODES 登记读取。"""
+    if approval_doc is None:
+        return None
+    source = approval_doc.model_dump(mode='python')
+    rows = []
+    for node, spec in NODES.items():
+        life = spec.lifecycle
+        if life is None or not life.approval_projection:
+            continue
+        value = source
+        for key in life.approval_projection:
+            value = value.get(key) if isinstance(value, dict) else None
+        status = ('accepted' if value else 'not_accepted') if isinstance(value, bool) else value
+        rows.append({'node': node, 'scope': life.commander_bindings[0][1],
+                     'state': status if isinstance(status, str) else 'unknown'})
+    return rows
+
+
+def _frontier_view(lane: _LanePlan, approval_doc: ApprovalDoc | None = None) -> RunResumeFrontierView:
     action = lane.action
+    review_states = _review_state_projection(approval_doc)
     if lane.state == 'pipeline_complete':
         return RunResumeFrontierView(
             state='pipeline_complete',
             why='当前快照下现役节点已全部越过；最终交付仍以终验包为准',
-            next_handler='none',
+            next_handler='none', review_states=review_states,
             verified_skipped_nodes=list(lane.verified_skipped_nodes),
             verified_skipped_count=len(lane.verified_skipped_nodes),
         )
@@ -367,7 +414,7 @@ def _frontier_view(lane: _LanePlan) -> RunResumeFrontierView:
         waiting_on=action.waiting_on,
         paid=action.paid,
         writes=action.writes,
-        next_handler=handler,
+        next_handler=handler, review_states=review_states,
         verified_skipped_nodes=list(lane.verified_skipped_nodes),
         verified_skipped_count=len(lane.verified_skipped_nodes),
     )
@@ -387,6 +434,7 @@ def progress_snapshot(
     novel_dir = paths.resolve_novel_dir(base, sid).resolve()
     with readonly_snapshot_memo(novel_dir):
         snapshot = capture_operator_snapshot(base, sid)
+        approval_doc = None
         recovery = _prepared_commit_recovery_surface(snapshot)
         if recovery is not None:
             lane, _inbox = recovery
@@ -399,7 +447,7 @@ def progress_snapshot(
                     include_spawns=False, operator_projection=True)
                 lane = _lane_from_snapshot(snapshot, approval_doc)
         _require_snapshot_current(snapshot)
-        return snapshot.overview, _frontier_view(lane)
+        return snapshot.overview, _frontier_view(lane, approval_doc)
 
 
 def next_action_at_code(

@@ -64,10 +64,10 @@ def stage2_generation_review(data: object) -> object:
             'state': item.get('state'),
             'generation_disposition': item.get('generation_disposition'),
         })
-    return {
-        'source_sha256': data.get('source_sha256'),
-        'blocking_items': rows,
-    }
+    # 全 Global 的 source hash 只负责审阅当前性；把它带入消费投影会使未被
+    # 本节点消费的 disclosure/fate 改动也触发整链重做。主体 hash 已绑定每项
+    # blocking 知识，状态与隔离决定则绑定实际生成视图。
+    return {'blocking_items': rows}
 
 
 def stage2_main_text(data: object) -> object:

@@ -48,6 +48,26 @@ _CTRL = re.compile(r'[\x00-\x1f\x7f]')
 MAX_TITLE = 80
 
 
+def workflow_manifest_path(base: str | os.PathLike[str]) -> Path:
+    """新 clean base 的固定工作流身份。"""
+    return service_dir(base) / 'workflow.json'
+
+
+def work_unit_dir(base: str | os.PathLike[str], sid: str, unit_id: str) -> Path:
+    """工作单元的唯一服务路径；外部输入不能充当路径。"""
+    if not re.fullmatch(r'[0-9a-f]{64}', unit_id):
+        raise ValueError('工作单元身份必须是 SHA-256')
+    return service_runs_dir(base) / check_sid(sid) / 'work_units' / unit_id
+
+
+def work_units_dir(base: str | os.PathLike[str], sid: str) -> Path:
+    return service_runs_dir(base) / check_sid(sid) / 'work_units'
+
+
+def work_unit_registry_path(base: str | os.PathLike[str], sid: str) -> Path:
+    return service_runs_dir(base) / check_sid(sid) / 'work_units.json'
+
+
 def derive_source_meta(path_or_name: str) -> tuple[str, str, str | None]:
     """`<platform?>_<title>[_<id>]` → `(source_id, title, platform)`。
 

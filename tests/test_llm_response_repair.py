@@ -24,6 +24,7 @@ from novel.llm.client import (
 from novel.llm.ledger import AUDIT_REL, ledger_path
 from novel.llm.transport import ChatResponse, FakeTransport
 from novel.run import RunContext
+from novel.observability import RequestProgress
 from novel.run_identity import new_run_id
 from novel.stages.stage2 import extract
 
@@ -82,7 +83,8 @@ def _ask(client: LlmClient) -> RepairResponse:
 def _ask_stage2(client: LlmClient, *, validator=None) -> RepairResponse:
     return client.ask_json(
         'system', 'user', model_cls=RepairResponse, purpose='repair.p',
-        validator=validator, recovery_policy='stage2-blueprint-v1')
+        validator=validator, recovery_policy='stage2-blueprint-v1',
+        progress=RequestProgress(chapter=1, index=1, total=1))
 
 
 def _rows(path: Path) -> list[dict]:
@@ -748,7 +750,8 @@ def test_an_accepted_dynamic_repair_cache_survives_a_crash_before_artifact_write
     assert replay_transport.calls == [], '动态恢复成功响应必须按自己的请求键 0 wire 回放'
     accepted = [row for row in _rows(base.joinpath(*AUDIT_REL))
                 if row['kind'] == 'gate_decision' and row['decision'] == 'accepted']
-    assert accepted[-1]['source'] == 'cache'
+    # 原回答优先恢复真实 attempt 身份，不能以 cache 行替换正式采纳来源。
+    assert accepted[-1]['source'] == 'wire'
     assert accepted[-1]['request_mode'] == 'targeted_repair:full'
 
 

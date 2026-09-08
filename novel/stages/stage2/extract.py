@@ -1579,7 +1579,7 @@ def _global_checkpoint_state(
         accepted_role_patch_count: int,
 ) -> dict[str, object]:
     return {
-        'kind': 'stage2-global-candidate-v1',
+        'kind': 'stage2-global-candidate-v2',
         'turn_kind': turn_kind,
         'accepted_role_patch_count': accepted_role_patch_count,
         'main_text_sha256': prepared.main_text_sha256,
@@ -1623,9 +1623,11 @@ def write_global_agent_checkpoint(
         if not isinstance(base_response, GlobalGroundingCandidateResponse):
             raise ProvenanceRefused(
                 'Global role_fate_patch checkpoint 缺 candidate-only typed base')
-        if accepted_role_patch_count not in (1, 2):
+        if (not isinstance(accepted_role_patch_count, int)
+                or isinstance(accepted_role_patch_count, bool)
+                or accepted_role_patch_count < 1):
             raise ProvenanceRefused(
-                'Global role_fate_patch checkpoint 的 accepted 计数只能是 1 或 2')
+                'Global role_fate_patch checkpoint 的 accepted 计数必须是正整数')
     else:
         raise ProvenanceRefused(
             f'Global checkpoint 尚未登记 turn 类型 {type(payload).__name__}')
@@ -1681,7 +1683,7 @@ def _assert_global_custody_durable_state(
     dynamic-validator rejection 会覆盖 client 的内存 accepted attempt，却不会写业务
     checkpoint。custody 因此只能把“被拒 turn 之前”的 base/count 绑定到最新 durable
     candidate；若裸信调用者传入的 ``count``，真实第二次 role patch 可被伪装成第一次，
-    恢复口就会错误放宽出第三次窄修。
+    恢复口就会丢失窄修的单调计数与 sticky 状态。
     """
     from novel.llm import stage2_global_runs
 
@@ -1730,7 +1732,7 @@ def custody_global_validator_rejection(
     """按当轮状态封存最后一份 schema-valid / dynamic-validator 拒稿。
 
     ``accepted_role_patch_count`` 是这份被拒 turn **之前**已经 accepted 的窄修数；
-    因此 role/fate replacement 成功后只能从 0→1 或 1→2。旧 full 调用省略
+    因此 role/fate replacement 成功后必须严格增加 1。旧 full 调用省略
     三个关键字时仍保持原语义。
     """
     from novel.llm import response_repair
@@ -1747,10 +1749,12 @@ def custody_global_validator_rejection(
             'Global locator evidence_patch custody 已退役；不能再保管旧 wire 拒稿')
     elif expected_turn_kind == 'role_fate_patch':
         if (not isinstance(base_response, GlobalGroundingCandidateResponse)
-                or accepted_role_patch_count not in (0, 1)):
+                or not isinstance(accepted_role_patch_count, int)
+                or isinstance(accepted_role_patch_count, bool)
+                or accepted_role_patch_count < 0):
             raise ProvenanceRefused(
                 'Global role_fate_patch custody 必须绑定 candidate base，'
-                '且写前 accepted 计数只能是 0 或 1')
+                '且写前 accepted 计数必须是非负整数')
     else:
         raise ProvenanceRefused(
             f'Global custody 未登记 expected_turn_kind={expected_turn_kind!r}')
@@ -1905,7 +1909,7 @@ def _global_custody_expectation(
             'Global locator evidence_patch custody 已退役；旧拒稿不能在当前 '
             'paragraph-candidate-v1 wire 上恢复')
     if expected == 'role_fate_patch':
-        if not isinstance(base_raw, dict) or count not in (0, 1):
+        if not isinstance(base_raw, dict) or count < 0:
             raise ProvenanceRefused(
                 'Global role/fate custody rejection 缺 candidate base 或计数非法')
         base = GlobalGroundingCandidateResponse.model_validate(base_raw)
@@ -2119,9 +2123,9 @@ def adopt_global_validator_resolution_checkpoint(
             response = apply_global_role_fate_patch(
                 prepared, base_evaluation, payload).response
         result_role_patch_count = prior_role_patch_count + 1
-        if result_role_patch_count not in (1, 2):
+        if result_role_patch_count < 1:
             raise ProvenanceRefused(
-                'Global role/fate custody accepted 计数未严格递增到 1/2')
+                'Global role/fate custody accepted 计数未严格递增')
     if why is not None:
         response_repair.write_outcome(
             record, decision='rejected', gate='validator',
@@ -2196,7 +2200,7 @@ def restore_global_agent_checkpoint(
         'evidence_candidates_sha256', 'candidate', 'candidate_sha256',
         'base_candidate', 'base_candidate_sha256', 'custody',
     }
-    if set(state) != expected_keys or state.get('kind') != 'stage2-global-candidate-v1':
+    if set(state) != expected_keys or state.get('kind') != 'stage2-global-candidate-v2':
         raise ProvenanceRefused('Global checkpoint state 形状/版本不合法')
     if (state.get('main_text_sha256') != prepared.main_text_sha256
             or state.get('evidence_candidates_sha256')
@@ -2210,9 +2214,9 @@ def restore_global_agent_checkpoint(
     accepted_role_patch_count = state.get('accepted_role_patch_count')
     if (not isinstance(accepted_role_patch_count, int)
             or isinstance(accepted_role_patch_count, bool)
-            or not 0 <= accepted_role_patch_count <= 2):
+            or accepted_role_patch_count < 0):
         raise ProvenanceRefused(
-            'Global checkpoint accepted_role_patch_count 不在 0..2 闭集')
+            'Global checkpoint accepted_role_patch_count 必须是非负整数')
     if turn_kind == 'full_candidate':
         if not isinstance(payload, GlobalCandidateFullTurn):
             raise ProvenanceRefused('Global checkpoint full_candidate 信封分支漂移')
@@ -2230,7 +2234,7 @@ def restore_global_agent_checkpoint(
         if not isinstance(payload, GlobalRoleFatePatchTurn):
             raise ProvenanceRefused(
                 'Global checkpoint role_fate_patch 信封分支漂移')
-        if accepted_role_patch_count not in (1, 2):
+        if accepted_role_patch_count < 1:
             raise ProvenanceRefused(
                 'Global role_fate_patch checkpoint 缺 accepted 计数')
         base_raw = state.get('base_candidate')
@@ -2317,9 +2321,9 @@ def restore_global_agent_checkpoint(
                     or not isinstance(repaired_payload, GlobalRoleFatePatchTurn)
                     or not isinstance(base, GlobalGroundingCandidateResponse)
                     or accepted_role_patch_count != prior_role_patch_count + 1
-                    or accepted_role_patch_count not in (1, 2)):
+                    or accepted_role_patch_count < 1):
                 raise ProvenanceRefused(
-                    'Global role/fate custody checkpoint 分支/base/计数未递增到 1/2')
+                    'Global role/fate custody checkpoint 分支/base/计数未严格递增')
             base_evaluation = evaluate_global_candidate(
                 ctx, source, prepared, base)
             why = global_role_fate_patch_validator(
@@ -2436,11 +2440,13 @@ def _read_global_downstream_guard(
 
 def prepare_global_candidate(
     ctx: RunContext, *, agent_envelope: bool = False,
+    review_token: str | None = None,
 ) -> GlobalCandidateContext:
     """冻结一次 global 候选循环的 prompt、正文与下游差分基线。
 
-    本函数不调用模型、不铸 provenance、不写盘。blueprint/旧 global 只决定能否提交，
-    不参与候选内容，因此用 ``validation_reads`` 隔离，避免它们冒充新 global 的输入边。
+    本函数不调用模型、不铸 provenance、不写盘。blueprint/旧 global 的差分守卫用
+    ``validation_reads`` 隔离；显式 Commander 返工才把本节点旧稿作为修订基线下发，
+    并将当前 typed 请求绑定进候选身份，不新增反向依赖。
     """
     if ctx.node != 'stage2.global':
         raise ValueError(
@@ -2466,6 +2472,27 @@ def prepare_global_candidate(
     spec = _active_global_spec()
     system, user, evidence_candidates = build_global_request(
         ctx.title, main_text, spec, agent_envelope=agent_envelope)
+    rework = None
+    if review_token is not None:
+        from novel.orchestrator.approvals import stage2_rework_request
+        rework = stage2_rework_request(
+            ctx.novel_dir.parent, ctx.sid, ctx.node, review_token)
+        source_rel = _GLOBAL_INVALID if store.exists(_GLOBAL_INVALID) else GLOBAL_REL
+        previous, _raw = store.read_own(
+            GlobalGrounding, source_rel, require_current=True)
+        baseline = previous.model_dump(by_alias=True)
+        baseline.pop('_provenance', None)
+        user += '\n\n' + json.dumps({
+            'kind': 'commander_rework_request',
+            'reviewer_node': rework.node,
+            'owner': rework.owner,
+            'reason': rework.reason,
+            'chapter_ordinals': rework.chapter_ordinals,
+            'review_token': review_token,
+            'baseline': baseline,
+            'instruction': ('按明确反馈修订本节点候选，保留未受影响的事实；'
+                            '证据仍只返回本次候选表 ID，由代码校验与提交。'),
+        }, ensure_ascii=False, sort_keys=True)
     with ctx.validation_reads():
         downstream = _read_global_downstream_guard(
             ctx, store, main_text, observe=True)
@@ -2475,6 +2502,7 @@ def prepare_global_candidate(
         'contract_name': spec.name,
         'main_text_file_sha256': main_text_sha256,
         'evidence_candidates_sha256': candidate_sha256,
+        **({'review_token': review_token} if rework is not None else {}),
     })
     return GlobalCandidateContext(
         system=system,
@@ -3228,9 +3256,11 @@ def finalize_global_candidate(
         return landed
 
 
-def run_global(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
+def run_global(
+    ctx: RunContext, client: LlmClient, *, review_token: str | None = None,
+) -> GlobalGrounding:
     """旧 LlmClient 单轮入口；agent 多轮必须显式用 prepare/evaluate/finalize 三段。"""
-    prepared = prepare_global_candidate(ctx)
+    prepared = prepare_global_candidate(ctx, review_token=review_token)
     response = client.ask_json(
         prepared.system,
         prepared.user,
@@ -3241,8 +3271,13 @@ def run_global(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
     )
     evaluation = evaluate_global_candidate(
         ctx, client, prepared, response)
-    return finalize_global_candidate(
+    artifact = finalize_global_candidate(
         ctx, client, prepared, evaluation)
+    if review_token is not None:
+        from novel.orchestrator.approvals import mark_stage2_rework_landed
+        mark_stage2_rework_landed(
+            ctx.novel_dir.parent, ctx.sid, ctx.node, review_token)
+    return artifact
 
 
 def run_resample(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
@@ -3609,6 +3644,9 @@ def _run_chapter_requests(
                         acceptance=checkpoint_material['acceptance'],
                         scope_violation=violation,
                     )
+                    checkpointed = getattr(client, 'mark_checkpointed', None)
+                    if callable(checkpointed):
+                        checkpointed(checkpoint_material['acceptance']['attempt_id'])
             except Exception as exc:  # 已成功的章仍必须保留。
                 errors.append(exc)
                 request_failures[ordinal] = exc
@@ -4243,14 +4281,23 @@ def _run_blueprint_repair(
     store: ArtifactStore,
     main_text: list[dict[str, Any]],
     character_projection: dict[str, Any],
+    review_token: str | None = None,
 ) -> CheckReport:
     """只重生成目标章，合并未动章节并记录完整 repair 账。
 
     ``--chapters`` 是主动刷新，所以绝不读取别的 logical run 留下的旧
     checkpoint；但本轮并发波次已经付费通过的章仍写进自己的 refresh run，供同一
-    ``run_id`` 的唯一 batch resume 恢复。两相契约也共用这一份 manifest 人工额度。
+    ``run_id`` 的唯一 batch resume 恢复。Commander 返工另有 typed 主体绑定，
+    沿用普通缓存与断点恢复；两条路径都只消费目标章既有的内容预算。
     """
-    if ctx.cache.name != 'refresh-write':
+    rework = None
+    if review_token is not None:
+        from novel.orchestrator.approvals import stage2_rework_request
+        rework = stage2_rework_request(
+            ctx.novel_dir.parent, ctx.sid, ctx.node, review_token)
+        if tuple(sorted(rework.chapter_ordinals)) != chapters:
+            raise ProvenanceRefused('Blueprint 返工目标章与 typed 请求不一致')
+    if rework is None and ctx.cache.name != 'refresh-write':
         raise TerminalState(
             'stage2.blueprint --chapters 必须使用 refresh-write：'
             '定向重生成不得读回原请求缓存')
@@ -4313,7 +4360,9 @@ def _run_blueprint_repair(
     # 在暂停期间被人改写。把完整 baseline/称名投影/main_text 与目标集压成一枚主体指纹，
     # resume 时任何输入漂移都会在首个 wire 前关闭式停止。
     refresh_subject = prov.projection_fingerprint({
-        'operation': 'stage2.blueprint --chapters',
+        'operation': ('commander-rework' if rework is not None
+                      else 'stage2.blueprint --chapters'),
+        **({'review_token': review_token} if rework is not None else {}),
         'chapters': list(chapters),
         'baseline': previous_raw,
         'character_projection': character_projection,
@@ -4334,11 +4383,12 @@ def _run_blueprint_repair(
             requests=initial_requests,
             request_policy=client.json_request_policy(
                 policy_phases, recovery_policy='stage2-blueprint-v1'),
-            refresh=True,
-            operation='chapters-refresh',
+            refresh=rework is None,
+            operation=('commander-rework' if rework is not None else 'chapters-refresh'),
             subject_fingerprint=refresh_subject,
-            resume_flags=(
-                '--chapters', ','.join(str(chapter) for chapter in chapters)),
+            resume_flags=(('--review-token', str(review_token))
+                          if rework is not None else
+                          ('--chapters', ','.join(str(chapter) for chapter in chapters))),
         )
         refresh_run_ready = True
 
@@ -4395,7 +4445,7 @@ def _run_blueprint_repair(
             #   语义上它本来就该重切边界：连区间都对不上原文，冻结它没有意义。
             unlocatable = [index for index, beat in enumerate(baseline_beats)
                            if beat.get('end_para') is None]
-            needs_resegment = backfill or bool(unlocatable) or bool(
+            needs_resegment = rework is not None or backfill or bool(unlocatable) or bool(
                 {row['rule'] for row in findings}
                 & {'beats_coarse', 'beats_collapsed'})
             if unlocatable:
@@ -4404,14 +4454,24 @@ def _run_blueprint_repair(
                     chapter_ordinal=ordinal, beats=unlocatable,
                     total_beats=len(baseline_beats))
             if needs_resegment:
+                boundary_user = build_blueprint_user(
+                    ctx.title, main_text, (ordinal,),
+                    past_names=past_names.get(ordinal, []),
+                    repair_findings=(None if backfill else findings),
+                )
+                if rework is not None:
+                    boundary_user += '\n\n' + json.dumps({
+                        'kind': 'commander_rework_request',
+                        'review_token': review_token,
+                        'owner': rework.owner,
+                        'chapter_ordinal': ordinal,
+                        'reason': rework.reason,
+                        'instruction': '根据当前目标章反馈检查边界，保留未受影响的结构。',
+                    }, ensure_ascii=False, sort_keys=True)
                 boundary_requests.append((
                     ordinal,
                     spec.boundary_system,
-                    build_blueprint_user(
-                        ctx.title, main_text, (ordinal,),
-                        past_names=past_names.get(ordinal, []),
-                        repair_findings=(None if backfill else findings),
-                    ),
+                    boundary_user,
                 ))
             else:
                 frozen[ordinal] = [int(beat['end_para'])
@@ -4477,6 +4537,15 @@ def _run_blueprint_repair(
             boundary_events=(boundary_events.get(ordinal)
                              if spec.topology == 'boundary_then_detail' else None),
         )
+        if rework is not None:
+            user += '\n\n' + json.dumps({
+                'kind': 'commander_rework_request',
+                'review_token': review_token,
+                'owner': rework.owner,
+                'chapter_ordinal': ordinal,
+                'reason': rework.reason,
+                'instruction': '只修订当前目标章，保留未受影响的事实和结构。',
+            }, ensure_ascii=False, sort_keys=True)
         prompt_rows[ordinal] = (user, findings_of[ordinal])
         requests.append((ordinal, system, user))
 
@@ -4553,8 +4622,8 @@ def _run_blueprint_repair(
 
     repaired_ordinals = sorted(normalized_by)
     for ordinal in repaired_ordinals:
-        accepted_model = client.accepted_model(f'{ctx.node}:ch{ordinal}')
-        if accepted_model is None:
+        accepted_models = client.accepted_models(f'{ctx.node}:ch{ordinal}')
+        if not accepted_models:
             raise ProvenanceRefused(
                 f'第 {ordinal} 章已经返回蓝图，但没有 accepted model；'
                 '拒绝按主模型配置估算')
@@ -4674,6 +4743,9 @@ def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
     正式 producer 保持默认开启。诊断响应仍按普通 cache/ledger/audit 留账，但不创建
     一个之后没有正式 commit/resume 消费者的孤立 service run。
     """
+    if checkpoints:
+        from novel.stages.stage2.global_review import require_global_accepted
+        require_global_accepted(ctx)
     store = ArtifactStore(ctx)
     main_text = _read_main_text(store)
     assert main_text is not None
@@ -5204,28 +5276,45 @@ def run_blueprint(
     client: LlmClient,
     *,
     chapters: tuple[int, ...] = (),
+    review_token: str | None = None,
 ) -> CheckReport:
-    if chapters:
+    if review_token is not None:
+        from novel.orchestrator.approvals import stage2_rework_request
+        rework = stage2_rework_request(
+            ctx.novel_dir.parent, ctx.sid, ctx.node, review_token)
+        requested = tuple(sorted(rework.chapter_ordinals))
+        if not requested or (chapters and chapters != requested):
+            raise ProvenanceRefused('Blueprint 返工必须使用 typed 请求的非空目标章')
+        chapters = requested
+    if chapters and review_token is None:
         # 普通整跑/另一轮刷新留下的 run 状态必须在读取任何 producer 输入、更不能
         # 在首个 wire 前拒绝；只有本轮自己登记且已封存唯一 batch resolution 的
         # refresh run 可以继续到详细 subject/request 复核并恢复本轮 checkpoint。
         from novel.llm import stage2_runs
         stage2_runs.preflight_refresh(
             ctx, operation='stage2.blueprint --chapters')
+    from novel.stages.stage2.global_review import require_global_accepted
+    require_global_accepted(ctx)
     store = ArtifactStore(ctx)
     main_text = _read_main_text(store)
     assert main_text is not None
     _projection, character_projection = \
         _require_blueprint_character_projection(store)
     if chapters:
-        return _run_blueprint_repair(
+        report = _run_blueprint_repair(
             ctx,
             client,
             chapters=chapters,
             store=store,
             main_text=main_text,
             character_projection=character_projection,
+            review_token=review_token,
         )
+        if review_token is not None:
+            from novel.orchestrator.approvals import mark_stage2_rework_landed
+            mark_stage2_rework_landed(
+                ctx.novel_dir.parent, ctx.sid, ctx.node, review_token)
+        return report
     finalized = _finish_full_commit_tail(
         ctx, store=store, main_text=main_text,
         character_projection=character_projection)
@@ -6588,6 +6677,57 @@ def _reconcile_reviewed_edit_commit(
                 'formal commit 不能退休不匹配的 GlobalEdit input WAL')
         store.archive_round(GLOBAL_EDIT_INPUT_COMMIT)
     return landed
+
+
+def submitted_global_patch_is_current(
+    base: str, sid: str, payload: dict[str, Any],
+) -> bool:
+    """确认原 Commander typed 回答仍拥有当前免费提交尾窗，不修改产物。
+
+    正式 Global 换版后原工作包必然过期；只有请求的 sparse edit、首写前
+    journal 及全部 live baseline/target 同时互验，才能重放原回答。
+    """
+    from contracts.schema import decode_artifact
+    from novel.orchestrator.state import readonly_ctx
+
+    edit = GlobalEdit.model_validate(decode_artifact(GLOBAL_EDIT, payload).payload)
+    if edit.post_edit_review is None:
+        return False
+    store = ArtifactStore(readonly_ctx(
+        paths.resolve_novel_dir(base, sid), 'stage2.global', prov.code_version()))
+    if not store.exists(GLOBAL_EDIT_COMMIT):
+        return False
+    journal = store.read_own(GlobalEditCommit, GLOBAL_EDIT_COMMIT)[0]
+    if (journal.action_kind != 'apply_edit' or not journal.reviewed_edit
+            or journal.failed_edit_sha256
+            != store.prospective_sparse_sha256(GLOBAL_EDIT, edit)):
+        return False
+    if store.exists(GLOBAL_EDIT_INPUT_COMMIT):
+        input_journal = store.read_own(
+            GlobalEditInputCommit, GLOBAL_EDIT_INPUT_COMMIT)[0]
+        if (store.full_sha256_or_none(GLOBAL_EDIT_COMMIT)
+                == input_journal.baseline_formal_commit_sha256):
+            return False
+        if (input_journal.target_edit_sha256 != journal.failed_edit_sha256
+                or input_journal.reviewed_edit != journal.reviewed_edit
+                or input_journal.formal_sha256 != journal.formal_sha256):
+            raise ProvenanceRefused(
+                'Commander 原回答的 GlobalEdit journal 与当前 input WAL 不匹配')
+    _validate_reviewed_edit_commit(store, journal)
+    if journal.state == 'committed':
+        _reviewed_edit_commit_readback(store, journal)
+        return True
+    baseline, target = journal.baseline, journal.target
+    for rel, before, after in (
+        (GLOBAL_REL, baseline.global_sha256, target.global_sha256),
+        (GLOBAL_REVIEW_REL, baseline.review_sha256, target.review_sha256),
+        (BLUEPRINT_CHARACTER_REL, baseline.projection_sha256, target.projection_sha256),
+        (_GLOBAL_INVALID, baseline.invalid_sha256, None),
+        (GLOBAL_EDIT_FAILURE, baseline.failure_sha256, None),
+    ):
+        _reviewed_edit_commit_target_state(
+            store, rel, baseline_sha256=before, target_sha256=after)
+    return True
 
 
 def _resume_reviewed_edit_commit(

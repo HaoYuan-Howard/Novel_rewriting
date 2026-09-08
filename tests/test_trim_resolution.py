@@ -38,6 +38,8 @@ PRETRIM_SHA256 = hashlib.sha256(PRETRIM_TEXT.encode('utf-8')).hexdigest()
 
 def _book(tmp_path):
     base = tmp_path / 'Output'
+    from novel.work_units import initialize_workflow
+    initialize_workflow(base)
     book = base / paths.novel_dirname('收缩测试', '42')
     (book / 'stage0').mkdir(parents=True)
     (book / 'stage0' / 'clean_text.txt').write_text(
@@ -83,8 +85,16 @@ def _audit(*, reason='超上限，本仓没有自动收缩路径', before=PRETRI
     )
 
 
+def _writer_ctx(book):
+    from novel.llm.cache import CachePolicy
+    from novel.llm.ledger import CostLedger
+    return RunContext(
+        novel_dir=book, node='stage5.review', paid=False,
+        code=prov.code_version(), cache=CachePolicy.default(), ledger=CostLedger())
+
+
 def _write_audit(book, audit):
-    _store(book).write(artifact_rel('stage5.trim_audit', nn=3), audit)
+    ArtifactStore(_writer_ctx(book)).write(artifact_rel('stage5.trim_audit', nn=3), audit)
 
 
 def _trim_rows(base):
@@ -114,7 +124,7 @@ def test_trim_verification_context_carries_the_limit_and_the_audit_identity():
 def test_trim_resolution_schema_has_no_candidate_adoption_action(tmp_path):
     _base, book = _book(tmp_path)
     _write_audit(book, _audit())
-    ctx = readonly_ctx(book, 'stage5.review', prov.code_version())
+    ctx = _writer_ctx(book)
     resolution = retain_pretrim(ctx, 3, actor='reviewer', reason='保留原稿更安全')
     payload = resolution.model_dump(by_alias=True, mode='json')
     payload['action'] = 'adopt_candidate'
@@ -129,7 +139,7 @@ def test_matching_resolution_closes_inbox_but_any_audit_change_makes_it_stale(tm
     assert [row.chapter for row in _trim_rows(str(base))] == [3]
 
     retain_pretrim(
-        readonly_ctx(book, 'stage5.review', prov.code_version()),
+        _writer_ctx(book),
         3, actor='甲', reason='核对后决定保留原稿')
     assert _trim_rows(str(base)) == []
     resolution_rel = artifact_rel('stage5.trim_resolution', nn=3)
@@ -159,7 +169,7 @@ def test_matching_resolution_closes_inbox_but_any_audit_change_makes_it_stale(tm
     assert [row.chapter for row in _trim_rows(str(base))] == [3]
 
     retain_pretrim(
-        readonly_ctx(book, 'stage5.review', prov.code_version()),
+        _writer_ctx(book),
         3, actor='乙', reason='按更新后的审计继续保留原稿')
     assert _trim_rows(str(base)) == []
     history = sorted((book / 'stage5' / '_rounds').glob('trim_resolution_ch03.r*.json'))
@@ -184,7 +194,7 @@ def test_stage5_view_exposes_and_closes_the_current_trim_decision_surface(tmp_pa
     assert 'before=' in before.trim_audit.context
 
     retain_pretrim(
-        readonly_ctx(book, 'stage5.review', prov.code_version()),
+        _writer_ctx(book),
         3, actor='reviewer', reason='逐段核对后接受完整原稿')
     assert stage5_view(str(base), '42', 3).trim_audit is None
 
@@ -206,7 +216,7 @@ def test_stage5_view_reports_an_old_trim_schema_as_legacy_incompatible(tmp_path)
 def test_formal_chapter_rewrite_retires_and_blocks_the_old_trim_resolution(tmp_path):
     base, book = _book(tmp_path)
     _write_audit(book, _audit())
-    ctx = readonly_ctx(book, 'stage5.review', prov.code_version())
+    ctx = _writer_ctx(book)
     retain_pretrim(ctx, 3, actor='甲', reason='确认保留当前 pretrim')
     assert _trim_rows(str(base)) == []
 
@@ -236,7 +246,7 @@ def test_revalidate_failure_restores_chapter_trim_and_all_history(tmp_path, monk
     base, book = _book(tmp_path)
     _write_audit(book, _audit())
     retain_pretrim(
-        readonly_ctx(book, 'stage5.review', prov.code_version()),
+        _writer_ctx(book),
         3, actor='reviewer', reason='确认保留当前 pretrim',
     )
     ctx = RunContext.open(base, '42', 'stage5.write', paid=False)

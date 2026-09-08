@@ -39,7 +39,7 @@ from contracts.artifacts import (  # noqa: E402
     STAGE1_MAIN_TEXT,
     STAGE2_GLOBAL_GROUNDING,
 )
-from contracts.invariants import HOOK_SLOTS, NODES  # noqa: E402
+from contracts.invariants import NODES, WORKFLOW_ROLE_CONTRACT  # noqa: E402
 from contracts.schema import artifact_spec, decode_artifact  # noqa: E402
 from contracts.schema.corpus import CURRENT_CORPUS_PAID_NODES  # noqa: E402
 from contracts.schema.stage0 import Stage0Revisions  # noqa: E402
@@ -73,7 +73,6 @@ from novel.stages.stage4.prompts import (  # noqa: E402
 )
 from novel.stages.stage5 import write as stage5_write  # noqa: E402
 from novel.stages.stage6.hook import (  # noqa: E402
-    CANDIDATE_RETRY_LIMIT as HOOK_RETRY_LIMIT,
     CANDIDATE_RETRY_MAX_TOKENS as HOOK_RETRY_MAX_TOKENS,
     CANDIDATE_RETRY_RUNGS as HOOK_RETRY_RUNGS,
     MAX_TOKENS as HOOK_MAX_TOKENS,
@@ -119,10 +118,11 @@ PREREQUISITES = {
         f'{STAGE2_GLOBAL_GROUNDING} 必须是本次正式、fresh 的 '
         f'v{artifact_spec(STAGE2_GLOBAL_GROUNDING).current_version} 产物。',
         '逐章输入范围由当前 Stage1 的 17/25 章复算，不使用旧 corpus 章表。',
+        '当前 Global 必须已通过独立 typed 节点接受；预审或已读记录不能放行。',
     ),
     'stage4.design': (
         'Stage2 blueprint 必须 fresh，去序真相图投影可完整闭合。',
-        'stage2/global_review.json 必须经 typed 人工 decisions 达到全项 PASS，打开 s2 gate。',
+        'Global generation-safe 且 Global/Blueprint 两个独立 Commander 均已接受，打开 s2 gate。',
     ),
     'stage4.plan': (
         'Stage4 blind_candidate 必须 fresh；Stage2 global + blueprint 证据层必须 fresh。',
@@ -345,17 +345,18 @@ def _logical_topology(node: str, chapters: int, rung_count: int,
         # 收缩臂整臂下线后本层只剩逐章一次调用；超上限只落 audit，0 次调用。
         base = chapters
     elif node == 'stage6.hook':
-        # The initial response always fills every slot.  Every initially HARD
-        # candidate can receive one fixed low/no-thinking refresh, so all three
-        # may trigger independently.  ⚠ The bound is the number of *slots*, not
-        # the number of registered approaches: the current recipe repeats one
-        # approach, so counting approaches would under-count the retry ceiling.
-        conditional = len(HOOK_SLOTS) * HOOK_RETRY_LIMIT
+        # 本预览强制空缓存：首次生成占一轮，全部槽位共用其余内容预算。
+        # 同槽持续改善可继续修订；不能把书级上限再乘槽位数。
+        lifecycle = NODES[node].lifecycle
+        assert lifecycle is not None
+        conditional = max(0, lifecycle.executor_content_limit - base)
         conditional_wire = (conditional * len(HOOK_RETRY_RUNGS) * model_count
                             * MAX_SAMPLES_PER_RUNG)
         condition = (
-            '初始三候选中每条含 HARD 的候选最多一次 low/no-thinking 定向重试；'
-            '三条均 dirty 时达到上限')
+            f'整书共用最多 {lifecycle.executor_content_limit} 次内容调用；'
+            f'冷缓存首次生成占 {base} 次，全部槽位共用其余 {conditional} 次 '
+            'low/no-thinking 定向修订；同槽 HARD 严格下降时可继续，'
+            '格式纠错也占同一预算，无进展提前停止')
     elif node == 'stage6.semantic':
         base = 2  # judge A/B
     base_wire = base * rung_count * model_count * MAX_SAMPLES_PER_RUNG
@@ -640,6 +641,39 @@ def _aggregate(dispatches: list[dict[str, Any]]) -> dict[str, int]:
 #     三块合并数一并移除——**留着它等于给一个不存在的付费计划报预算**。
 
 
+def workflow_role_budget(chapters: int) -> dict[str, Any]:
+    """当前生命周期的内容上限；B 只有真实歧义章开模型工作单元。"""
+    rows: list[dict[str, Any]] = []
+    for node, spec in NODES.items():
+        life = spec.lifecycle
+        if life is None:
+            raise ValueError(f'{node} 缺少职责登记')
+        units = (chapters if life.unit_kind in {'chapter', 'ambiguous_chapter'} else
+                 chapters + 1 if life.unit_kind == 'strategy_and_chapter' else
+                 2 if life.unit_kind == 'judge' else 1)
+        minimum = 0 if life.unit_kind == 'ambiguous_chapter' else units
+        if life.executor_content_limit:
+            rows.append({'node': node, 'role': 'executor', 'minimum_units': minimum,
+                         'maximum_units': units, 'content_limit_per_unit': life.executor_content_limit,
+                         'content_hard_limit': units * life.executor_content_limit})
+        if life.commander_content_limit:
+            review_units = len({scope for _blocker, scope in life.commander_bindings})
+            if not review_units:
+                raise ValueError(f'{node} 的 Commander 缺少预算工作单元 scope')
+            rows.append({'node': node, 'role': 'commander', 'minimum_units': review_units,
+                         'maximum_units': review_units,
+                         'content_limit_per_unit': life.commander_content_limit,
+                         'content_hard_limit': life.commander_content_limit * review_units})
+    stage2_commanders = [row for row in rows if row['role'] == 'commander'
+                         and row['node'].startswith('stage2.')]
+    return {'contract': WORKFLOW_ROLE_CONTRACT, 'scope': 'new_clean_base', 'units': rows,
+            'content_hard_limit': sum(row['content_hard_limit'] for row in rows),
+            'stage2_commander_units': sum(row['maximum_units'] for row in stage2_commanders),
+            'stage2_commander_content_hard_limit': sum(row['content_hard_limit'] for row in stage2_commanders),
+            'network_attempts': '独立有界并逐次留账；由实际运行 profile/transport 冻结',
+            'token_estimate': None, 'cost_estimate': None}
+
+
 def build_plan(
     spec: PreviewSpec,
     *,
@@ -672,6 +706,11 @@ def build_plan(
         'books': rendered_books,
         'dispatches': dispatches,
         'aggregate': aggregate,
+        'workflow_role_budget': {
+            book['sid']: workflow_role_budget(book['chapters']) for book in books},
+        'transport_estimate_scope': (
+            '既有 legacy CLI 首批请求观察；不含 Commander，不能作为新工作流总付费上限。'
+            '现役内容预算以 workflow_role_budget 为准；总 wire/token/费用必须由冻结运行 profile 另行预览。'),
         'token_estimate': {
             'stage2_global_exact_before_generation': global_tokens,
             'downstream_prompt_tokens': 'unknown',
@@ -721,6 +760,8 @@ def render(plan: dict[str, Any]) -> str:
         '',
         f'model={plan["model"]} thinking={plan["thinking"]} retry={plan["retry"]}',
         '授权状态：未授权执行；必须在人工 gate 完成后重生成并再次确认。',
+        plan['transport_estimate_scope'],
+        '现役新工作流内容预算：' + json.dumps(plan['workflow_role_budget'], ensure_ascii=False),
         '',
         '## 输入',
     ]

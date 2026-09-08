@@ -11,7 +11,7 @@ import sys
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 import pytest
 
@@ -263,8 +263,13 @@ def test_v2_child_run_uses_epoch_producer_id_and_keeps_parent_link(
 
     def open_context(*_args, **kwargs):
         captured.update(kwargs)
-        return SimpleNamespace(
+        from novel.run import RunContext
+        ctx = SimpleNamespace(
+            novel_dir=tmp_path / '测试书_42', readonly=False,
             run_id=kwargs['run_id'], parent_run_id=kwargs['parent_run_id'])
+        ctx.require_current_workflow_write = MethodType(
+            RunContext.require_current_workflow_write, ctx)
+        return ctx
 
     monkeypatch.setattr(cli.RunContext, 'open', open_context)
     monkeypatch.setattr(cli, '_dispatch', lambda *_args, **_kwargs: 0)
@@ -382,11 +387,34 @@ def test_plain_direct_run_refuses_durable_unresolved_before_run_context(
         cli.RunContext, 'open',
         lambda *_args, **_kwargs: pytest.fail('unresolved gate 前不得进入 RunContext'))
     args = cli._parser().parse_args([
-        'run', 'stage1.partition', '42', '--check-only', '--base', base])
+        'run', 'stage1.partition', '42', '--base', base])
 
     with pytest.raises(TerminalState, match='durable unresolved Commander admission'):
         cli._cmd_run(args)
 
+
+
+def test_plain_check_only_can_observe_unresolved_admission_without_writing(tmp_path, monkeypatch):
+    cli = importlib.import_module('novel.cli.main')
+    base = str(tmp_path.resolve())
+    admission.open_gate(base, 'parent-read-only', '42')
+    for name in (cli.commander_context.COMMANDER_RUN_ID_ENV,
+                 cli.commander_context.COMMANDER_CONTRACT_SHA256_ENV,
+                 admission.CLAIM_ID_ENV, execution_permit.PERMIT_JSON_ENV,
+                 execution_permit.STEP_INDEX_ENV):
+        monkeypatch.delenv(name, raising=False)
+    before = {p.relative_to(tmp_path): p.read_bytes()
+              for p in tmp_path.rglob('*') if p.is_file()}
+    monkeypatch.setattr(cli.RunContext, 'open', lambda *_a, **_k: SimpleNamespace())
+    calls = []
+    monkeypatch.setattr(cli, '_dispatch', lambda node, _ctx, flags:
+                        calls.append((node, flags)) or 0)
+    args = cli._parser().parse_args([
+        'run', 'stage1.partition', '42', '--check-only', '--base', base])
+    assert cli._cmd_run(args) == 0
+    assert calls == [('stage1.partition', ['--check-only'])]
+    assert {p.relative_to(tmp_path): p.read_bytes()
+            for p in tmp_path.rglob('*') if p.is_file()} == before
 
 def test_permit_envelope_without_commander_context_is_an_orphan(
         tmp_path, monkeypatch):

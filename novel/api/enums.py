@@ -68,6 +68,14 @@ _CONSUMED: dict[str, str] = {
 #: ⚠ 这张表**必须逐个列名**，不许写成「所有标量一律不发」那种规则：
 #: 那样新加一个标量会被**静默**挡住，而静默正是本模块要防的方向。
 _WITHHELD: dict[str, str] = {
+    'WORKFLOW_ROLE_CONTRACT': '工作流执行身份；界面只显示后端工作单元读模型',
+    'WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS': '预算已由持久工作单元账折叠，前端不自行重算',
+    'WORK_UNIT_MAX_DELIVERY_ATTEMPTS': '网络尝试上限只由工作单元底座执行，前端显示后端预算投影',
+    'WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS': '同上，Commander 与 Executor 各自计数',
+    'LEGACY_STAGE2_COMMANDER_SEAT_PURPOSES': '退役预审与终审只供历史审计解码',
+    'LEGACY_STAGE2_COMMANDER_MAX_SEATS': '冻结旧席账的历史预算，不参与新工作单元',
+    'LEGACY_STAGE2_COMMANDER_MAX_EDIT_SEAT': '冻结旧席账的历史编辑上限',
+    'LEGACY_COMMANDER_REVIEWER_MAX_CORRECTIONS': '冻结旧席账的历史纠错上限',
     'STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES': (
         '只随 Commander immutable submission option 与 Stage5 writer 固定 prompt 下发；'
         '当前浏览器没有该 delegated rewrite 表单，单独发布会制造未接线的第二消费面'),
@@ -391,7 +399,11 @@ def job_kinds() -> dict[str, dict[str, Any]]:
     """
     return {node: {'label': s.label, 'paid': s.paid, 'stage': s.stage,
                    'section': s.section,
-                   'flags': list(s.flags), 'produces': list(s.produces)}
+                   'flags': list(s.flags), 'produces': list(s.produces),
+                   'lifecycle': {
+                       key: ([list(item) if isinstance(item, tuple) else item for item in value]
+                             if isinstance(value, tuple) else value)
+                       for key, value in s.lifecycle._asdict().items()}}
             for node, s in NODES.items()}
 
 

@@ -29,21 +29,19 @@ def _tasks(tmp_path):
         },
     }
     options = reviewer_tasks._submission_options({
-        'global': {'workpack_sha256': '3' * 64, 'items': [{
+        'global': {'review_token': 's2gr1_' + '7' * 64, 'workpack_sha256': '3' * 64, 'items': [{
             'item_id': f'item-{i}', 'subject_sha256': str(i + 4) * 64,
             'current_state': 'pending',
         } for i in (1, 2)]},
         'global_template': encode_artifact(STAGE2_GLOBAL_REVIEW_DECISIONS, template),
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
+    options = [option for option in options if option['id'] == 'node:stage2.global.review']
     live = reviewer_tasks.ReviewerTask(
         waiting_on=queue.WAITING_ON_STAGE2_REVIEW, surface_seal=current.surface_seal,
         business_sha256='b' * 64, request_path=tmp_path / 'live.json', prompt='原提示',
         submission_options=tuple(options))
-    pre = reviewer_tasks.Stage2PrereviewTask(
-        business_sha256=live.business_sha256, workpack_sha256='3' * 64,
-        request_path=tmp_path / 'pre.json', prompt='预审提示',
-        input_template=copy.deepcopy(options[0]['exact_request']['action']['input_payload']))
-    return current, live, pre
+    return current, live
+
 
 
 def _response(task, *, exceptions=True):
@@ -59,21 +57,11 @@ def _response(task, *, exceptions=True):
 
 
 @pytest.mark.parametrize('exceptions', [True, False])
-def test_scope_exceptions_survive_prereview_and_live_materialization(tmp_path, exceptions):
-    current, live, pre = _tasks(tmp_path)
-    seen = []
-    payload, digest, _ = agent._materialize_stage2_prereview_response(
-        pre, json.dumps(_response(pre, exceptions=exceptions)),
-        persist_validated=lambda payload, sha: seen.append((copy.deepcopy(payload), sha)))
-    assert seen == [(payload, digest)]
-    action = reviewer_tasks.bind_stage2_prereview(live, current, payload)
-    assert decode_artifact(STAGE2_GLOBAL_REVIEW_DECISIONS, action.input_payload).payload == payload
-    # 同一真实接收器的 live 路也必须可达，且输出保留模型的 FAIL，不替换成 scope PASS。
-    live.request_path.unlink()
+def test_scope_exceptions_survive_live_materialization(tmp_path, exceptions):
+    current, live = _tasks(tmp_path)
     action, _, _ = agent._materialize_reviewer_response(
         live, current, json.dumps(_response(live, exceptions=exceptions)))
     logical = decode_artifact(STAGE2_GLOBAL_REVIEW_DECISIONS, action.input_payload).payload
-    assert logical == payload
     assert logical['blocking_scope']['state'] == 'PASS'
     if exceptions:
         assert [(row['item_id'], row['state'], row['expected_subject_sha256'])
@@ -84,7 +72,7 @@ def test_scope_exceptions_survive_prereview_and_live_materialization(tmp_path, e
 
 @pytest.mark.parametrize('corruption', ['unknown', 'duplicate', 'order', 'identity', 'span'])
 def test_scope_wire_rejects_unbound_or_invalid_answer_before_durable(tmp_path, corruption):
-    current, live, _ = _tasks(tmp_path)
+    current, live = _tasks(tmp_path)
     response = _response(live)
     row = response['decisions'][0]
     if corruption == 'unknown':
@@ -106,8 +94,8 @@ def test_scope_wire_rejects_unbound_or_invalid_answer_before_durable(tmp_path, c
 
 
 def test_scope_schema_injects_fixed_hashes_and_binds_exception_catalog(tmp_path):
-    _, live, pre = _tasks(tmp_path)
-    for task in (live, pre):
+    _, live = _tasks(tmp_path)
+    for task in (live,):
         schema = stage2_reviewer_wire.output_schema_for(task)
         text = json.dumps(schema)
         assert wire.WIRE_SCHEMA in text
@@ -118,7 +106,7 @@ def test_scope_schema_injects_fixed_hashes_and_binds_exception_catalog(tmp_path)
 
 
 def test_full_scope_loader_accepts_bound_subset_but_rejects_wrong_subject_hash(tmp_path):
-    current, live, _ = _tasks(tmp_path)
+    current, live = _tasks(tmp_path)
     request = wire.assemble(live, _response(live))
     live.request_path.write_text(json.dumps(request), encoding='utf-8')
     reviewer_tasks.load_action(live.request_path, current, submission_options=live.submission_options)
@@ -128,9 +116,9 @@ def test_full_scope_loader_accepts_bound_subset_but_rejects_wrong_subject_hash(t
         reviewer_tasks.load_action(live.request_path, current, submission_options=live.submission_options)
 
 
-def test_prereview_promotion_failure_preserves_assembled_content_identity(tmp_path, monkeypatch):
-    _, _, pre = _tasks(tmp_path)
-    response = json.dumps(_response(pre))
+def test_live_promotion_failure_preserves_assembled_content_identity(tmp_path, monkeypatch):
+    current, live = _tasks(tmp_path)
+    response = json.dumps(_response(live))
     preserved = []
 
     def fail_promote(*_args):
@@ -144,6 +132,20 @@ def test_prereview_promotion_failure_preserves_assembled_content_identity(tmp_pa
 
     monkeypatch.setattr(agent, '_promote_reviewer_candidate', fail_promote)
     with pytest.raises(OSError, match='synthetic'):
-        agent._materialize_stage2_prereview_response(
-            pre, response, preserve_validated=preserve)
+        agent._materialize_reviewer_response(
+            live, current, response, preserve_validated=preserve)
     assert len(preserved) == 1 and preserved[0].is_file()
+
+
+def test_scope_schema_stays_stable_across_candidate_tokens_but_checks_exact_sha(tmp_path):
+    from dataclasses import replace
+    _, live = _tasks(tmp_path)
+    options = copy.deepcopy(live.submission_options)
+    options[0]['exact_request']['surface_seal'] = 'd' * 64
+    changed = replace(live, submission_options=options)
+    assert stage2_reviewer_wire.output_schema_for(live) == stage2_reviewer_wire.output_schema_for(changed)
+    with pytest.raises(ValueError, match='stale'):
+        wire.assemble(changed, _response(live))
+    options[0]['exact_request']['action']['input_payload']['decisions'][0]['item_id'] = 'new-item'
+    changed_refs = replace(live, submission_options=options)
+    assert stage2_reviewer_wire.output_schema_for(live) != stage2_reviewer_wire.output_schema_for(changed_refs)

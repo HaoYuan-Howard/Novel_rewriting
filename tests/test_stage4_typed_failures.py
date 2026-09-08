@@ -30,7 +30,8 @@ from contracts.invariants import (
 from contracts.schema.stage4 import PlanChapters
 from contracts.schema.report import finding
 from novel import prov
-from novel.errors import GateBlocked
+from novel.errors import GateBlocked, TerminalState
+from novel.node_agents import Stage4PlanSessionPool
 from novel.llm.typed_failures import TypedFailure, WitnessCollector, make
 from novel.report.findings import ran
 from novel.stages.stage4 import checks, plan
@@ -39,7 +40,7 @@ from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
 from tests.test_stage4_agent_boundary import (
     _book, _bound_b_response, _client, _ctx, _land_design, _OneTurnDriver,
-    _seed_current_stage2,
+    _seed_current_stage2, _plan_pool,
 )
 
 
@@ -122,10 +123,7 @@ def _clean_plan_bundle(
     blueprints_raw = blueprints.model_dump(by_alias=True, mode='json')
     _design_ctx, candidate = _land_design(book, blueprints_raw)
     clean_ctx = _ctx(book, 'stage4.plan')
-    clean_client = _client(
-        clean_ctx, _OneTurnDriver(
-            _bound_b_response(candidate, blueprints_raw),
-            session_id='provider-typed-clean'))
+    clean_client = Stage4PlanSessionPool(clean_ctx)
     report = plan.run_plan(clean_ctx, clean_client)
     clean_client.finish(process_state='ok', delivery_state='delivered')
     clean_client.close()
@@ -231,10 +229,8 @@ def test_a_owned_failure_stops_first_round_without_more_wire(
         return outcomes
 
     monkeypatch.setattr(plan.checks, 'check', injecting)
-    driver = _OneTurnDriver(
-        _bound_b_response(candidate, blueprints_raw),
-        session_id='provider-a-stop')
-    client = _client(plan_ctx, driver, max_turns=4)
+    client, driver = _plan_pool(
+        plan_ctx, monkeypatch, session_id='provider-a-stop')
     with pytest.raises(GateBlocked, match='关闭式路由停止'):
         plan.run_plan(plan_ctx, client)
     client.finish(process_state='ok', delivery_state='blocked',
@@ -254,20 +250,36 @@ def test_a_owned_failure_stops_first_round_without_more_wire(
     assert witnesses[0]['attempt_id']
 
 
-def test_same_fingerprint_twice_terminates_early(tmp_path: Path) -> None:
+def test_same_fingerprint_twice_terminates_early(tmp_path: Path, monkeypatch) -> None:
     """同一 fingerprint 集连续两轮未闭合：第二轮终止，不把四轮烧完。"""
     book = _book(tmp_path)
     blueprints = _seed_current_stage2(book)
     blueprints_raw = blueprints.model_dump(by_alias=True, mode='json')
     _design_ctx, candidate = _land_design(book, blueprints_raw)
     plan_ctx = _ctx(book, 'stage4.plan')
-    hard_payload = _bound_b_response(candidate, blueprints_raw)
-    for chapter in hard_payload['chapters']:
-        for scene in chapter['scenes']:
-            scene['material_refs'] = []
-    driver = _OneTurnDriver(hard_payload, session_id='provider-repeat-stop')
-    client = _client(plan_ctx, driver, max_turns=4)
-    with pytest.raises(GateBlocked, match='关闭式路由停止'):
+    real_evaluate = plan.evaluate_plan_candidate
+    real_verdict = plan._candidate_bundle_verdict
+    post_model = False
+
+    def evaluate(*args, **kwargs):
+        nonlocal post_model
+        post_model = True
+        return real_evaluate(*args, **kwargs)
+
+    def recurring_material_failure(data, up, *, witness=None):
+        hits, feedback = real_verdict(data, up, witness=witness)
+        if not post_model:
+            return hits, feedback
+        if witness is not None:
+            witness.add(code='material_coverage', rule='material_coverage',
+                        chapter_ordinal=1, refs=['synthetic-material'])
+        return (*hits, 'material_coverage'), (*feedback, {'rule': 'material_coverage'})
+
+    monkeypatch.setattr(plan, 'evaluate_plan_candidate', evaluate)
+    monkeypatch.setattr(plan, '_candidate_bundle_verdict', recurring_material_failure)
+    client, driver = _plan_pool(
+        plan_ctx, monkeypatch, session_id='provider-repeat-stop')
+    with pytest.raises(TerminalState, match='replacement'):
         plan.run_plan(plan_ctx, client)
     client.finish(process_state='ok', delivery_state='blocked',
                   error_kind='checkpoint_business_rejected')
@@ -282,6 +294,7 @@ def test_same_fingerprint_twice_terminates_early(tmp_path: Path) -> None:
     assert rows
     assert all(row['repair_owner'] == 'stage4.plan' for row in rows)
     assert all(row['retryable'] for row in rows)
+    assert not (book / STAGE4_PLAN_CHAPTERS).exists()
     # 审计只留无正文读数：fingerprint 在、refs/判词不在。
     rejected_rows = [
         row for row in plan_ctx.ledger.audit_events

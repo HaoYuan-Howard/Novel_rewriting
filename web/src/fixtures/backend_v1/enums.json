@@ -303,6 +303,35 @@
   "replace_reconstruction_strategy",
   "change_chapter_weights"
  ],
+ "blueprint_review_change_kinds": [
+  "added",
+  "removed",
+  "changed"
+ ],
+ "blueprint_review_delta_modes": [
+  "initial",
+  "unchanged",
+  "targeted",
+  "full"
+ ],
+ "stage2_node_review_decisions": [
+  "accept",
+  "rework",
+  "uncertain",
+  "stop"
+ ],
+ "stage2_node_review_owners": [
+  "stage2.global",
+  "stage2.blueprint"
+ ],
+ "stage2_node_review_states": [
+  "missing",
+  "accepted",
+  "rework",
+  "uncertain",
+  "stopped",
+  "expired"
+ ],
  "design_preflight_statuses": [
   "pass",
   "blocked"
@@ -363,6 +392,11 @@
    "coverage"
   ]
  },
+ "design_constraint_operation_kinds": [
+  "keep",
+  "withdraw",
+  "supersede"
+ ],
  "design_repair_codes": [
   "entry_anchor",
   "ending_anchor",
@@ -406,6 +440,10 @@
    1,
    1
   ],
+  "scene_goal_exclude": [
+   1,
+   1
+  ],
   "binding_constraint_unsat": [
    1,
    0
@@ -413,10 +451,6 @@
   "narrative_relation": [
    0,
    0
-  ],
-  "scene_goal_exclude": [
-   1,
-   1
   ]
  },
  "binding_concern_codes": [
@@ -842,6 +876,7 @@
   "--apply-edit": "把人工改过的内容落成新的一轮",
   "--preview-edit": "只读预检 Stage5 人工稿，不调用模型、不写盘",
   "--review-decisions": "应用带 actor、理由和 subject hash 乐观锁的 stage2 人工复核决策",
+  "--close-review": "核验两个 Stage2 节点的当前 typed 接受并零模型补齐已读与 s2 闸",
   "--wontfix": "把一条「这条我不修」记进 <stage>/wontfix.json，纯记账、不调用",
   "--retain-pretrim": "人工确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，0 次 LLM 调用（不是 0 人工成本）",
   "--retain-pretrim-batch": "按显式 manifest 一次销账多章 trim；整批预检、按章幂等写hash-bound resolution，0 次 LLM 调用",
@@ -857,7 +892,7 @@
   "--adopt-rejected": "按当前完整四道闸 0 次调用重判一份封存的 Stage4A 拒稿；只消费隔离区里的候选与既有成本账，不发新请求",
   "--apply-binding": "把完整人工 EvidenceBinding 按与 Stage4B 相同的 schema、编译和 HARD 闸写回；0 次模型调用，也允许首次 B 无正式计划时恢复",
   "--emit-prepared-recovery-workpack": "向 stdout 输出一份绑定旧 Stage5 prepared checkpoint、当前代码与当前上游的只读恢复工作包；不调用模型、不写产物",
-  "--recover-prepared": "把旧 Stage5 run 中全部尚未收口的 prepared checkpoint 按当前代码重新验证并提交为 canonical；0 次模型调用，必须带 hash-bound 人工凭据",
+  "--recover-prepared": "按 source run 与主体摘要零模型收口 prepared；Stage5 另需人工凭据，Stage6 Hook/双盲组只补原正式提交及采纳尾账，不请求候选",
   "--recover-reviewer-rewrite-prepared": "按 canonical reviewer rewrite request 与旧 prepared checkpoint 的精确身份，零调用补完单章提交尾窗",
   "--retire-reviewer-rewrite-request": "把尚未启动执行且已被 current 主体证明过期的 Reviewer rewrite request 写成 hash-bound consumed receipt；不调用写手、不移动 request"
  },
@@ -888,7 +923,7 @@
   "--adopt-rejected": "要重判并采用的拒绝响应 attempt_id（16 位小写十六进制）；人只能编辑隔离区里那份固定的 candidate.json，本命令封存 actor/reason 与新旧闸指纹后再走同一套闸",
   "--apply-binding": "完整人工 Stage4 EvidenceBinding 路径（必填；相对路径相对书目录，也接受书目录内的绝对路径）",
   "--emit-prepared-recovery-workpack": "要审计的旧 Stage5 source run_id；输出绑定当前 target run/code 的只读工作包",
-  "--recover-prepared": "要零调用收口的旧 Stage5 source run_id；范围固定为其中全部 unresolved prepared",
+  "--recover-prepared": "要零调用收口的 source run_id；Stage5 为全部 unresolved prepared，Stage6 为主体摘要锁定的原 Hook 或双盲审判完成组",
   "--recover-repair-aggregate": "要零调用收口的旧 Stage4A repair/replan source run_id；只能消费唯一 prepared repair aggregate",
   "--source-journal-sha256": "Stage4A repair/replan prepared journal 的完整原始字节 SHA-256；与 source run 共同锁定本次恢复输入",
   "--source-commit-sha256": "Stage4A repair/replan prepared journal 内的 self/commit SHA-256；不得拿恢复后 journal 的新 hash 代替",
@@ -944,6 +979,13 @@
   "--recover-reviewer-rewrite-prepared": "零调用写回 request 所指单章 canonical，并补全 prepared recovery/adoption 审计",
   "--retire-reviewer-rewrite-request": "写 Reviewer rewrite request 的 self-hash consumed/expiry receipt；不改正文、不移动 canonical request"
  },
+ "review_actions": [
+  "accept",
+  "patch",
+  "rework",
+  "uncertain",
+  "stop"
+ ],
  "stages": [
   "stage0",
   "stage1",
@@ -1077,7 +1119,30 @@
    "produces": [
     "stage0/revisions.json",
     "stage0/clean_text.txt"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "原始文本与当前 revision",
+    "generation_mode": "deterministic",
+    "review_mode": "none",
+    "review_scope": "剔除结果由 stage0.approve 接受",
+    "repair_actions": [
+     "recompute"
+    ],
+    "repair_owners": [
+     "stage0.remove",
+     "stage0.edit"
+    ],
+    "session_scope": "none",
+    "recovery_entries": [
+     "--check-only"
+    ],
+    "executor_content_limit": 0,
+    "commander_content_limit": 0,
+    "commander_bindings": [],
+    "review_actions": [],
+    "approval_projection": []
+   }
   },
   "stage0.approve": {
    "label": "stage0 人工批准",
@@ -1091,7 +1156,42 @@
    ],
    "produces": [
     "stage0/revisions.json"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "完整 retained 与 removed 工作包",
+    "generation_mode": "human_submission",
+    "review_mode": "commander",
+    "review_scope": "当前剔除 revision",
+    "repair_actions": [
+     "accept",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage0.edit"
+    ],
+    "session_scope": "commander:stage0",
+    "recovery_entries": [
+     "typed_replay"
+    ],
+    "executor_content_limit": 0,
+    "commander_content_limit": 4,
+    "commander_bindings": [
+     [
+      "stage0.approve",
+      "book"
+     ]
+    ],
+    "review_actions": [
+     "accept",
+     "uncertain",
+     "stop"
+    ],
+    "approval_projection": [
+     "gate",
+     "s0"
+    ]
+   }
   },
   "stage0.edit": {
    "label": "stage0 人工编辑",
@@ -1108,7 +1208,31 @@
    "produces": [
     "stage0/revisions.json",
     "stage0/clean_text.txt"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "revision 与 typed 编辑计划",
+    "generation_mode": "deterministic",
+    "review_mode": "none",
+    "review_scope": "编辑后重新批准当前 revision",
+    "repair_actions": [
+     "typed_edit"
+    ],
+    "repair_owners": [
+     "stage0.edit"
+    ],
+    "session_scope": "none",
+    "recovery_entries": [
+     "--apply-edit",
+     "--apply-edit-plan",
+     "--apply-candidate-plan"
+    ],
+    "executor_content_limit": 0,
+    "commander_content_limit": 0,
+    "commander_bindings": [],
+    "review_actions": [],
+    "approval_projection": []
+   }
   },
   "stage1.partition": {
    "label": "stage1 分章",
@@ -1122,7 +1246,31 @@
    "produces": [
     "stage1/main_text.json",
     "stage1/hook_copy.json"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "已批准的 clean_text",
+    "generation_mode": "deterministic",
+    "review_mode": "none",
+    "review_scope": "机械覆盖与章号校验",
+    "repair_actions": [
+     "recompute",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage0.edit",
+     "stage1.partition"
+    ],
+    "session_scope": "none",
+    "recovery_entries": [
+     "--check-only"
+    ],
+    "executor_content_limit": 0,
+    "commander_content_limit": 0,
+    "commander_bindings": [],
+    "review_actions": [],
+    "approval_projection": []
+   }
   },
   "stage2.global": {
    "label": "stage2 全书级抽取",
@@ -1133,6 +1281,7 @@
     "--renormalize",
     "--purge-role",
     "--resample",
+    "--review-token",
     "--revalidate",
     "--apply-edit",
     "--review-decisions",
@@ -1149,7 +1298,55 @@
     "stage2/global_grounding.json",
     "stage2/global_review.json",
     "stage2/blueprint_character_projection.json"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "完整 MainText 与 Global 事实工作包",
+    "generation_mode": "executor",
+    "review_mode": "commander",
+    "review_scope": "生成所必需的全书事实",
+    "repair_actions": [
+     "accept",
+     "typed_edit",
+     "targeted_rework",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage2.global"
+    ],
+    "session_scope": "executor:book / commander:global",
+    "recovery_entries": [
+     "--revalidate",
+     "--apply-edit",
+     "--review-decisions",
+     "saved_response",
+     "prepared_commit"
+    ],
+    "executor_content_limit": 4,
+    "commander_content_limit": 4,
+    "commander_bindings": [
+     [
+      "approval:stage2-global-review",
+      "book"
+     ],
+     [
+      "recovery:stage2-global-reviewed-edit",
+      "book"
+     ]
+    ],
+    "review_actions": [
+     "accept",
+     "patch",
+     "rework",
+     "uncertain",
+     "stop"
+    ],
+    "approval_projection": [
+     "stage2_reviews",
+     "stage2.global",
+     "state"
+    ]
+   }
   },
   "stage2.blueprint": {
    "label": "stage2 逐章抽取",
@@ -1160,6 +1357,8 @@
     "--dry-run",
     "--check-only",
     "--renormalize",
+    "--review-token",
+    "--close-review",
     "--chapters",
     "--patch",
     "--emit-review-workpack",
@@ -1173,7 +1372,53 @@
    ],
    "produces": [
     "stage2/chapter_blueprints.json"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "chapter",
+    "input_workpack": "已接受 Global 投影与本章正文",
+    "generation_mode": "executor",
+    "review_mode": "commander",
+    "review_scope": "全章 Blueprint 与原文的交叉核验",
+    "repair_actions": [
+     "accept",
+     "typed_edit",
+     "targeted_rework",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage2.global",
+     "stage2.blueprint"
+    ],
+    "session_scope": "executor:phase/purpose/chapter / commander:blueprint",
+    "recovery_entries": [
+     "--revalidate",
+     "--apply-edit",
+     "--close-review",
+     "--chapters",
+     "saved_response",
+     "prepared_commit"
+    ],
+    "executor_content_limit": 4,
+    "commander_content_limit": 4,
+    "commander_bindings": [
+     [
+      "approval:stage2-blueprint-review",
+      "book"
+     ]
+    ],
+    "review_actions": [
+     "accept",
+     "patch",
+     "rework",
+     "uncertain",
+     "stop"
+    ],
+    "approval_projection": [
+     "stage2_reviews",
+     "stage2.blueprint",
+     "state"
+    ]
+   }
   },
   "stage4.design": {
    "label": "stage4 盲场景设计",
@@ -1196,7 +1441,58 @@
    ],
    "produces": [
     "stage4/blind_candidate.json"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "strategy_and_chapter",
+    "input_workpack": "去序盲事实与独立章工作包",
+    "generation_mode": "executor",
+    "review_mode": "commander",
+    "review_scope": "A 设计及本轮明确变更",
+    "repair_actions": [
+     "accept",
+     "typed_edit",
+     "targeted_rework",
+     "replan",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage2.blueprint",
+     "stage4.design"
+    ],
+    "session_scope": "executor:strategy/chapter / commander:design",
+    "recovery_entries": [
+     "--apply-edit",
+     "--recover-repair-aggregate",
+     "saved_response",
+     "prepared_commit"
+    ],
+    "executor_content_limit": 4,
+    "commander_content_limit": 4,
+    "commander_bindings": [
+     [
+      "approval:stage4-design-review",
+      "design"
+     ],
+     [
+      "approval:stage4-binding-resolution",
+      "design"
+     ],
+     [
+      "approval:stage4-structure-replan",
+      "design"
+     ]
+    ],
+    "review_actions": [
+     "accept",
+     "rework",
+     "uncertain",
+     "stop"
+    ],
+    "approval_projection": [
+     "design_review",
+     "state"
+    ]
+   }
   },
   "stage4.plan": {
    "label": "stage4 证据绑定与计划编译",
@@ -1218,7 +1514,51 @@
    "produces": [
     "stage4/evidence_binding.json",
     "stage4/plan_chapters.json"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "ambiguous_chapter",
+    "input_workpack": "已接受 A 与本章关闭目录、机械基线",
+    "generation_mode": "executor_or_deterministic",
+    "review_mode": "commander",
+    "review_scope": "独立 B 结构及证据绑定",
+    "repair_actions": [
+     "accept",
+     "typed_edit",
+     "targeted_rework",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage2.blueprint",
+     "stage4.design",
+     "stage4.plan"
+    ],
+    "session_scope": "executor:ambiguous_chapter / commander:structure",
+    "recovery_entries": [
+     "--revalidate",
+     "--apply-binding",
+     "--apply-edit",
+     "saved_response",
+     "prepared_commit"
+    ],
+    "executor_content_limit": 4,
+    "commander_content_limit": 4,
+    "commander_bindings": [
+     [
+      "approval:stage4-structure-review",
+      "structure"
+     ]
+    ],
+    "review_actions": [
+     "accept",
+     "rework",
+     "uncertain",
+     "stop"
+    ],
+    "approval_projection": [
+     "structure",
+     "state"
+    ]
+   }
   },
   "stage4.context": {
    "label": "stage4 写作上下文组装",
@@ -1228,7 +1568,32 @@
    "flags": [],
    "produces": [
     "stage4/writer_context.json"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "已接受 B 计划与当前事实",
+    "generation_mode": "deterministic",
+    "review_mode": "none",
+    "review_scope": "机械投影闭合",
+    "repair_actions": [
+     "recompute",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage2.blueprint",
+     "stage4.design",
+     "stage4.plan"
+    ],
+    "session_scope": "none",
+    "recovery_entries": [
+     "canonical"
+    ],
+    "executor_content_limit": 0,
+    "commander_content_limit": 0,
+    "commander_bindings": [],
+    "review_actions": [],
+    "approval_projection": []
+   }
   },
   "stage5.write": {
    "label": "stage5 全书闭卷写作",
@@ -1261,7 +1626,46 @@
    ],
    "produces": [
     "stage5/ch{nn}.json"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "chapter",
+    "input_workpack": "当前 Context、计划与独立 writing 授权",
+    "generation_mode": "executor",
+    "review_mode": "commander",
+    "review_scope": "独立 writing 授权；产出交机械 Review 与整书 closure",
+    "repair_actions": [
+     "typed_edit",
+     "targeted_rework",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage4.design",
+     "stage5.write"
+    ],
+    "session_scope": "executor:chapter / commander:writing",
+    "recovery_entries": [
+     "--revalidate",
+     "--apply-edit",
+     "--recover-prepared",
+     "--recover-reviewer-rewrite-prepared"
+    ],
+    "executor_content_limit": 4,
+    "commander_content_limit": 4,
+    "commander_bindings": [
+     [
+      "approval:stage5-writing",
+      "writing"
+     ]
+    ],
+    "review_actions": [
+     "accept",
+     "uncertain",
+     "stop"
+    ],
+    "approval_projection": [
+     "writing"
+    ]
+   }
   },
   "stage5.review": {
    "label": "stage5 全书验收",
@@ -1280,7 +1684,48 @@
    ],
    "produces": [
     "stage5/review_{n}.json"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "全章 canonical、计划与 trim 处置",
+    "generation_mode": "deterministic",
+    "review_mode": "commander",
+    "review_scope": "独立 closure 或 trim disposition 工作包",
+    "repair_actions": [
+     "accept",
+     "typed_edit",
+     "targeted_rework",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage5.write",
+     "stage5.review"
+    ],
+    "session_scope": "commander:closure/disposition",
+    "recovery_entries": [
+     "--check-only",
+     "--retain-pretrim-batch",
+     "typed_replay"
+    ],
+    "executor_content_limit": 0,
+    "commander_content_limit": 4,
+    "commander_bindings": [
+     [
+      "approval:stage5-closure",
+      "closure"
+     ]
+    ],
+    "review_actions": [
+     "accept",
+     "rework",
+     "uncertain",
+     "stop"
+    ],
+    "approval_projection": [
+     "closure",
+     "state"
+    ]
+   }
   },
   "stage6.hook": {
    "label": "stage6 开篇文案",
@@ -1296,13 +1741,44 @@
     "--apply-edit",
     "--wontfix",
     "--rebind-review",
+    "--recover-prepared",
+    "--subject-sha256",
     "--actor",
     "--reason",
     "--response-repair"
    ],
    "produces": [
     "stage6/hook.json"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "candidate_batch",
+    "input_workpack": "原文文案、限定正文与全书事实地图",
+    "generation_mode": "executor",
+    "review_mode": "none",
+    "review_scope": "三候选经独立 judge 与定稿",
+    "repair_actions": [
+     "typed_edit",
+     "targeted_rework",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage6.hook"
+    ],
+    "session_scope": "executor:hook",
+    "recovery_entries": [
+     "--revalidate",
+     "--apply-edit",
+     "--recheck",
+     "--recover-prepared",
+     "saved_response",
+     "prepared_commit"
+    ],
+    "executor_content_limit": 4,
+    "commander_content_limit": 0,
+    "commander_bindings": [],
+    "review_actions": [],
+    "approval_projection": []
+   }
   },
   "stage6.semantic": {
    "label": "stage6 文案语义审判",
@@ -1311,11 +1787,38 @@
    "section": "R-9",
    "flags": [
     "--dry-run",
-    "--response-repair"
+    "--response-repair",
+    "--recover-prepared",
+    "--subject-sha256"
    ],
    "produces": [
     "stage6/semantic_{n}.json"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "judge",
+    "input_workpack": "匿名候选与独立 A/B 证据工作包",
+    "generation_mode": "executor",
+    "review_mode": "none",
+    "review_scope": "只产带证据 UNVER，交 stage6.approve",
+    "repair_actions": [
+     "self_correct",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage6.semantic"
+    ],
+    "session_scope": "executor:judge_A / executor:judge_B",
+    "recovery_entries": [
+     "--recover-prepared",
+     "saved_response",
+     "prepared_commit"
+    ],
+    "executor_content_limit": 4,
+    "commander_content_limit": 0,
+    "commander_bindings": [],
+    "review_actions": [],
+    "approval_projection": []
+   }
   },
   "stage6.approve": {
    "label": "stage6 文案定稿",
@@ -1330,7 +1833,43 @@
    ],
    "produces": [
     "stage6/hook.json"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "candidate_batch",
+    "input_workpack": "三候选与两名 judge 的完整 workpack",
+    "generation_mode": "human_submission",
+    "review_mode": "commander",
+    "review_scope": "当前候选的 typed pick",
+    "repair_actions": [
+     "accept",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage6.hook"
+    ],
+    "session_scope": "commander:hook_approval",
+    "recovery_entries": [
+     "typed_replay",
+     "--review-token"
+    ],
+    "executor_content_limit": 0,
+    "commander_content_limit": 4,
+    "commander_bindings": [
+     [
+      "stage6.approve",
+      "hook"
+     ]
+    ],
+    "review_actions": [
+     "accept",
+     "uncertain",
+     "stop"
+    ],
+    "approval_projection": [
+     "gate",
+     "s6"
+    ]
+   }
   },
   "stage7.rename": {
    "label": "stage7 人名表",
@@ -1347,6 +1886,8 @@
     "--emit-edit-template",
     "--adopt-residual",
     "--rebind-review",
+    "--recover-prepared",
+    "--subject-sha256",
     "--validate-edit",
     "--actor",
     "--reason",
@@ -1354,7 +1895,36 @@
    ],
    "produces": [
     "stage7/name_map.json"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "全书人物、别名与已闭合正文",
+    "generation_mode": "executor",
+    "review_mode": "none",
+    "review_scope": "人名表交独立定稿",
+    "repair_actions": [
+     "typed_edit",
+     "targeted_rework",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage7.rename"
+    ],
+    "session_scope": "executor:rename",
+    "recovery_entries": [
+     "--revalidate",
+     "--apply-edit",
+     "--adopt-residual",
+     "--recover-prepared",
+     "saved_response",
+     "prepared_commit"
+    ],
+    "executor_content_limit": 4,
+    "commander_content_limit": 0,
+    "commander_bindings": [],
+    "review_actions": [],
+    "approval_projection": []
+   }
   },
   "stage7.approve": {
    "label": "stage7 人名表定稿",
@@ -1368,7 +1938,43 @@
    ],
    "produces": [
     "stage7/name_map.json"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "人物表与真实替换、残留扫描工作包",
+    "generation_mode": "human_submission",
+    "review_mode": "commander",
+    "review_scope": "当前人名与替换表",
+    "repair_actions": [
+     "accept",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage7.rename"
+    ],
+    "session_scope": "commander:rename_approval",
+    "recovery_entries": [
+     "typed_replay",
+     "--review-token"
+    ],
+    "executor_content_limit": 0,
+    "commander_content_limit": 4,
+    "commander_bindings": [
+     [
+      "stage7.approve",
+      "rename"
+     ]
+    ],
+    "review_actions": [
+     "accept",
+     "uncertain",
+     "stop"
+    ],
+    "approval_projection": [
+     "gate",
+     "s7"
+    ]
+   }
   },
   "stage7.assemble": {
    "label": "stage7 替换与成书",
@@ -1378,7 +1984,31 @@
    "flags": [],
    "produces": [
     "stage7/{title}_rewriting.txt"
-   ]
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "已批准人名表、文案与 canonical 正文",
+    "generation_mode": "deterministic",
+    "review_mode": "none",
+    "review_scope": "机械替换与交付对账",
+    "repair_actions": [
+     "recompute",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage7.rename",
+     "stage7.assemble"
+    ],
+    "session_scope": "none",
+    "recovery_entries": [
+     "canonical"
+    ],
+    "executor_content_limit": 0,
+    "commander_content_limit": 0,
+    "commander_bindings": [],
+    "review_actions": [],
+    "approval_projection": []
+   }
   }
  },
  "actions": [
@@ -1774,6 +2404,19 @@
    "paid": false,
    "free_flag": "--renormalize",
    "writes": "按当前契约重算代码派生字段与原文定位并写回",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.blueprint",
+   "label": "stage2 逐章抽取 --close-review",
+   "extra": [
+    "--close-review"
+   ],
+   "paid": false,
+   "free_flag": "--close-review",
+   "writes": "_service/approvals/<sid>.json（只核验并补齐当前接受对应的 seen/gate）",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
@@ -2301,7 +2944,7 @@
    "free_flag": "--recover-prepared",
    "writes": "写 stage5/chNN.json、target run recovery manifest/两相 replacement journal 与append-only adoption lineage；不改旧 source sidecar",
    "writes_disk": true,
-   "needs_value": "要零调用收口的旧 Stage5 source run_id；范围固定为其中全部 unresolved prepared",
+   "needs_value": "要零调用收口的 source run_id；Stage5 为全部 unresolved prepared，Stage6 为主体摘要锁定的原 Hook 或双盲审判完成组",
    "required_inputs": [
     {
      "flag": "--actor",
@@ -2545,6 +3188,24 @@
   },
   {
    "kind": "stage6.hook",
+   "label": "stage6 开篇文案 --recover-prepared",
+   "extra": [
+    "--recover-prepared"
+   ],
+   "paid": false,
+   "free_flag": "--recover-prepared",
+   "writes": "按原完成组补 stage6/hook.json、原 run 采纳审计及工作单元提交状态（0 模型）",
+   "writes_disk": true,
+   "needs_value": "要零调用收口的 source run_id；Stage5 为全部 unresolved prepared，Stage6 为主体摘要锁定的原 Hook 或双盲审判完成组",
+   "required_inputs": [
+    {
+     "flag": "--subject-sha256",
+     "description": "人工决定乐观锁定的完整内容 SHA-256"
+    }
+   ]
+  },
+  {
+   "kind": "stage6.hook",
    "label": "stage6 开篇文案 --response-repair",
    "extra": [
     "--response-repair"
@@ -2592,6 +3253,24 @@
    "writes_disk": true,
    "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
    "required_inputs": []
+  },
+  {
+   "kind": "stage6.semantic",
+   "label": "stage6 文案语义审判 --recover-prepared",
+   "extra": [
+    "--recover-prepared"
+   ],
+   "paid": false,
+   "free_flag": "--recover-prepared",
+   "writes": "按原双盲完成组补原序号 semantic 产物、双采纳审计及工作单元提交状态（0 模型）",
+   "writes_disk": true,
+   "needs_value": "要零调用收口的 source run_id；Stage5 为全部 unresolved prepared，Stage6 为主体摘要锁定的原 Hook 或双盲审判完成组",
+   "required_inputs": [
+    {
+     "flag": "--subject-sha256",
+     "description": "人工决定乐观锁定的完整内容 SHA-256"
+    }
+   ]
   },
   {
    "kind": "stage6.approve",
@@ -2786,6 +3465,24 @@
   },
   {
    "kind": "stage7.rename",
+   "label": "stage7 人名表 --recover-prepared",
+   "extra": [
+    "--recover-prepared"
+   ],
+   "paid": false,
+   "free_flag": "--recover-prepared",
+   "writes": "按原完成组补 name_map.json、原 run 采纳及工作单元提交状态（0 模型）",
+   "writes_disk": true,
+   "needs_value": "要零调用收口的 source run_id；Stage5 为全部 unresolved prepared，Stage6 为主体摘要锁定的原 Hook 或双盲审判完成组",
+   "required_inputs": [
+    {
+     "flag": "--subject-sha256",
+     "description": "人工决定乐观锁定的完整内容 SHA-256"
+    }
+   ]
+  },
+  {
+   "kind": "stage7.rename",
    "label": "stage7 人名表 --validate-edit",
    "extra": [
     "--validate-edit"
@@ -2845,10 +3542,5 @@
    "needs_value": null,
    "required_inputs": []
   }
- ],
- "design_constraint_operation_kinds": [
-  "keep",
-  "withdraw",
-  "supersede"
  ]
 }

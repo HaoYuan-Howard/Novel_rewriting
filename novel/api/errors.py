@@ -28,6 +28,7 @@ from novel.errors import (
     AccountingKeyUnregistered,
     ApprovalRequired,
     ArtifactUnreadable,
+    ArtifactSubmittedReviewPending,
     BlockingFindingsUnresolved,
     BookTrashFailed,
     ByteFormRefused,
@@ -56,6 +57,7 @@ from novel.errors import (
 )
 from novel.orchestrator.agent import AgentBusy
 from novel.orchestrator.jobs import JobConflict
+from novel.work_units import WorkUnitBudgetExhausted, WorkUnitRefused
 
 #: CSRF 闸门没过（`R-11.2`）。**不是一个异常** —— 它在请求进到业务代码**之前**就被拦下。
 #: 登记在这里是为了让「本服务会发哪些状态码」只有一张表。
@@ -73,6 +75,10 @@ STATUS: dict[type[NovelError], int] = {
     #: 界面会把「先跑 stage2」说成「stage2 的产物损坏了」。
     #: 409 而不是 500：产物是**数据**，不是我们的代码写错了。
     ArtifactUnreadable: 409,
+    # 运行预算或提交恢复需要用户处理当前状态，不能变成服务器错误或新付费调用。
+    WorkUnitRefused: 409,
+    WorkUnitBudgetExhausted: 409,
+    ArtifactSubmittedReviewPending: 409,
     #: ⚠ **不是 404**：那一份在盘上，只是不再是当前根上那一版 ⇒ 与「还没跑」是两条恢复路。
     #: 409 与 `ArtifactUnreadable` 同码同因：产物是**数据**，不是我们的代码写错了。
     UpstreamStale: 409,

@@ -25,7 +25,7 @@ from pydantic import Field, ValidationError, create_model
 from pydantic_core import PydanticUndefined
 from typing_extensions import TypeAliasType
 
-from contracts.invariants import DESIGN_REPAIR_CODE_INSTRUCTIONS
+from contracts.invariants import DESIGN_REPAIR_CODE_INSTRUCTIONS, commander_review_actions
 from contracts.schema.api import (
     DesignConstraintCatalog,
     DesignConstraintOperation,
@@ -43,6 +43,7 @@ from contracts.schema.api import (
     StructureChapterDecision,
 )
 from contracts.schema.base import StrictModel
+from contracts.schema.common import Sha256
 from novel.agents.session_client import agent_json_schema
 from novel.orchestrator import queue
 
@@ -89,6 +90,8 @@ def _options(task: _ReviewerTaskLike) -> list[Mapping[str, Any]]:
     options = list(task.submission_options)
     expected_surface = 'design' if task.waiting_on in _DESIGN_BLOCKERS else 'structure'
     seen: set[str] = set()
+    terminal_kinds: set[str] = set()
+    allowed_terminals = set(commander_review_actions(task.waiting_on)) & {'uncertain', 'stop'}
     for option in options:
         exact = option.get('exact_request') if isinstance(option, Mapping) else None
         action = exact.get('action') if isinstance(exact, Mapping) else None
@@ -100,16 +103,17 @@ def _options(task: _ReviewerTaskLike) -> list[Mapping[str, Any]]:
                 or not isinstance(action, Mapping)):
             raise Stage4ReviewerWireError('Stage4 option 身份重复、缺失或绑定漂移')
         seen.add(option_id)
-        if action.get('kind') == 'stop':
-            if task.waiting_on != queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
-                raise Stage4ReviewerWireError('当前 Stage4 blocker 未登记 stop')
+        if action.get('kind') in ('stop', 'uncertain'):
+            kind = action['kind']
+            if kind not in allowed_terminals or kind in terminal_kinds:
+                raise Stage4ReviewerWireError('当前 Stage4 blocker 未登记此停止动作或动作重复')
+            terminal_kinds.add(kind)
         elif (action.get('kind') != 'approval'
                 or action.get('surface') != expected_surface):
             raise Stage4ReviewerWireError('Stage4 option 超出当前审批面')
-    expected_ids = {'approval:' + expected_surface}
-    if task.waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
-        expected_ids.add('stop:stage4-structure-replan')
-    if seen != expected_ids:
+    if ('approval:' + expected_surface not in seen
+            or terminal_kinds != allowed_terminals
+            or len(seen) != 1 + len(allowed_terminals)):
         raise Stage4ReviewerWireError('Stage4 option 必须完整保留当前合法选择')
     return options
 
@@ -253,7 +257,7 @@ def _constraint_operations_model(
 def _payload_model(option: Mapping[str, Any], digest: str) -> type[StrictModel]:
     exact = option['exact_request']
     action = exact['action']
-    if action['kind'] == 'stop':
+    if action['kind'] in ('stop', 'uncertain'):
         return create_model(
             f'Stage4ReviewerStop_{digest}', __base__=StrictModel,
             reason=(str, Field(..., min_length=1)),
@@ -322,16 +326,16 @@ def response_model(task: _ReviewerTaskLike) -> type[StrictModel]:
     """由完整 frozen options 构造本轮专有 model，不静默删除 stop。"""
     choices = []
     for option in _options(task):
-        exact_sha = _sha256(option['exact_request'])
-        digest = _sha256(option)[:16]
+        # 名称只绑定响应角色；候选/token 的变化不是 schema 结构变化。
+        digest = _sha256(option['id'])[:16]
         choices.append(create_model(
             f'Stage4ReviewerChoice_{digest}', __base__=StrictModel,
             option_id=(_literal([option['id']]), ...),
-            expected_exact_request_sha256=(_literal([exact_sha]), ...),
+            expected_exact_request_sha256=(Sha256, ...),
             payload=(_payload_model(option, digest), ...),
         ))
     return create_model(
-        f'Stage4ReviewerEnvelope_{_sha256(list(task.submission_options))[:16]}',
+        f'Stage4ReviewerEnvelope_{_sha256([option["id"] for option in _options(task)])[:16]}',
         __base__=StrictModel,
         schema_=(Literal[WIRE_SCHEMA], Field(..., alias='schema')),
         selection=(reduce(or_, choices), ...),
@@ -417,10 +421,12 @@ def assemble(task: _ReviewerTaskLike, response_document: Mapping[str, Any] | str
         raise Stage4ReviewerWireError('Stage4 wire 响应不是唯一完整 JSON object') from exc
     selected = parsed['selection']
     option = next(option for option in _options(task) if option['id'] == selected['option_id'])
+    if selected['expected_exact_request_sha256'] != _sha256(option['exact_request']):
+        raise Stage4ReviewerWireError('Stage4 wire exact-request SHA 已 stale')
     assembled = copy.deepcopy(option['exact_request'])
     action = assembled['action']
     supplied = selected['payload']
-    if action['kind'] == 'stop':
+    if action['kind'] in ('stop', 'uncertain'):
         action['reason'] = supplied['reason']
         return assembled
     payload = action['payload']

@@ -265,9 +265,7 @@ def _blueprint_of(store: ArtifactStore, ordinal: int):
 # 只是不在紧凑人读面里重复铺开。名单必须随包发出：「没展示」不能
 # 被误读成「没检查」。
 _BLUEPRINT_MECHANICAL_FIELDS_HIDDEN = (
-    'blueprints[].beats[].beat_id',
     'blueprints[].beats[].span.start/end',
-    'blueprints[].fact_atoms[].fact_id',
     'blueprints[].fact_atoms[].source_beat_ref',
     'blueprints[].fact_atoms[].source.start/end',
     'blueprints[].beats[].hinges[].hinge_id',
@@ -330,6 +328,7 @@ def _review_chapter(
     for atom in blueprint.fact_atoms:
         facts_by_beat.setdefault(atom.source_beat_ref, []).append(
             BlueprintReviewFact(
+                fact_id=atom.fact_id,
                 claim=atom.claim,
                 kind=atom.kind,
                 obligation=atom.obligation,
@@ -363,6 +362,7 @@ def _review_chapter(
 
     beats = [
         BlueprintReviewBeat(
+            beat_id=beat.beat_id,
             beat_order=index,
             located=(
                 beat.span is not None
@@ -461,6 +461,7 @@ def _blueprint_review_snapshot(
 ) -> BlueprintReviewWorkpack:
     """从同一次严格读取的主体、字节摘要与生产报告组一份快照。"""
     from novel.stages.stage2 import extract
+    from novel.stages.stage2 import global_review as global_review_ops
 
     invalid_rel = paths.invalid_of(BP_REL)
     blueprint_rel = invalid_rel if store.exists(invalid_rel) else BP_REL
@@ -469,6 +470,9 @@ def _blueprint_review_snapshot(
     blueprints, blueprint_sha256 = store.read_own_with_sha256(
         ChapterBlueprints, blueprint_rel, require_current=True)
     report = extract.run_check_only(store.ctx)
+    global_review = global_review_ops.review_workpack(store.ctx, scope='all')
+    # 全文已由 coverage.segments 完整携带；交叉材料引用同一 MainText 身份。
+    global_review.pop('main_text_chapters', None)
     if report.provenance.invalid != (blueprint_rel == invalid_rel):
         raise ArtifactUnreadable(
             'Blueprint 工作包读取期间 formal/INVALID 主体发生切换；'
@@ -514,6 +518,7 @@ def _blueprint_review_snapshot(
         'accounting': [row.model_dump(mode='json') for row in accounting],
         'mechanical_fields_hidden': list(_BLUEPRINT_MECHANICAL_FIELDS_HIDDEN),
         'chapters': [row.model_dump(mode='json') for row in chapters],
+        'global_review': global_review,
     })
     rules_fingerprint = prov.rules_fingerprint('stage2')
     validation_seal_sha256 = _canonical_sha256({
@@ -536,7 +541,8 @@ def _blueprint_review_snapshot(
         title=title,
         review_identity_sha256=review_identity_sha256,
         validation_seal_sha256=validation_seal_sha256,
-        review_token='bpr3_' + '0' * 64,
+        review_token='bpr4_' + '0' * 64,
+        global_review=global_review,
         subject_sha256=subject_sha256,
         binding_sha256='0' * 64,
         binding=binding,
@@ -548,10 +554,18 @@ def _blueprint_review_snapshot(
     payload = base.model_dump(by_alias=True, mode='json')
     payload.pop('binding_sha256')
     payload.pop('review_token')
+    # 差异只是相对已接受材料的导航，接受后 baseline 前移不能使同一正式
+    # 主体的 token 自行过期；各行仍携带当前/原接受的精确业务摘要。
+    payload.pop('review_delta')
     binding_sha256 = _canonical_sha256(payload)
+    from novel.orchestrator.approvals import stage2_cross_review_scope
+    from novel.stages.stage2.review_delta import compare, snapshot
+    delta = compare(stage2_cross_review_scope(store.ctx.novel_dir.parent, store.ctx.sid),
+                    snapshot(base))
     return base.model_copy(update={
         'binding_sha256': binding_sha256,
-        'review_token': f'bpr3_{binding_sha256}',
+        'review_token': f'bpr4_{binding_sha256}',
+        'review_delta': delta,
     })
 
 
@@ -561,7 +575,7 @@ def blueprint_review_workpack(
     """生成 book-level 只读 Blueprint 审阅包，并用首尾重读拒绝混合快照。
 
     本函数不产生 approval 记录、不改 gate，也不写任何 artifact。
-    它只读 current MainText/ChapterBlueprints，并原样消费
+    它只读 current MainText/Global/GlobalReview/ChapterBlueprints，并原样消费
     ``stage2.blueprint --check-only`` 的生产 CheckReport。
 
     普通 API/CLI 调用省略 ``code`` 并现场取当前版本；已经建立只读快照的

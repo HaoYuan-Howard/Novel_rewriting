@@ -188,6 +188,8 @@ class MainTextLoose(RootModel[list[dict]]):
 def _book(sid: str = '123', title: str = '书名', payload: bytes = b'{"sections": []}',
           *, with_clean: bool = True, root: Path | None = None) -> Path:
     base = root if root is not None else Path(tempfile.mkdtemp())
+    from novel.work_units import initialize_workflow
+    initialize_workflow(base)
     book = base / f'{title}_{sid}'
     (book / 'stage1').mkdir(parents=True)
     if with_clean:

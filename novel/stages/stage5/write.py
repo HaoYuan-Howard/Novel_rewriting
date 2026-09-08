@@ -49,7 +49,7 @@ import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -604,7 +604,8 @@ def _require_revalidation_task_identity(
 
 def _write_chapter(ctx: RunContext, store: ArtifactStore, entry: dict[str, Any],
                    book: M.Book, *, segments: list[dict[str, str]], mat: str,
-                   account: M.NormalizeAccount, provenance: Any
+                   account: M.NormalizeAccount, provenance: Any,
+                   before_commit: Callable[[Chapter, M.NormalizeAccount], None] | None = None,
                    ) -> tuple[str, list[str], list, list[str]]:
     """归一 → 判据 → 闸门 → 落盘。返回 `(落点, errs, findings, trim notes)`。
 
@@ -628,6 +629,8 @@ def _write_chapter(ctx: RunContext, store: ArtifactStore, entry: dict[str, Any],
     art = _chapter_record(entry, segments2, book, warns=warns,
                           errs=errs or None, provenance=provenance)
     with stage5_runs.commit_ownership(ctx.novel_dir, ordinal):
+        if before_commit is not None:
+            before_commit(art, account)
         with store.history_transaction(rel, rejected_rel):
             if store.exists(rejected_rel):
                 store.archive_round(rejected_rel)
@@ -2470,6 +2473,7 @@ def run_write(ctx: RunContext, client: LlmClient,
         # load_book、_run_group 以及 direct Stage5WriteAgent 的 driver/probe/session。
         stage5_runs.refuse_foreign_prepared_before_wire(ctx, chapters)
         book = review.load_book(ctx, store)
+        _reconcile_legacy_chapter_deliveries(ctx, store, book, client)
         todo = _chapters_of(store, book, chapters)
         if not todo:
             raise TerminalState(
@@ -3247,6 +3251,13 @@ def _generate_chapter(
         attempts = [{'chars': M.chars_of(text), 'text': text}]
         regressions = checks.trim_regressions(prev_text, text, entry, book)
         if regressions:
+            feedback = getattr(client, 'record_candidate_feedback', None)
+            if callable(feedback):
+                feedback(accepted_purpose, {
+                    'kind': 'chapter_regression_review',
+                    'chapter_ordinal': ordinal, 'regressions': list(regressions),
+                    'action': 'targeted_revision',
+                })
             accepted_purpose = f'{ctx_purpose(entry)}·退化重采样'
             try:
                 got = client.ask_json(
@@ -3275,6 +3286,12 @@ def _generate_chapter(
             retry_regressions = checks.trim_regressions(
                 prev_text, retry_text, entry, book)
             if retry_regressions:
+                if callable(feedback):
+                    feedback(accepted_purpose, {
+                        'kind': 'chapter_regression_review',
+                        'chapter_ordinal': ordinal,
+                        'regressions': list(retry_regressions), 'action': 'stop',
+                    })
                 return {
                     'rejected': {
                         'output_ordinal': ordinal,
@@ -3290,6 +3307,146 @@ def _generate_chapter(
         'prev_text': prev_text, 'fixes': fixes, 'review_fp': review_fp,
         'accepted_purpose': accepted_purpose,
     }
+
+
+def _record_legacy_chapter_delivery(
+        ctx: RunContext, store: ArtifactStore, client: LlmClient, *,
+        ordinal: int, purpose: str, formal: bool,
+) -> None:
+    """按已写章节与真实尝试闭合来源账，INVALID 只退休已持久候选。"""
+    attempt_id = client.accepted_attempt(purpose)
+    if attempt_id is None:
+        raise ProvenanceRefused('Stage5 已落盘候选缺真实 accepted attempt')
+    if formal:
+        landed = store.read(Chapter, _rel(ordinal))
+        ctx.ledger.note_adoption(
+            sid=ctx.sid, node=ctx.node, purpose=purpose,
+            attempt_id=attempt_id, artifact=_rel(ordinal), chapter=ordinal,
+            artifact_fingerprint=prov.projection_fingerprint(
+                landed.model_dump(by_alias=True, mode='json')))
+    checkpointed = getattr(client, 'mark_checkpointed', None)
+    if callable(checkpointed):
+        checkpointed(attempt_id)
+
+
+def _prepare_legacy_chapter_delivery(
+        ctx: RunContext, store: ArtifactStore, client: LlmClient, *,
+        entry: dict[str, Any], artifact: Chapter, account: M.NormalizeAccount,
+        purpose: str,
+) -> None:
+    """首个产物写入前，把当前输入及最终 typed 候选绑回原模型回答。"""
+    save = getattr(client, 'save_producer_recovery', None)
+    if not callable(save):
+        return
+    attempt_id = client.accepted_attempt(purpose)
+    if attempt_id is None:
+        raise ProvenanceRefused('Stage5 候选提交前缺真实 accepted attempt')
+    rel = _rel(artifact.output_ordinal)
+    if artifact.errs:
+        rel = paths.invalid_of(rel)
+    ordinal = artifact.output_ordinal
+    _notes, desired_audit = _over_length_audit(
+        [segment.model_dump() for segment in artifact.segments],
+        {'output_ordinal': ordinal, 'budget_chars': artifact.budget_chars})
+    audit_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
+    companion_baselines = {
+        path: store.full_sha256_or_none(path)
+        for path in (audit_rel, artifact_rel('stage5.trim_resolution', nn=ordinal),
+                     _rejected_rel(ordinal))}
+    save(attempt_id, {
+        'kind': 'stage5-legacy-delivery-v1', 'code': ctx.code,
+        'purpose': purpose, 'attempt_id': attempt_id,
+        'entry': copy.deepcopy(entry),
+        'inputs': {key: edge.model_dump(mode='json') for key, edge in ctx.edges.items()},
+        'target_rel': rel, 'target_sha256': store.prospective_sha256(rel, artifact),
+        'baseline_sha256': store.full_sha256_or_none(rel),
+        'target_payload': artifact.model_dump(by_alias=True, mode='json'),
+        'account': asdict(account),
+        'companion_baselines': companion_baselines,
+        'target_audit_sha256': (
+            store.prospective_sha256(audit_rel, desired_audit)
+            if desired_audit is not None else None),
+    })
+
+
+def _reconcile_legacy_chapter_deliveries(
+        ctx: RunContext, store: ArtifactStore, book: M.Book, client: LlmClient,
+) -> None:
+    """默认增量筛章前补原候选的提交账；文件存在本身不构成采纳证明。"""
+    if _uses_agent_sessions(ctx) or not callable(getattr(client, 'save_producer_recovery', None)):
+        return
+    from novel.work_units import budget_for
+
+    for ordinal, entry in sorted(book.chapters.items()):
+        budget = budget_for(ctx, scope=f'chapter:{ordinal}')
+        pending = budget.latest_pending_response()
+        if pending is None:
+            continue
+        reservation, raw = pending
+        proof = budget.producer_recovery(reservation.turn_id)
+        if proof is None:
+            continue
+        if proof.get('kind') != 'stage5-legacy-delivery-v1':
+            raise ProvenanceRefused('Stage5 legacy 候选的 producer 恢复协议不匹配')
+        rel = str(proof['target_rel'])
+        if rel not in (_rel(ordinal), paths.invalid_of(_rel(ordinal))):
+            raise ProvenanceRefused('Stage5 producer 回执越过原章节范围')
+        current_sha = store.full_sha256_or_none(rel)
+        if current_sha != proof['target_sha256']:
+            if current_sha == proof['baseline_sha256']:
+                continue
+            raise ProvenanceRefused('Stage5 已提交候选处于第三方状态，不能补采纳')
+        current_inputs = {
+            key: edge.model_dump(mode='json') for key, edge in ctx.edges.items()}
+        with ctx.validation_reads():
+            artifact, _ = store.read_own(Chapter, rel, require_current=True)
+            if (proof['code'] != ctx.code or proof['entry'] != entry
+                    or proof['inputs'] != current_inputs
+                    or artifact.model_dump(by_alias=True, mode='json') != proof['target_payload']):
+                raise ProvenanceRefused('Stage5 提交回执与当前代码、输入或 typed 章不一致')
+            attempt_id = str(proof['attempt_id'])
+            turn = budget.turn(reservation.turn_id)
+            if (raw.get('attempt_id') != attempt_id
+                    or artifact.provenance.request_fingerprint != turn.request_sha256):
+                raise ProvenanceRefused('Stage5 正式章没有绑定原始模型请求')
+            # 用同一机械判据重验当前任务；复用首写前实际归一读数，不能拿零值
+            # 掩盖原引号/段落诊断，也不再对已正式提交的文本做二次改写。
+            _findings, errors, _warnings = _judge(
+                artifact.text, entry, book,
+                mat=prompts.build_material(entry, book).given,
+                account=M.NormalizeAccount(**proof['account']),
+                segments=[segment.model_dump() for segment in artifact.segments])
+            if rel == _rel(ordinal) and errors:
+                raise ProvenanceRefused('Stage5 待补采纳的正式章未通过当前机械校验')
+            ctx.require_observed_roots_current()
+        # canonical replace 之后、trim 写回之前硬杀也可补尾；只接受首写前
+        # 基线或本候选确定性目标，不覆盖第三方更改的伴随状态。
+        audit_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
+        for companion, baseline_sha in proof['companion_baselines'].items():
+            target_sha = proof['target_audit_sha256'] if companion == audit_rel else None
+            if store.full_sha256_or_none(companion) not in (baseline_sha, target_sha):
+                raise ProvenanceRefused('Stage5 提交伴随状态已经被第三方改写')
+        with ctx.validation_reads():
+            if rel == _rel(ordinal):
+                _commit_canonical_chapter(
+                    store, artifact, expected_ordinal=ordinal,
+                    commit=lambda _rel, _artifact: _rel)
+            rejected_rel = _rejected_rel(ordinal)
+            if store.exists(rejected_rel):
+                store.archive_round(rejected_rel)
+        receipt = raw.get('prepared_receipt')
+        if receipt is not None:
+            ctx.ledger.reconcile_work_unit_attempt(budget, reservation.turn_id, receipt)
+        ctx.ledger.claim_work_unit_attempts(
+            budget, reservation.turn_id, purpose=str(proof['purpose']))
+        if rel == _rel(ordinal):
+            ctx.ledger.bind_work_unit_commit(attempt_id, budget, reservation.turn_id)
+            ctx.ledger.note_adoption(
+                sid=ctx.sid, node=ctx.node, purpose=str(proof['purpose']),
+                attempt_id=attempt_id, artifact=rel, chapter=ordinal,
+                artifact_fingerprint=prov.projection_fingerprint(
+                    artifact.model_dump(by_alias=True, mode='json')))
+        budget.mark_adopted(reservation.turn_id)
 
 
 def _run_group_parallel(
@@ -3515,7 +3672,13 @@ def _run_group_parallel(
             where, errors, findings, trim_notes = _write_chapter(
                 ctx, store, entry, book,
                 segments=generated['segments'], mat=generated['mat'].given,
-                account=generated['account'], provenance=provenance)
+                account=generated['account'], provenance=provenance,
+                before_commit=lambda artifact, account: _prepare_legacy_chapter_delivery(
+                    ctx, store, client, entry=entry, artifact=artifact,
+                    account=account, purpose=generated['accepted_purpose']))
+            _record_legacy_chapter_delivery(
+                ctx, store, client, ordinal=ordinal,
+                purpose=generated['accepted_purpose'], formal=not errors)
             judged[ordinal] = findings
             line = (
                 f'第 {ordinal} 章 → {where}'
@@ -3761,6 +3924,7 @@ def run_revise(ctx: RunContext, client: LlmClient,
         book = review.load_book(ctx, store)
         # legacy 没有候选 journal，书锁覆盖本次 Review/旧稿快照直到全部提交；
         # agent profile 则在每轮 wire 前、逐章正式提交前另核 typed candidate 主体。
+        _reconcile_legacy_chapter_deliveries(ctx, store, book, client)
         review.require_fresh_review(ctx, store)
         picked, skipped, fp = revise_targets(store)
         if (spec := chapters):

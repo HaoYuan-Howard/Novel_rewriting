@@ -67,6 +67,7 @@ from novel.orchestrator import (
     stage2_review_ledger,
 )
 from novel.orchestrator.jobs import JobConflict
+from novel.work_units import WorkUnitBudget, WorkUnitRefused
 
 
 _REAL_STAGE2_REVIEWER_PREFLIGHT = agent._preflight_stage2_reviewer_action
@@ -135,6 +136,8 @@ def no_real_commander_cli(monkeypatch):
 
 @pytest.fixture
 def base(tmp_path):
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
     return str(tmp_path)
 
 
@@ -519,7 +522,7 @@ def test_same_epoch_reviewer_approval_inputs_keep_each_typed_payload(base):
     assert json.loads(second_path.read_text('utf-8')) == second.payload
 
 
-def test_stage2_final_review_confirm_uses_one_admitted_stage2_closure_process(base):
+def test_stage2_node_acceptance_uses_one_admitted_typed_approval_process(base):
     """一枚 launch ticket 只启动一个 façade 进程，不在 callback 内串起五棵子进程。"""
     epoch = ExecutionEpoch(
         epoch_id='stage2-close-epoch', ordinal=1, reason='initial',
@@ -528,12 +531,12 @@ def test_stage2_final_review_confirm_uses_one_admitted_stage2_closure_process(ba
         code_version='test-code-version', skill_sha256='8' * 64,
         session_run_id='stage2-close-session')
     action = agent.reviewer_tasks.ReviewerApprovalAction(
-        kind='approval', surface='stage2_final_review',
+        kind='approval', surface='stage2_blueprint_review',
         payload={
-            'actor': 'agent:final-seat',
-            'reason': '独立通读全部 blocking 项、整书正文与 Blueprint',
-            'global_review_token': 's2gr1_' + '8' * 64,
-            'blueprint_review_token': 'bpr3_' + '9' * 64,
+            'node': 'stage2.blueprint', 'decision': 'accept',
+            'actor': 'agent:blueprint-commander',
+            'reason': '结合 Global 与整书正文交叉核验 Blueprint',
+            'review_token': 'bpr4_' + '9' * 64,
         })
 
     argv = agent._reviewer_approval_argv(base, '42', epoch, action)
@@ -541,8 +544,8 @@ def test_stage2_final_review_confirm_uses_one_admitted_stage2_closure_process(ba
 
     assert argv[:5] == [
         agent.sys.executable, '-B', '-m', 'novel.cli', 'approval']
-    assert argv[5:8] == ['close-stage2', '42', '--base']
-    assert argv[8] == base
+    assert argv[5:9] == ['apply', 'stage2_blueprint_review', '42', '--base']
+    assert argv[9] == base
     assert json.loads(input_path.read_text('utf-8')) == action.payload
 
 
@@ -690,634 +693,18 @@ def test_stage5_batch_manifest_save_failure_leaves_no_payload_tmp(
     assert not list(root.glob('*.tmp')), '保存失败不得残留含人工理由的临时字节'
 
 
-@pytest.mark.parametrize(
-    ('review_exit_code', 'review_outcome', 'failure_point'),
-    [
-        (0, 'ok', None),
-        (70, 'failed', None),
-        (70, None, 'context'),
-        (70, None, 'popen'),
-    ],
-)
-def test_stage2_prereview_uses_unopened_epoch_context_and_blueprint_closes_alone(
-        base, corpus, monkeypatch, review_exit_code, review_outcome,
-        failure_point):
-    """预审无节点写权；env/Popen 的 0-wire 失败都不扣预算。"""
-    ready = SimpleNamespace(
-        code_version='test-code-version', state='ready', action=None,
-        execution_token=SimpleNamespace(node='stage2.blueprint'))
-    stopped = SimpleNamespace(
-        code_version='test-code-version', state='blocked',
-        surface_seal='1' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on='test:stop-after-blueprint', action_sha256='2' * 64))
-    operator_reads = 0
 
-    def next_action(_base, _sid, *, code):
-        nonlocal operator_reads
-        assert code == 'test-code-version'
-        operator_reads += 1
-        return ready if operator_reads == 1 else stopped
 
-    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
-    monkeypatch.setattr(
-        agent, '_assess_delivery',
-        lambda *_args, **_kwargs: AgentDeliveryOutcome(
-            state='stopped', checked_at=1, reason='测试停点'))
-    monkeypatch.setattr(
-        agent.reviewer_tasks, 'build_task',
-        lambda *_args, **_kwargs: None)
 
-    source_sha256 = '3' * 64
-    main_text_sha256 = '4' * 64
-    task_box = {}
 
-    def build_prereview(
-            _base, _sid, _current, request_path, *, epoch_id):
-        task = agent.reviewer_tasks.Stage2PrereviewTask(
-            business_sha256='5' * 64,
-            workpack_sha256='6' * 64,
-            request_path=Path(request_path),
-            prompt='STAGE2 GLOBAL PREREVIEW',
-            input_template={},
-            source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            progress_sha256='7' * 64,
-            blocker_count=1)
-        task_box['task'] = task
-        task_box['epoch_id'] = epoch_id
-        return task
 
-    monkeypatch.setattr(
-        agent.reviewer_tasks, 'build_stage2_prereview_task', build_prereview)
-    prereview_documents = []
 
-    def load_prereview(task):
-        prereview_documents.append(json.loads(task.request_path.read_text('utf-8')))
-        return {'business_sha256': task.business_sha256}
 
-    monkeypatch.setattr(
-        agent.reviewer_tasks, 'load_stage2_prereview', load_prereview)
-    commander_calls = []
-    monkeypatch.setattr(
-        agent, 'append_commander_call',
-        lambda *_args, **kwargs: commander_calls.append(kwargs))
 
-    runner_stems = []
 
-    def run_step_argv(_base, _sid, _epoch, permit, *, stem):
-        assert permit.node == 'stage2.blueprint'
-        runner_stems.append(stem)
-        return [agent.sys.executable, '-c', 'raise SystemExit(0)']
 
-    monkeypatch.setattr(agent, '_run_step_argv', run_step_argv)
 
-    contexts = []
-    raw_admission_ids = []
-    claim_refusals = []
-    unexpected_claims = []
 
-    def spawn_prereview(invocation, env, log):
-        log.write(b'fake prereview\n')
-        raw_admission_ids.append(
-            env.get(commander_context.COMMANDER_ADMISSION_ID_ENV))
-        loaded = commander_context.load_from_environment(
-            base, '42', env=env)
-        assert loaded is not None
-        contexts.append(loaded)
-        try:
-            claim = admission.claim(
-                base, loaded.execution_id, '42', node='stage2.blueprint',
-                claim_sha256='8' * 64, claim_id='forbidden-prereview-claim')
-        except TerminalState as exc:
-            claim_refusals.append(str(exc))
-        else:
-            unexpected_claims.append(claim)
-            admission.release(base, claim)
-        return CommanderProcessResult(
-            exit_code=review_exit_code,
-            observation=CommanderObservation(
-                provider_session_id='provider-stage2-prereview',
-                actual_model=invocation.profile.model,
-                actual_effort=invocation.profile.reasoning_effort,
-                usage=None),
-            final_response=('{}' if review_exit_code == 0 else None),
-            failure_kind=(None if review_exit_code == 0 else 'unknown'))
-
-    def default_spawn(_run_id, *, on_registered=None):
-        assert on_registered is not None
-
-        def spawn(invocation, env, log):
-            # 生产 driver 在 Popen 成功后、写 stdin 前触发；测试在相同缝打开
-            # Blueprint gate，才能证明只读预审身份不能借用节点写权。
-            if failure_point == 'popen':
-                raise OSError('synthetic popen failure')
-            on_registered()
-            return spawn_prereview(invocation, env, log)
-
-        return spawn
-
-    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
-    if failure_point == 'context':
-        real_env_with_context = agent.env_with_context
-
-        def fail_prereview_context(*args, **kwargs):
-            admission_id = kwargs.get('admission_id')
-            if (isinstance(admission_id, str)
-                    and admission_id.endswith('-stage2-prereview')):
-                raise ValueError('synthetic prereview context failure')
-            return real_env_with_context(*args, **kwargs)
-
-        monkeypatch.setattr(agent, 'env_with_context', fail_prereview_context)
-
-    rec = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES)
-    assert agent.wait(rec.run_id, 10)
-
-    assert runner_stems == ['ready-stage2.blueprint']
-    prereview_id = commander_context.stage2_prereview_admission_id(
-        task_box['epoch_id'])
-    if failure_point in ('context', 'popen'):
-        assert contexts == []
-        assert raw_admission_ids == []
-        assert claim_refusals == []
-    else:
-        assert len(contexts) == 1
-        assert raw_admission_ids == [prereview_id]
-        assert contexts[0].admission_id == prereview_id
-        assert claim_refusals and '不存在' in claim_refusals[0]
-    assert unexpected_claims == []
-    assert admission.snapshot(base, prereview_id).opened is False
-
-    ledger_path = stage2_review_ledger.ledger_path(
-        base, '42', source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256)
-    log_text = agent.run_log_path(base, rec.run_id).read_text('utf-8')
-    if failure_point in ('context', 'popen'):
-        assert not ledger_path.exists()
-        expected_failure = (
-            'synthetic prereview context failure'
-            if failure_point == 'context' else 'synthetic popen failure')
-        assert expected_failure in log_text
-        assert commander_calls == []
-    else:
-        ledger = json.loads(ledger_path.read_text('utf-8'))
-        assert ledger['turns'][0]['purpose'] == 'prereview'
-        assert ledger['turns'][0]['outcome'] == review_outcome
-        assert ledger['turns'][0]['exit_code'] == review_exit_code
-        assert len(commander_calls) == 1
-        assert 'admission id 必须属于当前 epoch' not in log_text
-        if review_exit_code == 0:
-            assert prereview_documents == [{}]
-            assert not task_box['task'].request_path.exists(), (
-                'typed loader 已消费回答；epoch 关闭后不保留 scratch')
-
-
-@pytest.mark.parametrize('prereview_case', [
-    'nonpending',
-    'invalid_without_formal',
-    'invalid_with_old_formal',
-])
-def test_stage2_prereview_skip_executes_blueprint_without_commander(
-        base, corpus, monkeypatch, prereview_case) -> None:
-    """已评审 Global 或 INVALID 投影都只消费 ready Blueprint token。"""
-    if prereview_case == 'nonpending':
-        overview = SimpleNamespace(stages=[])
-    else:
-        formal_exists = prereview_case == 'invalid_with_old_formal'
-        overview = SimpleNamespace(stages=[SimpleNamespace(
-            stage='stage2',
-            artifacts=[
-                SimpleNamespace(
-                    rel=STAGE2_GLOBAL_GROUNDING,
-                    exists=formal_exists,
-                    readable=formal_exists,
-                    freshness=('fresh' if formal_exists else 'missing'),
-                    invalid=True,
-                ),
-                SimpleNamespace(
-                    rel=STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
-                    exists=True,
-                    readable=True,
-                    freshness='fresh',
-                    invalid=False,
-                ),
-            ],
-        )])
-    ready = SimpleNamespace(
-        code_version='test-code-version', state='ready', action=None,
-        surface_seal='1' * 64,
-        overview=overview,
-        execution_token=SimpleNamespace(node='stage2.blueprint'))
-    stopped = SimpleNamespace(
-        code_version='test-code-version', state='blocked',
-        surface_seal='2' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on='test:stop-after-blueprint', action_sha256='3' * 64))
-    operator_reads = 0
-
-    def next_action(_base, _sid, *, code):
-        nonlocal operator_reads
-        assert code == 'test-code-version'
-        operator_reads += 1
-        return ready if operator_reads == 1 else stopped
-
-    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
-    monkeypatch.setattr(
-        agent, '_assess_delivery',
-        lambda *_args, **_kwargs: AgentDeliveryOutcome(
-            state='stopped', checked_at=1, reason='测试停点'))
-    monkeypatch.setattr(
-        agent.reviewer_tasks, 'build_task',
-        lambda *_args, **_kwargs: None)
-
-    workpack_calls = []
-
-    def json_command(argv, **_kwargs):
-        workpack_calls.append(tuple(argv))
-        if prereview_case != 'nonpending':
-            raise AssertionError(
-                f'INVALID projection ready 不得读取 formal workpack：{argv}')
-        if 'stage2.blueprint' in argv:
-            raise agent.reviewer_tasks.ReviewerTaskError(
-                'stale Blueprint 不可读')
-        if '--emit-review-workpack' in argv:
-            return {
-                'kind': 'stage2-global-review-workpack-v4',
-                'items': [{
-                    'item_id': 'item-1',
-                    'current_state': 'PASS',
-                }],
-            }
-        raise AssertionError(f'非 pending Global 不得继续构包：{argv}')
-
-    monkeypatch.setattr(agent.reviewer_tasks, '_json_command', json_command)
-    runner_stems = []
-
-    def run_step_argv(_base, _sid, _epoch, permit, *, stem):
-        assert permit.node == 'stage2.blueprint'
-        runner_stems.append(stem)
-        return [agent.sys.executable, '-c', 'raise SystemExit(0)']
-
-    monkeypatch.setattr(agent, '_run_step_argv', run_step_argv)
-    monkeypatch.setattr(
-        agent, '_default_spawn',
-        lambda *_args, **_kwargs: pytest.fail(
-            '非 pending Global 不得启动预审 Commander'))
-    commander_calls = []
-    monkeypatch.setattr(
-        agent, 'append_commander_call',
-        lambda *_args, **kwargs: commander_calls.append(kwargs))
-
-    rec = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES)
-    assert agent.wait(rec.run_id, 10)
-
-    assert runner_stems == ['ready-stage2.blueprint']
-    if prereview_case == 'nonpending':
-        assert len(workpack_calls) == 1
-        assert 'stage2.global' in workpack_calls[0]
-        assert '--emit-review-workpack' in workpack_calls[0]
-    else:
-        assert workpack_calls == []
-    assert commander_calls == []
-    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
-    assert done.exit_code == 2
-
-
-def _install_stage2_prereview_replay_harness(
-        base, monkeypatch, *, action_exit_codes=(0,)):
-    """最小真实 prereview loader → live loader → action 的整条 Supervisor 链。"""
-    identity = {
-        'business_sha256': '5' * 64,
-        'workpack_sha256': '6' * 64,
-        'source_sha256': '3' * 64,
-        'main_text_sha256': '4' * 64,
-        'progress_sha256': '7' * 64,
-        'blocker_count': 1,
-    }
-    template = GlobalReviewDecisionSet.model_validate({
-        'actor': 'agent:novel-pipeline-operator', 'decisions': [],
-        'blocking_scope': {
-            'expected_source_sha256': identity['source_sha256'],
-            'expected_blocking_scope_sha256': '8' * 64,
-            'expected_workpack_sha256': identity['workpack_sha256'],
-            'expected_item_count': 1,
-            'reviewed_chapter_ordinals': [1],
-            'state': 'UNVER', 'reason': agent.reviewer_tasks._REASON,
-            'evidence': [],
-        },
-    }).model_dump(mode='json')
-    decision = copy.deepcopy(template)
-    decision['blocking_scope']['state'] = 'PASS'
-    decision['blocking_scope']['reason'] = '已逐章复核完整正文与全部 blocking 项'
-    response = {
-        'schema': agent.reviewer_tasks.STAGE2_PREREVIEW_SCHEMA,
-        'business_sha256': identity['business_sha256'],
-        'workpack_sha256': identity['workpack_sha256'],
-        'input_payload': decision,
-    }
-    from novel.orchestrator import stage2_scope_wire
-    canonical_response = response
-    response = {
-        'schema': stage2_scope_wire.WIRE_SCHEMA,
-        'expected_exact_request_sha256': stage2_scope_wire._sha({
-            **canonical_response, 'input_payload': template}),
-        'blocking_scope': {key: decision['blocking_scope'][key]
-                           for key in ('state', 'reason', 'evidence')},
-        'decisions': [],
-    }
-    ready = SimpleNamespace(
-        code_version='test-code-version', state='ready', action=None,
-        surface_seal='a' * 64,
-        execution_token=SimpleNamespace(node='stage2.blueprint'))
-    blocked = SimpleNamespace(
-        code_version='test-code-version', state='blocked',
-        surface_seal='b' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
-            action_sha256='c' * 64))
-    reads = []
-
-    def next_action(_base, _sid, *, code):
-        assert code == 'test-code-version'
-        reads.append(code)
-        return ready if len(reads) == 1 else blocked
-
-    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
-    stopped = AgentDeliveryOutcome(
-        state='stopped', checked_at=1, reason='Stage2 测试停点')
-    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
-
-    prereview_paths = []
-
-    def build_prereview(_base, _sid, _current, request_path, *, epoch_id):
-        del epoch_id
-        prereview_paths.append(Path(request_path))
-        return agent.reviewer_tasks.Stage2PrereviewTask(
-            request_path=Path(request_path), prompt='STAGE2 GLOBAL PREREVIEW',
-            input_template=copy.deepcopy(template), **identity)
-
-    monkeypatch.setattr(
-        agent.reviewer_tasks, 'build_stage2_prereview_task', build_prereview)
-
-    live_paths = []
-
-    def build_task(_base, _sid, current, request_path, *, epoch_id):
-        del epoch_id
-        live_paths.append(Path(request_path))
-        exact = agent.reviewer_tasks._request_wrapper(
-            current, agent.queue.WAITING_ON_STAGE2_REVIEW, {
-                'kind': 'node', 'node': 'stage2.global',
-                'flags': ['--review-decisions', '@reviewer-input'],
-                'input_payload': copy.deepcopy(template),
-            })
-        return agent.reviewer_tasks.ReviewerTask(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
-            surface_seal=current.surface_seal,
-            request_path=Path(request_path), prompt='STAGE2 LIVE REVIEW',
-            submission_options=({
-                'id': 'node:stage2.global.review',
-                'exact_request': exact,
-            },),
-            **identity)
-
-    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
-    blueprint_runs = []
-
-    def run_step_argv(_base, _sid, _epoch, permit, *, stem):
-        assert permit.node == 'stage2.blueprint'
-        blueprint_runs.append(stem)
-        return [agent.sys.executable, '-c', 'raise SystemExit(0)']
-
-    monkeypatch.setattr(agent, '_run_step_argv', run_step_argv)
-    invocations = []
-
-    def default_spawn(_run_id, *, on_registered=None):
-        def spawn(invocation, env, log):
-            del env, log
-            invocations.append(invocation)
-            assert on_registered is not None
-            on_registered()
-            return CommanderProcessResult(
-                exit_code=0,
-                observation=CommanderObservation(
-                    provider_session_id='provider-stage2-prereview-durable',
-                    actual_model=invocation.profile.model,
-                    actual_effort=invocation.profile.reasoning_effort,
-                    usage=None),
-                wire_evidence=True,
-                final_response=json.dumps(response, ensure_ascii=False))
-        return spawn
-
-    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
-    executions = []
-    remaining_codes = list(action_exit_codes)
-
-    def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
-        formal = decode_artifact(
-            STAGE2_GLOBAL_REVIEW_DECISIONS, action.input_payload).payload
-        executions.append(formal['blocking_scope']['state'])
-        code = remaining_codes.pop(0)
-        outcome = (
-            stopped if code in (0, 1, 2) else AgentDeliveryOutcome(
-                state='unknown', checked_at=2,
-                reason='Stage2 canonical 结论未知'))
-        return agent.SupervisorActionResult(
-            exit_code=code, outcome=outcome, continue_ready=False,
-            failure_detail=(None if code == 0 else 'synthetic action failure'))
-
-    monkeypatch.setattr(agent, '_execute_reviewer_node_action', execute)
-    return SimpleNamespace(
-        identity=identity, template=template, response=response,
-        canonical_response=canonical_response,
-        ready=ready, blocked=blocked, reads=reads,
-        prereview_paths=prereview_paths, live_paths=live_paths,
-        blueprint_runs=blueprint_runs, invocations=invocations,
-        executions=executions)
-
-
-def test_stage2_prereview_survives_pause_stop_and_new_parent_without_rebuy(
-        base, corpus, monkeypatch):
-    """Blueprint 后 pause/stop 清 scratch；新 parent 从未绑定记录零模型重放。"""
-    harness = _install_stage2_prereview_replay_harness(base, monkeypatch)
-    saved = threading.Event()
-    original_save = agent.uploads.save_stage2_prereview
-
-    def save_then_pause(base_, sid, record):
-        path = original_save(base_, sid, record)
-        agent.request_pause(base_, record.run_id)
-        saved.set()
-        return path
-
-    monkeypatch.setattr(agent.uploads, 'save_stage2_prereview', save_then_pause)
-    first = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert saved.wait(10)
-    deadline = time.time() + 10
-    first_live = next(
-        row for row in agent.records(base) if row.run_id == first.run_id)
-    while first_live.state != 'paused' and time.time() < deadline:
-        time.sleep(0.05)
-        first_live = next(
-            row for row in agent.records(base) if row.run_id == first.run_id)
-    assert first_live.state == 'paused'
-    assert harness.executions == []
-    [record_path] = _stage2_prereview_files(base)
-    [(loaded_path, record)] = agent.uploads.load_stage2_prereviews(base, '42')
-    assert loaded_path == record_path.resolve()
-    assert isinstance(record, Stage2PrereviewRecord)
-    assert record.reviewer_session_run_id
-    assert record.provider_response_sha256 == agent._reviewer_response_sha256(
-        json.dumps(harness.response, ensure_ascii=False))
-    assert 'provider_session_id' not in record.model_dump(mode='json')
-
-    first_done = agent.stop(base, first.run_id)
-    assert first_done.ended is not None
-    assert not harness.prereview_paths[0].parent.exists()
-    assert record_path.is_file()
-    first_events = [
-        row for row in agent.read_events(base) if row.run_id == first.run_id]
-    [closed] = [row for row in first_events if row.kind == 'epoch_closed']
-    assert closed.provider_session_id is None, '预审 provider 身份不得传给 parent 续会'
-
-    monkeypatch.setattr(agent.uploads, 'save_stage2_prereview', original_save)
-    replayed = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(replayed.run_id, 10)
-
-    assert harness.blueprint_runs == ['ready-stage2.blueprint']
-    assert harness.executions == ['PASS']
-    assert len(harness.invocations) == 1
-    assert harness.invocations[0].resume_provider_session_id is None
-    assert _stage2_prereview_files(base) == []
-    assert _reviewer_action_files(base) == []
-    assert '[stage2-prereview-replay]' in agent.run_log_path(
-        base, replayed.run_id).read_text('utf-8')
-    [ledger] = stage2_review_ledger.list_ledgers(base, '42')
-    assert len(ledger['turns']) == 1
-    assert ledger['turns'][0]['outcome'] == 'ok'
-
-
-def test_stage2_prereview_record_repairs_started_ledger_after_finish_crash(
-        base, corpus, monkeypatch):
-    """record-save→finish 崩溃先 rc70；新 parent 以三账证据补 finish 再 bind。"""
-    harness = _install_stage2_prereview_replay_harness(base, monkeypatch)
-    original_finish = agent.stage2_review_ledger.finish
-    finish_calls = 0
-
-    def fail_first_finish(*args, **kwargs):
-        nonlocal finish_calls
-        finish_calls += 1
-        if finish_calls == 1:
-            raise agent.stage2_review_ledger.Stage2ReviewBudgetRefused(
-                'synthetic record-to-finish crash')
-        return original_finish(*args, **kwargs)
-
-    monkeypatch.setattr(agent.stage2_review_ledger, 'finish', fail_first_finish)
-    crashed = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(crashed.run_id, 10)
-    crashed_done = next(
-        row for row in agent.records(base) if row.run_id == crashed.run_id)
-    assert crashed_done.exit_code == 70
-    assert harness.executions == []
-    [record_path] = _stage2_prereview_files(base)
-    [before] = stage2_review_ledger.list_ledgers(base, '42')
-    assert before['turns'][0]['outcome'] == 'started'
-
-    recovered = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(recovered.run_id, 10)
-
-    assert finish_calls == 2
-    assert harness.executions == ['PASS']
-    assert len(harness.invocations) == 1
-    assert not record_path.exists()
-    [after] = stage2_review_ledger.list_ledgers(base, '42')
-    assert after['turns'][0]['outcome'] == 'ok'
-    assert after['turns'][0]['exit_code'] == 0
-
-
-def test_stage2_prereview_action_record_wins_conversion_delete_crash(
-        base, corpus, monkeypatch):
-    """action 已 durable 而 prereview 未删时，重启只消费后态且不再组装/买席。"""
-    harness = _install_stage2_prereview_replay_harness(base, monkeypatch)
-    original_discard = agent.uploads.discard_edit_plan
-    failed = False
-
-    def fail_conversion_delete(base_, path):
-        nonlocal failed
-        candidate = Path(path)
-        if (not failed and candidate.name.startswith('stage2-prereview-')
-                and _reviewer_action_files(base_)):
-            failed = True
-            raise agent.NovelError('synthetic action-to-prereview delete crash')
-        return original_discard(base_, path)
-
-    monkeypatch.setattr(agent.uploads, 'discard_edit_plan', fail_conversion_delete)
-    crashed = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(crashed.run_id, 10)
-    assert harness.executions == []
-    assert len(_stage2_prereview_files(base)) == 1
-    assert len(_reviewer_action_files(base)) == 1
-
-    monkeypatch.setattr(agent.uploads, 'discard_edit_plan', original_discard)
-    recovered = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(recovered.run_id, 10)
-
-    assert harness.executions == ['PASS']
-    assert len(harness.invocations) == 1
-    assert _stage2_prereview_files(base) == []
-    assert _reviewer_action_files(base) == []
-
-
-def test_stage2_prereview_ledger_identity_mismatch_closes_without_wire(
-        base, corpus, monkeypatch):
-    """记录与原席位 business 不同：保留证据、0 action、0 Commander。"""
-    harness = _install_stage2_prereview_replay_harness(base, monkeypatch)
-    monkeypatch.setattr(
-        agent.operator, 'next_action_at_code',
-        lambda _base, _sid, *, code: harness.blocked)
-    old_run = '1700000000-abcdef12'
-    old_session = '1700000001-abcdef12'
-    stage2_review_ledger.reserve(
-        base, '42', source_sha256=harness.identity['source_sha256'],
-        main_text_sha256=harness.identity['main_text_sha256'],
-        business_sha256='0' * 64,
-        workpack_sha256=harness.identity['workpack_sha256'],
-        progress_sha256=harness.identity['progress_sha256'],
-        blocker_count=harness.identity['blocker_count'], purpose='prereview',
-        parent_run_id=old_run, epoch_id='old-epoch',
-        session_run_id=old_session)
-    record_path = agent.uploads.save_stage2_prereview(
-        base, '42', Stage2PrereviewRecord(
-            sid='42', run_id=old_run, epoch_id='old-epoch',
-            reviewer_session_run_id=old_session,
-            provider_response_sha256='9' * 64,
-            input_payload=copy.deepcopy(harness.canonical_response['input_payload']),
-            recorded_at=1, **harness.identity))
-
-    rec = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(rec.run_id, 10)
-
-    done = next(row for row in agent.records(base) if row.run_id == rec.run_id)
-    assert done.exit_code == 70
-    assert record_path.is_file()
-    assert harness.executions == []
-    assert harness.invocations == []
 
 
 def test_prompt_forbids_direct_edits_of_formal_artifacts(base, book):
@@ -1916,7 +1303,7 @@ def test_stage4_permit_code_drift_rolls_and_freshens_new_exact_action(
 
 def test_non_stage2_invalid_reviewer_request_and_exit2_resume_same_commander_session(
         base, corpus, monkeypatch):
-    """非 Stage2 reviewer 仍可紧凑纠错；两轮硬预算只属于 global。"""
+    """格式纠错与 producer 返工在同一角色的四次内容预算内连续进行。"""
     current = SimpleNamespace(
         state='blocked', code_version='test-code-version',
         surface_seal='c' * 64, execution_token=None,
@@ -2022,14 +1409,12 @@ def test_non_stage2_invalid_reviewer_request_and_exit2_resume_same_commander_ses
     assert [turn.turn_index for turn in session.turns] == [1, 2, 3]
     assert session.end is not None, '席位在动作落盘后闭合'
     assert session.end.process_state == 'ok'
-    # 同一 binding 是一席 fresh logical session；纠错按 (sid, blocker, business) 持久记账。
-    [ledger] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert ledger['waiting_on'] == 'stage6.approve'
-    assert [row['purpose'] for row in ledger['turns']] == [
-        'review', 'correction', 'correction']
-    assert {row['session_run_id'] for row in ledger['turns']} == {
-        session.session_run_id}
-    assert all(row['outcome'] == 'ok' for row in ledger['turns'])
+    # 格式纠错与 producer 返工合并占用同一角色的三次内容请求。
+    node, scope = agent.commander_work_unit('stage6.approve')
+    ledger = WorkUnitBudget(base, '42', node, 'commander', scope)._read()
+    assert len(ledger.turns) == 3
+    assert {row.session_run_id for row in ledger.turns} == {session.session_run_id}
+    assert [row.state for row in ledger.turns] == ['failed', 'failed', 'adopted']
 
 
 def test_reviewer_workpack_stopped_reaches_agent_outcome_without_seat_or_wire(
@@ -2162,21 +1547,22 @@ def test_reviewer_stop_is_terminal_without_canonical_action(
     assert done.outcome is not None and done.outcome.state == 'stopped'
     assert stop_reason in done.outcome.reason
     assert waiting_on in done.outcome.reason
-    [seat] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert [row['outcome'] for row in seat['turns']] == ['ok']
-    assert seat['pending_correction'] is False
+    from contracts.invariants import commander_work_unit
+    node, scope = commander_work_unit(waiting_on)
+    budget = WorkUnitBudget(base, '42', node, 'commander', scope)
+    assert budget.used == 1 and budget.latest_turn().state == 'adopted'
+    assert budget.latest_turn().response_sha256
+    assert agent.reviewer_seat_ledger.list_ledgers(base, '42') == []
 
 
 def _stage4_review_harness(monkeypatch, seals):
     """operator next 依次给出不同 surface 的 Stage4A 审阅 blocker。"""
-    states = iter(seals)
-    box = {'current': None}
+    states = list(dict.fromkeys(seals))
+    box = {'current': None, 'applied': 0}
 
     def next_action(_base, _sid, *, code):
         del code
-        try:
-            seal = next(states)
-        except StopIteration:
+        if box['applied'] == len(states):
             # 两次审阅之后停在一个未登记 blocker：关闭式结束，不触发真实 finalizer。
             return SimpleNamespace(
                 state='blocked', code_version='test-code-version',
@@ -2184,6 +1570,7 @@ def _stage4_review_harness(monkeypatch, seals):
                 action=SimpleNamespace(
                     waiting_on='manual-unregistered-blocker',
                     action_sha256='9' * 64))
+        seal = states[box['applied']]
         box['current'] = SimpleNamespace(
             state='blocked', code_version='test-code-version',
             surface_seal=seal, execution_token=None,
@@ -2214,16 +1601,16 @@ def _stage4_review_harness(monkeypatch, seals):
         return task
 
     monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
-    monkeypatch.setattr(
-        agent, '_reviewer_approval_argv',
-        lambda _base, _sid, _epoch, _action:
-        [agent.sys.executable, '-c', 'raise SystemExit(0)'])
+    def approval_argv(_base, _sid, _epoch, _action):
+        box['applied'] += 1
+        return [agent.sys.executable, '-c', 'raise SystemExit(0)']
+    monkeypatch.setattr(agent, '_reviewer_approval_argv', approval_argv)
     return task_box
 
 
-def test_stage4_re_review_after_surface_change_opens_a_new_seat(
+def test_stage4_re_review_after_surface_change_continues_same_work_unit(
         base, corpus, monkeypatch):
-    """返修落盘后 surface 变化 ⇒ 新 binding、新 fresh session；不续用旧席。"""
+    """返修后换当前工作包，Commander 延续同一工作单元与预算。"""
     # 真实 operator next 在 typed 决定落盘前保持同一 surface：审阅轮与随后的
     # 执行轮各读一次同一 seal；返修落盘后才换成新 seal。
     task_box = _stage4_review_harness(
@@ -2241,12 +1628,12 @@ def test_stage4_re_review_after_surface_change_opens_a_new_seat(
             return CommanderProcessResult(
                 exit_code=0,
                 observation=CommanderObservation(
-                    provider_session_id=f'provider-seat-{len(invocations)}',
+                    provider_session_id='provider-stage4-continuous',
                     actual_model=invocation.profile.model,
                     actual_effort=invocation.profile.reasoning_effort,
                     usage=None),
                 final_response=json.dumps(
-                    _design_review_response(task, f'第 {len(invocations)} 次独立审阅'),
+                    _design_review_response(task, f'第 {len(invocations)} 次连续审阅'),
                     ensure_ascii=False))
         return spawn
 
@@ -2257,22 +1644,21 @@ def test_stage4_re_review_after_surface_change_opens_a_new_seat(
     assert agent.wait(rec.run_id, 10)
 
     assert len(invocations) == 2
-    assert [row.resume_provider_session_id for row in invocations] == [None, None]
+    assert [row.resume_provider_session_id for row in invocations] == [
+        None, 'provider-stage4-continuous']
     assert invocations[0].stdin_text != invocations[1].stdin_text
     [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
     assert done.exit_code == 2 and '没有登记' in (done.outcome.reason if done.outcome else '')
     sessions = agent_session_audit.fold(agent_session_audit.read_events(base))
-    assert len(sessions) == 2, '两个 surface 各一席，不是同一 provider session 续会'
+    assert len(sessions) == 1, '候选变化不重置工作单元或强制独立复审'
     assert all(session.end is not None for session in sessions)
-    assert sorted(
-        session.provider_session_ids[0] for session in sessions) == [
-        'provider-seat-1', 'provider-seat-2']
-    ledgers = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert sorted(row['business_sha256'] for row in ledgers) == ['1' * 64, '2' * 64]
-    assert all(row['turns'][0]['purpose'] == 'review' for row in ledgers)
+    assert sessions[0].provider_session_ids == ('provider-stage4-continuous',)
+    budget = WorkUnitBudget(base, '42', 'stage4.design', 'commander', 'design')
+    assert budget.used == 2 and budget.remaining == 2
+    assert agent.reviewer_seat_ledger.list_ledgers(base, '42') == []
 
 
-def test_reviewer_seat_ledger_persists_the_correction_cap_across_runs(
+def test_reviewer_work_unit_persists_the_correction_cap_across_runs(
         base, corpus, monkeypatch):
     """上一个 run 已留 pending：新 run 在 Popen 前恢复拒因，不得再首审。"""
     current = SimpleNamespace(
@@ -2302,22 +1688,16 @@ def test_reviewer_seat_ledger_persists_the_correction_cap_across_runs(
         agent.reviewer_tasks, 'load_action',
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             agent.reviewer_tasks.ReviewerTaskError('typed 请求仍不合法')))
-    # 上一个 run 留下的账：首审 + 两次纠错都已用完，最后拒因仍 durable。
-    for index, purpose in enumerate(('review', 'correction', 'correction')):
-        agent.reviewer_seat_ledger.reserve(
-            base, '42', waiting_on='stage6.approve', business_sha256='e' * 64,
-            purpose=purpose, session_run_id='previous-run-seat',
-            turn_id=f'previous-{index}', parent_run_id='previous-parent',
-            epoch_id='previous-epoch', now=index)
-        agent.reviewer_seat_ledger.finish(
-            base, '42', waiting_on='stage6.approve', business_sha256='e' * 64,
-            turn_id=f'previous-{index}', exit_code=0, now=index * 3 + 1)
-        agent.reviewer_seat_ledger.mark_pending_correction(
-            base, '42', waiting_on='stage6.approve', business_sha256='e' * 64,
-            session_run_id='previous-run-seat',
-            provider_session_id='previous-provider-seat',
-            request_sha256=f'{index + 1:x}' * 64,
-            reason=f'历史第 {index + 1} 轮 typed 拒因', now=index * 3 + 2)
+    # 上一个 run 的首审和三次纠错共四次；最后拒因与原回答保留。
+    budget = WorkUnitBudget(base, '42', 'stage6.approve', 'commander', 'hook')
+    for index in range(4):
+        turn = budget.reserve(f'{index + 1:x}' * 64, run_id='previous-parent',
+                              session_run_id='previous-run-session')
+        budget.save_response(turn.turn_id, {'final_response': str(index)})
+        budget.save_feedback(turn.turn_id, {
+            'business_sha256': 'e' * 64, 'waiting_on': 'stage6.approve',
+            'response_sha256': f'{index + 1:x}' * 64,
+            'reason': f'历史第 {index + 1} 轮 typed 拒因'})
     invocations = []
 
     def default_spawn(_run_id, *, on_registered=None):
@@ -2335,12 +1715,10 @@ def test_reviewer_seat_ledger_persists_the_correction_cap_across_runs(
     [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
     assert done.exit_code == 2
     assert done.outcome is not None
-    assert '历史第 3 轮 typed 拒因' in done.outcome.reason
-    assert '不返还' in done.outcome.reason or '不得' in done.outcome.reason
-    [ledger] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert [row['purpose'] for row in ledger['turns']] == [
-        'review', 'correction', 'correction']
-    assert ledger['pending_correction'] is True
+    assert '预算' in done.outcome.reason and '用尽' in done.outcome.reason
+    assert budget.used == 4
+    assert budget.latest_feedback()['reason'] == '历史第 4 轮 typed 拒因'
+    assert agent.reviewer_seat_ledger.list_ledgers(base, '42') == []
     sessions = agent_session_audit.fold(agent_session_audit.read_events(base))
     assert sessions == []
 
@@ -2368,10 +1746,9 @@ def test_initial_reviewer_prewire_refusal_does_not_write_an_orphan_attempt(
             business_sha256='e' * 64, request_path=Path(request_path),
             prompt='STAGE0 WORKPACK', submission_options=()))
     monkeypatch.setattr(
-        agent.reviewer_seat_ledger, 'reserve',
+        WorkUnitBudget, 'reserve',
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            agent.reviewer_seat_ledger.ReviewerSeatRefused(
-                '首席位账不兼容，必须先 reconcile')))
+            WorkUnitRefused('内容账不兼容，必须先 reconcile')))
     invocations = []
 
     def default_spawn(_run_id, *, on_registered=None):
@@ -2492,704 +1869,43 @@ def test_reviewer_identity_drift_after_workpack_before_wire_uses_zero_seat(
     assert 'manual-after-identity-roll' in done.outcome.reason
 
 
-def test_stage2_exit2_corrects_before_invalid_surface_can_replace_reviewer(
-        base, corpus, monkeypatch):
-    """HARD 留 INVALID 后重读现役 correction 包，不冻结旧审阅面。"""
-    review_current = SimpleNamespace(
-        state='blocked', code_version='test-code-version',
-        surface_seal='c' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
-            action_sha256='d' * 64,
-        ),
-    )
-    correction_current = SimpleNamespace(
-        state='blocked', code_version='test-code-version',
-        surface_seal='1' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
-            action_sha256='2' * 64,
-        ),
-    )
-    next_calls = 0
-
-    def next_action(_base, _sid, *, code):
-        nonlocal next_calls
-        assert code == 'test-code-version'
-        next_calls += 1
-        # fresh Commander 结束后，Supervisor 还会先重读同一 live blocker，
-        # 再消费刚持久化的 action；只有 canonical action 真正 exit 2 后
-        # producer 才把状态切到 correction。
-        return review_current if next_calls <= 2 else correction_current
-
-    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
-    blocked = AgentDeliveryOutcome(
-        state='stopped', reason='Stage2 仍待审阅', checked_at=1)
-    ready = AgentDeliveryOutcome(
-        state='ready', reason='Stage2 纠错已落盘', checked_at=2)
-    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: blocked)
-    task_box = {}
-
-    built_waiting_on = []
-
-    def build_task(_base, _sid, current, request_path, *, epoch_id):
-        del epoch_id
-        built_waiting_on.append(current.action.waiting_on)
-        task = agent.reviewer_tasks.ReviewerTask(
-            waiting_on=current.action.waiting_on,
-            surface_seal=current.surface_seal,
-            business_sha256='e' * 64,
-            request_path=Path(request_path),
-            prompt='STAGE2 IMMUTABLE REVIEW WORKPACK',
-            submission_options=(),
-            workpack_sha256='a' * 64,
-            source_sha256='b' * 64,
-            main_text_sha256='c' * 64,
-            progress_sha256='f' * 64,
-            blocker_count=2,
-        )
-        task_box['task'] = task
-        return task
-
-    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
-    actions = (
-        agent.reviewer_tasks.ReviewerNodeAction(
-            kind='node', node='stage2.global',
-            flags=('--apply-edit', 'first')),
-        agent.reviewer_tasks.ReviewerNodeAction(
-            kind='node', node='stage2.global',
-            flags=('--apply-edit', 'corrected')),
-    )
-    loaded = 0
-
-    def load_action(_path, current, *, submission_options):
-        nonlocal loaded
-        assert current is (review_current, correction_current)[loaded]
-        assert submission_options == ()
-        action = actions[loaded]
-        loaded += 1
-        return action
-
-    monkeypatch.setattr(agent.reviewer_tasks, 'load_action', load_action)
-    executed = 0
-
-    def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
-        nonlocal executed
-        assert action is actions[executed]
-        executed += 1
-        if executed == 1:
-            return agent.SupervisorActionResult(
-                exit_code=2, outcome=blocked, continue_ready=False,
-                failure_detail=(
-                    '✗ 人工 Stage2 订正被落盘闸门拦下：'
-                    "['role_repeats_name']"))
+def test_stage2_exit2_corrects_before_invalid_surface_can_replace_reviewer(base, corpus, monkeypatch):
+    """生产拒绝后沿同一 Global 工作单元读取新包并持续订正。"""
+    progress, calls, _ = _stage2_work_unit_harness(base, monkeypatch, mode='accept')
+    initial_next = agent.operator.next_action_at_code
+    seen = []
+    executed = []
+    def current(*args, **kwargs):
+        snapshot = initial_next(*args, **kwargs)
+        if executed:
+            snapshot.action.waiting_on = queue.WAITING_ON_STAGE2_EDIT_CORRECTION
+        seen.append(snapshot.action.waiting_on)
+        return snapshot
+    monkeypatch.setattr(agent.operator, 'next_action_at_code', current)
+    def execute(*args, **kwargs):
+        executed.append(args[2])
         return agent.SupervisorActionResult(
-            exit_code=0, outcome=ready, continue_ready=False)
-
+            exit_code=2 if len(executed) == 1 else 0,
+            outcome=AgentDeliveryOutcome(state='stopped', reason='合成生产校验', checked_at=1),
+            continue_ready=False, failure_detail='role_repeats_name' if len(executed) == 1 else None)
     monkeypatch.setattr(agent, '_execute_reviewer_node_action', execute)
-    invocations = []
-
-    def default_spawn(_run_id, *, on_registered=None):
-        def spawn(invocation, env, log):
-            del env, log
-            invocations.append(invocation)
-            assert on_registered is not None
-            on_registered()
-            task = task_box['task']
-            task.request_path.parent.mkdir(parents=True, exist_ok=True)
-            task.request_path.write_text(
-                json.dumps({'commander_turn': len(invocations)}),
-                encoding='utf-8')
-            return CommanderProcessResult(
-                exit_code=0,
-                observation=CommanderObservation(
-                    provider_session_id=f'provider-stage2-{len(invocations)}',
-                    actual_model=invocation.profile.model,
-                    actual_effort=invocation.profile.reasoning_effort,
-                    usage=None))
-        return spawn
-
-    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
-    rec = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(rec.run_id, 10)
-
-    assert next_calls == 4, (
-        'fresh action 执行前重验一次原 blocker；canonical exit 2 后还须先读'
-        ' correction 分类，再由 planner 以现役 workpack 进入新席')
-    assert loaded == executed == len(invocations) == 2
-    assert built_waiting_on == [
-        agent.queue.WAITING_ON_STAGE2_REVIEW,
-        agent.queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
-    ]
-    assert [row.resume_provider_session_id for row in invocations] == [
-        None, None]
-    assert 'role_repeats_name' in invocations[1].stdin_text
-    assert 'STAGE2 IMMUTABLE REVIEW WORKPACK' in invocations[1].stdin_text
-    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
-    assert done.exit_code == 0
+    run = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
+    assert agent.wait(run.run_id, 15)
+    assert len(executed) == len(calls) == 2
+    assert queue.WAITING_ON_STAGE2_EDIT_CORRECTION in seen
+    assert [call.resume_provider_session_id for call in calls] == [None, 'provider-global']
+    assert 'role_repeats_name' in calls[1].stdin_text
+    assert _stage2_commander_unit(base).used == 2
 
 
-def test_stage2_global_stops_after_three_fresh_commander_turns(
-        base, corpus, monkeypatch):
-    """即使 typed 输出持续坏，也只允许三次新的真实模型调用。"""
-    current = SimpleNamespace(
-        state='blocked', code_version='test-code-version',
-        surface_seal='c' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
-            action_sha256='d' * 64,
-        ),
-    )
-    monkeypatch.setattr(
-        agent.operator, 'next_action_at_code',
-        lambda _base, _sid, *, code: current)
-    outcome = AgentDeliveryOutcome(
-        state='stopped', reason='Stage2 仍待审阅', checked_at=1)
-    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: outcome)
-    task_box = {}
-
-    def build_task(_base, _sid, _current, request_path, *, epoch_id):
-        del epoch_id
-        task = agent.reviewer_tasks.ReviewerTask(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
-            surface_seal=current.surface_seal,
-            business_sha256='e' * 64,
-            request_path=Path(request_path),
-            prompt='STAGE2 FULL REVIEW',
-            submission_options=(),
-            workpack_sha256='a' * 64,
-            source_sha256='b' * 64,
-            main_text_sha256='c' * 64,
-            progress_sha256='f' * 64,
-            blocker_count=3,
-        )
-        task_box['task'] = task
-        return task
-
-    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
-    loaded = 0
-
-    def load_action(_path, _current, *, submission_options):
-        nonlocal loaded
-        assert submission_options == ()
-        loaded += 1
-        raise agent.reviewer_tasks.ReviewerTaskError(
-            f'第 {loaded} 次 typed 请求仍不合法')
-
-    monkeypatch.setattr(agent.reviewer_tasks, 'load_action', load_action)
-    invocations = []
-
-    def default_spawn(_run_id, *, on_registered=None):
-        def spawn(invocation, env, log):
-            del env, log
-            invocations.append(invocation)
-            assert on_registered is not None
-            on_registered()
-            task = task_box['task']
-            task.request_path.parent.mkdir(parents=True, exist_ok=True)
-            task.request_path.write_text(
-                json.dumps({'commander_turn': len(invocations)}),
-                encoding='utf-8')
-            return CommanderProcessResult(
-                exit_code=0,
-                observation=CommanderObservation(
-                    provider_session_id=f'provider-stage2-{len(invocations)}',
-                    actual_model=invocation.profile.model,
-                    actual_effort=invocation.profile.reasoning_effort,
-                    usage=None))
-        return spawn
-
-    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
-    rec = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(rec.run_id, 10)
-
-    assert loaded == 3
-    assert len(invocations) == 3
-    assert [row.resume_provider_session_id for row in invocations] == [
-        None, None, None]
-    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
-    assert done.exit_code == 2
-    assert done.outcome is not None
-    assert '连续纠正后仍未闭合' in done.outcome.reason
-    sessions = agent_session_audit.fold(agent_session_audit.read_events(base))
-    assert len(sessions) == 3
-    assert all([turn.turn_index for turn in session.turns] == [1]
-               for session in sessions)
 
 
-def test_durable_stage2_correction_uses_only_the_remaining_commander_turn(
-        base, corpus, monkeypatch):
-    """重启从 reviewed-edit INVALID 恢复时，持久账只发放第三格。"""
-    source_sha256 = 'a' * 64
-    main_text_sha256 = 'b' * 64
-    workpack_sha256 = 'c' * 64
-    for ordinal in (1, 2):
-        session_run_id = f'prior-stage2-session-{ordinal}'
-        stage2_review_ledger.reserve(
-            base, '42', source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            business_sha256='e' * 64,
-            workpack_sha256=workpack_sha256,
-            progress_sha256=str(ordinal) * 64,
-            blocker_count=1, purpose='review',
-            parent_run_id=f'prior-run-{ordinal}', epoch_id='prior-epoch',
-            session_run_id=session_run_id, now=ordinal)
-        stage2_review_ledger.finish(
-            base, '42', source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            session_run_id=session_run_id, exit_code=0, now=ordinal + 10)
-    current = SimpleNamespace(
-        state='blocked', code_version='test-code-version',
-        surface_seal='c' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
-            action_sha256='d' * 64,
-        ),
-    )
-    monkeypatch.setattr(
-        agent.operator, 'next_action_at_code',
-        lambda _base, _sid, *, code: current)
-    stopped = AgentDeliveryOutcome(
-        state='stopped', reason='Stage2 最终纠正仍被拒绝', checked_at=1)
-    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
-    task_box = {}
-
-    def build_task(_base, _sid, _current, request_path, *, epoch_id):
-        del epoch_id
-        task = agent.reviewer_tasks.ReviewerTask(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
-            surface_seal=current.surface_seal,
-            business_sha256='e' * 64,
-            request_path=Path(request_path),
-            prompt='STAGE2 FINAL DURABLE CORRECTION',
-            submission_options=(),
-            workpack_sha256=workpack_sha256,
-            source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            progress_sha256='3' * 64,
-            blocker_count=1,
-        )
-        task_box['task'] = task
-        return task
-
-    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
-    action = agent.reviewer_tasks.ReviewerNodeAction(
-        kind='node', node='stage2.global',
-        flags=('--apply-edit', 'final-correction'))
-    monkeypatch.setattr(
-        agent.reviewer_tasks, 'load_action',
-        lambda _path, _current, *, submission_options: action)
-    executed = 0
-
-    def execute(_base, _sid, got, _run_token, *, reviewer_action_record_path=None):
-        nonlocal executed
-        assert got is action
-        executed += 1
-        return agent.SupervisorActionResult(
-            exit_code=2, outcome=stopped, continue_ready=False,
-            failure_detail="✗ 仍命中 ['role_repeats_name']")
-
-    monkeypatch.setattr(agent, '_execute_reviewer_node_action', execute)
-    invocations = []
-
-    def default_spawn(_run_id, *, on_registered=None):
-        def spawn(invocation, env, log):
-            del env, log
-            invocations.append(invocation)
-            assert on_registered is not None
-            on_registered()
-            task = task_box['task']
-            task.request_path.parent.mkdir(parents=True, exist_ok=True)
-            task.request_path.write_text(
-                json.dumps({'commander_turn': 1}), encoding='utf-8')
-            return CommanderProcessResult(
-                exit_code=0,
-                observation=CommanderObservation(
-                    provider_session_id='provider-stage2-final',
-                    actual_model=invocation.profile.model,
-                    actual_effort=invocation.profile.reasoning_effort,
-                    usage=None))
-        return spawn
-
-    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
-    rec = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(rec.run_id, 10)
-
-    assert executed == 1
-    assert len(invocations) == 1
-    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
-    assert done.exit_code == 2
-    assert done.outcome is not None
-    assert '持久预算已用尽' in done.outcome.reason
-    pending = stage2_review_ledger.pending_rejection(
-        base, '42', source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        business_sha256='e' * 64, workpack_sha256=workpack_sha256)
-    assert pending is not None
-    assert pending.turn.ordinal == 3
-    assert pending.rejection.kind == 'canonical_action'
-    assert "role_repeats_name" in pending.rejection.reason
 
 
-def test_stage2_third_seat_typed_rejection_is_persisted_without_fourth_spawn(
-        base, corpus, monkeypatch):
-    """真实纵切：第三席 GlobalEdit loader 拒绝后，第四终审席不得被 correction 撞掉。"""
-    source_sha256 = '1' * 64
-    main_text_sha256 = '2' * 64
-    business_sha256 = '3' * 64
-    workpack_sha256 = '4' * 64
-    for ordinal, purpose, blockers in (
-            (1, 'prereview', 99), (2, 'correction', 80)):
-        session_run_id = f'prior-batch-session-{ordinal}'
-        stage2_review_ledger.reserve(
-            base, '42', source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            business_sha256=business_sha256,
-            workpack_sha256=workpack_sha256,
-            progress_sha256=str(ordinal) * 64,
-            blocker_count=blockers, purpose=purpose,
-            parent_run_id=f'prior-batch-parent-{ordinal}',
-            epoch_id='prior-batch-epoch', session_run_id=session_run_id,
-            now=ordinal)
-        stage2_review_ledger.finish(
-            base, '42', source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            session_run_id=session_run_id, exit_code=0, now=ordinal + 10)
-
-    current = SimpleNamespace(
-        state='blocked', code_version='test-code-version',
-        surface_seal='5' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
-            action_sha256='6' * 64))
-    monkeypatch.setattr(
-        agent.operator, 'next_action_at_code',
-        lambda _base, _sid, *, code: current)
-    stopped = AgentDeliveryOutcome(
-        state='stopped', reason='Stage2 仍待审阅', checked_at=1)
-    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
-    task_box = {}
-
-    def build_task(_base, _sid, _current, request_path, *, epoch_id):
-        del epoch_id
-        exact_payload = GlobalEdit.model_validate({
-            'characters': [{
-                'char_id': 'char_001',
-                'name_distinctiveness': 'high',
-            }],
-            'post_edit_review': {
-                'actor': 'agent:novel-pipeline-operator',
-                'expected_source_sha256': source_sha256,
-                'expected_workpack_sha256': workpack_sha256,
-                'reviewed_chapter_ordinals': [1],
-                'default_state': 'PASS',
-                'reason': '已完整复核本轮修改及仍存活旧主体',
-                'quarantine_groups': [],
-                'review_scope': [{
-                    'item_id': 'item-1',
-                    'expected_subject_sha256': '9' * 64,
-                }],
-                'decisions': [],
-            },
-        }).model_dump(mode='json', by_alias=True, exclude_unset=True)
-        exact_request = {
-            'schema': agent.reviewer_tasks.REQUEST_SCHEMA,
-            'surface_seal': current.surface_seal,
-            'waiting_on': agent.queue.WAITING_ON_STAGE2_REVIEW,
-            'action': {
-                'kind': 'node', 'node': 'stage2.global',
-                'flags': ['--apply-edit', '@reviewer-input'],
-                'input_payload': exact_payload,
-            },
-        }
-        rejected_request = copy.deepcopy(exact_request)
-        rejected_request['action']['input_payload']['post_edit_review'][
-            'decisions'] = [{
-                'item_id': 'item-1',
-                'expected_subject_sha256': '9' * 64,
-                'state': 'PASS',
-                'reason': '已复核旧主体在本次修改后仍成立',
-                # 真实故障：76 行都漏了这个必填的 evidence: []。
-            }]
-        task = agent.reviewer_tasks.ReviewerTask(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
-            surface_seal=current.surface_seal,
-            business_sha256=business_sha256,
-            request_path=Path(request_path),
-            prompt='STAGE2 INCREMENTAL GLOBAL EDIT WORKPACK',
-            submission_options=({
-                'id': 'node:stage2.global.apply-edit',
-                'exact_request': exact_request,
-            },),
-            workpack_sha256=workpack_sha256,
-            source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            progress_sha256='7' * 64,
-            blocker_count=76)
-        task_box['task'] = task
-        task_box['rejected_request'] = rejected_request
-        return task
-
-    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
-    rejection_location = 'post_edit_review.decisions.0.evidence:missing'
-    invocations = []
-
-    def default_spawn(_run_id, *, on_registered=None):
-        def spawn(invocation, env, log):
-            del env, log
-            invocations.append(invocation)
-            assert on_registered is not None
-            on_registered()
-            task = task_box['task']
-            task.request_path.parent.mkdir(parents=True, exist_ok=True)
-            task.request_path.write_text(
-                json.dumps(task_box['rejected_request'], ensure_ascii=False),
-                encoding='utf-8')
-            return CommanderProcessResult(
-                exit_code=0,
-                observation=CommanderObservation(
-                    provider_session_id=f'provider-third-{len(invocations)}',
-                    actual_model=invocation.profile.model,
-                    actual_effort=invocation.profile.reasoning_effort,
-                    usage=None))
-        return spawn
-
-    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
-    rec = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(rec.run_id, 10)
-
-    assert len(invocations) == 1, '第三席 loader 拒绝后不得再 Popen 第四席 correction'
-    pending = stage2_review_ledger.pending_rejection(
-        base, '42', source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        business_sha256=business_sha256,
-        workpack_sha256=workpack_sha256)
-    assert pending is not None
-    assert pending.turn.ordinal == 3
-    assert pending.rejection.kind == 'typed_loader'
-    assert rejection_location in pending.rejection.reason
-    assert 'input_value' not in pending.rejection.reason
-    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
-    assert done.exit_code == 2
-    assert done.outcome is not None
-    assert rejection_location in done.outcome.reason
-    assert '第 4 席只保留给只读 final_review' in done.outcome.reason
 
 
-def test_stage2_pending_rejection_resumes_in_new_parent_with_fresh_correction(
-        base, corpus, monkeypatch):
-    """重启纵切：matching business/workpack 先恢复拒因，不重做普通 review。"""
-    source_sha256 = '1' * 64
-    main_text_sha256 = '2' * 64
-    business_sha256 = '3' * 64
-    workpack_sha256 = '4' * 64
-    prior_session = 'prior-rejected-stage2-session'
-    stage2_review_ledger.reserve(
-        base, '42', source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        business_sha256=business_sha256,
-        workpack_sha256=workpack_sha256,
-        progress_sha256='5' * 64, blocker_count=5, purpose='review',
-        parent_run_id='prior-rejected-parent', epoch_id='prior-epoch',
-        session_run_id=prior_session, now=1)
-    stage2_review_ledger.finish(
-        base, '42', source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        session_run_id=prior_session, exit_code=0, now=2)
-    rejection = 'post_edit_review.decisions.0.evidence Field required'
-    rejected_request_sha256 = '6' * 64
-    stage2_review_ledger.record_rejection(
-        base, '42', source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        business_sha256=business_sha256,
-        workpack_sha256=workpack_sha256,
-        session_run_id=prior_session, kind='typed_loader',
-        request_sha256=rejected_request_sha256, reason=rejection, now=3)
-
-    current = SimpleNamespace(
-        state='blocked', code_version='test-code-version',
-        surface_seal='7' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
-            action_sha256='8' * 64))
-    next_calls = 0
-
-    def next_action(_base, _sid, *, code):
-        nonlocal next_calls
-        assert code == 'test-code-version'
-        next_calls += 1
-        return current
-
-    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
-    stopped = AgentDeliveryOutcome(
-        state='stopped', reason='Stage2 仍待审阅', checked_at=1)
-    ready = AgentDeliveryOutcome(
-        state='ready', reason='Stage2 correction 已落盘', checked_at=2)
-    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
-    task_box = {}
-
-    def build_task(_base, _sid, _current, request_path, *, epoch_id):
-        del epoch_id
-        task = agent.reviewer_tasks.ReviewerTask(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
-            surface_seal=current.surface_seal,
-            business_sha256=business_sha256,
-            request_path=Path(request_path),
-            prompt='STAGE2 SELF-CONTAINED CURRENT WORKPACK',
-            submission_options=({'id': 'node:stage2.global.apply-edit'},),
-            workpack_sha256=workpack_sha256,
-            source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            progress_sha256='9' * 64,
-            blocker_count=4)
-        task_box['task'] = task
-        return task
-
-    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
-    action = agent.reviewer_tasks.ReviewerNodeAction(
-        kind='node', node='stage2.global',
-        flags=('--apply-edit', 'corrected-request'))
-    monkeypatch.setattr(
-        agent.reviewer_tasks, 'load_action',
-        lambda _path, _current, *, submission_options: action)
-    monkeypatch.setattr(
-        agent, '_execute_reviewer_node_action',
-        lambda *_args, **_kwargs: agent.SupervisorActionResult(
-            exit_code=0, outcome=ready, continue_ready=False))
-    invocations = []
-
-    def default_spawn(_run_id, *, on_registered=None):
-        def spawn(invocation, env, log):
-            del env, log
-            invocations.append(invocation)
-            assert on_registered is not None
-            on_registered()
-            task = task_box['task']
-            task.request_path.parent.mkdir(parents=True, exist_ok=True)
-            task.request_path.write_text(
-                json.dumps({'corrected': True}), encoding='utf-8')
-            return CommanderProcessResult(
-                exit_code=0,
-                observation=CommanderObservation(
-                    provider_session_id='provider-fresh-correction',
-                    actual_model=invocation.profile.model,
-                    actual_effort=invocation.profile.reasoning_effort,
-                    usage=None))
-        return spawn
-
-    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
-    rec = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(rec.run_id, 10)
-
-    assert next_calls == 1, '恢复与 canonical apply 都应沿用同一 frozen current task'
-    assert len(invocations) == 1
-    assert invocations[0].resume_provider_session_id is None
-    assert 'STAGE2 SELF-CONTAINED CURRENT WORKPACK' in invocations[0].stdin_text
-    assert rejection in invocations[0].stdin_text
-    assert rejected_request_sha256 in invocations[0].stdin_text
-    assert '"attempt":1' in invocations[0].stdin_text
-    shown = stage2_review_ledger.inspect_ledger(
-        base, '42', source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256)
-    assert [row['purpose'] for row in shown['turns']] == [
-        'review', 'correction']
-    assert shown['turns'][0]['latest_rejection']['request_sha256'] == (
-        rejected_request_sha256)
-    assert shown['turns'][1]['latest_rejection'] is None
-    assert stage2_review_ledger.pending_rejection(
-        base, '42', source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        business_sha256=business_sha256,
-        workpack_sha256=workpack_sha256) is None
-    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
-    assert done.exit_code == 0
 
 
-def test_stage2_exhausted_pending_rejection_stops_new_parent_before_spawn(
-        base, corpus, monkeypatch):
-    """第三席拒因跨重启仍是主因；不能只显示预算错误或启动第四席。"""
-    source_sha256 = '1' * 64
-    main_text_sha256 = '2' * 64
-    business_sha256 = '3' * 64
-    workpack_sha256 = '4' * 64
-    last_session = ''
-    for ordinal, purpose, blockers in (
-            (1, 'prereview', 99),
-            (2, 'correction', 80),
-            (3, 'correction', 76)):
-        last_session = f'prior-exhausted-session-{ordinal}'
-        stage2_review_ledger.reserve(
-            base, '42', source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            business_sha256=business_sha256,
-            workpack_sha256=workpack_sha256,
-            progress_sha256=str(ordinal) * 64,
-            blocker_count=blockers, purpose=purpose,
-            parent_run_id=f'prior-exhausted-parent-{ordinal}',
-            epoch_id='prior-epoch', session_run_id=last_session, now=ordinal)
-        stage2_review_ledger.finish(
-            base, '42', source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            session_run_id=last_session, exit_code=0, now=ordinal + 10)
-    rejection = '76 个 post_edit_review.decisions 全部缺 evidence'
-    stage2_review_ledger.record_rejection(
-        base, '42', source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        business_sha256=business_sha256,
-        workpack_sha256=workpack_sha256,
-        session_run_id=last_session, kind='typed_loader',
-        request_sha256='5' * 64, reason=rejection, now=20)
-
-    current = SimpleNamespace(
-        state='blocked', code_version='test-code-version',
-        surface_seal='6' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
-            action_sha256='7' * 64))
-    monkeypatch.setattr(
-        agent.operator, 'next_action_at_code',
-        lambda _base, _sid, *, code: current)
-
-    def build_task(_base, _sid, _current, request_path, *, epoch_id):
-        del epoch_id
-        return agent.reviewer_tasks.ReviewerTask(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
-            surface_seal=current.surface_seal,
-            business_sha256=business_sha256,
-            request_path=Path(request_path), prompt='CURRENT WORKPACK',
-            submission_options=({'id': 'node:stage2.global.apply-edit'},),
-            workpack_sha256=workpack_sha256,
-            source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            progress_sha256='8' * 64, blocker_count=76)
-
-    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
-    spawned = []
-    monkeypatch.setattr(
-        agent, '_default_spawn',
-        lambda *_args, **_kwargs: spawned.append('constructed'))
-    rec = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(rec.run_id, 10)
-
-    assert spawned == []
-    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
-    assert done.exit_code == 2
-    assert done.outcome is not None
-    assert rejection in done.outcome.reason
-    assert '不会启动一个注定被拒的 Commander' in done.outcome.reason
-    assert '第 4 席只保留给只读 final_review' in done.outcome.reason
 
 
 def test_ready_action_exact_resumes_same_commander_session(
@@ -4894,9 +3610,12 @@ def _design_review_task(current, request_path, *, review_token=_REPLAY_TOKEN):
                     'kind': 'stop', 'reason': '<填写无修订行动权的独立理由>'}),
             'editable_fields': [], 'binding_fields': [], 'allowed_values': {},
         })
+    options = agent.reviewer_tasks._terminal_review_options(
+        options, current, current.action.waiting_on)
     return agent.reviewer_tasks.ReviewerTask(
         waiting_on=current.action.waiting_on, surface_seal=current.surface_seal,
-        business_sha256='e' * 64, request_path=Path(request_path),
+        business_sha256=hashlib.sha256(review_token.encode()).hexdigest(),
+        request_path=Path(request_path),
         prompt='DESIGN REVIEW IMMUTABLE WORKPACK', submission_options=tuple(options))
 
 
@@ -4927,7 +3646,7 @@ def _design_review_response(task, reason, *, stop=False):
 
 
 def _install_design_review_harness(
-        monkeypatch, *, apply_exit_codes, decisions):
+        monkeypatch, *, apply_exit_codes, decisions, review_token=_REPLAY_TOKEN):
     """固定 Stage4A blocker：完整原生回答/真实 loader，只有 apply 子进程替身。"""
     current = _design_review_blocker()
     monkeypatch.setattr(
@@ -4940,7 +3659,7 @@ def _install_design_review_harness(
 
     def build_task(_base, _sid, got, request_path, *, epoch_id):
         del epoch_id
-        task = _design_review_task(got, request_path)
+        task = _design_review_task(got, request_path, review_token=review_token)
         task_box['task'] = task
         return task
 
@@ -4968,7 +3687,7 @@ def _install_design_review_harness(
             return CommanderProcessResult(
                 exit_code=0,
                 observation=CommanderObservation(
-                    provider_session_id='provider-design-review',
+                    provider_session_id=f'provider-design-review-{_run_id}',
                     actual_model=invocation.profile.model,
                     actual_effort=invocation.profile.reasoning_effort,
                     usage=None),
@@ -5115,10 +3834,16 @@ def test_reviewer_audit_failure_blocks_structured_action(
     def fail(*_args, **_kwargs):
         raise OSError(f'synthetic {broken} failure')
 
-    if broken == 'seat_attempt_started':
-        monkeypatch.setattr(agent.reviewer_seat_ledger, 'record_attempt', fail)
-    elif broken == 'seat_attempt_finished':
-        monkeypatch.setattr(agent.reviewer_seat_ledger, 'finish_attempt', fail)
+    if broken in {'seat_attempt_started', 'seat_attempt_finished'}:
+        actual_record = WorkUnitBudget.record_attempt
+
+        def fail_selected_attempt(self, turn_id, **kwargs):
+            started = kwargs['outcome'] == 'started'
+            if started == (broken == 'seat_attempt_started'):
+                fail()
+            return actual_record(self, turn_id, **kwargs)
+
+        monkeypatch.setattr(WorkUnitBudget, 'record_attempt', fail_selected_attempt)
     elif broken == 'session_attempt':
         actual_append = agent_session_audit.append_event
 
@@ -5222,9 +3947,11 @@ def test_canonical_rejection_after_surface_change_never_corrects_old_workpack(
     assert done.exit_code == 2
     assert done.outcome is not None
     assert 'manual-after-concurrent-edit' in done.outcome.reason
-    [seat] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert [row['purpose'] for row in seat['turns']] == ['review']
-    assert seat['pending_correction'] is False
+    from novel.work_units import WorkUnitBudget
+    budget = WorkUnitBudget(base, '42', 'stage4.design', 'commander', 'design')
+    assert budget.used == 1
+    assert agent.reviewer_seat_ledger.list_ledgers(base, '42') == []
+    assert budget.latest_turn().state in ('delivered', 'adopted')
 
 
 def test_stage0_surface_change_before_permit_replays_durable_action_without_wire(
@@ -5318,8 +4045,10 @@ def test_stage0_surface_change_before_permit_replays_durable_action_without_wire
     assert executions == ['1' * 64, '3' * 64]
     assert len(load_calls) == 2, '首次回答与新 seal 重放均走 typed loader'
     assert _reviewer_action_files(base) == []
-    [seat] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert [row['purpose'] for row in seat['turns']] == ['review']
+    from novel.work_units import WorkUnitBudget
+    budget = WorkUnitBudget(base, '42', 'stage0.approve', 'commander', 'book')
+    assert budget.used == 1
+    assert agent.reviewer_seat_ledger.list_ledgers(base, '42') == []
     [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
     assert done.exit_code == 2
     assert done.outcome is not None
@@ -5428,8 +4157,10 @@ def test_stage0_subprocess_exit2_surface_change_preserves_zero_wire_replay(
     assert len(loaded_documents) == 2
     assert loaded_documents[1]['surface_seal'] == '3' * 64
     assert _reviewer_action_files(base) == []
-    [seat] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert [row['purpose'] for row in seat['turns']] == ['review']
+    from novel.work_units import WorkUnitBudget
+    budget = WorkUnitBudget(base, '42', 'stage0.approve', 'commander', 'book')
+    assert budget.used == 1
+    assert agent.reviewer_seat_ledger.list_ledgers(base, '42') == []
     [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
     assert done.exit_code == 2
     assert done.outcome is not None
@@ -5631,7 +4362,7 @@ def test_stage2_producer_preflight_rejects_before_executor_then_corrects(
             return CommanderProcessResult(
                 exit_code=0,
                 observation=CommanderObservation(
-                    provider_session_id=f'provider-preflight-{len(invocations)}',
+                    provider_session_id='provider-preflight',
                     actual_model=invocation.profile.model,
                     actual_effort=invocation.profile.reasoning_effort,
                     usage=None),
@@ -5644,9 +4375,8 @@ def test_stage2_producer_preflight_rejects_before_executor_then_corrects(
 
     def preflight(base_, sid, *, epoch, action):
         del epoch
-        [ledger] = agent.stage2_review_ledger.list_ledgers(base_, sid)
-        assert ledger['turns'][-1]['outcome'] == 'ok', (
-            'producer preflight 不得跑在席位 finish 之前')
+        unit = _stage2_commander_unit(base_, current.action.waiting_on)
+        assert unit.latest_turn().response_sha256, '预检前必须保存原模型回答'
         assert _reviewer_action_files(base_), (
             'producer preflight 不得跑在 durable action 之前')
         decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
@@ -5681,13 +4411,10 @@ def test_stage2_producer_preflight_rejects_before_executor_then_corrects(
         raw_responses[0], ensure_ascii=False, sort_keys=True,
         separators=(',', ':'), allow_nan=False,
     ).encode('utf-8') + b'\n').hexdigest()
-    [shown] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    ledger = agent.stage2_review_ledger.Stage2ReviewLedger.model_validate_json(
-        Path(shown['ledger_path']).read_bytes())
-    assert ledger.turns[0].rejections[0].kind == 'canonical_action'
-    assert ledger.turns[0].rejections[0].request_sha256 == first_digest
-    assert 'dangling_relation_endpoint:1' in ledger.turns[0].rejections[0].reason
-    assert 'rel_21' not in ledger.turns[0].rejections[0].reason
+    feedback = _stage2_feedback(_stage2_commander_unit(base), 0)
+    assert feedback['response_sha256'] == first_digest
+    assert 'dangling_relation_endpoint:1' in feedback['reason']
+    assert 'rel_21' not in feedback['reason']
     assert 'dangling_relation_endpoint:1' in invocations[1].stdin_text
     assert _reviewer_action_files(base) == []
 
@@ -5820,8 +4547,9 @@ def test_stage2_preflight_unknown_or_audit_failure_keeps_durable_action(
             lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 agent._Stage2ReviewerPreflightRejected(
                     'synthetic deterministic candidate rejection')))
+        from novel.work_units import WorkUnitBudget
         monkeypatch.setattr(
-            agent.stage2_review_ledger, 'record_rejection',
+            WorkUnitBudget, 'save_feedback',
             lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 OSError('synthetic rejection audit failure')))
     executions: list[object] = []
@@ -5843,243 +4571,62 @@ def test_stage2_preflight_unknown_or_audit_failure_keeps_durable_action(
     assert record_path.is_file()
 
 
-def test_preflight_rejection_delete_failure_is_retired_before_new_correction(
-        base, corpus, monkeypatch):
-    """拒因已落但 record 删除失败：新 parent 先退休旧 action，绝不执行。"""
-    current = SimpleNamespace(
-        state='blocked', code_version='test-code-version',
-        surface_seal='8' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
-            action_sha256='9' * 64))
-    monkeypatch.setattr(
-        agent.operator, 'next_action_at_code',
-        lambda _base, _sid, *, code: current)
-    stopped = AgentDeliveryOutcome(
-        state='stopped', reason='Stage2 仍待执行', checked_at=1)
-    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
-    task_box: dict[str, object] = {}
-
-    def build_task(_base, _sid, _current, request_path, *, epoch_id):
-        del epoch_id
-        task, response = _stage2_compact_apply_edit_fixture(
-            current, request_path)
-        task_box['response'] = response
-        return task
-
-    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
-    invocations: list[CommanderInvocation] = []
-
-    def default_spawn(_run_id, *, on_registered=None):
-        def spawn(invocation, env, log):
-            del env, log
-            invocations.append(invocation)
-            assert on_registered is not None
-            on_registered()
-            return CommanderProcessResult(
-                exit_code=0,
-                observation=CommanderObservation(
-                    provider_session_id='provider-preflight-retire',
-                    actual_model=invocation.profile.model,
-                    actual_effort=invocation.profile.reasoning_effort,
-                    usage=None),
-                wire_evidence=True,
-                final_response=json.dumps(
-                    task_box['response'], ensure_ascii=False))
-        return spawn
-
-    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
-    safe_reason = (
-        'Stage2 GlobalEdit 候选被 producer 业务边界拒绝；'
-        'categories=dangling_relation_endpoint:1；'
-        f'diagnostic_sha256={"a" * 64}')
-    monkeypatch.setattr(
-        agent, '_preflight_stage2_reviewer_action',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            agent._Stage2ReviewerPreflightRejected(safe_reason)))
-    executions: list[object] = []
-    monkeypatch.setattr(
-        agent, '_execute_reviewer_node_action',
-        lambda *_args, **_kwargs: executions.append(object()))
-
+def test_preflight_rejection_delete_failure_is_retired_before_new_correction(base, corpus, monkeypatch):
+    """拒因先耐久、记录删除中断后，新进程先退休旧动作再用余量修订。"""
+    progress, calls, _ = _stage2_work_unit_harness(base, monkeypatch, mode='accept')
+    def reject(*args, **kwargs):
+        raise agent._Stage2ReviewerPreflightRejected('确定性生产拒绝：原候选外键未闭合')
+    monkeypatch.setattr(agent, '_preflight_stage2_reviewer_action', reject)
     original_discard = agent.uploads.discard_edit_plan
-    rejected_action_deletes = 0
-
-    def fail_first_action_delete(base_, path):
-        nonlocal rejected_action_deletes
+    deletes = []
+    def fail_once(base_, path):
         if Path(path).name.startswith('reviewer-action-'):
-            rejected_action_deletes += 1
-            if rejected_action_deletes == 1:
-                raise OSError('synthetic rejected action delete failure')
+            deletes.append(Path(path))
+            if len(deletes) == 1:
+                raise OSError('模拟拒绝记录删除中断')
         return original_discard(base_, path)
-
-    monkeypatch.setattr(
-        agent.uploads, 'discard_edit_plan', fail_first_action_delete)
-    first = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(first.run_id, 10)
-    [first_done] = [
-        row for row in agent.records(base) if row.run_id == first.run_id]
-    assert first_done.exit_code == 70
-    assert len(invocations) == 1
-    assert executions == []
-    [record_path] = _reviewer_action_files(base)
-    assert record_path.is_file()
-    [ledger_view] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    assert ledger_view['turns'][0]['rejections'] == 1
-
-    # 第二 parent 只验证交接顺序：预算设成已用尽，若 record 先严格退休，
-    # 它会在任何新 Commander/Executor 前安全停住；若仍泄漏则应 exit70。
-    monkeypatch.setattr(agent, '_MAX_STAGE2_EDIT_SEAT', 1)
-    second = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(second.run_id, 10)
-
-    [second_done] = [
-        row for row in agent.records(base) if row.run_id == second.run_id]
-    assert second_done.exit_code == 2
-    assert rejected_action_deletes == 2
-    assert len(invocations) == 1, '退休 rejected record 前后都不得购买新席'
-    assert executions == []
-    assert not record_path.exists()
+    monkeypatch.setattr(agent.uploads, 'discard_edit_plan', fail_once)
+    first = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
+    assert agent.wait(first.run_id, 15)
+    [old_path] = _reviewer_action_files(base)
+    assert len(calls) == 1 and progress['applied'] == []
+    assert _stage2_commander_unit(base).latest_turn().feedback_sha256
+    monkeypatch.setattr(agent, '_preflight_stage2_reviewer_action', lambda *_a, **_k: None)
+    second = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
+    assert agent.wait(second.run_id, 15)
+    assert not old_path.exists()
+    assert len(calls) == 2 and progress['applied'] == ['stage2.global']
+    assert _stage2_commander_unit(base).used == 2
     assert _reviewer_action_files(base) == []
 
 
-def test_restart_replay_current_loader_rejects_old_action_then_corrects(
-        base, corpus, monkeypatch):
-    """旧 typed-valid action 被新 loader 拒绝：补原席拒因、删记录、同 parent 纠错。"""
-    current = SimpleNamespace(
-        state='blocked', code_version='test-code-version',
-        surface_seal='8' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
-            action_sha256='9' * 64))
-    scratch = Path(base) / '_service' / 'old-loader-task'
-    scratch.mkdir(parents=True)
-    task, corrected_response = _stage2_compact_apply_edit_fixture(
-        current, scratch / 'reviewer-request.json')
-    assert task.source_sha256 is not None
-    assert task.main_text_sha256 is not None
-    assert task.workpack_sha256 is not None
-    assert task.progress_sha256 is not None
-    assert task.blocker_count is not None
-    old_session = 'old-current-loader-stage2-session'
-    old_raw_sha256 = 'a' * 64
-    agent.stage2_review_ledger.reserve(
-        base, '42', source_sha256=task.source_sha256,
-        main_text_sha256=task.main_text_sha256,
-        business_sha256=task.business_sha256,
-        workpack_sha256=task.workpack_sha256,
-        progress_sha256=task.progress_sha256,
-        blocker_count=task.blocker_count, purpose='correction',
-        parent_run_id='dead-parent', epoch_id='dead-epoch',
-        session_run_id=old_session, now=1)
-    agent.stage2_review_ledger.finish(
-        base, '42', source_sha256=task.source_sha256,
-        main_text_sha256=task.main_text_sha256,
-        session_run_id=old_session, exit_code=0, now=2)
-
-    exact_payload = copy.deepcopy(
-        task.submission_options[0]['exact_request']['action']['input_payload'])
-    # 模拟旧代码曾接受并持久化、但今天 GlobalEdit 静态 validator 已拒绝的
-    # direct patch + 同集合 delete。不能用今天的 model 构造这份 legacy payload。
-    exact_payload['collection_edits'] = [{
-        'collection': 'characters',
-        'expected_collection_sha256': 'b' * 64,
-        'operations': [{'op': 'delete', 'subject_id': 'char_001'}],
-    }]
-    old_path = agent.uploads.save_reviewer_action(
-        base, '42', ReviewerActionRecord(
-            sid='42', run_id='dead-parent', epoch_id='dead-epoch',
-            waiting_on=task.waiting_on, surface_seal=task.surface_seal,
-            business_sha256=task.business_sha256,
-            node='stage2.global', flags=('--apply-edit', '@reviewer-input'),
-            input_payload=encode_artifact(STAGE2_GLOBAL_EDIT, exact_payload),
-            workpack_sha256=task.workpack_sha256,
-            source_sha256=task.source_sha256,
-            main_text_sha256=task.main_text_sha256,
-            progress_sha256=task.progress_sha256,
-            blocker_count=task.blocker_count,
-            reviewer_session_run_id=old_session,
-            provider_response_sha256=old_raw_sha256, recorded_at=3))
-
-    monkeypatch.setattr(
-        agent.operator, 'next_action_at_code',
-        lambda _base, _sid, *, code: current)
-    stopped = AgentDeliveryOutcome(
-        state='stopped', reason='Stage2 仍待执行', checked_at=1)
-    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
-    task_box: dict[str, object] = {}
-
-    def build_task(_base, _sid, _current, request_path, *, epoch_id):
-        del epoch_id
-        live_task = replace(task, request_path=Path(request_path))
-        task_box['task'] = live_task
-        task_box['response'] = corrected_response
-        return live_task
-
-    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
-    invocations: list[CommanderInvocation] = []
-
-    def default_spawn(_run_id, *, on_registered=None):
-        def spawn(invocation, env, log):
-            del env, log
-            invocations.append(invocation)
-            assert on_registered is not None
-            on_registered()
-            assert not old_path.exists(), (
-                '今天 loader 拒绝的旧 action 必须先落 rejection 并退休')
-            [view] = agent.stage2_review_ledger.list_ledgers(base, '42')
-            # correction 已 reserve 时它成为 ledger 最新席，pending_rejection
-            # 按契约返回 None；原席的 durable 拒因仍必须已经存在。
-            assert view['turns'][0]['rejections'] == 1
-            return CommanderProcessResult(
-                exit_code=0,
-                observation=CommanderObservation(
-                    provider_session_id='provider-current-loader-correction',
-                    actual_model=invocation.profile.model,
-                    actual_effort=invocation.profile.reasoning_effort,
-                    usage=None),
-                wire_evidence=True,
-                final_response=json.dumps(
-                    task_box['response'], ensure_ascii=False))
-        return spawn
-
-    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
-    executions: list[dict[str, object]] = []
-
-    def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
-        decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
-        executions.append(decoded.payload)
-        return agent.SupervisorActionResult(
-            exit_code=0, outcome=stopped, continue_ready=False)
-
-    monkeypatch.setattr(agent, '_execute_reviewer_node_action', execute)
-    rec = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(rec.run_id, 10)
-
-    assert len(invocations) == 1, '恢复只购买一席 correction，不重买 initial review'
-    assert len(executions) == 1
-    assert not executions[0].get('collection_edits')
-    assert not old_path.exists()
-    [shown] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    ledger = agent.stage2_review_ledger.Stage2ReviewLedger.model_validate_json(
-        Path(shown['ledger_path']).read_bytes())
-    rejection = ledger.turns[0].rejections[0]
-    assert rejection.kind == 'typed_loader'
-    assert rejection.request_sha256 == old_raw_sha256
-    assert 'direct_patch_subject_removed_by_collection_edit' in rejection.reason
-    assert 'char_001' not in rejection.reason
-    assert len(ledger.turns) == 2
+def test_restart_replay_current_loader_rejects_old_action_then_corrects(base, corpus, monkeypatch):
+    """新 loader 拒绝旧 typed 动作时保留原内容账，再用同单元余量订正。"""
+    progress, calls, _ = _stage2_work_unit_harness(base, monkeypatch, mode='crash')
+    first = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
+    assert agent.wait(first.run_id, 15)
+    assert len(calls) == 1
+    original_load = agent.reviewer_tasks.load_action
+    def current_loader(path, snapshot, *, submission_options):
+        document = json.loads(Path(path).read_text('utf-8'))
+        if document.get('action', {}).get('input_payload', {}).get('reason') == '轮次:1':
+            raise agent.reviewer_tasks.ReviewerTaskError('当前 typed 闭集拒绝原回答')
+        return original_load(path, snapshot, submission_options=submission_options)
+    monkeypatch.setattr(agent.reviewer_tasks, 'load_action', current_loader)
+    second = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
+    assert agent.wait(second.run_id, 15)
+    assert len(calls) == 2
+    assert _stage2_commander_unit(base).used == 2
+    assert '当前 typed 闭集拒绝原回答' in calls[1].stdin_text
+    assert _stage2_commander_unit(base)._read().turns[0].feedback_sha256
+    assert progress['applied'] == ['stage2.global', 'stage2.global']
+    assert not _reviewer_action_files(base)
 
 
 def test_stage2_typed_action_survives_pause_stop_and_new_parent_replay(
-        base, corpus, monkeypatch):
-    """live 初审回答先 durable；pause/stop 清 scratch 后新 parent 零模型重放。"""
+        base, corpus, monkeypatch, request):
+    """内部恢复安全点暂停；stop 清 scratch 后新 parent 按 durable 决定零模型重放。"""
+    monkeypatch.setattr(agent, '_preflight_stage2_reviewer_action', lambda *_a, **_k: None)
     current = SimpleNamespace(
         state='blocked', code_version='test-code-version',
         surface_seal='6' * 64, execution_token=None,
@@ -6127,8 +4674,22 @@ def test_stage2_typed_action_survives_pause_stop_and_new_parent_replay(
 
     monkeypatch.setattr(agent, '_default_spawn', default_spawn)
     executions: list[str] = []
+    paused_once = False
 
     def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
+        nonlocal paused_once
+        if not paused_once:
+            paused_once = True
+            assert reviewer_action_record_path is not None
+            record = next(row for path, row in agent.uploads.load_reviewer_actions(base, '42')
+                          if path == reviewer_action_record_path)
+            # producer 的可恢复断点只请求内部 barrier；不能在未 commit 的同一
+            # launch callback 内重入公开 pause API 等待自己。
+            with agent._SUPERVISORS_LOCK:
+                supervisor = agent._SUPERVISORS[record.run_id]
+            supervisor._request_recovery_pause()
+            return agent.SupervisorActionResult(
+                exit_code=70, outcome=stopped, continue_ready=False)
         decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
         executions.append(decoded.payload['characters'][0]['name_distinctiveness'])
         return agent.SupervisorActionResult(
@@ -6142,7 +4703,6 @@ def test_stage2_typed_action_survives_pause_stop_and_new_parent_replay(
     def save_then_pause(base_, sid, record):
         path = original_save(base_, sid, record)
         saved.append((path, record))
-        agent.request_pause(base_, record.run_id)
         saved_event.set()
         return path
 
@@ -6150,6 +4710,9 @@ def test_stage2_typed_action_survives_pause_stop_and_new_parent_replay(
     first = agent.start(
         base, '42', authorized=True, egress_authorized=True,
         profiles=_PROFILES, spawn=None)
+    request.addfinalizer(lambda: agent.stop(base, first.run_id)
+                         if any(row.run_id == first.run_id and row.ended is None
+                                for row in agent.records(base)) else None)
     assert saved_event.wait(10), 'typed-valid Stage2 action 没有在 canonical 前持久化'
     deadline = time.time() + 10
     first_live = next(
@@ -6178,7 +4741,8 @@ def test_stage2_typed_action_survives_pause_stop_and_new_parent_replay(
     assert raw_digest != assembled_digest
     assert record_path.is_file()
     assert record.node == 'stage2.global'
-    assert record.workpack_sha256 == task.workpack_sha256
+    assert record.work_unit_id == _stage2_commander_unit(base).unit_id
+    assert record.work_unit_turn_id == _stage2_commander_unit(base).latest_turn().turn_id
     assert record.reviewer_session_run_id is not None
     assert record.provider_response_sha256 == raw_digest
     assert decode_artifact(
@@ -6204,15 +4768,14 @@ def test_stage2_typed_action_survives_pause_stop_and_new_parent_replay(
     assert executions == ['medium']
     assert len(invocations) == 1, 'pause/stop/new parent 重放不得重发 Commander'
     assert not record_path.exists(), 'canonical landed 后必须删除 durable action'
-    assert '[reviewer-replay]' in agent.run_log_path(
-        base, replayed.run_id).read_text('utf-8')
-    [ledger] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    assert len(ledger['turns']) == 1
+    assert _stage2_commander_unit(base).latest_turn().state == 'adopted'
+    assert _stage2_commander_unit(base).used == 1
 
 
 def test_stage2_live_initial_action_exit70_is_retained_for_replay(
         base, corpus, monkeypatch):
     """live 初审 canonical 结论未知时保留 action；新 parent 零模型重放。"""
+    monkeypatch.setattr(agent, '_preflight_stage2_reviewer_action', lambda *_a, **_k: None)
     current = SimpleNamespace(
         state='blocked', code_version='test-code-version',
         surface_seal='6' * 64, execution_token=None,
@@ -6291,554 +4854,68 @@ def test_stage2_live_initial_action_exit70_is_retained_for_replay(
     assert executions == ['medium', 'medium']
     assert len(invocations) == 1, 'exit70 后 action replay 不得再买 Commander'
     assert not record_path.exists(), '重放 landed 后才消费 durable action'
-    assert '[reviewer-replay]' in agent.run_log_path(
-        base, replayed.run_id).read_text('utf-8')
+    assert _stage2_commander_unit(base).latest_turn().state == 'adopted'
 
 
 @pytest.mark.parametrize('waiting_on', [
     agent.queue.WAITING_ON_STAGE2_REVIEW,
     agent.queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
 ])
-def test_stage2_action_record_repairs_started_turn_after_finish_crash(
-        base, corpus, monkeypatch, waiting_on):
-    """initial/correction 都先存 action；finish 崩溃后新 parent 零 wire 补账。"""
-    current = SimpleNamespace(
-        state='blocked', code_version='test-code-version',
-        surface_seal='a' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on=waiting_on, action_sha256='b' * 64))
-    monkeypatch.setattr(
-        agent.operator, 'next_action_at_code',
-        lambda _base, _sid, *, code: current)
-    stopped = AgentDeliveryOutcome(
-        state='stopped', reason='Stage2 仍待执行', checked_at=1)
-    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
-    task_box: dict[str, object] = {}
+def test_stage2_action_record_repairs_started_turn_after_finish_crash(base, corpus, monkeypatch, waiting_on):
+    """typed proof 已耐久而 action record 尚未写入时，重启从原 raw 恢复。"""
+    progress, calls, budget_type = _stage2_work_unit_harness(base, monkeypatch, mode='accept')
+    original_next = agent.operator.next_action_at_code
+    def current(*args, **kwargs):
+        snapshot = original_next(*args, **kwargs)
+        snapshot.action.waiting_on = waiting_on
+        return snapshot
+    monkeypatch.setattr(agent.operator, 'next_action_at_code', current)
+    original_save = budget_type.save_recovery
+    def crash_after_save(self, turn_id, payload):
+        original_save(self, turn_id, payload)
+        raise OSError('模拟 typed proof 后 action record 前中断')
+    monkeypatch.setattr(budget_type, 'save_recovery', crash_after_save)
+    first = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
+    assert agent.wait(first.run_id, 15)
+    assert progress['applied'] == [] and len(calls) == 1
+    unit = _stage2_commander_unit(base, waiting_on)
+    assert unit.latest_pending_response() is not None
+    assert unit.recovery_proof(unit.latest_turn().turn_id) is not None
+    monkeypatch.setattr(budget_type, 'save_recovery', original_save)
+    second = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
+    assert agent.wait(second.run_id, 15)
+    assert progress['applied'] == ['stage2.global'] and len(calls) == 1
+    assert unit.latest_turn().state == 'adopted' and unit.used == 1
+
+
+def test_stage2_feedback_correction_records_effective_progress_before_finish(base, corpus, monkeypatch):
+    """格式拒因先耐久，后续有效回答崩溃恢复不再购买新的内容轮次。"""
+    progress, calls, budget_type = _stage2_work_unit_harness(base, monkeypatch, mode='accept')
+    original_load = agent.reviewer_tasks.load_action
+    def reject_first(path, snapshot, *, submission_options):
+        if len(calls) == 1:
+            raise agent.reviewer_tasks.ReviewerTaskError('首轮缺少 typed 字段')
+        return original_load(path, snapshot, submission_options=submission_options)
+    monkeypatch.setattr(agent.reviewer_tasks, 'load_action', reject_first)
+    original_save = agent.uploads.save_reviewer_action
+    def crash_save(*args, **kwargs):
+        raise OSError('模拟第二轮已验回答提交中断')
+    monkeypatch.setattr(agent.uploads, 'save_reviewer_action', crash_save)
+    first = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
+    assert agent.wait(first.run_id, 15)
+    unit = _stage2_commander_unit(base)
+    assert unit.used == 2 and progress['applied'] == []
+    assert '首轮缺少 typed 字段' in calls[1].stdin_text
+    assert unit._read().turns[0].feedback_sha256
+    monkeypatch.setattr(agent.uploads, 'save_reviewer_action', original_save)
+    second = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
+    assert agent.wait(second.run_id, 15)
+    assert len(calls) == 2 and progress['applied'] == ['stage2.global']
+    assert unit.latest_turn().state == 'adopted'
 
-    def build_task(_base, _sid, _current, request_path, *, epoch_id):
-        del epoch_id
-        task, response = _stage2_compact_apply_edit_fixture(
-            current, request_path)
-        task_box['task'] = task
-        task_box['response'] = response
-        return task
 
-    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
-    invocations: list[CommanderInvocation] = []
 
-    def default_spawn(_run_id, *, on_registered=None):
-        def spawn(invocation, env, log):
-            del env, log
-            invocations.append(invocation)
-            assert on_registered is not None
-            on_registered()
-            return CommanderProcessResult(
-                exit_code=0,
-                observation=CommanderObservation(
-                    provider_session_id='provider-stage2-finish-crash',
-                    actual_model=invocation.profile.model,
-                    actual_effort=invocation.profile.reasoning_effort,
-                    usage=None),
-                wire_evidence=True,
-                final_response=json.dumps(
-                    task_box['response'], ensure_ascii=False))
-        return spawn
 
-    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
-    executions: list[str] = []
-
-    def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
-        decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
-        executions.append(decoded.payload['characters'][0]['name_distinctiveness'])
-        return agent.SupervisorActionResult(
-            exit_code=0, outcome=stopped, continue_ready=False)
-
-    monkeypatch.setattr(agent, '_execute_reviewer_node_action', execute)
-    original_finish = agent.stage2_review_ledger.finish
-    finish_calls = 0
-
-    def fail_first_finish(*args, **kwargs):
-        nonlocal finish_calls
-        finish_calls += 1
-        if finish_calls == 1:
-            raise OSError('synthetic action-save to ledger-finish crash')
-        return original_finish(*args, **kwargs)
-
-    monkeypatch.setattr(agent.stage2_review_ledger, 'finish', fail_first_finish)
-    first = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(first.run_id, 10)
-
-    first_done = next(row for row in agent.records(base) if row.run_id == first.run_id)
-    assert first_done.exit_code == 70
-    assert executions == []
-    [record_path] = _reviewer_action_files(base)
-    assert record_path.is_file()
-    [ledger] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    assert ledger['turns'][0]['outcome'] == 'started'
-
-    monkeypatch.setattr(agent.stage2_review_ledger, 'finish', original_finish)
-    second = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(second.run_id, 10)
-
-    assert len(invocations) == 1, '新 parent 必须凭 durable action 补账，不能重发 Commander'
-    assert executions == ['medium']
-    assert not record_path.exists()
-    [ledger] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    assert ledger['turns'][0]['outcome'] == 'ok'
-    assert ledger['turns'][0]['exit_code'] == 0
-
-
-def test_stage2_feedback_correction_records_effective_progress_before_finish(
-        base, corpus, monkeypatch):
-    """typed 拒因后的真 correction 用 feedback progress；finish 崩溃仍可重放。"""
-    current = SimpleNamespace(
-        state='blocked', code_version='test-code-version',
-        surface_seal='c' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
-            action_sha256='d' * 64))
-    monkeypatch.setattr(
-        agent.operator, 'next_action_at_code',
-        lambda _base, _sid, *, code: current)
-    stopped = AgentDeliveryOutcome(
-        state='stopped', reason='Stage2 仍待执行', checked_at=1)
-    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
-    task_box: dict[str, object] = {}
-
-    def build_task(_base, _sid, _current, request_path, *, epoch_id):
-        del epoch_id
-        task, response = _stage2_compact_apply_edit_fixture(current, request_path)
-        task_box['task'] = task
-        task_box['response'] = response
-        return task
-
-    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
-    invocations: list[CommanderInvocation] = []
-
-    def default_spawn(_run_id, *, on_registered=None):
-        def spawn(invocation, env, log):
-            del env, log
-            invocations.append(invocation)
-            assert on_registered is not None
-            on_registered()
-            response = (
-                {'schema': 'deliberately-invalid-first-response'}
-                if len(invocations) == 1 else task_box['response'])
-            return CommanderProcessResult(
-                exit_code=0,
-                observation=CommanderObservation(
-                    provider_session_id=f'provider-feedback-{len(invocations)}',
-                    actual_model=invocation.profile.model,
-                    actual_effort=invocation.profile.reasoning_effort,
-                    usage=None),
-                wire_evidence=True,
-                final_response=json.dumps(response, ensure_ascii=False))
-        return spawn
-
-    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
-    executions: list[str] = []
-    monkeypatch.setattr(
-        agent, '_execute_reviewer_node_action',
-        lambda _base, _sid, action, _run_token, reviewer_action_record_path=None: (
-            executions.append(decode_artifact(
-                STAGE2_GLOBAL_EDIT,
-                action.input_payload).payload['characters'][0][
-                    'name_distinctiveness'])
-            or agent.SupervisorActionResult(
-                exit_code=0, outcome=stopped, continue_ready=False)))
-    original_finish = agent.stage2_review_ledger.finish
-    finish_calls = 0
-
-    def fail_second_finish(*args, **kwargs):
-        nonlocal finish_calls
-        finish_calls += 1
-        if finish_calls == 2:
-            raise OSError('synthetic feedback-correction finish crash')
-        return original_finish(*args, **kwargs)
-
-    monkeypatch.setattr(agent.stage2_review_ledger, 'finish', fail_second_finish)
-    first = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(first.run_id, 10)
-
-    assert next(row for row in agent.records(base) if row.run_id == first.run_id).exit_code == 70
-    assert executions == []
-    [record_path] = _reviewer_action_files(base)
-    record = ReviewerActionRecord.model_validate_json(record_path.read_bytes())
-    task = task_box['task']
-    assert isinstance(task, agent.reviewer_tasks.ReviewerTask)
-    assert record.progress_sha256 != task.progress_sha256
-    [shown] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    ledger = agent.stage2_review_ledger.Stage2ReviewLedger.model_validate_json(
-        Path(shown['ledger_path']).read_bytes())
-    assert [turn.outcome for turn in ledger.turns] == ['ok', 'started']
-    assert record.progress_sha256 == ledger.turns[1].progress_sha256
-
-    monkeypatch.setattr(agent.stage2_review_ledger, 'finish', original_finish)
-    second = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(second.run_id, 10)
-
-    assert len(invocations) == 2, '新 parent 不得为 durable correction 再买第三席'
-    assert executions == ['medium']
-    assert not record_path.exists()
-    [ledger] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    assert [turn['outcome'] for turn in ledger['turns']] == ['ok', 'ok']
-
-
-def test_stage2_final_review_action_repairs_started_turn_before_replay(
-        base, corpus, monkeypatch):
-    """final approval 也携 Stage2 席位身份；finish 崩溃后零模型补账再执行。"""
-    source_sha256 = '1' * 64
-    main_text_sha256 = '2' * 64
-    for index, (purpose, blockers) in enumerate((
-            ('review', 3), ('correction', 2), ('correction', 1)), start=1):
-        session_id = f'prior-stage2-seat-{index}'
-        agent.stage2_review_ledger.reserve(
-            base, '42', source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            business_sha256=str(index + 2) * 64,
-            workpack_sha256=str(index + 3) * 64,
-            progress_sha256=str(index + 4) * 64,
-            blocker_count=blockers, purpose=purpose,
-            parent_run_id=f'prior-parent-{index}', epoch_id='prior-epoch',
-            session_run_id=session_id, now=index)
-        agent.stage2_review_ledger.finish(
-            base, '42', source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            session_run_id=session_id, exit_code=0, now=index + 10)
-
-    current = SimpleNamespace(
-        state='blocked', code_version='test-code-version',
-        surface_seal='a' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_FINAL_REVIEW,
-            action_sha256='b' * 64))
-    complete = SimpleNamespace(
-        state='pipeline_complete', code_version='test-code-version',
-        surface_seal='f' * 64, execution_token=None, action=None)
-    canonical_calls: list[list[str]] = []
-
-    def next_action(_base, _sid, *, code):
-        assert code == 'test-code-version'
-        return complete if canonical_calls else current
-
-    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
-    stopped = AgentDeliveryOutcome(
-        state='stopped', reason='Stage2 终审待收口', checked_at=1)
-    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
-    task = agent.reviewer_tasks.ReviewerTask(
-        waiting_on=agent.queue.WAITING_ON_STAGE2_FINAL_REVIEW,
-        surface_seal=current.surface_seal,
-        business_sha256='c' * 64,
-        request_path=Path(base) / '_service' / 'placeholder-final-review.json',
-        prompt='STAGE2 FINAL REVIEW IMMUTABLE WORKPACK',
-        submission_options=({
-            'id': agent.review_seats.FINAL_REVIEW_APPROVAL_OPTION_ID,
-        },),
-        workpack_sha256='d' * 64,
-        source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        progress_sha256='e' * 64,
-        blocker_count=0)
-
-    task_box: dict[str, agent.reviewer_tasks.ReviewerTask] = {}
-
-    def build_task(_base, _sid, _current, request_path, *, epoch_id):
-        del epoch_id
-        live_task = replace(task, request_path=Path(request_path))
-        task_box['task'] = live_task
-        return live_task
-
-    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
-    action = agent.reviewer_tasks.ReviewerApprovalAction(
-        kind='approval', surface='stage2_final_review', payload={
-            'actor': 'agent:final-seat',
-            'reason': '独立通读 Global、MainText 与 Blueprint 后确认',
-            'global_review_token': 's2gr1_' + '6' * 64,
-            'blueprint_review_token': 'bpr3_' + '7' * 64,
-        })
-    loads: list[Path] = []
-
-    def load_action(request_path, _current, *, submission_options):
-        assert submission_options == task.submission_options
-        loads.append(Path(request_path))
-        return action
-
-    monkeypatch.setattr(agent.reviewer_tasks, 'load_action', load_action)
-    invocations: list[CommanderInvocation] = []
-
-    def default_spawn(_run_id, *, on_registered=None):
-        def spawn(invocation, env, log):
-            del env, log
-            invocations.append(invocation)
-            assert on_registered is not None
-            on_registered()
-            # final_response=None 模拟 driver 已把 typed JSON 写进 request_path 的
-            # 兼容载体；loader 本身在测试中仍是唯一 action 解释器。
-            task_box['task'].request_path.write_text('{}', encoding='utf-8')
-            return CommanderProcessResult(
-                exit_code=0,
-                observation=CommanderObservation(
-                    provider_session_id='provider-stage2-final-finish-crash',
-                    actual_model=invocation.profile.model,
-                    actual_effort=invocation.profile.reasoning_effort,
-                    usage=None),
-                wire_evidence=True)
-        return spawn
-
-    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
-
-    class _DoneProcess:
-        pid = 424242
-
-        def __init__(self, argv, **_kwargs):
-            canonical_calls.append(list(argv))
-
-        def wait(self):
-            return 0
-
-        def poll(self):
-            return 0
-
-    monkeypatch.setattr(agent.subprocess, 'Popen', _DoneProcess)
-    original_finish = agent.stage2_review_ledger.finish
-    finish_calls = 0
-
-    def fail_final_finish(*args, **kwargs):
-        nonlocal finish_calls
-        finish_calls += 1
-        if finish_calls == 1:
-            raise OSError('synthetic final-review action-save to finish crash')
-        return original_finish(*args, **kwargs)
-
-    monkeypatch.setattr(agent.stage2_review_ledger, 'finish', fail_final_finish)
-    first = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(first.run_id, 10)
-    assert next(row for row in agent.records(base) if row.run_id == first.run_id).exit_code == 70
-    assert canonical_calls == []
-    [record_path] = _reviewer_action_files(base)
-    record = ReviewerActionRecord.model_validate_json(record_path.read_bytes())
-    assert record.surface == 'stage2_final_review'
-    assert record.source_sha256 == source_sha256
-    assert record.progress_sha256 == task.progress_sha256
-    assert record.blocker_count == 0
-
-    monkeypatch.setattr(agent.stage2_review_ledger, 'finish', original_finish)
-    second = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(second.run_id, 10)
-
-    assert len(invocations) == 1, 'final approval 重放不得再买 Commander'
-    assert any('close-stage2' in argv for argv in canonical_calls)
-    assert not record_path.exists()
-    [ledger] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    assert ledger['state'] == 'complete'
-    assert all(turn['outcome'] == 'ok' for turn in ledger['turns'])
-
-
-@pytest.mark.parametrize('failure_window', ['mark_complete', 'record_retire'])
-def test_stage2_final_review_landed_reconciles_ledger_record_windows(
-        base, corpus, monkeypatch, failure_window):
-    """approval 已落地后两道双写窗都只补账/清记录，不重复 approval 或模型。"""
-    from novel.orchestrator import approvals
-
-    source_sha256 = '1' * 64
-    main_text_sha256 = '2' * 64
-    for index, (purpose, blockers) in enumerate((
-            ('review', 3), ('correction', 2), ('correction', 1)), start=1):
-        session_id = f'prior-final-landed-seat-{index}'
-        agent.stage2_review_ledger.reserve(
-            base, '42', source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            business_sha256=str(index + 2) * 64,
-            workpack_sha256=str(index + 3) * 64,
-            progress_sha256=str(index + 4) * 64,
-            blocker_count=blockers, purpose=purpose,
-            parent_run_id=f'prior-final-parent-{index}',
-            epoch_id='prior-final-epoch',
-            session_run_id=session_id, now=index)
-        agent.stage2_review_ledger.finish(
-            base, '42', source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            session_run_id=session_id, exit_code=0, now=index + 10)
-
-    global_token = 's2gr1_' + '6' * 64
-    blueprint_token = 'bpr3_' + '7' * 64
-    landed_state = {'approval': False}
-    current = SimpleNamespace(
-        state='blocked', code_version='test-code-version',
-        surface_seal='a' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_FINAL_REVIEW,
-            action_sha256='b' * 64))
-    complete = SimpleNamespace(
-        state='pipeline_complete', code_version='test-code-version',
-        surface_seal='f' * 64, execution_token=None, action=None)
-
-    def next_action(_base, _sid, *, code):
-        assert code == 'test-code-version'
-        return complete if landed_state['approval'] else current
-
-    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
-    stopped = AgentDeliveryOutcome(
-        state='stopped', reason='Stage2 终审待收口', checked_at=1)
-    monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: stopped)
-    task = agent.reviewer_tasks.ReviewerTask(
-        waiting_on=agent.queue.WAITING_ON_STAGE2_FINAL_REVIEW,
-        surface_seal=current.surface_seal,
-        business_sha256='c' * 64,
-        request_path=Path(base) / '_service' / 'placeholder-final-landed.json',
-        prompt='STAGE2 FINAL REVIEW LANDED WINDOW',
-        submission_options=({
-            'id': agent.review_seats.FINAL_REVIEW_APPROVAL_OPTION_ID,
-        },),
-        workpack_sha256='d' * 64,
-        source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        progress_sha256='e' * 64,
-        blocker_count=0)
-    task_box: dict[str, agent.reviewer_tasks.ReviewerTask] = {}
-
-    def build_task(_base, _sid, _current, request_path, *, epoch_id):
-        del epoch_id
-        live_task = replace(task, request_path=Path(request_path))
-        task_box['task'] = live_task
-        return live_task
-
-    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
-    action = agent.reviewer_tasks.ReviewerApprovalAction(
-        kind='approval', surface='stage2_final_review', payload={
-            'actor': 'agent:final-seat',
-            'reason': '独立通读当前 Global、MainText 与 Blueprint 后确认',
-            'global_review_token': global_token,
-            'blueprint_review_token': blueprint_token,
-        })
-    monkeypatch.setattr(
-        agent.reviewer_tasks, 'load_action',
-        lambda *_args, **_kwargs: action)
-    invocations: list[CommanderInvocation] = []
-
-    def default_spawn(_run_id, *, on_registered=None):
-        def spawn(invocation, env, log):
-            del env, log
-            invocations.append(invocation)
-            assert on_registered is not None
-            on_registered()
-            task_box['task'].request_path.write_text('{}', encoding='utf-8')
-            return CommanderProcessResult(
-                exit_code=0,
-                observation=CommanderObservation(
-                    provider_session_id='provider-final-landed-window',
-                    actual_model=invocation.profile.model,
-                    actual_effort=invocation.profile.reasoning_effort,
-                    usage=None),
-                wire_evidence=True)
-        return spawn
-
-    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
-    process_calls: list[list[str]] = []
-
-    class _DoneProcess:
-        pid = 434343
-
-        def __init__(self, argv, **_kwargs):
-            call = list(argv)
-            process_calls.append(call)
-            if 'close-stage2' in call:
-                landed_state['approval'] = True
-
-        def wait(self):
-            return 0
-
-        def poll(self):
-            return 0
-
-    monkeypatch.setattr(agent.subprocess, 'Popen', _DoneProcess)
-    monkeypatch.setattr(
-        approvals, 'get',
-        lambda *_args, **_kwargs: SimpleNamespace(
-            gate={'s2': landed_state['approval']},
-            seen={
-                'read': landed_state['approval'],
-                'global': landed_state['approval'],
-            }))
-    monkeypatch.setattr(
-        approvals, 'approval_head_bytes',
-        lambda *_args, **_kwargs: json.dumps({
-            'seen_subjects': {
-                'read': {'review_token': blueprint_token},
-                'global': {
-                    'actor': 'agent:final-seat',
-                    'review_token': global_token,
-                },
-            },
-        }).encode('utf-8'))
-
-    original_mark_complete = agent.stage2_review_ledger.mark_complete
-    original_discard = agent.uploads.discard_edit_plan
-    allow_retire = False
-    mark_calls = 0
-
-    def maybe_fail_mark(*args, **kwargs):
-        nonlocal mark_calls
-        mark_calls += 1
-        if failure_window == 'mark_complete' and mark_calls == 1:
-            raise OSError('synthetic approval-landed to ledger-complete crash')
-        return original_mark_complete(*args, **kwargs)
-
-    def maybe_fail_retire(base_, path):
-        candidate = Path(path)
-        if (failure_window == 'record_retire' and not allow_retire
-                and candidate.name.startswith('reviewer-action-')):
-            raise agent.NovelError(
-                'synthetic ledger-complete to record-retire crash')
-        return original_discard(base_, path)
-
-    monkeypatch.setattr(agent.stage2_review_ledger, 'mark_complete', maybe_fail_mark)
-    monkeypatch.setattr(agent.uploads, 'discard_edit_plan', maybe_fail_retire)
-    first = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(first.run_id, 10)
-
-    [record_path] = _reviewer_action_files(base)
-    [before] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    if failure_window == 'mark_complete':
-        first_done = next(
-            row for row in agent.records(base) if row.run_id == first.run_id)
-        assert first_done.exit_code == 70
-        assert before['state'] == 'exhausted'
-    else:
-        assert before['state'] == 'complete'
-    assert record_path.is_file()
-    assert len(invocations) == 1
-    assert sum('close-stage2' in call for call in process_calls) == 1
-
-    allow_retire = True
-    monkeypatch.setattr(
-        agent.stage2_review_ledger, 'mark_complete', original_mark_complete)
-    monkeypatch.setattr(agent.uploads, 'discard_edit_plan', original_discard)
-    recovered = agent.start(
-        base, '42', authorized=True, egress_authorized=True,
-        profiles=_PROFILES, spawn=None)
-    assert agent.wait(recovered.run_id, 10)
-
-    assert len(invocations) == 1, '补 ledger/删 record 不得再买 final-review Commander'
-    assert sum('close-stage2' in call for call in process_calls) == 1, (
-        'current approval/seen 已证明 landed，不得重复执行 close-stage2')
-    assert not record_path.exists()
-    [after] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    assert after['state'] == 'complete'
 
 
 def test_stage2_rejection_wins_crash_before_action_record_delete(
@@ -7070,7 +5147,7 @@ def test_generic_revalidate_commit_does_not_consume_apply_edit_action(
 
 @pytest.mark.real_code_version
 def test_stage2_wal_only_exit2_replans_to_exact_executor_without_second_commander(
-        base, corpus, monkeypatch):
+        base, corpus, monkeypatch, request):
     """首次 reviewed edit 只落 input WAL 就硬杀，同 parent 由确定性路补尾。
 
     这里只伪造 Commander 的 typed 回答；WAL 判定、operator blocker、permit
@@ -7259,7 +5336,10 @@ def test_stage2_wal_only_exit2_replans_to_exact_executor_without_second_commande
     rec = agent.start(
         base, '42', authorized=True, egress_authorized=True,
         profiles=_PROFILES, spawn=None)
-    assert agent.wait(rec.run_id, 30)
+    request.addfinalizer(lambda: agent.stop(base, rec.run_id)
+                         if any(row.run_id == rec.run_id and row.ended is None
+                                for row in agent.records(base)) else None)
+    assert agent.wait(rec.run_id, 120), '真实 CLI 补提交及全套主体复验未在有界窗口闭合'
 
     assert len(invocations) == 1, 'WAL 补尾不得重发 Commander'
     assert killed
@@ -7274,9 +5354,10 @@ def test_stage2_wal_only_exit2_replans_to_exact_executor_without_second_commande
     landed_global = store.read(GlobalGrounding, extract.GLOBAL_REL)
     assert landed_global.entities.characters['char_001'].role.startswith('沈家账房')
     assert _reviewer_action_files(base) == []
-    [ledger] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    assert ledger['turns'][0]['outcome'] == 'ok'
-    assert ledger['turns'][0]['rejections'] == 0
+    unit = _stage2_commander_unit(base)
+    assert unit.used == 1
+    assert unit.latest_turn().state == 'adopted'
+    assert unit.latest_turn().feedback_sha256 is None
 
 
 def test_stage2_commit_recovery_exit2_immediately_replans_to_correction(
@@ -7597,7 +5678,7 @@ def _seed_stage5_partial_batch(base: str):
 
 def _install_stage5_partial_agent_harness(
         base: str, monkeypatch, *, process_exit_code: int,
-        end_old_session: bool = True):
+        end_old_session: bool = True, work_unit: bool = False):
     """真实 queue 分类、replay loader、permit 与一次性外部输入的纵切。"""
     seeded = _seed_stage5_partial_batch(base)
     phase = {'done': False}
@@ -7735,38 +5816,40 @@ def _install_stage5_partial_agent_harness(
     # 尾，不是让 action record 自证来源或席位成功。
     attempt_id = 'old-stage5-trim-attempt'
     provider_session_id = 'old-stage5-provider-session'
-    prompt_sha256 = 'a' * 64
+    request_prompt = '原整批 Stage5 章节审阅工作包'
+    prompt_sha256 = hashlib.sha256(request_prompt.encode('utf-8')).hexdigest()
     schema_sha256 = 'b' * 64
     subject_sha256 = 'c' * 64
-    agent.reviewer_seat_ledger.reserve(
-        base, '42', waiting_on=seeded.record.waiting_on,
-        business_sha256=seeded.record.business_sha256,
-        purpose='review',
-        session_run_id=seeded.record.reviewer_session_run_id,
-        turn_id=seeded.record.reviewer_seat_turn_id,
-        parent_run_id=seeded.record.run_id,
-        epoch_id=seeded.record.epoch_id, now=1)
-    agent.reviewer_seat_ledger.record_attempt(
-        base, '42', waiting_on=seeded.record.waiting_on,
-        business_sha256=seeded.record.business_sha256,
-        turn_id=seeded.record.reviewer_seat_turn_id,
-        attempt_id=attempt_id, kind='launch', now=2)
-    agent.reviewer_seat_ledger.finish_attempt(
-        base, '42', waiting_on=seeded.record.waiting_on,
-        business_sha256=seeded.record.business_sha256,
-        turn_id=seeded.record.reviewer_seat_turn_id,
-        attempt_id=attempt_id, exit_code=0, error_kind=None,
-        provider_session_id=provider_session_id, wire_evidence=True, now=3)
-    agent.reviewer_seat_ledger.bind_response(
-        base, '42', waiting_on=seeded.record.waiting_on,
-        business_sha256=seeded.record.business_sha256,
-        turn_id=seeded.record.reviewer_seat_turn_id,
-        provider_response_sha256=seeded.record.provider_response_sha256)
-    agent.reviewer_seat_ledger.finish(
-        base, '42', waiting_on=seeded.record.waiting_on,
-        business_sha256=seeded.record.business_sha256,
-        turn_id=seeded.record.reviewer_seat_turn_id,
-        exit_code=0, now=4)
+    if not work_unit:
+        agent.reviewer_seat_ledger.reserve(
+            base, '42', waiting_on=seeded.record.waiting_on,
+            business_sha256=seeded.record.business_sha256,
+            purpose='review',
+            session_run_id=seeded.record.reviewer_session_run_id,
+            turn_id=seeded.record.reviewer_seat_turn_id,
+            parent_run_id=seeded.record.run_id,
+            epoch_id=seeded.record.epoch_id, now=1)
+        agent.reviewer_seat_ledger.record_attempt(
+            base, '42', waiting_on=seeded.record.waiting_on,
+            business_sha256=seeded.record.business_sha256,
+            turn_id=seeded.record.reviewer_seat_turn_id,
+            attempt_id=attempt_id, kind='launch', now=2)
+        agent.reviewer_seat_ledger.finish_attempt(
+            base, '42', waiting_on=seeded.record.waiting_on,
+            business_sha256=seeded.record.business_sha256,
+            turn_id=seeded.record.reviewer_seat_turn_id,
+            attempt_id=attempt_id, exit_code=0, error_kind=None,
+            provider_session_id=provider_session_id, wire_evidence=True, now=3)
+        agent.reviewer_seat_ledger.bind_response(
+            base, '42', waiting_on=seeded.record.waiting_on,
+            business_sha256=seeded.record.business_sha256,
+            turn_id=seeded.record.reviewer_seat_turn_id,
+            provider_response_sha256=seeded.record.provider_response_sha256)
+        agent.reviewer_seat_ledger.finish(
+            base, '42', waiting_on=seeded.record.waiting_on,
+            business_sha256=seeded.record.business_sha256,
+            turn_id=seeded.record.reviewer_seat_turn_id,
+            exit_code=0, now=4)
     session_common = dict(
         session_run_id=seeded.record.reviewer_session_run_id,
         parent_run_id=seeded.record.run_id,
@@ -7795,7 +5878,7 @@ def _install_stage5_partial_agent_harness(
             attempt_id=attempt_id, turn_index=1,
             actual_model=_CODEX.model,
             actual_effort=_CODEX.reasoning_effort,
-            kind='turn', ts=3))
+            kind='turn', ts=2 if work_unit else 3))
     if end_old_session:
         agent.agent_session_audit.append_event(
             base, agent.agent_session_audit.AgentSessionEvent(
@@ -7819,6 +5902,49 @@ def _install_stage5_partial_agent_harness(
         cli_version='test-cli-v1', outcome='ok', exit_code=0,
         activity=f'reviewer:{seeded.record.waiting_on}',
         response_sha256=seeded.record.provider_response_sha256)
+    if work_unit:
+        from dataclasses import asdict
+        from novel.work_units import WorkUnitBudget
+        budget = WorkUnitBudget(base, '42', 'stage5.review', 'commander', 'closure')
+        reservation = budget.reserve(
+            'e' * 64, run_id=seeded.record.run_id,
+            session_run_id=seeded.record.reviewer_session_run_id,
+            request_payload=dict(prompt=request_prompt, schema_sha256=schema_sha256,
+                                 waiting_on=seeded.record.waiting_on,
+                                 business_sha256=seeded.record.business_sha256))
+        budget.record_attempt(reservation.turn_id, attempt_id=attempt_id, outcome='ok',
+                              provider_session_id=provider_session_id)
+        seeded.record = seeded.record.model_copy(update=dict(
+            work_unit_id=budget.unit_id, work_unit_turn_id=reservation.turn_id,
+            reviewer_seat_turn_id=reservation.turn_id))
+        record = seeded.record
+        action = agent.reviewer_tasks.ReviewerNodeAction(
+            kind='node', node=record.node, flags=record.flags, input_payload=record.input_payload)
+        response = json.dumps(dict(schema=agent.reviewer_tasks.REQUEST_SCHEMA,
+            surface_seal=record.surface_seal, waiting_on=record.waiting_on,
+            action=asdict(action)), ensure_ascii=False)
+        session = next(item for item in agent_session_audit.fold(
+            agent_session_audit.read_events(base))
+            if item.session_run_id == record.reviewer_session_run_id)
+        cost_kwargs = dict(run_id=record.run_id, session_run_id=record.reviewer_session_run_id,
+            sid='42', attempt_id=attempt_id, request_model=_CODEX.model,
+            requested_effort=_CODEX.reasoning_effort, code='test-code-version',
+            protocol_version='test-protocol-v1', actual_model=_CODEX.model,
+            actual_effort=_CODEX.reasoning_effort, provider_session_id=provider_session_id,
+            cli_version='test-cli-v1', outcome='ok', exit_code=0,
+            activity=f'reviewer:{record.waiting_on}',
+            response_sha256=record.provider_response_sha256)
+        budget.save_response(reservation.turn_id, dict(
+            final_response=response, session_run_id=record.reviewer_session_run_id,
+            business_sha256=record.business_sha256, waiting_on=record.waiting_on,
+            prepared_receipt=dict(kind='commander-result-receipt-v1',
+                request_prompt=request_prompt, logical_prompt_sha256=prompt_sha256,
+                attempt_event=session.attempts[-1].to_dict(),
+                turn_event=session.turns[-1].to_dict(), cost_kwargs=cost_kwargs)))
+        budget.save_recovery(reservation.turn_id, dict(
+            business_sha256=record.business_sha256, waiting_on=record.waiting_on,
+            provider_response_sha256=record.provider_response_sha256,
+            action_sha256=agent.reviewer_tasks.action_business_sha256(action), action=asdict(action)))
     record_path = agent.uploads.save_reviewer_action(
         base, '42', seeded.record)
     return SimpleNamespace(
@@ -8109,15 +6235,13 @@ def test_stage5_durable_record_repairs_hard_kill_before_seat_finish(
         base, corpus, monkeypatch):
     """bind+record 已落后硬杀：新 parent 补 open session/started seat 后零 wire。"""
     harness = _install_stage5_live_batch_harness(base, monkeypatch)
-    original_finish = agent.reviewer_seat_ledger.finish
+    original_finish = agent._promote_reviewer_candidate
     original_append = agent.agent_session_audit.append_event
     block_tail = {'value': True}
     skipped_end = []
 
     def crash_before_finish(*args, **kwargs):
-        if (block_tail['value']
-                and kwargs.get('waiting_on') ==
-                agent.queue.WAITING_ON_STAGE5_CLOSURE):
+        if block_tail['value']:
             raise OSError('synthetic hard kill before Stage5 seat.finish')
         return original_finish(*args, **kwargs)
 
@@ -8128,7 +6252,7 @@ def test_stage5_durable_record_repairs_hard_kill_before_seat_finish(
             return None
         return original_append(base_arg, event)
 
-    monkeypatch.setattr(agent.reviewer_seat_ledger, 'finish', crash_before_finish)
+    monkeypatch.setattr(agent, '_promote_reviewer_candidate', crash_before_finish)
     monkeypatch.setattr(
         agent.agent_session_audit, 'append_event', skip_hard_killed_end)
     first = agent.start(
@@ -8140,8 +6264,9 @@ def test_stage5_durable_record_repairs_hard_kill_before_seat_finish(
     record = ReviewerActionRecord.model_validate_json(record_path.read_bytes())
     assert record.run_id == first.run_id
     assert record.review_token is None
-    [before] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert [row['outcome'] for row in before['turns']] == ['started']
+    from novel.work_units import WorkUnitBudget
+    budget = WorkUnitBudget(base, '42', 'stage5.review', 'commander', 'closure')
+    assert budget.used == 1 and budget.latest_turn().state == 'delivered'
     [open_session] = agent_session_audit.fold(
         agent_session_audit.read_events(base))
     assert open_session.end is None and skipped_end
@@ -8151,7 +6276,7 @@ def test_stage5_durable_record_repairs_hard_kill_before_seat_finish(
     assert first_done.exit_code == 70
 
     block_tail['value'] = False
-    monkeypatch.setattr(agent.reviewer_seat_ledger, 'finish', original_finish)
+    monkeypatch.setattr(agent, '_promote_reviewer_candidate', original_finish)
     monkeypatch.setattr(agent.agent_session_audit, 'append_event', original_append)
     second = agent.start(
         base, '42', authorized=True, egress_authorized=True,
@@ -8161,14 +6286,11 @@ def test_stage5_durable_record_repairs_hard_kill_before_seat_finish(
     assert len(harness.invocations) == 1
     assert len(harness.executions) == 1
     assert not record_path.exists()
-    [after] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert [row['outcome'] for row in after['turns']] == ['ok']
+    assert budget.used == 1 and budget.latest_turn().state == 'adopted'
     [restored_session] = agent_session_audit.fold(
         agent_session_audit.read_events(base))
     assert restored_session.process_state == 'ok'
     assert restored_session.delivery_state == 'unknown'
-    assert '[reviewer-replay]' in agent.run_log_path(
-        base, second.run_id).read_text('utf-8')
 
 
 @contextmanager
@@ -8445,8 +6567,9 @@ def test_stage5_reviewer_rewrite_normal_agent_path_seals_permanent_authority(
     record = reviewer_action_evidence.require_sealed_reviewer_rewrite_authority(
         base, '42', request, request_file_sha256)
     assert record.run_id == rec.run_id
-    [seat] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert [row['outcome'] for row in seat['turns']] == ['ok']
+    from novel.work_units import WorkUnitBudget
+    budget = WorkUnitBudget(base, '42', 'stage5.review', 'commander', 'closure')
+    assert budget.used == 1 and budget.latest_turn().state == 'adopted'
     [session] = agent_session_audit.fold(
         agent_session_audit.read_events(base))
     assert session.process_state == 'ok'
@@ -8698,9 +6821,8 @@ def test_stage5_reviewer_rewrite_seal_revalidates_seat_session_and_cost(
     record = reviewer_action_evidence.require_sealed_reviewer_rewrite_authority(
         base, '42', request, request_file_sha256)
 
-    seat_path = reviewer_seat_ledger.ledger_path(
-        base, '42', waiting_on=record.waiting_on,
-        business_sha256=record.business_sha256)
+    from novel.work_units import WorkUnitBudget
+    seat_path = WorkUnitBudget(base, '42', 'stage5.review', 'commander', 'closure').path
     session_path = agent_session_audit.audit_path(base)
     cost_path = Path(base) / '_service' / 'ledger.jsonl'
     originals = {
@@ -8710,7 +6832,7 @@ def test_stage5_reviewer_rewrite_seal_revalidates_seat_session_and_cost(
     }
 
     seat_payload = json.loads(originals[seat_path])
-    seat_payload['max_corrections'] += 1
+    seat_payload['content_limit'] += 1
     seat_path.write_text(
         json.dumps(seat_payload, ensure_ascii=False, indent=2) + '\n',
         encoding='utf-8')
@@ -8770,8 +6892,9 @@ def test_stage5_record_save_failure_fails_seat_before_any_canonical_action(
     assert len(harness.invocations) == 1
     assert harness.executions == []
     assert _reviewer_action_files(base) == []
-    [seat] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert [row['outcome'] for row in seat['turns']] == ['failed']
+    from novel.work_units import WorkUnitBudget
+    budget = WorkUnitBudget(base, '42', 'stage5.review', 'commander', 'closure')
+    assert budget.used == 1 and budget.latest_turn().state == 'delivered'
     [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
     assert done.exit_code == 70
 
@@ -8792,8 +6915,9 @@ def test_stage5_promote_failure_keeps_record_and_failed_seat_replays_zero_wire(
     assert agent.wait(first.run_id, 20)
 
     [record_path] = _reviewer_action_files(base)
-    [failed] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert [row['outcome'] for row in failed['turns']] == ['failed']
+    from novel.work_units import WorkUnitBudget
+    budget = WorkUnitBudget(base, '42', 'stage5.review', 'commander', 'closure')
+    assert budget.used == 1 and budget.latest_turn().state == 'delivered'
     assert harness.executions == []
     [first_done] = [
         row for row in agent.records(base) if row.run_id == first.run_id]
@@ -8808,18 +6932,14 @@ def test_stage5_promote_failure_keeps_record_and_failed_seat_replays_zero_wire(
     assert len(harness.invocations) == 1
     assert len(harness.executions) == 1
     assert not record_path.exists()
-    [after] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert [row['outcome'] for row in after['turns']] == ['failed']
-    assert '[reviewer-replay]' in agent.run_log_path(
-        base, second.run_id).read_text('utf-8')
+    assert budget.used == 1 and budget.latest_turn().state == 'adopted'
 
 
 def test_stage5_partial_batch_restarts_through_real_queue_without_commander(
         base, corpus, monkeypatch):
-    """旧 closure 席不接管 trim；durable 整批经 queue→Agent 只补 deterministic 尾。"""
-    old_business = _seed_old_stage5_closure_seat(base)
+    """同一工作单元的 durable 整批经 queue→Agent 只补 deterministic 尾。"""
     harness = _install_stage5_partial_agent_harness(
-        base, monkeypatch, process_exit_code=0)
+        base, monkeypatch, process_exit_code=0, work_unit=True)
 
     rec = agent.start(
         base, '42', authorized=True, egress_authorized=True,
@@ -8832,21 +6952,10 @@ def test_stage5_partial_batch_restarts_through_real_queue_without_commander(
     assert not harness.record_path.exists()
     assert harness.materialized_paths and all(
         not path.exists() for path in harness.materialized_paths)
-    assert '[reviewer-replay]' in agent.run_log_path(
-        base, rec.run_id).read_text('utf-8')
-    ledgers = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert len(ledgers) == 2
-    old_ledger = next(
-        row for row in ledgers if row['business_sha256'] == old_business)
-    trim_ledger = next(
-        row for row in ledgers
-        if row['business_sha256'] == harness.seeded.record.business_sha256)
-    assert [row['purpose'] for row in old_ledger['turns']] == [
-        'review', 'correction', 'correction']
-    assert old_ledger['pending_correction'] is True
-    assert [row['purpose'] for row in trim_ledger['turns']] == ['review']
-    assert trim_ledger['turns'][0]['outcome'] == 'ok'
-    assert trim_ledger['pending_correction'] is False
+    from novel.work_units import WorkUnitBudget
+    budget = WorkUnitBudget(base, '42', 'stage5.review', 'commander', 'closure')
+    assert budget.used == 1 and budget.latest_turn().state == 'adopted'
+    assert agent.reviewer_seat_ledger.list_ledgers(base, '42') == []
     [old_session] = agent_session_audit.fold(
         agent_session_audit.read_events(base))
     assert old_session.session_run_id == 'old-stage5-trim-session'
@@ -9082,7 +7191,7 @@ def test_stage5_partial_replay_exit2_keeps_record_across_parents_and_zero_wire(
         base, corpus, monkeypatch):
     """同 binding 的 deterministic 拒绝不消费完整 manifest，下一 parent 也不买席。"""
     harness = _install_stage5_partial_agent_harness(
-        base, monkeypatch, process_exit_code=2)
+        base, monkeypatch, process_exit_code=2, work_unit=True)
 
     run_ids = []
     for _ in range(2):
@@ -9095,16 +7204,15 @@ def test_stage5_partial_replay_exit2_keeps_record_across_parents_and_zero_wire(
         [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
         assert done.exit_code == 2
         assert done.outcome is not None
-        assert '完整 manifest 记录已保留' in done.outcome.reason
+        assert '保留原回答' in done.outcome.reason
 
     assert len(harness.permits) == 2
     assert harness.commander_spawns == []
-    assert all('[reviewer-replay]' in agent.run_log_path(
-        base, run_id).read_text('utf-8') for run_id in run_ids)
     assert harness.materialized_paths and all(
         not path.exists() for path in harness.materialized_paths)
-    [trim_ledger] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert [row['outcome'] for row in trim_ledger['turns']] == ['ok']
+    from novel.work_units import WorkUnitBudget
+    budget = WorkUnitBudget(base, '42', 'stage5.review', 'commander', 'closure')
+    assert budget.used == 1 and budget.latest_turn().state == 'delivered'
     [old_session] = agent_session_audit.fold(
         agent_session_audit.read_events(base))
     assert old_session.session_run_id == 'old-stage5-trim-session'
@@ -9247,17 +7355,33 @@ def test_stage5_closure_evidence_error_stops_before_seat_or_permit(
     assert done.outcome is not None and done.outcome.state == 'unknown'
 
 
+def _save_design_decision_before_submission(
+        base, monkeypatch, reason, *, review_token=_REPLAY_TOKEN):
+    """真实 Supervisor 保存回答、typed 决定与原成本，提交前中断。"""
+    with monkeypatch.context() as seed_patch:
+        _current, calls, applied = _install_design_review_harness(
+            seed_patch, apply_exit_codes=[], decisions=[reason], review_token=review_token)
+
+        def crash_before_submission(*_args, **_kwargs):
+            raise OSError('合成已保存决定、提交尚未开始的进程中断')
+
+        seed_patch.setattr(agent, '_promote_reviewer_candidate', crash_before_submission)
+        first = agent.start(base, '42', authorized=True, egress_authorized=True,
+                            profiles=_PROFILES, spawn=None)
+        assert agent.wait(first.run_id, 15)
+        assert len(calls) == 1 and applied == []
+        [path] = _reviewer_action_files(base)
+        budget = WorkUnitBudget(base, '42', 'stage4.design', 'commander', 'design')
+        assert budget.used == 1 and budget.latest_turn().state == 'delivered'
+        return path, first.run_id
+
+
 def test_recorded_reviewer_decision_replays_without_a_commander_turn(
         base, corpus, monkeypatch):
     """同 blocker、同 surface seal 的盘上决定直接交 canonical apply，不唤模型。"""
+    path, original_run = _save_design_decision_before_submission(base, monkeypatch, 'replayed')
     current, invocations, applied = _install_design_review_harness(
         monkeypatch, apply_exit_codes=[0], decisions=[])
-    path = agent.uploads.save_reviewer_action(base, '42', ReviewerActionRecord(
-        sid='42', run_id='1700000000-abcdef12', epoch_id='old-epoch',
-        waiting_on=current.action.waiting_on, surface_seal=current.surface_seal,
-        business_sha256='e' * 64, surface='design',
-        payload=_design_review_payload('replayed'),
-        review_token=_REPLAY_TOKEN, recorded_at=1))
 
     rec = agent.start(
         base, '42', authorized=True, egress_authorized=True,
@@ -9267,27 +7391,25 @@ def test_recorded_reviewer_decision_replays_without_a_commander_turn(
     assert invocations == []
     assert applied == [_design_review_payload('replayed')]
     assert not path.exists()
-    assert '[reviewer-replay]' in agent.run_log_path(
-        base, rec.run_id).read_text('utf-8')
     ledger = Path(base) / '_service' / 'ledger.jsonl'
     commander_rows = [
         json.loads(line) for line in (
             ledger.read_text('utf-8').splitlines() if ledger.exists() else [])
         if json.loads(line).get('role') == 'commander']
-    assert commander_rows == [], '重放不得伪造一次 Commander 调用'
+    assert len(commander_rows) == 1 and commander_rows[0]['run_id'] == original_run
+    assert WorkUnitBudget(base, '42', 'stage4.design', 'commander', 'design').used == 1
 
 
 def test_recorded_reviewer_decision_replays_across_code_change_by_review_token(
         base, corpus, monkeypatch):
     """surface seal 随代码变了，但 review_token 相同 ⇒ 仍重放（与 approve 侧同一判据）。"""
+    path, _original_run = _save_design_decision_before_submission(
+        base, monkeypatch, 'replayed-by-token')
     current, invocations, applied = _install_design_review_harness(
         monkeypatch, apply_exit_codes=[0], decisions=[])
-    path = agent.uploads.save_reviewer_action(base, '42', ReviewerActionRecord(
-        sid='42', run_id='1700000000-abcdef12', epoch_id='old-epoch',
-        waiting_on=current.action.waiting_on, surface_seal='0' * 64,
-        business_sha256='f' * 64, surface='design',
-        payload=_design_review_payload('replayed-by-token'),
-        review_token=_REPLAY_TOKEN, recorded_at=1))
+    current.surface_seal = '0' * 64
+    current.code_version = 'revised-code-version'
+    monkeypatch.setattr(agent.prov, 'code_version', lambda: 'revised-code-version')
 
     rec = agent.start(
         base, '42', authorized=True, egress_authorized=True,
@@ -9302,14 +7424,10 @@ def test_recorded_reviewer_decision_replays_across_code_change_by_review_token(
 def test_stale_reviewer_decision_is_discarded_and_commander_reviews(
         base, corpus, monkeypatch):
     """seal 与 token 都不匹配的记录当场删除，不得替当前 blocker 代签。"""
+    stale, _original_run = _save_design_decision_before_submission(
+        base, monkeypatch, 'stale', review_token='s4dr1_' + '2' * 64)
     current, invocations, applied = _install_design_review_harness(
         monkeypatch, apply_exit_codes=[0], decisions=['fresh'])
-    stale = agent.uploads.save_reviewer_action(base, '42', ReviewerActionRecord(
-        sid='42', run_id='1700000000-abcdef12', epoch_id='old-epoch',
-        waiting_on=current.action.waiting_on, surface_seal='0' * 64,
-        business_sha256='f' * 64, surface='design',
-        payload=_design_review_payload('stale', review_token='s4dr1_' + '2' * 64),
-        review_token='s4dr1_' + '2' * 64, recorded_at=1))
 
     rec = agent.start(
         base, '42', authorized=True, egress_authorized=True,
@@ -9322,32 +7440,29 @@ def test_stale_reviewer_decision_is_discarded_and_commander_reviews(
     assert _reviewer_action_files(base) == []
 
 
-def test_rejected_replay_stops_without_buying_a_second_review(
+def test_rejected_replay_uses_remaining_work_unit_budget(
         base, corpus, monkeypatch):
-    """重放被 canonical 拒绝：同 business 首审不返还，不再 wire。"""
+    """重放遭到明确内容拒绝，订正使用原业务余量，不重发四次额度。"""
+    path, _original_run = _save_design_decision_before_submission(base, monkeypatch, 'replayed')
     current, invocations, applied = _install_design_review_harness(
-        monkeypatch, apply_exit_codes=[2], decisions=[])
-    path = agent.uploads.save_reviewer_action(base, '42', ReviewerActionRecord(
-        sid='42', run_id='1700000000-abcdef12', epoch_id='old-epoch',
-        waiting_on=current.action.waiting_on, surface_seal=current.surface_seal,
-        business_sha256='e' * 64, surface='design',
-        payload=_design_review_payload('replayed'),
-        review_token=_REPLAY_TOKEN, recorded_at=1))
+        monkeypatch, apply_exit_codes=[2, 0], decisions=['corrected'])
 
     rec = agent.start(
         base, '42', authorized=True, egress_authorized=True,
         profiles=_PROFILES, spawn=None)
     assert agent.wait(rec.run_id, 10)
 
-    assert applied == [_design_review_payload('replayed')]
-    assert invocations == []
+    assert applied == [_design_review_payload('replayed'), _design_review_payload('corrected')]
+    assert len(invocations) == 1
     assert not path.exists()
     assert _reviewer_action_files(base) == []
     [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    # 合成 apply 不改真实审批，固定 blocker 仍在；已采纳后不能再买一次审阅。
     assert done.exit_code == 2
-    assert done.outcome is not None and done.outcome.state == 'stopped'
-    assert '首审席位' in done.outcome.reason
-    assert '不返还' in done.outcome.reason
+    assert '没有新的审阅进展' in done.outcome.reason
+    unit = WorkUnitBudget(base, '42', 'stage4.design', 'commander', 'design')
+    assert unit.used == 2 and unit.remaining == 2
+    assert [turn.state for turn in unit._read().turns] == ['failed', 'adopted']
 
 
 # ── 同席 attempt：网络/瞬态失败不新开 logical session、不扣新席 ─────────
@@ -9357,7 +7472,7 @@ def _seat_harness(monkeypatch):
         state='blocked', code_version='test-code-version',
         surface_seal='c' * 64, execution_token=None,
         action=SimpleNamespace(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
+            waiting_on='stage0.approve',
             action_sha256='d' * 64,
         ),
     )
@@ -9365,18 +7480,18 @@ def _seat_harness(monkeypatch):
         agent.operator, 'next_action_at_code',
         lambda _base, _sid, *, code: current)
     outcome = AgentDeliveryOutcome(
-        state='stopped', reason='Stage2 仍待审阅', checked_at=1)
+        state='stopped', reason='Stage0 明确停止', checked_at=1)
     monkeypatch.setattr(agent, '_assess_delivery', lambda *_args, **_kwargs: outcome)
     task_box = {}
 
     def build_task(_base, _sid, _current, request_path, *, epoch_id):
         del epoch_id
         task = agent.reviewer_tasks.ReviewerTask(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
+            waiting_on='stage0.approve',
             surface_seal=current.surface_seal,
             business_sha256='e' * 64,
             request_path=Path(request_path),
-            prompt='STAGE2 FULL REVIEW',
+            prompt='STAGE0 FULL REVIEW',
             submission_options=({'id': 'node:stage2.global.review'},),
             workpack_sha256='f' * 64,
             source_sha256='1' * 64,
@@ -9391,7 +7506,7 @@ def _seat_harness(monkeypatch):
 
     def load_action(_path, _current, *, submission_options):
         del submission_options
-        raise agent.reviewer_tasks.ReviewerTaskError('typed 请求仍不合法')
+        return agent.reviewer_tasks.ReviewerStopAction(kind='stop', reason='网络测试明确停止')
 
     monkeypatch.setattr(agent.reviewer_tasks, 'load_action', load_action)
     sleeps: list[float] = []
@@ -9400,8 +7515,7 @@ def _seat_harness(monkeypatch):
 
 
 def _seat_ledger(base):
-    [shown] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    return shown
+    return WorkUnitBudget(base, '42', 'stage0.approve', 'commander', 'book')._read()
 
 
 def _spawn_sequence(task_box, invocations, outcomes):
@@ -9422,7 +7536,7 @@ def _spawn_sequence(task_box, invocations, outcomes):
                 task.request_path.write_text(
                     json.dumps({'commander_turn': len(invocations)}),
                     encoding='utf-8')
-            return spec
+            return replace(spec, final_response=json.dumps({'action': {'kind': 'stop', 'reason': '网络测试明确停止'}})) if spec.exit_code == 0 else spec
         return spawn
 
     return default_spawn
@@ -9450,22 +7564,20 @@ def test_transient_failure_resumes_the_same_seat_without_a_new_session(
         _seat_result(1, provider='provider-seat-1',
                      failure_kind='connection', retryable=True),
         _seat_result(0, provider='provider-seat-1'),
-        _seat_result(0, provider='provider-seat-2'),
-        _seat_result(0, provider='provider-seat-3'),
     ]))
     rec = agent.start(
         base, '42', authorized=True, egress_authorized=True,
         profiles=_PROFILES, spawn=None)
     assert agent.wait(rec.run_id, 10)
 
-    assert len(invocations) == 4
+    assert len(invocations) == 2
     assert [row.resume_provider_session_id for row in invocations] == [
-        None, 'provider-seat-1', None, None]
+        None, 'provider-seat-1']
     assert invocations[1].stdin_text.startswith('上一进程因网络或瞬态故障中断')
     assert sleeps == [agent.COMMANDER_RETRY_BACKOFF_SECONDS[0]]
 
     sessions = agent_session_audit.fold(agent_session_audit.read_events(base))
-    assert len(sessions) == 3, '同席 resume 不新开 logical session'
+    assert len(sessions) == 1, '同次内容请求网络 resume 不新开 logical session'
     first = sessions[-1]
     assert [turn.turn_index for turn in first.turns] == [1, 2]
     assert [turn.error_kind for turn in first.turns] == ['connection', None]
@@ -9473,18 +7585,14 @@ def test_transient_failure_resumes_the_same_seat_without_a_new_session(
     assert [row.delivery_attempts for row in first.attempts] == [1, 2]
     assert [row.error_kind for row in first.attempts] == ['connection', None]
 
-    shown = _seat_ledger(base)
-    assert [row['purpose'] for row in shown['turns']] == [
-        'review', 'correction', 'correction']
-    assert [row['attempts'] for row in shown['turns']] == [2, 1, 1]
-    assert shown['turns'][0]['outcome'] == 'ok'
-    ledger = agent.stage2_review_ledger.Stage2ReviewLedger.model_validate_json(
-        Path(shown['ledger_path']).read_bytes())
+    ledger = _seat_ledger(base)
+    assert len(ledger.turns) == 1
     attempts = ledger.turns[0].attempts
-    assert [row.kind for row in attempts] == ['launch', 'resume']
-    assert attempts[0].error_kind == 'connection' and attempts[0].wire_evidence
+    assert len(attempts) == 2
+    assert [row.outcome for row in attempts] == ['error', 'ok']
     assert attempts[1].provider_session_id == 'provider-seat-1'
-    assert attempts[1].exit_code == 0
+    assert ledger.turns[0].state == 'adopted'
+    assert agent.reviewer_seat_ledger.list_ledgers(base, '42') == []
 
     log = agent.run_log_path(base, rec.run_id).read_text('utf-8')
     assert '[commander-retry] attempt=1 failure=connection' in log
@@ -9493,12 +7601,13 @@ def test_transient_failure_resumes_the_same_seat_without_a_new_session(
         (Path(base) / '_service' / 'ledger.jsonl').read_text('utf-8').splitlines()
         if line.strip()]
     commander_rows = [row for row in rows if row.get('role') == 'commander']
-    assert [row['outcome'] for row in commander_rows] == ['error', 'ok', 'ok', 'ok']
+    assert [row['outcome'] for row in commander_rows] == ['error', 'ok']
 
 
 def test_stage2_compact_schema_identity_is_stable_across_transient_resume(
         base, corpus, monkeypatch):
     """真实 AgentRun 首发与同席 resume 共用同一动态 schema 审计身份。"""
+    monkeypatch.setattr(agent, '_preflight_stage2_reviewer_action', lambda *_a, **_k: None)
     current = SimpleNamespace(
         state='blocked', code_version='test-code-version',
         surface_seal='6' * 64, execution_token=None,
@@ -9580,8 +7689,7 @@ def test_stage2_compact_schema_identity_is_stable_across_transient_resume(
     assert invocations[1].expected_output_schema_sha256 == schema_sha256
     assert sleeps == [agent.COMMANDER_RETRY_BACKOFF_SECONDS[0]]
 
-    [ledger] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    session_run_id = ledger['turns'][0]['session_run_id']
+    session_run_id = _stage2_commander_unit(base).latest_turn().session_run_id
     session_events = [
         row for row in agent_session_audit.read_events(base)
         if row.session_run_id == session_run_id
@@ -9598,9 +7706,10 @@ def test_stage2_compact_schema_identity_is_stable_across_transient_resume(
     assert done.exit_code == 0
 
 
-def test_stage2_canonical_rejection_keeps_compact_digest_for_no_progress(
+def test_stage2_canonical_rejection_keeps_original_compact_digest(
         base, corpus, monkeypatch):
-    """canonical 拒因绑原 compact digest；新 surface 以现役包纠错。"""
+    """canonical 明确拒绝当前动作，订正反馈必须绑定原 compact 回答摘要。"""
+    monkeypatch.setattr(agent, '_preflight_stage2_reviewer_action', lambda *_a, **_k: None)
     first_current = SimpleNamespace(
         state='blocked', code_version='test-code-version',
         surface_seal='6' * 64, execution_token=None,
@@ -9617,7 +7726,7 @@ def test_stage2_canonical_rejection_keeps_compact_digest_for_no_progress(
 
     def next_action(_base, _sid, *, code):
         assert code == 'test-code-version'
-        return first_current if executed == 0 else next_current
+        return first_current if executed < 2 else next_current
 
     monkeypatch.setattr(
         agent.operator, 'next_action_at_code',
@@ -9631,6 +7740,7 @@ def test_stage2_canonical_rejection_keeps_compact_digest_for_no_progress(
         del epoch_id
         task, response = _stage2_compact_apply_edit_fixture(
             current, request_path)
+        response['payload']['edit']['post_edit_review']['reason'] += f'；订正轮次{executed}'
         task_box['task'] = task
         task_box['response'] = response
         return task
@@ -9660,7 +7770,7 @@ def test_stage2_canonical_rejection_keeps_compact_digest_for_no_progress(
             return CommanderProcessResult(
                 exit_code=0,
                 observation=CommanderObservation(
-                    provider_session_id=f'provider-compact-{len(invocations)}',
+                    provider_session_id='provider-compact',
                     actual_model=invocation.profile.model,
                     actual_effort=invocation.profile.reasoning_effort,
                     usage=None),
@@ -9683,24 +7793,17 @@ def test_stage2_canonical_rejection_keeps_compact_digest_for_no_progress(
         wire_responses[1], ensure_ascii=False, sort_keys=True,
         separators=(',', ':'), allow_nan=False,
     ).encode('utf-8') + b'\n').hexdigest()
-    assert executed == 1
+    assert executed == 2
     assert len(invocations) == 2
-    assert raw_digest != second_digest, (
-        'planner 重读后的 exact-request binding 已变，不得把新包误判为'
-        '原字节 no-progress')
-    [shown] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    ledger = agent.stage2_review_ledger.Stage2ReviewLedger.model_validate_json(
-        Path(shown['ledger_path']).read_bytes())
-    assert ledger.turns[0].rejections[0].request_sha256 == raw_digest
-    assert len(ledger.turns[1].rejections) == 1
-    assert ledger.turns[1].rejections[0].kind == 'typed_loader'
-    assert ledger.turns[1].rejections[0].request_sha256 == second_digest
-    assert _reviewer_action_files(base) == [], (
-        '等价 typed 动作的拒因落账后不得留下可被下一 parent 执行的 record')
+    assert raw_digest != second_digest
+    feedback = _stage2_feedback(_stage2_commander_unit(base), 0)
+    assert feedback['response_sha256'] == raw_digest
+    assert 'surviving relation_set_complete' in feedback['reason']
+    assert [row.resume_provider_session_id for row in invocations] == [None, 'provider-compact']
+    assert _reviewer_action_files(base) == []
     [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
-    assert done.exit_code == 2
-    assert done.outcome is not None
-    assert '等价 typed 动作' in done.outcome.reason
+    assert done.exit_code == 0
+    assert _stage2_commander_unit(base).used == 2
 
 
 def test_zero_wire_launch_failure_relaunches_and_timeout_uses_partial_session(
@@ -9720,8 +7823,6 @@ def test_zero_wire_launch_failure_relaunches_and_timeout_uses_partial_session(
         _seat_result(1, provider=None, failure_kind='connection', retryable=True),
         idle,
         _seat_result(0, provider='provider-idle'),
-        _seat_result(0, provider='provider-seat-2'),
-        _seat_result(0, provider='provider-seat-3'),
     ]))
     rec = agent.start(
         base, '42', authorized=True, egress_authorized=True,
@@ -9729,16 +7830,14 @@ def test_zero_wire_launch_failure_relaunches_and_timeout_uses_partial_session(
     assert agent.wait(rec.run_id, 10)
 
     assert [row.resume_provider_session_id for row in invocations] == [
-        None, None, 'provider-idle', None, None]
+        None, None, 'provider-idle']
     assert sleeps == list(agent.COMMANDER_RETRY_BACKOFF_SECONDS[:2])
-    shown = _seat_ledger(base)
-    assert [row['attempts'] for row in shown['turns']] == [3, 1, 1]
-    ledger = agent.stage2_review_ledger.Stage2ReviewLedger.model_validate_json(
-        Path(shown['ledger_path']).read_bytes())
+    ledger = _seat_ledger(base)
+    assert len(ledger.turns) == 1
     attempts = ledger.turns[0].attempts
-    assert [row.kind for row in attempts] == ['launch', 'launch', 'resume']
-    assert [row.wire_evidence for row in attempts] == [False, True, True]
-    assert attempts[1].error_kind == 'timeout'
+    assert len(attempts) == 3
+    assert [row.outcome for row in attempts] == ['error', 'error', 'ok']
+    assert [row.provider_session_id for row in attempts] == [None, 'provider-idle', 'provider-idle']
     sessions = agent_session_audit.fold(agent_session_audit.read_events(base))
     first = sessions[-1]
     assert [row.delivery_attempts for row in first.attempts] == [1, 2, 3]
@@ -9761,8 +7860,8 @@ def test_non_retryable_failure_and_attempt_cap_do_not_loop(
     assert len(invocations) == 1 and sleeps == []
     [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
     assert done.exit_code == 1
-    shown = _seat_ledger(base)
-    assert [row['attempts'] for row in shown['turns']] == [1]
+    ledger = _seat_ledger(base)
+    assert len(ledger.turns) == len(ledger.turns[0].attempts) == 1
 
 
 def test_attempt_cap_stops_after_max_attempts(base, corpus, monkeypatch):
@@ -9783,10 +7882,11 @@ def test_attempt_cap_stops_after_max_attempts(base, corpus, monkeypatch):
     assert len(sleeps) == agent.COMMANDER_MAX_ATTEMPTS_PER_SEAT - 1
     [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
     assert done.exit_code == 1
-    shown = _seat_ledger(base)
-    assert [row['attempts'] for row in shown['turns']] == [
-        agent.COMMANDER_MAX_ATTEMPTS_PER_SEAT]
-    assert shown['turns'][0]['outcome'] == 'failed'
+    ledger = _seat_ledger(base)
+    assert len(ledger.turns) == 1
+    assert len(ledger.turns[0].attempts) == agent.COMMANDER_MAX_ATTEMPTS_PER_SEAT
+    assert ledger.turns[0].state == 'unknown'
+    assert ledger.turns[0].reason_code == 'commander_transport_failed'
 
 
 def test_session_pointer_is_written_from_the_first_protocol_event(
@@ -9809,7 +7909,7 @@ def test_session_pointer_is_written_from_the_first_protocol_event(
             # 每轮请求字节不同：相同字节会被“无效纠错循环”守卫提前停止。
             task.request_path.write_text(
                 json.dumps({'commander_turn': len(invocations)}), encoding='utf-8')
-            return _seat_result(0, provider=provider)
+            return replace(_seat_result(0, provider=provider), final_response=json.dumps({'action': {'kind': 'stop', 'reason': '指针已记录'}}))
         return spawn
 
     monkeypatch.setattr(agent, '_default_spawn', default_spawn)
@@ -9827,7 +7927,7 @@ def test_session_pointer_is_written_from_the_first_protocol_event(
         CommanderSessionPointer.model_validate_json(pointer.read_bytes())
         for pointer in pointers]
     assert sorted(row.provider_session_id for row in loaded) == [
-        'provider-pointer-1', 'provider-pointer-2', 'provider-pointer-3']
+        'provider-pointer-1']
     assert {row.attempt_kind for row in loaded} == {'launch'}
     assert {row.parent_run_id for row in loaded} == {rec.run_id}
     assert {pointer.stem for pointer in pointers} == {
@@ -9947,11 +8047,11 @@ def test_capacity_real_commander_driver_keeps_seat_schema_and_failure_audit(
     succeeded = scenario in ('capacity_then_success', 'capacity_last_success')
     failures = expected_attempts - int(succeeded)
     assert applied == ([_design_review_payload('capacity-adopted')] if succeeded else [])
-    [shown] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
-    assert len(shown['turns']) == 1, '交付重试不新开业务席位'
-    assert shown['turns'][0]['attempts'] == expected_attempts
-    assert shown['turns'][0]['outcome'] == ('ok' if succeeded else 'failed')
-    assert shown['corrections_used'] == 0
+    ledger = WorkUnitBudget(base, '42', 'stage4.design', 'commander', 'design')._read()
+    assert len(ledger.turns) == 1, '网络重试不另占内容轮'
+    assert len(ledger.turns[0].attempts) == expected_attempts
+    assert ledger.turns[0].state == ('adopted' if succeeded else 'unknown')
+    assert agent.reviewer_seat_ledger.list_ledgers(base, '42') == []
     [session] = agent_session_audit.fold(agent_session_audit.read_events(base))
     assert session.provider_session_ids == ('capacity-same-seat',)
     assert len(session.attempts) == len(session.turns) == expected_attempts
@@ -9979,3 +8079,163 @@ def test_capacity_real_commander_driver_keeps_seat_schema_and_failure_audit(
         assert expected_kind in done.outcome.reason
         assert _reviewer_action_files(base) == []
         assert session.process_state == 'failed' and session.delivery_state == 'unknown'
+
+
+# 新执行只保留两位 Commander，各自沿同一工作单元续用会话和四次额度。
+
+
+def _stage2_feedback(unit, index):
+    turn = unit._read().turns[index]
+    assert turn.feedback_sha256
+    return json.loads((unit.directory / f'{turn.feedback_sha256}.json').read_bytes())['payload']
+
+
+def _stage2_commander_unit(base, waiting_on=queue.WAITING_ON_STAGE2_REVIEW):
+    from novel.work_units import WorkUnitBudget
+    node, scope = agent.commander_work_unit(waiting_on)
+    return WorkUnitBudget(base, '42', node, 'commander', scope)
+
+
+def _stage2_work_unit_harness(base, monkeypatch, *, mode='invalid', both=False):
+    from novel.work_units import WorkUnitBudget
+    progress = {'node': 'stage2.global', 'loads': 0, 'applied': []}
+    invocations = []
+    box = {}
+    stopped = AgentDeliveryOutcome(state='stopped', reason='测试当前审阅结果', checked_at=1)
+    monkeypatch.setattr(agent, '_assess_delivery', lambda *_a, **_k: stopped)
+
+    def current(*_args, **_kwargs):
+        node = progress['node']
+        return SimpleNamespace(
+            state='blocked', code_version='test-code-version', surface_seal='c' * 64,
+            execution_token=None, action=SimpleNamespace(
+                waiting_on=(queue.WAITING_ON_STAGE2_REVIEW if node == 'stage2.global'
+                            else queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW), action_sha256='d' * 64))
+    monkeypatch.setattr(agent.operator, 'next_action_at_code', current)
+
+    def build_task(_base, _sid, snapshot, request_path, *, epoch_id):
+        task = agent.reviewer_tasks.ReviewerTask(
+            waiting_on=snapshot.action.waiting_on, surface_seal=snapshot.surface_seal,
+            business_sha256=('e' if progress['node'] == 'stage2.global' else 'f') * 64,
+            request_path=Path(request_path), prompt='完整且不可变的 Stage2 审阅工作包',
+            submission_options=(), workpack_sha256='a' * 64, source_sha256='b' * 64,
+            main_text_sha256='c' * 64, progress_sha256='d' * 64, blocker_count=1)
+        box['task'] = task
+        return task
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+
+    def load_action(path, snapshot, *, submission_options):
+        document = json.loads(Path(path).read_text(encoding='utf-8'))
+        ordinal = document.get('ordinal')
+        if ordinal is None:
+            ordinal = int(document['action']['input_payload']['reason'].removeprefix('轮次:'))
+        progress['loads'] += 1
+        if mode in {'invalid', 'repeat'} or (both and ordinal % 4 != 0):
+            raise agent.reviewer_tasks.ReviewerTaskError('typed 字段仍未完整：' + str(ordinal))
+        from contracts.artifacts import STAGE2_BLUEPRINT_RELATION_EDIT
+        payload = ({'actor': 'agent:test', 'reason': f'轮次:{ordinal}',
+                    'characters': [{'char_id': 'char_001', 'name_distinctiveness': 'medium'}]}
+                   if progress['node'] == 'stage2.global' else {
+                       'actor': 'agent:test', 'reason': f'轮次:{ordinal}',
+                       'review_token': 'brt1_' + 'a' * 64,
+                       'chapters': [{'chapter_ordinal': 1, 'narrative_relations': []}]})
+        return agent.reviewer_tasks.ReviewerNodeAction(
+            kind='node', node=progress['node'], flags=('--apply-edit', '@reviewer-input'),
+            input_payload=encode_artifact(
+                STAGE2_GLOBAL_EDIT if progress['node'] == 'stage2.global'
+                else STAGE2_BLUEPRINT_RELATION_EDIT, payload))
+    monkeypatch.setattr(agent.reviewer_tasks, 'load_action', load_action)
+
+    def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
+        progress['applied'].append(action.node)
+        if mode == 'crash' and len(progress['applied']) == 1:
+            return agent.SupervisorActionResult(exit_code=70, outcome=stopped, continue_ready=False)
+        if both and action.node == 'stage2.global':
+            progress['node'] = 'stage2.blueprint'
+            return agent.SupervisorActionResult(exit_code=0, outcome=stopped, continue_ready=True)
+        return agent.SupervisorActionResult(exit_code=0, outcome=stopped, continue_ready=False)
+    monkeypatch.setattr(agent, '_execute_reviewer_node_action', execute)
+
+    def factory(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            invocations.append(invocation)
+            on_registered()
+            node = progress['node']
+            # 每个逻辑 C 拿不同 provider 会话；同一单元纠正沿用同一个。
+            provider = 'provider-global' if node == 'stage2.global' else 'provider-blueprint'
+            provider_owners = box.setdefault('provider_owners', {})
+            if node not in provider_owners:
+                provider_owners[node] = (_run_id, provider)
+            elif provider_owners[node][0] != _run_id:
+                # 重启恢复业务预算不要求恢复旧物理 provider；新 start 不能冒用旧 ID。
+                provider_owners[node] = (_run_id, f'{provider}-{len(invocations)}')
+            provider = invocation.resume_provider_session_id or provider_owners[node][1]
+            return CommanderProcessResult(
+                exit_code=0, observation=CommanderObservation(
+                    provider_session_id=provider, actual_model=invocation.profile.model,
+                    actual_effort=invocation.profile.reasoning_effort, usage=None),
+                final_response=json.dumps({'ordinal': 1 if mode == 'repeat' else len(invocations)}))
+        return spawn
+    monkeypatch.setattr(agent, '_default_spawn', factory)
+    return progress, invocations, WorkUnitBudget
+
+
+def test_stage2_commander_budget_is_four_including_format_repairs_and_survives_restart(
+        base, corpus, monkeypatch):
+    progress, calls, budget_type = _stage2_work_unit_harness(base, monkeypatch)
+    first = agent.start(base, '42', authorized=True, egress_authorized=True,
+                        profiles=_PROFILES, spawn=None)
+    assert agent.wait(first.run_id, 15)
+    assert len(calls) == 4
+    assert [row.resume_provider_session_id for row in calls] == [
+        None, 'provider-global', 'provider-global', 'provider-global']
+    assert budget_type(base, '42', 'stage2.global', 'commander', agent.commander_work_unit(queue.WAITING_ON_STAGE2_REVIEW)[1]).used == 4
+    second = agent.start(base, '42', authorized=True, egress_authorized=True,
+                         profiles=_PROFILES, spawn=None)
+    assert agent.wait(second.run_id, 15)
+    assert len(calls) == 4
+    assert progress['applied'] == []
+    assert agent.stage2_review_ledger.list_ledgers(base, '42') == []
+
+
+def test_stage2_two_commanders_use_independent_continuous_four_call_budgets(
+        base, corpus, monkeypatch):
+    progress, calls, budget_type = _stage2_work_unit_harness(base, monkeypatch, mode='accept', both=True)
+    run = agent.start(base, '42', authorized=True, egress_authorized=True,
+                      profiles=_PROFILES, spawn=None)
+    assert agent.wait(run.run_id, 20)
+    assert progress['applied'] == ['stage2.global', 'stage2.blueprint']
+    assert len(calls) == 8
+    assert [row.resume_provider_session_id for row in calls] == [
+        None, 'provider-global', 'provider-global', 'provider-global',
+        None, 'provider-blueprint', 'provider-blueprint', 'provider-blueprint']
+    assert [budget_type(base, '42', node, 'commander', agent.commander_work_unit(queue.WAITING_ON_STAGE2_REVIEW if node == 'stage2.global' else queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW)[1]).used
+            for node in ('stage2.global', 'stage2.blueprint')] == [4, 4]
+
+
+def test_stage2_saved_model_answer_survives_submission_crash_without_rebuy(
+        base, corpus, monkeypatch):
+    progress, calls, budget_type = _stage2_work_unit_harness(base, monkeypatch, mode='crash')
+    first = agent.start(base, '42', authorized=True, egress_authorized=True,
+                        profiles=_PROFILES, spawn=None)
+    assert agent.wait(first.run_id, 15)
+    assert len(calls) == 1
+    unit = budget_type(base, '42', 'stage2.global', 'commander', agent.commander_work_unit(queue.WAITING_ON_STAGE2_REVIEW)[1])
+    assert unit.latest_pending_response() is not None
+    second = agent.start(base, '42', authorized=True, egress_authorized=True,
+                         profiles=_PROFILES, spawn=None)
+    assert agent.wait(second.run_id, 15)
+    assert len(calls) == 1
+    assert progress['applied'] == ['stage2.global', 'stage2.global']
+    assert unit.used == 1
+    assert unit.latest_turn().state == 'adopted'
+
+
+def test_stage2_repeated_identical_rejection_stops_before_four_calls(base, corpus, monkeypatch):
+    progress, calls, budget_type = _stage2_work_unit_harness(base, monkeypatch, mode='repeat')
+    run = agent.start(base, '42', authorized=True, egress_authorized=True,
+                      profiles=_PROFILES, spawn=None)
+    assert agent.wait(run.run_id, 15)
+    assert len(calls) == 2
+    assert budget_type(base, '42', 'stage2.global', 'commander', agent.commander_work_unit(queue.WAITING_ON_STAGE2_REVIEW)[1]).used == 2
+    assert progress['applied'] == []

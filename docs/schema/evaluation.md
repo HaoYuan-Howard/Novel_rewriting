@@ -164,10 +164,12 @@ pending/FAIL/未隔离 UNVER 的 subject cards；PASS 与已隔离项只留数�
 whole-book 卡时才携一次完整 MainText；成功且依赖未失效的卡不再重复发送。该投影不改变正式
 workpack、binding 或 workpack SHA。
 
-Stage2 global 的 Commander 闭环固定为最多四席真实模型调用：“一席审阅 → 至多两席增量 typed
-修订/复核 → 一席只读独立终审”。每席使用新的 logical/provider session，连续性只来自持久 ledger、
-workpack identity、catalog 与存活决定；第四席只可确认收口或 reopen 指定 FAIL/UNVER，不能修改
-Global。确认主体事实有错时取得
+Stage2 Global Commander 按整书工作单元最多 4 次内容调用，包含首次与格式/内容纠错；
+同一单元连续审阅，候选、run、epoch、物理会话和进程重启不重置。Global 正式有效、逐项审阅
+当前且 generation-safe 后，仍须提交绑定当前主体的 Global 节点接受，才能启动按章独立计账的
+Blueprint Executor。全章产物由另一工作单元的 Blueprint Commander 完成跨章审阅并接受，
+其内容上限也为 4；本流程没有预审或额外 Global 终审。两份节点接受后由确定性收口补齐 seen/gate，
+已读与落盘都不能代替语义接受。确认 Global 事实有错时取得
 当前 v3 骨架，通过 `--apply-edit` 同时提交真实修改和 `post_edit_review`；证明的 `review_scope`
 绑定修前未闭合项，`decisions` 显式复判 edit 后仍保持同一 hash 的旧红项，而新打开项才使用默认
 PASS/登记隔离。原样/no-op、未闭合 blocking、身份漂移、无进展 fingerprint 或预算耗尽均在当前动作

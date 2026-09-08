@@ -142,6 +142,8 @@ def _empty_book(base, sid: str = '422'):
 
 def test_approval_post_writes_normally_and_get_stays_read_only(client, base):
     """正常 POST 落审批账；GET 不为一次读取偷写同名服务状态。"""
+    from novel.work_units import initialize_workflow
+    initialize_workflow(base)
     _empty_book(base)
     approval = base / '_service' / 'approvals' / '422.json'
 
@@ -408,6 +410,7 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/stage2/global': ['GET'],
         '/api/novels/{sid}/stage2/blueprint-review-workpack': ['GET'],
         '/api/novels/{sid}/stage2/global-review': ['GET', 'POST'],
+        '/api/novels/{sid}/approvals/stage2-review': ['POST'],
         '/api/novels/{sid}/stage2/relations/edit': ['POST'],
         '/api/novels/{sid}/stage2/relations/edit/preview': ['POST'],
         '/api/novels/{sid}/stage6': ['GET'],
@@ -521,7 +524,9 @@ def test_preview_refuses_a_flag_that_node_does_not_have(client):
 
 _EXECUTOR_PROFILE_HTTP_CASES = (
     ('stage2.global', (), 1),
+    ('stage2.global', ('--review-token', 's2gr1_' + 'a' * 64), 1),
     ('stage2.blueprint', (), 2),
+    ('stage2.blueprint', ('--review-token', 'bpr4_' + 'a' * 64), 2),
     ('stage4.design', (), 1),
     ('stage4.design', ('--replan', '--review-token', 's4rr1_' + 'a' * 64), 1),
     ('stage4.design', ('--review-token', 's4rr1_' + 'a' * 64), 1),

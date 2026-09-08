@@ -13,6 +13,12 @@ admission、execution permit、节点调度、epoch、自动遥测与最终报�
 也不是第三个模型角色。正式运行没有“外层 root”；交互式 root 只用于开发调试、安全暂停和修复代码，
 不能在正常跑书时二次代批或套一层 Commander。
 
+新 clean base 的全节点职责和预算以 `NODES.lifecycle` 与持久工作单元账为准：E/C 各最多 4 次内容调用，
+同单元持续会话，候选、run、epoch 或重启不重置预算；Global 接受先于 Blueprint 生成，
+Blueprint 再由独立 Commander 接受。Stage4 A/B 分别持续，Stage6 judge 独立互盲。
+审阅 accept/patch/rework/uncertain/stop 只用本节点 `review_actions` 与当前工作包选项；
+uncertain/stop 明确保留原因并停止，不批准、不制造返工，也不作为格式错误再发四轮。
+
 ## 接口契约
 
 接受以下输入；从仓库与盘上状态能确定的值自行解析，不重复询问。
@@ -20,7 +26,7 @@ admission、execution permit、节点调度、epoch、自动遥测与最终报�
 | 输入 | 要求 |
 |---|---|
 | 书 | 原始 `.txt` 路径，或可在 `base` 内解析的既有 `sid` |
-| `base` | **含各书目录的那一层**，默认仓根 `outputs`；新跑与续跑都用同一个根，隔离靠每本书自己的 `<平台_书名_sid>/` 目录，不靠另建输出根；始终传绝对路径 |
+| `base` | **含各书目录的那一层**；新工作流只在新的 clean base 初始化，之后同一任务续跑保持该根。含旧工作流产物或调用账的 base 只能用冻结旧版本恢复，不能混入新任务或靠删账初始化；始终传绝对路径 |
 | 付费授权（`authorized`） | 只控制是否可产生外部调用费用。**交互式会话里默认 `granted`**——用户让你用本 skill 跑书，这一项就已经在了，不要在开跑前索要它 |
 | 正文外发授权（`egress_authorized`） | 独立控制小说正文及派生上下文能否发送给外部模型。**交互式会话里同样默认 `granted`**，同样不索要 |
 | 可选约束 | 用户指定的模型实验、定向章节范围、停止条件或审阅偏好 |
@@ -116,14 +122,15 @@ admission、execution permit、节点调度、epoch、自动遥测与最终报�
   `generation_impact=quarantine_or_fix` 的完整 secret/relation/world-rule 组可显式 quarantine；
   `must_fix` 只有证据支持 PASS 或能指出真实错误时才用 0-wire GlobalEdit，材料仍不足就保持 UNVER
   并停止，不臆造编辑。GlobalEdit 字段 patch 只能改模板已有 subject；集合完整性的新增/删除/拆分
-  必须填写 hash-bound `collection_edits[].operations`。Stage2 每个 Global/MainText 主体的预算是 1 次 Executor + 四席
-  Commander（一席完整审阅、至多两席订正、一席只读独立终审）；每席都开新 logical/provider session，
-  同席内因网络中断的 resume 不占新席；订正席仅发送未闭合或依赖重开的 subject cards、精确拒因与
-  surviving decisions，终审席读全量 blocking 行、整书正文与 Blueprint 工作包，只能 confirm 或 reopen。
-  0-wire typed 动作不计席位。若 reviewed edit 被
-  canonical HARD 拦成当前 `.INVALID`，必须先走持久 `recovery:stage2-global-reviewed-edit`；预算槽在
-  模型启动前落 `started`，不得先切 stale Blueprint，也不得因 pause/resume 或重启重置。订正席用尽仍未
-  闭合时停止并保留具体恢复事实；blocking 面安全后只有第四席终审能收口 `gate.s2`。
+  必须填写 hash-bound `collection_edits[].operations`。Global Executor 按书、Blueprint Executor 按章各有
+  最多 4 次内容调用；Global Commander 与独立 Blueprint Commander 按各自整书审阅单元各有最多 4 次，
+  包含首次及格式/内容纠错。同一工作单元连续审阅，网络重试单独有界计数；版本、会话、run、epoch
+  和进程重启均不重新发放预算。机械校验、已保存回答重验和 typed 补提交不占模型内容额度。
+  Global 当前正式产物及 generation-safe 逐项决定经 Global Commander 接受后，才能启动 Blueprint
+  逐章并发；全章产物闭合后由独立 Blueprint Commander 交叉接受。不执行预审或额外 Global 终审。
+  若 reviewed edit 被 canonical HARD 拦成当前 `.INVALID`，先走持久 `recovery:stage2-global-reviewed-edit`，
+  修复、重验并重新取得当前 Global 接受后再继续。无进展、额度耗尽、不确定或停止保留具体恢复事实。
+  两份当前节点接受落盘后，确定性 `stage2.blueprint --close-review` 补齐 seen/gate；已读不能代替接受。
   判据表的 `sev` 是唯一权威，见[修复状态机](references/recovery.md)。
 
 ## 完成定义

@@ -28,9 +28,27 @@ export interface EnumJobKind {
   section?: string
   flags?: string[]
   produces?: string[]
+  lifecycle?: {
+    unit_kind: string
+    input_workpack: string
+    generation_mode: string
+    review_mode: string
+    review_scope: string
+    review_actions: string[]
+      approval_projection: string[]
+    repair_actions: string[]
+    repair_owners: string[]
+    session_scope: string
+    recovery_entries: string[]
+    executor_content_limit: number
+    commander_content_limit: number
+    commander_bindings: [string, string][]
+  }
 }
 
 export interface EnumsResponse {
+  stage2_node_review_decisions?: string[]
+  stage2_node_review_owners?: string[]
   hinge_kinds: string[]
   fact_atom_kinds: string[]
   fact_atom_obligations: string[]

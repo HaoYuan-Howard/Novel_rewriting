@@ -73,6 +73,9 @@ def _seed(book: Path, *, with_blueprints: bool = False) -> None:
     extract.run_global(global_ctx, client)
     if not with_blueprints:
         return
+    from tests.test_stage2_review_decisions import _approve_all_review, _accept_global_node
+    _approve_all_review(book)
+    _accept_global_node(book)
     by_ordinal = _response_blueprints()
 
     def respond(req, _index):
@@ -963,6 +966,20 @@ def test_reviewed_prepared_bundle_recovers_every_hard_kill_write_point(
         for rel, payload in targets[:completed_companions]:
             replay_store.write_round(rel, payload)
 
+        submitted = json.loads((book / extract.GLOBAL_EDIT).read_bytes())
+        snapshot = {path: path.read_bytes() for path in book.rglob('*') if path.is_file()}
+        assert extract.submitted_global_patch_is_current(str(root), sid, submitted)
+        assert {path: path.read_bytes() for path in book.rglob('*') if path.is_file()} == snapshot
+        other_request = copy.deepcopy(submitted)
+        other_request['characters'][0]['role'] = '另一份尚未提交的职业修订'
+        assert not extract.submitted_global_patch_is_current(str(root), sid, other_request)
+        formal_path = book / extract.GLOBAL_REL
+        formal_bytes = formal_path.read_bytes()
+        formal_path.write_bytes(formal_bytes + b'\n')
+        with pytest.raises(ProvenanceRefused, match='第三方状态'):
+            extract.submitted_global_patch_is_current(str(root), sid, submitted)
+        formal_path.write_bytes(formal_bytes)
+
         current = operator.next_action(root, sid)
         assert current.state == 'blocked'
         assert current.action is not None
@@ -979,6 +996,7 @@ def test_reviewed_prepared_bundle_recovers_every_hard_kill_write_point(
         committed = ArtifactStore(ctx).read_own(
             GlobalEditCommit, extract.GLOBAL_EDIT_COMMIT)[0]
         assert committed.state == 'committed'
+        assert extract.submitted_global_patch_is_current(str(root), sid, submitted)
     finally:
         shutil.rmtree(root)
 
@@ -1839,6 +1857,8 @@ def test_stale_blueprints_are_displayable_but_not_consumable_after_base_edit():
         }]
         _write_edit(book, {'addresses_replace': initial_addresses})
         _apply(book)
+        from tests.test_stage2_generation import _accept_fixture_global
+        _accept_fixture_global(_ctx(book, 'stage2.global', paid=False))
 
         by_ordinal = _response_blueprints()
         blueprint_ctx = _ctx(book, 'stage2.blueprint')

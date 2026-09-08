@@ -225,7 +225,7 @@ def test_stamp_chain_follows_current_gate_order_without_touching_stage3(monkeypa
     written = []
     seen = []
     pack = SimpleNamespace(
-        review_token='bpr3_' + 'b' * 64,
+        review_token='bpr4_' + 'b' * 64,
     )
     monkeypatch.setattr(
         approvals, 'mark_seen',
@@ -740,6 +740,8 @@ def final_gate_book(tmp_path, monkeypatch):
     from tests.test_store import _stage0_on_disk
     from novel.stages.stage1.partition import partition_text
 
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
     sid = '866'
     book = tmp_path / f'定稿投影_{sid}'
     (book / 'stage0').mkdir(parents=True)

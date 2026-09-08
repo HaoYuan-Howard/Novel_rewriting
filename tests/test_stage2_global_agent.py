@@ -41,6 +41,8 @@ def _profile() -> AgentProfile:
 
 
 def _ctx(base: Path) -> RunContext:
+    from novel.work_units import initialize_workflow
+    initialize_workflow(base)
     book = base / 'agent纵切_2042'
     book.mkdir()
     clean = book / 'stage0/clean_text.txt'
@@ -187,6 +189,31 @@ class _Driver(AgentDriver):
 
 class _NoWireClient:
     model = 'gpt-5.6-sol'
+    calls = 0
+
+
+def test_commander_rework_reaches_executor_and_consumes_existing_book_budget(tmp_path):
+    from contracts.schema.api import Stage2NodeReviewRequest
+    from novel import work_units
+    from novel.node_agents import build_node_agent
+    from novel.orchestrator import approvals
+
+    initial = _ctx(tmp_path)
+    Stage2GlobalAgent(
+        initial, driver=_Driver([_full(_response_global())], initial.novel_dir)).run()
+    token = approvals._stage2_review_identity(initial.novel_dir, initial.node)[0]
+    approvals.approve_stage2_review(tmp_path, initial.sid, Stage2NodeReviewRequest(
+        node=initial.node, review_token=token, decision='rework', owner=initial.node,
+        actor='test-commander', reason='核对人物身份与当前章证据，并保留其他事实'))
+    revised = _new_run_ctx(initial)
+    driver = _Driver([_full(_response_global())], initial.novel_dir,
+                     session_id='global-commander-rework')
+    result = build_node_agent(revised, driver=driver, review_token=token).run()
+    assert result.passed
+    assert len(driver.calls) == 1
+    assert '核对人物身份与当前章证据，并保留其他事实' in driver.calls[0][1].prompt
+    assert work_units.budget_for(revised, scope='book').used == 2
+    assert approvals.pending_stage2_rework(tmp_path, initial.sid, initial.node) is None
 
     def __init__(self) -> None:
         self.calls = 0
@@ -687,10 +714,10 @@ def test_purge_role_rejects_foreign_committed_source_drift_after_wire(
     assert landed.entities.characters['char_001'].canonical == '竞态提交后的新称名'
 
 
-def test_hard_invalid_rechecks_foreign_prepared_after_its_wire(
+def test_pending_global_response_refuses_competing_producer_before_wire(
     tmp_path, monkeypatch,
 ):
-    """HARD 的 INVALID/projection 也不能破坏 wire 后出现的 prepared bundle。"""
+    """已付费完整候选尚未闭合时，第二 producer 不得占同工作单元的新额度。"""
     seed = _ctx(tmp_path)
     direct = _direct_ctx(seed)
     client, _transport = _client(
@@ -708,37 +735,32 @@ def test_hard_invalid_rechecks_foreign_prepared_after_its_wire(
         direct, client, prepared, response)
     assert evaluation.hard_hits
 
-    real_write = extract._write_formal
-
-    def crash_before_formal(*_args, **_kwargs):
-        raise KeyboardInterrupt('racer killed after prepared before formal')
-
-    monkeypatch.setattr(extract, '_write_formal', crash_before_formal)
+    from novel.work_units import WorkUnitRefused, budget_for
     racer = _new_run_ctx(seed)
-    with pytest.raises(KeyboardInterrupt, match='racer killed'):
+    racing_driver = _Driver(
+        [_full(_response_global())], racer.novel_dir,
+        session_id='stage2-global-hard-invalid-racer')
+    before = _global_business_snapshot(racer)
+    with pytest.raises(WorkUnitRefused, match='未闭合内容请求'):
         Stage2GlobalAgent(
-            racer,
-            driver=_Driver(
-                [_full(_response_global())], racer.novel_dir,
-                session_id='stage2-global-hard-invalid-racer'),
+            racer, driver=racing_driver,
             max_turns=2,
         ).run()
-    assert stage2_global_runs.prepared(racer) is not None
+    assert racing_driver.calls == []
+    assert budget_for(racer, scope='book').used == 1
+    assert stage2_global_runs.prepared(racer) is None
     assert not ArtifactStore(racer).exists(extract.GLOBAL_REL)
-    monkeypatch.setattr(extract, '_write_formal', real_write)
-
-    after_racer = _global_business_snapshot(racer)
-    with pytest.raises(ProvenanceRefused, match='prepared 正式写盘尾窗'):
-        extract.finalize_global_candidate(
-            direct, client, prepared, evaluation)
-    assert _global_business_snapshot(racer) == after_racer
+    assert _global_business_snapshot(racer) == before
     assert not ArtifactStore(racer).exists(extract._GLOBAL_INVALID)
 
     resumed = _resume_ctx(racer)
     replay = _Driver([], resumed.novel_dir)
-    result = Stage2GlobalAgent(resumed, driver=replay, max_turns=2).run()
-    assert result.passed and replay.calls == []
-    assert stage2_global_runs.committed(resumed) is not None
+    with pytest.raises(WorkUnitRefused, match='未闭合内容请求'):
+        Stage2GlobalAgent(resumed, driver=replay, max_turns=2).run()
+    assert replay.calls == []
+    assert budget_for(resumed, scope='book').used == 1
+    assert stage2_global_runs.committed(resumed) is None
+    assert _global_business_snapshot(resumed) == before
 
 
 def test_legacy_same_run_cannot_bypass_accepted_agent_checkpoint(

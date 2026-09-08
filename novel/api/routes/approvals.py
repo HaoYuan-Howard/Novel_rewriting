@@ -10,6 +10,7 @@ from contracts.schema.api import (
     Stage5ClosureRequest, Stage5ClosureTemplate,
     Stage6ApprovalWorkpack, Stage7ApprovalWorkpack,
     StructureApprovalRequest, WritingApprovalRequest,
+    Stage2NodeReviewRequest,
 )
 from novel.api.deps import checked_sid, get_base
 from novel.errors import ApprovalRequired
@@ -19,6 +20,18 @@ from novel.views.stage6 import stage6_approval_workpack
 from novel.views.stage7 import stage7_approval_workpack
 
 router = APIRouter(prefix='/novels/{sid}/approvals')
+
+
+@router.post('/stage2-review', response_model=ApprovalDoc)
+def submit_stage2_review(
+    request: Stage2NodeReviewRequest,
+    sid: str = Depends(checked_sid), base: str = Depends(get_base),
+) -> ApprovalDoc:
+    """提交绑定当前工作包的 Global 或 Blueprint 独立裁决。"""
+    with operation_scope(base, sid, operation='approval-stage2-review', details={
+            'node': request.node, 'review_token': request.review_token,
+            'decision': request.decision, 'actor': request.actor}):
+        return approvals.approve_stage2_review(base, sid, request)
 
 
 @router.get('', response_model=ApprovalDoc)

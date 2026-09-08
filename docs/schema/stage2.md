@@ -417,18 +417,17 @@ collection→member 映射，以及继承现役 operation model、专门化当�
 
 ### Headless Reviewer compact wire 与稀疏 canonical edit
 
-完整 blocking scope 的预审与唯一 `--review-decisions` task 使用
+当前唯一 `--review-decisions` task 需要完整 blocking scope 时使用
 `novel-stage2-scope-review-delta-v1`。Supervisor 从同一 workpack 为 canonical 模板补齐
 允许提交的 item/hash 行；这些行是例外闭集，不能把 CLI 原始空例外数组误解为禁止例外。
 wire 只含 schema、exact-request digest、scope 的 state/reason/evidence 与逐项例外的
 item_id/state/reason/evidence。actor、wrapper、scope 身份和逐项 SHA 可信注入；例外必须是
 模板的无重复有序子序列，允许为空，scope 默认 PASS 不覆盖任何例外 FAIL/UNVER。没有
-scope 的逐项订正仍要求提交全部指定行；多选与独立终审不被该运输协议接管。正式
+scope 的逐项订正仍要求提交全部指定行；多选动作与独立 Blueprint 交叉审阅不被该运输协议接管。正式
 `GlobalReviewDecisionSet` 与 artifact 版本不变，所有判断仍由原 loader 和 producer 复验。
-预审原始 response digest 与组装后候选 digest 分别用于审计和内容寻址，durable 成功后
-才晋升 scratch。旧瞬时输出形状不迁移；冻结空 scope 模板导致合法例外无法提交的已终态
-席位账，在修复提交后按现有 `reconcile --stage2-review-reopen` 的 CAS 归档入口恢复，保留
-完整旧席位与拒因；不把普通模型答错当成重开理由。
+原始 response digest 与组装后候选 digest 分别用于审计和内容寻址，耐久保存并完成原成本/会话
+尾账复验后才晋升 scratch。同一 Commander 工作单元继续订正，既有调用不因运输协议修复而返还。
+旧预审、瞬时输出形状与已终态席位账只属于冻结旧工作流；不迁入当前 base，也不通过归档重开预算。
 
 `submission_options[].exact_request` 仍保存 `novel-reviewer-action-v1` 的完整 canonical request；公开
 typed action、CLI producer 与书内 `global_edit.json` 的形状均未改变。只有 headless AgentRun 当前
@@ -468,8 +467,8 @@ secret knowledge subject 与 address 等外键必须在修后 registry 中解析
 实际 add/split。结构上可静态判断的 patch+delete/split 冲突由 `GlobalEdit` loader 关闭；依赖正式
 Global/MainText 的候选判据由 producer 的同一纯预检在 durable 回答之后、canonical 子进程之前复用。
 producer 必须先在修前 current collection 上预扫同一回答的全部 `collection_edits`，一次聚合所有
-stale/invalid operation diagnostics，再应用任何 operation；不能按集合逐个失败而消耗有限订正席。
-预检业务拒绝写回原席 provider-response digest，不启动 Executor，预检完整性/审计异常则保留 durable
+stale/invalid operation diagnostics，再应用任何 operation；不能按集合逐个失败而消耗有限内容预算。
+预检业务拒绝绑定原工作单元 turn 的 provider-response digest，不启动 Executor，预检完整性/审计异常则保留 durable
 动作并以 unknown 停止。持久安全拒因只暴露代码定义的可信 `collection/category/count` 与完整
 `diagnostic_sha256`，不回显模型可控的主体 ID、正文、任意 `loc/repr/detail`、Pydantic input 或 extra key。
 
@@ -570,19 +569,18 @@ INVALID/failure、MainText、正式三伴产物 baseline/target 以及本次真�
 因此 secret/rule/relation 的关联字段变化只重开该主体卡及其依赖项，集合完整性只在成员 ID 集变化时
 重开，互不相关且已成功的卡不再发给 Commander。
 
-ready Blueprint 的只读预审不是对所有可并行状态开放。Supervisor 先在同一冻结 snapshot 上复用
-`stage2_invalid_projection_ready`：若最新 Global 只以非称名 HARD 的 `.INVALID` 加 current/fresh
-projection 供 Blueprint 消费，就在读取 formal Global workpack 或旧/stale Blueprint 之前跳过预审，
-直接执行该 snapshot 已铸造的 ready Blueprint token。其余分支也只有在冻结 global review items 非空且
-全部为 `pending` 时才构造预审；任一已决、FAIL 或 UNVER 都返回 live reviewer 路由，且不得把等待重建的
-旧 Blueprint 当作预审材料。
+新 clean base 的 Stage2 严格串联 Global 有效正式产物、generation-safe 逐项决定与当前 Global
+Commander 接受，再启动 Blueprint 的逐章并发；`.INVALID` 或仅有 current/fresh 称名投影不能
+释放生产。Blueprint 全章产物闭合后才启动独立 Blueprint Commander 的整书交叉审阅。
+两份节点接受均绑定当前产物与审阅主体，不通过预审重叠或额外 Global 终审收口。
 
-Agent 的 Stage2 global 闭环是“一次 Executor 产出 + 最多四席 Commander”。第一席审阅当前未闭合面；
-第二、三席只在仍有进展时接收增量 subject cards，并可在一份动作里同时提交 typed edit 与
-`post_edit_review`；第四席独立读取完整 blocking 面、整书正文与 Blueprint 工作包，只能确认收口或把
-指定项 reopen 为 FAIL/UNVER，不能再编辑。每席使用新的 logical/provider session；连续性来自持久 typed
-ledger、workpack identity、去重 catalog 与存活决定，不依赖隐藏聊天历史。调用在启动前即以 `started`
-消耗席位，进程重启不会补发；同一 progress fingerprint、非法 blocker 回升或席位耗尽均关闭式停止。
+Global Executor 按书、Blueprint Executor 按章各最多 4 次内容调用；Global 与 Blueprint Commander
+分别按整书审阅单元各最多 4 次，包含首次和格式/内容纠错。同一单元连续审阅：增量 subject cards、
+精确拒因与存活决定保留上下文，但正式工作包与响应/typed 决定落盘才是恢复依据。
+调用在 wire 前预留内容轮次，网络 attempts 独立有界；版本、run、epoch、会话或重启不补发预算。
+无进展、预算耗尽、明确不确定或停止均关闭；重验、prepared 补提交与已保存回答重放不占模型额度。
+Blueprint C 发现上游事实错误时可以 typed owner 指向 Global，交回其 producer，并重新计算受影响
+下游；局部补丁、生成与人工写回仍共享 producer 的 schema、归一、HARD、归档与来源边界。
 
 producer 先在内存应用、归一和重枚举：本 edit 新打开的 blocking pending 项由默认 PASS/登记隔离
 证明收口；`review_scope` 中仍以相同 `item_id + subject_sha256` 存活的旧 FAIL/UNVER 必须**全部**由

@@ -76,6 +76,7 @@ OPTIONAL_HUMAN_NODES: frozenset[str] = frozenset({'stage0.edit'})
 #: 待人工清单非空时挡队列的那个理由（`INBOX_KIND` 的 `invalid`）。
 WAITING_ON_INBOX = 'inbox:invalid'
 WAITING_ON_STAGE2_REVIEW = 'approval:stage2-global-review'
+WAITING_ON_STAGE2_BLUEPRINT_REVIEW = 'approval:stage2-blueprint-review'
 WAITING_ON_STAGE2_EDIT_CORRECTION = 'recovery:stage2-global-reviewed-edit'
 WAITING_ON_STAGE2_EDIT_COMMIT = 'recovery:stage2-global-reviewed-edit-commit'
 WAITING_ON_STAGE2_EDIT_REVALIDATE = (
@@ -89,7 +90,7 @@ WAITING_ON_STAGE2_FINAL_REVIEW = 'approval:stage2-global-final-review'
 STAGE2_REVIEWER_WAITING_ON = frozenset({
     WAITING_ON_STAGE2_REVIEW,
     WAITING_ON_STAGE2_EDIT_CORRECTION,
-    WAITING_ON_STAGE2_FINAL_REVIEW,
+    WAITING_ON_STAGE2_BLUEPRINT_REVIEW,
 })
 WAITING_ON_STAGE4_DESIGN_REVIEW = 'approval:stage4-design-review'
 WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY = \
@@ -108,6 +109,8 @@ WAITING_ON_WRITING_APPROVAL = 'approval:stage5-writing'
 WAITING_ON_REVIEW = 'stage5:review-currentness'
 WAITING_ON_STAGE5_CLOSURE = 'approval:stage5-closure'
 WAITING_ON_STAGE5_REVIEWER_REWRITE = 'recovery:stage5-reviewer-rewrite'
+WAITING_ON_PREPARED_DELIVERY = 'recovery:prepared-delivery'
+WAITING_ON_PREPARED_DELIVERY_UNKNOWN = 'human:prepared-unknown'
 WAITING_ON_LEGACY = 'legacy_incompatible'
 WAITING_ON_RESUME_DECISION = 'resume:manual-decision'
 WAITING_ON_RESTART_CONFIRMATION = 'queue:restart-confirmation'
@@ -122,6 +125,7 @@ DETERMINISTIC_RECOVERY_WAITING_ON: frozenset[str] = frozenset({
     WAITING_ON_STAGE4_DESIGN_ACTION,
     WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT,
     WAITING_ON_STAGE5_REVIEWER_REWRITE,
+    WAITING_ON_PREPARED_DELIVERY,
 })
 
 
@@ -234,6 +238,48 @@ def _stage4_replan_required(base: str | os.PathLike[str], sid: str) -> bool:
     return current_infeasible_binding(store) is not None
 
 
+def prepared_delivery_recovery_item(
+    base: str | os.PathLike[str], sid: str, *, code: str, until_stage: str = 'stage7',
+) -> QueueItem | None:
+    """producer 严格检查后才发布免费补尾；此查询不补账、不因文件存在发命令。"""
+    from novel.stages.stage6 import hook, semantic
+    from novel.stages.stage7 import rename
+    from novel.work_units import workflow_manifest
+
+    if workflow_manifest(base) is None:
+        return None
+    book = paths.find_novel_dir(base, sid)
+    if book is None:
+        return None
+    pending = []
+    for node, producer in (('stage6.hook', hook), ('stage6.semantic', semantic), ('stage7.rename', rename)):
+        if STAGES.index(NODES[node].stage) > STAGES.index(until_stage):
+            continue
+        inspected = producer.inspect_prepared_recovery(st.readonly_ctx(book, node, code))
+        if inspected is not None and inspected.state != 'complete':
+            pending.append((node, inspected))
+    if not pending:
+        return None
+    if len(pending) != 1:
+        raise ArtifactUnreadable('同时存在多个 Stage6/7 未闭提交组，不能猜测恢复顺序')
+    node, inspected = pending[0]
+    if inspected.state == 'unknown':
+        return QueueItem(
+            sid=sid, node=node, flags=[], steps=[],
+            waiting_on=WAITING_ON_PREPARED_DELIVERY_UNKNOWN,
+            why=inspected.reason or 'Stage6/7 完成组证据无法验证；保留原账并等待人工核对')
+    if (inspected.state != 'recoverable' or inspected.source_run_id is None
+            or inspected.proof_sha256 is None):
+        raise ArtifactUnreadable('Stage6/7 producer 恢复投影缺精确原身份')
+    flags = ['--recover-prepared', inspected.source_run_id,
+             '--subject-sha256', inspected.proof_sha256]
+    return QueueItem(
+        sid=sid, node=node, flags=flags,
+        steps=build_steps(node, sid, flags, base=base, follow_check=False),
+        waiting_on=WAITING_ON_PREPARED_DELIVERY,
+        why='原完成组仍待正式提交或采纳尾账；先按精确来源免费补尾，再进入下游审阅')
+
+
 def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
               follow_check: bool = True) -> tuple[list[QueueItem], list[QueueItem]]:
     """一本书的 `(要跑的, 被挡住的)`。**纯函数**（只读盘，不写、不发请求）。
@@ -265,6 +311,12 @@ def plan_book_from_overview(
     if approval_doc is not None and approval_doc.sid != sid:
         raise ValueError(
             f'审批投影属于 {approval_doc.sid!r}，不是当前书 {sid!r}')
+    if STAGES.index(until_stage) >= STAGES.index('stage6'):
+        recovery = prepared_delivery_recovery_item(base, sid, code=approvals.projection_code(), until_stage=until_stage)
+        if recovery is not None:
+            # 先补原提交，不能让 fresh formal/已有 semantic 序号吞掉采纳尾窗，
+            # 更不能让后续 approve 改动原目标，致原证明永远无法补齐。
+            return [], [recovery]
     todo: list[QueueItem] = []
     blocked: list[QueueItem] = []
     #: ⚠ **一旦挡住，其后的项一律跟着挡住**——那才叫「挡住队列」（`R-13.5`）。
@@ -277,6 +329,9 @@ def plan_book_from_overview(
     # blocked writer 仍由 ``stuck`` 传递，不伪装成会在本次改变主体。
     stage5_write_will_run = False
     planned_nodes = nodes_up_to(until_stage)
+    stage2_halt = (approvals.stage2_review_halt(base, sid)
+                   if any(node in planned_nodes for node in
+                          ('stage2.global', 'stage2.blueprint', 'stage4.design')) else None)
     reviewer_rewrite_execution = None
     if 'stage5.write' in planned_nodes:
         # canonical request 是已完成 Commander 决定的唯一消费入口。它必须在
@@ -328,6 +383,15 @@ def plan_book_from_overview(
         stage4_design_action_flags: tuple[str, ...] | None = None
         stage5_reviewer_rewrite_flags: tuple[str, ...] | None = None
         stage5_reviewer_rewrite_no_action = False
+        stage2_rework = (approvals.pending_stage2_rework(base, sid, node)
+                         if node in {'stage2.global', 'stage2.blueprint'} else None)
+        stage2_close = False
+        if node == 'stage2.blueprint' and paths.find_novel_dir(base, sid) is not None:
+            current_approvals = approval_doc or approvals.get(base, sid, include_spawns=False)
+            stage2_close = (not current_approvals.gate['s2'] and all(
+                current_approvals.stage2_reviews.get(owner) is not None
+                and current_approvals.stage2_reviews[owner].state == 'accepted'
+                for owner in ('stage2.global', 'stage2.blueprint')))
         projection_recovery = (
             node == 'stage2.global'
             and st.stage2_projection_recovery_needed(ov)
@@ -335,6 +399,7 @@ def plan_book_from_overview(
         projection_blocked = (
             node == 'stage2.global'
             and naming_projection_blocked
+            and stage2_rework is None
         )
         blueprint_invalid_recovery = (
             node == 'stage2.blueprint'
@@ -345,6 +410,10 @@ def plan_book_from_overview(
             and st.stage2_legacy_blueprint_recovery_needed(ov)
         )
         why_blocked = stuck
+        if (why_blocked is None and stage2_halt is not None
+                and (node == stage2_halt[0]
+                     or node in ('stage2.blueprint', 'stage4.design'))):
+            why_blocked = WAITING_ON_INBOX
         if why_blocked is None and node in HUMAN_NODES:
             if node in OPTIONAL_HUMAN_NODES:
                 continue                             # 可选人工编辑不是流水线必经闸门
@@ -373,17 +442,23 @@ def plan_book_from_overview(
             why_blocked = WAITING_ON_STAGE2_EDIT_CORRECTION
         if (why_blocked is None
                 and (projection_blocked
-                     or (blueprint_invalid_recovery
+                     or (blueprint_invalid_recovery and stage2_rework is None
                          and not legacy_blueprint_recovery))):
             # 两种状态都已有可恢复的问题稿，且下一步需要人提供 typed 决策。
             # 队列不能替人造 actor/reason，更不能把 RUN 解释成默认再付一次钱。
             why_blocked = WAITING_ON_INBOX
-        # 人审移到 Stage4 的最低消费边界。队列的完整节点序列必经 A；在这里挡住后，
-        # ``stuck`` 会把 B、context 与后续全部保持 blocked。Stage2 blueprint 因而能
-        # 先跑，而恢复 global/blueprint 的 0 成本入口也不会被这道门反向堵死。
+        # Blueprint 先核验 Global 接受；Stage4 再核验两份接受和联合机械结果。
+        # 缺少任一接受都把后续保持 blocked，确定性恢复仍由各自节点发布。
         # ⚠ 必须先于通用 upstream-invalid 分类：Stage2 的 `.INVALID` 本来就是完整
         # closure 的一种 typed 终态；若先压成 `inbox:invalid`，规定的
         # `approval:stage2-global-review` 阻塞项与恢复文案就永远到不了。
+        if why_blocked is None and node == 'stage2.blueprint':
+            try:
+                approvals.require_stage2_review(base, sid, node)
+            except (ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
+                    GateBlocked, UpstreamStale, UpstreamUnproven,
+                    BlockingFindingsUnresolved):
+                why_blocked = WAITING_ON_STAGE2_REVIEW
         if (why_blocked is None and node == 'stage4.design'
                 and stage2_review_required(node, paid=spec.paid)
                 and not st.stage2_frozen_v6_subject_validated(ov)):
@@ -394,19 +469,19 @@ def plan_book_from_overview(
                 GateBlocked, UpstreamStale, UpstreamUnproven,
                 BlockingFindingsUnresolved,
             ):
-                why_blocked = WAITING_ON_STAGE2_REVIEW
+                try:
+                    approvals.require_stage2_review(base, sid, 'stage2.blueprint')
+                except (ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
+                        GateBlocked, UpstreamStale, UpstreamUnproven,
+                        BlockingFindingsUnresolved):
+                    why_blocked = WAITING_ON_STAGE2_REVIEW
+                else:
+                    why_blocked = WAITING_ON_STAGE2_BLUEPRINT_REVIEW
             else:
-                # Global typed review current 仍不等于完整 Stage2 审批链 current。
-                # Blueprint/Global 在 review 后重建会让 raw seen/gate proof 暂停；
-                # operator 已经冻结了同一时点的完整审批投影，就必须先把这项
-                # 恢复路由交回 Stage2 reviewer。否则队列会前移到 Stage4A，
-                # 而 design workpack/template 又按生产闸正确拒绝缺失 gate.s2，
-                # 形成一个无法由 Commander 自己越过的确定性死锁。
-                # ⚠ 这里不是普通 review blocker：review 已 generation-safe，
-                # 缺的是独立只读终审对 Global + Blueprint 的 hash-bound 阅读
-                # 事实。seen/gate proof 过期同样意味着主体变过，必须重读。
+                # 两接受齐备但审批链未完成时，上面的 Blueprint 节点会发布
+                # --close-review 免费补提交；本轮仍阻止下游提前执行。
                 if approval_doc is not None and not approval_doc.gate['s2']:
-                    why_blocked = WAITING_ON_STAGE2_FINAL_REVIEW
+                    why_blocked = WAITING_ON_STAGE2_BLUEPRINT_REVIEW
 
         if why_blocked is None:
             ghosts = _upstream_invalid(ov, spec.stage)
@@ -414,6 +489,10 @@ def plan_book_from_overview(
                 why_blocked = WAITING_ON_INBOX
 
         verdict, why = st.resume_verdict(ov, node)
+        if stage2_rework is not None and why_blocked is None:
+            verdict, why = st.RESUME_RUN, '执行当前 Commander 已落盘的定向返工'
+        elif stage2_close and why_blocked is None:
+            verdict, why = st.RESUME_RUN, '两份当前接受已齐，零模型补齐 Stage2 审批链'
         deterministic_redo_flags: tuple[str, ...] | None = None
         frozen_v6 = st.stage2_frozen_v6_subject_validated(ov)
         if (why_blocked is None and node == 'stage5.write'
@@ -513,6 +592,7 @@ def plan_book_from_overview(
             and st.live_invalid_artifacts(ov, node)
             and not projection_recovery
             and not legacy_blueprint_recovery
+            and stage2_rework is None
         ):
             # ``resume_verdict`` 必须如实描述“默认重跑会发生什么”，但 queue 不能
             # 把这句警告继续冻结成一条付费 argv。活动 INVALID 先停在已登记的
@@ -670,7 +750,10 @@ def plan_book_from_overview(
         # 称名投影是 Global 的确定性伴生产物。缺/坏/stale 时只冻结免费物化
         # 命令，绝不能因 ``produces`` 少一份而把默认付费 Global argv 排进队列。
         flags: list[str] = (
-            list(reviewed_edit_commit_flags or ())
+            ['--close-review'] if stage2_close and why_blocked is None
+            else ['--review-token', stage2_rework.review_token]
+            if stage2_rework is not None and why_blocked is None
+            else list(reviewed_edit_commit_flags or ())
             if node == 'stage2.global' and reviewed_edit_commit
             else list(
                 reviewed_edit_commit_flags
@@ -693,7 +776,7 @@ def plan_book_from_overview(
         if stage5_reviewer_rewrite_no_action:
             steps = []
         if (projection_blocked
-                or (blueprint_invalid_recovery
+                or (blueprint_invalid_recovery and stage2_rework is None
                     and not legacy_blueprint_recovery)
                 or (naming_projection_blocked
                     and stuck == WAITING_ON_INBOX)):
@@ -742,6 +825,7 @@ def plan_book_from_overview(
         if why_blocked in (
             WAITING_ON_INBOX,
             WAITING_ON_STAGE2_REVIEW,
+            WAITING_ON_STAGE2_BLUEPRINT_REVIEW,
             WAITING_ON_STAGE2_EDIT_CORRECTION,
             WAITING_ON_STAGE2_EDIT_TERMINAL,
             WAITING_ON_STAGE2_FINAL_REVIEW,
@@ -804,7 +888,8 @@ def plan_book_from_overview(
             sid=sid, node=node, flags=flags, steps=steps,
             why=(f'{verdict}：{why}' if why_blocked is None
                  else _blocked_why(
-                     why_blocked, why, legacy_frozen_v6=frozen_v6)),
+                     why_blocked, why, legacy_frozen_v6=frozen_v6,
+                     stage2_halt=stage2_halt)),
             waiting_on=why_blocked,
         )
         (blocked if why_blocked else todo).append(item)
@@ -817,8 +902,12 @@ def plan_book_from_overview(
 
 def _blocked_why(
     waiting_on: str, verdict_why: str, *, legacy_frozen_v6: bool = False,
+    stage2_halt: tuple[str, str, str] | None = None,
 ) -> str:
     if waiting_on == WAITING_ON_INBOX:
+        if stage2_halt is not None:
+            node, decision, reason = stage2_halt
+            return f'{node} 当前决定为 {decision}，保持停止并等待显式人工处理：{reason}'
         return (
             '上游或本层有被闸门拦下的稿要人处理（0 LLM 提升路是 '
             '`--revalidate --actor <id> --reason <why>`，同轮重判并留不可变审计）；'
@@ -839,20 +928,17 @@ def _blocked_why(
             'hash-bound request；当前只允许按 execution journal 发布 exact paid '
             'writer 或 0-wire prepared recovery，不再调用 Commander，也不退回默认'
             f'写作。执行终态后重新规划并免费重算 Review；{verdict_why}')
-    if waiting_on == WAITING_ON_STAGE2_FINAL_REVIEW:
+    if waiting_on == WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
         return (
-            'Stage2 Global 复核已 generation-safe，但 current seen/gate.s2 proof 尚未'
-            '由独立只读终审建立或已随主体变化过期：需要一次不带修改权的终审读完'
-            '全部 blocking 项、整书正文与 Blueprint 工作包后 confirm，或以终审者为 '
-            'actor reopen 指定项；Stage4A/B 与后续付费调用都不会越过这道门；'
+            'Global 已由自己的 Commander 接受；现在由独立 Blueprint Commander '
+            '结合 Global 与完整正文交叉审阅逐章蓝图，可局部订正、定向返工或停止。'
+            '两份当前 typed 接受齐备后零模型收口 Stage2；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE2_REVIEW:
         return (
-            'Stage2 尚未在当前完整主体上收口：global/blueprint 可能缺失、过期或有'
-            '问题稿/联合 HARD，也可能是全局逐项复核尚未全部 PASS，或 current '
-            'seen/gate.s2 proof 尚未随最新主体恢复。global 与 blueprint '
-            '可以先后生成并在人工阅读期间并行推进，但 Stage4A/B、写作上下文、后续'
-            '付费调用与最终成书都不会越过这道门；处理完具体终态后请重新预览队列；'
+            'Global 尚未有效落盘或没有当前独立 Commander 接受；先核对当前'
+            '全局事实并按 typed 决定订正、返工或停止。Global 接受后才允许'
+            'Blueprint 逐章并发生产；阅读事实 seen 不能代替接受；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE4_DESIGN_REVIEW:
         if legacy_frozen_v6:
@@ -1264,6 +1350,8 @@ def create(base: str | os.PathLike[str], sids: Sequence[str], *, until_stage: st
     unique = list(dict.fromkeys(sids))
     if not unique or len(unique) != len(sids):
         raise QueueConflict('队列必须至少包含一本书，且 sid 不得重复')
+    from novel.work_units import check_workflow_write
+    check_workflow_write(base)
     planned = plan(base, unique, until_stage=until_stage, follow_check=follow_check)
     confirm(planned, yes=yes)
     queue_id = queue_id or new_queue_id()
@@ -1402,6 +1490,8 @@ def _confirm_resume(
     marker.  This function is the sole path which may remove it, after showing
     and explicitly confirming the exact frozen commands.
     """
+    from novel.work_units import check_workflow_write
+    check_workflow_write(base)
     with _STATE_LOCK:
         run = _one(base, queue_id, registry=registry)
         commands = frozen_resume_commands(base, queue_id, registry=registry)
@@ -1725,6 +1815,8 @@ def run(base: str | os.PathLike[str], queue_id: str, *,
         registry: QueueRegistry = REGISTRY,
         job_registry: jobs.JobRegistry = jobs.REGISTRY) -> QueueRun:
     """Synchronously consume each novel lane; different novels run in parallel."""
+    from novel.work_units import check_workflow_write
+    check_workflow_write(base)
     registry.acquire(queue_id)
     try:
         return _execute(
@@ -1751,6 +1843,8 @@ def start(base: str | os.PathLike[str], queue_id: str, *,
           job_registry: jobs.JobRegistry = jobs.REGISTRY,
           _lane_sids: Sequence[str] | None = None) -> QueueRun:
     """Start a persistent queue runner in the background and return immediately."""
+    from novel.work_units import check_workflow_write
+    check_workflow_write(base)
     registry.acquire(queue_id)
 
     def worker() -> None:
@@ -1814,6 +1908,13 @@ def resume_incomplete(base: str | os.PathLike[str], *,
     """
     before = records(base, registry=registry)
     if not before:
+        return []
+    from novel.work_units import WorkUnitRefused, check_workflow_write
+    try:
+        check_workflow_write(base)
+    except WorkUnitRefused:
+        # 旧或不可判工作流只提供历史读取，服务启动不得补锁、改事件或自动执行。
+        # 读视图仍自行呈现损坏/未知；不因后台恢复不可用而阻止只读 UI 启动。
         return []
     from novel.orchestrator import admission
 

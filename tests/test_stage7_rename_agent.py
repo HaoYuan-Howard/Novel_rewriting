@@ -80,6 +80,8 @@ def _profile() -> AgentProfile:
 
 
 def _ctx(base: Path, *, run_id: str | None = None) -> RunContext:
+    from novel.work_units import require_workflow
+    require_workflow(base)
     novel_dir = base / '改名执行测试_991'
     clean = novel_dir / STAGE0_CLEAN_TEXT
     clean.parent.mkdir(parents=True, exist_ok=True)

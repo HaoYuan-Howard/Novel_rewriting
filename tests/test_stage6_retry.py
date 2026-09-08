@@ -31,7 +31,7 @@ def _response(data):
 
 def _run_case(monkeypatch, root: Path, initial_texts: list[str], retry_responder):
     book = root / 'case_622'
-    book.mkdir()
+    book.mkdir(exist_ok=True)
     ctx = _ctx(book, 'stage6.hook')
     material = prompts.Material(blocks=('完整创作包。',), upto=1)
     upstreams = SimpleNamespace(
@@ -53,6 +53,12 @@ def _run_case(monkeypatch, root: Path, initial_texts: list[str], retry_responder
 
         def read_own(self, _model, rel, **_kwargs):
             return state[rel], {}
+
+        def prospective_sha256(self, _rel, artifact):
+            return hook._canonical_sha256(artifact.model_dump(by_alias=True, mode='json'))
+
+        def full_sha256_or_none(self, rel):
+            return self.prospective_sha256(rel, state[rel]) if rel in state else None
 
         def freshness(self, _rel):
             return SimpleNamespace(state='fresh', reason='match')
@@ -98,7 +104,7 @@ def _run_case(monkeypatch, root: Path, initial_texts: list[str], retry_responder
     return hook.run_hook(ctx, client), transport, written
 
 
-def test_each_initially_dirty_candidate_retries_once_and_usage_includes_retries(monkeypatch):
+def test_each_single_hard_candidate_improves_once_and_usage_includes_retries(monkeypatch):
     root = Path(tempfile.mkdtemp())
     book = root / '文案候选重试测试_621'
     book.mkdir()
@@ -124,6 +130,12 @@ def test_each_initially_dirty_candidate_retries_once_and_usage_includes_retries(
 
             def read_own(self, _model, rel, **_kwargs):
                 return state[rel], {}
+
+            def prospective_sha256(self, _rel, artifact):
+                return hook._canonical_sha256(artifact.model_dump(by_alias=True, mode='json'))
+
+            def full_sha256_or_none(self, rel):
+                return self.prospective_sha256(rel, state[rel]) if rel in state else None
 
             def freshness(self, _rel):
                 return SimpleNamespace(state='fresh', reason='match')
@@ -198,7 +210,7 @@ def test_each_initially_dirty_candidate_retries_once_and_usage_includes_retries(
         shutil.rmtree(root, ignore_errors=True)
 
 
-@pytest.mark.parametrize('dirty_count', [0, 1, 2])
+@pytest.mark.parametrize('dirty_count', [0, 1, 2, 3])
 def test_retry_call_count_tracks_only_initially_dirty_candidates(monkeypatch, dirty_count):
     root = Path(tempfile.mkdtemp())
     try:
@@ -228,6 +240,44 @@ def test_retry_call_count_tracks_only_initially_dirty_candidates(monkeypatch, di
             else f'更新后的整组说明-{HOOK_SLOTS[dirty_count - 1]}。')
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_complete_legacy_group_recovers_before_commit_without_rebuying_slots(
+        monkeypatch, tmp_path):
+    """四次均已有完整回答，写盘前硬杀后只重放原组及逐槽机械裁决。"""
+    initial = [f'坏候选{index}' for index in range(3)]
+
+    def repaired(_request, repair, _retry_no):
+        slot = repair['target_slot']
+        return _response({
+            'approach': repair['target_approach'],
+            'text': f'已修好的完整-{slot}。',
+            'rationale': f'整组说明-{slot}。',
+        })
+
+    original_finalize = hook.finalize_hook_candidate
+
+    def crash_before_commit(*_args, **_kwargs):
+        raise KeyboardInterrupt('完整组已返回，正式提交前硬杀')
+
+    monkeypatch.setattr(hook, 'finalize_hook_candidate', crash_before_commit)
+    with pytest.raises(KeyboardInterrupt, match='正式提交前'):
+        _run_case(monkeypatch, tmp_path, initial, repaired)
+
+    def no_wire(*_args):
+        raise AssertionError('已有完整逐槽响应不得重复调用')
+
+    monkeypatch.setattr(hook, 'finalize_hook_candidate', original_finalize)
+    artifact, transport, written = _run_case(
+        monkeypatch, tmp_path, initial, no_wire)
+    assert transport.calls == []
+    assert all(not candidate.findings for candidate in artifact.candidates)
+    assert artifact.rationale == f'整组说明-{HOOK_SLOTS[-1]}。'
+    assert artifact.provenance.usage.calls_made == 4
+    assert written and written[0][0] == hook.REL
+    from novel.work_units import WorkUnitBudget
+    budget = WorkUnitBudget(tmp_path, '622', 'stage6.hook', 'executor', 'book')
+    assert (budget.used, budget.remaining) == (4, 0)
 
 
 @pytest.mark.parametrize(

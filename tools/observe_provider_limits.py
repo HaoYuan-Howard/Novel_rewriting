@@ -5,15 +5,17 @@
 本工具不会因普通执行而联网：CLI 必须同时收到 ``--acknowledge-paid-network``、
 有效 API key 和一个新的/空的输出目录。每个逻辑请求只走指定模型的
 ``low + thinking off`` 一档、禁用模型兜底与缓存、限制很小的输出 token；
-传输层重试仍走产品的唯一实现。
+网络退避与生产请求共用决策；实验不创建小说节点、工作单元或内容预算。
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import threading
 import time
+import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
@@ -22,13 +24,12 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from novel import config, prov
-from novel.llm.cache import CachePolicy, ResponseCache
-from novel.llm.client import LlmClient
+from novel.llm.cache import request_fingerprint
+from novel.llm.retry import RESOURCE_INTERRUPTED, TransportRetryPolicy
 from novel.llm.ledger import CostLedger
 from novel.llm.transport import (
     ChatRequest, ChatResponse, DeepSeekTransport, Transport, TransportError,
 )
-from novel.run import RunContext
 
 MAX_PROBE_REQUESTS = 128
 MAX_PROBE_TOKENS = 128
@@ -140,29 +141,75 @@ def run_probe(
         raise ProbeRefused(
             f'最坏线上尝试数 requests * (max_retries + 1) 必须不超过 '
             f'{MAX_PROBE_WIRE_ATTEMPTS}')
+    policy = TransportRetryPolicy(retries, cfg.backoff_base)
     _prepare_output(output)
 
     cfg = replace(cfg, concurrency=int(concurrency))
     ledger_path = output / 'ledger.jsonl'
-    ledger = CostLedger(path=ledger_path)
-    ctx = RunContext(
-        novel_dir=output / 'provider-rate-probe', node='stage2.global', paid=True,
-        code=prov.code_version(), cache=CachePolicy.disabled(), ledger=ledger,
-        observer=lambda _event: None,
-    )
+    ledger = CostLedger(path=ledger_path, run_id=str(uuid.uuid4()))
+    code = prov.code_version()
     measured = MeasuredTransport(transport or DeepSeekTransport(cfg))
-    # ⚠⚠ **首发独占闸必须关掉**（`novel/llm/client.py::LlmClient._warmup_gate`）。
-    #   那道闸为跑书而设：拿第一发的串行换后面 N−1 发的供应商前缀缓存命中。
-    #   而本工具量的恰恰是「并发 N 时对面怎么反应」——下面那个 `threading.Barrier(wave)`
-    #   就是为了让第一波**真的同时上线**。闸开着的话峰值恒为 1，
-    #   `wire.peak_active` / `observed_429` 全部失真，**而它们正是这个工具唯一的产出**。
-    client = LlmClient(
-        ctx, measured, cache=ResponseCache(), model=cfg.model,
-        thinking_mode='off', max_retries=cfg.max_retries,
-        backoff_base=cfg.backoff_base, concurrency=cfg.concurrency,
-        warmup=False, enable_model_fallback=False,
-        sleep=sleep,
-    )
+    # 首波必须真实并发；实验直接测单次传输，不借小说节点的首发缓存闸、
+    # 内容重采或工作单元身份。网络尝试仍逐次留账并遵守公共有界退避。
+
+    def send(index: int) -> None:
+        req = ChatRequest(
+            model=cfg.model, system='Return the requested token only.',
+            user=f'Return exactly OK. Probe id {index:04d}.',
+            reasoning_effort='low', thinking=False, json_mode=False,
+            max_tokens=max_tokens)
+        for attempt in range(1, policy.max_attempts + 1):
+            attempt_id = uuid.uuid4().hex[:16]
+            started = time.perf_counter()
+            response: ChatResponse | None = None
+            error: Exception | None = None
+            try:
+                response = measured.send(req)
+            except Exception as exc:
+                error = exc
+            interrupted = (response is not None
+                           and response.finish_reason == RESOURCE_INTERRUPTED)
+            retryable = (error.retryable if isinstance(error, TransportError)
+                         else interrupted)
+            delay = policy.delay(attempt=attempt, retryable=retryable)
+            usage = (response.usage if response else None) or {}
+            ledger.record(
+                node=None, sid=None, model=(response.model if response else '') or req.model,
+                code=code, cached=False, cache_policy='disabled',
+                prompt_tokens=usage.get('prompt_tokens'),
+                prompt_cache_hit_tokens=usage.get('prompt_cache_hit_tokens'),
+                prompt_cache_miss_tokens=usage.get('prompt_cache_miss_tokens'),
+                completion_tokens=usage.get('completion_tokens'),
+                reasoning_tokens=(usage.get('reasoning_tokens') or
+                                  (usage.get('completion_tokens_details') or {}).get('reasoning_tokens')),
+                purpose=f'provider-probe-{index:04d}',
+                outcome='ok' if error is None else 'error',
+                error=None if error is None else str(error),
+                status=error.status if isinstance(error, TransportError) else None,
+                reasoning_effort=req.reasoning_effort, thinking=req.thinking,
+                json_mode=req.json_mode, max_tokens=req.max_tokens,
+                finish_reason=response.finish_reason if response else None,
+                attempt=attempt, max_attempts=policy.max_attempts,
+                latency_ms=max(0, round((time.perf_counter() - started) * 1000)),
+                error_kind=(error.kind if isinstance(error, TransportError)
+                            else ('unexpected' if error is not None else None)),
+                retryable=retryable if error is not None else None,
+                will_retry=delay is not None,
+                backoff_ms=round(delay * 1000) if delay is not None else None,
+                attempt_id=attempt_id, request_fingerprint=request_fingerprint(req),
+                response_sha256=(hashlib.sha256((response.content or '').encode('utf-8')).hexdigest()
+                                 if response is not None else None),
+                request_model=req.model)
+            if delay is not None:
+                sleep(delay)
+                continue
+            if error is not None:
+                raise error
+            if interrupted:
+                raise RuntimeError('供应商资源中断已耗尽网络尝试；原 usage 已留账')
+            if response is None or not response.text:
+                raise RuntimeError('供应商未返回响应正文；已留账，不追加内容请求')
+            return
 
     wave = min(requests, concurrency)
     barrier = threading.Barrier(wave) if wave > 1 else None
@@ -172,13 +219,7 @@ def run_probe(
         if barrier is not None and index < wave:
             barrier.wait(timeout=30)
         try:
-            client.ask_text(
-                'Return the requested token only.',
-                f'Return exactly OK. Probe id {index:04d}.',
-                purpose=f'rate-limit-probe-{index:04d}',
-                max_tokens=max_tokens, rungs=(('low', False),),
-                cache_policy=CachePolicy.disabled(),
-            )
+            send(index)
             return {'request': index, 'outcome': 'ok', 'error_kind': None}
         except Exception as exc:  # 每个逻辑请求都要进入报告，其余请求继续完成。
             return {

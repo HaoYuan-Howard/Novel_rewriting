@@ -286,7 +286,7 @@ def _parser() -> argparse.ArgumentParser:
 
     approval_close_stage2 = approval_sub.add_parser(
         'close-stage2',
-        help='用独立终审回执（Global + Blueprint 两枚 opaque token）顺序恢复 '
+        help='核验已存在的 Global/Blueprint 接受及两枚当前 token，零模型恢复 '
              's0/s1/seen.read/seen.global/s2')
     approval_close_stage2.add_argument('sid')
     approval_close_stage2.add_argument('--base', required=True)
@@ -319,7 +319,8 @@ def _parser() -> argparse.ArgumentParser:
     approval_apply = approval_sub.add_parser(
         'apply', help='提交 typed 审批 JSON；只写审批账，不启动作业')
     approval_apply.add_argument(
-        'surface', choices=('design', 'structure', 'writing', 'stage5'))
+        'surface', choices=('design', 'structure', 'writing', 'stage5',
+                            'stage2_global_review', 'stage2_blueprint_review'))
     approval_apply.add_argument('sid')
     approval_apply.add_argument('--base', required=True)
     approval_apply.add_argument(
@@ -460,6 +461,10 @@ def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
         from novel.node_agents import build_node_agent
 
         kwargs: dict[str, object] = {}
+        if node in {'stage2.global', 'stage2.blueprint'}:
+            review_token = _valued(flags, '--review-token')
+            if review_token is not None:
+                kwargs['review_token'] = review_token
         if node == 'stage4.plan' and (
             not N.flag_tokens(flags)
             or '--apply-binding' in N.flag_tokens(flags)
@@ -725,13 +730,26 @@ def _run_stage1(ctx: RunContext, flags: list[str]) -> int:
 
 
 def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
-    """stage6 的七条路。**六条 0 成本，一条付费。**
+    """Stage6 生成、审阅与免费恢复的统一分发。
 
     ⚠ `stage6.approve --pick N` 也走这里：派发按 **stage** 分，节点由 `ctx.node` 带着。
     """
     from novel.stages.stage6 import hook, semantic
 
     tokens = set(N.flag_tokens(flags))
+
+    if ctx.node in ('stage6.hook', 'stage6.semantic') and '--recover-prepared' in tokens:
+        coordinates = {
+            'source_run_id': _valued(flags, '--recover-prepared') or '',
+            'proof_sha256': _valued(flags, '--subject-sha256') or '',
+        }
+        if ctx.node == 'stage6.hook':
+            hook.recover_prepared_hook(ctx, **coordinates)
+            print('  ✓ 已按原完成组补齐 Hook 正式提交与采纳尾账（0 模型）')
+            return X.OK
+        _artifact, report = semantic.recover_prepared_semantic(ctx, **coordinates)
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
 
     if ctx.node == 'stage6.semantic':
         if '--dry-run' in tokens:
@@ -839,6 +857,7 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
 
 
 def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
+    from novel.store import ArtifactStore
     """stage2 的九条路。**一个 stage 两个节点**（全书 / 逐章，两个都付费）。
 
     ⚠ 派发按 **stage** 分而节点由 `ctx.node` 带着 ⇒ **先按节点分岔**（形态同 stage4/stage7）。
@@ -847,6 +866,12 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     from novel.stages.stage2 import extract
 
     tokens = set(N.flag_tokens(flags))
+
+    if ctx.node == 'stage2.blueprint' and '--close-review' in tokens:
+        from novel.orchestrator.approvals import close_stage2_accepted
+        close_stage2_accepted(ctx.novel_dir.parent, ctx.sid)
+        print('  ✓ 已核验两份当前 Commander 接受并补齐 Stage2 审批链（0 模型）')
+        return X.OK
 
     if ctx.node == 'stage2.global':
         if '--emit-edit-correction-workpack' in tokens:
@@ -879,6 +904,22 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         if '--apply-edit' in tokens:
             artifact, report = extract.run_apply_edit(
                 ctx, _valued(flags, '--apply-edit') or '')
+            if report.passed:
+                from contracts.artifacts import STAGE2_GLOBAL_EDIT
+                from contracts.schema.stage2 import GlobalEdit
+                from contracts.schema.api import Stage2NodeReviewRequest
+                from novel.orchestrator.approvals import approve_stage2_review
+                from novel.stages.stage2.global_review import review_token
+                edit = ArtifactStore(ctx).read_own(GlobalEdit, STAGE2_GLOBAL_EDIT)[0]
+                if edit.post_edit_review is not None:
+                    from novel.errors import ArtifactSubmittedReviewPending, NovelError
+                    try:
+                        approve_stage2_review(ctx.novel_dir.parent, ctx.sid, Stage2NodeReviewRequest(
+                            node='stage2.global', review_token=review_token(ctx), decision='accept',
+                            actor=edit.post_edit_review.actor, reason=edit.post_edit_review.reason))
+                    except (NovelError, OSError, ValueError) as exc:
+                        raise ArtifactSubmittedReviewPending(str(exc), hint=(
+                            'Global typed 补丁已落盘；重放同一 --apply-edit 文件零模型补接受。')) from exc
             print(render(report))
             print(f'  ✓ Stage2 typed 人工订正已落为新一轮'
                   f'（{len(artifact.canon.secrets)} 条 secret / '
@@ -908,7 +949,7 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
             extract.run_purge_role(ctx, _llm_client(ctx))
             print('  ✓ stage2 role/fate 已重划并落盘')
             return X.OK
-        extract.run_global(ctx, _llm_client(ctx))
+        extract.run_global(ctx, _llm_client(ctx), review_token=_valued(flags, '--review-token'))
         print('  ✓ stage2 全书事实底座已落盘')
         return X.OK
 
@@ -988,7 +1029,8 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     if chapters:
         from novel.llm.cache import CachePolicy
         ctx.cache = CachePolicy.refresh()
-    report = extract.run_blueprint(ctx, _llm_client(ctx), chapters=chapters)
+    report = extract.run_blueprint(ctx, _llm_client(ctx), chapters=chapters,
+                                  review_token=_valued(flags, '--review-token'))
     print('  ✓ stage2 逐章蓝图已落盘')
     print(render(report))
     return X.OK if report.passed else X.CHECK_FAILED
@@ -1487,6 +1529,13 @@ def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
 
     tokens = set(N.flag_tokens(flags))
 
+    if ctx.node == 'stage7.rename' and '--recover-prepared' in tokens:
+        rename.recover_prepared_rename(
+            ctx, source_run_id=_valued(flags, '--recover-prepared') or '',
+            proof_sha256=_valued(flags, '--subject-sha256') or '')
+        print('  ✓ 已按原完成组补齐人名表提交与采纳尾账（0 模型）')
+        return X.OK
+
     if ctx.node == 'stage7.approve':
         actor = _valued(flags, '--actor')
         reason = _valued(flags, '--reason')
@@ -1657,7 +1706,8 @@ def _require_commander_execution_permit(
                         f'stage0.remove --source 派生 sid={derived_sid!r}，'
                         f'与显式 sid={a.sid!r} 不一致；不得对错书检查 admission')
                 target_sid = derived_sid
-        if target_sid is not None:
+        if target_sid is not None and N.would_write(a.node, flags):
+            # 纯读命令不申请 writer；不能为 check-only/dry-run 创建 admission 锁文件。
             unresolved = admission.unresolved(a.base, target_sid)
             if unresolved:
                 parent_runs = ', '.join(
@@ -1731,6 +1781,9 @@ def _cmd_run(a: argparse.Namespace) -> int:
     # （该节点不接受这条跑法）先被 `is_paid` 倒向“会花钱”，显示成“加 --yes”；
     # 真加了又会落到默认付费分支。入口先走与 preview 共用的节点校验。
     N.validate_run(a.node, flags)
+    if N.would_write(a.node, flags):
+        from novel.work_units import check_workflow_write
+        check_workflow_write(a.base)
     executor_backend = N.resolve_executor_backend(
         a.node, flags, _executor_backend_of(a))
     egress_authorized = N.resolve_executor_egress(
@@ -1805,6 +1858,9 @@ def _cmd_run(a: argparse.Namespace) -> int:
     # ⚠ `paid` 由 `is_paid` 算，**不由 `NODES[node].paid` 推**：
     # 真正的贵贱是 `(node, flags)` 二元组的函数，而它只有一处算（`R-11.7`）。
     if a.node == 'stage0.remove' and '--source' in N.flag_tokens(flags):
+        from novel.work_units import initialize_workflow
+        if N.would_write(a.node, flags):
+            initialize_workflow(a.base)
         # 这条路径在书目录建立前进入 producer，不经 `RunContext.open`。
         # 因此必须在这里先铸造这次跑的唯一身份，人手命令立即
         # 看得到，producer 里的 context / ledger 也复用同一个值。
@@ -1830,6 +1886,8 @@ def _cmd_run(a: argparse.Namespace) -> int:
             if isinstance(executor_backend, AgentExecutorBackend) else None),
         run_id=producer_run_id,
         parent_run_id=parent_run_id)
+    if N.would_write(a.node, flags):
+        ctx.require_current_workflow_write()
     # stdout 有 JSON 模板等机读消费者；身份打 stderr，人在终端仍能第一时间看到。
     # 测试里的最小 fake context 可能不带新字段，生产 RunContext 则结构上必有。
     if run_id := getattr(ctx, 'run_id', None):
@@ -1840,7 +1898,12 @@ def _cmd_run(a: argparse.Namespace) -> int:
     # Stage2 人工评测是**运行边界**，不是某个编排器的礼貌约定。任何调用方
     # （手敲 CLI、前端 jobs、headless agent）最终都要经过这里；0 成本复检/人工修复
     # 仍可在闸关闭时运行，否则人连开闸的恢复路都进不去。
-    if stage2_review_required(a.node, paid=paid):
+    if paid and a.node == 'stage2.blueprint':
+        # Blueprint 尚未生成时不可能满足整体 Stage2 交叉接受；这里独立核验
+        # Global 前置接受，producer 仍复验同一事实以覆盖直接调用。
+        from novel.stages.stage2 import global_review
+        global_review.require_global_accepted(ctx)
+    elif stage2_review_required(a.node, paid=paid):
         if a.node == 'stage7.assemble':
             # Stage7 的唯一 frozen-v6 兼容面必须与产地/下载共用同一判据；
             # 这里不能先用通用 v7 闸把 exact 旧书挡死，也不能在 CLI 重拼证明。
@@ -1884,9 +1947,14 @@ def _cmd_run(a: argparse.Namespace) -> int:
     # headless agent 子 CLI 都经过这里）：stage6/stage7 的任何写效果跑法都要求
     # 当前 typed closure 回执已打开 gate.s5。0 成本只读跑法（--check-only 等）
     # 仍可运行，否则人连开闸需要的证据都拿不到（R 系硬闸与恢复面同批交付）。
-    if a.node in ('stage6.hook', 'stage6.semantic', 'stage7.rename', 'stage7.assemble')             and not set(N.flag_tokens(flags)) <= set(STAGE5_CLOSED_EXEMPT_FLAGS):
-        from novel.llm import stage5_runs
+    prepared_delivery_recovery = (
+        a.node in ('stage6.hook', 'stage6.semantic', 'stage7.rename')
+        and run_tokens == {'--recover-prepared', '--subject-sha256'})
+    if (a.node in ('stage6.hook', 'stage6.semantic', 'stage7.rename', 'stage7.assemble')
+            and not prepared_delivery_recovery
+            and not run_tokens <= set(STAGE5_CLOSED_EXEMPT_FLAGS)):
         from novel.stages.stage5 import closure as stage5_closure
+        from novel.store import ArtifactStore
         stage5_closure.require_stage5_closed(ArtifactStore(ctx))
     return _dispatch(a.node, ctx, flags)
 
@@ -2425,6 +2493,7 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
     """可审计审批 CLI：template/show 只读，apply 只落审批账且绝不拉作业。"""
     from contracts.schema.api import (
         BlueprintSeenRequest, DesignReviewRequest, Stage2FinalReviewRequest,
+        Stage2NodeReviewRequest,
         Stage2GlobalSeenRequest, Stage5ClosureRequest, StructureApprovalRequest,
         WritingApprovalRequest,
     )
@@ -2511,12 +2580,20 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
             'structure': StructureApprovalRequest,
             'writing': WritingApprovalRequest,
             'stage5': Stage5ClosureRequest,
+            'stage2_global_review': Stage2NodeReviewRequest,
+            'stage2_blueprint_review': Stage2NodeReviewRequest,
         }[a.surface]
         try:
             request = model.model_validate_json(raw)
         except ValidationError as exc:
             raise TerminalState(f'{a.surface} 审批 JSON 不符合 typed 契约：{exc}') from exc
-        if a.surface == 'design':
+        if a.surface in {'stage2_global_review', 'stage2_blueprint_review'}:
+            expected_node = ('stage2.global' if a.surface == 'stage2_global_review'
+                             else 'stage2.blueprint')
+            if request.node != expected_node:
+                raise TerminalState('Stage2 approval surface 与节点不匹配')
+            result = approvals.approve_stage2_review(a.base, a.sid, request)
+        elif a.surface == 'design':
             result = approvals.approve_design(a.base, a.sid, request)
         elif a.surface == 'structure':
             result = approvals.approve_structure(a.base, a.sid, request)
@@ -2702,9 +2779,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     _force_utf8()
     raw = list(sys.argv[1:] if argv is None else argv)
     a = _parser().parse_args(_normalize_operator_permit_argv(raw))
+    from novel.errors import ArtifactSubmittedReviewPending
     try:
         _refuse_commander_control_mutation(a)
         return _CMDS[a.cmd](a)
+    except ArtifactSubmittedReviewPending as e:
+        print(f'\n✗ 产物已落盘，审阅提交尚未完成：{e}', file=sys.stderr)
+        _print_hint(e)
+        return X.CHECK_FAILED
     except TerminalState as e:
         # **不是 bug，所以不打栈**：打一段栈会让人以为程序坏了，
         # 而它说的其实是「按设计这一步走不下去」。

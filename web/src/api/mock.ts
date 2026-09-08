@@ -1459,7 +1459,8 @@ function mockBlueprintReviewWorkpack(sid: string): BlueprintReviewWorkpack {
     title: reading.title,
     read_only: true,
     auto_decisions: false,
-    review_contract_version: 'stage2-blueprint-review-v4',
+    review_contract_version: 'stage2-blueprint-review-v5',
+    global_review: {},
     review_identity_sha256: 'e'.repeat(64),
     validation_seal_sha256: 'f'.repeat(64),
     review_token: 'bpr3_' + 'c'.repeat(64),
@@ -1508,12 +1509,14 @@ function mockBlueprintReviewWorkpack(sid: string): BlueprintReviewWorkpack {
         segments,
       },
       beats: reading.beats.map((beat, index) => ({
+        beat_id: beat.beat_id,
         beat_order: index + 1,
         located: beat.located,
         time_layer: beat.time_layer,
         place: beat.place,
         present_char_ids: beat.present_char_ids,
         facts: beat.fact_atoms.map((fact) => ({
+          fact_id: fact.fact_id,
           claim: fact.claim,
           kind: fact.kind,
           obligation: fact.obligation,
@@ -1573,6 +1576,9 @@ function isCurrentBlueprintSeenRequest(
 /* ------------------------------------------------------------------ Api */
 
 export const mockApi: Api = {
+  approveStage2Review: async () => {
+    throw new Error('离线样本未提供 Stage2 节点接受，请连接真实服务')
+  },
   getNovels: () => later(mockNovels()),
 
   getNovel: (sid) =>

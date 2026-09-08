@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-plan.py —— Stage4 v4 的三个节点。**两次付费调用、一次确定性上下文组装。**
+plan.py —— Stage4 v4 的三个节点。策略/逐章设计、按歧义章绑定、确定性上下文组装。
 
   · `stage4.design`（付费，`R-5`）→ `stage4/blind_candidate.json`
   · `stage4.plan`（付费，`R-5`）  → `stage4/evidence_binding.json` + 编译计划
@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import nullcontext
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
@@ -67,6 +68,7 @@ from novel.errors import (
 )
 from novel.report import build
 from novel.report.findings import Outcome
+from novel.observability import RequestProgress
 from novel.run import RunContext
 from novel.core.naming import display_names_at
 from novel.stages.stage4 import checks, prompts
@@ -559,7 +561,6 @@ def _require_definitive_design_candidate(
             f'{rel} 已过期（{freshness.reason}）；不得把它当成空槽位覆盖')
     if freshness.state == 'unknown' and allow_frozen_v6 and rel == CANDIDATE_REL:
         from novel.stages.stage2.frozen_v6 import (
-            LEGACY_FROZEN_REVIEW_CONTRACT,
             require_frozen_v6_stage4_subject,
         )
         frozen = require_frozen_v6_stage4_subject(store)
@@ -4278,6 +4279,7 @@ def validate_design_chapter_edit(
     })
     if store.schema_version(BLUEPRINTS) == 6:
         from novel.stages.stage2.frozen_v6 import (
+            LEGACY_FROZEN_REVIEW_CONTRACT,
             require_frozen_v6_stage4_subject,
         )
         frozen = require_frozen_v6_stage4_subject(
@@ -4688,46 +4690,10 @@ def _plan_checkpoint_state(
     }
 
 
-def _ask_and_checkpoint_plan_candidate(
-        ctx: RunContext, source: Any, prepared: PlanCandidateContext,
-) -> EvidenceBindingResponse:
-    """消费原始请求或已经排队的 feedback，并追加一份 accepted revision。"""
-    from novel.llm import stage4_runs
-
-    _assert_plan_current(ctx, prepared)
-    response = source.ask_json(
-        prepared.system,
-        prepared.user,
-        model_cls=EvidenceBindingResponse,
-        purpose=ctx.node,
-        max_tokens=prompts.EVIDENCE_BIND_MAX_TOKENS,
-        # agent validator 只守可物化边界；联合业务 HARD 在 evaluate 后排队。
-        validator=prepared.validator,
-        recovery_policy=stage4_runs.recovery_policy(ctx.node),
-    )
-    if response.status == 'bound' and prepared.validator.compiled is None:
-        raise ProvenanceRefused(
-            'stage4.plan source 返回 bound 但未经唯一 compiler validator')
-    stage4_runs.write_checkpoint(
-        ctx,
-        input_sha256=prepared.input_sha256,
-        system=prepared.system,
-        user=prepared.user,
-        response_model=EvidenceBindingResponse,
-        max_tokens=prompts.EVIDENCE_BIND_MAX_TOKENS,
-        response_payload=response.model_dump(by_alias=True, mode='json'),
-        acceptance=source.accepted_checkpoint(ctx.node),
-        state_payload=_plan_checkpoint_state(
-            response, prepared.validator.compiled),
-        revision_key='candidate',
-    )
-    return response
-
-
 def request_plan_candidate(
         ctx: RunContext, source: Any, prepared: PlanCandidateContext,
 ) -> EvidenceBindingResponse:
-    """取得首份 B 候选；优先恢复 latest accepted revision，缺失才发 wire。"""
+    """只读恢复历史全书 B checkpoint；新请求必须经现役章池。"""
     _assert_plan_current(ctx, prepared)
     if _uses_agent_runs(ctx):
         _require_agent_bridge(ctx, source)
@@ -4756,25 +4722,10 @@ def request_plan_candidate(
                 recovery_policy=stage4_runs.recovery_policy(ctx.node),
             )
             return restored.value
-        return _ask_and_checkpoint_plan_candidate(ctx, source, prepared)
-    legacy_validator = _binding_validator(
-        candidate=prepared.candidate_raw,
-        subject=prepared.subject_sha256,
-        catalog=prepared.catalog,
-        up=prepared.upstream,
-        store=prepared.store,
-        include_business_hard=True,
-    )
-    return source.ask_json(
-        prepared.system,
-        prepared.user,
-        model_cls=EvidenceBindingResponse,
-        purpose=ctx.node,
-        max_tokens=prompts.EVIDENCE_BIND_MAX_TOKENS,
-        # legacy 的真实调用形态保持不变：业务 HARD 仍由 ask_json validator
-        # 在 LlmClient 内按旧重试策略处理，不要求它实现 agent feedback bridge。
-        validator=legacy_validator,
-    )
+        raise ProvenanceRefused(
+            'Stage4B 新请求必须使用实际章节 session；历史全书恢复未找到 checkpoint')
+    raise ProvenanceRefused(
+        'legacy Stage4B 已按歧义章节分发；请通过 run_plan 使用机械基线与章级预算')
 
 
 def _materialize_binding(
@@ -5356,10 +5307,15 @@ def finalize_plan_candidate(
                 evaluation.binding.model_dump(by_alias=True, mode='json'):
             raise ProvenanceRefused(
                 'stage4.plan provisional/final binding 不一致')
+        prepare_delivery = getattr(source, 'prepare_binding_delivery', None)
+        if callable(prepare_delivery):
+            prepare_delivery(prepared, binding)
         _write_producer_artifact(prepared.store, BINDING_REL, binding)
-        _note_adoption(
-            ctx, source, purpose=ctx.node,
-            rel=BINDING_REL, artifact=binding)
+        chapter_adoptions = getattr(source, 'note_binding_adoptions', None)
+        if not callable(chapter_adoptions):
+            _note_adoption(
+                ctx, source, purpose=ctx.node,
+                rel=BINDING_REL, artifact=binding)
         if binding.status == 'infeasible':
             return binding
         assert compiled is not None
@@ -5372,9 +5328,12 @@ def finalize_plan_candidate(
             blind_candidate_sha256=prepared.candidate_file_sha256,
             evidence_binding_sha256=binding_file_sha,
         )
-        return _gate_and_write(
+        result = _gate_and_write(
             ctx, prepared.store, compiled, prepared.upstream,
             provenance=provenance)
+        if callable(chapter_adoptions):
+            chapter_adoptions(binding)
+        return result
 
     from novel.llm import agent_runs, stage4_runs
     with stage4_runs.commit_ownership(ctx.novel_dir):
@@ -5644,36 +5603,6 @@ def finalize_plan_candidate(
         _finish_restored_agent_session(
             ctx, source, delivery_state='delivered', error_kind=None)
         return report
-
-
-def _queue_plan_validation_feedback(
-        ctx: RunContext, source: Any,
-        evaluation: PlanCandidateEvaluation,
-) -> bool:
-    """把业务 HARD 接到 live session，或接到 checkpoint 恢复的新 session。"""
-    rows = evaluation.feedback_rows()
-    if not evaluation.hard_hits or not rows:
-        raise ProvenanceRefused(
-            'stage4.plan 只有完整业务 HARD 反馈才能排入 executor')
-    missing = [
-        name for name in (
-            'queue_code_validation_feedback',
-            'queue_restored_code_validation_feedback',
-        )
-        if not callable(getattr(source, name, None))
-    ]
-    if missing:
-        raise ProvenanceRefused(
-            f'stage4.plan agent source 缺业务 feedback bridge {missing}')
-    if not hasattr(source, 'provider_session_id'):
-        raise ProvenanceRefused(
-            'stage4.plan agent source 不暴露 provider session 状态，'
-            '不能判断 live resume 与 checkpoint recovery')
-    if source.provider_session_id is None:
-        return source.queue_restored_code_validation_feedback(
-            rows, purpose=ctx.node)
-    return source.queue_code_validation_feedback(
-        rows, purpose=ctx.node)
 
 
 @dataclass(frozen=True)
@@ -6811,6 +6740,225 @@ def _finalize_mechanical_plan(
         provenance=provenance)
 
 
+class _LegacyPlanChapterSource:
+    """legacy 章级响应的聚合视图；模型选型与请求重试仍归 LlmClient。"""
+
+    def __init__(self, ctx: RunContext, client: Any, chapter_count: int):
+        self.ctx, self.client = ctx, client
+        self.chapter_count = chapter_count
+        self.model = client.model
+        self.units: dict[int, _PlanChapterUnit] = {}
+        self.lineage: dict[int, dict[str, Any]] = {}
+
+    def accepted_attempt(self, _purpose: str) -> str:
+        return self.units[max(self.units)].attempt_id
+
+    def accepted_models(self, _purpose: str) -> tuple[str, ...]:
+        return tuple(sorted({model for unit in self.units.values() for model in unit.models}))
+
+    def require_history_current(self) -> None:
+        from novel.work_units import budget_for
+        for chapter, identity in self.lineage.items():
+            if identity['origin'] != 'work_unit_response':
+                continue
+            budget = budget_for(self.ctx, scope=f'chapter:{chapter}')
+            turn = budget.turn(identity['content_turn_id'])
+            raw = budget.response_payload(turn.turn_id)
+            if (budget.unit_id != identity['work_unit_id']
+                    or turn.run_id != identity['source_run_id']
+                    or turn.request_sha256 != identity['source_request_fingerprint']
+                    or turn.response_sha256 != identity['source_response_sha256']
+                    or raw.get('attempt_id') != self.units[chapter].attempt_id):
+                raise ProvenanceRefused('Stage4B 工作单元聚合来源已经漂移')
+
+    def aggregate_usage(self):
+        return combine_usage(*(self.ctx.ledger.chapter_usage(chapter) for chapter in sorted(self.units)))
+
+    def note_binding_adoptions(self, artifact: EvidenceBinding) -> None:
+        for chapter, unit in sorted(self.units.items()):
+            _note_adoption_attempt(
+                self.ctx, purpose=stage4_runs.plan_chapter_purpose(chapter),
+                attempt_id=unit.attempt_id, chapter=chapter,
+                rel=BINDING_REL, artifact=artifact)
+
+    def prepare_binding_delivery(self, prepared: PlanCandidateContext, artifact: EvidenceBinding) -> None:
+        save = getattr(self.client, 'save_producer_recovery', None)
+        if not callable(save):
+            raise ProvenanceRefused('legacy B source 缺 producer 提交回执口')
+        proof = {
+            'kind': 'stage4-legacy-binding-delivery-v1',
+            'input_sha256': prepared.input_sha256,
+            'candidate_file_sha256': prepared.candidate_file_sha256,
+            'binding_sha256': prepared.store.prospective_sha256(BINDING_REL, artifact),
+            'binding_payload': artifact.model_dump(by_alias=True, mode='json'),
+        }
+        for unit in self.units.values():
+            save(unit.attempt_id, proof)
+
+    def ask(self, work: _PlanChapterWork, *, revision: int = 0,
+            recovery_turn_id: str | None = None) -> None:
+        chapter = work.chapter_ordinal
+        purpose = stage4_runs.plan_chapter_purpose(chapter)
+        recovery = (self.client.replay_content_progress(
+            scope=f'chapter:{chapter}', verified_turn_ids=frozenset((recovery_turn_id,)))
+            if recovery_turn_id is not None else nullcontext())
+        with recovery:
+            response = self.client.ask_json(
+                work.request.system, work.request.user,
+                model_cls=ChapterBindingResponse, purpose=purpose,
+                max_tokens=work.request.max_tokens, validator=work.validator,
+                progress=RequestProgress(chapter=chapter, index=chapter, total=self.chapter_count))
+        attempt = self.client.accepted_attempt(purpose)
+        models = tuple(self.client.accepted_models(purpose))
+        if not attempt or not models:
+            raise ProvenanceRefused(f'Stage4B ch{chapter} 缺已校验响应的来源')
+        rows = apply_chapter_resolutions(
+            work.chapter_baseline,
+            [row.model_dump(by_alias=True, mode='json') for row in response.resolutions])
+        self.units[chapter] = _PlanChapterUnit(
+            chapter_ordinal=chapter, request=work.request, response=response,
+            issue=work.issue, rows=rows, attempt_id=attempt, models=models,
+            restored=False, revision=revision, source_run_id=self.ctx.run_id)
+        from novel.work_units import budget_for
+        budget = budget_for(self.ctx, scope=f'chapter:{chapter}')
+        pending = budget.latest_pending_response()
+        if recovery_turn_id is not None:
+            from novel.work_units import ContentReservation
+            turn = budget.turn(recovery_turn_id)
+            pending = (ContentReservation(budget.unit_id, turn.turn_id, turn.ordinal),
+                       budget.response_payload(turn.turn_id))
+            proof = budget.producer_recovery(turn.turn_id)
+            prior = next(row for row in proof['binding_payload']['_provenance']['unit_lineage']
+                         if row['chapter_ordinal'] == chapter)
+            self.units[chapter] = replace(self.units[chapter], revision=int(prior['revision']))
+        if pending is not None and pending[1].get('attempt_id') == attempt:
+            reservation, _raw = pending
+            turn = budget.turn(reservation.turn_id)
+            self.lineage[chapter] = {
+                'origin': 'work_unit_response', 'source_run_id': turn.run_id,
+                'work_unit_id': reservation.unit_id,
+                'content_turn_id': reservation.turn_id,
+                'source_request_fingerprint': turn.request_sha256,
+                'source_response_sha256': turn.response_sha256,
+            }
+        else:
+            # 缓存命中仍有独立的缓存 attempt 成本行，不凭空新发内容额度。
+            self.lineage[chapter] = {
+                'origin': 'current_run', 'source_run_id': self.ctx.run_id}
+
+
+def _legacy_plan_delivery_recovery(
+        ctx: RunContext, prepared: PlanCandidateContext, chapters: Iterable[int],
+) -> dict[int, str]:
+    """仅多章聚合采纳未闭合时恢复；完整交付后的显式刷新仍申请剩余预算。"""
+    from novel.work_units import budget_for
+    turns = {}
+    for chapter in chapters:
+        budget = budget_for(ctx, scope=f'chapter:{chapter}')
+        turn = budget.latest_turn()
+        if turn is not None:
+            proof = budget.producer_recovery(turn.turn_id)
+            if proof is not None:
+                turns[chapter] = (turn, proof)
+    pending = [proof for turn, proof in turns.values()
+               if turn.state != 'adopted'
+               and proof.get('kind') == 'stage4-legacy-binding-delivery-v1'
+               and proof.get('input_sha256') == prepared.input_sha256
+               and proof.get('candidate_file_sha256') == prepared.candidate_file_sha256]
+    if not pending or not any(turn.state == 'adopted' for turn, _proof in turns.values()):
+        return {}
+    proof = pending[0]
+    if prepared.store.full_sha256_or_none(BINDING_REL) != proof['binding_sha256']:
+        # 首写前的回答仍由普通 raw 恢复；不能把旧正式绑定当本轮已提交。
+        return {}
+    if any(value != proof for _turn, value in turns.values()):
+        raise ProvenanceRefused('legacy B 聚合各章的 producer 目标不一致')
+    with ctx.validation_reads():
+        binding, _raw = prepared.store.read_own(EvidenceBinding, BINDING_REL, require_current=True)
+        if binding.model_dump(by_alias=True, mode='json') != proof['binding_payload']:
+            raise ProvenanceRefused('legacy B 已提交绑定与原 producer 回执不一致')
+        why = prepared.validator(EvidenceBindingResponse.model_validate(
+            binding.model_dump(exclude={'provenance', 'infeasibility_proof'})), None)
+        if why is not None:
+            raise ProvenanceRefused(f'legacy B 恢复绑定未通过当前动态闸：{why}')
+        current_plan, _plan_raw = prepared.store.read_own(PlanChapters, REL, require_current=True)
+        if (current_plan.provenance.evidence_binding_sha256 != proof['binding_sha256']
+                or current_plan.provenance.blind_candidate_sha256 != prepared.candidate_file_sha256
+                or current_plan.provenance.origin != 'compiled'):
+            raise ProvenanceRefused('legacy B 部分采纳缺同候选的已提交编译计划')
+        expected_plan = PlanChapters.model_validate({
+            **prepared.validator.compiled, '_provenance': current_plan.provenance})
+        if expected_plan != current_plan:
+            raise ProvenanceRefused('legacy B 部分采纳的当前计划与原绑定编译不一致')
+        ctx.require_observed_roots_current()
+    return {chapter: turn.turn_id for chapter, (turn, _proof) in turns.items()}
+
+
+def _run_legacy_plan_with_chapters(
+        ctx: RunContext, client: Any, prepared: PlanCandidateContext,
+) -> CheckReport | EvidenceBinding:
+    """共用机械基线、章内 wire 闸和整书 HARD，返工只回有权限的歧义章。"""
+    baseline = build_mechanical_baseline(
+        prepared.candidate_raw, prepared.upstream.blueprints)
+    resolved = {
+        chapter.chapter_ordinal: chapter.binding_rows()
+        for chapter in baseline.chapters if chapter.mechanical}
+    works = {
+        chapter.chapter_ordinal: _prepare_plan_chapter_work(
+            ctx, prepared, chapter, chapter.chapter_ordinal)
+        for chapter in baseline.chapters if not chapter.mechanical}
+    source = _LegacyPlanChapterSource(ctx, client, len(baseline.chapters))
+    recovery = _legacy_plan_delivery_recovery(ctx, prepared, works)
+    for work in works.values():
+        source.ask(work, recovery_turn_id=recovery.get(work.chapter_ordinal))
+    previous: dict[int, frozenset[str]] = {}
+    while True:
+        resolved.update({chapter: unit.rows for chapter, unit in source.units.items()})
+        aggregate = {
+            'status': 'bound', 'candidate_sha256': prepared.subject_sha256,
+            'chapters': [{'output_ordinal': ordinal, 'scenes': resolved[ordinal]}
+                         for ordinal in sorted(resolved)],
+            'binding_concerns': [
+                unit.issue.canonical_concern(concern)
+                for _chapter, unit in sorted(source.units.items())
+                for concern in unit.response.binding_concerns],
+        }
+        lineage = _plan_unit_lineage(baseline, source.units)
+        for row in lineage:
+            row.update(source.lineage.get(row['chapter_ordinal'], {}))
+        if not works:
+            return _finalize_mechanical_plan(ctx, prepared, aggregate, lineage)
+        evaluation = evaluate_plan_candidate(
+            ctx, source, prepared, EvidenceBindingResponse.model_validate(aggregate),
+            architecture='chapter_baseline_v1', unit_lineage=lineage)
+        _assert_plan_chapter_failure_scopes(evaluation, source.units)
+        if evaluation.passed or evaluation.stop_owner_failures():
+            return finalize_plan_candidate(ctx, source, prepared, evaluation)
+        by_chapter: dict[int, list[TypedFailure]] = {}
+        for failure in evaluation.typed_failures:
+            if failure.chapter_ordinal is not None:
+                by_chapter.setdefault(failure.chapter_ordinal, []).append(failure)
+        from novel.work_units import budget_for
+        retryable = []
+        for chapter, failures in sorted(by_chapter.items()):
+            signature = frozenset(row.failure_fingerprint for row in failures)
+            if (signature == previous.get(chapter)
+                    or budget_for(ctx, scope=f'chapter:{chapter}').remaining == 0):
+                continue
+            previous[chapter] = signature
+            feedback = getattr(client, 'record_candidate_feedback', None)
+            if not callable(feedback):
+                raise ProvenanceRefused('Stage4B legacy source 缺持久返工反馈口')
+            feedback(stage4_runs.plan_chapter_purpose(chapter), {
+                'kind': 'stage4-binding-business-rework',
+                'typed_failures': [row.to_payload() for row in failures]})
+            retryable.append(chapter)
+        if not retryable:
+            return finalize_plan_candidate(ctx, source, prepared, evaluation)
+        for chapter in retryable:
+            source.ask(works[chapter], revision=source.units[chapter].revision + 1)
+
+
 def run_plan(ctx: RunContext, client: Any, *,
              chapters: tuple[int, ...] = ()) -> CheckReport | EvidenceBinding:
     """Stage4B：冻结 A 候选，只绑定证据并由代码编译 v4 计划。
@@ -6820,49 +6968,15 @@ def run_plan(ctx: RunContext, client: Any, *,
     产生”的 ``TerminalState``，也绝不会编译或覆盖最终计划。
     """
     prepared = prepare_plan_candidate(ctx, chapters=chapters)
+    if not _uses_agent_runs(ctx):
+        return _run_legacy_plan_with_chapters(ctx, client, prepared)
     if _uses_agent_runs(ctx) and hasattr(client, 'prepare_chapters'):
         # 批次 4：章级 session 池（Stage4PlanSessionPool）——机械章 0 wire，
         # 歧义章私有 session；聚合仍过同一 compiler 与联合 HARD。
         return _run_plan_with_chapters(ctx, client, prepared)
-    response = request_plan_candidate(ctx, client, prepared)
-    if not _uses_agent_runs(ctx):
-        evaluation = evaluate_plan_candidate(ctx, client, prepared, response)
-        return finalize_plan_candidate(ctx, client, prepared, evaluation)
-
-    last_rejected: PlanCandidateEvaluation | None = None
-    prev_fingerprints: frozenset[str] | None = None
-    while True:
-        evaluation = evaluate_plan_candidate(ctx, client, prepared, response)
-        if evaluation.passed:
-            return finalize_plan_candidate(ctx, client, prepared, evaluation)
-        last_rejected = evaluation
-        # 关闭式路由（批次 1）：owner 表唯一落在 invariants。
-        # · A/Stage2/code owner：重试 B 不可能闭合 ⇒ 首轮立即停止，不消耗四轮；
-        # · 同一 fingerprint 集连续两轮未闭合：该 unit 的重试已无信息量 ⇒ 提前终止；
-        # · 其余（B owner）：照旧回同一 session。
-        stop_failures = evaluation.stop_owner_failures()
-        fingerprints = frozenset(
-            f.failure_fingerprint for f in evaluation.typed_failures)
-        repeat_stop = bool(fingerprints) and fingerprints == prev_fingerprints
-        prev_fingerprints = fingerprints
-        if not stop_failures and not repeat_stop and _queue_plan_validation_feedback(
-                ctx, client, evaluation):
-            try:
-                response = _ask_and_checkpoint_plan_candidate(
-                    ctx, client, prepared)
-            except LlmFailed:
-                # 若后续 parse/schema 轮把预算用尽，不能丢掉前一份已经 accepted
-                # 且业务 HARD 的可恢复候选。driver/code/subject 失败不走这条路。
-                if (last_rejected is not None
-                        and not client.driver_failed
-                        and not client.can_resume):
-                    _keep_business_witness(ctx, client, prepared, last_rejected)
-                    return finalize_plan_candidate(
-                        ctx, client, prepared, last_rejected)
-                raise
-            continue
-        _keep_business_witness(ctx, client, prepared, evaluation)
-        return finalize_plan_candidate(ctx, client, prepared, evaluation)
+    raise ProvenanceRefused(
+        'Stage4B Agent 生成必须通过 Stage4PlanSessionPool 分发实际章节；'
+        '全书单会话已退出新请求路径')
 
 
 def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:
@@ -6934,7 +7048,7 @@ def run_apply_binding(
     """0-wire 写回完整 ``EvidenceBindingResponse`` business JSON。
 
     人工输入不伪造 ``_provenance``；core 重跑同一 dynamic validator/
-    compiler/HARD，再铸 ``origin=human`` 的 v3 正式 binding。
+    compiler/HARD，再铸 ``origin=human`` 的 v4 正式 binding。
     """
     if not path or not path.strip():
         raise TerminalState('--apply-binding 必须显式指向书内 business JSON')
@@ -6951,7 +7065,7 @@ def run_apply_binding(
         response = EvidenceBindingResponse.model_validate(raw)
     except ValueError as exc:
         raise ArtifactUnreadable(
-            f'{rel} 不合 EvidenceBindingResponse v3 business 契约：{exc}') from exc
+            f'{rel} 不合 EvidenceBindingResponse 当前 business 契约：{exc}') from exc
 
     (
         _system, _user, _same_store, up, _candidate, candidate_raw,

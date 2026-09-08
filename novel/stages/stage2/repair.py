@@ -40,6 +40,7 @@ from novel.core.spans import content_index, content_only
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState, UpstreamMissing
 from novel.llm.client import LlmClient
 from novel.llm.ledger import combine_usage
+from novel.observability import RequestProgress
 from novel.llm.prompts import with_json_shape
 from novel.run import RunContext
 from novel.stages.stage2.character_refs import blueprint_inventory_from_projection
@@ -260,6 +261,9 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
         for bp in previous_raw['blueprints']
         for index, beat in enumerate(bp.get('beats') or [])
     }
+    if actions:
+        from novel.stages.stage2.global_review import require_global_accepted
+        require_global_accepted(ctx)
     for action in actions:
         ordinal, span = spans_by_beat[action.beat_id]
         seg = text_of.get(ordinal, '')[span.get('start', 0):span.get('end', 0)]
@@ -289,6 +293,7 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
                 system, user,
                 model_cls=HingeSelectResponse,
                 purpose=purpose,
+                progress=RequestProgress(chapter=ordinal, index=1, total=1),
                 validator=lambda obj, _r, _ids=valid_ids: (
                     None if obj.candidate_id in _ids
                     else f'candidate_id 不在候选里：{obj.candidate_id!r}'),
@@ -308,6 +313,7 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
                 system, user,
                 model_cls=HingePhraseResponse,
                 purpose=purpose,
+                progress=RequestProgress(chapter=ordinal, index=1, total=1),
                 validator=lambda obj, _r, _seg=seg: (
                     None if len(_occurrences(_seg, obj.phrase)) == 1
                     else f'短语在这一拍里命中 '

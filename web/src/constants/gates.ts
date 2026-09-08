@@ -48,7 +48,6 @@ export const SCREEN_GATE: Partial<Record<ScreenName, GateKey>> = {
 
 export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | null {
   const g = doc.gate
-  const seen = doc.seen
   const key = SCREEN_GATE[screen]
   if (!key) return null
   const done = g[key]
@@ -60,7 +59,7 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
         done,
         blocked: !g.s0,
         title: done ? '切分已确认' : g.s0 ? '这一刀切对了吗？' : '番外还没剔，切了也要重切',
-        note: '确认后先发起全局设定；全局产物落盘后，服务端会下发逐章骨架 continuation。人工复核可与骨架生成并行。',
+        note: '确认后先生成全局设定；当前 Global 接受后，服务端才会下发逐章骨架生成。',
         chips: [{ ok: g.s0, label: 'stage0 剔番外' }],
         btn: done ? '已确认' : g.s0 ? '确认切分' : '先过 stage0 剔除番外',
         blockedReason: 'stage0 还没确认删除范围。番外没剔就切分，切完还要重切。',
@@ -70,20 +69,22 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
       }
 
     case 's2': {
-      const both = seen.read && seen.global
+      const globalAccepted = doc.stage2_reviews?.['stage2.global']?.state === 'accepted'
+      const blueprintAccepted = doc.stage2_reviews?.['stage2.blueprint']?.state === 'accepted'
+      const both = globalAccepted && blueprintAccepted
       return {
         key,
         done,
         blocked: !both,
-        title: done ? 'stage2 已确认' : 'stage2 两屏都要过一遍',
-        note: 'stage2 = 全局设定 + 逐章骨架。全局复核当前且阻断面全部 PASS、填写确认人通读全局复核并整本审阅骨架后，才可发起 stage4；披露项继续留在审计面。',
+        title: done ? 'stage2 已确认' : 'stage2 两个节点都须接受',
+        note: '先接受当前全局设定，再生成并独立审阅整本骨架。两份当前节点接受齐全后，才可继续 stage4；已读记录不能替代接受。',
         chips: [
-          { ok: seen.global, label: '全局设定' },
-          { ok: seen.read, label: '原文↔骨架' },
+          { ok: globalAccepted, label: 'Global 接受' },
+          { ok: blueprintAccepted, label: 'Blueprint 接受' },
         ],
-        btn: done ? '已确认' : both ? '确认 stage2，启动 stage4' : '两屏都看过才能确认',
-        blockedReason: 'stage2 有两屏产物。只看过一屏就确认，等于替另一屏签了字。',
-        doneNote: done ? 'stage4 已发起。' : null,
+        btn: done ? '已确认' : both ? '确认 stage2，启动 stage4' : '两个节点都接受后才能继续',
+        blockedReason: '服务端尚未确认两份当前节点接受；请在全局设定与骨架页分别提交审阅决定。',
+        doneNote: done ? '两份节点接受已保存；下一动作由后端运行入口决定。' : null,
       }
     }
 

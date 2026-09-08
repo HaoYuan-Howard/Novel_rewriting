@@ -33,17 +33,19 @@ stage6/hook_edit.json        人工编辑一条候选，或修改当前定稿的
 stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 记账，纯 0 成本）
 ```
 
-本层产物分两档（见 `_README.md`「版本与路径注册表」；本仓**没有迁移机制**，
+本层产物分三档（见 `_README.md`「版本与路径注册表」；本仓**没有迁移机制**，
 破坏形状就 +1 并同批回答「存量由谁重建」）：
 
-- `hook.json` 与轮次归档、`hook_edit.json` ——**都是 schema v2**。
-  2026-08-23 一次破坏：候选身份与策略名解耦（`ApprovedHook.approach` /
-  `HookCandidateRetry.approach` → `slot`，`HookEdit.candidate` 的取值面换成位置身份）。
-  ⚠ 破坏的理由是结构性的：同一种策略采两条样本时，`approach` **答不出
-  「这份定稿是从哪条候选来的」**，而标签、wontfix 证据键与判官的 `judged_texts`
-  键全挂在那个答案上。存量重建代价见 `tests/test_artifact_versions.py::_SHAPE_BREAKS`。
-  `outputs/_ab/flash/` 下两份 v1 实验快照已明确退役为只读历史证据：不属于 current-schema
-  corpus，当前运行时拒读，原字节不删除；现役交付须由 producer 重建 v2 后重新人工定稿。
+- `hook.json` 与轮次归档**都是 schema v3**。2026-09-08 取消每槽只修一次的限制：
+  legacy 的 `candidate_retry_limit=4` 表示整书工作单元的内容上限，Agent 完整替换协议为 0；
+  同槽 `candidate_retries.attempt` 按实际请求连续编号 1..4，不能重复或跳号。
+  旧 v1/v2 base 保留原代码和原账，不迁移、不手改版本标记；新 clean base 从原材料逐层重建，
+  `stage6.hook` 经显式付费与正文外发授权生成 v3，再由独立双 judge 与当前 typed pick 定稿。
+  新 v3 的已封存提交尾窗可走 `--recover-prepared` 免费补尾，这不适用于旧 base。
+- `hook_edit.json` 与下文语义审判**都是 schema v2**。编辑请求的候选由位置身份 `c1/c2/c3`
+  定位；本轮未改编辑形状。
+  2026-08-23 的候选身份与策略名解耦仍保持：策略可重复，位置才唯一。旧实验快照只读，
+  不纳入 current-schema corpus；存量重建归属见 `tests/test_artifact_versions.py::_SHAPE_BREAKS`。
 - `semantic_<n>.json` ——**schema v2**。2026-08-27 新增 `judged`，把 A/B 判官实际
   看见的 Stage5 开篇成稿按 `JudgedDraft.consumed.text_sha1` 绑定。旧 v1 只绑
   hook 候选文本，正文改字后仍可被误当 current，因此不迁移、不手补；由
@@ -96,18 +98,20 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 重读后再运行 `stage6.approve`。若旧定稿没有 slot，运行时关闭式拒绝，要求人工显式指定
 `candidate=c1|c2|c3`；这样编辑后的正文一定进入三候选工作包，不存在绕过证据包的「第四条定稿」。
 
-`HookProvenance.params` 除初始 `max_tokens` 外，还冻结单候选重试的 max tokens、固定一次上限、
+`HookProvenance.params` 除初始 `max_tokens` 外，还冻结单候选重试的 max tokens、共享内容上限、
 `low` effort、`thinking=false` 与 `prompt_json_layout=pretty-v1｜compact-v1`；默认 `pretty-v1` 保持既有
 请求字节，compact 只删 JSON 语法空白。`candidate_retries[]` 逐条保存 `slot`（哪一条候选被重试，不是哪种策略）、失败规则/证据指纹、
 user/response 指纹、前后 HARD 数、cache policy、状态、是否采纳与失败理由。发生重试时
 `prompts.HOOK_RETRY_SYS` 必须存在；没有脏候选时该键与历史均为空。
 
-初始三候选归一并机械判定后，每条命中 HARD 的候选恰好获得一次 refresh-write 定向重试；
+初始三候选归一并机械判定后，命中 HARD 的候选按槽位顺序进入 refresh-write 定向修订；
 定位靠 `target_slot`（位置身份，唯一能选中一条候选的键）；请求只允许返回该条原有的 approach，
 并看见完整事实包、整组候选和该候选的具体 HARD 证据。只有重试后
 HARD 数严格下降且文本不与另两条重复时才替换该候选和整组 rationale；wrong approach、请求失败、
-重复或 HARD 未下降均保留已经付费取得的初始候选，并把原因写入重试账。调用数因此是
-`1 + 初始脏候选数`，不再把“初始一次调用”误写成整条路径的成本上限。
+重复或 HARD 未下降均保留最近一次已验真的候选，并把原因写入修订账、提前停止该无进展路径。
+若 HARD 严格下降但仍未清零，继续同槽修订，再处理后续槽位。整书初始生成、格式纠错和局部修订
+共同计入最多四次内容调用；首次缓存命中不买内容轮，因此最多可剩四次局部 wire，但每次网络尝试仍独立留账。
+重启、换模型会话、槽位切换或候选变化不重发余额；同槽记录可有多条，各次 attempt 必须唯一连续。
 若 wire 上互异的候选在归一后收敛成同一文本，producer 把完整付费产出落
 `hook.INVALID.json` 并明确报出重复槽位；人改开至少一条后走 `--revalidate` 0 LLM 提升，
 不能用一次无落盘的终态把缓存里的有效响应永久锁死。
@@ -304,3 +308,15 @@ hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本�
 | `hook_not_approved` | unver | 是否已有人工定稿 |
 | `hook_body_missing` | unver | 连续开篇范围是否缺成稿 |
 | `hook_body_stale` | unver | 文案绑定的开篇成稿消费投影是否仍一致 |
+
+## 9. 已封存完成组的零模型恢复
+
+legacy Hook 与双 judge 的原回答均受持久工作单元预算约束。完成组封存原 typed 目标、完整 SHA、
+原 run/parent、全部来源回答与采纳身份。`inspect_prepared_recovery` 只读验证原回答、费用、当前输入
+和提交状态；结果为 recoverable/complete/unknown，缺新工作流 manifest 不创建服务账。
+`stage6.hook` 与 `stage6.semantic` 的 `--recover-prepared <source_run_id> --subject-sha256 <proof_sha256>`
+只按 exact 原证明补正式提交和采纳，不构造模型客户端、不需要付费确认或密钥、不重发内容预算。
+
+队列与 Supervisor 在 fresh skip 和定稿之前优先处理未闭组；proof 损坏时不给 argv。完成后的旧组
+核验原审计链后退出待恢复集合，合法批准改写 Hook 或新一轮输入不会复活旧补尾任务。此入口与
+`--revalidate` 的 INVALID 原字节提升不同；它不会授予语义接受，也不替换独立 A/B judge。

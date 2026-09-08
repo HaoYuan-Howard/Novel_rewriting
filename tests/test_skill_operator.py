@@ -1430,7 +1430,7 @@ _FLOORS = {
     'discovery_shims': 2,
     'operator_next_contract': 1,
     'operator_execution_permit_contract': 1,
-    'reviewer_contract_blocks': 11,   # delegated-review.md 的 reviewer 契约锚块
+    'reviewer_contract_blocks': 9,  # 九类现役审阅契约；独立下界防止登记与扫描一起归零
 }
 
 

@@ -280,6 +280,93 @@ def inspect_rejection(
         source_log_sha256=hashlib.sha256(raw).hexdigest())
 
 
+
+def inspect_work_unit_rejection(
+    base: str, sid: str, *, budget: Any, parent: AgentRunRecord,
+    log_path: Path, profile: AgentProfile, replacement_schema_sha256: str,
+    validation_code_version: str, replacement_subject_sha256: str,
+    source_turn_id: str | None = None,
+) -> ReviewerSchemaRecoveryProof | None:
+    """新预算只借用已有严格拒绝证明器；下列临时投影不落盘、不分配额度。"""
+    turn = budget.turn(source_turn_id) if source_turn_id is not None else budget.latest_turn()
+    if (turn is None or turn.response_sha256 is not None
+            or source_turn_id is None and budget.remaining == 0
+            or turn.state not in ('unknown', 'failed') or len(turn.attempts) != 1):
+        return None
+    request = budget.request_payload(turn.turn_id)
+    waiting_on = request.get('waiting_on')
+    if waiting_on not in WAITING_ON:
+        return None
+    sessions = [item for item in agent_session_audit.fold(agent_session_audit.read_events(base))
+                if item.session_run_id == turn.session_run_id]
+    if len(sessions) != 1 or sessions[0].end is None:
+        return None
+    session = sessions[0]
+    if len(session.attempts) != 1 or len(session.turns) != 1:
+        return None
+    observed = session.attempts[0]
+    if (observed.attempt_id != turn.attempts[0].attempt_id
+            or observed.provider_session_id != turn.attempts[0].provider_session_id
+            or observed.error_kind not in {'agent_command', 'agent_schema'}):
+        return None
+    # 原证明器核查的 ordinal 是投影内序号。实际额度只认 budget.used，
+    # 原全局 turn_id / parent / session / attempt 身份原样保留。
+    source = ReviewerSeatLedger.model_validate(dict(
+        sid=sid, waiting_on=waiting_on, business_sha256=request['business_sha256'],
+        max_corrections=1, turns=[dict(
+            turn_id=turn.turn_id, ordinal=1, purpose='review',
+            session_run_id=turn.session_run_id, parent_run_id=turn.run_id,
+            epoch_id=request['epoch_id'], started_at=turn.created_at,
+            finished_at=session.end.ts, exit_code=1, outcome='failed',
+            attempts=[dict(attempt_id=observed.attempt_id, kind='launch',
+                           started_at=turn.created_at, finished_at=observed.ts,
+                           exit_code=1, error_kind=observed.error_kind,
+                           provider_session_id=observed.provider_session_id,
+                           wire_evidence=observed.provider_session_id is not None)])]))
+    return inspect_rejection(
+        base, sid, ledger=source, parent=parent, log_path=log_path, profile=profile,
+        replacement_schema_sha256=replacement_schema_sha256,
+        validation_code_version=validation_code_version,
+        replacement_subject_sha256=replacement_subject_sha256)
+
+
+def validate_work_unit_recovery(base: str, sid: str, *, budget: Any, turn_id: str) -> None:
+    """重放新工作单元决定前复验整个配置恢复链，不让保存的 proof 自证。"""
+    from novel.orchestrator import admission, agent
+
+    ledger = budget._read()
+    target = budget.turn(turn_id)
+    parents = {row.run_id: row for row in agent.records(base)}
+    for index, turn in enumerate(ledger.turns[:target.ordinal]):
+        request = budget.request_payload(turn.turn_id)
+        raw_proof = request.get('schema_recovery')
+        if raw_proof is None:
+            continue
+        proof = ReviewerSchemaRecoveryProof.model_validate(raw_proof)
+        if index == 0 or proof.source_turn_id != ledger.turns[index - 1].turn_id:
+            _refuse('配置恢复没有绑定同一工作单元紧邻的原失败轮')
+        parent = parents.get(proof.source_parent_run_id)
+        replacement = parents.get(turn.run_id)
+        if parent is None or replacement is None or replacement.contract is None:
+            _refuse('配置恢复缺原运行或恢复运行')
+        epochs = [row for row in replacement.epochs if row.epoch_id == request.get('epoch_id')]
+        if (len(epochs) != 1 or epochs[0].code_version != proof.validation_code_version
+                or request.get('schema_sha256') != proof.replacement_schema_sha256
+                or not isinstance(request.get('prompt'), str)
+                or hashlib.sha256(request['prompt'].encode('utf-8')).hexdigest()
+                != proof.replacement_subject_sha256):
+            _refuse('配置恢复的代码、schema 或实际请求与证明漂移')
+        with admission.require_owner_stopped(base, parent.run_id):
+            observed = inspect_work_unit_rejection(
+                base, sid, budget=budget, source_turn_id=proof.source_turn_id,
+                parent=parent, log_path=agent.run_log_path(base, parent.run_id),
+                profile=replacement.contract.profiles.commander,
+                replacement_schema_sha256=proof.replacement_schema_sha256,
+                validation_code_version=proof.validation_code_version,
+                replacement_subject_sha256=proof.replacement_subject_sha256)
+        if observed != proof:
+            _refuse('配置恢复的原拒绝日志、会话、成本或父运行证据已漂移')
+
 def source_prefix(ledger: ReviewerSeatLedger, recovery_ordinal: int) -> ReviewerSeatLedger:
     """证明只绑定追加前的原账，后续成功/纠错不改变这份来源闭集。"""
     return ReviewerSeatLedger.model_validate({
@@ -332,6 +419,13 @@ def validate_action_record(
 ) -> None:
     """新会话的正式决定必须与实际 turn/session/成本一致；独立证据可补成功尾。"""
     from novel.orchestrator import admission, reviewer_seat_ledger, stage4_reviewer_wire
+
+    if record.work_unit_id is not None:
+        # 新工作单元的原响应和 typed 决定已在统一耐久账绑定；不为配置恢复
+        # 另建历史 seat ledger，也不要求业务连续会话先被标成 ended。
+        from novel.work_units import validate_reviewer_record
+        validate_reviewer_record(base, sid, record)
+        return
 
     same_parent = record.run_id == current_parent_run_id
     guard = nullcontext() if same_parent else admission.require_owner_stopped(base, record.run_id)

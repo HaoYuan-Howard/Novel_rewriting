@@ -66,6 +66,7 @@ _STAGE2_EDIT_COMMIT = queue.WAITING_ON_STAGE2_EDIT_COMMIT
 _STAGE2_EDIT_REVALIDATE = queue.WAITING_ON_STAGE2_EDIT_REVALIDATE
 _STAGE2_EDIT_TERMINAL = queue.WAITING_ON_STAGE2_EDIT_TERMINAL
 _STAGE2_FINAL_REVIEW = queue.WAITING_ON_STAGE2_FINAL_REVIEW
+_STAGE2_BLUEPRINT_REVIEW = queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW
 _STAGE4_DESIGN = queue.WAITING_ON_STAGE4_DESIGN_REVIEW
 _STAGE4_BINDING = queue.WAITING_ON_STAGE4_BINDING_RESOLUTION
 _STAGE4_STRUCTURE_REPLAN = queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN
@@ -75,16 +76,16 @@ _STAGE4_STRUCTURE = queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW
 _STAGE5_REVIEW = queue.WAITING_ON_REVIEW
 _STAGE5_CLOSURE = queue.WAITING_ON_STAGE5_CLOSURE
 _STAGE5_REVIEWER_REWRITE = queue.WAITING_ON_STAGE5_REVIEWER_REWRITE
+_PREPARED_DELIVERY = queue.WAITING_ON_PREPARED_DELIVERY
 _STAGE0_APPROVE = 'stage0.approve'
 _STAGE6_APPROVE = 'stage6.approve'
 _STAGE7_APPROVE = 'stage7.approve'
 
 _W0 = frozenset({_INBOX, _RESUME, _STAGE0_APPROVE})
-# 第四席只读终审下同样只开放 Stage2 的读面与 review-decisions（reopen）；
-# 它不新增任何付费或 edit 许可。
+# 两个节点审阅都可读取交叉材料；写权仍按知识生产节点登记。
 _W2 = frozenset({
     _INBOX, _RESUME, _STAGE2_REVIEW, _STAGE2_EDIT_CORRECTION,
-    _STAGE2_FINAL_REVIEW,
+    _STAGE2_BLUEPRINT_REVIEW,
 })
 _W4 = frozenset({
     _INBOX, _RESUME, _STAGE4_DESIGN, _STAGE4_BINDING,
@@ -121,9 +122,9 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
             _STAGE2_EDIT_REVALIDATE, _STAGE2_EDIT_TERMINAL})),
     RecoveryRunPolicy(
         'stage2.global', _t('--apply-edit'),
-        _W2 | frozenset({
+        (_W2 - {_STAGE2_BLUEPRINT_REVIEW}) | frozenset({
             _STAGE2_EDIT_COMMIT, _STAGE2_EDIT_TERMINAL})),
-    RecoveryRunPolicy('stage2.global', _t('--review-decisions'), _W2),
+    RecoveryRunPolicy('stage2.global', _t('--review-decisions'), _W2 - {_STAGE2_BLUEPRINT_REVIEW}),
     RecoveryRunPolicy('stage2.global', _t('--emit-edit-template'), _W2),
     RecoveryRunPolicy(
         'stage2.global', _t('--emit-edit-correction-workpack'), _W2),
@@ -134,6 +135,7 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     RecoveryRunPolicy(
         'stage2.global', _t('--emit-review-workpack', '--review-scope'), _W2),
     RecoveryRunPolicy('stage2.blueprint', _t('--check-only'), _W2),
+    RecoveryRunPolicy('stage2.blueprint', _t('--close-review'), _W2),
     RecoveryRunPolicy('stage2.blueprint', _t('--renormalize'), _W2),
     RecoveryRunPolicy(
         'stage2.blueprint', _t('--revalidate', '--actor', '--reason'), _W2),
@@ -226,6 +228,15 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     RecoveryRunPolicy('stage6.hook', _t('--apply-edit'), _W6),
     RecoveryRunPolicy('stage6.hook', _t('--wontfix'), _W6),
     RecoveryRunPolicy('stage6.hook', _t('--rebind-review'), _W6),
+    RecoveryRunPolicy(
+        'stage6.hook', _t('--recover-prepared', '--subject-sha256'),
+        frozenset({_PREPARED_DELIVERY})),
+    RecoveryRunPolicy(
+        'stage6.semantic', _t('--recover-prepared', '--subject-sha256'),
+        frozenset({_PREPARED_DELIVERY})),
+    RecoveryRunPolicy(
+        'stage7.rename', _t('--recover-prepared', '--subject-sha256'),
+        frozenset({_PREPARED_DELIVERY})),
     RecoveryRunPolicy(
         'stage6.approve',
         _t('--pick', '--actor', '--reason', '--review-token'),
@@ -490,6 +501,14 @@ def _require_recovery_policy(
         raise UnsupportedRunMode(
             'Stage4 repair aggregate 补尾只允许逐字重放 operator 冻结的 '
             'source run/journal raw/commit SHA')
+    if waiting_on == _PREPARED_DELIVERY:
+        if node != current.action.node or flags != tuple(current.action.flags):
+            raise UnsupportedRunMode('Stage6/7 完成组只能执行 operator 冻结的原 run/proof SHA')
+        recovery = queue.prepared_delivery_recovery_item(
+            current.base, current.sid, code=current.code_version)
+        if (recovery is None or recovery.waiting_on != _PREPARED_DELIVERY
+                or recovery.node != node or tuple(recovery.flags) != flags):
+            raise UnsupportedRunMode('Stage6/7 原完成组证明已变化；拒绝签发旧恢复动作')
     if waiting_on == _STAGE5_REVIEWER_REWRITE:
         if node != 'stage5.write' or flags != tuple(current.action.flags):
             raise UnsupportedRunMode(

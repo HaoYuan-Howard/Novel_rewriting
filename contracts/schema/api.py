@@ -48,6 +48,8 @@ from contracts.invariants import (
     APPROVAL_GATES,
     APPROVAL_SEEN,
     BLUEPRINT_REVIEW_CONTRACT,
+    BLUEPRINT_REVIEW_CHANGE_KINDS,
+    BLUEPRINT_REVIEW_DELTA_MODES,
     BLUEPRINT_REVIEW_SUBJECT_KINDS,
     CHAPTER_LABEL_ANOMALY,
     DELIVERY_MODES,
@@ -79,6 +81,9 @@ from contracts.invariants import (
     HINGE_KINDS,
     HOOK_APPROACHES,
     STAGE6_JUDGE_ROLES,
+    STAGE2_NODE_REVIEW_DECISIONS,
+    STAGE2_NODE_REVIEW_OWNERS,
+    STAGE2_NODE_REVIEW_STATES,
     STAGE6_REVIEW_CONTRACT,
     STAGE7_REVIEW_CONTRACT,
     HOOK_SLOTS,
@@ -2928,6 +2933,49 @@ class Stage5ClosureView(FrozenModel):
         return self
 
 
+class Stage2NodeReviewRequest(StrictModel):
+    """Stage2 每个生产节点独立提交的语义裁决；已读不授予接受。"""
+
+    node: Literal[STAGE2_NODE_REVIEW_OWNERS]
+    review_token: str = Field(min_length=1)
+    decision: Literal[STAGE2_NODE_REVIEW_DECISIONS]
+    actor: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=4096)
+    chapter_ordinals: list[int] = Field(default_factory=list)
+    owner: Literal[STAGE2_NODE_REVIEW_OWNERS] | None = None
+
+    @model_validator(mode='after')
+    def _closed_action(self) -> 'Stage2NodeReviewRequest':
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('Stage2 裁决必须有明确 actor/reason')
+        if self.chapter_ordinals != sorted(set(self.chapter_ordinals)) or any(
+                ordinal < 1 for ordinal in self.chapter_ordinals):
+            raise ValueError('Stage2 返工章号必须升序、唯一且为正数')
+        if self.decision == 'rework':
+            if self.owner is None:
+                raise ValueError('返工必须指向知识生产节点')
+            if self.owner == 'stage2.blueprint' and not self.chapter_ordinals:
+                raise ValueError('Blueprint 定向返工必须列出章节')
+            if self.node == 'stage2.global' and self.owner != 'stage2.global':
+                raise ValueError('Global Commander 不拥有尚未生产的 Blueprint 返工权')
+        elif self.owner is not None or self.chapter_ordinals:
+            raise ValueError('只有返工决定能携带 owner/章范围')
+        return self
+
+
+class Stage2NodeReviewDecision(Stage2NodeReviewRequest):
+    review_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    review_contract_version: str = Field(min_length=1)
+    decided_at: str = Field(min_length=1)
+    review_scope_sha256: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
+
+
+class Stage2NodeReviewView(StrictModel):
+    state: Literal[STAGE2_NODE_REVIEW_STATES] = 'missing'
+    current_decision: Stage2NodeReviewDecision | None = None
+    history: list[Stage2NodeReviewDecision] = Field(default_factory=list)
+
+
 class ApprovalDoc(StrictModel):
     """公开审批面 v6：新增 Stage5 闭合回执投影。"""
 
@@ -2935,6 +2983,7 @@ class ApprovalDoc(StrictModel):
     sid: str = Field(min_length=1)
     gate: dict[GateKey, bool]
     seen: dict[SeenKey, bool]
+    stage2_reviews: dict[str, Stage2NodeReviewView] = Field(default_factory=dict)
     writing: bool = False
     design_review: DesignReviewView = Field(
         default_factory=lambda: DesignReviewView(state='unavailable'))
@@ -3764,6 +3813,7 @@ class BlueprintReviewCoverage(FrozenModel):
 
 
 class BlueprintReviewFact(FrozenModel):
+    fact_id: str = Field(min_length=1)
     """人审真正需要看的事实面；稳定 id 与 locator 由机械报告守。"""
 
     claim: str = Field(min_length=1)
@@ -3774,6 +3824,7 @@ class BlueprintReviewFact(FrozenModel):
 
 
 class BlueprintReviewBeat(FrozenModel):
+    beat_id: str = Field(min_length=1)
     """一拍紧凑语义面。``beat_order`` 是工作包内与 coverage 的连接键。"""
 
     beat_order: int = Field(ge=1)
@@ -3877,6 +3928,31 @@ class BlueprintReviewBinding(FrozenModel):
         return self
 
 
+class BlueprintReviewGlobalChange(FrozenModel):
+    """相对已接受交叉材料的事实/字段差异；章节范围只来自可证明引用。"""
+
+    item_id: str
+    subject_path: str
+    change: Literal[BLUEPRINT_REVIEW_CHANGE_KINDS]
+    changed_fields: list[str]
+    previous_subject_sha256: str | None = None
+    current_subject_sha256: str | None = None
+    affected_chapter_ordinals: list[int]
+    affected_references: list[str]
+    scope_reason: str
+
+
+class BlueprintReviewDelta(FrozenModel):
+    mode: Literal[BLUEPRINT_REVIEW_DELTA_MODES]
+    baseline_review_subject_sha256: str | None = None
+    current_review_subject_sha256: str
+    changed_global_items: list[BlueprintReviewGlobalChange]
+    changed_blueprint_chapters: list[int]
+    affected_chapter_ordinals: list[int]
+    reusable_accepted_chapter_ordinals: list[int]
+    reason: str
+
+
 class BlueprintReviewWorkpack(FrozenModel):
     """Stage2 Blueprint 的只读、异常优先审阅包。
 
@@ -3893,7 +3969,9 @@ class BlueprintReviewWorkpack(FrozenModel):
     review_contract_version: Literal[BLUEPRINT_REVIEW_CONTRACT] = BLUEPRINT_REVIEW_CONTRACT
     review_identity_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     validation_seal_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    review_token: str = Field(pattern=r'^bpr3_[0-9a-f]{64}$')
+    review_token: str = Field(pattern=r'^bpr4_[0-9a-f]{64}$')
+    global_review: dict[str, Any]
+    review_delta: BlueprintReviewDelta | None = None
     subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     binding_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     binding: BlueprintReviewBinding
@@ -3906,7 +3984,7 @@ class BlueprintReviewWorkpack(FrozenModel):
     def _read_only_complete_exception_first_surface(self) -> 'BlueprintReviewWorkpack':
         if not self.read_only or self.auto_decisions:
             raise ValueError('Blueprint review workpack 只读且绝不自动做决定')
-        if self.review_token != f'bpr3_{self.binding_sha256}':
+        if self.review_token != f'bpr4_{self.binding_sha256}':
             raise ValueError('Blueprint review_token 必须封装当前 exact workpack')
         ordinals = [row.chapter_ordinal for row in self.chapters]
         if (len(ordinals) != len(set(ordinals))
@@ -3938,7 +4016,7 @@ class BlueprintSeenRequest(StrictModel):
     面分层保存，但 Commander/UI 不再搬运五枚可相互矛盾的散装摘要。
     """
 
-    review_token: str = Field(pattern=r'^bpr3_[0-9a-f]{64}$')
+    review_token: str = Field(pattern=r'^bpr4_[0-9a-f]{64}$')
 
 
 class Stage2GlobalSeenRequest(StrictModel):
@@ -3963,24 +4041,22 @@ class Stage2GlobalSeenRequest(StrictModel):
 
 
 class Stage2FinalReviewRequest(StrictModel):
-    """Stage2 第四席只读终审的 ``confirm`` 回执。
+    """``approval close-stage2`` 的双 token 恢复请求。
 
-    它同时携带 Global 与 Blueprint 两枚 opaque token：终审者必须读完全部
-    blocking 项（含已 PASS 的理由与证据）、整书正文与 Blueprint 工作包，才由
-    Supervisor 以 ``approval close-stage2`` 一次确定性收口
-    ``s0 → s1 → seen.read → seen.global → s2``。终审发现问题时不用本形状：
-    改提交 ``stage2.global --review-decisions`` 的 reopen 决定（只允许 FAIL/UNVER）。
+    名字保留给公开 CLI 输入；现役语义只核验已有的两份独立节点接受，
+    并零模型补齐 ``s0 → s1 → seen.read → seen.global → s2``。
+    本请求自身不授予任何语义接受。
     """
 
     actor: str = Field(min_length=1, max_length=256)
     reason: str = Field(min_length=1, max_length=4096)
     global_review_token: str = Field(pattern=r'^s2gr1_[0-9a-f]{64}$')
-    blueprint_review_token: str = Field(pattern=r'^bpr3_[0-9a-f]{64}$')
+    blueprint_review_token: str = Field(pattern=r'^bpr4_[0-9a-f]{64}$')
 
     @model_validator(mode='after')
     def _no_blank_audit_fields(self) -> Stage2FinalReviewRequest:
         if not self.actor.strip() or not self.reason.strip():
-            raise ValueError('终审回执的 actor/reason 不得只含空白')
+            raise ValueError('Stage2 收口请求的 actor/reason 不得只含空白')
         return self
 
     @property

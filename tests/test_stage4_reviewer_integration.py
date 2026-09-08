@@ -20,7 +20,8 @@ import pytest
 
 from contracts.schema.api import DesignReviewRequest, StructureApprovalRequest
 from contracts.schema.orchestration import (
-    AgentDeliveryOutcome, AgentProfile, ExecutionEpoch, PipelineAgentProfiles,
+    AgentDeliveryOutcome, AgentProfile, AgentRunRecord, AgentRunStart, ExecutionEpoch,
+    PipelineAgentProfiles, RunContractV2,
 )
 from novel import agent_session_audit
 from novel.commanders import CodexCommanderDriver
@@ -33,8 +34,7 @@ from novel.orchestrator import (
 from tests.test_design_review import (
     FACT, SID, _subjects, _template, isolated as design_isolated,
 )
-from tests import test_reviewer_suffix_recovery as suffix_cases
-from tests.test_reviewer_suffix_recovery import suffix_source
+from tests.test_reviewer_work_unit_evidence import seed_commander_response
 from tests.test_structure_approval import isolated as structure_isolated
 
 
@@ -433,11 +433,13 @@ def test_supervisor_stage4_resume_freezes_schema_across_processes_and_all_audit_
                       if retry_kind == 'transport' else [])
     if retry_kind == 'typed_correction':
         assert first.stdin_text != resumed.stdin_text
-    [ledger] = agent.reviewer_seat_ledger.list_ledgers(base, SID)
-    assert [row['purpose'] for row in ledger['turns']] == (
-        ['review'] if retry_kind == 'transport' else ['review', 'correction'])
-    assert ledger['pending_correction'] is False
-    session_id = ledger['turns'][0]['session_run_id']
+    from novel.work_units import WorkUnitBudget
+    node, scope = ('stage4.design', 'design') if surface == 'design' else ('stage4.plan', 'structure')
+    budget = WorkUnitBudget(base, SID, node, 'commander', scope)
+    assert budget.used == (1 if retry_kind == 'transport' else 2)
+    assert budget.latest_turn().state == 'adopted'
+    assert agent.reviewer_seat_ledger.list_ledgers(base, SID) == []
+    session_id = budget._read().turns[0].session_run_id
     rows = [row for row in agent_session_audit.read_events(base)
             if row.session_run_id == session_id]
     for kind, count in [('started', 1), ('attempt', 2), ('turn', 2), ('ended', 1)]:
@@ -450,14 +452,22 @@ def test_supervisor_stage4_resume_freezes_schema_across_processes_and_all_audit_
     assert uploads.load_reviewer_actions(base, SID) == [], '正式审批成功后退休运输决定'
 
 
-@pytest.mark.parametrize('retirement_crash', [False, True])
-def test_suffix_supervisor_preserves_source_after_approval_and_retires_landed_crash_record(
-        request, monkeypatch, retirement_crash):
+@pytest.mark.parametrize('retirement_crash,adoption_crash', [(False, False), (True, False), (False, True)])
+def test_work_unit_supervisor_preserves_response_after_approval_and_retires_landed_crash_record(
+        request, monkeypatch, retirement_crash, adoption_crash):
     """原审批/loop/恢复真实运行；虚拟 producer 仅隔离收费返修与主体读取。"""
     actual_write = approvals._write
     actual_records = agent.records
     actual_codex_build = CodexCommanderDriver.build_invocation
     actual_codex_run = CodexCommanderDriver.run
+    actual_record_action = agent._record_reviewer_action
+    recorded_actions = []
+
+    def record_action(*args, **kwargs):
+        recorded_actions.append(kwargs['action'])
+        return actual_record_action(*args, **kwargs)
+
+    monkeypatch.setattr(agent, '_record_reviewer_action', record_action)
     base, subject_state = request.getfixturevalue('design_isolated')
     subject_state['candidate_proof_sha256'] = subject_state['subjects'].candidate_sha256
     # 在既有 typed subject/proof 夹具上恢复真实审批原子写入、raw 读取；跨 Run
@@ -477,23 +487,39 @@ def test_suffix_supervisor_preserves_source_after_approval_and_retires_landed_cr
     original = wire.assemble(seed_task, _response(seed_task, 'repair'))
     original['surface_seal'] = '1' * 64
     original['action']['payload']['chapters'][0]['reason'] = '最新章需补齐场景入口'
-    monkeypatch.setattr(suffix_cases, 'SID', SID)
-    monkeypatch.setattr(suffix_cases, 'BUSINESS', seed_task.business_sha256)
-    # AgentRun 准入将默认 execution_mode 规范化成 standard；原席位历史也必须
-    # 生成相同的正式 profile，不能拿 fixture 的 None 冒充原实际执行配置。
-    monkeypatch.setattr(suffix_cases, 'AgentProfile', lambda **kwargs:
-                        AgentProfile(**kwargs, execution_mode='standard'))
-    monkeypatch.setattr(suffix_cases, 'design_document', lambda: copy.deepcopy(original))
-    source = request.getfixturevalue('suffix_source')
+    original_action = reviewer_tasks.ReviewerApprovalAction(
+        kind='approval', surface='design', payload=original['action']['payload'])
+    source_profile = PROFILE.model_copy(update={'execution_mode': 'standard'})
+    source_profiles = PROFILES.model_copy(update={'commander': source_profile,
+                                                'executor_default': source_profile})
+    budget, reservation, _record, _cost = seed_commander_response(
+        base, sid=SID, node='stage4.design', scope='design',
+        waiting_on=current.action.waiting_on, action=original_action,
+        run_id='old-parent', business_sha256=seed_task.business_sha256, profile=source_profile)
+    source_epoch = ExecutionEpoch(
+        epoch_id='old-epoch', ordinal=1, reason='initial', argv=['supervisor'],
+        prompt_sha256='e' * 64, protocol_version='codex-jsonl-v1',
+        code_version='code-start', skill_sha256='b' * 64, session_run_id='producer-1')
+    parent = AgentRunRecord(
+        run_id='old-parent', start=AgentRunStart(
+            sid=SID, base=str(base), argv=['supervisor'], prompt='合成审阅授权', authorized=True,
+            egress_authorized=True, code_version='code-start', skill_sha256='b' * 64,
+            profiles=source_profiles),
+        contract=RunContractV2(sid=SID, base=str(base), authorized=True,
+                               egress_authorized=True, profiles=source_profiles),
+        epochs=[source_epoch], started=1, ended=50, exit_code=2, state='stopped',
+        outcome=AgentDeliveryOutcome(state='stopped', checked_at=50, reason='回答已保存，待提交'))
+    source = SimpleNamespace(parent=parent, original=original)
     monkeypatch.setattr(agent, 'records', lambda _base, **kwargs: [
         source.parent, *actual_records(_base, **kwargs)])
     monkeypatch.setattr(CodexCommanderDriver, 'build_invocation', actual_codex_build)
     monkeypatch.setattr(CodexCommanderDriver, 'run', actual_codex_run)
-    seat_path = agent.reviewer_seat_ledger.ledger_path(
-        base, SID, waiting_on=current.action.waiting_on,
-        business_sha256=seed_task.business_sha256)
-    source_paths = (seat_path, agent_session_audit.audit_path(base), ledger_path(base), source.log)
+    source_turn = budget.turn(reservation.turn_id)
+    source_paths = tuple(budget.directory / f'{digest}.json' for digest in (
+        source_turn.request_payload_sha256, source_turn.response_sha256, source_turn.recovery_sha256))
     source_bytes = tuple(path.read_bytes() for path in source_paths)
+    source_audit = agent_session_audit.audit_path(base).read_bytes()
+    source_cost = ledger_path(base).read_bytes()
     stopped = AgentDeliveryOutcome(state='stopped', reason='已走到测试后继动作', checked_at=1)
     monkeypatch.setattr(agent, '_assess_delivery', lambda *_a, **_k: stopped)
     live = {'finished': False, 'new_subject': False}
@@ -579,7 +605,7 @@ def test_suffix_supervisor_preserves_source_after_approval_and_retires_landed_cr
         launch = actual_spawn(run_id, on_registered=on_registered)
 
         def spawn(invocation, env, log):
-            assert live['new_subject'], '旧 suffix 恢复绝不能重发 Reviewer'
+            assert live['new_subject'], '已保存工作单元响应恢复绝不能重发 Reviewer'
             assert uploads.load_reviewer_actions(base, SID) == [], '新席开始前须严格退休已落旧记录'
             new_invocations.append(invocation)
             return launch(invocation, env, log)
@@ -588,6 +614,17 @@ def test_suffix_supervisor_preserves_source_after_approval_and_retires_landed_cr
     monkeypatch.setattr(agent, '_default_spawn', guarded_spawn)
     actual_discard = uploads.discard_edit_plan
     failed_paths = []
+    adoption_fault = {'active': adoption_crash, 'raised': False}
+    actual_adopt = agent.WorkUnitBudget.mark_adopted
+
+    def adopt(unit, turn_id):
+        if unit.unit_id == budget.unit_id and adoption_fault['active']:
+            assert approvals._read_raw(base, SID).design_decision is not None
+            adoption_fault['raised'] = True
+            raise OSError('测试：审批已落，原工作单元采用状态回写前中断')
+        return actual_adopt(unit, turn_id)
+
+    monkeypatch.setattr(agent.WorkUnitBudget, 'mark_adopted', adopt)
 
     def discard(_base, path):
         if retirement_crash and not failed_paths and Path(path).name.startswith('reviewer-action-'):
@@ -608,28 +645,35 @@ def test_suffix_supervisor_preserves_source_after_approval_and_retires_landed_cr
 
     first, first_log = run_once()
     assert len(approval_payloads) == 1, first_log
+    # 不依赖两个回调是否跨秒：已保存 proof 的重建与 loader 必须共用一次记录。
+    assert len(recorded_actions) == 1, first_log
     assert approval_payloads[0] == source.original['action']['payload']
     assert tuple(path.read_bytes() for path in source_paths) == source_bytes
     assert new_invocations == []
     assert approvals.stage4_review_payload_landed(
         base, SID, surface='design', payload=approval_payloads[0]) is True
-    archive_dir = agent.paths.reviewer_protocol_recoveries_dir(base, SID)
-    [archive] = list(archive_dir.glob('*.json'))
-    archive_bytes = archive.read_bytes()
-    if not retirement_crash:
+    assert budget.used == 1
+    assert agent.reviewer_seat_ledger.list_ledgers(base, SID) == []
+    if not retirement_crash and not adoption_crash:
         assert first.exit_code == 2 and planned_repairs, first_log
         assert uploads.load_reviewer_actions(base, SID) == []
         return
-    assert first.exit_code == 70 and len(failed_paths) == 1, first_log
+    assert first.exit_code == 70, first_log
     [(active_path, record)] = uploads.load_reviewer_actions(base, SID)
-    assert active_path == failed_paths[0] and record.protocol_recovery is not None
+    assert record.work_unit_id == budget.unit_id
+    if retirement_crash:
+        assert len(failed_paths) == 1 and active_path == failed_paths[0]
+        assert budget.latest_turn().state == 'adopted'
+    else:
+        assert adoption_fault['raised'] and budget.latest_turn().state == 'delivered'
+    adoption_fault['active'] = False
     assert not planned_repairs
     # 正式审批仍在；模拟下一份 A 业务主体已由 producer 改变。旧记录的退休
-    # 必须以旧已落事实和旧四证完成，不能要求它通过新 token/workpack 的审批。
+    # 必须以原已落事实与工作单元不可变证明完成，不能要求它通过新 token/workpack 的审批。
     subject_state['subjects'] = _subjects(brief='新的场景目标和布局，与旧候选不同')
     live['new_subject'] = True
     current.surface_seal = 'f' * 64
-    # 已落旧决定的机械退休只核原席位冻结配置；当前用户切换 Reviewer effort
+    # 已落旧决定的机械退休只核原工作单元冻结配置；当前用户切换 Reviewer effort
     # 不应阻塞旧账补尾，也不能让新主体沿用旧配置购买审阅。
     changed_profiles = PROFILES.model_copy(update={
         'commander': PROFILE.model_copy(update={'reasoning_effort': 'max'}),
@@ -638,11 +682,12 @@ def test_suffix_supervisor_preserves_source_after_approval_and_retires_landed_cr
     assert second.exit_code == 2 and len(new_invocations) == 1, second_log
     assert new_invocations[0].profile.reasoning_effort == 'max'
     assert len(approval_payloads) == 2
+    assert len(recorded_actions) == 2, second_log
     assert approval_payloads[1]['review_token'] != approval_payloads[0]['review_token']
     assert approvals.authorize_plan(base, SID) is not None
     assert uploads.load_reviewer_actions(base, SID) == []
-    assert archive.read_bytes() == archive_bytes
-    assert seat_path.read_bytes() == source_bytes[0]
-    assert source.log.read_bytes() == source_bytes[3]
-    assert agent_session_audit.audit_path(base).read_bytes().startswith(source_bytes[1])
-    assert ledger_path(base).read_bytes().startswith(source_bytes[2])
+    assert tuple(path.read_bytes() for path in source_paths) == source_bytes
+    assert budget.used == 2
+    assert agent.reviewer_seat_ledger.list_ledgers(base, SID) == []
+    assert agent_session_audit.audit_path(base).read_bytes().startswith(source_audit)
+    assert ledger_path(base).read_bytes().startswith(source_cost)

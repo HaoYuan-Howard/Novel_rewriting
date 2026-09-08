@@ -461,6 +461,8 @@ def test_retired_draft_in_old_s5_proof_revokes_s5_and_downstream(
 def test_mutation_writes_raw_and_suspended_downstream_reactivates(
         tmp_path, monkeypatch):
     """前置暂失效只 suspend；一次无关写入不得把下游 proof 永久清盘。"""
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
     novel_dir = tmp_path / '书名_123'
     novel_dir.mkdir()
     monkeypatch.setattr(
@@ -546,6 +548,8 @@ def test_legacy_stage5_is_explicit_and_cannot_authorize_or_approve():
 def test_begin_and_authorize_reject_every_legacy_stage5_subject_before_bool_gates(
         tmp_path, monkeypatch, legacy_rel):
     """旧目录、Review v1、trim v1 共用 review_status，且拒绝前不改审批账。"""
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
     book = tmp_path / '书名_123'
     book.mkdir()
     target = book / legacy_rel.rstrip('/')
@@ -557,7 +561,7 @@ def test_begin_and_authorize_reject_every_legacy_stage5_subject_before_bool_gate
 
     record = approvals._fresh_record('123')
     approval_path = approvals._path(tmp_path, '123')
-    approval_path.parent.mkdir(parents=True)
+    approval_path.parent.mkdir(parents=True, exist_ok=True)
     approval_path.write_text(record.model_dump_json(indent=2), encoding='utf-8')
     before = approval_path.read_bytes()
     monkeypatch.setattr(

@@ -577,6 +577,45 @@ export function RunScreen() {
           <>
             <ResumeFrontier frontier={d.resume_frontier} steps={d.steps} />
 
+            <Panel>
+              <PaneHeader title="当前审阅与恢复" meta="审批状态与当前节点恢复动作均由后端提供" />
+              <div className="flex flex-col gap-9 px-18 py-14 text-body">
+                <p className="m-0">当前恢复：{d.current_recovery_actions == null ? '未知' :
+                  d.current_recovery_actions.length ? d.current_recovery_actions.join('；') : '无已登记恢复动作'}</p>
+                {d.resume_frontier.review_states == null ? <p className="m-0">审阅状态未知</p> : (
+                  <ul className="m-0 pl-18" aria-label="当前审阅状态">
+                    {d.resume_frontier.review_states.map((review) => (
+                      <li key={review.node}>{review.node} · {review.scope}：{review.state}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </Panel>
+
+            <Panel>
+              <PaneHeader title="工作单元与内容预算" meta="首次生成、审阅和纠错均计入；恢复读取已保存的结果" />
+              {d.work_units == null ? (
+                <p className="px-18 text-body text-ink-3">工作单元状态未知</p>
+              ) : d.work_units.length === 0 ? (
+                <p className="px-18 text-body text-ink-3">尚无已登记的工作单元</p>
+              ) : (
+                <div className="overflow-x-auto px-18 py-12">
+                  <table className="w-full text-left text-body" aria-label="工作单元预算">
+                    <thead><tr><th>节点 / 范围</th><th>角色</th><th>内容调用</th><th>状态</th><th>恢复入口</th></tr></thead>
+                    <tbody>{d.work_units.map((unit) => (
+                      <tr key={unit.unit_id}>
+                        <td className="py-9">{unit.node} · {unit.scope}</td>
+                        <td>{unit.role}</td>
+                        <td>{unit.content_used} / {unit.content_limit}，剩余 {unit.content_remaining}</td>
+                        <td>{unit.state}</td>
+                        <td>{unit.recovery_action ?? '无已登记恢复动作'}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              )}
+            </Panel>
+
             {/* NODES 清单：seq / 节点 / 付费标记 / 信标 / 最近退出码 / 耗时 */}
             <Panel>
               <PaneHeader

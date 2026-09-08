@@ -613,6 +613,67 @@ def append_provider_turn(
     return _append_claimed_provider_turn(base, event, role='executor')
 
 
+def reconcile_executor_turn(
+    base: str | os.PathLike[str], event: AgentSessionEvent,
+) -> None:
+    """按已保存的原事件补 Executor 回答尾账；不重复 turn，不接管 provider。"""
+    if event.kind != 'turn' or event.role != 'executor' or not event.attempt_id:
+        raise ValueError('Executor 补账只接受有原 attempt 身份的 turn')
+    path = audit_path(base)
+    with _AUDIT_TRANSACTION_LOCK, process_append_lock(path):
+        events = read_events(base)
+        matches = [row for row in events
+                   if row.kind == 'turn' and row.attempt_id == event.attempt_id]
+        if matches:
+            if len(matches) != 1 or matches[0] != event:
+                raise ValueError('原 Executor turn 已存在但与持久 receipt 不一致')
+            fold(events)
+            return
+        # fold 同时验证静态身份、首轮stdin、原provider所有权及未ended；
+        # 所有约束先成立才能补行，不通过时不能留下半次“修复”。
+        fold([*events, event])
+        append_line_under_process_lock(path, _encoded_event(event))
+
+
+def reconcile_commander_event(
+    base: str | os.PathLike[str], event: AgentSessionEvent,
+    *, read_only: bool = False,
+) -> None:
+    """核验或补齐 Commander 原 attempt/turn，不续写已结束的会话。
+
+    事件以 kind 与原 attempt_id 定位，时间、provider、配置和回答摘要均须完全
+    一致。补行前折叠整份 prospective 事件流，继续由唯一 fold 守静态身份、
+    provider 所有权、首轮 schema/prompt 与 ended 边界。
+    """
+    if event.kind not in ('attempt', 'turn') or event.role != 'commander' or not event.attempt_id:
+        raise ValueError('Commander 补账只接受有原 attempt 身份的 attempt/turn')
+    encoded = _encoded_event(event)
+    path = audit_path(base)
+
+    def check() -> bool:
+        events = read_events(base)
+        matches = [row for row in events
+                   if row.kind == event.kind and row.attempt_id == event.attempt_id]
+        if matches:
+            if len(matches) != 1 or matches[0] != event:
+                raise ValueError('原 Commander 事件已存在但与持久 receipt 不一致')
+            fold(events)
+            return True
+        if read_only:
+            raise ValueError('原 Commander 会话事件缺失，须先恢复原账')
+        if path.exists() and path.stat().st_size and not path.read_bytes().endswith(b'\n'):
+            raise ValueError('会话账有未提交尾行，拒绝在其后补写 Commander 事件')
+        fold([*events, event])
+        return False
+
+    if read_only:
+        check()
+        return
+    with _AUDIT_TRANSACTION_LOCK, process_append_lock(path):
+        if not check():
+            append_line_under_process_lock(path, encoded)
+
+
 def append_commander_turn(
     base: str | os.PathLike[str],
     event: AgentSessionEvent,
@@ -1017,5 +1078,5 @@ __all__ = [
     'PROVIDER_SESSION_REUSED',
     'AgentSessionEvent', 'AgentSessionRecord', 'AgentSessionUsage',
     'append_commander_turn', 'append_event', 'append_provider_turn', 'audit_path',
-    'finish_restored_session', 'fold', 'read_events',
+    'finish_restored_session', 'fold', 'read_events', 'reconcile_commander_event',
 ]

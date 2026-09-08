@@ -234,13 +234,16 @@ def test_an_incomplete_book_reports_every_missing_piece_at_once(monkeypatch):
 
 
 def test_retired_book_leaves_the_live_download_path_but_remains_recoverable(tmp_path):
+    from novel.run import RunContext
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
     novel_dir = tmp_path / '书名_123'
     # 成书按书名命名 ⇒ 取生产那一个落点，别在测试里手拼 `stage7/book.txt`。
     live = novel_dir / paths.book_txt_rel(novel_dir)
     live.parent.mkdir(parents=True)
     raw = '旧交付物\n'.encode('utf-8')
     live.write_bytes(raw)
-    ctx = state.readonly_ctx(novel_dir, 'stage7.rename', prov.code_version())
+    ctx = RunContext.open(tmp_path, '123', 'stage7.rename', paid=False)
     store = ArtifactStore(ctx)
 
     rename._retire_book_txt(store)

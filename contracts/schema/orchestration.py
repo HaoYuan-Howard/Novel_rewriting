@@ -43,9 +43,11 @@ from contracts.invariants import (
     RUN_NEXT_HANDLERS,
     RUN_RESUME_FRONTIER_STATES, STAGES,
     EXECUTION_EPOCH_DRAIN_STATES, EXECUTION_EPOCH_REASONS,
-    COMMANDER_ATTEMPT_KINDS, COMMANDER_REVIEWER_MAX_CORRECTIONS,
-    STAGE2_COMMANDER_MAX_EDIT_SEAT,
-    STAGE2_COMMANDER_MAX_SEATS, STAGE2_COMMANDER_SEAT_PURPOSES,
+    COMMANDER_ATTEMPT_KINDS,
+    LEGACY_COMMANDER_REVIEWER_MAX_CORRECTIONS as COMMANDER_REVIEWER_MAX_CORRECTIONS,
+    LEGACY_STAGE2_COMMANDER_MAX_EDIT_SEAT as STAGE2_COMMANDER_MAX_EDIT_SEAT,
+    LEGACY_STAGE2_COMMANDER_MAX_SEATS as STAGE2_COMMANDER_MAX_SEATS,
+    LEGACY_STAGE2_COMMANDER_SEAT_PURPOSES as STAGE2_COMMANDER_SEAT_PURPOSES,
 )
 from contracts.schema.base import FrozenModel, StrictModel
 
@@ -632,6 +634,14 @@ class RunStepView(StrictModel):
     elapsed: int | None
 
 
+class RunReviewStateView(StrictModel):
+    """有效审批的原状态；not_accepted 只表示当前 gate 未接受，不猜缺失原因。"""
+
+    node: str
+    scope: str
+    state: str
+
+
 class RunResumeFrontierView(StrictModel):
     """运行页的权威续跑前沿；只投影 operator，不从信标历史猜。"""
 
@@ -645,6 +655,7 @@ class RunResumeFrontierView(StrictModel):
     paid: bool | None = None
     writes: str | None = None
     next_handler: RunNextHandler
+    review_states: list[RunReviewStateView] | None = None
     #: 当前同一 planner 快照明确判为无需再次执行、且位于续跑点之前的节点。
     verified_skipped_nodes: list[str] = Field(default_factory=list)
     verified_skipped_count: int = Field(ge=0)
@@ -704,6 +715,22 @@ class RunResumeFrontierView(StrictModel):
         return self
 
 
+class WorkUnitView(StrictModel):
+    """持久工作单元账的只读投影；余量与恢复动作由后端计算。"""
+
+    unit_id: str
+    node: str
+    role: str
+    scope: str
+    content_used: int = Field(ge=0)
+    content_limit: int = Field(ge=0)
+    content_remaining: int = Field(ge=0)
+    state: str
+    latest_request_sha256: str | None = None
+    latest_response_sha256: str | None = None
+    recovery_action: str | None = None
+
+
 class RunProgressView(StrictModel):
     """`GET /api/novels/{sid}/run` 的响应：信标折叠 + 产物盘的完成度，两栏并排。"""
 
@@ -715,6 +742,8 @@ class RunProgressView(StrictModel):
     stage_done: dict[str, bool | None]
     #: 最近若干条信标事件（人读时间线，文件序——新的在后）。
     events_tail: list[RunEventView]
+    work_units: list[WorkUnitView] | None = None
+    current_recovery_actions: list[str] | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1414,6 +1443,8 @@ class ReviewerActionRecord(FrozenModel):
     reviewer_seat_turn_id: str | None = Field(default=None, min_length=1)
     provider_response_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
+    work_unit_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
+    work_unit_turn_id: str | None = Field(default=None, min_length=1)
     recorded_at: int = Field(ge=0)
 
     @model_serializer(mode='wrap')
@@ -1425,6 +1456,8 @@ class ReviewerActionRecord(FrozenModel):
 
     @model_validator(mode='after')
     def _one_replayable_action_shape(self) -> ReviewerActionRecord:
+        if (self.work_unit_id is None) != (self.work_unit_turn_id is None):
+            raise ValueError('工作单元与内容轮次必须成组出现')
         if self.schema_recovery_response is not None and (
                 self.surface not in {'design', 'structure'}
                 or self.protocol_recovery is not None
@@ -1447,6 +1480,12 @@ class ReviewerActionRecord(FrozenModel):
                 raise ValueError('node reviewer record 字段组合不成立')
             if any(not isinstance(flag, str) or not flag for flag in self.flags):
                 raise ValueError('node reviewer record flags 必须是非空字符串')
+        if self.work_unit_id is not None:
+            if self.reviewer_session_run_id is None or self.provider_response_sha256 is None:
+                raise ValueError('工作单元决定必须绑定原会话与原始回答')
+            if self.protocol_recovery is not None or self.schema_recovery_response is not None:
+                raise ValueError('新工作单元决定不能混用旧席位协议恢复证明')
+            return self
         is_stage2_node = node and self.node == 'stage2.global'
         is_stage2_final = approval and self.surface == 'stage2_final_review'
         is_stage2 = bool(is_stage2_node or is_stage2_final)

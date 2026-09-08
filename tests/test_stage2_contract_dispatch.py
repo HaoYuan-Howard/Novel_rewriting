@@ -34,7 +34,9 @@ from novel.stages.stage2.contract import CONTRACTS, active_contract, contract_fo
 from novel.stages.stage2.paragraphs import paragraph_spans
 from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, main_text
-from tests.test_stage2_generation import _client, _ctx, _ok, _response_global
+from tests.test_stage2_generation import (
+    _accept_fixture_global, _client, _ctx, _ok, _response_global,
+)
 
 _ENV_KEY = 'NOVEL_STAGE2_BLUEPRINT_CONTRACT'
 
@@ -98,6 +100,7 @@ def test_build_prompts_under_the_v31_arm_emits_the_v31_request_bytes(
     global_client, _t = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     gg = extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     ctx = _ctx(book, 'stage2.blueprint')
     rows = extract.build_prompts(ctx, chapters=(1,))
@@ -248,6 +251,7 @@ def test_the_ir2_chain_freezes_boundaries_and_lands_closed_character_refs(
     global_client, _t = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     by_ordinal = _ir2_responses()
     ordinals = sorted(by_ordinal)
@@ -316,6 +320,7 @@ def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
     global_client, _t = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     by_ordinal = (
         _compact_v32_responses()
@@ -378,6 +383,7 @@ def test_ir31_adopts_valid_reasoning_only_blueprint_in_one_wire(monkeypatch):
     global_client, _t = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     by_ordinal = _scaffolded_responses()
     ordinal = min(by_ordinal)
@@ -416,6 +422,7 @@ def test_scaffolded_gate_reuses_the_compilers_tail_nudge_cap(monkeypatch):
     global_client, _t = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     grounding = extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     rows = _scaffolded_responses()
     texts = {row['chapter_ordinal']: row['text'] for row in main_text()}
@@ -466,6 +473,7 @@ def test_missing_chapter_repair_uses_the_initial_shape_without_a_fake_baseline(
     global_client, _t = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     spec = CONTRACTS[architecture]
     by_ordinal = (_ir2_responses()
@@ -545,6 +553,7 @@ def test_ir31_hard_gate_lands_invalid_without_extra_calls(monkeypatch):
     global_client, _t = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     by_ordinal = _scaffolded_responses()
     broken_ordinal = min(by_ordinal)
@@ -593,6 +602,7 @@ def _land_ir31_invalid(book, by_ordinal):
     global_client, _t = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     def respond(req, _index):
         ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
@@ -692,6 +702,7 @@ def test_a_v2_baseline_beat_that_cannot_be_located_is_resegmented(monkeypatch):
     global_client, _t = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     by_ordinal = _ir2_responses()
 

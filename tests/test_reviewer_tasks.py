@@ -219,7 +219,7 @@ def test_stage0_offers_typed_stop_and_loader_never_turns_it_into_approval(
     }, current, 'stage0.approve')
 
     assert [option['id'] for option in options] == [
-        'node:stage0.approve', 'stop:stage0.approve']
+        'node:stage0.approve', 'stop:stage0.approve', 'uncertain:stage0.approve']
     assert '不得把 required_opening_copy' in \
         options[1]['exact_request']['action']['reason']
     assert '重复钩子作为删除理由' in \
@@ -542,9 +542,10 @@ def test_design_option_publishes_constraint_semantics_and_validated_shapes(
 
     current = _current(queue.WAITING_ON_STAGE4_DESIGN_REVIEW)
     template = _design_template_fixture(monkeypatch)
-    [option] = reviewer_tasks._submission_options(
+    options = reviewer_tasks._submission_options(
         {'_design_template': template.model_dump(mode='json')}, current,
         queue.WAITING_ON_STAGE4_DESIGN_REVIEW)
+    [option] = [row for row in options if row['id'] == 'approval:design']
     values = option['allowed_values']
     assert values['chapters[].constraint_operations.active'] == (
         template.model_dump(mode='json')['constraint_catalog'])
@@ -736,7 +737,8 @@ def test_stage4_structure_replan_offers_bound_stop_without_weakening_design(
         queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN)
 
     assert [option['id'] for option in options] == [
-        'approval:design', 'stop:stage4-structure-replan']
+        'approval:design', 'stop:stage4-structure-replan',
+        'uncertain:approval:stage4-structure-replan']
     design_values = options[0]['allowed_values']
     assert '具体的 scene/fact/goal' in design_values['resolution_requirement']
     assert 'INFO、metric、UNVER' in design_values['resolution_requirement']
@@ -758,7 +760,7 @@ def test_stage4_structure_replan_offers_bound_stop_without_weakening_design(
     stop_request['surface_seal'] = wrong.surface_seal
     stop_request['waiting_on'] = queue.WAITING_ON_STAGE4_BINDING_RESOLUTION
     path.write_text(json.dumps(stop_request, ensure_ascii=False), encoding='utf-8')
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='不允许 reviewer stop'):
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='immutable'):
         reviewer_tasks.load_action(
             path, wrong, submission_options=[options[1]])
 
@@ -791,7 +793,8 @@ def test_structure_replan_prompt_never_turns_read_only_rows_into_paid_action(
 
     assert task is not None
     assert [row['id'] for row in task.submission_options] == [
-        'approval:design', 'stop:stage4-structure-replan']
+        'approval:design', 'stop:stage4-structure-replan',
+        'uncertain:approval:stage4-structure-replan']
     assert '声明—实算差异' in task.prompt
     assert '都只有阅读定位权' in task.prompt
     assert '不能单独制造付费返工' in task.prompt
@@ -1107,6 +1110,7 @@ def test_stage5_trim_card_offers_retain_rewrite_or_stop_and_never_closure(
         'node:stage5.review.retain-pretrim-batch',
         'node:stage5.review.request-reviewer-rewrite',
         'stop:stage5-trim-no-safe-disposition',
+        'uncertain:approval:stage5-closure',
     ]
     assert all(
         option['exact_request']['action']['kind'] != 'approval'
@@ -1480,7 +1484,8 @@ def test_writing_option_is_an_exact_wrapper_and_loader_rejects_untouched_reason(
             'review_token': 's5wr1_' + '6' * 64,
         },
     }, current, queue.WAITING_ON_WRITING_APPROVAL)
-    assert len(options) == 1
+    assert [row['id'] for row in options] == [
+        'approval:writing', 'uncertain:approval:stage5-writing', 'stop:approval:stage5-writing']
     request = options[0]['exact_request']
     assert request['action'] == {
         'kind': 'approval', 'surface': 'writing',
@@ -1515,7 +1520,7 @@ def test_writing_option_is_an_exact_wrapper_and_loader_rejects_untouched_reason(
                 path, current, submission_options=options)
 
 
-def test_stage2_options_bind_real_workpack_sha_and_blueprint_token(
+def test_stage2_options_bind_global_workpack_and_offer_explicit_node_decision(
         tmp_path) -> None:
     current = _current(queue.WAITING_ON_STAGE2_REVIEW)
     global_template = {
@@ -1532,6 +1537,7 @@ def test_stage2_options_bind_real_workpack_sha_and_blueprint_token(
     options = reviewer_tasks._submission_options({
         'global': {
             'workpack_sha256': '7' * 64,
+            'review_token': 's2gr1_' + 'a' * 64,
             'items': [{'current_state': 'pending', 'item_id': 'item-1',
                        'subject_sha256': '1' * 64}],
         },
@@ -1539,21 +1545,18 @@ def test_stage2_options_bind_real_workpack_sha_and_blueprint_token(
         # 直接塞逻辑 payload 会漏掉本次真实 UI/Supervisor 边界回归。
         'global_template': encode_artifact(
             STAGE2_GLOBAL_REVIEW_DECISIONS, global_template),
-        'blueprint': {'review_token': 'bpr3_' + 'a' * 64},
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
 
     assert [row['id'] for row in options] == [
-        'node:stage2.global.review']
+        'node:stage2.global.review', 'approval:stage2_global_review']
     scope = options[0]['exact_request']['action']['input_payload']['blocking_scope']
     assert scope['expected_workpack_sha256'] == '7' * 64
 
-    # blocking 面已 generation-safe 时，普通 review 席没有任何可提交项：
-    # 收口只属于第四席只读终审，不能在同一席里顺手 seen Blueprint。
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='独立只读终审'):
-        reviewer_tasks._submission_options({
-            'global': {'items': [{'current_state': 'PASS'}]},
-            'blueprint': {'review_token': 'bpr3_' + 'a' * 64},
-        }, current, queue.WAITING_ON_STAGE2_REVIEW)
+    closed = reviewer_tasks._submission_options({
+        'global': {'items': [{'current_state': 'PASS'}],
+                   'review_token': 's2gr1_' + 'a' * 64},
+    }, current, queue.WAITING_ON_STAGE2_REVIEW)
+    assert [row['id'] for row in closed] == ['approval:stage2_global_review']
 
     # Commander 只编辑逻辑 payload；可信 loader 必须在交给 CLI 前恢复同一份
     # v2 信封，否则下一步 ``store.read_external`` 会因缺版本标记再次停机。
@@ -1573,384 +1576,20 @@ def test_stage2_options_bind_real_workpack_sha_and_blueprint_token(
     GlobalReviewDecisionSet.model_validate(logical)
 
 
-def _final_review_pack() -> dict:
-    return {
-        'global': {
-            'workpack_sha256': '7' * 64,
-            'review_token': 's2gr1_' + 'e' * 64,
-            'items': [
-                {'item_id': 'role:entities.characters.0.role:aaaa',
-                 'subject_sha256': '1' * 64, 'current_state': 'PASS',
-                 'current_reason': '已核', 'generation_impact': 'must_fix'},
-                {'item_id': 'secret:canon.secrets.secret_01.fact:bbbb',
-                 'subject_sha256': '2' * 64, 'current_state': 'UNVER',
-                 'current_reason': '整组隔离',
-                 'generation_impact': 'quarantine_or_fix',
-                 'generation_disposition': {
-                     'action': 'quarantine_group', 'reason': '原文无答案'}},
-            ],
-        },
-        'blueprint': {'review_token': 'bpr3_' + 'a' * 64},
-    }
 
 
-def test_stage2_final_review_offers_confirm_or_reopen_and_binds_both_tokens(
-        tmp_path) -> None:
-    current = _current(queue.WAITING_ON_STAGE2_FINAL_REVIEW)
-    options = reviewer_tasks._submission_options(
-        _final_review_pack(), current, queue.WAITING_ON_STAGE2_FINAL_REVIEW)
-    assert [row['id'] for row in options] == [
-        'approval:stage2_final_review', 'node:stage2.global.final-reopen']
-
-    confirm = options[0]['exact_request']
-    assert confirm['action']['surface'] == 'stage2_final_review'
-    assert confirm['action']['payload']['global_review_token'] == 's2gr1_' + 'e' * 64
-    assert confirm['action']['payload']['blueprint_review_token'] == 'bpr3_' + 'a' * 64
-    path = tmp_path / 'final.json'
-    path.write_text(json.dumps(confirm), encoding='utf-8')
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='sentinel'):
-        reviewer_tasks.load_action(path, current, submission_options=options)
-    confirm['action']['payload']['reason'] = '独立通读 2 项 blocking 与 22 章正文，无可指向问题'
-    path.write_text(json.dumps(confirm), encoding='utf-8')
-    action = reviewer_tasks.load_action(path, current, submission_options=options)
-    assert isinstance(action, reviewer_tasks.ReviewerApprovalAction)
-    assert action.surface == 'stage2_final_review'
-    assert reviewer_tasks.approval_review_token(options) is None, (
-        '终审 confirm 携两枚 token，重放判据必须由 load_action 逐枚复核')
-    for field, value in (
-        ('actor', 'agent:other'),
-        ('global_review_token', 's2gr1_' + 'f' * 64),
-        ('blueprint_review_token', 'bpr3_' + 'b' * 64),
-    ):
-        altered = copy.deepcopy(confirm)
-        altered['action']['payload'][field] = value
-        path.write_text(json.dumps(altered), encoding='utf-8')
-        with pytest.raises(reviewer_tasks.ReviewerTaskError, match='immutable'):
-            reviewer_tasks.load_action(
-                path, current, submission_options=options)
-
-    reopen = copy.deepcopy(options[1]['exact_request'])
-    reopen['action']['input_payload']['decisions'] = [{
-        'item_id': 'role:entities.characters.0.role:aaaa',
-        'expected_subject_sha256': '1' * 64,
-        'state': 'PASS', 'reason': '想洗绿', 'evidence': [],
-    }]
-    path.write_text(json.dumps(reopen), encoding='utf-8')
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='只能是'):
-        reviewer_tasks.load_action(path, current, submission_options=options)
-    reopen['action']['input_payload']['decisions'][0].update({
-        'state': 'FAIL', 'reason': '第 3 章原文与 role 冲突'})
-    reopen['action']['input_payload']['decisions'].append({
-        'item_id': 'ghost:item', 'expected_subject_sha256': '9' * 64,
-        'state': 'FAIL', 'reason': '不存在的主体', 'evidence': [],
-    })
-    path.write_text(json.dumps(reopen), encoding='utf-8')
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='不在当前 blocking 面'):
-        reviewer_tasks.load_action(path, current, submission_options=options)
-    reopen['action']['input_payload']['decisions'].pop()
-    path.write_text(json.dumps(reopen), encoding='utf-8')
-    action = reviewer_tasks.load_action(path, current, submission_options=options)
-    assert isinstance(action, reviewer_tasks.ReviewerNodeAction)
-    assert action.flags == ('--review-decisions', '@reviewer-input')
-    logical = decode_artifact(
-        STAGE2_GLOBAL_REVIEW_DECISIONS, action.input_payload).payload
-    decided = GlobalReviewDecisionSet.model_validate(logical)
-    assert [row.state for row in decided.decisions] == ['FAIL']
 
 
-def test_stage2_final_review_refuses_unresolved_items_and_keeps_full_materials(
-        tmp_path) -> None:
-    pack = _final_review_pack()
-    pack['global']['items'][0]['current_state'] = 'FAIL'
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='未闭合'):
-        reviewer_tasks._submission_options(
-            pack, _current(queue.WAITING_ON_STAGE2_FINAL_REVIEW),
-            queue.WAITING_ON_STAGE2_FINAL_REVIEW)
-
-    full = _final_review_pack()
-    full['global']['main_text_chapters'] = [
-        {'chapter_ordinal': 1, 'text': '第一章正文'}]
-    materials = reviewer_tasks._review_materials(
-        full, queue.WAITING_ON_STAGE2_FINAL_REVIEW)
-    assert materials['global']['reading_mode'] == 'final_independent_review'
-    assert len(materials['global']['items']) == 2, '终审不过滤已 PASS 项'
-    assert materials['global']['main_text_chapters'][0]['text'] == '第一章正文'
-    compact = reviewer_tasks._review_materials(
-        full, queue.WAITING_ON_STAGE2_REVIEW)
-    assert compact['global']['delta']['sent_item_count'] == 0, (
-        '同一份包在普通 review 席下仍按 delta 压缩')
-
-    identity = reviewer_tasks._stage2_progress_identity({
-        'global': {
-            **full['global'],
-            'binding': {
-                'expected_source_sha256': '8' * 64,
-                'main_text_subject_sha256': '9' * 64,
-            },
-        },
-    }, queue.WAITING_ON_STAGE2_FINAL_REVIEW)
-    assert identity['blocker_count'] == 0
-    other = reviewer_tasks._stage2_progress_identity({
-        'global': {
-            **full['global'], 'review_token': 's2gr1_' + 'f' * 64,
-            'binding': {
-                'expected_source_sha256': '8' * 64,
-                'main_text_subject_sha256': '9' * 64,
-            },
-        },
-    }, queue.WAITING_ON_STAGE2_FINAL_REVIEW)
-    assert identity['progress_sha256'] != other['progress_sha256'], (
-        'review 字节变化必须改变终审 progress，否则第二次终审会被账本拒绝')
 
 
-def test_stage2_prereview_is_read_only_compact_and_rebinds_live_surface(
-        tmp_path, monkeypatch) -> None:
-    """预审只冻结业务与 workpack；Blueprint 后由 live surface 重铸 wrapper。"""
-    monkeypatch.setattr(
-        reviewer_tasks.paths, 'scratch_session_dir',
-        lambda _base, _sid, _epoch_id: tmp_path)
-    reason = '两行共用的已审理由'
-    workpack_sha = '7' * 64
-    global_pack = {
-        'kind': 'stage2-global-review-workpack-v4',
-        'workpack_sha256': workpack_sha,
-        'main_text_chapters': [
-            {'chapter_ordinal': 1, 'text': '第一章正文'},
-            {'chapter_ordinal': 2, 'text': '第二章正文'},
-        ],
-        'items': [{
-            'item_id': f'item-{index}',
-            'subject_sha256': str(index) * 64,
-            'current_state': 'pending',
-            'current_reason': reason,
-            'subject_path': f'arc.item_{index}',
-            'group_key': 'arc',
-            'reading_scope': 'whole_book',
-            'evidence_mode': 'formal_evidence',
-            'effect': 'blocking',
-            'generation_impact': 'must_fix',
-            'generation_disposition': None,
-            'subject': {'claim': f'主体 {index}'},
-            'registered_evidence': [],
-            'formal_evidence': [{'chapter_ordinal': index}],
-            'unresolved_formal_evidence': [],
-            'exact_literal_hits': [],
-        } for index in (1, 2)],
-        'binding': {
-            'expected_source_sha256': '8' * 64,
-            'main_text_subject_sha256': '9' * 64,
-            'reviewed_chapter_ordinals': [1, 2],
-        },
-    }
-    logical_template = {
-        'actor': '(template)', 'decisions': [],
-        'blocking_scope': {
-            'expected_source_sha256': '8' * 64,
-            'expected_blocking_scope_sha256': '6' * 64,
-            'expected_workpack_sha256': '0' * 64,
-            'expected_item_count': 2,
-            'reviewed_chapter_ordinals': [1, 2],
-            'state': 'UNVER', 'reason': '待审阅', 'evidence': [],
-        },
-    }
-    encoded_template = encode_artifact(
-        STAGE2_GLOBAL_REVIEW_DECISIONS, logical_template)
-    packed = {
-        'global': global_pack,
-        'global_template': encoded_template,
-    }
-    commands = []
-
-    def json_command(argv, **_kwargs):
-        commands.append(tuple(argv))
-        if '--emit-review-workpack' in argv:
-            return copy.deepcopy(global_pack)
-        if '--emit-review-template' in argv:
-            return copy.deepcopy(encoded_template)
-        raise AssertionError(f'预审不得读取其他工作包：{argv}')
-
-    monkeypatch.setattr(reviewer_tasks, '_json_command', json_command)
-    ready = SimpleNamespace(
-        state='ready', surface_seal='a' * 64, action=None,
-        overview=SimpleNamespace(stages=[]),
-        execution_token=SimpleNamespace(node='stage2.blueprint'))
-
-    prereview = reviewer_tasks.build_stage2_prereview_task(
-        tmp_path, '42', ready, tmp_path / 'prereview.json', epoch_id='epoch-1')
-
-    assert prereview is not None
-    assert len(commands) == 2
-    assert all('stage2.blueprint' not in command for command in commands)
-    assert prereview.prompt.count(reason) == 1, '相同持久理由必须以 catalog 去重'
-    assert 'global_template' not in prereview.prompt
-    assert prereview.prompt.count('第一章正文') == 1
-    assert 'stage2-global-review-delta-v1' in prereview.prompt
-    assert 'subject_cards' in prereview.prompt
-    assert 'claim_evidence_index' in prereview.prompt
-    payload = copy.deepcopy(prereview.input_template)
-    payload['decisions'] = []
-    payload['blocking_scope']['state'] = 'PASS'
-    payload['blocking_scope']['reason'] = '已逐章逐项阅读完整正文并复核'
-    prereview.request_path.write_text(json.dumps({
-        'schema': reviewer_tasks.STAGE2_PREREVIEW_SCHEMA,
-        'business_sha256': prereview.business_sha256,
-        'workpack_sha256': prereview.workpack_sha256,
-        'input_payload': payload,
-    }, ensure_ascii=False), encoding='utf-8')
-    loaded = reviewer_tasks.load_stage2_prereview(prereview)
-    assert loaded['blocking_scope']['state'] == 'PASS'
-
-    blocked = _current(queue.WAITING_ON_STAGE2_REVIEW)
-    options = reviewer_tasks._submission_options(
-        packed, blocked, queue.WAITING_ON_STAGE2_REVIEW)
-    live = reviewer_tasks.ReviewerTask(
-        waiting_on=queue.WAITING_ON_STAGE2_REVIEW,
-        surface_seal=blocked.surface_seal,
-        business_sha256=prereview.business_sha256,
-        request_path=tmp_path / 'live.json', prompt='unused',
-        submission_options=tuple(options))
-    action = reviewer_tasks.bind_stage2_prereview(live, blocked, loaded)
-
-    assert action.node == 'stage2.global'
-    assert action.flags == ('--review-decisions', '@reviewer-input')
-    assert action.input_payload is not None
-    formal = decode_artifact(
-        STAGE2_GLOBAL_REVIEW_DECISIONS, action.input_payload).payload
-    assert formal['blocking_scope']['state'] == 'PASS'
-    wrapper = json.loads(live.request_path.read_text(encoding='utf-8'))
-    assert wrapper['surface_seal'] == blocked.surface_seal
 
 
-@pytest.mark.parametrize('states', [
-    ('PASS',),
-    ('pending', 'PASS'),
-    ('FAIL',),
-    ('UNVER',),
-])
-def test_stage2_prereview_skips_nonpending_global_before_stale_blueprint_read(
-        tmp_path, monkeypatch, states) -> None:
-    """Global 已被评审时直接跑 Blueprint，不读它的 stale 旧产物。"""
-    monkeypatch.setattr(
-        reviewer_tasks.paths, 'scratch_session_dir',
-        lambda _base, _sid, _epoch_id: tmp_path)
-    commands = []
-
-    def json_command(argv, **_kwargs):
-        commands.append(tuple(argv))
-        if 'stage2.blueprint' in argv:
-            raise reviewer_tasks.ReviewerTaskError('stale Blueprint 不可读')
-        if '--emit-review-workpack' in argv:
-            return {
-                'kind': 'stage2-global-review-workpack-v4',
-                'items': [
-                    {
-                        'item_id': f'item-{index}',
-                        'current_state': state,
-                    }
-                    for index, state in enumerate(states, start=1)
-                ],
-            }
-        raise AssertionError(f'非 pending Global 不得继续构包：{argv}')
-
-    monkeypatch.setattr(reviewer_tasks, '_json_command', json_command)
-    ready = SimpleNamespace(
-        state='ready', surface_seal='a' * 64, action=None,
-        overview=SimpleNamespace(stages=[]),
-        execution_token=SimpleNamespace(node='stage2.blueprint'))
-
-    task = reviewer_tasks.build_stage2_prereview_task(
-        tmp_path, '42', ready, tmp_path / 'prereview.json', epoch_id='epoch-1')
-
-    assert task is None
-    assert len(commands) == 1
-    assert 'stage2.global' in commands[0]
-    assert '--emit-review-workpack' in commands[0]
 
 
-@pytest.mark.parametrize('formal_exists', [False, True])
-def test_stage2_prereview_skips_registered_invalid_projection_before_formal_read(
-        tmp_path, monkeypatch, formal_exists) -> None:
-    """Blueprint 消费 INVALID 投影时，不缺读或误审旧 formal。"""
-    monkeypatch.setattr(
-        reviewer_tasks.paths, 'scratch_session_dir',
-        lambda _base, _sid, _epoch_id: tmp_path)
-    overview = SimpleNamespace(stages=[SimpleNamespace(
-        stage='stage2',
-        artifacts=[
-            SimpleNamespace(
-                rel=STAGE2_GLOBAL_GROUNDING, exists=formal_exists,
-                readable=formal_exists, freshness=('fresh' if formal_exists else 'missing'),
-                invalid=True),
-            SimpleNamespace(
-                rel=STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
-                exists=True, readable=True, freshness='fresh', invalid=False),
-        ],
-    )])
-    ready = SimpleNamespace(
-        state='ready', surface_seal='a' * 64, action=None,
-        overview=overview,
-        execution_token=SimpleNamespace(node='stage2.blueprint'))
-    monkeypatch.setattr(
-        reviewer_tasks, '_json_command',
-        lambda *_args, **_kwargs: pytest.fail(
-            'INVALID projection ready 不得读取 formal Global workpack'))
-
-    task = reviewer_tasks.build_stage2_prereview_task(
-        tmp_path, '42', ready, tmp_path / 'prereview.json', epoch_id='epoch-1')
-
-    assert task is None
 
 
-def test_stage2_prereview_empty_blocking_workpack_closes_explicitly(
-        tmp_path, monkeypatch) -> None:
-    """空 blocking 面不是“全 pending”；不得静默铸空预审。"""
-    monkeypatch.setattr(
-        reviewer_tasks.paths, 'scratch_session_dir',
-        lambda _base, _sid, _epoch_id: tmp_path)
-    monkeypatch.setattr(
-        reviewer_tasks, '_json_command',
-        lambda argv, **_kwargs: ({
-            'kind': 'stage2-global-review-workpack-v4', 'items': [],
-        } if '--emit-review-workpack' in argv else pytest.fail(
-            f'空 blocking 面不得继续构包：{argv}')))
-    ready = SimpleNamespace(
-        state='ready', surface_seal='a' * 64, action=None,
-        overview=SimpleNamespace(stages=[]),
-        execution_token=SimpleNamespace(node='stage2.blueprint'))
-
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='缺完整 items'):
-        reviewer_tasks.build_stage2_prereview_task(
-            tmp_path, '42', ready, tmp_path / 'prereview.json', epoch_id='epoch-1')
 
 
-def test_stage2_prereview_rejects_identity_drift_before_live_binding(
-        tmp_path) -> None:
-    template = GlobalReviewDecisionSet.model_validate({
-        'actor': 'agent:novel-pipeline-operator', 'decisions': [],
-        'blocking_scope': {
-            'expected_source_sha256': '1' * 64,
-            'expected_blocking_scope_sha256': '2' * 64,
-            'expected_workpack_sha256': '3' * 64,
-            'expected_item_count': 1, 'reviewed_chapter_ordinals': [1],
-            'state': 'UNVER', 'reason': reviewer_tasks._REASON,
-            'evidence': [],
-        },
-    }).model_dump(mode='json')
-    task = reviewer_tasks.Stage2PrereviewTask(
-        business_sha256='4' * 64, workpack_sha256='3' * 64,
-        request_path=tmp_path / 'prereview.json', prompt='unused',
-        input_template=template)
-    submitted = copy.deepcopy(template)
-    submitted['blocking_scope']['reason'] = '已审阅'
-    task.request_path.write_text(json.dumps({
-        'schema': reviewer_tasks.STAGE2_PREREVIEW_SCHEMA,
-        'business_sha256': '5' * 64,
-        'workpack_sha256': task.workpack_sha256,
-        'input_payload': submitted,
-    }), encoding='utf-8')
-
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='身份不一致'):
-        reviewer_tasks.load_stage2_prereview(task)
 
 
 def _global_edit_envelope() -> dict:
@@ -2049,6 +1688,7 @@ def _stage2_failed_global(
         })
     return {
         'kind': 'stage2-global-review-workpack-v4',
+        'review_token': 's2gr1_' + '7' * 64,
         'workpack_sha256': '7' * 64,
         'main_text_subject_sha256': '9' * 64,
         'main_text_chapters': [],
@@ -2105,8 +1745,9 @@ def test_stage2_durable_correction_uses_failed_edit_without_loading_blueprint(
     assert 'failed_edit' not in pack['edit_correction']
     assert pack['edit_correction']['hard_hits'] == ['role_repeats_name']
     current = _current(queue.WAITING_ON_STAGE2_EDIT_CORRECTION)
-    [option] = reviewer_tasks._submission_options(
+    option, control = reviewer_tasks._submission_options(
         pack, current, queue.WAITING_ON_STAGE2_EDIT_CORRECTION)
+    assert control['id'] == 'approval:stage2_global_review'
     assert option['id'] == 'node:stage2.global.apply-edit'
     assert option['exact_request']['action']['input_payload']['characters'][0][
         'char_id'] == 'char_001'
@@ -2175,8 +1816,10 @@ def test_stage2_fail_routes_only_to_typed_global_edit_and_loader_restores_v3(
         'global': _stage2_failed_global([{
             'current_state': 'FAIL', 'group_key': 'character:char_001'}]),
         'global_edit_template': _global_edit_envelope(),
-        'blueprint': {'review_token': 'bpr3_' + 'a' * 64},
+        'blueprint': {'review_token': 'bpr4_' + 'a' * 64},
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
+    assert options[-1]['id'] == 'approval:stage2_global_review'
+    options = options[:-1]
 
     assert [row['id'] for row in options] == [
         'node:stage2.global.apply-edit']
@@ -2597,7 +2240,7 @@ def test_stage2_global_edit_cannot_invent_a_patch_subject(tmp_path) -> None:
         'global': _stage2_failed_global([{
             'current_state': 'FAIL', 'group_key': 'character:char_001'}]),
         'global_edit_template': _global_edit_envelope(),
-        'blueprint': {'review_token': 'bpr3_' + 'a' * 64},
+        'blueprint': {'review_token': 'bpr4_' + 'a' * 64},
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
     request = json.loads(json.dumps(options[0]['exact_request']))
     request['action']['input_payload']['post_edit_review']['reason'] = (
@@ -2890,7 +2533,7 @@ def test_stage2_main_prompt_distinguishes_sparse_retry_from_failed_edit_merge(
 def test_stage2_after_edit_reviews_only_changed_pending_items() -> None:
     current = _current(queue.WAITING_ON_STAGE2_REVIEW)
     options = reviewer_tasks._submission_options({
-        'global': {'items': [
+        'global': {'review_token': 's2gr1_' + '7' * 64, 'items': [
             {
                 'item_id': 'changed-item',
                 'subject_sha256': '1' * 64,
@@ -2904,8 +2547,10 @@ def test_stage2_after_edit_reviews_only_changed_pending_items() -> None:
                 'group_key': 'relation:rel_01',
             },
         ]},
-        'blueprint': {'review_token': 'bpr3_' + 'a' * 64},
+        'blueprint': {'review_token': 'bpr4_' + 'a' * 64},
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
+    assert options[-1]['id'] == 'approval:stage2_global_review'
+    options = options[:-1]
 
     assert [row['id'] for row in options] == ['node:stage2.global.review']
     payload = options[0]['exact_request']['action']['input_payload']
@@ -2925,8 +2570,10 @@ def test_stage2_safe_unver_offers_quarantine_redecision_or_real_edit() -> None:
             'group_key': 'secret:secret_01',
         }]),
         'global_edit_template': _global_edit_envelope(),
-        'blueprint': {'review_token': 'bpr3_' + 'a' * 64},
+        'blueprint': {'review_token': 'bpr4_' + 'a' * 64},
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
+    assert options[-1]['id'] == 'approval:stage2_global_review'
+    options = options[:-1]
 
     assert [row['id'] for row in options] == [
         'node:stage2.global.quarantine-unver',
@@ -2960,6 +2607,8 @@ def test_stage2_unsafe_unver_can_be_redecided_without_forcing_a_noop_edit() -> N
         }]),
         'global_edit_template': _global_edit_envelope(),
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
+    assert options[-1]['id'] == 'approval:stage2_global_review'
+    options = options[:-1]
 
     assert [row['id'] for row in options] == [
         'node:stage2.global.resolve-unver',
@@ -3032,3 +2681,82 @@ def test_multiple_trim_chapters_share_one_batch_before_review(tmp_path):
         path.write_text(json.dumps(altered, ensure_ascii=False), encoding='utf-8')
         with pytest.raises(reviewer_tasks.ReviewerTaskError):
             reviewer_tasks.load_action(path, current, submission_options=options)
+
+
+def _new_blueprint_options():
+    current = _current(queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW)
+    from contracts.invariants import BLUEPRINT_RELATION_REVIEW_CONTRACT
+    pack = {
+        'blueprint': {'review_token': 'bpr4_' + 'a' * 64,
+                      'chapters': [{'chapter_ordinal': 1}]},
+        '_blueprint_edit_template': {
+            'actor': 'template', 'reason': 'template', 'review_token': 'brt1_' + 'b' * 64,
+            'review_contract_version': BLUEPRINT_RELATION_REVIEW_CONTRACT,
+            'chapters': [{'chapter_ordinal': 1, 'narrative_relations': []}],
+        },
+    }
+    return current, reviewer_tasks._submission_options(pack, current, queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW)
+
+
+def test_blueprint_commander_has_bound_accept_rework_uncertain_stop_and_local_patch(tmp_path):
+    current, options = _new_blueprint_options()
+    assert [row['id'] for row in options] == [
+        'approval:stage2_blueprint_review', 'node:stage2.blueprint.apply-edit']
+    path = tmp_path / 'typed-review.json'
+    for decision in ('accept', 'uncertain', 'stop', 'rework'):
+        document = copy.deepcopy(options[0]['exact_request'])
+        payload = document['action']['payload']
+        payload.update(decision=decision, reason='依据全书原文及 Global 交叉材料作出明确决定')
+        if decision == 'rework':
+            payload.update(owner='stage2.global', chapter_ordinals=[1])
+        path.write_text(json.dumps(document), encoding='utf-8')
+        action = reviewer_tasks.load_action(path, current, submission_options=options)
+        assert action.payload['decision'] == decision
+        assert action.payload['node'] == 'stage2.blueprint'
+    altered = copy.deepcopy(document)
+    altered['action']['payload']['review_token'] = 'bpr4_' + 'c' * 64
+    path.write_text(json.dumps(altered), encoding='utf-8')
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='immutable'):
+        reviewer_tasks.load_action(path, current, submission_options=options)
+
+
+def test_blueprint_typed_patch_keeps_bound_actor_and_cross_review_identity(tmp_path):
+    current, options = _new_blueprint_options()
+    request = copy.deepcopy(options[1]['exact_request'])
+    payload = request['action']['input_payload']
+    payload['reason'] = '原文明确在室内，订正当前拍地点并接受修后蓝图'
+    payload['chapters'][0]['beat_patches'] = [{'beat_id': 'b01_01', 'place': '室内'}]
+    path = tmp_path / 'typed-patch.json'
+    path.write_text(json.dumps(request), encoding='utf-8')
+    action = reviewer_tasks.load_action(path, current, submission_options=options)
+    assert action.node == 'stage2.blueprint'
+    assert action.input_payload['post_edit_accept'] is True
+    payload['actor'] = 'foreign-commander'
+    path.write_text(json.dumps(request), encoding='utf-8')
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='绑定字段 actor'):
+        reviewer_tasks.load_action(path, current, submission_options=options)
+
+
+@pytest.mark.parametrize('waiting_on', [
+    'stage0.approve', 'approval:stage4-design-review', 'approval:stage4-binding-resolution',
+    'approval:stage4-structure-review', 'approval:stage4-structure-replan',
+    'approval:stage5-writing', 'approval:stage5-closure', 'stage6.approve', 'stage7.approve',
+])
+@pytest.mark.parametrize('kind', ['uncertain', 'stop'])
+def test_every_non_stage2_commander_has_bound_terminal_exit(tmp_path, waiting_on, kind):
+    current = _current(waiting_on)
+    options = reviewer_tasks._terminal_review_options([], current, waiting_on)
+    [option] = [row for row in options if row['exact_request']['action']['kind'] == kind]
+    document = copy.deepcopy(option['exact_request'])
+    document['action']['reason'] = '当前材料不足以形成有依据的裁决，明确保留原因'
+    path = tmp_path / 'terminal.json'
+    path.write_text(json.dumps(document), encoding='utf-8')
+    action = reviewer_tasks.load_action(path, current, submission_options=options)
+    assert isinstance(action, reviewer_tasks.ReviewerStopAction) and action.kind == kind
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='immutable'):
+        reviewer_tasks.load_action(path, current, submission_options=[])
+    wrong = copy.deepcopy(options)
+    for row in wrong:
+        row['exact_request']['surface_seal'] = 'f' * 64
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='immutable'):
+        reviewer_tasks.load_action(path, current, submission_options=wrong)

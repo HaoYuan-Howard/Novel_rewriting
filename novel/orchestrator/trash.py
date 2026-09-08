@@ -836,7 +836,7 @@ def reconcile_restore(
     key = jobs.acquire_job_writer(
         base, sid, 'book.restore-reconcile', writer_id, registry=registry)
     try:
-        with approvals.approval_file_lock(base, sid):
+        with approvals.approval_exclusion_lock(base, sid):
             current = _load_restore_receipt(base, trash_id)
             if current != receipt:
                 raise BookTrashFailed('restore receipt 在 reconcile 占锁前发生变化')
@@ -945,7 +945,7 @@ def restore(
     key = jobs.acquire_job_writer(
         base, sid, 'book.restore', writer_id, registry=registry)
     try:
-        with approvals.approval_file_lock(base, sid):
+        with approvals.approval_exclusion_lock(base, sid):
             # 拿到跨 writer/file 两把锁后重读；preview 前的对象不能继续当依据。
             current_meta = _read_object(metadata_path)
             current_manifest = _read_object(manifest_path)
@@ -1273,7 +1273,7 @@ def sweep_incomplete(
                 # 与 HTTP/CLI apply 共用审批文件锁。live 是否存在、选择恢复还是
                 # supersede、以及移动本身必须是同一段临界区，不能只锁 os.replace。
                 # 外层书级 writer 已经挡住 agent/job；这把只解决审批文件本身。
-                with approvals.approval_file_lock(base, sid):
+                with approvals.approval_exclusion_lock(base, sid):
                     if not archived_approval.is_file():
                         # 另一 sweep 已在我们等待锁时收完；后面的幂等清壳继续即可。
                         continue
@@ -1312,7 +1312,7 @@ def execute(base: str | os.PathLike[str], sid: str, expected_title: str,
     """CLI 子进程里的原子边界；整段占用与 approval apply 相同的文件锁。"""
     if not _TRASH_ID.fullmatch(trash_id):
         raise BookTrashFailed(f'非法 trash_id={trash_id!r}')
-    with approvals.approval_file_lock(base, sid):
+    with approvals.approval_exclusion_lock(base, sid):
         return _execute_locked(base, sid, expected_title, trash_id)
 
 

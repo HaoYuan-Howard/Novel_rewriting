@@ -84,6 +84,33 @@ def _approve_all_review(book) -> None:
     store.write_round(global_review.REL, review)
 
 
+
+def _accept_global_node(book):
+    """合成 Commander 明确核过逐项决定后，提交当前 Global 节点接受。"""
+    from contracts.schema.api import Stage2NodeReviewRequest
+    from novel import prov
+    from novel.orchestrator.state import readonly_ctx
+    ctx = readonly_ctx(book, 'stage2.global', prov.code_version())
+    return approvals.approve_stage2_review(book.parent, ctx.sid, Stage2NodeReviewRequest(
+        node='stage2.global', review_token=global_review.review_token(ctx),
+        decision='accept', actor='fixture-global-commander',
+        reason='合成 fixture 已逐项核对当前 Global 与正文'))
+
+
+def _accept_blueprint_node(book, monkeypatch):
+    from contracts.schema.api import Stage2NodeReviewRequest
+    from novel.views.stage2 import blueprint_review_workpack
+    ctx = _ctx(book, 'stage2.blueprint', paid=False)
+    # 本组只核验 Stage2 节点接受；S0/S1 原审批链在 facade 纵切另验。
+    with monkeypatch.context() as local:
+        local.setattr(approvals, 'close_stage2_accepted',
+                      lambda base, sid: approvals.get(base, sid, include_spawns=False))
+        return approvals.approve_stage2_review(book.parent, ctx.sid, Stage2NodeReviewRequest(
+            node='stage2.blueprint', review_token=blueprint_review_workpack(book.parent, ctx.sid).review_token,
+            decision='accept', actor='fixture-blueprint-commander',
+            reason='合成 fixture 已逐章交叉核对 Blueprint 与 Global'))
+
+
 def test_a_book_dir_absolute_decision_path_is_accepted():
     _root, book = _sandbox('书_123')
     _seed(book)
@@ -274,13 +301,15 @@ def test_v2_workpack_sha_is_rejected_without_disk_mutation_then_v3_can_apply():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_downstream_gate_requires_current_blueprint_and_joint_check(tmp_path):
+def test_downstream_gate_requires_current_blueprint_and_joint_check(tmp_path, monkeypatch):
     """全 PASS review 不能替缺失 blueprint 或联合 HARD 背书。"""
     book = tmp_path / '联合收口_123'
     book.mkdir()
     _seed(book, with_blueprints=True)
 
     _approve_all_review(book)
+    _accept_global_node(book)
+    _accept_blueprint_node(book, monkeypatch)
 
     # 完整的 current global + current blueprint + 联合 HARD + all-PASS review
     # 才是可供 Stage4 消费的那一态。
@@ -338,6 +367,7 @@ def test_s2_service_approval_cannot_outvote_a_joint_hard_failure(
     book.mkdir()
     _seed(book, with_blueprints=True)
     _approve_all_review(book)
+    _accept_global_node(book)
 
     record = approvals._fresh_record('126')
     gates = dict(record.gate)

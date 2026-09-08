@@ -398,6 +398,12 @@ def test_synthetic_stage6_gate_blocks_only_when_every_candidate_is_dirty(
         def read_own(self, _model, rel, **_kwargs):
             return state[rel], {}
 
+        def prospective_sha256(self, _rel, artifact):
+            return hook._canonical_sha256(artifact.model_dump(by_alias=True, mode='json'))
+
+        def full_sha256_or_none(self, rel):
+            return self.prospective_sha256(rel, state[rel]) if rel in state else None
+
         def freshness(self, _rel):
             return SimpleNamespace(state='fresh', reason='match')
 
@@ -427,7 +433,7 @@ def test_synthetic_stage6_gate_blocks_only_when_every_candidate_is_dirty(
     assert sum(bool(candidate.findings) for candidate in partial.candidates) == 1
     assert written[-1][0] == hook.REL
 
-    ctx2 = _ctx(book, 'stage6.hook')
+    ctx2 = _ctx(tmp_path / '合成全脏闸门_612', 'stage6.hook')
     with pytest.raises(GateBlocked, match='每一条'):
         hook.run_hook(ctx2, _fake_client(
             ctx2, ['坏候选甲', '坏候选乙', '坏候选丙']))
@@ -438,7 +444,7 @@ def test_synthetic_stage6_gate_blocks_only_when_every_candidate_is_dirty(
                 Mech(punct_fixed=0, quotes_fixed=0, paras_fixed=0), [])
 
     monkeypatch.setattr(hook, '_normalize_and_judge', normalize_full_width)
-    ctx3 = _ctx(book, 'stage6.hook')
+    ctx3 = _ctx(tmp_path / '合成归一闸门_613', 'stage6.hook')
     with pytest.raises(GateBlocked, match='归一后出现重复'):
         hook.run_hook(ctx3, _fake_client(
             ctx3, ['干净候选甲。', '同一句候选?', '同一句候选？']))

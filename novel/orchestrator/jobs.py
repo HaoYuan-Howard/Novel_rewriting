@@ -760,6 +760,9 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
         egress_authorized=egress_authorized,
         run_id=run_id, recovered_from_job_id=recovered_from_job_id))
     _require_executor_egress(start_meta)
+    if start_meta.writes:
+        from novel.work_units import check_workflow_write
+        check_workflow_write(base)
     job_id = job_id or new_job_id()
     if any(event.job_id == job_id for event in read_events(base)):
         raise JobConflict(f'job_id={job_id!r} already exists')
@@ -843,6 +846,9 @@ def start(
         egress_authorized=egress_authorized,
         run_id=run_id, recovered_from_job_id=recovered_from_job_id))
     _require_executor_egress(start_meta)
+    if start_meta.writes:
+        from novel.work_units import check_workflow_write
+        check_workflow_write(base)
     job_id = job_id or new_job_id()
     if any(event.job_id == job_id for event in read_events(base)):
         raise JobConflict(f'job_id={job_id!r} already exists')

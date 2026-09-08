@@ -13,11 +13,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from contracts.invariants import STAGES
+from contracts.invariants import STAGES, commander_work_unit
 from contracts.schema.orchestration import RunProgressView, RunResumeFrontierView
 from novel.api.deps import checked_sid, get_base
 from novel.errors import UpstreamMissing
 from novel.orchestrator import beacon, operator
+from novel.work_units import list_unit_views
 
 router = APIRouter(prefix='/novels')
 
@@ -44,10 +45,20 @@ def get_run_progress(sid: str = Depends(checked_sid),
             verified_skipped_nodes=[],
             verified_skipped_count=0,
         )
+    units = list_unit_views(base, sid)
+    identity = commander_work_unit(resume_frontier.waiting_on or '')
+    current_node = identity[0] if identity else resume_frontier.node
+    current_scope = identity[1] if identity else None
+    recovery = None if units is None or resume_frontier.state == 'unknown' else [
+        f"{row['scope']}: {row['recovery_action']}" for row in units
+        if row['node'] == current_node and row['role'] == resume_frontier.next_handler
+        and (current_scope is None or row['scope'] == current_scope)
+        and row['recovery_action'] is not None]
     return RunProgressView(
         sid=sid,
         resume_frontier=resume_frontier,
         steps=beacon.fold(events),
         stage_done=stage_done,
         events_tail=[beacon.event_view(event) for event in events[-beacon.TAIL:]],
+        work_units=units, current_recovery_actions=recovery,
     )

@@ -64,8 +64,9 @@ def _book() -> Path:
     return base
 
 
-def _ctx(*, cache: CachePolicy | None = None, paid: bool = True) -> RunContext:
-    return RunContext.open(_book(), '123', 'stage6.hook', paid=paid,
+def _ctx(*, cache: CachePolicy | None = None, paid: bool = True,
+         node: str = 'stage6.hook') -> RunContext:
+    return RunContext.open(_book(), '123', node, paid=paid,
                            cache=cache or CachePolicy.default(), write_ledger=False)
 
 
@@ -1097,10 +1098,10 @@ def test_the_first_wire_call_runs_alone_so_the_rest_can_hit_the_provider_prefix_
             marks.append(('exit', req.user))
         return OK_TEXT
 
-    client = _client(FakeTransport(responder=responder))
+    client = _client(FakeTransport(responder=responder), ctx=_ctx(node='stage5.write'))
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(
-            lambda n: client.ask_text('s', f'u{n}', purpose='扇出'), range(8)))
+            lambda n: client.ask_text('s', f'u{n}', purpose=f'stage5.write:{n + 1}'), range(8)))
 
     assert marks[0][0] == 'enter'
     assert marks[1] == ('exit', marks[0][1]), \
@@ -1117,14 +1118,14 @@ def test_a_failing_first_call_still_releases_the_warmup_gate():
         return (TransportError('炸了', retryable=False) if req.user == 'boom'
                 else OK_TEXT)
 
-    client = _client(FakeTransport(responder=responder))
+    client = _client(FakeTransport(responder=responder), ctx=_ctx(node='stage5.write'))
     with pytest.raises(TransportError):
-        client.ask_text('s', 'boom', purpose='首发')
+        client.ask_text('s', 'boom', purpose='stage5.write:1')
 
     assert client._warm_done.is_set(), '首发抛异常后闸没放行 ⇒ 后来者会死等'
     with ThreadPoolExecutor(max_workers=4) as pool:
         got = list(pool.map(
-            lambda n: client.ask_text('s', f'u{n}', purpose='其余'), range(4)))
+            lambda n: client.ask_text('s', f'u{n}', purpose=f'stage5.write:{n + 2}'), range(4)))
     assert got == ['一段正文'] * 4
 
 

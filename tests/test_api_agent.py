@@ -100,6 +100,8 @@ _SIDS = ('41', '42', '43', '44')
 
 @pytest.fixture
 def client(tmp_path):
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
     base = str(tmp_path)
     for sid in _SIDS:
         (tmp_path / f'FQ_接口测试书_{sid}').mkdir(exist_ok=True)

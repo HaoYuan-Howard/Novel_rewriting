@@ -280,6 +280,8 @@ def _proof(decision) -> approvals._ApprovalProof:
 
 @pytest.fixture
 def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
     book = tmp_path / f'design_{SID}'
     book.mkdir()
     base_record = approvals._fresh_record(SID)
@@ -1078,7 +1080,9 @@ def test_explicit_v5_to_v6_migration_never_fabricates_design_history(
     payload = approvals._fresh_record(SID).model_dump(
         mode='json',
         exclude={'design_history', 'design_decision',
-                 'closure_history', 'closure_decision', 'seen_subjects'})
+                 'closure_history', 'closure_decision', 'seen_subjects',
+            'stage2_review_history', 'stage2_reviews',
+            'stage2_rework_completed', 'stage2_patch_receipts', 'stage2_blueprint_scope'})
     payload['v'] = 5
     legacy = approvals._ApprovalRecordV5Legacy.model_validate(payload)
     book = tmp_path / f'legacy_{SID}'

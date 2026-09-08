@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from contracts import invariants as inv
 
 
@@ -366,8 +368,6 @@ def test_the_approval_union_covers_its_value_domain_exactly():
     """
     import typing
 
-    import pytest
-
     from contracts.schema.stage0 import (
         ApprovedApproval, PendingApproval, Stage0Approval,
     )
@@ -402,3 +402,26 @@ def test_the_approval_union_covers_its_value_domain_exactly():
         ApprovedApproval(
             status='approved', origin='auto_zero_hit', at='t', by='x', reason='r')
 
+
+def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
+    from contracts.invariants import NODES, REVIEW_ACTIONS, commander_review_actions
+
+    assert len(NODES) == 17
+    assert all(spec.lifecycle is not None for spec in NODES.values())
+    for node, spec in NODES.items():
+        life = spec.lifecycle
+        assert life.input_workpack and life.unit_kind and life.recovery_entries
+        assert set(life.repair_owners) <= set(NODES)
+        assert set(life.review_actions) <= set(REVIEW_ACTIONS)
+        assert bool(life.review_actions) == (life.review_mode == 'commander')
+        for waiting_on, _scope in life.commander_bindings:
+            assert commander_review_actions(waiting_on) == life.review_actions
+            assert {'uncertain', 'stop'} <= set(life.review_actions)
+        assert life.executor_content_limit == (4 if spec.paid else 0)
+        assert life.commander_content_limit == (4 if life.review_mode == 'commander' else 0)
+    assert NODES['stage4.context'].lifecycle.review_mode == 'none'
+    assert NODES['stage1.partition'].lifecycle.review_mode == 'none'
+    assert NODES['stage7.assemble'].lifecycle.review_mode == 'none'
+    assert NODES['stage5.review'].lifecycle.generation_mode == 'deterministic'
+    assert NODES['stage4.design'].lifecycle.session_scope != NODES['stage4.plan'].lifecycle.session_scope
+    assert NODES['stage6.semantic'].lifecycle.unit_kind == 'judge'

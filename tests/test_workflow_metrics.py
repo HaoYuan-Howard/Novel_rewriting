@@ -630,9 +630,31 @@ def test_stage2_run_metrics_bind_formal_artifacts_and_measure_real_overlap(
         'chapters': 2, 'p50': 100.0, 'p95': 200.0, 'max': 200.0}
     assert stage2['commander']['calls'] == 2
     assert stage2['overlap'] == {
-        'state': 'ok', 'prereview_blueprint_seconds': 100.0}
+        'state': 'retired_observation', 'historical_state': 'ok',
+        'prereview_blueprint_seconds': 100.0}
+    assert stage2['role_lifecycle']['state'] == 'unver'
     assert stage2['wall_clock']['state'] == 'ok'
     assert stage2['wall_clock']['seconds'] == 230.0
+
+
+def test_stage2_role_lifecycle_counts_separate_commanders_and_acceptance_order():
+    units = [dict(node=node, role='commander', content_used=4,
+                  content_limit=4, content_remaining=0)
+             for node in ('stage2.global', 'stage2.blueprint')]
+    reviews = {
+        'stage2.global': {'state': 'accepted', 'current_decision': {
+            'decided_at': '2026-09-08T00:00:10+00:00'}},
+        'stage2.blueprint': {'state': 'accepted', 'current_decision': {
+            'decided_at': '2026-09-08T00:00:50+00:00'}},
+    }
+    t = W._iso_epoch('2026-09-08T00:00:00+00:00')
+    intervals = [('stage2.blueprint', t + 20, t + 40)]
+    assert W._stage2_role_lifecycle(units, reviews, intervals)['state'] == 'ok'
+    units[1]['content_used'] = 5
+    assert W._stage2_role_lifecycle(units, reviews, intervals)['state'] == 'fail'
+    units[1]['content_used'] = 4
+    assert W._stage2_role_lifecycle(units, reviews, [('stage2.blueprint', t, t+40)])['sequence'] == 'fail'
+    assert W._stage2_role_lifecycle(None, reviews, intervals)['state'] == 'unver'
 
 
 def test_a_leaking_filename_fails_closed_instead_of_being_printed(base: Path) -> None:

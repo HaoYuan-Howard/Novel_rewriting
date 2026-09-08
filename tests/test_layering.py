@@ -195,6 +195,7 @@ def _runtime_files() -> tuple[str, ...]:
 
 #: 允许裸读 JSON 的白名单。每一条都要写得出理由。
 _JSON_READ_ALLOWED = {
+    'novel/work_units.py': '只读 _service 工作单元账和已保存响应，不读小说产物。',
     'novel/orchestrator/reviewer_schema_recovery.py': (
         '只解析 service 公开协议日志的完整失败信封并拒绝重复键，不读取小说产物；'
         '没有响应恢复或人工决定，来源证明只供有界席位预留 CAS'),
@@ -307,6 +308,7 @@ def test_only_the_store_reads_json_directly():
 #: 原型没有写口守卫，于是落盘闸门的失败支用**裸 `json.dump`** 写 `.INVALID`
 #: ——那份稿从此没有来源账，而提升路又「沿用原稿里那一份」。盘上留下 1 份铁证。
 _WRITE_ALLOWED = {
+    'novel/work_units.py': '只写 _service 运行预算、内容寻址回答和恢复证明，不写小说产物。',
     'novel/orchestrator/reviewer_protocol_recovery.py': (
         '仅在 _service/runs/<sid>/reviewer_protocol_recoveries 写内容寻址的复验审计副本；'
         '调用方持原 owner-stopped lease，来源四证与当前 typed loader 通过后才写，'

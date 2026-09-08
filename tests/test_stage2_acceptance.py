@@ -50,8 +50,12 @@ def _report(index: int, *, seconds: float | None = None) -> dict:
                 'actual_model_unknown_rows': 0,
                 'actual_efforts': {'high': 2},
                 'actual_effort_unknown_rows': 0},
-            'overlap': {'state': 'ok',
-                        'prereview_blueprint_seconds': 400},
+            'role_lifecycle': {
+                'state': 'ok', 'sequence': 'ok',
+                'commanders': {
+                    node: {'content_used': 1, 'content_limit': 4}
+                    for node in ('stage2.global', 'stage2.blueprint')
+                }},
             'wall_clock': {'state': 'ok', 'seconds': wall},
         },
     }
@@ -144,20 +148,23 @@ def test_stale_workflow_report_schema_cannot_enter_the_five_run_claim() -> None:
     assert result['claim_ready'] is False
 
 
-def test_three_commander_calls_are_in_budget_but_four_are_not() -> None:
+def test_each_commander_gets_four_content_calls_and_network_attempts_do_not_count() -> None:
     reports = [_report(index) for index in range(5)]
-    reports[0]['stage2']['commander']['calls'] = 3
+    reports[0]['stage2']['commander']['calls'] = 12
+    budgets = reports[0]['stage2']['role_lifecycle']['commanders']
+    budgets['stage2.global']['content_used'] = 4
+    budgets['stage2.blueprint']['content_used'] = 4
 
     accepted = A.evaluate(
         reports, manual_quality=_manual(reports),
         baseline_seconds=3_044, minimum_speedup_percent=20)
 
     assert accepted['run_set_state'] == 'pass'
-    reports[0]['stage2']['commander']['calls'] = 4
+    budgets['stage2.blueprint']['content_used'] = 5
     refused = A.evaluate(
         reports, manual_quality=_manual(reports),
         baseline_seconds=3_044, minimum_speedup_percent=20)
     assert refused['run_set_state'] == 'pass'
     assert refused['stability']['state'] == 'fail'
-    assert 'stage2_commander_call_budget' in (
+    assert 'stage2.blueprint_content_budget_exceeded' in (
         refused['stability']['observations'][0]['failures'])

@@ -21,7 +21,7 @@ import re
 import tempfile
 import threading
 from collections.abc import Callable, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypeVar
@@ -1219,7 +1219,9 @@ def committed(ctx: Any) -> dict[str, Any] | None:
     return record if record is not None and record.get('state') == 'committed' else None
 
 
-def _refuse_foreign_commit_reservation(ctx: Any, artifact: str) -> None:
+def _refuse_foreign_commit_reservation(
+        ctx: Any, artifact: str, *, read_only: bool = False,
+) -> None:
     """prepared 跨进程释放锁后仍保留 seq 所有权，直到同 run 补完尾窗。
 
     只靠活锁不够：进程可能死在 prepare 与正式 write 之间。若另一个 run 随即
@@ -1227,14 +1229,16 @@ def _refuse_foreign_commit_reservation(ctx: Any, artifact: str) -> None:
     任一 foreign prepared 都会阻止新 journal；foreign committed 只在调用方仍选到
     同一 artifact 时证明 seq 选择已过期。
     """
-    current = (_run_root(ctx) / COMMIT_FILE).resolve()
+    current_root = (paths.stage6_semantic_run_path(ctx.novel_dir, ctx.run_id)
+                    if read_only else _run_root(ctx))
+    current = (current_root / COMMIT_FILE).resolve()
     for target in _history_files(ctx, f'*/semantic/{COMMIT_FILE}'):
         foreign_run_id = target.parent.parent.name
         if foreign_run_id == ctx.run_id or target.resolve() == current:
             continue
         try:
             check_run_id(foreign_run_id)
-            with process_append_lock(target):
+            with nullcontext() if read_only else process_append_lock(target):
                 record = _read_json(target)
         except (ValueError, OSError) as exc:
             raise ProvenanceRefused(
@@ -1300,6 +1304,15 @@ def _refuse_foreign_hook_prepared(ctx: Any) -> None:
             raise ProvenanceRefused(
                 f'Stage6 hook run={run_id} 仍持有 prepared 尾窗；'
                 '必须先用原 run 补完，semantic 不能冻结旧 hook 输入')
+
+
+def inspect_foreign_commit_reservations(ctx: Any, artifact: str) -> None:
+    """只读预约快照；不拿写锁、不迁移 legacy 文件，提交时仍须锁内重验。"""
+    if (not isinstance(artifact, str)
+            or _SEMANTIC_ARTIFACT_RE.fullmatch(artifact) is None):
+        raise ProvenanceRefused('Stage6 commit artifact 必须是 stage6/semantic_<正整数>.json')
+    _refuse_foreign_hook_prepared(ctx)
+    _refuse_foreign_commit_reservation(ctx, artifact, read_only=True)
 
 
 def refuse_foreign_commit_reservations(ctx: Any, artifact: str) -> None:

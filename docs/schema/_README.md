@@ -64,7 +64,7 @@ schema 路由与 stage 真实读写均引用该目录。路径模板由 `artifac
 2026-08-23 architecture 从七值收窄为 v1.1/v2/v3.1，升 v3；2026-08-24 再收为
 v2/v3.1，升 v4；2026-08-25 以原子事实契约替换旧 event 形状，升 v5；
 2026-08-26 删除摘要、展示名、重复父键与无消费来源账，升 v6。Stage4
-`blind_candidate.json` / `evidence_binding.json` 为 v2 / v3，`plan_chapters.json` / `plan_edit.json` 与
+`blind_candidate.json` / `evidence_binding.json` 为 v2 / v4，`plan_chapters.json` / `plan_edit.json` 与
 writer context 为 v4；identity artifact 已退役。旧 Stage4 产物不迁移，先跑 `stage4.design`、再跑
 `stage4.plan` 重建，Context 可免费重建。Stage5 canonical 章、Review 与
 trim 两类产物也在 2026-08-24 单臂折平时升到 v2：旧 `stage5/deep|shallow/` 只读保留，

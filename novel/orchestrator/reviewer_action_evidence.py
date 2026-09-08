@@ -28,7 +28,7 @@ from contracts.schema.orchestration import (
 from contracts.schema.stage5 import (
     ReviewerRewriteBatchRequest, ReviewerRewriteBatchTrustedInput,
 )
-from novel import agent_session_audit, paths, prov
+from novel import agent_session_audit, paths, prov, work_units
 from novel.appendlog import path_transaction_lock
 from novel.cli.exit_codes import CRASH
 from novel.errors import ArtifactUnreadable, NovelError
@@ -79,6 +79,125 @@ def record_owner_guard(
         yield False
 
 
+def _validated_work_unit(
+    base: str | os.PathLike[str], sid: str, record: ReviewerActionRecord,
+) -> work_units.WorkUnitBudget:
+    """保持 typed action 消费边界，工作单元损坏仍按审阅任务错误拒绝。"""
+    try:
+        return work_units.validate_reviewer_record(base, sid, record)
+    except (work_units.WorkUnitRefused, OSError, ValueError, NovelError) as exc:
+        raise reviewer_tasks.ReviewerTaskError(str(exc)) from exc
+
+
+def _work_unit_evidence_hashes(
+    base: str | os.PathLike[str], sid: str, record: ReviewerActionRecord,
+) -> tuple[str, str, str]:
+    """封存本次内容响应的闭集；后续连续审阅不改变已授权响应的证据。"""
+    budget = _validated_work_unit(base, sid, record)
+    ledger = budget._read()
+    turn = budget.turn(record.work_unit_turn_id)
+    if (
+        ledger.node != 'stage5.review' or ledger.scope != 'closure'
+        or turn.state not in {'delivered', 'adopted'}
+        or record.reviewer_seat_turn_id != turn.turn_id
+        or not turn.attempts
+    ):
+        raise reviewer_tasks.ReviewerTaskError(
+            'Stage5 durable disposition 缺当前工作单元的已交付内容证据')
+    attempt = turn.attempts[-1]
+    if attempt.outcome != 'ok' or not attempt.provider_session_id:
+        raise reviewer_tasks.ReviewerTaskError(
+            'Stage5 durable disposition 内容轮缺成功 provider attempt')
+    sessions = [session for session in agent_session_audit.fold(
+        agent_session_audit.read_events(base))
+        if session.session_run_id == record.reviewer_session_run_id]
+    if len(sessions) != 1:
+        raise reviewer_tasks.ReviewerTaskError('Stage5 工作单元缺唯一 logical session')
+    session = sessions[0]
+    attempts = [row for row in session.attempts if row.attempt_id == attempt.attempt_id]
+    turns = [row for row in session.turns if row.attempt_id == attempt.attempt_id]
+    if (session.start.role != 'commander' or session.start.node is not None
+            or len(attempts) != 1 or len(turns) != 1):
+        raise reviewer_tasks.ReviewerTaskError('Stage5 工作单元 session/attempt/turn 不唯一')
+    audit_attempt, audit_turn = attempts[0], turns[0]
+    if (
+        audit_attempt.error_kind is not None or audit_turn.error_kind is not None
+        or audit_attempt.parent_run_id != turn.run_id
+        or audit_turn.parent_run_id != turn.run_id
+        or audit_attempt.provider_session_id != attempt.provider_session_id
+        or audit_turn.provider_session_id != attempt.provider_session_id
+        or audit_attempt.prompt_sha256 != audit_turn.prompt_sha256
+        or audit_attempt.schema_sha256 != audit_turn.schema_sha256
+        or audit_attempt.profile != audit_turn.profile
+        or audit_attempt.requested_model != audit_turn.requested_model
+        or audit_attempt.requested_effort != audit_turn.requested_effort
+    ):
+        raise reviewer_tasks.ReviewerTaskError('Stage5 工作单元 attempt 与 provider turn 不闭合')
+    costs = [row for row in read_jsonl_rows(cost_ledger_path(base))
+             if row.get('run_id') == turn.run_id
+             and row.get('session_run_id') == record.reviewer_session_run_id
+             and row.get('sid') == sid and row.get('role') == 'commander'
+             and row.get('attempt_id') == attempt.attempt_id
+             and row.get('activity') == f'reviewer:{queue.WAITING_ON_STAGE5_CLOSURE}']
+    if len(costs) != 1:
+        raise reviewer_tasks.ReviewerTaskError('Stage5 工作单元成本证据不唯一')
+    cost = costs[0]
+    if (
+        cost.get('outcome') != 'ok' or cost.get('exit_code') != 0
+        or cost.get('error_kind') is not None
+        or cost.get('response_sha256') != record.provider_response_sha256
+        or cost.get('provider_session_id') != attempt.provider_session_id
+        or cost.get('code') != audit_turn.start_code_version
+        or cost.get('request_model') != audit_turn.requested_model
+        or cost.get('model') != audit_turn.actual_model
+        or cost.get('reasoning_effort') != audit_turn.requested_effort
+        or cost.get('actual_reasoning_effort') != audit_turn.actual_effort
+        or cost.get('protocol_version') != audit_turn.protocol_version
+        or cost.get('cli_version') != audit_turn.cli_version
+    ):
+        raise reviewer_tasks.ReviewerTaskError(
+            'Stage5 工作单元成本账未证明同 attempt/response exit 0')
+    # logical session 可继续，内容轮也会从 delivered 转 adopted；封存只绑定
+    # 原请求、响应、typed 决定与该次 attempt，不绑定整本可变预算账或 session ended。
+    return (
+        canonical_sha256({
+            'unit_id': budget.unit_id, 'task_id': ledger.task_id,
+            'turn_id': turn.turn_id, 'ordinal': turn.ordinal,
+            'run_id': turn.run_id, 'session_run_id': turn.session_run_id,
+            'request_sha256': turn.request_sha256,
+            'request_payload_sha256': turn.request_payload_sha256,
+            'response_sha256': turn.response_sha256,
+            'recovery_sha256': turn.recovery_sha256,
+            'attempts': [row.model_dump(mode='json') for row in turn.attempts],
+        }),
+        canonical_sha256({
+            'session_run_id': session.session_run_id,
+            'start': session.start.to_dict(),
+            'attempt': audit_attempt.to_dict(), 'turn': audit_turn.to_dict(),
+        }),
+        canonical_sha256(cost),
+    )
+
+
+def _record_evidence_path(
+    base: str | os.PathLike[str], sid: str, record: ReviewerActionRecord,
+) -> Path:
+    if record.work_unit_id is not None:
+        return _validated_work_unit(base, sid, record).path
+    return reviewer_seat_ledger.ledger_path(
+        base, sid, waiting_on=record.waiting_on,
+        business_sha256=record.business_sha256)
+
+
+def _record_owner_run_id(
+    base: str | os.PathLike[str], sid: str, record: ReviewerActionRecord,
+) -> str:
+    if record.work_unit_id is not None:
+        budget = _validated_work_unit(base, sid, record)
+        return budget.turn(record.work_unit_turn_id).run_id
+    return record.run_id
+
+
 def validate_stage5_action_record_ledger(
     base: str | os.PathLike[str], sid: str, *,
     record: ReviewerActionRecord,
@@ -109,7 +228,8 @@ def validate_stage5_action_record_ledger(
     ):
         raise reviewer_tasks.ReviewerTaskError(
             'Stage5 durable disposition record 缺完整席位恢复身份')
-    if recorded_response_sha256(record) != record.provider_response_sha256:
+    if (record.work_unit_id is None
+            and recorded_response_sha256(record) != record.provider_response_sha256):
         raise reviewer_tasks.ReviewerTaskError(
             'Stage5 durable disposition record 与 provider 原回答 digest 不一致')
     if read_only and current_parent_run_id is not None:
@@ -118,7 +238,7 @@ def validate_stage5_action_record_ledger(
     if read_only and _owner_guard_same_parent is not None:
         raise reviewer_tasks.ReviewerTaskError(
             'sealed reviewer authority 只读复核不得借用 owner guard')
-    expected_same_parent = record.run_id == current_parent_run_id
+    expected_same_parent = _record_owner_run_id(base, sid, record) == current_parent_run_id
     if (
         _owner_guard_same_parent is not None
         and (
@@ -130,6 +250,19 @@ def validate_stage5_action_record_ledger(
             'Stage5 durable disposition 外层 owner guard 身份不闭合')
     same_parent = read_only or expected_same_parent
     try:
+        if record.work_unit_id is not None:
+            budget = _validated_work_unit(base, sid, record)
+            source = budget.turn(record.work_unit_turn_id)
+            # 恢复 record 的 transport parent 可能已改变；许可必须以实际
+            # 内容调用的 owner 为准，不能用新包装冒充旧调用已结束。
+            source_guard = (nullcontext(True) if read_only
+                            or _owner_guard_same_parent is not None
+                            else record_owner_guard(
+                                base, record_parent_run_id=source.run_id,
+                                current_parent_run_id=current_parent_run_id))
+            with source_guard:
+                _work_unit_evidence_hashes(base, sid, record)
+            return
         if read_only:
             owner_guard = nullcontext(True)
         elif _owner_guard_same_parent is not None:
@@ -629,6 +762,8 @@ def _closed_evidence_hashes(
     """只读复核 sealed 闭集并返回 seat/session/cost 三份稳定摘要。"""
     validate_stage5_action_record_ledger(
         base, sid, record=record, read_only=True)
+    if record.work_unit_id is not None:
+        return _work_unit_evidence_hashes(base, sid, record)
     ledger = reviewer_seat_ledger.read(
         base, sid, waiting_on=record.waiting_on,
         business_sha256=record.business_sha256)
@@ -796,9 +931,7 @@ def reviewer_rewrite_authority_sealed(
         raise reviewer_tasks.ReviewerTaskError(
             'reviewer rewrite active/archive authority 字节冲突')
     receipt = _read_authority_receipt(receipt_path)
-    seat_path = reviewer_seat_ledger.ledger_path(
-        base, sid, waiting_on=record.waiting_on,
-        business_sha256=record.business_sha256)
+    seat_path = _record_evidence_path(base, sid, record)
     with path_transaction_lock(seat_path):
         evidence = _closed_evidence_hashes(base, sid, record)
         # seal 写完后只准出现 exact active 尾巴；同锁再读一次 seat 与永久字节，
@@ -885,7 +1018,7 @@ def seal_reviewer_rewrite_authority(
         receipt = _read_authority_receipt(receipt_path)
         if active is not None:
             with record_owner_guard(
-                    base, record_parent_run_id=record.run_id,
+                    base, record_parent_run_id=_record_owner_run_id(base, sid, record),
                     current_parent_run_id=current_parent_run_id):
                 current_active = _active_authority(base, sid, digest)
                 if current_active is not None:
@@ -910,7 +1043,7 @@ def seal_reviewer_rewrite_authority(
     # 都必须用 current contract，且直到永久 commit、active exact 清理及历史复验
     # 全部结束才释放 lease。
     with record_owner_guard(
-            base, record_parent_run_id=initial_record.run_id,
+            base, record_parent_run_id=_record_owner_run_id(base, sid, initial_record),
             current_parent_run_id=current_parent_run_id) as same_parent:
         archive_exists = archive_path.exists() or archive_path.is_symlink()
         receipt_exists = receipt_path.exists() or receipt_path.is_symlink()
@@ -948,9 +1081,7 @@ def seal_reviewer_rewrite_authority(
             base, sid, record=record,
             current_parent_run_id=current_parent_run_id,
             _owner_guard_same_parent=same_parent)
-        seat_path = reviewer_seat_ledger.ledger_path(
-            base, sid, waiting_on=record.waiting_on,
-            business_sha256=record.business_sha256)
+        seat_path = _record_evidence_path(base, sid, record)
         with path_transaction_lock(receipt_path):
             with path_transaction_lock(seat_path):
                 # 永久字节只能来自锁内重新读取的 exact active；不能沿用取得

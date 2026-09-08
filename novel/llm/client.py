@@ -72,6 +72,8 @@ import hashlib
 import json
 import threading
 import time
+from dataclasses import asdict, replace
+from copy import deepcopy
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import (
@@ -94,11 +96,13 @@ from novel.llm import response_repair
 from novel.llm.json_text import normalize_json_text as _strip_fences
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatRequest, ChatResponse, Transport, TransportError
+from novel.llm.retry import RESOURCE_INTERRUPTED, TransportRetryPolicy
 from novel.model_slots import model_slot_from_environment
 from novel.observability import (
     AttemptHeartbeat, DEFAULT_HEARTBEAT_SECONDS, RequestProgress,
 )
 from novel.run import RunContext
+from novel.work_units import budget_for, executor_scope, WorkUnitBudget, WorkUnitRefused, ContentReservation
 
 #: 默认模型行为，只有一档。2026-08-24 用户裁决：**取消自动 effort / thinking 降级**。
 #: Flash 的实跑问题主要是能力与稳定性不足；把 `high` 降成 `low` 会让失败变成一份
@@ -223,7 +227,7 @@ MAX_SAMPLES_PER_RUNG: Final = 2
 #: 它便宜（一个常量 + 一个分支）而漏了很贵，所以先摆上。
 #: ⚠ **不新增账本字段**：账本本来就有 `finish_reason` 列，`grep` 得出来；
 #: 而 `will_retry` / `backoff_ms` 两列的语义与网络重试逐字相同。
-RESOURCE_INTERRUPTED: Final = 'insufficient_system_resource'
+# RESOURCE_INTERRUPTED 与退避决策由 retry.py 唯一登记。
 
 
 def _worth_resampling(resp: ChatResponse) -> bool:
@@ -487,6 +491,10 @@ class LlmFailed(TerminalState):
     """
 
 
+class _ContentRecoveryNeedsWire(Exception):
+    """零模型恢复探查已经走完确定性步骤，剩余工作需要新内容请求。"""
+
+
 def _attempt_id() -> str:
     """一次响应获取事件（一次真上线 attempt 或一次缓存命中）的联结键。
 
@@ -638,6 +646,10 @@ class LlmClient:
         #: 默认模型行为。思考开关选择唯一档位；显式 `rungs` 的优先级不受它影响。
         self._rungs = (NOTHINK_RUNGS if thinking_mode == 'off'
                        else rungs_from_effort(effort))
+        from contracts.invariants import WORK_UNIT_MAX_DELIVERY_ATTEMPTS
+        if (not isinstance(max_retries, int) or isinstance(max_retries, bool)
+                or not 0 <= max_retries < WORK_UNIT_MAX_DELIVERY_ATTEMPTS):
+            raise ValueError('max_retries 必须在 0..3；每内容请求网络尝试最多 4 次')
         self.max_retries = max_retries
         self.backoff_base = backoff_base
         self._sleep = sleep
@@ -656,7 +668,7 @@ class LlmClient:
         self.concurrency = concurrency
         self._gate = threading.Semaphore(self.concurrency)
         #: 首发独占闸。⚠ **与 `_gate` 是两件事**：`_gate` 守的是**并发度**（也就是钱），
-        #: 这一闸守的是**顺序**。见 `_warmup_gate`。默认开；关掉只该是测试的事。
+        #: 首发顺序闸默认开；Stage6 双判官按登记并发，其余例外只供测试。
         self.warmup = warmup
         self._warmup_lock = threading.Lock()
         self._warmed = False
@@ -670,6 +682,125 @@ class LlmClient:
         #: producer 把验证后的 payload 原子写进按书隔离的
         #: `_service/runs/<sid>/stage2/`；不进普通 cache 或正式产物。
         self._accepted_checkpoint: dict[str, dict[str, Any]] = {}
+        self._accepted_checkpoints_by_attempt: dict[str, dict[str, Any]] = {}
+        self._conversation_requests: dict[str, ChatRequest] = {}
+        self._work_requests: dict[str, tuple[WorkUnitBudget, ContentReservation]] = {}
+        self._producer_cache_receipts: dict[str, dict[str, Any]] = {}
+        self._content_local = threading.local()
+
+    @property
+    def _purpose_progress(self) -> dict[str, RequestProgress | None]:
+        """同 purpose 的跨章并发必须保留各自的请求工作单元。"""
+        progress = getattr(self._content_local, 'purpose_progress', None)
+        if progress is None:
+            progress = {}
+            self._content_local.purpose_progress = progress
+        return progress
+
+    def _chat_request(self, *, purpose: str, **kwargs: Any) -> ChatRequest:
+        """所有预检、缓存、wire 和采纳身份共用完整多轮消息。"""
+        raw = ChatRequest(**kwargs)
+        seed = request_fingerprint(raw)
+        scope = executor_scope(self.ctx.node, purpose, self._purpose_progress.get(purpose))
+        conversation_key = scope + ':' + seed
+        with self._adopt_lock:
+            prior = self._conversation_requests.get(conversation_key)
+        if prior is not None:
+            return prior
+        budget = budget_for(self.ctx, scope=scope)
+        original = budget.response_for_logical_request(seed, include_completed=True)
+        if original is not None:
+            # 重验旧响应时按原多轮请求复算，不能把后来的轮次加进它的输入。
+            saved = budget.request_payload(original[0].turn_id)
+            messages = saved.get('request', {}).get('messages', [])
+            if not isinstance(messages, list) or len(messages) < 2:
+                raise WorkUnitRefused('历史请求缺完整多轮消息')
+            history = tuple((row['role'], row['content']) for row in messages[1:-1])
+            request = ChatRequest(**kwargs, history=history)
+            if request_fingerprint(request) != budget.turn(original[0].turn_id).request_sha256:
+                raise WorkUnitRefused('历史完整请求与当前逻辑请求不一致')
+        else:
+            history = budget.conversation_history(system=raw.system, logical_request_sha256=seed)
+            request = ChatRequest(**kwargs, history=history)
+        with self._adopt_lock:
+            self._conversation_requests[conversation_key] = request
+        return request
+
+    def mark_checkpointed(self, attempt_id: str) -> None:
+        """producer 已验证并落下 checkpoint 后关闭恢复中的候选，缓存无需记内容账。"""
+        bound = self._work_requests.get(attempt_id)
+        if bound is not None:
+            budget, reservation = bound
+            budget.mark_adopted(reservation.turn_id)
+
+    def record_candidate_feedback(self, purpose: str, feedback: dict[str, Any]) -> None:
+        """生产者明确要求同单元继续修订时，保留前候选及拒因，不返还额度。"""
+        attempt_id = self.accepted_attempt(purpose)
+        bound = self._work_requests.get(attempt_id)
+        if bound is not None:
+            budget, reservation = bound
+            budget.save_feedback(reservation.turn_id, feedback)
+
+    @contextmanager
+    def replay_content_progress(
+            self, *, scope: str = 'book', verified_turn_ids: frozenset[str] = frozenset(),
+    ) -> Iterator[None]:
+        """重放持久业务序列；已采纳轮仅接受 producer 复核过的提交尾窗证明。"""
+        budget = budget_for(self.ctx, scope=scope)
+        for turn_id in verified_turn_ids:
+            budget.turn(turn_id)
+            budget.response_payload(turn_id)
+            if budget.producer_recovery(turn_id) is None:
+                raise ProvenanceRefused('已采纳响应重放缺 producer 提交证明')
+        previous = getattr(self._content_local, 'replay_turn_ids', frozenset())
+        previous_required = getattr(self._content_local, 'required_replay_turn_ids', frozenset())
+        self._content_local.replay_turn_ids = budget.unfinished_content_ids() | verified_turn_ids
+        self._content_local.required_replay_turn_ids = verified_turn_ids
+        try:
+            yield
+        finally:
+            self._content_local.replay_turn_ids = previous
+            self._content_local.required_replay_turn_ids = previous_required
+
+    def _restore_work_response(self, req: ChatRequest, *, purpose: str,
+                               progress: RequestProgress | None
+                               ) -> tuple[ChatResponse, str] | None:
+        budget = budget_for(self.ctx, scope=executor_scope(self.ctx.node, purpose, progress))
+        raw = replace(req, history=())
+        allowed_completed = getattr(self._content_local, 'replay_turn_ids', frozenset())
+        pending = budget.response_for_logical_request(
+            request_fingerprint(raw), include_completed=bool(allowed_completed))
+        if pending is None:
+            return None
+        reservation, saved = pending
+        prior_attempt = str(saved['attempt_id'])
+        if prior_attempt in self._work_requests:
+            return None
+        if budget.turn(reservation.turn_id).state != 'delivered' and reservation.turn_id not in allowed_completed:
+            return None
+        original = budget.request_payload(reservation.turn_id)
+        messages = original.get('request', {}).get('messages', [])
+        if not isinstance(messages, list) or len(messages) < 2:
+            raise WorkUnitRefused('历史响应缺完整原多轮消息')
+        history = tuple((str(row['role']), str(row['content'])) for row in messages[1:-1])
+        original_request = replace(req, history=history)
+        if request_fingerprint(original_request) != budget.turn(reservation.turn_id).request_sha256:
+            raise WorkUnitRefused('原多轮工作包与内容请求指纹不一致')
+        scope = executor_scope(self.ctx.node, purpose, progress)
+        with self._adopt_lock:
+            self._conversation_requests[scope + ':' + request_fingerprint(raw)] = original_request
+        receipt = saved.get('prepared_receipt')
+        if receipt is not None:
+            self.ctx.ledger.reconcile_work_unit_attempt(budget, reservation.turn_id, receipt)
+            budget.record_attempt(reservation.turn_id, attempt_id=prior_attempt, outcome='ok',
+                                  request_fingerprint=request_fingerprint(original_request))
+        self.ctx.ledger.claim_work_unit_attempts(budget, reservation.turn_id, purpose=purpose)
+        response = ChatResponse(**saved['response'])
+        self._work_requests[prior_attempt] = (budget, reservation)
+        self.ctx.ledger.bind_work_unit_commit(prior_attempt, budget, reservation.turn_id)
+        self.ctx.observe('work_unit_response_restored', purpose=purpose,
+                         unit_id=budget.unit_id, attempt_id=prior_attempt)
+        return response, prior_attempt
 
     # ── 两个入口 ──────────────────────────────────────────────────────────
 
@@ -702,6 +833,7 @@ class LlmClient:
         `rungs` 只给确有不同成本语义的辅助调用显式选择**一个**配置；空或多档
         都是调用错误，不能伪装成「模型失败」或借参数恢复自动降级。
         """
+        self._purpose_progress[purpose] = progress
         active_rungs = self._active_rungs_for(rungs, purpose=purpose)
         active_models = self._models
         self._preflight(system, user, models=active_models, rungs=active_rungs,
@@ -861,6 +993,7 @@ class LlmClient:
         恢复采样 + Pro 兜底。Stage2 传入 ``stage2-blueprint-v1`` 后按失败类型改走
         人工 batch / Flash targeted / Pro constraint rebuild，但仍复用同一组三道闸。
         """
+        self._purpose_progress[purpose] = progress
         active_rungs = self._active_rungs_for(rungs, purpose=purpose)
         if recovery_policy not in (None, 'stage2-blueprint-v1'):
             raise ValueError(f'{purpose}: 未登记的内容恢复策略 {recovery_policy!r}')
@@ -884,7 +1017,7 @@ class LlmClient:
         original_repair_request_fingerprints: tuple[str, ...] = ()
         if getattr(self.ctx, 'repair_rejected_responses', False):
             repair_requests = tuple(
-                ChatRequest(
+                self._chat_request(purpose=purpose,
                     model=model, system=system, user=user,
                     reasoning_effort=effort, thinking=thinking,
                     json_mode=JSON_OBJECT_MODE, max_tokens=max_tokens)
@@ -960,7 +1093,7 @@ class LlmClient:
         def request_shape(
                 *, model: str, effort: str, thinking: bool, request_user: str,
         ) -> ChatRequest:
-            return ChatRequest(
+            return self._chat_request(purpose=purpose,
                 model=model, system=system, user=request_user,
                 reasoning_effort=effort, thinking=thinking,
                 json_mode=JSON_OBJECT_MODE, max_tokens=max_tokens)
@@ -2107,6 +2240,9 @@ class LlmClient:
             request_mode=request_mode,
             recovery_from_attempts=recovery_from_attempts,
             chapter=progress.chapter if progress else None)
+        bound = self._work_requests.get(attempt_id)
+        if bound is not None and not accepted:
+            bound[0].mark_rejected(bound[1].turn_id, reason_code=gate or 'content_rejected')
         if accepted:
             with self._adopt_lock:
                 self._accepted[purpose] = attempt_id
@@ -2194,6 +2330,180 @@ class LlmClient:
         with self._adopt_lock:
             self._accepted[purpose] = attempt_id
             self._accepted_checkpoint[purpose] = payload
+            self._accepted_checkpoints_by_attempt[attempt_id] = deepcopy(payload)
+        bound = self._work_requests.get(attempt_id)
+        if bound is not None:
+            bound[0].save_recovery(bound[1].turn_id, payload)
+
+    def save_producer_recovery(self, attempt_id: str, payload: dict[str, Any]) -> bool:
+        """只将真实模型轮次绑定 producer 提交目标；缓存不制造内容消耗。"""
+        bound = self._work_requests.get(attempt_id)
+        if bound is None:
+            return False
+        bound[0].save_producer_recovery(bound[1].turn_id, payload)
+        return True
+
+    def producer_response_receipt(self, purpose: str, *, attempt_id: str | None = None) -> dict[str, Any]:
+        """封存完成批次的原响应；缓存快照保留原身份，不依赖缓存继续存在。"""
+        if attempt_id is None:
+            checkpoint = self.accepted_checkpoint(purpose)
+            attempt_id = str(checkpoint['attempt_id'])
+        else:
+            if attempt_id not in self.ctx.ledger.attempt_ids_for_purpose(purpose):
+                raise ProvenanceRefused(f'{purpose}: 指定贡献不属于原请求的成本来源')
+            bound = self._work_requests.get(attempt_id)
+            if bound is not None:
+                checkpoint = bound[0].recovery_proof(bound[1].turn_id)
+            else:
+                with self._adopt_lock:
+                    saved = self._accepted_checkpoints_by_attempt.get(attempt_id)
+                    if saved is None:
+                        raise ProvenanceRefused(f'{purpose}: 指定缓存贡献没有原接受快照')
+                    checkpoint = deepcopy(saved)
+            if checkpoint['attempt_id'] != attempt_id:
+                raise ProvenanceRefused(f'{purpose}: 指定贡献与接受快照不一致')
+        bound = self._work_requests.get(attempt_id)
+        if bound is not None:
+            budget, reservation = bound
+            turn = budget.turn(reservation.turn_id)
+            return {
+                'origin': 'wire', 'purpose': purpose, 'checkpoint': checkpoint,
+                'unit_id': budget.unit_id, 'turn_id': turn.turn_id,
+                'response_sha256': turn.response_sha256,
+                'request_sha256': turn.request_sha256,
+            }
+        raw = self._producer_cache_receipts.get(attempt_id)
+        if raw is None:
+            raise ProvenanceRefused(f'{purpose}: 完成批次缺原 wire/cache 响应证明')
+        return {'origin': 'cache', 'purpose': purpose, 'checkpoint': checkpoint,
+                **raw}
+
+    def restore_json_response(
+            self, system: str, user: str, *, model_cls: type[M], purpose: str,
+            max_tokens: int = DEFAULT_MAX_TOKENS,
+            validator: Callable[[M, ChatResponse], str | None] | None = None,
+    ) -> M | None:
+        """并行消费者先恢复每个已保存回答；此口绝不发送新请求或新增缓存身份。"""
+        budget = budget_for(self.ctx, scope=executor_scope(self.ctx.node, purpose, None))
+        latest = budget.latest_turn()
+        if latest is not None and latest.state in ('reserved', 'unknown') \
+                and latest.response_sha256 is None:
+            raise WorkUnitRefused('原请求没有完整回答，须先明确原尝试终态')
+        if budget.latest_pending_response() is None:
+            return None
+        previous = getattr(self._content_local, 'recover_without_wire', False)
+        self._content_local.recover_without_wire = True
+        try:
+            return self.ask_json(system, user, model_cls=model_cls, purpose=purpose,
+                                 max_tokens=max_tokens, validator=validator)
+        except _ContentRecoveryNeedsWire:
+            # 解析错误等真实内容反馈已按原通路保存；统一预验结束后才允许 worker
+            # 使用同一角色的剩余预算纠正，不能在另一角色旧证据尚未核验时发请求。
+            return None
+        finally:
+            self._content_local.recover_without_wire = previous
+
+    def producer_cost_receipts(self, purposes: Iterable[str]) -> list[dict[str, Any]]:
+        """封存完成组真实成本行，包含缓存与未被最终采用的已付费尝试。"""
+        from novel.llm.ledger import read_jsonl_rows
+
+        selected = set(purposes)
+        wanted = {attempt for purpose in selected
+                  for attempt in self.ctx.ledger.attempt_ids_for_purpose(purpose)}
+        if self.ctx.ledger.path is None or not wanted:
+            raise ProvenanceRefused('完成组缺持久成本来源')
+        rows = [row for row in read_jsonl_rows(self.ctx.ledger.path)
+                if row.get('attempt_id') in wanted]
+        if len(rows) != len(wanted) or {row.get('attempt_id') for row in rows} != wanted:
+            raise ProvenanceRefused('完成组成本来源缺失或重复')
+        for row in rows:
+            identity = self.ctx.ledger.request_identity_for_attempt(str(row['attempt_id']))
+            if (row.get('sid') != self.ctx.sid or row.get('node') != self.ctx.node
+                    or row.get('purpose') not in selected
+                    or any(row.get(key) != value for key, value in identity.items())):
+                raise ProvenanceRefused('完成组成本行与当前接受身份不一致')
+        return rows
+
+    @staticmethod
+    def verify_producer_responses(
+            ctx: RunContext, receipts: Iterable[Mapping[str, Any]], costs: list[dict[str, Any]],
+    ) -> dict[str, tuple[WorkUnitBudget, str]]:
+        """验证已保存组的原 cache/wire 证据，不加载缓存、不发请求、不重铸费用。"""
+        from novel.llm.ledger import CostLedger, ledger_path, read_jsonl_rows
+        from novel.run_identity import check_run_id
+
+        # queue 的 readonly_ctx 故意没有写账路径；验证仍只认 base 的权威账。
+        cost_path = ledger_path(ctx.novel_dir.parent)
+        wanted = {str(row['attempt_id']): row for row in costs}
+        actual = [row for row in read_jsonl_rows(cost_path)
+                  if row.get('attempt_id') in wanted]
+        if (len(wanted) != len(costs) or len(actual) != len(wanted)
+                or any(wanted[str(row['attempt_id'])] != row for row in actual)):
+            raise ProvenanceRefused('完成组原成本行缺失、重复或漂移')
+        bindings: dict[str, tuple[WorkUnitBudget, str]] = {}
+        seen: set[str] = set()
+        ledgers: dict[str, CostLedger] = {}
+        for receipt in receipts:
+            checkpoint = receipt['checkpoint']
+            attempt_id = str(checkpoint['attempt_id'])
+            purpose = str(receipt['purpose'])
+            row = wanted.get(attempt_id)
+            if (attempt_id in seen or row is None
+                    or row.get('sid') != ctx.sid or row.get('node') != ctx.node
+                    or row.get('purpose') != purpose):
+                raise ProvenanceRefused('完成组接受来源重复或不属于原节点请求')
+            seen.add(attempt_id)
+            if receipt['origin'] == 'wire':
+                budget = budget_for(ctx, scope=executor_scope(ctx.node, purpose, None))
+                turn_id = str(receipt['turn_id'])
+                turn = budget.turn(turn_id)
+                raw = budget.response_payload(turn_id)
+                request = budget.request_payload(turn_id)['request']
+                if (receipt['unit_id'] != budget.unit_id
+                        or turn.response_sha256 != receipt['response_sha256']
+                        or turn.request_sha256 != receipt['request_sha256']
+                        or raw['attempt_id'] != attempt_id or row.get('cached') is not False
+                        or checkpoint != budget.recovery_proof(turn_id)):
+                    raise ProvenanceRefused('完成组原 wire 回答或接受证明漂移')
+                response = ChatResponse(**raw['response'])
+                bindings[attempt_id] = (budget, turn_id)
+            elif receipt['origin'] == 'cache' and row.get('cached') is True:
+                request = receipt['request']
+                response = ChatResponse(**receipt['response'])
+            else:
+                raise ProvenanceRefused('完成组 cache/wire 来源类别漂移')
+            messages = request['messages']
+            req = ChatRequest(
+                **{key: value for key, value in request.items() if key != 'messages'},
+                system=messages[0]['content'], user=messages[-1]['content'],
+                history=tuple((item['role'], item['content']) for item in messages[1:-1]))
+            channel = checkpoint['accepted_channel']
+            direct = channel in ('content', 'reasoning')
+            repaired = receipt['origin'] == 'wire' and channel in ('agent', 'deterministic')
+            accepted = response.content if channel == 'content' else response.reasoning
+            if (not (direct or repaired)
+                    or (direct and checkpoint['accepted_text'] != (accepted or ''))
+                    or _response_sha256(response) != row.get('response_sha256')
+                    or request_fingerprint(req) != row.get('request_fingerprint')
+                    or checkpoint['request_fingerprint'] != row.get('request_fingerprint')):
+                raise ProvenanceRefused('完成组原请求、回答与成本指纹不闭合')
+            try:
+                run_id = check_run_id(row['run_id'])
+                parent = check_run_id(row.get('parent_run_id', run_id))
+            except ValueError as exc:
+                raise ProvenanceRefused('完成组原成本 run/parent 身份非法') from exc
+            ledger = ledgers.get(run_id)
+            if ledger is None:
+                ledger = CostLedger(path=cost_path, run_id=run_id, parent_run_id=parent)
+                ledgers[run_id] = ledger
+            elif ledger.parent_run_id != parent:
+                raise ProvenanceRefused('完成组原成本 parent 不唯一')
+            ledger.claim_prior_attempts([attempt_id], sid=ctx.sid, node=ctx.node,
+                                        purpose=purpose,
+                                        request_fingerprints=[str(row['request_fingerprint'])])
+            if ledger.request_identity_for_attempt(attempt_id) not in checkpoint['attempt_links']:
+                raise ProvenanceRefused('完成组接受证明与原成本身份不一致')
+        return bindings
 
     def accepted_checkpoint(self, purpose: str) -> dict[str, Any]:
         """返回刚通过完整响应闸的原文/attempt 联结；缺一格就不允许伪造检查点。"""
@@ -2315,7 +2625,7 @@ class LlmClient:
                     f'{purpose}: checkpoint 恢复 prompt 无法由当前失败证据唯一重建')
             request_user = matches[0].user
 
-        expected_request = ChatRequest(
+        expected_request = self._chat_request(purpose=purpose,
             model=request_model, system=system, user=request_user,
             reasoning_effort=str(effort), thinking=bool(thinking),
             json_mode=JSON_OBJECT_MODE, max_tokens=max_tokens)
@@ -2398,7 +2708,7 @@ class LlmClient:
         """把主模型与兜底模型一次验完；返回前没有缓存、账本、网络或文件副作用。"""
         self.ctx.require_observed_roots_current()
         requests = tuple(
-            ChatRequest(
+            self._chat_request(purpose=purpose,
                 model=model,
                 system=system,
                 user=user,
@@ -2419,13 +2729,22 @@ class LlmClient:
                      cache_policy: CachePolicy | None = None,
                      ) -> tuple[ChatResponse, str, str] | None:
         """只读一个档位的缓存；miss 绝不顺手上线。"""
+        if (getattr(self._content_local, 'required_replay_turn_ids', frozenset())
+                or getattr(self._content_local, 'recover_without_wire', False)):
+            # producer 已证明本次必须采用某个原响应；缓存不能改写该响应的身份。
+            return None
         policy = cache_policy or self.ctx.cache
         if not policy.read:
             return None
-        req = ChatRequest(model=model, system=system, user=user,
+        req = self._chat_request(purpose=purpose, model=model, system=system, user=user,
                           reasoning_effort=effort, thinking=thinking,
                           json_mode=json_mode, max_tokens=max_tokens)
         key = cache_key(req)
+        budget = budget_for(self.ctx, scope=executor_scope(self.ctx.node, purpose, progress))
+        pending = budget.latest_pending_response()
+        if pending is not None and str(pending[1].get('attempt_id')) not in self._work_requests:
+            # 原回答优先走真实恢复链；不以一条 cache attempt 覆盖原调用的提交身份。
+            return None
         hit = self.cache.get(key)
         if hit is None:
             return None
@@ -2453,11 +2772,33 @@ class LlmClient:
         `use_cache=False` 调这里。保留 `use_cache=True` 仅维持本私有帮助函数的完整语义，
         不能拿它恢复“某档 miss 就立刻上线”的旧顺序。
         """
-        req = ChatRequest(model=model, system=system, user=user,
+        req = self._chat_request(purpose=purpose, model=model, system=system, user=user,
                           reasoning_effort=effort, thinking=thinking,
                           json_mode=json_mode, max_tokens=max_tokens)
         key = cache_key(req)
         policy = cache_policy or self.ctx.cache
+
+        restored = self._restore_work_response(req, purpose=purpose, progress=progress)
+        if restored is not None:
+            response, attempt_id = restored
+            required = getattr(self._content_local, 'required_replay_turn_ids', frozenset())
+            if required and self._work_requests[attempt_id][1].turn_id not in required:
+                raise ProvenanceRefused('producer 恢复命中了未经提交证明授权的原响应')
+            frozen = self._chat_request(purpose=purpose, model=model, system=system, user=user,
+                                        reasoning_effort=effort, thinking=thinking,
+                                        json_mode=json_mode, max_tokens=max_tokens)
+            return response, cache_key(frozen), False, attempt_id
+        if getattr(self._content_local, 'required_replay_turn_ids', frozenset()):
+            raise ProvenanceRefused('producer 恢复没有匹配当前请求配置的原响应，禁止新增模型调用')
+        if getattr(self._content_local, 'recover_without_wire', False):
+            raise _ContentRecoveryNeedsWire()
+        budget = budget_for(self.ctx, scope=executor_scope(self.ctx.node, purpose, progress))
+        fingerprint = request_fingerprint(req)
+        previous_response = budget.latest_pending_response()
+        if previous_response is not None and str(previous_response[1].get('attempt_id')) in self._work_requests:
+            # 同一存活 producer 已明确进入下一次内容采样；原候选继续留证，
+            # 真正重启时则必须先通过上面的原请求恢复。
+            budget.mark_rejected(previous_response[0].turn_id, reason_code='continued_content_work')
 
         if use_cache and policy.read:
             hit = self.cache.get(key)
@@ -2469,9 +2810,28 @@ class LlmClient:
                     cache_policy=policy)
                 return hit, key, True, attempt_id
 
-        # ⚠ 记账在 `_send_with_retry` 里逐次发生（那里才知道自己发了几次）。
-        resp, attempt_id = self._send_with_retry(
-            req, purpose=purpose, progress=progress, cache_policy=policy)
+        seed = request_fingerprint(ChatRequest(
+            model=model, system=system, user=user, reasoning_effort=effort,
+            thinking=thinking, json_mode=json_mode, max_tokens=max_tokens))
+        reservation = budget.reserve(
+            fingerprint, run_id=self.ctx.run_id,
+            request_payload={'system': system, 'user': user,
+                             'logical_request_sha256': seed, 'request': req.cache_payload()})
+        self._content_local.current = (budget, reservation)
+        try:
+            resp, attempt_id = self._send_with_retry(
+                req, purpose=purpose, progress=progress, cache_policy=policy)
+            self._work_requests[attempt_id] = (budget, reservation)
+            self.ctx.ledger.bind_work_unit_commit(attempt_id, budget, reservation.turn_id)
+            budget.finish(reservation.turn_id, outcome='delivered')
+        except TransportError:
+            budget.finish(reservation.turn_id, outcome='failed', reason_code='transport_failed')
+            raise
+        except BaseException:
+            budget.finish(reservation.turn_id, outcome='unknown', reason_code='content_interrupted')
+            raise
+        finally:
+            self._content_local.current = None
         return resp, key, False, attempt_id
 
     def _keep(self, key: str, resp: ChatResponse, *,
@@ -2524,7 +2884,9 @@ class LlmClient:
         ⚠ **不给它 CLI flag**：用户已裁决默认接受这一次串行的墙钟，而一个恒真的 flag 是误导
         （同 `cache.py::CachePolicy.disabled` 那条）。构造参数留着只为让测试关掉它。
         """
-        if not self.warmup:
+        # 双盲 A/B 的现役契约要求同时发起独立请求；不能为前缀缓存把 B 挡在 A
+        # 完成之后。其余节点继续沿用原首发独占策略，不增加额外 warmup wire。
+        if not self.warmup or self.ctx.node == 'stage6.semantic':
             yield
             return
         with self._warmup_lock:
@@ -2548,10 +2910,16 @@ class LlmClient:
         返回 `(响应, 成功那次 attempt 的 attempt_id)`——每次上线各有自己的 id，
         失败行也带（账本行与审计行靠它相联）。"""
         last: TransportError | None = None
-        max_attempts = self.max_retries + 1
+        policy = TransportRetryPolicy(self.max_retries, self.backoff_base)
+        max_attempts = policy.max_attempts
         for attempt_index in range(max_attempts):
             attempt = attempt_index + 1
             attempt_id = _attempt_id()
+            content = getattr(self._content_local, 'current', None)
+            if content is not None:
+                content[0].record_attempt(
+                    content[1].turn_id, attempt_id=attempt_id, outcome='started',
+                    request_fingerprint=request_fingerprint(req))
             backoff_seconds: float | None = None
             with self._gate:                       # 并发闸：守的是钱不是速率
                 heartbeat = AttemptHeartbeat(
@@ -2566,11 +2934,12 @@ class LlmClient:
                     with model_slot_from_environment():
                         resp = self.transport.send(req)
                 except TransportError as e:
+                    if content is not None:
+                        content[0].record_attempt(content[1].turn_id, attempt_id=attempt_id, outcome='error')
                     last = e
                     latency_ms = max(0, round((self._clock() - started) * 1000))
-                    will_retry = e.retryable and attempt < max_attempts
-                    if will_retry:
-                        backoff_seconds = self.backoff_base * (2 ** attempt_index)
+                    backoff_seconds = policy.delay(attempt=attempt, retryable=e.retryable)
+                    will_retry = backoff_seconds is not None
                     try:
                         self._record_wire(
                             req, None, error=e, purpose=purpose, attempt=attempt,
@@ -2593,9 +2962,8 @@ class LlmClient:
                     #   `RESOURCE_INTERRUPTED`。记账走成功分支（`usage` 是真的、
                     #   钱花了），靠 `finish_reason` 列分辨，不新增字段。
                     interrupted = resp.finish_reason == RESOURCE_INTERRUPTED
-                    will_retry = interrupted and attempt < max_attempts
-                    if will_retry:
-                        backoff_seconds = self.backoff_base * (2 ** attempt_index)
+                    backoff_seconds = policy.delay(attempt=attempt, retryable=interrupted)
+                    will_retry = backoff_seconds is not None
                     try:
                         self._record_wire(
                             req, resp, error=None, purpose=purpose, attempt=attempt,
@@ -2605,6 +2973,11 @@ class LlmClient:
                                         if backoff_seconds is not None else None),
                             attempt_id=attempt_id, progress=progress,
                             cache_policy=cache_policy)
+                        if content is not None:
+                            content[0].record_attempt(
+                                content[1].turn_id, attempt_id=attempt_id,
+                                outcome='interrupted' if interrupted else 'ok',
+                                request_fingerprint=request_fingerprint(req))
                     finally:
                         heartbeat.finish(outcome='ok')
                     if not interrupted:
@@ -2632,7 +3005,7 @@ class LlmClient:
         """一次**真上线**记一行。失败那次 token 三项全 `None`——它没拿回任何读数。"""
         u = (resp.usage if resp else None) or {}
         policy = cache_policy or self.ctx.cache
-        self.ctx.ledger.record(
+        arguments = dict(
             attempt_id=attempt_id,
             request_fingerprint=request_fingerprint(req),
             response_sha256=_response_sha256(resp),
@@ -2665,6 +3038,27 @@ class LlmClient:
             progress=progress,
         )
 
+        content = getattr(self._content_local, 'current', None)
+        if (content is not None and resp is not None and error is None
+                and resp.finish_reason != RESOURCE_INTERRUPTED):
+            # 完整回答必须先带原 run/attempt 的成本回执持久化。这样进程死在
+            # append 前后都能精确补原账，不再次外发，也不把费用归到恢复 run。
+            content[0].save_response(content[1].turn_id, {
+                'attempt_id': attempt_id,
+                'response': asdict(resp),
+                'prepared_receipt': {
+                    'kind': 'executor-turn-receipt-v1',
+                    'run_id': self.ctx.run_id,
+                    'parent_run_id': self.ctx.parent_run_id,
+                    'ledger_arguments': {
+                        **arguments,
+                        'progress': None if progress is None else asdict(progress),
+                    },
+                    'request_payload': req.cache_payload(),
+                },
+            })
+        self.ctx.ledger.record(**arguments)
+
     def _record_cache_hit(self, req: ChatRequest, resp: ChatResponse, *,
                           purpose: str, progress: RequestProgress | None,
                           cache_policy: CachePolicy | None = None) -> str:
@@ -2695,4 +3089,7 @@ class LlmClient:
             finish_reason=resp.finish_reason,
             progress=progress,
         )
+        self._producer_cache_receipts[attempt_id] = {
+            'response': asdict(resp), 'request': req.cache_payload(),
+        }
         return attempt_id

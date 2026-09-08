@@ -38,6 +38,24 @@ conda run -n novel_refactor python -X utf8 -u -m novel.cli operator next <sid> -
 需要的 exact execution token；不得重新扫描全链或凭聊天记忆推演下一步。`operator permit` 只保留给
 blocked recovery 和诊断兼容，blocked action hash 本身不是恢复许可。
 
+## 新旧工作流的执行边界
+
+`workflow-role-boundaries-v1` 只用于新的 clean base。首次合法写入前固定
+`_service/workflow.json`；其后所有节点、直接 producer、审批和恢复共用该身份。
+不得删除 manifest、工作单元账或原审批来重新初始化；旧 base 的读取与诊断不授予新写入权限。
+
+本分支改造前的冻结基线为 `6473b78053ddb66eb111e835e41eb8d1f120eec7`。存量中断任务先核对原
+run 审计中的代码身份，再在匹配的旧代码工作区执行其版本的运行 skill；不能仅因主分支名相同就认为版本匹配。
+对于确认属于上述基线的旧任务，可建立独立、固定提交的恢复工作区：
+
+```powershell
+git worktree add --detach .worktrees/legacy-workflow-6473b78 6473b78053ddb66eb111e835e41eb8d1f120eec7
+```
+
+在该工作区读取 `.workflow/skills/novel-pipeline-operator/SKILL.md`，沿用原 base、账本与审批恢复。
+如果原任务属于其他代码身份，先恢复对应的原版本；代码身份缺失或脏工作区内容无法复原时保持停点。
+不得用本分支替旧 base 补造新预算、两份 Stage2 接受证明或当前版本产物。本轮工程验收未运行或修改存量任务。
+
 ## AgentRun 与流水线恢复
 
 完整跑书、断点续跑、代批和最终成书审阅必须使用
@@ -118,8 +136,8 @@ conda run -n novel_refactor python -X utf8 tools/stage2_acceptance.py `
 ```
 
 工具同时关闭式核对：五个不同 clean run、当前 schema 与目标 run adoption、无 `.INVALID`、生产
-HARD/skip、Global generation-safe、冷缓存、首次落盘率不低于 95%、Stage2 Commander 不超过四席（含一席只读终审）、
-预审与 Blueprint 确有重叠，以及五次实际模型/effort 一致。人工记录缺一轮、每轮少于 5 章，或任一
+HARD/skip、Global generation-safe、冷缓存、首次落盘率不低于 95%、Global 与 Blueprint 两个 Commander 各不超过 4 次内容调用、
+Global 接受先于 Blueprint 生成且 Blueprint 经独立交叉接受，以及五次实际模型/effort 一致。人工记录缺一轮、每轮少于 5 章，或任一
 读数未知时结论保持 `unver`；在汇总 `claim_ready=true` 前不得宣称质量未退化、显著提速或已稳定达到
 30 分钟。
 

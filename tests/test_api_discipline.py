@@ -428,6 +428,7 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         '/api/novels/{sid}/stage7/approve',
         '/api/novels/{sid}/stage7/adopt-residual',
         '/api/novels/{sid}/stage2/global-review',
+        '/api/novels/{sid}/approvals/stage2-review',
         # Stage2 v7 关系集合的 0-wire 完整替换与同尺 preview。
         '/api/novels/{sid}/stage2/relations/edit',
         '/api/novels/{sid}/stage2/relations/edit/preview',

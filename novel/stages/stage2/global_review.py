@@ -636,22 +636,74 @@ def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
         current = store.read_own(GlobalReview, REL)[0]
         require_current(grounding_payload, current)
         main_text = store.read_own(MainText, STAGE1_MAIN_TEXT)[0]
-        blocking_workpack = (
-            review_workpack(ctx, scope='blocking')
-            if decisions.blocking_scope is not None else None
+        from novel.orchestrator.approvals import (
+            prepare_stage2_patch_receipt, stage2_patch_receipt,
         )
-        updated = apply_decision_set(
-            current,
-            decisions,
-            expected_chapter_ordinals=tuple(
-                int(section.chapter_ordinal) for section in main_text.root),
-            expected_workpack_sha256=(
-                str(blocking_workpack['workpack_sha256'])
-                if blocking_workpack is not None else None),
-        )
-        require_current(grounding_payload, updated)
-        store.write_round(REL, updated)
+        request_sha = subject_sha256(decisions.model_dump(mode='json'))
+        receipt = stage2_patch_receipt(ctx.novel_dir.parent, ctx.sid, request_sha)
+        if (receipt is not None
+                and receipt.result_subject_sha256 == subject_sha256(current.model_dump(mode='json'))
+                and receipt.global_sha256 == subject_sha256(grounding_payload)):
+            updated = current
+        else:
+            from datetime import datetime, timezone
+            # 回执已经写入但正式 review 尚未提交时，重放必须还原第一次的
+            # 决定时间；重新取当前时间会让同一请求产生不同结果身份。
+            decision_timestamp = (
+                receipt.decision_timestamp if receipt is not None
+                else datetime.now(timezone.utc).isoformat())
+            blocking_workpack = (
+                review_workpack(ctx, scope='blocking')
+                if decisions.blocking_scope is not None else None)
+            updated = apply_decision_set(
+                current, decisions,
+                now=decision_timestamp,
+                expected_chapter_ordinals=tuple(
+                    int(section.chapter_ordinal) for section in main_text.root),
+                expected_workpack_sha256=(
+                    str(blocking_workpack['workpack_sha256'])
+                    if blocking_workpack is not None else None))
+            require_current(grounding_payload, updated)
+            prepare_stage2_patch_receipt(
+                ctx.novel_dir.parent, ctx.sid, request_sha256=request_sha,
+                before_token=review_token(ctx),
+                result_subject_sha256=subject_sha256(updated.model_dump(mode='json')),
+                global_sha256=subject_sha256(grounding_payload),
+                decision_timestamp=decision_timestamp)
+            store.write_round(REL, updated)
+        if generation_safety(grounding_payload, updated).safe:
+            from contracts.schema.api import Stage2NodeReviewRequest
+            from novel.orchestrator.approvals import approve_stage2_review
+            from novel.errors import ArtifactSubmittedReviewPending, NovelError
+            try:
+                approve_stage2_review(ctx.novel_dir.parent, ctx.sid, Stage2NodeReviewRequest(
+                    node='stage2.global', review_token=review_token(ctx),
+                    decision='accept', actor=decisions.actor,
+                    reason=(decisions.blocking_scope.reason if decisions.blocking_scope
+                            else '逐项 typed 决定已闭合当前全部 blocking 主体')))
+            except (NovelError, OSError, ValueError) as exc:
+                raise ArtifactSubmittedReviewPending(str(exc), hint=(
+                    '逐项决定已落盘；重放同一 --review-decisions 文件零模型补提交。')) from exc
         return updated
+
+
+def submitted_decisions_is_current(base: str, sid: str, payload: dict[str, object]) -> bool:
+    """逐项决定已写盘但节点接受中断时，确认原回答能零模型补提交。"""
+    from contracts.schema import decode_artifact
+    from novel.orchestrator.approvals import stage2_patch_receipt
+    from novel.orchestrator.state import readonly_ctx
+    from novel import prov
+    request = GlobalReviewDecisionSet.model_validate(
+        decode_artifact(DEFAULT_DECISIONS, payload).payload)
+    receipt = stage2_patch_receipt(base, sid, subject_sha256(request.model_dump(mode='json')))
+    if receipt is None:
+        return False
+    ctx = readonly_ctx(paths.resolve_novel_dir(base, sid), 'stage2.global', prov.code_version())
+    store = ArtifactStore(ctx)
+    grounding = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING, require_current=True)[0]
+    current = store.read_own(GlobalReview, REL, require_current=True)[0]
+    return (receipt.global_sha256 == subject_sha256(grounding.model_dump(by_alias=True))
+            and receipt.result_subject_sha256 == subject_sha256(current.model_dump(mode='json')))
 
 
 def is_approved(ctx: RunContext, review: GlobalReview) -> bool:
@@ -766,18 +818,8 @@ def generation_grounding(store: ArtifactStore) -> GlobalGrounding:
             '该组不能安全降级，必须用 GlobalEdit 修复') from exc
 
 
-def require_approved(ctx: RunContext) -> None:
-    """所有 Stage2 下游真实执行与成书读取共用的完整收口闸。
-
-    人工决定只回答 global 事实是否可信；它不能替 blueprint 的存在、freshness 或
-    联合 HARD 背书。把后半段留给各下游自己碰，会让 API 先创建一个注定失败的作业，
-    也会让已有交付物在 blueprint 后来缺失/过期时只凭旧 review 继续下载。
-
-    这里不造第二座 Stage2 判官：动态导入 ``extract.run_check_only``，仍走
-    ``stage2.blueprint --check-only`` 使用的那一份完整联合判据。只另行把报告第一节
-    的 freshness/INVALID 翻成 typed 终态，因为 ``CheckReport.passed`` 按契约只回答
-    判据 badge，不会把来源当前性偷算进去。
-    """
+def require_global_valid(ctx: RunContext) -> None:
+    """Global 自身当前、机械有效且逐项决定闭合；不反向要求 Blueprint 存在。"""
     store = ArtifactStore(ctx)
     global_invalid = paths.invalid_of(STAGE2_GLOBAL_GROUNDING)
     if store.exists(global_invalid):
@@ -814,6 +856,31 @@ def require_approved(ctx: RunContext) -> None:
             f'（{global_freshness.state}/{global_freshness.reason}）',
             hint='从 producer 重建 stage2.global')
 
+    from novel.stages.stage2 import extract
+    grounding = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+    main = store.read_own(MainText, STAGE1_MAIN_TEXT)[0]
+    hard = extract._hard_hits(extract._judge_candidate(
+        grounding.model_dump(by_alias=True, mode='json'), None,
+        main.model_dump(mode='json')), ignore={'upstream_missing'})
+    if hard:
+        raise BlockingFindingsUnresolved(
+            'Global 当前正式稿仍违反生产 HARD；不能授予或消费语义接受',
+            rules=tuple(hard), hint='stage2.global --check-only（0 成本）')
+
+def require_global_accepted(ctx: RunContext) -> None:
+    """Blueprint 的唯一语义前置；不反向要求尚未生产的 Blueprint。"""
+    require_global_valid(ctx)
+    from novel.orchestrator.approvals import require_stage2_node_accepted
+    require_stage2_node_accepted(
+        ctx.novel_dir.parent, ctx.sid, 'stage2.global')
+
+
+def require_approved(ctx: RunContext, *, require_acceptance: bool = True) -> None:
+    """联合生产闸；Stage4 起还必须持有两位 Commander 的当前接受。"""
+    require_global_valid(ctx)
+    store = ArtifactStore(ctx)
+    if require_acceptance:
+        require_global_accepted(ctx)
     if not store.exists(STAGE2_BLUEPRINT_CHARACTER_PROJECTION):
         raise UpstreamMissing(
             f'{STAGE2_BLUEPRINT_CHARACTER_PROJECTION} 不在盘上；'
@@ -838,7 +905,7 @@ def require_approved(ctx: RunContext) -> None:
             and not store.exists(blueprint_invalid)):
         raise UpstreamMissing(
             f'{STAGE2_CHAPTER_BLUEPRINTS} 不在盘上；Stage2 尚未完成联合检查',
-            hint='stage2.blueprint（付费；可在 global 人工阅读期间先运行）')
+            hint='Global 已接受后运行 stage2.blueprint（付费）')
 
     # ``run_check_only`` 的报告 node 必须是 stage2.blueprint；下游 ctx 若直接传入，
     # Stage4/7 的规则注册表会与 Stage2 outcomes 错配。只读子 context 不记账、不写盘。
@@ -871,3 +938,7 @@ def require_approved(ctx: RunContext) -> None:
             'Stage2 global + blueprint 的联合 HARD 尚未通过；拒绝进入下游',
             rules=hard or ('stage2_joint_check',),
             hint='stage2.blueprint --check-only（0 成本）')
+    if require_acceptance:
+        from novel.orchestrator.approvals import require_stage2_node_accepted
+        require_stage2_node_accepted(
+            ctx.novel_dir.parent, ctx.sid, 'stage2.blueprint')

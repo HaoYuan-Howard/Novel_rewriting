@@ -34,13 +34,14 @@ from contracts.schema.stage2 import (
 from contracts.schema.stage4 import (
     BlindCandidate,
     EvidenceBinding,
+    EvidenceBindingResponse,
     PlanChapters,
 )
 from novel import paths, prov
 from novel.llm.cache import CachePolicy, ResponseCache
 from novel.errors import ArtifactUnreadable, ProvenanceRefused
 from novel.llm.client import LlmClient, LlmFailed
-from novel.llm.ledger import CostLedger
+from novel.llm.ledger import CostLedger, ledger_path
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.run import RunContext
 from novel.stages.stage2.character_refs import (
@@ -67,11 +68,13 @@ def _ctx(book: Path, node: str, *, paid: bool = True) -> RunContext:
         paid=paid,
         code=CODE,
         cache=CachePolicy.default(),
-        ledger=CostLedger(path=None),
+        ledger=CostLedger(path=ledger_path(book.parent)),
     )
 
 
 def _book(tmp_path: Path) -> Path:
+    from novel.work_units import require_workflow
+    require_workflow(tmp_path)
     book = tmp_path / '盲规划生产链_742'
     clean = book / 'stage0' / 'clean_text.txt'
     clean.parent.mkdir(parents=True)
@@ -458,7 +461,7 @@ def test_run_plan_binds_evidence_then_compiles_plan_without_context(designed):
     report = plan.run_plan(ctx, client)
 
     assert report.passed
-    assert len(transport.calls) == 1
+    assert len(transport.calls) == 0
     store = ArtifactStore(ctx)
     binding = store.read_own(EvidenceBinding, plan.BINDING_REL)[0]
     final_plan = store.read_own(PlanChapters, plan.REL)[0]
@@ -478,13 +481,9 @@ def test_run_plan_binds_evidence_then_compiles_plan_without_context(designed):
     assert len(binding.provenance.inputs) == len(binding_inputs), '重复读 A 不得双计来源边'
     assert binding.provenance.candidate_sha256 == candidate_subject_sha256(
         _candidate_business(candidate))
-    assert binding.provenance.model == MODEL
-    assert binding.provenance.adopted_models == [MODEL]
-    assert binding.provenance.usage is not None
-    assert binding.provenance.usage.calls_made == 1
-    assert binding.provenance.usage.calls_cached == 0
-    adoption = _one_adoption(ctx, plan.BINDING_REL, binding)
-    assert adoption['attempt_id'] == client.accepted_attempt(ctx.node)
+    assert binding.provenance.origin == 'compiled'
+    assert binding.provenance.usage is None
+    assert not any(row['kind'] == 'artifact_adoption' for row in ctx.ledger.audit_events)
 
     compiled_inputs = binding_inputs | {plan.BINDING_REL}
     assert final_plan.provenance.origin == 'compiled'
@@ -577,9 +576,11 @@ def test_false_infeasible_is_rejected_and_never_lands_a_formal_terminal(designed
     _design_ctx, _design_client, _design_transport, candidate, _truth, _mapping = packed
     ctx = _ctx(book, 'stage4.plan')
     client, transport = _client(ctx, _infeasible_b_response(candidate))
-    with pytest.raises(LlmFailed, match='构造出了完整 bound'):
-        plan.run_plan(ctx, client)
-    assert len(transport.calls) == 2
+    prepared = plan.prepare_plan_candidate(ctx)
+    why = prepared.validator(EvidenceBindingResponse.model_validate(
+        _infeasible_b_response(candidate)), None)
+    assert '构造出了完整 bound' in why
+    assert len(transport.calls) == 0
     assert not (book / plan.BINDING_REL).exists()
     assert not (book / plan.REL).exists()
     assert not (book / plan.CTX_REL).exists()
@@ -598,14 +599,13 @@ def test_false_infeasible_is_corrected_to_bound_in_the_same_logical_request(desi
     client, transport = _client(ctx, lambda _request: next(responses))
     report = plan.run_plan(ctx, client)
     assert report.passed
-    assert len(transport.calls) == 2, '同一 B 请求内修正，不新开 replan'
+    assert len(transport.calls) == 0, '机械证据已经闭合，不发出可能误判 infeasible 的请求'
     landed = ArtifactStore(ctx).read_own(EvidenceBinding, plan.BINDING_REL)[0]
     assert landed.status == 'bound'
     assert (book / plan.REL).exists()
     assert not (book / plan.CTX_REL).exists()
     assert not (book / plan._INVALID).exists()
-    adoption = _one_adoption(ctx, plan.BINDING_REL, landed)
-    assert adoption['attempt_id'] == client.accepted_attempt(ctx.node)
+    assert landed.provenance.origin == 'compiled'
 
 
 def test_infeasible_unknown_evidence_ref_is_rejected_before_any_binding_lands(designed):
@@ -626,10 +626,10 @@ def test_infeasible_unknown_evidence_ref_is_rejected_before_any_binding_lands(de
     ctx = _ctx(book, 'stage4.plan')
     client, transport = _client(ctx, response)
 
-    with pytest.raises(LlmFailed, match='未下发引用'):
-        plan.run_plan(ctx, client)
-
-    assert transport.calls
+    prepared = plan.prepare_plan_candidate(ctx)
+    why = prepared.validator(EvidenceBindingResponse.model_validate(response), None)
+    assert '未下发引用' in why
+    assert transport.calls == []
     store = ArtifactStore(ctx)
     assert not store.exists(plan.BINDING_REL)
     assert not store.exists(plan.REL)
@@ -647,7 +647,7 @@ def _legacy_v2_binding_bytes(current_v3: bytes) -> bytes:
     本次测试的 A 主体保持真实一致。
     """
     raw = json.loads(current_v3)
-    assert raw['_schema_version'] == 3
+    assert raw['_schema_version'] == 4
     raw['_schema_version'] = 2
     raw.pop('binding_concerns', None)
     raw.pop('infeasibility_proof', None)
@@ -689,7 +689,7 @@ def test_apply_binding_mints_human_v3_and_builds_first_plan_without_context(desi
     assert compiled.provenance.origin == 'compiled'
     assert not store.exists(plan.CTX_REL)
     raw = json.loads((book / plan.BINDING_REL).read_text(encoding='utf-8'))
-    assert raw['_schema_version'] == 3
+    assert raw['_schema_version'] == 4
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -697,7 +697,7 @@ def test_apply_binding_mints_human_v3_and_builds_first_plan_without_context(desi
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize(('entry', 'expected_origin'), [
-    ('producer', 'llm'),
+    ('producer', 'compiled'),
     ('apply-binding', 'human'),
 ])
 def test_first_v3_binding_replaces_real_v2_live_bytes_without_round_history(
@@ -734,7 +734,7 @@ def test_first_v3_binding_replaces_real_v2_live_bytes_without_round_history(
     store = ArtifactStore(ctx)
     landed = store.read_own(EvidenceBinding, plan.BINDING_REL)[0]
     assert landed.provenance.origin == expected_origin
-    assert json.loads(formal.read_bytes())['_schema_version'] == 3
+    assert json.loads(formal.read_bytes())['_schema_version'] == 4
     assert not invalid.exists(), '退役 INVALID 应由 shape-break replace 原位丢弃'
     rounds = formal.parent / paths.ROUNDS_DIRNAME
     binding_rounds = [] if not rounds.exists() else [

@@ -9,7 +9,7 @@ hook.py —— `stage6.hook` 与 `stage6.approve` 的节点函数。
     `--identity`     0 成本恒等基线：同一把尺子量**原作文案段**
     `--recheck`      0 成本重判并写回（三条候选 + 定稿一起重跑归一与判据）
     `--revalidate`   0 成本把被闸门拦下的 `.INVALID` 提升为正式产物
-    （默认）         **付费**：一次调用产三个候选；机械 HARD 候选各自动重试一次
+    （默认）         **付费**：初始整组与机械 HARD 局部修订共享每工作单元最多 4 次内容请求
     `stage6.approve --pick N`  人定稿，0 成本
 
 ⚠⚠ **归一必须在判定之前。** 校验与落盘看**同一份最终字节**，不留两套。
@@ -24,7 +24,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from contracts.artifacts import (
     STAGE1_HOOK_COPY, STAGE2_GLOBAL_GROUNDING,
@@ -32,7 +32,9 @@ from contracts.artifacts import (
 )
 
 
-from contracts.invariants import HOOK_APPROACHES, STAGE6_REVIEW_CONTRACT, slot_of
+from contracts.invariants import (
+    HOOK_APPROACHES, STAGE6_REVIEW_CONTRACT, WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS, slot_of,
+)
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.api import Stage6ApprovalCandidate, Stage6ApprovalWorkpack
@@ -42,7 +44,7 @@ from contracts.schema.stage4 import WriterContext
 from contracts.schema.stage5 import ContextSource
 from contracts.schema.stage6 import (
     ApprovedHook, Candidate, Hook, HookApprovalResolution, HookEdit, HookParams,
-    HookCandidateRetryResponse, HookProvenance, HookResponse, Mech,
+    HookCandidateRetryResponse, HookProvenance, HookResponse, HookSources, Mech,
 )
 from novel import agent_session_audit, paths, prov, wontfix
 from novel.core.evidence import without_global_evidence
@@ -607,7 +609,7 @@ MAX_TOKENS = 64000
 
 #: 单候选修复只回一条完整文案；显式进 ``HookParams``，不能成为隐藏成本旋钮。
 CANDIDATE_RETRY_MAX_TOKENS = 24000
-CANDIDATE_RETRY_LIMIT = 1
+CANDIDATE_RETRY_LIMIT = WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS
 CANDIDATE_RETRY_RUNGS = (('low', False),)
 
 # Agent 不能把初始 ``HookResponse`` 与 legacy 单候选 retry schema 接在同一
@@ -859,7 +861,20 @@ def _legacy_hook_candidates(
         ctx: RunContext, source: _HookResponseSource,
         prepared: HookCandidateContext,
 ) -> HookCandidateBatch:
-    """旧 LlmClient：逐字保留初始请求 + 每个初始脏槽一次单候选 retry。"""
+    """重放已完成的整组/逐槽内容进度，再继续尚未完成的机械修订。"""
+    replay = getattr(source, 'replay_content_progress', None)
+    if callable(replay):
+        with replay():
+            return _legacy_hook_sequence(ctx, source, prepared)
+    return _legacy_hook_sequence(ctx, source, prepared)
+
+
+def _legacy_hook_sequence(
+        ctx: RunContext, source: _HookResponseSource,
+        prepared: HookCandidateContext,
+) -> HookCandidateBatch:
+    """legacy：保留原请求策略，当前槽持续改善；全组共用四次内容预算。"""
+    from novel.work_units import WorkUnitBudgetExhausted
     response = source.ask_json(
         prepared.system,
         prepared.user,
@@ -892,104 +907,128 @@ def _legacy_hook_candidates(
     retry_system = prompts.hook_retry_system()
     retry_policy = CachePolicy.refresh()
     retry_history: list[dict[str, object]] = []
+    feedback = getattr(source, 'record_candidate_feedback', None)
+    if initially_dirty and callable(feedback):
+        feedback(ctx.node, {
+            'kind': 'hook_group_code_review',
+            'dirty_slots': [slot_of(index + 1) for index in initially_dirty],
+            'action': 'repair_initially_dirty_slots',
+        })
 
     for index in initially_dirty:
-        row = rows[index]
-        slot = slot_of(index + 1)
-        approach = str(row['approach'])
-        before_findings = _hard_candidate_findings(
-            row['findings'])  # type: ignore[arg-type]
-        failure_rows = _retry_failure_rows(before_findings)
-        retry_user = prompts.build_retry_user(
-            prepared._up.mat,
-            slot=slot,
-            approach=approach,
-            candidates=[{
-                'slot': slot_of(position),
-                'approach': str(candidate['approach']),
-                'text': str(candidate['text']),
-            } for position, candidate in enumerate(rows, 1)],
-            rationale=rationale,
-            hard_findings=failure_rows,
-        )
-        purpose = f'{ctx.node}:retry:{slot}'
-        common: dict[str, object] = {
-            'slot': slot,
-            'attempt': 1,
-            'failure_items': sorted({item.rule for item in before_findings}),
-            'failure_evidence': prov.projection_fingerprint(failure_rows),
-            'user_prompt': prov.fingerprint(retry_user),
-            'model': source.model,
-            'cache_policy': retry_policy.name,
-            'before_hard': len(before_findings),
-        }
-        try:
-            retried = source.ask_json(
-                retry_system,
-                retry_user,
-                model_cls=HookCandidateRetryResponse,
-                purpose=purpose,
-                max_tokens=CANDIDATE_RETRY_MAX_TOKENS,
-                rungs=CANDIDATE_RETRY_RUNGS,
-                cache_policy=retry_policy,
+        slot_attempt = 0
+        while True:
+            row = rows[index]
+            slot = slot_of(index + 1)
+            approach = str(row['approach'])
+            before_findings = _hard_candidate_findings(
+                row['findings'])  # type: ignore[arg-type]
+            if not before_findings:
+                break
+            slot_attempt += 1
+            failure_rows = _retry_failure_rows(before_findings)
+            retry_user = prompts.build_retry_user(
+                prepared._up.mat,
+                slot=slot,
+                approach=approach,
+                candidates=[{
+                    'slot': slot_of(position),
+                    'approach': str(candidate['approach']),
+                    'text': str(candidate['text']),
+                } for position, candidate in enumerate(rows, 1)],
+                rationale=rationale,
+                hard_findings=failure_rows,
             )
-        except (TerminalState, TransportError) as exc:
-            retry_history.append({
-                **common,
-                'output': None,
-                'after_hard': None,
-                'status': 'request_failed',
-                'reason': f'{type(exc).__name__}: {str(exc)[:1000]}',
-                'accepted': False,
-            })
-            continue
+            purpose = f'{ctx.node}:retry:{slot}'
+            common: dict[str, object] = {
+                'slot': slot,
+                'attempt': slot_attempt,
+                'failure_items': sorted({item.rule for item in before_findings}),
+                'failure_evidence': prov.projection_fingerprint(failure_rows),
+                'user_prompt': prov.fingerprint(retry_user),
+                'model': source.model,
+                'cache_policy': retry_policy.name,
+                'before_hard': len(before_findings),
+            }
+            try:
+                retried = source.ask_json(
+                    retry_system,
+                    retry_user,
+                    model_cls=HookCandidateRetryResponse,
+                    purpose=purpose,
+                    max_tokens=CANDIDATE_RETRY_MAX_TOKENS,
+                    rungs=CANDIDATE_RETRY_RUNGS,
+                    cache_policy=retry_policy,
+                )
+            except WorkUnitBudgetExhausted:
+                # reserve 已在任何 wire 前拒绝；它不是第五次候选尝试，不伪造重试账。
+                break
+            except (TerminalState, TransportError) as exc:
+                retry_history.append({
+                    **common,
+                    'output': None,
+                    'after_hard': None,
+                    'status': 'request_failed',
+                    'reason': f'{type(exc).__name__}: {str(exc)[:1000]}',
+                    'accepted': False,
+                })
+                break
 
-        output = prov.projection_fingerprint(
-            retried.model_dump(by_alias=True))
-        if retried.approach != approach:
+            output = prov.projection_fingerprint(
+                retried.model_dump(by_alias=True))
+            if retried.approach != approach:
+                if callable(feedback):
+                    feedback(purpose, {'kind': 'hook_slot_code_review',
+                                       'slot': slot, 'status': 'wrong_approach'})
+                retry_history.append({
+                    **common,
+                    'output': output,
+                    'after_hard': None,
+                    'status': 'wrong_approach',
+                    'reason': (
+                        f'请求 {slot} 那一条（{approach!r}），'
+                        f'响应却返回 {retried.approach!r}；'
+                        '保留上一份已接受候选与整组 rationale'),
+                    'accepted': False,
+                })
+                break
+            retry_text, retry_mech, retry_findings = _normalize_and_judge(
+                retried.text, prepared._up)
+            after_findings = _hard_candidate_findings(retry_findings)
+            duplicate = any(
+                retry_text == str(other['text'])
+                for other_index, other in enumerate(rows)
+                if other_index != index
+            )
+            if duplicate:
+                status = 'duplicate'
+                reason = '重试文本与另一条当前候选重复；保留上一份已接受候选与整组 rationale'
+            elif len(after_findings) >= len(before_findings):
+                status = 'hard_not_reduced'
+                reason = (
+                    f'HARD 未严格下降：{len(before_findings)} → '
+                    f'{len(after_findings)}；保留上一份已接受候选与整组 rationale')
+            else:
+                status = 'accepted'
+                reason = None
+            accepted = status == 'accepted'
+            if callable(feedback):
+                feedback(purpose, {
+                    'kind': 'hook_slot_code_review', 'slot': slot,
+                    'status': status, 'before_hard': len(before_findings),
+                    'after_hard': len(after_findings),
+                })
             retry_history.append({
                 **common,
                 'output': output,
-                'after_hard': None,
-                'status': 'wrong_approach',
-                'reason': (
-                    f'请求 {slot} 那一条（{approach!r}），'
-                    f'响应却返回 {retried.approach!r}；'
-                    '保留初始候选与整组 rationale'),
-                'accepted': False,
+                'after_hard': len(after_findings),
+                'status': status,
+                'reason': reason,
+                'accepted': accepted,
             })
-            continue
-        retry_text, retry_mech, retry_findings = _normalize_and_judge(
-            retried.text, prepared._up)
-        after_findings = _hard_candidate_findings(retry_findings)
-        duplicate = any(
-            retry_text == str(other['text'])
-            for other_index, other in enumerate(rows)
-            if other_index != index
-        )
-        if duplicate:
-            status = 'duplicate'
-            reason = '重试文本与另一条当前候选重复；保留初始候选与整组 rationale'
-        elif len(after_findings) >= len(before_findings):
-            status = 'hard_not_reduced'
-            reason = (
-                f'HARD 未严格下降：{len(before_findings)} → '
-                f'{len(after_findings)}；保留初始候选与整组 rationale')
-        else:
-            status = 'accepted'
-            reason = None
-        accepted = status == 'accepted'
-        retry_history.append({
-            **common,
-            'output': output,
-            'after_hard': len(after_findings),
-            'status': status,
-            'reason': reason,
-            'accepted': accepted,
-        })
-        if accepted:
-            row.update(
-                text=retry_text, mech=retry_mech, findings=retry_findings)
+            if not accepted:
+                break
+            row.update(text=retry_text, mech=retry_mech, findings=retry_findings)
             wire_candidates[index] = {
                 'approach': retried.approach,
                 'text': retried.text,
@@ -1010,12 +1049,15 @@ def _legacy_hook_candidates(
     }
     adoptions = tuple(sorted(contributions))
     purposes = tuple(purpose for purpose, _attempt in adoptions)
+    adopted_models = (
+        tuple(sorted({ctx.ledger.model_for_attempt(attempt) for _purpose, attempt in adoptions}))
+        if isinstance(source, LlmClient) else source.accepted_models(*purposes))
     return _batch(
         response=final,
         initially_dirty=tuple(slot_of(index + 1) for index in initially_dirty),
         retry_history=retry_history,
         requested_model=source.model,
-        adopted_models=source.accepted_models(*purposes),
+        adopted_models=adopted_models,
         adoptions=adoptions,
         restored_acceptance=None,
         agent_mode=False,
@@ -1249,7 +1291,7 @@ def _agent_hook_candidates(
 
     # Agent 的轮次上限由 SessionAgentClient 统一掌管；producer 只关心总 HARD
     # 是否继续严格下降。目标槽修掉一条 HARD 后若仍有 HARD，会在下一轮继续成为
-    # 最靠前的目标，而不是像 legacy 那样把「每槽一次」误套到长上下文 session。
+    # 最靠前的目标；legacy 局部 schema 同样只由共享内容预算与严格改善决定继续。
     while True:
         current_rows = _normalized_candidate_rows(current, prepared._up)
         index = next((
@@ -1296,7 +1338,8 @@ def _agent_hook_candidates(
             max_semantic_turns = getattr(
                 source, 'max_semantic_turns', None)
             exhausted = (
-                isinstance(turns_used, int) and not isinstance(turns_used, bool)
+                getattr(source, 'content_budget_exhausted', False) is True
+                or isinstance(turns_used, int) and not isinstance(turns_used, bool)
                 and isinstance(max_semantic_turns, int)
                 and not isinstance(max_semantic_turns, bool)
                 and turns_used >= max_semantic_turns
@@ -1553,6 +1596,364 @@ def _note_hook_adoptions(
         )
 
 
+_LEGACY_DELIVERY_POLICY = 'stage6-legacy-group-delivery-v2'
+
+
+@dataclass(frozen=True)
+class PreparedRecovery:
+    """提交恢复的只读、精确来源投影；unknown 不提供可执行命令。"""
+    state: Literal['recoverable', 'complete', 'unknown']
+    source_run_id: str | None = None
+    proof_sha256: str | None = None
+    reason: str | None = None
+
+
+def _legacy_hook_policy(source: LlmClient) -> dict[str, Any]:
+    return {
+        'requests': source.json_request_policy((
+            ('group', HookResponse, MAX_TOKENS, False),
+            ('slot', HookCandidateRetryResponse, CANDIDATE_RETRY_MAX_TOKENS, False),
+        ), recovery_policy=_LEGACY_DELIVERY_POLICY),
+        'retry_rungs': [list(row) for row in CANDIDATE_RETRY_RUNGS],
+    }
+
+
+def _legacy_hook_payload(store: ArtifactStore) -> dict[str, Any] | None:
+    if not store.exists(REL):
+        return None
+    artifact, _raw = store.read_own(Hook, REL, require_current=True)
+    return artifact.model_dump(by_alias=True, mode='json')
+
+
+def _legacy_hook_run_identity(value: Any) -> str:
+    from novel import run_identity
+
+    try:
+        return run_identity.check_run_id(value)
+    except ValueError as exc:
+        raise ProvenanceRefused('Hook 完成组缺原始合法 run/parent 身份') from exc
+
+
+def _legacy_hook_adoptions_complete(
+        ctx: RunContext, proof: Mapping[str, Any], batch: HookCandidateBatch,
+        artifact: Any, *, rel: str = REL,
+) -> bool:
+    """每条采纳必须是原 producer 的 exact 行；组进度或单条命中不能替代全集。"""
+    from novel.llm.ledger import _adoption_id, audit_path, read_jsonl_rows
+
+    run_id = _legacy_hook_run_identity(proof['producer_run_id'])
+    parent_run_id = _legacy_hook_run_identity(proof['producer_parent_run_id'])
+    fingerprint = prov.projection_fingerprint(artifact.model_dump(by_alias=True, mode='json'))
+    rows = read_jsonl_rows(audit_path(ctx.novel_dir.parent))
+    complete = True
+    for purpose, attempt_id in batch.adoptions:
+        identity = _adoption_id(
+            run_id=run_id, node=ctx.node, purpose=purpose, attempt_id=attempt_id,
+            artifact=rel, artifact_fingerprint=fingerprint, chapter=None)
+        expected = {
+            'kind': 'artifact_adoption', 'adoption_id': identity,
+            'run_id': run_id, 'sid': ctx.sid, 'node': ctx.node, 'purpose': purpose,
+            'attempt_id': attempt_id, 'artifact': rel,
+            'artifact_fingerprint': fingerprint, 'chapter': None,
+        }
+        if parent_run_id != run_id:
+            expected['parent_run_id'] = parent_run_id
+        matches = [row for row in rows
+                   if row.get('adoption_id') == identity
+                   or (row.get('kind') == 'artifact_adoption'
+                       and row.get('run_id') == run_id
+                       and row.get('attempt_id') == attempt_id
+                       and row.get('artifact') == rel)]
+        if not matches:
+            complete = False
+        elif (len(matches) != 1
+              or {key: value for key, value in matches[0].items() if key != 'at'} != expected):
+            raise ProvenanceRefused('Hook 原采纳审计重复或身份漂移，拒绝补尾/重新生产')
+    return complete
+
+
+def _completed_target_available(store: ArtifactStore, rel: str, expected_sha256: str) -> bool:
+    """完成历史必须仍有原正式字节：当前文件或 producer 的正式归档。"""
+    if store.full_sha256_or_none(rel) == expected_sha256:
+        return True
+    for number in store.seen_rounds(rel):
+        archived = paths.round_rel(rel, number)
+        if not store.exists(archived):
+            continue
+        # 归档是三级路径；使用 Store 专用的不记输入边、保留 UTF-8 原字节读口。
+        # 正式二级路径的 full_sha256_or_none 不负责接受这类历史路径。
+        raw = store.read_own_text(archived).encode('utf-8')
+        if hashlib.sha256(raw).hexdigest() == expected_sha256:
+            return True
+    return False
+
+
+def _prepare_legacy_hook_delivery(
+        ctx: RunContext, source: _HookResponseSource,
+        prepared: HookCandidateContext, terminal: HookCandidateEvaluation,
+        store: ArtifactStore,
+) -> None:
+    """整组完成后、首个正式写前封存目标与全部来源，采纳中断不重跑修槽算法。"""
+    if not isinstance(source, LlmClient):
+        return
+    from novel.llm.ledger import read_jsonl_rows
+    from novel.work_units import budget_for
+
+    purposes = list(dict.fromkeys([ctx.node, *(
+        f'{ctx.node}:retry:{row["slot"]}' for row in terminal._batch.retry_history)]))
+    # 同槽最后一次回答可能未改善；保存最终保留的早先贡献，不能拿最新接受顶替。
+    accepted = set(terminal.adoptions)
+    accepted.update((purpose, attempt) for purpose in purposes
+                    if (attempt := source.accepted_attempt(purpose)) is not None)
+    receipts = [source.producer_response_receipt(purpose, attempt_id=attempt)
+                for purpose, attempt in sorted(accepted)]
+    wire = [row for row in receipts if row['origin'] == 'wire']
+    budget = budget_for(ctx, scope='book')
+    anchor = (max(wire, key=lambda row: budget.turn(str(row['turn_id'])).ordinal)
+              if wire else None)
+    if ctx.ledger.path is None:
+        raise ProvenanceRefused('Hook 完成组缺持久成本账，不能封存来源')
+    wanted = {attempt for purpose in purposes
+              for attempt in ctx.ledger.attempt_ids_for_purpose(purpose)}
+    costs = [row for row in read_jsonl_rows(ctx.ledger.path)
+             if row.get('attempt_id') in wanted]
+    if (len(costs) != len(wanted)
+            or {row.get('attempt_id') for row in costs} != wanted):
+        raise ProvenanceRefused('Hook 完成组成本来源缺失或重复')
+    for row in costs:
+        identity = ctx.ledger.request_identity_for_attempt(str(row['attempt_id']))
+        if (row.get('sid') != ctx.sid or row.get('node') != ctx.node
+                or row.get('purpose') not in purposes
+                or any(row.get(key) != value for key, value in identity.items())):
+            raise ProvenanceRefused('Hook 完成组成本行与当前接受身份不一致')
+    batch = terminal._batch
+    target_payload = terminal.candidate.model_dump(by_alias=True, mode='json')
+    proof = {
+        'kind': _LEGACY_DELIVERY_POLICY,
+        'input_sha256': prepared.input_sha256, 'code': ctx.code,
+        'policy': _legacy_hook_policy(source),
+        'producer_run_id': ctx.run_id, 'producer_parent_run_id': ctx.parent_run_id,
+        'target_payload': target_payload,
+        # WorkUnit blob 排序 object 的键；正式渲染保留 prompts/inputs 的原插入序。
+        # 把原 typed 顺序另存为字符串，才能逐字节重建首写前声明的同一目标。
+        'target_json': json.dumps(target_payload, ensure_ascii=False, separators=(',', ':')),
+        'baseline_payload': _legacy_hook_payload(store),
+        'target_sha256': store.prospective_sha256(REL, terminal.candidate),
+        'baseline_sha256': store.full_sha256_or_none(REL),
+        'batch': {
+            'response': batch.response.model_dump(by_alias=True, mode='json'),
+            'initially_dirty': list(batch.initially_dirty),
+            'retry_history': [dict(row) for row in batch.retry_history],
+            'requested_model': batch.requested_model,
+            'adopted_models': list(batch.adopted_models),
+            'adoptions': [list(row) for row in batch.adoptions],
+        },
+        'batch_sha256': batch._batch_sha256,
+        'receipts': receipts, 'costs': costs,
+    }
+    if anchor is None:
+        # 纯缓存整组仍有正式提交尾窗；零内容组锚不伪造 wire 或消耗预算。
+        budget.save_group_producer_recovery(proof)
+    else:
+        budget.save_producer_recovery(str(anchor['turn_id']), proof)
+
+
+def _restore_legacy_hook_delivery(
+        ctx: RunContext, source: LlmClient | None, prepared: HookCandidateContext | None,
+        *, inspect_only: bool = False,
+) -> Hook | PreparedRecovery | None:
+    """完整 batch 的零模型提交恢复；原 cache/wire 成本和采纳身份均不重铸。"""
+    from novel.llm.ledger import CostLedger, ledger_path, read_jsonl_rows
+    from novel.llm.transport import ChatRequest, ChatResponse
+    from novel.llm.client import _response_sha256
+    from novel.llm.cache import request_fingerprint
+    from novel.work_units import budget_for
+
+    budget = budget_for(ctx, scope='book')
+    group_proof = budget.group_producer_recovery()
+    if group_proof is not None:
+        _anchor, proof = None, group_proof
+    else:
+        proofs = budget.producer_recoveries()
+        if not proofs:
+            return None
+        _anchor, proof = proofs[0]
+    if proof.get('kind') != _LEGACY_DELIVERY_POLICY:
+        raise ProvenanceRefused('Hook 完成组恢复协议漂移')
+    producer_run_id = _legacy_hook_run_identity(proof['producer_run_id'])
+    producer_parent_run_id = _legacy_hook_run_identity(proof['producer_parent_run_id'])
+    batch = _batch(
+        **{**proof['batch'], 'response': HookResponse.model_validate(proof['batch']['response']),
+           'adoptions': [tuple(row) for row in proof['batch']['adoptions']]},
+        restored_acceptance=None, agent_mode=False)
+    if batch._batch_sha256 != proof['batch_sha256']:
+        raise ProvenanceRefused('Hook 完成批次内容身份漂移')
+    target_json = proof.get('target_json')
+    if not isinstance(target_json, str):
+        raise ProvenanceRefused('Hook 完成组缺正式目标的原序列化顺序')
+    target_payload = ArtifactStore._loads(REL, target_json.encode('utf-8'))
+    if target_payload != proof['target_payload']:
+        raise ProvenanceRefused('Hook 完成组正式目标的 typed/序列化证明不一致')
+    artifact = Hook.model_validate(target_payload)
+    # 只读上下文不配置写账路径；取权威位置读取，不把 inspector 变成付费上下文。
+    cost_path = ledger_path(ctx.novel_dir.parent)
+    wanted = {str(row['attempt_id']): row for row in proof['costs']}
+    current_costs = [row for row in read_jsonl_rows(cost_path)
+                     if row.get('attempt_id') in wanted]
+    if (len(current_costs) != len(wanted)
+            or any(wanted[str(row['attempt_id'])] != row for row in current_costs)):
+        raise ProvenanceRefused('Hook 完成组原成本行缺失、重复或漂移')
+    original_ledgers: dict[str, CostLedger] = {}
+    receipt_attempts: dict[str, Mapping[str, Any]] = {}
+    for receipt in proof['receipts']:
+        checkpoint = receipt['checkpoint']
+        attempt_id = str(checkpoint['attempt_id'])
+        row = wanted.get(attempt_id)
+        if (row is None or row.get('purpose') != receipt['purpose']
+                or row.get('sid') != ctx.sid or row.get('node') != ctx.node):
+            raise ProvenanceRefused('Hook 完成组接受来源不属于原节点请求')
+        if receipt['origin'] == 'wire':
+            turn_id = str(receipt['turn_id'])
+            turn = budget.turn(turn_id)
+            raw = budget.response_payload(turn_id)
+            request = budget.request_payload(turn_id)['request']
+            if (receipt['unit_id'] != budget.unit_id
+                    or turn.response_sha256 != receipt['response_sha256']
+                    or turn.request_sha256 != receipt['request_sha256']
+                    or raw['attempt_id'] != attempt_id or row.get('cached') is not False
+                    or checkpoint != budget.recovery_proof(turn_id)):
+                raise ProvenanceRefused('Hook 完成组 wire 原响应或接受证明漂移')
+            response = ChatResponse(**raw['response'])
+        elif receipt['origin'] == 'cache' and row.get('cached') is True:
+            response = ChatResponse(**receipt['response'])
+            request = receipt['request']
+        else:
+            raise ProvenanceRefused('Hook 完成组响应来源类别不一致')
+        messages = request['messages']
+        req = ChatRequest(
+            **{key: value for key, value in request.items() if key != 'messages'},
+            system=messages[0]['content'], user=messages[-1]['content'],
+            history=tuple((item['role'], item['content']) for item in messages[1:-1]))
+        channel = checkpoint['accepted_channel']
+        raw_text = response.content if channel == 'content' else response.reasoning
+        original_channel = channel in ('content', 'reasoning')
+        repaired_wire = receipt['origin'] == 'wire' and channel in ('agent', 'deterministic')
+        if (not (original_channel or repaired_wire)
+                or (original_channel and checkpoint['accepted_text'] != (raw_text or ''))
+                or _response_sha256(response) != row.get('response_sha256')
+                or request_fingerprint(req) != row.get('request_fingerprint')
+                or checkpoint['request_fingerprint'] != row.get('request_fingerprint')):
+            raise ProvenanceRefused('Hook 完成组原请求、响应通道或成本指纹不闭合')
+        original_run = _legacy_hook_run_identity(row['run_id'])
+        original_parent = _legacy_hook_run_identity(row.get('parent_run_id', original_run))
+        original = original_ledgers.get(original_run)
+        if original is None:
+            original = CostLedger(path=cost_path, run_id=original_run,
+                                  parent_run_id=original_parent)
+            original_ledgers[original_run] = original
+        elif original.parent_run_id != original_parent:
+            raise ProvenanceRefused('Hook 原成本 run 的 parent 身份不唯一')
+        original.claim_prior_attempts(
+            [attempt_id], sid=ctx.sid, node=ctx.node, purpose=str(receipt['purpose']),
+            request_fingerprints=[str(row['request_fingerprint'])])
+        if original.request_identity_for_attempt(attempt_id) not in checkpoint['attempt_links']:
+            raise ProvenanceRefused('Hook 完成组原接受联结与成本账不一致')
+        receipt_attempts[attempt_id] = receipt
+    if any(attempt not in receipt_attempts for _purpose, attempt in batch.adoptions):
+        raise ProvenanceRefused('Hook 完成组缺正式采纳来源')
+    store = ArtifactStore(ctx)
+    current_sha = store.full_sha256_or_none(REL)
+    if store.prospective_sha256(REL, artifact) != proof['target_sha256']:
+        raise ProvenanceRefused('Hook 原目标 typed/正式字节身份不一致')
+    complete = _legacy_hook_adoptions_complete(ctx, proof, batch, artifact)
+    projection = PreparedRecovery(
+        state='complete' if complete else 'recoverable', source_run_id=producer_run_id,
+        proof_sha256=(budget.group_producer_recovery_sha256 if _anchor is None
+                      else budget.turn(_anchor).producer_sha256))
+    if complete:
+        if not _completed_target_available(store, REL, proof['target_sha256']):
+            raise ProvenanceRefused('Hook 原采纳已齐但当前/历史正式目标缺失')
+        # 只读队列不把已完成历史重新绑定到新上游，也不把合法人工定稿当作未完组。
+        marker_pending = group_proof is not None and not budget.group_producer_completed
+        if inspect_only:
+            if marker_pending:
+                return PreparedRecovery(
+                    state='recoverable', source_run_id=producer_run_id,
+                    proof_sha256=budget.group_producer_recovery_sha256,
+                    reason='原采纳已齐，待补组完成标记')
+            return projection
+        if marker_pending:
+            budget.complete_group_producer_recovery(proof)
+        if prepared is None:
+            prepared = prepare_hook_candidate(ctx)
+        changed = (current_sha != proof['target_sha256']
+                   or proof.get('input_sha256') != prepared.input_sha256
+                   or proof.get('code') != ctx.code)
+        if source is not None and (changed or ctx.cache == CachePolicy.refresh()):
+            if group_proof is not None:
+                budget.complete_group_producer_recovery(proof)
+                budget.retire_group_producer_recovery(proof)
+            return None
+        if changed:
+            if marker_pending and source is None:
+                # 只补历史完成标记，绝不覆写已存在的后继定稿或替它授予接受。
+                return artifact
+            raise TerminalState('Hook 原提交已完成且已有后继，无需恢复旧组')
+    if prepared is None:
+        prepared = prepare_hook_candidate(ctx)
+    current = _legacy_hook_payload(store)
+    if (current not in (proof['target_payload'], proof['baseline_payload'])
+            or current_sha not in (proof['target_sha256'], proof['baseline_sha256'])):
+        raise ProvenanceRefused('Hook 正式目标已被第三方改写，拒绝补采纳')
+    if (proof.get('input_sha256') != prepared.input_sha256
+            or proof.get('code') != ctx.code
+            or (source is not None and proof.get('policy') != _legacy_hook_policy(source))):
+        raise ProvenanceRefused('Hook 完成组的输入或模型配置漂移')
+    # 直接重验原候选，不在免费恢复时再次铸造或结算 LLM provenance。
+    rebuilt = [Candidate(
+        approach=row['approach'], text=row['text'], mech=row['mech'],
+        findings=_labelled(slot_of(position), row['findings']))
+        for position, row in enumerate(_normalized_candidate_rows(batch.response, prepared._up), 1)]
+    if (artifact.candidates != rebuilt or artifact.rationale != batch.response.rationale
+            or artifact.lead_upto != prepared._up.upto or artifact.judged != prepared._up.judged
+            or artifact.approved is not None
+            or artifact.sources != HookSources(writer_context=_context_source())):
+        raise ProvenanceRefused('Hook 完成组不再通过原候选的机械评估')
+    _assert_prepared_current(ctx, prepared)
+    if inspect_only:
+        if current_sha == proof['target_sha256']:
+            verify_hook_delivery(ctx, prepared, artifact)
+        return PreparedRecovery(
+            state='complete' if complete else 'recoverable',
+            source_run_id=producer_run_id,
+            proof_sha256=(budget.group_producer_recovery_sha256 if _anchor is None
+                      else budget.turn(_anchor).producer_sha256))
+    if current != proof['target_payload']:
+        with store.history_transaction(REL):
+            store.write(REL, artifact)
+            landed = verify_hook_delivery(ctx, prepared, artifact)
+    else:
+        landed = verify_hook_delivery(ctx, prepared, artifact)
+    fingerprint = prov.projection_fingerprint(landed.model_dump(by_alias=True, mode='json'))
+    # 采纳的 run 是原 producer；成本来源可以来自更早恢复的原 wire run。
+    adoption_ledger = CostLedger(
+        path=cost_path, run_id=producer_run_id,
+        parent_run_id=producer_parent_run_id)
+    for purpose, attempt_id in batch.adoptions:
+        adoption_ledger.note_adoption(
+            sid=ctx.sid, node=ctx.node, purpose=purpose, attempt_id=attempt_id,
+            artifact=REL, artifact_fingerprint=fingerprint, chapter=None)
+        receipt = receipt_attempts[attempt_id]
+        if receipt['origin'] == 'wire':
+            budget.mark_adopted(str(receipt['turn_id']))
+    if not _legacy_hook_adoptions_complete(ctx, proof, batch, landed):
+        raise ProvenanceRefused('Hook 补尾后仍缺完整原采纳审计')
+    budget.mark_artifact_committed(REL, fingerprint)
+    if group_proof is not None:
+        budget.complete_group_producer_recovery(proof)
+    return landed
+
+
 def _terminal_hook_evaluation(
         ctx: RunContext, prepared: HookCandidateContext,
         evaluation: HookCandidateEvaluation,
@@ -1767,6 +2168,10 @@ def finalize_hook_candidate(
                 _assert_prepared_current(ctx, prepared)
                 _verify_hook_artifact(
                     ctx, prepared, artifact, rel=_INVALID)
+            checkpointed = getattr(source, 'mark_checkpointed', None)
+            if callable(checkpointed):
+                for _purpose, attempt_id in terminal.adoptions:
+                    checkpointed(attempt_id)
             if duplicates:
                 raise GateBlocked(
                     f'候选经标点、引号与分段归一后出现重复槽位 {duplicates}——'
@@ -1788,6 +2193,7 @@ def finalize_hook_candidate(
             return _finalize_agent_formal(
                 ctx, prepared, terminal)
 
+        _prepare_legacy_hook_delivery(ctx, source, prepared, terminal, store)
         with store.history_transaction(REL):
             store.write(REL, artifact)
             _assert_prepared_current(ctx, prepared)
@@ -1796,15 +2202,65 @@ def finalize_hook_candidate(
         _note_hook_adoptions(
             ctx, rel=REL, artifact=landed,
             adoptions=terminal.adoptions)
+        if isinstance(source, LlmClient):
+            from novel.work_units import budget_for
+            budget = budget_for(ctx, scope='book')
+            proof = budget.group_producer_recovery()
+            if proof is not None:
+                if not _legacy_hook_adoptions_complete(ctx, proof, terminal._batch, landed):
+                    raise ProvenanceRefused('Hook 纯缓存组的原采纳未闭合')
+                budget.complete_group_producer_recovery(proof)
         return landed
 
 
 def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
     """legacy 包装；agent executor 复用相同四段，但使用同 session 完整 replacement。"""
     prepared = prepare_hook_candidate(ctx)
+    from novel.llm import stage6_hook_runs
+    with stage6_hook_runs.commit_ownership(ctx.novel_dir):
+        restored = _restore_legacy_hook_delivery(ctx, client, prepared)
+        if restored is not None:
+            return restored
     batch = request_hook_candidates(ctx, client, prepared)
     evaluation = evaluate_hook_candidate(ctx, client, prepared, batch)
     return finalize_hook_candidate(ctx, client, prepared, evaluation)
+
+
+def inspect_prepared_recovery(ctx: RunContext) -> PreparedRecovery | None:
+    """API/queue 只读入口；不得初始化空 base、写产物或补任何账。"""
+    from novel.work_units import budget_for, workflow_manifest
+
+    try:
+        if workflow_manifest(ctx.novel_dir.parent) is None:
+            return None
+        budget = budget_for(ctx, scope='book')
+        if budget.group_producer_recovery() is None and not budget.producer_recoveries():
+            return None
+        return _restore_legacy_hook_delivery(ctx, None, None, inspect_only=True)
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError,
+            TerminalState, ProvenanceRefused) as exc:
+        return PreparedRecovery(state='unknown', reason=str(exc))
+
+
+def recover_prepared_hook(
+        ctx: RunContext, *, source_run_id: str | None = None,
+        proof_sha256: str | None = None,
+) -> Hook:
+    """预算耗尽或重启后的免费原提交恢复；无需模型客户端或 API key。"""
+    from novel.llm import stage6_hook_runs
+
+    with stage6_hook_runs.commit_ownership(ctx.novel_dir):
+        prepared = prepare_hook_candidate(ctx)
+        projection = _restore_legacy_hook_delivery(ctx, None, prepared, inspect_only=True)
+        if projection is None:
+            raise TerminalState('没有可恢复的 Hook 完整提交证明')
+        if ((source_run_id is not None and projection.source_run_id != source_run_id)
+                or (proof_sha256 is not None and projection.proof_sha256 != proof_sha256)):
+            raise ProvenanceRefused('Hook 恢复的原 run/提交证明已变化')
+        result = _restore_legacy_hook_delivery(ctx, None, prepared)
+        if not isinstance(result, Hook):
+            raise TerminalState('Hook 完整提交证明在恢复期间缺失')
+        return result
 
 
 @_commit_owned

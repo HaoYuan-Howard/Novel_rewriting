@@ -308,6 +308,7 @@ export interface BlueprintReviewCoverageSegment {
 }
 
 export interface BlueprintReviewFact {
+  fact_id: string
   claim: string
   kind: string
   obligation: string
@@ -316,6 +317,7 @@ export interface BlueprintReviewFact {
 }
 
 export interface BlueprintReviewBeat {
+  beat_id: string
   beat_order: number
   located: boolean
   time_layer: string
@@ -372,15 +374,40 @@ export interface BlueprintReviewChapter {
   narration: ReadingNarration[]
 }
 
+export interface BlueprintReviewGlobalChange {
+  item_id: string
+  subject_path: string
+  change: 'added' | 'removed' | 'changed'
+  changed_fields: string[]
+  previous_subject_sha256: string | null
+  current_subject_sha256: string | null
+  affected_chapter_ordinals: number[]
+  affected_references: string[]
+  scope_reason: string
+}
+
+export interface BlueprintReviewDelta {
+  mode: 'initial' | 'unchanged' | 'targeted' | 'full'
+  baseline_review_subject_sha256: string | null
+  current_review_subject_sha256: string
+  changed_global_items: BlueprintReviewGlobalChange[]
+  changed_blueprint_chapters: number[]
+  affected_chapter_ordinals: number[]
+  reusable_accepted_chapter_ordinals: number[]
+  reason: string
+}
+
 export interface BlueprintReviewWorkpack {
   sid: string
   title: string
   read_only: true
   auto_decisions: false
-  review_contract_version: 'stage2-blueprint-review-v4'
+  review_contract_version: 'stage2-blueprint-review-v5'
   review_identity_sha256: string
   validation_seal_sha256: string
   review_token: string
+  global_review: Record<string, unknown>
+  review_delta?: BlueprintReviewDelta | null
   subject_sha256: string
   binding_sha256: string
   binding: {

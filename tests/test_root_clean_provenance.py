@@ -37,6 +37,8 @@ def _ctx(novel_dir: Path, node: str = 'stage4.context') -> RunContext:
 
 
 def _book(tmp_path: Path) -> Path:
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
     novel_dir = tmp_path / '根哈希_123'
     clean = novel_dir / 'stage0/clean_text.txt'
     clean.parent.mkdir(parents=True)

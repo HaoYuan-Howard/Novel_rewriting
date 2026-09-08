@@ -43,6 +43,8 @@ def _profile() -> AgentProfile:
 def _ctx(
         base: Path, *, node: str = 'stage6.hook', run_id: str | None = None,
 ) -> RunContext:
+    from novel.work_units import require_workflow
+    require_workflow(base)
     novel_dir = base / 'Hook执行测试_771'
     clean = novel_dir / STAGE0_CLEAN_TEXT
     clean.parent.mkdir(parents=True, exist_ok=True)

@@ -563,6 +563,9 @@ def _respond_blueprints(req: ChatRequest, by_ordinal: dict[int, dict]) -> ChatRe
 
 
 def _ctx(book: Path, node: str, *, paid: bool = True) -> RunContext:
+    from novel.work_units import require_workflow
+    from novel.llm.ledger import ledger_path
+    require_workflow(book.parent)
     clean = book / 'stage0/clean_text.txt'
     clean.parent.mkdir(parents=True, exist_ok=True)
     if not clean.exists():
@@ -573,8 +576,16 @@ def _ctx(book: Path, node: str, *, paid: bool = True) -> RunContext:
         paid=paid,
         code=prov.code_version(),
         cache=CachePolicy.default(),
-        ledger=CostLedger(path=None),
+        ledger=CostLedger(path=ledger_path(book.parent)),
     )
+
+
+
+def _accept_fixture_global(ctx: RunContext) -> None:
+    """生产纵切显式模拟 Global Commander，供后续 Blueprint 消费。"""
+    from tests.test_stage2_review_decisions import _approve_all_review, _accept_global_node
+    _approve_all_review(ctx.novel_dir)
+    _accept_global_node(ctx.novel_dir)
 
 
 def _client(ctx: RunContext, responder) -> tuple[LlmClient, FakeTransport]:
@@ -650,6 +661,7 @@ def test_blueprint_old_fact_failure_recovers_from_verified_checkpoint_without_wi
     global_client, _global_transport = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     by_ordinal = _response_blueprints()
     phrase = '信上说父亲已经回城。'
@@ -734,6 +746,7 @@ def test_blueprint_unclosed_checkpoint_keeps_old_fact_failure_hard(
     global_client, _ = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     by_ordinal = _response_blueprints()
     by_ordinal[1]['beats'][0]['fact_atoms'][0]['evidence_phrase'] = \
@@ -806,6 +819,7 @@ def test_blueprint_reasoning_checkpoint_requires_original_answer_lost_evidence(
     global_client, _ = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     by_ordinal = _response_blueprints()
     phrase = '信上说父亲已经回城。'
@@ -883,6 +897,7 @@ def test_blueprint_multiple_matching_checkpoint_payloads_do_not_guess_a_locator(
     global_client, _ = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     ledger_path = tmp_path / 'blueprint-rehome-ambiguous.jsonl'
     total_calls = 0
@@ -987,6 +1002,7 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         assert isinstance(global_artifact, GlobalGrounding)
         assert len(global_transport.calls) == 1
         assert ArtifactStore(global_ctx).exists(extract.GLOBAL_REL)
+        _accept_fixture_global(global_ctx)
 
         by_ordinal = _response_blueprints()
 
@@ -1068,6 +1084,7 @@ def test_blueprint_resume_after_formal_write_is_idempotent_before_commit_sentine
         global_client, _ = _client(
             global_ctx, lambda _req, _index: _ok(_response_global()))
         extract.run_global(global_ctx, global_client)
+        _accept_fixture_global(global_ctx)
 
         run_id = new_run_id()
         ledger_path = root / '_service' / 'ledger.jsonl'
@@ -1139,7 +1156,8 @@ def test_blueprint_resume_after_formal_write_is_idempotent_before_commit_sentine
         assert stage2_runs.committed(resumed_ctx) is not None
         audit_path = ledger_path.with_name(AUDIT_REL[-1])
         audit = [json.loads(line) for line in audit_path.read_text('utf-8').splitlines()]
-        adopted = [row for row in audit if row.get('kind') == 'artifact_adoption']
+        adopted = [row for row in audit if row.get('kind') == 'artifact_adoption'
+                   and row.get('artifact') == 'stage2/chapter_blueprints.json']
         assert len(adopted) == len(main_text()), 'resume 不得重复追加 adoption'
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -1159,6 +1177,7 @@ def test_blueprint_resume_after_prepare_before_formal_uses_sealed_candidate(
         global_client, _ = _client(
             global_ctx, lambda _req, _index: _ok(_response_global()))
         extract.run_global(global_ctx, global_client)
+        _accept_fixture_global(global_ctx)
 
         stale_formal_bytes = None
         if stale_formal:
@@ -1182,6 +1201,7 @@ def test_blueprint_resume_after_prepare_before_formal_uses_sealed_candidate(
             assert ArtifactStore(_ctx(book, 'stage2.blueprint')).freshness(
                 extract.BLUEPRINT_REL).state == 'stale'
             stale_formal_bytes = (book / extract.BLUEPRINT_REL).read_bytes()
+            _accept_fixture_global(global_ctx)
 
         run_id = new_run_id()
         ledger_path = root / '_service' / 'ledger.jsonl'
@@ -1563,7 +1583,7 @@ def test_global_candidate_terminal_rejection_writes_invalid_only_once():
             lambda req, _index: _respond_blueprints(
                 req, _response_blueprints()),
         )
-        with pytest.raises(ProvenanceRefused, match='不得启动付费 Blueprint'):
+        with pytest.raises(GateBlocked, match='比旧正式稿更新的问题稿'):
             extract.run_blueprint(blueprint_ctx, blueprint_client)
         assert blueprint_transport.calls == [], '称名未收口必须在任何 Blueprint wire 前停止'
         assert not list((book / 'stage2/_rounds').glob(
@@ -1576,10 +1596,10 @@ def test_global_candidate_terminal_rejection_writes_invalid_only_once():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_non_name_global_hard_still_materializes_projection_and_blueprint_lands(
+def test_non_name_global_hard_keeps_projection_but_blocks_blueprint_before_wire(
         tmp_path):
-    """Global 非称名 HARD 留在 INVALID；Blueprint 只按自身 HARD 决定正式落盘。"""
-    book = tmp_path / 'Global问题稿仍可跑蓝图_4531'
+    """称名投影可供诊断；任何 Global HARD 都不能越过独立接受闸生产 Blueprint。"""
+    book = tmp_path / 'Global问题稿阻止蓝图_4531'
     book.mkdir()
     global_ctx = _ctx(book, 'stage2.global')
     store = ArtifactStore(global_ctx)
@@ -1608,18 +1628,13 @@ def test_non_name_global_hard_still_materializes_projection_and_blueprint_lands(
         blueprint_ctx,
         lambda req, _index: _respond_blueprints(req, by_ordinal),
     )
-    report = extract.run_blueprint(blueprint_ctx, blueprint_client)
+    with pytest.raises(GateBlocked, match='比旧正式稿更新的问题稿'):
+        extract.run_blueprint(blueprint_ctx, blueprint_client)
 
-    assert len(blueprint_transport.calls) == len(main_text())
-    assert not report.passed, '联合报告仍应披露 Global HARD，不能洗成全绿'
-    assert store.exists(extract.BLUEPRINT_REL)
+    assert blueprint_transport.calls == [], '非称名 HARD 同样必须在 Blueprint wire 前停止'
+    assert not store.exists(extract.BLUEPRINT_REL)
     assert not store.exists(extract._INVALID)
-    artifact = ArtifactStore(blueprint_ctx).read_own(
-        ChapterBlueprints, extract.BLUEPRINT_REL)[0]
-    assert set(artifact.provenance.inputs) == {
-        extract.MAIN_TEXT, extract.BLUEPRINT_CHARACTER_REL,
-    }
-    assert extract.GLOBAL_REL not in artifact.provenance.inputs
+    assert store.exists(extract._GLOBAL_INVALID)
 
     from novel.stages.stage2.global_review import require_approved
 
@@ -1638,17 +1653,22 @@ def test_name_change_with_interrupted_projection_write_closes_blueprint_and_stag
     global_client, _ = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     _grounding, raw = store.read_own(GlobalGrounding, extract.GLOBAL_REL)
     renamed = raw['entities']['characters']['char_001']
-    renamed['canonical'] = '中断后新名'
-    renamed['address'][0]['surface'] = '中断后新名'
+    renamed['canonical'] = '宝珠'
+    renamed['address'][0]['surface'] = '宝珠'
     (book / extract.GLOBAL_REL).write_text(
         json.dumps(encode_artifact(extract.GLOBAL_REL, raw),
                    ensure_ascii=False, indent=2) + '\n',
         encoding='utf-8', newline='\n')
     assert store.freshness(extract.GLOBAL_REL).state == 'fresh'
     assert store.freshness(extract.BLUEPRINT_CHARACTER_REL).state == 'stale'
+    from tests.test_stage2_review_decisions import _approve_all_review, _accept_global_node
+    store.write(extract.GLOBAL_REVIEW_REL, build_review(raw))
+    _approve_all_review(book)
+    _accept_global_node(book)
 
     blueprint_ctx = _ctx(book, 'stage2.blueprint')
     blueprint_client, blueprint_transport = _client(
@@ -1659,19 +1679,8 @@ def test_name_change_with_interrupted_projection_write_closes_blueprint_and_stag
         extract.run_blueprint(blueprint_ctx, blueprint_client)
     assert blueprint_transport.calls == []
 
-    # 隔离掉 review 的更早阻塞，只验证 Stage4 自己确实显式复查 projection；
-    # 否则普通 Blueprint freshness 不递归 special artifact，旧字节可能漏过。
     from novel.stages.stage2 import global_review
 
-    monkeypatch.setattr(
-        global_review, 'generation_status',
-        lambda _ctx: (
-            SimpleNamespace(
-                safe=True, current=True, blocking_item_ids=(),
-            ),
-            {'PASS': 1},
-        ),
-    )
     with pytest.raises(UpstreamStale, match='blueprint_character_projection'):
         global_review.require_approved(
             _ctx(book, 'stage4.design', paid=False))
@@ -1768,7 +1777,7 @@ def test_stage2_global_invalid_can_be_revalidated_without_another_llm_call():
 
 
 def test_global_resample_bypasses_the_rejected_cache_and_preserves_its_round():
-    """普通重跑仍命中问题缓存；显式重采样才产生第二次调用与新轮次。"""
+    """显式重采样生成新候选并归档问题稿，同时沿用原工作单元预算。"""
     root = Path(tempfile.mkdtemp())
     book = root / '全局重采样测试_460'
     book.mkdir()
@@ -1788,14 +1797,6 @@ def test_global_resample_bypasses_the_rejected_cache_and_preserves_its_round():
             extract.run_global(ctx, client)
         original_invalid = (book / extract._GLOBAL_INVALID).read_bytes()
 
-        # 参数未变的普通重跑必须仍然读缓存，不能暗中把“重跑”解释成“再花钱”。
-        with pytest.raises(GateBlocked) as blocked:
-            extract.run_global(ctx, client)
-        assert ('stage2.global --revalidate --actor <id> --reason <why>'
-                in str(blocked.value))
-        assert len(transport.calls) == 1
-        assert ctx.ledger.usage().calls_cached == 1
-
         artifact = extract.run_resample(ctx, client)
         assert isinstance(artifact, GlobalGrounding)
         assert ctx.cache.name == 'refresh-write'
@@ -1807,7 +1808,9 @@ def test_global_resample_bypasses_the_rejected_cache_and_preserves_its_round():
         assert archived and any(path.read_bytes() == original_invalid for path in archived), \
             '原问题稿没有进入轮次归档'
         usage = ctx.ledger.usage()
-        assert usage.calls_made == 2 and usage.calls_cached == 1
+        assert usage.calls_made == 2 and usage.calls_cached == 0
+        from novel.work_units import budget_for
+        assert budget_for(ctx, scope='book').used == 2
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1838,9 +1841,10 @@ def test_stage2_global_over_limit_stops_before_transport_cache_ledger_or_artifac
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_stage4_plan_over_limit_with_candidate_stops_before_b_transport_or_outputs():
+def test_stage4_plan_over_limit_with_candidate_stops_before_b_transport_or_outputs(monkeypatch):
     from novel.stages.stage4 import plan as stage4_plan
-    from tests.factories import approved_global_review
+    from tests.test_stage2_review_decisions import _accept_blueprint_node
+    from tests.test_stage4_plan_chapters import _inject_stage_ambiguities
     from tests.test_stage4_v3_integration import _split_a_responder
 
     root = Path(tempfile.mkdtemp())
@@ -1854,13 +1858,7 @@ def test_stage4_plan_over_limit_with_candidate_stops_before_b_transport_or_outpu
         global_client, _ = _client(
             global_ctx, lambda _request, _index: _ok(_response_global()))
         extract.run_global(global_ctx, global_client)
-        global_store = ArtifactStore(global_ctx)
-        current_global = global_store.read_own(
-            GlobalGrounding, extract.GLOBAL_REL)[0]
-        global_store.write(
-            extract.GLOBAL_REVIEW_REL,
-            approved_global_review(current_global),
-        )
+        _accept_fixture_global(global_ctx)
 
         by_ordinal = _response_blueprints()
 
@@ -1870,6 +1868,7 @@ def test_stage4_plan_over_limit_with_candidate_stops_before_b_transport_or_outpu
         blueprint_ctx = _ctx(book, 'stage2.blueprint')
         blueprint_client, _ = _client(blueprint_ctx, respond)
         assert extract.run_blueprint(blueprint_ctx, blueprint_client).passed
+        _accept_blueprint_node(book, monkeypatch)
 
         # v3 的 B 相只接受已经正式落盘的冻结 A 候选。先单独走 A producer，
         # 否则这个用例只会在预算闸之前因缺 candidate 终止，根本没测到 B 的预算前置。
@@ -1886,13 +1885,24 @@ def test_stage4_plan_over_limit_with_candidate_stops_before_b_transport_or_outpu
         assert len(design_transport.calls) == 1 + len(
             produced_blueprints.blueprints)
         candidate_before = (book / stage4_plan.CANDIDATE_REL).read_bytes()
+        # 已有 A 候选在本夹具里全可机械绑定；只把第一章一项归属设为真实关闭式
+        # 歧义，才会进入 B 的逐章模型请求准入，其他章节仍保持零调用。
+        monkeypatch.setattr(
+            stage4_plan, 'build_mechanical_baseline',
+            _inject_stage_ambiguities(stage4_plan.build_mechanical_baseline, (1,)))
 
         ctx = _ctx(book, 'stage4.plan')
         transport = FakeTransport.always(ChatResponse(content='{}'))
-        # Stage4B 当前声明 48k 输出；952001 + 48000 = 1000001，恰越过
-        # DeepSeek V4 的 1M context。不能沿用 Stage2 global 的 904001，后者配
-        # global 的 96k 输出才越线，放到 B 已经是合法预算。
-        checker = partial(enforce_request_budget, counter=lambda _request: 952_001)
+        # 逐章 B 请求声明 16k 输出；984001 + 16000 = 1000001，恰越过 1M。
+        # 本次真实请求本身也参与断言，避免输出上限调整后继续测一个未命中闸的常数。
+        counted = []
+
+        def count_input(request):
+            counted.append(request)
+            assert request.max_tokens == 16_000
+            return 984_001
+
+        checker = partial(enforce_request_budget, counter=count_input)
         client = LlmClient(ctx, transport, cache=ResponseCache(root / 'cache'),
                            model='deepseek-v4-pro', max_retries=0,
                            budget_checker=checker)
@@ -1908,6 +1918,7 @@ def test_stage4_plan_over_limit_with_candidate_stops_before_b_transport_or_outpu
         assert not store.exists(stage4_plan._INVALID)
         assert not store.exists(stage4_plan.CTX_REL)
         assert transport.calls == []
+        assert len(counted) == 1
         assert ctx.ledger.usage() is None
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -2039,6 +2050,7 @@ def test_stage2_blueprint_renormalize_does_not_invent_character_refs():
         global_client, _global_transport = _client(
             global_ctx, lambda _req, _index: _ok(_response_global()))
         extract.run_global(global_ctx, global_client)
+        _accept_fixture_global(global_ctx)
 
         by_ordinal = _response_blueprints()
 
@@ -2080,6 +2092,7 @@ def test_old_global_input_edge_refreshes_current_v7_without_wire(tmp_path):
     global_client, _ = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     by_ordinal = _response_blueprints()
     blueprint_ctx = _ctx(book, 'stage2.blueprint')
@@ -2138,6 +2151,7 @@ def test_old_v6_live_invalid_routes_to_renormalize_without_wire(
     global_client, _ = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     by_ordinal = _response_blueprints()
     blueprint_ctx = _ctx(book, 'stage2.blueprint')
@@ -2212,6 +2226,7 @@ def test_non_exact_legacy_invalid_never_borrows_the_renormalize_marker(
     global_client, _ = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     blueprint_ctx = _ctx(book, 'stage2.blueprint')
     blueprint_client, _transport = _client(
@@ -2284,6 +2299,7 @@ def test_exact_legacy_keys_never_hide_a_changed_global_upstream(
     global_client, _ = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     blueprint_ctx = _ctx(book, 'stage2.blueprint')
     blueprint_client, _transport = _client(
@@ -2552,6 +2568,7 @@ def test_stage2_renormalize_rejects_locator_shaped_formal_artifact():
         global_client, _ = _client(
             global_ctx, lambda _req, _index: _ok(_response_global()))
         extract.run_global(global_ctx, global_client)
+        _accept_fixture_global(global_ctx)
 
         by_ordinal = _response_blueprints()
 
@@ -2590,6 +2607,7 @@ def test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book():
         global_client, _global_transport = _client(
             global_ctx, lambda _req, _index: _ok(_response_global()))
         extract.run_global(global_ctx, global_client)
+        _accept_fixture_global(global_ctx)
 
         by_ordinal = _response_blueprints()
 
@@ -2651,6 +2669,7 @@ def test_targeted_refresh_drains_two_chapters_and_resumes_once_from_checkpoints(
     global_client, _global_transport = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     by_ordinal = _response_blueprints()
     baseline_ctx = _ctx(book, 'stage2.blueprint')
@@ -2795,6 +2814,7 @@ def test_targeted_v2_refresh_cannot_open_a_second_batch_in_detail_phase(
     global_client, _global_transport = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     texts = {row['chapter_ordinal']: row['text'] for row in main_text()}
     by_ordinal = {
@@ -2882,8 +2902,10 @@ def test_targeted_v2_refresh_cannot_open_a_second_batch_in_detail_phase(
         resumed,
         lambda _req, _index: ChatResponse(
             content='{"blueprints":[}', finish_reason='stop', model='test-model'))
-    with pytest.raises(LlmFailed):
+    from novel.work_units import WorkUnitBudgetExhausted, budget_for
+    with pytest.raises(WorkUnitBudgetExhausted):
         extract.run_blueprint(resumed, resumed_client, chapters=(1,))
+    assert budget_for(resumed, scope='chapter:1').used == 4
 
     assert stage2_runs.paths.stage2_blueprint_checkpoint_path(
         book, run_id, 'repair-boundaries', 1).is_file()

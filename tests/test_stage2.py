@@ -471,6 +471,46 @@ def test_the_clean_base_leaves_no_rule_unimplemented():
     assert len(outs) == len(want) == 68
 
 
+@pytest.mark.parametrize('missing_main_text', [None, []])
+@pytest.mark.parametrize('recovery_record', ['missing', 'known_clear', 'known_failure'])
+def test_missing_main_text_preserves_unver_and_original_recovery_evidence(
+        missing_main_text, recovery_record):
+    """全表与真实报告都闭合；缺原文不能伪造覆盖通过，也不抹去原生产失败账。"""
+    from novel.prov import FreshnessReport
+    from novel.report import build
+
+    bp = blueprints()
+    if recovery_record == 'missing':
+        bp['_provenance'].pop('verbatim_failures')
+        bp['_provenance'].pop('fact_atom_failures')
+    elif recovery_record == 'known_failure':
+        bp['_provenance']['verbatim_failures'] = [['b01_01', 'span', '段号区间倒序']]
+        bp['_provenance']['fact_atom_failures'] = [['f01_001', 'evidence_phrase', '证据未定位']]
+    outcomes = checks.check(global_g=global_grounding(), blueprints=bp,
+                            main_text=missing_main_text)
+    registered = {row.rule for row in REGISTRY.all() if row.stage == 'stage2'}
+    assert {row.rule for row in outcomes} == registered
+    assert len(outcomes) == len(registered), '缺料分支也必须每条规则恰好一次'
+    report = build(sid='123', node='stage2.blueprint',
+                   freshness=FreshnessReport('unknown', 'no_inputs'), outcomes=outcomes)
+    lines = {line.rule: line for line in report.rules}
+    assert all(line.status != 'skipped' for line in lines.values())
+    for rule in ('span_unlocatable', 'edge_hole', 'beats_collapsed', 'beats_coarse',
+                 'span_coverage', 'span_coverage_per_chapter', 'uncovered_holes'):
+        assert lines[rule].status == 'unver'
+        assert 'stage1/main_text.json' in next(row.unver_why for row in outcomes if row.rule == rule)
+        assert not lines[rule].findings
+    # 这些是蓝图自身可查的 id 形状，以及已正面留账的历史状态，不冒充原文复核。
+    assert lines['beat_id_unique'].status == lines['beat_id_format'].status == 'ok'
+    expected = {'missing': 'unver', 'known_clear': 'ok', 'known_failure': 'hit'}
+    verbatim = lines['verbatim_failed']
+    assert verbatim.status == expected[recovery_record]
+    if recovery_record == 'known_failure':
+        assert len(verbatim.findings) == 1 and verbatim.findings[0].output_ordinal == 1
+        assert any('段号区间倒序' in item for item in verbatim.findings[0].evidence)
+        assert any('证据未定位' in item for item in verbatim.findings[0].evidence)
+
+
 def test_global_field_failures_route_to_resample_except_typed_human_repairs():
     routed = {rule.rule for rule in REGISTRY.all()
               if rule.stage == 'stage2'

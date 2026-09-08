@@ -24,12 +24,12 @@ import pytest
 from contracts.invariants import DESIGN_REVIEW_CONTRACT
 from contracts.rules import REGISTRY
 from novel import prov
-from novel.errors import TerminalState
+from novel.errors import ProvenanceRefused, TerminalState
 from novel.report.builder import remediation_of
 from novel.stages.stage4 import checks, plan
 from tests.test_stage4_agent_boundary import (
     _book, _bound_b_response, _client, _ctx, _land_design, _NoWireDriver,
-    _OneTurnDriver, _seed_current_stage2,
+    _OneTurnDriver, _seed_current_stage2, _plan_pool,
 )
 
 
@@ -155,20 +155,33 @@ def test_prepare_plan_candidate_refuses_blocked_preflight_before_any_wire(
 
 
 def test_clean_plan_wire_still_runs_after_passing_preflight(
-        tmp_path: Path,
+        tmp_path: Path, monkeypatch,
 ) -> None:
     """预检 pass 不改变 B 的正常路径：一次 wire 即 passed。"""
     book, blueprints_raw, candidate = _clean_book(tmp_path)
     ctx = _ctx(book, 'stage4.plan')
-    driver = _OneTurnDriver(
-        _bound_b_response(candidate, blueprints_raw),
+    client, driver = _plan_pool(
+        ctx, monkeypatch, max_turns=2,
         session_id='provider-preflight-clean')
-    client = _client(ctx, driver, max_turns=2)
     report = plan.run_plan(ctx, client)
     client.finish(process_state='ok', delivery_state='delivered')
     client.close()
     assert report.passed
     assert driver.calls == 1
+
+
+def test_new_plan_rejects_whole_book_agent_before_any_driver_call(tmp_path: Path) -> None:
+    """新 B 请求必须有真实章节身份，不能用全书物理会话虚挂 chapter 预算。"""
+    book, _blueprints, _candidate = _clean_book(tmp_path)
+    ctx = _ctx(book, 'stage4.plan')
+    driver = _NoWireDriver()
+    client = _client(ctx, driver)
+    try:
+        with pytest.raises(ProvenanceRefused, match='Stage4PlanSessionPool'):
+            plan.run_plan(ctx, client)
+    finally:
+        client.close()
+    assert driver.calls == 0
 
 
 def test_structure_alignment_is_metric_only_with_no_paid_action() -> None:

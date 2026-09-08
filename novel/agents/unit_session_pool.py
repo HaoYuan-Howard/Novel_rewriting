@@ -172,7 +172,8 @@ class UnitSessionPool(Generic[K]):
         self.ctx = ctx
         self.profile = profile
         self.model = profile.model
-        self.max_turns = max_turns
+        from contracts.invariants import WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS
+        self.max_turns = min(max_turns, WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS)
         self.concurrency = effective_concurrency
         self.pool_name = pool_name
         self._clients: dict[K, SessionAgentClient] = {}

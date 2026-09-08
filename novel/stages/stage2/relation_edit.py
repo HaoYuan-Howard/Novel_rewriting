@@ -25,9 +25,11 @@ from contracts.invariants import BLUEPRINT_RELATION_REVIEW_CONTRACT
 from contracts.schema import encode_artifact
 from contracts.schema.api import BlueprintRelationEditPreview
 from contracts.schema.report import CheckReport
-from contracts.schema.stage2 import BlueprintRelationEdit, ChapterBlueprints
+from contracts.schema.stage2 import BlueprintProvenance, BlueprintRelationEdit, ChapterBlueprints
 from novel import paths
-from novel.errors import PathRefused, TerminalState, UpstreamMissing
+from novel.errors import (
+    ArtifactSubmittedReviewPending, NovelError, PathRefused, TerminalState, UpstreamMissing,
+)
 from novel.run import RunContext
 from novel.store import ArtifactStore
 
@@ -163,6 +165,7 @@ class PreparedRelationEdit:
     outcomes: tuple[Any, ...]
     hard_hits: tuple[str, ...]
     changed_chapters: tuple[int, ...]
+    cross_global_sha256: str | None = None
 
     def preview(self) -> BlueprintRelationEditPreview:
         counts = _relation_counts(self.artifact, self.changed_chapters)
@@ -205,6 +208,13 @@ def prepare_edit(
     if request.review_token != expected_token:
         raise TerminalState(
             'Blueprint relation edit 已过期：review_token 与当前内容审阅面不一致')
+    cross_global_sha256 = None
+    if request.post_edit_accept:
+        from novel.views.stage2 import blueprint_review_workpack
+        pack = blueprint_review_workpack(ctx.novel_dir.parent, ctx.sid)
+        if pack.review_token != request.expected_cross_review_token:
+            raise TerminalState('Blueprint 修后接受的交叉审阅包已过期')
+        cross_global_sha256 = hashlib.sha256(_canonical_bytes(pack.global_review)).hexdigest()
 
     by_ordinal = {
         chapter.chapter_ordinal: chapter for chapter in request.chapters}
@@ -228,10 +238,25 @@ def prepare_edit(
                 relation.model_dump(mode='json')
                 for relation in replacement.narrative_relations
             ]
+            for field, identity, patches in (
+                    ('fact_atoms', 'fact_id', replacement.fact_patches),
+                    ('beats', 'beat_id', replacement.beat_patches)):
+                edits = {getattr(patch, identity): patch for patch in patches}
+                existing = {item[identity] for item in row[field]}
+                if len(edits) != len(patches) or not set(edits) <= existing:
+                    raise TerminalState('Blueprint 局部订正只允许唯一的当前主体 ID')
+                row[field] = [{**item, **edits[item[identity]].model_dump(
+                    mode='json', exclude_unset=True)}
+                              if item[identity] in edits else item for item in row[field]]
 
     rewritten = ctx.rewrite_provenance(
         previous.provenance, by='--apply-edit').model_copy(
             update={'origin': 'human'})
+    data, accounting = extract.normalize_blueprints(
+        data, main_text,
+        previous_fact_atom_failures=list(previous.provenance.fact_atom_failures))
+    rewritten = BlueprintProvenance.model_validate({
+        **rewritten.model_dump(), **accounting})
     try:
         artifact = ChapterBlueprints.model_validate({
             **data, '_provenance': rewritten,
@@ -254,7 +279,7 @@ def prepare_edit(
         ordinal for ordinal in targets
         if before_rows[ordinal] != after_rows[ordinal]))
     if not changed:
-        raise TerminalState('Blueprint relation edit 没有改变任何关系集合')
+        raise TerminalState('Blueprint typed 补丁没有改变任何主体')
 
     candidate = artifact.model_dump(by_alias=True, mode='json')
     outcomes = tuple(extract._judge_candidate(None, candidate, main_text))
@@ -265,6 +290,7 @@ def prepare_edit(
         outcomes=outcomes,
         hard_hits=hits,
         changed_chapters=changed,
+        cross_global_sha256=cross_global_sha256,
     )
 
 
@@ -296,6 +322,18 @@ def apply_edit(
     # 合法 CLI 恢复路，不是第二个状态机。
     with stage2_runs.repair_ownership_lock(ctx.novel_dir):
         request = _read_request(store, ctx, edit_path)
+        request_sha = hashlib.sha256(_canonical_bytes(request.model_dump(mode='json'))).hexdigest()
+        if request.post_edit_accept:
+            from novel.orchestrator.approvals import stage2_patch_receipt
+            receipt = stage2_patch_receipt(ctx.novel_dir.parent, ctx.sid, request_sha)
+            if receipt is not None:
+                current = store.read_own(ChapterBlueprints, REL, require_current=True)[0]
+                if review_subject_sha256(current) == receipt.result_subject_sha256:
+                    # 原补丁已正式提交，重启只重验和补接受；旧 token 不再触发另一次修改。
+                    both = extract._Both(store)
+                    report = extract._report(ctx, store, both, both.judge(), judged_rel=REL)
+                    _accept_submitted_patch(ctx, request, receipt.global_sha256)
+                    return current, report
         prepared = prepare_edit(ctx, request)
         artifact = prepared.artifact
         changed = list(prepared.changed_chapters)
@@ -308,6 +346,14 @@ def apply_edit(
                 f'{list(prepared.hard_hits)}；正式蓝图未覆盖、'
                 '未写入 INVALID')
 
+        if request.post_edit_accept:
+            from novel.orchestrator.approvals import prepare_stage2_patch_receipt
+            assert prepared.cross_global_sha256 is not None
+            prepare_stage2_patch_receipt(
+                ctx.novel_dir.parent, ctx.sid, request_sha256=request_sha,
+                before_token=request.review_token,
+                result_subject_sha256=review_subject_sha256(artifact),
+                global_sha256=prepared.cross_global_sha256)
         extract._write_formal(store, REL, artifact)
         result_sha = hashlib.sha256(
             _canonical_bytes(review_subject(artifact))).hexdigest()
@@ -324,8 +370,54 @@ def apply_edit(
             summary=_relation_counts(artifact, changed),
         )
         both = extract._Both(store)
-        return artifact, extract._report(
+        report = extract._report(
             ctx, store, both, both.judge(), judged_rel=REL)
+        if request.post_edit_accept:
+            _accept_submitted_patch(ctx, request, prepared.cross_global_sha256)
+        return artifact, report
+
+
+def _accept_submitted_patch(
+    ctx: RunContext, request: BlueprintRelationEdit, global_sha256: str | None,
+) -> None:
+    from contracts.schema.api import Stage2NodeReviewRequest
+    from novel.orchestrator.approvals import approve_stage2_review
+    from novel.views.stage2 import blueprint_review_workpack
+    try:
+        workpack = blueprint_review_workpack(ctx.novel_dir.parent, ctx.sid)
+        if hashlib.sha256(_canonical_bytes(workpack.global_review)).hexdigest() != global_sha256:
+            raise TerminalState('Global 在补丁提交期间变化；当前蓝图必须重新交叉审阅')
+        approve_stage2_review(ctx.novel_dir.parent, ctx.sid, Stage2NodeReviewRequest(
+            node='stage2.blueprint', review_token=workpack.review_token,
+            decision='accept', actor=request.actor, reason=request.reason))
+    except (NovelError, OSError, ValueError) as exc:
+        raise ArtifactSubmittedReviewPending(str(exc), hint=(
+            '补丁已落盘并保存恢复身份；对同一 typed 文件重放 --apply-edit 可零模型补提交，'
+            'Global 主体已变化时保留候选并重新交叉审阅。')) from exc
+
+
+def submitted_patch_is_current(
+    base: str, sid: str, payload: dict[str, Any],
+) -> bool:
+    """Supervisor 在候选换版时确认原 typed 回答是否仅剩免费提交接受。"""
+    from contracts.schema import decode_artifact
+    from novel.orchestrator.approvals import stage2_patch_receipt
+    from novel.orchestrator.state import readonly_ctx
+    from novel.views.stage2 import blueprint_review_workpack
+    from novel import prov
+    request = BlueprintRelationEdit.model_validate(
+        decode_artifact(REQUEST_REL, payload).payload)
+    if not request.post_edit_accept:
+        return False
+    digest = hashlib.sha256(_canonical_bytes(request.model_dump(mode='json'))).hexdigest()
+    receipt = stage2_patch_receipt(base, sid, digest)
+    if receipt is None:
+        return False
+    store = ArtifactStore(readonly_ctx(paths.resolve_novel_dir(base, sid), 'stage2.blueprint', prov.code_version()))
+    current = store.read_own(ChapterBlueprints, REL, require_current=True)[0]
+    pack = blueprint_review_workpack(base, sid)
+    return (review_subject_sha256(current) == receipt.result_subject_sha256
+            and hashlib.sha256(_canonical_bytes(pack.global_review)).hexdigest() == receipt.global_sha256)
 
 
 __all__ = [

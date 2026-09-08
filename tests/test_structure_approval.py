@@ -48,6 +48,8 @@ def _proof(decision, *, root: str = 'c' * 40, plan: str = 'd' * 64):
 
 @pytest.fixture
 def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
     book = tmp_path / f'结构审批_{SID}'
     book.mkdir()
     state = {
@@ -168,6 +170,8 @@ def test_old_v5_record_without_typed_writing_fields_remains_migratable():
             'writing_history', 'writing_decision',
             'design_history', 'design_decision',
             'closure_history', 'closure_decision', 'seen_subjects',
+            'stage2_review_history', 'stage2_reviews',
+            'stage2_rework_completed', 'stage2_patch_receipts', 'stage2_blueprint_scope',
         })
     old_payload['v'] = 5
 

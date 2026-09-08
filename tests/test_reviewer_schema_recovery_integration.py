@@ -25,6 +25,7 @@ from novel.commanders import base as commander_base
 from novel.llm.ledger import ledger_path
 from novel.orchestrator import agent, approvals, queue, reviewer_tasks, uploads
 from novel.orchestrator import stage4_reviewer_wire as wire
+from novel.work_units import WorkUnitBudget
 from tests.test_design_review import SID, isolated as design_isolated
 from tests.test_stage4_reviewer_integration import (
     PROFILES, _canonical, _current, _install_task_source, _pack, _response,
@@ -230,9 +231,11 @@ def schema_run(request, monkeypatch):
 
 
 def _seat(harness):
-    task = harness.live['tasks'][0]
-    return agent.reviewer_seat_ledger.read(
-        harness.base, SID, waiting_on=WAITING, business_sha256=task.business_sha256)
+    return _budget(harness)._read()
+
+
+def _budget(harness):
+    return WorkUnitBudget(harness.base, SID, 'stage4.design', 'commander', 'design')
 
 
 def _first_failure(harness, *, expected_error='agent_schema'):
@@ -245,12 +248,10 @@ def _first_failure(harness, *, expected_error='agent_schema'):
     ledger = _seat(harness)
     assert ledger is not None and len(ledger.turns) == 1
     turn = ledger.turns[0]
-    assert turn.purpose == 'review' and turn.outcome == 'failed'
-    assert turn.exit_code == 1 and turn.provider_response_sha256 is None
-    assert ledger.pending_correction is None
+    assert turn.ordinal == 1 and turn.state == 'unknown'
+    assert turn.response_sha256 is None
     [attempt] = turn.attempts
-    assert attempt.wire_evidence is True and attempt.error_kind == expected_error
-    assert attempt.exit_code == 1
+    assert attempt.provider_session_id is not None and attempt.outcome == 'error'
     source_log = agent.run_log_path(harness.base, first.run_id)
     raw_log = source_log.read_bytes()
     assert b'[stdout protocol]' in raw_log and b'"turn.failed"' in raw_log
@@ -266,6 +267,7 @@ def _first_failure(harness, *, expected_error='agent_schema'):
               if row.session_run_id == turn.session_run_id]
     assert {row.kind for row in events} == {'started', 'attempt', 'turn', 'ended'}
     assert all(row.usage is None for row in events)
+    assert all(row.error_kind == expected_error for row in events if row.kind != 'started')
     return SimpleNamespace(
         run=first, turn=turn.model_dump(mode='json'), source_log=source_log,
         log_bytes=raw_log, session_id=turn.session_run_id,
@@ -274,7 +276,10 @@ def _first_failure(harness, *, expected_error='agent_schema'):
 
 
 def _assert_original_preserved(harness, source):
-    assert _seat(harness).turns[0].model_dump(mode='json') == source.turn
+    original = _seat(harness).turns[0].model_dump(mode='json')
+    # 准入可把已证明的配置拒绝闭合为 failed，原请求、发送和费用永远不重写。
+    assert {key: value for key, value in original.items() if key not in {'state', 'reason_code'}} == {
+        key: value for key, value in source.turn.items() if key not in {'state', 'reason_code'}}
     assert source.source_log.read_bytes() == source.log_bytes
     assert agent_session_audit.audit_path(harness.base).read_bytes().startswith(source.audit_bytes)
     assert ledger_path(harness.base).read_bytes().startswith(source.cost_bytes)
@@ -294,12 +299,11 @@ def test_stdout_schema_rejection_recovers_in_new_run_and_consumes_canonical_acti
         h.base, SID, surface='design', payload=h.live['applied'][0])
     assert uploads.load_reviewer_actions(h.base, SID) == []
     ledger = _seat(h)
-    assert [row.purpose for row in ledger.turns] == (
-        ['review', 'schema_recovery', 'correction'] if typed_correction
-        else ['review', 'schema_recovery'])
+    assert len(ledger.turns) == (3 if typed_correction else 2)
     recovery_turn = ledger.turns[1]
-    assert recovery_turn.schema_recovery is not None
-    proof = recovery_turn.schema_recovery
+    from contracts.schema.orchestration import ReviewerSchemaRecoveryProof
+    proof = ReviewerSchemaRecoveryProof.model_validate(
+        _budget(h).request_payload(recovery_turn.turn_id)['schema_recovery'])
     assert proof.policy == 'codex-output-schema-rejection-v1'
     assert proof.source_turn_id == source.turn['turn_id']
     assert proof.source_parent_run_id == source.run.run_id
@@ -307,8 +311,8 @@ def test_stdout_schema_rejection_recovers_in_new_run_and_consumes_canonical_acti
     assert proof.source_code_version == '1' * 40
     assert proof.validation_code_version == '2' * 40
     assert recovery_turn.session_run_id != source.session_id
-    assert recovery_turn.parent_run_id == second.run_id
-    assert recovery_turn.ordinal == 2 and ledger.pending_correction is None
+    assert recovery_turn.run_id == second.run_id
+    assert recovery_turn.ordinal == 2 and ledger.turns[-1].state == 'adopted'
     first, fresh = h.live['invocations'][:2]
     assert fresh.resume_provider_session_id is None
     assert first.output_schema_sha256 != fresh.output_schema_sha256
@@ -341,7 +345,8 @@ def test_schema_recovery_never_reissues_unchanged_or_unproven_request(schema_run
     second = h.run(
         code='1' * 40 if variant == 'same_code' else '2' * 40,
         schema_revision='old' if variant == 'same_schema' else 'fixed')
-    assert second.exit_code == 2
+    # 名称似 schema 错误但拒绝参数是 model，证据矛盾必须保持 unknown。
+    assert second.exit_code == (70 if variant == 'wrong_param' else 2)
     assert len(h.live['invocations']) == 1
     assert h.live['applied'] == [] and h.live['repairs'] == []
     assert len(_seat(h).turns) == 1
@@ -360,25 +365,26 @@ def test_schema_recovery_never_reissues_unchanged_or_unproven_request(schema_run
         assert third.exit_code == 2
         assert len(h.live['invocations']) == 2
         assert len(h.live['applied']) == len(h.live['repairs']) == 1
-        assert [row.purpose for row in _seat(h).turns] == ['review', 'schema_recovery']
+        assert len(_seat(h).turns) == 2
         _assert_original_preserved(h, source)
 
 
 def test_repeated_schema_repairs_consume_existing_budget_without_reset(schema_run):
     h = schema_run
-    h.live['scenarios'] = ['schema_reject'] * 3
+    h.live['scenarios'] = ['schema_reject'] * 4
     source = _first_failure(h)
     second = h.run(code='2' * 40, schema_revision='fixed-once')
     third = h.run(code='3' * 40, schema_revision='fixed-twice')
     assert second.exit_code == third.exit_code == 1
     ledger = _seat(h)
-    assert [row.purpose for row in ledger.turns] == ['review', 'schema_recovery', 'schema_recovery']
     assert [row.ordinal for row in ledger.turns] == [1, 2, 3]
     assert len({row.session_run_id for row in ledger.turns}) == 3
-    assert all(row.exit_code == 1 for row in ledger.turns)
+    assert all(row.response_sha256 is None for row in ledger.turns)
     fourth = h.run(code='4' * 40, schema_revision='another-fix')
-    assert fourth.exit_code == 2
-    assert len(h.live['invocations']) == len(_seat(h).turns) == 3
+    assert fourth.exit_code == 1
+    fifth = h.run(code='5' * 40, schema_revision='fifth-fix')
+    assert fifth.exit_code == 2
+    assert len(h.live['invocations']) == len(_seat(h).turns) == 4
     assert h.live['applied'] == [] and h.live['repairs'] == []
     _assert_original_preserved(h, source)
 
@@ -386,15 +392,15 @@ def test_repeated_schema_repairs_consume_existing_budget_without_reset(schema_ru
 def test_schema_recovery_and_last_invalid_correction_stop_before_an_extra_popen(schema_run):
     h = schema_run
     # 两个错误回答的原始字节不同，不能靠 no-progress 判重提前停机掩盖预算错误。
-    h.live['scenarios'] = ['schema_reject', 'typed_invalid', 'typed_invalid']
+    h.live['scenarios'] = ['schema_reject', 'typed_invalid', 'typed_invalid', 'typed_invalid']
     source = _first_failure(h)
     second = h.run(code='2' * 40, schema_revision='fixed')
     assert second.exit_code == 2
     ledger = _seat(h)
-    assert [row.purpose for row in ledger.turns] == ['review', 'schema_recovery', 'correction']
-    assert ledger.turns[1].provider_response_sha256 != ledger.turns[2].provider_response_sha256
-    assert len(h.live['invocations']) == len(h.live['popens']) == 3
-    assert ledger.pending_correction is not None
+    assert len(ledger.turns) == 4
+    assert ledger.turns[1].response_sha256 != ledger.turns[2].response_sha256
+    assert len(h.live['invocations']) == len(h.live['popens']) == 4
+    assert ledger.turns[-1].feedback_sha256 is not None
     assert h.live['applied'] == [] and h.live['repairs'] == []
     _assert_original_preserved(h, source)
 
@@ -404,52 +410,48 @@ def test_durable_schema_recovery_action_replays_after_finish_crash_only_with_int
         schema_run, monkeypatch, source_drift):
     h = schema_run
     source = _first_failure(h)
-    seats = agent.reviewer_seat_ledger
-    actual_finish = seats.finish
+    actual_record = agent._record_reviewer_action
     finish_failures = []
 
-    def interrupted_finish(base, sid, *, turn_id, exit_code, **kwargs):
-        ledger = seats.read(
-            base, sid, waiting_on=kwargs['waiting_on'],
-            business_sha256=kwargs['business_sha256'])
-        turn = next(row for row in ledger.turns if row.turn_id == turn_id)
-        if (turn.purpose == 'schema_recovery' and exit_code == 0
-                and not finish_failures):
+    def interrupted_record(base, sid, **kwargs):
+        result = actual_record(base, sid, **kwargs)
+        turn = _budget(h).turn(kwargs['work_unit_turn_id'])
+        if turn.ordinal == 2 and not finish_failures:
             [(path, record)] = uploads.load_reviewer_actions(base, sid)
-            assert record.reviewer_seat_turn_id == turn_id
+            assert record.work_unit_turn_id == turn.turn_id
             assert record.reviewer_session_run_id == turn.session_run_id
-            assert record.provider_response_sha256 == turn.provider_response_sha256
-            assert turn.provider_response_sha256 is not None
-            assert turn.outcome == 'started'
+            assert turn.response_sha256 is not None
+            assert turn.state == 'delivered'
             assert approvals._read_raw(base, sid).design_decision is None
             finish_failures.append((path, path.read_bytes()))
-            raise OSError('测试：有效决定已持久化，Reviewer 席位封账前进程中断')
-        return actual_finish(base, sid, turn_id=turn_id, exit_code=exit_code, **kwargs)
+            raise OSError('测试：有效决定已持久化，正式提交前进程中断')
+        return result
 
-    monkeypatch.setattr(seats, 'finish', interrupted_finish)
+    monkeypatch.setattr(agent, '_record_reviewer_action', interrupted_record)
     interrupted = h.run(code='2' * 40, schema_revision='fixed')
     assert interrupted.exit_code == 70
     assert len(finish_failures) == 1
     assert len(h.live['invocations']) == len(h.live['popens']) == 2
     assert h.live['applied'] == [] and h.live['repairs'] == []
-    assert _seat(h).turns[1].outcome == 'started'
+    assert _seat(h).turns[1].state == 'delivered'
     _assert_original_preserved(h, source)
     active_path, active_bytes = finish_failures[0]
     assert active_path.read_bytes() == active_bytes
     recovery_log = agent.run_log_path(h.base, interrupted.run_id)
     recovery_log_bytes = recovery_log.read_bytes()
     costs_before_replay = ledger_path(h.base).read_bytes()
-    task = h.live['tasks'][0]
-    seat_path = seats.ledger_path(
-        h.base, SID, waiting_on=WAITING, business_sha256=task.business_sha256)
+    budget = _budget(h)
+    seat_path = budget.path
     if source_drift == 'original_log':
         source.source_log.write_bytes(source.log_bytes + b'\n$ evidence-drift\n')
     elif source_drift == 'recovery_proof':
-        changed = json.loads(seat_path.read_text('utf-8'))
-        changed['turns'][1]['schema_recovery']['source_log_sha256'] = 'f' * 64
-        seat_path.write_bytes(_canonical(changed) + b'\n')
+        turn = budget.latest_turn()
+        request_path = budget.directory / f'{turn.request_payload_sha256}.json'
+        changed = json.loads(request_path.read_text('utf-8'))
+        changed['payload']['schema_recovery']['source_log_sha256'] = 'f' * 64
+        request_path.write_bytes(_canonical(changed) + b'\n')
     before_replay_seat = seat_path.read_bytes()
-    monkeypatch.setattr(seats, 'finish', actual_finish)
+    monkeypatch.setattr(agent, '_record_reviewer_action', actual_record)
 
     recovered = h.run()
 
@@ -471,8 +473,8 @@ def test_durable_schema_recovery_action_replays_after_finish_crash_only_with_int
     assert uploads.load_reviewer_actions(h.base, SID) == []
     ledger = _seat(h)
     assert len(ledger.turns) == 2
-    assert ledger.turns[1].outcome == 'ok' and ledger.turns[1].exit_code == 0
-    assert ledger.turns[1].parent_run_id == interrupted.run_id
+    assert ledger.turns[1].state == 'adopted'
+    assert ledger.turns[1].run_id == interrupted.run_id
     _assert_original_preserved(h, source)
 
 

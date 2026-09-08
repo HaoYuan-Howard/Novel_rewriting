@@ -168,12 +168,14 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '`stage4.design` 付费重跑；旧 v1 不迁移、不手补版本号',
     ),
     'stage4/evidence_binding.json': (
-        3,
+        4,
         '2026-08-26 v2 删除 participant_refs；2026-08-28 v3 把模型 infeasible '
         '降为待核证主张，新增非阻断 binding_concerns、代码铸造的 '
-        'infeasibility_proof 与 human/llm 判别来源账',
-        '`stage4.plan` 在当前 A 正式审阅 accepted 后付费重跑 B，或用 '
-        '`--apply-binding` 提交当前 EvidenceBindingResponse；旧 v1/v2 不迁移、不手补版本号',
+        'infeasibility_proof 与 human/llm 判别来源账；2026-09-08 v4 为按章 legacy B '
+        '新增 work_unit_response 来源，绑定原内容轮、请求和回答 SHA',
+        '旧 base 使用冻结旧代码保留证据；当前 producer 只在新 clean base 从原始材料及 '
+        '当前 A 接受后由 stage4.plan 重建，机械章零模型；可显式 --apply-binding 提交当前 '
+        'EvidenceBindingResponse。旧 v1/v2/v3 不原地迁移、不伪造工作单元来源、不手补版本号',
     ),
     'stage4/writer_context.json': (
         4,
@@ -215,24 +217,15 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '在当前 v2 TrimAudit 上重新走免费、hash-bound 的 `--retain-pretrim` 人工裁决',
     ),
     'stage6/hook.json': (
-        2,
-        '2026-08-23 候选身份与策略名解耦：`ApprovedHook.approach`'
-        '（策略名 + 一个 `human_edit`）换成 `slot`（位置身份 `c1`/`c2`/`c3`，'
-        '`None` = 无前身），`HookCandidateRetry.approach` 同样换成 `slot`。'
-        '⚠ 破坏的理由不是「换个名字更好看」：同一种策略采两条样本时，`approach` '
-        '**在结构上答不出「这份定稿是从哪条候选来的」**，而 `_texts_of` 的标签、'
-        'wontfix 的证据键、判官的 `judged_texts` 键全挂在那个答案上。'
-        '策略名没有丢——由 `candidates[slot].approach` 现算。'
-        '`HOOK_APPROVED_APPROACHES` 随之删除',
-        '`stage6.hook` 重跑（**付费**）。⚠ 重跑写 `approved=None` ⇒ 人工定稿一并失效，'
-        '必须重新走 `stage6.approve --pick` 的 actor / reason / 完整 subject SHA-256。'
-        '⚠⚠ **没有自动迁移，也不能宣称盘上代价为零**：`outputs/_ab/flash/` 仍保留两份'
-        '已到 stage7 的 v1 实验快照，而且都缺 `stage2/global_review_decisions.json`，'
-        '不能直接从 producer 付费重建。本次把它们明确退役为**只读历史实验证据**：'
-        '不纳入 current-schema corpus，也不承诺当前运行时可读；字节原样保留，'
-        '需要检视时使用形状破坏前的代码身份。现役交付必须由 producer 生成 v2 并重新人工定稿。'
-        '当次 `stage6/semantic_*.json` 未破坏形状，但它按 `judged_texts` '
-        '绑候选文本、重跑后会判 stale；后续的 semantic v2 破坏另见独立记录',
+        3,
+        '2026-09-08 同一候选机械 HARD 严格下降时可连续修订；candidate_retry_limit '
+        '改为 legacy 4 / Agent 0，candidate_retries.attempt 为同槽连续唯一的 1..4；'
+        '整书生成和修订仍共同占用工作单元四次内容预算，不给每槽另发预算。',
+        '旧 v1/v2 base 冻结原代码与原账，不迁移、不手改 schema 标记或补新来源。'
+        '新 clean base 从原始材料逐层重建；stage6.hook 在显式付费与外发授权后生产 v3，'
+        '然后由 stage6.semantic 双盲审阅并经 stage6.approve 当前 typed 决定定稿。'
+        '新 v3 已封存提交证明的尾窗走 --recover-prepared 零模型恢复；不是旧产物迁移。'
+        'HookEdit 与 Semantic 仍各自 v2，不因 Hook 升版自动改版本。',
     ),
     'stage6/hook_edit.json': (
         2,
@@ -538,3 +531,50 @@ def test_unreadable_current_artifacts_do_not_take_down_read_only_aggregation(tmp
 
     assert ov.summary.verdict == 'broken'
     assert inbox.total == len(inbox.items)
+
+
+def _hook_with_ordered_retries(attempts: list[int]):
+    from tests.test_stage6_style_ab_review import _hook, _retry
+    artifact = _hook(['甲推门进入庭院。', '乙收到一封密信。', '丙发现灯下的人影。'])
+    payload = artifact.model_dump(by_alias=True, mode='json')
+    rows = []
+    for index, attempt in enumerate(attempts):
+        row = _retry('c1', index)
+        row.update(attempt=attempt, before_hard=4 - index, after_hard=3 - index)
+        rows.append(row)
+    payload['_provenance']['candidate_retries'] = rows
+    return payload
+
+
+def test_hook_v3_records_four_distinct_same_slot_attempts_and_refuses_v2_envelope():
+    from contracts.schema.stage6 import Hook
+    payload = _hook_with_ordered_retries([1, 2, 3, 4])
+    artifact = Hook.model_validate(payload)
+    encoded = encode_artifact('stage6/hook.json', artifact.model_dump(by_alias=True, mode='json'))
+    assert encoded['_schema_version'] == 3
+    assert [row.attempt for row in artifact.provenance.candidate_retries] == [1, 2, 3, 4]
+    assert Hook.model_validate(decode_artifact('stage6/hook.json', encoded).payload) == artifact
+    encoded['_schema_version'] = 2
+    with pytest.raises(ArtifactVersionError):
+        decode_artifact('stage6/hook.json', encoded)
+    assert ARTIFACT_SPECS['stage6/hook_edit.json'].current_version == 2
+    assert ARTIFACT_SPECS['stage6/semantic_{n}.json'].current_version == 2
+
+
+@pytest.mark.parametrize('attempts', [[1, 1], [1, 3], [2], [1, 2, 3, 5]])
+def test_hook_v3_rejects_repeated_missing_or_out_of_budget_retry_identity(attempts):
+    from contracts.schema.stage6 import Hook
+    with pytest.raises(ValidationError):
+        Hook.model_validate(_hook_with_ordered_retries(attempts))
+
+
+def test_hook_v3_distinguishes_agent_full_replacement_from_legacy_local_revision():
+    from contracts.schema.stage6 import Hook, HookParams
+    assert HookParams(max_tokens=1).candidate_retry_limit == 4
+    assert HookParams(max_tokens=1, candidate_retry_limit=0).candidate_retry_limit == 0
+    with pytest.raises(ValidationError):
+        HookParams(max_tokens=1, candidate_retry_limit=1)
+    payload = _hook_with_ordered_retries([1])
+    payload['_provenance']['params']['candidate_retry_limit'] = 0
+    with pytest.raises(ValidationError, match='未启用局部候选协议'):
+        Hook.model_validate(payload)

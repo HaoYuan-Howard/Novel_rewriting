@@ -5,6 +5,7 @@ import type {
   ApprovalDoc,
   GateKey,
   Stage5ClosureRequest,
+  Stage2NodeReviewRequest,
   StructureApprovalRequest,
   WritingApprovalRequest,
 } from '@/types/approvals'
@@ -47,6 +48,10 @@ export function useApprovals(sidOverride?: string) {
     mutationFn: (key: GateKey) => api.approveGate(sid, key),
     onSuccess: put,
   })
+  const approveStage2Review = useMutation({
+    mutationFn: (request: Stage2NodeReviewRequest) => api.approveStage2Review(sid, request),
+    onSuccess: cache,
+  })
   const backfill = useMutation({
     mutationFn: () => api.backfillApprovals(sid),
     onSuccess: (result) => put(result.approvals),
@@ -86,6 +91,7 @@ export function useApprovals(sidOverride?: string) {
     error: q.error,
     refetch: q.refetch,
     approve,
+    approveStage2Review,
     approveStructure,
     approveStage5Closure,
     backfill,

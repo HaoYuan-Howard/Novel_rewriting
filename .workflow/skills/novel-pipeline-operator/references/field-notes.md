@@ -40,8 +40,8 @@ rg -n "stage6|hook_para_sep|exit 70" .workflow/skills/novel-pipeline-operator/re
 | FN-022 | 长退出序列用无损 RLE 与完整摘要双重锁定 | contract-confirmed | `exit_sequence_compact_text`, `exit_sequence_sha256`, 终审包 | 复制收集器输出，不手抄连续同项 |
 | FN-023 | Stage4B 拒稿先看 owner，再决定等不等 | contract-confirmed | `typed_failures`, `repair_owner`, `_llm_rejected`, `GateBlocked` | 按 witness 的 owner 走 revalidate / A 返修 / 上游修复，不重跑 B |
 | FN-024 | GlobalEdit patch 不能借合法格式发明新 subject | contract-confirmed | `stage2.global`, `GlobalEdit`, 不存在的 subject, exit 2 | 字段 patch 保留模板 identity；集合新增/删除/拆分走 hash-bound `collection_edits` |
-| FN-025 | Reviewed GlobalEdit 的 HARD 拒绝必须先于 Blueprint redo 恢复 | contract-confirmed | `global_edit.json`, current `.INVALID`, stale Blueprint | 绑定失败 edit/INVALID 给下一条增量 Commander；重启不重置三次预算 |
-| FN-026 | Stage2 prereview 的 0-wire 假扣不能靠重跑恢复 | contract-confirmed | `admission id 必须属于当前 epoch`, prereview exit 70, 3/3 budget | 用双账负证据的 hash-bound reconcile 隔离假预留 |
+| FN-025 | Reviewed GlobalEdit 的 HARD 拒绝必须先于 Blueprint redo 恢复 | contract-confirmed | `global_edit.json`, current `.INVALID`, stale Blueprint | 绑定失败 edit/INVALID 给下一条增量 Commander；重启不重置同工作单元四次内容预算 |
+| FN-026 | 冻结旧账的 Stage2 prereview 假扣不能靠重跑恢复 | observed | `admission id 必须属于当前 epoch`, prereview exit 70, 3/3 budget | 用双账负证据的 hash-bound reconcile 隔离假预留 |
 
 ### FN-001 · stage0 批准前的预期红灯
 
@@ -415,17 +415,16 @@ rg -n "stage6|hook_para_sep|exit 70" .workflow/skills/novel-pipeline-operator/re
   模板中追加了 `secret_08`。
 - 判断：`secret_08` 的格式合法只证明 schema 合法，不证明它是当前**字段 patch**的可编辑主体。
   patch 只更新盘上已有稳定 ID；集合新增、删除或拆分必须使用生产模板给出的
-  `collection_edits[].operations`，并逐字保留 collection 与 expected SHA。Stage2 每个主体有四席 Commander
-  （一席审阅、至多两席订正、一席只读终审），订正席的包只含当前未闭合/依赖重开的主体；集合完整性一旦 FAIL，模板会开放对应 delta 写口，
+  `collection_edits[].operations`，并逐字保留 collection 与 expected SHA。Global 与 Blueprint 各有独立 Commander 工作单元，各最多四次内容请求；订正包只含当前未闭合/依赖重开的主体；集合完整性一旦 FAIL，模板会开放对应 delta 写口，
   不需要复制整个成功集合。把“新增 ID 格式”塞进字段 patch binding 仍会误导 Commander。
 - 处置：`submission_options` 的字段 patch 行数、顺序、subject id、字段集合机械绑定；集合变化只填
-  hash-bound operations。每轮使用 fresh Commander session，并可提交合并 edit 与
+  hash-bound operations。同一工作单元默认连续 Commander session，并可提交合并 edit 与
   `post_edit_review`。非法请求或 canonical action 的未落盘 exit 2 会进入下一份自足增量包，但真实
-  纠错调用仍占订正席；相同字节或席位耗尽立即停止，等价已拒
+  纠错调用计入该工作单元内容预算；相同字节或预算耗尽立即停止，等价已拒
   业务动作也由 fingerprint 拦住。
 - 验证：`tests/test_reviewer_tasks.py::test_stage2_global_edit_cannot_invent_a_patch_subject` 与
   `tests/test_agent.py::test_non_stage2_invalid_reviewer_request_and_exit2_resume_same_commander_session`、
-  `tests/test_agent.py::test_stage2_global_stops_after_three_fresh_commander_turns`。
+  `tests/test_work_units.py::test_budget_survives_candidate_session_and_producer_changes`。
 - 依据：真实 agent run `1788331093-cdc3607e` 的第二轮 typed action 在正式写盘前 exit 2；
   `novel/orchestrator/reviewer_tasks.py::_validate_global_edit_binding`；
   `novel/orchestrator/agent.py::_run_reviewer`。
@@ -438,36 +437,35 @@ rg -n "stage6|hook_para_sep|exit 70" .workflow/skills/novel-pipeline-operator/re
   落到 `resume:manual-decision`，精确拒绝原因与最后一次返工机会一起丢失。
 - 判断：这是 reviewer action 的持久未完成态，不是新的 Blueprint 决策，更不是再跑一次 Executor。
   失败 edit、current INVALID、revalidation baseline 与正式 review 四者能逐字对证时，队列必须先返回
-  `recovery:stage2-global-reviewed-edit`。下一轮使用 fresh Commander session；进程或代码身份变化不能
+  `recovery:stage2-global-reviewed-edit`。下一轮默认续同工作单元 Commander；进程或代码身份变化不能
   清空盘上 typed ledger，也不能把席位重新发放。
 - 处置：只发 combined correction workpack：正式 Global review + 失败 edit/INVALID 的 SHA 和具体 HARD；
   不载入 Blueprint，不重读无关完整包。修正仍走原 GlobalEdit producer，成功后再按 freshness 决定是否
-  REDO Blueprint；失败则按剩余订正席继续，耗尽后稳定停止；第四席只做只读终审，不接订正。
+  定向重建 Blueprint；失败则按剩余内容预算继续，耗尽后稳定停止；没有额外全局终审。
 - 验证：`tests/test_orchestrator_queue.py::test_reviewed_global_edit_invalid_recovers_final_correction_before_blueprint`、
   `tests/test_reviewer_tasks.py::test_stage2_durable_correction_uses_failed_edit_without_loading_blueprint`、
-  `tests/test_agent.py::test_durable_stage2_correction_uses_only_the_remaining_commander_turn`；真实 run
+  `tests/test_work_units.py::test_response_survives_failure_before_submission`；真实 run
   `1788344824-47a4f45b` 的 `role_repeats_name` 拒绝经 run `1788349637-5aef1649` 一次 Commander、零
   Executor 修正后，`stage2.global` canonical action exit 0。
 - 依据：`novel/orchestrator/state.py::stage2_reviewed_edit_correction_needed`；
   `novel/orchestrator/queue.py::WAITING_ON_STAGE2_EDIT_CORRECTION`；
   `novel/stages/stage2/extract.py::global_edit_correction_workpack`。
 
-### FN-026 · Stage2 prereview 的 0-wire 假扣不能靠重跑恢复
+### FN-026 · 冻结旧账的 Stage2 prereview 假扣不能靠重跑恢复
 
-- 状态：`contract-confirmed`
+- 状态：`observed`
 - 触发：Stage2 只读预审在 `env_with_context` 报
   `ValueError: admission id 必须属于当前 epoch`；对应 review ledger 有即时
   `prereview/failed/exit 70`，但 `agent_sessions.jsonl` 与成本 `ledger.jsonl` 都没有该
   `session_run_id`，随后两次真实 Commander 后显示预算 3/3。
-- 判断：这是 Popen 前的 0-wire 本地失败，不是真实 Commander invocation；但席位按
+- 判断：这是冻结旧协议的历史问题；新 clean base 不运行 prereview。历史上这是 Popen 前的 0-wire 本地失败，不是真实 Commander invocation；但席位按
   Global/MainText 主体跨 run/epoch 持久化，修代码或重启都不会自动改旧账。直接删 ledger、换 run、
   私改席位上限都会抹掉审计或放宽产品边界。
 - 处置：新代码把预留放在 Popen 成功、stdin 发送前；存量只从 Commander 外先 inspect
   `reconcile --stage2-review-no-wire-session-run-id ... --stage2-review-sid ...`，再以
   actor/reason/current subject SHA apply。只有 parent 已终止、精确旧签名、双账 committed 且均无
   session 时才把原行移入 `reconciliations`，恢复一格有效预算；一般 crash 不返还。
-- 验证：`tests/test_agent.py::test_stage2_prereview_uses_unopened_epoch_context_and_blueprint_closes_alone`；
-  `tests/test_stage2_review_ledger.py::test_hash_bound_no_wire_reconcile_preserves_history_and_restores_one_call`、
+- 验证：`tests/test_stage2_review_ledger.py::test_hash_bound_no_wire_reconcile_preserves_history_and_restores_one_call`、
   `::test_no_wire_reconcile_refuses_subject_drift_or_any_wire_audit`、
   `::test_no_wire_reconcile_cli_is_read_only_then_typed_apply`。
 - 依据：真实 sid `2062949822106228156`、AgentRun `1788522381-3de10eda`：假预审 session

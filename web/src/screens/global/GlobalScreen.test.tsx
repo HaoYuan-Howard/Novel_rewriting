@@ -187,9 +187,9 @@ describe('GlobalScreen disclosure', () => {
 
     renderRoute(<GlobalScreen />, '/n/book-1/global')
 
-    const continuation = await screen.findByRole('group', { name: '逐章骨架并行生成' })
-    expect(continuation).toHaveTextContent('全局复核不再挡住逐章骨架')
-    expect(continuation).toHaveTextContent('Stage4 会等当前全局复核的阻断面全部 PASS')
+    const continuation = await screen.findByRole('group', { name: '接受全局后生成逐章骨架' })
+    expect(continuation).toHaveTextContent('全局接受后生成逐章骨架')
+    expect(continuation).toHaveTextContent('两个节点接受后才进入 Stage4')
     expect(screen.getByRole('button', { name: '继续下一步' })).toBeVisible()
   })
 

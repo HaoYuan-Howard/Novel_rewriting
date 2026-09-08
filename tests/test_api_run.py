@@ -58,6 +58,7 @@ def test_empty_base_is_all_pending(client):
         'paid': None,
         'writes': None,
         'next_handler': 'unknown',
+        'review_states': None,
         'verified_skipped_nodes': [],
         'verified_skipped_count': 0,
     }
@@ -117,3 +118,39 @@ def test_stage2_chapter_fix_route_reaches_http_preview(client):
     assert body['flags'] == ['--chapters', '11']
     assert any('--chapters' in step['argv'] and '11' in step['argv']
                for step in body['steps'])
+
+
+def test_run_projects_current_review_states_and_only_current_role_recovery(client, monkeypatch):
+    from types import SimpleNamespace
+    from contracts.schema.orchestration import RunResumeFrontierView
+    from novel.api.routes import run
+    from novel.orchestrator import operator
+
+    c, base = client
+    os.mkdir(os.path.join(base, '测试书_42'))
+    actual = c.get('/api/novels/42/run').json()
+    reviews = actual['resume_frontier']['review_states']
+    assert len(reviews) == 9
+    assert {row['node'] for row in reviews} == {
+        node for node, spec in NODES.items() if spec.lifecycle.review_mode == 'commander'}
+    assert {row['state'] for row in reviews if row['node'].startswith('stage2.')} == {'missing'}
+    assert operator._review_state_projection(None) is None
+    frontier = RunResumeFrontierView(
+        state='blocked', node='stage2.blueprint', seq=list(NODES).index('stage2.blueprint') + 1,
+        label=NODES['stage2.blueprint'].label, resume_verdict='run', why='先完成 Global 审阅',
+        waiting_on='approval:stage2-global-review', paid=True, writes='BluePrint',
+        next_handler='commander', review_states=reviews,
+        verified_skipped_nodes=list(NODES)[:list(NODES).index('stage2.blueprint')],
+        verified_skipped_count=list(NODES).index('stage2.blueprint'))
+    monkeypatch.setattr(operator, 'progress_snapshot', lambda *_args: (SimpleNamespace(stages=[]), frontier))
+    def row(node, role, scope):
+        return dict(unit_id=node+role+scope, node=node, role=role, scope=scope,
+                    content_used=1, content_limit=4, content_remaining=3, state='delivered',
+                    recovery_action='replay_response')
+    monkeypatch.setattr(run, 'list_unit_views', lambda *_args: [
+        row('stage2.global', 'commander', 'book'), row('stage2.global', 'executor', 'book'),
+        row('stage2.blueprint', 'commander', 'book')])
+    response = c.get('/api/novels/42/run')
+    assert response.status_code == 200
+    assert response.json()['current_recovery_actions'] == ['book: replay_response']
+    assert response.json()['resume_frontier']['next_handler'] == 'commander'

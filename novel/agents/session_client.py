@@ -18,14 +18,14 @@ import tempfile
 import time
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
 from contracts.schema.orchestration import AgentProfile
-from novel import agent_session_audit as session_audit, prov
+from novel import agent_session_audit as session_audit, prov, work_units
 from novel.agent_capabilities import validate_profile
 from novel.agent_model_identity import (
     AgentModelIdentityRefused, resolve_agent_model_identity,
@@ -474,6 +474,7 @@ def validate_checkpoint_acceptance(
     user: str,
     max_tokens: int,
     recovery_policy: str,
+    adopt_work_unit_response: bool = True,
 ) -> ValidatedCheckpointAcceptance:
     """在不构造 driver/client 的前提下复核一份 checkpoint acceptance。
 
@@ -595,6 +596,10 @@ def validate_checkpoint_acceptance(
     if attempt_id not in restored_attempts:
         raise ProvenanceRefused(
             f'{purpose}: checkpoint attempt_links 漏 accepted attempt')
+    if adopt_work_unit_response:
+        budget = work_units.budget_for(
+            ctx, scope=work_units.executor_scope(ctx.node, purpose, {'chapter': chapter}))
+        budget.mark_adopted_for_attempt(attempt_id)
     return ValidatedCheckpointAcceptance(
         attempt_id=attempt_id,
         prior_turns=prior_turns,
@@ -688,8 +693,11 @@ class SessionAgentClient:
     ) -> None:
         if max_semantic_turns < 1:
             raise ValueError('max_semantic_turns 必须 >= 1')
-        if max_delivery_retries < 0:
-            raise ValueError('max_delivery_retries 必须 >= 0')
+        from contracts.invariants import WORK_UNIT_MAX_DELIVERY_ATTEMPTS
+        if (not isinstance(max_delivery_retries, int) or isinstance(max_delivery_retries, bool)
+                or not 0 <= max_delivery_retries < WORK_UNIT_MAX_DELIVERY_ATTEMPTS):
+            raise ValueError(
+                f'max_delivery_retries 必须在 0..{WORK_UNIT_MAX_DELIVERY_ATTEMPTS - 1}')
         if delivery_backoff_base < 0:
             raise ValueError('delivery_backoff_base 必须 >= 0')
         self.ctx = ctx
@@ -700,9 +708,11 @@ class SessionAgentClient:
             raise ValueError(
                 'executor session 的 parent_run_id 必须等于 RunContext.run_id')
         self.parent_run_id = ctx.run_id
+        work_units.require_workflow(ctx.novel_dir.parent)
         # 语义修订轮与 CLI 交付尝试是两套正交预算。前者只在一轮新的
         # candidate/反馈修订开始时消耗；后者只在同一轮未取得回答时消耗。
-        self.max_semantic_turns = max_semantic_turns
+        from contracts.invariants import WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS
+        self.max_semantic_turns = min(max_semantic_turns, WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS)
         self.max_delivery_retries = max_delivery_retries
         self.delivery_backoff_base = delivery_backoff_base
         self._sleep = sleep
@@ -713,6 +723,13 @@ class SessionAgentClient:
         self._observed_provider_session_id: str | None = None
         self._provider_session_conflict_owner: str | None = None
         self._turn_index = 0
+        # 供应商/session ordinal 只解释当前恢复 lineage；业务预算独立持久化，
+        # 不能把另一 producer 的轮数塞进 checkpoint 的 attempt_links。
+        self._content_budget: work_units.WorkUnitBudget | None = None
+        self._content_scope: str | None = None
+        self._content_reservation: work_units.ContentReservation | None = None
+        self._prepared_receipt: dict[str, Any] | None = None
+        self._receipt_pending = False
         self._accepted: dict[str, str] = {}
         self._accepted_checkpoint: dict[str, dict[str, Any]] = {}
         # 只保存“schema 已过、dynamic validator 在最后一轮拒绝”的 stdout
@@ -753,11 +770,42 @@ class SessionAgentClient:
         return self._turn_index
 
     @property
+    def content_turns_used(self) -> int:
+        """当前工作单元两次进程之间也连续的真实内容调用数。"""
+        return (self._turn_index if self._content_budget is None
+                else self._content_budget.used)
+
+    @property
+    def content_budget_exhausted(self) -> bool:
+        return (self._turn_index >= self.max_semantic_turns
+                or (self._content_budget is not None
+                    and self._content_budget.remaining == 0))
+
+    def _bind_work_unit(
+        self, purpose: str, progress: RequestProgress | None = None,
+    ) -> work_units.WorkUnitBudget:
+        scope = work_units.executor_scope(
+            self.ctx.node, purpose,
+            progress if progress is not None else {'chapter': self.chapter})
+        if self._content_scope is not None and self._content_scope != scope:
+            raise ProvenanceRefused(
+                f'{purpose}: 同一 executor session 不能跨工作单元')
+        if self._content_budget is None:
+            self._content_scope = scope
+            self._content_budget = work_units.budget_for(self.ctx, scope=scope)
+        return self._content_budget
+
+    def _adopt_content_response(self) -> None:
+        if self._content_budget is not None and self._content_reservation is not None:
+            self._content_budget.mark_adopted(self._content_reservation.turn_id)
+            self._content_reservation = None
+
+    @property
     def can_resume(self) -> bool:
         return (
             self._started
             and not self._ended
-            and self._turn_index < self.max_semantic_turns
+            and not self.content_budget_exhausted
         )
 
     @property
@@ -908,6 +956,7 @@ class SessionAgentClient:
             resample=will_resume, reject_detail=safe_detail,
             request_mode='agent_session_resume', chapter=self.chapter,
         )
+        self._adopt_content_response()
         if not will_resume:
             return False
         self._pending_feedback = json.dumps({
@@ -960,8 +1009,8 @@ class SessionAgentClient:
         if not isinstance(accepted_text, str) or not accepted_text:
             raise RuntimeError(
                 f'{purpose}: restored checkpoint 缺完整 accepted stdout，不能续改')
-        can_continue = (
-            self._turn_index < self.max_semantic_turns and allow_resume)
+        self._bind_work_unit(purpose, self._progress)
+        can_continue = not self.content_budget_exhausted and allow_resume
         safe_detail: list[dict[str, object]] = []
         for row in rows:
             findings = row.get('findings')
@@ -1109,7 +1158,7 @@ class SessionAgentClient:
         # CostLedger.model 的既有语义是「实际响应模型」。provider 没回显时只能
         # 记 unknown；把 requested model 填进去会让正式 adopted_models 伪称已知。
         model_for_ledger = actual_model or 'unknown'
-        self.ctx.ledger.record(
+        self._record_ledger_turn(
             attempt_id=attempt_id,
             request_fingerprint=request_fingerprint,
             response_sha256=response_sha256,
@@ -1133,6 +1182,11 @@ class SessionAgentClient:
             backoff_ms=backoff_ms,
             progress=progress,
         )
+        if self._content_budget is not None and self._content_reservation is not None:
+            self._content_budget.record_attempt(
+                self._content_reservation.turn_id, attempt_id=attempt_id,
+                outcome=outcome, provider_session_id=provider_session_id,
+                request_fingerprint=request_fingerprint)
         if not link_provider_turn:
             # 没有形成可采纳回答的传输拒绝只是一笔 delivery attempt，不是
             # provider turn。它留在逐次 ledger 中（超时也可能有费用），但不能
@@ -1152,8 +1206,7 @@ class SessionAgentClient:
                 f'{self.ctx.node}: resume 返回了不同 provider session id')
         self._last_actual_model = actual_model or self._last_actual_model
         self._last_actual_effort = actual_effort or self._last_actual_effort
-        conflict_owner = session_audit.append_provider_turn(
-            self.ctx.novel_dir.parent,
+        conflict_owner = self._append_provider_turn(
             session_audit.AgentSessionEvent(
                 session_run_id=self.session_run_id,
                 parent_run_id=self.parent_run_id,
@@ -1179,9 +1232,135 @@ class SessionAgentClient:
         )
         if conflict_owner is None:
             self.provider_session_id = provider_session_id
+        self._receipt_pending = False
         return conflict_owner
 
+    def _record_ledger_turn(self, **kwargs: Any) -> None:
+        receipt = self._prepared_receipt
+        if (receipt is not None and kwargs['outcome'] == 'ok'
+                and receipt['ledger_arguments']['attempt_id'] == kwargs['attempt_id']):
+            kwargs = dict(receipt['ledger_arguments'])
+            if kwargs['progress'] is not None:
+                kwargs['progress'] = RequestProgress(**kwargs['progress'])
+        self.ctx.ledger.record(**kwargs)
+
+    def _append_provider_turn(self, event: session_audit.AgentSessionEvent) -> str | None:
+        receipt = self._prepared_receipt
+        if (receipt is not None
+                and receipt['ledger_arguments']['attempt_id'] == event.attempt_id
+                and event.error_kind is None):
+            event = session_audit.AgentSessionEvent.from_dict(receipt['session_event'])
+        return session_audit.append_provider_turn(self.ctx.novel_dir.parent, event)
+
+    def _prepare_turn_receipt(
+        self, turn: AgentTurn, *, purpose: str, attempt_id: str,
+        request_fingerprint: str, prompt_sha256: str, schema_sha256: str,
+        latency_ms: int, delivery_attempt: int, max_delivery_attempts: int,
+        progress: RequestProgress | None,
+    ) -> dict[str, Any]:
+        """先封存补账所需原值；尚未核验的 receipt 不授予候选接受。"""
+        response_sha256 = _sha256_bytes(turn.content.encode('utf-8'))
+        arguments = dict(
+            attempt_id=attempt_id, request_fingerprint=request_fingerprint,
+            response_sha256=response_sha256, request_model=self.profile.model,
+            node=self.ctx.node, sid=self.ctx.sid, model=turn.model or 'unknown',
+            code=self.ctx.code, cached=False, cache_policy='agent-session',
+            prompt_tokens=turn.usage.prompt_tokens,
+            prompt_cache_hit_tokens=turn.usage.prompt_cache_hit_tokens,
+            prompt_cache_miss_tokens=turn.usage.prompt_cache_miss_tokens,
+            completion_tokens=turn.usage.completion_tokens,
+            reasoning_tokens=turn.usage.reasoning_tokens,
+            purpose=purpose, outcome='ok', error=None,
+            reasoning_effort=self.profile.reasoning_effort,
+            thinking=None, json_mode=True, max_tokens=None, finish_reason=None,
+            attempt=delivery_attempt, max_attempts=max_delivery_attempts,
+            latency_ms=latency_ms, error_kind=None, status=None, retryable=None,
+            will_retry=False, backoff_ms=None,
+            progress=None if progress is None else asdict(progress),
+        )
+        event = session_audit.AgentSessionEvent(
+            session_run_id=self.session_run_id, parent_run_id=self.parent_run_id,
+            role='executor', node=self.ctx.node, chapter=self.chapter,
+            subject_sha256=self._subject_sha256, profile=self.profile,
+            provider_session_id=turn.session_id, turn_index=self._turn_index,
+            attempt_id=attempt_id, requested_model=self.profile.model,
+            actual_model=turn.model, requested_effort=self.profile.reasoning_effort,
+            actual_effort=turn.actual_reasoning_effort, cli_version=self._cli_version,
+            protocol_version=SESSION_PROTOCOL_VERSION, start_code_version=self.ctx.code,
+            prompt_sha256=prompt_sha256, schema_sha256=schema_sha256,
+            usage=_usage_or_none(turn.usage), error_kind=None,
+            kind='turn', ts=int(time.time()),
+        )
+        prior_links = [dict(row) for row in self._restored_attempt_links.get(purpose, ())]
+        prior_links.extend(
+            self.ctx.ledger.request_identity_for_attempt(aid)
+            for item_purpose, aid in self._logical_session_attempts if item_purpose == purpose)
+        return {
+            'kind': 'executor-turn-receipt-v1',
+            'run_id': self.ctx.run_id, 'parent_run_id': self.ctx.parent_run_id,
+            'ledger_arguments': arguments, 'session_event': event.to_dict(),
+            'acceptance_seed': {
+                'accepted_request': dict(self._initial_identity or {}),
+                'prior_attempt_links': prior_links,
+                'prior_provider_session_id': self.provider_session_id,
+            },
+        }
+
     def _invoke(
+        self, *, request: AgentRequest,
+        purpose: str, progress: RequestProgress | None,
+    ) -> tuple[AgentTurn, str]:
+        """在真实内容请求的唯一入口预留，网络尝试共享同一枚 reservation。"""
+        if self._ended or self._driver_failed:
+            raise LlmFailed('executor session 已终止，不能预留新的内容请求')
+        if prov.code_version() != self.ctx.code:
+            raise LlmFailed('executor 代码身份已漂移，不能预留新的内容请求')
+        budget = self._bind_work_unit(purpose, progress)
+        if self._turn_index >= self.max_semantic_turns:
+            raise LlmFailed(
+                f'{self.ctx.node}: 已用尽 {self.max_semantic_turns} 轮语义修订上限')
+        if self.content_budget_exhausted:
+            raise LlmFailed(
+                f'{self.ctx.node}: 工作单元内容预算已耗尽；保留候选供零成本恢复')
+        request_sha256 = _canonical_sha256({
+            'identity': self._initial_identity,
+            'stdin_sha256': _sha256_bytes(request.stdin_bytes()),
+        })
+        reservation = budget.reserve(
+            request_sha256, run_id=self.ctx.run_id,
+            session_run_id=self.session_run_id,
+            request_payload={
+                'kind': 'executor-content-request-v1',
+                'identity': self._initial_identity,
+                'system': request.system, 'prompt': request.prompt,
+                'output_schema': request.output_schema,
+            })
+        self._content_reservation = reservation
+        try:
+            result = self._invoke_reserved(
+                request=request, purpose=purpose, progress=progress)
+        except BaseException:
+            if self._driver_failed:
+                budget.mark_rejected(
+                    reservation.turn_id, reason_code='executor_delivery_failed')
+            else:
+                budget.finish(
+                    reservation.turn_id, outcome='unknown',
+                    reason_code='executor_delivery_unknown')
+            raise
+        turn, attempt_id = result
+        assert self._initial_identity is not None
+        budget.save_recovery(reservation.turn_id, {
+            'kind': 'executor-response-custody-v1',
+            'turn': asdict(turn),
+            'acceptance': self._response_acceptance(
+                purpose=purpose, turn=turn, attempt_id=attempt_id,
+                identity=self._initial_identity),
+        })
+        budget.finish(reservation.turn_id, outcome='delivered')
+        return result
+
+    def _invoke_reserved(
         self, *, request: AgentRequest,
         purpose: str, progress: RequestProgress | None,
     ) -> tuple[AgentTurn, str]:
@@ -1222,6 +1401,10 @@ class SessionAgentClient:
             purpose=purpose,
             turn_index=self._turn_index,
         )
+        from contracts.invariants import WORK_UNIT_MAX_DELIVERY_ATTEMPTS
+        if (not isinstance(self.max_delivery_retries, int) or isinstance(self.max_delivery_retries, bool)
+                or not 0 <= self.max_delivery_retries < WORK_UNIT_MAX_DELIVERY_ATTEMPTS):
+            raise ValueError('executor 网络重试配置越过登记上限')
         max_delivery_attempts = self.max_delivery_retries + 1
         turn: AgentTurn | None = None
         attempt_id = ''
@@ -1231,6 +1414,13 @@ class SessionAgentClient:
             # 退避期间代码/输入可能已变化；每次真正重发前都重新守一次来源根。
             self.ctx.require_observed_roots_current()
             attempt_id = _attempt_id()
+            assert self._content_budget is not None
+            assert self._content_reservation is not None
+            self._content_budget.record_attempt(
+                self._content_reservation.turn_id,
+                attempt_id=attempt_id, outcome='started',
+                provider_session_id=self.provider_session_id,
+                request_fingerprint=request_fingerprint)
             started = time.perf_counter()
             heartbeat = AttemptHeartbeat(
                 self.ctx.observe, purpose=purpose, attempt=delivery_attempt,
@@ -1247,6 +1437,9 @@ class SessionAgentClient:
                             self.profile, self.provider_session_id, request)
             except (AgentConfigurationError, AgentBusyError) as exc:
                 self._driver_failed = True
+                self._content_budget.record_attempt(
+                    self._content_reservation.turn_id,
+                    attempt_id=attempt_id, outcome='not_started')
                 heartbeat.finish(outcome='failed', error_kind='agent_not_started')
                 # driver 明确声明子进程尚未成功进入供应商调用；不能给成本账增加
                 # calls_made，也不能伪造一个没有 provider session id 的 turn。
@@ -1324,9 +1517,28 @@ class SessionAgentClient:
                         outcome='failed', error_kind='agent_protocol')
                 raise LlmFailed(f'{self.ctx.node}: agent 协议失败：{exc}') from exc
             except BaseException:
+                self._content_budget.record_attempt(
+                    self._content_reservation.turn_id,
+                    attempt_id=attempt_id, outcome='unknown')
                 heartbeat.finish(outcome='failed', error_kind='unexpected')
                 raise
             else:
+                # stdout 一旦到手就保存；后续成本/会话/业务校验失败不再丢回答。
+                self._prepared_receipt = self._prepare_turn_receipt(
+                    turn, purpose=purpose, attempt_id=attempt_id,
+                    request_fingerprint=request_fingerprint,
+                    prompt_sha256=prompt_sha256, schema_sha256=schema_sha256,
+                    latency_ms=max(0, round((time.perf_counter() - started) * 1000)),
+                    delivery_attempt=delivery_attempt,
+                    max_delivery_attempts=max_delivery_attempts, progress=progress)
+                self._receipt_pending = True
+                self._content_budget.save_response(
+                    self._content_reservation.turn_id,
+                    {'kind': 'executor-content-response-v1',
+                     'turn': asdict(turn), 'attempt_id': attempt_id,
+                     'run_id': self.ctx.run_id,
+                     'session_run_id': self.session_run_id,
+                     'prepared_receipt': self._prepared_receipt})
                 heartbeat.finish(outcome='ok')
                 break
         assert turn is not None and attempt_id
@@ -1428,11 +1640,11 @@ class SessionAgentClient:
                 f'契约不一致（{metadata_failure[0]}）；拒绝铸 accepted checkpoint')
         return turn, attempt_id
 
-    def _remember_json_acceptance(
+    def _response_acceptance(
         self, *, purpose: str, turn: AgentTurn, attempt_id: str,
         identity: Mapping[str, object],
-    ) -> None:
-        """冻结 agent stdout、session 与 ledger 的完整 checkpoint 联结。"""
+    ) -> dict[str, Any]:
+        """冻结 stdout 与三账联结；这份运输证明自身不授予业务接受。"""
         accepted = self.ctx.ledger.request_identity_for_attempt(attempt_id)
         resolved_model = resolve_ledger_model_identity(
             self.profile, accepted.get('model'),
@@ -1496,8 +1708,168 @@ class SessionAgentClient:
             ],
             'salvaged': False,
         }
+        return payload
+
+    def _remember_json_acceptance(
+        self, *, purpose: str, turn: AgentTurn, attempt_id: str,
+        identity: Mapping[str, object],
+    ) -> None:
         self._accepted[purpose] = attempt_id
-        self._accepted_checkpoint[purpose] = payload
+        self._accepted_checkpoint[purpose] = self._response_acceptance(
+            purpose=purpose, turn=turn, attempt_id=attempt_id, identity=identity)
+
+    @staticmethod
+    def _saved_turn(raw_turn: Any) -> AgentTurn:
+        try:
+            fields = dict(raw_turn)
+            fields['usage'] = AgentUsage(**fields['usage'])
+            if fields.get('raw_event_summary') is not None:
+                fields['raw_event_summary'] = tuple(fields['raw_event_summary'])
+            return AgentTurn(**fields)
+        except (TypeError, KeyError, ValueError) as exc:
+            raise ProvenanceRefused('工作单元原始 AgentTurn 形状不合法') from exc
+
+    def _reconcile_content_receipt(
+        self, budget: work_units.WorkUnitBudget,
+        reservation: work_units.ContentReservation, saved: dict[str, Any], *,
+        request: AgentRequest, identity: dict[str, object], purpose: str,
+    ) -> None:
+        """零模型补原成本及会话事件，再铸可被原 producer 验证的 custody。"""
+        receipt = saved.get('prepared_receipt')
+        if not isinstance(receipt, dict) or receipt.get('kind') != 'executor-turn-receipt-v1':
+            raise ProvenanceRefused('旧原始回答缺 prepared receipt，不能推测原账')
+        seed = receipt.get('acceptance_seed')
+        args = receipt.get('ledger_arguments')
+        if (not isinstance(seed, dict) or not isinstance(args, dict)
+                or seed.get('accepted_request') != identity):
+            raise ProvenanceRefused('待补账回答与当前请求身份不一致')
+        turn = self._saved_turn(saved.get('turn'))
+        event = session_audit.AgentSessionEvent.from_dict(receipt.get('session_event'))
+        attempt_id = str(saved.get('attempt_id') or '')
+        prompt_sha = _sha256_bytes(request.stdin_bytes())
+        response_sha = _sha256_bytes(turn.content.encode('utf-8'))
+        previous_provider = seed.get('prior_provider_session_id')
+        expected_fingerprint = agent_request_fingerprint(
+            profile=self.profile, subject_sha256=_canonical_sha256(identity),
+            provider_session_id=previous_provider,
+            system_sha256=(None if request.system is None else
+                           _sha256_bytes(request.system.encode('utf-8'))),
+            prompt_sha256=prompt_sha, schema_sha256=_canonical_sha256(request.output_schema),
+            purpose=purpose, turn_index=event.turn_index,
+        )
+        if (event.role != 'executor' or event.node != self.ctx.node
+                or event.chapter != self.chapter or event.profile != self.profile
+                or event.subject_sha256 != _canonical_sha256(identity)
+                or event.prompt_sha256 != prompt_sha
+                or event.schema_sha256 != identity['schema_sha256']
+                or event.session_run_id != saved.get('session_run_id')
+                or event.parent_run_id != saved.get('run_id')
+                or event.attempt_id != attempt_id or args.get('attempt_id') != attempt_id
+                or event.provider_session_id != turn.session_id
+                or event.actual_model != turn.model
+                or event.actual_effort != turn.actual_reasoning_effort
+                or event.usage != _usage_or_none(turn.usage)
+                or args.get('request_fingerprint') != expected_fingerprint
+                or args.get('response_sha256') != response_sha
+                or (previous_provider is not None and previous_provider != turn.session_id)):
+            raise ProvenanceRefused('原回答、原调用配置与原会话事件不闭合')
+        resolved = resolve_agent_model_identity(
+            self.profile, turn.model, cli_version=event.cli_version,
+            require_driver_version=True)
+        if ((turn.actual_reasoning_effort is not None
+             and turn.actual_reasoning_effort != self.profile.reasoning_effort)
+                or (turn.turn_count is not None and turn.turn_count < 1)):
+            raise ProvenanceRefused('原回答的供应商元数据未通过当前请求约束')
+        self.ctx.ledger.reconcile_work_unit_attempt(budget, reservation.turn_id, receipt)
+        budget.record_attempt(
+            reservation.turn_id, attempt_id=attempt_id, outcome='ok',
+            provider_session_id=turn.session_id, request_fingerprint=expected_fingerprint)
+        self.ctx.ledger.claim_work_unit_attempts(budget, reservation.turn_id, purpose=purpose)
+        prior_links = seed.get('prior_attempt_links')
+        if not isinstance(prior_links, list) or any(
+            not isinstance(row, dict)
+            or row != self.ctx.ledger.request_identity_for_attempt(str(row.get('attempt_id')))
+            for row in prior_links
+        ):
+            raise ProvenanceRefused('补账 receipt 的既有调用链与原成本账不一致')
+        links = [*prior_links, self.ctx.ledger.request_identity_for_attempt(attempt_id)]
+        links.sort(key=lambda row: (str(row['attempt_id']), str(row['request_fingerprint'])))
+        if (len(links) != event.turn_index
+                or len({row['attempt_id'] for row in links}) != len(links)):
+            raise ProvenanceRefused('补账 receipt 的原轮次与调用链不一致')
+        session_audit.reconcile_executor_turn(self.ctx.novel_dir.parent, event)
+        acceptance = {
+            'acceptance_protocol': SESSION_PROTOCOL_VERSION, 'attempt_id': attempt_id,
+            'request_fingerprint': expected_fingerprint, 'model': resolved.model,
+            'ledger_response_sha256': response_sha, 'accepted_channel': 'content',
+            'accepted_text': turn.content, 'normalized_text': normalize_json_text(turn.content),
+            'attempt_links': links, 'profile': self.profile.model_dump(mode='json'),
+            'subject_sha256': event.subject_sha256, 'session_run_id': event.session_run_id,
+            'provider_session_id': event.provider_session_id,
+            'accepted_turn_index': event.turn_index,
+            'accepted_prompt_sha256': event.prompt_sha256,
+            'accepted_schema_sha256': event.schema_sha256,
+            'accepted_request': identity,
+            'request_mode': 'original' if event.turn_index == 1 else 'agent_session_resume',
+            'recovery_from_attempts': [row['attempt_id'] for row in links
+                                     if row['attempt_id'] != attempt_id],
+            'salvaged': False,
+        }
+        budget.save_recovery(reservation.turn_id, {
+            'kind': 'executor-response-custody-v1',
+            'turn': saved['turn'], 'acceptance': acceptance,
+        })
+
+    def _recover_content_response(
+        self, request: AgentRequest, identity: dict[str, object], *,
+        purpose: str, system: str, user: str, max_tokens: int,
+        recovery_policy: str | None,
+    ) -> tuple[AgentTurn, str] | None:
+        """先恢复尚未 checkpoint 的完整回答；不续用历史 provider 身份。"""
+        if self._started:
+            return None
+        budget = self._bind_work_unit(purpose, self._progress)
+        request_sha = _canonical_sha256({
+            'identity': identity,
+            'stdin_sha256': _sha256_bytes(request.stdin_bytes()),
+        })
+        recovered = budget.pending_recovery(request_sha)
+        if recovered is None:
+            pending = budget.pending_response(request_sha)
+            if pending is None:
+                return None
+            self._reconcile_content_receipt(
+                budget, pending[0], pending[1], request=request,
+                identity=identity, purpose=purpose)
+            recovered = budget.pending_recovery(request_sha)
+            if recovered is None:
+                raise ProvenanceRefused('原回答已补账但恢复证明仍缺失')
+        reservation, evidence = recovered
+        if evidence.get('kind') != 'executor-response-custody-v1':
+            raise ProvenanceRefused('工作单元回答不属于当前 Executor 运输契约')
+        acceptance = evidence.get('acceptance')
+        raw_turn = evidence.get('turn')
+        if not isinstance(acceptance, dict) or not isinstance(raw_turn, dict):
+            raise ProvenanceRefused('工作单元回答缺完整运输证明')
+        links = acceptance.get('attempt_links')
+        if not isinstance(links, list) or any(not isinstance(row, dict) for row in links):
+            raise ProvenanceRefused('工作单元回答缺成本请求联结')
+        self.ctx.ledger.claim_work_unit_attempts(
+            budget, reservation.turn_id, purpose=purpose)
+        policy = recovery_policy or next(
+            name for name, node in _RECOVERY_POLICY_NODE.items() if node == self.ctx.node)
+        self.restore_checkpoint_acceptance(
+            purpose, acceptance, system=system, user=user,
+            max_tokens=max_tokens, recovery_policy=policy,
+            adopt_work_unit_response=False)
+        turn = self._saved_turn(raw_turn)
+        if (turn.content != acceptance.get('accepted_text')
+                or turn.session_id != acceptance.get('provider_session_id')
+                or _sha256_bytes(turn.content.encode('utf-8'))
+                != acceptance.get('ledger_response_sha256')):
+            raise ProvenanceRefused('工作单元回答与当前运输证明不一致')
+        self._content_reservation = reservation
+        return turn, str(acceptance['attempt_id'])
 
     def accepted_checkpoint(self, purpose: str) -> dict[str, Any]:
         """返回 accepted 或显式 repair-custody stdout 的不可变联结材料。"""
@@ -1529,6 +1901,7 @@ class SessionAgentClient:
         system: str | None = None, user: str | None = None,
         max_tokens: int | None = None,
         recovery_policy: str | None = None,
+        adopt_work_unit_response: bool = True,
         **unsupported: object,
     ) -> None:
         """复算 agent checkpoint 的当前 subject，再恢复 adoption 索引。
@@ -1556,6 +1929,7 @@ class SessionAgentClient:
             user=user,
             max_tokens=max_tokens,
             recovery_policy=recovery_policy,
+            adopt_work_unit_response=adopt_work_unit_response,
         )
         previous_links = self._restored_attempt_links.get(purpose)
         frozen_links = validated.attempt_links
@@ -1624,6 +1998,7 @@ class SessionAgentClient:
         schema = agent_json_schema(model_cls)
         identity = self._identity(
             system, user, schema, purpose=purpose, max_tokens=max_tokens)
+        self._bind_work_unit(purpose, progress)
         schema_sha = _canonical_sha256(schema)
         if self._started:
             self._assert_same_subject(identity)
@@ -1664,16 +2039,22 @@ class SessionAgentClient:
                 system=(None if self.provider_session_id is not None else system),
                 schema=schema,
             )
-            if not self._started:
+            recovered = self._recover_content_response(
+                request, identity, purpose=purpose, system=system, user=user,
+                max_tokens=max_tokens, recovery_policy=recovery_policy)
+            restored_wire = recovered is not None
+            if not self._started and not restored_wire:
                 self._begin(
                     identity,
                     prompt_sha256=_sha256_bytes(request.stdin_bytes()),
                     schema_sha256=schema_sha,
                 )
                 self._assert_same_subject(identity)
-            turn, attempt_id = self._invoke(
-                request=request, purpose=purpose,
-                progress=progress)
+            if recovered is None:
+                turn, attempt_id = self._invoke(
+                    request=request, purpose=purpose, progress=progress)
+            else:
+                turn, attempt_id = recovered
             gate: str | None = None
             details: list[dict[str, object]] = []
             private_feedback: str | None = None
@@ -1734,29 +2115,38 @@ class SessionAgentClient:
                     thinking=None, rung_index=0, sample=self._turn_index,
                     chapter=self.chapter,
                 )
-                self._remember_json_acceptance(
-                    purpose=purpose, turn=turn, attempt_id=attempt_id,
-                    identity=identity)
+                if not restored_wire:
+                    self._remember_json_acceptance(
+                        purpose=purpose, turn=turn, attempt_id=attempt_id,
+                        identity=identity)
                 return obj
 
+            can_continue = (not self.content_budget_exhausted
+                            if restored_wire else self.can_resume)
             self.ctx.ledger.note_gate(
                 sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
                 attempt_id=attempt_id, source='wire', decision='rejected',
                 gate=gate, reasoning_effort=self.profile.reasoning_effort,
                 thinking=None, rung_index=0, sample=self._turn_index,
-                resample=self.can_resume, reject_detail=details,
+                resample=can_continue, reject_detail=details,
                 request_mode='agent_session_resume', chapter=self.chapter,
             )
-            if not self.can_resume:
+            assert self._content_budget is not None
+            assert self._content_reservation is not None
+            self._content_budget.mark_rejected(
+                self._content_reservation.turn_id, reason_code=f'executor_{gate}_rejected')
+            self._content_reservation = None
+            if not can_continue:
                 if (retain_validator_rejection
                         and gate == 'validator' and obj is not None):
                     # 动态闸耗尽与 parse/schema 失败不同：stdout 已是一份完整
                     # response-model 对象，可安全成为“一次人工 replacement”的原稿。
                     # 这里冻结的仍是供应商原 stdout/attempt；人工候选只会封在
                     # response-repair resolution，绝不回写这份 acceptance。
-                    self._remember_json_acceptance(
-                        purpose=purpose, turn=turn,
-                        attempt_id=attempt_id, identity=identity)
+                    if not restored_wire:
+                        self._remember_json_acceptance(
+                            purpose=purpose, turn=turn,
+                            attempt_id=attempt_id, identity=identity)
                     self._last_json_rejection[purpose] = {
                         'attempt_id': attempt_id,
                         'content': turn.content,
@@ -1780,6 +2170,18 @@ class SessionAgentClient:
             }
             if typed_rows:
                 feedback_payload['typed_failures'] = typed_rows
+            if restored_wire:
+                session_audit.finish_restored_session(
+                    self.ctx.novel_dir.parent, self._accepted_checkpoint[purpose],
+                    process_state='ok', delivery_state='blocked',
+                    error_kind='checkpoint_business_rejected',
+                    end_code_version=prov.code_version(), only_if_open=True)
+                feedback_payload = {
+                    'kind': 'checkpoint_recovery_validation_failed',
+                    'previous_candidate': turn.content,
+                    'failures': [feedback_payload],
+                }
+                self._checkpoint_recovery_start = True
             self._pending_feedback = json.dumps(
                 feedback_payload, ensure_ascii=False, sort_keys=True,
                 separators=(',', ':'))
@@ -1793,6 +2195,20 @@ class SessionAgentClient:
         first_failure_detail: str | None = None,
     ) -> None:
         """在代码终验之后结束 logical session；无模型调用时不伪造一条会话。"""
+        if self._receipt_pending and not self._driver_failed:
+            # 原回答已经持久，但原 turn 尚未完整入账；先保留 opened 会话，
+            # 重启按 prepared receipt 补齐后再结束，不能把缺行封进 ended 后面。
+            return
+        if self._content_reservation is not None and delivery_state in ('delivered', 'blocked'):
+            self._adopt_content_response()
+        if not self._started:
+            for acceptance in self._accepted_checkpoint.values():
+                session_audit.finish_restored_session(
+                    self.ctx.novel_dir.parent, acceptance,
+                    process_state=process_state, delivery_state=delivery_state,
+                    error_kind=error_kind, end_code_version=prov.code_version(),
+                    only_if_open=True)
+            return
         if not self._started or self._ended:
             return
         end_code = prov.code_version()

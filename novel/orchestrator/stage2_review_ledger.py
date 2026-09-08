@@ -32,7 +32,7 @@ from typing import Any
 from pydantic import TypeAdapter
 
 from contracts.invariants import (
-    STAGE2_COMMANDER_MAX_EDIT_SEAT, STAGE2_COMMANDER_MAX_SEATS,
+    LEGACY_STAGE2_COMMANDER_MAX_EDIT_SEAT, LEGACY_STAGE2_COMMANDER_MAX_SEATS,
 )
 from contracts.schema.orchestration import (
     Stage2ReviewAttempt, Stage2ReviewLedger, Stage2ReviewLedgerArchive,
@@ -45,10 +45,10 @@ from novel.errors import PathRefused, TerminalState
 from novel.llm import ledger as cost_ledger
 
 
-MAX_COMMANDER_CALLS = STAGE2_COMMANDER_MAX_SEATS
+MAX_COMMANDER_CALLS = LEGACY_STAGE2_COMMANDER_MAX_SEATS
 #: 席位账不是 artifact，不走 store；用 typed adapter 读原始 object 供版本分流。
 _RAW_LEDGER = TypeAdapter(dict[str, Any])
-MAX_EDIT_SEAT = STAGE2_COMMANDER_MAX_EDIT_SEAT
+MAX_EDIT_SEAT = LEGACY_STAGE2_COMMANDER_MAX_EDIT_SEAT
 _ARCHIVABLE_SCHEMA_VERSIONS = (1, 2)
 _LEGACY_NO_WIRE_EXIT_CODE = 70
 _LEGACY_NO_WIRE_SIGNATURE = 'ValueError: admission id 必须属于当前 epoch'

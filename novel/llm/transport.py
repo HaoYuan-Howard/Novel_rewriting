@@ -82,9 +82,11 @@ class ChatRequest:
     json_mode: bool
     max_tokens: int
     temperature: float | None = None
+    history: tuple[tuple[str, str], ...] = ()
 
     def messages(self) -> list[dict[str, str]]:
         return [{'role': 'system', 'content': self.system},
+                *({'role': role, 'content': content} for role, content in self.history),
                 {'role': 'user', 'content': self.user}]
 
     def cache_payload(self) -> dict[str, Any]:

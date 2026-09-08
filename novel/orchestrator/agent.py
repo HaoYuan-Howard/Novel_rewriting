@@ -32,20 +32,22 @@ import threading
 import time
 import warnings
 from collections.abc import Callable, Sequence
-from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from contextlib import contextmanager, nullcontext
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator, NamedTuple
 
 from contracts.artifacts import (
     STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT,
     STAGE2_GLOBAL_EDIT_FAILURE, STAGE2_GLOBAL_REVIEW_DECISIONS,
+    STAGE2_BLUEPRINT_RELATION_EDIT,
     STAGE5_REVIEWER_REWRITE_REQUEST,
 )
 from contracts.invariants import (
     AGENT_EXECUTOR_NODES, COMMANDER_MAX_ATTEMPTS_PER_SEAT,
     COMMANDER_RETRY_BACKOFF_SECONDS, COMMANDER_REVIEWER_MAX_CORRECTIONS,
     STAGE2_BLUEPRINT_MAX_CONCURRENCY,
+    commander_work_unit,
 )
 from contracts.schema import decode_artifact
 from contracts.schema.api import (
@@ -53,7 +55,7 @@ from contracts.schema.api import (
     Stage2FinalReviewRequest, Stage5ReviewerRewriteRequest,
 )
 from contracts.schema.evaluation import GlobalReviewDecisionSet
-from contracts.schema.stage2 import GlobalEdit, GlobalEditCommit, GlobalEditFailure
+from contracts.schema.stage2 import BlueprintRelationEdit, GlobalEdit, GlobalEditCommit, GlobalEditFailure
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected,
     AgentRunEvent, AgentRunExitOrigin,
@@ -107,6 +109,9 @@ from novel.orchestrator.agent_supervisor import (
 from novel.orchestrator.jobs import JobConflict, JobRegistry, service_dir
 from novel.orchestrator.nodes import shell_line
 from novel.store import ArtifactStore
+from novel.work_units import (
+    WorkUnitBudget, WorkUnitRefused, ContentReservation, require_workflow, validate_reviewer_record,
+)
 
 RUNS_FILENAME = 'agent_runs.jsonl'
 LOG_PREFIX = 'agent-'
@@ -967,9 +972,14 @@ def _stage2_reviewer_input(
         decisions = GlobalReviewDecisionSet.model_validate(decoded.payload)
         path = uploads.save_global_review_decisions(base, sid, decisions)
     elif '--apply-edit' in tokens and '--review-decisions' not in tokens:
-        decoded = decode_artifact(STAGE2_GLOBAL_EDIT, payload)
-        edit = GlobalEdit.model_validate(decoded.payload)
-        path = uploads.save_global_edit(base, sid, edit)
+        if action.node == 'stage2.blueprint':
+            decoded = decode_artifact(STAGE2_BLUEPRINT_RELATION_EDIT, payload)
+            edit = BlueprintRelationEdit.model_validate(decoded.payload)
+            path = uploads.save_blueprint_relation_edit(base, sid, edit)
+        else:
+            decoded = decode_artifact(STAGE2_GLOBAL_EDIT, payload)
+            edit = GlobalEdit.model_validate(decoded.payload)
+            path = uploads.save_global_edit(base, sid, edit)
     else:
         raise RuntimeError(
             'Stage2 reviewer input 必须恰好属于 review-decisions 或 apply-edit')
@@ -1228,6 +1238,8 @@ def _record_reviewer_action(
         reviewer_session_run_id: str | None = None,
         reviewer_seat_turn_id: str | None = None,
         provider_response_sha256: str | None = None,
+        work_unit_id: str | None = None,
+        work_unit_turn_id: str | None = None,
         schema_recovery_response: dict[str, Any] | None = None,
         reviewer_progress_sha256: str | None = None) -> Path | None:
     """typed loader 一通过就按内容寻址持久化可执行决定（R-11.25）。
@@ -1247,7 +1259,16 @@ def _record_reviewer_action(
         'recorded_at': int(time.time()),
     }
     stage2_fields: dict[str, object] = {}
-    if task.waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
+    if work_unit_id is not None:
+        stage2_fields = {
+            'work_unit_id': work_unit_id, 'work_unit_turn_id': work_unit_turn_id,
+            'reviewer_seat_turn_id': work_unit_turn_id,
+            'reviewer_session_run_id': reviewer_session_run_id,
+            'provider_response_sha256': provider_response_sha256,
+            'stage5_review_sha256': task.stage5_review_sha256,
+            'stage5_reviewer_contract_sha256': task.stage5_reviewer_contract_sha256,
+        }
+    elif task.waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
         effective_progress = reviewer_progress_sha256 or task.progress_sha256
         metadata = (
             task.workpack_sha256, task.source_sha256, task.main_text_sha256,
@@ -1268,7 +1289,7 @@ def _record_reviewer_action(
             'provider_response_sha256': provider_response_sha256,
         }
     if isinstance(action, reviewer_tasks.ReviewerApprovalAction):
-        if task.waiting_on in reviewer_schema_recovery.WAITING_ON:
+        if work_unit_id is None and task.waiting_on in reviewer_schema_recovery.WAITING_ON:
             ledger = reviewer_seat_ledger.read(
                 base, sid, waiting_on=task.waiting_on,
                 business_sha256=task.business_sha256)
@@ -1310,7 +1331,7 @@ def _record_reviewer_action(
         except (ValueError, IndexError):
             pass
         if (
-            token is None
+            work_unit_id is None and token is None
             and action.node == 'stage5.review'
             and action.flags in {
                 ('--retain-pretrim-batch', '@reviewer-input'),
@@ -2248,6 +2269,108 @@ def _reconcile_landed_stage5_reviewer_rewrite_action(
     reviewer_action_evidence.seal_reviewer_rewrite_authority(
         base, sid, request, request_file_sha256,
         current_parent_run_id=current_parent_run_id or '')
+
+
+def _reconcile_completed_work_unit_actions(
+        base: str, sid: str, *, code: str,
+        current_parent_run_id: str | None = None) -> None:
+    """补齐正式审批成功、采用状态或活动记录尚未收尾的崩溃窗。
+
+    当前主体或配置可以已经改变。退休仅凭原工作单元的采用事实或 exact 提交证明，
+    不把旧决定交给新工作包，不授予任何新审批或模型额度。
+    """
+    from novel.orchestrator import approvals, reviewer_node_landed
+
+    for path, record in uploads.load_reviewer_actions(base, sid):
+        if record.work_unit_id is None or record.work_unit_turn_id is None:
+            continue
+        identity = commander_work_unit(record.waiting_on)
+        if identity is None:
+            raise WorkUnitRefused('活动审阅记录没有登记的工作单元属主')
+        node, scope = identity
+        budget = WorkUnitBudget(base, sid, node, 'commander', scope)
+        if budget.unit_id != record.work_unit_id:
+            raise WorkUnitRefused('活动审阅记录与登记工作单元不一致')
+        if budget.turn(record.work_unit_turn_id).state not in ('delivered', 'adopted'):
+            continue
+        owner = (nullcontext() if record.run_id == current_parent_run_id
+                 else admission.require_owner_stopped(base, record.run_id))
+        with owner:
+            verified = validate_reviewer_record(base, sid, record)
+            turn = verified.turn(record.work_unit_turn_id)
+            if turn.state == 'delivered':
+                if record.surface is not None and record.payload is not None:
+                    landed = approvals.reviewer_approval_payload_landed(
+                        base, sid, surface=record.surface, payload=record.payload)
+                elif record.node in ('stage0.approve', 'stage6.approve', 'stage7.approve'):
+                    landed = reviewer_node_landed.approval_action_landed(
+                        base, sid, node=record.node, flags=tuple(record.flags), code=code)
+                else:
+                    # typed 生产补丁仍由各 producer 的 committed journal 证明。
+                    continue
+                if not landed:
+                    continue
+                verified.mark_adopted(record.work_unit_turn_id)
+            elif turn.state != 'adopted':
+                raise WorkUnitRefused('取得原属主租约后交付状态发生变化')
+            uploads.discard_edit_plan(base, path)
+
+
+def _reconcile_landed_stage2_work_unit_actions(
+        base: str, sid: str, *, code: str,
+        current_parent_run_id: str | None = None) -> None:
+    """免费 producer 补提交后先收原内容账，再让 planner 越过原审阅 blocker。
+
+    prepared 仅授权重放，不证明提交。原回答、typed 动作、成本/会话证明与
+    当前 committed 产物、当前接受全部闭合后才能 adopt；只写服务账，不补造审批。
+    """
+    from novel.orchestrator import approvals
+    from novel.stages.stage2 import extract, global_review, relation_edit
+
+    for path, record in uploads.load_reviewer_actions(base, sid):
+        if (record.work_unit_id is None or record.work_unit_turn_id is None
+                or record.waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON):
+            continue
+        node, scope = commander_work_unit(record.waiting_on)
+        budget = WorkUnitBudget(base, sid, node, 'commander', scope)
+        if budget.unit_id != record.work_unit_id:
+            raise WorkUnitRefused('Stage2 退休记录与登记工作单元不一致')
+        if budget.turn(record.work_unit_turn_id).state == 'failed':
+            # 拒因先写、record 后删的尾窗由当前 Reviewer 拒绝恢复处理，不当作落盘。
+            continue
+        owner = (nullcontext() if record.run_id == current_parent_run_id
+                 else admission.require_owner_stopped(base, record.run_id))
+        with owner:
+            budget = validate_reviewer_record(base, sid, record)
+            if budget.turn(record.work_unit_turn_id).state == 'adopted':
+                uploads.discard_edit_plan(base, path)
+                continue
+            submitted = False
+            if record.surface in ('stage2_global_review', 'stage2_blueprint_review'):
+                if record.payload is not None:
+                    submitted = approvals.stage2_review_payload_landed(base, sid, record.payload)
+            elif record.node in ('stage2.global', 'stage2.blueprint') and record.input_payload is not None:
+                if record.node == 'stage2.global' and '--apply-edit' in record.flags:
+                    store = ArtifactStore(state.readonly_ctx(
+                        paths.resolve_novel_dir(base, sid), record.node, code))
+                    if store.exists(STAGE2_GLOBAL_EDIT_COMMIT):
+                        journal = store.read_own(GlobalEditCommit, STAGE2_GLOBAL_EDIT_COMMIT)[0]
+                        submitted = (journal.state == 'committed'
+                                     and extract.submitted_global_patch_is_current(base, sid, record.input_payload))
+                elif record.node == 'stage2.global' and '--review-decisions' in record.flags:
+                    submitted = global_review.submitted_decisions_is_current(base, sid, record.input_payload)
+                elif record.node == 'stage2.blueprint' and '--apply-edit' in record.flags:
+                    submitted = relation_edit.submitted_patch_is_current(base, sid, record.input_payload)
+                if submitted:
+                    try:
+                        approvals.require_stage2_node_accepted(base, sid, record.node)
+                    except ApprovalRequired:
+                        submitted = False
+            if submitted:
+                # 先标原回答已消费，再退休活动记录；删除中断可按 adopted 原证明补尾。
+                budget.mark_adopted(record.work_unit_turn_id)
+                uploads.discard_edit_plan(base, path)
+
 
 def _protocol_recovery_sources(
         base: str, sid: str, *, ledger: ReviewerSeatLedger,
@@ -3596,6 +3719,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         egress_authorized=plan.egress_authorized)
     base = plan.base
     sid = plan.sid
+    require_workflow(base)
     code_version = plan.code_version
     _require_reproducible_code_version(code_version)
     invocation = plan.invocation
@@ -4291,6 +4415,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             on_attempt_started: Callable[[str, str, str | None], None] | None = None,
             on_attempt_finished: Callable[
                 [str, int, str | None, str | None, bool], None] | None = None,
+            on_final_response: Callable[[str, dict[str, object]], None] | None = None,
             max_attempts: int = COMMANDER_MAX_ATTEMPTS_PER_SEAT,
             seat_provider_session_id: str | None = None,
             seat_turns_recorded: int = 0,
@@ -4389,6 +4514,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         invoked = False
         registered = False
         turn_latency_ms: int | None = None
+        durable_result: dict[str, object] | None = None
         drain = _ExecutionDrainResult(timed_out=False)
         # 同席 attempt 循环：一次 Commander turn 可以由多次真实进程尝试组成
         # （首发 + 因网络/瞬态故障的 resume/relaunch），它们共享同一 logical
@@ -4477,6 +4603,41 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     integrity_error_kind = 'commander_attempt_ledger'
                     raise
 
+        def attempt_event(
+                attempt_rc: int, failure: str | None,
+                attempt_observation: CommanderObservation) -> agent_session_audit.AgentSessionEvent:
+            return agent_session_audit.AgentSessionEvent(
+                session_run_id=audit_epoch.session_run_id,
+                parent_run_id=run_id,
+                role='commander', node=None, chapter=None,
+                subject_sha256=(
+                    fresh_prompt_sha256
+                    if fresh_prompt_sha256 is not None
+                    else current_session_prompt_sha256),
+                profile=plan.profiles.commander,
+                provider_session_id=(
+                    attempt_observation.provider_session_id),
+                attempt_id=current_attempt['id'],
+                delivery_attempts=attempt_no,
+                requested_model=plan.profiles.commander.model,
+                actual_model=attempt_observation.actual_model,
+                requested_effort=(
+                    plan.profiles.commander.reasoning_effort),
+                actual_effort=attempt_observation.actual_effort,
+                cli_version=attempt_invocation.cli_version,
+                protocol_version=attempt_invocation.protocol,
+                start_code_version=epoch.code_version,
+                skill_sha256=epoch.skill_sha256,
+                prompt_sha256=_sha256_bytes(
+                    attempt_invocation.stdin_text.encode('utf-8')),
+                schema_sha256=turn_schema_sha256,
+                usage=_session_usage(attempt_observation),
+                error_kind=(
+                    None if attempt_rc == 0
+                    else (failure or 'commander_process_exit')),
+                kind='attempt', ts=int(time.time()),
+            )
+
         def append_attempt_audit(
                 attempt_rc: int, failure: str | None,
                 attempt_observation: CommanderObservation) -> None:
@@ -4484,37 +4645,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             try:
                 agent_session_audit.append_event(
                     base,
-                    agent_session_audit.AgentSessionEvent(
-                        session_run_id=audit_epoch.session_run_id,
-                        parent_run_id=run_id,
-                        role='commander', node=None, chapter=None,
-                        subject_sha256=(
-                            fresh_prompt_sha256
-                            if fresh_prompt_sha256 is not None
-                            else current_session_prompt_sha256),
-                        profile=plan.profiles.commander,
-                        provider_session_id=(
-                            attempt_observation.provider_session_id),
-                        attempt_id=current_attempt['id'],
-                        delivery_attempts=attempt_no,
-                        requested_model=plan.profiles.commander.model,
-                        actual_model=attempt_observation.actual_model,
-                        requested_effort=(
-                            plan.profiles.commander.reasoning_effort),
-                        actual_effort=attempt_observation.actual_effort,
-                        cli_version=attempt_invocation.cli_version,
-                        protocol_version=attempt_invocation.protocol,
-                        start_code_version=epoch.code_version,
-                        skill_sha256=epoch.skill_sha256,
-                        prompt_sha256=_sha256_bytes(
-                            attempt_invocation.stdin_text.encode('utf-8')),
-                        schema_sha256=turn_schema_sha256,
-                        usage=_session_usage(attempt_observation),
-                        error_kind=(
-                            None if attempt_rc == 0
-                            else (failure or 'commander_process_exit')),
-                        kind='attempt', ts=int(time.time()),
-                    ),
+                    (agent_session_audit.AgentSessionEvent.from_dict(durable_result['attempt_event'])
+                     if durable_result is not None and attempt_rc == 0
+                     else attempt_event(attempt_rc, failure, attempt_observation)),
                 )
             except Exception:  # noqa: BLE001 —— 已发生 wire，禁止消费回答
                 integrity_error_kind = 'commander_attempt_audit'
@@ -4612,6 +4745,34 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         attempt_retryable = bool(result.retryable)
                         attempt_wire = bool(result.wire_evidence)
                         attempt_final_response = result.final_response
+                        if attempt_rc == 0 and attempt_final_response is not None and on_final_response is not None:
+                            # 原回答先保存，再闭会话/成本账；提交或审计失败不能迫使重买回答。
+                            received_event = attempt_event(0, None, attempt_observation)
+                            received_turn = replace(
+                                received_event, kind='turn', delivery_attempts=None,
+                                turn_index=fresh_turn_counter + 1)
+                            durable_result = {
+                                'kind': 'commander-result-receipt-v1',
+                                'request_prompt': attempt_invocation.stdin_text,
+                                'logical_prompt_sha256': _sha256_bytes(reviewer_prompt.encode('utf-8')),
+                                'attempt_event': received_event.to_dict(),
+                                'turn_event': received_turn.to_dict(),
+                                'cost_kwargs': dict(
+                                    run_id=run_id, session_run_id=audit_epoch.session_run_id,
+                                    sid=sid, attempt_id=current_attempt['id'],
+                                    request_model=plan.profiles.commander.model,
+                                    requested_effort=plan.profiles.commander.reasoning_effort,
+                                    code=epoch.code_version, protocol_version=attempt_invocation.protocol,
+                                    actual_model=attempt_observation.actual_model,
+                                    actual_effort=attempt_observation.actual_effort,
+                                    provider_session_id=attempt_observation.provider_session_id,
+                                    cli_version=attempt_invocation.cli_version,
+                                    usage=_usage_dict(attempt_observation), outcome='ok', exit_code=0,
+                                    error_kind=None, latency_ms=int((time.monotonic() - spawn_started) * 1000),
+                                    activity=activity,
+                                    response_sha256=_reviewer_response_sha256(attempt_final_response)),
+                            }
+                            on_final_response(attempt_final_response, durable_result)
                     except BaseException as exc:  # noqa: BLE001 —— 崩了也要闭合本 attempt
                         attempt_crashed = True
                         known_rc = getattr(exc, 'returncode', None)
@@ -4857,29 +5018,32 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
 
         if invoked:
             try:
-                append_commander_call(
-                    base, run_id=run_id,
-                    session_run_id=audit_epoch.session_run_id,
-                    sid=sid, attempt_id=attempt_id,
-                    request_model=plan.profiles.commander.model,
-                    requested_effort=(
-                        plan.profiles.commander.reasoning_effort),
-                    code=epoch.code_version,
-                    protocol_version=attempt_invocation.protocol,
-                    actual_model=observation.actual_model,
-                    actual_effort=observation.actual_effort,
-                    provider_session_id=(
-                        observation.provider_session_id),
-                    cli_version=attempt_invocation.cli_version,
-                    usage=_usage_dict(observation),
-                    outcome=('ok' if rc == 0 else 'error'),
-                    exit_code=rc, error_kind=error_kind,
-                    latency_ms=turn_latency_ms,
-                    activity=activity,
-                    response_sha256=(
-                        _reviewer_response_sha256(final_response)
-                        if reviewer_prompt is not None
-                        and final_response is not None else None))
+                if durable_result is not None:
+                    append_commander_call(base, **durable_result['cost_kwargs'])
+                else:
+                    append_commander_call(
+                        base, run_id=run_id,
+                        session_run_id=audit_epoch.session_run_id,
+                        sid=sid, attempt_id=attempt_id,
+                        request_model=plan.profiles.commander.model,
+                        requested_effort=(
+                            plan.profiles.commander.reasoning_effort),
+                        code=epoch.code_version,
+                        protocol_version=attempt_invocation.protocol,
+                        actual_model=observation.actual_model,
+                        actual_effort=observation.actual_effort,
+                        provider_session_id=(
+                            observation.provider_session_id),
+                        cli_version=attempt_invocation.cli_version,
+                        usage=_usage_dict(observation),
+                        outcome=('ok' if rc == 0 else 'error'),
+                        exit_code=rc, error_kind=error_kind,
+                        latency_ms=turn_latency_ms,
+                        activity=activity,
+                        response_sha256=(
+                            _reviewer_response_sha256(final_response)
+                            if reviewer_prompt is not None
+                            and final_response is not None else None))
             except Exception:  # noqa: BLE001
                 integrity_error_kind = 'commander_ledger'
                 error_kind = integrity_error_kind
@@ -4899,7 +5063,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 provider_reuse_owner = (
                     agent_session_audit.append_commander_turn(
                         base,
-                        agent_session_audit.AgentSessionEvent(
+                        (agent_session_audit.AgentSessionEvent.from_dict(durable_result['turn_event'])
+                         if durable_result is not None else agent_session_audit.AgentSessionEvent(
                             session_run_id=audit_epoch.session_run_id,
                             parent_run_id=run_id,
                             role='commander', node=None, chapter=None,
@@ -4928,7 +5093,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             usage=_session_usage(observation),
                             error_kind=error_kind,
                             kind='turn', ts=int(time.time()),
-                        ),
+                        )),
                     )
                 )
                 this_turn_recorded = provider_reuse_owner is None
@@ -5056,6 +5221,17 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         """给一席 fresh reviewer session 幂等补 ended；未落 started 的席位没有事实可闭。"""
         if not seat.started:
             return
+        identity = commander_work_unit(seat.waiting_on)
+        if identity is not None:
+            budget = WorkUnitBudget(base, sid, identity[0], 'commander', identity[1])
+            pending = budget.latest_pending_response()
+            if pending is not None and pending[1].get('session_run_id') == seat.session_run_id:
+                try:
+                    from novel.work_units import reconcile_commander_response
+                    reconcile_commander_response(budget, pending[0].turn_id, read_only=True)
+                except Exception:
+                    # 已保存完整回答但尾账未闭时不得先 ended；重启用原证明补尾。
+                    return
         seat.started = False
         observation = seat.last_observation or CommanderObservation(
             provider_session_id=None, actual_model=None,
@@ -5169,23 +5345,12 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             failure_detail=failure_detail, pause_note=pause_note)
 
     def _read_operator_next(epoch: ExecutionEpoch) -> OperatorNext:
-        # Supervisor 已在本调用前后各核一次 epoch identity；这里复用同一 code，
-        # 避免每个节点再为整棵 dirty worktree 启三次 git 子进程。
-        # reviewed apply-edit 可能已经由 canonical producer 写出 terminal
-        # failure/committed journal，却在子进程退出事实返回 Agent 前硬杀。先用
-        # durable action + producer 事实补拒因或退休记录；prepared 仍留给下面的
-        # deterministic recovery，不在这里把进行中的同一动作误记成失败。
-        _reconcile_stage2_apply_edit_actions(
-            base, sid, code=epoch.code_version)
-        # final-review canonical approval 可能已让 planner 越过旧 blocker，但宿主
-        # 尚未来得及封 Stage2 席位账。先用 durable action + current approval/seen
-        # 补完服务账并退休记录；不重复执行 approval，也不伪造一个 blocker。
-        _reconcile_landed_stage2_final_actions(base, sid)
-        # Stage4 协议恢复审批也可能先落盘、再于活动记录退休前硬杀。
-        # 必须在 planner 越过旧 blocker 前后都能补尾，不能等旧 token 再出现。
-        for path, record in uploads.load_reviewer_actions(base, sid):
-            _retire_landed_protocol_reviewer_action(
-                base, sid, path=path, record=record)
+        # 新 base 不读取旧四席次数账。producer journal / typed 接受各自补提交；
+        # 工作单元保存原回答，planner 重启不会重新发放预算。
+        _reconcile_completed_work_unit_actions(
+            base, sid, code=epoch.code_version, current_parent_run_id=run_id)
+        _reconcile_landed_stage2_work_unit_actions(
+            base, sid, code=epoch.code_version, current_parent_run_id=run_id)
         _reconcile_landed_stage5_reviewer_rewrite_action(
             base, sid, code=epoch.code_version,
             current_parent_run_id=run_id)
@@ -5196,295 +5361,12 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             epoch: ExecutionEpoch, current: OperatorNext,
             provider_session_id: str | None,
             launch_ticket: LaunchTicket) -> SupervisorActionResult:
-        nonlocal stage2_commander_turns, stage2_prereview
-        nonlocal latest_outcome, latest_rc, latest_error_kind
+        """所有生产只执行状态机当前许可；Stage2 不再并行发起预审。"""
         if current.execution_token is None:
             raise RuntimeError('ready next 缺 execution token')
         permit = current.execution_token
-        if permit.node != 'stage2.blueprint':
-            return _run_token(
-                epoch, permit, launch_ticket,
-                stem=f'ready-{permit.node}')
+        return _run_token(epoch, permit, launch_ticket, stem=f'ready-{permit.node}')
 
-        scratch = service_lifecycle.open_scratch_session(
-            base, sid, epoch.epoch_id)
-        prereview_task = reviewer_tasks.build_stage2_prereview_task(
-            base, sid, current,
-            scratch / f'stage2-prereview-{jobs.new_job_id()}.json',
-            epoch_id=epoch.epoch_id)
-        if prereview_task is None:
-            return _run_token(
-                epoch, permit, launch_ticket,
-                stem='ready-stage2.blueprint')
-
-        durable_prereview = _find_replayable_stage2_prereview(
-            base, sid, task=prereview_task)
-        if durable_prereview is not None:
-            log = run_log_path(base, run_id)
-            log.parent.mkdir(parents=True, exist_ok=True)
-            with open(log, 'ab') as fh:
-                fh.write(
-                    f'$ [stage2-prereview-replay] '
-                    f'{durable_prereview.path}\n'.encode('utf-8'))
-            # 未绑定记录没有 provider session，也不把旧 surface 当执行授权；
-            # 这里只跳过第二次预审，Blueprint 仍持当前 permit 正常执行。
-            stage2_prereview = None
-            return _run_token(
-                epoch, permit, launch_ticket,
-                stem='ready-stage2.blueprint')
-
-        existing = stage2_prereview
-        same_existing = (
-            existing is not None
-            and _stage2_prereview_identity(existing.task)
-            == _stage2_prereview_identity(prereview_task))
-        # 一次失败/坏 typed 输出已经是真实调用；没有可复用结果时也只让 Blueprint
-        # 继续，live blocker 最多再领取剩余一轮，绝不偷偷重做预审。
-        if same_existing:
-            return _run_token(
-                epoch, permit, launch_ticket,
-                stem='ready-stage2.blueprint')
-
-        # 这一格必须与 Blueprint pool 实际能取到的配置上限相同：
-        # 配置为 1 时宁可不重叠，也不能因多一个 Reviewer 把并发抬到 2。
-        shared_capacity = min(
-            STAGE2_BLUEPRINT_MAX_CONCURRENCY, load_config().concurrency)
-        slot_env = prepare_model_slot_gate(
-            scratch / f'stage2-model-slots-{jobs.new_job_id()}',
-            capacity=shared_capacity)
-        registered = threading.Event()
-        finished = threading.Event()
-        holder: dict[str, object] = {}
-        review_session_id = jobs.new_job_id()
-
-        def reserve_prereview_call() -> None:
-            try:
-                durable = _reserve_stage2_commander(
-                    prereview_task, epoch=epoch, purpose='prereview',
-                    session_id=review_session_id)
-            except BaseException as exc:  # noqa: BLE001 —— 传回 worker 收口
-                holder['error'] = exc
-                raise
-            holder['reservation_made'] = True
-            holder['durable_reservation'] = durable
-
-        def prereview_attempt_started(
-                attempt_id: str, kind: str,
-                resume_id: str | None) -> None:
-            if holder.get('durable_reservation') is not True:
-                return
-            assert prereview_task.source_sha256 is not None
-            assert prereview_task.main_text_sha256 is not None
-            stage2_review_ledger.record_attempt(
-                base, sid,
-                source_sha256=prereview_task.source_sha256,
-                main_text_sha256=prereview_task.main_text_sha256,
-                session_run_id=review_session_id,
-                attempt_id=attempt_id, kind=kind,
-                provider_session_id=resume_id)
-
-        def prereview_attempt_finished(
-                attempt_id: str, exit_code: int,
-                failure_kind: str | None,
-                provider_session_id: str | None,
-                wire_evidence: bool) -> None:
-            if holder.get('durable_reservation') is not True:
-                return
-            assert prereview_task.source_sha256 is not None
-            assert prereview_task.main_text_sha256 is not None
-            stage2_review_ledger.finish_attempt(
-                base, sid,
-                source_sha256=prereview_task.source_sha256,
-                main_text_sha256=prereview_task.main_text_sha256,
-                session_run_id=review_session_id,
-                attempt_id=attempt_id, exit_code=exit_code,
-                error_kind=failure_kind,
-                provider_session_id=provider_session_id,
-                wire_evidence=wire_evidence)
-
-        def prereview_worker() -> None:
-            review_exit_code = CRASH
-            try:
-                prereview_output_schema = (
-                    stage2_reviewer_wire.output_schema_for(prereview_task))
-                turn = _run_commander_turn(
-                    epoch, None,
-                    reviewer_prompt=stage2_reviewer_wire.prompt_for(
-                        prereview_task, prereview_task.prompt),
-                    reviewer_output_schema=prereview_output_schema,
-                    fresh_session_run_id=review_session_id,
-                    read_only=True,
-                    environment_overrides=slot_env,
-                    after_spawn_before_wire=reserve_prereview_call,
-                    on_registered=registered.set,
-                    activity='stage2.global.prereview',
-                    on_attempt_started=prereview_attempt_started,
-                    on_attempt_finished=prereview_attempt_finished)
-                holder['turn'] = turn
-                review_exit_code = turn.exit_code
-                if turn.exit_code == 0:
-                    if turn.final_response is not None:
-                        holder['response_sha256'] = _reviewer_response_sha256(
-                            turn.final_response)
-                        def persist_prereview(
-                                input_payload: dict[str, object],
-                                response_sha256: str) -> Path:
-                            holder['typed_validated'] = True
-                            path = _record_stage2_prereview(
-                                base, sid, run_id=run_id, epoch=epoch,
-                                task=prereview_task,
-                                input_payload=input_payload,
-                                reviewer_session_run_id=review_session_id,
-                                provider_response_sha256=response_sha256)
-                            holder['record_path'] = path
-                            return path
-
-                        (_input_payload, _response_sha256,
-                         _record_path) = (
-                            _materialize_stage2_prereview_response(
-                                prereview_task, turn.final_response,
-                                persist_validated=persist_prereview,
-                                preserve_validated=lambda candidate, digest: (
-                                    _preserve_validated_reviewer_residue(
-                                        base, sid, candidate, digest))))
-                    else:
-                        # 历史/测试 spawn 仍可物化旧文件；生产
-                        # structured driver 成功却缺回答会在协议层拒绝。
-                        input_payload = reviewer_tasks.load_stage2_prereview(
-                            prereview_task)
-                        response_sha256 = _reviewer_request_sha256(
-                            prereview_task.request_path)
-                        holder['response_sha256'] = response_sha256
-                        holder['typed_validated'] = True
-                        holder['record_path'] = _record_stage2_prereview(
-                            base, sid, run_id=run_id, epoch=epoch,
-                            task=prereview_task,
-                            input_payload=input_payload,
-                            reviewer_session_run_id=review_session_id,
-                            provider_response_sha256=response_sha256)
-                else:
-                    holder.setdefault(
-                        'error', RuntimeError(
-                            'Stage2 Global 预审 Commander '
-                            f'exit {turn.exit_code}'))
-            except BaseException as exc:  # noqa: BLE001 —— Blueprint 仍须独立收尾
-                holder['error'] = exc
-                if (review_exit_code == 0
-                        and isinstance(exc, reviewer_tasks.ReviewerTaskError)
-                        and not isinstance(holder.get('record_path'), Path)):
-                    holder['rejection_reason'] = str(exc)
-                    holder['rejection_request_sha256'] = (
-                        str(holder['response_sha256'])
-                        if isinstance(holder.get('response_sha256'), str)
-                        else _reviewer_request_sha256(
-                            prereview_task.request_path))
-            finally:
-                try:
-                    if holder.get('reservation_made') is True:
-                        _finish_stage2_commander(
-                            prereview_task, session_id=review_session_id,
-                            durable=(holder.get('durable_reservation') is True),
-                            exit_code=review_exit_code)
-                        if (holder.get('durable_reservation') is True
-                                and isinstance(
-                                    holder.get('rejection_reason'), str)
-                                and isinstance(
-                                    holder.get('rejection_request_sha256'), str)):
-                            _record_stage2_rejection(
-                                prereview_task,
-                                session_run_id=review_session_id,
-                                kind='typed_loader',
-                                request_sha256=str(
-                                    holder['rejection_request_sha256']),
-                                reason=str(holder['rejection_reason']))
-                except BaseException as exc:  # noqa: BLE001 —— 坏账必须显式留下
-                    holder['error'] = exc
-                    holder['ledger_error'] = exc
-                finally:
-                    finished.set()
-
-        thread = threading.Thread(
-            target=prereview_worker,
-            name=f'stage2-prereview-{run_id}', daemon=True)
-        thread.start()
-        # Reviewer 的 Popen 先拿到一槽，随后才把 Blueprint 放进同一总预算。
-        # 若它在 Popen 前失败，finished 会放行，Blueprint 不被一条坏预审拖死。
-        while not registered.wait(0.05):
-            if finished.is_set():
-                break
-
-        executed: SupervisorActionResult | None = None
-        action_error: BaseException | None = None
-        try:
-            executed = _run_token(
-                epoch, permit, launch_ticket,
-                stem='ready-stage2.blueprint',
-                environment_overrides=slot_env)
-        except BaseException as exc:  # noqa: BLE001 —— 先等只读调用闭账再原样抛
-            action_error = exc
-        finally:
-            thread.join()
-
-        error = holder.get('error')
-        stage2_prereview = _Stage2PrereviewState(
-            task=prereview_task,
-            session_run_id=review_session_id,
-            error=(
-                f'{type(error).__name__}: {error}' if isinstance(error, BaseException)
-                else None),
-            response_sha256=(
-                str(holder['response_sha256'])
-                if isinstance(holder.get('response_sha256'), str) else None),
-        )
-        if action_error is not None:
-            raise action_error
-        assert executed is not None
-        ledger_error = holder.get('ledger_error')
-        if isinstance(ledger_error, BaseException):
-            # provider 回答即使已经 durable，席位 finish/rejection 审计失败也
-            # 不能消费；记录继续留盘，下一 parent 先修复账面再恢复。
-            detail = f'{type(ledger_error).__name__}: {ledger_error}'
-            latest_outcome = AgentDeliveryOutcome(
-                state='unknown', checked_at=int(time.time()),
-                reason=(
-                    'Blueprint 动作已结束，但 Stage2 预审席位审计没有完整闭合：'
-                    f'{detail}'))
-            latest_rc = CRASH
-            latest_error_kind = 'stage2_prereview_integrity'
-            return SupervisorActionResult(
-                exit_code=CRASH, outcome=latest_outcome,
-                continue_ready=False, failure_detail=detail,
-                provider_session_id=None)
-        if (holder.get('typed_validated') is True
-                and not isinstance(holder.get('record_path'), Path)):
-            # Blueprint 可能已经 landed，但一份已付费、typed-valid 的预审没有
-            # 形成跨 stop/restart 的恢复凭据；不能把并发支线故障藏在 Blueprint
-            # exit 0 后继续，也不能下一 parent 再买同一席。
-            detail = (
-                f'{type(error).__name__}: {error}'
-                if isinstance(error, BaseException)
-                else 'Stage2 typed-valid 预审 durable save 未形成记录')
-            latest_outcome = AgentDeliveryOutcome(
-                state='unknown', checked_at=int(time.time()),
-                reason=(
-                    'Blueprint 动作已结束，但 Stage2 typed-valid 预审没有形成'
-                    f'可重启恢复记录：{detail}'))
-            latest_rc = CRASH
-            latest_error_kind = 'stage2_prereview_durable'
-            return SupervisorActionResult(
-                exit_code=CRASH, outcome=latest_outcome,
-                continue_ready=False, failure_detail=detail,
-                provider_session_id=None)
-        # 两条并发支线都收尾后，parent 的节点事实必须仍由 Blueprint action 决定；
-        # Commander 自己的 outcome 只留在 commander audit/session 中。
-        latest_outcome = executed.outcome
-        latest_rc = executed.exit_code
-        latest_error_kind = (
-            None if executed.exit_code in (0, 1, 2)
-            else 'ready-stage2.blueprint_process_exit')
-        # 预审席位只靠 ledger/workpack 连续，不把它的 provider session 注入
-        # parent；Supervisor 因而不会用该 session 续会。
-        return replace(executed, provider_session_id=None)
 
     def _run_blocked_action(
             epoch: ExecutionEpoch, current: OperatorNext,
@@ -5567,1882 +5449,381 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             epoch: ExecutionEpoch, current: OperatorNext,
             provider_session_id: str | None,
             launch_ticket: LaunchTicket) -> CommanderTurnResult | None:
-        nonlocal pending_reviewer_action, pending_reviewer_binding
-        nonlocal pending_reviewer_business_sha256, pending_reviewer_source_task
-        nonlocal pending_reviewer_stage2_session_run_id
-        nonlocal pending_reviewer_response_sha256
-        nonlocal pending_reviewer_record_path, pending_reviewer_replayed
-        nonlocal pending_reviewer_protocol_recovery
-        nonlocal reviewer_correction_task, reviewer_correction_binding
-        nonlocal reviewer_correction_reason, reviewer_correction_request_sha256
-        nonlocal reviewer_correction_attempts, stage2_commander_turns
-        nonlocal stage2_prereview
+        """同业务单元连续审阅；回答、决定、正式提交分别持久化。"""
         nonlocal latest_outcome, latest_rc, latest_error_kind
         assert current.action is not None
         waiting_on = current.action.waiting_on
-        assert waiting_on is not None
-        binding = (current.surface_seal, waiting_on)
-        stage2_turn_session_run_id: str | None = None
-
-        def persist_pending_correction(
-                task: reviewer_tasks.ReviewerTask, *,
-                reason: str, request_sha256: str) -> None:
-            """非 Stage2 席位把拒因落账后才允许进入内存 correction。"""
-            if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-                return
-            seat = open_reviewer_seats.get(binding)
-            if seat is None or seat.provider_session_id is None:
-                raise reviewer_seat_ledger.ReviewerSeatRefused(
-                    'typed 拒因无法绑定到已证明的 reviewer provider session')
-            reviewer_seat_ledger.mark_pending_correction(
-                base, sid, waiting_on=task.waiting_on,
-                business_sha256=task.business_sha256,
-                session_run_id=seat.session_run_id,
-                provider_session_id=seat.provider_session_id,
-                request_sha256=request_sha256, reason=reason)
-
-        def clear_pending_correction(
-                task: reviewer_tasks.ReviewerTask, *,
-                expected_request_sha256: str | None = None) -> None:
-            if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-                return
-            ledger = reviewer_seat_ledger.read(
-                base, sid, waiting_on=task.waiting_on,
-                business_sha256=task.business_sha256)
-            if ledger is None or ledger.pending_correction is None:
-                return
-            reviewer_seat_ledger.clear_pending_correction(
-                base, sid, waiting_on=task.waiting_on,
-                business_sha256=task.business_sha256,
-                expected_request_sha256=expected_request_sha256)
-
-        def resume_stage2_pending_rejection(
-                task: reviewer_tasks.ReviewerTask,
-                pending: stage2_review_ledger.Stage2PendingRejection,
-                ) -> CommanderTurnResult:
-            """把已 durable 的最新拒因接到 fresh correction，不重买首审。"""
-            nonlocal stage2_commander_turns
-            nonlocal reviewer_correction_task, reviewer_correction_binding
-            nonlocal reviewer_correction_reason
-            nonlocal reviewer_correction_request_sha256
-            nonlocal reviewer_correction_attempts
-            nonlocal latest_rc, latest_error_kind, latest_outcome
-
-            rejection = pending.rejection
-            rejected_turn = pending.turn
-            stage2_commander_turns = max(
-                stage2_commander_turns, rejected_turn.ordinal)
-            if rejected_turn.ordinal >= _MAX_STAGE2_EDIT_SEAT:
-                reviewed_blockers.add(binding)
-                latest_rc = 2
-                latest_error_kind = 'stage2_global_rejection_pending'
-                latest_outcome = AgentDeliveryOutcome(
-                    state='stopped', checked_at=int(time.time()),
-                    reason=(
-                        'Stage2 global 已恢复上一 parent 的持久拒因，但前 '
-                        f'{_MAX_STAGE2_EDIT_SEAT} 席审阅/订正预算已用尽，'
-                        f'第 {_MAX_STAGE2_COMMANDER_TURNS} 席只保留给只读 '
-                        'final_review；不会启动一个注定被拒的 Commander。'
-                        f'第 {rejected_turn.ordinal} 席 {rejection.kind} '
-                        f'原拒因：{rejection.reason}；被拒请求 identity='
-                        f'{rejection.request_sha256}。'))
-                return CommanderTurnResult(
-                    exit_code=2, provider_session_id=None,
-                    continue_ready=False, outcome=latest_outcome)
-            reviewer_correction_task = task
-            reviewer_correction_binding = binding
-            reviewer_correction_reason = rejection.reason
-            reviewer_correction_request_sha256 = rejection.request_sha256
-            # ordinal=1 尚未使用订正席；ordinal=2 已使用一次。这个值只控制
-            # 人读 attempt 与同 parent 的旧通用上限，真正预算仍由 ledger 守。
-            reviewer_correction_attempts = max(0, rejected_turn.ordinal - 1)
-            latest_rc = 2
-            latest_error_kind = 'stage2_global_rejection_resumed'
-            latest_outcome = AgentDeliveryOutcome(
-                state='stopped', checked_at=int(time.time()),
-                reason=(
-                    '已恢复上一 parent 的 Stage2 typed/canonical 待纠错事实；'
-                    '下一席将使用当前 self-contained workpack 与精确拒因启动'
-                    ' fresh correction session，不复用隐藏 provider 上下文。'))
-            return CommanderTurnResult(
-                exit_code=2, provider_session_id=None,
-                continue_ready=True, outcome=latest_outcome,
-                continue_reviewer=True)
-
-        def prepare_stage2_action_before_finish(
-                task: reviewer_tasks.ReviewerTask, current: OperatorNext,
-                turn: CommanderTurnResult, session_run_id: str,
-                holder: dict[str, object], *,
-                effective_progress_sha256: str | None = None) -> None:
-            """在 Stage2 席位闭账前完成 loader、action 持久化与 scratch 晋升。
-
-            回调把错误留给闭账后的调用者处理：typed-invalid 必须先把一次成功的
-            provider 交付记成 ``ok``，随后才能把 loader 拒因绑定回该席；反之，
-            typed-valid 的 full action 已在 finish 失败前落稳，绝不会只存在栈上。
-            """
-            try:
-                if turn.final_response is not None:
-                    action, response_sha256, record_path = (
-                        _materialize_reviewer_response(
-                            task, current, turn.final_response,
-                            persist_validated=lambda action, response_sha256: (
-                                _record_reviewer_action(
-                                    base, sid, run_id=run_id, epoch=epoch,
-                                    task=task, action=action,
-                                    reviewer_session_run_id=session_run_id,
-                                    provider_response_sha256=response_sha256,
-                                    reviewer_progress_sha256=(
-                                        effective_progress_sha256))),
-                            preserve_validated=lambda candidate, digest: (
-                                _preserve_validated_reviewer_residue(
-                                    base, sid, candidate, digest))))
-                else:
-                    try:
-                        action = reviewer_tasks.load_action(
-                            task.request_path, current,
-                            submission_options=task.submission_options)
-                    except reviewer_tasks.ReviewerTaskError as exc:
-                        raise _ReviewerResponseTypedInvalid(str(exc)) from exc
-                    response_sha256 = _reviewer_request_sha256(task.request_path)
-                    record_path = _record_reviewer_action(
-                        base, sid, run_id=run_id, epoch=epoch, task=task,
-                        action=action,
-                        reviewer_session_run_id=session_run_id,
-                        provider_response_sha256=response_sha256,
-                        reviewer_progress_sha256=effective_progress_sha256)
-                if record_path is None:
-                    raise RuntimeError(
-                        'Stage2 typed-valid node 决定没有形成 durable action record')
-                holder.update({
-                    'action': action,
-                    'response_sha256': response_sha256,
-                    'record_path': record_path,
-                })
-            except BaseException as exc:  # noqa: BLE001 —— finish 后按类型收口
-                holder['error'] = exc
-
-        def is_stage5_trim_task(
-                task: reviewer_tasks.ReviewerTask) -> bool:
-            """Stage5 顶部卡当前是 trim disposition，而不是 closure 回执。"""
-            return any(
-                isinstance(option, dict)
-                and (
-                    option.get('id') ==
-                    'node:stage5.review.retain-pretrim-batch'
-                    or str(option.get('id', '')).startswith(
-                        'node:stage5.review.request-reviewer-rewrite.'))
-                for option in task.submission_options)
-
-        def prepare_stage5_trim_action_before_finish(
-                task: reviewer_tasks.ReviewerTask, current: OperatorNext,
-                turn: CommanderTurnResult, session_run_id: str,
-                seat_turn_id: str,
-                holder: dict[str, object]) -> None:
-            """Stage5 trim disposition 先 durable full action，再闭 Commander 席。
-
-            typed-invalid 回答仍属于已成功交付的本席 turn，因此只把
-            loader 拒因交给现役纠错路。typed-valid 后的任何持久化/晋升
-            异常则必须穿透，让席位以 failed 闭账；若 record 已成功而
-            finish 失败，新 parent 仍能先从 record 零模型重放。
-            """
-            def persist_stage5_action(
-                    action: reviewer_tasks.ReviewerAction,
-                    response_sha256: str) -> Path | None:
-                if (
-                    isinstance(action, reviewer_tasks.ReviewerNodeAction)
-                    and action.node == 'stage5.review'
-                    and action.flags in {
-                        ('--retain-pretrim-batch', '@reviewer-input'),
-                        ('--request-reviewer-rewrite', '@reviewer-input'),
-                    }
-                ):
-                    # response bind 是独立于 action record 的来源证明；顺序固定为
-                    # seat.bind_response -> action record -> seat.finish。
-                    reviewer_seat_ledger.bind_response(
-                        base, sid, waiting_on=task.waiting_on,
-                        business_sha256=task.business_sha256,
-                        turn_id=seat_turn_id,
-                        provider_response_sha256=response_sha256)
-                return _record_reviewer_action(
-                    base, sid, run_id=run_id, epoch=epoch,
-                    task=task, action=action,
-                    reviewer_session_run_id=session_run_id,
-                    reviewer_seat_turn_id=seat_turn_id,
-                    provider_response_sha256=response_sha256)
-
-            try:
-                if turn.final_response is not None:
-                    action, response_sha256, record_path = (
-                        _materialize_reviewer_response(
-                            task, current, turn.final_response,
-                            persist_validated=persist_stage5_action,
-                            preserve_validated=lambda candidate, digest: (
-                                _preserve_validated_reviewer_residue(
-                                    base, sid, candidate, digest))))
-                else:
-                    action = reviewer_tasks.load_action(
-                        task.request_path, current,
-                        submission_options=task.submission_options)
-                    response_sha256 = _reviewer_request_sha256(
-                        task.request_path)
-                    record_path = persist_stage5_action(
-                        action, response_sha256)
-                if (isinstance(action, reviewer_tasks.ReviewerNodeAction)
-                        and record_path is None):
-                    raise RuntimeError(
-                        'Stage5 typed-valid disposition 没有形成 durable action record')
-                holder.update({
-                    'action': action,
-                    'response_sha256': response_sha256,
-                    'record_path': record_path,
-                })
-            except _ReviewerResponseTypedInvalid as exc:
-                # typed loader 拒绝仍先把 provider 原回答摘要绑到 seat，
-                # 再把 turn 记成 ok。这样后续 pending 不会只靠自己的
-                # request_sha256 证明来源，也能安全压过更旧 action。
-                response_sha256 = _reviewer_turn_response_sha256(
-                    turn, task.request_path)
-                reviewer_seat_ledger.bind_response(
-                    base, sid, waiting_on=task.waiting_on,
-                    business_sha256=task.business_sha256,
-                    turn_id=seat_turn_id,
-                    provider_response_sha256=response_sha256)
-                holder.update({
-                    'error': exc,
-                    'response_sha256': response_sha256,
-                })
-            except BaseException as exc:  # noqa: BLE001 —— durable 失败必须中止闭账
-                holder['error'] = exc
-                raise
-
-        def is_stage4_recovery_task(task: reviewer_tasks.ReviewerTask) -> bool:
-            if task.waiting_on not in reviewer_schema_recovery.WAITING_ON:
-                return False
-            ledger = reviewer_seat_ledger.read(
-                base, sid, waiting_on=task.waiting_on,
-                business_sha256=task.business_sha256)
-            return ledger is not None and any(row.schema_recovery is not None for row in ledger.turns)
-
-        def prepare_stage4_recovery_action(
-                task: reviewer_tasks.ReviewerTask, current: OperatorNext,
-                turn: CommanderTurnResult, session_id: str, seat_turn_id: str | None,
-                holder: dict[str, object]) -> None:
-            """新会话真实决定先 bind/durable，后 finish；与未知写盘异常分开。"""
-            holder['stage4_recovery'] = True
-            if seat_turn_id is None or turn.final_response is None:
-                raise reviewer_tasks.ReviewerTaskError('Stage4 schema recovery 缺原始响应或实际席位')
-            response_sha256 = _reviewer_turn_response_sha256(turn, task.request_path)
-            reviewer_seat_ledger.bind_response(
-                base, sid, waiting_on=task.waiting_on, business_sha256=task.business_sha256,
-                turn_id=seat_turn_id, provider_response_sha256=response_sha256)
-            try:
-                action, digest, record_path = _materialize_reviewer_response(
-                    task, current, turn.final_response,
-                    persist_validated=lambda action, digest: _record_reviewer_action(
-                        base, sid, run_id=run_id, epoch=epoch, task=task, action=action,
-                        reviewer_session_run_id=session_id, reviewer_seat_turn_id=seat_turn_id,
-                        provider_response_sha256=digest,
-                        schema_recovery_response=_reviewer_response_document(turn.final_response)[0]),
-                    preserve_validated=lambda candidate, digest: _preserve_validated_reviewer_residue(
-                        base, sid, candidate, digest))
-                holder.update(action=action, response_sha256=digest, record_path=record_path)
-            except _ReviewerResponseTypedInvalid as exc:
-                holder.update(error=exc, response_sha256=response_sha256)
-
-        def run_reviewer_turn(
-                task: reviewer_tasks.ReviewerTask,
-                prompt: str, *, purpose: str = 'review',
-                progress_sha256: str | None = None,
-                activity: str | None = None,
-                schema_recovery: ReviewerSchemaRecoveryProof | None = None,
-                before_success_finish: Callable[
-                    [CommanderTurnResult, str, str | None], None] | None = None,
-                ) -> CommanderTurnResult:
-            """Stage2 的模型调用预算是产品边界；确定性动作不占轮次。"""
-            nonlocal latest_outcome, latest_rc, latest_error_kind
-            nonlocal stage2_turn_session_run_id
-            wire = (stage4_reviewer_wire
-                    if stage4_reviewer_wire.uses_compact_wire(task)
-                    else stage2_reviewer_wire)
-            reviewer_prompt = wire.prompt_for(task, prompt)
-            reviewer_output_schema = wire.output_schema_for(task)
-            if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-                review_session_id = jobs.new_job_id()
-                stage2_turn_session_run_id = review_session_id
-                reservation_made = False
-                durable_reservation = False
-                reservation_error: BaseException | None = None
-
-                def reserve_reviewer_call() -> None:
-                    nonlocal reservation_made, durable_reservation
-                    nonlocal reservation_error
-                    try:
-                        durable_reservation = _reserve_stage2_commander(
-                            task, epoch=epoch, purpose=purpose,
-                            session_id=review_session_id,
-                            progress_sha256=progress_sha256)
-                    except BaseException as exc:  # noqa: BLE001 —— 转成 typed stop
-                        reservation_error = exc
-                        raise
-                    reservation_made = True
-
-                def attempt_started(
-                        attempt_id: str, kind: str,
-                        resume_id: str | None) -> None:
-                    if not durable_reservation:
-                        return
-                    assert task.source_sha256 and task.main_text_sha256
-                    stage2_review_ledger.record_attempt(
-                        base, sid,
-                        source_sha256=task.source_sha256,
-                        main_text_sha256=task.main_text_sha256,
-                        session_run_id=review_session_id,
-                        attempt_id=attempt_id, kind=kind,
-                        provider_session_id=resume_id)
-
-                def attempt_finished(
-                        attempt_id: str, exit_code: int,
-                        failure_kind: str | None,
-                        provider_session_id: str | None,
-                        wire_evidence: bool) -> None:
-                    if not durable_reservation:
-                        return
-                    assert task.source_sha256 and task.main_text_sha256
-                    stage2_review_ledger.finish_attempt(
-                        base, sid,
-                        source_sha256=task.source_sha256,
-                        main_text_sha256=task.main_text_sha256,
-                        session_run_id=review_session_id,
-                        attempt_id=attempt_id, exit_code=exit_code,
-                        error_kind=failure_kind,
-                        provider_session_id=provider_session_id,
-                        wire_evidence=wire_evidence)
-
-                turn: CommanderTurnResult | None = None
-                try:
-                    turn = _run_commander_turn(
-                        epoch, None,
-                        reviewer_prompt=reviewer_prompt,
-                        reviewer_output_schema=reviewer_output_schema,
-                        fresh_session_run_id=review_session_id,
-                        launch_ticket=launch_ticket,
-                        after_spawn_before_wire=reserve_reviewer_call,
-                        activity=activity,
-                        on_attempt_started=attempt_started,
-                        on_attempt_finished=attempt_finished)
-                    if (durable_reservation and turn.exit_code == 0
-                            and before_success_finish is not None):
-                        # Stage2 的 typed-valid 回答必须先变成 durable full action，
-                        # 再把席位从 started 补成 ok。这样宿主死在两次原子写之间时，
-                        # 新 parent 仍能凭 action+attempt/session/cost 四证补完并重放；
-                        # 不能出现“账已 ok、回答只在调用栈里”的不可恢复空窗。
-                        before_success_finish(turn, review_session_id, None)
-                    if not isinstance(
-                            reservation_error,
-                            stage2_review_ledger.Stage2ReviewBudgetRefused):
-                        return turn
-                    exc = reservation_error
-                    try:
-                        pending_rejection = _pending_stage2_rejection(task)
-                    except stage2_review_ledger.Stage2ReviewBudgetRefused:
-                        pending_rejection = None
-                    rejection_detail = ''
-                    if pending_rejection is not None:
-                        rejection = pending_rejection.rejection
-                        rejection_detail = (
-                            f'；上一席 {rejection.kind} 原拒因：'
-                            f'{rejection.reason}；被拒请求 identity='
-                            f'{rejection.request_sha256}')
-                    latest_rc = 2
-                    latest_error_kind = 'stage2_global_turn_budget'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='stopped', checked_at=int(time.time()),
-                        reason=(
-                            'Stage2 global 拒绝继续调用 Commander：'
-                            f'{exc}{rejection_detail}。每个主体最多 '
-                            f'{_MAX_STAGE2_COMMANDER_TURNS} 席'
-                            f'（前 {_MAX_STAGE2_EDIT_SEAT} 席审阅/订正，第 '
-                            f'{_MAX_STAGE2_COMMANDER_TURNS} 席只读终审），'
-                            '且每席必须减少未闭合项或改变精确拒因'))
-                    return CommanderTurnResult(
-                        exit_code=2,
-                        provider_session_id=None,
-                        continue_ready=False,
-                        outcome=latest_outcome)
-                finally:
-                    if reservation_made:
-                        _finish_stage2_commander(
-                            task, session_id=review_session_id,
-                            durable=durable_reservation,
-                            exit_code=(
-                                turn.exit_code if turn is not None else CRASH))
-            # 非 Stage2 blocker：每个 binding 一席 fresh logical/provider session；
-            # 同一 binding 内的纠错续用该席，纠错次数按 (sid, blocker, business)
-            # 持久记账。surface 变化（如返修落盘）即新 binding、新席。
-            seat = open_reviewer_seats.get(binding)
-            output_schema_digest = _prepare_output_schema(reviewer_output_schema)[2]
-            if schema_recovery is not None:
-                if (seat is not None or purpose != 'schema_recovery'
-                        or schema_recovery.replacement_schema_sha256 != output_schema_digest
-                        or schema_recovery.replacement_subject_sha256
-                        != _sha256_bytes(reviewer_prompt.encode('utf-8'))
-                        or schema_recovery.validation_code_version != epoch.code_version):
-                    raise UnsupportedRunMode('schema recovery 的新会话/当前请求身份已漂移')
-            if seat is None:
-                seat = _ReviewerSeat(
-                    session_run_id=jobs.new_job_id(),
-                    prompt_sha256=_sha256_bytes(reviewer_prompt.encode('utf-8')),
-                    waiting_on=waiting_on,
-                    business_sha256=task.business_sha256,
-                    output_schema_sha256=output_schema_digest)
-                open_reviewer_seats[binding] = seat
-            elif seat.output_schema_sha256 != output_schema_digest:
-                # 纠正只改 prompt，不能在同一 provider session 偷换输出协议。
-                # 这一步在 reserve/Popen/wire 前，不消耗一个不可返还的席位。
-                raise UnsupportedRunMode('同一 Reviewer 席位的原生输出 schema 已变化')
-            seat_turn_id = jobs.new_job_id()
-            seat_reserved = False
-            seat_reservation_error: BaseException | None = None
-            seat_identity = dict(
-                waiting_on=seat.waiting_on,
-                business_sha256=seat.business_sha256)
-
-            def reserve_seat_turn() -> None:
-                nonlocal seat_reserved, seat_reservation_error
-                try:
-                    def reserve() -> None:
-                        reviewer_seat_ledger.reserve(
-                            base, sid, purpose=purpose,
-                            session_run_id=seat.session_run_id,
-                            turn_id=seat_turn_id, parent_run_id=run_id,
-                            epoch_id=epoch.epoch_id, schema_recovery=schema_recovery,
-                            **seat_identity)
-
-                    if schema_recovery is None:
-                        reserve()
-                    else:
-                        # 在原 owner lease 内重验所有来源，并把同一账快照 CAS
-                        # 追加为耗额恢复轮；不能让 preview 的旧证明直接授权 wire。
-                        with admission.require_owner_stopped(
-                                base, schema_recovery.source_parent_run_id):
-                            ledger = reviewer_seat_ledger.read(base, sid, **seat_identity)
-                            parents = {row.run_id: row for row in records(base)}
-                            source = parents.get(schema_recovery.source_parent_run_id)
-                            if ledger is None or source is None:
-                                raise reviewer_seat_ledger.ReviewerSeatRefused(
-                                    'schema recovery 来源账或 parent 消失')
-                            reviewer_schema_recovery.validate_recovery_chain(
-                                base, sid, ledger=ledger, parents=parents,
-                                log_path_for=lambda identity: run_log_path(base, identity))
-                            checked = reviewer_schema_recovery.inspect_rejection(
-                                base, sid, ledger=ledger, parent=source,
-                                log_path=run_log_path(base, source.run_id),
-                                profile=plan.profiles.commander,
-                                replacement_schema_sha256=str(output_schema_digest),
-                                validation_code_version=epoch.code_version,
-                                replacement_subject_sha256=seat.prompt_sha256)
-                            if checked != schema_recovery:
-                                raise reviewer_seat_ledger.ReviewerSeatRefused(
-                                    'schema recovery 来源 proof 在发送前漂移')
-                            reserve()
-                except BaseException as exc:  # noqa: BLE001 —— 转成 typed stop
-                    seat_reservation_error = exc
-                    raise
-                seat_reserved = True
-
-            def seat_attempt_started(
-                    attempt_id: str, kind: str, resume_id: str | None) -> None:
-                if seat_reserved:
-                    reviewer_seat_ledger.record_attempt(
-                        base, sid, turn_id=seat_turn_id, attempt_id=attempt_id,
-                        kind=kind, provider_session_id=resume_id,
-                        **seat_identity)
-
-            def seat_attempt_finished(
-                    attempt_id: str, exit_code: int, failure_kind: str | None,
-                    provider_id: str | None, wire_evidence: bool) -> None:
-                if seat_reserved:
-                    reviewer_seat_ledger.finish_attempt(
-                        base, sid, turn_id=seat_turn_id, attempt_id=attempt_id,
-                        exit_code=exit_code, error_kind=failure_kind,
-                        provider_session_id=provider_id,
-                        wire_evidence=wire_evidence, **seat_identity)
-
-            seat_turn: CommanderTurnResult | None = None
-            seat_finish_exit_code = CRASH
-            try:
-                seat_turn = _run_commander_turn(
-                    epoch, None,
-                    reviewer_prompt=reviewer_prompt,
-                    reviewer_output_schema=reviewer_output_schema,
-                    fresh_session_run_id=seat.session_run_id,
-                    seat_provider_session_id=seat.provider_session_id,
-                    seat_turns_recorded=seat.turns_recorded,
-                    seat_subject_sha256=seat.prompt_sha256,
-                    seat_output_schema_sha256=seat.output_schema_sha256,
-                    close_seat=False,
-                    launch_ticket=launch_ticket,
-                    after_spawn_before_wire=reserve_seat_turn,
-                    activity=activity,
-                    on_attempt_started=seat_attempt_started,
-                    on_attempt_finished=seat_attempt_finished)
-                seat.started = seat.started or seat_turn.seat_started
-                if seat_turn.seat_provider_session_id is not None:
-                    seat.provider_session_id = seat_turn.seat_provider_session_id
-                seat.turns_recorded = seat_turn.seat_turns_recorded
-                seat.last_observation = latest_observation
-                seat.last_rc = latest_commander_rc
-                seat.last_outcome = latest_commander_outcome
-                seat.last_error_kind = latest_commander_error_kind
-                if (seat_turn.exit_code == 0
-                        and before_success_finish is not None):
-                    # Stage5 batch 与 Stage2 一样：人审回答必须先经
-                    # typed loader 并持久化 full action，才能把席位记为
-                    # success。宿主死在两次原子写之间时，record
-                    # 依然允许下一 parent 零模型重放。
-                    before_success_finish(
-                        seat_turn, seat.session_run_id, seat_turn_id)
-                seat_finish_exit_code = seat_turn.exit_code
-                if isinstance(
-                        seat_reservation_error,
-                        reviewer_seat_ledger.ReviewerSeatRefused):
-                    _close_reviewer_seat(binding, error_kind='reviewer_seat_budget')
-                    latest_rc = 2
-                    latest_error_kind = 'reviewer_seat_budget'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='stopped', checked_at=int(time.time()),
-                        reason=(
-                            f'{waiting_on} 拒绝继续调用 Commander：'
-                            f'{seat_reservation_error}'))
-                    return CommanderTurnResult(
-                        exit_code=2, provider_session_id=None,
-                        continue_ready=False, outcome=latest_outcome)
-                return seat_turn
-            finally:
-                if seat_reserved:
-                    reviewer_seat_ledger.finish(
-                        base, sid, turn_id=seat_turn_id,
-                        exit_code=seat_finish_exit_code,
-                        **seat_identity)
-
-        if reviewer_correction_task is not None:
-            if reviewer_correction_binding != binding:
-                _close_reviewer_seat(
-                    reviewer_correction_binding,
-                    error_kind='commander_reviewer_binding_changed')
-                reviewer_correction_task = None
-                reviewer_correction_binding = None
-                reviewer_correction_reason = None
-                reviewer_correction_request_sha256 = None
-                reviewer_correction_attempts = 0
-                return None
-            task = reviewer_correction_task
-            reason = reviewer_correction_reason
-            previous_request_sha256 = reviewer_correction_request_sha256
-            if reason is None or previous_request_sha256 is None:
-                raise RuntimeError('pending reviewer correction 缺拒绝事实')
-            if waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON:
-                correction_ledger = reviewer_seat_ledger.read(
-                    base, sid, waiting_on=task.waiting_on,
-                    business_sha256=task.business_sha256)
-                reviewer_correction_attempts = reviewer_seat_ledger.corrections_used(correction_ledger)
-                if (correction_ledger is None
-                        or reviewer_correction_attempts >= correction_ledger.max_corrections):
-                    _close_reviewer_seat(binding, error_kind='reviewer_seat_budget')
-                    latest_rc = 2
-                    latest_error_kind = 'reviewer_seat_budget'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='stopped', checked_at=int(time.time()),
-                        reason=f'Reviewer 纠错预算已用尽；原拒因：{reason}')
-                    return CommanderTurnResult(
-                        exit_code=2, provider_session_id=None,
-                        continue_ready=False, outcome=latest_outcome)
-            attempt = reviewer_correction_attempts + 1
-            correction_progress = (
-                stage2_review_ledger.progress_with_feedback(
-                    task.progress_sha256,
-                    reason=reason, request_sha256=previous_request_sha256)
-                if (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                    and task.progress_sha256 is not None) else None)
-            prepared_before_finish: dict[str, object] = {}
-            before_success_finish = None
-            if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-                before_success_finish = (
-                    lambda got, session_id, _seat_turn_id:
-                    prepare_stage2_action_before_finish(
-                        task, current, got, session_id,
-                        prepared_before_finish,
-                        effective_progress_sha256=correction_progress))
-            elif is_stage5_trim_task(task):
-                def prepare_stage5_correction(
-                        got: CommanderTurnResult, session_id: str,
-                        seat_turn_id: str | None) -> None:
-                    if seat_turn_id is None:  # pragma: no cover —— 只有非 Stage2 分支调用
-                        raise RuntimeError('Stage5 correction 缺 seat turn id')
-                    prepare_stage5_trim_action_before_finish(
-                        task, current, got, session_id, seat_turn_id,
-                        prepared_before_finish)
-
-                before_success_finish = prepare_stage5_correction
-            elif is_stage4_recovery_task(task):
-                before_success_finish = lambda got, session_id, seat_turn_id: (
-                    prepare_stage4_recovery_action(
-                        task, current, got, session_id, seat_turn_id, prepared_before_finish))
-            turn = run_reviewer_turn(
-                task,
-                reviewer_tasks.correction_prompt(
-                    task, reason,
-                    request_sha256=previous_request_sha256,
-                    attempt=attempt),
-                purpose='correction', progress_sha256=correction_progress,
-                activity=_reviewer_activity(task),
-                before_success_finish=before_success_finish)
-            if turn.exit_code != 0:
-                return turn
-            request_sha256 = _reviewer_turn_response_sha256(
-                turn, task.request_path)
-            if request_sha256 == previous_request_sha256:
-                no_progress_reason = (
-                    'Commander 收到 typed 拒绝反馈后没有改变请求字节；'
-                    '已阻止无效纠错循环')
-                if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-                    _record_stage2_rejection(
-                        task,
-                        session_run_id=stage2_turn_session_run_id,
-                        kind='typed_loader',
-                        request_sha256=request_sha256,
-                        reason=no_progress_reason)
-                    durable_no_progress = prepared_before_finish.get(
-                        'record_path')
-                    if isinstance(durable_no_progress, Path):
-                        # callback 已在 ledger.finish 前保存了 full action。只有
-                        # no-progress 拒因成功绑定本席后才消费这份可执行记录；若
-                        # 拒因写盘失败，上面的异常会保留 record 并以 unknown 收口。
-                        _discard_reviewer_action_record(
-                            base, durable_no_progress)
-                elif is_stage5_trim_task(task) or is_stage4_recovery_task(task):
-                    durable_no_progress = prepared_before_finish.get(
-                        'record_path')
-                    persist_pending_correction(
-                        task, reason=no_progress_reason,
-                        request_sha256=request_sha256)
-                    if isinstance(durable_no_progress, Path):
-                        uploads.discard_edit_plan(
-                            base, durable_no_progress)
-                reviewer_correction_task = None
-                reviewer_correction_binding = None
-                reviewer_correction_reason = None
-                reviewer_correction_request_sha256 = None
-                reviewer_correction_attempts = 0
-                _close_reviewer_seat(
-                    binding, error_kind='commander_reviewer_no_progress')
-                latest_rc = 2
-                latest_error_kind = 'commander_reviewer_no_progress'
-                latest_outcome = AgentDeliveryOutcome(
-                    state='stopped', checked_at=int(time.time()),
-                    reason=no_progress_reason)
-                return CommanderTurnResult(
-                    exit_code=2,
-                    provider_session_id=turn.provider_session_id,
-                    continue_ready=False, outcome=latest_outcome)
-            try:
-                validated_record_path: Path | None = None
-                if (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                        or is_stage5_trim_task(task)
-                        or prepared_before_finish.get('stage4_recovery')):
-                    prepared_error = prepared_before_finish.get('error')
-                    if isinstance(prepared_error, BaseException):
-                        raise prepared_error
-                    candidate_action = prepared_before_finish.get('action')
-                    candidate_digest = prepared_before_finish.get(
-                        'response_sha256')
-                    candidate_record = prepared_before_finish.get(
-                        'record_path')
-                    if (not isinstance(candidate_action, (
-                            reviewer_tasks.ReviewerNodeAction,
-                            reviewer_tasks.ReviewerApprovalAction,
-                            reviewer_tasks.ReviewerStopAction))
-                            or not isinstance(candidate_digest, str)
-                            or (isinstance(
-                                candidate_action,
-                                reviewer_tasks.ReviewerNodeAction)
-                                and not isinstance(candidate_record, Path))):
-                        raise RuntimeError(
-                            'reviewer correction finish 前没有完整 durable action')
-                    corrected_action = candidate_action
-                    request_sha256 = candidate_digest
-                    validated_record_path = (
-                        candidate_record
-                        if isinstance(candidate_record, Path) else None)
-                elif turn.final_response is not None:
-                    (corrected_action, request_sha256,
-                     validated_record_path) = (
-                        _materialize_reviewer_response(
-                            task, current, turn.final_response,
-                            persist_validated=lambda action, response_sha256: (
-                                _record_reviewer_action(
-                                    base, sid, run_id=run_id, epoch=epoch,
-                                    task=task, action=action,
-                                    reviewer_session_run_id=(
-                                        stage2_turn_session_run_id
-                                        if waiting_on
-                                        in queue.STAGE2_REVIEWER_WAITING_ON
-                                        else None),
-                                    provider_response_sha256=(
-                                        response_sha256
-                                        if waiting_on
-                                        in queue.STAGE2_REVIEWER_WAITING_ON
-                                        else None))),
-                            preserve_validated=lambda candidate, digest: (
-                                _preserve_validated_reviewer_residue(
-                                    base, sid, candidate, digest))))
-                else:
-                    corrected_action = reviewer_tasks.load_action(
-                        task.request_path, current,
-                        submission_options=task.submission_options)
-                    validated_record_path = _record_reviewer_action(
-                        base, sid, run_id=run_id, epoch=epoch, task=task,
-                        action=corrected_action,
-                        reviewer_session_run_id=(
-                            stage2_turn_session_run_id
-                            if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                            else None),
-                        provider_response_sha256=(
-                            request_sha256
-                            if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                            else None))
-            except reviewer_tasks.ReviewerTaskError as exc:
-                if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-                    _record_stage2_rejection(
-                        task,
-                        session_run_id=stage2_turn_session_run_id,
-                        kind='typed_loader',
-                        request_sha256=request_sha256,
-                        reason=str(exc))
-                persist_pending_correction(
-                    task, reason=str(exc), request_sha256=request_sha256)
-                stage2_edit_budget_exhausted = (
-                    waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                    and stage2_commander_turns >= _MAX_STAGE2_EDIT_SEAT)
-                if (stage2_edit_budget_exhausted
-                        or attempt >= _MAX_REVIEWER_CORRECTIONS):
-                    reviewer_correction_task = None
-                    reviewer_correction_binding = None
-                    reviewer_correction_reason = None
-                    reviewer_correction_request_sha256 = None
-                    reviewer_correction_attempts = 0
-                    _close_reviewer_seat(
-                        binding, error_kind='commander_reviewer_request')
-                    latest_rc = 2
-                    latest_error_kind = 'commander_reviewer_request'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='stopped', checked_at=int(time.time()),
-                        reason=(
-                            'Commander reviewer typed request 连续纠正后仍未闭合：'
-                            f'{exc}'
-                            + (
-                                f'；Stage2 global 前 {_MAX_STAGE2_EDIT_SEAT} 席'
-                                '审阅/订正预算已用尽，第 '
-                                f'{_MAX_STAGE2_COMMANDER_TURNS} 席只保留给'
-                                '只读 final_review'
-                                if stage2_edit_budget_exhausted else '')))
-                    return CommanderTurnResult(
-                        exit_code=2,
-                        provider_session_id=turn.provider_session_id,
-                        continue_ready=False, outcome=latest_outcome)
-                reviewer_correction_reason = str(exc)
-                reviewer_correction_request_sha256 = request_sha256
-                reviewer_correction_attempts = attempt
-                return CommanderTurnResult(
-                    exit_code=turn.exit_code,
-                    exit_origin=turn.exit_origin,
-                    provider_session_id=turn.provider_session_id,
-                    continue_ready=True, outcome=turn.outcome,
-                    continue_reviewer=True)
-
-            clear_pending_correction(
-                task, expected_request_sha256=previous_request_sha256)
-            reviewer_correction_task = None
-            reviewer_correction_binding = None
-            reviewer_correction_reason = None
-            reviewer_correction_request_sha256 = None
-            reviewer_correction_attempts = 0
-            pending_reviewer_action = corrected_action
-            pending_reviewer_binding = binding
-            pending_reviewer_business_sha256 = task.business_sha256
-            pending_reviewer_source_task = task
-            pending_reviewer_response_sha256 = request_sha256
-            pending_reviewer_stage2_session_run_id = (
-                stage2_turn_session_run_id
-                if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON else None)
-            pending_reviewer_record_path = validated_record_path
-            pending_reviewer_replayed = False
-            return CommanderTurnResult(
-                exit_code=turn.exit_code,
-                exit_origin=turn.exit_origin,
-                provider_session_id=turn.provider_session_id,
-                continue_ready=True, outcome=turn.outcome,
-                continue_reviewer=True)
-
-        if pending_reviewer_action is not None:
-            if pending_reviewer_binding != binding:
-                _close_reviewer_seat(
-                    pending_reviewer_binding,
-                    error_kind='commander_reviewer_binding_changed')
-                pending_reviewer_action = None
-                pending_reviewer_binding = None
-                pending_reviewer_business_sha256 = None
-                pending_reviewer_source_task = None
-                pending_reviewer_response_sha256 = None
-                pending_reviewer_stage2_session_run_id = None
-                pending_reviewer_record_path = None
-                pending_reviewer_replayed = False
-                pending_reviewer_protocol_recovery = False
-                return None
-            action = pending_reviewer_action
-            business_sha256 = pending_reviewer_business_sha256
-            source_task = pending_reviewer_source_task
-            source_response_sha256 = pending_reviewer_response_sha256
-            source_stage2_session_run_id = (
-                pending_reviewer_stage2_session_run_id)
-            pending_reviewer_action = None
-            pending_reviewer_binding = None
-            pending_reviewer_business_sha256 = None
-            pending_reviewer_source_task = None
-            pending_reviewer_response_sha256 = None
-            pending_reviewer_stage2_session_run_id = None
-            record_path = pending_reviewer_record_path
-            replayed = pending_reviewer_replayed
-            protocol_recovered = pending_reviewer_protocol_recovery
-            pending_reviewer_record_path = None
-            pending_reviewer_replayed = False
-            pending_reviewer_protocol_recovery = False
-            if business_sha256 is None or source_task is None:
-                raise RuntimeError('pending reviewer action 缺业务主体或 workpack')
-            if (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                    and isinstance(action, reviewer_tasks.ReviewerNodeAction)
-                    and action.node == 'stage2.global'
-                    and tuple(action.flags[:1]) == ('--apply-edit',)):
-                try:
-                    _preflight_stage2_reviewer_action(
-                        base, sid, epoch=epoch, action=action)
-                except _Stage2ReviewerPreflightRejected as exc:
-                    preflight_reason = exc.safe_summary
-                    # 到达这里的 action 已先形成 ReviewerActionRecord，产出它的
-                    # Stage2 席位也已经 finish。必须把拒因绑定原 session/raw digest
-                    # 后才退休 record；任何账/删除失败都保持 record 并显式 unknown。
-                    if (source_stage2_session_run_id is None
-                            or source_response_sha256 is None
-                            or record_path is None):
-                        latest_rc = CRASH
-                        latest_error_kind = 'stage2_global_preflight_identity'
-                        latest_outcome = AgentDeliveryOutcome(
-                            state='unknown', checked_at=int(time.time()),
-                            reason=(
-                                'Stage2 producer preflight 已拒绝 action，但 durable '
-                                'record/原席位/raw digest 身份不完整；拒绝消费或纠错'))
-                        return CommanderTurnResult(
-                            exit_code=CRASH, provider_session_id=None,
-                            continue_ready=False, outcome=latest_outcome)
-                    try:
-                        _record_stage2_rejection(
-                            source_task,
-                            session_run_id=source_stage2_session_run_id,
-                            # loader 已经接受该回答；这是 canonical producer 的
-                            # baseline-aware 业务判据前移，不得伪装成 schema 拒绝。
-                            kind='canonical_action',
-                            request_sha256=source_response_sha256,
-                            reason=preflight_reason)
-                        # 这里不能用告警后吞错的通用 best-effort 清理：拒因与
-                        # action record 的交接若没闭合，本 parent 必须 exit70。
-                        uploads.discard_edit_plan(base, record_path)
-                    except Exception as persist_exc:  # noqa: BLE001 —— 审计/交接失败即 unknown
-                        latest_rc = CRASH
-                        latest_error_kind = 'stage2_global_preflight_audit'
-                        latest_outcome = AgentDeliveryOutcome(
-                            state='unknown', checked_at=int(time.time()),
-                            reason=(
-                                'Stage2 producer preflight 拒因未能完整持久交接；'
-                                f'{type(persist_exc).__name__}: {persist_exc}；'
-                                'durable action record 保留，禁止执行回答'))
-                        return CommanderTurnResult(
-                            exit_code=CRASH, provider_session_id=None,
-                            continue_ready=False, outcome=latest_outcome)
-                    action_sha256 = reviewer_tasks.action_business_sha256(action)
-                    rejected_reviewer_business_actions.add(
-                        (business_sha256, action_sha256))
-                    latest_rc = 2
-                    latest_error_kind = 'stage2_global_preflight_rejected'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='stopped', checked_at=int(time.time()),
-                        reason=(
-                            'Stage2 durable apply-edit 在 canonical Executor 前被'
-                            f'唯一 producer 候选边界拒绝：{preflight_reason}'))
-                    if stage2_commander_turns >= _MAX_STAGE2_EDIT_SEAT:
-                        return CommanderTurnResult(
-                            exit_code=2, provider_session_id=None,
-                            continue_ready=False, outcome=latest_outcome)
-                    reviewer_correction_task = source_task
-                    reviewer_correction_binding = binding
-                    reviewer_correction_reason = preflight_reason
-                    reviewer_correction_request_sha256 = source_response_sha256
-                    reviewer_correction_attempts = 0
-                    return CommanderTurnResult(
-                        exit_code=2, provider_session_id=None,
-                        continue_ready=True, outcome=latest_outcome,
-                        continue_reviewer=True)
-                except Exception as exc:  # noqa: BLE001 —— 完整性/读取异常不能伪装业务拒绝
-                    latest_rc = CRASH
-                    latest_error_kind = 'stage2_global_preflight'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='unknown', checked_at=int(time.time()),
-                        reason=(
-                            'Stage2 durable apply-edit 的 producer preflight 结论未知；'
-                            f'{type(exc).__name__}: {exc}；action record 保留且未启动 '
-                            'canonical Executor'))
-                    return CommanderTurnResult(
-                        exit_code=CRASH, provider_session_id=None,
-                        continue_ready=False, outcome=latest_outcome)
-            action_sha256 = reviewer_tasks.action_business_sha256(action)
-            business_action = (business_sha256, action_sha256)
-            if (business_action in completed_reviewer_business_actions
-                    or business_action in rejected_reviewer_business_actions):
-                no_progress_reason = (
-                    'Commander 在同一 Stage2 业务主体上重复提交了已经执行或拒绝的'
-                    '等价 typed 动作；仅 review surface/workpack 变化不构成修复进展，'
-                    '已阻止无效循环')
-                if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-                    if source_stage2_session_run_id is None:
-                        raise RuntimeError(
-                            'Stage2 等价 typed 动作缺产出席位，不能安全消费 durable '
-                            'action record')
-                    _record_stage2_rejection(
-                        source_task,
-                        session_run_id=source_stage2_session_run_id,
-                        kind='typed_loader',
-                        request_sha256=(
-                            source_response_sha256
-                            or _reviewer_request_sha256(
-                                source_task.request_path)),
-                        reason=no_progress_reason)
-                elif (
-                    waiting_on == queue.WAITING_ON_STAGE5_CLOSURE
-                    and isinstance(action, reviewer_tasks.ReviewerNodeAction)
-                    and action.node == 'stage5.review'
-                    and action.flags in {
-                        ('--retain-pretrim-batch', '@reviewer-input'),
-                        ('--request-reviewer-rewrite', '@reviewer-input'),
-                    }
-                ):
-                    # 当前 turn 的 durable action 已被 no-progress 判据消费。
-                    # 先把拒因推进到这一 turn，再严格退休 record；若删除失败，
-                    # 下个 parent 会以同 turn pending 为更新事实拒绝重放。
-                    persist_pending_correction(
-                        source_task, reason=no_progress_reason,
-                        request_sha256=(
-                            source_response_sha256
-                            or _reviewer_request_sha256(
-                                source_task.request_path)))
-                # full action 已在 Stage2 席位 finish 前落盘。必须先让拒因
-                # durable，再退休它；若拒因持久化失败，上面的异常会保留记录，
-                # 下一 parent 关闭式恢复，绝不能把同一决定重新执行。
-                if record_path is not None:
-                    if waiting_on == queue.WAITING_ON_STAGE5_CLOSURE:
-                        uploads.discard_edit_plan(base, record_path)
-                    else:
-                        _discard_reviewer_action_record(base, record_path)
-                latest_rc = 2
-                latest_error_kind = 'commander_reviewer_no_progress'
-                latest_outcome = AgentDeliveryOutcome(
-                    state='stopped', checked_at=int(time.time()),
-                    reason=no_progress_reason)
-                return CommanderTurnResult(
-                    exit_code=2,
-                    provider_session_id=provider_session_id,
-                    continue_ready=False,
-                    outcome=latest_outcome)
-            if isinstance(action, reviewer_tasks.ReviewerStopAction):
-                # 登记 reviewer 的 typed non-approval 是明确终态，不是
-                # approval，也不是待 Executor 执行的 node。它不产生任何
-                # canonical 子进程/正式写盘，只把模型给出的证据性拒绝理由
-                # 原样投影为本次 AgentRun stop。
-                completed_reviewer_business_actions.add(business_action)
-                clear_pending_correction(source_task)
-                _close_reviewer_seat(binding)
-                latest_rc = 2
-                latest_error_kind = 'commander_reviewer_stopped'
-                latest_outcome = AgentDeliveryOutcome(
-                    state='stopped', checked_at=int(time.time()),
-                    reason=(
-                        f'Commander reviewer 明确拒绝批准 {waiting_on}：'
-                        f'{action.reason}'))
-                return CommanderTurnResult(
-                    exit_code=2,
-                    provider_session_id=provider_session_id,
-                    continue_ready=False, outcome=latest_outcome)
-            if isinstance(action, reviewer_tasks.ReviewerNodeAction):
-                try:
-                    result = _run_node_review_action(
-                        epoch, action, launch_ticket,
-                        reviewer_action_record_path=record_path)
-                except Exception:  # noqa: BLE001 —— 先区分 surface 竞态
-                    if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-                        raise
-                    try:
-                        live = _read_operator_next(epoch)
-                    except Exception:
-                        raise
-                    live_waiting_on = (
-                        live.action.waiting_on
-                        if live.state == 'blocked' and live.action is not None
-                        else None)
-                    live_binding = (
-                        (live.surface_seal, live_waiting_on)
-                        if live_waiting_on is not None else None)
-                    if live_binding == binding:
-                        raise
-                    # permit 尚未铸成，canonical 子进程也尚未启动。
-                    # durable record 保留：新 surface 若仍属同 business，
-                    # 下一窗口会重走当前 loader 后零模型重放；若
-                    # business 已变，_find_replayable 会把旧记录汰汰。
-                    _close_reviewer_seat(
-                        binding,
-                        error_kind='commander_reviewer_binding_changed')
-                    latest_rc = 2
-                    latest_error_kind = 'commander_reviewer_binding_changed'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='stopped', checked_at=int(time.time()),
-                        reason=(
-                            'reviewer typed 动作在铸 permit 前发现 live '
-                            'surface 已变；已关闭旧席并返回 planner '
-                            '以 durable 决定零模型重放'))
-                    return CommanderTurnResult(
-                        exit_code=2,
-                        provider_session_id=provider_session_id,
-                        continue_ready=True, outcome=latest_outcome)
-            elif isinstance(action, reviewer_tasks.ReviewerApprovalAction):
-                result = _run_approval_action(
-                    epoch, action, launch_ticket)
-            else:  # pragma: no cover —— ReviewerAction union 的未来扩展须显式接线
-                raise TypeError(f'未接线的 reviewer action：{type(action).__name__}')
-            stage2_apply_edit_exit2 = (
-                result.exit_code == 2
-                and waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                and isinstance(action, reviewer_tasks.ReviewerNodeAction)
-                and '--apply-edit' in action.flags
-            )
-            if stage2_apply_edit_exit2:
-                # exit 2 本身分不出“已经形成 terminal failure”与“canonical/
-                # formal WAL 已接管、只差 0-wire 补尾”。必须先重读唯一 planner：
-                # prepared 优先交 Executor，不能提前给原回答记 rejection；terminal
-                # sidecar 则由 planner 前 reconcile 精确绑回原席并消费 action record。
-                live = _read_operator_next(epoch)
-                live_waiting_on = (
-                    live.action.waiting_on
-                    if live.state == 'blocked' and live.action is not None
-                    else None)
-                if live_waiting_on == queue.WAITING_ON_STAGE2_EDIT_COMMIT:
-                    latest_rc = 2
-                    latest_error_kind = 'stage2_global_action_commit_pending'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='stopped', checked_at=int(time.time()),
-                        reason=(
-                            'Stage2 apply-edit 已由 canonical prepared journal '
-                            '接管；返回 planner 以 exact action 交 Executor 零模型补尾'))
-                    return CommanderTurnResult(
-                        exit_code=2, provider_session_id=None,
-                        continue_ready=True, outcome=latest_outcome)
-                if live_waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION:
-                    # 正常新 producer 由 _reconcile_stage2_apply_edit_actions 使用
-                    # terminal sidecar 落拒因。旧盘/测试若没有可读 record，仍以当前
-                    # 子进程的明确 exit2 摘要补同一事实，绝不无因开启 correction。
-                    pending_rejection = _pending_stage2_rejection(source_task)
-                    stage2_rejection = result.failure_detail or (
-                        'canonical Stage2 apply-edit 返回 exit 2，正式产物未落盘')
-                    if pending_rejection is None:
-                        _record_stage2_rejection(
-                            source_task,
-                            session_run_id=source_stage2_session_run_id,
-                            kind='canonical_action',
-                            request_sha256=(
-                                source_response_sha256
-                                or _reviewer_request_sha256(
-                                    source_task.request_path)),
-                            reason=stage2_rejection)
-                        if record_path is not None:
-                            _discard_reviewer_action_record(base, record_path)
-                    rejected_reviewer_business_actions.add(business_action)
-                    if stage2_commander_turns >= _MAX_STAGE2_EDIT_SEAT:
-                        latest_rc = 2
-                        latest_error_kind = 'stage2_global_action_rejected'
-                        latest_outcome = AgentDeliveryOutcome(
-                            state='stopped', checked_at=int(time.time()),
-                            reason=(
-                                f'Stage2 global 第 {stage2_commander_turns} 次 '
-                                'Commander apply-edit 被确定性边界拒绝，持久预算'
-                                '已用尽。'
-                                f'{pending_rejection.reason if pending_rejection else stage2_rejection}'))
-                        return CommanderTurnResult(
-                            exit_code=2, provider_session_id=None,
-                            continue_ready=False, outcome=latest_outcome)
-                    latest_rc = 2
-                    latest_error_kind = 'stage2_global_action_replan'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='stopped', checked_at=int(time.time()),
-                        reason=(
-                            'Stage2 apply-edit 拒因已持久绑定原席位；返回 planner '
-                            '重读 live reviewed-edit correction 业务面'))
-                    return CommanderTurnResult(
-                        exit_code=2, provider_session_id=None,
-                        continue_ready=True, outcome=latest_outcome)
-            if (result.exit_code == 2
-                    and waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                    and (source_stage2_session_run_id is not None
-                         or not replayed)):
-                # canonical 子进程已经明确证明未落盘；先把精确 stderr 摘要绑回
-                # 产出该 typed 动作的席位。后面的 in-memory correction 只是这个
-                # 持久事实的即时消费，parent/epoch 中断也不能抹掉根因。
-                stage2_rejection = result.failure_detail or (
-                    f'canonical {action.kind} action 返回 exit 2，正式产物未落盘')
-                _record_stage2_rejection(
-                    source_task,
-                    session_run_id=source_stage2_session_run_id,
-                    kind='canonical_action',
-                    request_sha256=(
-                        source_response_sha256
-                        or _reviewer_request_sha256(source_task.request_path)),
-                    reason=stage2_rejection)
-            final_stage2_approval_landed = (
-                result.exit_code == 0
-                and waiting_on == queue.WAITING_ON_STAGE2_FINAL_REVIEW
-                and isinstance(action, reviewer_tasks.ReviewerApprovalAction)
-            )
-            stage5_rewrite_action = (
-                waiting_on == queue.WAITING_ON_STAGE5_CLOSURE
-                and isinstance(action, reviewer_tasks.ReviewerNodeAction)
-                and action.node == 'stage5.review'
-                and action.flags == (
-                    '--request-reviewer-rewrite', '@reviewer-input')
-            )
-            stage5_batch_replay = (
-                replayed
-                and waiting_on == queue.WAITING_ON_STAGE5_CLOSURE
-                and isinstance(action, reviewer_tasks.ReviewerNodeAction)
-                and action.node == 'stage5.review'
-                and action.flags == (
-                    '--retain-pretrim-batch', '@reviewer-input')
-            )
-            stage5_disposition_action = (
-                waiting_on == queue.WAITING_ON_STAGE5_CLOSURE
-                and isinstance(action, reviewer_tasks.ReviewerNodeAction)
-                and action.node == 'stage5.review'
-                and action.flags in {
-                    ('--retain-pretrim-batch', '@reviewer-input'),
-                    ('--request-reviewer-rewrite', '@reviewer-input'),
-                }
-            )
-            if (record_path is not None and landed(result.exit_code)
-                    and not final_stage2_approval_landed):
-                # 已落盘的决定不再适用。exit 2 需先重读 live
-                # binding 才能判断是真正拒绝还是 surface 竞态，
-                # 不能在这里提前删掉；结论未知则一律保留。
-                # final approval exit0 还要先封 Stage2 review ledger；它在下方
-                # 单独按 landed → mark_complete → retire 顺序处理。
-                if stage5_rewrite_action and result.exit_code == 0:
-                    # canonical request typed readback 成功后，先把原 action 原字节
-                    # 对应 Reviewer logical session 正常闭合，再把全套来源证据
-                    # seal 成永久 authority。seal 前绝不让 readonly queue 把 active
-                    # record 当成付费授权；任一硬杀窗由 planner 前 reconcile 补完。
-                    _close_reviewer_seat(binding)
-                    _reconcile_landed_stage5_reviewer_rewrite_action(
-                        base, sid, code=epoch.code_version,
-                        current_parent_run_id=run_id)
-                elif protocol_recovered:
-                    uploads.discard_edit_plan(base, record_path)
-                else:
-                    _discard_reviewer_action_record(base, record_path)
-            if (result.exit_code == 2
-                    and waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON):
-                # canonical 动作执行期间，人工 edit/adopt 可能已经
-                # 改变 surface。此时旧 action 的 exit 2 只能证明它没有
-                # landed，不能再把旧 workpack/revision 登记成同席纠错；
-                # 否则 correction 又被要求逐字保留已过期 binding，必然
-                # 浪费下一轮付费席位。
-                try:
-                    live = _read_operator_next(epoch)
-                except Exception as exc:  # noqa: BLE001 —— 证明不了就不纠错
-                    _close_reviewer_seat(
-                        binding,
-                        error_kind='commander_reviewer_surface_recheck')
-                    latest_rc = CRASH
-                    latest_error_kind = 'commander_reviewer_surface_recheck'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='unknown', checked_at=int(time.time()),
-                        reason=(
-                            'canonical reviewer 动作被拒绝后无法重读 '
-                            f'live surface：{type(exc).__name__}: {exc}；'
-                            '已禁止沿用旧 workpack 纠错'))
-                    return CommanderTurnResult(
-                        exit_code=CRASH,
-                        provider_session_id=provider_session_id,
-                        continue_ready=False, outcome=latest_outcome)
-                live_waiting_on = (
-                    live.action.waiting_on
-                    if live.state == 'blocked' and live.action is not None
-                    else None)
-                live_binding = (
-                    (live.surface_seal, live_waiting_on)
-                    if live_waiting_on is not None else None)
-                if live_binding != binding:
-                    _close_reviewer_seat(
-                        binding,
-                        error_kind='commander_reviewer_binding_changed')
-                    # 返回 planner 重读新 next；不设 continue_reviewer，
-                    # 不落 pending correction，也不复用旧 provider 席。
-                    return CommanderTurnResult(
-                        exit_code=result.exit_code,
-                        exit_origin=result.exit_origin,
-                        provider_session_id=provider_session_id,
-                        continue_ready=True, outcome=result.outcome)
-                # 只有 live transport binding 仍稳定，才能把 exit 2
-                # 解释为这份 durable 决定在当前 surface 上真正
-                # 被 canonical 拒绝并消费。binding 变化分支已在上方
-                # 返回，记录必须留给新窗口按 business identity 复验。
-                if (record_path is not None and not stage5_disposition_action
-                        and not protocol_recovered):
-                    _discard_reviewer_action_record(base, record_path)
-            elif result.exit_code == 2 and record_path is not None:
-                # Stage2 的决定有独立书内 durable/correction 路，
-                # 不套用普通 reviewer 的 transport-binding 重放。
-                _discard_reviewer_action_record(base, record_path)
-            if landed(result.exit_code):
-                completed_reviewer_business_actions.add(business_action)
-                if not protocol_recovered:
-                    # 协议恢复 proof 绑定原席位全字节；成功也不能改写旧 pending。
-                    clear_pending_correction(source_task)
-                _close_reviewer_seat(binding)
-            elif result.exit_code == 2 and replayed:
-                # Stage2 的纠错包自足且每轮本来就开新会话，所以重放决定被拒后可
-                # 直接进入增量纠错；其他 reviewer 仍没有可续的 provider 上下文。
-                rejected_reviewer_business_actions.add(business_action)
-                rejection = result.failure_detail or (
-                    f'canonical {action.kind} action 返回 exit 2，正式产物未落盘')
-                if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-                    reviewer_correction_task = source_task
-                    reviewer_correction_binding = binding
-                    reviewer_correction_reason = (
-                        f'{rejection}；请按原 workpack 只修正上一份 typed 动作')
-                    reviewer_correction_request_sha256 = (
-                        source_response_sha256
-                        or _reviewer_request_sha256(source_task.request_path))
-                    reviewer_correction_attempts = 0
-                    return CommanderTurnResult(
-                        exit_code=result.exit_code,
-                        exit_origin=result.exit_origin,
-                        provider_session_id=None,
-                        continue_ready=True, outcome=result.outcome,
-                        continue_reviewer=True)
-                if stage5_batch_replay:
-                    # partial batch 的 record 绑定的是首席看到的完整 manifest，
-                    # current task 则只剩 suffix business。这里若先删 record，下一
-                    # parent 会把 suffix 当成新主体再买 Commander。Stage5 没有一条
-                    # 能替代它的 durable rejection/correction 账，因此同 binding
-                    # 的确定性拒绝必须保留唯一恢复凭据并关闭式停止；下次只允许再次
-                    # 零模型验证，或由可证明的新 Review/contract 将旧记录退休。
-                    latest_rc = 2
-                    latest_error_kind = 'stage5_trim_replay_rejected'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='stopped', checked_at=int(time.time()),
-                        reason=(
-                            'Stage5 trim durable batch 经零模型重放后被确定性边界'
-                            f'拒绝：{rejection}。完整 manifest 记录已保留；当前主体未'
-                            '证明漂移前不得删除记录、不得另开 Commander。'))
-                    return CommanderTurnResult(
-                        exit_code=2, provider_session_id=None,
-                        continue_ready=False, outcome=latest_outcome)
-                # 普通 blocker 的 durable record 已证明该 business 发生过
-                # 一次付费首审。重放又被 canonical 拒绝时，不能删掉
-                # record 后就把它包装成第二次 review；即使旧版尚未
-                # 落 ReviewerSeatLedger，durable 决定本身也是席位已用的
-                # 证据。Stage2 有独立书内 durable/correction 路，已在上分支。
-                rejection = result.failure_detail or (
-                    f'canonical {action.kind} action 返回 exit 2，正式产物未落盘')
-                latest_rc = 2
-                latest_error_kind = 'commander_reviewer_replay_rejected'
-                latest_outcome = AgentDeliveryOutcome(
-                    state='stopped', checked_at=int(time.time()),
-                    reason=(
-                        '持久 reviewer 决定经零模型重放后仍被确定性'
-                        f'边界拒绝：{rejection}。同一业务主体的首审席位'
-                        '在重启/epoch 切换后不返还；请用人工 typed 入口'
-                        '闭合，或先形成真实新业务 surface。'))
-                return CommanderTurnResult(
-                    exit_code=2,
-                    provider_session_id=provider_session_id,
-                    continue_ready=False, outcome=latest_outcome)
-            elif (result.exit_code == 2
-                  and (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                       or open_reviewer_seats.get(binding) is not None
-                       and open_reviewer_seats[binding].provider_session_id
-                       is not None)):
-                # Reviewer 的 typed 动作由 Commander 负责修正。显式终态证明没有
-                # landed；只要 blocker/surface 未变，就把拒绝事实连同紧凑 workpack
-                # 送进新的 Stage2 logical/provider session，而不是结束整书 parent。
-                # 等价动作由上面的业务摘要关闭式拦住。
-                rejected_reviewer_business_actions.add(business_action)
-                rejection = result.failure_detail or (
-                    f'canonical {action.kind} action 返回 exit 2，正式产物未落盘')
-                if (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                        and stage2_commander_turns
-                        >= _MAX_STAGE2_EDIT_SEAT):
-                    latest_rc = 2
-                    latest_error_kind = 'stage2_global_action_rejected'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='stopped', checked_at=int(time.time()),
-                        reason=(
-                            f'Stage2 global 第 {stage2_commander_turns} 次 Commander '
-                            '动作仍被确定性边界拒绝，持久预算已用尽。'
-                            f'{rejection}'))
-                    return CommanderTurnResult(
-                        exit_code=2,
-                        provider_session_id=provider_session_id,
-                        continue_ready=False, outcome=latest_outcome)
-                reviewer_correction_task = source_task
-                reviewer_correction_binding = binding
-                correction_reason = (
-                    f'{rejection}；请按原 workpack 只修正上一份 typed 动作')
-                correction_request_sha256 = (
-                    source_response_sha256
-                    or _reviewer_request_sha256(source_task.request_path))
-                persist_pending_correction(
-                    source_task, reason=correction_reason,
-                    request_sha256=correction_request_sha256)
-                if stage5_disposition_action and record_path is not None:
-                    # Stage5 durable-first 交接必须是 pending(newer fact) ->
-                    # strict record retirement。反序会在两写窗口重放被拒回答。
-                    uploads.discard_edit_plan(base, record_path)
-                reviewer_correction_reason = correction_reason
-                reviewer_correction_request_sha256 = correction_request_sha256
-                reviewer_correction_attempts = 0
-                return CommanderTurnResult(
-                    exit_code=result.exit_code,
-                    exit_origin=result.exit_origin,
-                    provider_session_id=provider_session_id,
-                    continue_ready=True, outcome=result.outcome,
-                    continue_reviewer=True)
-            if final_stage2_approval_landed:
-                # 只有第四席只读终审的 confirm 真正收口 s2 后才封账；review-decisions
-                # / apply-edit 以 exit 0 结束只说明 blocking 面安全，终审席仍待发放。
-                # record 必须跨过 mark_complete 失败窗：下个 parent 即使 planner
-                # 已越过旧 blocker，也能凭 current approval/seen 幂等补账；封账成功
-                # 后才退休 record，删除失败则由同一恢复口下次清理。
-                _complete_stage2_review_ledger(source_task)
-                if record_path is not None:
-                    _discard_reviewer_action_record(base, record_path)
-            return CommanderTurnResult(
-                exit_code=result.exit_code,
-                exit_origin=result.exit_origin,
-                provider_session_id=provider_session_id,
-                continue_ready=result.continue_ready,
-                outcome=result.outcome)
-
-        if binding in reviewed_blockers:
+        if waiting_on is None:
             return None
-        scratch = service_lifecycle.open_scratch_session(
-            base, sid, epoch.epoch_id)
-        request_path = scratch / (
-            f'reviewer-request-{current.action.action_sha256[:16]}.json')
-        try:
-            task = reviewer_tasks.build_task(
-                base, sid, current, request_path, epoch_id=epoch.epoch_id)
-        except reviewer_tasks.ReviewerTaskStopped as exc:
-            # workpack producer 已给出结构化 stopped（例如源文不可得/人工
-            # partition 尚无证明）；这发生在 submission options、席位预留和
-            # CLI invocation 之前，绝不能再花一轮 Reviewer 来猜。
-            reviewed_blockers.add(binding)
-            latest_rc = 2
-            latest_error_kind = 'reviewer_workpack_stopped'
+        identity = commander_work_unit(waiting_on)
+        if identity is None:
+            return None
+        node, scope = identity
+        budget = WorkUnitBudget(base, sid, node, 'commander', scope)
+        binding = (budget.unit_id, scope)
+
+        def stopped(reason: str, *, unknown: bool = False) -> CommanderTurnResult:
+            nonlocal latest_outcome, latest_rc, latest_error_kind
+            latest_rc = CRASH if unknown else 2
+            latest_error_kind = 'reviewer_work_unit_unknown' if unknown else 'reviewer_work_unit_stopped'
             latest_outcome = AgentDeliveryOutcome(
-                state='stopped', checked_at=int(time.time()),
-                reason=(
-                    f'{exc.waiting_on} 的只读 reviewer workpack 已明确停止：'
-                    f'{exc.reason}'))
-            return CommanderTurnResult(
-                exit_code=2, provider_session_id=None,
-                continue_ready=False, outcome=latest_outcome)
+                state='unknown' if unknown else 'stopped',
+                checked_at=int(time.time()), reason=reason)
+            return CommanderTurnResult(exit_code=latest_rc, provider_session_id=None,
+                                       continue_ready=False, outcome=latest_outcome)
+
+        scratch = service_lifecycle.open_scratch_session(base, sid, epoch.epoch_id)
+        request_path = scratch / f'reviewer-request-{jobs.new_job_id()}.json'
+        try:
+            task = reviewer_tasks.build_task(base, sid, current, request_path, epoch_id=epoch.epoch_id)
+        except reviewer_tasks.ReviewerTaskStopped as exc:
+            return stopped(f'{exc.waiting_on} 工作包明确停止：{exc.reason}')
         if task is None:
             return None
-        if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-            pending_stage2 = _pending_stage2_rejection(task)
-            if pending_stage2 is not None:
-                # rejection 是比 durable action 更新的业务事实。先严格退休同一
-                # 六元身份下可能残留的已拒 action，再允许启动 correction；这闭合
-                # “拒因落账成功 → record 删除失败/进程崩溃”的跨 parent 窗。
-                try:
-                    residual_action = _find_replayable_reviewer_action(
-                        base, sid, epoch=epoch, current=current, task=task,
-                        current_parent_run_id=run_id)
-                except Exception as exc:  # noqa: BLE001 —— 退休/校账失败即 unknown
-                    reviewed_blockers.add(binding)
-                    latest_rc = CRASH
-                    latest_error_kind = 'stage2_rejected_action_retirement'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='unknown', checked_at=int(time.time()),
-                        reason=(
-                            'Stage2 已有 durable rejection，但对应 action record '
-                            '未能确定性退休；禁止执行旧回答或启动新 correction。'
-                            f'failure={type(exc).__name__}'))
-                    return CommanderTurnResult(
-                        exit_code=CRASH, provider_session_id=None,
-                        continue_ready=False, outcome=latest_outcome)
-                if residual_action is not None:
-                    reviewed_blockers.add(binding)
-                    latest_rc = CRASH
-                    latest_error_kind = 'stage2_rejection_action_conflict'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='unknown', checked_at=int(time.time()),
-                        reason=(
-                            'Stage2 pending rejection 与一份仍可执行的 durable action '
-                            '同时存在；无法证明哪个事实更新，已关闭执行与新模型 wire。'))
-                    return CommanderTurnResult(
-                        exit_code=CRASH, provider_session_id=None,
-                        continue_ready=False, outcome=latest_outcome)
-                return resume_stage2_pending_rejection(task, pending_stage2)
-        if waiting_on == queue.WAITING_ON_STAGE2_REVIEW:
-            # full action record 是 prereview 成功 live bind 后的更晚状态。若宿主
-            # 崩在“保存 action → 删除 prereview”之间，优先重放 full action，并
-            # 幂等清掉被它取代的未绑定记录，不能再组装第二份 action。
-            action_replay = _find_replayable_reviewer_action(
-                base, sid, epoch=epoch, current=current, task=task,
-                current_parent_run_id=run_id)
-            if action_replay is not None:
-                for obsolete_path, _obsolete in uploads.load_stage2_prereviews(
-                        base, sid):
-                    uploads.discard_edit_plan(base, obsolete_path)
-                log = run_log_path(base, run_id)
-                log.parent.mkdir(parents=True, exist_ok=True)
-                with open(log, 'ab') as fh:
-                    fh.write(
-                        f'$ [reviewer-replay] '
-                        f'{action_replay.path}\n'.encode('utf-8'))
-                reviewed_blockers.add(binding)
-                pending_reviewer_action = action_replay.action
-                pending_reviewer_binding = binding
-                pending_reviewer_business_sha256 = task.business_sha256
-                pending_reviewer_source_task = task
-                pending_reviewer_response_sha256 = (
-                    action_replay.record.provider_response_sha256)
-                pending_reviewer_stage2_session_run_id = (
-                    action_replay.record.reviewer_session_run_id)
-                pending_reviewer_record_path = action_replay.path
-                pending_reviewer_replayed = True
-                stage2_prereview = None
-                return CommanderTurnResult(
-                    exit_code=0, provider_session_id=None,
-                    continue_ready=True, outcome=latest_outcome)
-            # `_find_replayable_reviewer_action` 可能刚用今天更严的 typed
-            # loader 拒绝一份旧 action，并已把拒因绑回原席后退休 record。
-            # 该拒因是在本轮最初 pending 检查之后才出现的，须立即转入
-            # fresh correction，不能继续买一席伪装成首次 review。
-            replay_rejection = _pending_stage2_rejection(task)
-            if replay_rejection is not None:
-                return resume_stage2_pending_rejection(
-                    task, replay_rejection)
-            try:
-                durable_prereview = _find_replayable_stage2_prereview(
-                    base, sid, task=task)
-            except (NovelError, reviewer_tasks.ReviewerTaskError) as exc:
-                reviewed_blockers.add(binding)
-                latest_rc = CRASH
-                latest_error_kind = 'stage2_prereview_recovery'
-                latest_outcome = AgentDeliveryOutcome(
-                    state='unknown', checked_at=int(time.time()),
-                    reason=(
-                        'Stage2 持久预审无法唯一、完整地恢复；已在任何新 '
-                        f'Commander wire 前关闭：{exc}'))
-                return CommanderTurnResult(
-                    exit_code=CRASH, provider_session_id=None,
-                    continue_ready=False, outcome=latest_outcome)
-            if durable_prereview is not None:
-                stage2_prereview = None
-                record = durable_prereview.record
-                try:
-                    prefetched_action = reviewer_tasks.bind_stage2_prereview(
-                        task, current, record.input_payload)
-                except reviewer_tasks.ReviewerTaskError as exc:
-                    # live loader 的显式拒绝先绑定回产出这份回答的原席；只有
-                    # rejection durable 后才消费未绑定记录、进入 fresh correction。
-                    _record_stage2_rejection(
-                        task,
-                        session_run_id=record.reviewer_session_run_id,
-                        kind='typed_loader',
-                        request_sha256=record.provider_response_sha256,
-                        reason=str(exc))
-                    uploads.discard_edit_plan(base, durable_prereview.path)
-                    pending = _pending_stage2_rejection(task)
-                    if pending is not None:
-                        stage2_commander_turns = max(
-                            stage2_commander_turns, pending.turn.ordinal)
-                    latest_rc = 2
-                    latest_error_kind = 'stage2_prereview_binding'
-                    latest_outcome = AgentDeliveryOutcome(
-                        state='stopped', checked_at=int(time.time()),
-                        reason=f'Stage2 Global 持久预审未通过 live 重绑定：{exc}')
-                    if stage2_commander_turns >= _MAX_STAGE2_EDIT_SEAT:
-                        reviewed_blockers.add(binding)
-                        latest_outcome = AgentDeliveryOutcome(
-                            state='stopped', checked_at=int(time.time()),
-                            reason=(
-                                'Stage2 Global 持久预审无法绑定 live workpack，且前 '
-                                f'{_MAX_STAGE2_EDIT_SEAT} 席审阅/订正预算已用尽；'
-                                f'第 {_MAX_STAGE2_COMMANDER_TURNS} 席只保留给'
-                                f'只读 final_review。原 typed loader 拒因：{exc}'))
-                        return CommanderTurnResult(
-                            exit_code=2, provider_session_id=None,
-                            continue_ready=False, outcome=latest_outcome)
-                    if not task.request_path.is_file():
-                        reviewed_blockers.add(binding)
-                        latest_outcome = AgentDeliveryOutcome(
-                            state='stopped', checked_at=int(time.time()),
-                            reason=(
-                                'Stage2 Global 持久预审无法绑定 live workpack，'
-                                f'且没有形成可纠正的 typed 请求：{exc}'))
-                        return CommanderTurnResult(
-                            exit_code=2, provider_session_id=None,
-                            continue_ready=False, outcome=latest_outcome)
-                    reviewer_correction_task = task
-                    reviewer_correction_binding = binding
-                    reviewer_correction_reason = str(exc)
-                    reviewer_correction_request_sha256 = (
-                        record.provider_response_sha256)
-                    reviewer_correction_attempts = 0
-                    return CommanderTurnResult(
-                        exit_code=2, provider_session_id=None,
-                        continue_ready=True, outcome=latest_outcome,
-                        continue_reviewer=True)
+        previous_turn = budget.latest_turn()
+        if previous_turn is not None and previous_turn.state == 'adopted' and previous_turn.recovery_sha256:
+            previous_decision = budget.recovery_proof(previous_turn.turn_id)
+            prior_action = previous_decision.get('action', {})
+            decision = prior_action.get('payload', {}).get('decision')
+            if prior_action.get('kind') in ('stop', 'uncertain') or decision in ('uncertain', 'stop'):
+                return stopped('该工作单元已有明确停止决定：' + str(
+                    prior_action.get('reason') or prior_action.get('payload', {}).get('reason')))
+            if previous_decision.get('business_sha256') == task.business_sha256:
+                return stopped('同一业务主体的审阅决定已执行，当前没有新的审阅进展')
+        feedback = budget.latest_feedback()
+        if feedback is not None and feedback.get('business_sha256') != task.business_sha256:
+            feedback = None
+        prompt = task.prompt
+        if feedback is not None:
+            prompt = reviewer_tasks.correction_prompt(
+                task, str(feedback['reason']),
+                request_sha256=str(feedback['response_sha256']), attempt=budget.used)
+        wire = (stage4_reviewer_wire if stage4_reviewer_wire.uses_compact_wire(task)
+                else stage2_reviewer_wire)
+        reviewer_prompt = wire.prompt_for(task, prompt)
+        output_schema = wire.output_schema_for(task)
+        output_schema_digest = _prepare_output_schema(output_schema)[2]
+        schema_recovery_proof = None
+        if (previous_turn is not None and previous_turn.response_sha256 is None
+                and previous_turn.state in ('unknown', 'failed')):
+            parents = [item for item in records(base) if item.run_id == previous_turn.run_id]
+            if len(parents) == 1 and previous_turn.run_id != run_id and output_schema_digest is not None:
+                with admission.require_owner_stopped(base, previous_turn.run_id):
+                    schema_recovery_proof = reviewer_schema_recovery.inspect_work_unit_rejection(
+                        base, sid, budget=budget, parent=parents[0],
+                        log_path=run_log_path(base, previous_turn.run_id), profile=plan.profiles.commander,
+                        replacement_schema_sha256=output_schema_digest,
+                        validation_code_version=epoch.code_version,
+                        replacement_subject_sha256=_sha256_bytes(reviewer_prompt.encode('utf-8')))
+                    if schema_recovery_proof is not None:
+                        budget.finish(previous_turn.turn_id, outcome='failed', reason_code='schema_recovery_validated')
+            if schema_recovery_proof is None:
+                return stopped('上次模型请求没有可恢复回答；缺精确配置修复证明，保留原额度并停止')
+        request_sha256 = _sha256_bytes(json.dumps({
+            'business_sha256': task.business_sha256, 'waiting_on': task.waiting_on,
+            'schema_sha256': output_schema_digest, 'feedback': feedback,
+        }, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8'))
+        pending = budget.latest_pending_response()
+        if pending is not None:
+            from novel.work_units import reconcile_commander_response
+            original_turn = budget.turn(pending[0].turn_id)
+            if original_turn.run_id == run_id:
+                reconcile_commander_response(budget, pending[0].turn_id)
+            else:
+                with admission.require_owner_stopped(base, original_turn.run_id):
+                    reconcile_commander_response(budget, pending[0].turn_id)
+                    sessions = [item for item in agent_session_audit.fold(
+                        agent_session_audit.read_events(base))
+                        if item.session_run_id == original_turn.session_run_id]
+                    if len(sessions) != 1:
+                        raise WorkUnitRefused('恢复回答缺唯一原 Commander 会话')
+                    restored_session = sessions[0]
+                    if restored_session.end is None:
+                        original = restored_session.turns[-1]
+                        agent_session_audit.append_event(base, replace(
+                            restored_session.start, kind='ended', ts=int(time.time()),
+                            provider_session_id=original.provider_session_id,
+                            actual_model=original.actual_model, actual_effort=original.actual_effort,
+                            process_state='ok', delivery_state='unknown',
+                            end_code_version=(epoch.code_version
+                                if epoch.code_version == original.start_code_version else prov.CODE_UNKNOWN)))
+        active_records = uploads.load_reviewer_actions(base, sid)
+        pending_record: tuple[Path, ReviewerActionRecord] | None = None
+        for path, record in active_records:
+            if record.work_unit_id != budget.unit_id:
+                continue
+            row = budget.turn(record.work_unit_turn_id)
+            if row.state == 'failed':
+                # 拒因先持久、记录后退休；重启补齐两写之间的中断。
+                uploads.discard_edit_plan(base, path)
+                continue
+            validate_reviewer_record(base, sid, record)
+            if pending is not None and record.work_unit_turn_id == pending[0].turn_id:
+                if pending_record is not None:
+                    raise WorkUnitRefused('同一回答出现多个活动 typed 决定记录')
+                pending_record = (path, record)
+        submitted_patch_recovery = False
+        partial_batch_recovery = False
+        if pending is not None and pending[1].get('business_sha256') != task.business_sha256:
+            if pending_record is not None:
+                _path, record = pending_record
+                if record.node == 'stage2.blueprint' and record.input_payload is not None:
+                    from novel.stages.stage2.relation_edit import submitted_patch_is_current
+                    submitted_patch_recovery = submitted_patch_is_current(base, sid, record.input_payload)
+                elif record.node == 'stage2.global' and record.input_payload is not None:
+                    if '--review-decisions' in record.flags:
+                        from novel.stages.stage2.global_review import submitted_decisions_is_current
+                        submitted_patch_recovery = submitted_decisions_is_current(base, sid, record.input_payload)
+                    else:
+                        from novel.stages.stage2.extract import submitted_global_patch_is_current
+                        submitted_patch_recovery = submitted_global_patch_is_current(base, sid, record.input_payload)
+                if record.node == 'stage5.review' and record.flags == ('--retain-pretrim-batch', '@reviewer-input'):
+                    partial = reviewer_tasks.stage5_trim_partial_replay_options(
+                        base, sid, record, current, task.submission_options,
+                        current_review_sha256=task.stage5_review_sha256)
+                    if partial is not None and partial.state == 'fully_landed':
+                        budget.mark_adopted(pending[0].turn_id)
+                        uploads.discard_edit_plan(base, _path)
+                        return CommanderTurnResult(exit_code=0, provider_session_id=None,
+                                                   continue_ready=True, outcome=latest_outcome)
+                    if partial is not None and partial.state == 'replayable':
+                        partial_batch_recovery = True
+                        task = replace(task, business_sha256=record.business_sha256,
+                                       submission_options=partial.submission_options)
+            if not submitted_patch_recovery and pending[1].get('business_sha256') != task.business_sha256:
+                # 当前候选确已被其他正式动作替代；旧回答失效仍保留已用额度。
+                budget.mark_rejected(pending[0].turn_id, reason_code='subject_superseded')
+                if pending_record is not None:
+                    uploads.discard_edit_plan(base, pending_record[0])
+                pending = None
 
-                # 这一步才从“无写权预审”变成可执行 full action。必须先保存后者，
-                # 再删前者；任一步异常都以 unknown 退出且保留至少一份恢复凭据。
-                action_record_path = _record_reviewer_action(
-                    base, sid, run_id=run_id, epoch=epoch, task=task,
-                    action=prefetched_action,
-                    reviewer_session_run_id=record.reviewer_session_run_id,
-                    provider_response_sha256=record.provider_response_sha256)
-                if action_record_path is None:  # pragma: no cover —— node 恒有记录
-                    raise RuntimeError('Stage2 预审重绑定没有形成 durable action record')
-                uploads.discard_edit_plan(base, durable_prereview.path)
-                log = run_log_path(base, run_id)
-                log.parent.mkdir(parents=True, exist_ok=True)
-                with open(log, 'ab') as fh:
-                    fh.write(
-                        f'$ [stage2-prereview-replay] '
-                        f'{durable_prereview.path}\n'.encode('utf-8'))
-                reviewed_blockers.add(binding)
-                pending_reviewer_action = prefetched_action
-                pending_reviewer_binding = binding
-                pending_reviewer_business_sha256 = task.business_sha256
-                pending_reviewer_source_task = task
-                pending_reviewer_response_sha256 = (
-                    record.provider_response_sha256)
-                pending_reviewer_stage2_session_run_id = (
-                    record.reviewer_session_run_id)
-                pending_reviewer_record_path = action_record_path
-                pending_reviewer_replayed = True
-                return CommanderTurnResult(
-                    exit_code=0, provider_session_id=None,
-                    continue_ready=True, outcome=latest_outcome)
-
-            # typed-invalid/Commander failure 没有 durable payload；同 parent 只保留
-            # 纠错坐标。完整身份一旦漂移就丢弃，不得把旧错误嫁接到新 workpack。
-            if stage2_prereview is not None:
-                prereview = stage2_prereview
-                stage2_prereview = None
-                if (_stage2_prereview_identity(prereview.task)
-                        == _stage2_prereview_identity(task)
-                        and prereview.error is not None):
-                    reviewer_correction_task = task
-                    reviewer_correction_binding = binding
-                    reviewer_correction_reason = prereview.error
-                    reviewer_correction_request_sha256 = (
-                        prereview.response_sha256
-                        or _reviewer_request_sha256(task.request_path))
-                    reviewer_correction_attempts = 0
-                    return CommanderTurnResult(
-                        exit_code=2, provider_session_id=None,
-                        continue_ready=True, outcome=latest_outcome,
-                        continue_reviewer=True)
-        replay = (
-            None
-            if waiting_on == queue.WAITING_ON_STAGE2_REVIEW
-            else _find_replayable_reviewer_action(
-                base, sid, epoch=epoch, current=current, task=task,
-                current_parent_run_id=run_id))
-        if replay is not None:
-            log = run_log_path(base, run_id)
-            log.parent.mkdir(parents=True, exist_ok=True)
-            with open(log, 'ab') as fh:
-                fh.write(
-                    f'$ [reviewer-replay] {replay.path}\n'.encode('utf-8'))
-            reviewed_blockers.add(binding)
-            pending_reviewer_action = replay.action
-            pending_reviewer_binding = binding
-            pending_reviewer_business_sha256 = task.business_sha256
-            pending_reviewer_source_task = task
-            pending_reviewer_response_sha256 = (
-                replay.record.provider_response_sha256)
-            # Stage2 durable record 把 full action 与原始 compact 回答、
-            # 产出席位分开保存；重放后 canonical exit 2 必须精确
-            # 回写原席，不得用 assembled request digest 污染拒因。
-            pending_reviewer_stage2_session_run_id = (
-                replay.record.reviewer_session_run_id)
-            pending_reviewer_record_path = replay.path
-            pending_reviewer_replayed = True
-            pending_reviewer_protocol_recovery = (
-                replay.record.protocol_recovery is not None)
+        def rejected(reservation: ContentReservation, digest: str, reason: str) -> CommanderTurnResult:
+            repeated = feedback is not None and feedback.get('response_sha256') == digest
+            budget.save_feedback(reservation.turn_id, dict(
+                business_sha256=task.business_sha256, waiting_on=waiting_on,
+                reason=reason, response_sha256=digest))
+            if repeated:
+                return stopped('Commander 收到反馈后重复提交同一回答，已停止无进展循环：' + reason)
+            if budget.remaining == 0:
+                return stopped('Commander 内容预算已用尽；仍可免费复验或人工编辑：' + reason)
             return CommanderTurnResult(
-                exit_code=0, provider_session_id=provider_session_id,
-                continue_ready=True, outcome=latest_outcome)
-        if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-            replay_rejection = _pending_stage2_rejection(task)
-            if replay_rejection is not None:
-                return resume_stage2_pending_rejection(
-                    task, replay_rejection)
-        schema_recovery_proof: ReviewerSchemaRecoveryProof | None = None
-        if waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON:
-            try:
-                prior_seat = reviewer_seat_ledger.read(
-                    base, sid, waiting_on=task.waiting_on,
-                    business_sha256=task.business_sha256)
-            except reviewer_seat_ledger.ReviewerSeatRefused as exc:
-                reviewed_blockers.add(binding)
-                latest_rc = CRASH
-                latest_error_kind = 'reviewer_seat_ledger'
-                latest_outcome = AgentDeliveryOutcome(
-                    state='failed', checked_at=int(time.time()),
-                    reason=(
-                        '既有 reviewer 席位账无法证明，已在任何新模型 wire 前'
-                        f'关闭：{exc}'))
-                return CommanderTurnResult(
-                    exit_code=CRASH, provider_session_id=None,
-                    continue_ready=False, outcome=latest_outcome)
-            if (prior_seat is not None
-                    and reviewer_schema_recovery.is_recovery_candidate(prior_seat)):
-                native_schema = stage4_reviewer_wire.output_schema_for(task)
-                schema_digest = _prepare_output_schema(native_schema)[2]
-                if schema_digest is not None:
-                    try:
-                        schema_recovery_proof = _schema_recovery_sources(
-                            base, sid, ledger=prior_seat,
-                            current_parent_run_id=run_id, validation_code=epoch.code_version,
-                            replacement_schema_sha256=schema_digest,
-                            replacement_subject_sha256=_sha256_bytes(
-                                stage4_reviewer_wire.prompt_for(task, task.prompt).encode('utf-8')))
-                    except (reviewer_tasks.ReviewerTaskError, NovelError, ValueError, OSError) as exc:
-                        reviewed_blockers.add(binding)
-                        latest_rc = 2
-                        latest_error_kind = 'reviewer_schema_recovery'
-                        latest_outcome = AgentDeliveryOutcome(
-                            state='stopped', checked_at=int(time.time()), reason=str(exc))
-                        return CommanderTurnResult(
-                            exit_code=2, provider_session_id=None,
-                            continue_ready=False, outcome=latest_outcome)
-            if prior_seat is not None and prior_seat.turns and schema_recovery_proof is None:
-                reviewed_blockers.add(binding)
-                pending = prior_seat.pending_correction
-                if pending is not None:
-                    reason = (
-                        '已恢复上一次付费 reviewer 席位留下的待纠错事实；'
-                        '当前 parent 不得把同一业务主体重新包装成第二次首审。'
-                        f'原拒因：{pending.reason}；'
-                        f'请求 identity={pending.request_sha256}。'
-                        '请用人工 typed 入口闭合该 blocker，或让业务 surface 发生'
-                        '真实变化后再启动。')
-                    error_kind = 'reviewer_correction_pending'
-                else:
-                    reason = (
-                        '同一业务主体的 reviewer 首审已经发生，但盘上没有可重放'
-                        ' approval 决定或完整 pending-correction 身份；重启/换 epoch '
-                        '不返还首审席位，已在模型 wire 前关闭。请用人工 typed 入口'
-                        '闭合 blocker，或先形成新的业务 surface。')
-                    error_kind = 'reviewer_seat_already_used'
-                latest_rc = 2
-                latest_error_kind = error_kind
-                latest_outcome = AgentDeliveryOutcome(
-                    state='stopped', checked_at=int(time.time()), reason=reason)
-                return CommanderTurnResult(
-                    exit_code=2, provider_session_id=None,
-                    continue_ready=False, outcome=latest_outcome)
-        reviewed_blockers.add(binding)
-        seat_purpose = 'schema_recovery' if schema_recovery_proof is not None else 'review'
-        if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-            seat_purpose = review_seats.seat_for(
-                waiting_on,
-                review_seats.option_ids(task.submission_options)).purpose
-        prepared_before_finish: dict[str, object] = {}
-        before_success_finish = None
-        if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-            before_success_finish = (
-                lambda got, session_id, _seat_turn_id:
-                prepare_stage2_action_before_finish(
-                    task, current, got, session_id,
-                    prepared_before_finish))
-        elif is_stage5_trim_task(task):
-            def prepare_stage5_initial(
-                    got: CommanderTurnResult, session_id: str,
-                    seat_turn_id: str | None) -> None:
-                if seat_turn_id is None:  # pragma: no cover —— 只有非 Stage2 分支调用
-                    raise RuntimeError('Stage5 initial review 缺 seat turn id')
-                prepare_stage5_trim_action_before_finish(
-                    task, current, got, session_id, seat_turn_id,
-                    prepared_before_finish)
+                exit_code=2, provider_session_id=None, continue_ready=True,
+                continue_reviewer=True, outcome=AgentDeliveryOutcome(
+                    state='stopped', checked_at=int(time.time()), reason=reason))
 
-            before_success_finish = prepare_stage5_initial
-        elif schema_recovery_proof is not None:
-            before_success_finish = lambda got, session_id, seat_turn_id: (
-                prepare_stage4_recovery_action(
-                    task, current, got, session_id, seat_turn_id, prepared_before_finish))
-        turn = run_reviewer_turn(
-            task, task.prompt, purpose=seat_purpose,
-            schema_recovery=schema_recovery_proof,
-            activity=_reviewer_activity(task),
-            before_success_finish=before_success_finish)
+        if pending is not None:
+            reservation, saved = pending
+            response = saved.get('final_response')
+            session_id = saved.get('session_run_id')
+            if not isinstance(response, str) or not isinstance(session_id, str):
+                return stopped('保存的 Commander 回答缺完整文本或原会话身份', unknown=True)
+            # 首次 loader 与重启后的重验共用同一边界。记录先于 scratch 晋升；
+            # 工作包只改变 epoch 包装时，以已验 typed 决定重建当前 transport 包装。
+            record_path: Path | None = None
+            def persist(action: reviewer_tasks.ReviewerAction, digest: str) -> Path | None:
+                nonlocal record_path
+                proof = dict(business_sha256=task.business_sha256, waiting_on=task.waiting_on,
+                             action_sha256=reviewer_tasks.action_business_sha256(action),
+                             provider_response_sha256=digest, action=asdict(action))
+                budget.save_recovery(reservation.turn_id, proof)
+                # 重建 transport 包装与 typed loader 会先后调用本回调；必须复用
+                # 同一持久记录，否则跨秒的 recorded_at 会遗留第二份活动决定。
+                if record_path is None:
+                    record_path = (pending_record[0] if pending_record is not None
+                                   else _record_reviewer_action(
+                                       base, sid, run_id=run_id, epoch=epoch, task=task, action=action,
+                                       reviewer_session_run_id=session_id, provider_response_sha256=digest,
+                                       work_unit_id=budget.unit_id, work_unit_turn_id=reservation.turn_id))
+                if record_path is not None:
+                    records_found = [(path, record) for path, record in uploads.load_reviewer_actions(base, sid)
+                                     if record.work_unit_id == budget.unit_id
+                                     and record.work_unit_turn_id == reservation.turn_id]
+                    if len(records_found) != 1 or records_found[0][0] != record_path:
+                        raise WorkUnitRefused('同一回答没有唯一活动 typed 决定记录')
+                    validate_reviewer_record(base, sid, records_found[0][1])
+                return record_path
+            try:
+                try:
+                    proof = budget.recovery_proof(reservation.turn_id)
+                except WorkUnitRefused:
+                    proof = None
+                    # 缺证明允许从原回答重验；已有证明损坏不得绕过。
+                    turn_row = budget.turn(reservation.turn_id)
+                    if turn_row.recovery_sha256 is not None:
+                        raise
+                if submitted_patch_recovery:
+                    assert pending_record is not None
+                    record_path, record = pending_record
+                    action = reviewer_tasks.ReviewerNodeAction(
+                        kind='node', node=record.node, flags=tuple(record.flags),
+                        input_payload=record.input_payload)
+                    digest = record.provider_response_sha256
+                elif proof is not None:
+                    row = proof['action']
+                    if row['kind'] in ('stop', 'uncertain'):
+                        action = reviewer_tasks.ReviewerStopAction(**row)
+                        digest = str(proof['provider_response_sha256'])
+                    else:
+                        if row['kind'] == 'node':
+                            rebuilt = reviewer_tasks.ReviewerNodeAction(
+                                kind='node', node=row['node'], flags=tuple(row['flags']),
+                                input_payload=row.get('input_payload'))
+                        else:
+                            rebuilt = reviewer_tasks.ReviewerApprovalAction(**row)
+                        digest = str(proof['provider_response_sha256'])
+                        record_path = persist(rebuilt, digest)
+                        assert record_path is not None
+                        records_found = [record for path, record in uploads.load_reviewer_actions(base, sid)
+                                         if path == record_path]
+                        if len(records_found) != 1:
+                            raise WorkUnitRefused('已保存的 typed 决定没有唯一内容地址')
+                        document = reviewer_tasks.replay_request_document(records_found[0], current)
+                        action, digest, record_path = _materialize_reviewer_document(
+                            task, current, document, response_digest=digest, persist_validated=persist)
+                else:
+                    action, digest, record_path = _materialize_reviewer_response(
+                        task, current, response, persist_validated=persist,
+                        preserve_validated=lambda candidate, digest:
+                        _preserve_validated_reviewer_residue(base, sid, candidate, digest))
+            except _ReviewerResponseTypedInvalid as exc:
+                return rejected(reservation, _reviewer_response_sha256(response), str(exc))
+            if isinstance(action, reviewer_tasks.ReviewerStopAction):
+                budget.mark_adopted(reservation.turn_id)
+                conclusion = '不确定' if action.kind == 'uncertain' else '明确停止'
+                return stopped(f'Commander {conclusion} {waiting_on}：' + action.reason)
+            try:
+                if isinstance(action, reviewer_tasks.ReviewerNodeAction):
+                    _preflight_stage2_reviewer_action(base, sid, epoch=epoch, action=action)
+                    result = _run_node_review_action(
+                        epoch, action, launch_ticket, reviewer_action_record_path=record_path)
+                else:
+                    result = _run_approval_action(epoch, action, launch_ticket)
+            except _Stage2ReviewerPreflightRejected as exc:
+                return rejected(reservation, digest, exc.safe_summary)
+            except Exception:
+                live = _read_operator_next(epoch)
+                if live.surface_seal != current.surface_seal:
+                    return CommanderTurnResult(exit_code=2, provider_session_id=None,
+                                               continue_ready=True, outcome=latest_outcome)
+                raise
+            # exit 1 只证明产物落盘；审批未落盘仍保留原决定供 producer 免费补提交。
+            if result.exit_code == 0:
+                if (isinstance(action, reviewer_tasks.ReviewerNodeAction)
+                        and action.node == 'stage5.review'
+                        and '--request-reviewer-rewrite' in action.flags):
+                    _reconcile_landed_stage5_reviewer_rewrite_action(
+                        base, sid, code=epoch.code_version, current_parent_run_id=run_id)
+                budget.mark_adopted(reservation.turn_id)
+                if record_path is not None:
+                    uploads.discard_edit_plan(base, record_path)
+                if (isinstance(action, reviewer_tasks.ReviewerApprovalAction)
+                        and action.payload.get('decision') in ('uncertain', 'stop')):
+                    return stopped(f'Commander 对 {waiting_on} 明确{action.payload["decision"]}：'
+                                   + str(action.payload.get('reason', '')))
+            elif result.exit_code == 2:
+                live = _read_operator_next(epoch)
+                if partial_batch_recovery or submitted_patch_recovery:
+                    detail = '：' + result.failure_detail if result.failure_detail else ''
+                    return stopped('已保存决定的免费补提交尚未闭合，保留原回答' + detail)
+                if live.surface_seal == current.surface_seal:
+                    detail = result.failure_detail or 'canonical producer 返回 exit 2，明确拒绝 typed 动作'
+                    if any(word in detail.lower() for word in ('permission', 'authorization', '权限', '授权')):
+                        return stopped(detail)
+                    return rejected(reservation, digest, detail)
+                return CommanderTurnResult(exit_code=2, provider_session_id=None,
+                                           continue_ready=True, outcome=result.outcome)
+            return CommanderTurnResult(
+                exit_code=result.exit_code, exit_origin=result.exit_origin,
+                provider_session_id=None, continue_ready=result.continue_ready,
+                outcome=result.outcome)
+
+        if budget.remaining == 0:
+            return stopped('Commander 每工作单元最多 4 次内容请求，预算已用尽；可免费复验或人工编辑')
+        seat = open_reviewer_seats.get(binding)
+        if seat is not None and seat.output_schema_sha256 != output_schema_digest:
+            _close_reviewer_seat(binding, error_kind='reviewer_schema_changed')
+            seat = None
+        if seat is None:
+            seat = _ReviewerSeat(
+                session_run_id=jobs.new_job_id(), prompt_sha256=_sha256_bytes(reviewer_prompt.encode('utf-8')),
+                waiting_on=waiting_on, business_sha256=task.business_sha256,
+                output_schema_sha256=output_schema_digest)
+            open_reviewer_seats[binding] = seat
+        reservation: ContentReservation | None = None
+        reserve_error: BaseException | None = None
+        def reserve() -> None:
+            nonlocal reservation, reserve_error
+            try:
+                reservation = budget.reserve(
+                    request_sha256=request_sha256, run_id=run_id, session_run_id=seat.session_run_id,
+                    request_payload=dict(prompt=reviewer_prompt, output_schema=output_schema,
+                                         business_sha256=task.business_sha256, waiting_on=task.waiting_on,
+                                         workpack_sha256=task.workpack_sha256, epoch_id=epoch.epoch_id,
+                                         schema_sha256=output_schema_digest or schema_sha256,
+                                         schema_recovery=(schema_recovery_proof.model_dump(mode='json')
+                                                          if schema_recovery_proof is not None else None)))
+            except BaseException as exc:
+                reserve_error = exc
+                raise
+        def attempt_started(attempt_id: str, kind: str, resume_id: str | None) -> None:
+            if reservation is None:
+                raise WorkUnitRefused('Commander attempt 不能先于内容轮次预留')
+            budget.record_attempt(reservation.turn_id, attempt_id=attempt_id,
+                                  outcome='started', provider_session_id=resume_id)
+        def attempt_finished(attempt_id: str, rc: int, error: str | None,
+                             provider_id: str | None, wire_evidence: bool) -> None:
+            if reservation is not None:
+                budget.record_attempt(reservation.turn_id, attempt_id=attempt_id,
+                                      outcome='ok' if rc == 0 else 'error', provider_session_id=provider_id)
+        saved_receipt: dict[str, object] | None = None
+        def save_raw(response: str, receipt: dict[str, object] | None = None) -> None:
+            nonlocal saved_receipt
+            if receipt is not None:
+                saved_receipt = receipt
+            if reservation is None:
+                raise WorkUnitRefused('完整回答没有对应已预留的内容请求')
+            budget.save_response(reservation.turn_id, dict(
+                final_response=response, session_run_id=seat.session_run_id,
+                business_sha256=task.business_sha256, waiting_on=task.waiting_on,
+                prepared_receipt=saved_receipt))
+        try:
+            turn = _run_commander_turn(
+                epoch, None, reviewer_prompt=reviewer_prompt, reviewer_output_schema=output_schema,
+                fresh_session_run_id=seat.session_run_id, seat_provider_session_id=seat.provider_session_id,
+                seat_turns_recorded=seat.turns_recorded, seat_subject_sha256=seat.prompt_sha256,
+                seat_output_schema_sha256=seat.output_schema_sha256, close_seat=False,
+                launch_ticket=launch_ticket, after_spawn_before_wire=reserve, activity=_reviewer_activity(task),
+                on_attempt_started=attempt_started, on_attempt_finished=attempt_finished,
+                on_final_response=save_raw)
+        except BaseException:
+            if reservation is not None:
+                budget.finish(reservation.turn_id, outcome='unknown', reason_code='commander_interrupted')
+            raise
+        seat.started = seat.started or turn.seat_started
+        seat.provider_session_id = turn.seat_provider_session_id or seat.provider_session_id
+        seat.turns_recorded = turn.seat_turns_recorded
+        seat.last_observation = latest_observation
+        seat.last_rc = latest_commander_rc
+        seat.last_outcome = latest_commander_outcome
+        seat.last_error_kind = latest_commander_error_kind
+        if reserve_error is not None:
+            return stopped(str(reserve_error))
+        if reservation is None:
+            return turn
+        if turn.final_response is not None:
+            save_raw(turn.final_response)
+        elif turn.exit_code == 0:
+            budget.finish(reservation.turn_id, outcome='unknown', reason_code='missing_final_response')
+            return stopped('Commander 结束但没有完整最终回答，保留已用额度与未知状态', unknown=True)
+        else:
+            budget.finish(reservation.turn_id, outcome='unknown', reason_code='commander_transport_failed')
+            return turn
         if turn.exit_code != 0:
             return turn
-        try:
-            validated_record_path: Path | None = None
-            if (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                    or is_stage5_trim_task(task)
-                    or prepared_before_finish.get('stage4_recovery')):
-                prepared_error = prepared_before_finish.get('error')
-                if isinstance(prepared_error, BaseException):
-                    raise prepared_error
-                candidate_action = prepared_before_finish.get('action')
-                candidate_digest = prepared_before_finish.get(
-                    'response_sha256')
-                candidate_record = prepared_before_finish.get('record_path')
-                if (not isinstance(candidate_action, (
-                        reviewer_tasks.ReviewerNodeAction,
-                        reviewer_tasks.ReviewerApprovalAction,
-                        reviewer_tasks.ReviewerStopAction))
-                        or not isinstance(candidate_digest, str)
-                        or (isinstance(
-                            candidate_action,
-                            reviewer_tasks.ReviewerNodeAction)
-                            and not isinstance(candidate_record, Path))):
-                    raise RuntimeError(
-                        'reviewer finish 前没有完整 durable action')
-                pending_reviewer_action = candidate_action
-                response_sha256 = candidate_digest
-                validated_record_path = (
-                    candidate_record
-                    if isinstance(candidate_record, Path) else None)
-            elif turn.final_response is not None:
-                (pending_reviewer_action, response_sha256,
-                 validated_record_path) = (
-                    _materialize_reviewer_response(
-                        task, current, turn.final_response,
-                        persist_validated=lambda action, response_sha256: (
-                            _record_reviewer_action(
-                                base, sid, run_id=run_id, epoch=epoch,
-                                task=task, action=action,
-                                reviewer_session_run_id=(
-                                    stage2_turn_session_run_id
-                                    if waiting_on
-                                    in queue.STAGE2_REVIEWER_WAITING_ON
-                                    else None),
-                                provider_response_sha256=(
-                                    response_sha256
-                                    if waiting_on
-                                    in queue.STAGE2_REVIEWER_WAITING_ON
-                                    else None))),
-                        preserve_validated=lambda candidate, digest: (
-                            _preserve_validated_reviewer_residue(
-                                base, sid, candidate, digest))))
-            else:
-                pending_reviewer_action = reviewer_tasks.load_action(
-                    request_path, current,
-                    submission_options=task.submission_options)
-                response_sha256 = _reviewer_request_sha256(request_path)
-                validated_record_path = _record_reviewer_action(
-                    base, sid, run_id=run_id, epoch=epoch, task=task,
-                    action=pending_reviewer_action,
-                    reviewer_session_run_id=(
-                        stage2_turn_session_run_id
-                        if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                        else None),
-                    provider_response_sha256=(
-                        response_sha256
-                        if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                        else None))
-        except reviewer_tasks.ReviewerTaskError as exc:
-            seat_open = open_reviewer_seats.get(binding)
-            if (waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON
-                    and (seat_open is None
-                         or seat_open.provider_session_id is None)):
-                _close_reviewer_seat(
-                    binding, error_kind='commander_reviewer_request')
-                latest_rc = 2
-                latest_error_kind = 'commander_reviewer_request'
-                latest_outcome = AgentDeliveryOutcome(
-                    state='stopped', checked_at=int(time.time()),
-                    reason=f'Commander reviewer typed request 未闭合：{exc}')
-                return CommanderTurnResult(
-                    exit_code=2,
-                    provider_session_id=None,
-                    continue_ready=False, outcome=latest_outcome)
-            failed_request_sha256 = _reviewer_turn_response_sha256(
-                turn, task.request_path)
-            if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-                _record_stage2_rejection(
-                    task,
-                    session_run_id=stage2_turn_session_run_id,
-                    kind='typed_loader',
-                    request_sha256=failed_request_sha256,
-                    reason=str(exc))
-            persist_pending_correction(
-                task, reason=str(exc),
-                request_sha256=failed_request_sha256)
-            if (waiting_on in queue.STAGE2_REVIEWER_WAITING_ON
-                    and stage2_commander_turns >= _MAX_STAGE2_EDIT_SEAT):
-                reviewed_blockers.add(binding)
-                latest_rc = 2
-                latest_error_kind = 'commander_reviewer_request'
-                latest_outcome = AgentDeliveryOutcome(
-                    state='stopped', checked_at=int(time.time()),
-                    reason=(
-                        'Commander reviewer typed request 未闭合，且 Stage2 '
-                        f'global 前 {_MAX_STAGE2_EDIT_SEAT} 席审阅/订正预算已用尽；'
-                        f'第 {_MAX_STAGE2_COMMANDER_TURNS} 席只保留给只读 '
-                        f'final_review。原 typed loader 拒因：{exc}'))
-                return CommanderTurnResult(
-                    exit_code=2,
-                    provider_session_id=turn.provider_session_id,
-                    continue_ready=False, outcome=latest_outcome)
-            reviewer_correction_task = task
-            reviewer_correction_binding = binding
-            reviewer_correction_reason = str(exc)
-            reviewer_correction_request_sha256 = failed_request_sha256
-            reviewer_correction_attempts = 0
-            return CommanderTurnResult(
-                exit_code=turn.exit_code,
-                exit_origin=turn.exit_origin,
-                provider_session_id=turn.provider_session_id,
-                continue_ready=True, outcome=turn.outcome,
-                continue_reviewer=True)
-        pending_reviewer_binding = binding
-        pending_reviewer_business_sha256 = task.business_sha256
-        pending_reviewer_source_task = task
-        pending_reviewer_response_sha256 = response_sha256
-        pending_reviewer_stage2_session_run_id = (
-            stage2_turn_session_run_id
-            if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON else None)
-        pending_reviewer_record_path = validated_record_path
-        pending_reviewer_replayed = False
-        return CommanderTurnResult(
-            exit_code=turn.exit_code,
-            exit_origin=turn.exit_origin,
-            provider_session_id=turn.provider_session_id,
-            continue_ready=True, outcome=turn.outcome)
+        # 下一次状态机窗口先重放已保存回答，然后才能开启下一个内容请求。
+        return CommanderTurnResult(exit_code=0, provider_session_id=None,
+                                   continue_ready=True, outcome=turn.outcome)
+
 
     def _finalize_run(
             epoch: ExecutionEpoch,

@@ -236,10 +236,11 @@ def test_agent_checkpoint_corruption_stops_before_either_wire(monkeypatch):
     assert calls == ['restore:A', 'restore:B']
 
 
-def test_legacy_client_keeps_sequential_a_then_b_requests(monkeypatch):
+def test_legacy_client_submits_independent_a_b_concurrently(monkeypatch):
     prepared = _prepared()
     ctx = SimpleNamespace(node='stage6.semantic', executor_profile=None)
     calls: list[str] = []
+    barrier = threading.Barrier(2)
 
     class LegacySource:
         model = 'legacy-model'
@@ -247,7 +248,8 @@ def test_legacy_client_keeps_sequential_a_then_b_requests(monkeypatch):
         def ask_json(self, _system, _user, **kwargs):
             calls.append(kwargs['purpose'])
             assert 'recovery_policy' not in kwargs
-            assert 'max_tokens' not in kwargs
+            assert kwargs['max_tokens'] == semantic.SEMANTIC_MAX_TOKENS
+            barrier.wait(timeout=10)
             return _response()
 
     monkeypatch.setattr(
@@ -256,7 +258,7 @@ def test_legacy_client_keeps_sequential_a_then_b_requests(monkeypatch):
     got = semantic.request_semantic_candidates(ctx, LegacySource(), prepared)
 
     assert set(got) == {'A', 'B'}
-    assert calls == ['stage6.semantic.A', 'stage6.semantic.B']
+    assert set(calls) == {'stage6.semantic.A', 'stage6.semantic.B'}
 
 
 def test_evaluate_is_provisional_and_never_constructs_a_store(monkeypatch):

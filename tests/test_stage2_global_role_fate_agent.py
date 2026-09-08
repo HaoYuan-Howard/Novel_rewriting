@@ -98,7 +98,7 @@ def test_one_role_fate_patch_lands_and_audit_contains_no_character_text(
     assert audits[0]['changed_field_count'] == 1
 
 
-def test_two_accepted_role_patches_can_repair_but_never_exceed_two(
+def test_two_accepted_role_patches_can_repair_within_shared_budget(
     tmp_path, monkeypatch,
 ):
     initial = _leaky_candidate()
@@ -118,7 +118,7 @@ def test_two_accepted_role_patches_can_repair_but_never_exceed_two(
     assert len(_role_patch_audits(tmp_path)) == 2
 
 
-def test_second_accepted_role_patch_still_red_is_terminal_without_fourth_wire(
+def test_third_role_patch_uses_the_fourth_content_turn(
     tmp_path, monkeypatch,
 ):
     initial = _leaky_candidate()
@@ -129,15 +129,15 @@ def test_second_accepted_role_patch_still_red_is_terminal_without_fourth_wire(
         _full(initial),
         _role_patch(initial, role=once['entities']['characters']['char_001']['role']),
         _role_patch(once, role=twice['entities']['characters']['char_001']['role']),
-        _full(_candidate_response()),  # 状态机若错误回 full 才会消费。
+        _role_patch(twice, role='沈家的独女，替父亲掌管家中账目'),
     ], ctx.novel_dir)
 
-    with pytest.raises(GateBlocked, match='role_leaks_fate'):
-        Stage2GlobalAgent(ctx, driver=driver, max_turns=4).run()
+    result = Stage2GlobalAgent(ctx, driver=driver, max_turns=4).run()
 
-    assert len(driver.calls) == 3
-    assert len(_role_patch_audits(tmp_path)) == 2
-    assert ArtifactStore(ctx).exists(extract._GLOBAL_INVALID)
+    assert result.passed and result.turns == 4
+    assert len(driver.calls) == 4
+    assert len(_role_patch_audits(tmp_path)) == 3
+    assert not ArtifactStore(ctx).exists(extract._GLOBAL_INVALID)
 
 
 def test_role_patch_introducing_other_hard_never_reenters_full_candidate(
@@ -296,7 +296,7 @@ def test_first_still_red_patch_checkpoint_resumes_only_the_second_patch(
     assert len(_role_patch_audits(tmp_path)) == 2
 
 
-def test_second_still_red_patch_checkpoint_is_terminal_on_restore_without_wire(
+def test_second_still_red_patch_checkpoint_keeps_one_remaining_turn(
     tmp_path, monkeypatch,
 ):
     initial = _leaky_candidate()
@@ -328,21 +328,12 @@ def test_second_still_red_patch_checkpoint_is_terminal_on_restore_without_wire(
 
     monkeypatch.setattr(extract, 'evaluate_global_candidate', real_evaluate)
     resumed_ctx = _resume_ctx(ctx)
-    no_wire = _Driver([], resumed_ctx.novel_dir)
-    with pytest.raises(GateBlocked, match='role_leaks_fate'):
-        Stage2GlobalAgent(
-            resumed_ctx, driver=no_wire, max_turns=4).run()
+    remaining = _Driver([
+        _role_patch(twice, role='沈家的独女，替父亲掌管家中账目'),
+    ], resumed_ctx.novel_dir, session_id='stage2-global-last-patch')
+    result = Stage2GlobalAgent(
+        resumed_ctx, driver=remaining, max_turns=4).run()
 
-    assert no_wire.calls == []
-    invalid = ArtifactStore(resumed_ctx).read(
-        GlobalGrounding, extract._GLOBAL_INVALID)
-    assert invalid.entities.characters['char_001'].role == \
-        twice['entities']['characters']['char_001']['role']
-    latest_attempt = _role_patch_audits(tmp_path)[-1]['attempt_id']
-    rejected = [
-        row for row in _rows(tmp_path.joinpath(*AUDIT_REL))
-        if row.get('kind') == 'gate_decision'
-        and row.get('attempt_id') == latest_attempt
-        and row.get('decision') == 'rejected'
-    ]
-    assert len(rejected) == 1 and rejected[0]['resample'] is False
+    assert result.passed and result.turns == 4
+    assert [kind for kind, _request in remaining.calls] == ['start']
+    assert len(_role_patch_audits(tmp_path)) == 3

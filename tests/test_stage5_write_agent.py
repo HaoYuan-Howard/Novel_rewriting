@@ -43,6 +43,8 @@ def _profile() -> AgentProfile:
 
 
 def _ctx(base: Path, *, run_id: str | None = None) -> RunContext:
+    from novel.work_units import require_workflow
+    require_workflow(base)
     book = base / '逐章执行者_851'
     book.mkdir(exist_ok=True)
     ledger = (

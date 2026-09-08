@@ -126,7 +126,7 @@ def _spec() -> agent_runs.SingleSessionRunSpec:
         label='test stage4 design',
         node='stage4.design',
         session_owner='stage4.design',
-        purpose='stage4.design',
+        purpose='stage4.design.strategy',
         chapter=None,
         phase='design',
         recovery_policy='stage4-design-v1',
@@ -157,9 +157,9 @@ def _accept(
 ) -> tuple[_Answer, dict[str, object]]:
     value = client.ask_json(
         _SYSTEM, _USER, model_cls=_Answer,
-        purpose='stage4.design', max_tokens=_MAX_TOKENS,
+        purpose='stage4.design.strategy', max_tokens=_MAX_TOKENS,
         recovery_policy='stage4-design-v1')
-    return value, client.accepted_checkpoint('stage4.design')
+    return value, client.accepted_checkpoint('stage4.design.strategy')
 
 
 def _write(
@@ -322,13 +322,14 @@ def test_trailing_rejected_turn_does_not_replace_last_accepted_checkpoint(
         ctx, _profile(), _Driver(['{"value":1}', '{"other":2}']),
         max_semantic_turns=2)
     value, acceptance = _accept(ctx, client)
+    path = _write(ctx, value, acceptance, state_value='last-valid')
     with pytest.raises(LlmFailed, match='已用尽 2 轮'):
         client.ask_json(
             _SYSTEM, _USER, model_cls=_Answer,
-            purpose='stage4.design', max_tokens=_MAX_TOKENS,
+            purpose='stage4.design.strategy', max_tokens=_MAX_TOKENS,
             recovery_policy='stage4-design-v1')
 
-    path = _write(ctx, value, acceptance, state_value='last-valid')
+    assert _write(ctx, value, acceptance, state_value='last-valid') == path
     assert path.name == 'rev-0001.json'
     records = agent_runs.agent_session_audit.fold(
         agent_runs.agent_session_audit.read_events(ctx.novel_dir.parent))

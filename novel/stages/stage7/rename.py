@@ -6,16 +6,16 @@ rename.py —— `stage7.rename` 与 `stage7.approve` 的节点函数。**唯一
 〔这是 `R-10.1` 那一行「谁在查」标的代码落点：**本模块没有任何一处往上游目录写**，
 产物只落 `stage7/`。〕
 
-八条路：`--check-only` · `--dry-run` · `--identity` · `--recheck` · `--apply-edit` ·
-`--revalidate` · 付费主路 · `stage7.approve`。
-**七条 0 成本，一条付费。**
+九条路：`--check-only` · `--dry-run` · `--identity` · `--recheck` · `--apply-edit` ·
+`--revalidate` · `--recover-prepared` · 付费主路 · `stage7.approve`。
+**八条 0 成本，一条付费。**
 """
 from __future__ import annotations
 
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import wraps
 
 from contracts.artifacts import (
@@ -23,7 +23,7 @@ from contracts.artifacts import (
     STAGE4_WRITER_CONTEXT, STAGE6_HOOK, STAGE7_NAME_MAP, STAGE7_NAME_MAP_EDIT,
 )
 
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import ValidationError
 
@@ -42,7 +42,7 @@ from contracts.schema.stage7 import (
 from novel import agent_session_audit, paths, prov
 from novel.core.naming import family_groups, strip_distinguisher, surface_owners
 from novel.errors import (
-    BlockingFindingsUnresolved, GateBlocked, TerminalState, UpstreamMissing,
+    BlockingFindingsUnresolved, GateBlocked, ProvenanceRefused, TerminalState, UpstreamMissing,
 )
 from novel.llm.client import LlmClient, LlmFailed
 from novel.llm.stage7_runs import RECOVERY_POLICY as AGENT_RECOVERY_POLICY
@@ -1328,7 +1328,8 @@ def _agent_rename_candidate(
             max_semantic_turns = getattr(
                 source, 'max_semantic_turns', None)
             exhausted = (
-                isinstance(turns_used, int) and not isinstance(turns_used, bool)
+                getattr(source, 'content_budget_exhausted', False) is True
+                or isinstance(turns_used, int) and not isinstance(turns_used, bool)
                 and isinstance(max_semantic_turns, int)
                 and not isinstance(max_semantic_turns, bool)
                 and turns_used >= max_semantic_turns)
@@ -1620,6 +1621,235 @@ def _note_rename_adoption(
     )
 
 
+_LEGACY_DELIVERY_POLICY = 'stage7-legacy-rename-delivery-v1'
+
+
+@dataclass(frozen=True)
+class PreparedRecovery:
+    """原人物表提交的只读状态；未知证据不提供可执行身份。"""
+
+    state: Literal['recoverable', 'complete', 'unknown']
+    source_run_id: str | None = None
+    proof_sha256: str | None = None
+    reason: str | None = None
+
+
+def _legacy_rename_policy(source: LlmClient) -> dict[str, Any]:
+    return source.json_request_policy((
+        ('rename', NameMapResponse, MAX_TOKENS, False),
+    ), recovery_policy=_LEGACY_DELIVERY_POLICY)
+
+
+def _prepare_legacy_rename_delivery(
+        ctx: RunContext, source: LlmClient, prepared: RenameCandidateContext,
+        terminal: RenameCandidateEvaluation, store: ArtifactStore,
+) -> None:
+    from novel.work_units import budget_for
+
+    if terminal.attempt_id is None:
+        raise ProvenanceRefused('Rename 正式候选缺原接受响应，拒绝创建提交证明')
+    payload = terminal.candidate.model_dump(by_alias=True, mode='json')
+    book_rel = book_txt_rel(store)
+    budget_for(ctx, scope='book').save_group_producer_recovery({
+        'kind': _LEGACY_DELIVERY_POLICY, 'code': ctx.code,
+        'input_sha256': prepared.input_sha256, 'policy': _legacy_rename_policy(source),
+        'producer_run_id': ctx.run_id, 'producer_parent_run_id': ctx.parent_run_id,
+        'target_rel': REL, 'book_rel': book_rel,
+        'target_payload': payload,
+        'target_json': json.dumps(payload, ensure_ascii=False, separators=(',', ':')),
+        'target_sha256': store.prospective_sha256(REL, terminal.candidate),
+        'baselines': {rel: store.full_sha256_or_none(rel)
+                      for rel in (REL, _INVALID, book_rel)},
+        'response': terminal._batch.response.model_dump(by_alias=True, mode='json'),
+        'adoptions': [[ctx.node, terminal.attempt_id]],
+        'receipts': [source.producer_response_receipt(ctx.node)],
+        'costs': source.producer_cost_receipts((ctx.node,)),
+    })
+
+
+def _legacy_rename_adopted(ctx: RunContext, proof: Mapping[str, Any], artifact: NameMap) -> bool:
+    """原 producer 的精确采纳行是提交事实，当前 name_map 不能代替它。"""
+    from novel.llm.ledger import _adoption_id, audit_path, read_jsonl_rows
+    from novel.run_identity import check_run_id
+
+    run_id = check_run_id(proof['producer_run_id'])
+    parent = check_run_id(proof['producer_parent_run_id'])
+    purpose, attempt_id = proof['adoptions'][0]
+    fingerprint = prov.projection_fingerprint(artifact.model_dump(by_alias=True, mode='json'))
+    identity = _adoption_id(run_id=run_id, node=ctx.node, purpose=purpose,
+                            attempt_id=attempt_id, artifact=REL,
+                            artifact_fingerprint=fingerprint, chapter=None)
+    expected = {
+        'kind': 'artifact_adoption', 'adoption_id': identity,
+        'run_id': run_id, 'sid': ctx.sid, 'node': ctx.node, 'purpose': purpose,
+        'attempt_id': attempt_id, 'artifact': REL,
+        'artifact_fingerprint': fingerprint, 'chapter': None,
+    }
+    if parent != run_id:
+        expected['parent_run_id'] = parent
+    matches = [row for row in read_jsonl_rows(audit_path(ctx.novel_dir.parent))
+               if row.get('adoption_id') == identity
+               or (row.get('kind') == 'artifact_adoption' and row.get('run_id') == run_id
+                   and row.get('attempt_id') == attempt_id and row.get('artifact') == REL)]
+    if not matches:
+        return False
+    if len(matches) != 1 or {key: value for key, value in matches[0].items()
+                             if key != 'at'} != expected:
+        raise ProvenanceRefused('Rename 原采纳重复或身份漂移，拒绝补尾')
+    return True
+
+
+def _restore_legacy_rename_delivery(
+        ctx: RunContext, source: LlmClient | None,
+        prepared: RenameCandidateContext | None = None, *, inspect_only: bool = False,
+) -> NameMap | PreparedRecovery | None:
+    """封存字节与原费用驱动零模型提交；不创建 legacy 不存在的 Agent 会话。"""
+    from novel.llm import stage7_runs
+    from novel.llm.cache import CachePolicy
+    from novel.llm.ledger import CostLedger, ledger_path
+    from novel.run_identity import check_run_id
+    from novel.work_units import budget_for
+
+    anchor = budget_for(ctx, scope='book')
+    proof = anchor.group_producer_recovery()
+    if proof is None:
+        return None
+    if proof.get('kind') != _LEGACY_DELIVERY_POLICY or proof.get('target_rel') != REL:
+        raise ProvenanceRefused('Rename 原提交证明的协议或目标漂移')
+    run_id = check_run_id(proof['producer_run_id'])
+    parent = check_run_id(proof['producer_parent_run_id'])
+    raw_target = proof.get('target_json')
+    if not isinstance(raw_target, str):
+        raise ProvenanceRefused('Rename 原提交证明缺目标字典顺序')
+    payload = ArtifactStore._loads(REL, raw_target.encode('utf-8'))
+    if payload != proof['target_payload']:
+        raise ProvenanceRefused('Rename 原目标 typed/原字节证明不一致')
+    artifact = NameMap.model_validate(payload)
+    receipts = proof['receipts']
+    if (len(receipts) != 1 or receipts[0]['purpose'] != ctx.node
+            or proof['adoptions'] != [[ctx.node, receipts[0]['checkpoint']['attempt_id']]]):
+        raise ProvenanceRefused('Rename 原响应与单次采纳身份不闭合')
+    # state.readonly_ctx 的账本刻意没有 path；证明只核权威原账，不向读上下文注入费用。
+    validation_ctx = replace(ctx, ledger=CostLedger(
+        path=ledger_path(ctx.novel_dir.parent), run_id=ctx.run_id,
+        parent_run_id=ctx.parent_run_id))
+    bindings = LlmClient.verify_producer_responses(validation_ctx, receipts, proof['costs'])
+    original = NameMapResponse.model_validate_json(receipts[0]['checkpoint']['normalized_text'])
+    if original.model_dump(by_alias=True, mode='json') != proof['response']:
+        raise ProvenanceRefused('Rename 原接受 JSON 与提交候选不一致')
+    store = ArtifactStore(ctx)
+    book_rel = book_txt_rel(store)
+    baselines = proof['baselines']
+    if (proof['book_rel'] != book_rel or set(baselines) != {REL, _INVALID, book_rel}
+            or store.prospective_sha256(REL, artifact) != proof['target_sha256']):
+        raise ProvenanceRefused('Rename 原目标或退休路径的字节身份不一致')
+    adopted = _legacy_rename_adopted(ctx, proof, artifact)
+    if anchor.group_producer_completed and not adopted:
+        raise ProvenanceRefused('Rename 提交标记已完成但原采纳缺失')
+    tails_complete = (anchor.group_producer_completed
+                      and all(budget.turn(turn_id).state == 'adopted'
+                              for budget, turn_id in bindings.values()))
+    projection = PreparedRecovery(
+        state='complete' if adopted and tails_complete else 'recoverable',
+        source_run_id=run_id, proof_sha256=anchor.group_producer_recovery_sha256)
+    current_sha = store.full_sha256_or_none(REL)
+    if adopted:
+        # 原封存字节、回答、费用与 exact adoption 已证明正式提交。Stage7 approve
+        # 有意同轮覆盖且不归档，不能用当前字节撤销历史事实；当前有效性另由现役闸判。
+        if inspect_only:
+            return projection
+        for budget, turn_id in bindings.values():
+            budget.mark_adopted(turn_id)
+        fingerprint = prov.projection_fingerprint(payload)
+        anchor.mark_artifact_committed(REL, fingerprint)
+        anchor.complete_group_producer_recovery(proof)
+        if source is not None:
+            changed = (current_sha != proof['target_sha256']
+                       or ctx.cache == CachePolicy.refresh() or proof['code'] != ctx.code)
+            if not changed:
+                if prepared is None:
+                    prepared = prepare_rename_candidate(ctx)
+                changed = proof['input_sha256'] != prepared.input_sha256
+            if changed:
+                anchor.retire_group_producer_recovery(proof)
+                return None
+        return artifact
+
+    if prepared is None:
+        prepared = prepare_rename_candidate(ctx)
+    if (proof['code'] != ctx.code or proof['input_sha256'] != prepared.input_sha256
+            or (source is not None and proof['policy'] != _legacy_rename_policy(source))):
+        raise ProvenanceRefused('Rename 原提交输入、代码或模型配置漂移')
+    desired = {REL: proof['target_sha256'], _INVALID: None, book_rel: None}
+    current = {rel: store.full_sha256_or_none(rel) for rel in baselines}
+    if any(current[rel] not in (baselines[rel], desired[rel]) for rel in baselines):
+        raise ProvenanceRefused('Rename 正式人物表、INVALID 或动态成书被第三方改写')
+    rebuilt, findings, _hook_new = _build(
+        ctx, prepared._up, proof['response'], [], artifact.provenance)
+    rebuilt = rebuilt.model_copy(update={'identity': prepared.identity})
+    if (rebuilt.model_dump(by_alias=True, mode='json') != payload
+            or _hard_findings(findings) or artifact.approved is not None
+            or artifact.book_txt is not None):
+        raise ProvenanceRefused('Rename 原候选不再通过确定性归一与业务 HARD')
+    _assert_rename_prepared_current(ctx, prepared)
+    if inspect_only:
+        stage7_runs.inspect_foreign_commit_reservations(ctx)
+        if current == desired:
+            verify_rename_delivery(ctx, prepared, artifact)
+        return projection
+    stage7_runs.refuse_foreign_commit_reservations(ctx)
+    with store.history_transaction(REL, book_rel):
+        if current[book_rel] is not None:
+            _retire_book_txt(store)
+        if current[REL] != desired[REL] or current[_INVALID] is not None:
+            store.write(REL, artifact)
+        landed = verify_rename_delivery(ctx, prepared, artifact)
+    fingerprint = prov.projection_fingerprint(payload)
+    ledger = CostLedger(path=ledger_path(ctx.novel_dir.parent), run_id=run_id, parent_run_id=parent)
+    purpose, attempt_id = proof['adoptions'][0]
+    ledger.note_adoption(sid=ctx.sid, node=ctx.node, purpose=purpose,
+                         attempt_id=attempt_id, artifact=REL,
+                         artifact_fingerprint=fingerprint, chapter=None)
+    if not _legacy_rename_adopted(ctx, proof, landed):
+        raise ProvenanceRefused('Rename 补尾后仍缺原采纳审计')
+    for budget, turn_id in bindings.values():
+        budget.mark_adopted(turn_id)
+    anchor.mark_artifact_committed(REL, fingerprint)
+    anchor.complete_group_producer_recovery(proof)
+    return landed
+
+
+def inspect_prepared_recovery(ctx: RunContext) -> PreparedRecovery | None:
+    """免费 CLI/queue 的只读投影；空 base 与旧 base 不初始化新工作流。"""
+    from novel.work_units import workflow_manifest
+
+    try:
+        if workflow_manifest(ctx.novel_dir.parent) is None:
+            return None
+        return _restore_legacy_rename_delivery(ctx, None, inspect_only=True)
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError,
+            TerminalState, ProvenanceRefused) as exc:
+        return PreparedRecovery(state='unknown', reason=str(exc))
+
+
+@_commit_owned
+def recover_prepared_rename(
+        ctx: RunContext, *, source_run_id: str | None = None,
+        proof_sha256: str | None = None,
+) -> NameMap:
+    """重放原目标并补原 run 的费用采纳；无需 client，也不新增内容轮次。"""
+    projection = _restore_legacy_rename_delivery(ctx, None, inspect_only=True)
+    if projection is None:
+        raise TerminalState('没有可恢复的 Rename 完整提交证明')
+    if ((source_run_id is not None and projection.source_run_id != source_run_id)
+            or (proof_sha256 is not None and projection.proof_sha256 != proof_sha256)):
+        raise ProvenanceRefused('Rename 恢复的原 run/提交证明已变化')
+    result = _restore_legacy_rename_delivery(ctx, None)
+    if not isinstance(result, NameMap):
+        raise TerminalState('Rename 完整提交证明在恢复期间缺失')
+    return result
+
+
 def _rename_finalization_payload(
         prepared: RenameCandidateContext,
         terminal: RenameCandidateEvaluation,
@@ -1812,6 +2042,9 @@ def finalize_rename_candidate(
     if terminal.hard_rules:
         _landed, path = _write_or_reuse_terminal_invalid(
             ctx, prepared, terminal.candidate)
+        checkpointed = getattr(source, 'mark_checkpointed', None)
+        if callable(checkpointed) and terminal.attempt_id is not None:
+            checkpointed(terminal.attempt_id)
         raise GateBlocked(
             f'这份映射表有阻断级问题（{list(terminal.hard_rules)}）'
             f'——不该拿它去替换正文。问题稿在 {path}',
@@ -1819,18 +2052,25 @@ def finalize_rename_candidate(
             hint='stage7.rename --apply-edit <name_map_edit.json 路径> 改一行，'
                  '或 stage7.rename --revalidate --actor <id> --reason <why>'
                  '（0 LLM、同轮重判并留不可变审计）')
-    store = ArtifactStore(ctx)
-    with store.history_transaction(REL, book_txt_rel(store)):
-        _retire_book_txt(store)
-        store.write(REL, terminal.candidate)
+    from novel.llm import stage7_runs
+    with stage7_runs.commit_ownership(ctx.novel_dir):
+        stage7_runs.refuse_foreign_commit_reservations(ctx)
         _assert_rename_prepared_current(ctx, prepared)
-        landed = verify_rename_delivery(
-            ctx, prepared, terminal.candidate)
-    return landed
+        store = ArtifactStore(ctx)
+        _prepare_legacy_rename_delivery(ctx, source, prepared, terminal, store)
+        landed = _restore_legacy_rename_delivery(ctx, source, prepared)
+        if not isinstance(landed, NameMap):
+            raise ProvenanceRefused('Rename 正常提交未闭合原目标和采纳')
+        return landed
 
 
 def run_rename(ctx: RunContext, client: LlmClient) -> NameMap:
     """legacy 包装：仍只请求一次；agent executor 复用同一四段并在 session 内返工。"""
+    from novel.llm import stage7_runs
+    with stage7_runs.commit_ownership(ctx.novel_dir):
+        restored = _restore_legacy_rename_delivery(ctx, client)
+        if isinstance(restored, NameMap):
+            return restored
     prepared = prepare_rename_candidate(ctx)
     batch = request_rename_candidate(ctx, client, prepared)
     evaluation = evaluate_rename_candidate(ctx, client, prepared, batch)

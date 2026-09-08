@@ -71,6 +71,8 @@ def _seed_frozen_v6_subject(tmp_path: Path) -> SimpleNamespace:
     """构造 exact v6 Blueprint ↔ current Stage4A/v1 truth 三重绑定。"""
     book = _book(tmp_path)
     _seed_current_stage2(book)
+    from tests.test_stage2_review_decisions import _accept_global_node
+    _accept_global_node(book)
 
     blueprint_path = book / STAGE2_CHAPTER_BLUEPRINTS
     envelope = json.loads(blueprint_path.read_text(encoding='utf-8'))

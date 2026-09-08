@@ -102,6 +102,9 @@ def legacy_book(tmp_path, monkeypatch) -> _Book:
         lambda until: [node for node in real_nodes(until) if node.startswith('stage4.')])
     book = _book(tmp_path)
     blueprints = _seed_current_stage2(book)
+    from tests.test_stage2_review_decisions import _accept_global_node, _accept_blueprint_node
+    _accept_global_node(book)
+    _accept_blueprint_node(book, monkeypatch)
     _a_ctx, _a_client, a_transport, candidate, _truth, _mapping = _design(book, blueprints)
     read_pack = blueprint_review_workpack(tmp_path, SID)
     approvals.mark_seen(
@@ -119,9 +122,11 @@ def legacy_book(tmp_path, monkeypatch) -> _Book:
     assert accepted.design_review.state == 'accepted'
 
     ctx = _ctx(book, 'stage4.plan')
-    response = _bound_b_response(candidate, blueprints.model_dump(by_alias=True, mode='json'))
-    client, b_transport = _client(ctx, response)
-    assert plan.run_plan(ctx, client).passed
+    from tests.test_stage4_legacy_chapter_budget import _one_ambiguous, _answer
+    client, b_transport = _client(ctx, _answer)
+    with monkeypatch.context() as local:
+        _one_ambiguous(local)
+        assert plan.run_plan(ctx, client).passed
     store = ArtifactStore(ctx)
     binding = store.read_own(EvidenceBinding, STAGE4_EVIDENCE_BINDING)[0]
     compiled = store.read_own(PlanChapters, STAGE4_PLAN_CHAPTERS)[0]

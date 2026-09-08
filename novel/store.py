@@ -707,6 +707,11 @@ class ArtifactStore:
 
     # ── 写 ────────────────────────────────────────────────────────────────
 
+    def _require_workflow_write(self) -> None:
+        """所有 producer 的写准入；外层事务已经核验时不重复进入。"""
+        if not self._history_transactions:
+            self.ctx.require_current_workflow_write()
+
     @staticmethod
     def _round_file_matches(path: Path, stem: str) -> bool:
         number = paths.round_no_of(path.name)
@@ -776,6 +781,7 @@ class ArtifactStore:
         Nested transactions let a producer widen a safe single-artifact helper
         to a companion review/context without duplicating compensation logic.
         """
+        self._require_workflow_write()
         if not rels:
             raise PathRefused('history_transaction 必须显式列出至少一份产物')
         live, rounds = self._history_scope(rels)
@@ -915,6 +921,7 @@ class ArtifactStore:
         ``exclude_unset``。这条窄口只接受不带 provenance 的输入模型，并在落盘前
         走同一注册表 envelope 与 round-trip 校验。
         """
+        self._require_workflow_write()
         key = paths.check_rel(rel)
         if paths.is_invalid(key):
             raise PathRefused(f'{key} 是 `.INVALID`，不能作为 sparse input 写入')
@@ -962,6 +969,7 @@ class ArtifactStore:
         require_existing: bool = False,
     ) -> Path:
         """正式路径的唯一原子替换实现；公开入口决定是否终结 INVALID。"""
+        self._require_workflow_write()
         rel = paths.check_rel_deep(rel)
         if paths.is_invalid(rel):
             raise PathRefused(
@@ -1133,6 +1141,7 @@ class ArtifactStore:
         （它要为「我改了什么」负责，可能还要记账）；写盘口只保证**平台不掺东西**。
         替产地做一次它自己没记账的改写，正是本项目要消灭的那种「安静地改了点什么」。
         """
+        self._require_workflow_write()
         rel = paths.check_rel_deep(rel)
         if '\r' in text:
             n = text.count('\r')
@@ -1244,6 +1253,7 @@ class ArtifactStore:
         ``src.promoted(audit=...)``。只有模块级白名单登记的 Stage2 确定性归一账
         可从已验证的 override 带入；live 中自报的生成来源仍不被信任。
         """
+        self._require_workflow_write()
         official_rel = paths.check_rel_deep(rel)
         inv_rel = paths.invalid_of(official_rel)
         if not self.exists(inv_rel):
@@ -1384,6 +1394,7 @@ class ArtifactStore:
         逐章成稿归档之后当前文件必须**消失**（下一轮马上要写一份新的到同一个路径），
         而「先抄一份再原地改写」的那几层需要它留着。
         """
+        self._require_workflow_write()
         rel = paths.check_rel_deep(rel)
         src = self.path(rel)
         if not _is_file(src):
@@ -1489,6 +1500,7 @@ class ArtifactStore:
         An already-existing destination is accepted only when its bytes are exactly
         identical. This supports interrupted/repeated retirement of derived products.
         """
+        self._require_workflow_write()
         source_rel = paths.check_rel_deep(rel)
         destination_rel = paths.check_rel_deep(destination)
         source = self.path(source_rel)
@@ -2250,6 +2262,7 @@ class ArtifactStore:
 
     def _write_immutable(self, destination: Path, data: bytes) -> None:
         """Create a content-addressed audit snapshot; never replace history."""
+        self._require_workflow_write()
         self._track_history_path(destination)
         if os.path.exists(_filesystem_path(destination)):
             try:
@@ -2516,6 +2529,7 @@ class ArtifactStore:
 
     def _write_json(self, rel: str, artifact: BaseModel, *,
                     prov_override: Provenance | None = None) -> Path:
+        self._require_workflow_write()
         data = self._render(rel, artifact, prov_override=prov_override)
         p = self.path(rel)
         p.parent.mkdir(parents=True, exist_ok=True)

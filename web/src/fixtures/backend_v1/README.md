@@ -93,3 +93,11 @@ python tools/regen_web_enums_fixture.py          # 写盘（--check 只报差异
 legacy adapter 例外，等 fixture 最终收口时一并删除。Stage3 check 没有这个例外，
 因此 `check_stage3.json` 随整层退役删除。其余 fixture 中出现的旧 Stage3 provenance
 只用于验证历史解码，不表示当前仍可运行或复检 Stage3。
+
+## Hook 连续修订升级后的历史抓包边界
+
+`stage6.json` 保留原 HTTP 抓包及其历史 `_provenance.params.candidate_retry_limit=1`；
+这份原始审计字段描述旧 Hook v2 的生产设置，不代表现役 Hook v3 的书级四次内容预算。
+前端不以该历史字段计算预算，运行页只消费后端工作单元账；本次不手改抓包来源冒充新 producer。
+当前协议为 legacy 局部修订上限 4、Agent 完整替换为 0，正式版本和存量重建入口见
+`docs/schema/stage6.md`。真实 Stage6 运行和恢复由新 clean base producer 验证。

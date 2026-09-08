@@ -169,6 +169,15 @@ def committed(ctx: Any) -> dict[str, Any] | None:
 def refuse_foreign_commit_reservations(ctx: Any) -> None:
     """另一 rename run 的 prepared 尾窗必须先由原 run 补完。"""
     _require_ownership(ctx)
+    inspect_foreign_commit_reservations(ctx)
+
+
+def inspect_foreign_commit_reservations(ctx: Any) -> None:
+    """只读核对当前 reservation 快照；实际提交必须在书锁内通过同一校验。
+
+    journal 原子替换且自带摘要，不为读取创建 .lock；扫描期间状态可能继续推进，
+    因此此结果只供恢复投影，不能代替写入临界区的 refuse 守卫。
+    """
     current = _commit_spec(ctx).commit_path(ctx).resolve()
     found: dict[str, Path] = {}
     for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage7'):
@@ -179,10 +188,9 @@ def refuse_foreign_commit_reservations(ctx: Any) -> None:
         if run_id == ctx.run_id or target.resolve() == current:
             continue
         try:
-            with process_append_lock(target):
-                record = agent_runs.validate_foreign_commit_envelope(
-                    target, label='Stage7 rename foreign commit',
-                    run_id=run_id, sid=ctx.sid, node='stage7.rename')
+            record = agent_runs.validate_foreign_commit_envelope(
+                target, label='Stage7 rename foreign commit',
+                run_id=run_id, sid=ctx.sid, node='stage7.rename')
         except OSError as exc:
             raise ProvenanceRefused(
                 f'Stage7 foreign commit journal {target} 不可验证：{exc}') from exc
@@ -268,6 +276,7 @@ def verify_committed_delivery(
 
 __all__ = [
     'RECOVERY_POLICY', 'commit_ownership', 'committed', 'ensure_run',
+    'inspect_foreign_commit_reservations',
     'file_sha256', 'mark_committed', 'prepare_commit', 'prepared',
     'refuse_foreign_commit_reservations', 'restore_checkpoint',
     'restore_commit_adoption', 'target_state', 'verify_commit_finalization',

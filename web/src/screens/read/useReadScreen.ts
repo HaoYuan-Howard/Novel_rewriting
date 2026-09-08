@@ -164,7 +164,7 @@ export function useReadScreen() {
           kind: 'hole' as const,
           beatId: null,
           label: s.flagged ? '没有被任何 beat 覆盖 · ' + s.chars + ' 字' : '空隙 ' + s.chars + ' 字',
-          paras: s.flagged ? s.text.split(/\n+/).filter((t) => t.trim()) : [],
+          paras: s.text.split(/\n+/).filter((t) => t.trim()),
           flagged: s.flagged,
           selected: false,
         }
@@ -183,8 +183,8 @@ export function useReadScreen() {
           located: b.located,
           span: b.located ? '原文已闭合定位' : '未定位',
           presentCharIds: b.present_char_ids,
-          facts: b.facts.map((fact, index) => ({
-            id: id + '-fact-' + index,
+          facts: b.facts.map((fact) => ({
+            id: fact.fact_id,
             claim: fact.claim,
             meta: fact.kind + ' · ' + fact.obligation,
             evidence: fact.evidence_text,

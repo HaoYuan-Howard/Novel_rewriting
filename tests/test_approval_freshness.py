@@ -107,6 +107,8 @@ def _binding(ctx: RunContext) -> EvidenceBinding:
 
 @pytest.fixture
 def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
     book = tmp_path / f'审批证明_{SID}'
     (book / 'stage0').mkdir(parents=True)
     (book / 'stage0' / 'clean_text.txt').write_text(
@@ -218,7 +220,9 @@ def test_explicit_v6_backfill_preserves_current_typed_histories_but_clears_stage
     assert before.writing_decision is not None
     payload = before.model_dump(
         mode='json',
-        exclude={'closure_history', 'closure_decision', 'seen_subjects'})
+        exclude={'closure_history', 'closure_decision', 'seen_subjects',
+                 'stage2_review_history', 'stage2_reviews',
+                 'stage2_rework_completed', 'stage2_patch_receipts', 'stage2_blueprint_scope'})
     payload['v'] = 6
     legacy = approvals._ApprovalRecordV6Legacy.model_validate(payload)
     path = approvals._path(base, SID)

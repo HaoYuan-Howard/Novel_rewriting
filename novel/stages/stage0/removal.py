@@ -278,7 +278,7 @@ def run_source(source_path: str | Path, base: str | Path, *, force: bool = False
     novel_dir = existing_dir.resolve() if existing_dir is not None else candidate_dir
     ctx = _context(novel_dir, 'stage0.remove', run_id=run_id)
     store = ArtifactStore(ctx)
-    log = rev.ensure_materialized(store)
+    log = rev.read(store) if dry_run else rev.ensure_materialized(store)
 
     # 首跑恒 pending（2026-08-21 裁决）：零命中不再自动批准。「零 removed、零 warning、
     # clean == source」恰好是纯数字番外盲区（`docs/schema/stage1.md` §五）的形状——

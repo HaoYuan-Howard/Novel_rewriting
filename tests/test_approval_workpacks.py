@@ -172,6 +172,8 @@ def test_real_design_and_structure_workpacks_are_read_only_and_zero_spawn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
 ) -> None:
     """真实链：先用 fake agent 落 A/B，再证明 GET builder/CLI 只读且不续 session。"""
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
     monkeypatch.setattr(prov, 'code_version', lambda: 'test-batch5-workpack')
     book = _book(tmp_path)
     sid = paths.derive_source_meta(book.name)[0]
@@ -190,19 +192,23 @@ def test_real_design_and_structure_workpacks_are_read_only_and_zero_spawn(
                for row in design.groups[-1].items)
 
     plan_ctx = _ctx(book, 'stage4.plan')
-    driver = _OneTurnDriver(
-        _bound_b_response(candidate, blueprint_raw),
-        session_id='provider-plan-workpack-seed')
-    client = _client(plan_ctx, driver)
-    report = plan.run_plan(plan_ctx, client)
-    client.finish(process_state='ok', delivery_state='delivered')
-    client.close()
+    from novel.node_agents import Stage4PlanSessionPool
+    calls = []
+    def refuse_unneeded_model(purpose, chapter):
+        calls.append((purpose, chapter))
+        pytest.fail('合成 A/B 对应关系已由机械基线闭合，不应请求模型')
+    client = Stage4PlanSessionPool(plan_ctx, driver_factory=refuse_unneeded_model)
+    try:
+        report = plan.run_plan(plan_ctx, client)
+        client.finish(process_state='ok', delivery_state='delivered')
+    finally:
+        client.close()
     assert report.passed
-    calls_before = driver.calls
+    assert calls == []
     before_structure = _tree(tmp_path)
 
     structure = approvals.structure_workpack(tmp_path, sid)
-    assert driver.calls == calls_before, '只读工作包不得 resume/start 旧 B session'
+    assert calls == [], '只读工作包不得 resume/start 旧 B session'
     assert _tree(tmp_path) == before_structure
     assert structure.kind == 'structure'
     assert [group.group for group in structure.groups] \
@@ -244,7 +250,7 @@ def test_real_design_and_structure_workpacks_are_read_only_and_zero_spawn(
     emitted = json.loads(stdout)
     assert rc == 0 and emitted['kind'] == 'structure'
     assert emitted['subject_sha256'] == structure.subject_sha256
-    assert driver.calls == calls_before
+    assert calls == []
     assert _tree(tmp_path) == before_structure, 'CLI workpack 只可写 stdout'
 
 

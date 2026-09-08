@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shlex
 import sys
-from types import SimpleNamespace
+from pathlib import Path
+from types import MethodType, SimpleNamespace
 
 import pytest
 
@@ -37,6 +39,17 @@ from novel.errors import ApprovalRequired, TerminalState
 from novel.orchestrator import nodes as N
 from novel.orchestrator import queue as Q
 from tests import sandbox
+
+
+def _dispatch_context(base, **fields):
+    """只替换分发材料；当前工作流写入准入仍调用真实 RunContext 方法。"""
+    from novel.run import RunContext
+    fields.setdefault('novel_dir', Path(base) / '测试书_123')
+    fields.setdefault('readonly', False)
+    ctx = SimpleNamespace(**fields)
+    ctx.require_current_workflow_write = MethodType(
+        RunContext.require_current_workflow_write, ctx)
+    return ctx
 
 @pytest.fixture
 def box():
@@ -73,7 +86,11 @@ def no_api_key(monkeypatch):
 
     monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
     monkeypatch.setattr(
-        config, 'load_config', lambda: config.Config(api_key=None))
+        config, 'load_config', lambda *, env=None, dotenv_path=None: config.Config(
+            api_key=None, stage2_blueprint_contract=(
+                env if env is not None else os.environ).get(
+                    config.ENV_KEYS['stage2_blueprint_contract'],
+                    config.DEFAULT_STAGE2_BLUEPRINT_CONTRACT)))
 
 
 def _run(*argv: str) -> int:
@@ -212,9 +229,9 @@ def test_stage2_review_workpack_is_read_only_and_never_auto_decides(reviewed_box
     assert after == before
 
 
-def test_r_2_16_allows_blueprint_but_blocks_stage4_before_dispatch(
+def test_r_2_16_requires_global_acceptance_before_blueprint_and_cross_acceptance_before_stage4(
         tmp_path, monkeypatch, capsys):
-    """review pending 时 blueprint 可跑；Stage4 仍在 CLI 最终边界拒绝。"""
+    """Global 未接受不得生产 Blueprint；交叉未接受不得生产 Stage4。"""
     import importlib
     from novel.stages.stage2 import global_review
 
@@ -223,28 +240,77 @@ def test_r_2_16_allows_blueprint_but_blocks_stage4_before_dispatch(
     checked: list[str] = []
     monkeypatch.setattr(
         cli_main, 'RunContext', SimpleNamespace(open=lambda _base, _sid, node, **_kw:
-                                                SimpleNamespace(
-                                                    node=node, run_id='test-run')))
+                                                _dispatch_context(
+                                                    _base, node=node, run_id='test-run')))
     monkeypatch.setattr(
         cli_main, '_dispatch',
         lambda node, _ctx, _flags: calls.append(node) or X.OK)
 
-    def pending(ctx):
-        checked.append(ctx.node)
-        raise ApprovalRequired('stage2 global review pending')
+    accepted = {'global': False}
 
-    monkeypatch.setattr(global_review, 'require_approved', pending)
+    def global_pending(ctx):
+        checked.append(ctx.node)
+        if not accepted['global']:
+            raise ApprovalRequired('stage2 global review pending')
+
+    def cross_pending(ctx):
+        checked.append(ctx.node)
+        raise ApprovalRequired('stage2 blueprint review pending')
+
+    monkeypatch.setattr(global_review, 'require_global_accepted', global_pending)
+    monkeypatch.setattr(global_review, 'require_approved', cross_pending)
 
     rc = _run('run', 'stage2.blueprint', 'book-1', '--yes',
               '--base', str(tmp_path))
+    assert rc == X.TERMINAL_STATE
+    assert calls == [] and checked == ['stage2.blueprint']
+    accepted['global'] = True
+    rc = _run('run', 'stage2.blueprint', 'book-1', '--yes',
+              '--base', str(tmp_path))
     assert rc == X.OK
-    assert calls == ['stage2.blueprint'] and checked == []
+    assert calls == ['stage2.blueprint']
 
     rc = _run('run', 'stage4.design', 'book-1', '--yes',
               '--base', str(tmp_path))
     assert rc == X.TERMINAL_STATE
-    assert calls == ['stage2.blueprint'] and checked == ['stage4.design']
+    assert calls == ['stage2.blueprint']
+    assert checked == ['stage2.blueprint', 'stage2.blueprint', 'stage4.design']
     assert 'review pending' in capsys.readouterr().err
+
+
+
+def test_blueprint_cli_uses_real_global_acceptance_before_constructing_client(tmp_path, monkeypatch):
+    """真实 CLI→审批证明→producer；仅模型传输用确定性合成回答。"""
+    from novel.cli import main as cli
+    from novel.stages.stage2 import extract
+    from novel.work_units import initialize_workflow
+    from tests.test_stage2_generation import _client, _respond_blueprints, _response_blueprints
+    from tests.test_stage2_review_decisions import _accept_global_node, _approve_all_review
+    from tests.test_stage2_secret_edit import _seed
+
+    initialize_workflow(tmp_path)
+    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
+    book = tmp_path / '合成书_123'
+    book.mkdir()
+    _seed(book)
+    _approve_all_review(book)
+    clients = []
+
+    def client(ctx):
+        clients.append(ctx)
+        return _client(ctx, lambda request, _index:
+                       _respond_blueprints(request, _response_blueprints()))[0]
+
+    monkeypatch.setattr(cli, '_llm_client', client)
+    argv = ['run', 'stage2.blueprint', '123', '--base', str(tmp_path), '--yes']
+    assert _run(*argv) == X.TERMINAL_STATE
+    assert clients == []
+    assert not (book / extract.BLUEPRINT_REL).exists()
+
+    _accept_global_node(book)
+    assert X.landed(_run(*argv))
+    assert len(clients) == 1
+    assert (book / extract.BLUEPRINT_REL).is_file()
 
 
 @pytest.mark.parametrize('reached,status,want_rc', [
@@ -962,12 +1028,13 @@ def test_every_paid_stage5_cli_path_authorizes_before_dispatch(
     from novel.orchestrator import approvals
     from novel.stages.stage2 import global_review
 
-    ctx = SimpleNamespace(node='stage5.write')
+    ctx = _dispatch_context(tmp_path, node='stage5.write')
     authorized: list[tuple[list[int] | None, bool]] = []
     dispatched: list[str] = []
     monkeypatch.setattr(
         M, 'RunContext', SimpleNamespace(open=lambda *_args, **_kwargs: ctx))
     monkeypatch.setattr(global_review, 'require_approved', lambda _ctx: None)
+    monkeypatch.setattr(global_review, 'require_global_accepted', lambda _ctx: None)
 
     def refuse(_base, _sid, selected, *, requires_fresh_review=False, reviewer_rewrite_request_rel=None):
         authorized.append((selected, requires_fresh_review))
@@ -1010,7 +1077,7 @@ def test_zero_cost_stage5_recovery_paths_are_not_blocked_by_paid_authorization(
     from novel.orchestrator import approvals
     from novel.stages.stage2 import global_review
 
-    ctx = SimpleNamespace(node='stage5.write')
+    ctx = _dispatch_context(tmp_path, node='stage5.write')
     dispatched: list[tuple[str, list[str]]] = []
     monkeypatch.setattr(
         M, 'RunContext', SimpleNamespace(open=lambda *_args, **_kwargs: ctx))
@@ -1378,8 +1445,8 @@ def test_profiled_argv_round_trips_through_cli_into_run_context(
 
     def open_context(base, sid, node, **kwargs):
         captured.update(base=base, sid=sid, node=node, **kwargs)
-        return SimpleNamespace(
-            node=node,
+        return _dispatch_context(
+            tmp_path, node=node,
             run_id='profile-round-trip',
             executor_profile=kwargs['executor_profile'],
         )
@@ -1392,6 +1459,7 @@ def test_profiled_argv_round_trips_through_cli_into_run_context(
     monkeypatch.setattr(M, '_dispatch', dispatch)
     from novel.stages.stage2 import global_review
     monkeypatch.setattr(global_review, 'require_approved', lambda _ctx: None)
+    monkeypatch.setattr(global_review, 'require_global_accepted', lambda _ctx: None)
     from novel.orchestrator import approvals
     monkeypatch.setattr(
         approvals, 'authorize_writing', lambda *_args, **_kwargs: None)
@@ -1417,8 +1485,8 @@ def test_explicit_legacy_argv_round_trips_without_becoming_an_agent_profile(
 
     def open_context(base, sid, node, **kwargs):
         captured.update(base=base, sid=sid, node=node, **kwargs)
-        return SimpleNamespace(
-            node=node,
+        return _dispatch_context(
+            tmp_path, node=node,
             run_id='legacy-round-trip',
             executor_backend=kwargs['executor_backend'],
             executor_profile=kwargs['executor_profile'],
@@ -1470,8 +1538,8 @@ def test_profiled_dispatch_never_constructs_a_deepseek_client(
     built = []
 
     def open_context(_base, _sid, actual_node, **kwargs):
-        ctx = SimpleNamespace(
-            node=actual_node,
+        ctx = _dispatch_context(
+            tmp_path, node=actual_node,
             run_id='profiled-stage2-cli',
             novel_dir=tmp_path / 'book', sid='book-1',
             executor_profile=kwargs['executor_profile'],
@@ -1501,6 +1569,7 @@ def test_profiled_dispatch_never_constructs_a_deepseek_client(
     monkeypatch.setattr(node_agents, 'build_node_agent', build_agent)
     from novel.stages.stage2 import global_review
     monkeypatch.setattr(global_review, 'require_approved', lambda _ctx: None)
+    monkeypatch.setattr(global_review, 'require_global_accepted', lambda _ctx: None)
     from novel.orchestrator import approvals
     monkeypatch.setattr(
         approvals, 'authorize_writing', lambda *_args, **_kwargs: None)
@@ -1676,8 +1745,8 @@ def test_profiled_gate_blocked_remains_exit_two_without_a_stack(
     from novel.errors import GateBlocked
 
     def open_context(_base, _sid, node, **kwargs):
-        return SimpleNamespace(
-            node=node, run_id='profiled-gate-blocked',
+        return _dispatch_context(
+            tmp_path, node=node, run_id='profiled-gate-blocked',
             executor_profile=kwargs['executor_profile'])
 
     class Agent:

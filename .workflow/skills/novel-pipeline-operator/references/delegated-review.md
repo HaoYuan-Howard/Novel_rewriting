@@ -42,6 +42,12 @@ submission option；它不替代证据、不降低判据、不扩大闭集，也
 
 如果争议属于产品语义而非单书裁决，安全停机并写出决策点；不要为了无人值守静默发明新规则。
 
+现役审阅能力以 `NODES.lifecycle.review_actions` 和工作包实际选项为准：接受、局部 typed 补丁、
+定向返工、不确定、停止。每个 Commander 都有 uncertain/stop 出口；两者必须写明原因并结束本次
+工作单元处理，不授予接受、补丁或返工，也不被当成格式错误继续烧四轮预算。所有选择只绑定本次
+workpack 的 surface、waiting_on 与闭集。`approval_projection` 仅供运行页显示后端有效审批原状态，
+不能以历史会话、已落盘或已读记录替代当前接受。
+
 ## 通用裁决格式
 
 每次代批立即把下列证据写入对应 typed 决定、provenance 或审批账；不要同步改写终审包 Markdown。
@@ -89,14 +95,7 @@ submission option；它不替代证据、不降低判据、不扩大闭集，也
 4. 把 `s0_approval=pending` 的 HARD 识别为当前工作包正在处理的待批准项，而不是剔除质量失败；`s0_correctness=UNVER` 正是本轮须由 Reviewer 读材料后作出的人类语义裁决，不得把这两个待决状态当作拒绝审阅本身的理由；确认除此项外无 HARD，所有 warning 均已人工判断。
 5. 发现误删或漏剔时不得违心批准；选择 `stop:stage0.approve` typed option，reason 必须指出完整 retained/剔除段中的精确证据与后续 `stage0.edit` 修复坐标。该动作不写审批、不执行节点；修复后由新 surface 重新复审。
 6. 完成前述审阅且其余 HARD 为零时，才选择 `node:stage0.approve` submission option；AgentRun 委托不是自动批准，reason 必须写明剔除分母、边界及反向抽查证据。
-<!-- reviewer-contract:stage0:end -->
 
-记录每个被删段的语义类别；零剔除也要记录分母和边界抽查结果。
-
-**零剔除时这份职责不是消失，是掉转方向。** 分母为零 ⇒ 没有"被误删的段"可判 ⇒
-唯一还能出错的方向是**漏剔**，所以改做反向抽查，并把它当作本次代批的实际证据：
-
-<!-- reviewer-contract:stage0:begin -->
 1. 只读工作包按登记版本扫描平台尾巴/广告模式，并记录**扫了多少类、各命中几处**；
    不再为每本书临时拼词表，也不把这些审阅模式搬进生产剔除规则；
 2. 每一个命中都要逐条读上下文再定性——现代题材里社交软件、人群、群聊这类词是正文自然用词，
@@ -104,6 +103,13 @@ submission option；它不替代证据、不降低判据、不扩大闭集，也
 3. 通读完整 retained clean_text，反向查找纯数字章号下的番外语义等零模式信号漏剔；再抽查首尾边界：生产词法识别到首个章号时，号前非空片段应是后续 Stage1 必须保留的开篇文案。叙事性概述、提前呈现后文情节或对白、与正文形成重复钩子，都是合法文案体裁，不能仅因它不是第一章正文首句或与后文重复就判为漏剔；只把书名/作者署名、平台网址、站内导航、更新订阅/票赏推广、作者站务元话语等不属于作品叙事文案的站务或元数据残留视为问题。尾行应为完结标记或正常收束，且不得截断句子；
 4. 顺带核一次结构分母（总行数/非空行、生产词法识别的独占章号行集合、第一个章号之前是否形成非空开篇文案）；开篇文案是 `R-1.12` 的必填下游材料，不是待删除前缀。若已识别到首个章号但号前没有非空文案，应关闭式停止并说明 Stage1 将缺少必填 hook；这些读数只服务材料分区与反向漏剔审阅，不在 Stage0 判断章号顺序或连续性。
 <!-- reviewer-contract:stage0:end -->
+
+记录每个被删段的语义类别；零剔除也要记录分母和边界抽查结果。
+
+**零剔除时这份职责不是消失，是掉转方向。** 分母为零 ⇒ 没有"被误删的段"可判 ⇒
+唯一还能出错的方向是**漏剔**，所以改做反向抽查，并把它当作本次代批的实际证据：
+
+
 
 零命中要写成"扫了 N 个模式、0 命中"，不能写成"没问题"——前者有分母，后者没有。
 
@@ -115,26 +121,16 @@ freshness 会让旧 blueprint 失效。Global 正式落盘后立即运行 `--emi
 和原文精确命中上下文放在一起，但它明确不自动做决定：0 命中不等于 PASS，集合完整性项必须通读
 全书反向寻找漏项。阅读原文、填写决策文件与逐章计算可以继续重叠。
 
-Headless 只读预审只在同一冻结 snapshot 的 global review items 非空且全部为 `pending` 时构建。
-若 operator 已登记“最新 Global `.INVALID` + current/fresh projection”可直接供 Blueprint 消费，
-Supervisor 必须在读取 formal Global workpack 或旧/stale Blueprint 前跳过预审，直接执行该 snapshot
-已铸造的 ready Blueprint token；不得为了并行而审不存在的 formal 或旧分支。
-
-完整读完并记下 workpack 顶层 `workpack_sha256` 后，再用 `--emit-review-template` 取得当前注册表骨架。
-默认模板不是几十条重复决定，而是一条 `blocking_scope`：它绑定当前完整 blocking
-`(item_id, subject_sha256)` 集合、项目数与正文章全集；其中 `expected_workpack_sha256` 故意是
-64 个 `0` 的不可提交占位，必须从**刚才实际读过的** workpack 顶层手工复制真实 SHA-256。
-不能重发一份新模板，让它替旧阅读自动刷新凭证；旧工作包不能配新主体提交。
-状态关闭式默认为 `UNVER`，actor/reason 也是必须替换的占位值。仍须逐项读完
-workpack；确认完整面成立后，才把 scope 改为 `PASS`，
-并在 reason 写明分母与覆盖章。`decisions[]` 只列 FAIL/UNVER/PASS 例外，服务端会把其余默认决定
-展开回逐项持久记录；需要例外的 item id、subject hash 与 evidence 从当前 workpack 复制。
-要逐项裁 disclosure 时改用 `--review-scope all` 的完整骨架。裁决口径不变：
+Headless 严格先取得当前 Global 节点接受，再逐章并发生成 Blueprint，最后由独立 Blueprint Commander 交叉接受。
+Global 与 Blueprint 各自持续会话、最多四次内容调用；新执行不预审、不另开 Global 终审。
 
 <!-- reviewer-contract:stage2:begin -->
-1. `PASS`：主体与原文逐项一致，且集合完整性已做正向与反向核对；scope 总理由与逐项例外理由都写明分母和核验位置。完整 blocking scope 的 decisions 模板是例外可选身份闭集，允许提交无重复有序子序列，空数组表示没有例外；scope 默认裁决不覆盖例外 FAIL/UNVER。原生 schema 明示 `novel-stage2-scope-review-delta-v1` 时，只返回绑定 exact request 的 digest、scope 的 state/reason/evidence，以及例外的 item_id/state/reason/evidence；全部 subject/scope/wrapper 固定身份由 Supervisor 注入。引用整个证据主体时 start/end 同时为 null，区间证据要求 end 严格大于 start，不使用 0/0 代替未知范围。
-2. `FAIL`：存在可指向的冲突、错抽或漏抽；当前增量里的问题必须一次列全。事实确有错误时从 `stage2.global --emit-edit-template` 取得当前 typed GlobalEdit。字段 patch 只可提交模板已有行的无重复有序子序列，已提交行的 subject id 与字段集合全部绑定；集合完整性的新增、删除或拆分只填写模板给出的 `collection_edits[].operations`，不得改 `collection` 或 `expected_collection_sha256`。operation 是关闭式判别联合：`add` 只含 `op + item`，`delete` 只含 `op + subject_id`，`split` 只含 `op + subject_id + items` 且 `items` 至少两项；没有 `value` 字段，`item/items` 必须使用 submission option 按当前 collection 下发的成员 model 与局部 Pydantic schema。`delete/split.subject_id` 只能从 submission option 的 `existing_subject_ids_by_collection` 对应冻结 current collection enum 选择；合法 `add.item` 的新 ID 不受该 enum 限制，直接 patch 的现存主体也不从 enum 中剔除，若同交 delete/split 仍由跨写口规则拒绝。同一 collection 的全部 operations 必须同时满足四条跨操作 ID 不变量：`split` 输出不得复用该 `subject_id`，`delete/split` 触及的输入 ID 不得重复，`add/split` 产生的输出 ID 不得重复，全部输入 ID 与输出 ID 必须不相交。所有 collection operations 应用后，直接字段 patch 的主体必须仍存在，不能一边 patch 同一主体、一边 delete/split；relation endpoint、secret knowledge subject 与 address 等外键必须在修后主体集合中存在，引用新主体时必须在同一 edit 实际 add/split 它。`exact_request` 中 canonical `collection_edits` 仍是 list；仅当本 task 唯一开放 apply-edit 且 native schema 明示 `novel-stage2-reviewer-delta-v2` 时，运输层 `collection_edits` 才是按模板开放集合固定键的 object，每个集合天然至多一次，不得输出旧 row-list transport。compact 中各 collection 固定键的空数组、其他 patch 数组的空数组与 setting/replacement 的 `null` 默认都表示本次不提交该写口；只有 task 与 exact_request 的 `waiting_on` 同为 `WAITING_ON_STAGE2_EDIT_CORRECTION` 且携 durable failed edit 时才启用 merge/drop：此时空 collection 键保留 failed baseline，撤销必须使用开放的 `drop_targets`；ledger `purpose=correction` 本身不能启用该语义。不得把模板 no-op 行带入 canonical edit。producer 必须先对同一回答的全部 collection 一次聚合诊断，再应用任何 operation；安全拒因只暴露可信 `collection/category/count` 与 `diagnostic_sha256`，不得回显模型主体 ID、正文或任意 `loc/repr/detail`。收到 collection breakdown 时，普通 sparse retry 应删去或纠正对应失败 operations，也可用空数组取消本次 collection 提交；只有上述 durable edit correction 才替换或 drop failed operations，且空数组保留 failed baseline。Stage2 每个 Global/MainText 主体最多四席 Commander：一席完整审阅、至多两席定向订正、一席只读独立终审；每席使用新的 logical/provider session，同席内因网络中断的 resume 不占新席。订正席的包只含仍未闭合或因依赖变化重开的 subject cards；终审席读全部 blocking 项（含已 PASS 的理由与证据）、整书正文与 Blueprint 工作包，只能 confirm 或以自己为 actor 把指定项 reopen 为 FAIL/UNVER，不得提交任何修改，也不得为通过而复述前席理由。`post_edit_review` 绑定修前 workpack、source 与完整旧未闭合 scope：本 edit 新打开的项才走默认自审，review_scope 中 edit 后以相同 `item_id + subject_sha256` 存活的旧 FAIL/UNVER 必须全部在 `decisions[]` 显式复判，不能因逻辑上已随 edit 修好就省略。例：只改既有 relation 的字段而不改变 relation ID 集时，`relation_set_complete` 的主体 hash 不变，仍须显式决定。canonical full-action 每行必须显式提交 `item_id / expected_subject_sha256 / state / reason / evidence`；compact transport 每行则提交 `item_id / state / reason / evidence / generation_disposition`，`expected_subject_sha256` 由 Supervisor 可信注入，且无 disposition 时也必须显式提交 `null`。两种载体没有可登记证据时都必须显式提交 `evidence: []`。不能重复提交同一 review，也不能用“已知问题”把 FAIL 当成披露放行。
-3. `UNVER`：证据不足以安全判断；绝不改写成 PASS。只有当前 submission option 明确给出 `quarantine_group`、且该 kind 的 `generation_impact=quarantine_or_fix` 时，才可在阅读完整组后填写隔离理由：状态仍为 UNVER，原始事实与审计保留，下游写作视图删除完整组。`generation_impact=must_fix` 只有在证据支持 PASS 或能指出真实事实错误并用 GlobalEdit 修正时才能收口；材料仍不足就保持 UNVER 并以 `stopped` 结束，不为追求全绿臆造编辑。`disclose` 项不阻断生成但继续披露。
+1. Global Commander 与 Executor 独立；同一工作单元连续审阅和订正，最多四次内容调用，首次、格式纠错与语义纠错都计入；换候选、会话或进程不补预算。网络重试独立计账，确定性重放不调用模型。
+2. 逐项核对工作包的完整正文、事实与正式证据；集合完整性要正向和反向核对。PASS 必须有位置与分母，FAIL 必须指出具体冲突或漏抽，无法判断保持 UNVER/uncertain，不因材料不足发明事实或返工。
+3. 当前逐项决定通过 producer 并使 blocking 面 generation-safe 时，同时构成该 Global Commander 的 typed 接受；未处置的 FAIL/pending/UNVER 不得接受。可隔离 UNVER 仅按既有 secret/relation/world_rule 组白名单处理，disclosure 不自动 PASS。
+4. 局部事实错误提交同包 GlobalEdit：稳定 subject/hash 与证据绑定不可修改；collection delta 只使用 add/delete/split 的现役 schema，外键必须在修后全集闭合。post_edit_review 必须精确覆盖修前未闭合项：修改的新主体要给修后结论，仍存活的旧 FAIL/UNVER 要显式复判。代码负责归一、HARD、归档和正式提交，模型不能写盘。
+5. 大范围生产错误使用 typed rework，owner 只可为 stage2.global；明确所需修订与证据，交回原 Executor。没有把握用 uncertain，必须停止用 stop。不得主动处理尚未生成的 Blueprint。
+6. Global 接受后才开始 Blueprint 逐章并发；没有预审，也没有额外 Global-only 终审。任何新反馈都以本轮落盘工作包为依据，历史对话不能代替当前证据。
 <!-- reviewer-contract:stage2:end -->
 
 Headless AgentRun 只有在当前 immutable task **唯一开放的 submission option 恰为** Stage2
@@ -162,9 +158,9 @@ patch/collection 行是模板的无重复有序子序列，reviewed edit 的 `po
 apply→normalize→HARD→reenumerate/completeness；组装器绝不替代本地判据或确定哪些 review item 在修后
 存活。所有 collection operations 应用后，direct patch 主体必须仍存在，修后外键必须解析到实际主体；
 结构冲突由 GlobalEdit loader 统一拒绝，依赖正式 Global/MainText 的判据由 producer 共用纯预检在
-full action durable、原席闭账后且 canonical Executor 前完成。同一回答的全部 `collection_edits` 必须先在
+原响应、prepared receipt 与 full action 耐久保存且成本/会话尾账复验后、canonical Executor 前完成。同一回答的全部 `collection_edits` 必须先在
 修前 current collection 上一次聚合 stale/invalid operation diagnostics，再应用任何 operation，不能逐集合
-失败而消耗订正席。业务拒绝记回原 provider-response digest
+失败而消耗内容预算。业务拒绝记回原工作单元 turn 的 provider-response digest
 且只暴露可信 `collection/category/count` 与完整 `diagnostic_sha256`，不回显模型主体 ID、正文或任意
 `loc/repr/detail`，也不启动 Executor；预检完整性/审计异常
 则保留 action 并以 unknown 停止。provider compact 回答的 digest 只用于拒因、重复请求与 no-progress；若保存 assembled full
@@ -190,30 +186,25 @@ binding 零模型重放；只有 action landed 后才删除记录、由书内 ty
 ⚠ 「不阻断」一旦顺手变成「不列出」，这次分级就成了一次静默删审计。分类只从
 `contracts/invariants.py::review_effect_of` 取，本 skill 不复制第二张表。
 
-“重叠”不放宽同书写盘互斥：blueprint producer、`--review-decisions` 与 typed global edit 不并发改文件。
-可以在 blueprint 运行中完成阅读与 decisions 草稿，等 producer 写盘结束再提交。若复核发现 global
-需要 typed edit，先修 global；改变实际人物称名候选 inventory 会让 blueprint stale，必须重建，
-只改未消费字段则以 freshness 结论复用。review 早于 blueprint 完成也可以保存，但 Stage2 状态仍关闭，
+blueprint producer、`--review-decisions` 与 typed global edit 不并发改文件。Global Commander 必须先完成
+本节点接受，再生成 Blueprint；没有边生成边预审的执行路径。若 Blueprint 交叉复核发现 Global
+需要 typed edit，先按 owner=stage2.global 回源；改变实际人物称名候选 inventory 会让 Blueprint stale，必须重建，
+只改未消费字段则以 freshness 结论复用。Global 接受必须早于 Blueprint 生成，Blueprint 接受之后 Stage2 才收口，
 不得把“已有人审”冒充整层已收口。
 
-Stage2 global 的总预算是 **1 次 Executor 产出 + 每个 Global/MainText 主体最多四席 Commander**：
-席 1 完整审阅；席 2～3 只看仍未闭合、因依赖变化重开的 subject cards 或精确拒因；席 4 是只读独立终审
-（`approval:stage2-global-final-review`），它收到不压缩的全量 blocking 行（含已 PASS 的理由与证据）、整书
-正文与 Blueprint 工作包，只能提交 `Stage2FinalReviewRequest` confirm，或以自己为 actor 用
-`--review-decisions` 把指定项 reopen 为 FAIL/UNVER；订正席不得占第四席，终审席不得编辑 Global。每席都开
-新的 logical/provider session，同席内因网络中断的 resume 不占新席；自足增量包携带 subject/evidence
-catalog、claim→evidence 索引、typed binding 与 surviving decisions，不依赖供应商隐藏上下文。review/edit 执行都是 0-wire，不新建 Executor 会话也不占
-模型轮次。业务主体未变化却重复等价 typed 动作、相同 progress fingerprint 或 blocker 数反增时由
-Supervisor 关闭式停止。typed request 被 loader 拒绝，或 canonical action 以 exit 2 在写盘前终止时，
-下一席收到紧凑 workpack 与精确拒因；订正席用尽就保留拒绝事实并停止。若 action 已产生绑定当前
-`global_edit.json` 的 `.INVALID`，队列必须在 Blueprint redo 之前暴露
-`recovery:stage2-global-reviewed-edit`；current correction workpack 只带正式 review、失败 edit/INVALID 的精确
-HARD 与席位声明。席位在模型启动前以 `started` 持久化，pause/resume、服务或代码重启都不得重置。
-随后运行 Stage2 唯一显式复检
-`stage2.blueprint --check-only`：只有 global 与 blueprint 均 current、联合 HARD 通过、评测面 current
-且 blocking 面 generation-safe，才可运行 Stage4A 或任何后续付费/组装/下载路径。CLI、API、队列、
-组装与下载会重复执行同一道闸；外层 Agent `exit 0` 不覆盖结论。pending、FAIL、未处置或不可隔离
-UNVER 仍阻断；已隔离 UNVER 仍进 inbox/终审包并把最终态限制为 `ready_with_disclosures`。
+Global E 与每章 Blueprint E 各自最多 4 次内容调用；Global C 和独立 Blueprint C 各自最多 4 次。
+首次、格式纠错和明确返工均占内容预算；网络尝试独立有界，确定性 apply/revalidate/replay 不占内容。
+候选变化、换 session、换 run/epoch 或重启均不返还预算。保存回答与 typed 决定后优先零模型恢复，
+同一错误无进展提前停止。只有两个节点均 current、Global generation-safe、两个 Commander 均已接受，
+才可进入 Stage4；已读不代替接受，UNVER 不改名 PASS。
+
+<!-- reviewer-contract:stage2-blueprint:begin -->
+1. 你是与 Global Commander 独立的 Blueprint Commander。完整阅读逐章蓝图与正文，并结合工作包 Global 的事实、证据、时序、人物与隔离状态交叉核验；不得仅凭机械 HARD 通过接受。
+2. 本工作单元最多四次内容调用，同一修复过程连续审阅。候选修改、执行者返工、会话切换、进程恢复或回源都不重发预算；Global Commander 的四次预算另计。
+3. 接受只用绑定当前 bpr4 工作包的 typed accept。局部问题可提交同包 Blueprint patch：仅修改现存 fact_id/beat_id 的 typed 候选或叙事关系，章号保持不变。post_edit_accept 声明修后核验，必须绑定修前完整交叉工作包；代码用 producer 同一 HARD、归一与来源口验证并落盘。
+4. 大范围蓝图重构用 rework，owner=stage2.blueprint，并列出精确章节与有据问题；人物名册或全局事实错误回源 owner=stage2.global，不能在蓝图里替上游事实打补丁。回源后保留自己的预算与工作单元，Global 重新接受后按 review_delta 的 changed_fields、affected_references 与 affected_chapter_ordinals 定向复核；reusable_accepted_chapter_ordinals 保留原接受依据。mode=full 表示无法证明局部范围，必须完整交叉核验。
+5. 不知道用 uncertain，停止用 stop；两者都不能被代码解释成重新生成。Global 与 Blueprint 两份 current typed 接受齐备后由确定性 façade 收口，seen 只是阅读事实，不授予接受。
+<!-- reviewer-contract:stage2-blueprint:end -->
 
 ## Stage4 结构代批
 
@@ -253,22 +244,15 @@ novel.cli approval gate s2 <SID> --base <BASE>
 `stage2.global --emit-review-workpack` 顶层的 `review_token`（`s2gr1_` 前缀，绑定 Global 主体、review
 完整字节、正文主体与 blocking scope），`actor` 是读完并确认的人/席位；review 任一项改判后旧 token
 失效，必须重读。`seen` 会绑定当前 Stage2 视图，`gate` 会绑定当前产物 proof 并逐级检查前置。
-`approval backfill` 不会制造 `seen.read/global` 或 `gate.s2`，不能拿它代替这段阅读事实。
+`approval backfill` 不会制造 `seen.read/global` 或 `gate.s2`，也不能把冻结旧 base 迁入当前工作流。
 通用 `approval gate` 只公开 `s0/s1/s2`；s4 必须走下面带完整 subject 与逐章决定的
 typed structure apply，不能匿名盖章。
 
-在 AgentRun 的标准 reviewer 路径中，只有第四席只读终审提交一份
-`Stage2FinalReviewRequest`（actor/reason + Global `s2gr1_` token + Blueprint `bpr3_` token）；
-RunSupervisor 用一枚 launch ticket 启动唯一的：
-
-```text
-novel.cli approval close-stage2 <SID> --base <BASE> --input <STAGE2_FINAL_REVIEW.json>
-```
-
-该 façade 在同一个可取消进程内严格复用上面的五步服务顺序。它不省略任何校验，
-不生成 Global review、不替 Commander 阅读，也不修改小说 artifact；其目的只是避免
-Supervisor 在一枚单次 ticket 内继续启动五棵独立子进程。人工/诊断路径仍可逐步执行
-上面的五条命令。
+新 AgentRun 先提交 `stage2_global_review` 当前 token 的 typed 接受，然后生成 Blueprint，
+再由独立 Blueprint Commander 提交 `stage2_blueprint_review` 接受。两份接受分别绑定本节点
+完整工作包，seen 只表示读过，不能替代接受。两份接受已经落盘但 gate 尾部未完成时，使用
+operator 发布的 FREE `stage2.blueprint --close-review` 补提交；该入口不再请求模型。
+历史 `Stage2FinalReviewRequest / approval close-stage2` 只保留冻结协议的审计含义，新流程不调用。
 
 ### A 候选设计审阅
 
@@ -276,7 +260,6 @@ A 机械通过不等于可进 B。先读取绑定当前候选与完整 design su
 决定模板；工作包只缩小阅读面，不替你填决定：
 
 ```text
-novel.cli approval backfill <SID> --base <BASE>  # 仅旧审批记录需要，普通 show 不迁移
 novel.cli approval workpack design <SID> --base <BASE>
 novel.cli approval template design <SID> --base <BASE> --actor <ACTOR> \
   --reviewer-kind delegated_operator --review-run-id <RUN_ID> --reason <总理由>
@@ -400,6 +383,11 @@ exact flags 交给 Executor。A 修订完成并重新全书审阅后，B 仍需�
 Stage5 写作授权与两次 Stage4 审阅都是独立的人类决定。只有当前最终 typed 结构决定覆盖全书且全部
 `accept`、并已单独生成 current/fresh WriterContext，才能生成写作授权模板；Commander 不得从 s4
 绿灯、付费总授权或正文外发授权推导这枚决定。
+
+模板携带当前 Stage1 / Stage4 计划 / WriterContext 与 measurement contract 所绑定的完整 subject SHA-256。
+`apply writing` 只接受 typed JSON 的 actor、reason 与完整 current subject；旧 UI 的空 body 兼容入口
+不是 Commander 入口。结构、计划或测量主体漂移后旧授权必须显示为 non-current，不能靠历史
+`writing=true` 继续写作。
 <!-- reviewer-contract:stage5-writing:end -->
 
 ```text
@@ -408,12 +396,7 @@ novel.cli approval apply writing <SID> --base <BASE> --input <决定文件或 ->
 novel.cli approval show <SID> --base <BASE>
 ```
 
-<!-- reviewer-contract:stage5-writing:begin -->
-模板携带当前 Stage1 / Stage4 计划 / WriterContext 与 measurement contract 所绑定的完整 subject SHA-256。
-`apply writing` 只接受 typed JSON 的 actor、reason 与完整 current subject；旧 UI 的空 body 兼容入口
-不是 Commander 入口。结构、计划或测量主体漂移后旧授权必须显示为 non-current，不能靠历史
-`writing=true` 继续写作。
-<!-- reviewer-contract:stage5-writing:end -->
+
 
 ## Stage5 闭合回执
 
@@ -493,6 +476,10 @@ SHA-256 主体的结论对齐后，依次筛选：
    记录命中数/分母与无据意象条数，优先选择无据意象为零、事实密度最高者；检索结果与分母写进终审包。
 5. 仍并列时，比较它与 blueprint 开篇冲突、原作文案体裁和正文首章气质的一致性，并写出审美理由。
 6. 对所有落选候选记录淘汰原因；总报告中的落选残红可保留，但不能混写成所选候选残红。
+
+同一文本出现相互矛盾的语义判断时，先核对完整 SHA-256、轮次、evaluator 指纹和输入
+freshness。确为同输入非确定性时采信更严格的一轮，不用后一次翻绿覆盖前一轮风险；
+把冲突本身写入终审包。
 <!-- reviewer-contract:stage6:end -->
 
 三条候选都不合格时：
@@ -502,11 +489,7 @@ SHA-256 主体的结论对齐后，依次筛选：
 - 通过 `stage6.hook --apply-edit <绝对路径>` 落新一轮；
 - 重新运行机械 check 与 `stage6.semantic`，再选择该候选。
 
-<!-- reviewer-contract:stage6:begin -->
-同一文本出现相互矛盾的语义判断时，先核对完整 SHA-256、轮次、evaluator 指纹和输入
-freshness。确为同输入非确定性时采信更严格的一轮，不用后一次翻绿覆盖前一轮风险；
-把冲突本身写入终审包。
-<!-- reviewer-contract:stage6:end -->
+
 
 `stage6.approve --pick N --actor <ACTOR> --reason <text> --review-token <opaque>`
 前后同时核对：

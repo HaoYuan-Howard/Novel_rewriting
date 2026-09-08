@@ -48,6 +48,8 @@ def _profile() -> AgentProfile:
 
 
 def _ctx(base: Path, *, run_id: str | None = None) -> RunContext:
+    from novel.work_units import initialize_workflow
+    initialize_workflow(base)
     book = base / 'Stage4多会话_901'
     book.mkdir(exist_ok=True)
     ledger = (
@@ -432,7 +434,7 @@ def test_build_node_agent_requires_stage4_factory_and_caps_concurrency(
             ctx, driver=_Driver('shared', ['{"value":1}']))
 
 
-def test_build_node_agent_forwards_typed_repair_and_hard_caps_two_turns(
+def test_build_node_agent_forwards_typed_repair_and_shared_four_turn_budget(
         tmp_path: Path,
 ) -> None:
     ctx = _ctx(tmp_path)
@@ -468,5 +470,5 @@ def test_build_node_agent_forwards_typed_repair_and_hard_caps_two_turns(
     assert isinstance(agent, Stage4DesignAgent)
     assert agent.repair_decision_sha256 == scope.decision_sha256
     assert agent.repair_scope == scope
-    assert agent.pool.max_turns == 2
+    assert agent.pool.max_turns == 4
     agent.pool.close()

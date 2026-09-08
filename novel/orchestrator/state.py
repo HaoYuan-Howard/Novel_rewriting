@@ -1003,7 +1003,9 @@ def stage2_frozen_v6_subject_validated(ov: NovelOverview) -> bool:
     )
 
 
-def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
+def resume_verdict(
+    ov: NovelOverview, node: str, *, flags: tuple[str, ...] = (),
+) -> tuple[str, str]:
     """这个节点该不该跑，以及**为什么**。返回 `(结论, 一句话)`。
 
     ⚠⚠ **`R-14.4`：续跑前必须重新判定新鲜度。上游在中断期间变过，
@@ -1017,6 +1019,13 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
     AgentRun 的单步 operator 只能再经 :func:`operator_redo_flags` 证明存在唯一的
     canonical 重放参数，且每执行一步后重新采快照，才允许执行其中一小部分 `redo`。
     """
+    # 明确工作单元动作不同于“补缺产物”：产物已存在也不能吞掉待消费的
+    # typed 返工或接受补提交。队列负责凭据当前性，producer 在执行时再核验。
+    if node == 'stage2.blueprint' and flags == ('--close-review',):
+        return RESUME_RUN, '零模型核验已有两份节点接受并补齐审批链'
+    if (node in {'stage2.global', 'stage2.blueprint'} and len(flags) == 2
+            and flags[0] == '--review-token' and bool(flags[1])):
+        return RESUME_RUN, '消费状态机已登记的当前 typed 返工请求'
     spec = NODES.get(node)
     if spec is None:
         return RESUME_RUN, f'未知节点 {node!r}'

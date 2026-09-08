@@ -12,7 +12,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from contracts.schema.orchestration import AgentProfile
-from novel import agent_session_audit, prov
+from novel import agent_session_audit, prov, work_units
 from novel.agents import (
     CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1,
     CLAUDE_STRUCTURED_DELIVERY_V1,
@@ -41,8 +41,10 @@ class _FakeDriver(AgentDriver):
     provider = 'openai'
     model = 'gpt-5.6-sol'
 
-    def __init__(self, responses: list[str]) -> None:
+    def __init__(self, responses: list[str], *,
+                 session_id: str = 'provider-session-1') -> None:
         self.responses = list(responses)
+        self.session_id = session_id
         self.calls: list[tuple[str, str | None, AgentRequest]] = []
         self.closed = False
 
@@ -54,7 +56,7 @@ class _FakeDriver(AgentDriver):
 
     def _turn(self) -> AgentTurn:
         return AgentTurn(
-            session_id='provider-session-1', content=self.responses.pop(0),
+            session_id=self.session_id, content=self.responses.pop(0),
             model=self.model, actual_reasoning_effort='high',
             usage=AgentUsage(
                 prompt_tokens=10, completion_tokens=3, reasoning_tokens=2,
@@ -70,7 +72,7 @@ class _FakeDriver(AgentDriver):
     def resume(self, profile: AgentProfile, session_id: str,
                request: AgentRequest) -> AgentTurn:
         assert profile.model == self.model
-        assert session_id == 'provider-session-1'
+        assert session_id == self.session_id
         self.calls.append(('resume', session_id, request))
         return self._turn()
 
@@ -215,6 +217,188 @@ def test_fresh_session_does_not_adopt_failed_same_purpose_attempts(tmp_path):
         ctx.ledger.request_identity_for_attempt(succeeded_row['attempt_id'])]
     assert failed_row['attempt_id'] not in {
         row['attempt_id'] for row in checkpoint['attempt_links']}
+
+
+def test_no_checkpoint_failures_share_four_turns_across_runs(tmp_path):
+    """坏 JSON 没有 checkpoint；换 run、改候选或换 provider 都不重新发预算。"""
+    for index in range(4):
+        ctx = _ctx(tmp_path)
+        driver = _FakeDriver(['not-json'], session_id=f'failed-provider-{index}')
+        # 每个会话只走一次，再模拟退出；跨会话共用的业务上限仍是 4。
+        client = SessionAgentClient(ctx, _profile(), driver, max_semantic_turns=1)
+        with pytest.raises(LlmFailed):
+            client.ask_json('SYS', f'candidate-{index}', model_cls=_Answer,
+                            purpose='stage2.global')
+        client.finish(process_state='ok', delivery_state='failed')
+        client.close()
+        assert len(driver.calls) == 1
+    latest = _ctx(tmp_path)
+    forbidden = _FakeDriver([])
+    client = SessionAgentClient(latest, _profile(), forbidden)
+    with pytest.raises(LlmFailed, match='工作单元内容预算已耗尽'):
+        client.ask_json('SYS', 'commander-rework', model_cls=_Answer,
+                        purpose='stage2.global')
+    client.close()
+    assert forbidden.calls == []
+    assert work_units.budget_for(latest, scope='book').used == 4
+    assert len(_rows(ledger_path(tmp_path))) == 4
+
+
+def test_saved_response_recovers_across_run_without_new_driver_turn(tmp_path):
+    """回答已保存、producer 尚未 checkpoint 的退出优先原字节重放。"""
+    original = _ctx(tmp_path)
+    first = SessionAgentClient(original, _profile(), _FakeDriver(['{"value":8}']))
+    assert first.ask_json('SYS', 'subject', model_cls=_Answer,
+                          purpose='stage2.global').value == 8
+    # close 只关进程资源，不冒充 producer 已采用候选。
+    first.close()
+    resumed = _ctx(tmp_path)
+    driver = _FakeDriver([])
+    client = SessionAgentClient(resumed, _profile(), driver)
+    assert client.ask_json('SYS', 'subject', model_cls=_Answer,
+                           purpose='stage2.global').value == 8
+    client.finish(process_state='ok', delivery_state='delivered')
+    client.close()
+    assert driver.calls == []
+    assert len(_rows(ledger_path(tmp_path))) == 1
+    assert work_units.budget_for(resumed, scope='book').used == 1
+    assert work_units.list_unit_views(tmp_path, resumed.sid)[0]['state'] == 'adopted'
+
+
+@pytest.mark.parametrize('window', ['before_cost', 'after_cost', 'before_session', 'after_session'])
+def test_prepared_response_receipt_repairs_original_ledgers_without_repurchase(
+    tmp_path, monkeypatch, window,
+):
+    original = _ctx(tmp_path)
+    first_driver = _FakeDriver(['{"value":11}'])
+    first = SessionAgentClient(original, _profile(), first_driver)
+    with monkeypatch.context() as fault:
+        if window in ('before_cost', 'after_cost'):
+            record = original.ledger.record
+
+            def fail_record(**kwargs):
+                if window == 'after_cost':
+                    record(**kwargs)
+                raise OSError('synthetic receipt window')
+
+            fault.setattr(original.ledger, 'record', fail_record)
+        else:
+            append = agent_session_audit.append_provider_turn
+
+            def fail_session(base, event):
+                if window == 'after_session':
+                    append(base, event)
+                raise OSError('synthetic receipt window')
+
+            fault.setattr(agent_session_audit, 'append_provider_turn', fail_session)
+        with pytest.raises(OSError, match='synthetic receipt window'):
+            first.ask_json('SYS', 'subject', model_cls=_Answer, purpose='stage2.global')
+        first.finish(process_state='ok', delivery_state='unknown')
+    first.close()
+    resumed = _ctx(tmp_path)
+    driver = _FakeDriver([])
+    client = SessionAgentClient(resumed, _profile(), driver)
+    assert client.ask_json('SYS', 'subject', model_cls=_Answer,
+                           purpose='stage2.global').value == 11
+    client.close()
+    # 补账成功但 producer 再次退出；同 receipt 继续恢复也不能二次加账。
+    repeated = _ctx(tmp_path)
+    replay_driver = _FakeDriver([])
+    client = SessionAgentClient(repeated, _profile(), replay_driver)
+    assert client.ask_json('SYS', 'subject', model_cls=_Answer,
+                           purpose='stage2.global').value == 11
+    client.finish(process_state='ok', delivery_state='delivered')
+    client.close()
+    assert driver.calls == replay_driver.calls == [] and len(first_driver.calls) == 1
+    rows = _rows(ledger_path(tmp_path))
+    assert len(rows) == 1 and rows[0]['run_id'] == original.run_id
+    sessions = agent_session_audit.fold(agent_session_audit.read_events(tmp_path))
+    assert len(sessions) == 1 and len(sessions[0].turns) == 1
+    assert sessions[0].start.parent_run_id == original.run_id
+    assert sessions[0].delivery_state == 'delivered'
+    assert work_units.budget_for(resumed, scope='book').used == 1
+
+
+def test_prepared_receipt_refuses_a_changed_original_cost_row(tmp_path, monkeypatch):
+    original = _ctx(tmp_path)
+    client = SessionAgentClient(original, _profile(), _FakeDriver(['{"value":12}']))
+    with monkeypatch.context() as fault:
+        def fail_session(_base, _event):
+            raise OSError('synthetic before session')
+
+        fault.setattr(agent_session_audit, 'append_provider_turn', fail_session)
+        with pytest.raises(OSError):
+            client.ask_json('SYS', 'subject', model_cls=_Answer, purpose='stage2.global')
+        client.finish(process_state='ok', delivery_state='unknown')
+    client.close()
+    rows = _rows(ledger_path(tmp_path))
+    rows[0]['completion_tokens'] = 999
+    ledger_path(tmp_path).write_text(json.dumps(rows[0]) + '\n', encoding='utf-8')
+    resumed = _ctx(tmp_path)
+    driver = _FakeDriver([])
+    restored = SessionAgentClient(resumed, _profile(), driver)
+    with pytest.raises(ProvenanceRefused, match='原尝试成本行与冻结回执不一致'):
+        restored.ask_json('SYS', 'subject', model_cls=_Answer, purpose='stage2.global')
+    restored.close()
+    assert driver.calls == []
+    assert _rows(ledger_path(tmp_path)) == rows
+    assert work_units.budget_for(resumed, scope='book').used == 1
+
+
+def test_stage5_rewrite_and_generation_share_chapter_budget(tmp_path):
+    ctx = _ctx(tmp_path, 'stage5.write')
+    progress = RequestProgress(chapter=3, index=1, total=1)
+    for index, purpose in enumerate(('stage5.write·ch3', 'stage5.write:revise:ch3')):
+        driver = _FakeDriver(['not-json', 'not-json'], session_id=f'chapter-provider-{index}')
+        client = SessionAgentClient(
+            ctx, _profile(), driver, chapter=3, max_semantic_turns=2)
+        with pytest.raises(LlmFailed):
+            client.ask_json('SYS', f'request-{index}', model_cls=_Answer,
+                            purpose=purpose, progress=progress)
+        client.finish(process_state='ok', delivery_state='failed')
+        client.close()
+    assert work_units.budget_for(ctx, scope='chapter:3').used == 4
+    assert work_units.budget_for(ctx, scope='chapter:4').used == 0
+
+
+def test_distinct_chapter_sessions_can_enter_wire_concurrently(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    ctx = _ctx(tmp_path, 'stage5.write')
+    entered = Barrier(2)
+
+    class ParallelDriver(_FakeDriver):
+        def start(self, profile, request):
+            entered.wait(timeout=5)
+            return super().start(profile, request)
+
+    clients = [SessionAgentClient(
+        ctx, _profile(), ParallelDriver(['{"value":1}'], session_id=f'chapter-{chapter}'),
+        chapter=chapter) for chapter in (1, 2)]
+
+    def generate(chapter):
+        client = clients[chapter - 1]
+        result = client.ask_json('SYS', f'第{chapter}章', model_cls=_Answer,
+                                 purpose=f'stage5.write·ch{chapter}',
+                                 progress=RequestProgress(chapter=chapter, index=chapter, total=2))
+        client.finish(process_state='ok', delivery_state='delivered')
+        client.close()
+        return result.value
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        assert list(executor.map(generate, (1, 2))) == [1, 1]
+    assert [work_units.budget_for(ctx, scope=f'chapter:{chapter}').used
+            for chapter in (1, 2)] == [1, 1]
+    assert len(_rows(ledger_path(tmp_path))) == 2
+
+
+@pytest.mark.parametrize('retries', [-1, 4, True, 1.5])
+def test_network_retry_boundary_refuses_out_of_contract_configuration(tmp_path, retries):
+    ctx = _ctx(tmp_path)
+    driver = _FakeDriver([])
+    with pytest.raises(ValueError, match='max_delivery_retries'):
+        SessionAgentClient(ctx, _profile(), driver, max_delivery_retries=retries)
+    assert driver.calls == []
 
 
 def test_business_rejection_only_sends_feedback_on_resume(tmp_path):

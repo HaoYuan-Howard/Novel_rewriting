@@ -44,6 +44,7 @@ from contracts.invariants import (
     HOOK_APPROACHES,
     HOOK_RECIPE,
     HOOK_SLOTS,
+    WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS,
 )
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import (
@@ -201,10 +202,9 @@ class HookParams(StrictModel):
     #: 仍须显式写入，不能靠默认值让正式产物无法区分付费 A/B。
     prompt_json_layout: Literal['pretty-v1', 'compact-v1'] = 'pretty-v1'
     candidate_retry_max_tokens: int = Field(default=24000, ge=1)
-    # ``0`` is the neutral migration value for v2 artifacts: those artifacts
-    # predate candidate retrying and therefore must not claim that a retry was
-    # configured.  Current producers still use the default of exactly one.
-    candidate_retry_limit: int = Field(default=1, ge=0, le=1)
+    #: legacy 局部修订共用书级内容上限；Agent 交完整替换候选，记 0 表示不启用此局部协议。
+    #: 4 不是每槽单独发放的轮数，预算仍由工作单元账核验；旧 v2 不迁移。
+    candidate_retry_limit: Literal[0, WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS] = WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS
     candidate_retry_effort: Literal['low'] = 'low'
     candidate_retry_thinking: Literal[False] = False
 
@@ -217,7 +217,8 @@ class HookCandidateRetry(StrictModel):
     """
 
     slot: Literal[HOOK_SLOTS]
-    attempt: int = Field(default=1, ge=1, le=1)
+    #: 同一槽位的实际定向请求序号；不同槽位分别从 1 起，但共享书级内容预算。
+    attempt: int = Field(default=1, ge=1, le=WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS)
     failure_items: list[str] = Field(min_length=1)
     failure_evidence: Fp10
     user_prompt: Fp10
@@ -267,9 +268,23 @@ class HookProvenance(LlmProvenance):
     #: `model` 由 `LlmProvenance` 定成必填，本层不重复定义。
     params: HookParams
 
-    #: 每条初始脏候选恰好一次定向重试。默认空 = **这一跑没有重试过任何候选**，
-    #: 是产地不写这一格时的中性值。（曾写作「兼容旧产物」，而迁移机制已整批删除。）
-    candidate_retries: list[HookCandidateRetry] = Field(default_factory=list)
+    #: 同槽 HARD 严格下降时可连续修订。空表示本次没有局部请求，不是缺失审计。
+    candidate_retries: list[HookCandidateRetry] = Field(
+        default_factory=list, max_length=WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS)
+
+    @model_validator(mode='after')
+    def _candidate_attempts_are_ordered(self) -> 'HookProvenance':
+        if self.params.candidate_retry_limit == 0 and self.candidate_retries:
+            raise ValueError('未启用局部候选协议时不能记录 candidate_retries')
+        latest: dict[str, int] = {}
+        for retry in self.candidate_retries:
+            expected = latest.get(retry.slot, 0) + 1
+            if retry.attempt != expected:
+                raise ValueError(
+                    f'{retry.slot} 的 candidate retry attempt 必须按实际请求顺序连续且唯一：'
+                    f'期望 {expected}，实得 {retry.attempt}')
+            latest[retry.slot] = retry.attempt
+        return self
 
 
 class Hook(StrictModel):

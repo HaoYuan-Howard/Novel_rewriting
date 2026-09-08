@@ -31,7 +31,7 @@ from typing import Any, Iterable, Mapping
 from contracts.schema import Usage
 from novel import run_identity
 from novel.appendlog import (
-    append_line, append_line_under_process_lock, process_append_lock,
+    append_line, append_line_under_process_lock, append_transaction, process_append_lock,
 )
 from novel.errors import ProvenanceRefused
 from novel.observability import RequestProgress
@@ -200,8 +200,8 @@ def prepared_recovery_audit_row(
     return row
 
 
-def append_commander_call(
-        base: str | Path, *, run_id: str, session_run_id: str, sid: str,
+def _commander_call_row(
+        *, run_id: str, session_run_id: str, sid: str,
         attempt_id: str, request_model: str, requested_effort: str,
         code: str, protocol_version: str,
         actual_model: str | None = None,
@@ -213,8 +213,8 @@ def append_commander_call(
         error_kind: str | None = None,
         latency_ms: int | None = None,
         activity: str | None = None,
-        response_sha256: str | None = None) -> None:
-    """追加一次整书 Commander 调用的成本事实。
+        response_sha256: str | None = None) -> dict[str, Any]:
+    """构造一次整书 Commander 调用的成本事实；正常追加与恢复共用。
 
     Commander 不是 ``NODES`` 的成员，故意以 ``role='commander'``、``node=null``
     落在同一本成本账里；拿一个假 node 填空会污染完成度与按节点成本统计。它也不
@@ -332,9 +332,50 @@ def append_commander_call(
         'chapter_index': None,
         'chapter_total': None,
     }
-    append_line(
-        ledger_path(base),
-        json.dumps(row, ensure_ascii=False, sort_keys=True, allow_nan=False))
+    return row
+
+
+def append_commander_call(base: str | Path, **original_kwargs: Any) -> None:
+    """追加 Commander 调用；字段与验证只由同一行构造器定义。"""
+    row = _commander_call_row(**original_kwargs)
+    append_line(ledger_path(base), json.dumps(
+        row, ensure_ascii=False, sort_keys=True, allow_nan=False))
+
+
+def reconcile_commander_call(
+        base: str | Path, *, read_only: bool = False,
+        **original_kwargs: Any) -> None:
+    """核验或补齐已保存的原 Commander 成本行，不改归属、不重复计费。
+
+    同一 attempt 的原事实必须逐字段相等；只有追加时间不可从 receipt 重建，
+    因此不参与比较。只读消费者遇到缺账必须拒绝，不能因读取动作创建成本事实。
+    """
+    expected = _commander_call_row(**original_kwargs)
+    path = ledger_path(base)
+
+    def check() -> bool:
+        matches = [row for row in read_jsonl_rows(path)
+                   if row.get('attempt_id') == expected['attempt_id']]
+        if not matches:
+            if read_only:
+                raise ProvenanceRefused('原 Commander attempt 成本行缺失，须先恢复原账')
+            return False
+        wanted = {key: value for key, value in expected.items() if key != 'at'}
+        if len(matches) != 1 or {
+                key: value for key, value in matches[0].items() if key != 'at'} != wanted:
+            raise ProvenanceRefused('原 Commander attempt 成本行与持久 receipt 不一致')
+        return True
+
+    if read_only:
+        check()
+        return
+    with append_transaction(path):
+        if check():
+            return
+        if path.exists() and path.stat().st_size and not path.read_bytes().endswith(b'\n'):
+            raise ProvenanceRefused('成本账有未提交尾行，拒绝在其后补写 Commander 事实')
+        append_line_under_process_lock(path, json.dumps(
+            expected, ensure_ascii=False, sort_keys=True, allow_nan=False))
 
 
 def _adoption_id(*, run_id: str, node: str, purpose: str, attempt_id: str,
@@ -528,7 +569,7 @@ class CostLedger:
     #: counter 同源更新，使 ``path=None`` 的同进程运行也能按
     #: purpose 聚合，不需要从请求 identity 猜 token。这里仍把
     #: sid/node 收进 key，不许同一 run 里恰好同名的其他请求串账。
-    _by_purpose: dict[tuple[str, str, str], _UsageCounter] = field(
+    _by_purpose: dict[tuple[str | None, str | None, str], _UsageCounter] = field(
         default_factory=dict, repr=False)
 
     #: 本 run 的 ``attempt_id → request_fingerprint`` 精确索引。
@@ -545,8 +586,8 @@ class CostLedger:
     #: 产物认领**的 attempts 重新纳入本次 provenance 窗口。按 purpose 过滤，不能把
     #: 同一节点的另一章/另一相调用一起认领。
     _request_purposes: dict[str, str] = field(default_factory=dict, repr=False)
-    _request_sids: dict[str, str] = field(default_factory=dict, repr=False)
-    _request_nodes: dict[str, str] = field(default_factory=dict, repr=False)
+    _request_sids: dict[str, str | None] = field(default_factory=dict, repr=False)
+    _request_nodes: dict[str, str | None] = field(default_factory=dict, repr=False)
     _request_chapters: dict[str, int | None] = field(default_factory=dict, repr=False)
 
     #: checkpoint 不能只凭请求指纹反推配置：指纹是结果身份，不说明当前运行到底
@@ -556,6 +597,7 @@ class CostLedger:
         default_factory=dict, repr=False)
     _response_sha256s: dict[str, str | None] = field(
         default_factory=dict, repr=False)
+    _work_unit_commits: dict[str, tuple[object, str]] = field(default_factory=dict, repr=False)
 
     #: Stage 2 会并发等待独立章节响应。计数更新与 JSONL 追加必须是同一个临界区，
     #: 否则两个成功回包可能互相覆盖内存计数，甚至把两行字节交错写坏。
@@ -591,7 +633,7 @@ class CostLedger:
             fields['parent_run_id'] = self.parent_run_id
         return fields
 
-    def record(self, *, node: str, sid: str, model: str, code: str,
+    def record(self, *, node: str | None, sid: str | None, model: str, code: str,
                cached: bool, cache_policy: str,
                prompt_tokens: int | None = None,
                prompt_cache_hit_tokens: int | None = None,
@@ -662,8 +704,8 @@ class CostLedger:
                 self._request_purposes[attempt_id] = purpose
                 previous_sid = self._request_sids.get(attempt_id)
                 previous_node = self._request_nodes.get(attempt_id)
-                if ((previous_sid is not None and previous_sid != sid)
-                        or (previous_node is not None and previous_node != node)):
+                if ((attempt_id in self._request_sids and previous_sid != sid)
+                        or (attempt_id in self._request_nodes and previous_node != node)):
                     raise ProvenanceRefused(
                         f'attempt_id={attempt_id} 同时指向两个 sid/node：'
                         f'{previous_sid}/{previous_node} / {sid}/{node}')
@@ -729,43 +771,74 @@ class CostLedger:
 
             if self.path is None:
                 return
-            row = {
-                'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
-                **self._identity_fields(),
-                'sid': sid, 'node': node, 'model': model, 'code': code,
-                'cached': cached, 'cache_policy': cache_policy,
-                'prompt_tokens': prompt_tokens,
-                # 供应商侧 prompt cache 与本地 `cached` 是两件事。必有两列；
-                # `null` 表示响应没给，不能伪装成确定命中 0 token。
-                'prompt_cache_hit_tokens': prompt_cache_hit_tokens,
-                'prompt_cache_miss_tokens': prompt_cache_miss_tokens,
-                'completion_tokens': completion_tokens,
-                'reasoning_tokens': reasoning_tokens,
-                'purpose': purpose,
-                'outcome': outcome, 'error': error, 'status': status,
-                'reasoning_effort': reasoning_effort,
-                'thinking': thinking,
-                'json_mode': json_mode,
-                'max_tokens': max_tokens,
-                'finish_reason': finish_reason,
-                'attempt': attempt,
-                'max_attempts': max_attempts,
-                'latency_ms': latency_ms,
-                'error_kind': error_kind,
-                'retryable': retryable,
-                'will_retry': will_retry,
-                'backoff_ms': backoff_ms,
-                # 采纳审计的联结键：`llm_audit.jsonl` 的 gate_decision / adoption 行
-                # 靠 `attempt_id` 指回这一行。`None` = 旧调用点没传（形状不破）。
-                'attempt_id': attempt_id,
-                'request_fingerprint': request_fingerprint,
-                'response_sha256': response_sha256,
-                'request_model': request_model or model,
-                'chapter': progress.chapter if progress else None,
-                'chapter_index': progress.index if progress else None,
-                'chapter_total': progress.total if progress else None,
-            }
+            row = self._record_row(
+                node=node, sid=sid, model=model, code=code, cached=cached, cache_policy=cache_policy, prompt_tokens=prompt_tokens, prompt_cache_hit_tokens=prompt_cache_hit_tokens, prompt_cache_miss_tokens=prompt_cache_miss_tokens, completion_tokens=completion_tokens, reasoning_tokens=reasoning_tokens, purpose=purpose, outcome=outcome, error=error, status=status, reasoning_effort=reasoning_effort, thinking=thinking, json_mode=json_mode, max_tokens=max_tokens, finish_reason=finish_reason, attempt=attempt, max_attempts=max_attempts, latency_ms=latency_ms, error_kind=error_kind, retryable=retryable, will_retry=will_retry, backoff_ms=backoff_ms, attempt_id=attempt_id, request_fingerprint=request_fingerprint, response_sha256=response_sha256, request_model=request_model, progress=progress)
             self._append(row)
+
+    def _record_row(self, *, node: str | None, sid: str | None, model: str, code: str,
+               cached: bool, cache_policy: str,
+               prompt_tokens: int | None = None,
+               prompt_cache_hit_tokens: int | None = None,
+               prompt_cache_miss_tokens: int | None = None,
+               completion_tokens: int | None = None,
+               reasoning_tokens: int | None = None,
+               purpose: str = '',
+               outcome: str = 'ok', error: str | None = None,
+               status: int | None = None,
+               reasoning_effort: str | None = None,
+               thinking: bool | None = None,
+               json_mode: bool | None = None,
+               max_tokens: int | None = None,
+               finish_reason: str | None = None,
+               attempt: int | None = None,
+               max_attempts: int | None = None,
+               latency_ms: int | None = None,
+               error_kind: str | None = None,
+               retryable: bool | None = None,
+               will_retry: bool | None = None,
+               backoff_ms: int | None = None,
+               attempt_id: str | None = None,
+               request_fingerprint: str | None = None,
+               response_sha256: str | None = None,
+               request_model: str | None = None,
+               progress: RequestProgress | None = None) -> dict[str, Any]:
+        row = {
+            'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            **self._identity_fields(),
+            'sid': sid, 'node': node, 'model': model, 'code': code,
+            'cached': cached, 'cache_policy': cache_policy,
+            'prompt_tokens': prompt_tokens,
+            # 供应商侧 prompt cache 与本地 `cached` 是两件事。必有两列；
+            # `null` 表示响应没给，不能伪装成确定命中 0 token。
+            'prompt_cache_hit_tokens': prompt_cache_hit_tokens,
+            'prompt_cache_miss_tokens': prompt_cache_miss_tokens,
+            'completion_tokens': completion_tokens,
+            'reasoning_tokens': reasoning_tokens,
+            'purpose': purpose,
+            'outcome': outcome, 'error': error, 'status': status,
+            'reasoning_effort': reasoning_effort,
+            'thinking': thinking,
+            'json_mode': json_mode,
+            'max_tokens': max_tokens,
+            'finish_reason': finish_reason,
+            'attempt': attempt,
+            'max_attempts': max_attempts,
+            'latency_ms': latency_ms,
+            'error_kind': error_kind,
+            'retryable': retryable,
+            'will_retry': will_retry,
+            'backoff_ms': backoff_ms,
+            # 采纳审计的联结键：`llm_audit.jsonl` 的 gate_decision / adoption 行
+            # 靠 `attempt_id` 指回这一行。`None` = 旧调用点没传（形状不破）。
+            'attempt_id': attempt_id,
+            'request_fingerprint': request_fingerprint,
+            'response_sha256': response_sha256,
+            'request_model': request_model or model,
+            'chapter': progress.chapter if progress else None,
+            'chapter_index': progress.index if progress else None,
+            'chapter_total': progress.total if progress else None,
+        }
+        return row
 
     def request_fingerprint_for_attempt(self, attempt_id: str) -> str:
         """精确反查一次已记账请求；缺联结是来源账结构错误，不做估算。"""
@@ -883,55 +956,161 @@ class CostLedger:
                         f'prior attempt {attempt_id} 不属于当前请求：'
                         f'{row.get("sid")}/{row.get("node")}/{row.get("purpose")}/'
                         f'{row.get("request_fingerprint")}')
-                fingerprint = str(row['request_fingerprint'])
-                model = str(row.get('model') or '')
-                self._request_fingerprints[attempt_id] = fingerprint
-                self._request_models[attempt_id] = model
-                self._request_purposes[attempt_id] = purpose
-                self._request_sids[attempt_id] = sid
-                self._request_nodes[attempt_id] = node
-                chapter_raw = row.get('chapter')
-                chapter = chapter_raw if isinstance(chapter_raw, int) else None
-                self._request_chapters[attempt_id] = chapter
-                self._request_specs[attempt_id] = {
-                    'request_model': str(row.get('request_model') or model),
-                    'reasoning_effort': row.get('reasoning_effort'),
-                    'thinking': row.get('thinking'),
-                    'json_mode': row.get('json_mode'),
-                    'max_tokens': row.get('max_tokens'),
-                }
-                raw_response_sha = row.get('response_sha256')
-                self._response_sha256s[attempt_id] = (
-                    str(raw_response_sha) if isinstance(raw_response_sha, str) else None)
+                self._adopt_prior_row(attempt_id, row, sid=sid, node=node, purpose=purpose)
 
-                cached = row.get('cached') is True
-                if cached:
-                    self.calls_cached += 1
-                else:
-                    self.calls_made += 1
-                purpose_counter = self._by_purpose.setdefault(
-                    (sid, node, purpose), _UsageCounter())
-                if cached:
-                    purpose_counter.calls_cached += 1
-                else:
-                    purpose_counter.calls_made += 1
-                counter = (self._by_chapter.setdefault(chapter, _UsageCounter())
-                           if chapter is not None else None)
+    def _adopt_prior_row(self, attempt_id: str, row: dict[str, object], *,
+                         sid: str, node: str, purpose: str) -> None:
+        """仅在来源身份全部验证后恢复内存计量，不追加费用行。"""
+        fingerprint = str(row['request_fingerprint'])
+        model = str(row.get('model') or '')
+        self._request_fingerprints[attempt_id] = fingerprint
+        self._request_models[attempt_id] = model
+        self._request_purposes[attempt_id] = purpose
+        self._request_sids[attempt_id] = sid
+        self._request_nodes[attempt_id] = node
+        chapter_raw = row.get('chapter')
+        chapter = chapter_raw if isinstance(chapter_raw, int) else None
+        self._request_chapters[attempt_id] = chapter
+        self._request_specs[attempt_id] = {
+            'request_model': str(row.get('request_model') or model),
+            'reasoning_effort': row.get('reasoning_effort'),
+            'thinking': row.get('thinking'),
+            'json_mode': row.get('json_mode'),
+            'max_tokens': row.get('max_tokens'),
+        }
+        raw_response_sha = row.get('response_sha256')
+        self._response_sha256s[attempt_id] = (
+            str(raw_response_sha) if isinstance(raw_response_sha, str) else None)
+
+        cached = row.get('cached') is True
+        if cached:
+            self.calls_cached += 1
+        else:
+            self.calls_made += 1
+        purpose_counter = self._by_purpose.setdefault(
+            (sid, node, purpose), _UsageCounter())
+        if cached:
+            purpose_counter.calls_cached += 1
+        else:
+            purpose_counter.calls_made += 1
+        counter = (self._by_chapter.setdefault(chapter, _UsageCounter())
+                   if chapter is not None else None)
+        if counter is not None:
+            if cached:
+                counter.calls_cached += 1
+            else:
+                counter.calls_made += 1
+        for key in TOKEN_KINDS:
+            value = row.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                setattr(self, key, getattr(self, key) + value)
+                self._seen[key] += 1
+                purpose_counter.tokens[key] += value
+                purpose_counter.seen[key] += 1
                 if counter is not None:
-                    if cached:
-                        counter.calls_cached += 1
-                    else:
-                        counter.calls_made += 1
-                for key in TOKEN_KINDS:
-                    value = row.get(key)
-                    if isinstance(value, int) and not isinstance(value, bool):
-                        setattr(self, key, getattr(self, key) + value)
-                        self._seen[key] += 1
-                        purpose_counter.tokens[key] += value
-                        purpose_counter.seen[key] += 1
-                        if counter is not None:
-                            counter.tokens[key] += value
-                            counter.seen[key] += 1
+                    counter.tokens[key] += value
+                    counter.seen[key] += 1
+
+    def claim_work_unit_attempts(self, budget: Any, turn_id: str, *, purpose: str) -> None:
+        """通过持久业务账户显式采用历史调用，原费用/run 身份保持原样。"""
+        from novel.work_units import WorkUnitBudget
+        if not isinstance(budget, WorkUnitBudget):
+            raise ProvenanceRefused('历史采用缺真实工作单元账户')
+        bindings = budget.recovery_attempts(turn_id)
+        wanted = {str(row['attempt_id']): row for row in bindings}
+        if len(wanted) != len(bindings) or not wanted:
+            raise ProvenanceRefused('历史采用的尝试集合为空或不唯一')
+        with self._lock:
+            missing = set(wanted) - set(self._request_fingerprints)
+            if not missing:
+                return
+            if self.path is None:
+                raise ProvenanceRefused('历史采用缺盘上成本账')
+            with process_append_lock(self.path):
+                raw = self.path.read_bytes()
+            if raw and not raw.endswith(b'\n'):
+                raise ProvenanceRefused('历史成本账末行未闭合')
+            rows: dict[str, dict[str, object]] = {}
+            for line in raw.splitlines():
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if not isinstance(row, dict):
+                    raise ProvenanceRefused('历史成本行不是对象')
+                identity = row.get('attempt_id')
+                if identity in wanted:
+                    if identity in rows:
+                        raise ProvenanceRefused('历史成本尝试身份重复')
+                    rows[str(identity)] = row
+            if set(rows) != set(wanted):
+                raise ProvenanceRefused('业务账户与历史成本尝试集合不闭合')
+            for identity, expected in wanted.items():
+                row = rows[identity]
+                if any(row.get(key) != value for key, value in expected.items()):
+                    raise ProvenanceRefused('历史尝试不属于当前工作单元绑定的来源')
+                if not isinstance(row.get('purpose'), str) or not row['purpose']:
+                    raise ProvenanceRefused('历史尝试缺调用目的')
+            for identity in sorted(missing):
+                row = rows[identity]
+                self._adopt_prior_row(identity, row, sid=str(row['sid']),
+                                      node=str(row['node']), purpose=str(row['purpose']))
+            self._append_audit_idempotent({
+                'kind': 'work_unit_adoption', 'sid': budget.identity['sid'],
+                'node': budget.identity['node'], 'purpose': purpose,
+                'work_unit_adoption_id': hashlib.sha256(
+                    f'{budget.unit_id}:{turn_id}:{self.run_id}'.encode()).hexdigest(),
+                'unit_id': budget.unit_id, 'content_turn_id': turn_id,
+                'source_run_ids': sorted({str(row['run_id']) for row in bindings}),
+                'attempt_ids': sorted(wanted),
+            }, identity_key='work_unit_adoption_id')
+
+    def reconcile_work_unit_attempt(self, budget: Any, turn_id: str,
+                                    receipt: Mapping[str, Any]) -> None:
+        """从 wire 后先保存的原始回执幂等补账，保留原 run、attempt 和未知用量。"""
+        from novel.work_units import WorkUnitBudget
+        if not isinstance(budget, WorkUnitBudget) or self.path is None:
+            raise ProvenanceRefused('工作单元补账缺持久业务账户或成本账')
+        frozen = budget.response_payload(turn_id).get('prepared_receipt')
+        if frozen != dict(receipt) or receipt.get('kind') != 'executor-turn-receipt-v1':
+            raise ProvenanceRefused('补账回执不是原始回答保存的精确对象')
+        turn = budget.turn(turn_id)
+        if receipt.get('run_id') != turn.run_id:
+            raise ProvenanceRefused('补账不能更换原调用 run')
+        arguments = dict(receipt['ledger_arguments'])
+        identity = arguments.get('attempt_id')
+        attempts = [row for row in turn.attempts if row.attempt_id == identity]
+        if (len(attempts) != 1 or arguments.get('cached') is not False
+                or arguments.get('sid') != budget.identity['sid']
+                or arguments.get('node') != budget.identity['node']
+                or arguments.get('request_fingerprint') != attempts[0].request_fingerprint):
+            raise ProvenanceRefused('待补成本行与已预留实际尝试不一致')
+        if arguments.get('progress') is not None:
+            arguments['progress'] = RequestProgress(**arguments['progress'])
+        source = CostLedger(path=None, run_id=turn.run_id,
+                            parent_run_id=str(receipt['parent_run_id']))
+        # record 的同一生成器保证当前写入和恢复没有第二套默认值或 token 规则。
+        expected = source._record_row(**arguments)
+        with self._lock:
+            with process_append_lock(self.path):
+                raw = self.path.read_bytes() if self.path.exists() else b''
+                if raw and not raw.endswith(b'\n'):
+                    raise ProvenanceRefused('成本账有未闭合尾行，禁止补写')
+                rows = [json.loads(line) for line in raw.splitlines() if line.strip()]
+                if any(not isinstance(row, dict) for row in rows):
+                    raise ProvenanceRefused('成本账含非对象记录')
+                matches = [row for row in rows if row.get('attempt_id') == identity]
+                if len(matches) > 1:
+                    raise ProvenanceRefused('原尝试在成本账重复出现')
+                if matches:
+                    row = matches[0]
+                    if {k: v for k, v in row.items() if k != 'at'} != {k: v for k, v in expected.items() if k != 'at'}:
+                        raise ProvenanceRefused('原尝试成本行与冻结回执不一致')
+                else:
+                    row = expected
+                    append_line_under_process_lock(self.path, json.dumps(row, ensure_ascii=False, sort_keys=True))
+            if identity not in self._request_fingerprints:
+                self._adopt_prior_row(str(identity), row, sid=str(row['sid']),
+                                      node=str(row['node']), purpose=str(row['purpose']))
 
     def usage_for_attempt_identities(
             self,
@@ -1410,6 +1589,11 @@ class CostLedger:
             'match_mode': match_mode,
         }, identity_key='evidence_locator_rewrite_id')
 
+    def bind_work_unit_commit(self, attempt_id: str, budget: object, turn_id: str) -> None:
+        """真实请求的提交关联；缓存尝试不注册、不伪造内容消耗。"""
+        with self._lock:
+            self._work_unit_commits[attempt_id] = (budget, turn_id)
+
     def note_adoption(self, *, sid: str, node: str, purpose: str,
                       attempt_id: str, artifact: str,
                       artifact_fingerprint: str,
@@ -1434,6 +1618,11 @@ class CostLedger:
             'artifact_fingerprint': artifact_fingerprint,
             'chapter': chapter,
         }, identity_key='adoption_id')
+        bound = self._work_unit_commits.get(attempt_id)
+        if bound is not None:
+            budget, turn_id = bound
+            budget.mark_adopted(turn_id)
+            budget.mark_artifact_committed(artifact, artifact_fingerprint)
 
     def note_human_typed_edit(
             self, *, sid: str, node: str, purpose: str,

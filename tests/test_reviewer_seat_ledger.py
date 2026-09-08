@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""非 Stage2 reviewer 席位账：首审 + 持久纠错上限 + 同轮 attempts。"""
+"""冻结旧 reviewer 席位账：原纠错上限不能随新工作单元四轮扩张。"""
 from __future__ import annotations
 
 import pytest
 
-from contracts.invariants import COMMANDER_REVIEWER_MAX_CORRECTIONS
+from contracts.invariants import LEGACY_COMMANDER_REVIEWER_MAX_CORRECTIONS
 from novel.orchestrator import reviewer_seat_ledger as L
 
 
@@ -29,7 +29,7 @@ def test_review_then_corrections_are_capped_and_persist(tmp_path):
         tmp_path, '42', waiting_on=BLOCKER, business_sha256=BUSINESS,
         session_run_id='seat-1', provider_session_id='provider-seat-1',
         request_sha256='1' * 64, reason='首审 typed 请求不合法', now=3)
-    for index in range(COMMANDER_REVIEWER_MAX_CORRECTIONS):
+    for index in range(LEGACY_COMMANDER_REVIEWER_MAX_CORRECTIONS):
         turn_id = f'c{index}'
         _reserve(tmp_path, purpose='correction', turn_id=turn_id)
         L.finish(
@@ -46,10 +46,10 @@ def test_review_then_corrections_are_capped_and_persist(tmp_path):
         _reserve(tmp_path, purpose='correction', turn_id='c-extra')
     shown = L.list_ledgers(tmp_path, '42')
     assert len(shown) == 1
-    assert shown[0]['corrections_used'] == COMMANDER_REVIEWER_MAX_CORRECTIONS
+    assert shown[0]['corrections_used'] == LEGACY_COMMANDER_REVIEWER_MAX_CORRECTIONS
     assert shown[0]['pending_correction'] is True
     assert [row['purpose'] for row in shown[0]['turns']] == [
-        'review', *['correction'] * COMMANDER_REVIEWER_MAX_CORRECTIONS]
+        'review', *['correction'] * LEGACY_COMMANDER_REVIEWER_MAX_CORRECTIONS]
     assert L.ledger_path(
         tmp_path, '42', waiting_on=BLOCKER, business_sha256=BUSINESS,
     ).parent.name == 'approval__stage4-design-review'

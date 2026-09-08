@@ -1,6 +1,6 @@
 # stage4 · 盲设计、证据绑定与场景编译
 
-Stage4 由两个隔离的付费相和一个确定性上下文相组成：
+Stage4 由两个隔离的付费相和一个确定性上下文相组成。Agent 与 legacy LLM 的 B 入口都先构造机械基线，只有歧义章进入模型；每章内容预算为包含首次的最多 4 次：
 
 ```text
 Stage2 v7
@@ -20,6 +20,13 @@ Stage2 v7
                                                              stage4.context（免费）── writer_context v4
 ```
 
+legacy B 使用相同的 `ChapterBindingResponse`、章内动态校验和整书联合 HARD。模型与升级策略仍由
+`LlmClient` 执行；业务返工的 typed 失败只回该章，重复失败提前停止。其 `unit_lineage` 使用
+`origin=work_unit_response`，绑定 `work_unit_id`、`content_turn_id`、原 `source_run_id`、
+`source_request_fingerprint` 与 `source_response_sha256`。恢复读取原回答并重验，不冒充 Agent
+checkpoint 或新模型调用。`EvidenceBinding` 因该来源协议升为 v4；旧 base 由冻结旧代码读取，
+不原地迁移或伪造工作单元账。当前 producer 只在新 clean base 从原始材料及当前前置重建 v4。
+
 A、B 是两个独立公开节点、两次独立授权；A 的一次授权覆盖预览中明示的 1+N 个内部逻辑请求，
 不是 N+1 次公开授权。A 落盘后先过正式设计审阅，不会自动连跑 B。B 编译 Plan 后再过另一份最终
 逐章结构审批；B 的公开授权也不等于一次整书 wire：代码先解机械唯一项，只有真歧义章各自发 wire。
@@ -32,7 +39,7 @@ Context 只能在该决定全书接受后独立生成。`stage4.plan --identity`
 |---|---|---|---|---|
 | `stage4/blind_candidate.json` | `BlindCandidate` v2 | `stage4.design` | 保存 A 的 N+1 个已验 unit 确定性聚合后的盲场景候选、编译映射与聚合来源账 | 码·契 |
 | `stage4/blind_chapter_edit.json` | `BlindChapterEditRequest` v1 | 人工输入 | Stage4A 的 hash-bound、零模型完整章替换请求；不是 Executor 产物，也不进入正式展示面 | 码·契 |
-| `stage4/evidence_binding.json` | `EvidenceBinding` v3 | `stage4.plan` / `--apply-binding` | 保存 B 的完整绑定、非阻断 concerns，或仅由代码铸造 witness 的 typed `infeasible` | 码·契 |
+| `stage4/evidence_binding.json` | `EvidenceBinding` v4 | `stage4.plan` / `--apply-binding` | 保存 B 的完整绑定、非阻断 concerns，或仅由代码铸造 witness 的 typed `infeasible` | 码·契 |
 | `stage4/plan_chapters.json` | `PlanChapters` v4 | `stage4.plan` 的编译段 | 保存 Stage5 真正消费的结构计划与 A/B 完整字节哈希 | 码·契 |
 | `stage4/plan_edit.json` | `PlanEdit` v4 | 人工输入 | 人工整份替换计划的 typed 入口 | 码·契 |
 | `stage4/writer_context.json` | `WriterContext` v4 | `stage4.context` | 把计划引用和当前 Stage2 真相投影成人话 | 三源 |
@@ -232,7 +239,7 @@ repair / strategy replan 仍能从该候选唯一恢复 lineage，而不会把�
 变化的章才可重跑；未变 accepted 章继续作为约束和 checkpoint 复用依据。所有生成/修订路都只产新 A，
 之后必须重新审阅；任何审批提交本身都不启动作业。
 
-## 三、Stage4B：`evidence_binding.json` v3
+## 三、Stage4B：`evidence_binding.json` v4
 
 B 收到冻结候选、候选业务主体 SHA-256，以及原文证据、源舞台和必须材料的关闭式目录。代码先用
 `build_mechanical_baseline` 把 scene fact 经 `source_beat_ref` 映射到舞台 allowlist、把 material 经属主
@@ -416,7 +423,7 @@ s0～s4、seen 与 design/structure/writing typed 历史，清除 s5～s7，绝�
 未审的 s2。更早版本同样只经显式逐项对证，普通 GET / 启动不静默迁移；
 其中旧 v5 的 design history 恒空，绝不从既有 A/B/Plan 或付费记录伪造 A 审阅；任何 Structure subject
 未携 current `STRUCTURE_REVIEW_CONTRACT` 的旧 typed 决定只保留 history，不重签、不 backfill s4，须用
-current Structure workpack 重新审阅。只有同时 current 的 Plan v4 与 bound EvidenceBinding v3（含其
+current Structure workpack 重新审阅。只有同时 current 的 Plan v4 与 bound EvidenceBinding v4（含其
 INVALID Plan 的零成本恢复）可继续最终结构审批，未来再次运行 B 才要求 current A accept。旧 v2 Binding
 不迁移、不补字段，须按 A 审阅 → B producer 重建。一次最终结构决定只提交
 Structure workpack 的 opaque `review_token`、actor、全书理由及与计划章集精确相等的逐章

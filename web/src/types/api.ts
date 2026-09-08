@@ -17,6 +17,7 @@ import type {
   SeenKey,
   StructureApprovalRequest,
   Stage5ClosureRequest,
+  Stage2NodeReviewRequest,
   Stage5ClosureTemplate,
   Stage6ApprovalWorkpack,
   Stage7ApprovalWorkpack,
@@ -164,6 +165,7 @@ export interface Api {
 
   /* 人工验收记录 */
   getApprovals(sid: string): Promise<ApprovalDoc>
+  approveStage2Review(sid: string, request: Stage2NodeReviewRequest): Promise<ApprovalDoc>
   /** Stage4 A 当前候选的异常优先只读工作包；不预填任何审批决定。 */
   getDesignApprovalWorkpack(sid: string): Promise<ApprovalWorkpack>
   /** Stage4 B 当前结构主体的异常优先只读工作包；不预填任何审批决定。 */

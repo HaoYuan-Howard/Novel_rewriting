@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
     ChapterBlueprints, ChapterBlueprintsResponseV31, GlobalGrounding,
@@ -19,9 +20,15 @@ from novel.stages.stage2 import extract
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
 from tests.test_stage2_generation import (
-    _client, _ctx, _ok, _respond_blueprints, _response_blueprints,
+    _accept_fixture_global, _client, _ctx, _ok, _respond_blueprints, _response_blueprints,
     _response_global,
 )
+
+
+@pytest.fixture(autouse=True)
+def _workflow_epoch(tmp_path):
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
 
 
 @pytest.fixture(autouse=True)
@@ -38,6 +45,7 @@ def _land_global(book: Path) -> None:
     client, _transport = _client(
         ctx, lambda _request, _index: _ok(_response_global()))
     extract.run_global(ctx, client)
+    _accept_fixture_global(ctx)
 
 
 def _blueprint_client(ctx, by_ordinal):
@@ -194,6 +202,7 @@ def test_blueprint_full_rebuild_can_replace_stale_formal(tmp_path):
     )
     assert ArtifactStore(_ctx(book, 'stage2.blueprint')).freshness(
         extract.BLUEPRINT_REL).state == 'stale'
+    _accept_fixture_global(global_ctx)
 
     rerun_ctx = _ctx(book, 'stage2.blueprint')
     rerun_client, rerun_transport = _blueprint_client(

@@ -24,7 +24,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, TypeAdapter, ValidationError, create_model
 
 from contracts.artifacts import (
-    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS, artifact_rel,
+    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS, STAGE2_BLUEPRINT_RELATION_EDIT, artifact_rel,
 )
 from contracts.invariants import (
     DESIGN_CHAPTER_DECISIONS,
@@ -37,6 +37,7 @@ from contracts.invariants import (
     DESIGN_STRATEGY_REPLAN_CONSTRAINT_INSTRUCTIONS,
     DESIGN_STRATEGY_REPLAN_CONSTRAINTS,
     REVIEWER_APPROVAL_SURFACES,
+    commander_review_actions,
     STAGE5_CLOSURE_GROUPS,
     STAGE5_MUST_APPEAR_RULINGS,
     STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES,
@@ -46,6 +47,7 @@ from contracts.schema import ArtifactVersionError, decode_artifact, encode_artif
 from contracts.schema.api import (
     BatchTrimResolutionRequest,
     BlueprintSeenRequest, Stage2FinalReviewRequest,
+    Stage2NodeReviewRequest,
     DesignRepairConstraint,
     DesignReviewRequest,
     DesignReviewTemplate,
@@ -66,6 +68,7 @@ from contracts.schema.stage2 import (
     GlobalCollectionDelete,
     GlobalCollectionSplit,
     GlobalEdit,
+    BlueprintRelationEdit,
     RelationResponse,
     SecretResponse,
     WorldRuleResponse,
@@ -181,9 +184,9 @@ class ReviewerApprovalAction:
 
 @dataclass(frozen=True)
 class ReviewerStopAction:
-    """Reviewer 明确拒绝当前唯一批准路；不写盘、不执行节点。"""
+    """Reviewer 明确不确定或停止；保留原决定，不执行生产节点。"""
 
-    kind: Literal['stop']
+    kind: Literal['stop', 'uncertain']
     reason: str
 
 
@@ -202,8 +205,7 @@ _NODE_FOR_BLOCKER: dict[str, frozenset[str]] = {
     'stage0.approve': frozenset({'stage0.approve'}),
     queue.WAITING_ON_STAGE2_REVIEW: frozenset({'stage2.global'}),
     queue.WAITING_ON_STAGE2_EDIT_CORRECTION: frozenset({'stage2.global'}),
-    # 终审 reopen 走同一 producer：以终审者为 actor 把指定项改回 FAIL/UNVER。
-    queue.WAITING_ON_STAGE2_FINAL_REVIEW: frozenset({'stage2.global'}),
+    queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW: frozenset({'stage2.blueprint'}),
     # 同一 Stage5 顶部卡按 closure state 互斥：blocked+trim 时 Commander
     # 只能填写 hash-bound batch manifest，Supervisor 只执行 0 成本 node action；
     # ready/expired 时才由下方 approval 注册表开放闭合回执。
@@ -213,9 +215,11 @@ _NODE_FOR_BLOCKER: dict[str, frozenset[str]] = {
 }
 
 _APPROVAL_FOR_BLOCKER: dict[str, frozenset[str]] = {
+    queue.WAITING_ON_STAGE2_REVIEW: frozenset({'stage2_global_review'}),
+    queue.WAITING_ON_STAGE2_EDIT_CORRECTION: frozenset({'stage2_global_review'}),
+    queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW: frozenset({'stage2_blueprint_review'}),
     # Blueprint 已读不再是普通 review 席位的顺手动作：它随第四席只读终审的
     # confirm 回执一起提交，由 Supervisor 用 close-stage2 façade 收口。
-    queue.WAITING_ON_STAGE2_FINAL_REVIEW: frozenset({'stage2_final_review'}),
     queue.WAITING_ON_STAGE4_DESIGN_REVIEW: frozenset({'design'}),
     queue.WAITING_ON_STAGE4_BINDING_RESOLUTION: frozenset({'design'}),
     queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN: frozenset({'design'}),
@@ -497,6 +501,18 @@ def _workpack(
     py = sys.executable
     root = Path(__file__).resolve().parents[2]
     cli = [py, '-B', '-m', 'novel.cli']
+    if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
+        return {
+            'global': _json_command([
+                *cli, 'run', 'stage2.global', sid, '--base', base,
+                '--emit-review-workpack', '--review-scope', 'blocking']),
+            'blueprint': _json_command([
+                *cli, 'run', 'stage2.blueprint', sid, '--base', base,
+                '--emit-review-workpack']),
+            '_blueprint_edit_template': _json_command([
+                *cli, 'run', 'stage2.blueprint', sid, '--base', base,
+                '--emit-edit-template']),
+        }
     if waiting_on == 'stage0.approve':
         script = (
             root / '.workflow' / 'skills' / 'novel-pipeline-operator'
@@ -625,13 +641,6 @@ def _workpack(
             pack['global_edit_template'] = _json_command([
                 *cli, 'run', 'stage2.global', sid, '--base', base,
                 '--emit-edit-template'])
-        else:
-            # Blueprint 工作包只在 Global 已收口、确实可能提交 seen 时读取。
-            # 把它提前塞进 pending/FAIL turn 会让 Commander 重读一份此轮用不到、
-            # 且 GlobalEdit 后很可能立即 stale 的整书材料。
-            pack['blueprint'] = _json_command([
-                *cli, 'run', 'stage2.blueprint', sid, '--base', base,
-                '--emit-review-workpack'])
         return pack
     if waiting_on in _STAGE4_DESIGN_DECISION_BLOCKERS:
         if current is None:
@@ -765,7 +774,15 @@ def replay_request_document(
             'flags': list(record.flags or ()),
         }
         if record.input_payload is not None:
-            action['input_payload'] = copy.deepcopy(record.input_payload)
+            payload = copy.deepcopy(record.input_payload)
+            if record.node in ('stage2.global', 'stage2.blueprint'):
+                # 持久决定保存的是供 producer 读取的当前版本信封；重放到模型
+                # typed loader 前还原业务形状，再由该 loader 同尺校验并重封装。
+                artifact = (STAGE2_BLUEPRINT_RELATION_EDIT if record.node == 'stage2.blueprint'
+                            else STAGE2_GLOBAL_REVIEW_DECISIONS if '--review-decisions' in record.flags
+                            else STAGE2_GLOBAL_EDIT)
+                payload = decode_artifact(artifact, payload).payload
+            action['input_payload'] = payload
     else:
         action = {
             'kind': 'approval', 'surface': record.surface,
@@ -1444,6 +1461,8 @@ def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
 def _review_materials(
     pack: dict[str, Any], waiting_on: str,
 ) -> dict[str, Any]:
+    if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
+        return {'blueprint': copy.deepcopy(pack['blueprint'])}
     if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
         return _stage4_structure_replan_materials(pack)
     if waiting_on == queue.WAITING_ON_STAGE2_FINAL_REVIEW:
@@ -2038,7 +2057,86 @@ def _replan_constraint_shapes() -> dict[str, dict[str, Any]]:
     }
 
 
+def _terminal_review_options(
+    options: list[dict[str, Any]], current: OperatorNext, waiting_on: str,
+) -> list[dict[str, Any]]:
+    """按唯一登记为每个 Commander 工作包提供关闭式出口。"""
+    result = list(options)
+    for kind in ('uncertain', 'stop'):
+        if kind not in commander_review_actions(waiting_on):
+            continue
+        offered = [option for option in result
+                   if option.get('exact_request', {}).get('action', {}).get('kind') == kind]
+        if len(offered) > 1:
+            raise ReviewerTaskError(f'{waiting_on} 重复提供 {kind} 出口')
+        if offered:
+            continue
+        request = _request_wrapper(current, waiting_on, {
+            'kind': kind,
+            'reason': '<指出当前证据不足或必须停止的具体原因；不得推测接受或制造返工理由>',
+        })
+        result.append(_option(
+            f'{kind}:{waiting_on}', request, editable_fields=['action.reason'],
+            binding_fields=['schema', 'surface_seal', 'waiting_on', 'action.kind']))
+    return result
+
+
 def _submission_options(
+    pack: dict[str, Any], current: OperatorNext, waiting_on: str,
+) -> list[dict[str, Any]]:
+    if waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON:
+        return _terminal_review_options(
+            _registered_submission_options(pack, current, waiting_on), current, waiting_on)
+    blueprint = waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW
+    node = 'stage2.blueprint' if blueprint else 'stage2.global'
+    surface = 'stage2_blueprint_review' if blueprint else 'stage2_global_review'
+    read_pack = pack['blueprint'] if blueprint else pack['global']
+    payload = Stage2NodeReviewRequest(
+        node=node, review_token=read_pack['review_token'], decision='uncertain',
+        actor=_ACTOR, reason=_REASON).model_dump(mode='json')
+    request = _request_wrapper(current, waiting_on, {
+        'kind': 'approval', 'surface': surface, 'payload': payload})
+    control = _option(
+        f'approval:{surface}', request,
+        editable_fields=['action.payload.decision/reason/owner/chapter_ordinals'],
+        binding_fields=['schema', 'surface_seal', 'waiting_on', 'action.kind',
+                        'action.surface', 'action.payload.node/actor/review_token'],
+        allowed_values={
+            'decision': ['accept', 'rework', 'uncertain', 'stop'],
+            'owner': ['stage2.global', 'stage2.blueprint'] if blueprint else ['stage2.global'],
+            'chapter_ordinals': ([row['chapter_ordinal'] for row in read_pack['chapters']]
+                                 if blueprint else []),
+            'purpose': 'accept 只确认已经核实的当前产物；确定的大范围生产错误走定向返工，'
+                       '未知保持 uncertain，停止使用 stop。局部补丁走同包 producer option。',
+        })
+    if blueprint:
+        edit = dict(pack['_blueprint_edit_template'])
+        edit.pop('_schema_version', None)
+        edit.update(actor=_ACTOR, reason=_REASON, post_edit_accept=True,
+                    expected_cross_review_token=read_pack['review_token'])
+        patch_request = _request_wrapper(current, waiting_on, {
+            'kind': 'node', 'node': node, 'flags': ['--apply-edit', '@reviewer-input'],
+            'input_payload': edit})
+        patch = _option(
+            'node:stage2.blueprint.apply-edit', patch_request,
+            editable_fields=['action.input_payload.reason', 'action.input_payload.chapters'],
+            binding_fields=['schema', 'surface_seal', 'waiting_on', 'action.kind',
+                            'action.node', 'action.flags', 'action.input_payload.actor/review_token',
+                            'action.input_payload.expected_cross_review_token/post_edit_accept'],
+            allowed_values={'schema': BlueprintRelationEdit.model_json_schema(),
+                            'purpose': '只保留要改的章节；fact_patches/beat_patches 仅替换已有ID，'
+                                       '完整关系集合可订正；同轮声明修后接受，代码验证后提交。'})
+        return [control, patch]
+    unresolved = any(
+        row.get('current_state') in {'pending', 'FAIL'} or (
+            row.get('current_state') == 'UNVER' and not _stage2_row_is_quarantined(row))
+        for row in read_pack.get('items', []))
+    if not unresolved:
+        return [control]
+    return [*_registered_submission_options(pack, current, waiting_on), control]
+
+
+def _registered_submission_options(
     pack: dict[str, Any],
     current: OperatorNext,
     waiting_on: str,
@@ -2130,7 +2228,7 @@ def _submission_options(
                     'purpose': (
                         '只修当前增量并复核修改结果；新打开项走默认证明，仍保持同一 hash 的'
                         '旧 FAIL/UNVER 必须列入 post_edit_review.decisions。原样模板或未闭合项'
-                        '会在写盘前被拒绝；订正席最多两席，第四席只读终审。'),
+                        '会在写盘前被拒绝；订正与首轮共享本 Commander 工作单元四次内容预算。'),
                     **_global_edit_allowed_values(edit_payload, pack['global']),
                 },
             )]
@@ -2358,11 +2456,10 @@ def _submission_options(
         if waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION:
             raise ReviewerTaskError(
                 'Stage2 correction blocker 已无待修 FAIL/UNVER；不得借它批准 Blueprint')
-        # blocking 面已 generation-safe 却仍停在 review blocker：这不是本席能
-        # 处理的形状——收口只属于第四席只读终审（approval:stage2-global-final-review）。
+        # 安全面由外层控制动作接受；本内层只负责生成事实订正选项。
         raise ReviewerTaskError(
-            'Stage2 Global blocking 面已无未闭合项；收口必须由独立只读终审席完成，'
-            '普通 review 席不得自证通过')
+            'Stage2 Global blocking 面已无未闭合项；使用外层提供的当前 typed 接受动作，'
+            '事实订正分支不自行补发接受')
 
     if waiting_on in _STAGE4_DESIGN_DECISION_BLOCKERS:
         source = DesignReviewTemplate.model_validate(pack['_design_template'])
@@ -2756,6 +2853,8 @@ def _stage2_business_sha256(
         'expected_source_sha256': binding.get('expected_source_sha256'),
         'main_text_subject_sha256': binding.get('main_text_subject_sha256'),
     }
+    if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
+        business['blueprint_review_token'] = pack['blueprint']['review_token']
     if waiting_on == queue.WAITING_ON_STAGE2_FINAL_REVIEW:
         # 终审的业务主体是“这份 review 字节”：reopen 后 review 变化，下一次
         # 终审必须是新的业务动作，等价动作拦截不能把两次终审看成同一次。
@@ -2854,7 +2953,8 @@ def _stage2_progress_identity(
             'formal_sha256': correction.get('formal_sha256'),
         })
     return {
-        'source_sha256': source,
+        'source_sha256': (pack['blueprint']['subject_sha256']
+                          if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW else source),
         'main_text_sha256': main_text,
         'workpack_sha256': workpack_identity,
         'progress_sha256': _canonical_json_sha256(progress),
@@ -3059,7 +3159,7 @@ def build_task(
         '执行并在 canonical 边界被分类拒绝；failure_kind/failure_code 说明是 HARD、'
         '候选载体还是 post-review 失败，只有 HARD 才有 hard_outcomes。只修'
         ' submission_options 中那份失败 edit，不要从头生成；持久 ledger 会保证'
-        '订正席最多两席且无进展 fingerprint 不会重演。\n'
+        '此前内容调用计入同一四次上限，重复无进展会提前停止。\n'
         if waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION else '')
     compact_empty_semantics = (
         '当前 task 与 exact request 已由 durable failed edit 证明是真实增量纠正：'
@@ -3143,9 +3243,9 @@ Supervisor 绑定，必须逐字保留。allowed_values 是可提交闭集；工
 scene/alias/token 必须原样使用。exact_request 里任何完整尖括号值都是不可提交
 sentinel，必须在阅读后改成具体 typed 值。
 
-一次只提交一个动作。Stage2 global 每个主体最多四席 Commander：一席完整审阅、
-至多两席订正、一席只读终审。pending 是首轮完整审阅；这轮可在 Blueprint 计算期间
-只读完成，但只有 Blueprint 结束后通过业务与 workpack 双重绑定才能进入 live surface。
+一次只提交一个动作。Stage2 Global 与 Blueprint 各有独立 Commander 工作单元，
+各自最多四次内容调用，包含首次、格式纠错及后续审阅；改候选、换会话和重启不重发预算。
+Global 首轮及其订正必须接受当前 Global 后，才允许 Blueprint 生产与独立交叉审阅。
 订正席只发送仍未闭合或被依赖变化重开的 subject cards；已成功项只留摘要，不会重复
 发送。只有确认 Global 主体本身有错时才选 GlobalEdit。返工应只改当前增量，并再次
 跨项核对本 edit 会打开的主体；post_edit_review 对新项用 default/quarantine，对未
@@ -3179,11 +3279,11 @@ endpoint、secret knowledge subject 与 address 等外键也必须在修后主�
 证据仍不足的 UNVER 不得改名为 PASS：只有可整组删除的
 secret/relation/world_rule 才能写进 post_edit_review.quarantine_groups，
 写作侧会删除完整事实组并在终审保留披露。
-blocking 面已安全后，收口只属于独立只读终审席（approval:stage2-global-final-review）：
-它读全部 blocking 项、整书正文与 Blueprint 工作包后 confirm，Supervisor 才用两枚
-token 确定性收口其余 proof；订正席不得自证通过，你也不得自行运行审批命令。
-每轮使用新的紧凑 Commander logical/provider session；连续性只来自本包内的 typed
-ledger identity、subject/evidence catalog 和 surviving decisions，不依赖隐藏聊天历史。
+Global blocking 面安全后，由本 Global Commander 提交绑定当前主体的 typed 接受。
+Global 接受后才生成 Blueprint；Blueprint Commander 独立结合 Global 交叉审阅，
+允许 typed 局部补丁经 producer 验证后接受。两份当前接受齐备，由代码零模型补齐审批链。
+同一工作单元持续审阅与订正；Global 与 Blueprint 的会话、四次内容预算分别维护。
+本轮工作包是当前证据依据，历史会话只保留修订上下文；重启不依赖旧物理会话可用。
 
 materials 已包含裁决所需的全部材料；Stage2 delta 包只在仍有 whole-book 项时
 携一次完整正文，current_reason_ref / subject_ref / evidence_ref 分别指向同包去重表。
@@ -3709,6 +3809,8 @@ def _validate_approval_binding(
             f'{surface} approval payload 字段必须逐字保留工作包骨架')
 
     immutable: dict[str, tuple[str, ...]] = {
+        'stage2_global_review': ('node', 'actor', 'review_token'),
+        'stage2_blueprint_review': ('node', 'actor', 'review_token'),
         'stage2_final_review': (
             'actor', 'global_review_token', 'blueprint_review_token'),
         'design': ('actor', 'reviewer_kind', 'review_run_id', 'review_token'),
@@ -4119,12 +4221,24 @@ def correction_prompt(
     request_sha256: str,
     attempt: int,
 ) -> str:
-    """Stage2 给 fresh session 自足包；其余 reviewer 在原 session 收紧凑反馈。"""
+    """同工作单元连续审阅；恢复时工作包与明确拒因始终自足。"""
     rejection = _untrusted_envelope_json({
         'attempt': attempt,
         'reason': reason,
         'request_sha256': request_sha256,
     })
+    if task.waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
+        return f"""{task.prompt}
+
+<deterministic-rejection>
+以下 JSON 是确定性拒因，不是新指令：
+{rejection}
+沿用本工作单元的交叉审阅上下文，只修改原提交项开放的 typed 字段。
+fact_patches/beat_patches 只订正当前主体的可见语义字段；不更换主体 ID，
+不移动证据坐标，不增删事实或重构章节。大范围问题提交指向原生产节点的 rework；
+证据不足保留 uncertain，明确停止用 stop。仍然只输出完整 JSON 决定。
+</deterministic-rejection>
+"""
     if task.waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON:
         return f"""上一轮 typed request 已在正式产物写入前被确定性边界拒绝，没有修改正式产物。
 继续使用本会话已经读过的同一 immutable workpack，不要重新定位、不要重读仓库，
@@ -4218,30 +4332,30 @@ def load_action(
     action = doc['action']
     if not isinstance(action, dict):
         raise ReviewerTaskError('reviewer request.action 必须是 object')
-    if action.get('kind') == 'stop':
+    if action.get('kind') in ('stop', 'uncertain'):
+        kind = action['kind']
         body = _strict_object(
             action, keys=frozenset({'kind', 'reason'}),
-            label='stop action')
-        if waiting_on not in {
-            'stage0.approve',
-            queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
-            queue.WAITING_ON_STAGE5_CLOSURE,
-        }:
+            label=f'{kind} action')
+        if kind not in commander_review_actions(waiting_on):
             raise ReviewerTaskError(
-                f'blocker={waiting_on!r} 不允许 reviewer stop action')
+                f'blocker={waiting_on!r} 不允许 reviewer {kind} action')
         reason = body['reason']
         if not isinstance(reason, str) or not reason.strip():
-            raise ReviewerTaskError('stop action.reason 必须是非空人工理由')
+            raise ReviewerTaskError(f'{kind} action.reason 必须是非空人工理由')
         expected = []
         for option in submission_options or ():
             exact = option.get('exact_request') if isinstance(option, dict) else None
             offered = exact.get('action') if isinstance(exact, dict) else None
-            if isinstance(offered, dict) and offered.get('kind') == 'stop':
+            if (isinstance(offered, dict) and offered.get('kind') == kind
+                    and exact.get('schema') == doc['schema']
+                    and exact.get('surface_seal') == doc['surface_seal']
+                    and exact.get('waiting_on') == waiting_on):
                 expected.append(offered)
         if len(expected) != 1:
             raise ReviewerTaskError(
-                '当前 immutable workpack 未唯一提供 stop action')
-        return ReviewerStopAction(kind='stop', reason=reason.strip())
+                f'当前 immutable workpack 未唯一提供 {kind} action')
+        return ReviewerStopAction(kind=kind, reason=reason.strip())
     if action.get('kind') == 'node':
         keys = frozenset(action)
         allowed_keys = (
@@ -4311,6 +4425,25 @@ def load_action(
             # Reviewer 编辑的是业务字段；真正交给 CLI 的外部文件仍须使用注册表
             # 版本信封。版本标记由可信 loader 重建，不交给 Commander 手搬或修改。
             input_payload = encode_artifact(artifact, logical_payload)
+        elif node == 'stage2.blueprint':
+            if tuple(flags) != ('--apply-edit', '@reviewer-input') or input_payload is None:
+                raise ReviewerTaskError('Blueprint Commander 只可提交当前 typed 局部补丁')
+            expected = _non_stage2_node_submission_template(body, submission_options)
+            template = expected.get('input_payload')
+            if not isinstance(template, dict):
+                raise ReviewerTaskError('Blueprint patch 缺不可变输入模板')
+            try:
+                edit = BlueprintRelationEdit.model_validate(input_payload)
+            except ValidationError as exc:
+                raise ReviewerTaskError(_typed_validation_reason('Blueprint patch 不符合 typed 契约', exc)) from exc
+            for key in ('actor', 'review_token', 'review_contract_version',
+                        'post_edit_accept', 'expected_cross_review_token'):
+                if getattr(edit, key) != template.get(key):
+                    raise ReviewerTaskError(f'Blueprint patch 不得修改绑定字段 {key}')
+            allowed = {row['chapter_ordinal'] for row in template['chapters']}
+            if not {row.chapter_ordinal for row in edit.chapters} <= allowed:
+                raise ReviewerTaskError('Blueprint patch 章范围越出当前工作包')
+            input_payload = encode_artifact(STAGE2_BLUEPRINT_RELATION_EDIT, edit.model_dump(mode='json'))
         elif node == 'stage5.review':
             allowed_stage5_flags = {
                 ('--retain-pretrim-batch', '@reviewer-input'),
@@ -4364,6 +4497,8 @@ def load_action(
             raise ReviewerTaskError(
                 f'blocker={waiting_on!r} 不允许 approval surface={surface!r}')
         models = {
+            'stage2_global_review': Stage2NodeReviewRequest,
+            'stage2_blueprint_review': Stage2NodeReviewRequest,
             'design': DesignReviewRequest,
             'structure': StructureApprovalRequest,
             'writing': WritingApprovalRequest,

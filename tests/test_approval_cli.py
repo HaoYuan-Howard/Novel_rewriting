@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -52,7 +54,7 @@ def test_approval_show_is_a_read_only_json_surface(monkeypatch, capsys, tmp_path
 def test_headless_seen_and_early_gates_reuse_approval_services(
         monkeypatch, capsys, tmp_path):
     calls = []
-    seen_request = BlueprintSeenRequest(review_token='bpr3_' + 'b' * 64)
+    seen_request = BlueprintSeenRequest(review_token='bpr4_' + 'b' * 64)
     seen_path = tmp_path / 'blueprint-seen.json'
     seen_path.write_text(seen_request.model_dump_json(indent=2), encoding='utf-8')
     monkeypatch.setattr(
@@ -84,7 +86,7 @@ def _final_request() -> Stage2FinalReviewRequest:
     return Stage2FinalReviewRequest(
         actor='agent:final-seat', reason='独立通读全部 blocking 项与 Blueprint',
         global_review_token='s2gr1_' + 'c' * 64,
-        blueprint_review_token='bpr3_' + 'b' * 64)
+        blueprint_review_token='bpr4_' + 'b' * 64)
 
 
 def test_headless_global_seen_requires_and_parses_a_typed_subject(
@@ -148,18 +150,28 @@ def test_stage2_closure_reuses_the_five_existing_services_in_order(monkeypatch):
 
     monkeypatch.setattr(approvals, 'approve_gate', gate)
     monkeypatch.setattr(approvals, 'mark_seen', seen)
+    accepted = []
+    monkeypatch.setattr(approvals, 'require_stage2_node_accepted',
+                        lambda base, sid, node: accepted.append(node))
+    monkeypatch.setattr(approvals, '_read_raw', lambda *_args: SimpleNamespace(
+        stage2_reviews={'stage2.global': SimpleNamespace(actor='global-commander')}))
+    monkeypatch.setattr(approvals.paths, 'resolve_novel_dir', lambda *_args: Path('书_123'))
+    monkeypatch.setattr(approvals, '_stage2_review_identity', lambda _path, node: (
+        request.global_review_token if node == 'stage2.global' else request.blueprint_review_token,
+        'a' * 64, 'test-contract'))
 
     got = approvals.close_stage2_review('base', SID, request)
 
     assert got is final
+    assert accepted == ['stage2.global', 'stage2.blueprint']
     assert calls == [
         ('gate', 'base', SID, 's0'),
         ('gate', 'base', SID, 's1'),
         ('seen', 'base', SID, 'read',
-         BlueprintSeenRequest(review_token='bpr3_' + 'b' * 64), None),
+         BlueprintSeenRequest(review_token='bpr4_' + 'b' * 64), None),
         ('seen', 'base', SID, 'global', None,
          Stage2GlobalSeenRequest(
-             review_token='s2gr1_' + 'c' * 64, actor='agent:final-seat')),
+             review_token='s2gr1_' + 'c' * 64, actor='global-commander')),
         ('gate', 'base', SID, 's2'),
     ]
 

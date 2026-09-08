@@ -114,6 +114,19 @@ arc、世界观与 setting evidence 不进入这条指纹，避免无消费者�
 做强审计：重建派生字段、记录 actor/reason 及 raw/canonical hash，但保留原生成轮次与
 来源账，审计通过不伪装成新的模型或人工改写轮。
 
+Legacy Rename 在首次正式写盘前保存完整提交证明：原 run/parent、请求策略、原接受回答与
+全部成本行、候选 typed 值及正式渲染 SHA-256，并绑定人物表、INVALID、动态成书的写前字节。
+证明保存在该书 `stage7.rename` 的 `book` 工作单元；纯缓存候选同样保存证明，内容调用计数仍为 0。
+`inspect_prepared_recovery` 只读投影精确来源，CLI 使用
+`--recover-prepared <source_run_id> --subject-sha256 <proof_sha256>` 进入 0 模型恢复，
+不构造 LLM client 或 Agent session，也不重新结算原模型费用。
+
+未完成提交必须重新通过原输入、当前 HARD 与三路径 CAS，然后只提交原候选并补原 run 的采纳。
+原采纳已存在时，以封存的原 typed 值、渲染字节摘要、原费用、原回答与精确采纳核验完成事实；
+合法人工定稿或编辑可以改变当前人物表，恢复只补预算与提交标记，不覆盖后继，也不授予当前主体
+任何接受。证明损坏、原费用缺失或未完成目标漂移
+保持 unknown，不提供可执行恢复动作，也不自动发起替代模型调用。
+
 ## 三、人工编辑输入
 
 `NameMapEdit` 是当前注册的 v1 严格 schema，允许以下任选组合：

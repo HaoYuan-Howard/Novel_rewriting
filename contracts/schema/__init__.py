@@ -311,7 +311,7 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # 不是 Executor 产物，也不进入正式产物展示面。
     STAGE4_BLIND_CHAPTER_EDIT: ArtifactSpec(BlindChapterEditRequest),
     # v2 删除可由绑定舞台 present 唯一推出的 participant_refs。
-    STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding, 3),
+    STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding, 4),
     # v4 删除 A 相过程字段、Stage2 重复契约、派生结构向量与编译参数快照。
     STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters, 4),
     STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit, 4),
@@ -333,7 +333,9 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # ⚠ 逐层一份账（2026-08-15 裁决）：**层由文件路径承载，不进收敛键**。
     #   两份共用一个模型——同一件事的第 N 个落点必然分家。
     STAGE5_WONTFIX: ArtifactSpec(WontFix),
-    STAGE6_HOOK: ArtifactSpec(Hook, 2),
+    # v3 同槽可持续修订，attempt 按槽连续唯一；总内容预算仍属整书工作单元。
+    # 旧 v2 只在冻结代码读取，新 clean base 由 Hook producer 重建，不迁移。
+    STAGE6_HOOK: ArtifactSpec(Hook, 3),
     STAGE6_HOOK_EDIT: ArtifactSpec(HookEdit, 2),
     # v2 新增判官实际看见的 Stage5 开篇成稿 `judged`绑定；
     # 旧 v1 不能证明正文改字后语义结论仍然 current。

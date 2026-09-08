@@ -67,6 +67,10 @@ class TerminalState(NovelError):
     """
 
 
+class ArtifactSubmittedReviewPending(NovelError):
+    """正式候选已落盘，接受尚未提交；应重放耐久决定，不重新调用模型。"""
+
+
 
 class ParagraphPlanInfeasible(TerminalState):
     """逐 slot 段落计划在任何 wire 之前已不可能完成。

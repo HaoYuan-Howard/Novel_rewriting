@@ -35,7 +35,7 @@ def _write(path: Path, value: object) -> None:
 def _retry(slot: str, index: int) -> dict:
     return {
         'slot': slot,
-        'attempt': 1,
+        'attempt': index // len(HOOK_SLOTS) + 1,
         'failure_items': ['hook_truncated'],
         'failure_evidence': f'{index:010x}'[-10:],
         'user_prompt': f'{index + 1:010x}'[-10:],
@@ -93,7 +93,7 @@ def _hook(
             'params': {
                 'max_tokens': 64000,
                 'candidate_retry_max_tokens': 24000,
-                'candidate_retry_limit': 1,
+                'candidate_retry_limit': 4,
                 'candidate_retry_effort': 'low',
                 'candidate_retry_thinking': False,
             },

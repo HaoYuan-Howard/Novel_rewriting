@@ -218,6 +218,7 @@ def _stage2_unver_options(*, safe: bool) -> tuple[SimpleNamespace, list[dict[str
         'global': {
             'kind': 'stage2-global-review-workpack-v4',
             'workpack_sha256': '7' * 64,
+            'review_token': 's2gr1_' + '7' * 64,
             'main_text_subject_sha256': '9' * 64,
             'main_text_chapters': [],
             'items': [item],
@@ -865,7 +866,7 @@ def test_option_and_exact_request_hash_are_closed(
     response = _response(task)
     response[field] = value
 
-    with pytest.raises(wire.Stage2ReviewerWireError, match='动态 schema'):
+    with pytest.raises(wire.Stage2ReviewerWireError, match=('stale' if field == 'expected_exact_request_sha256' else '动态 schema')):
         wire.assemble(task, response)
 
 
@@ -875,7 +876,7 @@ def test_stale_task_rejects_previous_response() -> None:
     stale = copy.deepcopy(task)
     stale.submission_options[0]['exact_request']['surface_seal'] = _sha(99)
 
-    with pytest.raises(wire.Stage2ReviewerWireError, match='动态 schema'):
+    with pytest.raises(wire.Stage2ReviewerWireError, match='stale'):
         wire.assemble(stale, response)
 
 
@@ -1016,7 +1017,7 @@ def test_real_stage2_unver_multioption_keeps_full_action_path_reachable(
             'node:stage2.global.apply-edit-unver',
         ]
     )
-    assert [option['id'] for option in options] == expected_ids
+    assert [option['id'] for option in options] == [*expected_ids, 'approval:stage2_global_review']
     assert wire.uses_compact_wire(task) is False
     assert wire.output_schema_for(task) is None
     assert wire.prompt_for(task, task.prompt) == task.prompt
@@ -1059,3 +1060,13 @@ def test_real_stage2_unver_multioption_keeps_full_action_path_reachable(
     assert len(response_sha256) == 64
     assert record_path is None
     assert task.request_path.is_file()
+
+
+def test_native_schema_follows_shape_not_candidate_digest():
+    task = _task()
+    changed = copy.deepcopy(task)
+    changed.submission_options[0]['exact_request']['surface_seal'] = _sha(701)
+    changed.submission_options[0]['exact_request']['action']['input_payload']['relations'][0]['predicate'] = '新候选值'
+    assert wire.response_schema(task) == wire.response_schema(changed)
+    changed.submission_options[0]['exact_request']['action']['input_payload']['relations'][0]['relation_id'] = 'rel_02'
+    assert wire.response_schema(task) != wire.response_schema(changed)

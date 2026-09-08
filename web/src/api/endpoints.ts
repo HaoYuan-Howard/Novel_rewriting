@@ -26,6 +26,7 @@ import type {
   SeenKey,
   StructureApprovalRequest,
   Stage5ClosureRequest,
+  Stage2NodeReviewRequest,
   Stage5ClosureTemplate,
   Stage6ApprovalWorkpack,
   Stage7ApprovalWorkpack,
@@ -513,6 +514,8 @@ export const realApi: Api = {
   getAgentQueue: () => get<AgentQueueView>('/agent/runs/queue'),
 
   getApprovals: (sid) => get<ApprovalDoc>(n(sid) + '/approvals'),
+  approveStage2Review: (sid, request: Stage2NodeReviewRequest) =>
+    post<ApprovalDoc>(n(sid) + '/approvals/stage2-review', request),
   getDesignApprovalWorkpack: (sid) =>
     get<ApprovalWorkpack>(n(sid) + '/approvals/design/workpack'),
   getStructureApprovalWorkpack: (sid) =>

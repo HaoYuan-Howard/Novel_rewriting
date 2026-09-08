@@ -55,7 +55,7 @@ from contracts.artifacts import (                                      # noqa: E
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
 )
 from contracts.invariants import (                                # noqa: E402
-    BLUEPRINT_ARCHITECTURE, STAGES, review_effect_of,
+    BLUEPRINT_ARCHITECTURE, STAGES, WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS, review_effect_of,
 )
 from contracts.schema import ARTIFACT_SPECS, artifact_key          # noqa: E402
 from contracts.schema.evaluation import GlobalReview               # noqa: E402
@@ -71,7 +71,7 @@ from novel.stages.stage4.measure import structure_metrics_of      # noqa: E402
 #: 长串阈值。短串大多是 id 与 ref（`f01_02` / `b03_01`），它们重复本来就是设计目标；
 #: 「重复业务语义」说的是被内联复制的自然语言。两档一起报，不合成一个数。
 LONG_STRING_MIN_CHARS = 16
-WORKFLOW_REPORT_SCHEMA = 'novel-workflow-metrics-v1'
+WORKFLOW_REPORT_SCHEMA = 'novel-workflow-metrics-v2'
 
 #: 一次跑的观察分组：CLI 次数按节点收敛，节点名来自信标本身，不在这里手抄一张表。
 _CODE_DIRTY = '-dirty'
@@ -910,6 +910,57 @@ def _stage2_mechanical_check(
     }
 
 
+def _stage2_role_lifecycle(
+    units: list[dict[str, Any]] | None,
+    reviews: dict[str, Any],
+    blueprint_intervals: list[tuple[str, float, float]],
+) -> dict[str, Any]:
+    """两名 Commander 的内容预算与接受顺序；不拿网络 attempt 数当内容次数。"""
+    result: dict[str, Any] = {
+        'state': 'unver', 'work_unit_scope': 'sid_workflow_episode',
+        'commanders': {}, 'review_states': {}, 'sequence': 'unver',
+    }
+    if units is None:
+        return result
+    failures = False
+    missing = False
+    times: dict[str, float] = {}
+    for node in ('stage2.global', 'stage2.blueprint'):
+        current = [row for row in units if row.get('role') == 'commander'
+                   and row.get('node') == node]
+        if len(current) != 1:
+            missing = True
+            continue
+        unit = current[0]
+        used, limit = unit.get('content_used'), unit.get('content_limit')
+        known = type(used) is int and type(limit) is int
+        within = known and limit == WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS and 1 <= used <= limit
+        result['commanders'][node] = {
+            'content_used': used, 'content_limit': limit,
+            'content_remaining': unit.get('content_remaining'),
+            'budget_state': 'ok' if within else 'fail' if known else 'unver',
+        }
+        failures |= known and not within
+        missing |= not known
+        review = reviews.get(node) or {}
+        result['review_states'][node] = review.get('state', 'unknown')
+        decision = review.get('current_decision') or {}
+        decided = _iso_epoch(decision.get('decided_at'))
+        if review.get('state') != 'accepted' or decided is None:
+            missing = True
+        else:
+            times[node] = decided
+    if len(times) == 2 and blueprint_intervals:
+        first_blueprint = min(start for _node, start, _end in blueprint_intervals)
+        sequence_ok = times['stage2.global'] <= first_blueprint <= times['stage2.blueprint']
+        result['sequence'] = 'ok' if sequence_ok else 'fail'
+        failures |= not sequence_ok
+    else:
+        missing = True
+    result['state'] = 'fail' if failures else 'unver' if missing else 'ok'
+    return result
+
+
 def stage2_metrics(
     base: Path, novel_dir: Path, sid: str, *, run_id: str | None,
     identity: dict[str, Any], audit: dict[str, Any],
@@ -990,6 +1041,16 @@ def stage2_metrics(
         'unver' if cli_errors or commander_interval_errors
         or not prereview_intervals or not blueprint_cli_intervals
         else 'ok' if overlap > 0 else 'missed')
+    from novel.work_units import list_unit_views
+    from novel.orchestrator import approvals
+    try:
+        unit_views = list_unit_views(base, sid)
+        review_views = (approvals.get(base, sid, include_spawns=False).model_dump(
+            mode='json')['stage2_reviews'] if unit_views is not None else {})
+        role_lifecycle = _stage2_role_lifecycle(
+            unit_views, review_views, blueprint_cli_intervals)
+    except Exception:  # noqa: BLE001 —— 读盘不完整不能伪造通过或回显正文
+        role_lifecycle = _stage2_role_lifecycle(None, {}, [])
 
     commander_rows = [
         row for row in ledger_rows
@@ -1118,8 +1179,10 @@ def stage2_metrics(
             },
             'latency_unver_rows': activity_latency_unver,
         },
+        'role_lifecycle': role_lifecycle,
         'overlap': {
-            'state': overlap_state,
+            'state': 'retired_observation',
+            'historical_state': overlap_state,
             'prereview_blueprint_seconds': overlap,
         },
         'wall_clock': {
@@ -1427,9 +1490,9 @@ def render(report: dict[str, Any]) -> str:
         f'逐章 latency {bp["latency_state"]}，P50 {bp_latency["p50"]}s / '
         f'P95 {bp_latency["p95"]}s / max {bp_latency["max"]}s',
         f'- Commander {stage2["commander"]["calls"]} 次：'
-        f'{stage2["commander"]["activities"]}；预审与 Blueprint 重叠 '
-        f'**{stage2["overlap"]["state"]}** '
-        f'{stage2["overlap"]["prereview_blueprint_seconds"]}s',
+        f'{stage2["commander"]["activities"]}；双 Commander 内容预算与接受顺序 '
+        f'**{stage2["role_lifecycle"]["state"]}**；'
+        f'{stage2["role_lifecycle"]["commanders"]}',
         f'- Stage2 首 start→最后 terminal：'
         f'**{stage2["wall_clock"]["state"]}** '
         f'{stage2["wall_clock"]["seconds"]}s',

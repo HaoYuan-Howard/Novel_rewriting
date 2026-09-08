@@ -50,6 +50,8 @@ def _offline_commander_planning(monkeypatch):
 
 
 def _book(base, *, sid='1001', title='测试书'):
+    from novel.work_units import initialize_workflow
+    initialize_workflow(base)
     book = base / f'{title}_{sid}'
     (book / 'stage0').mkdir(parents=True)
     (book / 'stage0' / 'clean_text.txt').write_text('正文\n', encoding='utf-8')
@@ -332,7 +334,7 @@ def test_execute_holds_the_same_approval_file_lock_for_both_moves(
         yield
         events.append(('exit', base, sid, approval.exists(), book.exists()))
 
-    monkeypatch.setattr(approvals, 'approval_file_lock', observed_lock)
+    monkeypatch.setattr(approvals, 'approval_exclusion_lock', observed_lock)
     trash.execute(tmp_path, '1001', '测试书', '1700000000-c001d00d')
 
     assert events == [

@@ -246,6 +246,13 @@ def test_an_unrecorded_flag_is_assumed_to_write():
 def test_node_specific_write_effects_keep_all_three_identity_behaviors_distinct():
     """stage4/stage6 只诊断，stage7 写回正式人物表。"""
     assert NODE_WRITE_EFFECTS == {
+        ('stage6.hook', '--recover-prepared'):
+            '按原完成组补 stage6/hook.json、原 run 采纳审计及工作单元提交状态（0 模型）',
+        ('stage6.semantic', '--recover-prepared'):
+            '按原双盲完成组补原序号 semantic 产物、双采纳审计及工作单元提交状态（0 模型）',
+        ('stage7.rename', '--recover-prepared'):
+            '按原完成组补 name_map.json、原 run 采纳及工作单元提交状态（0 模型）',
+        ('stage2.blueprint', '--close-review'): '_service/approvals/<sid>.json（只核验并补齐当前接受对应的 seen/gate）',
         ('stage4.plan', '--identity'): '',
         ('stage6.hook', '--identity'): '',
         ('stage7.rename', '--identity'): 'stage7/name_map.json',
@@ -289,6 +296,9 @@ def test_every_registered_run_mode_builds_a_command(node, flag):
             '--subject-sha256', 'a' * 64,
         ]
         if (node, flag) == ('stage5.write', '--subject-sha256')
+        else ['--recover-prepared', 'source-run-1', '--subject-sha256', 'a' * 64]
+        if node in ('stage6.hook', 'stage6.semantic', 'stage7.rename') and flag in {
+            '--recover-prepared', '--subject-sha256'}
         else (_stage5_edit_flags()
               if node == 'stage5.write' and flag in _STAGE5_EDIT_FLAGS
               else _args(flag, node))
@@ -492,7 +502,7 @@ def test_executor_runtime_registries_close_over_the_same_eight_nodes():
 
     expected = set(AGENT_EXECUTOR_NODES)
     assert len(expected) == len(N.EXECUTOR_PROFILED_RUNS) == 8
-    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 14
+    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 16
     assert set(EXECUTOR_FACTORIES) == set(N.EXECUTOR_PROFILED_RUNS) == expected
 
 

@@ -114,12 +114,14 @@ function workpack(): BlueprintReviewWorkpack {
       segments: [{ beat_order: 1, chars: 4, text: 'B2 工作包正文', flagged: false }],
     },
     beats: [{
+      beat_id: 'b01_01',
       beat_order: 1,
       located: true,
       time_layer: 'present',
       place: 'B2 工作包地点',
       present_char_ids: ['B2_在场人物'],
       facts: [{
+        fact_id: 'f01_01',
         claim: 'B2 工作包事实',
         kind: 'state',
         obligation: 'preserve',
@@ -154,7 +156,8 @@ function workpack(): BlueprintReviewWorkpack {
     title: '测试书',
     read_only: true,
     auto_decisions: false,
-    review_contract_version: 'stage2-blueprint-review-v4',
+    review_contract_version: 'stage2-blueprint-review-v5',
+    global_review: {},
     review_identity_sha256: 'e'.repeat(64),
     validation_seal_sha256: 'f'.repeat(64),
     review_token: 'bpr3_' + 'c'.repeat(64),
@@ -237,6 +240,28 @@ function renderRead(path = '/n/' + SID + '/read/1') {
 }
 
 describe('ReadScreen 整本 Blueprint 审阅确认', () => {
+  it('只呈现后端定向复核范围，保留可复用章与字段引用依据', async () => {
+    const { getBlueprintReviewWorkpack, markSeen } = stubApi()
+    const pack = workpack()
+    pack.review_delta = {
+      mode: 'targeted', baseline_review_subject_sha256: 'a'.repeat(64),
+      current_review_subject_sha256: 'b'.repeat(64), changed_blueprint_chapters: [],
+      affected_chapter_ordinals: [2], reusable_accepted_chapter_ordinals: [1],
+      reason: '当前修改只涉及第二章可证明引用',
+      changed_global_items: [{ item_id: 'person-1', subject_path: 'characters.person-1',
+        change: 'changed', changed_fields: ['name'], previous_subject_sha256: 'c'.repeat(64),
+        current_subject_sha256: 'd'.repeat(64), affected_chapter_ordinals: [2],
+        affected_references: ['fact-2'], scope_reason: 'fact-2 明确引用该人物' }],
+    }
+    getBlueprintReviewWorkpack.mockResolvedValue(pack)
+    renderRead()
+    fireEvent.click(await screen.findByText('本次复核范围：targeted'))
+    expect(screen.getByText('当前修改只涉及第二章可证明引用')).toBeVisible()
+    expect(screen.getByText(/受影响章：2；\s*可复用接受依据的章：1/)).toBeVisible()
+    expect(screen.getByText(/fact-2 明确引用该人物/)).toBeVisible()
+    expect(markSeen).not.toHaveBeenCalled()
+  })
+
   it('进入页面和切换章节都不会自动 POST seen.read', async () => {
     const { getReading, markSeen } = stubApi()
     renderRead()

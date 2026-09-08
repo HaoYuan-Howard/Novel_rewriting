@@ -88,6 +88,8 @@ def _review(root_sha1: str) -> Review:
 @pytest.fixture
 def rig(tmp_path, monkeypatch):
     """真 store + 真 Review/章文件；分类所需的判据表为现役注册表。"""
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
     book_dir = tmp_path / '闭合回执_001'
     (book_dir / 'stage5').mkdir(parents=True)
     (book_dir / 'stage0').mkdir(parents=True)

@@ -545,8 +545,9 @@ def response_model(task: _ReviewerTaskLike) -> type[StrictModel]:
     if stage2_scope_wire.exact_request(task) is not None:
         return stage2_scope_wire.response_model(task)
     option_id, exact = _apply_edit_option(task)
-    exact_sha = _canonical_sha256(exact)
-    digest = exact_sha[:12]
+    # 原生 schema 只绑定可编辑形状与真实引用闭集。当前候选 token、理由与
+    # 内容摘要由 assemble 精确核验，不进入 model 标题强制另开物理会话。
+    digest = 'v2'
     action = exact.get('action')
     edit = action.get('input_payload') if isinstance(action, dict) else None
     if not isinstance(edit, dict):
@@ -602,7 +603,7 @@ def response_model(task: _ReviewerTaskLike) -> type[StrictModel]:
         __base__=StrictModel,
         schema_=(Literal[WIRE_SCHEMA], Field(..., alias='schema')),
         option_id=(_literal([option_id]), ...),
-        expected_exact_request_sha256=(_literal([exact_sha]), ...),
+        expected_exact_request_sha256=(Sha256, ...),
         payload=(payload_model, ...),
     )
 

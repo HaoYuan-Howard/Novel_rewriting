@@ -20,6 +20,50 @@ beforeEach(() => {
 })
 
 describe('RunScreen 交付终验', () => {
+  it('显示后端当前审批与恢复，历史工作单元不决定下一角色', async () => {
+    const run = await mockApi.getRunProgress(SAMPLE_SID)
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue({
+      ...run,
+      resume_frontier: {
+        ...run.resume_frontier, next_handler: 'commander',
+        review_states: [
+          { node: 'stage2.global', scope: 'book', state: 'accepted' },
+          { node: 'stage2.blueprint', scope: 'book', state: 'uncertain' },
+        ],
+      },
+      current_recovery_actions: ['book: replay_response'],
+      work_units: [{ unit_id: 'old', node: 'stage2.blueprint', role: 'executor', scope: 'chapter:1',
+        content_used: 1, content_limit: 4, content_remaining: 3, state: 'adopted',
+        latest_request_sha256: null, latest_response_sha256: null, recovery_action: null }],
+    })
+    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
+    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
+    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+    expect(await screen.findByText('下一处理者：Commander（形成新裁决）')).toBeVisible()
+    expect(screen.getByText('stage2.global · book：accepted')).toBeVisible()
+    expect(screen.getByText('stage2.blueprint · book：uncertain')).toBeVisible()
+    expect(screen.getByText('当前恢复：book: replay_response')).toBeVisible()
+  })
+
+  it('原样显示后端工作单元预算和恢复状态，不从已用次数重算余量', async () => {
+    const run = await mockApi.getRunProgress(SAMPLE_SID)
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue({
+      ...run,
+      work_units: [{
+        unit_id: 'u1', node: 'stage2.blueprint', role: 'commander', scope: 'book',
+        content_used: 2, content_limit: 4, content_remaining: 1,
+        state: 'response_saved', latest_request_sha256: null,
+        latest_response_sha256: 'a'.repeat(64), recovery_action: 'replay_saved_response',
+      }],
+    })
+    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
+    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
+    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+    expect(await screen.findByText('2 / 4，剩余 1')).toBeInTheDocument()
+    expect(screen.getByText('response_saved')).toBeInTheDocument()
+    expect(screen.getByText('replay_saved_response')).toBeInTheDocument()
+  })
+
   it('按服务端 allowed_controls 恢复，202 仍返回 paused 时持续轮询到 running', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     const active = await mockApi.startAgentRun({

@@ -622,7 +622,7 @@ def prepare_semantic_candidate(ctx: RunContext) -> SemanticCandidateContext:
     if prepared.judge_stagger_ms and not _uses_agent_runs(ctx):
         raise ProvenanceRefused(
             'Stage6 semantic stagger 实验只支持独立 executor sessions；'
-            'legacy 顺序客户端不能冒充前缀缓存实验')
+            'legacy 客户端没有该实验的 provider session 观测面')
     if _uses_agent_runs(ctx):
         from novel.llm import stage6_runs
 
@@ -732,7 +732,7 @@ def request_semantic_candidates(
         source: _SemanticResponseSource,
         prepared: SemanticCandidateContext,
 ) -> dict[str, HookSemanticResponse]:
-    """取得 A/B；legacy 保持顺序，agent 全量验 checkpoint 后并发缺失 session。"""
+    """先核验双方已保存候选，再并发缺失的独立 A/B；失败也等待另一边持久收口。"""
     _assert_prepared_current(ctx, prepared)
     validate = response_validator(list(prepared.aliases))
     restored: dict[str, tuple[HookSemanticResponse, dict[str, Any]]] = {}
@@ -803,16 +803,29 @@ def request_semantic_candidates(
                     responses[role] = futures[role].result()
         return responses
 
-    # legacy LlmClient 的双请求、purpose 与顺序逐字保留；不把旧 acceptance
-    # 伪装成 node-executor/v1，也不创建 stage6 run sidecar。
+    # legacy 复用原 WorkUnit 回答，不创建或冒充 Agent session/checkpoint。
+    restore = getattr(source, 'restore_json_response', None)
     for role in ('A', 'B'):
-        responses[role] = source.ask_json(
-            prepared.system,
-            prepared.user_for(role),
-            model_cls=HookSemanticResponse,
-            purpose=_judge_purpose(ctx, role),
-            validator=validate,
-        )
+        if callable(restore):
+            response = restore(
+                prepared.system, prepared.user_for(role), model_cls=HookSemanticResponse,
+                purpose=_judge_purpose(ctx, role), max_tokens=SEMANTIC_MAX_TOKENS,
+                validator=validate)
+            if response is not None:
+                responses[role] = response
+    missing_roles = tuple(role for role in ('A', 'B') if role not in responses)
+    if missing_roles:
+        _assert_prepared_current(ctx, prepared)
+        with ThreadPoolExecutor(max_workers=len(missing_roles)) as executor:
+            futures = {
+                role: executor.submit(
+                    source.ask_json, prepared.system, prepared.user_for(role),
+                    model_cls=HookSemanticResponse, purpose=_judge_purpose(ctx, role),
+                    max_tokens=SEMANTIC_MAX_TOKENS, validator=validate)
+                for role in missing_roles
+            }
+            for role in missing_roles:
+                responses[role] = futures[role].result()
     return responses
 
 
@@ -1094,6 +1107,173 @@ def _note_semantic_adoptions(
         )
 
 
+_LEGACY_GROUP_POLICY = 'stage6-legacy-semantic-delivery-v1'
+
+
+def _legacy_semantic_policy(source: LlmClient) -> dict[str, Any]:
+    return source.json_request_policy((
+        ('judge', HookSemanticResponse, SEMANTIC_MAX_TOKENS, False),
+    ), recovery_policy=_LEGACY_GROUP_POLICY)
+
+
+def _prepare_legacy_semantic_delivery(
+        ctx: RunContext, source: LlmClient, prepared: SemanticCandidateContext,
+        evaluation: SemanticCandidateEvaluation, artifact: HookSemanticReview,
+        *, rel: str, seq: int, store: ArtifactStore,
+) -> None:
+    from novel.work_units import budget_for
+
+    purposes = tuple(_judge_purpose(ctx, role) for role in ('A', 'B'))
+    payload = artifact.model_dump(by_alias=True, mode='json')
+    budget_for(ctx, scope='judge:a').save_group_producer_recovery({
+        'kind': _LEGACY_GROUP_POLICY, 'code': ctx.code,
+        'input_sha256': prepared.input_sha256, 'hook_file_sha1': prepared.hook_file_sha1,
+        'policy': _legacy_semantic_policy(source),
+        'producer_run_id': ctx.run_id, 'producer_parent_run_id': ctx.parent_run_id,
+        'target_rel': rel, 'seq': seq,
+        'target_payload': payload,
+        'target_json': json.dumps(payload, ensure_ascii=False, separators=(',', ':')),
+        'target_sha256': store.prospective_sha256(rel, artifact),
+        'baseline_sha256': store.full_sha256_or_none(rel),
+        'responses': {role: response.model_dump(by_alias=True, mode='json')
+                      for role, response in evaluation._responses},
+        'adoptions': [[_judge_purpose(ctx, role), attempt]
+                      for role, attempt in evaluation.accepted_attempts],
+        'receipts': [source.producer_response_receipt(purpose) for purpose in purposes],
+        'costs': source.producer_cost_receipts(purposes),
+    })
+
+
+def _restore_legacy_semantic_delivery(
+        ctx: RunContext, source: LlmClient | None, prepared: SemanticCandidateContext | None,
+        *, inspect_only: bool = False,
+) -> tuple[HookSemanticReview, CheckReport] | hook.PreparedRecovery | None:
+    """先恢复完整原审判，含纯缓存 A/B；原序号与原 run 双采纳不可重铸。"""
+    from types import SimpleNamespace
+    from novel.llm import stage6_runs
+    from novel.llm.cache import CachePolicy
+    from novel.llm.ledger import CostLedger, ledger_path
+    from novel.work_units import budget_for
+
+    anchor = budget_for(ctx, scope='judge:a')
+    proof = anchor.group_producer_recovery()
+    if proof is None:
+        return None
+    if proof.get('kind') != _LEGACY_GROUP_POLICY:
+        raise ProvenanceRefused('Semantic 完成组恢复协议漂移')
+    run_id = hook._legacy_hook_run_identity(proof['producer_run_id'])
+    parent = hook._legacy_hook_run_identity(proof['producer_parent_run_id'])
+    rel, seq = _journal_rel({'artifact': proof['target_rel']})
+    if proof['seq'] != seq:
+        raise ProvenanceRefused('Semantic 完成组原序号漂移')
+    raw_target = proof.get('target_json')
+    if not isinstance(raw_target, str):
+        raise ProvenanceRefused('Semantic 完成组缺原目标字典顺序')
+    payload = ArtifactStore._loads(rel, raw_target.encode('utf-8'))
+    if payload != proof['target_payload']:
+        raise ProvenanceRefused('Semantic 完成组 typed/原字节证明不一致')
+    artifact = HookSemanticReview.model_validate(payload)
+    receipts = proof['receipts']
+    expected_purposes = {_judge_purpose(ctx, role) for role in ('A', 'B')}
+    if len(receipts) != 2 or {row['purpose'] for row in receipts} != expected_purposes:
+        raise ProvenanceRefused('Semantic 完成组必须恰有原 A/B 响应')
+    bindings = LlmClient.verify_producer_responses(ctx, receipts, proof['costs'])
+    adoptions = tuple(tuple(row) for row in proof['adoptions'])
+    if (len(adoptions) != 2 or {row[0] for row in adoptions} != expected_purposes
+            or set(adoptions) != {(row['purpose'], row['checkpoint']['attempt_id'])
+                                  for row in receipts}):
+        raise ProvenanceRefused('Semantic 完成组原接受与双采纳不闭合')
+    store = ArtifactStore(ctx)
+    seqs = semantic_seqs(store)
+    current_sha = store.full_sha256_or_none(rel)
+    if store.prospective_sha256(rel, artifact) != proof['target_sha256']:
+        raise ProvenanceRefused('Semantic 原目标 typed/正式字节身份不一致')
+    batch = SimpleNamespace(adoptions=adoptions)
+    complete = hook._legacy_hook_adoptions_complete(ctx, proof, batch, artifact, rel=rel)
+    if complete:
+        if not hook._completed_target_available(store, rel, proof['target_sha256']):
+            raise ProvenanceRefused('Semantic 原采纳已齐但当前/历史正式目标缺失')
+        marker_pending = not anchor.group_producer_completed
+        if inspect_only:
+            return hook.PreparedRecovery(
+                state='recoverable' if marker_pending else 'complete', source_run_id=run_id,
+                proof_sha256=anchor.group_producer_recovery_sha256,
+                reason='原双采纳已齐，待补组完成标记' if marker_pending else None)
+        if marker_pending:
+            anchor.complete_group_producer_recovery(proof)
+        if prepared is None:
+            prepared = prepare_semantic_candidate(ctx)
+        changed = (any(item > seq for item in seqs)
+                   or proof['code'] != ctx.code
+                   or proof['input_sha256'] != prepared.input_sha256
+                   or proof['hook_file_sha1'] != prepared.hook_file_sha1)
+        if source is not None and (changed or ctx.cache == CachePolicy.refresh()):
+            anchor.complete_group_producer_recovery(proof)
+            anchor.retire_group_producer_recovery(proof)
+            return None
+        if changed:
+            if marker_pending and source is None:
+                # 历史组只补标记，当前报告仍保留旧审判相对新输入的 stale/unknown。
+                with ctx.validation_reads():
+                    outcomes = hook._judge_artifact(prepared.art, prepared.up, store)
+                    report = hook._report(ctx, store, outcomes, prepared.art, freshness_rel=rel)
+                return artifact, report
+            raise TerminalState('Semantic 原审判已完成且输入已有后继，无需恢复旧组')
+    if prepared is None:
+        prepared = prepare_semantic_candidate(ctx)
+    if (any(item > seq for item in seqs)
+            or current_sha not in (proof['target_sha256'], proof['baseline_sha256'])):
+        raise ProvenanceRefused('Semantic 原序号或正式目标已被第三方改变')
+    if (proof['code'] != ctx.code or proof['input_sha256'] != prepared.input_sha256
+            or proof['hook_file_sha1'] != prepared.hook_file_sha1
+            or (source is not None and proof['policy'] != _legacy_semantic_policy(source))):
+        raise ProvenanceRefused('Semantic 原审判输入、代码或配置漂移')
+    responses = _validated_responses(prepared, {
+        role: HookSemanticResponse.model_validate(value)
+        for role, value in proof['responses'].items()})
+    # 原接受 JSON 仍通过同一逐字证据校验，并与 producer 保存的候选逐值一致。
+    for receipt in receipts:
+        role = 'A' if receipt['purpose'] == _judge_purpose(ctx, 'A') else 'B'
+        original = HookSemanticResponse.model_validate_json(receipt['checkpoint']['normalized_text'])
+        why = response_validator(list(prepared.aliases))(original, ChatResponse(content=''))
+        if why is not None or original != responses[role]:
+            raise ProvenanceRefused('Semantic 原接受 JSON 与完成候选不一致')
+    reviews, decisions, ranking, judge_rankings = materialize_double_blind(
+        responses['A'], responses['B'], aliases=list(prepared.aliases))
+    if (artifact.reviews != reviews or artifact.decisions != decisions
+            or artifact.ranking != ranking or artifact.judge_rankings != judge_rankings):
+        raise ProvenanceRefused('Semantic 原双盲结果不再通过确定性合并')
+    _assert_prepared_current(ctx, prepared)
+    if inspect_only:
+        stage6_runs.inspect_foreign_commit_reservations(ctx, rel)
+    else:
+        stage6_runs.refuse_foreign_commit_reservations(ctx, rel)
+    if inspect_only:
+        if current_sha == proof['target_sha256']:
+            verify_semantic_delivery(ctx, prepared, artifact, rel=rel)
+        return hook.PreparedRecovery(
+            state='complete' if complete else 'recoverable', source_run_id=run_id,
+            proof_sha256=anchor.group_producer_recovery_sha256)
+    if current_sha != proof['target_sha256']:
+        store.write(rel, artifact)
+    landed, report = verify_semantic_delivery(ctx, prepared, artifact, rel=rel)
+    adoption_ledger = CostLedger(path=ledger_path(ctx.novel_dir.parent), run_id=run_id, parent_run_id=parent)
+    fingerprint = prov.projection_fingerprint(landed.model_dump(by_alias=True, mode='json'))
+    for purpose, attempt_id in adoptions:
+        adoption_ledger.note_adoption(
+            sid=ctx.sid, node=ctx.node, purpose=purpose, attempt_id=attempt_id,
+            artifact=rel, artifact_fingerprint=fingerprint, chapter=None)
+        if attempt_id in bindings:
+            budget, turn_id = bindings[attempt_id]
+            budget.mark_adopted(turn_id)
+    if not hook._legacy_hook_adoptions_complete(ctx, proof, batch, landed, rel=rel):
+        raise ProvenanceRefused('Semantic 补尾后缺完整原双采纳')
+    for budget, _turn_id in bindings.values():
+        budget.mark_artifact_committed(rel, fingerprint)
+    anchor.complete_group_producer_recovery(proof)
+    return landed, report
+
+
 def verify_semantic_delivery(
         ctx: RunContext,
         prepared: SemanticCandidateContext,
@@ -1238,6 +1418,9 @@ def finalize_semantic_candidate(
                 raise ProvenanceRefused(
                     'stage6.semantic commit journal 与最终候选/输入/序号不闭合')
 
+        if not _uses_agent_runs(ctx) and isinstance(source, LlmClient):
+            _prepare_legacy_semantic_delivery(
+                ctx, source, prepared, evaluation, artifact, rel=rel, seq=seq, store=store)
         if store.exists(rel):
             existing, _raw = store.read_own(
                 HookSemanticReview, rel, require_current=True)
@@ -1277,6 +1460,15 @@ def finalize_semantic_candidate(
                     for role, attempt_id in evaluation.accepted_attempts
                 ),
             )
+            if isinstance(source, LlmClient):
+                from types import SimpleNamespace
+                from novel.work_units import budget_for
+                anchor = budget_for(ctx, scope='judge:a')
+                proof = anchor.group_producer_recovery()
+                if (proof is None or not hook._legacy_hook_adoptions_complete(
+                        ctx, proof, SimpleNamespace(adoptions=proof['adoptions']), landed, rel=rel)):
+                    raise ProvenanceRefused('Semantic 正式提交后原双采纳未闭合')
+                anchor.complete_group_producer_recovery(proof)
         return landed, report
 
 
@@ -1284,10 +1476,51 @@ def run_semantic(ctx: RunContext, client: LlmClient
                  ) -> tuple[HookSemanticReview, CheckReport]:
     """legacy 单轮包装；agent executor 复用相同四段，但启用 checkpoint/journal。"""
     prepared = prepare_semantic_candidate(ctx)
+    from novel.llm import stage6_runs
+    with stage6_runs.commit_ownership(ctx.novel_dir):
+        restored = _restore_legacy_semantic_delivery(ctx, client, prepared)
+        if restored is not None:
+            return restored
     responses = request_semantic_candidates(ctx, client, prepared)
     evaluation = evaluate_semantic_candidate(
         ctx, client, prepared, responses)
     return finalize_semantic_candidate(ctx, client, prepared, evaluation)
+
+
+def inspect_prepared_recovery(ctx: RunContext) -> hook.PreparedRecovery | None:
+    """完整 A/B 原组的只读投影；损坏证据保持 unknown，不能下发免费命令。"""
+    from novel.work_units import budget_for, workflow_manifest
+
+    try:
+        if workflow_manifest(ctx.novel_dir.parent) is None:
+            return None
+        if budget_for(ctx, scope='judge:a').group_producer_recovery() is None:
+            return None
+        return _restore_legacy_semantic_delivery(ctx, None, None, inspect_only=True)
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError,
+            TerminalState, ProvenanceRefused) as exc:
+        return hook.PreparedRecovery(state='unknown', reason=str(exc))
+
+
+def recover_prepared_semantic(
+        ctx: RunContext, *, source_run_id: str | None = None,
+        proof_sha256: str | None = None,
+) -> tuple[HookSemanticReview, CheckReport]:
+    """只恢复原序号、typed 目标和原双采纳；预算耗尽亦无需模型配置。"""
+    from novel.llm import stage6_runs
+
+    with stage6_runs.commit_ownership(ctx.novel_dir):
+        prepared = prepare_semantic_candidate(ctx)
+        projection = _restore_legacy_semantic_delivery(ctx, None, prepared, inspect_only=True)
+        if projection is None:
+            raise TerminalState('没有可恢复的 Semantic 完整提交证明')
+        if ((source_run_id is not None and projection.source_run_id != source_run_id)
+                or (proof_sha256 is not None and projection.proof_sha256 != proof_sha256)):
+            raise ProvenanceRefused('Semantic 恢复的原 run/提交证明已变化')
+        result = _restore_legacy_semantic_delivery(ctx, None, prepared)
+        if not isinstance(result, tuple):
+            raise TerminalState('Semantic 完整提交证明在恢复期间缺失')
+        return result
 
 
 # ⚠⚠ 这里曾有 `_calibration_status()`（不发请求地复查 profile 漂移）与

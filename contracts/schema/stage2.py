@@ -2105,11 +2105,30 @@ class BlueprintScopeViolation(StrictModel):
     duplicate_target: int
 
 
+class BlueprintFactPatch(StrictModel):
+    """只订正审阅包可见语义字段；证据区间调整交回原 Executor。"""
+
+    fact_id: str = Field(pattern=FACT_ID_PATTERN)
+    claim: str | None = Field(default=None, min_length=1)
+    kind: Literal[FACT_ATOM_KINDS] | None = None
+    obligation: Literal[FACT_ATOM_OBLIGATIONS] | None = None
+    participant_char_ids: list[str] | None = None
+
+
+class BlueprintBeatPatch(StrictModel):
+    beat_id: str = Field(pattern=BEAT_ID_PATTERN)
+    time_layer: Literal[TIME_LAYERS] | None = None
+    place: str | None = None
+    present_char_ids: list[str] | None = None
+
+
 class BlueprintRelationChapterEdit(StrictModel):
-    """指定章的完整关系集合；不是字段级 patch。"""
+    """指定章的关系集合及受控语义字段补丁；不增删事实或重构拍。"""
 
     chapter_ordinal: int = Field(ge=1)
     narrative_relations: list[NarrativeRelation]
+    fact_patches: list[BlueprintFactPatch] = Field(default_factory=list)
+    beat_patches: list[BlueprintBeatPatch] = Field(default_factory=list)
 
 
 class BlueprintRelationEdit(StrictModel):
@@ -2121,9 +2140,14 @@ class BlueprintRelationEdit(StrictModel):
     review_contract_version: Literal[BLUEPRINT_RELATION_REVIEW_CONTRACT] = (
         BLUEPRINT_RELATION_REVIEW_CONTRACT)
     chapters: list[BlueprintRelationChapterEdit] = Field(min_length=1)
+    post_edit_accept: bool = False
+    expected_cross_review_token: str | None = Field(
+        default=None, pattern=r'^bpr4_[0-9a-f]{64}$')
 
     @model_validator(mode='after')
     def _chapters_are_canonical(self) -> BlueprintRelationEdit:
+        if self.post_edit_accept and self.expected_cross_review_token is None:
+            raise ValueError('修后接受必须绑定修前完整 Global/Blueprint 交叉审阅包')
         if not self.actor.strip() or not self.reason.strip():
             raise ValueError('Blueprint relation edit 的 actor/reason 不能只含空白')
         ordinals = [row.chapter_ordinal for row in self.chapters]

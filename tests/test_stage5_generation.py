@@ -1183,7 +1183,7 @@ def test_revise_regression_gets_exactly_one_refresh_resample(monkeypatch):
     assert client.calls[1]['cache_policy'].name == 'refresh-write'
 
 
-def test_two_regressed_revisions_preserve_formal_and_write_rejected(monkeypatch):
+def test_two_regressed_revisions_preserve_formal_and_write_rejected(monkeypatch, tmp_path):
     from contracts.schema.stage5 import RejectedRevision
     from novel.store import ArtifactStore
 
@@ -1199,13 +1199,17 @@ def test_two_regressed_revisions_preserve_formal_and_write_rejected(monkeypatch)
     monkeypatch.setattr(write.prompts, 'write_system', lambda *_a, **_kw: 'SYS')
     monkeypatch.setattr(write, '_generate_chapter', lambda *_a, **_kw: {'rejected': rejected})
     monkeypatch.setattr(write, '_report', lambda *_a, **_kw: object())
-    root = Path(tempfile.mkdtemp(prefix='stage5-rejected-disk-'))
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
+    root = tmp_path / '修订退化_812'
     try:
         formal = root / 'stage5' / 'ch01.json'
         formal.parent.mkdir(parents=True)
         formal.write_bytes(b'paid-formal-draft')
-        ctx = SimpleNamespace(
-            novel_dir=root, observe=lambda *_a, **_kw: None)
+        ctx = RunContext(
+            novel_dir=root, node='stage5.write', paid=False,
+            code=prov.code_version(), cache=CachePolicy.default(),
+            ledger=CostLedger(), observer=lambda _event: None)
         store = ArtifactStore(ctx)
 
         for _attempt in range(2):
@@ -1392,6 +1396,7 @@ def test_legacy_direct_write_holds_the_shared_book_lock_through_the_wire(
 def test_parallel_write_paths_land_each_successful_canonical_chapter(
         tmp_path, monkeypatch, write_path):
     """单章失败或暂停不得取消同组内其他 canonical 章的成功落盘。"""
+    monkeypatch.setattr(write, '_record_legacy_chapter_delivery', lambda *_a, **_kw: None)
     root = tmp_path / '书名_123'
     root.mkdir()
     entries = {
@@ -1575,6 +1580,8 @@ def test_parallel_batch_trim_readback_does_not_poison_the_next_chapter(
     second['scenes'][0]['budget_chars'] = 200
 
     novel_dir = tmp_path / '双章来源账_812'
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
     clean = novel_dir / 'stage0' / 'clean_text.txt'
     clean.parent.mkdir(parents=True)
     clean.write_text('固定测试根。\n', encoding='utf-8', newline='')
@@ -1703,6 +1710,7 @@ def test_parallel_batch_trim_readback_does_not_poison_the_next_chapter(
 
 
 def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
+    monkeypatch.setattr(write, '_record_legacy_chapter_delivery', lambda *_a, **_kw: None)
     class Client:
         model = 'test-model'
 
@@ -1795,6 +1803,7 @@ def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
 def test_production_chapter_provenance_uses_the_accepted_request(
         monkeypatch):
     """正式章的 request 身份来自 accepted attempt 反查，不按首档参数估算。"""
+    monkeypatch.setattr(write, '_record_legacy_chapter_delivery', lambda *_a, **_kw: None)
     accepted_request = 'b' * 64
     captured: dict[str, object] = {}
 
@@ -1900,6 +1909,19 @@ class _LandingStore:
         self.landed.append((rel, artifact))
         return rel
 
+    def read(self, _model, rel):
+        return next(artifact for path, artifact in reversed(self.landed) if path == rel)
+
+    @staticmethod
+    def prospective_sha256(_rel, artifact):
+        return hashlib.sha256(json.dumps(
+            artifact.model_dump(by_alias=True, mode='json'),
+            ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+    def full_sha256_or_none(self, rel):
+        found = next((artifact for path, artifact in reversed(self.landed) if path == rel), None)
+        return None if found is None else self.prospective_sha256(rel, found)
+
     @staticmethod
     def write_invalid(*_args, **_kwargs):
         raise AssertionError('合格响应不应落到 INVALID')
@@ -1915,7 +1937,11 @@ class _LandingContext:
     def __init__(self):
         self.novel_dir = Path(tempfile.mkdtemp()) / 'book'
         self.cache = CachePolicy.default()
-        self.ledger = CostLedger()
+        from novel.llm.ledger import ledger_path
+        self.ledger = CostLedger(path=ledger_path(self.novel_dir.parent))
+        self.run_id = self.ledger.run_id
+        self.parent_run_id = self.ledger.parent_run_id
+        self.edges = {}
         self._accounting = {}
         self.events = []
 
@@ -2080,6 +2106,7 @@ def test_real_production_write_binds_provenance_to_the_accepted_pro_fallback(
 @pytest.mark.parametrize(('chapters', 'expected_peak'), [(2, 2), (19, 4), (40, 4)])
 def test_stage5_chapters_run_together_up_to_four(
         monkeypatch, chapters, expected_peak):
+    monkeypatch.setattr(write, '_record_legacy_chapter_delivery', lambda *_a, **_kw: None)
     all_entered = threading.Event()
     lock = threading.Lock()
     active = 0

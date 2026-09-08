@@ -16,6 +16,7 @@ from typing import Any, Literal
 from pydantic import Field, ValidationError, create_model
 
 from contracts.schema.base import StrictModel
+from contracts.schema.common import Sha256
 from contracts.schema.evaluation import EvidenceRef, GlobalReviewDecisionSet
 from novel.orchestrator import queue
 
@@ -75,14 +76,13 @@ def response_model(task: object) -> type[StrictModel]:
     exact = exact_request(task)
     if exact is None:
         raise ValueError('当前 task 没有唯一完整 Stage2 scope')
-    sha = _sha(exact)
     rows = _payload(exact)['decisions']
     ids = tuple(row['item_id'] for row in rows)
     if len(ids) != len(set(ids)):
         raise ValueError('Stage2 scope 模板 item 身份重复')
     if ids:
         decision = create_model(
-            f'Stage2ScopeException_{sha[:12]}', __base__=StrictModel,
+            'Stage2ScopeException', __base__=StrictModel,
             item_id=(Literal[ids], ...),
             state=(Literal['PASS', 'FAIL', 'UNVER'], ...),
             reason=(str, Field(min_length=1)),
@@ -93,9 +93,9 @@ def response_model(task: object) -> type[StrictModel]:
         # 历史/测试的空 scope 仍能表达默认裁决，但不能发明任何例外身份。
         decision_field = (list[str], Field(max_length=0))
     return create_model(
-        f'Stage2ScopeDelta_{sha[:12]}', __base__=StrictModel,
+        'Stage2ScopeDelta', __base__=StrictModel,
         schema_=(Literal[WIRE_SCHEMA], Field(alias='schema')),
-        expected_exact_request_sha256=(Literal[sha], ...),
+        expected_exact_request_sha256=(Sha256, ...),
         blocking_scope=(ScopeJudgment, ...),
         decisions=decision_field,
     )
@@ -114,6 +114,8 @@ def assemble(task: object, response: Any) -> dict[str, Any]:
         kinds = sorted({row['type'] for row in exc.errors(include_input=False)})
         raise ValueError(f'Stage2 scope compact typed 拒绝：{kinds}') from exc
     compact = parsed.model_dump(mode='json', by_alias=True)
+    if compact['expected_exact_request_sha256'] != _sha(exact):
+        raise ValueError('Stage2 scope compact exact-request SHA 已 stale')
     payload = _payload(exact)
     templates = {row['item_id']: row for row in payload['decisions']}
     payload['blocking_scope'].update(compact['blocking_scope'])

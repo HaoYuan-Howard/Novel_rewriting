@@ -11,6 +11,7 @@ import { useSampleCoverage } from '@/hooks/useSample'
 import { useSid } from '@/hooks/useRouteParams'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { GateBar } from '@/components/gate/GateBar'
+import { Stage2NodeReviewPanel } from '@/components/gate/Stage2NodeReviewPanel'
 import { QueryStates } from '@/components/state/QueryStates'
 import { EmptyIsSuspicious } from '@/components/state/States'
 import { LinkButton } from '@/components/ui/ActionButton'
@@ -185,13 +186,13 @@ export function GlobalScreen() {
           </div>
         </header>
         {blueprintAction ? (
-          <div role="group" aria-label="逐章骨架并行生成">
+          <div role="group" aria-label="接受全局后生成逐章骨架">
             <Panel className="flex flex-wrap items-center justify-between gap-14 px-18 py-14">
               <div className="flex max-w-[760px] flex-col gap-4">
-                <span className="text-body-lg font-semibold text-ink-2">全局复核不再挡住逐章骨架</span>
+                <span className="text-body-lg font-semibold text-ink-2">全局接受后生成逐章骨架</span>
                 <span className="text-body text-ink-4">
-                  {blueprintAction.label}。你可以一边核对本页、一边先跑骨架；同书写入仍互斥，
-                  骨架作业运行时请等它结束再提交复核决定。Stage4 会等当前全局复核的阻断面全部 PASS。
+                  {blueprintAction.label}。Global 的当前事实和节点审阅均接受后，才能逐章并发生成骨架；
+                  骨架完成后还需独立交叉审阅，两个节点接受后才进入 Stage4。
                 </span>
               </div>
               <GateBar screen="stage1" actionOnly />
@@ -199,6 +200,7 @@ export function GlobalScreen() {
           </div>
         ) : null}
         <GlobalReviewPanel sid={sid} />
+        <Stage2NodeReviewPanel sid={sid} node="stage2.global" token={reviewQuery.data?.review_token ?? null} />
         {doc ? (
           <GlobalSeenConfirm
             review={reviewQuery.data ?? null}

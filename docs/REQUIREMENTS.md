@@ -179,36 +179,23 @@ Stage2 Global Reviewer 增量 subject-card wire、Blueprint `extraction-ir-v3.2`
 `NOVEL_CONCURRENCY`、代码身份和 v3.2 契约，每轮使用独立 clean base 与冷缓存。
 
 **验收**：五个不同 parent run 都须 current/run-bound 正式落盘、无 `.INVALID`、生产 check 无 HARD hit
-或 HARD skip、Global generation-safe、Stage2 Commander 至多四席（含一席只读终审）且预审与 Blueprint 确有墙钟重叠；
+或 HARD skip、Global generation-safe、Global 与 Blueprint 两个 Commander 各至多 4 次内容调用且严格前后接受顺序成立；
 累计首次落盘率 ≥95%。每轮固定抽查至少 5 章，按源章核事实召回、因果方向、人物/世界状态和 evidence
 所属拍，任一失败即不宣称质量未受影响。历史 Stage2 基线 3044 秒，预注册“显著提速”为五轮 P50
 改善 ≥20%；三十分钟目标按五轮 max ≤1800 秒验收，不用一次最快值或 P50 代替。精确取证与汇总命令见
 `docs/OPERATIONS.md::Stage2 五次冷缓存性能与质量验收`。结果回写 `docs/DECISIONS.md` 后删除本条。
 
-### TODO-48 · Stage2 四席 Commander 契约与 seen.global typed 阅读事实：真机验收
+### TODO-48 · 工作单元职责统一的真实运行验收
 
-2026-09-04 落地（0 成本工程改动，无付费实证）：`Stage2ReviewLedger` v2 四席（席 1 审阅 / 席 2～3 订正 /
-席 4 只读终审）、`approval:stage2-global-final-review` blocker、`Stage2FinalReviewRequest` confirm 与
-`stage2.global --review-decisions` reopen、`seen.global` 改为 `Stage2GlobalSeenRequest` hash-bound 阅读事实
-（HTTP/CLI/界面同一形状）、`reconcile --stage2-review-reopen` 归档旧 v1 三席账。工程/合成面全绿，
-以下只追踪真机证据：
+工程推进计划与全部节点职责见 `docs/WORKFLOW_ROLE_BOUNDARIES.md`。本轮只做零模型工程验收；
+真实模型稳定性、成本和质量尚未验证。新契约只用于新 clean base，旧四席账、预审和额外 Global 终审
+不再作为新增实验目标，也不为旧书重新分配预算。
 
-- **两本卡死书续跑**：对 SID `2062949822106228156` 与 `2062246499690591305` 先 `reconcile --stage2-review-reopen`
-  归档旧三席账，再从 `approval:stage2-global-review` 起跑一次干净 worktree headless；验收席位序列
-  `review → (correction)* → final_review` 落账（`_service/runs/<sid>/stage2/global_review_ledgers/*.json`）、
-  `_service/approvals/<sid>.json` 的 `seen_proofs.global` 携 `s2gr1_` token、`seen_subjects.global.actor` 为终审
-  席 logical session、`gate.s2=true`，且终审席成本账 activity 为 `stage2.global.final-review`。
-- **终审 reopen 路**：至少一次真实终审提交 FAIL/UNVER reopen，随后订正席与第二次终审在同一账内完成；
-  reopen 引起的 blocker 回升不被账本拒绝。
-- **人工路径**：界面填写确认人提交 seen.global，改判任一 review 项后旧确认自动过期并要求重读。
-- **同席 resume（批 2）**：至少一次真实 Commander 轮在取得首个协议事件后被人为断网/杀 CLI，验收
-  席位账该席 `attempts[]` 出现 `launch(error) → resume(ok)`、`agent_sessions.jsonl` 同一 `session_run_id`
-  下 `attempt` 事件席内序号 1/2 且 `turn_index` 1/2、成本账两行 `attempt_id` 不同、
-  `_service/runs/<sid>/sessions/<session_run_id>.json` 指针在断网前已写出，且席位账席数不增加。
-- **Stage4 独立复审（批 3）**：一次真实 Stage4A `request_repair` 返修后，验收 `agent_sessions.jsonl` 里复审是新的
-  `session_run_id`/provider session（不是请求返修那一席的续会），且 `_service/runs/<sid>/reviewer_seats/` 下两个
-  business 各一账。
-- 结果回写 `docs/DECISIONS.md` 后删除本条。
+- 固定 clean commit、profile、冷缓存和并发，核验 Global 接受 → Blueprint 并发 → 独立 Blueprint 接受。
+- E/C 每工作单元包含首次最多 4 次内容调用，网络 attempts 逐次留账；候选变化、重启、换 epoch 不返还预算。
+- Stage4 A/B 分别连续审阅，Stage6 A/B judge 独立互盲；typed 决定和已保存回答崩溃后零模型重放。
+- 比较失败后恢复率、未变成功单元重复 wire、阻塞审阅时间与必需事实错误；缺失数据保持 unknown/unver。
+- 真实结果回写 `docs/DECISIONS.md` 后删除本条，不把非 corpus 回归称为全量语料绿。
 
 ## 条目生命周期
 

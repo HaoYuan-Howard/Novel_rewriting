@@ -1107,8 +1107,8 @@ def _beats(c: _Ctx) -> list[Outcome]:
                     'beats_coarse', 'span_coverage', 'span_coverage_per_chapter',
                     'uncovered_holes'):
             out.append(unverifiable(rid, _NO_MAIN_TEXT))
+        # 回取失败账描述原生产过程，不依赖当前原文；缺账仍由 _verbatim 报 UNVER。
         out += _verbatim(c)
-        out += _place_unlocatable(c)
         return out
 
     n_all = len(all_beats)

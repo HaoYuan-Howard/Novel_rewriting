@@ -279,12 +279,12 @@ history/proof，以及 `closure_decision/closure_history`。proof 绑定根 `cle
 关闭依赖 gate；Review、章节、finding 或 trim 身份变化会使 closure 进入 `review_required/expired`，
 旧决定只留 history。
 
-旧 `_ApprovalRecordV6Legacy` 及更早记录只供显式 backfill 读取，普通 GET / 启动绝不静默迁移。
-v6→v7 保留可逐项对证的 s0～s4、seen 与 design/structure/writing typed 历史，清除 s5～s7，
-绝不伪造 closure。旧 v5 的 design history 恒空，不得从已有 A/B/Plan 或付费账伪造 A 人审；
-已有 current Plan v4 + current bound EvidenceBinding v3 可继续最终结构裁决，但未来再次产 B 必须
-补 current A review。旧 v2 Binding 不迁移，仍由 B producer 重建；更早记录最多迁移仍能按当前
-盘面对证的前置 gate，不得凭旧 s4/writing 推造 typed 决定。v1 或损坏记录只能显式 reset/backfill。
+旧 `_ApprovalRecordV6Legacy` 及更早记录、相应 backfill 规则只解释冻结旧工作流。当前代码只在新 clean
+base 写入审批；普通 GET、历史事件与启动恢复保持只读，不借 reset/backfill 迁入旧 base 或补签决定。
+旧 v5 的 design history 恒空，已有 A/B/Plan 或付费账不能倒造 A 人审；旧 s4/writing 也不能推出新的
+typed 决定。新 base 必须依次取得当前 A 审阅、B producer 的 current Binding/Plan 和最终结构裁决，
+不得手补旧 Binding 字段。损坏或缺证明保持 unknown；冻结版本与原 code_version 核对见
+`docs/OPERATIONS.md` 的新旧 base 执行边界。
 
 ### 4.2 `Stage5ClosureView` / `Stage5ClosureWorkpack`
 

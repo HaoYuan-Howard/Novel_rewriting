@@ -32,6 +32,20 @@ from tools import current_corpus_paid_preview as P
 from novel.llm.client import MAX_SAMPLES_PER_RUNG
 
 _RUNGS = len(DEFAULT_RUNGS)
+
+
+def test_workflow_role_budget_counts_two_stage2_commanders_and_ambiguous_units():
+    budget = P.workflow_role_budget(17)
+    rows = budget['units']
+    stage2 = [row for row in rows if row['role'] == 'commander'
+              and row['node'].startswith('stage2.')]
+    assert {row['node'] for row in stage2} == {'stage2.global', 'stage2.blueprint'}
+    assert sum(row['content_hard_limit'] for row in stage2) == 8
+    binding = next(row for row in rows if row['node'] == 'stage4.plan'
+                   and row['role'] == 'executor')
+    assert (binding['minimum_units'], binding['maximum_units']) == (0, 17)
+    assert binding['content_hard_limit'] == 68
+    assert budget['token_estimate'] is None and budget['cost_estimate'] is None
 _FLASH_MODELS = len(P.models_for(P.config.DEFAULT_MODEL))
 _PRO_MODELS = len(P.models_for(PRO_FALLBACK_MODEL))
 
@@ -44,7 +58,8 @@ _SEMANTIC_WIRE = 4 * _PRO_MODELS * _RUNGS * MAX_SAMPLES_PER_RUNG
 _HOOK_RETRY_WIRE = 6 * _FLASH_MODELS * MAX_SAMPLES_PER_RUNG
 
 #: 当前语料范围的 wire 硬上限：(基础 136 + 语义 4) 按各自模型链放大，
-#: 每档采样数，再加 6 条 stage6 定向重试 × 采样数（它们走**单档**
+#: 每档采样数，再加双书各剩 3 次、合计 6 条 stage6 定向修订 × 采样数；
+#: 这是每书空缓存首次生成后共享的余额，不是三槽各领预算（它们走**单档**
 #: `HOOK_RETRY_RUNGS`，只乘采样数不乘档数）。⚠ 并列的 `external_hard_limit=588`
 #: 是**已有实验**的历史边界，不随当前阶梯变。
 _FULL_WIRE = _BASE_WIRE + _SEMANTIC_WIRE + _HOOK_RETRY_WIRE
@@ -172,6 +187,8 @@ def test_final_topology_lists_16_dispatches_and_real_conditional_limits(tmp_path
 
     hooks = [row for row in plan['dispatches'] if row['node'] == 'stage6.hook']
     assert all('low/no-thinking' in row['conditional_reason'] for row in hooks)
+    assert all('整书共用最多 4 次' in row['conditional_reason'] for row in hooks)
+    assert all('全部槽位共用其余 3 次' in row['conditional_reason'] for row in hooks)
     assert [(
         row['base_logical_requests'],
         row['conditional_logical_requests'],
@@ -302,7 +319,8 @@ def test_profiles_and_human_gates_are_explicit_before_semantic_calls(tmp_path):
     assert '没有自动放行门' in by_node['stage6.semantic']['semantic_gate_behavior']
     # `stage5.semantic` 于 2026-08-17 整节点下线 ⇒ 付费面上只剩 stage6 一条语义 dispatch。
     assert 'stage5.semantic' not in by_node
-    assert any('全项 PASS' in line for line in by_node['stage4.design']['human_gate_dependencies'])
+    assert any('Global/Blueprint' in line and '两个独立 Commander 均已接受' in line
+               for line in by_node['stage4.design']['human_gate_dependencies'])
     assert any('actor/reason' in line for line in by_node['stage2.global']['human_gate_dependencies'])
     assert any('approve' in line for line in by_node['stage7.rename']['human_gate_dependencies'])
     global_version = P.artifact_spec(P.STAGE2_GLOBAL_GROUNDING).current_version

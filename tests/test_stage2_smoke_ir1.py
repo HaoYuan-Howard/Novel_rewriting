@@ -23,7 +23,7 @@ from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
 from tests.test_stage2_contract_dispatch import _scaffolded_responses
 from tests.test_stage2_generation import (
-    _client, _ctx, _ok, _response_global,
+    _accept_fixture_global, _client, _ctx, _ok, _response_global,
 )
 from tools import smoke_stage2_ir1 as S
 
@@ -53,6 +53,7 @@ def _seed_v3_book(tmp_path: Path, monkeypatch) -> tuple[Path, Path, str]:
     global_client, _t = _client(
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     by_ordinal = _scaffolded_responses()
     ctx = _ctx(book, 'stage2.blueprint')

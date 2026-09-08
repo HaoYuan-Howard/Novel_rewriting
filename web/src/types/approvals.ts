@@ -690,11 +690,33 @@ export interface Stage5ClosureView {
   history: Stage5ClosureDecision[]
 }
 
+export interface Stage2NodeReviewRequest {
+  node: string
+  review_token: string
+  decision: string
+  actor: string
+  reason: string
+  chapter_ordinals: number[]
+  owner: string | null
+}
+
+export interface Stage2NodeReviewView {
+  state: string
+  current_decision: (Stage2NodeReviewRequest & {
+    review_subject_sha256: string
+    review_scope_sha256?: string | null
+    review_contract_version: string
+    decided_at: string
+  }) | null
+  history: Stage2NodeReviewView['current_decision'][]
+}
+
 export interface ApprovalDoc {
   v: 6
   sid: string
   gate: Record<GateKey, boolean>
   seen: Record<SeenKey, boolean>
+  stage2_reviews?: Record<string, Stage2NodeReviewView>
   /** 是否已经批准全书闭卷开写。 */
   writing: boolean
   /** Stage4A 候选的正式 hash-bound 审阅；accepted 也不会打开最终 s4 闸。 */

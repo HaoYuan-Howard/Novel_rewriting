@@ -165,6 +165,13 @@ class RunContext:
 
     # ── 身份 ──────────────────────────────────────────────────────────────
 
+    def require_current_workflow_write(self) -> None:
+        """真实写入要求当前工作流；费用与写权限是两个独立边界。"""
+        if self.readonly:
+            raise ProvenanceRefused('只读上下文不能写入或归档产物')
+        from novel.work_units import require_workflow
+        require_workflow(self.novel_dir.parent)
+
     @property
     def sid(self) -> str:
         """这本书的不可变 id。**从目录名解析**，与命令行怎么敲无关。"""
@@ -512,6 +519,9 @@ class RunContext:
         ⚠ 那不是「不记账」，`usage` 照样产出；它只是不往盘上追加行。
         """
         novel_dir = paths.resolve_novel_dir(base, sid)
+        if paid:
+            from novel.work_units import require_workflow
+            require_workflow(base)
         resolved_run_id = (
             run_identity.check_run_id(ledger.run_id)
             if run_id is None and ledger is not None
