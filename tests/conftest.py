@@ -42,6 +42,7 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_agent_drivers.py',
     'tests/test_agent_supervisor.py',
     'tests/test_api_agent.py',
+    'tests/test_api_edits.py',
     'tests/test_appendlog.py',
     'tests/test_commander_admission.py',
     'tests/test_commander_drivers.py',

@@ -206,18 +206,16 @@ def test_s7_service_proof_survives_delivery_and_derived_ledger_changes(monkeypat
         Path('synthetic-book'), record).gate['s7'] is True
 
 
-@pytest.mark.parametrize('mutation', ['approval', 'decision', 'stale_subject'])
-def test_s7_service_proof_revokes_changed_typed_approval_or_decision(
+@pytest.mark.parametrize('mutation', ['decision', 'stale_subject', 'missing'])
+def test_s7_service_proof_revokes_unapproved_or_stale_typed_decision(
     monkeypatch, mutation,
 ):
     holder = {'art': _approved_name_artifact()}
     record, _proof = _isolated_s7_proof(monkeypatch, holder)
     art = holder['art']
 
-    if mutation == 'approval':
-        art.approved = art.approved.model_copy(update={
-            'reason': 'a different typed approval audit',
-        })
+    if mutation == 'missing':
+        art.approved = None
     elif mutation == 'decision':
         art.surname_map = {'沈': '周'}
         art.approved = art.approved.model_copy(update={
@@ -228,6 +226,24 @@ def test_s7_service_proof_revokes_changed_typed_approval_or_decision(
 
     assert approvals._effective_record(
         Path('synthetic-book'), record).gate['s7'] is False
+
+
+@pytest.mark.parametrize('changed_subject', [False, True])
+def test_s7_current_typed_reapproval_replaces_obsolete_service_proof(monkeypatch, changed_subject):
+    holder = {'art': _approved_name_artifact()}
+    record, original_proof = _isolated_s7_proof(monkeypatch, holder)
+    art = holder['art']
+    if changed_subject:
+        art.surname_map = {'沈': '周'}
+    current_subject = rename.approval_subject_sha256(art)
+    art.approved = art.approved.model_copy(update={
+        'reason': '新的人明确核对并批准了当前人物决定',
+        'subject_sha256': current_subject, 'review_identity_sha256': current_subject,
+    })
+    effective = approvals._effective_record(Path('synthetic-book'), record)
+    assert effective.gate['s7'] is True
+    assert effective.gate_proofs['s7'] != original_proof
+    assert record.gate_proofs['s7'] == original_proof, '派生新当前值不能重写旧检查单事实'
 
 
 @_corpus_test

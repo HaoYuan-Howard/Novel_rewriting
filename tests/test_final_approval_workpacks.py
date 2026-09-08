@@ -441,13 +441,42 @@ def _stage7_snapshot_env(monkeypatch):
     monkeypatch.setattr(rename, '_Upstreams', lambda *_args: object())
     monkeypatch.setattr(rename, '_judge', lambda *_args: [])
     monkeypatch.setattr(
-        rename, '_report', lambda *_args: _Report(node='stage7.approve'))
+        rename, '_report', lambda *_args, **_kwargs: _Report(node='stage7.approve'))
     monkeypatch.setattr(
         rename, 'compact_approval_check', lambda _report: _compact_check())
     monkeypatch.setattr(
         rename.prov, 'rules_fingerprint', lambda _stage: rules['value'])
     store = SimpleNamespace(ctx=SimpleNamespace(sid='book-7', code='code-7'))
     return store, _name_map(), rules
+
+
+@pytest.mark.parametrize('caller_node', ['stage0.approve', 'stage7.assemble'])
+def test_stage7_workpack_keeps_own_report_and_identity_across_consumers(
+        monkeypatch, caller_node) -> None:
+    """真实 report builder 的规则分母不能因 API/组书调用上下文而改变。"""
+    from novel.prov import FreshnessReport
+
+    report_builder = rename._report
+    compact_check = rename.compact_approval_check
+    store, art, _rules = _stage7_snapshot_env(monkeypatch)
+    monkeypatch.setattr(rename, '_report', report_builder)
+    monkeypatch.setattr(rename, 'compact_approval_check', compact_check)
+    store.exists = lambda rel: rel == rename.REL
+    store.freshness = lambda _rel: FreshnessReport('fresh', 'match')
+    art.provenance = SimpleNamespace(model_dump=lambda **_kwargs: {})
+    store.ctx.node = 'stage7.approve'
+    canonical, canonical_report = rename._approval_workpack_snapshot(store, art)
+
+    store.ctx.node = caller_node
+    consumed, consumed_report = rename._approval_workpack_snapshot(store, art)
+
+    assert store.ctx.node == caller_node
+    assert canonical_report.node == consumed_report.node == 'stage7.approve'
+    assert canonical.check.rules_scanned > 0
+    assert consumed.check == canonical.check
+    assert consumed.review_identity_sha256 == canonical.review_identity_sha256
+    assert consumed.validation_seal_sha256 == canonical.validation_seal_sha256
+    assert consumed.workpack_sha256 == canonical.workpack_sha256
 
 
 def test_stage7_workpack_keeps_real_hits_residual_context_and_stable_subject(

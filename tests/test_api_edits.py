@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -252,27 +253,25 @@ def test_stamp_chain_follows_current_gate_order_without_touching_stage3(monkeypa
     assert written[0].gate_proofs['s7'] is None
 
 
-def test_stamp_writes_normally_through_the_short_admission_scope(
-        tmp_path, monkeypatch):
+def test_stamp_writes_normally_through_the_short_admission_scope(tmp_path, monkeypatch):
     from novel.api import approval_stamp
-    from novel.api.routes import edits as route
+    from novel.api.routes import edits, ingest
+    from novel.orchestrator import jobs
 
     stamped = []
-    monkeypatch.setattr(
-        approval_stamp.approvals, 'approve_gate',
-        lambda base, sid, gate: stamped.append((base, sid, gate)))
-
-    assert route._stamp is approval_stamp.stamp_approval_after_landed
-    route._stamp(str(tmp_path), '422', 's6')
-
-    assert stamped == [(str(tmp_path), '422', 's6')]
-    assert route.jobs.REGISTRY.conflicting_holder('422') is None
+    monkeypatch.setattr(approval_stamp.approvals, 'approve_gate',
+                        lambda base, sid, gate: stamped.append((base, sid, gate)))
+    assert ingest.stamp_approval_after_landed is approval_stamp.stamp_approval_after_landed
+    assert edits._stamp is approval_stamp.stamp_approval_after_landed
+    approval_stamp.stamp_approval_after_landed(str(tmp_path), '422', 's0')
+    assert stamped == [(str(tmp_path), '422', 's0')]
+    assert jobs.REGISTRY.conflicting_holder('422') is None
 
 
 @pytest.mark.parametrize('conflict_kind', ['live_agent', 'durable_orphan'])
 def test_landed_job_record_survives_a_stamp_writer_conflict(
         validation_client, tmp_path, monkeypatch, conflict_kind):
-    """jobs.run 后 writer 抢锁：HTTP 仍返回已落 JobRecord，只披露没盖章。"""
+    """定稿后不再写第二份服务章；writer 抢锁不产生补录警告。"""
     from novel.api import approval_stamp
     from novel.api.routes import edits as route
     from novel.orchestrator import admission
@@ -301,7 +300,8 @@ def test_landed_job_record_survives_a_stamp_writer_conflict(
         approval_stamp.approvals, 'approve_gate',
         lambda *_args: pytest.fail('同书 writer 冲突时不得进入审批写动作'))
     try:
-        with pytest.warns(RuntimeWarning, match='没有并发写盘'):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
             response = validation_client.post(
                 '/api/novels/422/stage6/approve',
                 json={
@@ -322,8 +322,11 @@ def test_landed_job_record_survives_a_stamp_writer_conflict(
     assert response.json()['job_id'] == f'landed-before-{conflict_kind}'
     assert response.json()['state'] == 'ok'
 
+    assert not [item for item in caught if issubclass(item.category, RuntimeWarning)]
+
 
 # ───────────────────────── 一、章节改稿 ─────────────────────────
+
 
 def test_blueprint_seen_http_body_requires_the_opaque_workpack_token(
         validation_client):
@@ -712,3 +715,353 @@ def test_residual_adoption_api_only_accepts_explicit_high(validation_client):
     assert response.status_code == 200
     assert response.json()['state'] == 'failed', (
         '空测试书没有 name_map，但合法请求必须真正抵达 0 成本作业而不是被载体误拒')
+
+
+# ─────────────── 默认套件：CLI typed 定稿 → 只读公开审批投影 ───────────────
+
+@pytest.fixture
+def final_gate_book(tmp_path, monkeypatch):
+    """真实 Store、CLI 定稿、workpack/proof 与 HTTP；隔离 Stage0～5 前置业务。
+
+    两份候选是合成输入，归一/判据环境固定为空异常；本组不测生成质量。
+    不替换最终 approval_is_current、freshness、gate 投影、定稿 producer 或 GET。
+    """
+    from contracts.schema.stage1 import HookCopy, MainText
+    from contracts.schema.stage6 import Hook, Mech
+    from contracts.schema.stage7 import NameMap, NameMapFreeProvenance
+    from novel import prov
+    from novel.cli import main as cli
+    from novel.orchestrator import approvals
+    from novel.stages.stage5 import closure
+    from novel.stages.stage6 import hook
+    from novel.store import ArtifactStore
+    from tests.test_stage6_semantic import TEXT_A, TEXT_B, TEXT_C
+    from tests.test_stage6_style_ab_review import _hook
+    from tests.test_store import _stage0_on_disk
+    from novel.stages.stage1.partition import partition_text
+
+    sid = '866'
+    book = tmp_path / f'定稿投影_{sid}'
+    (book / 'stage0').mkdir(parents=True)
+    clean = book / 'stage0/clean_text.txt'
+    source = tmp_path / 'source.txt'
+    source_bytes = '开篇悬念。\n\n1\n沈月来到门前。\n\n2\n她走进屋内。\n'.encode('utf-8')
+    source.write_bytes(source_bytes)
+    _stage0_on_disk(book, source, source_bytes, source_bytes)
+    partitioned = partition_text(source_bytes.decode('utf-8'))
+    stage1 = ArtifactStore(RunContext.open(
+        tmp_path, sid, 'stage1.partition', paid=False, write_ledger=False))
+    stage1.write('stage1/main_text.json', partitioned.main_text)
+    stage1.write('stage1/hook_copy.json', partitioned.hook_copy)
+
+    def hook_upstreams(_ctx, store):
+        store.read(HookCopy, 'stage1/hook_copy.json')
+        return SimpleNamespace(judged={}, upto=1)
+
+    def rename_upstreams(_ctx, store):
+        store.read(MainText, 'stage1/main_text.json')
+        return SimpleNamespace(judged={}, upto=1)
+
+    monkeypatch.setattr(hook, '_Upstreams', hook_upstreams)
+    monkeypatch.setattr(hook, '_judge_artifact', lambda *_args: [])
+    monkeypatch.setattr(hook, '_normalize_and_judge', lambda text, _up: (
+        text, Mech(punct_fixed=0, quotes_fixed=0, paras_fixed=0), []))
+    monkeypatch.setattr(rename, '_Upstreams', rename_upstreams)
+    monkeypatch.setattr(rename, '_judge', lambda *_args: [])
+    # Stage7 免费重判保持同一合成业务面；重写来源、批准继承与正式落盘仍走
+    # producer，本组不再复制人物替换器的业务判据。
+    def rebuild_name(ctx, _up, _model, _extra, provenance):
+        current, _ = ArtifactStore(ctx).read_own(NameMap, rename.REL)
+        return current.model_copy(update={'provenance': provenance}), [], None
+    monkeypatch.setattr(rename, '_build', rebuild_name)
+
+    ctx = RunContext.open(tmp_path, sid, 'stage6.hook', paid=True, write_ledger=False)
+    store = ArtifactStore(ctx)
+    store.read(HookCopy, 'stage1/hook_copy.json')
+    candidate = _hook([TEXT_A, TEXT_B, TEXT_C])
+    candidate = candidate.model_copy(update={'provenance': candidate.provenance.model_copy(update={
+        'code': ctx.code, 'root_clean_sha1': ctx.root_clean_sha1, 'inputs': ctx.edges,
+        'prompts': {'RULES': prov.fingerprint(prov.rules_fingerprint('stage6'))},
+    })})
+    store.write(hook.REL, candidate)
+
+    ctx7 = RunContext.open(tmp_path, sid, 'stage7.rename', paid=False, write_ledger=False)
+    store7 = ArtifactStore(ctx7)
+    store7.read(MainText, 'stage1/main_text.json')
+    name_map = NameMap(
+        surname_map={'沈': '陆'}, characters=[{
+            'char_id': 'char_001', 'old_canonical': '沈月', 'new_canonical': '陆月',
+            'renamed': True, 'not_renamed_reason': None, 'aliases': [],
+            'reason': '测试输入明确决定改姓。',
+        }], extra_subs=[], subs={'沈月': '陆月'}, kept=[],
+        applied={'chapters': {}, 'hook': {'counts': {}}}, residual=[], baselines={},
+        approved=None, book_txt=None, judged={}, hook_sha1=None,
+        hook_consumed={'present': False, 'approved_text_sha1': prov.fingerprint('')},
+        sources={'writer_context': {'state': 'fresh', 'detail': [], 'code': ctx7.code}},
+        book=[], identity=None,
+        _provenance=ctx7.free_provenance(
+            NameMapFreeProvenance, origin='human', params={'max_tokens': 1024},
+            prompts={'RULES': prov.rules_fingerprint('stage7')}))
+    store7.write(rename.REL, name_map)
+    assert store.freshness(hook.REL).state == store7.freshness(rename.REL).state == 'fresh'
+
+    proof = approvals._ApprovalProof(
+        root_clean_sha1=ctx.root_clean_sha1,
+        artifacts={'stage0/clean_text.txt': hashlib.sha256(clean.read_bytes()).hexdigest()},
+        decision_sha256='a' * 64)
+    real_gate_proof = approvals._proof_for_gate
+    monkeypatch.setattr(approvals, '_proof_for_gate', lambda root, gate, record: (
+        real_gate_proof(root, gate, record) if gate in {'s6', 's7'} else proof))
+    monkeypatch.setattr(approvals, '_proof_for_seen', lambda *_args: proof)
+    monkeypatch.setattr(approvals, '_proof_for_writing', lambda *_args: proof)
+    monkeypatch.setattr(approvals, '_spawns', lambda *_args: {})
+    monkeypatch.setattr(cli, 'stage2_review_required', lambda *_args, **_kw: False)
+    monkeypatch.setattr(closure, 'require_stage5_closed', lambda *_args: None)
+    structure = approvals._StoredStructureDecision(
+        actor='fixture-prerequisite', reason='前置结构决定由本测试输入给定',
+        subject_sha256='b' * 64, decided_at='2026-09-08T00:00:00Z', proof=proof,
+        chapters=[{'output_ordinal': 1, 'decision': 'accept', 'reason': '已核对前置'}])
+    closure_decision = approvals._StoredClosureDecision(
+        actor='fixture-prerequisite', reason='前置闭合决定由本测试输入给定',
+        workpack_sha256='c' * 64, review_sha256='d' * 64, decision_sha256='e' * 64,
+        decided_at='2026-09-08T00:00:00Z', proof=proof)
+    # Stage4/5 是本组给定的前置，不让无关的缺计划/Review 显示口否定已给定
+    # 的 typed 前提；使用完整公开载体，最终两层仍现场读产物、重算 proof。
+    from contracts.schema.api import StructureApprovalView, Stage5ClosureView, Stage5ClosureWorkpack
+    public_structure = approvals._public_structure_decision(structure)
+    monkeypatch.setattr(approvals, '_structure_view', lambda *_args: StructureApprovalView(
+        state='accepted', current_subject_sha256=structure.subject_sha256,
+        review_token=public_structure.review_token,
+        current_decision=public_structure, history=[public_structure]))
+    public_closure = approvals._public_closure_decision(closure_decision)
+    closure_pack = Stage5ClosureWorkpack(
+        review_seq=1, review_rel='stage5/review_1.json', review_sha256='d' * 64,
+        planned_chapters=[1], missing_chapters=[],
+        chapter_subjects=[{'output_ordinal': 1, 'chapter_sha256': 'f' * 64}],
+        invalid_chapters=[], hard_findings=[], unresolved_trim_chapters=[],
+        unresolved_trim_items=[], trim_subjects=[], wontfix_sha256=None, must_appear=[],
+        workpack_sha256='c' * 64, review_token=public_closure.review_token)
+    monkeypatch.setattr(approvals, '_closure_view', lambda *_args: Stage5ClosureView(
+        state='closed', workpack=closure_pack, current_decision=public_closure,
+        history=[public_closure]))
+    raw = approvals._fresh_record(sid)
+    raw = raw.model_copy(update={
+        'structure_history': [structure], 'structure_decision': structure,
+        'closure_history': [closure_decision], 'closure_decision': closure_decision,
+        'gate': {gate: gate not in {'s6', 's7'} for gate in APPROVAL_GATES},
+        'gate_proofs': {gate: None if gate in {'s6', 's7'} else proof for gate in APPROVAL_GATES},
+        'seen': {key: True for key in raw.seen},
+        'seen_proofs': {key: proof for key in raw.seen},
+        'writing': True, 'writing_proof': proof,
+    })
+    approvals._write(tmp_path, raw)
+    return SimpleNamespace(root=tmp_path, dir=book, sid=sid, cli=cli,
+                           hook=hook, approvals=approvals, ArtifactStore=ArtifactStore,
+                           models={'s6': Hook, 's7': NameMap})
+
+
+def _final_gate_cli(box, gate):
+    node = 'stage6.approve' if gate == 's6' else 'stage7.approve'
+    module = box.hook if gate == 's6' else rename
+    ctx = RunContext.open(box.root, box.sid, node, paid=False, write_ledger=False)
+    pack = module.approval_workpack(box.ArtifactStore(ctx))
+    argv = ['run', node, box.sid, '--base', str(box.root),
+            '--actor', 'cli-final-reviewer', '--reason', '核对完整测试工作包后定稿',
+            '--review-token', pack.review_token]
+    if gate == 's6':
+        argv += ['--pick', '1']
+    assert box.cli.main(argv) in (0, 1)
+    current, _ = box.ArtifactStore(ctx).read_own(box.models[gate], module.REL)
+    assert current.approved is not None
+    return current
+
+
+def _final_gate_bytes(box):
+    return {path.relative_to(box.root).as_posix(): path.read_bytes()
+            for path in box.root.rglob('*') if path.is_file()}
+
+
+def _get_final_gate_doc(client, box):
+    response = client.get(f'/api/novels/{box.sid}/approvals')
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+@pytest.mark.parametrize('old_stamp_failed', [False, True])
+def test_cli_final_approvals_are_public_without_secondary_service_stamps(
+        final_gate_book, old_stamp_failed):
+    box = final_gate_book
+    for gate in ('s6', 's7'):
+        _final_gate_cli(box, gate)
+    raw_path = box.approvals._path(box.root, box.sid)
+    if old_stamp_failed:
+        # 复刻旧 HTTP 已落稿、后置 stamp 因 writer 冲突失败的真实遗留盘面。
+        from novel.api.approval_stamp import stamp_approval_after_landed
+        from novel.orchestrator import jobs
+        key, holder = jobs.agent_lock_key(box.sid), 'legacy-final-stamp-conflict'
+        jobs.AGENT_REGISTRY.acquire(key, holder)
+        try:
+            with pytest.warns(RuntimeWarning, match='没有并发写盘'):
+                stamp_approval_after_landed(str(box.root), box.sid, 's6')
+        finally:
+            jobs.AGENT_REGISTRY.release(key, holder)
+    before = _final_gate_bytes(box)
+    raw_before = raw_path.read_bytes()
+    with TestClient(create_app(box.root)) as client:
+        for _ in range(2):
+            doc = _get_final_gate_doc(client, box)
+            assert doc['gate']['s6'] is doc['gate']['s7'] is True
+    assert _final_gate_bytes(box) == before
+    assert raw_path.read_bytes() == raw_before
+    raw = box.approvals._read_raw(box.root, box.sid)
+    assert raw.gate['s6'] is raw.gate['s7'] is False
+    assert raw.gate_proofs['s6'] is raw.gate_proofs['s7'] is None
+    assert not (box.root / '_service/ledger.jsonl').exists()
+
+
+@pytest.mark.parametrize('gate', ['s6', 's7'])
+@pytest.mark.parametrize('damage', ['missing', 'invalid', 'corrupt', 'no_decision',
+                                    'subject_changed', 'evidence_changed', 'upstream_closed'])
+def test_public_final_gate_refuses_missing_damaged_or_changed_typed_evidence(
+        final_gate_book, gate, damage):
+    box = final_gate_book
+    for current_gate in ('s6', 's7'):
+        _final_gate_cli(box, current_gate)
+    module = box.hook if gate == 's6' else rename
+    path = box.dir / module.REL
+    data = json.loads(path.read_text(encoding='utf-8'))
+    if damage == 'missing':
+        path.unlink()
+    elif damage == 'invalid':
+        path.with_name(path.stem + '.INVALID.json').write_bytes(path.read_bytes())
+    elif damage == 'corrupt':
+        path.write_text('损坏的 JSON', encoding='utf-8')
+    elif damage == 'upstream_closed':
+        raw = box.approvals._read_raw(box.root, box.sid)
+        raw.gate['s5'] = False
+        raw.gate_proofs['s5'] = None
+        box.approvals._write(box.root, raw)
+    else:
+        if damage == 'no_decision':
+            data['approved'] = None
+        elif damage == 'subject_changed':
+            if gate == 's6':
+                data['candidates'][0]['text'] += '新的一句话改变了候选。'
+            else:
+                data['characters'][0]['reason'] = '改名理由与人看过的决定不同。'
+        elif gate == 's6':
+            data['rationale'] = '审阅材料已发生变化。'
+        else:
+            data['applied']['hook']['counts'] = {'沈月': 99}
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+    before = _final_gate_bytes(box)
+    with TestClient(create_app(box.root)) as client:
+        doc = _get_final_gate_doc(client, box)
+    assert doc['gate'][gate] is False
+    if gate == 's6':
+        assert doc['gate']['s7'] is False
+    assert _final_gate_bytes(box) == before
+
+
+@pytest.mark.parametrize('gate', ['s6', 's7'])
+def test_final_gate_never_combines_old_typed_decision_with_new_unapproved_bytes(
+        final_gate_book, monkeypatch, gate):
+    box = final_gate_book
+    for current_gate in ('s6', 's7'):
+        _final_gate_cli(box, current_gate)
+    module = box.hook if gate == 's6' else rename
+    path = box.dir / module.REL
+    original = box.approvals._require_typed_gate_decision
+    replaced = False
+    def replace_after_typed_read(store, current_gate):
+        nonlocal replaced
+        result = original(store, current_gate)
+        if current_gate == gate and not replaced:
+            replaced = True
+            data = json.loads(path.read_text(encoding='utf-8'))
+            data['approved'] = None
+            path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        return result
+    monkeypatch.setattr(box.approvals, '_require_typed_gate_decision', replace_after_typed_read)
+    service_before = box.approvals._path(box.root, box.sid).read_bytes()
+    with TestClient(create_app(box.root)) as client:
+        doc = _get_final_gate_doc(client, box)
+    assert replaced
+    assert doc['gate'][gate] is False
+    assert box.approvals._path(box.root, box.sid).read_bytes() == service_before
+
+
+@pytest.mark.parametrize('gate', ['s6', 's7'])
+def test_zero_cost_recheck_preserves_same_typed_final_decision_without_backfill(
+        final_gate_book, monkeypatch, gate):
+    box = final_gate_book
+    for current_gate in ('s6', 's7'):
+        _final_gate_cli(box, current_gate)
+    module = box.hook if gate == 's6' else rename
+    original = json.loads((box.dir / module.REL).read_text(encoding='utf-8'))['approved']
+    raw_before = box.approvals._path(box.root, box.sid).read_bytes()
+    def current_pack():
+        ctx = RunContext.open(box.root, box.sid, f'stage{gate[1:]}.approve',
+                              paid=False, write_ledger=False)
+        return module.approval_workpack(box.ArtifactStore(ctx))
+
+    before_pack = current_pack()
+    old_rules = box.approvals.prov.rules_fingerprint
+    monkeypatch.setattr(box.approvals.prov, 'code_version', lambda: 'new-current-code')
+    monkeypatch.setattr(box.approvals.prov, 'rules_fingerprint',
+                        lambda stage: old_rules(stage) + ':new-validation-epoch')
+    after_pack = current_pack()
+    assert after_pack.validation_seal_sha256 != before_pack.validation_seal_sha256
+    assert after_pack.review_identity_sha256 == before_pack.review_identity_sha256
+    with TestClient(create_app(box.root)) as client:
+        # GET 已按当前代码/规则免费重验；同业务证据无需人为造 stale 或补录章。
+        assert _get_final_gate_doc(client, box)['gate'][gate] is True
+        for node in ('stage6.hook', 'stage7.rename'):
+            assert box.cli.main(['run', node, box.sid, '--base', str(box.root),
+                                 '--recheck']) in (0, 1)
+        assert _get_final_gate_doc(client, box)['gate'][gate] is True
+    assert current_pack().review_identity_sha256 == before_pack.review_identity_sha256
+    assert json.loads((box.dir / module.REL).read_text(encoding='utf-8'))['approved'] == original
+    assert box.approvals._path(box.root, box.sid).read_bytes() == raw_before
+    assert not (box.root / '_service/ledger.jsonl').exists()
+
+
+def test_backfill_does_not_write_final_stamps_or_manufacture_other_gate_facts(final_gate_book):
+    box = final_gate_book
+    for gate in ('s6', 's7'):
+        _final_gate_cli(box, gate)
+    before = box.approvals._path(box.root, box.sid).read_bytes()
+    result = box.approvals.backfill_from_disk(box.root, box.sid)
+    assert 's6' not in result.backfilled and 's7' not in result.backfilled
+    assert result.approvals.gate['s6'] is result.approvals.gate['s7'] is True
+    assert box.approvals._path(box.root, box.sid).read_bytes() == before
+    # 普通前置格仍必须由显式路径登记，GET 不自动补。
+    raw = box.approvals._read_raw(box.root, box.sid)
+    raw.gate['s1'] = False
+    raw.gate_proofs['s1'] = None
+    box.approvals._write(box.root, raw)
+    before = box.approvals._path(box.root, box.sid).read_bytes()
+    with TestClient(create_app(box.root)) as client:
+        doc = _get_final_gate_doc(client, box)
+        assert doc['gate']['s1'] is False
+        assert doc['gate']['s6'] is doc['gate']['s7'] is False
+    assert box.approvals._path(box.root, box.sid).read_bytes() == before
+
+
+def test_current_final_artifacts_never_silently_migrate_a_legacy_service_record(final_gate_book):
+    box = final_gate_book
+    for gate in ('s6', 's7'):
+        _final_gate_cli(box, gate)
+    path = box.approvals._path(box.root, box.sid)
+    legacy = json.loads(path.read_text(encoding='utf-8'))
+    legacy['v'] = 6
+    for key in ('closure_history', 'closure_decision', 'seen_subjects'):
+        legacy.pop(key, None)
+    legacy['gate']['s5'] = False
+    legacy['gate_proofs']['s5'] = None
+    path.write_text(json.dumps(legacy, ensure_ascii=False), encoding='utf-8')
+    before = _final_gate_bytes(box)
+    with TestClient(create_app(box.root)) as client:
+        response = client.get(f'/api/novels/{box.sid}/approvals')
+        assert response.status_code == 409, response.text
+    assert _final_gate_bytes(box) == before

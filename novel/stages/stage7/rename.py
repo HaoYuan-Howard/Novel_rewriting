@@ -555,7 +555,7 @@ def _hook_drift(art: NameMap, up: _Upstreams) -> bool:
 
 
 def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
-            art: NameMap | None) -> CheckReport:
+            art: NameMap | None, *, report_node: str | None = None) -> CheckReport:
     """⚠ **新鲜度判的是「这份报告在说哪个文件」**，而那不总是 `REL`。
 
     第一次付费跑就被闸门拦下时，盘上**只有 `.INVALID`**（`write_invalid` 不碰正式稿，
@@ -572,7 +572,9 @@ def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
         from novel.prov import FreshnessReport
         freshness = FreshnessReport('unknown', 'no_provenance')
     return build(
-        sid=ctx.sid, node=ctx.node, freshness=freshness,
+        # GET 审批投影与 assemble 也会重算终审包；其判据分母必须属于
+        # Stage7 定稿，不能继承调用方节点。普通生产/复检仍保留实际节点。
+        sid=ctx.sid, node=report_node or ctx.node, freshness=freshness,
         outcomes=outcomes, accounting=_accounting_of(prov_d),
         invalid=store.exists(_INVALID),
         revalidated=prov_d.get('revalidated'), origin=prov_d.get('origin'))
@@ -1994,7 +1996,8 @@ def _approval_workpack_snapshot_uncached(
     subject = art.model_copy(update={'approved': None, 'book_txt': None})
     up = _Upstreams(store.ctx, store)
     report = _report(
-        store.ctx, store, _judge(store.ctx, store, subject, up), subject)
+        store.ctx, store, _judge(store.ctx, store, subject, up), subject,
+        report_node='stage7.approve')
     replacement_hits: dict[str, int] = {}
     for face in [*subject.applied.chapters.values(), subject.applied.hook]:
         for old, count in face.counts.items():

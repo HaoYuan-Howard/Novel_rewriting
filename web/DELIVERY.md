@@ -207,7 +207,10 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | `drawerOpen` / 待确认动作 | 全应用**唯一一个** Context（`useChrome`） |
 | 选中的判据 / 剧透开关 / tab / 编辑中的文本 | 屏内 `useState` |
 
-**gate 走 Query 而不是 reducer**：它在真产品里是服务端的人工验收记录。
+**gate 走 Query 而不是 reducer**：它呈现服务端当前有效的人工决定。
+Stage6/7 的正式定稿来自产物里的 typed 决定；API 在既有前置链闭合后按 producer current
+证明只读投影，不要求 Agent/CLI 再补 HTTP 检查单。缺正式定稿时仍须进入对应审阅，
+“补录验收链”不能替代这次裁决；其它及 legacy 检查单的显式补录边界保持。
 普通闸门经 `approveGate`；Stage4 刻意不走通用 bool 路由，而有两道彼此独立的 typed 人审。
 Stage4A 表单一次提交当前完整 subject、策略 `accept|request_replan` 与逐章
 `accept|request_repair`；只有全接受才授权付费 B，拒绝决定本身不自动发起付费作业。B 编译并通过

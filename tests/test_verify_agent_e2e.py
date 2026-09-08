@@ -198,26 +198,31 @@ def test_resume_mode_discloses_scope_and_still_requires_each_executed_adoption()
     assert verifier.linkage_check(**kwargs, resume=True)['state'] == 'fail'
 
 
-def test_typed_approvals_are_checked_even_when_service_checklist_disagrees(monkeypatch):
+@pytest.mark.parametrize('public, producer, expected', [
+    (True, True, 'pass'), (False, True, 'fail'),
+    (True, False, 'fail'), (False, False, 'fail'),
+])
+def test_typed_final_approvals_and_public_projection_must_agree(
+        monkeypatch, public, producer, expected):
     approval = SimpleNamespace(
         gate=dict.fromkeys(('s0', 's1', 's2', 's4', 's5', 's6', 's7'), True),
         seen={'read': True, 'global': True})
-    approval.gate.update(s6=False, s7=False)
+    approval.gate.update(s6=public, s7=public)
+    before = copy.deepcopy(approval.gate)
     seen_nodes = []
 
     def current(_base, _sid, node):
         seen_nodes.append(node)
-        return True
+        return producer
 
     monkeypatch.setattr(verifier.queue, '_human_gate_satisfied', current)
-    assert verifier.current_approval_check(None, _SID, approval)['state'] == 'pass'
-    assert seen_nodes == ['stage6.approve', 'stage7.approve']
-    assert approval.gate['s6'] is False
-    approval.gate.update(s6=True, s7=True)
-    monkeypatch.setattr(verifier.queue, '_human_gate_satisfied', lambda *_: False)
     result = verifier.current_approval_check(None, _SID, approval)
-    assert result['state'] == 'fail'
-    assert result['facts']['missing_gates'] == ['s6', 's7']
+    assert result['state'] == expected
+    assert seen_nodes == ['stage6.approve', 'stage7.approve']
+    assert approval.gate == before, '验收不能覆盖公开的 gate 掩盖前后端矛盾'
+    assert result['facts']['missing_gates'] == ([] if public else ['s6', 's7'])
+    assert result['facts']['producer_missing_gates'] == ([] if producer else ['s6', 's7'])
+    assert result['facts']['projection_mismatches'] == ([] if public == producer else ['s6', 's7'])
 
 
 @pytest.mark.parametrize('start_code, epoch_code, expected', [

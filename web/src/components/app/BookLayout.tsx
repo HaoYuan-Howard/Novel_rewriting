@@ -15,8 +15,12 @@ const REQUIRED_GATE_BY_STAGE = {
   stage4: 's2',
   stage5: 's4',
   stage6: 's5',
-  stage7: 's6',
 } as const
+
+const FINAL_APPROVAL_PAGES = [
+  { stage: 'stage6', gate: 's6', label: 'Stage6 文案审阅' },
+  { stage: 'stage7', gate: 's7', label: 'Stage7 人物审阅' },
+] as const
 
 /**
  * 书级外壳：顶部一条书名 + sid。
@@ -38,12 +42,20 @@ export function BookLayout() {
   // 详情取不到时不猜书名：列表里那个名字属于列表，不属于这一屏
   const title = q.data?.title ?? null
   const chapters = q.data?.chapters ?? null
-  const approvalGaps = Object.entries(q.data?.stage_done ?? {})
+  const checklistGaps = Object.entries(q.data?.stage_done ?? {})
     .filter(([stage, done]) => {
       const required = REQUIRED_GATE_BY_STAGE[stage as keyof typeof REQUIRED_GATE_BY_STAGE]
       return done === true && required && doc && !doc.gate[required]
     })
     .map(([stage]) => stage)
+  // gate 的有效性只认后端；这里仅给已有产物对应的正式审阅页导航。
+  // s6/s7 也可能因前置链暂停，不能把 false 推断成必须重签。
+  const finalApprovalGaps = FINAL_APPROVAL_PAGES.filter(({ stage, gate }) =>
+    doc?.gate[gate] === false && (
+      q.data?.stage_done[stage] === true
+      || (stage === 'stage6' && q.data?.stage_done.stage7 === true)
+    ),
+  )
 
   return (
     <div className="flex min-w-0 flex-col">
@@ -62,12 +74,12 @@ export function BookLayout() {
           {sid} · {chapters === null ? '章数待分章' : chapters + ' 章'}
         </Mono>
       </header>
-      {approvalGaps.length ? (
+      {checklistGaps.length ? (
         <div className="flex items-center gap-10 border-b border-warn-line bg-warn-bg px-30 py-10 text-body text-warn-ink">
           <span aria-hidden>!</span>
           <span className="min-w-0 flex-1">
-            盘上已有 {approvalGaps.join('、')} 产物，但这本书缺少对应的前端人工验收记录。
-            可以只读审阅，也可以显式按盘面补录验收链；补录会标明来源，不伪装成逐屏点击。
+            盘上已有 {checklistGaps.join('、')} 产物，但对应的历史审批检查单尚未闭合。
+            可按盘面核对并补录仍能对证的历史记录；需要正式审阅的决定仍须在对应页面处理。
           </span>
           <button
             type="button"
@@ -77,6 +89,25 @@ export function BookLayout() {
           >
             {backfill.isPending ? '核对盘面中…' : '按盘面补录验收链'}
           </button>
+        </div>
+      ) : null}
+      {finalApprovalGaps.length ? (
+        <div className="flex items-center gap-10 border-b border-warn-line bg-warn-bg px-30 py-10 text-body text-warn-ink">
+          <span aria-hidden>!</span>
+          <span className="min-w-0 flex-1">
+            {finalApprovalGaps.map(({ label }) => label).join('、')}的最终定稿当前未生效。
+            请到正式审阅页查看前置条件和当前决定；检查单补录不能代替定稿审阅。
+          </span>
+          {finalApprovalGaps.map(({ stage, label }) => (
+            <button
+              key={stage}
+              type="button"
+              onClick={() => nav('/n/' + sid + '/' + stage)}
+              className="cursor-pointer rounded-btn border border-warn-line bg-card px-12 py-6 text-body font-semibold"
+            >
+              查看{label}
+            </button>
+          ))}
         </div>
       ) : null}
       {backfill.data?.backfilled.length &&

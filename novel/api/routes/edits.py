@@ -43,21 +43,6 @@ from novel.stages.stage5 import write
 router = APIRouter(prefix='/novels')
 
 
-def _completed(record: JobRecord) -> bool:
-    """这次动作**落没落**。判据在 `novel/cli/exit_codes.py::landed`（唯一落点）。
-
-    定稿类动作在 `1` 上也已经落盘（先写后判：approve 落了，只是报告有红行）——
-    **盖不盖审批章看「落没落」，红不红由 check 屏呈现**，两件事不许混
-    （混了的样子：一本带任何硬红的书永远盖不上人定稿的章，而人定稿的语义
-    恰恰是「人看过红行之后拍板」）。
-
-    ⚠ 这句话此前**只活在这个私有函数里**，编排层根本没有它 ⇒ `jobs.fold` 把
-    `1` 与 `2`/`70` 折成同一个 `failed`，批量队列因此在一个**产物已落盘**的节点上
-    整条停下。收口到 `exit_codes` 之后，两处问的是同一个谓词。
-    """
-    return X.landed(record.exit_code)
-
-
 @router.post('/{sid}/review/{ordinal}/edit', response_model=JobRecord)
 def edit_draft(
     ordinal: int,
@@ -247,8 +232,8 @@ def approve_hook(
 ) -> JobRecord:
     '''文案定稿：候选序号 + actor/reason + opaque workpack token。
 
-    定稿**落了**（exit 0/1）才盖 `s6` 审批章；越界 pick / 无 hook.json（exit 2/3）
-    不留半个脚印。报告红不红另说——那归 `/check/stage6` 呈现。
+    正式 typed 定稿是唯一事实；公开 s6 现场读取 producer 的 current 证明，
+    不再追加服务检查单写入。作业退出状态与校验报告仍各自原样返回。
     '''
     record = jobs.run(
         base, 'stage6.approve', sid,
@@ -256,8 +241,6 @@ def approve_hook(
          '--actor', request.actor,
          '--reason', request.reason,
          '--review-token', request.review_token])
-    if _completed(record):
-        _stamp(base, sid, 's6')
     return record
 
 
@@ -270,15 +253,13 @@ def approve_names(
     '''人名表定稿：actor/reason + opaque workpack token 乐观锁。
 
     后端会在任何归档/写盘前复核 token，并拒绝仍有 HARD 的人物表；
-    只有审批作业实际完成才盖 `s7`。
+    公开 s7 现场读取正式 typed 定稿的 current 证明，不另写服务检查单。
     '''
     record = jobs.run(
         base, 'stage7.approve', sid,
         ['--actor', request.actor,
          '--reason', request.reason,
          '--review-token', request.review_token])
-    if _completed(record):
-        _stamp(base, sid, 's7')
     return record
 
 

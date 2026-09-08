@@ -628,19 +628,29 @@ def linkage_check(
 
 
 def current_approval_check(base: Path, sid: str, approval: Any) -> dict[str, Any]:
-    """服务检查单不能替代 Stage6/7 producer 的当前 typed 定稿证明。"""
+    """独立核 producer 当前票，也要求公开投影一致；不能覆盖 API false 后验收。"""
     gates = dict(approval.gate)
-    for gate, node in (('s6', 'stage6.approve'), ('s7', 'stage7.approve')):
-        gates[gate] = queue._human_gate_satisfied(base, sid, node)
+    producer_gates = {
+        gate: queue._human_gate_satisfied(base, sid, node)
+        for gate, node in (('s6', 'stage6.approve'), ('s7', 'stage7.approve'))
+    }
+    projection_mismatches = sorted(
+        gate for gate, current in producer_gates.items()
+        if gates.get(gate) != current
+    )
+    producer_missing = sorted(
+        gate for gate, current in producer_gates.items() if not current)
     closed = sorted(key for key, value in gates.items() if value)
     missing = sorted(set(APPROVAL_GATES) - set(closed))
     seen = sorted(key for key, value in approval.seen.items() if value)
     missing_seen = sorted(set(APPROVAL_SEEN) - set(seen))
+    passed = not missing and not missing_seen and not producer_missing and not projection_mismatches
     return _check(
-        'current_hash_bound_approvals',
-        'pass' if not missing and not missing_seen else 'fail',
+        'current_hash_bound_approvals', 'pass' if passed else 'fail',
         closed_gates=closed, missing_gates=missing,
-        seen=seen, missing_seen=missing_seen)
+        seen=seen, missing_seen=missing_seen,
+        producer_gates=producer_gates, producer_missing_gates=producer_missing,
+        projection_mismatches=projection_mismatches)
 
 
 def epoch_lifecycle_check(events: Sequence[Any], run_id: str) -> dict[str, Any]:

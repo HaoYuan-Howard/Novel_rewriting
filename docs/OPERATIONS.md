@@ -62,6 +62,7 @@ conda run -n novel_refactor python -X utf8 tools/verify_agent_e2e.py `
 费用/session/adoption 只核本轮实际调用，报告显式标为 `mode=resume`，
 不能据此宣称八个节点在本轮重新执行。两种模式均逐 attempt 核对独立 Commander 席位；
 Stage6/7 定稿复用 production current proof，不把 API 审批检查单当第二套人工决定。
+同时核对公开 gate 与该 proof 的一致性，不能用 producer 真值掩盖 API 的错误状态。
 同席瞬态失败不从账本删除，也不要求失败 attempt 伪装成成功：验收须将每次成本行与
 attempt、实际存在的 provider turn 逐项联结，并证明同席有界重试最终成功；未观察到
 provider 身份的尝试保留实际 usage，不伪造 turn，也不由此推断没有付费。未恢复、

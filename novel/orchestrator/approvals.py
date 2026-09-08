@@ -2736,6 +2736,24 @@ def _same_proof(expected: _ApprovalProof | None, current: _ApprovalProof) -> boo
     return expected is not None and expected == current
 
 
+def _current_final_gate_proof(
+    novel_dir: Path, gate: str, record: _ApprovalRecordV7,
+) -> _ApprovalProof:
+    """只读复验正式定稿；服务检查单缺章不构成另一道人工裁决。
+
+    typed 验证与 proof 的产物读取可能跨过一次正式写回。必须再次复用完整
+    producer/current/freshness 检查并核同一 proof，不能把 A 的批准拼到 B 的字节。
+    返回值仅用于 effective 投影，不产生 raw 点击或补录事实。
+    """
+    if gate not in ('s6', 's7'):
+        raise ValueError(f'不是正式定稿闸门：{gate}')
+    first = _proof_for_gate(novel_dir, gate, record)
+    second = _proof_for_gate(novel_dir, gate, record)
+    if not _same_proof(first, second):
+        raise ArtifactUnreadable(f'{gate} 定稿证明在读取期间变化，不能投影为已确认')
+    return second
+
+
 def _effective_record(novel_dir: Path, record: _ApprovalRecordV7) -> _ApprovalRecordV7:
     """Return the effective current projection without rewriting audit history."""
     seen = dict(record.seen)
@@ -2805,7 +2823,10 @@ def _effective_record(novel_dir: Path, record: _ApprovalRecordV7) -> _ApprovalRe
         'writing': writing, 'writing_proof': writing_proof,
     })
     for gate in _POST_WRITING_GATES:
-        if not gates[gate]:
+        # s6/s7 的正式事实在 Hook/NameMap 的 typed 决定中。HTTP 旧附加章只是
+        # 检查单，不能让同一票因来自 CLI/Agent 而变成未审；s5 仍必须有原回执。
+        final_gate = gate in ('s6', 's7')
+        if not final_gate and not gates[gate]:
             continue
         if any(not gates[key] for key in _GATE_REQUIREMENTS.get(gate, ())):
             gates[gate] = False
@@ -2816,12 +2837,16 @@ def _effective_record(novel_dir: Path, record: _ApprovalRecordV7) -> _ApprovalRe
             gate_proofs[gate] = None
             continue
         try:
-            current = _proof_for_gate(novel_dir, gate, effective)
+            current = (
+                _current_final_gate_proof(novel_dir, gate, effective)
+                if final_gate else _proof_for_gate(novel_dir, gate, effective)
+            )
         except NovelError:
             current = None
-        if current is None or not _same_proof(gate_proofs[gate], current):
-            gates[gate] = False
-            gate_proofs[gate] = None
+        gates[gate] = current is not None and (
+            final_gate or _same_proof(gate_proofs[gate], current)
+        )
+        gate_proofs[gate] = current if gates[gate] else None
         effective = effective.model_copy(update={
             'gate': gates, 'gate_proofs': gate_proofs,
         })
@@ -5514,7 +5539,9 @@ def backfill_from_disk(
                 continue
             # Stage4 不能从「盘上有一份计划」推成人已经逐章审过；只有
             # ``approve_structure`` 能生成 actor/reason/subject-bound typed 决定。
-            if gate == 's4':
+            # s6/s7 已直接投影 current typed 定稿，无需补一个前端点击章；
+            # 真缺票也不能靠补录代审。其它检查单与 legacy 迁移仍须显式操作。
+            if gate in ('s4', 's6', 's7'):
                 continue
             if any(
                 not current_gates[key]
