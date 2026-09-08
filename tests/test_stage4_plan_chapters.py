@@ -27,6 +27,7 @@ from contracts.invariants import (
     STAGE4_BINDING_INPUT_CONTRACT, STAGE4_BINDING_INPUT_RECEIPT_KEY,
 )
 from contracts.schema.stage1 import MainText
+from contracts.schema.stage2 import ChapterBlueprints
 from contracts.schema.stage4 import EvidenceBinding
 from novel import paths, prov
 from novel.agents import (
@@ -45,6 +46,7 @@ from novel.stages.stage4 import plan
 from tests.test_stage4_agent_boundary import (
     _book, _ctx, _land_design, _seed_current_stage2, _bound_b_response,
 )
+from tests.frozen_tree import FrozenTree
 
 
 @pytest.fixture(autouse=True)
@@ -52,11 +54,31 @@ def _stable_code_version(monkeypatch) -> None:
     monkeypatch.setattr(prov, 'code_version', lambda: 'test-stage4-plan-chapters')
 
 
-def test_fully_mechanical_book_is_zero_wire(tmp_path) -> None:
-    book = _book(tmp_path)
-    blueprints = _seed_current_stage2(book)
+@pytest.fixture(scope='module')
+def _design_seed(tmp_path_factory) -> FrozenTree:
+    """本模块只测 B；A 仍由真 producer 生成一次，随后只复用不可变字节。"""
+    root = tmp_path_factory.mktemp('plan_design_seed')
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(prov, 'code_version', lambda: 'test-stage4-plan-chapters')
+        book = _book(root)
+        blueprints = _seed_current_stage2(book)
+        _land_design(book, blueprints.model_dump(by_alias=True, mode='json'))
+    return FrozenTree.capture(root)
+
+
+@pytest.fixture
+def prepared_design(tmp_path, _design_seed):
+    _design_seed.restore(tmp_path)
+    book = tmp_path / '盲规划生产链_742'
+    store = ArtifactStore(_ctx(book, 'stage4.plan'))
+    blueprints = store.read_own(ChapterBlueprints, plan.BLUEPRINTS)[0]
+    candidate = store.read_own(plan.BlindCandidate, STAGE4_BLIND_CANDIDATE)[0]
+    return book, blueprints, candidate
+
+
+def test_fully_mechanical_book_is_zero_wire(prepared_design) -> None:
+    book, blueprints, _candidate = prepared_design
     blueprints_raw = blueprints.model_dump(by_alias=True, mode='json')
-    _design_ctx, candidate = _land_design(book, blueprints_raw)
     plan_ctx = _ctx(book, 'stage4.plan')
 
     pool = Stage4PlanSessionPool(plan_ctx)
@@ -81,12 +103,10 @@ def test_fully_mechanical_book_is_zero_wire(tmp_path) -> None:
 
 
 def test_mixed_book_wires_only_the_ambiguous_chapter(
-        tmp_path, monkeypatch,
+        prepared_design, monkeypatch,
 ) -> None:
-    book = _book(tmp_path)
-    blueprints = _seed_current_stage2(book)
+    book, blueprints, candidate = prepared_design
     blueprints_raw = blueprints.model_dump(by_alias=True, mode='json')
-    _design_ctx, candidate = _land_design(book, blueprints_raw)
     plan_ctx = _ctx(book, 'stage4.plan')
 
     real_build = plan.build_mechanical_baseline
@@ -465,12 +485,9 @@ class _ConcernDriver(AgentDriver):
 
 @pytest.mark.parametrize('violation', ('wrong_chapter', 'wrong_scene', 'forged_ref'))
 def test_run_plan_rejects_cross_chapter_concern_before_terminal_checkpoint(
-        tmp_path, monkeypatch, violation: str,
+        prepared_design, monkeypatch, violation: str,
 ) -> None:
-    book = _book(tmp_path)
-    blueprints = _seed_current_stage2(book)
-    bp_raw = blueprints.model_dump(by_alias=True, mode='json')
-    _land_design(book, bp_raw)
+    book, _blueprints, candidate = prepared_design
     ctx = _ctx(book, 'stage4.plan')
     monkeypatch.setattr(
         plan, 'build_mechanical_baseline',
@@ -521,12 +538,9 @@ def test_run_plan_rejects_cross_chapter_concern_before_terminal_checkpoint(
 
 
 def test_formal_concern_checkpoint_same_run_zero_wire_resume_and_aliases(
-        tmp_path, monkeypatch,
+        prepared_design, monkeypatch,
 ) -> None:
-    book = _book(tmp_path)
-    blueprints = _seed_current_stage2(book)
-    bp_raw = blueprints.model_dump(by_alias=True, mode='json')
-    _design_ctx, candidate = _land_design(book, bp_raw)
+    book, _blueprints, candidate = prepared_design
     first_ctx = _ctx(book, 'stage4.plan')
     monkeypatch.setattr(
         plan, 'build_mechanical_baseline',
@@ -624,12 +638,10 @@ def test_formal_concern_checkpoint_same_run_zero_wire_resume_and_aliases(
 
 
 def test_real_chapter_issue_excludes_other_chapter_formal_and_alias(
-        tmp_path,
+        prepared_design,
 ) -> None:
-    book = _book(tmp_path)
-    blueprints = _seed_current_stage2(book)
+    book, blueprints, _candidate = prepared_design
     bp_raw = blueprints.model_dump(by_alias=True, mode='json')
-    _land_design(book, bp_raw)
     ctx = _ctx(book, 'stage4.plan')
     prepared = plan.prepare_plan_candidate(ctx)
     baseline = plan.build_mechanical_baseline(
@@ -656,12 +668,9 @@ def test_real_chapter_issue_excludes_other_chapter_formal_and_alias(
 
 
 def test_ambiguous_chapters_really_run_concurrently_and_aggregate_in_order(
-        tmp_path, monkeypatch,
+        prepared_design, monkeypatch,
 ) -> None:
-    book = _book(tmp_path)
-    blueprints = _seed_current_stage2(book)
-    bp_raw = blueprints.model_dump(by_alias=True, mode='json')
-    _design_ctx, _candidate = _land_design(book, bp_raw)
+    book, _blueprints, candidate = prepared_design
     ctx = _ctx(book, 'stage4.plan')
     monkeypatch.setattr(
         plan, 'build_mechanical_baseline',
@@ -825,11 +834,8 @@ class _DeliveryRecoveryDriver(AgentDriver):
         return None
 
 
-def _delivery_recovery_book(tmp_path, monkeypatch):
-    book = _book(tmp_path)
-    blueprints = _seed_current_stage2(book)
-    bp_raw = blueprints.model_dump(by_alias=True, mode='json')
-    _land_design(book, bp_raw)
+def _delivery_recovery_book(prepared_design, monkeypatch):
+    book, _blueprints, candidate = prepared_design
     monkeypatch.setattr(
         plan, 'build_mechanical_baseline',
         _inject_stage_ambiguities(plan.build_mechanical_baseline, (1, 2, 3)))
@@ -884,9 +890,9 @@ def test_b_owner_reask_refuses_non_target_unit_before_wire_or_checkpoint(
 
 
 def test_delivery_limit_stops_new_admission_and_same_run_only_fills_pending(
-        tmp_path, monkeypatch,
+        prepared_design, monkeypatch,
 ) -> None:
-    book = _delivery_recovery_book(tmp_path, monkeypatch)
+    book = _delivery_recovery_book(prepared_design, monkeypatch)
     first_ctx = _ctx(book, 'stage4.plan')
     first_drivers = {
         1: _DeliveryRecoveryDriver(1),
@@ -958,9 +964,9 @@ def test_delivery_limit_stops_new_admission_and_same_run_only_fills_pending(
 
 
 def test_delivery_pause_during_b_owner_reask_resumes_from_checkpoint_in_new_session(
-        tmp_path, monkeypatch,
+        prepared_design, monkeypatch,
 ) -> None:
-    book = _delivery_recovery_book(tmp_path, monkeypatch)
+    book = _delivery_recovery_book(prepared_design, monkeypatch)
     first_ctx = _ctx(book, 'stage4.plan')
     first_drivers = {
         1: _DeliveryRecoveryDriver(1, outcome='resume_usage_limit'),
@@ -1032,9 +1038,9 @@ def test_delivery_pause_during_b_owner_reask_resumes_from_checkpoint_in_new_sess
 
 
 def test_new_run_adopts_unique_valid_partial_history_without_copying_checkpoint(
-        tmp_path, monkeypatch,
+        prepared_design, monkeypatch,
 ) -> None:
-    book = _delivery_recovery_book(tmp_path, monkeypatch)
+    book = _delivery_recovery_book(prepared_design, monkeypatch)
     source_ctx = _ctx(book, 'stage4.plan')
     source_drivers = {
         1: _DeliveryRecoveryDriver(1),
@@ -1093,10 +1099,10 @@ def test_new_run_adopts_unique_valid_partial_history_without_copying_checkpoint(
 
 
 def test_historical_unit_is_fresh_owned_before_reask_and_restart_commit(
-        tmp_path, monkeypatch,
+        prepared_design, monkeypatch,
 ) -> None:
     """historical 只作首轮采用；返问、checkpoint、usage 与 anchor 都归 target。"""
-    book = _delivery_recovery_book(tmp_path, monkeypatch)
+    book = _delivery_recovery_book(prepared_design, monkeypatch)
     source_ctx = _ctx(book, 'stage4.plan')
     source_drivers = {
         1: _DeliveryRecoveryDriver(1),
@@ -1215,12 +1221,10 @@ def test_historical_unit_is_fresh_owned_before_reask_and_restart_commit(
 
 
 def test_dynamic_validator_tail_window_submit_and_same_run_zero_wire_resume(
-        tmp_path, monkeypatch,
+        prepared_design, monkeypatch,
 ) -> None:
-    book = _book(tmp_path)
-    blueprints = _seed_current_stage2(book)
+    book, blueprints, _candidate = prepared_design
     bp_raw = blueprints.model_dump(by_alias=True, mode='json')
-    _design_ctx, _candidate = _land_design(book, bp_raw)
     first_ctx = _ctx(book, 'stage4.plan')
     real_build = plan.build_mechanical_baseline
     injected = _inject_stage_ambiguities(real_build, (1, 2))
@@ -1434,12 +1438,9 @@ def test_unscoped_b_owner_failure_is_a_code_failure() -> None:
 
 
 def test_b_owner_reasks_only_target_chapter_and_rewrites_anchor_checkpoint(
-        tmp_path, monkeypatch,
+        prepared_design, monkeypatch,
 ) -> None:
-    book = _book(tmp_path)
-    blueprints = _seed_current_stage2(book)
-    bp_raw = blueprints.model_dump(by_alias=True, mode='json')
-    _design_ctx, _candidate = _land_design(book, bp_raw)
+    book, _blueprints, candidate = prepared_design
     ctx = _ctx(book, 'stage4.plan')
     monkeypatch.setattr(
         plan, 'build_mechanical_baseline',
@@ -1549,10 +1550,10 @@ def test_b_owner_reasks_only_target_chapter_and_rewrites_anchor_checkpoint(
 
 @pytest.mark.parametrize('old_surface', ['system', 'user', 'input_contract'])
 def test_new_binding_receipt_cannot_adopt_checkpoint_from_incomplete_input(
-        tmp_path, monkeypatch, old_surface,
+        prepared_design, monkeypatch, old_surface,
 ) -> None:
     """旧回答即使动态校验合法，也不能用新 receipt 冒充看过完整映射的回答。"""
-    book = _delivery_recovery_book(tmp_path, monkeypatch)
+    book = _delivery_recovery_book(prepared_design, monkeypatch)
     source_ctx = _ctx(book, 'stage4.plan')
     source_drivers = {
         1: _DeliveryRecoveryDriver(1),
@@ -1630,10 +1631,10 @@ def test_new_binding_receipt_cannot_adopt_checkpoint_from_incomplete_input(
 
 
 def test_committed_chapter_hard_recovery_preserves_input_receipt_zero_wire(
-        tmp_path, monkeypatch,
+        prepared_design, monkeypatch,
 ) -> None:
     """真实章 checkpoint→HARD commit→新进程零 wire 收尾，不能丢章架构回执。"""
-    book = _delivery_recovery_book(tmp_path, monkeypatch)
+    book = _delivery_recovery_book(prepared_design, monkeypatch)
     real_verdict = plan._candidate_bundle_verdict
     real_evaluate = plan.evaluate_plan_candidate
     post_model_evaluation = False

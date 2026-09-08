@@ -191,6 +191,26 @@ agent 执行 pytest 时必须绕开文件系统沙箱。Windows 沙箱可能给�
 pytest 汇总行有时到不了宿主工具输出；需要精确 passed/skipped 时记录 JUnit，或核对完整进度点，不从
 缺失的汇总行猜结果。
 
+### 测试热点测量与准备复用
+
+开发反馈只跑受影响文件或失败项；同一批改动稳定后再跑一次默认非 corpus 回归。测试速度比较必须
+保持相同文件、环境和 worker 配置，并同时记录用例分母。先用 pytest 自带的阶段耗时区分 setup、
+call 与 teardown，再对少量代表用例使用 cProfile；profiler 的附加开销不与普通测试秒数混比。
+
+```powershell
+& 'D:/Miniconda/envs/novel_refactor/python.exe' -B -m pytest -n 0 tests/test_agent.py tests/test_stage4_binding_input_recovery_integration.py tests/test_stage4_plan_chapters.py --durations=35 --basetemp=E:/_tr -o cache_dir=.test_cache --junitxml=.test_cache/test-hotspots.xml
+```
+
+JUnit 的单用例 time 合并准备、执行与清理；不能据此把整个慢用例归因于某一阶段。首项 setup 还可能
+包含上一轮 basetemp 清理。所有 serial 模块共用一个 worker，因此先降低这些用例的实际成本，不能
+只增加 `-n` 或删掉 serial 登记。真实进程测试的 `wait(..., timeout)` 是等待上限，不等于固定 sleep。
+运行真实代码身份测试时，须冻结同一 checkout 的全部写入，包括未跟踪的规划文档；否则代码漂移
+会触发真实 epoch 守卫，让测试耗时包含反复重开而非被测步骤本身。
+
+上游准备只在同一次 pytest 内复用：原 producer 生成一次，`FrozenTree` 保存不可变字节，每例还原
+独立目录，重新创建当前 Store/模型对象。它不是跨运行 fixture 缓存，改代码后下一轮必须重新生成。
+被测 producer、校验、故障窗和恢复调用不能替换为基线结果，生产 `code_version()` 也不能缓存。
+
 ## 前端与真实联调
 
 API 只监听 `127.0.0.1:8765`。前端默认配置在 `web/.env`，真实联调应为

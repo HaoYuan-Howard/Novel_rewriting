@@ -149,6 +149,16 @@
 
 | 2026-09-04 | **非 Stage2 reviewer 改为“每 binding 一席”：返修后的复审不再由请求返修的同一 provider session 完成；纠错次数按 (sid, blocker, business) 持久记账**（用户裁决；0 成本工程改动，真机待验） | 旧路由下 Stage4A/B 与 Stage0/5/6/7 审批的所有 reviewer 轮在同一 epoch 精确续用同一 Commander provider session：Stage4A 打回后由 Executor 返修，下一次 `approval:stage4-design-review` 又回到那个已经写过 request_repair 的会话——“打回—修—自己复审”不独立，而 `_MAX_REVIEWER_CORRECTIONS` 只是进程内计数，pause/resume 或重启即清零。现役：`agent.py::_run_reviewer` 为每个 binding 开一席 fresh logical/provider session（`_ReviewerSeat`），同一 binding 内的紧凑纠错续用本席（`_run_commander_turn` 的 `seat_provider_session_id/seat_turns_recorded/close_seat` 席位续接），surface 变化即新席；席位在动作落盘、纠错用尽/无进展、binding 变化或 run 结束时闭合 `ended`；`novel/orchestrator/reviewer_seat_ledger.py` 按 `(sid, blocker, business_sha256)` 持久记 review/correction 轮与同轮 attempts，纠错上限 `COMMANDER_REVIEWER_MAX_CORRECTIONS=2` 跨重启不返还。Stage2 四席契约不变。验证：`tests/test_reviewer_seat_ledger.py`、`tests/test_agent.py`（surface 变化开新席、跨 run 纠错上限、既有纠错续会用例）与默认非 corpus 回归 exit 0；未发真实 provider wire。 |
 
+| 2026-09-08 | **串行热点复用不可变上游基线，保留逐例生产与故障恢复**（用户要求；只改测试与操作文档） | 三模块串行基线 244 项通过、281.06 秒；`--durations` 显示 Binding 每例 setup 约 5～6 秒，cProfile 显示 Plan 代表用例 2.292 秒中 1.919 秒用于前置 A 生产。两模块改为原 producer 生成一次基线，再用 `tests/frozen_tree.py::FrozenTree` 保存不可变字节，每例在独立空目录还原；不共享硬链接、可变 Store/账/模型，不缓存生产代码身份，不改 serial 登记。故障注入、B 生产、HTTP/审批、未知拒绝、并发与最终盘面断言仍逐例执行。相同 `novel_refactor`、`-n 0` 下，两模块原有 35 项 JUnit 累计耗时由 **130.150 秒降至 52.199 秒（约 60%）**；另加 2 项复制隔离/零覆盖反例，共 37 项通过。Agent 代表用例主要耗在真实工作单元与审阅证据复核，未为测速替换这条被测链。首项 setup 可能包含旧 basetemp 清理，profiler 开销也不可混入普通回归比较；不将局部 60% 外推为整仓提速比例。日常采用受影响组/失败回放，批次稳定后一次默认非 corpus 回归，命令见 `docs/OPERATIONS.md::测试热点测量与准备复用`。 |
+
+本次测试提速批次的收口记录：默认非 corpus 回归 5925 项，5922 通过、2 项既有语料依赖跳过，
+1 项 WAL 真实子进程测试超时，整轮 595.79 秒。运行期间外部新增/修改 `PLAN.md` 与
+`docs/PIPELINE_COST_LATENCY_PLAN.md`，真实代码摘要变化使该合成编排夹具反复重开 epoch；
+没有进入 WAL 恢复步骤。原用例及 120 秒上限未修改，随后单点复验通过（call 21.29 秒、总 35.17 秒，
+含旧 basetemp 清理）。完整报告和复验分别为 `.test_cache/test-speed-final-non-corpus.xml` 与
+`.test_cache/test-speed-wal-recheck.xml`；两者联合记录，不把受干扰的整轮计为完整退出 0，也不以该轮
+墙钟计算整仓提速比例。两份外部规划文档不属于此次测试优化提交。
+
 证据解释纪律：阶段性 smoke 会被后续完整验收覆盖；历史报告中的“未完成”不能越过
 `docs/REQUIREMENTS.md` 重新成为活动状态。模型或语料结论只适用于当时样本与预登记规则，不外推成
 普遍质量保证。

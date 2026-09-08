@@ -40,6 +40,7 @@ from novel.store import ArtifactStore
 from novel.views.stage2 import blueprint_review_workpack
 from novel.views.stage4 import stage4_view
 from tests.test_design_review import _accept_all
+from tests.frozen_tree import FrozenTree
 from tests.test_stage4_agent_boundary import _ctx as _agent_ctx
 from tests.test_stage4_plan_chapters import (
     _DeliveryRecoveryDriver, _inject_stage_ambiguities,
@@ -90,8 +91,7 @@ def _write_historical_pair(case: _Book, raw: dict[str, Any], monkeypatch) -> Non
     case.binding = binding
 
 
-@pytest.fixture
-def legacy_book(tmp_path, monkeypatch) -> _Book:
+def _configure_boundary(monkeypatch) -> None:
     monkeypatch.setattr(prov, 'code_version', lambda: CODE)
     # 本模块从已完成 Stage2 的边界开始；不重复合成 Stage0/1 审批任务。
     # s2 已读与 proof、A 全章决定和 Stage4 的全部准入仍由真实审批口生成。
@@ -100,6 +100,10 @@ def legacy_book(tmp_path, monkeypatch) -> _Book:
     monkeypatch.setattr(
         queue, 'nodes_up_to',
         lambda until: [node for node in real_nodes(until) if node.startswith('stage4.')])
+
+
+def _build_legacy_book(tmp_path, monkeypatch) -> _Book:
+    _configure_boundary(monkeypatch)
     book = _book(tmp_path)
     blueprints = _seed_current_stage2(book)
     from tests.test_stage2_review_decisions import _accept_global_node, _accept_blueprint_node
@@ -145,6 +149,27 @@ def legacy_book(tmp_path, monkeypatch) -> _Book:
     ]
     _write_historical_pair(case, raw, monkeypatch)
     return case
+
+
+@pytest.fixture(scope='module')
+def _legacy_seed(tmp_path_factory):
+    root = tmp_path_factory.mktemp('legacy_binding_seed')
+    with pytest.MonkeyPatch.context() as patch:
+        case = _build_legacy_book(root, patch)
+    return FrozenTree.capture(root), case.transports
+
+
+@pytest.fixture
+def legacy_book(tmp_path, monkeypatch, _legacy_seed) -> _Book:
+    """每例独享副本；被测的旧契约判断、审批、HTTP 和 B 重建仍逐次运行。"""
+    _configure_boundary(monkeypatch)
+    frozen, transports = _legacy_seed
+    frozen.restore(tmp_path)
+    book = tmp_path / '盲规划生产链_742'
+    store = ArtifactStore(_ctx(book, 'stage4.plan'))
+    binding = store.read_own(EvidenceBinding, STAGE4_EVIDENCE_BINDING)[0]
+    compiled = store.read_own(PlanChapters, STAGE4_PLAN_CHAPTERS)[0]
+    return _Book(tmp_path, book, store, binding, compiled, copy.deepcopy(transports))
 
 
 def _frozen_bytes(case: _Book) -> dict[str, bytes]:
