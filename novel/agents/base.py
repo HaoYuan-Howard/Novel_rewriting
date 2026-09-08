@@ -465,6 +465,11 @@ def classify_agent_command_failure(
         return 'permission', status, False
     if status == 429 or 'too many requests' in text:
         return 'rate_limit', status, True
+    # Codex 实跑的明确容量终态；只登记完整句，不把 capacity 关键词、
+    # 未知错误中的引用或其它 4xx 自动解释成瞬态，也不按建议切换模型。
+    if status is None and text.strip() == (
+            'selected model is at capacity. please try a different model.'):
+        return 'provider_transient', status, True
     if any(marker in text for marker in (
             'connection reset', 'connection refused', 'connection aborted',
             'network error', 'network request failed', 'failed to fetch',

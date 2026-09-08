@@ -150,12 +150,12 @@ def _failure_detail(raw: Mapping[str, Any]) -> str:
     for key in ('error', 'error_type', 'code', 'result'):
         value = raw.get(key)
         if isinstance(value, str) and value.strip():
-            values.append(value[:2048])
+            values.append(value)
         elif isinstance(value, Mapping):
             for nested in ('type', 'code', 'message', 'status'):
                 item = value.get(nested)
                 if isinstance(item, (str, int)) and not isinstance(item, bool):
-                    values.append(str(item)[:512])
+                    values.append(str(item))
     return ' '.join(values)
 
 
@@ -171,6 +171,16 @@ def _failure_status(raw: Mapping[str, Any]) -> int | None:
             if value is not None and 100 <= value <= 599:
                 return value
     return None
+
+
+def claude_failure_evidence(
+    raw: Mapping[str, Any], stderr: str = '',
+) -> tuple[str, int | None]:
+    """完整失败 result 是唯一错误来源；缺格保持未知，不混后台 stderr 警告。"""
+    if raw.get('subtype') == 'success' and raw.get('is_error') is False:
+        # CLI 在成功回答之后另行失败时，result 仍是回答，不取得错误行动权。
+        return stderr, None
+    return _failure_detail(raw), _failure_status(raw)
 
 
 class ClaudeCodeDriver(CliAgentDriver):
@@ -263,11 +273,10 @@ class ClaudeCodeDriver(CliAgentDriver):
         )
         if (completed.returncode != 0 or raw.get('subtype') != 'success'
                 or raw.get('is_error') is not False):
-            failure_detail = ' '.join(filter(None, (
-                _failure_detail(raw), (completed.stderr or '')[:2048],
-            )))
+            failure_detail, failure_status = claude_failure_evidence(
+                raw, completed.stderr or '')
             error_kind, status, retryable = classify_agent_command_failure(
-                failure_detail, usage=usage, status=_failure_status(raw))
+                failure_detail, usage=usage, status=failure_status)
             raise AgentCommandError(
                 f'Claude Code 返回失败信封（exit={completed.returncode}，'
                 f'subtype={raw.get("subtype")!r}，is_error={raw.get("is_error")!r}，'

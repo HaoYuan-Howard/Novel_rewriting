@@ -252,9 +252,9 @@ class CommanderObservation:
 class CommanderProcessResult:
     """外层进程事实；它不声称工作流产物已经可交付。
 
-    ``failure_kind`` / ``status`` / ``retryable`` 只在非 0 退出时由驱动按 stderr
-    与 usage 归一（与 executor 侧同一分类器）；``wire_evidence`` 表示协议流里
-    出现过供应商 session/usage——没有它的失败是 0-wire 本地失败。
+    ``failure_kind`` / ``status`` / ``retryable`` 只在非 0 退出时由驱动按当前
+    结构化失败与 usage 归一；无失败信封才取 stderr（与 executor 同一分类器）。
+    ``wire_evidence`` 表示协议流里出现过供应商 session/usage——没有它的失败是 0-wire 本地失败。
     """
 
     exit_code: int
@@ -629,6 +629,13 @@ class CliCommanderDriver(CommanderDriver):
         del events
         return None
 
+    def _failure_evidence(
+        self, events: Sequence[Mapping[str, Any]], stderr: str,
+    ) -> tuple[str, int | None]:
+        """协议驱动选择失败权威；无结构化错误的进程失败才由 stderr 诊断。"""
+        del events
+        return stderr, None
+
     def _validate_structured_events(
         self,
         events: Sequence[Mapping[str, Any]],
@@ -727,23 +734,14 @@ class CliCommanderDriver(CommanderDriver):
                 exit_code=exit_code, observation=observation,
                 wire_evidence=wire_evidence,
                 final_response=final_response)
-        # Codex 的 provider 拒绝在 stdout 的结构化 error/turn.failed 中，stderr
-        # 可以完全为空；仅取 stderr 会把不可热重试的 schema 错误洗成 agent_command。
-        failure_messages = [_text(completed.stderr)]
-        for line in _text(completed.stdout).splitlines():
-            try:
-                event = decode_wire_json(line)
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(event, dict):
-                continue
-            if event.get('type') == 'error' and isinstance(event.get('message'), str):
-                failure_messages.append(event['message'])
-            if (event.get('type') == 'turn.failed' and isinstance(event.get('error'), dict)
-                    and isinstance(event['error'].get('message'), str)):
-                failure_messages.append(event['error']['message'])
+        # 原始 stdout 已经通过同一严格 JSONL 解析；这里仍不能把后台 stderr
+        # 警告拼进 provider 终态。未知显式拒绝也不得借 warning 变成热重试。
+        failure_detail, failure_status = self._failure_evidence(
+            jsonl_events(_text(completed.stdout), provider=self.provider_label,
+                         allow_empty=True),
+            _text(completed.stderr))
         kind, status, retryable = classify_agent_command_failure(
-            '\n'.join(failure_messages), usage=observation.usage)
+            failure_detail, usage=observation.usage, status=failure_status)
         return CommanderProcessResult(
             exit_code=exit_code, observation=observation,
             failure_kind=kind, status=status, retryable=retryable,

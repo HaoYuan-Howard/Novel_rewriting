@@ -1086,3 +1086,110 @@ def test_a_non_positive_turn_count_is_still_refused(tmp_path):
     client.finish(process_state='failed', delivery_state='failed',
                   error_kind='invalid_provider_turn_count')
     client.close()
+
+
+@pytest.mark.parametrize('success_on', [2, 4, None], ids=['恢复成功', '最后一次恢复成功', '四次耗尽'])
+def test_codex_capacity_failure_uses_bounded_delivery_and_preserves_unknown_usage(
+        tmp_path, success_on):
+    """真实 driver 分类进入 client；容量失败不冒充回答、零 token 或新语义席。"""
+    calls: list[list[str]] = []
+    inputs: list[bytes] = []
+    capacity = 'Selected model is at capacity. Please try a different model.'
+
+    def runner(argv, **kwargs):
+        if '--version' in argv:
+            return subprocess.CompletedProcess(argv, 0, 'codex-cli 0.test', '')
+        calls.append(list(argv))
+        inputs.append(kwargs['input'])
+        succeeded = success_on is not None and len(calls) == success_on
+        provider = 'capacity-accepted' if succeeded else f'capacity-failed-{len(calls)}'
+        events = [
+            {'type': 'thread.started', 'thread_id': provider},
+            {'type': 'item.completed', 'item': {
+                'type': 'agent_message',
+                'text': '{"value":7}' if succeeded else '{"value":999}'}},
+        ]
+        if succeeded:
+            events.append({'type': 'turn.completed',
+                           'usage': {'input_tokens': 10, 'output_tokens': 3}})
+        else:
+            # 容量拒绝没有计量，不用合成全零替供应商背书。失败前看似完整的
+            # agent_message 也不能变成模型回答或获准 checkpoint。
+            events.extend([
+                {'type': 'error', 'message': capacity},
+                {'type': 'turn.failed', 'error': {'message': capacity}},
+            ])
+        return subprocess.CompletedProcess(
+            argv, 0 if succeeded else 1,
+            '\n'.join(json.dumps(row) for row in events),
+            'WARN models refresh timeout',
+        )
+
+    ctx = _ctx(tmp_path, node='stage4.plan')
+    sleeps: list[float] = []
+    client = SessionAgentClient(
+        ctx, _profile(), CodexDriver(executable='codex.exe', runner=runner),
+        max_semantic_turns=1, max_delivery_retries=3,
+        delivery_backoff_base=2, sleep=sleeps.append)
+    purpose = 'stage4.plan:ch0003'
+    checkpoint = None
+    try:
+        if success_on is None:
+            with pytest.raises(AgentDeliveryUnavailable) as caught:
+                client.ask_json('SYS', 'subject', model_cls=_Answer, purpose=purpose)
+            assert caught.value.error_kind == 'provider_transient'
+            assert caught.value.status is None
+            assert caught.value.attempts == 4
+            assert caught.value.same_run_resumable is True
+            assert client.driver_failed
+            with pytest.raises(ProvenanceRefused, match='缺 stdout/session/ledger'):
+                client.accepted_checkpoint(purpose)
+            client.finish(process_state='failed', delivery_state='unknown',
+                          error_kind=caught.value.error_kind)
+        else:
+            answer = client.ask_json('SYS', 'subject', model_cls=_Answer, purpose=purpose)
+            assert answer.value == 7
+            checkpoint = client.accepted_checkpoint(purpose)
+            client.finish(process_state='ok', delivery_state='delivered')
+    finally:
+        client.close()
+
+    attempted = success_on or 4
+    failed_count = attempted if success_on is None else attempted - 1
+    assert len(calls) == attempted
+    assert client.turns_used == 1
+    assert sleeps == [2, 4, 8][:attempted - 1]
+    assert all('resume' not in argv for argv in calls)
+    assert all(argv[argv.index('--model') + 1] == _profile().model for argv in calls)
+    assert all(data == inputs[0] for data in inputs)
+    rows = _rows(ledger_path(tmp_path))
+    assert len(rows) == attempted and ctx.ledger.calls_made == attempted
+    assert len({row['attempt_id'] for row in rows}) == attempted
+    assert len({row['request_fingerprint'] for row in rows}) == 1
+    assert [row['attempt'] for row in rows] == list(range(1, attempted + 1))
+    assert all(row['max_attempts'] == 4 for row in rows)
+    assert [row['will_retry'] for row in rows] == [True] * (attempted - 1) + [False]
+    for row in rows[:failed_count]:
+        assert row['error_kind'] == 'provider_transient'
+        assert row['retryable'] is True
+        assert row['status'] is None
+        assert row['outcome'] == 'error' and row['response_sha256'] is None
+        assert row['model'] == 'unknown' and row['request_model'] == _profile().model
+        assert all(row[key] is None for key in (
+            'prompt_tokens', 'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens',
+            'completion_tokens', 'reasoning_tokens'))
+    [session] = agent_session_audit.fold(agent_session_audit.read_events(tmp_path))
+    if checkpoint is None:
+        assert session.turns == ()
+        assert session.provider_session_ids == ()
+        assert session.process_state == 'failed' and session.delivery_state == 'unknown'
+    else:
+        assert checkpoint['accepted_turn_index'] == 1
+        assert checkpoint['provider_session_id'] == 'capacity-accepted'
+        assert checkpoint['accepted_text'] == '{"value":7}'
+        assert [row['attempt_id'] for row in checkpoint['attempt_links']] == [rows[-1]['attempt_id']]
+        assert len(session.turns) == 1 and session.turns[0].attempt_id == rows[-1]['attempt_id']
+        assert session.provider_session_ids == ('capacity-accepted',)
+        assert rows[-1]['prompt_tokens'] == 10 and rows[-1]['completion_tokens'] == 3
+    ledger_text = ledger_path(tmp_path).read_text(encoding='utf-8')
+    assert capacity not in ledger_text and 'models refresh timeout' not in ledger_text

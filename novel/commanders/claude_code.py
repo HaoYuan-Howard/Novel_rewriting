@@ -18,6 +18,7 @@ from novel.agents.base import (
     ensure_command_line_fits,
     integer,
 )
+from novel.agents.claude_code import claude_failure_evidence
 from novel.commanders.base import (
     CliCommanderDriver,
     CommanderConfigurationError,
@@ -264,6 +265,20 @@ class ClaudeCodeCommanderDriver(CliCommanderDriver):
     def session_id_of_event(event: Mapping[str, Any]) -> str | None:
         value = event.get('session_id')
         return value if isinstance(value, str) and value.strip() else None
+
+    def _failure_evidence(
+        self, events: Sequence[Mapping[str, Any]], stderr: str,
+    ) -> tuple[str, int | None]:
+        terminals = [event for event in events if event.get('type') == 'result']
+        succeeded = [event.get('subtype') == 'success' and event.get('is_error') is False
+                     for event in terminals]
+        if any(succeeded) and not all(succeeded):
+            # 与 Codex 相同：同一进程同时报告失败和成功，不能借后台 warning
+            # 把矛盾状态解释成一次普通网络超时。
+            return '', None
+        if terminals:
+            return claude_failure_evidence(terminals[-1], stderr)
+        return stderr, None
 
     def _final_response(
         self, events: Sequence[Mapping[str, Any]],

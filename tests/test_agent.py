@@ -9860,3 +9860,122 @@ def test_canonical_exit1_keeps_its_source_when_execution_drain_is_unknown(
     assert done.outcome.state == 'unknown'
     assert 'drain' in done.outcome.reason
     assert '已经落盘' in done.note
+
+
+@pytest.mark.parametrize(('scenario', 'expected_attempts', 'expected_kind'), [
+    ('capacity_then_success', 2, 'provider_transient'),
+    ('capacity_last_success', 3, 'provider_transient'),
+    ('capacity_exhausted', 3, 'provider_transient'),
+    ('unknown', 1, 'agent_command'),
+    ('authentication', 1, 'authentication'),
+    ('refusal', 1, 'agent_command'),
+])
+def test_capacity_real_commander_driver_keeps_seat_schema_and_failure_audit(
+        base, corpus, monkeypatch, scenario, expected_attempts, expected_kind):
+    """真实 Supervisor→driver→JSONL 分类→席位/成本/loader；仅进程回包离线注入。"""
+    real_spawn = agent._default_spawn
+    _current, _unused, applied = _install_design_review_harness(
+        monkeypatch, apply_exit_codes=[0], decisions=[])
+    monkeypatch.setattr(agent, '_default_spawn', real_spawn)
+    previous_build = agent.reviewer_tasks.build_task
+    task_box = {}
+
+    def build_task(*args, **kwargs):
+        task = previous_build(*args, **kwargs)
+        task_box['task'] = task
+        return task
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
+    calls = []
+    prompts = []
+    schemas = []
+    sleeps = []
+    monkeypatch.setattr(agent, '_retry_sleep', sleeps.append)
+    messages = {
+        'unknown': 'Unknown explicit provider failure',
+        'authentication': 'not logged in',
+        'refusal': 'Content policy refusal',
+    }
+    capacity = 'Selected model is at capacity. Please try a different model.'
+
+    def runner(argv, **kwargs):
+        calls.append(argv)
+        prompts.append(kwargs['input'])
+        schemas.append(Path(argv[argv.index('--output-schema') + 1]).read_bytes())
+        success = scenario in ('capacity_then_success', 'capacity_last_success') \
+            and len(calls) == expected_attempts
+        events = [
+            {'type': 'thread.started', 'thread_id': 'capacity-same-seat'},
+            {'type': 'turn.started'},
+            {'type': 'item.completed', 'item': {
+                'type': 'agent_message',
+                'text': json.dumps(_design_review_response(
+                    task_box['task'], 'capacity-adopted' if success else 'must-never-adopt'))}},
+        ]
+        if success:
+            events.append({'type': 'turn.completed', 'usage': {
+                'input_tokens': 10, 'cached_input_tokens': 2, 'output_tokens': 3}})
+        else:
+            message = messages.get(scenario, capacity)
+            events.extend([
+                {'type': 'error', 'message': message},
+                {'type': 'turn.failed', 'error': {'message': message}},
+            ])
+        return SimpleNamespace(
+            returncode=0 if success else 1,
+            stdout=''.join(json.dumps(event) + '\n' for event in events),
+            stderr='WARN models refresh timed out')
+
+    monkeypatch.setattr(
+        agent, 'create_commander_driver',
+        lambda profile, **_kwargs: CodexCommanderDriver(
+            executable='offline-capacity.exe', runner=runner))
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 20)
+    assert len(calls) == expected_attempts
+    assert sleeps == list(agent.COMMANDER_RETRY_BACKOFF_SECONDS[:expected_attempts - 1])
+    assert all(argv[argv.index('--model') + 1] == _PROFILES.commander.model for argv in calls)
+    assert all(schema == schemas[0] for schema in schemas)
+    assert 'resume' not in calls[0]
+    for argv, prompt in zip(calls[1:], prompts[1:]):
+        assert argv[argv.index('resume') + 1] == 'capacity-same-seat'
+        assert prompt.startswith('上一进程因网络或瞬态故障中断')
+        assert 'DESIGN REVIEW IMMUTABLE WORKPACK' not in prompt
+
+    succeeded = scenario in ('capacity_then_success', 'capacity_last_success')
+    failures = expected_attempts - int(succeeded)
+    assert applied == ([_design_review_payload('capacity-adopted')] if succeeded else [])
+    [shown] = agent.reviewer_seat_ledger.list_ledgers(base, '42')
+    assert len(shown['turns']) == 1, '交付重试不新开业务席位'
+    assert shown['turns'][0]['attempts'] == expected_attempts
+    assert shown['turns'][0]['outcome'] == ('ok' if succeeded else 'failed')
+    assert shown['corrections_used'] == 0
+    [session] = agent_session_audit.fold(agent_session_audit.read_events(base))
+    assert session.provider_session_ids == ('capacity-same-seat',)
+    assert len(session.attempts) == len(session.turns) == expected_attempts
+    expected_errors = [expected_kind] * failures + ([None] if succeeded else [])
+    assert [row.error_kind for row in session.attempts] == expected_errors
+    assert [row.error_kind for row in session.turns] == expected_errors
+    assert [row.turn_index for row in session.turns] == list(range(1, expected_attempts + 1))
+    cost = [json.loads(line) for line in (Path(base) / '_service' / 'ledger.jsonl')
+            .read_text(encoding='utf-8').splitlines() if line.strip()]
+    rows = [row for row in cost if row.get('role') == 'commander']
+    assert len(rows) == expected_attempts
+    assert len({row['attempt_id'] for row in rows}) == expected_attempts
+    assert [row['error_kind'] for row in rows] == expected_errors
+    for row in rows[:failures]:
+        assert row['outcome'] == 'error' and row['exit_code'] == 1
+        assert row.get('response_sha256') is None
+        assert all(row[key] is None for key in (
+            'prompt_tokens', 'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens',
+            'completion_tokens', 'reasoning_tokens'))
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    if not succeeded:
+        assert done.exit_code == 1 and done.exit_origin == 'commander'
+        assert done.state == 'failed'
+        assert done.outcome is not None and done.outcome.state == 'unknown'
+        assert expected_kind in done.outcome.reason
+        assert _reviewer_action_files(base) == []
+        assert session.process_state == 'failed' and session.delivery_state == 'unknown'

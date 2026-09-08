@@ -221,6 +221,38 @@ def _failure_status(event: Mapping[str, Any] | None) -> int | None:
     return None
 
 
+def codex_failure_event(
+    events: Sequence[Mapping[str, Any]],
+) -> Mapping[str, Any] | None:
+    """Executor 与 Commander 共用的当前失败权威，不读回答或重连旧诊断。"""
+    # Codex 的 WebSocket/TLS 重连会先发 error 再发 turn.completed；
+    # 已被成功终态覆盖的过程诊断不能成为后来 CLI 失败的重试理由。
+    last_error: Mapping[str, Any] | None = None
+    for event in reversed(events):
+        if event.get('type') == 'turn.completed':
+            break
+        if event.get('type') == 'turn.failed':
+            return event
+        if event.get('type') == 'error' and last_error is None:
+            last_error = event
+    return last_error
+
+
+def codex_failure_evidence(
+    events: Sequence[Mapping[str, Any]], stderr: str,
+) -> tuple[str, int | None]:
+    """显式终态即使错误格为空也有权威；stderr 只补完全没有终态的进程失败。"""
+    if (any(event.get('type') == 'turn.failed' for event in events)
+            and any(event.get('type') == 'turn.completed' for event in events)):
+        # 同一 invocation 的失败/成功终态矛盾。失败事实仍阻止采纳回答，
+        # 但不能借成功后的 stderr 警告重新取得网络重试权。
+        return '', None
+    event = codex_failure_event(events)
+    if event is not None:
+        return _failure_detail(event), _failure_status(event)
+    return stderr, None
+
+
 def _summary(events: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], ...]:
     """保留事件骨架，不复制 agent_message、command 输出或错误正文。"""
     rows: list[dict[str, Any]] = []
@@ -340,22 +372,9 @@ class CodexDriver(CliAgentDriver):
             if completed.returncode != 0:
                 self._raise_for_exit(completed)
             raise
-        last_completed = max(
-            (index for index, event in enumerate(events)
-             if event.get('type') == 'turn.completed'),
-            default=-1)
-        failed_turn = next(
-            (event for event in events if event.get('type') == 'turn.failed'),
-            None)
-        terminal_error = next(
-            (event for index, event in enumerate(events)
-             if event.get('type') == 'error' and index > last_completed),
-            None)
-        # Codex 会把 websocket/TLS 瞬断作为顶层 ``error:
-        # Reconnecting...`` 发出，重连成功后再发 turn.completed。
-        # 这种已被后续成功终态覆盖的过程事件不是轮次失败。
-        failed_event = failed_turn or terminal_error
-        failed = completed.returncode != 0 or failed_event is not None
+        failed_event = codex_failure_event(events)
+        failed = (completed.returncode != 0 or failed_event is not None
+                  or any(event.get('type') == 'turn.failed' for event in events))
         # 启动前的 auth/config error 可以合法地没有 thread.started；先识别
         # 失败，才不会把一次命令失败误分成 wire 协议损坏。成功仍必须有 id。
         session_id = _optional_thread_id(events)
@@ -378,13 +397,10 @@ class CodexDriver(CliAgentDriver):
             raw_event_summary=_summary(events)))
         if failed:
             kind = None if failed_event is None else failed_event.get('type')
-            failure_detail = (
-                _failure_detail(failed_event)
-                if failed_event is not None else (completed.stderr or '')
-            )
+            failure_detail, failure_status = codex_failure_evidence(
+                events, completed.stderr or '')
             error_kind, status, retryable = classify_agent_command_failure(
-                failure_detail, usage=usage,
-                status=_failure_status(failed_event))
+                failure_detail, usage=usage, status=failure_status)
             raise AgentCommandError(
                 f'Codex CLI 失败（exit={completed.returncode}，event={kind!r}，'
                 f'kind={error_kind!r}，status={status!r}，'

@@ -12,6 +12,7 @@ from typing import Any, BinaryIO, Iterator
 
 from contracts.schema.orchestration import AgentProfile
 from novel.agents.base import AgentUsage, integer
+from novel.agents.codex import codex_failure_evidence
 from novel.commanders.base import (
     CliCommanderDriver,
     CommanderConfigurationError,
@@ -278,6 +279,11 @@ class CodexCommanderDriver(CliCommanderDriver):
             return None
         value = event.get('thread_id')
         return value if isinstance(value, str) and value.strip() else None
+
+    def _failure_evidence(
+        self, events: Sequence[Mapping[str, Any]], stderr: str,
+    ) -> tuple[str, int | None]:
+        return codex_failure_evidence(events, stderr)
 
     def _final_response(
         self, events: Sequence[Mapping[str, Any]],
