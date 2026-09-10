@@ -1585,13 +1585,13 @@ HARD / INFO / 闸门 / 度量的 R 必须被注册 Rule 覆盖；每条 Rule 必
 & 'D:\Miniconda\envs\novel_refactor\python.exe' -B -m pytest -q `
   tests/test_docs_references.py tests/test_coverage.py tests/test_rules_registry.py `
   tests/test_hard_counterexamples.py tests/test_ingest_fixtures.py
-npm --prefix web run seams
-npm --prefix web run typecheck
-npm --prefix web run build
 ```
 
-修改业务判据、schema、节点或 API 时追加对应 stage/API 测试，交付前运行完整测试集。测试通过只说明
-已登记守卫没有发现问题，仍需检查真实消费者和最终盘面。
+同一业务判据、schema、节点或 API 契约批次形状稳定后先跑以上五文件，再补对应 stage/API
+与恢复消费者测试。测试频率、前端检查范围和完整回归门槛统一由 `AGENTS.md::测试选择与批次验收`
+规定；局部提交与验收续跑不自动触发全仓回归。整批交付、候选冻结和 main／发布门槛仍须完成
+默认非 corpus 回归；前端命令见 `web/DELIVERY.md`，current-schema corpus 独立验收。
+测试通过只说明已登记守卫没有发现问题，仍需检查真实消费者和最终盘面。
 
 ## 历史决策与验证证据
 

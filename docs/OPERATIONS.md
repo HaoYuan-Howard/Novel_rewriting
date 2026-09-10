@@ -158,7 +158,9 @@ python -X utf8 -u -m novel.cli reconcile --base <Output目录> --admission-repai
 `-n 0 --require-corpus`；缺书、缺产物、版本漂移、ledger 不闭合或新增 skip 都会关闭式失败。
 
 日常单点反馈用 `pytest -n 0 -x <精确 node>`；失败回放用 `pytest -n 0 --lf --lfnf=none -x`。这两类
-命令没有覆盖完整收集面，只能报告定向测试；提交前仍须运行不带路径/额外 marker 的默认回归。
+命令没有覆盖完整收集面，只能报告定向测试。测试选择和批次门槛唯一见
+`AGENTS.md::测试选择与批次验收`；局部修复可在定向通过后提交或继续已授权验收，提交本身不触发
+完整回归。达到整批集成、候选冻结或 main／发布门槛时，才统一运行不带路径/额外 marker 的默认回归。
 
 agent 执行 pytest 时必须绕开文件系统沙箱。Windows 沙箱可能给新目录写入仅沙箱 SID 可用的 ACL：
 
@@ -187,8 +189,8 @@ pytest 汇总行有时到不了宿主工具输出；需要精确 passed/skipped 
 
 ### 测试热点测量与准备复用
 
-开发反馈只跑受影响文件或失败项；同一批改动稳定后再跑一次默认非 corpus 回归。测试速度比较必须
-保持相同文件、环境和 worker 配置，并同时记录用例分母。先用 pytest 自带的阶段耗时区分 setup、
+开发反馈只跑受影响文件或失败项；完整回归按 `AGENTS.md::测试选择与批次验收` 的门槛运行。
+测试速度比较必须保持相同文件、环境和 worker 配置，并同时记录用例分母。先用 pytest 自带的阶段耗时区分 setup、
 call 与 teardown，再对少量代表用例使用 cProfile；profiler 的附加开销不与普通测试秒数混比。
 
 ```powershell

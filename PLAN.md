@@ -137,7 +137,7 @@
 - 真实路径覆盖上传、授权预览、Agent、暂停续跑、epoch 切换、下载及服务重启，正常流程外层救场次数为零。
 - 归档后新根不混入旧审批、预算或 checkpoint；误指旧根在首副作用前拒绝。
 
-先跑契约五文件与受影响定向测试，交付前完成默认非 corpus 回归、前端 test/build/seams/typecheck。线程、跨进程及生命周期测试遵循 serial 登记。current-schema manifest 与 `--require-corpus` 单独闭合，不以普通回归代替。
+按 `AGENTS.md::测试选择与批次验收` 先跑契约五文件与受影响定向测试，整批交付／候选冻结前统一完成默认非 corpus 回归、前端 test/build/seams/typecheck；不对每个局部修复或验收续跑重复全仓。线程、跨进程及生命周期测试遵循 serial 登记。current-schema manifest 与 `--require-corpus` 单独闭合，不以普通回归代替。
 
 吸收 main 的行为反例并改接两位 C/统一工作单元契约，不保留旧第四席断言。其部分 HTTP/路由测试替换了 planner 或 producer 判定，实施验收须补真实 `operator → queue → CLI → 产物 → gate → 重启` 链路。
 

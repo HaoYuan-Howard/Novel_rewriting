@@ -243,8 +243,9 @@ TODO-21/28 仍闭合当前 corpus manifest 与真实 API fixture，TODO-30 保�
 - 真实页面上传→授权预览→Agent→pause/resume→epoch→下载→重启重读，正常路径外层救场为 0。
 - 归档后新根无旧审批/预算/采用混入，误指旧根首副作用前拒绝，归档中断可幂等恢复。
 
-先按 BACKEND_CONTRACT §9.5 跑契约五文件，再补相关定向测试，交付前完成默认非 corpus 回归及
-前端 test/build/seams/typecheck。线程、跨进程和生命周期测试遵循 serial 登记。真实全链、
+按 `AGENTS.md::测试选择与批次验收`，先按 BACKEND_CONTRACT §9.5 跑契约五文件，再补相关定向测试；
+整批交付／候选冻结前统一完成默认非 corpus 回归及前端 test/build/seams/typecheck，不对每个局部修复
+或验收续跑重复全仓。线程、跨进程和生命周期测试遵循 serial 登记。真实全链、
 current-schema manifest 与 --require-corpus 单独取证，不以普通回归代替。
 
 main 新增测试用作行为反例来源，改写到新两位 C/工作单元契约；其部分 HTTP 或路由测试替换了 planner

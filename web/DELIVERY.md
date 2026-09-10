@@ -17,6 +17,9 @@ npm run typecheck    # tsc --noEmit
 npm run seams        # 数据缝 / 设计缝红线（见下）
 ```
 
+测试选择与执行频率统一见 `AGENTS.md::测试选择与批次验收`：日常按前端及 API 消费影响选择检查，
+整批候选冻结或 main／发布前统一跑前端 test/build/seams/typecheck。
+
 **批量开书**：上传口接受一次选择 / 拖入 N 个 `.txt` / `.md`。浏览器复用单书
 `POST /api/upload` **逐本顺序**上传并执行免费 Stage0 扫描，不把 N 本原始字节同时压进内存；
 单本成功立即打开 agent 授权框（返回即落到该书 Stage0 人工审校），多本全部成功直接打开整批

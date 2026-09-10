@@ -38,8 +38,10 @@
 的事实材料和钩子独立支持规则后，契约五文件与 Stage6 生成、恢复、HTTP 重启消费者 654 项通过，
 前端 230 项、typecheck/seams/build 通过。终审 `materials` 纳入长期 review identity，
 原钩子、已接受主张及正文变化均使旧接受失效；缺章不以空材料代替。最终默认非 corpus 回归共
-6468 项，6466 通过、2 项因缺 Stage2 审阅语料跳过，无失败或错误，进程退出 0
-（`fujun-repair-noncorpus-v3.xml`）。这些工程结果不代替本书后续付费裁决和下载/重启验收。
+6476 项，6474 通过、2 项因缺 Stage2 审阅语料跳过，无失败或错误，进程退出 0
+（`fujun-commander-correction-noncorpus.xml`）；Global 工作包与跨运行纠错的定向 741 项通过。
+这些工程结果不代替本书后续付费裁决和下载/重启验收。后续局部修复的测试选择与批次门槛统一遵循
+`AGENTS.md::测试选择与批次验收`，不因每次提交或验收续跑重跑全仓。
 
 流水线实现的默认非 corpus 回归共 6431 项，6429 通过、2 项因缺 Stage2 审阅语料跳过，
 无失败或错误，进程退出 0（`retirement-final-noncorpus-v3.xml`）；不代表 current-schema corpus 已验收。
