@@ -6,6 +6,7 @@ import { qk } from '@/api/queryKeys'
 import { errorBody, isApiError } from '@/api/errors'
 import {
   useAgentCapabilities,
+  useAgentRunContinuation,
   useAgentProfileSettings,
   useStartAgentRun,
 } from '@/hooks/useAgentRuns'
@@ -49,24 +50,34 @@ export function AgentRunDialog({
   sid,
   onClose,
   onStarted,
+  sourceRunId,
 }: {
   sid: string
   onClose: () => void
   onStarted: (sid: string) => void
+  sourceRunId?: string
 }) {
   const [authorized, setAuthorized] = useState(false)
-  const [egressAuthorized, setEgressAuthorized] = useState(true)
+  const [egressAuthorized, setEgressAuthorized] = useState(!sourceRunId)
   const [commandOpen, setCommandOpen] = useState(false)
   const [promptOpen, setPromptOpen] = useState(false)
   const [profilesInitialized, setProfilesInitialized] = useState(false)
   const [profileDraft, setProfileDraft] = useState(emptyPipelineAgentProfilesDraft)
   const navigate = useNavigate()
   const capabilities = useAgentCapabilities()
-  const settings = useAgentProfileSettings()
+  const settings = useAgentProfileSettings(!sourceRunId)
+  const original = useAgentRunContinuation(sourceRunId)
   const start = useStartAgentRun(sid)
 
   useEffect(() => {
-    if (!capabilities.data || !settings.data || profilesInitialized) return
+    if (!capabilities.data || profilesInitialized) return
+    if (sourceRunId) {
+      if (!original.data?.available || !original.data.profiles || !original.data.source) return
+      setProfileDraft(pipelineDraftOf(original.data.profiles))
+      setProfilesInitialized(true)
+      return
+    }
+    if (!settings.data) return
     const preferred = settings.data.state === 'configured'
       ? settings.data.profiles
       : settings.data.state === 'unset'
@@ -74,7 +85,7 @@ export function AgentRunDialog({
         : null
     setProfileDraft(pipelineDraftOf(preferred))
     setProfilesInitialized(true)
-  }, [capabilities.data, profilesInitialized, settings.data])
+  }, [capabilities.data, profilesInitialized, settings.data, sourceRunId, original.data])
 
   const materialized = useMemo(
     () => capabilities.data
@@ -83,10 +94,11 @@ export function AgentRunDialog({
     [capabilities.data, profileDraft],
   )
   const request = useMemo(
-    () => profilesInitialized && materialized.profiles
-      ? requestSnapshot(sid, authorized, egressAuthorized, materialized.profiles)
+    () => profilesInitialized && materialized.profiles && (!sourceRunId || original.data?.available && original.data.source)
+      ? { ...requestSnapshot(sid, authorized, egressAuthorized, materialized.profiles),
+          ...(sourceRunId ? { continuation: original.data!.source } : {}) }
       : null,
-    [authorized, egressAuthorized, materialized.profiles, profilesInitialized, sid],
+    [authorized, egressAuthorized, materialized.profiles, profilesInitialized, sid, sourceRunId, original.data],
   )
 
   const preview = useQuery<PreviewEnvelope>({
@@ -105,6 +117,8 @@ export function AgentRunDialog({
         preview.data.response.profiles,
         preview.data.request.profiles,
       )
+      && (preview.data.response.continuation?.source_sha256 ?? null) === (preview.data.request.continuation?.source_sha256 ?? null)
+      && (preview.data.response.continuation?.run_id ?? null) === (preview.data.request.continuation?.run_id ?? null)
     : false
   const conflict = isApiError(start.error) && start.error.backendKind === 'JobConflict'
   const disabled = !preview.data || !echoed || !authorized || !egressAuthorized || start.isPending
@@ -140,7 +154,7 @@ export function AgentRunDialog({
           >
             {egressAuthorized ? '允许正文外发' : '禁止正文外发'}
           </span>
-          <span className="text-h3 font-semibold">让 agent 跑这本书</span>
+          <span className="text-h3 font-semibold">{sourceRunId ? '按原配置继续' : '让 agent 跑这本书'}</span>
           <Mono className="ml-auto text-mini text-ink-4">{sid}</Mono>
         </div>
 
@@ -148,7 +162,15 @@ export function AgentRunDialog({
           data-testid="agent-run-dialog-body"
           className="flex min-h-0 flex-col gap-12 overflow-y-auto px-22 py-18"
         >
-          {capabilities.isPending || settings.isPending ? (
+          {sourceRunId ? <>
+            <p className="m-0 text-body">来源运行：{sourceRunId}。本次保留原完整配置与累计工作单元额度。</p>
+            {original.isPending ? <p>正在核验原配置与停止证明…</p> : null}
+            <ErrorHint error={original.error} />
+            {original.data ? <p>{original.data.reason}</p> : null}
+            {original.data?.profiles ? <AgentProfilesSnapshot profiles={original.data.profiles} /> : null}
+            <ErrorHint error={capabilities.error} />
+            {materialized.errors.map((error) => <p key={error} role="alert">{error}</p>)}
+          </> : capabilities.isPending || settings.isPending ? (
             <div className="rounded-block border border-line bg-inset px-14 py-11 text-body text-ink-4">
               正在读取常用配置并探测本机 Agent 能力；两份都拿到前不会预览或启动…
             </div>

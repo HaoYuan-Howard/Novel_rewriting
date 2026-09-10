@@ -341,6 +341,7 @@ def validate_pipeline_profiles(
         commander=commander,
         executor_default=default_backend,
         executor_overrides=overrides,
+        concurrency=profiles.concurrency,
     )
 
 

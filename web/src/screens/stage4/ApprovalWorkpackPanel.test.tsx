@@ -189,18 +189,6 @@ describe('Stage4 exception-first 审阅工作包', () => {
     expect(screen.getByText('9'.repeat(64))).toBeVisible()
   })
 
-  it('明确呈现 frozen-v6 raw 决定被暂停且无需重复整读', async () => {
-    vi.spyOn(api, 'getDesignApprovalWorkpack').mockResolvedValue({
-      ...workpack('design'),
-      disposition: 'suspended',
-      current_decision_sha256: '7'.repeat(64),
-    })
-    renderRoute(<ApprovalWorkpackPanel kind="design" />, '/n/book-1/stage4/3')
-
-    expect(await screen.findByText(/raw 审阅已记录/)).toBeVisible()
-    expect(screen.getByText(/暂停下游授权且无需重复整读/)).toBeVisible()
-    expect(screen.queryByRole('button')).not.toBeInTheDocument()
-  })
 
   it('coverage 行的逐章裁决材料与顶层 legend 只作折叠呈现，不生成按钮', async () => {
     vi.spyOn(api, 'getStructureApprovalWorkpack').mockResolvedValue(workpack('structure'))

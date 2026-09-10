@@ -73,25 +73,23 @@ def beat_index(blueprints: dict[str, Any],
 
 
 def verbatim_pieces(hinges: list[dict[str, Any]]) -> tuple[dict[str, list[str]], list[tuple[Any, str]]]:
-    """把一条 beat 的 hinges 拆成【可以单独放进去的点】，按四组归类 → `({group: [piece,…]}, unknown)`。
+    """将非对白材料投影到登记的字符串通道；普通对白另走 typed 语义任务。
 
     ⚠⚠ **唯一一份实现**：`context._resolve_beats`（真正下发给写手的字节）与
     `measure.source_chars_table`（告诉规划器这一拍有多少字压不掉）**都调它**。
     两边各写一份拆分逻辑，报给规划者的数就会与写手实际收到的字节对不上
     ——一个量纲只能有一个口径，**而错的往往不是某个数，是那个跨口径的运算**。
 
-    【四组守的是**不同的维度**，不是「守多少」的四档】全塞进一个叫 `verbatim` 的数组，
+    【分组守的是不同维度】全塞进一个叫 `verbatim` 的数组，
     写手会把「因果前提」也当成必须逐字出现的句子，硬塞背景交代——而它要的只是命题成立。
     ⚠ 映射表就是 `contracts.invariants.HINGE_GROUPS`，**这里不抄第二份**；
     「它的 key 必须与 `HINGE_KINDS` 逐字一致」由 `tests/test_invariants.py` 钉着
     （原型是模块加载时 `assert`，改成测试更好：它不会在 import 期炸掉整条命令行）。
 
-    【跨段落的 hinge 必须按段落边界拆成独立的点】stage2 的「要害台词」允许摘「一两句」，
-    而本语料是「一句一段」，于是一条 hinge 常常跨过 `\\n\\n` 把两三句捆在一起
-    （实测某本 60 条 verbatim 里 13 条跨段落、另一本 81 条里 11 条）。
-    那样的一条**就是一个「段」而不是一个「点」**——写手要么连原文的段落结构一起复现，
-    要么整组放弃。**实测某章 4 条 verbatim 全部跨段落，成稿把它们一条不剩地丢光。**
-    在这里按段落边界拆开：语义一点没变（都还是原文字节），但写手能一条一条地满足。
+    普通对白不在这里下发源句，由说话关系、语义与事实引用表达。剧情字面例外
+    保留完整字符串，密码或识别序列的换行与符号不能拆散。其他材料按段落拆成独立点，
+    避免把跨段原文包装成必须整体复制的任务。过去曾出现整章跨段台词全部丢失，
+    因此不能把普通对白重新塞回逐字通道，也不能用拆段豁免真正的字面义务。
 
     【未知 kind 不下发，也不静默】曾经这里是 `HINGE_GROUPS.get(kind, 'verbatim')`——
     模型自造的 kind（实测「行动描述」）于是被**升级**成「原样写入，一个字都不能改」，
@@ -107,8 +105,71 @@ def verbatim_pieces(hinges: list[dict[str, Any]]) -> tuple[dict[str, list[str]],
         if g is None:
             unknown.append((kind, _hinge_text(h)[:20]))
             continue
+        if g == 'dialogue':
+            # 普通对白的源句只作后台证据，不能经字符串材料通道泄给闭卷写手。
+            continue
+        if g == 'verbatim':
+            # 密码、谜面或识别序列的换行与符号属于义务；不能拆开后把改变序列判为满足。
+            piece = _hinge_text(h)
+            if piece.strip():
+                out.setdefault(g, []).append(piece)
+            continue
         for piece in _PARA_SPLIT.split(_hinge_text(h)):
             piece = piece.strip()
             if piece:
                 out.setdefault(g, []).append(piece)
     return out, unknown
+
+
+def material_scene_candidates(hinges: list[dict[str, Any]], atoms: dict[str, dict[str, Any]],
+                              scenes: list[dict[str, Any]]) -> dict[str, tuple[str, ...]]:
+    """B 请求与 Plan 校验共用实际事实归属，不按材料所在的源拍猜目标场景。
+
+    有 land 义务时只取实际落场，后续 context 重提不制造重复候选。
+    全是 context 时取显式使用它的场景；没有候选仍保留 unplaceable 歧义，
+    不能当成没有材料。多个相关 land 分处多场时由 B 显式选择。
+    """
+    result: dict[str, tuple[str, ...]] = {}
+    for hinge in hinges:
+        refs = set(hinge['source_fact_refs'])
+        if not refs or not refs <= atoms.keys():
+            raise ValueError(f'{hinge["hinge_id"]} 的 source_fact_refs 缺失或引用本章外事实')
+        land = {ref for ref in refs if atoms[ref]['obligation'] == 'land'}
+        key = 'land_fact_refs' if land else 'context_fact_refs'
+        result[str(hinge['hinge_id'])] = tuple(sorted(
+            str(scene['slot']) for scene in scenes if (land or refs) & set(scene[key])))
+    return result
+
+
+def material_tasks(hinges: list[dict[str, Any]], atoms: dict[str, dict[str, Any]],
+                   names: dict[str, str]
+                   ) -> tuple[dict[str, list[Any]], list[tuple[Any, str]], list[str]]:
+    """Context 与校验共用的材料投影；事实关系保留引用，原句仅字面例外下发。"""
+    text_groups, unknown = verbatim_pieces(hinges)
+    groups: dict[str, list[Any]] = dict(text_groups)
+    withheld: list[str] = []
+
+    def party(value: dict[str, Any] | None) -> str | None:
+        if value is None:
+            return None
+        if value['kind'] == 'group':
+            return str(value['label'])
+        cid = value['char_id']
+        if cid not in names:
+            withheld.append(cid)
+        return names.get(cid)
+
+    for hinge in hinges:
+        if hinge['kind'] != '要害台词':
+            continue
+        row = hinge['dialogue']
+        addressees = row['addressees']
+        resolved = [party(value) for value in addressees] if addressees is not None else None
+        # 对象中有任何未解名称，就明确保持未知，不能删掉这个对象冒充完整列表。
+        groups.setdefault('dialogue', []).append({
+            'speaker': party(row['speaker']),
+            'addressees': resolved if resolved is not None and None not in resolved else None,
+            'meaning': row['meaning'], 'speech_act': row['speech_act'],
+            'required_facts': [atoms[ref]['claim'] for ref in hinge['source_fact_refs']],
+        })
+    return groups, unknown, withheld

@@ -38,7 +38,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from contracts.invariants import (
     BLIND_ALIAS_ALGORITHM,
@@ -52,7 +52,7 @@ from contracts.invariants import (
 )
 from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import (
-    FreeProvenance, LlmProvenance, RevalidationAudit, Sha256,
+    FreeProvenance, LlmProvenance, Sha256,
 )
 
 from contracts.schema.stage2 import (
@@ -500,23 +500,6 @@ class BlindCandidateChapter(BlindChapterResponse):
         return self
 
 
-class RejectedResponseAdoption(FrozenModel):
-    """Stage4A 专属的**拒稿采用**账；它不是 `.INVALID` 提升。
-
-    ⚠ 两者的区别是承重的：`.INVALID` 提升改写的是一份**已经落过盘**的正式产物，
-    而这里的响应从来没有成为过产物——它在内容闸就被挡住并封进 `_llm_rejected/`。
-    所以它没有 `invalid_baseline_sha256` 那条锚，只能自证到「哪一次调用、当时是
-    哪份代码、原响应的完整 SHA-256 是什么」。
-    ⚠ `historical_code` 与产物根部的 `code` **故意分开**：编译是**现在**这份代码做的，
-    响应是**当时**那份代码要来的。压成一个数就再也说不清哪一半是历史。
-    """
-
-    attempt_id: str = Field(pattern=r'^[0-9a-f]{16}$')
-    historical_code: str = Field(min_length=1)
-    response_sha256: Sha256
-    audit: RevalidationAudit
-
-
 class DesignUnitLineage(StrictModel):
     """Stage4A 聚合候选中每个实际被采纳 unit 的跨 run 来源。"""
 
@@ -526,7 +509,7 @@ class DesignUnitLineage(StrictModel):
     attempt_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{16}$')
     source_kind: Literal['inherited', 'repair', 'human']
     origin: Literal[
-        'agent', 'historical_checkpoint', 'human', 'candidate_snapshot',
+        'agent', 'historical_checkpoint', 'human',
     ] = 'agent'
     source_ref: Sha256 | None = None
 
@@ -550,25 +533,40 @@ class DesignUnitLineage(StrictModel):
         return self
 
 
+class DesignChapterDependency(FrozenModel):
+    chapter_ordinal: int = Field(ge=1)
+    request_sha256: Sha256
+
+
+class DesignDependencies(FrozenModel):
+    """已提交候选的普通实际请求投影；修复及人工来源由提交链另外绑定。"""
+
+    contract: Literal['stage4-design-dependencies-v1'] = 'stage4-design-dependencies-v1'
+    strategy: Sha256
+    chapters: list[DesignChapterDependency] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _complete_chapters(self) -> DesignDependencies:
+        if [row.chapter_ordinal for row in self.chapters] != list(range(1, len(self.chapters) + 1)):
+            raise ValueError('设计实际依赖必须完整、有序覆盖 1..N')
+        return self
+
+
 class BlindCandidateProvenance(LlmProvenance):
     alias_algorithm: Literal[BLIND_ALIAS_ALGORITHM]
     truth_sha256: Sha256
+    design_dependencies: DesignDependencies | None = None
 
-    #: 响应拓扑不是 artifact shape；旧产物诚实保持未知，新 producer 必须显式填其架构。
+    #: 当前 producer 必须显式提供策略与章拓扑；退役整书来源不能解码成当前候选。
     architecture: Literal[
-        'whole_book_v1', 'book_strategy_chapters_v1',
+        'book_strategy_chapters_v1',
         'book_strategy_targeted_repair_v1',
         'book_strategy_replan_v1',
-    ] | None = None
+    ]
 
     parent_candidate_sha256: Sha256 | None = None
     repair_decision_sha256: Sha256 | None = None
     unit_lineage: list[DesignUnitLineage] | None = None
-
-    #: 只有 `--adopt-rejected` 那一条 0-wire 路会填它；正常付费产出恒为 `None`。
-    #: ⚠ 它是**加法且带默认值** ⇒ 存量 `blind_candidate.json` 照样读得进来，
-    #: 不构成 shape break（`_SHAPE_BREAKS` 的语义是「存量读不进来」）。
-    rejected_response_adoption: RejectedResponseAdoption | None = None
 
     @model_validator(mode='after')
     def _repair_lineage_is_closed(self) -> BlindCandidateProvenance:
@@ -598,6 +596,7 @@ class BlindCandidateHumanProvenance(FreeProvenance):
     origin: Literal['human'] = 'human'
     alias_algorithm: Literal[BLIND_ALIAS_ALGORITHM]
     truth_sha256: Sha256
+    design_dependencies: DesignDependencies | None = None
     architecture: Literal['human_chapter_edit_v1'] = 'human_chapter_edit_v1'
     parent_candidate_sha256: Sha256
     review_token: str = Field(pattern=r'^s4er1_[0-9a-f]{64}$')
@@ -618,6 +617,17 @@ class BlindCandidateHumanProvenance(FreeProvenance):
         return self
 
 
+class BlindCandidateCompiledProvenance(FreeProvenance):
+    """全部响应由已验证历史采用；聚合本身没有模型调用或新模型身份。"""
+
+    origin: Literal['compiled'] = 'compiled'
+    alias_algorithm: Literal[BLIND_ALIAS_ALGORITHM]
+    truth_sha256: Sha256
+    design_dependencies: DesignDependencies | None = None
+    architecture: Literal['book_strategy_adopted_v1'] = 'book_strategy_adopted_v1'
+    sources_sha256: Sha256
+
+
 class BlindCandidate(StrictModel):
     alias_algorithm: Literal[BLIND_ALIAS_ALGORITHM]
     truth_sha256: Sha256
@@ -625,7 +635,7 @@ class BlindCandidate(StrictModel):
     participant_aliases: dict[str, str]
     reconstruction_strategy: str = Field(min_length=1)
     output_chapters: list[BlindCandidateChapter] = Field(min_length=1)
-    provenance: BlindCandidateProvenance | BlindCandidateHumanProvenance = Field(
+    provenance: BlindCandidateProvenance | BlindCandidateHumanProvenance | BlindCandidateCompiledProvenance = Field(
         alias='_provenance')
 
     @model_validator(mode='after')
@@ -769,23 +779,20 @@ class EvidenceBindingProvenance(LlmProvenance):
     origin: Literal['llm'] = 'llm'
     candidate_sha256: Sha256
 
-    #: 绑定架构（TODO-45 批次 4）：``whole_book_v1`` = 旧整书单发；
-    #: ``chapter_baseline_v1`` = 机械基线 + 歧义章 session。additive 兼容，
-    #: 旧产物可缺。
-    architecture: str | None = Field(default=None, min_length=1)
+    #: 两种现役后端都由机械基线与歧义章组成，必须显式登记完整来源。
+    architecture: Literal['chapter_baseline_v1']
+    unit_lineage: list[dict[str, Any]] = Field(min_length=1)
 
-    #: 逐章 unit lineage：``[{chapter_ordinal, kind, attempt_id?, ...}]``。
-    #: kind ∈ {baseline, chapter_session}；baseline 章 0 wire（确定性重算）。
-    unit_lineage: list[dict[str, Any]] | None = None
-
-    @model_validator(mode='after')
-    def _unit_lineage_covers_each_chapter_once(self):
-        value = self.unit_lineage
-        if value is None:
-            return self
-        ordinals = [int(row.get('chapter_ordinal') or 0) for row in value]
-        if sorted(ordinals) != sorted(set(ordinals)) or 0 in ordinals:
-            raise ValueError('unit_lineage 章号必须非零且不重复')
+    @field_validator('unit_lineage')
+    @classmethod
+    def validate_unit_lineage(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # 载体与 freshness 共用；缺字段的来源不能在另一读路被判为已知过时。
+        if not value or any(not isinstance(row, dict) for row in value):
+            raise ValueError('unit_lineage 必须是非空逐章来源表')
+        ordinals = [row.get('chapter_ordinal') for row in value]
+        if (any(not isinstance(n, int) or isinstance(n, bool) or n < 1 for n in ordinals)
+                or len(set(ordinals)) != len(ordinals)):
+            raise ValueError('unit_lineage 章号必须是正整数且不重复')
         kinds = {str(row.get('kind') or '') for row in value}
         unknown = kinds - {'baseline', 'chapter_session'}
         if unknown:
@@ -793,13 +800,19 @@ class EvidenceBindingProvenance(LlmProvenance):
         for row in value:
             if row.get('kind') != 'chapter_session':
                 continue
+            models = row.get('models')
+            revision = row.get('revision')
+            ambiguities = row.get('ambiguities')
+            if (not isinstance(row.get('attempt_id'), str)
+                    or re.fullmatch(r'[0-9a-f]{16}', row['attempt_id']) is None
+                    or not isinstance(models, list) or not models
+                    or any(not isinstance(model, str) or not model for model in models)
+                    or not isinstance(revision, int) or isinstance(revision, bool) or revision < 0
+                    or not isinstance(ambiguities, int) or isinstance(ambiguities, bool) or ambiguities < 1):
+                raise ValueError('chapter_session 缺完整响应、模型、修订或歧义来源')
             origin = row.get('origin')
-            if origin is None:
-                # additive 字段上线前的 current-schema 产物仍可读；新 producer
-                # 一律写出明确 origin，不能由缺字段反推历史采用。
-                continue
             source_run_id = row.get('source_run_id')
-            if (origin not in {'current_run', 'historical_checkpoint', 'work_unit_response'}
+            if (origin not in ('current_run', 'historical_checkpoint', 'work_unit_response')
                     or not isinstance(source_run_id, str)
                     or re.fullmatch(
                         r'[a-z0-9][a-z0-9_-]{0,127}', source_run_id) is None):
@@ -840,7 +853,7 @@ class EvidenceBindingProvenance(LlmProvenance):
                 raise ValueError(
                     'historical unit_lineage 缺 source-stable '
                     'run/checkpoint/attempt 身份')
-        return self
+        return value
 
 
 class EvidenceBindingHumanProvenance(FreeProvenance):
@@ -849,7 +862,7 @@ class EvidenceBindingHumanProvenance(FreeProvenance):
 
 
 class EvidenceBindingCompiledProvenance(FreeProvenance):
-    """全机械绑定（批次 4）的免费来源账：0 wire、无模型调用声明。
+    """机械绑定或全部采用的免费来源账：0 wire、无模型调用声明。
 
     `origin='compiled'` 如实说明这份绑定是代码从机械基线确定性编译的；
     `architecture`/`unit_lineage` 记录基线架构与逐章 unit。
@@ -857,8 +870,22 @@ class EvidenceBindingCompiledProvenance(FreeProvenance):
 
     origin: Literal['compiled'] = 'compiled'
     candidate_sha256: Sha256
-    architecture: str | None = Field(default=None, min_length=1)
-    unit_lineage: list[dict[str, Any]] | None = None
+    architecture: Literal['chapter_baseline_v1']
+    unit_lineage: list[dict[str, Any]] = Field(min_length=1)
+    #: 全部采用时绑定历史章实际匹配的输入契约；纯机械没有章请求回执。
+    binding_input_contract: str | None = None
+
+    @model_validator(mode='after')
+    def _compiled_lineage(self):
+        EvidenceBindingProvenance.validate_unit_lineage(self.unit_lineage)
+        sessions = [row for row in self.unit_lineage or [] if row.get('kind') == 'chapter_session']
+        if sessions and (any(row.get('origin') not in {'historical_checkpoint', 'current_run'}
+                             for row in sessions)
+                         or not self.binding_input_contract):
+            raise ValueError('免费采用必须提供已保存来源和输入契约')
+        if not sessions and self.binding_input_contract is not None:
+            raise ValueError('全机械聚合不能伪造章模型输入回执')
+        return self
 
 
 class EvidenceBinding(EvidenceBindingResponse):
@@ -873,6 +900,11 @@ class EvidenceBinding(EvidenceBindingResponse):
         if self.status == 'bound':
             if self.infeasibility_proof is not None:
                 raise ValueError('bound 不得夹带 infeasibility_proof')
+            if self.provenance.origin in {'llm', 'compiled'}:
+                chapters = {chapter.output_ordinal for chapter in self.chapters}
+                lineage = {row['chapter_ordinal'] for row in self.provenance.unit_lineage}
+                if lineage != chapters:
+                    raise ValueError('正式绑定 unit_lineage 必须完整覆盖当前章集')
         elif not self.infeasibility_proof:
             raise ValueError('infeasible 正式产物必须带代码铸造的 proof witness')
         return self
@@ -918,6 +950,33 @@ class CtxSemanticContract(StrictModel):
     ending_state: list[str]
 
 
+class CtxSceneKnowledge(StrictModel):
+    """只在指定场景开放的知识；伏笔 content 只能是关联的表现事实。"""
+
+    kind: Literal['secret', 'setup', 'world_rule', 'relation', 'character_state', 'setting']
+    content: str = Field(min_length=1)
+    usage: Literal['known', 'reveal', 'setup']
+    known_by: list[str]
+
+
+class CtxDisclosureWindow(StrictModel):
+    """整章请求中的每条受限事实仍携带允许使用的场景；不得当作全章已知。"""
+
+    subject_ref: str = Field(min_length=1, json_schema_extra={'prompt_private': True})
+    content: str = Field(min_length=1)
+    allowed_slots: list[str] = Field(min_length=1)
+
+
+class CtxDialogue(StrictModel):
+    """闭卷对白任务；人名按当前章解析，原句不进入写手输入。"""
+
+    speaker: str | None
+    addressees: list[str] | None
+    meaning: str = Field(min_length=1)
+    speech_act: str = Field(min_length=1)
+    required_facts: list[str] = Field(min_length=1)
+
+
 class CtxScene(StrictModel):
     """写手真正执行的场景任务；不携带源 beat/event 编号。"""
 
@@ -933,6 +992,8 @@ class CtxScene(StrictModel):
     entry_state: list[str]
     exit_state: list[str]
     stages: list[CtxStage] = Field(min_length=1)
+    knowledge: list[CtxSceneKnowledge]
+    dialogue: list[CtxDialogue] = Field(default_factory=list)
     verbatim: list[str] | None = None
     keep_value: list[str] | None = None
     must_appear: list[str] | None = None
@@ -971,7 +1032,7 @@ class CtxSecret(StrictModel):
 
     #: **唯一的读者时点标志**：`true` = 读者已知情、可以正面写；
     #: `false` = 事实可以作为伏笔出现，但本章绝不能点破。
-    reader_knows_by_now: bool
+    reader_knows_by_now: Literal[True]
 
 
 class CtxWorldRule(StrictModel):
@@ -983,38 +1044,6 @@ class CtxWorldRule(StrictModel):
 
     kind: Literal[WORLD_RULE_KINDS]
     description: str = Field(min_length=1)
-
-
-class CtxCurrentStage(StrictModel):
-    """⚠ **只给阶段名与跨度，不给 `summary`**：阶段摘要描述的是整个阶段的经过，
-    必然含本阶段后几章才发生的结果（实测 ch16 拿到的摘要写着 ch20 才发生的事）。
-    """
-
-    stage: str = Field(min_length=1)
-    chapters: list[int] = Field(min_length=1)
-
-
-class CtxArcTrack(StrictModel):
-    """⚠ 这里的 `subject` 已被确定性代码**解析成人话**（stage2 那份是原始 id）。
-    那条链路曾经断着：未解析的 `rel_05` 直接进了写作 prompt。
-    """
-
-    subject: str = Field(min_length=1)
-    trajectory: str = Field(min_length=1)
-
-
-class CtxArc(StrictModel):
-    """非末章只有 `current_stage`；**末章**另加三样。盘上 3/31 章是末章。
-
-    ⚠ **非末章一律不发 `arc_tracks`**：剥掉 `trajectory` 只剩主体，对写手是零信息，
-    不剥就是结局。
-    两头不讨好，所以整块不发。
-    """
-
-    current_stage: CtxCurrentStage
-    arc_tracks: list[CtxArcTrack] | None = None
-    climax: str | None = None
-    ending: str | None = None
 
 
 class CtxAddress(StrictModel):
@@ -1048,15 +1077,15 @@ class CtxSetting(StrictModel):
     写手故事材料，也已在组装入口被刻意剥掉。复用 producer 模型会让合法投影反而拒收。
     """
 
-    era: str = Field(alias='时代背景', min_length=1)
-    worldview: str = Field(alias='世界观', min_length=1)
+    era: str | None = Field(alias='时代背景', min_length=1)
+    worldview: str | None = Field(alias='世界观', min_length=1)
 
 
 class CtxFacts(StrictModel):
-    """六块，全部逐章投影。
+    """必要事实，全部逐章投影。
 
     ⚠⚠ **它是【整份 dict 铺进 prompt】的**（`facts_block` 做 `compact(f)`）：
-    `current_stage` / `relations` / `world_rules` / `address` / `arc` 全部逐条进了
+    `relations` / `world_rules` / `address` 全部逐条进了
     模型的注意力，**键名只是从不字面出现**。
     **拿 grep 审这一块，默认结论是错的。**
     """
@@ -1067,7 +1096,6 @@ class CtxFacts(StrictModel):
     relations: list[CtxRelation]
     secrets: list[CtxSecret]
     world_rules: list[CtxWorldRule]
-    arc: CtxArc
     address: list[CtxAddress]
 
 
@@ -1097,30 +1125,19 @@ class CtxNarration(StrictModel):
 
 
 class CtxChapter(StrictModel):
-    """一个输出章的完整任务书。"""
+    """一个输出章的完整任务书。
 
-    #: 章号与来源章原样透传；三个目标由 PlanGoal 的 typed refs 确定性解析为
-    #: CtxGoal，不携带内部 id。
+    章号唯一指向同号 Stage1 源章；总预算由场景预算求和，源字数由源正文计算。
+    这些运行时读数不在任务书保存副本，API 与执行守卫共用 measure.chapter_basis。
+    """
+
+    #: 三个目标由 PlanGoal 的 typed refs 确定性解析为 CtxGoal，不携带内部 id。
     output_ordinal: int = Field(ge=1)
-    from_source_ordinals: list[int] = Field(min_length=1, max_length=1)
     chapter_goal: CtxGoal
     open_hook_goal: CtxGoal
     end_hook_goal: CtxGoal
     semantic_contract: CtxSemanticContract
     chapter_rewrite_brief: str = Field(min_length=1)
-
-    #: 本章各拍预算之和（写手不必自己加）。
-    budget_chars: int = Field(gt=0)
-
-    #: 源章真实字数（`len(整章文本)`，**含空白**）。盘上 408~1963。
-    #:
-    #: ⚠⚠ **同一份产物里有两个口径，不许拿它们做相等断言**：
-    #: 本字段是 `len(整章文本)`，而 `budget_band` 判据的基准是 **span 合计**（约占正文 97%），
-    #: `segments[].source_chars` 也是 span 合计。
-    #: **两者都是对的，但它们不是同一个数**——`source_chars` 与 `sum(segments[].source_chars)`
-    #: **不相等是正常的**。产地已经踩过这个坑一次：预算区间校验曾用整章字数作基准，
-    #: 而规划器拿到的是 span 合计，于是一份合格的计划被判 `INVALID`。
-    source_chars: int = Field(ge=0)
 
     scenes: list[CtxScene] = Field(min_length=1)
 
@@ -1129,12 +1146,17 @@ class CtxChapter(StrictModel):
 
     narration: list[CtxNarration] = Field(min_length=1)
     facts: CtxFacts
+    disclosure_windows: list[CtxDisclosureWindow]
 
     @model_validator(mode='after')
     def _ctx_slots_are_unique(self) -> CtxChapter:
         slots = [scene.slot for scene in self.scenes]
         if len(slots) != len(set(slots)):
             raise ValueError('writer-context segment slots must be unique')
+        for window in self.disclosure_windows:
+            if (len(set(window.allowed_slots)) != len(window.allowed_slots)
+                    or window.allowed_slots != [slot for slot in slots if slot in window.allowed_slots]):
+                raise ValueError('披露许可必须指向当前场景的唯一有序子集')
         return self
 
 

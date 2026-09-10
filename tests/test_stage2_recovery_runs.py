@@ -458,6 +458,23 @@ def test_code_changed_epoch_gets_new_stage2_run_without_weakening_drift_guard(
             topology='scaffolded_single', requests=requests)
 
 
+@pytest.mark.parametrize('record', ['', 'run.json', 'ch0001.json', 'response_manifest.json'])
+def test_retired_book_local_blueprint_state_is_never_materialized(tmp_path, record):
+    """创建或恢复请求前即拒绝旧目录；空目录也不能解释成从未执行。"""
+    ctx = _ctx(tmp_path, new_run_id())
+    old = paths.legacy_stage2_blueprint_run_path(ctx.novel_dir, ctx.run_id)
+    old.mkdir(parents=True)
+    if record:
+        (old / record).write_bytes(b'{"historical":"unproven"}\n')
+    before = {p.name: p.read_bytes() for p in old.iterdir()}
+    with pytest.raises(ProvenanceRefused, match='旧.*已退役'):
+        _ensure_run(ctx, architecture='extraction-ir-v3.1',
+                    topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')])
+    assert {p.name: p.read_bytes() for p in old.iterdir()} == before
+    assert not paths.stage2_blueprint_run_path(ctx.novel_dir, ctx.run_id).exists()
+    assert ctx.ledger.usage() is None
+
+
 def _write_single_agent_checkpoint(tmp_path: Path) -> tuple[RunContext, Path]:
     """写一份可被 standalone 历史证据口完整对证的 Agent checkpoint。"""
     run_id = new_run_id()

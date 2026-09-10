@@ -947,9 +947,8 @@ def test_reconcile_cli_has_read_only_template_then_typed_apply(
     ],
     [
         'reconcile', '--base', 'unused',
-        '--stage2-review-no-wire-session-run-id', 'stage2-no-wire-session',
-        '--stage2-review-sid', '42',
-        '--actor', 'agent', '--reason', '不应在子上下文恢复预算',
+        '--beacon-repair-tail',
+        '--actor', 'agent', '--reason', '不应在子上下文修复信标账',
         '--subject-sha256', 'a' * 64,
     ],
 ])
@@ -975,8 +974,7 @@ def test_commander_dispatcher_refuses_control_plane_mutations_before_handler(
     ['reconcile', '--base', 'unused', '--admission-repair-tail'],
     [
         'reconcile', '--base', 'unused',
-        '--stage2-review-no-wire-session-run-id', 'stage2-no-wire-session',
-        '--stage2-review-sid', '42',
+        '--beacon-repair-tail',
     ],
 ])
 def test_commander_dispatcher_keeps_control_plane_inspection_read_only(

@@ -433,7 +433,9 @@ def test_prompts_only_expose_the_reading_ordinal():
     raw = main.model_dump(mode='json')
     body, index = render_book(main)
     system, user, _candidates = build_global_request(
-        '测试书', raw, active_contract(), agent_envelope=True)
+        '测试书', raw, active_contract(), source_hook='人物收到来信。',
+        character_reference={'char_001': {'canonical': '甲', 'surfaces': ['甲'], 'role': '来信者'}},
+        agent_envelope=True)
     rendered = '\n'.join((body, index, system, user))
     assert '原文标号' not in rendered and '原文标记' not in rendered
     assert all(f'阅读序第{i}章' in rendered for i in range(1, 4))

@@ -4,11 +4,10 @@
 receipt 复用已有 provenance.prompts 槽位，值仍由 prov.fingerprint 产生。
 只有已发行 LLM chapter_baseline_v1、精确旧 system 与完整章来源共同证明的
 缺 receipt 才是已知过时；未知形状绝不自动取得付费恢复权。
-整书全映射、人工绑定、纯机械基线都不使用章模型，不因缺此 receipt 失效。
+人工绑定与纯机械基线不使用章模型，不因缺此 receipt 失效；旧整书或无架构来源拒绝。
 """
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -16,6 +15,7 @@ from typing import Any, Literal
 from contracts.invariants import (
     STAGE4_BINDING_INPUT_CONTRACT, STAGE4_BINDING_INPUT_RECEIPT_KEY,
 )
+from contracts.schema.stage4 import EvidenceBindingProvenance
 from novel import prov
 
 # 已发行且确认缺 scene alias→fact join 的唯一章模型 system，永久冻结。
@@ -37,19 +37,26 @@ def inspect_binding_input_contract(binding: Any) -> BindingInputContractVerdict:
     source = raw.get('_provenance')
     if not isinstance(source, Mapping):
         return BindingInputContractVerdict('unproven')
+    inherited = (source.get('origin') == 'compiled'
+                 and source.get('architecture') == 'chapter_baseline_v1'
+                 and source.get('binding_input_contract') is not None)
     prompts = source.get('prompts')
+    if inherited:
+        if source['binding_input_contract'] != STAGE4_BINDING_INPUT_CONTRACT:
+            return BindingInputContractVerdict('unproven')
+        prompts = {STAGE4_BINDING_INPUT_RECEIPT_KEY: prov.fingerprint(STAGE4_BINDING_INPUT_CONTRACT)}
     receipt_present = (isinstance(prompts, Mapping)
                        and STAGE4_BINDING_INPUT_RECEIPT_KEY in prompts)
-    applies = (source.get('origin') == 'llm'
-               and source.get('architecture') == 'chapter_baseline_v1')
+    applies = inherited or (source.get('origin') == 'llm'
+                            and source.get('architecture') == 'chapter_baseline_v1')
     if not applies:
         # 只豁免已登记且不使用章模型的路径；未知架构不是历史全映射。
-        known_legacy = (
-            source.get('origin') in ('human', 'compiled')
-            or source.get('origin') == 'llm'
-            and source.get('architecture') in (None, 'whole_book_v1'))
+        non_model = (
+            source.get('origin') == 'human'
+            or source.get('origin') == 'compiled'
+            and source.get('architecture') == 'chapter_baseline_v1')
         return BindingInputContractVerdict(
-            'legacy' if known_legacy and not receipt_present else 'unproven')
+            'legacy' if non_model and not receipt_present else 'unproven')
     if raw.get('status') != 'bound' or not isinstance(prompts, Mapping):
         return BindingInputContractVerdict('unproven')
     chapters = raw.get('chapters')
@@ -67,6 +74,10 @@ def inspect_binding_input_contract(binding: Any) -> BindingInputContractVerdict:
             or len(set(owners)) != len(owners)
             or set(ordinals) != set(owners)):
         return BindingInputContractVerdict('unproven')
+    try:
+        EvidenceBindingProvenance.validate_unit_lineage(lineage)
+    except (TypeError, ValueError):
+        return BindingInputContractVerdict('unproven')
     sessions = 0
     for row in lineage:
         if row.get('kind') == 'baseline':
@@ -74,17 +85,7 @@ def inspect_binding_input_contract(binding: Any) -> BindingInputContractVerdict:
         if row.get('kind') != 'chapter_session':
             return BindingInputContractVerdict('unproven')
         sessions += 1
-        models = row.get('models')
-        revision = row.get('revision')
-        ambiguities = row.get('ambiguities')
-        if (not isinstance(row.get('attempt_id'), str)
-                or re.fullmatch(r'[0-9a-f]{16}', row['attempt_id']) is None
-                or not isinstance(models, list) or not models
-                or any(not isinstance(m, str) or not m for m in models)
-                or not isinstance(revision, int) or isinstance(revision, bool)
-                or revision < 0
-                or not isinstance(ambiguities, int) or isinstance(ambiguities, bool)
-                or ambiguities < 1):
+        if inherited and row.get('origin') not in {'historical_checkpoint', 'current_run'}:
             return BindingInputContractVerdict('unproven')
     if not sessions:
         return BindingInputContractVerdict('unproven')

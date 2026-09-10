@@ -26,14 +26,25 @@ export function useAgentCapabilities() {
 }
 
 /** 用户常用配置是服务端事实；不放 localStorage，也不与产品默认混成一格。 */
-export function useAgentProfileSettings() {
+export function useAgentProfileSettings(enabled = true) {
   return useQuery({
+    enabled,
     queryKey: qk.agentProfileSettings(),
     queryFn: () => api.getAgentProfileSettings(),
     staleTime: 0,
     gcTime: 0,
     refetchOnMount: 'always',
     refetchOnWindowFocus: 'always',
+  })
+}
+
+export function useAgentRunContinuation(runId?: string) {
+  return useQuery({
+    queryKey: qk.agentRunContinuation(runId ?? ''),
+    queryFn: () => api.getAgentRunContinuation(runId!),
+    enabled: !!runId,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
 }
 

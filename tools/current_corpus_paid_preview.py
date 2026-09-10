@@ -62,10 +62,9 @@ from novel.stages.stage0 import revisions as stage0_revisions  # noqa: E402
 from novel.stages.stage1.partition import partition_text  # noqa: E402
 from novel.stages.stage1.audit import audit_surface  # noqa: E402
 from novel.stages.stage2 import extract as stage2_extract  # noqa: E402
+from novel.stages.stage2 import characters as stage2_characters  # noqa: E402
 from novel.stages.stage2.contract import active_contract  # noqa: E402
-from novel.stages.stage2.global_contract import (  # noqa: E402
-    active_contract as active_global_contract,
-)
+from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable  # noqa: E402
 from novel.stages.stage4.prompts import (  # noqa: E402
     BLIND_BOOK_STRATEGY_MAX_TOKENS,
     BLIND_CHAPTER_DESIGN_MAX_TOKENS,
@@ -109,8 +108,13 @@ SEMANTIC_NODES = {
 }
 
 PREREQUISITES = {
+    'stage2.characters': (
+        'Stage0 必须真正 approved；Stage1 正文为当前 schema 且 fresh。',
+        '整书静态人物注册单独计入首轮调用；证据使用本次源文候选，不能复用旧人物表。',
+    ),
     'stage2.global': (
         'Stage0 必须是当前 v2 且真正 approved；Stage1 三份当前 schema 产物完整。',
+        '当前人物登记与称名投影必须已由 stage2.characters 完整提交。',
         'source-only 输入若不满足首次零 removed/零 warning/clean==source，'
         '须先由人工显式 actor/reason 批准。',
     ),
@@ -228,6 +232,7 @@ def _source_book(book: BookSpec) -> dict[str, Any]:
         #   已于 2026-08-22 随死值一并删除。摄入之后恒 pending，只有人能批。
         'stage0_gate': '必须先由人工 actor/reason 批准，预览不替代该决定',
         'main_text': partition.main_text,
+        'source_hook': partition.hook_copy.text,
         'chapters': len(partition.main_text.root),
     }
 
@@ -287,6 +292,7 @@ def _stage1_book(book: BookSpec) -> dict[str, Any]:
         'clean_sha1': report.clean_sha1,
         'stage0_gate': f'已批准（by={report.approval.by}）',
         'main_text': main,
+        'source_hook': hook.text,
         'chapters': len(main.root),
     }
 
@@ -386,6 +392,7 @@ def _request_envelopes(node: str, models: tuple[str, ...],
             ('chapter_design', BLIND_CHAPTER_DESIGN_MAX_TOKENS),
         )]
     normal_max = {
+        'stage2.characters': stage2_characters.MAX_TOKENS,
         'stage2.global': stage2_extract.GLOBAL_MAX_TOKENS,
         'stage2.blueprint': stage2_extract.BLUEPRINT_MAX_TOKENS,
         'stage4.plan': EVIDENCE_BIND_MAX_TOKENS,
@@ -462,14 +469,14 @@ def _dispatch(book: dict[str, Any], node: str) -> dict[str, Any]:
 TokenCounter = Callable[[ChatRequest], int]
 
 
-def _global_token_estimate(
+def _characters_token_estimate(
     book: dict[str, Any], counter: TokenCounter = count_input_tokens,
 ) -> dict[str, Any]:
     main = [row.model_dump(by_alias=True, mode='json') for row in book['main_text'].root]
-    system, user, _candidates = stage2_extract.build_global_request(
-        book['title'], main, active_global_contract(), agent_envelope=True)
-    rungs = rungs_from_effort(NODES['stage2.global'].effort)
-    models = models_for(NODES['stage2.global'].model or FIXED_MODEL)
+    system = stage2_characters.SYSTEM
+    user = stage2_characters.build_user(book['title'], GlobalEvidenceCandidateTable.build(main))
+    rungs = rungs_from_effort(NODES['stage2.characters'].effort)
+    models = models_for(NODES['stage2.characters'].model or FIXED_MODEL)
     counts: list[dict[str, Any]] = []
     try:
         for model in models:
@@ -481,7 +488,7 @@ def _global_token_estimate(
                     reasoning_effort=effort,
                     thinking=thinking,
                     json_mode=True,
-                    max_tokens=stage2_extract.GLOBAL_MAX_TOKENS,
+                    max_tokens=stage2_characters.MAX_TOKENS,
                 )
                 counts.append({
                     'model': model,
@@ -510,12 +517,12 @@ def _global_token_estimate(
         # 由每个 wire 的上下文闸给出，仍可用于付费边界确认。
         'exhausted_ladder_input_tokens': 'unknown_dynamic_recovery_prompts',
         'exhausted_ladder_input_token_hard_ceiling': sum(
-            model_budget(model).context_limit - stage2_extract.GLOBAL_MAX_TOKENS
+            model_budget(model).context_limit - stage2_characters.MAX_TOKENS
             for model in models for _rung in rungs
         ) * MAX_SAMPLES_PER_RUNG,
         'completion_tokens_lower_bound': 0,
         'completion_tokens_ladder_upper_bound': (
-            wire_count * stage2_extract.GLOBAL_MAX_TOKENS),
+            wire_count * stage2_characters.MAX_TOKENS),
         'completion_includes_reasoning': True,
     }
 
@@ -686,8 +693,13 @@ def build_plan(
         for node in PAID_NODES
     ]
     aggregate = _aggregate(dispatches)
+    character_tokens = {
+        book['sid']: _characters_token_estimate(book, token_counter)
+        for book in books
+    }
     global_tokens = {
-        book['sid']: _global_token_estimate(book, token_counter)
+        book['sid']: {'status': 'unknown', 'reason': (
+            '干净输出根尚未生成本次人物登记；知识请求必须消费其真实投影，不能用空表或旧人物表估算。')}
         for book in books
     }
     rendered_books = [{
@@ -712,7 +724,8 @@ def build_plan(
             '既有 legacy CLI 首批请求观察；不含 Commander，不能作为新工作流总付费上限。'
             '现役内容预算以 workflow_role_budget 为准；总 wire/token/费用必须由冻结运行 profile 另行预览。'),
         'token_estimate': {
-            'stage2_global_exact_before_generation': global_tokens,
+            'stage2_characters_exact_before_generation': character_tokens,
+            'stage2_global_before_generation': global_tokens,
             'downstream_prompt_tokens': 'unknown',
             'downstream_unknown_reason': (
                 'Stage2 global 之后的 prompt 依赖尚未生成的当前-schema artifacts；'
@@ -816,16 +829,19 @@ def render(plan: dict[str, Any]) -> str:
         '',
         '## token 口径',
     ])
-    for sid, estimate in plan['token_estimate']['stage2_global_exact_before_generation'].items():
-        if estimate['status'].startswith('exact'):
-            lines.append(
-                f'- {sid}/stage2.global：首档 input={estimate["first_success_input_tokens"]}；'
-                f'走完整模型恢复链 input={estimate["exhausted_ladder_input_tokens"]}；'
-                f'input hard ceiling={estimate["exhausted_ladder_input_token_hard_ceiling"]}；'
-                f'completion=0..{estimate["completion_tokens_ladder_upper_bound"]} '
-                '（已含 reasoning）')
-        else:
-            lines.append(f'- {sid}/stage2.global：unknown（{estimate["reason"]}）')
+    for node, key in (
+            ('stage2.characters', 'stage2_characters_exact_before_generation'),
+            ('stage2.global', 'stage2_global_before_generation')):
+        for sid, estimate in plan['token_estimate'][key].items():
+            if estimate['status'].startswith('exact'):
+                lines.append(
+                    f'- {sid}/{node}：首档 input={estimate["first_success_input_tokens"]}；'
+                    f'走完整模型恢复链 input={estimate["exhausted_ladder_input_tokens"]}；'
+                    f'input hard ceiling={estimate["exhausted_ladder_input_token_hard_ceiling"]}；'
+                    f'completion=0..{estimate["completion_tokens_ladder_upper_bound"]} '
+                    '（已含 reasoning）')
+            else:
+                lines.append(f'- {sid}/{node}：unknown（{estimate["reason"]}）')
     lines.extend([
         '- 其余 prompt token：unknown（依赖尚未生成的当前 schema 上游）。',
         '- 历史 ledger 仅作带 SHA256 的旧观察；不拿它冒充新 prompt 预测。',

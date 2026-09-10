@@ -11,16 +11,30 @@ check 报告的 badge（`R-13.6`）。
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from contracts.invariants import STAGES, commander_work_unit
 from contracts.schema.orchestration import RunProgressView, RunResumeFrontierView
+from contracts.schema.api import WorkUnitGrantPreview, WorkUnitGrantRequest, WorkUnitGrantResult
 from novel.api.deps import checked_sid, get_base
 from novel.errors import UpstreamMissing
-from novel.orchestrator import beacon, operator
-from novel.work_units import list_unit_views
+from novel.orchestrator import beacon, operator, work_unit_grants
+from novel.views import work_units
 
 router = APIRouter(prefix='/novels')
+
+
+@router.get('/{sid}/work-units/{unit_id}/grant', response_model=WorkUnitGrantPreview)
+def preview_work_unit_grant(unit_id: str, sid: str = Depends(checked_sid),
+                           additional: int = Query(default=1, ge=1, le=4),
+                           base: str = Depends(get_base)) -> WorkUnitGrantPreview:
+    return work_unit_grants.inspect(base, sid, unit_id, additional)
+
+
+@router.post('/{sid}/work-units/{unit_id}/grant', response_model=WorkUnitGrantResult)
+def apply_work_unit_grant(unit_id: str, request: WorkUnitGrantRequest,
+                         sid: str = Depends(checked_sid), base: str = Depends(get_base)) -> WorkUnitGrantResult:
+    return work_unit_grants.apply(base, sid, unit_id, request)
 
 
 @router.get('/{sid}/run', response_model=RunProgressView)
@@ -45,7 +59,7 @@ def get_run_progress(sid: str = Depends(checked_sid),
             verified_skipped_nodes=[],
             verified_skipped_count=0,
         )
-    units = list_unit_views(base, sid)
+    units, units_unavailable = work_units.get(base, sid)
     identity = commander_work_unit(resume_frontier.waiting_on or '')
     current_node = identity[0] if identity else resume_frontier.node
     current_scope = identity[1] if identity else None
@@ -60,5 +74,6 @@ def get_run_progress(sid: str = Depends(checked_sid),
         steps=beacon.fold(events),
         stage_done=stage_done,
         events_tail=[beacon.event_view(event) for event in events[-beacon.TAIL:]],
-        work_units=units, current_recovery_actions=recovery,
+        work_units=units, work_units_unavailable_reason=units_unavailable,
+        current_recovery_actions=recovery,
     )

@@ -12,6 +12,8 @@ test_agent.py —— Commander 代跑的提示词/启动计划、事件流与互
 """
 from __future__ import annotations
 
+from novel.stages.stage2 import grounding as grounding_io
+
 import copy
 import io
 import hashlib
@@ -52,7 +54,7 @@ from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentProfile, AgentRunEvent, AgentRunRecord, AgentRunStart,
     ExecutionEpoch, LegacyExecutorBackend, LegacyLlmProfile,
     PipelineAgentProfiles, ProgressEvent, ReviewerActionRecord, RunContractV2,
-    Stage2PrereviewRecord, Step,
+    Step,
 )
 from novel import agent_session_audit, commander_context, paths, skill_contract
 from novel.agents.base import AgentUsage
@@ -554,7 +556,8 @@ def test_stage2_reviewer_global_edit_uses_the_same_typed_service_transport(
     edit = GlobalEdit.model_validate({
         'characters': [{
             'char_id': 'char_001',
-            'name_distinctiveness': 'high',
+            'fate': '首版结局',
+            'fate_evidence': {'chapter_ordinal': 1, 'locator': '结局证据'},
         }],
     })
     action = agent.reviewer_tasks.ReviewerNodeAction(
@@ -691,20 +694,6 @@ def test_stage5_batch_manifest_save_failure_leaves_no_payload_tmp(
 
     assert not list(root.glob('stage5-trim-batch-*'))
     assert not list(root.glob('*.tmp')), '保存失败不得残留含人工理由的临时字节'
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_prompt_forbids_direct_edits_of_formal_artifacts(base, book):
@@ -1092,6 +1081,75 @@ def test_start_with_fake_spawn(base, corpus, monkeypatch):
     assert done.start.skill_sha256 == agent._skill_sha256()
     assert done.outcome is not None and done.outcome.state == 'stopped'
     assert 'fake run' in agent.run_log_path(base, rec.run_id).read_text('utf-8')
+
+
+def test_original_profiles_continue_through_http_after_restart(base, corpus, monkeypatch):
+    """真实历史账 → HTTP 预览 → 启动 → 新不可变契约，不读今日默认。"""
+    from fastapi.testclient import TestClient
+    from novel.api.app import create_app
+    from novel.orchestrator import agent_continuation
+    from contracts.schema.orchestration import PipelineConcurrency
+
+    profiles = PipelineAgentProfiles(commander=_CODEX, executor_default=_CLAUDE,
+        executor_overrides={'stage5.write': _CODEX},
+        concurrency=PipelineConcurrency(node_overrides={'stage5.write': 6}, per_book=6, per_provider=8))
+    # 完整解析由真实 start 固化，旧裸 AgentProfile 输入不能混入比较。
+    profiles = agent._freeze_profiles(profiles)
+    first = agent.start(base, '42', authorized=True, egress_authorized=True,
+                        profiles=profiles, spawn=_ok_spawn)
+    assert agent.wait(first.run_id, 10)
+    view = agent_continuation.inspect(base, first.run_id)
+    assert view.available, view.reason
+    actual_start = agent.start
+    monkeypatch.setattr(agent, 'start', lambda *a, **kw: actual_start(*a, **kw, spawn=_ok_spawn))
+    with TestClient(create_app(base)) as http:
+        shown = http.get(f'/api/agent/runs/{first.run_id}/continuation')
+        assert shown.status_code == 200 and shown.json()['available'], shown.text
+        req = dict(sid='42', authorized=False, egress_authorized=False,
+                   profiles=shown.json()['profiles'], continuation=shown.json()['source'])
+        preview = http.post('/api/agent/runs/preview', json=req, headers={'x-novel-ui': '1'})
+        assert preview.status_code == 200, preview.text
+        assert preview.json()['profiles'] == req['profiles']
+        assert preview.json()['continuation'] == req['continuation']
+        assert not preview.json()['authorized'] and not preview.json()['egress_authorized']
+        refused = http.post('/api/agent/runs', json=req, headers={'x-novel-ui': '1'})
+        assert refused.status_code >= 400
+        assert len(agent.records(base)) == 1
+        req.update(authorized=True, egress_authorized=True)
+        started = http.post('/api/agent/runs', json=req, headers={'x-novel-ui': '1'})
+        assert started.status_code == 202, started.text
+        assert agent.wait(started.json()['run_id'], 10)
+    with TestClient(create_app(base)) as restarted:
+        current = restarted.get('/api/agent/runs?sid=42').json()['runs'][0]
+        assert current['contract']['profiles'] == req['profiles']
+        assert current['contract']['continuation'] == req['continuation']
+
+
+@pytest.mark.parametrize('damage', ['profiles', 'sid', 'events', 'owner'])
+def test_original_profile_start_rechecks_source_under_writer(base, corpus, damage):
+    from novel.orchestrator import agent_continuation
+
+    first = agent.start(base, '42', authorized=True, egress_authorized=True,
+                        profiles=_PROFILES, spawn=_ok_spawn)
+    assert agent.wait(first.run_id, 10)
+    view = agent_continuation.inspect(base, first.run_id)
+    assert view.available, view.reason
+    planned = agent.plan(base, '42', authorized=True, egress_authorized=True,
+                         profiles=view.profiles, continuation=view.source)
+    if damage == 'profiles':
+        planned = replace(planned, profiles=PipelineAgentProfiles(
+            commander=_CODEX, executor_default=_CODEX, executor_overrides={}))
+    elif damage == 'sid':
+        planned = replace(planned, sid='41')
+    elif damage == 'events':
+        agent.append(base, AgentRunEvent(wire_version=2, run_id=first.run_id,
+            kind='reconciled', ts=int(time.time()), note='停止证明更新'))
+    from contextlib import nullcontext
+    guard = admission.owner_lease(base, first.run_id) if damage == 'owner' else nullcontext()
+    before = agent.runs_path(base).read_bytes()
+    with guard, pytest.raises(TerminalState):
+        agent._start_planned(planned, spawn=_ok_spawn)
+    assert agent.runs_path(base).read_bytes() == before
 
 
 def test_unregistered_deterministic_blocker_keeps_epoch_and_parent_end_in_sync(
@@ -1715,7 +1773,8 @@ def test_reviewer_work_unit_persists_the_correction_cap_across_runs(
     [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
     assert done.exit_code == 2
     assert done.outcome is not None
-    assert '预算' in done.outcome.reason and '用尽' in done.outcome.reason
+    assert '有效内容额度已用尽' in done.outcome.reason
+    assert '追加额度须由操作者另行授权' in done.outcome.reason
     assert budget.used == 4
     assert budget.latest_feedback()['reason'] == '历史第 4 轮 typed 拒因'
     assert agent.reviewer_seat_ledger.list_ledgers(base, '42') == []
@@ -1896,16 +1955,6 @@ def test_stage2_exit2_corrects_before_invalid_surface_can_replace_reviewer(base,
     assert [call.resume_provider_session_id for call in calls] == [None, 'provider-global']
     assert 'role_repeats_name' in calls[1].stdin_text
     assert _stage2_commander_unit(base).used == 2
-
-
-
-
-
-
-
-
-
-
 
 
 def test_ready_action_exact_resumes_same_commander_session(
@@ -3703,11 +3752,6 @@ def _reviewer_action_files(base):
         'reviewer-action-*.json'))
 
 
-def _stage2_prereview_files(base):
-    return sorted((Path(base) / '_service' / 'edits' / '42').glob(
-        'stage2-prereview-*.json'))
-
-
 def _stage2_compact_apply_edit_fixture(current, request_path):
     """铸一份最小但完整的真实 reviewed GlobalEdit + compact 回答。"""
     source_sha256 = '1' * 64
@@ -3715,7 +3759,8 @@ def _stage2_compact_apply_edit_fixture(current, request_path):
     exact_payload = GlobalEdit.model_validate({
         'characters': [{
             'char_id': 'char_001',
-            'name_distinctiveness': 'high',
+            'fate': '首版结局',
+            'fate_evidence': {'chapter_ordinal': 1, 'locator': '结局证据'},
         }],
         'post_edit_review': {
             'actor': 'agent:novel-pipeline-operator',
@@ -3771,7 +3816,8 @@ def _stage2_compact_apply_edit_fixture(current, request_path):
             'edit': {
                 'characters': [{
                     'char_id': 'char_001',
-                    'name_distinctiveness': 'medium',
+                    'fate': '订正结局',
+                    'fate_evidence': {'chapter_ordinal': 1, 'locator': '结局证据'},
                 }],
                 'post_edit_review': {
                     'reason': '已复读正文并复核本次人物辨识度增量',
@@ -4282,7 +4328,7 @@ def test_stage2_compact_materialization_uses_real_loader_and_separates_digests(
     assert record_path is None
     assert action.node == 'stage2.global'
     decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
-    assert decoded.payload['characters'][0]['name_distinctiveness'] == 'medium'
+    assert decoded.payload['characters'][0]['fate'] == '订正结局'
     assert first_task.request_path.read_bytes() == assembled_bytes
 
     failed_root = Path(base) / '_service' / 'scratch' / '42' / 'compact-failed'
@@ -4350,12 +4396,12 @@ def test_stage2_producer_preflight_rejects_before_executor_then_corrects(
             assert isinstance(response, dict)
             if len(invocations) == 1:
                 response['payload']['edit']['characters'][0][
-                    'name_distinctiveness'] = 'medium'
+                    'fate'] = '订正结局'
             else:
                 # correction 必须形成不同的真实业务动作，避免把只改说明文字
                 # 误当成候选修复进展。
                 response['payload']['edit']['characters'][0][
-                    'name_distinctiveness'] = 'common'
+                    'fate'] = '再次订正结局'
                 response['payload']['edit']['post_edit_review']['reason'] = (
                     '已补齐缺失 relation endpoint 并复核保留人物修订')
             raw_responses.append(response)
@@ -4380,7 +4426,7 @@ def test_stage2_producer_preflight_rejects_before_executor_then_corrects(
         assert _reviewer_action_files(base_), (
             'producer preflight 不得跑在 durable action 之前')
         decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
-        value = decoded.payload['characters'][0]['name_distinctiveness']
+        value = decoded.payload['characters'][0]['fate']
         preflighted.append(value)
         if len(preflighted) == 1:
             raise agent._Stage2ReviewerPreflightRejected(
@@ -4394,7 +4440,7 @@ def test_stage2_producer_preflight_rejects_before_executor_then_corrects(
     def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
         decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
         executions.append(
-            decoded.payload['characters'][0]['name_distinctiveness'])
+            decoded.payload['characters'][0]['fate'])
         return agent.SupervisorActionResult(
             exit_code=0, outcome=stopped, continue_ready=False)
 
@@ -4404,8 +4450,8 @@ def test_stage2_producer_preflight_rejects_before_executor_then_corrects(
         profiles=_PROFILES, spawn=None)
     assert agent.wait(rec.run_id, 10)
 
-    assert preflighted == ['medium', 'common']
-    assert executions == ['common'], '被 producer 拒绝的第一份 action 绝不能进 Executor'
+    assert preflighted == ['订正结局', '再次订正结局']
+    assert executions == ['再次订正结局'], '被 producer 拒绝的第一份 action 绝不能进 Executor'
     assert len(invocations) == 2
     first_digest = hashlib.sha256(json.dumps(
         raw_responses[0], ensure_ascii=False, sort_keys=True,
@@ -4435,7 +4481,7 @@ def test_agent_stage2_preflight_calls_real_readonly_producer(
     _seed(book)
     ctx = _ctx(book, 'stage2.global', paid=False)
     store = ArtifactStore(ctx)
-    current = store.read(GlobalGrounding, extract.GLOBAL_REL).model_dump(
+    current = grounding_io.read(store).model_dump(
         mode='json', by_alias=True)
     edit = GlobalEdit.model_validate({
         'collection_edits': [{
@@ -4691,7 +4737,7 @@ def test_stage2_typed_action_survives_pause_stop_and_new_parent_replay(
             return agent.SupervisorActionResult(
                 exit_code=70, outcome=stopped, continue_ready=False)
         decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
-        executions.append(decoded.payload['characters'][0]['name_distinctiveness'])
+        executions.append(decoded.payload['characters'][0]['fate'])
         return agent.SupervisorActionResult(
             exit_code=0, outcome=stopped, continue_ready=False)
 
@@ -4747,7 +4793,7 @@ def test_stage2_typed_action_survives_pause_stop_and_new_parent_replay(
     assert record.provider_response_sha256 == raw_digest
     assert decode_artifact(
         STAGE2_GLOBAL_EDIT,
-        record.input_payload).payload['characters'][0]['name_distinctiveness'] == 'medium'
+        record.input_payload).payload['characters'][0]['fate'] == '订正结局'
 
     first_done = agent.stop(base, first.run_id)
     assert first_done.ended is not None and first_done.outcome.state == 'stopped'
@@ -4765,7 +4811,7 @@ def test_stage2_typed_action_survives_pause_stop_and_new_parent_replay(
         profiles=_PROFILES, spawn=None)
     assert agent.wait(replayed.run_id, 10)
 
-    assert executions == ['medium']
+    assert executions == ['订正结局']
     assert len(invocations) == 1, 'pause/stop/new parent 重放不得重发 Commander'
     assert not record_path.exists(), 'canonical landed 后必须删除 durable action'
     assert _stage2_commander_unit(base).latest_turn().state == 'adopted'
@@ -4826,7 +4872,7 @@ def test_stage2_live_initial_action_exit70_is_retained_for_replay(
 
     def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
         decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
-        executions.append(decoded.payload['characters'][0]['name_distinctiveness'])
+        executions.append(decoded.payload['characters'][0]['fate'])
         if len(executions) == 1:
             return agent.SupervisorActionResult(
                 exit_code=70, outcome=unknown, continue_ready=False,
@@ -4851,7 +4897,7 @@ def test_stage2_live_initial_action_exit70_is_retained_for_replay(
         profiles=_PROFILES, spawn=None)
     assert agent.wait(replayed.run_id, 10)
 
-    assert executions == ['medium', 'medium']
+    assert executions == ['订正结局', '订正结局']
     assert len(invocations) == 1, 'exit70 后 action replay 不得再买 Commander'
     assert not record_path.exists(), '重放 landed 后才消费 durable action'
     assert _stage2_commander_unit(base).latest_turn().state == 'adopted'
@@ -4914,237 +4960,6 @@ def test_stage2_feedback_correction_records_effective_progress_before_finish(bas
     assert unit.latest_turn().state == 'adopted'
 
 
-
-
-
-
-def test_stage2_rejection_wins_crash_before_action_record_delete(
-        base, monkeypatch):
-    """拒因已 durable 而 action 尚未删时，恢复只能消费拒因，不能重放回答。"""
-    source_sha256 = '1' * 64
-    main_text_sha256 = '2' * 64
-    business_sha256 = '3' * 64
-    workpack_sha256 = '4' * 64
-    progress_sha256 = '5' * 64
-    session_run_id = 'stage2-rejected-action-session'
-    agent.stage2_review_ledger.reserve(
-        base, '42', source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        business_sha256=business_sha256,
-        workpack_sha256=workpack_sha256,
-        progress_sha256=progress_sha256,
-        blocker_count=2, purpose='review', parent_run_id='old-parent',
-        epoch_id='old-epoch', session_run_id=session_run_id, now=1)
-    agent.stage2_review_ledger.finish(
-        base, '42', source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        session_run_id=session_run_id, exit_code=0, now=2)
-    agent.stage2_review_ledger.record_rejection(
-        base, '42', source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        business_sha256=business_sha256,
-        workpack_sha256=workpack_sha256,
-        session_run_id=session_run_id, kind='canonical_action',
-        request_sha256='6' * 64,
-        reason='canonical apply-edit 明确拒绝', now=3)
-
-    current = SimpleNamespace(
-        state='blocked', code_version='test-code-version',
-        surface_seal='7' * 64, execution_token=None,
-        action=SimpleNamespace(
-            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
-            action_sha256='8' * 64))
-    task = agent.reviewer_tasks.ReviewerTask(
-        waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
-        surface_seal=current.surface_seal,
-        business_sha256=business_sha256,
-        request_path=Path(base) / '_service' / 'unused-rejected-action.json',
-        prompt='unused', submission_options=(),
-        workpack_sha256=workpack_sha256,
-        source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        progress_sha256=progress_sha256,
-        blocker_count=2)
-    path = agent.uploads.save_reviewer_action(
-        base, '42', ReviewerActionRecord(
-            sid='42', run_id='old-parent', epoch_id='old-epoch',
-            waiting_on=task.waiting_on,
-            surface_seal=task.surface_seal,
-            business_sha256=business_sha256,
-            node='stage2.global', flags=('--apply-edit', '@reviewer-input'),
-            input_payload={}, workpack_sha256=workpack_sha256,
-            source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            progress_sha256=progress_sha256, blocker_count=2,
-            reviewer_session_run_id=session_run_id,
-            provider_response_sha256='9' * 64, recorded_at=3))
-    epoch = ExecutionEpoch(
-        epoch_id='new-epoch', ordinal=1, reason='initial',
-        argv=['codex', 'headless'], prompt_sha256='a' * 64,
-        protocol_version='test-protocol', cli_version='test-cli',
-        code_version='test-code-version', skill_sha256='b' * 64,
-        session_run_id='new-session')
-    monkeypatch.setattr(
-        agent.reviewer_tasks, 'replay_request_document',
-        lambda *_args, **_kwargs: pytest.fail(
-            '已有 durable rejection 的旧 action 不得进入 replay loader'))
-
-    replay = agent._find_replayable_reviewer_action(
-        base, '42', epoch=epoch, current=current, task=task)
-
-    assert replay is None
-    assert not path.exists(), '恢复应关闭式消费 rejection 旁残留的旧 action'
-
-
-def test_stage2_terminal_sidecar_repairs_crash_before_action_rejection(
-        base, corpus):
-    """producer 已分类、Agent 尚未收 exit2：新 parent 先补原席拒因再开 correction。"""
-    source_sha256 = '1' * 64
-    main_text_sha256 = '2' * 64
-    business_sha256 = '3' * 64
-    workpack_sha256 = '4' * 64
-    progress_sha256 = '5' * 64
-    response_sha256 = '6' * 64
-    session_run_id = 'stage2-terminal-sidecar-session'
-    agent.stage2_review_ledger.reserve(
-        base, '42', source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        business_sha256=business_sha256,
-        workpack_sha256=workpack_sha256,
-        progress_sha256=progress_sha256,
-        blocker_count=1, purpose='review', parent_run_id='dead-parent',
-        epoch_id='dead-epoch', session_run_id=session_run_id, now=1)
-    agent.stage2_review_ledger.finish(
-        base, '42', source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        session_run_id=session_run_id, exit_code=0, now=2)
-
-    edit = GlobalEdit.model_validate({
-        'characters': [{
-            'char_id': 'char_001',
-            'name_distinctiveness': 'medium',
-        }],
-        'post_edit_review': {
-            'actor': 'agent:novel-pipeline-operator',
-            'expected_source_sha256': source_sha256,
-            'expected_workpack_sha256': workpack_sha256,
-            'reviewed_chapter_ordinals': [1],
-            'default_state': 'PASS',
-            'reason': '已完整复核当前正文与本次增量',
-            'quarantine_groups': [],
-            'review_scope': [{
-                'item_id': 'character:char_001',
-                'expected_subject_sha256': '7' * 64,
-            }],
-            'decisions': [],
-        },
-    })
-    novel_dir = paths.resolve_novel_dir(base, '42')
-    store = agent.ArtifactStore(replace(
-        agent.state.readonly_ctx(
-            novel_dir, 'stage2.global', 'test-code-version'),
-        readonly=False))
-    store.write_sparse_input(STAGE2_GLOBAL_EDIT, edit)
-    edit_sha256 = store.full_sha256_or_none(STAGE2_GLOBAL_EDIT)
-    assert edit_sha256 is not None
-    failure = agent.GlobalEditFailure(
-        failure_kind='post_edit_review',
-        failed_edit_sha256=edit_sha256,
-        formal_sha256='8' * 64,
-        expected_source_sha256=source_sha256,
-        global_review_workpack_sha256=workpack_sha256,
-        candidate_business_sha256='9' * 64,
-        reason_code='blocking_remaining',
-        reason_summary='修后自审仍有一项 blocking subject 未闭合',
-        code_version='test-code-version')
-    store.write(agent.STAGE2_GLOBAL_EDIT_FAILURE, failure)
-
-    path = agent.uploads.save_reviewer_action(
-        base, '42', ReviewerActionRecord(
-            sid='42', run_id='dead-parent', epoch_id='dead-epoch',
-            waiting_on=agent.queue.WAITING_ON_STAGE2_REVIEW,
-            surface_seal='a' * 64,
-            business_sha256=business_sha256,
-            node='stage2.global', flags=('--apply-edit', '@reviewer-input'),
-            input_payload=encode_artifact(
-                STAGE2_GLOBAL_EDIT,
-                edit.model_dump(mode='json', by_alias=True, exclude_unset=True)),
-            workpack_sha256=workpack_sha256,
-            source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            progress_sha256=progress_sha256, blocker_count=1,
-            reviewer_session_run_id=session_run_id,
-            provider_response_sha256=response_sha256,
-            recorded_at=3))
-
-    agent._reconcile_stage2_apply_edit_actions(
-        base, '42', code='test-code-version')
-
-    assert not path.exists(), 'terminal producer 事实落账后必须消费旧 action record'
-    pending = agent.stage2_review_ledger.pending_rejection(
-        base, '42', source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        business_sha256=business_sha256,
-        workpack_sha256=workpack_sha256)
-    assert pending is not None
-    assert pending.rejection.kind == 'canonical_action'
-    assert pending.rejection.request_sha256 == response_sha256
-    assert pending.rejection.reason == (
-        'blocking_remaining: 修后自审仍有一项 blocking subject 未闭合')
-
-    # crash 若落在 rejection save → record delete，下一 parent 只做幂等退休；
-    # 本次 record 已无，重复 reconcile 也不得追加第二条拒因或制造 Commander 账。
-    agent._reconcile_stage2_apply_edit_actions(
-        base, '42', code='test-code-version')
-    [shown] = agent.stage2_review_ledger.list_ledgers(base, '42')
-    assert shown['turns'][0]['rejections'] == 1
-    ledger_path = Path(base) / '_service' / 'ledger.jsonl'
-    assert not ledger_path.exists(), '纯 durable 补账不得伪造一次 Commander wire'
-
-
-def test_generic_revalidate_commit_does_not_consume_apply_edit_action(
-        base, corpus, monkeypatch):
-    """generic revalidate journal 不是 Reviewer apply-edit 成功事实。"""
-    record = ReviewerActionRecord(
-        sid='42', run_id='old-parent', epoch_id='old-epoch',
-        waiting_on=agent.queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
-        surface_seal='a' * 64, business_sha256='b' * 64,
-        node='stage2.global', flags=('--apply-edit', '@reviewer-input'),
-        input_payload={}, workpack_sha256='c' * 64,
-        source_sha256='d' * 64, main_text_sha256='e' * 64,
-        progress_sha256='f' * 64, blocker_count=1,
-        reviewer_session_run_id='old-stage2-session',
-        provider_response_sha256='1' * 64, recorded_at=1)
-    action_path = Path(base) / '_service' / 'edits' / '42' / 'action.json'
-    monkeypatch.setattr(
-        agent.uploads, 'load_reviewer_actions',
-        lambda _base, _sid: [(action_path, record)])
-
-    class ReadonlyStore:
-        def __init__(self, _ctx):
-            pass
-
-        @staticmethod
-        def exists(rel):
-            return rel == agent.STAGE2_GLOBAL_EDIT_COMMIT
-
-        @staticmethod
-        def read_own(_model, rel):
-            assert rel == agent.STAGE2_GLOBAL_EDIT_COMMIT
-            return SimpleNamespace(
-                state='committed', action_kind='revalidate',
-                failed_edit_sha256='2' * 64), {}
-
-    monkeypatch.setattr(agent, 'ArtifactStore', ReadonlyStore)
-    monkeypatch.setattr(
-        agent, '_stage2_apply_edit_record_sha256',
-        lambda *_args, **_kwargs: pytest.fail(
-            'revalidate journal 不得尝试匹配/消费 apply-edit action'))
-
-    agent._reconcile_stage2_apply_edit_actions(
-        base, '42', code='test-code-version')
-
-
 @pytest.mark.real_code_version
 def test_stage2_wal_only_exit2_replans_to_exact_executor_without_second_commander(
         base, corpus, monkeypatch, request):
@@ -5161,7 +4976,7 @@ def test_stage2_wal_only_exit2_replans_to_exact_executor_without_second_commande
     from novel.store import ArtifactStore
     from tests.factories import approved_global_review
     from tests.test_stage2_generation import _ctx
-    from tests.test_stage2_secret_edit import _role_locator, _seed
+    from tests.test_stage2_secret_edit import _seed
 
     monkeypatch.setenv(
         'NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
@@ -5170,27 +4985,27 @@ def test_stage2_wal_only_exit2_replans_to_exact_executor_without_second_commande
     code = agent.prov.code_version()
     ctx = _ctx(book, 'stage2.global', paid=False)
     store = ArtifactStore(ctx)
-    grounding = store.read(GlobalGrounding, extract.GLOBAL_REL)
+    grounding = grounding_io.read(store)
     review = approved_global_review(grounding)
     target = next(
         item for item in review.items
-        if item.kind == 'role'
-        and item.subject_path == 'entities.characters.char_001.role')
+        if item.kind == 'relation'
+        and item.subject_path == 'entities.relations.rel_01')
     review = decide(
         review, item_id=target.item_id,
         expected_subject_sha256=target.subject_sha256,
         state='FAIL', actor='test-reviewer',
-        reason='人物身份混入了错误事实',
+        reason='关系表述需要明确双方角色',
         now='2026-09-06T00:00:00+00:00')
     store.write(extract.GLOBAL_REVIEW_REL, review)
     workpack_sha256 = str(global_review_ops.review_workpack(
         ctx, scope='blocking',
         replaced_input_keys=(extract.GLOBAL_EDIT,))['workpack_sha256'])
     edit = GlobalEdit.model_validate({
-        'characters': [{
-            'char_id': 'char_001',
-            'role': '沈家账房，负责核对往来账目',
-            'role_evidence': _role_locator(),
+        'relations': [{
+            'relation_id': 'rel_01',
+            'predicate': '女儿与母亲',
+            'predicate_evidence': {'chapter_ordinal': 2, 'locator': '回来时看见母亲在门口等她。'},
         }],
         'post_edit_review': {
             'actor': 'agent:novel-pipeline-operator',
@@ -5351,8 +5166,8 @@ def test_stage2_wal_only_exit2_replans_to_exact_executor_without_second_commande
     assert not (book / extract.GLOBAL_EDIT_INPUT_COMMIT).exists()
     journal = store.read(GlobalEditCommit, extract.GLOBAL_EDIT_COMMIT)
     assert journal.state == 'committed'
-    landed_global = store.read(GlobalGrounding, extract.GLOBAL_REL)
-    assert landed_global.entities.characters['char_001'].role.startswith('沈家账房')
+    landed_global = grounding_io.read(store)
+    assert landed_global.entities.relations[0].predicate == '女儿与母亲'
     assert _reviewer_action_files(base) == []
     unit = _stage2_commander_unit(base)
     assert unit.used == 1
@@ -5564,27 +5379,7 @@ def _seed_stage5_partial_batch(base: str):
     audit_sha256: dict[int, str] = {}
     for ordinal in (1, 2):
         text = f'第{ordinal}章超限正文。' * 24
-        chapter = Chapter.model_validate({
-            'output_ordinal': ordinal,
-            'from_source_ordinals': [ordinal],
-            'source_chars': 100,
-            'budget_chars': 90,
-            'chars': len(text),
-            'overlap_excl_verbatim': 0.01,
-            'segments': [{'slot': 's01', 'text': text}],
-            'warns': [],
-            '_provenance': {
-                'code': 'test-code-version',
-                'root_clean_sha1': root_sha1,
-                'inputs': {'stage0/clean_text.txt': {
-                    'file': root_fp, 'consumed': None}},
-                'origin': 'human',
-                'round': 1,
-                'prompts': {'SYS': 'a' * 10},
-                'model': 'test-model',
-                'adopted_models': ['test-model'],
-            },
-        })
+        chapter = Chapter.model_validate({'output_ordinal': ordinal, 'segments': [{'slot': 's01', 'text': text}], '_provenance': {'code': 'test-code-version', 'root_clean_sha1': root_sha1, 'inputs': {'stage0/clean_text.txt': {'file': root_fp, 'consumed': None}}, 'origin': 'human', 'round': 1, 'prompts': {'SYS': 'a' * 10}, 'model': 'test-model', 'adopted_models': ['test-model']}})
         rel = artifact_rel('stage5.chapter', nn=ordinal)
         payload = chapter.model_dump(by_alias=True, exclude_none=True)
         payload['_provenance'] = chapter.provenance.to_disk()
@@ -5596,10 +5391,7 @@ def _seed_stage5_partial_batch(base: str):
         chapter_sha256[ordinal] = hashlib.sha256(
             chapter.text.encode('utf-8')).hexdigest()
         audit_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
-        store.write(audit_rel, TrimAudit(
-            output_ordinal=ordinal,
-            before_sha256=chapter_sha256[ordinal],
-            reason='超上限，登记 current pretrim identity'))
+        store.write(audit_rel, TrimAudit(before_sha256=chapter_sha256[ordinal], reason='超上限，登记 current pretrim identity'))
         audit_sha256[ordinal] = store.read_with_sha256(
             TrimAudit, audit_rel)[1]
 
@@ -5696,9 +5488,6 @@ def _install_stage5_partial_agent_harness(
             (agent.queue.st.RESUME_SKIP, 'fresh Review 已落')
             if node == 'stage5.review'
             else (agent.queue.st.RESUME_RUN, 'Stage6 尚未生成')))
-    monkeypatch.setattr(
-        agent.queue.st, 'stage2_frozen_v6_subject_validated',
-        lambda _overview: False)
     monkeypatch.setattr(
         agent.queue.st, 'live_invalid_artifacts', lambda *_args: [])
     monkeypatch.setattr(agent.queue, '_upstream_invalid', lambda *_args: [])
@@ -6832,7 +6621,7 @@ def test_stage5_reviewer_rewrite_seal_revalidates_seat_session_and_cost(
     }
 
     seat_payload = json.loads(originals[seat_path])
-    seat_payload['content_limit'] += 1
+    seat_payload['base_content_limit'] += 1
     seat_path.write_text(
         json.dumps(seat_payload, ensure_ascii=False, indent=2) + '\n',
         encoding='utf-8')
@@ -7635,7 +7424,7 @@ def test_stage2_compact_schema_identity_is_stable_across_transient_resume(
 
     def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):
         payload = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload).payload
-        applied.append(payload['characters'][0]['name_distinctiveness'])
+        applied.append(payload['characters'][0]['fate'])
         return agent.SupervisorActionResult(
             exit_code=0, outcome=stopped, continue_ready=False)
 
@@ -7678,7 +7467,7 @@ def test_stage2_compact_schema_identity_is_stable_across_transient_resume(
         profiles=_PROFILES, spawn=None)
     assert agent.wait(rec.run_id, 10)
 
-    assert applied == ['medium']
+    assert applied == ['订正结局']
     assert len(invocations) == 2
     schema_sha256 = invocations[0].output_schema_sha256
     assert schema_sha256 is not None
@@ -8134,7 +7923,7 @@ def _stage2_work_unit_harness(base, monkeypatch, *, mode='invalid', both=False):
             raise agent.reviewer_tasks.ReviewerTaskError('typed 字段仍未完整：' + str(ordinal))
         from contracts.artifacts import STAGE2_BLUEPRINT_RELATION_EDIT
         payload = ({'actor': 'agent:test', 'reason': f'轮次:{ordinal}',
-                    'characters': [{'char_id': 'char_001', 'name_distinctiveness': 'medium'}]}
+                    'characters': [{'char_id': 'char_001', 'fate': '订正结局'}]}
                    if progress['node'] == 'stage2.global' else {
                        'actor': 'agent:test', 'reason': f'轮次:{ordinal}',
                        'review_token': 'brt1_' + 'a' * 64,
@@ -8195,7 +7984,30 @@ def test_stage2_commander_budget_is_four_including_format_repairs_and_survives_r
     assert agent.wait(second.run_id, 15)
     assert len(calls) == 4
     assert progress['applied'] == []
-    assert agent.stage2_review_ledger.list_ledgers(base, '42') == []
+    assert stage2_review_ledger.list_ledgers(base, '42') == []
+
+
+def test_commander_grant_survives_new_parent_without_resetting_other_roles(base, corpus, monkeypatch):
+    from contracts.schema.api import WorkUnitGrantRequest
+    from novel.orchestrator import work_unit_grants
+    from uuid import uuid4
+
+    _progress, calls, _budget_type = _stage2_work_unit_harness(base, monkeypatch)
+    first = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
+    assert agent.wait(first.run_id, 15)
+    unit = _stage2_commander_unit(base)
+    assert unit.used == 4
+    preview = work_unit_grants.inspect(base, '42', unit.unit_id)
+    assert preview.available, preview.reason
+    # 缺供应商 usage 仍保留四次真实调用，不能把未知 token 写成零。
+    assert preview.costs.calls == 4 and preview.costs.total_tokens is None
+    work_unit_grants.apply(base, '42', unit.unit_id, WorkUnitGrantRequest(
+        preview_token=preview.preview_token, intent_id=uuid4().hex, reason='允许再订正一次'))
+    second = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
+    assert agent.wait(second.run_id, 15)
+    assert len(calls) == 5 and unit.used == 5 and unit.remaining == 0
+    assert _stage2_commander_unit(base, queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW).remaining == 4
+    assert WorkUnitBudget(base, '42', 'stage2.global').remaining == 4
 
 
 def test_stage2_two_commanders_use_independent_continuous_four_call_budgets(

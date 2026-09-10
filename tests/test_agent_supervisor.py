@@ -38,6 +38,50 @@ def _epoch(epoch_id: str, ordinal: int, reason: str,
         resume_provider_session_id=resume)
 
 
+def test_ready_producer_boundary_drains_then_rereads_without_reviewer():
+    events, calls = [], []
+    done = False
+    initial = _epoch('first', 1, 'initial')
+
+    def read(epoch):
+        calls.append(('read', epoch.session_run_id))
+        return SimpleNamespace(state='pipeline_complete' if done else 'ready', code_version='code-1',
+            action=SimpleNamespace(node='stage4.design', flags=[]),
+            execution_token=SimpleNamespace(node='stage4.design', snapshot=epoch.session_run_id))
+
+    def fresh(reason, ordinal, resume):
+        assert (reason, ordinal, resume) == ('continue', 2, None)
+        return _epoch('second', 2, reason).model_copy(update={
+            'code_version': 'code-1', 'session_run_id': 'session-2'})
+
+    def ready(epoch, current, resume, ticket):
+        nonlocal done
+        assert current.execution_token.snapshot == epoch.session_run_id == 'session-2'
+        assert resume is None
+        calls.append(('run', epoch.session_run_id))
+        ticket.commit()
+        done = True
+        return SupervisorActionResult(0, _outcome(), True)
+
+    def finish(epoch, ticket):
+        ticket.commit()
+        return SupervisorActionResult(0, _outcome('ready'), False)
+
+    supervisor = RunSupervisor(run_id='ready-rebuild', append_event=events.append,
+        make_epoch=fresh, open_epoch=lambda _epoch: None,
+        close_epoch=lambda epoch, _turn: (calls.append(('drain', epoch.session_run_id)) or 'drained'),
+        run_commander_turn=lambda *_: pytest.fail('重建边界不调用 Commander'),
+        epoch_identity_current=lambda _epoch: True, cancel_commander=lambda: True,
+        initial_epoch=initial, read_operator_next=read, run_ready_action=ready,
+        ready_requires_fresh_epoch=lambda epoch, _current: epoch.session_run_id == 'session-1',
+        run_reviewer=lambda *_: pytest.fail('重建边界不调用 Reviewer'), finalize_run=finish)
+    assert not supervisor.run().stopped
+    assert calls == [('read', 'session-1'), ('drain', 'session-1'),
+                     ('read', 'session-2'), ('run', 'session-2'),
+                     ('read', 'session-2'), ('drain', 'session-2')]
+    assert [event.kind for event in events].count('epoch_closed') == 2
+
+
 def test_supervisor_exact_resumes_without_artificial_turn_limit():
     events: list[AgentRunEvent] = []
     calls: list[str | None] = []

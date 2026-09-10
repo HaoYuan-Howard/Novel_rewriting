@@ -3,6 +3,7 @@
  * 抓包证据在 `src/fixtures/backend_v1/`。
  */
 import type { Badge, Freshness, Severity, InboxKind } from '@/constants/vocabulary'
+import type { KnowledgeLinkReview } from './knowledgeLinks'
 import type {
   Facts,
   Finding,
@@ -249,6 +250,15 @@ export interface ReadingSegment {
 
 export interface ReadingHinge {
   kind: string
+  hinge_id: string
+  source_fact_refs: string[]
+  dialogue: {
+    speaker: { kind: 'character'; char_id: string } | { kind: 'group'; label: string } | null
+    addressees: ({ kind: 'character'; char_id: string } | { kind: 'group'; label: string })[] | null
+    meaning: string
+    speech_act: string
+  } | null
+  literal: { kind: 'password' | 'code' | 'riddle' | 'identifier'; reason: string } | null
   /** null = 未定位（INVALID 状态的 hinge 没有原文可引） */
   text: string | null
 }
@@ -397,16 +407,20 @@ export interface BlueprintReviewDelta {
   reason: string
 }
 
+import type { Stage2ReviewCoverage } from './stage2Review'
+
 export interface BlueprintReviewWorkpack {
+  review_coverage?: Stage2ReviewCoverage | null
   sid: string
   title: string
   read_only: true
   auto_decisions: false
-  review_contract_version: 'stage2-blueprint-review-v5'
+  review_contract_version: 'stage2-blueprint-review-v7'
   review_identity_sha256: string
   validation_seal_sha256: string
   review_token: string
   global_review: Record<string, unknown>
+  knowledge_links: KnowledgeLinkReview
   review_delta?: BlueprintReviewDelta | null
   subject_sha256: string
   binding_sha256: string
@@ -530,15 +544,14 @@ export interface Stage2Global {
   world_rules: GlobalWorldRule[]
   /** 空数组 = 这本书没抽到秘密。那**可能是漏抽了**，不是「无」。 */
   secrets: GlobalSecret[]
-  arc: {
-    conflict_stages: { stage: string; chapters: number[] }[]
-    climax: string
-    ending: string
-    arc_tracks: {
-      subject: NameRef
-      trajectory: string
-      trajectory_evidence: GlobalFactEvidence
-    }[]
+  source_blurb: {
+    facts: (
+      | { kind: 'supported'; claim_id: string; claim: string; evidence: GlobalFactEvidence }
+      | { kind: 'unresolved'; claim_id: string; claim: string; reason: string }
+    )[]
+    opening:
+      | { kind: 'proposed'; through_chapter: number; rationale: string; boundary_evidence: GlobalFactEvidence }
+      | { kind: 'unresolved'; reason: string }
   }
   /** 全屏解引用失败的总数（读数，不是判定） */
   unresolved_refs: number
@@ -576,8 +589,9 @@ export type GlobalReviewKind =
   | 'knowledge_event'
   | 'setting_fact'
   | 'secret_setup'
-  | 'conflict_partition'
-  | 'arc_analysis'
+  | 'source_blurb_complete'
+  | 'source_blurb_fact'
+  | 'opening_scope'
 
 /** Server-side verdict: does this item hold Stage4 closed, or is it audit-only? */
 export type GlobalReviewEffect = 'blocking' | 'disclosure'
@@ -593,6 +607,7 @@ export interface GlobalReviewItem {
   subject_path: string
   subject_sha256: string
   state: GlobalReviewState
+  resolution_required: boolean
   evidence: EvidenceRef[]
   actor: string | null
   decided_at: string | null
@@ -611,6 +626,7 @@ export interface GlobalReviewItem {
 }
 
 export interface GlobalReviewResponse {
+  review_coverage?: Stage2ReviewCoverage | null
   /** Hash persisted with the review artifact. */
   source_sha256: string
   /** Hash recomputed from the current complete GlobalGrounding. */
@@ -756,6 +772,13 @@ export interface CtxSemanticContract {
 
 /** 写手直接执行的新场景任务（`CtxScene`）。 */
 export interface CtxScene {
+  dialogue: {
+    speaker: string | null
+    addressees: string[] | null
+    meaning: string
+    speech_act: string
+    required_facts: string[]
+  }[]
   slot: string
   purpose: string
   role: string
@@ -768,6 +791,12 @@ export interface CtxScene {
   entry_state: string[]
   exit_state: string[]
   stages: { time_layer: string; place: string | null; present: string[] }[]
+  knowledge: {
+    kind: 'secret' | 'setup' | 'world_rule' | 'relation' | 'character_state' | 'setting'
+    content: string
+    usage: 'known' | 'reveal' | 'setup'
+    known_by: string[]
+  }[]
   verbatim?: string[] | null
   keep_value?: string[] | null
   must_appear?: string[] | null
@@ -784,11 +813,13 @@ export interface CtxChapter {
   semantic_contract: CtxSemanticContract
   chapter_rewrite_brief: string
   budget_chars: number
-  source_chars: number
+  /** 从当前 Stage1 正文现算；缺失或不可读时为 null。 */
+  source_chars: number | null
   scenes: CtxScene[]
   characters: { char_id: string; display_name: string; role: string }[]
   narration: PlanNarration[]
   facts: Facts
+  disclosure_windows: { subject_ref: string; content: string; allowed_slots: string[] }[]
 }
 
 export interface Stage4Response {

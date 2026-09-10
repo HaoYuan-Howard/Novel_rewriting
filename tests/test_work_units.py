@@ -14,6 +14,50 @@ def sha(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+@pytest.mark.parametrize('kind', ['mechanical', 'history_adopted', 'cached'])
+def test_free_processing_records_source_without_spending_or_reissuing_budget(tmp_path, kind):
+    budget = WorkUnitBudget(tmp_path, '42', 'stage4.plan', scope='chapter:1')
+    values = dict(run_id='free-producer', input_sha256=sha('actual-input'),
+                  kind=kind, evidence_sha256=sha('validated-source'))
+    budget.note_processing(**values)
+    before = budget.path.read_bytes()
+    budget.note_processing(**values)
+    assert budget.path.read_bytes() == before
+    view = list_unit_views(tmp_path, '42')[0]
+    assert view['processing']['total'] == view['processing'][kind] == 1
+    assert view['content_used'] == 0 and view['content_remaining'] == 4
+    assert view['processing']['generated'] == 0
+    turn = budget.reserve(sha('rework'), run_id='new-producer')
+    budget.finish(turn.turn_id, outcome='unknown', reason_code='wire_result_unknown')
+    view = list_unit_views(tmp_path, '42')[0]
+    assert view['processing']['unknown'] == 1 and view['processing'][kind] == 0
+    assert view['processing']['reason'] == 'wire_result_unknown'
+    assert view['content_used'] == 1
+    assert len(budget._read().processing) == 2
+
+
+@pytest.mark.parametrize('damage', ['task', 'path', 'receipt'])
+def test_processing_view_keeps_bad_ledger_unknown_without_mutation(tmp_path, damage):
+    from novel.views import work_units
+    budget = WorkUnitBudget(tmp_path, '42', 'stage4.plan', scope='chapter:1')
+    budget.note_processing(run_id='free-producer', input_sha256=sha('input'),
+                           kind='mechanical', evidence_sha256=sha('result'))
+    raw = json.loads(budget.path.read_bytes())
+    if damage == 'task':
+        raw['task_id'] = '0' * 64
+    elif damage == 'path':
+        raw['unit_id'] = '0' * 64
+    else:
+        raw['processing'][0]['evidence_sha256'] = '0' * 64
+    budget.path.write_text(json.dumps(raw), encoding='utf-8')
+    before = budget.path.read_bytes()
+    units, reason = work_units.get(str(tmp_path), '42')
+    assert units is None and reason
+    assert budget.path.read_bytes() == before
+    with pytest.raises(WorkUnitRefused):
+        budget.reserve(sha('forbidden-new-call'), run_id='new-producer')
+
+
 def test_budget_survives_candidate_session_and_producer_changes(tmp_path):
     initialize_workflow(tmp_path)
     ids = set()
@@ -164,6 +208,22 @@ def test_old_base_is_not_migrated_or_given_budget(tmp_path):
     assert not (tmp_path / '_service' / 'workflow.json').exists()
 
 
+def test_previous_workflow_manifest_is_refused_without_rewriting(tmp_path):
+    from novel import paths
+    from novel.work_units import check_workflow_write
+    initialize_workflow(tmp_path)
+    manifest = paths.workflow_manifest_path(tmp_path)
+    old = json.loads(manifest.read_bytes())
+    old.update(schema_version=1, contract_version='workflow-role-boundaries-v1')
+    manifest.write_text(json.dumps(old), encoding='utf-8')
+    before = manifest.read_bytes()
+    with pytest.raises(WorkUnitRefused):
+        check_workflow_write(tmp_path)
+    with pytest.raises(WorkUnitRefused):
+        WorkUnitBudget(tmp_path, '42', 'stage2.global').reserve(sha('new'), run_id='new')
+    assert manifest.read_bytes() == before
+
+
 def test_saved_response_cannot_be_replaced_or_tampered(tmp_path):
     budget = WorkUnitBudget(tmp_path, '42', 'stage7.rename')
     turn = budget.reserve(sha('a'), run_id='first')
@@ -241,7 +301,7 @@ def test_raw_blob_saved_before_state_commit_recovers_exactly(tmp_path, monkeypat
 
 
 def test_open_readers_do_not_block_parallel_chapter_registration_or_ledger_update(tmp_path):
-    from contracts.schema.workflow import WorkUnitLedgerV1, WorkUnitRegistryV1
+    from contracts.schema.workflow import WorkUnitLedgerV2, WorkUnitRegistryV1
     from novel import work_units
 
     base = tmp_path / '逐章共享快照'
@@ -261,11 +321,11 @@ def test_open_readers_do_not_block_parallel_chapter_registration_or_ledger_updat
         assert old_registry.read() == registry_before
         assert old_ledger.read() == ledger_before
         current_registry = work_units._read(base, first.registry_path, WorkUnitRegistryV1)
-        current_ledger = work_units._read(base, first.path, WorkUnitLedgerV1)
+        current_ledger = work_units._read(base, first.path, WorkUnitLedgerV2)
         assert set(current_registry.unit_ids) == {first.unit_id, second.unit_id}
         assert current_ledger.turns[0].attempts[0].attempt_id == 'chapter-one-wire'
         assert WorkUnitRegistryV1.model_validate_json(registry_before).unit_ids == (first.unit_id,)
-        assert WorkUnitLedgerV1.model_validate_json(ledger_before).turns[0].attempts == ()
+        assert WorkUnitLedgerV2.model_validate_json(ledger_before).turns[0].attempts == ()
 
     rows = list_unit_views(base, '42')
     assert {(row['scope'], row['content_used'], row['content_remaining']) for row in rows} == {

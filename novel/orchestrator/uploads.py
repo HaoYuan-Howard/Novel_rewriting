@@ -23,10 +23,11 @@ from pydantic import ValidationError
 from contracts.schema.stage0 import Stage0CandidatePlan, Stage0EditPlan
 from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema.orchestration import (
-    ReviewerActionRecord, Stage2PrereviewRecord,
+    ReviewerActionRecord,
 )
 from contracts.schema import encode_artifact
 from contracts.artifacts import (
+    STAGE2_CHARACTERS_EDIT,
     STAGE2_BLUEPRINT_RELATION_EDIT,
     STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_REVIEW_DECISIONS,
@@ -35,6 +36,7 @@ from contracts.schema.api import (
     BatchTrimResolutionRequest, Stage5ReviewerRewriteRequest,
 )
 from contracts.schema.stage2 import BlueprintRelationEdit, GlobalEdit
+from contracts.schema.characters import CharactersEdit
 from contracts.schema.stage5 import ChapterResponse, ReviewerRewriteBatchTrustedInput
 from novel import paths
 from novel.errors import (
@@ -251,6 +253,24 @@ def save_global_review_decisions(
     return target.resolve()
 
 
+def save_characters_edit(base: str | os.PathLike[str], sid: str, edit: CharactersEdit) -> Path:
+    """HTTP 只保存同 SID 的一次性人物输入；正式写回属于 CLI producer。"""
+    paths.check_sid(sid)
+    root = service_dir(base) / EDITS_DIRNAME / sid
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f'characters-edit-{uuid.uuid4().hex}.json'
+    tmp = target.with_suffix('.tmp')
+    payload = encode_artifact(STAGE2_CHARACTERS_EDIT, edit.model_dump(mode='json'))
+    try:
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + NL, encoding='utf-8')
+        os.replace(tmp, target)
+    except OSError as exc:
+        raise ArtifactUnreadable(f'保存人物编辑请求失败：{exc!r}') from exc
+    finally:
+        tmp.unlink(missing_ok=True)
+    return target.resolve()
+
+
 def save_global_edit(
     base: str | os.PathLike[str],
     sid: str,
@@ -453,83 +473,6 @@ def save_reviewer_action(
         except OSError:
             pass
     return target.resolve()
-
-
-def save_stage2_prereview(
-    base: str | os.PathLike[str], sid: str, record: Stage2PrereviewRecord,
-) -> Path:
-    """内容寻址保存 typed-valid、尚未取得 live 写权的 Stage2 预审决定。"""
-    try:
-        paths.check_sid(sid)
-    except PathRefused as exc:
-        raise SourcePathRejected(f'Stage2 预审记录的书 id 不合法：{exc}') from exc
-    if record.sid != sid:
-        raise SourcePathRejected(
-            f'Stage2 预审记录属于 sid={record.sid!r}，不能落到 sid={sid!r}')
-    raw = (record.model_dump_json() + '\n').encode('utf-8')
-    digest = hashlib.sha256(raw).hexdigest()
-    root = service_dir(base) / EDITS_DIRNAME / sid
-    root.mkdir(parents=True, exist_ok=True)
-    target = root / f'stage2-prereview-{digest}.json'
-    if target.is_file():
-        try:
-            existing = target.read_bytes()
-        except OSError as exc:
-            raise ArtifactUnreadable(f'读不了已有 Stage2 预审记录：{exc!r}') from exc
-        if existing != raw:
-            raise SourceConflict(
-                f'Stage2 预审记录内容地址 {target} 已存在不同字节；拒绝覆盖')
-        return target.resolve()
-    tmp = target.with_name(f'.{target.name}.{uuid.uuid4().hex}.tmp')
-    try:
-        tmp.write_bytes(raw)
-        os.replace(tmp, target)
-    except OSError as exc:
-        raise ArtifactUnreadable(f'保存 Stage2 预审记录失败：{exc!r}') from exc
-    finally:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-    return target.resolve()
-
-
-def load_stage2_prereviews(
-    base: str | os.PathLike[str], sid: str,
-) -> list[tuple[Path, Stage2PrereviewRecord]]:
-    """关闭式读取尚未 live bind 的 Stage2 预审记录。
-
-    记录本身就是一次已付费席位的恢复凭据；若文件损坏、内容地址不符或 sid
-    串书，调用方不能把它当成“不存在”后再买一席。
-    """
-    try:
-        paths.check_sid(sid)
-    except PathRefused as exc:
-        raise SourcePathRejected(f'Stage2 预审记录的书 id 不合法：{exc}') from exc
-    root = service_dir(base) / EDITS_DIRNAME / sid
-    if not root.is_dir():
-        return []
-    out: list[tuple[Path, Stage2PrereviewRecord]] = []
-    for path in sorted(root.glob('stage2-prereview-*.json')):
-        if path.is_symlink() or not path.is_file():
-            raise ArtifactUnreadable(
-                f'Stage2 预审记录不是普通文件：{path.name}')
-        try:
-            raw = path.read_bytes()
-            record = Stage2PrereviewRecord.model_validate_json(raw)
-        except (OSError, ValueError, ValidationError) as exc:
-            raise ArtifactUnreadable(
-                f'Stage2 预审记录无法解析：{path.name}：'
-                f'{type(exc).__name__}') from exc
-        expected_name = f'stage2-prereview-{hashlib.sha256(raw).hexdigest()}.json'
-        if path.name != expected_name:
-            raise ArtifactUnreadable(
-                f'Stage2 预审记录内容地址不匹配：{path.name}')
-        if record.sid != sid:
-            raise ArtifactUnreadable(
-                f'Stage2 预审记录 {path.name} 的 sid 不匹配')
-        out.append((path.resolve(), record))
-    return out
 
 
 def load_reviewer_actions(

@@ -26,7 +26,7 @@ from novel.agents.session_client import SessionAgentClient
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, GateBlocked, ProvenanceRefused,
 )
-from novel.llm import agent_runs, stage4_runs
+from novel.llm import agent_runs, aggregate_runs, stage4_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.run import RunContext
@@ -247,6 +247,12 @@ def _rewrite_standard_aggregate_primary(
         / stage4_runs.DESIGN_AGGREGATE_COMMIT_FILE
     )
     record = json.loads(target.read_text(encoding='utf-8'))
+    # 这组反例模拟已发行 v1 的可省略 null 身份；不能留下 v2 冻结字节再单改主体。
+    record['version'], record['kind'] = 1, 'stage4-design-aggregate/v1'
+    for field in ('producer_parent_run_id', 'primary_file_text', 'primary_file_sha256', 'recovery'):
+        record.pop(field, None)
+    for row in record['adoptions']:
+        assert row.pop('source_run_id', ctx.run_id) == ctx.run_id
     primary = record['primary_payload']
     before = agent_runs.canonical_sha256(primary)
     mutate(primary)
@@ -422,13 +428,12 @@ def test_design_repair_identity_rejects_coercion_and_nonwhitelist_defaults(
     agent_runs._atomic_json(target, original)
 
     def delete_nonwhitelist_default(primary: dict[str, Any]) -> None:
-        assert primary['_provenance'].pop(
-            'rejected_response_adoption') is None
+        assert primary['_provenance'].pop('design_dependencies') is not None
 
     _rewrite_standard_aggregate_primary(
         parent_ctx, delete_nonwhitelist_default)
     record = json.loads(target.read_text(encoding='utf-8'))
-    with pytest.raises(ArtifactUnreadable, match='白名单之外'):
+    with pytest.raises(ArtifactUnreadable, match='默认值补全'):
         stage4_runs._normalized_design_candidate_identity(
             record['primary_payload'], label='test standard journal',
             aggregate_kind='standard')
@@ -604,12 +609,8 @@ def test_targeted_design_repair_reruns_only_target_and_reuses_parent_checkpoints
     blueprints = _seed_current_stage2(book)
     blueprint_raw = blueprints.model_dump(by_alias=True, mode='json')
     parent_ctx, parent = _land_design(book, blueprint_raw)
-    normalized_parent_sha, legacy_raw_parent_sha = \
-        _rewrite_standard_aggregate_primary(
-            parent_ctx, _drop_legacy_standard_repair_nulls)
-    assert normalized_parent_sha == agent_runs.canonical_sha256(
+    normalized_parent_sha = agent_runs.canonical_sha256(
         parent.model_dump(by_alias=True, mode='json'))
-    assert legacy_raw_parent_sha != normalized_parent_sha
     ordinals = tuple(row.chapter_ordinal for row in blueprints.blueprints)
     parent_checkpoint_bytes = {
         chapter: (
@@ -795,7 +796,7 @@ def test_targeted_design_repair_reruns_only_target_and_reuses_parent_checkpoints
     assert mismatched_capability.reason_code == 'checkpoint_lineage_unavailable'
 
 
-def test_design_repair_identity_normalization_keeps_real_drift_closed(
+def test_design_repair_current_snapshot_keeps_real_drift_unknown(
         tmp_path: Path,
 ) -> None:
     book = _book(tmp_path)
@@ -804,7 +805,6 @@ def test_design_repair_identity_normalization_keeps_real_drift_closed(
         book, blueprints.model_dump(by_alias=True, mode='json'))
 
     def drift_business(primary: dict[str, Any]) -> None:
-        _drop_legacy_standard_repair_nulls(primary)
         primary['reconstruction_strategy'] += '（journal 业务漂移）'
 
     _rewrite_standard_aggregate_primary(parent_ctx, drift_business)
@@ -815,7 +815,7 @@ def test_design_repair_identity_normalization_keeps_real_drift_closed(
             (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest(),
     )
     assert capability.repairable is False
-    assert capability.reason_code == 'legacy_or_untracked_candidate'
+    assert capability.reason_code == 'checkpoint_lineage_unavailable'
 
 
 def test_design_repair_identity_normalization_does_not_erase_lineage_drift(
@@ -1123,10 +1123,10 @@ def test_design_prepared_tail_recovers_same_candidate_and_usage_zero_wire(
     assert stage4_runs.design_aggregate_committed(restarted) is not None
 
 
-def test_legacy_adopter_refuses_foreign_prepared_design_aggregate(
+def test_retired_adopter_cannot_touch_current_prepared_design_aggregate(
         tmp_path: Path, monkeypatch,
 ) -> None:
-    """旧 whole-book 恢复口不能踩过另一 run 尚未收完的 split 提交。"""
+    """CLI 拒绝退役入口，并保持当前 prepared、正式字节和旧拒稿证据。"""
     import pytest
     from novel.llm import response_repair
 
@@ -1163,10 +1163,12 @@ def test_legacy_adopter_refuses_foreign_prepared_design_aggregate(
         legacy_ctx, book, response=response,
         why='合成的旧整书 validator 拒稿')
 
-    with pytest.raises(ProvenanceRefused, match='仍持有 prepared'):
-        plan.run_adopt_rejected(
-            legacy_ctx, attempt_id=attempt,
-            actor='tester', reason='不得覆盖 split 尾窗')
+    from novel.cli.main import main
+    with pytest.raises(SystemExit) as stopped:
+        main(['run', 'stage4.design', legacy_ctx.sid, '--base', str(book.parent),
+              '--adopt-rejected', attempt, '--actor', 'tester', '--reason', '不得覆盖提交尾窗'])
+    assert stopped.value.code == 2
+    assert stage4_runs.design_aggregate_prepared(split_ctx) is not None
 
     assert (book / STAGE4_BLIND_CANDIDATE).read_bytes() == formal_before
     assert response_repair.find_attempt(book, attempt).outcome is None
@@ -1197,8 +1199,10 @@ def test_plan_false_infeasible_is_repaired_to_bound_in_same_session(
     assert landed.status == 'bound'
     assert store.exists(STAGE4_PLAN_CHAPTERS)
     assert not store.exists(STAGE4_WRITER_CONTEXT)
-    assert stage4_runs.committed(
-        plan_ctx, stage4_runs.plan_chapter_commit_spec(1)) is not None
+    committed = aggregate_runs.validate_envelope(
+        paths.stage4_plan_aggregate_path(book, plan_ctx.run_id),
+        run_id=plan_ctx.run_id, sid=plan_ctx.sid, node=plan_ctx.node)
+    assert committed['state'] == 'committed'
     assert driver.calls == 2
     assert len(driver.requests) == 2
     assert driver.requests[0].system is not None
@@ -1294,8 +1298,10 @@ def test_plan_code_owned_hard_commits_binding_and_invalid_then_recovers_zero_wir
     assert _session_record(
         book, latest_checkpoint['session_run_id']).end is None
     assert (book / plan._INVALID).read_bytes() == prior_invalid
-    commit_spec = stage4_runs.plan_chapter_commit_spec(1)
-    assert stage4_runs.committed(hard_ctx, commit_spec) is None
+    prepared = aggregate_runs.validate_envelope(
+        paths.stage4_plan_aggregate_path(book, hard_ctx.run_id),
+        run_id=hard_ctx.run_id, sid=hard_ctx.sid, node=hard_ctx.node)
+    assert prepared['state'] == 'prepared'
 
     store = ArtifactStore(hard_ctx)
     binding = store.read_own(EvidenceBinding, STAGE4_EVIDENCE_BINDING)[0]
@@ -1318,8 +1324,10 @@ def test_plan_code_owned_hard_commits_binding_and_invalid_then_recovers_zero_wir
         PlanChapters, plan._INVALID)[0]
     assert invalid.output_chapters
     assert forbidden.calls == 0
-    committed = stage4_runs.committed(restarted, commit_spec)
-    assert committed is not None
+    committed = aggregate_runs.validate_envelope(
+        paths.stage4_plan_aggregate_path(book, restarted.run_id),
+        run_id=restarted.run_id, sid=restarted.sid, node=restarted.node)
+    assert committed['state'] == 'committed'
     assert committed['touched_paths'] == sorted((
         STAGE4_EVIDENCE_BINDING, plan._INVALID))
     assert committed['landed_payload_sha256s'].keys() == {
@@ -1333,3 +1341,37 @@ def test_plan_code_owned_hard_commits_binding_and_invalid_then_recovers_zero_wir
     archived_invalids = list((book / 'stage4' / '_rounds').glob(
         'plan_chapters.INVALID.r*.json'))
     assert any(path.read_bytes() == prior_invalid for path in archived_invalids)
+
+
+def test_current_journal_never_fills_missing_legacy_null_fields(tmp_path):
+    book = _book(tmp_path)
+    blueprints = _seed_current_stage2(book)
+    ctx, candidate = _land_design(book, blueprints.model_dump(by_alias=True, mode='json'))
+    before = (book / STAGE4_BLIND_CANDIDATE).read_bytes()
+    _rewrite_standard_aggregate_primary(ctx, _drop_legacy_standard_repair_nulls)
+    capability = stage4_runs.inspect_design_repair_capability(
+        ctx, candidate_payload=candidate.model_dump(by_alias=True, mode='json'),
+        candidate_file_sha256=hashlib.sha256(before).hexdigest())
+    assert not capability.repairable
+    assert capability.reason_code == 'checkpoint_lineage_unavailable'
+    assert (book / STAGE4_BLIND_CANDIDATE).read_bytes() == before
+
+
+@pytest.mark.parametrize('legacy_version', [1, 2])
+def test_retired_repair_journal_version_has_no_recovery_permission(tmp_path, monkeypatch, legacy_version):
+    from tests.test_stage4_repair_prepared_recovery import _leave_targeted_prepared
+    book = _book(tmp_path)
+    source, _parent, payload, target = _leave_targeted_prepared(book, monkeypatch)
+    before = (book / STAGE4_BLIND_CANDIDATE).read_bytes()
+    current = stage4_runs.validate_design_repair_aggregate_journal_envelope(
+        target, run_id=source.run_id, sid=source.sid)
+    assert current == payload
+    # 只改版本、kind 并重封摘要；其他字段均来自真实 prepared producer。
+    payload['version'] = legacy_version
+    payload['kind'] = f'stage4-design-targeted-repair/v{legacy_version}'
+    payload['commit_sha256'] = stage4_runs._design_repair_aggregate_hash(payload)
+    agent_runs._atomic_json(target, payload)
+    with pytest.raises(ArtifactUnreadable, match='身份/哈希'):
+        stage4_runs.validate_design_repair_aggregate_journal_envelope(
+            target, run_id=source.run_id, sid=source.sid)
+    assert (book / STAGE4_BLIND_CANDIDATE).read_bytes() == before

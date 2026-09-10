@@ -61,7 +61,7 @@ def rig(tmp_path, monkeypatch):
     entries = []
     for ordinal in (1, 2):
         entry = copy.deepcopy(seed.chapters[1])
-        entry.update(output_ordinal=ordinal, from_source_ordinals=[ordinal], budget_chars=400)
+        entry['output_ordinal'] = ordinal
         entry['scenes'][0]['budget_chars'] = 400
         entries.append(entry)
     context = WriterContext(chapters=entries, _provenance=ctx.free_provenance(CtxProvenance))
@@ -80,12 +80,12 @@ def rig(tmp_path, monkeypatch):
         ordinal = entry['output_ordinal']
         text = f'第{ordinal}章独立定位。' + '她逐页核对账册，终于找到了缺失的证据。' * 28
         chapter = write._chapter_record(
-            entry, [{'slot': 's01', 'text': text}], book, warns=[], errs=None,
-            provenance=ctx.free_provenance(write.RoundFreeProvenance, round=1, origin='human'))
+            entry,
+            [{'slot': 's01', 'text': text}],
+            provenance=ctx.free_provenance(write.RoundFreeProvenance, round=1, origin='human'),
+        )
         _dump(store, write._rel(ordinal), chapter)
-        store.write(f'stage5/trim_audit_ch{ordinal:02d}.json', TrimAudit(
-            output_ordinal=ordinal, before_sha256=hashlib.sha256(text.encode()).hexdigest(),
-            reason='合成超限稿，等候本次批量改写'))
+        store.write(f'stage5/trim_audit_ch{ordinal:02d}.json', TrimAudit(before_sha256=hashlib.sha256(text.encode()).hexdigest(), reason='合成超限稿，等候本次批量改写'))
     # 报告真实绑定两章文件，第一章替换后它必定 stale。
     rev = _review(prov.content_sha1(root.read_bytes()))
     review_ctx = replace(ctx, _edges={}, _judged={}, _accounting={})
@@ -162,7 +162,7 @@ def _readonly_probes(rig):
 
 def test_two_rewrites_run_concurrently_and_then_close_one_batch(rig):
     pool, entered = _pool(rig)
-    assert pool.concurrency == 4
+    assert pool.concurrency == 8
     write.run_reviewer_rewrite(rig.paid, pool)
     assert sorted(entered) == ['provider-batch-1', 'provider-batch-2']
     probes = _readonly_probes(rig)
@@ -212,7 +212,9 @@ def test_second_commit_failure_recovers_checkpoint_without_buying_first_again(ri
 
 def test_external_sibling_edit_does_not_expand_batch_authority(rig):
     chapter, _sha = rig.store.read_own_with_sha256(Chapter, write._rel(1))
-    changed = chapter.model_copy(update={'warns': ['盘外变化']})
+    changed = chapter.model_copy(update={
+        'provenance': chapter.provenance.model_copy(update={'code': '盘外变化'}),
+    })
     _dump(rig.store, write._rel(1), changed)
     with pytest.raises(ProvenanceRefused):
         rewrite.require_current_reviewer_rewrite_request(

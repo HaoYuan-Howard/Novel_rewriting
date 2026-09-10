@@ -41,7 +41,8 @@ from contracts.invariants import (
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.report import finding as _finding
-from contracts.schema.stage2 import BlueprintScopeViolation
+from contracts.schema.stage2 import BlueprintScopeViolation, Hinge
+from pydantic import ValidationError
 from novel.core.evidence import iter_global_evidence_slots
 from novel.core.facts import heuristic_relation_gates, relation_visibility_gates
 from novel.core.naming import (
@@ -118,7 +119,7 @@ def _scope_violation_ordinal(row: Any) -> int | None:
 # ⚠ 这三张**刻意不进 `contracts/invariants.py`**（形态照 `stage5/checks.py::META_PATTERNS`）：
 #   那张表收的是「**同时**进 prompt 与判据」的枚举，而这三份只有判据一个消费方。
 #   放进去就是给它们造第二个家。
-#   ⚠ **`BARE_PRONOUNS` 是反例**：它有三个消费方（`GLOBAL_CANDIDATE_SYS` 的禁令 ·
+#   ⚠ **`BARE_PRONOUNS` 是反例**：它有三个消费方（人物 `characters.SYSTEM` 的禁令 ·
 #   `address_bare_pronoun`/`address_has_pronoun`）
 #   ⇒ 它在 `invariants` 里，本模块 import 它、**不手抄子集**。
 
@@ -699,7 +700,7 @@ _CANON_RULES = ('world_rule_no_desc', 'canon_chapter_refs_dangling',
                 'relation_visibility_mismatch')
 
 
-def _canon(c: _Ctx) -> list[Outcome]:
+def _canon(c: _Ctx, *, character_evidence_only: bool = False) -> list[Outcome]:
     if not c.has_gg:
         return [unverifiable(r, _NO_GLOBAL) for r in _CANON_RULES]
 
@@ -938,6 +939,8 @@ def _canon(c: _Ctx) -> list[Outcome]:
         }
         total = 0
         for path, owner, field in iter_global_evidence_slots(c.gg):
+            if character_evidence_only and not path.startswith('entities.characters.'):
+                continue
             total += 1
             evidence = owner.get(field) or {}
             chapter = evidence.get('chapter_ordinal')
@@ -962,90 +965,41 @@ def _canon(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 五、冲突阶段章覆盖（1 HARD）
+# 五、源文案开篇范围（1 HARD；范围未定保持 UNVER）
 # ─────────────────────────────────────────────────────────────────────────────
 
-_ARC_RULES = ('conflict_stage_coverage',)
-
-
 @dataclass(frozen=True)
-class ConflictStageCoverageMeasure:
-    """冲突分段的唯一机械覆盖测量；producer 与 typed edit 共用。"""
-
-    memberships: dict[Any, tuple[str, ...]]
-    missing: tuple[int, ...]
-    extra: tuple[Any, ...]
-    duplicate: tuple[tuple[Any, tuple[str, ...]], ...]
-    evidence: tuple[str, ...]
-    stages_scanned: int
-    chapters_expected: int
+class OpeningScopeMeasure:
+    unresolved: bool
+    errors: tuple[str, ...]
 
 
-def measure_conflict_stage_coverage(
-    stages: Iterable[dict[str, Any]], expected_ordinals: Iterable[int],
-) -> ConflictStageCoverageMeasure:
-    """按 R-2.14 计算逐章显式枚举的缺、重、越界；不产生判定或写盘。"""
-    stage_rows = list(stages)
-    expected = set(expected_ordinals)
-    mutable_memberships: dict[Any, list[str]] = {}
-    for index, stage in enumerate(stage_rows, 1):
-        label = str((stage or {}).get('stage') or f'第{index}段')
-        for chapter in ((stage or {}).get('chapters') or []):
-            mutable_memberships.setdefault(chapter, []).append(label)
-    memberships = {
-        chapter: tuple(labels)
-        for chapter, labels in mutable_memberships.items()
-    }
-    missing = tuple(sorted(expected - set(memberships)))
-    extra = tuple(sorted(
-        (chapter for chapter in memberships if chapter not in expected), key=str))
-    duplicate = tuple(sorted(
-        ((chapter, labels) for chapter, labels in memberships.items()
-         if len(labels) != 1),
-        key=lambda row: str(row[0]),
-    ))
-    evidence = tuple(
-        [f'missing:ch{chapter}' for chapter in missing]
-        + [f'extra:ch{chapter}@{"|".join(memberships[chapter])}'
-           for chapter in extra]
-        + [f'duplicate:ch{chapter}@{"|".join(labels)}'
-           for chapter, labels in duplicate]
-    )
-    return ConflictStageCoverageMeasure(
-        memberships=memberships,
-        missing=missing,
-        extra=extra,
-        duplicate=duplicate,
-        evidence=evidence,
-        stages_scanned=len(stage_rows),
-        chapters_expected=len(expected),
-    )
+def measure_opening_scope(opening: dict[str, Any], ordinals: Iterable[int]) -> OpeningScopeMeasure:
+    """生成、typed 替换与提升共用范围量尺；不评判提案的语义合理性。"""
+    if opening.get('kind') == 'unresolved':
+        return OpeningScopeMeasure(True, ())
+    expected = set(ordinals)
+    upto = opening.get('through_chapter')
+    boundary = opening.get('boundary_evidence')
+    errors = []
+    if (opening.get('kind') != 'proposed' or type(upto) is not int
+            or upto not in expected or not set(range(1, upto + 1)) <= expected):
+        errors.append('开篇范围必须从第 1 章连续到合法终点章')
+    if not isinstance(boundary, dict) or boundary.get('chapter_ordinal') != upto:
+        errors.append('边界证据必须属于范围终点章')
+    return OpeningScopeMeasure(False, tuple(errors))
 
 
-def _arc(c: _Ctx) -> list[Outcome]:
-    """`conflict_stages[].chapters` 是逐章显式枚举，不是区间端点。"""
-    if not c.has_gg:
-        return [unverifiable(rule, _NO_GLOBAL) for rule in _ARC_RULES]
-    if not c.has_mt:
-        return [unverifiable(rule, _NO_MAIN_TEXT) for rule in _ARC_RULES]
-
-    stages = ((c.gg.get('arc') or {}).get('conflict_stages') or [])
-    measured = measure_conflict_stage_coverage(stages, c.ords)
-    findings = [finding(
-        'conflict_stage_coverage',
-        detail=(f'{measured.stages_scanned} 个冲突阶段没有把 '
-                f'{measured.chapters_expected} 章恰好各列一次：'
-                f'缺 {list(measured.missing)}，越界 {list(measured.extra)}，重复 '
-                f'{[(chapter, list(labels)) for chapter, labels in measured.duplicate]}'),
-        evidence=list(measured.evidence),
-    )] if measured.evidence else []
-    return [ran(
-        'conflict_stage_coverage', findings,
-        scanned=(f'{measured.stages_scanned} 个阶段 / '
-                 f'{measured.chapters_expected} 章 / '
-                 f'{sum(len(labels) for labels in measured.memberships.values())} '
-                 '次显式章号声明'),
-    )]
+def _opening(c: _Ctx) -> list[Outcome]:
+    rule = 'opening_scope_valid'
+    if not c.has_gg or not c.has_mt:
+        return [unverifiable(rule, _NO_GLOBAL if not c.has_gg else _NO_MAIN_TEXT)]
+    opening = (c.gg.get('source_blurb') or {}).get('opening') or {}
+    measured = measure_opening_scope(opening, c.ords)
+    if measured.unresolved:
+        return [unverifiable(rule, '开篇范围待 typed 裁决：' + str(opening.get('reason', '')))]
+    fs = [finding(rule, detail=error, evidence=[str(opening)]) for error in measured.errors]
+    return [ran(rule, fs, scanned='1 个开篇范围提案')]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1456,7 +1410,7 @@ _PRESENT_RULES = (
     'time_layer_no_present', 'present_ids_dangling',
     'present_continuity', 'present_ungrounded',
     'present_early_named', 'event_early_name', 'pronoun_surface_unattested',
-    'narration_multi', 'scope_violation', 'fact_atom_empty',
+    'narration_multi', 'scope_violation', 'fact_atom_empty', 'material_contract',
     'narration_voices', 'time_layer_mix', 'place_moves',
     'present_broad', 'context_scope')
 
@@ -1491,6 +1445,24 @@ def _present(c: _Ctx) -> list[Outcome]:
 
     out: list[Outcome] = []
     all_beats = [(x.get('chapter_ordinal'), be) for x in c.bps for be in (x.get('beats') or [])]
+
+    material_bad: list[tuple[Any, str]] = []
+    for chapter in c.bps:
+        refs = {atom.get('fact_id') for atom in chapter.get('fact_atoms') or []}
+        for beat in chapter.get('beats') or []:
+            for raw in beat.get('hinges') or []:
+                try:
+                    hinge = Hinge.model_validate(raw)
+                    if not set(hinge.source_fact_refs) <= refs:
+                        raise ValueError('source_fact_refs 引用本章外或不存在的事实')
+                except (ValidationError, ValueError) as exc:
+                    material_bad.append((chapter.get('chapter_ordinal'),
+                                         f'{raw.get("hinge_id")}:{exc}'))
+    out.append(ran('material_contract', [
+        finding('material_contract', detail=f'ch{o} 材料契约不闭合：{_cut(items)}',
+                evidence=items, output_ordinal=o)
+        for o, items in _group_chapter_evidence(material_bad)],
+        scanned=f'{sum(len(beat.get("hinges") or []) for _, beat in all_beats)} 条材料'))
 
     # ── 叙述声音两条（一条告警、一条度量）─────────────────────────────────
     # ⚠ **度量不许挂在告警的反面**（判据 21）：`narration_voices` 是这一整维的样本量，
@@ -1555,7 +1527,15 @@ def _present(c: _Ctx) -> list[Outcome]:
     else:
         bad_pc = [(o, f'{be.get("beat_id")}:{cid}') for o, be in all_beats
                   for cid in (be.get('present_char_ids') or []) if cid not in c.chars]
+        dialogue_ids = [(o, str(hinge.get('hinge_id')), party.get('char_id'))
+                        for o, beat in all_beats for hinge in beat.get('hinges') or []
+                        if isinstance(hinge.get('dialogue'), dict)
+                        for party in [hinge['dialogue'].get('speaker'),
+                                      *(hinge['dialogue'].get('addressees') or [])]
+                        if isinstance(party, dict) and party.get('kind') == 'character']
+        bad_pc.extend((o, f'{hid}:{cid}') for o, hid, cid in dialogue_ids if cid not in c.chars)
         n_pc = sum(len(be.get('present_char_ids') or []) for _o, be in all_beats)
+        n_pc += len(dialogue_ids)
         out.append(ran('present_ids_dangling',
                        [finding('present_ids_dangling',
                                 detail=f'ch{o} 有 {len(items)} 个 present_char_ids '
@@ -1861,6 +1841,21 @@ def blueprint_projection_blockers(
         *_addresses(context), *_roles(context),
     ])
 
+def check_characters(
+        registry: dict[str, Any], main_text: list[dict[str, Any]],
+) -> list[Outcome]:
+    """独立人物登记复用同一把称谓、静态身份和证据尺子，不替知识事实作结论。"""
+    context = _Ctx({
+        'entities': {'characters': registry['characters']},
+        '_provenance': registry['_provenance'],
+    }, None, main_text)
+    role_rows = [row for row in _roles(context)
+                 if row.rule not in {'fate_hedge_words', 'fate_report'}]
+    evidence_rows = [row for row in _canon(context, character_evidence_only=True)
+                     if row.rule == 'global_evidence_unlocated']
+    return [*_addresses(context), *role_rows, *evidence_rows]
+
+
 def check(*, global_g: dict[str, Any] | None, blueprints: dict[str, Any] | None,
           main_text: list[dict[str, Any]] | None) -> list[Outcome]:
     """对两份 stage2 产物跑全部注册的确定性判据 → `[Outcome]`。
@@ -1872,5 +1867,5 @@ def check(*, global_g: dict[str, Any] | None, blueprints: dict[str, Any] | None,
     对应的判据落 `unver` 并说出**是缺哪一份**，而不是悄悄不报。
     """
     c = _Ctx(global_g, blueprints, main_text)
-    return [*_alignment(c), *_addresses(c), *_roles(c), *_canon(c), *_arc(c),
+    return [*_alignment(c), *_addresses(c), *_roles(c), *_canon(c), *_opening(c),
             *_beats(c), *_hinges(c), *_present(c)]

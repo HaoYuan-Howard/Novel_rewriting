@@ -131,7 +131,7 @@ def test_workpack_schema_closes_groups_effects_and_full_chapter_coverage() -> No
     assert [row.chapter_ordinal for row in valid.groups[-1].items] == [1, 2]
     assert not hasattr(valid.groups[-1].items[1], 'decision')
 
-    with pytest.raises(ValidationError, match='suspended 只属于'):
+    with pytest.raises(ValidationError, match='disposition'):
         ApprovalWorkpack.model_validate({
             **valid.model_dump(mode='json'),
             'disposition': 'suspended',
@@ -290,6 +290,8 @@ def test_workpack_builders_fail_closed_when_subject_changes_mid_read(
     after = SimpleNamespace(**{
         **before.__dict__, 'plan_payload_sha256': '4' * 64,
     })
+    monkeypatch.setattr(approvals, '_current_structure_subject_and_chapters',
+                        lambda _book: (before.subject_sha256, before.chapter_ordinals))
     snapshots = iter((before, after))
     monkeypatch.setattr(
         approvals, '_structure_workpack_snapshot',
@@ -320,7 +322,7 @@ def test_design_builder_marks_only_exact_history_and_sorts_changed_first(
     exact = SimpleNamespace(decision_sha256='d' * 64)
     monkeypatch.setattr(
         approvals, '_accepted_design_chapter_source',
-        lambda _record, subject, _sha: (
+        lambda _record, subject, _sha, **_kwargs: (
             (exact, SimpleNamespace())
             if subject.chapter.output_ordinal == 2 else None
         ))

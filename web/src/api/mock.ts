@@ -52,7 +52,6 @@ import type { RunProgress } from '@/types/run'
 import type {
   CheckKind,
   CheckReport,
-  BlueprintReviewWorkpack,
   BlueprintSeenRequest,
   Stage2GlobalSeenRequest,
   DraftEditPreview,
@@ -635,9 +634,7 @@ function mockApprovalWorkpack(
     disposition: kind === 'design'
       ? loadDoc(sid).design_review.state === 'accepted'
         ? 'already_current'
-        : loadDoc(sid).design_review.state === 'suspended'
-          ? 'suspended'
-          : 'review_required'
+        : 'review_required'
       : loadDoc(sid).structure.state === 'accepted' ? 'already_current' : 'review_required',
     current_decision_sha256: kind === 'design'
       ? loadDoc(sid).design_review.current_decision?.decision_sha256 ?? null
@@ -821,6 +818,7 @@ const MOCK_SHA = {
 
 function freshGlobalReview(): GlobalReviewResponse {
   const decided = {
+    resolution_required: false,
     state: 'PASS' as const,
     evidence: [],
     actor: 'mock-reviewer',
@@ -834,15 +832,40 @@ function freshGlobalReview(): GlobalReviewResponse {
     source_sha256: MOCK_SHA.source,
     current_subject_sha256: MOCK_SHA.source,
     current: true,
-    approved: true,
-    generation_safe: true,
+    approved: false,
+    generation_safe: false,
     quarantined_groups: [],
     review_token: MOCK_GLOBAL_SEEN_TOKEN,
     effect_counts: {
-      blocking: { pending: 0, PASS: 4, FAIL: 0, UNVER: 0 },
+      blocking: { pending: 1, PASS: 4, FAIL: 0, UNVER: 1 },
       disclosure: { pending: 1, PASS: 0, FAIL: 0, UNVER: 0 },
     },
     items: [
+      {
+        item_id: 'source_blurb_complete:source_blurb.facts:' + MOCK_SHA.source.slice(0, 12),
+        kind: 'source_blurb_complete',
+        subject_path: 'source_blurb.facts',
+        subject_sha256: MOCK_SHA.source,
+        effect: 'blocking',
+        group_key: 'source_blurb',
+        ...decided,
+        state: 'pending',
+        actor: null,
+        decided_at: null,
+        reason: null,
+      },
+      {
+        item_id: 'opening_scope:source_blurb.opening:' + MOCK_SHA.source.slice(0, 12),
+        kind: 'opening_scope',
+        subject_path: 'source_blurb.opening',
+        subject_sha256: MOCK_SHA.source,
+        effect: 'blocking',
+        group_key: 'source_blurb',
+        ...decided,
+        resolution_required: true,
+        state: 'UNVER',
+        reason: '历史示例未生成开篇范围，须由当前 producer 重建',
+      },
       {
         item_id: 'character_set_complete:entities.characters:' + MOCK_SHA.characters.slice(0, 12),
         kind: 'character_set_complete',
@@ -883,6 +906,7 @@ function freshGlobalReview(): GlobalReviewResponse {
       {
         item_id: 'fate:entities.characters.char_001.fate:' + MOCK_SHA.characters.slice(0, 12),
         kind: 'fate',
+        resolution_required: false,
         subject_path: 'entities.characters.char_001.fate',
         subject_sha256: MOCK_SHA.characters,
         effect: 'disclosure',
@@ -919,7 +943,7 @@ function enums(): EnumsResponse {
       mode: 'display_only',
       security_boundary: false,
       server_sends_full_data: true,
-      hidden_paths: ['characters[].fate', 'secrets', 'arc.climax', 'arc.ending'],
+      hidden_paths: ['characters[].fate', 'secrets', 'source_blurb.facts', 'source_blurb.opening'],
       known_leakage_surfaces: [
         'HTTP response body',
         'browser network/devtools/cache',
@@ -1438,113 +1462,6 @@ function mockInbox(): InboxResponse {
   }
 }
 
-function mockBlueprintReviewWorkpack(sid: string): BlueprintReviewWorkpack {
-  const reading = fx<ReadingResponse>('reading_ch3.json')
-  const beatOrder = new Map(reading.beats.map((beat, index) => [beat.beat_id, index + 1]))
-  const segments = reading.segments.map((segment) => ({
-    beat_order: segment.beat_id === null ? null : (beatOrder.get(segment.beat_id) ?? null),
-    chars: segment.chars,
-    text: segment.text,
-    flagged: segment.flagged,
-  }))
-  const covered = segments
-    .filter((segment) => segment.beat_order !== null)
-    .reduce((total, segment) => total + segment.chars, 0)
-  const loose = segments
-    .filter((segment) => segment.beat_order === null)
-    .reduce((total, segment) => total + segment.chars, 0)
-  const subject = 'b'.repeat(64)
-  return {
-    sid,
-    title: reading.title,
-    read_only: true,
-    auto_decisions: false,
-    review_contract_version: 'stage2-blueprint-review-v5',
-    global_review: {},
-    review_identity_sha256: 'e'.repeat(64),
-    validation_seal_sha256: 'f'.repeat(64),
-    review_token: 'bpr3_' + 'c'.repeat(64),
-    subject_sha256: subject,
-    binding_sha256: 'c'.repeat(64),
-    binding: {
-      blueprint_rel: 'stage2/chapter_blueprints.json',
-      subject_kind: 'formal',
-      main_text_artifact_sha256: 'a'.repeat(64),
-      blueprint_artifact_sha256: subject,
-      check_report_sha256: 'd'.repeat(64),
-      chapter_ordinals: [reading.chapter_ordinal],
-    },
-    check: {
-      rules_scanned: 0,
-      counts: { ok: 0, hit: 0, unver: 0, skipped: 0 },
-      provenance: {
-        freshness: 'unknown',
-        reason: 'mock_sample_only',
-        ghosts: [],
-        edges: [],
-        invalid: false,
-        revalidated: null,
-        origin: null,
-      },
-      attention: [],
-      metrics: [],
-    },
-    accounting: [],
-    mechanical_fields_hidden: [
-      'blueprints[].beats[].beat_id',
-      'blueprints[].beats[].span.start/end',
-      'blueprints[].fact_atoms[].fact_id',
-      'blueprints[].fact_atoms[].source_beat_ref',
-    ],
-    chapters: [{
-      chapter_ordinal: reading.chapter_ordinal,
-      anomalous: false,
-      attention_rules: [],
-      chapter_function: 'mock 仅保留抓包章节；真实后端返回全书完整工作包',
-      coverage: {
-        text_chars: reading.text_chars,
-        covered_chars: covered,
-        loose_chars: loose,
-        uncovered_min_chars: reading.uncovered_min_chars,
-        segments,
-      },
-      beats: reading.beats.map((beat, index) => ({
-        beat_id: beat.beat_id,
-        beat_order: index + 1,
-        located: beat.located,
-        time_layer: beat.time_layer,
-        place: beat.place,
-        present_char_ids: beat.present_char_ids,
-        facts: beat.fact_atoms.map((fact) => ({
-          fact_id: fact.fact_id,
-          claim: fact.claim,
-          kind: fact.kind,
-          obligation: fact.obligation,
-          evidence_text: fact.evidence_text,
-          participant_char_ids: fact.participant_char_ids,
-        })),
-        hinges: beat.hinges,
-      })),
-      causal_links: [],
-      narrative_relations: [],
-      entry_state_claims: [],
-      ending_state_claims: [],
-      narration: reading.narration,
-    }],
-  }
-}
-
-const BLUEPRINT_SEEN_FIELDS = [
-  'review_token',
-] as const satisfies readonly (keyof BlueprintSeenRequest)[]
-
-function expectedBlueprintSeenRequest(sid: string): BlueprintSeenRequest {
-  const workpack = mockBlueprintReviewWorkpack(sid)
-  return {
-    review_token: workpack.review_token,
-  }
-}
-
 /** mock review 的 seen.global 凭证；测试用它模拟“读完当前 review 后确认”。 */
 export const MOCK_GLOBAL_SEEN_TOKEN = 's2gr1_' + '5'.repeat(64)
 
@@ -1557,20 +1474,6 @@ function isCurrentGlobalSeenRequest(
   if (keys.join(',') !== 'actor,review_token') return false
   if (!request.actor.trim()) return false
   return request.review_token === loadGlobalReview(sid).review_token
-}
-
-function isCurrentBlueprintSeenRequest(
-  sid: string,
-  request: BlueprintSeenRequest | Stage2GlobalSeenRequest | undefined,
-): request is BlueprintSeenRequest {
-  if (!request) return false
-  const keys = Object.keys(request)
-  if (keys.length !== BLUEPRINT_SEEN_FIELDS.length
-    || keys.some((key) => !BLUEPRINT_SEEN_FIELDS.includes(
-      key as (typeof BLUEPRINT_SEEN_FIELDS)[number],
-    ))) return false
-  const expected = expectedBlueprintSeenRequest(sid)
-  return BLUEPRINT_SEEN_FIELDS.every((field) => request[field] === expected[field])
 }
 
 /* ------------------------------------------------------------------ Api */
@@ -1588,6 +1491,8 @@ export const mockApi: Api = {
 
   // 进度屏在 stage0.remove 前就要能开（书目录可能还没建）——任何 sid 都给静态样例，不走 bookOnly
   getRunProgress: (sid) => later(mockRunProgress(sid)),
+  previewWorkUnitGrant: async () => { throw new Error('离线样本未提供工作单元额度授权，请连接真实服务') },
+  grantWorkUnit: async () => { throw new Error('离线样本未提供工作单元额度授权，请连接真实服务') },
 
   getEnums: () => later(enums()),
 
@@ -1670,14 +1575,22 @@ export const mockApi: Api = {
   getReading: (sid, o) =>
     chapterOnly(sid, o, `/novels/${sid}/reading/${o}`, () => fx<ReadingResponse>('reading_ch3.json')),
 
-  getBlueprintReviewWorkpack: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage2/blueprint-review-workpack`, () =>
-      mockBlueprintReviewWorkpack(sid)),
+  getBlueprintReviewWorkpack: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/blueprint-review-workpack`, {
+    status: 501, message: '知识关联需要当前源文、知识与 Blueprint 的完整工作包，请连接真实后端',
+    backendKind: 'MockCapabilityUnavailable',
+  })),
 
   getGlobal: (sid, revealSpoilers = false) =>
     bookOnly(sid, `/novels/${sid}/stage2/global`, () =>
       projectGlobalSpoilers(fx<Stage2Global>('global.json'), revealSpoilers),
     ),
+
+  getCharacters: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/characters`, {
+    status: 501, message: '独立人物登记请连接真实后端读取', backendKind: 'MockCapabilityUnavailable',
+  })),
+  editCharacters: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/characters/edit`, {
+    status: 501, message: '人物订正请使用真实后端写回', backendKind: 'MockCapabilityUnavailable',
+  })),
 
   getGlobalReview: (sid) =>
     bookOnly(sid, `/novels/${sid}/stage2/global-review`, () => loadGlobalReview(sid)),
@@ -1725,6 +1638,13 @@ export const mockApi: Api = {
         return fail(new ApiError('server', path, {
           status: 409,
           message: 'global-review subject changed; stale decision rejected',
+          backendKind: 'HumanEditProtected',
+        }))
+      }
+      if (item.resolution_required && row.state === 'PASS') {
+        return fail(new ApiError('server', path, {
+          status: 409,
+          message: '该主体仍待 typed 修订，不能直接 PASS',
           backendKind: 'HumanEditProtected',
         }))
       }
@@ -1948,6 +1868,7 @@ export const mockApi: Api = {
       profiles: cloneMockProfiles(mockAgentProfileSettings.profiles),
     })
   },
+  getAgentRunContinuation: async () => { throw new Error('离线样本没有历史运行停止证明；请连接真实服务。') },
   previewAgentRun: (req) => later(mockAgentRunPreview(req)),
   startAgentRun: (req) => later(mockAgentRunRecord(req)),
   getAgentRuns: () => later<AgentRunsResponse>({ runs: [] }),
@@ -2423,9 +2344,8 @@ export const mockApi: Api = {
 
   backfillApprovals: (sid) => {
     const doc = loadDoc(sid)
-    // Stage2 必须由两个独立 seen 共同打开。盘上没有 seen 证据时，backfill
-    // 只能补到 s1，不能替人制造 read/global 或越过它们补 s2/s4。
-    const stage2Seen = doc.seen.read && doc.seen.global
+    // 阅读声明与后端审阅安全状态共同限制补批；未知的开篇范围不能被 seen 越过。
+    const stage2Seen = doc.seen.read && doc.seen.global && loadGlobalReview(sid).generation_safe
     const backfillable = GATE_KEYS.slice(0, stage2Seen ? 3 : 2)
     const backfilled = backfillable.filter((key) => !doc.gate[key])
     const approvals = saveDoc({
@@ -2441,11 +2361,11 @@ export const mockApi: Api = {
 
   markSeen: (sid, key: SeenKey, request: BlueprintSeenRequest | Stage2GlobalSeenRequest) => {
     const path = '/novels/' + sid + '/approvals/seen/' + key
-    if (key === 'read' && !isCurrentBlueprintSeenRequest(sid, request)) {
+    if (key === 'read') {
       return fail(new ApiError('server', path, {
-        status: 409,
-        message: 'seen.read 必须逐项绑定当前 Blueprint 工作包；请刷新阅读页后重试',
-        backendKind: 'ApprovalRequired',
+        status: 501,
+        message: '当前 Blueprint 工作包与知识关联请连接真实后端；离线样本不能授予已读',
+        backendKind: 'MockCapabilityUnavailable',
       }))
     }
     if (key === 'global' && !isCurrentGlobalSeenRequest(sid, request)) {

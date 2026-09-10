@@ -91,6 +91,12 @@ def _chapter(beats: list[dict], ordinal: int) -> dict:
     for index, beat in enumerate(beats, 1):
         for atom_index, atom in enumerate(beat.get('fact_atoms') or [], 1):
             atom['atom_key'] = f'a{index:02d}_{atom_index:02d}'
+        # 这个定位夹具每拍恰有一个事实；显式把本拍材料归属到该合成事实。
+        for hinge in beat.get('hinges') or []:
+            hinge['source_fact_refs'] = [beat['fact_atoms'][0]['atom_key']]
+            if hinge['kind'] == '要害台词':
+                hinge['dialogue'] = {'speaker': None, 'addressees': None,
+                                     'meaning': beat['fact_atoms'][0]['claim'], 'speech_act': '告知'}
     return {
         'chapter_ordinal': ordinal,
         'chapter_function': '完成本章的事实与状态变化',
@@ -223,7 +229,7 @@ def test_v2_refs_keeps_selected_ids_authoritative_without_display_name_copies():
             'present_char_ids': ['char_002', 'char_001', 'char_002'],
             'fact_atoms': [_atom('a01', '母亲让李宝珠挑水', '今天的第一课',
                                  ['char_002', 'char_001'])],
-            'hinges': [{'kind': '硬数字', 'phrase': '两担水'}],
+            'hinges': [{'kind': '硬数字', 'phrase': '两担水', 'source_fact_refs': ['a01']}],
         }],
         'narration': [_narration()],
     }]}
@@ -268,13 +274,13 @@ def test_v31_candidate_ids_compile_to_exact_sources_and_closed_narration_refs():
             'fact_atoms': [_atom('a01', '母亲让李宝珠挑水，李宝珠完成两担',
                                  '两担水', ['char_001', 'char_002'])],
             'hinges': [{'kind': '硬数字',
-                        'candidate_id': hard_number['candidate_id']}],
+                        'candidate_id': hard_number['candidate_id'], 'source_fact_refs': ['a01']}],
         }, {
             'end_para': 5, 'time_layer': 'T_PRESENT', 'place': '屋内',
             'present_char_ids': ['char_001'],
             'fact_atoms': [_atom('a02', '李宝珠把三十文钱放在桌上',
                                  '三十文钱', ['char_001'])],
-            'hinges': [{'kind': '硬数字', 'phrase': '三十文'}],
+            'hinges': [{'kind': '硬数字', 'phrase': '三十文', 'source_fact_refs': ['a02']}],
         }],
         'narration': [{
             'grammatical_person': 'third',
@@ -349,7 +355,7 @@ def test_v31_rejects_a_candidate_from_outside_its_beat_even_without_call_gate():
             'present_char_ids': [],
             'fact_atoms': [_atom('a01', '母亲开课', '今天的第一课')],
             # h004 在第 5 段，不能挂到止于第 2 段的拍。
-            'hinges': [{'kind': '硬数字', 'candidate_id': 'h004'}],
+            'hinges': [{'kind': '硬数字', 'candidate_id': 'h004', 'source_fact_refs': ['a01']}],
         }, {
             'end_para': 5, 'time_layer': 'T_PRESENT', 'place': None,
             'present_char_ids': [],
@@ -374,7 +380,7 @@ def test_v31_projection_is_a_valid_repair_baseline_and_round_trips():
                 'end_para': 5, 'time_layer': 'T_PRESENT', 'place': '井边',
                 'present_char_ids': ['char_001'],
                 'fact_atoms': [_atom('a01', '李宝珠完成挑水', '两担水', ['char_001'])],
-                'hinges': [{'kind': '硬数字', 'candidate_id': 'h003'}],
+                'hinges': [{'kind': '硬数字', 'candidate_id': 'h003', 'source_fact_refs': ['a01']}],
             }],
             'narration': [{
                 'grammatical_person': 'third', 'narrator_char_id': 'char_001',
@@ -665,6 +671,7 @@ def test_hinges_of_a_failed_beat_are_blanked_without_their_own_cause_rows():
     assert _hinge_rows(acc) == {}, 'span 自己没定位成功 ⇒ cascade，不逐条记 hinge 根因'
     assert data['blueprints'][0]['beats'][0]['hinges'] == [{
         'hinge_id': 'h01_001', 'kind': '物件', 'source': None,
+        'source_fact_refs': ['f01_001'],
     }]
 
 
@@ -692,7 +699,8 @@ def test_projection_is_honest_about_failed_hinges():
     ])))
     projected = canonical_ir_projection(artifact['blueprints'][0], CH1)
     assert projected['beats'][0]['hinges'] == \
-        [{'kind': '物件', 'phrase': None}], '失败的 hinge 不许把 phrase 兜底成别的'
+        [{'kind': '物件', 'phrase': None, 'source_fact_refs': ['a01']}], \
+        '失败的 hinge 不许把 phrase 兜底成别的'
 
 
 def test_places_are_normalized_without_a_display_only_probe():

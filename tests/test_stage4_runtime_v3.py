@@ -395,3 +395,12 @@ def test_full_chapter_edit_preview_apply_is_zero_wire_and_non_target_exact(
     assert edited_source.origin == 'human'
     assert edited_source.attempt_id is None
     assert edited_source.model is None
+
+    # 随后变更别章事实：普通重建仍以人工后继为父，不得取回修前模型回答。
+    from tests.test_stage4_design_rebuild import _change_claim, _rebuild
+    changed = _change_claim(book, 1)
+    _rebuilt_ctx, rebuilt, next_sources = _rebuild(book, changed, [1])
+    assert rebuilt.output_chapters[1:] == applied.output_chapters[1:]
+    kept = next(row for row in next_sources if row.chapter == 2)
+    assert kept.origin == 'human' and kept.source_run_id == apply_ctx.run_id
+    assert kept.response_payload == edited_source.response_payload

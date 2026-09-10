@@ -26,6 +26,13 @@ api.py —— 对应 `docs/schema/_api.md`。**一次 HTTP 响应长什么样。
 """
 from __future__ import annotations
 
+from contracts.schema.workflow import BudgetGrant
+from contracts.schema.knowledge_links import KnowledgeLinkReview, KnowledgeLinkSubmission
+from contracts.schema.stage2_review import (
+    Stage2ReviewCoverage, Stage2ReviewReceipt, Stage2ReviewSubmission,
+)
+from contracts.schema.orchestration import RunContinuationSource, WorkUnitView, PipelineConcurrency
+
 import json
 import re
 from collections.abc import Mapping
@@ -37,6 +44,8 @@ from contracts.invariants import (
     WORKPACK_CLOSED_REF_KINDS, WORKPACK_READING_KINDS,
     ADDRESS_CONTEXT,
     AGENT_EXECUTOR_NODES,
+    PIPELINE_PARALLEL_NODES, PIPELINE_CONCURRENCY_TRIALS, PIPELINE_DEFAULT_CONCURRENCY,
+    PIPELINE_TOTAL_CONCURRENCY_MIN, PIPELINE_TOTAL_CONCURRENCY_MAX,
     AgentAvailability,
     AgentDriver,
     AgentExecutionMode,
@@ -70,6 +79,7 @@ from contracts.invariants import (
     DESIGN_REVIEW_CONTRACT,
     FROZEN_V6_DESIGN_REVIEW_CONTRACT,
     LEGACY_V3_DESIGN_REVIEW_CONTRACT,
+    LEGACY_V4_DESIGN_REVIEW_CONTRACT,
     DESIGN_REVIEWER_KINDS,
     DESIGN_REVIEW_STATES,
     DESIGN_STRATEGY_REPLAN_CONSTRAINTS,
@@ -83,6 +93,7 @@ from contracts.invariants import (
     STAGE6_JUDGE_ROLES,
     STAGE2_NODE_REVIEW_DECISIONS,
     STAGE2_NODE_REVIEW_OWNERS,
+    STAGE2_NODE_REVIEWERS,
     STAGE2_NODE_REVIEW_STATES,
     STAGE6_REVIEW_CONTRACT,
     STAGE7_REVIEW_CONTRACT,
@@ -127,6 +138,7 @@ from contracts.invariants import (
 
 from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import Finding, HashBoundHumanApproval, Sha256
+from contracts.schema.characters import CharacterRegistry, CharactersEdit
 from contracts.schema.evaluation import GlobalReviewItem, SemanticDecision
 from contracts.schema.orchestration import (
     AgentExecutorBackend, AgentProfile, AgentRunRecord, ArtifactCondition,
@@ -135,8 +147,8 @@ from contracts.schema.orchestration import (
 )
 from contracts.schema.stage0 import Stage0RevisionOrigin, Stage0Warning
 from contracts.schema.stage2 import (
-    BlueprintProvenance, ConflictStage, FactEvidence, GlobalProvenance,
-    RelationVisibility, Setting, WorldRule,
+    BlueprintProvenance, SourceBlurbGrounding, FactEvidence, GlobalProvenance,
+    DialogueSemantics, LiteralRequirement, RelationVisibility, Setting, WorldRule,
 )
 from contracts.schema.stage4 import (
     BindingConcern, BindingInfeasibilityWitness,
@@ -679,6 +691,51 @@ class QueueList(StrictModel):
     queues: list[QueueRun] = Field(default_factory=list)
 
 
+class WorkUnitGrantRequest(StrictModel):
+    """人工追加的明确意图；token 由预览提供，重复提交不重复增额。"""
+
+    preview_token: str = Field(pattern=r'^[0-9a-f]{64}$')
+    intent_id: str = Field(pattern=r'^[a-zA-Z0-9_-]{16,80}$')
+    additional: int = Field(default=1, ge=1, le=4, strict=True)
+    reason: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode='after')
+    def _explicit_reason(self) -> WorkUnitGrantRequest:
+        if not self.reason.strip():
+            raise ValueError('追加额度必须填写理由')
+        return self
+
+
+class WorkUnitCostView(StrictModel):
+    """只统计 ledger 的网络尝试与 token 成本；缺用量保持未知。"""
+
+    calls: int = Field(ge=0)
+    failed_calls: int = Field(ge=0)
+    cached_calls: int = Field(ge=0)
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    missing_usage_calls: int = Field(ge=0)
+
+
+class WorkUnitGrantPreview(StrictModel):
+    sid: str
+    unit_id: str
+    available: bool
+    reason: str
+    additional: int = Field(ge=1, le=4)
+    allowed_additions: list[int]
+    preview_token: str | None = None
+    unit: WorkUnitView | None = None
+    costs: WorkUnitCostView | None = None
+    history: list[BudgetGrant] | None = None
+
+
+class WorkUnitGrantResult(StrictModel):
+    grant: BudgetGrant
+    current: WorkUnitGrantPreview
+
+
 class AgentRunRequest(StrictModel):
     """`POST /api/agent/runs`（与 preview）的请求体。
 
@@ -695,6 +752,17 @@ class AgentRunRequest(StrictModel):
     #: ``None`` 只为旧客户端保留请求兼容形状；当前服务端默认也是
     #: ``null``，preview/start 均会关闭式拒绝，绝不拿 capability 首项代选。
     profiles: PipelineAgentProfiles | None = None
+
+    continuation: RunContinuationSource | None = None
+
+
+class AgentRunContinuationView(StrictModel):
+    run_id: str
+    sid: str | None = None
+    available: bool
+    reason: str
+    profiles: PipelineAgentProfiles | None = None
+    source: RunContinuationSource | None = None
 
 
 class AgentBatchRequest(StrictModel):
@@ -723,6 +791,8 @@ class AgentRunPreview(StrictModel):
     #: 服务端关闭式校验并物化 execution mode 后的完整选择。当前默认仍为 ``null``，
     #: 因此成功 preview 必然有这份快照；不能拿 capability 数组第一项替用户猜。
     profiles: PipelineAgentProfiles
+
+    continuation: RunContinuationSource | None = None
 
 
 class AgentModelCapability(FrozenModel):
@@ -821,12 +891,25 @@ class LegacyProviderCapability(FrozenModel):
         return self
 
 
+class PipelineConcurrencyCapability(FrozenModel):
+    """运行配置的并发选择面；前端不复制节点、档位或总槽范围。"""
+
+    nodes: list[str] = Field(default_factory=lambda: list(PIPELINE_PARALLEL_NODES))
+    node_choices: list[int] = Field(default_factory=lambda: list(PIPELINE_CONCURRENCY_TRIALS))
+    default_node: int = PIPELINE_DEFAULT_CONCURRENCY
+    defaults: PipelineConcurrency = Field(default_factory=PipelineConcurrency)
+    total_min: int = PIPELINE_TOTAL_CONCURRENCY_MIN
+    total_max: int = PIPELINE_TOTAL_CONCURRENCY_MAX
+    scope: str = 'output_root'
+
+
 class AgentCapabilitiesResponse(StrictModel):
     """``GET /api/agent/capabilities``：前端 agent 选择器的唯一数据源。"""
 
     drivers: list[AgentDriverCapability] = Field(min_length=1)
     legacy_providers: list[LegacyProviderCapability] = Field(min_length=1)
     executor_nodes: list[str] = Field(min_length=1)
+    concurrency: PipelineConcurrencyCapability = Field(default_factory=PipelineConcurrencyCapability)
 
     #: 服务端经真实整书验收后才能发布的产品预置；它不选择 backend 模式。
     #: ``None`` 表示尚无合格预置，调用方必须显式选择，不能拿任一 capability
@@ -898,7 +981,7 @@ class ApprovalAction(FrozenModel):
 
 
 class DesignReviewBasis(FrozenModel):
-    """Stage4A 人审的全局失效域；任一格变化都会令策略与全部章过期。"""
+    """Stage4A 人审的整书证据快照；v5 的局部失效按实际策略/章投影判断。"""
 
     review_contract: str = Field(min_length=1)
     root_clean_sha1: str = Field(pattern=r'^[0-9a-f]{40}$')
@@ -1303,7 +1386,7 @@ class DesignStrategyReview(FrozenModel):
         if keys != sorted(set(keys)):
             raise ValueError('strategy replan constraints 必须规范排序且不重复')
         split_capability = self.subject.basis.review_contract in {
-            DESIGN_REVIEW_CONTRACT, LEGACY_V3_DESIGN_REVIEW_CONTRACT,
+            DESIGN_REVIEW_CONTRACT, LEGACY_V3_DESIGN_REVIEW_CONTRACT, LEGACY_V4_DESIGN_REVIEW_CONTRACT,
             FROZEN_V6_DESIGN_REVIEW_CONTRACT,
         }
         if self.decision == 'accept' and self.replan_constraints:
@@ -1494,7 +1577,7 @@ class DesignReviewMaterialized(StrictModel):
         if [row.output_ordinal for row in self.repair_capability.chapters] != ordinals:
             raise ValueError('design repair capability 必须精确覆盖本次审阅章集')
         split_capability = self.strategy.subject.basis.review_contract in {
-            DESIGN_REVIEW_CONTRACT, LEGACY_V3_DESIGN_REVIEW_CONTRACT,
+            DESIGN_REVIEW_CONTRACT, LEGACY_V3_DESIGN_REVIEW_CONTRACT, LEGACY_V4_DESIGN_REVIEW_CONTRACT,
             FROZEN_V6_DESIGN_REVIEW_CONTRACT,
         }
         if split_capability:
@@ -1551,11 +1634,21 @@ class DesignStrategyRuling(StrictModel):
     decision: DesignStrategyDecisionKind
     reason: str = Field(min_length=1)
     replan_constraints: list[DesignStrategyReplanRuling] = Field(default_factory=list)
+    source_decision_sha256: Sha256 | None = None
+
+    @model_serializer(mode='wrap')
+    def _omit_absent_source(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if self.source_decision_sha256 is None:
+            data.pop('source_decision_sha256', None)
+        return data
 
     @model_validator(mode='after')
     def _ruling_is_closed(self) -> DesignStrategyRuling:
         if not self.reason.strip():
             raise ValueError('Stage4A 策略裁决理由不能只含空白')
+        if self.source_decision_sha256 is not None and self.decision != 'accept':
+            raise ValueError('只允许继承有效接受；新否决必须明确裁决')
         keys = [json.dumps(
             row.model_dump(mode='json'), ensure_ascii=False,
             sort_keys=True, separators=(',', ':'),
@@ -1577,6 +1670,7 @@ class DesignChapterRuling(StrictModel):
     reason: str = Field(min_length=1)
     constraints: list[DesignRepairConstraint] = Field(default_factory=list)
     constraint_operations: DesignConstraintOperations | None = None
+    source_decision_sha256: Sha256 | None = None
 
     @model_serializer(mode='wrap')
     def _omit_absent_operations(self, handler: Any) -> dict[str, Any]:
@@ -1585,12 +1679,17 @@ class DesignChapterRuling(StrictModel):
         data = handler(self)
         if self.constraint_operations is None:
             data.pop('constraint_operations', None)
+        if self.source_decision_sha256 is None:
+            data.pop('source_decision_sha256', None)
         return data
 
     @model_validator(mode='after')
     def _ruling_is_closed(self) -> DesignChapterRuling:
         if not self.reason.strip():
             raise ValueError('Stage4A 逐章裁决理由不能只含空白')
+        if self.source_decision_sha256 is not None and (
+                self.decision != 'accept' or self.constraint_operations is not None):
+            raise ValueError('历史接受不得夹带新决定或约束处置')
         keys = [json.dumps(
             row.model_dump(mode='json'), ensure_ascii=False,
             sort_keys=True, separators=(',', ':'),
@@ -1626,6 +1725,10 @@ class DesignReviewRequest(StrictModel):
         ordinals = [row.output_ordinal for row in self.chapters]
         if ordinals != sorted(set(ordinals)):
             raise ValueError('design review 章号必须升序且不重复')
+        if self.reviewer_kind == 'inherited' and (
+                self.strategy.source_decision_sha256 is None
+                or any(row.source_decision_sha256 is None for row in self.chapters)):
+            raise ValueError('免费继承收口不得包含新的语义裁决')
         return self
 
 
@@ -1682,12 +1785,11 @@ class DesignReviewView(FrozenModel):
         if available != (self.repair_capability is not None):
             raise ValueError('design review 可用态与 repair capability 必须同进同出')
         decided_states = {
-            'accepted', 'suspended',
+            'accepted',
             'repair_requested', 'strategy_replan_requested',
         }
         if (self.state in decided_states) != (self.current_decision is not None):
             raise ValueError('design review 当前决定必须与 decided state 同进同出')
-        frozen_without_validation_authority = False
         if self.current_decision is not None:
             if (
                 self.current_decision.candidate_sha256 != self.candidate_sha256
@@ -1709,29 +1811,20 @@ class DesignReviewView(FrozenModel):
             wants_repair = any(
                 row.decision == 'request_repair'
                 for row in self.current_decision.chapters)
-            frozen_without_validation_authority = (
-                self.current_decision.strategy.subject.basis.review_contract
-                == FROZEN_V6_DESIGN_REVIEW_CONTRACT
-            )
+            if self.current_decision.strategy.subject.basis.review_contract != DESIGN_REVIEW_CONTRACT:
+                raise ValueError('旧审阅契约只能作为 history，不能取得 current authority')
             expected = (
                 'strategy_replan_requested' if wants_replan else
                 'repair_requested' if wants_repair else 'accepted'
             )
-            if expected == 'accepted' and frozen_without_validation_authority:
-                expected = 'suspended'
             if self.state != expected:
                 raise ValueError('design review state 与策略/逐章决定不一致')
         if self.state == 'missing' and self.history:
             raise ValueError('已有旧 design review 时当前无决定应为 expired')
         if self.state == 'expired' and not self.history:
             raise ValueError('没有 design review 历史时不能声称 expired')
-        # frozen v6 的 request_repair 只有工作包逐章 ``s4er1`` 完整章
-        # edit 票；没有 relation/preflight authority，不能再把同一 raw
-        # 决定铸成会进入 agent/paid lane 的 ``s4rr1`` action token。
-        # current-v7 的两种修订态仍严格要求该 token。
         actionable = (
             self.state in ('repair_requested', 'strategy_replan_requested')
-            and not frozen_without_validation_authority
         )
         if actionable != (self.action_review_token is not None):
             raise ValueError('Stage4A 修订态必须且只能发布一枚 action review token')
@@ -1923,6 +2016,20 @@ class StructureChapterDecision(FrozenModel):
     output_ordinal: int = Field(ge=1)
     decision: StructureApprovalDecisionKind
     reason: str = Field(min_length=1)
+    source_decision_sha256: Sha256 | None = None
+
+    @model_serializer(mode='wrap')
+    def _omit_absent_source(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if self.source_decision_sha256 is None:
+            data.pop('source_decision_sha256', None)
+        return data
+
+    @model_validator(mode='after')
+    def _inherited_acceptance(self) -> StructureChapterDecision:
+        if self.source_decision_sha256 is not None and self.decision != 'accept':
+            raise ValueError('只允许继承有效结构接受；新否决必须明确裁决')
+        return self
 
     @field_validator('reason')
     @classmethod
@@ -2159,9 +2266,15 @@ class WorkpackItem(FrozenModel):
         default=None, pattern=r'^s4er1_[0-9a-f]{64}$')
     #: v2：coverage 行携带服务端确定性渲染的本章裁决材料；不进 subject/token/proof。
     reading: WorkpackChapterReading | None = None
+    inherited_structure_decision: StructureChapterDecision | None = None
 
     @model_validator(mode='after')
     def _actions_and_history_are_closed(self) -> WorkpackItem:
+        if self.inherited_structure_decision is not None and (
+                self.effect != 'coverage' or not self.historical_accept_reusable
+                or self.inherited_structure_decision.output_ordinal != self.chapter_ordinal
+                or self.inherited_structure_decision.source_decision_sha256 != self.source_decision_sha256):
+            raise ValueError('结构继承载荷必须来自同一章覆盖义务的有效历史接受')
         if self.reading is not None and self.effect != 'coverage':
             raise ValueError('reading 只属于 coverage 行')
         if (self.sev is None) != (self.status is None):
@@ -2236,15 +2349,11 @@ class ApprovalWorkpack(FrozenModel):
 
     @model_validator(mode='after')
     def _shape_is_closed_and_covers_every_chapter(self) -> ApprovalWorkpack:
-        has_current_decision = self.disposition in {
-            'already_current', 'suspended',
-        }
+        has_current_decision = self.disposition == 'already_current'
         if has_current_decision != (self.current_decision_sha256 is not None):
             raise ValueError(
-                'already_current/suspended 与 current_decision_sha256 '
+                'already_current 与 current_decision_sha256 '
                 '必须同时出现')
-        if self.disposition == 'suspended' and self.kind != 'design':
-            raise ValueError('suspended 只属于缺验证权威的 Stage4A 审阅')
         if [row.group for row in self.groups] != list(APPROVAL_WORKPACK_GROUPS):
             raise ValueError(
                 'workpack 分组必须是固定顺序的全集，不许裁剪或重排')
@@ -2416,8 +2525,6 @@ class Stage6ApprovalWorkpack(FrozenModel):
     def _currentness_and_candidate_set_are_closed(self) -> 'Stage6ApprovalWorkpack':
         if self.kind != 'stage6':
             raise ValueError('Stage6ApprovalWorkpack.kind 必须是 stage6')
-        if self.disposition == 'suspended':
-            raise ValueError('suspended 是 Stage4A frozen-v6 专用处置态')
         if self.review_token != f's6r3_{self.workpack_sha256}':
             raise ValueError('Stage6 review_token 必须封装当前 exact workpack')
         if [row.index for row in self.candidates] != [1, 2, 3]:
@@ -2471,8 +2578,6 @@ class Stage7ApprovalWorkpack(FrozenModel):
     def _currentness_is_hash_bound(self) -> 'Stage7ApprovalWorkpack':
         if self.kind != 'stage7':
             raise ValueError('Stage7ApprovalWorkpack.kind 必须是 stage7')
-        if self.disposition == 'suspended':
-            raise ValueError('suspended 是 Stage4A frozen-v6 专用处置态')
         if self.review_token != f's7r3_{self.workpack_sha256}':
             raise ValueError('Stage7 review_token 必须封装当前 exact workpack')
         if ((self.disposition == 'already_current')
@@ -2933,21 +3038,59 @@ class Stage5ClosureView(FrozenModel):
         return self
 
 
+class CharactersEditRequest(StrictModel):
+    actor: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=4096)
+    edit: CharactersEdit
+
+    @model_validator(mode='after')
+    def _visible_author(self) -> CharactersEditRequest:
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('人物订正必须有明确 actor 与 reason')
+        return self
+
+
+class CharacterRegistryView(StrictModel):
+    sid: str
+    source_sha256: Sha256
+    artifact: ArtifactState
+    registry: CharacterRegistry
+    edit_template: CharactersEdit | None
+    template_unavailable_reason: str | None
+
+    @model_validator(mode='after')
+    def _template_state(self) -> CharacterRegistryView:
+        if (self.edit_template is None) != (self.template_unavailable_reason is not None):
+            raise ValueError('人物编辑模板缺失必须保留明确原因')
+        if self.edit_template is not None and self.edit_template.source_sha256 != self.source_sha256:
+            raise ValueError('人物编辑模板必须来自当前实际展示的同一字节主体')
+        return self
+
+
 class Stage2NodeReviewRequest(StrictModel):
     """Stage2 每个生产节点独立提交的语义裁决；已读不授予接受。"""
 
-    node: Literal[STAGE2_NODE_REVIEW_OWNERS]
+    node: Literal[STAGE2_NODE_REVIEWERS]
     review_token: str = Field(min_length=1)
     decision: Literal[STAGE2_NODE_REVIEW_DECISIONS]
     actor: str = Field(min_length=1, max_length=256)
     reason: str = Field(min_length=1, max_length=4096)
     chapter_ordinals: list[int] = Field(default_factory=list)
     owner: Literal[STAGE2_NODE_REVIEW_OWNERS] | None = None
+    knowledge_links: KnowledgeLinkSubmission | None = None
+    review: Stage2ReviewSubmission | None = None
 
     @model_validator(mode='after')
     def _closed_action(self) -> 'Stage2NodeReviewRequest':
         if not self.actor.strip() or not self.reason.strip():
             raise ValueError('Stage2 裁决必须有明确 actor/reason')
+        if self.knowledge_links is not None:
+            if self.node != 'stage2.blueprint':
+                raise ValueError('只有 Blueprint Commander 能提交知识关联决定')
+            if self.knowledge_links.actor != self.actor or self.knowledge_links.reason != self.reason:
+                raise ValueError('关联与本次审阅的 actor/reason 必须一致')
+        if self.node == 'stage2.blueprint' and self.decision == 'accept' and self.knowledge_links is None:
+            raise ValueError('Blueprint 接受必须携带当前知识关联范围；全部继承时 decisions 为空')
         if self.chapter_ordinals != sorted(set(self.chapter_ordinals)) or any(
                 ordinal < 1 for ordinal in self.chapter_ordinals):
             raise ValueError('Stage2 返工章号必须升序、唯一且为正数')
@@ -2956,7 +3099,9 @@ class Stage2NodeReviewRequest(StrictModel):
                 raise ValueError('返工必须指向知识生产节点')
             if self.owner == 'stage2.blueprint' and not self.chapter_ordinals:
                 raise ValueError('Blueprint 定向返工必须列出章节')
-            if self.node == 'stage2.global' and self.owner != 'stage2.global':
+            if self.owner != 'stage2.blueprint' and self.chapter_ordinals:
+                raise ValueError('人物与知识按书派修，不携带 Blueprint 章范围')
+            if self.node == 'stage2.global' and self.owner == 'stage2.blueprint':
                 raise ValueError('Global Commander 不拥有尚未生产的 Blueprint 返工权')
         elif self.owner is not None or self.chapter_ordinals:
             raise ValueError('只有返工决定能携带 owner/章范围')
@@ -2964,6 +3109,7 @@ class Stage2NodeReviewRequest(StrictModel):
 
 
 class Stage2NodeReviewDecision(Stage2NodeReviewRequest):
+    obligation_receipt: Stage2ReviewReceipt | None = None
     review_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     review_contract_version: str = Field(min_length=1)
     decided_at: str = Field(min_length=1)
@@ -2971,6 +3117,8 @@ class Stage2NodeReviewDecision(Stage2NodeReviewRequest):
 
 
 class Stage2NodeReviewView(StrictModel):
+    coverage: Stage2ReviewCoverage | None = None
+    unavailable_reason: str | None = None
     state: Literal[STAGE2_NODE_REVIEW_STATES] = 'missing'
     current_decision: Stage2NodeReviewDecision | None = None
     history: list[Stage2NodeReviewDecision] = Field(default_factory=list)
@@ -3345,23 +3493,6 @@ class GlobalSecretLine(FrozenModel):
     first_reveal_chapter: int = Field(ge=1)
 
 
-class ArcTrackLine(FrozenModel):
-    """一条人物弧线（`subject` 已解引用；`char_id` / `reader` / `relation_id` 三类）。"""
-
-    subject: NameRef
-    trajectory: str = Field(min_length=1)
-    trajectory_evidence: FactEvidence
-
-
-class GlobalArcView(StrictModel):
-    """解读层。`climax` / `ending` 全量下发（遮蔽归前端，同 `fate` 那一条）。"""
-
-    conflict_stages: list[ConflictStage] = Field(min_length=1)
-    climax: str = Field(min_length=1)
-    ending: str = Field(min_length=1)
-    arc_tracks: list[ArcTrackLine] = Field(min_length=1)
-
-
 class GlobalView(StrictModel):
     """`GET /api/novels/:sid/stage2/global`。**S-05 那一屏的全部数据。**
 
@@ -3379,9 +3510,9 @@ class GlobalView(StrictModel):
     world_rules: list[WorldRule]
     #: 空数组 = 这本书没抽到秘密。**那可能是漏抽了，不是「无」**（探针盲区）。
     secrets: list[GlobalSecretLine]
-    arc: GlobalArcView
+    source_blurb: SourceBlurbGrounding[FactEvidence]
 
-    #: 全屏解引用失败的总数（relations 两端 + secrets.knowledge_events + arc.subject）。
+    #: 全屏解引用失败的总数（relations 两端 + secrets.knowledge_events）。
     #: **读数不是判定**——它是给人看「这份产物里有几个说不出名字的 id」。
     unresolved_refs: int = Field(ge=0)
 
@@ -3421,6 +3552,7 @@ class GlobalReviewView(StrictModel):
     不少地留在 ``items`` / ``effect_counts`` / ``quarantined_groups`` 里。
     """
 
+    review_coverage: Stage2ReviewCoverage | None = None
     source_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     current_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     current: bool
@@ -3671,6 +3803,10 @@ class ReadingHinge(FrozenModel):
 
     kind: Literal[HINGE_KINDS]
     text: str | None
+    hinge_id: str = Field(min_length=1)
+    source_fact_refs: list[str] = Field(min_length=1)
+    dialogue: DialogueSemantics | None
+    literal: LiteralRequirement | None
 
 
 class ReadingFactLine(FrozenModel):
@@ -3971,6 +4107,8 @@ class BlueprintReviewWorkpack(FrozenModel):
     validation_seal_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     review_token: str = Field(pattern=r'^bpr4_[0-9a-f]{64}$')
     global_review: dict[str, Any]
+    knowledge_links: KnowledgeLinkReview
+    review_coverage: Stage2ReviewCoverage | None = None
     review_delta: BlueprintReviewDelta | None = None
     subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     binding_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
@@ -4123,6 +4261,15 @@ class Stage4IndexRow(FrozenModel):
     scenes: int = Field(ge=1)
 
 
+class CtxChapterView(CtxChapter):
+    """任务书的读取视图；展示读数现算，不能序列化为 WriterContext 产物。"""
+
+    from_source_ordinals: list[int] = Field(min_length=1, max_length=1)
+    budget_chars: int = Field(gt=0)
+    #: Stage1 缺失或不可读时保持未知；不能从旧任务书抄一份数字兜底。
+    source_chars: int | None = Field(ge=0)
+
+
 class Stage4View(StrictModel):
     """`GET /api/novels/:sid/stage4/:o`。**S-07：计划决定了什么？写手实际拿到什么？**
 
@@ -4145,14 +4292,14 @@ class Stage4View(StrictModel):
     index: list[Stage4IndexRow] = Field(min_length=1)
 
     plan_chapter: PlanChapterLine
-    ctx_chapter: CtxChapter | None
+    ctx_chapter: CtxChapterView | None
 
     #: 写手被要求的篇幅区间，**与写手同一把尺子**（`prompts.target_band`）。
     #: `null` ⇔ `ctx_chapter=null`（没有任务书就没有目标）。
     #:
     #: ⚠ 此处**没有** `writer_target_estimated`：那个布尔曾用于区分「按 `budget_chars`
     #: 算的实数带」与「`budget_chars` 缺席时按 `source_chars` 估的带」，而
-    #: `CtxScene.budget_chars` / `CtxChapter.budget_chars` 都是 `Field(gt=0)` 必填，
+    #: `CtxScene.budget_chars` 是 `Field(gt=0)` 必填、总预算只由它求和，
     #: 估算那条路已随 `08240cf` 一并退役 ⇒ 它只会是 `false`。
     #: **一个永远不会为真的布尔比没有这个字段更坏**：它让下一个人以为这里真能区分两者。
     writer_target: tuple[int, int] | None

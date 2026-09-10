@@ -13,7 +13,8 @@ admission、execution permit、节点调度、epoch、自动遥测与最终报�
 也不是第三个模型角色。正式运行没有“外层 root”；交互式 root 只用于开发调试、安全暂停和修复代码，
 不能在正常跑书时二次代批或套一层 Commander。
 
-新 clean base 的全节点职责和预算以 `NODES.lifecycle` 与持久工作单元账为准：E/C 各最多 4 次内容调用，
+新 clean base 的全节点职责和预算以 `NODES.lifecycle` 与持久工作单元账为准：E/C 基础额度各为 4 次内容调用，
+有效上限包含同一单元已生效的不可变人工追加授权；执行者不能自行追加。
 同单元持续会话，候选、run、epoch 或重启不重置预算；Global 接受先于 Blueprint 生成，
 Blueprint 再由独立 Commander 接受。Stage4 A/B 分别持续，Stage6 judge 独立互盲。
 审阅 accept/patch/rework/uncertain/stop 只用本节点 `review_actions` 与当前工作包选项；
@@ -85,7 +86,7 @@ uncertain/stop 明确保留原因并停止，不批准、不制造返工，也�
    `approval workpack design|structure`。Stage6/7 定稿同样先分别读取 `approval workpack stage6|stage7`：
    Stage6 包内完整展开 A/B 各自 verdict、reason、evidence、ranking；Stage7 包内完整汇总人物、别名、
    kept、实际替换命中、残留上下文、替换计数和完整主体。若包的 `disposition=already_current`，当前
-   review subject 与 review contract 未变且当前 validation seal 免费复检通过，raw typed 决定仍适用，跳过重复提交；代码变化本身不撤销人审。若 **Stage4 Design** 包为 `suspended`，同样跳过重复提交，但必须明确停在 legacy-frozen 缺 relation/preflight validation authority：它不授权 B，不取 recovery permit，也不执行 repair/replan/B；该态没有 `s4rr1`、`s4er1` 或 execution token。否则只把**刚读完的同一份包**里的
+   review subject 与 review contract 未变且当前 validation seal 免费复检通过，raw typed 决定仍适用，跳过重复提交；代码变化本身不撤销人审。旧产物版本不再提供冻结兼容包；遇到版本拒绝应停止当前根，用配对旧代码处理旧根，新生产从独立空根开始。否则只把**刚读完的同一份包**里的
    opaque `review_token` 提交给对应 approve。工作包只缩小阅读范围，不自动 accept，
    INFO/metric/判据型 UNVER 不制造付费动作；Stage2 typed review 的 FAIL/UNVER 按下述专用
    GlobalEdit/隔离闭环处理。Stage5 最终 Review 与所有 edit/trim/wontfix 收口后，逐项读取
@@ -122,8 +123,9 @@ uncertain/stop 明确保留原因并停止，不批准、不制造返工，也�
   `generation_impact=quarantine_or_fix` 的完整 secret/relation/world-rule 组可显式 quarantine；
   `must_fix` 只有证据支持 PASS 或能指出真实错误时才用 0-wire GlobalEdit，材料仍不足就保持 UNVER
   并停止，不臆造编辑。GlobalEdit 字段 patch 只能改模板已有 subject；集合完整性的新增/删除/拆分
-  必须填写 hash-bound `collection_edits[].operations`。Global Executor 按书、Blueprint Executor 按章各有
-  最多 4 次内容调用；Global Commander 与独立 Blueprint Commander 按各自整书审阅单元各有最多 4 次，
+  必须填写 hash-bound `collection_edits[].operations`。Characters 与 Global Executor 各按书、Blueprint
+  Executor 按章计账；Global Commander 与独立 Blueprint Commander 各按整书审阅单元计账，不增设人物 Commander。
+  各单元基础额度为 4 次内容调用，有效上限加上已生效的不可变人工追加授权，
   包含首次及格式/内容纠错。同一工作单元连续审阅，网络重试单独有界计数；版本、会话、run、epoch
   和进程重启均不重新发放预算。机械校验、已保存回答重验和 typed 补提交不占模型内容额度。
   Global 当前正式产物及 generation-safe 逐项决定经 Global Commander 接受后，才能启动 Blueprint
@@ -138,11 +140,13 @@ uncertain/stop 明确保留原因并停止，不批准、不制造返工，也�
 只有同时满足以下条件才可标记 `ready`：
 
 - `state` 显示主链完成且所有消费中的正式产物 fresh/match；已解释的诊断噪声单列披露。
-- Stage2 global 与 blueprint 均 current、唯一联合 check 无 HARD，且全局复核面 current、
+- Stage2 characters、knowledge、blueprint 与 knowledge_links 均 current，两位 Commander 的接受有效，
+  唯一联合 check 无 HARD，且全局复核面 current、
   **blocking 面 generation-safe**：逐项 PASS，或仅余带 hash-bound `quarantine_group` 的
   secret/relation/world-rule UNVER。全 PASS 才可 `ready`；存在隔离项只能
   `ready_with_disclosures`，且写作只消费确定性净化视图。
-  人审可与 blueprint 计算重叠，但不能缺席。`disclosure` 的三类不挡门，
+  Global 接受先于 Blueprint 生成；有效历史决定可按当前义务继承，只审待审项且完整覆盖当前义务。
+  `disclosure` 的三类不挡门，
   却必须在终审包里逐条披露——「不阻断」不等于「不列出」。
 - `inbox.delivery_counts.blocking == 0`；`attention_counts` 区分“尚待处理”与“已裁决但记录保留”，不得拿总数冒充失败数。披露项逐类记录。
 - `inbox.counts` 的八类余额必须逐类披露：`invalid`、`rejected`、`repairable`、`human_only`、`verification`、`upstream`、`stalled`、`approval`；类别总数不直接等于阻塞数，阻塞性只读 `delivery_effect`。

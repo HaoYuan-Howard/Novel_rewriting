@@ -15,7 +15,7 @@ from contracts.invariants import (
 )
 from contracts.schema.orchestration import (
     AgentExecutorBackend, AgentProfile, LegacyExecutorBackend, LegacyLlmProfile,
-    PipelineAgentProfiles,
+    PipelineAgentProfiles, PipelineConcurrency,
 )
 from novel import agent_capabilities as capabilities
 
@@ -28,12 +28,52 @@ def _profile(*, driver: str = 'codex', model: str = 'gpt-5.6-sol',
     )
 
 
-def test_executor_nodes_are_exactly_the_eight_paid_llm_nodes():
+def test_executor_nodes_cover_all_paid_llm_nodes():
     """付费节点新增/退役时，executor 配置面不能静默漏接或误接代码节点。"""
-    assert len(AGENT_EXECUTOR_NODES) == 8
+    assert len(AGENT_EXECUTOR_NODES) == 9
     assert set(AGENT_EXECUTOR_NODES) == {
         node for node, spec in NODES.items() if spec.paid
     }
+
+
+def test_concurrency_capability_and_full_profiles_roundtrip_preserve_exact_trial():
+    from novel.config import load_config, ENV_KEYS
+
+    policy = PipelineConcurrency(node_overrides={'stage4.plan': 8}, per_book=8, per_provider=12)
+    profiles = PipelineAgentProfiles(commander=_profile(), executor_default=_profile(), concurrency=policy)
+    normalized = capabilities.validate_pipeline_profiles(profiles)
+    restored = PipelineAgentProfiles.model_validate_json(normalized.model_dump_json())
+    assert restored.concurrency == policy
+    cfg = load_config(env={ENV_KEYS['concurrency_policy']: policy.model_dump_json()})
+    assert cfg.concurrency_for('stage4.plan') == 8
+    assert cfg.concurrency_for('stage2.blueprint') == 4
+    assert cfg.concurrency_policy.per_provider == 12
+    cap = capabilities.get_agent_capabilities(which=lambda _name: None).concurrency
+    assert cap.default_node == cap.defaults.per_book == 4
+    assert cap.node_choices == [4, 6, 8]
+    assert set(cap.nodes) == {'stage2.blueprint', 'stage4.design', 'stage4.plan', 'stage5.write'}
+
+
+@pytest.mark.parametrize('policy', [
+    {'node_overrides': {'stage2.global': 8}},
+    {'node_overrides': {'stage5.write': 7}},
+    {'per_book': True}, {'per_provider': 0}, {'per_provider': 33},
+])
+def test_concurrency_policy_rejects_unregistered_or_invalid_values(policy):
+    with pytest.raises(ValidationError):
+        PipelineConcurrency.model_validate(policy)
+
+
+def test_missing_concurrency_keeps_original_profile_bytes_and_empty_env_is_invalid():
+    from novel.config import load_config, ENV_KEYS, Config
+
+    profiles = PipelineAgentProfiles(commander=_profile(), executor_default=_profile())
+    assert 'concurrency' not in profiles.model_dump(mode='json')
+    assert 'concurrency' not in capabilities.validate_pipeline_profiles(profiles).model_dump(mode='json')
+    with pytest.raises(ValueError):
+        load_config(env={ENV_KEYS['concurrency_policy']: ''})
+    with pytest.raises(ValueError, match='PipelineConcurrency'):
+        Config(concurrency_policy={})
 
 
 def test_registry_publishes_exact_ids_labels_and_model_specific_options():

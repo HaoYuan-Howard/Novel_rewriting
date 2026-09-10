@@ -408,6 +408,8 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
             '/api/upload': ['POST'],
         # ── 第二阶段 · 批 1/2：读屏（`tests/test_api_screens.py` 管行为） ──
         '/api/novels/{sid}/stage2/global': ['GET'],
+        '/api/novels/{sid}/stage2/characters': ['GET'],
+        '/api/novels/{sid}/stage2/characters/edit': ['POST'],
         '/api/novels/{sid}/stage2/blueprint-review-workpack': ['GET'],
         '/api/novels/{sid}/stage2/global-review': ['GET', 'POST'],
         '/api/novels/{sid}/approvals/stage2-review': ['POST'],
@@ -445,10 +447,12 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/agent/runs/batch': ['POST'],
         '/api/agent/runs/queue': ['GET'],
         '/api/agent/runs/{run_id}/log': ['GET'],
+        '/api/agent/runs/{run_id}/continuation': ['GET'],
         '/api/agent/runs/{run_id}/pause': ['POST'],
         '/api/agent/runs/{run_id}/resume': ['POST'],
         '/api/agent/runs/{run_id}/stop': ['POST'],
         '/api/novels/{sid}/run': ['GET'],
+        '/api/novels/{sid}/work-units/{unit_id}/grant': ['GET', 'POST'],
     }
 
 
@@ -523,6 +527,8 @@ def test_preview_refuses_a_flag_that_node_does_not_have(client):
 
 
 _EXECUTOR_PROFILE_HTTP_CASES = (
+    ('stage2.characters', (), 1),
+    ('stage2.characters', ('--review-token', 's2gr1_' + 'a' * 64), 1),
     ('stage2.global', (), 1),
     ('stage2.global', ('--review-token', 's2gr1_' + 'a' * 64), 1),
     ('stage2.blueprint', (), 2),

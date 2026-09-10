@@ -155,7 +155,7 @@ def test_a_fix_route_is_accepted_when_the_node_and_flag_both_exist():
     """
     reg = Registry()
     reg.register(_s2(rule='r_fix_free', fix=('stage2.blueprint', '--renormalize')))
-    reg.register(_s2(rule='r_fix_paid', fix=('stage2.global', '--purge-role')))
+    reg.register(_s2(rule='r_fix_paid', fix=('stage2.characters', '--resample')))
     assert len(reg) == 2
 
 

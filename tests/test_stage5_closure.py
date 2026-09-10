@@ -52,37 +52,16 @@ def _finding_payload(rule: str, *, ordinal: int | None = 1,
 
 def _review(root_sha1: str) -> Review:
     chapters = [
-        ReviewChapter.model_validate({
-            'output_ordinal': ordinal,
-            'from_source_ordinals': [ordinal],
-            'budget_chars': 300, 'source_chars': 280,
-            'relpath': f'stage5/ch{ordinal:02d}.json',
-            'draft_round': 1, 'draft_sha1': 'a' * 10,
-            'draft_text_sha1': 'b' * 10, 'chars': 260,
-            'findings': findings,
-        })
+        ReviewChapter.model_validate({'output_ordinal': ordinal, 'findings': findings})
         for ordinal, findings in ((1, [_finding_payload('must_appear_missing')]),
                                   (2, []))
     ]
-    return Review.model_validate({
-        'sources': {
-            'writer_context': {'state': 'fresh', 'detail': [], 'code': 'test'},
-            'drafts': {'stale': [], 'no_prov': []},
-        },
-        'judged': {},
-        'chapters': chapters,
-        'book': [
-            _finding_payload('must_hold_unver', ordinal=None,
-                             evidence=('全书',), detail='盲区披露'),
-        ],
-        'baselines': {},
-        'baselines_identity': {},
-        'counts': {},
-        '_provenance': {
-            'code': 'test-closure', 'root_clean_sha1': root_sha1,
-            'inputs': {}, 'origin': 'human',
-        },
-    })
+    return Review.model_validate({ 'judged': {
+        f'stage5/ch{ordinal:02d}.json': {
+            'output_ordinal': ordinal, 'round': 1, 'sha1': 'a' * 10,
+            'consumed': {'output_ordinal': ordinal, 'text_sha1': 'b' * 10},
+        } for ordinal in (1, 2)
+    }, 'chapters': chapters, 'book': [_finding_payload('must_hold_unver', ordinal=None, evidence=('全书',), detail='盲区披露')], 'baselines': {}, 'baselines_identity': {}, '_provenance': {'code': 'test-closure', 'root_clean_sha1': root_sha1, 'inputs': {}, 'origin': 'human'}})
 
 
 @pytest.fixture
@@ -370,27 +349,7 @@ def test_trim_batch_rebuilds_closure_under_the_same_review_without_paid_work(
     audit_sha256: dict[int, str] = {}
     for ordinal in (1, 2):
         text = f'第{ordinal}章必须完整保留的超限因果正文。' * 20
-        chapter = Chapter.model_validate({
-            'output_ordinal': ordinal,
-            'from_source_ordinals': [ordinal],
-            'source_chars': 100,
-            'budget_chars': 90,
-            'chars': len(text),
-            'overlap_excl_verbatim': 0.01,
-            'segments': [{'slot': 's01', 'text': text}],
-            'warns': [],
-            '_provenance': {
-                'code': ctx.code,
-                'root_clean_sha1': ctx.root_clean_sha1,
-                'inputs': {'stage0/clean_text.txt': {
-                    'file': root_fp, 'consumed': None}},
-                'origin': 'human',
-                'round': 1,
-                'prompts': {'SYS': 'a' * 10},
-                'model': 'test-model',
-                'adopted_models': ['test-model'],
-            },
-        })
+        chapter = Chapter.model_validate({'output_ordinal': ordinal, 'segments': [{'slot': 's01', 'text': text}], '_provenance': {'code': ctx.code, 'root_clean_sha1': ctx.root_clean_sha1, 'inputs': {'stage0/clean_text.txt': {'file': root_fp, 'consumed': None}}, 'origin': 'human', 'round': 1, 'prompts': {'SYS': 'a' * 10}, 'model': 'test-model', 'adopted_models': ['test-model']}})
         chapter_rel = artifact_rel('stage5.chapter', nn=ordinal)
         payload = chapter.model_dump(by_alias=True, exclude_none=True)
         payload['_provenance'] = chapter.provenance.to_disk()
@@ -401,10 +360,7 @@ def test_trim_batch_rebuilds_closure_under_the_same_review_without_paid_work(
         chapter_text_sha256[ordinal] = hashlib.sha256(
             chapter.text.encode('utf-8')).hexdigest()
         audit_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
-        store.write(audit_rel, TrimAudit(
-            output_ordinal=ordinal,
-            before_sha256=chapter_text_sha256[ordinal],
-            reason='当前正文超过冻结目标上限'))
+        store.write(audit_rel, TrimAudit(before_sha256=chapter_text_sha256[ordinal], reason='当前正文超过冻结目标上限'))
         audit_sha256[ordinal] = store.read_with_sha256(
             TrimAudit, audit_rel)[1]
 
@@ -498,27 +454,7 @@ def test_review_length_over_requires_the_same_chapter_current_trim_audit(
 
     text = '第二章仍然超过冻结上限且必须保留的完整因果正文。' * 20
     root_raw = store.path('stage0/clean_text.txt').read_bytes()
-    chapter = Chapter.model_validate({
-        'output_ordinal': 2,
-        'from_source_ordinals': [2],
-        'source_chars': 100,
-        'budget_chars': 90,
-        'chars': len(text),
-        'overlap_excl_verbatim': 0.01,
-        'segments': [{'slot': 's01', 'text': text}],
-        'warns': [],
-        '_provenance': {
-            'code': ctx.code,
-            'root_clean_sha1': ctx.root_clean_sha1,
-            'inputs': {'stage0/clean_text.txt': {
-                'file': prov.fingerprint_bytes(root_raw), 'consumed': None}},
-            'origin': 'human',
-            'round': 1,
-            'prompts': {'SYS': 'a' * 10},
-            'model': 'test-model',
-            'adopted_models': ['test-model'],
-        },
-    })
+    chapter = Chapter.model_validate({'output_ordinal': 2, 'segments': [{'slot': 's01', 'text': text}], '_provenance': {'code': ctx.code, 'root_clean_sha1': ctx.root_clean_sha1, 'inputs': {'stage0/clean_text.txt': {'file': prov.fingerprint_bytes(root_raw), 'consumed': None}}, 'origin': 'human', 'round': 1, 'prompts': {'SYS': 'a' * 10}, 'model': 'test-model', 'adopted_models': ['test-model']}})
     chapter_rel = artifact_rel('stage5.chapter', nn=2)
     chapter_payload = chapter.model_dump(by_alias=True, exclude_none=True)
     chapter_payload['_provenance'] = chapter.provenance.to_disk()
@@ -529,11 +465,7 @@ def test_review_length_over_requires_the_same_chapter_current_trim_audit(
     chapter_text_sha256 = hashlib.sha256(
         chapter.text.encode('utf-8')).hexdigest()
     audit_rel = artifact_rel('stage5.trim_audit', nn=2)
-    store.write(audit_rel, TrimAudit(
-        output_ordinal=2,
-        before_sha256=chapter_text_sha256,
-        reason='当前正文超过冻结目标上限',
-    ))
+    store.write(audit_rel, TrimAudit(before_sha256=chapter_text_sha256, reason='当前正文超过冻结目标上限'))
 
     current = review.require_fresh_review(ctx, store)
     assert current.review is not None and current.review_rel is not None
@@ -574,11 +506,7 @@ def test_unreadable_existing_trim_resolution_refuses_closure_before_review(
         rig, monkeypatch):
     """坏回执是已知证据损坏，不能洗成 unresolved 后再开付费 Reviewer。"""
     _ctx, store = rig
-    audit = TrimAudit(
-        output_ordinal=2,
-        before_sha256='c' * 64,
-        reason='合成 current trim audit',
-    )
+    audit = TrimAudit(before_sha256='c' * 64, reason='合成 current trim audit')
     monkeypatch.setattr(
         closure.trim_resolution, 'current_trim_audits',
         lambda _store, **_kwargs: {2: (audit, 'd' * 64)})
@@ -598,11 +526,7 @@ def test_readable_corrupt_trim_resolution_refuses_closure_before_review(
     ctx, store = rig
     from contracts.schema import encode_artifact
 
-    audit = TrimAudit(
-        output_ordinal=2,
-        before_sha256='c' * 64,
-        reason='合成 current trim audit',
-    )
+    audit = TrimAudit(before_sha256='c' * 64, reason='合成 current trim audit')
     monkeypatch.setattr(
         closure.trim_resolution, 'current_trim_audits',
         lambda _store, **_kwargs: {2: (audit, 'd' * 64)})
@@ -615,17 +539,7 @@ def test_readable_corrupt_trim_resolution_refuses_closure_before_review(
     elif corruption == 'wrong-ordinal':
         output_ordinal = 1
         chapter_rel = 'stage5/ch01.json'
-    resolution = TrimResolution.model_validate({
-        'output_ordinal': output_ordinal,
-        'action': 'retain_pretrim',
-        'actor': 'foreign-commander',
-        'reason': '盘外可读但身份损坏的回执',
-        'audit_sha256': 'd' * 64,
-        'before_sha256': 'c' * 64,
-        'chapter_rel': chapter_rel,
-        'chapter_sha256': chapter_sha256,
-        '_provenance': provenance,
-    })
+    resolution = TrimResolution.model_validate({'output_ordinal': output_ordinal, 'action': 'retain_pretrim', 'actor': 'foreign-commander', 'reason': '盘外可读但身份损坏的回执', 'audit_sha256': 'd' * 64, '_provenance': provenance})
     rel = trim_resolution.resolution_rel(2)
     payload = resolution.model_dump(by_alias=True, exclude_none=True)
     payload['_provenance'] = resolution.provenance.to_disk()
@@ -812,11 +726,7 @@ def test_workpack_refuses_trim_surface_drift_during_construction(
     _ctx, store = rig
     from contracts.schema.evaluation import TrimAudit
 
-    audit = TrimAudit(
-        output_ordinal=2,
-        before_sha256='c' * 64,
-        reason='构包中途出现未销账 trim',
-    )
+    audit = TrimAudit(before_sha256='c' * 64, reason='构包中途出现未销账 trim')
     calls = 0
 
     def drifting_trim(_store, **_kwargs):
@@ -1149,10 +1059,7 @@ def test_new_blocker_takes_priority_over_an_expired_old_decision(
         store.path('stage5/ch02.INVALID.json').write_text('{}', encoding='utf-8')
     else:
         from contracts.schema.evaluation import TrimAudit
-        audit = TrimAudit(
-            output_ordinal=2,
-            before_sha256='c' * 64,
-            reason='合成未销账 trim')
+        audit = TrimAudit(before_sha256='c' * 64, reason='合成未销账 trim')
         monkeypatch.setattr(
             closure.trim_resolution, 'current_trim_audits',
                 lambda _store, **_kwargs: {2: (audit, 'd' * 64)})

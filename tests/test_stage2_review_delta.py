@@ -135,3 +135,28 @@ def test_snapshot_pairs_real_item_hash_changes_by_stable_fact_slot(monkeypatch):
     assert delta.changed_global_items[0].change == 'changed'
     assert delta.changed_global_items[0].changed_fields == ['value']
     assert delta.affected_chapter_ordinals == [1]
+
+
+def test_changed_identity_reopens_a_chapter_with_only_dialogue_reference(monkeypatch):
+    from contracts.schema.stage2 import DialogueSemantics
+    from novel.views import stage2 as view
+    from tests.test_stage2_blueprint_workpack import _Store, _book_subjects, _install, _report
+    main, blueprints, _ = _book_subjects()
+    store = _Store(main, blueprints)
+    _install(monkeypatch, store, _report())
+    pack = view.blueprint_review_workpack('.', store.ctx.sid)
+    chapter = next(row for row in pack.chapters if row.chapter_ordinal == 2)
+    hinge = chapter.beats[0].hinges[0]
+    chapter.beats[0].hinges[0] = hinge.model_copy(update={
+        'kind': '要害台词', 'dialogue': DialogueSemantics(
+            speaker={'kind': 'character', 'char_id': 'char_003'},
+            addressees=None, meaning='陌生人请乙关门', speech_act='请求')})
+    item = {'kind': 'role', 'item_id': 'role:char_003:old',
+            'subject_path': 'entities.characters.char_003.role', 'subject_sha256': 'a' * 64,
+            'subject': '路人', 'current_state': 'PASS', 'formal_evidence': []}
+    before = snapshot(pack.model_copy(update={'global_review': {'items': [item]}}))
+    changed = {**item, 'item_id': 'role:char_003:new', 'subject_sha256': 'b' * 64, 'subject': '守卫'}
+    after = snapshot(pack.model_copy(update={'global_review': {'items': [changed]}}))
+    delta = compare(before, after)
+    assert delta.affected_chapter_ordinals == [2]
+    assert delta.changed_global_items[0].affected_references == [f'chapter:2/hinge:{hinge.hinge_id}']

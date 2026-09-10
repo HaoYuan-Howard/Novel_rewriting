@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE1_MAIN_TEXT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+    STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
     STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT,
     STAGE2_GLOBAL_EDIT_FAILURE, STAGE2_GLOBAL_EDIT_INPUT_COMMIT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
@@ -37,22 +37,28 @@ from contracts.schema.report import CheckReport
 from contracts.schema.evaluation import (
     GlobalReview, GlobalReviewGenerationDisposition,
 )
-from contracts.schema.stage1 import MainText
+from contracts.schema.stage1 import HookCopy, MainText
+from contracts.schema.characters import CharacterRegistry
+from contracts.schema.knowledge import (
+    KnowledgeGrounding,
+    KnowledgeAgentTurnResponse as GlobalCandidateAgentTurnResponse,
+    KnowledgeFullTurn as GlobalCandidateFullTurn,
+    KnowledgeResponse as GlobalGroundingCandidateResponse,
+)
 from contracts.schema.stage2 import (
     BlueprintCharacterProjection, BlueprintProvenance, BlueprintScopeViolation,
     CharacterCollectionItem, GlobalCollectionAdd, GlobalCollectionDelete,
     GlobalCollectionSplit,
     ChapterBlueprints,
-    GlobalCandidateAgentTurnResponse, GlobalCandidateFullTurn,
     GlobalEdit, GlobalEditCommit, GlobalEditFailure, GlobalEditInputCommit,
-    GlobalGrounding, GlobalGroundingCandidateResponse,
-    GlobalProvenance, GlobalRoleFatePatchTurn,
-    RoleSplitResponse,
+    GlobalGrounding,
+    GlobalProvenance,
 )
 from novel import paths, prov
+from novel.stages.stage2 import grounding as grounding_io
 from novel.config import MAX_CONCURRENCY
 from novel.errors import (
-    ArtifactUnreadable, GateBlocked, PathRefused, ProvenanceRefused,
+    ArtifactUnreadable, BlockingFindingsUnresolved, GateBlocked, PathRefused, ProvenanceRefused,
     ResponseRepairBatchRequired, ResponseRepairRequired, TerminalState,
     UpstreamMissing,
 )
@@ -76,12 +82,11 @@ from novel.stages.stage2.character_refs import (
 )
 from novel.stages.stage2.global_contract import GlobalEvidenceContractSpec
 from novel.stages.stage2.global_evidence_candidates import (
-    GlobalEvidenceCandidateTable, compile_candidate_evidence,
+    GlobalEvidenceCandidateTable,
 )
 from novel.stages.stage2.blueprint_evidence_candidates import (
     BlueprintEvidenceCandidateTable, tables_by_chapter,
 )
-from novel.stages.stage2 import global_role_fate_patch
 from novel.stages.stage2.normalize import (
     EvidenceLocatorCorrection, GlobalNormalizationAccounting,
     normalize_blueprints, normalize_global,
@@ -116,7 +121,6 @@ _GLOBAL_INVALID = paths.invalid_of(GLOBAL_REL)
 GLOBAL_MAX_TOKENS = 96_000
 BLUEPRINT_MAX_TOKENS = 256_000
 BOUNDARY_MAX_TOKENS = 64_000
-ROLE_MAX_TOKENS = 32_000
 #: 三个 v2 上下文预算（2026-08-14 用 167 本语料 2612 章实测标定，脚本不入仓）：
 #: 4000 字邻章尾窗对 99.5% 的章是整章（章长 P50=795 / P90=1422 / P99=2695；
 #: 收到 2000 只剩 97.2%，不值得省）；1600/240 尾摘只够 ~7 个更早章、86.8% 的书
@@ -232,6 +236,9 @@ class GlobalCandidateContext:
     input_sha256: str
     main_text_sha256: str
     evidence_candidates_sha256: str
+    source_hook_sha256: str
+    characters_reference_sha256: str
+    _characters: CharacterRegistry = field(repr=False)
     _main_text: tuple[dict[str, Any], ...] = field(repr=False)
     _downstream: _GlobalDownstreamGuard = field(repr=False)
     _contract: GlobalEvidenceContractSpec = field(repr=False)
@@ -253,7 +260,6 @@ class RestoredGlobalCandidate:
     acceptance: dict[str, Any]
     revision: int
     turn_kind: str
-    accepted_role_patch_count: int
 
 
 @dataclass(frozen=True)
@@ -378,7 +384,8 @@ def _read_raw(store: ArtifactStore, model: type, rel: str) -> dict[str, Any] | N
     target = invalid if store.exists(invalid) else rel
     if not store.exists(target):
         return None
-    _art, raw = store.read_own(model, target)
+    _art, raw = (grounding_io.read_own(store, target) if model is GlobalGrounding
+                 else store.read_own(model, target))
     return raw
 
 
@@ -394,42 +401,20 @@ def _read_main_text(store: ArtifactStore) -> list[dict[str, Any]] | None:
     if not store.exists(MAIN_TEXT):
         return None
     art = store.read(MainText, MAIN_TEXT)
+    if store.ctx.node == 'stage2.global':
+        # 生成、免费修订和复验共同保留实际输入边；遗漏会使未变的源文案
+        # 审阅身份变化，并把局部订正错误扩大成 Blueprint 全量复审。
+        hook = store.read(HookCopy, STAGE1_HOOK_COPY)
+        registry = grounding_io.read_registry(store)
+        hard = _hard_hits(checks.check_characters(
+            registry.model_dump(mode='json', by_alias=True), art.model_dump(mode='json')))
+        if hard:
+            raise BlockingFindingsUnresolved(
+                '人物正式登记仍有 HARD；先由 stage2.characters 修复，不购买知识重试',
+                rules=hard, hint='stage2.characters --revalidate --actor <id> --reason <why>（0 LLM）')
+        if not hook.text.strip():
+            raise ArtifactUnreadable('源文案为空，不能核验 Global 的事实与开篇范围')
     return [s.model_dump(by_alias=True) for s in art.root]
-
-
-def _write_blueprint_character_projection(
-    store: ArtifactStore,
-    grounding: GlobalGrounding,
-    *,
-    main_text: list[dict[str, Any]] | None = None,
-) -> BlueprintCharacterProjection:
-    """Global 终态写回时，用真实 prompt inventory 的唯一纯函数物化投影。
-
-    投影未变时不重写字节；这不是小优化，而是 role/fate 等非消费
-    修订不让 Blueprint stale 的物理保证。载体损坏也可在这条 0-LLM
-    生产者路上重建，不需要重采 global。
-    """
-    sections = main_text if main_text is not None else _read_main_text(store)
-    if sections is None:
-        raise UpstreamMissing(
-            f'{MAIN_TEXT} 不在盘上——无法物化 Blueprint 称名投影')
-    characters = grounding.model_dump(
-        by_alias=True, mode='json')['entities']['characters']
-    expected = materialize_blueprint_character_projection(characters, sections)
-    if store.exists(BLUEPRINT_CHARACTER_REL):
-        try:
-            current, _raw = store.read_own(
-                BlueprintCharacterProjection,
-                BLUEPRINT_CHARACTER_REL,
-            )
-        except ArtifactUnreadable:
-            current = None
-        if (current is not None
-                and current.model_dump(by_alias=True, mode='json')
-                == expected.model_dump(by_alias=True, mode='json')):
-            return current
-    store.write_round(BLUEPRINT_CHARACTER_REL, expected)
-    return expected
 
 
 def _require_blueprint_character_projection(
@@ -437,8 +422,8 @@ def _require_blueprint_character_projection(
 ) -> tuple[BlueprintCharacterProjection, dict[str, Any]]:
     """Blueprint 的唯一称名输入；缺/坏/stale 都关闭并指向 0-LLM 恢复。"""
     recovery = (
-        'stage2.global --renormalize（0 LLM）会从当前 formal/INVALID global '
-        '与 MainText 重建该投影')
+        'stage2.characters --revalidate --actor <id> --reason <why>（0 LLM）'
+        '从当前人物登记与 MainText 重建该投影')
     projection_exists = store.exists(BLUEPRINT_CHARACTER_REL)
     try:
         freshness = store.freshness(BLUEPRINT_CHARACTER_REL)
@@ -451,8 +436,8 @@ def _require_blueprint_character_projection(
         ) from exc
     if freshness.reason == 'global_naming_blocked':
         raise ProvenanceRefused(
-            '最新 Global 候选仍有会改变 Blueprint 称名闭集的 HARD；'
-            '先走 stage2.global typed edit / '
+            '最新人物登记仍有会改变 Blueprint 称名闭集的 HARD；'
+            '先走 stage2.characters typed edit / '
             '`--revalidate --actor <id> --reason <why>`（0 LLM）。'
             '在称名面收口前不得启动付费 Blueprint')
     if not projection_exists:
@@ -460,7 +445,7 @@ def _require_blueprint_character_projection(
             f'{BLUEPRINT_CHARACTER_REL} 不在盘上；{recovery}')
     if freshness.state != 'fresh':
         raise ProvenanceRefused(
-            f'{BLUEPRINT_CHARACTER_REL} 无法证明绑定当前最新 global + '
+            f'{BLUEPRINT_CHARACTER_REL} 无法证明绑定当前最新人物登记 + '
             f'MainText（{freshness.state}/{freshness.reason}）；{recovery}')
     try:
         artifact = store.read(
@@ -744,13 +729,14 @@ def _prepare_global_revalidation_evaluation(
     if not store.exists(_GLOBAL_INVALID):
         raise UpstreamMissing(
             f'{_GLOBAL_INVALID} 不在盘上——没有被拦下的全局问题稿要提升')
-    baseline = store.revalidation_baseline(
-        GLOBAL_REL, GlobalGrounding, actor=actor, reason=reason)
-    artifact, raw = store.read_own(GlobalGrounding, _GLOBAL_INVALID)
+    baseline = grounding_io.revalidation_baseline(store, actor=actor, reason=reason)
+    artifact, raw = grounding_io.read_own(store, _GLOBAL_INVALID)
     data = copy.deepcopy(raw)
     data.pop('_provenance', None)
     restore_failed_global_evidence_locators(
         data, baseline.provenance.evidence_locator_failures)
+    from novel.stages.stage2.normalize import restore_pruned_secret_setups
+    restore_pruned_secret_setups(data, baseline.provenance.setup_chapters_pruned)
     data, accounting = normalize_global(data, main_text)
     rebuilt = GlobalGrounding.model_validate({
         **data,
@@ -804,8 +790,7 @@ def run_revalidate(
             identity = _global_revalidation_commit_identity(ctx, store)
             if evaluated.hard_hits:
                 if identity is not None:
-                    invalid, invalid_sha256 = store.read_own_with_sha256(
-                        GlobalGrounding, _GLOBAL_INVALID, require_current=True)
+                    invalid, invalid_sha256 = grounding_io.read_own_with_sha256(store, _GLOBAL_INVALID, require_current=True)
                     candidate = invalid.model_dump(mode='json', by_alias=True)
                     candidate.pop('_provenance', None)
                     _write_global_edit_failure(
@@ -843,8 +828,8 @@ def run_revalidate(
                     raise ProvenanceRefused(
                         'Supervisor legacy revalidate 只接管 exact reviewed INVALID '
                         '且必须按同一 revalidate 尺子无 HARD')
-            promoted = store.prepared_invalid_promotion(
-                GLOBAL_REL, GlobalGrounding, actor=actor, reason=reason,
+            promoted = grounding_io.prepared_invalid_promotion(
+                store, actor=actor, reason=reason,
                 artifact_override=rebuilt)
             previous_review = (
                 store.read_own(GlobalReview, GLOBAL_REVIEW_REL)[0]
@@ -889,14 +874,6 @@ def run_revalidate(
             f'{_INVALID} 不在盘上——没有被拦下的逐章问题稿要提升')
     _projection, character_projection = \
         _require_blueprint_character_projection(store)
-    invalid_freshness = store.freshness(_INVALID)
-    if (invalid_freshness.state == 'unknown'
-            and invalid_freshness.reason == 'legacy_blueprint_inputs'):
-        raise TerminalState(
-            'stage2/chapter_blueprints.INVALID.json 仍记录旧 '
-            '`{MainText, Global}` 来源边；`--revalidate` 只能继承原生成来源账，'
-            '不能把旧账伪造成当前消费。请改跑 '
-            '`stage2.blueprint --renormalize`（0 LLM）刷新真实来源边')
     baseline = store.revalidation_baseline(
         BLUEPRINT_REL, ChapterBlueprints, actor=actor, reason=reason)
     artifact, raw = store.read_own(ChapterBlueprints, _INVALID)
@@ -950,7 +927,8 @@ def build_prompts(
     if ctx.node == 'stage2.global':
         spec = _active_global_spec()
         system, user, _candidates = build_global_request(
-            ctx.title, mt, spec)
+            ctx.title, mt, spec, source_hook=store.read(HookCopy, STAGE1_HOOK_COPY).text,
+            character_reference=grounding_io.knowledge_reference(grounding_io.read_registry(store)))
         return [(None, system, user)]
 
     ordinals = tuple(int(s.get('chapter_ordinal') or 0) for s in mt)
@@ -1182,11 +1160,16 @@ def build_global_user(
     main_text: list[dict[str, Any]],
     *,
     evidence_candidates: GlobalEvidenceCandidateTable,
+    source_hook: str,
+    character_reference: dict[str, dict[str, Any]],
 ) -> str:
     """全书 user；段标记与 lookup 来自同一张关闭候选表。"""
     body = evidence_candidates.render()
     return '\n\n'.join([
         f'《{title}》',
+        '── 源文案（不可变材料）──\n' + source_hook,
+        '── 冻结人物引用（只读）──\n' + json.dumps(
+            character_reference, ensure_ascii=False, sort_keys=True, separators=(',', ':')),
         '── 章节索引（一切对章的引用用阅读序章号）──\n' + _chapter_index(main_text),
         '── 全书证据候选（不可变原文；行首 ID 不属于正文）──\n' + body,
     ])
@@ -1197,6 +1180,8 @@ def build_global_request(
     main_text: list[dict[str, Any]],
     spec: GlobalEvidenceContractSpec,
     *,
+    source_hook: str,
+    character_reference: dict[str, dict[str, Any]],
     agent_envelope: bool = False,
 ) -> tuple[str, str, GlobalEvidenceCandidateTable]:
     """从同一份 MainText 构造 system/user/lookup 三元组。"""
@@ -1204,7 +1189,8 @@ def build_global_request(
     return (
         build_global_agent_system(spec) if agent_envelope else spec.system,
         build_global_user(
-            title, main_text, evidence_candidates=candidates),
+            title, main_text, evidence_candidates=candidates, source_hook=source_hook,
+            character_reference=character_reference),
         candidates,
     )
 
@@ -1212,44 +1198,10 @@ def build_global_request(
 def build_global_agent_system(
     spec: GlobalEvidenceContractSpec | None = None,
 ) -> str:
-    """为 agent 固定唯一 candidate wire 的全量/role-fate 窄修信封。"""
+    """原生 schema 承担结构；只下发必要知识说明，不再重复完整示例和静态窄修信封。"""
     spec = spec or _active_global_spec()
-
-    full = {
-        'payload': {
-            'kind': 'full_candidate',
-            'candidate': spec.hint,
-        },
-    }
-    role_fate_patch = {'payload': {
-        'kind': 'role_fate_patch',
-        'candidate_sha256': '代码反馈给出的64位小写sha256',
-        'evidence_table_sha256': '代码反馈给出的候选表64位小写sha256',
-        'changes': [{
-            'char_id': '只能复制代码反馈 allowed_char_ids 中的一项',
-            'role': '只含静态身份与位置',
-            'role_evidence': {'evidence_candidate_id': 'e000001'},
-            'fate': '搬入的完整经历与结局事实',
-            'fate_evidence': {'evidence_candidate_id': 'e000002'},
-        }],
-    }}
-    return (
-        spec.instruction
-        + '\n\n最终只沿请求声明的唯一结构化出口提交一份'
-          '符合响应 JSON Schema 的完整对象，不要解释、不要 markdown。'
-          '第一次回答必须使用 full_candidate。只有代码反馈明确给出 '
-          'repair_contract.kind=role_fate_patch 时，才使用 role_fate_patch；'
-          '它必须逐字回显 candidate_sha256 与 evidence_table_sha256，'
-          '人物集合必须与 allowed_char_ids 精确相等，四字段原子提交。'
-          'evidence_candidate_id 格式/成员失败会在 accepted 前拒绝，并保持'
-          '当前轮 repair contract；未进入 role_fate_patch 前的其他 HARD 才使用'
-          'full_candidate。一旦进入 role_fate_patch 就不得退回完整候选。'
-        + '\n\n完整候选形状：\n'
-        + json.dumps(full, ensure_ascii=False, separators=(',', ':'))
-        + '\n\n代码指定 role/fate 窄修时的形状：\n'
-        + json.dumps(
-            role_fate_patch, ensure_ascii=False, separators=(',', ':'))
-    )
+    return (spec.instruction + '\n\n响应固定为 payload.kind=full_candidate，'
+            'payload.candidate 提交本次完整必要知识；只使用声明的结构化出口。')
 
 
 def build_blueprint_user(title: str, main_text: list[dict[str, Any]],
@@ -1406,64 +1358,6 @@ def _blueprint_hard_hits(outcomes: list[Outcome]) -> list[str]:
     )
 
 
-def global_role_fate_patch_scope(
-        prepared: GlobalCandidateContext,
-        evaluation: GlobalCandidateEvaluation,
-) -> global_role_fate_patch.RoleFatePatchScope | None:
-    """只为纯 ``role_leaks_fate`` 建立 typed allowlist。"""
-    response = evaluation._response
-    table = prepared._evidence_candidates
-    actual_sha = global_response_sha256(response)
-    if actual_sha != evaluation.response_sha256:
-        raise ProvenanceRefused(
-            'stage2.global 评估后 raw candidate 已变异；'
-            '拒绝用旧 SHA 构造 role/fate patch allowlist')
-    scope = global_role_fate_patch.scope_for(
-        response,
-        hard_hits=evaluation.hard_hits,
-        candidate_sha256=actual_sha,
-        evidence_table=table,
-    )
-    if (scope is not None
-            and prepared.evidence_candidates_sha256
-            != scope.evidence_table_sha256):
-        raise ProvenanceRefused(
-            'stage2.global 冻结候选表身份与 role/fate patch scope 漂移')
-    return scope
-
-
-def global_role_fate_patch_feedback_rows(
-        evaluation: GlobalCandidateEvaluation,
-        scope: global_role_fate_patch.RoleFatePatchScope,
-) -> list[dict[str, object]]:
-    """给 provider 的失败事实与双 SHA 修订契约；服务账不复制正文。"""
-    rows = evaluation.feedback_rows()
-    matched = [row for row in rows if row.get('rule') == 'role_leaks_fate']
-    if len(rows) != 1 or len(matched) != 1:
-        raise ValueError(
-            'role/fate patch 必须恰好对应唯一 role_leaks_fate 反馈')
-    matched[0]['repair_contract'] = scope.to_dict()
-    return rows
-
-
-def apply_global_role_fate_patch(
-        prepared: GlobalCandidateContext,
-        evaluation: GlobalCandidateEvaluation,
-        patch: GlobalRoleFatePatchTurn,
-) -> global_role_fate_patch.AppliedRoleFatePatch:
-    """关闭式合并 role/fate patch；结果仍须走完整 evaluate/finalize。"""
-    response = evaluation._response
-    table = prepared._evidence_candidates
-    scope = global_role_fate_patch_scope(prepared, evaluation)
-    if scope is None:
-        raise ValueError(
-            '当前候选不是纯 role_leaks_fate，禁止 role/fate patch')
-    return global_role_fate_patch.apply_patch(
-        response, patch, scope, table,
-        actual_candidate_sha256=global_response_sha256(response),
-    )
-
-
 def global_full_candidate_feedback_rows(
     evaluation: GlobalCandidateEvaluation,
 ) -> list[dict[str, object]]:
@@ -1484,11 +1378,10 @@ def _compile_global_response(
 ) -> dict[str, Any]:
     """把 wire response 收到既有正式前形；candidate ID 绝不穿过此边界。"""
     if not isinstance(response, GlobalGroundingCandidateResponse):
-        raise ValueError('stage2.global 只接受 paragraph-candidate-v1 响应')
-    return compile_candidate_evidence(
-        response.model_dump(by_alias=True, mode='json'),
-        prepared._evidence_candidates,
-    )
+        raise ValueError('stage2.global 只接受 必要知识候选响应')
+    compiled = grounding_io.compile_response(
+        response, prepared._evidence_candidates, prepared._characters)
+    return grounding_io.compiled_view_payload(compiled, prepared._characters)
 
 
 def global_response_validator(
@@ -1511,37 +1404,12 @@ def global_full_candidate_validator(
     """agent 首轮/完整重写轮的分支 + candidate membership 联合闸。"""
     def validate(response: BaseModel, _wire: Any) -> str | None:
         if not isinstance(response, GlobalCandidateAgentTurnResponse):
-            return '本次只接受 paragraph-candidate-v1 agent 信封'
+            return '本次只接受 必要知识 agent 信封'
         if not isinstance(response.payload, GlobalCandidateFullTurn):
             return '本轮只接受 full_candidate'
         candidate = response.payload.candidate
         try:
             _compile_global_response(prepared, candidate)
-        except (TypeError, ValueError) as exc:
-            return str(exc)
-        return None
-
-    return validate
-
-
-def global_role_fate_patch_validator(
-    prepared: GlobalCandidateContext,
-    evaluation: GlobalCandidateEvaluation,
-) -> Callable[[GlobalCandidateAgentTurnResponse, Any], str | None]:
-    """role/fate 修复轮只接受绑定当前候选/候选表的窄 patch。
-
-    响应 schema 是 full/patch union，只负责让同一 provider session 的输出信封
-    保持稳定；真正的状态机必须在这里拒绝 full re-entry。错误 SHA、人物集合或
-    evidence ID 也都在 accepted/checkpoint/audit 之前关闭式返回。
-    """
-    def validate(
-        response: GlobalCandidateAgentTurnResponse, _wire: Any,
-    ) -> str | None:
-        if not isinstance(response.payload, GlobalRoleFatePatchTurn):
-            return '本轮 repair_contract 只接受 role_fate_patch，不接受完整候选'
-        try:
-            apply_global_role_fate_patch(
-                prepared, evaluation, response.payload)
         except (TypeError, ValueError) as exc:
             return str(exc)
         return None
@@ -1571,92 +1439,47 @@ def ensure_global_agent_run(
 
 
 def _global_checkpoint_state(
-        prepared: GlobalCandidateContext,
-        response: GlobalGroundingCandidateResponse,
-        *,
-        turn_kind: str,
-        base_response: GlobalGroundingCandidateResponse | None,
-        accepted_role_patch_count: int,
+        prepared: GlobalCandidateContext, response: GlobalGroundingCandidateResponse,
+        *, turn_kind: str,
 ) -> dict[str, object]:
     return {
-        'kind': 'stage2-global-candidate-v2',
-        'turn_kind': turn_kind,
-        'accepted_role_patch_count': accepted_role_patch_count,
+        'kind': 'stage2-knowledge-candidate-v3', 'turn_kind': turn_kind,
         'main_text_sha256': prepared.main_text_sha256,
         'evidence_candidates_sha256': prepared.evidence_candidates_sha256,
         'candidate': response.model_dump(by_alias=True, mode='json'),
-        'candidate_sha256': global_response_sha256(response),
-        'base_candidate': (
-            None if base_response is None else
-            base_response.model_dump(by_alias=True, mode='json')),
-        'base_candidate_sha256': (
-            None if base_response is None else
-            global_response_sha256(base_response)),
-        'custody': None,
+        'candidate_sha256': global_response_sha256(response), 'custody': None,
     }
 
 
 def write_global_agent_checkpoint(
-        ctx: RunContext,
-        source: _GlobalResponseSource,
-        prepared: GlobalCandidateContext,
-        turn: BaseModel,
+        ctx: RunContext, source: _GlobalResponseSource,
+        prepared: GlobalCandidateContext, turn: BaseModel,
         response: GlobalGroundingCandidateResponse,
-        *,
-        base_response: GlobalGroundingCandidateResponse | None = None,
-        accepted_role_patch_count: int = 0,
 ) -> None:
-    """accepted stdout 到手后立刻写 append-only checkpoint。"""
+    """accepted stdout 到手先写不可变知识 checkpoint，再做业务提交。"""
     from novel.llm import stage2_global_runs
-
     assert_global_main_text_current(ctx, prepared)
-    payload = getattr(turn, 'payload', None)
-    if isinstance(payload, GlobalCandidateFullTurn):
-        turn_kind = 'full_candidate'
-        if base_response is not None:
-            raise ProvenanceRefused('Global full_candidate checkpoint 不得携带 patch base')
-        if accepted_role_patch_count != 0:
-            raise ProvenanceRefused(
-                'Global full_candidate checkpoint 不得继承 role/fate patch 计数')
-    elif isinstance(payload, GlobalRoleFatePatchTurn):
-        turn_kind = 'role_fate_patch'
-        if not isinstance(base_response, GlobalGroundingCandidateResponse):
-            raise ProvenanceRefused(
-                'Global role_fate_patch checkpoint 缺 candidate-only typed base')
-        if (not isinstance(accepted_role_patch_count, int)
-                or isinstance(accepted_role_patch_count, bool)
-                or accepted_role_patch_count < 1):
-            raise ProvenanceRefused(
-                'Global role_fate_patch checkpoint 的 accepted 计数必须是正整数')
-    else:
-        raise ProvenanceRefused(
-            f'Global checkpoint 尚未登记 turn 类型 {type(payload).__name__}')
+    if (not isinstance(turn, GlobalCandidateAgentTurnResponse)
+            or not isinstance(turn.payload, GlobalCandidateFullTurn)
+            or turn.payload.candidate != response):
+        raise ProvenanceRefused('知识 checkpoint 必须与本次 full_candidate 回答完全一致')
     checkpoint = source.accepted_checkpoint(ctx.node)
     turn_index = checkpoint.get('accepted_turn_index')
     if not isinstance(turn_index, int) or isinstance(turn_index, bool) or turn_index < 1:
-        raise ProvenanceRefused('Global accepted checkpoint 缺正整数 turn index')
+        raise ProvenanceRefused('知识 accepted checkpoint 缺正整数 turn index')
     stage2_global_runs.write_checkpoint(
-        ctx,
-        input_sha256=prepared.input_sha256,
-        system=prepared.system,
-        user=prepared.user,
-        response_model=prepared.agent_response_model,
-        max_tokens=GLOBAL_MAX_TOKENS,
+        ctx, input_sha256=prepared.input_sha256, system=prepared.system, user=prepared.user,
+        response_model=prepared.agent_response_model, max_tokens=GLOBAL_MAX_TOKENS,
         response_payload=turn.model_dump(by_alias=True, mode='json'),
-        acceptance=checkpoint,
-        revision_key=f'candidate:{turn_index}',
-        state_payload=_global_checkpoint_state(
-            prepared, response, turn_kind=turn_kind,
-            base_response=base_response,
-            accepted_role_patch_count=accepted_role_patch_count),
-    )
+        acceptance=checkpoint, revision_key=f'candidate:{turn_index}',
+        state_payload=_global_checkpoint_state(prepared, response, turn_kind='full_candidate'))
 
 
 def _global_validator_custody_chain(
         ctx: RunContext, prepared: GlobalCandidateContext,
 ) -> str:
     return _canonical_sha256({
-        'kind': 'stage2-global-validator-custody-v1',
+        'kind': 'stage2-knowledge-validator-custody-v2',
         'run_id': ctx.run_id,
         'sid': ctx.sid,
         'node': ctx.node,
@@ -1670,107 +1493,26 @@ def _global_validator_custody_chain(
     })
 
 
-def _assert_global_custody_durable_state(
-        ctx: RunContext,
-        prepared: GlobalCandidateContext,
-        *,
-        expected_turn_kind: str,
-        base_response: GlobalGroundingCandidateResponse | None,
-        accepted_role_patch_count: int,
-) -> None:
-    """把调用者的内存 patch 状态与 latest durable checkpoint 对证。
-
-    dynamic-validator rejection 会覆盖 client 的内存 accepted attempt，却不会写业务
-    checkpoint。custody 因此只能把“被拒 turn 之前”的 base/count 绑定到最新 durable
-    candidate；若裸信调用者传入的 ``count``，真实第二次 role patch 可被伪装成第一次，
-    恢复口就会丢失窄修的单调计数与 sticky 状态。
-    """
+def _assert_global_custody_durable_state(ctx: RunContext, prepared: GlobalCandidateContext) -> None:
+    """最后一份动态拒稿只能承接同一知识契约下的 durable 状态。"""
     from novel.llm import stage2_global_runs
-
     durable = stage2_global_runs.restore_checkpoint(
-        ctx,
-        input_sha256=prepared.input_sha256,
-        system=prepared.system,
-        user=prepared.user,
-        response_model=prepared.agent_response_model,
-        max_tokens=GLOBAL_MAX_TOKENS,
-    )
-    if expected_turn_kind == 'full_candidate':
-        # 首轮 full 的 dynamic rejection 合法地发生在首个 checkpoint 之前；若已有
-        # durable candidate，它也只能属于尚未进入 role patch 的 count=0 状态。
-        if durable is not None:
-            state_count = durable.state_payload.get(
-                'accepted_role_patch_count')
-            if state_count != 0:
-                raise ProvenanceRefused(
-                    'Global full custody 与 durable role/fate sticky 状态冲突')
-        return
-    if durable is None or base_response is None:
-        raise ProvenanceRefused(
-            f'Global {expected_turn_kind} custody 缺 latest durable base checkpoint')
-    state = durable.state_payload
-    base_payload = base_response.model_dump(by_alias=True, mode='json')
-    base_sha = global_response_sha256(base_response)
-    if (state.get('candidate') != base_payload
-            or state.get('candidate_sha256') != base_sha
-            or state.get('accepted_role_patch_count')
-            != accepted_role_patch_count):
-        raise ProvenanceRefused(
-            f'Global {expected_turn_kind} custody 的 base/count 与 latest durable '
-            'checkpoint 不一致')
+        ctx, input_sha256=prepared.input_sha256, system=prepared.system, user=prepared.user,
+        response_model=prepared.agent_response_model, max_tokens=GLOBAL_MAX_TOKENS)
+    if durable is not None:
+        _validate_global_checkpoint_state(prepared, durable.state_payload)
 
 
 def custody_global_validator_rejection(
-        ctx: RunContext,
-        source: Any,
-        prepared: GlobalCandidateContext,
-        *,
-        expected_turn_kind: str = 'full_candidate',
-        base_response: GlobalGroundingCandidateResponse | None = None,
-        accepted_role_patch_count: int = 0,
+        ctx: RunContext, source: Any, prepared: GlobalCandidateContext,
 ) -> str | None:
-    """按当轮状态封存最后一份 schema-valid / dynamic-validator 拒稿。
-
-    ``accepted_role_patch_count`` 是这份被拒 turn **之前**已经 accepted 的窄修数；
-    因此 role/fate replacement 成功后必须严格增加 1。旧 full 调用省略
-    三个关键字时仍保持原语义。
-    """
+    """封存固定知识信封的最后一份 typed 动态拒稿，不购买第二份回答。"""
     from novel.llm import response_repair
 
     rejected = source.last_json_rejection(ctx.node)
     if rejected is None:
         return None
-    if expected_turn_kind == 'full_candidate':
-        if base_response is not None or accepted_role_patch_count != 0:
-            raise ProvenanceRefused(
-                'Global full_candidate custody 不得携带 base/role patch 计数')
-    elif expected_turn_kind == 'evidence_patch':
-        raise ProvenanceRefused(
-            'Global locator evidence_patch custody 已退役；不能再保管旧 wire 拒稿')
-    elif expected_turn_kind == 'role_fate_patch':
-        if (not isinstance(base_response, GlobalGroundingCandidateResponse)
-                or not isinstance(accepted_role_patch_count, int)
-                or isinstance(accepted_role_patch_count, bool)
-                or accepted_role_patch_count < 0):
-            raise ProvenanceRefused(
-                'Global role_fate_patch custody 必须绑定 candidate base，'
-                '且写前 accepted 计数必须是非负整数')
-    else:
-        raise ProvenanceRefused(
-            f'Global custody 未登记 expected_turn_kind={expected_turn_kind!r}')
-    base_payload = (
-        None if base_response is None else
-        base_response.model_dump(by_alias=True, mode='json'))
-    base_sha256 = (
-        None if base_response is None else
-        global_response_sha256(base_response))
-    _assert_global_custody_durable_state(
-        ctx,
-        prepared,
-        expected_turn_kind=expected_turn_kind,
-        base_response=base_response,
-        accepted_role_patch_count=accepted_role_patch_count,
-    )
+    _assert_global_custody_durable_state(ctx, prepared)
     assert_global_main_text_current(ctx, prepared)
     attempt_id = rejected.get('attempt_id')
     content = rejected.get('content')
@@ -1829,8 +1571,7 @@ def custody_global_validator_rejection(
             'repair_eligible': True,
             'eligibility_reason': (
                 'Stage2 Global 已有完整 typed envelope；人工 replacement 必须保持'
-                f'当轮 expected_turn_kind={expected_turn_kind}，并按当前 schema、'
-                '冻结 base、candidate table 与业务判据重放同一 applicator'),
+                '完整 full_candidate，并按当前 schema、关闭候选表与业务判据重验'),
             'response_model': prepared.agent_response_model.__name__,
             'required_top_level': required_top_level(
                 prepared.agent_response_model),
@@ -1840,10 +1581,7 @@ def custody_global_validator_rejection(
             'candidate_subject_sha256': prepared.input_sha256,
             'main_text_sha256': prepared.main_text_sha256,
             'evidence_candidates_sha256': prepared.evidence_candidates_sha256,
-            'expected_turn_kind': expected_turn_kind,
-            'base_candidate': base_payload,
-            'base_candidate_sha256': base_sha256,
-            'accepted_role_patch_count': accepted_role_patch_count,
+            'expected_turn_kind': 'full_candidate',
             'acceptance': acceptance,
             'typed_payload': typed_payload,
             'response': {
@@ -1875,78 +1613,11 @@ def custody_global_validator_rejection(
     return rel
 
 
-def _global_custody_expectation(
-        rejection: dict[str, Any],
-) -> tuple[
-    str,
-    GlobalGroundingCandidateResponse | None,
-    int,
-]:
-    """读取新状态绑定；三格全缺仅兼容既有 full-candidate custody。"""
-    state_keys = {
-        'expected_turn_kind', 'base_candidate',
-        'base_candidate_sha256', 'accepted_role_patch_count',
-    }
-    present = state_keys & set(rejection)
-    if not present:
-        return 'full_candidate', None, 0
-    if present != state_keys:
-        raise ProvenanceRefused(
-            'Global custody rejection 的 expected/base/count 状态只写了一半')
-    expected = rejection.get('expected_turn_kind')
-    base_raw = rejection.get('base_candidate')
-    base_sha = rejection.get('base_candidate_sha256')
-    count = rejection.get('accepted_role_patch_count')
-    if not isinstance(count, int) or isinstance(count, bool):
-        raise ProvenanceRefused('Global custody accepted_role_patch_count 不是整数')
-    if expected == 'full_candidate':
-        if base_raw is not None or base_sha is not None or count != 0:
-            raise ProvenanceRefused(
-                'Global full custody rejection 意外携带 base/patch 计数')
-        return expected, None, count
-    if expected == 'evidence_patch':
-        raise ProvenanceRefused(
-            'Global locator evidence_patch custody 已退役；旧拒稿不能在当前 '
-            'paragraph-candidate-v1 wire 上恢复')
-    if expected == 'role_fate_patch':
-        if not isinstance(base_raw, dict) or count < 0:
-            raise ProvenanceRefused(
-                'Global role/fate custody rejection 缺 candidate base 或计数非法')
-        base = GlobalGroundingCandidateResponse.model_validate(base_raw)
-    else:
-        raise ProvenanceRefused(
-            f'Global custody rejection 含未知 expected_turn_kind={expected!r}')
-    if global_response_sha256(base) != base_sha:
-        raise ProvenanceRefused('Global custody rejection 的 base SHA 不闭合')
-    return expected, base, count
-
-
-def _global_custody_base_evaluation(
-        ctx: RunContext,
-        prepared: GlobalCandidateContext,
-        base: GlobalGroundingCandidateResponse,
-        acceptance: dict[str, Any],
-) -> GlobalCandidateEvaluation:
-    """用 sealed acceptance 的来源事实重建 patch dynamic validator 所需 base。"""
-    links = acceptance.get('attempt_links')
-    if not isinstance(links, list) or not links:
-        raise ProvenanceRefused('Global custody acceptance 缺 attempt links')
-    models = tuple(sorted({
-        str(row.get('model')) for row in links
-        if isinstance(row, dict) and isinstance(row.get('model'), str)
-    }))
-    if not models:
-        raise ProvenanceRefused('Global custody acceptance 缺 adopted model 集合')
-    _assert_global_guard_current(ctx, prepared)
-    return _materialize_global_evaluation(
-        ctx,
-        prepared,
-        base,
-        requested_model=str(acceptance.get('model') or ''),
-        adopted_models=models,
-        source_attempt_id=str(acceptance.get('attempt_id') or ''),
-        settle=False,
-    )
+def _global_custody_expectation(rejection: dict[str, Any]) -> None:
+    if (rejection.get('expected_turn_kind') != 'full_candidate'
+            or any(key in rejection for key in (
+                'base_candidate', 'base_candidate_sha256', 'accepted_role_patch_count'))):
+        raise ProvenanceRefused('知识 custody 不是当前唯一 full_candidate 契约')
 
 
 def _note_global_custody_terminal_outcome(
@@ -2083,8 +1754,7 @@ def adopt_global_validator_resolution_checkpoint(
         request_fingerprints=fingerprints,
     )
     assert_global_main_text_current(ctx, prepared)
-    expected_turn_kind, base, prior_role_patch_count = \
-        _global_custody_expectation(rejection)
+    _global_custody_expectation(rejection)
     replacement_raw = resolution.get('candidate')
     try:
         replacement_turn = prepared.agent_response_model.model_validate(
@@ -2096,52 +1766,20 @@ def adopt_global_validator_resolution_checkpoint(
         _note_global_custody_terminal_outcome(ctx, record)
         raise TerminalState(
             f'Global typed replacement 不通过当前 schema：{exc}') from exc
-    payload = getattr(replacement_turn, 'payload', None)
-    why: str | None
-    if expected_turn_kind == 'full_candidate':
-        if not isinstance(payload, GlobalCandidateFullTurn):
-            why = '当轮 expected_turn_kind=full_candidate，只接受完整 full_candidate'
-        else:
-            why = global_full_candidate_validator(prepared)(
-                replacement_turn, None)
-        if why is None:
-            assert isinstance(payload, GlobalCandidateFullTurn)
-            response = payload.candidate
-        result_role_patch_count = 0
-    else:
-        assert expected_turn_kind == 'role_fate_patch'
-        if not isinstance(payload, GlobalRoleFatePatchTurn):
-            why = '当轮 expected_turn_kind=role_fate_patch，禁止借 custody 回 full'
-        else:
-            assert isinstance(base, GlobalGroundingCandidateResponse)
-            base_evaluation = _global_custody_base_evaluation(
-                ctx, prepared, base, acceptance)
-            why = global_role_fate_patch_validator(
-                prepared, base_evaluation)(replacement_turn, None)
-        if why is None:
-            assert isinstance(payload, GlobalRoleFatePatchTurn)
-            response = apply_global_role_fate_patch(
-                prepared, base_evaluation, payload).response
-        result_role_patch_count = prior_role_patch_count + 1
-        if result_role_patch_count < 1:
-            raise ProvenanceRefused(
-                'Global role/fate custody accepted 计数未严格递增')
+    why = global_full_candidate_validator(prepared)(replacement_turn, None)
+    response = replacement_turn.payload.candidate
     if why is not None:
         response_repair.write_outcome(
             record, decision='rejected', gate='validator',
             detail=None, why=why)
         _note_global_custody_terminal_outcome(ctx, record)
         raise TerminalState(
-            f'Global typed replacement 不通过当前 {expected_turn_kind} validator：{why}')
+            f'知识 typed replacement 不通过当前 validator：{why}')
     state = _global_checkpoint_state(
-        prepared, response, turn_kind='custody_replacement',
-        base_response=base,
-        accepted_role_patch_count=result_role_patch_count)
+        prepared, response, turn_kind='custody_replacement')
     state['custody'] = {
         'chain_id': chain,
         'attempt_id': record.attempt_id,
-        'expected_turn_kind': expected_turn_kind,
-        'accepted_role_patch_count_before': prior_role_patch_count,
         'resolution_sha256': resolution.get('resolution_sha256'),
         'candidate_payload_sha256': resolution.get(
             'candidate_payload_sha256'),
@@ -2166,211 +1804,67 @@ def adopt_global_validator_resolution_checkpoint(
     _note_global_custody_terminal_outcome(ctx, record)
 
 
-def restore_global_agent_checkpoint(
-        ctx: RunContext,
-        source: _GlobalResponseSource,
-        prepared: GlobalCandidateContext,
-) -> RestoredGlobalCandidate | None:
-    """同 run 零 wire 恢复 latest accepted 候选，并重放 patch applicator。"""
-    from novel.llm import stage2_global_runs
-
-    assert_global_main_text_current(ctx, prepared)
-    restored = stage2_global_runs.restore_checkpoint(
-        ctx,
-        input_sha256=prepared.input_sha256,
-        system=prepared.system,
-        user=prepared.user,
-        response_model=prepared.agent_response_model,
-        max_tokens=GLOBAL_MAX_TOKENS,
-    )
-    if restored is None:
-        return None
-    source.restore_checkpoint_acceptance(
-        ctx.node,
-        restored.acceptance,
-        system=prepared.system,
-        user=prepared.user,
-        max_tokens=GLOBAL_MAX_TOKENS,
-        recovery_policy=stage2_global_runs.RECOVERY_POLICY,
-    )
-    assert_global_main_text_current(ctx, prepared)
-    state = restored.state_payload
-    expected_keys = {
-        'kind', 'turn_kind', 'accepted_role_patch_count', 'main_text_sha256',
-        'evidence_candidates_sha256', 'candidate', 'candidate_sha256',
-        'base_candidate', 'base_candidate_sha256', 'custody',
-    }
-    if set(state) != expected_keys or state.get('kind') != 'stage2-global-candidate-v2':
-        raise ProvenanceRefused('Global checkpoint state 形状/版本不合法')
-    if (state.get('main_text_sha256') != prepared.main_text_sha256
-            or state.get('evidence_candidates_sha256')
-            != prepared.evidence_candidates_sha256):
-        raise ProvenanceRefused(
-            'Global checkpoint MainText/candidate table subject 与当前准备态漂移')
-
-    turn = restored.value
-    payload = getattr(turn, 'payload', None)
-    turn_kind = state.get('turn_kind')
-    accepted_role_patch_count = state.get('accepted_role_patch_count')
-    if (not isinstance(accepted_role_patch_count, int)
-            or isinstance(accepted_role_patch_count, bool)
-            or accepted_role_patch_count < 0):
-        raise ProvenanceRefused(
-            'Global checkpoint accepted_role_patch_count 必须是非负整数')
-    if turn_kind == 'full_candidate':
-        if not isinstance(payload, GlobalCandidateFullTurn):
-            raise ProvenanceRefused('Global checkpoint full_candidate 信封分支漂移')
-        if state.get('base_candidate') is not None or state.get('base_candidate_sha256') is not None:
-            raise ProvenanceRefused('Global checkpoint full_candidate 意外携带 patch base')
-        if accepted_role_patch_count != 0:
-            raise ProvenanceRefused(
-                'Global full_candidate checkpoint 意外携带 role/fate patch 计数')
-        response = payload.candidate
-    elif turn_kind == 'evidence_patch':
-        raise ProvenanceRefused(
-            'Global locator evidence_patch checkpoint 已退役；旧 checkpoint '
-            '不能在当前 paragraph-candidate-v1 wire 上恢复')
-    elif turn_kind == 'role_fate_patch':
-        if not isinstance(payload, GlobalRoleFatePatchTurn):
-            raise ProvenanceRefused(
-                'Global checkpoint role_fate_patch 信封分支漂移')
-        if accepted_role_patch_count < 1:
-            raise ProvenanceRefused(
-                'Global role_fate_patch checkpoint 缺 accepted 计数')
-        base_raw = state.get('base_candidate')
-        if not isinstance(base_raw, dict):
-            raise ProvenanceRefused(
-                'Global checkpoint role_fate_patch 缺 candidate-only typed base')
-        base = GlobalGroundingCandidateResponse.model_validate(base_raw)
-        if global_response_sha256(base) != state.get('base_candidate_sha256'):
-            raise ProvenanceRefused(
-                'Global checkpoint role/fate patch base SHA 漂移')
-        base_evaluation = evaluate_global_candidate(
-            ctx, source, prepared, base)
-        try:
-            applied = apply_global_role_fate_patch(
-                prepared, base_evaluation, payload)
-        except (TypeError, ValueError) as exc:
-            raise ProvenanceRefused(
-                f'Global checkpoint role/fate patch 当前代码重放失败：{exc}') from exc
-        response = applied.response
-        attempt_id = str(restored.acceptance.get('attempt_id') or '')
-        ctx.ledger.note_role_fate_candidate_patch(
-            sid=ctx.sid, node=ctx.node, purpose=ctx.node,
-            attempt_id=attempt_id,
-            base_candidate_sha256=base_evaluation.response_sha256,
-            result_candidate_sha256=global_response_sha256(response),
-            evidence_table_sha256=payload.evidence_table_sha256,
-            changed_field_count=applied.changed_field_count,
-        )
-    elif turn_kind == 'custody_replacement':
-        from novel.llm import response_repair
-
-        custody = state.get('custody')
-        candidate_raw = state.get('candidate')
-        if not isinstance(custody, dict) or not isinstance(candidate_raw, dict):
-            raise ProvenanceRefused('Global custody checkpoint 状态不完整')
-        attempt_id = custody.get('attempt_id')
-        if attempt_id != restored.acceptance.get('attempt_id'):
-            raise ProvenanceRefused('Global custody attempt 与 acceptance 漂移')
-        record = response_repair.find_attempt(ctx.novel_dir, str(attempt_id))
-        resolution = record.resolution
-        if (record.rejection.get('chain_id') != custody.get('chain_id')
-                or not isinstance(resolution, dict)
-                or resolution.get('action') not in ('submit', 'deterministic')
-                or resolution.get('resolution_sha256')
-                != custody.get('resolution_sha256')
-                or resolution.get('candidate_payload_sha256')
-                != custody.get('candidate_payload_sha256')):
-            raise ProvenanceRefused(
-                'Global custody checkpoint 与 sealed response-repair resolution 漂移')
-        expected_turn_kind, base, prior_role_patch_count = \
-            _global_custody_expectation(record.rejection)
-        custody_expected = custody.get(
-            'expected_turn_kind', 'full_candidate')
-        custody_prior = custody.get(
-            'accepted_role_patch_count_before', 0)
-        if (custody_expected != expected_turn_kind
-                or custody_prior != prior_role_patch_count):
-            raise ProvenanceRefused(
-                'Global custody checkpoint 的 expected turn/count 与 rejection 漂移')
-        if base is None:
-            if (state.get('base_candidate') is not None
-                    or state.get('base_candidate_sha256') is not None):
-                raise ProvenanceRefused(
-                    'Global full custody checkpoint 意外携带 base')
-        elif (state.get('base_candidate')
-              != base.model_dump(by_alias=True, mode='json')
-              or state.get('base_candidate_sha256')
-              != global_response_sha256(base)):
-            raise ProvenanceRefused(
-                'Global custody checkpoint 的 base candidate/SHA 与 rejection 漂移')
-        repaired_turn = prepared.agent_response_model.model_validate(
-            resolution.get('candidate'))
-        repaired_payload = getattr(repaired_turn, 'payload', None)
-        if expected_turn_kind == 'full_candidate':
-            if (not isinstance(repaired_payload, GlobalCandidateFullTurn)
-                    or accepted_role_patch_count != 0):
-                raise ProvenanceRefused(
-                    'Global full custody checkpoint 分支/计数漂移')
-            why = global_full_candidate_validator(prepared)(
-                repaired_turn, None)
-            response = repaired_payload.candidate
-        else:
-            if (expected_turn_kind != 'role_fate_patch'
-                    or not isinstance(repaired_payload, GlobalRoleFatePatchTurn)
-                    or not isinstance(base, GlobalGroundingCandidateResponse)
-                    or accepted_role_patch_count != prior_role_patch_count + 1
-                    or accepted_role_patch_count < 1):
-                raise ProvenanceRefused(
-                    'Global role/fate custody checkpoint 分支/base/计数未严格递增')
-            base_evaluation = evaluate_global_candidate(
-                ctx, source, prepared, base)
-            why = global_role_fate_patch_validator(
-                prepared, base_evaluation)(repaired_turn, None)
-            if why is None:
-                applied = apply_global_role_fate_patch(
-                    prepared, base_evaluation, repaired_payload)
-                response = applied.response
-                ctx.ledger.note_role_fate_candidate_patch(
-                    sid=ctx.sid, node=ctx.node, purpose=ctx.node,
-                    attempt_id=str(attempt_id),
-                    base_candidate_sha256=base_evaluation.response_sha256,
-                    result_candidate_sha256=global_response_sha256(response),
-                    evidence_table_sha256=(
-                        repaired_payload.evidence_table_sha256),
-                    changed_field_count=applied.changed_field_count,
-                )
-        if why is not None:
-            raise ProvenanceRefused(
-                f'Global custody replacement 不再通过当前 '
-                f'{expected_turn_kind} validator：{why}')
-        if response.model_dump(by_alias=True, mode='json') != candidate_raw:
-            raise ProvenanceRefused(
-                'Global custody checkpoint candidate 与 sealed replacement 漂移')
-    else:
-        raise ProvenanceRefused(
-            f'Global checkpoint 含未登记 turn_kind={turn_kind!r}')
-
-    candidate_raw = state.get('candidate')
-    if (not isinstance(candidate_raw, dict)
-            or response.model_dump(by_alias=True, mode='json') != candidate_raw
-            or global_response_sha256(response) != state.get('candidate_sha256')):
-        raise ProvenanceRefused('Global checkpoint 合并候选与当前 schema/applicator 漂移')
-    # full_candidate 的 unknown-ID 等动态成员闸也必须用当前候选表重验。
+def _validate_global_checkpoint_state(
+        prepared: GlobalCandidateContext, state: dict[str, Any],
+) -> GlobalGroundingCandidateResponse:
+    keys = {'kind', 'turn_kind', 'main_text_sha256', 'evidence_candidates_sha256',
+            'candidate', 'candidate_sha256', 'custody'}
+    if (set(state) != keys or state.get('kind') != 'stage2-knowledge-candidate-v3'
+            or state.get('turn_kind') not in ('full_candidate', 'custody_replacement')
+            or state.get('main_text_sha256') != prepared.main_text_sha256
+            or state.get('evidence_candidates_sha256') != prepared.evidence_candidates_sha256):
+        raise ProvenanceRefused('知识 checkpoint 的版本、输入或关闭字段集合漂移')
+    response = GlobalGroundingCandidateResponse.model_validate(state['candidate'])
+    if global_response_sha256(response) != state['candidate_sha256']:
+        raise ProvenanceRefused('知识 checkpoint 的回答 SHA 漂移')
     try:
         _compile_global_response(prepared, response)
     except (TypeError, ValueError) as exc:
-        raise ProvenanceRefused(
-            f'Global checkpoint 候选不再通过当前 membership validator：{exc}') from exc
+        raise ProvenanceRefused(f'知识 checkpoint 不通过当前成员校验：{exc}') from exc
+    return response
+
+
+def restore_global_agent_checkpoint(
+        ctx: RunContext, source: _GlobalResponseSource, prepared: GlobalCandidateContext,
+) -> RestoredGlobalCandidate | None:
+    """恢复同一已购知识回答，候选证据和 custody 从当前封存材料精确复验。"""
+    from novel.llm import response_repair, stage2_global_runs
     assert_global_main_text_current(ctx, prepared)
-    return RestoredGlobalCandidate(
-        response=response,
-        acceptance=dict(restored.acceptance),
-        revision=restored.revision,
-        turn_kind=str(turn_kind),
-        accepted_role_patch_count=accepted_role_patch_count,
-    )
+    restored = stage2_global_runs.restore_checkpoint(
+        ctx, input_sha256=prepared.input_sha256, system=prepared.system, user=prepared.user,
+        response_model=prepared.agent_response_model, max_tokens=GLOBAL_MAX_TOKENS)
+    if restored is None:
+        return None
+    source.restore_checkpoint_acceptance(
+        ctx.node, restored.acceptance, system=prepared.system, user=prepared.user,
+        max_tokens=GLOBAL_MAX_TOKENS, recovery_policy=stage2_global_runs.RECOVERY_POLICY)
+    state = restored.state_payload
+    response = _validate_global_checkpoint_state(prepared, state)
+    turn_kind = state['turn_kind']
+    if turn_kind == 'full_candidate':
+        if state['custody'] is not None or restored.value.payload.candidate != response:
+            raise ProvenanceRefused('知识 full checkpoint 与已接受原回答不一致')
+    else:
+        custody = state['custody']
+        if not isinstance(custody, dict) or custody.get('attempt_id') != restored.acceptance.get('attempt_id'):
+            raise ProvenanceRefused('知识 custody checkpoint 的原回答身份漂移')
+        record = response_repair.find_attempt(ctx.novel_dir, custody['attempt_id'])
+        _global_custody_expectation(record.rejection)
+        resolution = record.resolution
+        if (record.rejection.get('chain_id') != _global_validator_custody_chain(ctx, prepared)
+                or record.rejection.get('chain_id') != custody.get('chain_id')
+                or not isinstance(resolution, dict)
+                or resolution.get('action') not in ('submit', 'deterministic')
+                or resolution.get('resolution_sha256') != custody.get('resolution_sha256')
+                or resolution.get('candidate_payload_sha256') != custody.get('candidate_payload_sha256')):
+            raise ProvenanceRefused('知识 custody checkpoint 与 sealed resolution 漂移')
+        replacement = prepared.agent_response_model.model_validate(resolution.get('candidate'))
+        why = global_full_candidate_validator(prepared)(replacement, None)
+        if why is not None or replacement.payload.candidate != response:
+            raise ProvenanceRefused('知识 custody checkpoint 未命中当前有效 replacement')
+    assert_global_main_text_current(ctx, prepared)
+    return RestoredGlobalCandidate(response=response, acceptance=dict(restored.acceptance),
+                                   revision=restored.revision, turn_kind=turn_kind)
 
 
 def _read_blueprint_guard(
@@ -2469,19 +1963,33 @@ def prepare_global_candidate(
     if store.full_sha256_or_none(MAIN_TEXT) != main_text_sha256:
         raise ProvenanceRefused(
             f'{MAIN_TEXT} 在 Global prompt 读取期间发生漂移；拒绝冻结混合主体')
+    source_hook_sha256 = store.full_sha256_or_none(STAGE1_HOOK_COPY)
+    if source_hook_sha256 is None:
+        raise UpstreamMissing(f'{STAGE1_HOOK_COPY} 缺失，不能提出开篇范围')
+    source_hook = store.read(HookCopy, STAGE1_HOOK_COPY).text
+    if not source_hook.strip():
+        raise ArtifactUnreadable('源文案为空，不能提出开篇范围')
+    if store.full_sha256_or_none(STAGE1_HOOK_COPY) != source_hook_sha256:
+        raise ProvenanceRefused('源文案在 Global prompt 读取期间漂移')
+    registry = grounding_io.read_registry(store)
+    reference = grounding_io.knowledge_reference(registry)
+    reference_sha256 = grounding_io.knowledge_reference_sha256(registry)
     spec = _active_global_spec()
     system, user, evidence_candidates = build_global_request(
-        ctx.title, main_text, spec, agent_envelope=agent_envelope)
+        ctx.title, main_text, spec, source_hook=source_hook,
+        character_reference=reference, agent_envelope=agent_envelope)
     rework = None
     if review_token is not None:
         from novel.orchestrator.approvals import stage2_rework_request
         rework = stage2_rework_request(
             ctx.novel_dir.parent, ctx.sid, ctx.node, review_token)
         source_rel = _GLOBAL_INVALID if store.exists(_GLOBAL_INVALID) else GLOBAL_REL
-        previous, _raw = store.read_own(
-            GlobalGrounding, source_rel, require_current=True)
+        # 返修只下发本 owner 的知识载体；静态身份已经在 character_reference 出现一次。
+        from contracts.schema.knowledge import KnowledgeGrounding
+        previous, _raw = store.read_own(KnowledgeGrounding, source_rel, require_current=True)
         baseline = previous.model_dump(by_alias=True)
         baseline.pop('_provenance', None)
+        baseline.pop('characters_reference_sha256', None)
         user += '\n\n' + json.dumps({
             'kind': 'commander_rework_request',
             'reviewer_node': rework.node,
@@ -2502,6 +2010,8 @@ def prepare_global_candidate(
         'contract_name': spec.name,
         'main_text_file_sha256': main_text_sha256,
         'evidence_candidates_sha256': candidate_sha256,
+        'source_hook_file_sha256': source_hook_sha256,
+        'characters_reference_sha256': reference_sha256,
         **({'review_token': review_token} if rework is not None else {}),
     })
     return GlobalCandidateContext(
@@ -2511,6 +2021,9 @@ def prepare_global_candidate(
         input_sha256=input_sha256,
         main_text_sha256=main_text_sha256,
         evidence_candidates_sha256=candidate_sha256,
+        source_hook_sha256=source_hook_sha256,
+        characters_reference_sha256=reference_sha256,
+        _characters=registry.model_copy(deep=True),
         _main_text=tuple(copy.deepcopy(main_text)),
         _downstream=downstream,
         _contract=spec,
@@ -2522,6 +2035,12 @@ def assert_global_main_text_current(
         ctx: RunContext, prepared: GlobalCandidateContext,
 ) -> None:
     """逐尾窗重读盘上 MainText 主体 SHA，不拿冻结内存正文冒充 freshness。"""
+    current_hook = ArtifactStore(ctx).full_sha256_or_none(STAGE1_HOOK_COPY)
+    registry = grounding_io.read_registry(ArtifactStore(ctx), own=True)
+    if grounding_io.knowledge_reference_sha256(registry) != prepared.characters_reference_sha256:
+        raise ProvenanceRefused('stage2.global 实际人物引用在 executor 期间漂移；拒绝旧候选提交')
+    if current_hook != prepared.source_hook_sha256:
+        raise ProvenanceRefused('stage2.global 源文案在 executor 期间漂移；拒绝旧候选补尾')
     current = ArtifactStore(ctx).full_sha256_or_none(MAIN_TEXT)
     if current != prepared.main_text_sha256:
         raise ProvenanceRefused(
@@ -2696,12 +2215,12 @@ def _write_formal(
             raise ProvenanceRefused(
                 'reviewed-edit prepared commit 尚未收敛；其他 Global 写口不得覆盖')
     companions = (
-        (rel, GLOBAL_REVIEW_REL, BLUEPRINT_CHARACTER_REL,
-         GLOBAL_EDIT_FAILURE, GLOBAL_EDIT_COMMIT)
+        (rel, GLOBAL_REVIEW_REL, GLOBAL_EDIT_FAILURE, GLOBAL_EDIT_COMMIT)
         if rel == GLOBAL_REL else (rel,)
     )
     with store.history_transaction(*companions):
-        store.write_round(rel, artifact)
+        store.write_round(rel, grounding_io.for_write(store, artifact)
+                          if rel == GLOBAL_REL else artifact)
         if rel == GLOBAL_REL:
             if review_override is None:
                 _refresh_global_review(store, artifact)
@@ -2709,9 +2228,8 @@ def _write_formal(
                 require_current_review(
                     artifact.model_dump(by_alias=True), review_override)
                 store.write_round(GLOBAL_REVIEW_REL, review_override)
-            _write_blueprint_character_projection(store, artifact)
             # reviewed edit 的 failure/pending sidecar 只描述“formal bundle 尚未
-            # 提交”。Global + review + projection 全部落稳后才在同一回滚域退休；
+            # 提交”。知识 + review 全部落稳后才在同一回滚域退休；
             # 任一伴产物写失败都会连 sidecar 一起恢复到调用前。
             if store.exists(GLOBAL_EDIT_FAILURE):
                 store.archive_round(GLOBAL_EDIT_FAILURE)
@@ -2727,8 +2245,9 @@ def _retire_invalid_for_matching_formal(
     if not store.exists(invalid_rel):
         return
     with store.history_transaction(rel):
-        current, _raw = store.read_own(
-            type(artifact), rel, require_current=True)
+        current, _raw = (grounding_io.read_own(store, rel, require_current=True)
+                         if rel == GLOBAL_REL else store.read_own(
+                             type(artifact), rel, require_current=True))
         if current.model_dump(by_alias=True) != artifact.model_dump(by_alias=True):
             raise ProvenanceRefused(
                 f'{rel} 在提交尾窗已漂移；拒绝只退休 {invalid_rel}')
@@ -2758,33 +2277,10 @@ def _write_invalid(
         if pending_commit.state == 'prepared':
             raise ProvenanceRefused(
                 'reviewed-edit prepared commit 尚未收敛；其他 Global INVALID 写口不得覆盖')
-    sections = _read_main_text(store)
-    if sections is None:
-        raise UpstreamMissing(
-            f'{MAIN_TEXT} 不在盘上——无法判定 Blueprint 称名投影是否可发布')
-    grounding_payload = artifact.model_dump(by_alias=True, mode='json')
-    naming_blockers = checks.blueprint_projection_blockers(
-        global_g=grounding_payload,
-        main_text=sections,
-    )
-    if naming_blockers:
-        # 问题稿本身必须稳定落盘，但称名闭集尚不可信时不发布一份必然
-        # ``unknown`` 的正式伴生产物。freshness 会直接从 latest INVALID
-        # 报 ``global_naming_blocked``，修好后再由 0-LLM 路径物化投影。
-        with store.history_transaction(_GLOBAL_INVALID, GLOBAL_EDIT_COMMIT):
-            path = store.write_invalid(rel, artifact, gates_skipped=[])
-            if store.exists(GLOBAL_EDIT_COMMIT):
-                store.archive_round(GLOBAL_EDIT_COMMIT)
-        return str(path)
-
-    # schema-valid Global 被非称名 HARD 拦在 INVALID 时，已经足够确定
-    # Blueprint 真正消费的称名闭集。两者必须同进同退，否则崩在中间会让
-    # 旧投影为新名册继续背书。
+    # 人物与称名投影由独立 producer 拥有；知识问题稿不写、不采用它们。
     with store.history_transaction(
-            _GLOBAL_INVALID, BLUEPRINT_CHARACTER_REL, GLOBAL_EDIT_COMMIT):
-        path = store.write_invalid(rel, artifact, gates_skipped=[])
-        _write_blueprint_character_projection(
-            store, artifact, main_text=sections)
+            _GLOBAL_INVALID, GLOBAL_EDIT_COMMIT):
+        path = store.write_invalid(rel, grounding_io.for_write(store, artifact), gates_skipped=[])
         if store.exists(GLOBAL_EDIT_COMMIT):
             store.archive_round(GLOBAL_EDIT_COMMIT)
     return str(path)
@@ -2818,20 +2314,8 @@ def _write_or_reuse_global_invalid(
     store = ArtifactStore(ctx)
     if ctx.executor_profile is not None and store.exists(_GLOBAL_INVALID):
         with ctx.validation_reads():
-            existing, _ = store.read_own(
-                GlobalGrounding, _GLOBAL_INVALID, require_current=True)
+            existing, _ = grounding_io.read_own(store, _GLOBAL_INVALID, require_current=True)
         if _equal_global_invalid_payload(artifact, existing):
-            sections = _read_main_text(store)
-            if sections is None:
-                raise UpstreamMissing(
-                    f'{MAIN_TEXT} 不在盘上——无法复验 Global INVALID companion')
-            blockers = checks.blueprint_projection_blockers(
-                global_g=artifact.model_dump(by_alias=True, mode='json'),
-                main_text=sections,
-            )
-            if not blockers:
-                _write_blueprint_character_projection(
-                    store, artifact, main_text=sections)
             assert_global_main_text_current(ctx, prepared)
             return str(store.path(_GLOBAL_INVALID))
     return _write_invalid(store, GLOBAL_REL, artifact)
@@ -2874,6 +2358,8 @@ def _note_adopted(ctx: RunContext, client: _GlobalResponseSource, *, rel: str,
     「同 purpose 最后一条 ok 行」猜。本 run 没有采纳新响应的 purpose
     （定向重生成合并进来的未动章、0 成本路）没有登记项 ⇒ 无行，缺行即「沿用旧稿」。
     """
+    if rel == GLOBAL_REL and 'characters' in candidate.get('entities', {}):
+        candidate = grounding_io.payload(ArtifactStore(ctx), GlobalGrounding.model_validate(candidate))
     fp = prov.projection_fingerprint(candidate)
     for purpose, chapter in purposes.items():
         attempt_id = client.accepted_attempt(purpose)
@@ -2922,15 +2408,9 @@ def verify_global_delivery(
             '不能把一对互相矛盾的 live 文件声明为 delivered')
 
     with ctx.validation_reads():
-        landed, landed_raw = store.read_own(
-            GlobalGrounding, GLOBAL_REL, require_current=True)
+        landed, landed_raw = grounding_io.read_own(store, GLOBAL_REL, require_current=True)
         review, _review_raw = store.read_own(
             GlobalReview, GLOBAL_REVIEW_REL, require_current=True)
-        projection, _projection_raw = store.read_own(
-            BlueprintCharacterProjection,
-            BLUEPRINT_CHARACTER_REL,
-            require_current=True,
-        )
         global_freshness = store.freshness(GLOBAL_REL)
         review_freshness = store.freshness(GLOBAL_REVIEW_REL)
 
@@ -2950,15 +2430,6 @@ def verify_global_delivery(
             f'{GLOBAL_REVIEW_REL} readback freshness='
             f'{review_freshness.state}/{review_freshness.reason}，拒绝 delivered')
     require_current_review(landed_raw, review)
-
-    expected_projection = materialize_blueprint_character_projection(
-        expected_raw['entities']['characters'],
-        copy.deepcopy(list(prepared._main_text)),
-    )
-    if (projection.model_dump(by_alias=True, mode='json')
-            != expected_projection.model_dump(by_alias=True, mode='json')):
-        raise ProvenanceRefused(
-            f'{BLUEPRINT_CHARACTER_REL} readback 与本次 Global/MainText 投影不等值')
 
     _outcomes, hits = _global_candidate_outcomes(landed_raw, prepared)
     if hits:
@@ -2993,21 +2464,47 @@ def _global_finalization_payload(
     }
 
 
-def _expected_global_companions(
+def _expected_global_review(
         store: ArtifactStore,
-        prepared: GlobalCandidateContext,
         artifact: GlobalGrounding,
-) -> tuple[GlobalReview, BlueprintCharacterProjection]:
+) -> GlobalReview:
     previous = (
         store.read_own(GlobalReview, GLOBAL_REVIEW_REL)[0]
         if store.exists(GLOBAL_REVIEW_REL) else None)
     payload = artifact.model_dump(by_alias=True, mode='json')
-    review = build_review(payload, previous)
-    projection = materialize_blueprint_character_projection(
-        payload['entities']['characters'],
-        copy.deepcopy(list(prepared._main_text)),
-    )
-    return review, projection
+    return build_review(payload, previous)
+
+
+def _refresh_current_global_review(store: ArtifactStore, artifact: GlobalGrounding) -> GlobalReview:
+    """知识落盘的免费后继；只继承当前主体决定，不重复写相同的审阅轮次。"""
+    expected = _expected_global_review(store, artifact)
+    if store.full_sha256_or_none(GLOBAL_REVIEW_REL) != store.prospective_sha256(
+            GLOBAL_REVIEW_REL, expected):
+        store.write_round(GLOBAL_REVIEW_REL, expected)
+    landed = store.read_own(GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
+    require_current_review(artifact.model_dump(mode='json', by_alias=True), landed)
+    if landed != expected or store.freshness(GLOBAL_REVIEW_REL).state != 'fresh':
+        raise ProvenanceRefused('确定性审阅刷新后的主体或新鲜度不闭合')
+    return landed
+
+
+def run_refresh_review(ctx: RunContext) -> GlobalReview:
+    """只按当前人物和知识重建审阅；缺、坏或过期知识保持关闭，不重抽知识。"""
+    from novel.llm import stage2_global_runs
+    if ctx.node != 'stage2.global':
+        raise ValueError('知识审阅刷新只属于 stage2.global')
+    store = ArtifactStore(ctx)
+    with stage2_global_runs.mutation_ownership(ctx):
+        if any(store.exists(rel) for rel in (
+                _GLOBAL_INVALID, GLOBAL_EDIT_INPUT_COMMIT, GLOBAL_EDIT_FAILURE)):
+            raise ProvenanceRefused('知识尚有问题稿或人工提交尾窗，先恢复原动作')
+        if store.exists(GLOBAL_EDIT_COMMIT):
+            journal = store.read_own(GlobalEditCommit, GLOBAL_EDIT_COMMIT)[0]
+            if journal.state == 'prepared':
+                raise ProvenanceRefused('知识尚有人工 prepared 尾窗，先恢复原动作')
+        _read_main_text(store)
+        artifact = grounding_io.read_own(store, require_current=True)[0]
+        return _refresh_current_global_review(store, artifact)
 
 
 def _global_bundle_readback(
@@ -3015,19 +2512,9 @@ def _global_bundle_readback(
 ) -> dict[str, dict[str, Any]]:
     store = ArtifactStore(ctx)
     with ctx.validation_reads():
-        global_g, _ = store.read_own(
-            GlobalGrounding, GLOBAL_REL, require_current=True)
-        review, _ = store.read_own(
-            GlobalReview, GLOBAL_REVIEW_REL, require_current=True)
-        projection, _ = store.read_own(
-            BlueprintCharacterProjection,
-            BLUEPRINT_CHARACTER_REL,
-            require_current=True)
+        global_g, _ = grounding_io.read_own(store, GLOBAL_REL, require_current=True)
     return {
-        GLOBAL_REL: global_g.model_dump(by_alias=True, mode='json'),
-        GLOBAL_REVIEW_REL: review.model_dump(by_alias=True, mode='json'),
-        BLUEPRINT_CHARACTER_REL: projection.model_dump(
-            by_alias=True, mode='json'),
+        GLOBAL_REL: grounding_io.payload(store, global_g),
     }
 
 
@@ -3036,115 +2523,96 @@ def _finalize_agent_global_formal(
         prepared: GlobalCandidateContext,
         terminal: GlobalCandidateEvaluation,
 ) -> GlobalGrounding:
-    """Global bundle 的 prepared→write→readback→adoption→committed 尾窗。"""
+    """先封存知识与采用账，再以确定性后继刷新当前人物/知识的审阅。
+
+    人物未被知识请求消费的字段可以使审阅过期，却不能改写已购买知识的
+    来源身份。模型提交只拥有知识与 INVALID；审阅失败继续报 unknown，
+    原 run 恢复或 --refresh-review 可免费补尾，不能提前声明 delivered。
+    """
     from novel.llm import stage2_global_runs
 
     artifact = terminal.candidate
-    payload = artifact.model_dump(by_alias=True, mode='json')
+    store = ArtifactStore(ctx)
+    payload = grounding_io.payload(store, artifact)
     finalization = _global_finalization_payload(prepared, terminal)
     if terminal.source_attempt_id is None:
         raise ProvenanceRefused('stage2.global 正式 agent 候选缺 accepted attempt')
-    store = ArtifactStore(ctx)
-    touched = (
-        GLOBAL_REL, GLOBAL_REVIEW_REL,
-        BLUEPRINT_CHARACTER_REL, _GLOBAL_INVALID,
-    )
     with stage2_global_runs.commit_ownership(ctx.novel_dir):
         stage2_global_runs.refuse_foreign_commit_reservations(ctx)
-        journal = (
-            stage2_global_runs.committed(ctx)
-            or stage2_global_runs.prepared(ctx))
+        journal = stage2_global_runs.committed(ctx) or stage2_global_runs.prepared(ctx)
         if journal is None:
             _assert_global_guard_current(ctx, prepared)
-            assert_global_main_text_current(ctx, prepared)
             journal = stage2_global_runs.prepare_commit(
-                ctx,
-                primary_payload=payload,
-                finalization_payload=finalization,
-                touched_paths=touched,
-                attempt_id=terminal.source_attempt_id,
-            )
-        elif (not stage2_global_runs.verify_commit_primary(journal, payload)
-              or not stage2_global_runs.verify_commit_finalization(
-                  journal, finalization)):
-            raise ProvenanceRefused(
-                'stage2.global commit journal 与 terminal Global/subject 漂移')
-
-        assert_global_main_text_current(ctx, prepared)
-        expected_review, expected_projection = _expected_global_companions(
-            store, prepared, artifact)
-        expected = {
-            GLOBAL_REL: artifact,
-            GLOBAL_REVIEW_REL: expected_review,
-            BLUEPRINT_CHARACTER_REL: expected_projection,
-        }
-        states = {
-            rel: stage2_global_runs.target_state(
-                ctx, journal, rel,
-                expected_file_sha256=hashlib.sha256(
-                    store._render(rel, value)).hexdigest())
-            for rel, value in expected.items()
-        }
-        states[_GLOBAL_INVALID] = stage2_global_runs.target_state(
-            ctx, journal, _GLOBAL_INVALID, expected_absent=True)
-
-        if states[GLOBAL_REL] == 'baseline':
-            assert_global_main_text_current(ctx, prepared)
-            _write_formal(store, GLOBAL_REL, artifact)
+                ctx, primary_payload=payload, finalization_payload=finalization,
+                touched_paths=(GLOBAL_REL, _GLOBAL_INVALID),
+                attempt_id=terminal.source_attempt_id)
         else:
-            # 崩在 multi-file 写盘中段时只补缺失 companion；正式 Global 已精确
-            # 等于 journal 主体就不得再造一轮伪历史。
-            with store.history_transaction(
-                    GLOBAL_REVIEW_REL, BLUEPRINT_CHARACTER_REL):
-                if states[GLOBAL_REVIEW_REL] == 'baseline':
-                    store.write_round(GLOBAL_REVIEW_REL, expected_review)
-                if states[BLUEPRINT_CHARACTER_REL] == 'baseline':
-                    _write_blueprint_character_projection(
-                        store, artifact,
-                        main_text=copy.deepcopy(list(prepared._main_text)))
-            if states[_GLOBAL_INVALID] == 'baseline':
-                _retire_invalid_for_matching_formal(
-                    store, GLOBAL_REL, artifact)
+            if not stage2_global_runs.verify_commit_finalization(journal, finalization):
+                raise ProvenanceRefused('知识提交 journal 与当前回答/输入身份漂移')
+            if not stage2_global_runs.verify_commit_primary(journal, payload):
+                # 只有已经精确命中本 journal 的正式文件可以保留原来源账；
+                # 缺失或第三方修改都不能借业务相似性冒领这份回答。
+                owned, _ = store.read_own(KnowledgeGrounding, GLOBAL_REL, require_current=True)
+                owned_payload = owned.model_dump(mode='json', by_alias=True)
+                if (not stage2_global_runs.verify_commit_primary(journal, owned_payload)
+                        or {k: v for k, v in owned_payload.items() if k != '_provenance'}
+                        != {k: v for k, v in payload.items() if k != '_provenance'}):
+                    raise ProvenanceRefused('知识提交 journal 与正式文件或当前候选业务内容漂移')
+                # 当前请求与旧文件均已通过 actual-input freshness；完整业务值
+                # 相等并不能替代来源守卫，故这里仍要求非输入来源账逐字段相等。
+                old_prov = dict(owned_payload['_provenance'])
+                new_prov = dict(payload['_provenance'])
+                old_prov.pop('inputs', None)
+                new_prov.pop('inputs', None)
+                if old_prov != new_prov:
+                    raise ProvenanceRefused('知识恢复的非输入来源账变化，拒绝混用两次产出')
+                payload = owned_payload
+                artifact = grounding_io.compose(grounding_io.read_registry(store, own=True), owned)
 
         assert_global_main_text_current(ctx, prepared)
-        landed = verify_global_delivery(ctx, prepared, artifact)
-        _note_evidence_locator_corrections(
-            ctx, store, terminal._evidence_locator_corrections,
-            rel=GLOBAL_REL)
+        expected = grounding_io.for_write(store, artifact)
+        state = stage2_global_runs.target_state(
+            ctx, journal, GLOBAL_REL,
+            expected_file_sha256=store.prospective_sha256(GLOBAL_REL, expected))
+        invalid_state = stage2_global_runs.target_state(
+            ctx, journal, _GLOBAL_INVALID, expected_absent=True)
+        if state == 'baseline':
+            if any(store.exists(rel) for rel in (GLOBAL_EDIT_INPUT_COMMIT, GLOBAL_EDIT_FAILURE)):
+                raise ProvenanceRefused('人工知识订正尚未收敛，不能由模型提交覆盖')
+            if store.exists(GLOBAL_EDIT_COMMIT):
+                edit_commit = store.read_own(GlobalEditCommit, GLOBAL_EDIT_COMMIT)[0]
+                if edit_commit.state == 'prepared':
+                    raise ProvenanceRefused('人工知识 prepared 尚未收敛，不能由模型提交覆盖')
+            with store.history_transaction(GLOBAL_REL, GLOBAL_EDIT_COMMIT):
+                store.write_round(GLOBAL_REL, expected)
+                if store.exists(GLOBAL_EDIT_COMMIT):
+                    store.archive_round(GLOBAL_EDIT_COMMIT)
+        elif invalid_state == 'baseline':
+            _retire_invalid_for_matching_formal(store, GLOBAL_REL, artifact)
         assert_global_main_text_current(ctx, prepared)
-        purpose, attempt_id = stage2_global_runs.restore_commit_adoption(
-            ctx, journal)
-        if purpose != ctx.node or attempt_id != terminal.source_attempt_id:
-            raise ProvenanceRefused(
-                'stage2.global commit adoption 不等于 terminal accepted attempt')
         landed_payloads = _global_bundle_readback(ctx)
+        if landed_payloads[GLOBAL_REL] != payload or store.exists(_GLOBAL_INVALID):
+            raise ProvenanceRefused('知识 readback 未精确闭合当前提交目标')
+        _note_evidence_locator_corrections(
+            ctx, store, terminal._evidence_locator_corrections, rel=GLOBAL_REL)
+        purpose, attempt_id = stage2_global_runs.restore_commit_adoption(ctx, journal)
+        if purpose != ctx.node or attempt_id != terminal.source_attempt_id:
+            raise ProvenanceRefused('知识 adoption 与 accepted attempt 不一致')
         _note_restored_adoptions(
-            ctx,
-            rel=GLOBAL_REL,
-            candidate=landed_payloads[GLOBAL_REL],
-            adoptions=((purpose, None, attempt_id),),
-        )
+            ctx, rel=GLOBAL_REL, candidate=payload,
+            adoptions=((purpose, None, attempt_id),))
         assert_global_main_text_current(ctx, prepared)
         stage2_global_runs.mark_committed(
-            ctx,
-            primary_payload=landed_payloads[GLOBAL_REL],
-            finalization_payload=finalization,
-            landed_payloads=landed_payloads,
-        )
-        assert_global_main_text_current(ctx, prepared)
+            ctx, primary_payload=payload, finalization_payload=finalization,
+            landed_payloads=landed_payloads)
         committed = stage2_global_runs.committed(ctx)
         if committed is None:
-            raise ProvenanceRefused(
-                'stage2.global mark_committed 后没有 committed journal')
+            raise ProvenanceRefused('知识 mark_committed 后 journal 缺失')
         stage2_global_runs.verify_committed_delivery(
-            ctx,
-            committed,
-            primary_payload=landed_payloads[GLOBAL_REL],
-            finalization_payload=finalization,
-            landed_payloads=landed_payloads,
-        )
-        assert_global_main_text_current(ctx, prepared)
-        return landed
+            ctx, committed, primary_payload=payload,
+            finalization_payload=finalization, landed_payloads=landed_payloads)
+        _refresh_current_global_review(store, artifact)
+        return verify_global_delivery(ctx, prepared, artifact)
 
 
 def finalize_global_candidate(
@@ -3306,177 +2774,14 @@ def _global_source(
     """修复优先吃最新问题稿；没有问题稿才吃正式稿。
 
     ``--apply-edit`` 的下一轮会改写上一轮 provenance 里那份决策集；只允许这条明确
-    被替换的输入边变化，正文等其余来源仍必须 current。付费 ``--purge-role`` 不传
-    本参数，继续按完整 freshness 关闭式拒绝。
+    被替换的输入边变化，正文等其余来源仍必须 current；本参数不授权跳过人物或其他实际依赖。
     """
     rel = _GLOBAL_INVALID if store.exists(_GLOBAL_INVALID) else GLOBAL_REL
     if not store.exists(rel):
         raise UpstreamMissing(
             f'{GLOBAL_REL} 与 {_GLOBAL_INVALID} 都不在盘上——先跑 stage2.global')
-    artifact, raw = store.read_own(
-        GlobalGrounding,
-        rel,
-        require_current=True,
-        replaced_input_keys=(() if replaced_edit_rel is None else (replaced_edit_rel,)),
-    )
+    artifact, raw = grounding_io.read_own(store, rel, require_current=True, replaced_input_keys=() if replaced_edit_rel is None else (replaced_edit_rel,))
     return artifact, raw, rel
-
-
-def _role_split_user(global_raw: dict[str, Any]) -> str:
-    characters = ((global_raw.get('entities') or {}).get('characters') or {})
-    secrets = []
-    for secret in ((global_raw.get('canon') or {}).get('secrets') or []):
-        secrets.append({
-            '第几章揭示': secret.get('first_reveal_chapter'),
-            '秘密': secret.get('fact'),
-        })
-    payload = {
-        cid: {
-            'canonical': character.get('canonical'),
-            'role': character.get('role'),
-            'fate': character.get('fate'),
-        }
-        for cid, character in characters.items()
-    }
-    compact = lambda value: json.dumps(
-        value, ensure_ascii=False, separators=(',', ':'))
-    return (
-        '── 秘密清单（每条注明第几章才对读者揭示）──\n'
-        + compact(secrets)
-        + '\n\n── 人物表（role/fate 可能划错了，按判据重划）──\n'
-        + compact(payload)
-    )
-
-
-def run_purge_role(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
-    """付费语义判官：只在原 char_id 上双向重划 role/fate。"""
-    from novel.stages.stage2 import prompts
-    from novel.llm import stage2_global_runs
-
-    # 这是 legacy LlmClient 旁路：既不会消费 agent journal，也不能等花完钱
-    # 才发现另一 run 持有 prepared。正式写前还会在同一 guard 下二次复核。
-    stage2_global_runs.refuse_legacy_mutation_before_wire(ctx)
-
-    store = ArtifactStore(ctx)
-    # 把实际发给 provider 的 source rel + 完整文件 SHA 在同一所有权窗口冻结。
-    # 只看 foreign prepared 不够：长 wire 期间另一 run 可能已经完整 committed，
-    # 此时 journal 应当放行，但旧响应没有资格覆盖那份新底座。
-    with stage2_global_runs.mutation_ownership(ctx, legacy_wire=True):
-        old_artifact, old_raw, source_rel = _global_source(store)
-        source_sha256 = store.full_sha256_or_none(source_rel)
-        if source_sha256 is None:
-            raise ProvenanceRefused(
-                f'stage2.global --purge-role 无法冻结 {source_rel} 完整字节 SHA')
-    main_text = _read_main_text(store)
-    if main_text is None:
-        raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上')
-    if old_artifact.provenance.model != client.model:
-        raise TerminalState(
-            '局部重划不能把不同主模型配置的结果混成一份来源账；'
-            f'原稿 model={old_artifact.provenance.model!r}，本次={client.model!r}。'
-            '为避免来源账说假话，尚未调用 LLM')
-
-    system = with_json_shape(prompts.ROLE_SPLIT_SYS, prompts.ROLE_SPLIT_HINT)
-    response = client.ask_json(
-        system,
-        _role_split_user(old_raw),
-        model_cls=RoleSplitResponse,
-        purpose=f'{ctx.node}:purge-role',
-        max_tokens=ROLE_MAX_TOKENS,
-    )
-    returned = response.model_dump(by_alias=True)['characters']
-    characters = ((old_raw.get('entities') or {}).get('characters') or {})
-    if set(returned) != set(characters):
-        missing = sorted(set(characters) - set(returned))
-        extra = sorted(set(returned) - set(characters))
-        raise TerminalState(
-            f'role/fate 判官没有原样交回 char_id 集合：缺 {missing}，多 {extra}。'
-            '响应已进缓存与成本账，但没有覆盖 artifact')
-
-    data = copy.deepcopy(old_raw)
-    data.pop('_provenance', None)
-    out_characters = ((data.get('entities') or {}).get('characters') or {})
-    fallback_chapter = min(
-        (int(row.get('chapter_ordinal') or 0) for row in main_text), default=1)
-    for cid, split in returned.items():
-        character = out_characters[cid]
-        role = split['role'].strip()
-        fate = split['fate']
-        if role != character.get('role'):
-            old = character.get('role_evidence') or {}
-            character['role_evidence'] = {
-                'chapter_ordinal': old.get('chapter_ordinal') or fallback_chapter,
-                'source': None,
-            }
-        character['role'] = role
-        if fate is None:
-            character['fate_evidence'] = None
-        elif fate != character.get('fate'):
-            old = character.get('fate_evidence') or character.get('role_evidence') or {}
-            character['fate_evidence'] = {
-                'chapter_ordinal': old.get('chapter_ordinal') or fallback_chapter,
-                'source': None,
-            }
-        character['fate'] = fate
-
-    data, accounting = normalize_global(data, main_text)
-
-    old_prov = old_artifact.provenance
-    delta = ctx.llm_provenance(
-        GlobalProvenance,
-        prompts={'ROLE_SPLIT_SYS': system},
-        model=client.model,
-        adopted_models=client.accepted_models(f'{ctx.node}:purge-role'),
-        **accounting,
-    )
-    provenance = GlobalProvenance.model_validate({
-        **old_prov.model_dump(),
-        **accounting,
-        'code': ctx.code,
-        'inputs': delta.inputs,
-        'prompts': {**old_prov.prompts, **delta.prompts},
-        'adopted_models': sorted(set(old_prov.adopted_model_ids())
-                                 | set(delta.adopted_model_ids())),
-        'usage': combine_usage(old_prov.usage, delta.usage),
-        'gates_skipped': None,
-    })
-    artifact = GlobalGrounding.model_validate({
-        **data, '_provenance': provenance,
-    })
-    candidate = artifact.model_dump(by_alias=True)
-    hits = _hard_hits(
-        _judge_candidate(candidate, None, main_text),
-        ignore={'upstream_missing'},
-    )
-    with stage2_global_runs.mutation_ownership(ctx, legacy_wire=True):
-        current_source_rel = (
-            _GLOBAL_INVALID if store.exists(_GLOBAL_INVALID) else GLOBAL_REL)
-        current_source_sha256 = store.full_sha256_or_none(current_source_rel)
-        if (current_source_rel != source_rel
-                or current_source_sha256 != source_sha256):
-            raise ProvenanceRefused(
-                'stage2.global --purge-role provider 等待期间 Global source '
-                f'底座漂移：start={source_rel}@{source_sha256}，'
-                f'current={current_source_rel}@{current_source_sha256}；'
-                '响应与成本账保留，但拒绝覆盖更新后的 Global bundle')
-        if hits:
-            path = _write_invalid(store, GLOBAL_REL, artifact)
-            _note_evidence_locator_corrections(
-                ctx, store, accounting.evidence_locator_corrections,
-                rel=_GLOBAL_INVALID)
-            raise GateBlocked(
-                f'role/fate 重划后仍命中 {hits}。问题稿保留在 {_GLOBAL_INVALID}。'
-                '改好后跑 `stage2.global --revalidate --actor <id> --reason <why>`'
-                '（0 LLM、同轮重判并留不可变审计）。',
-                invalid_path=path,
-            )
-        _write_formal(store, GLOBAL_REL, artifact)
-        _note_evidence_locator_corrections(
-            ctx, store, accounting.evidence_locator_corrections,
-            rel=GLOBAL_REL)
-        _note_adopted(ctx, client, rel=GLOBAL_REL, candidate=candidate,
-                      purposes={f'{ctx.node}:purge-role': None})
-        return artifact
 
 
 def _run_chapter_requests(
@@ -5337,6 +4642,7 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
 
     if ctx.node == 'stage2.global':
         from novel.llm import stage2_global_runs
+        from novel.stages.stage2.character_rebind import prepare_if_changed
 
         with stage2_global_runs.mutation_ownership(ctx):
             source_rel = (
@@ -5345,7 +4651,12 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
                 raise UpstreamMissing(
                     f'{GLOBAL_REL} 与 {_GLOBAL_INVALID} 都不在盘上——'
                     '没有可重新归一的全局底座')
-            previous, raw = store.read_own(GlobalGrounding, source_rel)
+            rebound = prepare_if_changed(store, source_rel)
+            if rebound is None:
+                previous, raw = grounding_io.read_own(store, source_rel)
+            else:
+                previous = rebound.previous
+                raw = rebound.view.model_dump(mode='json', by_alias=True)
             data = copy.deepcopy(raw)
             data.pop('_provenance', None)
             data, accounting = normalize_global(data, main_text)
@@ -5362,6 +4673,8 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
             candidate = artifact.model_dump(by_alias=True)
             outcomes = _judge_candidate(candidate, None, main_text)
             hits = _hard_hits(outcomes, ignore={'upstream_missing'})
+            if rebound is not None:
+                rebound.assert_current(store)
             if hits:
                 _write_invalid(store, GLOBAL_REL, artifact)
                 _note_evidence_locator_corrections(
@@ -5390,6 +4703,11 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
         _require_blueprint_character_projection(store)
     previous, raw = store.read_own(ChapterBlueprints, source_rel)
     previous_provenance = previous.provenance
+    if not {MAIN_TEXT, BLUEPRINT_CHARACTER_REL} <= set(previous_provenance.inputs):
+        raise ProvenanceRefused(
+            'Blueprint 缺现役正文/称名投影来源边；不能把旧依赖补成当前输入，须配对冻结旧代码处理')
+    if store.freshness(source_rel).state == 'unknown':
+        raise ProvenanceRefused('Blueprint 真实来源仍未知，不能用确定性归一重签来源')
     phrases = _checkpoint_fact_atom_phrases(
         ctx,
         artifact=previous,
@@ -5492,8 +4810,7 @@ def global_edit_template(ctx: RunContext) -> GlobalEdit:
     schema，真正修改再由同一归一/HARD 判断，而不是让模型手写一份未知形状。
     """
     store = ArtifactStore(ctx)
-    grounding = store.read_own(
-        GlobalGrounding, GLOBAL_REL, require_current=True)[0]
+    grounding = grounding_io.read_own(store, GLOBAL_REL, require_current=True)[0]
     review = store.read_own(GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
     require_current_review(grounding.model_dump(by_alias=True), review)
     main = store.read_own(MainText, MAIN_TEXT, require_current=True)[0]
@@ -5521,7 +4838,6 @@ def global_edit_template(ctx: RunContext) -> GlobalEdit:
     raw = grounding.model_dump(mode='json', by_alias=True)
     entities = raw['entities']
     canon = raw['canon']
-    arc = raw['arc']
     characters = entities['characters']
     relations = {row['relation_id']: row for row in entities['relations']}
     rules = {row['rule_id']: row for row in canon['world_rules']}
@@ -5536,9 +4852,6 @@ def global_edit_template(ctx: RunContext) -> GlobalEdit:
             'expected_collection_sha256': subject_sha256(value),
             'operations': [],
         })
-
-    if 'set:characters' in grouped:
-        collection_delta('characters', characters)
 
     relation_groups = {
         group for group in grouped if group.startswith('relation:')
@@ -5573,7 +4886,6 @@ def global_edit_template(ctx: RunContext) -> GlobalEdit:
         ]
 
     character_patches: list[dict[str, Any]] = []
-    address_patches: list[dict[str, Any]] = []
     for group, items in sorted(grouped.items()):
         if not group.startswith('character:'):
             continue
@@ -5581,34 +4893,18 @@ def global_edit_template(ctx: RunContext) -> GlobalEdit:
         character = characters[char_id]
         patch: dict[str, Any] = {'char_id': char_id}
         for item in items:
-            if item.kind == 'name_distinctiveness':
-                patch['name_distinctiveness'] = character['name_distinctiveness']
-            elif item.kind == 'role':
-                patch['role'] = character['role']
-                patch['role_evidence'] = _manualize_evidence(
-                    character['role_evidence'], chapters, subject=item.subject_path)
-            elif item.kind == 'fate':
+            if item.kind == 'fate':
                 patch['fate'] = character['fate']
                 patch['fate_evidence'] = _manualize_evidence(
                     character['fate_evidence'], chapters, subject=item.subject_path)
                 if character['fate'] is None:
                     patch['fate_evidence'] = None
-            elif item.kind == 'address_context':
-                index = int(item.subject_path.split('.')[-2])
-                address_patches.append({
-                    'char_id': char_id,
-                    'address_index': index,
-                    'context': character['address'][index]['context'],
-                })
-            else:
-                raise TerminalState(
-                    f'{item.kind} 尚无可执行 character GlobalEdit 映射')
+            elif item.kind not in {'name_distinctiveness', 'role', 'address_context'}:
+                raise TerminalState(f'{item.kind} 尚无可执行知识编辑映射')
         if len(patch) > 1:
             character_patches.append(patch)
     if character_patches:
         edit['characters'] = character_patches
-    if address_patches:
-        edit['addresses'] = address_patches
     if collection_edits:
         edit['collection_edits'] = collection_edits
 
@@ -5627,22 +4923,20 @@ def global_edit_template(ctx: RunContext) -> GlobalEdit:
                     setting['worldview_evidence'], chapters, subject=item.subject_path)
         edit['setting'] = patch
 
-    arc_items = grouped.get('arc', [])
-    if arc_items:
-        if any(item.kind == 'arc_analysis' for item in arc_items):
-            edit['arc_replace'] = _manualize_evidence(
-                arc, chapters, subject='arc')
-        else:
-            edit['conflict_stages_replace'] = arc['conflict_stages']
+    if grouped.get('source_blurb'):
+        edit['source_blurb_replace'] = _manualize_evidence(
+            raw['source_blurb'], chapters, subject='source_blurb')
 
     known = {
         'set:characters', 'set:relations', 'set:world_rules', 'set:secrets',
-        'setting', 'arc', *relation_groups, *rule_groups, *secret_groups,
+        'setting', 'source_blurb', *relation_groups, *rule_groups, *secret_groups,
         *(group for group in grouped if group.startswith('character:')),
     }
     unknown = sorted(set(grouped) - known)
     if unknown:
         raise TerminalState(f'这些 review 组没有 GlobalEdit 映射：{unknown}')
+    if not edit:
+        raise TerminalState('当前问题属于静态人物，须派修 stage2.characters')
     return GlobalEdit.model_validate(edit)
 
 
@@ -5739,9 +5033,7 @@ def _validated_failure_inputs(
         raise TerminalState(
             'reviewed-edit failure 与 edit 的 blocking workpack 身份不匹配')
 
-    _formal, formal_sha256 = store.read_own_with_sha256(
-        GlobalGrounding, GLOBAL_REL, require_current=True,
-        replaced_input_keys=(GLOBAL_EDIT,))
+    _formal, formal_sha256 = grounding_io.read_own_with_sha256(store, GLOBAL_REL, require_current=True, replaced_input_keys=(GLOBAL_EDIT,))
     if formal_sha256 != failure.formal_sha256:
         raise TerminalState(
             'reviewed-edit failure 绑定的 formal Global 已变化；'
@@ -5775,15 +5067,14 @@ def _validated_ordinary_failure_inputs(
         raise TerminalState(
             '普通 GlobalEdit failure 与当前 canonical edit 不匹配')
     if failure.failure_kind == 'ordinary_hard_gate':
-        invalid, invalid_sha256 = store.read_own_with_sha256(
-            GlobalGrounding, _GLOBAL_INVALID, require_current=True)
+        invalid, invalid_sha256 = grounding_io.read_own_with_sha256(store, _GLOBAL_INVALID, require_current=True)
         candidate = invalid.model_dump(mode='json', by_alias=True)
         candidate.pop('_provenance', None)
         if (invalid_sha256 != failure.invalid_sha256
                 or _canonical_sha256(candidate)
                 != failure.candidate_business_sha256):
             audit = store.revalidation_audit(
-                GLOBAL_REL, GlobalGrounding,
+                GLOBAL_REL, grounding_io.KnowledgeGrounding,
                 actor='system:stage2-terminal-probe',
                 reason='只读识别普通 GlobalEdit INVALID 是否由人编辑',
             )
@@ -5853,33 +5144,10 @@ def _global_revalidation_commit_identity(
         raise TerminalState(
             f'{failure.failure_kind} failure 没有 live INVALID revalidate 语义')
 
-    attestation = edit.post_edit_review
-    if attestation is None:
-        return None
-    _formal, formal_sha256 = store.read_own_with_sha256(
-        GlobalGrounding, GLOBAL_REL, require_current=True,
-        replaced_input_keys=(GLOBAL_EDIT,))
-    review = store.read_own(
-        GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
-    if review.source_sha256 != attestation.expected_source_sha256:
+    if edit.post_edit_review is not None:
         raise TerminalState(
-            'legacy reviewed GlobalEdit 的正式 review source 已变化')
-    from novel.stages.stage2 import global_review as global_review_ops
-    workpack = global_review_ops.review_workpack(
-        ctx, scope='blocking', replaced_input_keys=(GLOBAL_EDIT,))
-    if attestation.expected_workpack_sha256 != workpack.get('workpack_sha256'):
-        raise TerminalState(
-            'legacy reviewed GlobalEdit 没有精确绑定当前 blocking workpack')
-    return _GlobalRevalidationCommitIdentity(
-        edit=edit,
-        edit_sha256=edit_sha256,
-        reviewed_edit=True,
-        formal_sha256=formal_sha256,
-        expected_source_sha256=attestation.expected_source_sha256,
-        global_review_workpack_sha256=workpack['workpack_sha256'],
-        failure=None,
-        failure_sha256=None,
-    )
+            'reviewed Global INVALID 缺 typed 失败回执；不得从旧 INVALID 推断恢复身份')
+    return None
 
 
 @dataclass(frozen=True)
@@ -5902,8 +5170,8 @@ class _ReviewedInvalidRecovery:
 def _reviewed_invalid_recovery(
     ctx: RunContext, store: ArtifactStore,
 ) -> _ReviewedInvalidRecovery | None:
-    """读取 legacy/registered reviewed HARD；人工改过的 INVALID 不自动接管。"""
-    if not store.exists(_GLOBAL_INVALID):
+    """只读取当前 typed 失败回执；人工改过的 INVALID 不自动接管。"""
+    if not store.exists(_GLOBAL_INVALID) or not store.exists(GLOBAL_EDIT_FAILURE):
         return None
     identity = _global_revalidation_commit_identity(ctx, store)
     if identity is None or not identity.reviewed_edit:
@@ -5916,10 +5184,9 @@ def _reviewed_invalid_recovery(
     failure = identity.failure
     failure_sha256 = identity.failure_sha256
 
-    invalid, invalid_sha256 = store.read_own_with_sha256(
-        GlobalGrounding, _GLOBAL_INVALID, require_current=True)
+    invalid, invalid_sha256 = grounding_io.read_own_with_sha256(store, _GLOBAL_INVALID, require_current=True)
     audit = store.revalidation_audit(
-        GLOBAL_REL, GlobalGrounding,
+        GLOBAL_REL, grounding_io.KnowledgeGrounding,
         actor=STAGE2_LEGACY_REVALIDATE_ACTOR,
         reason=STAGE2_LEGACY_REVALIDATE_REASON,
     )
@@ -5966,134 +5233,27 @@ def reviewed_invalid_auto_revalidation_needed(ctx: RunContext) -> bool:
     return recovery is not None and not recovery.hard_hits
 
 
-def _compact_legacy_failed_edit_delta(
-    *, edit: GlobalEdit, formal: GlobalGrounding,
-    main_text: list[dict[str, Any]],
-) -> GlobalEdit:
-    """清除旧 full-template assembler 留下的确定性净 no-op 行。
-
-    sidecar 引入前的 Commander wire 曾把模板中的每一行都当成本轮显式 patch，
-    因而 legacy ``global_edit.json`` 可能混有几十行“写回原值”。纠错若直接 fixed
-    merge 这些行，会把历史 wire 污染误当成模型意图。这里不改 raw edit 或其 SHA；
-    只在 workpack 中发布一份相对 exact formal、经当前同一 apply + normalize 尺子
-    证明有净业务变化的 sparse 基线。单原子无法独立应用时保守保留，绝不猜测删除。
-    """
-    raw_formal = formal.model_dump(mode='json', by_alias=True)
-    raw_formal.pop('_provenance', None)
-    baseline, _baseline_accounting = normalize_global(
-        copy.deepcopy(raw_formal), copy.deepcopy(main_text))
-    ordinals = {
-        int(section.get('chapter_ordinal') or 0) for section in main_text
-    }
-    sparse = edit.model_dump(
-        mode='json', by_alias=True, exclude_unset=True)
-    attestation = sparse.pop('post_edit_review', None)
-    compact: dict[str, Any] = {}
-
-    def atom_changes(payload: dict[str, Any]) -> bool:
-        try:
-            atom = GlobalEdit.model_validate(payload)
-            candidate = copy.deepcopy(raw_formal)
-            _apply_secret_patches(candidate, atom, ordinals)
-            normalized, _accounting = normalize_global(
-                candidate, copy.deepcopy(main_text))
-        except (TerminalState, ValidationError):
-            # 例如“先 add 成员、再 patch 新成员”的跨原子依赖不能拆开证明；
-            # 这种行保守留在基线，不能因最小化失败而静默撤销业务动作。
-            return True
-        return normalized != baseline
-
-    list_fields = {
-        'secrets', 'world_rules', 'characters', 'relations', 'arc_tracks',
-        'addresses', 'addresses_replace',
-    }
-    for key, value in sparse.items():
-        if key == 'collection_edits':
-            retained = [
-                copy.deepcopy(row) for row in value
-                if row.get('operations') and atom_changes({key: [row]})
-            ]
-            if retained:
-                compact[key] = retained
-        elif key in list_fields:
-            retained = [
-                copy.deepcopy(row) for row in value
-                if atom_changes({key: [row]})
-            ]
-            if retained:
-                compact[key] = retained
-        elif atom_changes({key: value}):
-            compact[key] = copy.deepcopy(value)
-    if attestation is not None:
-        compact['post_edit_review'] = attestation
-    try:
-        return GlobalEdit.model_validate(compact)
-    except ValidationError as exc:
-        raise TerminalState(
-            'legacy reviewed edit 相对 formal 没有可纠正的净业务 delta；'
-            '不能把 full-template no-op 当成新 Commander 意图') from exc
-
-
 def global_edit_correction_workpack(ctx: RunContext) -> dict[str, Any]:
-    """只读恢复一份 canonical reviewed GlobalEdit 及其 typed 失败事实。
+    """只从当前 typed 失败回执恢复已提交的 Commander 动作。
 
-    新盘面以 ``global_edit_failure.json`` 为权威：它把 edit、修前 formal 与完整
-    blocking workpack 三者精确绑定；只有 ``hard_gate`` 还额外绑定 live INVALID。
-    旧盘面没有 sidecar 时保留原来的 exact INVALID 恢复，避免升级代码后丢掉已发生
-    的 Commander 动作。两路都只交回同一份 failed sparse edit，不生成新模板。
+    缺 sidecar 属于未知状态；不从旧 INVALID 反推已购买决定或生成新预算。
+    当前提交中断由已登记的输入 WAL 与 prepared journal 免费补尾。
     """
     store = ArtifactStore(ctx)
-    if not store.exists(GLOBAL_EDIT):
-        raise TerminalState('当前没有 reviewed GlobalEdit 的中断纠正材料')
-    failure: GlobalEditFailure | None = None
-    failure_sha256: str | None = None
-    invalid_sha256: str | None = None
-    recovery_fact_kind = 'legacy_invalid'
-    legacy_formal: GlobalGrounding | None = None
-    if store.exists(GLOBAL_EDIT_FAILURE):
-        failure, failure_sha256 = store.read_own_with_sha256(
-            GlobalEditFailure, GLOBAL_EDIT_FAILURE)
-        edit, edit_sha256, formal_sha256, _review, review_workpack = (
-            _validated_failure_inputs(ctx, store, failure))
-        attestation = edit.post_edit_review
-        assert attestation is not None  # 上方 typed CAS 已守
-        failure_kind = failure.failure_kind
-        invalid_sha256 = failure.invalid_sha256
-        recovery_fact_kind = 'registered_sidecar'
-    else:
-        # 兼容 sidecar 引入前已落稳的 HARD + INVALID。这里仍完整复验 edit、
-        # formal/review/workpack/INVALID，不把“缺新 artifact”解释成动作没发生。
-        if not store.exists(_GLOBAL_INVALID):
-            raise TerminalState('当前没有 reviewed GlobalEdit 的中断纠正材料')
-        edit, edit_sha256 = store.read_own_with_sha256(GlobalEdit, GLOBAL_EDIT)
-        attestation = edit.post_edit_review
-        if attestation is None:
-            raise TerminalState(
-                '当前 global_edit.json 没有 post_edit_review；'
-                '不是 Commander reviewed edit 中断态')
-        legacy_formal, formal_sha256 = store.read_own_with_sha256(
-            GlobalGrounding, GLOBAL_REL, require_current=True,
-            replaced_input_keys=(GLOBAL_EDIT,))
-        review = store.read_own(
-            GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
-        if review.source_sha256 != attestation.expected_source_sha256:
-            raise TerminalState(
-                'reviewed GlobalEdit 绑定的正式 review source 已变化；'
-                '拒绝恢复旧纠正任务')
-        from novel.stages.stage2 import global_review as global_review_ops
-        review_workpack = global_review_ops.review_workpack(
-            ctx, scope='blocking', replaced_input_keys=(GLOBAL_EDIT,))
-        if (attestation.expected_workpack_sha256
-                != review_workpack.get('workpack_sha256')):
-            raise TerminalState(
-                'legacy reviewed GlobalEdit 没有精确绑定当前 blocking workpack；'
-                '拒绝升级成 Commander correction')
-        failure_kind = 'hard_gate'
+    if not store.exists(GLOBAL_EDIT) or not store.exists(GLOBAL_EDIT_FAILURE):
+        raise TerminalState('当前纠正材料缺 typed 失败回执；旧 INVALID 推断恢复已退役')
+    failure, failure_sha256 = store.read_own_with_sha256(
+        GlobalEditFailure, GLOBAL_EDIT_FAILURE)
+    edit, edit_sha256, formal_sha256, _review, review_workpack = (
+        _validated_failure_inputs(ctx, store, failure))
+    attestation = edit.post_edit_review
+    assert attestation is not None
+    failure_kind = failure.failure_kind
+    invalid_sha256 = failure.invalid_sha256
 
     hard_hits: list[str] = []
     hard_outcomes: list[Outcome] = []
-    candidate_business_sha256 = (
-        failure.candidate_business_sha256 if failure is not None else None)
+    candidate_business_sha256 = failure.candidate_business_sha256
     if failure_kind == 'hard_gate':
         recovery = _reviewed_invalid_recovery(ctx, store)
         if recovery is None:
@@ -6115,38 +5275,15 @@ def global_edit_correction_workpack(ctx: RunContext) -> dict[str, Any]:
         hard_outcomes = [
             outcome for outcome in recovery.outcomes if outcome.rule in hard_set]
 
-    if failure is not None:
-        failure_business_sha256 = _global_edit_failure_business_sha256(failure)
-    else:
-        # 旧盘面没有 registered sidecar；只把 INVALID 的业务主体写入稳定身份，
-        # 不把会随 provenance code_version 变化的 raw 文件 SHA 带进席位账。
-        failure_business_sha256 = _canonical_sha256({
-            'failure_kind': failure_kind,
-            'failed_edit_sha256': edit_sha256,
-            'formal_sha256': formal_sha256,
-            'expected_source_sha256': attestation.expected_source_sha256,
-            'global_review_workpack_sha256': review_workpack['workpack_sha256'],
-            'candidate_business_sha256': candidate_business_sha256,
-            'reason_code': 'legacy_canonical_hard_gate',
-            'hard_hits': sorted(hard_hits),
-        })
-
-    workpack_edit = edit
-    if recovery_fact_kind == 'legacy_invalid':
-        main_text = _read_main_text(store)
-        if main_text is None or legacy_formal is None:
-            raise UpstreamMissing(
-                'legacy reviewed edit correction 缺 exact formal/MainText 基线')
-        workpack_edit = _compact_legacy_failed_edit_delta(
-            edit=edit, formal=legacy_formal, main_text=main_text)
-    edit_payload = workpack_edit.model_dump(
+    failure_business_sha256 = _global_edit_failure_business_sha256(failure)
+    edit_payload = edit.model_dump(
         mode='json', by_alias=True, exclude_unset=True)
     result: dict[str, Any] = {
         'kind': 'stage2-global-edit-correction-workpack-v2',
         'read_only': True,
         'commander_budget_max': 3,
         'incremental_correction': True,
-        'recovery_fact_kind': recovery_fact_kind,
+        'recovery_fact_kind': 'registered_sidecar',
         'failure_kind': failure_kind,
         'failure_sha256': failure_sha256,
         'failure_business_sha256': failure_business_sha256,
@@ -6166,13 +5303,12 @@ def global_edit_correction_workpack(ctx: RunContext) -> dict[str, Any]:
             ],
         } for outcome in hard_outcomes],
     }
-    if failure is not None:
-        result.update({
-            'failure_code': failure.reason_code,
-            'failure_summary': failure.reason_summary,
-            'failure_code_version': failure.code_version,
-            'recorded_hard_hits': list(failure.hard_hits),
-        })
+    result.update({
+        'failure_code': failure.reason_code,
+        'failure_summary': failure.reason_summary,
+        'failure_code_version': failure.code_version,
+        'recorded_hard_hits': list(failure.hard_hits),
+    })
     return result
 
 
@@ -6551,17 +5687,13 @@ def _validate_reviewed_edit_commit(
     target = journal.target
     expected_hashes = {
         GLOBAL_REL: store.prospective_sha256(
-            GLOBAL_REL, target.global_grounding),
+            GLOBAL_REL, grounding_io.for_write(store, target.global_grounding)),
         GLOBAL_REVIEW_REL: store.prospective_sha256(
             GLOBAL_REVIEW_REL, target.global_review),
-        BLUEPRINT_CHARACTER_REL: store.prospective_sha256(
-            BLUEPRINT_CHARACTER_REL,
-            target.blueprint_character_projection),
     }
     recorded_hashes = {
         GLOBAL_REL: target.global_sha256,
         GLOBAL_REVIEW_REL: target.review_sha256,
-        BLUEPRINT_CHARACTER_REL: target.projection_sha256,
     }
     if expected_hashes != recorded_hashes:
         raise ProvenanceRefused(
@@ -6569,11 +5701,6 @@ def _validate_reviewed_edit_commit(
     target_global = target.global_grounding.model_dump(
         mode='json', by_alias=True)
     require_current_review(target_global, target.global_review)
-    expected_projection = materialize_blueprint_character_projection(
-        target_global['entities']['characters'], copy.deepcopy(main_text))
-    if expected_projection != target.blueprint_character_projection:
-        raise ProvenanceRefused(
-            'reviewed-edit commit staging projection 不等于 target Global/MainText')
     return edit, main_text
 
 
@@ -6585,7 +5712,6 @@ def _reviewed_edit_commit_readback(
     expected = {
         GLOBAL_REL: target.global_sha256,
         GLOBAL_REVIEW_REL: target.review_sha256,
-        BLUEPRINT_CHARACTER_REL: target.projection_sha256,
     }
     got = {rel: store.full_sha256_or_none(rel) for rel in expected}
     if got != expected:
@@ -6594,18 +5720,11 @@ def _reviewed_edit_commit_readback(
     if store.exists(_GLOBAL_INVALID) or store.exists(GLOBAL_EDIT_FAILURE):
         raise ProvenanceRefused(
             'reviewed-edit commit target readback 后仍有 live INVALID/failure sidecar')
-    landed = store.read_own(
-        GlobalGrounding, GLOBAL_REL, require_current=True)[0]
+    landed = grounding_io.read_own(store, GLOBAL_REL, require_current=True)[0]
     review = store.read_own(
         GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
-    projection = store.read_own(
-        BlueprintCharacterProjection, BLUEPRINT_CHARACTER_REL,
-        require_current=True)[0]
     require_current_review(
         landed.model_dump(mode='json', by_alias=True), review)
-    if projection != target.blueprint_character_projection:
-        raise ProvenanceRefused(
-            'reviewed-edit commit projection readback 语义漂移')
     return landed
 
 
@@ -6623,10 +5742,6 @@ def _reconcile_reviewed_edit_commit(
         GLOBAL_REVIEW_REL: _reviewed_edit_commit_target_state(
             store, GLOBAL_REVIEW_REL, baseline_sha256=baseline.review_sha256,
             target_sha256=target.review_sha256),
-        BLUEPRINT_CHARACTER_REL: _reviewed_edit_commit_target_state(
-            store, BLUEPRINT_CHARACTER_REL,
-            baseline_sha256=baseline.projection_sha256,
-            target_sha256=target.projection_sha256),
         _GLOBAL_INVALID: _reviewed_edit_commit_target_state(
             store, _GLOBAL_INVALID, baseline_sha256=baseline.invalid_sha256,
             target_sha256=None),
@@ -6637,13 +5752,9 @@ def _reconcile_reviewed_edit_commit(
     }
 
     if states[GLOBAL_REL] == 'baseline':
-        store.write_round(GLOBAL_REL, target.global_grounding)
+        store.write_round(GLOBAL_REL, grounding_io.for_write(store, target.global_grounding))
     if states[GLOBAL_REVIEW_REL] == 'baseline':
         store.write_round(GLOBAL_REVIEW_REL, target.global_review)
-    if states[BLUEPRINT_CHARACTER_REL] == 'baseline':
-        store.write_round(
-            BLUEPRINT_CHARACTER_REL,
-            target.blueprint_character_projection)
     if store.exists(_GLOBAL_INVALID):
         if store.full_sha256_or_none(_GLOBAL_INVALID) != baseline.invalid_sha256:
             raise ProvenanceRefused(
@@ -6721,7 +5832,6 @@ def submitted_global_patch_is_current(
     for rel, before, after in (
         (GLOBAL_REL, baseline.global_sha256, target.global_sha256),
         (GLOBAL_REVIEW_REL, baseline.review_sha256, target.review_sha256),
-        (BLUEPRINT_CHARACTER_REL, baseline.projection_sha256, target.projection_sha256),
         (_GLOBAL_INVALID, baseline.invalid_sha256, None),
         (GLOBAL_EDIT_FAILURE, baseline.failure_sha256, None),
     ):
@@ -6873,17 +5983,11 @@ def _prepare_reviewed_edit_commit(
           or store.exists(GLOBAL_EDIT_FAILURE)):
         raise ProvenanceRefused(
             '普通 GlobalEdit commit 不得接管 reviewed failure sidecar')
-    projection = materialize_blueprint_character_projection(
-        artifact.model_dump(mode='json', by_alias=True)['entities']['characters'],
-        copy.deepcopy(main_text))
     target = {
-        'global_grounding': artifact,
+        'global_grounding': artifact.model_dump(mode='json', by_alias=True),
         'global_review': review,
-        'blueprint_character_projection': projection,
-        'global_sha256': store.prospective_sha256(GLOBAL_REL, artifact),
+        'global_sha256': store.prospective_sha256(GLOBAL_REL, grounding_io.for_write(store, artifact)),
         'review_sha256': store.prospective_sha256(GLOBAL_REVIEW_REL, review),
-        'projection_sha256': store.prospective_sha256(
-            BLUEPRINT_CHARACTER_REL, projection),
     }
     main_text_sha256 = store.full_sha256_or_none(MAIN_TEXT)
     if main_text_sha256 is None:  # pragma: no cover —— caller 已读到 MainText
@@ -6901,15 +6005,13 @@ def _prepare_reviewed_edit_commit(
         'baseline': {
             'global_sha256': store.full_sha256_or_none(GLOBAL_REL),
             'review_sha256': store.full_sha256_or_none(GLOBAL_REVIEW_REL),
-            'projection_sha256': store.full_sha256_or_none(
-                BLUEPRINT_CHARACTER_REL),
             'invalid_sha256': store.full_sha256_or_none(_GLOBAL_INVALID),
             'failure_sha256': failure_sha256,
         },
         'target': target,
         'code_version': store.ctx.code,
     })
-    # 唯一 write-ahead 点：它返回前，Global/review/projection/INVALID 一个字节都没动。
+    # 唯一 write-ahead 点：它返回前，知识/review/INVALID 一个字节都没动。
     store.write_round(GLOBAL_EDIT_COMMIT, journal)
     return journal
 
@@ -6924,7 +6026,6 @@ _SAFE_GLOBAL_EDIT_REJECTION_CATEGORIES = frozenset({
     'collection_expected_sha_stale',
     'collection_split_output_subject_exists',
     'collection_split_subject_missing',
-    'dangling_arc_track_subject',
     'dangling_character_reference',
     'dangling_relation_endpoint',
     'dangling_secret_reference',
@@ -6932,6 +6033,7 @@ _SAFE_GLOBAL_EDIT_REJECTION_CATEGORIES = frozenset({
     'invalid_chapter_reference',
     'invalid_fate_evidence_pair',
     'invalid_relation_window',
+    'invalid_opening_scope',
     'missing_patch_index',
     'missing_patch_subject',
 })
@@ -7015,7 +6117,6 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
     candidate = copy.deepcopy(data)
     entities = candidate.get('entities') or {}
     canon = candidate.get('canon') or {}
-    arc = candidate.get('arc') or {}
     changed: list[str] = []
     removed_or_split: dict[str, set[str]] = {
         name: set() for name in (
@@ -7187,22 +6288,14 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
             canon['world_rules'] = ordered
 
     characters = entities.get('characters') or {}
-    if edit.characters_replace is not None:
-        characters = {
-            char_id: row.model_dump(by_alias=True)
-            for char_id, row in edit.characters_replace.items()
-        }
-        entities['characters'] = characters
-    if edit.arc_replace is not None:
-        arc = edit.arc_replace.model_dump(by_alias=True)
-        candidate['arc'] = arc
+    if edit.source_blurb_replace is not None:
+        candidate['source_blurb'] = edit.source_blurb_replace.model_dump(by_alias=True)
     secret_by_id = {str(row.get('secret_id') or ''): row
                     for row in (canon.get('secrets') or [])}
     rule_by_id = {str(row.get('rule_id') or ''): row
                   for row in (canon.get('world_rules') or [])}
     relation_by_id = {str(row.get('relation_id') or ''): row
                       for row in (entities.get('relations') or [])}
-    tracks = arc.get('arc_tracks') or []
 
     direct_targets = {
         'secret': {patch.secret_id for patch in edit.secrets},
@@ -7210,7 +6303,7 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
         'relation': {patch.relation_id for patch in edit.relations},
         'character': {
             patch.char_id for patch in [
-                *edit.characters, *edit.addresses, *edit.addresses_replace]
+                *edit.characters]
         },
     }
     collection_names = {
@@ -7235,7 +6328,7 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
                            if p.relation_id not in relation_by_id
                            and p.relation_id not in conflicts.get('relation', ())),
         'character': sorted(p.char_id for p in [
-            *edit.characters, *edit.addresses, *edit.addresses_replace]
+            *edit.characters]
                             if p.char_id not in characters
                             and p.char_id not in conflicts.get('character', ())),
     }
@@ -7254,23 +6347,6 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
             'subject_kind': kind,
             'subject_id': identity,
         } for identity in values)
-    bad_track = sorted(p.track_index for p in edit.arc_tracks
-                       if p.track_index >= len(tracks))
-    bad_address = sorted((p.char_id, p.address_index) for p in edit.addresses
-                         if p.char_id in characters and p.address_index >= len(
-                             (characters.get(p.char_id) or {}).get('address') or []))
-    candidate_diagnostics.extend({
-        'category': 'missing_patch_index',
-        'subject_kind': 'arc_track',
-        'index': index,
-    } for index in bad_track)
-    candidate_diagnostics.extend({
-        'category': 'missing_patch_index',
-        'subject_kind': 'address',
-        'subject_id': char_id,
-        'index': index,
-    } for char_id, index in bad_address)
-
     def dump(value: Any) -> Any:
         if isinstance(value, StrictModel):
             return value.model_dump(by_alias=True)
@@ -7278,10 +6354,8 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
             return [dump(item) for item in value]
         return copy.deepcopy(value)
 
-    if edit.characters_replace is not None:
-        changed.append('entities.characters')
-    if edit.arc_replace is not None:
-        changed.append('arc')
+    if edit.source_blurb_replace is not None:
+        changed.append('source_blurb')
 
     def apply_fields(target: dict[str, Any], patch: StrictModel,
                      identity: str, *, skip: set[str]) -> None:
@@ -7332,51 +6406,6 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
         dumped = edit.setting.model_dump(by_alias=True, exclude_unset=True)
         canon.setdefault('setting', {}).update(dumped)
         changed.extend(f'canon.setting.{key}' for key in dumped)
-    if edit.arc_replace is not None:
-        measured = checks.measure_conflict_stage_coverage(
-            arc.get('conflict_stages') or [], ordinals)
-        if measured.evidence:
-            raise TerminalState(
-                'arc_replace.conflict_stages 没有让正文章恰好各出现一次：'
-                f'缺章={list(measured.missing)}，越界={list(measured.extra)}，'
-                f'重复={[(chapter, list(labels)) for chapter, labels in measured.duplicate]}；'
-                f'盘上章集合={sorted(ordinals)}')
-    if edit.conflict_stages_replace is not None:
-        replacement = [row.model_dump(by_alias=True)
-                       for row in edit.conflict_stages_replace]
-        measured = checks.measure_conflict_stage_coverage(replacement, ordinals)
-        if measured.evidence:
-            raise TerminalState(
-                'conflict_stages_replace 没有让正文章恰好各出现一次：'
-                f'缺章={list(measured.missing)}，越界={list(measured.extra)}，'
-                f'重复={[(chapter, list(labels)) for chapter, labels in measured.duplicate]}；'
-                f'盘上章集合={sorted(ordinals)}')
-        arc['conflict_stages'] = replacement
-        changed.append('arc.conflict_stages')
-    if edit.arc_tracks_replace is not None:
-        arc['arc_tracks'] = [row.model_dump(by_alias=True)
-                             for row in edit.arc_tracks_replace]
-        changed.append('arc.arc_tracks')
-    else:
-        for patch in edit.arc_tracks:
-            if patch.track_index >= len(tracks):
-                continue
-            apply_fields(tracks[patch.track_index], patch,
-                         f'arc.arc_tracks.{patch.track_index}', skip={'track_index'})
-    for replacement in edit.addresses_replace:
-        if replacement.char_id not in characters:
-            continue
-        characters[replacement.char_id]['address'] = [
-            row.model_dump(by_alias=True) for row in replacement.address]
-        changed.append(f'{replacement.char_id}.address')
-    for patch in edit.addresses:
-        if (patch.char_id not in characters
-                or patch.address_index >= len(
-                    characters[patch.char_id].get('address') or [])):
-            continue
-        characters[patch.char_id]['address'][patch.address_index]['context'] = patch.context
-        changed.append(f'{patch.char_id}.address.{patch.address_index}.context')
-
     # 校验**应用后的完整候选**，这样“删了 secret 却留下 via_secret 引用”也会在写盘前出声。
     bad_refs: list[dict[str, Any]] = []
     bad_chapters: list[dict[str, Any]] = []
@@ -7392,23 +6421,6 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
     resulting_secrets = canon.get('secrets') or []
     secret_ids = {row.get('secret_id') for row in resulting_secrets
                   if isinstance(row, dict)}
-    resulting_relation_ids = {
-        row['relation_id']
-        for row in (entities.get('relations') or [])
-        if (isinstance(row, dict)
-            and isinstance(row.get('relation_id'), str))
-    }
-    arc_track_subjects = {
-        'reader', *characters.keys(), *resulting_relation_ids,
-    }
-    for index, track in enumerate(arc.get('arc_tracks') or []):
-        subject = track.get('subject') if isinstance(track, dict) else None
-        if subject not in arc_track_subjects:
-            bad_refs.append({
-                'category': 'dangling_arc_track_subject',
-                'track_index': index,
-                'target_id': subject,
-            })
     for relation in (entities.get('relations') or []):
         rid = relation.get('relation_id')
         for key in ('subject_id', 'object_id'):
@@ -7487,6 +6499,10 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
         evidence = owner.get(field) or {}
         chapter(f'{path}.{field}.chapter_ordinal', evidence.get('chapter_ordinal'))
 
+    if edit.source_blurb_replace is not None:
+        measured = checks.measure_opening_scope(candidate['source_blurb']['opening'], ordinals)
+        candidate_diagnostics.extend({'category': 'invalid_opening_scope', 'detail': error}
+                                     for error in measured.errors)
     diagnostics = [
         *candidate_diagnostics, *bad_refs, *bad_chapters,
     ]
@@ -7584,9 +6600,7 @@ def preflight_global_edit(ctx: RunContext, edit: GlobalEdit) -> None:
     previous_review = store.read_own(
         GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
     if edit.post_edit_review is not None:
-        previous = store.read_own(
-            GlobalGrounding, GLOBAL_REL, require_current=True,
-            replaced_input_keys=(GLOBAL_EDIT,))[0]
+        previous = grounding_io.read_own(store, GLOBAL_REL, require_current=True, replaced_input_keys=(GLOBAL_EDIT,))[0]
         raw = previous.model_dump(mode='json', by_alias=True)
         require_current_review(raw, previous_review)
     else:
@@ -7812,9 +6826,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
             # 拒绝、并留下 live INVALID 后到达。证明绑定的是修前正式 Global
             # 与它的 current review；纠正稿必须重新应用到该正式底座，不能在
             # INVALID 上叠加第一份 patch。执行许可仍由 live surface 现场铸造。
-            previous, reviewed_formal_sha256 = store.read_own_with_sha256(
-                GlobalGrounding, GLOBAL_REL, require_current=True,
-                replaced_input_keys=(GLOBAL_EDIT,))
+            previous, reviewed_formal_sha256 = grounding_io.read_own_with_sha256(store, GLOBAL_REL, require_current=True, replaced_input_keys=(GLOBAL_EDIT,))
             # 正式 Global 经 store 渲染时是完整形态；从 typed model 回取业务 payload
             # 可与同一次 read 得到的 raw SHA 共同关闭 TOCTOU。
             raw = previous.model_dump(mode='json', by_alias=True)
@@ -7877,7 +6889,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
                 **data, '_provenance': provenance})
         except ValidationError as exc:
             failure = TerminalState(
-                '人工 GlobalEdit 应用后的完整候选不符合当前 GlobalGrounding v4；'
+                '人工 GlobalEdit 应用后的完整候选不符合当前 KnowledgeGrounding v6；'
                 '字段位置可从异常链诊断，恢复事实不会持久化 input_value/正文')
             if reviewed_edit:
                 locations = sorted({
@@ -7895,7 +6907,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
                     candidate_business_sha256=_canonical_sha256(data),
                     reason_code='candidate_schema_invalid',
                     reason_summary=(
-                        'GlobalEdit 候选不符合 GlobalGrounding v4；fields='
+                        'GlobalEdit 候选不符合 KnowledgeGrounding v6；fields='
                         + ','.join(locations[:12]))[:512],
                 )
                 _retire_global_edit_input_commit_after_failure(
@@ -7911,7 +6923,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
                     candidate_business_sha256=_canonical_sha256(data),
                     reason_code='candidate_schema_invalid',
                     reason_summary=(
-                        '普通 GlobalEdit 候选不符合 GlobalGrounding v4'),
+                        '普通 GlobalEdit 候选不符合 KnowledgeGrounding v6'),
                 )
                 _retire_nonreviewed_global_edit_input_commit(
                     store, canonical_edit_sha256=canonical_edit_sha256)
@@ -7922,7 +6934,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
         hits = _hard_hits(outcomes, ignore={'upstream_missing'})
         if hits:
             failure_rels = (
-                _GLOBAL_INVALID, BLUEPRINT_CHARACTER_REL, GLOBAL_EDIT_FAILURE)
+                _GLOBAL_INVALID, GLOBAL_EDIT_FAILURE)
             with store.history_transaction(*failure_rels):
                 path = _write_invalid(
                     store, GLOBAL_REL, artifact,

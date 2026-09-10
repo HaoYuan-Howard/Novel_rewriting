@@ -13,9 +13,7 @@ from contracts.invariants import (
     HOOK_SLOTS,)
 from contracts.schema.stage6 import HookResponse
 from contracts.invariants import STYLE_MEASUREMENT_CONTRACT
-from novel.consumption import (
-    legacy_stage3_projection_for, legacy_stage6_style, projection_for,
-)
+from novel.consumption import projection_for
 from novel.stages.stage6 import checks, prompts
 
 
@@ -122,7 +120,7 @@ def test_invented_number_compares_values_and_ignores_success_false_positive():
     text = ('好感度一百成功。这位人物已经30岁，做这件事仍有八成胜算。'
             '所有事实都来自下发材料，这一句只是把文案补到正常长度。')
     findings = checks.hook_findings(
-        text, mat=mat, secrets=[], arc=None, characters={}, src_hook=None,
+        text, mat=mat, secrets=[],  characters={}, src_hook=None,
         hook_mechanical=None, quote_problems=[])
     assert not [finding for finding in findings
                 if finding.rule == 'hook_invented_number']
@@ -139,7 +137,7 @@ def test_hook_secret_literal_uses_the_shared_number_ruler_and_own_bytes():
             'fact': fact,
             'first_reveal_chapter': 9,
         }],
-        arc=None,
+
         characters={},
         src_hook=None,
         hook_mechanical=None,
@@ -231,7 +229,7 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
     grounding = {
         'entities': {'characters': {'c1': {'canonical': '阿宁'}}},
         'canon': {'secrets': [{'secret_id': 's1', 'fact': '写信者是仇人。'}]},
-        'arc': {'climax': '她当众烧信。', 'ending': '两人联手破局。'},
+        'source_blurb': {'facts': [{'kind': 'supported', 'claim_id': 'hook_001', 'claim': '她收到匿名信。'}], 'opening': {'kind': 'proposed', 'through_chapter': 1, 'rationale': '收到来信引出冲突'}},
     }
     material = prompts.build_material(
         title='匿名信',
@@ -254,7 +252,7 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
         'facts': ['事件：收到信。'],
     }
     assert 'fact_refs' not in packet['whole_story_map'][0]['chapter_goal']
-    assert packet['story_truth']['arc']['ending'] in user
+    assert packet['story_truth']['source_blurb']['facts'][0]['claim'] in user
     expected = {
         'chars': 100,
         'avg_sentence_chars': 10,
@@ -272,56 +270,6 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
     assert packet['rewritten_opening'][0]['text'] == '重写后的第一章正文。'
 
 
-def test_legacy_stage6_projection_is_exactly_the_five_hook_mechanical_leaves():
-    source = {
-        'voice': {'register_tone': '定性哨兵'},
-        'surface_habits': ['定性哨兵'],
-        'chapter_styles': [{'source_ordinal': 1, 'voice': {'x': '定性哨兵'}}],
-        'hook_style': {'end_question': '定性哨兵'},
-        'measurable': {
-            'body': {'avg_sentence_chars': 99},
-            'hook': {
-                'chars': 100,
-                'paragraphs': 8,
-                'sentences': 10,
-                'avg_sentence_chars': 10,
-                'avg_paragraph_chars': 12,
-                'paragraph_sep_chars': 2,
-                'dialogue_ratio': 0.2,
-                'dialogue_ratio_applicable': True,
-                'quote_styles': ['“”'],
-            },
-        },
-        '_provenance': {'code': '不消费'},
-    }
-    expected = {'hook': {
-        'chars': 100,
-        'avg_sentence_chars': 10,
-        'avg_paragraph_chars': 12,
-        'quote_styles': ['“”'],
-        'dialogue_ratio': 0.2,
-    }}
-    assert legacy_stage6_style(source) == expected
-
-    for key in ('voice', 'surface_habits', 'chapter_styles', 'hook_style',
-                '_provenance'):
-        edited = json.loads(json.dumps(source, ensure_ascii=False))
-        edited[key] = {'任意': '变化'}
-        assert legacy_stage6_style(edited) == expected, key
-    for key in expected['hook']:
-        edited = json.loads(json.dumps(source, ensure_ascii=False))
-        edited['measurable']['hook'][key] = 'changed'
-        assert legacy_stage6_style(edited) != expected, key
-
-    assert legacy_stage6_style({'measurable': '旧坏形状'}) == {'hook': {
-        'chars': None,
-        'avg_sentence_chars': None,
-        'avg_paragraph_chars': None,
-        'quote_styles': None,
-        'dialogue_ratio': None,
-    }}
-
-
 def test_current_stage6_freshness_binds_source_hook_and_measurement_contract():
     for node in ('stage6.hook', 'stage6.semantic'):
         project = projection_for(node, 'stage1/hook_copy.json')
@@ -331,12 +279,6 @@ def test_current_stage6_freshness_binds_source_hook_and_measurement_contract():
             'text': '原作文案',
         }
         assert projection_for(node, 'stage3/style_grounding.json') is None
-
-
-def test_old_stage6_provenance_still_uses_the_frozen_stage3_projection():
-    for node in ('stage6.hook', 'stage6.semantic'):
-        assert legacy_stage3_projection_for(
-            node, 'stage3/style_grounding.json') is legacy_stage6_style
 
 
 def test_weak_fact_attribution_metric_compares_gift_phrase_to_story_map():
@@ -350,7 +292,7 @@ def test_weak_fact_attribution_metric_compares_gift_phrase_to_story_map():
     )
     outcomes = checks.check(
         texts=[('候选', '阿宁送给小禾玉佩。', [])],
-        mat=material, secrets=[], arc=None, lead_upto_ch=1, hook_chars=None,
+        mat=material, secrets=[],  lead_upto_ch=1, hook_chars=None,
         approved=False, stale=[], missing=[])
     metric = next(outcome for outcome in outcomes
                   if outcome.rule == 'hook_fact_attribution')
@@ -366,7 +308,7 @@ def test_source_copy_guard_now_rejects_any_twenty_content_character_window():
         text,
         mat=prompts.Material(blocks=('完整故事真相。',)),
         secrets=[],
-        arc=None,
+
         characters={},
         src_hook=source,
         hook_mechanical=None,
@@ -386,7 +328,7 @@ def test_body_transcription_guard_reports_normalized_lcs_and_both_raw_ranges():
         text,
         mat=prompts.Material(blocks=('完整故事真相。',), lead=({'text': lead},)),
         secrets=[],
-        arc=None,
+
         characters={},
         src_hook=None,
         hook_mechanical=None,

@@ -24,7 +24,7 @@ from tests.test_design_review import (
     isolated as design_isolated,
 )
 from tests.test_reviewer_tasks import _current
-from tests.test_stage4_reviewer_integration import PROFILE, _materialize
+from tests.test_stage4_reviewer_integration import PROFILE, _materialize, _structure_pack
 
 
 DESIGN_BLOCKERS = (
@@ -84,12 +84,14 @@ def _assert_unseeded(envelope: dict[str, Any]) -> None:
             continue
         payload = action['payload']
         if action['surface'] == 'design':
-            assert payload['strategy']['decision'] == reviewer_tasks._DECISION
+            inherited = bool(payload['strategy'].get('source_decision_sha256'))
+            assert payload['strategy']['decision'] == ('accept' if inherited else reviewer_tasks._DECISION)
             assert payload['strategy']['replan_constraints'] == []
-            assert payload['strategy']['reason'] == reviewer_tasks._REASON
+            assert (payload['strategy']['reason'] == reviewer_tasks._REASON) != inherited
         for row in payload['chapters']:
-            assert row['decision'] == reviewer_tasks._DECISION
-            assert row['reason'] == reviewer_tasks._REASON
+            inherited = bool(row.get('source_decision_sha256'))
+            assert row['decision'] == ('accept' if inherited else reviewer_tasks._DECISION)
+            assert (row['reason'] == reviewer_tasks._REASON) != inherited
             if action['surface'] == 'design':
                 assert row['constraints'] == []
             for item in (row.get('constraint_operations') or {}).get('items', []):
@@ -103,6 +105,8 @@ def _native_response(task, *, repair=False):
     source = option['exact_request']['action']['payload']
     rows = {}
     for row in source['chapters']:
+        if row.get('source_decision_sha256'):
+            continue
         value = {'decision': 'accept', 'reason': '合成 Reviewer 已独立核实本章',
                  'constraints': []}
         if repair:
@@ -116,14 +120,15 @@ def _native_response(task, *, repair=False):
                 'kind': 'keep', 'reason': '复核后明确保留该历史义务', 'replacements': []}
                 for item in active}
         rows[str(row['output_ordinal'])] = value
+    payload = {'general_reason': '合成 Reviewer 已逐项及跨项复核', 'chapters': rows}
+    if not source['strategy'].get('source_decision_sha256'):
+        payload['strategy'] = {'decision': 'accept', 'reason': '当前策略可承载事实',
+                               'replan_constraints': []}
     return {'schema': wire.WIRE_SCHEMA, 'selection': {
         'option_id': option['id'],
         'expected_exact_request_sha256': hashlib.sha256(
             _json_bytes(option['exact_request'])).hexdigest(),
-        'payload': {'general_reason': '合成 Reviewer 已逐项及跨项复核',
-                    'strategy': {'decision': 'accept', 'reason': '当前策略可承载事实',
-                                 'replan_constraints': []},
-                    'chapters': rows},
+        'payload': payload,
     }}
 
 
@@ -241,8 +246,20 @@ def test_changed_chapter_loses_seed_but_unchanged_accept_keeps_its_source(
     by_chapter = {row['chapter_ordinal']: row for row in coverage}
     assert not by_chapter[1]['historical_accept_reusable']
     assert by_chapter[1]['source_decision_sha256'] is None
-    assert by_chapter[2]['historical_accept_reusable']
-    assert by_chapter[2]['source_decision_sha256'] == source_sha
+    assert set(by_chapter) == {1}
+    assert envelope['materials']['design']['review_projection']['inherited'] == [{
+        'chapter_ordinal': 2, 'source_decision_sha256': source_sha}]
+    frozen = task.submission_options[0]['exact_request']['action']['payload']['chapters'][1]
+    assert frozen['source_decision_sha256'] == source_sha
+    assert frozen['reason'] == template.chapters[1].reason
+    # 原生回答只交待审章；可信组装保留旧决定的每个字节语义。
+    assembled = wire.assemble(task, _native_response(task))['action']['payload']
+    assert assembled['chapters'][1] == frozen
+    assert assembled['strategy'] == task.submission_options[0]['exact_request']['action']['payload']['strategy']
+    forbidden = _native_response(task)
+    forbidden['selection']['payload']['chapters']['2'] = {'decision': 'accept', 'reason': '试图重写', 'constraints': []}
+    with pytest.raises(wire.Stage4ReviewerWireError, match='schema'):
+        wire.assemble(task, forbidden)
 
 
 @pytest.mark.parametrize('blocker', DESIGN_BLOCKERS)
@@ -307,10 +324,11 @@ def test_new_catalog_changes_actual_prompt_but_not_issued_resolution_budget(
 def test_structure_scaffold_does_not_prejudge_every_chapter_replan(
         design_isolated, monkeypatch):
     base, _state = design_isolated
-    pack = {'structure': {'chapter_ordinals': [1]}, '_structure_template': {
+    template = StructureApprovalRequest.model_validate({
         'actor': 'fixture', 'reason': '关闭式模板', 'review_token': 's4sr1_' + 'b' * 64,
         'chapters': [{'output_ordinal': 1, 'decision': 'request_replan', 'reason': '尚未审阅'}],
-    }}
+    })
+    pack = {'structure': _structure_pack(template), '_structure_template': template.model_dump(mode='json')}
     _, task = _build(base, monkeypatch, queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW, pack=pack)
     envelope = _envelope(wire.prompt_for(task, task.prompt))
     _assert_unseeded(envelope)

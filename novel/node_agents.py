@@ -17,14 +17,18 @@ from typing import Any, Generic, Literal, TypeVar
 from pydantic import BaseModel
 
 from contracts.invariants import (
-    STAGE2_BLUEPRINT_MAX_CONCURRENCY,
+    STAGE2_BLUEPRINT_MAX_CONCURRENCY, PIPELINE_DEFAULT_CONCURRENCY,
     STAGE4_DESIGN_MAX_CONCURRENCY, STAGE4_PLAN_MAX_CONCURRENCY,
     STAGE5_WRITE_MAX_CONCURRENCY,
 )
 from contracts.schema.report import CheckReport
+from contracts.schema.characters import CharacterRegistry
+from contracts.schema.knowledge import (
+    KnowledgeAgentTurnResponse as GlobalCandidateAgentTurnResponse,
+    KnowledgeFullTurn as GlobalCandidateFullTurn,
+)
 from contracts.schema.stage2 import (
-    ChapterBlueprints, GlobalCandidateAgentTurnResponse,
-    GlobalCandidateFullTurn, GlobalGrounding, GlobalRoleFatePatchTurn,
+    ChapterBlueprints, GlobalGrounding,
 )
 from contracts.schema.stage4 import (
     BindingConcern, BlindCandidate, ChapterBindingResponse, EvidenceBinding,
@@ -58,7 +62,6 @@ from novel.store import ArtifactStore
 
 
 A = TypeVar('A', bound=BaseModel)
-GlobalPatchKind = Literal['role_fate_patch']
 
 
 @dataclass(frozen=True)
@@ -147,6 +150,34 @@ class NodeExecutorAgent(ABC, Generic[A]):
             )
 
 
+class Stage2CharactersAgent(NodeExecutorAgent[CharacterRegistry]):
+    """独立人物 session，审阅仍归现有 Global Commander。"""
+
+    node = 'stage2.characters'
+
+    def __init__(self, ctx: RunContext, *, driver: AgentDriver | None = None,
+                 max_turns: int = 4, review_token: str | None = None) -> None:
+        super().__init__(ctx, driver=driver, max_turns=max_turns)
+        self.review_token = review_token
+
+    def run(self) -> NodeAgentResult[CharacterRegistry]:
+        from novel.stages.stage2 import characters
+
+        try:
+            artifact = characters.run(self.ctx, self.client, review_token=self.review_token)
+            if self.review_token is not None:
+                from novel.orchestrator.approvals import mark_stage2_rework_landed
+                mark_stage2_rework_landed(
+                    self.ctx.novel_dir.parent, self.ctx.sid, self.node, self.review_token)
+            self.client.finish(process_state='ok', delivery_state='delivered')
+            return NodeAgentResult(artifact=artifact, turns=self.client.turns_used, passed=True)
+        except Exception as exc:
+            self._finish_exception(exc)
+            raise
+        finally:
+            self.client.close()
+
+
 class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
     """``stage2.global`` 的候选—代码校验—resume—正式提交纵切。"""
 
@@ -210,65 +241,8 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
             raise
         raise AssertionError('HARD 候选 finalize 必须抛 GateBlocked')
 
-    @staticmethod
-    def _repair_transition(
-        prepared: extract.GlobalCandidateContext,
-        evaluation: extract.GlobalCandidateEvaluation,
-        *,
-        role_patch_started: bool,
-        accepted_role_patch_count: int,
-    ) -> tuple[
-        list[dict[str, object]],
-        extract.GlobalCandidateEvaluation | None,
-        GlobalPatchKind | None,
-        bool,
-    ]:
-        """把一份业务 HARD 候选收成唯一下一状态。
-
-        fresh 路与 checkpoint 恢复路必须共用这一只 reducer；否则进程恰好死在
-        accepted checkpoint 后，会因为走了另一套分支而跳过首个窄修、额外开放
-        重发内容预算，或把 mixed HARD 重新扩大成整书 full candidate。
-
-        返回 ``(feedback, next_base, next_kind, terminal_role_failure)``。
-        """
-        if role_patch_started:
-            role_scope = extract.global_role_fate_patch_scope(
-                prepared, evaluation)
-            if role_scope is not None:
-                return (
-                    extract.global_role_fate_patch_feedback_rows(
-                        evaluation, role_scope),
-                    evaluation,
-                    'role_fate_patch',
-                    False,
-                )
-            # role patch 一旦开始即 sticky。patch 引入 mixed/其它 HARD 必须
-            # 原样终态化；内容轮数统一交工作单元预算，剩余轮次不能重新扩大
-            # 改写面。终态仍返回完整反馈，供 rejected gate 留无正文计数。
-            return evaluation.feedback_rows(), None, None, True
-        role_scope = extract.global_role_fate_patch_scope(
-            prepared, evaluation)
-        if role_scope is not None:
-            return (
-                extract.global_role_fate_patch_feedback_rows(
-                    evaluation, role_scope),
-                evaluation,
-                'role_fate_patch',
-                False,
-            )
-        return (
-            extract.global_full_candidate_feedback_rows(evaluation),
-            None,
-            None,
-            False,
-        )
-
     def _run_candidate(self) -> NodeAgentResult[GlobalGrounding]:
         last_rejected: extract.GlobalCandidateEvaluation | None = None
-        patch_base: extract.GlobalCandidateEvaluation | None = None
-        patch_kind: GlobalPatchKind | None = None
-        role_patch_started = False
-        accepted_role_patch_count = 0
         try:
             prepared = extract.prepare_global_candidate(
                 self.ctx, agent_envelope=True, review_token=self.review_token)
@@ -278,24 +252,16 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
             restored = extract.restore_global_agent_checkpoint(
                 self.ctx, self.client, prepared)
             if restored is not None:
-                accepted_role_patch_count = restored.accepted_role_patch_count
-                role_patch_started = accepted_role_patch_count > 0
                 evaluation = extract.evaluate_global_candidate(
                     self.ctx, self.client, prepared, restored.response)
                 if not evaluation.passed:
                     last_rejected = evaluation
-                    (feedback, patch_base, patch_kind,
-                     terminal_role_failure) = self._repair_transition(
-                        prepared,
-                        evaluation,
-                        role_patch_started=role_patch_started,
-                        accepted_role_patch_count=accepted_role_patch_count,
-                    )
+                    feedback = extract.global_full_candidate_feedback_rows(evaluation)
                     extract.assert_global_main_text_current(self.ctx, prepared)
                     if not self.client.queue_restored_code_validation_feedback(
                             feedback,
                             purpose=self.ctx.node,
-                            allow_resume=not terminal_role_failure):
+                            allow_resume=True):
                         self._finalize_rejected(prepared, evaluation)
                 else:
                     try:
@@ -320,18 +286,7 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
                         passed=True)
             while True:
                 try:
-                    if patch_kind is None:
-                        turn_validator = \
-                            extract.global_full_candidate_validator(prepared)
-                    elif patch_base is None:
-                        raise ProvenanceRefused(
-                            f'stage2.global {patch_kind} 缺状态机 base candidate')
-                    elif patch_kind == 'role_fate_patch':
-                        turn_validator = extract.global_role_fate_patch_validator(
-                            prepared, patch_base)
-                    else:
-                        raise ProvenanceRefused(
-                            f'stage2.global 未登记 patch_kind={patch_kind!r}')
+                    turn_validator = extract.global_full_candidate_validator(prepared)
                     turn = self.client.ask_json(
                         prepared.system,
                         prepared.user,
@@ -339,7 +294,7 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
                         purpose=self.ctx.node,
                         max_tokens=extract.GLOBAL_MAX_TOKENS,
                         validator=turn_validator,
-                        recovery_policy='stage2-global-v1',
+                        recovery_policy='stage2-knowledge-v2',
                         retain_validator_rejection=True,
                     )
                 except LlmFailed:
@@ -348,19 +303,8 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
                     # driver/subject/code 失败不走这条路，不能拿旧候选掩盖进程失败。
                     if (not self.client.driver_failed
                             and not self.client.can_resume):
-                        expected_turn_kind = (
-                            'full_candidate' if patch_kind is None else
-                            patch_kind)
                         custody = extract.custody_global_validator_rejection(
-                            self.ctx,
-                            self.client,
-                            prepared,
-                            expected_turn_kind=expected_turn_kind,
-                            base_response=(
-                                None if patch_base is None else
-                                patch_base._response),
-                            accepted_role_patch_count=accepted_role_patch_count,
-                        )
+                            self.ctx, self.client, prepared)
                         # typed validator rejection 是最后一份已经付费的 stdout，
                         # 优先进入 hash-bound custody；只有根本没有 typed 稿（例如
                         # parse/schema 耗尽）时，才终态化上一份业务 HARD 候选。
@@ -376,89 +320,23 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
                     )
                     raise
 
-                if patch_kind is None:
-                    if (not isinstance(turn, GlobalCandidateAgentTurnResponse)
-                            or not isinstance(
-                                turn.payload, GlobalCandidateFullTurn)):
-                        raise ProvenanceRefused(
-                            'stage2.global full turn '
-                            '通过 dynamic validator 后分支漂移')
-                    response = turn.payload.candidate
-                    base_evaluation = None
-                    patch_audit: object | None = None
-                elif patch_kind == 'role_fate_patch':
-                    if (not isinstance(turn, GlobalCandidateAgentTurnResponse)
-                            or not isinstance(
-                                turn.payload, GlobalRoleFatePatchTurn)):
-                        raise ProvenanceRefused(
-                            'stage2.global role/fate patch turn 通过 dynamic '
-                            'validator 后分支漂移')
-                    if patch_base is None:
-                        raise ProvenanceRefused(
-                            'stage2.global role/fate patch 缺状态机 base candidate')
-                    base_evaluation = patch_base
-                    applied = extract.apply_global_role_fate_patch(
-                        prepared, base_evaluation, turn.payload)
-                    response = applied.response
-                    accepted_role_patch_count += 1
-                    role_patch_started = True
-                    patch_audit = applied
-                else:
-                    raise ProvenanceRefused(
-                        f'stage2.global 未登记 patch_kind={patch_kind!r}')
+                if (not isinstance(turn, GlobalCandidateAgentTurnResponse)
+                        or not isinstance(turn.payload, GlobalCandidateFullTurn)):
+                    raise ProvenanceRefused('知识完整候选通过 validator 后类型漂移')
+                response = turn.payload.candidate
                 extract.write_global_agent_checkpoint(
-                    self.ctx,
-                    self.client,
-                    prepared,
-                    turn,
-                    response,
-                    base_response=(
-                        None if base_evaluation is None else
-                        base_evaluation._response),
-                    accepted_role_patch_count=accepted_role_patch_count,
-                )
-                # checkpoint 先于审计：若进程死在两者之间，restore 会按同一事件
-                # identity 幂等补尾；反过来不能让审计声称一份尚不可恢复的 patch。
-                if patch_audit is not None:
-                    attempt_id = self.client.accepted_attempt(self.ctx.node)
-                    if attempt_id is None or base_evaluation is None:
-                        raise ProvenanceRefused(
-                            'stage2.global patch 已 checkpoint 但缺 accepted/base 身份')
-                    if not hasattr(patch_audit, 'changed_field_count'):
-                        raise ProvenanceRefused(
-                            'stage2.global role/fate patch 审计载荷漂移')
-                    self.ctx.ledger.note_role_fate_candidate_patch(
-                        sid=self.ctx.sid,
-                        node=self.ctx.node,
-                        purpose=self.ctx.node,
-                        attempt_id=attempt_id,
-                        base_candidate_sha256=base_evaluation.response_sha256,
-                        result_candidate_sha256=extract.global_response_sha256(
-                            response),
-                        evidence_table_sha256=turn.payload.evidence_table_sha256,
-                        changed_field_count=patch_audit.changed_field_count,
-                    )
-                patch_base = None
-                patch_kind = None
+                    self.ctx, self.client, prepared, turn, response)
 
                 evaluation = extract.evaluate_global_candidate(
                     self.ctx, self.client, prepared, response)
                 if not evaluation.passed:
                     last_rejected = evaluation
-                    (feedback, next_patch_base, next_patch_kind,
-                     terminal_role_failure) = self._repair_transition(
-                        prepared,
-                        evaluation,
-                        role_patch_started=role_patch_started,
-                        accepted_role_patch_count=accepted_role_patch_count,
-                    )
+                    feedback = extract.global_full_candidate_feedback_rows(evaluation)
                     extract.assert_global_main_text_current(
                         self.ctx, prepared)
                     if self.client.queue_code_validation_feedback(
                             feedback, purpose=self.ctx.node,
-                            allow_resume=not terminal_role_failure):
-                        patch_base = next_patch_base
-                        patch_kind = next_patch_kind
+                            allow_resume=True):
                         continue
                     # 只有循环预算耗尽才在这里写一次 INVALID；中间轮始终只在内存。
                     self._finalize_rejected(prepared, evaluation)
@@ -523,7 +401,7 @@ class BlueprintSessionPool:
         *,
         driver_factory: BlueprintDriverFactory | None = None,
         max_turns: int = 4,
-        concurrency: int = STAGE2_BLUEPRINT_MAX_CONCURRENCY,
+        concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
     ) -> None:
         self._sessions = UnitSessionPool[tuple[str, str, int]](
             ctx,
@@ -1034,7 +912,7 @@ class Stage2BlueprintAgent(NodeExecutorAgent[ChapterBlueprints]):
         *,
         driver_factory: BlueprintDriverFactory | None = None,
         max_turns: int = 4,
-        concurrency: int = STAGE2_BLUEPRINT_MAX_CONCURRENCY,
+        concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
         review_token: str | None = None,
     ) -> None:
         if ctx.node != self.node:
@@ -1312,7 +1190,7 @@ class Stage4DesignSessionPool:
         *,
         driver_factory: Stage4DesignDriverFactory | None = None,
         max_turns: int = 4,
-        concurrency: int = STAGE4_DESIGN_MAX_CONCURRENCY,
+        concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
     ) -> None:
         self._sessions = UnitSessionPool[str](
             ctx,
@@ -1735,7 +1613,7 @@ class Stage4DesignAgent(NodeExecutorAgent[BlindCandidate]):
         *,
         driver_factory: Stage4DesignDriverFactory | None = None,
         max_turns: int = 4,
-        concurrency: int = STAGE4_DESIGN_MAX_CONCURRENCY,
+        concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
         repair_decision_sha256: str | None = None,
         repair_scope: plan.DesignRepairScope | None = None,
     ) -> None:
@@ -1816,7 +1694,7 @@ class Stage4PlanAgent(NodeExecutorAgent[BaseModel]):
     node = 'stage4.plan'
 
     def __init__(self, ctx: RunContext, *, driver: AgentDriver | None = None,
-                 max_turns: int = 4) -> None:
+                 max_turns: int = 4, concurrency: int = PIPELINE_DEFAULT_CONCURRENCY) -> None:
         if ctx.node != self.node:
             raise ValueError(
                 f'{type(self).__name__} 只接受 {self.node}，实得 {ctx.node}')
@@ -1838,7 +1716,7 @@ class Stage4PlanAgent(NodeExecutorAgent[BaseModel]):
 
             driver_factory = _single_use_factory
         self.client = Stage4PlanSessionPool(
-            ctx, driver_factory=driver_factory, max_turns=max_turns)
+            ctx, driver_factory=driver_factory, max_turns=max_turns, concurrency=concurrency)
 
     def run(self) -> NodeAgentResult[BaseModel]:
         try:
@@ -1884,7 +1762,7 @@ class Stage4PlanSessionPool:
         *,
         driver_factory: Stage4DesignDriverFactory | None = None,
         max_turns: int = 4,
-        concurrency: int = STAGE4_PLAN_MAX_CONCURRENCY,
+        concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
     ) -> None:
         self._sessions = UnitSessionPool[int](
             ctx,
@@ -2159,7 +2037,7 @@ class Stage5SessionPool:
         *,
         driver_factory: Stage5DriverFactory | None = None,
         max_turns: int = 4,
-        concurrency: int = STAGE5_WRITE_MAX_CONCURRENCY,
+        concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
         reviewer_rewrite: bool = False,
     ) -> None:
         self._sessions = UnitSessionPool[int](
@@ -2667,7 +2545,7 @@ class Stage5WriteAgent(NodeExecutorAgent[CheckReport]):
         *,
         driver_factory: Stage5DriverFactory | None = None,
         max_turns: int = 4,
-        concurrency: int = STAGE5_WRITE_MAX_CONCURRENCY,
+        concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
         chapters: str | None = None,
         revise: bool = False,
         reviewer_rewrite: str | None = None,
@@ -3236,6 +3114,7 @@ class Stage7RenameAgent(NodeExecutorAgent[NameMap]):
 
 
 EXECUTOR_FACTORIES: dict[str, Callable[..., NodeExecutorAgent[BaseModel]]] = {
+    'stage2.characters': Stage2CharactersAgent,
     'stage2.global': Stage2GlobalAgent,
     'stage2.blueprint': Stage2BlueprintAgent,
     'stage4.design': Stage4DesignAgent,
@@ -3260,13 +3139,14 @@ def build_node_agent(
     repair_decision_sha256: str | None = None,
     repair_scope: plan.DesignRepairScope | None = None,
     max_turns: int = 4,
-    concurrency: int = MAX_CONCURRENCY,
+    concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
 ) -> NodeExecutorAgent[BaseModel]:
     factory = EXECUTOR_FACTORIES.get(ctx.node)
     if factory is None:
         raise ValueError(
             f'{ctx.node} 尚未按迁移顺序接入 executor agent；拒绝静默回退 DeepSeek')
-    if review_token is not None and ctx.node not in {'stage2.global', 'stage2.blueprint'}:
+    if review_token is not None and ctx.node not in {
+            'stage2.characters', 'stage2.global', 'stage2.blueprint'}:
         raise ValueError(f'{ctx.node} 不接受 Stage2 review_token 参数')
     if (ctx.node != 'stage4.design'
             and (repair_decision_sha256 is not None
@@ -3360,16 +3240,18 @@ def build_node_agent(
     if chapters is not None or revise or reviewer_rewrite is not None:
         raise ValueError(
             f'{ctx.node} 不接受 Stage5 chapters/revise/reviewer_rewrite 参数')
-    if ctx.node == 'stage2.global':
+    if ctx.node in {'stage2.characters', 'stage2.global'}:
         return factory(
             ctx, driver=driver, max_turns=max_turns, review_token=review_token)
+    if ctx.node == 'stage4.plan':
+        return factory(ctx, driver=driver, max_turns=max_turns, concurrency=concurrency)
     return factory(ctx, driver=driver, max_turns=max_turns)
 
 
 __all__ = [
     'BlueprintDriverFactory', 'BlueprintSessionPool', 'EXECUTOR_FACTORIES',
     'NodeAgentResult', 'NodeExecutorAgent', 'Stage2BlueprintAgent',
-    'Stage2GlobalAgent', 'Stage4DesignAgent', 'Stage4DesignDriverFactory',
+    'Stage2CharactersAgent', 'Stage2GlobalAgent', 'Stage4DesignAgent', 'Stage4DesignDriverFactory',
     'Stage4DesignSessionPool', 'Stage4PlanAgent',
     'Stage4PlanSessionPool',
     'Stage5DriverFactory', 'Stage5SessionPool',

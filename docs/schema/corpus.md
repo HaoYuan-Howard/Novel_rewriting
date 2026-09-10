@@ -17,14 +17,14 @@ manifest 不含书名、原文、prompt 或生成正文，只记录：
 实体字节；这样既不泄漏书名，又与 `contracts/artifacts.py::ARTIFACT_PATHS['stage7.book']`
 保持同一落点。
 
-Stage2 current 盘面除 Global、review 与 ChapterBlueprints 外，还必须含
-`stage2/blueprint_character_projection.json` v1：它由 schema-valid 的最新 formal/INVALID
-Global + MainText 零调用确定性物化，是 Blueprint 唯一的人物称名输入；缺失时不得用一次新的
-付费 `stage2.global` dispatch 冒充恢复，须先跑 `stage2.global --renormalize` 重建。
+Stage2 current 盘面必须含独立人物登记、必要知识、review、ChapterBlueprints、知识关联和
+`stage2/blueprint_character_projection.json` v1。称名投影由 `stage2.characters` 从当前 formal
+人物登记及 MainText 免费物化；缺失时由该节点的 `--revalidate` 恢复，不重抽知识。知识关联
+由 `stage2.blueprint --close-review` 消费已保存的 typed 决定免费物化。
 
 Stage5 current 盘面必须恰有 `stage5/ch01.json`～`stage5/chNN.json` 与
 `stage5/review_1.json`；不得出现旧 `stage5/deep|shallow/` 目录来替代
-canonical 章。正式章为 schema v2，Review 为 schema v2；版本逐份从 registry 现算，不能手补
+canonical 章。正式章和 Review 均为 schema v3；版本逐份从 registry 现算，不能手补
 marker 冒充 current producer。
 
 ## 生成与验证
@@ -52,7 +52,7 @@ conda run -n novel_refactor python -m tests.corpus_manifest verify `
 
 所有节点（包括 `stage5.write` 与 `stage6.semantic`）的冻结 flags 都恰为 `--base --yes`；
 `stage5.write` 不再带 `--deep` / `--shallow-rest` / `--mode`，`stage5.semantic` 已退役。
-两书 × 八个付费节点 = 当前 16 条 dispatch，但校验器按两个 current 元组现算条数与顺序，
+两书 × 九个付费节点 = 当前 18 条 dispatch（含独立人物抽取），校验器按两个 current 元组现算条数与顺序，
 不信本文数字。`preview`、`mark` 或缺少 `run` 的展示命令不能冒充 production dispatch。
 
 最终硬验收显式指定**盘面与 manifest 两个身份**：
@@ -69,16 +69,15 @@ conda run -n novel_refactor python -m pytest --require-corpus
 corpus 还要求 local cache hit 为 0、每个 dispatch 节点均有非零 wire 行；每个 token 列分别记录
 reported/null 行数，分母不闭合就失败。
 
-manifest 的 `commands` 字段必须是 `-m novel.cli run <node> <sid> ... --yes` 的 16 条真实
+manifest 的 `commands` 字段必须是 `-m novel.cli run <node> <sid> ... --yes` 的 18 条真实
 付费 production dispatch：每书各一条 Stage2 global/blueprint、Stage4 A `design`、
 Stage4 B `plan`、Stage5 write、Stage6 hook/semantic、Stage7 rename。机械测量由 Stage5/6 从
 Stage1 即时执行，不是 dispatch，也不在 required artifacts 中。`stage6.semantic` 只带 `--base --yes`
 （`--advisory` 已随自动放行门一并删除）；canonical `stage5.write` 也只带 `--base --yes`，
 默认补齐当前计划的全部缺章。
-ledger 必须对两书、八个付费节点逐一有非零记录并与这 16 条命令对账；Stage4 A/B 是两次
+ledger 必须对两书、九个付费节点逐一有非零记录并与这 18 条命令对账；Stage4 A/B 是两次
 独立付费 dispatch，不能用 B 相的一行账或最终计划替代 A 相的调用与中间产物。
-⚠ 这里的 16 = 2 书 × 8 付费节点，**现算不写死**——它曾因 Stage5 semantic 退役从 18
-降为 16、历史 Stage3 免费化不改变付费数，Stage4 拆成独立 A/B 后仍为 16。条数以
+条数按 2 书 × 9 付费节点现算；独立人物抽取是本期增加的两条，不得从优化后的分母剔除。条数以
 `contracts/schema/corpus.py` 的 `CURRENT_CORPUS_BOOKS × CURRENT_CORPUS_PAID_NODES` 为准。
 `preview`、`mark` 或缺 `run` 的展示命令不能冒充生产 dispatch。
 

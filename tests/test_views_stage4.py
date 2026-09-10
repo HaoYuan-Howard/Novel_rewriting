@@ -67,7 +67,8 @@ def test_the_real_plan_forwards_goals_and_sums_budgets(box):
     v = stage4_view(box.root, box.sid, o)
     assert not v.identity_plan
     assert v.structure_subject_sha256 == structure_review_subject_sha256(
-        plan, binding.get('binding_concerns') or []), \
+        plan, binding.get('binding_concerns') or [],
+        blueprints=sandbox.cut(box.book, 'stage2/chapter_blueprints.json')), \
         'rows 与 subject 必须来自同一份 plan，不许在 view 里二次读盘'
     pc = plan['output_chapters'][0]
     assert v.plan_chapter.chapter_goal.model_dump(mode='json') == pc['chapter_goal']
@@ -185,7 +186,7 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch):
 
     got = stage4_view('unused', '123', 1)
     assert plan_reads == 1, 'subject 不许为了算 hash 重读 plan'
-    assert got.structure_subject_sha256 == structure_review_subject_sha256(snapshot, [])
+    assert got.structure_subject_sha256 == structure_review_subject_sha256(snapshot, [], blueprints=_BPS4)
     assert got.plan_chapter.structure_decision.mode == \
         snapshot.output_chapters[0].structure_decision.mode
     assert got.plan_chapter.structure_decision.computed_change_kinds == []

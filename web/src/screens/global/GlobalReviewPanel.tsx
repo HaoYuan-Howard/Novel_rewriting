@@ -390,7 +390,7 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
                               className="rounded-btn border border-line bg-card px-9 py-7 text-body text-ink"
                             >
                               <option value="">请选择</option>
-                              <option value="PASS">PASS</option>
+                              <option value="PASS" disabled={item.resolution_required}>PASS</option>
                               <option value="FAIL">FAIL</option>
                               <option value="UNVER">UNVER</option>
                             </select>

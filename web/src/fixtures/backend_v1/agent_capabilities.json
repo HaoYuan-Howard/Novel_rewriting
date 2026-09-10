@@ -1,4 +1,26 @@
 {
+  "concurrency": {
+    "nodes": [
+      "stage2.blueprint",
+      "stage4.design",
+      "stage4.plan",
+      "stage5.write"
+    ],
+    "node_choices": [
+      4,
+      6,
+      8
+    ],
+    "default_node": 4,
+    "defaults": {
+      "node_overrides": {},
+      "per_book": 4,
+      "per_provider": 8
+    },
+    "total_min": 1,
+    "total_max": 32,
+    "scope": "output_root"
+  },
   "drivers": [
     {
       "id": "claude-code",

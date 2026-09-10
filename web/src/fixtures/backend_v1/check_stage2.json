@@ -376,19 +376,19 @@
    "baseline": null
   },
   {
-   "rule": "conflict_stage_coverage",
+   "rule": "opening_scope_valid",
    "sev": "hard",
    "status": "skipped",
-   "item": "冲突阶段逐章显式枚举且恰好覆盖全书一次",
+   "item": "开篇范围必须显式提出并以源文证据绑定边界；未知不得缺省第 1 章",
    "requirement": "R-2.14",
    "check_kind": "mechanical",
    "remediation": "human",
    "fix": null,
    "findings": [],
-   "why": "现役 fixture 没有这条新增判据的历史运行结果",
+   "why": "历史示例没有运行过现役开篇范围判据",
    "scanned": null,
    "baseline": null,
-   "note": "默认用 GlobalEdit.conflict_stages_replace + stage2.global --apply-edit stage2/global_edit.json 完整重画（0 LLM）；付费 --resample 只作最后手段"
+   "note": "需先由当前 Global producer 重建，随后免费复检；此处没有新运行结果"
   },
   {
    "rule": "context_scope",

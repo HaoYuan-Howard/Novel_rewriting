@@ -53,6 +53,12 @@ def workflow_manifest_path(base: str | os.PathLike[str]) -> Path:
     return service_dir(base) / 'workflow.json'
 
 
+def output_root_fence_path(base: str | os.PathLike[str]) -> Path:
+    """整根离线切换的外部围栏；旧根移动后原路径仍不得重新接纳任务。"""
+    root = Path(os.path.abspath(base))
+    return root.parent / f'.{root.name}.novel-root.json'
+
+
 def work_unit_dir(base: str | os.PathLike[str], sid: str, unit_id: str) -> Path:
     """工作单元的唯一服务路径；外部输入不能充当路径。"""
     if not re.fullmatch(r'[0-9a-f]{64}', unit_id):
@@ -432,6 +438,19 @@ def edit_rel(novel_dir: str | os.PathLike[str], edit_path: str | None,
             f'⚠ 相对路径按**书目录**解释，不按当前工作目录') from None
 
 
+def characters_edit_input(novel_dir: str | os.PathLike[str], supplied: str | None) -> Path:
+    """人物订正只接受本书或本 SID 服务输入目录；解析后的路径仍须留在授权根。"""
+    from contracts.artifacts import STAGE2_CHARACTERS_EDIT
+    book = Path(novel_dir).resolve()
+    candidate = Path(supplied) if supplied else Path(STAGE2_CHARACTERS_EDIT)
+    target = (candidate if candidate.is_absolute() else book / candidate).resolve()
+    sid = derive_source_meta(book.name)[0]
+    roots = (book, (service_dir(book.parent) / 'edits' / sid).resolve())
+    if not any(target.is_relative_to(root) for root in roots):
+        raise PathRefused('人物编辑输入必须在当前书目录或当前 SID 的服务编辑目录内')
+    return target
+
+
 def invalid_of(rel: str) -> str:
     """`stage4/plan_chapters.json` → `stage4/plan_chapters.INVALID.json`。"""
     norm = check_rel_deep(rel)
@@ -634,6 +653,15 @@ def service_dir(base: str | os.PathLike[str]) -> Path:
     return Path(os.fspath(base)) / SERVICE_DIRNAME
 
 
+def model_slot_group(base: str | os.PathLike[str], kind: str, identity: str) -> Path:
+    """同一输出根内按书及供应商共用总槽；路径不携带账户或模型凭据。"""
+    import hashlib
+    if kind not in {'book', 'provider'} or not isinstance(identity, str) or not identity.strip():
+        raise PathRefused('模型总槽必须声明书或供应商身份')
+    key = hashlib.sha256(identity.encode('utf-8')).hexdigest()
+    return service_dir(base) / 'model_slots' / kind / key
+
+
 def trash_dir(base: str | os.PathLike[str]) -> Path:
     """项目回收站：`<base>/_service/trash/`。"""
     return service_dir(base) / TRASH_DIRNAME
@@ -766,7 +794,7 @@ REJECTED_RESPONSE_DIRNAME = '_llm_rejected'
 
 #: 以下 `_stage*_runs` 是旧版书内恢复空间的**只读兼容名**。
 #: 新 run/checkpoint/history 一律写入 `<base>/_service/runs/<sid>/stageN/`；
-#: 恢复器可以显式回读这些 legacy 路径，但绝不向其追加或搬动现有文件。
+#: 这些旧路径仅供拒绝混合布局及归档诊断；现役恢复器不读取或搬运其文件。
 STAGE2_RUNS_DIRNAME = '_stage2_runs'
 
 #: Stage4 legacy 根名；新 design/plan 位于 service stage4 根。
@@ -821,15 +849,6 @@ def legacy_stage_runs_dir(
     return _legacy_stage_runs_dir(novel_dir, dirname)
 
 
-def stage_run_read_roots(
-        novel_dir: str | os.PathLike[str], stage: str,
-) -> tuple[Path, ...]:
-    """当前 service 根 + legacy 只读根；写口绝不使用本函数选路。"""
-    current = service_stage_runs_dir(novel_dir, stage)
-    legacy = legacy_stage_runs_dir(novel_dir, stage)
-    return (current,) if current == legacy else (current, legacy)
-
-
 def answer_lost_rel(attempt_id: str) -> str:
     """留证文件相对**书目录**的路径。审计账里存的就是它——绝对路径换台机器就断。"""
     return f'{ANSWER_LOST_DIRNAME}/{attempt_id}.json'
@@ -875,6 +894,22 @@ def legacy_stage2_blueprint_run_path(
             / check_run_id(run_id) / 'blueprint')
 
 
+def stage2_characters_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    """人物节点独立的 service run，不与 Global 共用回答或额度身份。"""
+    from novel.run_identity import check_run_id
+
+    return (_service_stage_runs_dir(novel_dir, 'stage2')
+            / check_run_id(run_id) / 'characters')
+
+
+def stage2_characters_commit_lock_path(
+        novel_dir: str | os.PathLike[str],
+) -> Path:
+    return _service_stage_runs_dir(novel_dir, 'stage2') / 'characters-commit.lock'
+
+
 def stage2_global_run_path(
         novel_dir: str | os.PathLike[str], run_id: str,
 ) -> Path:
@@ -883,6 +918,13 @@ def stage2_global_run_path(
 
     return (_service_stage_runs_dir(novel_dir, 'stage2')
             / check_run_id(run_id) / 'global')
+
+
+def stage2_knowledge_links_commit_lock_path(
+        novel_dir: str | os.PathLike[str],
+) -> Path:
+    """知识关联免费物化的跨进程锁；不与 Blueprint 的付费工作单元争用身份。"""
+    return _service_stage_runs_dir(novel_dir, 'stage2') / 'knowledge-links-commit.lock'
 
 
 def legacy_stage2_global_run_path(
@@ -961,6 +1003,16 @@ def stage4_run_path(
             / check_run_id(run_id) / phase)
 
 
+def stage4_plan_aggregate_path(novel_dir: str | Path, run_id: str) -> Path:
+    """Stage4B 确定性汇合提交；独立于章 session 与模型 attempt。"""
+    return stage4_run_path(novel_dir, run_id, 'stage4.plan') / 'aggregate-committed.json'
+
+
+def stage4_design_aggregate_path(novel_dir: str | Path, run_id: str) -> Path:
+    """普通 A 的策略与章聚合提交账；不属于任一 provider 单元。"""
+    return stage4_run_path(novel_dir, run_id, 'stage4.design') / 'aggregate-committed.json'
+
+
 def legacy_stage4_run_path(
         novel_dir: str | os.PathLike[str], run_id: str, node: str,
 ) -> Path:
@@ -1025,6 +1077,13 @@ def stage4_design_unit_checkpoint_dir(
     """Stage4 design 策略/单章各自的 append-only revision 目录。"""
     return stage4_design_unit_run_path(
         novel_dir, run_id, chapter) / 'checkpoints'
+
+
+def stage4_design_unit_adoption_path(
+        novel_dir: str | os.PathLike[str], run_id: str, chapter: int | None,
+) -> Path:
+    """当前单元对历史响应的不可变选择；不复制或续接旧模型会话。"""
+    return stage4_design_unit_run_path(novel_dir, run_id, chapter) / 'historical-adoption.json'
 
 
 def legacy_stage4_design_unit_checkpoint_dir(
@@ -1304,3 +1363,15 @@ def stage7_rename_commit_lock_path(
 ) -> Path:
     """同一本书所有 rename run 的正式写盘与 crash 恢复共用所有权锁。"""
     return _service_stage_runs_dir(novel_dir, 'stage7') / '.commit-ownership'
+
+def stage5_trim_audit_ordinal(rel: str) -> int | None:
+    """从登记的 canonical trim 路径恢复章主体；拒绝非规范章号或归档路径。"""
+    template = artifact_rel('stage5.trim_audit')
+    pattern = re.escape(template).replace(re.escape('{nn}'), r'([0-9]+)')
+    match = re.fullmatch(pattern, rel)
+    if match is None:
+        return None
+    ordinal = int(match.group(1))
+    if ordinal < 1 or artifact_rel('stage5.trim_audit', nn=ordinal) != rel:
+        return None
+    return ordinal

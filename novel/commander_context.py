@@ -36,14 +36,6 @@ COMMANDER_EPOCH_SHA256_ENV = 'NOVEL_COMMANDER_EPOCH_SHA256'
 COMMANDER_ADMISSION_ID_ENV = 'NOVEL_COMMANDER_ADMISSION_ID'
 CONTRACT_PROTOCOL = 'novel-commander-context/v1'
 CONTRACT_V2_PROTOCOL = 'novel-commander-context/v2'
-_STAGE2_PREREVIEW_ADMISSION_SUFFIX = '-stage2-prereview'
-
-
-def stage2_prereview_admission_id(epoch_id: str) -> str:
-    """返回只读 Stage2 预审使用的 epoch-scoped、未开放 gate 身份。"""
-    checked_epoch = run_identity.check_run_id(epoch_id)
-    return run_identity.check_run_id(
-        checked_epoch + _STAGE2_PREREVIEW_ADMISSION_SUFFIX)
 
 
 def action_admission_id_belongs_to_epoch(
@@ -70,11 +62,8 @@ def action_admission_id_belongs_to_epoch(
 def _admission_id_belongs_to_epoch(
         admission_id: str, epoch_id: str,
 ) -> bool:
-    """统一校验 action admission 与只读预审哨兵的 epoch 归属。"""
-    return (
-        action_admission_id_belongs_to_epoch(admission_id, epoch_id)
-        or admission_id == epoch_id + _STAGE2_PREREVIEW_ADMISSION_SUFFIX
-    )
+    """上下文只接受当前 epoch 的 canonical action admission。"""
+    return action_admission_id_belongs_to_epoch(admission_id, epoch_id)
 
 
 def _base_abs(base: str | os.PathLike[str]) -> str:
@@ -424,5 +413,5 @@ __all__ = [
     'contract_payload', 'contract_sha256', 'contract_v2_payload',
     'contract_v2_sha256', 'epoch_sha256', 'env_with_context', 'load_from_environment',
     'load_for_execution_close_from_environment',
-    'require_execution_authorized', 'stage2_prereview_admission_id',
+    'require_execution_authorized',
 ]

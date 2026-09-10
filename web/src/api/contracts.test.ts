@@ -49,17 +49,11 @@ function globalFixture(): Stage2Global {
         first_reveal_chapter: 4,
       },
     ],
-    arc: {
-      conflict_stages: [],
-      climax: '真实高潮',
-      ending: '真实结局',
-      arc_tracks: [
-        {
-          subject: { raw: 'c1', display: '甲', resolved: true },
-          trajectory: '真实弧线',
-          trajectory_evidence: evidence('真实弧线证据'),
-        },
-      ],
+    source_blurb: {
+      facts: [{ kind: 'supported', claim_id: 'hook_001', claim: '真实文案事实',
+        evidence: evidence('真实文案事实证据') }],
+      opening: { kind: 'proposed', through_chapter: 2, rationale: '开篇事件横跨前两章',
+        boundary_evidence: evidence('终点证据') },
     },
     unresolved_refs: 0,
     invalid_exists: false,
@@ -508,9 +502,9 @@ describe('display-only spoiler projection', () => {
     expect(hidden.characters[0]?.fate_evidence?.source?.text).toBe(SPOILER_PLACEHOLDER)
     expect(hidden.secrets).toHaveLength(1)
     expect(hidden.secrets[0]?.fact).toBe(SPOILER_PLACEHOLDER)
-    expect(hidden.arc.climax).toBe(SPOILER_PLACEHOLDER)
-    expect(hidden.arc.ending).toBe(SPOILER_PLACEHOLDER)
-    expect(hidden.arc.arc_tracks[0]?.trajectory_evidence.source?.text).toBe(
+    expect(hidden.source_blurb.facts[0]?.claim).toBe(SPOILER_PLACEHOLDER)
+    expect(hidden.source_blurb.opening.kind === 'proposed' && hidden.source_blurb.opening.rationale).toBe(SPOILER_PLACEHOLDER)
+    expect(hidden.source_blurb.facts[0]?.kind === 'supported' && hidden.source_blurb.facts[0].evidence.source?.text).toBe(
       SPOILER_PLACEHOLDER,
     )
     expect(JSON.stringify(hidden)).not.toContain('真实秘密')

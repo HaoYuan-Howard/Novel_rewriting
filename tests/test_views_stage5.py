@@ -157,3 +157,19 @@ def test_the_views_write_nothing(box):
     assert _tree(box.root) == before, '视图往盘上写了东西'
     assert not (box.root / '_service').exists()
     assert len(before) >= 6, f'只扫到 {len(before)} 个文件——沙箱多半没建起来'
+
+
+def test_current_scene_verbatim_anchors_partition_source_and_draft():
+    """当前任务书用 scenes；不能因继续读旧 segments 而静默丢失全部对齐锚。"""
+    from novel.views.stage5 import _align
+
+    source = '雨夜开门。先关门。她翻到账册末页。别惊动旁人。灯还亮着。'
+    draft = '沈青听见雨声。先关门。她将账册移到灯下。别惊动旁人。周衡点头。'
+    entry = {'scenes': [
+        {'slot': 's01', 'verbatim': ['先关门。']},
+        {'slot': 's02', 'verbatim': ['别惊动旁人。']},
+    ]}
+    reading, rows = _align(source, draft, entry)
+    assert reading is not None and reading.anchors == 2
+    assert ''.join(row.l for row in rows) == source
+    assert ''.join(row.r for row in rows) == draft

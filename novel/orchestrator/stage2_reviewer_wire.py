@@ -43,17 +43,13 @@ from contracts.schema.evaluation import (
 )
 from contracts.schema.stage2 import (
     AddressContextPatch,
-    ArcResponse,
-    ArcTrackPatch,
-    ArcTrackResponse,
     CharacterAddressReplacement,
     CharacterCollectionItem,
-    ConflictStage,
     GlobalCollectionAdd,
     GlobalCollectionDelete,
     GlobalCollectionSplit,
     GlobalCharacterPatch,
-    GlobalEdit,
+    SourceBlurbGrounding, EvidenceLocator, GlobalEdit,
     GlobalEditQuarantineGroup,
     RelationPatch,
     RelationResponse,
@@ -126,45 +122,22 @@ class _DropTarget:
     description: str = ''
 
 
-class Stage2PrereviewResponse(StrictModel):
-    """Stage2 无写权预审的原生 structured-output 载体。
-
-    本模型只让 CLI 在返回前保证 JSON/typed 形状；business/workpack binding、可编辑
-    字段及 sentinel 仍由 ``reviewer_tasks.load_stage2_prereview`` 复核。
-    """
-
-    schema_: Literal['novel-stage2-global-prereview-v1'] = Field(alias='schema')
-    business_sha256: Sha256
-    workpack_sha256: Sha256
-    input_payload: GlobalReviewDecisionSet
-
-
 _PATCH_MODELS: dict[str, tuple[type[StrictModel], tuple[str, ...]]] = {
     'secrets': (SecretPatch, ('secret_id',)),
     'world_rules': (WorldRulePatch, ('rule_id',)),
     'characters': (GlobalCharacterPatch, ('char_id',)),
     'relations': (RelationPatch, ('relation_id',)),
-    'arc_tracks': (ArcTrackPatch, ('track_index',)),
-    'addresses': (AddressContextPatch, ('char_id', 'address_index')),
-    # 这是单个人物称呼列表的完整替换，char_id 仍是当前模板开放的稳定身份。
-    'addresses_replace': (CharacterAddressReplacement, ('char_id',)),
 }
 
 _REPLACEMENT_WIRE_TYPES: dict[str, Any] = {
-    # 生产形状是 char_id -> CharacterResponse 的映射；agent portable schema 禁止
-    # 动态 object 键，因此 wire 提升为带显式 char_id 的行数组。
-    'characters_replace': list[CharacterCollectionItem] | None,
     'secrets_replace': list[SecretResponse] | None,
     'world_rules_replace': list[WorldRuleResponse] | None,
     'relations_replace': list[RelationResponse] | None,
-    'conflict_stages_replace': list[ConflictStage] | None,
-    'arc_tracks_replace': list[ArcTrackResponse] | None,
-    'arc_replace': ArcResponse | None,
+    'source_blurb_replace': SourceBlurbGrounding[EvidenceLocator] | None,
 }
 
 
 _COLLECTION_MEMBER_MODELS: dict[str, tuple[str, type[StrictModel]]] = {
-    'characters': ('Character', CharacterCollectionItem),
     'relations': ('Relation', RelationResponse),
     'secrets': ('Secret', SecretResponse),
     'world_rules': ('WorldRule', WorldRuleResponse),
@@ -614,19 +587,9 @@ def response_schema(task: _ReviewerTaskLike) -> dict[str, Any]:
 
 
 def output_schema_for(task: object) -> dict[str, Any] | None:
-    """返回 Stage2 Commander task 的原生输出 schema；其他任务保持旧协议。
-
-    ``Stage2PrereviewTask`` 与 ``ReviewerTask`` 都定义在 ``reviewer_tasks``，本模块
-    不能反向 import 它们，否则调用方接线会形成环。这里按两种冻结 dataclass 的
-    必要字段辨认，最终的本地 loader 仍会校验真实 task 类型与全部身份。
-    """
+    """只向现役 Stage2 typed 动作下发原生 schema；非 Stage2 不在此接管。"""
     if stage2_scope_wire.exact_request(task) is not None:
         return agent_json_schema(stage2_scope_wire.response_model(task))
-    if (hasattr(task, 'input_template')
-            and hasattr(task, 'business_sha256')
-            and hasattr(task, 'workpack_sha256')
-            and not hasattr(task, 'submission_options')):
-        return agent_json_schema(Stage2PrereviewResponse)
     if uses_compact_wire(task):
         return response_schema(task)  # type: ignore[arg-type]
     return None
@@ -1268,7 +1231,6 @@ __all__ = [
     'WIRE_SCHEMA',
     'Stage2ReviewerWireBinding',
     'Stage2ReviewerWireError',
-    'Stage2PrereviewResponse',
     'assemble',
     'output_schema_for',
     'prompt_addendum',

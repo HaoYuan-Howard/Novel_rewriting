@@ -89,6 +89,10 @@ def num_value(tok: str | None) -> int | float | None:
         return 0.5
     if re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', s):
         return float(s) if '.' in s else int(s)
+    # 「三两」不能按末字算成 2；金额单位由上下文词法拆开，含糊连续数词保持未知。
+    if any(a in _CN_DIGIT and b in _CN_DIGIT and a not in '〇零' and b not in '〇零'
+           for a, b in zip(s, s[1:])):
+        return None
     total, cur, seen = 0, 0, False
     for ch in s:
         if ch in _CN_DIGIT:
@@ -107,9 +111,25 @@ def num_value(tok: str | None) -> int | float | None:
     return (total + cur) if seen else None
 
 
+def number_tokens(text: str | None) -> list[tuple[str, int | float | None]]:
+    """显式数字义务的词法，保留解析不了的项；不复用排除纯量词的发明探针。"""
+    value = text or ''
+    out = []
+    for match in CN_NUM_RE.finditer(value):
+        token = match.group()
+        # 两既是数词也是金额单位；只在明确的钱币上下文拆单位，不把「三两人」猜成 3。
+        before, after = value[max(0, match.start() - 4):match.start()], value[match.end():]
+        amount = (token.endswith('两') and len(token) > 1
+                  and (re.match(r'(?:银|金|钱)', after) is not None
+                       or before.endswith(('银', '银子', '白银', '金', '黄金'))))
+        numeric = token[:-1] if amount else token
+        out.append((token, num_value(numeric)))
+    return out
+
+
 def num_values(text: str | None) -> set[int | float]:
-    """一段文字里所有**解析得出值**的数字 → 值的集合。解析不了的直接不进集合。"""
-    return {v for tok in CN_NUM_RE.findall(text or '') if (v := num_value(tok)) is not None}
+    """一段文字里解析得出值的数字；未知项可由 number_tokens 独立保留。"""
+    return {value for _, value in number_tokens(text) if value is not None}
 
 
 def num_unit_keys(text: str | None) -> dict[tuple[object, str], str]:

@@ -14,6 +14,7 @@ run 都能补齐，而不会覆盖另一进程刚选中的 ``semantic_<n>.json``
 """
 from __future__ import annotations
 
+from novel import runtime_layout
 import hashlib
 import json
 import os
@@ -63,9 +64,9 @@ _OWNERSHIP_LOCAL = threading.local()
 
 
 def _history_files(ctx: Any, pattern: str) -> tuple[Path, ...]:
-    """Stage6 service/legacy 历史只读合并，service 优先。"""
+    """只枚举当前 service 历史；旧书内布局不得参与采用或提交。"""
     found: dict[str, Path] = {}
-    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage6'):
+    for root in runtime_layout.stage_run_roots(ctx.novel_dir, 'stage6'):
         if not root.is_dir():
             continue
         for target in root.glob(pattern):
@@ -110,7 +111,6 @@ _RUN_FIELDS = {
     'experiment_arm',
     'identity_sha256', 'created_at',
 }
-_LEGACY_RUN_FIELDS = _RUN_FIELDS - {'experiment_arm'}
 _CHECKPOINT_EXTRA_FIELDS = {
     'version', 'created_at', 'run_id', 'sid', 'node', 'code',
     'run_sha256', 'role', 'purpose', 'input_sha256', 'response_model',
@@ -241,39 +241,8 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _run_root(ctx: Any) -> Path:
-    run_id = check_run_id(ctx.run_id)
-    current = paths.stage6_semantic_run_path(ctx.novel_dir, run_id)
-    legacy = paths.legacy_stage6_semantic_run_path(ctx.novel_dir, run_id)
-    candidates = [legacy / RUN_FILE, legacy / COMMIT_FILE]
-    candidates.extend(
-        paths.legacy_stage6_semantic_checkpoint_path(
-            ctx.novel_dir, run_id, role)
-        for role in JUDGE_ROLES)
-    sources = [source for source in candidates if source.is_file()]
-    if sources:
-        with process_append_lock(current / '.legacy-adoption'):
-            for source in sources:
-                relative = source.relative_to(legacy)
-                target = current / relative
-                raw = source.read_bytes()
-                if target.is_file():
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                fd, temp_name = tempfile.mkstemp(
-                    prefix=f'.{target.name}.', suffix='.tmp', dir=str(target.parent))
-                try:
-                    with os.fdopen(fd, 'wb') as handle:
-                        handle.write(raw)
-                        handle.flush()
-                        os.fsync(handle.fileno())
-                    os.replace(temp_name, target)
-                except BaseException:
-                    try:
-                        os.unlink(temp_name)
-                    except FileNotFoundError:
-                        pass
-                    raise
-    return current
+    runtime_layout.stage_run_roots(ctx.novel_dir, 'stage6')
+    return paths.stage6_semantic_run_path(ctx.novel_dir, check_run_id(ctx.run_id))
 
 
 def _resolved_profile(ctx: Any, value: object, *, label: str) -> dict[str, Any]:
@@ -437,7 +406,7 @@ def _validate_run_record(
         max_tokens: int | None = None,
 ) -> dict[str, Any]:
     fields = set(record)
-    if fields not in (_RUN_FIELDS, _LEGACY_RUN_FIELDS):
+    if fields != _RUN_FIELDS:
         raise ArtifactUnreadable('Stage6 run.json 字段不完整或含未登记字段')
     identity = {
         key: record[key] for key in fields
@@ -478,9 +447,11 @@ def _validate_run_record(
     if seen != set(JUDGE_ROLES):
         raise ArtifactUnreadable('Stage6 run.json 的 requests 未恰好覆盖 A/B')
     normalized = dict(record)
-    # 兼容本优化前已落盘的默认 run：缺字段只代表历史 0ms 并行臂，绝不能
-    # 被解释成“接受当前任意实验配置”。新 run 一律显式物化该格。
-    normalized['experiment_arm'] = _experiment_arm(record.get('experiment_arm'))
+    # 创建新 run 可选默认配置；读取既有记录必须核对显式写入的完整配置。
+    # 缺席或 null 都不能推断成默认臂，更不能重签已有 checkpoint。
+    if not isinstance(record.get('experiment_arm'), dict):
+        raise ArtifactUnreadable('Stage6 run.json 缺合法 experiment_arm')
+    normalized['experiment_arm'] = _experiment_arm(record['experiment_arm'])
     return normalized
 
 

@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import PlainTextResponse
 
 from contracts.schema.api import (
-    BlueprintReviewWorkpack, GlobalReviewView, GlobalView, InboxView,
+    BlueprintReviewWorkpack, CharacterRegistryView, GlobalReviewView, GlobalView, InboxView,
     ReadingView, ReviewView,
     Stage4View, Stage5View, Stage6View, Stage7View,
 )
@@ -32,7 +32,7 @@ from novel.stages.stage7 import assemble
 from novel.views.inbox import inbox_view
 from novel.views.global_review import global_review_view
 from novel.views.stage2 import (
-    blueprint_review_workpack, global_view, reading_view,
+    blueprint_review_workpack, character_registry_view, global_view, reading_view,
 )
 from novel.views.stage4 import stage4_view
 from novel.views.stage5 import review_view, stage5_view
@@ -72,6 +72,13 @@ def get_review(ordinal: int, sid: str = Depends(checked_sid),
                base: str = Depends(get_base)) -> ReviewView:
     """S-09 验收/修订（最新一份验收产物）。一份都没有 ⇒ 404。"""
     return review_view(base, sid, ordinal)
+
+
+@router.get('/{sid}/stage2/characters', response_model=CharacterRegistryView,
+            response_model_by_alias=True)
+def get_stage2_characters(sid: str = Depends(checked_sid),
+                         base: str = Depends(get_base)) -> CharacterRegistryView:
+    return character_registry_view(base, sid)
 
 
 @router.get('/{sid}/stage2/global', response_model=GlobalView, response_model_by_alias=True)

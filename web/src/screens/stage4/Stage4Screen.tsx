@@ -265,9 +265,28 @@ function PlanSceneRow({
         </div>
       ) : null}
 
+      {scene.knowledge?.map((item, i) => (
+        <div key={i} className="rounded-btn border border-line-2 px-10 py-8 text-sm2">
+          <div className="text-tag text-ink-4">{
+            { known: '本场起成立的知情状态', reveal: '本场起允许披露', setup: '伏笔只表现，不解释秘密答案' }[item.usage]
+          }</div>
+          <div>{item.content}</div>
+          {item.known_by.length ? <div>知情者：{item.known_by.join('、')}</div> : null}
+        </div>
+      ))}
+
+      {scene.dialogue?.map((row, i) => (
+        <div key={i} className="rounded-btn border border-line-2 px-10 py-8 text-sm2">
+          <div className="text-tag text-ink-4">对白可换措辞 · {row.speech_act}</div>
+          <div>{row.speaker ?? '未知说话者'} → {row.addressees === null ? '未知对象' : row.addressees.join('、') || '无特定对象'}</div>
+          <div>{row.meaning}</div>
+          <div>必保事实：{row.required_facts.join('；')}</div>
+        </div>
+      ))}
+
       {scene.verbatim.map((v, i) => (
         <div key={i} className="rounded-r-btn border-l-3 border-l-hinge bg-hinge-bg px-12 py-8">
-          <div className="text-micro text-hook-ink">必须逐字写进去（{scene.verbatimChars} 字）</div>
+          <div className="text-micro text-hook-ink">剧情必需的字面例外（{scene.verbatimChars} 字）</div>
           <div className="prose-cn text-sm2 text-ink-2">{v}</div>
         </div>
       ))}

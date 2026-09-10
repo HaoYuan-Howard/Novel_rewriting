@@ -6,8 +6,8 @@
 造成的坐标错位。候选行只由 :func:`paragraph_spans` 产生，prompt 标记与正式
 ``SourceSpan`` 又只从候选行产生。两侧各切一次原文会重新引入本模块要消灭的静默错位。
 
-候选 ID 是一次请求内的不透明 wire 引用，不进入正式 ``GlobalGrounding``。模型响应
-通过本模块编译成既有 ``FactEvidence`` 后，仍须走现有 normalize/check/人工语义复核。
+候选 ID 是一次请求内的不透明 wire 引用，不进入正式制品。人物与知识 producer
+分别编译各自拥有的证据槽，再走归一、判据和人工语义复核；本模块只提供唯一候选表。
 """
 from __future__ import annotations
 
@@ -17,12 +17,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
-from contracts.schema.stage2 import (
-    FactEvidence,
-    GlobalGroundingCandidateResponse,
-    SourceSpan,
-)
-from novel.core.evidence import iter_global_evidence_slots
+from contracts.schema.stage2 import SourceSpan
 from novel.stages.stage2.paragraphs import paragraph_spans
 
 
@@ -164,53 +159,8 @@ def build_global_evidence_candidates(
     return GlobalEvidenceCandidateTable.build(main_text)
 
 
-def compile_candidate_evidence(
-    response: dict[str, Any],
-    table: GlobalEvidenceCandidateTable,
-) -> dict[str, Any]:
-    """candidate-only 响应 → 全部 evidence 槽均为正式 FactEvidence 的字典。
-
-    输入先过独立 candidate-only schema；因此缺字段、locator 混入、fate/evidence
-    不一致都会在回取前关闭式失败。格式合法但未下发的 ID 再由 ``table.lookup``
-    关闭式失败。函数深拷贝且不修改模型响应或候选表。
-    """
-    try:
-        validated = GlobalGroundingCandidateResponse.model_validate(response)
-    except ValueError as exc:
-        raise ValueError(f'candidate-only global 响应不完整或不合法：{exc}') from exc
-
-    compiled = validated.model_dump(by_alias=True, mode='json')
-    for claim_path, owner, evidence_field in iter_global_evidence_slots(compiled):
-        evidence = owner.get(evidence_field)
-        if not isinstance(evidence, dict):
-            raise ValueError(f'{claim_path}: 缺少 evidence_candidate_id')
-        candidate_id = evidence.get('evidence_candidate_id')
-        if not isinstance(candidate_id, str):
-            raise ValueError(f'{claim_path}: 缺少 evidence_candidate_id')
-        candidate = table.lookup(candidate_id)
-        owner[evidence_field] = FactEvidence.model_validate({
-            'chapter_ordinal': candidate.chapter_ordinal,
-            'source': candidate.source_span(),
-        }).model_dump(mode='json')
-
-    # 新增 evidence 槽却忘记登记进统一遍历器时，不许把 wire ID 静默带进正式面。
-    if _contains_candidate_ref(compiled):
-        raise ValueError('candidate-only 响应仍有未登记的 evidence_candidate_id 槽')
-    return compiled
-
-
 def _candidate_id(index: int) -> str:
     if not 1 <= index <= _MAX_CANDIDATES:
         raise ValueError(
             f'全书证据候选超过 {_MAX_CANDIDATES} 条，六位 ID 无法无歧义表示')
     return f'e{index:06d}'
-
-
-def _contains_candidate_ref(value: object) -> bool:
-    if isinstance(value, dict):
-        if 'evidence_candidate_id' in value:
-            return True
-        return any(_contains_candidate_ref(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_contains_candidate_ref(item) for item in value)
-    return False

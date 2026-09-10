@@ -13,11 +13,13 @@ Humans may only record that the already-retained pretrim text is intentional.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 
 from contracts.artifacts import STAGE4_WRITER_CONTEXT, STAGE5_TRIM_AUDIT, artifact_rel
 from contracts.schema.evaluation import TrimAudit, TrimResolution
 from contracts.schema.stage4 import WriterContext
 from contracts.schema.stage5 import Chapter
+from novel import paths
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ProvenanceRefused, TerminalState,
     UpstreamMissing, UpstreamStale,
@@ -32,63 +34,48 @@ def resolution_rel(ordinal: int) -> str:
     return artifact_rel('stage5.trim_resolution', nn=ordinal)
 
 
+
 def _current_pretrim(
-    store: ArtifactStore,
-    audit: TrimAudit,
+    store: ArtifactStore, ordinal: int,
 ) -> tuple[str, str] | None:
-    """Return ``(formal rel, text sha256)`` only for a readable current chapter."""
-    rel = artifact_rel('stage5.chapter', nn=audit.output_ordinal)
+    """只接受当前路径与载体章号闭合的正文，未知不伪装成匹配。"""
+    rel = artifact_rel('stage5.chapter', nn=ordinal)
     if not store.exists(rel):
         return None
     try:
         chapter, _raw = store.read_own(Chapter, rel, require_current=True)
-    # ⚠ `UpstreamStale` 是 `require_current=True` 时真正会抛的那一条（2026-08-17 从
-    #   `ProvenanceRefused` 拆出来，见该类 docstring）；`ProvenanceRefused` 留在这里
-    #   只覆盖来源账自相矛盾的旧行为面，不是这条读法的正常出路。
     except (ArtifactUnreadable, ProvenanceRefused, UpstreamMissing, UpstreamStale):
         return None
-    if chapter.output_ordinal != audit.output_ordinal:
+    if chapter.output_ordinal != ordinal:
         return None
-    digest = hashlib.sha256(chapter.text.encode('utf-8')).hexdigest()
-    return rel, digest
+    return rel, hashlib.sha256(chapter.text.encode('utf-8')).hexdigest()
+
 
 
 def matches_current_audit(
-    store: ArtifactStore,
-    audit: TrimAudit,
-    audit_sha256: str,
+    store: ArtifactStore, audit: TrimAudit, audit_sha256: str, *, ordinal: int,
 ) -> bool:
-    """True only for a readable resolution bound to every current identity."""
-    return matching_current_resolution(store, audit, audit_sha256) is not None
+    """Resolution 只能采用同章、同根、exact audit 引用及其当前正文。"""
+    return matching_current_resolution(
+        store, audit, audit_sha256, ordinal=ordinal) is not None
+
 
 
 def matching_current_resolution(
-    store: ArtifactStore,
-    audit: TrimAudit,
-    audit_sha256: str,
+    store: ArtifactStore, audit: TrimAudit, audit_sha256: str, *, ordinal: int,
 ) -> tuple[TrimResolution, str] | None:
-    """返回绑定该 current audit/正文/root 的 resolution 及完整文件 SHA。
+    """按章主体和 audit 引用闭合人审决定；损坏不能洗成新的待审席位。
 
-    ``None`` 只表示文件物理不存在，或一份**可读**回执绑定的是旧 audit/正文。
-    现存但不可读的回执不能洗成“尚待人工决定”，否则 closure 会在已知坏盘上
-    打开新的付费 Reviewer 席位；这类证据损坏必须原样向上关闭式传播。
+    Resolution v3 不复制 audit 的正文 SHA。先验证同章、同根和 exact audit SHA，
+    再沿 audit.before_sha256 验证当前正文；链上任意未知均不得产生接受结论。
     """
-    rel = resolution_rel(audit.output_ordinal)
+    rel = resolution_rel(ordinal)
     if not store.exists(rel):
         return None
-    resolution, resolution_sha256 = store.read_own_with_sha256(
-        TrimResolution, rel)
-    expected_chapter_rel = artifact_rel(
-        'stage5.chapter', nn=audit.output_ordinal)
+    resolution, resolution_sha256 = store.read_own_with_sha256(TrimResolution, rel)
     identity_errors: list[str] = []
-    if resolution.output_ordinal != audit.output_ordinal:
-        identity_errors.append(
-            f'ordinal={resolution.output_ordinal}，期望 {audit.output_ordinal}')
-    if resolution.chapter_rel != expected_chapter_rel:
-        identity_errors.append(
-            f'chapter_rel={resolution.chapter_rel!r}，期望 {expected_chapter_rel!r}')
-    if resolution.before_sha256 != resolution.chapter_sha256:
-        identity_errors.append('before_sha256 与 chapter_sha256 自相矛盾')
+    if resolution.output_ordinal != ordinal:
+        identity_errors.append(f'ordinal={resolution.output_ordinal}，期望 {ordinal}')
     if resolution.provenance.root_clean_sha1 != store.ctx.root_clean_sha1:
         identity_errors.append('root_clean_sha1 不属于当前书根')
     if identity_errors:
@@ -96,26 +83,10 @@ def matching_current_resolution(
             f'{rel} 的 live trim resolution 身份损坏：'
             + '；'.join(identity_errors)
             + '；不得把坏回执洗成 unresolved 后启动 Reviewer')
-
-    # 基本自洽、同根但绑定旧 audit 的回执是合法历史：当前 Commander 可以
-    # 针对新 audit 形成下一 round。只有它自称绑定**当前 exact audit** 时，
-    # before 仍对不上才是不可解释的矛盾，而不是可覆盖的旧轮。
     if resolution.audit_sha256 != audit_sha256:
         return None
-    if resolution.before_sha256 != audit.before_sha256:
-        raise ProvenanceRefused(
-            f'{rel} 声称绑定当前 audit SHA，但 before/chapter SHA 与 audit 不一致；'
-            '不得把自相矛盾的 live 回执洗成 unresolved')
-    chapter = _current_pretrim(store, audit)
-    if chapter is None:
-        return None
-    chapter_rel, chapter_sha256 = chapter
-    if not (
-        resolution.audit_sha256 == audit_sha256
-        and resolution.before_sha256 == audit.before_sha256
-        and resolution.chapter_rel == chapter_rel == expected_chapter_rel
-        and resolution.chapter_sha256 == chapter_sha256 == audit.before_sha256
-    ):
+    chapter = _current_pretrim(store, ordinal)
+    if chapter is None or chapter[1] != audit.before_sha256:
         return None
     return resolution, resolution_sha256
 
@@ -124,6 +95,7 @@ def needs_human_resolution(
     store: ArtifactStore,
     audit: TrimAudit,
     audit_sha256: str,
+    *, ordinal: int,
 ) -> bool:
     """Whether this exact audit still represents the retained current draft.
 
@@ -132,10 +104,10 @@ def needs_human_resolution(
     de-duplication and inbox verification use this predicate so they cannot
     disagree about which audit is current.
     """
-    chapter = _current_pretrim(store, audit)
+    chapter = _current_pretrim(store, ordinal)
     if chapter is None or chapter[1] != audit.before_sha256:
         return False
-    return not matches_current_audit(store, audit, audit_sha256)
+    return not matches_current_audit(store, audit, audit_sha256, ordinal=ordinal)
 
 
 def current_trim_audits(
@@ -167,15 +139,20 @@ def current_trim_audits(
                 raise TerminalState(
                     f'Stage5 trim audit inventory 含不可读现役文件：{rel}') from exc
             continue
-        if rel != artifact_rel('stage5.trim_audit', nn=audit.output_ordinal):
+        ordinal = paths.stage5_trim_audit_ordinal(rel)
+        if ordinal is None:
             if strict_inventory:
                 raise TerminalState(
-                    'Stage5 trim audit inventory 的路径与声明章号不一致：'
-                    f'{rel} / output_ordinal={audit.output_ordinal}')
+                    f'Stage5 trim audit inventory 含非规范章路径：{rel}')
             continue
-        if ((chapter := _current_pretrim(store, audit)) is not None
-                and chapter[1] == audit.before_sha256):
-            out[audit.output_ordinal] = (audit, audit_sha256)
+        chapter = _current_pretrim(store, ordinal)
+        if chapter is None:
+            if strict_inventory:
+                raise TerminalState(
+                    f'Stage5 trim audit inventory 的 canonical 章缺失或当前身份不可证明：{rel}')
+            continue
+        if chapter[1] == audit.before_sha256:
+            out[ordinal] = (audit, audit_sha256)
     return out
 
 
@@ -189,7 +166,7 @@ def current_unresolved_audits(
         ordinal: row
         for ordinal, row in current_trim_audits(
             store, strict_inventory=strict_inventory).items()
-        if needs_human_resolution(store, row[0], row[1])
+        if needs_human_resolution(store, row[0], row[1], ordinal=ordinal)
     }
 
 
@@ -200,8 +177,6 @@ def same_retain_pretrim_decision(
     actor: str,
     reason: str,
     audit_sha256: str,
-    chapter_rel: str,
-    chapter_sha256: str,
     root_clean_sha1: str,
 ) -> bool:
     """比较 batch 重放的业务决定，而不是新旧执行 epoch 的来源账字节。
@@ -216,9 +191,6 @@ def same_retain_pretrim_decision(
         and resolution.actor == actor
         and resolution.reason == reason
         and resolution.audit_sha256 == audit_sha256
-        and resolution.before_sha256 == chapter_sha256
-        and resolution.chapter_rel == chapter_rel
-        and resolution.chapter_sha256 == chapter_sha256
         and resolution.provenance.root_clean_sha1 == root_clean_sha1
     )
 
@@ -243,7 +215,7 @@ def _validate_batch_frontier(
     current = current_trim_audits(store, strict_inventory=True)
     unresolved = {
         ordinal: row for ordinal, row in current.items()
-        if needs_human_resolution(store, row[0], row[1])
+        if needs_human_resolution(store, row[0], row[1], ordinal=ordinal)
     }
     current_suffix = [
         (ordinal, audit_sha256, audit.before_sha256)
@@ -271,8 +243,6 @@ def _validate_batch_frontier(
                 actor=request.actor,
                 reason=reason,
                 audit_sha256=audit_sha256,
-                chapter_rel=chapter_rel,
-                chapter_sha256=audit.before_sha256,
                 root_clean_sha1=store.ctx.root_clean_sha1,
             ):
                 if ordinal in unresolved:
@@ -350,16 +320,12 @@ def _retain_pretrim_batch_locked(
     for item in request.items:
         audit_rel = artifact_rel('stage5.trim_audit', nn=item.output_ordinal)
         audit, audit_sha256 = store.read_with_sha256(TrimAudit, audit_rel)
-        if audit.output_ordinal != item.output_ordinal:
-            raise TerminalState(
-                f'批量销账预检失败：{audit_rel} 声明 output_ordinal='
-                f'{audit.output_ordinal}，与 manifest 第 {item.output_ordinal} 章不符')
         if audit_sha256 != item.audit_sha256:
             raise TerminalState(
                 f'批量销账预检失败：第 {item.output_ordinal} 章 audit SHA 漂移'
                 f'（manifest {item.audit_sha256[:8]}… / 盘上 {audit_sha256[:8]}…）；'
                 '整批不开始，请重新抓取当前 trim 状态')
-        chapter = _current_pretrim(store, audit)
+        chapter = _current_pretrim(store, item.output_ordinal)
         if chapter is None:
             raise TerminalState(
                 f'批量销账预检失败：第 {item.output_ordinal} 章正式稿不存在或已过期；'
@@ -381,7 +347,7 @@ def _retain_pretrim_batch_locked(
         audit_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
         current_audit, current_audit_sha = store.read_with_sha256(
             TrimAudit, audit_rel)
-        chapter = _current_pretrim(store, current_audit)
+        chapter = _current_pretrim(store, ordinal)
         if (current_audit != expected_audit
                 or current_audit_sha != expected_audit_sha
                 or chapter is None
@@ -407,9 +373,6 @@ def _retain_pretrim_batch_locked(
             actor=request.actor,
             reason=reason,
             audit_sha256=audit_sha256,
-            before_sha256=audit.before_sha256,
-            chapter_rel=chapter_rel,
-            chapter_sha256=audit.before_sha256,
             _provenance=ctx.free_provenance(),
         )
         rel = resolution_rel(ordinal)
@@ -421,8 +384,6 @@ def _retain_pretrim_batch_locked(
                 actor=request.actor,
                 reason=reason,
                 audit_sha256=audit_sha256,
-                chapter_rel=chapter_rel,
-                chapter_sha256=audit.before_sha256,
                 root_clean_sha1=ctx.root_clean_sha1,
             ):
                 written.append(current)
@@ -435,32 +396,62 @@ def _retain_pretrim_batch_locked(
     return written
 
 
-def verification_context(store: ArtifactStore, audit: TrimAudit) -> str:
-    """Render the root-cause facts folded into one trim verification task."""
+@dataclass(frozen=True)
+class TrimVerificationReadings:
+    """同一正文快照的裁剪审阅读数；缺失读数保留未知。"""
+
+    chars: int | None
+    budget_chars: int | None
+    target: tuple[int, int] | None
+    context: str
+
+
+def verification_readings(
+    store: ArtifactStore, audit: TrimAudit, *, ordinal: int,
+    chapter: Chapter | None = None,
+) -> TrimVerificationReadings:
+    """接收调用方已核验的正文快照，或读取当前正式稿；任务预算只认当前场景。"""
     identity = f'audit before={audit.before_sha256}'
-    rel = artifact_rel('stage5.chapter', nn=audit.output_ordinal)
-    try:
-        chapter, _raw = store.read_own(Chapter, rel, require_current=True)
-    except (ArtifactUnreadable, ProvenanceRefused, UpstreamMissing, UpstreamStale):
-        return f'{identity}；当前正式稿字数/目标区间不可读'
+    if chapter is None:
+        rel = artifact_rel('stage5.chapter', nn=ordinal)
+        try:
+            chapter, _raw = store.read_own(Chapter, rel, require_current=True)
+        except (ArtifactUnreadable, ProvenanceRefused, UpstreamMissing, UpstreamStale):
+            return TrimVerificationReadings(
+                None, None, None, f'{identity}；当前正式稿字数/目标区间不可读')
+    if (chapter.output_ordinal != ordinal
+            or hashlib.sha256(chapter.text.encode('utf-8')).hexdigest() != audit.before_sha256):
+        return TrimVerificationReadings(
+            None, None, None, f'{identity}；当前正文与 audit 绑定不一致')
 
     chars = M.chars_of(chapter.text)
     try:
         writer_context = store.read(WriterContext, STAGE4_WRITER_CONTEXT)
     except (ArtifactUnreadable, ProvenanceRefused, UpstreamMissing, UpstreamStale):
-        return f'当前 pretrim {chars} 字（目标区间不可读）；{identity}'
+        return TrimVerificationReadings(
+            chars, None, None, f'当前 pretrim {chars} 字（目标区间不可读）；{identity}')
     entry = next(
-        (row for row in writer_context.chapters
-         if row.output_ordinal == audit.output_ordinal),
+        (row for row in writer_context.chapters if row.output_ordinal == ordinal),
         None,
     )
     if entry is None:
-        return f'当前 pretrim {chars} 字（写作上下文无该章目标）；{identity}'
-    lo, hi = M.target_range(entry.model_dump(by_alias=True))
+        return TrimVerificationReadings(
+            chars, None, None, f'当前 pretrim {chars} 字（写作上下文无该章目标）；{identity}')
+    payload = entry.model_dump(by_alias=True)
+    basis = M.chapter_basis(payload)
+    lo, hi = M.target_range(payload)
     relation = (f'超上限 {chars - hi} 字' if chars > hi
                 else f'未超上限（距上限 {hi - chars} 字）')
-    return (
+    return TrimVerificationReadings(
+        chars, basis.budget_chars, (lo, hi),
         f'当前 pretrim {chars} 字，目标 {lo}~{hi} 字，{relation}；{identity}')
+
+
+def verification_context(
+    store: ArtifactStore, audit: TrimAudit, *, ordinal: int,
+) -> str:
+    """裁剪审阅、inbox 与 API 共用同一份可读说明。"""
+    return verification_readings(store, audit, ordinal=ordinal).context
 
 
 def retain_pretrim(
@@ -487,10 +478,7 @@ def _retain_pretrim_locked(
     store = ArtifactStore(ctx)
     audit_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
     audit, audit_sha256 = store.read_with_sha256(TrimAudit, audit_rel)
-    if audit.output_ordinal != ordinal:
-        raise ArtifactUnreadable(
-            f'{audit_rel} 声明 output_ordinal={audit.output_ordinal}，与文件名 ch{ordinal:02d} 不符')
-    chapter = _current_pretrim(store, audit)
+    chapter = _current_pretrim(store, ordinal)
     if chapter is None:
         raise ApprovalRequired(
             f'第 {ordinal} 章正式稿不存在、不可读或已过期；'
@@ -507,9 +495,6 @@ def _retain_pretrim_locked(
         actor=actor,
         reason=reason,
         audit_sha256=audit_sha256,
-        before_sha256=audit.before_sha256,
-        chapter_rel=chapter_rel,
-        chapter_sha256=chapter_sha256,
         _provenance=ctx.free_provenance(),
     )
     rel = resolution_rel(ordinal)

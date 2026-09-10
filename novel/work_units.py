@@ -21,8 +21,9 @@ from pydantic import BaseModel
 
 from contracts.invariants import NODES, commander_work_unit
 from contracts.schema.workflow import (
-    WorkflowManifestV1, WorkUnitAttempt, WorkUnitBlobV1,
-    WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV1, WorkUnitRegistryV1,
+    WorkflowManifestV2, WorkUnitAttempt, WorkUnitBlobV1,
+    WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV2, WorkUnitRegistryV1,
+    WorkUnitProcessing,
 )
 from novel import paths
 from novel.appendlog import path_transaction_lock
@@ -59,7 +60,11 @@ def _safe(base: str | os.PathLike[str], path: Path) -> Path:
         current = current.parent
     try:
         # Windows 同一并发建目录窗口可能混合返回普通/扩展长度前缀。
-        resolved = os.path.normcase(os.path.realpath(target))
+        # 原子替换期间 Windows 可把旧文件句柄解析为 $Extend/$Deleted。
+        # 我们随后按路径打开当前快照，边界应核稳定父目录；符号链接仍由上面拒绝。
+        resolved_target = (os.path.realpath(target) if target.is_dir()
+                           else os.path.join(os.path.realpath(target.parent), target.name))
+        resolved = os.path.normcase(resolved_target)
         service = os.path.normcase(os.path.realpath(root / '_service'))
         if os.name == 'nt':
             resolved = resolved.removeprefix('\\\\?\\')
@@ -191,9 +196,9 @@ def _read(base: str | os.PathLike[str], path: Path, model: type[BaseModel]) -> A
         raise WorkUnitRefused(f'工作单元账缺失或不符合当前契约：{target.name}') from exc
 
 
-def workflow_manifest(base: str | os.PathLike[str]) -> WorkflowManifestV1 | None:
+def workflow_manifest(base: str | os.PathLike[str]) -> WorkflowManifestV2 | None:
     path = _safe(base, paths.workflow_manifest_path(base))
-    return _read(base, path, WorkflowManifestV1) if path.exists() else None
+    return _read(base, path, WorkflowManifestV2) if path.exists() else None
 
 
 def _require_clean_base(base: str | os.PathLike[str]) -> None:
@@ -223,7 +228,7 @@ def check_workflow_write(base: str | os.PathLike[str]) -> None:
         _require_clean_base(base)
 
 
-def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV1:
+def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV2:
     """仅空 base 可初始化；旧书不能靠删账或换代码获得新额度。"""
     target = _safe(base, paths.workflow_manifest_path(base))
     # 拒绝存量 base 必须零写；锁本身会创建父目录，因此先作只读预检。
@@ -234,13 +239,13 @@ def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV1:
         if existing is not None:
             return existing
         _require_clean_base(base)
-        manifest = WorkflowManifestV1(task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
+        manifest = WorkflowManifestV2(task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
                                       created_at=int(time.time()))
         _write(base, target, manifest)
         return manifest
 
 
-def require_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV1:
+def require_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV2:
     manifest = workflow_manifest(base)
     if manifest is None:
         return initialize_workflow(base)
@@ -292,7 +297,7 @@ class WorkUnitBudget:
             raise WorkUnitRefused('工作单元登记账身份漂移')
         return registry
 
-    def _read(self) -> WorkUnitLedgerV1:
+    def _read(self) -> WorkUnitLedgerV2:
         if not self.path.exists():
             if self.unit_id in self._registry().unit_ids:
                 raise WorkUnitRefused('已登记的工作单元预算账缺失，禁止重新发放额度')
@@ -300,21 +305,24 @@ class WorkUnitBudget:
             if self.directory.exists() and any(
                     p.name != 'ledger.json.lock' for p in self.directory.iterdir()):
                 raise WorkUnitRefused('工作单元已有内容但预算账缺失')
-            return WorkUnitLedgerV1(unit_id=self.unit_id, **self.identity)
-        ledger = _read(self.base, self.path, WorkUnitLedgerV1)
+            return WorkUnitLedgerV2(unit_id=self.unit_id, **self.identity)
+        ledger = _read(self.base, self.path, WorkUnitLedgerV2)
         if ledger.unit_id != self.unit_id or any(
                 getattr(ledger, key) != val for key, val in self.identity.items()):
             raise WorkUnitRefused('工作单元账身份不一致')
+        for row in ledger.processing:
+            if self._processing(**row.model_dump(exclude={'processing_id'}, exclude_none=True)) != row:
+                raise WorkUnitRefused('工作单元处理来源回执损坏，禁止新调用')
         return ledger
 
-    def _replace(self, ledger: WorkUnitLedgerV1, turn: WorkUnitContentTurn) -> None:
+    def _replace(self, ledger: WorkUnitLedgerV2, turn: WorkUnitContentTurn) -> None:
         rows = [row.model_dump(mode='json') if row.turn_id != turn.turn_id
                 else turn.model_dump(mode='json') for row in ledger.turns]
-        updated = WorkUnitLedgerV1.model_validate({
+        updated = WorkUnitLedgerV2.model_validate({
             **ledger.model_dump(mode='json'), 'turns': rows})
         _write(self.base, self.path, updated)
 
-    def _turn(self, ledger: WorkUnitLedgerV1, turn_id: str) -> WorkUnitContentTurn:
+    def _turn(self, ledger: WorkUnitLedgerV2, turn_id: str) -> WorkUnitContentTurn:
         found = [t for t in ledger.turns if t.turn_id == turn_id]
         if len(found) != 1:
             raise WorkUnitRefused('内容轮不属于当前工作单元')
@@ -326,7 +334,13 @@ class WorkUnitBudget:
 
     @property
     def remaining(self) -> int:
-        return 4 - self.used
+        ledger = self._read()
+        return ledger.content_limit - len(ledger.turns)
+
+    @property
+    def granted(self) -> int:
+        ledger = self._read()
+        return ledger.content_limit - ledger.base_content_limit
 
     def reserve(self, request_sha256: str, *, run_id: str,
                 session_run_id: str = '',
@@ -338,7 +352,9 @@ class WorkUnitBudget:
             if any(t.state in ('reserved', 'unknown', 'delivered') for t in ledger.turns):
                 raise WorkUnitRefused('已有未闭合内容请求；须先对账，不能重新调用模型')
             if len(ledger.turns) >= ledger.content_limit:
-                raise WorkUnitBudgetExhausted('本工作单元内容预算已耗尽（4/4），请复验或人工编辑')
+                raise WorkUnitBudgetExhausted(
+                    f'本工作单元内容预算已耗尽（{len(ledger.turns)}/{ledger.content_limit}），'
+                    '请免费恢复、人工编辑或明确申请追加额度')
             turn = WorkUnitContentTurn(
                 turn_id=uuid4().hex, ordinal=len(ledger.turns) + 1,
                 request_sha256=request_sha256, run_id=run_id,
@@ -349,9 +365,12 @@ class WorkUnitBudget:
                 digest = _digest(blob.model_dump(mode='json'))
                 # 账先持久，避免工作包落盘后崩溃把未知预算洗成空账。
                 turn = turn.model_copy(update={'request_payload_sha256': digest})
-            updated = WorkUnitLedgerV1.model_validate({
+            updated = WorkUnitLedgerV2.model_validate({
                 **ledger.model_dump(mode='json'),
-                'turns': [*ledger.turns, turn]})
+                'turns': [*ledger.turns, turn],
+                'processing': [*ledger.processing, self._processing(
+                    run_id=run_id, input_sha256=request_sha256, kind='model',
+                    turn_id=turn.turn_id)]})
             with path_transaction_lock(self.registry_path):
                 registry = self._registry()
                 if self.unit_id not in registry.unit_ids:
@@ -361,6 +380,30 @@ class WorkUnitBudget:
             if request_payload is not None:
                 _write(self.base, self.directory / f'{digest}.json', blob)
             return ContentReservation(self.unit_id, turn.turn_id, turn.ordinal)
+
+    def _processing(self, **values: Any) -> WorkUnitProcessing:
+        material = {'unit_id': self.unit_id, **values}
+        return WorkUnitProcessing(processing_id=_digest(material), **values)
+
+    def note_processing(self, *, run_id: str, input_sha256: str,
+                        kind: str, evidence_sha256: str) -> None:
+        """producer 完成来源复验后记录免费处理，重放不重复计数或重发额度。"""
+        if kind == 'model':
+            raise WorkUnitRefused('模型处理只能由首 wire 前 reserve 登记')
+        proposed = self._processing(run_id=run_id, input_sha256=input_sha256,
+                                    kind=kind, evidence_sha256=evidence_sha256)
+        with path_transaction_lock(self.path):
+            ledger = self._read()
+            if proposed in ledger.processing:
+                return
+            with path_transaction_lock(self.registry_path):
+                registry = self._registry()
+                if self.unit_id not in registry.unit_ids:
+                    _write(self.base, self.registry_path, registry.model_copy(update={
+                        'unit_ids': (*registry.unit_ids, self.unit_id)}))
+            _write(self.base, self.path, WorkUnitLedgerV2.model_validate({
+                **ledger.model_dump(mode='json'),
+                'processing': [*ledger.processing, proposed]}))
 
     def record_attempt(self, turn_id: str, *, attempt_id: str, outcome: str,
                        provider_session_id: str | None = None,
@@ -584,7 +627,7 @@ class WorkUnitBudget:
         """只读原整组提交证明；缺失、串单元或损坏均不得当成没执行。"""
         return self._group_producer_recovery(self._read())
 
-    def _group_producer_recovery(self, ledger: WorkUnitLedgerV1) -> dict[str, Any] | None:
+    def _group_producer_recovery(self, ledger: WorkUnitLedgerV2) -> dict[str, Any] | None:
         # 读取原子账快照及不可变 blob 不需要写锁；写侧可在已持有的事务锁内复用，
         # 避免不可重入 OS 锁死锁，也不让 API 查询创建不存在的单元或 .lock 文件。
         digest = ledger.group_producer_sha256
@@ -819,7 +862,7 @@ def validate_reviewer_record(base: str | os.PathLike[str], sid: str, record: Any
     turn_id = record.work_unit_turn_id
     if not unit_id or not turn_id or record.sid != sid:
         raise WorkUnitRefused('审阅决定缺工作单元身份')
-    ledger = _read(base, paths.work_unit_dir(base, sid, unit_id) / 'ledger.json', WorkUnitLedgerV1)
+    ledger = _read(base, paths.work_unit_dir(base, sid, unit_id) / 'ledger.json', WorkUnitLedgerV2)
     budget = WorkUnitBudget(base, sid, ledger.node, 'commander', ledger.scope)
     if budget.unit_id != unit_id or ledger.role != 'commander':
         raise WorkUnitRefused('审阅决定串用了其他角色或工作单元')
@@ -854,7 +897,7 @@ def validate_reviewer_record(base: str | os.PathLike[str], sid: str, record: Any
 
 def executor_scope(node: str, purpose: str, progress: Any = None) -> str:
     """只从登记的业务拓扑取 scope，修复 purpose 不铸新单元。"""
-    if node in ('stage2.global', 'stage6.hook', 'stage7.rename'):
+    if node in ('stage2.characters', 'stage2.global', 'stage6.hook', 'stage7.rename'):
         return 'book'
     chapter = getattr(progress, 'chapter_ordinal', None)
     if chapter is None:
@@ -881,31 +924,71 @@ def executor_scope(node: str, purpose: str, progress: Any = None) -> str:
     raise WorkUnitRefused('该节点没有登记 Executor 模型工作单元')
 
 
+def unit_view(ledger: WorkUnitLedgerV2) -> dict[str, Any]:
+    """运行页与额度预览共享同一投影，不从剩余次数重新猜恢复路径。"""
+    latest = ledger.turns[-1] if ledger.turns else None
+    state = latest.state if latest else 'not_run'
+    recovery = ('replay_response' if (state == 'delivered' or (
+                    ledger.group_producer_sha256 is not None and not ledger.group_producer_completed)
+                    or any(turn.producer_sha256 and turn.ordinal > ledger.committed_through for turn in ledger.turns)) else
+                'reconcile' if state in ('reserved', 'unknown') else
+                'manual_edit' if len(ledger.turns) >= ledger.content_limit else None)
+    return dict(unit_id=ledger.unit_id, node=ledger.node, role=ledger.role,
+                scope=ledger.scope, content_used=len(ledger.turns),
+                content_limit=ledger.content_limit, content_base_limit=ledger.base_content_limit,
+                content_granted=ledger.content_limit - ledger.base_content_limit,
+                grant_count=len(ledger.grants), content_remaining=ledger.content_limit - len(ledger.turns),
+                state=state, latest_request_sha256=latest.request_sha256 if latest else None,
+                latest_response_sha256=latest.response_sha256 if latest else None,
+                recovery_action=recovery, processing=processing_view(ledger))
+
+
+def processing_view(ledger: WorkUnitLedgerV2) -> dict[str, Any] | None:
+    """最近一次实际处理与累计内容账分别展示；回答存在不代表质量验收通过。"""
+    last = ledger.processing[-1] if ledger.processing else None
+    turn = (next((row for row in ledger.turns if row.turn_id == last.turn_id), None)
+            if last is not None and last.kind == 'model' else
+            ledger.turns[-1] if last is None and ledger.turns else None)
+    if last is None and turn is None:
+        return None
+    kind = last.kind if last is not None else 'model'
+    reason = None
+    if kind == 'model':
+        assert turn is not None
+        kind = {'adopted': 'generated', 'delivered': 'generated', 'reserved': 'pending',
+                'failed': 'failed', 'unknown': 'unknown'}[turn.state]
+        reason = turn.reason_code or None
+    counts = {name: int(name == kind) for name in (
+        'pending', 'generated', 'mechanical', 'history_adopted', 'cached', 'failed', 'unknown')}
+    return dict(run_id=last.run_id if last is not None else turn.run_id,
+                input_sha256=last.input_sha256 if last is not None else turn.request_sha256,
+                total=1, **counts, reason=reason)
+
+
 def list_unit_views(base: str | os.PathLike[str], sid: str) -> list[dict[str, Any]] | None:
-    if workflow_manifest(base) is None:
+    manifest = workflow_manifest(base)
+    if manifest is None:
         return None
     root = paths.work_units_dir(base, sid)
     registry_path = paths.work_unit_registry_path(base, sid)
     if registry_path.exists():
         registry = _read(base, registry_path, WorkUnitRegistryV1)
+        if registry.task_id != manifest.task_id or registry.sid != sid:
+            raise WorkUnitRefused('工作单元登记账属于另一工作流或书，运行状态未知')
         if any(not (root / unit_id / 'ledger.json').is_file() for unit_id in registry.unit_ids):
             raise WorkUnitRefused('已登记工作单元缺预算账，运行状态未知')
     if not root.exists():
         return []
     result: list[dict[str, Any]] = []
     for path in sorted(root.glob('*/ledger.json')):
-        ledger = _read(base, path, WorkUnitLedgerV1)
-        latest = ledger.turns[-1] if ledger.turns else None
-        state = latest.state if latest else 'not_run'
-        recovery = ('replay_response' if (state == 'delivered' or (
-                        ledger.group_producer_sha256 is not None and not ledger.group_producer_completed)) else
-                    'reconcile' if state in ('reserved', 'unknown') else
-                    'manual_edit' if len(ledger.turns) >= ledger.content_limit else None)
-        result.append(dict(unit_id=ledger.unit_id, node=ledger.node, role=ledger.role,
-                           scope=ledger.scope, content_used=len(ledger.turns),
-                           content_limit=ledger.content_limit,
-                           content_remaining=ledger.content_limit - len(ledger.turns),
-                           state=state, latest_request_sha256=latest.request_sha256 if latest else None,
-                           latest_response_sha256=latest.response_sha256 if latest else None,
-                           recovery_action=recovery))
+        ledger = _read(base, path, WorkUnitLedgerV2)
+        identity = {key: getattr(ledger, key) for key in ('task_id', 'sid', 'node', 'role', 'scope')}
+        if (ledger.task_id != manifest.task_id or ledger.sid != sid
+                or ledger.unit_id != path.parent.name or ledger.unit_id != _digest(identity)):
+            raise WorkUnitRefused('工作单元路径、任务、书或内容身份漂移，运行状态未知')
+        for row in ledger.processing:
+            material = row.model_dump(exclude={'processing_id'}, exclude_none=True)
+            if row.processing_id != _digest({'unit_id': ledger.unit_id, **material}):
+                raise WorkUnitRefused('工作单元处理来源回执损坏，运行状态未知')
+        result.append(unit_view(ledger))
     return result

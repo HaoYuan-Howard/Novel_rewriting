@@ -23,6 +23,7 @@ import { useApprovalWorkpack } from '@/hooks/useApprovalWorkpack'
 interface DraftDecision {
   decision: string
   reason: string
+  source_decision_sha256?: string | null
 }
 
 /**
@@ -180,10 +181,11 @@ export function StructureApprovalPanel({
   }
 
   const existing = doc.structure.current_decision
-  const alreadyCurrent = workpack.data?.disposition === 'already_current'
+  const sameWorkpackSubject = workpack.data?.subject_sha256 === subject
+  const alreadyCurrent = sameWorkpackSubject && workpack.data?.disposition === 'already_current'
   const workpackReviewable = Boolean(
     !workpack.isLoading && !workpack.isFetching && !workpack.isError &&
-    workpack.data?.disposition === 'review_required',
+    sameWorkpackSubject && workpack.data?.disposition === 'review_required',
   )
   const workpackDisabledReason = alreadyCurrent
     ? '同一当前 Stage4B 工作包已有全章接受决定，无需重复整读'
@@ -193,6 +195,8 @@ export function StructureApprovalPanel({
         ? '正在读取或刷新当前 Stage4B 工作包'
         : !workpack.data
           ? '服务端未返回当前 Stage4B 工作包'
+          : !sameWorkpackSubject
+            ? '结构工作包与页面当前主体不一致，请刷新后再提交'
           : !workpackReviewable
             ? '服务端返回了未知的 Stage4B 工作包处置态'
             : ''
@@ -200,6 +204,8 @@ export function StructureApprovalPanel({
     subject,
     existing?.decided_at ?? 'undecided',
     rows.map((row) => row.output_ordinal).join(','),
+    workpack.data?.review_token ?? '',
+    workpack.data?.groups.flatMap((group) => group.items.map((item) => item.source_decision_sha256 ?? '')).join(','),
   ].join(':')
   return (
     <StructureApprovalForm
@@ -260,15 +266,21 @@ function StructureApprovalForm({
   const existingByChapter = new Map(
     (existing?.chapters ?? []).map((row) => [row.output_ordinal, row]),
   )
+  const inheritedByChapter = new Map(
+    (workpackQuery.data?.groups ?? []).flatMap((group) => group.items.flatMap((item) =>
+      item.inherited_structure_decision
+        ? [[item.inherited_structure_decision.output_ordinal, item.inherited_structure_decision] as const] : [])),
+  )
   const orderedRows = [...rows].sort((a, b) => a.output_ordinal - b.output_ordinal)
   const [actor, setActor] = useState(existing?.actor ?? '')
   const [reason, setReason] = useState(existing?.reason ?? '')
   const [drafts, setDrafts] = useState<Record<number, DraftDecision>>(() =>
     Object.fromEntries(orderedRows.map((row) => {
-      const previous = existingByChapter.get(row.output_ordinal)
+      const previous = existingByChapter.get(row.output_ordinal) ?? inheritedByChapter.get(row.output_ordinal)
       return [row.output_ordinal, {
         decision: previous?.decision ?? '',
         reason: previous?.reason ?? '',
+        ...(previous?.source_decision_sha256 ? { source_decision_sha256: previous.source_decision_sha256 } : {}),
       }]
     })),
   )
@@ -277,6 +289,8 @@ function StructureApprovalForm({
     output_ordinal: row.output_ordinal,
     decision: drafts[row.output_ordinal]?.decision ?? '',
     reason: drafts[row.output_ordinal]?.reason ?? '',
+    ...(drafts[row.output_ordinal]?.source_decision_sha256
+      ? { source_decision_sha256: drafts[row.output_ordinal].source_decision_sha256 } : {}),
   }))
   const enumReady = decisions.length > 0
   const complete = Boolean(
@@ -290,7 +304,7 @@ function StructureApprovalForm({
   const setChapter = (ordinal: number, patch: Partial<DraftDecision>) => {
     setDrafts((current) => {
       const previous = current[ordinal] ?? { decision: '', reason: '' }
-      return { ...current, [ordinal]: { ...previous, ...patch } }
+      return { ...current, [ordinal]: { ...previous, ...patch, source_decision_sha256: undefined } }
     })
   }
 
@@ -390,6 +404,9 @@ function StructureApprovalForm({
                   </Mono>
                 </div>
                 <span className="prose-cn text-body text-ink-2">{plan.reason}</span>
+                {draft.source_decision_sha256 ? (
+                  <span className="text-micro text-ink-4">沿用有效历史裁决；修改决定或理由后按新裁决提交。</span>
+                ) : null}
                 <div className="flex flex-wrap gap-6 text-micro text-ink-4">
                   <span>声明变化</span>
                   {plan.declared_change_kinds.length
@@ -484,7 +501,7 @@ function StructureApprovalForm({
                 actor: actor.trim(),
                 reason: reason.trim(),
                 review_token: workpackQuery.data?.review_token ?? '',
-                chapters: chapters.map((row) => ({ ...row, reason: row.reason.trim() })),
+                chapters: chapters.map((row) => row.source_decision_sha256 ? row : { ...row, reason: row.reason.trim() }),
               }, {
                 onSuccess: (next) => notify(
                   next.gate.s4

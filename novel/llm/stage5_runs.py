@@ -15,6 +15,7 @@ append-only checkpoint 保存，进程重启后可以零 wire 重评并再次走
 """
 from __future__ import annotations
 
+from novel import runtime_layout
 import json
 import os
 import re
@@ -51,8 +52,8 @@ from novel.run_identity import check_run_id
 
 M = TypeVar('M', bound=BaseModel)
 
-RECOVERY_POLICY = 'stage5-write-v1'
-REVIEWER_REWRITE_RECOVERY_POLICY = 'stage5-reviewer-rewrite-v1'
+RECOVERY_POLICY = 'stage5-write-v2'
+REVIEWER_REWRITE_RECOVERY_POLICY = 'stage5-reviewer-rewrite-v2'
 SESSION_ISOLATION = 'per-chapter'
 RECOVERY_MANIFEST_VERSION = 1
 
@@ -75,7 +76,7 @@ _OWNERSHIP_LOCAL = threading.local()
 def _history_files(ctx: Any, pattern: str) -> tuple[Path, ...]:
     """Stage5 service/legacy 只读合并，当前空间优先。"""
     found: dict[str, Path] = {}
-    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage5'):
+    for root in runtime_layout.stage_run_roots(ctx.novel_dir, 'stage5'):
         if not root.is_dir():
             continue
         for target in root.glob(pattern):
@@ -159,10 +160,6 @@ def _run_spec(
             ctx.novel_dir, ctx.run_id, ordinal),
         checkpoint_dir=lambda ctx: paths.stage5_chapter_checkpoint_dir(
             ctx.novel_dir, ctx.run_id, ordinal),
-        legacy_run_path=lambda ctx: paths.legacy_stage5_chapter_run_path(
-            ctx.novel_dir, ctx.run_id, ordinal),
-        legacy_checkpoint_dir=lambda ctx: paths.legacy_stage5_chapter_checkpoint_dir(
-            ctx.novel_dir, ctx.run_id, ordinal),
     )
 
 
@@ -208,7 +205,7 @@ def _validate_state_payload(
     expected_fields = (
         _REVIEWER_REWRITE_STATE_FIELDS
         if mode == 'reviewer_rewrite' else _STATE_FIELDS)
-    if set(state) != expected_fields or state.get('version') != 1:
+    if set(state) != expected_fields or state.get('version') != 2:
         raise ProvenanceRefused(
             f'Stage5 第 {chapter} 章 checkpoint state 字段漂移')
     expected_mode = mode
@@ -242,17 +239,15 @@ def _validate_state_payload(
                 != reviewer_rewrite_request_file_sha256):
             raise ProvenanceRefused(
                 f'Stage5 第 {chapter} 章 reviewer rewrite checkpoint request 身份不闭合')
+    from contracts.schema.stage5 import RejectedAttempt
     normalized_prior: list[dict[str, Any]] = []
     for item in prior:
-        if (not isinstance(item, dict) or set(item) != {'chars', 'text'}
-                or not isinstance(item.get('chars'), int)
-                or isinstance(item.get('chars'), bool) or item['chars'] < 0
-                or not isinstance(item.get('text'), str) or not item['text'].strip()
-                # 与 Stage5 ``chars_of`` 的唯一口径相同：含内部空白，只裁两端。
-                or item['chars'] != len(item['text'].strip())):
+        try:
+            candidate = RejectedAttempt.model_validate(item)
+        except (ValueError, TypeError) as exc:
             raise ProvenanceRefused(
-                f'Stage5 第 {chapter} 章 checkpoint prior attempt 不合法')
-        normalized_prior.append({'chars': item['chars'], 'text': item['text']})
+                f'Stage5 第 {chapter} 章 checkpoint prior attempt 不合法') from exc
+        normalized_prior.append(candidate.model_dump(mode='json'))
     if (any(not isinstance(rule, str) or not rule for rule in hard_rules)
             or hard_rules != sorted(set(hard_rules))
             or any(not isinstance(item, str) or not item for item in regressions)):
@@ -715,7 +710,7 @@ def _reviewer_execution_files(
     source = check_run_id(run_id)
     dirname = f'ch{_chapter(chapter):04d}'
     found: dict[int, Path] = {}
-    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage5'):
+    for root in runtime_layout.stage_run_roots(ctx.novel_dir, 'stage5'):
         if root.exists():
             _require_plain_contained_path(
                 root, root, label='Stage5 run read root', leaf='dir')
@@ -848,7 +843,7 @@ def reviewer_rewrite_execution_chains(
     ordinal = _chapter(chapter)
     run_ids: set[str] = set()
     dirname = f'ch{ordinal:04d}'
-    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage5'):
+    for root in runtime_layout.stage_run_roots(ctx.novel_dir, 'stage5'):
         if not root.exists():
             continue
         _require_plain_contained_path(
@@ -1130,7 +1125,7 @@ def reviewer_rewrite_unstarted_evidence(
     })
     dirname = f'ch{row.output_ordinal:04d}'
     forbidden_files: list[str] = []
-    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage5'):
+    for root in runtime_layout.stage_run_roots(ctx.novel_dir, 'stage5'):
         chapter_dir = root / row.run_id / dirname
         for candidate in (
                 chapter_dir / agent_runs.COMMIT_FILE,
@@ -1275,7 +1270,7 @@ def reviewer_rewrite_checkpoint_file(
     source = check_run_id(run_id)
     dirname = f'ch{_chapter(chapter):04d}'
     matches: list[Path] = []
-    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage5'):
+    for root in runtime_layout.stage_run_roots(ctx.novel_dir, 'stage5'):
         directory = root / source / dirname / 'checkpoints'
         if not directory.is_dir():
             continue
@@ -1305,7 +1300,7 @@ def reviewer_rewrite_commit_envelope(
     ordinal = _chapter(chapter)
     candidates: list[Path] = []
     dirname = f'ch{ordinal:04d}'
-    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage5'):
+    for root in runtime_layout.stage_run_roots(ctx.novel_dir, 'stage5'):
         target = root / source / dirname / agent_runs.COMMIT_FILE
         if target.is_file():
             candidates.append(target)
@@ -1566,7 +1561,7 @@ def _unique_reviewer_history_file(
     dirname = f'ch{_chapter(chapter):04d}'
     candidates = [
         root / source / dirname / filename
-        for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage5')
+        for root in runtime_layout.stage_run_roots(ctx.novel_dir, 'stage5')
         if (root / source / dirname / filename).is_file()
     ]
     if not candidates:
@@ -1651,7 +1646,7 @@ def reviewer_rewrite_recovery_journals(
     ordinal = _chapter(chapter)
     dirname = f'ch{ordinal:04d}'
     found: dict[str, tuple[bytes, Path]] = {}
-    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage5'):
+    for root in runtime_layout.stage_run_roots(ctx.novel_dir, 'stage5'):
         if not root.exists():
             continue
         _require_plain_contained_path(
@@ -1692,21 +1687,9 @@ def reviewer_rewrite_recovery_state(
     _require_plain_contained_path(
         target, service_root, label='Stage5 reviewer rewrite recovery target',
         leaf='file', allow_missing=True)
+    runtime_layout.stage_run_roots(ctx.novel_dir, 'stage5')
     if not target.exists():
-        # legacy 是只读接入；一旦 materialize，后续 prepared->committed 只写 service。
-        legacy = (paths.legacy_stage5_chapter_run_path(
-            ctx.novel_dir, check_run_id(run_id), _chapter(chapter))
-            / _REVIEWER_RECOVERY_FILE)
-        legacy_root = paths.legacy_stage_runs_dir(ctx.novel_dir, 'stage5')
-        _require_plain_contained_path(
-            legacy, legacy_root, label='Stage5 reviewer rewrite recovery legacy',
-            leaf='file', allow_missing=True)
-        if not legacy.exists():
-            return None
-        _validated_reviewer_recovery_journal(legacy, sid=ctx.sid)
-        with process_append_lock(target):
-            if not target.is_file():
-                agent_runs._atomic_bytes(target, legacy.read_bytes())
+        return None
     journal = _validated_reviewer_recovery_journal(target, sid=ctx.sid)
     if journal.target_run_id != check_run_id(run_id):
         raise ProvenanceRefused('reviewer rewrite recovery journal target run 漂移')
@@ -2437,22 +2420,10 @@ def _validated_manifest(path: Path) -> PreparedRecoveryManifest:
     return manifest
 
 
-def _recovery_manifest_path(
-        novel_dir: Path, run_id: str, *, materialize: bool = True,
-) -> Path:
-    """target manifest 的 service 落点；legacy 只读原字节接入。"""
-    current = paths.stage5_prepared_recovery_manifest_path(novel_dir, run_id)
-    if current.is_file() or not materialize:
-        return current
-    legacy = paths.legacy_stage5_prepared_recovery_manifest_path(
-        novel_dir, run_id)
-    if not legacy.is_file():
-        return current
-    _validated_manifest(legacy)
-    with process_append_lock(current):
-        if not current.is_file():
-            agent_runs._atomic_bytes(current, legacy.read_bytes())
-    return current
+def _recovery_manifest_path(novel_dir: Path, run_id: str) -> Path:
+    """target manifest 只位于当前 service 根。"""
+    runtime_layout.stage_run_roots(novel_dir, 'stage5')
+    return paths.stage5_prepared_recovery_manifest_path(novel_dir, run_id)
 
 
 def write_recovery_manifest(
@@ -2602,16 +2573,9 @@ def recovery_state(ctx: Any, chapter: int) -> PreparedRecoveryJournal | None:
     ordinal = _chapter(chapter)
     target = paths.stage5_chapter_recovery_journal_path(
         ctx.novel_dir, ctx.run_id, ordinal)
+    runtime_layout.stage_run_roots(ctx.novel_dir, 'stage5')
     if not target.is_file():
-        legacy = paths.legacy_stage5_chapter_recovery_journal_path(
-            ctx.novel_dir, ctx.run_id, ordinal)
-        if not legacy.is_file():
-            return None
-        # 先验 legacy，再原字节物化；后续 prepared -> committed 只写 service。
-        _validated_recovery_journal(legacy)
-        with process_append_lock(target):
-            if not target.is_file():
-                agent_runs._atomic_bytes(target, legacy.read_bytes())
+        return None
     current = _validated_recovery_journal(target)
     if (current.sid != ctx.sid or current.node != 'stage5.write'
             or current.target_run_id != ctx.run_id or current.code != ctx.code):

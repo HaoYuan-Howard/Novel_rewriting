@@ -69,11 +69,81 @@ export interface RunWorkUnit {
   scope: string
   content_used: number
   content_limit: number
+  content_base_limit?: number
+  content_granted?: number
+  grant_count?: number
   content_remaining: number
   state: string
   latest_request_sha256: string | null
   latest_response_sha256: string | null
   recovery_action: string | null
+  registered?: boolean
+  processing?: {
+    run_id: string
+    input_sha256: string
+    total: number
+    pending: number
+    generated: number
+    mechanical: number
+    history_adopted: number
+    cached: number
+    failed: number
+    unknown: number
+    reason: string | null
+  } | null
+  review?: {
+    subject_sha256: string
+    total: number
+    pending: number
+    decision_inherited: number
+  } | null
+  review_unavailable_reason?: string | null
+}
+
+export interface BudgetGrant {
+  intent_id: string
+  preview_token: string
+  additional: number
+  actor: string
+  reason: string
+  created_at: number
+  before_ledger_sha256: string
+  surface_sha256: string
+  authorized_after_ordinal: number
+  owner_run_ids: string[]
+}
+
+export interface WorkUnitGrantRequest {
+  preview_token: string
+  intent_id: string
+  additional: number
+  reason: string
+}
+
+export interface WorkUnitGrantPreview {
+  sid: string
+  unit_id: string
+  available: boolean
+  reason: string
+  additional: number
+  allowed_additions: number[]
+  preview_token: string | null
+  unit: RunWorkUnit | null
+  costs: {
+    calls: number
+    failed_calls: number
+    cached_calls: number
+    prompt_tokens: number | null
+    completion_tokens: number | null
+    total_tokens: number | null
+    missing_usage_calls: number
+  } | null
+  history: BudgetGrant[] | null
+}
+
+export interface WorkUnitGrantResult {
+  grant: BudgetGrant
+  current: WorkUnitGrantPreview
 }
 
 export interface RunProgress {
@@ -87,5 +157,6 @@ export interface RunProgress {
   /** 最近约 20 条信标事件，人读时间线 */
   events_tail: RunEvent[]
   work_units?: RunWorkUnit[] | null
+  work_units_unavailable_reason?: string | null
   current_recovery_actions?: string[] | null
 }

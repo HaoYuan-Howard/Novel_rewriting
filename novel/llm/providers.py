@@ -176,7 +176,8 @@ class DeepSeekLegacyDriver(LegacyLlmDriver):
             effort=checked.reasoning_effort,
             max_retries=cfg.max_retries,
             backoff_base=cfg.backoff_base,
-            concurrency=cfg.concurrency,
+            concurrency=cfg.concurrency_for(ctx.node),
+            concurrency_policy=cfg.concurrency_policy,
         )
 
 

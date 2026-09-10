@@ -45,7 +45,7 @@ from contracts.artifacts import (
 )
 from contracts.invariants import (
     AGENT_EXECUTOR_NODES, COMMANDER_MAX_ATTEMPTS_PER_SEAT,
-    COMMANDER_RETRY_BACKOFF_SECONDS, COMMANDER_REVIEWER_MAX_CORRECTIONS,
+    COMMANDER_RETRY_BACKOFF_SECONDS,
     STAGE2_BLUEPRINT_MAX_CONCURRENCY,
     commander_work_unit,
 )
@@ -59,10 +59,10 @@ from contracts.schema.stage2 import BlueprintRelationEdit, GlobalEdit, GlobalEdi
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected,
     AgentRunEvent, AgentRunExitOrigin,
-    AgentExecutorBackend, AgentProfile, AgentRunRecord, AgentRunStart,
+    AgentExecutorBackend, AgentProfile, AgentRunRecord, AgentRunStart, RunContinuationSource,
     CommanderSessionPointer, ExecutionEpoch, ExecutorBackend,
     PipelineAgentProfiles, ReviewerActionRecord, RunContractV2,
-    ReviewerSchemaRecoveryProof, ReviewerSeatLedger, ReviewerSeatTurn, Stage2PrereviewRecord,
+    ReviewerSchemaRecoveryProof, ReviewerSeatLedger, ReviewerSeatTurn,
 )
 from novel import agent_session_audit, paths, prov, run_identity, skill_contract
 from novel.agent_capabilities import (
@@ -76,7 +76,7 @@ from novel.commander_context import (
     COMMANDER_ADMISSION_ID_ENV, COMMANDER_CONTRACT_SHA256_ENV,
     COMMANDER_EPOCH_ID_ENV,
     COMMANDER_EPOCH_SHA256_ENV, COMMANDER_RUN_ID_ENV, env_with_context,
-    action_admission_id_belongs_to_epoch, stage2_prereview_admission_id,
+    action_admission_id_belongs_to_epoch,
 )
 from novel.commanders import (
     CommanderConfigurationError, CommanderDriver, CommanderInvocation,
@@ -94,12 +94,13 @@ from novel.llm.ledger import (
 )
 from novel.model_slots import (
     model_slot_from_environment, prepare_model_slot_gate,
+    pipeline_model_slot, MODEL_BOOK_DIR_ENV,
 )
 from novel.orchestrator import (
     admission, commander_completion, execution_permit, jobs, operator, queue,
     review_seats, reviewer_action_evidence, reviewer_seat_ledger,
     reviewer_protocol_recovery, reviewer_schema_recovery,
-    reviewer_tasks, service_lifecycle, stage2_review_ledger,
+    reviewer_tasks, service_lifecycle,
     stage2_reviewer_wire, stage4_reviewer_wire, state, uploads,
 )
 from novel.orchestrator.agent_supervisor import (
@@ -143,9 +144,6 @@ MAX_CONCURRENT = 3
 # unknown，不把“后来终于结束”改写成“生命周期始终可证”。
 _EXECUTION_CLOSE_TIMEOUT_SECONDS = 300.0
 _EXECUTION_CLOSE_POLL_SECONDS = 0.25
-_MAX_REVIEWER_CORRECTIONS = COMMANDER_REVIEWER_MAX_CORRECTIONS
-_MAX_STAGE2_COMMANDER_TURNS = stage2_review_ledger.MAX_COMMANDER_CALLS
-_MAX_STAGE2_EDIT_SEAT = stage2_review_ledger.MAX_EDIT_SEAT
 _ACTION_FAILURE_TAIL_BYTES = 16 * 1024
 _ACTION_FAILURE_DETAIL_CHARS = 4096
 
@@ -153,6 +151,7 @@ _THREADS_LOCK = threading.Lock()
 _THREADS: dict[str, threading.Thread] = {}
 _COMMANDERS_LOCK = threading.Lock()
 _COMMANDERS: dict[str, CommanderDriver] = {}
+_COMMANDER_SLOT_CANCEL: dict[str, threading.Event] = {}
 #: 每个 run 当前 Commander turn 的协议事件汇：driver 首个事件里的 provider
 #: session id 经它在线落盘（``CommanderSessionPointer``）。
 _COMMANDER_EVENT_SINKS: dict[str, Callable[[object, str | None], None]] = {}
@@ -376,6 +375,7 @@ class AgentRunPlan:
     profiles: PipelineAgentProfiles
     prompt: str
     invocation: CommanderInvocation
+    continuation: RunContinuationSource | None = None
 
 
 def _plan_resolved(
@@ -410,12 +410,17 @@ def _plan_resolved(
 def plan(
         base: str | os.PathLike[str], sid: str, *, authorized: bool,
         egress_authorized: bool,
-        profiles: PipelineAgentProfiles | None) -> AgentRunPlan:
+        profiles: PipelineAgentProfiles | None,
+        continuation: RunContinuationSource | None = None) -> AgentRunPlan:
     """preview、单本启动与批量入队的唯一 planner；不发模型请求、不写盘。"""
-    return _plan_resolved(
+    if continuation is not None:
+        from novel.orchestrator import agent_continuation
+        profiles = agent_continuation.validate(base, sid, continuation, profiles)
+    planned = _plan_resolved(
         base, sid, authorized=authorized,
         egress_authorized=egress_authorized,
         profiles=_freeze_profiles(profiles))
+    return replace(planned, continuation=continuation)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -782,6 +787,16 @@ Spawn = Callable[
 ]
 
 
+def _model_runtime_env(base: Path, sid: str, profiles: PipelineAgentProfiles) -> dict[str, str]:
+    """实际子执行只用本次 plan 冻结的并发配置，不继承宿主的隐式提速参数。"""
+    from contracts.schema.orchestration import PipelineConcurrency
+    from novel.config import DEFAULT_CONCURRENCY, ENV_KEYS
+    policy = profiles.concurrency or PipelineConcurrency()
+    return {ENV_KEYS['concurrency_policy']: policy.model_dump_json(),
+            ENV_KEYS['concurrency']: str(DEFAULT_CONCURRENCY),
+            MODEL_BOOK_DIR_ENV: str(paths.resolve_novel_dir(base, sid))}
+
+
 def _default_spawn(
         run_id: str, *, on_registered: Callable[[], None] | None = None) -> Spawn:
     """由选定 driver 拉起一棵 Commander 进程树，并只登记这一个 owner。"""
@@ -799,7 +814,8 @@ def _default_spawn(
                 COMMANDER_CONTRACT_SHA256_ENV,
                 COMMANDER_EPOCH_ID_ENV,
                 COMMANDER_EPOCH_SHA256_ENV,
-                COMMANDER_ADMISSION_ID_ENV):
+                COMMANDER_ADMISSION_ID_ENV, MODEL_BOOK_DIR_ENV,
+                'NOVEL_CONCURRENCY_POLICY', 'NOVEL_CONCURRENCY'):
             if key not in env:
                 continue
             runtime_env[key] = env[key]
@@ -826,8 +842,10 @@ def _default_spawn(
                 invocation.expected_output_schema_sha256),
         )
         driver = create_commander_driver(runtime_invocation.profile)
+        slot_cancel = threading.Event()
         with _COMMANDERS_LOCK:
             _COMMANDERS[run_id] = driver
+            _COMMANDER_SLOT_CANCEL[run_id] = slot_cancel
             event_sink = _COMMANDER_EVENT_SINKS.get(run_id)
         if event_sink is not None:
             event_setter = getattr(driver, 'set_event_callback', None)
@@ -844,9 +862,14 @@ def _default_spawn(
         # owner 故意不在顶层 invocation 返回时移除：worker 接下来还要 drain
         # close 前 claim / beacon。300 秒阈值与人工 stop 都应尽可能仍能向这棵
         # driver 进程树发 cancel。真正 close 在 durable drain 闭合之后统一完成。
-        # Stage2 只读预审与 blueprint 子进程可被 Supervisor 放进同一份
-        # 跨进程总槽；普通 Commander 没有环境契约时严格保持原行为。
-        with model_slot_from_environment(runtime_env):
+        # Commander 与同根 Executor 共用整书、供应商总槽；取消等待不启动进程。
+        from novel.config import load_config
+        policy = load_config(env=runtime_env).concurrency_policy
+        book_dir = runtime_env.get(MODEL_BOOK_DIR_ENV)
+        total_slot = (pipeline_model_slot(Path(book_dir), driver.provider,
+            per_book=policy.per_book, per_provider=policy.per_provider,
+            cancelled=slot_cancel.is_set) if book_dir else nullcontext())
+        with model_slot_from_environment(runtime_env, cancelled=slot_cancel.is_set), total_slot:
             return driver.run(runtime_invocation, log=log, run_id=run_id)
 
     return go
@@ -856,6 +879,9 @@ def _close_commander_owner(run_id: str) -> None:
     """drain 闭合后才归还 driver owner；custom spawn 没有 owner。"""
     with _COMMANDERS_LOCK:
         driver = _COMMANDERS.pop(run_id, None)
+        slot_cancel = _COMMANDER_SLOT_CANCEL.pop(run_id, None)
+        if slot_cancel is not None:
+            slot_cancel.set()
     if driver is not None:
         driver.close()
 
@@ -864,6 +890,9 @@ def _cancel_commander_owner(run_id: str) -> str:
     """超时只尝试 cancel，不据返回值猜 claims/executions 已结束。"""
     with _COMMANDERS_LOCK:
         driver = _COMMANDERS.get(run_id)
+        slot_cancel = _COMMANDER_SLOT_CANCEL.get(run_id)
+        if slot_cancel is not None:
+            slot_cancel.set()
     if driver is None:
         return '没有可用 Commander driver owner（custom spawn 或句柄已丢）'
     try:
@@ -1160,14 +1189,9 @@ def _reviewer_approval_argv(
     payload_path = _write_identity_bound_scratch(
         scratch, stem=f'reviewer-{action.surface}', kind='input',
         identity_sha256=hashlib.sha256(payload).hexdigest(), payload=payload)
-    if action.surface == 'stage2_final_review':
-        tail = [
-            'approval', 'close-stage2', sid, '--base', base,
-            '--input', str(payload_path)]
-    else:
-        tail = [
-            'approval', 'apply', action.surface, sid, '--base', base,
-            '--input', str(payload_path)]
+    tail = [
+        'approval', 'apply', action.surface, sid, '--base', base,
+        '--input', str(payload_path)]
     return [sys.executable, '-B', '-m', 'novel.cli', *tail]
 
 
@@ -1198,36 +1222,16 @@ class _ReplayableReviewerAction:
     record: ReviewerActionRecord
 
 
-@dataclass(frozen=True)
-class _ReplayableStage2Prereview:
-    """盘上一份仍与当前 Global 业务面完全同一的未绑定预审决定。"""
-
-    path: Path
-    record: Stage2PrereviewRecord
-
-
-@dataclass(frozen=True)
-class _Stage2PrereviewState:
-    """同一 parent 内一次失败预审的纠错坐标；成功决定只认 durable record。"""
-
-    task: reviewer_tasks.Stage2PrereviewTask
-    session_run_id: str
-    error: str | None
-    response_sha256: str | None = None
-
-
 def _reviewer_activity(task: reviewer_tasks.ReviewerTask) -> str:
     """给成本账一枚人读分段；生产 node 身份仍保持 ``None``。"""
     option_ids = {
         str(option.get('id')) for option in task.submission_options
         if isinstance(option, dict)
     }
-    if task.waiting_on == queue.WAITING_ON_STAGE2_FINAL_REVIEW:
-        return 'stage2.global.final-review'
     if task.waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-        if any('apply-edit' in option_id for option_id in option_ids):
-            return 'stage2.global.review-or-edit'
-        return 'stage2.global.review'
+        node, _scope = commander_work_unit(task.waiting_on)
+        suffix = 'review-or-edit' if any('apply-edit' in value for value in option_ids) else 'review'
+        return f'{node}.{suffix}'
     return f'reviewer:{task.waiting_on}'
 
 
@@ -1269,25 +1273,7 @@ def _record_reviewer_action(
             'stage5_reviewer_contract_sha256': task.stage5_reviewer_contract_sha256,
         }
     elif task.waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-        effective_progress = reviewer_progress_sha256 or task.progress_sha256
-        metadata = (
-            task.workpack_sha256, task.source_sha256, task.main_text_sha256,
-            effective_progress, task.blocker_count,
-            reviewer_session_run_id, provider_response_sha256,
-        )
-        if not all(value is not None for value in metadata):
-            raise RuntimeError(
-                'Stage2 typed-valid 决定缺 workpack/source/main/progress/'
-                'blocker/席位/provider 回答身份')
-        stage2_fields = {
-            'workpack_sha256': task.workpack_sha256,
-            'source_sha256': task.source_sha256,
-            'main_text_sha256': task.main_text_sha256,
-            'progress_sha256': effective_progress,
-            'blocker_count': task.blocker_count,
-            'reviewer_session_run_id': reviewer_session_run_id,
-            'provider_response_sha256': provider_response_sha256,
-        }
+        raise WorkUnitRefused('Stage2 决定必须绑定现役工作单元；旧独立席位账已退役')
     if isinstance(action, reviewer_tasks.ReviewerApprovalAction):
         if work_unit_id is None and task.waiting_on in reviewer_schema_recovery.WAITING_ON:
             ledger = reviewer_seat_ledger.read(
@@ -1377,326 +1363,6 @@ def _discard_reviewer_action_record(base: str, path: Path) -> None:
     except NovelError as exc:
         warnings.warn(
             f'reviewer 决定记录清理失败：{exc}', RuntimeWarning, stacklevel=2)
-
-
-def _stage2_prereview_identity(
-        task: reviewer_tasks.ReviewerTask
-        | reviewer_tasks.Stage2PrereviewTask,
-        ) -> tuple[str, str, str, str, str, int] | None:
-    """返回可跨 parent 证明同一预审主体的完整稳定身份。"""
-    values = (
-        task.business_sha256, task.workpack_sha256,
-        task.source_sha256, task.main_text_sha256,
-        task.progress_sha256,
-    )
-    if (not all(isinstance(value, str) for value in values)
-            or not isinstance(task.blocker_count, int)):
-        return None
-    return (
-        str(task.business_sha256), str(task.workpack_sha256),
-        str(task.source_sha256), str(task.main_text_sha256),
-        str(task.progress_sha256), task.blocker_count,
-    )
-
-
-def _record_stage2_prereview(
-        base: str, sid: str, *, run_id: str, epoch: ExecutionEpoch,
-        task: reviewer_tasks.Stage2PrereviewTask,
-        input_payload: dict[str, object], reviewer_session_run_id: str,
-        provider_response_sha256: str) -> Path:
-    """typed prereview loader 一通过就保存未绑定决定，而不是伪造 live action。"""
-    identity = _stage2_prereview_identity(task)
-    if identity is None:
-        raise RuntimeError('Stage2 typed-valid 预审缺完整 durable 恢复身份')
-    (business_sha256, workpack_sha256, source_sha256,
-     main_text_sha256, progress_sha256, blocker_count) = identity
-    return uploads.save_stage2_prereview(base, sid, Stage2PrereviewRecord(
-        sid=sid, run_id=run_id, epoch_id=epoch.epoch_id,
-        business_sha256=business_sha256,
-        workpack_sha256=workpack_sha256,
-        source_sha256=source_sha256,
-        main_text_sha256=main_text_sha256,
-        progress_sha256=progress_sha256,
-        blocker_count=blocker_count,
-        reviewer_session_run_id=reviewer_session_run_id,
-        provider_response_sha256=provider_response_sha256,
-        input_payload=dict(input_payload), recorded_at=int(time.time())))
-
-
-def _find_replayable_stage2_prereview(
-        base: str, sid: str, *,
-        task: reviewer_tasks.ReviewerTask
-        | reviewer_tasks.Stage2PrereviewTask,
-        ) -> _ReplayableStage2Prereview | None:
-    """查找完全同一业务面的未绑定预审；失配清理，多份命中关闭式拒绝。"""
-    records = uploads.load_stage2_prereviews(base, sid)
-    if not records:
-        return None
-    identity = _stage2_prereview_identity(task)
-    if identity is None:
-        raise reviewer_tasks.ReviewerTaskError(
-            '当前 Stage2 workpack 缺完整身份，不能判定持久预审是否适用')
-    matches: list[tuple[Path, Stage2PrereviewRecord]] = []
-    for path, record in records:
-        record_identity = (
-            record.business_sha256, record.workpack_sha256,
-            record.source_sha256, record.main_text_sha256,
-            record.progress_sha256, record.blocker_count,
-        )
-        if record_identity == identity:
-            matches.append((path, record))
-        else:
-            _discard_reviewer_action_record(base, path)
-    if len(matches) > 1:
-        raise reviewer_tasks.ReviewerTaskError(
-            '同一 Stage2 业务/workpack 身份存在多份未绑定预审记录；'
-            '无法唯一证明应消费哪一席')
-    if not matches:
-        return None
-    path, record = matches[0]
-    # record 不能替席位账自证主体：先核原 turn 的全量身份。provider exit 0
-    # + typed loader 后才会有本记录，所以新 parent 可幂等补完崩溃窗里的
-    # ledger.finish；补完返回值仍必须是 ok/0，才允许进入 live bind。
-    try:
-        ledger_path = stage2_review_ledger.ledger_path(
-            base, sid, source_sha256=record.source_sha256,
-            main_text_sha256=record.main_text_sha256)
-        _raw, archive = stage2_review_ledger.read_any_version(ledger_path)
-        turns = [
-            turn for turn in archive.turns
-            if turn.session_run_id == record.reviewer_session_run_id]
-        if len(turns) != 1:
-            raise reviewer_tasks.ReviewerTaskError(
-                'Stage2 持久预审找不到唯一的原席位账')
-        turn = turns[0]
-        if (
-            turn.purpose != 'prereview'
-            or turn.business_sha256 != record.business_sha256
-            or turn.workpack_sha256 != record.workpack_sha256
-            or turn.progress_sha256 != record.progress_sha256
-            or turn.blocker_count != record.blocker_count
-        ):
-            raise reviewer_tasks.ReviewerTaskError(
-                'Stage2 持久预审与原席位账的完整 identity 不一致')
-        if turn.outcome == 'started':
-            # 崩溃若恰落在 record save → ledger.finish 之间，只能由三份已经
-            # 提交的独立事实共同证明 provider 成功；缺任一份都保持 started。
-            if record.run_id in REGISTRY.live():
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage2 预审原 parent 仍在活动，不能从旁补完其席位账')
-            if not turn.attempts:
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage2 预审 started 席缺进程 attempt 证据')
-            last_attempt = turn.attempts[-1]
-            if (
-                last_attempt.finished_at is None
-                or last_attempt.exit_code != 0
-                or last_attempt.error_kind is not None
-                or not last_attempt.wire_evidence
-            ):
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage2 预审 started 席没有 wire+exit0 attempt 证据')
-            sessions = [
-                session for session in agent_session_audit.fold(
-                    agent_session_audit.read_events(base))
-                if session.session_run_id == record.reviewer_session_run_id]
-            if len(sessions) != 1:
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage2 预审 started 席没有唯一 logical session 审计')
-            session = sessions[0]
-            audit_attempts = [
-                attempt for attempt in session.attempts
-                if attempt.attempt_id == last_attempt.attempt_id]
-            if (
-                session.start.parent_run_id != record.run_id
-                or session.start.role != 'commander'
-                or session.start.node is not None
-                or session.end is None
-                or session.process_state != 'ok'
-                or session.error_kind is not None
-                or len(audit_attempts) != 1
-                or audit_attempts[0].error_kind is not None
-            ):
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage2 预审 started 席的 session 审计未证明 process ok')
-            cost_rows = [
-                row for row in read_jsonl_rows(cost_ledger_path(base))
-                if row.get('run_id') == record.run_id
-                and row.get('session_run_id') == record.reviewer_session_run_id
-                and row.get('sid') == sid
-                and row.get('role') == 'commander'
-                and row.get('attempt_id') == last_attempt.attempt_id
-                and row.get('activity') == 'stage2.global.prereview'
-            ]
-            if (
-                len(cost_rows) != 1
-                or cost_rows[0].get('outcome') != 'ok'
-                or cost_rows[0].get('exit_code') != 0
-                or cost_rows[0].get('error_kind') is not None
-            ):
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage2 预审 started 席的成本账未证明同 attempt exit 0')
-            turn = stage2_review_ledger.finish(
-                base, sid, source_sha256=record.source_sha256,
-                main_text_sha256=record.main_text_sha256,
-                session_run_id=record.reviewer_session_run_id, exit_code=0)
-        if turn.outcome != 'ok' or turn.exit_code != 0:
-            raise reviewer_tasks.ReviewerTaskError(
-                'Stage2 持久预审的原席位没有成功闭账')
-    except reviewer_tasks.ReviewerTaskError:
-        raise
-    except (
-        NovelError, OSError, ValueError,
-        stage2_review_ledger.Stage2ReviewBudgetRefused,
-    ) as exc:
-        raise reviewer_tasks.ReviewerTaskError(
-            'Stage2 持久预审的原席位账无法确定性补完：'
-            f'{type(exc).__name__}: {exc}') from exc
-    return _ReplayableStage2Prereview(path=path, record=record)
-
-
-def _validate_stage2_action_record_ledger(
-        base: str, sid: str, *, record: ReviewerActionRecord,
-        task: reviewer_tasks.ReviewerTask) -> bool:
-    """执行 durable Stage2 action 前，复核并在强证据下补完原席位。
-
-    live reviewer 的 typed loader 与 action record 保存发生在
-    ``Stage2ReviewLedger.finish`` 之前。宿主若恰好死在两次原子写之间，记录会
-    指向一席仍为 ``started`` 的 turn；只有 attempt、logical-session audit 与成本账
-    同时证明同一进程已经 wire+exit0，且原 parent 已不活动，才允许幂等补 finish。
-    这份 record 自身不是席位成功证明，更不是 execution permit。
-    """
-    identity = _stage2_prereview_identity(task)
-    if identity is None:
-        raise reviewer_tasks.ReviewerTaskError(
-            '当前 Stage2 workpack 缺完整身份，不能复核 durable action 原席位')
-    (business_sha256, workpack_sha256, source_sha256,
-     main_text_sha256, _base_progress_sha256, blocker_count) = identity
-    if (record.business_sha256 != business_sha256
-            or record.workpack_sha256 != workpack_sha256
-            or (record.source_sha256 is not None
-                and record.source_sha256 != source_sha256)
-            or (record.main_text_sha256 is not None
-                and record.main_text_sha256 != main_text_sha256)
-            or (record.blocker_count is not None
-                and record.blocker_count != blocker_count)
-            or record.reviewer_session_run_id is None):
-        raise reviewer_tasks.ReviewerTaskError(
-            'Stage2 durable action 与当前 business/workpack/source/main/blocker '
-            '身份不一致')
-    try:
-        ledger_path = stage2_review_ledger.ledger_path(
-            base, sid, source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256)
-        _raw, archive = stage2_review_ledger.read_any_version(ledger_path)
-        turns = [
-            turn for turn in archive.turns
-            if turn.session_run_id == record.reviewer_session_run_id]
-        if len(turns) != 1:
-            raise reviewer_tasks.ReviewerTaskError(
-                'Stage2 durable action 找不到唯一的原席位账')
-        turn = turns[0]
-        if (
-            turn.business_sha256 != business_sha256
-            or turn.workpack_sha256 != workpack_sha256
-            or (record.progress_sha256 is not None
-                and turn.progress_sha256 != record.progress_sha256)
-            or turn.blocker_count != blocker_count
-        ):
-            raise reviewer_tasks.ReviewerTaskError(
-                'Stage2 durable action 与原席位账的完整 identity 不一致')
-        allowed_purposes = {
-            queue.WAITING_ON_STAGE2_REVIEW: {'prereview', 'review', 'correction'},
-            queue.WAITING_ON_STAGE2_EDIT_CORRECTION: {'correction'},
-            queue.WAITING_ON_STAGE2_FINAL_REVIEW: {'final_review'},
-        }.get(task.waiting_on, set())
-        if turn.purpose not in allowed_purposes:
-            raise reviewer_tasks.ReviewerTaskError(
-                'Stage2 durable action 的原席位 purpose 与 live blocker 不一致')
-        if turn.rejections:
-            # 拒因只可能在该席已 ok 后出现，且是 canonical/typed 边界已经消费
-            # 回答的更晚事实。崩在“拒因落账 → action record 删除”之间时，
-            # record 绝不能盖过拒因再次执行；调用方可安全删除它并继续走
-            # pending-rejection/correction 路。
-            return False
-        recoverable_failed = (
-            turn.outcome == 'failed' and turn.exit_code == CRASH)
-        if turn.outcome == 'started' or recoverable_failed:
-            if record.run_id in REGISTRY.live():
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage2 durable action 原 parent 仍在活动，不能从旁补完其席位账')
-            if not turn.attempts:
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage2 durable action started 席缺进程 attempt 证据')
-            last_attempt = turn.attempts[-1]
-            if (
-                last_attempt.finished_at is None
-                or last_attempt.exit_code != 0
-                or last_attempt.error_kind is not None
-                or not last_attempt.wire_evidence
-            ):
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage2 durable action started 席没有 wire+exit0 attempt 证据')
-            sessions = [
-                session for session in agent_session_audit.fold(
-                    agent_session_audit.read_events(base))
-                if session.session_run_id == record.reviewer_session_run_id]
-            if len(sessions) != 1:
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage2 durable action started 席没有唯一 logical session 审计')
-            session = sessions[0]
-            audit_attempts = [
-                attempt for attempt in session.attempts
-                if attempt.attempt_id == last_attempt.attempt_id]
-            if (
-                session.start.parent_run_id != record.run_id
-                or session.start.role != 'commander'
-                or session.start.node is not None
-                or session.end is None
-                or session.process_state != 'ok'
-                or session.error_kind is not None
-                or len(audit_attempts) != 1
-                or audit_attempts[0].error_kind is not None
-            ):
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage2 durable action started 席的 session 审计未证明 process ok')
-            activity = (
-                'stage2.global.prereview'
-                if turn.purpose == 'prereview' else _reviewer_activity(task))
-            cost_rows = [
-                row for row in read_jsonl_rows(cost_ledger_path(base))
-                if row.get('run_id') == record.run_id
-                and row.get('session_run_id') == record.reviewer_session_run_id
-                and row.get('sid') == sid
-                and row.get('role') == 'commander'
-                and row.get('attempt_id') == last_attempt.attempt_id
-                and row.get('activity') == activity
-            ]
-            if (
-                len(cost_rows) != 1
-                or cost_rows[0].get('outcome') != 'ok'
-                or cost_rows[0].get('exit_code') != 0
-                or cost_rows[0].get('error_kind') is not None
-            ):
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage2 durable action started 席的成本账未证明同 attempt exit 0')
-            turn = stage2_review_ledger.finish(
-                base, sid, source_sha256=source_sha256,
-                main_text_sha256=main_text_sha256,
-                session_run_id=record.reviewer_session_run_id, exit_code=0)
-        if turn.outcome != 'ok' or turn.exit_code != 0:
-            raise reviewer_tasks.ReviewerTaskError(
-                'Stage2 durable action 的原席位没有成功闭账')
-    except reviewer_tasks.ReviewerTaskError:
-        raise
-    except (
-        NovelError, OSError, ValueError,
-        stage2_review_ledger.Stage2ReviewBudgetRefused,
-    ) as exc:
-        raise reviewer_tasks.ReviewerTaskError(
-            'Stage2 durable action 的原席位账无法确定性补完：'
-            f'{type(exc).__name__}: {exc}') from exc
-    return True
 
 
 def _stage5_recorded_response_sha256(record: ReviewerActionRecord) -> str:
@@ -1951,60 +1617,6 @@ def _stage5_pending_supersedes_record(
             f'{type(exc).__name__}: {exc}') from exc
 
 
-def _stage2_task_from_action_record(
-        path: Path, record: ReviewerActionRecord,
-        ) -> reviewer_tasks.ReviewerTask:
-    """只为 durable 补账重建原席位 identity，不冒充当前 live workpack。"""
-    metadata = (
-        record.workpack_sha256, record.source_sha256,
-        record.main_text_sha256, record.progress_sha256,
-        record.blocker_count, record.reviewer_session_run_id,
-        record.provider_response_sha256,
-    )
-    if not all(value is not None for value in metadata):
-        raise reviewer_tasks.ReviewerTaskError(
-            f'Stage2 durable action {path.name} 缺完整席位身份')
-    assert record.workpack_sha256 is not None
-    assert record.source_sha256 is not None
-    assert record.main_text_sha256 is not None
-    assert record.progress_sha256 is not None
-    assert record.blocker_count is not None
-    return reviewer_tasks.ReviewerTask(
-        waiting_on=record.waiting_on,
-        surface_seal=record.surface_seal,
-        business_sha256=record.business_sha256,
-        request_path=path,
-        prompt='durable Stage2 action ledger reconciliation',
-        submission_options=(),
-        workpack_sha256=record.workpack_sha256,
-        source_sha256=record.source_sha256,
-        main_text_sha256=record.main_text_sha256,
-        progress_sha256=record.progress_sha256,
-        blocker_count=record.blocker_count,
-    )
-
-
-def _stage2_apply_edit_record_sha256(
-        store: ArtifactStore, record: ReviewerActionRecord,
-        ) -> str | None:
-    """复算一份 durable action 真正会写到 canonical edit 的完整文件 SHA。"""
-    if (
-        record.node != 'stage2.global'
-        or record.input_payload is None
-        or record.flags is None
-        or tuple(record.flags[:1]) != ('--apply-edit',)
-        or len(record.flags) != 2
-    ):
-        return None
-    try:
-        decoded = decode_artifact(STAGE2_GLOBAL_EDIT, record.input_payload)
-        edit = GlobalEdit.model_validate(decoded.payload)
-        return store.prospective_sparse_sha256(STAGE2_GLOBAL_EDIT, edit)
-    except Exception as exc:  # noqa: BLE001 —— 坏 durable 记录不能被静默当作不匹配
-        raise reviewer_tasks.ReviewerTaskError(
-            f'Stage2 durable apply-edit {record.run_id} 的 payload 无法复算') from exc
-
-
 class _Stage2ReviewerPreflightRejected(TerminalState):
     """producer 已确定性拒绝 durable Stage2 action；不是运行时 unknown。"""
 
@@ -2040,213 +1652,6 @@ def _preflight_stage2_reviewer_action(
         # producer 的完整 diagnostics 可能含模型提供的 ID/正文；席位账与
         # correction prompt 只允许传播它给出的稳定脱敏摘要。
         raise _Stage2ReviewerPreflightRejected(exc.safe_summary) from exc
-
-
-def _safe_stage2_loader_rejection(exc: Exception) -> str:
-    """把旧 durable action 的当前-loader 拒因压成不含 payload 的稳定摘要。"""
-    diagnostic_sha256 = hashlib.sha256(
-        str(exc).encode('utf-8')).hexdigest()
-    trusted_codes = (
-        'collection_split_output_reuses_subject',
-        'collection_touched_input_duplicate',
-        'collection_output_duplicate',
-        'collection_input_output_overlap',
-        'direct_patch_subject_removed_by_collection_edit',
-    )
-    matched = [code for code in trusted_codes if code in str(exc)]
-    category = matched[0] if len(matched) == 1 else 'typed_contract'
-    return (
-        'Stage2 durable action 未通过当前 typed loader；'
-        f'category={category}；diagnostic_sha256={diagnostic_sha256}')
-
-
-def _reconcile_stage2_apply_edit_actions(
-        base: str, sid: str, *, code: str | None = None) -> None:
-    """在 planner 前闭合 canonical action 与 producer 事实的双写窗。
-
-    ReviewerActionRecord 先于 canonical 子进程存在。进程可能已经留下两类更晚事实，
-    却在 Agent 收到退出码前硬终止：终态 failure sidecar 证明这份回答已被拒绝；
-    committed formal journal 证明它已经落地。两者都必须先绑回原席位/退休 record，
-    才能让新 planner 发 correction 或继续下游。prepared/canonical_pending 仍是进行中
-    的同一动作，只能交 deterministic Executor 补尾，不能提前记成拒绝。
-    """
-    action_records = [
-        (path, record)
-        for path, record in uploads.load_reviewer_actions(base, sid)
-        if record.node == 'stage2.global'
-        and record.flags is not None
-        and '--apply-edit' in record.flags
-    ]
-    if not action_records:
-        return
-
-    novel_dir = paths.resolve_novel_dir(base, sid)
-    store = ArtifactStore(state.readonly_ctx(
-        novel_dir, 'stage2.global', code or prov.code_version()))
-    target_sha256: str | None = None
-    failure: GlobalEditFailure | None = None
-    committed: GlobalEditCommit | None = None
-
-    if store.exists(STAGE2_GLOBAL_EDIT_FAILURE):
-        failure = store.read_own(
-            GlobalEditFailure, STAGE2_GLOBAL_EDIT_FAILURE)[0]
-        if failure.failure_kind != 'canonical_pending':
-            # 新人工 edit 可以在旧 sidecar 归档前成为 current；只有 exact
-            # canonical input 仍等于 failed edit 时，sidecar 才能消费旧回答。
-            if (store.full_sha256_or_none(STAGE2_GLOBAL_EDIT)
-                    == failure.failed_edit_sha256):
-                target_sha256 = failure.failed_edit_sha256
-            else:
-                failure = None
-    if store.exists(STAGE2_GLOBAL_EDIT_COMMIT):
-        journal = store.read_own(
-            GlobalEditCommit, STAGE2_GLOBAL_EDIT_COMMIT)[0]
-        # revalidate journal 证明的是既有 INVALID 的 0-wire 提升，不携带一份
-        # Reviewer apply-edit 动作。即使兼容记录里仍有 failed_edit_sha256，
-        # 也不能借它退休/消费一份 durable ReviewerActionRecord。
-        if journal.state == 'committed' and journal.action_kind == 'apply_edit':
-            if target_sha256 is not None:
-                raise reviewer_tasks.ReviewerTaskError(
-                    '同一 Stage2 edit 同时声称 terminal failure 与 committed')
-            committed = journal
-            target_sha256 = journal.failed_edit_sha256
-    if target_sha256 is None:
-        return
-
-    matches = [
-        (path, record)
-        for path, record in action_records
-        if _stage2_apply_edit_record_sha256(store, record) == target_sha256
-    ]
-    if len(matches) > 1:
-        raise reviewer_tasks.ReviewerTaskError(
-            '同一 canonical Stage2 edit 命中多份 durable action；无法唯一补账')
-    if not matches:
-        return
-
-    path, record = matches[0]
-    task = _stage2_task_from_action_record(path, record)
-    if failure is not None:
-        if (
-            record.source_sha256 != failure.expected_source_sha256
-            or record.workpack_sha256
-            != failure.global_review_workpack_sha256
-        ):
-            raise reviewer_tasks.ReviewerTaskError(
-                'Stage2 terminal failure 与 durable action 的 source/workpack 漂移')
-        if not _validate_stage2_action_record_ledger(
-                base, sid, record=record, task=task):
-            # 拒因已经 durable，只差 record 退休；绝不能再执行旧 action。
-            uploads.discard_edit_plan(base, path)
-            return
-        assert record.reviewer_session_run_id is not None
-        assert record.provider_response_sha256 is not None
-        assert record.source_sha256 is not None
-        assert record.main_text_sha256 is not None
-        assert record.workpack_sha256 is not None
-        stage2_review_ledger.record_rejection(
-            base, sid,
-            source_sha256=record.source_sha256,
-            main_text_sha256=record.main_text_sha256,
-            business_sha256=record.business_sha256,
-            workpack_sha256=record.workpack_sha256,
-            session_run_id=record.reviewer_session_run_id,
-            kind='canonical_action',
-            request_sha256=record.provider_response_sha256,
-            reason=(
-                f'{failure.reason_code}: {failure.reason_summary}'))
-        uploads.discard_edit_plan(base, path)
-        return
-
-    assert committed is not None
-    if (
-        record.source_sha256 != committed.expected_source_sha256
-        or record.workpack_sha256
-        != committed.global_review_workpack_sha256
-    ):
-        raise reviewer_tasks.ReviewerTaskError(
-            'Stage2 committed journal 与 durable action 的 source/workpack 漂移')
-    if not _validate_stage2_action_record_ledger(
-            base, sid, record=record, task=task):
-        raise reviewer_tasks.ReviewerTaskError(
-            'Stage2 action 已有 durable rejection，却又出现 committed formal journal')
-    _discard_reviewer_action_record(base, path)
-
-
-def _reconcile_landed_stage2_final_actions(base: str, sid: str) -> None:
-    """在 planner 读取前补完 final approval 已落地后的 ledger/record 双写窗。
-
-    ``approval close-stage2`` 是 canonical 正式写；它成功后 operator 已可能越过
-    final-review blocker，因此不能指望下一 parent 再构造旧 ReviewerTask 来清理。
-    这里不重放 approval，只以当前 effective s2/seen、盘上明文 token 与原席位账
-    证明同一回答已经落地：先幂等 ``mark_complete``，再退休 action record。
-    """
-    final_records = [
-        (path, record)
-        for path, record in uploads.load_reviewer_actions(base, sid)
-        if record.surface == 'stage2_final_review'
-    ]
-    if not final_records:
-        return
-
-    # 局部导入避免 approvals 的大依赖树进入 agent 模块初始化环。
-    from novel.orchestrator import approvals
-
-    approval = approvals.get(base, sid, include_spawns=False)
-    if not approval.gate.get('s2'):
-        # canonical 尚未落地：保留 record 给正常 final-review blocker 零模型重放。
-        return
-    if not all(approval.seen.values()):
-        raise reviewer_tasks.ReviewerTaskError(
-            'current s2 approval 与 seen.read/seen.global 投影不闭合')
-    try:
-        head = json.loads(approvals.approval_head_bytes(base, sid))
-        seen_subjects = head['seen_subjects']
-        current_global_token = seen_subjects['global']['review_token']
-        current_blueprint_token = seen_subjects['read']['review_token']
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise reviewer_tasks.ReviewerTaskError(
-            'current s2 approval 缺可与 durable final action 对证的 seen token') from exc
-
-    matching: list[tuple[Path, ReviewerActionRecord]] = []
-    stale: list[Path] = []
-    for path, record in final_records:
-        try:
-            request = Stage2FinalReviewRequest.model_validate(record.payload)
-        except Exception as exc:  # noqa: BLE001 —— 坏 durable 记录不得静默略过
-            raise reviewer_tasks.ReviewerTaskError(
-                f'Stage2 final action record {path.name} 的 payload 不合法') from exc
-        if (
-            request.global_review_token == current_global_token
-            and request.blueprint_review_token == current_blueprint_token
-        ):
-            matching.append((path, record))
-        else:
-            stale.append(path)
-    if len(matching) > 1:
-        raise reviewer_tasks.ReviewerTaskError(
-            'current s2 approval 命中多份 durable final action，无法唯一补账')
-    if not matching:
-        # 当前 approval 已由另一份精确主体事实闭合；旧 token 的 action 不再可执行。
-        for path in stale:
-            _discard_reviewer_action_record(base, path)
-        return
-
-    path, record = matching[0]
-    task = _stage2_task_from_action_record(path, record)
-    if not _validate_stage2_action_record_ledger(
-            base, sid, record=record, task=task):
-        raise reviewer_tasks.ReviewerTaskError(
-            'current s2 approval 对应的原 final-review 席已记录拒因，不能自动补账')
-    assert record.source_sha256 is not None
-    assert record.main_text_sha256 is not None
-    stage2_review_ledger.mark_complete(
-        base, sid,
-        source_sha256=record.source_sha256,
-        main_text_sha256=record.main_text_sha256)
-    _discard_reviewer_action_record(base, path)
-    for stale_path in stale:
-        _discard_reviewer_action_record(base, stale_path)
 
 
 def _reconcile_landed_stage5_reviewer_rewrite_action(
@@ -2571,6 +1976,8 @@ def _find_replayable_reviewer_action(
     等确定性判据以今天的代码为准。
     """
     waiting_on = task.waiting_on
+    if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
+        raise WorkUnitRefused('Stage2 旧席位决定重放已退役；只接受现役工作单元恢复')
     current_token = reviewer_tasks.approval_review_token(
         task.submission_options)
     current_stage5_trim = (
@@ -2756,16 +2163,6 @@ def _find_replayable_reviewer_action(
     if selected_is_stage5_batch and stage5_state == 'fully_landed':
         uploads.discard_edit_plan(base, path)
         return None
-    if record.workpack_sha256 is not None:
-        # 先证明 paid turn 已成功闭账；不能让一份 action record 自证席位成功，
-        # 更不能在 started/审计不完整时把它交给 canonical Executor。
-        if not _validate_stage2_action_record_ledger(
-                base, sid, record=record, task=task):
-            # 该席已有 durable rejection；这是比 action record 更新的业务事实。
-            # 退休失败不能吞成 warning，否则 pending-rejection 会先启动下一席，
-            # 被拒 action 却跨 parent 永久泄漏并可能在未来被误重放。
-            uploads.discard_edit_plan(base, path)
-            return None
     scratch = service_lifecycle.open_scratch_session(
         base, sid, epoch.epoch_id)
     try:
@@ -2822,43 +2219,13 @@ def _find_replayable_reviewer_action(
         if record.protocol_recovery is not None:
             raise reviewer_tasks.ReviewerTaskError(
                 '协议恢复的原判断未通过当前 typed loader；保留来源并停止') from exc
-        if record.workpack_sha256 is None:
-            warnings.warn(
-                f'盘上 reviewer 决定记录 {path.name} 未通过当前 loader，已删除：{exc}',
-                RuntimeWarning, stacklevel=2)
-            _discard_reviewer_action_record(base, path)
-            return None
-        if (not replay_path.is_file()
-                or any(isinstance(cause, OSError) for cause in (
-                    exc, exc.__cause__, exc.__context__))):
+        if record.workpack_sha256 is not None:
             raise reviewer_tasks.ReviewerTaskError(
-                'Stage2 durable action 的当前 loader 发生读取异常；'
-                '不能把 unknown 记成业务拒因') from exc
-        if (
-            record.reviewer_session_run_id is None
-            or record.provider_response_sha256 is None
-            or record.source_sha256 is None
-            or record.main_text_sha256 is None
-            or record.workpack_sha256 is None
-        ):
-            raise reviewer_tasks.ReviewerTaskError(
-                'Stage2 durable action 当前 loader 已拒绝，但原席位/raw digest '
-                '身份不完整；拒绝删除恢复凭据') from exc
-        # 原席/六元账已在本函数上半段验证。今天的 loader 若因 schema 或
-        # immutable binding 收紧而拒绝旧 typed-valid action，必须先把拒因绑回
-        # 原 provider raw digest，成功后才严格退休 record；否则同 progress 的
-        # reserve 会被旧席挡死，回答却无从纠错。
-        stage2_review_ledger.record_rejection(
-            base, sid,
-            source_sha256=record.source_sha256,
-            main_text_sha256=record.main_text_sha256,
-            business_sha256=record.business_sha256,
-            workpack_sha256=record.workpack_sha256,
-            session_run_id=record.reviewer_session_run_id,
-            kind='typed_loader',
-            request_sha256=record.provider_response_sha256,
-            reason=_safe_stage2_loader_rejection(exc))
-        uploads.discard_edit_plan(base, path)
+                '旧 Stage2 记录不能经非 Stage2 恢复入口执行；保留原记录') from exc
+        warnings.warn(
+            f'盘上 reviewer 决定记录 {path.name} 未通过当前 loader，已删除：{exc}',
+            RuntimeWarning, stacklevel=2)
+        _discard_reviewer_action_record(base, path)
         return None
     return _ReplayableReviewerAction(
         path=path, action=action, record=record)
@@ -3352,61 +2719,6 @@ def _materialize_reviewer_document(
                 pass
 
 
-def _materialize_stage2_prereview_response(
-        task: reviewer_tasks.Stage2PrereviewTask,
-        response: str, *,
-        persist_validated: Callable[[dict[str, object], str], Path] | None = None,
-        preserve_validated: Callable[[Path, str], Path] | None = None,
-        ) -> tuple[dict[str, object], str, Path | None]:
-    """预审由 Supervisor typed-load，并在 scratch 晋升前先 durable。"""
-    document, digest = _reviewer_response_document(response)
-    candidate_digest = digest
-    if stage2_reviewer_wire.uses_compact_wire(task):
-        try:
-            document = stage2_reviewer_wire.assemble(task, document)
-        except stage2_reviewer_wire.Stage2ReviewerWireError as exc:
-            raise _ReviewerResponseTypedInvalid(str(exc)) from exc
-        candidate_digest = _sha256_bytes(json.dumps(
-            document, ensure_ascii=False, sort_keys=True,
-            separators=(',', ':'), allow_nan=False,
-        ).encode('utf-8') + b'\n')
-    candidate = _reviewer_candidate_path(task.request_path)
-    validated = False
-    promoted = False
-    record_path: Path | None = None
-    try:
-        service_lifecycle.write_scratch_json_once(
-            task.request_path.parent, candidate, document)
-        payload = reviewer_tasks.load_stage2_prereview(
-            replace(task, request_path=candidate))
-        validated = True
-        record_path = (
-            persist_validated(payload, digest)
-            if persist_validated is not None else None)
-        _promote_reviewer_candidate(candidate, task.request_path)
-        promoted = True
-        return payload, digest, record_path
-    except BaseException as exc:
-        if (validated and record_path is None and not promoted
-                and preserve_validated is not None):
-            try:
-                preserved = preserve_validated(candidate, candidate_digest)
-                if hasattr(exc, 'add_note'):
-                    exc.add_note(f'typed-valid Stage2 预审已隔离保留：{preserved}')
-            except BaseException as preserve_error:  # noqa: BLE001
-                if hasattr(exc, 'add_note'):
-                    exc.add_note(
-                        'typed-valid Stage2 预审隔离失败：'
-                        f'{type(preserve_error).__name__}: {preserve_error}')
-        raise
-    finally:
-        if not validated or promoted:
-            try:
-                candidate.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-
 def _skill_sha256() -> str:
     try:
         return skill_contract.package_sha256(REPO_ROOT)
@@ -3689,6 +3001,7 @@ def _delivery_pause_note(
 def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
           egress_authorized: bool,
           profiles: PipelineAgentProfiles | None,
+          continuation: RunContinuationSource | None = None,
           spawn: Spawn | None = None,
           registry: JobRegistry = REGISTRY) -> AgentRunRecord:
     """解析一次冻结 plan 后拉起 Commander；缺任一授权时不触碰 CLI。"""
@@ -3696,7 +3009,7 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
         authorized=authorized, egress_authorized=egress_authorized)
     return _start_planned(
         plan(base, sid, authorized=authorized,
-             egress_authorized=egress_authorized, profiles=profiles),
+             egress_authorized=egress_authorized, profiles=profiles, continuation=continuation),
         spawn=spawn, registry=registry)
 
 
@@ -3742,7 +3055,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         sid=sid, base=base,
         authorized=plan.authorized,
         egress_authorized=plan.egress_authorized,
-        profiles=plan.profiles)
+        profiles=plan.profiles, continuation=plan.continuation)
     initial_epoch = ExecutionEpoch(
         epoch_id=run_id, ordinal=1, reason='initial',
         argv=list(invocation.argv), prompt_sha256=prompt_sha256,
@@ -3777,13 +3090,19 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 'agent 代跑不对一本不存在的书启动')
         # owner lease 必须先于 admission open；这样 tail repair 扫到 lease 时，
         # owner 要么已被证明停止，要么尚未进入可启动 Commander 的 durable 边界。
-        owner_guard.__enter__()
-        with owner_guard_lock:
-            owner_guard_active = True
-        append(base, AgentRunEvent(
-            wire_version=2, run_id=run_id, kind='started',
-            ts=parent_started_at, contract=contract_payload,
-            start=start_payload))
+        source_guard = (admission.require_owner_stopped(base, plan.continuation.run_id)
+                        if plan.continuation is not None else nullcontext())
+        with source_guard:
+            if plan.continuation is not None:
+                from novel.orchestrator import agent_continuation
+                agent_continuation.validate(base, sid, plan.continuation, plan.profiles)
+            owner_guard.__enter__()
+            with owner_guard_lock:
+                owner_guard_active = True
+            append(base, AgentRunEvent(
+                wire_version=2, run_id=run_id, kind='started',
+                ts=parent_started_at, contract=contract_payload,
+                start=start_payload))
         outer_started = True
         append(base, AgentRunEvent(
             wire_version=2, run_id=run_id, kind='epoch_opened',
@@ -3870,138 +3189,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     reviewer_correction_reason: str | None = None
     reviewer_correction_request_sha256: str | None = None
     reviewer_correction_attempts = 0
-    stage2_commander_turns = 0
-    stage2_prereview: _Stage2PrereviewState | None = None
-    stage2_fallback_progress: set[str] = set()
     reviewed_blockers: set[tuple[str, str]] = set()
     completed_reviewer_business_actions: set[tuple[str, str]] = set()
     rejected_reviewer_business_actions: set[tuple[str, str]] = set()
 
-    def _reserve_stage2_commander(
-            task: reviewer_tasks.ReviewerTask | reviewer_tasks.Stage2PrereviewTask,
-            *, epoch: ExecutionEpoch, purpose: str, session_id: str,
-            progress_sha256: str | None = None,
-    ) -> bool:
-        """在唯一调用缝预留一格预算；返回是否写入了持久账。"""
-        nonlocal stage2_commander_turns
-        progress = progress_sha256 or task.progress_sha256
-        metadata = (
-            task.source_sha256, task.main_text_sha256,
-            task.workpack_sha256, progress, task.blocker_count)
-        if (all(isinstance(value, str) for value in metadata[:4])
-                and isinstance(task.blocker_count, int)):
-            reserved = stage2_review_ledger.reserve(
-                base, sid,
-                source_sha256=str(task.source_sha256),
-                main_text_sha256=str(task.main_text_sha256),
-                business_sha256=task.business_sha256,
-                workpack_sha256=str(task.workpack_sha256),
-                progress_sha256=str(progress),
-                blocker_count=task.blocker_count,
-                purpose=purpose,
-                parent_run_id=run_id,
-                epoch_id=epoch.epoch_id,
-                session_run_id=session_id,
-            )
-            stage2_commander_turns = reserved.ordinal
-            return True
-        # legacy/test injection 没有新版 identity 时仍守同一硬预算；生产 build_task
-        # 永远走上面的持久分支，不能靠缺字段绕过跨重启账。
-        if stage2_commander_turns >= _MAX_STAGE2_COMMANDER_TURNS:
-            raise stage2_review_ledger.Stage2ReviewBudgetRefused(
-                f'Stage2 Global 已用满 {_MAX_STAGE2_COMMANDER_TURNS} 席 Commander')
-        if (purpose != 'final_review'
-                and stage2_commander_turns >= _MAX_STAGE2_EDIT_SEAT):
-            raise stage2_review_ledger.Stage2ReviewBudgetRefused(
-                f'Stage2 Global 前 {_MAX_STAGE2_EDIT_SEAT} 席已用完；'
-                f'第 {stage2_commander_turns + 1} 席只保留给只读 final_review')
-        fallback_progress = progress or f'legacy:{stage2_commander_turns + 1}'
-        if fallback_progress in stage2_fallback_progress:
-            raise stage2_review_ledger.Stage2ReviewBudgetRefused(
-                'Stage2 Global progress fingerprint 没有变化')
-        stage2_fallback_progress.add(fallback_progress)
-        stage2_commander_turns += 1
-        return False
-
-    def _finish_stage2_commander(
-            task: reviewer_tasks.ReviewerTask | reviewer_tasks.Stage2PrereviewTask,
-            *, session_id: str, durable: bool, exit_code: int,
-    ) -> None:
-        if not durable:
-            return
-        assert task.source_sha256 is not None
-        assert task.main_text_sha256 is not None
-        stage2_review_ledger.finish(
-            base, sid,
-            source_sha256=task.source_sha256,
-            main_text_sha256=task.main_text_sha256,
-            session_run_id=session_id,
-            exit_code=exit_code)
-
-    def _stage2_identity(
-            task: reviewer_tasks.ReviewerTask
-            | reviewer_tasks.Stage2PrereviewTask,
-    ) -> tuple[str, str, str, str] | None:
-        """返回能唯一绑定持久席位的业务身份；旧测试注入保持兼容。"""
-        identity = (
-            task.source_sha256, task.main_text_sha256,
-            task.business_sha256, task.workpack_sha256,
-        )
-        if not all(isinstance(value, str) for value in identity):
-            return None
-        return tuple(str(value) for value in identity)  # type: ignore[return-value]
-
-    def _record_stage2_rejection(
-            task: reviewer_tasks.ReviewerTask
-            | reviewer_tasks.Stage2PrereviewTask,
-            *, session_run_id: str | None,
-            kind: str, request_sha256: str, reason: str,
-    ) -> None:
-        """先把边界拒因写回产出该回答的席位，再允许任何纠错或停止。"""
-        identity = _stage2_identity(task)
-        if identity is None:
-            # 只兼容没有新版 identity 的旧单测注入；生产 build_task 永远完整。
-            return
-        if session_run_id is None:
-            raise stage2_review_ledger.Stage2ReviewBudgetRefused(
-                'Stage2 typed/canonical 拒因缺产出回答的 logical session identity')
-        source_sha256, main_text_sha256, business_sha256, workpack_sha256 = (
-            identity)
-        stage2_review_ledger.record_rejection(
-            base, sid,
-            source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            business_sha256=business_sha256,
-            workpack_sha256=workpack_sha256,
-            session_run_id=session_run_id,
-            kind=kind,
-            request_sha256=request_sha256,
-            reason=reason)
-
-    def _pending_stage2_rejection(
-            task: reviewer_tasks.ReviewerTask,
-    ) -> stage2_review_ledger.Stage2PendingRejection | None:
-        identity = _stage2_identity(task)
-        if identity is None:
-            return None
-        source_sha256, main_text_sha256, business_sha256, workpack_sha256 = (
-            identity)
-        return stage2_review_ledger.pending_rejection(
-            base, sid,
-            source_sha256=source_sha256,
-            main_text_sha256=main_text_sha256,
-            business_sha256=business_sha256,
-            workpack_sha256=workpack_sha256)
-
-    def _complete_stage2_review_ledger(
-            task: reviewer_tasks.ReviewerTask) -> None:
-        """Stage2 动作以 exit 0 闭合写作面后封账；旧注入 task 没 identity 时跳过。"""
-        if task.source_sha256 is None or task.main_text_sha256 is None:
-            return
-        stage2_review_ledger.mark_complete(
-            base, sid,
-            source_sha256=task.source_sha256,
-            main_text_sha256=task.main_text_sha256)
 
     def _resume_prompt(epoch: ExecutionEpoch) -> str:
         return (
@@ -4100,9 +3291,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         nonlocal pending_reviewer_protocol_recovery
         nonlocal reviewer_correction_task, reviewer_correction_binding
         nonlocal reviewer_correction_reason, reviewer_correction_request_sha256
-        nonlocal reviewer_correction_attempts, stage2_commander_turns
-        nonlocal stage2_fallback_progress
-        nonlocal stage2_prereview
+        nonlocal reviewer_correction_attempts
         current_code = prov.code_version()
         _require_reproducible_code_version(current_code)
         current_skill = _skill_sha256()
@@ -4160,9 +3349,6 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             reviewer_correction_reason = None
             reviewer_correction_request_sha256 = None
             reviewer_correction_attempts = 0
-            stage2_commander_turns = 0
-            stage2_fallback_progress.clear()
-            stage2_prereview = None
             reviewed_blockers.clear()
             completed_reviewer_business_actions.clear()
             rejected_reviewer_business_actions.clear()
@@ -4358,6 +3544,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 admission_id=admission_id, env=os.environ)
             if environment_overrides:
                 child_env.update(environment_overrides)
+            child_env.update(_model_runtime_env(base, sid, plan.profiles))
             options: dict[str, object] = {}
             if os.name == 'nt':
                 options['creationflags'] = (
@@ -4407,7 +3594,6 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             reviewer_output_schema: dict[str, object] | None = None,
             fresh_session_run_id: str | None = None,
             launch_ticket: LaunchTicket | None = None,
-            read_only: bool = False,
             environment_overrides: dict[str, str] | None = None,
             after_spawn_before_wire: Callable[[], None] | None = None,
             on_registered: Callable[[], None] | None = None,
@@ -4493,12 +3679,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         # 全部记录真正送进 CLI 的动态 schema，而不是旧的协议常量 hash。
         turn_schema_sha256 = (
             turn_invocation.output_schema_sha256 or schema_sha256)
-        # 预审 Commander 只读并只能返回最终文本，不领取任何
-        # producer admission。仍下发一枚不存在的 context id：即使
-        # 供应商边界意外放开工具，节点入口也会关闭式拒绝。
-        admission_id = (
-            stage2_prereview_admission_id(epoch.epoch_id)
-            if read_only else _open_action_admission(epoch))
+        admission_id = _open_action_admission(epoch)
         attempt_id = jobs.new_job_id()
         rc = CRASH
         raw_exit_known = False
@@ -4551,7 +3732,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     base, run_id, prompt=turn_invocation.stdin_text)
 
         def popen_registered() -> None:
-            nonlocal invoked, registered, integrity_error_kind
+            nonlocal invoked, registered, integrity_error_kind, spawn_started
+            # 总槽等待发生在 Popen 前，不计入 Commander 的实际执行区间。
+            # 该回调仍早于 stdin/wire；后面的账本 CAS 与原身份守卫保持同一顺序。
+            spawn_started = time.monotonic()
             # reviewer workpack 在 operator next/build_task 时绑定了本
             # execution epoch。从构包末端到真实 Popen 仍有窗口；
             # 必须在任何 seat/budget reserve、logical-session started、
@@ -4664,6 +3848,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     admission_id=admission_id, env=os.environ)
                 if environment_overrides:
                     child_env.update(environment_overrides)
+                child_env.update(_model_runtime_env(base, sid, plan.profiles))
                 with _COMMANDERS_LOCK:
                     _COMMANDER_EVENT_SINKS[run_id] = session_pointer_sink
                 while True:
@@ -4939,14 +4124,13 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         finally:
             with _COMMANDERS_LOCK:
                 _COMMANDER_EVENT_SINKS.pop(run_id, None)
-            if not read_only:
-                drain = _wait_for_execution_closure(
-                    base, admission_id, beacon_run_id=run_id)
-                with active_admission_lock:
-                    if active_admission_id == admission_id:
-                        active_admission_id = None
-                epoch_drain_states[epoch.epoch_id] = (
-                    'unknown' if drain.timed_out else 'drained')
+            drain = _wait_for_execution_closure(
+                base, admission_id, beacon_run_id=run_id)
+            with active_admission_lock:
+                if active_admission_id == admission_id:
+                    active_admission_id = None
+            epoch_drain_states[epoch.epoch_id] = (
+                'unknown' if drain.timed_out else 'drained')
             try:
                 _close_commander_owner(run_id)
             except Exception:  # noqa: BLE001 —— audit 仍须继续
@@ -4962,10 +4146,6 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     'Commander 未形成可信成功终态：'
                     f'{failure}（exit={rc}）。当前盘面仅作快照，'
                     '不得用下游缺产物覆盖这个直接故障'))
-        elif read_only:
-            outcome = AgentDeliveryOutcome(
-                state='unknown', checked_at=int(time.time()),
-                reason='Stage2 Global 只读预审已结束；等待 Blueprint 与 live surface')
         elif drain.timed_out:
             lifecycle_error_kind = 'commander_execution_barrier'
             outcome = AgentDeliveryOutcome(
@@ -4987,8 +4167,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 integrity_error_kind or 'commander_effort_drift')
 
         continue_ready = False
-        if (not read_only
-                and rc == 0
+        if (rc == 0
                 and lifecycle_error_kind is None
                 and integrity_error_kind is None
                 and runtime_error_kind is None):
@@ -5356,6 +4535,22 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             current_parent_run_id=run_id)
         return operator.next_action_at_code(
             base, sid, code=epoch.code_version)
+
+    def _ready_requires_fresh_epoch(epoch: ExecutionEpoch, current: OperatorNext) -> bool:
+        action = current.action
+        if (current.state != 'ready' or action is None
+                or action.node not in {'stage4.design', 'stage4.plan'}
+                or tuple(action.flags) not in {(), ('--reaggregate',)}):
+            return False
+        from novel.stages.stage4.design_rebuild import producer_requires_new_run
+        ctx = state.readonly_ctx(paths.resolve_novel_dir(base, sid), action.node, epoch.code_version)
+        ctx.run_id, ctx.parent_run_id = epoch.session_run_id, run_id
+        from novel.llm.ledger import CostLedger
+        ctx.ledger = CostLedger(path=None, run_id=ctx.run_id, parent_run_id=ctx.parent_run_id)
+        backend = plan.profiles.executor_overrides.get(action.node, plan.profiles.executor_default)
+        if isinstance(backend, AgentExecutorBackend):
+            ctx.executor_profile = backend.profile
+        return producer_requires_new_run(ctx)
 
     def _run_ready_action(
             epoch: ExecutionEpoch, current: OperatorNext,
@@ -5738,7 +4933,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 outcome=result.outcome)
 
         if budget.remaining == 0:
-            return stopped('Commander 每工作单元最多 4 次内容请求，预算已用尽；可免费复验或人工编辑')
+            return stopped('Commander 当前工作单元有效内容额度已用尽；可免费复验或人工编辑，追加额度须由操作者另行授权')
         seat = open_reviewer_seats.get(binding)
         if seat is not None and seat.output_schema_sha256 != output_schema_digest:
             _close_reviewer_seat(binding, error_kind='reviewer_schema_changed')
@@ -5846,6 +5041,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
 
     deterministic_callbacks = ({
         'read_operator_next': _read_operator_next,
+        'ready_requires_fresh_epoch': _ready_requires_fresh_epoch,
         'run_ready_action': _run_ready_action,
         'run_blocked_action': _run_blocked_action,
         'deterministic_blockers': queue.DETERMINISTIC_RECOVERY_WAITING_ON,

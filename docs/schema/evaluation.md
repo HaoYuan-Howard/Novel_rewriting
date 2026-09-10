@@ -93,14 +93,14 @@
 
 - **事实逐条**——人物辨识度与称谓语境、每个角色的 `role` 与 `fate`、`canon.setting` 的每个键、
   每条 relation、每条世界规则的 kind/version、每条秘密的 fact / known-by / **埋点章** / reveal；
-- **解读分组**——`arc.conflict_stages` 一项、`arc` 其余部分（climax / ending / arc_tracks）一项。
-  这两格是本层自己声明的解读层，逐条拆开每条都判不出对错。
+- **源文案与范围**——源文案事实逐条核对，完整性和连续开篇范围各占一项。
+  文学 arc 已退役；范围须有正式边界证据，未知时先 typed 修订，不能直接 PASS。
 
 外加四个集合级 subject：`entities.characters` 的 `character_set_complete`、`entities.relations`
 的 `relation_set_complete`、`canon.world_rules` 的 `world_rule_set_complete` 与 `canon.secrets` 的
 `secret_set_complete`。即使集合为空，这四项仍存在且初始为 `pending`；只有人工对照来源后才能
-裁为 `PASS｜FAIL｜UNVER`。它们与 `conflict_partition`、`arc_analysis` 两个整书解读项一起绑定
-Global producer 实际读取的 MainText 输入身份；正文变化会重开这六项，而不会冲掉未变事实的逐项决定。
+裁为 `PASS｜FAIL｜UNVER`。它们绑定 Global producer 实际读取的 MainText 输入身份；
+源文案事实、完整性与开篇范围还绑定 HookCopy 输入身份，任一依赖变化重开受影响项。
 因此「一个人/一条关系/一条规则/一个秘密都没抽到」不能借空循环变成全绿。
 
 ⚠ **没被枚举出来的字段等于没人审。** 下一段说的「缺任一必审项就不能开 gate」守的是这份清单
@@ -111,7 +111,8 @@ Global producer 实际读取的 MainText 输入身份；正文变化会重开这
 
 每次生成或编辑 `GlobalGrounding` 后，review 的 `source_sha256` 绑定去除 schema/provenance 后的
 完整 typed subject。普通事实的旧决定只在 `(item_id, kind, subject_path, subject_sha256)` 四项完全不变时
-继承；上述六个整书项还须 MainText 输入身份不变，变过的项回到 `pending`。读 API 与 s2 gate 不信任盘上 `approved` 推论，而是从当前
+继承；整书项还须实际输入身份不变，变过的项回到 `pending`。`resolution_required` 是代码派生的
+待修订状态；审阅账不能篡改该字段来放行未知范围。读 API 与 s2 gate 不信任盘上 `approved` 推论，而是从当前
 `GlobalGrounding` 重算完整 subject SHA 和现役必审 item surface：hash 过期、缺任一必审项、
 顺序/身份不一致或 blocking 面存在非 PASS 项，`approved=false`；这格继续只表示“真值面全部
 PASS”，不得把 UNVER 改名。生成闸另算 `generation_safe`：除 PASS 外，只接受逐项携带

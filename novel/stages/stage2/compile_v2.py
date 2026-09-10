@@ -167,6 +167,12 @@ def _nudge_boundaries(beats: list[dict[str, Any]], ends: list[int], table: list,
         ends[-1] = len(table)
 
 
+def _hinge_content(hinge: dict[str, Any]) -> dict[str, Any]:
+    """定位只改证据，不丢弃材料的事实归属、对白语义或字面例外依据。"""
+    return {key: copy.deepcopy(hinge[key]) for key in (
+        'kind', 'source_fact_refs', 'dialogue', 'literal') if key in hinge}
+
+
 def _compile_beats(blueprint: dict[str, Any], text: str,
                    failures: list[tuple[str, str, str]],
                    ambiguous_pending: list[tuple[str, str, str]]) -> None:
@@ -250,7 +256,7 @@ def _compile_beats(blueprint: dict[str, Any], text: str,
             kind = hinge.get('kind')
             if 'source' in hinge:
                 # 重放/重归一入形：已是产物形，保持原样（校验归判据侧 `hinge_drift`）。
-                fresh.append({'kind': kind, 'source': hinge.get('source')})
+                fresh.append({**_hinge_content(hinge), 'source': hinge.get('source')})
                 continue
             phrase = str(hinge.get('phrase') or '')
             got = locate_unique_span(seg, phrase)
@@ -258,7 +264,7 @@ def _compile_beats(blueprint: dict[str, Any], text: str,
                 offset, tail, _method = got
                 h_start, h_end = start + offset, start + tail
                 fresh.append(
-                    {'kind': kind, 'source': _source(text, h_start, h_end)})
+                    {**_hinge_content(hinge), 'source': _source(text, h_start, h_end)})
                 continue
             if isinstance(got, int):
                 failures.append((beat_id, 'hinge', '短语在本拍区间内多处命中'))
@@ -269,14 +275,14 @@ def _compile_beats(blueprint: dict[str, Any], text: str,
                     (beat_id, 'hinge', '短语不在它所属拍的区间里，而出现在别处'))
             else:
                 failures.append((beat_id, 'hinge', '短语不在本章原文里'))
-            fresh.append({'kind': kind, 'source': None})
+            fresh.append({**_hinge_content(hinge), 'source': None})
         beat['hinges'] = fresh
     # span 失败的拍：hinge 全部打回失败态（判据侧按「所属拍无可用 span」计 cascade，
     # 不再逐条记根因——与 normalize 的处置一致）。
     located_ids = {id(beat) for beat, _s, _e in located}
     for beat in beats:
         if id(beat) not in located_ids:
-            beat['hinges'] = [{'kind': h.get('kind'), 'source': None}
+            beat['hinges'] = [{**_hinge_content(h), 'source': None}
                               for h in (beat.get('hinges') or [])]
 
 
@@ -354,8 +360,8 @@ def _compile_semantic_contract(
         for hinge in (beat.get('hinges') or []):
             hinge_seq += 1
             fresh_hinges.append({
+                **_hinge_content(hinge),
                 'hinge_id': f'h{ordinal:02d}_{hinge_seq:03d}',
-                'kind': hinge.get('kind'),
                 'source': hinge.get('source'),
             })
         beat['hinges'] = fresh_hinges
@@ -365,6 +371,10 @@ def _compile_semantic_contract(
         if key not in key_map:
             raise ValueError(f'ch{ordinal} 章级语义引用不存在：{key!r}')
         return key_map[key]
+
+    for beat in blueprint.get('beats') or []:
+        for hinge in beat.get('hinges') or []:
+            hinge['source_fact_refs'] = [ref_of(ref) for ref in hinge['source_fact_refs']]
 
     blueprint['fact_atoms'] = facts
     blueprint['causal_edges'] = [
@@ -499,7 +509,8 @@ def canonical_ir_projection(blueprint: dict[str, Any],
         for hinge in (beat.get('hinges') or []):
             source = hinge.get('source')
             hinges.append({
-                'kind': hinge.get('kind'),
+                **_hinge_content(hinge),
+                'source_fact_refs': [atom_key_of[str(ref)] for ref in hinge['source_fact_refs']],
                 'phrase': source.get('text') if isinstance(source, dict) else None,
             })
         out['beats'].append({
@@ -598,6 +609,16 @@ def compile_v2_refs(
             if invalid_atoms:
                 raise ValueError(
                     f'ch{ordinal} fact atom 参与者引用不在本章可见集合：{invalid_atoms}')
+            for hinge in beat.get('hinges') or []:
+                dialogue = hinge.get('dialogue')
+                if dialogue is None:
+                    continue
+                parties = [dialogue['speaker'], *(dialogue['addressees'] or [])]
+                invalid_parties = [party['char_id'] for party in parties
+                                   if party is not None and party['kind'] == 'character'
+                                   and party['char_id'] not in allowed]
+                if invalid_parties:
+                    raise ValueError(f'ch{ordinal} 对白人物不在本章可见集合：{invalid_parties}')
         for narration in (blueprint.get('narration') or []):
             invalid = [
                 cid for cid in (
@@ -670,7 +691,7 @@ def compile_v31_refs(
                 candidate_id = hinge.get('candidate_id')
                 if candidate_id is None:
                     fresh_hinges.append({
-                        'kind': hinge.get('kind'),
+                        **_hinge_content(hinge),
                         'phrase': hinge.get('phrase'),
                     })
                     continue
@@ -684,7 +705,7 @@ def compile_v31_refs(
                         f'ch{ordinal} hinge 候选 {candidate_id} 位于第 {para} 段，'
                         f'不在所属拍 {cursor}..{end_para}')
                 fresh_hinges.append({
-                    'kind': hinge.get('kind'),
+                    **_hinge_content(hinge),
                     'source': copy.deepcopy(row['source']),
                 })
             beat['hinges'] = fresh_hinges

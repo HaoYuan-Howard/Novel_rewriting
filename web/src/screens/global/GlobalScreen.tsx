@@ -20,6 +20,7 @@ import { Panel } from '@/components/ui/Panel'
 import { cx } from '@/lib/cx'
 import type { GlobalFactEvidence, GlobalReviewResponse } from '@/types/stages'
 import { GlobalReviewPanel } from './GlobalReviewPanel'
+import { CharactersPanel } from './CharactersPanel'
 import type { ApprovalDoc } from '@/types/approvals'
 import type { UseMutationResult } from '@tanstack/react-query'
 import type { Stage2GlobalSeenRequest } from '@/types/stages'
@@ -88,7 +89,7 @@ function GlobalSeenConfirm({
   )
 }
 
-type Tab = 'chars' | 'rels' | 'rules' | 'secrets' | 'arc'
+type Tab = 'chars' | 'rels' | 'rules' | 'secrets' | 'opening'
 
 function EvidenceLine({ evidence }: { evidence: GlobalFactEvidence | null }) {
   if (evidence === null) return null
@@ -151,7 +152,7 @@ export function GlobalScreen() {
           <div className="flex flex-col gap-5">
             <h1 className="m-0 text-screen font-semibold">全局设定 · stage2</h1>
             <div className="text-body text-ink-3">
-              人物、关系、世界规则、秘密、弧线——抽对了吗、抽全了吗。
+              人物、关系、世界规则、秘密和源文案——抽对了吗、抽全了吗。
             </div>
           </div>
           <div className="flex max-w-[620px] flex-col items-end gap-7">
@@ -185,6 +186,7 @@ export function GlobalScreen() {
             </div>
           </div>
         </header>
+        <CharactersPanel key={sid} sid={sid} />
         {blueprintAction ? (
           <div role="group" aria-label="接受全局后生成逐章骨架">
             <Panel className="flex flex-wrap items-center justify-between gap-14 px-18 py-14">
@@ -200,7 +202,8 @@ export function GlobalScreen() {
           </div>
         ) : null}
         <GlobalReviewPanel sid={sid} />
-        <Stage2NodeReviewPanel sid={sid} node="stage2.global" token={reviewQuery.data?.review_token ?? null} />
+        <Stage2NodeReviewPanel sid={sid} node="stage2.global" token={reviewQuery.data?.review_token ?? null}
+          coverage={reviewQuery.data?.review_coverage} />
         {doc ? (
           <GlobalSeenConfirm
             review={reviewQuery.data ?? null}
@@ -215,7 +218,7 @@ export function GlobalScreen() {
             { key: 'rels', label: '关系', n: d.relations.length },
             { key: 'rules', label: '世界规则', n: d.world_rules.length },
             { key: 'secrets', label: '秘密', n: spoilers ? d.secrets.length : 0 },
-            { key: 'arc', label: '弧线', n: d.arc.arc_tracks.length },
+            { key: 'opening', label: '源文案与开篇', n: d.source_blurb.facts.length },
           ]
           const chapters = Math.max(
             8,
@@ -463,50 +466,35 @@ export function GlobalScreen() {
                 )
               ) : null}
 
-              {tab === 'arc' ? (
-                <div
-                  className="grid items-start gap-16"
-                  style={{ gridTemplateColumns: 'minmax(420px,0.9fr) minmax(520px,1.1fr)' }}
-                >
+              {tab === 'opening' ? (
+                <div className="grid items-start gap-16 lg:grid-cols-2">
                   <Panel className="flex flex-col gap-10 px-18 py-14">
-                    <span className="text-section font-semibold">冲突阶段</span>
-                    {d.arc.conflict_stages.map((s, i) => (
-                      <div key={i} className="flex gap-14">
-                        <Mono className="w-70 flex-none text-mini text-ink-5">
-                          {s.chapters.join(',')} 章
-                        </Mono>
-                        <span className="prose-cn text-section text-ink-2">{s.stage}</span>
-                      </div>
-                    ))}
+                    <span className="text-section font-semibold">连续开篇材料范围</span>
+                    {d.source_blurb.opening.kind === 'proposed' ? (
+                      <>
+                        <span>第 1～{d.source_blurb.opening.through_chapter} 章</span>
+                        <span className="prose-cn text-ink-2">{d.source_blurb.opening.rationale}</span>
+                        <EvidenceLine evidence={d.source_blurb.opening.boundary_evidence} />
+                        <span className="text-tag text-ink-4">这是 Global 提案；有效接受以审阅状态为准。</span>
+                      </>
+                    ) : (
+                      <span className="prose-cn text-ink-2">范围待裁决：{d.source_blurb.opening.reason}</span>
+                    )}
                   </Panel>
                   <Panel className="flex flex-col gap-10 px-18 py-14">
-                    <span className="text-section font-semibold">人物弧线</span>
-                    {d.arc.arc_tracks.map((t, i) => (
-                      <div
-                        key={i}
-                        className="grid items-baseline gap-12"
-                        style={{ gridTemplateColumns: '86px 1fr' }}
-                      >
-                        <span className="text-body font-semibold">{t.subject.display}</span>
-                        <span className="flex min-w-0 flex-col gap-2">
-                          <span className="prose-cn text-section text-ink-2">
-                            {t.trajectory}
-                          </span>
-                          <EvidenceLine evidence={t.trajectory_evidence} />
-                        </span>
+                    <span className="text-section font-semibold">源文案事实证据</span>
+                    {d.source_blurb.facts.map((fact) => (
+                      <div key={fact.claim_id} className="flex flex-col gap-3">
+                        <Mono>{fact.claim_id}</Mono>
+                        <span className="prose-cn text-ink-2">{fact.claim}</span>
+                        {fact.kind === 'supported'
+                          ? <EvidenceLine evidence={fact.evidence} />
+                          : <span className="text-tag text-ink-4">待裁决：{fact.reason}</span>}
                       </div>
                     ))}
-                  </Panel>
-                  <Panel className="flex flex-col gap-10 px-18 py-14">
-                    <span className="text-section font-semibold">高潮 / 结局</span>
-                    <div className="flex flex-col gap-3">
-                      <span className="text-tag text-ink-4">climax</span>
-                      <span className="prose-cn text-section text-ink-2">{d.arc.climax}</span>
-                    </div>
-                    <div className="flex flex-col gap-3">
-                      <span className="text-tag text-ink-4">ending</span>
-                      <span className="prose-cn text-section text-ink-2">{d.arc.ending}</span>
-                    </div>
+                    {d.source_blurb.facts.length === 0
+                      ? <span className="text-ink-4">未列出事实，完整性仍须审阅。</span>
+                      : null}
                   </Panel>
                 </div>
               ) : null}

@@ -108,6 +108,9 @@ def _global():
                          'setup': {'kind': 'cold'},
                          'first_reveal_chapter': 2}],
         },
+        'source_blurb': {'facts': [], 'opening': {
+            'kind': 'proposed', 'through_chapter': 1, 'rationale': '首章交代起点',
+            'boundary_evidence': _evidence('开篇事件')}},
     }
 
 
@@ -224,14 +227,11 @@ def _full_global():
                  'first_reveal_chapter': 3},
             ],
         },
-        'arc': {
-            'conflict_stages': [{'stage': '身份败露', 'chapters': [1, 2, 3, 4, 5]}],
-            'climax': '第五章对质',
-            'ending': '掌柜远走',
-            'arc_tracks': [{
-                'subject': 'char_001', 'trajectory': '由藏到认',
-                'trajectory_evidence': _evidence('由藏到认', 5),
-            }],
+        'source_blurb': {
+            'facts': [{'kind': 'supported', 'claim_id': 'hook_001',
+                       'claim': '第五章当面对证', 'evidence': _evidence('由藏到认', 5)}],
+            'opening': {'kind': 'proposed', 'through_chapter': 5,
+                        'rationale': '连续开篇至当面对证', 'boundary_evidence': _evidence('由藏到认', 5)},
         },
     }
 
@@ -268,9 +268,9 @@ def test_every_risk_bearing_stage2_subject_is_enumerated_for_review():
         'canon.secrets.secret_02.knowledge_events.1',
     ]
 
-    # 解读层分组：整份一项，不逐条拆——单拆一条判不出对错。
-    assert by_kind['conflict_partition'] == ['arc.conflict_stages']
-    assert by_kind['arc_analysis'] == ['arc']
+    # 范围与事实完整性独立裁决；文学分析不再进入审阅负担。
+    assert by_kind['source_blurb_complete'] == ['source_blurb.facts']
+    assert by_kind['opening_scope'] == ['source_blurb.opening']
 
 
 def test_review_kind_vocabulary_matches_what_enumeration_produces():
@@ -318,7 +318,8 @@ def test_review_kind_vocabulary_matches_what_enumeration_produces():
     (('canon', 'secrets', 0, 'fact_evidence'), 'canon.secrets.secret_01.fact'),
     (('canon', 'secrets', 0, 'knowledge_events', 0, 'evidence'),
      'canon.secrets.secret_01.knowledge_events.0'),
-    (('arc', 'arc_tracks', 0, 'trajectory_evidence'), 'arc'),
+    (('source_blurb', 'facts', 0, 'evidence'), 'source_blurb.facts.hook_001'),
+    (('source_blurb', 'opening', 'boundary_evidence'), 'source_blurb.opening'),
 ])
 def test_each_free_fact_hash_binds_its_formal_evidence(trail, subject_path):
     grounding = _full_global()
@@ -411,12 +412,12 @@ def test_widening_the_review_surface_keeps_unrelated_decisions():
         now='2026-08-23T00:00:00Z')
 
     # 只动一处**不相干**的主体：那条被批准的 secret 必须原样带着 PASS 过来。
-    grounding['arc']['climax'] = '改在第四章对质'
+    grounding['source_blurb']['opening']['rationale'] = '按源文案重新核验范围依据'
     refreshed = build_review(grounding, approved)
     carried = next(r for r in refreshed.items if r.item_id == target.item_id)
     assert (carried.state, carried.actor) == ('PASS', 'reviewer-1')
     assert next(r for r in refreshed.items
-                if r.kind == 'arc_analysis').state == 'pending'
+                if r.kind == 'opening_scope').state == 'pending'
 
 
 def test_review_approval_recomputes_complete_current_subject_and_required_surface():

@@ -22,9 +22,9 @@ from __future__ import annotations
 
 from contracts.artifacts import (
     ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE1_MAIN_TEXT,
-    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
-    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT, STAGE2_GLOBAL_EDIT_FAILURE,
-    STAGE2_GLOBAL_EDIT_INPUT_COMMIT, STAGE2_GLOBAL_GROUNDING,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_KNOWLEDGE_LINKS,
+    STAGE2_CHARACTERS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT, STAGE2_GLOBAL_EDIT_FAILURE,
+    STAGE2_GLOBAL_EDIT_INPUT_COMMIT, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
     STAGE5_CHAPTER, artifact_rel,
@@ -35,6 +35,7 @@ from pathlib import Path
 
 from contracts.invariants import (
     LEGACY_STAGE5_MODES, NODES, OPERATOR_REDO_STRATEGIES, RESUME_VERDICTS, STAGES,
+    STAGE2_NODE_REVIEW_OWNERS,
 )
 from contracts.schema import ARTIFACTS, artifact_key, artifact_spec
 from contracts.schema.orchestration import (
@@ -42,19 +43,15 @@ from contracts.schema.orchestration import (
 )
 from contracts.schema.stage2 import (
     GlobalEdit, GlobalEditCommit, GlobalEditFailure, GlobalEditInputCommit,
-    GlobalGrounding,
 )
+from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.stage4 import EvidenceBinding
 from novel import paths, prov
-from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing, UpstreamStale
+from novel.errors import ArtifactUnreadable, ProvenanceRefused, TerminalState, UpstreamMissing, UpstreamStale
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger
 from novel.run import RunContext
 from novel.stages.stage5.measure import legacy_stage5_paths as stage5_legacy_paths
-from novel.stages.stage2.frozen_v6 import (
-    LEGACY_FROZEN_CONTRACT, frozen_v6_stage4_subject_or_none,
-    require_frozen_v6_downstream_subject,
-)
 from novel.store import ArtifactStore
 
 #: `produces` 里带 `{}` 的那些：逐份不定，存在性不能靠一次 `is_file()`。
@@ -169,15 +166,12 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
         fresh, reason, ghosts = 'unknown', 'no_provenance', []
 
     readable = True
-    legacy_frozen = False
     spec = artifact_spec(rel)
     if spec is not None:
         try:
             obj, _raw = store.read_own(spec.model, rel)
         except ArtifactUnreadable:
             readable = False
-            if rel == STAGE2_CHAPTER_BLUEPRINTS:
-                legacy_frozen = frozen_v6_stage4_subject_or_none(store) is not None
         else:
             # Schema 只知道 ``output_ordinal >= 1``；文件名与主体的跨路径绑定
             # 必须在读盘边界另查。否则 ``ch01.json`` 里装一份合法的第 2 章，
@@ -189,51 +183,12 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
                     and rel == artifact_rel('stage5.chapter', nn=output_ordinal)
                 )
 
-    # Stage4A 自身是 current schema；它的普通 freshness 只因 current decoder
-    # 不认识所绑定的 v6 Blueprint 而 unknown 时，用同一 frozen 证明恢复这条
-    # 历史 consumed 边。Blueprint 本体仍保持 unreadable/legacy_frozen。
-    if (rel == STAGE4_BLIND_CANDIDATE and readable and fresh == 'unknown'):
-        frozen = frozen_v6_stage4_subject_or_none(store)
-        if (frozen is not None
-                and store.full_sha256_or_none(rel) == frozen.candidate_sha256):
-            fresh, reason, ghosts = 'fresh', 'match', []
-
-    # 冻结 v6 的现存 B/Plan/Context 仍是 current-schema 产物；普通投影只因
-    # Blueprint v7 shape break 无法重算 consumed。复用同一专用证明逐项核原始
-    # v6 字节、A 主体、其余来源边与当前正式字节，成功才把这一格恢复为 fresh。
-    # 该桥只影响“消费现存下游”，绝不让 v6 进入新的付费 B producer。
-    if (
-        rel in {
-            STAGE4_EVIDENCE_BINDING,
-            STAGE4_PLAN_CHAPTERS,
-            STAGE4_WRITER_CONTEXT,
-        }
-        and readable
-        and fresh == 'unknown'
-    ):
-        try:
-            require_frozen_v6_downstream_subject(store, rel)
-            restored = prov.FreshnessReport('fresh', 'match')
-            if rel in {STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS}:
-                binding, _binding_raw = store.read_own(
-                    EvidenceBinding, STAGE4_EVIDENCE_BINDING)
-                # v6 桥只修复 Blueprint 旧 consumed 形状，不能把独立的 B
-                # 输入契约问题一起洗成 fresh；仍复用 Store 的唯一检查。
-                restored = ArtifactStore._stage4_binding_input_freshness(
-                    binding, restored)
-        except (ArtifactUnreadable, UpstreamMissing, UpstreamStale, OSError, ValueError):
-            pass
-        else:
-            fresh, reason, ghosts = restored.state, restored.reason, []
-
     return ArtifactState(
         rel=rel, exists=True, bytes=st.st_size, mtime=int(st.st_mtime),
         freshness=fresh, reason=reason, ghosts=ghosts,
         display_freshness=fresh, invalid=invalid, readable=readable,
         invalid_freshness=invalid_freshness, invalid_reason=invalid_reason,
         condition=('invalid' if invalid else 'unreadable' if not readable else 'ready'),
-        legacy_frozen=legacy_frozen,
-        legacy_contract=(LEGACY_FROZEN_CONTRACT if legacy_frozen else None),
     )
 
 
@@ -437,11 +392,11 @@ def stage_state(store: ArtifactStore, stage: str) -> StageState:
             review_rel=review.review_rel,
         )
 
-    done = all(a.exists and (a.readable or a.legacy_frozen)
+    done = all(a.exists and a.readable
                and a.freshness != 'stale' and not a.invalid
                for a in arts) if arts else None
     reviewable = done is True or any(
-        a.exists and (a.readable or a.legacy_frozen) for a in arts)
+        a.exists and a.readable for a in arts)
     legacy = _legacy_ghosts(arts)
     return StageState(stage=stage, artifacts=arts, done=done,
                       rounds_done=rounds, reviewable=reviewable,
@@ -456,13 +411,12 @@ def overview_summary(stages: list[StageState]) -> OverviewSummary:
     counted_artifacts = [artifact for stage in stages if stage.stage != 'stage5'
                          for artifact in stage.artifacts]
     broken = [a for a in artifacts
-              if a.condition in ('invalid', 'unreadable') and not a.legacy_frozen]
+              if a.condition in ('invalid', 'unreadable')]
     legacy = [p for stage in stages for p in stage.legacy_paths]
     stale = [a for a in artifacts if a.display_freshness == 'stale']
     pending = next((stage for stage in stages if stage.done is False), None)
     unknown = [a for a in artifacts
-               if a.exists and a.display_freshness == 'unknown'
-               and not a.legacy_frozen]
+               if a.exists and a.display_freshness == 'unknown']
     missing = [a for a in artifacts if a.display_freshness == 'missing']
     unknown_stages = [stage for stage in stages if stage.done is None]
     existing = [a for a in counted_artifacts if a.exists]
@@ -605,7 +559,7 @@ def live_invalid_artifacts(ov: NovelOverview, node: str) -> list[ArtifactState]:
 #: 可能已经写完的付费层。折进 `skip` 更坏（跳过一个根本没跑的层，
 #: 而下游会拿着半份成品继续走）。⇒ 它只能是第四个值，由人来看那句话。
 def stage2_global_projection_blocked(ov: NovelOverview) -> bool:
-    """最新 Global 的称名 HARD 是否让 Blueprint 投影暂不可消费。"""
+    """静态人物 INVALID 是否让 Blueprint 称名投影暂不可消费。"""
     stage = next(
         (candidate for candidate in getattr(ov, 'stages', ())
          if candidate.stage == 'stage2'),
@@ -614,7 +568,7 @@ def stage2_global_projection_blocked(ov: NovelOverview) -> bool:
     if stage is None:
         return False
     by_rel = {artifact.rel: artifact for artifact in stage.artifacts}
-    grounding = by_rel.get(STAGE2_GLOBAL_GROUNDING)
+    grounding = by_rel.get(STAGE2_CHARACTERS)
     projection = by_rel.get(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
     return bool(
         grounding is not None and grounding.invalid
@@ -624,16 +578,9 @@ def stage2_global_projection_blocked(ov: NovelOverview) -> bool:
 
 
 def stage2_projection_recovery_needed(ov: NovelOverview) -> bool:
-    """当前 Global 可作底座、但 Blueprint 称名投影需要 0-LLM 重物化吗。
+    """人物正式登记 current，但其确定性称名投影缺失或过期时免费重建。
 
-    这格专门防一条昂贵的误派单：投影是 ``stage2.global.produces`` 的一员，
-    通用完成度若只看「少了一份 producer 产物」，会把它解释成整份 Global
-    需要默认重跑。实际恢复只需 ``stage2.global --renormalize``；即使最新
-    schema-valid Global 因非称名 HARD 留在 ``.INVALID``，它也足够确定这份投影。
-
-    ``invalid=True`` 只证明盘上有候选，不替候选伪造 schema-valid 结论；真正的
-    载体读取仍由 renormalize 的 ``ArtifactStore.read_own`` 关闭式执行。即便字节
-    损坏，这条免费命令也只会如实失败，绝不会退回付费重采。
+    live INVALID 先交人物免费编辑/复验；不能为缺一份投影重新购买整书抽取。
     """
     if stage2_global_projection_blocked(ov):
         return False
@@ -645,14 +592,13 @@ def stage2_projection_recovery_needed(ov: NovelOverview) -> bool:
     if stage is None:
         return False
     by_rel = {artifact.rel: artifact for artifact in stage.artifacts}
-    grounding = by_rel.get(STAGE2_GLOBAL_GROUNDING)
+    grounding = by_rel.get(STAGE2_CHARACTERS)
     projection = by_rel.get(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
     if grounding is None or projection is None:
         return False
     source_available = bool(
-        grounding.invalid
-        or (grounding.exists and grounding.readable
-            and grounding.freshness == 'fresh')
+        not grounding.invalid and grounding.exists and grounding.readable
+        and grounding.freshness == 'fresh'
     )
     projection_current = bool(
         projection.exists and projection.readable
@@ -680,6 +626,45 @@ def stage2_invalid_projection_ready(ov: NovelOverview) -> bool:
     )
 
 
+def stage2_global_review_refresh_needed(ov: NovelOverview) -> bool:
+    """已购买知识仍 current 时，缺失/过期审阅是免费后继；损坏保持 unknown。"""
+    stage = next((s for s in ov.stages if s.stage == 'stage2'), None)
+    if stage is None:
+        return False
+    rows = {row.rel: row for row in stage.artifacts}
+    for rel in (STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING):
+        source = rows.get(rel)
+        if source is None or not (source.exists and source.readable
+                                  and not source.invalid and source.freshness == 'fresh'):
+            return False
+    review = rows.get(STAGE2_GLOBAL_REVIEW)
+    return bool(review is not None and not review.invalid
+                and (not review.exists or (review.readable and review.freshness == 'stale')))
+
+
+def stage2_knowledge_rebind_needed(
+    base: str | os.PathLike[str], sid: str, ov: NovelOverview,
+) -> bool:
+    """只由知识 producer 证明人物投影之外的边未变；不从 stale 一词猜修复权限。"""
+    stage = next((row for row in ov.stages if row.stage == 'stage2'), None)
+    if stage is None:
+        return False
+    knowledge = next((row for row in stage.artifacts if row.rel == STAGE2_GLOBAL_GROUNDING), None)
+    if knowledge is None or not (knowledge.exists and knowledge.readable
+                                  and not knowledge.invalid and knowledge.freshness == 'stale'):
+        return False
+    book = paths.find_novel_dir(base, sid)
+    if book is None:
+        return False
+    from novel.stages.stage2.character_rebind import prepare_if_changed
+    try:
+        ctx = readonly_ctx(book, 'stage2.global', prov.code_version())
+        return prepare_if_changed(ArtifactStore(ctx), STAGE2_GLOBAL_GROUNDING) is not None
+    except (TerminalState, ProvenanceRefused):
+        # 原 unknown/stale 状态仍由 overview 保留；这里仅否定免费重绑动作的资格。
+        return False
+
+
 def stage2_reviewed_edit_correction_needed(
     base: str | os.PathLike[str], sid: str, ov: NovelOverview,
 ) -> bool:
@@ -692,8 +677,8 @@ def stage2_reviewed_edit_correction_needed(
     Commander 席位。sidecar 内容损坏则只读 planner 显式失败，不能静默退回普通
     review 而把已发生的业务 delta 丢掉。
 
-    sidecar 引入前的普通 Global ``.INVALID`` 仍走下方兼容探测：只有投影 current、
-    edit 带修后自检且 INVALID 未被人直接编辑时才视为旧 reviewed-edit 恢复态。
+    reviewed INVALID 缺少 typed 失败回执时保持结果未知，不从旧 provenance
+    反推一次已购买的 Commander 纠正授权。
 
     完成度仍不读 ``_service``，也不从作业日志猜状态；全部证据都在书内 typed
     产物、INVALID provenance/freshness 与不可变 revalidation baseline 中。
@@ -744,40 +729,14 @@ def stage2_reviewed_edit_correction_needed(
         raise ArtifactUnreadable(
             'classified reviewed-edit failure 与当前 reviewed edit SHA 不匹配')
 
-    if not stage2_invalid_projection_ready(ov):
-        return False
-    stage = next(
-        (candidate for candidate in getattr(ov, 'stages', ())
-         if candidate.stage == 'stage2'),
-        None,
-    )
-    if stage is None:
-        return False
-    grounding = next(
-        (artifact for artifact in stage.artifacts
-         if artifact.rel == STAGE2_GLOBAL_GROUNDING),
-        None,
-    )
-    if grounding is None or grounding.invalid_freshness != 'fresh':
-        return False
-
-    if not store.exists(STAGE2_GLOBAL_EDIT):
-        return False
-    try:
-        edit, _raw = store.read_own(GlobalEdit, STAGE2_GLOBAL_EDIT)
-        if edit.post_edit_review is None:
-            return False
-        audit = store.revalidation_audit(
-            STAGE2_GLOBAL_GROUNDING, GlobalGrounding,
-            actor='system:stage2-correction-probe',
-            reason='只读识别 reviewed GlobalEdit 的中断恢复态',
-        )
-    except TerminalState:
-        return False
-    if audit.edited_by_human:
-        return False
-    return not stage2_reviewed_edit_revalidation_needed(
-        base, sid, code=store.ctx.code)
+    if (store.exists(STAGE2_GLOBAL_EDIT)
+            and store.exists(paths.invalid_of(STAGE2_GLOBAL_GROUNDING))):
+        edit = store.read_own(GlobalEdit, STAGE2_GLOBAL_EDIT)[0]
+        if edit.post_edit_review is not None:
+            raise ArtifactUnreadable(
+                'reviewed Global INVALID 缺 typed 失败回执，结果未知；'
+                '旧 INVALID 推断恢复已退役，须由当前 producer 明确修复')
+    return False
 
 
 def stage2_reviewed_edit_revalidation_needed(
@@ -820,7 +779,7 @@ def stage2_global_edit_terminal_failure_needed(
     stage2_extract._validated_failure_inputs(  # noqa: SLF001
         ctx, store, failure)
     audit = store.revalidation_audit(
-        STAGE2_GLOBAL_GROUNDING, GlobalGrounding,
+        STAGE2_GLOBAL_GROUNDING, KnowledgeGrounding,
         actor='system:stage2-terminal-probe',
         reason='只读识别 reviewed GlobalEdit INVALID 是否由人编辑',
     )
@@ -896,9 +855,9 @@ def stage2_reviewed_edit_commit_recovery_needed(
 
 
 def stage2_projection_source_unproven(ov: NovelOverview) -> str | None:
-    """只缺投影时，盘上 formal Global 是否存在但不能证明可作免费底座。
+    """只缺投影时，盘上人物登记是否存在但不能证明可作免费底座。
 
-    这种盘面既不是首次生成，也不能擅自拿坏/unknown Global 重物化。返回原因让
+    这种盘面既不是首次生成，也不能擅自拿坏/unknown 人物登记重物化。返回原因让
     ``resume_verdict`` 保持 UNKNOWN；最重要的是不让通用 ``missing`` 分支把一份
     已存在的昂贵产物解释成“默认再采一次”。stale 仍走既有 REDO 分支。
     """
@@ -910,7 +869,7 @@ def stage2_projection_source_unproven(ov: NovelOverview) -> str | None:
     if stage is None:
         return None
     by_rel = {artifact.rel: artifact for artifact in stage.artifacts}
-    grounding = by_rel.get(STAGE2_GLOBAL_GROUNDING)
+    grounding = by_rel.get(STAGE2_CHARACTERS)
     projection = by_rel.get(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
     if grounding is None or projection is None:
         return None
@@ -921,47 +880,21 @@ def stage2_projection_source_unproven(ov: NovelOverview) -> str | None:
     if projection_current or grounding.invalid or not grounding.exists:
         return None
     if not grounding.readable:
-        return 'formal Global 盘上存在但按当前 schema/version 读不回来'
+        return '正式人物登记存在但按当前 schema/version 读不回来'
     if grounding.freshness == 'unknown':
         return (
-            'formal Global 盘上存在但来源 freshness '
+            '正式人物登记存在但来源 freshness '
             f'为 unknown/{grounding.reason}')
     return None
 
 
-def stage2_legacy_blueprint_recovery_needed(ov: NovelOverview) -> bool:
-    """旧 v6 ``{MainText, Global}`` 来源边可否零调用刷新为 projection 边。"""
-    stage = next(
-        (candidate for candidate in getattr(ov, 'stages', ())
-         if candidate.stage == 'stage2'),
-        None,
-    )
-    if stage is None:
-        return False
-    by_rel = {artifact.rel: artifact for artifact in stage.artifacts}
-    projection = by_rel.get(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
-    blueprint = by_rel.get(STAGE2_CHAPTER_BLUEPRINTS)
-    carrier_freshness = (
-        blueprint.invalid_freshness
-        if blueprint is not None and blueprint.invalid
-        else blueprint.freshness if blueprint is not None else None
-    )
-    carrier_reason = (
-        blueprint.invalid_reason
-        if blueprint is not None and blueprint.invalid
-        else blueprint.reason if blueprint is not None else None
-    )
-    return bool(
-        projection is not None and projection.exists and projection.readable
-        and projection.freshness == 'fresh'
-        and blueprint is not None
-        # ``readable`` 属于 formal；live INVALID 的完整可读性由零调用
-        # renormalize 自己关闭式验证，不能拿共存 formal 的状态替它作证或拦路。
-        and (blueprint.invalid or blueprint.readable)
-        and (blueprint.exists or blueprint.invalid)
-        and carrier_freshness == 'unknown'
-        and carrier_reason == 'legacy_blueprint_inputs'
-    )
+def stage2_blueprint_extraction_current(ov: NovelOverview) -> bool:
+    """E 的正式 Blueprint 完成与 C 后继关联物化分开，缺关联不得重购抽取。"""
+    stage = next((row for row in ov.stages if row.stage == 'stage2'), None)
+    artifact = next((row for row in stage.artifacts if row.rel == STAGE2_CHAPTER_BLUEPRINTS),
+                    None) if stage is not None else None
+    return bool(artifact is not None and artifact.exists and artifact.readable
+                and not artifact.invalid and artifact.freshness == 'fresh')
 
 
 def stage2_blueprint_invalid_recovery_needed(ov: NovelOverview) -> bool:
@@ -980,26 +913,6 @@ def stage2_blueprint_invalid_recovery_needed(ov: NovelOverview) -> bool:
     )
     return bool(
         blueprint is not None and blueprint.invalid
-        and not stage2_legacy_blueprint_recovery_needed(ov)
-    )
-
-
-def stage2_frozen_v6_subject_validated(ov: NovelOverview) -> bool:
-    """Stage2 Blueprint 是否是已绑定 Stage4A 主体的只读 frozen v6。"""
-    stage = next(
-        (candidate for candidate in getattr(ov, 'stages', ())
-         if candidate.stage == 'stage2'),
-        None,
-    )
-    if stage is None:
-        return False
-    blueprint = next((
-        artifact for artifact in stage.artifacts
-        if artifact.rel == STAGE2_CHAPTER_BLUEPRINTS
-    ), None)
-    return bool(
-        blueprint is not None and blueprint.exists and blueprint.legacy_frozen
-        and not blueprint.invalid
     )
 
 
@@ -1023,7 +936,9 @@ def resume_verdict(
     # typed 返工或接受补提交。队列负责凭据当前性，producer 在执行时再核验。
     if node == 'stage2.blueprint' and flags == ('--close-review',):
         return RESUME_RUN, '零模型核验已有两份节点接受并补齐审批链'
-    if (node in {'stage2.global', 'stage2.blueprint'} and len(flags) == 2
+    if node in {'stage4.design', 'stage4.plan'} and flags == ('--close-review',):
+        return RESUME_RUN, '零模型复验全部审阅义务的历史覆盖并绑定当前审批证据'
+    if (node in STAGE2_NODE_REVIEW_OWNERS and len(flags) == 2
             and flags[0] == '--review-token' and bool(flags[1])):
         return RESUME_RUN, '消费状态机已登记的当前 typed 返工请求'
     spec = NODES.get(node)
@@ -1037,39 +952,29 @@ def resume_verdict(
             '旧 Stage5 契约不兼容：' + ', '.join(st.legacy_paths)
             + '。它们是只读历史证据，不会当成 missing 或触发静默付费重跑')
 
-    if node == 'stage2.global' and stage2_global_projection_blocked(ov):
+    if node == 'stage2.characters' and stage2_global_projection_blocked(ov):
         return RESUME_RUN, (
-            '最新 Global 候选的称名 HARD 尚未收口，Blueprint 投影为 '
+            '最新人物候选的称名 HARD 尚未收口，Blueprint 投影为 '
             '`unknown/global_naming_blocked`；先运行 '
-            '`stage2.global --apply-edit <stage2/global_edit.json>` 修正称名，'
+            '`stage2.characters --apply-edit <stage2/characters_edit.json>` 修正称名，'
             '或人工确认后运行 '
-            '`stage2.global --revalidate --actor <id> --reason <why>`（均为 0 LLM）。'
-            '不得用 `--renormalize` 洗成可消费投影，也不得重采付费 Global')
-    if node == 'stage2.global' and stage2_projection_recovery_needed(ov):
+            '`stage2.characters --revalidate --actor <id> --reason <why>`（均为 0 LLM）。'
+            '不得用 `--renormalize` 洗成可消费投影，也不得重采付费人物登记')
+    if node == 'stage2.characters' and stage2_projection_recovery_needed(ov):
         return RESUME_RUN, (
             f'{STAGE2_BLUEPRINT_CHARACTER_PROJECTION} 缺失、损坏或未绑定当前称名底座；'
-            '当前 formal/INVALID Global 已足够确定性重建它，只运行 '
-            '`stage2.global --renormalize`（0 LLM），不得重采付费 Global')
-    if node == 'stage2.global' and stage2_invalid_projection_ready(ov):
-        return RESUME_SKIP, (
-            '最新 Global 候选虽因 HARD 留在 `.INVALID`，但 Blueprint 实际消费的'
-            '称名投影已 current/fresh；不得在 Blueprint 前自动重采付费 Global。'
-            '允许继续 Blueprint，Global INVALID 留给 Stage4 联合闸与人工恢复')
-    if node == 'stage2.global':
+            '当前人物登记已足够确定性重建它，运行 '
+            '`stage2.characters --revalidate --actor <id> --reason <why>`（0 LLM）')
+    if node == 'stage2.global' and stage2_global_review_refresh_needed(ov):
+        return RESUME_RUN, '当前知识可用，运行 --refresh-review 免费刷新人物与知识审阅'
+    if node == 'stage2.characters':
         unproven = stage2_projection_source_unproven(ov)
         if unproven is not None:
             return RESUME_UNKNOWN, (
                 f'{unproven}，同时称名投影缺失/损坏/未证明 current。'
-                '不得因伴生产物少一份就排默认付费 Global；先人工核对底座，'
-                '可只读诊断或尝试 `stage2.global --renormalize`（0 LLM），'
+                '不得因伴生产物少一份就排默认付费抽取；先人工核对人物登记，'
+                '可只读诊断或尝试人物 --revalidate（0 LLM），'
                 '命令若读不回会关闭式失败')
-    if (node == 'stage2.blueprint'
-            and stage2_legacy_blueprint_recovery_needed(ov)):
-        return RESUME_RUN, (
-            '当前 ChapterBlueprints v6 仍记录旧 `{MainText, Global}` 来源边；'
-            'current/fresh 称名投影已在场，只运行 '
-            '`stage2.blueprint --renormalize`（0 LLM）刷新为真实消费边，'
-            '不得重跑付费 Blueprint')
     if (node == 'stage2.blueprint'
             and stage2_blueprint_invalid_recovery_needed(ov)):
         return RESUME_RUN, (
@@ -1077,11 +982,6 @@ def resume_verdict(
             '`stage2.blueprint --revalidate --actor <id> --reason <why>`（0 LLM）'
             '按当前判据重判。队列不得构造默认付费 Blueprint argv；'
             '免费提升仍失败时再由人决定是否定向重生成')
-    if node == 'stage2.blueprint' and stage2_frozen_v6_subject_validated(ov):
-        return RESUME_SKIP, (
-            'ChapterBlueprints 是已由现存 Stage4A v1 truth 精确绑定的冻结 schema v6；'
-            '只读恢复允许跳过付费 Blueprint，但它不等于 current v7，且没有 '
-            'narrative_relations 权威面')
 
     if node == 'stage5.review':
         if st.review_state == 'fresh':
@@ -1170,6 +1070,12 @@ def resume_verdict(
         return RESUME_UNKNOWN, (
             f'{spec.stage} 的 canonical 章集合与当前计划不一致，'
             '但没有可安全归类为缺章的项；请先人工核对计划与多余章稿')
+
+    if node == 'stage2.blueprint' and stage2_blueprint_extraction_current(ov):
+        links = next((row for row in st.artifacts if row.rel == STAGE2_KNOWLEDGE_LINKS), None)
+        if links is not None and links.exists and (not links.readable or links.freshness == 'unknown'):
+            return RESUME_UNKNOWN, '知识关联来源损坏或未知；保留正式 Blueprint，先检查关联来源'
+        return RESUME_SKIP, '正式 Blueprint 抽取已完成；知识关联与审批由 Commander 决定及 --close-review 免费收口'
 
     mine = artifacts_for_node(ov, node)
     stale = [a for a in mine if a.freshness == 'stale']

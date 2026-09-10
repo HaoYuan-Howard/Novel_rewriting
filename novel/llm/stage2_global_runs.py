@@ -7,6 +7,7 @@ stdout/acceptance/ledger/session-audit 的逐字段闭环全部复用
 """
 from __future__ import annotations
 
+from novel import runtime_layout
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -17,9 +18,7 @@ from typing import Any, TypeVar
 from pydantic import BaseModel
 
 from contracts.artifacts import (
-    STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
     STAGE2_GLOBAL_GROUNDING,
-    STAGE2_GLOBAL_REVIEW,
 )
 from novel import paths
 from novel.appendlog import process_append_lock
@@ -29,11 +28,18 @@ from novel.llm.transport import ChatResponse
 
 
 M = TypeVar('M', bound=BaseModel)
-RECOVERY_POLICY = 'stage2-global-v1'
+RECOVERY_POLICY = 'stage2-knowledge-v2'
 _INVALID = paths.invalid_of(STAGE2_GLOBAL_GROUNDING)
 _OWNERSHIP_REGISTRY_LOCK = threading.Lock()
 _OWNERSHIP_THREAD_LOCKS: dict[str, threading.RLock] = {}
 _OWNERSHIP_LOCAL = threading.local()
+
+
+def _current_run_path(ctx: Any) -> Path:
+    """旧书内状态保持原位；不能从旧 checkpoint 重买或免费迁入当前根。"""
+    if paths.legacy_stage2_global_run_path(ctx.novel_dir, ctx.run_id).exists():
+        raise ProvenanceRefused('旧书内 Global run 已退役；须配对冻结代码处理，不能接入当前根')
+    return paths.stage2_global_run_path(ctx.novel_dir, ctx.run_id)
 
 
 def _run_spec() -> agent_runs.SingleSessionRunSpec:
@@ -42,14 +48,8 @@ def _run_spec() -> agent_runs.SingleSessionRunSpec:
         session_owner='stage2.global', purpose='stage2.global',
         chapter=None, phase='global', recovery_policy=RECOVERY_POLICY,
         session_isolation='per-node',
-        run_path=lambda ctx: paths.stage2_global_run_path(
-            ctx.novel_dir, ctx.run_id),
-        checkpoint_dir=lambda ctx: paths.stage2_global_checkpoint_dir(
-            ctx.novel_dir, ctx.run_id),
-        legacy_run_path=lambda ctx: paths.legacy_stage2_global_run_path(
-            ctx.novel_dir, ctx.run_id),
-        legacy_checkpoint_dir=lambda ctx: paths.legacy_stage2_global_checkpoint_dir(
-            ctx.novel_dir, ctx.run_id),
+        run_path=_current_run_path,
+        checkpoint_dir=lambda ctx: _current_run_path(ctx) / 'checkpoints',
     )
 
 
@@ -62,8 +62,6 @@ def _commit_spec() -> agent_runs.CommitBundleSpec:
         primary_artifact=STAGE2_GLOBAL_GROUNDING,
         allowed_touched=((
             STAGE2_GLOBAL_GROUNDING,
-            STAGE2_GLOBAL_REVIEW,
-            STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
             _INVALID,
         ),),
         nonformal_paths=(_INVALID,),
@@ -164,9 +162,10 @@ def _refuse_commit_reservations(
         ctx: Any, *, include_current: bool,
 ) -> None:
     _require_ownership(ctx)
+    _current_run_path(ctx)
     current = _commit_spec().commit_path(ctx).resolve()
     targets: dict[str, Path] = {}
-    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage2'):
+    for root in runtime_layout.stage_run_roots(ctx.novel_dir, 'stage2'):
         if not root.is_dir():
             continue
         for candidate in root.glob(f'*/global/{agent_runs.COMMIT_FILE}'):

@@ -32,29 +32,16 @@ QUOTE_MIN = 6
 
 # ── 下发范围 ────────────────────────────────────────────────────────────────
 
-def lead_upto(arc: dict | None) -> int:
-    """文案的下发范围 = **第一个冲突阶段的末章**。返回章号（至少 1）。
+def lead_upto(opening: dict | None) -> int:
+    """只消费已由 Global 审阅接受的显式范围；调用方负责接受与 freshness。"""
+    from novel.errors import TerminalState
 
-    【为什么需要一个范围，而不是只给第 1 章】实测原作文案就跨了好几章
-    （某本的文案里「新婚夜」「后半夜采花贼」「夫君求我」分属前几章）。
-    只给第 1 章，写出来的文案必然比原作干瘪——而这是**重构**，不是压缩。
-
-    【为什么是它，而不是一个参数】`conflict_stages[0]` 是 stage2 的结构化数据，
-    语义正好是「开篇的那一段故事」，逐书自动（实测 `[1]` / `[1,2]`）。
-    写成 `--reveal-upto N` 就是又一个需要人逐书拍、而且没有守卫的自由变量。
-
-    ⚠⚠ **只读 `chapters`，绝不读 `stage` 那个名字**——实测最后一个阶段叫
-    「子女满堂与安享晚年」「系统揭示与最终选择」，**阶段名本身就是结局**。
-    这个函数只是在数章号，它碰不得那一列文字。
-    〔这是 `R-9.2` 那一行「谁在查」标的代码落点。〕
-
-    ⚠ 这是**连续开篇正文**的下发范围，不是全书知识上界；结构化故事地图与真相面仍全量下发。
-    两件事分开：给得少 ≠ 挡得住，给得多 ≠ 允许说破。
-    """
-    stages = (arc or {}).get('conflict_stages') or []
-    first = (stages[0] or {}) if stages else {}
-    chs = [c for c in (first.get('chapters') or []) if isinstance(c, int)]
-    return max(chs) if chs else 1
+    if not isinstance(opening, dict) or opening.get('kind') != 'proposed':
+        raise TerminalState('开篇材料范围尚未确定，须由 Global typed 裁决；不能缺省第 1 章')
+    upto = opening.get('through_chapter')
+    if type(upto) is not int or upto < 1:
+        raise TerminalState('Global 开篇范围终点不是合法章号')
+    return upto
 
 
 def hidden_secrets(secrets: list[dict], upto: int) -> tuple[list[dict], list[str]]:

@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+from novel import runtime_layout
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -46,10 +47,6 @@ def _run_spec() -> agent_runs.SingleSessionRunSpec:
         run_path=lambda ctx: paths.stage7_rename_run_path(
             ctx.novel_dir, ctx.run_id),
         checkpoint_dir=lambda ctx: paths.stage7_rename_checkpoint_dir(
-            ctx.novel_dir, ctx.run_id),
-        legacy_run_path=lambda ctx: paths.legacy_stage7_rename_run_path(
-            ctx.novel_dir, ctx.run_id),
-        legacy_checkpoint_dir=lambda ctx: paths.legacy_stage7_rename_checkpoint_dir(
             ctx.novel_dir, ctx.run_id),
     )
 
@@ -180,7 +177,7 @@ def inspect_foreign_commit_reservations(ctx: Any) -> None:
     """
     current = _commit_spec(ctx).commit_path(ctx).resolve()
     found: dict[str, Path] = {}
-    for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage7'):
+    for root in runtime_layout.stage_run_roots(ctx.novel_dir, 'stage7'):
         if root.is_dir():
             for target in root.glob(f'*/rename/{agent_runs.COMMIT_FILE}'):
                 found.setdefault(target.parent.parent.name, target)

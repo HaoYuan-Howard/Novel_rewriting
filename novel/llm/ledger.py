@@ -41,7 +41,7 @@ LEDGER_REL = ('_service', 'ledger.jsonl')
 
 #: 采纳审计账：与成本账同目录、**分文件**。成本账答「花了多少」，这份答
 #: 「内容闸怎么判的、最终 artifact 用的是哪一次响应、丢掉的那份答案留证在哪」。
-#: 现役还包含不携业务正文的 `candidate_patch_applied` 与
+#: 历史 `candidate_patch_applied` 行仍可读取；现役保留
 #: `evidence_locator_rewrite`；需关联 wire 的行靠 `attempt_id` 与成本账相联，
 #: 纯确定性 locator 改写则绑定最终 artifact 的完整 SHA-256。
 #: ⚠ 不并进 `ledger.jsonl`：既有读者按「行=一次调用」聚合
@@ -398,21 +398,6 @@ def _repair_event_id(
     canonical = json.dumps(
         [run_id, node, purpose, attempt_id, action, decision,
          actor, gate, candidate_sha256],
-        ensure_ascii=False, separators=(',', ':'))
-    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
-
-
-def _candidate_patch_event_id(
-        *, run_id: str, node: str, purpose: str, attempt_id: str,
-        base_candidate_sha256: str, result_candidate_sha256: str,
-        patch_kind: str, changed_count_field: str, changed_count: int,
-        evidence_table_sha256: str | None,
-) -> str:
-    """一次 hash-bound 候选窄修的稳定身份；正文与路径明细不进服务账。"""
-    canonical = json.dumps(
-        [run_id, node, purpose, attempt_id, base_candidate_sha256,
-         result_candidate_sha256, patch_kind, changed_count_field,
-         changed_count, evidence_table_sha256],
         ensure_ascii=False, separators=(',', ':'))
     return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 
@@ -1505,45 +1490,6 @@ class CostLedger:
             return
         self._append_audit(row)
 
-    def note_role_fate_candidate_patch(
-            self, *, sid: str, node: str, purpose: str, attempt_id: str,
-            base_candidate_sha256: str, result_candidate_sha256: str,
-            evidence_table_sha256: str, changed_field_count: int) -> None:
-        """记录 role/fate 四字段窄修，不泄露人物键、路径、文本或证据内容。"""
-        base_sha = _require_sha256(
-            base_candidate_sha256, field='base_candidate_sha256')
-        result_sha = _require_sha256(
-            result_candidate_sha256, field='result_candidate_sha256')
-        table_sha = _require_sha256(
-            evidence_table_sha256, field='evidence_table_sha256')
-        if (not isinstance(changed_field_count, int)
-                or isinstance(changed_field_count, bool)
-                or changed_field_count < 1):
-            raise ProvenanceRefused('changed_field_count 必须是正整数')
-        if not isinstance(attempt_id, str) or not attempt_id.strip():
-            raise ProvenanceRefused('candidate patch attempt_id 必须是非空字符串')
-        event_id = _candidate_patch_event_id(
-            run_id=self.run_id, node=node, purpose=purpose,
-            attempt_id=attempt_id, base_candidate_sha256=base_sha,
-            result_candidate_sha256=result_sha,
-            patch_kind='role_fate',
-            changed_count_field='changed_field_count',
-            changed_count=changed_field_count,
-            evidence_table_sha256=table_sha)
-        self._append_audit_idempotent({
-            'kind': 'candidate_patch_applied',
-            'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
-            'candidate_patch_event_id': event_id,
-            'sid': sid,
-            'node': node,
-            'purpose': purpose,
-            'attempt_id': attempt_id,
-            'base_candidate_sha256': base_sha,
-            'result_candidate_sha256': result_sha,
-            'patch_kind': 'role_fate',
-            'evidence_table_sha256': table_sha,
-            'changed_field_count': changed_field_count,
-        }, identity_key='candidate_patch_event_id')
 
     def note_evidence_locator_rewrite(
             self, *, sid: str, node: str, purpose: str, artifact: str,
@@ -1594,6 +1540,19 @@ class CostLedger:
         with self._lock:
             self._work_unit_commits[attempt_id] = (budget, turn_id)
 
+    def artifact_adoption_payload(self, *, sid: str, node: str, purpose: str,
+                                  attempt_id: str, artifact: str, artifact_fingerprint: str,
+                                  chapter: int | None = None) -> dict[str, Any]:
+        """采用事件的唯一内容构造器，供写口与提交前完整闭集复核共享。"""
+        return {
+            **self._identity_fields(), 'kind': 'artifact_adoption',
+            'adoption_id': _adoption_id(
+                run_id=self.run_id, node=node, purpose=purpose, attempt_id=attempt_id,
+                artifact=artifact, artifact_fingerprint=artifact_fingerprint, chapter=chapter),
+            'sid': sid, 'node': node, 'purpose': purpose, 'attempt_id': attempt_id,
+            'artifact': artifact, 'artifact_fingerprint': artifact_fingerprint, 'chapter': chapter,
+        }
+
     def note_adoption(self, *, sid: str, node: str, purpose: str,
                       attempt_id: str, artifact: str,
                       artifact_fingerprint: str,
@@ -1604,25 +1563,48 @@ class CostLedger:
         不再从「最后一条 accepted」推测。本 run 没有采纳新响应的章
         （定向重生成合并进来的未动章）没有行——缺行即「沿用旧稿」。
         """
-        adoption_id = _adoption_id(
-            run_id=self.run_id, node=node, purpose=purpose,
-            attempt_id=attempt_id, artifact=artifact,
-            artifact_fingerprint=artifact_fingerprint, chapter=chapter)
+        payload = self.artifact_adoption_payload(
+            sid=sid, node=node, purpose=purpose, attempt_id=attempt_id,
+            artifact=artifact, artifact_fingerprint=artifact_fingerprint, chapter=chapter)
         self._append_audit_idempotent({
-            'kind': 'artifact_adoption',
-            'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
-            'adoption_id': adoption_id,
-            'sid': sid, 'node': node, 'purpose': purpose,
-            'attempt_id': attempt_id,
-            'artifact': artifact,
-            'artifact_fingerprint': artifact_fingerprint,
-            'chapter': chapter,
+            **payload, 'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
         }, identity_key='adoption_id')
         bound = self._work_unit_commits.get(attempt_id)
         if bound is not None:
             budget, turn_id = bound
             budget.mark_adopted(turn_id)
             budget.mark_artifact_committed(artifact, artifact_fingerprint)
+
+    def note_aggregate_adoption(self, *, sid: str, node: str, artifact: str,
+                                artifact_fingerprint: str, sources_sha256: str,
+                                finalization_sha256: str) -> None:
+        """确定性汇合的独立采用收据；不创造请求、费用或新的内容轮。"""
+        payload = {
+            'kind': 'deterministic_aggregate_adoption', 'run_id': self.run_id,
+            'sid': sid, 'node': node, 'artifact': artifact,
+            'artifact_fingerprint': artifact_fingerprint,
+            'sources_sha256': _require_sha256(sources_sha256, field='sources_sha256'),
+            'finalization_sha256': _require_sha256(
+                finalization_sha256, field='finalization_sha256'),
+        }
+        digest = hashlib.sha256(json.dumps(
+            payload, ensure_ascii=False, sort_keys=True,
+            separators=(',', ':')).encode('utf-8')).hexdigest()
+        self._append_audit_idempotent({
+            **payload, 'aggregate_adoption_id': digest,
+            'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+        }, identity_key='aggregate_adoption_id')
+
+    def note_aggregate_recovery(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """记录实际免费补尾执行；不把新 epoch 伪装成原模型 producer。"""
+        row = {**dict(payload), 'run_id': self.run_id, 'parent_run_id': self.parent_run_id}
+        identity = hashlib.sha256(json.dumps(
+            row, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+        self._append_audit_idempotent({
+            **row, 'aggregate_recovery_id': identity,
+            'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+        }, identity_key='aggregate_recovery_id', require_equal=True)
+        return {**row, 'aggregate_recovery_id': identity}
 
     def note_human_typed_edit(
             self, *, sid: str, node: str, purpose: str,
@@ -1975,3 +1957,52 @@ class CostLedger:
             seen = self._seen[k] - (mark.seen[i] if mark else 0)
             vals[k] = (getattr(self, k) - (mark.tokens[i] if mark else 0)) if seen else None
         return Usage(calls_made=made, calls_cached=cached, **vals)
+
+
+def read_strict_audit_events(ledger: CostLedger) -> list[dict[str, Any]]:
+    """提交恢复只接受 LF 闭合的审计事实；未知尾不能补账洗白。"""
+    if ledger.path is None:
+        return [dict(row) for row in ledger.audit_events]
+    return read_strict_jsonl_objects(ledger.path.with_name('llm_audit.jsonl'), label='聚合审计账')
+
+
+def read_strict_jsonl_objects(path: Path, *, label: str) -> list[dict[str, Any]]:
+    """恢复写口使用的 strict JSONL：无 LF 尾也是 unknown，而非可忽略事实。"""
+    try:
+        # 读侧与所有 append 写手共用同一把 OS 锁；否则恰好撞在一行 bytes
+        # 已写、LF 尚未写的窗口，会把并发正常追加误判成 durable 坏尾。
+        with process_append_lock(path):
+            if not path.is_file():
+                return []
+            raw = path.read_bytes()
+    except OSError as exc:
+        raise ProvenanceRefused(f'{label} 不可读：{exc}') from exc
+    if raw and not raw.endswith(b'\n'):
+        raise ProvenanceRefused(f'{label} 存在未闭合末行；恢复不得继续追加')
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f'JSON 不接受 {value}')
+
+    def reject_duplicate(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        value: dict[str, object] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError(f'JSON object 含重复键 {key!r}')
+            value[key] = item
+        return value
+
+    rows: list[dict[str, Any]] = []
+    for index, encoded in enumerate(raw.split(b'\n')):
+        if not encoded.strip():
+            continue
+        try:
+            value = json.loads(
+                encoded.decode('utf-8'), parse_constant=reject_constant,
+                object_pairs_hook=reject_duplicate)
+        except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            raise ProvenanceRefused(
+                f'{label} 第 {index + 1} 行损坏：{exc}') from exc
+        if not isinstance(value, dict):
+            raise ProvenanceRefused(f'{label} 第 {index + 1} 行不是 JSON object')
+        rows.append(value)
+    return rows

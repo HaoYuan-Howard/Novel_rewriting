@@ -4,7 +4,7 @@
 B 拆成章级 session 之前，先由代码把**能唯一确定的绑定**全部确定掉：
 
 - scene fact → `fact_atom.source_beat_ref` → 该场的舞台 allowlist；
-- material（hinge）→ 属主 beat → allowlist 覆盖该 beat 的 eligible 场景；
+- material（hinge）→ 显式 source_fact_refs → 承载相关事实的 eligible 场景；
 - 唯一归属直接由代码确定；**只有**「多候选舞台且 time/place/present 签名不同」
   与「材料可落多场/无处可落」才生成稳定 ambiguity id，交给对应章的 B session
   （或人工）。多候选舞台签名完全一致时语义等价，取排序首项并留痕，不是
@@ -15,6 +15,8 @@ B 拆成章级 session 之前，先由代码把**能唯一确定的绑定**全�
 可直接作为该章的 0-wire checkpoint。
 """
 from __future__ import annotations
+
+from novel.stages.stage4.beats import material_scene_candidates
 
 import hashlib
 import json
@@ -166,16 +168,24 @@ def build_mechanical_baseline(
             str(atom.get('fact_id')): atom
             for atom in (bp.get('fact_atoms') or [])
         }
-        hinge_owner: dict[str, str] = {
-            str(hinge.get('hinge_id')): str(beat.get('beat_id'))
+        material_facts: dict[str, frozenset[str]] = {
+            str(hinge['hinge_id']): frozenset(hinge['source_fact_refs'])
             for beat in beats.values()
             for hinge in (beat.get('hinges') or [])
         }
-        catalog_materials = set(hinge_owner)
+        for material, refs in material_facts.items():
+            if not refs or not refs <= atoms.keys():
+                raise ValueError(f'{material} 的 source_fact_refs 缺失或引用本章外事实')
+        catalog_materials = set(material_facts)
 
         scenes = list(raw_chapter.get('scenes') or [])
+        material_candidates = material_scene_candidates(
+            [hinge for beat in beats.values() for hinge in beat.get('hinges') or []],
+            atoms, [{'slot': scene['candidate_scene_id'],
+                     'land_fact_refs': [alias_to_fact[ref] for ref in scene['land_fact_aliases']],
+                     'context_fact_refs': [alias_to_fact[ref] for ref in scene['context_fact_aliases']]}
+                    for scene in scenes])
         scene_stage_refs: dict[str, tuple[str, ...]] = {}
-        scene_allowlist: dict[str, frozenset[str]] = {}
         ambiguities: list[BaselineAmbiguity] = []
         for scene in scenes:
             scene_id = str(scene.get('candidate_scene_id'))
@@ -186,7 +196,6 @@ def build_mechanical_baseline(
                 for ref in land_refs
                 if alias_to_fact.get(ref) in atoms
             })
-            scene_allowlist[scene_id] = frozenset(allowlist)
             if not allowlist:
                 # 没有任何可依据的源舞台：constructive witness 的可行性证明
                 # 会把它当空 allowlist 铸 witness；这里留空集给上游分类。
@@ -215,11 +224,8 @@ def build_mechanical_baseline(
         scene_material_refs: dict[str, tuple[str, ...]] = {
             scene_id: () for scene_id in scene_stage_refs}
         for material in sorted(catalog_materials):
-            owner = hinge_owner[material]
-            eligible = sorted(
-                scene_id for scene_id, refs in scene_allowlist.items()
-                if owner in refs
-            )
+            refs = material_facts[material]
+            eligible = material_candidates[material]
             if len(eligible) == 1:
                 scene_id = eligible[0]
                 scene_material_refs[scene_id] = tuple(sorted(
@@ -231,7 +237,8 @@ def build_mechanical_baseline(
                 ambiguity_id=_ambiguity_id(
                     kind=kind, chapter_ordinal=ordinal,
                     candidate_scene_id=eligible[0] if eligible else None,
-                    candidates=tuple(eligible), material_ref=material),
+                    candidates=tuple(eligible), material_ref=material,
+                    source_fact_refs=sorted(refs)),
                 kind=kind,
                 chapter_ordinal=ordinal,
                 candidate_scene_id=eligible[0] if eligible else None,

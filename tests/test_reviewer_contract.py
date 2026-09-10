@@ -60,15 +60,42 @@ def test_agent_run_delegation_is_explicit_without_weakening_stage0_review():
 def test_stage2_contract_closes_two_commanders_and_owner_repair():
     global_contract = reviewer_contract.CONTRACT_TEXT['stage2']
     blueprint = reviewer_contract.CONTRACT_TEXT['stage2-blueprint']
-    assert '最多四次内容调用' in global_contract and '最多四次内容调用' in blueprint
+    for contract in (global_contract, blueprint):
+        assert '基础四次内容额度加已生效的不可变人工追加' in contract
+        assert '模型不能自行加额' in contract
+        assert '有效历史决定由后端按义务继承' in contract
+        assert '修改或删除旧问题仍须复审' in contract
+        assert '最多四次内容调用' not in contract
     assert '换候选、会话或进程不补预算' in global_contract
     assert 'collection delta 只使用 add/delete/split 的现役 schema' in global_contract
     assert '外键必须在修后全集闭合' in global_contract
     assert '仍存活的旧 FAIL/UNVER 要显式复判' in global_contract
     assert '没有预审，也没有额外 Global-only 终审' in global_contract
-    assert 'owner 只可为 stage2.global' in global_contract
-    assert 'owner=stage2.blueprint' in blueprint and '回源 owner=stage2.global' in blueprint
+    assert 'owner=stage2.characters' in global_contract
+    assert 'owner=stage2.global' in global_contract
+    assert '人物静态字段不由 GlobalEdit 修改' in global_contract
+    assert '范围不明不缺省为第一章' in global_contract
+    assert '不新增人物 Commander' in global_contract
+    assert 'owner=stage2.blueprint' in blueprint
+    assert '回源 owner=stage2.characters' in blueprint
+    assert '回源 owner=stage2.global' in blueprint
+    assert '关联决定先持久化' in blueprint
+    assert 'Blueprint producer 免费物化' in blueprint
+    assert '伏笔不能携带未来答案' in blueprint
     assert 'seen 只是阅读事实，不授予接受' in blueprint
+
+
+def test_stage4_contract_inherits_only_actual_dependencies_and_preserves_budget():
+    design = reviewer_contract.CONTRACT_TEXT['stage4-design']
+    structure = reviewer_contract.CONTRACT_TEXT['stage4-structure']
+    assert 'source_decision_sha256' in design
+    assert '新决定与有效历史决定须完整覆盖当前义务' in design
+    assert '修改或删除问题仍有复审义务' in design
+    assert '不通过新 epoch、换候选或重启重领基础额度' in design
+    assert '不得重复购买无关章与已有有效决定' in design
+    assert 'Blueprint 证据、候选集合或邻章边界改变' in structure
+    assert '不得凭 Plan 未变延用旧接受' in structure
+    assert '来源损坏保持未知' in structure
 
 
 def test_stage5_rewrite_contract_distinguishes_text_file_sha_and_unique_evidence():
@@ -95,7 +122,7 @@ def test_stage5_batch_scope_preserves_independent_chapter_authority():
     stage5 = reviewer_contract.CONTRACT_TEXT['stage5-closure']
     assert '未选章节继续保持 unresolved' in stage5
     assert '本轮在 `targets[]` 中选择' in stage5
-    assert '并发上限 4' in stage5
+    assert '按本次冻结的章节并发配置改写（默认 4）' in stage5
     assert '整批完成后统一免费' in stage5
     assert '修复必须同时改动多章才能安全成立时' in stage5
     assert '恰有一章' not in stage5

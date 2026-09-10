@@ -28,8 +28,16 @@ def _tasks(tmp_path):
             'state': 'UNVER', 'reason': '待审阅', 'evidence': [],
         },
     }
+    from novel.stages.stage2 import review_obligations
+    from contracts.schema.stage2_review import Stage2ReviewObligation
+    coverage = review_obligations.coverage('stage2.global', [
+        Stage2ReviewObligation(obligation_id=f'item-{i}', subject_sha256=str(i + 4) * 64,
+            owner='stage2.global', chapter_ordinals=[i], subject_path=f'canon.secrets.item-{i}',
+            kind='global_item', context_refs=[]) for i in (1, 2)
+    ], []).model_dump(mode='json')
     options = reviewer_tasks._submission_options({
-        'global': {'review_token': 's2gr1_' + '7' * 64, 'workpack_sha256': '3' * 64, 'items': [{
+        'global': {'review_token': 's2gr1_' + '7' * 64, 'workpack_sha256': '3' * 64,
+                   'review_coverage': coverage, 'items': [{
             'item_id': f'item-{i}', 'subject_sha256': str(i + 4) * 64,
             'current_state': 'pending',
         } for i in (1, 2)]},
@@ -41,7 +49,6 @@ def _tasks(tmp_path):
         business_sha256='b' * 64, request_path=tmp_path / 'live.json', prompt='原提示',
         submission_options=tuple(options))
     return current, live
-
 
 
 def _response(task, *, exceptions=True):

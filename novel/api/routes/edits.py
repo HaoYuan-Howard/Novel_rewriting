@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends
 from contracts.schema.api import (
     BatchTrimResolutionRequest,
     BlueprintRelationEditPreview,
+    CharactersEditRequest,
     DraftEditPreview, DraftEditPreviewRequest, DraftEditRequest,
     HookApproveRequest, NameMapApproveRequest,
     ResidualAdoptionRequest, TrimResolutionRequest,
@@ -156,6 +157,19 @@ def apply_blueprint_relations(
                 RuntimeWarning,
                 stacklevel=2,
             )
+
+
+@router.post('/{sid}/stage2/characters/edit', response_model=JobRecord)
+def edit_characters(request: CharactersEditRequest, sid: str = Depends(checked_sid),
+                    base: str = Depends(get_base)) -> JobRecord:
+    """浏览器人物订正走 canonical CLI；服务不直接修改人物或知识产物。"""
+    path = uploads.save_characters_edit(base, sid, request.edit)
+    try:
+        return jobs.run(base, 'stage2.characters', sid,
+                        ['--apply-edit', str(path), '--actor', request.actor, '--reason', request.reason],
+                        follow_check=False)
+    finally:
+        uploads.discard_edit_plan(base, path)
 
 
 @router.post('/{sid}/stage2/global-review', response_model=JobRecord)

@@ -101,7 +101,6 @@ def _stage5_trim_pack(ordinals: tuple[int, ...] = (2, 11)) -> dict:
                 **row,
                 'chapter': {
                     'segments': [{'slot': 's01', 'text': f'第 {row["output_ordinal"]} 章正文'}],
-                    'rendered_text': f'第 {row["output_ordinal"]} 章正文',
                 },
                 'verification_context': '当前 pretrim 1200 字，目标 800~1000 字，超上限 200 字',
             } for row in items],
@@ -109,16 +108,16 @@ def _stage5_trim_pack(ordinals: tuple[int, ...] = (2, 11)) -> dict:
     }
 
 
-def test_frozen_v6_validation_suspension_is_not_a_reviewer_task() -> None:
-    """raw all-accept 已落账；缺 authority 不能再唤起 Commander。"""
+def test_retired_blocker_is_not_a_reviewer_task() -> None:
+    """历史阻塞名不再登记；不能因旧表面字符串唤起 Commander。"""
     assert reviewer_tasks.is_registered(
         queue.WAITING_ON_STAGE4_DESIGN_REVIEW) is True
     assert reviewer_tasks.is_registered(
-        queue.WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY) is False
+        'legacy_frozen_v6_design_authority_unavailable') is False
     current = SimpleNamespace(
         state='blocked', surface_seal='a' * 64,
         action=SimpleNamespace(
-            waiting_on=queue.WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY,
+            waiting_on='legacy_frozen_v6_design_authority_unavailable',
             action_sha256='b' * 64,
         ),
     )
@@ -391,6 +390,9 @@ def test_dynamic_workpack_may_contain_tool_names_without_tripping_static_guard(
     assert task is not None
     assert 'finalizer、run_step 和 operator next' in task.prompt
     assert task.request_path == (tmp_path / 'review.json').resolve()
+    assert 'collection_edits[].operations' not in task.prompt
+    assert 'post_edit_review.decisions' not in task.prompt
+    assert 'Global 首轮及其订正' not in task.prompt
     # 本 blocker 的裁决契约随包下发，且在 workpack 之前；Commander 不必再读 skill。
     from novel.orchestrator import reviewer_contract
     contract = task.prompt.split('<reviewer-contract>\n', 1)[1].split(
@@ -1314,16 +1316,17 @@ def test_stage5_trim_workpack_contains_current_full_text_audit_and_measurement(
         tmp_path, monkeypatch) -> None:
     """只给章号/双 SHA 不足以代签；Commander 必须拿到同采样完整材料。"""
     from contracts.schema.evaluation import TrimAudit
+    from contracts.schema.stage4 import WriterContext
+    from contracts.schema.stage5 import Chapter
+    from tests.factories import stage5_book
     from novel.orchestrator import state
     from novel.stages.stage5 import trim_resolution
     import novel.store as store_module
 
-    text = '第2章不可删的完整因果正文。' * 8
+    text = '第2章不可删的完整因果正文。' * 16
     chapter_sha256 = hashlib.sha256(text.encode('utf-8')).hexdigest()
     chapter_file_sha256 = hashlib.sha256(b'chapter').hexdigest()
-    audit = TrimAudit(
-        output_ordinal=2, before_sha256=chapter_sha256,
-        reason='当前正文超过冻结目标上限')
+    audit = TrimAudit(before_sha256=chapter_sha256, reason='当前正文超过冻结目标上限')
     audit_sha256 = '7' * 64
     closure = _stage5_trim_pack((2,))['stage5_trim']['closure']
     closure['workpack']['chapter_subjects'][0][
@@ -1336,15 +1339,25 @@ def test_stage5_trim_workpack_contains_current_full_text_audit_and_measurement(
         'audit_sha256': audit_sha256,
         'chapter_sha256': chapter_sha256,
     })
-    segment = SimpleNamespace(
-        model_dump=lambda **_kwargs: {'slot': 's01', 'text': text})
-    chapter = SimpleNamespace(
-        output_ordinal=2, text=text, chars=len(text), budget_chars=100,
-        segments=[segment])
+    provenance = {'code': 'test-code', 'root_clean_sha1': 'a' * 40, 'inputs': {}}
+    chapter = Chapter.model_validate({
+        'output_ordinal': 2, 'segments': [{'slot': 's01', 'text': text}],
+        '_provenance': {**provenance, 'round': 1, 'origin': 'human'},
+    })
+    entry = copy.deepcopy(stage5_book().chapters[1])
+    entry['output_ordinal'] = 2
+    entry['scenes'][0]['budget_chars'] = 100
+    writer_context = WriterContext.model_validate({
+        'chapters': [entry], '_provenance': provenance,
+    })
 
     class FakeStore:
         def __init__(self, ctx):
             self.ctx = ctx
+
+        def read(self, model, rel):
+            assert model is WriterContext and rel == 'stage4/writer_context.json'
+            return writer_context
 
         def read_with_sha256(self, model, rel):
             assert model is TrimAudit
@@ -1361,22 +1374,34 @@ def test_stage5_trim_workpack_contains_current_full_text_audit_and_measurement(
     monkeypatch.setattr(
         state, 'readonly_ctx', lambda *_args, **_kwargs: SimpleNamespace())
     monkeypatch.setattr(store_module, 'ArtifactStore', FakeStore)
-    monkeypatch.setattr(
-        trim_resolution, 'verification_context',
-        lambda _store, _audit: (
-            '当前 pretrim 224 字，目标 80~100 字，超上限 124 字'))
 
     result = reviewer_tasks._stage5_trim_workpack(
         str(tmp_path), '42', _current(queue.WAITING_ON_STAGE5_CLOSURE), closure)
     [material] = result['stage5_trim']['chapters']
-    assert material['chapter']['rendered_text'] == text
+    assert 'rendered_text' not in material['chapter']
     assert material['chapter']['segments'] == [{'slot': 's01', 'text': text}]
     assert material['audit'] == audit.model_dump(mode='json')
     assert material['audit_sha256'] == audit_sha256
     assert material['chapter_sha256'] == chapter_sha256
     assert material['chapter_file_sha256'] == chapter_file_sha256
-    assert '目标 80~100' in material['verification_context']
-    assert '超上限 124' in material['verification_context']
+    assert material['chapter']['chars'] == len(text)
+    assert material['chapter']['budget_chars'] == 100
+    assert '目标 80~120' in material['verification_context']
+    assert f'超上限 {len(text) - 120}' in material['verification_context']
+
+    monkeypatch.setattr(reviewer_tasks, '_workpack', lambda *_args, **_kwargs: result)
+    from novel.orchestrator import inspection
+    monkeypatch.setattr(inspection, 'read_surface_seal', lambda *_args, **_kwargs: 'a' * 64)
+    request_path = reviewer_tasks.paths.scratch_session_dir(tmp_path, '42', 'trim-once') / 'request.json'
+    task = reviewer_tasks.build_task(
+        str(tmp_path), '42', _current(queue.WAITING_ON_STAGE5_CLOSURE),
+        request_path, epoch_id='trim-once')
+    assert task is not None
+    assert task.prompt.count(text) == 1, 'Commander 不得重复读取全文副本'
+    assert '_validation_context' not in task.prompt
+    rewrite = next(option for option in task.submission_options
+                   if option['id'].endswith('request-reviewer-rewrite'))
+    assert rewrite['_validation_context']['chapter_texts'][2] == text
 
     # 同一份真实 material 继续投影成 immutable option；loader 必须保留
     # trim text SHA 与 target canonical full-file SHA 两条不同的身份轴。
@@ -1538,6 +1563,7 @@ def test_stage2_options_bind_global_workpack_and_offer_explicit_node_decision(
         'global': {
             'workpack_sha256': '7' * 64,
             'review_token': 's2gr1_' + 'a' * 64,
+            'review_coverage': _node_review_coverage('stage2.global'),
             'items': [{'current_state': 'pending', 'item_id': 'item-1',
                        'subject_sha256': '1' * 64}],
         },
@@ -1554,6 +1580,7 @@ def test_stage2_options_bind_global_workpack_and_offer_explicit_node_decision(
 
     closed = reviewer_tasks._submission_options({
         'global': {'items': [{'current_state': 'PASS'}],
+                   'review_coverage': _node_review_coverage('stage2.global'),
                    'review_token': 's2gr1_' + 'a' * 64},
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
     assert [row['id'] for row in closed] == ['approval:stage2_global_review']
@@ -1592,11 +1619,24 @@ def test_stage2_options_bind_global_workpack_and_offer_explicit_node_decision(
 
 
 
+def _node_review_coverage(node: str, ids: tuple[str, ...] = ('item-1',)) -> dict:
+    """协议单测显式冻结的义务；不代表真实正文已审阅。"""
+    from contracts.schema.stage2_review import Stage2ReviewObligation
+    from novel.stages.stage2.review_obligations import coverage, sha
+
+    rows = [Stage2ReviewObligation(
+        obligation_id=key, subject_sha256=sha(key), owner=node,
+        chapter_ordinals=[1], subject_path=f'fixture.{key}',
+        kind='fact' if node == 'stage2.blueprint' else 'global_item',
+        context_refs=[]) for key in ids]
+    return coverage(node, rows, []).model_dump(mode='json')
+
+
 def _global_edit_envelope() -> dict:
     return encode_artifact(STAGE2_GLOBAL_EDIT, {
         'characters': [{
             'char_id': 'char_001',
-            'name_distinctiveness': 'high',
+            'fate': None,
         }],
     })
 
@@ -1693,6 +1733,8 @@ def _stage2_failed_global(
         'main_text_subject_sha256': '9' * 64,
         'main_text_chapters': [],
         'items': normalized,
+        'review_coverage': _node_review_coverage(
+            'stage2.global', tuple(row['item_id'] for row in normalized)),
         'binding': {
             'expected_source_sha256': '8' * 64,
             'expected_blocking_scope_sha256': '6' * 64,
@@ -1738,7 +1780,7 @@ def test_stage2_durable_correction_uses_failed_edit_without_loading_blueprint(
     monkeypatch.setattr(reviewer_tasks, '_json_command', command)
     pack = reviewer_tasks._workpack(
         'base', '42', queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
-        review_run_id='review-run', include_converged_blueprint=False)
+        review_run_id='review-run')
 
     assert len(calls) == 1
     assert 'blueprint' not in pack
@@ -1809,7 +1851,7 @@ def test_stage2_post_review_correction_accepts_empty_hard_and_binds_failure_iden
             'workpack_sha256'] != identity['workpack_sha256']
 
 
-def test_stage2_fail_routes_only_to_typed_global_edit_and_loader_restores_v3(
+def test_stage2_fail_routes_only_to_typed_global_edit_and_loader_restores_v5(
         tmp_path) -> None:
     current = _current(queue.WAITING_ON_STAGE2_REVIEW)
     options = reviewer_tasks._submission_options({
@@ -1863,7 +1905,7 @@ def test_stage2_fail_routes_only_to_typed_global_edit_and_loader_restores_v3(
     assert isinstance(action, reviewer_tasks.ReviewerNodeAction)
     assert action.input_payload is not None
     decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
-    assert decoded.version == 3
+    assert decoded.version == 5
     GlobalEdit.model_validate(decoded.payload)
 
     # 真机回归：第三席曾完整审完 76 个旧主体，却把每行必需的空 evidence
@@ -2246,7 +2288,7 @@ def test_stage2_global_edit_cannot_invent_a_patch_subject(tmp_path) -> None:
     request['action']['input_payload']['post_edit_review']['reason'] = (
         '已复核这份精确返工会打开的完整 blocking 主体')
     request['action']['input_payload']['characters'].append({
-        'char_id': 'char_002', 'name_distinctiveness': 'high',
+        'char_id': 'char_002', 'fate': None,
     })
     path = tmp_path / 'invented-subject.json'
     path.write_text(json.dumps(request, ensure_ascii=False), encoding='utf-8')
@@ -2528,12 +2570,20 @@ def test_stage2_main_prompt_distinguishes_sparse_retry_from_failed_edit_merge(
     instructions = task.prompt.split('<reviewer-contract>', 1)[0]
     assert expected in instructions
     assert forbidden not in instructions
+    assert '基础四次' in instructions
+    assert '不可变人工追加' in instructions
+    assert '最多四次内容调用' not in instructions
+    assert 'stage2.characters' in instructions
+    assert 'stage2.global' in instructions
+    assert 'stage2.blueprint' in instructions
 
 
 def test_stage2_after_edit_reviews_only_changed_pending_items() -> None:
     current = _current(queue.WAITING_ON_STAGE2_REVIEW)
     options = reviewer_tasks._submission_options({
-        'global': {'review_token': 's2gr1_' + '7' * 64, 'items': [
+        'global': {'review_token': 's2gr1_' + '7' * 64,
+                   'review_coverage': _node_review_coverage(
+                       'stage2.global', ('changed-item', 'inherited-item')), 'items': [
             {
                 'item_id': 'changed-item',
                 'subject_sha256': '1' * 64,
@@ -2688,6 +2738,8 @@ def _new_blueprint_options():
     from contracts.invariants import BLUEPRINT_RELATION_REVIEW_CONTRACT
     pack = {
         'blueprint': {'review_token': 'bpr4_' + 'a' * 64,
+                      'review_coverage': _node_review_coverage('stage2.blueprint'),
+                      'knowledge_links': {'scope': {'scope_sha256': 'c' * 64}},
                       'chapters': [{'chapter_ordinal': 1}]},
         '_blueprint_edit_template': {
             'actor': 'template', 'reason': 'template', 'review_token': 'brt1_' + 'b' * 64,
@@ -2696,6 +2748,31 @@ def _new_blueprint_options():
         },
     }
     return current, reviewer_tasks._submission_options(pack, current, queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW)
+
+
+def test_blueprint_workpack_reads_only_blueprint_producer(monkeypatch):
+    calls = []
+
+    def read(argv):
+        calls.append(argv)
+        assert argv[argv.index('run') + 1] == 'stage2.blueprint'
+        return {'marker': argv[-1]}
+
+    monkeypatch.setattr(reviewer_tasks, '_json_command', read)
+    pack = reviewer_tasks._workpack('unused', '42', queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW,
+                                    review_run_id='current-review')
+    assert [argv[-1] for argv in calls] == ['--emit-review-workpack', '--emit-edit-template']
+    assert set(pack) == {'blueprint', '_blueprint_edit_template'}
+
+
+def test_blueprint_progress_refuses_missing_own_binding_instead_of_using_global():
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='绑定或义务不完整'):
+        reviewer_tasks._stage2_progress_identity({
+            'blueprint': {'subject_sha256': 'a' * 64},
+            'global': {'binding': {'expected_source_sha256': 'b' * 64,
+                                  'main_text_subject_sha256': 'c' * 64},
+                       'workpack_sha256': 'd' * 64, 'items': []},
+        }, queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW)
 
 
 def test_blueprint_commander_has_bound_accept_rework_uncertain_stop_and_local_patch(tmp_path):
@@ -2707,8 +2784,10 @@ def test_blueprint_commander_has_bound_accept_rework_uncertain_stop_and_local_pa
         document = copy.deepcopy(options[0]['exact_request'])
         payload = document['action']['payload']
         payload.update(decision=decision, reason='依据全书原文及 Global 交叉材料作出明确决定')
+        payload['knowledge_links']['reason'] = payload['reason']
+        payload['review']['default_decision'] = decision if decision != 'rework' else 'uncertain'
         if decision == 'rework':
-            payload.update(owner='stage2.global', chapter_ordinals=[1])
+            payload.update(owner='stage2.blueprint', chapter_ordinals=[1])
         path.write_text(json.dumps(document), encoding='utf-8')
         action = reviewer_tasks.load_action(path, current, submission_options=options)
         assert action.payload['decision'] == decision
@@ -2724,13 +2803,13 @@ def test_blueprint_typed_patch_keeps_bound_actor_and_cross_review_identity(tmp_p
     current, options = _new_blueprint_options()
     request = copy.deepcopy(options[1]['exact_request'])
     payload = request['action']['input_payload']
-    payload['reason'] = '原文明确在室内，订正当前拍地点并接受修后蓝图'
+    payload['reason'] = '原文明确在室内，订正当前拍地点，修后按变化义务复审'
     payload['chapters'][0]['beat_patches'] = [{'beat_id': 'b01_01', 'place': '室内'}]
     path = tmp_path / 'typed-patch.json'
     path.write_text(json.dumps(request), encoding='utf-8')
     action = reviewer_tasks.load_action(path, current, submission_options=options)
     assert action.node == 'stage2.blueprint'
-    assert action.input_payload['post_edit_accept'] is True
+    assert action.input_payload['post_edit_accept'] is False
     payload['actor'] = 'foreign-commander'
     path.write_text(json.dumps(request), encoding='utf-8')
     with pytest.raises(reviewer_tasks.ReviewerTaskError, match='绑定字段 actor'):

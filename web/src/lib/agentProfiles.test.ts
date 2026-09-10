@@ -10,12 +10,33 @@ import {
   materializePipelineAgentProfiles,
   pipelineDraftOf,
   pipelineProfilesEqual,
+  clonePipelineAgentProfiles,
   withBackendKind,
   withProfileDriver,
   withProfileModel,
 } from './agentProfiles'
 
 describe('agent profile draft/materialize', () => {
+  it('并发策略随预览与历史快照完整保留，任一限制漂移使预览失效', () => {
+    const original = { ...READY_PROFILES, concurrency: {
+      node_overrides: { 'node.dynamic-a': 6 }, per_book: 6, per_provider: 8,
+    } }
+    const draft = pipelineDraftOf(original)
+    const result = materializePipelineAgentProfiles(agentCapabilities(), draft)
+    expect(result).toEqual({ profiles: original, errors: [] })
+    const copied = clonePipelineAgentProfiles(original)
+    expect(pipelineProfilesEqual(copied, original)).toBe(true)
+    copied.concurrency!.node_overrides['node.dynamic-a'] = 8
+    expect(original.concurrency.node_overrides['node.dynamic-a']).toBe(6)
+    expect(pipelineProfilesEqual(copied, original)).toBe(false)
+    expect(pipelineProfilesEqual(original, READY_PROFILES)).toBe(false)
+    draft.concurrency!.per_book = 0
+    expect(materializePipelineAgentProfiles(agentCapabilities(), draft).profiles).toBeNull()
+    draft.concurrency!.per_book = 6
+    draft.concurrency!.node_overrides['node.dynamic-a'] = 7
+    expect(materializePipelineAgentProfiles(agentCapabilities(), draft).profiles).toBeNull()
+  })
+
   it('null 默认保持全空，完整动态选择才 materialize', () => {
     const capabilities = agentCapabilities(null)
     const empty = pipelineDraftOf(capabilities.default_profiles)

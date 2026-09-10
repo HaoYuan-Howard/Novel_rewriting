@@ -115,6 +115,28 @@ def _request(chapter: int | None) -> stage4_runs.DesignUnitRequest:
     )
 
 
+def _primary(ctx: RunContext, chapter_count: int) -> dict:
+    """提交协议使用当前 typed 产物；响应检查点仍可独立测试通用载体。"""
+    from contracts.schema.stage4 import BlindCandidate
+    from tests.test_stage4_blind import _compiled
+    root = ctx.novel_dir / 'stage0' / 'clean_text.txt'
+    root.parent.mkdir(exist_ok=True)
+    root.write_bytes('合成聚合协议根正文'.encode('utf-8'))
+    payload, _mapping, _catalog = _compiled()
+    payload['output_chapters'] = payload['output_chapters'][:chapter_count]
+    payload['_provenance'] = {
+        'code': ctx.code, 'root_clean_sha1': ctx.root_clean_sha1,
+        'inputs': {'stage0/clean_text.txt': {
+            'file': prov.fingerprint_bytes(root.read_bytes()),
+            'consumed': prov.fingerprint_bytes(root.read_bytes())}},
+        'model': _profile().model, 'prompts': {'test': 'a' * 10},
+        'alias_algorithm': payload['alias_algorithm'],
+        'truth_sha256': payload['truth_sha256'],
+        'architecture': 'book_strategy_chapters_v1',
+    }
+    return BlindCandidate.model_validate(payload).model_dump(mode='json', by_alias=True)
+
+
 def _land_unit(
         ctx: RunContext, request: stage4_runs.DesignUnitRequest, *,
         value: int, provider_session_id: str, retry_once: bool = False,
@@ -156,7 +178,7 @@ def _land_unit(
     return str(acceptance['attempt_id'])
 
 
-def test_stage4_design_unit_paths_specs_and_plan_legacy_are_isolated(
+def test_stage4_design_unit_paths_and_plan_metadata_are_isolated(
         tmp_path: Path,
 ) -> None:
     run_id = 'run-stage4-units'
@@ -187,10 +209,9 @@ def test_stage4_design_unit_paths_specs_and_plan_legacy_are_isolated(
     assert chapter.purpose == 'stage4.design:ch0012'
     assert chapter.chapter == 12
     assert chapter.recovery_policy == stage4_runs.DESIGN_UNIT_RECOVERY_POLICY
-    assert stage4_runs.DESIGN_MAX_CONCURRENCY == 4
+    assert stage4_runs.DESIGN_MAX_CONCURRENCY == 8
 
-    # plan 仍是单会话协议；新写入与 design unit 一样进入 service，
-    # 旧书内路径仅登记为恢复读源。
+    # 整书 plan 只冻结聚合的原配置；章节模型工作单元另行登记。
     plan = stage4_runs._run_spec('stage4.plan')
     fake_ctx = type('Ctx', (), {'novel_dir': novel_dir, 'run_id': run_id})()
     assert plan.run_path(fake_ctx) == (
@@ -199,9 +220,8 @@ def test_stage4_design_unit_paths_specs_and_plan_legacy_are_isolated(
     assert plan.checkpoint_dir(fake_ctx) == (
         tmp_path / '_service' / 'runs' / 'book' / 'stage4'
         / run_id / 'plan' / 'checkpoints')
-    assert plan.legacy_run_path is not None
-    assert plan.legacy_run_path(fake_ctx) == (
-        novel_dir / '_stage4_runs' / run_id / 'plan')
+    assert plan.track_pending is False
+    assert not hasattr(plan, 'legacy_run_path')
     assert plan.recovery_policy == 'stage4-plan-v1'
     assert plan.session_isolation == 'per-node'
 
@@ -224,7 +244,7 @@ def test_design_units_restore_independently_and_aggregate_commits_n_plus_one(
     assert restored_chapter.value == _Answer(value=2)
     assert restored_chapter.state_payload == {'unit_key': 'ch0001'}
 
-    primary = {'book_strategy': {'version': 1}, 'chapters': [1, 2]}
+    primary = _primary(ctx, 2)
     finalization = {'unit_keys': ['strategy', 'ch0001', 'ch0002']}
     with stage4_runs.commit_ownership(ctx.novel_dir):
         prepared = stage4_runs.prepare_design_aggregate_commit(
@@ -258,7 +278,7 @@ def test_design_units_restore_independently_and_aggregate_commits_n_plus_one(
 
         formal = restarted.novel_dir / STAGE4_BLIND_CANDIDATE
         formal.parent.mkdir(parents=True, exist_ok=True)
-        formal.write_text(json.dumps(primary), encoding='utf-8')
+        formal.write_bytes(resumed['primary_file_text'].encode('utf-8'))
         with pytest.raises(ProvenanceRefused, match='N\\+1|strategy'):
             stage4_runs.mark_design_aggregate_committed(
                 restarted, primary_payload=primary,
@@ -401,7 +421,7 @@ def test_plan_prepared_is_blocked_by_foreign_design_aggregate(
     with stage4_runs.commit_ownership(design.novel_dir):
         stage4_runs.prepare_design_aggregate_commit(
             design, units=units,
-            primary_payload={'chapters': [1]},
+            primary_payload=_primary(design, 1),
             finalization_payload={'units': 2})
 
     plan = RunContext(

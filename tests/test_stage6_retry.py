@@ -35,7 +35,7 @@ def _run_case(monkeypatch, root: Path, initial_texts: list[str], retry_responder
     ctx = _ctx(book, 'stage6.hook')
     material = prompts.Material(blocks=('完整创作包。',), upto=1)
     upstreams = SimpleNamespace(
-        mat=material, src_hook='', secrets=[], arc=None, characters={},
+        mat=material, src_hook='', secrets=[],  characters={},
         hook_mechanical={}, upto=1, judged={})
     written = []
     state = {}
@@ -112,7 +112,7 @@ def test_each_single_hard_candidate_improves_once_and_usage_includes_retries(mon
         ctx = _ctx(book, 'stage6.hook')
         material = prompts.Material(blocks=('完整创作包。',), upto=1)
         upstreams = SimpleNamespace(
-            mat=material, src_hook='', secrets=[], arc=None, characters={},
+            mat=material, src_hook='', secrets=[],  characters={},
             hook_mechanical={}, upto=1, judged={})
         written = []
         state = {}

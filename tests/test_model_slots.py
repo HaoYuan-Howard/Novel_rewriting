@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import threading
+import multiprocessing
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from novel.model_slots import (
     MODEL_SLOT_CAPACITY_ENV, MODEL_SLOT_DIR_ENV,
     model_slot_from_environment, prepare_model_slot_gate,
+    pipeline_model_slot, ModelSlotCancelled, ModelSlotUnavailable,
 )
 
 
@@ -56,3 +59,107 @@ def test_one_shared_slot_serializes_two_callers_and_returns_after_release(
     one.join(5)
     two.join(5)
     assert not one.is_alive() and not two.is_alive()
+
+
+def test_waiting_for_book_does_not_hold_other_books_provider_slot(tmp_path):
+    """同书等待者不能耗尽供应商余量；不同供应商也不能绕开整书总槽。"""
+    from novel import paths
+    from novel.appendlog import process_append_lock
+
+    first = tmp_path / 'first'
+    other = tmp_path / 'other'
+    cancel = threading.Event()
+    def waiting():
+        with pipeline_model_slot(first, 'anthropic', per_book=1, per_provider=1,
+                                 cancelled=cancel.is_set, poll_seconds=0.01):
+            pytest.fail('同一本书已占满，换供应商不得穿过整书总槽')
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with pipeline_model_slot(first, 'openai', per_book=1, per_provider=1):
+            future = executor.submit(waiting)
+            root = paths.model_slot_group(tmp_path, 'provider', 'anthropic')
+            # 另一书可消费同供应商槽。若等待者错误地持有它，这里会被取消明确暴露。
+            timer = threading.Timer(3, cancel.set)
+            timer.start()
+            try:
+                with pipeline_model_slot(other, 'anthropic', per_book=1, per_provider=1,
+                                         cancelled=cancel.is_set, poll_seconds=0.01):
+                    assert not future.done()
+                    with process_append_lock(root / 'capacity.json'):
+                        assert (root / 'capacity.json').is_file()
+            finally:
+                cancel.set()
+                timer.cancel()
+            with pytest.raises(ModelSlotCancelled):
+                future.result(timeout=5)
+
+
+def test_provider_limit_is_shared_across_books_and_cancel_does_not_acquire(tmp_path):
+    cancel = threading.Event()
+    entered = threading.Event()
+    def waiting():
+        with pipeline_model_slot(tmp_path / 'second', 'openai', per_book=2, per_provider=1,
+                                 cancelled=cancel.is_set, poll_seconds=0.01):
+            entered.set()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with pipeline_model_slot(tmp_path / 'first', 'openai', per_book=2, per_provider=1):
+            future = executor.submit(waiting)
+            assert not entered.wait(0.15)
+            cancel.set()
+            with pytest.raises(ModelSlotCancelled):
+                future.result(timeout=5)
+        with pipeline_model_slot(tmp_path / 'second', 'openai', per_book=2, per_provider=1):
+            assert not entered.is_set()
+
+
+def test_capacity_changes_require_drain_and_corruption_never_resets(tmp_path):
+    from novel import paths
+
+    book = tmp_path / 'book'
+    with pipeline_model_slot(book, 'openai', per_book=1, per_provider=1):
+        with pytest.raises(ModelSlotUnavailable, match='排空'):
+            with pipeline_model_slot(book, 'openai', per_book=2, per_provider=2):
+                pytest.fail('活跃 owner 期间不能改容量')
+    with pipeline_model_slot(book, 'openai', per_book=2, per_provider=2):
+        pass
+    root = paths.model_slot_group(tmp_path, 'provider', 'openai')
+    target = root / 'capacity.json'
+    target.write_text('{broken', encoding='utf-8')
+    with pytest.raises(ModelSlotUnavailable, match='不可读'):
+        with pipeline_model_slot(book, 'openai', per_book=2, per_provider=2):
+            pytest.fail('不能把损坏记录当作空槽')
+    assert target.read_text(encoding='utf-8') == '{broken'
+
+
+def _hold_process_slot(book, entered):
+    import time
+    with pipeline_model_slot(book, 'openai', per_book=1, per_provider=1):
+        entered.set()
+        # 故意终止时不能再操作子进程正在等待的 multiprocessing Event；
+        # 被终止者可能持有该 Event 的内部锁，清理测试本身也会死锁。
+        time.sleep(30)
+
+
+def test_process_termination_releases_both_total_slots(tmp_path):
+    context = multiprocessing.get_context('spawn')
+    entered = context.Event()
+    owner = context.Process(target=_hold_process_slot,
+                            args=(tmp_path / 'book', entered))
+    owner.start()
+    try:
+        assert entered.wait(10), '真实子进程未取得总槽'
+        owner.terminate()
+        owner.join(10)
+        assert not owner.is_alive()
+        cancel = threading.Event()
+        timer = threading.Timer(3, cancel.set)
+        timer.start()
+        try:
+            with pipeline_model_slot(tmp_path / 'book', 'openai', per_book=1,
+                                     per_provider=1, cancelled=cancel.is_set):
+                assert not cancel.is_set(), '崩溃不能残留假占用'
+        finally:
+            timer.cancel()
+    finally:
+        if owner.is_alive():
+            owner.terminate()
+        owner.join(10)

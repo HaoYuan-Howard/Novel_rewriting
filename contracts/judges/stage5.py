@@ -114,9 +114,14 @@ _info('names_absent', '本章人物的名字出现在正文里', 'R-7.16',
       note='目标被下发的称谓表**钉死**——用表里的叫法，不许另造（`invented_name` 兜着）。'
            '⚠ `R-7.5` 只管「不许编新的」，没管「要用给的」，这一条补的是另一半。盘上 0/31')
 
-_hard('verbatim_missing', '【原样写入】的句子逐字出现了', 'R-7.3',
+_unver('dialogue_semantics_unver', '普通对白的说话关系、语义及关键事实保持', 'R-7.3',
+       who_checks='HUMAN',
+       note='语义等价没有标定的自动判据；只展示场景、含义与必保事实供受托或人工核验。'
+            '普通对白不因措辞变化触发逐字 HARD 或自动返修，不从关键词命中制造 PASS。')
+
+_hard('verbatim_missing', '剧情必需的字面例外原样出现了', 'R-7.3',
       repair='UNIQUE', quote=True,
-      directive='这几句要求一个字都不能改，成稿里没有。原样放回本章合适的位置。',
+      directive='这些密码、口令、谜面或识别符号的字面是剧情必要条件，成稿里没有原样出现。按下发场景原样写回，标点和数字也不得改变。',
       note='目标是上游**逐字钉死**的句子，只能原样放回去或不放。'
            '旧语料 **0/31，177 条逐字要求全部落地**（那批语料已删）。'
            '⚠⚠ **别把这句读成「这条一向可信」——它有过一段假绿。**'
@@ -125,15 +130,13 @@ _hard('verbatim_missing', '【原样写入】的句子逐字出现了', 'R-7.3',
            '⇒ 现在分母（下发了多少条材料）无条件打在 `scanned` 那一行上，'
            '**分母为零落 `unver` 不落 `pass`**；根因那一条是 stage4 的 `ctx_hinge_delivered`。')
 
-_info('verbatim_typo', '【原样写入】没有被改字', 'R-7.3', quote=True,
-      note='与上一条同一次扫描的另一支：等长窗口最小汉明距 ≤2 ⇒ 判「改了一两个字」'
-           '而不是「漏写」。实测那多半是**纠正原文的错别字**，与漏写是两件事。'
-           '⚠ `actionable=False` 是有意的：它不是问题，没有要写手改的东西')
+_info('verbatim_typo', '剧情字面例外的近似匹配诊断', 'R-7.3', quote=True,
+      note='等长窗口最小汉明距 ≤2 时保留改字诊断；它不能证明密码或识别序列等价。'
+           '未精确出现仍同时产生 verbatim_missing HARD，由该 HARD 提供修复反馈。')
 
-_info('verbatim_split', '【原样写入】即便被提示语切开也逐字出现了', 'R-7.3b', quote=True,
-      note='**放行也要留痕**：`「…，」我说，「…」` 是中文小说的标准写法，算满足；'
-           '但「一个字都没动」与「切成两截后逐字出现」不是同一件事，不能都走 `[OK]`。'
-           '判定在 `core.text.split_by_speech_tag`（两侧各 ≥4 内容字、提示语 ≤12 内容字）')
+_info('verbatim_split', '剧情字面例外被提示语切开的诊断', 'R-7.3b', quote=True,
+      note='core.text.split_by_speech_tag 仅提供定位线索，不豁免字面义务；'
+           '未精确出现仍保留 verbatim_missing HARD。普通对白不进入这条检查。')
 
 _hard('keep_value_missing', '【数值不得改动】的数字都在', 'R-7.4',
       repair='UNIQUE', quote=True,

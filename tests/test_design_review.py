@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from contracts.invariants import (
     APPROVAL_GATES, APPROVAL_SEEN, BLIND_ALIAS_ALGORITHM,
-    DESIGN_REVIEW_CONTRACT, FROZEN_V6_DESIGN_REVIEW_CONTRACT,
+    DESIGN_REVIEW_CONTRACT,
 )
 from contracts.schema.api import (
     ApprovalDoc, DesignChapterSubject, DesignConstraintOperations, DesignPreflightFailure,
@@ -74,7 +74,6 @@ def _subjects(
     repair_capability: dict | None = None,
     preflight: DesignPreflightSummary | None = 'default',
     review_contract: str = DESIGN_REVIEW_CONTRACT,
-    legacy_frozen_v6: bool = False,
 ) -> approvals._DesignSubjects:
     strategy = DesignStrategySubject(
         basis={
@@ -154,7 +153,6 @@ def _subjects(
         }],
     }
     return approvals._DesignSubjects(
-        legacy_frozen_v6=legacy_frozen_v6,
         candidate_sha256='c' * 64,
         aggregate_subject_sha256=approvals._decision_sha256({
             'strategy': strategy_sha, 'chapter': chapter_sha,
@@ -170,27 +168,6 @@ def _subjects(
         strategy_epoch_sha256=strategy_epoch,
         chapters=[subject],
         chapter_subject_sha256={1: chapter_sha},
-    )
-
-
-def _frozen_subjects() -> approvals._DesignSubjects:
-    """frozen v6 只有零 wire 章替换能力，不伪造 agent lane。"""
-    return _subjects(
-        review_contract=FROZEN_V6_DESIGN_REVIEW_CONTRACT,
-        legacy_frozen_v6=True,
-        preflight=None,
-        repair_capability={
-            'agent_repairable': False,
-            'agent_reason_code': 'legacy_frozen_v6_human_edit_only',
-            'full_chapter_editable': True,
-            'full_chapter_edit_reason_code': 'current_typed_decision',
-            'chapters': [{
-                'output_ordinal': 1,
-                'committed_rounds': 2,
-                'agent_repair_available': False,
-                'full_chapter_edit_available': True,
-            }],
-        },
     )
 
 
@@ -484,10 +461,15 @@ def test_same_design_business_subject_rebinds_only_the_exact_payload_after_proof
         approvals.approve_design(base, SID, changed)
     assert len(state['record'].design_history) == 2
 
-def test_v3_split_capability_decision_decodes_but_is_expired_under_v4(isolated):
+def test_v3_split_capability_decision_decodes_but_is_expired_under_current(isolated, monkeypatch):
     base, state = isolated
     state['subjects'] = _subjects(review_contract='stage4-design-review-v3')
-    approvals.approve_design(base, SID, _accept_all(_template(base)))
+    # 只合成旧版审计记录；现役 HTTP 模型不再允许旧契约占据 current 格。
+    with monkeypatch.context() as legacy_writer:
+        legacy_writer.setattr(
+            approvals, '_write',
+            lambda _base, record: state.__setitem__('record', record))
+        approvals.approve_design(base, SID, _accept_all(_template(base)))
     assert state['record'].design_decision is not None
 
     state['subjects'] = _subjects()
@@ -576,121 +558,15 @@ def test_current_b_replan_allows_one_non_accept_design_resolution_only(
     decided = approvals.approve_design(base, SID, resolution)
     assert decided.design_review.state == 'repair_requested'
     assert len(state['record'].design_history) == 3
+    current_subject = state['subjects'].chapters[0]
+    assert approvals._accepted_design_chapter_source(
+        state['record'], current_subject,
+        state['subjects'].chapter_subject_sha256[1]) is None
 
     # resolution 落下后，同一 A 主体重新回到 exact-replay-only。
     replayed = approvals.approve_design(base, SID, resolution)
     assert replayed == decided
     assert len(state['record'].design_history) == 3
-
-
-def test_frozen_v6_raw_all_accept_is_suspended_without_any_action_token(
-    isolated,
-) -> None:
-    base, state = isolated
-    state['subjects'] = _frozen_subjects()
-    template = _template(base)
-
-    replan = _compact_request(template.model_copy(update={
-        'strategy': template.strategy.model_copy(update={
-            'placeholder': False,
-            'template_token': None,
-            'decision': 'request_replan',
-            'reason': '尝试重规划冻结书',
-            'source_decision_sha256': None,
-        }),
-        'chapters': [row.model_copy(update={
-            'placeholder': False,
-            'template_token': None,
-            'decision': 'request_repair',
-            'reason': '即使各章另有真实修订，冻结策略也不得付费重规划',
-            'constraints': [DesignRepairConstraint(
-                code='scene_goal', scene_refs=['c01s01'],
-                opaque_aliases=[FACT])],
-            'source_decision_sha256': None,
-        }) for row in template.chapters],
-    }))
-    with pytest.raises(HumanEditProtected, match='不开放付费 strategy replan'):
-        approvals.approve_design(base, SID, replan)
-    assert state['record'].design_decision is None
-
-    doc = approvals.approve_design(base, SID, _accept_all(template))
-
-    assert state['record'].design_decision is not None, 'raw typed 决定必须落盘'
-    assert len(state['record'].design_history) == 1
-    assert doc.design_review.state == 'suspended'
-    assert doc.design_review.current_decision is not None
-    assert doc.design_review.action_review_token is None
-    assert doc.spawns.get('s4', []) == []
-    assert approvals.design_review_is_current(base, SID) is False
-    with pytest.raises(ApprovalRequired, match='state=suspended'):
-        approvals.authorize_plan(base, SID)
-
-    workpack = approvals.design_workpack(base, SID)
-    assert workpack.disposition == 'suspended'
-    assert workpack.current_decision_sha256 \
-        == doc.design_review.current_decision.decision_sha256
-    assert all(
-        item.review_token is None
-        for group in workpack.groups for item in group.items
-    ), 'raw all-accept 不得签发 s4er1 完整章替换票'
-
-
-def test_frozen_v6_real_repair_still_mints_only_zero_wire_edit_token(
-    isolated,
-) -> None:
-    base, state = isolated
-    state['subjects'] = _frozen_subjects()
-    template = _template(base)
-    request = _compact_request(template.model_copy(update={
-        'strategy': template.strategy.model_copy(update={
-            'placeholder': False,
-            'template_token': None,
-            'decision': 'accept',
-            'reason': '整书策略可保留，仅修当前章',
-            'replan_constraints': [],
-            'source_decision_sha256': None,
-        }),
-        'chapters': [template.chapters[0].model_copy(update={
-            'placeholder': False,
-            'template_token': None,
-            'decision': 'request_repair',
-            'reason': '当前场景目标与事实锚点不一致',
-            'constraints': [DesignRepairConstraint(
-                code='scene_goal', scene_refs=['c01s01'],
-                opaque_aliases=[FACT])],
-            'source_decision_sha256': None,
-        })],
-    }))
-
-    doc = approvals.approve_design(base, SID, request)
-
-    assert doc.design_review.state == 'repair_requested'
-    assert doc.design_review.current_decision is not None
-    assert doc.design_review.action_review_token is None
-    assert doc.spawns.get('s4', []) == []
-    workpack = approvals.design_workpack(base, SID)
-    repair_item = next(
-        item for item in workpack.groups[0].items
-        if item.code == 'design_repair_requested:ch1')
-    assert repair_item.review_token is not None
-    assert repair_item.review_token.startswith('s4er1_')
-
-    chapter = template.chapters[0].subject.chapter.model_dump(mode='json')
-    for scene in chapter['scenes']:
-        scene.pop('candidate_scene_id')
-    edit = BlindChapterEditRequest.model_validate({
-        'actor': 'human:reviewer',
-        'reason': '按 typed constraint 提交完整章响应',
-        'review_token': repair_item.review_token,
-        'output_ordinal': 1,
-        'chapter': chapter,
-    })
-    authorization = approvals.resolve_design_edit_action(base, SID, edit)
-    assert authorization.review_token == repair_item.review_token
-    with pytest.raises(HumanEditProtected, match='只开放零 wire 完整章替换'):
-        approvals.resolve_design_action(
-            base, SID, doc.design_review.action_review_token,
-            expected='repair')
 
 
 def test_design_template_cannot_be_applied_while_placeholders_remain(isolated):
@@ -1073,28 +949,6 @@ def test_constraint_refs_must_belong_to_the_reviewed_chapter(isolated):
     }))
     with pytest.raises(HumanEditProtected, match='constraint 越界'):
         approvals.approve_design(base, SID, request)
-
-
-def test_explicit_v5_to_v6_migration_never_fabricates_design_history(
-        monkeypatch, tmp_path):
-    payload = approvals._fresh_record(SID).model_dump(
-        mode='json',
-        exclude={'design_history', 'design_decision',
-                 'closure_history', 'closure_decision', 'seen_subjects',
-            'stage2_review_history', 'stage2_reviews',
-            'stage2_rework_completed', 'stage2_patch_receipts', 'stage2_blueprint_scope'})
-    payload['v'] = 5
-    legacy = approvals._ApprovalRecordV5Legacy.model_validate(payload)
-    book = tmp_path / f'legacy_{SID}'
-    book.mkdir()
-    monkeypatch.setattr(
-        approvals.paths, 'resolve_novel_dir', lambda _base, _sid: book)
-
-    migrated, backfilled = approvals._migrate_legacy_v5(tmp_path, SID, legacy)
-
-    assert migrated.v == 7 and backfilled == []
-    assert migrated.design_history == [] and migrated.design_decision is None
-    assert not migrated.writing
 
 
 def test_design_http_routes_keep_template_read_only_and_apply_typed(

@@ -28,22 +28,7 @@ _GATES = 2
 
 
 def _chapter(ordinal: int, text: str, root_fp: str, root_sha1: str) -> Chapter:
-    return Chapter.model_validate({
-        'output_ordinal': ordinal,
-        'from_source_ordinals': [ordinal],
-        'source_chars': 100, 'budget_chars': 90,
-        'chars': len(text), 'overlap_excl_verbatim': 0.01,
-        'segments': [{'slot': 's01', 'text': text}],
-        'warns': [],
-        '_provenance': {
-            'code': 'test-trim-batch', 'root_clean_sha1': root_sha1,
-            'inputs': {'stage0/clean_text.txt': {
-                'file': root_fp, 'consumed': None}},
-            'origin': 'human',
-            'round': 1, 'prompts': {'SYS': 'a' * 10}, 'model': 'test-model',
-            'adopted_models': ['test-model'],
-        },
-    })
+    return Chapter.model_validate({'output_ordinal': ordinal, 'segments': [{'slot': 's01', 'text': text}], '_provenance': {'code': 'test-trim-batch', 'root_clean_sha1': root_sha1, 'inputs': {'stage0/clean_text.txt': {'file': root_fp, 'consumed': None}}, 'origin': 'human', 'round': 1, 'prompts': {'SYS': 'a' * 10}, 'model': 'test-model', 'adopted_models': ['test-model']}})
 
 
 @pytest.fixture
@@ -82,10 +67,7 @@ def rig(tmp_path):
             chapter.text.encode('utf-8')).hexdigest()
     for ordinal in sha_by_ordinal:
         from contracts.schema.evaluation import TrimAudit
-        audit = TrimAudit(
-            output_ordinal=ordinal,
-            before_sha256=sha_by_ordinal[ordinal],
-            reason='超上限，零调用落 identity audit')
+        audit = TrimAudit(before_sha256=sha_by_ordinal[ordinal], reason='超上限，零调用落 identity audit')
         store.write(f'stage5/trim_audit_ch{ordinal:02d}.json', audit)
         audit_sha[ordinal] = store.read_with_sha256(
             TrimAudit, f'stage5/trim_audit_ch{ordinal:02d}.json')[1]
@@ -394,17 +376,7 @@ def test_readable_corrupt_resolution_refuses_batch_before_any_write(
     elif corruption == 'wrong-ordinal':
         output_ordinal = 1
         chapter_rel = 'stage5/ch01.json'
-    resolution = TrimResolution.model_validate({
-        'output_ordinal': output_ordinal,
-        'action': 'retain_pretrim',
-        'actor': 'foreign-commander',
-        'reason': '盘外可读但身份损坏的回执',
-        'audit_sha256': audit_sha[2],
-        'before_sha256': sha_by_ordinal[2],
-        'chapter_rel': chapter_rel,
-        'chapter_sha256': chapter_sha256,
-        '_provenance': provenance,
-    })
+    resolution = TrimResolution.model_validate({'output_ordinal': output_ordinal, 'action': 'retain_pretrim', 'actor': 'foreign-commander', 'reason': '盘外可读但身份损坏的回执', 'audit_sha256': audit_sha[2], '_provenance': provenance})
     rel = trim_resolution.resolution_rel(2)
     from contracts.schema import encode_artifact
     payload = resolution.model_dump(by_alias=True, exclude_none=True)
@@ -440,10 +412,10 @@ def test_batch_requires_the_full_current_unresolved_frontier(rig):
         for ordinal in (1, 2))
 
 
-@pytest.mark.parametrize('foreign_kind', ['malformed', 'wrong-ordinal'])
+@pytest.mark.parametrize('foreign_kind', ['malformed', 'orphan-chapter'])
 def test_partial_batch_rejects_foreign_or_unreadable_physical_audit_before_suffix(
         rig, foreign_kind):
-    """matching glob 下的坏/错章 audit 不得从 strict frontier 静默消失。"""
+    """matching glob 下的坏/孤立 audit 不得从 strict frontier 静默消失。"""
     ctx, store, sha_by_ordinal, audit_sha = rig
     request = _request(sha_by_ordinal, audit_sha)
     first_reason = request.items[0].reason.strip() or request.reason
@@ -469,9 +441,7 @@ def test_new_audit_can_write_a_new_round_over_a_stale_old_resolution(rig):
     rel = trim_resolution.resolution_rel(1)
     round_before = store.next_round(rel)
     from contracts.schema.evaluation import TrimAudit, TrimResolution
-    new_audit = TrimAudit(
-        output_ordinal=1, before_sha256=sha_by_ordinal[1],
-        reason='同一正文按新一轮审计重新登记超限事实')
+    new_audit = TrimAudit(before_sha256=sha_by_ordinal[1], reason='同一正文按新一轮审计重新登记超限事实')
     audit_rel = 'stage5/trim_audit_ch01.json'
     store.write_round(audit_rel, new_audit)
     new_audit_sha = store.read_with_sha256(TrimAudit, audit_rel)[1]
@@ -550,30 +520,14 @@ def test_each_suffix_write_revalidates_frontier_after_landed_prefix(
         if drift == 'chapter':
             chapter, _ = store.read_own(Chapter, 'stage5/ch02.json')
             changed_text = chapter.text + '盘外新增一句。'
-            changed = Chapter.model_validate({
-                **chapter.model_dump(by_alias=True, exclude={'segments', 'chars'}),
-                'chars': len(changed_text),
-                'segments': [{'slot': 's01', 'text': changed_text}],
-            })
+            changed = Chapter.model_validate({**chapter.model_dump(by_alias=True, exclude={'segments', 'chars'}), 'segments': [{'slot': 's01', 'text': changed_text}]})
             write_artifact_bytes('stage5/ch02.json', changed)
         elif drift == 'audit':
             from contracts.schema.evaluation import TrimAudit
-            original_write_round(current_store, 'stage5/trim_audit_ch02.json',
-                                 TrimAudit(
-                                     output_ordinal=2,
-                                     before_sha256=sha_by_ordinal[2],
-                                     reason='首章落后出现一份新 current audit'))
+            original_write_round(current_store, 'stage5/trim_audit_ch02.json', TrimAudit(before_sha256=sha_by_ordinal[2], reason='首章落后出现一份新 current audit'))
         else:
             from contracts.schema.evaluation import TrimResolution
-            foreign = TrimResolution(
-                output_ordinal=2, action='retain_pretrim',
-                actor='foreign-commander', reason='盘外另一份人工决定',
-                audit_sha256=audit_sha[2],
-                before_sha256=sha_by_ordinal[2],
-                chapter_rel='stage5/ch02.json',
-                chapter_sha256=sha_by_ordinal[2],
-                _provenance=ctx.free_provenance(),
-            )
+            foreign = TrimResolution(output_ordinal=2, action='retain_pretrim', actor='foreign-commander', reason='盘外另一份人工决定', audit_sha256=audit_sha[2], _provenance=ctx.free_provenance())
             write_artifact_bytes(second_rel, foreign)
             foreign_raw = store.path(second_rel).read_bytes()
         return result
@@ -615,17 +569,7 @@ def test_each_loop_index_requires_the_already_processed_prefix(
         if drift == 'delete':
             store.path(first_rel).unlink()
         else:
-            stale = TrimResolution(
-                output_ordinal=1,
-                action='retain_pretrim',
-                actor=request.actor,
-                reason=request.reason,
-                audit_sha256='9' * 64,
-                before_sha256=sha_by_ordinal[1],
-                chapter_rel='stage5/ch01.json',
-                chapter_sha256=sha_by_ordinal[1],
-                _provenance=ctx.free_provenance(),
-            )
+            stale = TrimResolution(output_ordinal=1, action='retain_pretrim', actor=request.actor, reason=request.reason, audit_sha256='9' * 64, _provenance=ctx.free_provenance())
             store.write(first_rel, stale)
             stale_raw = store.path(first_rel).read_bytes()
         return result
@@ -662,17 +606,7 @@ def test_batch_revalidates_full_resolution_frontier_after_the_last_write(
         if drift == 'delete-prefix':
             store.path(first_rel).unlink()
         else:
-            foreign = TrimResolution(
-                output_ordinal=2,
-                action='retain_pretrim',
-                actor='foreign-commander',
-                reason='末笔后盘外覆盖的人审决定',
-                audit_sha256=audit_sha[2],
-                before_sha256=sha_by_ordinal[2],
-                chapter_rel='stage5/ch02.json',
-                chapter_sha256=sha_by_ordinal[2],
-                _provenance=ctx.free_provenance(),
-            )
+            foreign = TrimResolution(output_ordinal=2, action='retain_pretrim', actor='foreign-commander', reason='末笔后盘外覆盖的人审决定', audit_sha256=audit_sha[2], _provenance=ctx.free_provenance())
             store.write(second_rel, foreign)
             foreign_raw = store.path(second_rel).read_bytes()
         return result

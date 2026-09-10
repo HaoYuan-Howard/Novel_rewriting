@@ -21,15 +21,21 @@
     },
     {
       "id": "rejected_archive",
-      "path": "scenarios/rejected_revision_v1.json",
-      "sha256": "cb05666466f4ca47600a4722a7c9992dd27e0514a13fbcb396516d529cd5c966",
-      "reason": "固定两次退化候选的 rejected 载体及其独立轮次归档路径。"
+      "path": "scenarios/rejected_revision_v2.json",
+      "sha256": "7fe5330da7c2cc132a7fbcbf5ac835d674fdc1e95f8a66b1e6315c4b8dca83d2",
+      "reason": "以当前 RejectedAttempt 与 producer 的候选选择函数构造合成 v2，验证槽位保存及独立轮次归档；不作为真实模型或质量证据。"
     },
     {
       "id": "retry_branch",
       "path": "scenarios/retry_429_503_ok.json",
       "sha256": "e07d7addd1806f60985c0825ad05edd1788275868ddfcf0399b101a93d168a35",
       "reason": "固定 429→503→成功的传输重试、指数退避与调用次数。"
+    },
+    {
+      "id": "retired_rejected",
+      "path": "scenarios/rejected_revision_v1.json",
+      "sha256": "cb05666466f4ca47600a4722a7c9992dd27e0514a13fbcb396516d529cd5c966",
+      "reason": "保留原 v1 字节作为正式与轮次路径均拒绝迁移的反例。"
     }
   ]
 }

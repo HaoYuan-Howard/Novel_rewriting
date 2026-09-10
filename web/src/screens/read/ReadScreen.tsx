@@ -72,7 +72,9 @@ export function ReadScreen() {
                 onOpenChapter={(chapter) => nav('/n/' + vm.sid + '/read/' + chapter)}
               />
               <BlueprintReviewConfirmation review={vm.blueprintReview} ordinal={vm.ordinal} />
-              <Stage2NodeReviewPanel sid={vm.sid} node="stage2.blueprint" token={vm.reviewWorkpack.data?.review_token ?? null} />
+              <Stage2NodeReviewPanel sid={vm.sid} node="stage2.blueprint" token={vm.reviewWorkpack.data?.review_token ?? null}
+                coverage={vm.reviewWorkpack.data?.review_coverage}
+                knowledge={vm.reviewWorkpack.data?.knowledge_links} />
               <div className="flex flex-wrap items-center gap-10">
                 <span
                   className="rounded-chip px-10 py-3 text-body font-semibold"
@@ -442,7 +444,19 @@ function Beat({ b, onClick }: { b: BeatView; onClick: () => void }) {
       {b.hinges.map((h, i) => (
         <div key={i} className="rounded-r-btn border-l-3 border-l-hinge bg-hinge-bg px-12 py-8">
           <div className="text-micro text-hook-ink">必须保真的点 · {h.kind}</div>
-          <div className="prose-cn text-sm2 text-ink-2">{h.text}</div>
+          <div className="prose-cn text-sm2 text-ink-2">证据：{h.text}</div>
+          <div className="text-tag text-ink-4">关联事实：{h.source_fact_refs.join('、')}</div>
+          {h.dialogue ? (
+            <div className="prose-cn text-sm2 text-ink-2">
+              <div>说话者：{h.dialogue.speaker === null ? '未知' : h.dialogue.speaker.kind === 'character'
+                ? h.dialogue.speaker.char_id : h.dialogue.speaker.label}</div>
+              <div>对象：{h.dialogue.addressees === null ? '未知' : h.dialogue.addressees.map((party) =>
+                party.kind === 'character' ? party.char_id : party.label).join('、') || '无特定对象'}</div>
+              <div>对白语义：{h.dialogue.meaning}；话语作用：{h.dialogue.speech_act}</div>
+              <div className="text-tag text-ink-4">写手只读语义与必保事实，可以换措辞。</div>
+            </div>
+          ) : null}
+          {h.literal ? <div className="prose-cn text-sm2">字面必要性：{h.literal.reason}</div> : null}
         </div>
       ))}
 

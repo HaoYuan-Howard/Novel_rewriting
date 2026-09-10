@@ -220,16 +220,6 @@ def _parser() -> argparse.ArgumentParser:
     admission_recovery.add_argument(
         '--beacon-repair-tail', action='store_true',
         help='查看/恢复 agent_progress.jsonl 的 non-LF 坏尾（0 成本、hash-bound）')
-    admission_recovery.add_argument(
-        '--stage2-review-no-wire-session-run-id', type=_run_id_arg,
-        help='查看/隔离旧 admission/epoch bug 造成的 Stage2 预审 0-wire 假预算行')
-    admission_recovery.add_argument(
-        '--stage2-review-reopen', action='store_true',
-        help='查看/归档一本书的 Stage2 Commander 席位账（旧 v1 或已证明契约失效的终态 v2）并开 v2 空账；'
-             '查看模式列出全部账，apply 须给 --actor/--reason/--subject-sha256')
-    rc.add_argument(
-        '--stage2-review-sid',
-        help='Stage2 review no-wire 恢复必填：目标书 sid')
     rc.add_argument('--actor', help='admission apply 必填：执行恢复的人/agent')
     rc.add_argument('--reason', help='admission apply 必填：为何确认可收口')
     rc.add_argument(
@@ -263,7 +253,7 @@ def _parser() -> argparse.ArgumentParser:
     approval_show.add_argument('--base', required=True)
 
     approval_backfill = approval_sub.add_parser(
-        'backfill', help='显式保守迁移旧审批记录；普通 GET 永不静默迁移')
+        'backfill', help='按当前正式盘面补录可证明的检查单；旧审批版本不迁移')
     approval_backfill.add_argument('sid')
     approval_backfill.add_argument('--base', required=True)
 
@@ -461,7 +451,7 @@ def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
         from novel.node_agents import build_node_agent
 
         kwargs: dict[str, object] = {}
-        if node in {'stage2.global', 'stage2.blueprint'}:
+        if node in {'stage2.characters', 'stage2.global', 'stage2.blueprint'}:
             review_token = _valued(flags, '--review-token')
             if review_token is not None:
                 kwargs['review_token'] = review_token
@@ -475,11 +465,11 @@ def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
             # 与 jobs prepare 和 legacy dispatch 使用同一边界。
             from novel.orchestrator import approvals
             approvals.authorize_plan(ctx.novel_dir.parent, ctx.sid)
-        if node in {'stage2.blueprint', 'stage4.design', 'stage5.write'}:
+        if node in {'stage2.blueprint', 'stage4.design', 'stage4.plan', 'stage5.write'}:
             # 逐章 agent pool 必须消费与 legacy LLM 客户端同一份并发配置；
             # 各节点仍可在自己的 pool 内再施加更低的稳定性上限。
             from novel.config import load_config
-            kwargs['concurrency'] = load_config().concurrency
+            kwargs['concurrency'] = load_config().concurrency_for(node)
         if node == 'stage4.design':
             design_tokens = N.flag_tokens(flags)
             if not design_tokens:
@@ -585,7 +575,8 @@ def _llm_client(ctx: RunContext):
         effort=NODES[ctx.node].effort,
         max_retries=cfg.max_retries,
         backoff_base=cfg.backoff_base,
-        concurrency=cfg.concurrency,
+        concurrency=cfg.concurrency_for(ctx.node),
+        concurrency_policy=cfg.concurrency_policy,
     )
 
 
@@ -858,7 +849,7 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
 
 def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     from novel.store import ArtifactStore
-    """stage2 的九条路。**一个 stage 两个节点**（全书 / 逐章，两个都付费）。
+    """Stage2 人物、必要知识与逐章 Blueprint 的生成、编辑和免费恢复。
 
     ⚠ 派发按 **stage** 分而节点由 `ctx.node` 带着 ⇒ **先按节点分岔**（形态同 stage4/stage7）。
     全书与逐章两条付费生成路径均已接入；其余 flag 是各自的 0 成本操作。
@@ -868,12 +859,57 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     tokens = set(N.flag_tokens(flags))
 
     if ctx.node == 'stage2.blueprint' and '--close-review' in tokens:
-        from novel.orchestrator.approvals import close_stage2_accepted
-        close_stage2_accepted(ctx.novel_dir.parent, ctx.sid)
-        print('  ✓ 已核验两份当前 Commander 接受并补齐 Stage2 审批链（0 模型）')
+        from novel.stages.stage2.knowledge_links import run_close_review
+        run_close_review(ctx)
+        print('  ✓ 已按保存的 Commander 决定物化知识关联并补齐 Stage2 审批链（0 模型）')
+        return X.OK
+
+    if ctx.node == 'stage2.global' and '--close-review' in tokens:
+        from novel.orchestrator.approvals import close_stage2_inherited
+        close_stage2_inherited(ctx.novel_dir.parent, ctx.sid, node=ctx.node)
+        print('  ✓ 已核验并继承全部 Global 审阅义务（0 模型）')
+        return X.OK
+
+    if ctx.node == 'stage2.characters':
+        from contracts.artifacts import STAGE2_CHARACTERS_EDIT
+        from contracts.schema import encode_artifact
+        from contracts.schema.characters import CharactersEdit
+        from novel.stages.stage2 import characters
+        from novel.store import ArtifactStore
+        if '--dry-run' in tokens:
+            print(characters.SYSTEM)
+            print(characters.prepare(ctx).user)
+            return X.OK
+        if '--emit-edit-template' in tokens:
+            print(json.dumps(encode_artifact(
+                STAGE2_CHARACTERS_EDIT, characters.edit_template(ctx)),
+                ensure_ascii=False, indent=2))
+            return X.OK
+        if '--apply-edit' in tokens:
+            source = paths.characters_edit_input(ctx.novel_dir, _valued(flags, '--apply-edit'))
+            store = ArtifactStore(ctx)
+            edit = store.read_external(CharactersEdit, STAGE2_CHARACTERS_EDIT, source)
+            characters.apply_edit(ctx, edit, actor=_valued(flags, '--actor') or '',
+                                  reason=_valued(flags, '--reason') or '')
+            print('  ✓ 人物登记已按 typed 编辑落盘；仍需 Global Commander 复核')
+            return X.OK
+        if '--revalidate' in tokens:
+            passed, report = characters.revalidate(
+                ctx, actor=_valued(flags, '--actor') or '', reason=_valued(flags, '--reason') or '')
+            print(render(report))
+            return X.OK if passed else X.CHECK_FAILED
+        if '--resample' in tokens:
+            characters.run_resample(ctx, _llm_client(ctx))
+        else:
+            characters.run_legacy(ctx, _llm_client(ctx), review_token=_valued(flags, '--review-token'))
+        print('  ✓ 静态人物登记已落盘；仍需 Global Commander 复核')
         return X.OK
 
     if ctx.node == 'stage2.global':
+        if '--refresh-review' in tokens:
+            review = extract.run_refresh_review(ctx)
+            print(f'已免费刷新知识与人物审阅，共 {len(review.items)} 项；变更主体继续待审。')
+            return X.OK
         if '--emit-edit-correction-workpack' in tokens:
             print(extract.global_edit_correction_workpack_json(ctx))
             return X.OK
@@ -944,10 +980,6 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         if '--resample' in tokens:
             extract.run_resample(ctx, _llm_client(ctx))
             print('  ✓ stage2 全书事实底座已绕过问题缓存重新采样并落盘')
-            return X.OK
-        if '--purge-role' in tokens:
-            extract.run_purge_role(ctx, _llm_client(ctx))
-            print('  ✓ stage2 role/fate 已重划并落盘')
             return X.OK
         extract.run_global(ctx, _llm_client(ctx), review_token=_valued(flags, '--review-token'))
         print('  ✓ stage2 全书事实底座已落盘')
@@ -1071,6 +1103,12 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
 
     tokens = set(N.flag_tokens(flags))
 
+    if ctx.node in {'stage4.design', 'stage4.plan'} and '--close-review' in tokens:
+        from novel.orchestrator import approvals
+        approvals.close_stage4_review(ctx.novel_dir.parent, ctx.sid, node=ctx.node)
+        print('  ✓ 当前审阅义务已由有效历史决定完整覆盖（0 模型）')
+        return X.OK
+
     if ctx.node == 'stage4.context':
         from novel.orchestrator import approvals
         approvals.authorize_context(ctx.novel_dir.parent, ctx.sid)
@@ -1080,6 +1118,22 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     if ctx.node == 'stage4.design':
+        if '--recover-responses' in tokens:
+            from novel.stages.stage4 import design_response_recovery
+            count = design_response_recovery.recover(ctx)
+            print(f'  ✓ 已按原身份补齐 {count} 个回答的 checkpoint（0 模型）；重新读取下一操作')
+            return X.OK
+        if '--recover-prepared' in tokens:
+            from novel.stages.stage4 import design_recovery
+            artifact = design_recovery.recover_prepared(
+                ctx, source_run_id=_valued(flags, '--recover-prepared') or '',
+                proof_sha256=_valued(flags, '--subject-sha256') or '')
+            print(f'  ✓ Stage4A 原聚合已免费补尾：{len(artifact.output_chapters)} 章；原成本账保持不变')
+            return X.OK
+        if '--reaggregate' in tokens:
+            artifact = plan.run_design_reaggregate(ctx)
+            print(f'  ✓ Stage4A 已按当前材料采用并聚合 {len(artifact.output_chapters)} 章（0 模型）')
+            return X.OK
         if '--recover-repair-aggregate' in tokens:
             artifact = plan.run_design_repair_aggregate_recovery(
                 ctx,
@@ -1109,22 +1163,11 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
                 f'  ✓ Stage4A 完整章 edit 已经同一 preview/HARD '
                 f'尺子落盘：{len(artifact.output_chapters)} 章（0 次调用）')
             return X.OK
-        if '--adopt-rejected' in tokens:
-            # 0 次调用：只消费隔离区里那份封存候选，走同一套四道闸重判。
-            artifact = plan.run_adopt_rejected(
-                ctx,
-                attempt_id=_valued(flags, '--adopt-rejected') or '',
-                actor=_valued(flags, '--actor') or '',
-                reason=_valued(flags, '--reason') or '')
-            print(f'  ✓ Stage4A 拒稿已按当前四道闸重判并采用：'
-                  f'{len(artifact.output_chapters)} 章（0 次调用）。'
-                  '下一步请先人工检查候选，再单独预览并批准 stage4.plan')
-            return X.OK
         if '--dry-run' in tokens:
             system, user = plan.build_design_prompt(ctx)
             print('── Stage4A 策略请求预览 ──\n'
                   '这里只展示第 1 条整书策略请求；策略通过后，程序才会按当前'
-                  '真相图确定性生成 N 条 local-alias 单章请求，并以最多 4 路并发执行。')
+                  '真相图确定性生成 N 条 local-alias 单章请求，按本次冻结并发配置执行（默认 4 路）。')
             print(f'── system（{len(system)} 字）──\n{system}')
             print(f'\n── user（{len(user)} 字；不含原文/源序/beat/材料）──\n{user}')
             return X.OK
@@ -1162,6 +1205,29 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         print(f'  ✓ Stage4A 盲结构候选{action}：{len(artifact.output_chapters)} 章。'
               '下一步请先人工检查候选，再单独预览并批准 stage4.plan')
         return X.OK
+
+    if '--recover-prepared' in tokens:
+        from novel.stages.stage4 import plan_recovery
+        outcome = plan_recovery.recover_prepared(
+            ctx, source_run_id=_valued(flags, '--recover-prepared') or '',
+            proof_sha256=_valued(flags, '--subject-sha256') or '')
+        from contracts.schema.stage4 import EvidenceBinding
+        if isinstance(outcome, EvidenceBinding):
+            print('  Stage4B 原聚合已免费补尾，保留 typed infeasible 结论')
+            return X.CHECK_FAILED
+        print('  ✓ Stage4B 原聚合已由新执行免费补尾，原成本账保持不变')
+        return _report_exit(outcome)
+
+    if '--reaggregate' in tokens:
+        from novel.orchestrator import approvals
+        approvals.authorize_plan(ctx.novel_dir.parent, ctx.sid)
+        outcome = plan.run_reaggregate(ctx)
+        from contracts.schema.stage4 import EvidenceBinding
+        if isinstance(outcome, EvidenceBinding):
+            print('  Stage4B 已落盘 typed infeasible 结论（0 次新模型调用）')
+            return X.CHECK_FAILED
+        print('  ✓ Stage4B 来源已复验，免费聚合及提交已完成')
+        return _report_exit(outcome)
 
     if '--check-only' in tokens:
         report = plan.run_check_only(ctx)
@@ -1905,8 +1971,7 @@ def _cmd_run(a: argparse.Namespace) -> int:
         global_review.require_global_accepted(ctx)
     elif stage2_review_required(a.node, paid=paid):
         if a.node == 'stage7.assemble':
-            # Stage7 的唯一 frozen-v6 兼容面必须与产地/下载共用同一判据；
-            # 这里不能先用通用 v7 闸把 exact 旧书挡死，也不能在 CLI 重拼证明。
+            # 与产地和下载共用当前 Stage2 判据，CLI 不另造兼容证明。
             from novel.stages.stage7.assemble import (
                 require_stage2_delivery_approved,
             )
@@ -2156,88 +2221,6 @@ def _cmd_jobs(a: argparse.Namespace) -> int:
 
 def _cmd_reconcile(a: argparse.Namespace) -> int:
     """编排控制面的 0 成本 typed 恢复；无子选项仍执行 R-11.11。"""
-    if a.stage2_review_reopen:
-        if a.stage2_review_sid is None:
-            raise TerminalState(
-                '--stage2-review-reopen 必须同时给 --stage2-review-sid')
-        from novel.orchestrator import stage2_review_ledger
-
-        shown = stage2_review_ledger.list_ledgers(a.base, a.stage2_review_sid)
-        supplied = (a.actor, a.reason, a.subject_sha256)
-        if not any(value is not None for value in supplied):
-            print(json.dumps({
-                'sid': a.stage2_review_sid,
-                'ledgers': shown,
-                'apply_requires': [
-                    '--actor', '--reason',
-                    '--subject-sha256 <目标账的 original_sha256>'],
-            }, ensure_ascii=False, indent=2))
-            return X.OK
-        if a.force:
-            raise TerminalState(
-                '--force 不适用于 Stage2 席位账归档；只能按 original_sha256 CAS 归档')
-        if any(value is None for value in supplied):
-            raise TerminalState(
-                'Stage2 席位账归档 apply 必须同时给 --actor / --reason / --subject-sha256')
-        archived = stage2_review_ledger.reopen_archive_by_sha(
-            a.base, a.stage2_review_sid,
-            original_sha256=a.subject_sha256,
-            actor=a.actor, reason=a.reason)
-        print(
-            '✓ Stage2 席位账已整体归档并开 v2 空账；'
-            f'archived_turns={len(archived.turns)}，'
-            f'original_schema_version={archived.original_schema_version}')
-        return X.OK
-    if a.stage2_review_no_wire_session_run_id is not None:
-        if a.stage2_review_sid is None:
-            raise TerminalState(
-                '--stage2-review-no-wire-session-run-id 必须同时给 '
-                '--stage2-review-sid')
-        from novel.orchestrator import stage2_review_ledger
-
-        current = stage2_review_ledger.inspect_no_wire_reconciliation(
-            a.base, a.stage2_review_sid,
-            session_run_id=a.stage2_review_no_wire_session_run_id)
-        supplied = (a.actor, a.reason, a.subject_sha256)
-        if not any(value is not None for value in supplied) and not a.force:
-            print(json.dumps({
-                'sid': current.sid,
-                'session_run_id': current.session_run_id,
-                'parent_run_id': current.parent_run_id,
-                'original_ordinal': current.original_ordinal,
-                'active_calls': current.active_calls,
-                'remaining_calls_after_apply': current.remaining_calls,
-                'already_reconciled': current.already_reconciled,
-                'original_ledger_sha256': current.original_ledger_sha256,
-                'run_log_sha256': current.run_log_sha256,
-                'agent_sessions_sha256': current.agent_sessions_sha256,
-                'cost_ledger_sha256': current.cost_ledger_sha256,
-                'subject_sha256': current.subject_sha256,
-                'apply_requires': ['--actor', '--reason', '--subject-sha256'],
-            }, ensure_ascii=False, indent=2))
-            return X.OK
-        if a.force:
-            raise TerminalState(
-                '--force 不适用于 Stage2 no-wire budget reconcile；'
-                '只能隔离完整负证据证明的已知旧假预留')
-        if any(value is None for value in supplied):
-            raise TerminalState(
-                'Stage2 no-wire reconcile apply 必须同时给 '
-                '--actor / --reason / --subject-sha256')
-        done = stage2_review_ledger.reconcile_no_wire_reservation(
-            a.base, a.stage2_review_sid,
-            session_run_id=a.stage2_review_no_wire_session_run_id,
-            actor=a.actor, reason=a.reason,
-            subject_sha256=a.subject_sha256)
-        print(
-            '✓ Stage2 0-wire 假预留已从有效预算面隔离；'
-            f'session={done.removed_turn.session_run_id}，'
-            '原始行与负证据 hash 已保留在 reconciliation 记录中')
-        return X.OK
-    if a.stage2_review_sid is not None:
-        raise TerminalState(
-            '--stage2-review-sid 只能与 '
-            '--stage2-review-no-wire-session-run-id 成组使用')
     if a.beacon_repair_tail:
         subject = beacon.tail_repair_subject(a.base)
         supplied = (a.actor, a.reason, a.subject_sha256)
@@ -2355,7 +2338,7 @@ def _cmd_reconcile(a: argparse.Namespace) -> int:
             '--actor/--reason/--subject-sha256/--force 只与 '
             '--admission-parent-run-id / --admission-repair-tail / '
             '--beacon-repair-tail / '
-            '--stage2-review-no-wire-session-run-id 之一成组使用')
+            '--beacon-repair-tail 之一成组使用')
     from novel.orchestrator import jobs as J
     changed = J.reconcile(a.base)
     print(f'改判了 {len(changed)} 个作业为「不知道」'
@@ -2751,8 +2734,7 @@ def _commander_control_mutation(a: argparse.Namespace) -> bool:
     admission_inspect = bool(
         a.admission_parent_run_id is not None
         or a.admission_repair_tail
-        or a.beacon_repair_tail
-        or a.stage2_review_no_wire_session_run_id is not None)
+        or a.beacon_repair_tail)
     supplied = any((a.actor, a.reason, a.subject_sha256, a.force))
     # admission/tail 无 typed apply 参数时只是只读主体模板；普通 jobs reconcile
     # 即使没有附加参数也会追加事件，所以仍是 mutation。
@@ -2781,6 +2763,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     a = _parser().parse_args(_normalize_operator_permit_argv(raw))
     from novel.errors import ArtifactSubmittedReviewPending
     try:
+        from novel.output_root import require_active
+        if getattr(a, 'base', None) is not None:
+            require_active(a.base)
         _refuse_commander_control_mutation(a)
         return _CMDS[a.cmd](a)
     except ArtifactSubmittedReviewPending as e:

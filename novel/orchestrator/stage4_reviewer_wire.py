@@ -273,6 +273,9 @@ def _payload_model(option: Mapping[str, Any], digest: str) -> type[StrictModel]:
                 str(row['output_ordinal']) for row in rows}:
             raise Stage4ReviewerWireError('Stage4 引用闭集必须完整绑定当前章集')
     for row in rows:
+        if row.get('source_decision_sha256'):
+            # 继承是后端已冻结的凭据，不是本轮模型的开放裁决项。
+            continue
         ordinal = row['output_ordinal']
         fields = {
             'decision': _field(chapter_source, 'decision', _closed_enum(
@@ -300,6 +303,12 @@ def _payload_model(option: Mapping[str, Any], digest: str) -> type[StrictModel]:
         return create_model(
             f'Stage4ReviewerStructure_{digest}', __base__=StrictModel,
             reason=_field(StructureApprovalRequest, 'reason'), chapters=(chapters, ...),
+        )
+    if exact['action']['payload']['strategy'].get('source_decision_sha256'):
+        return create_model(
+            f'Stage4ReviewerDesign_{digest}', __base__=StrictModel,
+            general_reason=_field(DesignReviewRequest, 'general_reason'),
+            chapters=(chapters, ...),
         )
     replan = create_model(
         f'Stage4ReviewerReplan_{digest}', __base__=StrictModel,
@@ -367,12 +376,14 @@ def prompt_for(task: object, base_prompt: str) -> str:
 selection 必须完整选择一个合法 option，不得把 id 写到 JSON 末尾或复制完整 action。
 当前选项与绑定摘要：{json.dumps(choices, ensure_ascii=False, separators=(',', ':'))}
 
-design payload 只交 general_reason、strategy 和 chapters；strategy 交
+design payload 交 general_reason 和 chapters；只有策略待审时交 strategy，其中交
 decision/reason/replan_constraints，chapters 是按 output_ordinal 的十进制字符串
 固定键组成的 object，每章交 decision/reason/constraints；原生 schema 开放了
 constraint_operations 的章还必须逐项填写该 object。structure payload 只交
 reason 和同样固定键的 chapters，每章交 decision/reason。stop payload 只交 reason。
-全部章节键及全部字段都必须出现，空约束交 []，无 relation effect 交 null。不要回抄
+原生 schema 只开放待审章节键；带 source_decision_sha256 的历史接受由组装器完整继承，
+不要回抄或改写其章节及策略。开放的全部键和字段必须出现；待审章为空交 chapters: {{}}。
+空约束交 []，无 relation effect 交 null。不要回抄
 actor、reviewer_kind、review_run_id、review_token、output_ordinal 或 surface_seal；
 Supervisor 只从该 immutable option 注入这些身份，随后仍走现役 typed loader 和审批。
 未审模板里的占位决定不是历史裁决，空 constraints 也不表示已无历史义务；
@@ -437,10 +448,12 @@ def assemble(task: _ReviewerTaskLike, response_document: Mapping[str, Any] | str
         _constraint_operation_scopes(option, payload['chapters'])
         if action['surface'] == 'design' else {})
     for row in payload['chapters']:
+        if row.get('source_decision_sha256'):
+            continue
         ordinal = str(row['output_ordinal'])
         ruling = chapter_map[ordinal]
         if action['surface'] == 'design':
-            # 所有模型判断都从本次回答取；不继承 exact_request 的语义脚手架。
+            # 待审项的模型判断全部取本次回答；不能继承未审脚手架。
             row.pop('constraint_operations', None)
             operations = ruling.pop('constraint_operations', None)
             if operations is not None:

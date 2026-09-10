@@ -138,13 +138,13 @@ def test_final_approval_inbox_omits_already_current_actions():
         stage7_workpack=stage7_pack, workpacks_checked=True) == []
 
 
-def test_frozen_v6_design_suspension_does_not_publish_repeat_a_or_b_approval():
-    """缺 v7 validation authority 是永久兼容边界，不是新的 reviewer 待办。"""
+def test_unavailable_design_does_not_publish_a_or_b_approval():
+    """当前候选读不回来时，不发布虚假的 A/B 审批待办。"""
     from novel.views import inbox as I
 
     doc = SimpleNamespace(
         design_review=SimpleNamespace(
-            state='suspended', current_decision=SimpleNamespace()),
+            state='unavailable', current_decision=None),
         structure=SimpleNamespace(
             state='missing', current_decision=None),
     )
@@ -182,12 +182,12 @@ def test_structure_replan_inbox_publishes_typed_resolution_or_stop(monkeypatch):
     assert 'stop 也不授权执行' in rows[0].how
 
 
-def test_conflict_stage_coverage_inbox_points_to_typed_edit_not_paid_resample():
+def test_opening_scope_valid_inbox_points_to_typed_edit_not_paid_resample():
     from contracts.rules import REGISTRY
     from novel.report.builder import remediation_of
     from novel.views import inbox as I
 
-    rule = REGISTRY.get('conflict_stage_coverage')
+    rule = REGISTRY.get('opening_scope_valid')
     finding = SimpleNamespace(
         output_ordinal=None, wontfix=None, unresolved_rounds=0,
         owner='stage2', detail='冲突阶段缺章')
@@ -199,7 +199,7 @@ def test_conflict_stage_coverage_inbox_points_to_typed_edit_not_paid_resample():
 
     assert rule.fix is None and remediation_of(rule) == 'human'
     assert len(rows) == 1 and rows[0].kind == 'human_only'
-    assert '`conflict_stages_replace`' in rows[0].how
+    assert '`source_blurb_replace`' in rows[0].how
     assert ('`stage2.global --apply-edit stage2/global_edit.json`'
             in rows[0].how)
     assert '付费 `--resample` 只作最后手段' in rows[0].how
@@ -210,7 +210,7 @@ def test_missing_blueprint_projection_inbox_points_only_to_free_materialization(
     from novel.views import inbox as I
 
     grounding = SimpleNamespace(
-        rel='stage2/global_grounding.json', exists=True, readable=True,
+        rel='stage2/characters.json', exists=True, readable=True,
         freshness='fresh', invalid=False,
     )
     projection = SimpleNamespace(
@@ -224,36 +224,18 @@ def test_missing_blueprint_projection_inbox_points_only_to_free_materialization(
 
     assert len(rows) == 1 and rows[0].kind == 'repairable'
     assert rows[0].rule == 'blueprint_character_projection'
-    assert 'stage2.global --renormalize' in rows[0].how
-    assert '0 LLM' in rows[0].how and '不会重采付费 Global' in rows[0].how
+    assert 'stage2.characters --revalidate' in rows[0].how
+    assert '免费' in rows[0].how and '不会重采人物或知识' in rows[0].how
 
 
-def test_legacy_v6_blueprint_inbox_points_only_to_free_renormalize():
-    """旧来源账有独立 0-LLM 待办，不应建议付费重采 Blueprint。"""
+def test_old_blueprint_has_no_separate_migration_inbox():
+    """待办层不能恢复已退役的免费迁移入口。"""
     from novel.views import inbox as I
-
-    projection = SimpleNamespace(
-        rel='stage2/blueprint_character_projection.json', exists=True,
-        readable=True, freshness='fresh', invalid=False, reason='match',
-    )
-    blueprint = SimpleNamespace(
-        rel='stage2/chapter_blueprints.json', exists=True,
-        readable=True, freshness='unknown', invalid=False,
-        reason='legacy_blueprint_inputs',
-    )
-    ov = SimpleNamespace(stages=[SimpleNamespace(
-        stage='stage2', artifacts=[projection, blueprint])])
-
-    rows = I._stage2_legacy_blueprint_recovery_items(ov)
-
-    assert len(rows) == 1 and rows[0].kind == 'repairable'
-    assert rows[0].rule == 'chapter_blueprints_legacy_inputs'
-    assert 'stage2.blueprint --renormalize' in rows[0].how
-    assert '0 LLM' in rows[0].how and '不会重采付费 Blueprint' in rows[0].how
+    assert not hasattr(I, '_stage2_legacy_blueprint_recovery_items')
 
 
-def test_legacy_v6_live_invalid_suppresses_conflicting_generic_revalidate():
-    """同一 live INVALID 在 inbox 只能有一条恢复指令。"""
+def test_unknown_input_invalid_cannot_suppress_normal_validation_inbox():
+    """来源未知仍展示人工复验；是否可提升由 producer 判定。"""
     from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS
     from novel import paths
     from novel.views import inbox as I
@@ -266,12 +248,9 @@ def test_legacy_v6_live_invalid_suppresses_conflicting_generic_revalidate():
             return rel == invalid_rel
 
     generic = I._invalid_items(Store(), 'stage2')
-    suppressed = I._invalid_items(
-        Store(), 'stage2', suppress_legacy_blueprint=True)
-
     assert len(generic) == 1
     assert '--revalidate' in generic[0].how
-    assert suppressed == []
+    assert '--renormalize' not in generic[0].how
 
 
 def test_stage5_band_drift_is_one_book_task_with_chapter_details_preserved():
@@ -627,9 +606,7 @@ def test_an_over_length_trim_audit_is_a_verification_row(box):
     ordinal = next(iter(sorted(drafts)))
     draft = drafts[ordinal]
     before = hashlib.sha256(draft['text'].encode('utf-8')).hexdigest()
-    audit = TrimAudit(
-        output_ordinal=ordinal, before_sha256=before,
-        reason='超上限；本仓没有自动收缩路径，保留 pretrim，转 verification')
+    audit = TrimAudit(before_sha256=before, reason='超上限；本仓没有自动收缩路径，保留 pretrim，转 verification')
     store.write(artifact_rel('stage5.trim_audit', nn=ordinal), audit)
 
     rows = [row for row in inbox_view(str(box.root), box.sid).items

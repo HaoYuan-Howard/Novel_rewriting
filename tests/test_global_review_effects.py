@@ -16,6 +16,8 @@ test_global_review_effects.py —— Stage2 复核项的 blocking / disclosure �
 """
 from __future__ import annotations
 
+from novel.stages.stage2 import grounding as grounding_io
+
 import json
 import copy
 import shutil
@@ -132,7 +134,7 @@ def test_a_card_collects_every_item_of_the_same_subject():
     assert keys['canon.secrets.secret_01.knowledge_events.0'] == 'secret:secret_01'
     # 集合完整性各自成卡，不并进任何主体。
     assert keys['entities.characters'] == 'set:characters'
-    assert keys['arc.conflict_stages'] == 'arc'
+    assert keys['source_blurb.opening'] == 'source_blurb'
 
 
 def test_dependency_hash_reopens_only_the_changed_subject_card():
@@ -291,7 +293,7 @@ def test_a_new_main_text_identity_reopens_only_whole_book_review_decisions():
     whole_book = {
         'character_set_complete', 'relation_set_complete',
         'world_rule_set_complete', 'secret_set_complete',
-        'conflict_partition', 'arc_analysis',
+        'source_blurb_complete', 'source_blurb_fact', 'opening_scope',
     }
 
     assert all(item.state == 'pending' for item in refreshed.items
@@ -621,7 +623,7 @@ def test_the_workpack_follows_the_same_scope_rule():
     assert len(default['main_text_subject_sha256']) == 64
 
 
-def test_workpack_v4_preserves_items_and_includes_whole_book_text_once():
+def test_workpack_v5_preserves_items_and_includes_whole_book_text_once():
     book = _book_with_review()
     ctx = _ctx(book, 'stage2.global', paid=False)
     review = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
@@ -630,7 +632,7 @@ def test_workpack_v4_preserves_items_and_includes_whole_book_text_once():
     second = global_review.review_workpack(ctx, scope='all')
     assert first == second
     assert first['workpack_sha256'] == second['workpack_sha256']
-    assert first['kind'] == 'stage2-global-review-workpack-v4'
+    assert first['kind'] == 'stage2-global-review-workpack-v5'
     main = ArtifactStore(ctx).read(MainText, 'stage1/main_text.json')
     assert first['main_text_chapters'] == [
         {'chapter_ordinal': chapter.chapter_ordinal, 'text': chapter.text}
@@ -745,13 +747,12 @@ def test_quarantined_secret_is_removed_from_generation_but_retained_in_inbox():
         _seed(book)
         stage2_ctx = _ctx(book, 'stage2.global', paid=False)
         store = ArtifactStore(stage2_ctx)
-        grounding = store.read_own(
-            GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+        grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING)[0]
         payload = grounding.model_dump(mode='json', by_alias=True)
         payload['entities']['relations'][0]['visibility'] = {
             'kind': 'via_secret', 'secret_id': 'secret_01'}
         grounding = GlobalGrounding.model_validate(payload)
-        store.write(STAGE2_GLOBAL_GROUNDING, grounding)
+        store.write(STAGE2_GLOBAL_GROUNDING, grounding_io.for_write(store, grounding))
 
         review = _decide_all(
             build_review(payload), set(GLOBAL_REVIEW_KINDS))
@@ -773,8 +774,7 @@ def test_quarantined_secret_is_removed_from_generation_but_retained_in_inbox():
         assert set(downstream_ctx.edges) >= {
             STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW}
 
-        persisted = ArtifactStore(stage2_ctx).read_own(
-            GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+        persisted = grounding_io.read_own(ArtifactStore(stage2_ctx), STAGE2_GLOBAL_GROUNDING)[0]
         assert [row.secret_id for row in persisted.canon.secrets] == ['secret_01']
 
         from novel.views.inbox import inbox_view

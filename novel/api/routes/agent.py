@@ -13,7 +13,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from contracts.schema.api import (
-    AgentBatchRequest, AgentRunList, AgentRunPreview, AgentRunRequest, LogChunk,
+    AgentBatchRequest, AgentRunList, AgentRunPreview, AgentRunRequest, AgentRunContinuationView, LogChunk,
 )
 from contracts.schema.orchestration import AgentQueueView, AgentRunRecord
 from novel.api.deps import checked_sid, get_base
@@ -40,11 +40,12 @@ def preview_run(req: AgentRunRequest, base: str = Depends(get_base)) -> AgentRun
     sid = checked_sid(req.sid)
     planned = agent.plan(
         base, sid, authorized=req.authorized,
-        egress_authorized=req.egress_authorized, profiles=req.profiles)
+        egress_authorized=req.egress_authorized, profiles=req.profiles,
+        **({'continuation': req.continuation} if req.continuation is not None else {}))
     return AgentRunPreview(argv=list(planned.invocation.argv), prompt=planned.prompt,
                            authorized=req.authorized,
                            egress_authorized=req.egress_authorized,
-                           profiles=planned.profiles)
+                           profiles=planned.profiles, continuation=planned.continuation)
 
 
 @router.post('', response_model=AgentRunRecord, status_code=202)
@@ -57,7 +58,14 @@ def start_run(req: AgentRunRequest, base: str = Depends(get_base)) -> AgentRunRe
     sid = checked_sid(req.sid)
     return agent.start(base, sid, authorized=req.authorized,
                        egress_authorized=req.egress_authorized,
-                       profiles=req.profiles)
+                       profiles=req.profiles,
+                       **({'continuation': req.continuation} if req.continuation is not None else {}))
+
+
+@router.get('/{run_id}/continuation', response_model=AgentRunContinuationView)
+def get_continuation(run_id: str, base: str = Depends(get_base)) -> AgentRunContinuationView:
+    from novel.orchestrator import agent_continuation
+    return agent_continuation.inspect(base, run_id)
 
 
 @router.post('/batch', response_model=AgentQueueView, status_code=202)

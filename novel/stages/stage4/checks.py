@@ -17,7 +17,9 @@ from contracts.invariants import (
 from contracts.schema.report import finding
 from novel.llm.typed_failures import WitnessCollector
 from novel.report.findings import Outcome, ran, unverifiable
-from novel.stages.stage4.beats import beat_index, verbatim_pieces
+from novel.stages.stage4.beats import (
+    beat_index, material_scene_candidates, material_tasks, verbatim_pieces,
+)
 from novel.stages.stage4.baseline import _stage_signature
 from novel.stages.stage4.measure import (
     chapter_source_chars, computed_structure_change_kinds,
@@ -799,6 +801,15 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
                      for beat in (bp.get('beats') or [])
                      for hinge in (beat.get('hinges') or [])}
         scenes = list(chapter.get('scenes') or [])
+        try:
+            material_candidates = material_scene_candidates(
+                [hinge for beat in bp.get('beats') or [] for hinge in beat.get('hinges') or []],
+                atoms, scenes)
+        except (KeyError, ValueError):
+            material_candidates = {}
+            ref_bad.append((ordinal, f'ch{ordinal}:材料事实归属无法解析，须先修订 Blueprint'))
+            witness.add(code='fact_ref.material', rule='fact_ref', chapter_ordinal=ordinal,
+                        refs=sorted(materials))
         landed: list[str] = []
         assigned_materials: list[str] = []
         for index, scene in enumerate(scenes):
@@ -807,6 +818,12 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
             crefs = [str(ref) for ref in (scene.get('context_fact_refs') or [])]
             landed.extend(lrefs)
             assigned_materials.extend(str(ref) for ref in (scene.get('material_refs') or []))
+            for material in scene.get('material_refs') or []:
+                candidates = material_candidates.get(str(material), ())
+                if candidates and str(scene['slot']) not in candidates:
+                    ref_bad.append((ordinal, f'{prefix}:材料 {material} 未落在相关事实场景 {candidates}'))
+                    witness.add(code='fact_ref.material', rule='fact_ref', chapter_ordinal=ordinal,
+                                scene_refs=[str(scene['slot'])], refs=[str(material), *candidates])
             if set(lrefs) - land:
                 over = sorted(set(lrefs) - land)
                 ref_bad.append((ordinal, f'{prefix}:land={over}'))
@@ -1223,6 +1240,9 @@ def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, 
     facts_bad: list[tuple[int | None, str]] = []
     stage_bad: list[tuple[int | None, str]] = []
     name_bad: list[tuple[int | None, str]] = []
+    hinge_bad: list[str] = []
+    materials = {str(hinge['hinge_id']): hinge for beat in bidx.values()
+                 for hinge in beat.get('hinges') or []}
     forbidden = {'events', 'from_beats', 'end_beat'}
 
     def walk(value: Any, path: str = '') -> None:
@@ -1269,6 +1289,21 @@ def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, 
             continue
         for index, (pscene, cscene) in enumerate(zip(pscenes, cscenes)):
             expected_scene = escenes[index] if expected_ctx is not None else None
+            if expected_scene is None:
+                selected = [materials[ref] for ref in pscene.get('material_refs') or []
+                            if ref in materials]
+                atom_rows = {row['fact_id']: row for row in bp.get('fact_atoms') or []}
+                names = {row['char_id']: row['display_name'] for row in cch.get('characters') or []}
+                try:
+                    expected_materials = material_tasks(selected, atom_rows, names)[0]
+                except (KeyError, ValueError, TypeError):
+                    expected_materials = {}
+                    hinge_bad.append(f'ch{ordinal}.{pscene.get("slot")}:材料引用无法解析')
+            else:
+                expected_materials = expected_scene
+            for field in _HINGE_FIELDS:
+                if (cscene.get(field) or []) != (expected_materials.get(field) or []):
+                    hinge_bad.append(f'ch{ordinal}.{pscene.get("slot")}:{field}')
             # writer_context 的产地会在整棵下发树上把无据 canonical 标签替换成人话。
             # 守卫必须对照同一产地投影，不能拿替换前 atom.claim 制造假漂移。
             required = (expected_scene.get('required_facts') if expected_scene is not None else
@@ -1325,9 +1360,12 @@ def _context_outcomes(ctx: dict[str, Any] | None, plan_chapters: list[dict[str, 
     want = sum(len(verbatim_pieces([hinge])[0].get(group) or [])
                for row in bidx.values() for hinge in (row.get('hinges') or [])
                for group in _HINGE_FIELDS)
+    want += sum(hinge['kind'] == '要害台词' for beat in bidx.values()
+                for hinge in beat.get('hinges') or [])
     got = sum(len(scene.get(group) or []) for chapter in ctx_by.values()
               for scene in (chapter.get('scenes') or []) for group in _HINGE_FIELDS)
-    hinge_bad = [] if want == got else [f'want={want},got={got}']
+    if want != got:
+        hinge_bad.append(f'want={want},got={got}')
     if hinge_bad:
         witness.add(code='ctx_hinge_delivered', rule='ctx_hinge_delivered',
                     refs=hinge_bad)

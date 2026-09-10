@@ -150,6 +150,7 @@ def test_operator_redo_strategies_are_closed_and_explicit_per_node():
     }
     assert registered == {
         'stage1.partition': 'canonical',
+        'stage2.characters': 'canonical',
         'stage2.global': 'canonical',
         'stage2.blueprint': 'canonical',
         'stage4.design': 'canonical',
@@ -406,7 +407,7 @@ def test_the_approval_union_covers_its_value_domain_exactly():
 def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
     from contracts.invariants import NODES, REVIEW_ACTIONS, commander_review_actions
 
-    assert len(NODES) == 17
+    assert len(NODES) == 18
     assert all(spec.lifecycle is not None for spec in NODES.values())
     for node, spec in NODES.items():
         life = spec.lifecycle

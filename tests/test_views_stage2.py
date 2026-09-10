@@ -47,8 +47,7 @@ def test_the_view_resolves_ids_and_counts_what_it_could_not(box):
     v = global_view(box.root, box.sid)
     refs = ([a.by for c in v.characters for a in c.address]
             + [r.subject for r in v.relations] + [r.object for r in v.relations]
-            + [e.subject for s in v.secrets for e in s.knowledge_events]
-            + [t.subject for t in v.arc.arc_tracks])
+            + [e.subject for s in v.secrets for e in s.knowledge_events])
     assert refs, '一个引用都没收到——组装多半漏了整块'
     for ref in refs:
         if ref.resolved:
@@ -74,7 +73,7 @@ def test_spoiler_fields_are_sent_in_full(box):
     「服务端替你遮了」与「前端替你遮了」是两种承诺，本仓只做后者。
     """
     v = global_view(box.root, box.sid)
-    assert v.arc.climax and v.arc.ending, '结局两格被遮了——遮蔽不归服务端'
+    assert v.source_blurb.opening.kind == 'proposed'
     body = v.model_dump(by_alias=True, mode='json')
     assert all('fate' in c for c in body['characters']), 'fate 键必须恒在（可为 null）'
     assert 'secrets' in body

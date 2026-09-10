@@ -262,11 +262,32 @@ def structure_subject_sha256(plan: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def structure_blueprint_subject(
+    blueprints: Any, *, chapter_ordinal: int | None = None,
+) -> dict[str, Any]:
+    """结构审阅实际依赖的蓝图与完整证据；只排除包装 provenance。
+
+    reading 的摘录不能代替证据身份：原文后半段变化也必须使旧决定失效。
+    章级主体只取本章；全局 concern 由调用者显式扩大到全书，不能遗漏其跨章引用。
+    """
+    raw = (blueprints.model_dump(by_alias=True, mode='json')
+           if hasattr(blueprints, 'model_dump') else blueprints)
+    if not isinstance(raw, dict) or not isinstance(raw.get('blueprints'), list):
+        raise ValueError('结构审阅缺当前蓝图证据')
+    rows = raw['blueprints']
+    if chapter_ordinal is not None:
+        rows = [row for row in rows if row.get('chapter_ordinal') == chapter_ordinal]
+        if len(rows) != 1:
+            raise ValueError('结构审阅章必须对应唯一蓝图')
+    return {'blueprints': rows}
+
+
 def structure_review_subject_sha256(
     plan: Any, binding_concerns: list[Any], *,
+    blueprints: Any,
     binding_input_contract: str | None = None,
 ) -> str:
-    """最终结构主体：Plan、B 担忧与实际章级输入契约；旧非章模型保留原 hash。"""
+    """最终结构主体：Plan、蓝图证据、B 担忧与实际章级输入契约。"""
     concerns = [
         value.model_dump(mode='json')
         if hasattr(value, 'model_dump') else value
@@ -276,6 +297,7 @@ def structure_review_subject_sha256(
         'kind': 'stage4_structure_review_subject',
         'review_contract': STRUCTURE_REVIEW_CONTRACT,
         'plan_subject_sha256': structure_subject_sha256(plan),
+        'blueprints': structure_blueprint_subject(blueprints),
         'binding_concerns': concerns,
         **({'binding_input_contract': binding_input_contract}
            if binding_input_contract is not None else {}),

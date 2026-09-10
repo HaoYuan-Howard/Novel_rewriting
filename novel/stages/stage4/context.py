@@ -3,29 +3,14 @@
 """
 context.py —— `writer_context.json` 的**确定性组装**。
 
-【契约】写作节点吃本文件的任务上下文，以及 Stage5 从 Stage1 正文即时算出的机械基线。
-本模块是**按引用取值 + 按章投影**，
-不是「把计划给的东西转抄一遍」——四件事都由代码做：
+【契约】本模块按显式引用组装写手任务，与 Stage5 从正文计算的机械基线分工。
+事实、舞台和材料由 Blueprint 提供；人物只沿本章事实、舞台、叙述或目标引用下发，
+叫法仍受源文时点约束。必要知识从独立 KnowledgeLinks 的 typed 决定编译到当前场景。
+世界内成立、人物知情与读者披露分别计时；埋点只下发表现，不附秘密答案。
 
-  · 每个新场景按 `fact_refs` 去 stage2 取事实原子，再由原子的 `source_beat_ref` 回取
-    【原文字节】与【舞台条件】；场景计划只存编排决策，不复制第二份事实源；
-  · 下发的人名一律换成【原文里有据】的叫法（`canonical` 可能是模型自造的记账标签）；
-  · 全书事实按「本章为止」裁剪（未揭示的 secret / 结局 / 人物弧终点不下发）；
-  · 叙述视角原样透传，`char_id` 换成本名，段界描述换成**位置标签**。
-
-⚠⚠ **本层是全链的收口点：前三层所有逐章闸门最后都汇到这一份产物上。**
-六道闸一条都不许漏（`docs/schema/stage4.md` 事实②）：
-
-| 闸门 | 挡什么 | 落点 |
-|---|---|---|
-| 叫法时点 | 本章原文里还叫不出名字的人 → 整个人不下发 | `display_names_at` |
-| 秘密揭示章 | 未揭示且非埋点章的 secret → 整条不下发 | `_project_facts` |
-| 规则放行章 | 规则点到的人本章还没被指名 → 暂不下发 | `_plot_free_rules` |
-| 关系剧透闸门 | relation 的显式 `visibility` 决定读者可见章 | `relation_visibility_gates` |
-| 弧线终点 | `arc_tracks` / `climax` / `ending` **只在末章下发** | `_project_facts` |
-| setting 逐章闸门 | 转抄式说出未揭示 secret 的句子 → 剔除 | `_gate_setting` |
-
-⇒ **改任何一条闸门，唯一能看到效果的地方是这份产物。**
+【不能退回的旧做法】逐章比较首次揭示章不足以支持场景重排；setting 的字面子串
+过滤曾漏过改写式剧透，不能当作语义通过。本层只核验明确关联及引用，不替 Commander
+判断证据是否支持知识。缺失、过期或未决关联由入口拒绝，不能猜一个揭示场景。
 
 【本模块吃 `dict` 不吃模型】理由见 `novel/stages/stage4/__init__.py` ③。
 【本模块不 `print`、不 `sys.exit`】可观察信息进入返回账，由节点写入校验报告；
@@ -41,22 +26,14 @@ from novel.core.naming import (
     display_names_at, name_collisions, person_naming_surfaces,
     project_character_names, rule_names_a_person, surface_first_chapter,
 )
-from novel.core.facts import (
-    first_reveal_chapter, relation_visibility_gates, secret_contains, secret_keywords,
-    setup_chapters_of,
-)
 from novel.core.evidence import without_global_evidence
 from novel.errors import RefusedByStructure
-from novel.stages.stage4.beats import beat_index, verbatim_pieces
+from novel.stages.stage4.beats import beat_index, material_tasks
 from novel.stages.stage4.measure import semantic_contract_of
 
 #: `char_id` 的保留形。**按形状分流**：`char_\d+` 解析不出名字就不写，
 #: 其余（`narration` / `public` / 「在场士兵」这类无名群体）是自由文本，原样留。
 _CHAR_ID = re.compile(r'char_\d+')
-
-#: `setting` 的句界。⚠ 含 `；`：那一层是「一句一段」排版，分号后面常常就是另一件事。
-_SENT_SPLIT = re.compile(r'(?<=[。！？；])|\n+')
-
 
 @dataclass
 class Assembly:
@@ -79,10 +56,8 @@ class Assembly:
     dropped_hinges: list[tuple[Any, Any, str]] = field(default_factory=list)
     #: 规则暂不下发（`{(输出章, rule_id, 命中的叫法)}`）
     held_rules: set[tuple[Any, Any, tuple[str, ...]]] = field(default_factory=set)
-    #: setting 逐章闸门剔掉的句子（`[(输出章, 键, 句子)]`）
-    setting_cut: list[tuple[Any, str, str]] = field(default_factory=list)
-    #: setting 被整个剔空的章
-    setting_emptied: list[Any] = field(default_factory=list)
+    #: 当前章首尚未开放的设定，None 不伪装为空字符串。
+    withheld_setting: list[tuple[int, str]] = field(default_factory=list)
 
 
 # ── 一、名字：投影算法唯一落点在 `novel.core.naming` ─────────────────────
@@ -182,7 +157,8 @@ def _resolve_scenes(
         }
         selected = [materials[str(ref)] for ref in (scene.get('material_refs') or [])
                     if str(ref) in materials]
-        groups, unknown = verbatim_pieces(selected)
+        groups, unknown, hidden_names = material_tasks(selected, atoms, disp)
+        withheld.extend(hidden_names)
         for group, pieces in groups.items():
             if pieces:
                 w[group] = pieces
@@ -221,330 +197,59 @@ def _plot_free_rules(canon: dict[str, Any], o: int, naming: dict[str, str], avai
     return out, held
 
 
-def _relation_labels(ents: dict[str, Any], disp: dict[str, str]) -> dict[str, str]:
-    """`relation_id` → 人话标签（「苏清杳与江随野的关系（未婚夫妻）」）。
 
-    `arc_tracks[].subject` 的取值域是 `char_id | "reader" | relation_id` 三选一，
-    而这里过去只解析了 `char_id` —— `rel_05` 就这么原样进了写手手里。
-    **下发给下游的名字必须是人话，不能是记账用的内部编号**。
 
-    ⚠ 顺带说明为什么 `relation_id` 不是死字段：零消费审计看不见它，是因为它的消费方
-    （这个 join）**从来没被实现过**——消费方存在但链路没接通，字段是坏的，不是没用。
+
+
+def _project_identity_facts(global_g: dict[str, Any], ordinal: int, disp: dict[str, str]
+                            ) -> tuple[dict[str, Any], list[tuple[Any, tuple[str, ...]]]]:
+    """身份与叫法时点的机械投影；知识内容只由独立关联及当前场景编译。
+
+    叫法的 who/by 同样走本章表，避免用后续才出现的本名作为表格标签。
+    不再把秘密答案连同 reader_knows_by_now=false 送给埋点章写手。
     """
-    out: dict[str, str] = {}
-    for r in (ents.get('relations') or []):
-        rid = r.get('relation_id')
-        s, t = disp.get(r.get('subject_id')), disp.get(r.get('object_id'))
-        if rid and s and t:
-            pred = (r.get('predicate') or '').strip()
-            out[rid] = f'{s}与{t}的关系' + (f'（{pred}）' if pred else '')
-    return out
-
-
-def _arc_subject(subj: Any, disp: dict[str, str], rel_labels: dict[str, str]) -> str | None:
-    """把一条轨迹的 `subject` 说成人话；说不成返回 `None`（由调用方入显式终态）。"""
-    if subj == 'reader':
-        return '读者'                      # 本来就是人话
-    return disp.get(subj) or rel_labels.get(subj)
-
-
-def _gate_setting(setting: dict[str, Any], secrets: list[dict[str, Any]], hidden_ids: list[Any]
-                  ) -> tuple[dict[str, Any], list[tuple[str, str]]]:
-    """`setting` 的逐章闸门：剔掉说出了【本章还不该揭示的 secret】的那些句子。
-
-    【为什么 setting 需要一道闸门】它曾是**书级一份、无任何投影**地进写手 prompt。
-    实测某本的 `世界观` 写着「主角穿越到…」「系统绑定宿主，发布攻略任务，目标爱意度达百分百」
-    ——那**就是** `secret_03` 的全部内容，而它对读者的揭示在 ch14，写 ch1 的写手照样读到。
-    上一次按信息盘通道时，`setting` 由 global 直发、**从没进过那份名单**——
-    每次漏掉的那层都带着同一句直觉「这个块里不会有情节」。
-
-    【这不是新加一层闸门，是把唯一的例外收编】`relations`/`secrets`/`world_rules`/`arc`/`address`
-    全都已经在 `chapters[].facts` 里逐章投影，`setting` 是唯一漏在外面的那个。
-
-    【这不是词表】切出来的片段来自 secret 自己的 `fact`（共用 `secret_keywords`），
-    不是人手写的词表；换一本书自动跟着变。
-
-    ⚠⚠ **实测基线：盘上唯一有 secrets 的那本书上，它命中 0 次。**
-    四条 secret × 两个 setting 键 = 8 组比对，全部无命中，**包括那条已知的真泄漏**：
-    `fact` =「许言是穿越者，绑定系统，任务是完成剧情攻略男主们」（揭示 ch14），
-    `世界观` =「主角穿越到…系统绑定宿主，发布攻略任务…」——同一件事，**措辞完全不重叠**。
-    这是**改写式**泄底，而本函数的判据是纯字面子串包含，**它只挡得住转抄式**。
-
-    ⇒ **别把这道闸门读成「setting 的剧透面已经关掉了」。它没有。**
-    它的价值只有两条：① 万一 setting 真的抄了 secret 的措辞，这一条能挡；
-    ② 把 `setting` 收进逐章 `facts`，让将来真有判据时有地方接。
-    ⚠ **命中 0 时调用方要打一条常驻「查不了」，不打「通过」**。
-
-    ⚠ 真根因在**产地**：`canon.setting` 装着情节，与 `world_rules[].desc` 混进人名是同一类病。
-    """
-    if not setting or not hidden_ids:
-        return dict(setting or {}), []
-    hid = set(hidden_ids)
-    kws = [k for s in secrets if s.get('secret_id') in hid
-           for k in secret_keywords(s.get('fact'))]
-    if not kws:
-        return dict(setting), []
-    out: dict[str, Any] = {}
-    cut: list[tuple[str, str]] = []
-    for key, val in setting.items():
-        if not isinstance(val, str):
-            out[key] = val
-            continue
-        keep = []
-        for sent in _SENT_SPLIT.split(val):
-            if sent and sent.strip():
-                if any(secret_contains(k, sent) for k in kws):
-                    cut.append((key, sent.strip()[:40]))
-                else:
-                    keep.append(sent)
-        # ⚠ **整条被剔光不静默**：`setting` 是写手判断「这是个什么世界」的唯一依据，
-        #   空掉它比多给一句更危险。留空值 + 由调用方报出来，不假装它本来就没有。
-        out[key] = ''.join(keep).strip()
-    return out, cut
-
-
-def _known_by_at(secret: dict[str, Any], ordinal: int, disp: dict[str, str]) -> list[str]:
-    """把本章已经知情的 typed subject 投影成 `known_by` 的人话列表。
-
-    `knowledge_events` 的时间判断是包含式：`known_from_chapter <= ordinal`。
-    CharacterRef 走本章名字表，叫不出名字就略去；GroupRef 的自由文本 label 原样保留。
-    evidence 只用于上游回取与审计，不进入写手上下文。
-
-    本仓没有旧 artifact 迁移/双形状读取；缺整格 `knowledge_events` 与显式空数组都不
-    猜知情主体。GlobalGrounding v2 会先被注册版本拒掉，不能在下发层悄悄复活旧语义。
-    """
-    values = []
-    for event in (secret.get('knowledge_events') or []):
-        if not isinstance(event, dict):
-            continue
-        known_from = event.get('known_from_chapter')
-        if type(known_from) is not int or known_from > ordinal:
-            continue
-        subject = event.get('subject')
-        if not isinstance(subject, dict):
-            continue
-        if subject.get('kind') == 'character':
-            values.append(disp.get(subject.get('char_id')))
-        elif subject.get('kind') == 'group':
-            label = subject.get('label')
-            values.append(label.strip() if isinstance(label, str) else None)
-
-    out: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        if isinstance(value, str) and value and value not in seen:
-            seen.add(value)
-            out.append(value)
-    return out
-
-
-def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[str, str]
-                   ) -> tuple[dict[str, Any], list[tuple[Any, tuple[str, ...]]],
-                              list[tuple[str, str]]]:
-    """把全书事实裁剪到【本章为止】——闭卷防的是**文风**泄漏，全量下发泄的是**剧情**。
-
-    【`disp` 是唯一的名字表】= 本章可下发的名字（章级）。凡是要写进下发树的名字都用它；
-    **查不到就不写那一项**——写手拿到一个本章还不存在的名字，就是剧透。
-
-    实测（裁剪前）：写 ch1 的写手能看到**全部 7 条尚未揭示的 secret** 以及
-    `arc.climax`「第 20 章…赐死…」、`arc.ending`「第 23 章…密牢折磨」。
-    **写手一旦知道结局，笔下的伏笔就会写得过明**——对一本靠揭示节奏吃饭的书这是致命的。
-
-    ⚠ **裁剪的边界**：**点名了某个后续事件或结局的**才裁（未揭示的 secret、climax/ending、
-    人物弧的终点）；框架性的**不裁**（setting / world_rules / characters / 当前阶段），
-    因为**错删事实的代价（写手改口、编名字）比多给严重**。
-
-    `secrets` 的闸门是两条【或】关系，两条都带时间维：
-      ① 读者到本章已被**首次**揭示（`first_reveal_chapter(s) <= o`）→ 可以写在纸面上；
-      ② 本章是这条 secret 的【埋点章】→ 事实要摆在读者眼前，
-         **但当时读来是别的意思**，此时给 `reader_knows_by_now=false`，意思是「要埋，不要点破」。
-         没有②，写 ch3 那只茶盏时不知道它是主角安排的，ch9 的回收就没有铺垫。
-
-    ⚠ 一条 secret 只承载一个原子事实，并直接保存唯一的 `first_reveal_chapter`。
-    分步点破的复合真相必须拆成多条 secret，各自按自己的首次揭示章下发；不另存确认
-    事件或分组标签，因为它们不参与任何下游判定。
-
-    ⚠⚠ `knowledge_events` 有时间维，但它只回答**世内谁到本章已经知道**，用于裁剪
-    `known_by`；它仍然不能替代读者的揭示时点来放行 secret。第一人称主角先知道真相，
-    不等于读者已经知道；秘密本身的两臂闸门仍只认首次揭示章与埋点章。
-    """
-    ents = global_g.get('entities') or {}
-    canon = global_g.get('canon') or {}
-    arc = global_g.get('arc') or {}
-
-    # 【投影出去的一律用人名，不留 char_id】写作侧不该看见内部编号——它得拿着人物表反查，
-    # 而「每层只说自己的语言」正是为了避免这种事。
-    secrets: list[dict[str, Any]] = []
-    hidden: list[Any] = []
-    for s in (canon.get('secrets') or []):
-        first = first_reveal_chapter(s)
-        past = first is not None and first <= o
-        is_setup = o in setup_chapters_of(s)
-        if not past and not is_setup:
-            hidden.append(s.get('secret_id'))
-            continue
-        # 【只留 `reader_knows_by_now` 这一个标志】它已经把两种写法说完了。
-        # 曾经并排的 `is_setup_chapter` 落盘之后**全仓无人读**，而且它和这个标志
-        # 在揭示章上会同时为真——**一对自相矛盾的标志**。
-        secrets.append({'secret_id': s.get('secret_id'), 'fact': s.get('fact'),
-                        'known_by': _known_by_at(s, o, disp),
-                        'reader_knows_by_now': past})
-
-    # `relations` 是**第二条剧透通道**。`valid_from_chapter` 只记世内生效时点；
-    # 显式 `visibility` 才是读者可见时点。两种 visibility 的 max / secret join
-    # 与 typed fact refs 共用 core 那一个 gate，旧人名启发式只留给 INFO 对账。
-    gates = relation_visibility_gates(ents, canon.get('secrets') or [])
-    # ⚠ **两端都得叫得出名字，否则整条不发**：一条边只有一端有名字，写手拿到的是
-    #   「许言 · 情人 · char_003」——裸编号进 prompt；而把它解析成全书通用名，
-    #   正是这一整轮要堵的剧透（那个人本章还没登场）。
-    #   两害相权：**这一章先不告诉写手这条关系**——关系还在，下一章他有名字了就会出现。
-    rels = [{'subject': disp[r.get('subject_id')],
-             'predicate': r.get('predicate'),
-             'object': disp[r.get('object_id')]}
-            for r in (ents.get('relations') or [])
-            if r.get('subject_id') in disp and r.get('object_id') in disp
-            and gates.get(r.get('relation_id')) is not None
-            and gates[r.get('relation_id')] <= o
-            and (r.get('valid_through_chapter') is None
-                 or r.get('valid_through_chapter') >= o)]
-
-    # `arc_tracks` 的 `trajectory` 写的是「从什么变到什么」——**终点就是结局**。
-    # 去掉终点后只剩主体，是零信息；trajectory 本身终点即结局，截断不了。
-    # **两头不讨好，所以非末章一律不发 `arc_tracks`。**
-    a: dict[str, Any] = {}
-    stages = arc.get('conflict_stages') or []
-    stage = next((st for st in stages if o in (st.get('chapters') or [])), None)
-    if stage is None:
-        # 【阶段章列表会把连续段的中间章省掉】`conflict_stages[].chapters` 是显式枚举，
-        # 而覆盖全部章这条性质**没有任何判据在查**（`ConflictStage.chapters` 的注释自己承认）。
-        # 实测 flash 产出 [3,5]/[8,10]/[13,15]，4/9/14 三章落在段内空隙——旧代码只认
-        # 精确成员，此时组出**空的 arc**，`CtxArc.current_stage` 是必填字段，
-        # `WriterContext.model_validate` 在落盘事务里裸抛 exit 70（结论未知）。
-        # ⇒ 按 min≤o≤max 的**区间包含**解释：唯一可解时照常下发，读出的是写段时的
-        # 本意（连续段省写了中间章），不是发明归属；`chapters` 仍按记录原样透传。
-        inside = []
-        for st in stages:
-            chs = [c for c in (st.get('chapters') or []) if isinstance(c, int)]
-            if chs and min(chs) <= o <= max(chs):
-                inside.append(st)
-        if len(inside) != 1:
-            # 跨阶段的真空隙（0 个包含）与双包含（≥2 个）都说不清唯一归属：
-            # current_stage 是写手必拿的章级事实，省略与猜一个都是静默造假。
-            raise RefusedByStructure(
-                f'第 {o} 章不在任何冲突阶段的章列表里，区间解释也定不出唯一归属'
-                f'（包含它的阶段数 = {len(inside)}）。请重跑 stage2.global（付费）'
-                f'让 conflict_stages 覆盖全部章；本层不省略也不猜测章级阶段事实')
-        stage = inside[0]
-    if stage:
-        # ⚠ **只给阶段名与跨度，不给 `summary`**：摘要描述的是【整个阶段】的经过，
-        # 里面必然含本阶段后几章才发生的结果——实测 ch16 拿到的阶段摘要写着 ch20 的事。
-        a['current_stage'] = {k: stage.get(k) for k in ('stage', 'chapters')}
-    if is_last:
-        rl = _relation_labels(ents, disp)
-        a['arc_tracks'] = [
-            {'subject': _arc_subject(t.get('subject'), disp, rl),
-             'trajectory': t.get('trajectory')}
-            for t in (arc.get('arc_tracks') or [])]
-        a['climax'], a['ending'] = arc.get('climax'), arc.get('ending')
-
-    # 称谓表按起点投影：把全书的叫法一股脑给写手，第 3 章就会写出第 20 章才该有的称呼
-    # （实测某个亲密称呼要到 ch21 两人关系变了才出现）。
-    # 【没有终点这一维】曾有过 `to_chapter`，但模型 48/48 全填 null，而确定性派生
-    # 噪声压倒信号——17 个候选里最亲密的那个反被判成 ch21 退役，**方向正好相反**。
-    # 叫法停用的【成因】是关系变了，那件事记在 `relations.valid_through_chapter` 上。
-    # ⚠⚠ **`who` 也要走章级表**：这一处是本函数**自己内部**漏掉的那条——
-    #   闸门筛的是「列哪些叫法」，而挂在它上面的 `who` 标签用的仍是全书表，
-    #   于是称谓表本身合规、标签却把那个人的全书通用名说了出来。
-    #   **这一次的旁路就在同一个 return 语句里。**
-    chars = ents.get('characters') or {}
+    chars = global_g['entities']['characters']
     address = []
-    for cid, v in chars.items():
+    for cid, character in chars.items():
         if cid not in disp:
-            continue                      # 本章还叫不出他的名字，整个人先不列
-        for ad in (v.get('address') or []):
-            if (ad.get('from_chapter') or 1) <= o:
-                by = ad.get('by')
+            continue
+        for item in character['address']:
+            if item['from_chapter'] <= ordinal:
+                by = item['by']
                 by_name = disp.get(by) if _CHAR_ID.fullmatch(str(by or '')) else by
-                address.append({'who': disp[cid], 'surface': ad.get('surface'),
-                                'by': by_name, 'context': ad.get('context')})
-
-    rules, held = _plot_free_rules(canon, o, person_naming_surfaces(chars),
+                address.append({'who': disp[cid], 'surface': item['surface'],
+                                'by': by_name, 'context': item['context']})
+    rules, held = _plot_free_rules(global_g['canon'], ordinal, person_naming_surfaces(chars),
                                    surface_first_chapter(chars))
-    setting, set_cut = _gate_setting(canon.get('setting') or {},
-                                     canon.get('secrets') or [], hidden)
-    return ({'setting': setting, 'relations': rels, 'secrets': secrets, 'world_rules': rules,
-             'arc': a, 'address': address}, held, set_cut)
+    return {'address': address, 'world_rules': rules}, held
 
 
 def _resolve_goal(goal: dict[str, Any], *, ordinal: int,
                   atoms: dict[str, dict[str, Any]], disp: dict[str, str],
-                  facts: dict[str, Any], global_g: dict[str, Any]) -> dict[str, Any]:
-    """Project a durable ``PlanGoal`` into a writer-safe, human-readable goal.
+                  disclosure_targets: dict[tuple[str, str], str]) -> dict[str, Any]:
+    """稳定引用编译为写手目标；知识目标只使用已过场景披露许可的投影。
 
-    The plan keeps stable IDs because they make every decision recomputable.  A
-    writer cannot act on ``b03_02`` or ``secret_04`` and must never see those
-    join keys.  Resolution happens here, after all chapter/reveal gates have
-    run, so a reference cannot bypass the same projection used by ``facts``.
-    An inaccessible non-secret reference is a broken plan/context edge and is
-    therefore an explicit terminal state, not an invitation to leak the global
-    record or invent a label.
+    不能以目标解析为名回读未开放的全局知识正文，或把内部关联 ID 下发写手。
+    无法解析的目标是显式结构终态，交 Plan 订正后免费重建上下文。
     """
     intent = goal.get('intent')
-    entities = global_g.get('entities') or {}
-    relations = {
-        row.get('relation_id'): row
-        for row in (entities.get('relations') or []) if row.get('relation_id')
-    }
-    projected_relations = facts.get('relations') or []
-    projected_rules = {
-        row.get('rule_id'): row
-        for row in (facts.get('world_rules') or []) if row.get('rule_id')
-    }
-    projected_secrets = {
-        row.get('secret_id'): row
-        for row in (facts.get('secrets') or []) if row.get('secret_id')
-    }
 
     resolved: list[str] = []
     failures: list[str] = []
     for ref in goal.get('fact_refs') or []:
         kind, key = ref.get('kind'), ref.get('ref')
-        value: str | None = None
-        if kind == 'fact_atom':
+        value: str | None = disclosure_targets.get((str(kind), str(key)))
+        if value is not None:
+            pass
+        elif kind == 'fact_atom':
             value = (atoms.get(str(key)) or {}).get('claim')
             if value:
                 value = f'本章事实：{value}'
         elif kind == 'character':
             if disp.get(key):
                 value = f'人物：{disp[key]}'
-        elif kind == 'world_rule':
-            row = projected_rules.get(key) or {}
-            if row.get('description'):
-                value = f'规则：{row["description"]}'
-        elif kind == 'secret':
-            row = projected_secrets.get(key)
-            if row and row.get('fact'):
-                prefix = ('只作伏笔，不点破：' if not row.get('reader_knows_by_now')
-                          else '已揭示事实：')
-                value = prefix + str(row['fact'])
-            elif intent == 'withhold':
-                # A hidden secret's content is deliberately absent from this
-                # chapter projection.  The generic directive is sufficient:
-                # events carry what to write, while the gate prevents the
-                # writer from learning what those events will later mean.
-                value = '保留本章尚未公开的一项既定秘密，不点破其内容'
-        elif kind == 'relation':
-            row = relations.get(key) or {}
-            subject = disp.get(row.get('subject_id'))
-            obj = disp.get(row.get('object_id'))
-            predicate = row.get('predicate')
-            projected = {'subject': subject, 'predicate': predicate, 'object': obj}
-            if subject and obj and predicate and projected in projected_relations:
-                value = f'关系：{subject}与{obj}（{predicate}）'
-        elif kind == 'setting':
-            setting = (facts.get('setting') or {}).get(key)
-            if isinstance(setting, str) and setting.strip():
-                value = f'设定：{setting.strip()}'
+        elif kind == 'secret' and intent == 'withhold':
+            value = '保留本章尚未公开的一项既定秘密，不点破其内容'
         elif kind == 'chapter_boundary':
             suffix = str(key).rsplit(':', 1)[-1]
             where = {'start': '开篇', 'end': '结尾'}.get(suffix, '整体范围')
@@ -572,22 +277,20 @@ def _resolve_goal(goal: dict[str, Any], *, ordinal: int,
 # ── 三、组装 ──────────────────────────────────────────────────────────────
 
 def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
-                         blueprints: dict[str, Any], main_text: list[dict[str, Any]]) -> Assembly:
+                         blueprints: dict[str, Any], main_text: list[dict[str, Any]], *,
+                         knowledge_links: dict[str, Any]) -> Assembly:
     """把【写作节点该看到的东西】确定性地组装成 `stage4/writer_context.json`。
 
     ⚠ 写手只从计划读取【重构后】的开收目标；历史 Stage2 章摘要与 end_hook 均已裁撤，
     不再保留一份对原章起收方式的重复描述。
 
-    【剧透面已全部关闭】曾经有四条旁路把未揭示事实泄给写手，逐条堵掉：
-    `characters[].identity` 写着结局 → 契约拆成 role/fate，只发 role ·
-    `world_rules` 里混着情节与结局 → 按叫法时点扣住 ·
-    `core_conflict`（「…最终走向自由」）→ 该字段随后从 stage2 契约整个删除 ·
-    `arc_tracks` 剥掉 trajectory 后是零信息、不剥就是结局 → 非末章不发。
+    全局证据原文在入口剥除，知识按正式关联及场景边界投影，文学 arc 不进入下发面。
+    语义披露质量仍需独立审阅，本层不以机械关联成功冒充质量接受。
 
     返回 `Assembly` 而不是裸 dict，使撞名、剔除、闸住等信息能够进入报告。
     """
     # SourceSpan 只服务 Stage2 回取/复核，不是写手故事材料。这里在唯一组装入口剥一次，
-    # setting 与末章 arc_tracks 即使整格投影也不会把证据原文送进付费 prompt。
+    # setting 即使整格投影也不会把证据原文送进付费 prompt。
     semantic_global = without_global_evidence(global_g)
     assert isinstance(semantic_global, dict)
     global_g = semantic_global
@@ -624,27 +327,16 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
             f'⚠ 这里**没有兜底**：`description` 已从 stage2 契约删除，'
             f'而拿一句来路不明的文本充数正是这条终态要防的东西')
 
-    # 【显式终态·勿静默】`arc_tracks[].subject` 三种取值都必须能说成人话（末章会下发给写手）。
-    # 实测某本 ch23 有 **7 处原样发出去了**：`char_001`×3 / `char_002` / `char_003` /
-    # `rel_05` / `rel_09`。
-    _arc = (global_g.get('arc') or {})
-    _rl = _relation_labels(global_g.get('entities') or {}, disp)
-    unresolved = [t.get('subject') for t in (_arc.get('arc_tracks') or [])
-                  if not _arc_subject(t.get('subject'), disp, _rl)]
-    if unresolved:
-        raise RefusedByStructure(
-            f'arc_tracks 的 subject 解析不出人话：{unresolved}，未落盘。'
-            f'取值域是 char_id | "reader" | relation_id；'
-            f'relation_id 要两端都能解析成人名才有标签可发')
-
     bidx = beat_index(blueprints, main_text)
+    materials = {str(hinge['hinge_id']): hinge for beat in bidx.values()
+                 for hinge in beat['hinges']}
     atom_index = {str(atom.get('fact_id')): atom
                   for blueprint in (blueprints.get('blueprints') or [])
                   for atom in (blueprint.get('fact_atoms') or [])}
     asm = Assembly(subs=subs, collisions=name_collisions(disp, chars))
 
     # 【到本章为止的原文】章级名字表的输入。累积一次，循环里按源章号取。
-    # ⚠ 章号取 `max(srcs)` —— 与 `_project_facts` 的闸门**同一个口径**。
+    # 章号保持源章同号，场景内的披露时点另由当前知识关联确定。
     cum: dict[Any, str] = {}
     acc: list[str] = []
     for k in sorted(text):
@@ -653,23 +345,59 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
 
     outs = plan.get('output_chapters') or []
     chapters = []
-    for oi, o in enumerate(outs):
-        n_chars, narration = 0, []
+    for o in outs:
+        narration = []
         srcs = o.get('from_source_ordinals') or []
         o_src = max(srcs) if srcs else 0
         disp_o = display_names_at(chars, cum.get(o_src, ''))
+        # 身份材料只沿显式事实、舞台、叙述和目标引用进入本章。过去露过一次面
+        # 不等于本章仍需把整份人物登记反复发给写手。
+        needed = {cid for fact in (bp.get(o_src) or {}).get('fact_atoms') or []
+                  for cid in fact.get('participant_char_ids') or []}
+        needed.update(cid for scene in o.get('scenes') or []
+                      for ref in scene.get('stage_refs') or []
+                      for cid in bidx.get(str(ref), {}).get('present_char_ids') or [])
+        # 对白对象未必在舞台上，叙述事实的 participant 也不能代替明确说话关系。
+        # 材料的两条依赖都闭合，不能因裁剪人物表把一个已知对象降成 unknown。
+        for scene in o['scenes']:
+            for ref in scene['material_refs']:
+                material = materials[str(ref)]
+                needed.update(cid for fid in material['source_fact_refs']
+                              for cid in atom_index[fid]['participant_char_ids'])
+                dialogue = material.get('dialogue')
+                if dialogue is not None:
+                    parties = [dialogue['speaker'], *(dialogue['addressees'] or [])]
+                    needed.update(party['char_id'] for party in parties
+                                  if party is not None and party['kind'] == 'character')
+        goal_refs = {(ref['kind'], ref['ref'])
+                     for key in ('chapter_goal', 'open_hook_goal', 'end_hook_goal')
+                     for ref in o[key]['fact_refs']}
+        needed.update(ref for kind, ref in goal_refs if kind == 'character')
+        needed.update(cid for relation in global_g['entities']['relations']
+                      if ('relation', relation['relation_id']) in goal_refs
+                      for cid in (relation['subject_id'], relation['object_id']))
+        needed.update(event['subject']['char_id'] for secret in global_g['canon']['secrets']
+                      if ('secret', secret['secret_id']) in goal_refs
+                      for event in secret['knowledge_events']
+                      if event['subject']['kind'] == 'character')
+        needed.update(cid for seg in (bp.get(o_src) or {}).get('narration') or []
+                      for cid in (seg.get('narrator_char_id'), seg.get('focalizer_char_id')) if cid)
+        disp_o = {cid: name for cid, name in disp_o.items() if cid in needed}
         for s in srcs:
             b = bp.get(s) or {}
             segs = b.get('narration') or []
-            n_chars += len(text.get(s, ''))
             narration += [_name_narration(g, disp_o, i, len(segs)) for i, g in enumerate(segs)]
-        facts, held, set_cut = _project_facts(global_g, o_src, oi == len(outs) - 1, disp_o)
+        facts, held = _project_identity_facts(global_g, o_src, disp_o)
         oo = o.get('output_ordinal')
-        asm.setting_cut += [(oo,) + c for c in set_cut]
-        if not any((facts.get('setting') or {}).values()) and (global_g.get('canon') or {}).get('setting'):
-            asm.setting_emptied.append(oo)
         asm.held_rules |= {(oo,) + hh for hh in held}
         scenes, unk_kinds, withheld = _resolve_scenes(o, bidx, atom_index, disp_o)
+        from novel.stages.stage4.disclosure import project as project_disclosure
+        disclosure = project_disclosure(o, scenes, facts, global_g, atom_index, disp_o,
+                                        knowledge_links, needed_characters=needed,
+                                        materials=materials)
+        facts, scenes = disclosure.facts, disclosure.scenes
+        asm.withheld_setting.extend((oo, key) for key, value in facts['setting'].items()
+                                    if value is None)
         asm.withheld += [(oo, c) for c in withheld]
         # ⚠⚠ **章级表会造出书级表没有的撞名，必须出声**：书级表判有据用全书正文，
         #   于是某角色拿到 canonical、不撞名；而在 ch2 原文还没写出那个本名，
@@ -711,13 +439,13 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
         }
         chapter_goal = _resolve_goal(
             o.get('chapter_goal') or {}, ordinal=oo, atoms=atom_index, disp=disp_o,
-            facts=facts, global_g=global_g)
+            disclosure_targets=disclosure.goal_targets)
         open_hook_goal = _resolve_goal(
             o.get('open_hook_goal') or {}, ordinal=oo, atoms=atom_index, disp=disp_o,
-            facts=facts, global_g=global_g)
+            disclosure_targets=disclosure.goal_targets)
         end_hook_goal = _resolve_goal(
             o.get('end_hook_goal') or {}, ordinal=oo, atoms=atom_index, disp=disp_o,
-            facts=facts, global_g=global_g)
+            disclosure_targets=disclosure.goal_targets)
 
         # rule_id / secret_id 只用于上面的确定性 join；写手和持久化上下文都不消费。
         for row in facts.get('world_rules') or []:
@@ -727,22 +455,20 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
 
         chapters.append({
             'output_ordinal': oo,
-            'from_source_ordinals': srcs,
             'chapter_goal': chapter_goal,
             'open_hook_goal': open_hook_goal,
             'end_hook_goal': end_hook_goal,
             'semantic_contract': semantic_contract,
             'chapter_rewrite_brief': o.get('chapter_rewrite_brief'),
-            'budget_chars': sum(scene['budget_chars'] for scene in scenes),
             'scenes': scenes,
             'narration': narration,
-            'source_chars': n_chars,
             'characters': [
                 {'char_id': cid, 'display_name': nm,
                  'role': (chars.get(cid) or {}).get('role')}
                 for cid, nm in sorted(disp_o.items())
             ],
             'facts': facts,
+            'disclosure_windows': disclosure.windows,
         })
 
     # 【自造标签的收口只此一处】对整棵下发树做一遍确定性替换——**按信息收口，不按字段收口**，

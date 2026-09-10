@@ -57,6 +57,7 @@ def _load_unreachable_families() -> None:
         'novel.llm.transport',
         'novel.orchestrator.agent',
         'novel.orchestrator.agent_supervisor',
+        'novel.orchestrator.stage2_review_ledger',
         'novel.stages.stage2.extract',
     ):
         importlib.import_module(m)

@@ -21,6 +21,8 @@ export interface PlanSceneView {
   turnFact: string
   entryState: string[]
   exitState: string[]
+  knowledge: CtxScene['knowledge'] | null
+  dialogue: CtxScene['dialogue'] | null
   verbatimChars: number
   verbatim: string[]
   holds: { k: string; v: string }[]
@@ -63,6 +65,8 @@ function sceneView(plan: PlanScene, ctx: CtxScene | undefined): PlanSceneView {
     turnFact: ctx?.turn_fact ?? plan.turn_fact_ref,
     entryState: ctx?.entry_state ?? plan.entry_state_refs,
     exitState: ctx?.exit_state ?? plan.exit_state_refs,
+    knowledge: ctx?.knowledge ?? null,
+    dialogue: ctx?.dialogue ?? null,
     verbatimChars: verbatim.reduce((n, v) => n + [...v].length, 0),
     verbatim,
     holds,
@@ -109,28 +113,32 @@ export function useStage4Screen() {
           more: '其余 ' + Math.max(0, characters.length - 5) + ' 人同样下发',
         },
         {
-          title: '关系',
+          title: '章首关系',
           count: (facts?.relations.length ?? 0) + ' 条',
           lines: (facts?.relations ?? []).slice(0, 5)
             .map((r) => r.subject + ' ' + r.predicate + ' ' + r.object),
           more: '其余 ' + Math.max(0, (facts?.relations.length ?? 0) - 5) + ' 条同样下发',
         },
         {
-          title: '世界规则 / 弧线',
+          title: '章首世界规则',
           count: (facts?.world_rules.length ?? 0) + ' 条',
           lines: (facts?.world_rules ?? []).slice(0, 3)
             .map((w) => w.description.length > 40 ? w.description.slice(0, 40) + '…' : w.description)
-            .concat(facts?.arc.current_stage.stage
-              ? ['当前冲突阶段：' + facts.arc.current_stage.stage]
-              : []),
+,
           more: '',
         },
         {
-          title: '秘密',
+          title: '章首已知内情',
           count: (facts?.secrets.length ?? 0) + ' 条下发',
           lines: (facts?.secrets ?? []).map((secret) =>
             (secret.fact.length > 30 ? secret.fact.slice(0, 30) + '…' : secret.fact) +
-            '（读者此时' + (secret.reader_knows_by_now ? '已知' : '未知') + '）'),
+            '（读者章首已知）'),
+          more: '',
+        },
+        {
+          title: '场景披露许可',
+          count: ctx.disclosure_windows.length + ' 项',
+          lines: ctx.disclosure_windows.map((row) => row.allowed_slots.join('、') + '：' + row.content),
           more: '',
         },
       ]
@@ -175,7 +183,7 @@ export function useStage4Screen() {
     rewriteBrief: ctx?.chapter_rewrite_brief ?? plan?.chapter_rewrite_brief ?? '',
     budgets: ctx
       ? [
-          { k: '源章字数', v: String(ctx.source_chars) },
+          { k: '源章字数', v: ctx.source_chars === null ? '未知' : String(ctx.source_chars) },
           { k: '本章预算', v: String(ctx.budget_chars) },
           { k: '写手目标', v: d?.writer_target ? d.writer_target.join('–') : '—（没有任务书）' },
         ]

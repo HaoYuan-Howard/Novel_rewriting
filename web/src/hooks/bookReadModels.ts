@@ -5,7 +5,7 @@ import { qk } from '@/api/queryKeys'
 // 字符串碰巧等于 sid 匹配，更不能让一次刷新反过来触发自己的观察查询。
 const BOOK_READ_ROOTS = new Set([
   'novel', 'stage0', 'stage1', 'reading',
-  'global', 'globalReview', 'stage2', 'stage4', 'stage5', 'review', 'inbox',
+  'characters', 'global', 'globalReview', 'stage2', 'stage4', 'stage5', 'review', 'inbox',
   'stage6', 'stage7', 'check', 'approvals',
 ])
 

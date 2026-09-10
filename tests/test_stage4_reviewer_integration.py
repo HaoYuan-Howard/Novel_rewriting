@@ -18,7 +18,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from contracts.schema.api import DesignReviewRequest, StructureApprovalRequest
+from contracts.invariants import APPROVAL_WORKPACK_GROUPS
+from contracts.schema.api import (
+    ApprovalWorkpack, DesignReviewRequest, StructureApprovalRequest,
+)
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentProfile, AgentRunRecord, AgentRunStart, ExecutionEpoch,
     PipelineAgentProfiles, RunContractV2,
@@ -64,15 +67,29 @@ def _epoch():
         session_run_id='producer-1')
 
 
+def _structure_pack(template):
+    """隔离审批主体夹具也须提供完整工作包分母，不假装读过盘上 Plan。"""
+    return ApprovalWorkpack(
+        sid=SID, kind='structure', subject_sha256=template.review_token.removeprefix('s4sr1_'),
+        review_token=template.review_token,
+        chapter_ordinals=[row.output_ordinal for row in template.chapters],
+        groups=[{'group': group, 'scanned': '合成隔离审批主体', 'items': [
+            {'code': 'chapter_coverage', 'chapter_ordinal': row.output_ordinal,
+             'detail': '合成待审章节', 'effect': 'coverage', 'changed': True,
+             'allowed_actions': ['accept', 'request_replan']}
+            for row in template.chapters] if group == 'coverage' else []}
+            for group in APPROVAL_WORKPACK_GROUPS],
+    ).model_dump(mode='json')
+
+
 def _pack(base, surface):
     if surface == 'design':
         template = _template(base)
-        return {'design': {'chapters': [
-            row.subject.model_dump(mode='json') for row in template.chapters]},
+        return {'design': approvals.design_workpack(base, SID).model_dump(mode='json'),
             '_design_template': template.model_dump(mode='json')}
     template = approvals.structure_template(
         base, SID, actor='reviewer', reason='逐章核对结构')
-    return {'structure': {'chapters': template.model_dump(mode='json')['chapters']},
+    return {'structure': _structure_pack(template),
             '_structure_template': template.model_dump(mode='json')}
 
 
@@ -101,7 +118,7 @@ def _response(task, decision):
                          'replan_constraints': []},
             'chapters': {str(row['output_ordinal']): {
                 'decision': 'accept', 'reason': '本章场景和事实闭合', 'constraints': [],
-            } for row in exact['chapters']},
+            } for row in exact['chapters'] if not row.get('source_decision_sha256')},
         }
         if decision == 'repair':
             payload['chapters']['1'].update({
@@ -115,6 +132,8 @@ def _response(task, decision):
                 'replan_constraints': [{'kind': 'replace_reconstruction_strategy',
                                         'chapter_ordinals': []}],
             })
+        if exact['strategy'].get('source_decision_sha256'):
+            payload.pop('strategy')
         # 模拟 Reviewer 也必须读实际 task 的完整历史目录并明确处置；
         # 接受新候选时核对旧义务已满足，不借缺字段触发额外订正轮。
         catalog = option['allowed_values'][wire.CONSTRAINT_OPERATION_CATALOG]
@@ -137,7 +156,8 @@ def _response(task, decision):
                              else 'accept'),
                 'reason': ('结果先于触发事实，需重规划' if decision == 'replan' and index == 0
                            else '结构事实完整且因果闭合'),
-            } for index, row in enumerate(exact['chapters'])}}
+            } for index, row in enumerate(exact['chapters'])
+            if not row.get('source_decision_sha256')}}
     return {'schema': wire.WIRE_SCHEMA, 'selection': {
         'option_id': option['id'],
         'expected_exact_request_sha256': hashlib.sha256(
@@ -278,7 +298,6 @@ def test_design_native_wire_reaches_canonical_approval_and_repair_authorization(
             else (queue.st.RESUME_RUN, 'B 等待重建')))
         monkeypatch.setattr(queue.st, 'stage2_global_projection_blocked', lambda _ov: False)
         monkeypatch.setattr(queue.st, 'stage2_reviewed_edit_correction_needed', lambda *_a: False)
-        monkeypatch.setattr(queue.st, 'stage2_frozen_v6_subject_validated', lambda _ov: False)
         monkeypatch.setattr(queue.approvals, 'require_stage2_review', lambda *_a: None)
         todo, blocked = queue.plan_book_from_overview(
             base, SID, SimpleNamespace(stages=[]), until_stage='stage4',
@@ -544,7 +563,6 @@ def test_work_unit_supervisor_preserves_response_after_approval_and_retires_land
         else (queue.st.RESUME_RUN, 'B 等待重建')))
     monkeypatch.setattr(queue.st, 'stage2_global_projection_blocked', lambda _ov: False)
     monkeypatch.setattr(queue.st, 'stage2_reviewed_edit_correction_needed', lambda *_a: False)
-    monkeypatch.setattr(queue.st, 'stage2_frozen_v6_subject_validated', lambda _ov: False)
     monkeypatch.setattr(queue.approvals, 'require_stage2_review', lambda *_a: None)
     planned_repairs = []
 

@@ -1,4 +1,5 @@
 import type { Finding, RuleLine } from './common'
+import type { KnowledgeLinkSubmission } from './knowledgeLinks'
 
 /**
  * 人工验收记录。
@@ -251,6 +252,7 @@ export interface DesignStrategyRuling {
   decision: string
   reason: string
   replan_constraints: DesignStrategyReplanRuling[]
+  source_decision_sha256?: string | null
 }
 
 export interface DesignChapterRuling {
@@ -259,6 +261,7 @@ export interface DesignChapterRuling {
   reason: string
   constraints: DesignRepairConstraint[]
   constraint_operations?: DesignConstraintOperations
+  source_decision_sha256?: string | null
 }
 
 /** POST 只搬一枚 opaque token 与 typed 裁决；subject 由服务端现场重建。 */
@@ -355,6 +358,7 @@ export interface StructureChapterApproval {
   output_ordinal: number
   decision: string
   reason: string
+  source_decision_sha256?: string | null
 }
 
 export interface StructureApprovalRequest {
@@ -690,6 +694,8 @@ export interface Stage5ClosureView {
   history: Stage5ClosureDecision[]
 }
 
+import type { Stage2ReviewCoverage, Stage2ReviewSubmission, Stage2ReviewUnit } from './stage2Review'
+
 export interface Stage2NodeReviewRequest {
   node: string
   review_token: string
@@ -698,11 +704,16 @@ export interface Stage2NodeReviewRequest {
   reason: string
   chapter_ordinals: number[]
   owner: string | null
+  knowledge_links: KnowledgeLinkSubmission | null
+  review?: Stage2ReviewSubmission | null
 }
 
 export interface Stage2NodeReviewView {
+  coverage?: Stage2ReviewCoverage | null
+  unavailable_reason?: string | null
   state: string
   current_decision: (Stage2NodeReviewRequest & {
+    obligation_receipt?: { scope: Stage2ReviewCoverage['scope']; units: Stage2ReviewUnit[] } | null
     review_subject_sha256: string
     review_scope_sha256?: string | null
     review_contract_version: string
@@ -779,6 +790,7 @@ export interface ApprovalWorkpackItem {
   changed: boolean
   historical_accept_reusable: boolean
   source_decision_sha256?: string | null
+  inherited_structure_decision?: StructureChapterApproval | null
   /** Stage4A 完整章 edit 的单一 TOCTOU 票；只在当前 repair 决定行出现。 */
   review_token?: string | null
   /** v2：coverage 行的逐章裁决材料，服务端确定性渲染；页面只折叠呈现，不自算。 */
@@ -913,7 +925,7 @@ export interface ApprovalWorkpack {
   review_token: string
   chapter_ordinals: number[]
   groups: ApprovalWorkpackGroup[]
-  disposition: 'review_required' | 'already_current' | 'suspended'
+  disposition: 'review_required' | 'already_current'
   current_decision_sha256: string | null
   reading?: WorkpackReading | null
 }

@@ -327,63 +327,12 @@
       "first_reveal_chapter": 3
     }
   ],
-  "arc": {
-    "conflict_stages": [
-      {
-        "stage": "受困夫家",
-        "chapters": [
-          1,
-          2
-        ]
-      },
-      {
-        "stage": "在怡红院反击",
-        "chapters": [
-          3,
-          4,
-          5,
-          6,
-          7,
-          8
-        ]
-      }
-    ],
-    "climax": "李宝珠在围捕中击败叛逃的苏家父子。",
-    "ending": "李宝珠掌管怡红院并参与情报工作。",
-    "arc_tracks": [
-      {
-        "subject": {
-          "raw": "char_001",
-          "display": "李宝珠",
-          "resolved": true
-        },
-        "trajectory": "从受夫家压迫的媳妇到掌握怡红院实权的主理人。",
-        "trajectory_evidence": {
-          "chapter_ordinal": 3,
-          "source": {
-            "text": "特聘教习师",
-            "start": 91,
-            "end": 96
-          }
-        }
-      },
-      {
-        "subject": {
-          "raw": "rel_02",
-          "display": "苏子瑜与杜婉儿的关系（与对方相恋）",
-          "resolved": true
-        },
-        "trajectory": "从暗中通信到合谋对付李宝珠。",
-        "trajectory_evidence": {
-          "chapter_ordinal": 3,
-          "source": {
-            "text": "原来，那二人竟已同仇敌忾",
-            "start": 1363,
-            "end": 1375
-          }
-        }
-      }
-    ]
+  "source_blurb": {
+    "facts": [],
+    "opening": {
+      "kind": "unresolved",
+      "reason": "历史示例未生成源文案事实与开篇范围，须由当前 producer 重建"
+    }
   },
   "unresolved_refs": 0,
   "invalid_exists": true,

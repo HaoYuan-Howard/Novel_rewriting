@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage2 五次冷缓存验收只认闭合证据，不把缺测折成通过。"""
+"""退役五轮工具仅核对历史报告，不能接收现役报告或产生当前验收许可。"""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -144,6 +144,19 @@ def test_stale_workflow_report_schema_cannot_enter_the_five_run_claim() -> None:
         reports, manual_quality=_manual(reports),
         baseline_seconds=3_044, minimum_speedup_percent=20)
 
+    assert result['stability']['state'] == 'fail'
+    assert result['claim_ready'] is False
+
+
+def test_current_workflow_report_cannot_enter_the_retired_five_run_acceptance() -> None:
+    from tools.workflow_metrics import WORKFLOW_REPORT_SCHEMA
+
+    reports = [_report(index) for index in range(5)]
+    for report in reports:
+        report['schema'] = WORKFLOW_REPORT_SCHEMA
+    result = A.evaluate(
+        reports, manual_quality=_manual(reports),
+        baseline_seconds=3_044, minimum_speedup_percent=20)
     assert result['stability']['state'] == 'fail'
     assert result['claim_ready'] is False
 

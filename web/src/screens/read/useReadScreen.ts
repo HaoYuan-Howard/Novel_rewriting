@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { FRESH, SEV } from '@/constants/vocabulary'
-import type { ReadingBeat, ReadingNarration, ReadingSegment } from '@/types/stages'
+import type { ReadingBeat, ReadingHinge, ReadingNarration, ReadingSegment } from '@/types/stages'
 import { useApprovals } from '@/hooks/useApprovals'
 import { useOrdinal, useSid } from '@/hooks/useRouteParams'
 
@@ -36,7 +36,7 @@ export interface BeatView {
     evidence: string | null
     participantCharIds: string[]
   }[]
-  hinges: { kind: string; text: string }[]
+  hinges: (Omit<ReadingHinge, 'text'> & { text: string })[]
   selected: boolean
 }
 
@@ -139,7 +139,7 @@ export function useReadScreen() {
       participantCharIds: fact.participant_char_ids,
     })),
     hinges: b.hinges.map((h) => ({
-      kind: h.kind,
+      ...h,
       text: h.text ?? '（未定位——这条保真材料没有原文可引）',
     })),
     selected: selBeat === b.beat_id,
@@ -191,7 +191,7 @@ export function useReadScreen() {
             participantCharIds: fact.participant_char_ids,
           })),
           hinges: b.hinges.map((hinge) => ({
-            kind: hinge.kind,
+            ...hinge,
             text: hinge.text ?? '（未定位——这条保真材料没有原文可引）',
           })),
           selected: selBeat === id,

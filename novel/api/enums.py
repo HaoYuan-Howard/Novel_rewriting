@@ -68,6 +68,7 @@ _CONSUMED: dict[str, str] = {
 #: ⚠ 这张表**必须逐个列名**，不许写成「所有标量一律不发」那种规则：
 #: 那样新加一个标量会被**静默**挡住，而静默正是本模块要防的方向。
 _WITHHELD: dict[str, str] = {
+    'STAGE2_CHARACTER_REVIEW_KINDS': '静态字段的派修归属只由后端裁决；前端显示返回的 owner 和可执行动作',
     'WORKFLOW_ROLE_CONTRACT': '工作流执行身份；界面只显示后端工作单元读模型',
     'WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS': '预算已由持久工作单元账折叠，前端不自行重算',
     'WORK_UNIT_MAX_DELIVERY_ATTEMPTS': '网络尝试上限只由工作单元底座执行，前端显示后端预算投影',
@@ -87,15 +88,12 @@ _WITHHELD: dict[str, str] = {
     'STAGE2_COMMANDER_SEAT_PURPOSES': (
         'Stage2 Commander 席位语义只由 RunSupervisor 与持久席位账消费；页面只呈现'
         '后端已判定的 blocker/状态，另发枚举会让前端自算“还剩几席”'),
-    'STAGE2_COMMANDER_MAX_SEATS': '同上：席位上限是账本规则，不是前端可算的读数',
-    'STAGE2_COMMANDER_MAX_EDIT_SEAT': '同上',
     'COMMANDER_ATTEMPT_KINDS': (
         '同席内 launch/resume 只写进席位账与 session 审计；不是 HTTP/UI 取值面'),
     'COMMANDER_FIRST_EVENT_TIMEOUT_SECONDS': '调用层超时是驱动配置，不是前端读数',
     'COMMANDER_IDLE_TIMEOUT_SECONDS': '同上',
     'COMMANDER_MAX_ATTEMPTS_PER_SEAT': '同上：同席重试上限由 Supervisor 执行，前端只看结果',
     'COMMANDER_RETRY_BACKOFF_SECONDS': '同上',
-    'COMMANDER_REVIEWER_MAX_CORRECTIONS': '同上：纠错席位上限由持久席位账执行',
     'REVIEWER_APPROVAL_SURFACES': (
         'Commander reviewer typed request 的 approval 面闭集，只由 RunSupervisor 与'
         ' loader 消费；页面各审批面已有自己的 typed 表单，另发只会制造第二个消费面'),
@@ -238,9 +236,9 @@ _WITHHELD: dict[str, str] = {
     'LEGACY_V3_DESIGN_REVIEW_CONTRACT': (
         'Stage4A v3 split-capability 历史解码版本；只供后端无损读旧决定，'
         '不发布给前端、不取得 current 审阅或执行权'),
+    'LEGACY_V4_DESIGN_REVIEW_CONTRACT': '仅供后端识别旧审阅，当前界面消费后端有效性判定，不自行比版本',
     'FROZEN_V6_DESIGN_REVIEW_CONTRACT': (
-        '两本冻结 v6 旧书的只读恢复契约；只供后端证明旧候选与旧 Blueprint '
-        '精确绑定，前端不得选择该版本或据此放行付费恢复'),
+        '仅供后端无损解码不可变历史决定；现役不开放旧 Blueprint 兼容消费或恢复'),
     'BLUEPRINT_RELATION_REVIEW_CONTRACT': (
         'Stage2 typed relation edit 的内部审阅身份；请求 schema 已固定该值，'
         '前端不选择版本也不自行判断迁移'),
@@ -252,6 +250,13 @@ _WITHHELD: dict[str, str] = {
         'Stage7 workpack 已随包携带；UI 只回传 opaque token，不自行重算身份'),
     'BLIND_ALIAS_ALGORITHM': 'Stage4A 审计用的 opaque alias 算法身份；前端既不生成 alias，'
                              '也不据此判断候选是否可用',
+    'PIPELINE_DEFAULT_CONCURRENCY': '并发默认由 Agent capability 发布，enums 不另复制',
+    'PIPELINE_BOOK_CONCURRENCY': '整书总槽默认由 Agent capability 发布',
+    'PIPELINE_PROVIDER_CONCURRENCY': '供应商总槽默认由 Agent capability 发布',
+    'PIPELINE_TOTAL_CONCURRENCY_MIN': '总槽配置范围由 Agent capability 发布',
+    'PIPELINE_TOTAL_CONCURRENCY_MAX': '总槽配置范围由 Agent capability 发布',
+    'PIPELINE_CONCURRENCY_TRIALS': '并发实验档位由 Agent capability 发布',
+    'PIPELINE_PARALLEL_NODES': '并发覆盖节点由 Agent capability 发布',
     'STAGE2_BLUEPRINT_MAX_CONCURRENCY': (
         'Stage2 Blueprint 逐章 Agent session 的供应商稳定性护栏；'
         '它是后端编排参数，不是前端可调取值面'),

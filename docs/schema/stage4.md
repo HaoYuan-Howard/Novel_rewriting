@@ -1,13 +1,20 @@
 # stage4 · 盲设计、证据绑定与场景编译
 
-Stage4 由两个隔离的付费相和一个确定性上下文相组成。Agent 与 legacy LLM 的 B 入口都先构造机械基线，只有歧义章进入模型；每章内容预算为包含首次的最多 4 次：
+WriterContext v7 的场景 `dialogue[]` 只保存已解析的说话者、对象、语义、话语作用和必保事实。
+普通对白的原句只留在 Blueprint 证据及审阅面，不进入写手 prompt；`verbatim[]` 仅由已核验的
+字面例外生成。材料 producer 与 `ctx_hinge_delivered` 共用同一投影，除了数量还逐场复核内容。
+Stage5 首写、修订与 Reviewer rewrite 共用紧凑投影；相同事实正文只渲染一次，所有角色引用保留。
+对白语义等价为 UNVER，受托或人工核验对象、条件、时间和关键事实；字面例外按原字符精确复核，
+不能因近似拼写或标点归一而放行错误口令。数字材料必须保留全部值。
+
+Stage4 由两个隔离的付费相和一个确定性上下文相组成。Agent 与 legacy LLM 的 B 入口都先构造机械基线，只有歧义章进入模型；每章基础内容额度包含首次共 4 次，额外额度仅来自不可变人工授权。两种后端都使用冻结并发配置（默认 4 路）；首个异常后停止接收后续章任务，排空已在途请求并保存回答，全部完成后才聚合：
 
 ```text
-Stage2 v7
+Stage2 v8
   ├─ 章功能/计数 ─ stage4.design（A，付费）─ 整书策略 checkpoint
-  │                                      └─ 冻结策略 + 单章去序真相 ─ N 个私有 session（≤4 并发）
+  │                                      └─ 冻结策略 + 单章去序真相 ─ N 个私有 session（默认 4 路，按冻结配置）
   │                                                                      └─ 单章 checkpoints
-  │                              策略 + 全部章节 ─ 确定性聚合 + 整书 HARD ─ blind_candidate v2（原子落盘）
+  │                              策略 + 全部章节 ─ 确定性聚合 + 整书 HARD ─ blind_candidate v3（原子落盘）
   │                                                                        │
   │                                                            A 正式设计审阅（服务账）
   └─ 原文证据层 + 已审阅候选 ─ stage4.plan（B，独立授权）─ 机械基线（唯一解 0 wire）
@@ -17,7 +24,7 @@ Stage2 v7
                                                                                     │
                                                                最终逐章结构审批（s4）
                                                                                     │
-                                                             stage4.context（免费）── writer_context v4
+                                                             stage4.context（免费）── writer_context v7
 ```
 
 legacy B 使用相同的 `ChapterBindingResponse`、章内动态校验和整书联合 HARD。模型与升级策略仍由
@@ -37,21 +44,25 @@ Context 只能在该决定全书接受后独立生成。`stage4.plan --identity`
 
 | 路径 | 模型 / 版本 | 生产者 | 责任 | 证据 |
 |---|---|---|---|---|
-| `stage4/blind_candidate.json` | `BlindCandidate` v2 | `stage4.design` | 保存 A 的 N+1 个已验 unit 确定性聚合后的盲场景候选、编译映射与聚合来源账 | 码·契 |
+| `stage4/blind_candidate.json` | `BlindCandidate` v3 | `stage4.design` | 保存 A 的 N+1 个已验 unit 确定性聚合后的盲场景候选、编译映射与聚合来源账 | 码·契 |
 | `stage4/blind_chapter_edit.json` | `BlindChapterEditRequest` v1 | 人工输入 | Stage4A 的 hash-bound、零模型完整章替换请求；不是 Executor 产物，也不进入正式展示面 | 码·契 |
 | `stage4/evidence_binding.json` | `EvidenceBinding` v4 | `stage4.plan` / `--apply-binding` | 保存 B 的完整绑定、非阻断 concerns，或仅由代码铸造 witness 的 typed `infeasible` | 码·契 |
 | `stage4/plan_chapters.json` | `PlanChapters` v4 | `stage4.plan` 的编译段 | 保存 Stage5 真正消费的结构计划与 A/B 完整字节哈希 | 码·契 |
 | `stage4/plan_edit.json` | `PlanEdit` v4 | 人工输入 | 人工整份替换计划的 typed 入口 | 码·契 |
-| `stage4/writer_context.json` | `WriterContext` v4 | `stage4.context` | 把计划引用和当前 Stage2 真相投影成人话 | 三源 |
+| `stage4/writer_context.json` | `WriterContext` v7 | `stage4.context` | 把计划引用和当前 Stage2 真相投影成人话 | 三源 |
 
-旧 Blueprint v6 不自动迁移到 v7；现有旧书只走其冻结的 v6 恢复面，新 v7 关系契约只在 clean base
-由 producer 重建。旧 Blind v1、Evidence v1/v2、Plan/Edit v3、WriterContext v3 均关闭式拒读，
+旧 Blueprint v6/v7 不迁移或兼容消费；当前 v8 关系及材料契约只在独立空根
+由 producer 重建。旧书及证据整根归档，回滚须配对旧代码与旧归档根。旧 Blind v1、Evidence v1/v2、Plan/Edit v3、WriterContext v1/v2/v3/v4/v5/v6 均关闭式拒读，
 不迁移、不手补版本号。
 compiled 计划从 `stage4.design` → `stage4.plan` 重建；人工稿提交 v4 `PlanEdit`；上下文用
 `stage4.context` 在最终结构审批后免费重建。旧 `stage4/writer_context.identity.json` 已退役：不登记路径、不发现、
 不读取，也不主动删除用户盘上的历史文件。
 
-## 二、Stage4A：`blind_candidate.json` v2
+## 二、Stage4A：`blind_candidate.json` v3
+
+v3 只接受明确的策略/单章架构及现役来源账；整书拒稿采用字段、缺省架构与无来源候选快照已经退役。
+旧 v1/v2 保留在整根归档内，由配对旧代码读取；当前根只由 stage4.design producer 重建，
+不得补字段或伪造工作单元来源。当前回答、prepared 和多来源采用的免费恢复不受此退役影响。
 
 ### 2.1 A 的输入边界
 
@@ -63,7 +74,7 @@ Stage4A 不是一份全书事实请求。首个整书策略 session 只看按阅
 claim/kind/obligation、因果边与章首/章尾状态；不会看见其他章真相。
 事实与人物引用使用该章独有的短 local alias（`f_*` / `p_*`）：由 root 身份、章号和正式 alias
 确定性 HMAC 派生，碰撞时只延长摘要，因此跨恢复稳定且不携带源序；数组继续按 alias 稳定排序。
-因果边是真相约束，不是源披露顺序，因此在本章请求中保留。Stage2 v7 的 `enforcement=hard`
+因果边是真相约束，不是源披露顺序，因此在本章请求中保留。Stage2 v8 的 `enforcement=hard`
 叙事关系也按同一 local alias 投影；`enforcement=review` 只进 Commander workpack，不成为 Executor
 指令。普通相邻、同一 source beat 或数组位置都不会自动生成关系。尤其 `story_before` 表示故事世界
 真实时间，不是 scenes 披露顺序：机械复检只认 transition 能直接证明的偏序；同场内部、parallel、
@@ -78,12 +89,12 @@ claim/kind/obligation、因果边与章首/章尾状态；不会看见其他章�
 | 字段 | 类型 / 约束 | 语义 | 证据 |
 |---|---|---|---|
 | `alias_algorithm` | `hmac-sha256-v1` | opaque alias 算法 | 码·契 |
-| `truth_sha256` | 64 位 SHA-256 | 完整去序真相图主体；各 unit 绑定它，但没有 session 看见整份图 | 码·契 |
+| `truth_sha256` | 64 位 SHA-256 | 完整去序真相图主体，仅绑定整书聚合；章级请求只绑定实际下发依赖 | 码·契 |
 | `fact_aliases` | `{alias: fact_id}`；非空 | 编译期一一映射，不进入 A prompt | 码·契 |
 | `participant_aliases` | `{alias: char_id}` | 人物别名编译映射，不进入 B 回填 | 码·契 |
 | `reconstruction_strategy` | 非空字符串 | 仅 A 相使用的全书规划脚手架 | 码·契 |
 | `output_chapters` | 非空数组 | 一章对一章的盲候选 | 码·契 |
-| `_provenance` | `BlindCandidateProvenance` | A 的策略/逐章获采纳调用聚合来源账；逐 unit 明细留在 ledger/session/checkpoint | 码·契 |
+| `_provenance` | `BlindCandidateProvenance / BlindCandidateCompiledProvenance / BlindCandidateHumanProvenance` | A 的模型、确定性采用或人工演进来源；逐 unit 明细留在 ledger/session/checkpoint | 码·契 |
 
 每章保存 `output_ordinal`、`structure_decision`、三个 goal、章级 `weight`、
 `chapter_rewrite_brief` 与候选场数组。goal 只含 `intent + fact_aliases`，不保存 rationale。
@@ -114,7 +125,26 @@ accepted attempt、ledger 与验证后 checkpoint。进程中断后只恢复匹�
 从 ledger 重建全部成本，包含先前无 checkpoint 的失败私有 session；因此部分恢复、完整恢复与
 aggregate prepared 尾窗恢复必须得到同一份 usage，不能把已付费历史显示成 0 或漏掉。
 
-普通 checkpoint 恢复仍严格限于同 run。唯一跨 run 的 A 相桥只开放给 typed targeted repair：新
+普通 checkpoint 恢复仍严格限于同 run。普通 A 运行另有逐单元历史采用：策略与各章按当前实际请求
+分别核验来源，可以合用多个历史 run；同请求出现不同有效回答时保持未知，不按最近或命中数选取。
+每个选择冻结到当前 `design/units/{strategy|chNNNN}/historical-adoption.json`；普通聚合 journal v2
+在每个 adoption 行中保存 `source_run_id`，同时冻结原 producer parent、完整文件字节与补提交回执。
+来源 run、完整 checkpoint 链、回答、session、成本账及
+当前 compiler/validator 均需闭合；损坏不可解释为未命中。同一次普通运行的 usage 仍只认本 run
+完整成本，历史已购费用由原 ledger 行与新采用引用关联，不再复制成新消耗。
+
+`stage4.design --reaggregate` 可在正式候选缺失时免费汇合全部策略/章响应，也可按同 run journal
+幂等完成自己的提交。它不解析默认模型配置、不启动 driver、不补买缺失单元；全部采用产物使用
+`BlindCandidateCompiledProvenance(origin=compiled, architecture=book_strategy_adopted_v1)`，
+`sources_sha256` 绑定完整聚合来源行，不伪造本次 model/usage。普通付费配置运行即使全部命中，
+仍保留各来源实际模型和明确的采用账；下游 repair/human evolution 读取同一份 v2 source 身份。
+
+普通 A 的 prepared 聚合由 `stage4.design --recover-prepared <run> --subject-sha256 <proof>`
+免费补尾。原代码、原配置、策略与全部章来源均须通过当前投影与完整 compiler；证明原 owner 停止后，
+新 committer 持锁复验写前基线，仅补写已封存字节与缺失采用审计。恢复回执在主产物写入前预认领，
+最后进入原 journal；下游 lineage 继续验证该回执。损坏、第三方漂移与多份 prepared 保持未知。
+
+typed targeted repair 仍使用独立桥：新
 execution epoch 的 target run 在首个 wire 前，可采用唯一最大历史 run 中与 target 的 resolved profile、
 完整请求、输入、schema、token ceiling 和恢复协议逐字段相等，且 source checkpoint/session/ledger、
 当前动态 validator 与闭合业务状态全部通过的目标章响应。它不覆盖策略、首次整书或 strategy replan；
@@ -160,7 +190,7 @@ unit checkpoint 不是正式 artifact。只有策略和全部章节齐全，代�
 
 A 的 schema/HARD 通过只说明候选可读、引用闭合，不替人判断它是否实现了足够的结构重构。审批服务对
 当前 A 构造完整 review subject：全局 basis 绑定 root/truth/alias/review contract；策略 subject 绑定
-重构策略与章权重；`stage4-design-review-v4` 延续 v3 的 split-capability 形状，把宏观策略冻结为
+重构策略与章权重；`stage4-design-review-v5` 延续 v3/v4 的 split-capability 形状，把宏观策略冻结为
 strategy epoch，并让每章只绑定
 该 epoch 与**本章自己的 weight**，其他章权重变化不再污染本章 checkpoint。每章 subject 绑定
 安全的本章盲真相、候选业务面，以及服务端调用
@@ -190,9 +220,13 @@ Executor 的 repair prompt 与 Commander 工作包 `submission_options.allowed_v
 | `scene_goal_exclude` | 1 / 1 | 只调整指定场景目标，不得把给定事实写成此场的当前目标或已进入此场的事件；保留事实及其原落地场景 |
 | `binding_constraint_unsat` | 1 / 0 | 调整 scene_refs 指向场景的结构，使其可在后续关闭式证据绑定中实现 |
 | `narrative_relation` | 0 / 0 | 必须满足 typed HARD relation effect，不得用自由文本改写其端点或语义 |
-全局 basis、策略或 `DESIGN_REVIEW_CONTRACT` 变化使全章旧决定过期；单章业务变化只使该章过期。
-同一策略下、subject 完全相同的历史 accept 可由模板带 `source_decision_sha256` 复用，但仍须对当前
-整书重新提交一次，不静默代签。v3 split-capability 历史仍可严格解码，却不取得 v4 current authority。
+整书策略审阅仍绑定完整 basis。章级策略 epoch 不含整书 truth 摘要，只绑定宏观策略、root、alias 与 review contract；它们变化使全章旧决定过期，自身 weight、局部真相或证据变化只使相关章过期。同主体最近拒绝遮住更早接受。
+同一策略下，subject 完全相同的历史 accept 由 typed ruling 的 `source_decision_sha256` 明确继承。
+服务端复验原决定、完整引用链、当前义务与最近否决；新裁决和有效继承的并集必须覆盖全部义务。
+模型只读待审章节及全局必要上下文，继承行在传输中固定；原理由和来源保留，不能借继承改票。
+无待审义务时 operator 返回所属 A/B 节点的 `--close-review`，免费闭合审批；A 的确定性收口记为
+`reviewer_kind=inherited`，没有新 Commander 或语义接受。原 proof 失效而完整 typed 决定未变时，
+仍使用原载荷重绑。v3 split-capability 历史可严格解码，却不取得 v4 current authority。
 同一 current A 业务 subject 的决定一经落盘只允许 exact typed replay：proof 未变时不写；只有候选
 业务面未变、外部 payload 逐字段相同而完整 provenance proof 漂移时，才追加同语义 history 绑定新
 proof，且不改 B 或 s4。唯一不同 payload 的后续写入是 current A 已 accept 且 current B 为
@@ -256,8 +290,8 @@ purpose/role/delivery/transition 或权重。
 provider session、purpose、ledger attempt 与 checkpoint；实际并发取配置、待跑章数与硬上限 4 的最小值。
 单章响应在 worker 内依次过 parse/必需键/schema/动态 validator 与本章 baseline 闭合，成功即原子
 checkpoint，后章失败不能取消或抹掉此前已验章。聚合始终按章号确定，B-owner 的整书 HARD 若能唯一
-路由到一章，只回该章原 session；新响应通过后同时替换 checkpoint、accepted attempt、unit lineage 与
-commit anchor，不能让正式来源账继续指向旧稿。A/Stage2/code owner 立即停止，不消耗该章后续轮次。
+路由到一章，只回该章原 session；新响应通过后同时更新 checkpoint、accepted attempt、unit lineage 与
+聚合来源清单，不能让正式来源账继续指向旧稿。A/Stage2/code owner 立即停止，不消耗该章后续轮次。
 
 章池只维持有界并发窗，不预提交全部歧义章。首个 `usage_limit` 等登记的可恢复 delivery failure 会关闭
 新 admission、drain 已在途任务，并写严格绑定当前 run/code/候选主体/请求全集/各章 `run.json` 的
@@ -265,12 +299,28 @@ commit anchor，不能让正式来源账继续指向旧稿。A/Stage2/code owner
 只补 pending。该 sidecar 不含供应商错误正文，也不是正式 artifact。普通 schema/HARD/业务失败、混合
 失败或凭据漂移不形成系统暂停。
 
-若旧 run 已经 ended，新 run 不伪造 live resume，而可在首个 wire 前按只读历史采用恢复。只有一个历史
-run 给出唯一最大的**不完整**可用章集合，且旧 run/profile/request/schema/checkpoint/session/ledger、
-当前候选主体、请求全集与现役单章 validator 全部闭合时，才生成不可变
-`historical-checkpoint-adoption.json`。历史 checkpoint 不复制到 target 目录、不续旧 provider session；
-正式 lineage 保留来源 run/checkpoint/attempt/model 哈希，aggregate usage 精确合并 source 与 target ledger。
-并列最大来源、完整但无 target commit anchor 的来源或任一身份漂移都不采用，改由当前 run 正常请求。
+若旧 run 已经 ended，新 run 在首个 wire 前按章匹配真实请求依赖，并完整复验
+run/profile/request/schema/checkpoint/session/ledger 与当前动态 validator。来源可以来自多个 run，
+也可以覆盖全部待绑定章；不可变 `historical-checkpoint-adoption.json` v2 逐行绑定 source run。
+相同请求下业务回答不同须明确裁决；相同回答的多份完整证明按稳定摘要选择来源，不能按时间猜。
+已证实的依赖不匹配只是本章不适用；来源损坏保持 unknown，不能当作 cache miss 再付费。
+历史 checkpoint 不复制到 target、不续旧 provider；正式 lineage 保留 source-stable 身份，
+原费用保留在 ledger。当前已购买回答、历史采用与机械章共同覆盖当前章集后统一聚合。
+
+章级 B 的提交身份独立于模型 attempt：`plan/aggregate-committed.json` 保存完整来源集合、
+当前输入、typed 主体及准确冻结字节、终验结论与每条目标路径的写前 SHA。全机械、全采用和混合
+来源均走 `prepared → 正式写盘/终验 → 各章采用/聚合采用审计 → committed`；不再要求挑一个
+本轮模型章作提交锚点。全采用与免费汇合使用 `origin=compiled`，来源细节留在 `unit_lineage`；
+不产生新 wire/cache 费用，不把同一 token 再算入确定性 Plan。
+
+`stage4.plan --reaggregate` 是登记的免费 producer：当前所有章可机械确定或具有完整保存成果时，
+operator 发布该动作；缺章、冲突、拒稿与未知状态都不能创建 driver、probe 或额外模型请求。
+同 run 中断可补齐 prepared、Binding、Plan 和采用尾账。原 producer 已停止时，operator 在审批
+之前发布 `--recover-prepared <source run> --subject-sha256 <proof>`；实际新 committer 另留审计。
+恢复在 owner-stopped lease 和书级提交锁内重建完整 typed payload/provenance，复验所有来源、
+原成本与 LF 闭合审计，只有 live 文件为写前基线或冻结目标才继续；第三态、多份 prepared、
+不完整 Agent epoch 生命周期、伪造 provenance 或来源损坏均为 unknown。原 journal 最后标
+committed，并记录实际恢复 run/parent；相同凭据重复执行不重复写盘、采用或购买。
 
 章 prompt 保留完整本章冻结候选（goal、brief、结构决定、每场 purpose/role/delivery/transition、
 turn/首尾状态和权重），并显式下发本章 `fact_aliases / participant_aliases`，把 opaque 引用与正式
@@ -283,10 +333,10 @@ hash-bound unit replacement。人工 replacement 与模型章响应复用同一�
 validator、聚合 compiler 与全书 HARD；它只消费已封存且绑定原 run/request/code/subject 的 resolution，
 不新增 provider wire。整份人工 `--apply-binding` 继续作为另一条明确入口，不与 unit replacement 混用。
 
-`STAGE4_BINDING_INPUT_CONTRACT=stage4-chapter-binding-input-v2` 作为明确字段实际进入章请求，
+`STAGE4_BINDING_INPUT_CONTRACT=stage4-chapter-binding-input-v3` 作为明确字段实际进入章请求，
 同值进入章 input SHA 和请求恢复比较。新章模型 B 在既有 provenance 的 prompts 映射写
-`CHAPTER_BIND_INPUT_CONTRACT=prov.fingerprint(契约值)`，不新增 artifact 字段或升版；纯机械、
-人工与旧整书路径不写该模型输入回执。只有当前完整来源能证明实际使用新契约时，回执才有效。
+`CHAPTER_BIND_INPUT_CONTRACT=prov.fingerprint(契约值)`；免费 compiled 汇合以可选
+`binding_input_contract` 保存同一已验证输入契约。纯机械、人工与旧整书路径不写该模型输入回执。只有当前完整来源能证明实际使用新契约时，回执才有效。
 
 Store 以唯一纯 helper 识别已发行的缺图旧 B：LLM `chapter_baseline_v1`、完整逐章 lineage、
 精确旧 `CHAPTER_BIND_SYS` 指纹且无新回执，合取才报 `binding_input_contract_obsolete`。
@@ -302,10 +352,12 @@ Store 以唯一纯 helper 识别已发行的缺图旧 B：LLM `chapter_baseline_
 | `chapters` | 非空；章场集精确匹配候选 | `null` | 码·契 |
 | `binding_concerns[]` | 可空；非阻断语义担忧 | 模型主张阶段必须非空；正式稿保留作审阅证据 | 码·契 |
 | `infeasibility_proof[]` | `null` | 非空、由代码铸造的关闭式 witness | 码·契 |
-| `_provenance` | `architecture=chapter_baseline_v1` 时含 baseline/chapter session 的逐章 `unit_lineage`；新章 session 明确 `origin=current_run`，历史采用明确 `origin=historical_checkpoint` 及 source-stable run/checkpoint/attempt 身份；全机械书明确 0 模型；旧整书路为 `whole_book_v1`；`--apply-binding` 为 human 免费来源账 | 同左 | 码·契 |
+| `_provenance` | `architecture=chapter_baseline_v1` 时含 baseline/chapter session 的逐章 `unit_lineage`；新章 session 明确 `origin=current_run`，历史采用明确 `origin=historical_checkpoint` 及 source-stable run/checkpoint/attempt 身份；全机械书明确 0 模型；旧整书及缺省架构不再接受；`--apply-binding` 为 human 免费来源账 | 同左 | 码·契 |
 
 `bound.chapters[].scenes[]` 只含 `candidate_scene_id`、`stage_refs`、`material_refs`。每个候选场恰绑定
-一次，每条材料全章恰落一次；返回数组顺序不产生叙事语义，编译始终沿 A 顺序。
+一次，每条材料全章恰落一次。材料的 source_fact_refs 由 novel/stages/stage4/beats.py::material_scene_candidates 同时供请求和 fact_ref 闸使用；相关 land 的落场优先，后续 context 重提不制造新候选。多事实分属多场仍由 B 裁决；返回数组顺序不产生叙事语义，编译始终沿 A 顺序。
+
+预检的存在性样本使用同一机械基线；歧义材料只在其候选中选最晚场，避免先造提前披露再误归责 A。样本不写成正式 B 决定。
 
 模型的 `infeasible` 只是待核证主张，不是 artifact。代码在同一目录上先作构造性求解：合法章至少有
 一个舞台、每场可复用首项舞台、全部材料可唯一落到首场，因此常规输入可绑定；错误主张在同一 session
@@ -362,7 +414,7 @@ Store 以唯一纯 helper 识别已发行的缺图旧 B：LLM `chapter_baseline_
 声明；不包含来源账、已删除字段或现场派生向量。最终人审 subject 再把该 plan subject 与当前 B 的
 完整 `binding_concerns`、`STRUCTURE_REVIEW_CONTRACT` 及经有效章模型回执证明的
 `binding_input_contract` 合成唯一 SHA-256。该输入身份同步进入逐章复用 hash、immutable snapshot、
-实际 workpack reading 与 API view；旧非章模型路径省略它并保留旧 hash。修好输入后即使 B 结果
+实际 workpack reading 与 API view；非章模型路径省略该输入回执身份，但仍绑定现役结构审阅契约与完整 Blueprint 证据。修好输入后即使 B 结果
 恰好相同也须正式重审，旧决定保留历史；任意 code/prompt/run/provenance 漂移不能冒充输入契约
 变化。改变实际计划、concerns 或 review contract 同样会使决定过期；只改变算法读数不会改写
 计划字节。逐章 subject 同样绑定该 contract，
@@ -381,10 +433,16 @@ Store 以唯一纯 helper 识别已发行的缺图旧 B：LLM `chapter_baseline_
 计划 provenance 不复制 A/B 的 model/prompts/usage，也不保存编译参数。A/B 完整文件 SHA-256 是正式计划
 可消费当前中间产物的精确凭据。人工 v4 edit 产生 `origin=human`，不得继续冒充旧 A/B 编译物。
 
-## 五、`writer_context.json` v4
+## 五、`writer_context.json` v7
 
 顶层只含 `chapters` 与免费 `_provenance`。每章保留同号身份、三个已解析 CtxGoal、由当前 blueprint 派生
-的 `semantic_contract`、brief、章预算、章级源字数、场景、叙述、章级人物数组及安全投影后的事实。
+的 `semantic_contract`、brief、场景、叙述、按显式依赖裁剪的人物数组、章首已知事实及场景披露许可。
+
+源章恒等于输出章；总预算由场景预算求和，源字数来自 Stage1 正文。
+`novel/stages/stage5/measure.py::chapter_basis` 是执行与 API 的唯一派生入口，产物不保存这三个展示副本。
+API 的 `CtxChapterView` 仅在读取时补齐读数；源文缺失或不可读时源字数为 null，真实写作由
+`require_chapter_basis` 关闭式拒绝。按章人物名单具有写作及后续审阅消费者，角色与当章称名仍绑定
+任务书的实际依赖，不替换成无依据的全书名单。
 
 | 字段 | 写手含义 | 证据 |
 |---|---|---|
@@ -394,12 +452,20 @@ Store 以唯一纯 helper 识别已发行的缺图旧 B：LLM `chapter_baseline_
 | `required_facts / context_facts / turn_fact` | typed refs 的人话解析 | 三源 |
 | `entry_state / exit_state` | 场景进入与退出状态 | 码·契 |
 | `stages[]` | `time_layer/place/present`；人物到场只从这里读取 | 三源 |
+| `knowledge[]` | 本场起开放的知识正文、known/reveal/setup 用途和知情者；埋点只含表现事实 | 码·契 |
+| `disclosure_windows[]` | 当前受限内容及允许使用的场景；subject_ref 是不下发写手的审计引用 | 码·契 |
 | `verbatim / keep_value / must_appear / must_hold` | 四类保真材料 | 三源 |
 
-Context 不保存顶层 `world_facts`、逐场源字数、逐场 participants、secret/rule 内部 id 或章级
-`must_not_reveal`。Stage5 的全书名称检测基线由当前 `GlobalGrounding + MainText` 经共享名称投影重建；
-秘密边界只读 Stage2 权威时间线。Stage4 和 Stage5 共用 `novel/core/naming.py`，避免 `display_name`、
-名称区分度和残留名检查口径漂移。
+Context 不保存顶层 `world_facts`、逐场源字数、逐场 participants、章级未揭示 id 清单。
+章首 `facts.secrets[].reader_knows_by_now` 只能为 true；埋点不再携带秘密答案。时代背景和世界观
+在章首未开放时显式为 null。本章新增知识经 `KnowledgeLinks` 的明确触发事实映射到实际场景，
+支持证据不能代替触发时点；场景重排后免费重算 allowed_slots，提前通过 context/entry/exit
+引用触发事实则拒绝。全部场景、目标、因果和进出状态都受同一披露许可约束。
+
+当前 Context v7 由 `stage4.context` 免费重建。Producer 必须先核验当前完整知识决定及关联来源；
+缺失、过期、未决或来源损坏不回退旧逐章闸门。名称闸门仍独立保留：Stage4 和 Stage5 共用
+`novel/core/naming.py`，Stage5 全书名称及秘密检测基线继续从完整当前上游重建，不因材料裁剪
+漏查。关联成功不是成稿语义质量通过；改写式泄底和跨场景提前披露继续独立审阅。
 
 Stage5 prompt 不接收 fact/beat/hinge/secret/rule id、alias、A 策略、结构 metric、逐场源字数或源正文。
 
@@ -446,11 +512,11 @@ Structure replan blocker 不强迫 Reviewer 发明付费 A 动作：交叉阅读
 
 | 状态 | 允许的恢复 | 禁止的捷径 | 证据 |
 |---|---|---|---|
-| A 的策略或单章响应暂停/拒收 | 同一 `run_id` 恢复，只补失败/缺失 unit；旧 whole-book validator 拒稿才可走 `--adopt-rejected` | 重发已验 unit、公开 `--chapters`、拿旧整书入口冒充 unit adoption、补字段或部分聚合冒充正式候选 | 码·契 |
+| A 的策略或单章响应暂停/拒收 | 同一 `run_id` 恢复，只补失败/缺失 unit；已保存回答可免费重判并聚合，旧整书拒稿采用入口已退役 | 重发已验 unit、公开 `--chapters`、拿旧整书入口冒充 unit adoption、补字段或部分聚合冒充正式候选 | 码·契 |
 | A 正式审阅逐章拒绝 | 当前 opaque `--review-token` 由服务端展开决定；Supervisor 在执行前打开 fresh producer epoch、重读 exact action 且不再调用 Reviewer，只返修 request_repair 章；每个 repair epoch 最多两轮，累计约束不可遗忘；耗尽后可新开同策略 repair epoch或走完整章 preview/apply | 在修前 producer run 内续写、把单章耗尽自动升级成整书 replan、把默认模板理由当真实反馈、字段 patch、无决定随机重采整书 | 码·契 |
 | A 正式审阅策略拒绝 | 同样先切 fresh producer epoch；`--replan` 携 typed 累计策略/章节失败反馈和 accepted 章约束，只重跑 effective 输入变化的章 | 在原 aggregate 的 producer run 内 replan、丢掉失败史重新采样、让未变已验章重发 wire、把自由文本 reason 当执行约束 | 码·契 |
 | A repair/replan aggregate 已 prepared，source producer 已结束 | operator 只发布 raw/self 双 SHA 绑定的 `--recover-repair-aggregate`；新 recovery run 在任一写前复核 source 生命周期/账/响应与当前 compiler/HARD，幂等补 candidate/adoption/audit/committed | 重解 stale review token、重唤 Reviewer/Executor、续旧 provider、按 newest 挑 journal、从多份/双副本/第三态中猜 winner、先改候选再验账 | 码·契 |
-| B 章池遇到可恢复交付失败 | 当前 run 由严格 `delivery_recovery.json` 系统暂停并只补 pending；已 ended 的旧 run 只允许新 run 经 immutable historical adoption 采用唯一、严格复验的不完整 checkpoint 集合 | 预提交全部章节、把普通 exit 2 洗成 paused、复活 ended parent、复制 checkpoint、续旧 provider session、在多个最大来源间猜一个、漏记历史 usage | 码·契 |
+| B 章池遇到可恢复交付失败 | 当前 run 由严格 `delivery_recovery.json` 系统暂停并只补 pending；已 ended 的旧 run 由新 run 逐章严格复验后采用，允许多来源和全部采用；prepared 尾窗优先免费补尾 | 预提交全部章节、把普通 exit 2 洗成 paused、复活 ended parent、复制 checkpoint、续旧 provider session、在冲突业务回答间猜一个、把未知来源当未命中、漏记历史 usage | 码·契 |
 | 模型声称 B `infeasible` | 同 session 结构化反馈要求 bound；真实代码 witness 可落正式终态；亦可提交 `--apply-binding` 或完整 v4 人工计划 | 信任模型自证、B 私改 A、自动生成 A2、要求已有 Plan 才给首次恢复 | 码·契 |
 | 最终 Structure 人审 `request_replan` | 独立 resolution Reviewer 交叉读 B 决定与 current A；有具体 coverage 语义损害才提交非 all-accept typed A resolution，仅有 read-only 理由则 typed stop 安全停机；review contract/subject 变化后再审 | 用同 token 覆盖 B、把 metric/INFO/UNVER/binding concern 变成 A constraint、强迫 all-accept 或无依据付费返工 | 人·契 |
 | 计划落 `.INVALID` | 修订 v4 `plan_edit.json` 后 `--apply-edit`，或 `--revalidate --actor --reason` | 改名提升、绕过 schema/判据/归档 | 三源 |
@@ -470,3 +536,22 @@ Structure replan blocker 不强迫 Reviewer 发明付费 A 动作：交叉阅读
 | 常驻读数 | `scene_budget_distribution` · `verbatim_share` · `partition_change` · `disclosure_order` · `noncontiguous_regroup` · `anchor_migration` · `structure_eligibility` · `structure_alignment` · `semantic_closure_reading` · `ctx_source` |
 
 判据权威定义在 `contracts/judges/stage4.py`。metric 不产生自动结论，API、前端与审批服务不得再造第二个判官。
+
+### 上游局部重建与合法父节点
+
+当前 A producer 在 provenance 保存 `design_dependencies`：策略和逐章普通请求的实际依赖摘要。
+宏观策略审阅同样消费 `build_blind_strategy_projection`；`basis.truth_sha256` 保留整书证据快照，
+不再单独令宏观策略或无关章义务失效。候选、证据、策略、候选集合、边界或义务实际变化仍须复审。
+
+正式候选明确 stale 时，普通 A 重建先由其唯一 committed aggregate、完整文件 SHA 和全部来源链
+确认合法父节点。实际依赖不变的单元保留该父节点中的来源，包括人工章替换和 typed 修复；变化章
+收到当前父设计及新事实，再走同一 compiler 与 HARD。人工正式别名与模型局部别名通过编译往返
+相等校验转换，原人工来源、理由和费用不改写。没有依赖凭据或来源不闭合时保持 stale/unknown，
+不取修复前旧缓存覆盖当前父节点。
+
+聚合 journal 的 `finalization_payload.rebuild` 冻结父节点身份与保留源全集；普通新回答、历史采用和
+保留源必须无重叠覆盖策略及全部章。提交、免费 prepared 恢复与下游 repair/human 消费验证同一来源
+集合，重建不清空已提交修复轮数或未关闭义务。上游变化若发生于同一 Agent epoch，Supervisor 先
+关闭并 drain 已提交 producer 的旧 epoch，换新身份后重读 next/token，边界本身不调用 Reviewer。
+
+原回答落盘早于 checkpoint 的窗口由 `stage4.design --recover-responses` 免费闭合。queue 的只读发现优先于新的生成和聚合；执行持原 owner 停止锁，以原请求、原完整配置和费用回执恢复原 checkpoint。正式候选仍由下一次确定性聚合提交，失败或损坏保留 unknown。

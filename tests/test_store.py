@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field, RootModel
 from contracts.artifacts import (
     STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
-    STAGE2_GLOBAL_GROUNDING,
+    STAGE2_GLOBAL_GROUNDING, STAGE2_CHARACTERS,
     STAGE2_GLOBAL_REVIEW, STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
 )
 from contracts.schema import (
@@ -38,7 +38,7 @@ from contracts.schema.stage4 import (
     EvidenceBinding, EvidenceBindingHumanProvenance, PlanChapters, PlanProvenance,
 )
 from novel.consumption import (
-    CONSUMED_PROJECTIONS, legacy_stage3_projection_for, legacy_stage5_style,
+    CONSUMED_PROJECTIONS,
     producer_node, project_consumed, projection_for,
 )
 from novel.errors import (
@@ -563,16 +563,7 @@ def _stage4_grounding_payload() -> dict:
                 }],
             }],
         },
-        'arc': {
-            'conflict_stages': [{'stage': '守店', 'chapters': [1, 2]}],
-            'climax': '旧信被当众取出的那一刻',
-            'ending': '甲守住了铺子也说清了旧事',
-            'arc_tracks': [{
-                'subject': 'char_001',
-                'trajectory': '从独自隐瞒到公开承担',
-                'trajectory_evidence': evidence(2, '甲当众展开旧信并认下责任。', 100),
-            }],
-        },
+        'source_blurb': {'facts': [], 'opening': {'kind': 'proposed', 'through_chapter': 2, 'rationale': '开篇经营与展开旧信', 'boundary_evidence': evidence(2, '甲当众展开旧信并认下责任。', 100)}},
         '_provenance': {
             'code': 'source-v1',
             'root_clean_sha1': '0' * 40,
@@ -585,6 +576,29 @@ def _stage4_grounding_payload() -> dict:
     }
 
 
+def _character_subject(view: dict) -> dict:
+    """显式构造当前人物载体；不把动态知识写回静态 owner。"""
+    from contracts.schema.characters import CharactersProvenance
+    return {'characters': {
+        cid: {key: value for key, value in row.items() if key not in {'fate', 'fate_evidence'}}
+        for cid, row in view['entities']['characters'].items()},
+        '_provenance': {key: value for key, value in view['_provenance'].items()
+                        if key in CharactersProvenance.model_fields}}
+
+
+def _write_character_subject(book: Path, view: dict) -> None:
+    _write_payload(book, STAGE2_CHARACTERS, _character_subject(view))
+
+
+def _write_knowledge_subject(book: Path, view: dict) -> None:
+    from contracts.schema.characters import CharacterRegistry
+    from contracts.schema.stage2 import GlobalGrounding
+    from novel.stages.stage2.grounding import decompose
+    registry = CharacterRegistry.model_validate(_character_subject(view))
+    knowledge = decompose(GlobalGrounding.model_validate(view), registry)
+    _write_payload(book, STAGE2_GLOBAL_GROUNDING, knowledge.model_dump(mode='json', by_alias=True))
+
+
 def _write_grounding_projection_subject(
     base: Path, grounding: dict, *, node: str, rel: str,
     payload: dict | None = None,
@@ -592,9 +606,8 @@ def _write_grounding_projection_subject(
 ) -> ArtifactStore:
     """把 `grounding` 写成上游，再按 `node` **注册的那一个**投影给 `rel` 记来源边。
 
-    ⚠ 名字里不再带 `stage4`：`stage2.blueprint` 与 stage4 两相消费的是**同一份上游、
-    各自不同的投影**，共用这一个 helper 才能保证记账走的是注册表里那个函数
-    ——守卫要调用生产的落点，不重拼一份。
+    Blueprint 显式预置独立人物与必要知识，并只登记实际称名投影；
+    其他节点在本组只验证单条注册投影，完整 producer 链另有集成测试。
     """
     book = base / '书名_123'
     related: dict[str, object] = {}
@@ -615,7 +628,11 @@ def _write_grounding_projection_subject(
             ]
         _write_payload(book, STAGE1_MAIN_TEXT, main_text)
         related[STAGE1_MAIN_TEXT] = main_text
-    _write_payload(book, STAGE2_GLOBAL_GROUNDING, grounding)
+    if node == 'stage2.blueprint':
+        _write_character_subject(book, grounding)
+        _write_knowledge_subject(book, grounding)
+    else:
+        _write_payload(book, STAGE2_GLOBAL_GROUNDING, grounding)
     if node == 'stage2.blueprint':
         from novel.stages.stage2.character_refs import (
             materialize_blueprint_character_projection,
@@ -803,7 +820,7 @@ def test_stage5_review_name_projection_ignores_non_name_character_metadata():
 
 @pytest.mark.parametrize('edited', (
     'secret_fact', 'setup', 'first_reveal', 'knowledge_events', 'role', 'fate',
-    'relations', 'setting', 'arc', 'world_rules',
+    'relations', 'setting', 'opening', 'world_rules',
     'name_distinctiveness', 'address_context', 'address_by', 'evidence',
     'address_from_chapter',
 ))
@@ -845,8 +862,8 @@ def test_blueprint_grounding_projection_only_tracks_attested_names(edited: str):
         grounding['entities']['relations'][0]['predicate'] = '自指'
     elif edited == 'setting':
         grounding['canon']['setting']['世界观'] = '换一个世界'
-    elif edited == 'arc':
-        grounding['arc']['climax'] = '高潮在第九章'
+    elif edited == 'opening':
+        grounding['source_blurb']['opening']['rationale'] = '重新核验开篇的依据'
     elif edited == 'world_rules':
         grounding['canon']['world_rules'][0]['kind'] = 'institution'
     elif edited == 'name_distinctiveness':
@@ -869,7 +886,10 @@ def test_blueprint_grounding_projection_only_tracks_attested_names(edited: str):
         # 本 fixture 的「掌柜」只挂 char_001；运行时只按正文首现控制它，
         # 所以这个 from_chapter 不影响任何逐章候选字节。
         char['address'][0]['from_chapter'] = 9
-    _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
+    if edited in {'role', 'name_distinctiveness', 'address_context', 'address_by', 'address_from_chapter'}:
+        _write_character_subject(base / '书名_123', grounding)
+    else:
+        _write_knowledge_subject(base / '书名_123', grounding)
 
     projection_report = store.freshness(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
     assert (projection_report.state, projection_report.reason) == ('fresh', 'match')
@@ -893,12 +913,12 @@ def test_blueprint_grounding_projection_tracks_ambiguous_address_clock():
 
     grounding['entities']['characters']['char_001']['address'][0][
         'from_chapter'] = 9
-    _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
+    _write_character_subject(base / '书名_123', grounding)
 
     report = store.freshness(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
     assert (report.state, report.reason) == ('stale', 'consumed_changed')
     edge = next(edge for edge in report.edges
-                if edge.key == STAGE2_GLOBAL_GROUNDING)
+                if edge.key == STAGE2_CHARACTERS)
     assert edge.recorded_consumed != edge.now_consumed
     # 普通 artifact freshness 不递归执行投影自己的特殊 freshness；真正 consumer
     # 与 Stage4 联合闸另行要求 projection current/fresh。
@@ -919,7 +939,7 @@ def test_blueprint_grounding_projection_ignores_unattested_ambiguous_clock():
 
     grounding['entities']['characters']['char_001']['address'][0][
         'from_chapter'] = 9
-    _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
+    _write_character_subject(base / '书名_123', grounding)
 
     report = store.freshness(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
     assert (report.state, report.reason) == ('fresh', 'match')
@@ -948,7 +968,7 @@ def test_ambiguous_clock_only_stales_when_it_crosses_real_first_attestation(
 
     grounding['entities']['characters']['char_001']['address'][0][
         'from_chapter'] = new_clock
-    _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
+    _write_character_subject(base / '书名_123', grounding)
 
     report = store.freshness(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
     assert (report.state, report.reason) == expected
@@ -965,12 +985,12 @@ def test_blueprint_grounding_projection_ignores_canonical_shadowed_address_clock
         rel=STAGE2_CHAPTER_BLUEPRINTS, payload={'blueprints': []})
 
     character['address'][0]['from_chapter'] = 9
-    _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
+    _write_character_subject(base / '书名_123', grounding)
 
     report = store.freshness(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
     assert (report.state, report.reason) == ('fresh', 'match')
     edge = next(edge for edge in report.edges
-                if edge.key == STAGE2_GLOBAL_GROUNDING)
+                if edge.key == STAGE2_CHARACTERS)
     assert edge.recorded_consumed == edge.now_consumed
 
 
@@ -985,6 +1005,11 @@ def test_blueprint_grounding_projection_tracks_every_attested_name(edited: str):
     """
     base = _book()
     grounding = _stage4_grounding_payload()
+    if edited == 'drop_character':
+        other = copy.deepcopy(grounding['entities']['characters']['char_001'])
+        other.update(canonical='乙', address=[{'surface': '乙', 'from_chapter': 1,
+                                             'by': 'narration', 'context': 'reference'}])
+        grounding['entities']['characters']['char_002'] = other
     store = _write_grounding_projection_subject(
         base, grounding, node='stage2.blueprint',
         rel=STAGE2_CHAPTER_BLUEPRINTS, payload={'blueprints': []})
@@ -1023,16 +1048,16 @@ def test_blueprint_grounding_projection_tracks_every_attested_name(edited: str):
                 'by': 'public', 'context': 'address',
             }],
         }
-    _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
+    _write_character_subject(base / '书名_123', grounding)
 
     report = store.freshness(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
     assert (report.state, report.reason) == ('stale', 'consumed_changed')
     edge = next(edge for edge in report.edges
-                if edge.key == STAGE2_GLOBAL_GROUNDING)
+                if edge.key == STAGE2_CHARACTERS)
     assert edge.recorded_consumed != edge.now_consumed
 
 
-def test_blueprint_consumer_closes_when_global_changed_but_projection_write_interrupted():
+def test_blueprint_consumer_closes_when_characters_changed_but_projection_write_interrupted():
     """普通 freshness 不递归特殊投影；真实 consumer 必须补上这道承重闸。"""
     from novel.stages.stage2 import extract
     from novel.stages.stage2.character_refs import (
@@ -1047,13 +1072,13 @@ def test_blueprint_consumer_closes_when_global_changed_but_projection_write_inte
         rel=STAGE2_CHAPTER_BLUEPRINTS, payload={'blueprints': []})
 
     grounding['entities']['characters']['char_001']['canonical'] = '乙'
-    _write_payload(book, STAGE2_GLOBAL_GROUNDING, grounding)
+    _write_character_subject(book, grounding)
     assert store.freshness(
         STAGE2_BLUEPRINT_CHARACTER_PROJECTION).state == 'stale'
     assert store.freshness(STAGE2_CHAPTER_BLUEPRINTS).state == 'fresh', \
         '这条正是普通 freshness 不递归 special artifact 的反例'
 
-    with pytest.raises(ProvenanceRefused, match='stage2.global --renormalize'):
+    with pytest.raises(ProvenanceRefused, match='stage2.characters --revalidate'):
         extract._require_blueprint_character_projection(store)
 
     main = json.loads(
@@ -1068,7 +1093,7 @@ def test_blueprint_consumer_closes_when_global_changed_but_projection_write_inte
         '投影真正重写后，旧 Blueprint 的直接输入边才应 stale'
 
 
-def test_blueprint_consumer_rejects_schema_invalid_latest_global_candidate():
+def test_blueprint_consumer_rejects_schema_invalid_latest_characters_candidate():
     """称名字段没变也不能让 schema-invalid 的最新 INVALID 冒充可用底座。"""
     from novel.stages.stage2 import extract
 
@@ -1079,17 +1104,16 @@ def test_blueprint_consumer_rejects_schema_invalid_latest_global_candidate():
         base, grounding, node='stage2.blueprint',
         rel=STAGE2_CHAPTER_BLUEPRINTS, payload={'blueprints': []})
 
-    broken = copy.deepcopy(grounding)
-    broken['entities']['relations'] = '这不是关系数组'
-    _write_payload(
-        book, paths.invalid_of(STAGE2_GLOBAL_GROUNDING), broken)
+    broken = _character_subject(grounding)
+    broken['characters']['char_001']['role_evidence'] = '这不是证据对象'
+    _write_payload(book, paths.invalid_of(STAGE2_CHARACTERS), broken)
 
     report = store.freshness(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
     assert (report.state, report.reason) == (
         'unknown', 'consumed_unresolved')
     assert store.freshness(STAGE2_CHAPTER_BLUEPRINTS).state == 'fresh', \
         '普通 consumer freshness 不递归 projection 的 special freshness'
-    with pytest.raises(ProvenanceRefused, match='stage2.global --renormalize'):
+    with pytest.raises(ProvenanceRefused, match='stage2.characters --revalidate'):
         extract._require_blueprint_character_projection(store)
 
 
@@ -1106,7 +1130,7 @@ def test_blueprint_consumer_routes_damaged_projection_to_zero_llm_recovery():
 
     with pytest.raises(
             ProvenanceRefused,
-            match='stage2.global --renormalize.*0 LLM'):
+            match='stage2.characters --revalidate.*0 LLM'):
         extract._require_blueprint_character_projection(store)
 
 
@@ -1218,12 +1242,12 @@ def test_projection_registry_resolves_dynamic_and_invalid_artifact_paths():
         'stage2/chapter_blueprints.json',
         'stage2/global_grounding.json',
         'stage2/global_review.json',
+        'stage2/characters.json', 'stage2/knowledge_links.json',
         'stage4/plan_chapters.json',
     }
     assert projection_for('stage3.style', UPSTREAM) is None
-    assert legacy_stage3_projection_for(
-        'stage3.style', 'stage1/main_text.INVALID.json'
-    ) is legacy_stage3_projection_for('stage3.style', UPSTREAM)
+    assert projection_for('stage3.style', 'stage1/main_text.INVALID.json') is None
+    assert producer_node('stage3/style_grounding.json') is None
 
 
 def test_stage2_review_projection_tracks_generation_semantics_not_reason_wording():
@@ -1273,89 +1297,6 @@ def test_stage5_review_tracks_context_code_without_overinvalidating_writing():
     after = {**before, '_provenance': {'code': 'new-code'}}
     assert write_projection(before) == write_projection(after)
     assert review_projection(before) != review_projection(after)
-
-
-def test_legacy_stage5_style_projection_is_exactly_the_nine_body_mechanical_leaves():
-    write_projection = legacy_stage3_projection_for(
-        'stage5.write', 'stage3/style_grounding.json')
-    review_projection = legacy_stage3_projection_for(
-        'stage5.review', 'stage3/style_grounding.json')
-    assert write_projection is review_projection is legacy_stage5_style
-    source = {
-        'voice': {'narrative_distance': '定性哨兵'},
-        'surface_habits': ['习惯哨兵'],
-        'chapter_styles': [{'source_ordinal': 1, 'voice': {'x': '逐章哨兵'}}],
-        'hook_style': {'tone': '文案定性哨兵'},
-        'measurable': {
-            'body': {
-                'chars': 101, 'paragraphs': 11, 'sentences': 21,
-                'avg_sentence_chars': 17.1, 'avg_paragraph_chars': 27.2,
-                'paragraph_sep_chars': 2.0,
-                'dialogue_ratio_applicable': True, 'dialogue_ratio': 0.33,
-                'quote_styles': ['「」'],
-                'chapter_chars': {'min': 700, 'max': 1300, 'avg': 1000.0},
-                'per_chapter_avg_sentence': {'min': 15.0, 'max': 20.0},
-            },
-            'hook': {
-                'chars': 51, 'paragraphs': 5, 'sentences': 7,
-                'avg_sentence_chars': 9.9, 'avg_paragraph_chars': 10.2,
-            },
-        },
-    }
-    expected = {'body': {
-        'avg_sentence_chars': 17.1,
-        'avg_paragraph_chars': 27.2,
-        'paragraph_sep_chars': 2.0,
-        'dialogue_ratio_applicable': True,
-        'dialogue_ratio': 0.33,
-        'quote_styles': ['「」'],
-        'chapter_chars': {'avg': 1000.0},
-        'per_chapter_avg_sentence': {'min': 15.0, 'max': 20.0},
-    }}
-    assert write_projection(source) == expected
-
-    dropped = copy.deepcopy(source)
-    dropped['voice'] = {'changed': 'changed'}
-    dropped['surface_habits'] = ['changed']
-    dropped['chapter_styles'] = [{'changed': True}]
-    dropped['hook_style'] = {'changed': 'changed'}
-    dropped['measurable']['hook']['avg_sentence_chars'] = 999
-    dropped['measurable']['body']['chars'] = 999
-    dropped['measurable']['body']['paragraphs'] = 999
-    dropped['measurable']['body']['sentences'] = 999
-    dropped['measurable']['body']['chapter_chars']['min'] = 999
-    dropped['measurable']['body']['chapter_chars']['max'] = 999
-    assert write_projection(dropped) == expected
-
-    retained_paths = (
-        ('avg_sentence_chars',), ('avg_paragraph_chars',), ('paragraph_sep_chars',),
-        ('dialogue_ratio_applicable',), ('dialogue_ratio',), ('quote_styles',),
-        ('chapter_chars', 'avg'),
-        ('per_chapter_avg_sentence', 'min'), ('per_chapter_avg_sentence', 'max'),
-    )
-    for path in retained_paths:
-        edited = copy.deepcopy(source)
-        target = edited['measurable']['body']
-        for key in path[:-1]:
-            target = target[key]
-        target[path[-1]] = 'changed'
-        assert write_projection(edited) != expected, path
-
-
-def test_legacy_stage5_style_projection_tolerates_malformed_raw_nested_shapes():
-    project = legacy_stage3_projection_for(
-        'stage5.write', 'stage3/style_grounding.json')
-    assert project is legacy_stage5_style
-    assert project({'measurable': '旧坏形状'}) == {'body': {
-        'avg_sentence_chars': None,
-        'avg_paragraph_chars': None,
-        'paragraph_sep_chars': None,
-        'dialogue_ratio_applicable': None,
-        'dialogue_ratio': None,
-        'quote_styles': None,
-        'chapter_chars': {'avg': None},
-        'per_chapter_avg_sentence': {'min': None, 'max': None},
-    }}
 
 
 def test_a_draft_cannot_be_read_through_the_edge_path():
@@ -1714,11 +1655,9 @@ def test_deterministic_self_fresh_policy_only_guards_artifacts_that_can_self_pro
 def test_global_review_pending_decisions_are_fresh_when_required_surface_is_exact():
     base = _book()
     book = base / '书名_123'
-    grounding = {
-        'entities': {'characters': {}},
-        'canon': {'world_rules': [], 'secrets': []},
-    }
-    _write_payload(book, STAGE2_GLOBAL_GROUNDING, grounding)
+    grounding = _stage4_grounding_payload()
+    _write_character_subject(book, grounding)
+    _write_knowledge_subject(book, grounding)
     review = build_review(grounding)
     assert review.items and all(item.state == 'pending' for item in review.items)
 
@@ -1733,11 +1672,9 @@ def test_global_review_pending_decisions_are_fresh_when_required_surface_is_exac
 def test_global_review_surface_drift_is_stale_even_when_source_hash_is_copied():
     base = _book()
     book = base / '书名_123'
-    grounding = {
-        'entities': {'characters': {}},
-        'canon': {'world_rules': [], 'secrets': []},
-    }
-    _write_payload(book, STAGE2_GLOBAL_GROUNDING, grounding)
+    grounding = _stage4_grounding_payload()
+    _write_character_subject(book, grounding)
+    _write_knowledge_subject(book, grounding)
     incomplete = build_review(grounding)
     incomplete = incomplete.model_copy(update={'items': incomplete.items[:-1]})
     _write_payload(book, STAGE2_GLOBAL_REVIEW, incomplete.model_dump())
@@ -1752,19 +1689,17 @@ def test_global_review_surface_drift_is_stale_even_when_source_hash_is_copied():
 def test_global_review_source_drift_refuses_write_and_restores_previous_bytes():
     base = _book()
     book = base / '书名_123'
-    grounding = {
-        'entities': {'characters': {}},
-        'canon': {'world_rules': [], 'secrets': []},
-    }
-    _write_payload(book, STAGE2_GLOBAL_GROUNDING, grounding)
+    grounding = _stage4_grounding_payload()
+    _write_character_subject(book, grounding)
+    _write_knowledge_subject(book, grounding)
     review = build_review(grounding)
     store = ArtifactStore(_ctx(base, node='stage2.global', paid=False))
     official = store.write(STAGE2_GLOBAL_REVIEW, review)
     before = official.read_bytes()
 
     changed = copy.deepcopy(grounding)
-    changed['canon']['world_rules'].append({'rule_id': 'r1', 'kind': 'hard'})
-    _write_payload(book, STAGE2_GLOBAL_GROUNDING, changed)
+    changed['canon']['world_rules'][0]['versions'][0]['desc'] = '改为白日实行宵禁'
+    _write_knowledge_subject(book, changed)
     assert store.freshness(STAGE2_GLOBAL_REVIEW).reason == 'file_changed'
 
     with pytest.raises(ProvenanceRefused, match='freshness 后置条件'):
@@ -3254,15 +3189,17 @@ def test_the_waiver_lets_unknown_through_and_still_refuses_stale(
 
     # ② stale/file_changed：写完之后动上游 ⇒ 必须照旧拒，且回滚
     base = _book()
-    _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
+    grounding = _stage4_grounding_payload()
+    _write_character_subject(base / '书名_123', grounding)
+    _write_knowledge_subject(base / '书名_123', grounding)
     store = ArtifactStore(_ctx(base, node='stage2.global', paid=False))
     review = build_review(grounding)
     official = store.write(STAGE2_GLOBAL_REVIEW, review)
     before = official.read_bytes()
 
     changed = copy.deepcopy(grounding)
-    changed['canon']['world_rules'].append({'rule_id': 'r1', 'kind': 'hard'})
-    _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, changed)
+    changed['canon']['world_rules'][0]['versions'][0]['desc'] = '改为白日实行宵禁'
+    _write_knowledge_subject(base / '书名_123', changed)
     assert store.freshness(STAGE2_GLOBAL_REVIEW).state == 'stale'
 
     with pytest.raises(ProvenanceRefused, match='freshness 后置条件'):

@@ -31,7 +31,7 @@ from contracts.schema.stage1 import MainText
 from novel import paths, prov
 from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing
 from novel.orchestrator.state import artifact_state, planned_chapters, readonly_ctx
-from novel.stages.stage5 import review, trim_resolution
+from novel.stages.stage5 import measure as M, review, trim_resolution
 from novel.stages.stage5.measure import legacy_stage5_paths, load_drafts
 from novel.stages.stage5.prompts import build_material, target_band
 from novel.store import ArtifactStore
@@ -76,7 +76,7 @@ def stage5_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage5V
 
     invalid_by_ord = _invalids_by_ord(invalid_rels)
     index = [_index_row(store, o, by_ord.get(o), invalid_by_ord.get(o, []),
-                        entries.get(o))
+                        entries.get(o), text_of.get(o))
              for o in chapters]
 
     source_text = text_of.get(ordinal)
@@ -96,7 +96,11 @@ def stage5_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage5V
             trim_audit = Stage5TrimAuditView(
                 output_ordinal=ordinal,
                 reason=audit.reason,
-                context=trim_resolution.verification_context(store, audit),
+                context=trim_resolution.verification_context(
+                    store,
+                    audit,
+                    ordinal=ordinal,
+                ),
             )
 
     written = sorted(by_ord)
@@ -150,24 +154,30 @@ def _invalids_by_ord(invalid_rels: list[str]) -> dict[int, list[str]]:
     return out
 
 
-def _index_row(store, o: int, primary, invalid_rels: list[str], entry) -> Stage5IndexRow:
-    fresh = None
-    if primary is not None:
-        fresh = artifact_state(store, primary['_relpath']).freshness
-    budget = None
-    if entry is not None:
-        budget = entry.get('budget_chars')
-    elif primary is not None:
-        budget = primary.get('budget_chars')
+
+def _draft_readings(rec, entry, source_text):
+    """同一章只按当前可读任务书计算读数；缺材料时预算/重合度保持未知。"""
+    body = str(rec.get('text') or '')
+    budget = M.chapter_basis(entry).budget_chars if entry is not None else None
+    overlap = (M.overlap_ratio(
+        body, entry, {int(entry['output_ordinal']): source_text})
+        if entry is not None and source_text is not None else None)
+    return M.chars_of(body), budget, overlap
+
+
+def _index_row(store, o: int, primary, invalid_rels: list[str], entry,
+               source_text: str | None) -> Stage5IndexRow:
+    fresh = (artifact_state(store, primary['_relpath']).freshness
+             if primary is not None else None)
+    if primary is None:
+        chars, overlap = None, None
+        budget = M.chapter_basis(entry).budget_chars if entry is not None else None
+    else:
+        chars, budget, overlap = _draft_readings(primary, entry, source_text)
     return Stage5IndexRow(
-        output_ordinal=o,
-        budget_chars=budget,
-        has_draft=primary is not None,
-        invalid=bool(invalid_rels),
-        chars=primary.get('chars') if primary is not None else None,
-        overlap_excl_verbatim=(primary.get('overlap_excl_verbatim')
-                               if primary is not None else None),
-        freshness=fresh)
+        output_ordinal=o, budget_chars=budget, has_draft=primary is not None,
+        invalid=bool(invalid_rels), chars=chars,
+        overlap_excl_verbatim=overlap, freshness=fresh)
 
 
 def _draft_view(store, rec: dict[str, Any], *, source_text: str | None, entry) -> DraftView:
@@ -181,10 +191,11 @@ def _draft_view(store, rec: dict[str, Any], *, source_text: str | None, entry) -
         fresh, reason = 'unknown', 'no_provenance'
     p = rec.get('_provenance') or {}
     align, rows = _align(source_text, rec.get('text') or '', entry)
+    chars, budget, overlap = _draft_readings(rec, entry, source_text)
     return DraftView(
-        chars=int(rec.get('chars') or 0),
-        budget_chars=rec.get('budget_chars'),
-        overlap_excl_verbatim=rec.get('overlap_excl_verbatim'),
+        chars=chars,
+        budget_chars=budget,
+        overlap_excl_verbatim=overlap,
         segments=list(rec.get('segments') or []),
         align=align,
         align_rows=rows,
@@ -222,7 +233,7 @@ def _align(source: str | None, draft: str,
     """
     if source is None or entry is None or not draft:
         return None, []
-    beats = list(entry.get('segments') or [])
+    beats = list(entry.get('scenes') or [])
     if not beats:
         return None, []
 

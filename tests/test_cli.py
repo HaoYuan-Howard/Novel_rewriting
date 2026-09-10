@@ -1376,7 +1376,7 @@ _PROFILED_RUN_CASES = (
     pytest.param(
         'stage4.design', [], {'concurrency': DEFAULT_CONCURRENCY},
         id='stage4-design'),
-    pytest.param('stage4.plan', [], {}, id='stage4-plan'),
+    pytest.param('stage4.plan', [], {'concurrency': DEFAULT_CONCURRENCY}, id='stage4-plan'),
     pytest.param(
         'stage5.write', [], {
             'concurrency': DEFAULT_CONCURRENCY,
@@ -1787,6 +1787,13 @@ def test_cli_refuses_profiled_flags_and_unmigrated_nodes_before_context(
         M, 'RunContext',
         SimpleNamespace(open=lambda *_args, **_kwargs: opened.append(_kwargs)))
 
+    if '--purge-role' in flags:
+        with pytest.raises(SystemExit) as error:
+            _run('run', node, 'book-1', *flags, *EXECUTOR_PROFILE_ARGS,
+                 '--base', str(tmp_path), '--yes')
+        assert error.value.code == 2 and opened == []
+        assert 'unrecognized arguments' in capsys.readouterr().err
+        return
     rc = _run(
         'run', node, 'book-1', *flags, *EXECUTOR_PROFILE_ARGS,
         '--base', str(tmp_path), '--yes')

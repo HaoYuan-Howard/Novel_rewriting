@@ -526,9 +526,10 @@ def test_output_never_carries_the_book_identity(base: Path) -> None:
     assert '正文' not in blob
 
 
-def test_stage2_run_metrics_bind_formal_artifacts_and_measure_real_overlap(
-        base: Path) -> None:
-    """章耗时认 ledger，节点墙钟认 beacon，预审重叠只取两者区间交集。"""
+@pytest.mark.parametrize('mode', ['complete', 'characters_cached', 'characters_unclosed', 'characters_failed'])
+def test_stage2_current_report_counts_characters_and_both_commanders_with_shared_intervals(
+        base: Path, mode: str) -> None:
+    """人物新增消耗、失败和未知不可漏算；展示与配对的墙钟只认同一统计结果。"""
     run_id = 'stage2-acceptance-run'
     book = base / f'{TITLE}_{SID}'
     blueprint_path = book / 'stage2/chapter_blueprints.json'
@@ -541,6 +542,15 @@ def test_stage2_run_metrics_bind_formal_artifacts_and_measure_real_overlap(
 
     rows = [
         {
+            'at': '1970-01-01T00:01:30+00:00', 'sid': SID,
+            'run_id': run_id, 'node': 'stage2.characters', 'code': CODE_CLEAN,
+            'cached': mode == 'characters_cached',
+            'outcome': 'error' if mode == 'characters_failed' else 'ok',
+            'prompt_tokens': 10, 'completion_tokens': 5, 'reasoning_tokens': 2,
+            'model': 'executor-m', 'reasoning_effort': 'high',
+            'latency_ms': 30_000, 'chapter': None,
+        },
+        {
             'at': '1970-01-01T00:01:55+00:00', 'sid': SID,
             'run_id': run_id, 'node': 'stage2.global', 'code': CODE_CLEAN,
             'cached': False, 'outcome': 'ok', 'prompt_tokens': 10,
@@ -549,7 +559,7 @@ def test_stage2_run_metrics_bind_formal_artifacts_and_measure_real_overlap(
             'latency_ms': 10_000, 'chapter': None,
         },
         {
-            'at': '1970-01-01T00:03:40+00:00', 'sid': SID,
+            'at': '1970-01-01T00:04:00+00:00', 'sid': SID,
             'run_id': run_id, 'node': 'stage2.blueprint', 'code': CODE_CLEAN,
             'cached': False, 'outcome': 'ok', 'prompt_tokens': 10,
             'completion_tokens': 5, 'reasoning_tokens': 2,
@@ -557,7 +567,7 @@ def test_stage2_run_metrics_bind_formal_artifacts_and_measure_real_overlap(
             'latency_ms': 100_000, 'chapter': 1,
         },
         {
-            'at': '1970-01-01T00:05:20+00:00', 'sid': SID,
+            'at': '1970-01-01T00:05:40+00:00', 'sid': SID,
             'run_id': run_id, 'node': 'stage2.blueprint', 'code': CODE_CLEAN,
             'cached': False, 'outcome': 'ok', 'prompt_tokens': 10,
             'completion_tokens': 5, 'reasoning_tokens': 2,
@@ -565,22 +575,22 @@ def test_stage2_run_metrics_bind_formal_artifacts_and_measure_real_overlap(
             'latency_ms': 200_000, 'chapter': 2,
         },
         {
-            'at': '1970-01-01T00:04:10+00:00', 'sid': SID,
+            'at': '1970-01-01T00:02:20+00:00', 'sid': SID,
             'run_id': run_id, 'role': 'commander', 'node': None,
             'code': CODE_CLEAN, 'cached': False, 'outcome': 'ok',
             'prompt_tokens': 10, 'completion_tokens': 5, 'reasoning_tokens': 2,
             'model': 'commander-m', 'request_model': 'commander-m',
-            'reasoning_effort': 'high', 'latency_ms': 100_000,
-            'activity': 'stage2.global.prereview',
+            'reasoning_effort': 'high', 'latency_ms': 20_000,
+            'activity': 'reviewer:approval:stage2-global-review',
         },
         {
-            'at': '1970-01-01T00:05:30+00:00', 'sid': SID,
+            'at': '1970-01-01T00:05:50+00:00', 'sid': SID,
             'run_id': run_id, 'role': 'commander', 'node': None,
             'code': CODE_CLEAN, 'cached': False, 'outcome': 'ok',
             'prompt_tokens': 10, 'completion_tokens': 5, 'reasoning_tokens': 2,
             'model': 'commander-m', 'request_model': 'commander-m',
             'reasoning_effort': 'high', 'latency_ms': 10_000,
-            'activity': 'stage2.blueprint.review',
+            'activity': 'reviewer:approval:stage2-blueprint-review',
         },
     ]
     (base / '_service/ledger.jsonl').write_text(
@@ -605,15 +615,23 @@ def test_stage2_run_metrics_bind_formal_artifacts_and_measure_real_overlap(
     (base / '_service/llm_audit.jsonl').write_text(
         '\n'.join(json.dumps(row) for row in adoptions) + '\n', encoding='utf-8')
     progress = [
+        {'ts': 50, 'sid': SID, 'run_id': run_id, 'execution_id': 'characters',
+         'node': 'stage2.characters', 'phase': 'start', 'exit_code': None, 'note': None},
+        {'ts': 100, 'sid': SID, 'run_id': run_id, 'execution_id': 'characters',
+         'node': 'stage2.characters', 'phase': 'end',
+         'exit_code': 2 if mode == 'characters_failed' else 0, 'note': None},
         {'ts': 100, 'sid': SID, 'run_id': run_id, 'execution_id': 'global',
          'node': 'stage2.global', 'phase': 'start', 'exit_code': None, 'note': None},
         {'ts': 120, 'sid': SID, 'run_id': run_id, 'execution_id': 'global',
          'node': 'stage2.global', 'phase': 'end', 'exit_code': 0, 'note': None},
-        {'ts': 120, 'sid': SID, 'run_id': run_id, 'execution_id': 'blueprint',
+        {'ts': 140, 'sid': SID, 'run_id': run_id, 'execution_id': 'blueprint',
          'node': 'stage2.blueprint', 'phase': 'start', 'exit_code': None, 'note': None},
-        {'ts': 320, 'sid': SID, 'run_id': run_id, 'execution_id': 'blueprint',
+        {'ts': 340, 'sid': SID, 'run_id': run_id, 'execution_id': 'blueprint',
          'node': 'stage2.blueprint', 'phase': 'end', 'exit_code': 0, 'note': None},
     ]
+    if mode == 'characters_unclosed':
+        progress = [row for row in progress
+                    if not (row['node'] == 'stage2.characters' and row['phase'] == 'end')]
     (base / '_service/agent_progress.jsonl').write_text(
         '\n'.join(json.dumps(row) for row in progress) + '\n', encoding='utf-8')
 
@@ -622,24 +640,44 @@ def test_stage2_run_metrics_bind_formal_artifacts_and_measure_real_overlap(
     stage2 = collected['stage2']
 
     assert stage2['architecture'] == 'extraction-ir-v3.2'
+    cached = mode == 'characters_cached'
     assert stage2['cold_cache'] == {
-        'state': 'ok', 'hits': 0, 'unknown_rows': 0}
+        'state': 'fail' if cached else 'ok', 'hits': int(cached), 'unknown_rows': 0}
+    assert stage2['characters_artifact']['formal_present'] is False
+    assert stage2['characters_artifact']['run_binding']['state'] == 'unver'
     assert stage2['global_artifact']['run_binding']['state'] == 'ok'
     assert stage2['blueprint_artifact']['run_binding']['state'] == 'ok'
     assert stage2['blueprint_wire']['chapter_latency_seconds'] == {
         'chapters': 2, 'p50': 100.0, 'p95': 200.0, 'max': 200.0}
     assert stage2['commander']['calls'] == 2
-    assert stage2['overlap'] == {
-        'state': 'retired_observation', 'historical_state': 'ok',
-        'prereview_blueprint_seconds': 100.0}
+    assert 'overlap' not in stage2
     assert stage2['role_lifecycle']['state'] == 'unver'
-    assert stage2['wall_clock']['state'] == 'ok'
-    assert stage2['wall_clock']['seconds'] == 230.0
+    performance = collected['performance']['stages']['stage2']
+    assert performance['wire']['total_tokens'] == (75 if cached else 90)
+    assert performance['roles']['executor']['total_tokens'] == (45 if cached else 60)
+    assert performance['roles']['commander']['total_tokens'] == 30
+    assert performance['failed_wires'] == int(mode == 'characters_failed')
+    assert stage2['wall_clock'] == {
+        'state': performance['interval_state'],
+        'seconds': performance['observed_elapsed_seconds'],
+        'active_seconds': performance['observed_active_seconds'],
+        'interval_errors': performance['interval_errors'],
+    }
+    if mode == 'characters_unclosed':
+        assert stage2['wall_clock']['state'] == 'unver'
+        assert stage2['wall_clock']['seconds'] is None
+    else:
+        assert stage2['wall_clock']['state'] == 'ok'
+        assert stage2['wall_clock']['seconds'] == 300.0
+        assert stage2['wall_clock']['active_seconds'] == 300.0
+    rendered = W.render(collected)
+    assert 'tools/workflow_pairs.py' in rendered and '含人物抽取' in rendered
+    assert 'stage2_acceptance.py' not in rendered and '预审' not in rendered
 
 
 def test_stage2_role_lifecycle_counts_separate_commanders_and_acceptance_order():
     units = [dict(node=node, role='commander', content_used=4,
-                  content_limit=4, content_remaining=0)
+                  content_limit=4, content_remaining=0, content_granted=0, grant_count=0)
              for node in ('stage2.global', 'stage2.blueprint')]
     reviews = {
         'stage2.global': {'state': 'accepted', 'current_decision': {
@@ -855,3 +893,306 @@ def test_first_call_landing_refuses_an_adopted_transport_error(base: Path) -> No
             'units': 1, 'first_call': 0, 'retried': 0,
             'zero_wire_landed': 0, 'never_landed': 0, 'unknown': 1,
         }
+
+
+
+def test_performance_stage4_and_stage5_count_both_roles_and_union_wall_clock(tmp_path):
+    from datetime import datetime, timezone
+    from novel import paths
+    from contracts.schema.workflow import WorkUnitLedgerV2, WorkUnitRegistryV1
+
+    sid, run = SID, 'perf-run-1'
+    service = tmp_path / '_service'
+    service.mkdir()
+    def ledger(attempt, node, prompt, *, role=None, activity=None, outcome='ok'):
+        return dict(sid=sid, run_id=run, attempt_id=attempt, node=node,
+                    role=role, activity=activity, cached=False, outcome=outcome,
+                    prompt_tokens=prompt, completion_tokens=10, reasoning_tokens=3,
+                    at=datetime.fromtimestamp(150, timezone.utc).isoformat(), latency_ms=20_000)
+    rows = [ledger('e1', 'stage4.design', 100),
+            ledger('e2', 'stage4.design', 50, outcome='error'),
+            ledger('c1', None, 200, role='commander',
+                   activity='reviewer:approval:stage4-structure-review'),
+            ledger('w1', 'stage5.write', 300),
+            ledger('w2', None, 400, role='commander',
+                   activity='reviewer:approval:stage5-closure')]
+    (service / 'ledger.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in rows), encoding='utf-8')
+    events = [dict(sid=sid, run_id=run, execution_id=identity, node=node,
+                   phase=phase, ts=ts, exit_code=None if phase == 'start' else 0, note=None)
+              for identity, node, start, end in [('a', 'stage4.design', 100, 160),
+                                                  ('b', 'stage4.plan', 120, 170),
+                                                  ('w', 'stage5.write', 100, 160)]
+              for phase, ts in [('start', start), ('end', end)]]
+    (service / 'agent_progress.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in events), encoding='utf-8')
+    unit_id, task_id = 'a'*64, 'b'*64
+    registry = WorkUnitRegistryV1(task_id=task_id, sid=sid, unit_ids=(unit_id,))
+    _write(paths.work_unit_registry_path(tmp_path, sid), registry.model_dump(mode='json'))
+    unit = WorkUnitLedgerV2(task_id=task_id, unit_id=unit_id, sid=sid,
+        node='stage4.design', role='executor', scope='chapter:1', turns=({
+            'turn_id': 'turn-1', 'ordinal': 1, 'request_sha256': 'c'*64,
+            'run_id': run, 'created_at': 100, 'state': 'failed',
+            'attempts': [{'attempt_id': 'e1', 'outcome': 'error'},
+                         {'attempt_id': 'e2', 'outcome': 'error'}],
+        },))
+    _write(paths.work_unit_dir(tmp_path, sid, unit_id) / 'ledger.json', unit.model_dump(mode='json'))
+    report = W.pipeline_performance_metrics(tmp_path, sid, run_id=run)
+    stage4, stage5 = report['stages']['stage4'], report['stages']['stage5']
+    assert report['unassigned_rows'] == 0
+    assert stage4['wire']['total_tokens'] == 380
+    assert stage4['roles']['commander']['total_tokens'] == 210
+    assert stage4['outcomes'] == {'error': 1, 'ok': 2}
+    assert stage4['observed_active_seconds'] == 70, '两个并发 CLI 与 C 的重叠不能累加'
+    assert stage4['network_retry_wires'] == 1
+    assert stage4['content_phases']['first']['wire_calls'] == 2
+    assert stage4['attempt_link_unknown'] == 1
+    assert stage5['wire']['total_tokens'] == 720
+    assert stage5['observed_active_seconds'] == 60
+    assert report['nodes']['stage4.design']['wire']['total_tokens'] == 170
+    assert report['nodes']['stage4.plan']['roles']['commander']['total_tokens'] == 210
+    assert report['nodes']['stage4.design']['observed_active_seconds'] == 60
+    assert report['nodes']['stage4.plan']['observed_active_seconds'] == 50
+    assert report['nodes']['stage4.design']['failed_wires'] == 1
+    # 缺执行尾不许用其他完整区间洗成阶段完成；已知消耗照常保留。
+    events.pop()
+    (service / 'agent_progress.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in events), encoding='utf-8')
+    incomplete = W.pipeline_performance_metrics(tmp_path, sid, run_id=run)['stages']['stage5']
+    assert incomplete['observed_active_seconds'] is None
+    assert incomplete['interval_state'] == 'unver'
+    assert incomplete['wire']['total_tokens'] == 720
+
+
+def test_blueprint_chapter_median_includes_failed_attempts_without_apportioning_commander(tmp_path):
+    service = tmp_path / '_service'
+    service.mkdir()
+    rows = [dict(sid=SID, run_id='blueprint-metrics', node='stage2.blueprint',
+                 chapter=chapter, cached=False, outcome=outcome, prompt_tokens=prompt,
+                 completion_tokens=10, reasoning_tokens=5, model='固定模型', reasoning_effort='high')
+            for chapter, prompt, outcome in [(1, 100, 'ok'), (2, 40, 'error'), (2, 140, 'ok')]]
+    commander = dict(rows[0], node=None, chapter=None, role='commander',
+        activity='reviewer:approval:stage2-blueprint-review', prompt_tokens=900,
+        at='2026-09-01T00:00:10Z', latency_ms=1000)
+    rows.append(commander)
+    target = service / 'ledger.jsonl'
+    target.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+    node = W.pipeline_performance_metrics(tmp_path, SID, run_id='blueprint-metrics')['nodes']['stage2.blueprint']
+    assert node['wire']['total_tokens'] == 1220
+    assert node['chapter_executor_usage']['2']['total_tokens'] == 200
+    assert node['chapter_total_tokens_p50'] == 155
+    assert node['roles']['commander']['total_tokens'] == 910
+    assert node['observed_active_seconds'] is None
+    assert 'executor_interval_missing' in node['interval_errors']
+    assert node['model_effort_unknown_wires'] == 0
+    rows[1]['prompt_tokens'] = None
+    target.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+    unknown = W.pipeline_performance_metrics(tmp_path, SID, run_id='blueprint-metrics')['nodes']['stage2.blueprint']
+    assert unknown['wire']['total_tokens'] is None
+    assert unknown['chapter_total_tokens_p50'] is None
+    assert unknown['chapter_executor_usage']['2']['known_prompt_tokens'] == 140
+
+
+def test_performance_unknown_usage_and_missing_unit_evidence_are_not_zero(tmp_path):
+    service = tmp_path / '_service'
+    service.mkdir()
+    row = dict(sid=SID, run_id='perf-run', node='stage5.write', cached=False,
+               prompt_tokens=None, completion_tokens=10, reasoning_tokens=3, outcome='error')
+    (service / 'ledger.jsonl').write_text(json.dumps(row)+'\n', encoding='utf-8')
+    stage = W.pipeline_performance_metrics(tmp_path, SID, run_id='perf-run')['stages']['stage5']
+    assert stage['wire']['total_tokens'] is None
+    assert stage['content_phases']['unknown']['wire_calls'] == 1
+    assert stage['attempt_link_unknown'] == 1
+    assert stage['work_unit_errors'] == ['work_unit_registry_missing']
+    assert stage['observed_active_seconds'] is None
+
+
+@pytest.mark.parametrize('gap', ['unassigned', 'cache_unknown', 'uncommitted_tail'])
+def test_performance_does_not_call_partial_cost_a_complete_total(tmp_path, gap):
+    service = tmp_path / '_service'
+    service.mkdir()
+    row = dict(sid=SID, run_id='perf-run', node='stage5.write', cached=False,
+               prompt_tokens=100, completion_tokens=10, reasoning_tokens=3, outcome='ok')
+    rows = [row]
+    if gap == 'unassigned':
+        rows.append({**row, 'node': 'not-a-registered-node'})
+    elif gap == 'cache_unknown':
+        rows.append({**row, 'cached': None})
+    content = ''.join(json.dumps(value)+'\n' for value in rows)
+    if gap == 'uncommitted_tail':
+        content += json.dumps(row)
+    (service / 'ledger.jsonl').write_text(content, encoding='utf-8')
+    stage = W.pipeline_performance_metrics(tmp_path, SID, run_id='perf-run')['stages']['stage5']
+    assert stage['wire']['total_tokens'] is None
+    assert stage['wire']['known_prompt_tokens'] == 100
+    assert stage['roles']['executor']['total_tokens'] is None
+    assert stage['role_content_phases']['executor']['unknown']['total_tokens'] is None
+    assert stage['cost_partition_errors']
+    assert stage['observed_active_seconds'] is None
+
+
+@pytest.mark.parametrize('intervals', [[], [(80, 95)], [(100, 170), (120, 160)]])
+def test_executor_wires_need_one_own_cli_interval_even_when_commander_is_complete(tmp_path, intervals):
+    service = tmp_path / '_service'
+    service.mkdir()
+    common = dict(sid=SID, run_id='perf-run', cached=False, outcome='ok',
+                  at='1970-01-01T00:02:30+00:00', latency_ms=20_000,
+                  prompt_tokens=100, completion_tokens=10, reasoning_tokens=3)
+    rows = [dict(common, node='stage5.write', attempt_id='executor'),
+            dict(common, role='commander', node=None, attempt_id='commander',
+                 activity='reviewer:approval:stage5-closure')]
+    (service / 'ledger.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in rows), encoding='utf-8')
+    events = [dict(sid=SID, run_id='perf-run', execution_id=f'exec-{index}', node='stage5.write',
+                   phase=phase, ts=ts, exit_code=None if phase == 'start' else 0)
+              for index, (start, end) in enumerate(intervals)
+              for phase, ts in [('start', start), ('end', end)]]
+    (service / 'agent_progress.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in events), encoding='utf-8')
+    report = W.pipeline_performance_metrics(tmp_path, SID, run_id='perf-run')
+    assert report['stages']['stage5']['known_interval_union_seconds'] >= 20
+    for value, tokens in [(report['nodes']['stage5.write'], 110), (report['stages']['stage5'], 220)]:
+        assert value['wire']['total_tokens'] == tokens
+        assert value['observed_active_seconds'] is None
+        assert value['interval_state'] == 'unver'
+
+
+def test_metrics_ledger_uses_the_same_committed_line_boundary(tmp_path):
+    path = tmp_path / 'ledger.jsonl'
+    path.write_text('{"cached": false}\n{"cached": true}', encoding='utf-8')
+    assert W._jsonl(path) == [{'cached': False}]
+    path.write_text('{"cached": false}\n{broken}\n', encoding='utf-8')
+    with pytest.raises(ValueError):
+        W._jsonl(path)
+
+
+def _frozen_baseline_metric_evidence(base: Path) -> tuple[dict, Path, str]:
+    """合成冻结基线的原始 v1 运行事实，不为真实旧根补字段。"""
+    from novel import paths
+
+    run_id = 'frozen-baseline'
+    task_id, unit_id = 'a' * 64, 'b' * 64
+    unit = {
+        'schema_version': 1, 'task_id': task_id, 'unit_id': unit_id, 'sid': SID,
+        'node': 'stage5.write', 'role': 'executor', 'scope': 'chapter:1',
+        'content_limit': 4,
+        'turns': [
+            {'turn_id': 't1', 'ordinal': 1, 'request_sha256': 'c' * 64,
+             'run_id': run_id, 'created_at': 100, 'state': 'failed',
+             'attempts': [
+                 {'attempt_id': 'not-started', 'outcome': 'not_started'},
+                 {'attempt_id': 'e1', 'outcome': 'error'},
+                 {'attempt_id': 'e2', 'outcome': 'error'}]},
+            {'turn_id': 't2', 'ordinal': 2, 'request_sha256': 'd' * 64,
+             'run_id': run_id, 'created_at': 120, 'state': 'adopted',
+             'response_sha256': 'e' * 64,
+             'attempts': [{'attempt_id': 'e3', 'outcome': 'ok'}]},
+        ],
+    }
+    _write(paths.workflow_manifest_path(base), {
+        'schema_version': 1, 'contract_version': 'workflow-role-boundaries-v1',
+        'task_id': task_id, 'created_at': 1,
+    })
+    _write(paths.work_unit_registry_path(base, SID), {
+        'schema_version': 1, 'task_id': task_id, 'sid': SID, 'unit_ids': [unit_id],
+    })
+    unit_path = paths.work_unit_dir(base, SID, unit_id) / 'ledger.json'
+    _write(unit_path, unit)
+    rows = [dict(
+        sid=SID, run_id=run_id, node='stage5.write', chapter=1, cached=False,
+        attempt_id=attempt, outcome=outcome, prompt_tokens=prompt, completion_tokens=10,
+        reasoning_tokens=3, at='1970-01-01T00:02:30+00:00', latency_ms=1000,
+        model='冻结模型', reasoning_effort='high',
+    ) for attempt, outcome, prompt in [('e1', 'error', 100), ('e2', 'error', 80), ('e3', 'ok', 50)]]
+    (base / '_service/ledger.jsonl').write_text(
+        ''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+    events = [dict(
+        sid=SID, run_id=run_id, execution_id='write-1', node='stage5.write',
+        phase=phase, ts=ts, exit_code=None if phase == 'start' else 0,
+    ) for phase, ts in [('start', 100), ('end', 160)]]
+    (base / '_service/agent_progress.jsonl').write_text(
+        ''.join(json.dumps(row) + '\n' for row in events), encoding='utf-8')
+    return unit, unit_path, run_id
+
+
+def test_frozen_baseline_work_units_prove_phases_without_restoring_production_writes(tmp_path):
+    from novel.work_units import WorkUnitRefused, check_workflow_write
+    from tools import workflow_pairs
+
+    _unit, _unit_path, run_id = _frozen_baseline_metric_evidence(tmp_path)
+    before = {str(path.relative_to(tmp_path)): path.read_bytes()
+              for path in tmp_path.rglob('*') if path.is_file()}
+    report = W.pipeline_performance_metrics(tmp_path, SID, run_id=run_id)
+    stage = report['stages']['stage5']
+    assert report['work_unit_ledger_versions'] == [1]
+    assert stage['work_unit_errors'] == []
+    assert stage['attempt_link_unknown'] == 0
+    assert stage['network_retry_wires'] == 1
+    assert stage['failed_wires'] == 2
+    assert stage['wire']['total_tokens'] == 260
+    assert stage['role_content_phases']['executor']['first']['prompt_tokens'] == 180
+    assert stage['role_content_phases']['executor']['revision']['prompt_tokens'] == 50
+    assert stage['observed_active_seconds'] == 60
+    trail = ('performance', 'stages', 'stage5', 'role_content_phases',
+             'executor', 'first', 'prompt_tokens')
+    compared = workflow_pairs._metric(
+        {'performance': report}, {'performance': report}, trail, .20, [])
+    assert compared['errors'] == []
+    assert compared['credited_reduction'] == 0
+    # 相同根仍被真正的现役写入守卫拒绝；读数器既不升级账，也不打开生产通道。
+    with pytest.raises(WorkUnitRefused):
+        check_workflow_write(tmp_path)
+    assert {str(path.relative_to(tmp_path)): path.read_bytes()
+            for path in tmp_path.rglob('*') if path.is_file()} == before
+
+
+@pytest.mark.parametrize('damage', [
+    'future_version', 'boolean_version', 'current_shape_in_old_version',
+    'ordinal_gap', 'duplicate_attempt', 'missing_response', 'extra_turn',
+    'wrong_task', 'mixed_versions',
+])
+def test_historical_metric_damage_keeps_cost_but_never_proves_first_round(tmp_path, damage):
+    import copy
+    from novel import paths
+    from tools import workflow_pairs
+
+    unit, path, run_id = _frozen_baseline_metric_evidence(tmp_path)
+    if damage == 'future_version':
+        unit['schema_version'] = 99
+    elif damage == 'boolean_version':
+        unit['schema_version'] = True
+    elif damage == 'current_shape_in_old_version':
+        unit['grants'] = []
+    elif damage == 'ordinal_gap':
+        unit['turns'][0]['ordinal'] = 2
+    elif damage == 'duplicate_attempt':
+        unit['turns'][1]['attempts'][0]['attempt_id'] = 'e1'
+    elif damage == 'missing_response':
+        unit['turns'][1].pop('response_sha256')
+    elif damage == 'extra_turn':
+        for ordinal in range(3, 6):
+            turn = copy.deepcopy(unit['turns'][0])
+            turn.update(turn_id=f't{ordinal}', ordinal=ordinal, attempts=[])
+            unit['turns'].append(turn)
+    elif damage == 'wrong_task':
+        unit['task_id'] = 'f' * 64
+    elif damage == 'mixed_versions':
+        other = copy.deepcopy(unit)
+        other.update(schema_version=2, unit_id='f' * 64, base_content_limit=4, turns=[])
+        other.pop('content_limit')
+        _write(paths.work_unit_dir(tmp_path, SID, other['unit_id']) / 'ledger.json', other)
+        registry_path = paths.work_unit_registry_path(tmp_path, SID)
+        registry = json.loads(registry_path.read_bytes())
+        registry['unit_ids'].append(other['unit_id'])
+        _write(registry_path, registry)
+    _write(path, unit)
+    before = {str(p.relative_to(tmp_path)): p.read_bytes()
+              for p in tmp_path.rglob('*') if p.is_file()}
+    report = W.pipeline_performance_metrics(tmp_path, SID, run_id=run_id)
+    stage = report['stages']['stage5']
+    assert stage['wire']['total_tokens'] == 260
+    assert stage['work_unit_errors']
+    assert stage['attempt_link_unknown'] == 3
+    trail = ('performance', 'stages', 'stage5', 'role_content_phases',
+             'executor', 'first', 'prompt_tokens')
+    compared = workflow_pairs._metric(
+        {'performance': report}, {'performance': report}, trail, .20, [])
+    assert 'baseline_content_phase_unproven' in compared['errors']
+    assert compared['credited_reduction'] is None
+    assert {str(p.relative_to(tmp_path)): p.read_bytes()
+            for p in tmp_path.rglob('*') if p.is_file()} == before

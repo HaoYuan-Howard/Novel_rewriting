@@ -97,7 +97,7 @@ def snapshot(pack: BlueprintReviewWorkpack) -> CrossReviewScope:
             item_id=row['item_id'], subject_path=path,
             subject_sha256=row['subject_sha256'], field_sha256=fields,
             char_ids=char_ids, evidence_chapters=evidence_chapters,
-            whole_book=(not char_ids or path.startswith(('setting', 'arc', 'canon.world_rules'))),
+            whole_book=(not char_ids or path.startswith(('setting', 'canon.world_rules'))),
             collection_summary=kind.endswith('_set_complete'))
     chapters = {}
     for chapter in pack.chapters:
@@ -109,6 +109,11 @@ def snapshot(pack: BlueprintReviewWorkpack) -> CrossReviewScope:
             add(beat.present_char_ids, f'beat:{beat.beat_id}')
             for fact in beat.facts:
                 add(fact.participant_char_ids, f'fact:{fact.fact_id}')
+            for hinge in beat.hinges:
+                if hinge.dialogue is not None:
+                    parties = [hinge.dialogue.speaker, *(hinge.dialogue.addressees or [])]
+                    add([party.char_id for party in parties if isinstance(party, CharacterRef)],
+                        f'hinge:{hinge.hinge_id}')
         for index, narration in enumerate(chapter.narration):
             add([char for char in (narration.narrator_char_id, narration.focalizer_char_id) if char],
                 f'narration:{index}')

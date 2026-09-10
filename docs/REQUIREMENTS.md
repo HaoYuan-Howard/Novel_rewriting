@@ -10,6 +10,51 @@
 `--require-corpus` 对精确匹配的无正文 manifest 与盘面完成验收后，才可以称“全量语料绿”；
 此前的通过结果只能称“非 corpus 回归”。
 
+## P0 · 成本与耗时优化实施
+
+### TODO-49 · 小说流水线 token 与耗时优化
+
+实施依据为 `PLAN.md` 与 `docs/PIPELINE_COST_LATENCY_PLAN.md`，工程基线 `24e4cf4`。首轮和返工分别验收，分批开发、一次切换；旧根整根归档，不迁移旧产物。活动状态仅在本条维护。
+
+- [ ] P0：对齐目标与当前能力，补齐 Stage4/5 E/C、内容轮/网络尝试、采用、恢复和墙钟观测，冻结质量样例与配对标准。
+- [ ] P1：先闭合结构审批的 Blueprint 依赖，再贯通 A/B 精确局部、多来源及全采用、免费整书提交和恢复。
+- [ ] P2：义务决定继承、待审材料压缩、无待审免费收口；移除非 Stage2 指令中的 Global 编辑规则。
+- [ ] P3：人物注册、必要知识、arc 删除、源文案范围、三 owner 派修、独立知识—事实关联及披露消费。
+- [ ] P4：Blueprint 与材料 fact 归属、对白语义化、Stage5 整章边界内的紧凑首写/修订/Reviewer rewrite。
+- [ ] 独立恢复：同单元人工追加、停止证明、幂等/CAS、原完整 profiles 续跑，不作为所有性能批次前置。
+- [ ] P5：默认四并发、逐节点 6/8 对照与总并发限制、真实链路、current-schema corpus、归档切换。
+
+已实现、尚待真实语料与发布验收的工程增量：
+
+流水线实现的默认非 corpus 回归共 6431 项，6429 通过、2 项因缺 Stage2 审阅语料跳过，
+无失败或错误，进程退出 0（`retirement-final-noncorpus-v3.xml`）；不代表 current-schema corpus 已验收。
+指标 v3 与审阅指令已对齐：Stage2 总耗时和用量纳入人物节点及两位 Commander，
+旧五轮验收工具仅保留历史报告读取，现役入口统一九组配对；Commander 的三 owner 派修、
+实际依赖决定继承和人工累计额度同步到运行时工作包与操作 skill，删除提前生成 Blueprint 的旧指引。
+该增量的契约五文件 331 项及指标、实际工作包、额度、API/skill 定向验证 273 项均已通过。
+默认回归后仅追加统计工具对冻结基线 v1 工作单元账的只读解析，保留未知与生产拒绝边界；
+该补丁与契约五文件、指标配对及工作单元守卫共 425 项定向测试通过
+（`retirement-metrics-history-targeted.xml`），不混称已包含在前述默认回归中。
+这些工程结果不覆盖或替代各条明确保留的真书、corpus、付费实验与切换缺口。
+
+- 旧 frozen-v6 产物读取、Stage4 审阅/编辑与 Stage7 组装/下载兼容入口已按用户明确授权退役；当前产物版本不匹配保持拒绝。旧 Stage2 预审、额外终审、独立额度账的写入/退款/归档重开入口亦已移除，Blueprint Commander 的进度分母改为自身义务并删除重复 Global 工作包读取。旧书内运行目录的搬运与回退、Approval v2～v6 的自动迁移、Stage3 的现役消费投影和旧整书 B checkpoint 恢复入口亦已退役；当前 service 根的有效回答与提交尾窗继续免费恢复。退役入口在 API/CLI/重启读取上的定向拒绝测试已通过，恢复守卫已纳入默认回归，正式旧根尚未归档。
+
+- P0 已有实际处理/待执行/历史采用/机械处理/缓存、当前审阅待办与决定继承的后端工作单元投影；异常保持 unknown，累计额度独立呈现。真实 HTTP 重启读取及运行页续跑操作已过定向测试。已有阶段与节点 E/C、历史采用及恢复读数，以及绑定报告、冻结配置和人工质量收据的九组配对工具；具体口径见 `docs/PERFORMANCE_EXPERIMENTS.md`。真实三书质量样例、配置与收据尚未冻结，尚无性能结论。
+- P1/P2 已接入 Blueprint 审批依赖、A/B 逐章采用与聚合、A 原回答和 prepared 恢复、精确审阅义务继承与免费收口。同一存活父任务内，已关闭并排空的来源只准当前完整上下文和活动 claim 的后继免费补尾；回答与 prepared 两类中断和拒绝反例已过定向验证，扩大后的契约与 Stage4 恢复测试通过。未聚合运行的局部依赖变化、来源损坏与后继恢复已补定向反例；真书链路仍待验收。
+- P3 已删除 arc，Global 正式读取源文案、持久化证据支持或未知状态，并通过 typed 编辑及审阅确定开篇范围；Stage6 不再缺省第 1 章。独立人物节点已接入载体、两种 executor backend、工作单元、CLI、checkpoint/prepared 与免费编辑/重验证；Global 已切到只存必要知识的 v6，输入绑定静态人物实际引用；静态写口从 GlobalEdit v5 移除，称名投影由人物发布。七个下游读取入口、知识免费编辑及保存回答/checkpoint/正式提交中断恢复已过定向验证。三 owner 的 typed 决策与派修选项已接入，两位 Commander 不变；人物 API/UI、知识关联与场景披露已接入，现役 fixture 已随契约调整；真书消费链仍待闭合。
+- P3 的知识关联已通过 Blueprint Commander typed 决定先保存、免费 producer 再物化；场景级披露、人物/群体知情、世界规则及关系时点已进入 WriterContext v7 和前端。人物订正后的免费引用重绑已闭合来源校验、状态 unknown、旧知识归档及变化项复审。上传→源文审批/分章→人物与知识 producer→人物 HTTP 订正→免费重绑→Blueprint Commander 决定→关联落盘中断→真实 CLI 补尾→重启读取的 88 项消费链定向检查已通过（`stage2-closure-projection-consumers.xml`）；包含落盘前后中断和代码变化拒绝盖章。三 owner 派修的实际 HTTP operator/preview、producer、完成回执和重启读取也已全部通过（`stage2-real-owner-rework-fixed.xml`，3 项），Blueprint 只请求被派修章。测试仅替换模型传输，合成决定不作为质量结论；独立 corpus 仍待闭合。
+- P5 整根离线归档已新增专用 preview/apply、旧代码停止证明、整树清单 CAS、根外 prepared/committed 和新旧根消费围栏。合成盘面验证了移动与提交中断、真实进程退出后的同一事务补尾、未知记录及停止裁决保留、迟到事件反证、目录不可读拒绝和 API/CLI 围栏。契约五文件与该批路由、归档及消费检查共 465 项通过（`retirement-final-contract-consumers.xml`）。尚未执行真实旧根归档或新根生产，逐书 trash 结果不替代整根发布验收。
+- P3 已退役旧 Global role/fate 窄修 schema、编译与写审计入口；其累计轮次、回答托管和中断恢复保障由现役人物/知识完整候选测试接续。人物 INVALID 的失败定位已贯通 HTTP、真实免费 CLI 和重启读取；未知人物 ID 不再归一成 public。普通 Global 复验保留裁剪失败依据，显式归一路由不变；缺 typed 失败回执的 reviewed INVALID 在 workpack、恢复身份和只读调度器中均保持未知，不再推断付费纠正授权。退役增量的定向验证已通过，真实质量与性能验收仍待完成。
+- P4 的 WriterContext v7、Chapter v3、Review v3、Rejected v2、TrimAudit/TrimResolution v3 已接入最小主体与运行时读数。checkpoint 保存完整候选 segments；Review 全书篇幅分母仍取已写章的真实源长度；trim Reviewer 正文只下发一次，精确证据校验上下文保留在后端。恢复、审批、HTTP 与重启读取已过定向测试，独立 corpus 验收仍待完成。
+- P4 已新增 Blueprint v8 材料事实归属、普通对白语义任务与剧情字面例外，B 请求/Plan 守卫共用事实候选；Context 对材料引用执行披露检查并保留对白人物依赖。首写、修订、Reviewer rewrite 共用紧凑材料，普通对白不再走逐字返修。定向消费链已通过，真实性能与质量验收仍待完成。
+- 退役收尾已删除 Stage2 无调用者的旧 Global/role-fate 提示，人物节点正式提示改为引用唯一称名枚举。Stage5 将上一章实际下发的目标、末场转折和章末状态纳入同一文字表，未下发证据不进入材料；角色引用、字面例外与原任务书不变。根切换标记或计划版本未知时，即使摘要相互匹配，CLI/服务也拒绝消费。契约五文件及上述写作、人物、拒稿、归档恢复消费链共 619 项定向测试通过（`retirement-final-v2-targeted-fixed.xml`），现役消费链已纳入默认回归；旧版拒稿 fixture 原字节保留为拒绝反例，当前版由现役候选载体单独合成，不作为真实质量证据。
+- 人工追加额度及原完整 profiles 续跑已接入锁内复验、API 与界面；真实运行到重启读取的最终消费链仍待验收。
+- Stage2 逐义务回执已接入新决定/历史接受的完整覆盖、删除问题复审、来源损坏 unknown、模型待审材料投影、API/UI 与两个节点的免费收口。定向测试已验证实际 Blueprint 局部编辑、HTTP 重启、CLI 零模型恢复和三 owner 派修；真书验收仍待完成。
+
+性能沿原三书各三对冻结基线/候选。Stage4 token/墙钟目标 −30%/−20%；Stage2 token −20% 且墙钟不恶化；Blueprint token/墙钟各 −15%；Stage5 首轮输入 −20%、阶段 E+C 总 token/墙钟各 −15%、独立返工总 token −20%。失败、人工追加和未知留在分母；未完成/质量失败不计节约；正文篇幅、事实/因果/状态/披露/对白质量不退化。
+
+TODO-45 的旧书恢复和 TODO-47 的五轮三十分钟目标退出本次活动目标；它们仍有价值的恢复、真实消费链与质量反例并入本条。TODO-46/48 的真机成本和恢复验收并入本条，不重复购入旧席位实验。TODO-21/28 的 corpus 与真实 fixture 继续独立闭合，TODO-30 仍为独立研究。真实模型尚未执行，不把工程改动记为性能验收通过。
+
 ## P1 · 质量闭环与诊断可信度
 
 ### TODO-21 · 建立 current-schema 现役语料基线
@@ -66,136 +111,15 @@ B 只绑定证据，不静默改变 A 的场景顺序、事实分组、首尾锚
 
 ### TODO-31 · 下一次新 base 同批收紧 Stage4→5 盘上契约
 
-**缺口**：Stage5 已从当前 Stage1/Stage4 任务书现场派生来源章号、源字数和章预算，但 Chapter、
-Review 与 trim 仍保留可由正文、findings 或绑定主体重算的展示副本。旧书为保留付费正文和人工决定
-不原地迁移；shape break 与 TODO-45 的 clean v7 base 同批切换。
+**当前状态**：最小主体与现役消费者已实现，默认非 corpus 回归已通过，尚待独立 corpus 和新根切换。
+WriterContext v7 删除章级同号来源、源字数和预算副本，API 从当前场景与 Stage1 现场派生；
+逐章人物名单被写手、Stage6/7 实际读取，因此保留。Chapter v3、Review v3、Rejected v2、
+TrimAudit/TrimResolution v3 均只保存承重主体、必要历史基线或精确绑定证据。
+这些 shape break 与 TODO-49 同批发布；旧书只留在整根归档，不原地迁移。
 
-**工作**：只在 TODO-45 的新 clean base 上由 producer 完整生成：WriterContext v5 删除重复人物/章级
-来源字段；Chapter v3 删除可重算读数；Review v3 收成当前主体、findings 与必要基线；Rejected v2
-改存 segments；TrimAudit/TrimResolution v3 删除可由正文、路径或对方主体确定的重复字段。
-
-**验收**：五次 shape break 均登记 current version 与 `_SHAPE_BREAKS`；不迁移、不手补旧产物；
+**验收**：相关 shape break 均登记 current version 与 `_SHAPE_BREAKS`；不迁移、不手补旧产物；
 Stage5 写作、recheck/revalidate、Review、trim、s5 审批及 Stage6/7 只读最小主体；删字段前后 prompt、
 机械 findings、正文拼接和审批语义不变。关系若没有真实 WriterContext consumer，不复制到展示字段。
-
-### TODO-45 · 稳定工作流的两本书恢复、clean v7 与现实运行验收
-
-TODO-32 的剩余真实 agent-only 验收已并入本条，旧编号删除。已经落地的 RunSupervisor、四类身份、
-raw/effective 审批、opaque token、Stage2 v7 关系和 Stage4 v3 repair/edit/replan 不再作为活动叙述重复；
-冻结行为见 `R-3.16`、`R-3.21`、`R-5.26`、`R-11.19`～`R-11.21`、`R-12.7`、`R-13.8`、
-`R-14.7`，工程证据见 `docs/DECISIONS.md`。本条只追踪尚未完成的实书恢复、运行验收与
-目录生命周期。
-
-**批次一：第一本书零模型最小恢复。** 对 SID `2067848088279168820` 在 current code 下重建
-validation seal。只要 review subject/contract 未变，就从盘上 raw typed decisions 恢复 effective 投影，
-不重新签字、不改成书字节；刷新一次性终审包并达到真实 delivery 终态。若内容或可见 finding 变化，
-必须诚实停在 review_required，不能为满足验收自动代批。不得重建 Stage2 v7 或重新生成正文。
-冻结 v6 的旧 A 决定若因 review contract 升版过期，仍不得复活；但现存 EvidenceBinding、Plan、
-WriterContext 已由 frozen exact proof 逐字对证且当前 s4/structure 已接受时，A 的一次性 B 生产授权不再
-反向阻断这些既有下游的消费。任一 proof、Plan/Context 或最终结构决定缺失仍关闭式停止。
-
-**批次二：第二本书 Stage4 定向恢复。** 对 SID `2062246499690591305` 用 ch4/ch6/ch8 已知的错指、
-纠正和动作—台词关系作回归。旧书保持 Stage2 v6，不自动迁移 v7；修复轮必须携本轮 finding 与全部
-未关闭历史 typed constraints。单章两轮耗尽后只能开同策略 repair epoch 或走完整章 preview/apply；
-只有显式全局策略驳回才 replan。验收只改受影响章，Stage0～Stage4A 其余有效单元不重跑，未变
-checkpoint 的重复 wire 为 0。若 frozen-v6 当前候选经真实复核为全章 accept，raw typed 决定必须
-如实落账而 effective 投影保持 `suspended`：不伪造 `request_repair` 换 edit 票，不重复唤 Commander，
-不发布 Structure approval、`s4rr1`、`s4er1`、付费 repair/replan/B 或 execution token；需要新 B 时只在
-clean v7 base 继续。只有真实 `request_repair` 才保留该章零 wire 完整章 edit。current Stage4B
-`request_replan` 必须先进入不同的 Stage4A resolution blocker，不得重审同一 B。Commander 结合 B 证据
-交叉核证：有具体 scene/fact/goal 结构损害才形成新的 non-all-accept typed A 修订决定；若只有 read-only
-INFO/metric/UNVER/binding concern，则提交同包 typed stop，以 exit 2 停机且不写审批、不铸 permit、不调用
-Executor。只有 A 决定落盘后才由确定性 Supervisor 交 exact action 给 Executor，不再重复调用 Commander；
-运行页须把该真实前沿和下一处理角色直接展示，而不是用空 beacon 营造从 Stage0 重跑。
-
-**批次三：一次 clean v7 agent-only 全链。** 新建 clean base，用冻结提交、固定 profile、冷缓存和
-完整 lifecycle/admission/beacon/ledger/session/unit 记录，从 producer 跑 Stage0～Stage7。legacy
-`operator_phases` 若缺失只报 unknown，不作为验收 blocker。Stage2 v7 的 review 关系只进入 Commander
-workpack，只有 typed 确认的 hard 关系以 opaque alias 进入 Stage4A；`same_scene` 不因同 source beat 自动
-生成，Executor 不见 SourceSpan/source beat/完整源顺序。正常运行只有确定性 RunSupervisor 调度
-Commander/Executor，外层 root 介入为 0；同一 parent run 必须跨 pause/resume 和至少一次 execution
-epoch rollover 完成：同 epoch 精确续 provider session，新 epoch 新建 session。`kind=legacy` backend 显式禁用且
-不作 fallback；付费与正文外发在首 wire 前分别授权。该 run 同时承担 TODO-32 的剩余真机验收；
-`default_profiles` 在此验收前保持 null。
-
-**批次四：现实生命周期验收。** `_service/runs`、scratch、两相 retention、v3 trash、
-round/revalidation 精确去重、restore hard-kill reconcile、维护 API/UI 与 AgentRun `reconciled` 的工程面
-已经完成，证据移入 `docs/DECISIONS.md`，不再作为活动施工项。当前只剩在现实运行中演练
-TTL preview/apply、部分删除与进程崩溃补尾、trash restore，以及一个 parent run 跨 pause/resume 与多个
-epoch 交付；服务崩溃、坏尾、迟到 child 与并发 resume 必须继续关闭式处理。
-
-**验证纪律**：
-
-- 小修只跑直接受影响单测、对应守卫和至少一个反例；不为每个小修重复全仓。
-- 契约变更跑 `docs/BACKEND_CONTRACT.md` §9.5 五文件及受影响 stage/API/恢复测试；前端受影响才跑
-  seams、typecheck 和相关测试。
-- 每个连贯批次合并前只跑一次完整非 corpus 后端；前端跑 test/build/seams/typecheck；skill 变化跑
-  skill validator。Release 才运行 current-schema corpus manifest、`--require-corpus`、固定 profile/cache、
-  单一 clean execution identity 和一次 clean agent-only Stage7。
-- 必测：代码变化只滚 epoch/validation seal；raw 下游决定不被前置失效擦除；内容/关系/可见 finding
-  只使受影响范围过期；每节点最多一次完整 operator snapshot 和一次 execute CAS；pause/stop API 只以
-  202 异步受理，后台 drain 后才分别落 paused/ended，stop 永久；第二轮 repair 继承第一轮未关闭约束；人工完整章替换零 wire且非目标章字节恒等；真策略
-  replan 有累计反馈并只重跑 effective input 变化章；Stage4B 首个用量窗口失败停止新章 admission、同 run
-  只补 pending，ended 历史 run 只经严格且唯一的只读 checkpoint adoption 接续；INFO/metric/UNVER
-  不产生付费动作；Stage4B `request_replan` 不重审同一 B，有具体结构损害时新的 non-all-accept typed A
-  决定只触发一次 exact Executor recovery，只有 read-only 依据时 typed stop 必须 exit 2 且零审批/permit/
-  Executor；运行页的跳过前缀/续跑点/下一角色必须全部来自 operator 同一快照。
-
-**性能验收（相同模型、effort、并发与冷缓存）**：
-
-- 第二本 15 章 Stage4 付费调用从 85 降到不超过 25，墙钟 40～60 分钟；非模型控制面累计少于
-  10 分钟，控制/审阅不再占总墙钟 80%。
-- Stage4 整书 replan 为 0，除非显式全局策略驳回；已成功未变单元重复 wire 为 0。
-- 首次逻辑单元落盘率 ≥95%，已授权公开节点首次正式落盘率 100%，基础设施失败率 ≤1%，正常运行
-  外层 root 介入为 0。
-- 现有两本多代码身份 run 只作问题回归，不作 clean 性能基线。累计至少 5 次 clean run 后，才把
-  ≤20 章 P50 120 分钟、P95 180 分钟升级为发布硬门。
-
-### TODO-46 · headless Commander 审阅轮次的往返成本与决定持久化：真机验收
-
-2026-09-03 实测 SID `2062246499690591305` run `1788450838-4558c248`：Stage4B 结构裁决与 Stage4A 解析两轮
-Commander 共约 22 分钟、38 次工具往返、7.3M 输入 token（reasoning 合计仅 26k），第二轮成果因主仓被改脏
-（`code_version_drift`）随 scratch 一起丢失。六批整改已合入 main（`00e2427` `8733880` `7fc796c` `5360793`
-`ec201d2` `8c7e3c8`），工程/合成面与前端全绿；本条只追踪尚未取得的真机证据与待裁决项。
-
-- **验收 run**：干净工作树 + 跑书专用 worktree，对同一 SID 从 `approval:stage4-structure-review` 起跑一次
-  headless。目标：每轮 Commander 工具往返 ≤ 3、run 日志无任何读盘/翻仓命令、ledger `role:commander` 行
-  `latency_ms` 可读且明显低于 11m47s / 10m27s；重放路径至少验一次"typed 决定落盘后代码漂移 → 新 epoch
-  零模型 apply"（`R-11.25`）。
-- **B 面体积**：v2 结构工作包实测 147→263 KB（+79%，coverage 21→207 KB）；design 247→276 KB。增量是过去
-  靠 11 次读盘取的逐场/事实/读数材料。若真机 token 账仍偏高，再评估 stages 去重、concern reason 去重或
-  entry/exit 状态改 delta；不得为省字节删掉裁决必需的材料。
-- **待裁决**：B 裁决与 A 解析是否合并成一轮（用户 2026-09-04 裁定暂不合并，保持 `R-5.20` 两票）；Codex 是否以
-  `project_doc_max_bytes=0` 彻底不加载根 AGENTS.md（键名未在本机 Codex 0.148 核实，现靠 shim 与
-  AGENTS.md 的排除句）。
-- 付费验收结果回写 `docs/DECISIONS.md` 后删除本条。
-
-### TODO-47 · 《夫君不行_但我有孕啦》Stage2 三十分钟目标：五次真机验收
-
-Stage2 Global Reviewer 增量 subject-card wire、Blueprint `extraction-ir-v3.2` 紧凑 wire、共享并发槽与
-`tools/workflow_metrics.py` / `tools/stage2_acceptance.py` 已完成工程落地；当前没有新增真实模型调用，
-因此速度、随机响应稳定性与语义质量仍是 `unver`。本条只追踪下一批真实跑数，不追加模型 A/B：用户
-在设置界面于首轮前更换一次默认 Agent profile，随后五轮固定实际 Blueprint/Commander 模型、effort、
-`NOVEL_CONCURRENCY`、代码身份和 v3.2 契约，每轮使用独立 clean base 与冷缓存。
-
-**验收**：五个不同 parent run 都须 current/run-bound 正式落盘、无 `.INVALID`、生产 check 无 HARD hit
-或 HARD skip、Global generation-safe、Global 与 Blueprint 两个 Commander 各至多 4 次内容调用且严格前后接受顺序成立；
-累计首次落盘率 ≥95%。每轮固定抽查至少 5 章，按源章核事实召回、因果方向、人物/世界状态和 evidence
-所属拍，任一失败即不宣称质量未受影响。历史 Stage2 基线 3044 秒，预注册“显著提速”为五轮 P50
-改善 ≥20%；三十分钟目标按五轮 max ≤1800 秒验收，不用一次最快值或 P50 代替。精确取证与汇总命令见
-`docs/OPERATIONS.md::Stage2 五次冷缓存性能与质量验收`。结果回写 `docs/DECISIONS.md` 后删除本条。
-
-### TODO-48 · 工作单元职责统一的真实运行验收
-
-工程推进计划与全部节点职责见 `docs/WORKFLOW_ROLE_BOUNDARIES.md`。本轮只做零模型工程验收；
-真实模型稳定性、成本和质量尚未验证。新契约只用于新 clean base，旧四席账、预审和额外 Global 终审
-不再作为新增实验目标，也不为旧书重新分配预算。
-
-- 固定 clean commit、profile、冷缓存和并发，核验 Global 接受 → Blueprint 并发 → 独立 Blueprint 接受。
-- E/C 每工作单元包含首次最多 4 次内容调用，网络 attempts 逐次留账；候选变化、重启、换 epoch 不返还预算。
-- Stage4 A/B 分别连续审阅，Stage6 A/B judge 独立互盲；typed 决定和已保存回答崩溃后零模型重放。
-- 比较失败后恢复率、未变成功单元重复 wire、阻塞审阅时间与必需事实错误；缺失数据保持 unknown/unver。
-- 真实结果回写 `docs/DECISIONS.md` 后删除本条，不把非 corpus 回归称为全量语料绿。
 
 ## 条目生命周期
 

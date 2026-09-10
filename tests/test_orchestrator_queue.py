@@ -20,7 +20,7 @@ from pydantic import ValidationError
 
 from contracts.artifacts import (
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
-    STAGE2_GLOBAL_GROUNDING, artifact_rel,
+    STAGE2_GLOBAL_GROUNDING, STAGE2_CHARACTERS, artifact_rel,
 )
 from contracts.invariants import NODES, STAGES
 from contracts.schema.orchestration import (
@@ -249,8 +249,6 @@ def test_stage5_trim_then_closure_uses_one_state_aware_frontier_without_rerun(
         Q, 'nodes_up_to', lambda _until: ['stage5.review', 'stage6.hook'])
     overview = SimpleNamespace(stages=[SimpleNamespace(
         stage='stage5', artifacts=[], review_state='fresh')])
-    monkeypatch.setattr(
-        Q.st, 'stage2_frozen_v6_subject_validated', lambda _ov: False)
     monkeypatch.setattr(Q.st, 'live_invalid_artifacts', lambda *_args: [])
     monkeypatch.setattr(Q, '_upstream_invalid', lambda *_args: [])
     review_verdict = {'value': Q.st.RESUME_SKIP}
@@ -422,12 +420,12 @@ def test_operator_projection_routes_expired_s2_proof_back_before_stage4_review(
 
 
 @pytest.mark.parametrize('invalid', [False, True])
-def test_queue_materializes_missing_projection_without_paid_global(
+def test_queue_materializes_missing_projection_without_paid_characters(
         queue_base, monkeypatch, invalid):
-    """存量有 current Global 只缺伴生产物时，派免费 renormalize，不派默认付费命令。"""
-    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage2.global'])
+    """当前人物登记只缺称名投影时派免费复验，问题稿先交人工。"""
+    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage2.characters'])
     grounding = ArtifactState(
-        rel=STAGE2_GLOBAL_GROUNDING, exists=not invalid,
+        rel=STAGE2_CHARACTERS, exists=not invalid,
         bytes=(None if invalid else 1), mtime=(None if invalid else 1),
         freshness=('unknown' if invalid else 'fresh'),
         reason=('no_provenance' if invalid else 'match'),
@@ -455,14 +453,19 @@ def test_queue_materializes_missing_projection_without_paid_global(
     todo, blocked = Q.plan_book(
         queue_base, 'book-a', until_stage='stage2', follow_check=False)
 
+    if invalid:
+        assert todo == [] and len(blocked) == 1
+        assert blocked[0].steps == []
+        assert blocked[0].waiting_on == Q.WAITING_ON_INBOX
+        return
     assert blocked == [] and len(todo) == 1
     item = todo[0]
-    assert item.node == 'stage2.global'
-    assert item.flags == ['--renormalize']
+    assert item.node == 'stage2.characters'
+    assert item.flags[:1] == ['--revalidate']
     assert item.steps and all(not step.paid for step in item.steps)
     argv = item.steps[0].argv
-    assert '--renormalize' in argv and '--yes' not in argv
-    assert '0 LLM' in item.why and '不得重采付费 Global' in item.why
+    assert '--revalidate' in argv and '--yes' not in argv
+    assert '免费' in item.why
 
 
 def test_queue_stops_naming_blocked_projection_at_human_zero_llm_recovery(
@@ -470,9 +473,9 @@ def test_queue_stops_naming_blocked_projection_at_human_zero_llm_recovery(
     """称名不可信时不 renormalize、不重采，并把阻塞传播给 Blueprint。"""
     monkeypatch.setattr(
         Q, 'nodes_up_to',
-        lambda _until: ['stage2.global', 'stage2.blueprint'])
+        lambda _until: ['stage2.characters', 'stage2.blueprint'])
     grounding = ArtifactState(
-        rel=STAGE2_GLOBAL_GROUNDING, exists=False, bytes=None, mtime=None,
+        rel=STAGE2_CHARACTERS, exists=False, bytes=None, mtime=None,
         freshness='unknown', reason='no_provenance', display_freshness='missing',
         invalid=True, invalid_freshness='unknown',
         invalid_reason='no_provenance', readable=True, condition='invalid',
@@ -502,7 +505,7 @@ def test_queue_stops_naming_blocked_projection_at_human_zero_llm_recovery(
 
     assert todo == []
     assert [item.node for item in blocked] == [
-        'stage2.global', 'stage2.blueprint']
+        'stage2.characters', 'stage2.blueprint']
     assert all(item.waiting_on == Q.WAITING_ON_INBOX for item in blocked)
     assert all(item.steps == [] for item in blocked)
     assert '--apply-edit' in blocked[0].why and '--revalidate' in blocked[0].why
@@ -510,12 +513,12 @@ def test_queue_stops_naming_blocked_projection_at_human_zero_llm_recovery(
 
 
 @pytest.mark.parametrize('readable', [False, True])
-def test_queue_never_paid_resamples_unproven_existing_global_for_projection(
+def test_queue_never_paid_resamples_unproven_existing_characters_for_projection(
         queue_base, monkeypatch, readable):
-    """Global 已存在但不可读/unknown 时只阻塞诊断，不冻结默认付费 argv。"""
-    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage2.global'])
+    """人物登记 已存在但不可读/unknown 时只阻塞诊断，不冻结默认付费 argv。"""
+    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage2.characters'])
     grounding = ArtifactState(
-        rel=STAGE2_GLOBAL_GROUNDING, exists=True, bytes=1, mtime=1,
+        rel=STAGE2_CHARACTERS, exists=True, bytes=1, mtime=1,
         freshness='unknown', reason='no_provenance',
         display_freshness='unknown', invalid=False,
         invalid_freshness=None, invalid_reason=None, readable=readable,
@@ -540,15 +543,15 @@ def test_queue_never_paid_resamples_unproven_existing_global_for_projection(
 
     assert todo == [] and len(blocked) == 1
     item = blocked[0]
-    assert item.node == 'stage2.global'
+    assert item.node == 'stage2.characters'
     assert item.steps == []
     assert item.waiting_on == Q.WAITING_ON_RESUME_DECISION
-    assert '默认付费 Global' in item.why
+    assert '默认付费抽取' in item.why
 
 
 def test_queue_does_not_paid_rerun_global_invalid_after_projection_is_ready(
         queue_base, monkeypatch):
-    """非称名 HARD 留下 INVALID 时，queue 让 Blueprint 继续，汇合到 Stage4 再挡。"""
+    """知识 INVALID 阻断本节点及 Blueprint，称名投影不能替代知识接受。"""
     monkeypatch.setattr(
         Q, 'nodes_up_to',
         lambda _until: ['stage2.global', 'stage2.blueprint'])
@@ -582,9 +585,10 @@ def test_queue_does_not_paid_rerun_global_invalid_after_projection_is_ready(
     todo, blocked = Q.plan_book(
         queue_base, 'book-a', until_stage='stage2', follow_check=False)
 
-    assert blocked == []
-    assert [item.node for item in todo] == ['stage2.blueprint']
-    assert all(item.node != 'stage2.global' for item in todo)
+    assert todo == []
+    assert [item.node for item in blocked] == ['stage2.global', 'stage2.blueprint']
+    assert all(item.steps == [] for item in blocked)
+    assert blocked[0].waiting_on == Q.WAITING_ON_INBOX
 
 
 def test_reviewed_global_edit_invalid_recovers_final_correction_before_blueprint(
@@ -602,10 +606,6 @@ def test_reviewed_global_edit_invalid_recovers_final_correction_before_blueprint
         Q.st, 'stage2_projection_recovery_needed', lambda _ov: False)
     monkeypatch.setattr(
         Q.st, 'stage2_blueprint_invalid_recovery_needed', lambda _ov: False)
-    monkeypatch.setattr(
-        Q.st, 'stage2_legacy_blueprint_recovery_needed', lambda _ov: False)
-    monkeypatch.setattr(
-        Q.st, 'stage2_frozen_v6_subject_validated', lambda _ov: False)
     monkeypatch.setattr(
         Q.st, 'resume_verdict',
         lambda _ov, node: (
@@ -631,9 +631,9 @@ def test_reviewed_global_edit_invalid_recovers_final_correction_before_blueprint
     ('formal_exists', 'invalid'),
     [(True, False), (False, True), (True, True)],
 )
-def test_queue_refreshes_legacy_v6_blueprint_inputs_without_paid_wire(
+def test_queue_refuses_unknown_blueprint_input_migration_and_paid_wire(
         queue_base, monkeypatch, formal_exists, invalid):
-    """旧 Blueprint 来源边只排 --renormalize，不能冻结默认付费 argv。"""
+    """旧来源没有免费迁移或默认付费的队列指令。"""
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage2.blueprint'])
 
     projection = ArtifactState(
@@ -650,14 +650,14 @@ def test_queue_refreshes_legacy_v6_blueprint_inputs_without_paid_wire(
         mtime=(1 if formal_exists else None),
         freshness=('unknown' if formal_exists and not invalid else
                    'fresh' if formal_exists else 'unknown'),
-        reason=('legacy_blueprint_inputs' if formal_exists and not invalid else
+        reason=('consumed_unresolved' if formal_exists and not invalid else
                 'match' if formal_exists else 'no_provenance'),
         display_freshness=(
             'unknown' if formal_exists and not invalid else
             'fresh' if formal_exists else 'missing'),
         invalid=invalid, readable=True,
         invalid_freshness=('unknown' if invalid else None),
-        invalid_reason=('legacy_blueprint_inputs' if invalid else None),
+        invalid_reason=('consumed_unresolved' if invalid else None),
         condition=('invalid' if invalid else 'ready'),
     )
     ov = SimpleNamespace(stages=[StageState(
@@ -669,14 +669,13 @@ def test_queue_refreshes_legacy_v6_blueprint_inputs_without_paid_wire(
     todo, blocked = Q.plan_book(
         queue_base, 'book-a', until_stage='stage2', follow_check=False)
 
-    assert blocked == [] and len(todo) == 1
-    item = todo[0]
+    assert todo == [] and len(blocked) == 1
+    item = blocked[0]
     assert item.node == 'stage2.blueprint'
-    assert item.flags == ['--renormalize']
-    assert item.steps and all(not step.paid for step in item.steps)
-    assert '--renormalize' in item.steps[0].argv
-    assert '--yes' not in item.steps[0].argv
-    assert '0 LLM' in item.why and '不得重跑付费 Blueprint' in item.why
+    assert item.flags == [] and item.steps == []
+    assert '--renormalize' not in item.why
+    assert item.waiting_on == (
+        Q.WAITING_ON_INBOX if invalid else Q.WAITING_ON_RESUME_DECISION)
 
 
 @pytest.mark.parametrize('formal_exists', [False, True])
@@ -954,8 +953,6 @@ def test_stage4_typed_design_decision_routes_to_exact_executor_recovery(
     monkeypatch.setattr(
         Q.st, 'stage2_reviewed_edit_correction_needed',
         lambda *_args: False)
-    monkeypatch.setattr(
-        Q.st, 'stage2_frozen_v6_subject_validated', lambda _ov: False)
     monkeypatch.setattr(Q.approvals, 'require_stage2_review', lambda *_args: None)
     approval_doc = SimpleNamespace(
         sid='book-a',
@@ -998,8 +995,6 @@ def test_stage4_structure_replan_routes_back_to_a_resolution_not_same_b_review(
     monkeypatch.setattr(
         Q.st, 'stage2_reviewed_edit_correction_needed',
         lambda *_args: False)
-    monkeypatch.setattr(
-        Q.st, 'stage2_frozen_v6_subject_validated', lambda _ov: False)
     approval_doc = SimpleNamespace(
         sid='book-a',
         design_review=SimpleNamespace(

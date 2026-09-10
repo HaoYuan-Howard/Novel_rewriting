@@ -38,8 +38,7 @@ from contracts.schema.report import CheckReport, finding
 from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage4 import WriterContext
 from contracts.schema.stage5 import (
-    ContextSource, ContextSourceDetail, DraftSources, Review, ReviewChapter, ReviewProvenance,
-    ReviewSources,
+    JudgedDraft, Review, ReviewChapter, ReviewProvenance,
 )
 from novel import prov, wontfix
 from novel.core.evidence import without_global_evidence
@@ -94,7 +93,7 @@ def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
     context_payload = wc.model_dump(by_alias=True)
     for entry in context_payload.get('chapters') or []:
         try:
-            M.assert_writer_context_v4(entry, M.chapter_basis(entry, source_text))
+            M.require_chapter_basis(entry, source_text)
         except ValueError as exc:
             raise TerminalState(
                 f'{exc}。请免费重建 stage4.context，不要继续用漂移的任务书。'
@@ -276,11 +275,14 @@ def _review_status_uncached(
             review_rel=rel, seq=seq, review=rev)
 
     review_rows = {row.output_ordinal: row for row in rev.chapters}
-    row_paths = {row.relpath for row in rev.chapters if row.relpath is not None}
     current_paths = set(judged_now)
     judged_paths = set(rev.judged)
-    if row_paths != judged_paths:
-        stale.append(f'Review chapters.relpath 与 judged 键不一致：{sorted(row_paths ^ judged_paths)}')
+    if len(review_rows) != len(rev.chapters):
+        unknown.append('Review 章节主体重复')
+    if any(artifact_rel('stage5.chapter', nn=row.output_ordinal) != path
+           or row.consumed.output_ordinal != row.output_ordinal
+           for path, row in rev.judged.items()):
+        unknown.append('Review judged 的路径、章号与正文投影主体不一致')
     if judged_paths != current_paths:
         stale.append(f'judged 主体集合已变：{sorted(judged_paths ^ current_paths)}')
     if set(by_ord) != {jd.output_ordinal for jd in judged_now.values()}:
@@ -291,8 +293,8 @@ def _review_status_uncached(
         if was.output_ordinal != now.output_ordinal or was.consumed != now.consumed:
             stale.append(f'{path} 正文投影已变')
         row = review_rows.get(was.output_ordinal)
-        if row is None or row.relpath != path or row.draft_text_sha1 != now.consumed.text_sha1:
-            stale.append(f'{path} Review 章行没有绑定当前正文摘要')
+        if row is None:
+            stale.append(f'{path} Review 缺少该主体的章级结论')
         try:
             chapter_fresh = store.freshness(path)
         except (ArtifactUnreadable, UpstreamMissing) as exc:
@@ -357,6 +359,12 @@ def require_fresh_review(ctx: RunContext, store: ArtifactStore | None = None) ->
     raise AssertionError(f'未登记的 Stage5 Review 状态：{status.state!r}')
 
 
+def missing_draft_ordinals(rev: Review) -> list[int]:
+    """计划中没有被 Review 判过正文的章，不能由缺少展示字段推断。"""
+    present = {item.output_ordinal for item in rev.judged.values()}
+    return [row.output_ordinal for row in rev.chapters if row.output_ordinal not in present]
+
+
 def require_accepted_review(ctx: RunContext, store: ArtifactStore | None = None) -> ReviewStatus:
     """正式下游的共同闸：Review 不仅 fresh，而且当前 Stage5 主体可接受。"""
     store = store or ArtifactStore(ctx)
@@ -371,7 +379,7 @@ def require_accepted_review(ctx: RunContext, store: ArtifactStore | None = None)
             hint='stage5.write --revalidate --actor <id> --reason <why>（0 成本提升），'
                  '或 stage5.write --apply-edit <chNN.json 路径> 继续人工修复')
 
-    missing = [row.output_ordinal for row in status.review.chapters if row.relpath is None]
+    missing = missing_draft_ordinals(status.review)
     if missing:
         raise UpstreamMissing(
             f'Stage5 Review 仍缺正式章稿：{missing}',
@@ -435,19 +443,7 @@ def _downgrade(f: Finding, **kw: Any) -> Finding:
     return Finding.model_validate({**f.model_dump(by_alias=True), **kw})
 
 
-def _context_source(store: ArtifactStore, book: M.Book) -> ContextSource:
-    """`writer_context` 这一条上游的新鲜度。
 
-    ⚠⚠ **两套新鲜度机制并存，而本轮裁决是「保留两个字段、只算一次」**（2026-08-12）：
-    这一格是 `store.freshness()` 的**投影**，不是第二次计算。各算一份的后果很具体——
-    报告第一节说 `fresh`、产物里这一格说 `stale`，而两边都不出声。
-    """
-    fr = store.freshness(WRITER_CONTEXT)
-    return ContextSource(
-        state='fresh' if fr.state == 'fresh' else ('stale' if fr.state == 'stale' else 'unknown'),
-        detail=[ContextSourceDetail(key=e.key, was=e.recorded_file, now=e.now_file)
-                for e in fr.stale_edges],
-        code=((book.ctx.get('_provenance') or {}).get('code')))
 
 
 def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
@@ -455,21 +451,7 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
     by_ord, invalids, judged = M.load_drafts(store)
     prev = latest_review(store)
 
-    # ── ① 先报来源，再报判定 ────────────────────────────────────────────────
-    #    对不上时报出来的一堆违规是「拿新尺子量旧布」，不说破就会被当成一次回归。
-    stale: list[str] = []
-    no_prov: list[str] = []
-    for rel in sorted(judged):
-        fr = store.freshness(rel)
-        if fr.reason == 'no_provenance' or fr.reason == 'no_inputs':
-            no_prov.append(rel)
-        elif fr.state == 'stale':
-            stale.append(rel)
-    sources = ReviewSources(
-        writer_context=_context_source(store, book),
-        # ⚠ 这一半原型**只在非空时才报**，而 `Q-1` 要求**空也要报**。
-        drafts=DraftSources(stale=stale, no_prov=no_prov))
-
+    # 来源状态只经当前 provenance/currentness 判定；盘上不保存另一份状态副本。
     # ── ② 逐章 ──────────────────────────────────────────────────────────────
     rows: list[ReviewChapter] = []
     bodies: dict[int, str] = {}
@@ -481,13 +463,7 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
     for o in sorted(book.chapters):
         entry = book.chapters[o]
         rec = by_ord.get(o)
-        basis = M.chapter_basis(entry, book.source_text)
-        assert (basis.source_ordinal is not None and basis.source_chars is not None
-                and basis.budget_chars is not None)
-        base = {'output_ordinal': o,
-                'from_source_ordinals': [basis.source_ordinal],
-                'budget_chars': basis.budget_chars,
-                'source_chars': basis.source_chars}
+        base = {'output_ordinal': o}
         if rec is None:
             rows.append(ReviewChapter(**base, findings=checks.with_output_ordinal([finding(
                 'draft_missing',
@@ -524,17 +500,20 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
               if (f.rule in ident and f.rule not in checks.IDENTITY_NA) else f
               for f in fs]
         rows.append(ReviewChapter(
-            **base, relpath=rec['_relpath'],
-            # ⚠ **两把指纹各管一件事，这是被一次误判逼出来的**：来源账、`warns`、归一
-            #   这类 0 成本元数据修复会改整份文件的指纹，但写手**一个字都没再写**——
-            #   拿整份指纹去推进收敛计数，等于把一次重判记成「写手又试了一次」。
-            draft_round=judged[rec['_relpath']].round,
-            draft_sha1=judged[rec['_relpath']].sha1,
-            draft_text_sha1=prov.fingerprint(body),
-            chars=M.chars_of(body), findings=checks.with_output_ordinal(fs, o)))
+            **base, findings=checks.with_output_ordinal(fs, o)))
 
     # ── ③ 书级 ──────────────────────────────────────────────────────────────
-    row_dicts = [r.model_dump(by_alias=True) for r in rows]
+    # 书级篇幅守卫只消费当前任务与实际正文的即时读数，不回写 Review 行。
+    row_dicts = []
+    for ordinal, body in bodies.items():
+        basis = M.chapter_basis(book.chapters[ordinal], book.source_text)
+        row_dicts.append({
+            'output_ordinal': ordinal,
+            'relpath': artifact_rel('stage5.chapter', nn=ordinal),
+            'chars': M.chars_of(body),
+            'budget_chars': basis.budget_chars,
+            'source_chars': basis.source_chars,
+        })
     book_fs = checks.book_findings(book, rows=row_dicts, bodies=bodies,
                                    inv_numbers=inv_numbers, inv_names=inv_names)
 
@@ -569,10 +548,10 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
     rows, book_fs = _apply_wontfix(rows, book_fs, wf)
 
     # ── ④ 收敛 ──────────────────────────────────────────────────────────────
-    rows, book_fs = _converge(rows, book_fs, prev[1] if prev else None)
+    rows, book_fs = _converge(rows, book_fs, prev[1] if prev else None, judged=judged)
 
     # ── ⑤ 基线（判据 31：没有基线数字的判据，等于不知道自己在说什么）───────────
-    nch = len([r for r in rows if r.relpath])
+    nch = len(judged)
     # 这份确定性验收的恒等基线只覆盖机械判据。语义判据有自己按审判产物
     # 记录的覆盖账；把它们塞进这里会伪造出「0/n 章命中」的机械基线，
     # 还会让未运行的付费审判看起来像已经跑过。
@@ -587,13 +566,9 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
         f"（另 {land['noatom']} 事实提不出原子、{land['ident']} 事实原子提错，均未检查）")
     baselines_identity = {r_: f'{ident_hits.get(r_, 0)}/{nch}' for r_ in conclusive}
 
-    counts: collections.Counter = collections.Counter()
-    for f in [f for r in rows for f in r.findings] + book_fs:
-        counts[f.sev] += 1
-
     return Review(
-        sources=sources, judged=judged, chapters=rows, book=book_fs,
-        baselines=baselines, baselines_identity=baselines_identity, counts=dict(counts),
+        judged=judged, chapters=rows, book=book_fs,
+        baselines=baselines, baselines_identity=baselines_identity,
         _provenance=ctx.free_provenance(ReviewProvenance,
                                         prompts={'RULES': prov.rules_fingerprint('stage5')}),
     )
@@ -646,8 +621,10 @@ def with_current_wontfix(store: ArtifactStore, rev: Review) -> Review:
     return rev.model_copy(update={'chapters': rows, 'book': book_fs})
 
 
-def _converge(rows: list[ReviewChapter], book_fs: list[Finding], prev: Review | None
-              ) -> tuple[list[ReviewChapter], list[Finding]]:
+def _converge(
+    rows: list[ReviewChapter], book_fs: list[Finding], prev: Review | None,
+    *, judged: dict[str, JudgedDraft],
+) -> tuple[list[ReviewChapter], list[Finding]]:
     """给每条结论标 `new` / `unresolved_N` / `same_draft`，并补一条收敛账。
 
     键是 `(章, rule, evidence_key)`。**只按 `rule` 去重是不够的**：修好了第 1 句 verbatim
@@ -656,7 +633,7 @@ def _converge(rows: list[ReviewChapter], book_fs: list[Finding], prev: Review | 
     ⚠⚠ **计数只在稿子真的变过时才前进**（`R-8.4`）。拿同一份成稿重跑一次验收（改判据、
     补上游、或者手滑跑了两遍）**不是「写手又试了一次没修好」**——那时把计数 +1，
     等于让一次 **0 成本重算**把「停止重写」的闸门推到跟前。
-    判别用**正文**指纹 `draft_text_sha1`；`draft_sha1` 是整份 JSON 的指纹，只管来源与过期。
+    判别只查 judged 中的 consumed.text_sha1；文件摘要仍保留作来源审计。
     ⚠ **`converge` 由「稿子变没变」决定，不由计数值决定**：拿 `n` 去判会让一条
     「重写过一次、还没消」的结论在重跑验收时从 `same_draft` 翻成 `unresolved_1`，
     而那一轮写手根本没落笔。
@@ -665,12 +642,20 @@ def _converge(rows: list[ReviewChapter], book_fs: list[Finding], prev: Review | 
     old_text: dict[int | None, str | None] = {}
     if prev is not None:
         for r in prev.chapters:
-            old_text[r.output_ordinal] = r.draft_text_sha1
+            prior_subject = prev.judged.get(
+                artifact_rel('stage5.chapter', nn=r.output_ordinal))
+            old_text[r.output_ordinal] = (
+                prior_subject.consumed.text_sha1 if prior_subject else None)
             for f in r.findings:
                 old[(r.output_ordinal, f.rule, f.evidence_key)] = f
         for f in prev.book:
             old[(None, f.rule, f.evidence_key)] = f
-    now_text = {r.output_ordinal: r.draft_text_sha1 for r in rows}
+    now_text = {
+        row.output_ordinal: (
+            subject.consumed.text_sha1 if (subject := judged.get(
+                artifact_rel('stage5.chapter', nn=row.output_ordinal))) else None)
+        for row in rows
+    }
 
     def rewritten(o: int | None) -> bool:
         if o is None:                      # 书级条目跟着「有没有任何一章重写过」走
@@ -725,7 +710,7 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
         by_rule['band_drift'] = [
             _aggregate_band_drift(band_findings, total_chapters=len(rev.chapters))]
 
-    nch = len([r for r in rev.chapters if r.relpath])
+    nch = len(rev.judged)
     scanned = {r_: f'{rev.baselines.get(r_, "")} 章（恒等基线 '
                    f'{rev.baselines_identity.get(r_, "?")}）'
                for r_ in rev.baselines if r_ != '_fact_landing'}

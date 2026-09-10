@@ -12,7 +12,7 @@ const disclosure = {
   mode: 'display_only' as const,
   security_boundary: false as const,
   server_sends_full_data: true as const,
-  hidden_paths: ['characters[].fate', 'secrets', 'arc.climax', 'arc.ending'],
+  hidden_paths: ['characters[].fate', 'secrets', 'source_blurb.facts', 'source_blurb.opening'],
   known_leakage_surfaces: ['network'],
   consumers: ['GlobalScreen'],
   notice: '测试说明：服务端仍全量下发；这不是安全边界。',
@@ -79,17 +79,11 @@ function globalView(): Stage2Global {
         first_reveal_chapter: 3,
       },
     ],
-    arc: {
-      conflict_stages: [{ stage: '反击', chapters: [1, 2, 3] }],
-      climax: '高潮',
-      ending: '结局',
-      arc_tracks: [
-        {
-          subject: name,
-          trajectory: '从受困到反击',
-          trajectory_evidence: evidence('弧线证据'),
-        },
-      ],
+    source_blurb: {
+      facts: [{ kind: 'supported', claim_id: 'hook_001', claim: '真实文案事实',
+        evidence: evidence('真实文案事实证据') }],
+      opening: { kind: 'proposed', through_chapter: 2, rationale: '开篇事件横跨前两章',
+        boundary_evidence: evidence('终点证据') },
     },
     unresolved_refs: 0,
     invalid_exists: true,

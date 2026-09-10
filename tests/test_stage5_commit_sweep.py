@@ -62,7 +62,7 @@ class _Delivery:
         if outcome == 'rejected_revision':
             self.artifact = write.RejectedRevision(
                 output_ordinal=1, why=['退化'], fixes=[],
-                attempts=[{'chars': 4, 'text': '退化稿。'}])
+                attempts=[{'segments': [{'slot': 's01', 'text': '退化稿。'}]}])
         else:
             self.artifact = object()
 

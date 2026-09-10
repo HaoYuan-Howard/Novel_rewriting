@@ -91,6 +91,11 @@ export function AgentProfilesSnapshot({
       ) : (
         <div className="mt-4 text-ink-5">节点覆盖：无</div>
       )}
+      {profiles.concurrency ? <div className="mt-5 grid gap-3 border-t border-line-soft pt-5">
+        <span>整书总并发：{profiles.concurrency.per_book} · 同根供应商总并发：{profiles.concurrency.per_provider}</span>
+        {Object.entries(profiles.concurrency.node_overrides).map(([node, count]) =>
+          <span key={node}><Mono>{node}</Mono> 并发：{count}</span>)}
+      </div> : <div className="mt-4 text-ink-5">并发：未单独配置</div>}
     </div>
   )
 }

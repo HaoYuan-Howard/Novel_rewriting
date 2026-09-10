@@ -135,7 +135,7 @@ def test_headless_stage2_closure_parses_one_typed_input(
     assert calls == [(str(tmp_path), SID, request)]
 
 
-def test_stage2_closure_reuses_the_five_existing_services_in_order(monkeypatch):
+def test_stage2_closure_checks_current_nodes_and_links_before_existing_services(monkeypatch):
     request = _final_request()
     calls = []
     final = _doc()
@@ -151,6 +151,9 @@ def test_stage2_closure_reuses_the_five_existing_services_in_order(monkeypatch):
     monkeypatch.setattr(approvals, 'approve_gate', gate)
     monkeypatch.setattr(approvals, 'mark_seen', seen)
     accepted = []
+    from novel.stages.stage2 import knowledge_links
+    monkeypatch.setattr(knowledge_links, 'require_current',
+                        lambda ctx: accepted.append(ctx.node + ':knowledge_links'))
     monkeypatch.setattr(approvals, 'require_stage2_node_accepted',
                         lambda base, sid, node: accepted.append(node))
     monkeypatch.setattr(approvals, '_read_raw', lambda *_args: SimpleNamespace(
@@ -163,7 +166,7 @@ def test_stage2_closure_reuses_the_five_existing_services_in_order(monkeypatch):
     got = approvals.close_stage2_review('base', SID, request)
 
     assert got is final
-    assert accepted == ['stage2.global', 'stage2.blueprint']
+    assert accepted == ['stage2.global', 'stage2.blueprint', 'stage2.blueprint:knowledge_links']
     assert calls == [
         ('gate', 'base', SID, 's0'),
         ('gate', 'base', SID, 's1'),

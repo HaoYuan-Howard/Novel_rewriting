@@ -45,7 +45,7 @@ from novel.store import ArtifactStore
 def draft_projection(data: object) -> object:
     """本层（以及下游两层）**真正消费**的成稿投影 —— 喂给 `store.read_judged(project=)`。
 
-    来源元数据、`warns`、预算这些字段变了**不要求任何人重做** ⇒ 只投影章序与正文。
+    来源审计元数据变了**不要求任何人重做** ⇒ 只投影章序与正文。
 
     ⚠⚠ 这条投影是「判过期」的**全部依据**：整文件 `sha1` 只作审计。
     不参与消费的元数据变化可以改变整文件 `sha1`，但不能让正文投影误报过期。
@@ -109,7 +109,7 @@ def load_drafts(store: ArtifactStore, *, require_current: bool = True
     必须分得开。
 
     ⚠ 旧双臂目录由 `legacy_stage5_paths` 单独发现；本函数不读它们、
-    不替人选一份，更不把旧 v1 字节伪装成 current v2。
+    不替人选一份，更不把旧字节伪装成 current v3。
     """
     by_ord: dict[int, dict[str, Any]] = {}
     judged: dict[str, JudgedDraft] = {}
@@ -236,15 +236,17 @@ def normalize_chapter(text: str, *, quote_style: tuple[str, str] | None,
 
 @dataclass(frozen=True)
 class ChapterBasis:
-    """WriterContext v4 三个冗余标量的唯一派生结果。
+    """当前写作任务的唯一运行时基准。
 
     ``source_ordinal`` 只认 ``output_ordinal``；``source_chars`` 只认当前
-    Stage1 源章正文；``budget_chars`` 只认场景预算之和。盘上的三格仍保留，
-    避免改 WriterContext/Chapter 形状与旧写作指纹；运行时不再把它们当第二份
-    真相。
+    Stage1 源章正文；``budget_chars`` 只认场景预算之和。WriterContext v7 与
+    Chapter v3 都不保存这三份副本；API 只在读取时投影。
+
+    源字数是含空白的整章长度，规划预算仍受各源 span 合计约束；两者口径不同。
+    不因删除展示副本而把预算基准改为整章长度，否则会误拒合法计划。
 
     ``source_text is None`` 只服务 ``target_range`` 这类只需预算的纯函数；
-    真实 Stage5 Book 一定传源章表，并由 ``assert_writer_context_v4`` 对账。
+    真实 Stage5 Book 一定传源章表，并由 ``require_chapter_basis`` 对账。
     """
 
     source_ordinal: int | None
@@ -273,7 +275,7 @@ def chapter_basis(
         )
     elif entry.get('budget_chars') is not None:
         # 保留 target_range 对「只给一个预算」的纯函数输入的旧契约。
-        # WriterContext v4 要求 scenes 非空，真实路径不会走这条。
+        # WriterContext v7 要求 scenes 非空，真实路径不会走这条。
         budget_chars = int(entry['budget_chars'])
     else:
         # 部分机械 helper 的反例夹具只构造自己所需的字段；源章派生不应
@@ -302,27 +304,15 @@ def chapter_basis(
     )
 
 
-def assert_writer_context_v4(entry: dict[str, Any], basis: ChapterBasis) -> None:
-    """断言 WriterContext v4 保留的三份副本与现算基准逐值一致。"""
+def require_chapter_basis(
+    entry: dict[str, Any], source_text: dict[int, str],
+) -> ChapterBasis:
+    """真实执行要求当前源章与正数场景预算齐全，未知读数不能进入写作与审阅。"""
+    basis = chapter_basis(entry, source_text)
     if (basis.source_ordinal is None or basis.source_chars is None
-            or basis.budget_chars is None):
-        raise ValueError('WriterContext v4 对账必须提供完整 Stage1 源章表与场景预算')
-    expected_sources = [basis.source_ordinal]
-    mismatches: list[str] = []
-    if entry.get('from_source_ordinals') != expected_sources:
-        mismatches.append(
-            f'from_source_ordinals={entry.get("from_source_ordinals")!r},'
-            f' expected={expected_sources!r}')
-    if entry.get('source_chars') != basis.source_chars:
-        mismatches.append(
-            f'source_chars={entry.get("source_chars")!r}, expected={basis.source_chars}')
-    if entry.get('budget_chars') != basis.budget_chars:
-        mismatches.append(
-            f'budget_chars={entry.get("budget_chars")!r}, expected={basis.budget_chars}')
-    if mismatches:
-        ordinal = entry.get('output_ordinal')
-        raise ValueError(
-            f'WriterContext v4 第 {ordinal} 章派生字段漂移：' + '; '.join(mismatches))
+            or basis.budget_chars is None or basis.budget_chars <= 0):
+        raise ValueError('写作基准必须提供完整 Stage1 源章表与正数场景预算')
+    return basis
 
 
 def chapter_source(entry: dict[str, Any], source_text: dict[int, str]) -> str:

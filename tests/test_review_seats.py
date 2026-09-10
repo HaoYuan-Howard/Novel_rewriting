@@ -1,11 +1,11 @@
-"""Stage2 两个业务工作单元独立、连续且各至多四次。"""
+"""Stage2 两位 Commander 的业务分类不另行发放或限制工作单元额度。"""
 from __future__ import annotations
 
 import pytest
 from novel.orchestrator import queue, review_seats
 
 
-def test_global_and_blueprint_have_independent_editable_fourth_turns():
+def test_global_and_blueprint_classification_does_not_own_content_allowance():
     for blocker, purpose in (
             (queue.WAITING_ON_STAGE2_REVIEW, 'review'),
             (queue.WAITING_ON_STAGE2_EDIT_CORRECTION, 'correction'),
@@ -13,7 +13,7 @@ def test_global_and_blueprint_have_independent_editable_fourth_turns():
         seat = review_seats.seat_for(blocker, ['node:stage2.global.apply-edit'])
         assert seat.purpose == purpose
         assert seat.read_only is False
-        assert seat.max_ordinal == 4
+        assert not hasattr(seat, 'max_ordinal')
 
 
 def test_retired_prereview_and_extra_final_cannot_start_new_content_calls():

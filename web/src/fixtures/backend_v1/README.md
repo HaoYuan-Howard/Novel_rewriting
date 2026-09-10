@@ -13,16 +13,17 @@ check-seams 钉着），本目录才是 mock 现役消费的数据源；两边�
 ## ⚠ Stage4/Stage5 场景契约示例（2026-08-25）
 
 Stage2 原子事实契约与 Stage4 场景编译器替换后，旧 Stage4/Stage5 产物没有迁移路径。
-`stage4_ch3.json` 改为结构有效的现役小示例；`check_stage4.json` 由当前判据注册表生成，
+`stage4_ch3.json` 改为结构有效的现役小示例；Context v7 示例声明本章没有知识增量或受限披露，
+不据此构造知识关联接受或冒充真实 Commander 决定。`check_stage4.json` 由当前判据注册表生成，
 明确呈现「没有可重判的现役 Stage4 产物」的 `skipped` 状态。Stage5 两份夹具已收成现役 HTTP
 瘦响应下的 `legacy_incompatible` 终态：不携带旧 Draft/Review 重复正文与展示字段，也不把旧双臂
 产物冒充 current；它们不代表新链已做付费实证。事实落点示例仍只由机械 check fixture 承担。
-`check_stage5.json` 同步为当前 50 条机械判据；旧抓包没产生过的现役判据明确记作 `skipped`，
+`check_stage5.json` 同步为当前 52 条判据；旧抓包没产生过的现役判据明确记作 `skipped`，
 不保留已下线的双臂、语义节点或重复材料占位。其判据集合由后端测试直接与注册表对账。
 原 `check_stage2.json` 抓包早于 v5，其中原子事实必填行因此明确标作 `unver`，不拿旧事件拍
 冒充 current-schema 的 fact atom 验收。
 
-## ⚠⚠ `global.json` 是结构有效的 v3 示例，不是新抓包（2026-08-24）
+## ⚠⚠ `global.json` 是结构有效的 v5 示例，不是新抓包（2026-09-09）
 
 原抓包书已不在盘上，无法付费重建 `GlobalGrounding` v3。本文件因此收成一份小而完整的
 现役 API 示例，专门覆盖 relation `public/via_secret` 两支、knowledge event 的
@@ -31,7 +32,19 @@ Stage2 原子事实契约与 Stage4 场景编译器替换后，旧 Stage4/Stage5
 成功的 `SourceSpan` 均取自同目录 `reading_ch3.json` 的真实第 3 章 `segments[].text`，
 offset 按拼接后的章正文核过；第 8 章 fate 与第 3 章无法唯一定位的时代背景故意保留
 `source=null`，用来守 UI 不把失败态显示成“没有证据”。这份示例不代表字段分布、模型遵守率
-或语料真值；下次有 v3 真产物时应由真实端点响应整份覆盖。
+或语料真值；下次有现役真产物时应由真实端点响应整份覆盖。
+
+此次随 GlobalGrounding v5 删除文学 arc；源文案事实为空，开篇范围明确为 unresolved，
+不从历史样例臆造证据或默认第 1 章。Stage4 示例同步删除 facts.arc；开篇范围判据保持 skipped。
+这些修改只服务界面开发，不代表新 schema 的语料或付费验收。
+
+## 阅读页旧 Blueprint 边界（2026-09-09）
+
+reading_ch3.json 保留原抓包的章正文，按现役阅读端点的不可读 Blueprint 分支
+呈现：exists=true/readable=false/condition=unreadable，正文为一段未覆盖文本。
+旧拍与材料没有当前事实归属，不能补造 ID 冒充新抽取；本文件不再下发旧 Blueprint
+或旧 provenance。这是结构示例的明确调整，不是新语料抓包或已运行证明。
+check_stage5.json 新增对白语义行明确为 skipped，历史判据结论仍保留原记录。
 
 ## ⚠ `enums.json` 不是抓包，是**生成**的（2026-08-22 改）
 

@@ -100,24 +100,15 @@ export interface Sources {
 
 /** stage4 / stage5 共用的「写手真正拿得到的事实」（`CtxFacts`）。 */
 export interface Facts {
-  setting: Record<string, string>
+  setting: { 时代背景: string | null; 世界观: string | null }
   relations: { subject: string; predicate: string; object: string }[]
   secrets: {
     fact: string
     known_by: string[]
-    reader_knows_by_now: boolean
+    reader_knows_by_now: true
   }[]
   /** 键名是 `description` 不是 `desc` —— 照抄后端。 */
   world_rules: { kind: string; description: string }[]
-  arc: {
-    current_stage: { stage: string; chapters: number[] }
-    /** 只有末章才有；非末章恒 null（发了就是泄结局）。 */
-    arc_tracks:
-      | { subject: string; trajectory: string }[]
-      | null
-    climax: string | null
-    ending: string | null
-  }
   address: { who: string; surface: string; by: string | null; context: string }[]
 }
 

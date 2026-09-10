@@ -5,7 +5,7 @@ stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §
 
 **68 条现役：39 HARD · 16 INFO · 11 度量 · 2 查不了。**
 权威恒在本模块的注册表与 `BACKEND_CONTRACT.md` §反向覆盖率；2026-08-23 新增的
-`conflict_stage_coverage` HARD 把冲突阶段的逐章覆盖关在 Stage2 产地。
+`opening_scope_valid` 只验证开篇材料范围的章域；范围语义仍由 Global Commander 裁决。
 
 【一张表，两个节点共用】`stage2.global`（全书级抽取）与 `stage2.blueprint`（逐章抽取）
 **读同一张表**，谁也不许再抄一份。⚠ `--check-only` 只挂在 `stage2.blueprint` 上
@@ -20,7 +20,7 @@ stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §
 
 **① 这是第一个用 `Rule.fix` 的层。** 修复路由使用机器可读的节点与 flag：
 `blueprint --chapters` 15 · `blueprint --patch` 1 ·
-`global --resample` 15 · `global --purge-role` 1 ·
+`global --resample`（知识）· `characters`（静态人物）·
 `global --renormalize` 1。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
 而写进 `note` 的散文里拼错一个 flag 名不会有任何东西出声（LESSONS 第 11 条）。
 ⚠ **`fix` 与 `directive` 是两格，在本层完全不重叠**：全表 `repair='NONE'`
@@ -42,7 +42,7 @@ STAGE = 'stage2'
 FIX_REGEN = ('stage2.blueprint', '--chapters')      # 定向重生成那几章（**付费**）
 FIX_REGEN_ARGS = ('--chapters',)                    # 值由本次 finding 的机器证据给
 FIX_RENORMALIZE_G = ('stage2.global', '--renormalize')      # 同上，全书那一份
-FIX_PURGE_ROLE = ('stage2.global', '--purge-role')  # 语义判官臂重划 role/fate（**付费**）
+FIX_CHARACTERS = ('stage2.characters', '--resample')  # 只重采人物 INVALID；typed 人工编辑另走免费恢复入口
 FIX_RESAMPLE = ('stage2.global', '--resample')  # 绕过问题缓存重采整份 global（**付费**）
 FIX_PATCH = ('stage2.blueprint', '--patch')     # 字段级修复（**付费**，IR 族，量级=条）
 
@@ -116,17 +116,17 @@ _hard('chapter_order', 'blueprint 顺序与 main_text 章序一致', 'R-3.16', f
 
 # ═══ 二、称谓表（7 HARD · 4 INFO）═════════════════════════════════════════
 
-_hard('canonical_unique', '一个显示名只挂一个 char_id', 'R-2.1', fix=FIX_RESAMPLE,
+_hard('canonical_unique', '一个显示名只挂一个 char_id', 'R-2.1', fix=FIX_CHARACTERS,
       note='重名 ⇒ 下游按名字解析时**静默**取到其中一个，而取到哪一个只取决于遍历顺序。'
            '盘上 0/3（12 / 15 / 48 个显示名）')
 
-_hard('character_unattested', '每个角色至少有一个叫法在原文里搜得到', 'R-2.2', fix=FIX_RESAMPLE,
+_hard('character_unattested', '每个角色至少有一个叫法在原文里搜得到', 'R-2.2', fix=FIX_CHARACTERS,
       note='判的是 `canonical`（剥掉区分词之后）与全部 `surface` 里**至少有一个**能搜到。'
            '⚠ 与 `address_unlocatable` 是**同一条需求的两级**：那一条逐条查、判 INFO；'
            '本条查「这个人在原文里到底有没有出现过」，一个都搜不到＝**这个角色是编的**。'
            '盘上 0/3')
 
-_hard('address_by_unresolved', '「谁在这么叫」解析得出来', 'R-2.4', fix=FIX_RESAMPLE,
+_hard('address_by_unresolved', '「谁在这么叫」解析得出来', 'R-2.4', fix=FIX_CHARACTERS,
       note='取值是 registry 里的 `char_id`，或 `narration` / `public`。'
            '⚠ 载体那边的 `AddressBy` 只管**形状**（`^(char_\\d+|narration|public)$`），'
            '「这个 `char_001` 在不在 registry 里」是**跨产物**的，只能是判据。'
@@ -135,25 +135,25 @@ _hard('address_by_unresolved', '「谁在这么叫」解析得出来', 'R-2.4', 
            '盘上 0/3（27 / 47 / 82 条）')
 
 _hard('address_from_out_of_range', '「从第几章起可用」在全书章范围内', 'R-2.5',
-      fix=FIX_RESAMPLE,
+      fix=FIX_CHARACTERS,
       note='越界 ⇒ 这条称呼**永不下发**，而它在产物里看着一切正常。盘上 0/3')
 
 _hard('address_from_too_early', '「从第几章起可用」不早于该字面在原文里首次出现的章', 'R-2.5',
-      fix=FIX_RESAMPLE,
+      fix=FIX_CHARACTERS,
       note='⚠ **单边判定**：早于字面首现一定错（读者还不知道这个叫法）；晚于合法'
            '（作者可以先用别的叫法）。反过来判就会把一大批正当的谨慎标注报成违规。'
            '⚠ 落盘前会**只往后抬** ⇒ 本条在成品上恒 0 是**预期**，'
            '它守的是抬升逻辑本身没坏。'
            '盘上 0/3')
 
-_hard('address_bare_pronoun', '称谓整条不是代词', 'R-2.3', fix=FIX_RESAMPLE,
+_hard('address_bare_pronoun', '称谓整条不是代词', 'R-2.3', fix=FIX_CHARACTERS,
       note='代词相对说话人，收了它下游必然取到「我妈」这种说法，而它不触发任何终态。'
            '⭐ **盘上 1/3 有真反例**：三岁那本 `char_034` 的 `surface` 整条就是「她」。'
            '词表是 `contracts/invariants.py::BARE_PRONOUNS`（我/你/他/她/它/咱），'
-           '**整份插值进 `GLOBAL_CANDIDATE_SYS`，不许在这里手抄子集**')
+           '**整份插值进 `novel/stages/stage2/characters.py::SYSTEM`，不许手抄子集**')
 
 _hard('address_all_pronoun', '一个角色有据的叫法不得全都含代词', 'R-2.3',
-      fix=FIX_RESAMPLE,
+      fix=FIX_CHARACTERS,
       note='上一条判「整条是代词」，本条判**这个角色一条干净叫法都没有**——'
            '那种情况下游 `display_name` 只能取到「我妈」。'
            '两条分开是因为**修法不同**：前者删掉那一条即可，后者要补一条新的。盘上 0/3')
@@ -180,11 +180,11 @@ _info('address_unlocatable', '每条叫法都能在原文里原样找到', 'R-2.
 
 # ═══ 三、身份与结局（5 HARD · 1 INFO · 1 度量 · 1 查不了）════════════════════════
 
-_hard('role_missing', '每个角色都有静态身份描述', 'R-2.6', fix=FIX_RESAMPLE,
+_hard('role_missing', '每个角色都有静态身份描述', 'R-2.6', fix=FIX_CHARACTERS,
       note='下游**只下发 `role`，不下发 `fate`** ⇒ 缺了它写手不认识这个人。盘上 0/3')
 
 _hard('role_leaks_fate', '静态身份里没有结局词', 'R-2.6', wordlist=True,
-      fix=FIX_PURGE_ROLE,
+      fix=FIX_CHARACTERS,
       baseline='⭐ **盘上 2/3 命中**（头牌 2 处 · 三岁 5 处）。'
                '⚠⚠ **词表只抓转抄式**：`(最终/后被/而死/下狱/被处死/走向/结局/沦为)` '
                '在头牌上命中 **0/17 而人读真违规 6/17**——`char_009.role` 写着'
@@ -193,15 +193,14 @@ _hard('role_leaks_fate', '静态身份里没有结局词', 'R-2.6', wordlist=Tru
                '常驻说出来',
       note='拆 role/fate 两个字段的**唯一理由**就是只下发 role——写手提前知道谁最后会死，'
            '第 1 章的伏笔就写过明。⇒ 结局漏回 role 就是把这次拆分白做了。'
-           '⚠ 自动修法是**付费**的（`--purge-role` 要再调一次语义判官），'
-           '它是本表唯一一条 `is_paid` 为真的 fix；人工核对后的新 `role` 另可走 '
-           '`stage2.global --apply-edit <书内json>`（0 LLM）')
+           '静态人物可由独立 producer 定向返工；人工核对后的新 `role` 另可走 '
+           '`stage2.characters --apply-edit <书内json>`（0 LLM）')
 
-_hard('role_repeats_name', '静态身份不与显示名完全同字', 'R-2.6', fix=FIX_RESAMPLE,
+_hard('role_repeats_name', '静态身份不与显示名完全同字', 'R-2.6', fix=FIX_CHARACTERS,
       note='同字的话写手拿到的下发面是「李宝珠：李宝珠」——一条零信息的介绍。盘上 0/3')
 
 _hard('hedge_words', '身份 / 显示名里没有模棱语', 'R-2.6', wordlist=True,
-      fix=FIX_RESAMPLE,
+      fix=FIX_CHARACTERS,
       baseline='旧裸子串基线 **2/3 命中**，两处都在 `fate`；拆出 fate 后'
                '`role/canonical` 基线为 **0/3**。',
       note='模棱语（可能 / 疑似 / 大概 / 或许…）落在下发字段上意味着'
@@ -215,7 +214,7 @@ _info('fate_hedge_words', '结局字段的模棱语筛查', 'R-2.6', wordlist=Tr
            '`disclosure`，所以模棱语保留在报告中但不拒绝 global 落盘，也不拦 Stage4。')
 
 _hard('distinguisher_lonely', '带区分词的显示名真有同名对象', 'R-2.6b',
-      fix=FIX_RESAMPLE,
+      fix=FIX_CHARACTERS,
       note='没有重名就没有消歧可言，而**区分词会被写手原样写进正文**'
            '（「李宝珠（丫鬟）掀开帘子」）。落盘前会确定性剥除无必要区分词。盘上 0/3')
 
@@ -226,8 +225,8 @@ _unver('role_fate_unverifiable', '改写式结局泄漏有确定性防线', 'R-2
             '**在最需要说的两本上反而不说**。'
             '⇒ 本条与 `role_leaks_fate` 报绿灯还是红灯无关，**每本每次都产**：'
             '词表只挡转抄式（实测头牌命中 0/17 而人读真违规 6/17），'
-            '改写式泄漏仍须人读；自动语义重划分只有 `--purge-role` 那条**付费**臂，'
-            '人工核对后的 typed `role` 可用 `stage2.global --apply-edit` 0 LLM 写回。'
+            '改写式泄漏仍须人读；人物 producer 返工也不能代替 Global Commander 的语义裁决，'
+            '人工核对后的 typed `role` 可用 `stage2.characters --apply-edit` 0 LLM 写回。'
             '⚠ 它是本层徽章到不了 `pass` 的主因，**而那是对的**')
 
 _metric('fate_report', '结局字段的缺失率', 'R-2.7',
@@ -313,16 +312,12 @@ _hard('global_evidence_unlocated', '自由事实证据能唯一回取为精确 S
            '走同会话 hash-bound evidence patch；终态后由 typed GlobalEdit / `--revalidate` '
            '0 LLM 收口，显式 `--resample` 只作最后手段，不再作为报告默认修复路由')
 
-# ═══ 五、冲突阶段章覆盖（1 HARD）═══════════════════════════════════════════
+# ═══ 五、连续开篇范围（1 HARD）═══════════════════════════════════════════
 
-_hard('conflict_stage_coverage', '冲突阶段逐章显式枚举且恰好覆盖全书一次', 'R-2.14',
-      note='`chapters` 是**显式章号枚举**，不是区间端点：`[3, 5]` 只表示第 3、5 章，'
-           '不能暗含第 4 章。每个阅读序章号必须恰好出现一次；缺章会让 Stage4 拿不到'
-           '`current_stage`，重章会让归属不唯一。实测 Flash 曾把连续段省写成 '
-           '`[3,5]/[8,10]/[13,15]`，旧产地照常落盘，直到 Stage4 才裸抛 exit 70。'
-           '本条把错误拦在付费产物的产地；默认转人工用 GlobalEdit '
-           '`conflict_stages_replace` + `--apply-edit` 0 LLM 完整重画，或补全既有问题稿后走 '
-           '`--revalidate` 0 成本提升；显式 `--resample` 只作最后手段，不是报告默认路由。')
+_hard('opening_scope_valid', '连续开篇范围具有合法终点及该章边界证据', 'R-2.14',
+      note='只验证章域与坐标，不推断语义范围；unresolved 保持 UNVER，由 Global Commander '
+           '通过 source_blurb_replace typed 编辑提出范围，再审阅接受。没有第 1 章 fallback；'
+           '错误提案可由 --apply-edit 或 .INVALID + --revalidate 零模型修复。')
 
 # ═══ 六、拍与区间（6 HARD · 1 INFO）═══════════════════════════════════════
 
@@ -438,6 +433,11 @@ _hard('hinge_drift', '保真材料的正文落在本拍 span 的原文范围内'
            '落在所属 beat.span 内；因此能区分「原文字节不一致」与「材料归错拍」。'
            '不满足时说明材料字节或归属不可信。'
            '盘上 0/3（113 / 66 / 103 条全中）')
+
+_hard('material_contract', '材料事实引用、对白语义与字面例外契约闭合', 'R-3.5', fix=FIX_REGEN,
+      note='source_fact_refs 非空、唯一且仅引用本章事实；普通对白携带说话关系、'
+           '语义与话语作用，字面例外必须声明剧情依据。语义是否忠实由 Blueprint C 核验，'
+           '本规则不从结构合法推导语义 PASS。定向重生成或免费重验均走同一闸。')
 
 _hard('chapter_no_hinge', '整章不得一条保真材料都没有', 'R-3.6b', fix=FIX_REGEN,
       note='保真材料是闭卷写作**唯一**的通道 ⇒ 整章为 0 等于这一章的原文材料'

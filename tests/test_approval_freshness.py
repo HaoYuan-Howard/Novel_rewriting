@@ -11,10 +11,13 @@ import pytest
 from contracts.schema import encode_artifact
 from contracts.schema.api import StructureApprovalRequest
 from contracts.schema.stage1 import MainText
+from contracts.schema.stage2 import BlueprintProvenance, ChapterBlueprints
 from contracts.schema.stage4 import (
     EvidenceBinding, EvidenceBindingHumanProvenance, PlanChapters, PlanProvenance,
 )
-from contracts.artifacts import STAGE4_EVIDENCE_BINDING, STAGE4_WRITER_CONTEXT
+from contracts.artifacts import (
+    STAGE2_CHAPTER_BLUEPRINTS, STAGE4_EVIDENCE_BINDING, STAGE4_WRITER_CONTEXT,
+)
 from novel.orchestrator import approvals
 from novel.orchestrator import queue as Q
 from novel.run import RunContext
@@ -119,6 +122,43 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     ])
     _disk_json(book, MAIN_REL, main.model_dump(mode='json'))
 
+    # 结构 Commander 实际读取的证据必须是真实 typed 产物；未发模型，来源明确标测试。
+    from tests.test_stage2 import blueprints
+    blueprint_ctx = RunContext.open(
+        tmp_path, SID, 'stage2.blueprint', paid=True, write_ledger=False)
+    blueprint_store = ArtifactStore(blueprint_ctx)
+    blueprint_store.read(MainText, MAIN_REL)
+    chapters = []
+    for chapter in main.root:
+        ordinal, text = chapter.chapter_ordinal, chapter.text
+        beat_id, fact_id = f'b{ordinal:02d}_01', f'f{ordinal:02d}_001'
+        source = {'text': text, 'start': 0, 'end': len(text)}
+        chapters.append({
+            'chapter_ordinal': ordinal, 'chapter_function': text,
+            'beats': [{
+                'beat_id': beat_id, 'span': source, 'time_layer': 'present',
+                'place': None, 'present_char_ids': [], 'hinges': [],
+            }],
+            'fact_atoms': [{
+                'fact_id': fact_id, 'claim': text, 'kind': 'event',
+                'obligation': 'land', 'source_beat_ref': beat_id,
+                'source': source, 'participant_char_ids': [],
+            }],
+            'causal_edges': [], 'narrative_relations': [],
+            'entry_state_refs': [], 'ending_state_refs': [],
+            'narration': [{
+                'grammatical_person': 'third', 'narrator_char_id': None,
+                'focalizer_char_id': None, 'pronoun_surfaces': [],
+            }],
+        })
+    blueprint_store.write(STAGE2_CHAPTER_BLUEPRINTS, ChapterBlueprints(
+        blueprints=chapters,
+        _provenance=blueprint_ctx.llm_provenance(
+            BlueprintProvenance, model='fixture-model',
+            prompts={'BLUEPRINT_SYS': '合成审批夹具，无真实模型请求'},
+            adopted_models=('fixture-model',), **blueprints()['_provenance']),
+    ))
+
     plan_ctx = RunContext.open(
         tmp_path, SID, 'stage4.plan', paid=True, write_ledger=False)
     plan_store = ArtifactStore(plan_ctx)
@@ -201,10 +241,10 @@ def test_current_writing_proof_binds_stage1_plan_and_context_without_s3(
     assert 'mode' not in todo[0].model_dump()
 
 
-def test_explicit_v6_backfill_preserves_current_typed_histories_but_clears_stage5(
+def test_retired_v6_with_current_typed_histories_is_not_migrated(
     current_book,
 ):
-    """v6 内已绑 current 契约的 typed 票可对证，但不伪造 Stage5 权限。"""
+    """已有可对证的写作与结构历史，也不能跳过版本边界重新签入当前工作流。"""
     base, _book = current_book
     _approve_writing(base)
     request = approvals.writing_template(
@@ -224,117 +264,17 @@ def test_explicit_v6_backfill_preserves_current_typed_histories_but_clears_stage
                  'stage2_review_history', 'stage2_reviews',
                  'stage2_rework_completed', 'stage2_patch_receipts', 'stage2_blueprint_scope'})
     payload['v'] = 6
-    legacy = approvals._ApprovalRecordV6Legacy.model_validate(payload)
     path = approvals._path(base, SID)
-    path.write_text(legacy.model_dump_json(indent=2), encoding='utf-8')
-
-    result = approvals.backfill_from_disk(base, SID)
-    landed = approvals._read_raw(base, SID)
-
-    assert result.backfilled == ['s4']
-    assert landed.v == 7 and landed.gate['s4']
-    assert not landed.writing and landed.writing_proof is None
-    assert not any(landed.gate[key] for key in ('s5', 's6', 's7'))
-    assert all(landed.gate_proofs[key] is None for key in ('s5', 's6', 's7'))
-    assert landed.structure_history == before.structure_history
-    assert landed.structure_decision == before.structure_decision
-    assert landed.writing_history == before.writing_history
-    assert landed.writing_decision == before.writing_decision
-    assert landed.design_history == before.design_history == []
-    assert landed.closure_history == [] and landed.closure_decision is None
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+    before_bytes = path.read_bytes()
+    with pytest.raises(approvals.HumanEditProtected, match='均不迁移'):
+        approvals.backfill_from_disk(base, SID)
+    assert path.read_bytes() == before_bytes
+    with pytest.raises(approvals.HumanEditProtected, match='均不迁移'):
+        approvals.get(base, SID)
 
 
-def test_explicit_v5_backfill_preserves_old_s4_as_expired_history(
-        current_book, monkeypatch):
-    """旧 Plan-only 决定不得借显式 backfill 获得 v2 证据权威。"""
-    from novel.stages.stage4.measure import structure_subject_sha256
-
-    base, book = current_book
-    store = approvals._store_for(book)
-    plan, _raw = store.read_own(PlanChapters, PLAN_REL)
-    legacy_subject = structure_subject_sha256(plan)
-    old_request = StructureApprovalRequest(
-        actor='legacy-reviewer',
-        reason='旧版已逐章核对同一份正式计划',
-        review_token=f's4sr1_{legacy_subject}',
-        chapters=[{
-            'output_ordinal': 1,
-            'decision': 'accept',
-            'reason': '旧版第一章结构已核对',
-        }],
-    )
-    old_proof = approvals._proof_for_legacy_structure(book, old_request)
-    old_stored = approvals._StoredStructureDecision(
-        actor=old_request.actor,
-        reason=old_request.reason,
-        subject_sha256=legacy_subject,
-        chapters=old_request.chapters,
-        decided_at='2026-08-26T00:00:00+00:00',
-        proof=old_proof,
-    )
-
-    fake_gate_proofs = {
-        gate: approvals._ApprovalProof(
-            root_clean_sha1='a' * 40,
-            artifacts={f'legacy/{gate}.json': format(index + 1, 'x') * 64},
-            decision_sha256=format(index + 5, 'x') * 64,
-        )
-        for index, gate in enumerate(('s0', 's1', 's2'))
-    }
-    fake_seen_proofs = {
-        key: approvals._ApprovalProof(
-            root_clean_sha1='a' * 40,
-            artifacts={f'legacy/{key}.json': format(index + 9, 'x') * 64},
-            decision_sha256=format(index + 11, 'x') * 64,
-        )
-        for index, key in enumerate(('read', 'global'))
-    }
-    current_gate_proof = approvals._proof_for_gate
-    monkeypatch.setattr(
-        approvals, '_proof_for_gate',
-        lambda novel_dir, gate, record: (
-            fake_gate_proofs[gate]
-            if gate in fake_gate_proofs
-            else current_gate_proof(novel_dir, gate, record)))
-    monkeypatch.setattr(
-        approvals, '_proof_for_seen',
-        lambda _novel_dir, key: fake_seen_proofs[key])
-
-    fresh = approvals._fresh_record(SID)
-    gates = dict(fresh.gate)
-    gate_proofs = dict(fresh.gate_proofs)
-    for gate in ('s0', 's1', 's2'):
-        gates[gate] = True
-        gate_proofs[gate] = fake_gate_proofs[gate]
-    gates['s4'] = True
-    gate_proofs['s4'] = old_proof
-    legacy = approvals._ApprovalRecordV5Legacy(
-        sid=SID,
-        gate=gates,
-        seen={key: True for key in fresh.seen},
-        gate_proofs=gate_proofs,
-        seen_proofs=fake_seen_proofs,
-        structure_history=[old_stored],
-        structure_decision=old_stored,
-    )
-    path = approvals._path(base, SID)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(legacy.model_dump_json(indent=2), encoding='utf-8')
-
-    result = approvals.backfill_from_disk(base, SID)
-    raw = json.loads(path.read_text(encoding='utf-8'))
-
-    assert result.approvals.v == 6 and not result.approvals.gate['s4']
-    assert result.approvals.structure.state == 'expired'
-    assert 's4' not in result.backfilled and raw['v'] == 7
-    assert raw['structure_decision']['subject_sha256'] == legacy_subject
-    assert raw['gate_proofs']['s4'] is None
-    assert set(raw['structure_decision']['proof']['artifacts']) == {PLAN_REL}
-    assert raw['structure_decision']['actor'] == 'legacy-reviewer'
-    assert raw['structure_decision']['decided_at'] == '2026-08-26T00:00:00+00:00'
-
-
-@pytest.mark.parametrize('mutation', ['root', 'main', 'plan', 'context', 'invalid'])
+@pytest.mark.parametrize('mutation', ['root', 'main', 'plan', 'blueprint', 'context', 'invalid'])
 def test_current_subject_changes_revoke_writing(current_book, monkeypatch, mutation):
     base, book = current_book
     _approve_writing(base)
@@ -357,6 +297,13 @@ def test_current_subject_changes_revoke_writing(current_book, monkeypatch, mutat
         original = changed.read_bytes()
         data = json.loads(changed.read_text(encoding='utf-8'))
         data['output_chapters'][0]['chapter_rewrite_brief'] = '当前计划字节已由人改动。'
+        changed.write_text(
+            json.dumps(data, ensure_ascii=False), encoding='utf-8', newline='')
+    elif mutation == 'blueprint':
+        changed = book / STAGE2_CHAPTER_BLUEPRINTS
+        original = changed.read_bytes()
+        data = json.loads(changed.read_text(encoding='utf-8'))
+        data['blueprints'][0]['fact_atoms'][0]['claim'] = '她发现当前计划有一处矛盾。'
         changed.write_text(
             json.dumps(data, ensure_ascii=False), encoding='utf-8', newline='')
     elif mutation == 'context':
@@ -483,7 +430,7 @@ def test_v1_or_corrupt_service_record_never_authorizes_queue(
     assert not approvals.has_record(base, SID)
     with pytest.raises(approvals.HumanEditProtected, match='pre-v7'):
         approvals.get(base, SID)
-    with pytest.raises(approvals.HumanEditProtected, match='backfilled as v2/v3/v4/v5'):
+    with pytest.raises(approvals.HumanEditProtected, match='均不迁移'):
         approvals.backfill_from_disk(base, SID)
 
     _queue_stage5(monkeypatch)
@@ -520,23 +467,15 @@ def _write_legacy_v2(base: Path, *, deep: list[int]) -> None:
 
 
 @pytest.mark.parametrize('deep', ([1], []), ids=['all-deep', 'has-shallow'])
-def test_explicit_v2_backfill_drops_s3_and_never_resigns_s4_or_writing(
+def test_retired_v2_keeps_old_stage3_and_writing_proofs_unmodified(
     current_book, deep,
 ):
     base, _book = current_book
     _write_legacy_v2(base, deep=deep)
 
-    result = approvals.backfill_from_disk(base, SID)
-    assert result.backfilled == []
-    assert result.approvals.v == 6
-    assert set(result.approvals.gate) == set(approvals.APPROVAL_GATES)
-    assert 's3' not in result.approvals.gate
-    assert not result.approvals.gate['s4']
-    assert not result.approvals.writing
-    assert not any(result.approvals.gate[gate] for gate in ('s5', 's6', 's7'))
-
-    raw = json.loads(approvals._path(base, SID).read_text(encoding='utf-8'))
-    assert raw['v'] == 7
-    assert set(raw['gate']) == set(approvals.APPROVAL_GATES)
-    assert 's3' not in raw['gate'] and 's3' not in raw['gate_proofs']
-    assert 'deep' not in raw and 'deep_proof' not in raw
+    path = approvals._path(base, SID)
+    before = path.read_bytes()
+    with pytest.raises(approvals.HumanEditProtected, match='均不迁移'):
+        approvals.backfill_from_disk(base, SID)
+    assert path.read_bytes() == before
+    assert not approvals.has_record(base, SID)

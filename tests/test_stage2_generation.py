@@ -3,6 +3,8 @@
 """Stage2 生成侧的零成本闭环测试。"""
 from __future__ import annotations
 
+from novel.stages.stage2 import grounding as grounding_io
+
 import copy
 from functools import partial
 import hashlib
@@ -19,10 +21,11 @@ from pydantic import ValidationError
 
 from contracts.schema import encode_artifact
 from contracts.schema.evaluation import GlobalReview
+from contracts.schema.knowledge import KnowledgeResponse as GlobalGroundingCandidateResponse
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
     ChapterBlueprints, ChapterBlueprintsResponseV31,
-    GlobalGrounding, GlobalGroundingCandidateResponse,
+    GlobalGrounding,
 )
 from novel import prov
 from novel.errors import (
@@ -213,24 +216,9 @@ def test_stage2_uses_one_concurrent_call_per_chapter_up_to_32(chapters, expected
 
 
 def _response_global() -> dict:
-    """正式 v4 fixture → 唯一现役 provider candidate-ID 响应形。"""
-    data = copy.deepcopy(global_grounding())
-    data.pop('_provenance')
-    table = GlobalEvidenceCandidateTable.build(main_text())
-    for claim_path, owner, field in iter_global_evidence_slots(data):
-        evidence = owner.get(field)
-        assert isinstance(evidence, dict) and isinstance(evidence.get('source'), dict)
-        matches = [
-            row for row in table.rows
-            if row.chapter_ordinal == evidence['chapter_ordinal']
-            and row.text == evidence['source']['text']
-        ]
-        assert len(matches) == 1, claim_path
-        owner[field] = {
-            'evidence_candidate_id': matches[0].evidence_candidate_id,
-        }
-    return GlobalGroundingCandidateResponse.model_validate(data).model_dump(
-        by_alias=True, mode='json')
+    """Global provider 只返回必要知识；静态人物输入由独立夹具明确提供。"""
+    from tests.stage2_fixtures import knowledge_response
+    return knowledge_response()
 
 
 def _legacy_locator_response_global() -> dict:
@@ -269,7 +257,7 @@ def test_cross_chapter_unique_recovery_covers_every_global_evidence_slot(
     claim_path: str,
 ):
     response = _legacy_locator_response_with_every_evidence_kind()
-    assert len(_ALL_GLOBAL_EVIDENCE_PATHS) == 11
+    assert len(_ALL_GLOBAL_EVIDENCE_PATHS) == 12
     slots = {
         path: (owner, field)
         for path, owner, field in iter_global_evidence_slots(response)
@@ -308,7 +296,7 @@ def test_cross_chapter_unique_recovery_covers_every_global_evidence_slot(
 @pytest.mark.parametrize(('branch', 'message'), [
     ('secret', 'duplicate secret ids'),
     ('world_rule', 'duplicate world rule ids'),
-    ('relation', 'duplicate relation ids'),
+    ('relation', 'duplicate relation ids|relation_id 不可重复'),
 ])
 def test_global_response_and_formal_artifact_reject_duplicate_stable_ids(
     branch: str, message: str,
@@ -429,7 +417,7 @@ def test_existing_invalid_uses_immutable_failure_ledger_for_zero_llm_revalidate(
     extract.run_global(initial_ctx, client)
     assert len(transport.calls) == 1
 
-    _formal, formal_raw = store.read_own(GlobalGrounding, extract.GLOBAL_REL)
+    _formal, formal_raw = grounding_io.read_own(store, extract.GLOBAL_REL)
     old_invalid = copy.deepcopy(formal_raw)
     old_invalid['entities']['relations'][0]['predicate_evidence'] = {
         'chapter_ordinal': 1, 'source': None,
@@ -441,7 +429,7 @@ def test_existing_invalid_uses_immutable_failure_ledger_for_zero_llm_revalidate(
     ]]
     store.write_invalid(
         extract.GLOBAL_REL,
-        GlobalGrounding.model_validate(old_invalid),
+        grounding_io.for_write(store, GlobalGrounding.model_validate(old_invalid)),
         gates_skipped=[])
 
     invalid_path = book / extract._GLOBAL_INVALID
@@ -467,8 +455,7 @@ def test_existing_invalid_uses_immutable_failure_ledger_for_zero_llm_revalidate(
     assert recovery_ctx.ledger.usage() is None, \
         '旧 INVALID locator 恢复必须保持本 run 0 wire'
     assert not invalid_path.exists()
-    landed = ArtifactStore(recovery_ctx).read(
-        GlobalGrounding, extract.GLOBAL_REL)
+    landed = grounding_io.read(ArtifactStore(recovery_ctx))
     evidence = landed.entities.relations[0].predicate_evidence
     assert evidence.chapter_ordinal == 2 and evidence.source is not None
     assert landed.provenance.evidence_locator_failures == []
@@ -490,19 +477,18 @@ def test_formal_span_drift_stays_invalid_across_real_revalidate(tmp_path):
     client, _transport = _client(
         initial_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(initial_ctx, client)
-    _formal, formal_raw = store.read_own(
-        GlobalGrounding, extract.GLOBAL_REL)
+    _formal, formal_raw = grounding_io.read_own(store, extract.GLOBAL_REL)
     formal_before = (book / extract.GLOBAL_REL).read_bytes()
 
     stale = copy.deepcopy(formal_raw)
     stale.pop('_provenance')
-    evidence = stale['entities']['characters']['char_001']['role_evidence']
-    assert evidence['source']['text'] in sections[2]['text']
+    evidence = stale['canon']['secrets'][0]['fact_evidence']
+    assert evidence['source']['text'] in sections[0]['text']
     evidence['chapter_ordinal'] = 2
     normalized, accounting = normalize_global(stale, sections)
     failure = next(
         row for row in accounting['evidence_locator_failures']
-        if row[0] == 'entities.characters.char_001.role')
+        if row[0] == 'canon.secrets.secret_01.fact')
     assert not failure[3].startswith('locator 在指定章内')
 
     artifact = GlobalGrounding.model_validate({
@@ -512,7 +498,7 @@ def test_formal_span_drift_stays_invalid_across_real_revalidate(tmp_path):
             **accounting,
         },
     })
-    store.write_invalid(extract.GLOBAL_REL, artifact, gates_skipped=[])
+    store.write_invalid(extract.GLOBAL_REL, grounding_io.for_write(store, artifact), gates_skipped=[])
 
     recovery_ctx = _ctx(book, 'stage2.global', paid=False)
     promoted, report = extract.run_revalidate(
@@ -570,7 +556,7 @@ def _ctx(book: Path, node: str, *, paid: bool = True) -> RunContext:
     clean.parent.mkdir(parents=True, exist_ok=True)
     if not clean.exists():
         clean.write_text('synthetic stage0 root\n', encoding='utf-8', newline='')
-    return RunContext(
+    ctx = RunContext(
         novel_dir=book,
         node=node,
         paid=paid,
@@ -578,7 +564,39 @@ def _ctx(book: Path, node: str, *, paid: bool = True) -> RunContext:
         cache=CachePolicy.default(),
         ledger=CostLedger(path=ledger_path(book.parent)),
     )
+    from contracts.artifacts import STAGE1_HOOK_COPY
+    from contracts.schema.stage1 import HookCopy
+    store = ArtifactStore(ctx)
+    if not store.exists(STAGE1_HOOK_COPY):
+        store.write(STAGE1_HOOK_COPY, HookCopy(text='李宝珠收到父亲已经回城的来信。'))
+    # 生成用例以当前人物登记为前置；免费恢复 context 不替 missing 上游造数据。
+    from contracts.artifacts import STAGE2_CHARACTERS
+    if paid and node == 'stage2.global' and not store.exists(STAGE2_CHARACTERS):
+        from tests.stage2_fixtures import seed_character_registry
+        if not store.exists(extract.MAIN_TEXT):
+            store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        seed_character_registry(ctx)
+    return ctx
 
+
+def _edit_static_character(book: Path, char_id: str, **changes):
+    from contracts.schema.characters import CharactersEdit
+    from novel.stages.stage2 import characters
+    ctx = _ctx(book, 'stage2.characters', paid=False)
+    store = ArtifactStore(ctx)
+    current, sha = store.read_own_with_sha256(
+        characters.CharacterRegistry, characters.REL, require_current=True)
+    value = current.characters[char_id].model_dump(mode='json')
+    evidence = value['role_evidence']
+    value['role_evidence'] = {
+        'chapter_ordinal': evidence['chapter_ordinal'],
+        'locator': evidence['source']['text'],
+    }
+    value.update(changes)
+    return characters.apply_edit(ctx, CharactersEdit.model_validate({
+        'source_sha256': sha,
+        'operations': [{'kind': 'replace', 'char_id': char_id, 'character': value}],
+    }), actor='test-reviewer', reason='按当前人物契约修改独立登记')
 
 
 def _accept_fixture_global(ctx: RunContext) -> None:
@@ -1188,16 +1206,9 @@ def test_blueprint_resume_after_prepare_before_formal_uses_sealed_candidate(
                     req, _response_blueprints()),
             )
             extract.run_blueprint(old_ctx, old_client)
-            store = ArtifactStore(global_ctx)
-            grounding, _raw = store.read_own(
-                GlobalGrounding, extract.GLOBAL_REL)
-            changed = grounding.model_dump(by_alias=True, mode='json')
-            changed['entities']['characters']['char_001']['canonical'] = '管家'
-            extract._write_formal(
-                store,
-                extract.GLOBAL_REL,
-                GlobalGrounding.model_validate(changed),
-            )
+            _edit_static_character(book, 'char_001', canonical='管家')
+            assert extract.run_renormalize(
+                _ctx(book, 'stage2.global', paid=False)).passed
             assert ArtifactStore(_ctx(book, 'stage2.blueprint')).freshness(
                 extract.BLUEPRINT_REL).state == 'stale'
             stale_formal_bytes = (book / extract.BLUEPRINT_REL).read_bytes()
@@ -1287,7 +1298,7 @@ def test_global_rebuild_is_not_locked_by_an_obsolete_blueprint_schema():
         assert isinstance(artifact, GlobalGrounding)
         assert len(transport.calls) == 1
         assert obsolete.read_text(encoding='utf-8').startswith('{"_schema_version": 2}')
-        assert store.read(GlobalGrounding, extract.GLOBAL_REL) == artifact
+        assert grounding_io.read(store) == artifact
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1342,7 +1353,7 @@ def test_global_producer_rebuilds_obsolete_global_and_review_as_one_transaction(
         artifact = extract.run_global(ctx, client)
 
         assert len(transport.calls) == 1
-        assert store.read(GlobalGrounding, extract.GLOBAL_REL) == artifact
+        assert grounding_io.read(store) == artifact
         review = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
         assert review.items and all(item.state == 'pending' for item in review.items)
         global_rounds = list((book / 'stage2/_rounds').glob(
@@ -1455,8 +1466,7 @@ def test_global_candidate_boundary_keeps_intermediate_hard_in_memory():
         ArtifactStore(ctx).write(
             extract.MAIN_TEXT, MainText.model_validate(main_text()))
         bad = _response_global()
-        bad['entities']['characters']['char_002']['canonical'] = \
-            bad['entities']['characters']['char_001']['canonical']
+        bad['canon']['secrets'][0]['first_reveal_chapter'] = 99
 
         def respond(_req: ChatRequest, index: int) -> ChatResponse:
             return _ok(bad if index == 0 else _response_global())
@@ -1471,9 +1481,9 @@ def test_global_candidate_boundary_keeps_intermediate_hard_in_memory():
             ctx, client, prepared, first)
 
         assert not rejected.passed
-        assert 'canonical_unique' in rejected.hard_hits
+        assert 'canon_chapter_refs_dangling' in rejected.hard_hits
         feedback = rejected.feedback_rows()
-        assert any(row['rule'] == 'canonical_unique' for row in feedback)
+        assert any(row['rule'] == 'canon_chapter_refs_dangling' for row in feedback)
         assert not (book / extract.GLOBAL_REL).exists()
         assert not (book / extract._GLOBAL_INVALID).exists()
         assert not (book / extract.GLOBAL_REVIEW_REL).exists()
@@ -1484,7 +1494,7 @@ def test_global_candidate_boundary_keeps_intermediate_hard_in_memory():
         # 会由 SessionAgentClient.resume 复用 provider session。
         second = client.ask_json(
             prepared.system,
-            prepared.user + '\n\n代码反馈：canonical_unique，请交回完整 JSON。',
+            prepared.user + '\n\n代码反馈：canon_chapter_refs_dangling，请交回完整 JSON。',
             model_cls=prepared.response_model,
             purpose=ctx.node, max_tokens=extract.GLOBAL_MAX_TOKENS)
         accepted = extract.evaluate_global_candidate(
@@ -1546,8 +1556,7 @@ def test_global_candidate_terminal_rejection_writes_invalid_only_once():
         ArtifactStore(ctx).write(
             extract.MAIN_TEXT, MainText.model_validate(main_text()))
         bad = _response_global()
-        bad['entities']['characters']['char_002']['canonical'] = \
-            bad['entities']['characters']['char_001']['canonical']
+        bad['canon']['secrets'][0]['first_reveal_chapter'] = 99
         client, transport = _client(ctx, lambda _req, _index: _ok(bad))
         prepared = extract.prepare_global_candidate(ctx)
         response = client.ask_json(
@@ -1564,7 +1573,7 @@ def test_global_candidate_terminal_rejection_writes_invalid_only_once():
         assert not list((book / 'stage2/_rounds').glob(
             'global_grounding.INVALID.r*.json'))
 
-        with pytest.raises(GateBlocked, match='canonical_unique'):
+        with pytest.raises(GateBlocked, match='canon_chapter_refs_dangling'):
             extract.finalize_global_candidate(
                 ctx, client, prepared, second)
 
@@ -1575,7 +1584,7 @@ def test_global_candidate_terminal_rejection_writes_invalid_only_once():
         projection = ArtifactStore(ctx).freshness(
             extract.BLUEPRINT_CHARACTER_REL)
         assert (projection.state, projection.reason) == (
-            'unknown', 'global_naming_blocked')
+            'fresh', 'match')
 
         blueprint_ctx = _ctx(book, 'stage2.blueprint')
         blueprint_client, blueprint_transport = _client(
@@ -1585,11 +1594,10 @@ def test_global_candidate_terminal_rejection_writes_invalid_only_once():
         )
         with pytest.raises(GateBlocked, match='比旧正式稿更新的问题稿'):
             extract.run_blueprint(blueprint_ctx, blueprint_client)
-        assert blueprint_transport.calls == [], '称名未收口必须在任何 Blueprint wire 前停止'
+        assert blueprint_transport.calls == [], '知识未接受必须在任何 Blueprint wire 前停止'
         assert not list((book / 'stage2/_rounds').glob(
             'global_grounding.INVALID.r*.json'))
-        invalid = ArtifactStore(ctx).read(
-            GlobalGrounding, extract._GLOBAL_INVALID)
+        invalid = grounding_io.read_own(ArtifactStore(ctx), extract._GLOBAL_INVALID, require_current=True)[0]
         assert invalid.provenance.usage is not None
         assert invalid.provenance.usage.calls_made == 1
     finally:
@@ -1644,7 +1652,7 @@ def test_non_name_global_hard_keeps_projection_but_blocks_blueprint_before_wire(
 
 def test_name_change_with_interrupted_projection_write_closes_blueprint_and_stage4(
         tmp_path, monkeypatch):
-    """global 字节已换名而投影仍旧：两个真实 consumer 都必须关闭，且 0 wire。"""
+    """人物登记已换名而投影仍旧：两个真实 consumer 都必须关闭，且 0 wire。"""
     book = tmp_path / '称名投影中断关闭_4532'
     book.mkdir()
     global_ctx = _ctx(book, 'stage2.global')
@@ -1655,33 +1663,33 @@ def test_name_change_with_interrupted_projection_write_closes_blueprint_and_stag
     extract.run_global(global_ctx, global_client)
     _accept_fixture_global(global_ctx)
 
-    _grounding, raw = store.read_own(GlobalGrounding, extract.GLOBAL_REL)
-    renamed = raw['entities']['characters']['char_001']
+    from contracts.schema.characters import CharacterRegistry
+    from novel.stages.stage2 import characters
+    raw = store.read_own(CharacterRegistry, characters.REL)[0].model_dump(
+        mode='json', by_alias=True)
+    renamed = raw['characters']['char_001']
     renamed['canonical'] = '宝珠'
     renamed['address'][0]['surface'] = '宝珠'
-    (book / extract.GLOBAL_REL).write_text(
-        json.dumps(encode_artifact(extract.GLOBAL_REL, raw),
-                   ensure_ascii=False, indent=2) + '\n',
+    # 模拟硬杀留下已提交的人物与未补尾的旧投影；不改知识文件或替旧审批重签。
+    (book / characters.REL).write_text(
+        json.dumps(encode_artifact(characters.REL, raw), ensure_ascii=False) + '\n',
         encoding='utf-8', newline='\n')
-    assert store.freshness(extract.GLOBAL_REL).state == 'fresh'
+    assert store.freshness(characters.REL).state == 'fresh'
+    assert store.freshness(extract.GLOBAL_REL).state == 'stale'
     assert store.freshness(extract.BLUEPRINT_CHARACTER_REL).state == 'stale'
-    from tests.test_stage2_review_decisions import _approve_all_review, _accept_global_node
-    store.write(extract.GLOBAL_REVIEW_REL, build_review(raw))
-    _approve_all_review(book)
-    _accept_global_node(book)
 
     blueprint_ctx = _ctx(book, 'stage2.blueprint')
     blueprint_client, blueprint_transport = _client(
         blueprint_ctx,
         lambda req, _index: _respond_blueprints(req, _response_blueprints()),
     )
-    with pytest.raises(ProvenanceRefused, match='stage2.global --renormalize'):
+    with pytest.raises(UpstreamStale):
         extract.run_blueprint(blueprint_ctx, blueprint_client)
     assert blueprint_transport.calls == []
 
     from novel.stages.stage2 import global_review
 
-    with pytest.raises(UpstreamStale, match='blueprint_character_projection'):
+    with pytest.raises(UpstreamStale):
         global_review.require_approved(
             _ctx(book, 'stage4.design', paid=False))
 
@@ -1737,9 +1745,8 @@ def test_stage2_global_invalid_can_be_revalidated_without_another_llm_call():
         ArtifactStore(ctx).write(
             extract.MAIN_TEXT, MainText.model_validate(main_text()))
         response = _response_global()
-        original = response['entities']['characters']['char_002']['canonical']
-        response['entities']['characters']['char_002']['canonical'] = \
-            response['entities']['characters']['char_001']['canonical']
+        original = response['canon']['secrets'][0]['first_reveal_chapter']
+        response['canon']['secrets'][0]['first_reveal_chapter'] = 99
         client, transport = _client(ctx, lambda _req, _index: _ok(response))
 
         with pytest.raises(GateBlocked):
@@ -1748,30 +1755,30 @@ def test_stage2_global_invalid_can_be_revalidated_without_another_llm_call():
 
         invalid = book / extract._GLOBAL_INVALID
         raw = json.loads(invalid.read_text(encoding='utf-8'))
-        raw['entities']['characters']['char_002']['canonical'] = original
+        raw['canon']['secrets'][0]['first_reveal_chapter'] = original
         invalid.write_text(
             json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
             encoding='utf-8', newline='\n')
 
         promoted, report = extract.run_revalidate(
             _ctx(book, 'stage2.global', paid=False),
-            actor='reviewer', reason='fix duplicate canonical name')
+            actor='reviewer', reason='修正越界的揭示章')
         assert promoted
         assert len(transport.calls) == 1
         assert (book / extract.GLOBAL_REL).is_file()
         assert not invalid.exists()
-        stored = ArtifactStore(ctx).read(GlobalGrounding, extract.GLOBAL_REL)
+        stored = grounding_io.read(ArtifactStore(ctx))
         assert stored.provenance.revalidated is True
         audit = stored.provenance.revalidation_audit
         assert audit is not None
         assert audit.actor == 'reviewer'
-        assert audit.reason == 'fix duplicate canonical name'
+        assert audit.reason == '修正越界的揭示章'
         assert audit.content_changed is True
         assert audit.edited_by_human is True
-        assert '/entities/characters/char_002/canonical' in \
+        assert '/canon/secrets/0/first_reveal_chapter' in \
             audit.changed_json_pointers
         assert next(r for r in report.rules
-                    if r.rule == 'canonical_unique').status == 'ok'
+                    if r.rule == 'canon_chapter_refs_dangling').status == 'ok'
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1786,8 +1793,7 @@ def test_global_resample_bypasses_the_rejected_cache_and_preserves_its_round():
         store = ArtifactStore(ctx)
         store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
         bad = _response_global()
-        bad['entities']['characters']['char_002']['canonical'] = \
-            bad['entities']['characters']['char_001']['canonical']
+        bad['canon']['secrets'][0]['first_reveal_chapter'] = 99
 
         def respond(_req: ChatRequest, index: int) -> ChatResponse:
             return _ok(bad if index == 0 else _response_global())
@@ -1957,19 +1963,17 @@ def test_failed_global_resample_keeps_the_formal_round_and_archives_the_problem(
         formal_before = (book / extract.GLOBAL_REL).read_bytes()
 
         rejected = formal.model_dump(by_alias=True)
-        rejected['entities']['characters']['char_002']['canonical'] = \
-            rejected['entities']['characters']['char_001']['canonical']
+        rejected['canon']['secrets'][0]['first_reveal_chapter'] = 98
         store.write_invalid(
             extract.GLOBAL_REL,
-            GlobalGrounding.model_validate(rejected),
+            grounding_io.for_write(store, GlobalGrounding.model_validate(rejected)),
             gates_skipped=[],
         )
         invalid_before = (book / extract._GLOBAL_INVALID).read_bytes()
 
         retry_ctx = _ctx(book, 'stage2.global')
         retry_bad = _response_global()
-        retry_bad['entities']['characters']['char_002']['canonical'] = \
-            retry_bad['entities']['characters']['char_001']['canonical']
+        retry_bad['canon']['secrets'][0]['first_reveal_chapter'] = 99
         retry_client, retry_transport = _client(
             retry_ctx, lambda _req, _index: _ok(retry_bad))
         with pytest.raises(GateBlocked):
@@ -2027,7 +2031,7 @@ def test_stage2_global_renormalize_promotes_deterministically_pruned_invalid():
         assert len(transport.calls) == 1
         assert (book / extract.GLOBAL_REL).is_file()
         assert not (book / extract._GLOBAL_INVALID).exists()
-        stored = ArtifactStore(ctx).read(GlobalGrounding, extract.GLOBAL_REL)
+        stored = grounding_io.read(ArtifactStore(ctx))
         # 埋点全裁光 ⇒ 降级成 cold。⚠ 它与真·冷揭示在字段值上同形，
         # 分得开的只有下一行那份裁剪账。
         assert stored.canon.secrets[0].setup.kind == 'cold'
@@ -2082,8 +2086,8 @@ def test_stage2_blueprint_renormalize_does_not_invent_character_refs():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_old_global_input_edge_refreshes_current_v7_without_wire(tmp_path):
-    """v7 载体不升版；旧 global provenance 诚实 unknown，再免费换成真实输入。"""
+def test_old_global_input_edge_cannot_be_resigned_as_current_blueprint(tmp_path):
+    """现役载体缺称名投影来源时保持未知，不可由免费归一追认旧输入。"""
     book = tmp_path / '旧v6来源边零成本刷新_4581'
     book.mkdir()
     global_ctx = _ctx(book, 'stage2.global')
@@ -2105,7 +2109,7 @@ def test_old_global_input_edge_refreshes_current_v7_without_wire(tmp_path):
 
     path = book / extract.BLUEPRINT_REL
     raw = json.loads(path.read_text(encoding='utf-8'))
-    assert raw['_schema_version'] == 7
+    assert raw['_schema_version'] == 8
     inputs = raw['_provenance']['inputs']
     old_edge = inputs.pop(extract.BLUEPRINT_CHARACTER_REL)
     old_edge['file'] = prov.fingerprint_bytes(
@@ -2119,28 +2123,23 @@ def test_old_global_input_edge_refreshes_current_v7_without_wire(tmp_path):
         _ctx(book, 'stage2.blueprint', paid=False)).freshness(
             extract.BLUEPRINT_REL)
     assert (legacy.state, legacy.reason) == (
-        'unknown', 'legacy_blueprint_inputs')
+        'stale', 'consumed_changed')
 
+    before = path.read_bytes()
     recovery_ctx = _ctx(book, 'stage2.blueprint', paid=False)
-    report = extract.run_renormalize(recovery_ctx)
-
-    assert report.passed
+    with pytest.raises(ProvenanceRefused, match='现役正文/称名投影来源边'):
+        extract.run_renormalize(recovery_ctx)
+    assert path.read_bytes() == before
     assert len(blueprint_transport.calls) == calls_before
     assert recovery_ctx.ledger.usage() is None
-    refreshed = ArtifactStore(recovery_ctx).read_own(
-        ChapterBlueprints, extract.BLUEPRINT_REL)[0]
-    assert json.loads(path.read_text(encoding='utf-8'))['_schema_version'] == 7
-    assert set(refreshed.provenance.inputs) == {
-        extract.MAIN_TEXT, extract.BLUEPRINT_CHARACTER_REL,
-    }
     assert ArtifactStore(recovery_ctx).freshness(
-        extract.BLUEPRINT_REL).state == 'fresh'
+        extract.BLUEPRINT_REL).state == 'stale'
 
 
 @pytest.mark.parametrize('formal_exists', [False, True])
-def test_old_v6_live_invalid_routes_to_renormalize_without_wire(
+def test_old_input_invalid_preserves_bytes_and_refuses_free_migration(
         tmp_path, formal_exists):
-    """INVALID-only / formal+INVALID 都保留精确 legacy marker，且误敲先正常拒绝。"""
+    """INVALID-only / formal+INVALID 均拒绝来源重签，不覆盖正式稿或重买。"""
     from novel.orchestrator import state as orchestrator_state
 
     book = tmp_path / f'旧v6问题稿零成本刷新_{int(formal_exists)}'
@@ -2180,11 +2179,11 @@ def test_old_v6_live_invalid_routes_to_renormalize_without_wire(
     store = ArtifactStore(recovery_ctx)
     invalid_freshness = store.freshness(extract._INVALID)
     assert (invalid_freshness.state, invalid_freshness.reason) == (
-        'unknown', 'legacy_blueprint_inputs')
+        'stale', 'consumed_changed')
     state = orchestrator_state.artifact_state(store, extract.BLUEPRINT_REL)
     assert state.exists is formal_exists and state.invalid
     assert (state.invalid_freshness, state.invalid_reason) == (
-        'unknown', 'legacy_blueprint_inputs')
+        'stale', 'consumed_changed')
     if formal_exists:
         assert (state.freshness, state.reason) == ('fresh', 'match')
     else:
@@ -2192,23 +2191,17 @@ def test_old_v6_live_invalid_routes_to_renormalize_without_wire(
             'unknown', 'no_provenance')
 
     before = invalid_path.read_bytes()
-    with pytest.raises(TerminalState, match='stage2.blueprint --renormalize'):
+    formal_before = formal_path.read_bytes() if formal_exists else None
+    with pytest.raises(ProvenanceRefused):
         extract.run_revalidate(
-            recovery_ctx, actor='agent:test', reason='错误入口应在写盘前拒绝')
+            recovery_ctx, actor='agent:test', reason='旧来源不可经提升追认')
+    with pytest.raises(ProvenanceRefused, match='现役正文/称名投影来源边'):
+        extract.run_renormalize(recovery_ctx)
     assert invalid_path.read_bytes() == before
+    assert (formal_path.read_bytes() if formal_exists else None) == formal_before
     assert formal_path.exists() is formal_exists
-
-    report = extract.run_renormalize(recovery_ctx)
-
-    assert report.passed
     assert len(blueprint_transport.calls) == calls_before
     assert recovery_ctx.ledger.usage() is None
-    assert formal_path.is_file() and not invalid_path.exists()
-    refreshed = store.read_own(ChapterBlueprints, extract.BLUEPRINT_REL)[0]
-    assert set(refreshed.provenance.inputs) == {
-        extract.MAIN_TEXT, extract.BLUEPRINT_CHARACTER_REL,
-    }
-    assert store.freshness(extract.BLUEPRINT_REL).state == 'fresh'
 
 
 @pytest.mark.parametrize('formal_exists', [False, True])
@@ -2272,7 +2265,6 @@ def test_non_exact_legacy_invalid_never_borrows_the_renormalize_marker(
     assert (blueprint_state.invalid_freshness,
             blueprint_state.invalid_reason) == (
                 'unknown', 'consumed_unresolved')
-    assert not orchestrator_state.stage2_legacy_blueprint_recovery_needed(ov)
     assert orchestrator_state.stage2_blueprint_invalid_recovery_needed(ov)
 
     before = invalid_path.read_bytes()
@@ -2280,6 +2272,8 @@ def test_non_exact_legacy_invalid_never_borrows_the_renormalize_marker(
         extract.run_revalidate(
             recovery_ctx, actor='agent:test', reason='通用未知不得借迁移 marker')
     assert '--renormalize' not in str(refused.value)
+    with pytest.raises(ProvenanceRefused, match='真实来源仍未知'):
+        extract.run_renormalize(recovery_ctx)
     assert invalid_path.read_bytes() == before
     assert formal_path.exists() is formal_exists
 
@@ -2315,6 +2309,7 @@ def test_exact_legacy_keys_never_hide_a_changed_global_upstream(
         extract.BLUEPRINT_CHARACTER_REL)
     old_edge['file'] = prov.fingerprint_bytes(
         (book / extract.GLOBAL_REL).read_bytes())
+    old_edge['consumed'] = None  # 模拟只记录文件身份的历史输入边。
     raw['_provenance']['inputs'][extract.GLOBAL_REL] = old_edge
     source_path = book / (
         extract._INVALID if invalid_carrier else extract.BLUEPRINT_REL)
@@ -2342,7 +2337,6 @@ def test_exact_legacy_keys_never_hide_a_changed_global_upstream(
     ov = SimpleNamespace(stages=[StageState(
         stage='stage2', artifacts=[projection_state, blueprint_state],
         done=False, reviewable=True)])
-    assert not orchestrator_state.stage2_legacy_blueprint_recovery_needed(ov)
     verdict, why = orchestrator_state.resume_verdict(ov, 'stage2.blueprint')
     assert '--renormalize' not in why
     if invalid_carrier:

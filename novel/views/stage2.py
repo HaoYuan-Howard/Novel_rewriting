@@ -15,6 +15,8 @@ view 不编名字：编出来的名字比一个看得出来的 id 更坏（它�
 """
 from __future__ import annotations
 
+from novel.stages.stage2 import grounding as grounding_io
+
 import hashlib
 import json
 import os
@@ -24,7 +26,8 @@ from contracts.artifacts import (
 )
 from contracts.invariants import BLUEPRINT_REVIEW_CONTRACT
 from contracts.schema.api import (
-    ArcTrackLine, GlobalAddressLine, GlobalArcView, GlobalCharacterLine,
+    CharacterRegistryView,
+    GlobalAddressLine, GlobalCharacterLine,
     GlobalKnowledgeEventLine, GlobalRelationLine, GlobalSecretLine, GlobalView, NameRef,
     BlueprintReviewBeat, BlueprintReviewBinding, BlueprintReviewCausalLink,
     BlueprintReviewChapter, BlueprintReviewCoverage,
@@ -53,11 +56,39 @@ BP_REL = STAGE2_CHAPTER_BLUEPRINTS
 MAIN_TEXT = STAGE1_MAIN_TEXT
 
 
+def character_registry_view(base: str | os.PathLike[str], sid: str) -> CharacterRegistryView:
+    """人物独立可读，知识未生成或过期不妨碍查看人物当前问题稿。"""
+    from contracts.schema.characters import CharacterRegistry, CharactersEdit
+    from novel.errors import NovelError, SourceConflict
+    from novel.stages.stage2 import characters
+    from pydantic import ValidationError
+    ctx = readonly_ctx(paths.resolve_novel_dir(base, sid), characters.NODE, prov.code_version())
+    store = ArtifactStore(ctx)
+    snapshots = {rel: store.full_sha256_or_none(rel)
+                 for rel in (characters.REL, characters.INVALID)}
+    source = characters.INVALID if snapshots[characters.INVALID] is not None else characters.REL
+    registry, sha = store.read_own_with_sha256(CharacterRegistry, source)
+    state = artifact_state(store, characters.REL)
+    template = None
+    unavailable = None
+    try:
+        template = CharactersEdit.model_validate(characters.edit_template(ctx))
+    except (NovelError, ValidationError) as exc:
+        unavailable = f'当前人物模板不可执行：{exc}'
+    if sha != snapshots[source] or any(
+        store.full_sha256_or_none(rel) != expected for rel, expected in snapshots.items()
+    ):
+        raise SourceConflict('读取人物编辑视图期间主体改变，请重新读取')
+    return CharacterRegistryView(
+        sid=sid, source_sha256=sha, artifact=state, registry=registry,
+        edit_template=template, template_unavailable_reason=unavailable)
+
+
 def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:
     """S-05 的一屏。**纯读**：不写一个字节，不发一个请求，不产生任何判定。
 
     ⚠ 不带 `badge` / `passed` / `counts`——结论只能来自 `/check/stage2`（`R-11.4`）。
-    ⚠ 剧透遮蔽不在这里做：`fate` / `secrets` / `arc.climax` / `arc.ending` 全量下发，
+    ⚠ 剧透遮蔽不在这里做：`fate` / `secrets` / 源文案事实 / 开篇范围 全量下发，
     开关是前端的纯展示行为（`R-11.13`，那句话作为 `spoiler_disclosure.notice`
     随 `/api/enums` 整份下发——**不单独发一个标量**，免得一句话与结构化契约分家）。
     """
@@ -67,7 +98,7 @@ def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:
     # 产物不在 ⇒ 404；在而读不回 ⇒ `read_own` 抛 `ArtifactUnreadable` ⇒ 409。
     # （`artifact_state` 不抛，所以「不在」这一态要自己升成终态。）
     st = artifact_state(store, REL)
-    art, _raw = store.read_own(GlobalGrounding, REL)
+    art, _raw = grounding_io.read_own(store, REL)
 
     misses = _Misses()
     chars = {cid: c for cid, c in art.entities.characters.items()}
@@ -127,13 +158,6 @@ def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:
             setup_chapters=list(getattr(s.setup, 'chapters', None) or []),
             first_reveal_chapter=s.first_reveal_chapter)
         for s in art.canon.secrets]
-    arc = GlobalArcView(
-        conflict_stages=art.arc.conflict_stages,
-        climax=art.arc.climax, ending=art.arc.ending,
-        arc_tracks=[ArcTrackLine(subject=ref(t.subject), trajectory=t.trajectory,
-                                 trajectory_evidence=t.trajectory_evidence)
-                    for t in art.arc.arc_tracks])
-
     return GlobalView(
         sid=paths.derive_source_meta(novel_dir.name)[0],
         title=paths.title_of(novel_dir),
@@ -142,7 +166,7 @@ def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:
         relations=relations,
         world_rules=art.canon.world_rules,
         secrets=secrets,
-        arc=arc,
+        source_blurb=art.source_blurb,
         unresolved_refs=misses.count,
         invalid_exists=st.invalid,
         freshness=st.freshness,
@@ -215,6 +239,8 @@ def reading_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Readin
             present_char_ids=list(b.present_char_ids),
             fact_atoms=facts_by_beat.get(b.beat_id, []),
             hinges=[ReadingHinge(kind=h.kind,
+                                 hinge_id=h.hinge_id, source_fact_refs=h.source_fact_refs,
+                                 dialogue=h.dialogue, literal=h.literal,
                                  text=h.source.text if h.source is not None else None)
                     for h in b.hinges])
         for b in (bp.beats if bp is not None else [])]
@@ -268,7 +294,6 @@ _BLUEPRINT_MECHANICAL_FIELDS_HIDDEN = (
     'blueprints[].beats[].span.start/end',
     'blueprints[].fact_atoms[].source_beat_ref',
     'blueprints[].fact_atoms[].source.start/end',
-    'blueprints[].beats[].hinges[].hinge_id',
     'blueprints[].beats[].hinges[].source.start/end',
     'chapter_blueprints._provenance',
 )
@@ -375,6 +400,8 @@ def _review_chapter(
             hinges=[
                 ReadingHinge(
                     kind=hinge.kind,
+                    hinge_id=hinge.hinge_id, source_fact_refs=hinge.source_fact_refs,
+                    dialogue=hinge.dialogue, literal=hinge.literal,
                     text=(hinge.source.text if hinge.source is not None else None),
                 )
                 for hinge in beat.hinges
@@ -462,6 +489,8 @@ def _blueprint_review_snapshot(
     """从同一次严格读取的主体、字节摘要与生产报告组一份快照。"""
     from novel.stages.stage2 import extract
     from novel.stages.stage2 import global_review as global_review_ops
+    from novel.stages.stage2 import knowledge_links as knowledge_link_ops
+    from novel.orchestrator.approvals import knowledge_link_history
 
     invalid_rel = paths.invalid_of(BP_REL)
     blueprint_rel = invalid_rel if store.exists(invalid_rel) else BP_REL
@@ -473,6 +502,10 @@ def _blueprint_review_snapshot(
     global_review = global_review_ops.review_workpack(store.ctx, scope='all')
     # 全文已由 coverage.segments 完整携带；交叉材料引用同一 MainText 身份。
     global_review.pop('main_text_chapters', None)
+    global_review.pop('review_coverage', None)
+    knowledge_scope = knowledge_link_ops.read_scope(store, blueprint_rel=blueprint_rel)
+    knowledge_review = knowledge_link_ops.review(knowledge_scope, knowledge_link_history(
+        store.ctx.novel_dir.parent, store.ctx.sid))
     if report.provenance.invalid != (blueprint_rel == invalid_rel):
         raise ArtifactUnreadable(
             'Blueprint 工作包读取期间 formal/INVALID 主体发生切换；'
@@ -519,6 +552,7 @@ def _blueprint_review_snapshot(
         'mechanical_fields_hidden': list(_BLUEPRINT_MECHANICAL_FIELDS_HIDDEN),
         'chapters': [row.model_dump(mode='json') for row in chapters],
         'global_review': global_review,
+        'knowledge_links_scope': knowledge_scope.model_dump(mode='json'),
     })
     rules_fingerprint = prov.rules_fingerprint('stage2')
     validation_seal_sha256 = _canonical_sha256({
@@ -543,6 +577,7 @@ def _blueprint_review_snapshot(
         validation_seal_sha256=validation_seal_sha256,
         review_token='bpr4_' + '0' * 64,
         global_review=global_review,
+        knowledge_links=knowledge_review,
         subject_sha256=subject_sha256,
         binding_sha256='0' * 64,
         binding=binding,
@@ -557,15 +592,24 @@ def _blueprint_review_snapshot(
     # 差异只是相对已接受材料的导航，接受后 baseline 前移不能使同一正式
     # 主体的 token 自行过期；各行仍携带当前/原接受的精确业务摘要。
     payload.pop('review_delta')
+    payload.pop('review_coverage')
+    # 继承记录是待审导航。接受推进历史后，不能让同一主体的 token 自行失效。
+    payload['knowledge_links'] = {'scope': knowledge_scope.model_dump(mode='json')}
     binding_sha256 = _canonical_sha256(payload)
     from novel.orchestrator.approvals import stage2_cross_review_scope
     from novel.stages.stage2.review_delta import compare, snapshot
     delta = compare(stage2_cross_review_scope(store.ctx.novel_dir.parent, store.ctx.sid),
                     snapshot(base))
+    from novel.orchestrator.approvals import stage2_review_history
+    from novel.stages.stage2 import review_obligations
+    coverage = review_obligations.coverage(
+        BP_NODE, review_obligations.blueprint_catalog(base, blueprints),
+        stage2_review_history(store.ctx.novel_dir.parent, store.ctx.sid))
     return base.model_copy(update={
         'binding_sha256': binding_sha256,
         'review_token': f'bpr4_{binding_sha256}',
         'review_delta': delta,
+        'review_coverage': coverage,
     })
 
 

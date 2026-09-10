@@ -27,7 +27,7 @@ from contracts.schema.common import Finding
 from contracts.schema.report import finding
 from novel.core.bands import PARA_BANDS, SENT_BANDS, band, cut_distance
 from novel.core.facts import (
-    NUM_UNIT, first_reveal_chapter, locate_secret, num_unit_keys, num_values,
+    first_reveal_chapter, locate_secret, num_unit_keys, num_values, number_tokens,
     secret_contains, secret_keywords,
 )
 from novel.core.measure import measure
@@ -119,39 +119,25 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     scenes = entry.get('scenes') or []
     source_norm = norm(M.chapter_source(entry, book.source_text))
 
-    # ── ① 【原样写入】必须逐字出现（四组材料里唯一要求逐字的一组）───────────────
-    #
-    # ⚠ **按原文段落边界拆开逐段查**：原文是「每句一段」排版，一条材料常常跨了 `\n\n`
-    #   ——那意味着它本来就是**两句**。`norm()` 会把换行也剥掉，若整条当成一个连续串来要求，
-    #   就凭空造出了「这两句之间不许有别的字」这个**原文里并不存在**的约束。
-    #   实测：写手把两句都逐字写了，只在中间插了一句「他放下茶盏，声音发紧。」
-    #   ——那是 `INVENT_ALLOW` 里明确**鼓励**的动作分解，判它失败是判错了。
+    # 字面例外只比较原字节：密码和识别符号中的标点、大小写也可能参与剧情。
+    # 提示语切分或近似拼写只留诊断，不能把一个不同的口令判为满足。
     nb, nmap = norm_index(body)
+    source_text = M.chapter_source(entry, book.source_text)
     miss_v: list[str] = []
     typo_v: list[str] = []
     split_v: list[tuple[str, str]] = []
     for scene in scenes:
-        for t in (scene.get('verbatim') or []):
-            for seg in re.split(r'\n+', t):
-                k = norm(seg)
-                # 伪锚属于 Stage2；Stage5 不得把源文中不存在的“原话”当 HARD 目标，
-                # 更不得沿 UNIQUE 路由付费塞回正文。独立 finding 由
-                # `material_anchor_findings` 留下上游账。
-                if source_norm and k and k not in source_norm:
-                    continue
-                if not k or k in nb:
-                    continue
-                # 【被提示语切开算满足】`「…，」他说，「…」` 是中文小说的**标准写法**，
-                # 不是改写。放行，但**单独留痕**——「一个字都没动」与「切成两截后逐字出现」
-                # 不是同一件事，不能都走 `[OK]`。
-                if (gap := split_by_speech_tag(k, body, nb, nmap)) is not None:
-                    split_v.append((seg, gap))
-                    continue
-                # 【一两个字之差按错别字放行】原文里本来就有错字（实测「这**为**公子伤口溃烂…」），
-                # 写手写成了「这**位**公子…」——那是**纠正**，不是改写。
-                # 要求它复现原文的错别字是荒谬的；契约把一两个字的局部修正都留作
-                # INFO 痕迹，三字及以上才按「没有原样写入」处理。
-                (typo_v if min_hamming(k, nb) <= 2 else miss_v).append(seg)
+        for seg in scene.get('verbatim') or []:
+            if not seg or seg in body:
+                continue
+            if source_text and seg not in source_text:
+                continue  # 伪造锚点交上游 finding，禁止 Stage5 付费填回
+            k = norm(seg)
+            if k and (gap := split_by_speech_tag(k, body, nb, nmap)) is not None:
+                split_v.append((seg, gap))
+            if k and min_hamming(k, nb) <= 2:
+                typo_v.append(seg)
+            miss_v.append(seg)
     if split_v:
         fs.append(finding(
             'verbatim_split',
@@ -161,7 +147,7 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     if miss_v:
         fs.append(finding(
             'verbatim_missing',
-            detail=f'{len(miss_v)} 句【原样写入】的台词没出现在成稿里'
+            detail=f'{len(miss_v)} 条【字面例外】没有原样出现在成稿里'
                    f'：{[t[:18] for t in miss_v[:4]]}',
             evidence=miss_v))
     if typo_v:
@@ -183,10 +169,14 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
         for t in (scene.get('keep_value') or []):
             if source_norm and norm(t) not in source_norm:
                 continue
-            nums = [m.group() for m in NUM_UNIT.finditer(t or '')]
-            vals = num_values(t)
-            ok = bool(vals & body_vals) if vals else any(n in body for n in nums)
-            if nums and not ok:
+            tokens = number_tokens(t)
+            nums = [token for token, _ in tokens]
+            vals = {value for _, value in tokens if value is not None}
+            unresolved = [token for token, value in tokens if value is None]
+            ok = vals <= body_vals and all(token in body for token in unresolved)
+            if not tokens:
+                ok = norm(t) in nb  # 数字材料无可解析数词也不能自动满足。
+            if not ok:
                 miss_n.append((t[:18], nums[:3]))
                 miss_n_full.append(t)
     if miss_n:
@@ -219,6 +209,14 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
             evidence=miss_o_full))
     # ⚠ `must_hold` **故意不查文面**——它要的是命题成立，逐字出现反而是硬塞背景交代。
     #   它由书级那条 `must_hold_unver` 显式说「没查」。
+
+    for scene in scenes:
+        for dialogue in scene.get('dialogue') or []:
+            fs.append(finding(
+                'dialogue_semantics_unver',
+                detail=f"slot {scene['slot']} 对白的说话关系、承诺条件、时间和语义等价须人工核验；"
+                       '普通措辞变化不触发原句返修',
+                evidence=[scene['slot'], dialogue['meaning'], *dialogue['required_facts']]))
 
     # ── ④ 本章不该点破的秘密 ────────────────────────────────────────────────
     # 秘密边界只认 Stage2 权威揭示时间线；WriterContext 不再复制一份 id 清单。
@@ -790,7 +788,7 @@ def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
     `given` 缺省为空串时会按**最严**的口径判发明越界（不知道是哪一臂就不替它放宽探测器）；
     调用方一律应传 `prompts.build_material(...).given`。
 
-    ⚠ **追加顺序即渲染顺序**：`warns` 是这份列表的字符串投影并原样存进 `chNN.json`，
+    ⚠ **追加顺序即渲染顺序**：运行时 warns 是这份列表的字符串投影；正式 Review 保存 findings，
     顺序一变，验收相逐轮做差集时会把整批警告读成「全换了」。
     """
     fs: list[Finding] = []
@@ -1050,10 +1048,11 @@ def material_anchor_findings(entry: dict[str, Any], book: M.Book) -> list[Findin
     for scene in (entry.get('scenes') or []):
         for field in ('verbatim', 'keep_value', 'must_appear'):
             for raw in (scene.get(field) or []):
-                pieces = re.split(r'\n+', str(raw)) if field == 'verbatim' else [str(raw)]
+                pieces = [str(raw)]
                 for piece in pieces:
                     key = norm(piece)
-                    if key and key not in source_norm:
+                    missing = piece not in source if field == 'verbatim' else key not in source_norm
+                    if piece and missing:
                         missed.append((field, piece))
     if not missed:
         return []
@@ -1237,7 +1236,7 @@ def trim_regressions(prev: str, new: str, entry: dict[str, Any], book: M.Book) -
 
     a, b = hits(prev), hits(new)
     out: list[str] = []
-    for rule, label in (('verbatim_missing', '丢了【原样写入】的原话'),
+    for rule, label in (('verbatim_missing', '丢了剧情必需的字面例外'),
                         ('keep_value_missing', '丢了【数值不得改动】的数字'),
                         ('draft_truncated', '结尾被削断'),
                         ('dialogue_fewer', '把台词压成了转述'),
@@ -1256,7 +1255,7 @@ def trim_regressions(prev: str, new: str, entry: dict[str, Any], book: M.Book) -
 _FROM_CHAPTER: tuple[str, ...] = (
     'draft_too_short', 'draft_truncated', 'meta_leak', 'names_absent',
     'verbatim_missing', 'verbatim_typo', 'verbatim_split', 'keep_value_missing',
-    'must_appear_missing', 'secret_leak',
+    'dialogue_semantics_unver', 'must_appear_missing', 'secret_leak',
     'invented_number', 'invented_name',
     'length_report', 'length_over', 'length_under',
     'paragraph_count_report', 'paragraph_budget_missed', 'paragraph_slot_report',
@@ -1283,7 +1282,7 @@ _FROM_REVIEW: tuple[str, ...] = (
 #: 一条 `sev='unver'` 却没说出「这次为什么够不着」的判据）。
 _UNVER: frozenset[str] = frozenset({
     'must_hold_unver', 'fact_landing_unver', 'draft_missing',
-    'no_secrets_in_book', 'end_hook_unver'})
+    'dialogue_semantics_unver', 'no_secrets_in_book', 'end_hook_unver'})
 
 
 def _why_of(rule: str, fs: list[Finding], *, empty: str) -> str:
@@ -1332,7 +1331,9 @@ def check(*, chapter_findings_by_rule: dict[str, list[Finding]],
             continue
         if rule in _UNVER:
             out.append(unverifiable(
-                rule, _why_of(rule, fs, empty=unver_empty.get(rule, '这一次没有够不着的地方')),
+                rule, _why_of(rule, fs, empty=unver_empty.get(rule,
+                    '本次材料没有普通对白义务；不代表语义已获核验'
+                    if rule == 'dialogue_semantics_unver' else '这一次没有够不着的地方')),
                 scanned=sc))
             continue
         out.append(ran(rule, fs, scanned=sc))

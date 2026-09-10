@@ -315,3 +315,110 @@ def test_prev_context_gives_goals_and_last_scene_state_not_previous_fact_list():
     assert '上一章末场转折。' in rendered and '主角已经拿到账册。' in rendered
     assert '不应重发的前场事实。' not in rendered
     assert '不应重发的末场约束。' not in rendered
+
+
+
+def test_writer_material_indexes_repeated_text_without_merging_scene_obligations(book):
+    import copy
+    import re
+    entry = copy.deepcopy(book.chapters[1])
+    fact = '她必须在天亮之前把父亲留下的完整账册交给门外等候的旧友，并明确要求对方保守这件事的秘密。'
+    entry['semantic_contract']['must_land_facts'] = [fact]
+    entry['semantic_contract']['information_delta'] = [fact]
+    entry['semantic_contract']['causal_edges'] = [{'before': fact, 'after': '旧友接受了请求。'}]
+    entry['chapter_goal']['facts'] = [fact]
+    for scene in entry['scenes']:
+        scene['required_facts'] = [fact]
+        scene['entry_state'] = [fact]
+        scene['turn_fact'] = fact
+        scene['exit_state'] = [fact]
+    frozen = copy.deepcopy(entry)
+    material = prompts.build_material(entry, book)
+    given = material.given
+    assert entry == frozen, '传输压缩不能修改校验器的原任务书'
+    assert given.count(fact) == 1
+    label = re.search(r'(〔文[0-9]+〕)：' + re.escape(fact), given).group(1)
+    assert f'进入状态：{label}' in given and f'退出状态：{label}' in given
+    assert f'转折：{label}' in given and f'{label} → 旧友接受了请求。' in given
+    assert all(f'slot={scene["slot"]}' in given for scene in entry['scenes'])
+    assert prompts.revise_user(material, '上一版正文', ['修正目标']).startswith(given)
+    assert '不合并事件' in given
+
+
+@pytest.mark.parametrize('also_current', [False, True])
+def test_previous_chapter_uses_the_same_text_table_without_sending_other_material(book, also_current):
+    import copy
+    import re
+    from dataclasses import replace
+    from novel.stages.stage5 import review
+
+    fact = '沈青已经拿到账册。'
+    previous = copy.deepcopy(book.chapters[1])
+    previous['chapter_goal']['facts'] = ['本章事实：' + fact]
+    previous['end_hook_goal']['facts'] = [fact, '〔文1〕是保留的字面标记。']
+    previous['scenes'][-1]['turn_fact'] = fact
+    previous['scenes'][-1]['exit_state'] = [fact]
+    excluded = '上一章未下发的证据细节，不得进入文字表。'
+    previous['scenes'][0]['required_facts'] = [excluded]
+    previous['semantic_contract']['must_land_facts'] = [excluded]
+    entry = copy.deepcopy(book.chapters[1])
+    entry['output_ordinal'] = 2
+    if also_current:
+        entry['semantic_contract']['entry_state'] = [fact]
+        entry['scenes'][0]['entry_state'] = [fact]
+    sample = replace(book, ctx={**book.ctx, 'chapters': [previous, entry]},
+                     source_text={**book.source_text, 2: book.source_text[1]}, _cache={})
+    frozen = copy.deepcopy(sample.ctx)
+    material = prompts.build_material(entry, sample)
+    given = material.given
+    assert given.count(fact) == 1 and excluded not in given
+    label = re.search(r'(〔文[0-9]+〕)：' + re.escape(fact), given).group(1)
+    assert label != '〔文1〕' and '〔文1〕是保留的字面标记。' in given
+    assert f'末场转折：{label}' in given and f'章末状态：{label}' in given
+    assert '本章事实：' + label in given
+    if also_current:
+        assert f'章首输入状态：{label}' in given and f'进入状态：{label}' in given
+    assert sample.ctx == frozen, '不能修改校验器、其他章或其他并发写手的原始材料'
+    assert review._material(entry, sample) == given
+    assert prompts.revise_user(material, '上一版正文。', ['修正重复']).startswith(given)
+
+
+def test_writer_text_table_keeps_similar_facts_and_verbatim_material_separate(book):
+    import copy
+    entry = copy.deepcopy(book.chapters[1])
+    first, second = '她承诺明日交出账册。', '她拒绝明日交出账册。'
+    entry['semantic_contract']['must_land_facts'] = [first, second]
+    entry['scenes'][0]['required_facts'] = [first, second]
+    given = prompts.build_material(entry, book).given
+    assert first in given and second in given
+    for key in prompts.HINGE_LABEL:
+        for scene in entry['scenes']:
+            assert all(text.strip() in given for text in scene.get(key) or [])
+
+
+def test_compiled_goal_prefix_does_not_duplicate_the_fact_body(book):
+    """真实 Context 的目标包装与场景事实仍指向同一段正文。"""
+    import re
+    from novel.stages.stage5 import review
+    entry = book.chapters[1]
+    fact = entry['scenes'][0]['required_facts'][0]
+    assert '本章事实：' + fact in entry['chapter_goal']['facts']
+    given = prompts.build_material(entry, book).given
+    assert given.count(fact) == 1
+    label = re.search(r'(〔文[0-9]+〕)：' + re.escape(fact), given).group(1)
+    assert '本章事实：' + label in given
+    assert review._material(entry, book) == given
+
+
+def test_short_facts_and_preexisting_reference_labels_are_lossless(book):
+    import copy
+    entry = copy.deepcopy(book.chapters[1])
+    entry['chapter_rewrite_brief'] += '〔文1〕是原材料中的字样。'
+    first = entry['scenes'][0]
+    first['required_facts'] = ['门开了。', '本章事实：门未开。']
+    first['turn_fact'] = '门开了。'
+    entry['chapter_goal']['facts'] = ['本章事实：门开了。', '本章事实：门未开。']
+    given = prompts.build_material(entry, book).given
+    assert given.count('门开了。') == 1
+    assert '〔文1〕：' not in given
+    assert '本章事实：门未开。' in given

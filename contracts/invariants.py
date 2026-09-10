@@ -75,7 +75,7 @@ RUN_NEXT_HANDLERS: Final = (
 EXECUTION_PERMIT_KINDS: Final = ('ready', 'recovery')
 
 #: 只登记本次章级 B 场景 alias→事实/材料证据 join；不随任意代码或提示词变化。
-STAGE4_BINDING_INPUT_CONTRACT: Final = 'stage4-chapter-binding-input-v2'
+STAGE4_BINDING_INPUT_CONTRACT: Final = 'stage4-chapter-binding-input-v3'
 STAGE4_BINDING_INPUT_RECEIPT_KEY: Final = 'CHAPTER_BIND_INPUT_CONTRACT'
 
 #: 一条来源边**为什么**得到那个结论。**用 id 不用措辞**（同 `STAGE0_WARNINGS` 的理由）：
@@ -458,18 +458,19 @@ STRUCTURE_CHANGE_KINDS: Final = (
 )
 STRUCTURE_METRIC_CONTRACT: Final = 'atomic-structure-v2'
 BLIND_ALIAS_ALGORITHM: Final = 'hmac-sha256-v1'
-#: Stage2 Blueprint 的逐章 Agent session 并发上限。18 章直接沿用全局 32 会让
-#: Claude CLI 在本机并发拒绝，成功 checkpoint 虽能保住，失败章仍要多轮补跑；
-#: 配置可调低不能调高。只约束 agent pool，不改变 legacy LLM transport。
-STAGE2_BLUEPRINT_MAX_CONCURRENCY: Final = 4
-#: Stage4A 的逐章私有 session 并发上限。配置可以把它调低，但不能调高；
-#: 这是该节点的供应商稳定性边界，不与全局 ``MAX_CONCURRENCY`` 混成一把尺子。
-STAGE4_DESIGN_MAX_CONCURRENCY: Final = 4
-#: Stage4B 章级 session 的并发上限（批次 4）：与 A 的逐章池同一供应商稳定性
-#: 边界，配置可以调低不能调高。
-STAGE4_PLAN_MAX_CONCURRENCY: Final = 4
-#: Stage5 普通写作与受托批量改写共享的章节并发上限。
-STAGE5_WRITE_MAX_CONCURRENCY: Final = 4
+#: 默认仍为四并发；6/8 只在显式配置中启用，并继续受整书及供应商总槽限制。
+PIPELINE_DEFAULT_CONCURRENCY: Final = 4
+PIPELINE_BOOK_CONCURRENCY: Final = 4
+PIPELINE_PROVIDER_CONCURRENCY: Final = 8
+PIPELINE_TOTAL_CONCURRENCY_MIN: Final = 1
+PIPELINE_TOTAL_CONCURRENCY_MAX: Final = 32
+PIPELINE_CONCURRENCY_TRIALS: Final = (4, 6, 8)
+PIPELINE_PARALLEL_NODES: Final = (
+    'stage2.blueprint', 'stage4.design', 'stage4.plan', 'stage5.write')
+STAGE2_BLUEPRINT_MAX_CONCURRENCY: Final = 8
+STAGE4_DESIGN_MAX_CONCURRENCY: Final = 8
+STAGE4_PLAN_MAX_CONCURRENCY: Final = 8
+STAGE5_WRITE_MAX_CONCURRENCY: Final = 8
 STRUCTURE_APPROVAL_DECISIONS: Final = ('accept', 'request_replan')
 STRUCTURE_APPROVAL_STATES: Final = (
     'unavailable', 'missing', 'accepted', 'replan_requested', 'expired',
@@ -477,14 +478,14 @@ STRUCTURE_APPROVAL_STATES: Final = (
 #: 最终结构审批的证据权威契约。它独立于结构度量契约：度量算法不变时，
 #: 审批能否把一项读数解释为行动依据仍可能变化。该值必须进入整书与逐章
 #: subject，使旧裁决只留历史而不能在新批准边界下继续铸造执行权。
-STRUCTURE_REVIEW_CONTRACT: Final = 'stage4-structure-review-v2'
+STRUCTURE_REVIEW_CONTRACT: Final = 'stage4-structure-review-v3'
 
 #: Stage4A 的正式设计审阅与 B 后最终计划审批是两张不同的票。前者只决定
 #: 当前盲候选能否进入付费 B，绝不打开 ``gate.s4``。决定与修复码都必须是
 #: 闭合集：自由文本理由只留审计，不能未经代码解释直接塞回模型 prompt。
 DESIGN_STRATEGY_DECISIONS: Final = ('accept', 'request_replan')
 DESIGN_CHAPTER_DECISIONS: Final = ('accept', 'request_repair')
-DESIGN_REVIEWER_KINDS: Final = ('human', 'delegated_operator')
+DESIGN_REVIEWER_KINDS: Final = ('human', 'delegated_operator', 'inherited')
 #: Commander/Reviewer 可提交的 approval 面闭集。reviewer typed request 的
 #: ``action.surface``、可重放决定记录与 blocker→surface 注册表共用这一张表。
 REVIEWER_APPROVAL_SURFACES: Final = (
@@ -498,9 +499,10 @@ REVIEWER_APPROVAL_SURFACES: Final = (
 #: exact replay；旧 v3 仍须按 split-capability/strategy-epoch 形状解码，但不再
 #: 是 current review contract。
 LEGACY_V3_DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v3'
-DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v4'
-#: 精确 v6 Blueprint ↔ 既有 Stage4A v1 truth 的人工作包契约。它沿用 v3
-#: typed edit 载体，却明确没有 narrative_relations 权威，不能进入 paid lane。
+LEGACY_V4_DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v4'
+# v5：策略绑定同一宏观输入投影；局部事实变化只重开实际受影响的章义务。
+DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v5'
+#: 仅供不可变历史决定解码；现役不提供 v6 读取、审批、恢复或交付权。
 FROZEN_V6_DESIGN_REVIEW_CONTRACT: Final = \
     'stage4-design-review-v3-legacy-frozen-v6'
 #: 策略驳回只能改它真实拥有的两个消费面：全书重构策略或
@@ -511,13 +513,18 @@ DESIGN_STRATEGY_REPLAN_CONSTRAINTS: Final = (
 #: Stage2 v3 把 v7 narrative_relations 从“只进 subject hash”改为逐章
 #: claim 化可见面；v4 再把 execution code / rules 收回服务端 opaque seal。
 #: Stage6/7 v3 同样不再把 seal 原料作为公开 workpack 字段外发。
-BLUEPRINT_REVIEW_CONTRACT: Final = 'stage2-blueprint-review-v5'
+BLUEPRINT_REVIEW_CONTRACT: Final = 'stage2-blueprint-review-v7'
 BLUEPRINT_REVIEW_CHANGE_KINDS: Final = ('added', 'removed', 'changed')
 BLUEPRINT_REVIEW_DELTA_MODES: Final = ('initial', 'unchanged', 'targeted', 'full')
 STAGE2_NODE_REVIEW_DECISIONS: Final = ('accept', 'rework', 'uncertain', 'stop')
-STAGE2_NODE_REVIEW_OWNERS: Final = ('stage2.global', 'stage2.blueprint')
+# 两位 Commander 与三位生产/派修 owner 分开登记，人物不新增第三个审阅席位。
+STAGE2_CHARACTER_REVIEW_KINDS: Final = frozenset({
+    'character_set_complete', 'name_distinctiveness', 'role', 'address_context',
+})
+STAGE2_NODE_REVIEWERS: Final = ('stage2.global', 'stage2.blueprint')
+STAGE2_NODE_REVIEW_OWNERS: Final = ('stage2.characters', 'stage2.global', 'stage2.blueprint')
 STAGE2_NODE_REVIEW_STATES: Final = (
-    'missing', 'accepted', 'rework', 'uncertain', 'stopped', 'expired')
+    'missing', 'accepted', 'rework', 'uncertain', 'stopped', 'expired', 'unknown')
 STAGE6_REVIEW_CONTRACT: Final = 'stage6-final-review-v3'
 STAGE7_REVIEW_CONTRACT: Final = 'stage7-final-review-v3'
 #: `R-5.22` 预检结论的两态。pass = 构造性绑定过整书联合 HARD；
@@ -541,12 +548,9 @@ WORKPACK_READING_KINDS: Final = (
 #: B concern 的 closed_ref 解析结果分类；unknown 表示当前蓝图找不到该引用。
 WORKPACK_CLOSED_REF_KINDS: Final = ('fact', 'beat', 'hinge', 'unknown')
 #: 审批工作包相对当前 typed 决定的处置态。``already_current`` 只表示
-#: **同一份工作包摘要**已有当前有效批准；``suspended`` 表示 raw
-#: 人工决定仍精确绑定当前审阅主体，但前置验证权威不足，因而不产生
-#: 下游授权。二者都供调用方跳过重复人工整读，也都不把不同
-#: actor/reason 的人工声明折叠成同一件事。
+#: **同一份工作包摘要**已有当前有效批准；旧根不再开放冻结兼容处置态。
 APPROVAL_WORKPACK_DISPOSITIONS: Final = (
-    'review_required', 'already_current', 'suspended',
+    'review_required', 'already_current',
 )
 #: Stage6/7 紧凑、hash-bound 终审工作包的两种主体。
 FINAL_APPROVAL_WORKPACK_KINDS: Final = ('stage6', 'stage7')
@@ -690,7 +694,7 @@ BINDING_INFEASIBILITY_CODES: Final = (
 )
 DESIGN_REVIEW_STATES: Final = (
     'unavailable', 'missing', 'repair_requested',
-    'strategy_replan_requested', 'accepted', 'suspended', 'expired',
+    'strategy_replan_requested', 'accepted', 'expired',
 )
 
 # ── Stage4 运行时失败 witness 的关闭式路由（TODO-45 批次 1）────────────────
@@ -828,7 +832,10 @@ assert tuple(LAYER_CN) == tuple(LAYER_GLOSS) == TIME_LAYERS, \
 #: 从原文抽出来的保真「点」。
 #: **以「点」不以「段」**：离散原子无法被模仿成文风，只能被放进去或不放进去；
 #: 连续文本段一律不下发——写作节点必然沿着它的句序和节奏走，那正是重写要避免的。
-HINGE_KINDS: Final = ('硬数字', '要害台词', '物件', '因果前提')
+HINGE_KINDS: Final = ('硬数字', '要害台词', '物件', '因果前提', '字面例外')
+
+#: 仅剧情依赖字面本身时保留原样；普通承诺、问答和威胁均属对白语义。
+LITERAL_REQUIREMENT_KINDS: Final = ('password', 'code', 'riddle', 'identifier')
 
 #: Stage2 原子事实的关闭式语义分类。它回答「这条章内真相改变了什么」，不回答
 #: 「Stage5 应怎样写」；场景归组、先后与篇幅属于 Stage4 的职责。
@@ -861,7 +868,8 @@ BLUEPRINT_RELATION_REVIEW_CONTRACT: Final = 'blueprint-relations-v1'
 #: 「原样写入，一个字都不能改」，会让一段叙述文变成逐字要求，而全链没有一层出声。
 #: 认不出的类型：产地一侧入显式终态，消费侧丢弃 + 告警。
 HINGE_GROUPS: Final = {
-    '要害台词': 'verbatim',      # 逐字，允许被【一处】提示语切开（中文小说的标准写法）
+    '要害台词': 'dialogue',      # 说话关系、语义、话语作用与必保事实；不下发源句
+    '字面例外': 'verbatim',      # 仅有剧情依据的密码、口令、谜面谜底、识别符号
     '硬数字': 'keep_value',      # 比【数值】不比字面：下发「30岁」、成稿「三十岁」= 满足
     '物件': 'must_appear',       # 必须出现
     '因果前提': 'must_hold',     # 必须成立，不必写在纸面上 —— 按定义查不了文面，恒 unver
@@ -876,13 +884,14 @@ HINGE_GROUPS: Final = {
 #: ⚠ **把四种都当成「必须逐字出现」是最常见的错法**：`must_hold` 要的只是命题成立，
 #: 当台词写就会逼出一段背景交代。四条限定语正是在防这件事，**一个字都不许省**。
 HINGE_LABEL_PARTS: Final = {
-    'verbatim': ('原样写入', '一个字都不能改'),
+    'dialogue': ('对白语义', '可换措辞，保留说话关系、话语作用与必保事实'),
+    'verbatim': ('字面例外原样写入', '密码、口令、谜面或识别符号，一个字都不能改'),
     'keep_value': ('数值不得改动', '措辞随你'),
     'must_appear': ('必须在场并起作用', '怎么描写随你'),
     'must_hold': ('必须成立，但【不必写在纸面上】', '别为它硬塞背景交代'),
 }
 assert set(HINGE_LABEL_PARTS) == set(HINGE_GROUPS.values()), \
-    '保真标签的四个键与 `HINGE_GROUPS` 分家了'
+    '保真标签与 `HINGE_GROUPS` 分家了'
 
 #: 合起来的全串（下发面逐条用）。**由上表派生，不另存一份。**
 HINGE_LABEL: Final = {k: f'{name}（{qual}）' for k, (name, qual) in HINGE_LABEL_PARTS.items()}
@@ -999,7 +1008,7 @@ assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 #: ``stage2.global`` 唯一现役模型证据 wire 身份。模型只交段落候选 ID，代码再铸成
 #: 正式 ``SourceSpan``；人工 ``GlobalEdit`` 与存量 ``.INVALID`` 的 locator 恢复不属于
 #: provider wire，也不由本常量选择。
-GLOBAL_EVIDENCE_CONTRACT: Final = 'paragraph-candidate-v1'
+GLOBAL_EVIDENCE_CONTRACT: Final = 'knowledge-paragraph-candidate-v2'
 
 #: Stage2 Blueprint 只读工作包当前绑定的是正式稿还是 live 问题稿。
 #: 只有 formal 工作包能提交 ``seen.read``；invalid 包只辅助修复。
@@ -1171,7 +1180,7 @@ WORLD_RULE_KINDS: Final = (
 #: 裸代词。**`address[].surface` 里一个都不许出现，连在别的字上也不行**（`R-2.3`）。
 #:
 #: 【为什么它必须在契约层而不是 prompt 里】三个消费方：
-#:   · stage2 的 `GLOBAL_CANDIDATE_SYS`（`$PRONOUNS`，下发给模型的那句禁令）；
+#:   · `novel/stages/stage2/characters.py::SYSTEM`（`$PRONOUNS`，下发给模型的禁令）；
 #:   · 判据 `address_bare_pronoun`（**HARD**，盘上 1/3 本命中：三岁 `char_034='她'`）
 #:     与 `address_has_pronoun`（INFO）；
 #:   · 判据 `present_names_pronoun`（度量，盘上 15/176）。
@@ -1221,7 +1230,7 @@ GLOBAL_REVIEW_KINDS: Final = (
     'character_set_complete', 'relation_set_complete',
     'world_rule_set_complete', 'secret_set_complete',
     'role', 'fate', 'relation', 'setting_fact', 'secret_setup',
-    'conflict_partition', 'arc_analysis',
+    'source_blurb_complete', 'source_blurb_fact', 'opening_scope',
 )
 
 #: 每类复核项对生成消费面的精确影响。这里不是优先级标签，而是恢复路由：
@@ -1254,8 +1263,9 @@ GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND: Final = {
     'relation': 'quarantine_or_fix',
     'setting_fact': 'must_fix',
     'secret_setup': 'quarantine_or_fix',
-    'conflict_partition': 'must_fix',
-    'arc_analysis': 'must_fix',
+    'source_blurb_complete': 'must_fix',
+    'source_blurb_fact': 'must_fix',
+    'opening_scope': 'must_fix',
 }
 
 #: 只披露、不阻断的那三类。保留这个派生常量供 API/文档兼容消费；权威分类是上表。
@@ -1317,7 +1327,7 @@ SPOILER_DISCLOSURE: Final = {
     'security_boundary': False,
     'server_sends_full_data': True,
     'hidden_paths': (
-        'characters[].fate', 'secrets', 'arc.climax', 'arc.ending',
+        'characters[].fate', 'secrets', 'source_blurb.facts', 'source_blurb.opening',
     ),
     'known_leakage_surfaces': (
         'characters[].role', 'relations[].valid_from_chapter',
@@ -1329,7 +1339,7 @@ SPOILER_DISCLOSURE: Final = {
     ),
     'notice': (
         '这是显示辅助，不是安全边界；服务端仍下发完整数据。关闭时只隐藏 fate、secrets、'
-        'climax、ending 四处核心字段，role、关系时点、规则正文与网络响应仍可能剧透。'
+        '源文案事实、开篇范围四处核心字段，role、关系时点、规则正文与网络响应仍可能剧透。'
     ),
 }
 
@@ -1848,6 +1858,8 @@ IDENTITY_BLIND: Final = (
 #: 于是一个漏登记的 0 成本动作会在界面上被画成橙色、弹二次确认，
 #: 而**它根本不花钱**。表不全 ⇒ 系统在对用户说假话。
 FREE_ENTRIES: Final = {
+    '--reaggregate': '复验机械与已保存来源并免费聚合；缺失、冲突或未知不创建模型调用',
+    '--recover-responses': '按原 producer 身份免费恢复已保存回答的 checkpoint，随后重新读取下一操作',
     '--dry-run': '只打印将要发出去的东西，不调用、不写盘',
     '--check-only': '按当前判据复检存量产物，纯读不写盘；报 FAIL 退出码非零',
     '--recheck': '按当前判据重判存量产物并写回指标',
@@ -1858,7 +1870,7 @@ FREE_ENTRIES: Final = {
     '--apply-edit': '把人工改过的内容落成新的一轮',
     '--preview-edit': '只读预检 Stage5 人工稿，不调用模型、不写盘',
     '--review-decisions': '应用带 actor、理由和 subject hash 乐观锁的 stage2 人工复核决策',
-    '--close-review': '核验两个 Stage2 节点的当前 typed 接受并零模型补齐已读与 s2 闸',
+    '--close-review': '核验当前节点所需的 typed 接受覆盖，零模型补齐审批与闸门',
     # ⚠⚠ **它是 2026-08-15 补的，而漏它的后果正是本表开头那条**：
     #   `--wontfix` 原来只挂在 `stage5.review` 上，而那是个 `paid=False` 节点
     #   ⇒ 不进本表也判不出付费，注释因此写着「它是参数不是入口 ⇒ 不进 FREE_ENTRIES」。
@@ -1888,15 +1900,10 @@ FREE_ENTRIES: Final = {
                                '安全 UNVER 决策骨架，不写盘'),
     '--emit-review-workpack': ('向 stdout 输出 Stage2 Global 逐项证据包，或 Blueprint '
                                 '异常优先全章包；只辅助人工核验，不自动做决定'),
+    '--refresh-review': '从当前人物登记与必要知识免费重建 Global 审阅；不改知识、不生成接受决定',
     '--adopt-residual': '显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链',
     '--rebind-review': ('将可机械证明语义等价的旧人工决定绑定到当前 stable review '
                         'identity；旧盘未持久化 immutable workpack/evidence digest 时关闭式拒绝'),
-    # ⚠ 它**不是**通用 response-repair 的一种：那条路只收 parse/require/schema
-    #   （`repair_eligible=True`）。Stage4 的 validator 拒稿明确不在通用修复面
-    #   （`eligibility_reason='validator 不属于通用 JSON/形状修复面'`），在此之前
-    #   它**没有任何恢复入口** ⇒ 一次有效付费的整书候选只能整本重来。
-    '--adopt-rejected': ('按当前完整四道闸 0 次调用重判一份封存的 Stage4A 拒稿；'
-                         '只消费隔离区里的候选与既有成本账，不发新请求'),
     '--apply-binding': ('把完整人工 EvidenceBinding 按与 Stage4B 相同的 schema、'
                         '编译和 HARD 闸写回；0 次模型调用，也允许首次 B 无正式计划时恢复'),
     '--emit-prepared-recovery-workpack': (
@@ -1918,17 +1925,7 @@ PAID_FLAGS: Final = {
     '--revise': 'stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手',
     '--reviewer-rewrite': (
         '消费 Stage5 顶部 Commander 已落盘的单章关闭式改写 request，调用写手重写正文'),
-    # ⚠ 原型 `FREE_FLAGS['n2_global']` 那一行的注释明写着
-    #   「`--purge-role` 是一次真实调用，**不在这里**」——它是语义判官那条臂
-    #   （`ROLE_SPLIT_SYS`，2008 字），`role`/`fate` 双向重划分。
-    # ⚠ 它是判据 `role_leaks_fate`（盘上 2/3 本命中）**唯一的修复路**，
-    #   而那条路要再花一次钱 ⇒ 界面必须把它画成付费色。
-    # ⚠ 它**不进 `NodeSpec.paid_flags`**：那一列的定义是「能把一个 **0 成本节点**
-    #   变成付费的 flag」，而 `stage2.global` 默认路径本来就付费 ⇒ 那会是一格
-    #   永远不起作用的声明（`is_paid` 早在 `spec.paid` 那一步就判完了）。
-    #   同 `stage5.write` 的 `--revise`，理由见 `NODES` 里那一格上方的注释。
-    '--purge-role': 'stage2 的语义判官臂——把 role/fate 双向重划分一遍，它要再调一次模型',
-    '--resample': 'stage2 全书响应被闸门拦下后，绕过同参数问题缓存重新采样整份响应',
+    '--resample': 'stage2 人物或知识响应被闸门拦下后，由原 producer 重新采样自己的响应',
     '--replan': ('Stage4B 返回 infeasible 或人工结构审批 request_replan 后，'
                  '仅在当前正式 Stage4A 策略审阅明确 request_replan 后，'
                  '绕过同参数缓存重新采样整书策略与各章；不会自动串行 Stage4B'),
@@ -2005,9 +2002,6 @@ VALUED_FLAGS: Final = {
                          '可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样',
     '--review-token': ('人工审阅动作的 opaque immutable-workpack token；内部内容、'
                        '证据、validation 与 execution 摘要不再由 Commander 散装搬运'),
-    '--adopt-rejected': ('要重判并采用的拒绝响应 attempt_id（16 位小写十六进制）；'
-                         '人只能编辑隔离区里那份固定的 candidate.json，'
-                         '本命令封存 actor/reason 与新旧闸指纹后再走同一套闸'),
     '--apply-binding': ('完整人工 Stage4 EvidenceBinding 路径（必填；相对路径相对书目录，'
                         '也接受书目录内的绝对路径）'),
     '--emit-prepared-recovery-workpack': (
@@ -2111,6 +2105,8 @@ VALUED_FLAGS: Final = {
 #: 已经核实的节点特例放在下方 `NODE_WRITE_EFFECTS`；没登记的其余
 #: 节点仍由 `write_effect` 保守判为会写。
 WRITE_EFFECTS: Final = {
+    '--recover-responses': '补原 producer checkpoint、工作单元与会话采用尾账，不写正式候选、不新增模型调用',
+    '--reaggregate': '按当前输入复验来源、聚合并补齐 prepared/正式文件/采用审计/committed，不修改历史成本',
     # ── 只看不动的入口（`FREE_ENTRIES` 自述「不写盘」）──
     '--dry-run': '',
     '--check-only': '',
@@ -2139,6 +2135,7 @@ WRITE_EFFECTS: Final = {
     #   所以这一格只说得出两边都成立的那部分：落成新的一版、上一版仍可回看。
     '--apply-edit': '把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）',
     '--renormalize': '按当前契约重算代码派生字段与原文定位并写回',
+    '--refresh-review': '只刷新 stage2/global_review.json；保留有效决定，变化主体保持待审',
     # ⚠ 它写的是**另一份**产物（`<stage>/wontfix.json`），不是本节点 `produces` 里那一份
     # ⇒ 不登记的后果是**方向反的**：`/api/enums` 会把它派生成「写 `stage5/review_{n}.json`」，
     # 而它一份验收报告都不产。同 `--names-only` 那一格的病，只是方向相反。
@@ -2179,12 +2176,22 @@ WRITE_EFFECTS: Final = {
 #:
 #: `stage4.plan --identity` 与 Stage6 一样只做内存诊断；Stage7 仍写正式人物表。
 NODE_WRITE_EFFECTS: Final = {
+    ('stage4.design', '--recover-prepared'):
+        '原 producer 已停止后，以独立免费 committer 补完 Stage4A 聚合与原采用尾账',
+    ('stage4.plan', '--recover-prepared'):
+        '原 producer 已停止后，以独立免费 committer 补完 Stage4B 聚合与原采用尾账',
     ('stage6.hook', '--recover-prepared'):
         '按原完成组补 stage6/hook.json、原 run 采纳审计及工作单元提交状态（0 模型）',
     ('stage6.semantic', '--recover-prepared'):
         '按原双盲完成组补原序号 semantic 产物、双采纳审计及工作单元提交状态（0 模型）',
     ('stage2.blueprint', '--close-review'):
-        '_service/approvals/<sid>.json（只核验并补齐当前接受对应的 seen/gate）',
+        f'{artifact_paths.STAGE2_KNOWLEDGE_LINKS}；_service/approvals/<sid>.json（已有 typed 关联决定的免费物化与 seen/gate 补提交）',
+    ('stage2.global', '--close-review'):
+        '_service/approvals/<sid>.json（逐项继承 Global 当前义务，不新增语义决定）',
+    ('stage4.design', '--close-review'):
+        '_service/approvals/<sid>.json（完整继承当前 A 策略与逐章有效决定，不新增语义接受）',
+    ('stage4.plan', '--close-review'):
+        '_service/approvals/<sid>.json（完整继承当前 B 逐章有效决定并闭合结构闸）',
     ('stage4.plan', '--identity'): '',
     ('stage7.rename', '--recover-prepared'):
         '按原完成组补 name_map.json、原 run 采纳及工作单元提交状态（0 模型）',
@@ -2213,10 +2220,11 @@ OPERATOR_REDO_STRATEGIES: Final = (
 )
 
 
-WORKFLOW_ROLE_CONTRACT: Final = 'workflow-role-boundaries-v1'
+WORKFLOW_ROLE_CONTRACT: Final = 'pipeline-cost-latency-v2'
 WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS: Final = 4
 WORK_UNIT_MAX_DELIVERY_ATTEMPTS: Final = 4
 WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS: Final = 4
+WORK_UNIT_GRANT_ADDITIONS: Final = (1, 2, 3, 4)
 
 
 REVIEW_ACTIONS: Final = ('accept', 'patch', 'rework', 'uncertain', 'stop')
@@ -2359,26 +2367,33 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   `reader_reveal_events` / 知情人 / secret 事实抽错时，此前唯一的路是手改产物
     #   ——没有 schema 管形状，来源账上也留不下「这是人改的」。
     #   当时除 Stage1 外的 stage0/3/4/5/6/7 都已有这条 0 成本人工路；Stage3 后来整层退役。
+    'stage2.characters': NodeSpec('stage2', 'R-2', True, 'stage2 静态人物登记',
+                                  lifecycle=NodeLifecycleSpec('book', '完整 MainText 与人物证据闭集', 'executor', 'none', '静态身份、称谓及来源证据；由 Global Commander 审阅', ('typed_edit', 'targeted_rework', 'stop'), ('stage2.characters',), 'executor:book', ('--revalidate', '--apply-edit', 'saved_response', 'prepared_commit'), commander_content_limit=0),
+                                  flags=('--dry-run', '--revalidate', '--apply-edit', '--resample',
+                                         '--emit-edit-template', '--actor', '--reason',
+                                         '--review-token', '--response-repair'),
+                                  produces=(artifact_paths.STAGE2_CHARACTERS,
+                                            artifact_paths.STAGE2_BLUEPRINT_CHARACTER_PROJECTION),
+                                  operator_redo='canonical'),
     'stage2.global':    NodeSpec('stage2', 'R-2',  True,  'stage2 全书级抽取',
-                                 lifecycle=NodeLifecycleSpec('book', '完整 MainText 与 Global 事实工作包', 'executor', 'commander', '生成所必需的全书事实', ('accept', 'typed_edit', 'targeted_rework', 'stop'), ('stage2.global',), 'executor:book / commander:global', ('--revalidate', '--apply-edit', '--review-decisions', 'saved_response', 'prepared_commit'), commander_bindings=(('approval:stage2-global-review', 'book'), ('recovery:stage2-global-reviewed-edit', 'book')), review_actions=('accept', 'patch', 'rework', 'uncertain', 'stop'), approval_projection=('stage2_reviews', 'stage2.global', 'state')),
-                                 flags=('--renormalize', '--purge-role', '--resample',
-                                         '--review-token',
+                                 lifecycle=NodeLifecycleSpec('book', '完整 MainText 与 Global 事实工作包', 'executor', 'commander', '生成所必需的全书事实', ('accept', 'typed_edit', 'targeted_rework', 'stop'), ('stage2.characters', 'stage2.global'), 'executor:book / commander:global', ('--revalidate', '--apply-edit', '--review-decisions', 'saved_response', 'prepared_commit'), commander_bindings=(('approval:stage2-global-review', 'book'), ('recovery:stage2-global-reviewed-edit', 'book')), review_actions=('accept', 'patch', 'rework', 'uncertain', 'stop'), approval_projection=('stage2_reviews', 'stage2.global', 'state')),
+                                 flags=('--renormalize', '--resample',
+                                         '--review-token', '--close-review',
                                          '--revalidate',
-                                         '--apply-edit', '--review-decisions',
+                                         '--apply-edit', '--review-decisions', '--refresh-review',
                                          '--emit-edit-template',
                                          '--emit-edit-correction-workpack',
                                          '--emit-review-template', '--emit-review-workpack',
                                          '--review-scope',
                                          '--actor', '--reason', '--response-repair'),
                                  produces=(artifact_paths.STAGE2_GLOBAL_GROUNDING,
-                                           artifact_paths.STAGE2_GLOBAL_REVIEW,
-                                           artifact_paths.STAGE2_BLUEPRINT_CHARACTER_PROJECTION),
+                                           artifact_paths.STAGE2_GLOBAL_REVIEW),
                                  operator_redo='canonical'),
     # ⚠⚠ **`--chapters` 是这一列里最容易漏的那一个**：§5.1 有 **19 条**判据的修法是
     #   `blueprint --chapters`（定向重生成那几章），而它此前只挂在 `stage5.write` 上。
     #   漏了它，那 19 条在 F5-4 注册的那一刻全被 `_validate` ⑧ 拒收。
     'stage2.blueprint': NodeSpec('stage2', 'R-3',  True,  'stage2 逐章抽取',
-                                  lifecycle=NodeLifecycleSpec('chapter', '已接受 Global 投影与本章正文', 'executor', 'commander', '全章 Blueprint 与原文的交叉核验', ('accept', 'typed_edit', 'targeted_rework', 'stop'), ('stage2.global', 'stage2.blueprint'), 'executor:phase/purpose/chapter / commander:blueprint', ('--revalidate', '--apply-edit', '--close-review', '--chapters', 'saved_response', 'prepared_commit'), commander_bindings=(('approval:stage2-blueprint-review', 'book'),), review_actions=('accept', 'patch', 'rework', 'uncertain', 'stop'), approval_projection=('stage2_reviews', 'stage2.blueprint', 'state')),
+                                  lifecycle=NodeLifecycleSpec('chapter', '已接受 Global 投影与本章正文', 'executor', 'commander', '全章 Blueprint 与原文的交叉核验', ('accept', 'typed_edit', 'targeted_rework', 'stop'), ('stage2.characters', 'stage2.global', 'stage2.blueprint'), 'executor:phase/purpose/chapter / commander:blueprint', ('--revalidate', '--apply-edit', '--close-review', '--chapters', 'saved_response', 'prepared_commit'), commander_bindings=(('approval:stage2-blueprint-review', 'book'),), review_actions=('accept', 'patch', 'rework', 'uncertain', 'stop'), approval_projection=('stage2_reviews', 'stage2.blueprint', 'state')),
                                   flags=('--dry-run', '--check-only', '--renormalize',
                                          '--review-token', '--close-review',
                                          '--chapters', '--patch',
@@ -2387,7 +2402,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--apply-edit',
                                          '--revalidate', '--actor', '--reason',
                                          '--response-repair'),
-                                  produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,),
+                                  produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,
+                                            artifact_paths.STAGE2_KNOWLEDGE_LINKS),
                                   operator_redo='canonical'),
     # ⚠⚠ Stage4 两个付费相仍沿用 `deepseek-v4-pro`，但调用拓扑已分开：
     #   A = 一条小型整书策略 + N 条逐章私有 session，代码聚合后跑整书 HARD；
@@ -2397,9 +2413,10 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   架构改变本身不静默翻默认；后续须在同一 unit 契约下比较首交率、
     #   HARD、token 与墙钟再裁决。
     'stage4.design':    NodeSpec('stage4', 'R-5',  True,  'stage4 盲场景设计',
-                                  lifecycle=NodeLifecycleSpec('strategy_and_chapter', '去序盲事实与独立章工作包', 'executor', 'commander', 'A 设计及本轮明确变更', ('accept', 'typed_edit', 'targeted_rework', 'replan', 'stop'), ('stage2.blueprint', 'stage4.design'), 'executor:strategy/chapter / commander:design', ('--apply-edit', '--recover-repair-aggregate', 'saved_response', 'prepared_commit'), commander_bindings=(('approval:stage4-design-review', 'design'), ('approval:stage4-binding-resolution', 'design'), ('approval:stage4-structure-replan', 'design')), review_actions=('accept', 'rework', 'uncertain', 'stop'), approval_projection=('design_review', 'state')),
-                                   flags=('--dry-run', '--replan', '--review-token',
-                                          '--adopt-rejected', '--validate-edit',
+                                  lifecycle=NodeLifecycleSpec('strategy_and_chapter', '去序盲事实与独立章工作包', 'executor', 'commander', 'A 设计及本轮明确变更', ('accept', 'typed_edit', 'targeted_rework', 'replan', 'stop'), ('stage2.blueprint', 'stage4.design'), 'executor:strategy/chapter / commander:design', ('--apply-edit', '--recover-repair-aggregate', '--recover-prepared', '--close-review', '--reaggregate', '--recover-responses', 'saved_response', 'prepared_commit'), commander_bindings=(('approval:stage4-design-review', 'design'), ('approval:stage4-binding-resolution', 'design'), ('approval:stage4-structure-replan', 'design')), review_actions=('accept', 'rework', 'uncertain', 'stop'), approval_projection=('design_review', 'state')),
+                                   flags=('--dry-run', '--replan', '--review-token', '--close-review', '--reaggregate', '--recover-responses',
+                                          '--recover-prepared', '--subject-sha256',
+                                          '--validate-edit',
                                           '--apply-edit',
                                           '--recover-repair-aggregate',
                                           '--source-journal-sha256',
@@ -2409,8 +2426,9 @@ NODES: Final[dict[str, NodeSpec]] = {
                                   model='deepseek-v4-pro',
                                   operator_redo='canonical'),
     'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 证据绑定与计划编译',
-                                  lifecycle=NodeLifecycleSpec('ambiguous_chapter', '已接受 A 与本章关闭目录、机械基线', 'executor_or_deterministic', 'commander', '独立 B 结构及证据绑定', ('accept', 'typed_edit', 'targeted_rework', 'stop'), ('stage2.blueprint', 'stage4.design', 'stage4.plan'), 'executor:ambiguous_chapter / commander:structure', ('--revalidate', '--apply-binding', '--apply-edit', 'saved_response', 'prepared_commit'), commander_bindings=(('approval:stage4-structure-review', 'structure'),), review_actions=('accept', 'rework', 'uncertain', 'stop'), approval_projection=('structure', 'state')),
-                                  flags=('--dry-run', '--check-only',
+                                  lifecycle=NodeLifecycleSpec('ambiguous_chapter', '已接受 A 与本章关闭目录、机械基线', 'executor_or_deterministic', 'commander', '独立 B 结构及证据绑定', ('accept', 'typed_edit', 'targeted_rework', 'stop'), ('stage2.blueprint', 'stage4.design', 'stage4.plan'), 'executor:ambiguous_chapter / commander:structure', ('--revalidate', '--apply-binding', '--apply-edit', '--reaggregate', '--recover-prepared', '--close-review', 'saved_response', 'prepared_commit'), commander_bindings=(('approval:stage4-structure-review', 'structure'),), review_actions=('accept', 'rework', 'uncertain', 'stop'), approval_projection=('structure', 'state')),
+                                  flags=('--dry-run', '--check-only', '--reaggregate', '--close-review',
+                                         '--recover-prepared', '--subject-sha256',
                                          '--revalidate', '--names-only', '--identity',
                                          '--apply-edit', '--apply-binding',
                                          '--actor', '--reason',
@@ -2565,14 +2583,14 @@ def commander_review_actions(waiting_on: str) -> tuple[str, ...]:
     identity = commander_work_unit(waiting_on)
     return () if identity is None else NODES[identity[0]].lifecycle.review_actions
 
-#: 允许配置 executor agent 的现役节点。这里只列**真正调用生成/审判模型**的八个
+#: 允许配置 executor agent 的现役节点。这里只列**真正调用生成/审判模型**的九个
 #: 付费节点；``stage4.context``、人工 approve 与机械 review 仍由代码执行，不能在
 #: API 上挂一份看似生效、实际无人消费的 executor override。
 #:
 #: 本表显式列值而不从 ``NODES`` 现算，配套闭合测试守 ``spec.paid`` 双向一致：
 #: 新增付费节点却没接 agent、或代码节点误标 paid，两种漂移都必须响亮地红。
 AGENT_EXECUTOR_NODES: Final = (
-    'stage2.global', 'stage2.blueprint',
+    'stage2.characters', 'stage2.global', 'stage2.blueprint',
     'stage4.design', 'stage4.plan',
     'stage5.write',
     'stage6.hook', 'stage6.semantic',
@@ -2583,7 +2601,7 @@ AGENT_EXECUTOR_NODES: Final = (
 #: Blueprint 的首次生成与返工另由 producer 强制核验当前 Global 接受。这里只登记
 #: 整体 Stage2 下游闸，不能用这个例外绕过 Global → Blueprint 的先后关系。
 _STAGE2_REVIEW_PRODUCERS: Final = frozenset({
-    'stage2.global', 'stage2.blueprint',
+    'stage2.characters', 'stage2.global', 'stage2.blueprint',
 })
 
 #: 这两项自身不花钱，却会把未复核的 Stage2 主体投影给写手或交付物；若只用
@@ -2617,10 +2635,11 @@ def stage2_review_required(node: str, *, paid: bool) -> bool:
 #:   自报 `--actor` / `--reason`：它是逐章的 hash-bound 人工决定，不是匿名布尔开关。
 CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
     ('stage0.edit', '--apply-edit'): ('--actor', '--reason'),
+    ('stage2.characters', '--apply-edit'): ('--actor', '--reason'),
+    ('stage2.characters', '--revalidate'): ('--actor', '--reason'),
     ('stage2.global', '--revalidate'): ('--actor', '--reason'),
     ('stage2.blueprint', '--revalidate'): ('--actor', '--reason'),
     ('stage4.plan', '--revalidate'): ('--actor', '--reason'),
-    ('stage4.design', '--adopt-rejected'): ('--actor', '--reason'),
     ('stage4.design', '--recover-repair-aggregate'): (
         '--source-journal-sha256', '--source-commit-sha256'),
     ('stage5.write', '--revalidate'): ('--actor', '--reason'),
@@ -2631,6 +2650,8 @@ CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
         '--actor', '--reason', '--subject-sha256'),
     ('stage5.review', '--retain-pretrim'): ('--chapters', '--actor', '--reason'),
     ('stage6.hook', '--revalidate'): ('--actor', '--reason'),
+    ('stage4.plan', '--recover-prepared'): ('--subject-sha256',),
+    ('stage4.design', '--recover-prepared'): ('--subject-sha256',),
     ('stage6.hook', '--recover-prepared'): ('--subject-sha256',),
     ('stage6.semantic', '--recover-prepared'): ('--subject-sha256',),
     ('stage7.rename', '--recover-prepared'): ('--subject-sha256',),
@@ -2720,7 +2741,7 @@ COMMANDER_ADMISSION_EVENT_KINDS: Final = (
 #: admission 纵切留下的名字，beacon 也共用这一个闭集，不能另长第三种恢复相位。
 COMMANDER_ADMISSION_TAIL_REPAIR_KINDS: Final = ('authorized', 'applied')
 
-#: 两个 Stage2 Commander 各有完整 4 次内容预算：Global 接受后才生产 Blueprint，
+#: 两个 Stage2 Commander 各有完整 4 次基础内容额度，可接受同单元不可变人工追加：Global 接受后才生产 Blueprint，
 #: 后者由独立 Commander 交叉核验。轮内网络尝试与内容轮分账，持续会话不重发预算。
 #: 预审与额外 Global 终审仅保留历史解码身份，新 clean base 不再执行。
 STAGE2_COMMANDER_SEAT_PURPOSES: Final = (
@@ -2731,10 +2752,6 @@ LEGACY_STAGE2_COMMANDER_SEAT_PURPOSES: Final = (
 LEGACY_STAGE2_COMMANDER_MAX_SEATS: Final = 4
 LEGACY_STAGE2_COMMANDER_MAX_EDIT_SEAT: Final = 3
 LEGACY_COMMANDER_REVIEWER_MAX_CORRECTIONS: Final = 2
-#: 每个 Commander 工作单元最多四次内容调用，包含首次与格式纠错。
-STAGE2_COMMANDER_MAX_SEATS: Final = 4
-#: 第四轮仍可提交合法订正，不预留另一次 Global 终审。
-STAGE2_COMMANDER_MAX_EDIT_SEAT: Final = 4
 #: 存量 reviewed edit 的 INVALID 若按当前代码已无任何 HARD，只能由 Supervisor
 #: 用这组固定审计身份走 0-wire ``--revalidate``。固定值既避免伪装成人类决定，
 #: 也让 execution permit 能在首副作用前逐字关闭其它 actor/reason。
@@ -2756,5 +2773,3 @@ COMMANDER_IDLE_TIMEOUT_SECONDS: Final = 1800.0
 COMMANDER_MAX_ATTEMPTS_PER_SEAT: Final = 3
 #: 同席重试前的退避秒数，按尝试序号取值，越界取最后一档。
 COMMANDER_RETRY_BACKOFF_SECONDS: Final = (30.0, 120.0)
-#: 首审加最多三次纠错，共享工作单元的四次预算；候选变化、返工、换会话和重启不返还。
-COMMANDER_REVIEWER_MAX_CORRECTIONS: Final = 3

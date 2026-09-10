@@ -54,6 +54,11 @@ describe('RunScreen 交付终验', () => {
         content_used: 2, content_limit: 4, content_remaining: 1,
         state: 'response_saved', latest_request_sha256: null,
         latest_response_sha256: 'a'.repeat(64), recovery_action: 'replay_saved_response',
+        content_base_limit: 4, content_granted: 0,
+        processing: { run_id: 'saved', input_sha256: 'a'.repeat(64), total: 1,
+          pending: 0, generated: 0, mechanical: 0, history_adopted: 1,
+          cached: 0, failed: 0, unknown: 0, reason: null },
+        review: { subject_sha256: 'b'.repeat(64), total: 19, pending: 1, decision_inherited: 18 },
       }],
     })
     vi.spyOn(api, 'getCheck').mockResolvedValue(null)
@@ -62,6 +67,8 @@ describe('RunScreen 交付终验', () => {
     expect(await screen.findByText('2 / 4，剩余 1')).toBeInTheDocument()
     expect(screen.getByText('response_saved')).toBeInTheDocument()
     expect(screen.getByText('replay_saved_response')).toBeInTheDocument()
+    expect(screen.getByRole('table', { name: '工作单元预算' })).toHaveTextContent('历史采用 1')
+    expect(screen.getByRole('table', { name: '工作单元预算' })).toHaveTextContent('待审 1，决定继承 18')
   })
 
   it('按服务端 allowed_controls 恢复，202 仍返回 paused 时持续轮询到 running', async () => {
@@ -84,7 +91,9 @@ describe('RunScreen 交付终验', () => {
       note: '同一 parent run 已恢复',
       allowed_controls: ['pause', 'stop'] as const,
     }
-    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue({
+      ...run, work_units: null, work_units_unavailable_reason: '处理来源账损坏，保持未知',
+    })
     vi.spyOn(api, 'getCheck').mockResolvedValue(null)
     let reads = 0
     const getRuns = vi.spyOn(api, 'getAgentRuns').mockImplementation(async () => {
@@ -101,6 +110,7 @@ describe('RunScreen 交付终验', () => {
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
 
     const button = await screen.findByRole('button', { name: '继续' })
+    expect(screen.getByText('工作单元状态未知：处理来源账损坏，保持未知')).toBeVisible()
     expect(screen.queryByRole('button', { name: '暂停' })).not.toBeInTheDocument()
     expect(screen.getByTestId('agent-run-note')).toHaveTextContent(
       '当前 claim 已安全闭合',

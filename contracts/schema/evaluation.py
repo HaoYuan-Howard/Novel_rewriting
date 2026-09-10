@@ -125,14 +125,13 @@ class GlobalReviewItem(StrictModel):
     #: 生成影响，等于一条谁也说不清该修、该隔离还是只披露的复核项。
     #: `known_by` 只为读取存量 global_review v1 保留；当前 grounding 的
     #: knowledge_events 有时间与逐事件证据，生产面改用 `knowledge_event`。
-    #: 2026-08-23 补齐 `role` / `fate` / `relation` / `setting_fact` /
-    #: `secret_setup` / `conflict_partition` / `arc_analysis`：此前评测面只有九类，
-    #: 于是结局旁路、setting 泄底、relations 这条第二剧透通道与两道下发闸门的前件
-    #: **全部无人裁决**。粒度按「能不能被单独修正」分。
+    #: role/fate、关系、setting 和埋点都须单独裁决；源文案与开篇范围取代文学分析。
+    #: 新增或删除取值必须与枚举器、版本和免费恢复面同步，不能留下无人审阅的消费字段。
     kind: Literal[GLOBAL_REVIEW_KINDS]
     subject_path: str = Field(min_length=1)
     subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     state: GlobalReviewState
+    resolution_required: bool = False
     evidence: list[EvidenceRef]
     actor: str | None = None
     decided_at: str | None = None
@@ -141,6 +140,8 @@ class GlobalReviewItem(StrictModel):
 
     @model_validator(mode='after')
     def _decision_has_audit_fields(self) -> 'GlobalReviewItem':
+        if self.resolution_required and self.state == 'PASS':
+            raise ValueError('未解决的源文案事实或开篇范围必须先 typed 修订，不能直接 PASS')
         decided = self.state != 'pending'
         values = (self.actor, self.decided_at, self.reason)
         if decided and any(not value for value in values):
@@ -244,14 +245,14 @@ class TrimAudit(StrictModel):
     → 采用」那条收缩臂。收缩臂随 evaluator profile 整臂下线后，那六格恒为
     「等于 before / 空 / True / None / None / False」——**六个恒定值不是六个状态**。
 
-    留下的三格各有不可替代的作用：`before_sha256` 是过期机制本体（`trim_resolution`
-    靠「当前正文 sha == 它」判这条 audit 还代不代表当前稿），`output_ordinal`
-    是唯一键，`reason` 是唯一携带「这一章为什么在这里」的人读格。
+    v3 只留 before_sha256 与当时 reason。章号只从当前登记路径解析；before SHA
+    决定 audit 是否仍代表当前正文，reason 保留产生当时的超限事实，不能用后改的
+    任务书重写历史原因。人审 Resolution 保留自身章主体并引用 exact audit SHA，
+    不再复制 audit 的 before SHA 或由章主体确定的正文路径。
     ⚠ **不要**加 `over_by_chars` / `target_hi`：`trim_resolution.verification_context`
     已经 0 成本现算这两个数，落盘等于给自己造第二个会漂的落点。
     """
 
-    output_ordinal: int = Field(ge=1)
     before_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     reason: str = Field(min_length=1)
 
@@ -273,19 +274,10 @@ class TrimResolution(StrictModel):
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
     audit_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    before_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    chapter_rel: str = Field(min_length=1)
-    chapter_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     provenance: FreeProvenance = Field(alias='_provenance')
 
     @model_validator(mode='after')
     def _audit_text_is_not_blank(self) -> 'TrimResolution':
         if not self.actor.strip() or not self.reason.strip():
             raise ValueError('actor/reason must not be blank')
-        expected = f'stage5/ch{self.output_ordinal:02d}.json'
-        if self.chapter_rel != expected:
-            raise ValueError(
-                f'chapter_rel 必须精确绑定 ordinal：期望 {expected}，实得 {self.chapter_rel}')
-        if self.chapter_sha256 != self.before_sha256:
-            raise ValueError('retain_pretrim 的 chapter_sha256 必须等于 audit.before_sha256')
         return self

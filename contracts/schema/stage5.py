@@ -6,7 +6,7 @@ stage5.py —— 对应 `docs/schema/stage5.md`。写作 + 全书验收。
 
 ```
 stage5/chNN.json                LLM 产，逐章一次调用 —— 唯一承载正文的产物
-stage5/chNN.INVALID.json        被落盘闸门拦下的问题稿（同一份章契约 + errs）
+stage5/chNN.INVALID.json        被落盘闸门拦下的问题稿（同一份章契约）
 stage5/_rounds/…                三种归档：上一轮 · 被提升掉的问题稿 · 被护栏驳回的自救
 stage5/review_<n>.json           确定性验收报告（**0 成本，不调 LLM**）
 stage5/wontfix.json              人的「这条我不修」
@@ -21,8 +21,8 @@ stage5/wontfix.json              人的「这条我不修」
 
   ② **判据 vs 载体在本层几乎全部倒向判据**：拒收 = 整章响应作废 = **再花一次高推理调用**
      （本层最贵的一次重试），而判据拦下 = 落 `.INVALID` + 人手改 / 重判 = **0 成本**。
-     ⇒ 现役 50 条判据**一条都不该上移**；少数够得着的（`from_source_ordinals` 长度恒 1）
-     **本来就没有判据**，归载体是原样承认现状，不是收权。
+     ⇒ 现役 50 条判据**一条都不该上移**；章号与槽位唯一性
+     由载体闭合；源章号从 output_ordinal 唯一派生，不再保存副本。
      Stage5 的 `ask_json` 只在响应侧校验 segment 形状与 slot 闭合；保真等内容判据仍在
      落盘前完整执行，失败落 `.INVALID`，不把一次可恢复的付费正文当场丢掉。
 
@@ -86,90 +86,18 @@ class ChapterResponse(StrictModel):
             raise ValueError('writer response contains duplicate segment slots')
         return self
 
+
 class Chapter(StrictModel):
-    """一章成稿。顶层 **10 个键**。
+    """当前一章成稿：章主体、原场景槽位正文与来源账。
 
-    **正式稿与 `.INVALID` 共用同一份章契约**——状态由**文件名**区分，不由字段贫富区分。
-
-    ⚠ **前五个字段是 `writer_context` 的副本，看起来违反「能 0 成本现算的不落盘」。**
-    它们**不是抄件，是冻结下来的任务书**：`writer_context` 可以被 `stage4.context`
-    0 成本重建并覆盖，而这一份成稿是**付过钱**的。
-    实测发生过一次：23 章成稿与盘上任何一版 ctx 都配不上（匹配 1/23），配对关系**永久丢失**
-    ——那时留在成稿里的这几个数是唯一还说得出「写手当时被要求写多少字」的东西。
-    ⇒ 与被裁掉的那些**不同类**：那些的源头（目录名、原文）不会被覆盖，这个会。
-
-    ⚠ **已裁撤 3 个**：`op`（随 stage4）· `mech` · `dialogue_count`——
-    **信息一条都没丢，只是换了落点**：
-      · `mech` 的三个计数器 → **校验报告的一行**（`Q-1`：空也要报）；
-        `mech.quote_problems` → **升成一条 INFO 判据 `quote_unbalanced`**。
-        它根本不是记账，**它是一条结论**（「引号配对异常、未归一、留着交人工」）——
-        把一条结论塞进记账块，就是它既没有出口、也没有守卫的原因。
-      · `dialogue_count` → 可 0 成本现算，但**补一条无条件的度量 `dialogue_report`**：
-        本层原本只有三条**告警**，「这本书的对白比是多少」**只有在漂了的时候才说得出来**。
+    正式稿与 INVALID 共用 v3，状态由落点区分，HARD 由同一判据现场复算。
+    旧形状曾用任务书标量副本补救历史上下文丢失；新空根中以不可变输入身份、
+    checkpoint/prepared 和归档追溯购买时的任务，不把当前预算重签成历史事实。
+    字数、重合度和 warns/errs 属于当前检查与 API 投影，不能与正文各自漂移。
     """
 
-    #: 1..N。**文件名里的 NN 就是它。**
     output_ordinal: int = Field(ge=1)
-
-    #: **长度恒为 1**（一章对一章）。透传自 ctx。
-    from_source_ordinals: list[int] = Field(min_length=1, max_length=1)
-
-    #: 源章对应部分字数（计划算好的）。盘上 408~1963。
-    source_chars: int = Field(ge=0)
-
-    #: 本章各拍预算之和。
-    budget_chars: int = Field(gt=0)
-
-    #: `len(text.strip())`，**含空白**。盘上 399~1967。
-    #: ⚠ 与 stage3 `measurable.body.chars`（**去空白**）不是同一个口径——跨口径运算要先对齐。
-    chars: int = Field(ge=0)
-
-    #: 20 字窗口重合率，**已扣掉按契约必须逐字保留的部分**。
-    #: `null` = 正文短于一个窗口，**那是「量不了」不是「重合 0」**。
-    #:
-    #: 闭卷的现役上界是 10%（`source_overlap_high`），必须按**逐章**口径读；
-    #: 书级均值会把少数高重合章平掉。
-    overlap_excl_verbatim: float | None
-
-    #: **唯一内容权威**。整章正文由消费者按 producer slot 顺序拼出；
-    #: schema v2 不再保存第二份可独立漂移的 `text`。
     segments: list[ChapterSegment] = Field(min_length=1)
-
-    #: 提示级判定的**字符串投影**。盘上长度 4~9，共 187 条。
-    #:
-    #: ⚠ **恒非空**：5 条 metric（篇幅 / 段落数 / 重合度 / 破折号密度 / 连续短段）无条件产出
-    #: ⇒ **「有 warns」不携带任何信息**，只有读它是哪几条才有。
-    warns: list[str]
-
-    #: 阻断级判定。⚠ **一个键承担两种语义**：
-    #:
-    #: | 出现在 | 含义 | 盘上 |
-    #: |---|---|---|
-    #: | `chNN.INVALID.json` | **它为什么被拦下**（非空） | 2 份（都在 `_rounds/`） |
-    #: | `chNN.json`（`--apply-edit` 落的） | **人工稿仍然违反了什么，但人决定照落**（可能为空） | 1 份，值是 `[]` |
-    #: | `chNN.json`（其余） | 键不存在 | 28 份 |
-    #:
-    #: ⇒ 「状态只由文件名与 `errs` 区分」这句话**不再成立**：一份正式稿也可以带 `errs`，
-    #: 甚至带非空的。今天靠 `_provenance.origin=human` 还分得开，**但那是第二个落点**。
-    #: 非空 `errs` 的正式稿会进入下一轮 Review，供人工修复 / wontfix 收口；
-    #: `review.require_accepted_review` 会在审批、Stage6、Stage7 前拒绝当前 HARD，
-    #: 不再允许它静默进入成书。盘上零样本。
-    errs: list[str] | None = None
-
-    #: ⚠ **全链唯一带轮次账的产物。** 两种形状：模型产的那一份（`RoundLlmProvenance`）·
-    #: `--apply-edit` 落的人工稿（`RoundFreeProvenance`：**没有 `prompts`/`model`，
-    #: 却仍带着 `round`/`revision_of`**，盘上 1/31）。
-    #:
-    #: ⚠⚠ **`--revalidate` 那条路伪造来源账，方向与 stage4 恰好相反**：stage4 是**丢掉**
-    #: `_provenance`，本层是**盖上一份当前的**——一份上一轮付费产出的问题稿被提升为正式稿后，
-    #: 来源账写着这一轮的 SYS 指纹 · `model` · 这一轮读到的上游指纹，`round` 还 +1，
-    #: 而**没有任何一次新的落笔发生过**。
-    #: 正确形状由 `LlmProvenance.promoted()` 在结构上保证（签名里没有 prompts/model/inputs）。
-    #: ⚠ `--apply-edit` 在**同一个文件里、相隔 30 行**把这三件事全做对了——移植时连注释一起搬。
-    #:
-    #: ⚠ **已裁撤**：`state`（原 `'invalid'`，只在 `.INVALID` 上）——0 读者，
-    #: 且**它恒等于文件名**。一个叫 `chNN.INVALID.json` 的文件里再写一句「我是 invalid」
-    #: 就是第二落点。
     provenance: RoundLlmProvenance | RoundFreeProvenance = Field(
         alias='_provenance', union_mode='left_to_right')
 
@@ -182,7 +110,7 @@ class Chapter(StrictModel):
 
     @property
     def text(self) -> str:
-        """Deterministic whole-chapter projection; never serialized as a second authority."""
+        """正文只有 segments 一份权威，拼接结果不再落盘。"""
         return '\n\n'.join(segment.text.strip() for segment in self.segments).strip()
 
 
@@ -1068,11 +996,17 @@ class PreparedRecoveryJournal(FrozenModel):
 # 一b、`stage5/chNN.rejected.json`
 # ─────────────────────────────────────────────────────────────────────────────
 
-class RejectedAttempt(StrictModel):
-    """一次已完整返回、但相对上一轮成稿发生确定性退化的候选。"""
 
-    chars: int = Field(ge=1)
-    text: str = Field(min_length=1)
+class RejectedAttempt(ChapterResponse):
+    """一次已完整返回的退化候选，保留原始场景槽位，不另存整章与字数。"""
+
+    @property
+    def text(self) -> str:
+        return '\n\n'.join(segment.text.strip() for segment in self.segments).strip()
+
+    @property
+    def chars(self) -> int:
+        return len(self.text.strip())
 
 
 class RejectedRevision(StrictModel):
@@ -1123,27 +1057,10 @@ class ContextSource(StrictModel):
     code: str | None
 
 
-class DraftSources(StrictModel):
-    """成稿这一侧的来源账。
-
-    ⚠ 这一半今天**只在非空时才报**，而 `Q-1` 要求**空也要报**。
-    """
-
-    #: 照的是另一份上游的成稿。盘上全空。
-    stale: list[str]
-
-    #: 没有来源账的成稿。盘上 3 份 review 里各 1 条。
-    no_prov: list[str]
 
 
-class ReviewSources(StrictModel):
-    """**先报来源再报判定**（`Q-4`）。
 
-    对不上时报出来的一堆违规是「拿新尺子量旧布」，不说破就会被当成一次回归。
-    """
 
-    writer_context: ContextSource
-    drafts: DraftSources
 
 
 class DraftConsumed(FrozenModel):
@@ -1175,32 +1092,11 @@ class JudgedDraft(FrozenModel):
     consumed: DraftConsumed
 
 
+
 class ReviewChapter(StrictModel):
-    """逐章。长度 = 计划章数，**没有成稿的章也在**（带一条 `draft_missing`）。"""
+    """逐章结论；缺稿章仍在，是否已判正文只查 Review.judged。"""
 
-    #: 以下四项取自 **ctx**（不取成稿）。
     output_ordinal: int = Field(ge=1)
-    from_source_ordinals: list[int] = Field(min_length=1, max_length=1)
-    budget_chars: int = Field(gt=0)
-    source_chars: int = Field(ge=0)
-
-    #: 以下六项**无成稿的章没有**。
-    relpath: str | None = None
-    draft_round: int | None = None
-
-    #: **整份文件**指纹——管来源与过期。
-    draft_sha1: Fp10 | None = None
-
-    #: **只管正文**——判「写手有没有再落笔」。⚠ 盘上只有 10/124（后加的）。
-    #:
-    #: ⚠ **两把指纹各管一件事，这是被一次误判逼出来的**：来源账、`warns`、归一这类
-    #: 0 成本元数据修复会改整份文件的指纹，但写手**一个字都没再写**——
-    #: 拿整份指纹去推进收敛计数，等于**把一次重判记成「写手又试了一次」**。
-    draft_text_sha1: Fp10 | None = None
-
-    chars: int | None = None
-
-    #: 盘上长度 4~11。
     findings: list[Finding]
 
 
@@ -1213,48 +1109,18 @@ class ReviewProvenance(FreeProvenance):
     """
 
 
+
 class Review(StrictModel):
-    """`stage5/review_<n>.json` —— 顶层 **8 个键**。
-    **0 成本、不调 LLM。判成品，不判计划。**
+    """v3 的最小机械验收主体，0 成本生成。
 
-    `<n>` 由盘上已有的最大序号 +1。
-
-    ⚠ **已裁撤 4 个**：`tag`（全仓 0 读者，盘上 12/12 恒 `''`）· `review_seq` ·
-    `title` · `source_id`——**四个全在文件名或目录名里**，消费方都握着路径。
-    ⚠ `source_id` 那条**不改不行**：它取自 ctx 的同名字段，而那个已随 stage4 裁撤
-    ⇒ 不改就会**静默变 `null`**，报告抬头打印 `=== stage5·全书验收: 书名 (None) ===`。
+    judged 是唯一正文身份，章节行只存结论；当前来源状态经 provenance/currentness
+    复算，严重度计数由 findings 现算。两套基线保留当轮判据及事实原子扫描的分母，
+    不用今天的规则集合把一份历史报告改成另一份观测。
     """
 
-    sources: ReviewSources
-
-    #: `{完整相对路径: 引用}` —— **判了哪几份稿。**
     judged: dict[str, JudgedDraft]
-
     chapters: list[ReviewChapter]
-
-    #: 全书级结论。盘上长度 6~13。
     book: list[Finding]
-
-    #: `{rule: 'k/N'}`，**每条 hard/info 判据在多少章上命中**。
-    #: ⚠ 它是「一条判据有没有判别力」唯一的读数——**没有基线数字的判据，
-    #: 等于不知道自己在说什么**。含一条 `_fact_landing`。
     baselines: dict[str, str]
-
-    #: 同一把尺子量**源章原文**的命中率。**「判据把合法情况排除在外了吗」的可执行形式。**
-    #:
-    #: ⚠ **逐章豁免与书级闸门问的是两个不同的问题，都要**：
-    #: 逐章（`identity_hit`）问「这一条被本章源文的同一现象混淆了吗」；
-    #: 书级（`identity_dead`）问「这条判据在这本书上比它自己的基础发生率强吗」。
-    #: 只做逐章会漏掉这种情形：源文 3/8 章命中、成稿也 3/8 章命中，**但是不同的章**——
-    #: 逐章看每条都「干净」，而整体上这条判据什么也没测出来。
-    #: ⚠ **两道闸都只降 `actionable`，不删结论**：「查过、但这一章原文自己也这样」
-    #: 与「没查」必须分得开。
     baselines_identity: dict[str, str]
-
-    #: `{hard, info, unver, metric}` 计数。
-    #: ⚠ **稀疏**：盘上 12/12 份都没有 `hard` 这个键（一条都没有）——
-    #: 「没有这个键」与「值是 0」在这里混掉了，所以四个键**都要能缺席**，
-    #: 而消费方必须按 `.get(k, 0)` 之外的方式处理（报告现算，别读这个字段）。
-    counts: dict[str, int]
-
     provenance: ReviewProvenance = Field(alias='_provenance')

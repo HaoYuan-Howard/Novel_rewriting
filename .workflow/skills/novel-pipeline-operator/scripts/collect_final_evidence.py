@@ -298,7 +298,7 @@ def _book_facts(
         # 这个入口先走 current v7，只在精确 v6→v7 shape break 且
         # 完整 frozen proof 闭合时才放行旧书；不能让 finalizer 把
         # 同一本已可下载的书记成 ``current_delivery_readable=false``。
-        current = assemble.read_current_book(ctx, allow_frozen_v6=True)
+        current = assemble.read_current_book(ctx)
         current_error = None
     except Exception as exc:  # noqa: BLE001
         current = None

@@ -10,9 +10,10 @@ import pytest
 from contracts.invariants import SOURCE_OVERLAP_MAX
 from contracts.schema.stage1 import MainText
 from novel.core.measure import body_style_metrics, measure_body
-from novel.core.text import quote_count
+from novel.core.text import norm, quote_count
 from contracts.schema.stage5 import Chapter
-from novel.stages.stage5 import measure as M
+from novel.stages.stage5 import measure as M, review, trim_resolution
+from novel.views.stage5 import stage5_view
 from tests import corpus
 
 
@@ -77,6 +78,35 @@ def _sep_of(sid: str):
 def _chapter_text(rec: dict) -> str:
     """Current schema has one content authority: ordered ``segments``."""
     return Chapter.model_validate(rec).text
+
+
+def _read_view(artifact):
+    base = corpus.corpus_root()
+    assert base is not None
+    raw = corpus.load_current(artifact)
+    view = stage5_view(base, artifact.source_id, raw['output_ordinal'])
+    assert len(view.drafts) == 1, f'{artifact.rel} 没有唯一当前成稿视图'
+    return view, view.drafts[0]
+
+
+def _review_rules(artifact):
+    from novel import prov
+    from novel.orchestrator.state import readonly_ctx
+    from novel.store import ArtifactStore
+
+    base = corpus.corpus_root()
+    assert base is not None
+    store = ArtifactStore(readonly_ctx(base / artifact.book_dir, 'stage5.review', prov.code_version()))
+    current = review.review_status(store.ctx, store)
+    corpus.declared_dependency(
+        current.state == 'fresh',
+        needs=f'{artifact.book_dir} 相对当前正文与判据为 fresh 的 Stage5 Review',
+        produced_by='stage5.review', cost='免费')
+    assert current.review is not None
+    ordinal = corpus.load_current(artifact)['output_ordinal']
+    row = next(item for item in current.review.chapters if item.output_ordinal == ordinal)
+    rules = {f.rule for f in row.findings}
+    return rules, ordinal in trim_resolution.current_trim_audits(store)
 
 
 # ── ⭐ 一、归一幂等 ────────────────────────────────────────────────────────
@@ -165,31 +195,17 @@ def test_minimal_body_baseline_keeps_quote_and_paragraph_normalization_idempoten
 
 @needs_corpus
 def test_chars_is_len_of_the_stripped_text():
-    """`chars` = `len(text.strip())`，**含空白**，可逐份复算。
-
-    ⚠ 它与 stage3 `measurable.body.chars`（**去空白**）不是同一个口径，
-    而本层的预算 `budget_chars` 也是含空白那一支——两边对得上才谈得上篇幅带。
-    """
+    """实际成稿视图按完整 segments 拼文计长，包含空白，不依赖盘上副本。"""
     for a in DRAFTS:
         rec = corpus.load_current(a)
-        assert M.chars_of(_chapter_text(rec)) == rec['chars'], a.rel
+        _view, draft = _read_view(a)
+        assert draft.chars == len(_chapter_text(rec).strip()), a.rel
+        assert 'chars' not in rec, a.rel
 
 
 @needs_corpus
-def test_overlap_reproduces_every_stored_value():
-    """20 字窗口重合率（扣掉被要求逐字复现的部分）可逐份复算。
-
-    它同时钉住三样：窗口宽度 20、`norm` 空间、以及**扣除口径**
-    ——不扣的话「写手在抄原文」（坏）与「写手正确复现了指定台词」（好）就分不开，
-    实测某章重合 19.9% 而 52 个重合窗口里非 `verbatim` 的是 **0** 个。
-
-    ⚠⚠ **只对「成稿相对上游是当前」的书对账。** 扣除面来自
-    `stage4/writer_context.json` 的本章 entry；那份一旦被重生成（本轮的保真点修复就
-    重生成过），旧成稿存的那个数是照**另一版扣除口径**算出来的
-    ——差值不是「尺子漂了」，是它量的不是同一份输入。实测差 0.594 vs 0.600。
-    ⇒ 过滤，并**留分母**：查了几本、几份，一份都不剩就按声明跳过，
-    否则「一本当前的都没有」与「查过、都对得上」在报告上同形（LESSONS 第 2 条）。
-    """
+def test_overlap_reaches_the_current_draft_view():
+    """当前成稿的窗口重合率进入实际读取视图；来源过期仍保留明确扫描分母。"""
     rels_by_book = {
         book: tuple(a.rel for a in DRAFTS if a.book_dir == book)
         for book in {a.book_dir for a in DRAFTS}
@@ -211,45 +227,31 @@ def test_overlap_reproduces_every_stored_value():
         entry = _ctx_of(a.source_id, rec['output_ordinal'])
         assert entry is not None, f'{a.rel} 在 writer_context 里找不到对应章'
         got = M.overlap_ratio(_chapter_text(rec), entry, _source_of(a.source_id))
-        assert got == rec.get('overlap_excl_verbatim'), \
-            f'{a.rel} 重合率对不上：算 {got}，盘上 {rec.get("overlap_excl_verbatim")}'
+        _view, draft = _read_view(a)
+        assert got == draft.overlap_excl_verbatim, a.rel
         checked += 1
     assert checked == len(todo) and checked > 0, \
         f'扫描分母是 {checked}——这一条没在查'
 
 
 @needs_corpus
-def test_every_out_of_band_draft_carries_the_band_finding():
-    """⭐ **出带的每一章都必须把那条 finding 带在身上**——尺子量过了，而且说出口了。
-
-    ⚠⚠ **本条原来断言的是「一章都没出带」，而那是一道产品明说不存在的闸。**
-    `stage5/checks.py::length_over` 的措辞逐字是「收缩已跑过并未能压下来，**照样落盘**，
-    由全书验收相在成品上判（**由阻断降为提示**）」——`length_over` / `length_under`
-    在判据表里是 `info`，不是 `hard`。⇒ 盘上有出带的正式稿是**契约允许的常态**，
-    把它读成「语料过期」会指着一批健康产物要求重跑（那要花钱）。
-    ⇒ 真正的代码级不变量是这一条：**尺子量过、判定出声、字节落盘，三件事对得上。**
-    尺子静默失效（判定没产出）才是 bug，而那正是本条现在守的东西。
-    """
-    silent: list[str] = []
-    seen_out_of_band = 0
+def test_every_out_of_band_draft_has_a_current_review_or_trim_finding():
+    """出带仍须在 Review 出声；超长已由当前 trim 接管时只保留一个根因入口。"""
+    checked = 0
     for a in DRAFTS:
         rec = corpus.load_current(a)
         entry = _ctx_of(a.source_id, rec['output_ordinal'])
-        rng = M.target_range(entry or {})
-        if not rng:
-            continue
-        lo, hi = rng
-        want = ('length_over' if rec['chars'] > hi else
-                'length_under' if rec['chars'] < lo else None)
-        if want is None:
-            continue
-        seen_out_of_band += 1
-        # `warns` 的形态是 `[判据] 说明`（`checks.warnings_of`），判据 id 逐字在里面。
-        if not any(w.startswith(f'[{want}]') for w in (rec.get('warns') or [])):
-            silent.append(f'{a.source_id[-4:]}/{a.rel} {rec["chars"]} 字 ∉ {lo}~{hi}，'
-                          f'却没有 [{want}]')
-    assert not silent, ('出带却没出声的章——尺子静默失效了：\n  ' + '\n  '.join(silent[:8]))
-    assert seen_out_of_band or DRAFTS, '一章都没有？那这条测试什么也没查'
+        assert entry is not None, a.rel
+        lo, hi = M.target_range(entry)
+        size = len(_chapter_text(rec).strip())
+        want = 'length_over' if size > hi else 'length_under' if size < lo else None
+        rules, has_trim = _review_rules(a)
+        assert 'length_report' in rules, f'{a.rel} 当前 Review 缺少篇幅读数'
+        if want is not None:
+            assert want in rules or (want == 'length_over' and has_trim), (
+                f'{a.rel} {size} 字不在 {lo}~{hi}，当前 Review/trim 却没有 {want}')
+        checked += 1
+    assert checked == len(DRAFTS) and checked > 0
 
 
 @needs_corpus
@@ -281,27 +283,20 @@ def test_dialogue_ratios_are_defined_per_canonical_chapter():
 
 
 @needs_corpus
-def test_overlap_is_a_ratio_and_every_excess_carries_its_finding():
-    """重合率是逐章的 0..1 数；越上限的每一章都必须带上 `source_overlap_high`。
-
-    ⚠ **上限不是闸。** `source_overlap_high` 在判据表里是 `info`，
-    它只把逐章源文表面重合越线说出来，供人复核；不是一条拦落盘的规则。
-    本条原来直接断言 `value <= SOURCE_OVERLAP_MAX`，于是它在**产品正常工作时**变红。
-    ⇒ 改守「越线必出声」：0..1 的取值域仍然是硬的（那是度量自己的契约）。
-    """
-    values: list[float] = []
-    silent: list[str] = []
+def test_overlap_is_a_ratio_and_every_excess_has_a_current_review_finding():
+    """重合率从正文现算；超标必须进入当前 Review，不能依赖已退役的 warns。"""
+    checked = 0
     for a in DRAFTS:
-        rec = corpus.load_current(a)
-        value = rec.get('overlap_excl_verbatim')
+        _view, draft = _read_view(a)
+        value = draft.overlap_excl_verbatim
         if value is None:
-            continue
-        values.append(value)
-        if value > SOURCE_OVERLAP_MAX:
-            if not any(w.startswith('[source_overlap_high]')
-                       for w in (rec.get('warns') or [])):
-                silent.append(f'{a.source_id[-4:]}/{a.rel} 重合 {value} > '
-                              f'{SOURCE_OVERLAP_MAX}，却没有 [source_overlap_high]')
-    assert all(0 <= value <= 1 for value in values), \
-        '重合率不是 0..1 的比例——度量自己的取值域破了'
-    assert not silent, ('闭卷越线却没出声的章：\n  ' + '\n  '.join(silent[:8]))
+            assert (len(norm(_chapter_text(corpus.load_current(a)))) < 20
+                    or not norm(_view.source_text)), (
+                f'{a.rel} 长正文的重合率未知，不能当作已检查')
+        else:
+            assert 0 <= value <= 1
+            rules, _has_trim = _review_rules(a)
+            if value > SOURCE_OVERLAP_MAX:
+                assert 'source_overlap_high' in rules, a.rel
+        checked += 1
+    assert checked == len(DRAFTS) and checked > 0

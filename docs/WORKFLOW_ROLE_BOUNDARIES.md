@@ -1,5 +1,9 @@
 # 工作流职责统一推进计划
 
+本文保留职责统一批次的历史设计与验证记录。后续 token/耗时改造使用
+`pipeline-cost-latency-v2` 独立空根；人工累计追加和原配置续跑的现役规则见
+`docs/schema/work_units.md`，完整推进范围见 `docs/PIPELINE_COST_LATENCY_PLAN.md`。
+
 本次覆盖全部 17 个现役节点。Stage2 优先闭合只是实施顺序，交付必须包含其余节点、
 API／界面、工作单元账、恢复路径和指标。新契约为 `workflow-role-boundaries-v1`，只从新 clean base
 由当前 producer 生成；旧书、旧预算账与旧审批保留只读，不迁移、不补字段、不借重启重新发放预算。
@@ -52,10 +56,11 @@ API／界面、工作单元账、恢复路径和指标。新契约为 `workflow-
 | `stage0.approve` | book：完整 retained 与 removed 工作包 | human_submission / commander：当前剔除 revision | accept, uncertain, stop | stage0.edit；accept, stop | commander:stage0 | 0/4 | typed_replay |
 | `stage0.edit` | book：revision 与 typed 编辑计划 | deterministic / none：编辑后重新批准当前 revision | none | stage0.edit；typed_edit | none | 0/0 | --apply-edit, --apply-edit-plan, --apply-candidate-plan |
 | `stage1.partition` | book：已批准的 clean_text | deterministic / none：机械覆盖与章号校验 | none | stage0.edit, stage1.partition；recompute, stop | none | 0/0 | --check-only |
+| `stage2.characters` | book：完整 MainText 与人物证据闭集 | executor / none：静态身份、称谓及来源证据；由 Global Commander 审阅 | none | stage2.characters；typed_edit, targeted_rework, stop | executor:book | 4/0 | --revalidate, --apply-edit, saved_response, prepared_commit |
 | `stage2.global` | book：完整 MainText 与 Global 事实工作包 | executor / commander：生成所必需的全书事实 | accept, patch, rework, uncertain, stop | stage2.global；accept, typed_edit, targeted_rework, stop | executor:book / commander:global | 4/4 | --revalidate, --apply-edit, --review-decisions, saved_response, prepared_commit |
 | `stage2.blueprint` | chapter：已接受 Global 投影与本章正文 | executor / commander：全章 Blueprint 与原文的交叉核验 | accept, patch, rework, uncertain, stop | stage2.global, stage2.blueprint；accept, typed_edit, targeted_rework, stop | executor:phase/purpose/chapter / commander:blueprint | 4/4 | --revalidate, --apply-edit, --close-review, --chapters, saved_response, prepared_commit |
-| `stage4.design` | strategy_and_chapter：去序盲事实与独立章工作包 | executor / commander：A 设计及本轮明确变更 | accept, rework, uncertain, stop | stage2.blueprint, stage4.design；accept, typed_edit, targeted_rework, replan, stop | executor:strategy/chapter / commander:design | 4/4 | --apply-edit, --recover-repair-aggregate, saved_response, prepared_commit |
-| `stage4.plan` | ambiguous_chapter：已接受 A 与本章关闭目录、机械基线 | executor_or_deterministic / commander：独立 B 结构及证据绑定 | accept, rework, uncertain, stop | stage2.blueprint, stage4.design, stage4.plan；accept, typed_edit, targeted_rework, stop | executor:ambiguous_chapter / commander:structure | 4/4 | --revalidate, --apply-binding, --apply-edit, saved_response, prepared_commit |
+| `stage4.design` | strategy_and_chapter：去序盲事实与独立章工作包 | executor / commander：A 设计及本轮明确变更 | accept, rework, uncertain, stop | stage2.blueprint, stage4.design；accept, typed_edit, targeted_rework, replan, stop | executor:strategy/chapter / commander:design | 4/4 | --apply-edit, --recover-repair-aggregate, --recover-prepared, --close-review, --reaggregate, --recover-responses, saved_response, prepared_commit |
+| `stage4.plan` | ambiguous_chapter：已接受 A 与本章关闭目录、机械基线 | executor_or_deterministic / commander：独立 B 结构及证据绑定 | accept, rework, uncertain, stop | stage2.blueprint, stage4.design, stage4.plan；accept, typed_edit, targeted_rework, stop | executor:ambiguous_chapter / commander:structure | 4/4 | --revalidate, --apply-binding, --apply-edit, --reaggregate, --recover-prepared, --close-review, saved_response, prepared_commit |
 | `stage4.context` | book：已接受 B 计划与当前事实 | deterministic / none：机械投影闭合 | none | stage2.blueprint, stage4.design, stage4.plan；recompute, stop | none | 0/0 | canonical |
 | `stage5.write` | chapter：当前 Context、计划与独立 writing 授权 | executor / commander：独立 writing 授权；产出交机械 Review 与整书 closure | accept, uncertain, stop | stage4.design, stage5.write；typed_edit, targeted_rework, stop | executor:chapter / commander:writing | 4/4 | --revalidate, --apply-edit, --recover-prepared, --recover-reviewer-rewrite-prepared |
 | `stage5.review` | book：全章 canonical、计划与 trim 处置 | deterministic / commander：独立 closure 或 trim disposition 工作包 | accept, rework, uncertain, stop | stage5.write, stage5.review；accept, typed_edit, targeted_rework, stop | commander:closure/disposition | 0/4 | --check-only, --retain-pretrim-batch, typed_replay |

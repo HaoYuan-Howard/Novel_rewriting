@@ -169,7 +169,11 @@ def _trim_surface(
     unresolved: list[Stage5TrimWorkItem] = []
     for ordinal, (audit, audit_sha256) in sorted(current.items()):
         matching = trim_resolution.matching_current_resolution(
-            store, audit, audit_sha256)
+            store,
+            audit,
+            audit_sha256,
+            ordinal=ordinal,
+        )
         resolution_sha256 = None if matching is None else matching[1]
         subject = Stage5TrimSubject(
             output_ordinal=ordinal,
@@ -301,7 +305,7 @@ def closure_workpack(
         classify(finding, None)
 
     planned = [row.output_ordinal for row in rev.chapters]
-    missing = [row.output_ordinal for row in rev.chapters if row.relpath is None]
+    missing = review.missing_draft_ordinals(rev)
     chapter_subjects = [
         Stage5ChapterSubject(
             output_ordinal=ordinal,

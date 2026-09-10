@@ -25,7 +25,6 @@ from contracts.schema import (
     decode_artifact,
     encode_artifact,
 )
-from contracts.schema.legacy_stage3 import decode_legacy_stage3_v2
 from novel.consumption import CONSUMED_PROJECTIONS
 from novel.orchestrator.state import overview
 from novel.views.inbox import inbox_view
@@ -91,7 +90,7 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '同 `stage1/main_text.json`：`stage1.partition` 免费重跑',
     ),
     'stage2/global_grounding.json': (
-        4,
+        6,
         '两次破坏。v2（2026-08-23）secret 时间线三刀：① `setup_chapters: list[int]` 换成 `setup` '
         '判别联合（`{"kind":"cold"}` / `{"kind":"foreshadowed","chapters":[…]}`）'
         '——v1 的 `[]` 同时表示「声明冷揭示」与「模型压根没想过」，而这一格是两道'
@@ -106,10 +105,17 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '失败态 source=null；'
         '④ `valid_to_chapter` 改名 `valid_through_chapter`，把原本即包含式的端点语义写进字段名。'
         'v4（2026-08-26）删除 SourceSpan.normalized/recovery、secret group_id/确认事件，'
-        '把唯一消费的首次揭示收成 first_reveal_chapter 标量，并删除 arc dimension/change_type',
+        '把唯一消费的首次揭示收成 first_reveal_chapter 标量，并删除 arc dimension/change_type。'
+        'v5 删除文学 arc，新增源文案事实及显式开篇范围，正式读取 HookCopy；v6 静态人物拆至独立 CharacterRegistry，只保存必要知识与人物引用',
         '`stage2.global` 整跑（**付费**）；`.INVALID` 与 `_rounds/` 一律作废，'
         'v1/v2 都不手补字段冒充当前产地。重建后 review 按 claim+evidence 新 hash 重新 pending；'
         '这是形状破坏的真实人工成本，不能靠迁移伪装成旧决定仍有效。',
+    ),
+    'stage2/global_review.json': (
+        2,
+        '源文案与开篇范围取代文学 arc 审阅；新增 resolution_required，未知提案不能直接 PASS',
+        '`stage2.global --renormalize` 从当前 Global 免费重建审阅，新增或变化主体重新 pending；'
+        '旧 Global 必须先由 producer 付费重建，不把旧决定迁移成新事实的结论',
     ),
     'stage2/global_review_decisions.json': (
         2,
@@ -120,17 +126,23 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '逐项例外后重新提交。旧 v1 文件原样保留为历史输入，不改版本号冒充新阅读声明',
     ),
     'stage2/global_edit.json': (
-        3,
+        5,
         '2026-08-24：secret patch/replacement 从 `character_known_by` 换成带 locator 的 '
         '`knowledge_events`，并新增 relation visibility、setting、fate、arc 与全部自由事实证据的 '
         'typed patch/replacement；旧 v1 决策文件不能表达知情时点或证据',
-        'v3（2026-08-26）随 GlobalGrounding v4 删除同批冗余字段。'
-        '它是人产决策集，不由模型重建：人工按当前 `GlobalEdit` v3 重写书内 JSON。'
+        'v3（2026-08-26）随 GlobalGrounding v4 删除同批冗余字段；v4 删除 arc 修改协议，'
+        '新增带 locator 的 source_blurb_replace；v5 删除静态人物写权限，仅保留必要状态、知识与源文案订正。'
+        '它是人产决策集，不由模型重建：人工用 --emit-edit-template 免费取得当前 `GlobalEdit` v5 模板并重写书内 JSON。'
         '不根据旧 known_by 猜 known_from_chapter，不为旧 claim 伪造 locator；盘上 v1 字节原样保留'
         '只能作为历史输入，当前运行时关闭式拒读',
     ),
+    'stage2/global_edit_commit.json': (
+        2,
+        '人物与知识分离后，免费知识写回回执只冻结 KnowledgeGrounding 当前主体与人物引用；不再携静态人物修改',
+        '旧 v1 回执保留历史字节；由 stage2.global --apply-edit 按当前 v5 输入与来源重新生成 v2，不迁移旧回执',
+    ),
     'stage2/chapter_blueprints.json': (
-        7,
+        8,
         '四次破坏。2026-08-19 bounded-fidelity-v2 → v3：beat 的区间改由段号'
         '算出，SourceSpan.recovery 去掉 lcs，BlueprintProvenance.verbatim_recovered '
         '删除。2026-08-23：BlueprintContext.architecture 从七值收窄为 '
@@ -140,10 +152,10 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '`entry_state_refs` 与 `ending_state_refs`；hinge 新增稳定 id。2026-08-26 v6 删除'
         'summary、present_names、叙述显示名、hinge 重复父键与无消费者 provenance 账。'
         '2026-09-01 v7 新增 typed narrative_relations（故事时序、回应、必须同场、观察），'
-        '并把 hard/review 分级写入正式关系契约',
+        '并把 hard/review 分级写入正式关系契约；v8 新增材料 source_fact_refs、对白语义与有剧情依据的字面例外',
         'stage2.blueprint 整跑（付费）；.INVALID 与 _rounds/ 一律作废，'
         '不手补字段冒充当前产地。仓内没有迁移机制，任何 v3 信封'
-        '都必须由 producer 重建为当前 v7；两本既有恢复样本不自动迁移',
+        '都必须由 producer 重建为当前 v8；旧根整根归档，不把旧材料字面要求迁移成语义决定',
     ),
     'stage4/plan_chapters.json': (
         4,
@@ -163,40 +175,48 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '旧人工编辑集不能凭空推造当前结构；需要时由人按当前 PlanEdit v4 重写',
     ),
     'stage4/blind_candidate.json': (
-        2,
-        '2026-08-26 删除三个 goal 的 rationale；reconstruction_strategy 只保留为 A 相规划脚手架',
-        '`stage4.design` 付费重跑；旧 v1 不迁移、不手补版本号',
+        3,
+        'v2 删除三个 goal 的 rationale；v3 删除退役整书拒稿采用来源，'
+        '策略/单章架构改为必填，旧候选快照不得冒充当前 unit lineage',
+        '整根归档旧输出后，由新根内 stage4.design 策略和单章 producer 付费重建；'
+        '旧 v1/v2 不迁移、不补字段。当前 schema 的已保存回答和 prepared 仍可免费恢复',
     ),
     'stage4/evidence_binding.json': (
         4,
         '2026-08-26 v2 删除 participant_refs；2026-08-28 v3 把模型 infeasible '
         '降为待核证主张，新增非阻断 binding_concerns、代码铸造的 '
         'infeasibility_proof 与 human/llm 判别来源账；2026-09-08 v4 为按章 legacy B '
-        '新增 work_unit_response 来源，绑定原内容轮、请求和回答 SHA',
+        '新增 work_unit_response 来源，绑定原内容轮、请求和回答 SHA；'
+        '删除整书及缺省架构兼容，章模型必须有明确来源，正式绑定必须完整覆盖章集',
         '旧 base 使用冻结旧代码保留证据；当前 producer 只在新 clean base 从原始材料及 '
         '当前 A 接受后由 stage4.plan 重建，机械章零模型；可显式 --apply-binding 提交当前 '
         'EvidenceBindingResponse。旧 v1/v2/v3 不原地迁移、不伪造工作单元来源、不手补版本号',
     ),
     'stage4/writer_context.json': (
-        4,
+        7,
         '2026-08-25 删除写手面的 `CtxBeat.events[]`，新增 chapter_rewrite_brief、'
         '四类 delta 在内的人话 semantic_contract 与可直接执行的 CtxScene；v3 随 Stage2 '
         'ArcTrack 删除 dimension/change_type；2026-08-26 v4 删除 world_facts、逐场源字数/参与者、'
-        '秘密与规则内部 id、must_not_reveal，并把 characters 改为带 char_id 的数组',
-        '`stage4.context` 从当前 Stage2 v6 + Stage4 plan v4 免费重建；下游 Stage5/6 按消费投影判 stale',
+        '秘密与规则内部 id、must_not_reveal，并把 characters 改为带 char_id 的数组；v5 删除无消费必要的 facts.arc；'
+        'v6 以独立 KnowledgeLinks 生成场景 knowledge 与披露许可；章首秘密仅已知、未开放设定显式为 null；'
+        'v7 删除同号源章、总预算、源字数副本，运行时从章序、场景预算与 Stage1 唯一派生',
+        '`stage4.context` 从当前人物、GlobalKnowledge v6、Blueprint、知识关联及 Plan 免费重建；'
+        '新增关联须先由 Blueprint Commander 显式裁决并免费物化，不手补旧 Context；下游按消费投影判 stale',
     ),
     'stage5/ch{nn}.json': (
-        2,
-        '2026-08-24 Stage5 单臂折平：删除 `mode`，正式稿从 '
-        '`stage5/{mode}/chNN.json` 收成唯一 `stage5/chNN.json`',
-        '`stage5.write` 在冻结的 stage0～4 上游上全书重跑（付费）；旧 deep/shallow '
-        '目录原样保留为只读历史证据，运行时明确报 `legacy_incompatible`，不迁移、不选臂',
+        3,
+        '2026-08-24 Stage5 单臂折平：删除 `mode`，正式稿从 `stage5/{mode}/chNN.json` 收成唯一 `stage5/chNN.json` v3 删除来源章号/字数、预算、成稿读数与 warns/errs；只保存章主体、segments 和来源账。',
+        '新空根由 stage5.write 在显式付费授权下重建；当前 INVALID 可按原来源免费重验证，不升级旧字节。',
     ),
     'stage5/review_{n}.json': (
+        3,
+        '2026-08-24 Stage5 单臂折平：ReviewChapter 删除 `mode/mode_dir`，judged 主体改绑 canonical 章集合 v3 删除重复 sources/counts 和章节展示副本；judged 唯一绑定正文，保留 findings 与必要基线。',
+        '新空根由 stage5.review 对当前 Chapter v3 免费重建；旧 Review 不迁移、不驱动新付费动作。',
+    ),
+    'stage5/ch{nn}.rejected.json': (
         2,
-        '2026-08-24 Stage5 单臂折平：ReviewChapter 删除 `mode/mode_dir`，judged '
-        '主体改绑 canonical 章集合',
-        '`stage5.review` 在 canonical 成稿上免费重跑；旧 Review 不得驱动付费 `--revise`',
+        '拒稿尝试删除 chars/text 副本，保留原 producer segments，恢复不猜场景边界。',
+        '新空根由 stage5.write 当前候选链生成；旧拒稿保留在旧根，不转换为新候选。',
     ),
     'stage5/reviewer_rewrite_request.json': (
         2,
@@ -205,16 +225,14 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         'FREE stage5.review --request-reviewer-rewrite 重建 v2。未知执行不得删除或手补为新授权',
     ),
     'stage5/trim_audit_ch{nn}.json': (
-        2,
-        '2026-08-24 Stage5 单臂折平：TrimAudit 删除 `mode`，章身份只由 ordinal '
-        '与 canonical 路径承载',
-        '新的超长 canonical 章由 `stage5.write` 生成审计；旧双臂审计仅作历史证据',
+        3,
+        '2026-08-24 Stage5 单臂折平：TrimAudit 删除 `mode`，章身份只由 ordinal 与 canonical 路径承载 v3 章号从登记路径唯一解析，保留当时 reason 与 before SHA，不重写历史事实。',
+        '新空根当前写作或免费 recheck/revalidate 由 stage5.write 生成；旧 audit 不手补。',
     ),
     'stage5/trim_resolution_ch{nn}.json': (
-        2,
-        '2026-08-24 Stage5 单臂折平：TrimResolution 删除 `mode`，`chapter_rel` '
-        '固定绑定 `stage5/chNN.json`',
-        '在当前 v2 TrimAudit 上重新走免费、hash-bound 的 `--retain-pretrim` 人工裁决',
+        3,
+        '2026-08-24 Stage5 单臂折平：TrimResolution 删除 `mode`，`chapter_rel` 固定绑定 `stage5/chNN.json` v3 保留人审章主体与 exact audit 引用；删除 before/chapter SHA 和正文路径副本。',
+        '对新空根的当前 audit 重新走免费 typed retain_pretrim 单章或整批决定；不迁移旧审批。',
     ),
     'stage6/hook.json': (
         3,
@@ -492,21 +510,15 @@ def _legacy_stage3_v2() -> dict[str, object]:
     }
 
 
-def test_retired_stage3_decoder_accepts_only_the_frozen_v2_shape():
+@pytest.mark.parametrize('marker', [None, 1, 2, 3, 99])
+def test_retired_stage3_payload_has_no_current_decoder(marker):
     raw = _legacy_stage3_v2()
-    assert decode_legacy_stage3_v2(raw).measurable.body.chars == 10
-
-    for marker in (None, 1, 3, 99):
-        changed = {**raw}
-        if marker is None:
-            changed.pop('_schema_version')
-        else:
-            changed['_schema_version'] = marker
-        with pytest.raises(ValueError, match='只接受 v2'):
-            decode_legacy_stage3_v2(changed)
-
-    with pytest.raises(ValidationError):
-        decode_legacy_stage3_v2({**raw, 'voice': {'historical': True}})
+    if marker is None:
+        raw.pop('_schema_version')
+    else:
+        raw['_schema_version'] = marker
+    with pytest.raises(ArtifactVersionError):
+        decode_artifact(RETIRED_STAGE3_STYLE_GROUNDING, raw)
 
 
 def test_unreadable_current_artifacts_do_not_take_down_read_only_aggregation(tmp_path: Path):
@@ -578,3 +590,15 @@ def test_hook_v3_distinguishes_agent_full_replacement_from_legacy_local_revision
     payload['_provenance']['params']['candidate_retry_limit'] = 0
     with pytest.raises(ValidationError, match='未启用局部候选协议'):
         Hook.model_validate(payload)
+
+@pytest.mark.parametrize('rel', [
+    'stage3/style_grounding.json',
+    'stage3/style_grounding.INVALID.json',
+    'stage3/_rounds/style_grounding.r1.json',
+    'stage3/_rounds/style_grounding.INVALID.r1.json',
+])
+def test_retired_registered_path_cannot_borrow_unregistered_data_io(rel):
+    with pytest.raises(ArtifactVersionError, match='产物路径已退役'):
+        encode_artifact(rel, {'historical': True})
+    with pytest.raises(ArtifactVersionError, match='产物路径已退役'):
+        decode_artifact(rel, {'historical': True})

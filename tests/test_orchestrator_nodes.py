@@ -149,8 +149,8 @@ UNMIGRATED_EXECUTOR_FLAG_CASES = [
 def test_the_matrix_actually_has_rows():
     """参数化表算空时，下面几十条会**全绿**——而那正是最坏的情况。"""
     assert len(CASES) > 25, f'node × flag 只铺出 {len(CASES)} 行，节点表多半被清空了'
-    # 17 = 既有 18 个节点减去已折叠进 Stage5/6 的 `stage3.style`。
-    assert len(NODES) == 17, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
+    # Stage3 已退役；人物独立抽取新增一个 Executor，不新增 Commander。
+    assert len(NODES) == 18, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
 
 
 # ───────────────────────── 贵贱（R-11.7 · Q-10） ─────────────────────────
@@ -246,13 +246,20 @@ def test_an_unrecorded_flag_is_assumed_to_write():
 def test_node_specific_write_effects_keep_all_three_identity_behaviors_distinct():
     """stage4/stage6 只诊断，stage7 写回正式人物表。"""
     assert NODE_WRITE_EFFECTS == {
+        ('stage4.design', '--recover-prepared'):
+            '原 producer 已停止后，以独立免费 committer 补完 Stage4A 聚合与原采用尾账',
+        ('stage4.plan', '--recover-prepared'):
+            '原 producer 已停止后，以独立免费 committer 补完 Stage4B 聚合与原采用尾账',
         ('stage6.hook', '--recover-prepared'):
             '按原完成组补 stage6/hook.json、原 run 采纳审计及工作单元提交状态（0 模型）',
         ('stage6.semantic', '--recover-prepared'):
             '按原双盲完成组补原序号 semantic 产物、双采纳审计及工作单元提交状态（0 模型）',
         ('stage7.rename', '--recover-prepared'):
             '按原完成组补 name_map.json、原 run 采纳及工作单元提交状态（0 模型）',
-        ('stage2.blueprint', '--close-review'): '_service/approvals/<sid>.json（只核验并补齐当前接受对应的 seen/gate）',
+        ('stage2.blueprint', '--close-review'): 'stage2/knowledge_links.json；_service/approvals/<sid>.json（已有 typed 关联决定的免费物化与 seen/gate 补提交）',
+        ('stage2.global', '--close-review'): '_service/approvals/<sid>.json（逐项继承 Global 当前义务，不新增语义决定）',
+        ('stage4.design', '--close-review'): '_service/approvals/<sid>.json（完整继承当前 A 策略与逐章有效决定，不新增语义接受）',
+        ('stage4.plan', '--close-review'): '_service/approvals/<sid>.json（完整继承当前 B 逐章有效决定并闭合结构闸）',
         ('stage4.plan', '--identity'): '',
         ('stage6.hook', '--identity'): '',
         ('stage7.rename', '--identity'): 'stage7/name_map.json',
@@ -297,7 +304,7 @@ def test_every_registered_run_mode_builds_a_command(node, flag):
         ]
         if (node, flag) == ('stage5.write', '--subject-sha256')
         else ['--recover-prepared', 'source-run-1', '--subject-sha256', 'a' * 64]
-        if node in ('stage6.hook', 'stage6.semantic', 'stage7.rename') and flag in {
+        if node in ('stage4.design', 'stage4.plan', 'stage6.hook', 'stage6.semantic', 'stage7.rename') and flag in {
             '--recover-prepared', '--subject-sha256'}
         else (_stage5_edit_flags()
               if node == 'stage5.write' and flag in _STAGE5_EDIT_FLAGS
@@ -342,8 +349,7 @@ def test_stage2_global_resample_is_paid_and_cannot_hide_another_action():
     assert '--resample' in argv
     assert N.is_paid('stage2.global', ['--resample']) is True
     assert N.write_effect('stage2.global', ['--resample']) == \
-        ('stage2/global_grounding.json · stage2/global_review.json · '
-         'stage2/blueprint_character_projection.json')
+        'stage2/global_grounding.json · stage2/global_review.json'
     with pytest.raises(UnsupportedRunMode, match='必须单独执行'):
         N.build_argv(
             'stage2.global', SID, ['--resample', '--purge-role'], base=BASE)
@@ -496,13 +502,13 @@ def test_executor_profile_refuses_unmigrated_nodes_and_unknown_capability_pairs(
         )
 
 
-def test_executor_runtime_registries_close_over_the_same_eight_nodes():
+def test_executor_runtime_registries_close_over_the_same_nine_nodes():
     """能力公开面、跑法矩阵与真实 factory 缺任何一边都必须响亮地红。"""
     from novel.node_agents import EXECUTOR_FACTORIES
 
     expected = set(AGENT_EXECUTOR_NODES)
-    assert len(expected) == len(N.EXECUTOR_PROFILED_RUNS) == 8
-    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 16
+    assert len(expected) == len(N.EXECUTOR_PROFILED_RUNS) == 9
+    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 18
     assert set(EXECUTOR_FACTORIES) == set(N.EXECUTOR_PROFILED_RUNS) == expected
 
 

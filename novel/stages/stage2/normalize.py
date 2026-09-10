@@ -8,7 +8,10 @@
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any, Literal, NamedTuple
+
+from contracts.schema.stage2 import Hinge
 
 from novel.core.evidence import iter_global_evidence_slots
 from novel.core.facts import first_reveal_chapter, setup_chapters_of
@@ -82,6 +85,21 @@ class BlueprintNormalizationAccounting(dict[str, Any]):
             fact_atom_failures=fact_atom_failures,
         )
         self.fact_atom_rehomes = tuple(fact_atom_rehomes)
+
+
+def restore_pruned_secret_setups(
+        data: dict[str, Any], pruned: list[tuple[str, list[int], list[int]]],
+) -> None:
+    """复验保留原裁剪输入；仅显式归一或 typed 修订可以确认改变埋点意图。
+
+    当前埋点仍等于旧归一结果时，从可信失败账恢复原列表再判。人工已明确改过
+    埋点或删除该 secret 时，不把历史字段强行补回；揭示章修正后原埋点可重新通过。
+    """
+    secrets = {row['secret_id']: row for row in data['canon']['secrets']}
+    for secret_id, original, normalized in pruned:
+        row = secrets.get(secret_id)
+        if row is not None and setup_chapters_of(row) == normalized:
+            row['setup'] = {'kind': 'foreshadowed', 'chapters': list(original)}
 
 
 def restore_failed_global_evidence_locators(
@@ -225,6 +243,9 @@ def _resolve_address_by(characters: dict[str, dict[str, Any]]) -> None:
             raw = address.get('by')
             if not raw or raw in characters or raw in ('narration', 'public'):
                 continue
+            # char_id 是显式外键，未知 ID 交给 HARD；不能伪装成无名群体 public。
+            if isinstance(raw, str) and re.fullmatch(r'char_\d+', raw):
+                continue
             hit = unique_canonical.get(str(raw)) or unique_surface.get(str(raw))
             if hit:
                 address['by'] = hit
@@ -259,6 +280,7 @@ def _prune_setups(data: dict[str, Any]) -> list[tuple[str, list[int], list[int]]
 
 def _normalize_global_evidence(
     data: dict[str, Any], main_text: list[dict[str, Any]],
+    *, character_only: bool = False,
 ) -> tuple[
     list[tuple[str, int, str, str]],
     list[EvidenceLocatorCorrection],
@@ -283,6 +305,8 @@ def _normalize_global_evidence(
     corrections: list[EvidenceLocatorCorrection] = []
 
     for path, owner, field in iter_global_evidence_slots(data):
+        if character_only and not path.startswith('entities.characters.'):
+            continue
         evidence = owner.get(field)
         if not isinstance(evidence, dict):
             owner[field] = {'chapter_ordinal': fallback_chapter, 'source': None}
@@ -378,6 +402,27 @@ def _normalize_global_evidence(
         owner[field] = {'chapter_ordinal': chapter, 'source': copy.deepcopy(source)}
 
     return failures, corrections
+
+
+def normalize_characters(
+        characters: dict[str, dict[str, Any]], main_text: list[dict[str, Any]],
+) -> tuple[dict[str, Any], GlobalNormalizationAccounting]:
+    """人物 producer 与人工编辑共用的称谓及静态证据归一，不创建知识占位。"""
+    data = {'entities': {'characters': copy.deepcopy(characters)}}
+    current = data['entities']['characters']
+    whole = ''.join(str(section.get('text') or '') for section in main_text)
+    chapters = [(int(section.get('chapter_ordinal') or 0), str(section.get('text') or ''))
+                for section in main_text]
+    _normalize_distinguishers(current)
+    _normalize_address_surfaces(current, whole)
+    _dedupe_addresses(current)
+    _normalize_from_chapter(current, chapters)
+    _resolve_address_by(current)
+    failures, corrections = _normalize_global_evidence(
+        data, main_text, character_only=True)
+    return current, GlobalNormalizationAccounting(
+        setup_chapters_pruned=[], evidence_locator_failures=failures,
+        evidence_locator_corrections=corrections)
 
 
 def normalize_global(data: dict[str, Any], main_text: list[dict[str, Any]]) \
@@ -548,14 +593,14 @@ def locate_fact_atom_source(
 
 
 def _blank_hinge(hinge: dict[str, Any]) -> None:
-    """把一条 hinge 打回失败态：只留 `kind`，`source` 置空。
+    """保留材料身份、事实关联与语义，把 source 打回明确失败态。
 
     ⚠ 用 `clear()` 而不是逐键 `pop`：响应形状的键（`para` / `phrase`）与产物形状的键
     （`source`）**不能同时留在盘上**——`StrictModel` 的 `extra='forbid'` 会拒收整份产物。
     """
-    kind = hinge.get('kind')
+    retained = {key: hinge[key] for key in Hinge.model_fields if key != 'source' and key in hinge}
     hinge.clear()
-    hinge.update({'kind': kind, 'source': None})
+    hinge.update({**retained, 'source': None})
 
 
 def _beat_span(text: str, span: dict[str, Any], cursor: int,

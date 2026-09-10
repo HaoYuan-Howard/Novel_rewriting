@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib
+import copy
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -117,14 +118,12 @@ class _Rig:
         changed = chapter.text + '\n\n她又补写了一段。'
         self.store.chapters['stage5/ch01.json'] = chapter.model_copy(update={
             'segments': [ChapterSegment(slot='s01', text=changed)],
-            'chars': len(changed),
         })
 
     def add_unreviewed_chapter(self) -> None:
         first = self.store.chapters['stage5/ch01.json']
         second = first.model_copy(update={
             'output_ordinal': 2,
-            'from_source_ordinals': [2],
         })
         self.store.chapters['stage5/ch02.json'] = second
         self.store.path('stage5/ch02.json').write_text('{}', encoding='utf-8')
@@ -135,50 +134,11 @@ def status_rig(tmp_path, monkeypatch) -> _Rig:
     entry = book.chapters[1]
     text = ('沈青关上门，重新翻到账册最后一页。她逐笔核对墨迹，'
             '确认那串数字已被人换过。' * 4)
-    chapter = Chapter.model_validate({
-        'output_ordinal': 1,
-        'from_source_ordinals': [1],
-        'source_chars': entry['source_chars'],
-        'budget_chars': entry['budget_chars'],
-        'chars': len(text),
-        'overlap_excl_verbatim': 0.01,
-        'segments': [{'slot': 's01', 'text': text}],
-        'warns': [],
-        '_provenance': {
-            'code': 'test-code', 'root_clean_sha1': 'a' * 40,
-            'inputs': {}, 'round': 1, 'origin': 'human',
-        },
-    })
+    chapter = Chapter.model_validate({'output_ordinal': 1, 'segments': [{'slot': 's01', 'text': text}], '_provenance': {'code': 'test-code', 'root_clean_sha1': 'a' * 40, 'inputs': {}, 'round': 1, 'origin': 'human'}})
     store = _StatusStore(tmp_path / 'book', book, chapter)
     _by_ord, _invalid, judged = M.load_drafts(store, require_current=False)
     one: JudgedDraft = judged['stage5/ch01.json']
-    store.review = Review.model_validate({
-        'sources': {
-            'writer_context': {'state': 'fresh', 'detail': [], 'code': 'test-code'},
-            'drafts': {'stale': [], 'no_prov': []},
-        },
-        'judged': judged,
-        'chapters': [ReviewChapter(
-            output_ordinal=1,
-            from_source_ordinals=[1],
-            budget_chars=entry['budget_chars'],
-            source_chars=entry['source_chars'],
-            relpath='stage5/ch01.json',
-            draft_round=1,
-            draft_sha1=one.sha1,
-            draft_text_sha1=one.consumed.text_sha1,
-            chars=len(text),
-            findings=[],
-        )],
-        'book': [],
-        'baselines': {'_fact_landing': '0/0'},
-        'baselines_identity': {},
-        'counts': {},
-        '_provenance': {
-            'code': 'test-code', 'root_clean_sha1': 'a' * 40, 'inputs': {},
-            'prompts': {'RULES': prov.fingerprint(prov.rules_fingerprint('stage5'))},
-        },
-    })
+    store.review = Review.model_validate({'judged': judged, 'chapters': [ReviewChapter(output_ordinal=1, findings=[])], 'book': [], 'baselines': {'_fact_landing': '0/0'}, 'baselines_identity': {}, '_provenance': {'code': 'test-code', 'root_clean_sha1': 'a' * 40, 'inputs': {}, 'prompts': {'RULES': prov.fingerprint(prov.rules_fingerprint('stage5'))}}})
     monkeypatch.setattr(review, 'load_book', lambda _ctx, current: current.book)
     return _Rig(store=store, ctx=store.ctx)
 
@@ -187,6 +147,41 @@ def test_review_status_fresh_baseline_binds_the_complete_canonical_subject(statu
     status = review.review_status(status_rig.ctx, status_rig.store)
     assert status.state == 'fresh' and status.reasons == ()
     assert status.review_rel == 'stage5/review_1.json' and status.seq == 1
+
+
+@pytest.mark.parametrize('copies,over_length', [(1, False), (2, True)])
+def test_minimal_review_builder_keeps_written_source_denominator(
+        tmp_path, copies, over_length):
+    """实际 builder→书级守卫仍使用已写章源文；未落盘章不能稀释超长比例。"""
+    book = factories.stage5_book()
+    missing = copy.deepcopy(book.ctx['chapters'][0])
+    missing['output_ordinal'] = 2
+    book.ctx['chapters'].append(missing)
+    source = book.source_text[1]
+    chapter = Chapter.model_validate({
+        'output_ordinal': 1,
+        'segments': [{'slot': 's01', 'text': source * copies}],
+        '_provenance': {
+            'code': 'test-code', 'root_clean_sha1': 'a' * 40,
+            'inputs': {}, 'round': 1, 'origin': 'human',
+        },
+    })
+    store = _StatusStore(tmp_path / 'book', book, chapter)
+    store.path('stage5/review_1.json').unlink()
+    store.ctx.free_provenance = lambda model, **kwargs: model(
+        code='test-code', root_clean_sha1='a' * 40, inputs={}, **kwargs)
+
+    result = review.build_review(store.ctx, store, book)
+
+    report = next(f for f in result.book if f.rule == 'book_length_report')
+    assert report.evidence == [
+        str(M.chars_of(chapter.text)),
+        str(sum(s['budget_chars'] for s in book.chapters[1]['scenes'])),
+        str(len(source)),
+    ]
+    assert any(f.rule == 'book_length' for f in result.book) is over_length
+    assert any(f.rule == 'draft_missing' for f in result.chapters[1].findings)
+    assert set(result.model_dump()['chapters'][0]) == {'output_ordinal', 'findings'}
 
 
 def test_review_view_refetches_wontfix_without_rewriting_review(

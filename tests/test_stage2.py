@@ -105,14 +105,15 @@ def _beat(bid: str, a: str, b: str, *, event: str, place: str,
           ids: list[str], hinges: list[dict] | None = None,
           layer: str = 'present') -> dict[str, Any]:
     chapter = {'01': CH1, '02': CH2, '03': CH3}[bid[1:3]]
+    fact_id = f'f{bid[1:3]}_{int(bid[-2:]):03d}'
     current_hinges = [
         {'hinge_id': f'h{bid[1:3]}_{int(bid[-2:]) * 10 + index:03d}',
          'kind': hinge['kind'],
+         'source_fact_refs': [fact_id],
          'source': _source(chapter, hinge['starts_with'], hinge['ends_with'])}
         for index, hinge in enumerate((hinges or []), 1)
     ]
     atom_source = _source(chapter, a, b)
-    fact_id = f'f{bid[1:3]}_{int(bid[-2:]):03d}'
     return {'beat_id': bid, 'span': atom_source,
             'time_layer': layer, 'place': place,
             'present_char_ids': list(ids),
@@ -190,14 +191,13 @@ def global_grounding() -> dict[str, Any]:
                          'setup': {'kind': 'foreshadowed', 'chapters': [1]},
                          'first_reveal_chapter': 2}],
         },
-        'arc': {
-            'conflict_stages': [{'stage': '家事初起', 'chapters': [1, 2, 3]}],
-            'climax': '账册上的窟窿被当众翻出来的那一刻',
-            'ending': '她替父亲把这笔烂账认了下来',
-            'arc_tracks': [{'subject': 'char_001',
-                            'trajectory': '从被瞒着到自己扛下这件事',
-                            'trajectory_evidence': _evidence(
-                                3, '她忽然想起父亲从前也这样翻账。')}],
+        'source_blurb': {
+            'facts': [{'kind': 'supported', 'claim_id': 'hook_001',
+                       'claim': '父亲已经回城',
+                       'evidence': _evidence(1, '信上说父亲已经回城。')}],
+            'opening': {'kind': 'proposed', 'through_chapter': 1,
+                        'rationale': '来信引出连续开篇事件',
+                        'boundary_evidence': _evidence(1, '远处传来更夫的梆子声。')},
         },
         '_provenance': {
             'setup_chapters_pruned': [],
@@ -240,7 +240,7 @@ def blueprints() -> dict[str, Any]:
                        ids=['char_001', 'char_002'],
                        hinges=[{'kind': '硬数字', 'starts_with': '她买了两个',
                                 'ends_with': '包子。', 'text': '她买了两个热腾腾的包子。'},
-                               {'kind': '要害台词', 'starts_with': '其实母亲',
+                               {'kind': '因果前提', 'starts_with': '其实母亲',
                                 'ends_with': '那封信的事。',
                                 'text': '其实母亲早就知道那封信的事。'}]),
              ]},
@@ -318,41 +318,27 @@ def test_the_clean_base_has_no_hard_hits():
     assert got == set(), f'干净底座上不该有任何 HARD 命中，实得 {sorted(got)}'
 
 
-@pytest.mark.parametrize(('chapters', 'evidence'), [
-    ([1, 2, 2, 3], 'duplicate:ch2@家事初起|家事初起'),
-    ([1, 2, 3, 99], 'extra:ch99@家事初起'),
+@pytest.mark.parametrize('change', [
+    {'through_chapter': 99}, {'through_chapter': True},
+    {'boundary_evidence': _evidence(2, '第二日清晨天色微亮。')},
 ])
-def test_conflict_stage_coverage_reports_duplicate_and_out_of_range_memberships(
-        chapters, evidence):
+def test_opening_scope_rejects_out_of_range_and_wrong_boundary(change):
     gg = global_grounding()
-    gg['arc']['conflict_stages'][0]['chapters'] = chapters
+    gg['source_blurb']['opening'].update(change)
     outcome = next(o for o in checks.check(
         global_g=gg, blueprints=blueprints(), main_text=main_text())
-        if o.rule == 'conflict_stage_coverage')
+        if o.rule == 'opening_scope_valid')
     assert outcome.findings
-    assert evidence in outcome.findings[0].evidence
 
 
-@pytest.mark.parametrize(('branch', 'expected'), [
-    ('world_rule', 'wr_01.versions.effective_from_chapter=99'),
-    ('setup', 'secret_01.setup.chapters=98'),
-    ('reveal', 'secret_01.first_reveal_chapter=99'),
-])
-def test_canon_chapter_refs_reject_all_three_out_of_book_timelines(branch, expected):
+def test_unresolved_opening_scope_is_not_a_pass():
     gg = global_grounding()
-    if branch == 'world_rule':
-        gg['canon']['world_rules'][0]['versions'][0]['effective_from_chapter'] = 99
-    elif branch == 'setup':
-        gg['canon']['secrets'][0]['setup'] = {
-            'kind': 'foreshadowed', 'chapters': [98],
-        }
-    else:
-        gg['canon']['secrets'][0]['first_reveal_chapter'] = 99
+    gg['source_blurb']['opening'] = {'kind': 'unresolved', 'reason': '无法确定终点'}
     outcome = next(o for o in checks.check(
         global_g=gg, blueprints=blueprints(), main_text=main_text())
-        if o.rule == 'canon_chapter_refs_dangling')
-    assert outcome.findings
-    assert expected in outcome.findings[0].evidence
+        if o.rule == 'opening_scope_valid')
+    assert outcome.unver_why
+    assert not outcome.findings
 
 
 def test_real_stage2_report_separates_instance_detail_from_stable_rule_notes():
@@ -437,7 +423,7 @@ def test_role_fate_wordlist_remains_hard_because_role_reaches_writer():
     rule = REGISTRY.get('role_leaks_fate')
     assert outcome.findings, '转抄式结局词必须在进入 writer context 前阻断'
     assert rule.sev == 'hard'
-    assert rule.fix == ('stage2.global', '--purge-role')
+    assert rule.fix == ('stage2.characters', '--resample')
     assert 'role_leaks_fate' in _hard_hits(gg, blueprints(), main_text())
     assert review_effect_of('role') == 'blocking', '机械闸与 Stage4 前人审应共同保护 role'
 
@@ -468,7 +454,7 @@ def test_the_clean_base_leaves_no_rule_unimplemented():
                         main_text=main_text())
     want = {r.rule for r in REGISTRY.all() if r.stage == 'stage2'}
     assert {o.rule for o in outs} == want
-    assert len(outs) == len(want) == 68
+    assert len(outs) == len(want) == 69
 
 
 @pytest.mark.parametrize('missing_main_text', [None, []])
@@ -516,18 +502,23 @@ def test_global_field_failures_route_to_resample_except_typed_human_repairs():
               if rule.stage == 'stage2'
               and rule.fix == ('stage2.global', '--resample')}
     assert routed == {
+        'world_rule_no_desc', 'secret_known_by_dangling', 'relation_dangling',
+        'canon_chapter_refs_dangling',
+    }
+    character_routed = {rule.rule for rule in REGISTRY.all()
+                        if rule.stage == 'stage2' and rule.fix == ('stage2.characters', '--resample')}
+    assert character_routed == {
         'canonical_unique', 'character_unattested', 'address_by_unresolved',
         'address_from_out_of_range', 'address_from_too_early',
         'address_bare_pronoun', 'address_all_pronoun', 'role_missing',
         'role_repeats_name', 'hedge_words', 'distinguisher_lonely',
-        'world_rule_no_desc', 'secret_known_by_dangling', 'relation_dangling',
-        'canon_chapter_refs_dangling',
+        'role_leaks_fate',
     }
     evidence = REGISTRY.get('global_evidence_unlocated')
     assert evidence.fix is None
-    conflict = REGISTRY.get('conflict_stage_coverage')
+    conflict = REGISTRY.get('opening_scope_valid')
     assert conflict.fix is None
-    assert '`--apply-edit` 0 LLM' in conflict.note
+    assert '--apply-edit' in conflict.note and '零模型' in conflict.note
 
 
 def test_the_two_unver_rules_always_speak():
@@ -654,9 +645,9 @@ CASES: list[tuple[str, Mutator, str]] = [
      _m(lambda g, b, m: g['entities']['characters']['char_001']['role_evidence']
         .__setitem__('source', None)),
      'source=null 是可读失败态，不是可放行的正式证据'),
-    ('conflict_stage_coverage',
-     _m(lambda g, b, m: g['arc']['conflict_stages'][0].__setitem__('chapters', [1, 3])),
-     '`chapters` 是逐章显式枚举；省掉第 2 章会让 Stage4 拿不到唯一 current_stage'),
+    ('opening_scope_valid',
+     _m(lambda g, b, m: g['source_blurb']['opening'].__setitem__('through_chapter', 99)),
+     '开篇终点必须存在且边界证据属于该章'),
     # ── 五、拍与区间 ────────────────────────────────────────────────────
     ('beat_id_unique',
      _m(lambda g, b, m: _ch(b, 2)['beats'][0].__setitem__('beat_id', 'b01_01')),
@@ -730,6 +721,10 @@ CASES: list[tuple[str, Mutator, str]] = [
     ('fact_atom_empty',
      _m(lambda g, b, m: _ch(b, 1)['fact_atoms'][0].__setitem__('claim', '')),
      '⚠ **判在本层不判 stage4**：留在下游意味着要先付掉一次规划调用才发现这一层产坏了'),
+    ('material_contract',
+     _m(lambda g, b, m: _ch(b, 1)['beats'][0]['hinges'][0].__setitem__(
+         'source_fact_refs', ['f02_001'])),
+     '材料指向外章事实，必须在 Blueprint 闸发现，不能由 B 以源拍猜归属'),
 ]
 
 
@@ -761,7 +756,7 @@ def test_every_hard_rule_without_a_disk_counterexample_has_a_synthetic_one():
     on_disk = {'address_bare_pronoun', 'role_leaks_fate', 'hinge_in_hole'}
     hard = {r.rule for r in REGISTRY.all() if r.stage == 'stage2' and r.sev == 'hard'}
     covered = {c[0] for c in CASES}
-    assert len(hard) == 39, f'HARD 条数变了（{len(hard)}）——本条与 §5.1 的账要一起改'
+    assert len(hard) == 40, f'HARD 条数变了（{len(hard)}）——本条与 §5.1 的账要一起改'
     assert covered <= hard, f'CASES 里有不是 HARD 的：{sorted(covered - hard)}'
     assert not (missing := sorted(hard - on_disk - covered)), (
         f'这几条 HARD 既没有盘上反例、也没有合成样本：{missing}\n'

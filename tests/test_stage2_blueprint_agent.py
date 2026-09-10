@@ -94,7 +94,7 @@ def test_blueprint_agent_concurrency_is_clamped_to_provider_stability_limit(
     low = BlueprintSessionPool(
         ctx, driver_factory=lambda *_args: None, concurrency=2)
     try:
-        assert high.concurrency == STAGE2_BLUEPRINT_MAX_CONCURRENCY == 4
+        assert high.concurrency == STAGE2_BLUEPRINT_MAX_CONCURRENCY == 8
         assert low.concurrency == 2
     finally:
         high.close()

@@ -272,7 +272,7 @@ def test_agent_hard_resumes_same_chapter_purpose_without_refresh(monkeypatch):
     assert purposes == ['stage5.write·ch1', 'stage5.write·ch1']
     assert all('cache_policy' not in call[2] for call in source.calls)
     assert all(
-        call[2]['recovery_policy'] == 'stage5-write-v1'
+        call[2]['recovery_policy'] == 'stage5-write-v2'
         for call in source.calls)
     assert [row['state_payload']['outcome'] for row in checkpoints] == [
         'hard', 'passed']
@@ -393,17 +393,17 @@ def test_dirty_checkpoint_queues_safe_feedback_before_new_candidate(monkeypatch)
     evaluation = generated['evaluation']
     assert evaluation.passed
     assert evaluation.text == '新合格候选。'
-    assert evaluation.attempts == (
-        (len('旧坏候选。'), '旧坏候选。'),
-        (len('新合格候选。'), '新合格候选。'),
-    )
+    assert [item.model_dump() for item in evaluation.attempts] == [
+        {'segments': [{'slot': 's01', 'text': '旧坏候选。'}]},
+        {'segments': [{'slot': 's01', 'text': '新合格候选。'}]},
+    ]
     assert len(source.calls) == 1
-    assert source.calls[0][2]['recovery_policy'] == 'stage5-write-v1'
+    assert source.calls[0][2]['recovery_policy'] == 'stage5-write-v2'
     assert source.feedback[0][0] == prepared.purpose
     assert secret not in json.dumps(source.feedback, ensure_ascii=False)
     assert checkpoints[0]['state_payload']['accepted_turn_index'] == 2
     assert checkpoints[0]['state_payload']['prior_attempts'] == [
-        {'chars': len('旧坏候选。'), 'text': '旧坏候选。'},
+        {'segments': [{'slot': 's01', 'text': '旧坏候选。'}]},
     ]
 
 

@@ -102,6 +102,27 @@ def test_usage_combination_is_strict_about_missing_history_and_token_parts():
     assert got.completion_tokens is None
 
 
+def test_total_slot_refusal_is_zero_wire_and_does_not_leave_unknown_budget(tmp_path):
+    from contracts.schema.orchestration import PipelineConcurrency
+    from novel.model_slots import pipeline_model_slot
+    from novel.work_units import list_unit_views
+
+    book = tmp_path / '槽位_42'
+    book.mkdir()
+    ctx = RunContext(novel_dir=book, node='stage6.hook', paid=True,
+                     code='test-code-version', ledger=CostLedger(), cache=CachePolicy.default())
+    transport = FakeTransport([OK_JSON])
+    client = _client(transport, ctx=ctx, concurrency_policy=PipelineConcurrency(
+        per_book=2, per_provider=2))
+    with pipeline_model_slot(book, 'deepseek', per_book=1, per_provider=1):
+        with pytest.raises(LlmFailed, match='模型调用未开始'):
+            client.ask_json('SYS', 'subject', model_cls=Resp, purpose='stage6.hook')
+    assert transport.calls == [] and ctx.ledger.calls_made == 0
+    units = list_unit_views(tmp_path, '42')
+    assert units is not None and len(units) == 1
+    assert units[0]['state'] == 'failed' and units[0]['recovery_action'] is None
+
+
 def test_ask_json_can_refresh_a_valid_cached_response():
     """Structured revision resampling must bypass, then replace, a valid cache row."""
     cache = ResponseCache(Path(tempfile.mkdtemp()))

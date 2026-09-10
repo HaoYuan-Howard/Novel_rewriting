@@ -57,7 +57,6 @@ def test_receipt_is_current_and_is_the_only_new_structure_identity():
 
 @pytest.mark.parametrize(('origin', 'architecture'), [
     ('human', None), ('compiled', 'chapter_baseline_v1'),
-    ('llm', None), ('llm', 'whole_book_v1'),
 ])
 def test_only_known_non_chapter_model_producers_keep_legacy_identity(
         origin: str, architecture: str | None):
@@ -74,6 +73,7 @@ def test_only_known_non_chapter_model_producers_keep_legacy_identity(
 @pytest.mark.parametrize('mutation', [
     'future_architecture', 'typo_architecture', 'unknown_origin', 'unknown_system',
     'missing_system', 'wrong_receipt', 'null_receipt', 'no_lineage',
+    'missing_source_origin', 'missing_source_run', 'bad_source_origin',
     'non_scalar_origin', 'non_scalar_architecture',
     'missing_chapter', 'duplicate_chapter', 'extra_chapter', 'boolean_chapter',
     'unknown_unit', 'bad_attempt', 'no_models', 'no_revision',
@@ -110,6 +110,12 @@ def test_unknown_or_incomplete_evidence_never_becomes_current_or_obsolete(mutati
         source['unit_lineage'].append({'chapter_ordinal': 3, 'kind': 'baseline'})
     elif mutation == 'boolean_chapter':
         source['unit_lineage'][0]['chapter_ordinal'] = True
+    elif mutation == 'missing_source_origin':
+        row.pop('origin')
+    elif mutation == 'missing_source_run':
+        row.pop('source_run_id')
+    elif mutation == 'bad_source_origin':
+        row['origin'] = {'unknown': True}
     elif mutation == 'unknown_unit':
         row['kind'] = 'unknown'
     elif mutation == 'bad_attempt':
@@ -155,17 +161,25 @@ def test_same_plan_new_input_contract_changes_book_and_each_chapter_subject(monk
     monkeypatch.setattr(measure, 'structure_subject', lambda _plan: projected)
     plan = SimpleNamespace(output_chapters=[
         SimpleNamespace(output_ordinal=1), SimpleNamespace(output_ordinal=2)])
-    old_book = measure.structure_review_subject_sha256(plan, [])
-    old_chapters = approvals._structure_chapter_subject_sha256(plan, [])
+    blueprints = {'blueprints': [{'chapter_ordinal': 1}, {'chapter_ordinal': 2}]}
+    old_book = measure.structure_review_subject_sha256(plan, [], blueprints=blueprints)
+    old_chapters = approvals._structure_chapter_subject_sha256(plan, [], blueprints=blueprints)
     current_book = measure.structure_review_subject_sha256(
-        plan, [], binding_input_contract=STAGE4_BINDING_INPUT_CONTRACT)
+        plan, [], blueprints=blueprints, binding_input_contract=STAGE4_BINDING_INPUT_CONTRACT)
     current_chapters = approvals._structure_chapter_subject_sha256(
-        plan, [], binding_input_contract=STAGE4_BINDING_INPUT_CONTRACT)
+        plan, [], blueprints=blueprints, binding_input_contract=STAGE4_BINDING_INPUT_CONTRACT)
     assert current_book != old_book
     assert set(current_chapters) == set(old_chapters) == {1, 2}
     assert all(current_chapters[n] != old_chapters[n] for n in old_chapters)
     # 既有非章模型与人工/机械产物保留原已发行默认 hash，未泛化版本失效。
     assert measure.structure_review_subject_sha256(
-        plan, [], binding_input_contract=None) == old_book
+        plan, [], blueprints=blueprints, binding_input_contract=None) == old_book
     assert approvals._structure_chapter_subject_sha256(
-        plan, [], binding_input_contract=None) == old_chapters
+        plan, [], blueprints=blueprints, binding_input_contract=None) == old_chapters
+
+
+@pytest.mark.parametrize('architecture', [None, 'whole_book_v1'])
+def test_retired_full_book_origin_has_no_current_input_permission(architecture):
+    binding = _issued_chapter_binding()
+    binding['_provenance']['architecture'] = architecture
+    assert inspect_binding_input_contract(binding).state == 'unproven'

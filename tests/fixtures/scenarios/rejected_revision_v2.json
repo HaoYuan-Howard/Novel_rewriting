@@ -1,0 +1,32 @@
+{
+  "_schema_version": 2,
+  "output_ordinal": 1,
+  "why": [
+    "合成候选遗漏了结尾动作"
+  ],
+  "fixes": [
+    [
+      "ending_drop",
+      "review:chapter:1"
+    ]
+  ],
+  "attempts": [
+    {
+      "segments": [
+        {
+          "slot": "s01",
+          "text": "首轮的重复语句。"
+        }
+      ]
+    },
+    {
+      "segments": [
+        {
+          "slot": "s01",
+          "text": "终轮遗漏了动作。"
+        }
+      ]
+    }
+  ],
+  "reviewer_rewrite_request_sha256": null
+}

@@ -9,6 +9,8 @@
 - [Stage4A repair/replan prepared 的 0-wire 提交补尾](#stage4a-repairreplan-prepared-的-0-wire-提交补尾)
 - [Stage6/7 完成组的免费采纳补尾](#stage67-完成组的免费采纳补尾)
 - [Stage4B 旧章输入契约恢复](#stage4b-旧章输入契约恢复)
+- [Stage4A 全部历史响应的免费聚合](#stage4a-全部历史响应的免费聚合)
+- [Stage4B 免费聚合与独立提交补尾](#stage4b-免费聚合与独立提交补尾)
 - [结构化响应修复](#结构化响应修复)
 - [Stage5 顶部卡的 trim 处置与 LLM 改写恢复](#stage5-顶部卡的-trim-处置与-llm-改写恢复)
 - [Stage5 foreign prepared 的显式 0-wire 收口](#stage5-foreign-prepared-的显式-0-wire-收口)
@@ -97,7 +99,7 @@ Stage4 的 `state_closure` 就是现役例子——章内 `earlier`/`later`/`par
 
 `deterministic` 那一行的入口**由 finding 的 `fix` 给出，不要自己挑**。注册在案的修复路由有三条 flag：
 `--renormalize`（`stage2.global` / `stage2.blueprint`，按当前契约重算代码派生字段与原文定位并写回，
-修锚点逐字、悬空 id、secret 时序这类定位问题）、`stage2.blueprint --chapters <N>`（定向重生成那几章，**这一条付费**）、
+不猜人物 ID；知识仅人物投影改变时可由 producer 证明其余输入未变并免费重绑，变化项仍待审）、`stage2.blueprint --chapters <N>`（定向重生成那几章，**这一条付费**）、
 以及 `stage2.blueprint --patch`（**付费但量级是条不是章**：`extraction-ir-v1` 契约下 `hinge_ambiguous` 的修复路——
 代码枚举候选命中位、模型只挑 candidate_id；有整章级根因时它会显式拒绝并指路 `--chapters`，先整章、后字段）。
 另有同样 0 成本、会写盘但不一定由 finding flag 指名的重算入口，只在读数需要刷新时用：
@@ -109,7 +111,7 @@ Stage4 的 `state_closure` 就是现役例子——章内 `earlier`/`later`/`par
 
 | flag | 节点 | 它修什么 |
 |---|---|---|
-| `--purge-role` | `stage2.global` | `role_leaks_fate` 的唯一修复路：把 role/fate 双向重划分一遍 |
+| `--resample` | `stage2.characters` | 人物 INVALID 的静态身份或称名问题按登记路由重采；静态身份不再由 Global 修改 |
 | `--resample` | `stage2.global` | 全书响应被闸门拦下后，绕过同参数问题缓存重新采样整份响应 |
 | `--patch` | `stage2.blueprint` | `extraction-ir-v1` 专属的字段级修复（`hinge_ambiguous` 候选选择 / 编的短语重给），逐条失败各调一次模型，量级是条不是章；详见 `docs/stage2_contract_experiment.md` |
 
@@ -138,8 +140,7 @@ schema version 写），不按记忆手抄。
 [经验库](field-notes.md) FN-017）。
 
 下表按**节点**索引，覆盖每一条 0 成本、但**会改动盘上产物**的入口——包括不需要另写输入文件的那几条
-（`--revalidate` / `--renormalize` / `--recheck` / `--identity` / `--adopt-residual` /
-`--adopt-rejected`）。
+（`--revalidate` / `--renormalize` / `--recheck` / `--identity` / `--adopt-residual` / `--recover-responses`）。
 **“0 成本”不等于“只看不动”**：真正只读的是 `--dry-run`、`--check-only`、
 `--names-only`、`--emit-review-template`、`--emit-review-workpack`、`--emit-edit-template`、
 `--emit-prepared-recovery-workpack`、`--validate-edit`，以及
@@ -149,10 +150,11 @@ schema version 写），不按记忆手抄。
 | 节点 | 0 成本写盘入口 | 需要 agent 自己写的输入 | 约束 |
 |---|---|---|---|
 | `stage0.edit` | `--apply-edit` · `--apply-edit-plan` · `--apply-candidate-plan` | 正式 edit / edit-plan / candidate-plan 形状 | 不直接覆盖 `clean_text.txt`：三者都只向 `revisions.json` 追加一版，再由链物化唯一 clean 投影。`--apply-candidate-plan` 裁决机器候选（`adopt` / `dismiss`），与 edit-plan 同样带 `expected_revision_id` 乐观锁。⚠ 「采纳后再编辑」不是第三个动作，是 adopt 后照常走 `--apply-edit-plan` |
-| `stage2.global` | `--apply-edit` · `--review-decisions` · `--renormalize` · `--revalidate` | `--emit-edit-template` 生成的当前 GlobalEdit；`stage2/global_review_decisions.json` | 本层**有**通用 `--apply-edit`。Global E 与 Global C 各按同一整书工作单元最多 4 次内容调用，Blueprint E 按章、独立 Blueprint C 按整书分别计账；包含首次和模型纠错，同一单元持续会话。Global 正式有效且被当前 Global C 接受后才能生产 Blueprint；全章产物再经独立 Blueprint C 接受。确定性 typed 补提交不占内容额度，版本/run/重启不重置；重复无进展、预算耗尽与明确 uncertain/stop 均停止。FAIL/可定位错误用合并 typed edit + `post_edit_review`；新打开项走默认自审，未修改且 hash 存活的旧 FAIL/UNVER 必须列入 `decisions[]`，原样/no-op 或仍未闭合均原子拒绝。集合新增/删除/拆分填写模板 hash-bound `collection_edits[].operations`，不复制完整集合。只有 `generation_impact=quarantine_or_fix` 的 secret/relation/world-rule 完整组可提交 `quarantine_group`；`must_fix` 材料不足就保持 UNVER 并停止。reviewed edit 被完整 HARD 拦成 current `.INVALID` 时，队列在 stale Blueprint redo 前先返回 `recovery:stage2-global-reviewed-edit`。先生成并完整阅读 `--emit-review-workpack`，再取 `--emit-review-template`：默认 blocking 模板是一条 `UNVER` scope，workpack SHA 为全零占位；必须从实际读过的 workpack 顶层复制真实 SHA。subject/scope/MainText/workpack 任一漂移都关闭式拒绝。同一 SID 的 service edit 只作一次性运输，producer 把非 no-op 输入原子落到书内 canonical 后 provenance 才消费，scratch/兄弟 SID 拒绝 |
-| `stage2.blueprint` | `--renormalize` · `--revalidate` · `--apply-edit` · `--close-review` | 先把 `--emit-edit-template` 的输出另存为当前书内 `stage2/blueprint_relation_edit.json`，填写 actor/reason 与目标章完整 `narrative_relations` 集合 | `--close-review` 只复验两份当前 typed 接受并免费补审批尾部；`--apply-edit` 是当前 token 绑定的 typed 关系/fact/beat 补丁：review token、关系端点闭引用、时序 DAG、观察者、schema、Stage2/全书 HARD 与非目标章业务字节恒等全部重判。旧 Blueprint 不手补字段、不自动迁移；其普通内容仍走 `--chapters <N>` 定向重生成（付费）或回 `stage2.global` |
-| `stage4.design` | `--adopt-rejected` · `--apply-edit` · `--recover-repair-aggregate` | legacy 采用只编辑终态点名的 `_llm_rejected/<chain>/<attempt>/candidate.json`；完整章替换先准备书内 `stage4/blind_chapter_edit.json`，内含 actor/reason、current candidate/aggregate/decision/章/strategy/constraint 身份和完整 `BlindChapterResponse`；prepared 补尾不写人工输入，三项值只原样消费当前 operator action | `--adopt-rejected` 只重判 legacy whole-book 原字节，不能冒充正式 A repair。`--apply-edit` 是单章两轮模型 repair 耗尽前后的 0-wire 路：先 preview 再 apply，两次共享同一 compiler/schema/dynamic validator/全书 HARD；只替换目标章，非目标章业务字节恒等，provenance 记 `origin=human`，不伪造模型/prompt/usage。`--recover-repair-aggregate` 是新 recovery run 对 ended source producer 已封存 aggregate 的确定性提交补尾：只在 baseline 时写 sealed candidate，随后幂等补 adoption/recovery audit，并最后把 source journal 提为 committed；它不解析旧 review token，不启动 Commander/Reviewer 或模型 Executor。单章耗尽不得自动 replan；真正策略驳回才允许携带累计反馈重规划 |
-| `stage4.plan` | `--apply-binding` · `--apply-edit` · `--revalidate` · B unit `response-repair` | 当前 `EvidenceBindingResponse` 业务 JSON；`<novel-dir>/stage4/plan_edit.json`；终态明确允许时可修活动 `.INVALID`；B 终态点名的 `_llm_rejected/<chain>/<attempt>/candidate.json` | `--apply-binding` 只在当前 A 正式审阅全 accepted 时开放，服务端铸 `origin=human` 并走与 B 相同 compiler/HARD；B unit replacement 只接受终态给出的 attempt，封存后以原 run 重跑，同一章 validator、整书 compiler/HARD 全部重判且 0 wire。`--revalidate` 与 `--apply-edit` 也只落 Plan。各入口都**不生成 writer context**，须在最终结构全 accepted 后单独运行 `stage4.context`。`--identity` 只作内存诊断 |
+| `stage2.characters` | `--apply-edit` · `--revalidate` | 当前书内 `stage2/characters_edit.json` | typed 新增、替换、删除必须绑定当前源 hash，填写 actor/reason；producer 在锁内复验 CAS、证据与 HARD，失败不冒充正式有效。原回答与 prepared 可沿同一 producer 免费恢复，不靠新 run 重置额度 |
+| `stage2.global` | `--apply-edit` · `--review-decisions` · `--renormalize` · `--revalidate` · `--refresh-review` · `--close-review` | `--emit-edit-template` 生成的当前 GlobalEdit；`stage2/global_review_decisions.json` | 本层**有**通用 `--apply-edit`。`--close-review` 只继承当前义务上的有效决定并免费补接受回执，不新增语义判断。`--refresh-review` 只在人物未消费字段订正后免费刷新逐项审阅，保留必要知识原稿与仍有效的决定；它不代替审阅接受。Characters E、Global E 与 Global C 各按独立整书工作单元计账，Blueprint E 按章、独立 Blueprint C 按整书计账；各使用基础四次内容额度加已生效的不可变人工追加；包含首次和模型纠错，同一单元持续会话。Global 正式有效且被当前 Global C 接受后才能生产 Blueprint；全章产物再经独立 Blueprint C 接受。确定性 typed 补提交不占内容额度，版本/run/重启不重置；重复无进展、预算耗尽与明确 uncertain/stop 均停止。FAIL/可定位错误用合并 typed edit + `post_edit_review`；新打开项走默认自审，未修改且 hash 存活的旧 FAIL/UNVER 必须列入 `decisions[]`，原样/no-op 或仍未闭合均原子拒绝。集合新增/删除/拆分填写模板 hash-bound `collection_edits[].operations`，不复制完整集合。只有 `generation_impact=quarantine_or_fix` 的 secret/relation/world-rule 完整组可提交 `quarantine_group`；`must_fix` 材料不足就保持 UNVER 并停止。reviewed edit 被完整 HARD 拦成 current `.INVALID` 时，队列在 stale Blueprint redo 前先返回 `recovery:stage2-global-reviewed-edit`。先生成并完整阅读 `--emit-review-workpack`，再取 `--emit-review-template`：默认 blocking 模板是一条 `UNVER` scope，workpack SHA 为全零占位；必须从实际读过的 workpack 顶层复制真实 SHA。subject/scope/MainText/workpack 任一漂移都关闭式拒绝。同一 SID 的 service edit 只作一次性运输，producer 把非 no-op 输入原子落到书内 canonical 后 provenance 才消费，scratch/兄弟 SID 拒绝 |
+| `stage2.blueprint` | `--renormalize` · `--revalidate` · `--apply-edit` · `--close-review` | 先把 `--emit-edit-template` 的输出另存为当前书内 `stage2/blueprint_relation_edit.json`，填写 actor/reason 与目标章完整 `narrative_relations` 集合 | `--close-review` 先复验两份当前 typed 接受及已持久化的完整知识关联决定，免费物化 `knowledge_links.json`，再补审批尾部；`--apply-edit` 是当前 token 绑定的 typed 关系/fact/beat 补丁：review token、关系端点闭引用、时序 DAG、观察者、schema、Stage2/全书 HARD 与非目标章业务字节恒等全部重判。旧 Blueprint 不手补字段、不自动迁移；其普通内容仍走 `--chapters <N>` 定向重生成（付费）或回 `stage2.global` |
+| `stage4.design` | `--apply-edit` · `--recover-repair-aggregate` · `--recover-prepared` · `--close-review` · `--reaggregate` · `--recover-responses` | 旧整书采用已退役；当前工作单元回答恢复只消费已保存原响应；完整章替换先准备书内 `stage4/blind_chapter_edit.json`，内含 actor/reason、current candidate/aggregate/decision/章/strategy/constraint 身份和完整 `BlindChapterResponse`；prepared 补尾不写人工输入，三项值只原样消费当前 operator action | 不再提供旧 whole-book 拒稿采用。`--apply-edit` 是单章两轮模型 repair 耗尽前后的 0-wire 路：先 preview 再 apply，两次共享同一 compiler/schema/dynamic validator/全书 HARD；只替换目标章，非目标章业务字节恒等，provenance 记 `origin=human`，不伪造模型/prompt/usage。`--recover-repair-aggregate` 是新 recovery run 对 ended source producer 已封存 aggregate 的确定性提交补尾：只在 baseline 时写 sealed candidate，随后幂等补 adoption/recovery audit，并最后把 source journal 提为 committed；它不解析旧 review token，不启动 Commander/Reviewer 或模型 Executor。单章耗尽不得自动 replan；真正策略驳回才允许携带累计反馈重规划 |
+| `stage4.plan` | `--apply-binding` · `--apply-edit` · `--revalidate` · `--reaggregate` · `--recover-prepared` · `--close-review` · B unit `response-repair` | 当前 `EvidenceBindingResponse` 业务 JSON；`<novel-dir>/stage4/plan_edit.json`；终态明确允许时可修活动 `.INVALID`；B 终态点名的 `_llm_rejected/<chain>/<attempt>/candidate.json`；operator 冻结的聚合来源与恢复主体 | `--apply-binding` 只在当前 A 正式审阅全 accepted 时开放，服务端铸 `origin=human` 并走与 B 相同 compiler/HARD；B unit replacement 只接受终态给出的 attempt，封存后以原 run 重跑，同一章 validator、整书 compiler/HARD 全部重判且 0 wire。`--reaggregate` 免费聚合全机械或已保存章结果；`--recover-prepared` 在原 producer 停止后用新执行补提交尾窗。`--revalidate` 与 `--apply-edit` 也只落 Plan。各入口都**不生成 writer context**，须在最终结构全 accepted 后单独运行 `stage4.context`。`--identity` 只作内存诊断 |
 | `stage5.write` | `--apply-edit` · `--recheck` · `--revalidate` · `--recover-prepared` · `--recover-reviewer-rewrite-prepared` · `--retire-reviewer-rewrite-request` | **`<base>/_service/edits/` 下**、文件名含 `chNN` 的完整 `ChapterResponse`：`{"segments":[{"slot":"s01","text":"…"},…]}`；通用 prepared recovery 消费前一步 emit 的 hash-bound workpack；Reviewer rewrite recovery/retirement 只原样消费 operator 给出的 source/request/recovery WAL 身份 | **0 LLM 调用。** `--apply-edit` 必须提交该章全部 producer-owned slot 的全文；`--recheck` 不改正文或写作 provenance，只刷新当前契约的派生指标并对账 trim；`--revalidate` 原字节重判 `.INVALID` segments。`--recover-prepared` 只收口 initial-write；`--recover-reviewer-rewrite-prepared` 只收口同一正式 request 的最新 matching checkpoint/prepared，若已有 target WAL 必须同时原样携 target run 与 WAL SHA；`--retire-reviewer-rewrite-request` 只退休全根零执行且已过期的 request。三者都不续 provider、不再次审批或付费。旧 source sidecar 始终只读；完整顺序见下文专节。不直接改正式 chapter JSON 或其他章。⚠⚠ **编辑文件落点不要按上面四层类比写进 `<novel-dir>/stage5/`**：那四层的编辑文件登记在 `ARTIFACTS` 里（所以必须在书目录内），本层**刻意没有登记**（`novel/paths.py::edit_rel` 的例外一段），写进书目录会让 `tests/corpus.py::_classify` 关闭式失败 ⇒ **这本书从此当不成语料底座**，而报错文案还会把人引向「加进 ARTIFACTS」那条错路（真发生过）|
 | `stage5.review` | `--retain-pretrim` · `--retain-pretrim-batch` · `--request-reviewer-rewrite` · `--wontfix` | 单章交互决定本身就是输入；headless retain/rewrite 只消费 Supervisor 物化的 `@reviewer-input` | `--retain-pretrim --chapters <N> --actor <ACTOR> --reason <text>` 恰好一章，写 hash-bound `trim_resolution_chNN.json`；顶部卡的一席 Commander 在 full-batch retain、可选择多章的 typed rewrite batch request 与 stop 之间互斥选择。Supervisor 只验证、持久化和运输，不能代选或把自由理由拼进 prompt。retain producer 维持 exact prefix/current suffix；rewrite producer 先零调用落 `stage5/reviewer_rewrite_request.json`，再由 queue 独立触发唯一 paid `stage5.write --reviewer-rewrite`。`--wontfix` 只把豁免记进 `stage5/wontfix.json`，**一份验收报告都不产** |
 | `stage6.hook` | `--apply-edit` · `--recheck` · `--revalidate` · `--wontfix` · `--rebind-review` · `--recover-prepared` | `<novel-dir>/stage6/hook_edit.json` | 一次只改目标候选；随后重跑机械与语义审判。`--rebind-review` 只用于旧审批的 review subject/contract 与当前可见内容/finding 完全相同、免费机械复检已通过的兼容恢复：保留原 actor/reason/所选文本，不重新签字；任一可见主体变化都拒绝并回正常 workpack 审阅 |
@@ -187,13 +189,23 @@ execution 或 admission 已完成。Beacon 修复后由真实写手重放缺失�
 
 旧 Stage2 prereview 的 `failed/exit 70` 与 `admission id 必须属于当前 epoch` 曾出现模型尚未开始、
 却预留席位的事故。冻结协议保留 `Stage2ReviewLedger.reconciliations` 的原 ledger/log/双账负证据与
-actor/reason；旧三席/四席账、`archived_ledgers`、`--stage2-review-no-wire-session-run-id` 和
-`--stage2-review-reopen` 仅用于解释当时的记录与恢复过程，不是当前操作入口。
-新 `workflow-role-boundaries-v1` 不返还这些历史席位、不创建兼容旧账、不用归档换取空预算。
+actor/reason；旧三席/四席账、`archived_ledgers` 和历史退款/重开过程仅供审计解释，
+对应旧命令已经移除，不是当前操作入口。
+当前 `pipeline-cost-latency-v2` 不返还这些历史席位、不创建兼容旧账、不用归档换取空预算。
 旧 base 的实际恢复必须按 `docs/OPERATIONS.md` 的冻结代码与原审计 code_version 处理；不得在
 新代码、新 base 或新工作单元上执行旧 reopen 流程。历史字节保留供核证，不改写成当前产地。
 
 ### 当前工作单元的网络与回答恢复
+
+工作单元基础四次内容额度耗尽时，可由人类在运行页的“查看 / 追加额度”预览并明确追加。
+默认一次、单次一至四次；追加保留全部历史调用和费用，不重置工作单元。模型、CLI 与
+Commander 都不能自批额度；未闭合尝试、现有回答或 prepared 提交先经原免费恢复入口闭合。
+增额不改变语义决定、无进展停点或既有付费/外发授权。请求重复时使用同一意图，不能为网络
+不确定结果另买一笔。完整规则见 `docs/schema/work_units.md`。
+
+运行页“按原配置继续”读取并复用原 Commander、默认 Executor 与逐节点覆盖，重新确认
+两项授权。来源缺失、配置已不支持、epoch 未排空或 owner 仍活动时明确拒绝，不回退当前设置。
+同一 paused 运行仍使用既有“继续”；新运行与原工作单元额度共账。
 
 网络或瞬态故障（connection / timeout / rate_limit / server_error / provider_transient）按每次内容
 请求的独立有界网络预算重试；已取得 provider session 时可续接，未取得时可重新启动物理会话。
@@ -223,11 +235,9 @@ validation seal 与 execution epoch 由生产和 Supervisor 管理；Commander �
 审批盘保存 raw typed decision，前置机械闸临时失效只生成只读 `suspended` 投影，不得把级联的 false
 写回覆盖 raw proof。前置恢复且 review subject/contract 未变时，原决定自动恢复。
 
-Stage4 Design 的 exact legacy-frozen 主体还有一条永久兼容投影：raw all-accept 可以如实落账，但缺现役
-relation/preflight authority 时保持 `suspended`，不再进入 reviewer registry，也不发布 Structure
-approval、`s4rr1`、`s4er1`、paid action 或 execution token。只有 raw 决定真实包含 `request_repair`
-时，对应章工作包才给零 wire `s4er1` 完整章 edit；它仍不生成 `s4rr1` 或付费 spawn。不要伪造 repair
-来换票，也不要把该 suspension 当作可通过免费复检自动复活的 current-v7 临时 seal 漂移。
+旧 Stage4 冻结产物不再提供兼容审阅、人工编辑或下游消费。版本不匹配在当前根明确拒绝，
+不能以 raw all-accept、免费复检或新增 repair 请求换取运行权；旧代码与完整旧根配对保留，
+当前生产从独立空根开始。
 
 存量旧审批尚无稳定 review identity 时，先在新 epoch 做免费机械复检。Stage6 的旧 resolution
 持久化了所选文本、机械 finding 与 semantic sequence，只有这些可见证据和 review contract 都能逐项
@@ -279,6 +289,27 @@ canonical `stage4.plan` 重建 B 和 Plan，再进入独立结构审阅。前端
 重开审阅的许可。新真实输入契约参与结构审阅身份，因此新 B 即使结果恰与旧 B 相同也要正式
 重审，旧裁决保留历史。既有 `--apply-binding` 是 0 成本 typed 恢复面；不得手补来源回执，
 也不得把 `--revalidate` 的机械复检说成模型已收到修好的输入。
+
+## Stage4A 全部历史响应的免费聚合
+
+只有 producer 证明当前策略及全部章响应均可完整采用时，operator 才发布 `stage4.design --reaggregate`。可以合用多个历史 run，来源冲突或损坏保持 unknown；不得选择最近 run 或重发缺失请求。免费汇合仍走同一 compiler/HARD、正式字节复验及独立聚合账，随后必须完成正式设计审阅。
+
+普通 A 聚合停在 prepared 时，operator 优先发布 `--recover-prepared <source_run_id> --subject-sha256 <proof>`。
+原样使用许可给出的参数，由新免费执行补尾；不重新选择来源、不创建模型客户端。原 owner 停止证明、
+当前 compiler、原完整文件字节与采用审计全部通过后才提交。策略驳回/定向返修聚合仍走上一节独立恢复入口。
+
+## Stage4B 免费聚合与独立提交补尾
+
+当前义务全可由机械编译、当前 checkpoint 或有效历史结果覆盖时，`operator next` 返回
+`stage4.plan --reaggregate`。原样复用完整 token，经 runner preview/execute；不要自行选择历史目录。
+生产者重新核验当前输入、每章来源及采用证据，再独立提交 Binding/Plan。可以全部采用或混合多个
+历史来源；同一请求存在冲突结果、证据损坏或未完成账本尾行时保持 unknown，不据此重新购买。
+
+若发现 prepared 聚合，operator 优先给出 `--recover-prepared` 与绑定主体的 `--subject-sha256`。
+使用它铸 exact recovery permit，经同一 runner 在新的执行中补尾。原 producer 与 parent 必须已经
+停止，冻结代码、输入、模型来源、提交基线和当前文件须全部复验；当前文件只可等于写前基线或
+目标字节。恢复不启动或续接模型，会幂等补齐原采用账、实际恢复执行回执与 committed 标记。
+每次中断后重新读取 operator，不沿用旧 token；不改历史费用、不手补文件或删除 journal。
 
 ## 结构化响应修复
 
@@ -566,7 +597,7 @@ stage5 调用次数高于接受章数可以来自传输重试、内建重采 / �
 先读取 `operator next`。只有 producer 对原回答、费用、typed 目标、来源与采纳全链验真后，才发布
 `--recover-prepared <source_run_id> --subject-sha256 <proof_sha256>`；按该 exact action 执行，
 不自行拼 SHA。CLI、HTTP preview、队列与 Supervisor 共用这一登记，恢复不需要 `--yes` 或模型密钥，
-不构造 LLM client，也不补发内容预算。Hook 全书四次用尽仍能补尾；双 judge 保持各自原 run 与原序号。
+不构造 LLM client，也不补发内容预算。Hook 当前有效额度用尽仍能补尾；双 judge 保持各自原 run 与原序号。
 
 恢复优先于 fresh 文件跳过和下游审批；文件存在不是完成证明。未知或损坏证明只显示阻塞原因，
 没有恢复或默认付费 argv。完成组先验证原证据与全部采纳，再退出待恢复集合；后续合法 approve
@@ -575,6 +606,19 @@ stage5 调用次数高于接受章数可以来自传输重试、内建重采 / �
 ### Hook 的同槽连续修订
 
 legacy Hook 对同槽候选仅在 HARD 严格下降时继续修订；无进展、错策略、重复或请求失败提前停止该路径，
-保留最近已验真的候选。初始生成、格式纠错和全部槽位共同最多四次内容调用，不能按槽或重启重发预算。
+保留最近已验真的候选。初始生成、格式纠错和全部槽位共享基础四次内容额度与已生效的不可变人工追加，不能按槽或重启重发额度。
 原回答免费恢复不占内容轮；仍需当前 typed 审阅接受后才能推进。旧 Hook base 留在冻结代码运行，
 新 clean base 从原材料与当前正式 producer 重建，不能手改旧 JSON 版本或补来源。
+
+## Stage4 有效历史审阅的免费汇合
+
+A/B 普通工作包只要求裁决当前待审义务。带 `source_decision_sha256` 的继承行由服务端发布，
+原决定、原理由和当前义务必须一致；Commander 不修改继承行。修改问题、删除主体或证据变化
+仍交给当前义务复审，同主体最新否决不能被更早接受遮住。
+
+当待审集合为空，operator 返回 `stage4.design --close-review` 或 `stage4.plan --close-review`。
+沿用同一完整 token 经 runner preview/execute，不开 Commander、不补新的接受，不手工写审批。
+该入口只在当前覆盖、来源链和机械前置全部通过时免费汇合；来源未知或仍有待审项时明确拒绝。
+完成后重新读取 operator，保留首次审阅与历史继承的独立统计。
+
+Stage4A 原回答已保存但 checkpoint 未完时，先执行 operator 发布的 `--recover-responses`。发现过程不写盘；执行在原 owner 停止锁内复验请求、回答、费用与 session，再按原身份补 checkpoint。之后重新读取 next，由当前 compiler 决定免费聚合或尚缺工作，不能把恢复结果算成本轮模型生成。

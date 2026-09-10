@@ -14,8 +14,8 @@ from tests.test_stage4_v3_integration import _retain_a_response
 
 
 def _inputs():
-    # 两个事实故意同属一个 beat，且 alias 大小与事实/场景顺序相反。
-    # 两场均在材料机械候选中；只有联结事实原文才能找到测试指定的承载场。
+    # 材料显式涉及两个事实，且 alias 大小与事实/场景顺序相反。
+    # 多事实分属两场，不能靠源拍或 alias 顺序替模型选择。
     mapping = {
         'fact_aliases': {
             'a_ffffffffffffffff': 'f02_001',
@@ -43,7 +43,11 @@ def _inputs():
         'beats': [{
             'beat_id': 'b02_01', 'time_layer': 'present', 'place': '山门',
             'present_char_ids': ['char_002'],
-            'hinges': [{'hinge_id': 'h02_001', 'kind': 'must_keep_quote',
+            'hinges': [{'hinge_id': 'h02_001', 'kind': '要害台词',
+                        'source_fact_refs': ['f02_001', 'f02_002'],
+                        'dialogue': {'speaker': {'kind': 'character', 'char_id': 'char_002'},
+                                     'addressees': None, 'meaning': '来人在出发前追问期限',
+                                     'speech_act': '询问'}, 'literal': None,
                         'source': {'text': '几天？'}}],
         }],
     }
@@ -57,6 +61,8 @@ def _inputs():
         **mapping,
         'output_chapters': [
             {'output_ordinal': 1, 'scenes': [{
+                'candidate_scene_id': 'c01s01', 'land_fact_aliases': [],
+                'context_fact_aliases': [],
                 'exit_state_aliases': ['a_1111111111111111']}]},
             chapter,
         ],
@@ -175,3 +181,92 @@ def test_binding_request_identity_does_not_reuse_old_input_contract(monkeypatch)
     assert current.input_sha256 != previous.input_sha256
     assert current.user == previous.user == issue.user
     assert current.system == previous.system
+
+
+@pytest.mark.parametrize('has_alias', [False, True])
+def test_dialogue_only_participant_is_issued_without_inventing_alias(has_alias):
+    ctx, up, candidate, baseline = _inputs()
+    dialogue = up.blueprints['blueprints'][1]['beats'][0]['hinges'][0]['dialogue']
+    dialogue['speaker'] = {'kind': 'character', 'char_id': 'char_009'}
+    dialogue['addressees'] = [{'kind': 'group', 'label': '同行人'},
+                              {'kind': 'character', 'char_id': 'char_008'}]
+    if has_alias:
+        candidate['participant_aliases']['a_9999999999999999'] = 'char_009'
+    issue = plan._chapter_binding_issue(ctx, up, candidate, baseline, 2)
+    evidence = _payload(issue, plan.prompts.BLOCK_CHAPTER_EVIDENCE)
+    assert {'char_008', 'char_009'} <= issue.issued_refs
+    assert '同行人' not in issue.issued_refs
+    assert ('char_009' in evidence['participant_aliases'].values()) is has_alias
+    assert 'char_008' not in evidence['participant_aliases'].values()
+
+
+@pytest.mark.parametrize('change', ['facts', 'meaning', 'speaker', 'addressees', 'source_start', 'source_end'])
+def test_binding_request_invalidates_changed_material_evidence(change):
+    ctx, up, candidate, baseline = _inputs()
+    prepared = SimpleNamespace(subject_sha256='a' * 64, input_sha256='b' * 64)
+    before = plan._plan_chapter_request(ctx, prepared, baseline, 2,
+        plan._chapter_binding_issue(ctx, up, candidate, baseline, 2))
+    hinge = up.blueprints['blueprints'][1]['beats'][0]['hinges'][0]
+    if change == 'facts':
+        hinge['source_fact_refs'] = ['f02_002']
+    elif change == 'meaning':
+        hinge['dialogue']['meaning'] = '质疑能否及时出发'
+    elif change == 'speaker':
+        hinge['dialogue']['speaker'] = None
+    elif change == 'addressees':
+        hinge['dialogue']['addressees'] = [{'kind': 'group', 'label': '同伴'}]
+    else:
+        hinge['source'][change.removeprefix('source_')] = 4
+    updated = plan.build_mechanical_baseline(candidate, up.blueprints).chapter(2)
+    after = plan._plan_chapter_request(ctx, prepared, updated, 2,
+        plan._chapter_binding_issue(ctx, up, candidate, updated, 2))
+    assert after.input_sha256 != before.input_sha256
+
+
+@pytest.mark.parametrize('changed', [
+    'foreign_text', 'foreign_fact', 'foreign_candidate', 'book_identity',
+    'own_source', 'own_source_range', 'own_fact', 'own_candidate', 'previous_boundary', 'previous_state_fact',
+    'candidates',
+])
+def test_binding_request_changes_only_for_actual_materials_and_boundary(changed):
+    ctx, up, candidate, baseline = _inputs()
+    prepared = SimpleNamespace(subject_sha256='a' * 64, input_sha256='b' * 64)
+    before = plan._plan_chapter_request(
+        ctx, prepared, baseline, 2,
+        plan._chapter_binding_issue(ctx, up, candidate, baseline, 2))
+    if changed == 'foreign_text':
+        up.main_text[0]['text'] = '改变上一章正文但边界不变。'
+    elif changed == 'foreign_fact':
+        up.blueprints['blueprints'][0]['fact_atoms'] = [{'claim': '改变未下发的事实。'}]
+    elif changed == 'foreign_candidate':
+        candidate['output_chapters'][0]['chapter_rewrite_brief'] = '别章重写说明'
+    elif changed == 'book_identity':
+        prepared.subject_sha256 = 'c' * 64
+        prepared.input_sha256 = 'd' * 64
+    elif changed == 'own_source':
+        up.main_text[1]['text'] += '第三日动身。'
+    elif changed == 'own_source_range':
+        up.blueprints['blueprints'][1]['fact_atoms'][0]['source']['start'] = 3
+    elif changed == 'previous_state_fact':
+        up.blueprints['blueprints'][0]['fact_atoms'] = [{
+            'fact_id': 'f01_001', 'claim': '上一章结束时角色已经离开。', 'kind': 'character_state',
+            'obligation': 'land'}]
+    elif changed == 'own_fact':
+        up.blueprints['blueprints'][1]['fact_atoms'][0]['source']['text'] = '明日出发。'
+    elif changed == 'own_candidate':
+        candidate['output_chapters'][1]['scenes'][0]['purpose'] = '拒绝行动指令。'
+    elif changed == 'previous_boundary':
+        up.blueprints['blueprints'][0]['ending_state_refs'] = []
+    else:
+        from dataclasses import replace
+        ambiguity = baseline.ambiguities[0]
+        baseline = replace(baseline, ambiguities=(replace(
+            ambiguity, candidates=ambiguity.candidates[:1]),))
+    after = plan._plan_chapter_request(
+        ctx, prepared, baseline, 2,
+        plan._chapter_binding_issue(ctx, up, candidate, baseline, 2))
+    should_change = changed in {'own_source', 'own_source_range', 'own_fact', 'own_candidate',
+                                'previous_boundary', 'previous_state_fact', 'candidates'}
+    assert (after.input_sha256 != before.input_sha256) is should_change
+    if not should_change:
+        assert (after.user, after.system) == (before.user, before.system)

@@ -32,12 +32,29 @@ export interface LegacyExecutorBackend {
 
 export type ExecutorBackend = AgentExecutorBackend | LegacyExecutorBackend
 
+export interface PipelineConcurrency {
+  node_overrides: Record<string, number>
+  per_book: number
+  per_provider: number
+}
+
+export interface PipelineConcurrencyCapability {
+  nodes: string[]
+  node_choices: number[]
+  default_node: number
+  defaults: PipelineConcurrency
+  total_min: number
+  total_max: number
+  scope: string
+}
+
 export interface PipelineAgentProfiles {
   schema_version: 2
   commander: AgentProfile
   executor_default: ExecutorBackend
   /** 键同样由 capability 响应的 executor_nodes 给出，前端不保存节点副本。 */
   executor_overrides: Record<string, ExecutorBackend>
+  concurrency?: PipelineConcurrency
 }
 
 export type AgentRole = 'commander' | 'executor'
@@ -88,6 +105,7 @@ export interface AgentCapabilitiesResponse {
   drivers: AgentDriverCapability[]
   legacy_providers: LegacyProviderCapability[]
   executor_nodes: string[]
+  concurrency: PipelineConcurrencyCapability
   /** null = 尚无通过整书验收的产品预置；不是 backend 开关，也不得取任一 capability 首项猜。 */
   default_profiles: PipelineAgentProfiles | null
 }
@@ -112,7 +130,22 @@ export interface AgentProfileSettingsUpdate {
 }
 
 /** 发起参数。两项授权彼此独立，都会原样进入 prompt 与审计记录。 */
+export interface RunContinuationSource {
+  run_id: string
+  source_sha256: string
+}
+
+export interface AgentRunContinuationView {
+  run_id: string
+  sid: string | null
+  available: boolean
+  reason: string
+  profiles: PipelineAgentProfiles | null
+  source: RunContinuationSource | null
+}
+
 export interface AgentRunRequest {
+  continuation?: RunContinuationSource | null
   sid: string
   /** 只控制是否允许产生外部调用费用。 */
   authorized: boolean
@@ -124,6 +157,7 @@ export interface AgentRunRequest {
 
 /** preview 的返回：与真跑同一构造函数，0 成本。前端不拼 argv / prompt。 */
 export interface AgentRunPreview {
+  continuation?: RunContinuationSource | null
   argv: string[]
   prompt: string
   authorized: boolean
@@ -149,6 +183,7 @@ export interface AgentRunStart {
 }
 
 export interface RunContractV2 {
+  continuation?: RunContinuationSource | null
   wire_version: 2
   sid: string
   base: string

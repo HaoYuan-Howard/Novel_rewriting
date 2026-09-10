@@ -27,20 +27,19 @@ stage2.py —— 对应 `docs/schema/stage2.md`。抽取。**全链第一个调 
 """
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Generic, Literal, TypeVar
 
 from pydantic import Field, StringConstraints, field_validator, model_validator
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, BLUEPRINT_ARCHITECTURES,
     BLUEPRINT_RELATION_REVIEW_CONTRACT,
-    FACT_ATOM_KINDS, FACT_ATOM_OBLIGATIONS, HINGE_KINDS,
+    FACT_ATOM_KINDS, FACT_ATOM_OBLIGATIONS, HINGE_KINDS, LITERAL_REQUIREMENT_KINDS,
     KNOWLEDGE_SUBJECT_KINDS, RELATION_VISIBILITY_KINDS, SECRET_SETUP_KINDS,
     NAME_DISTINCTIVENESS, NARRATIVE_PERSON, RESPONSE_TIME_LAYERS,
     NARRATIVE_RELATION_ENFORCEMENTS, NARRATIVE_RELATION_KINDS,
     TIME_LAYERS, WORLD_RULE_KINDS,
 )
-from contracts.schema.agent_wire import keyed_rows_to_mapping
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import LlmProvenance, Sha256
 from contracts.schema.evaluation import GlobalReview, GlobalReviewDecision
@@ -382,52 +381,57 @@ class Secret(StrictModel):
         return self
 
 
-class ConflictStage(StrictModel):
-    """冲突阶段。盘上每本 4~5 段。"""
-
-    #: 长度 5~9。阶段名要**能定位**（「政治清算」），不是对经过的复述——
-    #: 复述必含后几章的结果 = 剧透。**无守卫 → `B-08`**。
-    #: ⚠ 下发时**只发阶段名与跨度，不发摘要**：阶段摘要描述的是整个阶段的经过，
-    #: 必然含本阶段后几章才发生的结果（实测 ch16 拿到的摘要写着 ch20 才发生的事）。
-    stage: str = Field(min_length=1)
-
-    #: **逐章显式枚举**，不是区间端点：`[3, 5]` 不暗含第 4 章。
-    #: 全部阶段合起来必须让每个阅读序章号**恰好出现一次**；跨字段的不重不漏由
-    #: `conflict_stage_coverage` HARD 在产地按 Stage1 正文章集合校验（`R-2.14`）。
-    chapters: list[Annotated[int, Field(strict=True)]] = Field(min_length=1)
+EvidenceT = TypeVar('EvidenceT')
 
 
-class ArcTrack(StrictModel):
-    """一条人物弧线。盘上 16 条。**仅末章下发。**"""
+class SupportedBlurbFact(StrictModel, Generic[EvidenceT]):
+    """源文案的一条事实主张及正文支持；语义支持仍交 Global Commander。"""
 
-    #: `char_id` ｜ `"reader"` ｜ `relation_id`。**三种都必须能解析成人话**，否则显式终态。
-    #: ⚠ 这条链路**曾经断着**：`relation_id` 被引用却从未被解析，未解析的 `rel_05`
-    #: 直接进了写作 prompt。**有确定性消费方 ≠ 那条链路接通了。**
-    subject: str = Field(min_length=1)
-
-    #: 长度 16~38。要说清**从什么变到什么**，不能只写「有成长」。**无守卫 → `B-08`**。
-    trajectory: str = Field(min_length=1)
-    trajectory_evidence: FactEvidence
+    kind: Literal['supported']
+    claim_id: str = Field(pattern=r'^hook_\d{3}$')
+    claim: str = Field(min_length=1)
+    evidence: EvidenceT
 
 
-class Arc(StrictModel):
-    """⚠ **这一块是解读层，不是事实层。**
+class UnresolvedBlurbFact(StrictModel):
+    kind: Literal['unresolved']
+    claim_id: str = Field(pattern=r'^hook_\d{3}$')
+    claim: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
 
-    `entities` / `canon` 记的是原文写出来的事实；`arc` 记的是「高潮在哪」「弧怎么走」
-    ——**判断**。它的确定性消费方近乎恒空（逐章只发一个阶段名），几乎全靠 prompt 消费。
-    """
 
-    conflict_stages: list[ConflictStage] = Field(min_length=1)
+class ProposedOpeningScope(StrictModel, Generic[EvidenceT]):
+    """从首章到 through_chapter 的连续材料范围；接受由既有 Global 审阅负责。"""
 
-    #: 长度 25~52。**仅末章下发。**
-    climax: str = Field(min_length=1)
+    kind: Literal['proposed']
+    through_chapter: ChapterOrdinal
+    rationale: str = Field(min_length=1)
+    boundary_evidence: EvidenceT
 
-    #: **仅末章下发。**
-    ending: str = Field(min_length=1)
 
-    #: 长度 4~7。**仅末章下发**——非末章一律不发：剥掉 `trajectory` 剩下的对写手是零信息，
-    #: 不剥就是结局。两头不讨好，所以整块不发。
-    arc_tracks: list[ArcTrack] = Field(min_length=1)
+class UnresolvedOpeningScope(StrictModel):
+    kind: Literal['unresolved']
+    reason: str = Field(min_length=1)
+
+
+class SourceBlurbGrounding(StrictModel, Generic[EvidenceT]):
+    """正式消费 stage1/hook_copy 的事实与开篇范围，不保存文学分析或正文副本。"""
+
+    facts: list[Annotated[
+        SupportedBlurbFact[EvidenceT] | UnresolvedBlurbFact,
+        Field(discriminator='kind'),
+    ]]
+    opening: Annotated[
+        ProposedOpeningScope[EvidenceT] | UnresolvedOpeningScope,
+        Field(discriminator='kind'),
+    ]
+
+    @model_validator(mode='after')
+    def _unique_claim_ids(self) -> SourceBlurbGrounding:
+        ids = [fact.claim_id for fact in self.facts]
+        if len(ids) != len(set(ids)):
+            raise ValueError('源文案 claim_id 不能重复')
+        return self
 
 
 class Canon(StrictModel):
@@ -478,22 +482,17 @@ class GlobalProvenance(LlmProvenance):
 
 
 class GlobalGrounding(StrictModel):
-    """`stage2/global_grounding.json` —— 顶层 4 个键。**全书一次调用。**
+    """人物与知识的只读领域视图，不登记 ARTIFACT_SPECS，不可作为落盘模型。
 
-    结构化调用点声明的必需顶层键 = `entities` · `canon` · `arc`
-    （`_provenance` 是代码写的，不归调用点管）。
-    **全链规矩：每个结构化调用点声明自己【全部】必需顶层键。**
-    判准不能是「这一块有没有后置兜底判据」——**兜底判据本身是会退役的**。
-
-    ⚠ **已裁撤**：`title` · `source_id`——书名 = 目录名、`source_id` = 目录名后缀，
-    都能 0 成本现算，落盘只是抄第二份。
+    人物来自 CharacterRegistry，知识来自 KnowledgeGrounding。共享事实判据消费
+    这个完整视图；任何 producer 都不能将其写成另一份静态人物表。
     """
 
     entities: Entities
     canon: Canon
-    arc: Arc
+    source_blurb: SourceBlurbGrounding[FactEvidence]
 
-    #: `inputs` 恒一条：`stage1/main_text.json`。
+    #: `inputs` 绑定实际读取的 MainText 与 HookCopy；不能用正文身份替代源文案身份。
     provenance: GlobalProvenance = Field(alias='_provenance')
 
 
@@ -626,27 +625,6 @@ class SecretResponse(StrictModel):
         return self
 
 
-class ArcTrackResponse(StrictModel):
-    subject: str = Field(min_length=1)
-    trajectory: str = Field(min_length=1)
-    trajectory_evidence: EvidenceLocator
-
-
-class ArcResponse(StrictModel):
-    """人工完整替换解读层；arc_analysis 不能只改 tracks 冒充整组已修。"""
-
-    conflict_stages: list[ConflictStage] = Field(min_length=1)
-    climax: str = Field(min_length=1)
-    ending: str = Field(min_length=1)
-    arc_tracks: list[ArcTrackResponse] = Field(min_length=1)
-
-
-# ── stage2.global 唯一现役 provider wire ──────────────────────────────────
-#
-# provider 边界只接受 ``evidence_candidate_id``，不提供 locator union。正式
-# ``GlobalGrounding`` 仍落 SourceSpan；人工 ``GlobalEdit`` 与存量 ``.INVALID`` 的
-# 0-LLM 恢复仍收 locator，二者不属于 provider wire。
-
 class EvidenceCandidateRef(StrictModel):
     """本次 prompt 已下发证据候选表中的一个不透明引用。"""
 
@@ -658,28 +636,6 @@ class AddressCandidateResponse(StrictModel):
     by: str = Field(min_length=1)
     context: Literal[ADDRESS_CONTEXT]
     from_chapter: ChapterOrdinal
-
-
-class CharacterCandidateResponse(StrictModel):
-    canonical: str = Field(min_length=1)
-    address: list[AddressCandidateResponse] = Field(min_length=1)
-    name_distinctiveness: Literal[NAME_DISTINCTIVENESS]
-    role: str = Field(min_length=1)
-    role_evidence: EvidenceCandidateRef
-    fate: str | None
-    fate_evidence: EvidenceCandidateRef | None
-
-    @model_validator(mode='after')
-    def _fate_and_evidence_agree(self) -> CharacterCandidateResponse:
-        if (self.fate is None) != (self.fate_evidence is None):
-            raise ValueError('fate 与 fate_evidence 必须同时为空或同时非空')
-        return self
-
-
-class CharacterCandidateWireRow(CharacterCandidateResponse):
-    """provider wire 的一行人物；动态 ``char_id`` 必须是显式字段。"""
-
-    char_id: str = Field(pattern=r'^char_\d{3}$')
 
 
 class RelationCandidateResponse(StrictModel):
@@ -769,136 +725,6 @@ class CanonCandidateResponse(StrictModel):
         return self
 
 
-class ArcTrackCandidateResponse(StrictModel):
-    subject: str = Field(min_length=1)
-    trajectory: str = Field(min_length=1)
-    trajectory_evidence: EvidenceCandidateRef
-
-
-class ArcCandidateResponse(StrictModel):
-    conflict_stages: list[ConflictStage] = Field(min_length=1)
-    climax: str = Field(min_length=1)
-    ending: str = Field(min_length=1)
-    arc_tracks: list[ArcTrackCandidateResponse] = Field(min_length=1)
-
-
-class EntitiesCandidateResponse(StrictModel):
-    # 内部与正式候选继续使用 ``{char_id: character}``；agent schema 只发布
-    # ``[{char_id, ...character}]``，避开严格结构化输出不支持动态 object 键的边界。
-    characters: dict[str, CharacterCandidateResponse]
-    relations: list[RelationCandidateResponse]
-
-    @field_validator(
-        'characters', mode='before',
-        json_schema_input_type=list[CharacterCandidateWireRow],
-    )
-    @classmethod
-    def _characters_from_wire_rows(cls, value: object) -> object:
-        return keyed_rows_to_mapping(
-            value,
-            row_model=CharacterCandidateWireRow,
-            key_field='char_id',
-        )
-
-    @model_validator(mode='after')
-    def _relation_ids_are_unique(self) -> EntitiesCandidateResponse:
-        values = [row.relation_id for row in self.relations]
-        if len(values) != len(set(values)):
-            raise ValueError('duplicate relation ids')
-        return self
-
-
-class GlobalGroundingCandidateResponse(StrictModel):
-    """stage2.global 不可信响应；不含 locator 或正式 SourceSpan。"""
-
-    entities: EntitiesCandidateResponse
-    canon: CanonCandidateResponse
-    arc: ArcCandidateResponse
-
-
-class GlobalCandidateFullTurn(StrictModel):
-    kind: Literal['full_candidate']
-    candidate: GlobalGroundingCandidateResponse
-
-
-class RoleFateEvidenceCandidatePatch(StrictModel):
-    """一名泄漏角色的四字段原子替换；证据只能引用本次候选表。"""
-
-    char_id: str = Field(pattern=r'^char_\d{3}$')
-    role: str = Field(min_length=1)
-    role_evidence: EvidenceCandidateRef
-    fate: str | None
-    fate_evidence: EvidenceCandidateRef | None
-
-    @model_validator(mode='after')
-    def _fate_and_evidence_agree(self) -> RoleFateEvidenceCandidatePatch:
-        if (self.fate is None) != (self.fate_evidence is None):
-            raise ValueError('fate 与 fate_evidence 必须同时为空或同时非空')
-        return self
-
-
-class GlobalRoleFatePatchTurn(StrictModel):
-    """只允许修订纯 ``role_leaks_fate`` 的 hash-bound candidate 分支。"""
-
-    kind: Literal['role_fate_patch']
-    candidate_sha256: Sha256
-    evidence_table_sha256: Sha256
-    changes: list[RoleFateEvidenceCandidatePatch] = Field(min_length=1)
-
-    @model_validator(mode='after')
-    def _character_ids_are_unique(self) -> GlobalRoleFatePatchTurn:
-        char_ids = [change.char_id for change in self.changes]
-        if len(char_ids) != len(set(char_ids)):
-            raise ValueError('role/fate patch char_id 不能重复')
-        return self
-
-
-GlobalCandidateAgentPayload = Annotated[
-    GlobalCandidateFullTurn | GlobalRoleFatePatchTurn,
-    Field(discriminator='kind'),
-]
-
-
-class GlobalCandidateAgentTurnResponse(StrictModel):
-    """stage2.global 全 session 固定信封。
-
-    首轮及非局部失败交完整候选；只有代码证明 HARD 集精确为
-    ``role_leaks_fate`` 时，才开放绑定 candidate/table 双 SHA 的四字段窄修。
-    candidate ID 的格式/成员失败仍不得进入此分支。
-    """
-
-    payload: GlobalCandidateAgentPayload
-
-
-class RoleFateResponse(StrictModel):
-    role: str = Field(min_length=1)
-    fate: str | None
-
-
-class RoleFateWireRow(RoleFateResponse):
-    """purge-role provider wire 的一行；内部仍按 ``char_id`` 查表。"""
-
-    char_id: str = Field(pattern=r'^char_\d{3}$')
-
-
-class RoleSplitResponse(StrictModel):
-    """purge-role 只允许交回 role/fate；wire 上 char_id 是显式行字段。"""
-
-    characters: dict[str, RoleFateResponse]
-
-    @field_validator(
-        'characters', mode='before',
-        json_schema_input_type=list[RoleFateWireRow],
-    )
-    @classmethod
-    def _characters_from_wire_rows(cls, value: object) -> object:
-        return keyed_rows_to_mapping(
-            value,
-            row_model=RoleFateWireRow,
-            key_field='char_id',
-        )
-
-
 class SecretPatch(StrictModel):
     """一条 secret 的 typed 人工订正；claim 改动必须同交新 locator。"""
 
@@ -955,12 +781,9 @@ class WorldRulePatch(StrictModel):
 
 
 class GlobalCharacterPatch(StrictModel):
-    """按人物稳定 ID 订正 enum、role/fate 与其 locator。"""
+    """按人物稳定 ID 订正必要动态状态；静态身份只由 CharactersEdit 修改。"""
 
     char_id: str = Field(pattern=r'^char_\d{3}$')
-    name_distinctiveness: Literal[NAME_DISTINCTIVENESS] | None = None
-    role: str | None = Field(default=None, min_length=1)
-    role_evidence: EvidenceLocator | None = None
     fate: str | None = None
     fate_evidence: EvidenceLocator | None = None
 
@@ -969,14 +792,6 @@ class GlobalCharacterPatch(StrictModel):
         changed = self.model_fields_set - {'char_id'}
         if not changed:
             raise ValueError(f'{self.char_id}: empty character patch')
-        if 'name_distinctiveness' in changed and self.name_distinctiveness is None:
-            raise ValueError(f'{self.char_id}: name_distinctiveness 不能显式置空')
-        if 'role' in changed and self.role is None:
-            raise ValueError(f'{self.char_id}: role 不能显式置空')
-        if 'role' in changed and 'role_evidence' not in changed:
-            raise ValueError(f'{self.char_id}: 修改 role 必须同交 role_evidence locator')
-        if 'role_evidence' in changed and self.role_evidence is None:
-            raise ValueError(f'{self.char_id}: role_evidence 不能显式置空')
         if 'fate' in changed and self.fate is not None and 'fate_evidence' not in changed:
             raise ValueError(f'{self.char_id}: 写入 fate 必须同交 fate_evidence locator')
         if 'fate' in changed and self.fate is None and self.fate_evidence is not None:
@@ -1034,27 +849,6 @@ class SettingPatch(StrictModel):
                 raise ValueError(f'修改 setting.{claim} 必须同交 {evidence} locator')
             if evidence in changed and getattr(self, evidence) is None:
                 raise ValueError(f'{evidence} 不能显式置空')
-        return self
-
-
-class ArcTrackPatch(StrictModel):
-    track_index: int = Field(ge=0)
-    subject: str | None = Field(default=None, min_length=1)
-    trajectory: str | None = Field(default=None, min_length=1)
-    trajectory_evidence: EvidenceLocator | None = None
-
-    @model_validator(mode='after')
-    def _valid_patch(self) -> ArcTrackPatch:
-        changed = self.model_fields_set - {'track_index'}
-        if not changed:
-            raise ValueError(f'arc track {self.track_index}: empty patch')
-        for field in ('subject', 'trajectory'):
-            if field in changed and getattr(self, field) is None:
-                raise ValueError(f'arc track {self.track_index}: {field} 不能显式置空')
-        if 'trajectory' in changed and 'trajectory_evidence' not in changed:
-            raise ValueError('修改 trajectory 必须同交 trajectory_evidence locator')
-        if 'trajectory_evidence' in changed and self.trajectory_evidence is None:
-            raise ValueError('trajectory_evidence 不能显式置空')
         return self
 
 
@@ -1155,7 +949,7 @@ class CharacterCollectionItem(CharacterResponse):
 
 
 GlobalCollectionItem = (
-    CharacterCollectionItem | RelationResponse | SecretResponse | WorldRuleResponse
+    RelationResponse | SecretResponse | WorldRuleResponse
 )
 
 
@@ -1184,8 +978,7 @@ GlobalCollectionOperation = Annotated[
 class GlobalCollectionEdit(StrictModel):
     """集合完整性修订 DSL；只传 delta，不复制整组既有成员。"""
 
-    collection: Literal[
-        'characters', 'relations', 'secrets', 'world_rules']
+    collection: Literal['relations', 'secrets', 'world_rules']
     expected_collection_sha256: Sha256
     # 空数组只供 producer 生成 schema-valid no-op 模板；apply 仍会拒绝无业务变化。
     operations: list[GlobalCollectionOperation] = Field(default_factory=list)
@@ -1193,15 +986,12 @@ class GlobalCollectionEdit(StrictModel):
     @model_validator(mode='after')
     def _operations_match_collection(self) -> GlobalCollectionEdit:
         expected_type = {
-            'characters': CharacterCollectionItem,
             'relations': RelationResponse,
             'secrets': SecretResponse,
             'world_rules': WorldRuleResponse,
         }[self.collection]
 
         def item_id(item: GlobalCollectionItem) -> str:
-            if isinstance(item, CharacterCollectionItem):
-                return item.char_id
             if isinstance(item, RelationResponse):
                 return item.relation_id
             if isinstance(item, SecretResponse):
@@ -1238,123 +1028,59 @@ class GlobalCollectionEdit(StrictModel):
 
 
 class GlobalEdit(StrictModel):
-    """`stage2/global_edit.json` —— 全局事实的 0 LLM typed 恢复面。"""
+    """知识 v6 的 0 LLM 恢复面；人物静态身份、称谓和集合只能走 CharactersEdit。"""
 
     secrets: list[SecretPatch] = Field(default_factory=list)
     world_rules: list[WorldRulePatch] = Field(default_factory=list)
     characters: list[GlobalCharacterPatch] = Field(default_factory=list)
     relations: list[RelationPatch] = Field(default_factory=list)
     setting: SettingPatch | None = None
-    arc_tracks: list[ArcTrackPatch] = Field(default_factory=list)
-    addresses: list[AddressContextPatch] = Field(default_factory=list)
-    characters_replace: dict[str, CharacterResponse] | None = Field(
-        default=None, min_length=1)
     secrets_replace: list[SecretResponse] | None = None
     world_rules_replace: list[WorldRuleResponse] | None = None
     relations_replace: list[RelationResponse] | None = None
-    conflict_stages_replace: list[ConflictStage] | None = Field(
-        default=None, min_length=1)
-    arc_tracks_replace: list[ArcTrackResponse] | None = Field(default=None, min_length=1)
-    arc_replace: ArcResponse | None = None
-    addresses_replace: list[CharacterAddressReplacement] = Field(default_factory=list)
+    source_blurb_replace: SourceBlurbGrounding[EvidenceLocator] | None = None
     collection_edits: list[GlobalCollectionEdit] = Field(default_factory=list)
     post_edit_review: GlobalEditReviewAttestation | None = None
 
     @model_validator(mode='after')
     def _one_patch_per_subject(self) -> GlobalEdit:
-        if not (
-            self.secrets or self.world_rules or self.characters or self.relations
-            or self.setting is not None or self.arc_tracks or self.addresses
-            or self.characters_replace is not None
-            or self.secrets_replace is not None or self.world_rules_replace is not None
-            or self.relations_replace is not None
-            or self.conflict_stages_replace is not None
-            or self.arc_tracks_replace is not None
-            or self.arc_replace is not None
-            or self.addresses_replace or self.collection_edits
-        ):
+        if not (self.secrets or self.world_rules or self.characters or self.relations
+                or self.setting is not None or self.secrets_replace is not None
+                or self.world_rules_replace is not None or self.relations_replace is not None
+                or self.source_blurb_replace is not None or self.collection_edits):
             raise ValueError('global edit must contain at least one typed patch')
-        for label, patch, replacement in (
-            ('canon.secrets', self.secrets, self.secrets_replace),
-            ('canon.world_rules', self.world_rules, self.world_rules_replace),
-            ('entities.relations', self.relations, self.relations_replace),
-            ('arc.arc_tracks', self.arc_tracks, self.arc_tracks_replace),
-        ):
-            if replacement is not None and patch:
-                raise ValueError(f'{label} cannot be patched and completely replaced together')
-        if self.characters_replace is not None and (
-                self.characters or self.addresses or self.addresses_replace):
-            raise ValueError(
-                'entities.characters cannot be patched and completely replaced together')
-        if self.arc_replace is not None and (
-                self.conflict_stages_replace is not None
-                or self.arc_tracks or self.arc_tracks_replace is not None):
-            raise ValueError('arc cannot be patched and completely replaced together')
         for label, keys in (
             ('secret', [p.secret_id for p in self.secrets]),
             ('world rule', [p.rule_id for p in self.world_rules]),
-            ('character', [p.char_id for p in self.characters]),
+            ('character state', [p.char_id for p in self.characters]),
             ('relation', [p.relation_id for p in self.relations]),
-            ('arc track', [p.track_index for p in self.arc_tracks]),
-            ('address', [(p.char_id, p.address_index) for p in self.addresses]),
         ):
             if len(keys) != len(set(keys)):
                 raise ValueError(f'duplicate {label} patches are order-dependent')
-        replacement_characters = [row.char_id for row in self.addresses_replace]
-        if len(replacement_characters) != len(set(replacement_characters)):
-            raise ValueError('duplicate complete address replacements are order-dependent')
-        if set(replacement_characters) & {row.char_id for row in self.addresses}:
-            raise ValueError('character address cannot be patched and replaced together')
         collections = [row.collection for row in self.collection_edits]
         if len(collections) != len(set(collections)):
             raise ValueError('每个集合最多一条 collection edit')
-        replacement_by_collection = {
-            'characters': self.characters_replace,
-            'relations': self.relations_replace,
-            'secrets': self.secrets_replace,
-            'world_rules': self.world_rules_replace,
-        }
-        conflict = [
-            name for name in collections
-            if replacement_by_collection[name] is not None
-        ]
-        if conflict:
-            raise ValueError(
-                f'集合不能同时走 delta edit 与完整 replacement：{conflict}')
-        direct_patch_targets = {
-            'characters': {
-                *(row.char_id for row in self.characters),
-                *(row.char_id for row in self.addresses),
-                *(row.char_id for row in self.addresses_replace),
-            },
-            'relations': {row.relation_id for row in self.relations},
-            'secrets': {row.secret_id for row in self.secrets},
-            'world_rules': {row.rule_id for row in self.world_rules},
-        }
-        removed_or_split_targets: dict[str, set[str]] = {
-            name: set() for name in direct_patch_targets
-        }
-        for collection_edit in self.collection_edits:
-            for operation in collection_edit.operations:
-                if isinstance(operation, (
-                        GlobalCollectionDelete, GlobalCollectionSplit)):
-                    removed_or_split_targets[collection_edit.collection].add(
-                        operation.subject_id)
-        if any(
-                direct_patch_targets[name] & removed_or_split_targets[name]
-                for name in direct_patch_targets):
-            raise ValueError(
-                '直接字段 patch 主体不得同时被同集合 delete/split')
-        for label, rows, key in (
-            ('secret', self.secrets_replace, 'secret_id'),
-            ('world rule', self.world_rules_replace, 'rule_id'),
-            ('relation', self.relations_replace, 'relation_id'),
+        for name, patch, replacement, key in (
+            ('secrets', self.secrets, self.secrets_replace, 'secret_id'),
+            ('world_rules', self.world_rules, self.world_rules_replace, 'rule_id'),
+            ('relations', self.relations, self.relations_replace, 'relation_id'),
         ):
-            if rows is None:
-                continue
-            ids = [str(getattr(row, key)) for row in rows]
-            if len(ids) != len(set(ids)):
-                raise ValueError(f'duplicate {label} ids in complete replacement')
+            if replacement is not None:
+                if patch:
+                    raise ValueError(f'{name} cannot be patched and completely replaced together')
+                if name in collections:
+                    raise ValueError('集合不能同时走 delta edit 与完整 replacement')
+                ids = [getattr(row, key) for row in replacement]
+                if len(ids) != len(set(ids)):
+                    raise ValueError(f'duplicate {name} ids in complete replacement')
+            targets = {getattr(row, key) for row in patch}
+            for collection in self.collection_edits:
+                if collection.collection != name:
+                    continue
+                removed = {row.subject_id for row in collection.operations
+                           if isinstance(row, (GlobalCollectionDelete, GlobalCollectionSplit))}
+                if targets & removed:
+                    raise ValueError('直接字段 patch 主体不得同时被同集合 delete/split')
         return self
 
 
@@ -1363,18 +1089,55 @@ class GlobalEdit(StrictModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-
 FACT_ID_PATTERN = r'^f\d{2,}_\d{3,}$'
 HINGE_ID_PATTERN = r'^h\d{2,}_\d{3,}$'
 ATOM_KEY_PATTERN = r'^a\d{2,}$'
 
 
-class Hinge(StrictModel):
-    """一条有稳定引用的保真材料；`source=None` 是明确的 INVALID 状态。"""
+class DialogueSemantics(StrictModel):
+    """原句只留证据；null 表示无法确定，空 addressees 表示明确没有特定对象。"""
+
+    speaker: KnowledgeSubject | None
+    addressees: list[KnowledgeSubject] | None
+    meaning: str = Field(min_length=1)
+    speech_act: str = Field(min_length=1)
+
+
+class LiteralRequirement(StrictModel):
+    """字面本身参与剧情的例外；理由须能由材料所引事实和源文支持。"""
+
+    kind: Literal[LITERAL_REQUIREMENT_KINDS]
+    reason: str = Field(min_length=1)
+
+
+class HingeContent(StrictModel):
+    """响应与正式载体共用种类约束，禁止把普通对白再升级成逐字要求。"""
+
+    kind: Literal[HINGE_KINDS]
+    dialogue: DialogueSemantics | None = None
+    literal: LiteralRequirement | None = None
+
+    @model_validator(mode='after')
+    def _material_kind(self) -> HingeContent:
+        if (self.kind == '要害台词') != (self.dialogue is not None):
+            raise ValueError('仅要害台词必须携带 dialogue 语义，其他种类不得携带')
+        if (self.kind == '字面例外') != (self.literal is not None):
+            raise ValueError('仅字面例外必须携带 literal 剧情依据，其他种类不得携带')
+        return self
+
+
+class Hinge(HingeContent):
+    """材料事实归属与后台源文证据；`source=None` 是明确的 INVALID 状态。"""
 
     hinge_id: str = Field(pattern=HINGE_ID_PATTERN)
-    kind: Literal[HINGE_KINDS]
     source: SourceSpan | None
+    source_fact_refs: list[Annotated[str, Field(pattern=FACT_ID_PATTERN)]] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _unique_fact_refs(self) -> Hinge:
+        if len(self.source_fact_refs) != len(set(self.source_fact_refs)):
+            raise ValueError('材料 source_fact_refs 不得重复')
+        return self
 
 
 #: 源 beat 编号的形状。这里只用于证据定位；Stage4 场景响应不再引用源 beat 编号。
@@ -1554,33 +1317,34 @@ class GlobalEditInputCommit(StrictModel):
 
 
 class GlobalEditCommitBaseline(StrictModel):
-    """prepared 前冻结的 live 五件套；``None`` 精确表达当时缺失。"""
+    """prepared 前冻结的知识、审阅和两份问题产物；None 表示当时缺失。"""
 
     global_sha256: Sha256 | None
     review_sha256: Sha256 | None
-    projection_sha256: Sha256 | None
     invalid_sha256: Sha256 | None
     failure_sha256: Sha256 | None
 
 
 class GlobalEditCommitTarget(StrictModel):
-    """可逐字重放的正式目标；payload 与正式渲染 SHA 必须双向互验。"""
+    """可逐字重放的知识/审阅目标；人物只作冻结的审阅上下文，不拥有写权。
+
+    global_grounding 是只读组装视图；写口须与当前人物登记逐字段互验后，
+    只渲染 KnowledgeGrounding。称名投影由人物 producer 独占，不在此提交中。
+    """
 
     global_grounding: GlobalGrounding
     global_review: GlobalReview
-    blueprint_character_projection: BlueprintCharacterProjection
     global_sha256: Sha256
     review_sha256: Sha256
-    projection_sha256: Sha256
 
 
 class GlobalEditCommit(StrictModel):
     """Stage2 Global 的 prepared/committed 可恢复正式 bundle 提交记录。
 
-    reviewed 与普通人工 edit 共用同一三伴产物提交面；区别只在前者额外绑定
+    reviewed 与普通人工 edit 共用同一知识/审阅提交面；区别只在前者额外绑定
     attestation/workpack 与 pending failure。它不是 Commander failure，也不进入
     节点 ``produces``。prepared 在任何 live companion mutation 前落稳；恢复只
-    接受每个路径仍为 baseline 或已为 target。首次生成、purge 或 renormalize 留下
+    接受每个路径仍为 baseline 或已为 target。首次生成或 renormalize 留下
     的 generic INVALID 可没有归属于本动作的 GlobalEdit 身份，也可能没有既有正式
     Global；这两格只由 ``action_kind=revalidate`` 的 ``None`` 显式表达。
     """
@@ -1589,7 +1353,7 @@ class GlobalEditCommit(StrictModel):
     action_kind: Literal['apply_edit', 'revalidate'] = 'apply_edit'
     reviewed_edit: bool = True
     submitted_transport_identity: str = Field(min_length=1, max_length=300)
-    # generic Global INVALID（首次生成/purge/renormalize HARD）没有归属于本动作的
+    # generic Global INVALID（首次生成/renormalize HARD）没有归属于本动作的
     # GlobalEdit identity，也可能还没有正式 Global；``None`` 只在 revalidate 表示
     # 没有可绑定身份。apply-edit 与 reviewed/ordinary terminal revalidate 仍绑 SHA。
     failed_edit_sha256: Sha256 | None
@@ -1753,6 +1517,8 @@ class Blueprint(StrictModel):
             raise ValueError(f'fact_atom 引用了本章外或不存在的 beat：{bad_beats}')
         refs = set(fact_ids)
         used = [ref for edge in self.causal_edges for ref in (edge.before, edge.after)]
+        used += [ref for beat in self.beats for hinge in beat.hinges
+                 for ref in hinge.source_fact_refs]
         relation_keys: list[tuple[object, ...]] = []
         story_edges: list[tuple[str, str]] = [
             (edge.before, edge.after) for edge in self.causal_edges]
@@ -1898,15 +1664,15 @@ NarrativeRelationResponse = Annotated[
 ]
 
 
-class HingeResponseV2(StrictModel):
-    """一条保真材料：**只有种类和那几个字**，没有段号。
+class HingeResponseV2(HingeContent):
+    """材料的事实归属、语义与定位短语，没有段号。
 
     短语必须能在**所属拍的区间内**原样找到且唯一；不唯一时 compiler 记
     `短语在本拍区间内多处命中`（修法是候选选择，不是重抄）。
     """
 
-    kind: Literal[HINGE_KINDS]
     phrase: str = Field(min_length=1)
+    source_fact_refs: list[Annotated[str, Field(pattern=ATOM_KEY_PATTERN)]] = Field(min_length=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1992,11 +1758,11 @@ class MicroEventResponse(StrictModel):
     cue: str = Field(min_length=1)
 
 
-class HingeCandidateResponse(StrictModel):
+class HingeCandidateResponse(HingeContent):
     """从 user 下发的确定性原文候选中选择；位置由代码掌握，模型只交 id。"""
 
-    kind: Literal[HINGE_KINDS]
     candidate_id: str = Field(pattern=r'^h\d{3}$')
+    source_fact_refs: list[Annotated[str, Field(pattern=ATOM_KEY_PATTERN)]] = Field(min_length=1)
 
 
 # 不加 `mode`：`candidate_id` 与 `phrase` 两种严格模型本身已互斥，额外判别字段只会
@@ -2072,8 +1838,6 @@ class HingePhraseResponse(StrictModel):
     原文重给一条；「拍内原样唯一」由 validator 当场验，不唯一就换样本。"""
 
     phrase: str = Field(min_length=1)
-
-
 
 
 class BlueprintContext(StrictModel):

@@ -642,10 +642,7 @@ def test_global_evidence_projection_removes_only_evidence_slots():
                 }],
             }],
         },
-        'arc': {'arc_tracks': [{
-            'trajectory': '由弱变强',
-            'trajectory_evidence': {'source': {'text': '变强'}},
-        }]},
+        'source_blurb': {'facts': [{'kind': 'supported', 'claim_id': 'hook_001', 'claim': '主角变强', 'evidence': {'source': {'text': '变强'}}}], 'opening': {'kind': 'unresolved', 'reason': '本例只测剥证据'}},
     }
 
     paths = [path for path, _owner, _field in iter_global_evidence_slots(data)]

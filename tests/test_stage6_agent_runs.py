@@ -18,7 +18,7 @@ from novel.agents import (
     render_structured_agent_stdin,
 )
 from novel.agents.session_client import SessionAgentClient, agent_json_schema
-from novel.errors import ProvenanceRefused
+from novel.errors import ArtifactUnreadable, ProvenanceRefused
 from novel.llm import stage6_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
@@ -187,13 +187,18 @@ def test_default_checkpoint_cannot_be_relabelled_as_a_stagger_arm(tmp_path):
     assert checkpoint.is_file()
 
 
-def test_legacy_run_without_an_arm_remains_the_default_zero_ms_arm(tmp_path):
-    """优化前的 run.json 没有 arm 字段；只兼容成默认臂，不作通配符。"""
+@pytest.mark.parametrize('damage', ['missing', 'null'])
+def test_run_without_proven_arm_is_unknown_and_preserves_paid_checkpoint(tmp_path, damage):
+    """旧或损坏的运行不能从默认值推断实验身份；已付费的 checkpoint 原样保留。"""
     ctx = _ctx(tmp_path)
     _ensure(ctx)
+    _produce(ctx, 'A', 11)
     run_path = stage6_runs._run_root(ctx) / stage6_runs.RUN_FILE
     historical = json.loads(run_path.read_text(encoding='utf-8'))
-    historical.pop('experiment_arm')
+    if damage == 'missing':
+        historical.pop('experiment_arm')
+    else:
+        historical['experiment_arm'] = None
     identity = {
         key: value for key, value in historical.items()
         if key not in ('identity_sha256', 'created_at')
@@ -203,11 +208,16 @@ def test_legacy_run_without_an_arm_remains_the_default_zero_ms_arm(tmp_path):
         json.dumps(historical, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
         encoding='utf-8')
 
+    checkpoint = paths.stage6_semantic_checkpoint_path(ctx.novel_dir, ctx.run_id, 'A')
+    run_before, checkpoint_before = run_path.read_bytes(), checkpoint.read_bytes()
+    ledger_before = ctx.ledger.path.read_bytes()
     restarted = _ctx(tmp_path, run_id=ctx.run_id, code=ctx.code)
-    restored = _ensure(restarted)
-    assert restored['experiment_arm']['judge_stagger_ms'] == 0
-    with pytest.raises(ProvenanceRefused, match='experiment arm.*漂移'):
-        _ensure(restarted, judge_stagger_ms=25)
+    for stagger in (0, 25):
+        with pytest.raises(ArtifactUnreadable, match='字段不完整|缺合法 experiment_arm'):
+            _ensure(restarted, judge_stagger_ms=stagger)
+    assert run_path.read_bytes() == run_before
+    assert checkpoint.read_bytes() == checkpoint_before
+    assert ctx.ledger.path.read_bytes() == ledger_before
 
 
 def test_same_stagger_arm_restores_checkpoint_without_a_new_wire(tmp_path):

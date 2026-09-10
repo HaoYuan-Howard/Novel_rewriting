@@ -31,8 +31,10 @@ from typing import Mapping
 from urllib.parse import urlsplit
 
 from contracts.invariants import (
-    BLUEPRINT_ARCHITECTURE, BLUEPRINT_ARCHITECTURES,
+    BLUEPRINT_ARCHITECTURE, BLUEPRINT_ARCHITECTURES, PIPELINE_PARALLEL_NODES,
+    PIPELINE_DEFAULT_CONCURRENCY, PIPELINE_CONCURRENCY_TRIALS,
 )
+from contracts.schema.orchestration import PipelineConcurrency
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -104,9 +106,9 @@ DEFAULT_MAX_RETRIES = 3
 DEFAULT_BACKOFF_BASE = 2.0
 
 #: 逐章 LLM 并发闸。2026-08-13 用户裁决：初始抽取与写作都按章并发，硬上限 32。
-#: 默认即用满上限；这是**并发数**，不是速率限制，传输层的重试/退避仍各自生效。
+#: 默认四并发；上限只保留给显式 legacy 配置，Agent 逐节点对照另受 8 的上限。
 MAX_CONCURRENCY = 32
-DEFAULT_CONCURRENCY = MAX_CONCURRENCY
+DEFAULT_CONCURRENCY = PIPELINE_DEFAULT_CONCURRENCY
 
 #: 字段 → 喂它的那个环境变量。**唯一落点**：`load_config` 与出错文案共用这一张表，
 #: 免得报错说的变量名与真正读的那个分了家（那种错最费时间：人照着改，而它一直没生效）。
@@ -122,6 +124,7 @@ ENV_KEYS: dict[str, str] = {
     'max_retries': 'DEEPSEEK_MAX_RETRIES',
     'backoff_base': 'DEEPSEEK_BACKOFF_BASE',
     'concurrency': 'NOVEL_CONCURRENCY',
+    'concurrency_policy': 'NOVEL_CONCURRENCY_POLICY',
     'stage2_blueprint_contract': 'NOVEL_STAGE2_BLUEPRINT_CONTRACT',
 }
 
@@ -149,7 +152,15 @@ class Config:
     max_retries: int = DEFAULT_MAX_RETRIES
     backoff_base: float = DEFAULT_BACKOFF_BASE
     concurrency: int = DEFAULT_CONCURRENCY
+    concurrency_policy: PipelineConcurrency = field(default_factory=PipelineConcurrency)
     stage2_blueprint_contract: str = DEFAULT_STAGE2_BLUEPRINT_CONTRACT
+
+    def concurrency_for(self, node: str) -> int:
+        """只覆盖目标节点；对照实验不能顺带提升其他阶段。"""
+        if node in self.concurrency_policy.node_overrides:
+            return self.concurrency_policy.node_overrides[node]
+        return (min(self.concurrency, max(PIPELINE_CONCURRENCY_TRIALS))
+                if node in PIPELINE_PARALLEL_NODES else self.concurrency)
 
     def __post_init__(self) -> None:
         """取值面的闸。**放这里不放 `load_config`**，于是手搭一个 `Config` 也拦得住。
@@ -169,6 +180,8 @@ class Config:
         def bad(field_name: str, why: str) -> ValueError:
             return ValueError(
                 f'{ENV_KEYS[field_name]}（{field_name}）={getattr(self, field_name)!r}：{why}')
+        if not isinstance(self.concurrency_policy, PipelineConcurrency):
+            raise bad('concurrency_policy', '必须是已校验的 PipelineConcurrency')
 
         if not isfinite(self.timeout) or self.timeout <= 0:
             raise bad('timeout', '超时必须是一个有限的正数（秒）')
@@ -281,6 +294,8 @@ def load_config(*, env: Mapping[str, str] | None = None,
         max_retries=int(_num('max_retries', DEFAULT_MAX_RETRIES, int)),
         backoff_base=_num('backoff_base', DEFAULT_BACKOFF_BASE, float),
         concurrency=int(_num('concurrency', DEFAULT_CONCURRENCY, int)),
+        concurrency_policy=(PipelineConcurrency.model_validate_json(src[ENV_KEYS['concurrency_policy']])
+            if ENV_KEYS['concurrency_policy'] in src else PipelineConcurrency()),
         stage2_blueprint_contract=(
             src.get(ENV_KEYS['stage2_blueprint_contract'])
             or DEFAULT_STAGE2_BLUEPRINT_CONTRACT),

@@ -1,0 +1,49 @@
+# 工作单元与人工追加
+
+当前运行根由 `WorkflowManifestV2` 标记为 `pipeline-cost-latency-v2`。只接受独立空根初始化，
+既有 manifest v1 和 ledger v1 不迁移、不补版本。存量由与原审计匹配的冻结代码恢复；发布时
+按 `docs/PIPELINE_COST_LATENCY_PLAN.md` 整根归档和切换，不删除单本账本换取预算。
+
+`WorkUnitLedgerV2` 位于 `novel/paths.py::work_unit_dir`。工作单元身份仍由工作流任务、书、
+节点、角色和 scope 决定。基础内容额度四次；新候选、新会话、新 run 和新 epoch 都沿用原账。
+网络重试单列为 attempt，缓存命中单列。追加金额只表示允许增加的内容调用次数，不是货币费用。
+
+人工追加入口为运行页工作单元详情，API 为
+`GET/POST /api/novels/:sid/work-units/:unit_id/grant`，唯一实现是
+`novel/orchestrator/work_unit_grants.py`。GET 不创建锁、账或模型请求；成本只来自实际 ledger，
+reasoning 不重复加到 completion，缺失用量显示 unknown。默认追加一次，单次一至四次，实际
+选项由后端下发。POST 必须有 CSRF 头、预览 token、稳定 intent_id、追加次数和理由。
+
+提交先取得同书 writer、审批和工作单元锁，再证明全部原 owner 已停止并在锁内复验主体、
+代码、成本和 session/epoch 归属。预算未耗尽、未闭合尝试、已保存回答或 producer/group
+待提交均不能追加。只在现有 ledger 的 grants 末尾记录不可变 `BudgetGrant`；原轮次与费用
+完整保留。相同 intent_id 的原内容重试返回同一授权；改金额、理由或 token 必须拒绝。
+授权自身不发模型、不改变 typed 决定、不解除无进展停点。后续模型调用仍经过独立付费与正文
+外发授权。每个 role/scope 的额度互不流转，SessionAgentClient 恢复同一 logical request 时
+接受累计额度和全部历史 attempt links，不把第五次当成新的首次调用。
+
+`WorkUnitView` 统一发布 content_base_limit、content_granted、grant_count、content_used、
+content_limit、content_remaining 和恢复入口，运行页与指标工具复用同一投影。
+
+`WorkUnitLedgerV2.processing` 按写入顺序保存不可变来源回执；冻结请求时登记待处理单元，
+包括尚未启动的并发章节，避免只统计已发请求。模型项精确引用内容轮次，
+机械处理、历史采用和缓存命中引用 producer 已核验的输入与结果摘要。免费处理登记同一
+业务单元但不创建 turn、不消耗或重发基础额度；同一来源重放幂等。回执损坏保持 unknown。
+`WorkUnitView.processing` 展示该单元最近一次实际处理的总量、待处理、新生成、机械处理、
+历史采用、缓存、失败、未知和原因；这描述处理成果，不代表产物通过质量审阅。
+
+`WorkUnitView.review` 直接复用 Stage2 义务覆盖及 Stage4 当前审阅模板，发布当前义务总量、
+待审和有效决定继承；二者之和必须等于总量。无模型账的免费继承仍可显示，标记
+`registered=false`，只读查询不会创建预算账。缺失或坏账只令该投影 unknown，并保留原因，
+不拦截独立的暂停、停止或排空控制；模型调用累计账与当前审阅义务不可互相替代。
+
+# 按原配置继续
+
+`GET /api/agent/runs/:run_id/continuation` 返回历史完整 profiles、来源 hash、可用性及原因。
+Commander、默认 Executor 和全部逐节点覆盖必须完整；缺失、冲突、模型已不支持或原执行
+未排空均不得用当前 settings/default 补齐。只读能力查询不会产生模型请求。
+
+`AgentRunRequest.continuation` 在 preview 和 start 中绑定同一个 `RunContinuationSource`。
+启动在书级 writer 与原 owner 停止 lease 内复验；新的 `RunContractV2.continuation` 保存原来源。
+旧 contract 没有该字段时不向旧 hash 加入 null。原配置续跑重新明确付费与正文外发，保留
+原工作单元累计额度；正在暂停的同一运行继续沿用原有 pause/resume 协议。

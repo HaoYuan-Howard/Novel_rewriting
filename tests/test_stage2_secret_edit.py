@@ -21,6 +21,8 @@ test_stage2_secret_edit.py —— `stage2.global --apply-edit`：Stage2 typed fa
 """
 from __future__ import annotations
 
+from novel.stages.stage2 import grounding as grounding_io
+
 import copy
 import json
 import shutil
@@ -33,12 +35,13 @@ from pydantic import ValidationError
 from contracts.schema import decode_artifact, encode_artifact
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
+from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.stage2 import (
     ChapterBlueprints, GlobalEdit, GlobalEditCommit, GlobalEditFailure,
     GlobalGrounding,
 )
 from novel.errors import (
-    GateBlocked, ProvenanceRefused, TerminalState, UnsupportedRunMode,
+    ArtifactUnreadable, GateBlocked, ProvenanceRefused, TerminalState, UnsupportedRunMode,
     UpstreamStale,
 )
 from novel.orchestrator import (
@@ -52,7 +55,7 @@ from novel.store import ArtifactStore
 from tests.factories import approved_global_review
 from tests.test_stage2_generation import (
     _client, _ctx, _ok, _respond_blueprints, _response_blueprints,
-    _response_global,
+    _response_global, _edit_static_character,
 )
 from tests.test_stage2 import main_text
 
@@ -136,7 +139,7 @@ def test_character_set_fail_emits_a_complete_typed_recovery_instead_of_crashing(
         _seed(book)
         ctx = _ctx(book, 'stage2.global', paid=False)
         store = ArtifactStore(ctx)
-        grounding = store.read(GlobalGrounding, extract.GLOBAL_REL)
+        grounding = grounding_io.read(store)
         review = approved_global_review(grounding)
         target = next(item for item in review.items
                       if item.kind == 'character_set_complete')
@@ -149,14 +152,13 @@ def test_character_set_fail_emits_a_complete_typed_recovery_instead_of_crashing(
             now='2026-09-02T00:00:00+00:00')
         store.write(extract.GLOBAL_REVIEW_REL, review)
 
-        template = extract.global_edit_template(ctx)
-
-        [collection_edit] = template.collection_edits
-        assert collection_edit.collection == 'characters'
-        assert collection_edit.operations == []
-        assert len(collection_edit.expected_collection_sha256) == 64
-        assert template.characters_replace is None
-        assert template.characters == []
+        from novel.stages.stage2 import characters
+        with pytest.raises(TerminalState, match='stage2.characters'):
+            extract.global_edit_template(ctx)
+        character_template = characters.edit_template(_ctx(book, 'stage2.characters', paid=False))
+        assert character_template['operations']
+        assert all(row['kind'] == 'replace' for row in character_template['operations'])
+        assert len(character_template['source_sha256']) == 64
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -167,12 +169,12 @@ def test_second_round_reviewed_edit_commits_global_and_closed_review_together():
         _seed(book)
         ctx = _ctx(book, 'stage2.global', paid=False)
         store = ArtifactStore(ctx)
-        grounding = store.read(GlobalGrounding, extract.GLOBAL_REL)
+        grounding = grounding_io.read(store)
         review = approved_global_review(grounding)
         target = next(
             item for item in review.items
-            if item.kind == 'role'
-            and item.subject_path == 'entities.characters.char_001.role')
+            if item.kind == 'reveal'
+            and item.subject_path == 'canon.secrets.secret_01.first_reveal_chapter')
         review = decide(
             review,
             item_id=target.item_id,
@@ -182,11 +184,7 @@ def test_second_round_reviewed_edit_commits_global_and_closed_review_together():
             now='2026-09-02T00:00:00+00:00')
         store.write(extract.GLOBAL_REVIEW_REL, review)
         _write_edit(book, {
-            'characters': [{
-                'char_id': 'char_001',
-                'role': '沈家账房，负责核对往来账目',
-                'role_evidence': _role_locator(),
-            }],
+            'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 3}],
             'post_edit_review': {
                 'actor': 'agent:novel-pipeline-operator',
                 'expected_source_sha256': review.source_sha256,
@@ -203,164 +201,100 @@ def test_second_round_reviewed_edit_commits_global_and_closed_review_together():
         closed = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
         corrected = next(
             item for item in closed.items
-            if item.kind == 'role'
-            and item.subject_path == 'entities.characters.char_001.role')
+            if item.kind == 'reveal'
+            and item.subject_path == 'canon.secrets.secret_01.first_reveal_chapter')
         assert corrected.state == 'PASS'
         assert corrected.actor == 'agent:novel-pipeline-operator'
         assert corrected.subject_sha256 != target.subject_sha256
-        assert artifact.entities.characters['char_001'].role.startswith('沈家账房')
+        assert artifact.canon.secrets[0].first_reveal_chapter == 3
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_reviewed_correction_reapplies_to_formal_after_first_edit_left_invalid():
-    """第二次 Commander 纠错不叠加 INVALID，并可闭合首轮 HARD。"""
-    root, book = _sandbox('两轮闸门纠错_002e')
-    try:
-        _seed(book)
-        ctx = _ctx(book, 'stage2.global', paid=False)
-        store = ArtifactStore(ctx)
-        grounding = store.read(GlobalGrounding, extract.GLOBAL_REL)
-        review = approved_global_review(grounding)
-        target = next(
-            item for item in review.items
-            if item.kind == 'role'
-            and item.subject_path == 'entities.characters.char_001.role')
-        review = decide(
-            review,
-            item_id=target.item_id,
-            expected_subject_sha256=target.subject_sha256,
-            state='FAIL', actor='test-reviewer',
-            reason='人物身份需要返工',
-            now='2026-09-02T00:00:00+00:00')
-        store.write(extract.GLOBAL_REVIEW_REL, review)
-        review_workpack = global_review_ops.review_workpack(
-            ctx, scope='blocking', replaced_input_keys=(extract.GLOBAL_EDIT,))
-        attestation = {
-            'actor': 'agent:novel-pipeline-operator',
-            'expected_source_sha256': review.source_sha256,
-            'reviewed_chapter_ordinals': [1, 2, 3],
-            'default_state': 'PASS',
-            'reason': '已复核纠正后的完整 blocking 主体',
-            'quarantine_groups': [],
-            'expected_workpack_sha256': review_workpack['workpack_sha256'],
-            'review_scope': [{
-                'item_id': target.item_id,
-                'expected_subject_sha256': target.subject_sha256,
-            }],
-            'decisions': [],
-        }
+def test_reviewed_correction_reapplies_to_formal_after_first_edit_left_invalid(tmp_path):
+    """当前 typed 失败回执绑定原 formal；人工候选和缺回执状态不得被旧动作覆盖。"""
+    root, book = _tmp_book(tmp_path, '两轮闸门纠错_0025')
+    _seed(book)
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    store = ArtifactStore(ctx)
+    review = approved_global_review(grounding_io.read(store))
+    target = next(item for item in review.items if item.kind == 'reveal')
+    review = decide(
+        review, item_id=target.item_id, expected_subject_sha256=target.subject_sha256,
+        state='FAIL', actor='test-reviewer', reason='揭示章需要返工',
+        now='2026-09-02T00:00:00+00:00')
+    store.write(extract.GLOBAL_REVIEW_REL, review)
+    pack = global_review_ops.review_workpack(
+        ctx, scope='blocking', replaced_input_keys=(extract.GLOBAL_EDIT,))
+    attestation = {
+        'actor': 'agent:novel-pipeline-operator',
+        'expected_source_sha256': review.source_sha256,
+        'reviewed_chapter_ordinals': [1, 2, 3], 'default_state': 'PASS',
+        'reason': '已复核纠正后的完整 blocking 主体', 'quarantine_groups': [],
+        'expected_workpack_sha256': pack['workpack_sha256'],
+        'review_scope': [{'item_id': target.item_id,
+                          'expected_subject_sha256': target.subject_sha256}],
+        'decisions': [],
+    }
+    _write_edit(book, {
+        'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 1}],
+        'post_edit_review': attestation,
+    })
+    formal = store.path(extract.GLOBAL_REL).read_bytes()
+    ledger = ctx.ledger.path.read_bytes()
+    with pytest.raises(GateBlocked, match='secret_setup_order'):
+        _apply(book)
+    assert store.path(extract.GLOBAL_REL).read_bytes() == formal
+    correction = extract.global_edit_correction_workpack(_ctx(book, 'stage2.global', paid=False))
+    assert correction['recovery_fact_kind'] == 'registered_sidecar'
+    assert correction['failure_kind'] == 'hard_gate'
+    assert correction['hard_hits'] == ['secret_setup_order']
+    assert correction['hard_outcomes'][0]['findings']
+    assert len(correction['failure_sha256']) == 64
+    failed = decode_artifact(extract.GLOBAL_EDIT, correction['failed_edit']).payload
+    assert failed['secrets'][0]['first_reveal_chapter'] == 1
+    assert orchestrator_state.stage2_reviewed_edit_correction_needed(
+        root, '0025', orchestrator_state.overview(root, '0025'))
 
-        _write_edit(book, {
-            'characters': [
-                {
-                    'char_id': 'char_001',
-                    'role': '李宝珠',
-                    'role_evidence': _role_locator(),
-                },
-                {
-                    # 模拟旧 full-template assembler：显式写回 formal 原值。
-                    'char_id': 'char_002',
-                    'name_distinctiveness': grounding.entities.characters[
-                        'char_002'].name_distinctiveness,
-                },
-            ],
-            'collection_edits': [{
-                # 旧 wire 还会把 template scaffold 的空 operations 当提交行。
-                'collection': 'relations',
-                'expected_collection_sha256': extract.subject_sha256(
-                    grounding.model_dump(mode='json', by_alias=True)[
-                        'entities']['relations']),
-                'operations': [],
-            }],
-            'post_edit_review': attestation,
-        })
-        formal_before = (book / extract.GLOBAL_REL).read_bytes()
-        with pytest.raises(GateBlocked, match='role_repeats_name'):
-            extract.run_apply_edit(_ctx(book, 'stage2.global', paid=False))
-        assert (book / extract.GLOBAL_REL).read_bytes() == formal_before
-        assert (book / extract._GLOBAL_INVALID).is_file()
-        workpack = extract.global_edit_correction_workpack(
-            _ctx(book, 'stage2.global', paid=False))
-        assert workpack['commander_budget_max'] == 3
-        assert workpack['incremental_correction'] is True
-        assert workpack['recovery_fact_kind'] == 'registered_sidecar'
-        assert workpack['failure_kind'] == 'hard_gate'
-        assert isinstance(workpack['failure_sha256'], str)
-        assert workpack['hard_hits'] == ['role_repeats_name']
-        assert workpack['hard_outcomes'][0]['findings'][0]['evidence'] == [
-            "char_001:'李宝珠'"]
-        failed_edit = decode_artifact(
-            extract.GLOBAL_EDIT, workpack['failed_edit']).payload
-        assert failed_edit['characters'][0]['role'] == '李宝珠'
-        assert workpack['global_review_workpack']['binding'][
-            'expected_source_sha256'] == review.source_sha256
-        ov = orchestrator_state.overview(root, '002e')
-        assert orchestrator_state.stage2_reviewed_edit_correction_needed(
-            root, '002e', ov)
+    invalid = store.path(extract._GLOBAL_INVALID)
+    invalid_bytes = invalid.read_bytes()
+    human = json.loads(invalid_bytes)
+    human['canon']['secrets'][0]['fact'] = '人工补充但尚未复核的事实'
+    invalid.write_text(json.dumps(human, ensure_ascii=False), encoding='utf-8')
+    assert not orchestrator_state.stage2_reviewed_edit_correction_needed(
+        root, '0025', orchestrator_state.overview(root, '0025'))
+    next_action = operator.next_action(root, '0025')
+    assert next_action.action is not None
+    assert next_action.action.waiting_on == queue.WAITING_ON_STAGE2_EDIT_TERMINAL
+    invalid.write_bytes(invalid_bytes)
 
-        # reviewed INVALID 若已被人直接修改，不能让 Commander 的 formal sparse
-        # correction 覆盖这份人工候选；planner 应改暴露 manual successor。
-        invalid_path = book / extract._GLOBAL_INVALID
-        invalid_before = invalid_path.read_bytes()
-        human = json.loads(invalid_before)
-        human['entities']['characters']['char_001']['role'] = '人工候选身份'
-        invalid_path.write_text(
-            json.dumps(human, ensure_ascii=False, indent=2) + '\n',
-            encoding='utf-8', newline='\n')
-        human_ov = orchestrator_state.overview(root, '002e')
-        assert not orchestrator_state.stage2_reviewed_edit_correction_needed(
-            root, '002e', human_ov)
-        human_next = operator.next_action(root, book.name)
-        assert human_next.action is not None
-        assert human_next.action.waiting_on == queue.WAITING_ON_STAGE2_EDIT_TERMINAL
-        invalid_path.write_bytes(invalid_before)
+    failure = store.path(extract.GLOBAL_EDIT_FAILURE)
+    failure_bytes = failure.read_bytes()
+    failure.unlink()
+    snapshot = {p: p.read_bytes() for p in book.rglob('*') if p.is_file()}
+    with pytest.raises(TerminalState, match='缺 typed 失败回执'):
+        extract.global_edit_correction_workpack(_ctx(book, 'stage2.global', paid=False))
+    assert {p: p.read_bytes() for p in book.rglob('*') if p.is_file()} == snapshot
+    with pytest.raises(ArtifactUnreadable, match='缺 typed 失败回执'):
+        orchestrator_state.stage2_reviewed_edit_correction_needed(
+            root, '0025', orchestrator_state.overview(root, '0025'))
+    with pytest.raises(ArtifactUnreadable, match='结果未知'):
+        operator.next_action(root, '0025')
+    assert {p: p.read_bytes() for p in book.rglob('*') if p.is_file()} == snapshot
+    failure.write_bytes(failure_bytes)
 
-        # sidecar 引入前已落稳的 exact edit + INVALID 仍能恢复；不能因为升级
-        # current schema 就把旧 Commander 动作解释成“没发生”。
-        (book / extract.GLOBAL_EDIT_FAILURE).unlink()
-        legacy_workpack = extract.global_edit_correction_workpack(
-            _ctx(book, 'stage2.global', paid=False))
-        assert legacy_workpack['recovery_fact_kind'] == 'legacy_invalid'
-        assert legacy_workpack['failure_sha256'] is None
-        assert legacy_workpack['hard_hits'] == ['role_repeats_name']
-        legacy_failed = decode_artifact(
-            extract.GLOBAL_EDIT, legacy_workpack['failed_edit']).payload
-        assert [row['char_id'] for row in legacy_failed['characters']] == [
-            'char_001']
-        assert 'collection_edits' not in legacy_failed
-        assert legacy_workpack['failed_edit_sha256'] == (
-            ArtifactStore(ctx).full_sha256_or_none(extract.GLOBAL_EDIT))
-        legacy_overview = orchestrator_state.overview(root, '002e')
-        assert orchestrator_state.stage2_reviewed_edit_correction_needed(
-            root, '002e', legacy_overview)
-
-        _write_edit(book, {
-            'characters': [{
-                'char_id': 'char_001',
-                'role': '沈家账房，负责核对往来账目',
-                'role_evidence': _role_locator(),
-            }],
-            'post_edit_review': attestation,
-        })
-        artifact, report = extract.run_apply_edit(
-            _ctx(book, 'stage2.global', paid=False))
-
-        assert report.passed
-        assert artifact.entities.characters['char_001'].role == (
-            '沈家账房，负责核对往来账目')
-        assert not (book / extract._GLOBAL_INVALID).exists()
-        closed_overview = orchestrator_state.overview(root, '002e')
-        assert not orchestrator_state.stage2_reviewed_edit_correction_needed(
-            root, '002e', closed_overview)
-        closed = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
-        corrected = next(
-            item for item in closed.items
-            if item.kind == 'role'
-            and item.subject_path == 'entities.characters.char_001.role')
-        assert corrected.state == 'PASS'
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
+    _write_edit(book, {
+        'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 3}],
+        'post_edit_review': attestation,
+    })
+    artifact, report = _apply(book)
+    assert report.passed and artifact.canon.secrets[0].first_reveal_chapter == 3
+    assert artifact.canon.secrets[0].setup.chapters == [1], '必须从原 formal 纠错，不能继承失败稿的裁剪'
+    assert not invalid.exists()
+    assert not failure.exists()
+    closed = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
+    assert next(row for row in closed.items if row.kind == 'reveal').state == 'PASS'
+    assert ctx.ledger.path.read_bytes() == ledger
 
 
 def test_post_review_failure_builds_correction_and_only_new_decision_can_land(
@@ -371,7 +305,7 @@ def test_post_review_failure_builds_correction_and_only_new_decision_can_land(
         _seed(book)
         ctx = _ctx(book, 'stage2.global', paid=False)
         store = ArtifactStore(ctx)
-        grounding = store.read(GlobalGrounding, extract.GLOBAL_REL)
+        grounding = grounding_io.read(store)
         review = approved_global_review(grounding)
         target = next(
             item for item in review.items
@@ -527,11 +461,7 @@ def test_ordinary_hard_human_revalidate_prepared_replays_exact_audit_identity(
     ctx = _ctx(book, 'stage2.global', paid=False)
     store = ArtifactStore(ctx)
     _write_edit(book, {
-        'characters': [{
-            'char_id': 'char_001',
-            'role': '李宝珠',
-            'role_evidence': _role_locator(),
-        }],
+        'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 1}],
     })
     original_retire = extract._retire_nonreviewed_global_edit_input_commit
     monkeypatch.setattr(
@@ -559,13 +489,13 @@ def test_ordinary_hard_human_revalidate_prepared_replays_exact_audit_identity(
 
     invalid_path = book / extract._GLOBAL_INVALID
     raw = json.loads(invalid_path.read_text(encoding='utf-8'))
-    raw['entities']['characters']['char_001']['role'] = '沈家账房，负责核对往来账目'
+    raw['canon']['secrets'][0]['first_reveal_chapter'] = 3
     invalid_path.write_text(
         json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
         encoding='utf-8', newline='\n')
     assert store.revalidation_audit(
-        extract.GLOBAL_REL, GlobalGrounding,
-        actor='human:reviewer', reason='修正人物身份').edited_by_human
+        extract.GLOBAL_REL, KnowledgeGrounding,
+        actor='human:reviewer', reason='修正秘密揭示章').edited_by_human
     assert orchestrator_state.stage2_global_edit_terminal_failure_needed(
         root, '326', code=ctx.code)
 
@@ -576,7 +506,7 @@ def test_ordinary_hard_human_revalidate_prepared_replays_exact_audit_identity(
             KeyboardInterrupt('模拟 revalidate prepared 后硬杀')))
     with pytest.raises(KeyboardInterrupt, match='prepared 后'):
         extract.run_revalidate(
-            ctx, actor='human:reviewer', reason='修正人物身份')
+            ctx, actor='human:reviewer', reason='修正秘密揭示章')
 
     journal = store.read_own(
         GlobalEditCommit, extract.GLOBAL_EDIT_COMMIT)[0]
@@ -592,7 +522,7 @@ def test_ordinary_hard_human_revalidate_prepared_replays_exact_audit_identity(
     assert current.action.waiting_on == queue.WAITING_ON_STAGE2_EDIT_REVALIDATE
     assert current.action.flags == [
         '--revalidate', '--actor', 'human:reviewer',
-        '--reason', '修正人物身份',
+        '--reason', '修正秘密揭示章',
     ]
     permit = execution_permit.permit_from_next(
         current, 'stage2.global', current.action.flags)
@@ -607,7 +537,7 @@ def test_ordinary_hard_human_revalidate_prepared_replays_exact_audit_identity(
     monkeypatch.setattr(
         extract, '_reconcile_reviewed_edit_commit', original)
     promoted, report = extract.run_revalidate(
-        ctx, actor='human:reviewer', reason='修正人物身份')
+        ctx, actor='human:reviewer', reason='修正秘密揭示章')
     assert promoted and report.passed
     assert not invalid_path.exists()
     assert not (book / extract.GLOBAL_EDIT_FAILURE).exists()
@@ -618,7 +548,7 @@ def test_ordinary_hard_human_revalidate_prepared_replays_exact_audit_identity(
         'human:reviewer')
 
 
-@pytest.mark.parametrize('completed_companions', [0, 1, 2, 3])
+@pytest.mark.parametrize('completed_companions', [0, 1, 2])
 def test_generic_global_revalidate_prepared_recovers_every_hard_kill_write_point(
         completed_companions, monkeypatch, tmp_path):
     """无 GlobalEdit/formal 身份的首次 Global INVALID 也由同一 WAL 补尾。"""
@@ -628,16 +558,14 @@ def test_generic_global_revalidate_prepared_recovers_every_hard_kill_write_point
     store = ArtifactStore(ctx)
     store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
     response = _response_global()
-    original_name = response['entities']['characters']['char_002']['canonical']
-    response['entities']['characters']['char_002']['canonical'] = (
-        response['entities']['characters']['char_001']['canonical'])
+    response['canon']['secrets'][0]['first_reveal_chapter'] = 99
     client, _transport = _client(ctx, lambda _req, _index: _ok(response))
-    with pytest.raises(GateBlocked, match='canonical_unique'):
+    with pytest.raises(GateBlocked, match='canon_chapter_refs_dangling'):
         extract.run_global(ctx, client)
 
     invalid_path = book / extract._GLOBAL_INVALID
     raw = json.loads(invalid_path.read_text(encoding='utf-8'))
-    raw['entities']['characters']['char_002']['canonical'] = original_name
+    raw['canon']['secrets'][0]['first_reveal_chapter'] = 3
     invalid_path.write_text(
         json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
         encoding='utf-8', newline='\n')
@@ -653,7 +581,7 @@ def test_generic_global_revalidate_prepared_recovers_every_hard_kill_write_point
     with pytest.raises(KeyboardInterrupt, match='prepared 后'):
         extract.run_revalidate(
             _ctx(book, 'stage2.global', paid=False),
-            actor='human:reviewer', reason='修正首次抽取的重复姓名')
+            actor='human:reviewer', reason='修正首次知识抽取的越界章号')
 
     journal = store.read_own(
         GlobalEditCommit, extract.GLOBAL_EDIT_COMMIT)[0]
@@ -668,9 +596,8 @@ def test_generic_global_revalidate_prepared_recovers_every_hard_kill_write_point
     monkeypatch.setattr(
         extract, '_reconcile_reviewed_edit_commit', original_reconcile)
     targets = [
-        (extract.GLOBAL_REL, journal.target.global_grounding),
+        (extract.GLOBAL_REL, grounding_io.for_write(store, journal.target.global_grounding)),
         (extract.GLOBAL_REVIEW_REL, journal.target.global_review),
-        (BLUEPRINT_EDGE, journal.target.blueprint_character_projection),
     ]
     for rel, payload in targets[:completed_companions]:
         store.write_round(rel, payload)
@@ -680,7 +607,7 @@ def test_generic_global_revalidate_prepared_recovers_every_hard_kill_write_point
     assert current.action.waiting_on == queue.WAITING_ON_STAGE2_EDIT_REVALIDATE
     assert current.action.flags == [
         '--revalidate', '--actor', 'human:reviewer',
-        '--reason', '修正首次抽取的重复姓名',
+        '--reason', '修正首次知识抽取的越界章号',
     ]
     permit = execution_permit.permit_from_next(
         current, 'stage2.global', current.action.flags)
@@ -688,7 +615,7 @@ def test_generic_global_revalidate_prepared_recovers_every_hard_kill_write_point
 
     promoted, report = extract.run_revalidate(
         _ctx(book, 'stage2.global', paid=False),
-        actor='human:reviewer', reason='修正首次抽取的重复姓名')
+        actor='human:reviewer', reason='修正首次知识抽取的越界章号')
     assert promoted and report.passed
     assert not invalid_path.exists()
     assert not (book / extract.GLOBAL_EDIT_FAILURE).exists()
@@ -756,21 +683,14 @@ def test_new_ordinary_edit_explicitly_supersedes_old_terminal_failure(tmp_path):
     _seed(book)
     ctx = _ctx(book, 'stage2.global', paid=False)
     _write_edit(book, {
-        'characters': [{
-            'char_id': 'char_001', 'role': '李宝珠',
-            'role_evidence': _role_locator(),
-        }],
+        'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 1}],
     })
     with pytest.raises(GateBlocked):
         _apply(book)
     assert (book / extract.GLOBAL_EDIT_FAILURE).is_file()
 
     replacement = GlobalEdit.model_validate({
-        'characters': [{
-            'char_id': 'char_001',
-            'role': '沈家账房，负责核对往来账目',
-            'role_evidence': _role_locator(),
-        }],
+        'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 3}],
     })
     service_path = uploads.save_global_edit(root, '328', replacement)
     terminal = operator.next_action(root, '328')
@@ -781,7 +701,7 @@ def test_new_ordinary_edit_explicitly_supersedes_old_terminal_failure(tmp_path):
 
     landed, report = extract.run_apply_edit(ctx, str(service_path))
     assert report.passed
-    assert landed.entities.characters['char_001'].role.startswith('沈家账房')
+    assert landed.canon.secrets[0].first_reveal_chapter == 3
     assert not (book / extract.GLOBAL_EDIT_FAILURE).exists()
     assert not orchestrator_state.stage2_global_edit_terminal_failure_needed(
         root, '328', code=ctx.code)
@@ -896,22 +816,22 @@ def test_new_wal_is_not_swallowed_by_previous_committed_formal_journal(
         shutil.rmtree(root)
 
 
-@pytest.mark.parametrize('completed_companions', [0, 1, 2, 3])
+@pytest.mark.parametrize('completed_companions', [0, 1, 2])
 def test_reviewed_prepared_bundle_recovers_every_hard_kill_write_point(
         completed_companions, monkeypatch, tmp_path):
-    """prepared 后 0/1/2/3 个正式 companion 已写都走同一 operator 恢复。"""
+    """prepared 后 0/1/2 个正式 companion 已写都走同一 operator 恢复。"""
     sid = f'325{completed_companions}'
     root, book = _tmp_book(tmp_path, f'reviewed提交断点_{sid}')
     try:
         _seed(book)
         ctx = _ctx(book, 'stage2.global', paid=False)
         store = ArtifactStore(ctx)
-        grounding = store.read(GlobalGrounding, extract.GLOBAL_REL)
+        grounding = grounding_io.read(store)
         review = approved_global_review(grounding)
         target_item = next(
             item for item in review.items
-            if item.kind == 'role'
-            and item.subject_path == 'entities.characters.char_001.role')
+            if item.kind == 'reveal'
+            and item.subject_path == 'canon.secrets.secret_01.first_reveal_chapter')
         review = decide(
             review,
             item_id=target_item.item_id,
@@ -923,11 +843,7 @@ def test_reviewed_prepared_bundle_recovers_every_hard_kill_write_point(
         workpack = global_review_ops.review_workpack(
             ctx, scope='blocking', replaced_input_keys=(extract.GLOBAL_EDIT,))
         _write_edit(book, {
-            'characters': [{
-                'char_id': 'char_001',
-                'role': '沈家账房，负责核对往来账目',
-                'role_evidence': _role_locator(),
-            }],
+            'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 3}],
             'post_edit_review': {
                 'actor': 'agent:novel-pipeline-operator',
                 'expected_source_sha256': review.source_sha256,
@@ -959,9 +875,8 @@ def test_reviewed_prepared_bundle_recovers_every_hard_kill_write_point(
             extract, '_reconcile_reviewed_edit_commit', original)
         replay_store = ArtifactStore(_ctx(book, 'stage2.global', paid=False))
         targets = [
-            (extract.GLOBAL_REL, journal.target.global_grounding),
+            (extract.GLOBAL_REL, grounding_io.for_write(replay_store, journal.target.global_grounding)),
             (extract.GLOBAL_REVIEW_REL, journal.target.global_review),
-            (BLUEPRINT_EDGE, journal.target.blueprint_character_projection),
         ]
         for rel, payload in targets[:completed_companions]:
             replay_store.write_round(rel, payload)
@@ -971,7 +886,7 @@ def test_reviewed_prepared_bundle_recovers_every_hard_kill_write_point(
         assert extract.submitted_global_patch_is_current(str(root), sid, submitted)
         assert {path: path.read_bytes() for path in book.rglob('*') if path.is_file()} == snapshot
         other_request = copy.deepcopy(submitted)
-        other_request['characters'][0]['role'] = '另一份尚未提交的职业修订'
+        other_request['secrets'][0]['first_reveal_chapter'] = 1
         assert not extract.submitted_global_patch_is_current(str(root), sid, other_request)
         formal_path = book / extract.GLOBAL_REL
         formal_bytes = formal_path.read_bytes()
@@ -990,7 +905,7 @@ def test_reviewed_prepared_bundle_recovers_every_hard_kill_write_point(
 
         landed, report = _apply(book)
         assert report.passed
-        assert landed.entities.characters['char_001'].role.startswith('沈家账房')
+        assert landed.canon.secrets[0].first_reveal_chapter == 3
         assert not (book / extract.GLOBAL_EDIT_INPUT_COMMIT).exists()
         assert not (book / extract.GLOBAL_EDIT_FAILURE).exists()
         committed = ArtifactStore(ctx).read_own(
@@ -1040,8 +955,7 @@ def test_a_wrong_reveal_chapter_is_corrected_and_the_downstream_turns_stale():
         # ① 改真的落进产物
         secret = artifact.canon.secrets[0]
         assert secret.first_reveal_chapter == 3
-        reloaded = ArtifactStore(_ctx(book, 'stage2.global', paid=False)).read(
-            GlobalGrounding, extract.GLOBAL_REL)
+        reloaded = grounding_io.read(ArtifactStore(_ctx(book, 'stage2.global', paid=False)))
         assert reloaded.canon.secrets[0].first_reveal_chapter == 3
 
         # ② 重走归一：埋点章 1 < 新揭示章 3 ⇒ 不该被裁掉
@@ -1098,10 +1012,13 @@ def test_correcting_the_reveal_chapter_backwards_reprunes_and_then_hits_the_same
         assert invalid['canon']['secrets'][0]['setup'] == {'kind': 'cold'}
         assert invalid['_provenance']['setup_chapters_pruned'] == [['secret_01', [1], []]]
 
+        passed, report = extract.run_revalidate(
+            _ctx(book, 'stage2.global', paid=False), actor='test:human', reason='仅复验不确认裁剪')
+        assert not passed and not report.passed
+        assert (book / extract.GLOBAL_REL).read_bytes() == before
         report = extract.run_renormalize(_ctx(book, 'stage2.global', paid=False))
         assert report.passed
-        stored = ArtifactStore(_ctx(book, 'stage2.global', paid=False)).read(
-            GlobalGrounding, extract.GLOBAL_REL)
+        stored = grounding_io.read(ArtifactStore(_ctx(book, 'stage2.global', paid=False)))
         assert stored.canon.secrets[0].first_reveal_chapter == 1
         assert stored.canon.secrets[0].setup.kind == 'cold'
         assert stored.provenance.setup_chapters_pruned == []
@@ -1137,11 +1054,7 @@ def test_fact_and_typed_knowledge_timeline_land_together():
 
 
 def test_a_reviewed_role_can_be_corrected_without_an_llm_and_reopens_only_its_review():
-    """批 1 的 role 复核必须接得上批 2 的 typed 写回面。
-
-    人先对旧 role 作出 PASS 决策，再用 ``GlobalEdit.characters[].role`` 修正它；
-    写回要走正式落盘口，而旧 subject hash 上的决定不得跟到新事实上。
-    """
+    """独立人物订正后，免费重绑知识；旧决定只继承给未变主体。"""
     root, book = _sandbox('人物身份订正_003a')
     try:
         _seed(book)
@@ -1177,18 +1090,14 @@ def test_a_reviewed_role_can_be_corrected_without_an_llm_and_reopens_only_its_re
         store.write(extract.GLOBAL_REVIEW_REL, review)
 
         corrected = '沈家账房，负责核对往来账目'
-        _write_edit(book, {'characters': [{
-            'char_id': 'char_001',
-            'role': corrected,
-            'role_evidence': _role_locator(),
-        }]})
-        artifact, report = _apply(book)
-
+        ledger = ctx.ledger.path.read_bytes()
+        _edit_static_character(book, 'char_001', role=corrected, role_evidence=_role_locator())
+        assert store.freshness(extract.GLOBAL_REL).state == 'stale'
+        report = extract.run_renormalize(_ctx(book, 'stage2.global', paid=False))
         assert report.node == 'stage2.global' and report.passed
-        assert artifact.entities.characters['char_001'].role == corrected
-        reloaded = ArtifactStore(ctx).read(GlobalGrounding, extract.GLOBAL_REL)
+        reloaded = grounding_io.read(ArtifactStore(ctx))
         assert reloaded.entities.characters['char_001'].role == corrected
-        assert reloaded.provenance.partial_rewrite == '--apply-edit'
+        assert ctx.ledger.path.read_bytes() == ledger
 
         rebuilt = ArtifactStore(ctx).read(GlobalReview, extract.GLOBAL_REVIEW_REL)
         new_item = next(
@@ -1208,79 +1117,59 @@ def test_a_reviewed_role_can_be_corrected_without_an_llm_and_reopens_only_its_re
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_a_leaky_role_invalid_is_repaired_by_the_typed_zero_llm_path():
-    """role/evidence HARD 先留可读问题稿，再从 `.INVALID` 走 typed 恢复。
-
-    第一次人工稿既含结局词，locator 也零命中；归一必须把证据收成 `source=null`，
-    仍能通过 GlobalGrounding 载体落 `.INVALID`。第二次同交 role + 正确 locator，
-    从 live INVALID 继续修，0 LLM 回取正式 SourceSpan；旧正式稿与问题稿都归档。
-    """
-    root, book = _sandbox('身份泄漏恢复_003aa')
-    try:
-        _seed(book)
-        formal_path = book / extract.GLOBAL_REL
-        invalid_path = book / extract._GLOBAL_INVALID
-        formal_before = formal_path.read_bytes()
-
-        _write_edit(book, {'characters': [{
-            'char_id': 'char_001',
-            'role': '沈家账房，最终下狱',
-            'role_evidence': _locator(3, '不存在的身份原文'),
-        }]})
-        blocked_ctx = _ctx(book, 'stage2.global', paid=False)
-        with pytest.raises(GateBlocked, match='role_leaks_fate') as blocked:
-            extract.run_apply_edit(blocked_ctx)
-        assert 'global_evidence_unlocated' in str(blocked.value)
-
-        assert blocked_ctx.ledger.usage() is None, '0 LLM 人工路不该产生调用账'
-        assert formal_path.read_bytes() == formal_before, '问题稿覆盖了正式底座'
-        invalid_before = invalid_path.read_bytes()
-        invalid = json.loads(invalid_before)
-        assert invalid['entities']['characters']['char_001']['role'].endswith('最终下狱')
-        evidence = invalid['entities']['characters']['char_001']['role_evidence']
-        assert evidence['source'] is None
-        failures = invalid['_provenance']['evidence_locator_failures']
-        assert failures and failures[0][0] == 'entities.characters.char_001.role'
-        decoded = decode_artifact(extract._GLOBAL_INVALID, invalid)
-        assert GlobalGrounding.model_validate(decoded.payload), \
-            'source=null 必须仍是可读的失败态'
-
-        corrected = '沈家账房，负责核对往来账目'
-        _write_edit(book, {'characters': [{
-            'char_id': 'char_001',
-            'role': corrected,
-            'role_evidence': _role_locator(),
-        }]})
-
-        # 只豁免「正被替换的决策集」那条 stale 边；正文变化仍须关闭式拒绝。
-        main_path = book / extract.MAIN_TEXT
-        main_before = main_path.read_bytes()
-        changed_main = json.loads(main_before)
-        changed_main['payload'][0]['text'] += '正文发生变化。'
-        main_path.write_text(
-            json.dumps(changed_main, ensure_ascii=False, indent=2), encoding='utf-8')
-        with pytest.raises(UpstreamStale, match='stage1/main_text.json'):
-            extract.run_apply_edit(_ctx(book, 'stage2.global', paid=False))
-        assert invalid_path.read_bytes() == invalid_before
-        assert formal_path.read_bytes() == formal_before
-        main_path.write_bytes(main_before)
-
-        repair_ctx = _ctx(book, 'stage2.global', paid=False)
-        artifact, report = extract.run_apply_edit(repair_ctx)
-
-        assert repair_ctx.ledger.usage() is None, '恢复路不该调用模型或命中模型缓存'
-        assert report.passed
-        assert artifact.entities.characters['char_001'].role == corrected
-        assert artifact.entities.characters['char_001'].role_evidence.source is not None
-        assert artifact.provenance.evidence_locator_failures == []
-        assert not invalid_path.exists(), '通过后的 live INVALID 没有退役'
-        rounds = book / 'stage2' / '_rounds'
-        assert any(path.read_bytes() == invalid_before for path in rounds.glob(
-            'global_grounding.INVALID.r*.json')), '原问题稿没有进入轮次归档'
-        assert any(path.read_bytes() == formal_before for path in rounds.glob(
-            'global_grounding.r*.json')), '原正式底座没有进入轮次归档'
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
+def test_a_leaky_role_invalid_is_repaired_by_the_typed_zero_llm_path(tmp_path):
+    """人物 owner 留可读 INVALID；正确证据修复后归档原正式稿与失败稿。"""
+    from contracts.schema.characters import CharacterRegistry, CharactersEdit
+    from novel.stages.stage2 import characters
+    root, book = _tmp_book(tmp_path, '身份泄漏恢复_003aa')
+    _seed(book)
+    ctx = _ctx(book, 'stage2.characters', paid=False)
+    store = ArtifactStore(ctx)
+    formal = store.path(characters.REL)
+    invalid = store.path(characters.INVALID)
+    before = formal.read_bytes()
+    knowledge = store.path(extract.GLOBAL_REL).read_bytes()
+    ledger = ctx.ledger.path.read_bytes()
+    template = characters.edit_template(ctx)
+    row = next(op for op in template['operations'] if op['char_id'] == 'char_001')
+    row['character'].update(
+        role='沈家账房，最终下狱', role_evidence=_locator(3, '不存在的身份原文'))
+    with pytest.raises(GateBlocked, match='role_leaks_fate'):
+        characters.apply_edit(
+            ctx, CharactersEdit.model_validate({**template, 'operations': [row]}),
+            actor='test:human', reason='核对静态身份与证据')
+    assert formal.read_bytes() == before
+    invalid_bytes = invalid.read_bytes()
+    failed = store.read_own(CharacterRegistry, characters.INVALID)[0]
+    assert failed.characters['char_001'].role_evidence.source is None
+    assert failed.provenance.evidence_locator_failures
+    repair = characters.edit_template(_ctx(book, 'stage2.characters', paid=False))
+    fixed = next(op for op in repair['operations'] if op['char_id'] == 'char_001')
+    fixed['character'].update(
+        role='沈家账房，负责核对往来账目', role_evidence=_role_locator())
+    edit = CharactersEdit.model_validate({**repair, 'operations': [fixed]})
+    main = store.path(extract.MAIN_TEXT)
+    main_bytes = main.read_bytes()
+    changed_main = json.loads(main_bytes)
+    changed_main['payload'][0]['text'] += '正文发生变化。'
+    main.write_text(json.dumps(changed_main, ensure_ascii=False), encoding='utf-8')
+    with pytest.raises((UpstreamStale, ProvenanceRefused)):
+        characters.apply_edit(
+            _ctx(book, 'stage2.characters', paid=False), edit,
+            actor='test:human', reason='核对静态身份与证据')
+    assert invalid.read_bytes() == invalid_bytes and formal.read_bytes() == before
+    main.write_bytes(main_bytes)
+    corrected = characters.apply_edit(
+        _ctx(book, 'stage2.characters', paid=False), edit,
+        actor='test:human', reason='核对静态身份与证据')
+    assert corrected.characters['char_001'].role_evidence.source is not None
+    assert not corrected.provenance.evidence_locator_failures
+    assert not invalid.exists()
+    rounds = book / 'stage2/_rounds'
+    assert any(p.read_bytes() == invalid_bytes for p in rounds.glob('characters.INVALID.r*.json'))
+    assert any(p.read_bytes() == before for p in rounds.glob('characters.r*.json'))
+    assert store.path(extract.GLOBAL_REL).read_bytes() == knowledge
+    assert ctx.ledger.path.read_bytes() == ledger
 
 
 def test_typed_edit_uses_cross_chapter_unique_recovery_and_hash_only_audit():
@@ -1288,21 +1177,20 @@ def test_typed_edit_uses_cross_chapter_unique_recovery_and_hash_only_audit():
     try:
         _seed(book)
         locator = '李宝珠把账册摊在桌上一页页翻。'
-        _write_edit(book, {'characters': [{
-            'char_id': 'char_001',
-            'role': '沈家账房，负责核对往来账目',
-            'role_evidence': _locator(1, locator),
+        _write_edit(book, {'secrets': [{
+            'secret_id': 'secret_01', 'fact': '账册已被摊开逐页核对',
+            'fact_evidence': _locator(1, locator),
         }]})
         ctx = _ctx(book, 'stage2.global', paid=False)
 
         artifact, report = extract.run_apply_edit(ctx)
 
         assert report.passed
-        evidence = artifact.entities.characters['char_001'].role_evidence
+        evidence = artifact.canon.secrets[0].fact_evidence
         assert evidence.chapter_ordinal == 3 and evidence.source is not None
         event, = [row for row in ctx.ledger.audit_events
                   if row['kind'] == 'evidence_locator_rewrite']
-        assert event['claim_path'] == 'entities.characters.char_001.role'
+        assert event['claim_path'] == 'canon.secrets.secret_01.fact'
         assert (event['original_chapter_ordinal'],
                 event['resolved_chapter_ordinal']) == (1, 3)
         assert event['artifact'] == extract.GLOBAL_REL
@@ -1314,15 +1202,7 @@ def test_typed_edit_uses_cross_chapter_unique_recovery_and_hash_only_audit():
 
 
 def test_complete_typed_surfaces_reach_disk_and_rebuild_the_human_review():
-    """A compound secret can be split without bypassing the real consumer.
-
-    ``Stage4`` exposes a secret's whole fact after the earliest reveal event;
-    adding a second event to one compound fact therefore cannot express two
-    independently revealed facts.  The complete-set edit splits that row,
-    also replaces an omitted world-rule set and a character's complete address
-    surface, then ``run_apply_edit`` rebuilds ``global_review`` from the landed
-    artifact.  Old decisions bind to the old hashes and must not follow it.
-    """
+    """拆分复合秘密并完整替换规则，经真实知识写口重新生成审阅义务。"""
     root, book = _sandbox('集合订正_003b')
     try:
         _seed(book)
@@ -1371,16 +1251,6 @@ def test_complete_typed_surfaces_reach_disk_and_rebuild_the_human_review():
                     'desc_evidence': _locator(1, '远处传来更夫的梆子声。'),
                 }],
             }],
-            'addresses_replace': [{
-                'char_id': 'char_002',
-                'address': [{
-                    'surface': '母亲', 'by': 'public', 'context': 'address',
-                    'from_chapter': 2,
-                }, {
-                    'surface': '母亲', 'by': 'char_001', 'context': 'reference',
-                    'from_chapter': 2,
-                }],
-            }],
         })
         artifact, report = _apply(book)
 
@@ -1388,12 +1258,6 @@ def test_complete_typed_surfaces_reach_disk_and_rebuild_the_human_review():
         assert [row.secret_id for row in artifact.canon.secrets] == [
             'secret_01', 'secret_02']
         assert [row.rule_id for row in artifact.canon.world_rules] == ['wr_02']
-        assert [(row.surface, row.by, row.context, row.from_chapter)
-                for row in artifact.entities.characters['char_002'].address] == [
-            ('母亲', 'public', 'address', 2),
-            ('母亲', 'char_001', 'reference', 2),
-        ]
-
         rebuilt = ArtifactStore(_ctx(book, 'stage2.global', paid=False)).read(
             GlobalReview, extract.GLOBAL_REVIEW_REL)
         secret_rows = [
@@ -1404,129 +1268,6 @@ def test_complete_typed_surfaces_reach_disk_and_rebuild_the_human_review():
         assert old_item_ids.isdisjoint({item.item_id for item in secret_rows})
         assert {item.subject_path for item in secret_rows if item.kind == 'secret'} == {
             'canon.secrets.secret_01.fact', 'canon.secrets.secret_02.fact'}
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-def test_conflict_partition_replace_uses_the_full_apply_edit_commit_path():
-    """整组重画必须刷新审阅 hash、归档旧轮并保留人工来源账，不能旁写 Global。"""
-    root, book = _sandbox('冲突阶段重画_003c')
-    try:
-        _seed(book)
-        ctx = _ctx(book, 'stage2.global', paid=False)
-        store = ArtifactStore(ctx)
-        old_review = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
-        old_item = next(
-            item for item in old_review.items
-            if item.kind == 'conflict_partition')
-        old_review = decide(
-            old_review,
-            item_id=old_item.item_id,
-            expected_subject_sha256=old_item.subject_sha256,
-            state='PASS',
-            actor='test-reviewer',
-            reason='synthetic old partition reviewed before replacement',
-            now='2026-08-29T00:00:00+00:00',
-        )
-        store.write(extract.GLOBAL_REVIEW_REL, old_review)
-        formal_before = (book / extract.GLOBAL_REL).read_bytes()
-
-        _write_edit(book, {'conflict_stages_replace': [
-            {'stage': '疑点累积', 'chapters': [1]},
-            {'stage': '关系对质', 'chapters': [2, 3]},
-        ]})
-        artifact, report = _apply(book)
-
-        assert report.passed
-        assert [row.stage for row in artifact.arc.conflict_stages] == [
-            '疑点累积', '关系对质']
-        assert artifact.provenance.partial_rewrite == '--apply-edit'
-        assert extract.GLOBAL_EDIT in artifact.provenance.inputs
-        reloaded = store.read(GlobalGrounding, extract.GLOBAL_REL)
-        assert reloaded.arc.conflict_stages == artifact.arc.conflict_stages
-
-        new_review = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
-        new_item = next(
-            item for item in new_review.items
-            if item.kind == 'conflict_partition')
-        assert new_item.subject_sha256 != old_item.subject_sha256
-        assert new_item.state == 'pending'
-        assert new_item.actor is None and new_item.reason is None
-        assert (book / 'stage2' / '_rounds' /
-                'global_grounding.r1.json').read_bytes() == formal_before
-        assert (book / 'stage2' / '_rounds' / 'global_review.r1.json').exists()
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-@pytest.mark.parametrize('replacement,detail', [
-    ([{'stage': '缺章', 'chapters': [1, 3]}], '缺章'),
-    ([{'stage': '重复甲', 'chapters': [1, 2]},
-      {'stage': '重复乙', 'chapters': [2, 3]}], '重复'),
-    ([{'stage': '越界', 'chapters': [1, 2, 3, 4]}], '越界'),
-])
-def test_bad_conflict_partition_replacement_changes_no_artifact_bytes(
-    replacement, detail,
-):
-    """坏人工分段在内存副本关闭；正式底座不动，也不产生误导性的 INVALID。"""
-    root, book = _sandbox(f'冲突阶段{detail}_003d')
-    try:
-        _seed(book)
-        formal_before = (book / extract.GLOBAL_REL).read_bytes()
-        review_before = (book / extract.GLOBAL_REVIEW_REL).read_bytes()
-        _write_edit(book, {'conflict_stages_replace': replacement})
-        bytes_before = {
-            path.relative_to(book): path.read_bytes()
-            for path in book.rglob('*') if path.is_file()
-        }
-
-        with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
-            _apply(book)
-        assert 'candidate_application:1' in caught.value.safe_summary
-        assert detail not in caught.value.safe_summary
-
-        bytes_after = {
-            path.relative_to(book): path.read_bytes()
-            for path in book.rglob('*') if path.is_file()
-        }
-        assert bytes_after == bytes_before
-        assert (book / extract.GLOBAL_REL).read_bytes() == formal_before
-        assert (book / extract.GLOBAL_REVIEW_REL).read_bytes() == review_before
-        assert not (book / 'stage2' / 'global_grounding.INVALID.json').exists()
-        assert not (book / 'stage2' / '_rounds').exists()
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-def test_unrelated_edit_on_bad_conflict_invalid_still_reaches_the_shared_hard_gate():
-    """没有 replacement 时不把既有坏 INVALID 误报成“坏决策集”。"""
-    root, book = _sandbox('冲突阶段渐进修复_003e')
-    try:
-        _seed(book)
-        ctx = _ctx(book, 'stage2.global', paid=False)
-        store = ArtifactStore(ctx)
-        formal_before = (book / extract.GLOBAL_REL).read_bytes()
-        current = store.read(GlobalGrounding, extract.GLOBAL_REL)
-        raw = current.model_dump(by_alias=True)
-        raw['arc']['conflict_stages'] = [
-            {'stage': '既有问题分段', 'chapters': [1, 3]},
-        ]
-        store.write_invalid(
-            extract.GLOBAL_REL, GlobalGrounding.model_validate(raw),
-            gates_skipped=[])
-        _write_edit(book, {'characters': [{
-            'char_id': 'char_001', 'name_distinctiveness': 'medium',
-        }]})
-
-        with pytest.raises(GateBlocked, match='conflict_stage_coverage'):
-            _apply(book)
-
-        assert (book / extract.GLOBAL_REL).read_bytes() == formal_before
-        invalid = ArtifactStore(
-            _ctx(book, 'stage2.global', paid=False)).read(
-                GlobalGrounding, 'stage2/global_grounding.INVALID.json')
-        assert invalid.entities.characters['char_001'].name_distinctiveness == 'medium'
-        assert invalid.arc.conflict_stages[0].chapters == [1, 3]
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1546,7 +1287,7 @@ def test_the_human_round_inherits_the_paid_ledger_and_marks_the_partial_rewrite(
     try:
         _seed(book)
         store = ArtifactStore(_ctx(book, 'stage2.global', paid=False))
-        before = store.read(GlobalGrounding, extract.GLOBAL_REL).provenance
+        before = grounding_io.read(store).provenance
 
         _write_edit(book, {'secrets': [
             {'secret_id': 'secret_01', 'fact': '父亲早已回城，只是不肯认这笔账',
@@ -1855,8 +1596,11 @@ def test_stale_blueprints_are_displayable_but_not_consumable_after_base_edit():
                 'from_chapter': 2,
             }],
         }]
-        _write_edit(book, {'addresses_replace': initial_addresses})
-        _apply(book)
+        initial_registry = grounding_io.read(ArtifactStore(_ctx(book, 'stage2.global', paid=False)))
+        for row in initial_addresses:
+            if [a.model_dump(mode='json') for a in initial_registry.entities.characters[row['char_id']].address] != row['address']:
+                _edit_static_character(book, row['char_id'], address=row['address'])
+        extract.run_renormalize(_ctx(book, 'stage2.global', paid=False))
         from tests.test_stage2_generation import _accept_fixture_global
         _accept_fixture_global(_ctx(book, 'stage2.global', paid=False))
 
@@ -1870,8 +1614,9 @@ def test_stale_blueprints_are_displayable_but_not_consumable_after_base_edit():
 
         updated_addresses = copy.deepcopy(initial_addresses)
         updated_addresses[0]['address'][1]['from_chapter'] = 2
-        _write_edit(book, {'addresses_replace': updated_addresses})
-        artifact, _report = _apply(book)
+        _edit_static_character(book, 'char_001', address=updated_addresses[0]['address'])
+        extract.run_renormalize(_ctx(book, 'stage2.global', paid=False))
+        artifact = grounding_io.read(ArtifactStore(_ctx(book, 'stage2.global', paid=False)))
         shared = artifact.entities.characters['char_001'].address[1]
         assert (shared.surface, shared.from_chapter) == ('母亲', 2)
 
@@ -1893,13 +1638,12 @@ def test_the_patch_does_not_touch_anything_outside_the_named_secret():
     try:
         _seed(book)
         store = ArtifactStore(_ctx(book, 'stage2.global', paid=False))
-        _artifact_before, before = store.read_own(GlobalGrounding, extract.GLOBAL_REL)
+        _artifact_before, before = grounding_io.read_own(store, extract.GLOBAL_REL)
         _write_edit(book, {'secrets': [
             {'secret_id': 'secret_01', 'first_reveal_chapter': 3}]})
         _apply(book)
-        _artifact_after, after = ArtifactStore(
-            _ctx(book, 'stage2.global', paid=False)).read_own(
-                GlobalGrounding, extract.GLOBAL_REL)
+        _artifact_after, after = grounding_io.read_own(ArtifactStore(
+            _ctx(book, 'stage2.global', paid=False)), extract.GLOBAL_REL)
 
         expected = copy.deepcopy(before)
         # ⚠ 决策集里没写 `kind`，落盘那一格仍然要带上它（载体默认 `first`）：

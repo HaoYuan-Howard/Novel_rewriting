@@ -242,7 +242,7 @@ def test_strategy_then_chapters_precreate_and_overlap_with_private_sessions(
     factory = _Factory(plans, overlap=overlap)
     pool = Stage4DesignSessionPool(
         ctx, driver_factory=factory, concurrency=99)
-    assert pool.concurrency == STAGE4_DESIGN_MAX_CONCURRENCY == 4
+    assert pool.concurrency == STAGE4_DESIGN_MAX_CONCURRENCY == 8
 
     pool.prepare_initial_sessions((_unit_tuple(None),))
     assert _wire_and_checkpoint(ctx, pool, None).value == 10

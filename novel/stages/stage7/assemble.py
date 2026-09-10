@@ -151,59 +151,17 @@ def _require_mapping_current(
 
 
 def require_stage2_delivery_approved(ctx: RunContext) -> None:
-    """Stage7 组装/下载共用的 Stage2 总闸，含唯一 frozen-v6 例外。
-
-    默认先走 current-v7 的完整人工 + 联合 HARD 闸。只有它明确因为 canonical
-    Blueprint 的精确 v6→v7 shape break 拒读时，才继续证明历史 A 主体以及
-    EvidenceBinding/Plan/WriterContext 三份下游逐字闭合，并要求盘上本来就有、
-    由同一 exact content proof 自动复活的 s2 人工决定。该路径不迁移、不补关系、
-    不开放任何 producer；其他失败原样抛出。
-    """
+    """组装与下载共用当前 Stage2 总闸；旧根只配旧代码回滚。"""
     from novel.stages.stage2 import global_review
-
-    try:
-        global_review.require_approved(ctx)
-        return
-    except ArtifactUnreadable as exc:
-        from novel.stages.stage2.frozen_v6 import (
-            is_exact_frozen_v6_shape_break,
-            require_frozen_v6_delivery_subject,
-        )
-
-        if not is_exact_frozen_v6_shape_break(exc):
-            raise
-
-    store = ArtifactStore(ctx)
-    with ctx.validation_reads():
-        require_frozen_v6_delivery_subject(store)
-
-    # frozen v6 没有 current-v7 人审面，只能恢复旧盘已经存在、且当前 effective
-    # 投影仍能逐项对证的 s2 决定；这里绝不替它新盖章。
-    from novel.orchestrator import approvals
-
-    approval = approvals.get(
-        ctx.novel_dir.parent,
-        ctx.sid,
-        include_spawns=False,
-    )
-    if not approval.gate['s2']:
-        raise ApprovalRequired(
-            '冻结 Stage2 v6 没有可逐项对证并自动复活的既有 s2 人工决定；'
-            '拒绝用兼容证明新造审批',
-            hint='保留旧书与审批原始记录；若 exact subject 已变化，只能在 clean base '
-                 '由 Stage2 v7 producer 重建并重新审阅')
+    global_review.require_approved(ctx)
 
 
 def read_current_book(
-    ctx: RunContext, *, allow_frozen_v6: bool = False,
+    ctx: RunContext,
 ) -> str:
     """Return the delivery only when every approval/freshness binding is current."""
     # 下载是交付的一部分；已有 txt 不能绕过后来变红/变旧的 Stage2 人工闸。
-    if allow_frozen_v6:
-        require_stage2_delivery_approved(ctx)
-    else:
-        from novel.stages.stage2 import global_review
-        global_review.require_approved(ctx)
+    require_stage2_delivery_approved(ctx)
     store = ArtifactStore(ctx)
     if not store.exists(REL):
         raise UpstreamMissing(f'{REL} 不在盘上', hint='先跑 stage7.rename')

@@ -17,9 +17,9 @@ import pytest
 from contracts.artifacts import (
     ARTIFACT_PATHS, BOOK_SCOPED_PATHS,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
-    STAGE2_GLOBAL_GROUNDING, artifact_rel,
+    STAGE2_GLOBAL_GROUNDING, STAGE2_CHARACTERS, artifact_rel,
 )
-from contracts.invariants import NODES, STAGES
+from contracts.invariants import NODES, STAGES, STAGE2_NODE_REVIEW_OWNERS
 from contracts.schema import ARTIFACTS
 from contracts.schema.orchestration import (
     ArtifactState, NovelOverview, OverviewSummary, StageState,
@@ -399,13 +399,13 @@ def _stage2_artifact(
 
 
 @pytest.mark.parametrize('invalid', [False, True])
-def test_missing_projection_routes_to_free_materialization_not_paid_global(invalid):
-    """formal/INVALID Global 都足够重建投影；不能因伴生产物缺席重采整份。"""
+def test_missing_projection_routes_to_free_materialization_not_paid_characters(invalid):
+    """有效人物登记可以免费重建投影；问题稿必须先复验。"""
     stage = StageState(
         stage='stage2',
         artifacts=[
             _stage2_artifact(
-                STAGE2_GLOBAL_GROUNDING,
+                STAGE2_CHARACTERS,
                 exists=not invalid,
                 invalid=invalid,
             ),
@@ -420,19 +420,22 @@ def test_missing_projection_routes_to_free_materialization_not_paid_global(inval
     ov = _overview(stage)
 
     assert not S.stage2_global_projection_blocked(ov)
-    assert S.stage2_projection_recovery_needed(ov)
-    verdict, why = S.resume_verdict(ov, 'stage2.global')
+    verdict, why = S.resume_verdict(ov, 'stage2.characters')
     assert verdict == S.RESUME_RUN
-    assert 'stage2.global --renormalize' in why
-    assert '0 LLM' in why and '不得重采付费 Global' in why
+    if invalid:
+        assert not S.stage2_projection_recovery_needed(ov)
+        assert '--renormalize' not in why
+    else:
+        assert S.stage2_projection_recovery_needed(ov)
+        assert 'stage2.characters --revalidate' in why and '0 LLM' in why
 
 
-def test_naming_blocked_projection_routes_only_to_global_human_recovery():
+def test_naming_blocked_projection_routes_only_to_characters_human_recovery():
     stage = StageState(
         stage='stage2',
         artifacts=[
             _stage2_artifact(
-                STAGE2_GLOBAL_GROUNDING, exists=False, invalid=True,
+                STAGE2_CHARACTERS, exists=False, invalid=True,
                 reason='no_provenance'),
             _stage2_artifact(
                 STAGE2_BLUEPRINT_CHARACTER_PROJECTION, exists=False,
@@ -445,19 +448,19 @@ def test_naming_blocked_projection_routes_only_to_global_human_recovery():
 
     assert S.stage2_global_projection_blocked(ov)
     assert not S.stage2_projection_recovery_needed(ov)
-    verdict, why = S.resume_verdict(ov, 'stage2.global')
+    verdict, why = S.resume_verdict(ov, 'stage2.characters')
     assert verdict == S.RESUME_RUN
     assert '--apply-edit' in why and '--revalidate' in why and '0 LLM' in why
     assert '--renormalize' in why and '不得' in why
-    assert '不得重采付费 Global' in why
+    assert '不得重采付费人物登记' in why
 
 
-def test_stale_global_is_not_disguised_as_projection_only_recovery():
+def test_stale_characters_is_not_disguised_as_projection_only_recovery():
     """底座自己 stale 时仍是 REDO 人工决定，免费物化不能替它洗新。"""
     stage = StageState(
         stage='stage2',
         artifacts=[
-            _stage2_artifact(STAGE2_GLOBAL_GROUNDING, freshness='stale'),
+            _stage2_artifact(STAGE2_CHARACTERS, freshness='stale'),
             _stage2_artifact(
                 STAGE2_BLUEPRINT_CHARACTER_PROJECTION, exists=False),
         ],
@@ -467,21 +470,21 @@ def test_stale_global_is_not_disguised_as_projection_only_recovery():
     ov = _overview(stage)
 
     assert not S.stage2_projection_recovery_needed(ov)
-    assert S.resume_verdict(ov, 'stage2.global')[0] == S.RESUME_REDO
+    assert S.resume_verdict(ov, 'stage2.characters')[0] == S.RESUME_REDO
 
 
 @pytest.mark.parametrize(('readable', 'freshness'), [
     (False, 'unknown'),
     (True, 'unknown'),
 ])
-def test_existing_unproven_global_plus_missing_projection_never_becomes_paid_run(
+def test_existing_unproven_characters_plus_missing_projection_never_becomes_paid_run(
         readable: bool, freshness: str):
-    """伴生产物缺失不能把一份已存在但不可证明的 Global 压成首次付费生成。"""
+    """伴生产物缺失不能把一份已存在但不可证明的 人物登记 压成首次付费生成。"""
     stage = StageState(
         stage='stage2',
         artifacts=[
             _stage2_artifact(
-                STAGE2_GLOBAL_GROUNDING,
+                STAGE2_CHARACTERS,
                 freshness=freshness,
                 readable=readable,
             ),
@@ -494,16 +497,16 @@ def test_existing_unproven_global_plus_missing_projection_never_becomes_paid_run
     ov = _overview(stage)
 
     assert not S.stage2_projection_recovery_needed(ov)
-    verdict, why = S.resume_verdict(ov, 'stage2.global')
+    verdict, why = S.resume_verdict(ov, 'stage2.characters')
     assert verdict == S.RESUME_UNKNOWN
-    assert '不得因伴生产物少一份就排默认付费 Global' in why
+    assert '不得因伴生产物少一份就排默认付费抽取' in why
     assert '0 LLM' in why
 
 
 @pytest.mark.parametrize('formal_exists', [False, True])
 def test_global_invalid_with_fresh_projection_does_not_auto_rerun_paid_global(
         formal_exists):
-    """旧 formal 可有可无；更新 INVALID 已投影后都应让 Blueprint 先继续。"""
+    """知识 INVALID 仍须修复；称名投影已就绪不能代替知识接受。"""
     stage = StageState(
         stage='stage2',
         artifacts=[
@@ -521,31 +524,29 @@ def test_global_invalid_with_fresh_projection_does_not_auto_rerun_paid_global(
 
     assert S.stage2_invalid_projection_ready(ov)
     verdict, why = S.resume_verdict(ov, 'stage2.global')
-    assert verdict == S.RESUME_SKIP
-    assert '不得在 Blueprint 前自动重采付费 Global' in why
-    assert 'Stage4 联合闸' in why
+    assert verdict == S.RESUME_RUN
+    assert not S.stage2_blueprint_extraction_current(ov)
+    assert 'Stage4 联合闸' not in why
 
 
-def test_legacy_v6_blueprint_inputs_route_only_to_free_renormalize():
-    """精确 legacy marker + fresh projection 才有零调用换账语义。"""
+def test_old_blueprint_inputs_remain_unknown_without_migration():
+    """当前称名投影不能证明旧来源边。"""
     stage = StageState(
         stage='stage2',
         artifacts=[
             _stage2_artifact(STAGE2_BLUEPRINT_CHARACTER_PROJECTION),
             _stage2_artifact(
                 STAGE2_CHAPTER_BLUEPRINTS,
-                freshness='unknown', reason='legacy_blueprint_inputs'),
+                freshness='unknown', reason='consumed_unresolved'),
         ],
         done=True,
         reviewable=True,
     )
     ov = _overview(stage)
 
-    assert S.stage2_legacy_blueprint_recovery_needed(ov)
     verdict, why = S.resume_verdict(ov, 'stage2.blueprint')
-    assert verdict == S.RESUME_RUN
-    assert 'stage2.blueprint --renormalize' in why
-    assert '0 LLM' in why and '不得重跑付费 Blueprint' in why
+    assert verdict == S.RESUME_UNKNOWN
+    assert '--renormalize' not in why
 
 
 @pytest.mark.parametrize(('formal_exists', 'formal_readable'), [
@@ -553,9 +554,9 @@ def test_legacy_v6_blueprint_inputs_route_only_to_free_renormalize():
     (True, True),
     (True, False),
 ])
-def test_legacy_v6_live_invalid_takes_priority_over_generic_revalidate(
+def test_unknown_input_invalid_keeps_normal_validation_route(
         formal_exists, formal_readable):
-    """legacy INVALID 自己决定换账路，不能借共存 formal 的可读性作证。"""
+    """未知来源 INVALID 不能借共存正式稿追认；提升仍须 producer 复验。"""
     stage = StageState(
         stage='stage2',
         artifacts=[
@@ -566,19 +567,18 @@ def test_legacy_v6_live_invalid_takes_priority_over_generic_revalidate(
                 readable=formal_readable,
                 invalid=True,
                 invalid_freshness='unknown',
-                invalid_reason='legacy_blueprint_inputs'),
+                invalid_reason='consumed_unresolved'),
         ],
         done=False,
         reviewable=True,
     )
     ov = _overview(stage)
 
-    assert S.stage2_legacy_blueprint_recovery_needed(ov)
-    assert not S.stage2_blueprint_invalid_recovery_needed(ov)
+    assert S.stage2_blueprint_invalid_recovery_needed(ov)
     verdict, why = S.resume_verdict(ov, 'stage2.blueprint')
     assert verdict == S.RESUME_RUN
-    assert 'stage2.blueprint --renormalize' in why
-    assert '--revalidate' not in why
+    assert '--renormalize' not in why
+    assert '--revalidate' in why
 
 
 @pytest.mark.parametrize('formal_exists', [False, True])
@@ -621,6 +621,18 @@ def test_missing_blueprint_without_invalid_remains_a_normal_paid_run():
     verdict, why = S.resume_verdict(ov, 'stage2.blueprint')
     assert verdict == S.RESUME_RUN
     assert '产物不在盘上' in why
+
+
+@pytest.mark.parametrize('owner', STAGE2_NODE_REVIEW_OWNERS)
+def test_current_typed_rework_is_not_swallowed_by_existing_artifact(owner):
+    stage = StageState(stage='stage2', done=True, reviewable=True, artifacts=[
+        _stage2_artifact(rel) for rel in (STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING,
+                                         STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+                                         STAGE2_CHAPTER_BLUEPRINTS)])
+    overview = _overview(stage)
+    if owner == 'stage2.characters':
+        assert S.resume_verdict(overview, owner)[0] == S.RESUME_SKIP
+    assert S.resume_verdict(overview, owner, flags=('--review-token', 'typed-current'))[0] == S.RESUME_RUN
 
 
 @pytest.mark.parametrize(
@@ -666,7 +678,6 @@ def test_legacy_blueprint_recovery_does_not_generalize_other_unknowns(
     )
     ov = _overview(stage)
 
-    assert not S.stage2_legacy_blueprint_recovery_needed(ov)
     assert S.resume_verdict(ov, 'stage2.blueprint')[0] == S.RESUME_UNKNOWN
 
 
@@ -750,7 +761,6 @@ def test_legacy_stage5_is_never_treated_as_missing_or_paid_resume():
         verdict, why = S.resume_verdict(ov, node)
         assert verdict == S.RESUME_LEGACY
         assert 'stage5/deep' in why and 'missing' in why
-
 
 
 def test_stage6_semantic_is_not_answered_by_the_hook_artifact():

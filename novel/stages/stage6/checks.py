@@ -137,7 +137,7 @@ def _source_distance_finding(body: str, src_hook: str | None) -> Finding:
     return finding('hook_source_distance', detail=detail, evidence=evidence)
 
 
-def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | None,
+def hook_findings(text: str, *, mat: Material, secrets: list[dict],
                   characters: dict | None, src_hook: str | None,
                   hook_mechanical: dict | None, quote_problems: list[str]) -> list[Finding]:
     """对**一条文案**跑全部确定性判据 → `[Finding]`。
@@ -418,7 +418,7 @@ _PER_TEXT_METRIC = ('hook_secret_literal', 'hook_quote_shape', 'hook_source_dist
 
 
 def check(*, texts: list[tuple[str, str, list[Finding]]], mat: Material,
-          secrets: list[dict], arc: dict | None,
+          secrets: list[dict],
           lead_upto_ch: int, hook_chars: int | None, approved: bool,
           stale: list[str] | None, missing: list[str] | None) -> list[Outcome]:
     """一份 `hook.json` → **18 个机械 `Outcome`，一条判据一个**。

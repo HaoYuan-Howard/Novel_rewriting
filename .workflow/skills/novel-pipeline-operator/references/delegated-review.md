@@ -115,21 +115,19 @@ workpack 的 surface、waiting_on 与闭集。`approval_projection` 仅供运行
 
 ## Stage2 逐项复核
 
-Blueprint 不等 Global 正式稿：最新 Global 候选通过当前 schema 并物化出 current/fresh 称名投影后
-即可启动；Global HARD 可以让候选暂留 `.INVALID`，其修复与逐章计算重叠；后续修订若真的改变投影，
-freshness 会让旧 blueprint 失效。Global 正式落盘后立即运行 `--emit-review-workpack`。workpack 把每一项的当前主体、注册证据
-和原文精确命中上下文放在一起，但它明确不自动做决定：0 命中不等于 PASS，集合完整性项必须通读
-全书反向寻找漏项。阅读原文、填写决策文件与逐章计算可以继续重叠。
-
-Headless 严格先取得当前 Global 节点接受，再逐章并发生成 Blueprint，最后由独立 Blueprint Commander 交叉接受。
-Global 与 Blueprint 各自持续会话、最多四次内容调用；新执行不预审、不另开 Global 终审。
+先由人物节点发布当前人物登记，再由 Global 消费人物、源文案与正文生成必要知识。
+Global 正式落盘后运行 `--emit-review-workpack`，读取当前待审主体、注册证据与必要正文上下文；
+有效历史决定由后端按义务继承。工作包不自动做决定：0 命中不等于 PASS，集合完整性仍须反向寻找漏项。
+Global 正式有效且经当前 Commander 接受后，才逐章并发生成 Blueprint，最后由独立 Blueprint Commander
+交叉接受；`.INVALID` 或称名投影不能提前释放 Blueprint，也没有边生成边预审的执行路径。
+Global 与 Blueprint 各自持续会话，使用基础四次内容额度加已生效的不可变人工追加；不另开 Global 终审。
 
 <!-- reviewer-contract:stage2:begin -->
-1. Global Commander 与 Executor 独立；同一工作单元连续审阅和订正，最多四次内容调用，首次、格式纠错与语义纠错都计入；换候选、会话或进程不补预算。网络重试独立计账，确定性重放不调用模型。
-2. 逐项核对工作包的完整正文、事实与正式证据；集合完整性要正向和反向核对。PASS 必须有位置与分母，FAIL 必须指出具体冲突或漏抽，无法判断保持 UNVER/uncertain，不因材料不足发明事实或返工。
+1. Global Commander 与 Executor 独立；同一工作单元连续审阅和订正，基础四次内容额度加已生效的不可变人工追加，首次、格式纠错与语义纠错都计入；换候选、会话或进程不补预算，模型不能自行加额。网络重试独立计账，确定性重放不调用模型。
+2. 逐项核对当前待审的人物登记、必要知识、源文案范围与正式证据；集合完整性要正向和反向核对。有效历史决定由后端按义务继承，不要求本轮重复裁决；修改或删除旧问题仍须复审。PASS 必须有位置与分母，FAIL 必须指出具体冲突或漏抽，无法判断保持 UNVER/uncertain，不因材料不足发明事实或返工。范围不明不缺省为第一章。
 3. 当前逐项决定通过 producer 并使 blocking 面 generation-safe 时，同时构成该 Global Commander 的 typed 接受；未处置的 FAIL/pending/UNVER 不得接受。可隔离 UNVER 仅按既有 secret/relation/world_rule 组白名单处理，disclosure 不自动 PASS。
-4. 局部事实错误提交同包 GlobalEdit：稳定 subject/hash 与证据绑定不可修改；collection delta 只使用 add/delete/split 的现役 schema，外键必须在修后全集闭合。post_edit_review 必须精确覆盖修前未闭合项：修改的新主体要给修后结论，仍存活的旧 FAIL/UNVER 要显式复判。代码负责归一、HARD、归档和正式提交，模型不能写盘。
-5. 大范围生产错误使用 typed rework，owner 只可为 stage2.global；明确所需修订与证据，交回原 Executor。没有把握用 uncertain，必须停止用 stop。不得主动处理尚未生成的 Blueprint。
+4. 局部知识错误仅在 submission_options 开放时提交同包 GlobalEdit：稳定 subject/hash 与证据绑定不可修改；collection delta 只使用 add/delete/split 的现役 schema，外键必须在修后全集闭合。post_edit_review 必须精确覆盖修前未闭合项：修改的新主体要给修后结论，仍存活的旧 FAIL/UNVER 要显式复判。人物静态字段不由 GlobalEdit 修改。代码负责归一、HARD、归档和正式提交，模型不能写盘。
+5. 人物名册、静态身份或称名错误派修 owner=stage2.characters；必要知识、源文案或范围错误派修 owner=stage2.global。只使用本包开放的 typed rework，明确所需修订与证据，交回真正负责的 Executor。没有把握用 uncertain，必须停止用 stop。不得主动处理尚未生成的 Blueprint，也不新增人物 Commander。
 6. Global 接受后才开始 Blueprint 逐章并发；没有预审，也没有额外 Global-only 终审。任何新反馈都以本轮落盘工作包为依据，历史对话不能代替当前证据。
 <!-- reviewer-contract:stage2:end -->
 
@@ -177,33 +175,34 @@ binding 零模型重放；只有 action landed 后才删除记录、由书内 ty
 范围，不是评测面：没进输出的 `disclosure` 项在盘上仍是 `pending`，仍逐条出现在 `inbox`
 （`delivery_effect='disclosure'`）与终审包。
 
-- `blocking`（当前 95/145 那一类的口径）：判错会让下游造出一本假书 ⇒ 逐项 PASS；或对
+- `blocking`：判错会让下游造出一本假书 ⇒ 逐项 PASS；或对
   `secret:<id>` / `relation:<id>` / `world_rule:<id>` 完整组显式 quarantine 并从写作视图删除，
-  才开 Stage4。人物、setting、arc 与集合完整性不在隔离白名单。
+  才开 Stage4。人物、setting、源文案范围与集合完整性不在隔离白名单。
 - `disclosure`（`name_distinctiveness` / `address_context` / `fate` 三类）：不挡 Stage4，
   但**不许自动 PASS、不许从终审包消失**。终审包必须逐条列出它们的 subject_path 与状态。
 
 ⚠ 「不阻断」一旦顺手变成「不列出」，这次分级就成了一次静默删审计。分类只从
 `contracts/invariants.py::review_effect_of` 取，本 skill 不复制第二张表。
 
-blueprint producer、`--review-decisions` 与 typed global edit 不并发改文件。Global Commander 必须先完成
-本节点接受，再生成 Blueprint；没有边生成边预审的执行路径。若 Blueprint 交叉复核发现 Global
-需要 typed edit，先按 owner=stage2.global 回源；改变实际人物称名候选 inventory 会让 Blueprint stale，必须重建，
-只改未消费字段则以 freshness 结论复用。Global 接受必须早于 Blueprint 生成，Blueprint 接受之后 Stage2 才收口，
-不得把“已有人审”冒充整层已收口。
+producer、`--review-decisions` 与 typed edit 不并发改同一产物。若 Blueprint 交叉复核发现上游错误，
+人物名册或称名派修 owner=stage2.characters，必要知识派修 owner=stage2.global，蓝图派修 owner=stage2.blueprint。
+实际称名候选变化只重开受影响的依赖；未消费字段以 freshness 结论复用。Global 接受必须早于 Blueprint 生成，
+Blueprint 接受之后 Stage2 才收口，不得把“已有人审”冒充整层已收口，也不新增人物 Commander。
 
-Global E 与每章 Blueprint E 各自最多 4 次内容调用；Global C 和独立 Blueprint C 各自最多 4 次。
+Characters E、Global E、每章 Blueprint E、Global C 与整书 Blueprint C 各有独立工作单元，
+使用基础四次内容额度加已生效的不可变人工追加。
 首次、格式纠错和明确返工均占内容预算；网络尝试独立有界，确定性 apply/revalidate/replay 不占内容。
 候选变化、换 session、换 run/epoch 或重启均不返还预算。保存回答与 typed 决定后优先零模型恢复，
-同一错误无进展提前停止。只有两个节点均 current、Global generation-safe、两个 Commander 均已接受，
+同一错误无进展提前停止。只有人物、必要知识、Blueprint 与知识关联均 current、Global generation-safe、两个 Commander 均已接受，
 才可进入 Stage4；已读不代替接受，UNVER 不改名 PASS。
 
 <!-- reviewer-contract:stage2-blueprint:begin -->
-1. 你是与 Global Commander 独立的 Blueprint Commander。完整阅读逐章蓝图与正文，并结合工作包 Global 的事实、证据、时序、人物与隔离状态交叉核验；不得仅凭机械 HARD 通过接受。
-2. 本工作单元最多四次内容调用，同一修复过程连续审阅。候选修改、执行者返工、会话切换、进程恢复或回源都不重发预算；Global Commander 的四次预算另计。
-3. 接受只用绑定当前 bpr4 工作包的 typed accept。局部问题可提交同包 Blueprint patch：仅修改现存 fact_id/beat_id 的 typed 候选或叙事关系，章号保持不变。post_edit_accept 声明修后核验，必须绑定修前完整交叉工作包；代码用 producer 同一 HARD、归一与来源口验证并落盘。
-4. 大范围蓝图重构用 rework，owner=stage2.blueprint，并列出精确章节与有据问题；人物名册或全局事实错误回源 owner=stage2.global，不能在蓝图里替上游事实打补丁。回源后保留自己的预算与工作单元，Global 重新接受后按 review_delta 的 changed_fields、affected_references 与 affected_chapter_ordinals 定向复核；reusable_accepted_chapter_ordinals 保留原接受依据。mode=full 表示无法证明局部范围，必须完整交叉核验。
-5. 不知道用 uncertain，停止用 stop；两者都不能被代码解释成重新生成。Global 与 Blueprint 两份 current typed 接受齐备后由确定性 façade 收口，seen 只是阅读事实，不授予接受。
+1. 你是与 Global Commander 独立的 Blueprint Commander。完整阅读本轮待审蓝图与正文，并结合必要知识、人物、证据、时序与隔离状态交叉核验；不得仅凭机械 HARD 通过接受。有效历史决定由后端按义务继承，修改或删除旧问题仍须复审。
+2. 本工作单元使用基础四次内容额度加已生效的不可变人工追加，同一修复过程连续审阅。候选修改、执行者返工、会话切换、进程恢复或回源都不重发预算，模型不能自行加额；Global Commander 的累计额度另计。
+3. 接受只用绑定当前工作包的 typed accept。局部问题仅按 submission_options 提交同包 Blueprint patch：只修改开放的 typed 候选或叙事关系，章号保持不变。post_edit_accept 声明修后核验，必须绑定修前交叉工作包；代码用 producer 同一 HARD、归一与来源口验证并落盘。
+4. 蓝图错误派修 owner=stage2.blueprint，并列出精确章节与有据问题；人物名册或称名错误回源 owner=stage2.characters，必要知识错误回源 owner=stage2.global，不能在蓝图里替上游事实打补丁。回源后保留自己的预算与工作单元，按实际依赖变化和本轮义务复核；未知范围不能冒充局部无变化。
+5. knowledge_links 只裁决当前 pending 关联，证据不足用 unresolved；读者揭示、人物知情、世界生效和伏笔表现分别核验，伏笔不能携带未来答案。关联决定先持久化，再由 Blueprint producer 免费物化，不回写 Global 或蓝图抽取主体。
+6. 不知道用 uncertain，停止用 stop；两者都不能被代码解释成重新生成。新决定与有效历史决定完整覆盖当前义务后，两份 current typed 接受才由确定性 producer 收口；seen 只是阅读事实，不授予接受。
 <!-- reviewer-contract:stage2-blueprint:end -->
 
 ## Stage4 结构代批
@@ -268,9 +267,9 @@ novel.cli approval show <SID> --base <BASE>
 ```
 
 工作包固定按 blocking、semantic attention、disclosure、metric only、phase deferred、coverage 六组
-出线，空组也带扫描分母。先读 blocking 与 attention，再逐条核 coverage 的全部章；changed 章排在
-exact historical accept 可复用章之前，但 `historical_accept_reusable=true` 只说明主体逐字相等，仍须
-人工核对并随本次完整决定提交。INFO、metric、UNVER、skipped 的 `allowed_actions` 恒为空；不得因为
+出线，空组也带扫描分母。先读 blocking 与 attention，再逐条核待审 coverage；有效历史决定由后端
+按实际依赖、当前义务与 `source_decision_sha256` 验证后继承，不重复语义审阅。新决定和有效历史决定
+必须完整覆盖当前义务，来源损坏保持 unknown。INFO、metric、UNVER、skipped 的 `allowed_actions` 恒为空；不得因为
 它们排在异常区就制造 `request_repair` 或付费重跑。Context 才能判的条目只在 phase deferred 登记，
 不进入 A 的决定主体。
 
@@ -280,8 +279,8 @@ exact historical accept 可复用章之前，但 `historical_accept_reusable=tru
 B infeasible 终态，模板与 view 会同时发布其 concerns 和代码 proof 并纳入 aggregate subject；旧 accept
 不得替人复用。`repair_capability` 由 durable split lineage 分别给出
 `agent_repair_available` 与 `full_chapter_edit_available`；前端/Commander 不自行按目录猜轮次。
-单章两轮模型 repair 耗尽只关闭该章的 agent repair，不得借机把策略判成整书 replan；仍可在同策略
-下打开新 repair epoch，或用 hash-bound 的
+单章模型 repair 的有效额度耗尽只关闭该章的 agent repair，不得借机把策略判成整书 replan，
+也不能用新 epoch 重发预算；可等待同一单元的不可变人工追加授权，或用 hash-bound 的
 `stage4.design --apply-edit <stage4/blind_chapter_edit.json>` 提交一份完整 `BlindChapterResponse`。
 后者先 preview 再 apply，两次走同一 compiler、schema、dynamic validator 与全书 HARD；只替换目标章，
 非目标章业务字节必须恒等，provenance 记 `origin=human` 且不伪造 prompt/model/usage。逐项阅读工作包
@@ -295,17 +294,13 @@ coverage 行 `reading` 中的安全盲真相、候选场景与服务端现场复
    关系。每轮 repair 都携带当前问题与全部尚未关闭的历史约束；已关闭约束显式保留状态，不得静默
    遗忘。不得凭空补证据，不得把自然语言 reason 当自由 prompt。约束语义与合法示例形状以工作包
    `submission_options.allowed_values` 的 `semantics / shapes` 为准，不必再读源码或测试。
-3. 已接受且 subject 未变的历史章可由模板携带 `source_decision_sha256` 复用，但仍须核对并对当前
-   整书主体原子提交；策略、truth/root/alias/review contract 变化使全章复用失效，单章变化只失效该章。
-4. 提交后只认 `design_review.state`。`repair_requested` 时执行服务端 action 中的
-   `stage4.design --review-token <opaque>`；单章耗尽只走该章新 repair epoch 或上述 0-wire
-   完整章 edit。`strategy_replan_requested` 时才执行 `stage4.design --replan`，并携带累计失败反馈；
-   effective strategy/input digest 未变的 accepted 章保留 checkpoint，不得重发 wire。模型修订仍需
-   重新 preview/付费确认，修订 A 后还要再提交一份当前完整 A 审阅。headless AgentRun 在 typed
-   决定落盘后由 RunSupervisor 精确执行该 action，不再调用 Commander；交互式操作者仍显式
-   preview/确认，但不得自行改 node、flags 或 token。typed approval 决定一经 loader 通过就按内容寻址
-   持久化到 `_service/edits/<sid>/`；代码/skill 漂移、崩溃或重启后，同一 blocker 先零模型重放该
-   决定，不重复唤起 Commander。
+3. 只裁决本轮待审义务；`source_decision_sha256` 继承行由后端按当前义务与实际依赖核验，
+   Commander 不重写原决定或理由。策略、候选、证据或邻章边界变化按实际影响失效，不从整书
+   hash 猜测全章重审。修改或删除问题仍有复审义务，新决定与有效历史决定须完整覆盖当前义务。
+4. 决定先持久化，后续修复或免费补提交只由 Supervisor 按当前后端 action 执行；Commander
+   不启动节点。已经保存的有效结果优先免费恢复；耗尽当前有效额度后停止，只有另行生效的
+   人工追加可增加同一工作单元额度，不通过新 epoch、换候选或重启重领基础额度。恢复或
+   局部修复不得重复购买无关章与已有有效决定。
 5. 当本轮用于收敛 Stage4B 的 `request_replan` 时，只有交叉阅读后能独立指出具体的 scene/fact/goal
    结构损害，才把它翻译成 typed A constraint。INFO、metric、UNVER、`binding_concern`、
    声明—实算差异或 `allowed_actions=[]` 的行只有阅读定位权，不得改写成 Executor 指令；若现有 B
@@ -313,12 +308,8 @@ coverage 行 `reading` 中的安全盲真相、候选场景与服务端现场复
    不写 A/B 审批、不改 gate、不签 execution token，也不调用 Executor。
 <!-- reviewer-contract:stage4-design:end -->
 
-exact legacy-frozen 主体是唯一例外：真实全章 accept 仍必须提交 raw typed 决定，但公开 Design workpack 与
-`design_review` 随后投影为 `suspended`。这等同 `already_current` 地跳过重复 Commander 审阅，却绝不
-授权 B，也不得取 recovery permit、`s4rr1`、`s4er1` 或任何 repair/replan/B action。只有审阅中确有
-`request_repair` 的章才在 immutable workpack 对应行取得 `s4er1`，走零 wire 完整章 edit；不得为获得
-edit token 伪造问题，frozen 路也始终不得生成 `s4rr1` 或 paid spawn。需要新 B 时只在 clean current base
-重建。operator 若报 legacy frozen validation suspension，不把它当 reviewer blocker 再次唤起 Commander。
+旧版本产物没有兼容审阅或编辑例外。当前代码遇到版本不匹配时停止；旧根只能与配对旧代码处理，
+新生产从独立空根开始。不得提交旧 all-accept 或伪造 repair 请求来获取当前执行权。
 
 只有 `design_review.state=accepted` 才能预览/执行 B。A 审阅只授权 B，不打开 s4，也不替代下面的
 最终计划裁决。
@@ -344,6 +335,8 @@ edit token 伪造问题，frozen 路也始终不得生成 `s4rr1` 或 paid spawn
    定位权，不能单独制造付费动作；“无法确认”必须保持其原状态，绝不能因此保留或发明
    `request_replan`。接受章的理由可说明 concern 为何不破坏结构；拒绝章则必须另行给出第一条要求的
    具体 coverage 语义缺陷。
+6. 本轮只裁决待审义务；有效历史决定由后端按实际依赖继承。修改或删除旧问题仍须复审，
+   Blueprint 证据、候选集合或邻章边界改变时不得凭 Plan 未变延用旧接受；来源损坏保持未知。
 <!-- reviewer-contract:stage4-structure:end -->
 
 提交时必须使用服务端当前完整 subject SHA-256、actor、总理由，以及恰好覆盖全部计划章的逐章
@@ -385,8 +378,8 @@ Stage5 写作授权与两次 Stage4 审阅都是独立的人类决定。只有�
 绿灯、付费总授权或正文外发授权推导这枚决定。
 
 模板携带当前 Stage1 / Stage4 计划 / WriterContext 与 measurement contract 所绑定的完整 subject SHA-256。
-`apply writing` 只接受 typed JSON 的 actor、reason 与完整 current subject；旧 UI 的空 body 兼容入口
-不是 Commander 入口。结构、计划或测量主体漂移后旧授权必须显示为 non-current，不能靠历史
+`apply writing` 只接受 typed JSON 的 actor、reason 与完整 current subject。结构、计划或测量主体
+漂移后旧授权必须显示为 non-current，不能靠历史
 `writing=true` 继续写作。
 <!-- reviewer-contract:stage5-writing:end -->
 
@@ -422,7 +415,7 @@ current canonical 完整正文、TrimAudit、现算目标区间/超额与 closur
 先通读全部待办作跨章复核。全部章节都确应保留时，为 retain manifest 每章填写具体非空理由后整批提交。
 存在可用登记的 `remove_repetition / compress_exposition / repair_wording / smooth_transition` 独立安全改写的章节时，
 本轮在 `targets[]` 中选择需要改写的非空有序子集，每章分别填写指令。多章可独立修复时一起提交，
-Executor 按章节并发上限 4 改写；每章使用独立 session、checkpoint 和执行身份。整批完成后统一免费
+Executor 按本次冻结的章节并发配置改写（默认 4）；每章使用独立 session、checkpoint 和执行身份。整批完成后统一免费
 Review；部分中断先恢复未收口章，不重复生成已完成章。未选章节继续保持 unresolved，不批准保留或销账。
 每条 evidence 必须非空、不超过 240 字，并在 target current 正文中逐字恰好唯一命中。
 actor/reason 与 evidence 只用于审计和定位，不得作为自由 prompt；固定执行约束另行要求压回本章预算、

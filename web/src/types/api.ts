@@ -31,6 +31,7 @@ import type {
   AgentQueueView,
   AgentRunLogChunk,
   AgentRunPreview,
+  AgentRunContinuationView,
   AgentRunRecord,
   AgentRunRequest,
   AgentRunsResponse,
@@ -47,7 +48,7 @@ import type {
 } from './jobs'
 import type { NovelOverview, NovelsResponse } from './novels'
 import type { TrashNovelResult } from './novels'
-import type { RunProgress } from './run'
+import type { RunProgress, WorkUnitGrantPreview, WorkUnitGrantRequest, WorkUnitGrantResult } from './run'
 import type {
   RetentionApplyResult,
   RetentionPlan,
@@ -85,6 +86,8 @@ import type {
   TrimResolutionRequest,
 } from './stages'
 
+import type { CharacterRegistryView, CharactersEditRequest } from './characters'
+
 export interface Api {
   /* 读 */
   getNovels(): Promise<NovelsResponse>
@@ -92,6 +95,8 @@ export interface Api {
   getEnums(): Promise<EnumsResponse>
   /** 跑书进度：NODES 信标 + 各层产物完成度。beacon=ok 只念作「跑完」，判定归各层屏的 badge。 */
   getRunProgress(sid: string): Promise<RunProgress>
+  previewWorkUnitGrant(sid: string, unitId: string, additional: number): Promise<WorkUnitGrantPreview>
+  grantWorkUnit(sid: string, unitId: string, request: WorkUnitGrantRequest): Promise<WorkUnitGrantResult>
 
   getStage0Report(sid: string): Promise<Stage0Report>
   getStage0Segments(sid: string): Promise<Stage0Segments>
@@ -105,6 +110,8 @@ export interface Api {
   getReading(sid: string, ordinal: number): Promise<ReadingResponse>
   getBlueprintReviewWorkpack(sid: string): Promise<BlueprintReviewWorkpack>
   getGlobal(sid: string, revealSpoilers?: boolean): Promise<Stage2Global>
+  getCharacters(sid: string): Promise<CharacterRegistryView>
+  editCharacters(sid: string, request: CharactersEditRequest): Promise<Job>
   getGlobalReview(sid: string): Promise<GlobalReviewResponse>
   decideGlobalReview(sid: string, request: GlobalReviewDecisionSet): Promise<Job>
   getStage4(sid: string, ordinal: number): Promise<Stage4Response>
@@ -143,6 +150,7 @@ export interface Api {
   /** CAS 保存/清空常用配置；不改变任何历史或排队中的 run 快照。 */
   saveAgentProfileSettings(req: AgentProfileSettingsUpdate): Promise<AgentProfileSettingsView>
   /** 0 成本预览：与真跑同一构造函数。两项授权都进 prompt，任一勾选变化都重新 preview。 */
+  getAgentRunContinuation(runId: string): Promise<AgentRunContinuationView>
   previewAgentRun(req: AgentRunRequest): Promise<AgentRunPreview>
   startAgentRun(req: AgentRunRequest): Promise<AgentRunRecord>
   /** 新的在前 */

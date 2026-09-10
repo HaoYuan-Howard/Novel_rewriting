@@ -805,29 +805,6 @@ describe('Stage4A 正式设计审阅', () => {
     expect(screen.getByText(/默认跳过重复人工整读/)).toBeVisible()
   })
 
-  it('frozen-v6 raw 决定 suspended 时不重复审阅也不呈现 B 动作', async () => {
-    const pack = await mockApi.getDesignApprovalWorkpack('book-1')
-    vi.spyOn(api, 'getDesignApprovalWorkpack').mockResolvedValue({
-      ...pack,
-      disposition: 'suspended',
-      current_decision_sha256: '7'.repeat(64),
-    })
-    const doc = approval('suspended')
-    doc.spawns = {}
-    vi.spyOn(api, 'getApprovals').mockResolvedValue(doc)
-    await mount('suspended')
-
-    const start = await screen.findByRole('button', { name: '读取关闭式审阅模板' })
-    expect(start).toBeDisabled()
-    expect(start.parentElement).toHaveAttribute(
-      'title',
-      '当前 raw Stage4A 决定已记录；缺 v7 relation/preflight 验证权威，无需重复审阅且不能授权 Stage4B',
-    )
-    expect(screen.getByText(
-      'raw 审阅已记录 · 缺验证权威，暂停下游授权且无需重复整读',
-    )).toBeVisible()
-    expect(screen.queryByRole('button', { name: /Stage4B/ })).not.toBeInTheDocument()
-  })
 
   it('模板已读后后台刷新工作包时禁用最终保存，刷新失败后也不复开', async () => {
     const pack = await mockApi.getDesignApprovalWorkpack('book-1')

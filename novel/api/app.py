@@ -37,6 +37,7 @@ from novel.api.routes import (
     maintenance, novels, queues, run, screens, settings,
 )
 from novel.errors import NovelError
+from novel.output_root import require_active
 from novel.orchestrator import trash
 from novel.orchestrator import queue as queue_runner
 
@@ -148,6 +149,7 @@ def create_app(base: str | os.PathLike[str],
     """
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        require_active(app.state.base)
         # restore child 被 hard-kill 后，prepared/committed receipt 是唯一恢复
         # 身份。启动先做有界扫描并仍只拉受控 CLI child；冲突项留给同一服务的
         # maintenance preview/apply，不因一条坏 receipt 让恢复 UI 自己起不来。
@@ -170,6 +172,11 @@ def create_app(base: str | os.PathLike[str],
         中间件是全局的：新路由默认就在闸门后面，要绕过它得显式做点什么。
         这是本仓一贯的形状：**让绕过变成更费事的那条路。**
         """
+        try:
+            require_active(app.state.base)
+        except NovelError as exc:
+            return JSONResponse(status_code=status_of(exc), content=ErrorBody(
+                kind=type(exc).__name__, message=str(exc)).model_dump(mode='json'))
         if request.method not in SAFE_METHODS:
             if request.headers.get(UI_HEADER) != '1':
                 return _refuse(f'变更类请求缺少 `{UI_HEADER}: 1`')

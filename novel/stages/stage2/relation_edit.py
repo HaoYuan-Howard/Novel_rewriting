@@ -387,9 +387,15 @@ def _accept_submitted_patch(
         workpack = blueprint_review_workpack(ctx.novel_dir.parent, ctx.sid)
         if hashlib.sha256(_canonical_bytes(workpack.global_review)).hexdigest() != global_sha256:
             raise TerminalState('Global 在补丁提交期间变化；当前蓝图必须重新交叉审阅')
+        if workpack.knowledge_links.pending_obligation_ids:
+            raise TerminalState('补丁改变了知识关联义务，须由 Blueprint Commander 复核新增范围')
+        from contracts.schema.knowledge_links import KnowledgeLinkSubmission
         approve_stage2_review(ctx.novel_dir.parent, ctx.sid, Stage2NodeReviewRequest(
             node='stage2.blueprint', review_token=workpack.review_token,
-            decision='accept', actor=request.actor, reason=request.reason))
+            decision='accept', actor=request.actor, reason=request.reason,
+            knowledge_links=KnowledgeLinkSubmission(
+                scope_sha256=workpack.knowledge_links.scope.scope_sha256,
+                actor=request.actor, reason=request.reason, decisions=[])))
     except (NovelError, OSError, ValueError) as exc:
         raise ArtifactSubmittedReviewPending(str(exc), hint=(
             '补丁已落盘并保存恢复身份；对同一 typed 文件重放 --apply-edit 可零模型补提交，'
@@ -417,7 +423,8 @@ def submitted_patch_is_current(
     current = store.read_own(ChapterBlueprints, REL, require_current=True)[0]
     pack = blueprint_review_workpack(base, sid)
     return (review_subject_sha256(current) == receipt.result_subject_sha256
-            and hashlib.sha256(_canonical_bytes(pack.global_review)).hexdigest() == receipt.global_sha256)
+            and hashlib.sha256(_canonical_bytes(pack.global_review)).hexdigest() == receipt.global_sha256
+            and not pack.knowledge_links.pending_obligation_ids)
 
 
 __all__ = [

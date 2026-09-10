@@ -33,7 +33,7 @@ def _rig(tmp_path, monkeypatch, *, cached=False, fail_last=False):
     ArtifactStore(ctx).write(hook.HOOK_COPY, HookCopy(text='合成原始开篇文案。'))
     up = SimpleNamespace(
         mat=prompts.Material(blocks=('完整合成创作包。',), upto=1),
-        src_hook='', secrets=[], arc=None, characters={},
+        src_hook='', secrets=[],  characters={},
         hook_mechanical={}, upto=1, judged={})
     def upstreams(_current, store):
         # 真实消费边由 ArtifactStore 读取建立；不手填 provenance.inputs。

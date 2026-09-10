@@ -7,17 +7,14 @@ import json
 
 import pytest
 
-from contracts.schema.stage2 import (
-    FactEvidence,
-    GlobalCandidateAgentTurnResponse,
-    GlobalGroundingCandidateResponse,
-    SourceSpan,
-)
-from novel.core.evidence import iter_global_evidence_slots
+from contracts.schema.stage2 import FactEvidence, SourceSpan
+from contracts.schema.knowledge import KnowledgeAgentTurnResponse, KnowledgeResponse
+from novel.core.evidence import iter_knowledge_evidence_slots
+from novel.stages.stage2 import grounding
+from tests.test_stage2_characters import _ctx, _generate
 from novel.stages.stage2.global_evidence_candidates import (
     EVIDENCE_CANDIDATE_FORMAT,
     build_global_evidence_candidates,
-    compile_candidate_evidence,
 )
 
 
@@ -36,22 +33,10 @@ MAIN_TEXT = [
 def _candidate_response() -> dict[str, object]:
     return {
         'entities': {
-            'characters': {
+            'character_states': {
                 'char_001': {
-                    'canonical': '账房',
-                    'address': [{
-                        'surface': '账房',
-                        'by': 'public',
-                        'context': 'address',
-                        'from_chapter': 1,
-                    }],
-                    'name_distinctiveness': 'medium',
-                    'role': '负责核账',
-                    'role_evidence': {
-                        'evidence_candidate_id': 'e000002',
-                    },
-                    'fate': None,
-                    'fate_evidence': None,
+                    'fate': '后来继续核账',
+                    'fate_evidence': {'evidence_candidate_id': 'e000002'},
                 },
             },
             'relations': [],
@@ -70,20 +55,12 @@ def _candidate_response() -> dict[str, object]:
             'world_rules': [],
             'secrets': [],
         },
-        'arc': {
-            'conflict_stages': [{
-                'stage': '开端',
-                'chapters': [1, 2],
-            }],
-            'climax': '当面对证',
-            'ending': '账目厘清',
-            'arc_tracks': [{
-                'subject': 'char_001',
-                'trajectory': '从隐忍到公开对证',
-                'trajectory_evidence': {
-                    'evidence_candidate_id': 'e000003',
-                },
-            }],
+        'source_blurb': {
+            'facts': [{'kind': 'supported', 'claim_id': 'hook_001', 'claim': '核账',
+                       'evidence': {'evidence_candidate_id': 'e000003'}}],
+            'opening': {'kind': 'proposed', 'through_chapter': 2,
+                        'rationale': '第二章继续处理账目',
+                        'boundary_evidence': {'evidence_candidate_id': 'e000004'}},
         },
     }
 
@@ -118,19 +95,19 @@ def test_one_paragraph_table_drives_both_prompt_render_and_exact_lookup():
     assert table.lookup('e000003') is duplicate_rows[1]
 
 
-def test_candidate_response_compiles_every_evidence_slot_to_formal_source_span():
+def test_candidate_response_compiles_every_evidence_slot_to_formal_source_span(registry):
     table = build_global_evidence_candidates(MAIN_TEXT)
     response = _candidate_response()
-    compiled = compile_candidate_evidence(response, table)
+    compiled = grounding.compile_response(KnowledgeResponse.model_validate(response), table, registry)
 
     # 编译不修改模型原响应，正式面不残留任何 wire ID / locator。
-    assert response['entities']['characters']['char_001']['role_evidence'] == {
+    assert response['entities']['character_states']['char_001']['fate_evidence'] == {
         'evidence_candidate_id': 'e000002'}
     assert 'evidence_candidate_id' not in repr(compiled)
     assert 'locator' not in repr(compiled)
 
-    slots = list(iter_global_evidence_slots(compiled))
-    assert len(slots) == 4
+    slots = list(iter_knowledge_evidence_slots(compiled))
+    assert len(slots) == 5
     for _path, owner, field in slots:
         evidence = FactEvidence.model_validate(owner[field])
         assert evidence.source is not None
@@ -138,8 +115,8 @@ def test_candidate_response_compiles_every_evidence_slot_to_formal_source_span()
         assert chapter[evidence.source.start:evidence.source.end] == \
             evidence.source.text
 
-    role_evidence = compiled['entities']['characters']['char_001']['role_evidence']
-    trajectory = compiled['arc']['arc_tracks'][0]['trajectory_evidence']
+    role_evidence = compiled['entities']['character_states']['char_001']['fate_evidence']
+    blurb_evidence = compiled['source_blurb']['facts'][0]['evidence']
     assert role_evidence == {
         'chapter_ordinal': 1,
         'source': {
@@ -148,81 +125,44 @@ def test_candidate_response_compiles_every_evidence_slot_to_formal_source_span()
             'end': table.lookup('e000002').end,
         },
     }
-    assert trajectory['source']['start'] == table.lookup('e000003').start
+    assert blurb_evidence['source']['start'] == table.lookup('e000003').start
 
 
-def test_unknown_or_missing_candidate_id_fails_closed_before_formal_output():
+@pytest.mark.parametrize('evidence,match', [
+    ({'evidence_candidate_id': 'e999999'}, '不在本次下发闭集'),
+    ({}, 'evidence_candidate_id'),
+    ({'chapter_ordinal': 1, 'locator': '重复证据'}, 'evidence_candidate_id'),
+])
+def test_unknown_or_missing_candidate_id_fails_closed_before_formal_output(registry, evidence, match):
     table = build_global_evidence_candidates(MAIN_TEXT)
-
-    unknown = _candidate_response()
-    unknown['entities']['characters']['char_001']['role_evidence'] = {
-        'evidence_candidate_id': 'e999999'}
-    with pytest.raises(ValueError, match='不在本次下发闭集'):
-        compile_candidate_evidence(unknown, table)
-
-    missing = _candidate_response()
-    missing['entities']['characters']['char_001']['role_evidence'] = {}
-    with pytest.raises(ValueError, match='candidate-only global 响应不完整'):
-        compile_candidate_evidence(missing, table)
-
-    locator = _candidate_response()
-    locator['entities']['characters']['char_001']['role_evidence'] = {
-        'chapter_ordinal': 1,
-        'locator': '重复证据',
-    }
-    with pytest.raises(ValueError, match='candidate-only global 响应不完整'):
-        compile_candidate_evidence(locator, table)
-
-
-def test_candidate_agent_schema_accepts_full_or_typed_role_fate_patch_only():
     response = _candidate_response()
-    GlobalGroundingCandidateResponse.model_validate(response)
+    response['entities']['character_states']['char_001']['fate_evidence'] = evidence
+    before = json.dumps(response, ensure_ascii=False)
+    with pytest.raises(ValueError, match=match):
+        grounding.compile_response(KnowledgeResponse.model_validate(response), table, registry)
+    assert json.dumps(response, ensure_ascii=False) == before
 
-    full = GlobalCandidateAgentTurnResponse.model_validate({
-        'payload': {
-            'kind': 'full_candidate',
-            'candidate': response,
-        },
+
+@pytest.mark.parametrize('kind', ['role_fate_patch', 'evidence_patch'])
+def test_knowledge_agent_schema_accepts_current_full_candidate_and_rejects_retired_patch(kind):
+    response = _candidate_response()
+    full = KnowledgeAgentTurnResponse.model_validate({
+        'payload': {'kind': 'full_candidate', 'candidate': response},
     })
     assert full.payload.kind == 'full_candidate'
-
-    fake_patch = {
-        'payload': {
-            'kind': 'evidence_patch',
-            'candidate_sha256': 'a' * 64,
-            'changes': [{
-                'claim_path': 'entities.characters.char_001.role',
-                'evidence': {'evidence_candidate_id': 'e000001'},
-            }],
-        },
-    }
     with pytest.raises(ValueError):
-        GlobalCandidateAgentTurnResponse.model_validate(fake_patch)
-
-    role_fate_patch = GlobalCandidateAgentTurnResponse.model_validate({
-        'payload': {
-            'kind': 'role_fate_patch',
-            'candidate_sha256': 'a' * 64,
-            'evidence_table_sha256': 'b' * 64,
-            'changes': [{
-                'char_id': 'char_001',
-                'role': '侯府专属医生',
-                'role_evidence': {'evidence_candidate_id': 'e000001'},
-                'fate': '后来离开侯府独自行医',
-                'fate_evidence': {'evidence_candidate_id': 'e000002'},
-            }],
-        },
-    })
-    assert role_fate_patch.payload.kind == 'role_fate_patch'
-
-    schema = json.dumps(
-        GlobalCandidateAgentTurnResponse.model_json_schema(),
-        ensure_ascii=False,
-    )
-    # 模型 docstring 会如实解释“为什么没有该分支”；守的是 wire 取值与字段，
-    # 不是禁止说明文字提到被关闭的旧能力。
+        KnowledgeAgentTurnResponse.model_validate({
+            'payload': {'kind': kind, 'candidate_sha256': 'a' * 64,
+                        'evidence_table_sha256': 'b' * 64, 'changes': []},
+        })
+    schema = json.dumps(KnowledgeAgentTurnResponse.model_json_schema(), ensure_ascii=False)
+    assert '"const": "full_candidate"' in schema
+    assert '"const": "role_fate_patch"' not in schema
     assert '"const": "evidence_patch"' not in schema
-    assert '"const": "role_fate_patch"' in schema
-    assert 'candidate_sha256' in schema
-    assert 'evidence_table_sha256' in schema
-    assert 'changes' in schema
+    assert 'candidate_sha256' not in schema
+
+
+@pytest.fixture
+def registry(tmp_path):
+    registry, _ = _generate(_ctx(tmp_path))
+    return registry

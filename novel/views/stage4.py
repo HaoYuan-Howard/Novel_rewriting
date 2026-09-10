@@ -24,7 +24,7 @@ from contracts.artifacts import (
 import os
 
 from contracts.schema.api import (
-    PlanChapterLine, PlanSceneLine, Stage4IndexRow, Stage4View,
+    CtxChapterView, PlanChapterLine, PlanSceneLine, Stage4IndexRow, Stage4View,
 )
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
@@ -41,6 +41,7 @@ from novel.stages.stage4.measure import (
     structure_metrics_of, structure_review_subject_sha256,
 )
 from novel.stages.stage5.prompts import target_band
+from novel.stages.stage5.measure import chapter_basis
 from novel.store import ArtifactStore
 
 NODE = 'stage4.plan'
@@ -82,7 +83,7 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
         # 输入契约保持原业务 hash，审批服务会因 B 非 fresh 拒发 current token；
         # 新回执才产生新的契约身份。不可把历史计划伪装为 identity 基线。
         structure_subject = structure_review_subject_sha256(
-            plan_art, binding.binding_concerns,
+            plan_art, binding.binding_concerns, blueprints=blueprints,
             binding_input_contract=binding_contract.identity)
         plan_raw = plan_art.model_dump(by_alias=True)
         identity = False
@@ -144,13 +145,29 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
                 entry_state_refs=list(scene.get('entry_state_refs') or []),
                 exit_state_refs=list(scene.get('exit_state_refs') or []),
             ) for i, scene in enumerate(pc['scenes'], start=1)]),
-        ctx_chapter=ctx_entry,
+        ctx_chapter=_chapter_view(store, ctx_entry) if ctx_entry is not None else None,
         writer_target=target,
         plan_state=plan_state,
         ctx_state=ctx_state,
         _provenance=plan_prov,
         _ctx_provenance=ctx_prov,
     )
+
+
+def _chapter_view(store: ArtifactStore, chapter: CtxChapter) -> CtxChapterView:
+    """同一份任务书和当前源文现算展示读数；源文未知不吞掉可读的任务书。"""
+    payload = chapter.model_dump(by_alias=True)
+    try:
+        main, _raw = store.read_own(MainText, MAIN_TEXT)
+        source = {row.chapter_ordinal: row.text for row in main.root}
+    except (UpstreamMissing, ArtifactUnreadable):
+        source = {}
+    basis = chapter_basis(
+        payload, source if chapter.output_ordinal in source else None)
+    assert basis.budget_chars is not None
+    return CtxChapterView(
+        **payload, from_source_ordinals=[chapter.output_ordinal],
+        budget_chars=basis.budget_chars, source_chars=basis.source_chars)
 
 
 def _ctx_from_disk(store: ArtifactStore):
@@ -179,7 +196,9 @@ def _identity(store: ArtifactStore, blueprints: dict):
         store).model_dump(by_alias=True)
     bidx = beat_index(blueprints, main_raw)
     plan_raw = identity_plan(blueprints, main_raw, bidx)
-    asm = build_writer_context(plan_raw, gg_raw, blueprints, main_raw)
+    from novel.stages.stage2.knowledge_links import require_current
+    knowledge = require_current(store.ctx).model_dump(mode='json', by_alias=True)
+    asm = build_writer_context(plan_raw, gg_raw, blueprints, main_raw, knowledge_links=knowledge)
     chapters = [CtxChapter.model_validate(c) for c in (asm.ctx.get('chapters') or [])]
     return plan_raw, chapters
 

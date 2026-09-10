@@ -65,7 +65,7 @@ def test_writing_gate_requires_fidelity_material_in_its_declared_segment():
     second = {**entry['scenes'][0], 'slot': 's02', 'verbatim': []}
     entry = {**entry, 'scenes': [first, second]}
     source = dict(book.source_text)
-    source_ordinal = int(entry['from_source_ordinals'][0])
+    source_ordinal = int(entry['output_ordinal'])
     source[source_ordinal] += '\n' + required
     book = type(book)(title=book.title, ctx=book.ctx, measurable=book.measurable,
                       source_text=source, secrets=book.secrets)
@@ -198,7 +198,8 @@ def test_writer_goal_uses_resolved_facts_and_never_internal_plan_ids():
     entry, book = _entry()
     material = prompts.build_material(entry, book)
     user = prompts.build_user(material)
-    assert '本章事实：沈青发现账册末页的墨迹被人换过。' in user
+    assert user.count('沈青发现账册末页的墨迹被人换过。') == 1
+    assert '本章事实：〔文' in user
     assert 'f01_01' not in user
     assert 'chapter:1:start' not in user
     assert 'fact_refs' not in user
@@ -216,8 +217,7 @@ def test_context_resolves_goal_ids_after_chapter_gates():
         goal, ordinal=1,
         atoms={'f01_01': {'claim': '沈青发现账册墨迹被换过。'}},
         disp={'char_001': '沈青'},
-        facts={'relations': [], 'world_rules': [], 'secrets': [], 'setting': {}},
-        global_g={'entities': {'relations': []}},
+        disclosure_targets={},
     )
     assert resolved == {
         'intent': 'advance',
@@ -233,8 +233,7 @@ def test_context_refuses_goal_that_would_bypass_a_chapter_gate():
             {'intent': 'advance', 'fact_refs': [
                 {'kind': 'world_rule', 'ref': 'wr_09'}]},
             ordinal=1, atoms={}, disp={},
-            facts={'relations': [], 'world_rules': [], 'secrets': [], 'setting': {}},
-            global_g={'entities': {'relations': []}},
+            disclosure_targets={},
         )
 
 
@@ -243,8 +242,7 @@ def test_hidden_secret_withhold_goal_does_not_disclose_identity_or_fact():
         {'intent': 'withhold', 'fact_refs': [
             {'kind': 'secret', 'ref': 'secret_09'}]},
         ordinal=1, atoms={}, disp={},
-        facts={'relations': [], 'world_rules': [], 'secrets': [], 'setting': {}},
-        global_g={'entities': {'relations': []}},
+        disclosure_targets={},
     )
     wire = json.dumps(resolved, ensure_ascii=False)
     assert 'secret_09' not in wire
@@ -268,7 +266,6 @@ def _trim_case():
     candidate = (
         '沈青在茶馆核对账册。随后，她确认墨迹被人换过，却没有仓促下结论。'
         '窗外雨声渐紧，她把账册收好，决定天亮后再查。')
-    entry['budget_chars'] = len(candidate)
     entry['scenes'][0]['budget_chars'] = len(candidate)
     original = candidate + '这段解释重复了同一个意思。' * 8
     return entry, book, [{'slot': 's01', 'text': original}]
@@ -285,7 +282,7 @@ def test_over_length_lands_an_identity_audit_and_cannot_spend_anything():
     entry, _book, original = _trim_case()
     notes, audit = write._over_length_audit(original, entry)
     assert audit is not None
-    assert audit.output_ordinal == int(entry['output_ordinal'])
+    assert set(audit.model_dump()) == {'before_sha256', 'reason'}
     assert audit.before_sha256 == write._sha256_text(write._segments_text(original))
     assert notes == [audit.reason]
     assert '超上限' in audit.reason and 'verification' in audit.reason
@@ -312,9 +309,7 @@ def test_over_length_audit_stays_in_verification(tmp_path):
     from novel.store import ArtifactStore
     from novel.views.inbox import _trim_verification_items
 
-    audit = TrimAudit(
-        output_ordinal=4, before_sha256='a' * 64,
-        reason='超上限 120 字（620/500）；本仓没有自动收缩路径，保留 pretrim，转 verification')
+    audit = TrimAudit(before_sha256='a' * 64, reason='超上限 120 字（620/500）；本仓没有自动收缩路径，保留 pretrim，转 verification')
     initialize_workflow(tmp_path)
     root = tmp_path / '收缩审计_42'
     try:

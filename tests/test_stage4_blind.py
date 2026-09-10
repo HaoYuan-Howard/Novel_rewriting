@@ -532,8 +532,11 @@ def test_split_prompt_shapes_and_provenance_architecture_are_explicit():
         'alias_algorithm': BLIND_ALIAS_ALGORITHM,
         'truth_sha256': 'b' * 64,
     }
-    legacy = BlindCandidateProvenance.model_validate(common)
-    assert legacy.architecture is None
+    with pytest.raises(ValidationError, match='architecture'):
+        BlindCandidateProvenance.model_validate(common)
+    for old in (None, 'whole_book_v1'):
+        with pytest.raises(ValidationError, match='architecture'):
+            BlindCandidateProvenance.model_validate({**common, 'architecture': old})
     split = BlindCandidateProvenance.model_validate({
         **common, 'architecture': 'book_strategy_chapters_v1',
     })
@@ -982,3 +985,48 @@ def test_deterministic_infeasibility_witness_only_covers_closed_code_constraints
     assert proof[0]['chapter_ordinal'] == 1
     assert proof[0]['scenes'] == ['c01s01', 'c01s02']
     assert proof[0]['closed_refs'] == ['c01s01', 'c01s02']
+
+
+def test_nineteen_chapter_requests_only_invalidate_changed_fact_chapter():
+    from types import SimpleNamespace
+    from contracts.schema.stage4 import BlindBookStrategyResponse, BlindChapterDesignResponse
+    from novel.stages.stage4 import plan
+
+    blueprints = {'blueprints': [{
+        'chapter_ordinal': ordinal, 'chapter_function': '闭合本章因果。',
+        'fact_atoms': [_atom(ordinal, 1, '甲抵达门口。', participants=['char_001'])],
+        'causal_edges': [], 'narrative_relations': [],
+        'entry_state_refs': [], 'ending_state_refs': [],
+        'beats': [_beat(ordinal, 1, ['char_001'], hinge=False)], 'narration': [],
+    } for ordinal in range(1, 20)]}
+    strategy = BlindBookStrategyResponse.model_validate({
+        'reconstruction_strategy': '逐章闭合因果。',
+        'chapter_weights': [{'chapter_ordinal': n, 'weight': 'CH_EVEN'} for n in range(1, 20)],
+    })
+    ctx = SimpleNamespace(root_clean_sha1=ROOT)
+
+    def requests():
+        truth, mapping = build_blind_projection(blueprints, root_clean_sha1=ROOT)
+        prepared = SimpleNamespace(
+            truth=truth, mapping=mapping,
+            rebuild_parent=None,
+            input_sha256=plan._canonical_sha256(truth),
+            validator=plan._BlindStrategyValidator(tuple(range(1, 20))))
+        return plan._design_chapter_contexts(ctx, prepared, strategy, ensure_units=False)
+
+    before = requests()
+    blueprints['blueprints'][16]['fact_atoms'][0]['claim'] = '甲拒绝进入门口。'
+    after = requests()
+    changed = [new.chapter_ordinal for old, new in zip(before, after, strict=True)
+               if old.input_sha256 != new.input_sha256]
+    assert changed == [17]
+    assert before[0].local_mapping['truth_sha256'] != after[0].local_mapping['truth_sha256']
+    assert before[0].strategy_epoch_sha256 == after[0].strategy_epoch_sha256
+    for old, new in zip(before, after, strict=True):
+        if old.chapter_ordinal != 17:
+            assert (old.system, old.user) == (new.system, new.user)
+        # 相同历史回答必须仍可由当前编译器校验，不能仅凭输入摘要相同即信任。
+        from tests.test_stage4_v3_integration import _split_a_responder
+        response = _split_a_responder(blueprints)(SimpleNamespace(system=new.system, user=new.user))
+        typed = BlindChapterDesignResponse.model_validate(response)
+        assert new.validator(typed, None) is None

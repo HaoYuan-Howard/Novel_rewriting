@@ -198,7 +198,6 @@ export function ApprovalWorkpackEvidence({
       </div>
     )
   }
-  const suspended = workpack.disposition === 'suspended'
 
   return (
     <section
@@ -209,18 +208,14 @@ export function ApprovalWorkpackEvidence({
         <span className="text-body font-semibold text-ink-2">{label}</span>
         <Mono className="rounded-tag bg-card px-7 py-2 text-micro">v{workpack.v}</Mono>
         <span className="text-tag text-ink-4">
-          异常优先，只读呈现；不预填裁决、不自动接受、不在此发起作业
+          展示当前审阅证据和有效历史决定；待审内容仍需逐项裁决
         </span>
         <span className={workpack.disposition === 'already_current'
           ? 'rounded-tag bg-gate-ok-bg px-8 py-2 text-tag font-semibold text-gate-ok-ink'
-          : suspended
-            ? 'rounded-tag border border-warn-line bg-warn-bg px-8 py-2 text-tag font-semibold text-warn-ink'
-            : 'rounded-tag bg-inset px-8 py-2 text-tag text-ink-3'}>
+          : 'rounded-tag bg-inset px-8 py-2 text-tag text-ink-3'}>
           {workpack.disposition === 'already_current'
             ? '同一当前工作包已批准 · 默认跳过重复人工整读'
-            : suspended
-              ? 'raw 审阅已记录 · 缺验证权威，暂停下游授权且无需重复整读'
-              : '当前工作包需要审阅'}
+            : '当前工作包需要审阅'}
         </span>
       </div>
       <div className="flex min-w-0 flex-col gap-3 text-tag text-ink-4">

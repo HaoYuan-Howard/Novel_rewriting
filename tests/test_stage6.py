@@ -636,10 +636,8 @@ def test_prompt_carries_source_full_story_and_minimal_hook_mechanical(box):
     gg = sandbox.cut(box.book, 'stage2/global_grounding.json')
     assert packet['source_hook'] == source['text'].strip()
     assert mat.source_hook == source['text'].strip()
-    assert gg['arc'] == mat.story_truth['arc'] == packet['story_truth']['arc']
-    for value in (gg['arc'].get('climax'), gg['arc'].get('ending')):
-        if value:
-            assert value in user, '全书兑现没有真正下发，payoff_preview 仍会闭卷写作'
+    assert mat.story_truth['source_blurb'] == packet['story_truth']['source_blurb']
+    assert 'arc' not in packet['story_truth']
     expected = hook_style_metrics(measure(source['text'].strip()))
     assert packet['source_hook_mechanical'] == mat.hook_mechanical == expected
     assert 'style' not in packet and 'measurable' not in packet
@@ -672,11 +670,9 @@ def test_paid_hook_prompt_excludes_global_source_spans(monkeypatch):
                 'text': marker,
                 'start': start,
                 'end': start + len(marker),
-                'normalized': f'STAGE6_NORMALIZED_ONLY_{index}',
-                'recovery': 'normalized',
             },
         }
-        markers.extend((marker, f'STAGE6_NORMALIZED_ONLY_{index}'))
+        markers.append(marker)
         coordinates.extend((start, start + len(marker)))
 
     class Dumped:
@@ -686,14 +682,22 @@ def test_paid_hook_prompt_excludes_global_source_spans(monkeypatch):
         def model_dump(self, **_kwargs):
             return copy.deepcopy(self.value)
 
+    from contracts.artifacts import STAGE2_CHARACTERS
+    from tests.stage2_fixtures import formal_subjects
+    registry, knowledge = formal_subjects(grounding)
     stored = {
-        hook.GLOBAL_GROUNDING: Dumped(grounding),
+        hook.GLOBAL_GROUNDING: knowledge,
+        STAGE2_CHARACTERS: registry,
         stage2_global_review.REL: factories.approved_global_review(grounding),
         hook.WRITER_CONTEXT: Dumped(seed.ctx),
         hook.HOOK_COPY: SimpleNamespace(text='原作开篇文案。'),
     }
 
     class Store:
+        @staticmethod
+        def full_sha256_or_none(rel):
+            return 'a' * 64 if rel in stored else None
+
         @staticmethod
         def exists(rel):
             return rel in stored
@@ -781,7 +785,7 @@ def _distance_reading(text: str, src_hook: str | None) -> dict:
     """跑生产那一个落点取读数。**不在守卫里重拼一份计算。**"""
     fs = checks.hook_findings(
         text, mat=prompts.Material(blocks=('合成创作包。',), upto=1),
-        secrets=[], arc=None, characters=None, src_hook=src_hook,
+        secrets=[],  characters=None, src_hook=src_hook,
         hook_mechanical=None, quote_problems=[])
     return {f.rule: f for f in fs}
 

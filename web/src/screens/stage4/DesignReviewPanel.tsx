@@ -85,7 +85,6 @@ function stateLabel(state: string): string {
     case 'repair_requested': return '当前候选已要求逐章返修'
     case 'strategy_replan_requested': return '当前候选已要求整书重规划'
     case 'accepted': return '当前候选已正式接受'
-    case 'suspended': return 'raw 审阅已记录；缺验证权威，暂停下游授权'
     case 'expired': return '历史审阅已过期'
     default: return '服务端状态 ' + state
   }
@@ -120,15 +119,12 @@ export function DesignReviewPanel() {
   const view = doc.design_review
   const humanReviewer = enums.data?.design_reviewer_kinds.find((value) => value === 'human') ?? ''
   const alreadyCurrent = workpack.data?.disposition === 'already_current'
-  const suspended = workpack.data?.disposition === 'suspended'
   const workpackReviewable = Boolean(
     !workpack.isLoading && !workpack.isFetching && !workpack.isError &&
     workpack.data?.disposition === 'review_required',
   )
   const workpackDisabledReason = alreadyCurrent
     ? '同一当前 Stage4A 工作包已有正式接受决定，无需重复整读'
-    : suspended
-      ? '当前 raw Stage4A 决定已记录；缺 v7 relation/preflight 验证权威，无需重复审阅且不能授权 Stage4B'
     : workpack.isError
       ? '当前 Stage4A 工作包读取失败，不能绑定本轮审阅'
       : workpack.isFetching
@@ -627,17 +623,21 @@ function DesignReviewForm({
               review_token: draft.review_token,
               strategy: {
                 decision: draft.strategy.decision,
-                reason: draft.strategy.reason.trim(),
+                reason: draft.strategy.source_decision_sha256 ? draft.strategy.reason : draft.strategy.reason.trim(),
                 replan_constraints: draft.strategy.replan_constraints.map((row) => ({
                   kind: row.kind,
                   chapter_ordinals: row.chapter_ordinals,
                 })),
+                ...(draft.strategy.source_decision_sha256
+                  ? { source_decision_sha256: draft.strategy.source_decision_sha256 } : {}),
               },
               chapters: draft.chapters.map((chapter) => ({
                 output_ordinal: chapter.output_ordinal,
                 decision: chapter.decision,
-                reason: chapter.reason.trim(),
+                reason: chapter.source_decision_sha256 ? chapter.reason : chapter.reason.trim(),
                 constraints: chapter.constraints,
+                ...(chapter.source_decision_sha256
+                  ? { source_decision_sha256: chapter.source_decision_sha256 } : {}),
                 ...(chapter.constraint_operations ? { constraint_operations: chapter.constraint_operations } : {}),
               })),
             }, {

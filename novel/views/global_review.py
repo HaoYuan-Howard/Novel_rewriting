@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from novel.stages.stage2 import grounding as grounding_io
+
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
 )
@@ -28,7 +30,7 @@ def global_review_view(base: str, sid: str) -> GlobalReviewView:
     if not store.exists(STAGE2_GLOBAL_GROUNDING):
         raise UpstreamMissing(f'{STAGE2_GLOBAL_GROUNDING} 不在盘上')
     review = store.read_own(GlobalReview, STAGE2_GLOBAL_REVIEW)[0]
-    grounding = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+    grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING)[0]
     grounding_payload = grounding.model_dump(by_alias=True)
     subject, current, approved = review_status(grounding_payload, review)
     safety = generation_safety(grounding_payload, review)
@@ -46,7 +48,10 @@ def global_review_view(base: str, sid: str) -> GlobalReviewView:
                 grounding_payload, review,
                 subject_sha256(main.model_dump(mode='json', by_alias=True)),
             )['review_token']
+    from novel.orchestrator.approvals import stage2_review_coverage
     return GlobalReviewView(
+        review_coverage=(stage2_review_coverage(base, sid, 'stage2.global')
+                         if review_token is not None else None),
         source_sha256=review.source_sha256,
         current_subject_sha256=subject,
         current=current,

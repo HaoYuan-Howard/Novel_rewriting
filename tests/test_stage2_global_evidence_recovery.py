@@ -59,12 +59,7 @@ def _response(role_evidence: dict[str, object]) -> dict[str, object]:
             'world_rules': [],
             'secrets': [],
         },
-        'arc': {
-            'conflict_stages': [],
-            'climax': '无',
-            'ending': '无',
-            'arc_tracks': [],
-        },
+        'source_blurb': {'facts': [], 'opening': {'kind': 'unresolved', 'reason': '仅测试证据回取，不推断开篇范围'}},
     }
 
 

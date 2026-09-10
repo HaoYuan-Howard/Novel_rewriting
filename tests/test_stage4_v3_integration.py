@@ -20,8 +20,10 @@ from contracts.artifacts import (
     STAGE1_MAIN_TEXT,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
     STAGE2_CHAPTER_BLUEPRINTS,
+    STAGE2_CHARACTERS,
     STAGE2_GLOBAL_GROUNDING,
     STAGE2_GLOBAL_REVIEW,
+    STAGE2_KNOWLEDGE_LINKS,
 )
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
@@ -88,11 +90,20 @@ def _book(tmp_path: Path) -> Path:
 
 def _seed_current_stage2(book: Path) -> ChapterBlueprints:
     """写 current Stage2 产物；来源边与 root 都走正式 ``RunContext`` 铸造口。"""
+    from contracts.artifacts import STAGE1_HOOK_COPY
+    from contracts.schema.stage1 import HookCopy
+    from novel.stages.stage2 import grounding
+    from tests.stage2_fixtures import generate_characters, accept_and_materialize_links
+
     global_ctx = _ctx(book, 'stage2.global')
     global_store = ArtifactStore(global_ctx)
     main_artifact = MainText.model_validate(main_text())
     global_store.write(STAGE1_MAIN_TEXT, main_artifact)
+    global_store.write(STAGE1_HOOK_COPY, HookCopy(text='李宝珠收到父亲已经回城的来信。'))
+    generate_characters(global_ctx, view=global_grounding())
     global_store.read(MainText, STAGE1_MAIN_TEXT)
+    global_store.read(HookCopy, STAGE1_HOOK_COPY)
+    grounding.read_registry(global_store)
 
     global_raw = copy.deepcopy(global_grounding())
     global_extra = global_raw.pop('_provenance')
@@ -107,7 +118,7 @@ def _seed_current_stage2(book: Path) -> ChapterBlueprints:
         **global_raw,
         '_provenance': global_provenance,
     })
-    global_store.write(STAGE2_GLOBAL_GROUNDING, global_artifact)
+    global_store.write(STAGE2_GLOBAL_GROUNDING, grounding.for_write(global_store, global_artifact))
     global_store.write(
         STAGE2_GLOBAL_REVIEW,
         approved_global_review(global_artifact),
@@ -140,6 +151,7 @@ def _seed_current_stage2(book: Path) -> ChapterBlueprints:
         '_provenance': blueprint_provenance,
     })
     blueprint_store.write(STAGE2_CHAPTER_BLUEPRINTS, artifact)
+    accept_and_materialize_links(blueprint_ctx)
     return artifact
 
 
@@ -213,7 +225,8 @@ def _split_a_responder(blueprints_raw: dict[str, Any]) \
                     for ordinal in ordinals
                 ],
             }
-        projection = json.loads(request.user.splitlines()[-1])
+        lines = request.user.splitlines()
+        projection = json.loads(lines[lines.index(plan.prompts.BLOCK_BLIND_CHAPTER_TRUTH) + 1])
         facts = list(projection['chapter']['facts'])
         aliases = [
             str(row['fact_alias']) for row in facts
@@ -323,6 +336,7 @@ def _infeasible_b_response(candidate: BlindCandidate) -> dict:
 def _client(
     ctx: RunContext,
     response: dict | Callable[[ChatRequest], dict],
+    *, concurrency: int = 1,
 ) -> tuple[LlmClient, FakeTransport]:
     def answer(request: ChatRequest, _index: int) -> ChatResponse:
         payload = response(request) if callable(response) else response
@@ -345,7 +359,7 @@ def _client(
         model=MODEL,
         enable_model_fallback=False,
         max_retries=0,
-        concurrency=1,
+        concurrency=concurrency,
         warmup=False,
         budget_checker=lambda *_args, **_kwargs: None,
     )
@@ -472,11 +486,13 @@ def test_run_plan_binds_evidence_then_compiles_plan_without_context(designed):
 
     binding_inputs = {
         plan.CANDIDATE_REL,
-            STAGE1_MAIN_TEXT,
-            STAGE2_CHAPTER_BLUEPRINTS,
-            STAGE2_GLOBAL_GROUNDING,
-            STAGE2_GLOBAL_REVIEW,
-        }
+        STAGE1_MAIN_TEXT,
+        STAGE2_CHAPTER_BLUEPRINTS,
+        STAGE2_CHARACTERS,
+        STAGE2_GLOBAL_GROUNDING,
+        STAGE2_GLOBAL_REVIEW,
+        STAGE2_KNOWLEDGE_LINKS,
+    }
     assert set(binding.provenance.inputs) == binding_inputs
     assert len(binding.provenance.inputs) == len(binding_inputs), '重复读 A 不得双计来源边'
     assert binding.provenance.candidate_sha256 == candidate_subject_sha256(
@@ -495,6 +511,47 @@ def test_run_plan_binds_evidence_then_compiles_plan_without_context(designed):
         (book / plan.CANDIDATE_REL).read_bytes()).hexdigest()
     assert final_plan.provenance.evidence_binding_sha256 == hashlib.sha256(
         (book / plan.BINDING_REL).read_bytes()).hexdigest()
+
+
+def test_minimal_context_producer_http_and_restart_share_derived_readings(
+        designed, monkeypatch):
+    """免费 Context 只落主体；HTTP 与重启读取恢复相同预算、源字数和写作目标。"""
+    from fastapi.testclient import TestClient
+    from novel.api.app import create_app
+    from novel.stages.stage5.measure import chapter_basis, target_range
+
+    book, blueprint_artifact, packed = designed
+    candidate = packed[3]
+    ctx = _ctx(book, 'stage4.plan')
+    client, transport = _client(ctx, _bound_b_response(
+        candidate, blueprint_artifact.model_dump(by_alias=True, mode='json')))
+    assert plan.run_plan(ctx, client).passed
+    calls_before = len(transport.calls)
+    assert plan.run_context(_ctx(book, 'stage4.context', paid=False)).passed
+    context_bytes = (book / plan.CTX_REL).read_bytes()
+    disk = json.loads(context_bytes)
+    assert disk['_schema_version'] == 7
+    entry = disk['chapters'][0]
+    assert not {'from_source_ordinals', 'budget_chars', 'source_chars'} & entry.keys()
+    basis = chapter_basis(entry, {
+        row['chapter_ordinal']: row['text'] for row in main_text()})
+    monkeypatch.setattr(prov, 'code_version', lambda: CODE)
+
+    replies = []
+    for _ in range(2):
+        with TestClient(create_app(book.parent)) as http:
+            response = http.get('/api/novels/742/stage4/1')
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            visible = payload['ctx_chapter']
+            assert visible['from_source_ordinals'] == [1]
+            assert visible['budget_chars'] == basis.budget_chars
+            assert visible['source_chars'] == basis.source_chars
+            assert payload['writer_target'] == list(target_range(entry))
+            replies.append(visible)
+    assert replies[0] == replies[1]
+    assert len(transport.calls) == calls_before
+    assert (book / plan.CTX_REL).read_bytes() == context_bytes
 
 
 @pytest.mark.parametrize(('phase_rel', 'provenance_field'), (
@@ -779,7 +836,7 @@ def test_apply_binding_refuses_mixed_v2_v3_live_bytes_without_mutation(
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# `--adopt-rejected`：validator 拒稿唯一的 0-wire 恢复入口
+# 退役整书拒稿的历史样本只用于拒绝反例，不提供旧采用入口
 # ───────────────────────────────────────────────────────────────────────────
 
 def _seal_a_validator_rejection(
@@ -814,212 +871,34 @@ def _seal_a_validator_rejection(
     return attempt_id
 
 
-def test_a_validator_rejection_can_be_adopted_with_zero_calls_after_a_human_fix(
-        tmp_path: Path):
-    """v8 的真实处境：一次已付费的整书候选被 validator 拒 ⇒ 此前只能整本重来。"""
-    book = _book(tmp_path)
-    blueprints_artifact = _seed_current_stage2(book)
-    ctx = _ctx(book, 'stage4.design', paid=False)      # ⚠ 0 成本的跑
-    truth, mapping = build_blind_projection(
-        blueprints_artifact.model_dump(by_alias=True, mode='json'),
-        root_clean_sha1=ctx.root_clean_sha1,
-    )
-    good = _retain_a_response(
-        blueprints_artifact.model_dump(by_alias=True, mode='json'), mapping)
-    broken = copy.deepcopy(good)
-    # 制造一条**只有 validator 抓得住**的违约：整章漏掉。schema 允许任意非空章集，
-    # 「章集不闭合」只有绑定当前 truth 的动态 validator 判得出来。
-    assert len(broken['output_chapters']) > 1
-    broken['output_chapters'] = broken['output_chapters'][:-1]
-    attempt = _seal_a_validator_rejection(
-        ctx, book, response=broken, why='章集不闭合')
-
-    # ① 原样重判仍然红，且当场封 outcome。
-    from novel.errors import TerminalState
+def test_retired_whole_book_adoption_is_rejected_by_cli_and_http(tmp_path, capsys):
+    from fastapi.testclient import TestClient
+    from contracts.invariants import FREE_ENTRIES, NODES, VALUED_FLAGS
+    from novel.api.app import create_app
+    from novel.cli.main import main
     from novel.llm import response_repair
 
-    # 显式终态、一个字节都没落盘 ⇒ exit 2 那一类，不是「跑完了没过」的 exit 1。
-    with pytest.raises(TerminalState):
-        plan.run_adopt_rejected(
-            ctx, attempt_id=attempt, actor='tester', reason='先原样试一次')
-    sealed = response_repair.find_attempt(book, attempt)
-    assert sealed.outcome is not None and sealed.outcome['decision'] == 'rejected'
-    assert not (book / plan.CANDIDATE_REL).exists(), '重判失败绝不落正式产物'
-
-
-def test_a_human_fixed_candidate_is_adopted_and_the_history_stays_separable(
-        tmp_path: Path):
     book = _book(tmp_path)
-    blueprints_artifact = _seed_current_stage2(book)
-    ctx = _ctx(book, 'stage4.design', paid=False)
-    truth, mapping = build_blind_projection(
-        blueprints_artifact.model_dump(by_alias=True, mode='json'),
-        root_clean_sha1=ctx.root_clean_sha1,
-    )
-    good = _retain_a_response(
-        blueprints_artifact.model_dump(by_alias=True, mode='json'), mapping)
-    broken = copy.deepcopy(good)
-    assert len(broken['output_chapters']) > 1
-    broken['output_chapters'] = broken['output_chapters'][:-1]
-    attempt = _seal_a_validator_rejection(
-        ctx, book, response=broken, why='章集不闭合')
-
-    from novel.llm import response_repair
-
-    record = response_repair.find_attempt(book, attempt)
-    response_repair.candidate_path(record).write_text(
-        json.dumps(good, ensure_ascii=False), encoding='utf-8')
-
-    artifact = plan.run_adopt_rejected(
-        ctx, attempt_id=attempt, actor='agent:novel-pipeline-operator',
-        reason='人工补回被漏掉的那一章后按当前四道闸重判')
-
-    assert (book / plan.CANDIDATE_REL).is_file()
-    adoption = artifact.provenance.rejected_response_adoption
-    assert adoption is not None
-    assert adoption.attempt_id == attempt
-    # 历史与现在分开：响应来自当时那份代码，编译由现在这份做。
-    assert adoption.historical_code == CODE
-    assert artifact.provenance.code == ctx.code
-    # 人改过什么，逐个 JSON pointer 记着。
-    assert adoption.audit.edited_by_human is True
-    assert adoption.audit.changed_json_pointers
-    assert adoption.audit.actor == 'agent:novel-pipeline-operator'
-    # 这一次跑真的一个模型都没调；成本仍由 attempt_id 联结回账本。
-    assert artifact.provenance.model == MODEL
-    assert (artifact.provenance.usage is None
-            or artifact.provenance.usage.calls_made == 0)
-
-    # whole_book_v1 没有 split aggregate/checkpoints：审批模板必须在建立
-    # request_repair 前即可只读判为不可执行，只允许 strategy replan。
-    from novel.llm import stage4_runs
-    capability = stage4_runs.inspect_design_repair_capability(
-        ctx,
-        candidate_payload=artifact.model_dump(by_alias=True, mode='json'),
-        candidate_file_sha256=hashlib.sha256(
-            (book / plan.CANDIDATE_REL).read_bytes()).hexdigest(),
-    )
-    assert capability.repairable is False
-    assert capability.reason_code == 'legacy_or_untracked_candidate'
-    assert capability.parent_run_id is None
-    assert capability.chapter_repair_rounds == ()
-
-    sealed = response_repair.find_attempt(book, attempt)
-    assert sealed.outcome['decision'] == 'accepted'
-    # 一份拒稿只有一次采用机会。
-    with pytest.raises(Exception):
-        plan.run_adopt_rejected(
-            ctx, attempt_id=attempt, actor='tester', reason='再来一次')
-
-
-def test_adoption_refuses_a_rejection_that_belongs_to_another_node(tmp_path: Path):
-    book = _book(tmp_path)
-    blueprints_artifact = _seed_current_stage2(book)
-    ctx = _ctx(book, 'stage4.design', paid=False)
-    truth, mapping = build_blind_projection(
-        blueprints_artifact.model_dump(by_alias=True, mode='json'),
-        root_clean_sha1=ctx.root_clean_sha1,
-    )
-    good = _retain_a_response(
-        blueprints_artifact.model_dump(by_alias=True, mode='json'), mapping)
-    foreign = _ctx(book, 'stage2.blueprint', paid=False)
-    attempt = _seal_a_validator_rejection(
-        foreign, book, response=good, why='别的节点的拒稿')
-
-    from novel.errors import TerminalState
-
-    with pytest.raises(TerminalState, match='不能被'):
-        plan.run_adopt_rejected(
-            ctx, attempt_id=attempt, actor='tester', reason='跨节点采用')
-
-
-@pytest.mark.parametrize(
-    ('purpose', 'response_model'),
-    (
-        ('stage4.design:strategy', 'BlindPlanResponse'),
-        ('stage4.design', 'BlindBookStrategyResponse'),
-    ),
-)
-def test_legacy_adopter_refuses_new_design_units_without_consuming_outcome(
-        tmp_path: Path, purpose: str, response_model: str) -> None:
-    """新 strategy/chapter 拒稿不能被旧 whole-book 恢复口永久封掉。"""
-    book = _book(tmp_path)
-    blueprints_artifact = _seed_current_stage2(book)
-    ctx = _ctx(book, 'stage4.design', paid=False)
-    _truth, mapping = build_blind_projection(
-        blueprints_artifact.model_dump(by_alias=True, mode='json'),
-        root_clean_sha1=ctx.root_clean_sha1,
-    )
-    response = _retain_a_response(
-        blueprints_artifact.model_dump(by_alias=True, mode='json'), mapping)
-    attempt = _seal_a_validator_rejection(
-        ctx, book, response=response, why='合成的新 unit 拒稿',
-        purpose=purpose, response_model=response_model)
-
-    from novel.errors import TerminalState
-    from novel.llm import response_repair
-
-    with pytest.raises(TerminalState, match='不是旧 whole-book Stage4A'):
-        plan.run_adopt_rejected(
-            ctx, attempt_id=attempt, actor='tester', reason='不得误路由')
-
+    blueprints = _seed_current_stage2(book)
+    ctx, _client_value, wire, candidate, _truth, mapping = _design(book, blueprints)
+    response = _retain_a_response(blueprints.model_dump(by_alias=True, mode='json'), mapping)
+    attempt = _seal_a_validator_rejection(ctx, book, response=response, why='旧整书历史证据')
+    before = (book / plan.CANDIDATE_REL).read_bytes()
+    calls = len(wire.calls)
+    flags = ['--adopt-rejected', attempt, '--actor', 'tester', '--reason', '退役反例']
+    with pytest.raises(SystemExit) as stopped:
+        main(['run', 'stage4.design', ctx.sid, '--base', str(book.parent), *flags])
+    assert stopped.value.code == 2
+    assert 'unrecognized arguments' in capsys.readouterr().err
+    for registry in (FREE_ENTRIES, VALUED_FLAGS, NODES['stage4.design'].flags):
+        assert '--adopt-rejected' not in registry
+    for _restart in range(2):
+        with TestClient(create_app(book.parent)) as api:
+            rejected = api.post('/api/jobs/preview', headers={'x-novel-ui': '1'},
+                                json={'sid': ctx.sid, 'node': 'stage4.design', 'flags': flags})
+            assert rejected.status_code == 400, rejected.text
+            assert '--adopt-rejected' in rejected.text
+    assert (book / plan.CANDIDATE_REL).read_bytes() == before
     assert response_repair.find_attempt(book, attempt).outcome is None
-    assert not (book / plan.CANDIDATE_REL).exists()
-
-
-def test_legacy_adopter_recovers_if_accepted_outcome_write_crashes_after_adoption(
-        tmp_path: Path, monkeypatch) -> None:
-    """accepted outcome 必须晚于幂等 adoption，尾窗重跑才能补齐。"""
-    book = _book(tmp_path)
-    blueprints_artifact = _seed_current_stage2(book)
-    ctx = _ctx(book, 'stage4.design', paid=False)
-    _truth, mapping = build_blind_projection(
-        blueprints_artifact.model_dump(by_alias=True, mode='json'),
-        root_clean_sha1=ctx.root_clean_sha1,
-    )
-    response = _retain_a_response(
-        blueprints_artifact.model_dump(by_alias=True, mode='json'), mapping)
-    attempt = _seal_a_validator_rejection(
-        ctx, book, response=response, why='合成的旧整书 validator 拒稿')
-
-    from novel.llm import response_repair
-
-    record = response_repair.find_attempt(book, attempt)
-    response_repair.candidate_path(record).write_text(
-        json.dumps(response, ensure_ascii=False), encoding='utf-8')
-    original_write_outcome = response_repair.write_outcome
-
-    def crash_after_adoption(record, **kwargs):
-        assert kwargs['decision'] == 'accepted'
-        assert any(
-            row.get('kind') == 'artifact_adoption'
-            and row.get('attempt_id') == attempt
-            for row in ctx.ledger.audit_events)
-        raise RuntimeError('模拟 adoption 后 accepted outcome 落盘中断')
-
-    monkeypatch.setattr(response_repair, 'write_outcome', crash_after_adoption)
-    with pytest.raises(RuntimeError, match='accepted outcome'):
-        plan.run_adopt_rejected(
-            ctx, attempt_id=attempt, actor='tester', reason='先验证尾窗')
-
-    assert (book / plan.CANDIDATE_REL).is_file()
-    assert response_repair.find_attempt(book, attempt).outcome is None
-    adoptions = [
-        row for row in ctx.ledger.audit_events
-        if row.get('kind') == 'artifact_adoption'
-        and row.get('attempt_id') == attempt
-    ]
-    assert len(adoptions) == 1
-
-    monkeypatch.setattr(
-        response_repair, 'write_outcome', original_write_outcome)
-    landed = plan.run_adopt_rejected(
-        ctx, attempt_id=attempt, actor='tester', reason='先验证尾窗')
-
-    assert isinstance(landed, BlindCandidate)
-    assert response_repair.find_attempt(book, attempt).outcome['decision'] == 'accepted'
-    assert len([
-        row for row in ctx.ledger.audit_events
-        if row.get('kind') == 'artifact_adoption'
-        and row.get('attempt_id') == attempt
-    ]) == 1
+    assert len(wire.calls) == calls
+    assert candidate.provenance.architecture == 'book_strategy_chapters_v1'

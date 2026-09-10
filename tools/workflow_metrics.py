@@ -41,6 +41,7 @@ import argparse
 import json
 import math
 import os
+import statistics
 import sys
 from collections import Counter
 from datetime import datetime
@@ -51,27 +52,30 @@ sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from contracts.artifacts import (                                      # noqa: E402
-    ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE2_CHAPTER_BLUEPRINTS,
+    ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_CHARACTERS,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
 )
 from contracts.invariants import (                                # noqa: E402
-    BLUEPRINT_ARCHITECTURE, STAGES, WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS, review_effect_of,
+    BLUEPRINT_ARCHITECTURE, NODES, STAGES, WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS,
+    commander_work_unit, review_effect_of,
 )
 from contracts.schema import ARTIFACT_SPECS, artifact_key          # noqa: E402
 from contracts.schema.evaluation import GlobalReview               # noqa: E402
-from contracts.schema.stage2 import GlobalGrounding                # noqa: E402
+from contracts.schema.characters import CharacterRegistry         # noqa: E402
+from contracts.schema.knowledge import KnowledgeGrounding         # noqa: E402
 from novel import paths, prov, run_identity                        # noqa: E402
-from novel.llm.ledger import audit_path, ledger_path              # noqa: E402
+from novel.llm.ledger import audit_path, ledger_path, read_jsonl_rows              # noqa: E402
 from novel.orchestrator.beacon import read_events                 # noqa: E402
 from novel.quality.global_review import (                          # noqa: E402
     generation_safety, review_group_key,
 )
 from novel.stages.stage4.measure import structure_metrics_of      # noqa: E402
+from novel.stages.stage2.grounding import compose                  # noqa: E402
 
 #: 长串阈值。短串大多是 id 与 ref（`f01_02` / `b03_01`），它们重复本来就是设计目标；
 #: 「重复业务语义」说的是被内联复制的自然语言。两档一起报，不合成一个数。
 LONG_STRING_MIN_CHARS = 16
-WORKFLOW_REPORT_SCHEMA = 'novel-workflow-metrics-v2'
+WORKFLOW_REPORT_SCHEMA = 'novel-workflow-metrics-v3'
 
 #: 一次跑的观察分组：CLI 次数按节点收敛，节点名来自信标本身，不在这里手抄一张表。
 _CODE_DIRTY = '-dirty'
@@ -250,22 +254,8 @@ BOOK_TXT_KEY: str = next(iter(sorted(BOOK_SCOPED_PATHS)))
 # ── 账本 ─────────────────────────────────────────────────────────────────────
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
-    """读 append-only 账。**只容忍最后一行被 kill 截断**（同 `beacon.read_events`）。"""
-    if not path.is_file():
-        return []
-    lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
-    rows: list[dict[str, Any]] = []
-    for index, line in enumerate(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rows.append(json.loads(line))
-        except json.JSONDecodeError:
-            if index == len(lines) - 1:
-                break
-            raise
-    return rows
+    """成本与审计统一消费 LF 提交行；损坏的完整事件不能冒充截断尾。"""
+    return read_jsonl_rows(path)
 
 
 def _run_rows(
@@ -723,9 +713,283 @@ def cli_metrics(
     }
 
 
-# ── Stage2 下一次真跑验收读数 ───────────────────────────────────────────────
+# ── 分阶段性能读数：用量、内容轮、网络尝试与区间并集 ──────────────────────
 
-_STAGE2_NODES = frozenset({'stage2.global', 'stage2.blueprint'})
+
+def _performance_node(row: dict[str, Any]) -> tuple[str | None, str]:
+    """Commander 仍不是生产 node；仅从其登记 blocker 归属到阶段。"""
+    if row.get('role') == 'commander':
+        activity = row.get('activity')
+        if isinstance(activity, str) and activity.startswith('reviewer:'):
+            unit = commander_work_unit(activity.removeprefix('reviewer:'))
+            return (unit[0] if unit else None), 'commander'
+        if activity in {
+                'stage2.global.review', 'stage2.global.review-or-edit',
+                'stage2.global.final-review', 'stage2.global.prereview'}:
+            return 'stage2.global', 'commander'
+        return None, 'commander'
+    node = row.get('node')
+    return (node if isinstance(node, str) and node in NODES else None), 'executor'
+
+
+def _unit_attempt_phases(base: Path, sid: str) -> tuple[dict, list[str], list[int]]:
+    """只读原版运行账归属内容轮；历史基线只供统计，绝不提供恢复或额度。"""
+    from contracts.schema.workflow import WorkUnitLedgerV2, WorkUnitRegistryV1
+    from tools.workflow_metric_history import HistoricalWorkUnitLedgerV1
+
+    index: dict[tuple[str, str], tuple[str, str, int, bool]] = {}
+    versions: set[int] = set()
+    registry_path = paths.work_unit_registry_path(base, sid)
+    if not registry_path.is_file():
+        return {}, ['work_unit_registry_missing'], []
+    try:
+        registry = WorkUnitRegistryV1.model_validate_json(registry_path.read_bytes())
+        if registry.sid != sid:
+            return {}, ['work_unit_registry_identity_mismatch'], []
+        for unit_id in registry.unit_ids:
+            payload = json.loads(
+                (paths.work_unit_dir(base, sid, unit_id) / 'ledger.json').read_bytes())
+            version = payload.get('schema_version') if isinstance(payload, dict) else None
+            if type(version) is not int or version not in (1, 2):
+                raise ValueError('未知工作单元账版本')
+            versions.add(version)
+            model = HistoricalWorkUnitLedgerV1 if version == 1 else WorkUnitLedgerV2
+            unit = model.model_validate(payload)
+            if (unit.sid != sid or unit.unit_id != unit_id
+                    or unit.task_id != registry.task_id or unit.node not in NODES):
+                return {}, ['work_unit_identity_mismatch'], sorted(versions)
+            for turn in unit.turns:
+                actual = [a for a in turn.attempts if a.outcome != 'not_started']
+                for number, attempt in enumerate(actual):
+                    key = (turn.run_id, attempt.attempt_id)
+                    if key in index:
+                        return {}, ['work_unit_attempt_ambiguous'], sorted(versions)
+                    index[key] = (unit.node, unit.role, turn.ordinal, number > 0)
+    except (OSError, ValueError):
+        return {}, ['work_unit_unreadable'], sorted(versions)
+    if len(versions) > 1:
+        return {}, ['work_unit_schema_mixed'], sorted(versions)
+    return index, [], sorted(versions)
+
+
+def _interval_union(intervals: list[tuple[float, float]]) -> float:
+    total = 0.0
+    end: float | None = None
+    for start, stop in sorted(intervals):
+        total += max(0.0, stop - (start if end is None else max(start, end)))
+        end = stop if end is None else max(stop, end)
+    return round(total, 3)
+
+
+def _performance_intervals(base: Path, sid: str, run_id: str | None) -> tuple[dict, dict, dict, dict]:
+    """一次读取信标，向阶段和节点分别投影精确执行区间；缺尾或重叠身份保持未知。"""
+    spans = {stage: [] for stage in STAGES}
+    errors = {stage: [] for stage in STAGES}
+    node_spans = {node: [] for node in NODES}
+    node_errors = {node: [] for node in NODES}
+    if run_id is None:
+        return (spans, {stage: ['run_id_missing'] for stage in STAGES},
+                node_spans, {node: ['run_id_missing'] for node in NODES})
+    events = [event for event in read_events(base)
+              if event.sid == sid and event.run_id == run_id and event.node in NODES]
+    groups: dict[str, list[Any]] = {}
+    def fail(node: str, reason: str) -> None:
+        errors[NODES[node].stage].append(reason)
+        node_errors[node].append(reason)
+    for event in events:
+        if not event.execution_id:
+            fail(event.node, 'execution_id_missing')
+        else:
+            groups.setdefault(event.execution_id, []).append(event)
+    for group in groups.values():
+        starts = [event for event in group if event.phase == 'start']
+        ends = [event for event in group if event.phase != 'start']
+        if (len(starts) != 1 or len(ends) != 1
+                or starts[0].node != ends[0].node or ends[0].ts < starts[0].ts):
+            for node in {event.node for event in group}:
+                fail(node, 'execution_interval_unclosed')
+            continue
+        interval = (float(starts[0].ts), float(ends[0].ts))
+        spans[NODES[starts[0].node].stage].append(interval)
+        node_spans[starts[0].node].append(interval)
+    return spans, errors, node_spans, node_errors
+
+
+def _performance_group(values: list[tuple[dict, str, Any]], *, spans: list,
+                       interval_errors: list[str], unit_errors: list[str],
+                       audits: list[dict], related_nodes: set[str]) -> dict:
+    """阶段和节点使用同一用量及区间聚合口径，不分摊书级 C 到任意章节。"""
+    wire = [value for value in values if value[0].get('cached') is False]
+    unknown_cache = sum(value[0].get('cached') is not True and value[0].get('cached') is not False
+                        for value in values)
+    errors = list(interval_errors)
+    if not spans:
+        errors.append('no_observed_interval')
+    if unknown_cache:
+        errors.append('cache_state_unknown')
+    result = {
+        'observed_ledger_rows': len(values),
+        'wire': _wire_usage_metrics([row for row, _role, _phase in wire]),
+        'roles': {role: _wire_usage_metrics([
+            row for row, row_role, _phase in wire if row_role == role])
+            for role in ('executor', 'commander')},
+        'cache_hits': sum(value[0].get('cached') is True for value in values),
+        'cache_state_unknown': unknown_cache,
+        'outcomes': dict(sorted(Counter(
+            row['outcome'] if row.get('outcome') in ('ok', 'error') else 'unknown'
+            for row, _role, _phase in wire).items())),
+        'content_phases': {label: _wire_usage_metrics([
+            row for row, _role, phase in wire
+            if (phase is None if ordinal is None else
+                phase is not None and (phase[2] == 1) == ordinal)])
+            for label, ordinal in (('first', True), ('revision', False), ('unknown', None))},
+        'role_content_phases': {
+            role: {label: _wire_usage_metrics([
+                row for row, row_role, phase in wire if row_role == role
+                and (phase is None if ordinal is None else
+                     phase is not None and (phase[2] == 1) == ordinal)])
+                for label, ordinal in (('first', True), ('revision', False), ('unknown', None))}
+            for role in ('executor', 'commander')},
+        'network_retry_wires': sum(bool(phase and phase[3]) for _row, _role, phase in wire),
+        'attempt_link_unknown': sum(phase is None for _row, _role, phase in wire),
+        'work_unit_errors': unit_errors,
+        'audit_events': dict(sorted(Counter(
+            str(row.get('kind') or 'unknown') for row in audits
+            if _performance_node(row)[0] in related_nodes).items())),
+        'observed_active_seconds': _interval_union(spans) if not errors else None,
+        'known_interval_union_seconds': _interval_union(spans),
+        'observed_elapsed_seconds': (round(max(end for _, end in spans)
+            - min(start for start, _ in spans), 3) if not errors else None),
+        'interval_state': 'unver' if errors else 'ok',
+        'interval_errors': sorted(set(errors)),
+        'observed_intervals': len(spans),
+    }
+
+    result['failed_wires'] = (None if result['outcomes'].get('unknown') else
+                              result['outcomes'].get('error', 0))
+    result['observed_first_start'] = min((start for start, _ in spans), default=None)
+    result['observed_last_end'] = max((end for _, end in spans), default=None)
+    by_chapter: dict[int, list[dict]] = {}
+    chapterless = 0
+    identities: set[tuple[str, str, str]] = set()
+    unknown_identity = 0
+    for row, role, _phase in wire:
+        model, effort = row.get('model'), row.get('reasoning_effort')
+        if all(isinstance(value, str) and value.strip() for value in (model, effort)):
+            identities.add((role, model, effort))
+        else:
+            unknown_identity += 1
+        if role != 'executor':
+            continue
+        ordinal = row.get('chapter')
+        if type(ordinal) is int and ordinal > 0:
+            by_chapter.setdefault(ordinal, []).append(row)
+        else:
+            chapterless += 1
+    result['model_effort_identities'] = [
+        {'role': role, 'model': model, 'reasoning_effort': effort}
+        for role, model, effort in sorted(identities)]
+    result['model_effort_unknown_wires'] = unknown_identity
+    result['chapter_executor_usage'] = {str(key): _wire_usage_metrics(rows)
+                                        for key, rows in sorted(by_chapter.items())}
+    result['chapterless_executor_wires'] = chapterless
+    totals = [row['total_tokens'] for row in result['chapter_executor_usage'].values()]
+    result['chapter_total_tokens_p50'] = (statistics.median(totals)
+        if totals and not chapterless and all(value is not None for value in totals) else None)
+    return result
+
+
+def pipeline_performance_metrics(base: Path, sid: str, *, run_id: str | None) -> dict[str, Any]:
+    """观察 E/C 阶段、节点、内容轮与并发墙钟；完成和质量仍须独立收据。"""
+    rows = _run_rows(_jsonl(ledger_path(base)), sid, run_id)
+    audits = _run_rows(_jsonl(audit_path(base)), sid, run_id)
+    ledger_file = ledger_path(base)
+    ledger_bytes = ledger_file.read_bytes() if ledger_file.is_file() else None
+    ledger_complete = ledger_bytes is not None and (not ledger_bytes or ledger_bytes.endswith(b'\n'))
+    attempts, unit_errors, unit_versions = _unit_attempt_phases(base, sid)
+    spans, interval_errors, node_spans, node_errors = _performance_intervals(base, sid, run_id)
+    executor_spans = {node: tuple(intervals) for node, intervals in node_spans.items()}
+    grouped = {stage: [] for stage in STAGES}
+    node_groups = {node: [] for node in NODES}
+    unassigned = []
+    for row in rows:
+        node, role = _performance_node(row)
+        if node is None:
+            unassigned.append(row)
+            continue
+        stage = NODES[node].stage
+        phase = attempts.get((row.get('run_id'), row.get('attempt_id')))
+        if phase is not None and (phase[0] != node or phase[1] != role):
+            phase = None
+        grouped[stage].append((row, role, phase))
+        node_groups[node].append((row, role, phase))
+        if role == 'executor' and row.get('cached') is False:
+            end, latency = _iso_epoch(row.get('at')), row.get('latency_ms')
+            # 信标和旧 ledger 时刻精度为秒；一秒容差只用于边界量化，不能拿
+            # 其他节点或 Commander 的完整区间替缺失的 Executor 区间补证。
+            matched = ([] if end is None or type(latency) is not int or latency < 0 else
+                [interval for interval in executor_spans[node]
+                 if interval[0] - 1 <= end - latency / 1000.0 and end <= interval[1] + 1])
+            if len(matched) != 1:
+                reason = 'executor_interval_missing' if not matched else 'executor_interval_ambiguous'
+                interval_errors[stage].append(reason)
+                node_errors[node].append(reason)
+        if role == 'commander' and row.get('cached') is False:
+            end, latency = _iso_epoch(row.get('at')), row.get('latency_ms')
+            if end is None or type(latency) is not int or latency < 0:
+                interval_errors[stage].append('commander_interval_unknown')
+                node_errors[node].append('commander_interval_unknown')
+            else:
+                interval = (end - latency / 1000.0, end)
+                spans[stage].append(interval)
+                node_spans[node].append(interval)
+    output = {stage: _performance_group(values, spans=spans[stage],
+        interval_errors=interval_errors[stage], unit_errors=unit_errors, audits=audits,
+        related_nodes={node for node, spec in NODES.items() if spec.stage == stage})
+        for stage, values in grouped.items()}
+    nodes = {node: _performance_group(values, spans=node_spans[node],
+        interval_errors=node_errors[node], unit_errors=unit_errors, audits=audits,
+        related_nodes={node}) for node, values in node_groups.items()}
+    for values in [*output.values(), *nodes.values()]:
+        gaps = []
+        if not ledger_complete:
+            gaps.append('ledger_missing_or_uncommitted')
+        if unassigned:
+            gaps.append('ledger_rows_unassigned')
+        if values['cache_state_unknown']:
+            gaps.append('cache_state_unknown')
+        values['cost_partition_errors'] = gaps
+        if gaps:
+            values['interval_state'] = 'unver'
+            values['interval_errors'] = sorted(set([*values['interval_errors'], *gaps]))
+            values['observed_active_seconds'] = values['observed_elapsed_seconds'] = None
+            # 未归属/未提交的调用可能还属于任一角色或轮次；已知小计留着，
+            # 但不能把可见片段冒充该组完整总量用于配对节约结论。
+            buckets = [values['wire'], *values['roles'].values(),
+                       *values['content_phases'].values(),
+                       *(item for role in values['role_content_phases'].values()
+                         for item in role.values())]
+            values['chapter_total_tokens_p50'] = None
+            buckets.extend(values['chapter_executor_usage'].values())
+            for bucket in buckets:
+                bucket['token_verdict'] = 'unver'
+                for key in ('total_tokens', 'prompt_tokens', 'completion_tokens',
+                            'reasoning_tokens_within_completion'):
+                    bucket[key] = None
+    return {
+        'ledger_state': 'ok' if ledger_complete else 'missing_or_uncommitted',
+        'scope': 'observed_execution_intervals_not_delivery',
+        'work_unit_ledger_versions': unit_versions,
+        'unassigned_rows': len(unassigned),
+        'unassigned_wire': _wire_usage_metrics([row for row in unassigned if row.get('cached') is False]),
+        'stages': output,
+        'nodes': nodes,
+    }
+
+
+# ── Stage2 当前载体与审阅闭合读数 ───────────────────────────────────────────
+
+_STAGE2_NODES = frozenset(node for node, spec in NODES.items() if spec.stage == 'stage2')
 
 
 def _nearest_rank(values: list[float], percentile: float) -> float | None:
@@ -747,81 +1011,6 @@ def _iso_epoch(value: object) -> float | None:
     if parsed.tzinfo is None:
         return None
     return parsed.timestamp()
-
-
-def _stage2_cli_intervals(
-    base: Path, sid: str, run_id: str | None,
-) -> tuple[list[tuple[str, float, float]], list[str]]:
-    """只按 exact execution id 配 Stage2 信标，不为验收猜旧历史。"""
-    if run_id is None:
-        return [], ['run_id_missing']
-    events = [
-        event for event in read_events(base)
-        if event.sid == sid and event.run_id == run_id
-        and event.node in _STAGE2_NODES
-    ]
-    pending: dict[str, Any] = {}
-    closed: set[str] = set()
-    intervals: list[tuple[str, float, float]] = []
-    errors: list[str] = []
-    for event in events:
-        execution_id = event.execution_id
-        if execution_id is None:
-            errors.append('execution_id_missing')
-            continue
-        if event.phase == 'start':
-            if execution_id in pending or execution_id in closed:
-                errors.append('duplicate_start')
-                continue
-            pending[execution_id] = event
-            continue
-        started = pending.pop(execution_id, None)
-        if started is None:
-            errors.append('orphan_end')
-            continue
-        if started.node != event.node:
-            errors.append('node_drift')
-            continue
-        closed.add(execution_id)
-        intervals.append((event.node, float(started.ts), float(event.ts)))
-    if pending:
-        errors.append('unclosed_start')
-    for required in sorted(_STAGE2_NODES):
-        if not any(node == required for node, _start, _end in intervals):
-            errors.append(f'{required}_interval_missing')
-    return intervals, sorted(Counter(errors).elements())
-
-
-def _stage2_commander_intervals(
-    rows: list[dict[str, Any]],
-) -> tuple[list[tuple[str, float, float]], list[str]]:
-    intervals: list[tuple[str, float, float]] = []
-    errors: list[str] = []
-    for row in rows:
-        if row.get('role') != 'commander':
-            continue
-        activity = row.get('activity')
-        if not isinstance(activity, str) or not activity.startswith('stage2.'):
-            continue
-        end = _iso_epoch(row.get('at'))
-        latency = row.get('latency_ms')
-        if (end is None or isinstance(latency, bool)
-                or not isinstance(latency, int) or latency < 0):
-            errors.append('commander_interval_unver')
-            continue
-        intervals.append((activity, end - latency / 1000.0, end))
-    return intervals, errors
-
-
-def _overlap_seconds(
-    left: list[tuple[str, float, float]],
-    right: list[tuple[str, float, float]],
-) -> float:
-    return round(sum(
-        max(0.0, min(l_end, r_end) - max(l_start, r_start))
-        for _l_name, l_start, l_end in left
-        for _r_name, r_start, r_end in right
-    ), 3)
 
 
 def _known_string_counter(
@@ -933,10 +1122,12 @@ def _stage2_role_lifecycle(
             continue
         unit = current[0]
         used, limit = unit.get('content_used'), unit.get('content_limit')
-        known = type(used) is int and type(limit) is int
-        within = known and limit == WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS and 1 <= used <= limit
+        granted = unit.get('content_granted')
+        known = type(used) is int and type(limit) is int and type(granted) is int
+        within = known and granted >= 0 and limit == WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS + granted and 1 <= used <= limit
         result['commanders'][node] = {
             'content_used': used, 'content_limit': limit,
+            'content_granted': granted, 'grant_count': unit.get('grant_count'),
             'content_remaining': unit.get('content_remaining'),
             'budget_state': 'ok' if within else 'fail' if known else 'unver',
         }
@@ -963,13 +1154,15 @@ def _stage2_role_lifecycle(
 
 def stage2_metrics(
     base: Path, novel_dir: Path, sid: str, *, run_id: str | None,
-    identity: dict[str, Any], audit: dict[str, Any],
+    identity: dict[str, Any], audit: dict[str, Any], performance: dict[str, Any],
 ) -> dict[str, Any]:
-    """下一次真实 Stage2 的稳定性、质量与墙钟证据；只读且不下结论越权。"""
+    """当前三 producer 与两 Commander 的取证；耗时共用 performance 的唯一口径。"""
     ledger_rows = _run_rows(_jsonl(ledger_path(base)), sid, run_id)
     audit_rows = _run_rows(_jsonl(audit_path(base)), sid, run_id)
     blueprint, blueprint_current, blueprint_invalid = _current_artifact(
         novel_dir, STAGE2_CHAPTER_BLUEPRINTS)
+    characters, characters_current, characters_invalid = _current_artifact(
+        novel_dir, STAGE2_CHARACTERS)
     global_payload, global_current, global_invalid = _current_artifact(
         novel_dir, STAGE2_GLOBAL_GROUNDING)
     review_payload, review_current_schema, review_invalid = _current_artifact(
@@ -986,7 +1179,8 @@ def stage2_metrics(
         if blueprint is not None else None)
 
     blueprint_rows = [
-        row for row in ledger_rows if row.get('node') == 'stage2.blueprint']
+        row for row in ledger_rows
+        if _performance_node(row) == ('stage2.blueprint', 'executor')]
     blueprint_wire = [row for row in blueprint_rows if row.get('cached') is False]
     per_chapter_ms: dict[int, int] = {}
     latency_unver = 0
@@ -1008,39 +1202,20 @@ def stage2_metrics(
 
     stage2_rows = [
         row for row in ledger_rows
-        if row.get('node') in _STAGE2_NODES
-        or (isinstance(row.get('activity'), str)
-            and row['activity'].startswith('stage2.'))
+        if _performance_node(row)[0] in _STAGE2_NODES
     ]
     stage2_cache = [row for row in stage2_rows if row.get('cached') is True]
     cache_unknown = [
         row for row in stage2_rows
         if row.get('cached') is not True and row.get('cached') is not False]
     cold_cache_state = (
-        'unver' if not stage2_rows or cache_unknown
+        'unver' if not stage2_rows or cache_unknown or performance['cost_partition_errors']
         else 'ok' if not stage2_cache else 'fail')
 
-    cli_intervals, cli_errors = _stage2_cli_intervals(base, sid, run_id)
-    commander_intervals, commander_interval_errors = _stage2_commander_intervals(
-        ledger_rows)
-    all_intervals = [*cli_intervals, *commander_intervals]
-    wall_complete = (
-        bool(all_intervals) and not cli_errors and not commander_interval_errors
-        and bool(commander_intervals))
-    wall_seconds = (
-        round(max(end for _name, _start, end in all_intervals)
-              - min(start for _name, start, _end in all_intervals), 3)
-        if wall_complete else None)
-    prereview_intervals = [
-        row for row in commander_intervals
-        if row[0] == 'stage2.global.prereview']
-    blueprint_cli_intervals = [
-        row for row in cli_intervals if row[0] == 'stage2.blueprint']
-    overlap = _overlap_seconds(prereview_intervals, blueprint_cli_intervals)
-    overlap_state = (
-        'unver' if cli_errors or commander_interval_errors
-        or not prereview_intervals or not blueprint_cli_intervals
-        else 'ok' if overlap > 0 else 'missed')
+    # 接受顺序只取 Executor 的精确区间，不把 Commander 的起点代入生成起点。
+    _spans, _errors, node_spans, node_errors = _performance_intervals(base, sid, run_id)
+    blueprint_cli_intervals = ([] if node_errors['stage2.blueprint'] else [
+        ('stage2.blueprint', start, end) for start, end in node_spans['stage2.blueprint']])
     from novel.work_units import list_unit_views
     from novel.orchestrator import approvals
     try:
@@ -1053,10 +1228,8 @@ def stage2_metrics(
         role_lifecycle = _stage2_role_lifecycle(None, {}, [])
 
     commander_rows = [
-        row for row in ledger_rows
-        if row.get('role') == 'commander'
-        and isinstance(row.get('activity'), str)
-        and row['activity'].startswith('stage2.')
+        row for row in stage2_rows
+        if row.get('role') == 'commander' and row.get('cached') is False
     ]
     activity_counts = Counter(str(row['activity']) for row in commander_rows)
     activity_ms: Counter[str] = Counter()
@@ -1083,7 +1256,10 @@ def stage2_metrics(
 
     global_review_safety: dict[str, Any]
     try:
-        grounding = GlobalGrounding.model_validate(global_payload)
+        if not characters_current or characters_invalid or not global_current or global_invalid:
+            raise ValueError('人物与知识必须都是当前正式载体')
+        grounding = compose(CharacterRegistry.model_validate(characters),
+                            KnowledgeGrounding.model_validate(global_payload))
         review = GlobalReview.model_validate(review_payload)
         safety = generation_safety(
             grounding.model_dump(by_alias=True, mode='json'), review)
@@ -1111,6 +1287,15 @@ def stage2_metrics(
             'state': cold_cache_state,
             'hits': len(stage2_cache),
             'unknown_rows': len(cache_unknown),
+        },
+        'characters_artifact': {
+            'formal_present': characters is not None,
+            'current_schema': characters_current,
+            'invalid_present': characters_invalid,
+            'run_binding': _artifact_run_binding(
+                characters, rel=STAGE2_CHARACTERS,
+                node='stage2.characters', chapters=[None],
+                audit_rows=audit_rows, run_id=run_id),
         },
         'global_artifact': {
             'formal_present': global_payload is not None,
@@ -1180,16 +1365,11 @@ def stage2_metrics(
             'latency_unver_rows': activity_latency_unver,
         },
         'role_lifecycle': role_lifecycle,
-        'overlap': {
-            'state': 'retired_observation',
-            'historical_state': overlap_state,
-            'prereview_blueprint_seconds': overlap,
-        },
         'wall_clock': {
-            'state': 'ok' if wall_complete else 'unver',
-            'seconds': wall_seconds,
-            'cli_interval_errors': cli_errors,
-            'commander_interval_errors': commander_interval_errors,
+            'state': performance['interval_state'],
+            'seconds': performance['observed_elapsed_seconds'],
+            'active_seconds': performance['observed_active_seconds'],
+            'interval_errors': performance['interval_errors'],
         },
     }
 
@@ -1358,6 +1538,7 @@ def collect(
     identity = identity_metrics(
         base_path, novel_dir, sid, run_id=checked_run_id)
     audit = audit_metrics(base_path, sid, run_id=checked_run_id)
+    performance = pipeline_performance_metrics(base_path, sid, run_id=checked_run_id)
     report = {
         'schema': WORKFLOW_REPORT_SCHEMA,
         'sid': sid,
@@ -1369,7 +1550,8 @@ def collect(
         'cli': cli_metrics(base_path, sid, run_id=checked_run_id),
         'stage2': stage2_metrics(
             base_path, novel_dir, sid, run_id=checked_run_id,
-            identity=identity, audit=audit),
+            identity=identity, audit=audit, performance=performance['stages']['stage2']),
+        'performance': performance,
         'human': human_metrics(novel_dir),
         'structure': structure_readings(novel_dir),
     }
@@ -1470,16 +1652,37 @@ def render(report: dict[str, Any]) -> str:
         '',
     ]
 
+    if 'performance' in report:
+        out += ['', '## 分阶段 E/C 消耗与活跃区间', '',
+                  '活跃秒数为已闭合执行区间并集，不代表交付或质量通过。', '',
+                  '| 阶段 | E token | C token | 合计 token | 活跃秒 | 缓存 | 网络重试 | 未联结尝试 |',
+                  '|---|---:|---:|---:|---:|---:|---:|---:|']
+        for name in ('stage2', 'stage4', 'stage5'):
+            value = report['performance']['stages'][name]
+            if not value['observed_ledger_rows']:
+                out.append(f'| {name} | 未观察到数据 | — | — | — | — | — | — |')
+                continue
+            def shown(item):
+                return '未知' if item is None else str(item)
+            out.append(f"| {name} | {shown(value['roles']['executor']['total_tokens'])} | "
+                         f"{shown(value['roles']['commander']['total_tokens'])} | "
+                         f"{shown(value['wire']['total_tokens'])} | "
+                         f"{shown(value['observed_active_seconds'])} | {value['cache_hits']} | "
+                         f"{value['network_retry_wires']} | {value['attempt_link_unknown']} |")
+
     stage2 = report['stage2']
     bp = stage2['blueprint_wire']
     bp_latency = bp['chapter_latency_seconds']
     out += [
-        '## Stage2 下一次真跑验收面', '',
+        '## Stage2 当前载体与审阅取证', '',
         f'- 契约：实际 `{stage2["architecture"]}` / '
         f'预期 `{stage2["expected_architecture"]}`；冷缓存 '
         f'**{stage2["cold_cache"]["state"]}** '
         f'（命中 {stage2["cold_cache"]["hits"]}）',
-        f'- Global formal/run 绑定：'
+        f'- 人物 formal/run 绑定：'
+        f'{stage2["characters_artifact"]["formal_present"]} / '
+        f'{stage2["characters_artifact"]["run_binding"]["state"]}；'
+        f'Global formal/run 绑定：'
         f'{stage2["global_artifact"]["formal_present"]} / '
         f'{stage2["global_artifact"]["run_binding"]["state"]}；'
         f'Blueprint {stage2["blueprint_artifact"]["chapters"]} 章，'
@@ -1489,18 +1692,20 @@ def render(report: dict[str, Any]) -> str:
         f'error {bp["errors"]} / unknown {bp["outcome_unknown"]}）；'
         f'逐章 latency {bp["latency_state"]}，P50 {bp_latency["p50"]}s / '
         f'P95 {bp_latency["p95"]}s / max {bp_latency["max"]}s',
-        f'- Commander {stage2["commander"]["calls"]} 次：'
+        f'- Commander wire {stage2["commander"]["calls"]} 次：'
         f'{stage2["commander"]["activities"]}；双 Commander 内容预算与接受顺序 '
         f'**{stage2["role_lifecycle"]["state"]}**；'
         f'{stage2["role_lifecycle"]["commanders"]}',
         f'- Stage2 首 start→最后 terminal：'
         f'**{stage2["wall_clock"]["state"]}** '
-        f'{stage2["wall_clock"]["seconds"]}s',
+        f'{stage2["wall_clock"]["seconds"]}s；活跃区间并集 '
+        f'{stage2["wall_clock"]["active_seconds"]}s（含人物抽取）',
         f'- 生产机械 check：{stage2["mechanical_check"]["state"]}；'
         f'Global review generation-safe：'
         f'{stage2["global_review"]["generation_safe"]}',
-        '- 本节只提供单次证据；“稳定、质量未受影响、显著提速”须交给 '
-        '`tools/stage2_acceptance.py` 汇总至少 5 次冷缓存 clean run 与人工抽查。',
+        '- 本节只提供单次证据；当前性能与质量验收使用 '
+        '`tools/workflow_pairs.py` 的三书九组配对和具名质量收据，见 '
+        '`docs/PERFORMANCE_EXPERIMENTS.md`。',
         '',
     ]
 

@@ -638,3 +638,53 @@ def test_resume_skips_completed_paid_cells_and_only_runs_pending_cells(
         json.dumps({**seal, 'plan_sha256': 'f' * 64}), encoding='utf-8')
     with pytest.raises(RuntimeError, match='write-once'):
         A._write_complete_seal(plan)
+
+
+def test_legacy_stage6_projection_is_exactly_the_five_hook_mechanical_leaves():
+    source = {
+        'voice': {'register_tone': '定性哨兵'},
+        'surface_habits': ['定性哨兵'],
+        'chapter_styles': [{'source_ordinal': 1, 'voice': {'x': '定性哨兵'}}],
+        'hook_style': {'end_question': '定性哨兵'},
+        'measurable': {
+            'body': {'avg_sentence_chars': 99},
+            'hook': {
+                'chars': 100,
+                'paragraphs': 8,
+                'sentences': 10,
+                'avg_sentence_chars': 10,
+                'avg_paragraph_chars': 12,
+                'paragraph_sep_chars': 2,
+                'dialogue_ratio': 0.2,
+                'dialogue_ratio_applicable': True,
+                'quote_styles': ['“”'],
+            },
+        },
+        '_provenance': {'code': '不消费'},
+    }
+    expected = {
+        'chars': 100,
+        'avg_sentence_chars': 10,
+        'avg_paragraph_chars': 12,
+        'quote_styles': ['“”'],
+        'dialogue_ratio': 0.2,
+    }
+    assert A._historical_hook_measurement(source) == expected
+
+    for key in ('voice', 'surface_habits', 'chapter_styles', 'hook_style',
+                '_provenance'):
+        edited = json.loads(json.dumps(source, ensure_ascii=False))
+        edited[key] = {'任意': '变化'}
+        assert A._historical_hook_measurement(edited) == expected, key
+    for key in expected:
+        edited = json.loads(json.dumps(source, ensure_ascii=False))
+        edited['measurable']['hook'][key] = 'changed'
+        assert A._historical_hook_measurement(edited) != expected, key
+
+    assert A._historical_hook_measurement({'measurable': '旧坏形状'}) == {
+        'chars': None,
+        'avg_sentence_chars': None,
+        'avg_paragraph_chars': None,
+        'quote_styles': None,
+        'dialogue_ratio': None,
+    }

@@ -37,6 +37,7 @@ from novel.errors import (
     HookCopyMissing,
     HumanEditProtected,
     NovelError,
+    OutputRootUnavailable,
     ParagraphPlanInfeasible,
     PathRefused,
     PartitionChapterMismatch,
@@ -68,6 +69,7 @@ BAD_REQUEST = 400
 
 #: 异常 → 状态码。**按类精确匹配，再沿 MRO 上溯；没有默认格。**
 STATUS: dict[type[NovelError], int] = {
+    OutputRootUnavailable: 409,
     # ── 数据/流程说走不下去了（`TerminalState`）。**不是 bug，不打栈** ──
     UpstreamMissing: 404,
     #: ⚠ **与 404 必须分开**（`novel/errors.py` 的原话）：「上游还没跑」是流程问题
@@ -165,6 +167,9 @@ STATUS: dict[type[NovelError], int] = {
 #: ⚠ 那条边界哪天松了（比如有人把付费路直接接进 HTTP 层），这张表要跟着改——
 #: 而上面那条测试会逼他先来读这段话。
 UNREACHABLE_OVER_HTTP: dict[str, str] = {
+    'Stage2ReviewBudgetRefused': (
+        '已退役 Stage2 独立账的只读审计解码异常；当前 API、CLI 和 Supervisor '
+        '只消费 work_units，不调用旧账读取器'),
     'GlobalEditCandidateRejected': (
         'Stage2 GlobalEdit 的纯内存候选边界；canonical CLI 会把它映射为终态退出码，'
         'Agent Supervisor 预检也会先转成私有控制流并在席位账内闭合，HTTP 路由不会接到异常对象'),

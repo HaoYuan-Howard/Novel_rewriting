@@ -242,11 +242,11 @@ def test_next_uses_one_snapshot_and_the_shared_queue_lane(monkeypatch, tmp_path)
     assert A._READ_OVERVIEW.get() is None
 
 
-def test_frozen_v6_validation_suspension_has_no_execution_token(
+def test_retired_blocker_has_no_execution_token(
         monkeypatch, tmp_path):
     snapshot = _snapshot(tmp_path)
     blocker = _blocked(
-        'stage4.plan', Q.WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY)
+        'stage4.plan', 'legacy_frozen_v6_design_authority_unavailable')
     _wire(monkeypatch, snapshot, todo=[], blocked=[blocker])
 
     got = O.next_action(tmp_path, 'book-1')
@@ -254,7 +254,7 @@ def test_frozen_v6_validation_suspension_has_no_execution_token(
     assert got.state == 'blocked'
     assert got.execution_token is None
     assert got.action is not None
-    assert got.action.waiting_on == Q.WAITING_ON_FROZEN_V6_DESIGN_AUTHORITY
+    assert got.action.waiting_on == 'legacy_frozen_v6_design_authority_unavailable'
     assert got.action.waiting_on != Q.WAITING_ON_STAGE4_DESIGN_REVIEW
 
 

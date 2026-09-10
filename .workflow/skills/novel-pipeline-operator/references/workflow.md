@@ -194,19 +194,20 @@ runner 外补信标。preview 不写信标。信标只记录观察轨迹、不�
 | 2 | `stage0.approve` | `--expected-revision-id <工作包 revision_id> --actor <ACTOR> --reason <text>` | 按代批契约审阅 Stage0 check 与剔除视图后批准，批准状态写入 revision 链；读包后 revision 漂移会关闭式拒绝。**每本书都要过这一步**——首跑恒 pending，零剔除的书也一样（见下） |
 | 3 | `stage0.edit` | 仅当代批发现剔除错误时用 typed edit/edit-plan；无修改则 `state` 跳过 | 人工修订经同一 Stage0 闸门重判，不直改正式文本 |
 | 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
-| 5 | `stage2.global` | 无；agent executor 原生同 session 修复 | 最新 Global 候选通过 schema 后即物化 current 称名投影；Global HARD 可让候选暂留 `.INVALID`，但只要投影 current/fresh 就不阻塞 blueprint 计算 |
-| 6 | `stage2.blueprint` | current/fresh 称名投影可读后独立 preview/run，不等 Global 正式稿；新关系只经 `--emit-edit-template` → `--apply-edit` 完整集合替换 | 逐章蓝图正式落盘；Stage4 前再汇合 current 正式 global、唯一 Stage2 `--check-only` 联合 HARD 无命中，以及 current review 的 generation-safe blocking 面 |
-| 7 | `stage4.design` | 首轮无参数；当前正式 A 审阅拒绝时只执行服务端给出的 `--review-token <opaque>`；单章模型 repair 耗尽可 `--apply-edit` 完整章，显式策略驳回则同时带 `--replan` | 只产生当前盲候选；本相未读取原文顺序、证据位置或必须材料，且不会顺带启动下一相。机械通过后还须提交全书策略 + 逐章正式设计审阅 |
-| 8 | `stage4.plan` | 仅在当前 A 设计审阅全书 accepted 后重新独立 preview/run | B 只绑定证据；模型的 `binding_concerns` 进入最终人审但不阻断。模型声称 infeasible 只有代码构造性证明后才可正式落盘，否则同 session 返修为完整 bound |
-| 9 | `stage4.context` | B 编译计划机械通过、且最终逐章结构裁决全书 accepted 后单独执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh；B、`--revalidate`、`--apply-edit`、`--apply-binding` 都不得自动组装它 |
-| 10 | `stage5.write` | 不带 `--chapters` 即写全部缺少的 canonical 章 | `stage5/chNN.json` 恰好覆盖计划章集合；内部重试不等于整节点失败 |
-| 11 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态；所有 edit/trim/wontfix 收口后另提交 current Stage5 typed closure，才可进入 Stage6 |
-| 12 | `stage6.hook` | 无；完整三候选 replacement 在同 session 内修复 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
-| 13 | `stage6.semantic` | 无；A/B 独立 session 并发 | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
-| 14 | `stage6.approve` | `--pick <N> --actor <ACTOR> --reason <text> --review-token <opaque>` | 先完整读取 current Stage6 workpack；所选候选满足代批判据，opaque token 来自同一不可变包，`hook.json.approved` 与最新语义结论一致；`already_current` 时不重复提交 |
-| 15 | `stage7.rename` | 无；完整映射 replacement 在同 session 内修复 | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
-| 16 | `stage7.approve` | `--actor <ACTOR> --reason <text> --review-token <opaque>` | 先完整读取 current Stage7 workpack；映射、别名、替换命中、漏网上下文与语义标记通过代批判据，opaque token 来自同一不可变包，批准状态落盘；`already_current` 时不重复提交 |
-| 17 | `stage7.assemble` | 无 | `stage7/<书名>_rewriting.txt` 生成并通过独立成书对账 |
+| 5 | `stage2.characters` | 无；同一整书工作单元恢复回答与 prepared | 静态人物注册及源文证据经 schema/HARD 复验后正式落盘；typed 编辑与 `--revalidate` 走同一 producer |
+| 6 | `stage2.global` | 当前人物正式产物可用；agent executor 原生同 session 修复 | Global 正式消费源文案和证据，再提出开篇范围；当前正式知识与称名投影有效，逐项决定 generation-safe，且 Global Commander 已接受后才放行 Blueprint |
+| 7 | `stage2.blueprint` | Global 当前接受后独立 preview/run；新关系只经 `--emit-edit-template` → `--apply-edit` 完整集合替换 | 逐章蓝图正式落盘；Blueprint Commander 核验知识关联，typed 决定先持久化，再由本 producer 提交独立版本化 knowledge_links；唯一联合 check 无 HARD 且两位 Commander 当前接受后免费收口 |
+| 8 | `stage4.design` | 首轮无参数；当前正式 A 审阅拒绝时只执行服务端给出的 `--review-token <opaque>`；单章模型 repair 耗尽可 `--apply-edit` 完整章，显式策略驳回则同时带 `--replan` | 只产生当前盲候选；本相未读取原文顺序、证据位置或必须材料，且不会顺带启动下一相。机械通过后还须提交全书策略 + 逐章正式设计审阅 |
+| 9 | `stage4.plan` | 仅在当前 A 设计审阅全书 accepted 后重新独立 preview/run | B 只绑定证据；模型的 `binding_concerns` 进入最终人审但不阻断。模型声称 infeasible 只有代码构造性证明后才可正式落盘，否则同 session 返修为完整 bound |
+| 10 | `stage4.context` | B 编译计划机械通过、且最终逐章结构裁决全书 accepted 后单独执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh；B、`--revalidate`、`--apply-edit`、`--apply-binding` 都不得自动组装它 |
+| 11 | `stage5.write` | 不带 `--chapters` 即写全部缺少的 canonical 章 | `stage5/chNN.json` 恰好覆盖计划章集合；内部重试不等于整节点失败 |
+| 12 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态；所有 edit/trim/wontfix 收口后另提交 current Stage5 typed closure，才可进入 Stage6 |
+| 13 | `stage6.hook` | 无；完整三候选 replacement 在同 session 内修复 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
+| 14 | `stage6.semantic` | 无；A/B 独立 session 并发 | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
+| 15 | `stage6.approve` | `--pick <N> --actor <ACTOR> --reason <text> --review-token <opaque>` | 先完整读取 current Stage6 workpack；所选候选满足代批判据，opaque token 来自同一不可变包，`hook.json.approved` 与最新语义结论一致；`already_current` 时不重复提交 |
+| 16 | `stage7.rename` | 无；完整映射 replacement 在同 session 内修复 | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
+| 17 | `stage7.approve` | `--actor <ACTOR> --reason <text> --review-token <opaque>` | 先完整读取 current Stage7 workpack；映射、别名、替换命中、漏网上下文与语义标记通过代批判据，opaque token 来自同一不可变包，批准状态落盘；`already_current` 时不重复提交 |
+| 18 | `stage7.assemble` | 无 | `stage7/<书名>_rewriting.txt` 生成并通过独立成书对账 |
 <!-- pipeline-steps:end -->
 
 Stage4 的两次付费调用不得压成一次授权或一次 runner 执行。先对 `stage4.design` 单独 preview/run；
@@ -215,8 +216,9 @@ Stage4 的两次付费调用不得压成一次授权或一次 runner 执行。�
 coverage。只有策略与全章 accepted，才能重新取得 `stage4.plan` 的 preview 并单独 run。
 若逐章 `request_repair`，只执行服务端给出的 `--review-token <opaque>`，未变且已接受的章
 由 checkpoint 复用；每轮 repair 必须携带当前问题和全部尚未关闭的历史 typed constraints，关闭状态也要
-显式保留。同策略单章两轮模型 repair 耗尽时，允许为该章打开新的 repair epoch，或用
-`stage4.design --apply-edit <stage4/blind_chapter_edit.json>` 预览并提交一份完整章响应；后者 0 wire，
+显式保留。模型 repair 受同一持久工作单元的有效额度约束，不能用新 epoch 重新发放预算。
+额度耗尽可等待不可变人工追加授权，或用 `stage4.design --apply-edit <stage4/blind_chapter_edit.json>`
+预览并提交一份完整章响应；后者 0 wire，
 仍走相同 compiler、schema、dynamic validator 与全书 HARD，且非目标章业务字节必须恒等。**单章耗尽
 不得自动升级成整书 replan**；只有策略决定本身显式 `request_replan` 才可整书重做，并且要携带累计
 策略/章节失败反馈，复用 effective input 未变的 accepted 章。自然语言 reason 只进审计，不充当模型
@@ -235,7 +237,7 @@ concerns 的完整逐章 typed 最终结构决定。工作包里 INFO/metric/UNV
 Executor；两条出口都不得再次审同一份 B，也不得用全量 accept 改写 B。只有新 A 决定落盘后，
 确定性恢复才按 opaque token 只交 Executor 精确执行。
 
-Stage2 依次执行 Global E → Global C 接受 → 逐章并发 Blueprint E → 独立 Blueprint C 全章交叉接受。
+Stage2 依次执行 Characters E → Global E → Global C 接受 → 逐章并发 Blueprint E → 独立 Blueprint C 交叉接受。
 Global 必须是当前有效正式产物，称名投影 current/fresh，逐项决定 generation-safe，且当前 Global 节点
 已明确接受；`.INVALID`、pending 或仅有称名投影都不能启动 Blueprint。Blueprint 内部章并发不放宽
 同书正式写盘互斥，也不允许 Global 修复与首次 Blueprint 生产重叠。
@@ -243,12 +245,15 @@ Global 必须是当前有效正式产物，称名投影 current/fresh，逐项�
 Global 审阅先完整阅读 `--emit-review-workpack` 并记录顶层 `workpack_sha256`，再从
 `--emit-review-template` 取得骨架，用实际读取的 SHA 替换全零占位，同时阅读原文并逐项填写决定。
 当前 typed Global 接受只覆盖绑定的事实与审阅主体；返修导致主体变化后由同一 Global Commander
-检查修订，内容预算不重置。每个 Global E/C 工作单元各最多 4 次内容调用，Blueprint E 按章各 4 次，
-独立 Blueprint C 按整书 4 次，均包含首次和模型纠错；确定性复验、重放与补提交不占内容额度。
+检查修订，内容预算不重置。Characters E 与 Global E/C 各按书、Blueprint E 按章、独立 Blueprint C
+按整书计账，各单元基础额度 4 次，加上已生效的不可变人工追加授权，包含首次和模型纠错；
+确定性复验、重放与补提交不占内容额度，不增设人物 Commander。
 
-全章 Blueprint 落盘后先运行唯一联合 `stage2.blueprint --check-only`。Blueprint Commander 核验完整
-跨章事实及变化范围，接受绑定当前 `bpr4_` 工作包；发现 Global 事实问题时可用 typed owner 指回
-`stage2.global`，由对应 producer 修订并让状态机重新计算依赖。只有两份当前节点接受同时成立，
+全章 Blueprint 落盘后先运行唯一联合 `stage2.blueprint --check-only`。Blueprint Commander 核验待审义务
+及必要的跨章事实和变化范围，接受绑定当前 `bpr4_` 工作包；新决定与有效历史决定须完整覆盖当前义务。
+发现事实问题时由 typed owner 派回 `stage2.characters`、`stage2.global` 或 `stage2.blueprint`，
+由对应 producer 修订并让状态机重新计算依赖。知识关联决定先持久化，再免费补交 knowledge_links 与接受。
+只有两份当前节点接受同时成立，
 `stage2.blueprint --close-review` 才能零模型补齐 `seen.read`/`seen.global`/`gate.s2` 并释放 Stage4A。
 本链不执行预审、第四席终审或额外全局终审；disclosure 未决项仍披露，不自动写成 PASS。
 
@@ -257,12 +262,12 @@ Commander 局部订正从生产模板取得 hash-bound typed 骨架；集合成�
 producer 对本 edit 新打开项使用默认证明，仍保持同一 hash 的旧 FAIL/UNVER
 必须列入 `review_scope` 内的 `decisions`；可删的 secret/relation/world_rule 完整组可显式
 `quarantine_group`，但状态仍是 UNVER，写作视图删除该组且
-最终交付只能 `ready_with_disclosures`。人物、setting、arc、集合完整性不能隔离。
+最终交付只能 `ready_with_disclosures`。人物、setting、开篇范围、集合完整性不能隔离。
 若这份 reviewed edit 通过 schema 却被 canonical HARD 拦成当前 `.INVALID`，队列先暴露
 `recovery:stage2-global-reviewed-edit`：最终 correction workpack 绑定失败 edit/INVALID 原始字节，只反馈
 具体 HARD，不重新载入 Blueprint 或整份无关材料；下一轮续用本工作单元 Commander，持久 ledger
 在调用前记 `started`，重启不返还席位。修正通过后才重新计算 Blueprint freshness。
-共享人物称名 inventory 改变时 blueprint 会 stale，必须重建，未消费字段变化则按 freshness 结果复用。
+人物称名 inventory 改变时，按实际依赖投影使受影响的 Blueprint 失效；未消费字段变化按 freshness 结果复用。
 Global 当前接受先于 Blueprint 生成；Blueprint 完成后由独立 Commander 交叉接受。机械测量不是独立节点：Stage5/6
 会从各自已读的 Stage1 文本即时计算，operator
 不需要预跑、确认或修复机械缓存。
@@ -322,7 +327,7 @@ contract，跳过重复批准；代码/机械规则变化只滚动 validation se
 remediation 收口 HARD，并完成所有 edit、trim disposition 与 wontfix。pure-trim 顶部卡的一席 Reviewer
 只可互斥选择 full-batch retain、可选多章的关闭式 LLM rewrite batch request 或 typed stop；rewrite 回答先
 零成本落正式 request 并封存 Reviewer authority，再由 queue 的 fresh epoch 唯一触发 paid writer。
-多章可独立改写时同批提交并按上限 4 并发执行，未选章仍保持 unresolved；整批收口后统一免费 Review。
+多章可独立改写时同批提交，按本次冻结的并发配置执行，默认章并发 4；未选章仍保持 unresolved，整批收口后统一免费 Review。
 正式 request 的九态收口优先于 stale Review/closure/new Reviewer；只运行 `operator next` 给出的 paid、
 checkpoint/prepared recovery 或 expired retirement 动作，已有 recovery target/WAL 时逐字复用其身份。
 unknown 不重买 Writer；INVALID/rejected 只有 revalidate/apply-edit 的 request-specific successor receipt

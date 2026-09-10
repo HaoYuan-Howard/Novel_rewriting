@@ -195,6 +195,14 @@ def _runtime_files() -> tuple[str, ...]:
 
 #: 允许裸读 JSON 的白名单。每一条都要写得出理由。
 _JSON_READ_ALLOWED = {
+    'novel/output_root.py': (
+        '只读根外的离线归档围栏、清单和提交回执；不解析旧 artifact，'
+        '新根须有同事务的 committed 证明，服务/CLI/Store 共用这一判定'),
+    'novel/orchestrator/approvals.py': (
+        '审批记录是 _service/approvals 下的服务自有状态，不是小说 artifact；'
+        '唯一审批 owner 显式检查当前 v7、SID 与 typed 决定，旧版本不迁移。'
+        '章节产物及来源证据仍必须通过 ArtifactStore 读取'),
+    'novel/model_slots.py': '只读 _service/model_slots 的容量配置，不读小说产物；损坏配置关闭式拒绝。',
     'novel/work_units.py': '只读 _service 工作单元账和已保存响应，不读小说产物。',
     'novel/orchestrator/reviewer_schema_recovery.py': (
         '只解析 service 公开协议日志的完整失败信封并拒绝重复键，不读取小说产物；'
@@ -262,7 +270,7 @@ _JSON_READ_ALLOWED = {
     'novel/llm/stage2_runs.py': (
         'Stage2 验证后章节检查点与一次性 repair workpack 不是正式产物或普通缓存；'
         '它们在 `_service/runs/<sid>/stage2/` 按书、run_id 关闭式恢复，读取后仍须重跑'
-        '当前 schema/validator/scope/HARD；旧书内路径只读兼容。'
+        '当前 schema/validator/scope/HARD；旧书内运行目录关闭式拒绝。'
         '单独成模块正是为了不给 extract.py/client.py 开裸 IO 豁免'),
     'novel/llm/stage6_runs.py': (
         'Stage6 双判官检查点与 prepared→committed 提交账不是正式产物；'
@@ -270,8 +278,8 @@ _JSON_READ_ALLOWED = {
         '当前 schema/validator/input/profile/session/ledger/audit，正式写盘仍回 semantic producer'),
     'novel/llm/agent_runs.py': (
         '逐节点 executor 的通用 run/checkpoint/commit journal 不是正式产物；'
-        '它只向 `_service/runs/<sid>/stageN/<run_id>/` 追加，并可只读接入旧书内'
-        '`_stage*_runs/<run_id>/` 的不可变恢复账；恢复时重新闭合'
+        '它只向 `_service/runs/<sid>/stageN/<run_id>/` 追加；关闭式拒绝旧书内'
+        '`_stage*_runs/<run_id>/` 的恢复目录；当前来源重新闭合'
         'profile/prompt/schema/code/ledger/session audit。正式 artifact 仍只能由 stage producer '
         '经 ArtifactStore 读写'),
 }
@@ -363,9 +371,9 @@ _WRITE_ALLOWED = {
         '这些 sidecar 不是正式 artifact，候选仍须回到对应 stage producer 的 schema/HARD/'
         'ArtifactStore/readback/adoption 终验后才能 delivered'),
     'novel/model_slots.py': (
-        'Stage2 只读 Reviewer 与 Blueprint 子进程共享的 OS 锁槽。模块只在 Supervisor '
-        '传入的受管 scratch 子目录创建固定数量、内容恒为 0 的锁文件，并以 r+b 取得'
-        '内核文件锁；锁不是产物或状态账，进程崩溃由内核释放，正式产物仍只经 store'),
+        'Executor/Commander 在 _service/model_slots 下共享整书和供应商 OS 锁槽，'
+        '只创建固定字节锁文件和原子容量配置；原显式外层槽仍支持受管 scratch。'
+        '容量记录不代表占用，变更容量须先持有全部旧槽。崩溃由内核释放，正式产物仍只经 store'),
     'novel/commanders/output_schema_file.py': (
         'Codex CLI 只接受文件形态的原生 output schema；本模块只在受管 epoch '
         'scratch 中为一次 runner 独占物化冻结 schema，并校验路径、hash、普通文件、'

@@ -360,11 +360,11 @@ export const REVIEW_GROUP_LABEL: Record<string, string> = {
   secret: '秘密时间线',
   world_rule: '规则',
   setting: '设定',
-  arc: '弧线',
+  source_blurb: '源文案与开篇范围',
   set: '集合完整性',
 }
 
 /** Stable card order; unknown prefixes sort last without being hidden. */
 export const REVIEW_GROUP_ORDER: readonly string[] = [
-  'set', 'character', 'relation', 'secret', 'world_rule', 'setting', 'arc',
+  'set', 'character', 'relation', 'secret', 'world_rule', 'setting', 'source_blurb',
 ]

@@ -82,6 +82,7 @@ from typing import (
 from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
+from contracts.schema.orchestration import PipelineConcurrency
 
 from novel import config
 from novel.errors import (
@@ -97,7 +98,7 @@ from novel.llm.json_text import normalize_json_text as _strip_fences
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatRequest, ChatResponse, Transport, TransportError
 from novel.llm.retry import RESOURCE_INTERRUPTED, TransportRetryPolicy
-from novel.model_slots import model_slot_from_environment
+from novel.model_slots import model_slot_from_environment, pipeline_model_slot, ModelSlotUnavailable
 from novel.observability import (
     AttemptHeartbeat, DEFAULT_HEARTBEAT_SECONDS, RequestProgress,
 )
@@ -569,8 +570,8 @@ def judge_payload(
     就是给捞出来的那份开了一个自己的契约。
 
     【它为什么是模块级的】判定面**只许有一份**，而消费方不止 `ask_json` 一个：
-    响应修复、机械候选采纳，以及 Stage4 的 0-wire 拒稿重判
-    （`stage4.design --adopt-rejected`）都必须走同一套 parse/require/schema/validator。
+    响应修复、机械候选采纳及已保存工作单元回答恢复，都必须走同一套
+    parse/require/schema/validator。
     它当初写成 `ask_json` 里的闭包，于是**函数外的任何恢复路都调不到它**——
     那正是「一次有效付费产出只能整本重来」的结构性原因。
     """
@@ -619,6 +620,7 @@ class LlmClient:
                  max_retries: int = config.DEFAULT_MAX_RETRIES,
                  backoff_base: float = config.DEFAULT_BACKOFF_BASE,
                  concurrency: int = config.DEFAULT_CONCURRENCY,
+                 concurrency_policy: PipelineConcurrency | None = None,
                  warmup: bool = True,
                  enable_model_fallback: bool = True,
                  sleep: Callable[[float], None] = time.sleep,
@@ -666,6 +668,7 @@ class LlmClient:
             raise ValueError(
                 f'concurrency 必须在 1..{config.MAX_CONCURRENCY}，实得 {concurrency!r}')
         self.concurrency = concurrency
+        self.concurrency_policy = concurrency_policy or PipelineConcurrency()
         self._gate = threading.Semaphore(self.concurrency)
         #: 首发独占闸。⚠ **与 `_gate` 是两件事**：`_gate` 守的是**并发度**（也就是钱），
         #: 首发顺序闸默认开；Stage6 双判官按登记并发，其余例外只供测试。
@@ -2824,6 +2827,9 @@ class LlmClient:
             self._work_requests[attempt_id] = (budget, reservation)
             self.ctx.ledger.bind_work_unit_commit(attempt_id, budget, reservation.turn_id)
             budget.finish(reservation.turn_id, outcome='delivered')
+        except ModelSlotUnavailable as exc:
+            budget.finish(reservation.turn_id, outcome='failed', reason_code='model_slot_not_started')
+            raise LlmFailed(f'模型调用未开始：{exc}') from exc
         except TransportError:
             budget.finish(reservation.turn_id, outcome='failed', reason_code='transport_failed')
             raise
@@ -2929,10 +2935,19 @@ class LlmClient:
                 heartbeat.start()
                 started = self._clock()
                 try:
-                    # AgentRun 的 Stage2 预审重叠会显式下发跨进程总槽；
-                    # standalone/其余节点没有该环境时此上下文是 no-op。
-                    with model_slot_from_environment():
+                    # 等待总槽不是供应商调用耗时；每次实际上线才开始计时。
+                    with model_slot_from_environment(), pipeline_model_slot(
+                            self.ctx.novel_dir, 'deepseek',
+                            per_book=self.concurrency_policy.per_book,
+                            per_provider=self.concurrency_policy.per_provider):
+                        started = self._clock()
                         resp = self.transport.send(req)
+                except ModelSlotUnavailable as exc:
+                    if content is not None:
+                        content[0].record_attempt(
+                            content[1].turn_id, attempt_id=attempt_id, outcome='not_started')
+                    heartbeat.finish(outcome='error', error_kind='model_slot_not_started')
+                    raise
                 except TransportError as e:
                     if content is not None:
                         content[0].record_attempt(content[1].turn_id, attempt_id=attempt_id, outcome='error')
@@ -3092,4 +3107,7 @@ class LlmClient:
         self._producer_cache_receipts[attempt_id] = {
             'response': asdict(resp), 'request': req.cache_payload(),
         }
+        budget_for(self.ctx, scope=executor_scope(self.ctx.node, purpose, progress)).note_processing(
+            run_id=self.ctx.run_id, input_sha256=request_fingerprint(req),
+            kind='cached', evidence_sha256=_response_sha256(resp))
         return attempt_id

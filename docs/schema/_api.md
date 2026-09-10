@@ -1,5 +1,9 @@
 # HTTP 响应（`/api/**`）
 
+Stage2 节点审阅的 `review` 范围提交、`obligation_receipt`、工作包与状态的
+`review_coverage` 统一见 `docs/schema/stage2_review.md`。完整范围由后端派生；界面只展示
+待审/继承数量、原问题及 typed 例外，不从摘要相似或主体删除推断接受。
+
 **载体已定：Pydantic v2**——但本文只定**内容**，模型照它写，**方向别搞反**。
 所以下面的表里不出现任何 Python 类型标注。
 
@@ -189,11 +193,8 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 > 不是 argv；INFO、metric、UNVER、skipped 和非 blocking/coverage effect 恒为空。coverage 恰覆盖
 > `chapter_ordinals`，changed 章在前、段内按章号升序；changed 与 exact historical accept reuse
 > 互斥且穷尽。工作包没有 actor/reason/decision 字段，GET 不写审批账、不启动 job，也不替用户签字。
-> Stage4 工作包 disposition 为 `review_required / already_current / suspended`。`suspended` 只属于
-> Design exact frozen-v6：raw all-accept 已绑定当前主体落账，但缺 v7 relation/preflight validation
-> authority，因而不重复审阅、不授权 B、不发布 Structure approval、`s4rr1`、`s4er1` 或 paid/execution
-> token；Stage6/7 的 disposition 仍只有前两态。frozen-v6 的真实 `request_repair` 只在相应章行发布
-> 零 wire `s4er1`，不发布 `s4rr1`。盘上 raw typed 决定不会因前置闸暂时失效被删除；重新闭合且
+> Stage4/6/7 工作包 disposition 均为 `review_required / already_current`；旧 frozen-v6 工作包退役，
+> 版本不匹配明确拒绝。盘上 raw typed 决定不因前置闸暂时失效而删除；重新闭合且
 > subject/contract 未变时可恢复 `already_current` 并携 `current_decision_sha256`。Design/Structure POST 只回交本 workpack
 > 的 opaque `review_token` 与 typed rulings；Stage4A 完整章 edit 使用独立 `s4er1_…` token。三者都由
 > 服务端现场重建内部 subject/contract/validation 身份，不共享也不要求调用方搬运多枚 SHA。
@@ -267,6 +268,11 @@ preview 可以在任一项为 false 时 0 成本展开；单本 start 与 batch 
 
 `GET /api/agent/capabilities` 是 Commander 与 executor backend 选择面的唯一公开数据源：
 
+原配置续跑通过 `GET /api/agent/runs/:run_id/continuation` 读取历史完整快照和可用性；
+preview/start 都携相同 `RunContinuationSource` 并由后端复验。运行页工作单元的
+`GET/POST /api/novels/:sid/work-units/:unit_id/grant` 提供只读累计成本、历史授权与人工追加。
+详细的 v2 ledger、停止证明、锁内 CAS 和幂等规则见 `docs/schema/work_units.md`。
+
 | 模型 | 字段 | 约束 |
 |---|---|---|
 | `AgentCapabilitiesResponse` | `drivers[]` · `legacy_providers[]` · `executor_nodes[]` · `default_profiles` | `executor_nodes` 按 `AGENT_EXECUTOR_NODES` 完整有序发布，前端不维护第二份节点表。`default_profiles` 是经整书验收后才可发布的产品预置配置，不是 backend 模式选择器；当前明确为 `null`，不能取任一数组首项猜 |
@@ -277,6 +283,8 @@ preview 可以在任一项为 false 时 0 成本展开；单本 start 与 batch 
 | `LegacyLlmProfile` | `provider` · `model` · `reasoning_effort` · `thinking_mode` | 只保存改变模型行为的稳定选择，不保存 API key、base URL、代理、超时或缓存目录 |
 | `ExecutorBackend` | `{kind:'agent',profile:AgentProfile}` 或 `{kind:'legacy',profile:LegacyLlmProfile}` | `kind` 是唯一模式选择器；两套 profile 不得混搭，运行中也不得自动降级到另一种 backend |
 | `PipelineAgentProfiles` | `schema_version=2` · `commander` · `executor_default` · `executor_overrides{node: backend}` | Commander 固定使用 AgentProfile；默认 executor 和逐节点覆盖使用 `ExecutorBackend`。override 键只接受响应中的 executor 节点 |
+| `PipelineConcurrency` | `node_overrides{node: int}` · `per_book` · `per_provider` | `PipelineAgentProfiles.concurrency` 的可选精确配置；随常用配置、preview/start、batch 与原配置续跑保留。缺失时省略序列化，不改写旧身份 |
+| `PipelineConcurrencyCapability` | `nodes[]` · `node_choices[]` · `default_node` · `defaults` · `total_min` · `total_max` · `scope` | `AgentCapabilitiesResponse.concurrency` 发布的唯一选择面；当前总槽作用域为同一输出根。界面不复制节点、档位和数值边界 |
 
 Agent 探针只在本机解析 CLI 并读取版本，**不发模型请求、不产生费用**；因此 `ready` 只证明可执行文件与
 版本探针成功，不证明账号认证、模型 entitlement 或真实调用可用。当前 registry 只发布实际受测的
@@ -324,7 +332,7 @@ client 构造，不能静默回退直接 API。
 
 Legacy backend 不借用 Agent 的 flag 矩阵，而由 `LegacyLlmDriver` 对 provider/model/thinking/effort/node
 关闭式校验，并继续服从节点本身的合法 flags、schema、HARD 与提交契约。当前 DeepSeek V4 Flash 不支持
-契约钉死 Pro 的 `stage4.design`、`stage4.plan`、`stage6.semantic`；V4 Pro 支持现役八个 executor 节点。
+契约钉死 Pro 的 `stage4.design`、`stage4.plan`、`stage6.semantic`；V4 Pro 支持现役九个 executor 节点。
 两种 backend 任一失败都不自动切换。
 
 direct `PreviewRequest.egress_authorized` 默认 false（不要与上方 outer `AgentRunRequest` 当前默认 true
@@ -371,8 +379,8 @@ current writing 授权、Review 状态与旧布局，不存在另一个按臂的
 | `ApprovalBackfillResult` | `approvals` · `backfilled[]` | `backfilled` 是本次**按正式盘面补录**的 gate id，空数组表示无事可补；界面必须明确这些不是用户逐屏点过的验收记录。该入口不制造 `seen.read/global`，也不因 Stage2 产物齐备越过未审的 s2 |
 | `Stage2GlobalSeenRequest / Stage2FinalReviewRequest` | 前者：`review_token`（`s2gr1_`）+ `actor`；后者：`actor` + `reason` + `global_review_token` + `blueprint_review_token` | 前者记录 `seen.global` 的当前已读主体；已读不授予节点接受。后者只核验已落盘的 Global/BP 两份当前节点接受并补齐 `s0 → s1 → seen.read → seen.global → s2`，经 `close_stage2_accepted` 或 CLI `stage2.blueprint --close-review` 零模型恢复，不产生第四席终审决定 |
 | `Stage2NodeReviewRequest / Stage2NodeReviewDecision / Stage2NodeReviewView` | 请求：`node / review_token / decision / actor / reason / chapter_ordinals / owner`；决定增加 `review_subject_sha256 / review_contract_version / decided_at / review_scope_sha256`；视图：`state / current_decision / history` | Global/BP 分别接受；`decision` 为 accept/rework/uncertain/stop。返工必须指向登记 owner，Blueprint owner 的返工明确章节；Global C 不拥有未生成 Blueprint 的修复权。HTTP/CLI 使用同一 shape；视图 missing/accepted/rework/uncertain/stopped/expired 不混同，未接受不给 paid 许可 |
-| `BlueprintReviewWorkpack / BlueprintSeenRequest` | 工作包：内部 review identity、`stage2-blueprint-review-v5`、opaque validation seal、`bpr4_` review token、全章语义面与 `review_delta`；已读请求：`review_token` | 页面、已读和节点接受均绑定同一份 current workpack；`seen.read` 只证明阅读，不能代替 Blueprint Commander 接受。模型/人工提交前服务端重建并核 token。代码复验与实际可见主体变化分别处理，旧 bpr2/bpr3 token 只读、不接受新提交；delta 接受基线前移不使当前 token 自失效 |
-| `ApprovalDoc` | `v=6` · `sid` · `gate` · `seen` · `stage2_reviews` · `writing` · `design_review` · `structure` · `writing_approval` · `closure` · `spawns` | HTTP v6 不等于 `_service/approvals/<sid>.json` 的盘上 v7。`stage2_reviews` 分别投影 Global/BP 当前决定与历史，旧已读不生成接受。公开 gate 没有 s3；`design_review` 是 A 的独立相位，不是 gate：给出当前 candidate/aggregate hash、typed 当前决定、历史与 `unavailable / missing / repair_requested / strategy_replan_requested / accepted / suspended / expired`；只有 current `accepted` 才能授权 B，`suspended` 保留当前 raw 决定但不携 action token。`structure` 是 B 编译 Plan 后的另一张票，另给当前 subject、B `binding_concerns`、typed 当前裁决、历史与 `unavailable / missing / accepted / replan_requested / expired`；`gate.s4=true` 只可能来自这张当前 `accepted`。`writing_approval` 同样给出 available、current subject、typed current decision/history；新 typed writing 决定绑定 Stage1 正文、Stage4 Plan、fresh WriterContext 与测量契约。`closure` 是 Stage5 当前整书工作包、typed 决定与不可擦除历史，`gate.s5=true` 只可能来自 current `closed`。当前写入要求已有新 clean 工作流 manifest，旧 base 不经 backfill 迁成新任务；历史版本仅供读取，恢复使用冻结旧代码。旧 read proof 不升级成节点接受，Structure subject 未携 current `STRUCTURE_REVIEW_CONTRACT` 的历史决定不重签 s4，普通 GET 不迁移 |
+| `BlueprintReviewWorkpack / BlueprintSeenRequest` | 工作包：内部 review identity、`stage2-blueprint-review-v7`、opaque validation seal、`bpr4_` review token、全章语义面与 `review_delta`；已读请求：`review_token` | 页面、已读和节点接受均绑定同一份 current workpack；`seen.read` 只证明阅读，不能代替 Blueprint Commander 接受。模型/人工提交前服务端重建并核 token。代码复验与实际可见主体变化分别处理，旧 bpr2/bpr3 token 只读、不接受新提交；delta 接受基线前移不使当前 token 自失效 |
+| `ApprovalDoc` | `v=6` · `sid` · `gate` · `seen` · `stage2_reviews` · `writing` · `design_review` · `structure` · `writing_approval` · `closure` · `spawns` | HTTP v6 不等于 `_service/approvals/<sid>.json` 的盘上 v7。`stage2_reviews` 分别投影 Global/BP 当前决定与历史，旧已读不生成接受。公开 gate 没有 s3；`design_review` 是 A 的独立相位，不是 gate：给出当前 candidate/aggregate hash、typed 当前决定、历史与 `unavailable / missing / repair_requested / strategy_replan_requested / accepted / suspended / expired`；只有 current `accepted` 才能授权 B，`suspended` 保留当前 raw 决定但不携 action token。`structure` 是 B 编译 Plan 后的另一张票，另给当前 subject、B `binding_concerns`、typed 当前裁决、历史与 `unavailable / missing / accepted / replan_requested / expired`；`gate.s4=true` 只可能来自这张当前 `accepted`。`writing_approval` 同样给出 available、current subject、typed current decision/history；新 typed writing 决定绑定 Stage1 正文、Stage4 Plan、fresh WriterContext 与测量契约。`closure` 是 Stage5 当前整书工作包、typed 决定与不可擦除历史，`gate.s5=true` 只可能来自 current `closed`。当前写入要求已有新 clean 工作流 manifest，backfill 只接受当前盘上 v7；旧版本、未来版本和损坏均返回明确错误，不迁移或重签。历史恢复使用配对的冻结旧代码与旧根。旧 read proof 不升级成节点接受，Structure subject 未携 current `STRUCTURE_REVIEW_CONTRACT` 的历史决定不重签 s4，普通 GET 不迁移 |
 | `Stage5ClosureView / Workpack` | `state` · `workpack?` · `next_step?` · `current_decision?` · `history[]`；工作包含 Review 身份、`planned/missing`、`chapter_subjects[]`、`.INVALID` / HARD、`unresolved_trim_items[]`、逐项 must-appear、fact/unver 组、披露/已处置计数与 `workpack_sha256` | `state ∈ missing｜review_required｜blocked｜ready｜closed｜expired`，只由服务端重算，页面不得按计数重判。`review_required` 表示没有可接受的 current 最终 Review，不能携 current workpack/decision，且 `next_step` 必须指出重跑；`chapter_subjects[]` 精确覆盖全部当前 canonical 计划章；`unresolved_trim_items[]` 是章号、audit SHA 与正文 SHA 的精确批量提交面，章号投影必须等于 `unresolved_trim_chapters`。决定或正文漂移后旧决定只留 history，不能继续充当 current |
 | `Stage5ClosureTemplate / Request / Decision` | Template 是服务端完整 materialized workpack + `review_token`；Request 只有 `actor/reason/review_token/must_appear[]/group_acks[]`；Decision 在 Request 上加 `decision_sha256/decided_at` | must-appear 与 group 的 finding/chapter/review/workpack SHA 只在模板和盘上完整决定中物化；调用方只提交 token 与 typed ruling。服务端展开 current workpack 后要求 ruling 精确覆盖；模板 placeholder/token 不进入 Request，确认不会把 UNVER 改写成 PASS |
 | `BatchTrimResolutionRequest` | `actor` · 共享 `reason` · `items[{output_ordinal,audit_sha256,chapter_sha256,reason}]` | actor/共享理由非空，章号升序去重；单项空理由沿用共享理由。服务端在任何写入前重读并核完整批次，按章幂等落 hash-bound resolution；浏览器只复制当前 closure workpack 的 exact item，不自行计算 SHA |
@@ -614,3 +622,10 @@ HTTP 侧「书 id 不合法」的产地是**客户端**，那是 400。
 受影响章与 references、scope_reason。无法证明局部范围时保持 full；前端只呈现服务端范围，不重新计算依赖。
 `Stage2NodeReviewDecision.review_scope_sha256` 可为空，保存实际已审范围的摘要。delta 不进入 review token；
 接受后只推进基线，不让刚保存的当前接受自行过期。公共 TypeScript 与页面沿用同形字段。
+
+### 写作上下文的即时读数
+
+Stage4 `ctx_chapter` 使用 `CtxChapterView`；章节主体来自当前 WriterContext v7，
+`from_source_ordinals / budget_chars / source_chars` 由章号、场景预算和 Stage1 源正文现算。
+源文缺失或不可读时 `source_chars=null`，界面显示“未知”。展示字段不能作为新任务书提交；
+Stage5 的成稿字数、预算及重合率也经后端唯一度量入口现算，不从 Chapter v3 读取副本。

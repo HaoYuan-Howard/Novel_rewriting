@@ -3,6 +3,8 @@
 """Stage2 blueprint 的候选评估、单次终态与交付终验边界。"""
 from __future__ import annotations
 
+from novel.stages.stage2 import grounding as grounding_io
+
 from pathlib import Path
 
 import pytest
@@ -192,14 +194,9 @@ def test_blueprint_full_rebuild_can_replace_stale_formal(tmp_path):
 
     global_ctx = _ctx(book, 'stage2.global')
     store = ArtifactStore(global_ctx)
-    grounding, _raw = store.read_own(GlobalGrounding, extract.GLOBAL_REL)
-    changed = grounding.model_dump(by_alias=True, mode='json')
-    changed['entities']['characters']['char_001']['canonical'] = '管家'
-    extract._write_formal(
-        store,
-        extract.GLOBAL_REL,
-        GlobalGrounding.model_validate(changed),
-    )
+    from tests.test_stage2_generation import _edit_static_character
+    _edit_static_character(book, 'char_001', canonical='管家')
+    extract.run_renormalize(_ctx(book, 'stage2.global', paid=False))
     assert ArtifactStore(_ctx(book, 'stage2.blueprint')).freshness(
         extract.BLUEPRINT_REL).state == 'stale'
     _accept_fixture_global(global_ctx)
@@ -234,13 +231,9 @@ def test_blueprint_candidate_rejects_naming_projection_drift_after_wire(tmp_path
 
     global_ctx = _ctx(book, 'stage2.global')
     store = ArtifactStore(global_ctx)
-    grounding, _raw = store.read_own(GlobalGrounding, extract.GLOBAL_REL)
-    changed = grounding.model_dump(by_alias=True, mode='json')
-    # 改成正文第 3 章真实出现的唯一字面，确保这不只是
-    # Global 整份字节变化，而是请求已经消费的称名投影真的从 P1 变 P2。
-    changed['entities']['characters']['char_001']['canonical'] = '管家'
-    replacement = GlobalGrounding.model_validate(changed)
-    extract._write_formal(store, extract.GLOBAL_REL, replacement)
+    from tests.test_stage2_generation import _edit_static_character
+    # 使用第三章真实字面，由人物 producer 发布新的称名投影。
+    _edit_static_character(book, 'char_001', canonical='管家')
     _projection, current_projection = \
         extract._require_blueprint_character_projection(store)
     assert current_projection != request_projection, '反例没有真正改变称名投影'

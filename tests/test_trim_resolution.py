@@ -56,15 +56,7 @@ def _book(tmp_path):
         ensure_ascii=False), encoding='utf-8', newline='\n')
     ctx = readonly_ctx(book, 'stage5.review', prov.code_version())
     rel = artifact_rel('stage5.chapter', nn=3)
-    chapter = Chapter(
-        output_ordinal=3, from_source_ordinals=[1],
-        source_chars=len(PRETRIM_TEXT), budget_chars=len(PRETRIM_TEXT),
-        chars=len(PRETRIM_TEXT), overlap_excl_verbatim=None,
-        segments=[ChapterSegment(slot='s01', text=PRETRIM_TEXT)],
-        warns=[], errs=None,
-        _provenance=ctx.free_provenance(
-            RoundFreeProvenance, round=1, origin='human'),
-    )
+    chapter = Chapter(output_ordinal=3, segments=[ChapterSegment(slot='s01', text=PRETRIM_TEXT)], _provenance=ctx.free_provenance(RoundFreeProvenance, round=1, origin='human'))
     target = book / rel
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(encode_artifact(
@@ -78,11 +70,7 @@ def _store(book, node='stage5.review'):
 
 
 def _audit(*, reason='超上限，本仓没有自动收缩路径', before=PRETRIM_SHA256):
-    return TrimAudit(
-        output_ordinal=3,
-        before_sha256=before,
-        reason=reason,
-    )
+    return TrimAudit(before_sha256=before, reason=reason)
 
 
 def _writer_ctx(book):
@@ -105,20 +93,34 @@ def _trim_rows(base):
 
 
 def test_trim_verification_context_carries_the_limit_and_the_audit_identity():
-    audit = _audit(before='a' * 64)
-    chapter = SimpleNamespace(text='甲' * 20)
-    entry = SimpleNamespace(
-        output_ordinal=3,
-        model_dump=lambda **_kwargs: {'budget_chars': 10},
-    )
+    from contracts.schema.stage4 import WriterContext
+
+    text = '甲' * 20
+    audit = _audit(before=hashlib.sha256(text.encode('utf-8')).hexdigest())
+    provenance = {'code': 'test', 'root_clean_sha1': 'a' * 40, 'inputs': {}}
+    chapter = Chapter.model_validate({
+        'output_ordinal': 3, 'segments': [{'slot': 's01', 'text': text}],
+        '_provenance': {**provenance, 'round': 1, 'origin': 'human'},
+    })
+    entry = factories.stage5_book().chapters[1]
+    entry['output_ordinal'] = 3
+    entry['scenes'][0]['budget_chars'] = 10
+    context = WriterContext.model_validate({
+        'chapters': [entry], '_provenance': provenance,
+    })
     store = SimpleNamespace(
         read_own=lambda *_args, **_kwargs: (chapter, {}),
-        read=lambda *_args, **_kwargs: SimpleNamespace(chapters=[entry]),
+        read=lambda *_args, **_kwargs: context,
     )
-    detail = verification_context(store, audit)
+    detail = verification_context(store, audit, ordinal=3)
     assert '当前 pretrim 20 字' in detail and '目标 ' in detail
     assert '超上限' in detail
     assert f'before={audit.before_sha256}' in detail
+    changed = chapter.model_copy(update={
+        'segments': [ChapterSegment(slot='s01', text=text + '乙')],
+    })
+    store.read_own = lambda *_args, **_kwargs: (changed, {})
+    assert '绑定不一致' in verification_context(store, audit, ordinal=3)
 
 
 def test_trim_resolution_schema_has_no_candidate_adoption_action(tmp_path):
@@ -158,8 +160,8 @@ def test_matching_resolution_closes_inbox_but_any_audit_change_makes_it_stale(tm
     assert raw['_schema_version'] == artifact_spec(resolution_rel).current_version
     assert raw['action'] == 'retain_pretrim'
     assert 'mode' not in raw
-    assert raw['chapter_rel'] == 'stage5/ch03.json'
-    assert raw['chapter_sha256'] == PRETRIM_SHA256
+    assert raw['output_ordinal'] == 3
+    assert not {'before_sha256', 'chapter_rel', 'chapter_sha256'} & raw.keys()
     assert len(raw['audit_sha256']) == 64
     assert 'model' not in raw['_provenance']
 
@@ -209,7 +211,7 @@ def test_stage5_view_reports_an_old_trim_schema_as_legacy_incompatible(tmp_path)
 
     view = stage5_view(str(base), '42', 3)
     assert view.legacy_incompatible is True
-    assert any('trim_audit_ch03.json:v1->v2' in path for path in view.legacy_paths)
+    assert any('trim_audit_ch03.json:v1->v3' in path for path in view.legacy_paths)
     assert view.trim_audit is None
 
 
@@ -254,7 +256,7 @@ def test_revalidate_failure_restores_chapter_trim_and_all_history(tmp_path, monk
     rel = artifact_rel('stage5.chapter', nn=3)
     chapter, _raw = store.read_own(Chapter, rel)
     store.write_invalid(
-        rel, chapter.model_copy(update={'errs': ['模拟旧阻断结论']}),
+        rel, chapter,
         gates_skipped=[],
     )
 

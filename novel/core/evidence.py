@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Stage2 全局事实证据的遍历与语义投影。
 
-自由事实分散在人物、关系、设定、世界规则、秘密和弧线六棵子树里。若归一、
+自由事实分散在人物、关系、设定、世界规则、秘密和源文案中。若归一、
 人工复核、freshness 投影与付费 prompt 各手抄一份路径表，新增一格时最危险的
 失败不是报错，而是某个消费者继续收到未经回取的 locator 或原文证据。
 
@@ -66,10 +66,28 @@ def iter_global_evidence_slots(data: dict[str, Any]) -> Iterator[EvidenceSlot]:
                 yield (f'canon.secrets.{sid}.knowledge_events.{event_index}',
                        event, 'evidence')
 
-    arc = data.get('arc') if isinstance(data.get('arc'), dict) else {}
-    for index, track in enumerate(arc.get('arc_tracks') or []):
-        if isinstance(track, dict):
-            yield f'arc.arc_tracks.{index}.trajectory', track, 'trajectory_evidence'
+    blurb = data.get('source_blurb')
+    if isinstance(blurb, dict):
+        for index, fact in enumerate(blurb.get('facts') or []):
+            if isinstance(fact, dict) and fact.get('kind') == 'supported':
+                cid = fact.get('claim_id') or index
+                yield f'source_blurb.facts.{cid}.claim', fact, 'evidence'
+        opening = blurb.get('opening')
+        if isinstance(opening, dict) and opening.get('kind') == 'proposed':
+            yield 'source_blurb.opening', opening, 'boundary_evidence'
+
+
+def iter_knowledge_evidence_slots(data: dict[str, Any]) -> Iterator[EvidenceSlot]:
+    """知识载体只拥有动态状态与非人物证据，不遍历静态注册表。"""
+    entities = data.get('entities') if isinstance(data.get('entities'), dict) else {}
+    states = (entities.get('character_states')
+              if isinstance(entities.get('character_states'), dict) else {})
+    for cid, state in states.items():
+        if isinstance(state, dict):
+            yield f'entities.character_states.{cid}.fate', state, 'fate_evidence'
+    for path, owner, field in iter_global_evidence_slots(data):
+        if not path.startswith('entities.characters.'):
+            yield path, owner, field
 
 
 def without_global_evidence(data: object) -> object:
@@ -83,6 +101,8 @@ def without_global_evidence(data: object) -> object:
         return copy.deepcopy(data)
     projected = copy.deepcopy(data)
     for _path, owner, field in iter_global_evidence_slots(projected):
+        owner.pop(field, None)
+    for _path, owner, field in iter_knowledge_evidence_slots(projected):
         owner.pop(field, None)
     # ``iter_global_evidence_slots`` 只把非空 fate 当作待举证事实；投影则必须连
     # fate=null 的占位 evidence 一并剥掉，避免证据字段进入下游 prompt/freshness。

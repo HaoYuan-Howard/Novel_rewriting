@@ -15,12 +15,12 @@ from typing import Literal
 from pydantic import BaseModel
 
 from contracts.invariants import GLOBAL_EVIDENCE_CONTRACT
-from contracts.schema.stage2 import (
-    GlobalCandidateAgentTurnResponse, GlobalGroundingCandidateResponse,
+from contracts.schema.knowledge import (
+    KnowledgeAgentTurnResponse, KnowledgeResponse,
 )
 from novel.config import reject_retired_global_evidence_selector
 from novel.llm.prompts import with_json_shape
-from novel.stages.stage2 import prompts
+from novel.stages.stage2 import knowledge_prompts
 
 
 @dataclass(frozen=True)
@@ -40,15 +40,15 @@ class GlobalEvidenceContractSpec:
 
 CONTRACT = GlobalEvidenceContractSpec(
     name=GLOBAL_EVIDENCE_CONTRACT,
-    instruction=prompts.GLOBAL_CANDIDATE_SYS,
+    instruction=knowledge_prompts.SYSTEM,
     system=with_json_shape(
-        prompts.GLOBAL_CANDIDATE_SYS,
-        prompts.GLOBAL_CANDIDATE_HINT,
+        knowledge_prompts.SYSTEM,
+        knowledge_prompts.HINT,
     ),
-    sys_name='GLOBAL_CANDIDATE_SYS',
-    hint=prompts.GLOBAL_CANDIDATE_HINT,
-    response_model=GlobalGroundingCandidateResponse,
-    agent_response_model=GlobalCandidateAgentTurnResponse,
+    sys_name='KNOWLEDGE_SYS',
+    hint=knowledge_prompts.HINT,
+    response_model=KnowledgeResponse,
+    agent_response_model=KnowledgeAgentTurnResponse,
 )
 
 

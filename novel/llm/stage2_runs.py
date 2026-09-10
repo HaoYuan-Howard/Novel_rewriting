@@ -10,10 +10,11 @@ schema、动态 validator、章节 scope、整书 compile 与联合 HARD 的前�
 为什么单独成模块：检查点会直接保存模型响应正文，必须按 sid 隔离在
 ``_service/runs/<sid>/stage2``，且不能借 ``ArtifactStore`` 冒充正式产物。把所有裸 IO
 收进这一处，分层守卫便能给这一种内部状态一个窄豁免，而不必把最长的
-``extract.py`` 或 ``client.py`` 整体放进写盘白名单。旧书内 ``_stage2_runs`` 只读接入。
+``extract.py`` 或 ``client.py`` 整体放进写盘白名单。旧书内 ``_stage2_runs`` 不再接入恢复。
 """
 from __future__ import annotations
 
+from novel import runtime_layout
 import copy
 import hashlib
 import json
@@ -516,39 +517,12 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _materialize_run_root(novel_dir: Path, run_id: str) -> Path:
+    """只使用当前 service 落点；旧书内状态保留原位，不迁移或据此重买。"""
     run_id = check_run_id(run_id)
-    current = paths.stage2_blueprint_run_path(novel_dir, run_id)
     legacy = paths.legacy_stage2_blueprint_run_path(novel_dir, run_id)
-    if legacy == current:
-        return current
-    # legacy 目录从此只读。仅物化本协议登记的状态与
-    # checkpoint JSON，不递归搬运临时文件或未知形状。
-    evidence = _existing_run_state(legacy)
-    if evidence:
-        lock = current / '.legacy-adoption'
-        with process_append_lock(lock):
-            for source in evidence:
-                relative = source.relative_to(legacy)
-                target = current / relative
-                raw = source.read_bytes()
-                if target.is_file():
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                fd, temp_name = tempfile.mkstemp(
-                    prefix=f'.{target.name}.', suffix='.tmp', dir=str(target.parent))
-                try:
-                    with os.fdopen(fd, 'wb') as fh:
-                        fh.write(raw)
-                        fh.flush()
-                        os.fsync(fh.fileno())
-                    os.replace(temp_name, target)
-                except BaseException:
-                    try:
-                        os.unlink(temp_name)
-                    except FileNotFoundError:
-                        pass
-                    raise
-    return current
+    if legacy.exists():
+        raise ProvenanceRefused('旧书内 Stage2 checkpoint 已退役；须配对冻结代码恢复，不能移入当前根')
+    return paths.stage2_blueprint_run_path(novel_dir, run_id)
 
 
 def _run_root(ctx: Any) -> Path:
@@ -677,6 +651,17 @@ def ensure_run(
         'request_policy': normalized_policy,
         'request_policy_sha256': _sha(normalized_policy),
     }
+
+    def note_pending() -> None:
+        if getattr(ctx, 'readonly', False):
+            return
+        from novel.work_units import budget_for
+        for chapter, system, user in requests:
+            if chapter is not None:
+                digest = _sha(_request_rows([(chapter, system, user)]))
+                budget_for(ctx, scope=f'chapter:{chapter}').note_processing(
+                    run_id=ctx.run_id, input_sha256=digest, kind='pending',
+                    evidence_sha256=identity['initial_requests_sha256'])
     with _LOCK:
         with process_append_lock(target):
             if target.is_file():
@@ -698,6 +683,7 @@ def ensure_run(
                     raise ProvenanceRefused(
                         f'Stage2 run={ctx.run_id} 的代码/契约/输入绑定已漂移；'
                         f'盘上={comparable}，当前={identity}。拒绝把旧章接到新请求上')
+                note_pending()
                 return current
             if refresh:
                 # 没有 run.json 却有 orphan checkpoint/manifest 同样不能当新刷新起点。
@@ -706,6 +692,7 @@ def ensure_run(
                     ctx, operation='Stage2 blueprint 主动重采')
             payload = {**identity, 'created_at': _now()}
             _atomic_json(target, payload)
+            note_pending()
             return payload
 
 
@@ -2086,7 +2073,7 @@ def verified_blueprint_recovery_checkpoints(
         return ()
     run_dir_by_id: dict[str, Path] = {}
     try:
-        for root in paths.stage_run_read_roots(ctx.novel_dir, 'stage2'):
+        for root in runtime_layout.stage_run_roots(ctx.novel_dir, 'stage2'):
             if root.is_dir():
                 for path in root.iterdir():
                     if not path.is_dir() or path.name in run_dir_by_id:
@@ -2318,7 +2305,7 @@ def _create_repair_manifest_locked(
 
 def _manifest_paths(novel_dir: Path) -> Iterable[Path]:
     found: dict[str, Path] = {}
-    for root in paths.stage_run_read_roots(novel_dir, 'stage2'):
+    for root in runtime_layout.stage_run_roots(novel_dir, 'stage2'):
         if root.is_dir():
             for target in root.glob(f'*/blueprint/{MANIFEST_FILE}'):
                 run_id = target.parent.parent.name
@@ -2456,15 +2443,12 @@ def submit_batch(
         raise TerminalState('批量响应修复必须显式给非空 actor')
     root = Path(novel_dir).resolve()
     supplied = Path(manifest_path).resolve()
-    # 先从 manifest 外壳取 run_id，再用路径唯一落点重锚；legacy
-    # 请求会先原字节物化到 service，resolution 绝不回写书内旧目录。
+    # 先从 manifest 外壳取 run_id，再用当前 service 唯一落点重锚。
     supplied_manifest = _validate_manifest(supplied)
     run_id = check_run_id(str(supplied_manifest.get('run_id') or ''))
     current_root = _materialize_run_root(root, run_id).resolve()
     current_manifest = current_root / MANIFEST_FILE
-    legacy_manifest = paths.legacy_stage2_blueprint_run_path(
-        root, run_id).resolve() / MANIFEST_FILE
-    if supplied not in (current_manifest.resolve(), legacy_manifest.resolve()):
+    if supplied != current_manifest.resolve():
         raise TerminalState(f'{supplied} 不是登记的 Stage2 blueprint manifest 落点')
     manifest_path = current_manifest.resolve()
     manifest = _validate_manifest(manifest_path)

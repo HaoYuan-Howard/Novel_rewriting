@@ -7,7 +7,9 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from contracts.artifacts import STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS
+from contracts.artifacts import (
+    STAGE2_CHAPTER_BLUEPRINTS, STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS,
+)
 from contracts.invariants import (
     APPROVAL_GATES, APPROVAL_SEEN, STRUCTURE_REVIEW_CONTRACT,
 )
@@ -130,15 +132,16 @@ def test_request_is_strict_and_requires_sorted_unique_chapters_and_real_reasons(
 
 def test_structure_review_contract_is_in_whole_book_and_chapter_subjects(
         monkeypatch: pytest.MonkeyPatch):
-    assert STRUCTURE_REVIEW_CONTRACT == 'stage4-structure-review-v2'
+    assert STRUCTURE_REVIEW_CONTRACT == 'stage4-structure-review-v3'
     plan = {'output_chapters': []}
     expected_book = approvals._decision_sha256({
         'kind': 'stage4_structure_review_subject',
         'review_contract': STRUCTURE_REVIEW_CONTRACT,
         'plan_subject_sha256': measure.structure_subject_sha256(plan),
+        'blueprints': {'blueprints': []},
         'binding_concerns': [],
     })
-    assert measure.structure_review_subject_sha256(plan, []) == expected_book
+    assert measure.structure_review_subject_sha256(plan, [], blueprints={'blueprints': []}) == expected_book
     legacy_book = approvals._decision_sha256({
         'kind': 'stage4_structure_review_subject',
         'plan_subject_sha256': measure.structure_subject_sha256(plan),
@@ -157,14 +160,16 @@ def test_structure_review_contract_is_in_whole_book_and_chapter_subjects(
         'kind': 'stage4_structure_chapter_review_subject',
         'review_contract': STRUCTURE_REVIEW_CONTRACT,
         'chapter': projected['output_chapters'][0],
+        'blueprint_evidence': {'blueprints': [{'chapter_ordinal': 1}]},
         'binding_concerns': [],
     })
-    assert approvals._structure_chapter_subject_sha256(fake_plan, []) == {
+    assert approvals._structure_chapter_subject_sha256(
+        fake_plan, [], blueprints={'blueprints': [{'chapter_ordinal': 1}]}) == {
         1: expected_chapter,
     }
 
 
-def test_old_v5_record_without_typed_writing_fields_remains_migratable():
+def test_old_v5_record_cannot_use_current_approval_decoder():
     old_payload = approvals._fresh_record(SID).model_dump(
         mode='json', exclude={
             'writing_history', 'writing_decision',
@@ -175,9 +180,8 @@ def test_old_v5_record_without_typed_writing_fields_remains_migratable():
         })
     old_payload['v'] = 5
 
-    restored = approvals._ApprovalRecordV5Legacy.model_validate(old_payload)
-
-    assert restored.writing_history == [] and restored.writing_decision is None
+    with pytest.raises(ValueError):
+        approvals._ApprovalRecordV7.model_validate(old_payload)
 
 
 def test_structure_template_is_current_and_fail_closed_by_default(isolated):
@@ -203,7 +207,7 @@ def test_structure_proof_binds_the_full_plan_path_and_exact_typed_decision(monke
     request = _request('accept', 'request_replan')
     approvals._proof_for_structure(Path('book'), request)
     assert captured['rels'] == (
-        STAGE4_PLAN_CHAPTERS, STAGE4_EVIDENCE_BINDING)
+        STAGE4_PLAN_CHAPTERS, STAGE4_EVIDENCE_BINDING, STAGE2_CHAPTER_BLUEPRINTS)
     assert captured['decision'] == approvals._structure_decision_payload(request)
     assert captured['decision']['chapters'][1]['decision'] == 'request_replan'
 
@@ -530,37 +534,6 @@ def test_generic_s4_gate_can_no_longer_bypass_the_typed_decision():
         approvals.approve_gate('unused', SID, 's4')
 
 
-def test_explicit_v3_migration_preserves_at_most_s0_through_s2(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-):
-    book = tmp_path / f'旧审批_{SID}'
-    book.mkdir()
-    proof = _proof(_request('accept', 'accept'))
-    gates = {key: False for key in approvals._LEGACY_APPROVAL_GATES}
-    gate_proofs = {key: None for key in approvals._LEGACY_APPROVAL_GATES}
-    for gate in ('s3', 's4', 's5', 's6', 's7'):
-        gates[gate] = True
-        gate_proofs[gate] = proof
-    legacy = approvals._ApprovalRecordV3Legacy(
-        v=3, sid=SID, gate=gates, seen={key: False for key in APPROVAL_SEEN},
-        writing=True, gate_proofs=gate_proofs,
-        seen_proofs={key: None for key in APPROVAL_SEEN},
-        writing_proof=proof,
-    )
-    monkeypatch.setattr(
-        approvals.paths, 'resolve_novel_dir', lambda _base, _sid: book)
-    monkeypatch.setattr(
-        approvals, '_proof_for_gate',
-        lambda _novel_dir, gate, _record: proof)
-
-    migrated, backfilled = approvals._migrate_legacy_v3(tmp_path, SID, legacy)
-    assert migrated.v == 7 and backfilled == []
-    assert 's3' not in migrated.gate
-    assert not any(migrated.gate[gate] for gate in ('s4', 's5', 's6', 's7'))
-    assert not migrated.writing
-    assert migrated.structure_history == [] and migrated.structure_decision is None
-
-
 def test_structure_route_accepts_the_typed_body(monkeypatch, tmp_path):
     fastapi = pytest.importorskip('fastapi')
     del fastapi
@@ -658,3 +631,56 @@ def test_writing_route_dispatches_a_typed_body_without_starting_a_job(monkeypatc
     assert got.status_code == 200, got.text
     assert captured['sid'] == SID
     assert captured['request'] == request
+
+
+@pytest.mark.parametrize('field', ['claim', 'source'])
+def test_blueprint_evidence_change_expires_only_affected_chapter(field):
+    """Plan 不变也不能沿用读过不同事实/证据的票；未改章仍能精确采用。"""
+    from copy import deepcopy
+    from contracts.schema.stage4 import PlanChapters
+    from tests.hard_cases import _clean_plan4
+
+    raw = _clean_plan4()
+    raw['_provenance'] = {
+        'code': 'test', 'root_clean_sha1': 'c' * 40, 'inputs': {},
+        'origin': 'compiled', 'blind_candidate_sha256': 'a' * 64,
+        'evidence_binding_sha256': 'b' * 64,
+    }
+    plan = PlanChapters.model_validate(raw)
+    blueprints = {'blueprints': [
+        {'chapter_ordinal': row.output_ordinal,
+         'fact_atoms': [{'claim': '承诺归还物品', 'source': {'text': '原证据', 'start': 0, 'end': 3}}]}
+        for row in plan.output_chapters
+    ]}
+    before = approvals._structure_chapter_subject_sha256(plan, [], blueprints=blueprints)
+    after = deepcopy(blueprints)
+    after['blueprints'][0]['fact_atoms'][0][field] = (
+        '否认归还物品' if field == 'claim' else {'text': '新证据', 'start': 0, 'end': 3})
+    changed = approvals._structure_chapter_subject_sha256(plan, [], blueprints=after)
+    first = plan.output_chapters[0].output_ordinal
+    assert changed[first] != before[first]
+    assert all(changed[o] == before[o] for o in before if o != first)
+    assert measure.structure_review_subject_sha256(plan, [], blueprints=blueprints) != (
+        measure.structure_review_subject_sha256(plan, [], blueprints=after))
+    after = deepcopy(blueprints)
+    after['_provenance'] = {'code': 'another-format-only-proof'}
+    assert approvals._structure_chapter_subject_sha256(plan, [], blueprints=after) == before
+
+
+def test_structure_review_refuses_missing_blueprint_dependencies():
+    with pytest.raises(ValueError, match='缺当前蓝图'):
+        measure.structure_review_subject_sha256({'output_chapters': []}, [], blueprints={})
+
+
+def test_later_same_chapter_rejection_masks_earlier_accept(isolated):
+    base, book, state = isolated
+    approvals.approve_structure(base, SID, _request('accept', 'accept'))
+    # 另一章变化使整书合法重审；第一章主体保持不变但最新裁决要求返工。
+    state['subject'] = SUBJECT_B
+    state['chapter_subjects'][2] = '3' * 64
+    approvals.approve_structure(
+        base, SID, _request('request_replan', 'accept', subject=SUBJECT_B))
+    sources = approvals._accepted_structure_chapter_sources(
+        state['record'], book, SUBJECT_B, state['chapter_subjects'])
+    assert 1 not in sources
+    assert 2 in sources

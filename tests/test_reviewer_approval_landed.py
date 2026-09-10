@@ -181,7 +181,7 @@ def test_missing_or_incomplete_receipt_never_creates_a_file(tmp_path):
 
 def test_corrupt_record_is_unknown_not_missing(source):
     source.path.write_text('{broken', encoding='utf-8')
-    with pytest.raises(HumanEditProtected, match='corrupt'):
+    with pytest.raises(HumanEditProtected, match='corrupt|损坏'):
         _lookup(source)
 
 

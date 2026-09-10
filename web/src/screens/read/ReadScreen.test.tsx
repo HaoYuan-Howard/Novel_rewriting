@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { emptyKnowledgeReview } from '@/test/knowledgeLinks'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import type { ReactNode } from 'react'
@@ -73,7 +74,8 @@ function reading(ordinal: number, blueprint = true): ReadingResponse {
         evidence_text: 'B1 独立响应旧证据',
         participant_char_ids: ['B1_事实人物'],
       }],
-      hinges: [{ kind: 'b1_hinge', text: 'B1 独立响应旧铰链' }],
+      hinges: [{ kind: 'b1_hinge', text: 'B1 独立响应旧铰链', hinge_id: 'b1_hinge_' + ordinal,
+        source_fact_refs: ['b1_fact_' + ordinal], dialogue: null, literal: null }],
     }] : [],
     narration: blueprint ? [{
       grammatical_person: 'first',
@@ -128,7 +130,12 @@ function workpack(): BlueprintReviewWorkpack {
         evidence_text: 'B2 工作包证据',
         participant_char_ids: ['B2_参与者甲', 'B2_参与者乙'],
       }],
-      hinges: [{ kind: 'b2_hinge', text: 'B2 工作包铰链' }],
+      hinges: [{ kind: '要害台词', text: 'B2 工作包铰链', hinge_id: 'h01_001',
+        source_fact_refs: ['f01_01'], literal: null,
+        dialogue: { speaker: null, addressees: [{ kind: 'group' as const, label: '守门人' }],
+          meaning: '向守门人询问放行条件', speech_act: '询问' } },
+      { kind: '字面例外', text: 'A-17', hinge_id: 'h01_002', source_fact_refs: ['f01_01'],
+        dialogue: null, literal: { kind: 'code' as const, reason: '守门人按符号序列识别许可' } }],
     }],
     causal_links: [],
     narrative_relations: ordinal === 1 ? [{
@@ -156,8 +163,9 @@ function workpack(): BlueprintReviewWorkpack {
     title: '测试书',
     read_only: true,
     auto_decisions: false,
-    review_contract_version: 'stage2-blueprint-review-v5',
+    review_contract_version: 'stage2-blueprint-review-v7',
     global_review: {},
+    knowledge_links: emptyKnowledgeReview(),
     review_identity_sha256: 'e'.repeat(64),
     validation_seal_sha256: 'f'.repeat(64),
     review_token: 'bpr3_' + 'c'.repeat(64),
@@ -385,7 +393,11 @@ describe('ReadScreen 整本 Blueprint 审阅确认', () => {
     expect(await screen.findByText('B2 工作包事实')).toBeVisible()
     expect(screen.getByText('B2 工作包正文')).toBeVisible()
     expect(screen.getByText('B2 工作包地点')).toBeVisible()
-    expect(screen.getByText('B2 工作包铰链')).toBeVisible()
+    expect(screen.getByText('证据：B2 工作包铰链')).toBeVisible()
+    expect(screen.getByText('说话者：未知')).toBeVisible()
+    expect(screen.getByText('对象：守门人')).toBeVisible()
+    expect(screen.getByText(/向守门人询问放行条件/)).toBeVisible()
+    expect(screen.getByText('字面必要性：守门人按符号序列识别许可')).toBeVisible()
     expect(screen.getByText(
       '叙事关系：待复核 · 回应：甲立即回头 ← 门外传来脚步声',
     )).toBeVisible()
@@ -406,7 +418,7 @@ describe('ReadScreen 整本 Blueprint 审阅确认', () => {
 })
 
 describe('mock Blueprint 审阅审批契约', () => {
-  it('read 只接受当前工作包的 opaque token，global 只接受当前 review token 与非空确认人', async () => {
+  it('离线样本不伪造 Blueprint 工作包或已读，global 仍复验当前 token 与确认人', async () => {
     await mockApi.resetBook(SID)
     const pack = workpack()
     const request = {
@@ -415,15 +427,9 @@ describe('mock Blueprint 审阅审批契约', () => {
 
     await expect(mockApi.markSeen(SID, 'read', { review_token: 'bpr3_' + '0'.repeat(64) }))
       .rejects.toThrow(/当前 Blueprint 工作包/)
-    await Promise.all(Object.keys(request).map(async (field) => {
-      await expect(mockApi.markSeen(SID, 'read', {
-        ...request,
-        [field]: 'mismatch',
-      })).rejects.toThrow(/当前 Blueprint 工作包/)
-    }))
-
-    const read = await mockApi.markSeen(SID, 'read', request)
-    expect(read.seen).toEqual({ read: true, global: false })
+    await expect(mockApi.getBlueprintReviewWorkpack(SID)).rejects.toMatchObject({ status: 501 })
+    await expect(mockApi.markSeen(SID, 'read', request)).rejects.toMatchObject({ status: 501 })
+    expect((await mockApi.getApprovals(SID)).seen.read).toBe(false)
     await expect(mockApi.markSeen(SID, 'global', request)).rejects.toThrow(
       /seen\.global 必须携带当前 review 的 review_token/,
     )
@@ -436,9 +442,10 @@ describe('mock Blueprint 审阅审批契约', () => {
     const global = await mockApi.markSeen(SID, 'global', {
       review_token: MOCK_GLOBAL_SEEN_TOKEN, actor: '人工审阅者',
     })
-    expect(global.seen).toEqual({ read: true, global: true })
+    expect(global.seen).toEqual({ read: false, global: true })
     const filled = await mockApi.backfillApprovals(SID)
-    expect(filled.approvals.gate).toMatchObject({ s2: true, s4: false })
+    // 现役历史示例的开篇范围未知；读完并不能代替 typed 修订及语义审阅。
+    expect(filled.approvals.gate).toMatchObject({ s2: false, s4: false })
   })
 
   it('backfill 不制造 seen，且没有双 seen 时只补到 s1', async () => {

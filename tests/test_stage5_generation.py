@@ -192,18 +192,7 @@ def _stage5_chapter(*, text, budget_chars=10, errs=None, output_ordinal=1):
     provenance = write.RoundFreeProvenance(
         code='test-code', root_clean_sha1='a' * 40, inputs={},
         round=7, origin='human')
-    return write.Chapter(
-        output_ordinal=output_ordinal,
-        from_source_ordinals=[9],
-        source_chars=777,
-        budget_chars=budget_chars,
-        chars=1,
-        overlap_excl_verbatim=None,
-        segments=[write.ChapterSegment(slot='s01', text=text)],
-        warns=['旧读数'],
-        errs=errs,
-        _provenance=provenance,
-    )
+    return write.Chapter(output_ordinal=output_ordinal, segments=[write.ChapterSegment(slot='s01', text=text)], _provenance=provenance)
 
 
 def _trim_book(entry):
@@ -480,7 +469,8 @@ def test_edit_preview_is_readonly_and_working_draft_is_explicit(
 
     assert report.passed
     assert store.docs['stage5/ch01.json'].text == '候选人工稿。'
-    assert store.docs['stage5/ch01.json'].errs == ['候选出现任务术语']
+    assert 'errs' not in store.docs['stage5/ch01.json'].model_dump()
+    assert judge(store.docs['stage5/ch01.json'].text)[1] == ['候选出现任务术语']
     assert store.docs['stage5/review_1.json'] == before['stage5/review_1.json']
     assert 'stage5/review_2.json' not in store.docs, '逐次 edit 不得自动追跑 Review'
     actions = write.human_actions.read_events(tmp_path)
@@ -799,14 +789,10 @@ def test_recheck_preserves_paid_payload_and_backfills_trim_audit(
         'segments': [segment.model_dump() for segment in chapter.segments],
     }
     assert updated.segments == chapter.segments
-    assert updated.from_source_ordinals == chapter.from_source_ordinals
-    assert updated.source_chars == chapter.source_chars
-    assert updated.budget_chars == chapter.budget_chars
-    assert updated.provenance == chapter.provenance
-    assert updated.chars == write.M.chars_of(chapter.text)
-    assert updated.overlap_excl_verbatim == 0.25
-    assert updated.warns == ['新读数'] and updated.errs is None
-    assert store.refreshed == [rel]
+    assert updated.model_dump(by_alias=True) == chapter.model_dump(by_alias=True)
+    assert set(updated.model_dump(by_alias=True)) == {
+        'output_ordinal', 'segments', '_provenance'}
+    assert store.refreshed == [], 'recheck 不再改写正文或派生字段副本'
     assert store.docs[invalid_rel] is invalid
     assert invalid_rel not in store.archived
     assert store.docs['stage5/trim_audit_ch01.json'].before_sha256 == (
@@ -860,12 +846,9 @@ def test_revalidate_judges_and_promotes_the_live_invalid_segments_verbatim(
     }
     assert inv_rel not in store.docs
     assert store.promoted.segments == invalid.segments
-    assert store.promoted.from_source_ordinals == invalid.from_source_ordinals
-    assert store.promoted.source_chars == invalid.source_chars
-    assert store.promoted.budget_chars == invalid.budget_chars
-    assert store.promoted.provenance == invalid.provenance
-    assert store.promoted.warns == ['当前判据读数']
-    assert store.promoted.errs is None
+    assert store.promoted.model_dump(by_alias=True) == invalid.model_dump(by_alias=True)
+    assert set(store.promoted.model_dump(by_alias=True)) == {
+        'output_ordinal', 'segments', '_provenance'}
     assert store.docs['stage5/trim_audit_ch01.json'].before_sha256 == (
         write._sha256_text(invalid.text))
 
@@ -982,34 +965,17 @@ def test_revalidate_refuses_an_edited_invalid_with_noncanonical_slots(
     assert store.transactions == []
 
 
-def test_revalidate_refuses_an_invalid_that_tampers_with_the_frozen_budget(
-        tmp_path, monkeypatch):
-    baseline = _stage5_chapter(text='正文保持不变。', budget_chars=3)
-    invalid = baseline.model_copy(update={'budget_chars': 3000})
-    entry = {
-        'output_ordinal': 1,
-        'from_source_ordinals': [1],
-        'source_chars': 3,
-        'budget_chars': 3,
-        'scenes': [{'slot': 's01', 'budget_chars': 3}],
-    }
-    book = _trim_book(entry)
-    inv_rel = 'stage5/ch01.INVALID.json'
-    store = _MemoryTrimStore(
-        {inv_rel: invalid}, baselines={inv_rel: baseline})
-    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
-    monkeypatch.setattr(write, 'require_canonical_layout', lambda _store: None)
-    monkeypatch.setattr(write.review, 'load_book', lambda *_args: book)
 
-    with pytest.raises(ProvenanceRefused, match='任务身份字段.*budget_chars'):
-        write.run_revalidate(
-            SimpleNamespace(novel_dir=tmp_path / 'book'),
-            actor='tester', reason='尝试放大预算绕过 trim')
-
-    assert store.docs == {inv_rel: invalid}
-    assert store.promoted is None
-    assert store.transactions == []
-    assert 'stage5/trim_audit_ch01.json' not in store.docs
+def test_current_invalid_carrier_refuses_an_injected_retired_budget():
+    """任务预算只来自已验证的当前任务书；INVALID 不能另加一份预算绕过 trim。"""
+    from pydantic import ValidationError
+    baseline = _stage5_chapter(text='正文保持不变。')
+    payload = baseline.model_dump(by_alias=True)
+    payload['budget_chars'] = 3000
+    with pytest.raises(ValidationError, match='budget_chars'):
+        write.Chapter.model_validate(payload)
+    assert set(baseline.model_dump(by_alias=True)) == {
+        'output_ordinal', 'segments', '_provenance'}
 
 
 def test_same_text_commit_keeps_the_matching_trim_resolution(monkeypatch):
@@ -1030,7 +996,7 @@ def test_same_text_commit_keeps_the_matching_trim_resolution(monkeypatch):
     matched = []
     monkeypatch.setattr(
         trim_resolution, 'matches_current_audit',
-        lambda got_store, got_audit, got_sha: (
+        lambda got_store, got_audit, got_sha, *, ordinal: (
             matched.append((got_store, got_audit, got_sha)) or True))
 
     write._commit_canonical_chapter(
@@ -1038,6 +1004,7 @@ def test_same_text_commit_keeps_the_matching_trim_resolution(monkeypatch):
         chapter,
         expected_ordinal=1,
         commit=lambda rel, artifact: store.write_round(rel, artifact),
+        entry={'output_ordinal': 1, 'scenes': [{'slot': 's01', 'budget_chars': 3}]},
     )
 
     assert matched == [(store, audit, 'a' * 64)]
@@ -1106,7 +1073,7 @@ def test_a_successful_retry_uses_transactional_round_write_for_superseded_files(
     ctx = SimpleNamespace(
         novel_dir=tmp_path / 'book',
         accounting={}, account=lambda *_a, **_kw: None)
-    entry = {'output_ordinal': 5}
+    entry = {'output_ordinal': 5, 'scenes': [{'slot': 's01', 'budget_chars': 1}]}
     kwargs = {
         'segments': [{'slot': 's01', 'text': '合格正文。'}],
         'mat': 'given',
@@ -1192,8 +1159,8 @@ def test_two_regressed_revisions_preserve_formal_and_write_rejected(monkeypatch,
         'why': ['丢失结尾'],
         'fixes': [['rule-a', 'evidence-a']],
         'attempts': [
-            {'chars': 3, 'text': '退化一'},
-            {'chars': 3, 'text': '退化二'},
+            {'segments': [{'slot': 's01', 'text': '退化一'}]},
+            {'segments': [{'slot': 's01', 'text': '退化二'}]},
         ],
     }
     monkeypatch.setattr(write.prompts, 'write_system', lambda *_a, **_kw: 'SYS')
@@ -1416,7 +1383,7 @@ def test_parallel_write_paths_land_each_successful_canonical_chapter(
         text = write._segments_text(segments)
         return {
             'output_ordinal': entry['output_ordinal'],
-            'from_source_ordinals': entry['from_source_ordinals'],
+            'from_source_ordinals': [entry['output_ordinal']],
             'chars': write.M.chars_of(text),
             'overlap_excl_verbatim': 0.0,
             'text': text,
@@ -1568,15 +1535,9 @@ def test_parallel_batch_trim_readback_does_not_poison_the_next_chapter(
     """并发候选按章 formalize 时，前章自有 trim 状态不得进入后章 inputs。"""
     seed = factories.stage5_book()
     first = copy.deepcopy(seed.chapters[1])
-    first['budget_chars'] = 8
     first['scenes'][0]['budget_chars'] = 8
     second = copy.deepcopy(seed.chapters[1])
-    second.update({
-        'output_ordinal': 2,
-        'from_source_ordinals': [2],
-        'source_chars': len(seed.source_text[2]),
-        'budget_chars': 200,
-    })
+    second['output_ordinal'] = 2
     second['scenes'][0]['budget_chars'] = 200
 
     novel_dir = tmp_path / '双章来源账_812'
@@ -1647,9 +1608,6 @@ def test_parallel_batch_trim_readback_does_not_poison_the_next_chapter(
         return write._chapter_record(
             entry,
             [{'slot': 's01', 'text': text}],
-            book,
-            warns=[],
-            errs=None,
             provenance=provenance,
         )
 
@@ -1666,6 +1624,7 @@ def test_parallel_batch_trim_readback_does_not_poison_the_next_chapter(
         first_artifact,
         expected_ordinal=1,
         commit=lambda rel, candidate: store.write_round(rel, candidate),
+        entry=first_entry,
     )
     first_audit_rel = write.artifact_rel('stage5.trim_audit', nn=1)
     assert first_trim_notes and store.exists(first_audit_rel)
@@ -1684,6 +1643,7 @@ def test_parallel_batch_trim_readback_does_not_poison_the_next_chapter(
         first_artifact,
         expected_ordinal=1,
         commit=lambda rel, _candidate: store.path(rel),
+        entry=first_entry,
     )
     assert store.path(first_audit_rel).read_bytes() == before_audit
     assert ctx.edges == baseline_inputs, '预存 TrimAudit 被误记成了 Stage5 写作输入'
@@ -1700,6 +1660,7 @@ def test_parallel_batch_trim_readback_does_not_poison_the_next_chapter(
         second_artifact,
         expected_ordinal=2,
         commit=lambda rel, candidate: store.write_round(rel, candidate),
+        entry=second_entry,
     )
     write.verify_chapter_delivery(
         ctx, second_prepared, second_artifact, rel=second_rel)

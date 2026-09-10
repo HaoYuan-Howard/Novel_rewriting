@@ -62,7 +62,6 @@ from contracts.schema.stage6 import Hook  # noqa: E402
 from novel import paths, prov  # noqa: E402
 from novel.cli import exit_codes as X  # noqa: E402
 from novel.config import Config, load_config  # noqa: E402
-from novel.consumption import legacy_stage6_style  # noqa: E402
 from novel.core.bands import ending_shape, hook_shape_band, sep_band_of_text  # noqa: E402
 from novel.llm.client import NOTHINK_RUNGS, rungs_from_effort  # noqa: E402
 from novel.llm.ledger import ledger_path  # noqa: E402
@@ -583,6 +582,16 @@ def no_qual_hook_system(
     return text
 
 
+def _historical_hook_measurement(data: object) -> dict[str, object]:
+    """只复现隔离历史实验的五项测量值；不参与现役消费、freshness 或审批。"""
+    measurable = data.get('measurable') if isinstance(data, dict) else None
+    hook = measurable.get('hook') if isinstance(measurable, dict) else None
+    hook = hook if isinstance(hook, dict) else {}
+    return {key: hook.get(key) for key in (
+        'chars', 'avg_sentence_chars', 'avg_paragraph_chars', 'quote_styles', 'dialogue_ratio',
+    )}
+
+
 def _legacy_build_material(*, arm: str, title: str, ctx: dict, style: dict,
                            grounding: dict, source_hook: str, lead: list[dict],
                            missing: list[int], upto: int) -> prompts.Material:
@@ -622,7 +631,7 @@ def _legacy_build_material(*, arm: str, title: str, ctx: dict, style: dict,
         source_hook=source_hook,
         story_truth=truth,
         story_map=tuple(full_map),
-        hook_mechanical=legacy_stage6_style(style)['hook'],
+        hook_mechanical=_historical_hook_measurement(style),
     )
 
 

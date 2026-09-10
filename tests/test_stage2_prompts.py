@@ -3,54 +3,62 @@
 """Stage 2 当前模型提示与响应契约。"""
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from contracts.invariants import (
-    ADDRESS_BY, ADDRESS_CONTEXT, FATE_WORDS, HINGE_KINDS, NAME_DISTINCTIVENESS,
+    BARE_PRONOUNS, HINGE_KINDS,
     KNOWLEDGE_SUBJECT_KINDS, NARRATIVE_PERSON, RELATION_VISIBILITY_KINDS,
     RESPONSE_TIME_LAYERS, WORLD_RULE_KINDS,
 )
-from novel.stages.stage2 import prompts
+from contracts.schema.knowledge import KnowledgeAgentTurnResponse, KnowledgeResponse
+from novel.stages.stage2 import characters, knowledge_prompts, prompts
 
 
 def test_all_current_prompt_arms_are_rendered():
-    assert prompts.GLOBAL_CANDIDATE_SYS.startswith(prompts.RULES_V2)
-    assert prompts.BLUEPRINT_SYS_V2_REFS.startswith(prompts.RULES_V2)
-    assert prompts.BLUEPRINT_SYS_V31.startswith(prompts.RULES_V2)
-    assert prompts.ROLE_FATE_RULE in prompts.GLOBAL_CANDIDATE_SYS
-    assert prompts.ROLE_FATE_RULE in prompts.ROLE_SPLIT_SYS
-    assert '$FATE_WORDS' not in prompts.ROLE_FATE_RULE
-    assert all(word in prompts.ROLE_FATE_RULE for word in FATE_WORDS)
-    rendered = (prompts.GLOBAL_CANDIDATE_SYS + prompts.BOUNDARY_SYS_V2
+    assert prompts.BLUEPRINT_SYS_V2_REFS.startswith(prompts.BLUEPRINT_RULES)
+    assert prompts.BLUEPRINT_SYS_V31.startswith(prompts.BLUEPRINT_RULES)
+    assert prompts.BLUEPRINT_SYS_V32.startswith(prompts.BLUEPRINT_RULES)
+    assert '静态人物登记' in characters.SYSTEM and '不写经历、结局' in characters.SYSTEM
+    assert '不得新增人物 ID' in knowledge_prompts.SYSTEM
+    rendered = (knowledge_prompts.SYSTEM + characters.SYSTEM + prompts.BOUNDARY_SYS_V2
                 + prompts.BLUEPRINT_SYS_V2_REFS + prompts.BLUEPRINT_SYS_V31
-                + prompts.ROLE_SPLIT_SYS)
+                + prompts.BLUEPRINT_SYS_V32)
     assert '$' not in rendered
 
 
-def test_global_prompt_requires_an_explicit_exact_chapter_partition():
-    assert '每一章逐个显式列全' in prompts.GLOBAL_CANDIDATE_SYS
-    assert '每章恰好出现一次' in prompts.GLOBAL_CANDIDATE_SYS
+def test_character_prompt_uses_the_complete_pronoun_contract_and_retired_arms_are_absent():
+    assert all(f'「{word}」' in characters.SYSTEM for word in BARE_PRONOUNS)
+    for retired in ('GLOBAL_CANDIDATE_SYS', 'GLOBAL_CANDIDATE_HINT',
+                    'ROLE_SPLIT_SYS', 'ROLE_SPLIT_HINT', 'ROLE_FATE_RULE'):
+        assert not hasattr(prompts, retired)
+
+
+def test_global_prompt_requires_evidence_bound_opening_without_default_chapter():
+    assert 'source_blurb' in knowledge_prompts.SYSTEM
+    assert 'boundary_evidence' in knowledge_prompts.SYSTEM
+    assert 'unresolved' in knowledge_prompts.SYSTEM
+    assert '不能默认第 1 章' in knowledge_prompts.SYSTEM
+    assert 'conflict_stages' not in knowledge_prompts.SYSTEM
 
 
 def test_global_prompt_separates_opening_premises_from_later_hidden_truths():
-    assert '第一章明牌不是秘密' in prompts.GLOBAL_CANDIDATE_SYS
-    assert '不能因为书中其他角色暂时不知道就收进 secrets' in \
-        prompts.GLOBAL_CANDIDATE_SYS
-    assert '反向扫“早就知道”' in prompts.GLOBAL_CANDIDATE_SYS
-    assert '收徒那天就知道' in prompts.GLOBAL_CANDIDATE_SYS
-    assert 'secret 关心的' in prompts.GLOBAL_CANDIDATE_SYS
-    assert '是读者何时知道' in prompts.GLOBAL_CANDIDATE_SYS
+    assert '第一章直接明牌的普通背景不列秘密' in knowledge_prompts.SYSTEM
+    assert '最早知情' in knowledge_prompts.SYSTEM
+    assert '世界内知情、读者揭示、事实发生三者分开' in knowledge_prompts.SYSTEM
+    assert '范围不是秘密披露授权' in knowledge_prompts.SYSTEM
 
 
 def test_global_prompt_requests_typed_visibility_and_candidate_ids_only():
-    assert 'visibility 写【读者】何时能知道这条关系' in \
-        prompts.GLOBAL_CANDIDATE_SYS
-    assert 'knowledge_events' in prompts.GLOBAL_CANDIDATE_SYS
-    assert 'character_known_by' not in prompts.GLOBAL_CANDIDATE_SYS
-    assert '七类自由事实必须从关闭候选表选择证据' in \
-        prompts.GLOBAL_CANDIDATE_SYS
-    assert '只返回候选 id，不要返回章号、locator、原文' in \
-        prompts.GLOBAL_CANDIDATE_SYS
+    assert '读者知情单独用 visibility' in knowledge_prompts.SYSTEM
+    assert 'knowledge_events' in knowledge_prompts.SYSTEM
+    assert 'character_known_by' not in knowledge_prompts.SYSTEM
+    assert '本次表内 evidence_candidate_id' in knowledge_prompts.SYSTEM
+    assert '不抄 locator、章号或 SourceSpan' in knowledge_prompts.SYSTEM
 
-    hint = prompts.GLOBAL_CANDIDATE_HINT
+    hint = knowledge_prompts.HINT
+    KnowledgeResponse.model_validate(hint)
+    assert set(hint['entities']) == {'character_states', 'relations'}
     relations = hint['entities']['relations']
     assert [row['visibility']['kind'] for row in relations] == list(
         RELATION_VISIBILITY_KINDS)
@@ -59,21 +67,21 @@ def test_global_prompt_requests_typed_visibility_and_candidate_ids_only():
 
     candidate_ref_keys = {'evidence_candidate_id'}
     seven_families = [
-        hint['entities']['characters'][0]['role_evidence'],
+        hint['entities']['character_states'][0]['fate_evidence'],
         relations[0]['predicate_evidence'],
         hint['canon']['setting']['era_evidence'],
         hint['canon']['world_rules'][0]['versions'][0]['desc_evidence'],
         hint['canon']['secrets'][0]['fact_evidence'],
         knowledge[0]['evidence'],
-        hint['arc']['arc_tracks'][0]['trajectory_evidence'],
+        hint['source_blurb']['opening']['boundary_evidence'],
     ]
     assert all(set(row) == candidate_ref_keys for row in seven_families)
 
 
-def test_role_split_stays_a_claim_only_judge_without_source_access():
-    assert set(prompts.ROLE_SPLIT_HINT['characters'][0]) == {
-        'char_id', 'role', 'fate'}
-    assert 'locator' not in prompts.ROLE_SPLIT_SYS
+def test_knowledge_response_cannot_restore_static_character_patch_protocol():
+    with pytest.raises(ValidationError):
+        KnowledgeAgentTurnResponse.model_validate({'kind': 'role_fate_patch',
+            'characters': [{'char_id': 'char_001', 'role': '新身份', 'fate': None}]})
 
 
 def test_removed_narration_fields_are_absent_from_model_surfaces():
@@ -113,21 +121,24 @@ def test_the_prompt_asks_for_paragraph_numbers_not_transcribed_source():
 def test_response_hints_derive_enums_from_the_contract_layer():
     beat = prompts.BLUEPRINT_HINT_V31['blueprints'][0]['beats'][0]
     assert beat['time_layer'] == '|'.join(RESPONSE_TIME_LAYERS)
-    assert beat['hinges'][0]['kind'] == '|'.join(HINGE_KINDS)
-    character = prompts.GLOBAL_CANDIDATE_HINT[
-        'entities']['characters'][0]
-    assert character['name_distinctiveness'] == '|'.join(NAME_DISTINCTIVENESS)
-    assert character['address'][0]['context'] == '|'.join(ADDRESS_CONTEXT)
-    assert character['address'][0]['by'] == 'char_002|' + '|'.join(
-        value for value in ADDRESS_BY if value != 'char_id')
-    assert prompts.GLOBAL_CANDIDATE_HINT[
+    assert beat['hinges'][0]['kind'] in HINGE_KINDS
+    assert all(kind in prompts.BLUEPRINT_SYS_V31 for kind in HINGE_KINDS)
+    assert 'dialogue' in beat['hinges'][0] and 'source_fact_refs' in beat['hinges'][0]
+    assert knowledge_prompts.HINT[
         'canon']['world_rules'][0]['kind'] == WORLD_RULE_KINDS[0]
-    assert set(prompts.GLOBAL_CANDIDATE_HINT['arc']['arc_tracks'][0]) == {
-        'subject', 'trajectory', 'trajectory_evidence'}
+    assert set(knowledge_prompts.HINT['source_blurb']['facts'][0]) == {
+        'kind', 'claim_id', 'claim', 'evidence'}
 
 
 def test_response_hints_only_request_model_written_fields():
-    surface = str(prompts.BLUEPRINT_HINT_V31)
+    def keys(value):
+        if isinstance(value, dict):
+            return set(value).union(*(keys(child) for child in value.values()))
+        if isinstance(value, list):
+            return set().union(*(keys(child) for child in value))
+        return set()
+
+    surface = keys(prompts.BLUEPRINT_HINT_V31)
     for field in ('narrator_name', 'focalizer_name', 'present_names', 'source',
                   'summary'):
         assert field not in surface

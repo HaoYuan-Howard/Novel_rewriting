@@ -433,6 +433,46 @@ export function PipelineAgentProfilesForm({
         </div>
       </fieldset>
 
+      <fieldset disabled={disabled} className="m-0 rounded-block border border-line bg-sunken-2 px-13 py-11">
+        <legend className="px-4 text-body font-semibold text-ink-2">并发配置</legend>
+        <p className="m-0 mb-8 text-tag text-ink-4">
+          默认逐节点并发 {capabilities.concurrency.default_node}，整书总上限 {capabilities.concurrency.defaults.per_book}，
+          同一输出根的单供应商总上限 {capabilities.concurrency.defaults.per_provider}。实际调用同时受三个上限约束。
+        </p>
+        <label className="flex items-center gap-8">
+          <input type="checkbox" checked={!!value.concurrency} onChange={(event) => {
+            const next = { ...value }
+            if (event.target.checked) {
+              next.concurrency = { ...capabilities.concurrency.defaults,
+                node_overrides: { ...capabilities.concurrency.defaults.node_overrides } }
+            } else delete next.concurrency
+            onChange(next)
+          }} />
+          自定义并发
+        </label>
+        {value.concurrency ? <div className="mt-9 grid grid-cols-2 gap-9">
+          {capabilities.concurrency.nodes.map((node) => <label key={node} className="grid gap-4 text-tag">
+            {node} 并发
+            <select aria-label={`${node} 并发`} value={value.concurrency!.node_overrides[node] ?? ''}
+              onChange={(event) => {
+                const nodeOverrides = { ...value.concurrency!.node_overrides }
+                if (event.target.value) nodeOverrides[node] = Number(event.target.value)
+                else delete nodeOverrides[node]
+                onChange({ ...value, concurrency: { ...value.concurrency!, node_overrides: nodeOverrides } })
+              }}>
+              <option value="">默认（{capabilities.concurrency.default_node}）</option>
+              {capabilities.concurrency.node_choices.map((count) => <option key={count} value={count}>{count}</option>)}
+            </select>
+          </label>)}
+          {(['per_book', 'per_provider'] as const).map((field) => <label key={field} className="grid gap-4 text-tag">
+            {field === 'per_book' ? '整书总并发' : '供应商总并发'}
+            <input type="number" min={capabilities.concurrency.total_min} max={capabilities.concurrency.total_max}
+              value={value.concurrency![field]} onChange={(event) => onChange({ ...value,
+                concurrency: { ...value.concurrency!, [field]: Number(event.target.value) } })} />
+          </label>)}
+        </div> : null}
+      </fieldset>
+
       {errors.length > 0 ? (
         <div
           role="status"

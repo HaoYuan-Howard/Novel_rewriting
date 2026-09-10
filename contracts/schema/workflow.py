@@ -9,9 +9,9 @@ from contracts.schema.base import FrozenModel
 from contracts.schema.common import Sha256
 
 
-class WorkflowManifestV1(FrozenModel):
-    schema_version: Literal[1] = 1
-    contract_version: Literal['workflow-role-boundaries-v1'] = 'workflow-role-boundaries-v1'
+class WorkflowManifestV2(FrozenModel):
+    schema_version: Literal[2] = 2
+    contract_version: Literal['pipeline-cost-latency-v2'] = 'pipeline-cost-latency-v2'
     task_id: Sha256
     created_at: int
 
@@ -25,7 +25,7 @@ class WorkUnitAttempt(FrozenModel):
 
 class WorkUnitContentTurn(FrozenModel):
     turn_id: str = Field(min_length=1)
-    ordinal: int = Field(ge=1, le=4)
+    ordinal: int = Field(ge=1)
     request_sha256: Sha256
     request_payload_sha256: Sha256 | None = None
     run_id: str = Field(min_length=1)
@@ -40,17 +40,62 @@ class WorkUnitContentTurn(FrozenModel):
     created_at: int
 
 
-class WorkUnitLedgerV1(FrozenModel):
-    schema_version: Literal[1] = 1
+class BudgetGrant(FrozenModel):
+    """同一业务单元的不可变人工追加；不含付费或正文外发授权。"""
+
+    intent_id: str = Field(pattern=r'^[a-zA-Z0-9_-]{16,80}$')
+    preview_token: Sha256
+    additional: int = Field(default=1, ge=1, le=4, strict=True)
+    actor: Literal['human:frontend'] = 'human:frontend'
+    reason: str = Field(min_length=1, max_length=2000)
+    created_at: int = Field(ge=0)
+    before_ledger_sha256: Sha256
+    surface_sha256: Sha256
+    authorized_after_ordinal: int = Field(ge=4)
+    owner_run_ids: tuple[str, ...] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _reason_and_owners(self) -> BudgetGrant:
+        if not self.reason.strip() or any(not value for value in self.owner_run_ids):
+            raise ValueError('人工追加必须有理由和精确 owner')
+        if tuple(sorted(set(self.owner_run_ids))) != self.owner_run_ids:
+            raise ValueError('追加授权的 owner 必须排序且唯一')
+        return self
+
+
+class WorkUnitProcessing(FrozenModel):
+    """一次实际处理的来源；免费处理只记证据，绝不伪造内容轮次。"""
+
+    processing_id: Sha256
+    run_id: str = Field(min_length=1)
+    input_sha256: Sha256
+    kind: Literal['pending', 'model', 'mechanical', 'history_adopted', 'cached']
+    turn_id: str | None = None
+    evidence_sha256: Sha256 | None = None
+
+    @model_validator(mode='after')
+    def _evidence(self) -> WorkUnitProcessing:
+        if self.kind == 'model':
+            if not self.turn_id or self.evidence_sha256 is not None:
+                raise ValueError('模型处理必须引用内容轮次')
+        elif self.turn_id is not None or self.evidence_sha256 is None:
+            raise ValueError('免费处理必须有独立来源证据，不能冒充模型轮次')
+        return self
+
+
+class WorkUnitLedgerV2(FrozenModel):
+    schema_version: Literal[2] = 2
     task_id: Sha256
     unit_id: Sha256
     sid: str = Field(min_length=1)
     node: str = Field(min_length=1)
     role: Literal['executor', 'commander']
     scope: str = Field(min_length=1, max_length=160)
-    content_limit: Literal[4] = 4
+    base_content_limit: Literal[4] = 4
+    grants: tuple[BudgetGrant, ...] = ()
     turns: tuple[WorkUnitContentTurn, ...] = ()
-    committed_through: int = Field(default=0, ge=0, le=4)
+    processing: tuple[WorkUnitProcessing, ...] = ()
+    committed_through: int = Field(default=0, ge=0)
     committed_artifact: str | None = None
     committed_fingerprint: str | None = None
     # 整组候选可能全部来自缓存；提交证明不能为此伪造内容轮次。
@@ -58,7 +103,16 @@ class WorkUnitLedgerV1(FrozenModel):
     group_producer_completed: bool = False
 
     @model_validator(mode='after')
-    def _closed_turns(self) -> WorkUnitLedgerV1:
+    def _closed_turns(self) -> WorkUnitLedgerV2:
+        limit = self.base_content_limit
+        intents: set[str] = set()
+        for grant in self.grants:
+            if grant.intent_id in intents or grant.authorized_after_ordinal != limit:
+                raise ValueError('追加授权必须唯一，且只能在已有额度耗尽后累计')
+            if grant.authorized_after_ordinal > len(self.turns):
+                raise ValueError('人工追加不得越过实际已用轮次')
+            intents.add(grant.intent_id)
+            limit += grant.additional
         if len(self.turns) > self.content_limit:
             raise ValueError('工作单元内容预算超过上限')
         if self.committed_through > len(self.turns):
@@ -72,6 +126,15 @@ class WorkUnitLedgerV1(FrozenModel):
             raise ValueError('内容轮次必须连续且从一开始')
         if len({t.turn_id for t in self.turns}) != len(self.turns):
             raise ValueError('内容请求身份重复')
+        if len({row.processing_id for row in self.processing}) != len(self.processing):
+            raise ValueError('处理来源回执身份重复')
+        turns = {turn.turn_id: turn for turn in self.turns}
+        for row in self.processing:
+            if row.kind == 'model':
+                turn = turns.get(row.turn_id)
+                if (turn is None or turn.run_id != row.run_id
+                        or turn.request_sha256 != row.input_sha256):
+                    raise ValueError('处理来源回执不属于所声明的内容轮次')
         attempts = [a.attempt_id for t in self.turns for a in t.attempts]
         if len(set(attempts)) != len(attempts):
             raise ValueError('网络尝试不能属于多个内容轮')
@@ -79,6 +142,10 @@ class WorkUnitLedgerV1(FrozenModel):
             if turn.state in ('delivered', 'adopted') and not turn.response_sha256:
                 raise ValueError('已交付状态必须有完整响应证据')
         return self
+
+    @property
+    def content_limit(self) -> int:
+        return self.base_content_limit + sum(grant.additional for grant in self.grants)
 
 
 class WorkUnitBlobV1(FrozenModel):

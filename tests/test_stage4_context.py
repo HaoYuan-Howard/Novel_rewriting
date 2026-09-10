@@ -9,14 +9,14 @@ from typing import get_origin, get_type_hints
 import pytest
 
 from contracts.schema.stage4 import CtxScene, WriterContext
-from novel.core.facts import heuristic_relation_gates
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.context import (
-    Assembly, _gate_setting, _name_narration, _project_facts, _resolve_scenes,
+    Assembly, _name_narration, _resolve_scenes,
     build_writer_context, rename_all,
 )
 from novel.core.naming import display_names, display_names_at, name_collisions
 from tests import corpus
+from tests.test_stage2_grounding import character_preparation, pair  # noqa: F401
 
 
 def _by(rel: str) -> dict[str, object]:
@@ -28,20 +28,31 @@ BPS: dict[str, object] = {}
 GG: dict[str, object] = {}
 PLANS: dict[str, object] = {}
 CTX: dict[str, object] = {}
+LINKS: dict[str, object] = {}
 BOOKS: list[str] = []
 _CORPUS_LOADED = False
 
 
 def _load_corpus() -> None:
-    global MAIN, BPS, GG, PLANS, CTX, BOOKS, _CORPUS_LOADED
+    global MAIN, BPS, GG, PLANS, CTX, LINKS, BOOKS, _CORPUS_LOADED
     if _CORPUS_LOADED:
         return
     MAIN = _by('stage1/main_text.json')
     BPS = _by('stage2/chapter_blueprints.json')
-    GG = _by('stage2/global_grounding.json')
+    from contracts.schema.characters import CharacterRegistry
+    from contracts.schema.knowledge import KnowledgeGrounding
+    from novel.stages.stage2.grounding import compose
+    knowledge = _by('stage2/global_grounding.json')
+    characters = _by('stage2/characters.json')
+    LINKS = _by('stage2/knowledge_links.json')
+    assert set(knowledge) <= set(characters), '当前语料缺少独立人物登记，不能伪装组合成功'
+    GG = {sid: compose(CharacterRegistry.model_validate(characters[sid]),
+                       KnowledgeGrounding.model_validate(raw)).model_dump(by_alias=True)
+          for sid, raw in knowledge.items()}
     PLANS = _by('stage4/plan_chapters.json')
     CTX = _by('stage4/writer_context.json')
     BOOKS = sorted(set(MAIN) & set(BPS) & set(GG) & set(PLANS) & set(CTX))
+    assert set(BOOKS) <= set(LINKS), '当前语料缺少正式知识关联，不能跳过披露验收'
     _CORPUS_LOADED = True
 
 
@@ -66,6 +77,7 @@ def _ctx_scene(**overrides):
         'required_facts': ['三位住客拒绝接受主角'], 'context_facts': [],
         'turn_fact': '三位住客拒绝接受主角', 'entry_state': [], 'exit_state': [],
         'stages': [{'time_layer': 'present', 'place': '公寓', 'present': ['主角']}],
+        'knowledge': [],
     }
     return {**base, **overrides}
 
@@ -145,12 +157,13 @@ def test_the_assembler_reproduces_every_context_on_disk():
     放松的是「拿两种形态直接比」这个前提错误。
     """
     for sid in BOOKS:
-        asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid])
-        mine = _through_the_carrier(asm.ctx, CTX[sid]['_provenance'])
+        asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid],
+                                   knowledge_links=LINKS[sid])
+        mine = WriterContext.model_validate({**asm.ctx, '_provenance': CTX[sid]['_provenance']}).model_dump(
+            by_alias=True, mode='json')
         disk = WriterContext.model_validate(CTX[sid]).model_dump(
             by_alias=True, mode='json')
-        d = _diffs(mine, disk)
-        assert not d, f'{sid} 重组与盘上不一致（{len(d)} 处）：\n  ' + '\n  '.join(d[:8])
+        assert mine == disk, f'{sid} 当前关联重组与盘上上下文不一致'
 
 
 @needs_corpus
@@ -159,7 +172,8 @@ def test_the_rebuilt_context_passes_the_carrier():
     prov = {'code': '0' * 10, 'root_clean_sha1': '0' * 40,
             'inputs': {'stage4/plan_chapters.json': {'file': '1' * 10, 'consumed': '2' * 10}}}
     for sid in BOOKS:
-        asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid])
+        asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid],
+                                   knowledge_links=LINKS[sid])
         WriterContext.model_validate({**asm.ctx, '_provenance': prov})
 
 
@@ -179,11 +193,12 @@ def test_the_side_ledger_is_returned_not_printed():
     hints = get_type_hints(Assembly)
     containers = {rows: get_origin(hints[rows]) for rows in
                   ('subs', 'collisions', 'chapter_collisions', 'withheld',
-                   'dropped_hinges', 'held_rules', 'setting_cut', 'setting_emptied')}
+                   'dropped_hinges', 'held_rules', 'withheld_setting')}
     assert set(containers.values()) <= {dict, list, set}, \
         f'副产物出现了非容器形状：{containers}'
     for sid in BOOKS:
-        asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid])
+        asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid],
+                                   knowledge_links=LINKS[sid])
         for name, origin in containers.items():
             got = getattr(asm, name)
             assert isinstance(got, origin), \
@@ -193,302 +208,35 @@ def test_the_side_ledger_is_returned_not_printed():
 @needs_corpus
 def test_the_setting_gate_returns_structured_results():
     for sid in BOOKS:
-        asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid])
-        assert isinstance(asm.setting_cut, list)
-        assert isinstance(asm.setting_emptied, list)
-
-
-def test_the_setting_gate_uses_the_same_number_ruler_as_secret_keywords():
-    """原样转抄含「一直 / 三」时也必须被从写手的 setting 中剪掉。"""
-    fact = '她其实一直都知道他是三皇子'
-    setting = {'暗线': fact + '。这里另有一条无关规则。'}
-    out, cut = _gate_setting(
-        setting, [{'secret_id': 'secret_x', 'fact': fact}], ['secret_x'])
-    assert out['暗线'] == '这里另有一条无关规则。'
-    assert cut == [('暗线', fact + '。')]
+        asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid],
+                                   knowledge_links=LINKS[sid])
+        assert isinstance(asm.withheld_setting, list)
 
 
 # ── 二·四、关系截止章的包含式边界（`R-2.8`）──────────────────────────────
 
-def test_relation_valid_through_chapter_includes_the_named_chapter_only():
-    grounding = {
-        'entities': {
-            'characters': {},
-            'relations': [{
-                'relation_id': 'rel_01',
-                'subject_id': 'char_001',
-                'predicate': '雇佣',
-                'object_id': 'char_002',
-                'valid_from_chapter': 1,
-                'valid_through_chapter': 2,
-                'visibility': {'kind': 'public', 'from_chapter': 1},
-            }],
-        },
-        'canon': {},
-        'arc': {'conflict_stages': [{
-            'stage': '共事阶段',
-            'chapters': [1, 2, 3],
-        }]},
-    }
-    display = {'char_001': '沈青', 'char_002': '周衡'}
-
-    at_boundary = _project_facts(grounding, 2, False, display)[0]
-    after_boundary = _project_facts(grounding, 3, False, display)[0]
-
-    assert at_boundary['relations'] == [{
-        'subject': '沈青', 'predicate': '雇佣', 'object': '周衡'}]
-    assert after_boundary['relations'] == []
 
 
 # ── 二·五、secret 的下发时点（`R-2.18`）───────────────────────────────────
 
-def _split_secrets_grounding() -> dict:
-    """一个复合真相拆成两条原子 secret 的合成底座。
 
-    这正是盘上那本书 `secret_01` 的形状：穿女装的行为在 ch4 点破，而「为什么」
-    要到 ch7 才点破。v1 只能把两件事写进一条 `fact`，于是 ch4 的写手整份都拿到。
-    """
-    return {
-        'entities': {'characters': {
-            'char_001': {'canonical': '江尽夏', 'role': '练习生',
-                         'address': [{'surface': '江尽夏', 'by': 'narration',
-                                      'context': 'reference', 'from_chapter': 1}]},
-        }, 'relations': []},
-        'canon': {
-            'setting': {'时代背景': '当代', '世界观': '偶像公寓'},
-            'world_rules': [],
-            'secrets': [
-                {'secret_id': 'secret_01',
-                 'fact': '江尽夏私下会穿女装打扮自己',
-                 'knowledge_events': [{
-                     'subject': {'kind': 'character', 'char_id': 'char_001'},
-                     'known_from_chapter': 1,
-                     'evidence': {'chapter_ordinal': 1, 'source': None},
-                 }],
-                 'setup': {'kind': 'foreshadowed', 'chapters': [2]},
-                 'first_reveal_chapter': 4},
-                {'secret_id': 'secret_02',
-                 'fact': '他这么做是因为中学时穿裙子被舅舅剃了头',
-                 'knowledge_events': [{
-                     'subject': {'kind': 'character', 'char_id': 'char_001'},
-                     'known_from_chapter': 1,
-                     'evidence': {'chapter_ordinal': 1, 'source': None},
-                 }],
-                 'setup': {'kind': 'cold'},
-                 'first_reveal_chapter': 7},
-            ],
-        },
-        # ⚠ 阶段必须逐章覆盖全书（`R-2.14`）：`_project_facts` 对定不出章级阶段的
-        #   情形是显式终态，不猜也不省略 ⇒ 这里给满 1~9 章，否则测的就成了那条闸。
-        'arc': {'conflict_stages': [{'stage': '藏', 'chapters': [1, 2, 3, 4, 5]},
-                                    {'stage': '认', 'chapters': [6, 7, 8, 9]}],
-                'climax': '摊牌', 'ending': '和解', 'arc_tracks': []},
-    }
-
-
-def _explicit_visibility_grounding() -> dict:
-    """显式 relation visibility 与 typed knowledge event 的合成底座。"""
-    grounding = _split_secrets_grounding()
-    grounding['entities']['characters']['char_002'] = {
-        'canonical': '周衡',
-        'role': '室友',
-        'address': [{'surface': '周衡', 'by': 'narration',
-                     'context': 'reference', 'from_chapter': 1}],
-    }
-    # 两端名字都在 fact 且关系在隐瞒窗口里，旧启发式会把 rel_public 推到 ch4；
-    # 显式 public 却声明 ch1 可见。实际 gate 必须取 max(valid_from=2, public=1) = 2。
-    grounding['canon']['secrets'][0]['fact'] = '江尽夏与周衡其实是恋人'
-    grounding['entities']['relations'] = [
-        {
-            'relation_id': 'rel_public',
-            'subject_id': 'char_001',
-            'predicate': '室友',
-            'object_id': 'char_002',
-            'valid_from_chapter': 2,
-            'valid_through_chapter': 5,
-            'visibility': {'kind': 'public', 'from_chapter': 1},
-        },
-        {
-            'relation_id': 'rel_via_secret',
-            'subject_id': 'char_002',
-            'predicate': '恋人',
-            'object_id': 'char_001',
-            'valid_from_chapter': 3,
-            'valid_through_chapter': 5,
-            'visibility': {'kind': 'via_secret', 'secret_id': 'secret_01'},
-        },
-    ]
-    grounding['canon']['secrets'].append({
-        'secret_id': 'secret_03',
-        'fact': '公寓里的人会轮流替江尽夏保管钥匙',
-        'setup': {'kind': 'cold'},
-        'first_reveal_chapter': 1,
-        'knowledge_events': [
-            {
-                'subject': {'kind': 'character', 'char_id': 'char_001'},
-                'known_from_chapter': 4,
-                'evidence': {'chapter': 4, 'locator': '江尽夏收下钥匙'},
-            },
-            {
-                'subject': {'kind': 'group', 'label': '公寓众人'},
-                'known_from_chapter': 4,
-                'evidence': {'chapter': 4, 'locator': '众人都点了头'},
-            },
-        ],
-    })
-    return grounding
-
-
-def test_explicit_public_and_via_secret_gates_override_the_old_heuristic():
-    """显式声明是生产权威；旧启发式仍能复算，但只供 INFO 对账。"""
-    grounding = _explicit_visibility_grounding()
-    display = {'char_001': '江尽夏', 'char_002': '周衡'}
-
-    inferred, vanished = heuristic_relation_gates(
-        grounding['entities'], grounding['canon']['secrets'])
-    assert inferred['rel_public'] == 4, '合成样本必须制造显式值与旧启发式的真实分歧'
-    assert inferred['rel_via_secret'] == 4
-    assert vanished == []
-
-    chapter2 = _project_facts(grounding, 2, False, display)[0]['relations']
-    chapter3 = _project_facts(grounding, 3, False, display)[0]['relations']
-    chapter4 = _project_facts(grounding, 4, False, display)[0]['relations']
-
-    assert [row['predicate'] for row in chapter2] == ['室友'], \
-        'public gate=max(valid_from=2, from=1)，不能被旧启发式推到 ch4'
-    assert [row['predicate'] for row in chapter3] == ['室友']
-    assert [row['predicate'] for row in chapter4] == ['室友', '恋人'], \
-        'via_secret gate=max(valid_from=3, secret 首次揭示=4)'
-
-
-def test_explicit_relation_valid_through_boundary_is_inclusive_for_both_arms():
-    grounding = _explicit_visibility_grounding()
-    display = {'char_001': '江尽夏', 'char_002': '周衡'}
-
-    at_boundary = _project_facts(grounding, 5, False, display)[0]['relations']
-    after_boundary = _project_facts(grounding, 6, False, display)[0]['relations']
-
-    assert [row['predicate'] for row in at_boundary] == ['室友', '恋人']
-    assert after_boundary == []
-
-
-def test_typed_knowledge_events_open_on_the_named_chapter_for_character_and_group():
-    grounding = _explicit_visibility_grounding()
-    display = {'char_001': '江尽夏', 'char_002': '周衡'}
-
-    before = _project_facts(grounding, 3, False, display)[0]['secrets']
-    on_chapter = _project_facts(grounding, 4, False, display)[0]['secrets']
-    before_row = next(row for row in before if row['secret_id'] == 'secret_03')
-    on_row = next(row for row in on_chapter if row['secret_id'] == 'secret_03')
-
-    assert before_row['known_by'] == []
-    assert on_row['known_by'] == ['江尽夏', '公寓众人']
-    assert 'evidence' not in on_row, '上游回取证据不能进入写手上下文'
-
-
-def test_writer_context_excludes_every_global_source_span_byte():
-    """writer_context 是 Stage5/6 付费材料，正式证据须在组装入口剥掉。"""
+def test_writer_context_excludes_every_global_source_span_byte(pair):
+    """正式证据只用于关联和审计；付费 writer 材料不能读取原文片段或坐标。"""
     import json
-
     from novel.core.evidence import iter_global_evidence_slots
-    from tests.test_stage2 import blueprints, global_grounding, main_text
-
-    global_g = global_grounding()
-    markers: list[str] = []
-    coordinates: list[int] = []
-    for index, (_claim_path, owner, field) in enumerate(
-        iter_global_evidence_slots(global_g), 1,
-    ):
+    from tests.test_stage4_disclosure import _inputs, _build
+    inputs = _inputs(pair)
+    markers, coordinates = [], []
+    for index, (_claim_path, owner, field) in enumerate(iter_global_evidence_slots(inputs[1]), 1):
         marker = f'CONTEXT_EVIDENCE_ONLY_{index}'
         start = 923_456_700 + index * 100
-        owner[field] = {
-            'chapter_ordinal': 1,
-            'source': {
-                'text': marker,
-                'start': start,
-                'end': start + len(marker),
-            },
-        }
+        owner[field] = {'chapter_ordinal': 1,
+                        'source': {'text': marker, 'start': start, 'end': start + len(marker)}}
         markers.append(marker)
         coordinates.extend((start, start + len(marker)))
-
-    goal = {'intent': 'advance', 'fact_refs': [{
-        'kind': 'chapter_boundary', 'ref': 'chapter:3',
-    }]}
-    plan_raw = {'output_chapters': [{
-        'output_ordinal': 3,
-        'from_source_ordinals': [3],
-        'chapter_goal': goal,
-        'open_hook_goal': goal,
-        'end_hook_goal': goal,
-        'chapter_rewrite_brief': '重新设计翻账场景，但保持章尾选择不变。',
-        'scenes': [{
-            'slot': 's01',
-            'purpose': '把六项事实汇入一次翻账冲突',
-            'land_fact_refs': [f'f03_{index:03d}' for index in range(1, 7)],
-            'context_fact_refs': [], 'material_refs': [],
-            'turn_fact_ref': 'f03_006', 'entry_state_refs': [], 'exit_state_refs': [],
-            'stage_refs': [f'b03_{index:02d}' for index in range(1, 7)],
-            'budget_chars': 900,
-            'role': 'setup', 'delivery': 'scene', 'transition': 'start',
-        }],
-    }]}
-    assembled = build_writer_context(
-        plan_raw, global_g, blueprints(), main_text()).ctx
-    paid_context = json.dumps(assembled, ensure_ascii=False, sort_keys=True)
-
+    paid_context = json.dumps(_build(inputs), ensure_ascii=False, sort_keys=True)
     assert markers and all(marker not in paid_context for marker in markers)
-    assert all(str(coordinate) not in paid_context for coordinate in coordinates), \
-        'SourceSpan 的 start/end 坐标进了 writer_context'
-
-
-@pytest.mark.parametrize(('ordinal', 'visible'), [
-    # ch2 是 secret_01 的埋点章 ⇒ 事实要摆出来（但 reader_knows_by_now=False）
-    (2, ['secret_01']),
-    (4, ['secret_01']),
-    (6, ['secret_01']),
-    (7, ['secret_01', 'secret_02']),
-])
-def test_a_split_secret_group_is_released_per_member_not_per_group(
-    ordinal: int, visible: list[str],
-):
-    """⭐ `R-2.18`：拆开的两条各按**自己的**首次揭示章下发。
-
-    这是 v2 那次改动真正修掉的东西。v1 里这两件事只能写进一条 `fact`，
-    而闸门按「任意一次揭示 ≤ 本章」判 ⇒ 写 ch4 的写手连 ch7 才点破的成因一起拿到。
-    载体不再保留对下发无作用的分组和确认事件。
-    """
-    facts, _held, _cut = _project_facts(
-        _split_secrets_grounding(), ordinal, False, {'char_001': '江尽夏'})
-    got = [row['secret_id'] for row in facts['secrets']]
-    assert got == visible
-    # 已下发的那些必须同时说清「读者到本章知不知道」——ch2 是埋点章的那一条例外。
-    for row in facts['secrets']:
-        assert isinstance(row['reader_knows_by_now'], bool)
-
-
-def test_a_setup_chapter_releases_the_fact_but_marks_the_reader_as_unaware():
-    """埋点章要把事实摆出来，但 `reader_knows_by_now` 必须是 `False`。
-
-    没有这一格，写 ch2 那件事时不知道它后面会被回收，ch4 的点破就没有铺垫。
-    """
-    facts, _held, _cut = _project_facts(
-        _split_secrets_grounding(), 2, False, {'char_001': '江尽夏'})
-    row = next(r for r in facts['secrets'] if r['secret_id'] == 'secret_01')
-    assert row['reader_knows_by_now'] is False, '埋点章不是「读者已经知道」'
-    assert all(r['secret_id'] != 'secret_02' for r in facts['secrets'])
-
-
-def test_a_missing_first_reveal_chapter_never_opens_the_gate():
-    """未校验 dict 缺少首次揭示章时，下发闸门安全地保持关闭。"""
-    grounding = _split_secrets_grounding()
-    grounding['canon']['secrets'] = [{
-        'secret_id': 'secret_01', 'fact': '缺少揭示章的坏形状',
-        'character_known_by': ['char_001'], 'setup': {'kind': 'cold'},
-    }]
-    facts, _held, _cut = _project_facts(
-        grounding, 9, False, {'char_001': '江尽夏'})
-    assert facts['secrets'] == []
+    assert all(str(coordinate) not in paid_context for coordinate in coordinates)
 
 
 # ── 三、名字表的三个方向 ─────────────────────────────────────────────────
@@ -512,7 +260,7 @@ def test_a_character_with_no_attested_appellation_is_a_terminal_state():
     with pytest.raises(RefusedByStructure, match='没有任何【原文里有据】的称呼'):
         build_writer_context({'output_chapters': []},
                              {'entities': {'characters': chars}}, {'blueprints': []},
-                             [{'chapter_ordinal': 1, 'text': '街上人来人往。'}])
+                             [{'chapter_ordinal': 1, 'text': '街上人来人往。'}], knowledge_links={})
 
 
 def test_the_chapter_level_table_withholds_a_name_the_book_level_one_would_give():
@@ -552,9 +300,9 @@ def test_rename_all_replaces_values_never_keys_and_longest_first():
 
 # ── 四、两条剩下的显式终态 ───────────────────────────────────────────────
 
-def _minimal(canon: dict, arc: dict | None = None) -> tuple[dict, dict, list]:
+def _minimal(canon: dict) -> tuple[dict, dict, list]:
     chars = {'char_001': {'canonical': '阿禾', 'address': [{'surface': '阿禾'}]}}
-    gg = {'entities': {'characters': chars}, 'canon': canon, 'arc': arc or {}}
+    gg = {'entities': {'characters': chars}, 'canon': canon, }
     return gg, {'blueprints': []}, [{'chapter_ordinal': 1, 'text': '阿禾走了进来。'}]
 
 
@@ -568,68 +316,10 @@ def test_a_rule_without_any_version_text_is_a_terminal_state():
     """
     gg, bps, mt = _minimal({'world_rules': [{'rule_id': 'wr_01', 'versions': []}]})
     with pytest.raises(RefusedByStructure, match='没有任何带 desc 的 version'):
-        build_writer_context({'output_chapters': []}, gg, bps, mt)
-
-
-def test_an_arc_subject_that_is_not_human_readable_is_a_terminal_state():
-    """实测某本 ch23 有 **7 处**内部编号原样发给写手：`char_001`×3 / `rel_05` / `rel_09`…"""
-    gg, bps, mt = _minimal({}, {'arc_tracks': [{'subject': 'rel_99'}]})
-    with pytest.raises(RefusedByStructure, match='解析不出人话'):
-        build_writer_context({'output_chapters': []}, gg, bps, mt)
+        build_writer_context({'output_chapters': []}, gg, bps, mt, knowledge_links={})
 
 
 # ── 五、冲突阶段的章覆盖 ──────────────────────────────────────────────────
-
-def _elided_plan(ordinal: int = 4) -> dict:
-    """一个只够走通组装的最小输出章：三个 goal 都用可零成本解析的 chapter_boundary。"""
-    goal = {'intent': 'advance', 'fact_refs': [
-        {'kind': 'chapter_boundary', 'ref': f'ch{ordinal}:start'}]}
-    return {'output_chapters': [{
-        'output_ordinal': ordinal, 'from_source_ordinals': [ordinal],
-        'chapter_goal': goal, 'open_hook_goal': goal, 'end_hook_goal': goal,
-        'chapter_rewrite_brief': '只测试全书事实投影。', 'scenes': [],
-    }]}
-
-
-def _elided_inputs(ordinal: int = 4) -> tuple[dict, dict, list]:
-    chars = {'char_001': {'canonical': '阿禾', 'address': [{'surface': '阿禾'}]}}
-    gg = {'entities': {'characters': chars}, 'canon': {}, 'arc': {}}
-    mt = [{'chapter_ordinal': ordinal, 'text': '阿禾走了进来。'}]
-    return gg, {'blueprints': []}, mt
-
-
-def test_a_chapter_inside_an_elided_stage_span_still_gets_its_current_stage():
-    """⭐ 阶段章列表省写中间章（实测 flash 产出 [3,5]/[8,10]/[13,15]）时按区间解释。
-
-    旧代码只认精确成员，段内空隙的那章组出**空的 arc**——`CtxArc.current_stage`
-    是必填字段，`WriterContext.model_validate` 在落盘事务里裸抛 exit 70（结论未知）。
-    区间包含唯一可解 = 读出写段的本意，不发明归属；`chapters` 按记录原样透传，不补写。
-    """
-    gg, bps, mt = _elided_inputs()
-    gg['arc'] = {'conflict_stages': [
-        {'stage': '前段', 'chapters': [1, 2]}, {'stage': '中段', 'chapters': [3, 5]}]}
-    asm = build_writer_context(_elided_plan(), gg, bps, mt)
-    arc = asm.ctx['chapters'][0]['facts']['arc']
-    assert arc['current_stage'] == {'stage': '中段', 'chapters': [3, 5]}, \
-        '第 4 章落在 [3,5] 的段内空隙，应按区间归入该段；跨度按记录原样透传'
-
-
-def test_a_chapter_in_a_true_stage_gap_or_overlap_is_a_terminal_state():
-    """跨阶段的真空隙（0 个包含）与双包含（≥2 个）都定不出唯一归属 ⇒ 显式终态。
-
-    current_stage 是写手必拿的章级事实：省略它与猜一个都是静默造假；
-    修复面在产地（stage2 的阶段覆盖），本层只负责不说谎。
-    """
-    gg, bps, mt = _elided_inputs()
-    gg['arc'] = {'conflict_stages': [{'stage': '前段', 'chapters': [1, 2]},
-                                     {'stage': '后段', 'chapters': [6, 7]}]}
-    with pytest.raises(RefusedByStructure, match='唯一归属'):
-        build_writer_context(_elided_plan(), gg, bps, mt)
-
-    gg['arc'] = {'conflict_stages': [{'stage': '段甲', 'chapters': [3, 5]},
-                                     {'stage': '段乙', 'chapters': [2, 6]}]}
-    with pytest.raises(RefusedByStructure, match='唯一归属'):
-        build_writer_context(_elided_plan(), gg, bps, mt)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -692,3 +382,10 @@ def test_the_stage2_segment_label_never_reaches_the_writer():
     assert one['segment'] == '全章'
     assert many['segment'] == '第2段（共3段，按顺序写）'
     assert '沉重的呼吸声' not in str(one) and '沉重的呼吸声' not in str(many)
+
+
+def test_writer_context_no_longer_requires_or_emits_literary_arc(pair):
+    from tests.test_stage4_disclosure import _inputs, _build
+    inputs = _inputs(pair)
+    assert 'arc' not in inputs[1]
+    assert all('arc' not in chapter['facts'] for chapter in _build(inputs))

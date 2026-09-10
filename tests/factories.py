@@ -51,7 +51,6 @@ def stage5_book() -> Book:
     }
     entry = {
         'output_ordinal': 1,
-        'from_source_ordinals': [1],
         'chapter_goal': {'intent': 'advance', 'facts': [
             '本章事实：沈青发现账册末页的墨迹被人换过。']},
         'open_hook_goal': {'intent': 'open', 'facts': ['第 1 章开篇']},
@@ -66,8 +65,6 @@ def stage5_book() -> Book:
             'ending_state': ['沈青决定暂不惊动旁人。'],
         },
         'chapter_rewrite_brief': '从雨夜核账切入，让墨迹异常成为本场转折，章尾落到秘密追查。',
-        'budget_chars': len(source_one),
-        'source_chars': len(source_one),
         'scenes': [{
             'slot': 's01',
             'purpose': '让墨迹异常在核账过程中暴露',
@@ -79,11 +76,13 @@ def stage5_book() -> Book:
             'entry_state': [], 'exit_state': ['沈青决定暂不惊动旁人。'],
             'stages': [{'time_layer': 'present', 'place': '茶馆',
                         'present': ['沈青', '周衡']}],
+            'knowledge': [],
             'verbatim': [],
             'keep_value': [],
             'must_appear': [],
             'must_hold': [],
         }],
+        'disclosure_windows': [],
         'characters': [{'char_id': 'char_001',
                         'display_name': character['display_name'], 'role': character['role']}],
         'narration': [{
@@ -96,7 +95,6 @@ def stage5_book() -> Book:
             'relations': [],
             'secrets': [],
             'world_rules': [],
-            'arc': {'current_stage': {'stage': '查账', 'chapters': [1]}},
             'address': [],
         },
     }

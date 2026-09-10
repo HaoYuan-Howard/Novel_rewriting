@@ -9,7 +9,7 @@ Pydantic 载体以 `contracts/schema/stage5.py` 为准。
 
 ```text
 stage5/chNN.json                 canonical 正式章（schema v2）
-stage5/chNN.INVALID.json         落盘闸门拦下的问题稿（Chapter v2）
+stage5/chNN.INVALID.json         落盘闸门拦下的问题稿（Chapter v3）
 stage5/chNN.rejected.json        两次修订候选都相对旧稿退化的证据（v1）
 stage5/_rounds/...               被替代正式稿、INVALID、rejected 与 Review 的不可变历史
 stage5/review_<n>.json           全书确定性验收（schema v2，0 LLM 调用）
@@ -73,7 +73,7 @@ semantic self-hash，再以 target 当前代码复算输入、prompt、schema、
 target 的 `_service/runs/<sid>/stage5/<TARGET>/prepared_recovery.json` 冻结整书 workpack/action，逐章
 `prepared_recovery.json` 走 `prepared → committed`；只有 replacement journal、全局 adoption
 audit 与 live canonical 三者精确闭合，旧 foreign reservation 才算 superseded。写回会令旧
-Review stale，因此恢复成功后必须**另跑** `stage5.review`。旧书内 `_stage5_runs` 仅作只读恢复来源。
+Review stale，因此恢复成功后必须**另跑** `stage5.review`。旧书内 `_stage5_runs` 已退役；只恢复当前 service 根，不搬运旧运行字节。
 
 上面两步人工工作包只服务 initial write 的通用 foreign prepared；Reviewer LLM 改写有另一条更窄的
 自动恢复。顶部卡回答先经 FREE `--request-reviewer-rewrite` 写 current canonical request，queue 再以
@@ -158,18 +158,13 @@ slot、逐槽归一，再跑内容判据。缺槽、重槽、多槽、未知键�
 | 字段 | 类型 | 必填 | 取值面 / 语义 | 证据 |
 |---|---|---:|---|---|
 | `output_ordinal` | int | 是 | `>=1`；与文件名 NN 相同 | **契·码** |
-| `from_source_ordinals` | int[] | 是 | 长度恒 1；输出章号恒等于源章阅读序 | **契·码** |
-| `source_chars` | int | 是 | `>=0`；冻结写作任务书中的源章字数 | **契·码** |
-| `budget_chars` | int | 是 | `>0`；冻结写作任务书中的计划预算 | **契·码** |
-| `chars` | int | 是 | `len(text.strip())`，含正文内部空白 | **契·码** |
-| `overlap_excl_verbatim` | float / null | 是 | 20 字窗口重合率，扣除契约要求逐字保留的片段；短于窗口为 `null`，不是 0 | **契·码** |
 | `segments` | `ChapterSegment[]` | 是 | `{slot,text}`；slot 匹配 `^s\\d{2,4}$`、章内唯一 | **契·码** |
-| `warns` | str[] | 是 | finding 的人读字符串投影；metric 常驻，非空本身不代表异常 | **契·码** |
-| `errs` | str[] / 键不在 | 否 | `.INVALID` 中为阻断原因；人工稿相对 current 未新增 HARD 时以 `formal` 写回，新增一般 HARD 时只可显式 `working_draft` 写成 canonical 人工轮并由 Review/closure 阻断；`paragraph_budget_missed` 两种确认态都不得正式化 | **契·码** |
 | `_provenance` | object | 是 | LLM 轮次账或人工 `RoundFreeProvenance` | **契·码** |
 
 v1 → v2 是破坏形状：删除 `mode`，路径从 `stage5/{mode}/chNN.json` 折平为
-`stage5/chNN.json`。本仓没有迁移机制；旧稿不能补版本号或搬文件冒充 v2 产地。
+`stage5/chNN.json`。v3 同批删除来源章号、源字数、预算、字数、重合度与 warns/errs 副本。
+预算和重合度只按当前可读任务书计算，缺材料保持未知；检查不改变正文或创建身份。
+本仓没有迁移机制；当前 producer 只在新空根完整生成，旧稿不能补版本号或搬文件冒充 v3。
 
 ### 2.2 正文归一、篇幅与来源账
 
@@ -225,19 +220,17 @@ run、source code、run/commit/checkpoint 的 raw+self SHA、attempt、response�
 解释“为何 model 产物能在零调用的新 run 落盘”。兼容旧 v2 的缺席态只表示普通写作或字段引入前
 的历史章，不反推为一次恢复。
 
-## 三、Review（schema v2）与 currentness
+## 三、Review（schema v3）与 currentness
 
 `stage5.review` 不调 LLM，`review_<n>.json` 的 n 是盘上最大序号 +1。顶层字段：
 
 | 字段 | 类型 | 语义 | 证据 |
 |---|---|---|---|
-| `sources` | object | 先报 `writer_context` 与 drafts 的来源状态，再报判定 | **契·码** |
 | `judged` | `{rel: JudgedDraft}` | rel 必须是完整 canonical 路径 `stage5/chNN.json`；整文件 SHA-1 只审计，`consumed.text_sha1` 才判正文漂移 | **契·码** |
-| `chapters[]` | `ReviewChapter[]` | 长度等于计划章数；缺稿章也在，并产 `draft_missing` | **契·码** |
+| `chapters[]` | `ReviewChapter[]` | 只含章号与 findings；长度等于计划章数，缺稿章仍有 draft_missing；正文身份只在 judged | **契·码** |
 | `book[]` | Finding[] | 全书 / 跨章结论 | **契·码** |
 | `baselines` | `{rule:"k/N"}` | 当前稿的判据命中分母 | **契·码** |
 | `baselines_identity` | `{rule:"k/N"}` | 同一把尺子量源章原文；只降 actionable，不删 finding | **契·码** |
-| `counts` | `{sev:int}` | 产物侧是稀疏 Counter；API 必须现算四键恒在的投影 | **契·码** |
 | `_provenance` | `ReviewProvenance` | 0 成本，含 `RULES` 指纹；成稿主体另记在 `judged` | **契·码** |
 
 `novel/stages/stage5/review.py::review_status` 是 Review 能否驱动返工、豁免、s5 审批的唯一
@@ -259,7 +252,7 @@ currentness 出口。状态取值：
 零成本重跑一次最终 `stage5.review`，再重新生成闭合模板；`retain_pretrim` 只落 hash-bound
 人工处置、不改正文或 Review 主体，因此纯 trim 销账保留同一份 fresh Review，只重建当前 closure
 workpack/token，不能为“保险”再买一席或重跑 Review。旧 Review v1 仍含
-`mode/mode_dir`；现役 v2 删除这两格，由 producer 免费重建，不做迁移。
+`mode/mode_dir`；当前 v3 另删除来源状态、计数及章节展示副本，由 producer 免费重建，不做迁移。
 
 ## 四、审批与人工服务账：HTTP v6，盘上 v7
 
@@ -376,11 +369,11 @@ audit/resolution/wontfix 处置摘要变化重建 closure workpack/token；不�
 `target_ordinal/target_chapter_file_sha256/directives`。未选章保持待处理，不形成 retain。
 多个章节可独立修复时按上限 4 并发生成，整批正式落盘后统一免费重算 Review。
 其中每项既有
-`chapter_sha256` 始终是 `rendered_text` 的正文 SHA，target 另带从 closure
+`chapter_sha256` 始终是 `segments` 按序拼接的正文 SHA，target 另带从 closure
 `chapter_subjects[target]` 冻结的 `target_chapter_file_sha256` 完整文件 SHA，两者不得互换。
 actor/reason 非空，`directives[]`
 至少一项，code 只能是 `remove_repetition｜compress_exposition｜repair_wording｜smooth_transition`，
-`current_text_evidence` 必须是该章 current `rendered_text` 中恰好唯一命中、非空且不超过 240 字的片段，
+`current_text_evidence` 必须是该章 current `segments` 按序拼接的正文中恰好唯一命中、非空且不超过 240 字的片段，
 同一 code/evidence 不得重复。Review SHA、frontier、target 与 actor 从 immutable option 逐字保留，本次只可选择
 targets 非空有序子集、填写 reason 和各章 directive code/evidence。reason/evidence 不会直接拼进 writer prompt；
 可信 producer 按 code 注入固定指令，并总是附加预算、plan slots、事实、时序与逐字材料约束。
@@ -443,11 +436,11 @@ trim 与 closure submit 另共用 `_service/stage5_writer_locks/<book>/book.lock
 
 ### 5.1 rejected / trim / wontfix / 历史
 
-- `RejectedRevision`（v1）保存 `output_ordinal`、非空 `why[]`、`fixes[[rule,evidence_key]]`
-  和 1～2 份 `{chars,text}` 尝试；旧正式稿不被退化候选覆盖。
-- `TrimAudit`（v2）只保存 ordinal、pretrim 正文 SHA-256 与 reason。没有候选、没有 adopted。
-- `TrimResolution`（v2）唯一 action 是 `retain_pretrim`；同时绑定 audit SHA-256、当前
-  `stage5/chNN.json` 路径与正文 SHA-256、actor/reason 和免费来源账。单章 CLI 与顶部卡 full-batch
+- `RejectedRevision`（v2）保存 `output_ordinal`、非空 `why[]`、`fixes[[rule,evidence_key]]`
+  和 1～2 份 `{segments}` 尝试；当前 checkpoint 也保存原场景槽位，首轮与终轮无需重新分段；旧正式稿不被退化候选覆盖。
+- `TrimAudit`（v3）只保存 pretrim 正文 SHA-256 与当时 reason，章号只从登记路径解析。没有候选、没有 adopted。
+- `TrimResolution`（v3）唯一 action 是 `retain_pretrim`；保留章主体、audit SHA-256、actor/reason 和免费来源账。
+  正文 SHA 只沿 exact audit 引用核验；公开批输入仍绑定 audit/chapter 双 SHA，首尾复核不能减少。单章 CLI 与顶部卡 full-batch
   共用这一个 canonical writer；batch 不是第二种 resolution，也不改变正文或 Review。
 - `wontfix.json`（v1）按 `(stage, chapter|book, rule, evidence_key)` 绑定人工理由；豁免不删结论。
 - `_rounds/` 是审计历史，不计活动 `.INVALID` / rejected / stalled 余额；反推 schema 时仍必须读。
@@ -461,8 +454,8 @@ artifact、不再由节点生成，也不参与完成度、Review freshness、�
 
 ## 六、判据注册表
 
-当前注册表共 **51 条**：**7 hard、26 info、13 metric、5 unver**。
-repair 分桶为 **12 UNIQUE、12 FREE、27 NONE**；repair 不是 severity，只有 UNIQUE 才能在
+当前注册表共 **52 条**：**7 hard、26 info、13 metric、6 unver**。
+repair 分桶为 **12 UNIQUE、12 FREE、28 NONE**；repair 不是 severity，只有 UNIQUE 才能在
 `unresolved_rounds < 2` 时进入付费 `--revise`，FREE / NONE 不得被包装成自动修复。
 
 | 判据 | sev | repair | 需求 |
@@ -472,6 +465,7 @@ repair 分桶为 **12 UNIQUE、12 FREE、27 NONE**；repair 不是 severity，�
 | `meta_leak` | hard | UNIQUE | `R-7.3` |
 | `names_absent` | info | UNIQUE | `R-7.4` |
 | `verbatim_missing` | hard | UNIQUE | `R-7.4` |
+| `dialogue_semantics_unver` | unver | NONE | `R-7.3` |
 | `verbatim_typo` | info | NONE | `R-7.4` |
 | `verbatim_split` | info | NONE | `R-7.4` |
 | `keep_value_missing` | hard | UNIQUE | `R-7.4` |
@@ -543,10 +537,10 @@ repair 分桶为 **12 UNIQUE、12 FREE、27 NONE**；repair 不是 severity，�
 旧双臂盘面曾有 31 章（deep 11 / shallow 20），并留下逐章带极值 0.814 / 1.206、全书比值
 0.949 / 1.022 / 0.980、旧规则命中与对白差异等读数。这些数字只用于解释阈值来历和识别
 判据退化，是 **v1 旧布局历史基线**；它们不是 canonical v2 current-schema corpus，不能用于
-宣称现役 Stage5 通过率、当前 HARD“0 命中”或当前 51 条判据的质量结论。
+宣称现役 Stage5 通过率、当前 HARD“0 命中”或当前 52 条判据的质量结论。
 
-canonical v2 产物、单臂入口、freshness、恢复路与 51 条判据的工程可靠性已经由定向及
-非 corpus 回归验证。现役 beat-material 写作契约在设计上改为按 beat / material 组织闭卷材料，
+当前 52 条判据、对白语义材料及写作入口已有定向回归；整批非 corpus 与真实语料验收仍待完成。
+现役写作材料按场景事实、明确对白任务和披露许可组织，
 但原计划与旧 event-list 契约进行的受控双书付费 A/B 已在开跑前取消：没有实验正文、盲评结果
 或无正文 manifest。因此不得宣称 beat-material 在质量、成本或速度上胜出。
 
@@ -554,3 +548,7 @@ TODO-21 的隔离双书重跑、current-schema manifest 与 `--require-corpus` �
 现役全链语料基线。Stage5 消费 Stage1/2/4 的事实、即时机械基线、计划与 writer context，上游质量会
 显著改变成稿；即使 TODO-21 通过，也不能把全链读数因果归到 Stage5 写作契约。在它完成前，
 单元 / 非 corpus 回归只能证明工程守卫通过，不能证明现役语料全量绿。
+
+Trim Commander 的完整正文只在 `materials.stage5_trim.chapters[].chapter.segments` 出现一次；
+不再同时发送 `rendered_text` 和内部 `_validation_context.chapter_texts` 副本。
+服务端的 immutable submission option 仍保留完整拼接正文，逐字 evidence 唯一命中与三条 SHA 绑定不变。

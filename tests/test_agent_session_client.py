@@ -662,7 +662,7 @@ def test_codex_missing_actual_model_uses_driver_evidence_without_backfill(tmp_pa
     restarted.restore_checkpoint_acceptance(
         'stage2.global', checkpoint,
         system='SYS', user='subject', max_tokens=64_000,
-        recovery_policy='stage2-global-v1')
+        recovery_policy='stage2-knowledge-v2')
     assert restarted.accepted_model('stage2.global') == 'gpt-5.6-sol'
     restarted.close()
 
@@ -751,6 +751,39 @@ def test_configuration_failure_before_spawn_does_not_increment_calls(tmp_path):
 
     assert ctx.ledger.calls_made == 0
     assert _rows(ledger_path(tmp_path)) == []
+
+
+def test_cancel_while_waiting_total_slots_never_starts_or_charges(tmp_path, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from contracts.schema.orchestration import PipelineConcurrency
+    from novel.model_slots import pipeline_model_slot
+
+    monkeypatch.setenv('NOVEL_CONCURRENCY_POLICY', PipelineConcurrency(
+        per_book=1, per_provider=1).model_dump_json())
+    ctx = _ctx(tmp_path)
+    driver = _FakeDriver(['{"value":7}'])
+    client = SessionAgentClient(ctx, _profile(), driver)
+    entered = threading.Event()
+    import novel.agents.session_client as module
+    original = module.pipeline_model_slot
+    def observed(*args, **kwargs):
+        entered.set()
+        return original(*args, **kwargs)
+    monkeypatch.setattr(module, 'pipeline_model_slot', observed)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with pipeline_model_slot(ctx.novel_dir, 'openai', per_book=1, per_provider=1):
+            future = executor.submit(client.ask_json, 'SYS', 'subject', model_cls=_Answer,
+                                     purpose='stage2.global')
+            assert entered.wait(5)
+            client.close()
+            with pytest.raises(LlmFailed, match='启动前拒绝'):
+                future.result(timeout=5)
+    assert driver.calls == []
+    assert ctx.ledger.calls_made == 0 and _rows(ledger_path(tmp_path)) == []
+    units = work_units.list_unit_views(tmp_path, ctx.sid)
+    assert units is not None and len(units) == 1
+    assert units[0]['state'] == 'failed' and units[0]['recovery_action'] is None
 
 
 def test_transient_delivery_retry_is_separate_from_semantic_turn_budget(tmp_path):
@@ -980,7 +1013,7 @@ def test_stage6_policy_is_per_purpose_not_per_chapter():
         ('stage4-design-v1', 'per-node'),
         ('stage4-design-v2', 'per-purpose'),
         ('stage4-plan-v1', 'per-node'),
-        ('stage5-write-v1', 'per-chapter'),
+        ('stage5-write-v2', 'per-chapter'),
         ('stage6-hook-v1', 'per-node'),
         ('stage7-rename-v1', 'per-node'),
     ],
@@ -1099,7 +1132,7 @@ def test_restored_bad_candidate_starts_new_session_with_remaining_budget(tmp_pat
     first.ask_json(
         'SYS', 'chapter subject', model_cls=_Answer,
         purpose='stage5.write·ch3', progress=progress, max_tokens=4096,
-        recovery_policy='stage5-write-v1')
+        recovery_policy='stage5-write-v2')
     checkpoint = first.accepted_checkpoint('stage5.write·ch3')
     first.finish(
         process_state='ok', delivery_state='blocked',
@@ -1118,7 +1151,7 @@ def test_restored_bad_candidate_starts_new_session_with_remaining_budget(tmp_pat
         ctx, _profile(), driver, chapter=3, max_semantic_turns=2)
     restored.restore_checkpoint_acceptance(
         'stage5.write·ch3', checkpoint, system='SYS', user='chapter subject',
-        max_tokens=4096, recovery_policy='stage5-write-v1')
+        max_tokens=4096, recovery_policy='stage5-write-v2')
     assert restored.queue_restored_code_validation_feedback([{
         'rule': 'stage5.chapter.hard', 'type': 'business_rule', 'count': 1,
     }], purpose='stage5.write·ch3') is True
@@ -1126,7 +1159,7 @@ def test_restored_bad_candidate_starts_new_session_with_remaining_budget(tmp_pat
     result = restored.ask_json(
         'SYS', 'chapter subject', model_cls=_Answer,
         purpose='stage5.write·ch3', progress=progress, max_tokens=4096,
-        recovery_policy='stage5-write-v1')
+        recovery_policy='stage5-write-v2')
     acceptance = restored.accepted_checkpoint('stage5.write·ch3')
     restored.finish(process_state='ok', delivery_state='delivered')
     restored.close()

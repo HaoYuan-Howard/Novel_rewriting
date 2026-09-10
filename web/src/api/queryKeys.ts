@@ -9,9 +9,13 @@ import type { DesignReviewTemplateQuery } from '@/types/approvals'
  * 不存在 A 书的 ✓ 能漏到 B 书的代码路径。
  */
 export const qk = {
+  characters: (sid: string) => ['characters', sid] as const,
   novels: () => ['novels'] as const,
   novel: (sid: string) => ['novel', sid] as const,
   run: (sid: string) => ['run', sid] as const,
+  workUnitGrant: (sid: string, unitId: string, additional: number) =>
+    ['workUnitGrant', sid, unitId, additional] as const,
+  workUnitGrantRoot: (sid: string, unitId: string) => ['workUnitGrant', sid, unitId] as const,
   enums: () => ['enums'] as const,
 
   stage0Report: (sid: string) => ['stage0', sid, 'report'] as const,
@@ -54,6 +58,7 @@ export const qk = {
   agentQueue: () => ['agentQueue'] as const,
   agentRunLog: (id: string) => ['agentRunLog', id] as const,
   /** 完整请求就是预览身份：profiles 的任一深层字段变化都必须换 key、重新预览。 */
+  agentRunContinuation: (runId: string) => ['agentRunContinuation', runId] as const,
   agentRunPreview: (req: AgentRunRequest | null) =>
     ['agentRunPreview', req] as const,
 

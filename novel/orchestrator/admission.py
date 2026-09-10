@@ -390,6 +390,29 @@ def snapshot(base: str | os.PathLike[str], parent_run_id: str,
                 current, events, beacon_events)
 
 
+def readonly_snapshot(base: str | os.PathLike[str], parent_run_id: str) -> AdmissionSnapshot:
+    """供授权预览读取；不创建锁文件，变化或未提交尾行保持未知。
+
+    提交端仍需持有 owner 停止 lease 与业务写锁后复验同一 seal。这里仅复用
+    正式 snapshot 的折叠判据，并核对读取前后两份日志字节，不能代替提交锁。
+    """
+    from novel.orchestrator import beacon
+
+    checked = run_identity.check_run_id(parent_run_id)
+    sources = (admission_path(base), beacon.beacon_path(base))
+    before = tuple(path.read_bytes() if path.is_file() else b'' for path in sources)
+    if any(raw and not raw.endswith(b'\n') for raw in before):
+        raise ValueError('停止证明存在未提交尾行，不能批准新额度')
+    events = _read_events(sources[0])
+    current = _fold(events, checked)
+    result = _validate_reconcile_seal(
+        current, events, _parent_beacon_events(beacon.read_events(base), current.lifecycle_run_id))
+    after = tuple(path.read_bytes() if path.is_file() else b'' for path in sources)
+    if before != after:
+        raise ValueError('停止证明在只读核验中变化，请重新预览')
+    return result
+
+
 def unresolved(base: str | os.PathLike[str], sid: str | None = None,
                ) -> tuple[AdmissionSnapshot, ...]:
     """返回重启后也必须继续挡住新写手的 gate。

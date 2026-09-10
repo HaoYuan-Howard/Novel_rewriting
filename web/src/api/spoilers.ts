@@ -40,14 +40,14 @@ export function projectGlobalSpoilers(raw: Stage2Global, reveal: boolean): Stage
         first_reveal_chapter: 1,
       },
     ],
-    arc: {
-      ...raw.arc,
-      climax: SPOILER_PLACEHOLDER,
-      ending: SPOILER_PLACEHOLDER,
-      arc_tracks: raw.arc.arc_tracks.map((track) => ({
-        ...track,
-        trajectory_evidence: maskEvidence(track.trajectory_evidence),
-      })),
+    source_blurb: {
+      facts: raw.source_blurb.facts.map((fact) => fact.kind === 'supported'
+        ? { ...fact, claim: SPOILER_PLACEHOLDER, evidence: maskEvidence(fact.evidence) }
+        : { ...fact, claim: SPOILER_PLACEHOLDER, reason: SPOILER_PLACEHOLDER }),
+      opening: raw.source_blurb.opening.kind === 'proposed'
+        ? { ...raw.source_blurb.opening, rationale: SPOILER_PLACEHOLDER,
+          boundary_evidence: maskEvidence(raw.source_blurb.opening.boundary_evidence) }
+        : { ...raw.source_blurb.opening, reason: SPOILER_PLACEHOLDER },
     },
   }
 }

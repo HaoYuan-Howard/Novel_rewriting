@@ -58,7 +58,7 @@ from contracts.invariants import (
     STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES, STOP_REWRITE_AFTER,
 )
 from novel.agent_session_audit import sanitize_failure_detail
-from novel.config import MAX_CONCURRENCY
+from novel.config import MAX_CONCURRENCY, DEFAULT_CONCURRENCY
 from contracts.rules import REGISTRY
 from contracts.schema.common import (
     Finding, InputEdge, PreparedCheckpointAdoption,
@@ -71,7 +71,7 @@ from contracts.schema.stage4 import CtxChapter
 from contracts.schema.stage5 import (
     Chapter, ChapterResponse, ChapterSegment, PreparedRecoveryAction,
     PreparedRecoveryChapter, PreparedRecoveryJournal,
-    PreparedRecoveryManifest, PreparedRecoveryWorkpack, RejectedRevision,
+    PreparedRecoveryManifest, PreparedRecoveryWorkpack, RejectedAttempt, RejectedRevision,
     ReviewerRewriteRecoveryJournal, ReviewerRewriteRequest,
 )
 from novel import human_actions, paths, prov
@@ -315,7 +315,7 @@ class ChapterCandidateEvaluation:
     warnings: tuple[str, ...]
     regressions: tuple[str, ...]
     feedback: tuple[ChapterCandidateFeedback, ...]
-    attempts: tuple[tuple[int, str], ...]
+    attempts: tuple[RejectedAttempt, ...]
     _account: M.NormalizeAccount = field(repr=False)
     _response: ChapterResponse = field(repr=False)
     _input_sha256: str = field(repr=False)
@@ -384,14 +384,16 @@ def _commit_canonical_chapter(
     chapter: Chapter,
     *,
     expected_ordinal: int,
+    entry: dict[str, Any],
     commit: Callable[[str, Chapter], Any],
 ) -> tuple[Any, list[str]]:
     """提交一份 canonical Chapter，并让 trim 状态精确描述这一份正文。
 
     这是 Stage5 替换/提升 ``chNN.json`` 的唯一提交口。调用方必须同时交出它正在
     处理的 ``expected_ordinal``；本函数在任何写盘前将其与载体主体闭合，再由这一个
-    章号同时推导 canonical 与两份 trim 路径。正文与冻结预算只从同一个 ``Chapter``
-    取，不能另传一份可能漂移的 segments/entry。完全匹配的 audit 刻意保留：
+    章号同时推导 canonical 与两份 trim 路径。entry 必须与该章主体及槽位闭合；
+    预算由调用方已验证的任务书派生，正文只从 Chapter 读取。完全匹配的 audit
+    刻意保留：
     hash-bound ``retain_pretrim``
     裁决的是正文，不是 ``warns`` 或 provenance 之类的元数据。正文/audit 一变，
     旧 audit 与 resolution 就在正文提交的同一回滚域里退休。
@@ -408,10 +410,10 @@ def _commit_canonical_chapter(
     audit_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
     resolution_rel = artifact_rel('stage5.trim_resolution', nn=ordinal)
     segments = [segment.model_dump() for segment in chapter.segments]
-    trim_notes, desired_audit = _over_length_audit(segments, {
-        'output_ordinal': ordinal,
-        'budget_chars': chapter.budget_chars,
-    })
+    if entry.get('output_ordinal') != ordinal:
+        raise ProvenanceRefused('Stage5 canonical 提交的任务书章号与目标不一致')
+    _require_canonical_slots(segments, entry)
+    trim_notes, desired_audit = _over_length_audit(segments, entry)
 
     matching_audit: tuple[TrimAudit, str] | None = None
     if desired_audit is not None and store.exists(audit_rel):
@@ -449,7 +451,11 @@ def _commit_canonical_chapter(
             from novel.stages.stage5 import trim_resolution
             current_audit, current_sha256 = matching_audit
             if not trim_resolution.matches_current_audit(
-                    store, current_audit, current_sha256):
+                store,
+                current_audit,
+                current_sha256,
+                ordinal=ordinal,
+            ):
                 store.archive_round(resolution_rel)
 
     return where, trim_notes
@@ -531,22 +537,15 @@ def _judge(text: str, entry: dict[str, Any], book: M.Book, *, mat: str,
     return fs, checks.blocking(fs), checks.warnings_of(fs)
 
 
-def _chapter_record(entry: dict[str, Any], segments: list[dict[str, str]], book: M.Book, *,
-                    warns: list[str], errs: list[str] | None,
-                    provenance: Any) -> Chapter:
-    """一份成稿。**正式稿与 `.INVALID` 共用这一份章契约**——状态由文件名区分。"""
+
+def _chapter_record(
+    entry: dict[str, Any], segments: list[dict[str, str]], *, provenance: Any,
+) -> Chapter:
+    """正式稿与 INVALID 共用最小章载体；检查结论由调用方交给报告。"""
     _require_canonical_slots(segments, entry)
-    text = _segments_text(segments)
     return Chapter(
         output_ordinal=int(entry['output_ordinal']),
-        from_source_ordinals=list(entry['from_source_ordinals']),
-        source_chars=int(entry['source_chars']),
-        budget_chars=int(entry['budget_chars']),
-        chars=M.chars_of(text),
-        overlap_excl_verbatim=M.overlap_ratio(text, entry, book.source_text),
         segments=[ChapterSegment.model_validate(segment) for segment in segments],
-        warns=warns,
-        errs=errs,
         _provenance=provenance,
     )
 
@@ -559,28 +558,7 @@ def _inspection_account(
     return M.NormalizeAccount(quote_problems=list(observed.quote_problems))
 
 
-def _refresh_chapter_derived(
-    chapter: Chapter,
-    entry: dict[str, Any],
-    book: M.Book,
-    *,
-    warns: list[str],
-    errs: list[str] | None,
-) -> Chapter:
-    """只刷新 Chapter v2 的确定性派生字段。
 
-    付费任务快照、producer-owned segments 与 provenance 经同一个强类型载体原样穿过。
-    recheck/revalidate 不能拿当前 context 伪造历史任务书，也不能静默对付费正文再跑一遍归一。
-    """
-    payload = chapter.model_dump(by_alias=True, mode='json')
-    payload.update({
-        'chars': M.chars_of(chapter.text),
-        'overlap_excl_verbatim': M.overlap_ratio(
-            chapter.text, entry, book.source_text),
-        'warns': list(warns),
-        'errs': list(errs) if errs else None,
-    })
-    return Chapter.model_validate(payload)
 
 
 def _require_revalidation_task_identity(
@@ -588,9 +566,7 @@ def _require_revalidation_task_identity(
     baseline: Chapter,
 ) -> None:
     """INVALID 可改正文，但不能借人工编辑改写冻结的付费任务身份。"""
-    fields = (
-        'output_ordinal', 'from_source_ordinals', 'source_chars', 'budget_chars',
-    )
+    fields = ('output_ordinal',)
     changed = [
         field for field in fields
         if getattr(candidate, field) != getattr(baseline, field)
@@ -605,7 +581,7 @@ def _require_revalidation_task_identity(
 def _write_chapter(ctx: RunContext, store: ArtifactStore, entry: dict[str, Any],
                    book: M.Book, *, segments: list[dict[str, str]], mat: str,
                    account: M.NormalizeAccount, provenance: Any,
-                   before_commit: Callable[[Chapter, M.NormalizeAccount], None] | None = None,
+                   before_commit: Callable[[Chapter, M.NormalizeAccount, bool], None] | None = None,
                    ) -> tuple[str, list[str], list, list[str]]:
     """归一 → 判据 → 闸门 → 落盘。返回 `(落点, errs, findings, trim notes)`。
 
@@ -626,11 +602,14 @@ def _write_chapter(ctx: RunContext, store: ArtifactStore, entry: dict[str, Any],
     rel = _rel(entry['output_ordinal'])
     ordinal = int(entry['output_ordinal'])
     rejected_rel = _rejected_rel(ordinal)
-    art = _chapter_record(entry, segments2, book, warns=warns,
-                          errs=errs or None, provenance=provenance)
+    art = _chapter_record(
+        entry,
+        segments2,
+        provenance=provenance,
+    )
     with stage5_runs.commit_ownership(ctx.novel_dir, ordinal):
         if before_commit is not None:
-            before_commit(art, account)
+            before_commit(art, account, bool(errs))
         with store.history_transaction(rel, rejected_rel):
             if store.exists(rejected_rel):
                 store.archive_round(rejected_rel)
@@ -643,8 +622,8 @@ def _write_chapter(ctx: RunContext, store: ArtifactStore, entry: dict[str, Any],
                 store,
                 art,
                 expected_ordinal=ordinal,
-                commit=lambda canonical_rel, artifact: store.write_round(
-                    canonical_rel, artifact),
+                entry=entry,
+                commit=lambda canonical_rel, artifact: store.write_round(canonical_rel, artifact),
             )
             return str(where), [], fs, trim_notes
 
@@ -763,7 +742,6 @@ def _over_length_audit(segments: list[dict[str, str]],
         f'超上限 {chars - hi} 字（{chars}/{hi}）；本仓没有自动收缩路径，'
         f'保留 pretrim，转 verification')
     return [reason], TrimAudit(
-        output_ordinal=int(entry['output_ordinal']),
         before_sha256=_sha256_text(text),
         reason=reason,
     )
@@ -1214,7 +1192,8 @@ def _evaluation_payload(evaluation: ChapterCandidateEvaluation) -> dict[str, obj
         'errors': list(evaluation.errors),
         'warnings': list(evaluation.warnings),
         'regressions': list(evaluation.regressions),
-        'attempts': [[chars, _sha256_text(text)] for chars, text in evaluation.attempts],
+        'attempts': [_canonical_sha256(item.model_dump(mode='json'))
+                     for item in evaluation.attempts],
         'account': {
             **evaluation._account.counters(),
             'quote_problems': list(evaluation._account.quote_problems),
@@ -1254,7 +1233,7 @@ def _chapter_checkpoint_state(
     hard_rules = _hard_rule_ids(evaluation)
     regressions = list(evaluation.regressions)
     return {
-        'version': 1,
+        'version': 2,
         'mode': prepared.mode,
         'outcome': _checkpoint_outcome(
             hard_rules=hard_rules, regressions=regressions),
@@ -1264,8 +1243,7 @@ def _chapter_checkpoint_state(
         # 当前响应已由 generic checkpoint 的 accepted_text/response_payload 保存；
         #这里只携带前序业务候选，供 revision 拒稿在 crash 后恢复首轮与终轮正文。
         'prior_attempts': [
-            {'chars': chars, 'text': text}
-            for chars, text in evaluation.attempts[:-1]
+            item.model_dump(mode='json') for item in evaluation.attempts[:-1]
         ],
         'hard_rules': hard_rules,
         'regressions': regressions,
@@ -1369,7 +1347,7 @@ def _restore_chapter_checkpoint(
         recovery_policy=stage5_runs.recovery_policy_of(prepared.mode),
     )
     prior_attempts = tuple(
-        (int(item['chars']), str(item['text']))
+        RejectedAttempt.model_validate(item)
         for item in restored.state_payload['prior_attempts']
     )
     evaluation = evaluate_chapter_candidate(
@@ -1501,7 +1479,7 @@ def evaluate_chapter_candidate(
     response: ChapterResponse,
     *,
     accepted_purpose: str | None = None,
-    prior_attempts: Sequence[tuple[int, str]] = (),
+    prior_attempts: Sequence[RejectedAttempt] = (),
 ) -> ChapterCandidateEvaluation:
     """归一并运行 revision + 正式章判据；不写盘、不归档、不结算 usage。"""
     _assert_chapter_context_memory(prepared)
@@ -1543,7 +1521,7 @@ def evaluate_chapter_candidate(
             regressions.append(
                 f'formal reviewer rewrite 仍超冻结上限：{chars}>{upper}')
     purpose = accepted_purpose or prepared.purpose
-    attempts = (*tuple(prior_attempts), (M.chars_of(text), text))
+    attempts = (*tuple(prior_attempts), RejectedAttempt.model_validate({'segments': segments}))
     provisional = ChapterCandidateEvaluation(
         ordinal=prepared.ordinal,
         accepted_purpose=purpose,
@@ -1634,14 +1612,15 @@ def _record_normalization_account(
         ctx.account(key, int(ctx.accounting.get(key) or 0) + value)
 
 
+
 def _rejected_attempts(
-    attempts: Sequence[tuple[int, str]],
+    attempts: Sequence[RejectedAttempt],
 ) -> list[dict[str, object]]:
-    """RejectedRevision v1 最多容纳两份正文；多轮 session 留首轮与终轮。"""
+    """RejectedRevision v2 保留首轮与终轮的原场景槽位，正文不被重新分段。"""
     selected = list(attempts)
     if len(selected) > 2:
         selected = [selected[0], selected[-1]]
-    return [{'chars': chars, 'text': text} for chars, text in selected]
+    return [item.model_dump(mode='json') for item in selected]
 
 
 def verify_rejected_revision_delivery(
@@ -1712,9 +1691,9 @@ def verify_chapter_delivery(
             segments=[segment.model_dump() for segment in landed.segments],
         )
         del findings
-        if tuple(errors) != tuple(landed.errs or ()):
+        if rel == invalid_rel and not errors:
             raise ProvenanceRefused(
-                f'Stage5 第 {prepared.ordinal} 章 readback 的 HARD 投影不可复算')
+                f'Stage5 第 {prepared.ordinal} 章 INVALID readback 未复现阻断依据')
         if rel == formal_rel:
             if prepared.revision:
                 revision_of = getattr(landed.provenance, 'revision_of', None)
@@ -1759,7 +1738,11 @@ def verify_chapter_delivery(
                 if store.exists(resolution_rel):
                     from novel.stages.stage5 import trim_resolution
                     if not trim_resolution.matches_current_audit(
-                            store, actual_audit, actual_sha256):
+                        store,
+                        actual_audit,
+                        actual_sha256,
+                        ordinal=prepared.ordinal,
+                    ):
                         raise ProvenanceRefused(
                             f'Stage5 第 {prepared.ordinal} 章 trim resolution 已过期')
         elif not errors:
@@ -1822,9 +1805,6 @@ def _formal_artifact(
     return _chapter_record(
         prepared._entry,
         [segment.model_dump() for segment in evaluation.segments],
-        prepared._book,
-        warns=list(evaluation.warnings),
-        errs=None,
         provenance=provenance,
     )
 
@@ -1926,7 +1906,11 @@ def _trim_preflight_expectations_locked(
             and store.exists(resolution_rel)):
         from novel.stages.stage5 import trim_resolution
         if trim_resolution.matches_current_audit(
-                store, current_audit, current_audit_sha):
+            store,
+            current_audit,
+            current_audit_sha,
+            ordinal=prepared.ordinal,
+        ):
             resolution_sha = stage5_runs.file_sha256(ctx, resolution_rel)
     return desired_audit, audit_sha, resolution_sha
 
@@ -2195,6 +2179,7 @@ def _finalize_formal_agent_candidate(
                     store,
                     artifact,
                     expected_ordinal=prepared.ordinal,
+                    entry=prepared._entry,
                     commit=commit,
                 )
                 # typed readback 留在回滚域内：核验失败 = 本次写盘整体回滚，
@@ -2416,9 +2401,6 @@ def _finalize_chapter_candidate_owned(
     artifact = _chapter_record(
         prepared._entry,
         segments,
-        prepared._book,
-        warns=list(evaluation.warnings),
-        errs=list(evaluation.errors),
         provenance=provenance,
     )
     rejected_rel = _rejected_rel(prepared.ordinal)
@@ -2521,7 +2503,7 @@ def _historical_recovery_unit(
         model=str(profile['model']), purpose=prepared.purpose,
         acceptance=acceptance)
     prior = tuple(
-        (int(item['chars']), str(item['text']))
+        RejectedAttempt.model_validate(item)
         for item in historical.historical.checkpoint.state_payload['prior_attempts']
     )
     evaluation = evaluate_chapter_candidate(
@@ -2688,9 +2670,6 @@ def _recovered_formal_artifact(
     return _chapter_record(
         prepared._entry,
         [segment.model_dump() for segment in evaluation.segments],
-        prepared._book,
-        warns=list(evaluation.warnings),
-        errs=None,
         provenance=provenance,
     )
 
@@ -2869,6 +2848,7 @@ def _finalize_recovered_prepared(
                 store,
                 artifact,
                 expected_ordinal=prepared.ordinal,
+                entry=prepared._entry,
                 commit=commit,
             )
             landed = verify_chapter_delivery(
@@ -3248,7 +3228,7 @@ def _generate_chapter(
     segments, account = _normalize_segments(segments, book)
     text = _segments_text(segments)
     if revise is not None:
-        attempts = [{'chars': M.chars_of(text), 'text': text}]
+        attempts = [{'segments': copy.deepcopy(segments)}]
         regressions = checks.trim_regressions(prev_text, text, entry, book)
         if regressions:
             feedback = getattr(client, 'record_candidate_feedback', None)
@@ -3282,7 +3262,7 @@ def _generate_chapter(
             retry_segments = _ordered_segments(got, entry)
             retry_segments, retry_account = _normalize_segments(retry_segments, book)
             retry_text = _segments_text(retry_segments)
-            attempts.append({'chars': M.chars_of(retry_text), 'text': retry_text})
+            attempts.append({'segments': copy.deepcopy(retry_segments)})
             retry_regressions = checks.trim_regressions(
                 prev_text, retry_text, entry, book)
             if retry_regressions:
@@ -3332,7 +3312,7 @@ def _record_legacy_chapter_delivery(
 def _prepare_legacy_chapter_delivery(
         ctx: RunContext, store: ArtifactStore, client: LlmClient, *,
         entry: dict[str, Any], artifact: Chapter, account: M.NormalizeAccount,
-        purpose: str,
+        purpose: str, invalid: bool,
 ) -> None:
     """首个产物写入前，把当前输入及最终 typed 候选绑回原模型回答。"""
     save = getattr(client, 'save_producer_recovery', None)
@@ -3342,12 +3322,12 @@ def _prepare_legacy_chapter_delivery(
     if attempt_id is None:
         raise ProvenanceRefused('Stage5 候选提交前缺真实 accepted attempt')
     rel = _rel(artifact.output_ordinal)
-    if artifact.errs:
+    if invalid:
         rel = paths.invalid_of(rel)
     ordinal = artifact.output_ordinal
     _notes, desired_audit = _over_length_audit(
         [segment.model_dump() for segment in artifact.segments],
-        {'output_ordinal': ordinal, 'budget_chars': artifact.budget_chars})
+        entry)
     audit_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
     companion_baselines = {
         path: store.full_sha256_or_none(path)
@@ -3429,8 +3409,12 @@ def _reconcile_legacy_chapter_deliveries(
         with ctx.validation_reads():
             if rel == _rel(ordinal):
                 _commit_canonical_chapter(
-                    store, artifact, expected_ordinal=ordinal,
-                    commit=lambda _rel, _artifact: _rel)
+                    store,
+                    artifact,
+                    expected_ordinal=ordinal,
+                    entry=entry,
+                    commit=lambda _rel, _artifact: _rel,
+                )
             rejected_rel = _rejected_rel(ordinal)
             if store.exists(rejected_rel):
                 store.archive_round(rejected_rel)
@@ -3507,7 +3491,7 @@ def _run_group_parallel(
         prepare_sessions(tuple(ordinals))
     workers = min(
         STAGE5_WRITE_MAX_CONCURRENCY,
-        max(1, int(getattr(client, 'concurrency', STAGE5_WRITE_MAX_CONCURRENCY))),
+        max(1, int(getattr(client, 'concurrency', DEFAULT_CONCURRENCY))),
         len(todo),
     )
     fatal: Exception | None = None
@@ -3673,9 +3657,9 @@ def _run_group_parallel(
                 ctx, store, entry, book,
                 segments=generated['segments'], mat=generated['mat'].given,
                 account=generated['account'], provenance=provenance,
-                before_commit=lambda artifact, account: _prepare_legacy_chapter_delivery(
+                before_commit=lambda artifact, account, invalid: _prepare_legacy_chapter_delivery(
                     ctx, store, client, entry=entry, artifact=artifact,
-                    account=account, purpose=generated['accepted_purpose']))
+                    account=account, purpose=generated['accepted_purpose'], invalid=invalid))
             _record_legacy_chapter_delivery(
                 ctx, store, client, ordinal=ordinal,
                 purpose=generated['accepted_purpose'], formal=not errors)
@@ -3886,7 +3870,7 @@ def revise_targets(store: ArtifactStore
     picked: dict[int, list[list[str]]] = {}
     skipped: list[str] = []
     for row in rev.chapters:
-        if not row.relpath:
+        if row.output_ordinal in review.missing_draft_ordinals(rev):
             continue
         for f in row.findings:
             if not f.actionable:
@@ -4088,7 +4072,7 @@ def _reviewer_recovery_unit(
         model=str(profile['model']), purpose=prepared.purpose,
         acceptance=acceptance)
     prior = tuple(
-        (int(item['chars']), str(item['text']))
+        RejectedAttempt.model_validate(item)
         for item in restored.state_payload['prior_attempts'])
     evaluation = evaluate_chapter_candidate(
         source, prepared, restored.historical.checkpoint.value,
@@ -4177,9 +4161,6 @@ def _reviewer_recovered_chapter(
     return _chapter_record(
         prepared._entry,
         [segment.model_dump() for segment in evaluation.segments],
-        prepared._book,
-        warns=list(evaluation.warnings),
-        errs=None if errors is None else list(errors),
         provenance=provenance,
     )
 
@@ -4423,8 +4404,12 @@ def _finalize_reviewer_rewrite_recovery(
                         else store.write_round(canonical_rel, candidate))
 
                 where, trim_notes = _commit_canonical_chapter(
-                    store, artifact, expected_ordinal=prepared.ordinal,
-                    commit=commit)
+                    store,
+                    artifact,
+                    expected_ordinal=prepared.ordinal,
+                    entry=prepared._entry,
+                    commit=commit,
+                )
             landed = verify_chapter_delivery(
                 ctx, prepared, artifact, rel=formal_rel)
         elif outcome == 'invalid':
@@ -4561,7 +4546,7 @@ def run_reviewer_rewrite_prepared_recovery(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_recheck(ctx: RunContext, chapters: str | None = None) -> CheckReport:
-    """`--recheck`：原字节重判，只刷新 Chapter v2 派生字段与 trim 状态。
+    """`--recheck`：原字节重判，只刷新当前检查报告与 trim 状态。
 
     这条 0 成本路不再偷偷运行第二次正文归一：producer-owned ``segments``、冻结任务书与
     ``_provenance`` 原样保留。否则一次“检查”会被收敛账误认成写手又落笔了一轮。
@@ -4590,16 +4575,13 @@ def run_recheck(ctx: RunContext, chapters: str | None = None) -> CheckReport:
                 text, entry, book, mat=mat, account=acc,
                 segments=segments)
             judged[o] = fs
-            updated = _refresh_chapter_derived(
-                art, entry, book, warns=warns, errs=errs or None)
+            updated = art  # v3 无派生字段可刷新；检查不得改写正文或历史来源。
             _where, notes = _commit_canonical_chapter(
                 store,
                 updated,
                 expected_ordinal=o,
-                commit=lambda canonical_rel, artifact: (
-                    store.path(canonical_rel)
-                    if artifact == art
-                    else store.refresh_formal(canonical_rel, artifact)),
+                entry=entry,
+                commit=lambda canonical_rel, artifact: store.path(canonical_rel) if artifact == art else store.refresh_formal(canonical_rel, artifact),
             )
             trim_notes.extend(f'第 {o} 章：{note}' for note in notes)
     return _report(ctx, store, written=[], blocked=trim_notes, book=book, judged=judged)
@@ -4651,19 +4633,13 @@ def run_revalidate(
             if errs:
                 still.append(f'第 {o} 章仍有 {len(errs)} 条阻断级：{errs[0]}')
                 continue
-            rebuilt = _refresh_chapter_derived(
-                art, entry, book, warns=warns, errs=None)
+            rebuilt = art  # 提升只追加 revalidation audit，正文和创建身份原样继承。
             where, notes = _commit_canonical_chapter(
                 store,
                 rebuilt,
                 expected_ordinal=o,
-                commit=lambda canonical_rel, artifact: store.promote_invalid(
-                    canonical_rel,
-                    Chapter,
-                    actor=actor,
-                    reason=reason,
-                    artifact_override=artifact,
-                ),
+                entry=entry,
+                commit=lambda canonical_rel, artifact: store.promote_invalid(canonical_rel, Chapter, actor=actor, reason=reason, artifact_override=artifact),
             )
             promoted.append(
                 f'第 {o} 章 → {where}'
@@ -4911,8 +4887,7 @@ def _reconcile_landed_human_action(
             store,
             chapter,
             expected_ordinal=ordinal,
-            # 章字节已经精确等于 prepared.expected result；这里只让唯一提交口
-            # 补齐/校正 trim，不得再 write_round 造一轮。
+            entry=entry,
             commit=lambda canonical_rel, _artifact: store.path(canonical_rel),
         )
         note = ([
@@ -5048,9 +5023,6 @@ def run_apply_edit(
         art = _chapter_record(
             evaluated.entry,
             segments,
-            evaluated.book,
-            warns=list(evaluated.warnings),
-            errs=list(evaluated.errors),
             provenance=provenance,
         )
         expected_result_sha256 = store.prospective_sha256(rel, art)
@@ -5084,8 +5056,8 @@ def run_apply_edit(
                 store,
                 art,
                 expected_ordinal=ordinal,
-                commit=lambda canonical_rel, artifact: store.write_round(
-                    canonical_rel, artifact),
+                entry=evaluated.entry,
+                commit=lambda canonical_rel, artifact: store.write_round(canonical_rel, artifact),
             )
             landed, result_sha256 = store.read_own_with_sha256(Chapter, rel)
             if landed.output_ordinal != ordinal:

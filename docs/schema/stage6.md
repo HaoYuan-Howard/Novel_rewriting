@@ -15,7 +15,7 @@ Stage6 生成放在正文前的开篇文案。一次模型调用产三个候选�
 +3.90/10，且实验候选 3/3 获胜。因此生产设计采用以下已验证变化：
 
 - 原作文案作为创作金标准下发，保留其信息顺序、升级节拍、反差、对白密度和最后一击；
-- 下发完整 `entities` / `canon` / `arc` 与全书逐章事件地图，使候选可选择后期兑现；
+- 下发完整 `entities` / `canon` / `source_blurb` 与全书逐章事件地图，使候选可选择后期兑现；
 - 从 Stage1 原作文案即时计算机械五叶（字符数、平均句/段长、引号体、对白比例），不再下发任何定性文风包；
 - 剧透不再是错误，也不因剧透本身加减分；
 - 合法体裁自由包括重写台词、时间压缩、倒叙、合并数章和合成场面；
@@ -110,7 +110,8 @@ user/response 指纹、前后 HARD 数、cache policy、状态、是否采纳与
 HARD 数严格下降且文本不与另两条重复时才替换该候选和整组 rationale；wrong approach、请求失败、
 重复或 HARD 未下降均保留最近一次已验真的候选，并把原因写入修订账、提前停止该无进展路径。
 若 HARD 严格下降但仍未清零，继续同槽修订，再处理后续槽位。整书初始生成、格式纠错和局部修订
-共同计入最多四次内容调用；首次缓存命中不买内容轮，因此最多可剩四次局部 wire，但每次网络尝试仍独立留账。
+共同计入同一工作单元的基础四次内容额度与已生效的不可变人工追加；缓存命中不买内容轮，
+后续 wire 只能使用当前累计余额，每次网络尝试仍独立留账。
 重启、换模型会话、槽位切换或候选变化不重发余额；同槽记录可有多条，各次 attempt 必须唯一连续。
 若 wire 上互异的候选在归一后收敛成同一文本，producer 把完整付费产出落
 `hook.INVALID.json` 并明确报出重复槽位；人改开至少一条后走 `--revalidate` 0 LLM 提升，
@@ -190,7 +191,7 @@ producer 在归一后、落盘前再守一次正式文本唯一性。这里**不
 `prompts.build_material` 是生成 prompt 与机械“给过什么”探针的唯一材料落点：
 
 - `source_hook`：原作文案全文；
-- `story_truth`：完整 `entities`、`canon`、`arc`；
+- `story_truth`：完整 `entities`、`canon`、`source_blurb`；
 - `whole_story_map`：每章章号、源章号、章目标、开头目标、全部 beat events、结尾目标；
 - `rewritten_opening`：第 1 章至 `lead_upto` 的连续成稿；
 - `source_hook_mechanical`：由 `novel/core/measure.py::hook_style_metrics` 从同一份 `source_hook` 即时计算，只有 `chars`、

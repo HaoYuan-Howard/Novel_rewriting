@@ -188,6 +188,7 @@ def _response(task: SimpleNamespace, *, scope_count: int = 3) -> dict[str, Any]:
 
 def _stage2_unver_options(*, safe: bool) -> tuple[SimpleNamespace, list[dict[str, Any]]]:
     """经现役 reviewer_tasks producer 生成真实的 UNVER 多选面。"""
+    from tests.test_reviewer_tasks import _node_review_coverage
     current = SimpleNamespace(
         state='blocked', surface_seal='a' * 64, code_version='code-v1',
         action=SimpleNamespace(
@@ -195,7 +196,7 @@ def _stage2_unver_options(*, safe: bool) -> tuple[SimpleNamespace, list[dict[str
             action_sha256='b' * 64,
         ),
     )
-    group_key = 'secret:secret_01' if safe else 'set:characters'
+    group_key = 'secret:secret_01' if safe else 'set:relations'
     item = {
         'item_id': 'item-1',
         'subject_sha256': '1' * 64,
@@ -222,6 +223,7 @@ def _stage2_unver_options(*, safe: bool) -> tuple[SimpleNamespace, list[dict[str
             'main_text_subject_sha256': '9' * 64,
             'main_text_chapters': [],
             'items': [item],
+            'review_coverage': _node_review_coverage('stage2.global'),
             'binding': {
                 'expected_source_sha256': '8' * 64,
                 'expected_blocking_scope_sha256': '6' * 64,
@@ -233,7 +235,8 @@ def _stage2_unver_options(*, safe: bool) -> tuple[SimpleNamespace, list[dict[str
         'global_edit_template': encode_artifact(STAGE2_GLOBAL_EDIT, {
             'characters': [{
                 'char_id': 'char_001',
-                'name_distinctiveness': 'high',
+                'fate': None,
+                'fate_evidence': None,
             }],
         }),
     }
@@ -297,10 +300,9 @@ def test_assembler_emits_only_explicit_business_delta() -> None:
         '时代背景': '未提交的旧时代',
         'era_evidence': {'chapter_ordinal': 1, 'locator': '旧时代证据'},
     }
-    edit['conflict_stages_replace'] = [{
-        'stage': '未提交的旧冲突阶段',
-        'chapters': [1, 2],
-    }]
+    edit['source_blurb_replace'] = {
+        'facts': [], 'opening': {'kind': 'unresolved', 'reason': '未提交的旧范围'},
+    }
     edit['collection_edits'] = [{
         'collection': 'relations',
         'expected_collection_sha256': _sha(2),
@@ -323,7 +325,7 @@ def test_assembler_emits_only_explicit_business_delta() -> None:
         'secrets': [],
         'world_rules': [],
         'setting': None,
-        'conflict_stages_replace': None,
+        'source_blurb_replace': None,
         'collection_edits': {
             'relations': [
                 {'op': 'add', 'item': _relation_item(f'rel_{index:02d}')}
@@ -429,9 +431,9 @@ def test_correction_drop_targets_are_closed_explicit_and_conflict_free() -> None
         '时代背景': '上一轮误改的时代',
         'era_evidence': {'chapter_ordinal': 1, 'locator': '时代证据'},
     }
-    edit['conflict_stages_replace'] = [{
-        'stage': '上一轮误替换的冲突阶段', 'chapters': [1, 2],
-    }]
+    edit['source_blurb_replace'] = {
+        'facts': [], 'opening': {'kind': 'unresolved', 'reason': '上一轮误替换的范围'},
+    }
     GlobalEdit.model_validate(edit)
     target_map = wire._drop_target_map(edit)
     setting_target = next(
@@ -439,21 +441,21 @@ def test_correction_drop_targets_are_closed_explicit_and_conflict_free() -> None
         if target.description == 'setting')
     replacement_target = next(
         token for token, target in target_map.items()
-        if target.description == 'conflict_stages_replace')
+        if target.description == 'source_blurb_replace')
     collection_target = next(
         token for token, target in target_map.items()
         if target.description == 'collection_edits[collection=world_rules]')
 
     response = _response(task, scope_count=1)
     response['payload']['edit']['setting'] = None
-    response['payload']['edit']['conflict_stages_replace'] = None
+    response['payload']['edit']['source_blurb_replace'] = None
     response['payload']['edit']['collection_edits'] = {'world_rules': []}
     response['payload']['drop_targets'] = [
         setting_target, replacement_target, collection_target]
     merged = wire.assemble(task, response)['action']['input_payload']
 
     assert 'setting' not in merged
-    assert 'conflict_stages_replace' not in merged
+    assert 'source_blurb_replace' not in merged
     assert 'collection_edits' not in merged
     assert merged['relations'][0]['predicate'] == '新关系'
 
@@ -589,33 +591,30 @@ def test_collection_split_reusing_subject_has_safe_actionable_reason() -> None:
     assert 'rel_08' not in reason
 
 
-def test_direct_character_patch_and_collection_delete_has_safe_reason() -> None:
+def test_direct_relation_patch_and_collection_delete_has_safe_reason() -> None:
     task = _task(scope_count=1)
     edit = task.submission_options[0]['exact_request']['action']['input_payload']
-    edit['characters'] = [{
-        'char_id': 'char_009', 'name_distinctiveness': 'common',
-    }]
+    edit['relations'] = [{'relation_id': 'rel_09', 'predicate': '旧关系',
+                         'predicate_evidence': {'chapter_ordinal': 1, 'locator': '旧证据'}}]
     edit['collection_edits'] = [{
-        'collection': 'characters',
-        'expected_collection_sha256': _sha(2),
+        'collection': 'relations', 'expected_collection_sha256': _sha(2),
         'operations': [],
     }]
     GlobalEdit.model_validate(edit)
     response = _response(task, scope_count=1)
-    response['payload']['edit']['characters'] = [{
-        'char_id': 'char_009', 'name_distinctiveness': 'high',
-    }]
+    response['payload']['edit']['relations'] = [
+        {'relation_id': 'rel_09', 'predicate': '新关系',
+         'predicate_evidence': {'chapter_ordinal': 1, 'locator': '新证据'}}]
     response['payload']['edit']['collection_edits'] = {
-        'characters': [{'op': 'delete', 'subject_id': 'char_009'}],
+        'relations': [{'op': 'delete', 'subject_id': 'rel_09'}],
     }
-
     with pytest.raises(wire.Stage2ReviewerWireError) as caught:
         wire.assemble(task, response)
-
     reason = str(caught.value)
     assert 'direct_patch_subject_removed_by_collection_edit' in reason
     assert '直接字段 patch 主体不得同时被同集合 delete/split' in reason
-    assert 'char_009' not in reason
+    assert 'rel_09' not in reason
+
 
 
 def test_response_schema_is_portable_and_task_specific() -> None:
@@ -805,7 +804,7 @@ def test_large_fixed_collection_schema_fits_real_claude_windows_argv(
             'operations': [],
         }
         for index, collection in enumerate(
-            ('characters', 'relations', 'secrets', 'world_rules'))
+            ('relations', 'secrets', 'world_rules'))
     ]
     GlobalEdit.model_validate(edit)
     driver = ClaudeCodeCommanderDriver(
@@ -823,23 +822,16 @@ def test_large_fixed_collection_schema_fits_real_claude_windows_argv(
     assert units < 32_767
 
 
-def test_composite_identity_cross_product_is_closed_by_trusted_assembler() -> None:
+def test_retired_static_address_patch_cannot_widen_the_knowledge_wire() -> None:
     task = _task()
-    edit = task.submission_options[0]['exact_request']['action']['input_payload']
-    edit['addresses'] = [
-        {'char_id': 'char_001', 'address_index': 0, 'context': 'address'},
-        {'char_id': 'char_002', 'address_index': 1, 'context': 'address'},
-    ]
-    GlobalEdit.model_validate(edit)
     response = _response(task)
-    # 分组 native schema 为缩短 argv 可分别枚举两列；真正允许的 tuple 仍只能
-    # 来自 immutable exact template，不能接受这个交叉组合。
+    # 称谓整体归人物 producer；即使主体看似有效，也不能重新混入知识 wire。
     response['payload']['edit']['addresses'] = [
         {'char_id': 'char_001', 'address_index': 1, 'context': 'address'},
     ]
-
-    with pytest.raises(wire.Stage2ReviewerWireError, match='越出模板主体'):
+    with pytest.raises(wire.Stage2ReviewerWireError):
         wire.assemble(task, response)
+
 
 
 def test_prompt_addendum_replaces_full_request_recopy_contract() -> None:
@@ -970,15 +962,14 @@ def test_eighty_one_decisions_keep_shape_and_cut_recopy_bytes() -> None:
     assert compact_bytes < full_bytes * 0.7
 
 
-def test_prereview_gets_native_schema_but_non_stage2_does_not() -> None:
+def test_retired_prereview_and_non_stage2_get_no_stage2_schema() -> None:
     prereview = SimpleNamespace(
         business_sha256=_sha(1),
         workpack_sha256=_sha(2),
         input_template={},
     )
     schema = wire.output_schema_for(prereview)
-    assert schema is not None
-    assert 'novel-stage2-global-prereview-v1' in json.dumps(schema)
+    assert schema is None
     assert wire.output_schema_for(SimpleNamespace(
         waiting_on='stage0.approve', submission_options=())) is None
     ordinary = SimpleNamespace(waiting_on='stage0.approve', submission_options=())
@@ -1031,7 +1022,8 @@ def test_real_stage2_unver_multioption_keeps_full_action_path_reachable(
     request = copy.deepcopy(selected['exact_request'])
     payload = request['action']['input_payload']
     if selected_id.endswith('apply-edit-unver'):
-        payload['characters'][0]['name_distinctiveness'] = 'medium'
+        payload['characters'][0].update(fate='最终获救', fate_evidence={
+            'chapter_ordinal': 2, 'locator': '他终于获救了'})
         payload['post_edit_review']['reason'] = (
             '已修改错误主体，并复核 review scope 的所有存活旧项')
         payload['post_edit_review']['decisions'] = [{

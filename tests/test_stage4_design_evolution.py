@@ -94,6 +94,21 @@ def test_strategy_epoch_excludes_other_chapter_weights_but_chapter_digest_does_n
         chapter_strategy_sha256(epoch, 1, 'CH_EVEN')
 
 
+
+def test_strategy_epoch_keeps_local_truth_changes_out_but_preserves_global_changes():
+    basis = _basis()
+    current = strategy_epoch_sha256(basis, '冻结宏观策略')
+    assert current == strategy_epoch_sha256(
+        {**basis, 'truth_sha256': 'c' * 64}, '冻结宏观策略')
+    for key, changed in (
+        ('review_contract', 'changed-review-contract'),
+        ('root_clean_sha1', 'd' * 40), ('alias_algorithm', 'changed-alias'),
+    ):
+        assert current != strategy_epoch_sha256({**basis, key: changed}, '冻结宏观策略')
+    with pytest.raises(DesignEvolutionError, match='SHA-256'):
+        strategy_epoch_sha256({**basis, 'truth_sha256': 'broken'}, '冻结宏观策略')
+
+
 def test_replan_only_marks_own_weight_changes_unless_global_strategy_changes():
     old = _strategy()
     weight_only = _strategy(second='CH_MAJOR')

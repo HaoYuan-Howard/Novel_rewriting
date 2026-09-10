@@ -75,21 +75,23 @@ def test_blueprint_cross_workpack_exposes_global_and_stable_patch_ids(book):
         global_review.require_approved(_ctx(book, 'stage4.design', paid=False))
 
 
-def test_typed_rework_routes_to_owner_with_exact_current_chapter_range(book):
+@pytest.mark.parametrize('owner', ['stage2.characters', 'stage2.global', 'stage2.blueprint'])
+def test_typed_rework_routes_to_owner_with_exact_current_chapter_range(book, owner):
     _produce_blueprints(book)
     token = blueprint_review_workpack(book.parent, '123').review_token
     request = Stage2NodeReviewRequest(
         node='stage2.blueprint', review_token=token, decision='rework',
-        actor='blueprint-commander', reason='第二章人物称名需要回全局生产节点核证',
-        owner='stage2.global', chapter_ordinals=[2])
+        actor='blueprint-commander', reason='按问题归属派回人物、知识或章蓝图核证',
+        owner=owner, chapter_ordinals=[2] if owner == 'stage2.blueprint' else [])
     approvals.approve_stage2_review(book.parent, '123', request)
-    assert approvals.pending_stage2_rework(book.parent, '123', 'stage2.blueprint') is None
-    assert approvals.stage2_rework_request(book.parent, '123', 'stage2.global', token).owner == 'stage2.global'
-    approvals.mark_stage2_rework_landed(book.parent, '123', 'stage2.global', token)
-    assert approvals.pending_stage2_rework(book.parent, '123', 'stage2.global') is None
+    if owner != 'stage2.blueprint':
+        assert approvals.pending_stage2_rework(book.parent, '123', 'stage2.blueprint') is None
+    assert approvals.stage2_rework_request(book.parent, '123', owner, token).owner == owner
+    approvals.mark_stage2_rework_landed(book.parent, '123', owner, token)
+    assert approvals.pending_stage2_rework(book.parent, '123', owner) is None
     with pytest.raises(HumanEditProtected, match='不存在的章'):
         approvals.approve_stage2_review(book.parent, '123', request.model_copy(update={
-            'chapter_ordinals': [999]}))
+            'owner': 'stage2.blueprint', 'chapter_ordinals': [999]}))
 
 
 def test_raw_acceptance_expires_and_revives_without_being_erased(book):
@@ -109,6 +111,8 @@ def test_raw_acceptance_expires_and_revives_without_being_erased(book):
 
 def test_landed_patch_replays_original_request_without_reapplying_or_model(book, monkeypatch):
     _produce_blueprints(book)
+    from tests.test_stage2_review_decisions import _accept_blueprint_node
+    _accept_blueprint_node(book, monkeypatch)
     ctx = _ctx(book, 'stage2.blueprint', paid=False)
     before = ArtifactStore(ctx).read_own(ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)[0]
     payload = relation_edit.edit_template(ctx)
@@ -274,17 +278,17 @@ def test_cross_review_reuse_refuses_scope_without_matching_accepted_proof(book, 
         blueprint_review_workpack(book.parent, '123')
 
 
-def test_global_non_name_patch_routes_only_affected_cross_review_without_regenerating_blueprint(book, monkeypatch):
+def test_static_role_rebind_routes_only_affected_cross_review_without_regenerating_blueprint(book, monkeypatch):
     from tests.test_stage2_review_decisions import _accept_blueprint_node, _accept_global_node
-    from tests.test_stage2_secret_edit import _write_edit, _apply, _locator
+    from tests.test_stage2_secret_edit import _locator
+    from tests.test_stage2_generation import _edit_static_character
     _produce_blueprints(book)
     _accept_blueprint_node(book, monkeypatch)
     blueprint_bytes = (book / STAGE2_CHAPTER_BLUEPRINTS).read_bytes()
-    _write_edit(book, {'characters': [{
-        'char_id': 'char_002', 'role': '李宝珠的母亲，掌管家中内院日常',
-        'role_evidence': _locator(2, '回来时看见母亲在门口等她。'),
-    }]})
-    _, report = _apply(book)
+    _edit_static_character(
+        book, 'char_002', role='李宝珠的母亲，掌管家中内院日常',
+        role_evidence=_locator(2, '回来时看见母亲在门口等她。'))
+    report = extract.run_renormalize(_ctx(book, 'stage2.global', paid=False))
     assert report.passed
     _approve_all_review(book)
     _accept_global_node(book)

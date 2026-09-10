@@ -84,7 +84,6 @@ def _approve_all_review(book) -> None:
     store.write_round(global_review.REL, review)
 
 
-
 def _accept_global_node(book):
     """合成 Commander 明确核过逐项决定后，提交当前 Global 节点接受。"""
     from contracts.schema.api import Stage2NodeReviewRequest
@@ -98,17 +97,10 @@ def _accept_global_node(book):
 
 
 def _accept_blueprint_node(book, monkeypatch):
-    from contracts.schema.api import Stage2NodeReviewRequest
-    from novel.views.stage2 import blueprint_review_workpack
+    from tests.stage2_fixtures import accept_and_materialize_links
     ctx = _ctx(book, 'stage2.blueprint', paid=False)
-    # 本组只核验 Stage2 节点接受；S0/S1 原审批链在 facade 纵切另验。
-    with monkeypatch.context() as local:
-        local.setattr(approvals, 'close_stage2_accepted',
-                      lambda base, sid: approvals.get(base, sid, include_spawns=False))
-        return approvals.approve_stage2_review(book.parent, ctx.sid, Stage2NodeReviewRequest(
-            node='stage2.blueprint', review_token=blueprint_review_workpack(book.parent, ctx.sid).review_token,
-            decision='accept', actor='fixture-blueprint-commander',
-            reason='合成 fixture 已逐章交叉核对 Blueprint 与 Global'))
+    accept_and_materialize_links(ctx)
+    return approvals.get(book.parent, ctx.sid, include_spawns=False)
 
 
 def test_a_book_dir_absolute_decision_path_is_accepted():
@@ -394,7 +386,7 @@ def test_s2_service_approval_cannot_outvote_a_joint_hard_failure(
 
 
 def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
-        monkeypatch):
+        monkeypatch, tmp_path):
     """正式 SourceSpan 转 EvidenceRef；失败态不能退回 claim 字面搜索。
 
     反例刻意让 ``世界观`` claim 原样出现在正文里：若 source=None 后仍递归搜 claim，
@@ -445,13 +437,7 @@ def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
             'world_rules': [],
             'secrets': [],
         },
-        'arc': {
-            'conflict_stages': [], 'climax': '对质', 'ending': '和解',
-            'arc_tracks': [{
-                'subject': 'char_001', 'trajectory': '掌柜从守成转为主动担当',
-                'trajectory_evidence': valid,
-            }],
-        },
+        'source_blurb': {'facts': [], 'opening': {'kind': 'proposed', 'through_chapter': 1, 'rationale': '开篇交代掌柜', 'boundary_evidence': valid}},
     }
     review = build_review(payload)
     grounding = SimpleNamespace(model_dump=lambda **_kwargs: payload)
@@ -467,6 +453,8 @@ def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
         def read_own(self, _model, rel, **_kwargs):
             if rel == global_review.REL:
                 return review, None
+            if rel == global_review.STAGE1_HOOK_COPY:
+                return SimpleNamespace(text='掌柜面临新的经营挑战。'), None
             if rel == global_review.STAGE1_MAIN_TEXT:
                 return main, None
             return grounding, None
@@ -475,10 +463,13 @@ def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
             return main
 
     monkeypatch.setattr(global_review, 'ArtifactStore', lambda _ctx: FakeStore())
-    workpack = global_review.review_workpack(SimpleNamespace(sid='synthetic-book'))
+    monkeypatch.setattr(global_review.grounding_io, 'read_own', lambda *_args, **_kwargs: (grounding, None))
+    from novel.orchestrator import approvals
+    monkeypatch.setattr(approvals, 'stage2_review_history', lambda *_args: [])
+    workpack = global_review.review_workpack(SimpleNamespace(sid='synthetic-book', novel_dir=tmp_path / '书_synthetic-book'))
     by_path = {row['subject_path']: row for row in workpack['items']}
     full_workpack = global_review.review_workpack(
-        SimpleNamespace(sid='synthetic-book'), scope='all')
+        SimpleNamespace(sid='synthetic-book', novel_dir=tmp_path / '书_synthetic-book'), scope='all')
     full_by_path = {row['subject_path']: row for row in full_workpack['items']}
 
     role = by_path['entities.characters.char_001.role']
@@ -504,9 +495,9 @@ def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
     assert worldview['unresolved_formal_evidence'][0]['reason'].endswith('source=None')
     assert worldview['evidence_mode'] == 'unresolved_formal_evidence'
 
-    arc = by_path['arc']
-    assert arc['reading_scope'] == 'whole_book'
-    assert arc['evidence_mode'] == 'formal_evidence', \
+    opening = by_path['source_blurb.opening']
+    assert opening['reading_scope'] == 'whole_book'
+    assert opening['evidence_mode'] == 'formal_evidence', \
         '整书阅读与 evidence 模式是正交轴，不能互相覆盖'
 
     companion = role['fate_companion']
@@ -540,8 +531,8 @@ def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
     name = full_by_path['entities.characters.char_001.name_distinctiveness']
     assert name['evidence_mode'] == 'claim_literal'
     assert name['exact_literal_hits']
-    conflict = by_path['arc.conflict_stages']
-    assert conflict['reading_scope'] == 'whole_book'
-    assert conflict['evidence_mode'] == 'none'
+    complete = by_path['source_blurb.facts']
+    assert complete['reading_scope'] == 'whole_book'
+    assert complete['evidence_mode'] == 'none'
     assert 'fate_companion' not in full_by_path['entities.characters.char_001.role'], \
         'all scope 已有同组 fate 正式行，不得再复制一份 companion'

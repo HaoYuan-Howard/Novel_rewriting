@@ -147,7 +147,7 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
         return dict(unit_id=node+role+scope, node=node, role=role, scope=scope,
                     content_used=1, content_limit=4, content_remaining=3, state='delivered',
                     recovery_action='replay_response')
-    monkeypatch.setattr(run, 'list_unit_views', lambda *_args: [
+    monkeypatch.setattr(run.work_units, 'list_unit_views', lambda *_args: [
         row('stage2.global', 'commander', 'book'), row('stage2.global', 'executor', 'book'),
         row('stage2.blueprint', 'commander', 'book')])
     response = c.get('/api/novels/42/run')

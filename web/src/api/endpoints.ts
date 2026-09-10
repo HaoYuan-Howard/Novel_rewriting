@@ -5,12 +5,14 @@
  * 如果哪个组件自己造了数据，那一屏就会当场空掉 —— 而这正是联调时最不想找的一类 bug。
  */
 import type { Api } from '@/types/api'
+import type { CharacterRegistryView } from '@/types/characters'
 import type {
   AgentCapabilitiesResponse,
   AgentProfileSettingsView,
   AgentQueueView,
   AgentRunLogChunk,
   AgentRunPreview,
+  AgentRunContinuationView,
   AgentRunRecord,
   AgentRunsResponse,
 } from '@/types/agent'
@@ -49,7 +51,7 @@ import type {
 } from '@/types/jobs'
 import type { Artifact, NovelOverview, NovelsResponse } from '@/types/novels'
 import type { TrashNovelResult } from '@/types/novels'
-import type { RunProgress } from '@/types/run'
+import type { RunProgress, WorkUnitGrantPreview, WorkUnitGrantResult } from '@/types/run'
 import type {
   RetentionApplyResult,
   RetentionPlan,
@@ -369,6 +371,10 @@ export const realApi: Api = {
   getEnums: () => get<EnumsResponse>('/enums'),
   // run 的响应已是视图形状（snake_case 照后端原样），数据缝不做适配
   getRunProgress: (sid) => get<RunProgress>(n(sid) + '/run'),
+  previewWorkUnitGrant: (sid, unitId, additional) => get<WorkUnitGrantPreview>(
+    n(sid) + '/work-units/' + encodeURIComponent(unitId) + '/grant?additional=' + additional),
+  grantWorkUnit: (sid, unitId, request) => post<WorkUnitGrantResult>(
+    n(sid) + '/work-units/' + encodeURIComponent(unitId) + '/grant', request),
 
   getStage0Report: (sid) => get<Stage0Report>(n(sid) + '/stage0/report'),
   getStage0Segments: (sid) => get<Stage0Segments>(n(sid) + '/stage0/segments'),
@@ -401,6 +407,9 @@ export const realApi: Api = {
     get<BlueprintReviewWorkpack>(n(sid) + '/stage2/blueprint-review-workpack'),
   getGlobal: async (sid, revealSpoilers = false) =>
     projectGlobalSpoilers(await get<Stage2Global>(n(sid) + '/stage2/global'), revealSpoilers),
+  getCharacters: (sid) => get<CharacterRegistryView>(n(sid) + '/stage2/characters'),
+  editCharacters: async (sid, request) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage2/characters/edit', request)),
   getGlobalReview: (sid) =>
     get<GlobalReviewResponse>(n(sid) + '/stage2/global-review'),
   decideGlobalReview: async (sid, request: GlobalReviewDecisionSet) =>
@@ -499,6 +508,7 @@ export const realApi: Api = {
     get<AgentProfileSettingsView>('/settings/agent-profiles'),
   saveAgentProfileSettings: (req) =>
     post<AgentProfileSettingsView>('/settings/agent-profiles', req),
+  getAgentRunContinuation: (runId) => get<AgentRunContinuationView>(`/agent/runs/${encodeURIComponent(runId)}/continuation`),
   previewAgentRun: (req) => post<AgentRunPreview>('/agent/runs/preview', req),
   startAgentRun: (req) => post<AgentRunRecord>('/agent/runs', req),
   getAgentRuns: (sid) => get<AgentRunsResponse>('/agent/runs?sid=' + encodeURIComponent(sid)),

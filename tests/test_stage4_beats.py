@@ -54,6 +54,10 @@ def _blueprints() -> dict:
             {'beat_id': 'b01_02', 'span': spans[1], 'time_layer': 'present',
              'place': '门口', 'present_char_ids': ['char_001', 'char_002'],
              'hinges': [{'hinge_id': 'h01_001', 'kind': '要害台词',
+                         'source_fact_refs': ['f01_002'], 'literal': None,
+                         'dialogue': {'speaker': {'kind': 'character', 'char_id': 'char_002'},
+                                      'addressees': [{'kind': 'character', 'char_id': 'char_001'}],
+                                      'meaning': '乙拒绝甲入住', 'speech_act': '拒绝'},
                          'source': _source('拒绝甲')}]},
             {'beat_id': 'b01_03', 'span': spans[2], 'time_layer': 'present',
              'place': '门口', 'present_char_ids': ['char_001'],
@@ -124,12 +128,12 @@ def test_beat_index_is_evidence_only_and_has_no_event_payload():
     assert 'event' not in index['b01_02']
 
 
-def test_cross_paragraph_material_is_split_without_changing_its_words():
+def test_cross_paragraph_premise_is_split_without_changing_its_words():
     pieces, unknown = verbatim_pieces([{
-        'hinge_id': 'h01_001', 'kind': '要害台词',
+        'hinge_id': 'h01_001', 'kind': '因果前提',
         'source': {'text': '第一句。\n\n第二句。'},
     }])
-    assert pieces['verbatim'] == ['第一句。', '第二句。'] and unknown == []
+    assert pieces['must_hold'] == ['第一句。', '第二句。'] and unknown == []
 
 
 def test_plan_response_rejects_every_retired_skeleton_key():

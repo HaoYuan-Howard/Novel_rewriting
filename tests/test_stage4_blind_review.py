@@ -147,6 +147,8 @@ def _seed_candidate(
             'prompts': {'STAGE4_BLIND_DESIGN_SYS': 'c' * 10},
             'model': 'test-model',
             'adopted_models': ['test-model'],
+            # 显式合成的当前载体；不把旧正式产物改签为当前架构。
+            'architecture': 'book_strategy_chapters_v1',
             'alias_algorithm': mapping['alias_algorithm'],
             'truth_sha256': truth and mapping['truth_sha256'],
         },

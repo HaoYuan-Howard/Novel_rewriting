@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from novel.stages.stage2 import grounding as grounding_io
+
 import copy
 import hashlib
 import json
@@ -10,7 +12,7 @@ from typing import Final
 from pydantic import ValidationError
 
 from contracts.artifacts import (
-    STAGE1_MAIN_TEXT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+    STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
     STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
     STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
@@ -21,7 +23,7 @@ from contracts.schema.evaluation import (
 )
 from contracts.schema import encode_artifact
 from contracts.schema.stage2 import GlobalGrounding
-from contracts.schema.stage1 import MainText
+from contracts.schema.stage1 import HookCopy, MainText
 
 from novel import paths
 from novel.core.evidence import iter_global_evidence_slots, without_global_evidence
@@ -241,22 +243,22 @@ def _formal_materials(
     return materials, unresolved
 
 
-#: 必须通读全书才能裁的那几类：集合完整性问「有没有漏收」，解读层问「这个划分/
-#: 这条弧线成不成立」——两者的答案都不在某一段原文里，**精确命中 0 条是常态**。
+#: 必须通读全书才能裁的几类：集合完整性问「有没有漏收」，开篇范围问「是否覆盖
+#: 源文案必需事实」；二者不能靠单段命中证明，精确命中 0 条仍须阅读裁决。
 #: ⚠ 判成另一类会给出一句「命中只是缩小阅读范围」的提示，读的人容易误以为
 #: 「找不到命中 ⇒ 没问题」，而这几类恰恰是 0 命中最需要人真的去读的。
 _WHOLE_BOOK_KINDS = frozenset({
     'character_set_complete', 'relation_set_complete',
     'world_rule_set_complete', 'secret_set_complete',
-    'conflict_partition', 'arc_analysis',
+    'source_blurb_complete', 'opening_scope',
 })
 
 # 这些主体的问题不是“这一条事实有没有出处”，不能把其下所有正式 evidence
-# 拼起来冒充集合完整性或阶段划分的证据。arc_analysis 例外：它自己的 trajectory
-# 有逐条证据，虽仍需整体阅读判断，workpack 应优先展示那些正式坐标。
+# 拼起来冒充集合完整性的证据。开篇范围有独立边界证据，虽仍需整体阅读判断，
+# workpack 应优先展示该正式坐标。
 _NO_FORMAL_EVIDENCE_KINDS = frozenset({
     'character_set_complete', 'relation_set_complete',
-    'world_rule_set_complete', 'secret_set_complete', 'conflict_partition',
+    'world_rule_set_complete', 'secret_set_complete', 'source_blurb_complete',
 })
 
 
@@ -402,8 +404,7 @@ def review_identity(
 def review_token(ctx: RunContext) -> str:
     """现算当前 Global 审阅面的 opaque token；主体不 current 时按现役异常拒绝。"""
     store = ArtifactStore(ctx)
-    grounding = store.read_own(
-        GlobalGrounding, STAGE2_GLOBAL_GROUNDING, require_current=True)[0]
+    grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING, require_current=True)[0]
     review = store.read_own(GlobalReview, REL, require_current=True)[0]
     main = store.read_own(MainText, STAGE1_MAIN_TEXT, require_current=True)[0]
     grounding_payload = grounding.model_dump(mode='json', by_alias=True)
@@ -428,9 +429,7 @@ def review_workpack(
     普通工作包不给这个参数，不能把任意 stale Global 伪装成 current。
     """
     store = ArtifactStore(ctx)
-    grounding = store.read_own(
-        GlobalGrounding, STAGE2_GLOBAL_GROUNDING, require_current=True,
-        replaced_input_keys=replaced_input_keys)[0]
+    grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING, require_current=True, replaced_input_keys=replaced_input_keys)[0]
     review = store.read_own(GlobalReview, REL, require_current=True)[0]
     main = store.read_own(MainText, STAGE1_MAIN_TEXT, require_current=True)[0]
     main_text_subject_sha256 = subject_sha256(
@@ -512,6 +511,7 @@ def review_workpack(
             'subject_path': item.subject_path,
             'subject_sha256': item.subject_sha256,
             'current_state': item.state,
+            'resolution_required': item.resolution_required,
             'current_reason': item.reason,
             'generation_disposition': (
                 None if item.generation_disposition is None
@@ -535,7 +535,7 @@ def review_workpack(
     needs_whole_book = any(
         row.get('reading_scope') == 'whole_book' for row in rows)
     payload: dict[str, object] = {
-        'kind': 'stage2-global-review-workpack-v4',
+        'kind': 'stage2-global-review-workpack-v5',
         'sid': ctx.sid,
         'scope': scope,
         'read_only': True,
@@ -552,6 +552,7 @@ def review_workpack(
         # 正确地把这种材料不足判成 UNVER，随后误入 GlobalEdit，形成“模型成功、
         # 交付失败”。v4 对 whole-book 包把 current MainText 只放一遍；行仍引用
         # 同一主体/证据，不复制正文，workpack SHA 也会绑定实际读到的全部字节。
+        'source_hook': store.read_own(HookCopy, STAGE1_HOOK_COPY, require_current=True)[0].text,
         'main_text_chapters': ([{
             'chapter_ordinal': int(chapter.chapter_ordinal),
             'text': chapter.text,
@@ -569,6 +570,15 @@ def review_workpack(
     # 哈希故意不含它自己；模板与应用口都调本函数现算，
     # 不从 grounding/review 另拼一份“看起来相同”的阅读面。
     payload['workpack_sha256'] = subject_sha256(payload)
+    # 覆盖导航不进入材料身份；保存接受本身不能令同一份包自行过期。
+    # Global 节点接受的义务是 blocking 面，披露项继续沿原 typed UNVER 账展示。
+    from novel.orchestrator.approvals import stage2_review_history
+    from novel.stages.stage2 import review_obligations
+    commander_pack = {**payload, 'items': [row for row in rows if row['effect'] == 'blocking']}
+    coverage = review_obligations.coverage(
+        'stage2.global', review_obligations.global_catalog(commander_pack),
+        stage2_review_history(ctx.novel_dir.parent, ctx.sid))
+    payload['review_coverage'] = coverage.model_dump(mode='json')
     return payload
 
 
@@ -630,8 +640,7 @@ def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
     # 决策文件先按路径/schema 读入，当前 grounding/review/workpack 则必须在同一
     # 所有权窗口内读取、校验并写回，避免锁前快照覆盖刚 committed 的新 bundle。
     with stage2_global_runs.mutation_ownership(ctx):
-        grounding = store.read_own(
-            GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+        grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING)[0]
         grounding_payload = grounding.model_dump(by_alias=True)
         current = store.read_own(GlobalReview, REL)[0]
         require_current(grounding_payload, current)
@@ -700,7 +709,7 @@ def submitted_decisions_is_current(base: str, sid: str, payload: dict[str, objec
         return False
     ctx = readonly_ctx(paths.resolve_novel_dir(base, sid), 'stage2.global', prov.code_version())
     store = ArtifactStore(ctx)
-    grounding = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING, require_current=True)[0]
+    grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING, require_current=True)[0]
     current = store.read_own(GlobalReview, REL, require_current=True)[0]
     return (receipt.global_sha256 == subject_sha256(grounding.model_dump(by_alias=True))
             and receipt.result_subject_sha256 == subject_sha256(current.model_dump(mode='json')))
@@ -708,16 +717,14 @@ def submitted_decisions_is_current(base: str, sid: str, payload: dict[str, objec
 
 def is_approved(ctx: RunContext, review: GlobalReview) -> bool:
     """Bind approval to the complete, current Stage2 subject (blocking surface)."""
-    grounding = ArtifactStore(ctx).read_own(
-        GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+    grounding = grounding_io.read_own(ArtifactStore(ctx))[0]
     return review_status(
         grounding.model_dump(by_alias=True), review)[2]
 
 
 def is_generation_safe(ctx: RunContext, review: GlobalReview) -> bool:
     """是否可把当前 review 经确定性隔离后交给写作消费方。"""
-    grounding = ArtifactStore(ctx).read_own(
-        GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+    grounding = grounding_io.read_own(ArtifactStore(ctx))[0]
     return generation_safety(
         grounding.model_dump(by_alias=True), review).safe
 
@@ -739,7 +746,7 @@ def approval_status(ctx: RunContext) -> tuple[bool, bool, dict[str, int]]:
     **不互相推导**——把 disclosure 从合计里减掉，就再也说不清「一共有多少项被人看过」。
     """
     store = ArtifactStore(ctx)
-    grounding = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+    grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING)[0]
     review = store.read_own(GlobalReview, REL)[0]
     _subject, current, approved = review_status(
         grounding.model_dump(by_alias=True), review)
@@ -749,7 +756,7 @@ def approval_status(ctx: RunContext) -> tuple[bool, bool, dict[str, int]]:
 def generation_status(ctx: RunContext) -> tuple[GenerationSafety, dict[str, int]]:
     """返回写作安全结论与完整四态计数；不把隔离过的 UNVER 改名为 PASS。"""
     store = ArtifactStore(ctx)
-    grounding = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+    grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING)[0]
     review = store.read_own(GlobalReview, REL)[0]
     return (
         generation_safety(grounding.model_dump(by_alias=True), review),
@@ -765,7 +772,7 @@ def generation_grounding(store: ArtifactStore) -> GlobalGrounding:
     完整组，再以 ``GlobalGrounding`` schema 复验。这样终审仍看得到原事实与决定，
     写作模型却不可能收到被隔离的未知事实。
     """
-    grounding = store.read(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)
+    grounding = grounding_io.read(store)
     review = store.read(GlobalReview, REL)
     safety = generation_safety(
         grounding.model_dump(by_alias=True), review)
@@ -857,7 +864,7 @@ def require_global_valid(ctx: RunContext) -> None:
             hint='从 producer 重建 stage2.global')
 
     from novel.stages.stage2 import extract
-    grounding = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+    grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING)[0]
     main = store.read_own(MainText, STAGE1_MAIN_TEXT)[0]
     hard = extract._hard_hits(extract._judge_candidate(
         grounding.model_dump(by_alias=True, mode='json'), None,
@@ -884,21 +891,21 @@ def require_approved(ctx: RunContext, *, require_acceptance: bool = True) -> Non
     if not store.exists(STAGE2_BLUEPRINT_CHARACTER_PROJECTION):
         raise UpstreamMissing(
             f'{STAGE2_BLUEPRINT_CHARACTER_PROJECTION} 不在盘上；'
-            'Stage4 不能让 Blueprint 拿一份未绑当前 global 的旧称名表过门',
-            hint='stage2.global --renormalize（0 LLM）重建称名投影')
+            'Stage4 不能让 Blueprint 拿一份未绑当前人物的旧称名表过门',
+            hint='stage2.characters --revalidate --actor <id> --reason <why>（0 LLM）重建称名投影')
     projection_freshness = store.freshness(
         STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
     if projection_freshness.state == 'stale':
         raise UpstreamStale(
             f'{STAGE2_BLUEPRINT_CHARACTER_PROJECTION} 已不是当前最新 '
-            'global + MainText 的确定性投影；拒绝让旧 Blueprint 过门',
-            hint='stage2.global --renormalize（0 LLM）重建称名投影')
+            'characters + MainText 的确定性投影；拒绝让旧 Blueprint 过门',
+            hint='stage2.characters --revalidate --actor <id> --reason <why>（0 LLM）重建称名投影')
     if projection_freshness.state != 'fresh':
         raise UpstreamUnproven(
             f'{STAGE2_BLUEPRINT_CHARACTER_PROJECTION} 证明不了自己来自当前'
-            f'最新 global + MainText（{projection_freshness.state}/'
+            f'最新 characters + MainText（{projection_freshness.state}/'
             f'{projection_freshness.reason}）',
-            hint='stage2.global --renormalize（0 LLM）重建称名投影')
+            hint='stage2.characters --revalidate --actor <id> --reason <why>（0 LLM）重建称名投影')
 
     blueprint_invalid = paths.invalid_of(STAGE2_CHAPTER_BLUEPRINTS)
     if (not store.exists(STAGE2_CHAPTER_BLUEPRINTS)
@@ -942,3 +949,5 @@ def require_approved(ctx: RunContext, *, require_acceptance: bool = True) -> Non
         from novel.orchestrator.approvals import require_stage2_node_accepted
         require_stage2_node_accepted(
             ctx.novel_dir.parent, ctx.sid, 'stage2.blueprint')
+        from novel.stages.stage2.knowledge_links import require_current
+        require_current(ctx)

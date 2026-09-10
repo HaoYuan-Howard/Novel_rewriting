@@ -87,6 +87,18 @@ DeepSeek base URL 后继续复用它的模型回退、tokenizer、thinking wire 
 | `commander` | `AgentProfile` | **是** | 全程指挥、人审代批与 skill 接入的 agent 身份；Commander 本身不走 legacy API | **契·码** |
 | `executor_default` | `ExecutorBackend` | **是** | 所有未覆盖付费 executor 节点的默认 backend | **契·码** |
 | `executor_overrides` | `{node: ExecutorBackend}` | 否；默认 `{}` | 只写逐节点差异；键严格属于 `AGENT_EXECUTOR_NODES`。stage 名、代码节点与退役节点一律拒绝 | **契·码** |
+| `concurrency` | `PipelineConcurrency` | 否 | 显式冻结逐节点并发与整书、同根供应商总上限；未配置时序列化省略，保留既有 profiles 的字节身份 | **契·码** |
+
+`PipelineConcurrency.node_overrides` 只接受 `PIPELINE_PARALLEL_NODES` 中的节点和
+`PIPELINE_CONCURRENCY_TRIALS` 档位。默认逐节点并发为 4，显式对照可选 6/8；其他节点保持原配置。
+`per_book` 默认 4，`per_provider` 默认 8，均为 1～32 的整数。两个总槽作用于同一输出根的实际
+Executor/Commander 调用；不把不同输出根或不同供应商混算。节点并发提高后仍受两个总槽约束。
+服务端 capability 发布节点、档位、默认与范围；设置、preview/start、batch、历史和原配置续跑
+完整保留这一字段。旧 profiles 缺失该字段不回填历史测量值。
+
+总槽由 `novel/model_slots.py::pipeline_model_slot` 在实际 wire 前取得；同书等待者归还已取得的
+供应商槽，取消或配置拒绝不产生模型费用。模型单次 latency 从取得槽后计时，排队仍属于节点墙钟。
+容量变更先占有全部旧槽，尚有活跃 wire 时拒绝；配置损坏不按默认重建。锁持有者退出后由 OS 释放。
 
 `None` / `null` 只服务旧历史与迁移期尚未指定的请求，**不表示 capability 数组第一项**。
 服务端 capability 的 `default_profiles=null` 表示当前还没有通过 TODO-45 真实整书验收的**产品预置
@@ -107,7 +119,7 @@ DeepSeek base URL 后继续复用它的模型回退、tokenizer、thinking wire 
 
 Agent 矩阵之外的 direct 组合仍关闭式拒绝。Legacy backend 则按 provider registry 发布的精确
 model/node 能力关闭式校验：DeepSeek V4 Flash 不承接契约钉死 Pro 的 `stage4.design`、`stage4.plan`、
-`stage6.semantic`，必须改用 Pro 或逐节点覆盖；DeepSeek V4 Pro 承接现役八个 executor 节点。
+`stage6.semantic`，必须改用 Pro 或逐节点覆盖；DeepSeek V4 Pro 承接现役九个 executor 节点。
 
 两种 backend 共用一条身份链：`preview/start` → `Step/JobStart` → `argv` → `CLI` → `RunContext` →
 按 `kind` 选择的 executor。Agent registry 在 argv builder 边界物化 `execution_mode`；Legacy registry
@@ -451,10 +463,11 @@ secret/relation/world-rule UNVER；后者仍是 disclosure-ready 而不是 PASS�
 连续审阅，局部返修的 surface 或候选变化不重置预算，也不强制换审阅者。Stage4 A/B 分别隔离，
 Stage6 双盲 judge 分别隔离；这些业务边界不因共用基础设施而合并。
 
-Stage2 严格执行 Global E → Global C 接受 → 逐章并发 Blueprint E → 独立 Blueprint C 全章交叉接受。
+Stage2 严格执行 Characters E → Global E → Global C 接受 → 逐章并发 Blueprint E → 独立 Blueprint C 交叉接受。
 Global 必须正式有效、逐项审阅 generation-safe 且节点接受 current；`.INVALID` 与称名投影不能释放
-Blueprint。Global E 与每章 Blueprint E 各最多 4 次内容调用；Global C 与整书 Blueprint C 各最多
-4 次，包含首次、格式和内容纠错。不存在预审、额外 Global 终审或按序号保留的第四席。
+Blueprint。Characters E、Global E、每章 Blueprint E、Global C 与整书 Blueprint C 各有独立工作单元，
+内容额度为基础 4 次加已生效的不可变人工追加，包含首次、格式和内容纠错。
+不存在人物 Commander、预审、额外 Global 终审或按序号保留的第四席。
 
 网络 attempts 是每次内容请求的独立有界预算，逐次记成本与会话事实；模型纠错仍占角色内容额度。
 E/C 的工作单元不含 run/epoch/candidate/provider session，重启或换会话不补发。确定性 typed 提交
@@ -504,17 +517,21 @@ unknown 停止并保留 action 供零模型重放。
 `relation_set_complete`）。新打开项才使用默认证明。typed loader 拒绝或 canonical action exit 2 时，
 Supervisor 在仍有预算且可修复时把完整紧凑包与确定性拒因交回同一工作单元继续修订，
 物理会话按当前 schema/profile 续用或重建；相同请求字节且无进展立即停。新内容调用计入该 Commander
-最多 4 次总额，不另发纠错轮次。权限失败、未知提交结果与明确 uncertain/stop 分别保留原因，
+基础额度与已生效人工追加的累计总额，不另发纠错轮次。权限失败、未知提交结果与明确 uncertain/stop 分别保留原因，
 不能当普通模型格式错误重试；已保存决定的补提交不占模型额度。预算、授权、pause/stop、current blocker
 与 admission 均关闭式生效，surface 自变不能重开预算或制造循环。已经 `pipeline_complete` 而
 delivery 终验未闭合时只运行确定性 finalizer/verify，不追加无关模型 turn；next 自身不可读则降 unknown。
 
-Stage2 下一次真跑验收不从日志文案猜：`tools/workflow_metrics.py --run-id` 以
-`novel-workflow-metrics-v1` 报告把 Blueprint 每章
-`latency_ms`、Commander `activity`、exact execution beacon、formal adoption、生产 check 与 Global
-generation-safe 分格输出；`tools/stage2_acceptance.py` 只汇总至少五次不同 run_id 的冷缓存 clean
-报告。每轮人工抽查少于 5 个章序或缺记录时质量固定为 `unver`；30 分钟以每次 Stage2 首 start 到最后 terminal 的 max 判，
-“显著提速”只有调用方在跑前显式给出历史 baseline 与最小改善百分比才可判。
+当前性能取证不从日志文案猜：`tools/workflow_metrics.py --run-id` 输出
+`novel-workflow-metrics-v3`，以同一 `performance` 聚合器分别给出 Stage2/4/5 E/C、
+内容轮与网络尝试、缓存、历史采用和区间并集。Stage2 辅助段计入人物 producer，展示现役
+两位 Commander 与三份正式载体，不再使用预审重叠或旧两节点墙钟。
+`performance.work_unit_ledger_versions` 显示观察到的运行账版本。统计工具只读解析冻结基线 v1，
+现役 v2 仍按当前 schema 校验；混合版本或损坏账的内容阶段保持未知，不计算对应节约。
+该统计面不迁移旧账，不提供生产恢复、额度或写入权限。
+真实验收只由 `tools/workflow_pairs.py` 按 `docs/PERFORMANCE_EXPERIMENTS.md` 的三书九组
+清单、冻结配置与具名质量收据收口；失败、未完成和未知保留在分母。旧五轮工具只消费既存
+v2 历史报告，不能接收当前报告或恢复其已退出活动目标的质量/速度结论。
 
 ---
 
@@ -908,7 +925,7 @@ approval 形状携带 `surface / payload / review_token`，node 形状携带
 | 字段 | 类型 | 新 Commander 决定 | 含义 |
 |---|---|---|---|
 | `work_unit_id` | 64 位 SHA-256 | **是** | 固定 task/node/role/scope 的身份，scope 由 NODES 登记；candidate/run/session 不参与 |
-| `work_unit_turn_id` | 非空字符串 | **是** | 同一角色单元具体内容请求；最多 4 次，不因重启变化 |
+| `work_unit_turn_id` | 非空字符串 | **是** | 同一角色单元具体内容请求；占用基础额度与已生效人工追加的累计总额，不因重启变化 |
 | `reviewer_session_run_id` | 非空字符串 | **是** | 原 Commander logical session，恢复新 parent 不重签原成本 |
 | `reviewer_seat_turn_id` | 非空字符串 | **是** | 兼容字段名，现役值等于 `work_unit_turn_id`，不引用旧席位预算 |
 | `provider_response_sha256` | 64 位 SHA-256 | **是** | 原始模型回答的规范字节摘要，不以 assembler 展开的 request SHA 代替 |
@@ -939,12 +956,12 @@ queue 在 stale Review、closure 与新 Reviewer 前先处理 request，创建�
 
 #### 冻结旧工作流记录（只读）
 
-`Stage2PrereviewRecord`、`stage2-prereview-<sha>.json`、`Stage2ReviewLedger` 的
+旧 `stage2-prereview-<sha>.json` 与 `Stage2ReviewLedger` 的
 `stage2/global_review_ledgers/<sha>.json`、`ReviewerSeatLedger` 的
 `reviewer_seats/<blocker>/<business_sha256>.json` 仅解释冻结旧工作流。旧协议曾使用预审、四席/前三席
 订正、第四席终审和按业务换席；新工作单元不读取它们来发预算、不新建它们、不通过归档开启空账。
 旧 `workpack_sha256 / source_sha256 / main_text_sha256 / progress_sha256 / blocker_count` 字段组、
-`purpose=prereview`、`surface=stage2_final_review` 与旧 finish/complete 仅保留历史解码意义。
+`purpose=prereview` 仅保留历史账解码意义；预审记录、终审 action、旧 finish/complete 与重开命令均无现役写口。
 
 旧 `protocol_recovery` 的 `codex-recovered-transport-notice-v1`、
 `codex-redundant-option-suffix-v1` 以及 `schema_recovery_response={response, exact_request}`
@@ -955,10 +972,11 @@ queue 在 stale Review、closure 与新 Reviewer 前先处理 request，创建�
 #### 当前 Stage2 producer 提交收敛
 
 reviewed `stage2.global --apply-edit` 在 canonical 子进程内还有更晚的 producer
-事实。Supervisor 每次读 planner 前都先用 `ReviewerActionRecord` 对账：精确命中
-terminal `global_edit_failure.json` 时，把 canonical 拒因绑回原 logical session/provider
-回答 SHA，成功后才退休 record；命中 `global_edit_commit.json: committed` 时只退休
-已落地 record。若 input journal、`canonical_pending` 或 apply-edit formal journal 仍为
+事实。Supervisor 每次读 planner 前都先用 `ReviewerActionRecord` 及当前工作单元对账。
+原回答、typed 动作、成本和会话证明、已提交产物及当前节点接受完整闭合后，先标记原 turn
+已采用，再退休活动 record；删除中断仍可据已采用证明免费补尾。失败 turn 保留给当前
+Reviewer 的拒绝恢复，不把终态 sidecar 或 generic revalidate 误认成已采用动作。
+若 input journal、`canonical_pending` 或 apply-edit formal journal 仍为
 prepared，必须优先交给 `recovery:stage2-global-reviewed-edit-commit` 的确定性 Executor，且只允许
 exact `stage2.global --apply-edit stage2/global_edit.json`；首次 canonical 文件尚未出现、只有 input
 WAL 时，permit 也不伪造一份 external-input 字节身份，由 producer 从 WAL target 物化并收敛。
@@ -1027,8 +1045,8 @@ trim/report/committed，不造新轮。公开读视图只认 committed，同一 
 因此 `stage7.assemble` 写回 `book_txt` 交付账不会自废 s7，而决策面、actor/reason/origin
 或 subject hash 变化仍会失效；读取还必须先证明 approval 存在且 subject 与当前决策面一致。
 当前工作流只在新 clean base 写入 v7 记录；审批变更和新写作业的公开入口先验证当前 workflow manifest，
-不能用 reset/backfill 把旧 base 收进新协议。旧 v6 等解码与历史 backfill 分支只解释冻结旧代码的记录，
-不授权当前代码迁移或补签旧审批；旧版本、旧 token、旧 Binding 不手工补字段冒充现役来源。
+不能用 reset/backfill 把旧 base 收进新协议。旧 v1～v6 审批解码与迁移分支已删除；
+HTTP、CLI 及服务补录只接受当前 v7，缺版本、未来版本和损坏均拒绝且保留原字节；旧版本、旧 token、旧 Binding 不手工补字段冒充现役来源。
 普通 GET、事件观测与历史读取保持只读，损坏或证据不够保持 unknown。当前 Stage4 必须先有真实 A 审阅，
 由 B producer 产出当前 Binding/Plan，再经独立 B 结构审阅；不得从既有产物或付费记录倒造审阅。
 队列在一把锁内读取 current 结构裁决、
@@ -1172,32 +1190,39 @@ artifact adoption → committed` 收口；foreign prepared 序号不能被 legac
 匿名标签闭合、合并、当前输入与代码漂移检查、最终交付验证都由代码承担，agent 自述或进程成功不能
 替代。checkpoint 与 journal 都是
 `<base>/_service/runs/<sid>/stage6/<run_id>/` 内部 sidecar，不是正式 artifact、缓存或
-公开 API 类型。旧书内 `_stage6_runs` 只读兼容，不再接受新 checkpoint/journal。
+公开 API 类型。旧书内 `_stage6_runs` 已退役；不再将其 run、checkpoint 或 journal 复制到 service 根。
+当前 Stage6 run 必须显式保存完整 `experiment_arm`；缺字段或 null 的旧记录保持未知，
+不能补成默认实验臂后继续采用。新运行默认仍使用 0 ms，两侧 checkpoint 恢复须闭合同一冻结实验配置。
 
-#### 7.0c Phase5 executor checkpoint / commit journal —— 六个 producer 共用一套 acceptance
+#### 7.0c Phase5 executor checkpoint / commit journal —— 现役 producer 共用一套 acceptance
+
+所有运行记录的读取、历史采用和免费恢复先经 `novel/runtime_layout.py::stage_run_roots`
+检查布局。当前只有 `<base>/_service/runs/<sid>/stageN/` 一条来源；旧书内
+`_stage2_runs` / `_stage4_runs` / `_stage5_runs` / `_stage6_runs` /
+`_stage7_runs` 即使为空、不可读或损坏，也明确拒绝，不能当作无历史而重新付费。
+当前 run、checkpoint、prepared、Reviewer rewrite journal 和恢复 manifest 不搬运旧字节；
+原 service 根中的有效尾窗与同工作单元累计账仍可按原身份免费续完。旧代码与整根归档配对读取。
 
 Stage2 Global、Stage4 design/plan、Stage5 write、Stage6 hook 与 Stage7 rename 不另造 acceptance
 协议；都复用
 `novel/llm/agent_runs.py` 的 `node-executor/v1`、append-only revision checkpoint 与
 `prepared / committed` journal。各薄 adapter 只登记路径、purpose、recovery policy、session isolation、
-允许触碰的正式/伴生路径和同书 foreign prepared 排斥：Global 是 `stage2-global-v1` 且 per-node；
-Stage4 分别是 `stage4-design-v1` / `stage4-plan-v1` 且 per-node；Stage5 是 `stage5-write-v1` 且
+允许触碰的正式/伴生路径和同书 foreign prepared 排斥：Global 是 `stage2-knowledge-v2` 且 per-node；
+Stage4 分别是 `stage4-design-v1` / `stage4-plan-v1` 且 per-node；Stage5 是 `stage5-write-v2` 且
 per-chapter；Hook 是 `stage6-hook-v1`、Rename 是 `stage7-rename-v1`，后二者均 per-node。
 
-Global 的 specialized state 仍归同一通用 checkpoint/journal core：每个 accepted turn 保存完整合并
-candidate、turn kind、可选 patch base、MainText SHA 及 candidate/table 双 SHA 与
-`accepted_role_patch_count`。fresh/restored 共用同一个 role patch reducer；纯 `role_leaks_fate` 才开放
-四字段、双 SHA、精确人物集合的 `role_fate_patch`，最多两次 accepted，开始后 sticky，禁止 full
-candidate re-entry。dynamic-validator 拒稿 custody 按当轮 `expected_turn_kind + base + accepted count`
-封存并与 latest checkpoint 对证；人工 replacement 必须重放同一 validator/applicator。正式尾窗只在
-同书所有权内走 `prepared → Global/review/projection/INVALID touched paths → typed readback + freshness
-→ adoption → committed`；foreign prepared 先拒，新 run 不得覆盖 kill 窗口。
+Global 每个 accepted turn 保存完整 Knowledge candidate、MainText 身份和候选表身份；静态人物由
+独立 `stage2.characters` 完整候选负责。旧 role/fate 窄修信封、accepted patch 计数与编译入口退役。
+两个现役 owner 分别遵守同一工作单元累计额度，恢复不能换 run 清零。dynamic-validator 拒稿先封存
+精确当轮响应与验证身份；人工 replacement 必须重放当前同一 validator。正式尾窗只在同书所有权内
+走 `prepared → 所属正式/伴生产物 → typed readback + freshness → adoption → committed`；foreign
+prepared 先拒，新 run 不得覆盖中断窗口。历史窄修审计行保留只读，不能据此产生现役候选或追加额度。
 
 所有 executor 共用 `agent_json_schema` 生成的 provider wire，不按 Claude/Codex 分叉 schema。该 wire
 限制为两端都能严格校验的子集：根是 object，每层 object 关闭动态属性且全部字段必填；Pydantic 的
 `discriminator/default` 注解被移除，`oneOf` 等价归一为 `anyOf`，单值 `const` 等价归一为单元素
 `enum`。业务上必须保留的动态键映射不伪装成
-开放 object：Stage2 的人物表/role-fate 表与 Stage7 的 surname map 在线上改为显式 key/value 行数组，
+开放 object：Stage2 的人物表/必要经历表与 Stage7 的 surname map 在线上改为显式 key/value 行数组，
 验收时拒绝重复键并确定性还原成原有 dict。这个适配只存在于 agent wire；正式 artifact、内部 typed
 对象与新 checkpoint 的 response payload 都不改形，恢复后仍重跑当前 schema/HARD。旧 checkpoint
 字节不迁移；其旧 schema SHA 与当前 wire 不同，因此 live restore 关闭式失败、由新 run 重建。

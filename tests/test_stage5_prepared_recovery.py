@@ -231,18 +231,7 @@ def _typed_chapter(
             request_fingerprint=SHA,
             prepared_checkpoint_adoption=adoption,
         )
-    return Chapter(
-        output_ordinal=2,
-        from_source_ordinals=[2],
-        source_chars=777,
-        budget_chars=900,
-        chars=len(text.strip()),
-        overlap_excl_verbatim=None,
-        segments=[ChapterSegment(slot='s01', text=text)],
-        warns=['合成读数'],
-        errs=None,
-        _provenance=provenance,
-    )
+    return Chapter(output_ordinal=2, segments=[ChapterSegment(slot='s01', text=text)], _provenance=provenance)
 
 
 def _committed_journal_for(
@@ -625,7 +614,9 @@ def test_workpack_builder_is_read_only_and_covers_every_unresolved_prepared(
     from novel.stages.stage5 import write
 
     book = tmp_path / 'prepared工作包_2007780338055790990'
-    source_marker = book / '_stage5_runs' / SOURCE_RUN_ID / 'source.marker'
+    book.mkdir()
+    source_marker = (stage5_runs.paths.service_stage_runs_dir(book, 'stage5')
+                     / SOURCE_RUN_ID / 'source.marker')
     source_marker.parent.mkdir(parents=True)
     source_marker.write_bytes(b'immutable-source-sidecar')
     before = source_marker.read_bytes()
@@ -731,10 +722,9 @@ def test_recovery_producer_authorizes_every_chapter_and_stays_zero_wire(
     from novel.stages.stage5 import write
 
     book = tmp_path / 'prepared整书恢复_2007780338055790990'
-    source_marker = (
-        book / stage5_runs.paths.STAGE5_RUNS_DIRNAME
-        / SOURCE_RUN_ID / 'source.marker'
-    )
+    book.mkdir()
+    source_marker = (stage5_runs.paths.service_stage_runs_dir(book, 'stage5')
+                     / SOURCE_RUN_ID / 'source.marker')
     source_marker.parent.mkdir(parents=True)
     source_marker.write_bytes(b'immutable-source-run-marker')
     source_before = source_marker.read_bytes()
@@ -1262,18 +1252,20 @@ def test_committed_recovery_lineage_survives_retain_recheck_and_archived_rewrite
     assert not stage5_runs._committed_recovery_closes_live_now(
         later_ctx, journal, source_record)
 
-    # recheck：沿用来源账原位刷新，绝不会留下最初 recovery payload 的归档副本。
-    rechecked = recovered.model_copy(update={'warns': ['当前判据重算后的读数']})
+    # recheck：v3 不再写派生副本，原恢复主体原样保留，也不制造历史轮次。
+    rechecked = recovered.model_copy(deep=True)
+    before_recheck = store.path(journal.primary_artifact).read_bytes()
     store.refresh_formal(journal.primary_artifact, rechecked)
+    assert store.path(journal.primary_artifact).read_bytes() == before_recheck
     rounds_dir = store.path('stage5/_rounds')
     assert not rounds_dir.exists() or not list(rounds_dir.glob('ch02.r*.json'))
     assert agent_runs.canonical_sha256(
         rechecked.model_dump(by_alias=True, mode='json')) \
-        != journal.primary_payload_sha256
+        == journal.primary_payload_sha256
     assert stage5_runs._committed_recovery_closes_live(
         later_ctx, journal, source_record)
 
-    # rewrite：归档的是 rechecked bytes（不是 journal 原稿），但 typed adoption 仍闭合。
+    # rewrite：归档原样保留的 recovery bytes，typed adoption 仍须闭合。
     rewritten = _typed_chapter(
         text='后续合法人工改写', round_no=2, adoption=None,
         root_clean_sha1=recovery_ctx.root_clean_sha1)
@@ -1284,7 +1276,7 @@ def test_committed_recovery_lineage_survives_retain_recheck_and_archived_rewrite
     assert archived.provenance.prepared_checkpoint_adoption == adoption
     assert agent_runs.canonical_sha256(
         archived.model_dump(by_alias=True, mode='json')) \
-        != journal.primary_payload_sha256
+        == journal.primary_payload_sha256
     assert stage5_runs._committed_recovery_closes_live(
         later_ctx, journal, source_record)
 

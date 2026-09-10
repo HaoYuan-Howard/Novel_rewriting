@@ -125,7 +125,6 @@ def schema_run(request, monkeypatch):
         else (queue.st.RESUME_RUN, 'B 等待重建')))
     monkeypatch.setattr(queue.st, 'stage2_global_projection_blocked', lambda _ov: False)
     monkeypatch.setattr(queue.st, 'stage2_reviewed_edit_correction_needed', lambda *_a: False)
-    monkeypatch.setattr(queue.st, 'stage2_frozen_v6_subject_validated', lambda _ov: False)
     monkeypatch.setattr(queue.approvals, 'require_stage2_review', lambda *_a: None)
 
     def next_action(_base, _sid, *, code):

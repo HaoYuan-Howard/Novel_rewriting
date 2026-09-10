@@ -128,7 +128,8 @@ def test_current_corpus_tracks_both_paid_stage4_phases_and_their_outputs():
     assert tuple(
         node for node in CURRENT_CORPUS_PAID_NODES if NODES[node].stage == 'stage4'
     ) == ('stage4.design', 'stage4.plan')
-    assert len(CURRENT_CORPUS_BOOKS) * len(CURRENT_CORPUS_PAID_NODES) == 16
+    assert len(CURRENT_CORPUS_BOOKS) * len(CURRENT_CORPUS_PAID_NODES) == 18
+    assert ARTIFACT_PATHS['stage2.characters'] in required_current_corpus_artifacts(17)
 
     stage4_paid_outputs = {
         rel

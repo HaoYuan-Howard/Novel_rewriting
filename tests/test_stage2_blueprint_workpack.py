@@ -105,7 +105,7 @@ def _fact(
 
 
 def _beat(
-    beat_id: str, start: int, end: int, *, hinge: str,
+    beat_id: str, start: int, end: int, *, hinge: str, fact_id: str,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         beat_id=beat_id,
@@ -114,8 +114,8 @@ def _beat(
         place='城门',
         present_char_ids=['char_001'],
         hinges=[SimpleNamespace(
-            hinge_id='h' + beat_id[1:].replace('_', '') + '0',
-            kind='因果前提', source=_source(hinge))],
+            hinge_id='h' + fact_id[1:], source_fact_refs=[fact_id],
+            kind='因果前提', dialogue=None, literal=None, source=_source(hinge))],
     )
 
 
@@ -124,9 +124,9 @@ def _book_subjects():
     suffix = '甲随后进城。'
     text1 = prefix + ('过渡' * 20) + suffix
     text2 = '乙关上了门。'
-    b11 = _beat('b01_01', 0, len(prefix), hinge='门外')
+    b11 = _beat('b01_01', 0, len(prefix), hinge='门外', fact_id='f01_001')
     b12 = _beat(
-        'b01_02', len(text1) - len(suffix), len(text1), hinge='进城')
+        'b01_02', len(text1) - len(suffix), len(text1), hinge='进城', fact_id='f01_002')
     f11 = _fact('f01_001', '甲已在门外', 'context', b11.beat_id)
     f12 = _fact('f01_002', '甲进城', 'land', b12.beat_id)
     bp1 = SimpleNamespace(
@@ -162,7 +162,7 @@ def _book_subjects():
             focalizer_char_id='char_001', pronoun_surfaces=[])],
     )
 
-    b21 = _beat('b02_01', 0, len(text2), hinge='关上')
+    b21 = _beat('b02_01', 0, len(text2), hinge='关上', fact_id='f02_001')
     f21 = _fact('f02_001', '乙关门', 'land', b21.beat_id,
                 participant='char_002')
     bp2 = SimpleNamespace(
@@ -239,6 +239,14 @@ class _Store:
 
 def _install(monkeypatch, store: _Store, report: CheckReport):
     calls: list[object] = []
+    from contracts.schema.knowledge_links import KnowledgeLinkScope
+    from novel.stages.stage2 import knowledge_links
+    # 本模块测试阅读投影；知识关联由独立真实 store 链路测试覆盖。
+    monkeypatch.setattr(knowledge_links, 'read_scope', lambda *_args, **_kwargs: KnowledgeLinkScope(
+        scope_sha256='e' * 64, main_text_sha256=store.main_sha,
+        knowledge_sha256='c' * 64, blueprint_sha256=store.blueprint_sha, obligations=[]))
+    monkeypatch.setattr(approvals, 'knowledge_link_history', lambda *_args: [])
+    monkeypatch.setattr(approvals, 'stage2_review_history', lambda *_args: [])
     monkeypatch.setattr(approvals, 'stage2_cross_review_scope', lambda *_args: None)
     monkeypatch.setattr(
         view.paths, 'resolve_novel_dir',
@@ -257,7 +265,7 @@ def _install(monkeypatch, store: _Store, report: CheckReport):
     monkeypatch.setattr(extract, 'run_check_only', check)
     from novel.stages.stage2 import global_review
     monkeypatch.setattr(global_review, 'review_workpack', lambda *_args, **_kwargs: {
-        'scope': 'all', 'rows': [], 'source_sha256': 'c' * 64,
+        'scope': 'all', 'items': [], 'source_sha256': 'c' * 64,
         'main_text_chapters': [],
     })
     return calls
@@ -338,7 +346,7 @@ def test_workpack_is_complete_exception_first_and_semantic_not_id_first(
     assert len(calls) == 2, '首尾重算生产 CheckReport 才能拒绝混合快照'
     assert all(ctx.readonly for ctx in calls), '工作包必须只读，不能借复检写盘'
     assert pack.read_only is True and pack.auto_decisions is False
-    assert pack.review_contract_version == 'stage2-blueprint-review-v5'
+    assert pack.review_contract_version == 'stage2-blueprint-review-v7'
     assert pack.subject_sha256 == view._canonical_sha256(
         blueprints.model_dump(exclude={'provenance'}))
     assert pack.review_token == 'bpr4_' + pack.binding_sha256
@@ -410,6 +418,8 @@ def test_workpack_is_complete_exception_first_and_semantic_not_id_first(
     unsigned.pop('binding_sha256')
     unsigned.pop('review_token')
     unsigned.pop('review_delta')
+    unsigned.pop('review_coverage')
+    unsigned['knowledge_links'] = {'scope': pack.knowledge_links.scope.model_dump(mode='json')}
     assert pack.binding_sha256 == view._canonical_sha256(unsigned)
 
 
@@ -471,7 +481,11 @@ def test_production_checks_drive_multichapter_anomaly_priority_in_workpack(
     """真实 checks→CheckReport→workpack，不用手造带 output_ordinal 的 Finding。"""
     main_raw = production_main_text()
     blueprint_raw = production_blueprints()
+    from contracts.schema.stage2 import Hinge
     for chapter in blueprint_raw['blueprints']:
+        for beat in chapter['beats']:
+            beat['hinges'] = [Hinge.model_validate(row).model_dump(mode='json')
+                              for row in beat['hinges']]
         if chapter['chapter_ordinal'] in (1, 3):
             for beat in chapter['beats']:
                 beat['hinges'] = []

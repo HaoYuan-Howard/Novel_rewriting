@@ -44,9 +44,8 @@ from pydantic import BaseModel, ValidationError
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_CHARACTERS,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
-    RETIRED_STAGE3_STYLE_GROUNDING,
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
     STAGE7_NAME_MAP,
@@ -56,14 +55,10 @@ from contracts.schema import (
     artifact_spec, decode_artifact, encode_artifact,
 )
 from contracts.schema.stage4 import EvidenceBinding
-from contracts.schema.legacy_stage3 import LegacyStyleGrounding, decode_legacy_stage3_v2
-from contracts.schema.legacy_stage2 import (
-    FrozenChapterBlueprintsV6, decode_frozen_stage2_blueprints_v6,
-)
 from novel import paths, prov
 from novel.consumption import (
-    canonical_rel, context_inputs_for, legacy_stage3_projection_for,
-    frozen_v6_stage4_design_blueprints, producer_node, project_consumed,
+    canonical_rel, context_inputs_for,
+    producer_node, project_consumed,
     projection_for,
 )
 from novel.errors import (
@@ -88,6 +83,7 @@ REVALIDATION_REFERENCE_VERSION = 1
 #: 否则 Stage2 ``--revalidate`` 虽然提升了新 SourceSpan，正式 provenance
 #: 却会被旧 ``evidence_locator_failures`` 再次判红。
 _REVALIDATION_DERIVED_PROVENANCE_FIELDS = {
+    STAGE2_CHARACTERS: frozenset({'evidence_locator_failures'}),
     STAGE2_GLOBAL_GROUNDING: frozenset({
         'setup_chapters_pruned', 'evidence_locator_failures',
     }),
@@ -287,14 +283,9 @@ def build_revalidation_audit(
 ) -> RevalidationAudit:
     """铸一份「基线 → 候选」的不可变对证账。**全仓唯一的构造口。**
 
-    两种消费方共用它：`.INVALID` 提升（改写一份已落盘的正式产物）与
-    `stage4.design --adopt-rejected`（采用一份从未落过盘的封存拒稿）。两者的
-    「基线」是不同的东西，但**要回答的问题一模一样**：字节变没变、逻辑内容变没变、
-    变在哪几个 JSON pointer 上。各铸一份的下场是两处对「变没变」的判定慢慢分家。
-
-    ⚠ `edited_by_human` 与 `content_changed` 同值不是笔误：只有人能改这两条路上的
-    候选（提升前的 live `.INVALID`、隔离区里那份固定 `candidate.json`），
-    所以逻辑内容变了就等于人改过。
+    当前用于 .INVALID 提升：基线是已落盘产物的不可变快照。它回答字节、
+    逻辑内容是否变化及具体 JSON pointer，不根据展示读数推断人工修改。
+    edited_by_human 与 content_changed 同值：此路只允许人修改待提升的候选。
     """
     baseline_canonical = hashlib.sha256(
         _canonical_json_bytes(baseline_payload)).hexdigest()
@@ -333,6 +324,8 @@ class ArtifactStore:
     """一次跑的读写口。**它只由 `RunContext` 造**，因为记账要落在那个实例上。"""
 
     def __init__(self, ctx: RunContext) -> None:
+        from novel.output_root import require_active
+        require_active(ctx.novel_dir.resolve().parent)
         if _READONLY_SNAPSHOT_MEMO.get() is not None:
             if not ctx.readonly:
                 raise ValueError(
@@ -403,6 +396,31 @@ class ArtifactStore:
             consumed=self._consumed_fingerprint(self.ctx.node, key, data),
         ))
         return obj, hashlib.sha256(raw).hexdigest()
+
+    @classmethod
+    def decode_snapshot(cls, model: type[M], rel: str, raw: bytes) -> M:
+        """经现役版本与 schema 解码冻结字节；不宣称盘上来源或消费边。"""
+        paths.check_rel_deep(rel)
+        return cls._validate_payload(model, rel, cls._loads(rel, raw))[0]
+
+    @contextmanager
+    def preview_dependency(self, rel: str, artifact: BaseModel):
+        """只读预览两相 bundle 内尚未落盘的依赖边，离开后不污染真实消费账。
+
+        只接受当前 schema 的完整 typed 对象，经同一 renderer/decoder/消费投影
+        重建预期边。调用方仍须独立证明 sealed 对象来源；此口没有写入能力。
+        """
+        if not self.ctx.readonly:
+            raise ProvenanceRefused('预览依赖只允许只读上下文，不能用于正式产地记账')
+        key = paths.input_key(rel)
+        raw = self._render(rel, artifact)
+        obj, data = self._validate_payload(type(artifact), rel, self._loads(rel, raw))
+        with self.ctx.validation_reads():
+            self._record_artifact_root(rel, obj)
+            self.ctx.record_edge(key, InputEdge(
+                file=prov.fingerprint_bytes(raw),
+                consumed=self._consumed_fingerprint(self.ctx.node, key, data)))
+            yield obj
 
     def read_judged(self, model: type[M], rel: str, *,
                     project: Callable[[Any], Any] | None = None,
@@ -567,46 +585,6 @@ class ArtifactStore:
         marker = data.get('_schema_version')
         return marker if isinstance(marker, int) and not isinstance(marker, bool) else None
 
-    def read_legacy_stage3_v2(self, rel: str) -> LegacyStyleGrounding:
-        """通过唯一 JSON 读路解码退役 Stage3 v2，不把它注册成当前 artifact。"""
-        data = self._loads(rel, self._read_bytes(rel))
-        try:
-            return decode_legacy_stage3_v2(data)
-        except (ValidationError, ValueError) as exc:
-            raise ArtifactUnreadable(f'{rel} 不是可读的冻结 v2：{exc}') from exc
-
-    def read_frozen_stage2_blueprints_v6(
-        self,
-        rel: str = STAGE2_CHAPTER_BLUEPRINTS,
-        *,
-        record_stage4_design_edge: bool = False,
-    ) -> tuple[FrozenChapterBlueprintsV6, dict[str, Any], str]:
-        """只读一份精确 v6 Blueprint；不把它升级成活动 ``ChapterBlueprints``。
-
-        唯一允许记普通来源边的消费方是 ``stage4.design`` 的**零 wire 完整章人工
-        替换**。它沿用 v6 当时的 consumed 投影，让新的人工作品仍绑定原始 v6
-        真相；普通 design/repair/replan 不调用本口，继续由 current decoder 拒绝。
-        """
-        if rel != STAGE2_CHAPTER_BLUEPRINTS:
-            raise ArtifactUnreadable(
-                '冻结 Stage2 v6 reader 只接受 canonical chapter_blueprints 路径')
-        raw = self._read_bytes(rel)
-        data = self._loads(rel, raw)
-        try:
-            artifact, payload = decode_frozen_stage2_blueprints_v6(data)
-        except (ValidationError, ValueError) as exc:
-            raise ArtifactUnreadable(str(exc)) from exc
-        self._record_artifact_root(rel, artifact)
-        if record_stage4_design_edge:
-            if self.ctx.node != 'stage4.design':
-                raise ArtifactUnreadable(
-                    '冻结 v6 来源边只允许由 stage4.design 的零 wire human edit 记录')
-            key = paths.input_key(rel)
-            consumed = prov.projection_fingerprint(
-                frozen_v6_stage4_design_blueprints(payload))
-            self.ctx.record_edge(key, InputEdge(
-                file=prov.fingerprint_bytes(raw), consumed=consumed))
-        return artifact, payload, hashlib.sha256(raw).hexdigest()
 
     def read_external(self, model: type[M], contract_rel: str,
                       path: str | os.PathLike[str]) -> M:
@@ -1606,81 +1584,12 @@ class ArtifactStore:
             if block is not None and recorded is None:
                 recorded = {}                # 有来源账但没有 `inputs` ⇒ `no_inputs`，不是 `no_provenance`
         report = self.freshness_of_inputs(rel, recorded)
-        if canonical_rel(rel) == STAGE2_CHAPTER_BLUEPRINTS:
-            report = self._legacy_blueprint_inputs_freshness(recorded, report)
-        if (canonical_rel(rel) == STAGE4_BLIND_CANDIDATE
-                and rel == STAGE4_BLIND_CANDIDATE
-                and report.state == 'unknown'):
-            # 专用 frozen-v6 证明只在已有 Stage4A 主体上恢复历史 consumed 边；
-            # Blueprint producer 与 Stage4 paid 路仍走 current decoder，不会经此口。
-            try:
-                from novel.stages.stage2.frozen_v6 import (
-                    require_frozen_v6_stage4_subject,
-                )
-                frozen = require_frozen_v6_stage4_subject(self)
-            except (ArtifactUnreadable, UpstreamMissing, UpstreamStale,
-                    OSError, ValueError):
-                pass
-            else:
-                candidate_edge = (
-                    frozen.candidate.provenance.inputs or {}
-                ).get(paths.input_key(STAGE2_CHAPTER_BLUEPRINTS))
-                if candidate_edge is not None:
-                    now_consumed = prov.projection_fingerprint(
-                        frozen_v6_stage4_design_blueprints(
-                            frozen.blueprint_payload))
-                    edge = prov.EdgeVerdict(
-                        key=paths.input_key(STAGE2_CHAPTER_BLUEPRINTS),
-                        state='fresh', reason='match',
-                        recorded_file=candidate_edge.file,
-                        now_file=candidate_edge.file,
-                        recorded_consumed=candidate_edge.consumed,
-                        now_consumed=now_consumed,
-                    )
-                    return FreshnessReport('fresh', 'match', (edge,))
         if canonical_rel(rel) == STAGE4_EVIDENCE_BINDING:
             return self._stage4_binding_input_freshness(data, report)
         if canonical_rel(rel) == STAGE4_PLAN_CHAPTERS and isinstance(data, dict):
             return self._stage4_plan_phase_freshness(data, report)
         return report
 
-    def _legacy_blueprint_inputs_freshness(
-        self, recorded: object, ordinary: FreshnessReport,
-    ) -> FreshnessReport:
-        """把 current v6 Blueprint 的旧 ``{MainText, Global}`` 边标成免费恢复态。
-
-        这不是 stale：旧边并没有声明现役称名投影，因而不能证明其消费内容是否与
-        当前 projection 相同；也不是普通 unknown：只有这一格精确历史键形拥有
-        ``stage2.blueprint --renormalize`` 的零调用迁移语义。MainText 自身若已经
-        stale/unknown，仍保留普通结论，不能借兼容桥把真正的上游漂移洗掉。
-        """
-        if not isinstance(recorded, dict) or set(recorded) != {
-                STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING}:
-            return ordinary
-        by_key = {edge.key: edge for edge in ordinary.edges}
-        main_edge = by_key.get(STAGE1_MAIN_TEXT)
-        global_edge = by_key.get(STAGE2_GLOBAL_GROUNDING)
-        if (main_edge is None or main_edge.state != 'fresh'
-                or global_edge is None
-                or global_edge.state != 'unknown'
-                or global_edge.reason != 'consumed_unresolved'):
-            return ordinary
-        legacy_global = prov.EdgeVerdict(
-            key=global_edge.key,
-            state='unknown',
-            reason='legacy_blueprint_inputs',
-            recorded_file=global_edge.recorded_file,
-            now_file=global_edge.now_file,
-            recorded_consumed=global_edge.recorded_consumed,
-            now_consumed=None,
-        )
-        edges = tuple(
-            legacy_global if edge.key == STAGE2_GLOBAL_GROUNDING else edge
-            for edge in ordinary.edges
-        )
-        # edge 与 aggregate 共用专用 reason：FreshnessReport.reason 始终仍是
-        # 最坏边的代表原因，不另造一条脱离 edges 的旁路结论。
-        return FreshnessReport('unknown', 'legacy_blueprint_inputs', edges)
 
     def freshness_of_inputs(self, rel: str, recorded: dict | None) -> FreshnessReport:
         """同 `freshness`，但**来源账由调用方给**——用于还没落盘的那一份。
@@ -1696,19 +1605,10 @@ class ArtifactStore:
         **不读它的字节**。
         """
         node = producer_node(rel, fallback=self.ctx.node)
-        legacy_stage3 = (
-            node == 'stage3.style'
-            or (
-                isinstance(recorded, dict)
-                and RETIRED_STAGE3_STYLE_GROUNDING in recorded
-                and node in {'stage5.write', 'stage5.review', 'stage6.hook', 'stage6.semantic'}
-            )
-        )
-        lookup = legacy_stage3_projection_for if legacy_stage3 else projection_for
         return prov.freshness(
             recorded,
             file_now=self._file_fp_of_key,
-            consumed_now=lambda key: self._consumed_fp_of_key(node, key, lookup),
+            consumed_now=lambda key: self._consumed_fp_of_key(node, key),
         )
 
     @staticmethod
@@ -1823,24 +1723,23 @@ class ArtifactStore:
         return None
 
     def _blueprint_character_projection_freshness(self) -> FreshnessReport:
-        """称名投影必须等于“当前最新 schema-valid global + main_text”的纯函数。
+        """称名投影只来自人物 producer 与 MainText；知识、关系和规则没有该输入边。
 
-        global 的 formal/INVALID 是同一业务候选的两种终态：INVALID 存在时它总是更新
-        的一次尝试，投影也必须跟它走；否则一次称名修订会让旧 Blueprint 继续显示 fresh。
-        反过来，role/fate 等修订若不改变最终投影，逐值对账仍是 match。
+        live 人物 INVALID 优先，坏载体保持 unknown。语境或静态身份只有实际改变
+        逐章可选称名集合时才使投影 stale，不能按整份人物文件 SHA 扩大失效。
         """
         recorded = self._freshness_payload(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
-        global_invalid = paths.invalid_of(STAGE2_GLOBAL_GROUNDING)
-        global_rel = (
-            global_invalid if self.exists(global_invalid)
-            else STAGE2_GLOBAL_GROUNDING
+        characters_invalid = paths.invalid_of(STAGE2_CHARACTERS)
+        characters_rel = (
+            characters_invalid if self.exists(characters_invalid)
+            else STAGE2_CHARACTERS
         )
-        global_loaded, global_payload = self._projection_payload(global_rel)
+        characters_loaded, characters_payload = self._projection_payload(characters_rel)
         main_loaded, main_payload = self._projection_payload(STAGE1_MAIN_TEXT)
-        if not global_loaded or not main_loaded:
+        if not characters_loaded or not main_loaded:
             if recorded is None:
                 return FreshnessReport('unknown', 'no_provenance')
-            missing = global_rel if not global_loaded else STAGE1_MAIN_TEXT
+            missing = characters_rel if not characters_loaded else STAGE1_MAIN_TEXT
             edge = prov.EdgeVerdict(
                 key=missing, state='unknown', reason='ghost',
                 recorded_file=None, now_file=None,
@@ -1855,12 +1754,12 @@ class ArtifactStore:
             # schema-valid 的 GlobalGrounding；若人工改坏 role/relation 等未消费字段，
             # 不能仅因 ``entities.characters`` 还能读就把问题稿称为可用底座。
             from contracts.schema.stage1 import MainText
-            from contracts.schema.stage2 import GlobalGrounding
+            from contracts.schema.characters import CharacterRegistry
 
-            grounding = GlobalGrounding.model_validate(global_payload)
+            grounding = CharacterRegistry.model_validate(characters_payload)
             main_text = MainText.model_validate(main_payload)
-            grounding_payload = grounding.model_dump(
-                by_alias=True, mode='json')
+            grounding_payload = {'entities': {'characters': grounding.model_dump(
+                by_alias=True, mode='json')['characters']}}
             characters = grounding_payload['entities']['characters']
             sections = [
                 section.model_dump(by_alias=True, mode='json')
@@ -1879,15 +1778,15 @@ class ArtifactStore:
                 # 这道闸只服务“从 schema-valid 问题稿提前并行 Blueprint”。
                 # formal Global 按正式投影逐值比较：变化就 stale，不把已有
                 # 正式产物的普通漂移泛化成另一种人工等待态。
-                if global_rel == global_invalid else ()
+                if characters_rel == characters_invalid else ()
             )
             if naming_blockers:
                 edge = prov.EdgeVerdict(
-                    key=global_rel,
+                    key=characters_rel,
                     state='unknown',
                     reason='global_naming_blocked',
                     recorded_file=None,
-                    now_file=self._file_fp_of_key(global_rel),
+                    now_file=self._file_fp_of_key(characters_rel),
                     recorded_consumed=(
                         prov.projection_fingerprint(recorded)
                         if recorded is not None else None
@@ -1908,8 +1807,8 @@ class ArtifactStore:
             if recorded is None:
                 return FreshnessReport('unknown', 'no_provenance')
             edge = prov.EdgeVerdict(
-                key=global_rel, state='unknown', reason='consumed_unresolved',
-                recorded_file=None, now_file=self._file_fp_of_key(global_rel),
+                key=characters_rel, state='unknown', reason='consumed_unresolved',
+                recorded_file=None, now_file=self._file_fp_of_key(characters_rel),
                 recorded_consumed=prov.projection_fingerprint(recorded),
                 now_consumed=None,
             )
@@ -1925,7 +1824,7 @@ class ArtifactStore:
                 recorded_file=None, now_file=self._file_fp_of_key(key),
                 recorded_consumed=recorded_fp, now_consumed=expected_fp,
             )
-            for key in (global_rel, STAGE1_MAIN_TEXT)
+            for key in (characters_rel, STAGE1_MAIN_TEXT)
         )
         return FreshnessReport(state, reason, edges)
 
@@ -2095,6 +1994,19 @@ class ArtifactStore:
             raise ArtifactUnreadable(
                 f'{STAGE2_GLOBAL_REVIEW} 不合 GlobalReview 契约，判不了新鲜度：{exc}') from exc
 
+        from novel.stages.stage2 import grounding as grounding_io
+        try:
+            source = grounding_io.read_own(self)[1]
+        except (ProvenanceRefused, UpstreamMissing, UpstreamStale):
+            # 人物已订正而知识尚待 producer 重绑时，不存在可审阅的当前组合视图。
+            # 只读 state/API 保留 unknown，不能崩溃或临时拼接后追认旧决定。
+            present = self.exists(STAGE2_CHARACTERS)
+            reason = 'consumed_unresolved' if present else 'ghost'
+            edge = prov.EdgeVerdict(
+                key=STAGE2_CHARACTERS, state='unknown', reason=reason,
+                recorded_file=None, now_file=self._file_fp_of_key(STAGE2_CHARACTERS),
+                recorded_consumed=None, now_consumed=None)
+            return FreshnessReport('unknown', reason, (edge,))
         expected_subject, exact_current, _approved = review_status(source, review)
         # Approval completeness is a gate/UI fact, not freshness.  Pending/FAIL/
         # UNVER decisions remain fresh as long as they describe the exact surface.
@@ -2384,24 +2296,19 @@ class ArtifactStore:
         self,
         node: str | None,
         key: str,
-        lookup: Callable[[str, str], Callable[[Any], Any] | None] = projection_for,
     ) -> str | None:
         if node is None:
             return None
-        if lookup is projection_for:
-            memo = _memo_for_context(self.ctx)
-            memo_key = (node, key)
-            if memo is not None and memo_key in memo.consumed:
-                return memo.consumed[memo_key]
-            loaded, data = self._projection_payload(key)
-            if not loaded:
-                if memo is not None:
-                    memo.consumed[memo_key] = None
-                return None
-            return self._consumed_fingerprint(node, key, data)
-        if (project := lookup(node, key)) is None:
+        memo = _memo_for_context(self.ctx)
+        memo_key = (node, key)
+        if memo is not None and memo_key in memo.consumed:
+            return memo.consumed[memo_key]
+        loaded, data = self._projection_payload(key)
+        if not loaded:
+            if memo is not None:
+                memo.consumed[memo_key] = None
             return None
-        return self._project_current(key, project)
+        return self._consumed_fingerprint(node, key, data)
 
     def _consumed_fingerprint(
         self, node: str, key: str, data: object,
@@ -2439,11 +2346,7 @@ class ArtifactStore:
             raw = _read_file_bytes(p)
             if p.suffix.lower() == '.json':
                 decoded_json = json.loads(raw.decode('utf-8'))
-                data: object = (
-                    decode_legacy_stage3_v2(decoded_json).model_dump(by_alias=True)
-                    if key == RETIRED_STAGE3_STYLE_GROUNDING
-                    else decode_artifact(key, decoded_json).payload
-                )
+                data: object = decode_artifact(key, decoded_json).payload
             else:
                 data = raw.decode('utf-8')
             result = (True, data)
@@ -2455,14 +2358,6 @@ class ArtifactStore:
             memo.projections[key] = copy.deepcopy(result)
         return result
 
-    def _project_current(self, key: str, project: Callable[[Any], Any]) -> str | None:
-        loaded, data = self._projection_payload(key)
-        if not loaded:
-            return None
-        try:
-            return prov.projection_fingerprint(project(data))
-        except (AttributeError, KeyError, IndexError, TypeError, ValueError):
-            return None
 
     @staticmethod
     def _provenance_of(artifact: BaseModel) -> Provenance | None:

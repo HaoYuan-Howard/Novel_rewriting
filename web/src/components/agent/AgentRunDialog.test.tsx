@@ -82,6 +82,68 @@ describe('AgentRunDialog', () => {
     vi.spyOn(api, 'getAgentProfileSettings').mockResolvedValue(UNSET_SETTINGS)
   })
 
+  it('按原配置继续使用服务端历史完整快照，两项授权重新确认，不读取常用配置', async () => {
+    const source = { run_id: 'old-run', source_sha256: 'f'.repeat(64) }
+    const originalProfiles = { ...READY_PROFILES, concurrency: {
+      node_overrides: { 'node.dynamic-a': 6 }, per_book: 6, per_provider: 8,
+    } }
+    vi.spyOn(api, 'getAgentRunContinuation').mockResolvedValue({
+      run_id: source.run_id, sid: 'book-1', available: true, reason: '原 owner 已停止',
+      profiles: originalProfiles, source,
+    })
+    vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities(null))
+    const preview = vi.spyOn(api, 'previewAgentRun').mockImplementation(async (req) => ({
+      ...previewOf(req.profiles, req.authorized, req.egress_authorized), continuation: req.continuation,
+    }))
+    const start = vi.spyOn(api, 'startAgentRun').mockImplementation(async (req) => runningRecord(req))
+    renderRoute(<AgentRunDialog sid="book-1" sourceRunId="old-run" onClose={vi.fn()} onStarted={vi.fn()} />)
+    await waitFor(() => expect(preview).toHaveBeenCalledTimes(1))
+    expect(api.getAgentProfileSettings).not.toHaveBeenCalled()
+    expect(preview.mock.calls[0]?.[0]).toMatchObject({ profiles: originalProfiles, continuation: source,
+      authorized: false, egress_authorized: false })
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+    const boxes = screen.getAllByRole('checkbox')
+    fireEvent.click(boxes[0]!)
+    fireEvent.click(boxes[1]!)
+    const launch = await screen.findByRole('button', { name: '授权并开始跑书' })
+    await waitFor(() => expect(launch).toBeEnabled())
+    fireEvent.click(launch)
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1))
+    expect(start.mock.calls[0]?.[0]).toEqual(preview.mock.calls.at(-1)?.[0])
+  })
+
+  it('并发选项来自 capability，目标与两个总上限随同一预览启动', async () => {
+    vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities())
+    const preview = vi.spyOn(api, 'previewAgentRun').mockImplementation(async (req) =>
+      previewOf(req.profiles, req.authorized, req.egress_authorized))
+    const start = vi.spyOn(api, 'startAgentRun').mockImplementation(async (req) => runningRecord(req))
+    renderRoute(<AgentRunDialog sid="book-1" onClose={vi.fn()} onStarted={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('checkbox', { name: '自定义并发' }))
+    fireEvent.change(screen.getByRole('combobox', { name: 'node.dynamic-a 并发' }), { target: { value: '6' } })
+    fireEvent.change(screen.getByRole('spinbutton', { name: '整书总并发' }), { target: { value: '6' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /允许本会话产生外部模型调用费用/ }))
+    const launch = screen.getByRole('button', { name: '授权并开始跑书' })
+    await waitFor(() => expect(launch).toBeEnabled())
+    expect(preview.mock.calls.at(-1)?.[0].profiles.concurrency).toEqual({
+      node_overrides: { 'node.dynamic-a': 6 }, per_book: 6, per_provider: 8,
+    })
+    fireEvent.click(launch)
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1))
+    expect(start.mock.calls[0]?.[0]).toBe(preview.mock.calls.at(-1)?.[0])
+  })
+
+  it('原配置或停止证明不可用时保留原因，禁止回落默认或启动', async () => {
+    vi.spyOn(api, 'getAgentRunContinuation').mockResolvedValue({
+      run_id: 'bad-source', sid: 'book-1', available: false, reason: '原 profiles 缺失', profiles: null, source: null,
+    })
+    vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities())
+    const preview = vi.spyOn(api, 'previewAgentRun')
+    renderRoute(<AgentRunDialog sid="book-1" sourceRunId="bad-source" onClose={vi.fn()} onStarted={vi.fn()} />)
+    expect(await screen.findByText('原 profiles 缺失')).toBeVisible()
+    expect(preview).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: '需先授权模型调用费用' })).toBeDisabled()
+  })
+
   it('用户常用配置优先于产品默认，并作为本次 preview 的完整快照', async () => {
     const savedProfiles: PipelineAgentProfiles = {
       schema_version: 2,

@@ -424,8 +424,7 @@ def _frozen_request_evidence(
             artifact_rel('stage5.trim_audit', nn=subject.output_ordinal),
             subject.audit_sha256,
             label=f'reviewer rewrite 第 {subject.output_ordinal} 章 TrimAudit')
-        if (audit.output_ordinal != subject.output_ordinal
-                or audit.before_sha256
+        if (audit.before_sha256
                 != hashlib.sha256(chapter.text.encode('utf-8')).hexdigest()):
             raise ProvenanceRefused(
                 f'reviewer rewrite 第 {subject.output_ordinal} 章 audit/chapter 关系漂移')
@@ -533,12 +532,6 @@ def _recovery_wal_closes(
             paths.stage5_chapter_run_path(
                 ctx.novel_dir, wal.source_run_id, request.target_ordinal)
             / 'committed.json')
-        if not commit_path.is_file():
-            legacy = (
-                paths.legacy_stage5_chapter_run_path(
-                    ctx.novel_dir, wal.source_run_id, request.target_ordinal)
-                / 'committed.json')
-            commit_path = legacy
         commit_file_sha = _file_sha256(
             commit_path, label='reviewer rewrite source commit')
     expected_adoption = stage5_runs.reviewer_rewrite_source_adoption_id(
@@ -828,9 +821,9 @@ def _require_successor_wal_closes(
         raise ProvenanceRefused('reviewer rewrite successor action evidence 身份漂移')
     if wal.successor_kind == 'recheck':
         if (wal.terminal_event != 'landed_formal'
-                or set(changed) - {'chars', 'overlap_excl_verbatim', 'warns', 'errs'}
+                or changed
                 or evidence.get('changed_fields') != changed):
-            raise ProvenanceRefused('reviewer rewrite recheck successor 改动越出派生字段')
+            raise ProvenanceRefused('reviewer rewrite recheck successor 不得改写最小章主体')
     elif wal.successor_kind == 'revalidate':
         audit = successor.provenance.revalidation_audit
         if (wal.terminal_event != 'landed_invalid'

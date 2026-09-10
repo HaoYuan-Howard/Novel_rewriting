@@ -55,10 +55,10 @@ _VOCABULARY = frozenset({
 def _models() -> dict[str, type]:
     from contracts.schema.stage2 import (
         ChapterBlueprintsResponseV2Refs, ChapterBlueprintsResponseV31,
-        ChapterBoundariesResponse, GlobalCandidateAgentTurnResponse,
-        GlobalGroundingCandidateResponse, HingePhraseResponse,
-        HingeSelectResponse, RoleSplitResponse,
+        ChapterBoundariesResponse, HingePhraseResponse, HingeSelectResponse,
     )
+    from contracts.schema.characters import CharactersResponse
+    from contracts.schema.knowledge import KnowledgeAgentTurnResponse, KnowledgeResponse
     from contracts.schema.stage4 import (
         BlindBookStrategyResponse, BlindChapterDesignResponse,
         BlindPlanResponse, ChapterBindingResponse, EvidenceBindingResponse,
@@ -69,9 +69,9 @@ def _models() -> dict[str, type]:
     )
     from contracts.schema.stage7 import NameMapResponse
     return {
-        'stage2.global': GlobalCandidateAgentTurnResponse,
-        'stage2.global/legacy-direct': GlobalGroundingCandidateResponse,
-        'stage2.global/role_split': RoleSplitResponse,
+        'stage2.global': KnowledgeAgentTurnResponse,
+        'stage2.global/legacy-direct': KnowledgeResponse,
+        'stage2.characters': CharactersResponse,
         'stage2.blueprint/boundaries': ChapterBoundariesResponse,
         'stage2.blueprint/v2': ChapterBlueprintsResponseV2Refs,
         'stage2.blueprint/v3.1': ChapterBlueprintsResponseV31,
@@ -186,9 +186,9 @@ def test_every_agent_response_schema_only_uses_json_schema_keywords():
 
 def test_the_discriminator_is_actually_present_before_stripping():
     """反向自检：靶子必须真的存在，否则上一条测的是一个不会发生的情况。"""
-    from contracts.schema.stage2 import GlobalCandidateAgentTurnResponse
+    from contracts.schema.knowledge import KnowledgeAgentTurnResponse
 
-    raw = GlobalCandidateAgentTurnResponse.model_json_schema(by_alias=True)
+    raw = KnowledgeAgentTurnResponse.model_json_schema(by_alias=True)
     assert 'discriminator' in json.dumps(raw), (
         'pydantic 不再发 discriminator 了？那就确认 CLI 侧的限制是否还在，'
         '而不是顺手删掉归一——删掉之后这条守卫就再也没有判别力')
@@ -196,7 +196,7 @@ def test_the_discriminator_is_actually_present_before_stripping():
 
 def test_normalization_preserves_union_branches_and_equivalent_constraints():
     """联合分支不丢；const 变单值 enum，注解删除，约束语义保持。"""
-    from contracts.schema.stage2 import GlobalCandidateAgentTurnResponse as M
+    from contracts.schema.knowledge import KnowledgeAgentTurnResponse as M
 
     raw = M.model_json_schema(by_alias=True)
     sent = agent_json_schema(M)
@@ -380,67 +380,45 @@ def test_unreferenced_definitions_still_require_valid_local_reference_targets(re
 
 
 def test_dynamic_business_maps_use_keyed_rows_on_wire_and_round_trip_to_dict():
-    """三个动态映射都在线上变行数组，内部/旧 checkpoint 仍是原有 dict。"""
-    from contracts.schema.stage2 import (
-        EntitiesCandidateResponse, GlobalGroundingCandidateResponse,
-        RoleSplitResponse,
-    )
+    """人物、必要经历和姓氏映射在线上都是显式行；当前 checkpoint 保存规范 dict。"""
+    from contracts.schema.characters import CharactersResponse
+    from contracts.schema.knowledge import KnowledgeEntitiesResponse, KnowledgeResponse
     from contracts.schema.stage7 import NameMapResponse
 
-    global_schema = agent_json_schema(GlobalGroundingCandidateResponse)
-    assert global_schema['$defs']['EntitiesCandidateResponse'] \
-        ['properties']['characters']['type'] == 'array'
-    assert agent_json_schema(RoleSplitResponse)['properties'] \
-        ['characters']['type'] == 'array'
-    assert agent_json_schema(NameMapResponse)['properties'] \
-        ['surname_map']['type'] == 'array'
-
+    assert agent_json_schema(CharactersResponse)['properties']['characters']['type'] == 'array'
+    knowledge_schema = agent_json_schema(KnowledgeResponse)
+    assert knowledge_schema['$defs']['KnowledgeEntitiesResponse']['properties']['character_states']['type'] == 'array'
+    assert agent_json_schema(NameMapResponse)['properties']['surname_map']['type'] == 'array'
     character = {
-        'char_id': 'char_001',
-        'canonical': '账房',
-        'address': [{
-            'surface': '账房', 'by': 'public', 'context': 'address',
-            'from_chapter': 1,
-        }],
-        'name_distinctiveness': 'medium',
-        'role': '负责核账',
+        'char_id': 'char_001', 'canonical': '账房',
+        'address': [{'surface': '账房', 'by': 'public', 'context': 'address', 'from_chapter': 1}],
+        'name_distinctiveness': 'medium', 'role': '负责核账',
         'role_evidence': {'evidence_candidate_id': 'e000001'},
-        'fate': None,
-        'fate_evidence': None,
     }
-    entities = EntitiesCandidateResponse.model_validate({
-        'characters': [character], 'relations': [],
+    registry = CharactersResponse.model_validate({'characters': [character]})
+    assert registry.model_dump(mode='json')['characters'] == {
+        'char_001': {key: value for key, value in character.items() if key != 'char_id'},
+    }
+    state = {'char_id': 'char_001', 'fate': '后来继续核账',
+             'fate_evidence': {'evidence_candidate_id': 'e000002'}}
+    entities = KnowledgeEntitiesResponse.model_validate({
+        'character_states': [state], 'relations': [],
     })
-    assert entities.model_dump(mode='json')['characters'] == {
-        'char_001': {key: value for key, value in character.items()
-                     if key != 'char_id'},
+    assert entities.model_dump(mode='json')['character_states'] == {
+        'char_001': {key: value for key, value in state.items() if key != 'char_id'},
     }
-
-    split = RoleSplitResponse.model_validate({
-        'characters': [{'char_id': 'char_001', 'role': '账房', 'fate': None}],
-    })
-    assert split.model_dump(mode='json')['characters'] == {
-        'char_001': {'role': '账房', 'fate': None},
-    }
-    # 内部 model_dump / 当前 checkpoint payload 是 dict；typed 0-wire 重放不改形。
-    assert RoleSplitResponse.model_validate(split.model_dump(mode='json')) == split
-
+    assert CharactersResponse.model_validate(registry.model_dump(mode='json')) == registry
+    assert KnowledgeEntitiesResponse.model_validate(entities.model_dump(mode='json')) == entities
     renamed = NameMapResponse.model_validate({
         'surname_map': [{'old_surname': '沈', 'new_surname': '林'}],
-        'characters': [{
-            'char_id': 'char_001', 'new_canonical': '林昭', 'renamed': True,
-            'not_renamed_reason': None, 'aliases': [], 'reason': '贴合时代',
-        }],
+        'characters': [{'char_id': 'char_001', 'new_canonical': '林昭', 'renamed': True,
+                        'not_renamed_reason': None, 'aliases': [], 'reason': '贴合时代'}],
     })
     assert renamed.surname_map == {'沈': '林'}
-
     with pytest.raises(ValidationError, match='不能重复'):
-        RoleSplitResponse.model_validate({
-            'characters': [
-                {'char_id': 'char_001', 'role': '甲', 'fate': None},
-                {'char_id': 'char_001', 'role': '乙', 'fate': None},
-            ],
-        })
+        CharactersResponse.model_validate({'characters': [character, dict(character)]})
+    with pytest.raises(ValidationError, match='不能重复'):
+        KnowledgeEntitiesResponse.model_validate({'character_states': [state, dict(state)], 'relations': []})
 
 
 @pytest.mark.parametrize('where', ['request', 'policy'])

@@ -129,8 +129,8 @@ def _v3_capability() -> DesignReviewRepairCapability:
     )
 
 
-def test_design_review_contract_is_v4_and_chapter_subject_identity_is_exclusive():
-    assert DESIGN_REVIEW_CONTRACT == 'stage4-design-review-v4'
+def test_design_review_contract_is_v5_and_chapter_subject_identity_is_exclusive():
+    assert DESIGN_REVIEW_CONTRACT == 'stage4-design-review-v5'
     assert _v3_subject().strategy_subject_sha256 is None
 
     legacy = DesignChapterSubject(

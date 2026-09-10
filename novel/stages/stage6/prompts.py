@@ -247,7 +247,7 @@ def build_material(*, title: str, ctx: dict, hook_mechanical: dict, grounding: d
     truth = {
         'entities': grounding.get('entities'),
         'canon': grounding.get('canon'),
-        'arc': grounding.get('arc'),
+        'source_blurb': grounding.get('source_blurb'),
     }
     full_map = story_map(ctx)
     mechanical = dict(hook_mechanical)

@@ -26,7 +26,7 @@ def _ctx(tmp_path: Path):
 
 def _state(*, turn: int = 1, prior=()):
     return {
-        'version': 1,
+        'version': 2,
         'mode': 'write',
         'outcome': 'hard',
         'input_sha256': 'a' * 64,
@@ -74,18 +74,15 @@ def test_run_spec_freezes_one_chapter_owner_policy_and_paths(tmp_path, monkeypat
         'stage5.write·ch7',
         7,
         'write',
-        'stage5-write-v1',
+        'stage5-write-v2',
         'per-chapter',
     )
     assert spec.run_path(ctx) == paths.stage5_chapter_run_path(
         ctx.novel_dir, ctx.run_id, 7)
     assert spec.checkpoint_dir(ctx) == paths.stage5_chapter_checkpoint_dir(
         ctx.novel_dir, ctx.run_id, 7)
-    assert spec.legacy_run_path(ctx) == paths.legacy_stage5_chapter_run_path(
-        ctx.novel_dir, ctx.run_id, 7)
-    assert spec.legacy_checkpoint_dir(ctx) == \
-        paths.legacy_stage5_chapter_checkpoint_dir(
-            ctx.novel_dir, ctx.run_id, 7)
+    assert not hasattr(spec, 'legacy_run_path')
+    assert not hasattr(spec, 'legacy_checkpoint_dir')
 
 
 def test_checkpoint_revision_uses_accepted_turn_and_does_not_copy_core_validator(
@@ -101,7 +98,7 @@ def test_checkpoint_revision_uses_accepted_turn_and_does_not_copy_core_validator
     monkeypatch.setattr(stage5_runs.agent_runs, 'write_checkpoint', fake_write)
     state = _state(
         turn=2,
-        prior=({'chars': len('旧稿。'), 'text': '旧稿。'},),
+        prior=({'segments': [{'slot': 's01', 'text': '旧稿。'}]},),
     )
     acceptance = {'accepted_turn_index': 2, 'opaque_core_field': object()}
     target = stage5_runs.write_checkpoint(
@@ -146,8 +143,7 @@ def test_checkpoint_state_cannot_claim_more_business_candidates_than_turns(
             state_payload=_state(
                 turn=1,
                 prior=({
-                    'chars': len('不可能存在的前序。'),
-                    'text': '不可能存在的前序。',
+                    'segments': [{'slot': 's01', 'text': '不可能存在的前序。'}],
                 },),
             ),
         )

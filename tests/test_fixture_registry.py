@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from contracts.schema import decode_artifact
+from contracts.schema import ArtifactVersionError, artifact_spec, decode_artifact
 from contracts.schema.stage5 import RejectedRevision
 from novel import paths
 from novel.llm.cache import cache_key
@@ -66,7 +66,17 @@ def _rejected_archive(_monkeypatch) -> None:
     assert len(artifact.attempts) == 2
     archived = paths.round_rel(rel, 1)
     assert archived == 'stage5/_rounds/ch01.rejected.r1.json'
-    assert decode_artifact(archived, _load('rejected_archive')).version == 1
+    spec = artifact_spec(rel)
+    assert spec is not None
+    assert decode_artifact(archived, _load('rejected_archive')).version == spec.current_version
+    assert [attempt.segments[0].slot for attempt in artifact.attempts] == ['s01', 's01']
+
+
+def _retired_rejected(_monkeypatch) -> None:
+    # 原 v1 字节继续作为拒绝反例，不手补字段或改版本冒充新产物。
+    for rel in ('stage5/ch01.rejected.json', 'stage5/_rounds/ch01.rejected.r1.json'):
+        with pytest.raises(ArtifactVersionError):
+            decode_artifact(rel, _load('retired_rejected'))
 
 
 def _retry_branch(_monkeypatch) -> None:
@@ -100,6 +110,7 @@ HANDLERS = {
     'secret_numbers': _secret_numbers,
     'half_draft': _half_draft,
     'rejected_archive': _rejected_archive,
+    'retired_rejected': _retired_rejected,
     'retry_branch': _retry_branch,
 }
 

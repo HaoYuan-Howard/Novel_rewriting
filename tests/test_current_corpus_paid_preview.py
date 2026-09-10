@@ -23,7 +23,8 @@ from tools import current_corpus_paid_preview as P
 #: 「1 份整书策略 + N 份逐章私有 session」；17+25 章双书的 A 从 2 条变为
 #: 44 条逻辑请求，B 仍为 2 条，现役基础数因此为 **136**。公开付费 dispatch
 #: 仍是每书 A/B 各一条，不随内部逻辑拓扑增加。
-#: `_logical_topology` 从现役契约派生；这里钉 136 是在守当前默认真实 consumer，
+#: 独立人物节点为双书各增加一条整书请求，现役基础数为 138。
+#: `_logical_topology` 从现役契约派生；这里钉 138 是在守当前默认真实 consumer，
 #: 翻默认时要随生产拓扑一起改，不能把预算预览留在旧臂。
 #: ⚠ 2026-08-18 阶梯由 4 档降到 3 档（删掉被服务端静默映射回 `high` 的 `medium`，
 #: 见 `novel/llm/client.py::LADDER`）⇒ 全部 wire 上限跟着降 1/4，**那是正确结果不是回归**。
@@ -49,15 +50,15 @@ def test_workflow_role_budget_counts_two_stage2_commanders_and_ambiguous_units()
 _FLASH_MODELS = len(P.models_for(P.config.DEFAULT_MODEL))
 _PRO_MODELS = len(P.models_for(PRO_FALLBACK_MODEL))
 
-# 136 条非语义逻辑请求里，双书 Stage4 A（18+26）/B（1+1）共
-# 46 条钉死 Pro；其余 90 条默认 Flash 并各带一次 Pro 兜底。
+# 138 条非语义逻辑请求里，双书 Stage4 A（18+26）/B（1+1）共
+# 46 条钉死 Pro；其余 92 条默认 Flash 并各带一次 Pro 兜底。
 # 语义判官 4 条全部钉死 Pro。
-_BASE_WIRE = (90 * _FLASH_MODELS + 46 * _PRO_MODELS) \
+_BASE_WIRE = (92 * _FLASH_MODELS + 46 * _PRO_MODELS) \
     * _RUNGS * MAX_SAMPLES_PER_RUNG
 _SEMANTIC_WIRE = 4 * _PRO_MODELS * _RUNGS * MAX_SAMPLES_PER_RUNG
 _HOOK_RETRY_WIRE = 6 * _FLASH_MODELS * MAX_SAMPLES_PER_RUNG
 
-#: 当前语料范围的 wire 硬上限：(基础 136 + 语义 4) 按各自模型链放大，
+#: 当前语料范围的 wire 硬上限：(基础 138 + 语义 4) 按各自模型链放大，
 #: 每档采样数，再加双书各剩 3 次、合计 6 条 stage6 定向修订 × 采样数；
 #: 这是每书空缓存首次生成后共享的余额，不是三槽各领预算（它们走**单档**
 #: `HOOK_RETRY_RUNGS`，只乘采样数不乘档数）。⚠ 并列的 `external_hard_limit=588`
@@ -142,19 +143,19 @@ def test_real_current_corpus_has_the_frozen_17_and_25_chapter_shape(tmp_path):
     ]
 
 
-def test_final_topology_lists_16_dispatches_and_real_conditional_limits(tmp_path):
+def test_final_topology_lists_18_dispatches_and_real_conditional_limits(tmp_path):
     plan = P.build_plan(_spec(tmp_path), token_counter=lambda _request: 123)
     aggregate = plan['aggregate']
     assert aggregate == {
-        'production_cli_dispatches': 16,
-        'base_nonsemantic_logical_requests': 136,
+        'production_cli_dispatches': 18,
+        'base_nonsemantic_logical_requests': 138,
         'base_nonsemantic_ladder_wire_hard_limit': _BASE_WIRE,
         'semantic_logical': 4,
         'semantic_wire_hard_limit': _SEMANTIC_WIRE,
         'stage6_conditional_candidate_retry_logical': 6,
         'stage6_conditional_candidate_retry_wire_hard_limit':
             _HOOK_RETRY_WIRE,
-        'full_conditional_logical_hard_limit': 146,
+        'full_conditional_logical_hard_limit': 148,
         'full_conditional_wire_hard_limit': _FULL_WIRE,
         'full_conditional_context_token_hard_ceiling': _FULL_WIRE * 1_000_000,
     }
@@ -218,7 +219,7 @@ def test_commands_use_production_builder_and_freeze_env_without_execution(tmp_pa
     plan = P.build_plan(_spec(tmp_path), token_counter=lambda _request: 1)
     assert plan['read_only'] is True and plan['has_execution_entry'] is False
     assert plan['authorization'].startswith('not_granted')
-    assert len(plan['dispatches']) == 16
+    assert len(plan['dispatches']) == 18
     caches = set()
     for row in plan['dispatches']:
         argv = row['production_cli_argv']
@@ -336,7 +337,7 @@ def test_profiles_and_human_gates_are_explicit_before_semantic_calls(tmp_path):
     assert write_row['conditional_reason'] is None
 
 
-def test_only_global_prompt_is_exact_before_upstream_generation(tmp_path):
+def test_only_characters_prompt_is_exact_before_upstream_generation(tmp_path):
     requests = []
 
     def count(request):
@@ -344,7 +345,7 @@ def test_only_global_prompt_is_exact_before_upstream_generation(tmp_path):
         return 321
 
     plan = P.build_plan(_spec(tmp_path), token_counter=count)
-    estimates = plan['token_estimate']['stage2_global_exact_before_generation']
+    estimates = plan['token_estimate']['stage2_characters_exact_before_generation']
     assert set(estimates) == {
         '2019402867061048656', '1668963766200045568'}
     for estimate in estimates.values():
@@ -353,15 +354,15 @@ def test_only_global_prompt_is_exact_before_upstream_generation(tmp_path):
         assert estimate['exhausted_ladder_input_tokens'] == (
             'unknown_dynamic_recovery_prompts')
         assert estimate['exhausted_ladder_input_token_hard_ceiling'] == (
-            _FLASH_MODELS * _RUNGS * MAX_SAMPLES_PER_RUNG * (1_000_000 - 96_000))
+            _FLASH_MODELS * _RUNGS * MAX_SAMPLES_PER_RUNG * (1_000_000 - 64_000))
         assert estimate['completion_tokens_ladder_upper_bound'] == (
-            _FLASH_MODELS * _RUNGS * MAX_SAMPLES_PER_RUNG * 96_000)
+            _FLASH_MODELS * _RUNGS * MAX_SAMPLES_PER_RUNG * 64_000)
         assert estimate['completion_includes_reasoning'] is True
     assert requests
-    assert all('第一次回答必须使用 full_candidate' in row.system
-               for row in requests)
-    assert all('role_fate_patch' in row.system for row in requests)
-    assert all('evidence_patch' not in row.system for row in requests)
+    assert all(row.system == P.stage2_characters.SYSTEM for row in requests)
+    assert all('fate_evidence' not in row.system for row in requests)
+    assert all(row['status'] == 'unknown' for row in
+               plan['token_estimate']['stage2_global_before_generation'].values())
     assert plan['token_estimate']['downstream_prompt_tokens'] == 'unknown'
     assert '不含费率' in plan['token_estimate']['price']
 
@@ -438,12 +439,12 @@ def test_dirty_source_base_or_wrong_input_scope_is_rejected(tmp_path):
 
 def test_render_says_upper_bound_unknown_price_and_no_execution(tmp_path):
     text = P.render(P.build_plan(_spec(tmp_path), token_counter=lambda _request: 1))
-    assert '[16/16]' in text
+    assert '[18/18]' in text
     # 6 条定向重试 × 单档 × 每档采样数（重采对单档臂一样适用）。
     hook_retry_wire = (6 * _FLASH_MODELS * len(P.HOOK_RETRY_RUNGS)
                        * MAX_SAMPLES_PER_RUNG)
     assert f'Stage6 条件候选定向重试：logical=6 / wire 上限={hook_retry_wire}' in text
-    assert f'全条件硬上限：logical=146 / wire={_FULL_WIRE}' in text
+    assert f'全条件硬上限：logical=148 / wire={_FULL_WIRE}' in text
     assert '可达硬上限，不是预计实付' in text
     assert '已有 FC08/12/13：10 CLI run' in text
     assert '那场战役不会发生' in text

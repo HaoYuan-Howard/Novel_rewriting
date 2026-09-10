@@ -19,10 +19,11 @@ plan.py —— Stage4 v4 的三个节点。策略/逐章设计、按歧义章绑
 """
 from __future__ import annotations
 
+from novel import runtime_layout
 import hashlib
 import json
 from contextlib import nullcontext
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field, replace
 
@@ -33,11 +34,12 @@ from contracts.artifacts import (
     STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
 )
 
-from typing import Any, NoReturn
+from typing import Any, NoReturn, TypeVar
 
 from contracts.invariants import (
     BLIND_ALIAS_ALGORITHM, DESIGN_REPAIR_CODE_INSTRUCTIONS,
     DESIGN_REVIEW_CONTRACT, FAILURE_STOP_OWNERS,
+    PIPELINE_DEFAULT_CONCURRENCY,
     STAGE4_BINDING_INPUT_CONTRACT, STAGE4_BINDING_INPUT_RECEIPT_KEY,
 )
 from contracts.schema import artifact_spec
@@ -50,16 +52,16 @@ from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
 from contracts.schema.stage4 import (
     BlindBookStrategyResponse, BlindCandidate, BlindCandidateChapter,
     BlindCandidateHumanProvenance,
-    BlindCandidateProvenance, BlindChapterEditRequest,
+    BlindCandidateProvenance, BlindCandidateCompiledProvenance, BlindChapterEditRequest,
     BlindChapterDesignResponse, BlindPlanResponse, BindingConcern,
     ChapterBindingResponse,
     EvidenceBindingCompiledProvenance,
-    RejectedResponseAdoption,
     CtxProvenance, EvidenceBinding, EvidenceBindingProvenance,
     EvidenceBindingHumanProvenance, EvidenceBindingResponse,
     PlanChapters, PlanEdit, PlanProvenance, WriterContext,
 )
 from novel import paths, prov
+from novel.consumption import stage4_material_evidence
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, GateBlocked, HumanEditProtected,
     RefusedByStructure,
@@ -69,12 +71,14 @@ from novel.errors import (
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.observability import RequestProgress
+from novel.llm import aggregate_runs
 from novel.run import RunContext
 from novel.core.naming import display_names_at
 from novel.stages.stage4 import checks, prompts
 from novel.stages.stage4.blind import (
     BlindPlanError, assemble_blind_candidate, build_blind_chapter_projection,
-    build_blind_executor_projection, build_blind_projection,
+    blind_chapter_compilation_dependencies,
+    build_blind_projection,
     build_blind_strategy_projection,
     build_evidence_catalog, candidate_subject_sha256,
     compile_blind_candidate, compile_blind_chapter_design,
@@ -103,12 +107,11 @@ from novel.llm import response_repair, typed_failures
 from novel.llm import stage4_runs
 from novel.agents.session_client import AgentDeliveryUnavailable
 from novel.llm.client import LlmFailed, judge_payload
-from novel.llm.ledger import combine_usage
-from novel.llm.json_text import normalize_json_text as _strip_fences
+from novel.llm.ledger import combine_usage, read_strict_jsonl_objects
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatResponse
 from novel.llm.typed_failures import TypedFailure, WitnessCollector
-from novel.store import ArtifactStore, build_revalidation_audit
+from novel.store import ArtifactStore
 
 REL = STAGE4_PLAN_CHAPTERS
 CANDIDATE_REL = STAGE4_BLIND_CANDIDATE
@@ -160,10 +163,14 @@ class _Upstreams:
         self.blueprints = store.read(
             ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True)
         self.global_g: dict[str, Any] | None = None
+        self.knowledge_links: dict[str, Any] | None = None
         if need_grounding:
             from novel.stages.stage2 import global_review as stage2_global_review
             self.global_g = stage2_global_review.generation_grounding(
                 store).model_dump(by_alias=True)
+            from novel.stages.stage2.knowledge_links import require_current
+            self.knowledge_links = require_current(ctx, consuming=True).model_dump(
+                by_alias=True, mode='json')
         self.bidx = beat_index(self.blueprints, self.main_text)
 
 
@@ -198,6 +205,7 @@ class DesignCandidateContext:
     strategy_input_sha256: str
     validator: Any = field(repr=False, compare=False)
     strategy_feedback: dict[str, Any] | None = None
+    rebuild_parent: Any | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -222,6 +230,8 @@ class DesignCandidateResponses:
 
     strategy: BlindBookStrategyResponse
     chapters: tuple[tuple[int, BlindChapterDesignResponse], ...]
+    historical: tuple[tuple[int | None, Any], ...] = field(default=(), repr=False, compare=False)
+    preserved: tuple[Any, ...] = field(default=(), repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -300,7 +310,7 @@ class PlanCandidateEvaluation:
     compiled: dict[str, Any] | None
     requested_model: str
     adopted_models: tuple[str, ...]
-    attempt_id: str
+    attempt_id: str | None
     input_sha256: str
     binding_sha256: str
     compiled_sha256: str | None
@@ -432,7 +442,7 @@ def _judge(store: ArtifactStore, plan_raw: dict[str, Any], up: _Upstreams, *,
             assert up.global_g is not None
             expected_unvalidated = build_writer_context(
                 plan_raw, up.global_g, up.blueprints, up.main_text,
-            ).ctx
+             knowledge_links=up.knowledge_links).ctx
             # 盘上载体已经经过 Pydantic 的默认值归一；期望树也必须走同一
             # 个生产 schema，否则可选字段的 absent/None 差异会让守卫假红。
             expected_ctx = WriterContext.model_validate({
@@ -504,6 +514,11 @@ def run_check_only(ctx: RunContext) -> CheckReport:
                    art.provenance.model_dump(by_alias=True), judged_rel=judged)
 
 
+def _design_strategy_user(projection: Mapping[str, Any]) -> str:
+    return prompts.BLOCK_BLIND_BOOK_STRATEGY + '\n' + json.dumps(
+        projection, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+
 def _design_request(
     ctx: RunContext,
 ) -> tuple[
@@ -517,24 +532,8 @@ def _design_request(
         up.blueprints, root_clean_sha1=ctx.root_clean_sha1)
     projection = build_blind_strategy_projection(truth)
     system = prompts.blind_book_strategy_system()
-    user = prompts.BLOCK_BLIND_BOOK_STRATEGY + '\n' + json.dumps(
-        projection, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    user = _design_strategy_user(projection)
     return system, user, store, up, truth, mapping, projection
-
-
-def _legacy_design_request(
-    ctx: RunContext,
-) -> tuple[str, str, ArtifactStore, _DesignUpstream, dict[str, Any], dict[str, Any]]:
-    """只供旧整书拒稿的零 wire 采用路；新付费路径不得调用。"""
-    store = ArtifactStore(ctx)
-    up = _DesignUpstream(ctx, store)
-    truth, mapping = build_blind_projection(
-        up.blueprints, root_clean_sha1=ctx.root_clean_sha1)
-    system = prompts.blind_design_system()
-    user = prompts.BLOCK_BLIND_TRUTH + '\n' + json.dumps(
-        build_blind_executor_projection(truth),
-        ensure_ascii=False, sort_keys=True, separators=(',', ':'))
-    return system, user, store, up, truth, mapping
 
 
 def build_design_prompt(ctx: RunContext) -> tuple[str, str]:
@@ -549,7 +548,7 @@ def build_design_prompt(ctx: RunContext) -> tuple[str, str]:
 
 
 def _require_definitive_design_candidate(
-        store: ArtifactStore, rel: str, *, allow_frozen_v6: bool = False,
+        store: ArtifactStore, rel: str,
 ) -> tuple[BlindCandidate, str]:
     """强类型读取一份 A，并把 stale/unknown 保留为不同显式终态。"""
     with store.ctx.validation_reads():
@@ -559,15 +558,6 @@ def _require_definitive_design_candidate(
     if freshness.state == 'stale':
         raise UpstreamStale(
             f'{rel} 已过期（{freshness.reason}）；不得把它当成空槽位覆盖')
-    if freshness.state == 'unknown' and allow_frozen_v6 and rel == CANDIDATE_REL:
-        from novel.stages.stage2.frozen_v6 import (
-            require_frozen_v6_stage4_subject,
-        )
-        frozen = require_frozen_v6_stage4_subject(store)
-        if frozen.candidate_sha256 != file_sha256:
-            raise UpstreamUnproven(
-                '冻结 v6 证明绑定的 Stage4A candidate 与本次读取字节不同')
-        freshness = frozen.source_freshness
     if freshness.state == 'unknown':
         raise UpstreamUnproven(
             f'{rel} 的来源无法证明为当前（{freshness.reason}）；'
@@ -581,12 +571,12 @@ def _require_definitive_design_candidate(
     return candidate, file_sha256
 
 
-def require_initial_design_slot(store: ArtifactStore) -> None:
-    """只在 Stage4A 正式槽位真正为空时授权首次 design。
+def require_initial_design_slot(store: ArtifactStore) -> Any | None:
+    """空槽位首次生成；明确过期时只授权有完整提交父链的实际依赖重建。
 
-    本函数是审批服务与 producer 共用的最终边界：现役/旧版/损坏/过期/
-    来源未知的 A，以及同名 ``.INVALID``，都不能被裸 ``stage4.design``
-    洗成“尚未生成”并覆盖。仅两个路径都确实 absent 时返回。
+    本函数是审批服务与 producer 共用的最终边界；现役、旧版、损坏、
+    来源未知及同名 INVALID 不能被裸 design 洗成尚未生成。过期分支返回
+    经核验的父节点，后续只能保持该父节点中的合法修复和人工来源。
     """
     if store.exists(_CANDIDATE_INVALID):
         # 先强类型读与 freshness 分类；旧版、坏字节、stale/unknown 原样关闭。
@@ -598,6 +588,11 @@ def require_initial_design_slot(store: ArtifactStore) -> None:
         )
     if not store.exists(CANDIDATE_REL):
         return
+    with store.ctx.validation_reads():
+        status = store.freshness(CANDIDATE_REL)
+    if status.state == 'stale':
+        from novel.stages.stage4.design_rebuild import current_parent
+        return current_parent(store)
     _require_definitive_design_candidate(store, CANDIDATE_REL)
     raise ApprovalRequired(
         f'当前 fresh {CANDIDATE_REL} 已存在；裸 stage4.design 不得覆盖。'
@@ -984,7 +979,7 @@ def _candidate_bundle_verdict(
     from contracts.rules import REGISTRY
 
     assert up.global_g is not None
-    asm = build_writer_context(data, up.global_g, up.blueprints, up.main_text)
+    asm = build_writer_context(data, up.global_g, up.blueprints, up.main_text, knowledge_links=up.knowledge_links)
     candidate_ctx = asm.ctx
     outcomes = checks.check(
         data,
@@ -1080,8 +1075,8 @@ def preflight_binding_candidate(
     """唯一 A→formal 预检：**任何 driver/probe/provider 副作用之前**可重跑。
 
     从当前 A 候选与 Stage2 关闭目录构造 canonical binding witness——
-    `construct_feasible_binding_witness` 的零自由度构造性绑定（每场绑 catalog
-    首项舞台、全部材料落首场），再复用正式 `merge_evidence_bindings`、plan ref
+    `construct_feasible_binding_witness` 先验证关闭目录可构造，再从同一机械基线
+    构造满足材料归属的存在性样本；多场材料取允许的最晚场以免提前泄露，再复用正式 `merge_evidence_bindings`、plan ref
     validator、WriterContext 组装与 `_candidate_bundle_verdict` 同一联合 HARD。
     因此预检暴露的每一条失败都只可能属于 A 的设计、上游 Stage2 或判据代码：
     **「B 选得不好」在这个预检里结构性不存在**，不会拿任意舞台选择制造 A 假红。
@@ -1135,9 +1130,8 @@ def preflight_binding_candidate(
         return _finish(failures=infeasible_failures, infeasibility=tuple(proof))
     constructive = construct_feasible_binding_witness(candidate_raw, catalog)
     up = _Upstreams(ctx, store, need_grounding=True)
-    # 批次 4：机械基线把代码能唯一确定的绑定先确定掉（签名等价多候选取规范
-    # 首项），歧义章回退 constructive 的零自由度行——预检的 canonical witness
-    # 因此与 B 的真实绑定空间同构，不再是「任取首舞台」的粗下界。
+    # 预检样本不能把有事实归属的材料随意塞到首场，再把该错误归责于 A。
+    # 这里只证明存在性，正式 B 仍须显式裁决各歧义，不采用这个样本充当模型决定。
     baseline = build_mechanical_baseline(candidate_raw, up.blueprints)
     constructive_rows = {
         int(row['output_ordinal']): row['scenes']
@@ -1145,6 +1139,22 @@ def preflight_binding_candidate(
     for chapter in baseline.chapters:
         if chapter.mechanical:
             constructive_rows[chapter.chapter_ordinal] = chapter.binding_rows()
+            continue
+        row = next(row for row in candidate_raw['output_chapters']
+                   if row['output_ordinal'] == chapter.chapter_ordinal)
+        scene_ids = [scene['candidate_scene_id'] for scene in row['scenes']]
+        resolutions = []
+        for ambiguity in chapter.ambiguities:
+            resolution: dict[str, Any] = {'ambiguity_id': ambiguity.ambiguity_id}
+            if ambiguity.kind == 'stage_signature_conflict':
+                resolution['stage_ref'] = ambiguity.candidates[0]
+            else:
+                allowed = ambiguity.candidates if ambiguity.kind == 'material_multi_scene' else scene_ids
+                resolution['candidate_scene_id'] = next(scene for scene in reversed(scene_ids)
+                                                        if scene in allowed)
+            resolutions.append(resolution)
+        constructive_rows[chapter.chapter_ordinal] = apply_chapter_resolutions(
+            chapter, resolutions, scene_ids=scene_ids)
     canonical_witness = {
         'status': constructive['status'],
         'candidate_sha256': constructive['candidate_sha256'],
@@ -1161,7 +1171,7 @@ def preflight_binding_candidate(
         validate_plan_refs(
             merged, fact_catalog(
                 up.global_g, up.blueprints, up.main_text))
-        build_writer_context(merged, up.global_g, up.blueprints, up.main_text)
+        build_writer_context(merged, up.global_g, up.blueprints, up.main_text, knowledge_links=up.knowledge_links)
     except (BlindPlanError, RefusedByStructure) as exc:
         return _finish(failures=(typed_failures.make(
             candidate_sha256=subject, code='blind_compile_refused',
@@ -1383,6 +1393,12 @@ def _chapter_binding_issue(
     present_participants = {
         ref for beat in beats.values()
         for ref in (beat.get('present_char_ids') or [])}
+    dialogue_participants = {
+        party['char_id'] for beat in beats.values()
+        for hinge in beat.get('hinges') or []
+        for dialogue in [hinge.get('dialogue') or {}]
+        for party in [dialogue.get('speaker'), *(dialogue.get('addressees') or [])]
+        if isinstance(party, dict) and party.get('kind') == 'character'}
     local_alias_tables: dict[str, dict[str, str]] = {}
     for field_name, required_refs in (
             ('fact_aliases', set(atoms)),
@@ -1394,9 +1410,9 @@ def _chapter_binding_issue(
                 f'stage4.plan ch{chapter_ordinal} {field_name} 缺本章映射：{missing}')
         local_refs = required_refs
         if field_name == 'participant_aliases':
-            # A 的 participant 表只保证 fact 参与者；纯舞台到场者可合法无
+            # A 的 participant 表只保证 fact 参与者；纯舞台或对白人物可合法无
             # opaque alias，仍以正式 char_id 阅读，不能为此发明映射/业务闸。
-            local_refs = local_refs | present_participants
+            local_refs = local_refs | present_participants | dialogue_participants
         local_alias_tables[field_name] = {
             alias: formal for alias, formal in table.items()
             if formal in local_refs}
@@ -1428,22 +1444,21 @@ def _chapter_binding_issue(
          'participant_char_ids': atom.get('participant_char_ids') or [],
          'obligation': atom.get('obligation'),
          'source_beat_ref': atom.get('source_beat_ref'),
+         'source_start': (atom.get('source') or {}).get('start'),
+         'source_end': (atom.get('source') or {}).get('end'),
          'source_text': (
              (atom.get('source') or {}).get('text')
              if isinstance(atom.get('source'), dict) else None)}
         for atom in atoms.values()]
     stage_payload = [
         {'stage_ref': beat.get('beat_id'),
+         'span_start': (beat.get('span') or {}).get('start'),
+         'span_end': (beat.get('span') or {}).get('end'),
          'time_layer': beat.get('time_layer'),
          'place': beat.get('place'),
          'present_char_ids': beat.get('present_char_ids') or [],
-         'materials': [
-             {'material_ref': hinge.get('hinge_id'),
-              'kind': hinge.get('kind'),
-              'text': (
-                  (hinge.get('source') or {}).get('text')
-                  if isinstance(hinge.get('source'), dict) else None)}
-             for hinge in (beat.get('hinges') or [])]}
+          'materials': [stage4_material_evidence(hinge)
+                        for hinge in (beat.get('hinges') or [])]}
         for beat in beats.values()]
     baseline_payload = {
         'scene_stage_refs': {
@@ -1461,6 +1476,7 @@ def _chapter_binding_issue(
         for scene in candidate_payload['scenes']
         if isinstance(scene.get('candidate_scene_id'), str))
     issued_refs: set[str] = set(scene_ids)
+    issued_refs.update(dialogue_participants)
 
     def issue(value: object) -> None:
         if isinstance(value, str) and value:
@@ -1510,6 +1526,17 @@ def _chapter_binding_issue(
                 if current_scenes else []),
             'note': '仅承接判断；不得引用、复述或推断上一章正文',
         }
+        # 边界事实的文字也是实际依赖。只给 ID 会使“同一 ID 的状态改了”
+        # 既对模型不可见，也无法正确使相邻章的历史绑定失效；仍不下发邻章正文。
+        boundary_refs = set(neighbor_payload['previous_ending_state_refs'])
+        boundary_refs.update(
+            alias_to_formal.get(alias, alias)
+            for alias in neighbor_payload['previous_exit_state_aliases'])
+        neighbor_payload['previous_state_facts'] = [
+            {'fact_id': atom.get('fact_id'), 'claim': atom.get('claim'),
+             'kind': atom.get('kind'), 'obligation': atom.get('obligation')}
+            for atom in previous_bp.get('fact_atoms') or []
+            if atom.get('fact_id') in boundary_refs]
         # 只把当前章一侧收入 concern 闭集；上一章一侧只是只读边界摘要。
         for field_name in (
                 'current_entry_state_refs', 'current_entry_state_aliases'):
@@ -1593,8 +1620,7 @@ def _keep_business_witness(
     无正文读数；这里是第三份——**完整 witness**（typed 失败 + 被拒响应全文）
     进 response_repair 的同一目录状态机，不建第二份审计文件。
     ``repair_eligible=False``：这不是通用 JSON 修复面，收口走 ``--revalidate`` /
-    decision-bound repair / hash-bound replacement；``--adopt-rejected`` 会按
-    eligibility 关闭式拒绝它。
+    decision-bound repair / hash-bound replacement；封存见证只供该工作单元恢复。
     """
     if not evaluation.typed_failures or not _uses_agent_runs(ctx):
         return
@@ -1788,7 +1814,7 @@ def run_context(ctx: RunContext) -> CheckReport:
     plan = store.read(PlanChapters, REL)
     plan_raw = plan.model_dump(by_alias=True)
     assert up.global_g is not None
-    asm = build_writer_context(plan_raw, up.global_g, up.blueprints, up.main_text)
+    asm = build_writer_context(plan_raw, up.global_g, up.blueprints, up.main_text, knowledge_links=up.knowledge_links)
     # ⚠ **必须显式给 `CtxProvenance`**：默认的 `FreeProvenance` 过不了 `WriterContext` 的载体。
     #   这一层的来源账**没有 `prompts` 也没有 `model`**（确定性组装，无 LLM 参与）。
     art = WriterContext.model_validate(
@@ -1973,6 +1999,12 @@ def _finish_restored_agent_session(
         # client 路一致，不把任一章的历史 provider id 冒充可 resume。
         from novel import agent_session_audit
         closed_any = False
+        if isinstance(source._pool, _PlanRecoveryPool):
+            for restored in source._pool._restored.values():
+                closed_any = agent_session_audit.finish_restored_session(
+                    ctx.novel_dir.parent, restored.acceptance, process_state='ok',
+                    delivery_state=delivery_state, end_code_version=prov.code_version(),
+                    error_kind=error_kind, only_if_open=True) or closed_any
         for chapter, client in sorted(source._pool._clients.items()):
             if client.provider_session_id is not None:
                 closed_any = True
@@ -2018,10 +2050,10 @@ def _refuse_foreign_before_wire(
     """legacy/agent 共用正式路径，不能踩过另一 run 的 prepared。"""
     from novel.llm import stage4_runs
     if (not _uses_agent_runs(ctx)
-            and not any(root.is_dir() for root in paths.stage_run_read_roots(
+            and not any(root.is_dir() for root in runtime_layout.stage_run_roots(
                 ctx.novel_dir, 'stage4'))):
         return
-    with stage4_runs.commit_ownership(ctx.novel_dir):
+    with (nullcontext() if ctx.readonly else stage4_runs.commit_ownership(ctx.novel_dir)):
         stage4_runs.refuse_foreign_commit_reservations(
             ctx,
             allowed_design_repair_run_id=allowed_design_repair_run_id,
@@ -2048,13 +2080,8 @@ def _assert_design_current(
                 prepared.strategy_feedback, ensure_ascii=False,
                 sort_keys=True, separators=(',', ':')),
         ))
-    strategy_identity = {
-        'root_input_sha256': current_input,
-        'strategy_projection': projection,
-    }
-    if prepared.strategy_feedback is not None:
-        strategy_identity['strategy_feedback'] = prepared.strategy_feedback
-    strategy_input = _canonical_sha256(strategy_identity)
+    strategy_input = _design_strategy_input_sha(
+        projection, prepared.strategy_feedback)
     if (system != prepared.system or expected_user != prepared.user
             or truth != prepared.truth or mapping != prepared.mapping
             or projection != prepared.strategy_projection
@@ -2063,6 +2090,27 @@ def _assert_design_current(
         raise ProvenanceRefused(
             'stage4.design 运行期间 truth/mapping/prompt 发生漂移')
     ctx.require_observed_roots_current()
+    if prepared.rebuild_parent is not None:
+        parent = prepared.rebuild_parent
+        current_file = prepared.store.full_sha256_or_none(CANDIDATE_REL)
+        if current_file != parent.identity['file_sha256']:
+            from novel.llm import stage4_runs
+            with stage4_runs.commit_ownership(ctx.novel_dir):
+                journal = stage4_runs.design_aggregate_state(ctx)
+            if (journal is None or journal.get('primary_file_sha256') != current_file
+                    or journal['finalization_payload'].get('rebuild', {}).get('parent') != parent.identity):
+                raise ProvenanceRefused('Stage4A 重建期间正式父候选发生第三方变更')
+
+
+def _design_strategy_input_sha(
+    projection: Mapping[str, Any], feedback: Mapping[str, Any] | None = None,
+) -> str:
+    """策略只消费公开章概况及已下发的 typed 反馈，不消费事实全集。"""
+    return _canonical_sha256({
+        'contract': 'stage4-design-strategy-dependencies-v1',
+        'strategy_projection': dict(projection),
+        'strategy_feedback': dict(feedback) if feedback is not None else None,
+    })
 
 
 def _design_strategy_unit(prepared: DesignCandidateContext) -> Any:
@@ -2086,16 +2134,20 @@ def prepare_design_candidate(
     if ctx.node != 'stage4.design':
         raise ValueError(
             f'prepare_design_candidate 只接受 stage4.design，实得 {ctx.node!r}')
+    rebuild_parent = None
     if not _existing_candidate_authorized:
         own_tail = None
-        if _uses_agent_runs(ctx):
+        if _uses_agent_runs(ctx) or ctx.paid is False:
             from novel.llm import stage4_runs
-            with stage4_runs.commit_ownership(ctx.novel_dir):
+            with (nullcontext() if ctx.readonly else stage4_runs.commit_ownership(ctx.novel_dir)):
                 own_tail = stage4_runs.design_aggregate_state(ctx)
         # 同 run 的 prepared/committed aggregate 只授权幂等补完；没有该尾窗
         # 才是首次入口，必须证明正式槽位确实为空。
         if own_tail is None:
-            require_initial_design_slot(ArtifactStore(ctx))
+            rebuild_parent = require_initial_design_slot(ArtifactStore(ctx))
+        elif own_tail['finalization_payload'].get('rebuild') is not None:
+            from novel.stages.stage4.design_rebuild import restore_parent
+            rebuild_parent = restore_parent(ctx, own_tail['finalization_payload']['rebuild']['parent'])
     _refuse_foreign_before_wire(
         ctx,
         allowed_design_repair_run_id=_allowed_design_repair_run_id,
@@ -2117,14 +2169,23 @@ def prepare_design_candidate(
         mapping=mapping,
         strategy_projection=projection,
         input_sha256=root_input,
-        strategy_input_sha256=_canonical_sha256({
-            'root_input_sha256': root_input,
-            'strategy_projection': projection,
-        }),
+        strategy_input_sha256=_design_strategy_input_sha(projection),
         validator=_BlindStrategyValidator(chapters),
+        rebuild_parent=rebuild_parent,
     )
+    if rebuild_parent is not None:
+        from novel.stages.stage4.design_rebuild import strategy_dependency
+        if rebuild_parent.candidate.provenance.design_dependencies.strategy != strategy_dependency(prepared):
+            feedback = {
+                'kind': 'stage4-upstream-changed-strategy/v1',
+                'previous_strategy': next(row.response_payload for row in rebuild_parent.sources if row.chapter is None),
+            }
+            prepared = replace(prepared, strategy_feedback=feedback,
+                user=user + '\n【TYPED_REPLAN_FEEDBACK_JSON】\n' + json.dumps(
+                    feedback, ensure_ascii=False, sort_keys=True, separators=(',', ':')),
+                strategy_input_sha256=_design_strategy_input_sha(projection, feedback))
     _assert_design_current(ctx, prepared)
-    if _uses_agent_runs(ctx) and ensure_strategy_unit:
+    if _uses_agent_runs(ctx) and ensure_strategy_unit and not ctx.readonly:
         from novel.llm import stage4_runs
         stage4_runs.ensure_design_unit_run(ctx, _design_strategy_unit(prepared))
     return prepared
@@ -2158,11 +2219,6 @@ def _prepare_design_replan_candidate(
             prompt_feedback, ensure_ascii=False,
             sort_keys=True, separators=(',', ':')),
     ))
-    identity = {
-        'root_input_sha256': base.input_sha256,
-        'strategy_projection': base.strategy_projection,
-        'strategy_feedback': prompt_feedback,
-    }
     chapters = tuple(sorted(
         int(row.get('chapter_ordinal') or 0)
         for row in (base.truth.get('chapters') or [])))
@@ -2175,7 +2231,8 @@ def _prepare_design_replan_candidate(
         mapping=base.mapping,
         strategy_projection=base.strategy_projection,
         input_sha256=base.input_sha256,
-        strategy_input_sha256=_canonical_sha256(identity),
+        strategy_input_sha256=_design_strategy_input_sha(
+            base.strategy_projection, prompt_feedback),
         validator=_ReplanStrategyValidator(
             _BlindStrategyValidator(chapters),
             previous=previous,
@@ -2256,13 +2313,13 @@ def _design_chapter_contexts(
         own_strategy_sha = chapter_strategy_sha256(
             epoch, ordinal, weights[ordinal])
         input_sha = _canonical_sha256({
-            'root_input_sha256': prepared.input_sha256,
-            # 真正进入本章 prompt 的只有宏观 strategy + 本章 weight。其他章
-            # weight 不得污染本章 checkpoint 身份。
+            'contract': 'stage4-design-chapter-dependencies-v1',
+            # 策略、本章公开投影与编译映射共同决定同一份请求的业务结果。
             'strategy_epoch_sha256': epoch,
             'chapter_strategy_sha256': own_strategy_sha,
             'chapter_projection': projection,
-            'local_mapping': local_mapping,
+            'compilation_mapping': blind_chapter_compilation_dependencies(
+                local_mapping, prepared.mapping),
         })
         contexts.append(DesignChapterContext(
             chapter_ordinal=ordinal,
@@ -2281,6 +2338,9 @@ def _design_chapter_contexts(
                 chapter_weight=weights[ordinal],
             ),
         ))
+    if prepared.rebuild_parent is not None:
+        from novel.stages.stage4.design_rebuild import chapter_request
+        contexts = [chapter_request(prepared, chapter) for chapter in contexts]
     if _uses_agent_runs(ctx) and ensure_units:
         from novel.llm import stage4_runs
         for chapter in contexts:
@@ -2303,10 +2363,17 @@ def _design_chapter_unit(chapter: DesignChapterContext) -> Any:
 
 def _request_design_strategy(
         ctx: RunContext, source: Any, prepared: DesignCandidateContext,
+        *, historical: Any | None = None,
 ) -> BlindBookStrategyResponse:
     from novel.llm import stage4_runs
     purpose = stage4_runs.design_unit_purpose(None)
     unit = _design_strategy_unit(prepared)
+    if historical is not None:
+        response = BlindBookStrategyResponse.model_validate(historical.checkpoint.value)
+        if (prepared.validator(response, None) is not None
+                or historical.checkpoint.state_payload != _design_strategy_checkpoint_state(response)):
+            raise ProvenanceRefused('Stage4A 历史策略的响应/编译状态不闭合')
+        return response
     if _uses_agent_runs(ctx):
         restored = stage4_runs.restore_design_unit_checkpoint(
             ctx, unit, validator=prepared.validator)
@@ -2444,7 +2511,7 @@ def _request_design_chapters(
     if missing:
         max_workers = min(
             stage4_runs.DESIGN_MAX_CONCURRENCY,
-            int(getattr(source, 'concurrency', stage4_runs.DESIGN_MAX_CONCURRENCY)),
+            int(getattr(source, 'concurrency', PIPELINE_DEFAULT_CONCURRENCY)),
             len(missing))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
@@ -2474,13 +2541,75 @@ def request_design_candidate(
     _assert_design_current(ctx, prepared)
     if _uses_agent_runs(ctx):
         _require_design_agent_bridge(source)
-    strategy = _request_design_strategy(ctx, source, prepared)
+    from novel.llm import design_adoption, stage4_runs
+    from novel.stages.stage4.design_rebuild import dependencies, strategy_dependency
+    historical: dict[int | None, Any] = {}
+    parent = prepared.rebuild_parent
+    if (parent is not None
+            and parent.candidate.provenance.design_dependencies.strategy == strategy_dependency(prepared)):
+        strategy = BlindBookStrategyResponse.model_validate(next(
+            row.response_payload for row in parent.sources if row.chapter is None))
+    else:
+        if (_uses_agent_runs(ctx) or not ctx.paid) and not stage4_runs.design_unit_checkpoint_exists(ctx, None):
+            previous = design_adoption.select(
+                ctx, _design_strategy_unit(prepared), validator=prepared.validator,
+                state_payload=_design_strategy_checkpoint_state, persist=not ctx.readonly)
+            if previous is not None:
+                historical[None] = previous
+        if not ctx.paid and None not in historical:
+            raise TerminalState('Stage4A 缺当前策略响应，不能免费聚合')
+        strategy = _request_design_strategy(ctx, source, prepared, historical=historical.get(None))
     chapters = _design_chapter_contexts(ctx, prepared, strategy)
-    responses = _request_design_chapters(
-        ctx, source, prepared, chapters)
+    preserved = parent.preserved(dependencies(ctx, prepared, strategy)) if parent is not None else ()
+    preserved_by = {row.chapter: row for row in preserved}
+    if any(stage4_runs.design_unit_checkpoint_exists(ctx, chapter) for chapter in preserved_by):
+        raise ProvenanceRefused('Stage4A 当前 run 的 checkpoint 与父候选保留源重叠')
+    if _uses_agent_runs(ctx) or not ctx.paid:
+        # 全部来源先完成 preflight；任一章未知都不能先购买其余缺失章。
+        for chapter in chapters:
+            if chapter.chapter_ordinal in preserved_by or stage4_runs.design_unit_checkpoint_exists(ctx, chapter.chapter_ordinal):
+                continue
+            def compiled_state(response, current=chapter):
+                why = current.validator(response, None)
+                if why is not None or current.validator.compiled is None:
+                    raise ProvenanceRefused(f'Stage4A 历史章不能按当前材料编译：{why}')
+                return _design_chapter_checkpoint_state(response, current.validator.compiled)
+            previous = design_adoption.select(
+                ctx, _design_chapter_unit(chapter), validator=chapter.validator,
+                state_payload=compiled_state, persist=not ctx.readonly)
+            if previous is not None:
+                historical[chapter.chapter_ordinal] = previous
+    targets = tuple(row for row in chapters if row.chapter_ordinal not in preserved_by)
+    if ctx.paid:
+        responses = _request_design_chapters(
+            ctx, source, prepared, targets,
+            historical={key: value for key, value in historical.items() if key is not None})
+    else:
+        if any(row.chapter_ordinal not in historical for row in targets):
+            raise TerminalState('Stage4A 尚缺当前章响应，不能免费聚合')
+        responses = tuple((row.chapter_ordinal, historical[row.chapter_ordinal].checkpoint.value) for row in targets)
+    chapter_by = {row.chapter_ordinal: row for row in chapters}
+    responses = tuple(sorted((*responses, *((row.chapter, _design_source_response(row, chapter_by[row.chapter]))
+                                           for row in preserved if row.chapter is not None))))
     if len(responses) != len(chapters):
         raise ProvenanceRefused('stage4.design 逐章响应集合未闭合')
-    return DesignCandidateResponses(strategy=strategy, chapters=responses)
+    return DesignCandidateResponses(strategy=strategy, chapters=responses, historical=tuple(historical.items()), preserved=preserved)
+
+
+def _design_source_response(source: Any, chapter: DesignChapterContext) -> BlindChapterDesignResponse:
+    """同一正式来源入口接纳模型局部稿和人工完整章稿，保留原始来源账。"""
+    raw = source.response_payload
+    if source.origin == 'human':
+        from novel.stages.stage4.blind import localize_blind_chapter_edit
+        validator = chapter.validator
+        raw = localize_blind_chapter_edit(raw, chapter.local_mapping, validator.formal_mapping,
+            truth_chapter=validator.truth_chapter, chapter_weight=chapter.chapter_weight)
+    return BlindChapterDesignResponse.model_validate(raw, strict=True)
+
+
+def _design_dependencies(ctx: RunContext, prepared: DesignCandidateContext, strategy: BlindBookStrategyResponse):
+    from novel.stages.stage4.design_rebuild import dependencies
+    return dependencies(ctx, prepared, strategy)
 
 
 def _materialize_design_candidate(
@@ -2516,7 +2645,24 @@ def _materialize_design_candidate(
         raise ProvenanceRefused(f'stage4.design 确定性聚合失败：{exc}') from exc
     if why := _blind_candidate_problem(business, prepared.truth):
         raise ProvenanceRefused(f'stage4.design 整书 HARD 未闭合：{why}')
-    _adoptions, adopted_models = _design_accepted_identity(source, expected)
+    from novel.stages.stage4.design_rebuild import dependencies
+    actual_dependencies = dependencies(ctx, prepared, responses.strategy)
+    _adoptions, adopted_models = _design_accepted_identity(source, expected, historical=responses.historical, preserved=responses.preserved)
+    if not ctx.paid:
+        from novel.llm import stage4_runs
+        historical = dict(responses.historical)
+        units = (_design_strategy_unit(prepared), *(_design_chapter_unit(chapter) for chapter in chapter_contexts))
+        preserved_by = {row.chapter: row for row in responses.preserved}
+        if set(historical) | set(preserved_by) != {unit.chapter for unit in units}:
+            raise ProvenanceRefused('免费 Stage4A 聚合必须证明策略与全部章的已保存来源')
+        rows = [stage4_runs._design_adoption_row(ctx, unit, historical=historical[unit.chapter])
+                for unit in units if unit.chapter not in preserved_by]
+        rows.extend(stage4_runs._design_source_row(row) for row in responses.preserved)
+        provenance = ctx.free_provenance(
+            BlindCandidateCompiledProvenance, alias_algorithm=BLIND_ALIAS_ALGORITHM,
+            truth_sha256=str(prepared.mapping['truth_sha256']), sources_sha256=_canonical_sha256(rows),
+            design_dependencies=actual_dependencies)
+        return BlindCandidate.model_validate({**business, '_provenance': provenance})
     usage_kwargs: dict[str, Any] = {}
     if _uses_agent_runs(ctx):
         from novel.llm import stage4_runs
@@ -2525,7 +2671,8 @@ def _materialize_design_candidate(
             *(_design_chapter_unit(chapter) for chapter in chapter_contexts),
         )
         usage_kwargs['usage_override'] = \
-            stage4_runs.design_aggregate_usage(ctx, units)
+            stage4_runs.design_aggregate_usage(ctx, units, historical=dict(responses.historical),
+                                              preserved=responses.preserved)
     provenance = ctx.llm_provenance(
         BlindCandidateProvenance,
         prompts={
@@ -2540,6 +2687,7 @@ def _materialize_design_candidate(
         alias_algorithm=BLIND_ALIAS_ALGORITHM,
         truth_sha256=str(prepared.mapping['truth_sha256']),
         architecture='book_strategy_chapters_v1',
+        design_dependencies=actual_dependencies,
         **usage_kwargs,
     )
     return BlindCandidate.model_validate({
@@ -2550,22 +2698,37 @@ def _materialize_design_candidate(
 
 def _design_accepted_identity(
         source: Any, chapters: tuple[int, ...],
+    *, historical: tuple[tuple[int | None, Any], ...] = (),
+    preserved: tuple[Any, ...] = (),
 ) -> tuple[tuple[DesignAdoption, ...], tuple[str, ...]]:
     from novel.llm import stage4_runs
     units = (None, *chapters)
     rows: list[DesignAdoption] = []
     purposes: list[str] = []
+    historical_by = dict(historical)
+    historical_models: list[str] = []
+    preserved_by = {row.chapter: row for row in preserved}
     for chapter in units:
+        if chapter in preserved_by:
+            model = preserved_by[chapter].model
+            if model is not None:
+                historical_models.append(model)
+            continue
         purpose = stage4_runs.design_unit_purpose(chapter)
-        purposes.append(purpose)
-        attempt_id = source.accepted_attempt(purpose)
+        prior = historical_by.get(chapter)
+        if prior is None:
+            purposes.append(purpose)
+            attempt_id = source.accepted_attempt(purpose)
+        else:
+            attempt_id = prior.checkpoint.acceptance['attempt_id']
+            historical_models.append(prior.checkpoint.acceptance['model'])
         if not isinstance(attempt_id, str) or not attempt_id:
             raise ProvenanceRefused(
                 f'{purpose}: 候选缺 accepted attempt')
         rows.append(DesignAdoption(
             purpose=purpose, chapter=chapter, attempt_id=attempt_id))
-    models = tuple(sorted(set(source.accepted_models(*purposes))))
-    if not models or any(not isinstance(model, str) or not model for model in models):
+    models = tuple(sorted(set([*(source.accepted_models(*purposes) if purposes else ()), *historical_models])))
+    if (not models and not preserved) or any(not isinstance(model, str) or not model for model in models):
         raise ProvenanceRefused(
             'stage4.design 候选缺 N+1 units 的 evidence-backed adopted model')
     return tuple(rows), models
@@ -2580,7 +2743,7 @@ def evaluate_design_candidate(
     candidate = _materialize_design_candidate(
         ctx, source, prepared, responses, settle=False)
     chapters = tuple(ordinal for ordinal, _response in responses.chapters)
-    adoptions, adopted_models = _design_accepted_identity(source, chapters)
+    adoptions, adopted_models = _design_accepted_identity(source, chapters, historical=responses.historical, preserved=responses.preserved)
     payload = candidate.model_dump(by_alias=True, mode='json')
     return DesignCandidateEvaluation(
         responses=responses,
@@ -2601,7 +2764,7 @@ def _assert_design_evaluation(
         raise ProvenanceRefused('stage4.design evaluation 不属于当前 input')
     chapters = tuple(
         ordinal for ordinal, _response in evaluation.responses.chapters)
-    adoptions, models = _design_accepted_identity(source, chapters)
+    adoptions, models = _design_accepted_identity(source, chapters, historical=evaluation.responses.historical, preserved=evaluation.responses.preserved)
     if (source.model != evaluation.requested_model
             or adoptions != evaluation.adoptions
             or models != evaluation.adopted_models
@@ -2614,7 +2777,7 @@ def _assert_design_evaluation(
 def _design_finalization_payload(
         prepared: DesignCandidateContext, artifact: BlindCandidate,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         'delivery_kind': 'design',
         'architecture': 'book_strategy_chapters_v1',
         'unit_count': 1 + len(prepared.truth.get('chapters') or []),
@@ -2623,6 +2786,12 @@ def _design_finalization_payload(
         'candidate_sha256': _canonical_sha256(
             artifact.model_dump(by_alias=True, mode='json')),
     }
+    if prepared.rebuild_parent is not None:
+        from novel.llm import stage4_runs
+        parent = prepared.rebuild_parent
+        payload['rebuild'] = {'parent': parent.identity, 'preserved_sources': [
+            stage4_runs._design_source_row(row) for row in parent.preserved(artifact.provenance.design_dependencies)]}
+    return payload
 
 
 def verify_design_delivery(
@@ -2680,11 +2849,12 @@ def _note_adoption_attempt(
 def finalize_design_candidate(
         ctx: RunContext, source: Any, prepared: DesignCandidateContext,
         evaluation: DesignCandidateEvaluation,
+        *, committer: RunContext | None = None,
 ) -> BlindCandidate:
     """A 的唯一 settle/aggregate/write/readback/N+1 adoption/commit 边界。"""
     _assert_design_evaluation(ctx, source, prepared, evaluation)
     _assert_design_current(ctx, prepared)
-    if not _uses_agent_runs(ctx):
+    if not _uses_agent_runs(ctx) and not evaluation.responses.historical and not evaluation.responses.preserved:
         artifact = _materialize_design_candidate(
             ctx, source, prepared, evaluation.responses, settle=True)
         if artifact.model_dump(by_alias=True, mode='json') != \
@@ -2715,7 +2885,9 @@ def finalize_design_candidate(
         if journal is not None:
             sealed_payload, sealed_finalization = \
                 stage4_runs.restore_design_aggregate_payloads(ctx, journal)
-            artifact = BlindCandidate.model_validate(sealed_payload)
+            artifact = (ArtifactStore.decode_snapshot(
+                BlindCandidate, CANDIDATE_REL, journal['primary_file_text'].encode('utf-8'))
+                if journal['version'] == 2 else BlindCandidate.model_validate(sealed_payload))
             if artifact.model_dump(by_alias=True, mode='json') != \
                     evaluation.candidate.model_dump(by_alias=True, mode='json'):
                 raise ProvenanceRefused(
@@ -2739,7 +2911,10 @@ def finalize_design_candidate(
             journal = stage4_runs.prepare_design_aggregate_commit(
                 ctx,
                 units=units,
+                historical=dict(evaluation.responses.historical),
+                preserved=evaluation.responses.preserved,
                 primary_payload=payload,
+                primary_file_text=prepared.store._render(CANDIDATE_REL, artifact).decode('utf-8'),
                 finalization_payload=expected_finalization,
                 touched_paths=(CANDIDATE_REL,),
             )
@@ -2765,6 +2940,9 @@ def finalize_design_candidate(
 
         expected_file_sha = agent_runs.canonical_sha256(
             prepared.store._render(CANDIDATE_REL, artifact))
+        stage4_runs._require_design_aggregate_adoptions(ctx, journal, require_present=False)
+        recovery = aggregate_runs.preclaim_recovery_actor(
+            ctx, stage4_runs.design_aggregate_recovery_record(journal), committer=committer)
         _assert_design_current(ctx, prepared)
         state = stage4_runs.design_aggregate_target_state(
             ctx, journal, CANDIDATE_REL,
@@ -2795,145 +2973,8 @@ def finalize_design_candidate(
             primary_payload=landed_payload,
             finalization_payload=_design_finalization_payload(prepared, landed),
             landed_payloads={CANDIDATE_REL: landed_payload},
+            recovery=recovery,
         )
-        return landed
-
-
-def run_adopt_rejected(
-        ctx: RunContext, *, attempt_id: str, actor: str, reason: str,
-) -> BlindCandidate:
-    """Stage4A：**0 次调用**按当前完整四道闸重判并采用一份封存的拒稿。
-
-    【它补的是哪个洞】通用 `--response-repair` 只收 parse/require/schema
-    （`repair_eligible=True`）。Stage4A 的 validator 拒稿明确不在那个面上
-    （封存记录里逐字写着 `validator 不属于通用 JSON/形状修复面`）⇒ 在此之前
-    一次**已经付过费**的整书候选被判据挡下后，**没有任何恢复入口**，只能整本重来。
-    v8 那次跑就这样丢掉过整书候选。
-
-    【它凭什么不是「绕过判据」】
-    - 走的是同一个 `judge_payload`（parse/require/schema/validator 四道闸的唯一实现），
-      不是一套宽松的旁路；validator 仍绑**当前**的 truth/mapping，
-      所以上游变了就一定重判失败，不会拿旧候选配新上游。
-    - 人只能编辑隔离区里那份固定的 `candidate.json`；改了什么由
-      `RevalidationAudit` 逐个 JSON pointer 记下来，actor/reason 必填。
-    - 重判失败**当场封 outcome**：一份拒稿只有一次采用机会，不许反复试到过为止。
-    - provenance 走 `recovered_llm_provenance`：`model` 记当初那次真实产出的模型，
-      `code` 记**现在**这份编译代码，历史代码身份单独存在
-      `rejected_response_adoption.historical_code` 里，两半不压成一个数。
-    """
-    actor, reason = actor.strip(), reason.strip()
-    if not actor or not reason:
-        raise TerminalState('--adopt-rejected 必须显式给非空 --actor 与 --reason')
-
-    # 旧整书拒稿与新 strategy/chapter unit 共用 node，但不共用响应契约。
-    # 这条恢复口只能消费历史 whole-book response；若只验 node，新 unit 拒稿
-    # 会被送进 BlindPlanResponse 重判并永久封掉 outcome，等于把未来的逐 unit
-    # 恢复材料误销毁。身份检查和 outcome 检查都放在同书提交所有权内，避免
-    # 两只 CLI 同时看见“尚未处理”。
-    from novel.llm import stage4_runs
-
-    with stage4_runs.commit_ownership(ctx.novel_dir):
-        stage4_runs.refuse_foreign_commit_reservations(ctx)
-        record = response_repair.find_attempt(ctx.novel_dir, attempt_id)
-        rejection = record.rejection
-        if str(rejection.get('node')) != ctx.node:
-            raise TerminalState(
-                f'attempt_id={attempt_id} 属于 {rejection.get("node")}，'
-                f'不能被 {ctx.node} 采用')
-        if (rejection.get('purpose') != ctx.node
-                or rejection.get('response_model')
-                != BlindPlanResponse.__name__):
-            raise TerminalState(
-                f'attempt_id={attempt_id} 不是旧 whole-book Stage4A 拒稿：'
-                f'purpose={rejection.get("purpose")!r}, '
-                f'response_model={rejection.get("response_model")!r}。'
-                'strategy/单章 unit 修复尚未开放，不能送进旧整书采用器')
-        if record.outcome is not None:
-            raise TerminalState(
-                f'attempt_id={attempt_id} 已有不可变 outcome（'
-                f'{record.outcome.get("decision")}）；一份拒稿只有一次采用机会，'
-                '要么开一次新 run，要么走完整 typed 人工计划')
-
-        # 隔离区的字节格式归 `response_repair` 一处解析；这里只拿结果，不碰路径。
-        material = response_repair.adoption_material(record)
-        candidate_text = _strip_fences(material.candidate_text)
-
-        system, user, store, _up, truth, mapping = _legacy_design_request(ctx)
-        validator = _blind_validator(truth, mapping)
-        replay = ChatResponse(
-            content=candidate_text,
-            model=str(rejection.get('model') or ''),
-            finish_reason=str(
-                (rejection.get('response') or {}).get('finish_reason') or ''),
-        )
-        response, why, gate, detail = judge_payload(
-            candidate_text, replay,
-            require=required_top_level(BlindPlanResponse),
-            model_cls=BlindPlanResponse,
-            validator=validator,
-        )
-        if why is not None or response is None or validator.compiled is None:
-            response_repair.write_outcome(
-                record, decision='rejected', gate=gate, detail=detail, why=why)
-            # 显式终态、没落盘 ⇒ exit 2。不是 `1`：`1` 说的是「跑完了、判定不通过、
-            # 已落盘」，而这里一个字节都没写进正式产物。
-            raise TerminalState(
-                f'attempt_id={attempt_id} 按当前四道闸仍不通过（gate={gate}）：{why}；'
-                '本次结论已封存，同一份拒稿不再接受第二次采用——'
-                '要么开一次新 run，要么走完整 typed 人工计划')
-
-        business = validator.compiled
-        audit = build_revalidation_audit(
-            actor=actor,
-            reason=reason,
-            baseline_locator_sha256=str(
-                (rejection.get('response') or {}).get('sha256') or ''),
-            baseline_raw_sha256=material.original_sha256,
-            baseline_payload=material.original_payload,
-            candidate_raw_sha256=material.candidate_raw_sha256,
-            candidate_payload=material.candidate_payload,
-        )
-        provenance = ctx.recovered_llm_provenance(
-            BlindCandidateProvenance,
-            prompts={'BLIND_DESIGN_SYS': system},
-            model=str(rejection.get('model') or ''),
-            adopted_models=[str(rejection.get('model') or '')],
-            alias_algorithm=BLIND_ALIAS_ALGORITHM,
-            truth_sha256=str(mapping['truth_sha256']),
-            architecture='whole_book_v1',
-            rejected_response_adoption=RejectedResponseAdoption(
-                attempt_id=attempt_id,
-                historical_code=str(rejection.get('code') or ''),
-                response_sha256=str(
-                    (rejection.get('response') or {}).get('sha256') or ''),
-                audit=audit,
-            ),
-        )
-        artifact = BlindCandidate.model_validate({
-            **business, '_provenance': provenance,
-        })
-        store.write(CANDIDATE_REL, artifact)
-        with ctx.validation_reads():
-            landed, _raw = store.read_own(
-                BlindCandidate, CANDIDATE_REL, require_current=True)
-            freshness = store.freshness(CANDIDATE_REL)
-        if landed.model_dump(by_alias=True, mode='json') != artifact.model_dump(
-                by_alias=True, mode='json'):
-            raise ProvenanceRefused(
-                '旧 whole-book Stage4A 采用后的正式 readback 与候选不相等')
-        if freshness.state != 'fresh':
-            raise ProvenanceRefused(
-                '旧 whole-book Stage4A 采用后的正式 readback 不 fresh：'
-                f'{freshness.state}/{freshness.reason}')
-
-        # adoption_id 是稳定幂等键；必须先于不可变 accepted outcome。若进程
-        # 死在两者之间，重跑会重复核验/写同一稿并命中同一 adoption，而后补齐
-        # outcome。反过来先封 outcome 会把缺 adoption 的尾窗永久锁死。
-        _note_adoption_attempt(
-            ctx, purpose=ctx.node, attempt_id=attempt_id,
-            rel=CANDIDATE_REL, artifact=landed)
-        response_repair.write_outcome(
-            record, decision='accepted', gate=None, detail=None, why=None)
         return landed
 
 
@@ -3188,8 +3229,7 @@ def _prepare_design_repair(
         if source_row is None:
             raise ProvenanceRefused(
                 f'parent aggregate 缺 ch{chapter.chapter_ordinal} source')
-        response = BlindChapterDesignResponse.model_validate(
-            source_row.response_payload)
+        response = _design_source_response(source_row, chapter)
         why = chapter.validator(response, None)
         if why is not None or chapter.validator.compiled is None:
             raise ProvenanceRefused(
@@ -3338,6 +3378,7 @@ def _materialize_design_repair(
         alias_algorithm=BLIND_ALIAS_ALGORITHM,
         truth_sha256=str(prepared.mapping['truth_sha256']),
         architecture='book_strategy_targeted_repair_v1',
+        design_dependencies=_design_dependencies(ctx, prepared, responses.strategy),
         parent_candidate_sha256=_canonical_sha256(
             parent.model_dump(by_alias=True, mode='json')),
         repair_decision_sha256=scope.decision_sha256,
@@ -3589,6 +3630,7 @@ def _materialize_design_replan(
         alias_algorithm=BLIND_ALIAS_ALGORITHM,
         truth_sha256=str(prepared.mapping['truth_sha256']),
         architecture='book_strategy_replan_v1',
+        design_dependencies=_design_dependencies(ctx, prepared, responses.strategy),
         parent_candidate_sha256=_canonical_sha256(
             parent.model_dump(by_alias=True, mode='json')),
         repair_decision_sha256=scope.decision_sha256,
@@ -3642,8 +3684,7 @@ def _run_design_replan(
         if row is None:
             raise ProvenanceRefused(
                 f'replan parent 缺 ch{chapter.chapter_ordinal} checkpoint')
-        response = BlindChapterDesignResponse.model_validate(
-            row.response_payload)
+        response = _design_source_response(row, chapter)
         why = chapter.validator(response, None)
         if why is not None or chapter.validator.compiled is None:
             raise ProvenanceRefused(
@@ -3817,6 +3858,11 @@ def _require_design_repair_recovery_provenance(
             alias_algorithm=BLIND_ALIAS_ALGORITHM,
             truth_sha256=str(prepared.mapping['truth_sha256']),
             architecture=architecture,
+            design_dependencies=(_design_dependencies(ctx, prepared, BlindBookStrategyResponse.model_validate({
+                'reconstruction_strategy': artifact.reconstruction_strategy,
+                'chapter_weights': [{'chapter_ordinal': row.output_ordinal, 'weight': row.weight}
+                                    for row in artifact.output_chapters]}))
+                if artifact.provenance.design_dependencies is not None else None),
             parent_candidate_sha256=_canonical_sha256(
                 parent.model_dump(by_alias=True, mode='json')),
             repair_decision_sha256=scope.decision_sha256,
@@ -3872,8 +3918,13 @@ def _rebuild_design_repair_recovery_candidate(
         raise ProvenanceRefused(
             f'Stage4 repair recovery parent strategy 当前 compiler '
             f'拒绝：{why}')
-    stage4_runs.validate_design_repair_recovery_unit_request(
-        ctx, parent_by[None], _design_strategy_unit(prepared))
+    parent_dependencies = parent.provenance.design_dependencies
+    if parent_dependencies is not None:
+        if parent_dependencies != _design_dependencies(ctx, prepared, previous_strategy):
+            raise ProvenanceRefused('Stage4 recovery 父候选实际依赖发生漂移')
+    else:
+        stage4_runs.validate_design_repair_recovery_unit_request(
+            ctx, parent_by[None], _design_strategy_unit(prepared))
 
     # 先证明 parent aggregate 仍由其 response checkpoints 在当前 compiler 下
     # 逐字重建；否则不能拿一个已漂移的父主体解释新候选。
@@ -3882,13 +3933,12 @@ def _rebuild_design_repair_recovery_candidate(
     parent_responses: dict[int, BlindChapterDesignResponse] = {}
     parent_compiled: list[dict[str, Any]] = []
     for chapter in parent_contexts:
-        stage4_runs.validate_design_repair_recovery_unit_request(
-            ctx, parent_by[chapter.chapter_ordinal],
-            _design_chapter_unit(chapter))
+        if parent_dependencies is None:
+            stage4_runs.validate_design_repair_recovery_unit_request(
+                ctx, parent_by[chapter.chapter_ordinal],
+                _design_chapter_unit(chapter))
         try:
-            response = BlindChapterDesignResponse.model_validate(
-                parent_by[chapter.chapter_ordinal].response_payload,
-                strict=True)
+            response = _design_source_response(parent_by[chapter.chapter_ordinal], chapter)
         except (KeyError, ValueError) as exc:
             raise ProvenanceRefused(
                 f'Stage4 recovery parent ch{chapter.chapter_ordinal} '
@@ -3943,8 +3993,7 @@ def _rebuild_design_repair_recovery_candidate(
                 current = normal
                 response_source = parent_by[ordinal]
             try:
-                response = BlindChapterDesignResponse.model_validate(
-                    response_source.response_payload, strict=True)
+                response = _design_source_response(response_source, current)
             except ValueError as exc:
                 raise ProvenanceRefused(
                     f'Stage4 targeted recovery ch{ordinal} response '
@@ -4061,8 +4110,7 @@ def _rebuild_design_repair_recovery_candidate(
                         'source/effective input 漂移')
                 response_source = parent_by[ordinal]
             try:
-                response = BlindChapterDesignResponse.model_validate(
-                    response_source.response_payload, strict=True)
+                response = _design_source_response(response_source, chapter)
             except ValueError as exc:
                 raise ProvenanceRefused(
                     f'Stage4 replan recovery ch{ordinal} response '
@@ -4266,7 +4314,7 @@ def validate_design_chapter_edit(
         ctx.novel_dir.parent, ctx.sid, request)
     scope = authorization.scope
     candidate, candidate_file_sha = _require_definitive_design_candidate(
-        store, CANDIDATE_REL, allow_frozen_v6=True)
+        store, CANDIDATE_REL)
     if candidate_file_sha != authorization.candidate_sha256:
         raise ApprovalRequired('Stage4A edit 绑定的 candidate 已变化')
 
@@ -4277,58 +4325,24 @@ def validate_design_chapter_edit(
             'weight': row.weight,
         } for row in candidate.output_chapters],
     })
-    if store.schema_version(BLUEPRINTS) == 6:
-        from novel.stages.stage2.frozen_v6 import (
-            LEGACY_FROZEN_REVIEW_CONTRACT,
-            require_frozen_v6_stage4_subject,
-        )
-        frozen = require_frozen_v6_stage4_subject(
-            store, record_human_edit_edge=True)
-        truth = frozen.truth
-        mapping = frozen.mapping
-        # v6 没有关系权威面；即使 alias 形式上可解析，也不能把新关系倒签成
-        # “Stage2 已确认”。完整章人工替换仍可执行旧 review 的普通 typed 约束。
-        active_constraints = (
-            scope.accumulated_constraints if scope.is_v3 else scope.constraints)
-        if any(
-            item.code == 'narrative_relation' or item.effect is not None
-            for item in active_constraints
-        ):
-            raise HumanEditProtected(
-                '冻结 Stage2 v6 没有 narrative_relations 权威面；'
-                '不得对它铸 relation membership 或执行 relation repair')
-        epoch = strategy_epoch_sha256({
-            'review_contract': LEGACY_FROZEN_REVIEW_CONTRACT,
-            'root_clean_sha1': ctx.root_clean_sha1,
-            'truth_sha256': str(mapping['truth_sha256']),
-            'alias_algorithm': BLIND_ALIAS_ALGORITHM,
-        }, strategy.reconstruction_strategy)
-        weights = {
-            row.chapter_ordinal: row.weight for row in strategy.chapter_weights}
-        chapter_weight = weights.get(request.output_ordinal)
-        if chapter_weight is None:
-            raise ProvenanceRefused(
-                f'Stage4A edit 目标章 {request.output_ordinal} 不在当前策略中')
-        chapter_strategy = chapter_strategy_sha256(
-            epoch, request.output_ordinal, chapter_weight)
-    else:
-        prepared = prepare_design_candidate(
-            ctx, ensure_strategy_unit=False,
-            _existing_candidate_authorized=True)
-        truth = prepared.truth
-        mapping = prepared.mapping
-        contexts = _design_chapter_contexts(
-            ctx, prepared, strategy, ensure_units=False)
-        chapter_ctx = next((
-            row for row in contexts
-            if row.chapter_ordinal == request.output_ordinal
-        ), None)
-        if chapter_ctx is None:
-            raise ProvenanceRefused(
-                f'Stage4A edit 目标章 {request.output_ordinal} 不在当前策略中')
-        epoch = chapter_ctx.strategy_epoch_sha256
-        chapter_strategy = chapter_ctx.chapter_strategy_sha256
-        chapter_weight = chapter_ctx.chapter_weight
+    prepared = prepare_design_candidate(
+        ctx, ensure_strategy_unit=False,
+        _existing_candidate_authorized=True)
+    truth = prepared.truth
+    mapping = prepared.mapping
+    contexts = _design_chapter_contexts(
+        ctx, prepared, strategy, ensure_units=False)
+    chapter_ctx = next((
+        row for row in contexts
+        if row.chapter_ordinal == request.output_ordinal
+    ), None)
+    if chapter_ctx is None:
+        raise ProvenanceRefused(
+            f'Stage4A edit 目标章 {request.output_ordinal} 不在当前策略中')
+    epoch = chapter_ctx.strategy_epoch_sha256
+    chapter_strategy = chapter_ctx.chapter_strategy_sha256
+    chapter_weight = chapter_ctx.chapter_weight
+    design_dependencies = _design_dependencies(ctx, prepared, strategy)
     if (
         epoch != authorization.strategy_epoch_sha256
         or chapter_strategy != authorization.chapter_strategy_sha256
@@ -4362,21 +4376,15 @@ def validate_design_chapter_edit(
 
     parent_payload = candidate.model_dump(by_alias=True, mode='json')
     parent_payload_sha = _canonical_sha256(parent_payload)
-    if candidate.provenance.architecture in (None, 'whole_book_v1'):
-        parent_run_id = None
-        parent_sources = stage4_runs.candidate_snapshot_design_sources(
-            ctx, parent_payload,
-            parent_candidate_sha256=parent_payload_sha)
-    else:
-        parent_run_id, resolved_parent, parent_sources = \
-            stage4_runs.resolve_committed_design_sources(
-                ctx,
-                candidate_payload=parent_payload,
-                candidate_file_sha256=candidate_file_sha,
-            )
-        if resolved_parent != parent_payload:
-            raise ProvenanceRefused(
-                'Stage4A human edit 解析的 parent lineage 与当前候选漂移')
+    parent_run_id, resolved_parent, parent_sources = \
+        stage4_runs.resolve_committed_design_sources(
+            ctx,
+            candidate_payload=parent_payload,
+            candidate_file_sha256=candidate_file_sha,
+        )
+    if resolved_parent != parent_payload:
+        raise ProvenanceRefused(
+            'Stage4A human edit 解析的 parent lineage 与当前候选漂移')
     parent_business = {
         key: value for key, value in parent_payload.items()
         if key != '_provenance'
@@ -4404,6 +4412,7 @@ def validate_design_chapter_edit(
         origin='human',
         alias_algorithm=BLIND_ALIAS_ALGORITHM,
         truth_sha256=str(mapping['truth_sha256']),
+        design_dependencies=design_dependencies,
         parent_candidate_sha256=parent_payload_sha,
         review_token=authorization.review_token,
         review_decision_sha256=authorization.decision_sha256,
@@ -4557,6 +4566,26 @@ def run_design(
     return _run_design_repair(ctx, client, repair_scope)
 
 
+class _DesignAdoptionSource:
+    """只供确定性汇合的评估身份；没有 driver、probe、start 或 resume 接口。"""
+    model = 'saved-unit-adoption'
+
+
+def run_design_reaggregate(ctx: RunContext) -> BlindCandidate | DesignCandidateEvaluation:
+    """全部历史单元免费编译；请求缺失或损坏时在提交前关闭式停止。"""
+    if ctx.node != 'stage4.design' or ctx.paid:
+        raise ProvenanceRefused('Stage4A reaggregate 只接受明确的免费执行')
+    if ctx.code != prov.code_version():
+        raise ProvenanceRefused('Stage4A 免费聚合的代码身份已变化')
+    prepared = prepare_design_candidate(ctx, ensure_strategy_unit=False)
+    source = _DesignAdoptionSource()
+    result = request_design_candidate(ctx, source, prepared)
+    evaluation = evaluate_design_candidate(ctx, source, prepared, result)
+    if ctx.readonly:
+        return evaluation
+    return finalize_design_candidate(ctx, source, prepared, evaluation)
+
+
 def _assert_plan_current(
         ctx: RunContext, prepared: PlanCandidateContext,
 ) -> None:
@@ -4573,6 +4602,7 @@ def _assert_plan_current(
         'main_text': up.main_text,
         'blueprints': up.blueprints,
         'global_grounding': up.global_g,
+        'knowledge_links': up.knowledge_links,
     })
     if (system != prepared.system or user != prepared.user
             or candidate_raw != prepared.candidate_raw
@@ -4588,8 +4618,12 @@ def _own_stage4_tail(ctx: RunContext) -> Mapping[str, Any] | None:
     if not _uses_agent_runs(ctx):
         return None
     from novel.llm import stage4_runs
-    with stage4_runs.commit_ownership(ctx.novel_dir):
+    with (nullcontext() if ctx.readonly else stage4_runs.commit_ownership(ctx.novel_dir)):
         stage4_runs.refuse_foreign_commit_reservations(ctx)
+        aggregate_path = paths.stage4_plan_aggregate_path(ctx.novel_dir, ctx.run_id)
+        if ctx.node == 'stage4.plan' and aggregate_path.is_file():
+            return aggregate_runs.validate_envelope(
+                aggregate_path, run_id=ctx.run_id, sid=ctx.sid, node=ctx.node)
         return stage4_runs.committed(ctx) or stage4_runs.prepared(ctx)
 
 
@@ -4640,6 +4674,7 @@ def prepare_plan_candidate(
         'main_text': up.main_text,
         'blueprints': up.blueprints,
         'global_grounding': up.global_g,
+        'knowledge_links': up.knowledge_links,
     })
     prepared = PlanCandidateContext(
         system=system,
@@ -4661,7 +4696,7 @@ def prepare_plan_candidate(
         ),
     )
     _assert_plan_current(ctx, prepared)
-    if _uses_agent_runs(ctx):
+    if _uses_agent_runs(ctx) and not ctx.readonly:
         from novel.llm import stage4_runs
         stage4_runs.ensure_run(
             ctx,
@@ -4674,58 +4709,11 @@ def prepare_plan_candidate(
     return prepared
 
 
-def _plan_checkpoint_state(
-        response: EvidenceBindingResponse,
-        compiled: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    return {
-        # 一份 accepted candidate 可能随后被业务 HARD 拒稿；是否终态由
-        # commit journal 决定，checkpoint 不抢先把它叫作 terminal。
-        'kind': 'stage4-plan-candidate',
-        'status': response.status,
-        'response_sha256': _canonical_sha256(
-            response.model_dump(by_alias=True, mode='json')),
-        'compiled_sha256': (
-            None if compiled is None else _canonical_sha256(dict(compiled))),
-    }
-
-
-def request_plan_candidate(
-        ctx: RunContext, source: Any, prepared: PlanCandidateContext,
-) -> EvidenceBindingResponse:
-    """只读恢复历史全书 B checkpoint；新请求必须经现役章池。"""
-    _assert_plan_current(ctx, prepared)
-    if _uses_agent_runs(ctx):
-        _require_agent_bridge(ctx, source)
-        from novel.llm import stage4_runs
-        restored = stage4_runs.restore_checkpoint(
-            ctx,
-            input_sha256=prepared.input_sha256,
-            system=prepared.system,
-            user=prepared.user,
-            response_model=EvidenceBindingResponse,
-            max_tokens=prompts.EVIDENCE_BIND_MAX_TOKENS,
-            validator=prepared.validator,
-        )
-        if restored is not None:
-            if (restored.revision_key != 'candidate'
-                    or restored.state_payload != _plan_checkpoint_state(
-                        restored.value, prepared.validator.compiled)):
-                raise ProvenanceRefused(
-                    'stage4.plan latest checkpoint 的业务 progress_state 不闭合')
-            source.restore_checkpoint_acceptance(
-                ctx.node,
-                restored.acceptance,
-                system=prepared.system,
-                user=prepared.user,
-                max_tokens=prompts.EVIDENCE_BIND_MAX_TOKENS,
-                recovery_policy=stage4_runs.recovery_policy(ctx.node),
-            )
-            return restored.value
-        raise ProvenanceRefused(
-            'Stage4B 新请求必须使用实际章节 session；历史全书恢复未找到 checkpoint')
-    raise ProvenanceRefused(
-        'legacy Stage4B 已按歧义章节分发；请通过 run_plan 使用机械基线与章级预算')
+def _plan_accepted_identity(ctx: RunContext, source: Any) -> tuple[str | None, tuple[str, ...]]:
+    if isinstance(source, _PlanChapterAggregateSource) and source.mechanical:
+        source.require_history_current()
+        return None, ()
+    return _accepted_identity(ctx, source)
 
 
 def _materialize_binding(
@@ -4743,7 +4731,56 @@ def _materialize_binding(
         raise ProvenanceRefused(f'stage4.plan 候选绕过响应闸：{why}')
     if response.status == 'bound' and prepared.validator.compiled is None:
         raise ProvenanceRefused('stage4.plan bound 候选没有唯一编译树')
-    _attempt, adopted_models = _accepted_identity(ctx, source)
+    if not ctx.paid and isinstance(source, _PlanChapterAggregateSource):
+        sealed_path = paths.stage4_plan_aggregate_path(ctx.novel_dir, ctx.run_id)
+        if sealed_path.is_file():
+            sealed = aggregate_runs.validate_envelope(
+                sealed_path, run_id=ctx.run_id, sid=ctx.sid, node=ctx.node)
+            binding = ArtifactStore.decode_snapshot(
+                EvidenceBinding, BINDING_REL, sealed['primary_file_text'].encode('utf-8'))
+            expected_response = EvidenceBindingResponse.model_validate(
+                binding.model_dump(by_alias=True, exclude={'provenance', 'infeasibility_proof'}))
+            if (sealed['code'] != ctx.code or expected_response != response
+                    or sealed['sources']['input_sha256'] != prepared.input_sha256
+                    or binding.provenance.unit_lineage != unit_lineage):
+                raise ProvenanceRefused('免费聚合的冻结回答、输入或逐章来源漂移')
+            # 冻结字节只保持序列化身份，完整 typed provenance 仍从当前输入、
+            # 原 checkpoint 与 ledger 独立重建，不能只相信 journal 自哈希。
+            prompt_map = {
+                'CHAPTER_BIND_SYS': prov.fingerprint(prompts.chapter_binding_system()),
+                STAGE4_BINDING_INPUT_RECEIPT_KEY: prov.fingerprint(STAGE4_BINDING_INPUT_CONTRACT),
+            }
+            common = dict(code=ctx.code, root_clean_sha1=ctx.root_clean_sha1,
+                          inputs=ctx.edges, candidate_sha256=prepared.subject_sha256,
+                          architecture=architecture, unit_lineage=unit_lineage)
+            if binding.provenance.origin == 'llm':
+                if source.mechanical or source.all_historical:
+                    raise ProvenanceRefused('全机械/全历史聚合不能声明本轮模型产出')
+                _attempt, models = _plan_accepted_identity(ctx, source)
+                expected_provenance = EvidenceBindingProvenance(
+                    **common, prompts=prompt_map, model=source.model,
+                    adopted_models=sorted(models), usage=source.aggregate_usage())
+            else:
+                expected_provenance = EvidenceBindingCompiledProvenance(
+                    **common, usage=binding.provenance.usage,
+                    binding_input_contract=(STAGE4_BINDING_INPUT_CONTRACT
+                                            if not source.mechanical else None))
+                if binding.provenance.usage is not None:
+                    expected_usage = source.aggregate_usage() if not source.mechanical else None
+                    if binding.provenance.usage != expected_usage:
+                        raise ProvenanceRefused('冻结聚合 usage 与原成本证据不等')
+            expected = EvidenceBinding.model_validate({
+                **response.model_dump(by_alias=True),
+                'infeasibility_proof': prepared.validator.infeasibility_proof,
+                '_provenance': expected_provenance,
+            })
+            if expected != binding:
+                raise ProvenanceRefused('冻结聚合 typed payload/provenance 与来源重建不等')
+            if settle:
+                ctx.ledger.commit(ctx._usage_mark)
+                ctx._usage_mark = ctx.ledger.snapshot()
+            return binding, prepared.validator.compiled
+    _attempt, adopted_models = _plan_accepted_identity(ctx, source)
     lineage_kwargs: dict[str, Any] = {}
     if architecture is not None:
         # 批次 4 的 additive 来源账：旧路径（legacy/整书单发）不写这两格，
@@ -4766,11 +4803,27 @@ def _materialize_binding(
         binding_prompts[STAGE4_BINDING_INPUT_RECEIPT_KEY] = STAGE4_BINDING_INPUT_CONTRACT
     provenance_kwargs: dict[str, Any] = {}
     aggregate_usage = getattr(source, 'aggregate_usage', None)
-    if architecture == 'chapter_baseline_v1':
+    if architecture == 'chapter_baseline_v1' and not (
+            isinstance(source, _PlanChapterAggregateSource) and source.mechanical):
         if not callable(aggregate_usage):
             raise ProvenanceRefused(
                 'stage4.plan 章级聚合 source 缺精确 usage bridge')
         provenance_kwargs['usage_override'] = aggregate_usage()
+    if isinstance(source, _PlanChapterAggregateSource) and (
+            source.mechanical or source.all_historical or not ctx.paid):
+        # 聚合既有付费成果没有本轮模型声明；历史来源与费用证据留在逐章 lineage。
+        provenance = ctx.free_provenance(
+            EvidenceBindingCompiledProvenance,
+            candidate_sha256=prepared.subject_sha256,
+            architecture=architecture, unit_lineage=unit_lineage,
+            binding_input_contract=(STAGE4_BINDING_INPUT_CONTRACT
+                                    if not source.mechanical else None),
+        )
+        return EvidenceBinding.model_validate({
+            **response.model_dump(by_alias=True),
+            'infeasibility_proof': prepared.validator.infeasibility_proof,
+            '_provenance': provenance,
+        }), prepared.validator.compiled
     provenance = ctx.llm_provenance(
         EvidenceBindingProvenance,
         prompts=binding_prompts,
@@ -4812,7 +4865,7 @@ def evaluate_plan_candidate(
             candidate_sha256=prepared.subject_sha256,
             surfacing='stage4.plan')
         feedback = tuple(_attach_typed_rows(row, typed) for row in feedback)
-    attempt_id, adopted_models = _accepted_identity(ctx, source)
+    attempt_id, adopted_models = _plan_accepted_identity(ctx, source)
     payload = binding.model_dump(by_alias=True, mode='json')
     return PlanCandidateEvaluation(
         response=response,
@@ -4838,7 +4891,7 @@ def _assert_plan_evaluation(
         ctx: RunContext, source: Any, prepared: PlanCandidateContext,
         evaluation: PlanCandidateEvaluation,
 ) -> None:
-    attempt, models = _accepted_identity(ctx, source)
+    attempt, models = _plan_accepted_identity(ctx, source)
     if evaluation.compiled is None:
         current_hits: tuple[str, ...] = ()
         current_feedback: tuple[dict[str, object], ...] = ()
@@ -4967,7 +5020,7 @@ def _expected_context_artifact(ctx: RunContext) -> WriterContext:
     plan_raw = plan.model_dump(by_alias=True)
     assert up.global_g is not None
     asm = build_writer_context(
-        plan_raw, up.global_g, up.blueprints, up.main_text)
+        plan_raw, up.global_g, up.blueprints, up.main_text, knowledge_links=up.knowledge_links)
     return WriterContext.model_validate({
         **asm.ctx,
         '_provenance': cctx.free_provenance(CtxProvenance),
@@ -5269,22 +5322,84 @@ def _land_bound_bundle(
 
 
 def _plan_commit_spec(
-        evaluation: PlanCandidateEvaluation,
-) -> 'Any | None':
-    """批次 4：章级拓扑的 commit 账机锚定锚章 checkpoint 链；整书路为 None。"""
+        evaluation: PlanCandidateEvaluation, *, ctx: RunContext,
+        source: Any, prepared: PlanCandidateContext,
+) -> Any | None:
+    """章级 B 以完整来源集合提交，整书历史单 session 路仍用原账。"""
     if evaluation.architecture != 'chapter_baseline_v1':
         return None
-    chapter_rows = [
-        row for row in (evaluation.unit_lineage or [])
-        if (row.get('kind') == 'chapter_session'
-            and row.get('origin') != 'historical_checkpoint')
-    ]
-    if not chapter_rows:
-        return None
-    anchor = max(chapter_rows, key=lambda row: (
-        int(row.get('revision') or 0), int(row['chapter_ordinal'])))
-    return stage4_runs.plan_chapter_commit_spec(
-        int(anchor['chapter_ordinal']))
+    frozen = source.aggregate_source_manifest(prepared)
+
+    def validate_sources() -> None:
+        _assert_plan_current(ctx, prepared)
+        if source.aggregate_source_manifest(prepared) != frozen:
+            raise ProvenanceRefused('Stage4B 聚合来源在提交期间漂移')
+
+    return aggregate_runs.AggregateCommitSpec(
+        node='stage4.plan', primary_artifact=BINDING_REL,
+        commit_path=lambda run: paths.stage4_plan_aggregate_path(run.novel_dir, run.run_id),
+        allowed_touched=((BINDING_REL,), (BINDING_REL, _INVALID),
+                         (BINDING_REL, REL, _INVALID)),
+        nonformal_paths=(_INVALID,),
+        primary_file_text=prepared.store._render(BINDING_REL, evaluation.binding).decode('utf-8'),
+        sources={
+            'input_sha256': prepared.input_sha256,
+            'unit_lineage': evaluation.unit_lineage, 'checkpoints': frozen,
+        }, validate_sources=validate_sources,
+        committer=getattr(source._pool, 'committer', None),
+    )
+
+
+def _preclaim_plan_adoptions(ctx: RunContext, source: Any, binding: EvidenceBinding,
+                            *, require_present: bool = False) -> None:
+    """所有本轮模型章必须恰在完整闭集内；历史采用不向旧 run 写新采用。"""
+    from novel.llm.ledger import read_strict_audit_events
+    rows = read_strict_audit_events(ctx.ledger)
+    fingerprint = prov.projection_fingerprint(binding.model_dump(by_alias=True, mode='json'))
+    expected = [ctx.ledger.artifact_adoption_payload(
+        sid=ctx.sid, node=ctx.node, purpose=stage4_runs.plan_chapter_purpose(chapter),
+        attempt_id=unit.attempt_id, artifact=BINDING_REL,
+        artifact_fingerprint=fingerprint, chapter=chapter)
+        for chapter, unit in sorted(source._units.items()) if unit.source_context is None]
+    identities = {row['adoption_id'] for row in expected}
+    for row in expected:
+        matches = [item for item in rows if item.get('adoption_id') == row['adoption_id']]
+        if len(matches) > 1 or (require_present and len(matches) != 1):
+            raise ProvenanceRefused('Stage4B 原章采用审计缺失或重复')
+        for actual in matches:
+            stage4_runs._semantic_audit_row(actual, row, label='Stage4B 原章采用')
+    relevant = [row for row in rows if row.get('kind') == 'artifact_adoption'
+                and row.get('run_id') == ctx.run_id and row.get('sid') == ctx.sid
+                and row.get('node') == ctx.node and row.get('artifact') == BINDING_REL]
+    if any(row.get('adoption_id') not in identities for row in relevant):
+        raise ProvenanceRefused('Stage4B 原章采用审计有冻结来源之外的记录')
+
+
+def _note_plan_commit_adoptions(
+        ctx: RunContext, source: Any, spec: Any, journal: Mapping[str, Any],
+        binding: EvidenceBinding,
+) -> None:
+    if isinstance(spec, aggregate_runs.AggregateCommitSpec):
+        # 新模型章仍逐一结算工作单元；历史章只入 source-stable 清单，不能改旧账。
+        for chapter, unit in sorted(source._units.items()):
+            if unit.source_context is None:
+                _note_adoption_attempt(
+                    ctx, purpose=stage4_runs.plan_chapter_purpose(chapter),
+                    attempt_id=unit.attempt_id, rel=BINDING_REL,
+                    artifact=binding, chapter=chapter)
+                if isinstance(source._pool, _PlanRecoveryPool):
+                    from novel import work_units
+                    budget = work_units.budget_for(ctx, scope=work_units.executor_scope(
+                        ctx.node, stage4_runs.plan_chapter_purpose(chapter), {'chapter': chapter}))
+                    budget.mark_artifact_committed(BINDING_REL, prov.projection_fingerprint(
+                        binding.model_dump(by_alias=True, mode='json')))
+        aggregate_runs.note_adoption(ctx, spec, journal)
+        _preclaim_plan_adoptions(ctx, source, binding, require_present=True)
+        return
+    purpose, attempt_id = stage4_runs.restore_commit_adoption(ctx, journal, spec=spec)
+    _note_adoption_attempt(
+        ctx, purpose=purpose, attempt_id=attempt_id, rel=BINDING_REL,
+        artifact=binding, chapter=None if spec is None else spec.run.chapter)
 
 
 def finalize_plan_candidate(
@@ -5294,7 +5409,7 @@ def finalize_plan_candidate(
     """B 的唯一 settle/write/readback/adoption/committed 边界。"""
     _assert_plan_evaluation(ctx, source, prepared, evaluation)
     _assert_plan_current(ctx, prepared)
-    if not _uses_agent_runs(ctx):
+    if not _uses_agent_runs(ctx) and not isinstance(source, _PlanChapterAggregateSource):
         binding, compiled = _materialize_binding(
             ctx, source, prepared, evaluation.response, settle=True,
             architecture=evaluation.architecture,
@@ -5339,11 +5454,14 @@ def finalize_plan_candidate(
     with stage4_runs.commit_ownership(ctx.novel_dir):
         _assert_plan_current(ctx, prepared)
         stage4_runs.refuse_foreign_commit_reservations(ctx)
-        # 批次 4：章级拓扑的 commit 账机锚定锚章 checkpoint 链（spec 不同，
-        # primary/touched 面一致）；整书单发路保持原 spec。
-        commit_spec = _plan_commit_spec(evaluation)
+        # 章级拓扑使用独立聚合 journal；整书历史单发路保持原 spec。
+        commit_spec = _plan_commit_spec(evaluation, ctx=ctx, source=source, prepared=prepared)
+        if isinstance(commit_spec, aggregate_runs.AggregateCommitSpec):
+            _preclaim_plan_adoptions(ctx, source, evaluation.binding)
         committed = stage4_runs.committed(ctx, commit_spec)
         if committed is not None:
+            if isinstance(commit_spec, aggregate_runs.AggregateCommitSpec):
+                _preclaim_plan_adoptions(ctx, source, evaluation.binding, require_present=True)
             compiled = evaluation.compiled
             expected_binding = evaluation.binding
             # bound-HARD 原始交付先结算 LLM binding，再为确定性
@@ -5431,6 +5549,7 @@ def finalize_plan_candidate(
                 primary_payload=landed_payloads[BINDING_REL],
                 finalization_payload=finalization,
                 landed_payloads=landed_payloads,
+                spec=commit_spec,
             )
             _finish_restored_agent_session(
                 ctx, source, delivery_state='delivered', error_kind=None)
@@ -5471,6 +5590,9 @@ def finalize_plan_candidate(
             attempt_id=evaluation.attempt_id,
             spec=commit_spec,
         )
+        if isinstance(commit_spec, aggregate_runs.AggregateCommitSpec):
+            aggregate_runs.preclaim_adoption(ctx, journal)
+            aggregate_runs.preclaim_recovery(ctx, commit_spec, journal)
         expected_binding_sha = agent_runs.canonical_sha256(
             prepared.store._render(BINDING_REL, binding))
         binding_state = stage4_runs.target_state(
@@ -5487,14 +5609,8 @@ def finalize_plan_candidate(
             _assert_preserved_infeasible(ctx, finalization)
             landed_payload = landed.model_dump(by_alias=True, mode='json')
             _assert_plan_current(ctx, prepared)
-            purpose, attempt_id = stage4_runs.restore_commit_adoption(ctx, journal, spec=commit_spec)
-            _note_adoption_attempt(
-                ctx,
-                purpose=purpose,
-                attempt_id=attempt_id,
-                rel=BINDING_REL,
-                artifact=landed,
-            )
+            _note_plan_commit_adoptions(
+                ctx, source, commit_spec, journal, landed)
             _assert_plan_current(ctx, prepared)
             _assert_preserved_infeasible(ctx, finalization)
             stage4_runs.mark_committed(
@@ -5529,16 +5645,8 @@ def finalize_plan_candidate(
                 by_alias=True, mode='json')
             _assert_plan_current(ctx, prepared)
             _assert_preserved_plan_hard(ctx, finalization)
-            purpose, attempt_id = stage4_runs.restore_commit_adoption(ctx, journal, spec=commit_spec)
-            _note_adoption_attempt(
-                ctx,
-                purpose=purpose,
-                attempt_id=attempt_id,
-                rel=BINDING_REL,
-                artifact=landed_binding,
-                chapter=(None if commit_spec is None
-                         else commit_spec.run.chapter),
-            )
+            _note_plan_commit_adoptions(
+                ctx, source, commit_spec, journal, landed_binding)
             _assert_plan_current(ctx, prepared)
             _assert_preserved_plan_hard(ctx, finalization)
             stage4_runs.mark_committed(
@@ -5580,16 +5688,8 @@ def finalize_plan_candidate(
         }
         _assert_preserved_context(ctx, finalization)
         _assert_plan_current(ctx, prepared)
-        purpose, attempt_id = stage4_runs.restore_commit_adoption(ctx, journal, spec=commit_spec)
-        _note_adoption_attempt(
-            ctx,
-            purpose=purpose,
-            attempt_id=attempt_id,
-            rel=BINDING_REL,
-            artifact=landed_binding,
-            chapter=(None if commit_spec is None
-                     else commit_spec.run.chapter),
-        )
+        _note_plan_commit_adoptions(
+            ctx, source, commit_spec, journal, landed_binding)
         _assert_plan_current(ctx, prepared)
         stage4_runs.mark_committed(
             ctx,
@@ -5667,6 +5767,15 @@ class _PlanChapterAggregateSource:
         self._historical_adoption_file_sha256 = \
             historical_adoption_file_sha256
 
+    @property
+    def mechanical(self) -> bool:
+        return not self._units
+
+    @property
+    def all_historical(self) -> bool:
+        return bool(self._units) and all(
+            unit.source_context is not None for unit in self._units.values())
+
     def accepted_attempt(self, purpose: str) -> str:
         if not self._anchor_attempt:
             raise ProvenanceRefused(
@@ -5682,6 +5791,51 @@ class _PlanChapterAggregateSource:
     def require_history_current(self) -> None:
         stage4_runs.require_plan_historical_adoption_file(
             self._pool.ctx, self._historical_adoption_file_sha256)
+
+    def aggregate_source_manifest(self, prepared: PlanCandidateContext) -> dict[str, Any]:
+        self.require_history_current()
+        if self._units and self._pool.ctx.ledger.path is not None:
+            read_strict_jsonl_objects(self._pool.ctx.ledger.path, label='Stage4B 来源成本账')
+        manifest: dict[str, Any] = {}
+        baseline = build_mechanical_baseline(
+            prepared.candidate_raw, prepared.upstream.blueprints)
+        for chapter, unit in sorted(self._units.items()):
+            validator = _chapter_wire_validator(baseline.chapter(chapter), unit.issue)
+            if unit.source_context is not None:
+                historical = stage4_runs._restore_plan_historical_chapter(
+                    self._pool.ctx, source_run_id=unit.source_context.run_id,
+                    request=unit.request, validator=validator)
+                restored = historical.checkpoint
+                proof = stage4_runs.plan_historical_source_lineage(chapter, historical)
+            else:
+                restored = stage4_runs.restore_plan_chapter_checkpoint(
+                    self._pool.ctx, unit.request,
+                    validator=None if unit.replacement is not None else validator)
+                if restored is None:
+                    raise ProvenanceRefused(f'Stage4B ch{chapter} 聚合来源 checkpoint 消失')
+                proof = {
+                    'source_run_id': self._pool.ctx.run_id,
+                    'checkpoint_revision': restored.revision,
+                    'checkpoint_sha256': restored.checkpoint_sha256,
+                }
+            if (restored.acceptance['attempt_id'] != unit.attempt_id
+                    or restored.acceptance != unit.acceptance):
+                raise ProvenanceRefused(f'Stage4B ch{chapter} 聚合 acceptance 漂移')
+            response = restored.value
+            if unit.replacement is not None:
+                response, replacement = _replacement_response(
+                    self._pool.ctx, prepared, unit, validator)
+                if replacement is None or replacement.resolution != unit.replacement.resolution:
+                    raise ProvenanceRefused(f'Stage4B ch{chapter} 聚合修复回执漂移')
+                proof['replacement_sha256'] = _canonical_sha256(replacement.resolution)
+            if response != unit.response:
+                raise ProvenanceRefused(f'Stage4B ch{chapter} 聚合回答漂移')
+            manifest[str(chapter)] = {
+                **proof, 'response_sha256': _canonical_sha256(
+                    response.model_dump(by_alias=True, mode='json')),
+                'acceptance_sha256': _canonical_sha256(restored.acceptance),
+            }
+        return manifest
 
     def aggregate_usage(self):
         """按 source run 分组核完整 purpose 成本，再合并为本 binding 用量。"""
@@ -5757,14 +5911,17 @@ def _chapter_wire_validator(
     return validate
 
 
-def _chapter_input_sha(ctx: RunContext, prepared: PlanCandidateContext,
-                       chapter_ordinal: int) -> str:
+def _chapter_input_sha(issue: _ChapterBindingIssue) -> str:
+    """请求、章恢复和采用共用真实下发的闭合引用面，不混入整书提交身份。"""
     return _canonical_sha256({
-        'purpose': stage4_runs.plan_chapter_purpose(chapter_ordinal),
-        'candidate_subject_sha256': prepared.subject_sha256,
-        'input_sha256': prepared.input_sha256,
-        'chapter_ordinal': chapter_ordinal,
+        'contract': 'stage4-binding-chapter-dependencies-v1',
+        'purpose': stage4_runs.plan_chapter_purpose(issue.chapter_ordinal),
+        'chapter_ordinal': issue.chapter_ordinal,
         'binding_input_contract': STAGE4_BINDING_INPUT_CONTRACT,
+        'materials': issue.user,
+        'formal_to_alias': dict(issue.formal_to_alias),
+        'scene_ids': sorted(issue.scene_ids),
+        'issued_refs': sorted(issue.issued_refs),
     })
 
 
@@ -5779,7 +5936,7 @@ def _plan_chapter_request(
             f'ch{issue.chapter_ordinal} issued-ref 尺')
     return stage4_runs.PlanChapterRequest(
         chapter=chapter_ordinal,
-        input_sha256=_chapter_input_sha(ctx, prepared, chapter_ordinal),
+        input_sha256=_chapter_input_sha(issue),
         system=prompts.chapter_binding_system(),
         user=issue.user,
         response_model=ChapterBindingResponse,
@@ -5957,7 +6114,8 @@ def _load_plan_chapter_unit(
     issue = work.issue
     request = work.request
     validator = work.validator
-    stage4_runs.ensure_plan_chapter_run(ctx, request)
+    if not ctx.readonly:
+        stage4_runs.ensure_plan_chapter_run(ctx, request)
     identity = _plan_chapter_replacement_identity(ctx, prepared, request)
     replacement_records = response_repair.records_for_chain(
         ctx.novel_dir, _canonical_sha256(identity))
@@ -5982,6 +6140,8 @@ def _load_plan_chapter_unit(
             raise ProvenanceRefused(
                 f'stage4.plan ch{chapter_ordinal} repairable checkpoint '
                 '如今通过 dynamic validator；拒绝静默改判历史')
+        if ctx.readonly:
+            raise TerminalState('已保存拒稿尚无 typed 修复，免费预览不能物化或重问')
         acceptance = pool.chapter_acceptance(chapter_ordinal)
         _keep_plan_chapter_wire_rejection(
             ctx, pool, prepared, request, {
@@ -6179,11 +6339,7 @@ def _plan_aggregate_source(
         if unit.source_context is None
         and (target_run_id is None
              or unit.source_run_id in (None, target_run_id))]
-    if not current:
-        raise ProvenanceRefused(
-            'stage4.plan 历史 adoption 覆盖了全部歧义章；'
-            '聚合提交缺 target run checkpoint 锚')
-    anchor = max(current, key=lambda unit: (
+    anchor = max(current or ordered, key=lambda unit: (
         unit.revision, unit.chapter_ordinal))
     return _PlanChapterAggregateSource(
         pool, units, anchor.attempt_id, models,
@@ -6288,15 +6444,21 @@ def _assert_plan_chapter_failure_scopes(
             f'应按 code failure 修判据发射点：{sorted(invalid)}')
 
 
+_PlanBatchResult = TypeVar('_PlanBatchResult')
+
+
 def _execute_plan_chapter_batch(
         chapters: Sequence[int], *, concurrency: int,
-        worker: Any, stop_on_error: Any | None = None,
-) -> tuple[dict[int, _PlanChapterUnit], list[tuple[int, Exception]], list[int]]:
+        worker: Callable[[int], _PlanBatchResult], stop_on_error: Any | None = None,
+) -> tuple[dict[int, _PlanBatchResult], list[tuple[int, Exception]], list[int]]:
     """有界 admission：首个异常后不再启动排队章，只 drain 已在途 future。"""
     ordered = sorted(set(int(chapter) for chapter in chapters))
     if len(ordered) != len(chapters) or not ordered:
         raise ProvenanceRefused('Stage4B batch 章集合必须非空、唯一')
-    results: dict[int, _PlanChapterUnit] = {}
+    if (not isinstance(concurrency, int) or isinstance(concurrency, bool)
+            or concurrency < 1):
+        raise ProvenanceRefused('Stage4B batch 必须使用本次冻结的合法并发配置')
+    results: dict[int, _PlanBatchResult] = {}
     errors: list[tuple[int, Exception]] = []
     next_index = 0
     stop_admission = False
@@ -6394,7 +6556,7 @@ def _raise_plan_batch_error(
 
 def _run_plan_with_chapters(
         ctx: RunContext, pool: Any, prepared: PlanCandidateContext,
-) -> CheckReport | EvidenceBinding:
+) -> CheckReport | EvidenceBinding | _PlanAggregatePreview:
     """批次 4 的章级 B 拓扑（公开仍是一个 stage4.plan、一次授权）。
 
     机械章 0 wire（绑定由冻结输入确定性重算）；歧义章各自私有 session
@@ -6405,6 +6567,7 @@ def _run_plan_with_chapters(
     """
     baseline = build_mechanical_baseline(
         prepared.candidate_raw, prepared.upstream.blueprints)
+    _note_mechanical_plan_progress(ctx, prepared, baseline)
     resolved_rows: dict[int, list[dict[str, Any]]] = {}
     ambiguous: list[int] = []
     for chapter in baseline.chapters:
@@ -6417,6 +6580,8 @@ def _run_plan_with_chapters(
     historical_adoption_file_sha256: str | None = None
     historical_chapters: set[int] = set()
     if ambiguous:
+        if ctx.ledger.path is not None:
+            read_strict_jsonl_objects(ctx.ledger.path, label='Stage4B 来源成本账')
         works = {
             chapter: _prepare_plan_chapter_work(
                 ctx, prepared, baseline.chapter(chapter), chapter)
@@ -6435,6 +6600,7 @@ def _run_plan_with_chapters(
                 set(ambiguous) - current_checkpoint_chapters),
             validators={
                 chapter: works[chapter].validator for chapter in ambiguous},
+            persist=not ctx.readonly,
         )
         if historical is not None:
             historical_adoption_file_sha256 = \
@@ -6459,29 +6625,40 @@ def _run_plan_with_chapters(
                     revision=int(restored.checkpoint.state_payload[
                         'aggregate_revision']),
                     acceptance=acceptance,
-                    source_run_id=historical.source_run_id,
+                    source_run_id=restored.context.run_id,
                     source_context=restored.context,
                     source_lineage=stage4_runs.plan_historical_source_lineage(
                         chapter, restored),
                 )
                 historical_chapters.add(chapter)
+                if not ctx.readonly:
+                    from novel.work_units import budget_for
+                    budget_for(ctx, scope=f'chapter:{chapter}').note_processing(
+                        run_id=ctx.run_id, input_sha256=work.request.input_sha256,
+                        kind='history_adopted',
+                        evidence_sha256=restored.checkpoint.checkpoint_sha256)
 
         target_chapters = sorted(set(ambiguous) - historical_chapters)
-        if not target_chapters:
-            raise ProvenanceRefused(
-                'stage4.plan historical adoption 不得覆盖全部歧义章')
+        if not ctx.paid and set(target_chapters) - current_checkpoint_chapters:
+            raise TerminalState(
+                f'Stage4B 免费汇合缺少当前有效成果：{target_chapters}；请走正常生成授权')
         # 熔断后未 admission 的章也必须先有 immutable run.json；恢复凭据
         # 才能绑定完整请求集，而不是只描述已经碰巧启动的 future。
         for chapter in target_chapters:
-            stage4_runs.ensure_plan_chapter_run(ctx, works[chapter].request)
+            if not ctx.readonly:
+                stage4_runs.ensure_plan_chapter_run(ctx, works[chapter].request)
         # 历史采用章也预建空 client，只做 driver/session 隔离 preflight；除非
         # 后续整书 HARD 指回该章，否则不会 start wire，也不会伪造 acceptance。
-        pool.prepare_chapters(ambiguous)
-        stage4_runs.clear_plan_delivery_recovery(ctx)
-        loaded, errors, deferred = _execute_plan_chapter_batch(
-            target_chapters, concurrency=pool.concurrency,
-            worker=lambda chapter: _load_plan_chapter_unit(
-                ctx, pool, prepared, works[chapter]))
+        if target_chapters:
+            pool.prepare_chapters(ambiguous)
+        if not ctx.readonly:
+            stage4_runs.clear_plan_delivery_recovery(ctx)
+        loaded, errors, deferred = ({}, [], [])
+        if target_chapters:
+            loaded, errors, deferred = _execute_plan_chapter_batch(
+                target_chapters, concurrency=pool.concurrency,
+                worker=lambda chapter: _load_plan_chapter_unit(
+                    ctx, pool, prepared, works[chapter]))
         units.update(loaded)
         if errors:
             paused = _write_plan_delivery_pause(
@@ -6492,7 +6669,8 @@ def _run_plan_with_chapters(
                 historical_adoption_file_sha256=
                     historical_adoption_file_sha256)
             _raise_plan_batch_error(errors, delivery_paused=paused)
-        stage4_runs.clear_plan_delivery_recovery(ctx)
+        if not ctx.readonly:
+            stage4_runs.clear_plan_delivery_recovery(ctx)
         resolved_rows.update({chapter: unit.rows
                               for chapter, unit in units.items()})
 
@@ -6514,8 +6692,14 @@ def _run_plan_with_chapters(
 
     lineage = _plan_unit_lineage(baseline, units)
     if not ambiguous:
-        # 整书零歧义：B 全部由机械基线确定性编译，0 wire。
-        return _finalize_mechanical_plan(ctx, prepared, _aggregate(), lineage)
+        # 全机械也走独立 prepared/committed；第一份正式文件写完中断仍能补尾。
+        source = _plan_aggregate_source(pool, units)
+        evaluation = evaluate_plan_candidate(
+            ctx, source, prepared, EvidenceBindingResponse.model_validate(_aggregate()),
+            architecture='chapter_baseline_v1', unit_lineage=lineage)
+        if ctx.readonly:
+            return _PlanAggregatePreview(prepared, source, evaluation)
+        return finalize_plan_candidate(ctx, source, prepared, evaluation)
     previous_by_chapter: dict[int, frozenset[str]] = {}
     exhausted_chapters: set[int] = set()
     pending_wire_replacements: set[int] = set()
@@ -6530,11 +6714,16 @@ def _run_plan_with_chapters(
             ctx, source, prepared, response_obj,
             architecture='chapter_baseline_v1', unit_lineage=lineage)
         _assert_plan_chapter_failure_scopes(evaluation, units)
+        if ctx.readonly:
+            return _PlanAggregatePreview(prepared, source, evaluation)
         if evaluation.passed:
             artifact = finalize_plan_candidate(
                 ctx, source, prepared, evaluation)
             _accept_plan_chapter_replacements(units)
             return artifact
+        if not ctx.paid:
+            # 免费恢复只能提交已购买结果；任何语义返修仍需新的明确执行授权。
+            return finalize_plan_candidate(ctx, source, prepared, evaluation)
         stop_failures = evaluation.stop_owner_failures()
         current_by_chapter: dict[int, frozenset[str]] = {}
         for failure in evaluation.typed_failures:
@@ -6796,7 +6985,7 @@ class _LegacyPlanChapterSource:
             save(unit.attempt_id, proof)
 
     def ask(self, work: _PlanChapterWork, *, revision: int = 0,
-            recovery_turn_id: str | None = None) -> None:
+            recovery_turn_id: str | None = None) -> tuple[_PlanChapterUnit, dict[str, Any]]:
         chapter = work.chapter_ordinal
         purpose = stage4_runs.plan_chapter_purpose(chapter)
         recovery = (self.client.replay_content_progress(
@@ -6815,7 +7004,7 @@ class _LegacyPlanChapterSource:
         rows = apply_chapter_resolutions(
             work.chapter_baseline,
             [row.model_dump(by_alias=True, mode='json') for row in response.resolutions])
-        self.units[chapter] = _PlanChapterUnit(
+        unit = _PlanChapterUnit(
             chapter_ordinal=chapter, request=work.request, response=response,
             issue=work.issue, rows=rows, attempt_id=attempt, models=models,
             restored=False, revision=revision, source_run_id=self.ctx.run_id)
@@ -6830,11 +7019,11 @@ class _LegacyPlanChapterSource:
             proof = budget.producer_recovery(turn.turn_id)
             prior = next(row for row in proof['binding_payload']['_provenance']['unit_lineage']
                          if row['chapter_ordinal'] == chapter)
-            self.units[chapter] = replace(self.units[chapter], revision=int(prior['revision']))
+            unit = replace(unit, revision=int(prior['revision']))
         if pending is not None and pending[1].get('attempt_id') == attempt:
             reservation, _raw = pending
             turn = budget.turn(reservation.turn_id)
-            self.lineage[chapter] = {
+            lineage = {
                 'origin': 'work_unit_response', 'source_run_id': turn.run_id,
                 'work_unit_id': reservation.unit_id,
                 'content_turn_id': reservation.turn_id,
@@ -6843,8 +7032,32 @@ class _LegacyPlanChapterSource:
             }
         else:
             # 缓存命中仍有独立的缓存 attempt 成本行，不凭空新发内容额度。
-            self.lineage[chapter] = {
+            lineage = {
                 'origin': 'current_run', 'source_run_id': self.ctx.run_id}
+        return unit, lineage
+
+    def ask_many(
+            self, works: Mapping[int, _PlanChapterWork], *,
+            recovery: Mapping[int, str] | None = None,
+            revisions: Mapping[int, int] | None = None,
+    ) -> None:
+        if not works:
+            return
+
+        def worker(chapter: int) -> tuple[_PlanChapterUnit, dict[str, Any]]:
+            return self.ask(
+                works[chapter],
+                revision=(revisions or {}).get(chapter, 0),
+                recovery_turn_id=(recovery or {}).get(chapter))
+
+        results, errors, _deferred = _execute_plan_chapter_batch(
+            list(works), concurrency=self.client.concurrency, worker=worker)
+        # 在途回答已经全部落盘。只在 drain 后汇合；异常时不把半本绑定写成正式产物。
+        for chapter, (unit, lineage) in sorted(results.items()):
+            self.units[chapter] = unit
+            self.lineage[chapter] = lineage
+        if errors:
+            raise min(errors, key=lambda row: row[0])[1]
 
 
 def _legacy_plan_delivery_recovery(
@@ -6894,12 +7107,24 @@ def _legacy_plan_delivery_recovery(
     return {chapter: turn.turn_id for chapter, (turn, _proof) in turns.items()}
 
 
+def _note_mechanical_plan_progress(ctx: RunContext, prepared: PlanCandidateContext, baseline) -> None:
+    if ctx.readonly:
+        return
+    from novel.work_units import budget_for
+    for chapter in baseline.chapters:
+        if chapter.mechanical:
+            budget_for(ctx, scope=f'chapter:{chapter.chapter_ordinal}').note_processing(
+                run_id=ctx.run_id, input_sha256=prepared.input_sha256, kind='mechanical',
+                evidence_sha256=_canonical_sha256(chapter.binding_rows()))
+
+
 def _run_legacy_plan_with_chapters(
         ctx: RunContext, client: Any, prepared: PlanCandidateContext,
 ) -> CheckReport | EvidenceBinding:
     """共用机械基线、章内 wire 闸和整书 HARD，返工只回有权限的歧义章。"""
     baseline = build_mechanical_baseline(
         prepared.candidate_raw, prepared.upstream.blueprints)
+    _note_mechanical_plan_progress(ctx, prepared, baseline)
     resolved = {
         chapter.chapter_ordinal: chapter.binding_rows()
         for chapter in baseline.chapters if chapter.mechanical}
@@ -6909,8 +7134,7 @@ def _run_legacy_plan_with_chapters(
         for chapter in baseline.chapters if not chapter.mechanical}
     source = _LegacyPlanChapterSource(ctx, client, len(baseline.chapters))
     recovery = _legacy_plan_delivery_recovery(ctx, prepared, works)
-    for work in works.values():
-        source.ask(work, recovery_turn_id=recovery.get(work.chapter_ordinal))
+    source.ask_many(works, recovery=recovery)
     previous: dict[int, frozenset[str]] = {}
     while True:
         resolved.update({chapter: unit.rows for chapter, unit in source.units.items()})
@@ -6955,8 +7179,84 @@ def _run_legacy_plan_with_chapters(
             retryable.append(chapter)
         if not retryable:
             return finalize_plan_candidate(ctx, source, prepared, evaluation)
-        for chapter in retryable:
-            source.ask(works[chapter], revision=source.units[chapter].revision + 1)
+        source.ask_many(
+            {chapter: works[chapter] for chapter in retryable},
+            revisions={chapter: source.units[chapter].revision + 1 for chapter in retryable})
+
+
+@dataclass(frozen=True)
+class _PlanAggregatePreview:
+    prepared: PlanCandidateContext
+    source: _PlanChapterAggregateSource
+    evaluation: PlanCandidateEvaluation
+
+
+class _PlanRecoveryPool:
+    """免费汇合专用的 checkpoint 读取器；不存在 transport/driver 构造口。"""
+    plan_chapter_pool = True
+    driver_failed = False
+    provider_session_id = None
+    concurrency = 1
+    max_turns = 4
+
+    def __init__(self, ctx: RunContext) -> None:
+        self.ctx = ctx
+        self.model = ctx.executor_profile.model if ctx.executor_profile is not None else ''
+        self._clients: dict[int, Any] = {}
+        self._restored: dict[int, Any] = {}
+
+    def prepare_chapters(self, chapters: Iterable[int]) -> None:
+        return None
+
+    def restore_chapter(self, chapter: int, request: Any, *, validator: Any) -> Any:
+        from novel.agents.session_client import validate_checkpoint_acceptance
+        restored = stage4_runs.restore_plan_chapter_checkpoint(self.ctx, request, validator=validator)
+        if restored is None:
+            raise TerminalState(f'免费汇合缺少第 {chapter} 章的已保存回答')
+        if not self.ctx.readonly:
+            validate_checkpoint_acceptance(
+                self.ctx, self.ctx.executor_profile, chapter=chapter,
+                max_semantic_turns=self.max_turns,
+                purpose=stage4_runs.plan_chapter_purpose(chapter), record=restored.acceptance,
+                system=request.system, user=request.user, max_tokens=request.max_tokens,
+                recovery_policy=stage4_runs.PLAN_CHAPTER_RECOVERY_POLICY)
+        self._restored[chapter] = restored
+        return restored
+
+    def accepted_chapter(self, chapter: int) -> tuple[str, tuple[str, ...]]:
+        acceptance = self.chapter_acceptance(chapter)
+        return acceptance['attempt_id'], (acceptance['model'],)
+
+    def chapter_acceptance(self, chapter: int) -> dict[str, Any]:
+        return self._restored[chapter].acceptance
+
+    def ask_chapter(self, *args: Any, **kwargs: Any) -> Any:
+        raise ProvenanceRefused('免费汇合不得请求模型')
+
+
+def _restore_plan_original_profile(ctx: RunContext) -> None:
+    # 同 run 补尾只读取原不可变配置；不使用 settings 或当前默认 profile。
+    from contracts.schema.orchestration import AgentProfile
+    from novel.llm import agent_runs
+    path = paths.stage4_run_path(ctx.novel_dir, ctx.run_id, ctx.node) / 'run.json'
+    if path.is_file():
+        record = agent_runs._read_json(path, label='Stage4B 原配置')
+        try:
+            original_profile = AgentProfile.model_validate(record['request_policy']['profile'])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProvenanceRefused('Stage4B 原请求配置损坏；不能使用默认配置代替') from exc
+        ctx.executor_profile = original_profile
+        agent_runs._validate_run_record(ctx, stage4_runs._run_spec(ctx.node), record)
+
+
+def run_reaggregate(ctx: RunContext) -> CheckReport | EvidenceBinding:
+    """免费重新聚合机械/已保存/历史来源；缺失、冲突或未知不创建模型请求。"""
+    if ctx.node != 'stage4.plan' or ctx.paid:
+        raise ProvenanceRefused('Stage4B reaggregate 必须是明确的免费执行')
+    _restore_plan_original_profile(ctx)
+    prepared = prepare_plan_candidate(ctx)
+    pool = _PlanRecoveryPool(ctx)
+    return _run_plan_with_chapters(ctx, pool, prepared)
 
 
 def run_plan(ctx: RunContext, client: Any, *,
@@ -6995,7 +7295,7 @@ def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:
     up = _Upstreams(ctx, store)
     assert up.global_g is not None
     base = identity_plan(up.blueprints, up.main_text, up.bidx)
-    asm = build_writer_context(base, up.global_g, up.blueprints, up.main_text)
+    asm = build_writer_context(base, up.global_g, up.blueprints, up.main_text, knowledge_links=up.knowledge_links)
     WriterContext.model_validate(
         {**asm.ctx, '_provenance': ctx.free_provenance(CtxProvenance)})
     outcomes = checks.check(

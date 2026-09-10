@@ -13,6 +13,11 @@ import { StructureApprovalPanel } from './StructureApprovalPanel'
 
 const SUBJECT = 'a'.repeat(64)
 
+async function currentWorkpack() {
+  const pack = await mockApi.getStructureApprovalWorkpack('book-1')
+  return { ...pack, subject_sha256: SUBJECT, review_token: 's4sr1_' + SUBJECT }
+}
+
 function NoticeReadout() {
   const { notices } = useChrome()
   return <output data-testid="structure-notices">{notices.length}</output>
@@ -92,11 +97,65 @@ beforeEach(async () => {
   vi.restoreAllMocks()
   sessionStorage.clear()
   vi.spyOn(api, 'getStructureApprovalWorkpack').mockResolvedValue(
-    await mockApi.getStructureApprovalWorkpack('book-1'),
+    await currentWorkpack(),
   )
 })
 
 describe('Stage4 typed 结构审批', () => {
+  it('保留后端继承行的原理由和来源，只对待审章填写新决定', async () => {
+    const pack = await currentWorkpack()
+    const inherited = {
+      output_ordinal: 1, decision: 'accept', reason: ' 原决定理由 ',
+      source_decision_sha256: '7'.repeat(64),
+    }
+    vi.spyOn(api, 'getStructureApprovalWorkpack').mockResolvedValue({
+      ...pack,
+      groups: [{ group: 'coverage', scanned: '逐章义务', items: [{
+        code: 'chapter_coverage', rule: null, chapter_ordinal: 1,
+        scene_refs: [], refs: [], repair_owner: null, detail: '本章依赖未变化',
+        effect: 'coverage', allowed_actions: ['accept'], changed: false,
+        historical_accept_reusable: true, source_decision_sha256: inherited.source_decision_sha256,
+        inherited_structure_decision: inherited,
+      }] }],
+    })
+    vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())
+    vi.spyOn(api, 'getApprovals').mockResolvedValue(undecided())
+    // 不制造成功通知；本用例检查的真实边界是 typed 请求内容。
+    const approve = vi.spyOn(api, 'approveStructure').mockRejectedValue(new Error('请求已捕获'))
+    renderRoute(<StructureApprovalPanel rows={rows} identity={false} viewSubject={SUBJECT}
+      onRefreshView={vi.fn()} />, '/n/book-1/stage4/1')
+    expect(await screen.findByLabelText('第 1 章裁决理由')).toHaveValue(inherited.reason)
+    const user = userEvent.setup()
+    await user.selectOptions(screen.getByLabelText('第 2 章结构裁决'), 'accept')
+    await user.type(screen.getByLabelText('第 2 章裁决理由'), '新证据已核对')
+    await user.type(screen.getByLabelText('自报身份 actor'), 'reviewer-a')
+    await user.type(screen.getByLabelText('本次批准 / 编辑理由 reason'), '复核变化章')
+    await user.click(screen.getByRole('button', { name: '保存全书结构裁决' }))
+    await waitFor(() => expect(approve).toHaveBeenCalledWith('book-1', {
+      actor: 'reviewer-a', reason: '复核变化章', review_token: 's4sr1_' + SUBJECT,
+      chapters: [inherited, { output_ordinal: 2, decision: 'accept', reason: '新证据已核对' }],
+    }))
+    await screen.findByText(/请求已捕获/)
+    await user.type(screen.getByLabelText('第 1 章裁决理由'), '补充本轮判断')
+    await user.click(screen.getByRole('button', { name: '保存全书结构裁决' }))
+    await waitFor(() => expect(approve).toHaveBeenCalledTimes(2))
+    expect(approve.mock.calls[1][1].chapters[0]).not.toHaveProperty('source_decision_sha256')
+  })
+
+  it('工作包与审批主体错位时禁用继承提交', async () => {
+    vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())
+    vi.spyOn(api, 'getApprovals').mockResolvedValue(undecided())
+    vi.spyOn(api, 'getStructureApprovalWorkpack').mockResolvedValue({
+      ...await currentWorkpack(), subject_sha256: 'b'.repeat(64),
+    })
+    renderRoute(<StructureApprovalPanel rows={rows} identity={false} viewSubject={SUBJECT}
+      onRefreshView={vi.fn()} />, '/n/book-1/stage4/1')
+    const save = await screen.findByRole('button', { name: '保存全书结构裁决' })
+    await waitFor(() => expect(save.parentElement).toHaveAttribute(
+      'title', '结构工作包与页面当前主体不一致，请刷新后再提交'))
+    expect(save).toBeDisabled()
+  })
+
   it('A 不是服务端 current accepted 时不呈现 B 审批表单', async () => {
     vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())
     vi.spyOn(api, 'getApprovals').mockResolvedValue({
@@ -244,7 +303,7 @@ describe('Stage4 typed 结构审批', () => {
       '/n/book-1/stage4/1',
     )
 
-    expect(await screen.findByText(SUBJECT)).toBeVisible()
+    expect((await screen.findAllByText(SUBJECT))[0]).toBeVisible()
     expect(screen.getByText('retain')).toBeVisible()
     expect(screen.getByText('reconstruct')).toBeVisible()
     expect(screen.getAllByText('entry_anchor').length).toBeGreaterThan(0)
@@ -259,7 +318,7 @@ describe('Stage4 typed 结构审批', () => {
     await user.click(screen.getByRole('button', { name: '保存全书结构裁决' }))
 
     await waitFor(() => expect(approve).toHaveBeenCalledWith('book-1', {
-      review_token: 's4sr1_' + 'f'.repeat(64),
+      review_token: 's4sr1_' + SUBJECT,
       actor: 'reviewer-a',
       reason: '已逐章核对结构报告',
       chapters: [
@@ -415,7 +474,7 @@ describe('Stage4 typed 结构审批', () => {
   })
 
   it('同一当前 Stage4B 工作包已批准时默认跳过重复提交', async () => {
-    const pack = await mockApi.getStructureApprovalWorkpack('book-1')
+    const pack = await currentWorkpack()
     vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())
     vi.spyOn(api, 'getApprovals').mockResolvedValue(undecided())
     vi.spyOn(api, 'getStructureApprovalWorkpack').mockResolvedValue({
@@ -444,7 +503,7 @@ describe('Stage4 typed 结构审批', () => {
   })
 
   it('表单完成后后台刷新工作包时禁用提交，刷新失败后也不复开', async () => {
-    const pack = await mockApi.getStructureApprovalWorkpack('book-1')
+    const pack = await currentWorkpack()
     const getWorkpack = vi.spyOn(api, 'getStructureApprovalWorkpack')
       .mockResolvedValue(pack)
     vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())

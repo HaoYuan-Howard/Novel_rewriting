@@ -274,7 +274,7 @@ def test_pool_refuses_wrong_node_and_caps_concurrency(tmp_path) -> None:
         code='t', cache=CachePolicy.default(), ledger=CostLedger(path=None),
         executor_profile=_profile())
     pool = Stage4PlanSessionPool(plan_ctx, concurrency=99)
-    assert pool.concurrency == 4  # 供应商稳定性边界：配置只能调低
+    assert pool.concurrency == 8  # 显式并发实验最多八路；默认仍为四路。
     with pytest.raises(ValueError, match='1..4'):
         Stage4PlanSessionPool(plan_ctx, max_turns=5)
 

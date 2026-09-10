@@ -23,7 +23,7 @@ def _hook(text: str, *, src_hook: str | None = None, characters: dict | None = N
           given: str = '下发面：本书人物与秘密的材料。') -> list:
     from novel.stages.stage6 import checks, prompts
     return checks.hook_findings(
-        text, mat=prompts.Material(blocks=(given,)), secrets=[], arc=None,
+        text, mat=prompts.Material(blocks=(given,)), secrets=[],
         characters=characters or {}, src_hook=src_hook, hook_mechanical=None,
         quote_problems=[])
 
@@ -118,8 +118,8 @@ _BPS4 = {'blueprints': [{
         {'beat_id': 'b01_02', 'span': _span4('乙在门口拒绝甲。'),
          'time_layer': 'present', 'place': '门口',
          'present_char_ids': ['char_001', 'char_002'],
-         'hinges': [{'hinge_id': 'h01_001', 'kind': '要害台词',
-                     'source_beat_ref': 'b01_02', 'source': _span4('拒绝甲')}]},
+         'hinges': [{'hinge_id': 'h01_001', 'kind': '因果前提',
+                     'source_fact_refs': ['f01_002'], 'source': _span4('拒绝甲')}]},
         {'beat_id': 'b01_03', 'span': _span4('甲决定留下。'),
          'time_layer': 'present', 'place': '门口',
          'present_char_ids': ['char_001'], 'hinges': []},
@@ -162,7 +162,7 @@ def _ctx4(plan: dict) -> dict:
             **materials,
         })
     return {'chapters': [{
-        'output_ordinal': 1, 'from_source_ordinals': [1], 'scenes': scenes,
+        'output_ordinal': 1, 'scenes': scenes,
         'characters': [], 'narration': [], 'facts': {'secrets': []},
     }]}
 

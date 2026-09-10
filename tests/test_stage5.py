@@ -423,18 +423,17 @@ def test_verbatim_missing_goes_red_when_the_mandated_line_is_gone(book, entry):
     '这位工子的伤口已经溃烂了整整三日无人问津。',
     '这位公子的伤口已经溃烂了整整三日无人问津。',
 ])
-def test_verbatim_typo_is_a_separate_conclusion_not_a_miss(
+def test_literal_typo_is_diagnostic_and_does_not_waive_missing(
         book, entry, rewritten):
-    """⚠ **一两个字之差按错别字放行**，但**单独留痕**。
+    """剧情字面例外须精确保留；近似匹配只留定位线索，不能作为放行凭据。
 
-    原文里本来就有错字（实测「这**为**公子伤口溃烂…」），写手写成「这**位**公子…」
-    ——那是**纠正**不是改写。要求它复现原文的错别字是荒谬的。
+    普通对白已改走语义义务，不再进入这个原句检查通道。
     """
     line = '这为公子的伤口已经溃烂了整整三日无人问津。'
     e = dict(entry, scenes=[{**(entry['scenes'][0]), 'verbatim': [line]}])
     anchored = _with_source_material(book, e, line)
     fired = _fire(_clean_body(book, entry) + rewritten, e, anchored)
-    assert 'verbatim_typo' in fired and 'verbatim_missing' not in fired
+    assert {'verbatim_typo', 'verbatim_missing'} <= fired
 
 
 def test_verbatim_three_character_rewrite_is_still_missing(book, entry):
@@ -447,17 +446,14 @@ def test_verbatim_three_character_rewrite_is_still_missing(book, entry):
     assert 'verbatim_missing' in fired and 'verbatim_typo' not in fired
 
 
-def test_verbatim_split_by_a_speech_tag_is_allowed_but_still_recorded(book, entry):
-    """⚠ `「…，」他说，「…」` 是中文小说的**标准写法** ⇒ 放行；
-
-    但「一个字都没动」与「切成两截后逐字出现」不是同一件事，**不能都走 `[OK]`**。
-    """
+def test_literal_split_by_a_speech_tag_keeps_missing_and_diagnostic(book, entry):
+    """插入说话提示改变了剧情必需的字面序列，定位诊断不得覆盖 HARD。"""
     line = '「你要是真的想走，那就走吧，我不拦着你，一次都不会。」'
     e = dict(entry, scenes=[{**(entry['scenes'][0]), 'verbatim': [line]}])
     split = '「你要是真的想走，」他说，「那就走吧，我不拦着你，一次都不会。」'
     anchored = _with_source_material(book, e, line)
     fired = _fire(_clean_body(book, entry) + split, e, anchored)
-    assert 'verbatim_split' in fired and 'verbatim_missing' not in fired
+    assert {'verbatim_split', 'verbatim_missing'} <= fired
 
 
 def test_real_stage5_report_keeps_verbatim_caveat_in_note_only(book, entry):
@@ -487,7 +483,7 @@ def test_real_stage5_report_keeps_verbatim_caveat_in_note_only(book, entry):
     assert row.findings[0].output_ordinal == int(entry['output_ordinal'])
     assert '本体裁的标准写法' not in row.findings[0].detail
     assert '已放行' not in row.findings[0].detail
-    assert row.note and '中文小说的标准写法' in row.note
+    assert row.note and '不豁免字面义务' in row.note
     assert f'说明：{row.note}' in render(report)
 
 
@@ -514,9 +510,10 @@ def test_stage5_check_report_aggregates_band_drift_without_losing_chapter_state(
         converge='unresolved_2', unresolved_rounds=2,
     )], 7)[0]
     review_artifact = SimpleNamespace(
+        judged={'stage5/ch02.json': object(), 'stage5/ch07.json': object()},
         chapters=[
-            SimpleNamespace(output_ordinal=2, relpath='stage5/ch02.json', findings=[first]),
-            SimpleNamespace(output_ordinal=7, relpath='stage5/ch07.json', findings=[second]),
+            SimpleNamespace(output_ordinal=2, findings=[first]),
+            SimpleNamespace(output_ordinal=7, findings=[second]),
         ],
         book=[],
         baselines={'band_drift': '2/2', '_fact_landing': '0/0 事实有落点'},
@@ -555,17 +552,8 @@ def test_check_only_overlays_a_wontfix_written_after_the_latest_review(monkeypat
         'fact_landing', detail='一个必落事实没有落点', evidence=['事实摘要'],
         converge='same_draft', unresolved_rounds=0,
     )], 6)[0]
-    row = ReviewChapter(
-        output_ordinal=6, from_source_ordinals=[6], budget_chars=100,
-        source_chars=100, relpath='stage5/ch06.json', draft_round=1,
-        draft_sha1='a' * 10, draft_text_sha1='b' * 10, chars=100,
-        findings=[hit],
-    )
-    artifact = Review.model_construct(
-        sources=None, judged={}, chapters=[row], book=[],
-        baselines={'_fact_landing': '0/1 事实有落点'},
-        baselines_identity={}, counts={}, provenance=None,
-    )
+    row = ReviewChapter(output_ordinal=6, findings=[hit])
+    artifact = Review.model_construct(judged={}, chapters=[row], book=[], baselines={'_fact_landing': '0/1 事实有落点'}, baselines_identity={}, provenance=None)
     entry = WontFixEntry(
         output_ordinal=6, rule=hit.rule, evidence_key=hit.evidence_key,
         why='故意保留留白', detail=hit.detail, at='review_1',
@@ -593,20 +581,7 @@ def test_review_material_denominators_follow_current_writer_context_scenes():
     from contracts.schema.stage5 import Review
     from novel.stages.stage5 import review
 
-    artifact = Review.model_construct(
-        sources=None, judged={}, chapters=[], book=[],
-        baselines={
-            'verbatim_missing': '0/0',
-            'keep_value_missing': '0/0',
-            'must_appear_missing': '0/0',
-            '_fact_landing': '0/0 事实有落点',
-        },
-        baselines_identity={
-            'verbatim_missing': '0/0',
-            'keep_value_missing': '0/0',
-            'must_appear_missing': '0/0',
-        },
-    )
+    artifact = Review.model_construct(judged={}, chapters=[], book=[], baselines={'verbatim_missing': '0/0', 'keep_value_missing': '0/0', 'must_appear_missing': '0/0', '_fact_landing': '0/0 事实有落点'}, baselines_identity={'verbatim_missing': '0/0', 'keep_value_missing': '0/0', 'must_appear_missing': '0/0'})
     current_ctx = {
         'chapters': [{'scenes': [{
             'verbatim': ['逐字保留'],
@@ -742,7 +717,7 @@ def test_the_two_phases_read_one_and_the_same_rule_table():
 
 
 def test_every_registered_rule_has_exactly_one_producer():
-    """⭐ 51 条判据**一条不多一条不少**地被实现覆盖。
+    """⭐ 52 条判据**一条不多一条不少**地被实现覆盖。
 
     ⚠ 少列一条，那一条在报告上就变 `skipped`——而 `skipped`（实现未被调用）与
     「跑了没命中」是**两种颜色**；多列一条，`builder` 会抛（那是「注册了没实现」的镜像病）。
@@ -753,8 +728,8 @@ def test_every_registered_rule_has_exactly_one_producer():
     assert set(mine) == reg, (f'注册了没实现：{sorted(reg - set(mine))}；'
                               f'实现了没注册：{sorted(set(mine) - reg)}')
     # secret_unknown 随重复 must_not_reveal 清单退役；paragraph_slot_report
-    # 加入后现役共 51 条。
-    assert len(reg) == 51
+    # 与 dialogue_semantics_unver 加入后现役共 52 条。
+    assert len(reg) == 52
 
 
 def test_every_unver_rule_must_say_why_it_cannot_check():
@@ -764,13 +739,13 @@ def test_every_unver_rule_must_say_why_it_cannot_check():
     **`unver` 是判据的边界，而边界要说得出在哪。**
     """
     unver = {r.rule for r in REGISTRY.of_stage('stage5') if r.sev == 'unver'}
-    assert unver == set(checks._UNVER) and len(unver) == 5
+    assert unver == set(checks._UNVER) and len(unver) == 6
 
 
 def test_the_badge_can_never_be_pass_on_this_layer():
     """⭐⭐ **本层徽章结构上永远到不了 `pass`**，而那是对的。
 
-    5 条 `unver`，其中 `must_hold_unver` **每本都产**（全书那一组按定义查不了文面）
+    6 条 `unver`，其中 `must_hold_unver` **每本都产**（全书那一组按定义查不了文面）
     ⇒ 最好情况是 `amber` + 退出码 0。**与 stage4 相反**（那一层没有一条 `unver`）。
     """
     from contracts.schema.report import RuleLine, badge_of
@@ -841,26 +816,29 @@ def test_the_downsend_band_is_the_very_one_the_judges_use(book, entry):
     assert f'**{lo}~{hi} 字**' in mat.given
 
 
-def test_writer_context_v4_duplicates_are_checked_against_one_derived_basis(book, entry):
-    """三格继续序列化，但运行时只认章序、Stage1 正文与场景预算。"""
-    basis = M.chapter_basis(entry, book.source_text)
+def test_minimal_writer_context_has_one_complete_execution_basis(book, entry):
+    """任务书不接受第二份读数；源章缺失或场景预算未知时真实执行拒绝。"""
+    from contracts.schema.stage4 import CtxChapter
+
+    basis = M.require_chapter_basis(entry, book.source_text)
     assert basis.source_ordinal == entry['output_ordinal']
     assert basis.source_text == book.source_text[entry['output_ordinal']]
     assert basis.source_chars == len(book.source_text[entry['output_ordinal']])
     assert basis.budget_chars == sum(scene['budget_chars'] for scene in entry['scenes'])
-    M.assert_writer_context_v4(entry, basis)
-
-    bad_values = {
-        'from_source_ordinals': [basis.source_ordinal + 1],
-        'source_chars': basis.source_chars + 1,
-        'budget_chars': basis.budget_chars + 1,
+    assert CtxChapter.model_validate(entry).output_ordinal == basis.source_ordinal
+    copies = {
+        'from_source_ordinals': [basis.source_ordinal],
+        'source_chars': basis.source_chars,
+        'budget_chars': basis.budget_chars,
     }
-    for field, bad in bad_values.items():
-        drifted = {**entry, field: bad}
-        # 派生结果不许反过来读取这三份副本，否则「对账」永远会自证相等。
-        assert M.chapter_basis(drifted, book.source_text) == basis
+    for field, value in copies.items():
         with pytest.raises(ValueError, match=field):
-            M.assert_writer_context_v4(drifted, basis)
+            CtxChapter.model_validate({**entry, field: value})
+    with pytest.raises(ValueError, match='Stage1 缺少'):
+        M.require_chapter_basis(entry, {})
+    broken = {**entry, 'scenes': [{'slot': 's01'}]}
+    with pytest.raises(ValueError, match='正数场景预算'):
+        M.require_chapter_basis(broken, book.source_text)
 
 
 def test_the_secret_ids_never_reach_the_writer(book, entry):
@@ -915,8 +893,9 @@ def test_paid_writer_prompt_excludes_global_source_spans(monkeypatch, tmp_path):
         for ordinal, text in seed.source_text.items()
     }
     writer_context = copy.deepcopy(seed.ctx)
-    for entry in writer_context['chapters']:
-        entry['source_chars'] = len(source_text[entry['output_ordinal']])
+    from contracts.artifacts import STAGE2_CHARACTERS
+    from tests.stage2_fixtures import formal_subjects
+    registry, knowledge = formal_subjects(grounding)
     stored = {
         review.MAIN_TEXT: SimpleNamespace(root=[
             SimpleNamespace(
@@ -925,12 +904,17 @@ def test_paid_writer_prompt_excludes_global_source_spans(monkeypatch, tmp_path):
             )
             for ordinal, text in source_text.items()
         ]),
-        review.GLOBAL_GROUNDING: Dumped(grounding),
+        review.GLOBAL_GROUNDING: knowledge,
+        STAGE2_CHARACTERS: registry,
         stage2_global_review.REL: factories.approved_global_review(grounding),
         review.WRITER_CONTEXT: Dumped(writer_context),
     }
 
     class Store:
+        @staticmethod
+        def full_sha256_or_none(rel):
+            return 'a' * 64 if rel in stored else None
+
         @staticmethod
         def path(rel):
             return tmp_path / rel
@@ -962,10 +946,7 @@ def test_current_trim_audit_absorbs_the_duplicate_length_over_action():
     hit = checks.with_output_ordinal([finding(
         'length_over', detail='当前 1800 字，预算 1200 字', evidence=['1800', '1200'],
     )], 3)[0]
-    row = ReviewChapter(
-        output_ordinal=3, from_source_ordinals=[7], budget_chars=1200,
-        source_chars=1500, findings=[hit],
-    )
+    row = ReviewChapter(output_ordinal=3, findings=[hit])
 
     untouched = review._merge_length_over_into_trim([row], set())[0]
     merged = review._merge_length_over_into_trim([row], {3})[0]

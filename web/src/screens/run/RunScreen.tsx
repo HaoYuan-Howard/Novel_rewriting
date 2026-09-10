@@ -26,6 +26,8 @@ import type {
 } from '@/types/run'
 import { CHECK_KINDS, type CheckReport } from '@/types/stages'
 import { useRunProgress } from '@/hooks/useRunProgress'
+import { WorkUnitBudgetGrant } from '@/components/agent/WorkUnitBudgetGrant'
+import { AgentRunDialog } from '@/components/agent/AgentRunDialog'
 import { useSid } from '@/hooks/useRouteParams'
 import {
   useAgentRunLog,
@@ -248,6 +250,7 @@ function AgentRunBlock({
   stoppedStageTarget: StoppedStageTarget | null
 }) {
   const [resumingRunId, setResumingRunId] = useState<string | null>(null)
+  const [continueSource, setContinueSource] = useState<{ sid: string; runId: string } | null>(null)
   const runs = useAgentRuns(undefined, resumingRunId !== null)
   const latest = runs.data?.runs[0] ?? null
   const activeEpoch = latest?.epochs.find((epoch) => epoch.epoch_id === latest.active_epoch_id) ?? null
@@ -290,6 +293,8 @@ function AgentRunBlock({
   return (
     <Panel>
       <PaneHeader title="agent 代跑" />
+      {continueSource ? <AgentRunDialog key={continueSource.runId} sid={continueSource.sid} sourceRunId={continueSource.runId}
+        onClose={() => setContinueSource(null)} onStarted={() => setContinueSource(null)} /> : null}
       {runs.isPending ? (
         <div className="px-18 py-14 text-body text-ink-5">取代跑记录中 …</div>
       ) : runs.isError ? (
@@ -332,6 +337,7 @@ function AgentRunBlock({
               </span>
             ) : null}
             <span className="ml-auto flex items-center gap-8">
+              <LinkButton onClick={() => setContinueSource({ sid: latest.start.sid, runId: latest.run_id })}>按原配置继续</LinkButton>
               <LinkButton onClick={() => setLogOpen((v) => !v)}>
                 {logOpen ? '收起日志' : '日志尾部'}
               </LinkButton>
@@ -593,22 +599,34 @@ export function RunScreen() {
             </Panel>
 
             <Panel>
-              <PaneHeader title="工作单元与内容预算" meta="首次生成、审阅和纠错均计入；恢复读取已保存的结果" />
+              <PaneHeader title="工作单元与内容预算" meta="处理来源显示最近一轮，额度累计保留；生成回答仍须经过质量审阅" />
               {d.work_units == null ? (
-                <p className="px-18 text-body text-ink-3">工作单元状态未知</p>
+                <p className="px-18 text-body text-ink-3">工作单元状态未知：{d.work_units_unavailable_reason ?? '缺少可核验的账面信息'}</p>
               ) : d.work_units.length === 0 ? (
                 <p className="px-18 text-body text-ink-3">尚无已登记的工作单元</p>
               ) : (
                 <div className="overflow-x-auto px-18 py-12">
                   <table className="w-full text-left text-body" aria-label="工作单元预算">
-                    <thead><tr><th>节点 / 范围</th><th>角色</th><th>内容调用</th><th>状态</th><th>恢复入口</th></tr></thead>
+                    <thead><tr><th>节点 / 范围</th><th>角色</th><th>内容调用</th><th>最近处理</th><th>当前审阅</th><th>状态 / 恢复入口</th></tr></thead>
                     <tbody>{d.work_units.map((unit) => (
                       <tr key={unit.unit_id}>
                         <td className="py-9">{unit.node} · {unit.scope}</td>
                         <td>{unit.role}</td>
-                        <td>{unit.content_used} / {unit.content_limit}，剩余 {unit.content_remaining}</td>
-                        <td>{unit.state}</td>
-                        <td>{unit.recovery_action ?? '无已登记恢复动作'}</td>
+                        <td>基础 {unit.content_base_limit ?? '未知'} + 追加 {unit.content_granted ?? '未知'}<br />累计 <span>{unit.content_used} / {unit.content_limit}，剩余 {unit.content_remaining}</span></td>
+                        <td>{unit.processing ? <>
+                          总量 {unit.processing.total}，待处理 {unit.processing.pending}<br />
+                          新生成 {unit.processing.generated}，机械处理 {unit.processing.mechanical}<br />
+                          历史采用 {unit.processing.history_adopted}，缓存 {unit.processing.cached}<br />
+                          失败 {unit.processing.failed}，未知 {unit.processing.unknown}
+                          {unit.processing.reason ? <p className="m-0">{unit.processing.reason}</p> : null}
+                        </> : unit.registered === false ? '尚无处理记录' : '处理来源未知'}</td>
+                        <td>{unit.review ? <>
+                          义务总量 {unit.review.total}<br />
+                          待审 {unit.review.pending}，决定继承 {unit.review.decision_inherited}
+                        </> : unit.role === 'commander' ? `审阅进度未知：${unit.review_unavailable_reason ?? '尚无当前义务投影'}` : '由对应 Commander 审阅'}</td>
+                        <td><span>{unit.state}</span><br /><span>{unit.recovery_action ?? '无已登记恢复动作'}</span>
+                          {unit.registered !== false ? <WorkUnitBudgetGrant sid={sid} unitId={unit.unit_id} /> : null}
+                        </td>
                       </tr>
                     ))}</tbody>
                   </table>

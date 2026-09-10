@@ -20,6 +20,8 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage0.clean_text': 'stage0/clean_text.txt',
     'stage1.main_text': 'stage1/main_text.json',
     'stage1.hook_copy': 'stage1/hook_copy.json',
+    'stage2.characters': 'stage2/characters.json',
+    'stage2.characters_edit': 'stage2/characters_edit.json',
     'stage2.global_grounding': 'stage2/global_grounding.json',
     'stage2.global_review': 'stage2/global_review.json',
     'stage2.global_review_decisions': 'stage2/global_review_decisions.json',
@@ -37,6 +39,7 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage2.global_edit_commit': 'stage2/global_edit_commit.json',
     'stage2.blueprint_character_projection': 'stage2/blueprint_character_projection.json',
     'stage2.chapter_blueprints': 'stage2/chapter_blueprints.json',
+    'stage2.knowledge_links': 'stage2/knowledge_links.json',
     'stage2.blueprint_relation_edit': 'stage2/blueprint_relation_edit.json',
     'stage4.blind_candidate': 'stage4/blind_candidate.json',
     'stage4.blind_chapter_edit': 'stage4/blind_chapter_edit.json',
@@ -65,7 +68,7 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage7.book': 'stage7/{title}_rewriting.txt',
 }
 
-# 只供旧 provenance / 审批显式迁移读取；不进入当前 artifact registry。
+# 只供识别并拒绝退役产物；不进入当前 artifact registry，不提供解码或迁移。
 RETIRED_ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage3.style_grounding': 'stage3/style_grounding.json',
 }
@@ -109,6 +112,8 @@ STAGE0_REVISIONS = artifact_rel('stage0.revisions')
 STAGE0_CLEAN_TEXT = artifact_rel('stage0.clean_text')
 STAGE1_MAIN_TEXT = artifact_rel('stage1.main_text')
 STAGE1_HOOK_COPY = artifact_rel('stage1.hook_copy')
+STAGE2_CHARACTERS = artifact_rel('stage2.characters')
+STAGE2_CHARACTERS_EDIT = artifact_rel('stage2.characters_edit')
 STAGE2_GLOBAL_GROUNDING = artifact_rel('stage2.global_grounding')
 STAGE2_GLOBAL_REVIEW = artifact_rel('stage2.global_review')
 STAGE2_GLOBAL_REVIEW_DECISIONS = artifact_rel('stage2.global_review_decisions')
@@ -120,6 +125,7 @@ STAGE2_GLOBAL_EDIT_COMMIT = artifact_rel('stage2.global_edit_commit')
 STAGE2_BLUEPRINT_CHARACTER_PROJECTION = artifact_rel(
     'stage2.blueprint_character_projection')
 STAGE2_CHAPTER_BLUEPRINTS = artifact_rel('stage2.chapter_blueprints')
+STAGE2_KNOWLEDGE_LINKS = artifact_rel('stage2.knowledge_links')
 STAGE2_BLUEPRINT_RELATION_EDIT = artifact_rel('stage2.blueprint_relation_edit')
 RETIRED_STAGE3_STYLE_GROUNDING = RETIRED_ARTIFACT_PATHS['stage3.style_grounding']
 STAGE4_BLIND_CANDIDATE = artifact_rel('stage4.blind_candidate')

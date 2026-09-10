@@ -13,6 +13,7 @@ token；blocked action 只描述 blocker，恢复命令的 exact node + 全部 f
 """
 from __future__ import annotations
 
+from novel import runtime_layout
 import hashlib
 import json
 import os
@@ -65,7 +66,6 @@ _STAGE2_EDIT_CORRECTION = queue.WAITING_ON_STAGE2_EDIT_CORRECTION
 _STAGE2_EDIT_COMMIT = queue.WAITING_ON_STAGE2_EDIT_COMMIT
 _STAGE2_EDIT_REVALIDATE = queue.WAITING_ON_STAGE2_EDIT_REVALIDATE
 _STAGE2_EDIT_TERMINAL = queue.WAITING_ON_STAGE2_EDIT_TERMINAL
-_STAGE2_FINAL_REVIEW = queue.WAITING_ON_STAGE2_FINAL_REVIEW
 _STAGE2_BLUEPRINT_REVIEW = queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW
 _STAGE4_DESIGN = queue.WAITING_ON_STAGE4_DESIGN_REVIEW
 _STAGE4_BINDING = queue.WAITING_ON_STAGE4_BINDING_RESOLUTION
@@ -152,8 +152,6 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     RecoveryRunPolicy(
         'stage2.blueprint', _t('--apply-edit'), _W2 | _W4),
 
-    RecoveryRunPolicy(
-        'stage4.design', _t('--adopt-rejected', '--actor', '--reason'), _W4),
     RecoveryRunPolicy('stage4.design', _t('--validate-edit'), _W4),
     RecoveryRunPolicy('stage4.design', _t('--apply-edit'), _W4),
     RecoveryRunPolicy(
@@ -162,6 +160,17 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
            '--source-commit-sha256'),
         frozenset({_STAGE4_DESIGN_REPAIR_COMMIT}),
     ),
+    RecoveryRunPolicy('stage4.plan', _t('--reaggregate'), _W4),
+    RecoveryRunPolicy('stage4.design', _t('--reaggregate'), _W4),
+    RecoveryRunPolicy('stage4.design', _t('--recover-responses'), _W4),
+    RecoveryRunPolicy('stage4.design', _t('--close-review'), _W4),
+    RecoveryRunPolicy('stage4.plan', _t('--close-review'), _W4),
+    RecoveryRunPolicy(
+        'stage4.plan', _t('--recover-prepared', '--subject-sha256'),
+        frozenset({_PREPARED_DELIVERY})),
+    RecoveryRunPolicy(
+        'stage4.design', _t('--recover-prepared', '--subject-sha256'),
+        frozenset({_PREPARED_DELIVERY})),
     RecoveryRunPolicy('stage4.plan', _t('--check-only'), _W4),
     RecoveryRunPolicy('stage4.plan', _t('--names-only'), _W4),
     RecoveryRunPolicy('stage4.plan', _t('--identity'), _W4),
@@ -342,7 +351,7 @@ def _resolve_external_path_at(
         candidates = tuple(
             root / run_id / 'design'
             / stage4_runs.DESIGN_REPAIR_AGGREGATE_COMMIT_FILE
-            for root in paths.stage_run_read_roots(novel_dir, 'stage4'))
+            for root in runtime_layout.stage_run_roots(novel_dir, 'stage4'))
         return next(
             (target.resolve() for target in candidates if target.is_file()),
             candidates[0].resolve(),

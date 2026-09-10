@@ -3,6 +3,8 @@
 """stage2.global executor agent 的候选—校验—resume—落盘纵切。"""
 from __future__ import annotations
 
+from novel.stages.stage2 import grounding as grounding_io
+
 import copy
 import json
 from pathlib import Path
@@ -14,14 +16,15 @@ from contracts.schema.evaluation import (
     GlobalReview, GlobalReviewDecision, GlobalReviewDecisionSet,
 )
 from contracts.schema.orchestration import AgentProfile
+from contracts.schema.knowledge import KnowledgeAgentTurnResponse as GlobalCandidateAgentTurnResponse
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
-    GlobalCandidateAgentTurnResponse, GlobalGrounding,
+    GlobalGrounding,
 )
 from novel import agent_session_audit, paths, prov
 from novel.agents import AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage
 from novel.agents.session_client import agent_json_schema
-from novel.errors import GateBlocked, ProvenanceRefused
+from novel.errors import GateBlocked, ProvenanceRefused, UpstreamStale
 from novel.llm import stage2_global_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmFailed
@@ -40,7 +43,7 @@ def _profile() -> AgentProfile:
         execution_mode='standard')
 
 
-def _ctx(base: Path) -> RunContext:
+def _ctx(base: Path, *, with_characters: bool = True) -> RunContext:
     from novel.work_units import initialize_workflow
     initialize_workflow(base)
     book = base / 'agent纵切_2042'
@@ -54,6 +57,12 @@ def _ctx(base: Path) -> RunContext:
         ledger=CostLedger(path=ledger_path(base)), executor_profile=_profile())
     ArtifactStore(ctx).write(
         extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    from contracts.artifacts import STAGE1_HOOK_COPY
+    from contracts.schema.stage1 import HookCopy
+    ArtifactStore(ctx).write(STAGE1_HOOK_COPY, HookCopy(text='李宝珠收到父亲已经回城的来信。'))
+    if with_characters:
+        from tests.stage2_fixtures import seed_character_registry
+        seed_character_registry(ctx)
     return ctx
 
 
@@ -70,6 +79,27 @@ def _resume_ctx(ctx: RunContext) -> RunContext:
         executor_profile=_profile(),
         run_id=ctx.run_id,
     )
+
+
+@pytest.mark.parametrize('record', ['', 'run.json', 'checkpoints/0001.json', 'committed.json'])
+def test_retired_book_local_global_state_never_migrates_or_rebuys(tmp_path, record):
+    """真实 executor 入口拒绝旧目录，包含空目录和损坏来源，且保留费用及原字节。"""
+    ctx = _ctx(tmp_path)
+    old = paths.legacy_stage2_global_run_path(ctx.novel_dir, ctx.run_id)
+    old.mkdir(parents=True)
+    if record:
+        target = old / record
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b'{"historical":"unproven"}\n')
+    before = {str(p.relative_to(old)): p.read_bytes() for p in old.rglob('*') if p.is_file()}
+    ledger_before = ctx.ledger.path.read_bytes() if ctx.ledger.path.exists() else None
+    driver = _Driver([], ctx.novel_dir)
+    with pytest.raises(ProvenanceRefused, match='旧.*已退役'):
+        Stage2GlobalAgent(ctx, driver=driver).run()
+    assert driver.calls == []
+    assert not paths.stage2_global_run_path(ctx.novel_dir, ctx.run_id).exists()
+    assert {str(p.relative_to(old)): p.read_bytes() for p in old.rglob('*') if p.is_file()} == before
+    assert (ctx.ledger.path.read_bytes() if ctx.ledger.path.exists() else None) == ledger_before
 
 
 def _new_run_ctx(ctx: RunContext) -> RunContext:
@@ -116,18 +146,15 @@ def _free_ctx(ctx: RunContext) -> RunContext:
 
 def _bad_global() -> dict:
     bad = copy.deepcopy(_response_global())
-    bad['entities']['characters']['char_002']['canonical'] = \
-        bad['entities']['characters']['char_001']['canonical']
+    bad['canon']['secrets'][0]['first_reveal_chapter'] = 99
     return bad
 
 
 def _full(candidate: dict) -> str:
     wire = copy.deepcopy(candidate)
-    characters = wire['entities']['characters']
-    wire['entities']['characters'] = [
-        {'char_id': char_id, **character}
-        for char_id, character in characters.items()
-    ]
+    states = wire['entities']['character_states']
+    wire['entities']['character_states'] = [
+        {'char_id': char_id, **state} for char_id, state in states.items()]
     return json.dumps({
         'payload': {'kind': 'full_candidate', 'candidate': wire},
     }, ensure_ascii=False)
@@ -272,7 +299,7 @@ def test_hard_candidate_resumes_same_session_then_lands_once(tmp_path):
     assert first.cwd == resumed.cwd
     assert resumed.execution_policy == 'executor-isolated'
     assert 'code_validation_failed' in resumed.prompt
-    assert 'canonical_unique' in resumed.prompt
+    assert 'canon_chapter_refs_dangling' in resumed.prompt
     assert 'full_candidate' in resumed.prompt
     assert first.output_schema == resumed.output_schema
     assert first.output_schema == agent_json_schema(
@@ -282,7 +309,7 @@ def test_hard_candidate_resumes_same_session_then_lands_once(tmp_path):
     assert first_paragraph not in resumed.prompt
 
     store = ArtifactStore(ctx)
-    landed = store.read(GlobalGrounding, extract.GLOBAL_REL)
+    landed = grounding_io.read(store)
     review = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
     assert landed == result.artifact
     assert landed.provenance.usage is not None
@@ -312,7 +339,7 @@ def test_turn_limit_lands_only_the_last_typed_invalid(tmp_path):
     bad = _full(_bad_global())
     driver = _Driver([bad, bad], ctx.novel_dir)
 
-    with pytest.raises(GateBlocked, match='canonical_unique'):
+    with pytest.raises(GateBlocked, match='canon_chapter_refs_dangling'):
         Stage2GlobalAgent(ctx, driver=driver, max_turns=2).run()
 
     store = ArtifactStore(ctx)
@@ -334,11 +361,10 @@ def test_schema_exhaustion_after_business_reject_preserves_recovery_candidate(tm
         'not-json',
     ], ctx.novel_dir)
 
-    with pytest.raises(GateBlocked, match='canonical_unique'):
+    with pytest.raises(GateBlocked, match='canon_chapter_refs_dangling'):
         Stage2GlobalAgent(ctx, driver=driver, max_turns=2).run()
 
-    invalid = ArtifactStore(ctx).read(
-        GlobalGrounding, extract._GLOBAL_INVALID)
+    invalid = grounding_io.read_own(ArtifactStore(ctx), extract._GLOBAL_INVALID, require_current=True)[0]
     assert invalid.provenance.usage is not None
     assert invalid.provenance.usage.calls_made == 2
     record, = agent_session_audit.fold(agent_session_audit.read_events(tmp_path))
@@ -471,7 +497,7 @@ def test_foreign_prepared_blocks_new_run_before_any_wire(
 def test_prepared_global_bundle_blocks_every_side_writer_then_owner_recovers(
     tmp_path, monkeypatch,
 ):
-    """四个 free 写口与 purge-role 都不能破坏 agent 的 prepared bundle。"""
+    """free 写口与另一 backend 都不能破坏 agent 的 prepared bundle。"""
     real_note = extract._note_restored_adoptions
 
     def crash_before_adoption(*_args, **_kwargs):
@@ -500,7 +526,8 @@ def test_prepared_global_bundle_blocks_every_side_writer_then_owner_recovers(
             encode_artifact(extract.GLOBAL_EDIT, edit_payload),
             ensure_ascii=False, indent=2),
         encoding='utf-8', newline='\n')
-    current_review = input_store.read(GlobalReview, global_review.REL)
+    from tests.factories import approved_global_review
+    current_review = approved_global_review(grounding_io.read(input_store))
     item = current_review.items[0]
     input_store.write(
         global_review.DEFAULT_DECISIONS,
@@ -521,8 +548,8 @@ def test_prepared_global_bundle_blocks_every_side_writer_then_owner_recovers(
     actions = (
         ('renormalize', lambda: extract.run_renormalize(_free_ctx(owner))),
         ('apply-edit', lambda: extract.run_apply_edit(_free_ctx(owner))),
-        ('review apply', lambda: global_review.apply_file(_free_ctx(owner))),
-        ('purge-role', lambda: extract.run_purge_role(
+        ('review refresh', lambda: extract.run_refresh_review(_free_ctx(owner))),
+        ('legacy generate', lambda: extract.run_global(
             _direct_ctx(owner), no_wire)),
     )
     for _label, action in actions:
@@ -544,7 +571,7 @@ def test_prepared_before_formal_blocks_revalidate_then_owner_recovers(
     """INVALID 提升也不能踩过尚未写 formal 的 foreign prepared。"""
     blocked_owner = _ctx(tmp_path)
     bad = _full(_bad_global())
-    with pytest.raises(GateBlocked, match='canonical_unique'):
+    with pytest.raises(GateBlocked, match='canon_chapter_refs_dangling'):
         Stage2GlobalAgent(
             blocked_owner,
             driver=_Driver([bad, bad], blocked_owner.novel_dir),
@@ -552,12 +579,14 @@ def test_prepared_before_formal_blocks_revalidate_then_owner_recovers(
         ).run()
     assert ArtifactStore(blocked_owner).exists(extract._GLOBAL_INVALID)
 
-    real_write = extract._write_formal
+    real_write = ArtifactStore.write_round
 
-    def crash_before_formal(*_args, **_kwargs):
-        raise KeyboardInterrupt('kill after prepared before formal')
+    def crash_before_formal(store, rel, *args, **kwargs):
+        if rel == extract.GLOBAL_REL:
+            raise KeyboardInterrupt('kill after prepared before formal')
+        return real_write(store, rel, *args, **kwargs)
 
-    monkeypatch.setattr(extract, '_write_formal', crash_before_formal)
+    monkeypatch.setattr(ArtifactStore, 'write_round', crash_before_formal)
     owner = _new_run_ctx(blocked_owner)
     with pytest.raises(KeyboardInterrupt, match='before formal'):
         Stage2GlobalAgent(
@@ -569,7 +598,7 @@ def test_prepared_before_formal_blocks_revalidate_then_owner_recovers(
         ).run()
     assert stage2_global_runs.prepared(owner) is not None
     assert ArtifactStore(owner).exists(extract._GLOBAL_INVALID)
-    monkeypatch.setattr(extract, '_write_formal', real_write)
+    monkeypatch.setattr(ArtifactStore, 'write_round', real_write)
 
     before = _global_business_snapshot(owner)
     with pytest.raises(ProvenanceRefused, match='prepared 正式写盘尾窗'):
@@ -586,132 +615,23 @@ def test_prepared_before_formal_blocks_revalidate_then_owner_recovers(
     assert not ArtifactStore(resumed).exists(extract._GLOBAL_INVALID)
 
 
-def test_purge_role_rechecks_foreign_prepared_after_its_wire(
-    tmp_path, monkeypatch,
-):
-    """pre-wire 通过后才出现的 prepared 仍须在 purge-role 正式写前挡住。"""
-    seed = _ctx(tmp_path)
+@pytest.mark.parametrize('command', ['run', 'preview'])
+def test_retired_purge_role_has_no_cli_consumer_and_preserves_existing_book(
+        tmp_path, monkeypatch, capsys, command):
+    """旧命令在读取运行上下文前拒绝；已存人物、知识与原费用均不变。"""
+    from novel.cli import main as cli
+    ctx = _ctx(tmp_path)
     Stage2GlobalAgent(
-        seed,
-        driver=_Driver([_full(_response_global())], seed.novel_dir),
-        max_turns=2,
-    ).run()
-    original = ArtifactStore(seed).read(GlobalGrounding, extract.GLOBAL_REL)
-    roles = {
-        char_id: {'role': character.role, 'fate': character.fate}
-        for char_id, character in original.entities.characters.items()
-    }
-
-    real_note = extract._note_restored_adoptions
-
-    def crash_before_adoption(*_args, **_kwargs):
-        raise KeyboardInterrupt('racer killed after formal readback')
-
-    monkeypatch.setattr(
-        extract, '_note_restored_adoptions', crash_before_adoption)
-    racer = _new_run_ctx(seed)
-    after_racer: dict[str, object] = {}
-
-    def create_prepared_during_wire() -> None:
-        with pytest.raises(KeyboardInterrupt, match='racer killed'):
-            Stage2GlobalAgent(
-                racer,
-                driver=_Driver(
-                    [_full(_response_global())], racer.novel_dir,
-                    session_id='stage2-global-purge-racer'),
-                max_turns=2,
-            ).run()
-        assert stage2_global_runs.prepared(racer) is not None
-        after_racer.update(_global_business_snapshot(racer))
-
-    class PurgeClient:
-        model = original.provenance.model
-
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def ask_json(self, *_args, model_cls, **_kwargs):
-            self.calls += 1
-            create_prepared_during_wire()
-            return model_cls.model_validate({'characters': roles})
-
-        def accepted_models(self, *_purposes):
-            return (self.model,)
-
-        def accepted_attempt(self, _purpose):
-            return None
-
-    client = PurgeClient()
-    with pytest.raises(ProvenanceRefused, match='prepared 正式写盘尾窗'):
-        extract.run_purge_role(
-            _direct_ctx(seed), client)  # type: ignore[arg-type]
-    assert client.calls == 1
-    assert _global_business_snapshot(racer) == after_racer
-
-    monkeypatch.setattr(extract, '_note_restored_adoptions', real_note)
-    resumed = _resume_ctx(racer)
-    replay = _Driver([], resumed.novel_dir)
-    result = Stage2GlobalAgent(resumed, driver=replay, max_turns=2).run()
-    assert result.passed and replay.calls == []
-    assert stage2_global_runs.committed(resumed) is not None
-
-
-def test_purge_role_rejects_foreign_committed_source_drift_after_wire(
-    tmp_path,
-):
-    """foreign journal 已闭合可放行，但旧 source SHA 的响应不能覆盖新稿。"""
-    seed = _ctx(tmp_path)
-    Stage2GlobalAgent(
-        seed,
-        driver=_Driver([_full(_response_global())], seed.novel_dir),
-        max_turns=2,
-    ).run()
-    original = ArtifactStore(seed).read(GlobalGrounding, extract.GLOBAL_REL)
-    roles = {
-        char_id: {'role': character.role, 'fate': character.fate}
-        for char_id, character in original.entities.characters.items()
-    }
-    racer_candidate = copy.deepcopy(_response_global())
-    racer_character = racer_candidate['entities']['characters']['char_001']
-    racer_character['canonical'] = '竞态提交后的新称名'
-    racer_character['address'][0]['surface'] = '竞态提交后的新称名'
-    racer = _new_run_ctx(seed)
-    after_racer: dict[str, object] = {}
-
-    class PurgeClient:
-        model = original.provenance.model
-
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def ask_json(self, *_args, model_cls, **_kwargs):
-            self.calls += 1
-            result = Stage2GlobalAgent(
-                racer,
-                driver=_Driver(
-                    [_full(racer_candidate)], racer.novel_dir,
-                    session_id='stage2-global-purge-committed-racer'),
-                max_turns=2,
-            ).run()
-            assert result.passed
-            assert stage2_global_runs.committed(racer) is not None
-            after_racer.update(_global_business_snapshot(racer))
-            return model_cls.model_validate({'characters': roles})
-
-        def accepted_models(self, *_purposes):
-            return (self.model,)
-
-        def accepted_attempt(self, _purpose):
-            return None
-
-    client = PurgeClient()
-    with pytest.raises(ProvenanceRefused, match='Global source 底座漂移'):
-        extract.run_purge_role(
-            _direct_ctx(seed), client)  # type: ignore[arg-type]
-    assert client.calls == 1
-    assert _global_business_snapshot(racer) == after_racer
-    landed = ArtifactStore(racer).read(GlobalGrounding, extract.GLOBAL_REL)
-    assert landed.entities.characters['char_001'].canonical == '竞态提交后的新称名'
+        ctx, driver=_Driver([_full(_response_global())], ctx.novel_dir), max_turns=2).run()
+    before = _global_business_snapshot(ctx)
+    ledger_before = ctx.ledger.path.read_bytes()
+    monkeypatch.setattr(cli, '_llm_client', lambda *_args: pytest.fail('退役入口不得构造模型'))
+    with pytest.raises(SystemExit) as rejected:
+        cli.main([command, 'stage2.global', ctx.sid, '--base', str(tmp_path), '--purge-role'])
+    assert rejected.value.code == 2
+    assert '--purge-role' in capsys.readouterr().err
+    assert _global_business_snapshot(ctx) == before
+    assert ctx.ledger.path.read_bytes() == ledger_before
 
 
 def test_pending_global_response_refuses_competing_producer_before_wire(
@@ -827,7 +747,8 @@ def test_legacy_global_cannot_bypass_prepared_journal_but_foreign_committed_allo
         extract.BLUEPRINT_CHARACTER_REL,
     )
     before = {
-        rel: owner.novel_dir.joinpath(rel).read_bytes()
+        rel: (owner.novel_dir.joinpath(rel).read_bytes()
+             if owner.novel_dir.joinpath(rel).exists() else None)
         for rel in guarded_paths
     }
 
@@ -839,7 +760,8 @@ def test_legacy_global_cannot_bypass_prepared_journal_but_foreign_committed_allo
             extract.run_global(direct, no_wire)  # type: ignore[arg-type]
         assert no_wire.calls == 0
         assert {
-            rel: owner.novel_dir.joinpath(rel).read_bytes()
+            rel: (owner.novel_dir.joinpath(rel).read_bytes()
+             if owner.novel_dir.joinpath(rel).exists() else None)
             for rel in guarded_paths
         } == before
 
@@ -852,7 +774,7 @@ def test_legacy_global_cannot_bypass_prepared_journal_but_foreign_committed_allo
     # foreign committed 是已闭合历史，不应永久阻断后续新 run；这里只准备，0 wire。
     allowed = _direct_ctx(owner)
     prepared = extract.prepare_global_candidate(allowed)
-    assert prepared.contract_name == 'paragraph-candidate-v1'
+    assert prepared.contract_name == 'knowledge-paragraph-candidate-v2'
 
 
 def test_main_text_drift_refuses_checkpoint_restore_before_wire(
@@ -880,7 +802,7 @@ def test_main_text_drift_refuses_checkpoint_restore_before_wire(
         extract.MAIN_TEXT, MainText.model_validate(drifted))
     resumed_ctx = _resume_ctx(ctx)
     no_wire = _Driver([], resumed_ctx.novel_dir)
-    with pytest.raises(ProvenanceRefused, match='run.json|输入'):
+    with pytest.raises(UpstreamStale, match='stage2/characters.json'):
         Stage2GlobalAgent(
             resumed_ctx, driver=no_wire, max_turns=2).run()
     assert no_wire.calls == []

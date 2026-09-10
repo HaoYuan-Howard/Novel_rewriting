@@ -67,6 +67,7 @@ FOLLOW_CHECK_NOTE = '自动追跑：退出码 0 也可能是残缺产物'
 #: 因此唯一判据是 ``(node, flag token set)``，值只列**已经完整迁移**的组合。
 #: 带值参数只以 token 入表，值仍由 ``validate_run`` 与 producer 校验。
 EXECUTOR_PROFILED_RUNS: dict[str, tuple[frozenset[str], ...]] = {
+    'stage2.characters': (frozenset(), frozenset({'--review-token'})),
     'stage2.global': (frozenset(), frozenset({'--review-token'})),
     'stage2.blueprint': (frozenset(), frozenset({'--review-token'})),
     'stage4.design': (
@@ -99,8 +100,11 @@ EXECUTOR_PROFILED_NODES = tuple(EXECUTOR_PROFILED_RUNS)
 #: 可能被排在后面的 ``--dry-run`` / ``--check-only`` 盖成“不写盘”，preview 就会
 #: 对实际写盘说假话。这里关闭式拒收，展示与执行共用同一道门。
 _PRIMARY_OPERATIONS = {
+    'stage2.characters': frozenset({
+        '--dry-run', '--revalidate', '--apply-edit', '--emit-edit-template', '--resample',
+    }),
     'stage2.global': frozenset({
-        '--renormalize', '--purge-role', '--resample', '--revalidate',
+        '--renormalize', '--resample', '--revalidate', '--close-review',
         '--apply-edit', '--review-decisions', '--emit-edit-template',
         '--emit-review-template', '--emit-review-workpack',
     }),
@@ -110,12 +114,12 @@ _PRIMARY_OPERATIONS = {
         '--validate-edit', '--apply-edit', '--close-review',
     }),
     'stage4.design': frozenset({
-        '--dry-run', '--replan', '--adopt-rejected',
+        '--dry-run', '--replan', '--close-review', '--reaggregate', '--recover-prepared', '--recover-responses',
         '--validate-edit', '--apply-edit', '--recover-repair-aggregate',
     }),
     'stage4.plan': frozenset({
         '--dry-run', '--check-only', '--revalidate', '--names-only',
-        '--identity', '--apply-edit', '--apply-binding',
+        '--identity', '--apply-edit', '--apply-binding', '--reaggregate', '--recover-prepared', '--close-review',
     }),
     'stage5.write': frozenset({
         '--dry-run', '--recheck', '--revalidate', '--preview-edit',
@@ -223,6 +227,13 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
             f'现有 {len(NODES)} 个：{", ".join(sorted(NODES))}')
     spec = NODES[node]
     tokens = flag_tokens(flags)
+    if node in {'stage2.global', 'stage2.blueprint', 'stage4.design', 'stage4.plan'} and '--close-review' in tokens:
+        if set(tokens) != {'--close-review'}:
+            raise UnsupportedRunMode('--close-review 只核验历史覆盖，不接受模型或新裁决参数')
+    if node == 'stage4.design' and '--reaggregate' in tokens and set(tokens) != {'--reaggregate'}:
+        raise UnsupportedRunMode('Stage4A --reaggregate 只免费汇合已保存来源，不接受新的生成参数')
+    if node == 'stage4.design' and '--recover-responses' in tokens and set(tokens) != {'--recover-responses'}:
+        raise UnsupportedRunMode('Stage4A --recover-responses 只恢复原回答，不接受新的生成参数')
     if node == 'stage2.global' and '--resample' in tokens:
         if set(tokens) != {'--resample'}:
             raise UnsupportedRunMode(
@@ -279,7 +290,7 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
                 'stage5.write --recover-prepared 只接受 source run_id 与必填的 '
                 '--actor/--reason/--subject-sha256；不得与 chapters/revise/'
                 'response-repair 或其他操作混用')
-    if node in ('stage6.hook', 'stage6.semantic', 'stage7.rename') and '--recover-prepared' in tokens:
+    if node in ('stage4.design', 'stage4.plan', 'stage6.hook', 'stage6.semantic', 'stage7.rename') and '--recover-prepared' in tokens:
         expected = {'--recover-prepared', '--subject-sha256'}
         if set(tokens) != expected or len(flags) != 2 * len(expected):
             raise UnsupportedRunMode(
@@ -295,7 +306,7 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
         if (not (allow_placeholders and digest == placeholder_for('--subject-sha256'))
                 and re.fullmatch(r'[0-9a-f]{64}', digest) is None):
             raise UnsupportedRunMode('--subject-sha256 必须是 64 位小写十六进制 SHA-256')
-    if (node in ('stage6.hook', 'stage6.semantic', 'stage7.rename') and '--subject-sha256' in tokens
+    if (node in ('stage4.design', 'stage4.plan', 'stage6.hook', 'stage6.semantic', 'stage7.rename') and '--subject-sha256' in tokens
             and '--recover-prepared' not in tokens):
         raise UnsupportedRunMode(f'{node} --subject-sha256 只绑定 --recover-prepared')
     if node == 'stage5.write' and '--reviewer-rewrite' in tokens:

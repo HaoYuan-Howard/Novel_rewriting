@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import json
+
 import copy
 import hashlib
 from contextlib import contextmanager
@@ -139,14 +141,8 @@ def _build_legacy_book(tmp_path, monkeypatch) -> _Book:
     source = raw['_provenance']
     source['architecture'] = 'chapter_baseline_v1'
     source['prompts'] = {'CHAPTER_BIND_SYS': 'a3c0d541d9'}
-    source['unit_lineage'] = [
-        ({'chapter_ordinal': row.output_ordinal, 'kind': 'chapter_session',
-          'attempt_id': 'a' * 16, 'models': [source['model']],
-          'revision': 0, 'ambiguities': 1}
-         if index == 0 else
-         {'chapter_ordinal': row.output_ordinal, 'kind': 'baseline'})
-        for index, row in enumerate(binding.chapters)
-    ]
+    # 只模拟已发行旧 system 的输入契约；章来源沿用真实 producer 的完整回执，
+    # 不以固定 attempt 或缺省 origin 冒充历史来源。
     _write_historical_pair(case, raw, monkeypatch)
     return case
 
@@ -209,7 +205,8 @@ def _assert_display_subject_is_not_approval(case: _Book) -> None:
         assert not view['identity_plan']
         subject = view['structure_subject_sha256']
         assert subject == structure_review_subject_sha256(
-            case.compiled, case.binding.binding_concerns)
+            case.compiled, case.binding.binding_concerns,
+            blueprints=json.loads((case.book / 'stage2/chapter_blueprints.json').read_text(encoding='utf-8')))
         assert subject is not None
         projected = client.get(f'/api/novels/{SID}/approvals')
         assert projected.status_code == 200, projected.text
@@ -281,13 +278,16 @@ def test_old_binding_is_readonly_redo_then_real_producer_stops_repeating(
     assert next_step.state == 'ready'
     assert next_step.action.node == 'stage4.plan'
     assert next_step.action.resume_verdict == state.RESUME_REDO
-    assert next_step.action.flags == [] and next_step.action.paid
+    assert next_step.action.flags == ['--reaggregate'] and not next_step.action.paid
     assert next_step.action.waiting_on is None and next_step.execution_token
     assert state.operator_redo_flags(next_step.overview, 'stage4.plan') == ()
     assert approvals.get(case.base, SID).design_review.state == 'accepted'
     assert _frozen_bytes(case) == old_bytes and case.calls == calls
 
-    _binding, driver = _rebuild_with_current_chapter_producer(case, monkeypatch)
+    from novel.cli.main import main
+    ctx = _agent_ctx(case.book, 'stage4.plan')
+    assert main(['--run-id', ctx.run_id, 'run', 'stage4.plan', SID,
+                 '--base', str(case.base), *next_step.action.flags]) == 0
     _assert_pair_contract(case, 'fresh', None)
     after = _http_next(case)
     assert after.action.node == 'stage4.context'
@@ -296,7 +296,57 @@ def test_old_binding_is_readonly_redo_then_real_producer_stops_repeating(
     assert state.operator_redo_flags(after.overview, 'stage4.plan') is None
     assert case.store.path(STAGE4_BLIND_CANDIDATE).read_bytes() == old_a
     assert approvals._read_raw(case.base, SID).design_decision == old_decision
-    assert driver.calls == 1 and case.calls == calls
+    assert case.calls == calls
+
+
+@pytest.mark.parametrize('owner', ['stage4.design', 'stage4.plan'])
+def test_unchanged_review_obligations_close_via_http_permit_cli_and_reopen(
+        legacy_book, monkeypatch, owner):
+    """正式文件仅排版改变：复用业务决定，完整新字节仍由 CLI 重新绑定 proof。"""
+    from novel.cli.main import main
+    from novel.orchestrator import execution_permit
+    from contracts.schema.stage4 import BlindCandidate
+
+    case = legacy_book
+    build = _agent_ctx(case.book, 'stage4.plan')
+    assert main(['--run-id', build.run_id, 'run', 'stage4.plan', SID,
+                 '--base', str(case.base), '--reaggregate']) == 0
+    template = approvals.structure_template(case.base, SID, actor='fixture', reason='已逐章核对')
+    request = StructureApprovalRequest.model_validate({
+        **template.model_dump(mode='json'), 'chapters': [
+            {**row.model_dump(mode='json'), 'decision': 'accept', 'reason': '当前事实与结构已核对'}
+            for row in template.chapters],
+    })
+    approvals.approve_structure(case.base, SID, request)
+    rel, model = ((STAGE4_BLIND_CANDIDATE, BlindCandidate) if owner == 'stage4.design'
+                  else (STAGE4_PLAN_CHAPTERS, PlanChapters))
+    artifact = case.store.read_own(model, rel)[0]
+    old_bytes = case.store.path(rel).read_bytes()
+    old_render = ArtifactStore._render
+    with monkeypatch.context() as patch:
+        def render(store, path, value):
+            encoded = old_render(store, path, value)
+            return json.dumps(json.loads(encoded), ensure_ascii=False, indent=4).encode('utf-8')
+        patch.setattr(ArtifactStore, '_render', render)
+        case.store.write(rel, artifact)
+    assert case.store.path(rel).read_bytes() != old_bytes
+    assert case.store.freshness(rel).state == 'fresh'
+    route = _http_next(case)
+    assert route.state == 'ready' and route.action.node == owner
+    assert route.action.flags == ['--close-review'] and route.action.paid is False
+    permit = execution_permit.parse_execution_permit(route.execution_token)
+    assert permit.paid is False
+    before_calls = case.calls
+    before_ledger = case.base.joinpath('_service/ledger.jsonl').read_bytes()
+    run = _agent_ctx(case.book, owner)
+    assert main(['--run-id', run.run_id, 'run', owner, SID, '--base', str(case.base),
+                 '--close-review']) == 0
+    # 新只读实例模拟进程重启；不复用审批投影缓存或 CLI 返回对象。
+    current = approvals.get(case.base, SID)
+    view = current.design_review if owner == 'stage4.design' else current.structure
+    assert view.state == 'accepted'
+    assert case.calls == before_calls
+    assert case.base.joinpath('_service/ledger.jsonl').read_bytes() == before_ledger
 
 
 def test_new_receipt_changes_book_and_chapter_review_identity_preserving_negative_history(
@@ -354,7 +404,7 @@ def test_new_receipt_changes_book_and_chapter_review_identity_preserving_negativ
     assert all(row.decision == 'accept' for row in saved.structure_decision.chapters)
 
 
-@pytest.mark.parametrize('origin', ('whole_book_v1', None, 'human', 'compiled'))
+@pytest.mark.parametrize('origin', ('human', 'compiled'))
 def test_non_chapter_model_binding_without_receipt_remains_fresh(legacy_book, monkeypatch, origin):
     case = legacy_book
     raw = case.binding.model_dump(by_alias=True, mode='json')
@@ -364,9 +414,10 @@ def test_non_chapter_model_binding_without_receipt_remains_fresh(legacy_book, mo
         raw['_provenance'] = {
             key: value for key, value in source.items() if key in model.model_fields}
         raw['_provenance']['origin'] = origin
-    else:
-        source['architecture'] = origin
-        source['unit_lineage'] = None
+        if origin == 'compiled':
+            raw['_provenance']['unit_lineage'] = [
+                {'chapter_ordinal': row['chapter_ordinal'], 'kind': 'baseline'}
+                for row in source['unit_lineage']]
     _write_historical_pair(case, raw, monkeypatch)
     before, calls = _frozen_bytes(case), case.calls
     _assert_pair_contract(case, 'fresh', None)
@@ -378,7 +429,7 @@ def test_non_chapter_model_binding_without_receipt_remains_fresh(legacy_book, mo
 
 
 @pytest.mark.parametrize('drift', (
-    'unknown_receipt', 'unknown_system', 'partial_lineage', 'unknown_architecture'))
+    'unknown_receipt', 'unknown_system'))
 def test_unproven_binding_never_authorizes_paid_rebuild(legacy_book, monkeypatch, drift):
     case = legacy_book
     raw = copy.deepcopy(case.binding.model_dump(by_alias=True, mode='json'))
@@ -387,10 +438,6 @@ def test_unproven_binding_never_authorizes_paid_rebuild(legacy_book, monkeypatch
         source['prompts'][STAGE4_BINDING_INPUT_RECEIPT_KEY] = 'f' * 10
     elif drift == 'unknown_system':
         source['prompts']['CHAPTER_BIND_SYS'] = 'f' * 10
-    elif drift == 'unknown_architecture':
-        source['architecture'] = 'chapter_baseline_v999'
-    else:
-        source['unit_lineage'] = source['unit_lineage'][:-1]
     _write_historical_pair(case, raw, monkeypatch)
     before, calls = _frozen_bytes(case), case.calls
     _assert_pair_contract(case, 'unknown', 'binding_input_contract_unproven')
@@ -400,4 +447,36 @@ def test_unproven_binding_never_authorizes_paid_rebuild(legacy_book, monkeypatch
     assert next_step.action.node == 'stage4.plan'
     assert next_step.execution_token is None
     assert state.operator_redo_flags(next_step.overview, 'stage4.plan') is None
+    assert _frozen_bytes(case) == before and case.calls == calls
+
+
+@pytest.mark.parametrize('damage', ['old_architecture', 'missing_architecture', 'partial_lineage', 'missing_origin'])
+def test_retired_or_incomplete_binding_is_unreadable_and_never_authorizes_rebuild(
+        legacy_book, damage):
+    from contracts.schema import encode_artifact
+    from novel.errors import ArtifactUnreadable
+    case = legacy_book
+    raw = encode_artifact(
+        STAGE4_EVIDENCE_BINDING, case.binding.model_dump(by_alias=True, mode='json'))
+    source = raw['_provenance']
+    if damage == 'old_architecture':
+        source['architecture'] = 'whole_book_v1'
+    elif damage == 'missing_architecture':
+        source.pop('architecture')
+    elif damage == 'partial_lineage':
+        source['unit_lineage'].pop()
+    else:
+        next(row for row in source['unit_lineage'] if row['kind'] == 'chapter_session').pop('origin')
+    # 故意破坏当前信封是拒绝反例，不经 producer 给旧来源补签。
+    case.store.path(STAGE4_EVIDENCE_BINDING).write_text(
+        json.dumps(raw, ensure_ascii=False), encoding='utf-8')
+    before, calls = _frozen_bytes(case), case.calls
+    with pytest.raises(ArtifactUnreadable):
+        case.store.read_own(EvidenceBinding, STAGE4_EVIDENCE_BINDING)
+    assert case.store.freshness(STAGE4_EVIDENCE_BINDING).state == 'unknown'
+    for _restart in range(2):
+        next_step = _http_next(case)
+        assert next_step.state == 'blocked'
+        assert next_step.execution_token is None
+        assert state.operator_redo_flags(next_step.overview, 'stage4.plan') is None
     assert _frozen_bytes(case) == before and case.calls == calls

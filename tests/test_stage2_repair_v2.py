@@ -157,8 +157,9 @@ def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
     target = by_ordinal[1]['beats'][beat_index]
     base = len(target['hinges'])
     target['hinges'] += [
-        {'kind': '物件', 'phrase': dup},
-        {'kind': '因果前提', 'phrase': '这句话不存在于原文里也不该存在'},
+        {'kind': '物件', 'phrase': dup, 'source_fact_refs': [target['fact_atoms'][0]['atom_key']]},
+        {'kind': '因果前提', 'phrase': '这句话不存在于原文里也不该存在',
+         'source_fact_refs': [target['fact_atoms'][0]['atom_key']]},
     ]
 
     def respond(req, _index):

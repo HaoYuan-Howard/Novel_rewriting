@@ -7,6 +7,7 @@ import type {
   LegacyLlmProfile,
   LegacyProviderCapability,
   PipelineAgentProfiles,
+  PipelineConcurrency,
 } from '@/types/agent'
 
 /** 浏览器草稿允许半成品；只有 materialize 成功后的对象才准进入 preview/start。 */
@@ -35,6 +36,7 @@ export interface PipelineAgentProfilesDraft {
   executor_default: ExecutorBackendDraft
   /** 键存在表示启用覆盖；没有键表示继承 executor_default。 */
   executor_overrides: Record<string, ExecutorBackendDraft>
+  concurrency?: PipelineConcurrency
 }
 
 export interface MaterializedProfiles {
@@ -104,6 +106,7 @@ export function pipelineDraftOf(
 ): PipelineAgentProfilesDraft {
   if (profiles === null) return emptyPipelineAgentProfilesDraft()
   return {
+    ...concurrencySnapshot(profiles.concurrency),
     commander: profileDraftOf(profiles.commander),
     executor_default: executorBackendDraftOf(profiles.executor_default),
     executor_overrides: Object.fromEntries(
@@ -331,6 +334,20 @@ export function materializePipelineAgentProfiles(
   const errors = [...commander.errors, ...executorDefault.errors]
   const overrides: Record<string, ExecutorBackend> = {}
   const knownNodes = new Set(capabilities.executor_nodes)
+  if (draft.concurrency) {
+    const policy = draft.concurrency
+    const allowed = capabilities.concurrency
+    for (const [node, count] of Object.entries(policy.node_overrides)) {
+      if (!allowed.nodes.includes(node) || !allowed.node_choices.includes(count)) {
+        errors.push(`并发覆盖 ${node}=${count} 不在当前 capability 中`)
+      }
+    }
+    for (const count of [policy.per_book, policy.per_provider]) {
+      if (!Number.isInteger(count) || count < allowed.total_min || count > allowed.total_max) {
+        errors.push(`总并发必须是 ${allowed.total_min}～${allowed.total_max} 的整数`)
+      }
+    }
+  }
 
   for (const node of Object.keys(draft.executor_overrides)) {
     if (!knownNodes.has(node)) errors.push(`节点覆盖：${node} 已不在当前 capability 中`)
@@ -358,6 +375,7 @@ export function materializePipelineAgentProfiles(
   return {
     profiles: {
       schema_version: 2,
+      ...concurrencySnapshot(draft.concurrency),
       commander: commander.profile,
       executor_default: executorDefault.backend,
       executor_overrides: overrides,
@@ -382,6 +400,7 @@ export function clonePipelineAgentProfiles(
 ): PipelineAgentProfiles {
   return {
     schema_version: 2,
+    ...concurrencySnapshot(profiles.concurrency),
     commander: cloneAgentProfile(profiles.commander),
     executor_default: cloneExecutorBackend(profiles.executor_default),
     executor_overrides: Object.fromEntries(
@@ -391,6 +410,19 @@ export function clonePipelineAgentProfiles(
       ]),
     ),
   }
+}
+
+function concurrencySnapshot(policy: PipelineConcurrency | undefined): { concurrency?: PipelineConcurrency } {
+  return policy ? { concurrency: { ...policy, node_overrides: { ...policy.node_overrides } } } : {}
+}
+
+function concurrencyEqual(left: PipelineConcurrency | undefined, right: PipelineConcurrency | undefined): boolean {
+  if (!left || !right) return left === right
+  if (left.per_book !== right.per_book || left.per_provider !== right.per_provider) return false
+  const nodes = Object.keys(left.node_overrides).sort()
+  const others = Object.keys(right.node_overrides).sort()
+  return nodes.length === others.length && nodes.every((node, index) =>
+    node === others[index] && left.node_overrides[node] === right.node_overrides[node])
 }
 
 function profileEqual(left: AgentProfile, right: AgentProfile): boolean {
@@ -421,6 +453,7 @@ export function pipelineProfilesEqual(
 ): boolean {
   if (left === null || right === null) return left === right
   if (left.schema_version !== right.schema_version) return false
+  if (!concurrencyEqual(left.concurrency, right.concurrency)) return false
   if (!profileEqual(left.commander, right.commander)) return false
   if (!backendEqual(left.executor_default, right.executor_default)) return false
   const leftNodes = Object.keys(left.executor_overrides).sort()

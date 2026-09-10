@@ -106,7 +106,7 @@ def test_build_prompt_records_hook_as_a_formal_input(monkeypatch):
         src_hook='原作文案',
         mat=SimpleNamespace(
             lead=[{'output_ordinal': 1, 'text': '第一章'}],
-            story_truth={'arc': {}},
+            story_truth={'source_blurb': {'facts': [], 'opening': {'kind': 'proposed', 'through_chapter': 1}}},
             story_map=[],
         ),
     )

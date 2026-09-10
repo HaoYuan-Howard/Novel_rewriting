@@ -70,7 +70,7 @@ def test_stage6_workpack_hash_is_stable_after_approval_and_old_approval_is_not_c
     assert before.v == 3
     assert before.review_contract_version == 'stage6-final-review-v3'
     assert 'code_version' not in public and 'rules_fingerprint' not in public
-    with pytest.raises(ValidationError, match='Stage4A frozen-v6'):
+    with pytest.raises(ValidationError, match='disposition'):
         Stage6ApprovalWorkpack.model_validate({
             **public, 'disposition': 'suspended',
         })
@@ -484,7 +484,7 @@ def test_stage7_workpack_keeps_real_hits_residual_context_and_stable_subject(
 ) -> None:
     store, art, rules = _stage7_snapshot_env(monkeypatch)
     before, _ = rename._approval_workpack_snapshot(store, art)
-    with pytest.raises(ValidationError, match='Stage4A frozen-v6'):
+    with pytest.raises(ValidationError, match='disposition'):
         Stage7ApprovalWorkpack.model_validate({
             **before.model_dump(mode='json'), 'disposition': 'suspended',
         })

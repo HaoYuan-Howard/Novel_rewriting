@@ -29,7 +29,7 @@ _SHA1_RE: Final = re.compile(r'^[0-9a-f]{40}$')
 _SHA256_RE: Final = re.compile(r'^[0-9a-f]{64}$')
 _ALIAS_RE: Final = re.compile(r'^a_[0-9a-f]{16,64}$')
 
-_EPOCH_CONTRACT: Final = 'stage4-design-strategy-epoch-v1'
+_EPOCH_CONTRACT: Final = 'stage4-design-strategy-epoch-v2'
 _CHAPTER_STRATEGY_CONTRACT: Final = 'stage4-design-chapter-strategy-v1'
 _RELATION_CONSTRAINT_CONTRACT: Final = 'stage4-design-relation-constraint-v1'
 _RELATION_SET_CONTRACT: Final = 'stage4-design-relation-constraint-set-v1'
@@ -127,7 +127,8 @@ def strategy_epoch_sha256(
 
     epoch 刻意不含 chapter weights、run id 或代码指纹。只改某章 weight 会改变该章
     的请求身份，却不能洗掉同一宏观策略下已经承诺的 repair 约束与轮数。
-    review contract / root / truth / alias 任一变化则必须开新 epoch。
+    review contract / root / alias 或宏观策略变化才开新 epoch。整书 truth 仍在
+    策略审阅主体中完整验证；单章依赖由该章投影另行绑定，不能经 epoch 全书传播。
     """
     raw = _plain_mapping(basis, where='design review basis')
     if set(raw) != _BASIS_FIELDS:
@@ -144,6 +145,9 @@ def strategy_epoch_sha256(
         'alias_algorithm': _nonblank(
             raw['alias_algorithm'], where='basis.alias_algorithm'),
     }
+    # truth 摘要必须合法，但它属于整书策略的证据身份，不属于已接受策略的
+    # 执行 epoch。把它带入这里会使所有未变章的请求和审阅一起失效。
+    normalized.pop('truth_sha256')
     strategy = _nonblank(
         reconstruction_strategy, where='reconstruction_strategy')
     return _sha256({

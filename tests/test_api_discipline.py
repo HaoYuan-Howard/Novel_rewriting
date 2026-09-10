@@ -369,7 +369,7 @@ def test_the_spoiler_disclosure_boundary_is_published():
     assert disclosure['security_boundary'] is False
     assert disclosure['server_sends_full_data'] is True
     assert disclosure['hidden_paths'] == [
-        'characters[].fate', 'secrets', 'arc.climax', 'arc.ending']
+        'characters[].fate', 'secrets', 'source_blurb.facts', 'source_blurb.opening']
     assert disclosure['known_leakage_surfaces']
     assert disclosure['consumers']
     assert '不是安全边界' in disclosure['notice']
@@ -428,6 +428,7 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         '/api/novels/{sid}/stage7/approve',
         '/api/novels/{sid}/stage7/adopt-residual',
         '/api/novels/{sid}/stage2/global-review',
+        '/api/novels/{sid}/stage2/characters/edit',
         '/api/novels/{sid}/approvals/stage2-review',
         # Stage2 v7 关系集合的 0-wire 完整替换与同尺 preview。
         '/api/novels/{sid}/stage2/relations/edit',
@@ -435,6 +436,7 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         # agent 代跑（行为在 `tests/test_api_agent.py`；preview 是 0 成本但仍是 POST）
         '/api/agent/runs',
         '/api/agent/runs/preview',
+        '/api/novels/{sid}/work-units/{unit_id}/grant',
         # 当前 output base 的用户常用 profiles；只写 _service，且用 revision CAS。
         '/api/settings/agent-profiles',
         '/api/agent/runs/{run_id}/pause',

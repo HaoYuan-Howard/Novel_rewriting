@@ -34,9 +34,11 @@ from typing import Any
 from pydantic import BaseModel
 
 from contracts.artifacts import (
+    RETIRED_ARTIFACT_PATHS,
     STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
+    STAGE2_CHARACTERS, STAGE2_CHARACTERS_EDIT,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_BLUEPRINT_RELATION_EDIT,
-    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT,
+    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_KNOWLEDGE_LINKS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT,
     STAGE2_GLOBAL_EDIT_INPUT_COMMIT,
     STAGE2_GLOBAL_EDIT_FAILURE,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
@@ -90,6 +92,9 @@ from contracts.schema.api import (
     UploadResult,
 )
 from contracts.schema.base import Fp10, FrozenModel, Sha1, StrictModel
+from contracts.schema.characters import CharacterRegistry, CharactersEdit
+from contracts.schema.knowledge import KnowledgeGrounding
+from contracts.schema.knowledge_links import KnowledgeLinks
 from contracts.schema.common import (
     Finding,
     FreeProvenance,
@@ -144,13 +149,13 @@ from contracts.schema.stage0 import (
 )
 from contracts.schema.stage1 import HookCopy, MainText, MainTextSection
 from contracts.schema.stage2 import (
-    Address, AddressContextPatch, Arc, ArcTrack, ArcTrackPatch, Beat, Blueprint, Canon,
+    Address, AddressContextPatch, Beat, Blueprint, Canon,
     BlueprintCharacterProjection, BlueprintCharacterProjectionChapter,
     BlueprintRelationEdit,
     ChapterBlueprints, Character,
-    CharacterAddressReplacement, CharacterRef, CharacterResponse, ConflictStage,
+    CharacterAddressReplacement, CharacterRef, CharacterResponse,
     Entities, EvidenceLocator,
-    ArcResponse, CausalEdge, FactAtom, FactEvidence, GlobalEdit,
+    CausalEdge, FactAtom, FactEvidence, GlobalEdit,
     CharacterCollectionItem, GlobalCollectionAdd, GlobalCollectionDelete,
     GlobalCollectionEdit, GlobalCollectionSplit,
     GlobalEditCommit, GlobalEditCommitBaseline, GlobalEditCommitTarget,
@@ -160,7 +165,7 @@ from contracts.schema.stage2 import (
     GlobalGrounding, GlobalCharacterPatch,
     GroupRef, Hinge, KnowledgeEvent, KnowledgeEventResponse,
     Narration, Relation, RelationPatch, RelationVisibility,
-    RoleSplitResponse, Secret, SecretPatch, Setting, SettingPatch, SourceSpan, WorldRule,
+    Secret, SecretPatch, Setting, SettingPatch, SourceSpan, WorldRule,
     WorldRulePatch, WorldRuleVersion,
 )
 from contracts.schema.stage4 import (
@@ -265,20 +270,22 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # Stage0～7 减法完成后，两本现役书统一从头重建，不做迁移或手补字段。
     STAGE1_MAIN_TEXT: ArtifactSpec(MainText, 3),
     STAGE1_HOOK_COPY: ArtifactSpec(HookCopy, 2),
-    # ⚠ v4 删除无下游作用的 span 恢复账、secret 分组/确认事件与 arc 分类标签；存量
+    # ⚠ v5 删除文学 arc，新增源文案证据与开篇范围；存量
     #   只能由 `stage2.global` 付费重建。完整版本账见 artifact version 守卫。
-    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(GlobalGrounding, 4),
-    STAGE2_GLOBAL_REVIEW: ArtifactSpec(GlobalReview),
+    STAGE2_CHARACTERS: ArtifactSpec(CharacterRegistry),
+    STAGE2_CHARACTERS_EDIT: ArtifactSpec(CharactersEdit),
+    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(KnowledgeGrounding, 6),
+    # v2 换用源文案/范围义务；未知主体必须先 typed 修订，不允许直接 PASS。
+    STAGE2_GLOBAL_REVIEW: ArtifactSpec(GlobalReview, 2),
     # v2（2026-08-28）：新增完整 blocking scope 默认决定与逐项例外；旧 v1 没有
     # scope hash / 正文章全集阅读声明，由人免费重发模板后重新提交，不迁移。
     STAGE2_GLOBAL_REVIEW_DECISIONS: ArtifactSpec(GlobalReviewDecisionSet, 2),
     # ⚠ 人产的 Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它）——
     #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
     #   被 `store.read` 当上游边记账 ⇒ 形状同样是契约。
-    # ⚠ v3：随 GlobalGrounding v4 删除同一批冗余字段；由人按当前 typed 契约重写。
-    # 2026-08-29 新增可缺的 ``conflict_stages_replace`` 是兼容加法：旧 v3
-    # 决策集仍能逐字解码，故不构成形状破坏、不升版。
-    STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit, 3),
+    # v4 删除 arc patch/replacement，新增 source_blurb_replace；旧输入由人
+    # 免费重发模板后按当前 typed 契约重写，不迁移或伪造事实与范围。
+    STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit, 5),
     # v1：canonical reviewed edit 被拒后由 ``stage2.global --apply-edit`` 免费
     # 重建；它是 transient correction fact，不进入 NodeSpec.produces。
     STAGE2_GLOBAL_EDIT_FAILURE: ArtifactSpec(GlobalEditFailure),
@@ -287,7 +294,7 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # v1：Stage2 Global 正式三件套的 transient prepared/committed journal；
     # reviewed 额外绑定 failure/workpack，generic INVALID 提升可显式表达没有
     # action-owned edit identity / formal baseline；不进入 NodeSpec.produces。
-    STAGE2_GLOBAL_EDIT_COMMIT: ArtifactSpec(GlobalEditCommit),
+    STAGE2_GLOBAL_EDIT_COMMIT: ArtifactSpec(GlobalEditCommit, 2),
     # v1：由当前 schema-valid global（正式或 INVALID）+ main_text 免费物化；
     # 无存量兼容负担，缺/坏时由 `stage2.global --renormalize` 0-LLM 重建。
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION: ArtifactSpec(
@@ -302,11 +309,14 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # v6 删除摘要、人物显示名、重复父键与无消费者 provenance 账；由
     # `stage2.blueprint` 整跑（付费）重建，不迁移或手补。称名投影
     # 只改通用 `inputs` 的运行时键，没改 BlueprintProvenance 载体形状，不升版。
-    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 7),
+    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 8),
+    # 独立 typed 关联；Blueprint Commander 决定先耐久，producer --close-review 免费物化。
+    STAGE2_KNOWLEDGE_LINKS: ArtifactSpec(KnowledgeLinks),
     # v1：外部 hash-bound typed request；只被 CLI/API 读取，不是 producer 产物。
     STAGE2_BLUEPRINT_RELATION_EDIT: ArtifactSpec(BlueprintRelationEdit),
     # v2 删除 goal rationale；A 仍保留重构策略与预算权重，供 B/编译器消费。
-    STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate, 2),
+    # v3 退役整书拒稿采用及无架构来源；由新根内当前策略/单章 producer 重建。
+    STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate, 3),
     # v1：外部 hash-bound 完整章替换请求；只被 Stage4A CLI/API 读取，
     # 不是 Executor 产物，也不进入正式产物展示面。
     STAGE4_BLIND_CHAPTER_EDIT: ArtifactSpec(BlindChapterEditRequest),
@@ -315,21 +325,23 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # v4 删除 A 相过程字段、Stage2 重复契约、派生结构向量与编译参数快照。
     STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters, 4),
     STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit, 4),
-    # v4 删除全书名册、私有 id/秘密清单及逐场展示字段；由免费 context 节点重建。
-    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, 4),
+    # v5 删除文学 arc；由免费 context 节点从当前上游重建。
+    # v6：场景知识与披露许可由独立知识关联导出；0 成本 stage4.context 重建。
+    # v7 删除同号源章、总预算与源字数副本；仍由免费 context 节点重建。
+    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, 7),
     # ⚠ 2026-08-24 单臂折平：删除 `mode`，路径改为
     #   `stage5/chNN.json`。存量双臂稿是只读历史证据，不做迁移；
     #   current 产物由 `stage5.write` 重建。
-    STAGE5_CHAPTER: ArtifactSpec(Chapter, 2),
-    STAGE5_REJECTED_REVISION: ArtifactSpec(RejectedRevision),
+    STAGE5_CHAPTER: ArtifactSpec(Chapter, 3),
+    STAGE5_REJECTED_REVISION: ArtifactSpec(RejectedRevision, 2),
     STAGE5_REVIEWER_REWRITE_REQUEST: ArtifactSpec(ReviewerRewriteBatchRequest, 2),
     # ⚠ Review 的章行同步删除 `mode/mode_dir`；由 `stage5.review`
     #   零成本重建，旧报告不伪装成当前判据产地。
-    STAGE5_REVIEW: ArtifactSpec(Review, 2),
+    STAGE5_REVIEW: ArtifactSpec(Review, 3),
     # ⚠ trim 两份 hash-bound 产物删除目录臂字段，改绑
     #   canonical 章路径；新的超长章由写作/重判路径重建。
-    STAGE5_TRIM_AUDIT: ArtifactSpec(TrimAudit, 2),
-    STAGE5_TRIM_RESOLUTION: ArtifactSpec(TrimResolution, 2),
+    STAGE5_TRIM_AUDIT: ArtifactSpec(TrimAudit, 3),
+    STAGE5_TRIM_RESOLUTION: ArtifactSpec(TrimResolution, 3),
     # ⚠ 逐层一份账（2026-08-15 裁决）：**层由文件路径承载，不进收敛键**。
     #   两份共用一个模型——同一件事的第 N 个落点必然分家。
     STAGE5_WONTFIX: ArtifactSpec(WontFix),
@@ -398,9 +410,17 @@ def _refuse_unfilled_template(rel: str) -> None:
             f'→ 先用 `contracts/artifacts.py::artifact_rel` 填出具体路径')
 
 
+def _refuse_retired_artifact(rel: str) -> None:
+    """已登记退役的路径不能借未注册测试数据通道获得读写许可。"""
+    if formal_artifact_rel(rel) in RETIRED_ARTIFACT_PATHS.values():
+        raise ArtifactVersionError(
+            f'{rel}: 产物路径已退役，不接受任何版本；旧字节只随旧代码与旧根配对读取')
+
+
 def decode_artifact(rel: str, data: Any) -> DecodedArtifact:
     """拆出当前版本的逻辑 payload；未注册的测试数据原样返回。"""
     _refuse_unfilled_template(rel)
+    _refuse_retired_artifact(rel)
     spec = artifact_spec(rel)
     if spec is None:
         return DecodedArtifact(data, 0)
@@ -441,6 +461,7 @@ def decode_artifact(rel: str, data: Any) -> DecodedArtifact:
 def encode_artifact(rel: str, payload: Any) -> Any:
     """给当前逻辑 payload 加版本；RootModel 用 envelope，普通对象加顶层标记。"""
     _refuse_unfilled_template(rel)
+    _refuse_retired_artifact(rel)
     spec = artifact_spec(rel)
     if spec is None:
         return payload
@@ -490,6 +511,7 @@ __all__ = [
     'Stage0Revisions', 'Stage0Revision', 'Stage0RevisionContent',
     'Stage0Current', 'Stage0DismissedCandidate',
     'MainText', 'MainTextSection', 'HookCopy',
+    'CharacterRegistry', 'CharactersEdit', 'KnowledgeGrounding',
     'GlobalGrounding', 'Entities', 'Character', 'Address', 'Relation', 'Canon',
     'BlueprintCharacterProjection', 'BlueprintCharacterProjectionChapter',
     'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret',
@@ -502,13 +524,11 @@ __all__ = [
     'GlobalEditReviewTarget', 'GlobalCollectionEdit', 'GlobalCollectionAdd',
     'GlobalCollectionDelete', 'GlobalCollectionSplit', 'CharacterCollectionItem',
     'SecretPatch', 'WorldRulePatch', 'RelationPatch', 'SettingPatch',
-    'ArcTrackPatch', 'GlobalCharacterPatch',
+    'GlobalCharacterPatch',
     'AddressContextPatch', 'CharacterAddressReplacement', 'CharacterResponse',
-    'Arc', 'ArcResponse', 'ConflictStage',
-    'ArcTrack', 'ChapterBlueprints', 'Blueprint', 'Beat', 'FactAtom', 'CausalEdge',
+    'ChapterBlueprints', 'Blueprint', 'Beat', 'FactAtom', 'CausalEdge',
     'BlueprintRelationEdit',
     'SourceSpan', 'Hinge', 'Narration',
-    'RoleSplitResponse',
     'BlindCandidate', 'BlindChapterEditRequest', 'EvidenceBinding',
     'PlanChapters', 'PlanChapter', 'PlanScene', 'FactRef', 'PlanGoal', 'PlanEdit',
     'WriterContext',

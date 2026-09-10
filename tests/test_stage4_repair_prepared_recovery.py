@@ -20,7 +20,7 @@ from contracts.schema.orchestration import (
 from contracts.schema.stage4 import BlindCandidate
 from novel import agent_session_audit, paths, prov
 from novel.agents.session_client import SESSION_PROTOCOL_VERSION
-from novel.errors import ProvenanceRefused
+from novel.errors import ArtifactUnreadable, ProvenanceRefused
 from novel.llm import agent_runs, stage4_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
@@ -344,16 +344,31 @@ def _write_target_prepared_envelope(
             'code': target.code,
         })
         payload['commit_sha256'] = agent_runs._commit_hash(payload)
-    elif kind == 'initial':
+    elif kind in {'initial', 'retired_initial'}:
         path = (
             paths.stage4_run_path(
                 book, target.run_id, 'stage4.design')
             / stage4_runs.DESIGN_AGGREGATE_COMMIT_FILE)
-        payload = {
-            key: None for key in stage4_runs._DESIGN_AGGREGATE_FIELDS}
+        if kind == 'initial':
+            # 占用检查必须使用当前 producer 已封存的完整字节与来源。
+            # 这里只注入另一个 run 的 prepared 保留窗，不赋予提交权限。
+            sources = list(paths.stage4_run_path(
+                book, target.run_id, 'stage4.design').parent.parent.glob(
+                    '*/design/' + stage4_runs.DESIGN_AGGREGATE_COMMIT_FILE))
+            assert len(sources) == 1
+            payload = json.loads(sources[0].read_text(encoding='utf-8'))
+            payload.update({
+                'producer_parent_run_id': target.parent_run_id,
+                'recovery': None, 'committed_at': None,
+                'landed_payload_sha256s': None, 'post_file_sha256s': None,
+            })
+        else:
+            payload = {
+                key: None for key in stage4_runs._DESIGN_AGGREGATE_FIELDS}
+            payload.update({
+                'version': 1, 'kind': 'stage4-design-aggregate/v1',
+            })
         payload.update({
-            'version': stage4_runs._DESIGN_AGGREGATE_VERSION,
-            'kind': stage4_runs._DESIGN_AGGREGATE_KIND,
             'state': 'prepared', 'prepared_at': '2026-01-01T00:00:00Z',
             'run_id': target.run_id, 'sid': target.sid,
             'node': 'stage4.design', 'code': target.code,
@@ -510,7 +525,7 @@ def test_repair_prepared_rebuild_refuses_self_rehashed_usage_drift(
 
 
 @pytest.mark.parametrize(
-    'foreign_kind', ['generic', 'initial', 'human', 'plan_chapter'])
+    'foreign_kind', ['generic', 'initial', 'retired_initial', 'human', 'plan_chapter'])
 def test_repair_recovery_refuses_target_run_prepared_reservation_before_write(
         tmp_path: Path, monkeypatch, foreign_kind: str,
 ) -> None:
@@ -522,7 +537,11 @@ def test_repair_recovery_refuses_target_run_prepared_reservation_before_write(
     target = _free_ctx(book, f'recovery-with-{foreign_kind}-tail')
     _write_target_prepared_envelope(book, target, foreign_kind)
 
-    with pytest.raises(ProvenanceRefused, match='另一份 prepared'):
+    error, message = (
+        (ArtifactUnreadable, '身份/哈希不闭合')
+        if foreign_kind == 'retired_initial'
+        else (ProvenanceRefused, '另一份 prepared'))
+    with pytest.raises(error, match=message):
         _recover(target, source, journal, journal_path)
 
     assert (book / STAGE4_BLIND_CANDIDATE).read_bytes() == before_candidate
@@ -618,7 +637,7 @@ def test_repair_recovery_discovery_refuses_service_legacy_duplicate_journal(
     legacy.write_bytes(journal_path.read_bytes())
     target = _free_ctx(book, 'repair-shadow-recovery')
 
-    with pytest.raises(ProvenanceRefused, match='当前/legacy'):
+    with pytest.raises(ProvenanceRefused, match='旧运行目录已退役'):
         _recover(target, source, journal, journal_path)
 
     assert (book / STAGE4_BLIND_CANDIDATE).read_bytes() == before_candidate

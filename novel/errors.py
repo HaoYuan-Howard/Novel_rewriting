@@ -396,6 +396,10 @@ class RefusedByStructure(NovelError):
     """写盘口/读盘口拒绝了一次自相矛盾的操作。**这是 bug，不是数据问题。**"""
 
 
+class OutputRootUnavailable(TerminalState):
+    """输出根处于离线切换、归档或提交证据未知状态，不能接纳现役任务。"""
+
+
 class ProvenanceRefused(RefusedByStructure):
     """来源账自相矛盾，拒绝落盘。
 

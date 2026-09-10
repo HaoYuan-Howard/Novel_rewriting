@@ -60,6 +60,7 @@
       "fix": null,
       "findings": [
         {
+          "output_ordinal": null,
           "rule": "band_drift",
           "sev": "info",
           "item": "句段形态还落在本书的档位上",
@@ -69,6 +70,7 @@
             "短句",
             "极短句"
           ],
+          "fix_args": {},
           "evidence_key": "句子形态|短句|极短句",
           "owner": "stage5",
           "actionable": true,
@@ -79,6 +81,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "band_drift",
           "sev": "info",
           "item": "句段形态还落在本书的档位上",
@@ -88,6 +91,7 @@
             "极短段（多为一句一段）",
             "短段"
           ],
+          "fix_args": {},
           "evidence_key": "段落形态|极短段（多为一句一段）|短段",
           "owner": "stage5",
           "actionable": true,
@@ -98,6 +102,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "band_drift",
           "sev": "info",
           "item": "句段形态还落在本书的档位上",
@@ -107,6 +112,7 @@
             "短句",
             "极短句"
           ],
+          "fix_args": {},
           "evidence_key": "句子形态|短句|极短句",
           "owner": "stage5",
           "actionable": true,
@@ -119,7 +125,8 @@
       ],
       "why": null,
       "scanned": "3/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "book_length",
@@ -133,7 +140,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "book_length_report",
@@ -146,6 +154,7 @@
       "fix": null,
       "findings": [
         {
+          "output_ordinal": null,
           "rule": "book_length_report",
           "sev": "metric",
           "item": "〔度量〕全书篇幅总账",
@@ -155,6 +164,7 @@
             "9970",
             "10702"
           ],
+          "fix_args": {},
           "evidence_key": "10936|9970|10702",
           "owner": null,
           "actionable": false,
@@ -167,7 +177,8 @@
       ],
       "why": null,
       "scanned": "8/8 章有成稿",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "convergence_report",
@@ -180,11 +191,13 @@
       "fix": null,
       "findings": [
         {
+          "output_ordinal": null,
           "rule": "convergence_report",
           "sev": "metric",
           "item": "〔度量〕与上一轮相比消掉了什么",
           "detail": "与上一份 review 相比：消掉 1 条（['convergence_report']）",
           "evidence": [],
+          "fix_args": {},
           "evidence_key": "",
           "owner": null,
           "actionable": false,
@@ -197,7 +210,8 @@
       ],
       "why": null,
       "scanned": "8/8 章有成稿",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "cross_chapter_number",
@@ -211,7 +225,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "dash_drift",
@@ -224,6 +239,7 @@
       "fix": null,
       "findings": [
         {
+          "output_ordinal": null,
           "rule": "dash_drift",
           "sev": "info",
           "item": "破折号密度贴着本书与体裁",
@@ -231,6 +247,7 @@
           "evidence": [
             "0.00->6.09"
           ],
+          "fix_args": {},
           "evidence_key": "0.00->6.09",
           "owner": "stage5",
           "actionable": false,
@@ -241,6 +258,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "dash_drift",
           "sev": "info",
           "item": "破折号密度贴着本书与体裁",
@@ -248,6 +266,7 @@
           "evidence": [
             "0.00->5.48"
           ],
+          "fix_args": {},
           "evidence_key": "0.00->5.48",
           "owner": "stage5",
           "actionable": false,
@@ -258,6 +277,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "dash_drift",
           "sev": "info",
           "item": "破折号密度贴着本书与体裁",
@@ -265,6 +285,7 @@
           "evidence": [
             "0.00->3.21"
           ],
+          "fix_args": {},
           "evidence_key": "0.00->3.21",
           "owner": "stage5",
           "actionable": false,
@@ -275,6 +296,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "dash_drift",
           "sev": "info",
           "item": "破折号密度贴着本书与体裁",
@@ -282,6 +304,7 @@
           "evidence": [
             "0.00->4.72"
           ],
+          "fix_args": {},
           "evidence_key": "0.00->4.72",
           "owner": "stage5",
           "actionable": false,
@@ -294,7 +317,8 @@
       ],
       "why": null,
       "scanned": "4/8 章（恒等基线 0/8）",
-      "baseline": "⭐ **本层唯一分母被测过程改不动的判定量**：恒等基线 **0/31**、成稿命中 **11/31** ⇒ **判据干净、有判别力**（原作几乎不用破折号，成稿在用）。语料级上界 `core.style.DASH_CORPUS_P95`(2.25/千字) 由 `calibrate_style_corpus.py` 标定，可 0 成本重跑"
+      "baseline": "⭐ 本层唯一分母被测过程改不动的判定量：恒等基线 0/31、成稿命中 11/31 ⇒ 判据干净、有判别力（原作几乎不用破折号，成稿在用）。语料级上界 core.style.DASH_CORPUS_P95(2.25/千字) 由 calibrate_style_corpus.py 标定，可 0 成本重跑",
+      "note": null
     },
     {
       "rule": "dash_report",
@@ -307,6 +331,7 @@
       "fix": null,
       "findings": [
         {
+          "output_ordinal": null,
           "rule": "dash_report",
           "sev": "metric",
           "item": "〔度量〕破折号密度",
@@ -314,6 +339,7 @@
           "evidence": [
             "0.00->6.09"
           ],
+          "fix_args": {},
           "evidence_key": "0.00->6.09",
           "owner": null,
           "actionable": false,
@@ -324,6 +350,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "dash_report",
           "sev": "metric",
           "item": "〔度量〕破折号密度",
@@ -331,6 +358,7 @@
           "evidence": [
             "0.00->5.48"
           ],
+          "fix_args": {},
           "evidence_key": "0.00->5.48",
           "owner": null,
           "actionable": false,
@@ -341,6 +369,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "dash_report",
           "sev": "metric",
           "item": "〔度量〕破折号密度",
@@ -348,6 +377,7 @@
           "evidence": [
             "0.00->0.00"
           ],
+          "fix_args": {},
           "evidence_key": "0.00->0.00",
           "owner": null,
           "actionable": false,
@@ -358,6 +388,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "dash_report",
           "sev": "metric",
           "item": "〔度量〕破折号密度",
@@ -365,6 +396,7 @@
           "evidence": [
             "0.00->3.21"
           ],
+          "fix_args": {},
           "evidence_key": "0.00->3.21",
           "owner": null,
           "actionable": false,
@@ -375,6 +407,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "dash_report",
           "sev": "metric",
           "item": "〔度量〕破折号密度",
@@ -382,6 +415,7 @@
           "evidence": [
             "0.00->0.00"
           ],
+          "fix_args": {},
           "evidence_key": "0.00->0.00",
           "owner": null,
           "actionable": false,
@@ -392,6 +426,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "dash_report",
           "sev": "metric",
           "item": "〔度量〕破折号密度",
@@ -399,6 +434,7 @@
           "evidence": [
             "0.00->0.00"
           ],
+          "fix_args": {},
           "evidence_key": "0.00->0.00",
           "owner": null,
           "actionable": false,
@@ -409,6 +445,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "dash_report",
           "sev": "metric",
           "item": "〔度量〕破折号密度",
@@ -416,6 +453,7 @@
           "evidence": [
             "0.00->4.72"
           ],
+          "fix_args": {},
           "evidence_key": "0.00->4.72",
           "owner": null,
           "actionable": false,
@@ -426,6 +464,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "dash_report",
           "sev": "metric",
           "item": "〔度量〕破折号密度",
@@ -433,6 +472,7 @@
           "evidence": [
             "0.00->0.00"
           ],
+          "fix_args": {},
           "evidence_key": "0.00->0.00",
           "owner": null,
           "actionable": false,
@@ -445,7 +485,8 @@
       ],
       "why": null,
       "scanned": null,
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "dialogue_broken",
@@ -459,7 +500,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "dialogue_fewer",
@@ -473,7 +515,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "dialogue_ratio_drift",
@@ -486,6 +529,7 @@
       "fix": null,
       "findings": [
         {
+          "output_ordinal": null,
           "rule": "dialogue_ratio_drift",
           "sev": "info",
           "item": "对白占比贴着本书",
@@ -493,6 +537,7 @@
           "evidence": [
             "0.358->0.219"
           ],
+          "fix_args": {},
           "evidence_key": "0.358->0.219",
           "owner": "stage5",
           "actionable": true,
@@ -503,6 +548,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "dialogue_ratio_drift",
           "sev": "info",
           "item": "对白占比贴着本书",
@@ -510,6 +556,7 @@
           "evidence": [
             "0.358->0.235"
           ],
+          "fix_args": {},
           "evidence_key": "0.358->0.235",
           "owner": "stage5",
           "actionable": true,
@@ -520,6 +567,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "dialogue_ratio_drift",
           "sev": "info",
           "item": "对白占比贴着本书",
@@ -527,6 +575,7 @@
           "evidence": [
             "0.358->0.212"
           ],
+          "fix_args": {},
           "evidence_key": "0.358->0.212",
           "owner": "stage5",
           "actionable": false,
@@ -537,6 +586,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "dialogue_ratio_drift",
           "sev": "info",
           "item": "对白占比贴着本书",
@@ -544,6 +594,7 @@
           "evidence": [
             "0.358->0.182"
           ],
+          "fix_args": {},
           "evidence_key": "0.358->0.182",
           "owner": "stage5",
           "actionable": true,
@@ -554,6 +605,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "dialogue_ratio_drift",
           "sev": "info",
           "item": "对白占比贴着本书",
@@ -561,6 +613,7 @@
           "evidence": [
             "0.358->0.509"
           ],
+          "fix_args": {},
           "evidence_key": "0.358->0.509",
           "owner": "stage5",
           "actionable": false,
@@ -573,7 +626,8 @@
       ],
       "why": null,
       "scanned": "5/8 章（恒等基线 2/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "dialogue_report",
@@ -587,7 +641,23 @@
       "findings": [],
       "why": null,
       "scanned": null,
-      "baseline": null
+      "baseline": null,
+      "note": null
+    },
+    {
+      "rule": "dialogue_semantics_unver",
+      "sev": "unver",
+      "status": "skipped",
+      "item": "普通对白的说话关系、语义及关键事实保持",
+      "requirement": "R-7.3",
+      "check_kind": "mechanical",
+      "remediation": "human",
+      "fix": null,
+      "findings": [],
+      "why": "历史抓包未执行现役普通对白语义核验，不据此给出质量结论。",
+      "scanned": null,
+      "baseline": null,
+      "note": "语义等价没有标定的自动判据；只展示场景、含义与必保事实供受托或人工核验。普通对白不因措辞变化触发逐字 HARD 或自动返修，不从关键词命中制造 PASS。"
     },
     {
       "rule": "draft_missing",
@@ -601,7 +671,8 @@
       "findings": [],
       "why": "计划 8 章全部有成稿——没有一章的判定被跳过",
       "scanned": "8/8 章有成稿",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "draft_too_short",
@@ -615,7 +686,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "draft_truncated",
@@ -629,7 +701,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "end_hook_surface_report",
@@ -643,7 +716,8 @@
       "findings": [],
       "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
       "scanned": null,
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "end_hook_unver",
@@ -657,7 +731,8 @@
       "findings": [],
       "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
       "scanned": null,
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "fact_atom_unattested",
@@ -671,7 +746,8 @@
       "findings": [],
       "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
       "scanned": null,
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "fact_landing",
@@ -685,7 +761,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "fact_landing_unver",
@@ -699,7 +776,8 @@
       "findings": [],
       "why": "1 个必落事实提不出可回查的表面原子、0 个事实的原子连源章原文里都找不到（原子提错了，不是成稿的账）——这些事实没有被检查",
       "scanned": "8/8 章有成稿",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "invented_name",
@@ -713,7 +791,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": "盘上 0 命中、恒等基线 0。⚠ **召回有缺口**：用没出现过的姓造人抓不到 · 不带称谓后缀的光名字抓不到 · 地名物名完全不查"
+      "baseline": "盘上 0 命中、恒等基线 0。⚠ 召回有缺口：用没出现过的姓造人抓不到 · 不带称谓后缀的光名字抓不到 · 地名物名完全不查",
+      "note": null
     },
     {
       "rule": "invented_number",
@@ -726,6 +805,7 @@
       "fix": null,
       "findings": [
         {
+          "output_ordinal": null,
           "rule": "invented_number",
           "sev": "info",
           "item": "没有编出下发面以外的数字",
@@ -734,6 +814,7 @@
             "二十岁",
             "半月"
           ],
+          "fix_args": {},
           "evidence_key": "二十岁|半月",
           "owner": "stage5",
           "actionable": false,
@@ -744,6 +825,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "invented_number",
           "sev": "info",
           "item": "没有编出下发面以外的数字",
@@ -751,6 +833,7 @@
           "evidence": [
             "十倍"
           ],
+          "fix_args": {},
           "evidence_key": "十倍",
           "owner": "stage5",
           "actionable": false,
@@ -763,7 +846,8 @@
       ],
       "why": null,
       "scanned": "2/8 章（恒等基线 2/8）",
-      "baseline": "盘上命中 **3**，而**恒等基线 4**——⚠⚠ **基线高于命中**：拿同一把尺子量源章原文触发得更多。它在 2/3 本上被书级恒等闸门判死"
+      "baseline": "盘上命中 3，而恒等基线 4——⚠⚠ 基线高于命中：拿同一把尺子量源章原文触发得更多。它在 2/3 本上被书级恒等闸门判死",
+      "note": null
     },
     {
       "rule": "keep_value_missing",
@@ -777,7 +861,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "layout_drift",
@@ -791,7 +876,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "length_over",
@@ -805,7 +891,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "length_report",
@@ -818,6 +905,7 @@
       "fix": null,
       "findings": [
         {
+          "output_ordinal": null,
           "rule": "length_report",
           "sev": "metric",
           "item": "〔度量〕篇幅",
@@ -827,6 +915,7 @@
             "1120",
             "1222"
           ],
+          "fix_args": {},
           "evidence_key": "1135|1120|1222",
           "owner": null,
           "actionable": false,
@@ -837,6 +926,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "length_report",
           "sev": "metric",
           "item": "〔度量〕篇幅",
@@ -846,6 +936,7 @@
             "1400",
             "1471"
           ],
+          "fix_args": {},
           "evidence_key": "1689|1400|1471",
           "owner": null,
           "actionable": false,
@@ -856,6 +947,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "length_report",
           "sev": "metric",
           "item": "〔度量〕篇幅",
@@ -865,6 +957,7 @@
             "1360",
             "1461"
           ],
+          "fix_args": {},
           "evidence_key": "1374|1360|1461",
           "owner": null,
           "actionable": false,
@@ -875,6 +968,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "length_report",
           "sev": "metric",
           "item": "〔度量〕篇幅",
@@ -884,6 +978,7 @@
             "1050",
             "1200"
           ],
+          "fix_args": {},
           "evidence_key": "1211|1050|1200",
           "owner": null,
           "actionable": false,
@@ -894,6 +989,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "length_report",
           "sev": "metric",
           "item": "〔度量〕篇幅",
@@ -903,6 +999,7 @@
             "1280",
             "1366"
           ],
+          "fix_args": {},
           "evidence_key": "1384|1280|1366",
           "owner": null,
           "actionable": false,
@@ -913,6 +1010,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "length_report",
           "sev": "metric",
           "item": "〔度量〕篇幅",
@@ -922,6 +1020,7 @@
             "1140",
             "1234"
           ],
+          "fix_args": {},
           "evidence_key": "1238|1140|1234",
           "owner": null,
           "actionable": false,
@@ -932,6 +1031,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "length_report",
           "sev": "metric",
           "item": "〔度量〕篇幅",
@@ -941,6 +1041,7 @@
             "1500",
             "1568"
           ],
+          "fix_args": {},
           "evidence_key": "1721|1500|1568",
           "owner": null,
           "actionable": false,
@@ -951,6 +1052,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "length_report",
           "sev": "metric",
           "item": "〔度量〕篇幅",
@@ -960,6 +1062,7 @@
             "1120",
             "1180"
           ],
+          "fix_args": {},
           "evidence_key": "1184|1120|1180",
           "owner": null,
           "actionable": false,
@@ -972,7 +1075,8 @@
       ],
       "why": null,
       "scanned": null,
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "length_under",
@@ -986,7 +1090,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "material_anchor_unattested",
@@ -1000,7 +1105,8 @@
       "findings": [],
       "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
       "scanned": null,
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "meta_leak",
@@ -1014,7 +1120,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": "盘上 0/31。词表是章节标题 / 编号 / 任务术语那几类模式（「第N章」「本章」「拍」「beat」「字数」…）"
+      "baseline": "盘上 0/31。词表是章节标题 / 编号 / 任务术语那几类模式（「第N章」「本章」「拍」「beat」「字数」…）",
+      "note": null
     },
     {
       "rule": "must_appear_missing",
@@ -1028,7 +1135,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "must_hold_unver",
@@ -1040,9 +1148,10 @@
       "remediation": "human",
       "fix": null,
       "findings": [],
-      "why": "全书 6 条【必须成立、不必写在纸面上】的材料 —— 这一组按定义就查不了文面，确定性层**没有检查它们**。这类命题只能由人结合正文判断，在那之前别把「没报违规」读成「守住了」",
+      "why": "全书 6 条【必须成立、不必写在纸面上】的材料 —— 这一组按定义就查不了文面，确定性层没有检查它们。这类命题只能由人结合正文判断，在那之前别把「没报违规」读成「守住了」",
       "scanned": "8/8 章有成稿",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "name_surface_survey",
@@ -1056,7 +1165,8 @@
       "findings": [],
       "why": null,
       "scanned": "8/8 章有成稿",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "names_absent",
@@ -1070,7 +1180,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "narration_person_drift",
@@ -1084,7 +1195,8 @@
       "findings": [],
       "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
       "scanned": null,
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "narration_person_report",
@@ -1098,7 +1210,8 @@
       "findings": [],
       "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
       "scanned": null,
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "no_secrets_in_book",
@@ -1112,7 +1225,8 @@
       "findings": [],
       "why": "这本书有 7 条 secret",
       "scanned": "7 条 secret",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "overlap_report",
@@ -1125,6 +1239,7 @@
       "fix": null,
       "findings": [
         {
+          "output_ordinal": null,
           "rule": "overlap_report",
           "sev": "metric",
           "item": "〔度量〕与源章原文的重合度",
@@ -1132,6 +1247,7 @@
           "evidence": [
             "0.001"
           ],
+          "fix_args": {},
           "evidence_key": "0.001",
           "owner": null,
           "actionable": false,
@@ -1142,6 +1258,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "overlap_report",
           "sev": "metric",
           "item": "〔度量〕与源章原文的重合度",
@@ -1149,6 +1266,7 @@
           "evidence": [
             "0.0"
           ],
+          "fix_args": {},
           "evidence_key": "0.0",
           "owner": null,
           "actionable": false,
@@ -1159,6 +1277,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "overlap_report",
           "sev": "metric",
           "item": "〔度量〕与源章原文的重合度",
@@ -1166,6 +1285,7 @@
           "evidence": [
             "0.823"
           ],
+          "fix_args": {},
           "evidence_key": "0.823",
           "owner": null,
           "actionable": false,
@@ -1176,6 +1296,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "overlap_report",
           "sev": "metric",
           "item": "〔度量〕与源章原文的重合度",
@@ -1183,6 +1304,7 @@
           "evidence": [
             "0.001"
           ],
+          "fix_args": {},
           "evidence_key": "0.001",
           "owner": null,
           "actionable": false,
@@ -1193,6 +1315,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "overlap_report",
           "sev": "metric",
           "item": "〔度量〕与源章原文的重合度",
@@ -1200,6 +1323,7 @@
           "evidence": [
             "0.678"
           ],
+          "fix_args": {},
           "evidence_key": "0.678",
           "owner": null,
           "actionable": false,
@@ -1210,6 +1334,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "overlap_report",
           "sev": "metric",
           "item": "〔度量〕与源章原文的重合度",
@@ -1217,6 +1342,7 @@
           "evidence": [
             "0.87"
           ],
+          "fix_args": {},
           "evidence_key": "0.87",
           "owner": null,
           "actionable": false,
@@ -1227,6 +1353,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "overlap_report",
           "sev": "metric",
           "item": "〔度量〕与源章原文的重合度",
@@ -1234,6 +1361,7 @@
           "evidence": [
             "0.0"
           ],
+          "fix_args": {},
           "evidence_key": "0.0",
           "owner": null,
           "actionable": false,
@@ -1244,6 +1372,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "overlap_report",
           "sev": "metric",
           "item": "〔度量〕与源章原文的重合度",
@@ -1251,6 +1380,7 @@
           "evidence": [
             "0.749"
           ],
+          "fix_args": {},
           "evidence_key": "0.749",
           "owner": null,
           "actionable": false,
@@ -1263,7 +1393,8 @@
       ],
       "why": null,
       "scanned": null,
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "para_len_drift",
@@ -1277,7 +1408,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "paragraph_budget_missed",
@@ -1291,7 +1423,8 @@
       "findings": [],
       "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
       "scanned": null,
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "paragraph_count_report",
@@ -1305,7 +1438,8 @@
       "findings": [],
       "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
       "scanned": null,
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "paragraph_slot_report",
@@ -1318,6 +1452,7 @@
       "fix": null,
       "findings": [
         {
+          "output_ordinal": null,
           "rule": "paragraph_slot_report",
           "sev": "metric",
           "item": "〔度量〕逐 slot 段落计划对账",
@@ -1326,17 +1461,21 @@
             "s01:1/1",
             "total 1/1"
           ],
+          "fix_args": {},
           "evidence_key": "s01:1/1|total 1/1",
           "owner": null,
           "actionable": false,
           "identity_hit": false,
+          "identity_dead": null,
           "converge": "none",
-          "unresolved_rounds": 0
+          "unresolved_rounds": 0,
+          "wontfix": null
         }
       ],
       "why": null,
       "scanned": "1/8 章（恒等基线 1/8）",
-      "baseline": "盘上命中 7/31，恒等基线 4/31。词表是三个词（心里 / 心中 / 心底）"
+      "baseline": "盘上命中 7/31，恒等基线 4/31。词表是三个词（心里 / 心中 / 心底）",
+      "note": null
     },
     {
       "rule": "quote_unbalanced",
@@ -1350,7 +1489,8 @@
       "findings": [],
       "why": null,
       "scanned": null,
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "quotes_in_unquoted_corpus",
@@ -1364,7 +1504,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "secret_leak",
@@ -1376,9 +1517,10 @@
       "remediation": "llm",
       "fix": null,
       "findings": [],
-      "why": "这本书 7 条 secret 的字面探针**全部**连它自己的揭示章都命中不了 ⇒ 本条这一次没有判别力样本。「0 命中」在这里不是一个结论；全链没有书级语义审判节点，改写式泄底由 Stage2 后见之明判据与交付前成书逐字对账复核",
+      "why": "这本书 7 条 secret 的字面探针全部连它自己的揭示章都命中不了 ⇒ 本条这一次没有判别力样本。「0 命中」在这里不是一个结论；全链没有书级语义审判节点，改写式泄底由 Stage2 后见之明判据与交付前成书逐字对账复核",
       "scanned": "7 条 secret，其中 7 条的字面探针零判别力",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "secret_timeline",
@@ -1391,6 +1533,7 @@
       "fix": null,
       "findings": [
         {
+          "output_ordinal": null,
           "rule": "secret_timeline",
           "sev": "metric",
           "item": "〔度量〕未揭示秘密在全书成稿里的出现分布",
@@ -1398,6 +1541,7 @@
           "evidence": [
             "secret_01"
           ],
+          "fix_args": {},
           "evidence_key": "secret_01",
           "owner": null,
           "actionable": false,
@@ -1408,6 +1552,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "secret_timeline",
           "sev": "metric",
           "item": "〔度量〕未揭示秘密在全书成稿里的出现分布",
@@ -1415,6 +1560,7 @@
           "evidence": [
             "secret_02"
           ],
+          "fix_args": {},
           "evidence_key": "secret_02",
           "owner": null,
           "actionable": false,
@@ -1425,6 +1571,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "secret_timeline",
           "sev": "metric",
           "item": "〔度量〕未揭示秘密在全书成稿里的出现分布",
@@ -1432,6 +1579,7 @@
           "evidence": [
             "secret_03"
           ],
+          "fix_args": {},
           "evidence_key": "secret_03",
           "owner": null,
           "actionable": false,
@@ -1442,6 +1590,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "secret_timeline",
           "sev": "metric",
           "item": "〔度量〕未揭示秘密在全书成稿里的出现分布",
@@ -1449,6 +1598,7 @@
           "evidence": [
             "secret_04"
           ],
+          "fix_args": {},
           "evidence_key": "secret_04",
           "owner": null,
           "actionable": false,
@@ -1459,6 +1609,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "secret_timeline",
           "sev": "metric",
           "item": "〔度量〕未揭示秘密在全书成稿里的出现分布",
@@ -1466,6 +1617,7 @@
           "evidence": [
             "secret_05"
           ],
+          "fix_args": {},
           "evidence_key": "secret_05",
           "owner": null,
           "actionable": false,
@@ -1476,6 +1628,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "secret_timeline",
           "sev": "metric",
           "item": "〔度量〕未揭示秘密在全书成稿里的出现分布",
@@ -1483,6 +1636,7 @@
           "evidence": [
             "secret_06"
           ],
+          "fix_args": {},
           "evidence_key": "secret_06",
           "owner": null,
           "actionable": false,
@@ -1493,6 +1647,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "secret_timeline",
           "sev": "metric",
           "item": "〔度量〕未揭示秘密在全书成稿里的出现分布",
@@ -1500,6 +1655,7 @@
           "evidence": [
             "secret_07"
           ],
+          "fix_args": {},
           "evidence_key": "secret_07",
           "owner": null,
           "actionable": false,
@@ -1512,7 +1668,8 @@
       ],
       "why": null,
       "scanned": "7 条 secret",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "short_run_report",
@@ -1525,6 +1682,7 @@
       "fix": null,
       "findings": [
         {
+          "output_ordinal": null,
           "rule": "short_run_report",
           "sev": "metric",
           "item": "〔度量〕连续短段成串",
@@ -1532,6 +1690,7 @@
           "evidence": [
             "3.10->7.31"
           ],
+          "fix_args": {},
           "evidence_key": "3.10->7.31",
           "owner": null,
           "actionable": false,
@@ -1542,6 +1701,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "short_run_report",
           "sev": "metric",
           "item": "〔度量〕连续短段成串",
@@ -1549,6 +1709,7 @@
           "evidence": [
             "3.10->6.26"
           ],
+          "fix_args": {},
           "evidence_key": "3.10->6.26",
           "owner": null,
           "actionable": false,
@@ -1559,6 +1720,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "short_run_report",
           "sev": "metric",
           "item": "〔度量〕连续短段成串",
@@ -1566,6 +1728,7 @@
           "evidence": [
             "3.10->1.90"
           ],
+          "fix_args": {},
           "evidence_key": "3.10->1.90",
           "owner": null,
           "actionable": false,
@@ -1576,6 +1739,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "short_run_report",
           "sev": "metric",
           "item": "〔度量〕连续短段成串",
@@ -1583,6 +1747,7 @@
           "evidence": [
             "3.10->2.14"
           ],
+          "fix_args": {},
           "evidence_key": "3.10->2.14",
           "owner": null,
           "actionable": false,
@@ -1593,6 +1758,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "short_run_report",
           "sev": "metric",
           "item": "〔度量〕连续短段成串",
@@ -1600,6 +1766,7 @@
           "evidence": [
             "3.10->3.77"
           ],
+          "fix_args": {},
           "evidence_key": "3.10->3.77",
           "owner": null,
           "actionable": false,
@@ -1610,6 +1777,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "short_run_report",
           "sev": "metric",
           "item": "〔度量〕连续短段成串",
@@ -1617,6 +1785,7 @@
           "evidence": [
             "3.10->3.09"
           ],
+          "fix_args": {},
           "evidence_key": "3.10->3.09",
           "owner": null,
           "actionable": false,
@@ -1627,6 +1796,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "short_run_report",
           "sev": "metric",
           "item": "〔度量〕连续短段成串",
@@ -1634,6 +1804,7 @@
           "evidence": [
             "3.10->5.51"
           ],
+          "fix_args": {},
           "evidence_key": "3.10->5.51",
           "owner": null,
           "actionable": false,
@@ -1644,6 +1815,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "short_run_report",
           "sev": "metric",
           "item": "〔度量〕连续短段成串",
@@ -1651,6 +1823,7 @@
           "evidence": [
             "3.10->2.27"
           ],
+          "fix_args": {},
           "evidence_key": "3.10->2.27",
           "owner": null,
           "actionable": false,
@@ -1663,7 +1836,8 @@
       ],
       "why": null,
       "scanned": null,
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "simile_drift",
@@ -1676,6 +1850,7 @@
       "fix": null,
       "findings": [
         {
+          "output_ordinal": null,
           "rule": "simile_drift",
           "sev": "info",
           "item": "明喻密度贴着本书",
@@ -1683,6 +1858,7 @@
           "evidence": [
             "0.99->4.69"
           ],
+          "fix_args": {},
           "evidence_key": "0.99->4.69",
           "owner": "stage5",
           "actionable": false,
@@ -1693,6 +1869,7 @@
           "wontfix": null
         },
         {
+          "output_ordinal": null,
           "rule": "simile_drift",
           "sev": "info",
           "item": "明喻密度贴着本书",
@@ -1700,6 +1877,7 @@
           "evidence": [
             "0.99->2.83"
           ],
+          "fix_args": {},
           "evidence_key": "0.99->2.83",
           "owner": "stage5",
           "actionable": false,
@@ -1712,7 +1890,8 @@
       ],
       "why": null,
       "scanned": "2/8 章（恒等基线 2/8）",
-      "baseline": "盘上命中 7/31，**恒等基线 5/31**——判别力薄。词表是六个明喻标记（像/好似/如同/仿佛/似的/一样）"
+      "baseline": "盘上命中 7/31，恒等基线 5/31——判别力薄。词表是六个明喻标记（像/好似/如同/仿佛/似的/一样）",
+      "note": null
     },
     {
       "rule": "source_overlap_high",
@@ -1726,7 +1905,8 @@
       "findings": [],
       "why": "这份历史抓包没有 current-schema Stage5 章稿，无法重算当前判据",
       "scanned": null,
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "verbatim_missing",
@@ -1740,7 +1920,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "verbatim_split",
@@ -1754,7 +1935,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "verbatim_typo",
@@ -1768,7 +1950,8 @@
       "findings": [],
       "why": null,
       "scanned": "0/8 章（恒等基线 0/8）",
-      "baseline": null
+      "baseline": null,
+      "note": null
     },
     {
       "rule": "xinli_drift",
@@ -1781,6 +1964,7 @@
       "fix": null,
       "findings": [
         {
+          "output_ordinal": null,
           "rule": "xinli_drift",
           "sev": "info",
           "item": "不靠「心里」解释情绪",
@@ -1788,6 +1972,7 @@
           "evidence": [
             "0.62->2.86"
           ],
+          "fix_args": {},
           "evidence_key": "0.62->2.86",
           "owner": "stage5",
           "actionable": false,
@@ -1800,7 +1985,8 @@
       ],
       "why": null,
       "scanned": "1/8 章（恒等基线 1/8）",
-      "baseline": "盘上命中 7/31，恒等基线 4/31。词表是三个词（心里 / 心中 / 心底）"
+      "baseline": "盘上命中 7/31，恒等基线 4/31。词表是三个词（心里 / 心中 / 心底）",
+      "note": null
     }
   ],
   "accounting": [
@@ -1832,6 +2018,6 @@
     "ok": 31,
     "hit": 6,
     "unver": 5,
-    "skipped": 9
+    "skipped": 10
   }
 }

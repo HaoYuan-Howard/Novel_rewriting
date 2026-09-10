@@ -195,7 +195,7 @@ def _land_checkpoint(
         response_payload=response.model_dump(by_alias=True, mode='json'),
         acceptance=acceptance,
         state_payload={
-            'version': 1,
+            'version': 2,
             'mode': 'write',
             'outcome': 'passed' if passed else 'hard',
             'input_sha256': _INPUT_SHA256,

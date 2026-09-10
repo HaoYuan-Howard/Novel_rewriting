@@ -101,6 +101,13 @@ def test_fully_mechanical_book_is_zero_wire(prepared_design) -> None:
                for row in prov_payload['unit_lineage'])
     assert store.exists(STAGE4_PLAN_CHAPTERS)
 
+    from novel.work_units import list_unit_views
+    units = [row for row in list_unit_views(book.parent, plan_ctx.sid)
+             if row['node'] == 'stage4.plan' and row['role'] == 'executor']
+    assert {row['scope'] for row in units} == {f'chapter:{n}' for n in ordinals}
+    assert all(row['processing']['mechanical'] == 1 for row in units)
+    assert all(row['content_used'] == 0 for row in units)
+
 
 def test_mixed_book_wires_only_the_ambiguous_chapter(
         prepared_design, monkeypatch,
@@ -842,6 +849,37 @@ def _delivery_recovery_book(prepared_design, monkeypatch):
     return book
 
 
+@pytest.mark.parametrize('corrupt_other_chapter', [False, True])
+def test_partial_plan_checks_child_request_policy_without_mutating_files(
+        prepared_design, monkeypatch, corrupt_other_chapter):
+    from novel.stages.stage4.design_rebuild import producer_requires_new_run
+    from novel.errors import ArtifactUnreadable
+
+    book = _delivery_recovery_book(prepared_design, monkeypatch)
+    ctx = _ctx(book, 'stage4.plan')
+    prepared = plan.prepare_plan_candidate(ctx)
+    baseline = plan.build_mechanical_baseline(prepared.candidate_raw, prepared.upstream.blueprints)
+    for chapter in baseline.chapters:
+        work = plan._prepare_plan_chapter_work(ctx, prepared, chapter, chapter.chapter_ordinal)
+        stage4_runs.ensure_plan_chapter_run(ctx, work.request)
+    assert producer_requires_new_run(ctx) is False
+    original = plan.prompts.chapter_binding_system()
+    monkeypatch.setattr(plan.prompts, 'chapter_binding_system', lambda: original + '\n新增绑定策略')
+    if corrupt_other_chapter:
+        target = paths.stage4_plan_chapter_run_path(book, ctx.run_id, 3) / agent_runs.RUN_FILE
+        target.write_text('{broken', encoding='utf-8')
+    before = {str(path.relative_to(book.parent)): path.read_bytes()
+              for path in book.parent.rglob('*') if path.is_file()}
+    if corrupt_other_chapter:
+        with pytest.raises(ArtifactUnreadable):
+            producer_requires_new_run(ctx)
+    else:
+        assert producer_requires_new_run(ctx) is True
+    after = {str(path.relative_to(book.parent)): path.read_bytes()
+             for path in book.parent.rglob('*') if path.is_file()}
+    assert after == before
+
+
 def test_mixed_batch_failure_does_not_hide_non_delivery_error() -> None:
     delivery = AgentDeliveryUnavailable(
         'Claude session limit', error_kind='usage_limit', attempts=1,
@@ -1211,11 +1249,12 @@ def test_historical_unit_is_fresh_owned_before_reask_and_restart_commit(
     assert not any(key.startswith('source_checkpoint_') for key in lineage[1])
     assert provenance['usage']['calls_made'] == 5
 
-    anchor = stage4_runs.plan_chapter_commit_spec(1).commit_path(resumed_ctx)
+    anchor = paths.stage4_plan_aggregate_path(book, resumed_ctx.run_id)
     committed = json.loads(anchor.read_text(encoding='utf-8'))
     assert committed['state'] == 'committed'
     assert committed['run_id'] == target_ctx.run_id
-    assert committed['attempt_id'] == latest['attempt_id']
+    assert committed['sources']['unit_lineage'][0]['attempt_id'] == latest['attempt_id']
+    assert 'attempt_id' not in committed, '聚合不冒充某一章的模型回答'
     assert not stage4_runs.plan_chapter_commit_spec(1).commit_path(
         source_ctx).exists()
 
@@ -1393,7 +1432,7 @@ def test_dynamic_validator_tail_window_submit_and_same_run_zero_wire_resume(
     assert ch1['revision'] == 0
 
 
-def test_anchor_uses_latest_revision_not_highest_chapter() -> None:
+def test_representative_model_identity_uses_latest_revision_and_all_models() -> None:
     pool = SimpleNamespace(model='requested', driver_failed=False,
                            provider_session_id=None)
     def issue(chapter: int) -> plan._ChapterBindingIssue:
@@ -1417,13 +1456,6 @@ def test_anchor_uses_latest_revision_not_highest_chapter() -> None:
     assert source.accepted_attempt('stage4.plan') == 'new-low-chapter'
     assert source.accepted_models('stage4.plan') == ('model-a', 'model-b')
     assert source.driver_failed is False
-    evaluation = SimpleNamespace(
-        architecture='chapter_baseline_v1',
-        unit_lineage=[
-            {'kind': 'chapter_session', 'chapter_ordinal': 1, 'revision': 2},
-            {'kind': 'chapter_session', 'chapter_ordinal': 3, 'revision': 0},
-        ])
-    assert plan._plan_commit_spec(evaluation).run.chapter == 1
 
 
 def test_unscoped_b_owner_failure_is_a_code_failure() -> None:
@@ -1544,8 +1576,7 @@ def test_b_owner_reasks_only_target_chapter_and_rewrites_anchor_checkpoint(
     ch2 = next(row for row in lineage if row['chapter_ordinal'] == 2)
     assert ch1['revision'] == 1 and ch2['revision'] == 0
     assert ch1['attempt_id'] == latest_ch1['attempt_id']
-    anchor_spec = stage4_runs.plan_chapter_commit_spec(1)
-    assert anchor_spec.commit_path(ctx).is_file()
+    assert paths.stage4_plan_aggregate_path(book, ctx.run_id).is_file()
 
 
 @pytest.mark.parametrize('old_surface', ['system', 'user', 'input_contract'])
@@ -1672,8 +1703,10 @@ def test_committed_chapter_hard_recovery_preserves_input_receipt_zero_wire(
                       error_kind='checkpoint_business_rejected')
     first_pool.close()
     assert [first_drivers[ch].calls for ch in (1, 2, 3)] == [1, 1, 1]
-    commit_spec = stage4_runs.plan_chapter_commit_spec(3)
-    committed = stage4_runs.committed(first_ctx, commit_spec)
+    from novel.llm.aggregate_runs import validate_envelope
+    committed = validate_envelope(
+        paths.stage4_plan_aggregate_path(book, first_ctx.run_id),
+        run_id=first_ctx.run_id, sid=first_ctx.sid, node='stage4.plan')
     assert committed is not None
     assert committed['touched_paths'] == sorted((
         STAGE4_EVIDENCE_BINDING, plan._INVALID))
@@ -1706,3 +1739,240 @@ def test_committed_chapter_hard_recovery_preserves_input_receipt_zero_wire(
     assert after.prompts == before.prompts
     assert after.unit_lineage == before.unit_lineage
     assert after.usage == before.usage
+
+
+@pytest.mark.parametrize('damaged', ['run', 'checkpoint', 'ledger_tail'])
+def test_historical_source_corruption_refuses_before_new_driver(prepared_design, monkeypatch, damaged):
+    book = _delivery_recovery_book(prepared_design, monkeypatch)
+    source_ctx = _ctx(book, 'stage4.plan')
+    source_drivers = {1: _DeliveryRecoveryDriver(1),
+                      2: _DeliveryRecoveryDriver(2, outcome='usage_limit'),
+                      3: _DeliveryRecoveryDriver(3, outcome='forbid')}
+    source_pool = Stage4PlanSessionPool(
+        source_ctx, driver_factory=lambda _purpose, chapter: source_drivers[int(chapter)],
+        concurrency=1)
+    with pytest.raises(AgentDeliveryUnavailable):
+        plan.run_plan(source_ctx, source_pool)
+    source_pool.finish(process_state='failed', delivery_state='unknown', error_kind='usage_limit')
+    source_pool.close()
+    stage4_runs.clear_plan_delivery_recovery(source_ctx)
+    target = (paths.stage4_plan_chapter_run_path(book, source_ctx.run_id, 1) / 'run.json'
+              if damaged == 'run' else
+              paths.stage4_plan_chapter_checkpoint_dir(book, source_ctx.run_id, 1) / 'rev-0001.json')
+    if damaged == 'ledger_tail':
+        with source_ctx.ledger.path.open('ab') as stream:
+            stream.write(b'{"kind":"uncommitted"}')
+    else:
+        target.write_text('{broken committed evidence}', encoding='utf-8')
+    target_ctx = _ctx(book, 'stage4.plan')
+    factories = []
+    target_pool = Stage4PlanSessionPool(
+        target_ctx, driver_factory=lambda *args: factories.append(args), concurrency=1)
+    from novel.errors import ArtifactUnreadable
+    with pytest.raises((ArtifactUnreadable, ProvenanceRefused)):
+        plan.run_plan(target_ctx, target_pool)
+    target_pool.close()
+    assert factories == [], '来源 unknown 不能被当作未命中再创建模型 driver'
+
+
+def test_all_historical_chapters_aggregate_without_driver_or_new_cost(prepared_design, monkeypatch):
+    book = _delivery_recovery_book(prepared_design, monkeypatch)
+    source = _ctx(book, 'stage4.plan')
+    drivers = {ch: _DeliveryRecoveryDriver(ch) for ch in (1, 2, 3)}
+    pool = Stage4PlanSessionPool(
+        source, driver_factory=lambda _purpose, chapter: drivers[int(chapter)], concurrency=1)
+    assert plan.run_plan(source, pool).passed
+    pool.finish(process_state='ok', delivery_state='delivered')
+    pool.close()
+    ledger_before = source.ledger.path.read_bytes()
+    target = _ctx(book, 'stage4.plan')
+    target.paid = False
+    def forbidden(*args):
+        raise AssertionError('全部采用不能创建 driver/probe/session')
+    target.executor_profile = None
+    monkeypatch.setattr('novel.node_agents.Stage4PlanSessionPool', forbidden)
+    assert plan.run_reaggregate(target).passed
+    assert source.ledger.path.read_bytes() == ledger_before
+    binding = ArtifactStore(target).read_own(EvidenceBinding, STAGE4_EVIDENCE_BINDING)[0]
+    assert binding.provenance.origin == 'compiled'
+    assert binding.provenance.binding_input_contract == STAGE4_BINDING_INPUT_CONTRACT
+    assert {row['source_run_id'] for row in binding.provenance.unit_lineage} == {source.run_id}
+    from novel.llm.aggregate_runs import validate_envelope
+    record = validate_envelope(paths.stage4_plan_aggregate_path(book, target.run_id),
+                               run_id=target.run_id, sid=target.sid, node=target.node)
+    assert record['state'] == 'committed'
+    assert set(record['sources']['checkpoints']) == {'1', '2', '3'}
+    assert not (paths.stage4_run_path(book, target.run_id, target.node) / 'chapters').exists()
+
+
+@pytest.mark.parametrize('crash_after', ['prepared', 'binding', 'plan', 'adoption'])
+def test_mechanical_aggregate_crash_replays_exact_tail_without_wire(
+        prepared_design, monkeypatch, crash_after):
+    from novel.llm import aggregate_runs
+    book, _blueprints, _candidate = prepared_design
+    ctx = _ctx(book, 'stage4.plan')
+    pool = Stage4PlanSessionPool(ctx)
+    def interrupted(*args, **kwargs):
+        raise RuntimeError('合成聚合落盘中断')
+    with monkeypatch.context() as patch:
+        if crash_after == 'prepared':
+            patch.setattr(plan, '_write_producer_artifact', interrupted)
+        elif crash_after == 'adoption':
+            patch.setattr(aggregate_runs, 'mark_committed', interrupted)
+        else:
+            real = plan._write_producer_artifact
+            def write_then_interrupt(store, rel, artifact, **kwargs):
+                result = real(store, rel, artifact, **kwargs)
+                if rel == (STAGE4_EVIDENCE_BINDING if crash_after == 'binding' else STAGE4_PLAN_CHAPTERS):
+                    interrupted()
+                return result
+            patch.setattr(plan, '_write_producer_artifact', write_then_interrupt)
+        with pytest.raises(RuntimeError, match='合成聚合'):
+            plan.run_plan(ctx, pool)
+    pool.close()
+    path = paths.stage4_plan_aggregate_path(book, ctx.run_id)
+    record = json.loads(path.read_text(encoding='utf-8'))
+    assert record['state'] == 'prepared'
+    before = {rel: (book / rel).read_bytes() for rel in (STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS)
+              if (book / rel).exists()}
+    resumed = _ctx(book, 'stage4.plan', run_id=ctx.run_id)
+    resumed.paid = False
+    resumed.executor_profile = None
+    assert plan.run_reaggregate(resumed).passed
+    assert json.loads(path.read_text(encoding='utf-8'))['state'] == 'committed'
+    assert all((book / rel).read_bytes() == data for rel, data in before.items())
+
+
+@pytest.mark.parametrize('with_model', [False, True])
+def test_prepared_aggregate_is_discovered_and_recovered_by_new_execution(
+        prepared_design, monkeypatch, with_model):
+    from novel.llm import aggregate_runs
+    from novel.orchestrator import queue, state
+    from novel.orchestrator.nodes import is_paid, validate_run
+    from novel.stages.stage4 import plan_recovery
+    book = (_delivery_recovery_book(prepared_design, monkeypatch) if with_model
+            else prepared_design[0])
+    producer = _ctx(book, 'stage4.plan')
+    drivers = {ch: _DeliveryRecoveryDriver(ch) for ch in (1, 2, 3)}
+    pool = Stage4PlanSessionPool(producer, driver_factory=(
+        lambda _purpose, chapter: drivers[int(chapter)]), concurrency=1)
+    with monkeypatch.context() as patch:
+        patch.setattr(aggregate_runs, 'mark_committed',
+                      lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('模拟提交中断')))
+        with pytest.raises(RuntimeError, match='模拟提交中断'):
+            plan.run_plan(producer, pool)
+    pool.finish(process_state='failed', delivery_state='unknown', error_kind='unexpected_error')
+    pool.close()
+    files_before = {rel: (book / rel).read_bytes()
+                    for rel in (STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS)}
+    ledger_before = producer.ledger.path.read_bytes() if producer.ledger.path.exists() else None
+    audit = producer.ledger.path.with_name('llm_audit.jsonl')
+    audit_before = audit.read_bytes()
+    readonly = state.readonly_ctx(book, 'stage4.plan', producer.code)
+    inspected = plan_recovery.inspect_prepared_recovery(readonly)
+    assert inspected is not None and inspected.state == 'recoverable', inspected
+    item = queue.prepared_delivery_recovery_item(book.parent, producer.sid, code=producer.code)
+    assert item is not None and item.node == 'stage4.plan'
+    assert item.flags == ['--recover-prepared', producer.run_id,
+                          '--subject-sha256', inspected.proof_sha256]
+    validate_run(item.node, item.flags)
+    assert not is_paid(item.node, item.flags)
+    assert audit.read_bytes() == audit_before, 'operator 查询不能补账'
+    recovery = _ctx(book, 'stage4.plan')
+    recovery.paid = False
+    recovery.executor_profile = None
+    recovery.executor_backend = None
+    monkeypatch.setattr('novel.node_agents.Stage4PlanSessionPool',
+                        lambda *args, **kwargs: pytest.fail('恢复禁止构造模型客户端'))
+    from novel.cli.main import main
+    assert main(['--run-id', recovery.run_id, 'run', 'stage4.plan', producer.sid,
+                 '--base', str(book.parent), *item.flags]) == 0
+    record = aggregate_runs.validate_envelope(
+        paths.stage4_plan_aggregate_path(book, producer.run_id),
+        run_id=producer.run_id, sid=producer.sid, node=producer.node)
+    assert record['state'] == 'committed'
+    assert record['recovery']['run_id'] == recovery.run_id
+    assert record['recovery']['source_run_id'] == producer.run_id
+    assert all((book / rel).read_bytes() == data for rel, data in files_before.items())
+    assert (producer.ledger.path.read_bytes() if producer.ledger.path.exists() else None) == ledger_before
+    audit_after = audit.read_bytes()
+    assert plan_recovery.recover_prepared(
+        recovery, source_run_id=producer.run_id, proof_sha256=inspected.proof_sha256).passed
+    assert audit.read_bytes() == audit_after, '相同恢复凭据必须幂等'
+    assert plan_recovery.inspect_prepared_recovery(readonly) is None
+
+
+@pytest.mark.parametrize('damage', ['audit_tail', 'forged_provenance', 'agent_parent_missing'])
+def test_prepared_aggregate_unknown_does_not_write_or_authorize_models(
+        prepared_design, monkeypatch, damage):
+    from novel.llm import aggregate_runs
+    from novel.orchestrator import state
+    from novel.stages.stage4 import plan_recovery
+    book = prepared_design[0]
+    producer = _ctx(book, 'stage4.plan')
+    pool = Stage4PlanSessionPool(producer)
+    with monkeypatch.context() as patch:
+        patch.setattr(plan, '_write_producer_artifact',
+                      lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('模拟写前中断')))
+        with pytest.raises(RuntimeError):
+            plan.run_plan(producer, pool)
+    pool.close()
+    journal_path = paths.stage4_plan_aggregate_path(book, producer.run_id)
+    record = json.loads(journal_path.read_text(encoding='utf-8'))
+    if damage == 'audit_tail':
+        audit = producer.ledger.path.with_name('llm_audit.jsonl')
+        with audit.open('ab') as stream:
+            stream.write(b'{"kind":"uncommitted"}')
+    elif damage == 'agent_parent_missing':
+        record['producer_parent_run_id'] = 'missing-agent-parent'
+        record['commit_sha256'] = aggregate_runs._hash(record)
+        agent_runs._atomic_json(journal_path, record)
+    else:
+        # 同时更新所有外壳 hash，证明不是只测 JSON 损坏。
+        artifact = EvidenceBinding.model_validate(record['primary_payload'])
+        artifact.provenance.code = 'forged-provenance-code'
+        record['primary_payload'] = artifact.model_dump(by_alias=True, mode='json')
+        record['primary_payload_sha256'] = agent_runs.canonical_sha256(record['primary_payload'])
+        record['primary_payload_fingerprint'] = prov.projection_fingerprint(record['primary_payload'])
+        record['primary_file_text'] = ArtifactStore(producer)._render(STAGE4_EVIDENCE_BINDING, artifact).decode('utf-8')
+        record['primary_file_sha256'] = agent_runs.canonical_sha256(record['primary_file_text'].encode('utf-8'))
+        record['commit_sha256'] = aggregate_runs._hash(record)
+        agent_runs._atomic_json(journal_path, record)
+    inspected = plan_recovery.inspect_prepared_recovery(state.readonly_ctx(book, producer.node, producer.code))
+    assert inspected is not None and inspected.state == 'unknown', inspected
+    assert not (book / STAGE4_EVIDENCE_BINDING).exists()
+    assert not (book / STAGE4_PLAN_CHAPTERS).exists()
+
+
+def test_complementary_history_aggregates_multiple_source_runs_without_wire(
+        prepared_design, monkeypatch):
+    book = prepared_design[0]
+    base = plan.build_mechanical_baseline
+    sources = []
+    for index, chapters in enumerate(((1,), (2, 3))):
+        with monkeypatch.context() as patch:
+            patch.setattr(plan, 'build_mechanical_baseline', _inject_stage_ambiguities(base, chapters))
+            ctx = _ctx(book, 'stage4.plan')
+            sources.append(ctx)
+            drivers = {ch: _DeliveryRecoveryDriver(ch, session_id=f'multi-{index}-{ch}')
+                       for ch in chapters}
+            pool = Stage4PlanSessionPool(ctx, driver_factory=(
+                lambda _purpose, chapter: drivers[int(chapter)]), concurrency=1)
+            assert plan.run_plan(ctx, pool).passed
+            pool.finish(process_state='ok', delivery_state='delivered')
+            pool.close()
+            assert sum(driver.calls for driver in drivers.values()) == len(chapters)
+    monkeypatch.setattr(plan, 'build_mechanical_baseline', _inject_stage_ambiguities(base, (1, 2, 3)))
+    target = _ctx(book, 'stage4.plan')
+    target.paid = False
+    target.executor_profile = None
+    target.executor_backend = None
+    before = target.ledger.path.read_bytes()
+    from novel.orchestrator import state
+    from novel.stages.stage4 import plan_recovery
+    assert plan_recovery.reaggregate_available(state.readonly_ctx(book, target.node, target.code))
+    assert plan.run_reaggregate(target).passed
+    binding = ArtifactStore(target).read_own(EvidenceBinding, STAGE4_EVIDENCE_BINDING)[0]
+    by = {row['chapter_ordinal']: row['source_run_id'] for row in binding.provenance.unit_lineage}
+    assert by == {1: sources[0].run_id, 2: sources[1].run_id, 3: sources[1].run_id}
+    assert target.ledger.path.read_bytes() == before

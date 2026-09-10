@@ -140,6 +140,9 @@ export function agentCapabilities(
       },
     ],
     executor_nodes: ['node.dynamic-a', 'node.dynamic-b'],
+    concurrency: { nodes: ['node.dynamic-a'], node_choices: [4, 6, 8], default_node: 4,
+      defaults: { node_overrides: {}, per_book: 4, per_provider: 8 },
+      total_min: 1, total_max: 32, scope: 'output_root' },
     default_profiles: defaultProfiles === null ? null : cloneProfiles(defaultProfiles),
   }
 }

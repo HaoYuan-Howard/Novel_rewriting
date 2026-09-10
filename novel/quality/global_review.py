@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from contracts.artifacts import STAGE1_MAIN_TEXT
+from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY
 from contracts.invariants import (
     GLOBAL_REVIEW_EFFECTS, GLOBAL_REVIEW_KINDS, review_effect_of,
     review_generation_impact_of,
@@ -23,7 +23,7 @@ from novel.errors import HumanEditProtected
 UNBOUND_WORKPACK_SHA256 = '0' * 64
 
 # 只有删除整组后仍能由 ``GlobalGrounding`` schema 关闭式复验、且不会删掉
-# 人物/主线骨架的三类事实可以隔离。集合完整性、人物、setting 与 arc 都不在
+# 人物/主线骨架的三类事实可以隔离。集合完整性、人物、setting 与源文案范围都不在
 # 这里：它们必须经 typed GlobalEdit 修正，不能借 UNVER 处置静默越过。
 QUARANTINABLE_REVIEW_GROUP_PREFIXES = ('secret:', 'relation:', 'world_rule:')
 
@@ -118,7 +118,7 @@ def _whole_book_item(
     """把必须通读全书的决定同时绑定到 Global 主体与正文输入身份。
 
     普通事实有自己的 claim/evidence hash，正文别处改字不该把它们全部重开；集合
-    完整性、冲突分期与整条 arc 却是在回答“这本完整正文有没有漏/分对”。若只 hash
+    完整性与开篇范围却是在回答“这本完整正文有没有漏/范围是否足够”。若只 hash
     Global 结果，同章数的新正文重新抽出同形 Global 时，旧的全书 PASS 会被继承。
     ``main_text_input`` 取 Global provenance 里 producer 真正读到的 MainText 边，
     不另读正文、也不另造一套 freshness 算法。
@@ -131,6 +131,7 @@ def _whole_book_item(
 
 def enumerate_required(
     global_grounding: dict[str, Any], *, main_text_input: Any = None,
+    source_hook_input: Any = None,
 ) -> list[GlobalReviewItem]:
     """从 typed Stage2 表面派生全部人工复核主体。
 
@@ -144,8 +145,8 @@ def enumerate_required(
 
     【粒度的分界线是「能不能被单独修正」】事实逐条、解读分组。`role` / `fate` /
     setting 的两项事实 / 每条 relation / 每条 secret 的埋点章都能单独改，各占一项；
-    `conflict_stages` 与 `arc` 是这一层自己定义的**解读层**，拆成逐条反而每条都
-    判不出对错，合成一项整体裁决。
+    源文案事实逐条裁决；完整性与开篇范围需要同时核对源文案和整书，不能从局部命中
+    推断通过。未确定的事实或范围必须先经 typed 修订提供可核验的主体。
 
     ⚠ 取值面在 `contracts/invariants.py::GLOBAL_REVIEW_KINDS`（`GlobalReviewItem.kind`
     从那里派生），交付效果在同文件的 `review_effect_of`；新增一类必须同批在两处登记。
@@ -300,33 +301,23 @@ def enumerate_required(
             'reveal', f'canon.secrets.{sid}.first_reveal_chapter',
             secret.get('first_reveal_chapter'), dependency=secret_dependency))
 
-    # 解读层分组两项。`conflict_stages` 的**覆盖性**已由 `R-2.14` 机械查（逐章显式
-    # 枚举、恰好覆盖全书一次），这里人工只判「这个划分本身合不合理、阶段名能不能定位」。
-    # 其余三格（climax / ending / arc_tracks）是这一层自己声明的解读，逐条拆开
-    # 每条都判不出对错 ⇒ 整体一项。
-    arc = global_grounding.get('arc') or {}
-    projected_arc = projected.get('arc') or {}
+    blurb = global_grounding.get('source_blurb') or {}
+    projected_blurb = projected.get('source_blurb') or {}
+    source_dependency = {'main_text': main_text_input, 'source_hook': source_hook_input}
     rows.append(_whole_book_item(
-        'conflict_partition', 'arc.conflict_stages',
-        arc.get('conflict_stages') or [], main_text_input))
-    referenced_relations = sorted({
-        str(track.get('subject'))
-        for track in (projected_arc.get('arc_tracks') or [])
-        if isinstance(track, dict)
-        and str(track.get('subject') or '').startswith('rel_')
-    })
-    relation_dependency = [
-        row for row in projected_relations
-        if isinstance(row, dict) and row.get('relation_id') in referenced_relations
-    ]
-    rows.append(_whole_book_item('arc_analysis', 'arc', {
-        'claim': {
-            key: value for key, value in projected_arc.items()
-            if key != 'conflict_stages'
-        },
-        'evidence': evidence_for('arc', grouped=True),
-        'referenced_relations': relation_dependency,
-    }, main_text_input))
+        'source_blurb_complete', 'source_blurb.facts',
+        projected_blurb.get('facts'), source_dependency))
+    for fact in blurb.get('facts') or []:
+        path = f"source_blurb.facts.{fact['claim_id']}"
+        row = _fact_item('source_blurb_fact', path,
+                         {key: value for key, value in fact.items() if key != 'evidence'},
+                         evidence_for(path), dependency=source_dependency)
+        rows.append(row.model_copy(update={'resolution_required': fact.get('kind') == 'unresolved'}))
+    opening = blurb.get('opening') or {}
+    row = _fact_item('opening_scope', 'source_blurb.opening',
+                     projected_blurb.get('opening'), evidence_for('source_blurb.opening'),
+                     dependency={'source': source_dependency, 'facts': blurb.get('facts')})
+    rows.append(row.model_copy(update={'resolution_required': opening.get('kind') != 'proposed'}))
     return rows
 
 
@@ -339,6 +330,7 @@ def build_review(
     inputs = provenance.get('inputs') if isinstance(provenance, dict) else None
     main_text_input = (
         inputs.get(STAGE1_MAIN_TEXT) if isinstance(inputs, dict) else None)
+    source_hook_input = inputs.get(STAGE1_HOOK_COPY) if isinstance(inputs, dict) else None
     source = {
         key: value for key, value in global_grounding.items()
         if key not in {'_provenance', '_schema_version'}
@@ -348,7 +340,8 @@ def build_review(
         for item in (previous.items if previous else [])
     }
     items = []
-    for fresh in enumerate_required(source, main_text_input=main_text_input):
+    for fresh in enumerate_required(source, main_text_input=main_text_input,
+                                    source_hook_input=source_hook_input):
         inherited = prior.get((
             fresh.item_id, fresh.kind, fresh.subject_path, fresh.subject_sha256))
         items.append(inherited if inherited is not None else fresh)
@@ -389,8 +382,8 @@ def review_group_key(subject_path: str) -> str:
             return f'{group}:{path[len(prefix):].split(".", 1)[0]}'
     if path == 'canon.setting' or path.startswith('canon.setting.'):
         return 'setting'
-    if path == 'arc' or path.startswith('arc.'):
-        return 'arc'
+    if path == 'source_blurb' or path.startswith('source_blurb.'):
+        return 'source_blurb'
     raise ValueError(
         f'复核项路径 {path!r} 没有登记的卡片收敛键。'
         f'`enumerate_required` 新增一类主体路径时必须同批在这里登记，'
@@ -431,8 +424,9 @@ def review_status(
     分级只改「谁能拦」，不改「谁必须在场」。
     """
     expected = build_review(global_grounding)
-    def identity(item: GlobalReviewItem) -> tuple[str, str, str, str]:
-        return item.item_id, item.kind, item.subject_path, item.subject_sha256
+    def identity(item: GlobalReviewItem) -> tuple[str, str, str, str, bool]:
+        return (item.item_id, item.kind, item.subject_path, item.subject_sha256,
+                item.resolution_required)
     current = (
         review.source_sha256 == expected.source_sha256
         and [identity(item) for item in review.items]
@@ -530,6 +524,8 @@ def decide(
             updated.append(item)
             continue
         found = True
+        if item.resolution_required and state == 'PASS':
+            raise HumanEditProtected('该事实或开篇范围仍为 unresolved，必须先提交 typed 修订')
         if item.subject_sha256 != expected_subject_sha256:
             raise HumanEditProtected(
                 'global-review subject changed; stale decision rejected')

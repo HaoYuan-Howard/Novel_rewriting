@@ -138,6 +138,7 @@ EpochIdentityCurrent = Callable[[ExecutionEpoch], bool]
 CancelCommander = Callable[[], bool]
 SetCommanderQuiesced = Callable[[bool], bool]
 ReadOperatorNext = Callable[[ExecutionEpoch], OperatorNext]
+ReadyRequiresFreshEpoch = Callable[[ExecutionEpoch, OperatorNext], bool]
 RunReadyAction = Callable[
     [ExecutionEpoch, OperatorNext, str | None, LaunchTicket],
     SupervisorActionResult,
@@ -166,6 +167,7 @@ class RunSupervisor:
         set_commander_quiesced: SetCommanderQuiesced | None = None,
         initial_epoch: ExecutionEpoch | None = None,
         read_operator_next: ReadOperatorNext | None = None,
+        ready_requires_fresh_epoch: ReadyRequiresFreshEpoch | None = None,
         run_ready_action: RunReadyAction | None = None,
         run_blocked_action: RunBlockedAction | None = None,
         deterministic_blockers: frozenset[str] = frozenset(),
@@ -188,6 +190,8 @@ class RunSupervisor:
         if any(callback is not None for callback in deterministic) and not all(
                 callback is not None for callback in deterministic):
             raise ValueError('Supervisor 确定性主路的四个 callback 必须同时提供')
+        if ready_requires_fresh_epoch is not None and not all(callback is not None for callback in deterministic):
+            raise ValueError('ready producer 边界只随完整确定性主路提供')
         if (run_blocked_action is not None or deterministic_blockers) and not all(
                 callback is not None for callback in deterministic):
             raise ValueError(
@@ -199,6 +203,7 @@ class RunSupervisor:
             raise ValueError(
                 'fresh_epoch_blockers 必须是 deterministic_blockers 的子集')
         self._read_next = read_operator_next
+        self._ready_requires_fresh_epoch = ready_requires_fresh_epoch or (lambda _epoch, _next: False)
         self._run_ready = run_ready_action
         self._run_blocked = run_blocked_action
         self._deterministic_blockers = deterministic_blockers
@@ -668,6 +673,16 @@ class RunSupervisor:
                         if current.execution_token is None:
                             raise RuntimeError(
                                 'ready operator next 没有同快照 execution token')
+                        if self._ready_requires_fresh_epoch(epoch, current):
+                            boundary_turn = epoch_last or CommanderTurnResult(
+                                exit_code=0, provider_session_id=provider_session_id,
+                                continue_ready=True, outcome=AgentDeliveryOutcome(
+                                    state='unknown', checked_at=int(time.time()),
+                                    reason='当前 ready 作业需要独立 producer 身份'))
+                            close_epoch(epoch, boundary_turn)
+                            provider_session_id = None
+                            reason = 'continue'
+                            break
                         executed = self._launch(
                             lambda ticket: self._run_ready(
                                 epoch, current, provider_session_id, ticket))

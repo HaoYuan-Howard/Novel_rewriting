@@ -43,7 +43,7 @@ from novel.llm.client import LlmFailed
 from novel.llm.json_text import normalize_json_text
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatResponse
-from novel.model_slots import model_slot_from_environment
+from novel.model_slots import model_slot_from_environment, pipeline_model_slot, ModelSlotUnavailable
 from novel.observability import AttemptHeartbeat, RequestProgress
 from novel.run import RunContext
 
@@ -77,25 +77,27 @@ class AgentDeliveryUnavailable(LlmFailed):
 # executor 分别使用 per-chapter / per-purpose / per-node；policy 也同时绑定唯一 node，
 # 不能借同名协议把一个节点的 checkpoint 接到另一个节点。
 _RECOVERY_SESSION_ISOLATION = {
-    'stage2-global-v1': 'per-node',
+    'stage2-characters-v1': 'per-node',
+    'stage2-knowledge-v2': 'per-node',
     'stage2-blueprint-v1': 'per-purpose-chapter',
     'stage4-design-v1': 'per-node',
     'stage4-design-v2': 'per-purpose',
     'stage4-plan-v1': 'per-node',
-    'stage5-write-v1': 'per-chapter',
-    'stage5-reviewer-rewrite-v1': 'per-chapter',
+    'stage5-write-v2': 'per-chapter',
+    'stage5-reviewer-rewrite-v2': 'per-chapter',
     'stage6-hook-v1': 'per-node',
     'stage6-semantic-v1': 'per-purpose',
     'stage7-rename-v1': 'per-node',
 }
 _RECOVERY_POLICY_NODE = {
-    'stage2-global-v1': 'stage2.global',
+    'stage2-characters-v1': 'stage2.characters',
+    'stage2-knowledge-v2': 'stage2.global',
     'stage2-blueprint-v1': 'stage2.blueprint',
     'stage4-design-v1': 'stage4.design',
     'stage4-design-v2': 'stage4.design',
     'stage4-plan-v1': 'stage4.plan',
-    'stage5-write-v1': 'stage5.write',
-    'stage5-reviewer-rewrite-v1': 'stage5.write',
+    'stage5-write-v2': 'stage5.write',
+    'stage5-reviewer-rewrite-v2': 'stage5.write',
     'stage6-hook-v1': 'stage6.hook',
     'stage6-semantic-v1': 'stage6.semantic',
     'stage7-rename-v1': 'stage7.rename',
@@ -568,6 +570,12 @@ def validate_checkpoint_acceptance(
             f'{purpose}: agent checkpoint 缺 provider/logical session 身份')
     prior_turns = record.get('accepted_turn_index')
     prior_links = record.get('attempt_links')
+    # checkpoint 的供应商轮次仍逐条核验；人工额度由同一持久工作单元证明，
+    # 不能靠调用者传一个较大的 max_semantic_turns 给第五次调用开门。
+    budget = work_units.budget_for(ctx, scope=work_units.executor_scope(
+        ctx.node, purpose, {'chapter': chapter}))
+    from contracts.invariants import WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS
+    max_semantic_turns = min(max_semantic_turns, WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS) + budget.granted
     if (not isinstance(prior_turns, int) or isinstance(prior_turns, bool)
             or prior_turns < 1 or prior_turns > max_semantic_turns
             or not isinstance(prior_links, list)
@@ -681,7 +689,7 @@ class SessionAgentClient:
         self,
         ctx: RunContext,
         profile: AgentProfile,
-        driver: AgentDriver,
+        driver: AgentDriver | None,
         *,
         chapter: int | None = None,
         parent_run_id: str | None = None,
@@ -701,6 +709,8 @@ class SessionAgentClient:
         if delivery_backoff_base < 0:
             raise ValueError('delivery_backoff_base 必须 >= 0')
         self.ctx = ctx
+        if driver is None and ctx.paid:
+            raise ValueError('无 driver 的 client 只允许显式免费原回答恢复')
         self.profile = validate_profile(profile, role='executor')
         self.driver = driver
         self.chapter = chapter
@@ -712,7 +722,7 @@ class SessionAgentClient:
         # 语义修订轮与 CLI 交付尝试是两套正交预算。前者只在一轮新的
         # candidate/反馈修订开始时消耗；后者只在同一轮未取得回答时消耗。
         from contracts.invariants import WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS
-        self.max_semantic_turns = min(max_semantic_turns, WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS)
+        self._base_semantic_turn_limit = min(max_semantic_turns, WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS)
         self.max_delivery_retries = max_delivery_retries
         self.delivery_backoff_base = delivery_backoff_base
         self._sleep = sleep
@@ -762,12 +772,19 @@ class SessionAgentClient:
         self._preflight_probe = preflight_probe
         self._progress: RequestProgress | None = None
         self._closed = False
+        from novel.config import load_config
+        self._concurrency_policy = load_config().concurrency_policy
         self._workdir = tempfile.TemporaryDirectory(
             prefix=f'novel-agent-{ctx.node.replace(".", "-")}-')
 
     @property
     def turns_used(self) -> int:
         return self._turn_index
+
+    @property
+    def max_semantic_turns(self) -> int:
+        return self._base_semantic_turn_limit + (
+            self._content_budget.granted if self._content_budget is not None else 0)
 
     @property
     def content_turns_used(self) -> int:
@@ -1088,6 +1105,8 @@ class SessionAgentClient:
     ) -> None:
         if self._started:
             return
+        if self.driver is None:
+            raise ProvenanceRefused('免费原回答恢复没有适用的已保存响应；禁止探测或启动模型')
         probe = self._preflight_probe or self.driver.probe()
         if probe.driver != self.profile.driver:
             raise LlmFailed(
@@ -1427,15 +1446,19 @@ class SessionAgentClient:
                 max_attempts=max_delivery_attempts, progress=progress)
             heartbeat.start()
             try:
-                # 仅当 Supervisor 为 Stage2 重叠窗口下发跨进程槽契约时生效；
-                # 其余节点仍保持原有并发。一次 start/resume 整体只占一槽。
-                with model_slot_from_environment():
+                # 一次 start/resume 整体占一槽；排队时间不计入模型调用耗时。
+                with model_slot_from_environment(cancelled=lambda: self._closed), pipeline_model_slot(
+                        self.ctx.novel_dir, self.driver.provider,
+                        per_book=self._concurrency_policy.per_book,
+                        per_provider=self._concurrency_policy.per_provider,
+                        cancelled=lambda: self._closed):
+                    started = time.perf_counter()
                     if self.provider_session_id is None:
                         turn = self.driver.start(self.profile, request)
                     else:
                         turn = self.driver.resume(
                             self.profile, self.provider_session_id, request)
-            except (AgentConfigurationError, AgentBusyError) as exc:
+            except (AgentConfigurationError, AgentBusyError, ModelSlotUnavailable) as exc:
                 self._driver_failed = True
                 self._content_budget.record_attempt(
                     self._content_reservation.turn_id,
@@ -2199,7 +2222,9 @@ class SessionAgentClient:
             # 原回答已经持久，但原 turn 尚未完整入账；先保留 opened 会话，
             # 重启按 prepared receipt 补齐后再结束，不能把缺行封进 ended 后面。
             return
-        if self._content_reservation is not None and delivery_state in ('delivered', 'blocked'):
+        # blocked 只说明本轮尚未交付；不能把尚未 checkpoint 的已付费回答标为采纳。
+        # 已落 checkpoint 的单元由 producer 的写口确认采纳；其余保留供原回答恢复。
+        if self._content_reservation is not None and delivery_state == 'delivered':
             self._adopt_content_response()
         if not self._started:
             for acceptance in self._accepted_checkpoint.values():
@@ -2246,9 +2271,10 @@ class SessionAgentClient:
     def close(self) -> None:
         if self._closed:
             return
-        self.driver.close()
-        self._workdir.cleanup()
         self._closed = True
+        if self.driver is not None:
+            self.driver.close()
+        self._workdir.cleanup()
 
 
 __all__ = [

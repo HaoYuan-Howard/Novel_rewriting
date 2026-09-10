@@ -30,6 +30,9 @@ from pydantic import Field, StrictInt, model_serializer, model_validator
 from contracts.invariants import (
     AGENT_DELIVERY_OUTCOME,
     AGENT_EXECUTOR_NODES, AGENT_RUN_CONTROLS, AGENT_RUN_EVENT_KINDS,
+    PIPELINE_CONCURRENCY_TRIALS, PIPELINE_PARALLEL_NODES,
+    PIPELINE_BOOK_CONCURRENCY, PIPELINE_PROVIDER_CONCURRENCY,
+    PIPELINE_TOTAL_CONCURRENCY_MIN, PIPELINE_TOTAL_CONCURRENCY_MAX,
     AGENT_RUN_EVENT_V2_KINDS, AGENT_RUN_EXIT_ORIGINS, AGENT_RUN_STATE,
     ARTIFACT_CONDITION, ARTIFACT_DISPLAY, BEACON_STATES,
     COMMANDER_ADMISSION_EVENT_KINDS, COMMANDER_ADMISSION_TAIL_REPAIR_KINDS,
@@ -50,6 +53,7 @@ from contracts.invariants import (
     LEGACY_STAGE2_COMMANDER_SEAT_PURPOSES as STAGE2_COMMANDER_SEAT_PURPOSES,
 )
 from contracts.schema.base import FrozenModel, StrictModel
+from contracts.schema.common import Sha256
 
 #: 枚举一律从 `contracts.invariants` 取，不在本文件重抄（同 `common.py` / `report.py`）。
 JobState = Literal[JOB_STATE]
@@ -144,6 +148,23 @@ def _backend_from_legacy_profile(value: Any) -> Any:
     return value
 
 
+class PipelineConcurrency(FrozenModel):
+    """一次运行冻结的并发策略；节点对照与两个总上限分别记录。"""
+
+    node_overrides: dict[str, Literal[PIPELINE_CONCURRENCY_TRIALS]] = Field(default_factory=dict)
+    per_book: StrictInt = Field(default=PIPELINE_BOOK_CONCURRENCY,
+        ge=PIPELINE_TOTAL_CONCURRENCY_MIN, le=PIPELINE_TOTAL_CONCURRENCY_MAX)
+    per_provider: StrictInt = Field(default=PIPELINE_PROVIDER_CONCURRENCY,
+        ge=PIPELINE_TOTAL_CONCURRENCY_MIN, le=PIPELINE_TOTAL_CONCURRENCY_MAX)
+
+    @model_validator(mode='after')
+    def _valid_parallel_nodes(self) -> PipelineConcurrency:
+        unknown = set(self.node_overrides) - set(PIPELINE_PARALLEL_NODES)
+        if unknown:
+            raise ValueError(f'并发覆盖只支持逐章节点：{sorted(unknown)}')
+        return self
+
+
 class PipelineAgentProfiles(FrozenModel):
     """一次整书代跑的 commander 与显式 executor backend 选择。
 
@@ -160,6 +181,14 @@ class PipelineAgentProfiles(FrozenModel):
     commander: AgentProfile
     executor_default: ExecutorBackend
     executor_overrides: dict[str, ExecutorBackend] = Field(default_factory=dict)
+    concurrency: PipelineConcurrency | None = None
+
+    @model_serializer(mode='wrap')
+    def _omit_unconfigured_concurrency(self, handler):
+        result = handler(self)
+        if self.concurrency is None:
+            result.pop('concurrency', None)
+        return result
 
     @model_validator(mode='before')
     @classmethod
@@ -715,6 +744,40 @@ class RunResumeFrontierView(StrictModel):
         return self
 
 
+class WorkUnitProcessingView(StrictModel):
+    run_id: str
+    input_sha256: Sha256
+    total: int = Field(ge=0)
+    pending: int = Field(ge=0)
+    generated: int = Field(ge=0)
+    mechanical: int = Field(ge=0)
+    history_adopted: int = Field(ge=0)
+    cached: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    unknown: int = Field(ge=0)
+    reason: str | None = None
+
+    @model_validator(mode='after')
+    def _complete(self) -> WorkUnitProcessingView:
+        if self.total != sum(getattr(self, key) for key in (
+                'pending', 'generated', 'mechanical', 'history_adopted', 'cached', 'failed', 'unknown')):
+            raise ValueError('工作单元处理数量必须完整且不重复')
+        return self
+
+
+class WorkUnitReviewProgress(StrictModel):
+    subject_sha256: Sha256
+    total: int = Field(ge=0)
+    pending: int = Field(ge=0)
+    decision_inherited: int = Field(ge=0)
+
+    @model_validator(mode='after')
+    def _complete(self) -> WorkUnitReviewProgress:
+        if self.pending + self.decision_inherited != self.total:
+            raise ValueError('当前待审与有效继承须完整覆盖审阅义务')
+        return self
+
+
 class WorkUnitView(StrictModel):
     """持久工作单元账的只读投影；余量与恢复动作由后端计算。"""
 
@@ -724,11 +787,18 @@ class WorkUnitView(StrictModel):
     scope: str
     content_used: int = Field(ge=0)
     content_limit: int = Field(ge=0)
+    content_base_limit: int = Field(default=4, ge=0)
+    content_granted: int = Field(default=0, ge=0)
+    grant_count: int = Field(default=0, ge=0)
     content_remaining: int = Field(ge=0)
     state: str
     latest_request_sha256: str | None = None
     latest_response_sha256: str | None = None
     recovery_action: str | None = None
+    registered: bool = True
+    processing: WorkUnitProcessingView | None = None
+    review: WorkUnitReviewProgress | None = None
+    review_unavailable_reason: str | None = None
 
 
 class RunProgressView(StrictModel):
@@ -743,6 +813,7 @@ class RunProgressView(StrictModel):
     #: 最近若干条信标事件（人读时间线，文件序——新的在后）。
     events_tail: list[RunEventView]
     work_units: list[WorkUnitView] | None = None
+    work_units_unavailable_reason: str | None = None
     current_recovery_actions: list[str] | None = None
 
 
@@ -793,6 +864,13 @@ class AgentRunStart(FrozenModel):
     profiles: PipelineAgentProfiles | None = None
 
 
+class RunContinuationSource(FrozenModel):
+    """原配置续跑的来源；绑定完整历史 profiles 与可靠停止证明。"""
+
+    run_id: str = Field(pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
+    source_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
 class RunContractV2(FrozenModel):
     """整本书 parent run 真正稳定的不可变契约（wire v2）。
 
@@ -810,6 +888,15 @@ class RunContractV2(FrozenModel):
     authorized: bool
     egress_authorized: bool
     profiles: PipelineAgentProfiles
+
+    continuation: RunContinuationSource | None = None
+
+    @model_serializer(mode='wrap')
+    def _preserve_original_contract_identity(self, handler: Any) -> dict[str, Any]:
+        result = handler(self)
+        if self.continuation is None:
+            result.pop('continuation', None)
+        return result
 
     legacy_argv: list[str] | None = Field(
         default=None, alias='argv', exclude=True)
@@ -1330,32 +1417,6 @@ class Stage2ReviewLedger(FrozenModel):
             raise ValueError(
                 'Stage2 review ledger 只有全部席位 ok/exit0 才能标 complete')
         return self
-
-
-class Stage2PrereviewRecord(FrozenModel):
-    """已通过预审 typed loader、尚未绑定 live surface 的 Stage2 决定。
-
-    这不是 ``ReviewerActionRecord``：Blueprint 尚未完成时没有 live submission
-    option、execution permit 或 canonical action。记录只保存重新绑定所需的完整
-    业务身份、原 logical session 与 provider 原始回答摘要；provider session 不属于
-    恢复身份，也绝不据此续会。
-    """
-
-    kind: Literal['novel-stage2-prereview-record-v1'] = (
-        'novel-stage2-prereview-record-v1')
-    sid: str = Field(min_length=1)
-    run_id: str = Field(min_length=1)
-    epoch_id: str = Field(min_length=1)
-    business_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    source_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    main_text_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    progress_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    blocker_count: int = Field(ge=1)
-    reviewer_session_run_id: str = Field(min_length=1)
-    provider_response_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    input_payload: dict[str, Any]
-    recorded_at: int = Field(ge=0)
 
 
 class ReviewerProtocolRecoveryProof(FrozenModel):
@@ -1921,22 +1982,11 @@ class ArtifactState(StrictModel):
     #: 能不能按**当前** schema 加载。
     readable: bool = True
 
-    #: 当前 schema 明确拒读、但由专用只读适配器证明仍精确绑定既有人审主体。
-    #: 这不是迁移或 ``readable=True`` 的别名；正常 producer 仍必须拒绝该载体。
-    legacy_frozen: bool = False
-    legacy_contract: str | None = Field(default=None, min_length=1)
-
     #: 缺席/可用/隔离/读不回。界面只按这个 id 选文案，不再组合 exists/invalid/readable。
     condition: ArtifactCondition
 
     @model_validator(mode='after')
     def _absent_artifacts_carry_nothing(self) -> ArtifactState:
-        if self.legacy_frozen != (self.legacy_contract is not None):
-            raise ValueError(
-                f'{self.rel}: legacy_frozen/legacy_contract 必须同时出现或同时缺席')
-        if self.legacy_frozen and (not self.exists or self.readable):
-            raise ValueError(
-                f'{self.rel}: frozen legacy 必须在盘且仍不可按 current schema 读取')
         if ((self.invalid_freshness is None)
                 != (self.invalid_reason is None)):
             raise ValueError(
@@ -2066,7 +2116,7 @@ class StageState(StrictModel):
         if self.done is None:
             return self          # 逐章类的层：判据在别处（见 `chapters_done`）
         want = all(
-            a.exists and (a.readable or a.legacy_frozen)
+            a.exists and a.readable
             and a.freshness != 'stale' and not a.invalid
             for a in self.artifacts
         )

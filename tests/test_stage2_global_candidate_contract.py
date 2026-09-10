@@ -3,16 +3,18 @@
 """stage2.global 唯一闭集 evidence wire 的真实 executor 纵切。"""
 from __future__ import annotations
 
+from novel.stages.stage2 import grounding as grounding_io
+
 import copy
 import json
 
 import pytest
 
 import novel.config as novel_config
-from contracts.invariants import FATE_WORDS, GLOBAL_EVIDENCE_CONTRACT
-from contracts.schema.stage2 import (
-    GlobalCandidateAgentTurnResponse, GlobalCandidateFullTurn, GlobalGrounding,
-    GlobalGroundingCandidateResponse, GlobalRoleFatePatchTurn,
+from contracts.invariants import GLOBAL_EVIDENCE_CONTRACT
+from contracts.schema.knowledge import (
+    KnowledgeAgentTurnResponse as GlobalCandidateAgentTurnResponse,
+    KnowledgeResponse as GlobalGroundingCandidateResponse,
 )
 from novel import paths
 from novel.agents.session_client import SessionAgentClient, agent_json_schema
@@ -27,7 +29,7 @@ from novel.stages.stage2.global_contract import CONTRACT, active_contract
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
 from tests.test_stage2_generation import (
-    _legacy_locator_response_global, _response_global,
+    _response_global,
 )
 from tests.test_stage2_global_agent import (
     _Driver, _ctx, _profile, _resume_ctx, _rows,
@@ -44,8 +46,8 @@ def _candidate_response() -> dict:
 
 def _full(candidate: dict) -> str:
     wire = copy.deepcopy(candidate)
-    characters = wire['entities']['characters']
-    wire['entities']['characters'] = [
+    characters = wire['entities']['character_states']
+    wire['entities']['character_states'] = [
         {'char_id': char_id, **character}
         for char_id, character in characters.items()
     ]
@@ -60,39 +62,22 @@ def _session_client(ctx, driver, *, max_turns: int = 2) -> SessionAgentClient:
         parent_run_id=ctx.run_id, max_semantic_turns=max_turns)
 
 
-def _role_leak_candidate() -> dict:
+def _unknown_candidate():
+    value = _candidate_response()
+    value['entities']['relations'][0]['predicate_evidence'] = {'evidence_candidate_id': 'e999999'}
+    return value
+
+
+def _offer_knowledge_custody(ctx, *, prior_count):
     candidate = _candidate_response()
-    character = candidate['entities']['characters']['char_001']
-    character['role'] += '，最终仍独自承担家中账目'
-    character['fate'] = None
-    character['fate_evidence'] = None
-    return candidate
-
-
-def _role_patch_text(
-        prepared: extract.GlobalCandidateContext,
-        evaluation: extract.GlobalCandidateEvaluation,
-        *, bad_sha: bool = False, role: str | None = None,
-) -> str:
-    scope = extract.global_role_fate_patch_scope(prepared, evaluation)
-    assert scope is not None
-    base = evaluation._response.model_dump(by_alias=True, mode='json')
-    character = base['entities']['characters']['char_001']
-    payload = {
-        'payload': {
-            'kind': 'role_fate_patch',
-            'candidate_sha256': ('f' * 64 if bad_sha else scope.candidate_sha256),
-            'evidence_table_sha256': scope.evidence_table_sha256,
-            'changes': [{
-                'char_id': 'char_001',
-                'role': role or character['role'].split('，最终', 1)[0],
-                'role_evidence': character['role_evidence'],
-                'fate': '最终仍独自承担家中账目',
-                'fate_evidence': character['role_evidence'],
-            }],
-        },
-    }
-    return json.dumps(payload, ensure_ascii=False)
+    candidate['canon']['secrets'][0]['first_reveal_chapter'] = 99
+    driver = _Driver([_full(candidate)] * prior_count + [_full(_unknown_candidate())], ctx.novel_dir)
+    with pytest.raises(LlmFailed, match=f'已用尽 {prior_count + 1} 轮'):
+        Stage2GlobalAgent(ctx, driver=driver, max_turns=prior_count + 1).run()
+    assert len(driver.calls) == prior_count + 1
+    store = ArtifactStore(ctx)
+    assert not store.exists(extract.GLOBAL_REL) and not store.exists(extract._GLOBAL_INVALID)
+    return driver
 
 
 def _seal_replacement(ctx, replacement: str) -> str:
@@ -119,113 +104,8 @@ def _terminal_repair_rows(base, attempt_id: str) -> list[dict]:
     ]
 
 
-def _offer_role_patch_custody(ctx, *, prior_count: int) -> str:
-    prepared = extract.prepare_global_candidate(ctx, agent_envelope=True)
-    extract.ensure_global_agent_run(ctx, prepared)
-    base_raw = _role_leak_candidate()
-    driver = _Driver([_full(base_raw)], ctx.novel_dir)
-    client = _session_client(ctx, driver, max_turns=prior_count + 2)
-    try:
-        turn = client.ask_json(
-            prepared.system, prepared.user,
-            model_cls=prepared.agent_response_model,
-            purpose=ctx.node, max_tokens=extract.GLOBAL_MAX_TOKENS,
-            validator=extract.global_full_candidate_validator(prepared),
-            recovery_policy=stage2_global_runs.RECOVERY_POLICY,
-        )
-        assert isinstance(turn, GlobalCandidateAgentTurnResponse)
-        assert isinstance(turn.payload, GlobalCandidateFullTurn)
-        response = turn.payload.candidate
-        extract.write_global_agent_checkpoint(
-            ctx, client, prepared, turn, response)
-        evaluation = extract.evaluate_global_candidate(
-            ctx, client, prepared, response)
-        scope = extract.global_role_fate_patch_scope(prepared, evaluation)
-        assert scope is not None
-        if prior_count == 1:
-            assert client.queue_code_validation_feedback(
-                extract.global_role_fate_patch_feedback_rows(
-                    evaluation, scope),
-                purpose=ctx.node)
-            driver.responses.append(_role_patch_text(
-                prepared,
-                evaluation,
-                role='沈家账房，最终仍独自承担家中账目'))
-            first_patch_turn = client.ask_json(
-                prepared.system, prepared.user,
-                model_cls=prepared.agent_response_model,
-                purpose=ctx.node, max_tokens=extract.GLOBAL_MAX_TOKENS,
-                validator=extract.global_role_fate_patch_validator(
-                    prepared, evaluation),
-                recovery_policy=stage2_global_runs.RECOVERY_POLICY,
-                retain_validator_rejection=True,
-            )
-            assert isinstance(first_patch_turn, GlobalCandidateAgentTurnResponse)
-            assert isinstance(
-                first_patch_turn.payload, GlobalRoleFatePatchTurn)
-            first_base = evaluation
-            applied = extract.apply_global_role_fate_patch(
-                prepared, first_base, first_patch_turn.payload)
-            response = applied.response
-            extract.write_global_agent_checkpoint(
-                ctx,
-                client,
-                prepared,
-                first_patch_turn,
-                response,
-                base_response=first_base._response,
-                accepted_role_patch_count=1,
-            )
-            first_attempt = client.accepted_attempt(ctx.node)
-            assert first_attempt is not None
-            ctx.ledger.note_role_fate_candidate_patch(
-                sid=ctx.sid,
-                node=ctx.node,
-                purpose=ctx.node,
-                attempt_id=first_attempt,
-                base_candidate_sha256=first_base.response_sha256,
-                result_candidate_sha256=extract.global_response_sha256(response),
-                evidence_table_sha256=(
-                    first_patch_turn.payload.evidence_table_sha256),
-                changed_field_count=applied.changed_field_count,
-            )
-            evaluation = extract.evaluate_global_candidate(
-                ctx, client, prepared, response)
-            scope = extract.global_role_fate_patch_scope(prepared, evaluation)
-            assert scope is not None
-        assert client.queue_code_validation_feedback(
-            extract.global_role_fate_patch_feedback_rows(evaluation, scope),
-            purpose=ctx.node)
-        driver.responses.append(_role_patch_text(
-            prepared, evaluation, bad_sha=True))
-        with pytest.raises(
-                LlmFailed, match=f'已用尽 {prior_count + 2} 轮'):
-            client.ask_json(
-                prepared.system, prepared.user,
-                model_cls=prepared.agent_response_model,
-                purpose=ctx.node, max_tokens=extract.GLOBAL_MAX_TOKENS,
-                validator=extract.global_role_fate_patch_validator(
-                    prepared, evaluation),
-                recovery_policy=stage2_global_runs.RECOVERY_POLICY,
-                retain_validator_rejection=True,
-            )
-        rel = extract.custody_global_validator_rejection(
-            ctx, client, prepared,
-            expected_turn_kind='role_fate_patch',
-            base_response=evaluation._response,
-            accepted_role_patch_count=prior_count,
-        )
-        assert rel is not None
-        return _role_patch_text(prepared, evaluation)
-    finally:
-        client.finish(
-            process_state='ok', delivery_state='failed',
-            error_kind='response_validation')
-        client.close()
-
-
 def test_global_provider_has_one_candidate_only_contract_and_schema():
-    assert GLOBAL_EVIDENCE_CONTRACT == 'paragraph-candidate-v1'
+    assert GLOBAL_EVIDENCE_CONTRACT == 'knowledge-paragraph-candidate-v2'
     assert active_contract() is CONTRACT
     assert CONTRACT.name == GLOBAL_EVIDENCE_CONTRACT
     assert CONTRACT.response_model is GlobalGroundingCandidateResponse
@@ -236,26 +116,16 @@ def test_global_provider_has_one_candidate_only_contract_and_schema():
     assert 'chapter_ordinal' not in serialized
 
 
-def test_candidate_agent_union_has_only_full_and_role_fate_patch():
-    candidate_system = extract.build_global_agent_system(CONTRACT)
-    assert '第一次回答必须使用 full_candidate' in candidate_system
-    assert 'repair_contract.kind=role_fate_patch' in candidate_system
-    assert 'allowed_char_ids' in candidate_system
-    assert 'evidence_table_sha256' in candidate_system
-    assert '"kind":"role_fate_patch"' in candidate_system
-    assert '"kind": "evidence_patch"' not in candidate_system
-    assert '"kind":"evidence_patch"' not in candidate_system
-    assert '$FATE_WORDS' not in candidate_system
-    assert all(word in candidate_system for word in FATE_WORDS)
-    schema = json.dumps(
-        agent_json_schema(GlobalCandidateAgentTurnResponse),
-        ensure_ascii=False,
-    )
+def test_knowledge_agent_schema_only_accepts_complete_knowledge_candidates():
+    system = extract.build_global_agent_system(CONTRACT)
+    assert 'full_candidate' in system
+    schema = json.dumps(agent_json_schema(GlobalCandidateAgentTurnResponse), ensure_ascii=False)
     assert 'full_candidate' in schema
-    assert 'role_fate_patch' in schema
-    assert '"const": "evidence_patch"' not in schema
+    assert 'role_fate_patch' not in schema and 'evidence_patch' not in schema
     assert '"locator":' not in schema
     assert '"evidence_candidate_id":' in schema
+    assert '"characters":' not in schema
+    assert '"character_states":' in schema
 
 
 def test_retired_global_selector_is_not_configurable_and_fails_closed(
@@ -311,7 +181,7 @@ def test_candidate_agent_compiles_ids_to_formal_source_spans(
         GlobalCandidateAgentTurnResponse)
     assert '<e000001>' in request.prompt
     assert 'evidence_candidate_id' in request.system
-    landed = ArtifactStore(ctx).read(GlobalGrounding, extract.GLOBAL_REL)
+    landed = grounding_io.read(ArtifactStore(ctx))
     dumped = landed.model_dump(by_alias=True, mode='json')
     assert 'evidence_candidate_id' not in json.dumps(dumped, ensure_ascii=False)
     assert not any(
@@ -434,69 +304,42 @@ def test_unknown_id_typed_replacement_recovers_same_run_without_wire(
         {'candidate', 'reason', 'why', 'reject_detail'} & terminal[0].keys())
 
 
-@pytest.mark.parametrize('prior_count', [0, 1])
-def test_role_patch_validator_custody_replays_narrow_patch_and_increments_count(
-    tmp_path, monkeypatch, prior_count: int,
-):
+@pytest.mark.parametrize('prior_count', [1, 2, 3])
+def test_knowledge_custody_preserves_prior_paid_turns_and_recovers_without_wire(
+        tmp_path, prior_count):
     ctx = _ctx(tmp_path)
-    replacement = _offer_role_patch_custody(
-        ctx, prior_count=prior_count)
-    attempt_id = _seal_replacement(ctx, replacement)
-
-    resumed_ctx = _resume_ctx(ctx)
-    prepared = extract.prepare_global_candidate(
-        resumed_ctx, agent_envelope=True)
-    extract.ensure_global_agent_run(resumed_ctx, prepared)
-    extract.adopt_global_validator_resolution_checkpoint(
-        resumed_ctx, prepared)
-    source = _session_client(
-        resumed_ctx, _Driver([], resumed_ctx.novel_dir),
-        max_turns=prior_count + 2)
-    restored = extract.restore_global_agent_checkpoint(
-        resumed_ctx, source, prepared)
-    source.close()
-
-    assert restored is not None
-    assert restored.turn_kind == 'custody_replacement'
-    assert restored.accepted_role_patch_count == prior_count + 1
-    character = restored.response.entities.characters['char_001']
-    assert '最终' not in character.role
-    assert character.fate == '最终仍独自承担家中账目'
-
-    # kill 在 patch audit 之后再恢复，事件身份稳定，不得重复记数。
-    replay_ctx = _resume_ctx(ctx)
-    replay_prepared = extract.prepare_global_candidate(
-        replay_ctx, agent_envelope=True)
-    extract.ensure_global_agent_run(replay_ctx, replay_prepared)
-    extract.adopt_global_validator_resolution_checkpoint(
-        replay_ctx, replay_prepared)
-    replay_source = _session_client(
-        replay_ctx, _Driver([], replay_ctx.novel_dir),
-        max_turns=prior_count + 2)
-    extract.restore_global_agent_checkpoint(
-        replay_ctx, replay_source, replay_prepared)
-    replay_source.close()
-    patch_rows = [
-        row for row in _rows(tmp_path.joinpath(*AUDIT_REL))
-        if row.get('kind') == 'candidate_patch_applied'
-        and row.get('attempt_id') == attempt_id
-    ]
-    assert len(patch_rows) == 1
-    assert patch_rows[0]['patch_kind'] == 'role_fate'
+    _offer_knowledge_custody(ctx, prior_count=prior_count)
+    attempt = _seal_replacement(ctx, _full(_candidate_response()))
+    calls_before = ctx.ledger.path.read_bytes()
+    resumed = _resume_ctx(ctx)
+    driver = _Driver([], ctx.novel_dir)
+    result = Stage2GlobalAgent(resumed, driver=driver, max_turns=prior_count + 1).run()
+    assert result.passed and not driver.calls
+    assert result.turns == prior_count + 1
+    assert result.artifact.provenance.usage.calls_made == prior_count + 1
+    rows = _terminal_repair_rows(tmp_path, attempt)
+    assert len(rows) == 1 and rows[0]['decision'] == 'accepted'
+    ledger_after = ctx.ledger.path.read_bytes()
+    assert ledger_after == calls_before, '恢复可追加采用审计，但不得重写或新增调用账'
+    again = _resume_ctx(ctx)
+    driver_again = _Driver([], ctx.novel_dir)
+    repeated = Stage2GlobalAgent(again, driver=driver_again, max_turns=prior_count + 1).run()
+    assert repeated.passed and not driver_again.calls
+    assert len(_terminal_repair_rows(tmp_path, attempt)) == 1
 
 
-def test_role_patch_validator_custody_rejects_full_reentry(
+def test_knowledge_custody_rejects_a_replacement_with_unknown_evidence(
     tmp_path, monkeypatch,
 ):
     ctx = _ctx(tmp_path)
-    _offer_role_patch_custody(ctx, prior_count=0)
-    attempt_id = _seal_replacement(ctx, _full(_candidate_response()))
+    _offer_knowledge_custody(ctx, prior_count=0)
+    attempt_id = _seal_replacement(ctx, _full(_unknown_candidate()))
 
     resumed_ctx = _resume_ctx(ctx)
     prepared = extract.prepare_global_candidate(
         resumed_ctx, agent_envelope=True)
     extract.ensure_global_agent_run(resumed_ctx, prepared)
-    with pytest.raises(TerminalState, match='禁止借 custody 回 full'):
+    with pytest.raises(TerminalState, match='不通过当前 validator'):
         extract.adopt_global_validator_resolution_checkpoint(
             resumed_ctx, prepared)
     record = response_repair.find_attempt(ctx.novel_dir, attempt_id)
@@ -522,7 +365,7 @@ def test_global_validator_custody_decline_audit_is_terminal_and_idempotent(
     tmp_path, monkeypatch,
 ):
     ctx = _ctx(tmp_path)
-    _offer_role_patch_custody(ctx, prior_count=0)
+    _offer_knowledge_custody(ctx, prior_count=0)
     rejections = list((ctx.novel_dir / '_llm_rejected').glob(
         '*/*/rejection.json'))
     assert len(rejections) == 1
@@ -565,8 +408,8 @@ def test_global_validator_custody_rejected_outcome_replays_audit_after_crash(
     tmp_path, monkeypatch,
 ):
     ctx = _ctx(tmp_path)
-    _offer_role_patch_custody(ctx, prior_count=0)
-    attempt_id = _seal_replacement(ctx, _full(_candidate_response()))
+    _offer_knowledge_custody(ctx, prior_count=0)
+    attempt_id = _seal_replacement(ctx, _full(_unknown_candidate()))
 
     resumed_ctx = _resume_ctx(ctx)
     prepared = extract.prepare_global_candidate(
@@ -600,52 +443,24 @@ def test_global_validator_custody_rejected_outcome_replays_audit_after_crash(
     assert terminal[0]['gate'] == 'validator'
 
 
-def test_role_patch_custody_count_must_match_latest_durable_checkpoint(
-    tmp_path, monkeypatch,
-):
-    ctx = _ctx(tmp_path)
-    prepared = extract.prepare_global_candidate(ctx, agent_envelope=True)
-    extract.ensure_global_agent_run(ctx, prepared)
-    base_raw = _role_leak_candidate()
-    client = _session_client(
-        ctx, _Driver([_full(base_raw)], ctx.novel_dir))
-    try:
-        turn = client.ask_json(
-            prepared.system, prepared.user,
-            model_cls=prepared.agent_response_model,
-            purpose=ctx.node, max_tokens=extract.GLOBAL_MAX_TOKENS,
-            validator=extract.global_full_candidate_validator(prepared),
-            recovery_policy=stage2_global_runs.RECOVERY_POLICY,
-        )
-        assert isinstance(turn, GlobalCandidateAgentTurnResponse)
-        assert isinstance(turn.payload, GlobalCandidateFullTurn)
-        response = turn.payload.candidate
-        extract.write_global_agent_checkpoint(
-            ctx, client, prepared, turn, response)
-
-        with pytest.raises(ProvenanceRefused, match='durable checkpoint 不一致'):
-            extract._assert_global_custody_durable_state(
-                ctx,
-                prepared,
-                expected_turn_kind='role_fate_patch',
-                base_response=response,
-                accepted_role_patch_count=1,
-            )
-    finally:
-        client.close()
-
-
-@pytest.mark.parametrize('retired_payload', ['locator_full', 'evidence_patch'])
+@pytest.mark.parametrize('retired_payload', ['locator_full', 'evidence_patch', 'role_fate_patch', 'static_full'])
 def test_retired_locator_wire_payloads_are_rejected_without_durable_adoption(
     tmp_path, retired_payload: str,
 ):
     ctx = _ctx(tmp_path)
     if retired_payload == 'locator_full':
-        raw = _full(_legacy_locator_response_global())
+        candidate = _candidate_response()
+        candidate['canon']['setting']['era_evidence'] = {
+            'chapter_ordinal': 1, 'locator': '原文明示的时代背景'}
+        raw = _full(candidate)
+    elif retired_payload == 'static_full':
+        from tests.stage2_fixtures import candidate_view
+        raw = json.dumps({'payload': {'kind': 'full_candidate', 'candidate': candidate_view()}},
+                         ensure_ascii=False)
     else:
         raw = json.dumps({
             'payload': {
-                'kind': 'evidence_patch',
+                'kind': retired_payload,
                 'candidate_sha256': 'a' * 64,
                 'changes': [{
                     'claim_path': 'entities.relations.rel_01.predicate',

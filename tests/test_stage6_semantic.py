@@ -468,7 +468,7 @@ def test_build_prompt_is_anonymous_and_carries_all_quality_references(monkeypatc
     mat = SimpleNamespace(
         lead=({'output_ordinal': 1, 'text': '这是重写后的第一章。'},),
         story_truth={'entities': {'characters': {'c1': {'canonical': '她'}}},
-                     'canon': {'secrets': []}, 'arc': {'ending': '真结局'}},
+                     'canon': {'secrets': []}, 'source_blurb': {'facts': [{'kind': 'supported', 'claim_id': 'hook_001', 'claim': '她收到匿名信'}], 'opening': {'kind': 'proposed', 'through_chapter': 1}}},
         story_map=({'chapter': 1, 'scenes': [{
             'slot': 's01', 'required_facts': ['她收到匿名信']} ]},),
         hook_mechanical={'chars': 100},
@@ -494,7 +494,7 @@ def test_build_prompt_is_anonymous_and_carries_all_quality_references(monkeypatc
     payload = json.loads(user.split('\n\n', 1)[1])
     assert payload['source_reference'] == '原作文案金句。'
     assert payload['rewritten_opening'][0]['text'] == '这是重写后的第一章。'
-    assert payload['story_truth']['arc']['ending'] == '真结局'
+    assert payload['story_truth']['source_blurb']['facts'][0]['claim'] == '她收到匿名信'
     assert payload['whole_story_map'][0]['scenes'][0]['required_facts'] == ['她收到匿名信']
     assert 'style' not in payload
     assert 'hook_mechanical' not in payload

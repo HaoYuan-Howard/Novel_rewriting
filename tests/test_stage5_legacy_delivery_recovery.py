@@ -49,7 +49,6 @@ def _rig(tmp_path, monkeypatch):
     ctx = _ctx(tmp_path)
     seed = factories.stage5_book()
     entry = copy.deepcopy(seed.chapters[1])
-    entry['budget_chars'] = 1000
     entry['scenes'][0]['budget_chars'] = 1000
     store = ArtifactStore(ctx)
     artifact = WriterContext(

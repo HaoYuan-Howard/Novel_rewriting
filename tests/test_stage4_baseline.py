@@ -27,19 +27,22 @@ def setup_module(module) -> None:  # noqa: ANN001
 
 
 def _blueprint(*beat_rows: tuple[str, str, str, str, list[str]],
-               atoms: list[tuple[str, str]]) -> dict[str, Any]:
+               atoms: list[tuple[str, str]], materials: dict[str, list[str]],
+               contexts: tuple[str, ...] = ()) -> dict[str, Any]:
     """(beat_id, time_layer, place, present, hinges) × N + (fact_id, beat)。"""
     return {'blueprints': [{
         'chapter_ordinal': 1,
         'beats': [
             {'beat_id': beat_id, 'time_layer': layer, 'place': place,
              'present_char_ids': present.split(',') if present else [],
-             'hinges': [{'hinge_id': hinge} for hinge in hinges]}
+             'hinges': [{'hinge_id': hinge, 'source_fact_refs': materials[hinge]}
+                        for hinge in hinges]}
             for beat_id, layer, place, present, hinges in beat_rows
         ],
         'fact_atoms': [
             {'fact_id': fact_id, 'claim': f'{fact_id} 的 claim',
-             'kind': 'event', 'obligation': 'land', 'source_beat_ref': beat,
+             'kind': 'event', 'obligation': 'context' if fact_id in contexts else 'land',
+             'source_beat_ref': beat,
              'participant_char_ids': []}
             for fact_id, beat in atoms
         ],
@@ -68,7 +71,8 @@ def test_identical_signature_stages_are_canonically_resolved() -> None:
         ('b01_01', 'now', '庭院', 'c1', ['h1']),
         ('b01_02', 'now', '正厅', 'c1', ['h2']),
         ('b01_03', 'now', '庭院', 'c1', []),       # 与 b01_01 签名等价
-        atoms=[('f_01', 'b01_01'), ('f_02', 'b01_02'), ('f_03', 'b01_03')])
+        atoms=[('f_01', 'b01_01'), ('f_02', 'b01_02'), ('f_03', 'b01_03')],
+        materials={'h1': ['f_01'], 'h2': ['f_02']})
     candidate = _candidate(
         ('cs1', ['f_01', 'f_03']), ('cs2', ['f_02']))
     baseline = build_mechanical_baseline(candidate, blueprints)
@@ -88,7 +92,9 @@ def test_signature_conflict_and_material_ambiguities_are_stable() -> None:
         ('b01_01', 'now', '庭院', 'c1', ['h1']),
         ('b01_02', 'now', '正厅', 'c1', ['h2']),
         ('b01_04', 'recall', '旧宅', 'c1,c2', ['h4']),   # 无人引用：无处可落
-        atoms=[('f_01', 'b01_01'), ('f_02', 'b01_02'), ('f_03', 'b01_02')])
+        atoms=[('f_01', 'b01_01'), ('f_02', 'b01_02'), ('f_03', 'b01_02'),
+               ('f_04', 'b01_04')], contexts=('f_04',),
+        materials={'h1': ['f_01'], 'h2': ['f_02', 'f_03'], 'h4': ['f_04']})
     candidate = _candidate(
         ('cs1', ['f_01', 'f_03']), ('cs2', ['f_02']))
     baseline = build_mechanical_baseline(candidate, blueprints)
@@ -145,7 +151,8 @@ def test_apply_chapter_resolutions_closes_ambiguities() -> None:
     blueprints = _blueprint(
         ('b01_01', 'now', '庭院', 'c1', ['h1']),
         ('b01_02', 'now', '正厅', 'c1', ['h2']),
-        atoms=[('f_01', 'b01_01'), ('f_02', 'b01_02'), ('f_03', 'b01_02')])
+        atoms=[('f_01', 'b01_01'), ('f_02', 'b01_02'), ('f_03', 'b01_02')],
+        materials={'h1': ['f_01'], 'h2': ['f_02', 'f_03']})
     candidate = _candidate(('cs1', ['f_01', 'f_03']), ('cs2', ['f_02']))
     baseline = build_mechanical_baseline(candidate, blueprints)
     chapter = baseline.chapter(1)

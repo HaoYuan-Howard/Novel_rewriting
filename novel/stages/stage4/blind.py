@@ -29,7 +29,6 @@ from novel.stages.stage4.checks import derive_effective_states
 
 
 BLIND_CONTRACT: Final = 'stage4-blind-truth-graph-v2'
-FROZEN_V6_BLIND_CONTRACT: Final = 'stage4-blind-truth-graph-v1'
 BLIND_BOOK_STRATEGY_CONTRACT: Final = 'stage4-blind-book-strategy-v1'
 BLIND_CHAPTER_CONTRACT: Final = 'stage4-blind-chapter-v2'
 _ROOT_SHA1_RE: Final = re.compile(r'^[0-9a-f]{40}$')
@@ -439,26 +438,6 @@ def build_blind_projection(
     )
 
 
-def build_frozen_v6_blind_projection(
-    blueprints: object,
-    *,
-    root_clean_sha1: str,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """复刻 v6 当时的 v1 truth；只供旧候选/hash-bound 人工作品对证。
-
-    任何章已经含 ``narrative_relations`` 都拒绝，避免 current v7 借这个入口
-    丢弃关系后冒充历史主体。返回的 v1 truth 也不得进入普通 producer/wire。
-    """
-    rows = _blueprint_rows(blueprints)
-    if any('narrative_relations' in row for row in rows):
-        raise BlindPlanError(
-            '冻结 v6 blind projection 拒绝含 narrative_relations 的 Blueprint')
-    return _build_blind_projection(
-        blueprints,
-        root_clean_sha1=root_clean_sha1,
-        contract=FROZEN_V6_BLIND_CONTRACT,
-        include_narrative_relations=False,
-    )
 
 
 def _truth_chapter_rows(truth: object) -> dict[int, Mapping[str, Any]]:
@@ -1062,6 +1041,32 @@ def _local_fact_map(
     return chapter, facts
 
 
+
+def blind_chapter_compilation_dependencies(
+    local_mapping: object, formal_mapping: object,
+) -> dict[str, Any]:
+    """单章响应编译实际使用的映射；整书映射先验证，再取局部依赖。
+
+    不把全书 truth 摘要传进章身份，也不因裁剪而免除正式映射完整性验证。
+    local → opaque → formal 两级都保留，避免相同响应被重译为另一事实。
+    """
+    chapter, local_facts = _local_fact_map(local_mapping, formal_mapping)
+    _, formal_facts, formal_participants = _formal_maps(formal_mapping)
+    mapping = _mapping(local_mapping, 'local_alias_mapping')
+    return {
+        'contract': 'stage4-chapter-compilation-dependencies-v1',
+        'chapter_ordinal': chapter,
+        'fact_aliases': {
+            local: {'alias': alias, 'fact_id': formal_facts[alias][0]}
+            for local, alias in local_facts.items()
+        },
+        'participant_aliases': {
+            local: {'alias': alias, 'char_id': formal_participants[alias]}
+            for local, alias in mapping['participant_aliases'].items()
+        },
+    }
+
+
 def compile_blind_chapter_design(
     response: object,
     local_mapping: object,
@@ -1192,6 +1197,38 @@ def compile_blind_chapter_edit(
         chapter_entry_refs=list(source.get('entry_state_aliases') or []),
         where=f'ch{chapter}.human_chapter_edit',
     )
+
+
+def localize_blind_chapter_edit(
+    response: object, local_mapping: object, formal_mapping: object, *,
+    truth_chapter: object, chapter_weight: str,
+) -> dict[str, Any]:
+    """人工后继转成当前局部响应；原来源不改写，两个编译出口必须相等。"""
+    expected = compile_blind_chapter_edit(
+        response, formal_mapping, truth_chapter=truth_chapter, expected_weight=chapter_weight)
+    _ordinal_value, mapping = _local_fact_map(local_mapping, formal_mapping)
+    inverse = {opaque: local for local, opaque in mapping.items()}
+    raw = copy.deepcopy(dict(_mapping(response, 'human_chapter_edit')))
+    raw.pop('output_ordinal')
+    raw.pop('weight')
+
+    def aliases(values: list[str]) -> list[str]:
+        try:
+            return [inverse[value] for value in values]
+        except KeyError as exc:
+            raise BlindPlanError('人工章稿包含本章局部投影之外的事实') from exc
+
+    for key in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
+        raw[key]['fact_aliases'] = aliases(raw[key]['fact_aliases'])
+    for scene in raw['scenes']:
+        for key in ('land_fact_aliases', 'context_fact_aliases', 'entry_state_aliases', 'exit_state_aliases'):
+            scene[key] = aliases(scene[key])
+        scene['turn_fact_alias'] = aliases([scene['turn_fact_alias']])[0]
+    actual = compile_blind_chapter_design(raw, local_mapping, formal_mapping,
+        truth_chapter=truth_chapter, chapter_weight=chapter_weight)
+    if actual != expected:
+        raise BlindPlanError('人工章稿局部投影往返改变了正式设计')
+    return raw
 
 
 def assemble_blind_candidate(
@@ -1756,10 +1793,10 @@ def merge_evidence_bindings(
 
 
 __all__ = [
-    'BLIND_CONTRACT', 'FROZEN_V6_BLIND_CONTRACT',
+    'BLIND_CONTRACT',
     'BLIND_BOOK_STRATEGY_CONTRACT',
     'BLIND_CHAPTER_CONTRACT', 'BlindPlanError',
-    'build_blind_projection', 'build_frozen_v6_blind_projection',
+    'build_blind_projection',
     'build_blind_executor_projection',
     'build_blind_strategy_projection',
     'build_blind_chapter_projection',

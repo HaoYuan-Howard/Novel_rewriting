@@ -65,8 +65,7 @@ from novel.orchestrator.inspection import (
 )
 from novel.orchestrator.nodes import check_node
 from novel.orchestrator.state import (
-    readonly_ctx, stage2_legacy_blueprint_recovery_needed,
-    stage2_frozen_v6_subject_validated,
+    readonly_ctx,
     stage2_projection_recovery_needed,
 )
 from novel.store import ArtifactStore
@@ -114,9 +113,9 @@ def _human_how(stage: str, rule: str | None = None) -> str:
     ⚠ 一条都没有时**如实说没有**，不要编一个看起来像下一步的句子：
     「这一层没有 0 成本入口」与「有而我没告诉你」是两件事。
     """
-    if stage == 'stage2' and rule == 'conflict_stage_coverage':
+    if stage == 'stage2' and rule == 'opening_scope_valid':
         return (
-            '用 GlobalEdit 的 `conflict_stages_replace` 完整重画分段，再跑 '
+            '用 GlobalEdit 的 `source_blurb_replace` 提出有证据的连续开篇范围，再跑 '
             f'`stage2.global --apply-edit {STAGE2_GLOBAL_EDIT}`（0 成本）；'
             '付费 `--resample` 只作最后手段')
 
@@ -193,7 +192,6 @@ def inbox_from_snapshot(
     wontfix_total = 0
     trim_audits = _current_trim_audits(novel_dir, code)
     ov = snapshot.overview
-    legacy_blueprint_recovery = stage2_legacy_blueprint_recovery_needed(ov)
 
     for stage in STAGES:
         # ctx/store 仍用于本层旁路账与活动终态；报告只取 snapshot 中已经跑过的那一份。
@@ -210,9 +208,7 @@ def inbox_from_snapshot(
             # unreadable。这里不猜它有几条，按 0 聚合，保留其余层可用的待办。
             pass
 
-        items += _invalid_items(
-            store, stage,
-            suppress_legacy_blueprint=legacy_blueprint_recovery)
+        items += _invalid_items(store, stage)
         if stage == 'stage5':
             items += _stage5_chapter_invalids(store)
             items += _stage5_rejected_revisions(store)
@@ -224,8 +220,6 @@ def inbox_from_snapshot(
 
     items += _verification_items(novel_dir, code)
     items += _stage2_projection_recovery_items(ov)
-    items += _stage2_legacy_blueprint_recovery_items(ov)
-    items += _stage2_frozen_v6_disclosure_items(ov)
     items += _trim_verification_items(novel_dir, code, audits=trim_audits)
     stage6_workpack = _stage6_workpack_or_none(novel_dir, code)
     stage7_workpack = _stage7_workpack_or_none(novel_dir, code)
@@ -274,40 +268,9 @@ def _stage2_projection_recovery_items(ov) -> list[InboxItem]:
     return [InboxItem(
         kind='repairable', stage='stage2', chapter=None,
         rule='blueprint_character_projection',
-        what=('Stage2 Blueprint 称名投影缺失、损坏或未绑定当前最新 '
-              'formal/INVALID Global；不得把它当成整份 Global 未生成'),
-        how=('跑 `stage2.global --renormalize`：只从当前 Global + MainText '
-             '确定性重建投影，0 LLM、不会重采付费 Global'),
-    )]
-
-
-def _stage2_legacy_blueprint_recovery_items(ov) -> list[InboxItem]:
-    """旧 v6 来源边只需换账，不应重采已落盘的 Blueprint。"""
-    if not stage2_legacy_blueprint_recovery_needed(ov):
-        return []
-    return [InboxItem(
-        kind='repairable', stage='stage2', chapter=None,
-        rule='chapter_blueprints_legacy_inputs',
-        what=('当前 ChapterBlueprints v6 仍记录旧 `{MainText, Global}` 来源边；'
-              '称名投影已经 current/fresh，旧账不能证明真实消费 freshness'),
-        how=('跑 `stage2.blueprint --renormalize`：只重编译并刷新来源边，'
-             '0 LLM、不会重采付费 Blueprint'),
-    )]
-
-
-def _stage2_frozen_v6_disclosure_items(ov) -> list[InboxItem]:
-    """旧书可续不等于 v7：永久披露缺失的关系权威面。"""
-    if not stage2_frozen_v6_subject_validated(ov):
-        return []
-    return [InboxItem(
-        kind='human_only', stage='stage2', chapter=None,
-        rule='chapter_blueprints_frozen_v6_disclosure',
-        what=(
-            'ChapterBlueprints 是已由现存 Stage4A v1 truth 精确绑定的冻结 schema v6；'
-            '来源与既有候选仍匹配，但当时没有 v7 narrative_relations 权威面'),
-        how=(
-            '只允许保留既有审阅决定或走 Stage4A 零 wire 完整章替换；不得手补关系、'
-            '自动迁移、启动付费 relation repair/replan，交付必须保留本披露'),
+        what='Blueprint 称名投影缺失、损坏或未绑定当前人物登记',
+        how=('跑 `stage2.characters --revalidate --actor <id> --reason <why>`：'
+             '从当前人物登记免费重建称名投影；不会重采人物或知识'),
     )]
 
 
@@ -350,15 +313,9 @@ def _stage_rels(stage: str) -> list[str]:
     return list(seen)
 
 
-def _invalid_items(
-        store: ArtifactStore, stage: str, *,
-        suppress_legacy_blueprint: bool = False) -> list[InboxItem]:
+def _invalid_items(store: ArtifactStore, stage: str) -> list[InboxItem]:
     out: list[InboxItem] = []
     for rel in _stage_rels(stage):
-        # 旧来源边的 live INVALID 有唯一的 0-LLM renormalize 路。若这里再产
-        # 一条通用 revalidate，inbox 会同时给出两条互相冲突的操作指令。
-        if suppress_legacy_blueprint and rel == STAGE2_CHAPTER_BLUEPRINTS:
-            continue
         inv = paths.invalid_of(rel)
         if not store.exists(inv):
             continue
@@ -637,7 +594,11 @@ def _trim_verification_items(novel_dir, code: str, *, audits=None) -> list[Inbox
     store = ArtifactStore(readonly_ctx(novel_dir, 'stage5.write', code))
     out: list[InboxItem] = []
     for ordinal, (audit, _audit_sha256) in sorted(current.items()):
-        context = trim_resolution.verification_context(store, audit)
+        context = trim_resolution.verification_context(
+            store,
+            audit,
+            ordinal=ordinal,
+        )
         out.append(InboxItem(
             kind='verification', stage='stage5', chapter=ordinal,
             rule=f'trim_audit_ch{ordinal:02d}',
@@ -884,7 +845,7 @@ def _stage4_approval_items(
 
     if (
         structure.state in ('missing', 'expired')
-        and design.state != 'suspended'
+        and design.state != 'unavailable'
     ):
         out.append(InboxItem(
             kind='approval', stage='stage4', chapter=None,
@@ -917,12 +878,10 @@ def _stage4_approval_items(
         ))
 
     if (
-        design.state == 'suspended'
+        design.state == 'unavailable'
         and structure.state in ('unavailable', 'missing', 'expired')
     ):
-        # raw A 已审完但 frozen validation authority 永久不足；既没有可读 B
-        # workpack，也没有新的 reviewer 动作。继续调用 structure_workpack 只会
-        # 把同一兼容边界重新包装成异常或审批待办。
+        # 设计来源未知时没有可提交的 B 审批；不能把缺少主体显示成待审。
         return out
 
     try:

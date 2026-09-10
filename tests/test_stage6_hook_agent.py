@@ -78,7 +78,7 @@ def _patch_business(monkeypatch) -> SimpleNamespace:
         mat=prompts.Material(blocks=('完整而封闭的合成创作包。',), upto=1),
         src_hook='',
         secrets=[],
-        arc={},
+
         characters={},
         hook_mechanical={},
         upto=1,

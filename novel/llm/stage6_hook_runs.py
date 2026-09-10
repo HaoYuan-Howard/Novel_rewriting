@@ -43,10 +43,6 @@ def _run_spec() -> agent_runs.SingleSessionRunSpec:
             ctx.novel_dir, ctx.run_id),
         checkpoint_dir=lambda ctx: paths.stage6_hook_checkpoint_dir(
             ctx.novel_dir, ctx.run_id),
-        legacy_run_path=lambda ctx: paths.legacy_stage6_hook_run_path(
-            ctx.novel_dir, ctx.run_id),
-        legacy_checkpoint_dir=lambda ctx: paths.legacy_stage6_hook_checkpoint_dir(
-            ctx.novel_dir, ctx.run_id),
         incompatible_session_nodes=('stage6.semantic',),
     )
 

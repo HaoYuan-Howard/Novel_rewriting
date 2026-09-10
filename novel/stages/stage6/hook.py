@@ -9,7 +9,7 @@ hook.py —— `stage6.hook` 与 `stage6.approve` 的节点函数。
     `--identity`     0 成本恒等基线：同一把尺子量**原作文案段**
     `--recheck`      0 成本重判并写回（三条候选 + 定稿一起重跑归一与判据）
     `--revalidate`   0 成本把被闸门拦下的 `.INVALID` 提升为正式产物
-    （默认）         **付费**：初始整组与机械 HARD 局部修订共享每工作单元最多 4 次内容请求
+    （默认）         **付费**：初始整组与机械 HARD 局部修订共享同一工作单元的基础与人工追加内容额度
     `stage6.approve --pick N`  人定稿，0 成本
 
 ⚠⚠ **归一必须在判定之前。** 校验与落盘看**同一份最终字节**，不留两套。
@@ -123,11 +123,10 @@ class _Upstreams:
         projected = without_global_evidence(gg.model_dump(by_alias=True))
         assert isinstance(projected, dict)
         self.grounding_raw: dict = projected
-        self.arc: dict = projected.get('arc') or {}
         self.secrets: list[dict] = ((projected.get('canon') or {}).get('secrets') or [])
         self.characters: dict = (
             (projected.get('entities') or {}).get('characters') or {})
-        self.upto: int = lead_upto(self.arc)
+        self.upto: int = lead_upto(projected['source_blurb']['opening'])
         lead, missing, self.judged = lead_drafts(store, self.upto)
         self.mat = prompts.build_material(
             title=ctx.title, ctx=wc.model_dump(by_alias=True),
@@ -153,7 +152,7 @@ def _normalize_and_judge(text: str, up: _Upstreams) -> tuple[str, Mech, list[Fin
     problems = quote_problems_of(text, src_hook=up.src_hook)
     text, mech = normalize_hook(text, src_hook=up.src_hook)
     fs = checks.hook_findings(
-        text, mat=up.mat, secrets=up.secrets, arc=up.arc, characters=up.characters,
+        text, mat=up.mat, secrets=up.secrets, characters=up.characters,
         src_hook=up.src_hook, hook_mechanical=up.hook_mechanical,
         quote_problems=problems)
     return text, mech, fs
@@ -234,7 +233,7 @@ def _outcomes_for_rows(
     return checks.check(
         texts=[(label, text, list(findings))
                for label, text, findings in rows],
-        mat=up.mat, secrets=up.secrets, arc=up.arc,
+        mat=up.mat, secrets=up.secrets,
         lead_upto_ch=art.lead_upto,
         hook_chars=up.hook_mechanical.get('chars'),
         approved=approved, stale=list(stale), missing=list(missing),
@@ -481,7 +480,7 @@ def run_identity(ctx: RunContext) -> tuple[dict[str, str], CheckReport]:
             for r in _judgeable_rules() if r.rule != 'hook_reuses_source'}
     outcomes = checks.check(
         texts=[('原作文案段', up.src_hook, _labelled('原作文案段', fs))],
-        mat=up.mat, secrets=up.secrets, arc=up.arc,
+        mat=up.mat, secrets=up.secrets,
         lead_upto_ch=up.upto, hook_chars=up.hook_mechanical.get('chars'),
         approved=False, stale=[], missing=[]
     ) + semantic.unavailable_outcomes('恒等基线是 0 成本路，不跑付费语义审判')
@@ -873,7 +872,7 @@ def _legacy_hook_sequence(
         ctx: RunContext, source: _HookResponseSource,
         prepared: HookCandidateContext,
 ) -> HookCandidateBatch:
-    """legacy：保留原请求策略，当前槽持续改善；全组共用四次内容预算。"""
+    """legacy：保留原请求策略，当前槽持续改善；全组共用同一工作单元的有效内容额度。"""
     from novel.work_units import WorkUnitBudgetExhausted
     response = source.ask_json(
         prepared.system,
