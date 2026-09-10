@@ -186,6 +186,27 @@ def _response(task: SimpleNamespace, *, scope_count: int = 3) -> dict[str, Any]:
     }
 
 
+def test_hook_supported_edit_survives_compact_wire_with_its_own_locator():
+    task = _task(scope_count=1)
+    template = task.submission_options[0]['exact_request']['action']['input_payload']
+    template['source_blurb_replace'] = {
+        'facts': [{'kind': 'unresolved', 'claim_id': 'hook_001',
+                   'claim': '钩子独有信息', 'reason': '未找到正文重复表述'}],
+        'opening': {'kind': 'unresolved', 'reason': '范围另待裁决'},
+    }
+    response = _response(task, scope_count=1)
+    replacement = {
+        'facts': [{'kind': 'hook_supported', 'claim_id': 'hook_001',
+                   'claim': '钩子独有信息', 'hook_evidence': {'locator': '原钩子定位'}}],
+        'opening': {'kind': 'unresolved', 'reason': '范围另待裁决'},
+    }
+    response['payload']['edit']['source_blurb_replace'] = replacement
+    assembled = wire.assemble(task, json.dumps(response, ensure_ascii=False))
+    edit = GlobalEdit.model_validate(assembled['action']['input_payload'])
+    assert edit.source_blurb_replace.facts[0].hook_evidence.locator == '原钩子定位'
+    assert edit.source_blurb_replace.opening.kind == 'unresolved', '允许文案来源不能自动确认开篇范围'
+
+
 def _stage2_unver_options(*, safe: bool) -> tuple[SimpleNamespace, list[dict[str, Any]]]:
     """经现役 reviewer_tasks producer 生成真实的 UNVER 多选面。"""
     from tests.test_reviewer_tasks import _node_review_coverage

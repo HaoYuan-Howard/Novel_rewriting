@@ -77,6 +77,13 @@ def iter_global_evidence_slots(data: dict[str, Any]) -> Iterator[EvidenceSlot]:
             yield 'source_blurb.opening', opening, 'boundary_evidence'
 
 
+def iter_hook_evidence_slots(data: dict[str, Any]) -> Iterator[EvidenceSlot]:
+    """HookCopy 独立证据槽；不把钩子伪装成第 0/1 章正文。"""
+    for fact in (data.get('source_blurb') or {}).get('facts') or []:
+        if isinstance(fact, dict) and fact.get('kind') == 'hook_supported':
+            yield f"source_blurb.facts.{fact['claim_id']}.claim", fact, 'hook_evidence'
+
+
 def iter_knowledge_evidence_slots(data: dict[str, Any]) -> Iterator[EvidenceSlot]:
     """知识载体只拥有动态状态与非人物证据，不遍历静态注册表。"""
     entities = data.get('entities') if isinstance(data.get('entities'), dict) else {}
@@ -103,6 +110,8 @@ def without_global_evidence(data: object) -> object:
     for _path, owner, field in iter_global_evidence_slots(projected):
         owner.pop(field, None)
     for _path, owner, field in iter_knowledge_evidence_slots(projected):
+        owner.pop(field, None)
+    for _path, owner, field in iter_hook_evidence_slots(projected):
         owner.pop(field, None)
     # ``iter_global_evidence_slots`` 只把非空 fate 当作待举证事实；投影则必须连
     # fate=null 的占位 evidence 一并剥掉，避免证据字段进入下游 prompt/freshness。

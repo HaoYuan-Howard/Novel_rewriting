@@ -37,7 +37,9 @@ from contracts.invariants import (
 )
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
-from contracts.schema.api import Stage6ApprovalCandidate, Stage6ApprovalWorkpack
+from contracts.schema.api import (
+    Stage6ApprovalCandidate, Stage6ApprovalMaterials, Stage6ApprovalWorkpack,
+)
 from contracts.schema.report import CheckReport
 from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage4 import WriterContext
@@ -115,6 +117,7 @@ class _Upstreams:
         hook_copy = store.read(paths_hook_copy_model(), HOOK_COPY)
 
         self.gg, self.wc = gg, wc
+        self.source_hook: str = hook_copy.text
         self.src_hook: str = (hook_copy.text or '').strip()
         mechanical = hook_style_metrics(measure(self.src_hook))
         if not mechanical:
@@ -208,6 +211,7 @@ class _ApprovalBaseline:
     stale: tuple[str, ...]
     missing: tuple[str, ...]
     report: CheckReport
+    materials: Stage6ApprovalMaterials
 
 
 def _judged_text_rows(art: Hook, up: _Upstreams) -> tuple[_JudgedTextRow, ...]:
@@ -373,6 +377,7 @@ def _build_approval_baseline(
         stale=tuple(stale),
         missing=tuple(missing),
         report=report,
+        materials=_approval_materials(store, up),
     )
 
 
@@ -2551,6 +2556,20 @@ def _approval_workpack_snapshot(
         store, art, approval_baseline=approval_baseline)
 
 
+def _approval_materials(store: ArtifactStore, up: _Upstreams) -> Stage6ApprovalMaterials:
+    """冻结原钩子、已接受主张及 canonical 正文；Commander 无须另读盘。"""
+    chapters, missing, _judged = lead_drafts(store, len(up.wc.chapters))
+    if missing:
+        raise UpstreamMissing(f'文案终审缺少正式正文第 {missing} 章，不能用空材料代替核验')
+    return Stage6ApprovalMaterials(
+        source_hook=up.source_hook,
+        source_blurb=up.gg.source_blurb,
+        rewritten_chapters=[{
+            'chapter_ordinal': row['output_ordinal'], 'text': row['text'],
+        } for row in chapters],
+    )
+
+
 def _approval_workpack_snapshot_uncached(
     store: ArtifactStore, art: Hook, *,
     approval_baseline: _ApprovalBaseline | None = None,
@@ -2565,10 +2584,12 @@ def _approval_workpack_snapshot_uncached(
         report = _report(
             store.ctx, store, _judge_artifact(subject, up, store), subject,
             report_node='stage6.approve')
+        materials = _approval_materials(store, up)
     else:
         _require_matching_approval_baseline(
             store, subject, approval_baseline)
         report = approval_baseline.report
+        materials = approval_baseline.materials
     rows = _approval_candidate_rows(store, subject)
     check = compact_approval_check(report)
     judge_rankings = semantic.current_judge_rankings(store, subject)
@@ -2578,6 +2599,7 @@ def _approval_workpack_snapshot_uncached(
         'kind': 'stage6',
         'sid': store.ctx.sid,
         'rationale': subject.rationale,
+        'materials': materials.model_dump(mode='json'),
         'check': check.model_dump(mode='json'),
         'judge_rankings': judge_rankings,
         'candidates': [row.model_dump(mode='json') for row in rows],
@@ -2598,6 +2620,7 @@ def _approval_workpack_snapshot_uncached(
         review_token='s6r3_' + '0' * 64,
         artifact_subject_sha256=artifact_subject_sha256,
         rationale=subject.rationale,
+        materials=materials,
         check=check,
         judge_rankings=judge_rankings,
         candidates=rows,

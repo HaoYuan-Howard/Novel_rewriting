@@ -2747,8 +2747,10 @@ def _stage2_business_sha256(
     binding = global_pack.get('binding') if isinstance(global_pack, Mapping) else None
     if not isinstance(binding, Mapping):
         raise ReviewerTaskError('Stage2 global workpack 缺业务 binding')
+    from contracts.invariants import SOURCE_BLURB_EVIDENCE_POLICY
     business: dict[str, Any] = {
         'waiting_on': waiting_on,
+        'source_blurb_evidence_policy': SOURCE_BLURB_EVIDENCE_POLICY,
         'expected_source_sha256': binding.get('expected_source_sha256'),
         'main_text_subject_sha256': binding.get('main_text_subject_sha256'),
     }

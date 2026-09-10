@@ -495,6 +495,28 @@ describe('request-shaped cache and diagnostics', () => {
 })
 
 describe('display-only spoiler projection', () => {
+  it('masks hook evidence and failed locators while preserving their distinct source state', () => {
+    const raw = globalFixture()
+    raw.source_blurb.facts = [{
+      kind: 'hook_supported', claim_id: 'hook_001', claim: '钩子独有秘密',
+      hook_evidence: { source: { text: '钩子证据', start: 0, end: 4 }, unresolved_locator: null },
+    }, {
+      kind: 'hook_supported', claim_id: 'hook_002', claim: '待定位的钩子主张',
+      hook_evidence: { source: null, unresolved_locator: '不能暴露的失败定位' },
+    }]
+    const hidden = projectGlobalSpoilers(raw, false)
+    expect(hidden.source_blurb.facts[0]).toMatchObject({
+      kind: 'hook_supported', claim: SPOILER_PLACEHOLDER,
+      hook_evidence: { source: { text: SPOILER_PLACEHOLDER }, unresolved_locator: null },
+    })
+    expect(hidden.source_blurb.facts[1]).toMatchObject({
+      hook_evidence: { source: null, unresolved_locator: SPOILER_PLACEHOLDER },
+    })
+    expect(JSON.stringify(hidden)).not.toContain('钩子独有秘密')
+    expect(JSON.stringify(hidden)).not.toContain('不能暴露的失败定位')
+    expect(projectGlobalSpoilers(raw, true)).toBe(raw)
+  })
+
   it('projects all four configured paths before screens consume them', () => {
     const raw = globalFixture()
     const hidden = projectGlobalSpoilers(raw, false)

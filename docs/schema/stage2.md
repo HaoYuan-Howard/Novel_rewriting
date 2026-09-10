@@ -145,7 +145,21 @@ Stage4 下发只认这格；旧的人名/埋点启发式只作 INFO 对账。
 ### 1.3 源文案事实与开篇范围
 
 KnowledgeGrounding v6 正式读取 MainText、HookCopy 与人物实际投影。`source_blurb.facts` 按 `claim_id`
-保存 supported 主张与正文证据，或 unresolved 主张与原因；空列表也必须接受完整性审阅。
+保存三种显式分支；空列表也必须接受完整性审阅：
+
+- `supported`：主张与正文 `FactEvidence`。
+- `hook_supported`：原作者在开头钩子独立给出的主张，与 `hook_evidence: HookFactEvidence`。
+  证据只指向 HookCopy，`source` 为其中的精确 SourceSpan，不伪造正文章号。
+  模型和人工编辑只交 `{locator}`；代码从当前文案回取坐标。失败保留 `source=null` 与
+  `unresolved_locator`，供免费 typed 编辑或 `--revalidate`，不得用正文猜补。
+- `unresolved`：来源不明、歧义或与正文存在明确矛盾的主张与原因，继续阻断。
+
+正文没有重复钩子信息本身不构成错误。`hook_supported` 仍须由 Commander 阅读文案与全书
+排查矛盾并显式裁决；不是自动 PASS。这一分支只支持 Stage6 文案创作，不要求逐章正文补写，
+不据此新增人物动态、关系、秘密或世界规则，也不改变 Stage5 场景披露边界。
+本次只扩展现役 v6 的判别联合，原 supported/unresolved 字节与语义不变；不迁移或补写旧版产物。
+已有 unresolved 用现役 GlobalEdit typed 替换后重审，已购买人物、知识与无关决定继续保留。
+
 `opening` 是 proposed（`through_chapter/rationale/boundary_evidence`）或 unresolved（reason）。
 提案代表从第 1 章到终点的连续材料范围；终点与边界证据属于同章，语义合理性仍由 Global Commander 判断。
 未知事实、未知范围的审阅项 `resolution_required=true`，不能直接 PASS；先 typed 修订再审阅。
@@ -155,9 +169,11 @@ Stage6 只消费已接受提案，缺失或未知时停止。文学 arc 整体�
 
 人物与知识共用 `GlobalEvidenceCandidateTable` 的段落候选算法。每轮只从 MainText 的
 `paragraph_spans` 构造连续候选 ID，prompt 和 lookup 使用同一张表。人物响应为
-`CharactersResponse`，知识响应为 `KnowledgeResponse`；证据槽只交 `{evidence_candidate_id}`。
+`CharactersResponse`，知识响应为 `KnowledgeResponse`；正文证据槽只交 `{evidence_candidate_id}`。
 格式正确但不在本表的 ID，须在 acceptance、checkpoint 与业务落盘前拒绝。代码编译
 `FactEvidence + SourceSpan`，模型不提交章号、locator、文件摘要或正式区间。
+独立钩子证据是上述正文候选表之外的明确分支，只交文案 `{locator}`，由同一 producer 回取、
+HARD 验证与恢复；审阅 EvidenceRef 的 artifact 明确为 `stage1/hook_copy.json`。
 
 动态人物键只在 provider wire 上转为带 `char_id` 的行数组，重复 ID 拒绝；落盘时仍按
 当前 typed 模型保存字典。知识仅输出 `character_states`，不重新输出静态身份。知识请求

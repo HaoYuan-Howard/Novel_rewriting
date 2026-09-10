@@ -147,7 +147,7 @@ from contracts.schema.orchestration import (
 )
 from contracts.schema.stage0 import Stage0RevisionOrigin, Stage0Warning
 from contracts.schema.stage2 import (
-    BlueprintProvenance, SourceBlurbGrounding, FactEvidence, GlobalProvenance,
+    BlueprintProvenance, SourceBlurbGrounding, FactEvidence, GlobalProvenance, HookFactEvidence,
     DialogueSemantics, LiteralRequirement, RelationVisibility, Setting, WorldRule,
 )
 from contracts.schema.stage4 import (
@@ -2494,6 +2494,26 @@ class Stage6ApprovalCandidate(FrozenModel):
         return self
 
 
+class Stage6ApprovalChapter(FrozenModel):
+    chapter_ordinal: int = Field(ge=1)
+    text: str = Field(min_length=1)
+
+
+class Stage6ApprovalMaterials(FrozenModel):
+    """终审可实际核验的事实来源；原钩子与重写正文各只下发一次。"""
+
+    source_hook: str = Field(min_length=1)
+    source_blurb: SourceBlurbGrounding[FactEvidence, HookFactEvidence]
+    rewritten_chapters: list[Stage6ApprovalChapter] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _chapters_cover_the_reading_order(self) -> 'Stage6ApprovalMaterials':
+        if [row.chapter_ordinal for row in self.rewritten_chapters] != list(
+                range(1, len(self.rewritten_chapters) + 1)):
+            raise ValueError('文案终审正文必须按阅读序完整覆盖连续章号')
+        return self
+
+
 class Stage6ApprovalWorkpack(FrozenModel):
     """Stage6 当前候选集的紧凑终审包。
 
@@ -2511,6 +2531,7 @@ class Stage6ApprovalWorkpack(FrozenModel):
     review_token: str = Field(pattern=r'^s6r3_[0-9a-f]{64}$')
     artifact_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     rationale: str = Field(min_length=1)
+    materials: Stage6ApprovalMaterials
     check: CompactApprovalCheck
     #: 两名盲评各自的原始完整排序；逐候选 verdict/reason/evidence 在
     #: ``candidates[].semantic_decision.judges``，两者合起来才是未压扁的 A/B 证据。
@@ -3510,7 +3531,7 @@ class GlobalView(StrictModel):
     world_rules: list[WorldRule]
     #: 空数组 = 这本书没抽到秘密。**那可能是漏抽了，不是「无」**（探针盲区）。
     secrets: list[GlobalSecretLine]
-    source_blurb: SourceBlurbGrounding[FactEvidence]
+    source_blurb: SourceBlurbGrounding[FactEvidence, HookFactEvidence]
 
     #: 全屏解引用失败的总数（relations 两端 + secrets.knowledge_events）。
     #: **读数不是判定**——它是给人看「这份产物里有几个说不出名字的 id」。

@@ -66,11 +66,20 @@ def test_scope_separates_world_knowledge_reader_reveal_and_setup(pair):
     assert any(row.entry_fact_refs for row in scope.obligations if row.kind == 'knowledge_event')
 
 
-def test_unrelated_knowledge_change_inherits_exact_obligations(pair):
+@pytest.mark.parametrize('change', ['claim', 'hook_supported'])
+def test_unrelated_knowledge_change_inherits_exact_obligations(pair, change):
     _registry, knowledge = pair
     old = _scope(knowledge)
     changed = knowledge.model_copy(deep=True)
-    changed.source_blurb.facts[0].claim += '订正'
+    if change == 'claim':
+        changed.source_blurb.facts[0].claim += '订正'
+    else:
+        from contracts.schema.stage2 import HookSupportedBlurbFact, HookFactEvidence
+        changed.source_blurb.facts[0] = HookSupportedBlurbFact[HookFactEvidence].model_validate({
+            'kind': 'hook_supported', 'claim_id': changed.source_blurb.facts[0].claim_id,
+            'claim': '钩子中独立给出的信息',
+            'hook_evidence': {'source': {'text': '钩子', 'start': 0, 'end': 2}},
+        })
     current = _scope(changed, digest='e' * 64)
     assert current.scope_sha256 != old.scope_sha256
     assert current.obligations == old.obligations

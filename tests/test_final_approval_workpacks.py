@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.schema.api import (
-    CompactApprovalCheck, Stage6ApprovalWorkpack, Stage7ApprovalWorkpack,
+    CompactApprovalCheck, Stage6ApprovalMaterials, Stage6ApprovalWorkpack, Stage7ApprovalWorkpack,
 )
 from contracts.schema.stage6 import ApprovedHook, HookApprovalResolution
 from contracts.schema.stage7 import (
@@ -38,6 +38,22 @@ class _Report(SimpleNamespace):
         return {'node': getattr(self, 'node', 'synthetic-approval-check')}
 
 
+def _stage6_materials() -> Stage6ApprovalMaterials:
+    return Stage6ApprovalMaterials.model_validate({
+        'source_hook': '新婚夜收到来信。',
+        'source_blurb': {
+            'facts': [{'kind': 'hook_supported', 'claim_id': 'hook_001',
+                       'claim': '新婚夜收到来信', 'hook_evidence': {
+                           'source': {'text': '新婚夜收到来信。', 'start': 0, 'end': 8},
+                           'unresolved_locator': None}}],
+            'opening': {'kind': 'proposed', 'through_chapter': 1, 'rationale': '合成开篇范围',
+                        'boundary_evidence': {'chapter_ordinal': 1,
+                                              'source': {'text': '天亮了。', 'start': 0, 'end': 4}}},
+        },
+        'rewritten_chapters': [{'chapter_ordinal': 1, 'text': '天亮了。'}],
+    })
+
+
 def _stage6_snapshot_env(monkeypatch):
     art = _hook([TEXT_A, TEXT_B, TEXT_C])
     monkeypatch.setattr(
@@ -50,6 +66,7 @@ def _stage6_snapshot_env(monkeypatch):
     monkeypatch.setattr(
         semantic, 'current_judge_rankings', lambda _store, _art: None)
     monkeypatch.setattr(hook, '_Upstreams', lambda *_args: object())
+    monkeypatch.setattr(hook, '_approval_materials', lambda *_args: _stage6_materials())
     monkeypatch.setattr(hook, '_judge_artifact', lambda *_args: [])
     monkeypatch.setattr(
         hook, '_report', lambda *_args, **_kwargs: _Report(node='stage6.approve'))
@@ -68,7 +85,7 @@ def test_stage6_workpack_hash_is_stable_after_approval_and_old_approval_is_not_c
     before, _ = hook._approval_workpack_snapshot(store, art)
     public = before.model_dump(mode='json')
     assert before.v == 3
-    assert before.review_contract_version == 'stage6-final-review-v3'
+    assert before.review_contract_version == 'stage6-final-review-v4'
     assert 'code_version' not in public and 'rules_fingerprint' not in public
     with pytest.raises(ValidationError, match='disposition'):
         Stage6ApprovalWorkpack.model_validate({
@@ -145,6 +162,25 @@ def test_stage6_workpack_pins_its_report_node_when_rechecked_by_stage7(
     assert seen == {'report_node': 'stage6.approve'}
 
 
+@pytest.mark.parametrize('part', ['hook', 'claim', 'body'])
+def test_stage6_visible_fact_materials_invalidate_the_review_identity(monkeypatch, part):
+    store, art = _stage6_snapshot_env(monkeypatch)
+    before, _ = hook._approval_workpack_snapshot(store, art)
+    data = _stage6_materials().model_dump(mode='json')
+    if part == 'hook':
+        data['source_hook'] += '原钩子新增限定。'
+    elif part == 'claim':
+        data['source_blurb']['facts'][0]['claim'] += '并确认了寄信人'
+    else:
+        data['rewritten_chapters'][0]['text'] += '她并未收到来信。'
+    changed_materials = Stage6ApprovalMaterials.model_validate(data)
+    monkeypatch.setattr(hook, '_approval_materials', lambda *_args: changed_materials)
+    after, _ = hook._approval_workpack_snapshot(store, art)
+    assert after.artifact_subject_sha256 == before.artifact_subject_sha256
+    assert after.review_identity_sha256 != before.review_identity_sha256
+    assert after.review_token != before.review_token
+
+
 def test_stage6_current_check_reuses_candidate_baseline_in_one_invocation(
     monkeypatch,
 ) -> None:
@@ -171,7 +207,7 @@ def test_stage6_current_check_reuses_candidate_baseline_in_one_invocation(
             (f'c{index}', row.text, tuple())
             for index, row in enumerate(base_art.candidates, 1)
         ),
-        stale=(), missing=(), report=report,
+        stale=(), missing=(), report=report, materials=_stage6_materials(),
     )
     normalized: list[str] = []
     observed: dict[str, object] = {}
@@ -208,7 +244,7 @@ def test_stage6_workpack_consumes_exact_invocation_baseline_without_rejudge(
     baseline = hook._ApprovalBaseline(
         store=store,
         artifact_subject_sha256=hook._approval_subject_sha256(art),
-        texts=(), stale=(), missing=(), report=report,
+        texts=(), stale=(), missing=(), report=report, materials=_stage6_materials(),
     )
     monkeypatch.setattr(
         hook, '_judge_artifact',

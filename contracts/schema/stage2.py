@@ -382,6 +382,26 @@ class Secret(StrictModel):
 
 
 EvidenceT = TypeVar('EvidenceT')
+HookEvidenceT = TypeVar('HookEvidenceT')
+
+
+class HookEvidenceLocator(StrictModel):
+    """源文案内的短定位；不伪造正文章号。"""
+
+    locator: str = Field(min_length=1, max_length=160)
+
+
+class HookFactEvidence(StrictModel):
+    """HookCopy 的精确码点证据；失败定位保留供免费修订/复验。"""
+
+    source: SourceSpan | None
+    unresolved_locator: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode='after')
+    def _located_evidence_has_no_failed_locator(self) -> HookFactEvidence:
+        if self.source is not None and self.unresolved_locator is not None:
+            raise ValueError('已定位文案证据不得同时保留失败 locator')
+        return self
 
 
 class SupportedBlurbFact(StrictModel, Generic[EvidenceT]):
@@ -391,6 +411,15 @@ class SupportedBlurbFact(StrictModel, Generic[EvidenceT]):
     claim_id: str = Field(pattern=r'^hook_\d{3}$')
     claim: str = Field(min_length=1)
     evidence: EvidenceT
+
+
+class HookSupportedBlurbFact(StrictModel, Generic[HookEvidenceT]):
+    """原作者在钩子中独立给出的信息；不产生正文章补写义务。"""
+
+    kind: Literal['hook_supported']
+    claim_id: str = Field(pattern=r'^hook_\d{3}$')
+    claim: str = Field(min_length=1)
+    hook_evidence: HookEvidenceT
 
 
 class UnresolvedBlurbFact(StrictModel):
@@ -414,11 +443,11 @@ class UnresolvedOpeningScope(StrictModel):
     reason: str = Field(min_length=1)
 
 
-class SourceBlurbGrounding(StrictModel, Generic[EvidenceT]):
+class SourceBlurbGrounding(StrictModel, Generic[EvidenceT, HookEvidenceT]):
     """正式消费 stage1/hook_copy 的事实与开篇范围，不保存文学分析或正文副本。"""
 
     facts: list[Annotated[
-        SupportedBlurbFact[EvidenceT] | UnresolvedBlurbFact,
+        SupportedBlurbFact[EvidenceT] | HookSupportedBlurbFact[HookEvidenceT] | UnresolvedBlurbFact,
         Field(discriminator='kind'),
     ]]
     opening: Annotated[
@@ -490,7 +519,7 @@ class GlobalGrounding(StrictModel):
 
     entities: Entities
     canon: Canon
-    source_blurb: SourceBlurbGrounding[FactEvidence]
+    source_blurb: SourceBlurbGrounding[FactEvidence, HookFactEvidence]
 
     #: `inputs` 绑定实际读取的 MainText 与 HookCopy；不能用正文身份替代源文案身份。
     provenance: GlobalProvenance = Field(alias='_provenance')
@@ -1038,7 +1067,7 @@ class GlobalEdit(StrictModel):
     secrets_replace: list[SecretResponse] | None = None
     world_rules_replace: list[WorldRuleResponse] | None = None
     relations_replace: list[RelationResponse] | None = None
-    source_blurb_replace: SourceBlurbGrounding[EvidenceLocator] | None = None
+    source_blurb_replace: SourceBlurbGrounding[EvidenceLocator, HookEvidenceLocator] | None = None
     collection_edits: list[GlobalCollectionEdit] = Field(default_factory=list)
     post_edit_review: GlobalEditReviewAttestation | None = None
 

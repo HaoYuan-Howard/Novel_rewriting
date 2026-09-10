@@ -219,7 +219,9 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 > 业务证据、可见 finding 或审阅契约变化才改变人审适用性。
 >
 > Stage6 另携三条完整候选（正文、subject SHA、mech/findings、semantic 状态、合并 decision、每名 judge
-> 的 verdict/reason/evidence、质量分/名次）与 A/B 原始 `judge_rankings`。Stage7 另携完整
+> 的 verdict/reason/evidence、质量分/名次）与 A/B 原始 `judge_rankings`；`materials` 下发原钩子、已接受
+> `source_blurb` 和按阅读序的完整 `rewritten_chapters`，各一份，纳入 review identity。
+> 审阅契约 `stage6-final-review-v4` 允许钩子独立证据，正文反证仍须核验。Stage7 另携完整
 > 内部 decision subject、surname map、characters/aliases、extra subs、kept 明细、逐旧字面的真实
 > `replacement_hits`、residual 上下文/baseline、book findings 与 identity。approve 请求必须同时提交
 > 同一份包的 opaque `review_token`；服务端重建后任一漂移关闭式拒绝。`already_current` 必须携仍绑定本包的

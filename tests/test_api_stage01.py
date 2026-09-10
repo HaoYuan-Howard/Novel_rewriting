@@ -60,6 +60,35 @@ def _upload(client: TestClient) -> dict:
     return body
 
 
+def test_stage0_cli_approval_projects_current_revision_without_service_stamp(root: Path):
+    from novel.cli import main as cli
+    from novel.orchestrator import approvals
+
+    with TestClient(create_app(root)) as first:
+        sid = _upload(first)['sid']
+        report = first.get(f'/api/novels/{sid}/stage0/report').json()
+    assert cli.main([
+        'run', 'stage0.approve', sid, '--base', str(root),
+        '--expected-revision-id', report['revision_id'],
+        '--actor', 'cli-reviewer', '--reason', '核对完整保留与移除文本后批准',
+    ]) in (0, 1)
+    assert approvals._read_raw(root, sid).gate['s0'] is False
+    from novel import paths
+    assert approvals._current_typed_gate_proof(
+        paths.resolve_novel_dir(root, sid), 's0', approvals._read_raw(root, sid))
+    before = {str(path.relative_to(root)): path.read_bytes()
+              for path in root.rglob('*') if path.is_file()}
+    for _ in range(2):
+        with TestClient(create_app(root)) as restarted:
+            report = restarted.get(f'/api/novels/{sid}/stage0/report').json()
+            doc = restarted.get(f'/api/novels/{sid}/approvals').json()
+            assert report['executable'] is True
+            assert doc['gate']['s0'] is True
+    assert {str(path.relative_to(root)): path.read_bytes()
+            for path in root.rglob('*') if path.is_file()} == before
+    assert approvals._read_raw(root, sid).gate['s0'] is False
+
+
 def test_stage0_landed_job_survives_a_stamp_writer_conflict(
         client: TestClient, root: Path, monkeypatch):
     """s0 盖章与 edits 共用 helper；抢锁只披露，不篡改 jobs.run 终态。"""

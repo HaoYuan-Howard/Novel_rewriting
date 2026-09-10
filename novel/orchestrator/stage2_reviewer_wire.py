@@ -35,6 +35,7 @@ from typing import Annotated, Any, Literal, Protocol
 from pydantic import Field, ValidationError, create_model
 
 from contracts.schema.base import StrictModel
+from contracts.schema.stage2 import HookEvidenceLocator
 from contracts.schema.common import Sha256
 from contracts.schema.evaluation import (
     EvidenceRef,
@@ -133,7 +134,7 @@ _REPLACEMENT_WIRE_TYPES: dict[str, Any] = {
     'secrets_replace': list[SecretResponse] | None,
     'world_rules_replace': list[WorldRuleResponse] | None,
     'relations_replace': list[RelationResponse] | None,
-    'source_blurb_replace': SourceBlurbGrounding[EvidenceLocator] | None,
+    'source_blurb_replace': SourceBlurbGrounding[EvidenceLocator, HookEvidenceLocator] | None,
 }
 
 

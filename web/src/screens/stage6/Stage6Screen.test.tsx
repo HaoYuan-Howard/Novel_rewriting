@@ -14,6 +14,26 @@ afterEach(() => {
 })
 
 describe('Stage6Screen audited approval', () => {
+  it('shows hook-only evidence and the exact rewritten body from the approval workpack', async () => {
+    const fixture = await mockApi.getStage6(SAMPLE_SID)
+    const workpack = await mockApi.getStage6ApprovalWorkpack(SAMPLE_SID)
+    workpack.materials.source_hook = '新婚夜收到来信。'
+    workpack.materials.source_blurb.facts = [{
+      kind: 'hook_supported', claim_id: 'hook_001', claim: '新婚夜收到来信',
+      hook_evidence: { source: { text: '收到来信', start: 3, end: 7 }, unresolved_locator: null },
+    }]
+    workpack.materials.rewritten_chapters = [{ chapter_ordinal: 1, text: '天亮后，她走出了院门。' }]
+    vi.spyOn(api, 'getStage6').mockResolvedValue(fixture)
+    vi.spyOn(api, 'getStage6ApprovalWorkpack').mockResolvedValue(workpack)
+    vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
+    renderRoute(<Stage6Screen />, `/n/${SAMPLE_SID}/stage6`)
+    fireEvent.click(await screen.findByText('核验材料 · 1 章正文 · 1 条钩子主张'))
+    expect(screen.getByText('hook_001 · 钩子独立支持')).toBeVisible()
+    expect(screen.getByText('收到来信')).toBeVisible()
+    fireEvent.click(screen.getByText('第 1 章正文'))
+    expect(screen.getByText('天亮后，她走出了院门。')).toBeVisible()
+  })
+
   it('shows every contradiction field as an UNVER clue the human must read', async () => {
     const fixture = await mockApi.getStage6(SAMPLE_SID)
     const workpack = await mockApi.getStage6ApprovalWorkpack(SAMPLE_SID)

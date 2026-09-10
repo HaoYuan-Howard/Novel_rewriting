@@ -1947,12 +1947,17 @@ export const mockApi: Api = {
         v: 3,
         kind: 'stage6',
         sid,
-        review_contract_version: 'stage6-final-review-v3',
+        review_contract_version: 'stage6-final-review-v4',
         review_identity_sha256,
         validation_seal_sha256: '9'.repeat(64),
         review_token: 's6r3_' + workpack_sha256,
         artifact_subject_sha256: 'a'.repeat(64),
         rationale: view.rationale,
+        materials: {
+          source_hook: view.source_hook_text,
+          source_blurb: fx<Stage2Global>('global.json').source_blurb,
+          rewritten_chapters: [{ chapter_ordinal: 1, text: '合成终审正文，仅用于界面测试。' }],
+        },
         check: {
           rules_scanned: 0,
           counts: { ok: 0, hit: 0, unver: 0, skipped: 0 },

@@ -37,13 +37,18 @@ knowledge_events 记录世界内主体最早知情的章及证据；subject 是 
 世界内知情、读者揭示、事实发生三者分开，不根据其中一项推测另一项。
 
 【source_blurb】
-完整读取独立源文案，facts 用 hook_001…覆盖可核验主张：supported 给 claim 与正文证据；
-无支持、歧义或矛盾用 unresolved + reason，不伪造证据或删掉问题。修辞不强作事实。
+源文案就是原作者放在正文章前吸引读者的开头钩子。完整读取，facts 用 hook_001…
+覆盖可核验主张：supported 给 claim 与正文证据；钩子明确给出而正文未重复的信息
+用 hook_supported + claim + hook_evidence:{locator:原文案内≤160字的唯一定位}。
+仅钩子支持的信息只用于文案创作，不要求正文补写，不据此新增人物动态、关系、世界规则
+或秘密。正文未重复不等于冲突；来源不明、歧义或正文明确矛盾用 unresolved + reason，
+不伪造证据或删掉问题，修辞不强作事实。
 opening 给从第 1 章连续到 through_chapter 的开篇范围：proposed 须附 rationale 与
 终点章 boundary_evidence；不明确用 unresolved + reason，不能默认第 1 章或按篇幅猜测。
 范围不是秘密披露授权；必要原文与事实完整性仍由既有 Commander 核验。
 
-所有证据只填本次表内 evidence_candidate_id（e000001…），不抄 locator、章号或 SourceSpan；
+正文证据只填本次表内 evidence_candidate_id（e000001…），不抄 locator、章号或 SourceSpan；
+仅 hook_supported 的 hook_evidence 填源文案定位，不造第 0 章或第 1 章证据。
 代码从同一表回取原文。只通过声明的结构化出口返回 entities/canon/source_blurb。
 """)
 

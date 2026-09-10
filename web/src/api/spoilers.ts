@@ -43,7 +43,15 @@ export function projectGlobalSpoilers(raw: Stage2Global, reveal: boolean): Stage
     source_blurb: {
       facts: raw.source_blurb.facts.map((fact) => fact.kind === 'supported'
         ? { ...fact, claim: SPOILER_PLACEHOLDER, evidence: maskEvidence(fact.evidence) }
-        : { ...fact, claim: SPOILER_PLACEHOLDER, reason: SPOILER_PLACEHOLDER }),
+        : fact.kind === 'hook_supported'
+          ? { ...fact, claim: SPOILER_PLACEHOLDER,
+            hook_evidence: {
+              source: fact.hook_evidence.source === null ? null
+                : { ...fact.hook_evidence.source, text: SPOILER_PLACEHOLDER },
+              unresolved_locator: fact.hook_evidence.unresolved_locator === null
+                ? null : SPOILER_PLACEHOLDER,
+            } }
+          : { ...fact, claim: SPOILER_PLACEHOLDER, reason: SPOILER_PLACEHOLDER }),
       opening: raw.source_blurb.opening.kind === 'proposed'
         ? { ...raw.source_blurb.opening, rationale: SPOILER_PLACEHOLDER,
           boundary_evidence: maskEvidence(raw.source_blurb.opening.boundary_evidence) }

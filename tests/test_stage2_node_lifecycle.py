@@ -223,6 +223,12 @@ def test_global_decisions_replay_receipt_without_new_timestamp_or_model(book, mo
         with pytest.raises(expected):
             global_review.apply_file(ctx, str(target))
     before_replay = (book / global_review.REL).read_bytes()
+    assert global_review.submitted_decisions_is_current(
+        book.parent, ctx.sid, encode_artifact(STAGE2_GLOBAL_REVIEW_DECISIONS, request)
+    ) is (window == 'submitted')
+    assert not global_review.submitted_decisions_is_current(
+        book.parent, ctx.sid, encode_artifact(STAGE2_GLOBAL_REVIEW_DECISIONS, request),
+        require_action_complete=True)
     restored = global_review.apply_file(ctx, str(target))
     after_replay = (book / global_review.REL).read_bytes()
     from contracts.schema.evaluation import GlobalReviewDecisionSet
@@ -233,6 +239,36 @@ def test_global_decisions_replay_receipt_without_new_timestamp_or_model(book, mo
     if window == 'submitted':
         assert before_replay == after_replay
     assert approvals.get(book.parent, ctx.sid, include_spawns=False).stage2_reviews['stage2.global'].state == 'accepted'
+    assert global_review.submitted_decisions_is_current(
+        book.parent, ctx.sid, encode_artifact(STAGE2_GLOBAL_REVIEW_DECISIONS, request),
+        require_action_complete=True)
+
+
+@pytest.mark.parametrize('decision', ['FAIL', 'UNVER'])
+def test_landed_negative_global_decisions_finish_without_node_acceptance(book, decision):
+    from contracts.artifacts import STAGE2_GLOBAL_REVIEW_DECISIONS
+    from contracts.schema.evaluation import GlobalReview
+    ctx = _ctx(book, 'stage2.global', paid=False)
+    store = ArtifactStore(ctx)
+    current = store.read_own(GlobalReview, global_review.REL)[0]
+    target = next(row for row in current.items if row.kind == 'opening_scope')
+    request = encode_artifact(STAGE2_GLOBAL_REVIEW_DECISIONS, {
+        'actor': 'global-commander', 'decisions': [{
+            'item_id': target.item_id, 'expected_subject_sha256': target.subject_sha256,
+            'state': decision, 'reason': '开篇范围证据仍待操作者裁决', 'evidence': [],
+        }],
+    })
+    path = book / STAGE2_GLOBAL_REVIEW_DECISIONS
+    path.write_text(json.dumps(request, ensure_ascii=False), encoding='utf-8')
+    global_review.apply_file(ctx, str(path))
+    assert not global_review.generation_status(ctx)[0].safe
+    with pytest.raises(ApprovalRequired):
+        approvals.require_stage2_node_accepted(book.parent, ctx.sid, 'stage2.global')
+    assert global_review.submitted_decisions_is_current(
+        book.parent, ctx.sid, request, require_action_complete=True)
+    before = (book / global_review.REL).read_bytes()
+    global_review.apply_file(ctx, str(path))
+    assert (book / global_review.REL).read_bytes() == before
 
 
 @pytest.mark.parametrize('decision', ['uncertain', 'stop'])

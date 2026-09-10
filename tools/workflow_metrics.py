@@ -59,7 +59,10 @@ from contracts.invariants import (                                # noqa: E402
     BLUEPRINT_ARCHITECTURE, NODES, STAGES, WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS,
     commander_work_unit, review_effect_of,
 )
-from contracts.schema import ARTIFACT_SPECS, artifact_key          # noqa: E402
+from contracts.schema import (                                    # noqa: E402
+    ARTIFACT_SPECS, ArtifactVersionError, artifact_key, decode_artifact,
+)
+from pydantic import ValidationError                              # noqa: E402
 from contracts.schema.evaluation import GlobalReview               # noqa: E402
 from contracts.schema.characters import CharacterRegistry         # noqa: E402
 from contracts.schema.knowledge import KnowledgeGrounding         # noqa: E402
@@ -1048,9 +1051,17 @@ def _artifact_run_binding(
     audit_rows: list[dict[str, Any]], run_id: str | None,
 ) -> dict[str, Any]:
     """当前 formal 必须被目标 run 的 adoption 逐单元指回，不能只看“文件在”。"""
-    if payload is None or run_id is None:
+    key = artifact_key(rel)
+    spec = ARTIFACT_SPECS.get(key) if key else None
+    if payload is None or run_id is None or spec is None:
         return {'state': 'unver', 'adopted_units': 0, 'expected_units': len(chapters)}
-    fingerprint = prov.projection_fingerprint(payload)
+    try:
+        canonical = spec.model.model_validate(decode_artifact(rel, payload).payload)
+    except (ArtifactVersionError, ValidationError):
+        return {'state': 'unver', 'adopted_units': 0, 'expected_units': len(chapters)}
+    # producer 对 typed payload 求指纹；盘面省略的默认/null 字段也必须同型展开。
+    # 旧版或损坏来源不能靠 raw 指纹与某条 adoption 巧合相等取得当前身份。
+    fingerprint = prov.projection_fingerprint(canonical.model_dump(by_alias=True, mode='json'))
     matches = [
         row for row in audit_rows
         if row.get('kind') == 'artifact_adoption'

@@ -68,6 +68,7 @@ _CONSUMED: dict[str, str] = {
 #: ⚠ 这张表**必须逐个列名**，不许写成「所有标量一律不发」那种规则：
 #: 那样新加一个标量会被**静默**挡住，而静默正是本模块要防的方向。
 _WITHHELD: dict[str, str] = {
+    'SOURCE_BLURB_EVIDENCE_POLICY': '源文案审阅的后端身份规则；前端只展示证据来源和 typed 结论，不选择或重算策略',
     'STAGE2_CHARACTER_REVIEW_KINDS': '静态字段的派修归属只由后端裁决；前端显示返回的 owner 和可执行动作',
     'WORKFLOW_ROLE_CONTRACT': '工作流执行身份；界面只显示后端工作单元读模型',
     'WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS': '预算已由持久工作单元账折叠，前端不自行重算',

@@ -86,6 +86,8 @@ def _patch_business(monkeypatch) -> SimpleNamespace:
     )
     monkeypatch.setattr(
         hook, '_Upstreams', lambda _ctx, _store: upstream)
+    from tests.test_final_approval_workpacks import _stage6_materials
+    monkeypatch.setattr(hook, '_approval_materials', lambda *_args: _stage6_materials())
     monkeypatch.setattr(
         hook, '_assert_prepared_current', lambda _ctx, _prepared: upstream)
     monkeypatch.setattr(

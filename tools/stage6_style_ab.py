@@ -123,9 +123,14 @@ _SYSTEM_REPLACEMENTS: tuple[tuple[str, str], ...] = (
     ),
 )
 
-# 现役 production 在 B 臂基础上新增了机械基线说明；反构历史 A 臂时这三处
+# 现役 production 在 B 臂基础上新增了机械基线与独立钩子证据说明；反构历史 A 臂时
 # 与实验内的 A→B 替换不是同一张表。分开登记，避免 retired runner 反向污染生产。
 _CURRENT_TO_LEGACY_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    (
+        'source_blurb 中 hook_supported 表示原作者在钩子中独立给出的信息，可用于新文案；\n'
+        '正文无需重复这些信息，不因正文未出现就判成编造，也不把它们改成正文必须补写的剧情。\n',
+        '',
+    ),
     (
         '你会看到原始文案、完整故事事实、全书逐章故事地图、重写后的开篇正文，'
         '以及原作文案的机械基线。',

@@ -7969,6 +7969,54 @@ def _stage2_work_unit_harness(base, monkeypatch, *, mode='invalid', both=False):
     return progress, invocations, WorkUnitBudget
 
 
+def test_landed_unver_action_is_consumed_then_stops_without_replay_or_new_wire(
+        base, corpus, monkeypatch):
+    """Supervisor 的真实回答账与退出路径；producer exact 回执另由 lifecycle 用例核验。"""
+    from novel.stages.stage2 import global_review
+    progress, calls, _budget_type = _stage2_work_unit_harness(base, monkeypatch, mode='accept')
+    original_load = agent.reviewer_tasks.load_action
+
+    def load_action(*args, **kwargs):
+        original_load(*args, **kwargs)
+        from contracts.artifacts import STAGE2_GLOBAL_REVIEW_DECISIONS
+        return agent.reviewer_tasks.ReviewerNodeAction(
+            kind='node', node='stage2.global',
+            flags=('--review-decisions', '@reviewer-input'), input_payload=encode_artifact(
+                STAGE2_GLOBAL_REVIEW_DECISIONS, {
+                    'actor': 'agent:test', 'decisions': [{
+                        'item_id': 'opening_scope:source_blurb.opening:subject',
+                        'expected_subject_sha256': 'a' * 64,
+                        'state': 'UNVER', 'reason': '仍缺开篇边界证据', 'evidence': [],
+                    }],
+                }))
+
+    def execute(*_args, **_kwargs):
+        progress['applied'].append('stage2.global')
+        # 旧实现会重复重放；给反例有限上界，避免失败测试自身成为无限循环。
+        return agent.SupervisorActionResult(
+            exit_code=1 if len(progress['applied']) == 1 else 70,
+            outcome=AgentDeliveryOutcome(state='stopped', reason='开篇范围未确定', checked_at=1),
+            continue_ready=len(progress['applied']) == 1)
+
+    def exact_receipt(_base, _sid, _payload, *, require_action_complete=False):
+        assert require_action_complete
+        return bool(progress['applied'])
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'load_action', load_action)
+    monkeypatch.setattr(agent, '_execute_reviewer_node_action', execute)
+    monkeypatch.setattr(global_review, 'submitted_decisions_is_current', exact_receipt)
+    run = agent.start(base, '42', authorized=True, egress_authorized=True,
+                      profiles=_PROFILES, spawn=None)
+    assert agent.wait(run.run_id, 15)
+    assert len(calls) == 1 and progress['applied'] == ['stage2.global']
+    unit = _stage2_commander_unit(base)
+    assert unit.used == 1 and unit.latest_turn().state == 'adopted'
+    assert _reviewer_action_files(base) == []
+    done = next(row for row in agent.records(base) if row.run_id == run.run_id)
+    assert done.exit_code == 2
+    assert '没有新的审阅进展' in done.outcome.reason
+
+
 def test_stage2_commander_budget_is_four_including_format_repairs_and_survives_restart(
         base, corpus, monkeypatch):
     progress, calls, budget_type = _stage2_work_unit_harness(base, monkeypatch)

@@ -325,6 +325,12 @@ describe('GlobalScreen disclosure', () => {
     })
     vi.spyOn(api, 'getGlobal').mockResolvedValue(globalView())
 
+    const withHook = globalView()
+    withHook.source_blurb.facts.push({
+      kind: 'hook_supported', claim_id: 'hook_002', claim: '钩子独有的背景',
+      hook_evidence: { source: { text: '仅源文案支持', start: 0, end: 6 }, unresolved_locator: null },
+    })
+    vi.mocked(api.getGlobal).mockResolvedValue(withHook)
     renderRoute(<GlobalScreen />, '/n/book-1/global')
     expect(await screen.findByText('证据 ch3 · “古代证据”')).toBeVisible()
     expect(screen.getByText('证据定位失败 · 第 8 章')).toBeVisible()
@@ -335,6 +341,9 @@ describe('GlobalScreen disclosure', () => {
     fireEvent.click(screen.getByRole('button', { name: /隐藏核心剧透字段（非完整遮蔽）/ }))
     fireEvent.click(await screen.findByRole('button', { name: /^秘密/ }))
     expect(await screen.findByText('在场众人（群体 · 第 2 章起）')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: /^源文案与开篇/ }))
+    expect(screen.getByText('原钩子独立支持；正文无需重复，审阅状态另行裁决。')).toBeVisible()
+    expect(screen.getByText('文案证据 · “仅源文案支持”')).toBeVisible()
   })
 })
 

@@ -240,6 +240,7 @@ class GlobalCandidateContext:
     characters_reference_sha256: str
     _characters: CharacterRegistry = field(repr=False)
     _main_text: tuple[dict[str, Any], ...] = field(repr=False)
+    _source_hook: str = field(repr=False)
     _downstream: _GlobalDownstreamGuard = field(repr=False)
     _contract: GlobalEvidenceContractSpec = field(repr=False)
     _evidence_candidates: GlobalEvidenceCandidateTable = field(repr=False)
@@ -364,11 +365,12 @@ class _Both:
         self.global_g = _read_raw(store, GlobalGrounding, GLOBAL_REL)
         self.blueprints = _read_raw(store, ChapterBlueprints, BLUEPRINT_REL)
         self.main_text = _read_main_text(store)
+        self.source_hook = _read_source_hook(store)
 
     def judge(self) -> list[Outcome]:
         """跑全部注册判据。**唯一判定落点**——落盘闸门与复检共用它。"""
         return checks.check(global_g=self.global_g, blueprints=self.blueprints,
-                            main_text=self.main_text)
+                            main_text=self.main_text, source_hook=self.source_hook)
 
 
 def _read_raw(store: ArtifactStore, model: type, rel: str) -> dict[str, Any] | None:
@@ -395,6 +397,12 @@ def _older_version_error(exc: ArtifactUnreadable) -> ArtifactVersionError | None
     if isinstance(cause, ArtifactVersionError) and cause.is_older_than_current:
         return cause
     return None
+
+
+def _read_source_hook(store: ArtifactStore) -> str | None:
+    if not store.exists(STAGE1_HOOK_COPY):
+        return None
+    return store.read_own(HookCopy, STAGE1_HOOK_COPY)[0].text
 
 
 def _read_main_text(store: ArtifactStore) -> list[dict[str, Any]] | None:
@@ -737,7 +745,8 @@ def _prepare_global_revalidation_evaluation(
         data, baseline.provenance.evidence_locator_failures)
     from novel.stages.stage2.normalize import restore_pruned_secret_setups
     restore_pruned_secret_setups(data, baseline.provenance.setup_chapters_pruned)
-    data, accounting = normalize_global(data, main_text)
+    source_hook = _read_source_hook(store)
+    data, accounting = normalize_global(data, main_text, source_hook=source_hook)
     rebuilt = GlobalGrounding.model_validate({
         **data,
         '_provenance': GlobalProvenance.model_validate({
@@ -745,7 +754,7 @@ def _prepare_global_revalidation_evaluation(
         }),
     })
     candidate = rebuilt.model_dump(by_alias=True)
-    outcomes = tuple(_judge_candidate(candidate, None, main_text))
+    outcomes = tuple(_judge_candidate(candidate, None, main_text, source_hook=source_hook))
     hard_hits = tuple(_hard_hits(
         list(outcomes), ignore={'upstream_missing'}))
     return _GlobalRevalidationEvaluation(
@@ -1318,9 +1327,10 @@ def _judge_candidate(
     global_g: dict[str, Any] | None,
     blueprints: dict[str, Any] | None,
     main_text: list[dict[str, Any]],
+    *, source_hook: str | None = None,
 ) -> list[Outcome]:
     return checks.check(
-        global_g=global_g, blueprints=blueprints, main_text=main_text)
+        global_g=global_g, blueprints=blueprints, main_text=main_text, source_hook=source_hook)
 
 
 def _canonical_sha256(value: object) -> str:
@@ -1922,7 +1932,7 @@ def _read_global_downstream_guard(
         )
 
     before = frozenset(_hard_hits(
-        _judge_candidate(old_global, blueprint.raw, main_text)))
+        _judge_candidate(old_global, blueprint.raw, main_text, source_hook=_read_source_hook(store))))
     return _GlobalDownstreamGuard(
         blueprint=blueprint,
         baseline_state='absent' if old_global is None else 'current',
@@ -2028,6 +2038,7 @@ def prepare_global_candidate(
         _downstream=downstream,
         _contract=spec,
         _evidence_candidates=evidence_candidates,
+        _source_hook=source_hook,
     )
 
 
@@ -2084,12 +2095,12 @@ def _global_candidate_outcomes(
 ) -> tuple[list[Outcome], tuple[str, ...]]:
     """复用现有判据并严格保留 blueprint 的 before/after 差分口径。"""
     main_text = copy.deepcopy(list(prepared._main_text))
-    outcomes = _judge_candidate(candidate, None, main_text)
+    outcomes = _judge_candidate(candidate, None, main_text, source_hook=prepared._source_hook)
     hits = set(_hard_hits(outcomes, ignore={'upstream_missing'}))
     guard = prepared._downstream
     if guard.blueprint.state == 'current':
         assert guard.blueprint.raw is not None
-        after = _judge_candidate(candidate, guard.blueprint.raw, main_text)
+        after = _judge_candidate(candidate, guard.blueprint.raw, main_text, source_hook=prepared._source_hook)
         outcomes.extend(after)
         after_hits = set(_hard_hits(after))
         if guard.baseline_hard_hits is None:
@@ -2142,7 +2153,7 @@ def _materialize_global_evaluation(
     """归一、铸候选来源账并判定；``settle=False`` 时严格无终态副作用。"""
     main_text = copy.deepcopy(list(prepared._main_text))
     data, accounting = normalize_global(
-        _compile_global_response(prepared, response), main_text)
+        _compile_global_response(prepared, response), main_text, source_hook=prepared._source_hook)
     provenance = ctx.llm_provenance(
         GlobalProvenance,
         prompts={prepared._contract.sys_name: prepared.system},
@@ -4659,7 +4670,8 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
                 raw = rebound.view.model_dump(mode='json', by_alias=True)
             data = copy.deepcopy(raw)
             data.pop('_provenance', None)
-            data, accounting = normalize_global(data, main_text)
+            source_hook = _read_source_hook(store)
+            data, accounting = normalize_global(data, main_text, source_hook=source_hook)
             rewritten = ctx.rewrite_provenance(
                 previous.provenance, by='--renormalize')
             provenance = GlobalProvenance.model_validate({
@@ -4671,7 +4683,7 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
                 **data, '_provenance': provenance,
             })
             candidate = artifact.model_dump(by_alias=True)
-            outcomes = _judge_candidate(candidate, None, main_text)
+            outcomes = _judge_candidate(candidate, None, main_text, source_hook=source_hook)
             hits = _hard_hits(outcomes, ignore={'upstream_missing'})
             if rebound is not None:
                 rebound.assert_current(store)
@@ -4786,17 +4798,22 @@ def _manual_locator(
 
 def _manualize_evidence(
     value: Any, chapters: dict[int, str], *, subject: str,
+    source_hook: str | None = None,
 ) -> Any:
     if isinstance(value, dict):
         if set(value) == {'chapter_ordinal', 'source'}:
             return _manual_locator(value, chapters, subject=subject)
+        if value.get('kind') == 'hook_supported':
+            from novel.stages.stage2.source_blurb import manual_hook_evidence
+            return {**copy.deepcopy(value), 'hook_evidence': manual_hook_evidence(
+                value['hook_evidence'], source_hook)}
         return {
-            key: _manualize_evidence(child, chapters, subject=subject)
+            key: _manualize_evidence(child, chapters, subject=subject, source_hook=source_hook)
             for key, child in value.items()
         }
     if isinstance(value, list):
         return [
-            _manualize_evidence(child, chapters, subject=subject)
+            _manualize_evidence(child, chapters, subject=subject, source_hook=source_hook)
             for child in value
         ]
     return copy.deepcopy(value)
@@ -4925,7 +4942,7 @@ def global_edit_template(ctx: RunContext) -> GlobalEdit:
 
     if grouped.get('source_blurb'):
         edit['source_blurb_replace'] = _manualize_evidence(
-            raw['source_blurb'], chapters, subject='source_blurb')
+            raw['source_blurb'], chapters, subject='source_blurb', source_hook=_read_source_hook(store))
 
     known = {
         'set:characters', 'set:relations', 'set:world_rules', 'set:secrets',
@@ -6518,6 +6535,7 @@ def _build_global_edit_candidate(
     raw: dict[str, Any],
     edit: GlobalEdit,
     main_text: list[dict[str, Any]],
+    *, source_hook: str | None = None,
 ) -> _GlobalEditCandidate:
     """构造并验证完整业务候选；纯内存且是 apply/preflight 的唯一判据。"""
     previous_business = copy.deepcopy(raw)
@@ -6537,7 +6555,7 @@ def _build_global_edit_candidate(
             'detail': str(exc),
         }]) from exc
     try:
-        data, accounting = normalize_global(data, main_text)
+        data, accounting = normalize_global(data, main_text, source_hook=source_hook)
     except TerminalState as exc:
         # normalize 是纯内存 producer 判据。它明确给出的 TerminalState 属于
         # 候选业务拒绝；OSError/结构性异常等其他失败仍原样上抛为 unknown。
@@ -6606,7 +6624,7 @@ def preflight_global_edit(ctx: RunContext, edit: GlobalEdit) -> None:
     else:
         previous, raw, _source_rel = _global_source(
             store, replaced_edit_rel=GLOBAL_EDIT)
-    _build_global_edit_candidate(previous, raw, edit, main_text)
+    _build_global_edit_candidate(previous, raw, edit, main_text, source_hook=_read_source_hook(store))
 
 
 class _PostEditReviewRejected(TerminalState):
@@ -6845,7 +6863,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
                 ctx, scope='blocking',
                 replaced_input_keys=(GLOBAL_EDIT,))['workpack_sha256'])
         prepared_candidate = _build_global_edit_candidate(
-            previous, raw, submitted_edit, main_text)
+            previous, raw, submitted_edit, main_text, source_hook=_read_source_hook(store))
         data = prepared_candidate.data
         accounting = prepared_candidate.accounting
         changed = prepared_candidate.changed
@@ -6930,7 +6948,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
             raise failure from exc
 
         candidate = artifact.model_dump(by_alias=True)
-        outcomes = _judge_candidate(candidate, None, main_text)
+        outcomes = _judge_candidate(candidate, None, main_text, source_hook=_read_source_hook(store))
         hits = _hard_hits(outcomes, ignore={'upstream_missing'})
         if hits:
             failure_rels = (

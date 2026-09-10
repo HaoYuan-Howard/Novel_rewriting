@@ -41,6 +41,8 @@ def _rig(tmp_path, monkeypatch, *, cached=False, fail_last=False):
         return up
 
     monkeypatch.setattr(hook, '_Upstreams', upstreams)
+    from tests.test_final_approval_workpacks import _stage6_materials
+    monkeypatch.setattr(hook, '_approval_materials', lambda *_args: _stage6_materials())
 
     def judge(text, _up):
         findings = ([finding('hook_truncated', detail='候选未完整', evidence=[text])]

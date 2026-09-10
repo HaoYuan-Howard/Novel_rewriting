@@ -16,7 +16,7 @@ from contracts.schema.evaluation import (
     GlobalReview, GlobalReviewDecisionSet, GlobalReviewGenerationDisposition,
     GlobalReviewItem,
 )
-from novel.core.evidence import iter_global_evidence_slots, without_global_evidence
+from novel.core.evidence import iter_global_evidence_slots, iter_hook_evidence_slots, without_global_evidence
 from novel.errors import HumanEditProtected
 
 
@@ -158,7 +158,8 @@ def enumerate_required(
     assert isinstance(projected, dict)
     evidence_by_path = {
         path: owner.get(field)
-        for path, owner, field in iter_global_evidence_slots(global_grounding)
+        for path, owner, field in (
+            *iter_global_evidence_slots(global_grounding), *iter_hook_evidence_slots(global_grounding))
     }
 
     def evidence_for(path: str, *, grouped: bool = False) -> Any:
@@ -310,7 +311,8 @@ def enumerate_required(
     for fact in blurb.get('facts') or []:
         path = f"source_blurb.facts.{fact['claim_id']}"
         row = _fact_item('source_blurb_fact', path,
-                         {key: value for key, value in fact.items() if key != 'evidence'},
+                         {key: value for key, value in fact.items()
+                          if key not in {'evidence', 'hook_evidence'}},
                          evidence_for(path), dependency=source_dependency)
         rows.append(row.model_copy(update={'resolution_required': fact.get('kind') == 'unresolved'}))
     opening = blurb.get('opening') or {}

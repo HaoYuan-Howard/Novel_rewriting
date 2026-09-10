@@ -246,11 +246,11 @@ run、AgentRun、日志和动作预览不进入这份读缓存失效面，避免
 | `/n/:sid/stage0` | 整本剔除审阅、编辑与批准；完整原文默认展开、可收起，不重复展示属于 Stage1 的分章预览。Agent 入口放在审批操作栏；浏览器人工动作不要求填写 actor/reason，统一按 `human-ui` 和具体动作理由记审计；Agent/CLI 仍显式自报 |
 | `/n/:sid/stage1` | 顶部合并展示校验结论与切分确认，且不依赖正文查询成功；下方是章节索引和原文切分结果，只读，开篇文案只展示一次，重号/缺号/倒退按服务端章号诊断逐章显式提示 |
 | `/n/:sid/read/:o` | 原文与 stage2 骨架对照；书级工作包先给异常章与完整检查摘要，默认隐藏已由代码校验的 beat/fact/hinge 结构 ID 与字符坐标，仍保留章功能、覆盖原文、事实参与人物、因果、hinge、状态与**全部**叙述声音；打开/切换单章不自动标整本已读，只有正式工作包成功加载后才可显式确认。页面所见与待签主体来自同一工作包，提交时携带整包 binding 及 Blueprint/MainText/code/rules 身份，任一漂移均零写入，后续整包变化使旧 seen 自动过期 |
-| `/n/:sid/global` | stage2 全局人物、关系、规则、秘密 |
+| `/n/:sid/global` | stage2 全局人物、关系、规则、秘密与源文案；文案事实区分正文支持、原钩子独立支持及未决，展示对应证据及定位失败。钩子独立支持不代表已审阅通过，不要求正文重复；结论仍由后端 typed 审阅下发 |
 | `/n/:sid/stage4/:o` | Stage4A 盲候选先经策略级与逐章 typed 人审；A/B 各自先显示服务端异常优先工作包（`blocking → semantic_attention → disclosure → metric_only → phase_deferred → coverage`），再由人填写完整 typed 裁决。全接受后才呈现 B/最终结构工作面。常驻展示完整结构 subject SHA-256、全章 `retain/reconstruct`、声明/复算变化与 B 的 nonblocking concerns，选中章再展示计划/上下文细节，并经第二道 typed 表单原子提交最终逐章结构裁决。最终结构批准不等于 Stage5 写作授权 |
 | `/n/:sid/stage5/:o` | canonical 成稿、材料、验收 finding 与修订的合并工作面；顶部常驻服务端 Stage5 Commander 闭合卡：`review_required` 只给一次最终 Review，blocked 工作包可按服务端 `unresolved_trim_items` 批量销账，ready/expired 经 `/approvals/stage5/template` 逐项形成 typed 回执；空状态在付费确认前先写入全书闭卷授权。单章改稿严格走只读 typed preview → 明示 `formal/working_draft` → 双 SHA apply，每次 apply 不自动 Review；fresh Review 的章级/书级 finding 仍可按完整 evidence identity 提交 wontfix |
 | `/n/:sid/inbox` | 八类待办的全书路由器，不提供第二个编辑面（校验下沉到各阶段屏的面板） |
-| `/n/:sid/stage6` | 三候选文案与人工定稿 |
+| `/n/:sid/stage6` | 三候选文案与人工定稿；核验材料从同一终审 workpack 展开原钩子、已接受主张及完整重写正文，钩子独立支持与正文支持分列，不自行推导通过 |
 | `/n/:sid/stage7`、`/n/:sid/stage7/:o` | 人名表、漏网候选、成书状态和逐章替换对照 |
 
 旧 `/n/:sid/review/:o` 重定向到 `stage5/:o`，旧 `/n/:sid/check` 重定向到 `inbox`；

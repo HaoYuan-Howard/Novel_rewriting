@@ -119,10 +119,15 @@ def test_global_provider_has_one_candidate_only_contract_and_schema():
 def test_knowledge_agent_schema_only_accepts_complete_knowledge_candidates():
     system = extract.build_global_agent_system(CONTRACT)
     assert 'full_candidate' in system
-    schema = json.dumps(agent_json_schema(GlobalCandidateAgentTurnResponse), ensure_ascii=False)
+    structured = agent_json_schema(GlobalCandidateAgentTurnResponse)
+    schema = json.dumps(structured, ensure_ascii=False)
     assert 'full_candidate' in schema
     assert 'role_fate_patch' not in schema and 'evidence_patch' not in schema
-    assert '"locator":' not in schema
+    # 正文仍只接受候选引用；独立钩子证据有自己的定位域，不能混作正文章。
+    locator_models = {name for name, definition in structured['$defs'].items()
+                      if 'locator' in definition.get('properties', {})}
+    assert locator_models == {'HookEvidenceLocator'}
+    assert structured['$defs']['HookEvidenceLocator']['required'] == ['locator']
     assert '"evidence_candidate_id":' in schema
     assert '"characters":' not in schema
     assert '"character_states":' in schema

@@ -525,7 +525,7 @@ STAGE2_NODE_REVIEWERS: Final = ('stage2.global', 'stage2.blueprint')
 STAGE2_NODE_REVIEW_OWNERS: Final = ('stage2.characters', 'stage2.global', 'stage2.blueprint')
 STAGE2_NODE_REVIEW_STATES: Final = (
     'missing', 'accepted', 'rework', 'uncertain', 'stopped', 'expired', 'unknown')
-STAGE6_REVIEW_CONTRACT: Final = 'stage6-final-review-v3'
+STAGE6_REVIEW_CONTRACT: Final = 'stage6-final-review-v4'
 STAGE7_REVIEW_CONTRACT: Final = 'stage7-final-review-v3'
 #: `R-5.22` 预检结论的两态。pass = 构造性绑定过整书联合 HARD；
 #: blocked = 存在 stop-owner 失败或代码铸造的不可行 witness。
@@ -1232,6 +1232,9 @@ GLOBAL_REVIEW_KINDS: Final = (
     'role', 'fate', 'relation', 'setting_fact', 'secret_setup',
     'source_blurb_complete', 'source_blurb_fact', 'opening_scope',
 )
+
+# 钩子可独立提供文案事实；审阅行动权变化要进入业务身份，不能复用旧策略的停机结论。
+SOURCE_BLURB_EVIDENCE_POLICY: Final = 'source-hook-independent-evidence-v1'
 
 #: 每类复核项对生成消费面的精确影响。这里不是优先级标签，而是恢复路由：
 #:

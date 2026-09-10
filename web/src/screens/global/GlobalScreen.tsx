@@ -489,7 +489,17 @@ export function GlobalScreen() {
                         <span className="prose-cn text-ink-2">{fact.claim}</span>
                         {fact.kind === 'supported'
                           ? <EvidenceLine evidence={fact.evidence} />
-                          : <span className="text-tag text-ink-4">待裁决：{fact.reason}</span>}
+                          : fact.kind === 'hook_supported'
+                            ? <>
+                              <span className="text-tag text-ink-4">原钩子独立支持；正文无需重复，审阅状态另行裁决。</span>
+                              {fact.hook_evidence.source === null
+                                ? <span className="text-tag text-warn-ink">源文案证据定位失败</span>
+                                : <span className="prose-cn text-mini text-ink-5"
+                                  title={`文案码点 ${fact.hook_evidence.source.start}–${fact.hook_evidence.source.end}`}>
+                                  文案证据 · “{fact.hook_evidence.source.text}”
+                                </span>}
+                            </>
+                            : <span className="text-tag text-ink-4">待裁决：{fact.reason}</span>}
                       </div>
                     ))}
                     {d.source_blurb.facts.length === 0

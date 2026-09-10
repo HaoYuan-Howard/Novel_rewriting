@@ -769,8 +769,7 @@ def _read_state(
     上作定点更新；这是审批可以在 exact subject 回退后自动复活的根本边界。
     """
     raw = _read_raw(base, sid)
-    if not _path(base, sid).is_file():
-        return raw, raw
+    # CLI 首次批准可能尚无服务记录；typed 产物依然是当前事实，不能提前返回全 false。
     novel_dir = paths.resolve_novel_dir(base, sid)
     return raw, _effective_record(novel_dir, raw)
 
@@ -2865,17 +2864,17 @@ def _same_proof(expected: _ApprovalProof | None, current: _ApprovalProof) -> boo
     return expected is not None and expected == current
 
 
-def _current_final_gate_proof(
+def _current_typed_gate_proof(
     novel_dir: Path, gate: str, record: _ApprovalRecordV7,
 ) -> _ApprovalProof:
-    """只读复验正式定稿；服务检查单缺章不构成另一道人工裁决。
+    """只读复验正式 typed 决定；服务检查单缺章不构成另一道人工裁决。
 
     typed 验证与 proof 的产物读取可能跨过一次正式写回。必须再次复用完整
     producer/current/freshness 检查并核同一 proof，不能把 A 的批准拼到 B 的字节。
     返回值仅用于 effective 投影，不产生 raw 点击或补录事实。
     """
-    if gate not in ('s6', 's7'):
-        raise ValueError(f'不是正式定稿闸门：{gate}')
+    if gate not in ('s0', 's6', 's7'):
+        raise ValueError(f'不是正式 typed 决定闸门：{gate}')
     first = _proof_for_gate(novel_dir, gate, record)
     second = _proof_for_gate(novel_dir, gate, record)
     if not _same_proof(first, second):
@@ -2921,7 +2920,16 @@ def _effective_record(novel_dir: Path, record: _ApprovalRecordV7) -> _ApprovalRe
             gate_proofs[gate] = None
 
     for gate in _PRE_WRITING_GATES:
-        validate_gate(gate)
+        if gate == 's0':
+            # CLI/Agent 与 HTTP 的批准都落同一 revision 链；只读面不能再等附加点击。
+            try:
+                current = _current_typed_gate_proof(novel_dir, gate, record)
+            except NovelError:
+                current = None
+            gates[gate] = current is not None
+            gate_proofs[gate] = current
+        else:
+            validate_gate(gate)
 
     writing = record.writing
     writing_proof = record.writing_proof
@@ -2961,7 +2969,7 @@ def _effective_record(novel_dir: Path, record: _ApprovalRecordV7) -> _ApprovalRe
             continue
         try:
             current = (
-                _current_final_gate_proof(novel_dir, gate, effective)
+                _current_typed_gate_proof(novel_dir, gate, effective)
                 if final_gate else _proof_for_gate(novel_dir, gate, effective)
             )
         except NovelError:

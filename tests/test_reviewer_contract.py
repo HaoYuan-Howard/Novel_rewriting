@@ -126,3 +126,12 @@ def test_stage5_batch_scope_preserves_independent_chapter_authority():
     assert '整批完成后统一免费' in stage5
     assert '修复必须同时改动多章才能安全成立时' in stage5
     assert '恰有一章' not in stage5
+
+
+def test_stage6_contract_accepts_both_evidence_sources_without_ignoring_contradictions():
+    stage6 = reviewer_contract.for_blocker('stage6.approve')
+    assert 'materials.rewritten_chapters' in stage6
+    assert 'hook_supported' in stage6 and '原钩子' in stage6
+    assert '正文未重复不构成编造' in stage6
+    assert '正文有反证时不能计为支持' in stage6
+    assert '同一断言只计一次' in stage6

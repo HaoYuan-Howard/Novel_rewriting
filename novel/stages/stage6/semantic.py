@@ -104,6 +104,7 @@ SEMANTIC_SYS = with_json_shape("""\
 【实质矛盾口径】
 - 剧透本身不加分也不扣分，只判断它增强阅读欲还是把问题彻底说完；
 - 文案体裁允许重写台词、压缩时间、倒叙、合并数章和合成场面；“正文没有逐字出现这句台词/这个场面”不等于矛盾；
+- story_truth.source_blurb 中 hook_supported 是原钩子独立支持的已审主张；正文无需重复，不仅因正文未出现就判编造，也不要求正文为它补写；
 - 只有候选改变人物身份、人物关系、关键因果或故事结果，或凭空增加会改变读者理解的新设定，才写入 contradictions；
 - 每条 contradiction 的 evidence 必须是候选文案里的逐字连续片段，assertion 与 reason 不得大段复述全书真相；
 - 若无法确信已完整核对，coverage=uncertain 并说明原因，绝不能用 complete 洗绿。

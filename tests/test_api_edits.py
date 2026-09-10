@@ -765,6 +765,8 @@ def final_gate_book(tmp_path, monkeypatch):
         return SimpleNamespace(judged={}, upto=1)
 
     monkeypatch.setattr(hook, '_Upstreams', hook_upstreams)
+    from tests.test_final_approval_workpacks import _stage6_materials
+    monkeypatch.setattr(hook, '_approval_materials', lambda *_args: _stage6_materials())
     monkeypatch.setattr(hook, '_judge_artifact', lambda *_args: [])
     monkeypatch.setattr(hook, '_normalize_and_judge', lambda text, _up: (
         text, Mech(punct_fixed=0, quotes_fixed=0, paras_fixed=0), []))

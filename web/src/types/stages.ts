@@ -547,6 +547,8 @@ export interface Stage2Global {
   source_blurb: {
     facts: (
       | { kind: 'supported'; claim_id: string; claim: string; evidence: GlobalFactEvidence }
+      | { kind: 'hook_supported'; claim_id: string; claim: string;
+          hook_evidence: { source: GlobalSourceSpan | null; unresolved_locator: string | null } }
       | { kind: 'unresolved'; claim_id: string; claim: string; reason: string }
     )[]
     opening:

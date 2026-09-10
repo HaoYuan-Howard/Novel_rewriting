@@ -160,6 +160,8 @@ def _approved_name_artifact():
 def _isolated_s7_proof(monkeypatch, holder: dict[str, object]):
     class Store:
         def read_own(self, _model, _rel):
+            if _rel != rename.REL:
+                raise UpstreamMissing('本用例只提供 Stage7 typed 产物')
             return holder['art'], {}
 
     monkeypatch.setattr(approvals, '_store_for', lambda _novel_dir: Store())

@@ -188,6 +188,30 @@ export function Stage6Screen() {
                         artifact {workpackQ.data.artifact_subject_sha256}
                       </Mono>
                       <CompactCheckEvidence check={workpackQ.data.check} />
+                      <details className="mt-10">
+                        <summary className="cursor-pointer font-semibold">
+                          核验材料 · {workpackQ.data.materials.rewritten_chapters.length} 章正文
+                          {' · '}{workpackQ.data.materials.source_blurb.facts.length} 条钩子主张
+                        </summary>
+                        <p>钩子独立支持的主张无需在正文重复；正文有反证时仍须处理。</p>
+                        <div className="whitespace-pre-wrap">{workpackQ.data.materials.source_hook}</div>
+                        {workpackQ.data.materials.source_blurb.facts.map((fact) => (
+                          <div key={fact.claim_id} className="mt-10">
+                            <strong>{fact.claim_id} · {fact.kind === 'hook_supported'
+                              ? '钩子独立支持' : fact.kind === 'supported' ? '正文支持' : '待裁决'}</strong>
+                            <div>{fact.claim}</div>
+                            <div>{fact.kind === 'hook_supported'
+                              ? fact.hook_evidence.source?.text ?? fact.hook_evidence.unresolved_locator
+                              : fact.kind === 'supported' ? fact.evidence.source?.text : fact.reason}</div>
+                          </div>
+                        ))}
+                        {workpackQ.data.materials.rewritten_chapters.map((chapter) => (
+                          <details key={chapter.chapter_ordinal} className="mt-10">
+                            <summary className="cursor-pointer">第 {chapter.chapter_ordinal} 章正文</summary>
+                            <div className="whitespace-pre-wrap">{chapter.text}</div>
+                          </details>
+                        ))}
+                      </details>
                     </div>
                   ) : null}
                   <ActorReasonFields

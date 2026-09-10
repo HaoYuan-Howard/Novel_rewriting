@@ -17,7 +17,7 @@ from contracts.schema.common import Sha256
 from contracts.schema.stage2 import (
     Canon, CanonCandidateResponse, EvidenceCandidateRef, EvidenceLocator,
     FactEvidence, GlobalGrounding, GlobalProvenance, Relation, RelationCandidateResponse,
-    SourceBlurbGrounding,
+    SourceBlurbGrounding, HookEvidenceLocator, HookFactEvidence,
 )
 
 
@@ -57,7 +57,7 @@ class KnowledgeGrounding(StrictModel):
     characters_reference_sha256: Sha256
     entities: KnowledgeEntities
     canon: Canon
-    source_blurb: SourceBlurbGrounding[FactEvidence]
+    source_blurb: SourceBlurbGrounding[FactEvidence, HookFactEvidence]
     provenance: GlobalProvenance = Field(alias='_provenance')
 
 
@@ -90,7 +90,7 @@ class KnowledgeResponse(StrictModel):
     # 人物引用由代码冻结，不由模型抄回一个声称相同的 SHA。
     entities: KnowledgeEntitiesResponse
     canon: CanonCandidateResponse
-    source_blurb: SourceBlurbGrounding[EvidenceCandidateRef]
+    source_blurb: SourceBlurbGrounding[EvidenceCandidateRef, HookEvidenceLocator]
 
 
 class KnowledgeFullTurn(StrictModel):

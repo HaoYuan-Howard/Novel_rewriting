@@ -1727,7 +1727,8 @@ def _reconcile_landed_stage2_work_unit_actions(
     """免费 producer 补提交后先收原内容账，再让 planner 越过原审阅 blocker。
 
     prepared 仅授权重放，不证明提交。原回答、typed 动作、成本/会话证明与
-    当前 committed 产物、当前接受全部闭合后才能 adopt；只写服务账，不补造审批。
+    当前 committed 产物与合法提交后继闭合后才能 adopt；只写服务账，不补造审批。
+    逐项否定/UNVER 决定没有接受后继，不能因节点仍阻断而无限重放已落决定。
     """
     from novel.orchestrator import approvals
     from novel.stages.stage2 import extract, global_review, relation_edit
@@ -1763,10 +1764,11 @@ def _reconcile_landed_stage2_work_unit_actions(
                         submitted = (journal.state == 'committed'
                                      and extract.submitted_global_patch_is_current(base, sid, record.input_payload))
                 elif record.node == 'stage2.global' and '--review-decisions' in record.flags:
-                    submitted = global_review.submitted_decisions_is_current(base, sid, record.input_payload)
+                    submitted = global_review.submitted_decisions_is_current(
+                        base, sid, record.input_payload, require_action_complete=True)
                 elif record.node == 'stage2.blueprint' and '--apply-edit' in record.flags:
                     submitted = relation_edit.submitted_patch_is_current(base, sid, record.input_payload)
-                if submitted:
+                if submitted and '--review-decisions' not in record.flags:
                     try:
                         approvals.require_stage2_node_accepted(base, sid, record.node)
                     except ApprovalRequired:

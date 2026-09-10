@@ -1,5 +1,6 @@
 import type { Finding, RuleLine } from './common'
 import type { KnowledgeLinkSubmission } from './knowledgeLinks'
+import type { Stage2Global } from './stages'
 
 /**
  * 人工验收记录。
@@ -488,6 +489,11 @@ export interface Stage6WorkpackCandidate {
 export interface Stage6ApprovalWorkpack extends FinalApprovalWorkpack {
   kind: 'stage6'
   rationale: string
+  materials: {
+    source_hook: string
+    source_blurb: Stage2Global['source_blurb']
+    rewritten_chapters: { chapter_ordinal: number; text: string }[]
+  }
   check: CompactApprovalCheck
   judge_rankings: Record<'A' | 'B', string[]> | null
   candidates: Stage6WorkpackCandidate[]

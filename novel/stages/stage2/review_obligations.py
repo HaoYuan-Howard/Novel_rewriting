@@ -6,6 +6,7 @@ import hashlib
 import json
 from typing import Any
 
+from contracts.artifacts import STAGE1_HOOK_COPY
 from contracts.invariants import STAGE2_CHARACTER_REVIEW_KINDS
 from contracts.schema.stage2_review import (
     Stage2ReviewCoverage, Stage2ReviewObligation, Stage2ReviewReceipt,
@@ -39,12 +40,21 @@ def global_catalog(pack: Mapping[str, Any]) -> list[Stage2ReviewObligation]:
         if row['reading_scope'] == 'whole_book':
             material['source'] = pack['main_text_subject_sha256']
             material['source_hook'] = pack.get('source_hook')
+        chapters = set()
+        for evidence in row.get('formal_evidence', []):
+            ordinal = evidence.get('chapter_ordinal')
+            if (evidence.get('evidence_ref') or {}).get('artifact') == STAGE1_HOOK_COPY:
+                if ordinal is not None:
+                    raise ArtifactUnreadable('HookCopy 证据不得伪装为正文章')
+            elif type(ordinal) is not int or ordinal < 1:
+                raise ArtifactUnreadable('正文正式证据缺合法章号，不能构造审阅义务')
+            else:
+                chapters.add(ordinal)
         catalog.append(Stage2ReviewObligation(
             obligation_id=key, subject_sha256=sha(material),
             owner=('stage2.characters' if row['kind'] in STAGE2_CHARACTER_REVIEW_KINDS
                    else 'stage2.global'),
-            chapter_ordinals=sorted({item['chapter_ordinal']
-                                     for item in row.get('formal_evidence', [])}),
+            chapter_ordinals=sorted(chapters),
             subject_path=path, kind='global_item', context_refs=sorted(context)))
     return catalog
 

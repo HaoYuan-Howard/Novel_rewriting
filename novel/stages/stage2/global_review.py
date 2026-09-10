@@ -26,7 +26,7 @@ from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage1 import HookCopy, MainText
 
 from novel import paths
-from novel.core.evidence import iter_global_evidence_slots, without_global_evidence
+from novel.core.evidence import iter_global_evidence_slots, iter_hook_evidence_slots, without_global_evidence
 from novel.core.spans import exact_span
 from novel.errors import (
     ApprovalRequired, BlockingFindingsUnresolved, GateBlocked, PathRefused,
@@ -288,6 +288,11 @@ _WORKPACK_LEGEND: Final = {
         'blocking role 行附带同人物 fate 的只读主体、状态与正式证据，'
         '只供成对阅读，不增加或代替任何 decision item。'),
     'decision': 'workpack 只提供只读材料；PASS/FAIL/UNVER 必须由人显式提交。',
+    'source_blurb': (
+        '源文案就是原作者的开头钩子。supported 引用正文章；hook_supported 引用 HookCopy，'
+        '允许正文不再重复。后者只支持文案创作，不要求正文补写，也不扩大正文知识披露。'
+        '核对钩子是否明确给出主张及有无正文矛盾；歧义、矛盾或范围不明保持 unresolved，'
+        '先通过 typed 编辑解决，不能因开头已有某句话就忽略正文反证。'),
     'whole_book_text': (
         '只要本包含 reading_scope=whole_book，main_text_chapters 就逐章给出完整正文；'
         '每章只出现一次，行级证据仍只负责定位，不能代替通读。'),
@@ -441,6 +446,8 @@ def review_workpack(
         (path, owner.get(field))
         for path, owner, field in iter_global_evidence_slots(payload)
     ]
+    hook_slots = [(path, owner.get(field)) for path, owner, field in iter_hook_evidence_slots(payload)]
+    source_hook = store.read_own(HookCopy, STAGE1_HOOK_COPY, require_current=True)[0].text
     chapters = {chapter.chapter_ordinal: chapter for chapter in main.root}
     rows: list[dict[str, object]] = []
     for item in _scoped_items(review.items, scope):
@@ -473,8 +480,16 @@ def review_workpack(
                 if path == item.subject_path or path.startswith(prefix)
             ]
         formal, unresolved = _formal_materials(relevant_slots, chapters)
+        relevant_hook_slots = ([(path, evidence) for path, evidence in hook_slots
+                                if path == item.subject_path or path.startswith(item.subject_path + '.')]
+                               if item.kind not in _NO_FORMAL_EVIDENCE_KINDS else [])
+        if relevant_hook_slots:
+            from novel.stages.stage2.source_blurb import hook_evidence_materials
+            hook_formal, hook_unresolved = hook_evidence_materials(relevant_hook_slots, source_hook)
+            formal.extend(hook_formal)
+            unresolved.extend(hook_unresolved)
         hits: list[dict[str, object]] = []
-        if not relevant_slots:
+        if not relevant_slots and not relevant_hook_slots:
             for literal in literals:
                 if len(hits) >= 24:
                     break
@@ -496,7 +511,10 @@ def review_workpack(
                         })
                         start = found + max(1, len(literal))
         reading_scope = (
-            'whole_book' if item.kind in _WHOLE_BOOK_KINDS else 'localized')
+            'whole_book' if (item.kind in _WHOLE_BOOK_KINDS
+                             or (item.kind == 'source_blurb_fact' and isinstance(subject, dict)
+                                 and subject.get('kind') in {'hook_supported', 'unresolved'}))
+            else 'localized')
         if unresolved:
             evidence_mode = 'unresolved_formal_evidence'
         elif formal:
@@ -552,7 +570,7 @@ def review_workpack(
         # 正确地把这种材料不足判成 UNVER，随后误入 GlobalEdit，形成“模型成功、
         # 交付失败”。v4 对 whole-book 包把 current MainText 只放一遍；行仍引用
         # 同一主体/证据，不复制正文，workpack SHA 也会绑定实际读到的全部字节。
-        'source_hook': store.read_own(HookCopy, STAGE1_HOOK_COPY, require_current=True)[0].text,
+        'source_hook': source_hook,
         'main_text_chapters': ([{
             'chapter_ordinal': int(chapter.chapter_ordinal),
             'text': chapter.text,
@@ -696,8 +714,14 @@ def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
         return updated
 
 
-def submitted_decisions_is_current(base: str, sid: str, payload: dict[str, object]) -> bool:
-    """逐项决定已写盘但节点接受中断时，确认原回答能零模型补提交。"""
+def submitted_decisions_is_current(
+        base: str, sid: str, payload: dict[str, object], *,
+        require_action_complete: bool = False) -> bool:
+    """确认 exact 决定已落盘；需要退休回答时也核对合法提交后继。
+
+    FAIL/UNVER 是合法的已提交语义结论，不能因节点未接受而无限重放。
+    全部安全的决定仍须补齐节点接受，不能丢弃其尚未完成的免费后继。
+    """
     from contracts.schema import decode_artifact
     from novel.orchestrator.approvals import stage2_patch_receipt
     from novel.orchestrator.state import readonly_ctx
@@ -711,8 +735,18 @@ def submitted_decisions_is_current(base: str, sid: str, payload: dict[str, objec
     store = ArtifactStore(ctx)
     grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING, require_current=True)[0]
     current = store.read_own(GlobalReview, REL, require_current=True)[0]
-    return (receipt.global_sha256 == subject_sha256(grounding.model_dump(by_alias=True))
-            and receipt.result_subject_sha256 == subject_sha256(current.model_dump(mode='json')))
+    payload = grounding.model_dump(by_alias=True)
+    if (receipt.global_sha256 != subject_sha256(payload)
+            or receipt.result_subject_sha256 != subject_sha256(current.model_dump(mode='json'))):
+        return False
+    if require_action_complete and generation_safety(payload, current).safe:
+        from novel.errors import ApprovalRequired
+        from novel.orchestrator.approvals import require_stage2_node_accepted
+        try:
+            require_stage2_node_accepted(base, sid, 'stage2.global')
+        except ApprovalRequired:
+            return False
+    return True
 
 
 def is_approved(ctx: RunContext, review: GlobalReview) -> bool:
@@ -868,7 +902,7 @@ def require_global_valid(ctx: RunContext) -> None:
     main = store.read_own(MainText, STAGE1_MAIN_TEXT)[0]
     hard = extract._hard_hits(extract._judge_candidate(
         grounding.model_dump(by_alias=True, mode='json'), None,
-        main.model_dump(mode='json')), ignore={'upstream_missing'})
+        main.model_dump(mode='json'), source_hook=extract._read_source_hook(store)), ignore={'upstream_missing'})
     if hard:
         raise BlockingFindingsUnresolved(
             'Global 当前正式稿仍违反生产 HARD；不能授予或消费语义接受',

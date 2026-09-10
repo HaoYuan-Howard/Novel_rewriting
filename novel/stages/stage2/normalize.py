@@ -425,7 +425,8 @@ def normalize_characters(
         evidence_locator_corrections=corrections)
 
 
-def normalize_global(data: dict[str, Any], main_text: list[dict[str, Any]]) \
+def normalize_global(data: dict[str, Any], main_text: list[dict[str, Any]], *,
+                     source_hook: str | None = None) \
         -> tuple[dict[str, Any], GlobalNormalizationAccounting]:
     """把已由编译边界铸成正式 evidence 形状的 dict 归一为最终产物字段。"""
     characters = (((data.get('entities') or {}).get('characters')) or {})
@@ -441,6 +442,8 @@ def normalize_global(data: dict[str, Any], main_text: list[dict[str, Any]]) \
     pruned = _prune_setups(data)
     evidence_failures, evidence_corrections = _normalize_global_evidence(
         data, main_text)
+    from novel.stages.stage2.source_blurb import normalize_hook_evidence
+    normalize_hook_evidence(data, source_hook)
     return data, GlobalNormalizationAccounting(
         setup_chapters_pruned=pruned,
         evidence_locator_failures=evidence_failures,

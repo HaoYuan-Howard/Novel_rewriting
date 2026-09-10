@@ -645,8 +645,9 @@ def test_stage2_current_report_counts_characters_and_both_commanders_with_shared
         'state': 'fail' if cached else 'ok', 'hits': int(cached), 'unknown_rows': 0}
     assert stage2['characters_artifact']['formal_present'] is False
     assert stage2['characters_artifact']['run_binding']['state'] == 'unver'
-    assert stage2['global_artifact']['run_binding']['state'] == 'ok'
-    assert stage2['blueprint_artifact']['run_binding']['state'] == 'ok'
+    # 这些是用于历史体积统计的旧版简略样本，不能用自写 adoption 冒充当前正式产物。
+    assert stage2['global_artifact']['run_binding']['state'] == 'unver'
+    assert stage2['blueprint_artifact']['run_binding']['state'] == 'unver'
     assert stage2['blueprint_wire']['chapter_latency_seconds'] == {
         'chapters': 2, 'p50': 100.0, 'p95': 200.0, 'max': 200.0}
     assert stage2['commander']['calls'] == 2
@@ -673,6 +674,45 @@ def test_stage2_current_report_counts_characters_and_both_commanders_with_shared
     rendered = W.render(collected)
     assert 'tools/workflow_pairs.py' in rendered and '含人物抽取' in rendered
     assert 'stage2_acceptance.py' not in rendered and '预审' not in rendered
+
+
+@pytest.mark.parametrize('node,rel', [
+    ('stage2.characters', 'stage2/characters.json'),
+    ('stage2.global', 'stage2/global_grounding.json'),
+])
+@pytest.mark.parametrize('condition,expected', [
+    ('current', 'ok'), ('changed', 'fail'), ('duplicate', 'fail'),
+    ('old_version', 'unver'), ('malformed', 'unver'),
+])
+def test_formal_run_binding_uses_real_producer_typed_identity(
+        tmp_path: Path, node: str, rel: str, condition: str, expected: str) -> None:
+    """真实提交省略默认字段；统计仍须对上 producer 的 adoption，损坏不得假绿。"""
+    from tests.test_stage2_knowledge_flow import _prepared, _run
+
+    ctx, _registry = _prepared(tmp_path)
+    if node == 'stage2.global':
+        _run(ctx)
+    payload, current, invalid = W._current_artifact(ctx.novel_dir, rel)
+    assert current and not invalid and payload is not None
+    adoptions = W.read_jsonl_rows(W.audit_path(ctx.novel_dir.parent))
+    matches = [row for row in adoptions
+               if row.get('kind') == 'artifact_adoption' and row.get('node') == node]
+    assert len(matches) == 1
+    assert W.prov.projection_fingerprint(payload) != matches[0]['artifact_fingerprint']
+    if condition == 'changed':
+        matches[0]['artifact_fingerprint'] = '0' * 10
+    elif condition == 'duplicate':
+        adoptions.append(dict(matches[0]))
+    elif condition == 'old_version':
+        payload['_schema_version'] -= 1
+    elif condition == 'malformed':
+        payload['_provenance'] = {}
+    result = W._artifact_run_binding(
+        payload, rel=rel, node=node, chapters=[None],
+        audit_rows=adoptions, run_id=ctx.run_id)
+    assert result['state'] == expected
+    assert result['expected_units'] == 1
+    assert result['adopted_units'] == (1 if condition == 'current' else 2 if condition == 'duplicate' else 0)
 
 
 def test_stage2_role_lifecycle_counts_separate_commanders_and_acceptance_order():

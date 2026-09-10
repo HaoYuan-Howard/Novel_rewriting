@@ -231,11 +231,12 @@ class _Ctx:
     """
 
     def __init__(self, global_g: dict[str, Any] | None, blueprints: dict[str, Any] | None,
-                 main_text: list[dict[str, Any]] | None) -> None:
+                 main_text: list[dict[str, Any]] | None, source_hook: str | None = None) -> None:
         self.gg = global_g or {}
         self.bp_raw = blueprints or {}
         self.has_gg = global_g is not None
         self.has_bp = blueprints is not None
+        self.source_hook = source_hook
 
         mt = list(main_text or [])
         self.has_mt = bool(mt)
@@ -954,12 +955,17 @@ def _canon(c: _Ctx, *, character_evidence_only: bool = False) -> list[Outcome]:
                 # ``source=None`` 只能再给出笼统的 span 缺失。后者不得覆盖
                 # 前者，否则交回 agent 的反馈会丢掉唯一可修的根因。
                 problems.setdefault(path, problem)
+        if not character_evidence_only:
+            from novel.core.evidence import iter_hook_evidence_slots
+            from novel.stages.stage2.source_blurb import hook_evidence_problems
+            total += len(list(iter_hook_evidence_slots(c.gg)))
+            problems.update(hook_evidence_problems(c.gg, c.source_hook))
         findings = [finding(
             'global_evidence_unlocated', detail=f'{path}: {problem}', evidence=[path, problem],
         ) for path, problem in sorted(problems.items())]
         out.append(ran(
             'global_evidence_unlocated', findings,
-            scanned=f'{total} 条自由事实证据 · 指定章 + 精确 SourceSpan + 归一失败账',
+            scanned=f'{total} 条自由事实证据 · 明确正文/文案来源 + 精确 SourceSpan + 归一失败账',
         ))
     return out
 
@@ -1857,7 +1863,7 @@ def check_characters(
 
 
 def check(*, global_g: dict[str, Any] | None, blueprints: dict[str, Any] | None,
-          main_text: list[dict[str, Any]] | None) -> list[Outcome]:
+          main_text: list[dict[str, Any]] | None, source_hook: str | None = None) -> list[Outcome]:
     """对两份 stage2 产物跑全部注册的确定性判据 → `[Outcome]`。
 
     **一条判据恰好一个 `Outcome`，一条都不许少**：`build()` 遍历判据注册表，
@@ -1866,6 +1872,6 @@ def check(*, global_g: dict[str, Any] | None, blueprints: dict[str, Any] | None,
     ⚠ 三个参数都可以是 `None`（那一份不在盘上 / 读不回来）。**缺料不是「通过」**：
     对应的判据落 `unver` 并说出**是缺哪一份**，而不是悄悄不报。
     """
-    c = _Ctx(global_g, blueprints, main_text)
+    c = _Ctx(global_g, blueprints, main_text, source_hook)
     return [*_alignment(c), *_addresses(c), *_roles(c), *_canon(c), *_opening(c),
             *_beats(c), *_hinges(c), *_present(c)]
