@@ -765,6 +765,43 @@ class WorkUnitBudget:
             return blob.payload
         return None
 
+    def rejected_responses(
+            self, *, business_sha256: str, waiting_on: str,
+            limit: int = 2) -> tuple[dict[str, Any], ...]:
+        """恢复纠错上下文，只读最近同主体的拒因与原回答，不把它们提升为决定。
+
+        每份回答和拒因继续核验原 blob；遇到接受或主体变更就停止回溯，损坏
+        则关闭式拒绝。调用方还须按其运输协议核对 feedback 的原回答摘要。
+        """
+        rows = []
+        for turn in reversed(self._read().turns):
+            if turn.state == 'adopted' or len(rows) >= limit:
+                break
+            if not turn.feedback_sha256:
+                continue
+            blob = _read(self.base, self.directory / f'{turn.feedback_sha256}.json', WorkUnitBlobV1)
+            if (_digest(blob.model_dump(mode='json')) != turn.feedback_sha256
+                    or blob.unit_id != self.unit_id or blob.turn_id != turn.turn_id):
+                raise WorkUnitRefused('纠错拒因的原始身份漂移')
+            feedback = blob.payload
+            if (feedback.get('business_sha256') != business_sha256
+                    or feedback.get('waiting_on') != waiting_on):
+                break
+            response = self.response_payload(turn.turn_id)
+            if (response.get('business_sha256') != business_sha256
+                    or response.get('waiting_on') != waiting_on
+                    or not isinstance(response.get('final_response'), str)
+                    or not isinstance(feedback.get('reason'), str)
+                    or not isinstance(feedback.get('response_sha256'), str)):
+                raise WorkUnitRefused('纠错回答与原拒因的业务身份不一致')
+            rows.append({
+                'ordinal': turn.ordinal,
+                'response_sha256': feedback['response_sha256'],
+                'final_response': response['final_response'],
+                'reason': feedback['reason'],
+            })
+        return tuple(reversed(rows))
+
     def response_for_logical_request(self, seed: str, *, include_completed: bool = False
                                      ) -> tuple[ContentReservation, dict[str, Any]] | None:
         """冻结的请求种子不含后来追加的历史，恢复仍保留原完整请求指纹。"""

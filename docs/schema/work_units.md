@@ -25,6 +25,12 @@ reasoning 不重复加到 completion，缺失用量显示 unknown。默认追加
 `WorkUnitView` 统一发布 content_base_limit、content_granted、grant_count、content_used、
 content_limit、content_remaining 和恢复入口，运行页与指标工具复用同一投影。
 
+Stage2 Commander 有剩余额度时，纠错请求从同一工作单元恢复最近两份同业务主体、同
+waiting_on 的被拒原回答及拒因，供新 provider 会话自足定位错误。每份原回答、拒因 blob
+及运输摘要必须相互匹配；损坏保持 unknown 并在调用前停止。遇到已采用回答或业务主体
+变化即停止回溯，不把旧上下文带给新主体。它们只是明确隔离的不可信诊断数据，绑定和
+可选动作仍以当前工作包为准；不会因此采用旧决定、改写原回答、返还或新增调用额度。
+
 `WorkUnitLedgerV2.processing` 按写入顺序保存不可变来源回执；冻结请求时登记待处理单元，
 包括尚未启动的并发章节，避免只统计已发请求。模型项精确引用内容轮次，
 机械处理、历史采用和缓存命中引用 producer 已核验的输入与结果摘要。免费处理登记同一

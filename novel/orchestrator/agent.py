@@ -4688,7 +4688,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             if previous_decision.get('business_sha256') == task.business_sha256:
                 return stopped('同一业务主体的审阅决定已执行，当前没有新的审阅进展')
         feedback = budget.latest_feedback()
-        if feedback is not None and feedback.get('business_sha256') != task.business_sha256:
+        if feedback is not None and (
+                feedback.get('business_sha256') != task.business_sha256
+                or feedback.get('waiting_on') != waiting_on):
             feedback = None
         prompt = task.prompt
         if feedback is not None:
@@ -4936,6 +4938,20 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
 
         if budget.remaining == 0:
             return stopped('Commander 当前工作单元有效内容额度已用尽；可免费复验或人工编辑，追加额度须由操作者另行授权')
+        if feedback is not None and waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
+            # 纠错上下文只服务下一次内容调用。原回答已保存时先走上面的免费
+            # 补提交，不因更早的拒稿材料损坏或 blocker 变化而夺走恢复能力。
+            rejected_responses = budget.rejected_responses(
+                business_sha256=task.business_sha256, waiting_on=waiting_on)
+            if not rejected_responses or any(
+                    _reviewer_response_sha256(row['final_response']) != row['response_sha256']
+                    for row in rejected_responses):
+                return stopped('纠错上下文缺原回答或与持久拒因摘要不一致', unknown=True)
+            prompt = reviewer_tasks.correction_prompt(
+                task, str(feedback['reason']),
+                request_sha256=str(feedback['response_sha256']), attempt=budget.used,
+                rejected_responses=rejected_responses)
+            reviewer_prompt = wire.prompt_for(task, prompt)
         seat = open_reviewer_seats.get(binding)
         if seat is not None and seat.output_schema_sha256 != output_schema_digest:
             _close_reviewer_seat(binding, error_kind='reviewer_schema_changed')

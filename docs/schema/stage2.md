@@ -425,6 +425,13 @@ provider 只提交开放的值。patch 行必须是模板的无重复有序子�
 模板允许的固定键。空数组/null 表示本次不提交，不能自动生成 no-op 业务编辑。异常字段、
 重复 object key、越权主体、错误 expected digest 均拒绝，不以 last-wins 解释。
 
+多动作工作包保留完整 action 运输，但编辑选项必须从现役 Pydantic 模型下发
+`source_blurb_replace` 的局部完整 schema，不能只展示当前 unresolved 模板。
+`supported.evidence` 使用 `{chapter_ordinal, locator}`，`hook_supported.hook_evidence`
+只使用 `{locator}`，两者不可互换。带 `resolution_required` 的 UNVER 不开放直接 PASS
+入口，必须先 typed 编辑并在同轮 `post_edit_review` 复核；普通可重新判定的 UNVER
+仍保留复裁选项。逐项事实未闭合时节点选项不开放 accept，但保留 rework、uncertain、stop。
+
 修复 owner 与审阅席位分开：Global Commander 可派修人物或知识，Blueprint Commander 可
 派修人物、知识或本章 Blueprint。只有两位 Commander。静态问题只开放正确 owner 的动作，
 不能把未执行的静态修改夹进 GlobalEdit。source/workpack/正文章全集及 surviving 旧 FAIL/UNVER

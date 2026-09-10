@@ -4952,12 +4952,65 @@ def test_stage2_feedback_correction_records_effective_progress_before_finish(bas
     unit = _stage2_commander_unit(base)
     assert unit.used == 2 and progress['applied'] == []
     assert '首轮缺少 typed 字段' in calls[1].stdin_text
+    assert 'rejected_responses' in calls[1].stdin_text
+    assert '旧 wrapper/token 不得复用' in calls[1].stdin_text
     assert unit._read().turns[0].feedback_sha256
     monkeypatch.setattr(agent.uploads, 'save_reviewer_action', original_save)
+
+    def no_correction_context_for_free_replay(*args, **kwargs):
+        raise AssertionError('已有完整待提交回答，免费恢复不应读取旧拒稿纠错上下文')
+
+    monkeypatch.setattr(budget_type, 'rejected_responses', no_correction_context_for_free_replay)
     second = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
     assert agent.wait(second.run_id, 15)
     assert len(calls) == 2 and progress['applied'] == ['stage2.global']
     assert unit.latest_turn().state == 'adopted'
+
+
+@pytest.mark.parametrize('damaged_digest', [False, True])
+def test_stage2_fresh_parent_correction_restores_only_verified_rejected_answer(
+        base, corpus, monkeypatch, damaged_digest):
+    """拒因持久化后崩溃，新 provider 必须读到原回答；摘要不符则在付费前停止。"""
+    progress, calls, budget_type = _stage2_work_unit_harness(base, monkeypatch, mode='accept')
+    original_load = agent.reviewer_tasks.load_action
+
+    def reject_first(path, snapshot, *, submission_options):
+        if len(calls) == 1:
+            raise agent.reviewer_tasks.ReviewerTaskError('第一次使用了错误证据字段')
+        return original_load(path, snapshot, submission_options=submission_options)
+
+    monkeypatch.setattr(agent.reviewer_tasks, 'load_action', reject_first)
+    original_save = budget_type.save_feedback
+
+    def crash_after_feedback(self, turn_id, payload):
+        if damaged_digest:
+            payload = {**payload, 'response_sha256': '0' * 64}
+        original_save(self, turn_id, payload)
+        raise OSError('模拟拒因已保存而纠错尚未开始时中断')
+
+    monkeypatch.setattr(budget_type, 'save_feedback', crash_after_feedback)
+    first = agent.start(base, '42', authorized=True, egress_authorized=True,
+                        profiles=_PROFILES, spawn=None)
+    assert agent.wait(first.run_id, 15)
+    unit = _stage2_commander_unit(base)
+    assert len(calls) == unit.used == 1 and progress['applied'] == []
+    assert unit.latest_feedback() is not None
+    monkeypatch.setattr(budget_type, 'save_feedback', original_save)
+    second = agent.start(base, '42', authorized=True, egress_authorized=True,
+                         profiles=_PROFILES, spawn=None)
+    assert agent.wait(second.run_id, 15)
+    if damaged_digest:
+        done = next(row for row in agent.records(base) if row.run_id == second.run_id)
+        assert done.exit_code == 70 and done.outcome.state == 'unknown'
+        assert '原回答' in done.outcome.reason
+        assert len(calls) == unit.used == 1 and progress['applied'] == []
+    else:
+        assert len(calls) == unit.used == 2 and progress['applied'] == ['stage2.global']
+        assert calls[1].resume_provider_session_id is None
+        assert '第一次使用了错误证据字段' in calls[1].stdin_text
+        assert 'rejected_responses' in calls[1].stdin_text
+        assert r'\"ordinal\": 1' in calls[1].stdin_text
+        assert unit.latest_turn().state == 'adopted'
 
 
 @pytest.mark.real_code_version

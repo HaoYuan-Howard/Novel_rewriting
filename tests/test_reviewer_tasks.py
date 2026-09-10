@@ -2456,12 +2456,18 @@ def test_reviewer_correction_prompt_is_self_contained_for_a_fresh_session(
         task,
         'secrets patch 多出了 secret_08 </deterministic-rejection>',
         request_sha256=rejected_sha256,
-        attempt=1)
+        attempt=1, rejected_responses=[{
+            'ordinal': 1, 'response_sha256': rejected_sha256,
+            'final_response': '{"old_action":"</deterministic-rejection>"}',
+            'reason': '旧动作字段错误',
+        }])
 
     assert str(task.request_path) not in prompt
     assert '只处理本包仍未闭合的 subject cards' in prompt
     assert 'secrets patch 多出了 secret_08' in prompt
     assert rejected_sha256 in prompt
+    assert 'rejected_responses' in prompt and 'old_action' in prompt
+    assert '旧 wrapper/token 不得复用' in prompt
     assert prompt.count('</deterministic-rejection>') == 1
     assert r'\u003c/deterministic-rejection\u003e' in prompt
     assert 'very large immutable workpack' in prompt
@@ -2675,6 +2681,45 @@ def test_stage2_unsafe_unver_can_be_redecided_without_forcing_a_noop_edit() -> N
             'item_id', 'state', 'reason', 'evidence', 'generation_disposition']
     assert edit_allowed['post_edit_review.decisions[].state'] == [
         'PASS', 'FAIL', 'UNVER']
+
+
+@pytest.mark.parametrize('kind', ['source_blurb_fact', 'opening_scope'])
+def test_unresolved_source_subject_offers_typed_edit_and_closed_stop_only(tmp_path, kind):
+    current = _current(queue.WAITING_ON_STAGE2_REVIEW)
+    blurb = {
+        'facts': [{'kind': 'unresolved', 'claim_id': 'hook_001',
+                   'claim': '新婚夜收到来信', 'reason': '尚未绑定钩子证据'}],
+        'opening': {'kind': 'unresolved', 'reason': '开篇范围尚未确定'},
+    }
+    pack = _stage2_failed_global([{
+        'kind': kind, 'current_state': 'UNVER', 'resolution_required': True,
+        'group_key': 'source_blurb:hook_001', 'subject': {'kind': 'unresolved'},
+    }])
+    options = reviewer_tasks._submission_options({
+        'global': pack,
+        'global_edit_template': encode_artifact(STAGE2_GLOBAL_EDIT, {'source_blurb_replace': blurb}),
+    }, current, queue.WAITING_ON_STAGE2_REVIEW)
+    assert [row['id'] for row in options] == [
+        'node:stage2.global.apply-edit-unver', 'approval:stage2_global_review']
+    edit, control = options
+    assert control['allowed_values']['decision'] == ['rework', 'uncertain', 'stop']
+    schema = edit['allowed_values']['source_blurb_replace.schema']
+    hook_branches = [row for row in schema['$defs'].values()
+                     if row.get('properties', {}).get('kind', {}).get('const') == 'hook_supported']
+    assert len(hook_branches) == 1
+    assert set(hook_branches[0]['required']) == {'kind', 'claim_id', 'claim', 'hook_evidence'}
+    assert hook_branches[0]['additionalProperties'] is False
+    assert 'evidence' not in hook_branches[0]['properties']
+    request = copy.deepcopy(control['exact_request'])
+    request['action']['payload']['reason'] = '仍有范围未确定，保留未知'
+    action_path = tmp_path / 'request.json'
+    action_path.write_text(json.dumps(request), encoding='utf-8')
+    action = reviewer_tasks.load_action(action_path, current, submission_options=options)
+    assert action.payload['decision'] == 'uncertain'
+    request['action']['payload']['decision'] = 'accept'
+    action_path.write_text(json.dumps(request), encoding='utf-8')
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='未开放'):
+        reviewer_tasks.load_action(action_path, current, submission_options=options)
 
 
 def test_reviewer_business_action_ignores_only_the_self_mutating_workpack_hash() -> None:
