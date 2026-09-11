@@ -7398,6 +7398,58 @@ def test_commander_failure_reconciliation_keeps_budget_cost_and_proves_replay(
     assert reservation.ordinal == 2 and f.budget.remaining == 2
 
 
+@pytest.mark.parametrize('failed_commander', [3], indirect=True)
+@pytest.mark.parametrize('proof_state', ['valid', 'unreconciled', 'missing', 'changed'])
+def test_commander_failure_reconciliation_is_consumed_by_new_supervisor(
+        failed_commander, monkeypatch, proof_state):
+    """真实调度入口消费工程收口；切模型仍扣原余量，不能凭 failed 字样放行。"""
+    from contracts.schema.work_unit_recovery import CommanderFailureRecoveryRequest
+    from novel.orchestrator import work_unit_recovery
+    from novel.llm.ledger import ledger_path
+    f = failed_commander
+    cost = ledger_path(f.base).read_bytes()
+    if proof_state != 'unreconciled':
+        work_unit_recovery.apply(f.base, '42', f.budget.unit_id, f.turn.turn_id,
+            CommanderFailureRecoveryRequest(preview_token=f.view.preview_token,
+                actor='工程验收', reason='连接失败且没有回答，显式换用智谱'))
+        proof = next(row for row in f.budget._read().processing if row.kind == 'mechanical')
+        proof_path = f.budget.directory / f'{proof.evidence_sha256}.json'
+        if proof_state == 'missing':
+            proof_path.unlink()
+        elif proof_state == 'changed':
+            proof_path.write_bytes(proof_path.read_bytes() + b' ')
+    before = f.budget.path.read_bytes()
+    _, task_box, _ = _seat_harness(monkeypatch)
+    glm = AgentProfile(driver='claude-code-glm', model='glm-5.3-flash[1M]',
+                       reasoning_effort='max', execution_mode='standard')
+    result = _seat_result(0, provider='new-glm-provider')
+    result = replace(result, observation=replace(result.observation,
+        actual_model=glm.model, actual_effort=glm.reasoning_effort))
+    invocations = []
+    monkeypatch.setattr(agent, '_default_spawn', _spawn_sequence(task_box, invocations, [result]))
+    rec = agent.start(f.base, '42', authorized=True, egress_authorized=True,
+        profiles=PipelineAgentProfiles(commander=glm, executor_default=glm), spawn=None)
+    assert agent.wait(rec.run_id, 10)
+    if proof_state != 'valid':
+        assert invocations == []
+        assert f.budget.path.read_bytes() == before
+        assert ledger_path(f.base).read_bytes() == cost
+        return
+    assert len(invocations) == 1
+    assert invocations[0].profile == glm
+    assert invocations[0].resume_provider_session_id is None
+    assert f.budget.used == 2 and f.budget.remaining == 2
+    first, second = f.budget._read().turns
+    assert first.state == 'failed' and first.attempts == f.turn.attempts
+    assert second.state == 'adopted' and second.run_id == rec.run_id
+    assert first.session_run_id != second.session_run_id
+    assert ledger_path(f.base).read_bytes().startswith(cost)
+    rows = [json.loads(line) for line in ledger_path(f.base).read_text('utf-8').splitlines()]
+    assert len(rows) == len(f.turn.attempts) + 1
+    assert rows[-1]['request_model'] == glm.model
+    assert rows[-1]['reasoning_effort'] == 'max'
+
+
 @pytest.mark.parametrize('damage', [
     'missing_cost', 'duplicate_cost', 'model', 'effort', 'code', 'protocol', 'usage',
     'provider', 'session_open', 'owner_open', 'log_answer', 'log_claude_answer', 'log_prefixed_answer',

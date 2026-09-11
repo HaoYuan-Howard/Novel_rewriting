@@ -111,7 +111,8 @@ from novel.orchestrator.jobs import JobConflict, JobRegistry, service_dir
 from novel.orchestrator.nodes import shell_line
 from novel.store import ArtifactStore
 from novel.work_units import (
-    WorkUnitBudget, WorkUnitRefused, ContentReservation, require_workflow, validate_reviewer_record,
+    COMMANDER_FAILURE_RECONCILED, WorkUnitBudget, WorkUnitRefused, ContentReservation,
+    require_workflow, validate_reviewer_record,
 )
 
 RUNS_FILENAME = 'agent_runs.jsonl'
@@ -4717,20 +4718,28 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         output_schema = wire.output_schema_for(task)
         output_schema_digest = _prepare_output_schema(output_schema)[2]
         schema_recovery_proof = None
+        failure_recovery_validated = False
         if (previous_turn is not None and previous_turn.response_sha256 is None
                 and previous_turn.state in ('unknown', 'failed')):
             parents = [item for item in records(base) if item.run_id == previous_turn.run_id]
-            if len(parents) == 1 and previous_turn.run_id != run_id and output_schema_digest is not None:
+            if len(parents) == 1 and previous_turn.run_id != run_id:
                 with admission.require_owner_stopped(base, previous_turn.run_id):
-                    schema_recovery_proof = reviewer_schema_recovery.inspect_work_unit_rejection(
-                        base, sid, budget=budget, parent=parents[0],
-                        log_path=run_log_path(base, previous_turn.run_id), profile=plan.profiles.commander,
-                        replacement_schema_sha256=output_schema_digest,
-                        validation_code_version=epoch.code_version,
-                        replacement_subject_sha256=_sha256_bytes(reviewer_prompt.encode('utf-8')))
-                    if schema_recovery_proof is not None:
-                        budget.finish(previous_turn.turn_id, outcome='failed', reason_code='schema_recovery_validated')
-            if schema_recovery_proof is None:
+                    # latest_turn 的权威读路已校验失败收口凭据的原始字节与原账；
+                    # 后续锁内 reserve 仍会重验。新运行不必伪造 schema 修复，
+                    # 也不重签原凭据、续旧供应商会话或退还旧内容轮。
+                    failure_recovery_validated = (
+                        previous_turn.state == 'failed'
+                        and previous_turn.reason_code == COMMANDER_FAILURE_RECONCILED)
+                    if not failure_recovery_validated and output_schema_digest is not None:
+                        schema_recovery_proof = reviewer_schema_recovery.inspect_work_unit_rejection(
+                            base, sid, budget=budget, parent=parents[0],
+                            log_path=run_log_path(base, previous_turn.run_id), profile=plan.profiles.commander,
+                            replacement_schema_sha256=output_schema_digest,
+                            validation_code_version=epoch.code_version,
+                            replacement_subject_sha256=_sha256_bytes(reviewer_prompt.encode('utf-8')))
+                        if schema_recovery_proof is not None:
+                            budget.finish(previous_turn.turn_id, outcome='failed', reason_code='schema_recovery_validated')
+            if schema_recovery_proof is None and not failure_recovery_validated:
                 return stopped('上次模型请求没有可恢复回答；缺精确配置修复证明，保留原额度并停止')
         request_sha256 = _sha256_bytes(json.dumps({
             'business_sha256': task.business_sha256, 'waiting_on': task.waiting_on,
