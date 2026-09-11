@@ -892,6 +892,7 @@ def reconcile_commander_response(
         budget: WorkUnitBudget, turn_id: str, *, read_only: bool = False) -> None:
     """原始回答的成本/会话尾账必须闭合后才能消费 typed 决定。"""
     from novel import agent_session_audit
+    from novel.agent_capabilities import reported_model_matches
     from novel.llm.ledger import reconcile_commander_call
 
     row = budget.turn(turn_id)
@@ -934,7 +935,8 @@ def reconcile_commander_response(
             or attempt.profile is None or attempt.profile != turn.profile
             or attempt.profile.model != kwargs.get('request_model')
             or attempt.profile.reasoning_effort != kwargs.get('requested_effort')
-            or attempt.actual_model not in (None, attempt.profile.model)
+            or (attempt.actual_model is not None
+                and not reported_model_matches(attempt.profile, attempt.actual_model))
             or attempt.actual_effort not in (None, attempt.profile.reasoning_effort)
             or not attempt.provider_session_id
             or attempt.provider_session_id != turn.provider_session_id

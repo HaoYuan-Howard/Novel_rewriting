@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from contracts.schema.orchestration import AgentProfile, PipelineAgentProfiles
 from novel import agent_session_audit
 from novel.orchestrator import agent
 from novel import work_units
@@ -16,8 +18,27 @@ from tests.test_agent import (
 
 
 @pytest.mark.parametrize('window', ['raw_after', 'cost_before', 'cost_after', 'attempt_before', 'turn_before', 'turn_after'])
-def test_saved_commander_receipt_reconciles_without_wire(base, corpus, monkeypatch, window):
+@pytest.mark.parametrize('reported_model', [None, 'glm-5.3-flash[1m]', 'glm-5.3-flash'])
+def test_saved_commander_receipt_reconciles_without_wire(base, corpus, monkeypatch, window, reported_model):
     progress, calls, budget_type = _stage2_work_unit_harness(base, monkeypatch, mode='accept')
+    profiles = _PROFILES
+    if reported_model is not None:
+        glm = AgentProfile(driver='claude-code-glm', model='glm-5.3-flash[1M]',
+                           reasoning_effort='max', execution_mode='standard')
+        profiles = PipelineAgentProfiles(commander=glm, executor_default=glm)
+        original_factory = agent._default_spawn
+
+        def factory(run_id, *, on_registered=None):
+            original_spawn = original_factory(run_id, on_registered=on_registered)
+
+            def spawn(*args):
+                result = original_spawn(*args)
+                return replace(result, observation=replace(result.observation,
+                    actual_model=reported_model, actual_effort=None))
+
+            return spawn
+
+        monkeypatch.setattr(agent, '_default_spawn', factory)
     original_cost = agent.append_commander_call
     original_append = agent_session_audit.append_event
     original_turn = agent_session_audit.append_commander_turn
@@ -58,12 +79,12 @@ def test_saved_commander_receipt_reconciles_without_wire(base, corpus, monkeypat
     monkeypatch.setattr(agent_session_audit, 'append_event', event)
     monkeypatch.setattr(agent_session_audit, 'append_commander_turn', turn)
     monkeypatch.setattr(work_units, '_write', write)
-    first = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
+    first = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=profiles, spawn=None)
     assert agent.wait(first.run_id, 15)
     assert fault['raised'] and len(calls) == 1
     assert progress['applied'] == []
     fault['active'] = False
-    second = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
+    second = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=profiles, spawn=None)
     assert agent.wait(second.run_id, 15)
     assert len(calls) == 1 and progress['applied'] == ['stage2.global']
     unit = budget_type(base, '42', 'stage2.global', 'commander', 'book')
@@ -71,6 +92,10 @@ def test_saved_commander_receipt_reconciles_without_wire(base, corpus, monkeypat
     rows = [json.loads(line) for line in (Path(base) / '_service' / 'ledger.jsonl').read_text('utf-8').splitlines()]
     commander_rows = [row for row in rows if row.get('role') == 'commander']
     assert len(commander_rows) == 1 and commander_rows[0]['run_id'] == first.run_id
+    if reported_model is not None:
+        assert commander_rows[0]['request_model'] == profiles.commander.model
+        assert commander_rows[0]['model'] == reported_model
+        assert commander_rows[0]['actual_reasoning_effort'] is None
     sessions = agent_session_audit.fold(agent_session_audit.read_events(base))
     assert len(sessions) == 1 and len(sessions[0].turns) == 1
     assert len(sessions[0].attempts) == 1 and sessions[0].end is not None
