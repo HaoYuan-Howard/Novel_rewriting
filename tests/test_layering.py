@@ -196,6 +196,9 @@ def _runtime_files() -> tuple[str, ...]:
 
 #: 允许裸读 JSON 的白名单。每一条都要写得出理由。
 _JSON_READ_ALLOWED = {
+    'novel/agents/glm.py': (
+        '只读取 Claude CLI 用户 settings.json 中的非敏感接收端配置，不读取小说产物；'
+        '智谱接收端必须精确匹配，密钥仍由 CLI 自己消费，不进入模型输入或审计'),
     'novel/output_root.py': (
         '只读根外的离线归档围栏、清单和提交回执；不解析旧 artifact，'
         '新根须有同事务的 committed 证明，服务/CLI/Store 共用这一判定'),
@@ -205,6 +208,9 @@ _JSON_READ_ALLOWED = {
         '章节产物及来源证据仍必须通过 ArtifactStore 读取'),
     'novel/model_slots.py': '只读 _service/model_slots 的容量配置，不读小说产物；损坏配置关闭式拒绝。',
     'novel/work_units.py': '只读 _service 工作单元账和已保存响应，不读小说产物。',
+    'novel/orchestrator/work_unit_recovery.py': (
+        'JSON 解码只将内存中的失败恢复证据规范化为落盘重放的嵌套形状；'
+        '原账、成本、session 与 owner 证明走各自权威读路，不读取小说产物'),
     'novel/orchestrator/reviewer_schema_recovery.py': (
         '只解析 service 公开协议日志的完整失败信封并拒绝重复键，不读取小说产物；'
         '没有响应恢复或人工决定，来源证明只供有界席位预留 CAS'),
