@@ -3125,6 +3125,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     active_admission_lock = threading.Lock()
     active_admission_id: str | None = None
     admission_quiesced = False
+    commander_stop_requested = threading.Event()
     epoch_action_counts: dict[str, int] = {}
     epoch_drain_states: dict[str, str] = {}
     turn_index = 0
@@ -3463,6 +3464,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             return False
 
     def _cancel_active() -> bool:
+        # 同席重试复用已经 commit 的 launch ticket，必须另行记住终止请求；
+        # 不能在换 driver 后丢掉旧 driver 上的 cancel 状态。
+        commander_stop_requested.set()
         _cancel_commander_owner(run_id)
         _cancel_action_owner(run_id)
         # 安全边界上没有活动 owner 时，stop 仍已通过 launch ticket 阻止新 spawn；
@@ -3685,6 +3689,11 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         attempt_invocation = turn_invocation
         current_attempt = {'id': attempt_id, 'kind': 'launch'}
         pointer_written: set[str] = set()
+        recorded_cost_attempt_id: str | None = None
+        recorded_turn_attempt_id: str | None = None
+
+        class StoppedBeforeWire(Exception):
+            """已创建重试进程，但还没有发送本次 prompt。"""
 
         def session_pointer_sink(event: object, session_id: str | None) -> None:
             nonlocal integrity_error_kind
@@ -3712,6 +3721,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
 
         def popen_registered() -> None:
             nonlocal invoked, registered, integrity_error_kind, spawn_started
+            if commander_stop_requested.is_set():
+                raise StoppedBeforeWire()
             # 总槽等待发生在 Popen 前，不计入 Commander 的实际执行区间。
             # 该回调仍早于 stdin/wire；后面的账本 CAS 与原身份守卫保持同一顺序。
             spawn_started = time.monotonic()
@@ -3831,6 +3842,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 with _COMMANDERS_LOCK:
                     _COMMANDER_EVENT_SINKS[run_id] = session_pointer_sink
                 while True:
+                    if commander_stop_requested.is_set():
+                        break
+                    previous_attempt_id = attempt_id
+                    previous_invocation = attempt_invocation
                     raw_exit_known = False
                     attempt_no += 1
                     if attempt_no > 1:
@@ -3887,6 +3902,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     attempt_retryable = False
                     attempt_wire = False
                     attempt_crashed = False
+                    stopped_before_wire = False
                     try:
                         # 注入 spawn 没有真实 runner 的 Popen 回调；仍把登记放进
                         # 本 attempt 的 try/finally，使账本前置凭证失败也能形成
@@ -3937,6 +3953,16 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                                     response_sha256=_reviewer_response_sha256(attempt_final_response)),
                             }
                             on_final_response(attempt_final_response, durable_result)
+                    except StoppedBeforeWire:
+                        # 旧尝试已经结账；这个零 wire 进程没有预留新 attempt，
+                        # 继续以最后一次真实调用收口，不能制造第二笔未知成本。
+                        stopped_before_wire = True
+                        attempt_id = previous_attempt_id
+                        attempt_invocation = previous_invocation
+                        current_attempt['id'] = attempt_id
+                        if not invoked:
+                            rc = 2
+                            process_error_kind = 'commander_stopped'
                     except BaseException as exc:  # noqa: BLE001 —— 崩了也要闭合本 attempt
                         attempt_crashed = True
                         known_rc = getattr(exc, 'returncode', None)
@@ -3953,8 +3979,11 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         _append_safe_traceback(
                             base, run_id, prompt=turn_invocation.stdin_text)
                     finally:
-                        turn_latency_ms = int(
-                            (time.monotonic() - spawn_started) * 1000)
+                        if not stopped_before_wire:
+                            turn_latency_ms = int(
+                                (time.monotonic() - spawn_started) * 1000)
+                    if stopped_before_wire:
+                        break
                     if on_attempt_finished is not None:
                         try:
                             on_attempt_finished(
@@ -3970,9 +3999,15 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     if invoked:
                         append_attempt_audit(
                             attempt_rc, attempt_failure, attempt_observation)
+                    # stop 也可能发生在退避期间；保留最后一次真实返回，供
+                    # 循环直接退出后统一收口，已写的成本/turn 下方不重复追加。
+                    rc = attempt_rc
+                    observation = attempt_observation
+                    process_error_kind = attempt_failure
                     retry = (
                         invoked and attempt_rc != 0 and attempt_retryable
                         and attempt_no < max_attempts
+                        and not commander_stop_requested.is_set()
                         and integrity_error_kind is None)
                     if not retry:
                         rc = attempt_rc
@@ -4012,6 +4047,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             error_kind=intermediate_kind,
                             latency_ms=turn_latency_ms,
                             activity=activity)
+                        recorded_cost_attempt_id = attempt_id
                     except Exception:  # noqa: BLE001
                         integrity_error_kind = 'commander_ledger'
                         _append_safe_traceback(
@@ -4064,6 +4100,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             )
                             if not fresh_reviewer_session and reuse_owner is None:
                                 provider_turn_recorded = True
+                            if reuse_owner is None:
+                                recorded_turn_attempt_id = attempt_id
                         except Exception:  # noqa: BLE001
                             integrity_error_kind = 'commander_session_audit'
                             _append_safe_traceback(
@@ -4174,7 +4212,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             or process_error_kind
             or (None if rc == 0 else 'commander_process_exit'))
 
-        if invoked:
+        if invoked and recorded_cost_attempt_id != attempt_id:
             try:
                 if durable_result is not None:
                     append_commander_call(base, **durable_result['cost_kwargs'])
@@ -4209,8 +4247,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     base, run_id, prompt=turn_invocation.stdin_text)
 
         provider_reuse_owner: str | None = None
-        this_turn_recorded = False
-        if observation.provider_session_id is not None:
+        this_turn_recorded = recorded_turn_attempt_id == attempt_id
+        if observation.provider_session_id is not None and not this_turn_recorded:
             if fresh_reviewer_session:
                 fresh_turn_counter += 1
                 audit_turn_index = fresh_turn_counter

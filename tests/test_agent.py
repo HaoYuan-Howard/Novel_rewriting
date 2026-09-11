@@ -7388,6 +7388,60 @@ def test_transient_failure_resumes_the_same_seat_without_a_new_session(
     assert [row['outcome'] for row in commander_rows] == ['error', 'ok']
 
 
+@pytest.mark.parametrize('stop_at', ['failed_attempt', 'backoff', 'retry_before_wire'])
+def test_stop_prevents_commander_retry_without_duplicate_usage(
+        base, corpus, monkeypatch, stop_at):
+    """停止覆盖失败返回、退避和重试 Popen 窗口；只记已经发生的那一次调用。"""
+    _current, _task_box, _sleeps = _seat_harness(monkeypatch)
+    wire = []
+    launched = []
+    owner = {}
+
+    def default_spawn(run_id, *, on_registered=None):
+        owner['run_id'] = run_id
+
+        def spawn(invocation, env, log):
+            del env, log
+            launched.append(invocation)
+            if len(launched) == 2 and stop_at == 'retry_before_wire':
+                agent.request_stop(base, run_id)
+            on_registered()
+            wire.append(invocation)
+            if len(wire) == 1:
+                if stop_at == 'failed_attempt':
+                    agent.request_stop(base, run_id)
+                return _seat_result(1, provider='stopped-seat',
+                                    failure_kind='timeout', retryable=True)
+            return replace(_seat_result(0, provider='stopped-seat'),
+                           final_response=json.dumps({'action': {
+                               'kind': 'stop', 'reason': '不应发生第二次请求'}}))
+        return spawn
+
+    def backoff(_seconds):
+        if stop_at == 'backoff':
+            agent.request_stop(base, owner['run_id'])
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    monkeypatch.setattr(agent, '_retry_sleep', backoff)
+    rec = agent.start(base, '42', authorized=True, egress_authorized=True,
+                      profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+    assert len(wire) == 1, 'stop 后不能再次发送 Commander prompt'
+    assert len(launched) == (2 if stop_at == 'retry_before_wire' else 1)
+    [session] = agent_session_audit.fold(agent_session_audit.read_events(base))
+    assert len(session.attempts) == len(session.turns) == 1
+    assert session.attempts[0].error_kind == 'timeout'
+    [turn] = _seat_ledger(base).turns
+    assert len(turn.attempts) == 1 and turn.attempts[0].outcome == 'error'
+    rows = [json.loads(line) for line in
+            (Path(base) / '_service' / 'ledger.jsonl').read_text('utf-8').splitlines()]
+    assert len(rows) == 1 and rows[0]['error_kind'] == 'timeout'
+    [done] = [row for row in agent.records(base) if row.run_id == rec.run_id]
+    assert done.ended is not None
+    from novel.orchestrator import agent_continuation
+    assert agent_continuation.inspect(base, rec.run_id).available
+
+
 def test_stage2_compact_schema_identity_is_stable_across_transient_resume(
         base, corpus, monkeypatch):
     """真实 AgentRun 首发与同席 resume 共用同一动态 schema 审计身份。"""
