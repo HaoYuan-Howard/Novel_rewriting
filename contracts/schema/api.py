@@ -31,7 +31,7 @@ from contracts.schema.knowledge_links import KnowledgeLinkReview, KnowledgeLinkS
 from contracts.schema.stage2_review import (
     Stage2ReviewCoverage, Stage2ReviewReceipt, Stage2ReviewSubmission,
 )
-from contracts.schema.orchestration import RunContinuationSource, WorkUnitView, PipelineConcurrency
+from contracts.schema.orchestration import AgentDeliveryOutcome, RunContinuationSource, WorkUnitView, PipelineConcurrency
 
 import json
 import re
@@ -3755,6 +3755,8 @@ class Stage7View(StrictModel):
     book_txt: BookTxt | None
     #: 成书此刻真的在不在盘上（`book_txt` 记的是组装时的账，两者可分家）。
     book_txt_on_disk: bool
+    #: 共用确定性交付终验；文件存在不能代替可下载证明。
+    delivery: AgentDeliveryOutcome
     #: 成书的文件名（`<书名>_rewriting.txt`）。**下载时另存成什么名字用它，
     #: 别在前端拿 `title` 再拼一次**——那就是同一条命名规则的第二个落点，
     #: 而它与 `novel/paths.py::book_txt_rel` 分家时盘上那份和下载那份会叫两个名字。

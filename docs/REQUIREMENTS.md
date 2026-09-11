@@ -10,67 +10,47 @@
 `--require-corpus` 对精确匹配的无正文 manifest 与盘面完成验收后，才可以称“全量语料绿”；
 此前的通过结果只能称“非 corpus 回归”。
 
-## P0 · 成本与耗时优化实施
+## P0 · 当前工程实施
+
+### TODO-50 · Stage6/7 人工前端免费编辑范围待裁决
+
+开发 harness、操作 skill 退役、运行身份、无 Markdown 交付及前端统计已闭合，规则归所属指南与契约。
+尚未确定的扩展是 Stage6 文案编辑、Stage7 人物表编辑：`docs/schema/_api.md` 五j 与
+`novel/api/routes/edits.py` 仍明确限定为 CLI。已向用户建议撤回旧限制，尚未收到该范围的裁决。
+若纳入，服务只暂存同书 typed 请求，由 CLI 按当前主体校验、归档和写盘；编辑后重新审批，
+验证页面编辑、旧批准失效、重新批准、下载及重启读回。此扩展不阻塞现有自动跑书验收。
 
 ### TODO-49 · 小说流水线 token 与耗时优化
 
-实施依据为 `PLAN.md` 与 `docs/PIPELINE_COST_LATENCY_PLAN.md`，工程基线 `24e4cf4`。首轮和返工分别验收，分批开发、一次切换；旧根整根归档，不迁移旧产物。活动状态仅在本条维护。
+现役设计见 BACKEND_CONTRACT 与 schema，性能配对协议见 `docs/OPERATIONS.md`；首轮、局部返工和故障恢复分开验收，最终一次整根切换。
+工程基线由 `24e4cf4` 推进至当前 worktree；已实现行为见当前契约，历史验证只见 DECISIONS/Git。
 
-- [ ] P0：对齐目标与当前能力，补齐 Stage4/5 E/C、内容轮/网络尝试、采用、恢复和墙钟观测，冻结质量样例与配对标准。
-- [ ] P1：先闭合结构审批的 Blueprint 依赖，再贯通 A/B 精确局部、多来源及全采用、免费整书提交和恢复。
-- [ ] P2：义务决定继承、待审材料压缩、无待审免费收口；移除非 Stage2 指令中的 Global 编辑规则。
-- [ ] P3：人物注册、必要知识、arc 删除、源文案范围、三 owner 派修、独立知识—事实关联及披露消费。
-- [ ] P4：Blueprint 与材料 fact 归属、对白语义化、Stage5 整章边界内的紧凑首写/修订/Reviewer rewrite。
-- [ ] 独立恢复：同单元人工追加、停止证明、幂等/CAS、原完整 profiles 续跑，不作为所有性能批次前置。
-- [ ] P5：默认四并发、逐节点 6/8 对照与总并发限制、真实链路、current-schema corpus、归档切换。
+已接入人物/知识/Blueprint 三 producer、两 Commander、Stage4 实际依赖与历史采用、义务继承、
+知识关联及披露边界、Stage5 紧凑整章任务书、不可变人工追加额度、原 profiles 续跑和指标 v3。
+旧版兼容通道已按授权退役。这些工程能力仍须完成以下验收，不能视为性能目标已经通过：
 
-单书真实验收已于 2026-09-10 启动，使用独立输出根和用户明确授权的 OpenAI Codex / gpt-5.6-sol（Commander high、Executor xhigh）。已完成上传、Stage0/1、人物与 Global 生成；Global 审阅因四项钩子独有信息保持 UNVER，运行已正式停止并证明排空，已购买成果及原配置保留。根据用户对钩子用途的澄清，本批补充钩子独立证据、负决定提交退休、Stage0 typed 公开投影和统计 typed 指纹一致性；尚未完成 Stage2 后续至下载/重启的单书验收，不能据此移动 main 或宣称性能达标。
+- [ ] 完成《夫君的报恩》单书真实消费者链：Blueprint Commander → Stage2 免费收口 → Stage4～7 → 下载 → 服务重启读取。
+- [ ] 真书核 Stage4 局部/多来源/全采用、无待审免费提交及回答/决定/prepared/正式写回中断恢复；19 章只改第 17 章时无关章零新增请求/审阅，第 18 章实际边界变化正确失效。
+- [ ] Plan 不变但 Blueprint 证据改变、候选从唯一变多义时，旧决定/绑定失效；修改或删除问题仍完整复审，来源损坏保持 unknown。
+- [ ] 真书核人物/知识三 owner 派修、规则变化不重抽无关 Blueprint、场景重排披露边界、对白语义与必要字面例外。
+- [ ] 冻结三书样例、两臂干净代码/源 hash/配置/输出及人工质量收据，按 OPERATIONS 完成九组配对；首轮、返工、恢复分开。
+- [ ] 逐节点完成 4 对 6/8 并发实验，验证每书/供应商总限制、失败、重试与 token 不退化。
+- [ ] 完成追加额度、原配置续跑及重启累计账的真实链路；无进展或 unknown 不因追加而解除。
+- [ ] 与 TODO-21/28/31 同批闭合 current-schema corpus、真实 API fixture 和产物形状验收。
+- [ ] 最终冻结批次完成根 AGENTS 规定的回归及前端门槛；备份 main 后按已授权方案用验收通过的 worktree 替换。
+- [ ] 停止 admission、排空并证明 owner 停止，通过 preview/apply 整根归档旧输出；新生产使用独立空根，回滚配对旧代码与旧根。
 
-按原配置续跑已走真实运行页；用户仅授权 Global Commander 追加一次（4→5），不可变
-授权只登记一笔。第 5 次回答仍直接 PASS 未解决主体，被 producer 拒绝，当前 5/5 且安全停止。
-实际请求暴露多动作工作包缺少 `hook_evidence` 分支 schema、仍开放无效直接 PASS、跨运行
-纠错缺原回答的问题；本批补齐当前合法动作、闭合 schema 和同主体拒绝上下文，不改旧回答、
-不返还费用、不自行追加。修复后的真实付费裁决及后续交付仍待完成。
+**当前授权与交付范围（2026-09-11）**：用户已要求继续隔离根中的《夫君的报恩》，保留原
+OpenAI Codex / gpt-5.6-sol（Commander high、Executor xhigh）配置及已购成果；另以
+gpt-5.6-terra / xhigh 同时配置 Executor 与 Commander，验收《夫君不行，但我有孕啦》。
+两书必要的 OpenAI 正文外发与付费已获明确授权，不重复询问。先冻结已验收工程代码并提交，
+旧 owner 排空后走正式续跑；实际停点、额度和用量只读对应 `_service` 权威记录。
+两书通过真实交付验收后，备份 main 并用本 worktree 的已验收代码替换。速度、token 与稳定性
+保留失败和恢复分母；不同书目及 Commander effort 的观测比较不冒充固定条件的模型配对实验。
+上述两书交付不代表本条其他 corpus、九组配对或局部恢复实验已完成，也不自动归档既有输出根。
 
-已实现、尚待真实语料与发布验收的工程增量：
-
-单书停点修复已通过契约与受影响 510 项、随后集成定向 225 项；补齐 Stage6 最终 Commander
-的事实材料和钩子独立支持规则后，契约五文件与 Stage6 生成、恢复、HTTP 重启消费者 654 项通过，
-前端 230 项、typecheck/seams/build 通过。终审 `materials` 纳入长期 review identity，
-原钩子、已接受主张及正文变化均使旧接受失效；缺章不以空材料代替。最终默认非 corpus 回归共
-6476 项，6474 通过、2 项因缺 Stage2 审阅语料跳过，无失败或错误，进程退出 0
-（`fujun-commander-correction-noncorpus.xml`）；Global 工作包与跨运行纠错的定向 741 项通过。
-这些工程结果不代替本书后续付费裁决和下载/重启验收。后续局部修复的测试选择与批次门槛统一遵循
-`AGENTS.md::测试选择与批次验收`，不因每次提交或验收续跑重跑全仓。
-
-流水线实现的默认非 corpus 回归共 6431 项，6429 通过、2 项因缺 Stage2 审阅语料跳过，
-无失败或错误，进程退出 0（`retirement-final-noncorpus-v3.xml`）；不代表 current-schema corpus 已验收。
-指标 v3 与审阅指令已对齐：Stage2 总耗时和用量纳入人物节点及两位 Commander，
-旧五轮验收工具仅保留历史报告读取，现役入口统一九组配对；Commander 的三 owner 派修、
-实际依赖决定继承和人工累计额度同步到运行时工作包与操作 skill，删除提前生成 Blueprint 的旧指引。
-该增量的契约五文件 331 项及指标、实际工作包、额度、API/skill 定向验证 273 项均已通过。
-默认回归后仅追加统计工具对冻结基线 v1 工作单元账的只读解析，保留未知与生产拒绝边界；
-该补丁与契约五文件、指标配对及工作单元守卫共 425 项定向测试通过
-（`retirement-metrics-history-targeted.xml`），不混称已包含在前述默认回归中。
-这些工程结果不覆盖或替代各条明确保留的真书、corpus、付费实验与切换缺口。
-
-- 旧 frozen-v6 产物读取、Stage4 审阅/编辑与 Stage7 组装/下载兼容入口已按用户明确授权退役；当前产物版本不匹配保持拒绝。旧 Stage2 预审、额外终审、独立额度账的写入/退款/归档重开入口亦已移除，Blueprint Commander 的进度分母改为自身义务并删除重复 Global 工作包读取。旧书内运行目录的搬运与回退、Approval v2～v6 的自动迁移、Stage3 的现役消费投影和旧整书 B checkpoint 恢复入口亦已退役；当前 service 根的有效回答与提交尾窗继续免费恢复。退役入口在 API/CLI/重启读取上的定向拒绝测试已通过，恢复守卫已纳入默认回归，正式旧根尚未归档。
-
-- P0 已有实际处理/待执行/历史采用/机械处理/缓存、当前审阅待办与决定继承的后端工作单元投影；异常保持 unknown，累计额度独立呈现。真实 HTTP 重启读取及运行页续跑操作已过定向测试。已有阶段与节点 E/C、历史采用及恢复读数，以及绑定报告、冻结配置和人工质量收据的九组配对工具；具体口径见 `docs/PERFORMANCE_EXPERIMENTS.md`。真实三书质量样例、配置与收据尚未冻结，尚无性能结论。
-- P1/P2 已接入 Blueprint 审批依赖、A/B 逐章采用与聚合、A 原回答和 prepared 恢复、精确审阅义务继承与免费收口。同一存活父任务内，已关闭并排空的来源只准当前完整上下文和活动 claim 的后继免费补尾；回答与 prepared 两类中断和拒绝反例已过定向验证，扩大后的契约与 Stage4 恢复测试通过。未聚合运行的局部依赖变化、来源损坏与后继恢复已补定向反例；真书链路仍待验收。
-- P3 已删除 arc，Global 正式读取源文案、持久化证据支持或未知状态，并通过 typed 编辑及审阅确定开篇范围；Stage6 不再缺省第 1 章。独立人物节点已接入载体、两种 executor backend、工作单元、CLI、checkpoint/prepared 与免费编辑/重验证；Global 已切到只存必要知识的 v6，输入绑定静态人物实际引用；静态写口从 GlobalEdit v5 移除，称名投影由人物发布。七个下游读取入口、知识免费编辑及保存回答/checkpoint/正式提交中断恢复已过定向验证。三 owner 的 typed 决策与派修选项已接入，两位 Commander 不变；人物 API/UI、知识关联与场景披露已接入，现役 fixture 已随契约调整；真书消费链仍待闭合。
-- P3 的知识关联已通过 Blueprint Commander typed 决定先保存、免费 producer 再物化；场景级披露、人物/群体知情、世界规则及关系时点已进入 WriterContext v7 和前端。人物订正后的免费引用重绑已闭合来源校验、状态 unknown、旧知识归档及变化项复审。上传→源文审批/分章→人物与知识 producer→人物 HTTP 订正→免费重绑→Blueprint Commander 决定→关联落盘中断→真实 CLI 补尾→重启读取的 88 项消费链定向检查已通过（`stage2-closure-projection-consumers.xml`）；包含落盘前后中断和代码变化拒绝盖章。三 owner 派修的实际 HTTP operator/preview、producer、完成回执和重启读取也已全部通过（`stage2-real-owner-rework-fixed.xml`，3 项），Blueprint 只请求被派修章。测试仅替换模型传输，合成决定不作为质量结论；独立 corpus 仍待闭合。
-- P5 整根离线归档已新增专用 preview/apply、旧代码停止证明、整树清单 CAS、根外 prepared/committed 和新旧根消费围栏。合成盘面验证了移动与提交中断、真实进程退出后的同一事务补尾、未知记录及停止裁决保留、迟到事件反证、目录不可读拒绝和 API/CLI 围栏。契约五文件与该批路由、归档及消费检查共 465 项通过（`retirement-final-contract-consumers.xml`）。尚未执行真实旧根归档或新根生产，逐书 trash 结果不替代整根发布验收。
-- P3 已退役旧 Global role/fate 窄修 schema、编译与写审计入口；其累计轮次、回答托管和中断恢复保障由现役人物/知识完整候选测试接续。人物 INVALID 的失败定位已贯通 HTTP、真实免费 CLI 和重启读取；未知人物 ID 不再归一成 public。普通 Global 复验保留裁剪失败依据，显式归一路由不变；缺 typed 失败回执的 reviewed INVALID 在 workpack、恢复身份和只读调度器中均保持未知，不再推断付费纠正授权。退役增量的定向验证已通过，真实质量与性能验收仍待完成。
-- P4 的 WriterContext v7、Chapter v3、Review v3、Rejected v2、TrimAudit/TrimResolution v3 已接入最小主体与运行时读数。checkpoint 保存完整候选 segments；Review 全书篇幅分母仍取已写章的真实源长度；trim Reviewer 正文只下发一次，精确证据校验上下文保留在后端。恢复、审批、HTTP 与重启读取已过定向测试，独立 corpus 验收仍待完成。
-- P4 已新增 Blueprint v8 材料事实归属、普通对白语义任务与剧情字面例外，B 请求/Plan 守卫共用事实候选；Context 对材料引用执行披露检查并保留对白人物依赖。首写、修订、Reviewer rewrite 共用紧凑材料，普通对白不再走逐字返修。定向消费链已通过，真实性能与质量验收仍待完成。
-- 退役收尾已删除 Stage2 无调用者的旧 Global/role-fate 提示，人物节点正式提示改为引用唯一称名枚举。Stage5 将上一章实际下发的目标、末场转折和章末状态纳入同一文字表，未下发证据不进入材料；角色引用、字面例外与原任务书不变。根切换标记或计划版本未知时，即使摘要相互匹配，CLI/服务也拒绝消费。契约五文件及上述写作、人物、拒稿、归档恢复消费链共 619 项定向测试通过（`retirement-final-v2-targeted-fixed.xml`），现役消费链已纳入默认回归；旧版拒稿 fixture 原字节保留为拒绝反例，当前版由现役候选载体单独合成，不作为真实质量证据。
-- 人工追加额度及原完整 profiles 续跑已接入锁内复验、API 与界面；真实运行到重启读取的最终消费链仍待验收。
-- Stage2 逐义务回执已接入新决定/历史接受的完整覆盖、删除问题复审、来源损坏 unknown、模型待审材料投影、API/UI 与两个节点的免费收口。定向测试已验证实际 Blueprint 局部编辑、HTTP 重启、CLI 零模型恢复和三 owner 派修；真书验收仍待完成。
-
-性能沿原三书各三对冻结基线/候选。Stage4 token/墙钟目标 −30%/−20%；Stage2 token −20% 且墙钟不恶化；Blueprint token/墙钟各 −15%；Stage5 首轮输入 −20%、阶段 E+C 总 token/墙钟各 −15%、独立返工总 token −20%。失败、人工追加和未知留在分母；未完成/质量失败不计节约；正文篇幅、事实/因果/状态/披露/对白质量不退化。
-
-TODO-45 的旧书恢复和 TODO-47 的五轮三十分钟目标退出本次活动目标；它们仍有价值的恢复、真实消费链与质量反例并入本条。TODO-46/48 的真机成本和恢复验收并入本条，不重复购入旧席位实验。TODO-21/28 的 corpus 与真实 fixture 继续独立闭合，TODO-30 仍为独立研究。真实单书已开始但尚未交付，不把工程改动或阶段性低消耗记为性能验收通过。
+TODO-45～48 的有效恢复/质量反例并入本条；旧书恢复和“五轮三十分钟”不再是活动目标。
+失败、追加额度调用和未知保留分母；未完成或质量失败不能因便宜计作节约。
 
 ## P1 · 质量闭环与诊断可信度
 
@@ -82,7 +62,7 @@ producer 从来源完整生成、且与盘面精确匹配的无正文 manifest�
 
 **工作**：
 
-- 按 `.workflow/skills/novel-pipeline-operator/SKILL.md`，在隔离输出与独立空缓存中，对
+- 通过前端自动跑书，在隔离输出与独立空缓存中，对
   `CURRENT_CORPUS_BOOKS` 从来源运行 Stage0～Stage7；人工闸与 typed review 必须留下真实决定，
   不批量盖章，不给旧产物补字段或版本冒充当前 producer。
 - 生成并提交无正文 manifest。逐书记录 sid、source hash、章节数、预期产物及当前版本、代码身份、

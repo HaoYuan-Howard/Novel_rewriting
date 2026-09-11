@@ -13,6 +13,8 @@ export const qk = {
   novels: () => ['novels'] as const,
   novel: (sid: string) => ['novel', sid] as const,
   run: (sid: string) => ['run', sid] as const,
+  runMetrics: (sid: string, runId?: string) => ['runMetrics', sid, runId ?? null] as const,
+  runMetricLog: (sid: string, kind: string, runId: string) => ['runMetricLog', sid, kind, runId] as const,
   workUnitGrant: (sid: string, unitId: string, additional: number) =>
     ['workUnitGrant', sid, unitId, additional] as const,
   workUnitGrantRoot: (sid: string, unitId: string) => ['workUnitGrant', sid, unitId] as const,

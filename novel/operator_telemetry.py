@@ -660,7 +660,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
     start.add_argument('--base', required=True)
     start.add_argument('--sid', required=True)
     start.add_argument('--start-code-version', required=True)
-    start.add_argument('--started-at', type=int, help='session_preflight 的 epoch 秒')
+    start.add_argument('--started-at', type=int, help='工程 preflight 捕获的 epoch 秒')
     start.add_argument('--source', choices=OPERATOR_SOURCES, default='interactive')
     start.add_argument('--parent-run-id')
 
@@ -744,3 +744,7 @@ __all__ = [
     'finish_phase', 'finish_session', 'fold', 'read_events', 'start_session',
     'summarize', 'telemetry_dir', 'telemetry_path',
 ]
+
+
+if __name__ == '__main__':
+    raise SystemExit(cli_main())

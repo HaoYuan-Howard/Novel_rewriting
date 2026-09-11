@@ -5,11 +5,12 @@ import { api } from '@/api/endpoints'
 import { errorBody, isNoSample, isNotRunYet } from '@/api/errors'
 import { qk } from '@/api/queryKeys'
 import { lookupAction } from '@/constants/actions'
-import { FRESH, SCRIM, SEV } from '@/constants/vocabulary'
+import { DELIVERY_LABEL, FRESH, SCRIM, SEV } from '@/constants/vocabulary'
 import { useSampleCoverage } from '@/hooks/useSample'
 import { useChrome, useAskJob } from '@/hooks/useChrome'
 import { useEnums } from '@/hooks/useEnums'
 import { useSid } from '@/hooks/useRouteParams'
+import { invalidateBookReadModels } from '@/hooks/bookReadModels'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { CompareRows } from '@/components/compare/CompareRows'
 import { QueryStates } from '@/components/state/QueryStates'
@@ -75,14 +76,17 @@ export function Stage7Screen() {
     enabled: ordinal !== null,
     retry: false,
   })
+  const deliveryReady = !q.isFetching && !q.isError &&
+    (q.data?.delivery.state === 'ready' || q.data?.delivery.state === 'ready_with_disclosures')
   const bookQ = useQuery({
     queryKey: qk.stage7book(sid),
     queryFn: () => api.getStage7Book(sid),
-    enabled: bookOpen,
+    enabled: bookOpen && deliveryReady,
     retry: false,
   })
   const download = useMutation({
     mutationFn: () => api.downloadStage7Book(sid),
+    onError: () => { void invalidateBookReadModels(qc, sid) },
     onSuccess: (blob) => {
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
@@ -500,7 +504,9 @@ export function Stage7Screen() {
                           (d.book_txt_on_disk ? ' · 在盘上' : ' · ⚠ 账在而盘上没有——重跑 stage7.assemble')
                         : '还没组装成书'}
                     </Mono>
-                    {d.book_txt_on_disk ? (
+                    <p className="m-0 text-body text-ink-2">{q.isFetching ? '正在重验交付状态' : DELIVERY_LABEL[d.delivery.state] + ' · ' + d.delivery.reason}</p>
+                    {!bookOpen && download.isError ? <LoadFailed error={download.error} compact /> : null}
+                    {deliveryReady ? (
                       <div className="mt-3 flex flex-wrap gap-8">
                         <button
                           type="button"
@@ -636,7 +642,7 @@ export function Stage7Screen() {
                       </Mono>
                       <button
                         type="button"
-                        disabled={download.isPending}
+                        disabled={!deliveryReady || download.isPending}
                         onClick={() => download.mutate()}
                         className="ml-auto cursor-pointer rounded-btn border border-line-btn bg-card px-12 py-6 text-body font-semibold text-ink disabled:cursor-not-allowed disabled:opacity-40"
                       >
@@ -650,17 +656,15 @@ export function Stage7Screen() {
                         关闭
                       </button>
                     </div>
-                    <pre className="m-0 min-h-0 flex-1 overflow-y-auto px-28 py-22 font-sans text-read leading-[2] whitespace-pre-wrap text-ink">
-                      {bookQ.isPending
-                        ? '读取成书中…'
-                        : bookQ.isError
-                          ? '取不到成书；请确认文件仍在盘上。'
+                    {deliveryReady && bookQ.isError ? <LoadFailed error={bookQ.error} onRetry={() => void bookQ.refetch()} compact /> : <pre className="m-0 min-h-0 flex-1 overflow-y-auto px-28 py-22 font-sans text-read leading-[2] whitespace-pre-wrap text-ink">
+                      {!deliveryReady
+                        ? (q.isFetching ? '正在重验交付状态' : d.delivery.reason)
+                        : bookQ.isPending || bookQ.isFetching
+                          ? '读取成书中…'
                           : bookQ.data}
-                    </pre>
+                    </pre>}
                     {download.isError ? (
-                      <div className="border-t border-warn-line bg-warn-bg px-20 py-10 text-body text-warn-ink">
-                        下载失败；请确认成书仍在盘上。
-                      </div>
+                      <LoadFailed error={download.error} compact />
                     ) : null}
                   </aside>
                 </div>

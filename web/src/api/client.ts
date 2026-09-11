@@ -9,7 +9,7 @@ const BASE = '/api'
 /** 后端的 CSRF 闸门：写请求没有这个头一律 403 */
 const UI_HEADER = { 'X-Novel-UI': '1' }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function response(path: string, init?: RequestInit): Promise<Response> {
   let res: Response
   try {
     res = await fetch(BASE + path, init)
@@ -47,7 +47,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       hint,
     })
   }
+  return res
+}
 
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await response(path, init)
   try {
     return (await res.json()) as T
   } catch {
@@ -56,32 +60,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function requestText(path: string): Promise<string> {
-  let res: Response
-  try {
-    res = await fetch(BASE + path)
-  } catch {
-    throw new ApiError('offline', path)
-  }
-  if (!res.ok) {
-    throw new ApiError(res.status === 404 ? 'notfound' : 'server', path, {
-      status: res.status,
-    })
-  }
+  const res = await response(path)
   return res.text()
 }
 
 async function requestBlob(path: string): Promise<Blob> {
-  let res: Response
-  try {
-    res = await fetch(BASE + path)
-  } catch {
-    throw new ApiError('offline', path)
-  }
-  if (!res.ok) {
-    throw new ApiError(res.status === 404 ? 'notfound' : 'server', path, {
-      status: res.status,
-    })
-  }
+  const res = await response(path)
   return res.blob()
 }
 

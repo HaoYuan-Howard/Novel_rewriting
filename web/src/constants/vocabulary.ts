@@ -1,7 +1,7 @@
 /**
  * 静态设计契约。不是数据 —— 数据只有服务端响应。
  *
- * 值源自历史原型，现役语义统一登记在 web/DELIVERY.md §6（UI 硬规则 U-01～U-20）。
+ * 值源自历史原型，现役语义统一登记在 web/AGENTS.md「UI 硬规则」U-01～U-20。
  * 状态色**只从这里取**：组件里不许写死十六进制或 oklch。
  * 消费者只有 src/components/vocab/ 下那几个叶子组件（它们把 color/bg 内联出来），
  * 其余一切走 Tailwind class。
@@ -368,3 +368,12 @@ export const REVIEW_GROUP_LABEL: Record<string, string> = {
 export const REVIEW_GROUP_ORDER: readonly string[] = [
   'set', 'character', 'relation', 'secret', 'world_rule', 'setting', 'source_blurb',
 ]
+
+
+export const DELIVERY_LABEL = {
+  ready: '可交付',
+  ready_with_disclosures: '可交付·有披露',
+  stopped: '已停·未交付',
+  failed: '进程失败',
+  unknown: '交付未知',
+} as const

@@ -259,7 +259,7 @@ strategy epoch 打开新的单章 repair epoch，也可直接走下述 0-wire �
 `BlindChapterEditRequest` v1：外部只提交单一 opaque `review_token`、actor/reason、目标章号与一份完整
 `BlindChapterResponse`，不接受字段 patch。服务端从当前 immutable workpack 现场重建并核对 current
 candidate、整书/目标章 subject、设计决定、strategy epoch、本章 strategy 与累计 constraint set；这些
-内部 SHA 不要求 Commander、skill 或 UI 手工搬运。preview 与 apply 共用同一编译器、schema、dynamic validator、章级和全书 HARD；
+内部 SHA 不要求 Commander 或 UI 手工搬运。preview 与 apply 共用同一编译器、schema、dynamic validator、章级和全书 HARD；
 apply 前后二次核 candidate，且非目标章业务字节必须完全相同。成功来源记 `origin=human`，不伪造
 模型、prompt 或 usage；请求文件只是外部 typed 输入，不成为新的正式展示产物。apply 同时提交一份
 确定性 human-evolution journal，内联封存目标章响应并继承其余 unit source，因此下一轮 agent

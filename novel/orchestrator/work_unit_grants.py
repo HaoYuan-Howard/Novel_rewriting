@@ -23,6 +23,7 @@ from novel.errors import TerminalState
 from novel.llm.ledger import ledger_path, read_strict_jsonl_objects
 from novel.orchestrator import admission, approvals, beacon, jobs
 from novel.orchestrator.inspection import read_surface_seal
+from novel.work_unit_usage import match_attempt, summarize
 
 
 def _rows(path: Path, label: str) -> list[dict]:
@@ -48,36 +49,21 @@ def _costs(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2) -> tuple
         for attempt in turn.attempts:
             if attempt.outcome in ('started', 'unknown', 'interrupted'):
                 raise work_units.WorkUnitRefused('内容轮仍有未知或未结束的网络尝试，须先对账')
-            found = [row for row in rows if row.get('attempt_id') == attempt.attempt_id]
-            if not found and attempt.outcome == 'not_started':
+            row = match_attempt(ledger, turn, attempt, rows)
+            if row is None:
                 continue
-            if len(found) != 1:
-                raise work_units.WorkUnitRefused('内容轮的网络尝试与成本账不是一一对应')
-            row = found[0]
-            if (row.get('run_id') != turn.run_id or row.get('sid') != ledger.sid
-                    or row.get('role', 'executor') != ledger.role
-                    or (ledger.role == 'executor' and row.get('node') != ledger.node)
-                    or attempt.request_fingerprint is not None and row.get('request_fingerprint') != attempt.request_fingerprint):
-                raise work_units.WorkUnitRefused('内容轮与成本归属不一致')
             turn_owners.add(str(row.get('parent_run_id') or turn.run_id))
             selected.append(row)
         if len(turn_owners) > 1:
             raise work_units.WorkUnitRefused('同一内容轮映射到多个 owner')
         owners.update(turn_owners or {turn.run_id})
-    def total(field: str) -> int | None:
-        values = [row.get(field) for row in selected]
-        if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in values):
-            return None
-        return sum(values)
-    prompt, completion = total('prompt_tokens'), total('completion_tokens')
+    usage = summarize(selected)
     return WorkUnitCostView(
-        calls=sum(row.get('cached') is not True for row in selected),
-        cached_calls=sum(row.get('cached') is True for row in selected),
-        failed_calls=sum(row.get('outcome') != 'ok' for row in selected),
-        prompt_tokens=prompt, completion_tokens=completion,
-        total_tokens=None if prompt is None or completion is None else prompt + completion,
-        missing_usage_calls=sum(row.get('prompt_tokens') is None or row.get('completion_tokens') is None
-                                for row in selected)), selected, owners
+        calls=usage.wire_calls, cached_calls=usage.cached_calls,
+        failed_calls=usage.failed_calls,
+        prompt_tokens=usage.prompt_tokens, completion_tokens=usage.completion_tokens,
+        total_tokens=usage.total_tokens,
+        missing_usage_calls=usage.missing_usage_calls), selected, owners
 
 
 def _owner_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2,

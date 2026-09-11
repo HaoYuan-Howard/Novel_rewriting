@@ -825,7 +825,7 @@ class AgentRunStart(FrozenModel):
     """`started` 事件的载荷——一次 agent 代跑的全部静态字段。
 
     ⚠ `argv` 与 `prompt` **分栏全文留档**：Commander 与它调度的逐节点
-    executor 都可能产生外部模型费用，审计与终审包要能看到
+    executor 都可能产生外部模型费用，审计与前端要能看到
     「到底跑了哪条命令、授权声明原文是什么」。prompt 只作为
     Commander stdin 传入，绝不出现在 `argv` 或进程日志里。
     """
@@ -843,7 +843,7 @@ class AgentRunStart(FrozenModel):
     #: 发给 agent 的提示词全文。两项授权声明都在里面；下面两格只是机读摘要。
     prompt: str = Field(min_length=1)
 
-    #: 显式付费总授权（SKILL 接口契约）：True = 付费命令直接执行；False = 首个付费节点前停。
+    #: 显式付费总授权：True = 允许执行付费命令；False = 首个付费节点前停。
     authorized: bool
 
     #: 正文外发授权，与付费授权正交；每一条 started 事件都必须显式记录。
@@ -853,15 +853,31 @@ class AgentRunStart(FrozenModel):
     #: unknown；新 run 在结束时必须与当前指纹一致，避免一次跑跨两版代码却冒充可复现。
     code_version: str | None = None
 
-    #: Commander 启动时 canonical operator skill 整树（SKILL + references +
-    #: scripts + assets）的原始字节契约。旧事件没有这一格时为
-    #: ``None``，只能读为未记录，不得拿今天的 skill 回填。
+    #: 历史 canonical operator skill 的原始摘要，仅保留历史读取；
+    #: 新 identity_version=2 不再生成它，不得给旧记录回填。
     skill_sha256: str | None = Field(
         default=None, pattern=r'^[0-9a-f]{64}$')
 
     #: commander + 默认 executor + 节点覆盖的解析后快照。旧事件没有这一格时为
     #: ``None``，只能显示 unknown，绝不按今天的默认配置回填昨天的运行身份。
     profiles: PipelineAgentProfiles | None = None
+
+
+    #: v1 只解释历史 skill 身份；v2 由 code/prompt/schema/input 覆盖运行资源。
+    identity_version: Literal[1, 2] = 1
+
+    @model_serializer(mode='wrap')
+    def _identity_wire(self, handler):
+        payload = handler(self)
+        if self.identity_version == 1:
+            payload.pop('identity_version', None)
+        return payload
+
+    @model_validator(mode='after')
+    def _runtime_identity(self):
+        if self.identity_version == 2 and self.skill_sha256 is not None:
+            raise ValueError('当前运行身份不接受 skill 指纹；旧值只保留在原记录')
+        return self
 
 
 class RunContinuationSource(FrozenModel):
@@ -904,6 +920,7 @@ class RunContractV2(FrozenModel):
         default=None, alias='prompt', exclude=True)
     legacy_code_version: str | None = Field(
         default=None, alias='code_version', exclude=True)
+    legacy_identity_version: Literal[1, 2] = Field(default=1, alias='identity_version', exclude=True)
     legacy_skill_sha256: str | None = Field(
         default=None, alias='skill_sha256', exclude=True,
         pattern=r'^[0-9a-f]{64}$')
@@ -919,15 +936,16 @@ class RunContractV2(FrozenModel):
             egress_authorized=self.egress_authorized,
             code_version=self.legacy_code_version,
             skill_sha256=self.legacy_skill_sha256,
+            identity_version=self.legacy_identity_version,
             profiles=self.profiles)
 
 
 class ExecutionEpoch(FrozenModel):
     """同一 parent run 内一段身份稳定的 Commander 执行窗口。
 
-    一个 epoch 可以包含多个 provider turn；只要代码、skill 与 Commander
+    一个 epoch 可以包含多个 provider turn；只要代码、执行契约与 Commander
     profile 身份没有变化，Supervisor 就在同一 epoch 内精确续会。发生代码或
-    skill 漂移时关闭旧 epoch、另开新 epoch，但仍保留同一个 parent run。
+    执行契约漂移时关闭旧 epoch、另开新 epoch，但仍保留同一个 parent run。
     Stage4 typed repair/replan 还是显式的 producer 边界：即使身份未漂移，也要在
     执行动作前以 ``reason=continue`` 打开 fresh epoch，不能让修前与修后 aggregate
     共用同一 ``session_run_id``。
@@ -944,12 +962,29 @@ class ExecutionEpoch(FrozenModel):
     protocol_version: str = Field(min_length=1)
     cli_version: str | None = Field(default=None, min_length=1)
     code_version: str = Field(min_length=1)
-    skill_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    skill_sha256: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
     session_run_id: str = Field(pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
 
     #: 新 epoch 若沿用既有供应商会话，必须把精确 id 先写进 opened 事件；
     #: ``None`` 只表示首次创建 provider session，不能解释成“可任选一个会话”。
     resume_provider_session_id: str | None = Field(default=None, min_length=1)
+
+
+    #: v1 只解释历史 skill 身份；v2 由 code/prompt/schema/input 覆盖运行资源。
+    identity_version: Literal[1, 2] = 1
+
+    @model_serializer(mode='wrap')
+    def _identity_wire(self, handler):
+        payload = handler(self)
+        if self.identity_version == 1:
+            payload.pop('identity_version', None)
+        return payload
+
+    @model_validator(mode='after')
+    def _runtime_identity(self):
+        if self.identity_version == 2 and self.skill_sha256 is not None:
+            raise ValueError('当前运行身份不接受 skill 指纹；旧值只保留在原记录')
+        return self
 
 
 CommanderAdmissionEventKind = Literal[COMMANDER_ADMISSION_EVENT_KINDS]
@@ -1446,7 +1481,7 @@ class ReviewerActionRecord(FrozenModel):
     """Commander 已通过 typed loader 的可重放决定，按内容寻址落盘。
 
     它不是审批账，也不是执行授权：审批仍只由 ``novel.cli approval apply`` 子进程
-    在 admission 内写入。这里只保证一次已经完成的模型审阅，在 epoch 因代码/skill
+    在 admission 内写入。这里只保证一次已经完成的模型审阅，在 epoch 因代码/执行契约
     漂移关闭、进程崩溃或服务重启后，能在同一 blocker 上零模型成本重放，而不是再
     买一轮 Commander。普通决定的适用性由 ``waiting_on`` 加三条判据之一决定：
     ``surface_seal``、``review_token`` 或稳定 business identity 相同；Stage2 则必须

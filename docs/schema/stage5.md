@@ -1,23 +1,22 @@
 # stage5 产物 schema
 
-Stage5 负责逐章闭卷写作与全书零成本验收，是全链唯一产出正文、也是唯一保留 LLM
-返工回路的层。对应 `R-7`（写作）与 `R-8`（验收 / 收敛）。读法与证据列见
+Stage5 负责逐章闭卷写作、正文修订与全书零成本验收。对应 `R-7`（写作）与 `R-8`（验收 / 收敛）。读法与证据列见
 `docs/schema/_README.md`；路径字面以 `contracts/artifacts.py::ARTIFACT_PATHS` 为准，
 Pydantic 载体以 `contracts/schema/stage5.py` 为准。
 
 ## 一、现役落盘面：单臂、单一正文位置
 
 ```text
-stage5/chNN.json                 canonical 正式章（schema v2）
-stage5/chNN.INVALID.json         落盘闸门拦下的问题稿（Chapter v3）
-stage5/chNN.rejected.json        两次修订候选都相对旧稿退化的证据（v1）
+stage5/chNN.json                 canonical 正式章
+stage5/chNN.INVALID.json         同一 Chapter 载体的闸门问题稿
+stage5/chNN.rejected.json        两次修订候选都相对旧稿退化的证据
 stage5/_rounds/...               被替代正式稿、INVALID、rejected 与 Review 的不可变历史
-stage5/review_<n>.json           全书确定性验收（schema v2，0 LLM 调用）
-stage5/trim_audit_chNN.json      超上限但未自动裁剪的事实（schema v2）
-stage5/trim_resolution_chNN.json 人工保留 pretrim 的 hash-bound 决定（schema v2）
+stage5/review_<n>.json           全书确定性验收（0 LLM 调用）
+stage5/trim_audit_chNN.json      超上限但未自动裁剪的事实
+stage5/trim_resolution_chNN.json 人工保留 pretrim 的 hash-bound 决定
 stage5/reviewer_rewrite_request.json
-                                 Reviewer 明确授权的多章 LLM 改写批请求（v2）
-stage5/wontfix.json              人工豁免账（v1）
+                                 Reviewer 明确授权的多章 LLM 改写批请求
+stage5/wontfix.json              人工豁免账
 ```
 
 人工改稿的身份审计另落 `<base>/_service/human_actions.jsonl`；它是服务账，不是 Stage5
@@ -29,27 +28,10 @@ stage5/wontfix.json              人工豁免账（v1）
 冒充 canonical，也不自动迁移。存量正文只能由 `stage5.write` 在冻结的 Stage0～4 上游上
 重新生成。
 
-现役命令面由 `contracts/invariants.py::NODES` 唯一发布：
-
-| 目的 | canonical 跑法 | 费用 |
-|---|---|---:|
-| 写全部缺章 | `run stage5.write <sid> --base <base> --yes` | 付费 |
-| 定向重写 | `run stage5.write <sid> --chapters 3,7 --base <base> --yes` | 付费 |
-| 根据 fresh Review 修订 | `run stage5.write <sid> --revise --chapters 3,7 --base <base> --yes` | 付费 |
-| 预览 prompt | `run stage5.write <sid> --dry-run --chapters 3 --base <base>` | 0 |
-| 重判正式章 / 问题稿 | `--recheck` / `--revalidate --actor ... --reason ...` | 0 |
-| 只读人工稿预览 | `--preview-edit <ChapterResponse.json>` | 0；不写盘 |
-| 人工整章写回 | `--apply-edit <ChapterResponse.json> --actor ... --reason ... --current-chapter-sha256 ... --preview-subject-sha256 ... --edit-confirmation formal\|working_draft` | 0 LLM |
-| 只读复验旧 run 的 prepared 尾窗 | `--emit-prepared-recovery-workpack <SOURCE_RUN_ID>` | 0 |
-| 按已审工作包收口 prepared 尾窗 | `--recover-prepared <SOURCE_RUN_ID> --actor ... --reason ... --subject-sha256 ...` | 0 wire |
-| 生成最新 Review | `run stage5.review <sid> --base <base>` | 0 |
-| 读取已有 Review | `run stage5.review <sid> --check-only --base <base>` | 0 |
-| 批量保留 pretrim | `stage5.review --retain-pretrim-batch <BatchTrimResolutionRequest.json>` | 0 |
-| Supervisor 把 Reviewer 改写回答正式化（内部） | `stage5.review --request-reviewer-rewrite @reviewer-input` | 0；`@reviewer-input` 只能由 Supervisor 从已验证的 ReviewerActionRecord 与 seat/session/cost 证据注入，不能手写或经 HTTP jobs 提交 |
-| 消费 current 正式改写请求 | `stage5.write --reviewer-rewrite stage5/reviewer_rewrite_request.json --yes` | 付费；仅执行批内 ready 章，并发上限 4 |
-| 补完 Reviewer 改写 checkpoint/prepared 尾窗 | `stage5.write --recover-reviewer-rewrite-prepared <SOURCE_RUN_ID> --reviewer-rewrite-request-sha256 <SHA256>`；已有 target WAL 时再原样携 `--reviewer-rewrite-recovery-target-run-id <TARGET_RUN_ID> --reviewer-rewrite-recovery-journal-sha256 <SHA256>` | 0 wire；不新建 provider/session/cache |
-| 退休从未开始且已过期的 Reviewer 改写请求 | `stage5.write --retire-reviewer-rewrite-request stage5/reviewer_rewrite_request.json --reviewer-rewrite-request-sha256 <SHA256>` | 0 wire；只在全根零执行证据闭合时可用 |
-| 生成 / 提交闭合回执 | `approval template stage5 ...` / `approval apply stage5 ... --input <决定文件>` | 0 |
+当前载体版本从 `contracts/schema/__init__.py::ARTIFACT_SPECS` 读取；节点及 flags 由
+`contracts/invariants.py::NODES` 和 `novel/orchestrator/nodes.py::build_steps` 发布。
+维护时用 `python -m novel.cli run stage5.write --help` 查看参数，页面动作走后端 preview。
+以下各节解释人工编辑、prepared 恢复、Reviewer 改写和闭合的证据语义，不另抄完整命令表。
 
 不带 `--chapters` 就是全书，不需要也不接受 `--deep`、`--shallow-rest` 或 `--mode`。
 `novel/orchestrator/nodes.py` 在预览与真跑共用的命令构造口关闭式拒绝 `mode`，CLI/API
@@ -104,6 +86,37 @@ successor WAL 与 terminal 原字节，再执行各自既有 0-wire 事务，最
 `consumed_resolved`。formal 正文改变后旧 Review/closure 过期，下一步只能免费重跑 Review；旧请求只有
 已正式落稿或已有合法 successor/expiry receipt 时才可被新的 fixed-path request 替换。`landed_invalid /
 landed_rejected / in_flight_or_unknown / recoverable_* / ready_paid` 都不能被覆盖。
+
+### Reviewer 改写授权与执行
+
+`R-7.31` 的字段载体为 `contracts/schema/stage5.py::ReviewerRewriteBatchRequest`；
+关闭式 directive 只允许删除重复、压缩解释、修复措辞和顺接过渡，具体枚举由载体发布。
+每项 evidence 必须在当前目标正文唯一命中；自由 reason/evidence 仅作审计与定位，不注入 writer 指令。
+writer 固定保留全部 plan slots、事实、时序和必须逐字的内容，同时遵守篇幅预算。
+
+批请求绑定同一 fresh Review 原始字节、完整有序 unresolved audit/chapter 双 SHA；
+`targets[]` 是有序非空子集，逐章独立指令。frontier 的 `chapter_sha256` 是正文 SHA，
+`target_chapter_file_sha256` 是完整 canonical 文件 CAS，两域不得互换。
+跨章联动超出关闭式指令时 stop；未选章仍 unresolved，不代签 retain。
+
+永久 authority 由 `novel/orchestrator/reviewer_action_evidence.py` 封存：先 typed readback 正式请求，
+再保存原 ReviewerActionRecord 字节、request raw/self、stable business、当时 Reviewer contract、
+原 session/seat/provider response 与 seat/session/cost 摘要的自哈希 receipt。receipt 是 commit point，
+之后才退休 active record。读取先核原始字节，再 typed 解码；补默认值或 JSON 排版不能重签或否定原凭据。
+历史 terminal/expiry 按封存契约解读，新 paid claim 和 active checkpoint recovery 还要求契约 current。
+
+permit、CLI 和 producer 在任何 provider、计费、session、cache 或 wire 副作用前共同复验当前
+writing/egress/profile/code、request/Review/audit/chapter 与 sealed 来源。执行、免费恢复和退休均持有
+批 request lease，再按章取单元 lease；每个 worker 自己持有线程本地 lease，不继承父线程锁。
+每章独立自哈希身份和 checkpoint；已落兄弟章仅有 exact formal execution 证明才允许 Review 输入边过期。
+聚合先收 recoverable，再阻断 unknown/negative，仅 ready 单元可生成，全批收口前不开新 Review。
+
+journal 的 commit SHA 只允许在 `delivery_prepared → landed_formal` 时更新：旧摘要须等于同一
+committed envelope 的 prepared 投影，新摘要须等于已验 committed self SHA，其余漂移关闭。
+其余九态、最新 intent、WAL、successor receipt 与免费恢复约束见本节前文。
+
+canonical 只接受 v2 批请求；内部 v1 单章 request 只是执行单元，不再独立登记 artifact。
+旧 v1 先在原版本按原账收口，再由 fresh Commander 决定和 FREE producer 重建；未知执行不删除或补造授权。
 
 ### 1.1 Stage5 从 Stage1 即时计算正文机械基线
 

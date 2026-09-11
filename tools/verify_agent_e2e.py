@@ -43,7 +43,7 @@ from contracts.invariants import (                                  # noqa: E402
     COMMANDER_MAX_ATTEMPTS_PER_SEAT, STAGES,
 )
 from novel import (                                                  # noqa: E402
-    agent_session_audit, operator_telemetry, prov, skill_contract,
+    agent_session_audit, operator_telemetry, prov,
 )
 from novel.llm.ledger import (                                       # noqa: E402
     audit_path, ledger_path, read_jsonl_rows,
@@ -149,14 +149,11 @@ def _one_outer_run(base: str | Path, run_id: str) -> tuple[Any | None, dict[str,
             'outer_run', 'unknown', matching_records=len(matches))
     row = matches[0]
     profiles = row.start.profiles
-    try:
-        current_skill_sha256 = skill_contract.package_sha256(REPO_ROOT)
-    except (OSError, skill_contract.SkillContractError):
-        current_skill_sha256 = None
-    skill_matches = (
-        current_skill_sha256 is not None
-        and row.start.skill_sha256 == current_skill_sha256
-    )
+    identity = row.epochs[-1] if row.epochs else row.start
+    identity_current = (
+        identity.identity_version == 2 and identity.skill_sha256 is None
+        and identity.code_version not in (None, prov.CODE_UNKNOWN)
+        and identity.code_version == prov.code_version())
     facts = {
         'process_state': row.state,
         'exit_code': row.exit_code,
@@ -165,8 +162,8 @@ def _one_outer_run(base: str | Path, run_id: str) -> tuple[Any | None, dict[str,
         'egress_authorized': row.start.egress_authorized,
         'profiles_frozen': profiles is not None,
         'start_code_version': row.start.code_version,
-        'skill_sha256_recorded': row.start.skill_sha256 is not None,
-        'skill_matches_current': skill_matches,
+        'identity_version': identity.identity_version,
+        'runtime_identity_current': identity_current,
     }
     passed = (
         row.state == 'ok'
@@ -177,10 +174,9 @@ def _one_outer_run(base: str | Path, run_id: str) -> tuple[Any | None, dict[str,
         and row.start.egress_authorized
         and profiles is not None
         and row.start.code_version not in (None, prov.CODE_UNKNOWN)
-        and skill_matches
+        and identity_current
     )
-    state = ('unknown' if current_skill_sha256 is None
-             else 'pass' if passed else 'fail')
+    state = ('pass' if passed else 'fail')
     return row, _check('outer_run', state, **facts)
 
 

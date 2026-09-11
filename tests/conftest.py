@@ -32,6 +32,10 @@ _WINDOWS_MAX_PATH = 260
 # `tests/test_layering.py::test_concurrency_and_process_lifecycle_modules_are_registered_serial`
 # 反向扫描调用面，新增模块漏登记会直接失败。
 _SERIAL_TEST_MODULES = frozenset({
+    'tests/test_delivery_modes.py',
+    'tests/test_delivery.py',
+    'tests/test_run_metrics.py',
+    'tests/test_operator_telemetry.py',
     'tests/test_output_root_archive.py',
     'tests/test_stage4_active_parent_recovery.py',
     'tests/test_stage2_characters_http.py',
@@ -51,7 +55,7 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_reviewer_schema_recovery_integration.py',
     'tests/test_agent.py',
     'tests/test_commander_work_unit_recovery.py',
-    'tests/test_skill_operator.py',
+    'tests/test_runtime_operator.py',
     'tests/test_agent_drivers.py',
     'tests/test_agent_supervisor.py',
     'tests/test_api_agent.py',
@@ -60,7 +64,6 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_commander_admission.py',
     'tests/test_commander_drivers.py',
     'tests/test_final_approval_workpacks.py',
-    'tests/test_final_review_tools.py',
     'tests/test_human_actions.py',
     'tests/test_jsonl_runner.py',
     'tests/test_llm.py',

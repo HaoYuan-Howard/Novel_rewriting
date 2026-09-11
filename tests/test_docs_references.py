@@ -17,9 +17,13 @@ test_docs_references.py —— 文档里的**引用**不许悬空。
 """
 from __future__ import annotations
 
+import ast
 import os
 import re
 import subprocess
+import sys
+from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 
@@ -28,45 +32,37 @@ from contracts import requirements as reqs
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOC = reqs.load()
 
-#: 扫哪些文档。产品 U/S 规格已并入冻结契约；本正则只识别后端 R/Q/B 编号。
-#:
-#: ⚠ `docs/LESSONS.md` 在这张表里，而它的原则条目会点名现役代码落点
-#: ——那正是本文件第 ② 条要查的东西。一份「经验」文档指着一个已经改名的模块，
-#: 比没有这条经验更坏：读的人会去找它，然后按自己的猜测把它读通。
-#: ⚠ `docs/AUDIT_*.md` 是**临时销账清单**（跑完一次全链之后逐条修，修完删文件），
-#: 但它恰恰是引用密度最高的一类文档——每条都点名 `<模块>:<行>` 的根因与改法。
-#: 一份指着已改名模块的修复清单，比没有这份清单更坏：照着改的人会先去找那个文件。
-#: 通配符而不是逐份登记：文件删掉之后这条 glob 自己就空了，不会留下死配置。
-#: ⚠ `AGENTS.md` 是 agent 的入口摘要（`CLAUDE.md` 是指向它的符号链接，glob 只 match 实体
-#: 那一份，不会重复扫）。它虽已收窄为路由与关键不变量，读它的人仍会把其中路径当第一手线索。
-#: 实测过这个形状的代价：README 那句「双击 `tools\start.cmd`」指着一个不存在的路径活了很久，
-#: 而它没被抓住只是因为写的是**反斜杠**——本文件的 `_PATH` 只认正斜杠。
-#: ⇒ 在这几份文档里写仓内路径时一律用正斜杠，否则等于自愿退出这道守卫。
-#: ⚠ skill 文档也在这张表里。`.workflow/skills/*/scripts/validate_skill.py` 查的是
-#: markdown **链接**（`[文字](相对路径)`）的目标存在性与渐进披露闭合；反引号里的
-#: **仓内路径**和 R/Q/B 编号一直无人查，两边的域不重叠、不是重复。
-#: ⚠ `docs/DECISIONS.md` 与 `docs/OPERATIONS.md` 是从入口文档拆出的永久文档，不走
-#: `docs/AUDIT_*.md` 的临时生命周期；必须显式进入扫描面，避免拆分后反而失去引用守卫。
-DOC_GLOBS = (
-    'docs/schema/*.md',
-    'docs/AUDIT_*.md',
-    'docs/BACKEND_CONTRACT.md',
-    'docs/DECISIONS.md',
-    'docs/REQUIREMENTS.md',
-    'docs/LESSONS.md',
-    'docs/OPERATIONS.md',
-    'README.md',
-    'AGENTS.md',
-    '.workflow/skills/*/SKILL.md',
-    '.workflow/skills/*/references/*.md',
-    '.workflow/skills/*/assets/*.md',
-    '.agents/skills/*/SKILL.md',
-    '.claude/skills/*/SKILL.md',
-)
+# Git 给出 tracked + 当前未忽略新增文件；目录排除是用途边界，不是固定文档名单。
+_EXCLUDED_PARTS = frozenset({
+    '.git', 'node_modules', 'vendor', 'vendors', 'dist', 'outputs', 'Output',
+    'Novel_data', 'Test_data', '.tr', '.test_cache', '.pytest_cache', '.llm_cache',
+    '__pycache__', '.venv', 'venv',
+})
+
+
+def _git_paths(*, tracked_only: bool = False) -> set[str]:
+    args = ['git', '-c', f'safe.directory={Path(ROOT).as_posix()}', 'ls-files', '-z', '--cached']
+    if not tracked_only:
+        args += ['--others', '--exclude-standard']
+    result = subprocess.run(args, cwd=ROOT, check=True, capture_output=True,
+                            text=True, encoding='utf-8')
+    return {item for item in result.stdout.split('\0') if item}
+
+
+def _purpose(doc: str) -> str:
+    path = Path(doc)
+    if path.name == 'NOTICE.md':
+        return 'license'
+    if 'fixtures' in path.parts:
+        return 'fixture_source'
+    if path.name.startswith('AUDIT_'):
+        return 'temporary_plan'
+    return 'normative'
+
 
 #: 只有这些前缀才当「仓内路径」看。`stage0/clean_text.txt` 这类是**产物路径**，不在仓里。
 REPO_PREFIXES = (
-    'tests/', 'contracts/', 'tools/', 'novel/', 'docs/',
+    'tests/', 'contracts/', 'tools/', 'novel/', 'docs/', 'web/', 'scripts/',
     '.workflow/', '.agents/', '.claude/',
 )
 
@@ -82,8 +78,8 @@ REPO_PREFIXES = (
 #: 不该顺带把 `.claude/settings.local.json.bak` 一起放行。
 _DECLARED_ABSENT: dict[str, str] = {
     '.claude/settings.local.json': (
-        '被 `.gitignore` 忽略、只存在于各人自己的工作区。README 与 `docs/REQUIREMENTS.md` '
-        '里引用它的那两句话说的**正是它不存在**（「根 `.env`、`outputs/`、`Test_data/`…'
+        '被 `.gitignore` 忽略、只存在于各人自己的工作区。`docs/OPERATIONS.md` '
+        '里引用它的那段说的**正是它不存在**（「根 `.env`、`outputs/`、`Test_data/`…'
         '不存在」那一段）⇒ 要求它在盘上等于要求文档自我否定，任何新 clone / worktree '
         '都会红，而红的是宿主环境不是文档'),
 }
@@ -99,11 +95,10 @@ _PATH = re.compile(
 
 
 def _docs() -> list[str]:
-    import glob
-    out: list[str] = []
-    for pat in DOC_GLOBS:
-        out += sorted(glob.glob(os.path.join(ROOT, pat)))
-    return out
+    return sorted(str(Path(ROOT) / rel) for rel in _git_paths()
+                  if Path(rel).suffix.lower() == '.md'
+                  and not set(Path(rel).parts) & _EXCLUDED_PARTS
+                  and (Path(ROOT) / rel).is_file())
 
 
 def _rel(p: str) -> str:
@@ -113,7 +108,9 @@ def _rel(p: str) -> str:
 @pytest.mark.parametrize('doc', _docs(), ids=_rel)
 def test_every_referenced_requirement_id_exists(doc):
     """引用一个不存在的需求编号 = 需求改过而文档没跟上。"""
-    text = open(doc, encoding='utf-8').read()
+    if _purpose(doc) in ('license', 'fixture_source'):
+        return
+    text = Path(doc).read_text(encoding='utf-8')
     known = set(DOC.requirements)
     missing = sorted({m for m in _ID.findall(text) if m not in known})
     assert not missing, (
@@ -143,19 +140,164 @@ def test_every_referenced_repo_path_exists(doc):
     )
 
 
-def _tracked_paths() -> set[str]:
-    """git **真正跟踪**的路径。
+_LINK = re.compile(r'!?\[[^\]\n]*\]\((?:<([^>\n]+)>|([^\s)]+))(?:\s+[^)]*)?\)')
 
-    ⚠ 「它在不在仓里」只能问 git，**不能问 `os.path.exists`**：本表登记的正是
-    「存不存在因人而异」的那一类路径（各人工作区的本地文件、gitignore 掉的东西）。
-    拿盘上存不存在去判，等于把宿主环境当成被测对象——同一个 commit 在有那个本地
-    文件的 checkout 里红、在没有的 worktree 里绿，而红的既不是文档也不是代码
-    （实测：`.claude/settings.local.json` 在主仓有、在功能 worktree 没有）。
-    """
-    done = subprocess.run(
-        ['git', '-c', f'safe.directory={ROOT.replace(os.sep, "/")}', 'ls-files', '-z'],
-        cwd=ROOT, check=True, capture_output=True, text=True, encoding='utf-8')
-    return {item for item in done.stdout.split('\0') if item}
+
+def _prose(text: str) -> str:
+    return re.sub(r'^(`{3,}|~{3,}).*?^\1[^\n]*$', '', text, flags=re.M | re.S)
+
+
+def _anchors(path: Path) -> set[str]:
+    text = _prose(path.read_text(encoding='utf-8'))
+    seen = set(re.findall(r'<a\s+(?:id|name)=["\']([^"\']+)', text))
+    for heading in re.findall(r'^ {0,3}#{1,6}\s+(.+?)\s*#*$', text, re.M):
+        heading = re.sub(r'\[([^]]+)\]\([^)]+\)', r'\1', heading)
+        slug = re.sub(r'[^\w\- ]', '', heading.lower()).replace(' ', '-')
+        candidate, suffix = slug, 0
+        while candidate in seen:
+            suffix += 1
+            candidate = f'{slug}-{suffix}'
+        seen.add(candidate)
+    return seen
+
+
+def _local_targets(doc: str):
+    for angle, plain in _LINK.findall(_prose(Path(doc).read_text(encoding='utf-8'))):
+        target = angle or plain
+        if re.match(r'^[A-Za-z][A-Za-z0-9+.-]*:', target):
+            continue
+        path, _, anchor = unquote(target).partition('#')
+        path = path.split('?', 1)[0]
+        full = (Path(doc) if not path else Path(ROOT) / path.lstrip('/')
+                if path.startswith('/') else Path(doc).parent / path)
+        yield target, full.resolve(), anchor
+
+
+def _missing_local_links(doc: str) -> list[str]:
+    return sorted({target for target, full, anchor in _local_targets(doc)
+                   if not full.exists() or (anchor and full.suffix.lower() == '.md'
+                                             and anchor not in _anchors(full))})
+
+
+def _references(doc: str) -> set[Path]:
+    linked = {full for _, full, _ in _local_targets(doc) if full.suffix.lower() == '.md'}
+    # 工程指南允许仓内路径形式；同目录文档从所在文件夹解析。
+    for token in re.findall(r'`([^`\n]+?\.md)(?:::[^`]+)?`', Path(doc).read_text(encoding='utf-8')):
+        if not re.fullmatch(r'[A-Za-z0-9_./-]+', token):
+            continue
+        full = Path(ROOT) / token
+        if not full.is_file():
+            full = Path(doc).parent / token
+        if full.is_file():
+            linked.add(full.resolve())
+    return linked
+
+
+def _orphans(docs: list[str]) -> set[Path]:
+    targets = {Path(doc).resolve() for doc in docs if _purpose(doc) in ('normative', 'temporary_plan')}
+    reached, pending = set(), [Path(ROOT).resolve() / 'AGENTS.md']
+    while pending:
+        current = pending.pop()
+        if current in reached or not current.is_file():
+            continue
+        reached.add(current)
+        pending.extend(_references(str(current)) - reached)
+    return targets - reached
+
+
+def _defined_names(path: Path) -> set[str]:
+    names = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            names.add(node.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names.update(alias.asname or alias.name.split('.')[0] for alias in node.names)
+    return names
+
+
+def _missing_symbols(doc: str) -> list[str]:
+    missing = []
+    defined = {}
+    text = Path(doc).read_text(encoding='utf-8')
+    for path, symbol in re.findall(r'`([A-Za-z0-9_./-]+\.(?:py|md))::([^`\[\n]+)(?:\[[^`]*\])?`', text):
+        full = Path(ROOT) / path
+        if not full.is_file():
+            full = Path(doc).parent / path
+        if not full.is_file():
+            missing.append(path + '::' + symbol)
+        elif full.suffix == '.py':
+            if full not in defined:
+                defined[full] = _defined_names(full)
+            name = symbol.split('(', 1)[0]
+            if any(part not in defined[full] for part in name.split('.')):
+                missing.append(path + '::' + symbol)
+        elif full.suffix == '.md':
+            content = full.read_text(encoding='utf-8')
+            if re.fullmatch(r'(?:R-\d+(?:\.\d+[a-z]?)?|Q-\d+|B-\d+)', symbol):
+                known = set(DOC.requirements)
+                if symbol in known or any(value.startswith(symbol + '.') for value in known):
+                    continue
+            if re.fullmatch(r'TODO-\d+', symbol) and re.search(
+                    rf'^#+[^\n]*\b{re.escape(symbol)}\b', content, re.M):
+                continue
+            slug = re.sub(r'[^\w\- ]', '', symbol.lower()).replace(' ', '-')
+            if slug not in _anchors(full):
+                missing.append(path + '::' + symbol)
+    return missing
+
+
+@pytest.mark.parametrize('doc', _docs(), ids=_rel)
+def test_critical_symbols_and_guide_headings_exist(doc):
+    assert not _missing_symbols(doc), f'{_rel(doc)} 的符号或标题悬空：{_missing_symbols(doc)}'
+
+
+def test_every_document_has_a_purpose_and_development_entry():
+    docs = _docs()
+    assert docs and str(Path(ROOT) / 'AGENTS.md') in docs
+    assert {_purpose(doc) for doc in docs} <= {'normative', 'temporary_plan', 'license', 'fixture_source'}
+    assert not _orphans(docs), f'新 MD 未接入任务阅读入口：{sorted(map(str, _orphans(docs)))}'
+
+
+@pytest.mark.parametrize('doc', _docs(), ids=_rel)
+def test_every_local_markdown_link_exists(doc):
+    missing = _missing_local_links(doc)
+    assert not missing, f'{_rel(doc)} 的本地 Markdown 链接悬空：{missing}'
+
+
+def test_new_markdown_is_discovered_and_unlinked_docs_fail(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], 'ROOT', str(tmp_path))
+    paths = {'AGENTS.md', 'novel/new/README.md', 'docs/new.md', 'docs/deleted.md',
+             'web/node_modules/dependency/AGENTS.md', 'outputs/book/report.md'}
+    monkeypatch.setattr(sys.modules[__name__], '_git_paths', lambda **_: paths)
+    for rel in paths - {'docs/deleted.md'}:
+        file = tmp_path / rel
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text('# 新文档\n', encoding='utf-8')
+    docs = _docs()
+    assert {Path(p).relative_to(tmp_path).as_posix() for p in docs} == {
+        'AGENTS.md', 'novel/new/README.md', 'docs/new.md'}
+    assert _orphans(docs) == {tmp_path / 'docs/new.md', tmp_path / 'novel/new/README.md'}
+    (tmp_path / 'AGENTS.md').write_text('[新增](docs/new.md) `novel/new/README.md`\n', encoding='utf-8')
+    assert not _orphans(docs)
+
+
+def test_deleted_markdown_link_is_detected_relative_to_its_document(tmp_path):
+    parent = tmp_path / 'docs'
+    parent.mkdir()
+    (tmp_path / 'AGENTS.md').write_text('# 入口\n', encoding='utf-8')
+    (parent / 'with space.md').write_text('# 有效目标\n', encoding='utf-8')
+    doc = parent / 'AGENTS.md'
+    doc.write_text(
+        '[父入口](../AGENTS.md#入口) [空格](with%20space.md)\n# 入口\n'
+        '[失效计划](removed.md) [远端](https://example.com/docs) [本页](#入口)\n'
+        '```markdown\n[示例](not-a-real-file.md)\n```\n', encoding='utf-8')
+    assert _missing_local_links(str(doc)) == ['removed.md']
+
+
+def _tracked_paths() -> set[str]:
+    return _git_paths(tracked_only=True)
 
 
 def test_declared_absent_entries_are_still_live_and_still_in_no_repo():
@@ -184,15 +326,23 @@ def test_declared_absent_entries_are_still_live_and_still_in_no_repo():
             f'把这条从 `_DECLARED_ABSENT` 撤销，让它回到扫描面上')
 
 
-def test_the_scan_actually_finds_something():
-    """守卫自己的守卫：正则失配时上面两条会**全绿**，而那正是最坏的情况。
+def test_reference_parsers_do_not_pass_on_empty_scans(tmp_path):
+    doc = tmp_path / 'example.md'
+    doc.write_text('`R-1.1` `Q-1` `B-11` `novel/missing.py`\n'
+                   '[标题](#稳定标题)\n## 稳定标题\n', encoding='utf-8')
+    text = doc.read_text(encoding='utf-8')
+    assert _ID.findall(text) == ['R-1.1', 'Q-1', 'B-11']
+    assert _PATH.findall(text) == ['novel/missing.py']
+    assert not _missing_local_links(str(doc))
+    doc.write_text(text.replace('## 稳定标题', '## 已改名'), encoding='utf-8')
+    assert _missing_local_links(str(doc)) == ['#稳定标题']
 
-    「没报违规」与「根本没在查」必须能区分——这条测试自己也不例外。
-    """
-    ids = paths = 0
-    for doc in _docs():
-        text = open(doc, encoding='utf-8').read()
-        ids += len(_ID.findall(text))
-        paths += len(_PATH.findall(text))
-    assert ids > 100, f'只扫到 {ids} 个编号引用——正则多半失配了'
-    assert paths > 10, f'只扫到 {paths} 个路径引用——正则多半失配了'
+
+def test_deleted_python_symbol_is_detected(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], 'ROOT', str(tmp_path))
+    source = tmp_path / 'novel/example.py'
+    source.parent.mkdir()
+    source.write_text('def current(): pass\n', encoding='utf-8')
+    doc = tmp_path / 'AGENTS.md'
+    doc.write_text('`novel/example.py::current` `novel/example.py::removed`', encoding='utf-8')
+    assert _missing_symbols(str(doc)) == ['novel/example.py::removed']

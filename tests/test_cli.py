@@ -115,6 +115,26 @@ def test_stage7_edit_template_is_stdout_only_and_round_trips(
     assert list(novel_dir.iterdir()) == []
 
 
+@pytest.mark.parametrize('passed', [True, False])
+def test_stage5_review_cli_uses_current_minimal_review_shape(monkeypatch, capsys, passed):
+    """Review v3 不保存计数；落盘后的 CLI 输出不能把合法结果变成 exit 70。"""
+    from contracts.schema.stage5 import Review, ReviewProvenance
+    from novel.cli import main as M
+    from novel.stages.stage5 import review
+
+    artifact = Review(
+        judged={}, chapters=[{'output_ordinal': 1, 'findings': []}], book=[],
+        baselines={}, baselines_identity={},
+        _provenance=ReviewProvenance(code='test-code', root_clean_sha1='a' * 40, inputs={}))
+    report = SimpleNamespace(passed=passed)
+    monkeypatch.setattr(review, 'run_review', lambda _ctx: (artifact, report))
+    monkeypatch.setattr(M, 'render', lambda actual: '当前判据报告' if actual is report else '')
+    assert M._run_stage5(SimpleNamespace(node='stage5.review'), []) == (
+        X.OK if passed else X.CHECK_FAILED)
+    output = capsys.readouterr().out
+    assert '全书验收：1 章' in output and '当前判据报告' in output
+
+
 def test_stage7_approve_cli_forwards_the_opaque_review_token(monkeypatch):
     """预览列出的 opaque token 必须真的穿过 CLI。"""
     from novel.cli import main as M

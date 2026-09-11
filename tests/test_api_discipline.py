@@ -357,7 +357,7 @@ def test_the_spoiler_disclosure_boundary_is_published():
 
     在 E 期之前它**没有任何机器可读的落点**——需求表标着 `INFO`（要一条注册判据），
     而 UI 层没有 stage 可以挂判据，于是它落在反向覆盖率表之外
-    （README 把这条缺口登记过）。现在它是 `contracts/invariants.py::SPOILER_DISCLOSURE`，
+    （这类取值必须来自唯一注册表）。现在它是 `contracts/invariants.py::SPOILER_DISCLOSURE`，
     作为 `spoiler_disclosure` 随 `/api/enums` 整份下发 ⇒ 「谁在查」从 `INFO` 改成 `结构`。
 
     ⚠ 断言里带上「部分屏蔽，不是屏蔽」这句：那是这条标注**存在的全部意义**

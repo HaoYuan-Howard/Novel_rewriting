@@ -8,7 +8,7 @@ from contracts.artifacts import STAGE4_BLIND_CANDIDATE
 from contracts.schema.orchestration import (
     AgentRunEvent, AgentRunStart, ExecutionEpoch, PipelineAgentProfiles, RunContractV2,
 )
-from novel import commander_context, skill_contract
+from novel import commander_context
 from novel.errors import ProvenanceRefused, TerminalState
 from novel.llm import design_adoption, stage4_runs
 from novel.llm.ledger import CostLedger
@@ -33,14 +33,14 @@ def _open_successor(source, target, monkeypatch, *, drain='drained', claim=True)
         sid=source.sid, base=str(source.novel_dir.parent.resolve()),
         argv=['commander', '-'], prompt='恢复已保存成果', authorized=True,
         egress_authorized=True, code_version=source.code,
-        skill_sha256=skill_contract.package_sha256(), profiles=profiles)
+        identity_version=2, profiles=profiles)
     contract = RunContractV2(
         sid=source.sid, base=start.base, authorized=True, egress_authorized=True,
         profiles=profiles)
     old = ExecutionEpoch(
         epoch_id='source-epoch', ordinal=1, reason='initial',
         argv=start.argv, prompt_sha256='b' * 64, protocol_version='test', cli_version='test',
-        code_version=source.code, skill_sha256=start.skill_sha256, session_run_id=source.run_id)
+        code_version=source.code, identity_version=2, session_run_id=source.run_id)
     current = old.model_copy(update={
         'epoch_id': 'successor-epoch', 'ordinal': 2, 'session_run_id': target.run_id})
     for kind, fields in (

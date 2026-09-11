@@ -3,13 +3,12 @@
 """一次调用内的 operator 只读快照。
 
 这里复用完成度与各层 ``check_only`` 的生产入口，只负责让 ``state``、
-``inbox`` 和终审事实收集在同一次调用里看到同一个代码指纹、同一轮报告。
+``inbox`` 和交付校验在同一次调用里看到同一个代码指纹、同一轮报告。
 快照只活在调用栈内：不落盘、不做模块级缓存，也没有跨写盘刷新接口。
 """
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,8 +22,7 @@ from contracts.schema.orchestration import NovelOverview
 from contracts.schema.report import CheckReport
 from novel import paths, prov
 from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing
-from novel.llm.ledger import ledger_path, read_jsonl_rows
-from novel.orchestrator import approvals, beacon
+from novel.orchestrator import approvals
 from novel.orchestrator.nodes import check_node
 from novel.orchestrator.state import overview_at, readonly_ctx
 from novel.stages import check_only
@@ -115,23 +113,6 @@ def capture_operator_snapshot(
     )
 
 
-def _service_facts(
-    base: Path, sid: str,
-) -> dict[str, object]:
-    """只投影当前终审收集器消费的本书服务事实；别书追加不假漂移。"""
-    ledger = [
-        row for row in read_jsonl_rows(ledger_path(base))
-        if row.get('sid') == sid
-    ]
-    progress = [
-        event.model_dump(mode='json')
-        for event in beacon.read_events(base)
-        if event.sid == sid
-    ]
-    return {
-        'ledger': ledger,
-        'progress': progress,
-    }
 
 
 def _active_artifact_paths(novel_dir: Path) -> tuple[Path, ...]:
@@ -205,19 +186,15 @@ def _update_entry(digest: Any, base: Path, path: Path) -> None:
 def read_surface_seal(
     base: str | os.PathLike[str], sid: str, *,
     code: str | None = None,
-    include_final_evidence_service: bool = False,
-    excluded_review: str | os.PathLike[str] | None = None,
 ) -> str:
-    """当前坐标：代码 + active artifacts + 审批 head，可选终审事实。
+    """当前坐标：代码 + active artifacts + 审批 head。
 
-    终审 Markdown 由 finalizer 自己做字节 CAS；``_rounds``、临时文件、旧 run
+    ``_rounds``、非注册文档、临时文件、旧 run
     与 scratch 不是当前执行输入，不进入 seal。外部 typed request 还会由
     execution permit 按 exact flag 另绑原始字节。
     """
     base_path = Path(base).resolve()
     novel_dir = paths.resolve_novel_dir(base_path, sid).resolve()
-    # 参数保留给 finalizer/旧调用兼容；review 本来就不属于注册活动产物。
-    del excluded_review
     digest = hashlib.sha256()
     digest.update((code if code is not None else prov.code_version()).encode('utf-8'))
     digest.update(b'\nactive-artifacts-v2\n')
@@ -231,13 +208,4 @@ def read_surface_seal(
         digest.update(approval_head)
     else:
         digest.update(b'approval-head\0missing')
-    if include_final_evidence_service:
-        try:
-            service = _service_facts(base_path, sid)
-        except (OSError, UnicodeDecodeError, ValueError) as exc:
-            raise ArtifactUnreadable(
-                f'终审封印期间服务事实不可读：{type(exc).__name__}: {exc}') from exc
-        digest.update(json.dumps(
-            service, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
-        ).encode('utf-8'))
     return digest.hexdigest()

@@ -477,9 +477,9 @@ def test_durable_schema_recovery_action_replays_after_finish_crash_only_with_int
     _assert_original_preserved(h, source)
 
 
-def test_finalizer_precommit_failure_does_not_claim_a_landed_result(
+def test_delivery_assessment_failure_does_not_claim_a_landed_result(
         schema_run, monkeypatch):
-    """真实 finalizer 在缺输入时可 exit 1，父运行不得套 novel CLI 的落盘承诺。"""
+    """真实交付终验在缺输入时可 exit 1，父运行不得套 novel CLI 的落盘承诺。"""
     h = schema_run
     monkeypatch.setattr(agent.operator, 'next_action_at_code',
                         lambda _base, _sid, *, code: SimpleNamespace(
@@ -490,7 +490,6 @@ def test_finalizer_precommit_failure_does_not_claim_a_landed_result(
     assert done.outcome.state == 'unknown' and done.note is None
     assert h.live['invocations'] == [] and h.live['applied'] == []
     assert h.live['repairs'] == []
-    assert not agent.paths.review_package_path(
-        agent.paths.resolve_novel_dir(h.base, SID)).exists()
+    assert not list(agent.paths.resolve_novel_dir(h.base, SID).glob('*_review.md'))
     log = agent.run_log_path(h.base, done.run_id).read_text('utf-8')
-    assert '$ [finalize-review]' in log
+    assert '$ [delivery-assess]' in log

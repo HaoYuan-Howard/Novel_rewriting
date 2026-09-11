@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
 import { ConfirmDialog } from '@/components/job/ConfirmDialog'
 import { GateBar } from './GateBar'
+import { useApprovals } from '@/hooks/useApprovals'
 
 /**
  * 闸门按钮的动作分类。
@@ -84,6 +85,20 @@ function mount(screenName: 'stage5' | 'stage4' | 'global', approval: ApprovalDoc
 }
 
 describe('GateBar 的动作分类', () => {
+  it.each(['stage6', 'stage7'] as const)('%s 使用专用审批面，不再由通用闸门宣称下一步已执行', async (stage) => {
+    const approved = { ...doc, gate: { ...doc.gate, s5: true, s6: true, s7: true } }
+    vi.spyOn(api, 'getEnums').mockResolvedValue(enums)
+    vi.spyOn(api, 'getApprovals').mockResolvedValue(approved)
+    vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
+    function Loaded() {
+      const { doc: current } = useApprovals()
+      return current ? <span>审批已读回</span> : null
+    }
+    const { container } = renderRoute(<><GateBar screen={stage} /><Loaded /></>)
+    await screen.findByText('审批已读回')
+    expect(container.textContent).toBe('审批已读回')
+  })
+
   it('Stage2 即使两屏都已读，缺当前节点接受仍禁止推进', async () => {
     const approve = vi.spyOn(api, 'approveGate')
     mount('global', { ...doc, gate: { ...doc.gate, s2: false } })

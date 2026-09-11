@@ -7,7 +7,7 @@
 conda run -n novel_refactor python -m pytest
 ```
 
-`tests/conftest.py` 把普通测试按文件分到同一 worker，使模块 fixture、skill 校验快照和 AST 缓存只
+`tests/conftest.py` 把普通测试按文件分到同一 worker，使模块 fixture、文档检查和 AST 缓存只
 建立一次；登记在 `_SERIAL_TEST_MODULES` 的并发/进程生命周期模块进入同一个串行组。新增这类模块时
 必须同步登记，AST 守卫会反查遗漏，不能靠本机一次碰巧不抖来判断可并行。
 
@@ -32,6 +32,12 @@ conda run -n novel_refactor python -m pytest -n 0 --lf --lfnf=none -x
 字节，每例还原到自己的空 `tmp_path`。不共享可变 Store、模型对象、账或硬链接；不重用被测步骤的
 结论。当前仅 Stage4 B 的两个测试模块复用 A/旧 B 前置盘面，故障注入、真实生产、HTTP/审批、
 并发与最终字节断言仍逐例运行。并发生命周期的 serial 登记和真实代码身份校验保持原约束。
+
+`tests/test_delivery_modes.py` 将当前工程文件复制并提交到独立临时 Git 根，从空输出执行
+`tests/delivery_scenario.py`：人工上传与逐层审批、免费 CLI、自动 Supervisor 收尾、HTTP 下载和
+服务重启均用真实入口。模型回答由合成 transport/driver 提供；自动收尾只准免费组装，任何额外
+动作或模型调用都失败。这验证两种模式共用交付证明及无需 Markdown 报告，不证明模型质量或真实费用。
+回答/决定/prepared 的中断恢复仍由所属恢复测试保留反例，不用成功场景替代。
 
 标记为 `corpus` 的测试是针对冻结生成产物或源语料的集成检查，默认 marker 表达式会跳过它们。
 最终硬验收必须同时提供隔离的当前 schema 输出盘和与它精确对应、已提交的无正文 manifest，

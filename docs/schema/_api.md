@@ -12,11 +12,8 @@ Stage2 节点审阅的 `review` 范围提交、`obligation_receipt`、工作包�
 
 ## 本文**不定**路由表
 
-路由表的唯一落点是 `web/DELIVERY.md` §3，该节明确记录
-「**固定，不要改**」，前端已经照它接完了 14 屏。**在这里再抄一份就是第二个落点**，
-而两份路由表分家的表现是：前端按 A 请求、后端按 B 注册，双方都不出声，只有 404。
-
-本文定的是那张表右边那一列的**响应长什么样**，以及三条跨端点的纪律。
+页面职责统一由 `web/AGENTS.md`「路由与屏幕职责」维护，实际路由在 `web/src/routes.tsx`。
+本文件维护对应的 HTTP 响应形状和跨端点纪律，不复制路由表；调整页面时同步核对真实端点。
 
 ## 「证据」列
 
@@ -87,7 +84,7 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 |---|---|---|
 | `invent` | 无（`allow`/`forbid`/`principle` 逐值相同） | `抓包` |
 | `job_kinds` | 键从原型 12 个 `n1..n9` 换成**节点 id**，值含 `stage`/`section`/`flags`/`produces`；不再发布任何 mode 取值面 | `docs/BACKEND_CONTRACT.md`「命名体系」第 5 条；Stage5 v2 只有 canonical 写作 |
-| `actions` | `kind` 取值同上；字段为 `kind`/`extra`/`label`/`paid`/`free_flag`/`writes`/`writes_disk`/`needs_value`/`required_inputs`，无 mode | 同上；`writes_disk` 是前端在 `web/DELIVERY.md` 里点名要的那一格 |
+| `actions` | `kind` 取值同上；字段为 `kind`/`extra`/`label`/`paid`/`free_flag`/`writes`/`writes_disk`/`needs_value`/`required_inputs`，无 mode | 同上；`writes_disk` 是前端在 `web/AGENTS.md` 里点名要的那一格 |
 
 ⚠ `job_kinds` 里的 `paid` 说的是**默认路径**贵不贵，**不许拿它做贵贱对账**。
 真正的贵贱由 `(node, flags)` 决定，唯一落点 `novel/orchestrator/nodes.py::is_paid`（`R-11.7`），
@@ -114,7 +111,7 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/jobs/:id` | `JobRecord` | **复用** `_orchestration.md` |
 | `GET /api/jobs/:id/log?offset=N` | `LogChunk` | 新 |
 | `GET /api/jobs/:id/stream?offset=N` | SSE：`LogStreamEvent` | 新；主日志通道 |
-| `POST /api/jobs/preview` | `JobStart`（请求体 `PreviewRequest`） | **复用** `_orchestration.md`；现役 direct executor 为 8 节点 / 13 种 flag-token 组合（精确矩阵见下），并回显独立 `egress_authorized` 快照 |
+| `POST /api/jobs/preview` | `JobStart`（请求体 `PreviewRequest`） | **复用** `_orchestration.md`；direct executor 能力从运行登记表派生，并回显独立 `egress_authorized` 快照 |
 | `POST /api/jobs` | `JobRecord`（202；请求体 `PreviewRequest`） | **复用** `_orchestration.md`；同一组 profile / egress 边界，profile 非空且 egress 不是 true 时不起 job |
 | `GET /api/queues` | `QueueList` | 新 |
 | `POST /api/queues/preview` | `QueuePlan`（请求体 `QueueCreateRequest`；纯预览） | **复用** `_orchestration.md` |
@@ -164,13 +161,14 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/novels/:sid/stage7/book.txt?download=` | 仅在 Stage7 人物表已批准、输入/正文/文案均 current/fresh 且组装账闭合时返回 UTF-8 纯文本（`download=true` 时为附件）；旧文件仅存在不构成交付资格。⚠ **URL 字面与盘上文件名是两件事**：盘上那份叫 `stage7/<书名>_rewriting.txt`，这条 URL 是稳定的 API 标识符、不随书名变；另存名由 `Content-Disposition` 给出（`filename*=UTF-8''…` 带书名，`filename=` 留 ASCII 回退） | 新 |
 | `GET /api/novels/:sid/stage7/:o` | `Stage7View` | 新 |
 | `GET /api/novels/:sid/run` | `RunProgressView`（信标折叠 + 完成度，观察轨迹非判定） | **复用** `_orchestration.md` |
+| `GET /api/novels/:sid/run/metrics?run_id=` | `contracts/schema/run_metrics.py::RunMetricsView`；省略 run_id 为本书跨运行累计 | 只读权威成本、工作单元、运行和会话账；不依赖追加额度资格，不写状态或发模型请求 |
 | `POST /api/agent/runs/preview` | `AgentRunPreview`（与真跑同一构造函数） | 新 |
 | `POST /api/agent/runs` | `AgentRunRecord`（202；请求体 `AgentRunRequest`） | **复用** `_orchestration.md` |
 | `GET /api/agent/runs?sid=` | `AgentRunList` | 新 |
 | `GET /api/agent/runs/:id/log?offset=N` | `LogChunk`（与作业日志同一形状） | 新 |
 | `POST /api/agent/runs/:id/stop` | `AgentRunRecord`（202） | 只受理永久终止：后台先关 admission gate、terminate 全部 Commander/Executor 子进程树并 drain，闭合后才追加 ended；stop 后不可 resume，HTTP 返回不冒充 drain 已完成 |
 | `POST /api/agent/runs/:id/pause` | `AgentRunRecord`（202） | 只受理暂停：立即停止接纳新节点，后台等待当前 claim/beacon 闭合后才追加 paused；不取消正常付费节点，HTTP 返回不冒充已 paused |
-| `POST /api/agent/runs/:id/resume` | `AgentRunRecord`（202） | 受理后由后台同身份续 current epoch/provider session；代码或 skill 漂移时同 parent run 开新 epoch并免费复检 |
+| `POST /api/agent/runs/:id/resume` | `AgentRunRecord`（202） | 受理后由后台同身份续 current epoch/provider session；代码或执行契约 漂移时同 parent run 开新 epoch并免费复检 |
 | `POST /api/novels/:sid/review/:o/edit/preview` | `DraftEditPreview`（请求体 `DraftEditPreviewRequest`） | 同步、只读、0 成本；与正式 apply 共用归一/判据/subject 构造，不写一次性文件、产物或 Review |
 | `POST /api/novels/:sid/review/:o/edit` | `JobRecord`（请求体 `DraftEditRequest`） | 新 |
 | `POST /api/novels/:sid/stage5/trim/:o/retain-pretrim` | `JobRecord`（请求体 `TrimResolutionRequest`；只允许保留原稿） | 新 |
@@ -314,20 +312,10 @@ Legacy capability 是 provider driver 的静态关闭表，也不读取密钥、
 公开响应和新请求不再发旧字段。独立旧 CLI/客户端省略 backend 的 DeepSeek 路只作兼容，新 AgentRun、
 设置页和新 preview/start 都不得靠字段缺失猜 Legacy。
 
-Agent backend 当前只接受以下 **8 节点 / 13 种 flag-token 组合**：
+Agent backend 的合法节点与 flags 唯一登记于 `novel/orchestrator/nodes.py::EXECUTOR_PROFILED_RUNS`，
+API capability 从同一登记派生；本文件不复制能力矩阵。
 
-| node | token 组合 |
-|---|---|
-| `stage2.global` | `[]` |
-| `stage2.blueprint` | `[]` |
-| `stage4.design` | `[]`、`[--review-token]`、`[--replan, --review-token]` |
-| `stage4.plan` | `[]` |
-| `stage5.write` | `[]`、`[--chapters]`、`[--revise]`、`[--revise,--chapters]` |
-| `stage6.hook` | `[]` |
-| `stage6.semantic` | `[]` |
-| `stage7.rename` | `[]` |
-
-`--chapters` 后的章号是值，不是第十三种 token。各 producer 固定 typed 完整 replacement；
+各 producer 固定 typed 完整 replacement；
 agent 只交候选，代码负责业务 HARD、结构化 feedback、append-only checkpoint、正式 journal、typed
 readback、current/fresh 终验和 accepted-attempt adoption。`kind=agent` 的节点 dispatch 先于 Legacy
 client 构造，不能静默回退直接 API。
@@ -370,6 +358,24 @@ current writing 授权、Review 状态与旧布局，不存在另一个按臂的
 
 ---
 
+### 运行统计的归属与分母
+
+响应字段以 `contracts/schema/run_metrics.py` 为准，聚合唯一落点为
+`novel/views/run_metrics.py::get` 与 `novel/work_unit_usage.py::summarize`。
+费用只读取服务 ledger；unit → turn → attempt 精确核对 sid、producer、角色和 request，
+parent/epoch 与 session 只用于关联，不从日志文字或时间接近补身份。
+
+省略 run_id 返回本书跨运行累计；指定则按显式 parent_run_id（无父时用 run_id）筛选。
+同一业务单元可以跨运行，累计内容轮与本次调用不能互换。旧无关联行单列且保留成本，
+无法证明归属、重复 attempt、未提交尾或缺失用量均披露；不以未知作为零，也不隐藏失败分母。
+重复身份的行不进入已知小计，完整合计为 null。只有 cached=false 是确定网络调用，
+缓存命中和历史采用不重复计入旧费用，reasoning 只作 completion 子口径。
+
+运行历时来自运行起止，包含暂停和等待；模型尝试耗时取 latency_ms 累计；模型活跃区间由
+原账完成时刻和耗时还原后取并集，保留原时间精度，不把重叠相加成墙钟。缺时刻/耗时/尝试时
+完整区间为 null，已知部分另给小计；机械恢复和人工等待不并入生成耗时。首 token 没有可信事件就为 null。
+每次查询只投影当时已提交记录，刷新和重启重新读原账，不生成第二份持久统计总账。
+
 ## 四、四个小模型
 
 | 模型 | 字段 | 说明 |
@@ -398,7 +404,7 @@ current writing 授权、Review 状态与旧布局，不存在另一个按臂的
 请求外壳是 strict，任何旧 `mode` 键都返回 422；老
 `jobs.jsonl` 的兼容解码只在服务内部磁盘边界发生，不进入本请求或公开响应模型。
 旧客户端提交 `executor_profile` 时只无损迁移成 `kind=agent`，新响应不再发旧字段。Agent variant 只允许
-`_orchestration.md` 精确表中的 8 节点 / 13 组合；Legacy variant 按 provider/model/node 能力表关闭式
+`novel/orchestrator/nodes.py::EXECUTOR_PROFILED_RUNS` 的登记组合；Legacy variant 按 provider/model/node 能力表关闭式
 校验。自动追跑的 `--check-only` Step 不继承 backend。非空 backend 必须显式携带 bool egress：false
 允许预览但真启动返回 `ApprovalRequired`，true 才进入 argv；无 backend 时 false 归一成响应快照
 `null`，true 拒绝。
@@ -422,7 +428,6 @@ S-08（ctx 不在仍 200，`materials=null`）。
 | `relations[]` | 数组 | 是 | 有向关系，两端已解引用 |
 | `world_rules[]` | 数组 | 是 | `WorldRule` 原样 |
 | `secrets[]` | 数组 | 是 | ⚠ 空数组 = 这本书没抽到秘密——**那可能是漏抽了，不是「无」**（探针盲区） |
-| `arc` | 对象 | 是 | 解读层。`climax` / `ending` 全量下发（遮蔽归前端，同 `fate`） |
 | `unresolved_refs` | 整数 | 是 | 全屏解引用失败的总数。**读数不是判定**——给人看「这份产物里有几个说不出名字的 id」 |
 | `invalid_exists` / `freshness` / `reason` / `ghosts` | | 是 | 同 S-06 的来源账四格 |
 | `_provenance` | 对象 | 是 | `GlobalProvenance` |
@@ -458,7 +463,7 @@ S-08（ctx 不在仍 200，`materials=null`）。
 
 ## 五d、`Stage4View` —— S-07 计划 ↔ 写作上下文
 
-⚠ **没跑过 stage4 时本屏也有内容**（`web/DELIVERY.md` §3）：`identity_plan=true`，
+⚠ **没跑过 stage4 时本屏也有内容**（`web/AGENTS.md`「路由与屏幕职责」）：`identity_plan=true`，
 计划与上下文都是**本次现算的恒等基线**（不落盘）——「如果计划什么都不改，
 写手手里会有什么」。恒等基线没有可审批的正式主体 ⇒ `structure_subject_sha256`、
 `_provenance` / `_ctx_provenance` 必须为 `null`（后置条件）。计划在而 ctx 不在 ⇒ 200 且 `ctx_chapter=null`
@@ -478,7 +483,7 @@ S-08（ctx 不在仍 200，`materials=null`）。
 
 ## 五e、`Stage5View` —— S-08 成稿 ↔ 材料
 
-⚠ `ctx_exists=false` ⇒ `materials=null`：**不发假材料**（`web/DELIVERY.md` §3，
+⚠ `ctx_exists=false` ⇒ `materials=null`：**不发假材料**（`web/AGENTS.md`「路由与屏幕职责」，
 后置条件焊死），给「先跑 stage4」——左半边缺席、右半边照常列已有成稿。
 某章无 canonical 稿 ⇒ 200 且 `drafts=[]`（「还没写」不是错误）。
 `planned=null` = 计划读不回来，「该有几章」判不了——与 0 是两件事。
@@ -536,12 +541,13 @@ S-08（ctx 不在仍 200，`materials=null`）。
 | `baselines` / `identity` / `approved` / `book[]` / `sources` | | 是 | 词干基线、恒等基线（可空）、定稿（可空）、书级结论、来源账 |
 | `book_txt` | 对象 或 null | 是 | **可空**——`null` = 成书还没组装过 |
 | `book_txt_on_disk` | 布尔 | 是 | 成书此刻真的在不在盘上。`book_txt` 记的是组装时的账，两者可分家 |
+| `delivery` | `AgentDeliveryOutcome` | 是 | 同一后端终验的 state/reason/checked_at；文件存在不能代替交付证明 |
 | `book_filename` | 字符串 | 是 | 成书的文件名（`<书名>_rewriting.txt`）。**另存名与按钮文案用它**——前端不许拿 `title` 再拼一次（`R-11.4`）：那是同一条命名规则的第二个落点，与 `novel/paths.py::book_txt_rel` 分家时盘上那份和下载那份会叫两个名字 |
 | `chapters[]` / `ordinal` / `rows[]` / `hook` | | 是 | `chapters` = 可切换「逐章对照」的输出章号（本层判过的成稿章，升序）；`rows[].changed` 是 bool 不是 kind 字符串（两态本来就该是 bool） |
 | `invalid_exists` / `freshness` / `reason` / `ghosts` / `_provenance` | | 是 | 来源账五格 |
 
-`book_txt_on_disk=true` 只表示 live 路径有字节，不是交付授权。界面可据此展示预览/下载
-入口，但专用纯文本端点仍会重跑 approved/current/fresh 与组装账闸；不把整本正文塞进
+`book_txt_on_disk=true` 只表示 live 路径有字节。预览/下载入口以 `delivery` 的 ready 类结论开放，
+刷新中不沿用旧可交付状态；纯文本端点再次执行同一后端终验。不把整本正文塞进
 `Stage7View`，也不要求用户离开审校台去文件系统寻找。
 
 ## 五i、`InboxView` —— 待人工清单
@@ -562,7 +568,7 @@ stage5 的 `counts` 字段就是这么烂掉的（稀疏 Counter，0 键消失�
   后端不给书级条目编一个假章号。
 - `wontfix`（视图顶层）：被人豁免的条数——豁免不删结论、不进清单，单独计数。
 - `attention`：`pending` / `reviewed_retained`。后者必须同时带 typed `decision`
-  （actor/reason/subject SHA-256/state/decided_at）；不能凭终审包散文或 agent 自述补推。
+  （actor/reason/subject SHA-256/state/decided_at）；不能凭报告散文或 agent 自述补推。
 - `delivery_effect`：`blocking` / `disclosure`，与 attention 正交。顶层
   `attention_counts`、`delivery_counts` 都由 items 分组并由后置条件核一致；总数不再冒充失败数。
 
@@ -603,7 +609,7 @@ HTTP 进程只写 `_service/`（一次性人工稿）。
 | `hint` | 串 或 null | 是 | 下一步该做什么 |
 
 ⚠ **`kind` 用类名不用措辞**：前端的四态要求区分「后端没起来 / 这本书没有 / 这一步还没跑」
-（`web/DELIVERY.md` §5「每屏四态」），靠句子前缀去认，一次措辞改动就静默断掉。
+（`web/AGENTS.md` U-17），靠句子前缀去认，一次措辞改动就静默断掉。
 
 状态码表的唯一落点是 `novel/api/errors.py::STATUS`：**按类精确匹配再沿 MRO 上溯，没有默认格**
 ——`novel/errors.py` 开头写着「不设默认异常」，本表是它在 HTTP 侧的同一条纪律。

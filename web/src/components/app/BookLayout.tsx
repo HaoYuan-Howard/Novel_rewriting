@@ -6,6 +6,8 @@ import { qk } from '@/api/queryKeys'
 import { errorBody, isNoSample } from '@/api/errors'
 import { useSid } from '@/hooks/useRouteParams'
 import { useApprovals } from '@/hooks/useApprovals'
+import { useAgentRuns } from '@/hooks/useAgentRuns'
+import { useRunProgress } from '@/hooks/useRunProgress'
 import { Mono } from '@/components/ui/Mono'
 import { ErrorHint } from '@/components/state/States'
 
@@ -29,6 +31,9 @@ const FINAL_APPROVAL_PAGES = [
 export function BookLayout() {
   const sid = useSid()
   const nav = useNavigate()
+  // 任一 Stage 长驻时都观察自动进展；与运行页共享查询和去重的书级刷新。
+  useRunProgress(sid)
+  useAgentRuns(sid)
   const { doc, backfill } = useApprovals()
   // 成功条的「知道了」只挡当前这本书的当前这次结果：换书、或又补录了一次，都要重新出现
   const [dismissed, setDismissed] = useState<{ sid: string; data: unknown } | null>(null)

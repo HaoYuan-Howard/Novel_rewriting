@@ -39,7 +39,7 @@ function Stage5IndexRedirect() {
   return <Navigate to={'/n/' + sid + '/stage5/1'} replace />
 }
 
-/** 老路由保留为重定向；当前权威路由表在 web/DELIVERY.md §3 */
+/** 老路由保留为重定向；当前权威路由表在 web/AGENTS.md「路由与屏幕职责」 */
 function RedirectChapter({ to }: { to: string }) {
   const { o } = useParams<{ o: string }>()
   return <Navigate to={'../../' + to + '/' + o} replace relative="path" />

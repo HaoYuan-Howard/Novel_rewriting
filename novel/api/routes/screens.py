@@ -135,9 +135,9 @@ def get_stage7_book(
     `Content-Disposition` 决定，落点就是下面这一处。
     """
     novel_dir = paths.resolve_novel_dir(base, sid)
-    ctx = state.readonly_ctx(
-        novel_dir, 'stage7.assemble', prov.code_version())
-    text = assemble.read_current_book(ctx)
+    from novel.orchestrator.delivery import read_deliverable_book
+
+    text = read_deliverable_book(base, sid)
     headers = _download_headers(novel_dir) if download else None
     return PlainTextResponse(
         text, media_type='text/plain; charset=utf-8',

@@ -1716,7 +1716,7 @@ def render(report: dict[str, Any]) -> str:
         f'{stage2["global_review"]["generation_safe"]}',
         '- 本节只提供单次证据；当前性能与质量验收使用 '
         '`tools/workflow_pairs.py` 的三书九组配对和具名质量收据，见 '
-        '`docs/PERFORMANCE_EXPERIMENTS.md`。',
+        '`docs/OPERATIONS.md` 的性能配对执行协议。',
         '',
     ]
 

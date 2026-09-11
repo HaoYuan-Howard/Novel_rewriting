@@ -2,9 +2,8 @@ import type { JobState } from '@/constants/vocabulary'
 import type { ExecutorBackend } from '@/types/agent'
 
 /**
- * 作业。jobs.json 是空数组，样本里没有元素形状 ——
- * 这份定义来自 04_delivery.md 的 JobState 契约 + enums.job_kinds，
- * 已在 DELIVERY.md 里标为「需要后端确认的形状」。
+ * 作业抽屉的展示投影，由 api/endpoints.ts 适配后端 JobRecord。
+ * 状态、费用与执行者均由服务端下发，界面不从日志或本地记录推导。
  */
 export interface Job {
   id: string

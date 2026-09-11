@@ -167,7 +167,7 @@ v1 骨架为：
 - 正文和已定稿文案使用同一替换器；书名只作为人工不可验证项报告。
 - 成书前要求每个输出章恰有一份正式成稿、没有 `.INVALID` 成稿，并且 Stage 6 文案已定稿。
 - 成书只能在当前 `name_map` 已人工批准、批准的 subject 仍精确等于当前决策面、provenance fresh、正文/文案消费指纹均未漂移时写入；写入后，其 sha1、字符数与章节数进入 `book_txt`。映射编辑、`--identity` 与重判都会清空旧 `book_txt`，并将旧 txt 移到内容寻址的 `_rounds/` 归档。映射编辑始终清空旧批准；`--identity` / 重判只有在重写 provenance **之前**证明旧模型消费投影仍 fresh、且决策面未变时才保留批准，输入 stale / unknown 时清空批准并保留零模型 `stage7.approve` 重批路。
-- 预览/下载端点复用组装前的 approved/current/fresh 闸并复核 `book_txt` 指纹与规模；只有文件存在而账或批准不成立时拒绝返回。
+- 预览/下载端点经 `novel/orchestrator/delivery.py::read_deliverable_book` 共用后端终验，复核当前审批、Stage2 generation-safe、阻塞待办、成书指纹/规模与确定性逐字重建，前后 surface 或代码漂移拒绝。自动收尾和 Stage7 页面消费同一结论；没有 Markdown 报告要求。
 
 ## 五、当前入口
 

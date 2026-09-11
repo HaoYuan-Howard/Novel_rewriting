@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-stage7.py —— S-12「人名替换 + 成书」那一屏（`GET /api/novels/:sid/stage7[/:o]`）。
+stage7.py —— 人名替换与成书视图（`GET /api/novels/:sid/stage7[/:o]`）。
 
 【这一屏回答的问题】新人名起得对吗？替换干净了吗？有没有漏掉一个人？
-（`02_screens.md` S-12：新旧人物表并排 · 漏网叫法候选 · 逐章替换前后对照 ·
+（页面职责见 `web/AGENTS.md`：新旧人物表并排 · 漏网叫法候选 · 逐章替换前后对照 ·
 文案前后对照 · 定稿按钮 · 成书状态。正文**只读**——改正文要回 stage5。）
 
 【逐章对照 `rows` 是现算的，且必须用同一个替换器】
@@ -31,6 +31,7 @@ from contracts.schema.stage7 import NameMap
 from novel import paths, prov
 from novel.errors import ArtifactUnreadable, HumanEditProtected, UpstreamMissing
 from novel.orchestrator.state import artifact_state, readonly_ctx
+from novel.orchestrator import delivery
 from novel.stages.stage5.measure import (
     is_legacy_stage5_rel, legacy_stage5_paths, load_drafts,
 )
@@ -98,6 +99,7 @@ def stage7_view(base: str | os.PathLike[str], sid: str,
         identity=art.identity,
         book_txt=art.book_txt,
         book_txt_on_disk=store.exists(book_txt),
+        delivery=delivery.assess(base, sid, start_code_version=store.ctx.code),
         book_filename=os.path.basename(book_txt),
         sources=art.sources,
         chapters=chapters,

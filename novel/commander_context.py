@@ -24,7 +24,7 @@ from contracts.schema.orchestration import (
     AgentExecutorBackend, AgentProfile, AgentRunRecord, AgentRunStart,
     ExecutionEpoch, ExecutorBackend, PipelineAgentProfiles, RunContractV2,
 )
-from novel import prov, run_identity, skill_contract
+from novel import prov, run_identity
 from novel.agent_capabilities import validate_pipeline_profiles
 from novel.errors import TerminalState
 
@@ -100,7 +100,7 @@ def contract_v2_payload(
     这枚 hash 是 append-only ``started`` 行的内容地址，不是“当前代码是否仍与
     首次启动相同”的判据。读取方只会对盘上同一份 contract 重算它；当前执行
     的 code / skill / invocation 必须另由 ``epoch_sha256`` 与 currentness 闸证明。
-    因此兼容字段里的首次 argv/prompt/code/skill 不会触发 parent rebind。
+    因此兼容字段里的首次 argv/prompt/code/identity 不会触发 parent rebind。
     """
     return {
         'protocol': CONTRACT_V2_PROTOCOL,
@@ -121,7 +121,7 @@ def contract_v2_sha256(
 
 
 def epoch_sha256(*, run_id: str, epoch: ExecutionEpoch) -> str:
-    """epoch 的 canonical hash；代码/skill 漂移只改变这一枚。"""
+    """epoch 的 canonical hash；代码/执行契约 漂移只改变这一枚。"""
     encoded = json.dumps({
         'protocol': CONTRACT_V2_PROTOCOL,
         'run_id': run_identity.check_run_id(run_id),
@@ -245,7 +245,7 @@ def _load_from_environment(
 
     ``require_current_identity=False`` 只供已经落过 start 的 execution 追加精确
     end。它仍验证 parent/epoch/content hash/sid/base/admission 指针，但不拿已经
-    变化的当前 code/skill 阻断清理。调用方还必须另验 active claim 与 open start；
+    变化的当前 code/identity 阻断清理。调用方还必须另验 active claim 与 open start；
     这条慢路本身绝不构成新执行授权。
     """
     source = os.environ if env is None else env
@@ -311,7 +311,7 @@ def _load_from_environment(
         raise TerminalState(
             'Commander contract SHA-256 与盘上 started 事件不一致；拒绝使用漂移的授权/profile')
     if not require_current_identity:
-        # 这里有意在 profile registry、当前 code/skill 与两项执行授权之前返回。
+        # 这里有意在 profile registry、当前 code/identity 与两项执行授权之前返回。
         # 关闭凭证不暴露这些字段，因此既不会因今天的 registry 变化再次卡死，
         # 也不可能被误传给 executor/producer 当作旧 epoch 的执行授权。
         return CommanderExecutionCloseContext(
@@ -322,21 +322,11 @@ def _load_from_environment(
         else start.profiles)
     if profile_snapshot is None:
         raise TerminalState('Commander started 事件没有 resolved profiles；历史运行不能猜成今天的默认')
-    effective_skill_sha256 = (
-        epoch.skill_sha256 if epoch is not None else start.skill_sha256)
-    if effective_skill_sha256 is None:
+    identity = epoch if epoch is not None else start
+    if identity.identity_version != 2 or identity.skill_sha256 is not None:
         raise TerminalState(
-            'Commander started 事件没有 canonical operator skill 整树指纹；'
-            '历史运行不能猜成今天的操作契约')
-    try:
-        current_skill_sha256 = skill_contract.package_sha256()
-    except skill_contract.SkillContractError as exc:
-        raise TerminalState(
-            'canonical operator skill 整树不完整，拒绝执行 Commander 动作') from exc
-    if effective_skill_sha256 != current_skill_sha256:
-        raise TerminalState(
-            'Commander contract 的 operator skill 整树指纹与当前仓库不一致；'
-            '拒绝在一本书中混用两份操作规程')
+            '旧 skill 运行身份只供历史读取；须关闭旧 owner 并由当前代码打开新 epoch，'
+            '不能重签旧记录或继续旧供应商会话')
     profiles = validate_pipeline_profiles(profile_snapshot)
     if profiles != profile_snapshot:
         raise TerminalState('Commander started 事件中的 profiles 不是完整 resolved 快照')
@@ -368,7 +358,7 @@ def load_from_environment(
     env: Mapping[str, str] | None = None,
     records: Sequence[AgentRunRecord] | None = None,
 ) -> CommanderContext | None:
-    """严格加载执行上下文；任何当前 code/skill 漂移都拒绝继续执行。"""
+    """严格加载执行上下文；任何当前 code/identity 漂移都拒绝继续执行。"""
     loaded = _load_from_environment(
         base, sid, env=env, records=records, require_current_identity=True)
     assert loaded is None or isinstance(loaded, CommanderContext)

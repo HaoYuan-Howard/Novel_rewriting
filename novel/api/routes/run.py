@@ -19,7 +19,8 @@ from contracts.schema.api import WorkUnitGrantPreview, WorkUnitGrantRequest, Wor
 from novel.api.deps import checked_sid, get_base
 from novel.errors import UpstreamMissing
 from novel.orchestrator import beacon, operator, work_unit_grants
-from novel.views import work_units
+from novel.views import work_units, run_metrics
+from contracts.schema.run_metrics import RunMetricsView
 
 router = APIRouter(prefix='/novels')
 
@@ -35,6 +36,12 @@ def preview_work_unit_grant(unit_id: str, sid: str = Depends(checked_sid),
 def apply_work_unit_grant(unit_id: str, request: WorkUnitGrantRequest,
                          sid: str = Depends(checked_sid), base: str = Depends(get_base)) -> WorkUnitGrantResult:
     return work_unit_grants.apply(base, sid, unit_id, request)
+
+
+@router.get('/{sid}/run/metrics', response_model=RunMetricsView)
+def get_run_metrics(sid: str = Depends(checked_sid), base: str = Depends(get_base),
+                    run_id: str | None = Query(default=None, min_length=1)) -> RunMetricsView:
+    return run_metrics.get(base, sid, run_id)
 
 
 @router.get('/{sid}/run', response_model=RunProgressView)

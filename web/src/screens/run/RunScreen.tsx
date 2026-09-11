@@ -1,3 +1,5 @@
+import { DELIVERY_LABEL } from '@/constants/vocabulary'
+import { RunMetricsPanel } from './RunMetricsPanel'
 import { useEffect, useId, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { keepPreviousData, useQueries, useQuery } from '@tanstack/react-query'
@@ -141,13 +143,7 @@ function AuthorizationChip({ value, label }: { value: boolean | null; label: str
   )
 }
 
-const DELIVERY_LABEL = {
-  ready: '可交付',
-  ready_with_disclosures: '可交付·有披露',
-  stopped: '已停·未交付',
-  failed: '进程失败',
-  unknown: '交付未知',
-} as const
+
 
 /**
  * 交付终验徽标 + **可展开的判定依据**。
@@ -577,6 +573,7 @@ export function RunScreen() {
 
       {/* agent 代跑进程：独立查询，进度取数炸了也不挡这块 */}
       <AgentRunBlock stoppedStageTarget={stoppedStageTarget} />
+      <RunMetricsPanel key={sid} sid={sid} />
 
       <QueryStates q={q} loadingLabel="读跑书进度">
         {(d) => (

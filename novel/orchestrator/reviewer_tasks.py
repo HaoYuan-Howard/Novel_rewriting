@@ -84,6 +84,7 @@ from novel.orchestrator import queue, reviewer_contract, service_lifecycle
 
 
 REQUEST_SCHEMA = 'novel-reviewer-action-v1'
+# 审批审计沿用既有 actor 标识；它不对应需发现或加载的 skill 目录。
 _ACTOR = 'agent:novel-pipeline-operator'
 # 这是 prompt 内的不可提交 sentinel。简单审批（尤其 writing）没有业务
 # decision 枚举可替它关闭式兜底，因此 loader 也必须拒绝原样复制。
@@ -503,11 +504,9 @@ def _workpack(
                 '--emit-edit-template']),
         }
     if waiting_on == 'stage0.approve':
-        script = (
-            root / '.workflow' / 'skills' / 'novel-pipeline-operator'
-            / 'scripts' / 'stage0_review_workpack.py')
         return {'stage0': _json_command([
-            py, '-B', str(script), '--base', base, '--sid', sid],
+            py, '-B', '-m', 'novel.stages.stage0.review_workpack',
+            '--base', base, '--sid', sid],
             allow_stopped=True)}
     if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
         correction: dict[str, Any] | None = None

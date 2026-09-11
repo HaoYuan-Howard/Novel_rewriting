@@ -192,6 +192,12 @@ def read_current_book(
             f'chars={len(text)}/{art.book_txt.chars}, '
             f'chapters={len(up.recs)}/{art.book_txt.chapters}',
             hint='stage7.assemble（0 成本，按当前映射重拼并重记账）')
+    hook_new, _counts, _claimed = apply_subs(up.hook_text, dict(art.subs), kept=list(art.kept))
+    expected = assemble_txt(hook_new, up.recs, dict(art.subs), list(art.kept))
+    if text != expected:
+        raise UpstreamStale(
+            '成书与当前已批准正文、文案和改名表的确定性重建不一致',
+            hint='stage7.assemble（0 成本）')
     return text
 
 

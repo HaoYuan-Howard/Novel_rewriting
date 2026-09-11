@@ -4,7 +4,7 @@
 
 节点执行由 execution permit + ``run_step`` claim 约束；终审包提交与 operator
 telemetry 不是节点，也没有付费/产物 argv，不能冒充那张 permit。但它们仍会写盘：
-若 Commander 已退出，而一个迟发的 finalizer/telemetry 子进程才开始，父 worker
+若 Commander 已退出，而一个迟发的遥测写入子进程才开始，父 worker
 可能已经把 admission 标成 drained 并释放书锁。
 
 本模块只解决这条生命周期缝：Commander context 下先完整重读冻结契约，再以独立

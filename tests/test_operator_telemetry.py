@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Commander/operator 阶段遥测：独立账、隐私边界、折叠与 skill 薄入口。"""
+"""Commander/operator 阶段遥测：独立账、隐私边界、折叠与正式模块入口。"""
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 
 import pytest
 
@@ -18,6 +20,14 @@ RUN_ID = '44444444-4444-4444-8444-444444444444'
 OTHER_SESSION = '55555555-5555-4555-8555-555555555555'
 SHA_A = 'a' * 64
 SHA_B = 'b' * 64
+
+
+def test_module_entrypoint_actually_dispatches_the_cli():
+    result = subprocess.run([sys.executable, '-X', 'utf8', '-B', '-m',
+                             'novel.operator_telemetry', '--help'],
+                            capture_output=True, text=True, encoding='utf-8', timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert 'session-start' in result.stdout and 'phase-end' in result.stdout
 
 
 def _start(base, *, session_id=SESSION):

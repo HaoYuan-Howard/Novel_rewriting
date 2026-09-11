@@ -90,11 +90,38 @@ def ledger_path(base: str | Path) -> Path:
     return Path(base).joinpath(*LEDGER_REL)
 
 
+def read_cost_snapshot(base: str | Path) -> tuple[list[dict], bool]:
+    """锁内读取成本账的已提交前缀，并单列未提交尾；坏完整行不容错。"""
+    path = ledger_path(base)
+    if not path.is_file():
+        return [], False
+    with process_append_lock(path):
+        raw = path.read_bytes()
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('成本账含重复 JSON 键')
+            result[key] = value
+        return result
+
+    rows = []
+    parts = raw.split(b'\n')
+    for line in parts[:-1]:
+        if not line.strip():
+            continue
+        row = json.loads(line, object_pairs_hook=unique)
+        if not isinstance(row, dict):
+            raise ValueError('成本账不是 JSON object')
+        rows.append(row)
+    return rows, bool(parts[-1])
+
+
 def read_jsonl_rows(path: str | Path) -> list[dict[str, Any]]:
     """读服务 JSONL dict 行；只容忍被 kill 留下的最后一条半行。
 
-    成本聚合与终审 seal 必须共用同一组容错语义，否则一条刚追加到一半的
-    wire 会在「收集事实」与「判盘面是否漂移」两侧被解释成不同状态。
+    换行是提交标记；成本聚合和恢复消费者均不得把尚未追加完的行当成完整证据。
     """
     source = Path(path)
     if not source.is_file():
@@ -106,7 +133,7 @@ def read_jsonl_rows(path: str | Path) -> list[dict[str, Any]]:
         if not complete:
             if index == len(lines) - 1:
                 # 换行是 append-only 行的提交标记；无论截断点是否恰好落在
-                # 一个可解析 JSON 后面，未提交的尾都不能进入终审事实。
+                # 一个可解析 JSON 后面，未提交的尾都不能进入已记录事实。
                 break
             raise ValueError(
                 f'{source} 第 {index + 1} 行不是 LF 提交的完整事件')

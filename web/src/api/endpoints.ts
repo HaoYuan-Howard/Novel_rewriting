@@ -1,3 +1,4 @@
+import type { RunMetrics } from '@/types/runMetrics'
 /**
  * 唯一的数据缝。屏与组件只认这个文件导出的 `api`。
  *
@@ -371,6 +372,7 @@ export const realApi: Api = {
   getEnums: () => get<EnumsResponse>('/enums'),
   // run 的响应已是视图形状（snake_case 照后端原样），数据缝不做适配
   getRunProgress: (sid) => get<RunProgress>(n(sid) + '/run'),
+  getRunMetrics: (sid, runId) => get<RunMetrics>(n(sid) + '/run/metrics' + (runId ? '?run_id=' + encodeURIComponent(runId) : '')),
   previewWorkUnitGrant: (sid, unitId, additional) => get<WorkUnitGrantPreview>(
     n(sid) + '/work-units/' + encodeURIComponent(unitId) + '/grant?additional=' + additional),
   grantWorkUnit: (sid, unitId, request) => post<WorkUnitGrantResult>(

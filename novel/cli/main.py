@@ -840,7 +840,7 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
               '定稿闸门（`stage6.approve --pick`）**照旧拒绝有矛盾的候选**')
         return X.OK if report.passed else X.CHECK_FAILED
 
-    # 付费路。⚠ 本仓第一次真花钱要先说一声（README）。
+    # 付费路：遵循 AGENTS.md 的付费与正文外发授权边界。
     client = _llm_client(ctx)
     hook.run_hook(ctx, client)
     print('  ✓ stage6 开篇文案已落盘（三个候选）——跑 `stage6.approve --pick N` 定稿')
@@ -1427,8 +1427,7 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
             print(render(report))
             return X.OK if report.passed else X.CHECK_FAILED
         rev, report = review.run_review(ctx)
-        print(f'  ✓ 全书验收：{len(rev.chapters)} 章 · 书级 {len(rev.book)} 条'
-              f'（{rev.counts}）')
+        print(f'  ✓ 全书验收：{len(rev.chapters)} 章 · 书级 {len(rev.book)} 条')
         print(render(report))
         # ⚠⚠ **本层徽章结构上永远到不了 `pass`**（5 条 `unver`）⇒ 最好是 amber + 退出码 0。
         #    拿 `passed` 当退出码是对的：`amber` 的 `passed` 为真，只有真命中 hard 才非零。
@@ -1555,7 +1554,7 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
               f'消费：{disposition.disposition_sha256}')
         return X.OK
 
-    # 付费两条路。⚠ 本仓第一次真花钱要先说一声（README）。
+    # 两种付费调用模式均遵循 AGENTS.md 的付费与正文外发授权边界。
     from novel.llm import stage5_runs
     reviewer_rewrite_rel = _valued(flags, '--reviewer-rewrite')
     if reviewer_rewrite_rel is not None:
@@ -1691,7 +1690,7 @@ def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
-    # 付费路。⚠ 本仓第一次真花钱要先说一声（README）。
+    # 付费路：遵循 AGENTS.md 的付费与正文外发授权边界。
     client = _llm_client(ctx)
     rename.run_rename(ctx, client)
     print('  ✓ stage7 人物表已落盘——跑 `stage7.approve` 定稿，再 `stage7.assemble` 成书')
@@ -2598,7 +2597,7 @@ def _cmd_mark(a: argparse.Namespace) -> int:
     ⚠ 相位与载荷的一致由 `ProgressEvent` 的后置校验钉着；这里先把
     「end 忘了带 --exit」翻成人话，不放它去撞裸 `ValidationError`。
     ⚠ stage0.remove 那一步书目录还没落地也能打——信标只进 `_service/`，
-    sid 是 SKILL 工作流契约从源文件名推导出来的那个。
+    sid 由登记的源文件命名规则推导。
     """
     if a.phase == 'end' and a.exit is None:
         raise TerminalState('phase=end 必须带 --exit <退出码>（phase=start 不许带）')

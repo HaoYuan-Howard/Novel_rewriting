@@ -31,10 +31,7 @@ def test_operator_snapshot_freezes_one_code_and_runs_each_check_once(
     monkeypatch.setattr(
         I, 'readonly_ctx', lambda novel_dir, node, code: (novel_dir, node, code))
     monkeypatch.setattr(I, 'check_node', lambda stage: f'{stage}.canonical-check')
-    monkeypatch.setattr(
-        I, '_service_facts',
-        lambda *_args, **_kwargs: pytest.fail(
-            '普通 state/inbox seal 不得读取终审 ledger/beacon'))
+
 
     def check_only(stage):
         def run(ctx):
@@ -211,7 +208,7 @@ def test_approval_projection_requires_a_complete_matching_snapshot_coordinate():
         A.get('.', 'other-book', overview=overview, code='code-v1')
 
 
-def test_read_surface_seal_ignores_only_the_review_it_will_replace(
+def test_read_surface_seal_ignores_unregistered_documents(
         monkeypatch, tmp_path):
     novel_dir = tmp_path / 'FQ_测试书_book-1'
     (novel_dir / 'stage7').mkdir(parents=True)
@@ -221,7 +218,6 @@ def test_read_surface_seal_ignores_only_the_review_it_will_replace(
     review.write_text('draft v1', encoding='utf-8')
     monkeypatch.setattr(
         I.paths, 'resolve_novel_dir', lambda _base, _sid: novel_dir)
-    monkeypatch.setattr(I.paths, 'review_package_path', lambda _dir: review)
     monkeypatch.setattr(I.prov, 'code_version', lambda: 'code-v1')
 
     before = I.read_surface_seal(tmp_path, 'book-1')
@@ -230,9 +226,7 @@ def test_read_surface_seal_ignores_only_the_review_it_will_replace(
 
     artifact.write_text('artifact changed', encoding='utf-8')
     assert I.read_surface_seal(tmp_path, 'book-1') != before
-
-
-def test_surface_seal_ignores_review_control_files_but_keeps_active_artifact(
+def test_surface_seal_ignores_legacy_report_files_but_keeps_active_artifact(
         monkeypatch, tmp_path):
     novel_dir = tmp_path / 'FQ_测试书_book-1'
     novel_dir.mkdir()
@@ -242,28 +236,27 @@ def test_surface_seal_ignores_review_control_files_but_keeps_active_artifact(
     custom.write_text('draft', encoding='utf-8')
     monkeypatch.setattr(
         I.paths, 'resolve_novel_dir', lambda _base, _sid: novel_dir)
-    monkeypatch.setattr(I.paths, 'review_package_path', lambda _dir: canonical)
     monkeypatch.setattr(I.prov, 'code_version', lambda: 'code-v1')
 
     before = I.read_surface_seal(
-        tmp_path, 'book-1', excluded_review=custom)
+        tmp_path, 'book-1')
     custom.write_text('edited draft', encoding='utf-8')
     custom.with_name(custom.name + '.lock').write_bytes(b'\0')
     custom.with_name(
         f'.{custom.name}.operator-sync.abc.tmp').write_text(
             'pending', encoding='utf-8')
     assert I.read_surface_seal(
-        tmp_path, 'book-1', excluded_review=custom) == before
+        tmp_path, 'book-1') == before
 
     canonical.write_text('changed evidence', encoding='utf-8')
     assert I.read_surface_seal(
-        tmp_path, 'book-1', excluded_review=custom) == before
+        tmp_path, 'book-1') == before
 
     active = novel_dir / 'stage7' / 'name_map.json'
     active.parent.mkdir(exist_ok=True)
     active.write_text('{}', encoding='utf-8')
     assert I.read_surface_seal(
-        tmp_path, 'book-1', excluded_review=custom) != before
+        tmp_path, 'book-1') != before
 
 
 def test_surface_seal_ignores_rounds_scratch_and_approval_history(
@@ -328,52 +321,3 @@ def test_surface_seal_ignores_rounds_scratch_and_approval_history(
     })
     approval.write_text(changed_current.model_dump_json(), encoding='utf-8')
     assert I.read_surface_seal(tmp_path, 'book-1') != before
-
-
-def test_surface_seal_filters_shared_ledger_and_beacon_by_sid(
-        monkeypatch, tmp_path):
-    novel_dir = tmp_path / 'FQ_测试书_book-1'
-    novel_dir.mkdir()
-    review = novel_dir / '测试书_review.md'
-    review.write_text('draft', encoding='utf-8')
-    monkeypatch.setattr(
-        I.paths, 'resolve_novel_dir', lambda _base, _sid: novel_dir)
-    monkeypatch.setattr(I.paths, 'review_package_path', lambda _dir: review)
-    monkeypatch.setattr(I.prov, 'code_version', lambda: 'code-v1')
-
-    service = tmp_path / '_service'
-    service.mkdir()
-    ledger = service / 'ledger.jsonl'
-    progress = service / 'agent_progress.jsonl'
-
-    def append(path, row):
-        with open(path, 'a', encoding='utf-8', newline='\n') as handle:
-            handle.write(json.dumps(row, ensure_ascii=False) + '\n')
-
-    append(ledger, {'sid': 'other-book', 'run_id': 'other-1'})
-    append(progress, {
-        'ts': 1, 'sid': 'other-book', 'node': 'stage0.remove',
-        'phase': 'start', 'exit_code': None,
-    })
-    before = I.read_surface_seal(
-        tmp_path, 'book-1', include_final_evidence_service=True)
-
-    append(ledger, {'sid': 'other-book', 'run_id': 'other-2'})
-    append(progress, {
-        'ts': 2, 'sid': 'other-book', 'node': 'stage1.main',
-        'phase': 'start', 'exit_code': None,
-    })
-    assert I.read_surface_seal(
-        tmp_path, 'book-1', include_final_evidence_service=True) == before
-
-    append(ledger, {'sid': 'book-1', 'run_id': 'ours-1'})
-    after_ledger = I.read_surface_seal(
-        tmp_path, 'book-1', include_final_evidence_service=True)
-    assert after_ledger != before
-
-    append(progress, {
-        'ts': 3, 'sid': 'book-1', 'node': 'stage7.assemble',
-        'phase': 'end', 'exit_code': 0,
-    })
-    assert I.read_surface_seal(
-        tmp_path, 'book-1', include_final_evidence_service=True) != after_ledger

@@ -14,6 +14,7 @@ import type {
   Sources,
 } from './common'
 import type { Job } from './jobs'
+import type { AgentDeliveryOutcome } from './agent'
 import type { CompactApprovalCheck } from './approvals'
 
 /* ---------------------------------------------------------------- stage0 */
@@ -1177,6 +1178,7 @@ export interface Stage7Response {
   /** 组装时的账；book_txt_on_disk 才是盘上此刻的实况（两者可分家） */
   book_txt: { sha1: string; chars: number; chapters: number } | null
   book_txt_on_disk: boolean
+  delivery: AgentDeliveryOutcome
   /**
    * 成书文件名（`<书名>_rewriting.txt`），由服务端下发。
    * ⚠ 另存名、按钮文案都用它，**不要拿 title 再拼一次**：那是同一条命名规则的第二个

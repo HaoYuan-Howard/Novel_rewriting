@@ -351,7 +351,7 @@ if (-not $Python) {
         $UseCondaRun = $true
     } else {
         Write-Bad "没找到 conda 环境 $CondaEnv 的 python，也没找到 conda 命令。"
-        Write-Note "后端跑在 conda 环境 $CondaEnv 里（见 README「运行与验证」）。"
+        Write-Note "后端跑在 conda 环境 $CondaEnv 里（见 docs/OPERATIONS.md「后端命令」）。"
         exit 127
     }
 }

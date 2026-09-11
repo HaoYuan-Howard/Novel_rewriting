@@ -650,7 +650,8 @@ def test_raw_usage_cannot_equal_typed_integer_by_python_numeric_coercion(tmp_pat
     ('commander_reviewer_request', True),
 ])
 def test_transport_linkage_discloses_end_reason_but_cannot_override_stopped_outer_run(
-        tmp_path, end_error_kind, stopped):
+        tmp_path, monkeypatch, end_error_kind, stopped):
+    monkeypatch.setattr(verifier.prov, 'code_version', lambda: 'clean-code')
     values = _commander_retry_chain(tmp_path, end_error_kind=end_error_kind)
     linkage = _retry_check(values)
     assert linkage['state'] == 'pass'
@@ -661,7 +662,7 @@ def test_transport_linkage_discloses_end_reason_but_cannot_override_stopped_oute
         sid=_SID, base=str(tmp_path), argv=['novel', 'agent'],
         prompt='零模型测试的授权记录', authorized=True, egress_authorized=True,
         code_version='clean-code',
-        skill_sha256=verifier.skill_contract.package_sha256(verifier.REPO_ROOT),
+        identity_version=2,
         profiles={'commander': _PROFILE, 'executor_default': _PROFILE})
     verifier.agent.append(tmp_path, AgentRunEvent(
         run_id=_RUN_ID, kind='started', ts=1, start=start))

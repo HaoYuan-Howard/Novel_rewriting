@@ -102,10 +102,10 @@ def review_commander_stop(
         )
     else:
         # pipeline_complete 只代表 node 链没有下一项；delivery 仍 stopped 说明
-        # canonical finalizer、终审包或 fresh 交付证据至少有一面没有闭合。
+        # 当前成书、审批或交付阻塞条件仍有未闭合项。
         reason = (
             'Commander 顶层进程以 exit 0 结束；operator next 已是 '
-            'pipeline_complete，但 fresh delivery 仍为 stopped，说明收尾/终审证据'
+            'pipeline_complete，但 fresh delivery 仍为 stopped，说明成书/审批证据'
             '尚未闭合；pipeline 已无 ready action，Supervisor 不猜测新动作。'
             f'原终验：{outcome.reason}'
         )

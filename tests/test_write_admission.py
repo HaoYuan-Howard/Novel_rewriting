@@ -13,16 +13,9 @@ import pytest
 from contracts.schema.orchestration import (
     AgentProfile, AgentRunEvent, AgentRunStart, PipelineAgentProfiles,
 )
-from novel import commander_context, operator_telemetry as telemetry, skill_contract
+from novel import commander_context, operator_telemetry as telemetry
 from novel.errors import TerminalState
 from novel.orchestrator import admission, agent, jobs, write_admission
-
-
-SCRIPT_DIR = (Path(__file__).resolve().parent.parent
-              / skill_contract.SKILL_REL / 'scripts')
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-import finalize_review as finalizer  # noqa: E402
 
 
 SID = '42'
@@ -44,7 +37,7 @@ def _install_commander(base: Path, monkeypatch, *, run_id: str = PARENT) -> str:
         sid=SID, base=str(base.resolve()), argv=['codex', 'exec', '-'],
         prompt='writer lifecycle test', authorized=True,
         egress_authorized=True, code_version='write-guard-code-v1',
-        skill_sha256=skill_contract.package_sha256(), profiles=_profiles())
+        identity_version=2, profiles=_profiles())
     agent.append(base, AgentRunEvent(
         run_id=run_id, kind='started', ts=1, start=start))
     env = commander_context.env_with_context(
@@ -75,22 +68,22 @@ def _finish_gate(base: Path, run_id: str) -> None:
 
 def test_operation_hash_binds_protocol_base_sid_operation_and_details(tmp_path):
     base = write_admission.operation_sha256(
-        tmp_path, '42', 'finalize-review', details={'started_at': 1})
+        tmp_path, '42', 'maintenance-write', details={'started_at': 1})
     variants = {
         write_admission.operation_sha256(
-            tmp_path / 'other', '42', 'finalize-review',
+            tmp_path / 'other', '42', 'maintenance-write',
             details={'started_at': 1}),
         write_admission.operation_sha256(
-            tmp_path, '43', 'finalize-review', details={'started_at': 1}),
+            tmp_path, '43', 'maintenance-write', details={'started_at': 1}),
         write_admission.operation_sha256(
             tmp_path, '42', 'operator-session-end',
             details={'started_at': 1}),
         write_admission.operation_sha256(
-            tmp_path, '42', 'finalize-review', details={'started_at': 2}),
+            tmp_path, '42', 'maintenance-write', details={'started_at': 2}),
     }
     assert len(base) == 64 and base not in variants and len(variants) == 4
     payload = write_admission.operation_payload(
-        tmp_path, '42', 'finalize-review', details={'started_at': 1})
+        tmp_path, '42', 'maintenance-write', details={'started_at': 1})
     assert payload['protocol'] == write_admission.WRITE_ADMISSION_PROTOCOL
 
 
@@ -101,7 +94,7 @@ def test_closed_parent_rejects_a_late_generic_writer(tmp_path, monkeypatch):
 
     with pytest.raises(TerminalState, match='关闭 admission|迟到'):
         with write_admission.operation_scope(
-                tmp_path, SID, operation='finalize-review'):
+                tmp_path, SID, operation='maintenance-write'):
             raise AssertionError('closed parent 不得进入 mutation body')
 
     admission.mark_drained(tmp_path, run_id)
@@ -113,10 +106,10 @@ def test_active_generic_claim_blocks_drained_until_scope_exits(
     admission.open_gate(tmp_path, run_id, SID)
 
     with write_admission.operation_scope(
-            tmp_path, SID, operation='finalize-review') as receipt:
+            tmp_path, SID, operation='maintenance-write') as receipt:
         current = admission.snapshot(tmp_path, run_id)
         assert len(current.active_claims) == 1
-        assert current.active_claims[0].node == 'write:finalize-review'
+        assert current.active_claims[0].node == 'write:maintenance-write'
         assert current.active_claims[0].claim_sha256 == receipt.claim_sha256
         admission.close_gate(tmp_path, run_id)
         with pytest.raises(TerminalState, match='active claims'):
@@ -162,14 +155,14 @@ def test_contextless_release_failure_does_not_mask_the_mutation_error(
 
     with pytest.raises(RuntimeError, match='body is primary') as caught:
         with write_admission.operation_scope(
-                tmp_path, SID, operation='finalize-review'):
+                tmp_path, SID, operation='maintenance-write'):
             raise RuntimeError('body is primary')
 
     notes = '\n'.join(getattr(caught.value, '__notes__', ()))
     assert 'contextless release unavailable' in notes
     holder = jobs.REGISTRY.conflicting_holder(SID)
     assert holder is not None, 'release 失败必须如实留下 active writer'
-    actual_release(jobs.active_key(SID, 'write:finalize-review'), holder)
+    actual_release(jobs.active_key(SID, 'write:maintenance-write'), holder)
 
 
 def test_contextless_release_failure_is_explicit_after_successful_body(
@@ -183,12 +176,12 @@ def test_contextless_release_failure_is_explicit_after_successful_body(
 
     with pytest.raises(OSError, match='contextless release unavailable'):
         with write_admission.operation_scope(
-                tmp_path, SID, operation='finalize-review'):
+                tmp_path, SID, operation='maintenance-write'):
             pass
 
     holder = jobs.REGISTRY.conflicting_holder(SID)
     assert holder is not None, 'release 失败必须如实留下 active writer'
-    actual_release(jobs.active_key(SID, 'write:finalize-review'), holder)
+    actual_release(jobs.active_key(SID, 'write:maintenance-write'), holder)
 
 
 def test_contextless_scope_and_agent_admission_are_one_barrier_transaction(
@@ -213,7 +206,7 @@ def test_contextless_scope_and_agent_admission_are_one_barrier_transaction(
     def direct_writer() -> None:
         try:
             with write_admission.operation_scope(
-                    tmp_path, SID, operation='finalize-review'):
+                    tmp_path, SID, operation='maintenance-write'):
                 winners.append('write')
                 entered.set()
                 assert release.wait(3)
@@ -263,7 +256,7 @@ def test_contextless_scope_and_agent_admission_are_one_barrier_transaction(
     assert all(not thread.is_alive() for thread in threads)
 
 
-def test_finalizer_and_all_four_telemetry_writes_hold_real_generic_claims(
+def test_all_four_telemetry_writes_hold_real_generic_claims(
         tmp_path, monkeypatch):
     run_id = _install_commander(tmp_path, monkeypatch)
     admission.open_gate(tmp_path, run_id, SID)
@@ -282,15 +275,7 @@ def test_finalizer_and_all_four_telemetry_writes_hold_real_generic_claims(
             observed.append((operation, sid, receipt.parent_run_id or ''))
             yield receipt
 
-    monkeypatch.setattr(finalizer, 'operation_scope', observed_scope)
     monkeypatch.setattr(telemetry, 'operation_scope', observed_scope)
-    monkeypatch.setattr(
-        finalizer, '_finalize_admitted',
-        lambda *_args, **_kwargs: {'state': 'stopped', 'guarded': True})
-
-    assert finalizer.finalize(
-        tmp_path, SID, started_at=1,
-        start_code_version='write-guard-code-v1')['guarded'] is True
     telemetry.start_session(
         tmp_path, SID, start_code_version='write-guard-code-v1',
         source='skill', parent_run_id=run_id, session_id=SESSION,
@@ -308,7 +293,6 @@ def test_finalizer_and_all_four_telemetry_writes_hold_real_generic_claims(
         tmp_path, SID, session_id=SESSION)['session_count'] == 1
     assert observed == before_summary, 'summary 是纯读，不得取得 write claim'
     assert observed == [
-        ('finalize-review', SID, run_id),
         ('operator-session-start', SID, run_id),
         ('operator-phase-start', SID, run_id),
         ('operator-phase-end', SID, run_id),

@@ -9,7 +9,7 @@ from contracts.schema.orchestration import (
     AgentProfile, AgentRunRecord, AgentRunStart, ExecutionEpoch,
     PipelineAgentProfiles, RunContractV2,
 )
-from novel import commander_context, skill_contract
+from novel import commander_context
 from novel.errors import TerminalState
 
 
@@ -38,7 +38,7 @@ def _start(base: Path, **changes) -> AgentRunStart:
         'authorized': True,
         'egress_authorized': True,
         'code_version': 'code-v1',
-        'skill_sha256': skill_contract.package_sha256(),
+        'identity_version': 2,
         'profiles': _profiles(),
     }
     values.update(changes)
@@ -78,7 +78,7 @@ def test_v2_parent_compatibility_snapshots_do_not_override_epoch_identity(
     """parent hash 固定 started 字节；执行 currentness 只认当前 epoch。"""
     initial = _start(
         tmp_path, argv=['old-commander', '-'], prompt='首次启动提示',
-        code_version='code-v1', skill_sha256='0' * 64)
+        code_version='code-v1', identity_version=1, skill_sha256='0' * 64)
     contract = RunContractV2(**initial.model_dump(mode='json'))
     assert contract.model_dump(mode='json') == {
         'wire_version': 2,
@@ -88,12 +88,11 @@ def test_v2_parent_compatibility_snapshots_do_not_override_epoch_identity(
         'egress_authorized': True,
         'profiles': initial.profiles.model_dump(mode='json'),
     }
-    current_skill = skill_contract.package_sha256()
     epoch = ExecutionEpoch(
         epoch_id='epoch-v2', ordinal=2, reason='code_change',
         argv=['new-commander', '-'], prompt_sha256='1' * 64,
         protocol_version='commander-v2', cli_version='cli-v2',
-        code_version='code-v2', skill_sha256=current_skill,
+        code_version='code-v2', identity_version=2,
         session_run_id='session-v2')
     record = AgentRunRecord(
         run_id='commander-v2', start=initial, contract=contract,
@@ -127,7 +126,7 @@ def test_retired_stage2_prereview_context_cannot_open_or_load_admission(
         epoch_id='epoch-prereview', ordinal=1, reason='initial',
         argv=['commander', '-'], prompt_sha256='1' * 64,
         protocol_version='commander-v2', cli_version='cli-v2',
-        code_version='code-v1', skill_sha256=skill_contract.package_sha256(),
+        code_version='code-v1', identity_version=2,
         session_run_id='session-prereview')
     record = AgentRunRecord(
         run_id='commander-prereview', start=start, contract=contract,
@@ -154,20 +153,20 @@ def test_retired_stage2_prereview_context_cannot_open_or_load_admission(
 
 @pytest.mark.parametrize('drift,match', [
     ('code', '代码指纹'),
-    ('skill', 'operator skill'),
+    ('skill', '旧 skill 运行身份'),
 ])
 def test_execution_close_loader_keeps_old_epoch_pointer_but_cannot_authorize_work(
         tmp_path, monkeypatch, drift, match):
     """漂移只能放行旧 execution 收尾；严格执行 loader 仍关闭式拒绝。"""
     initial = _start(tmp_path)
     contract = RunContractV2(**initial.model_dump(mode='json'))
-    current_skill = skill_contract.package_sha256()
     epoch = ExecutionEpoch(
         epoch_id='epoch-close', ordinal=1, reason='initial',
         argv=['commander', '-'], prompt_sha256='1' * 64,
         protocol_version='commander-v2', cli_version='cli-v2',
         code_version='code-v1',
-        skill_sha256=('0' * 64 if drift == 'skill' else current_skill),
+        identity_version=(1 if drift == 'skill' else 2),
+        skill_sha256=('0' * 64 if drift == 'skill' else None),
         session_run_id='session-close')
     record = AgentRunRecord(
         run_id='commander-close', start=initial, contract=contract,
@@ -201,8 +200,8 @@ def test_execution_close_loader_keeps_old_epoch_pointer_but_cannot_authorize_wor
     ('sid', '不能执行'),
     ('base', '不能执行'),
     ('code', '代码指纹'),
-    ('skill', 'operator skill'),
-    ('missing_skill', '没有 canonical operator skill'),
+    ('skill', '旧 skill 运行身份'),
+    ('missing_skill', '旧 skill 运行身份'),
 ])
 def test_context_refuses_partial_or_drifted_identity(
         tmp_path, monkeypatch, mutation, match):
@@ -220,11 +219,11 @@ def test_context_refuses_partial_or_drifted_identity(
     elif mutation == 'base':
         base = tmp_path / 'other'
     elif mutation == 'skill':
-        start = _start(tmp_path, skill_sha256='0' * 64)
+        start = _start(tmp_path, identity_version=1, skill_sha256='0' * 64)
         env = commander_context.env_with_context(
             run_id='commander-1', base=tmp_path, start=start, env={})
     elif mutation == 'missing_skill':
-        start = _start(tmp_path, skill_sha256=None)
+        start = _start(tmp_path, identity_version=1, skill_sha256=None)
         env = commander_context.env_with_context(
             run_id='commander-1', base=tmp_path, start=start, env={})
     monkeypatch.setattr(

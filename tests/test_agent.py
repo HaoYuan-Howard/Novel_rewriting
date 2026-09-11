@@ -56,7 +56,7 @@ from contracts.schema.orchestration import (
     PipelineAgentProfiles, ProgressEvent, ReviewerActionRecord, RunContractV2,
     Step,
 )
-from novel import agent_session_audit, commander_context, paths, skill_contract
+from novel import agent_session_audit, commander_context, paths
 from novel.agents.base import AgentUsage
 from novel.commanders import (
     CodexCommanderDriver, CommanderInvocation, CommanderObservation,
@@ -203,15 +203,14 @@ def test_prompt_carries_the_two_authorizations_independently(base, book):
     assert '付费授权已授予' in yes and '正文外发授权已授予' in yes
     assert '付费授权未授予' in no_paid and '正文外发授权已授予' in no_paid
     assert '付费授权已授予' in no_egress and '正文外发授权未授予' in no_egress
-    canonical_skill = (skill_contract.SKILL_REL / 'SKILL.md').as_posix()
     for text in (yes, no_paid, no_egress):
         assert 'sid=42' in text
-        assert canonical_skill in text                # 双保险：发现 shim 外的显式 neutral 路径
+        assert 'operator skill' not in text                # 双保险：发现 shim 外的显式 neutral 路径
         assert '.claude/skills/novel-pipeline-operator/SKILL.md' not in text
         # 落点取生产那一个落点，不在测试里重拼一份（`docs/LESSONS.md` 第 21 条）。
-        assert paths.review_package_path(book).as_posix() in text
+        assert '_review.md' not in text
     # 同时钉住人看得懂的那一面：书名 + `_review.md`，且**落在书目录里**。
-    assert '测试书_review.md' in yes
+    assert 'stage7/测试书_rewriting.txt' in yes
     assert 'final_review' not in yes, '终审包已不叫 final_review_<sid>.md，提示词里不该再出现'
 
 
@@ -333,20 +332,18 @@ def test_prompt_gives_the_rule_when_the_book_dir_is_not_there_yet(base):
     """`preview` 可以在摄入之前调用 ⇒ 那时拼不出书名。
 
     ⚠ 这一格**不许猜一个名字**：猜出来的那份会与书目录落地后按同一条规则算出的
-    名字分家，于是盘上出现两份终审包，而没有任何一层会报错。
+    名字分家，于是 prompt 与实际成书路径不一致。
     """
     text = agent.build_prompt(
         '42', base, authorized=False, egress_authorized=False, profiles=_PROFILES)
-    assert '<书目录>/<书名>_review.md' in text
-    assert 'state 42' in text                         # 指向真正能给出书目录的那条命令
+    assert 'stage7/<书名>_rewriting.txt' in text
+    assert '摄入后按书目录派生' in text
 
 
 def test_prompt_never_hardcodes_a_book_filename(base):
     """⭐ 成书名按书名派生（`paths.book_txt_rel`），prompt 里不许写死一个文件名。
 
-    ⚠ 这条错误**不会让 agent 跑挂**——它会照 SKILL.md 自我纠正，所以没有任何
-    退出码会变红。但 headless 下没有第二个人能纠正启动 prompt，而那是任务的
-    第一句话。⇒ 只能靠这条守卫。
+    启动材料与实际下载文件共用路径规则，不要求模型自行修正文件名。
     """
     text = agent.build_prompt(
         '42', base, authorized=True, egress_authorized=True, profiles=_PROFILES)
@@ -369,7 +366,7 @@ def test_prompt_is_reviewer_only_and_contains_no_control_plane_instructions(base
     assert 'expected-code-version' in text
     assert 'schema 提供 UNVER 时保持 UNVER' in text
     assert 'read-only 或材料不足不得制造付费动作' in text
-    assert 'reviewer 契约' in text and '不读取该 skill' in text
+    assert 'reviewer 契约' in text and 'operator skill' not in text
     assert 'run_step' not in text
     assert 'operator next' not in text
     assert 'finalizer' not in text
@@ -1078,7 +1075,7 @@ def test_start_with_fake_spawn(base, corpus, monkeypatch):
     assert done.start.profiles == _PROFILES
     assert done.start.base == os.path.abspath(base)
     assert done.start.code_version
-    assert done.start.skill_sha256 == agent._skill_sha256()
+    assert done.start.identity_version == 2 and done.start.skill_sha256 is None
     assert done.outcome is not None and done.outcome.state == 'stopped'
     assert 'fake run' in agent.run_log_path(base, rec.run_id).read_text('utf-8')
 
@@ -1832,11 +1829,10 @@ def test_initial_reviewer_prewire_refusal_does_not_write_an_orphan_attempt(
     assert done.outcome is not None and 'reconcile' in done.outcome.reason
 
 
-@pytest.mark.parametrize('identity_kind', ['code', 'skill'])
 @pytest.mark.parametrize(
     'drift_phase', ['after_workpack', 'after_pre_spawn_cas'])
 def test_reviewer_identity_drift_after_workpack_before_wire_uses_zero_seat(
-        base, corpus, monkeypatch, identity_kind, drift_phase):
+        base, corpus, monkeypatch, drift_phase):
     """R-11.23：spawn 前 + Popen 后双 CAS 均早于席位/wire。"""
     identity = {
         'code': 'test-code-version',
@@ -1844,7 +1840,6 @@ def test_reviewer_identity_drift_after_workpack_before_wire_uses_zero_seat(
         'drifted': False,
     }
     monkeypatch.setattr(agent.prov, 'code_version', lambda: identity['code'])
-    monkeypatch.setattr(agent, '_skill_sha256', lambda: identity['skill'])
 
     review = SimpleNamespace(
         state='blocked', code_version='test-code-version',
@@ -1867,10 +1862,7 @@ def test_reviewer_identity_drift_after_workpack_before_wire_uses_zero_seat(
 
     def apply_drift():
         identity['drifted'] = True
-        if identity_kind == 'code':
-            identity['code'] = 'new-code-version'
-        else:
-            identity['skill'] = 'b' * 64
+        identity['code'] = 'new-code-version'
 
     def build_task(_base, _sid, current, request_path, *, epoch_id):
         del epoch_id
@@ -2109,14 +2101,14 @@ def test_code_drift_rolls_epoch_and_starts_a_new_logical_session(
         'code-v1', 'code-v2']
 
 
-def test_skill_drift_rolls_epoch_without_resuming_the_old_provider_session(
+def test_runtime_code_drift_rolls_epoch_without_resuming_the_old_provider_session(
         base, corpus, monkeypatch):
     """skill 与代码同属 execution identity，但不创建第二个 parent run。"""
-    identity = {'skill': 'a' * 64}
+    identity = {'code': 'runtime-code-v1'}
+    monkeypatch.setattr(agent.prov, 'code_version', lambda: identity['code'])
     invocations = []
     reviews = 0
 
-    monkeypatch.setattr(agent, '_skill_sha256', lambda: identity['skill'])
     monkeypatch.setattr(
         agent.commander_completion, 'ready_action_remains',
         lambda _base, _sid: True)
@@ -2134,7 +2126,7 @@ def test_skill_drift_rolls_epoch_without_resuming_the_old_provider_session(
             'provider-before-skill-change' if len(invocations) == 1
             else 'provider-after-skill-change')
         if len(invocations) == 1:
-            identity['skill'] = 'b' * 64
+            identity['code'] = 'runtime-code-v2'
         return CommanderProcessResult(
             exit_code=0,
             observation=CommanderObservation(
@@ -2156,7 +2148,8 @@ def test_skill_drift_rolls_epoch_without_resuming_the_old_provider_session(
     epochs = [event.epoch for event in events
               if event.kind == 'epoch_opened']
     assert len(epochs) == 2 and all(epoch is not None for epoch in epochs)
-    assert [epoch.skill_sha256 for epoch in epochs] == ['a' * 64, 'b' * 64]
+    assert [epoch.code_version for epoch in epochs] == ['runtime-code-v1', 'runtime-code-v2']
+    assert all(epoch.identity_version == 2 and epoch.skill_sha256 is None for epoch in epochs)
     assert epochs[0].session_run_id != epochs[1].session_run_id
     assert [item.resume_provider_session_id for item in invocations] == [
         None, None]
@@ -3009,7 +3002,7 @@ def test_spawn_exception_traceback_redacts_the_stdin_prompt(base, corpus):
 
 
 def test_one_agent_per_book(base, corpus):
-    """**同一本书**一次只跑一个 agent。两个 agent 写同一片盘是 SKILL 明禁的。"""
+    """**同一本书**一次只跑一个 agent。同书的产物、审批与审计必须共享写互斥。"""
     gate = threading.Event()
 
     def slow(invocation, env, log):
@@ -3046,9 +3039,7 @@ def test_durable_unresolved_admission_blocks_new_agent_after_memory_restart(
 def test_different_books_run_in_parallel(base, corpus):
     """⭐ **不同书可以同时跑。** 锁按书分（`jobs.agent_lock_key`）。
 
-    ⚠ 这条是那次解读更正的落点：锁曾经是全局一把，理由写着「SKILL：两本书不并行」，
-    而 SKILL 那条管的是「一个 agent 会话别同时管两本」。N 个 headless agent
-    各看各的书，谁也碰不到谁的目录。
+    锁保护一本书的写盘；不同书各有目录与运行上下文，不扩大成全局互斥。
     """
     gate = threading.Event()
 
@@ -3486,54 +3477,6 @@ def test_stop_without_a_live_process_is_a_terminal_state(base):
 
 # ── 交付终验：证明不了的一律不倒成 ready ──────────────────────────────────
 
-def _delivery_book(base, *, review: str | None, book_text='成书\n',
-                   review_first=False):
-    """一本「成书 + 终审包」都在盘上的书；`review_first` 造出终审包早于成书。"""
-    from novel import paths
-    d = Path(base) / 'FQ_交付测试_77'
-    (d / 'stage7').mkdir(parents=True, exist_ok=True)
-    book_path = d / paths.book_txt_rel(d)
-    review_path = paths.review_package_path(d)
-    if review_first and review is not None:
-        review_path.write_text(review, encoding='utf-8')
-        os.utime(review_path, (1_700_000_000, 1_700_000_000))
-        book_path.write_text(book_text, encoding='utf-8')
-        os.utime(book_path, (1_700_000_100, 1_700_000_100))
-    else:
-        book_path.write_text(book_text, encoding='utf-8')
-        os.utime(book_path, (1_700_000_000, 1_700_000_000))
-        if review is not None:
-            review_path.write_text(review, encoding='utf-8')
-            os.utime(review_path, (1_700_000_100, 1_700_000_100))
-    return d
-
-
-def test_an_empty_review_package_is_not_a_delivered_one(base):
-    """⭐ **`is_file()` 不是判据。** agent 常先 `touch` 一个草稿占位，
-    而 0 字节草稿与「写完了」在文件存在性上一模一样。"""
-    from novel.orchestrator import delivery
-
-    d = _delivery_book(base, review='   \n\n  ')
-    why = delivery._review_package_refused(d)
-    assert why is not None and '空文件' in why, why
-
-
-def test_a_review_package_older_than_the_book_is_stale(base):
-    """终审包早于成书 ⇒ 它描述的是上一版成书，不是现在能下载的这一份。"""
-    from novel.orchestrator import delivery
-
-    d = _delivery_book(base, review='# 终审包\n结论：可交付\n', review_first=True)
-    why = delivery._review_package_refused(d)
-    assert why is not None and '早于当前成书' in why, why
-
-
-def test_a_current_non_empty_review_package_passes(base):
-    from novel.orchestrator import delivery
-
-    d = _delivery_book(base, review='# 终审包\n结论：可交付\n')
-    assert delivery._review_package_refused(d) is None
-
-
 def test_delivery_reports_quarantined_stage2_unver_as_disclosure_not_failure(
         base, monkeypatch):
     from novel.orchestrator import delivery
@@ -3566,7 +3509,6 @@ def test_delivery_reports_quarantined_stage2_unver_as_disclosure_not_failure(
         ))
     monkeypatch.setattr(
         delivery.assemble, 'read_current_book', lambda *_args, **_kwargs: '成书')
-    monkeypatch.setattr(delivery, '_review_package_refused', lambda _dir: None)
     monkeypatch.setattr(
         delivery, 'inbox_view', lambda _base, _sid: SimpleNamespace(items=[]))
 

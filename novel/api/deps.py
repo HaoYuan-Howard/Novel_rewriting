@@ -45,9 +45,7 @@ def checked_sid(sid: str) -> str:
 def checked_kind(kind: str) -> str:
     """校验报告的 `:kind`。**取值面 = `invariants.STAGES`，不手写第二份清单。**
 
-    ⚠ 退役 Stage3 前的八个 kind 里，第六个原来叫 `stage5_review`（原型脚本名泄漏进契约），
-    E 期已改名为 `stage5`——于是这一列与 `STAGES` 逐值相等、可以直接派生。
-    改名的账记在 `docs/schema/_api.md` §七；README 只保留现役入口，不保存改名历史。
+    当前报告 kind 直接从 `STAGES` 派生；公开形状见 `docs/schema/_api.md`，不保存原型别名。
 
     ⚠ **不在七个现役值里 ⇒ 400 并把七个列出来**，而不是 404：
     404 是「这本书没有」，400 是「你给的这个层名不存在」，两件事。

@@ -45,7 +45,7 @@ from novel.orchestrator import queue as queue_runner
 #: 会在本机执行进程 · 那些进程花真钱 · 会往盘上写文件 · 传输的是不外流的版权正文。
 HOST = '127.0.0.1'
 
-#: `web/DELIVERY.md` §1 写死的（Vite dev proxy 指着它）。
+#: 服务默认端口，与 `web/vite.config.ts` 的开发代理一致；运行入口见 `web/AGENTS.md`。
 PORT = 8765
 
 #: `R-11.2` 的自定义头。前端在 `web/src/api/client.ts` 里只给 `post()` 带它。

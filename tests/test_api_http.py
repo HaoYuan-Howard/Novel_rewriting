@@ -353,10 +353,8 @@ def _surface(app) -> dict[str, list[str]]:
 def test_the_published_surface_is_exactly_the_current_surface(app):
     """⭐ 公开接口面写死在这里（基础端点 + Stage 0/1 + 第二阶段读屏）。
 
-    ⚠ 路由表的唯一落点是 `web/DELIVERY.md` §3，
-    那张表的标题写着「**固定，不要改**」。本条不复制那张表，它只钉住
-    「**当前实现了其中哪几条**」——多接一个、少接一个都要来改这个清单，
-    于是「顺手加一个端点」变成一次显式的决定。
+    页面职责见 `web/AGENTS.md`「路由与屏幕职责」。本条钉住实际 HTTP 接口面，
+    不复制页面路由；新增或退役端点必须同步调整这份清单并验证其消费者。
     """
     assert _surface(app) == {
         '/api/enums': ['GET'],
@@ -433,9 +431,9 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/stage6/approve': ['POST'],
         '/api/novels/{sid}/stage7/approve': ['POST'],
         '/api/novels/{sid}/stage7/adopt-residual': ['POST'],
-        # ── agent 全链运行（`web/DELIVERY.md` §3 的 `/n/:sid/run` 那一格）──
+        # ── agent 全链运行（`web/AGENTS.md`「路由与屏幕职责」的 `/n/:sid/run`）──
         #    ⚠ 这五条是本条绊线**按设计逮到的**一次「顺手加端点」：路由已上线、
-        #    §3 的屏幕职责表也已登记，而这张清单没跟着改 ⇒ 全量跑时它红着。
+        #    屏幕职责表也已登记，而这张清单没跟着改 ⇒ 接口面测试失败。
         #    补进来就是那次「显式的决定」；它们的行为归 `tests/test_api_agent.py`。
         '/api/agent/capabilities': ['GET'],
         # 用户偏好与 capability 产品默认分开；行为归 `tests/test_agent_settings.py`。
@@ -452,6 +450,7 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/agent/runs/{run_id}/resume': ['POST'],
         '/api/agent/runs/{run_id}/stop': ['POST'],
         '/api/novels/{sid}/run': ['GET'],
+        '/api/novels/{sid}/run/metrics': ['GET'],
         '/api/novels/{sid}/work-units/{unit_id}/grant': ['GET', 'POST'],
     }
 
@@ -556,6 +555,15 @@ def test_executor_backend_http_matrix_covers_current_run_registry():
     covered['stage5.write'].append(frozenset({'--reviewer-rewrite'}))
     assert {node: tuple(token_sets) for node, token_sets in covered.items()} == \
         EXECUTOR_PROFILED_RUNS
+
+
+def test_executor_matrix_guard_detects_a_missing_public_combination(monkeypatch):
+    """能力手写副本删除后，真实 HTTP 验证面少一组合仍必须红。"""
+    import sys
+    monkeypatch.setattr(sys.modules[__name__], '_EXECUTOR_PROFILE_HTTP_CASES',
+                        _EXECUTOR_PROFILE_HTTP_CASES[1:])
+    with pytest.raises(AssertionError):
+        test_executor_backend_http_matrix_covers_current_run_registry()
 
 
 @pytest.mark.parametrize(

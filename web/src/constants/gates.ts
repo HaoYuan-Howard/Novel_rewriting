@@ -5,13 +5,8 @@
  *                                      └─ 人工复核 ─┘ ─► stage4 计划
  *                   ─► Stage5 写作授权 ─► stage5 ─► stage6 ─► stage7
  *
- * 文案与禁用条件源自历史原型 gateVals()，现役语义见 web/DELIVERY.md（§3 路由 / §7 UI 硬规则）。
- *
- * 这张表只被 components/gate/useGateBar.ts 消费。等后端接管这套工作流
- * （approve 返回新记录 + 它发起的作业），删这一个文件即可。
- *
- * 注意：这**不是**「前端做判定」。判定指的是 badge / paid / freshness / sev / passed，
- * 那些全部由服务端算好下发。这里是人工验收的流程本身，brief 自己画了这张图。
+ * GateBar 只展示仍使用通用确认的页面；Stage6/7 已由专用 typed 审批面负责。
+ * 审批、后续作业与最终交付分别读取后端证明，不能从 gate 推导成书或自动发起状态。
  */
 import type { ApprovalDoc, GateKey } from '@/types/approvals'
 import type { ScreenName } from './vocabulary'
@@ -42,8 +37,6 @@ export const SCREEN_GATE: Partial<Record<ScreenName, GateKey>> = {
   global: 's2',
   stage4: 's4',
   stage5: 's5',
-  stage6: 's6',
-  stage7: 's7',
 }
 
 export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | null {
@@ -120,39 +113,6 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
         doneNote: done ? 'stage6 已发起。' : null,
       }
     }
-
-    case 's6':
-      return {
-        key,
-        done,
-        blocked: !g.s5,
-        title: done ? '文案已确认' : g.s5 ? '开篇文案定哪一版？' : '成稿没确认，文案先别定',
-        note: g.s5
-          ? '确认后发起 stage7 人名替换。'
-          : '文案是给成稿写的招牌。成稿还在改，文案定了也要重来。',
-        chips: [{ ok: g.s5, label: 'stage5 成稿' }],
-        btn: done ? '已确认' : g.s5 ? '确认文案，启动 stage7' : '等 stage5 成稿确认',
-        blockedReason: '成稿还没确认。文案是给成稿写的招牌，成稿变了文案也要重来。',
-        doneNote: done ? 'stage7 已发起。' : null,
-      }
-
-    case 's7':
-      return {
-        key,
-        done,
-        blocked: !g.s6,
-        title: done ? '已成书' : g.s6 ? '人名替换对了就能成书' : '文案没确认，还不能成书',
-        note: g.s6
-          ? '确认后按原书结构拼装（文案 + 正文各章），落到 out/ 下的成书 txt。'
-          : '成书要把文案和正文一起拼进去。stage6 文案没确认，拼出来的是半本。',
-        chips: [
-          { ok: g.s5, label: 'stage5 成稿' },
-          { ok: g.s6, label: 'stage6 文案' },
-        ],
-        btn: done ? '已成书' : g.s6 ? '确认并成书' : '等 stage6 文案确认',
-        blockedReason: 'stage6 文案没确认，拼出来的是半本。',
-        doneNote: done ? '已写到 out/rebuilt.txt——语料库那屏能看到它的落盘时间。' : null,
-      }
 
     default:
       return null

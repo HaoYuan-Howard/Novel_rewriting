@@ -1,4 +1,5 @@
 import { api } from '@/api/endpoints'
+import { ApiError } from '@/api/errors'
 import { mockApi, SAMPLE_SID } from '@/api/mock'
 import { qk } from '@/api/queryKeys'
 import { ConfirmDialog } from '@/components/job/ConfirmDialog'
@@ -16,7 +17,9 @@ describe('Stage7Screen download', () => {
   it('uses the API adapter so mock and real modes share one path', async () => {
     const view = await mockApi.getStage7(SAMPLE_SID)
     const pack = await mockApi.getStage7ApprovalWorkpack(SAMPLE_SID)
-    vi.spyOn(api, 'getStage7').mockResolvedValue(view)
+    vi.spyOn(api, 'getStage7').mockResolvedValue({ ...view,
+      delivery: { state: 'ready', reason: '当前合成交付证明', checked_at: 1 },
+    })
     vi.spyOn(api, 'getStage7ApprovalWorkpack').mockResolvedValue({
       ...pack,
       disposition: 'already_current',
@@ -49,6 +52,72 @@ describe('Stage7Screen download', () => {
     await waitFor(() => expect(download).toHaveBeenCalledWith(SAMPLE_SID))
     expect(createUrl).toHaveBeenCalled()
     expect(revokeUrl).toHaveBeenCalledWith('blob:test')
+  })
+
+  it.each(['unknown', 'stopped'] as const)('文件存在但交付为 %s 时不开放下载', async (state) => {
+    const view = await mockApi.getStage7(SAMPLE_SID)
+    vi.spyOn(api, 'getStage7').mockResolvedValue({ ...view, book_txt_on_disk: true,
+      delivery: { state, reason: '当前证据未闭合', checked_at: 1 },
+    })
+    renderRoute(<Stage7Screen />, `/n/${SAMPLE_SID}/stage7`)
+    expect(await screen.findByText(/当前证据未闭合/)).toBeVisible()
+    expect(screen.queryByRole('button', { name: '下载 ' + view.book_filename })).not.toBeInTheDocument()
+  })
+
+  it('主区直接下载被拒后显示后端原因和恢复提示，并重取交付状态', async () => {
+    const view = await mockApi.getStage7(SAMPLE_SID)
+    vi.spyOn(api, 'getStage7')
+      .mockResolvedValueOnce({ ...view, delivery: {
+        state: 'ready', reason: '当前合成交付证明', checked_at: 1,
+      } })
+      .mockResolvedValue({ ...view, delivery: {
+        state: 'stopped', reason: '批准已失效，交付关闭', checked_at: 2,
+      } })
+    vi.spyOn(api, 'downloadStage7Book').mockRejectedValue(new ApiError('server', '/book.txt', {
+      status: 409,
+      backendKind: 'UpstreamStale',
+      message: '成书依据在下载前发生变化',
+      hint: '请核对当前人物表后重新定稿',
+    }))
+    renderRoute(<Stage7Screen />, `/n/${SAMPLE_SID}/stage7`)
+    fireEvent.click(await screen.findByRole('button', { name: '下载 ' + view.book_filename }))
+
+    expect(await screen.findByText('成书依据在下载前发生变化')).toBeVisible()
+    expect(screen.getByText('请核对当前人物表后重新定稿')).toBeVisible()
+    expect(await screen.findByText(/批准已失效，交付关闭/)).toBeVisible()
+    expect(screen.queryByRole('button', { name: '下载 ' + view.book_filename })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '下载' })).not.toBeInTheDocument()
+  })
+
+  it('交付重验和阻塞时关闭已打开抽屉的下载，并隐藏旧成书', async () => {
+    const view = await mockApi.getStage7(SAMPLE_SID)
+    const ready = { ...view, delivery: {
+      state: 'ready' as const, reason: '当前合成交付证明', checked_at: 1,
+    } }
+    const getStage7 = vi.spyOn(api, 'getStage7').mockResolvedValue(ready)
+    vi.spyOn(api, 'getStage7Book').mockResolvedValue('旧成书正文')
+    const download = vi.spyOn(api, 'downloadStage7Book')
+    const { queryClient } = renderRoute(<Stage7Screen />, `/n/${SAMPLE_SID}/stage7`)
+    fireEvent.click(await screen.findByRole('button', { name: '预览成书' }))
+    expect(await screen.findByText('旧成书正文')).toBeVisible()
+    expect(screen.getByRole('button', { name: '下载' })).toBeEnabled()
+
+    let finish!: (value: Awaited<ReturnType<typeof api.getStage7>>) => void
+    getStage7.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    await act(async () => {
+      void queryClient.refetchQueries({ queryKey: qk.stage7(SAMPLE_SID), exact: true })
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: '下载' })).toBeDisabled())
+    expect(screen.queryByText('旧成书正文')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '下载' }))
+    expect(download).not.toHaveBeenCalled()
+
+    await act(async () => finish({ ...ready, delivery: {
+      state: 'stopped', reason: '当前批准已失效', checked_at: 2,
+    } }))
+    await waitFor(() => expect(screen.getAllByText(/当前批准已失效/).length).toBeGreaterThan(0))
+    expect(screen.getByRole('button', { name: '下载' })).toBeDisabled()
+    expect(screen.queryByText('旧成书正文')).not.toBeInTheDocument()
   })
 
   it('previews and submits an auditable opaque-token name-map approval', async () => {

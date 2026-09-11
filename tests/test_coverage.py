@@ -239,7 +239,7 @@ def test_structural_rows_that_name_a_repo_path_actually_point_at_it():
         + '\n→ 落点写的是**本仓**的代码。指向原型仓、或改名之后没跟上，'
           '读的人会以为有一段代码在守而其实没有'
     )
-    # 守卫的守卫（形态照抄 `test_docs_references.py::test_the_scan_actually_finds_something`）：
+    # 扫描防空：结构行仍保留自己的覆盖分母，不能只检查已经匹配到的路径。
     # 把可解析形态全改回裸符号名，上面那个循环一条都不跑而测试照样绿。
     # 13 →(F1-6) 15 →(F2-6) 30 →(F3-0) **32**：stage7 那七行 `结构` 从原型裸符号
     # （`save_name_map` / `apply_subs` / `sub_table` / `merge_mapping_edit`…）

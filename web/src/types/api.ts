@@ -1,3 +1,4 @@
+import type { RunMetrics } from './runMetrics'
 /**
  * 唯一的数据缝。
  *
@@ -95,6 +96,7 @@ export interface Api {
   getEnums(): Promise<EnumsResponse>
   /** 跑书进度：NODES 信标 + 各层产物完成度。beacon=ok 只念作「跑完」，判定归各层屏的 badge。 */
   getRunProgress(sid: string): Promise<RunProgress>
+  getRunMetrics(sid: string, runId?: string): Promise<RunMetrics>
   previewWorkUnitGrant(sid: string, unitId: string, additional: number): Promise<WorkUnitGrantPreview>
   grantWorkUnit(sid: string, unitId: string, request: WorkUnitGrantRequest): Promise<WorkUnitGrantResult>
 

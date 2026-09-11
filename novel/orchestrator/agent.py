@@ -64,7 +64,7 @@ from contracts.schema.orchestration import (
     PipelineAgentProfiles, ReviewerActionRecord, RunContractV2,
     ReviewerSchemaRecoveryProof, ReviewerSeatLedger, ReviewerSeatTurn,
 )
-from novel import agent_session_audit, paths, prov, run_identity, skill_contract
+from novel import agent_session_audit, paths, prov, run_identity
 from novel.agent_capabilities import (
     AgentProfileRefused, provider_for_driver, validate_pipeline_profiles,
 )
@@ -118,7 +118,7 @@ RUNS_FILENAME = 'agent_runs.jsonl'
 LOG_PREFIX = 'agent-'
 
 #: 仓根：agent.py → orchestrator → novel → 仓根。agent 的 cwd 钉死在这里——
-#: 两侧发现 shim、neutral `.workflow/skills/` 与 `-m novel.cli` 的 import 都吃这个 cwd。
+#: 正式 `-m novel.cli` 与 runner 子进程使用此仓根 cwd。
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: **表和键都住在 `jobs.py`**（`AGENT_REGISTRY` / `agent_lock_key`）——
@@ -248,25 +248,17 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
     核心构造函数故意不设默认值：API/UI 可以提供产品默认，但到达 prompt 边界时
     两项事实必须都已经物化，不能让一个布尔值静默扩大成另一项授权。
 
-    ⚠ 终审包的落点由 `paths.review_package_path` 现算，**不在这里拼第二份文件名**。
-    书目录还没落地时（preview 可以在摄入之前调）拼不出书名，那时给出规则而不是
-    猜一个名字——`state` 会打印书目录，届时按同一条规则得到同一个名字。
     """
     base_abs = os.path.abspath(os.fspath(base))
     code_version = code_version or prov.code_version()
     py = Path(sys.executable).as_posix()
     novel_dir = paths.find_novel_dir(base_abs, sid)
     #: ⚠ 成书名**按书名派生**，不是固定的 `book.txt`——唯一落点是 `paths.book_txt_rel`。
-    #: 这一句此前硬编码了一个不存在的文件名：agent 会照 SKILL.md 自我纠正，
+    #: 这一句此前硬编码了一个不存在的文件名：运行入口必须按同一规则派生，
     #: 但 headless 下没有第二个人能纠正启动 prompt，而它是任务的第一句话。
     book_target = (
         paths.book_txt_rel(novel_dir) if novel_dir is not None
-        else 'stage7/<书名>_rewriting.txt（书名规则同下）')
-    review_target = (
-        paths.review_package_path(novel_dir).as_posix() if novel_dir is not None
-        else f'<书目录>/<书名>{paths.REVIEW_SUFFIX}'
-             f'（书目录还没落地；`state {sid}` 会打印它，书名就是目录名去掉'
-             f'平台前缀与 `_{sid}` 尾巴的那一段）')
+        else 'stage7/<书名>_rewriting.txt（摄入后按书目录派生）')
     payment_authorization = (
         '**付费授权已授予**：本会话允许产生外部模型调用费用，工作流契约中的付费命令逐条直接执行、'
         '不再询问；节点、用量与判据读数由 Supervisor 和权威账自动留痕。'
@@ -296,19 +288,18 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
     overrides = ', '.join(
         f'{node}={_backend_label(backend)}'
         for node, backend in sorted(profiles.executor_overrides.items())) or '无'
-    canonical_skill = (skill_contract.SKILL_REL / 'SKILL.md').as_posix()
     return f"""你是小说工作流的 Commander/Reviewer，不是调度器。仓根是
 `{REPO_ROOT.as_posix()}`，审阅对象属于 sid={sid}、base=`{base_abs}`。
 
-确定性 RunSupervisor 独占状态机、execution token、节点调度、Executor 调度、遥测与终审报告；
+确定性 RunSupervisor 独占状态机、execution token、节点调度、Executor 调度、遥测与交付终验；
 你只会在一个已登记的 reviewer blocker 上被唤醒。每一轮实际提示都会内嵌同一时点冻结的
 immutable workpack 与唯一 typed request 落点。先逐项审阅，再做一次跨项复核，最后只提交
 一份 typed 判断。不得启动任何小说节点或 Executor，不得修改正式产物、服务账或 Markdown，
 不得从目录存在性、旧对话或退出码猜测 PASS；schema 提供 UNVER 时保持 UNVER，
 否则只走当前 blocker 明示的关闭式出口，read-only 或材料不足不得制造付费动作。
 
-本次 parent contract 的审计起点：code_version=`{code_version}`；成书目标=`{book_target}`；
-终审包目标=`{review_target}`。这些目标仅供识别对象，不授予写权限。
+本次 parent contract 的审计起点：code_version=`{code_version}`；成书目标=`{book_target}`。
+该目标仅供识别对象，不授予写权限。
 
 付费授权：{payment_authorization}
 正文外发授权：{egress_authorization}
@@ -318,8 +309,7 @@ immutable workpack 与唯一 typed request 落点。先逐项审阅，再做一�
 - 默认 Executor：{_backend_label(executor)}
 - Executor 节点覆盖：{overrides}
 
-本 run 冻结的 operator skill 为 `{canonical_skill}`（整树指纹已入 epoch 审计）。受托 reviewer 轮次
-只以随轮提示下发的 reviewer 契约与 workpack 明示的 review contract 为准，不读取该 skill；
+受托 reviewer 轮次只以随轮提示下发的 reviewer 契约与 workpack 明示的 review contract 为准；
 若两者与当前 typed schema 冲突，关闭式拒绝并让本轮结束，不自行发明兼容写法。"""
 
 
@@ -904,7 +894,7 @@ def _cancel_commander_owner(run_id: str) -> str:
 
 
 def _cancel_action_owner(run_id: str) -> bool:
-    """取消 Supervisor 直接启动的 canonical runner/finalizer 进程树。"""
+    """取消 Supervisor 直接启动的 canonical runner/交付校验 进程树。"""
     with _ACTIONS_LOCK:
         process = _ACTIONS.get(run_id)
     if process is None or process.poll() is not None:
@@ -1165,11 +1155,8 @@ def _run_step_argv(
         scratch, stem=stem, kind='execution-token',
         identity_sha256=permit.permit_sha256,
         payload=(permit.model_dump_json(indent=2) + '\n').encode('utf-8'))
-    runner = (
-        REPO_ROOT / '.workflow' / 'skills' / 'novel-pipeline-operator'
-        / 'scripts' / 'run_step.py')
     return [
-        sys.executable, '-B', str(runner),
+        sys.executable, '-B', '-m', 'novel.orchestrator.run_step',
         '--base', base, '--sid', sid,
         '--expect-code-version', epoch.code_version,
         '--operator-permit-file', str(token_path), '--execute',
@@ -2721,14 +2708,6 @@ def _materialize_reviewer_document(
                 pass
 
 
-def _skill_sha256() -> str:
-    try:
-        return skill_contract.package_sha256(REPO_ROOT)
-    except (OSError, skill_contract.SkillContractError) as exc:
-        raise UnsupportedRunMode(
-            'Commander 启动契约的 canonical operator skill 整树不完整，'
-            '不能声称本轮已冻结操作规程') from exc
-
 
 def _usage_dict(observation: CommanderObservation) -> dict[str, int | None] | None:
     usage = observation.usage
@@ -3024,7 +3003,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
       · 并发闸——同时在跑的 agent 不超过 `MAX_CONCURRENT`（满了抛 `JobConflict`，
         批量入口 `enqueue` 会把它接住改成排队，单本入口就是明确的 409）；
       · 反向互斥——这本书上有 API 作业在跑 ⇒ 409（agent 会自己起 `novel.cli`
-        子进程，两边同时写同一本书就是 skill 禁的并行写盘）。
+        子进程，两边同时写同一本书就是 同书互斥禁止的并行写盘）。
     ⚠ 两张 registry 各自线程安全仍不够：agent 与 job 若各自「查对面 → 占自己」，
     可以同时看见空表再各拿一把。双方统一经 ``jobs.acquire_*_writer``，在同一个
     短临界区内完成 durable/对表检查与占锁；运行期仍只持本书逻辑 writer，异书并行。
@@ -3046,12 +3025,11 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     prompt_sha256 = _sha256_bytes(plan.prompt.encode('utf-8'))
     schema_sha256 = _sha256_bytes(
         f'commander-observation:{invocation.protocol}'.encode('utf-8'))
-    skill_sha256 = _skill_sha256()
     start_payload = AgentRunStart(
         sid=sid, base=base, argv=list(invocation.argv), prompt=plan.prompt,
         authorized=plan.authorized,
         egress_authorized=plan.egress_authorized,
-        code_version=code_version, skill_sha256=skill_sha256,
+        code_version=code_version, identity_version=2,
         profiles=plan.profiles)
     contract_payload = RunContractV2(
         sid=sid, base=base,
@@ -3063,7 +3041,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         argv=list(invocation.argv), prompt_sha256=prompt_sha256,
         protocol_version=invocation.protocol,
         cli_version=invocation.cli_version, code_version=code_version,
-        skill_sha256=skill_sha256, session_run_id=session_run_id)
+        identity_version=2, session_run_id=session_run_id)
     key = jobs.acquire_agent_writer(
         base, sid, run_id, admit=_admit, registry=registry)
     owner_guard = admission.owner_lease(base, run_id)
@@ -3164,7 +3142,6 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     latest_commander_error_kind: str | None = None
     provider_turn_recorded = False
     current_session_code_version = code_version
-    current_session_skill_sha256 = skill_sha256
     current_session_invocation = invocation
     current_session_prompt_sha256 = prompt_sha256
     # 创建 parent/epoch 不等于调用过模型；只有 reviewer 真正启动前才开
@@ -3282,7 +3259,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         nonlocal latest_observation, latest_outcome, latest_rc, latest_error_kind
         nonlocal latest_commander_outcome, latest_commander_rc
         nonlocal latest_commander_error_kind
-        nonlocal current_session_code_version, current_session_skill_sha256
+        nonlocal current_session_code_version
         nonlocal current_session_invocation, current_session_prompt_sha256
         nonlocal session_started, session_ended
         nonlocal pending_reviewer_action, pending_reviewer_binding
@@ -3296,7 +3273,6 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         nonlocal reviewer_correction_attempts
         current_code = prov.code_version()
         _require_reproducible_code_version(current_code)
-        current_skill = _skill_sha256()
         epoch_id = jobs.new_job_id()
         if provider_session_id is None:
             # 身份漂移后从新 provider session 进入，但 workpack 仍是 parent
@@ -3308,7 +3284,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 error_kind=(latest_commander_error_kind
                             or 'provider_session_unavailable'),
                 end_code_version=current_code)
-            # 新 execution epoch 必须从当前代码/skill 重新构造 Commander
+            # 新 execution epoch 必须从当前代码/运行契约 重新构造 Commander
             # 启动包；只换一枚 code 指纹、却继续发送旧 prompt，会把“滚 epoch”
             # 变成审计假象。授权与 profiles 仍只取稳定 parent contract。
             epoch_plan = _plan_resolved(
@@ -3331,7 +3307,6 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             latest_commander_rc = CRASH
             latest_commander_error_kind = None
             current_session_code_version = current_code
-            current_session_skill_sha256 = current_skill
             current_session_invocation = epoch_invocation
             current_session_prompt_sha256 = _sha256_bytes(
                 epoch_invocation.stdin_text.encode('utf-8'))
@@ -3362,7 +3337,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 protocol_version=current_session_invocation.protocol,
                 cli_version=current_session_invocation.cli_version,
                 code_version=current_code,
-                skill_sha256=current_skill,
+                identity_version=2,
                 session_run_id=session_run_id,
                 resume_provider_session_id=provider_session_id)
             epoch_invocation = _resume_invocation(
@@ -3375,7 +3350,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             protocol_version=epoch_invocation.protocol,
             cli_version=epoch_invocation.cli_version,
             code_version=current_code,
-            skill_sha256=current_skill,
+            identity_version=2,
             session_run_id=session_run_id,
             resume_provider_session_id=provider_session_id)
         epoch_invocations[epoch_id] = epoch_invocation
@@ -3403,7 +3378,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 cli_version=current_session_invocation.cli_version,
                 protocol_version=current_session_invocation.protocol,
                 start_code_version=current_session_code_version,
-                skill_sha256=current_session_skill_sha256,
+
                 prompt_sha256=current_session_prompt_sha256,
                 schema_sha256=schema_sha256,
                 kind='started', ts=int(time.time()),
@@ -3438,7 +3413,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 protocol_version=current_session_invocation.protocol,
                 start_code_version=current_session_code_version,
                 end_code_version=end_code_version,
-                skill_sha256=current_session_skill_sha256,
+
                 prompt_sha256=current_session_prompt_sha256,
                 schema_sha256=schema_sha256,
                 process_state=('ok' if rc == 0 else 'failed'),
@@ -3460,7 +3435,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             drift_kind = (
                 'code_version_drift'
                 if end_code != epoch.code_version
-                else 'skill_version_drift')
+                else 'runtime_identity_drift')
             _end_current_session(
                 outcome=AgentDeliveryOutcome(
                     state='unknown', checked_at=int(time.time()),
@@ -3480,8 +3455,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     def _epoch_identity_current(epoch: ExecutionEpoch) -> bool:
         try:
             return (
-                prov.code_version() == epoch.code_version
-                and _skill_sha256() == epoch.skill_sha256)
+                epoch.identity_version == 2
+                and epoch.skill_sha256 is None
+                and epoch.code_version != prov.CODE_UNKNOWN
+                and prov.code_version() == epoch.code_version)
         except Exception:  # noqa: BLE001 —— 取不到身份就必须滚 epoch
             return False
 
@@ -3503,7 +3480,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         return True
 
     def _open_action_admission(epoch: ExecutionEpoch) -> str:
-        """给 ready/reviewer/finalizer 共用一条严格递增的 admission 序列。"""
+        """给 ready/reviewer/交付校验 共用一条严格递增的 admission 序列。"""
         nonlocal active_admission_id
         count = epoch_action_counts.get(epoch.epoch_id, 0) + 1
         epoch_action_counts[epoch.epoch_id] = count
@@ -3657,7 +3634,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     cli_version=current_session_invocation.cli_version,
                     protocol_version=current_session_invocation.protocol,
                     start_code_version=audit_epoch.code_version,
-                    skill_sha256=audit_epoch.skill_sha256,
+
                     prompt_sha256=fresh_prompt_sha256,
                     schema_sha256=turn_schema_sha256,
                     kind='started', ts=int(time.time()),
@@ -3741,13 +3718,13 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             # reviewer workpack 在 operator next/build_task 时绑定了本
             # execution epoch。从构包末端到真实 Popen 仍有窗口；
             # 必须在任何 seat/budget reserve、logical-session started、
-            # attempt/ticket 和 stdin 之前再做一次 code+skill CAS。Popen
+            # attempt/ticket 和 stdin 之前再做一次 code+identity CAS。Popen
             # 已创建不等于已 wire，callback 抛出后公共 runner 会在
             # 发送 prompt 前终止进程树。
             if (reviewer_prompt is not None
                     and not _epoch_identity_current(epoch)):
                 raise CommanderConfigurationError(
-                    'reviewer 发送前 execution epoch code/skill 已漂移；'
+                    'reviewer 发送前 execution epoch code/identity 已漂移；'
                     '本次保持 0-seat/0-wire 并由 Supervisor 重开 epoch')
             # 默认 runner 只在 Popen 成功后、stdin/prompt 发出前触发；同席后续
             # attempt 也会再次触发，但席位预留、session started、launch ticket
@@ -3813,7 +3790,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 cli_version=attempt_invocation.cli_version,
                 protocol_version=attempt_invocation.protocol,
                 start_code_version=epoch.code_version,
-                skill_sha256=epoch.skill_sha256,
+
                 prompt_sha256=_sha256_bytes(
                     attempt_invocation.stdin_text.encode('utf-8')),
                 schema_sha256=turn_schema_sha256,
@@ -4076,7 +4053,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                                     cli_version=attempt_invocation.cli_version,
                                     protocol_version=attempt_invocation.protocol,
                                     start_code_version=epoch.code_version,
-                                    skill_sha256=epoch.skill_sha256,
+
                                     prompt_sha256=_sha256_bytes(
                                         attempt_invocation.stdin_text.encode('utf-8')),
                                     schema_sha256=turn_schema_sha256,
@@ -4267,7 +4244,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             cli_version=attempt_invocation.cli_version,
                             protocol_version=attempt_invocation.protocol,
                             start_code_version=epoch.code_version,
-                            skill_sha256=epoch.skill_sha256,
+
                             prompt_sha256=_sha256_bytes(
                                 attempt_invocation.stdin_text.encode('utf-8')),
                             schema_sha256=turn_schema_sha256,
@@ -4336,7 +4313,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             prov.code_version()
                             if _epoch_identity_current(epoch)
                             else prov.CODE_UNKNOWN),
-                        skill_sha256=audit_epoch.skill_sha256,
+
                         prompt_sha256=fresh_prompt_sha256,
                         schema_sha256=turn_schema_sha256,
                         process_state=('ok' if rc == 0 else 'failed'),
@@ -4441,7 +4418,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         prov.code_version()
                         if prov.code_version() == current_session_code_version
                         else prov.CODE_UNKNOWN),
-                    skill_sha256=current_session_skill_sha256,
+
                     prompt_sha256=seat.prompt_sha256,
                     schema_sha256=seat.output_schema_sha256 or schema_sha256,
                     process_state=('ok' if seat.last_rc == 0 else 'failed'),
@@ -5041,19 +5018,16 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     def _finalize_run(
             epoch: ExecutionEpoch,
             launch_ticket: LaunchTicket) -> SupervisorActionResult:
-        script = (
-            REPO_ROOT / '.workflow' / 'skills' / 'novel-pipeline-operator'
-            / 'scripts' / 'finalize_review.py')
         argv = [
-            sys.executable, '-B', str(script), '--base', base, '--sid', sid,
-            '--started-at', str(parent_started_at),
+            sys.executable, '-B', '-m', 'novel.orchestrator.delivery',
+            '--base', base, '--sid', sid,
             '--start-code-version', epoch.code_version,
         ]
         rc, timed_out, failure_detail = _run_supervisor_process(
-            epoch, argv, launch_ticket, label='finalize-review')
+            epoch, argv, launch_ticket, label='delivery-assess')
         return _action_outcome(
-            epoch, rc, timed_out, label='finalize-review',
-            # finalizer 的 1 包括提交前失败，属于其自身状态域；只有
+            epoch, rc, timed_out, label='delivery-assess',
+            # 交付终验的 1 表示校验未通过，属于自身状态域；只有
             # novel CLI 的 1 才承诺正式结果落盘，不能仅按 canonical 身份套用。
             failure_detail=failure_detail, exit_origin='supervisor')
 
@@ -5142,7 +5116,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 except Exception:  # noqa: BLE001
                     _append_safe_traceback(base, run_id, prompt=plan.prompt)
                 try:
-                    # code/skill rollover 已在 epoch_close 把旧 logical session
+                    # code/identity rollover 已在 epoch_close 把旧 logical session
                     # 封存；这里只闭合最后仍活动的那一个，不能写第二条 ended。
                     _end_current_session(
                         outcome=latest_commander_outcome,

@@ -1339,7 +1339,7 @@ function mockAgentRunPreview(req: AgentRunRequest): AgentRunPreview {
   return {
     argv: ['agent-cli', '--sid', req.sid, '--base', '/mock/base'],
     prompt:
-      '按 novel-pipeline-operator 操作规程把这本书跑到成书（sid ' + req.sid + '）。\n' +
+      '由自动流水线完成本书并校验交付条件（sid ' + req.sid + '）。\n' +
       (req.authorized
         ? '付费授权已授予：付费命令不再逐条停。'
         : '付费授权未授予：到第一条付费命令前停下。') +
@@ -1491,6 +1491,7 @@ export const mockApi: Api = {
 
   // 进度屏在 stage0.remove 前就要能开（书目录可能还没建）——任何 sid 都给静态样例，不走 bookOnly
   getRunProgress: (sid) => later(mockRunProgress(sid)),
+  getRunMetrics: async () => { throw new Error('当前模拟样例没有运行成本账；请使用实际运行记录') },
   previewWorkUnitGrant: async () => { throw new Error('离线样本未提供工作单元额度授权，请连接真实服务') },
   grantWorkUnit: async () => { throw new Error('离线样本未提供工作单元额度授权，请连接真实服务') },
 
@@ -1752,6 +1753,7 @@ export const mockApi: Api = {
         // 冻结抓包记录的是“账在、txt 不在”的历史故障；假服务端把专用文本端点
         // 也做成可达，开发时才能走通预览 / 下载这条新增 UX。
         book_txt_on_disk: true,
+        delivery: { state: 'unknown', reason: '冻结样例没有当前交付证明；请连接真实后端重验', checked_at: 0 },
         // 抓包日期（2026-08-17）早于成书改名，那份 fixture 里没有这个字段。
         // ⚠ 兼容推导只许留在**适配边界**（本文件），不许进屏幕组件
         // （`docs/LESSONS.md` 第 13 条）；真实服务端由
@@ -1764,7 +1766,8 @@ export const mockApi: Api = {
     chapterOnly(sid, o, `/novels/${sid}/stage7/${o}`, () => {
       const base = fx<Stage7Response>('stage7_ch3.json')
       const approved = lsRead<NonNullable<Stage7Response['approved']>>('names.' + sid)
-      return { ...base, approved: approved ?? base.approved }
+      return { ...base, approved: approved ?? base.approved,
+        delivery: { state: 'unknown', reason: '冻结样例没有当前交付证明；请连接真实后端重验', checked_at: 0 } }
     }),
 
   getStage7Book: (sid) =>

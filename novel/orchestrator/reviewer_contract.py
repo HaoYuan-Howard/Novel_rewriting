@@ -3,23 +3,17 @@
 """
 reviewer_contract.py —— 每个 reviewer blocker 随 prompt 下发的裁决契约摘录。
 
-运行时权威是本模块。`.workflow/skills/novel-pipeline-operator/references/delegated-review.md`
-用 ``<!-- reviewer-contract:<id>:begin/end -->`` 锚块镜像同一段文字（同一 id 多个锚块按空行拼接），
-`tests/test_reviewer_contract.py` 逐字比对，两边任一漂移即红。这样 headless Commander 不必再读
-整份 operator skill：它每轮只看自己 blocker 的判据，而那正是它过去每轮多花五次往返去读的东西。
+运行时权威是本模块，每轮只下发对应 blocker 的契约。
+`tests/test_reviewer_contract.py` 验证每个已登记 blocker 实际收到对应契约及材料边界。
 
 这里只有裁决判据，没有 CLI 命令、调度或收尾指令；`reviewer_tasks.build_task` 的静态守卫同样
 扫这段文字。
 """
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 
 from novel.orchestrator import queue
-
-CONTRACT_ANCHOR = re.compile(
-    r'^<!-- reviewer-contract:([a-z0-9-]+):(begin|end) -->$', re.M)
 
 #: 所有 blocker 共用的裁决纪律；不重复 build_task 已写的输出格式要求。
 COMMON = '''裁决纪律：
@@ -205,31 +199,9 @@ def for_blocker(waiting_on: str) -> str:
     return COMMON + '\n\n' + CONTRACT_TEXT[CONTRACT_FOR_BLOCKER[waiting_on]]
 
 
-def parse_anchored_blocks(text: str) -> dict[str, list[str]]:
-    """解析 markdown 里的锚块；配对/嵌套错误关闭式抛错，供测试与 skill 校验共用口径。"""
-    blocks: dict[str, list[str]] = {}
-    open_key: str | None = None
-    open_pos = 0
-    for match in CONTRACT_ANCHOR.finditer(text):
-        key, kind = match.group(1), match.group(2)
-        if kind == 'begin':
-            if open_key is not None:
-                raise ValueError(f'reviewer-contract 锚块嵌套：{open_key} 未关闭又打开 {key}')
-            open_key, open_pos = key, match.end()
-            continue
-        if open_key != key:
-            raise ValueError(f'reviewer-contract 锚块不配对：end {key}，当前打开 {open_key}')
-        body = text[open_pos:match.start()].strip('\n')
-        if not body.strip():
-            raise ValueError(f'reviewer-contract 锚块 {key} 为空')
-        blocks.setdefault(key, []).append(body)
-        open_key = None
-    if open_key is not None:
-        raise ValueError(f'reviewer-contract 锚块 {open_key} 没有 end')
-    return blocks
 
 
 __all__ = [
-    'COMMON', 'CONTRACT_ANCHOR', 'CONTRACT_FOR_BLOCKER', 'CONTRACT_TEXT',
-    'for_blocker', 'parse_anchored_blocks',
+    'COMMON', 'CONTRACT_FOR_BLOCKER', 'CONTRACT_TEXT',
+    'for_blocker',
 ]

@@ -116,8 +116,8 @@
 `_common.md` §七 要求工厂从注册表取 `actionable`，而 `contracts/rules.py::Rule` 上**没有这个字段**，
 只有 `repair`（`UNIQUE｜FREE｜NONE`）。两者的不变量正好同构：
 
-- `rules.py::_validate` ③：`repair != 'NONE'` ⇒ `owner == 'stage5'`
-- `common.py::Finding._postconditions` ③：`actionable` ⇒ `owner == 'stage5'`
+- `contracts/rules.py::_validate` ③：`repair != 'NONE'` ⇒ `owner == 'stage5'`
+- `contracts/schema/common.py::Finding._postconditions` ③：`actionable` ⇒ `owner == 'stage5'`
 
 ⇒ **`actionable := (repair != 'NONE')`**。加一个字段等于给同一件事开第二个落点，
 而「同一件事的第 N 个落点必然分家」是本项目要消灭的那条病。
@@ -137,8 +137,7 @@
 > 2. `actionable` 的定义是「写作层能修」，stage6 一条都不是。
 >    硬把第二种意思塞进同一个名字，就是判据 32 那条：**名字先于证据定下来，
 >    后来读报告的人会按名字去解释它**——前端拿到同一个布尔值却要按层解释。
-> 3. **语料已经替它投过票**：`tests/corpus.py::_migrate_findings` 写着
->    `setdefault('actionable', False)`，而盘上 6 份 stage6 产物在这个前提下 `model_validate` 全过。
+> 历史语料迁移结果不能作为现役字段语义依据；当前反例以注册与 Finding 后置条件为准。
 >
 > ⇒ 「人能 0 成本改掉」写进 `Rule.note`（那 12 条各一句），
 > **不进载体**。stage7 亦按同一条办；若发现真有消费方需要它，

@@ -424,9 +424,8 @@ def actions() -> list[dict[str, Any]]:
       · `label`       ← `nodes.step_label`  —— 与作业记录里那一步共用（`R-11.8`）
       · `paid`        ← `nodes.is_paid`     —— 贵贱只有一处算（`R-11.7`）
       · `writes`      ← `nodes.write_effect`—— 空串 = 不写盘
-      · `writes_disk` ← `nodes.would_write` —— 前端点名要的那一格（`web/DELIVERY.md`）：
-        它今天在 `web/src/constants/actions.ts` 手抄成了一张表，而那份注释自己写着
-        「`/api/enums` 目前没有 `writes_disk` 字段…所以这个分类只能在前端做一张表」。
+      · `writes_disk` ← `nodes.would_write` —— `web/AGENTS.md` U-08 的写盘分类来源；
+        `web/src/constants/actions.ts` 仅为缺该字段的历史 mock 保留兜底，真实响应不另造判定。
 
     ⚠ **flag 的那一句人话不放进本表。** `free_entries` / `paid_flags` / `valued_flags` /
     `write_effects` 四张表已经整份下发了，前端按 flag 去查即可——

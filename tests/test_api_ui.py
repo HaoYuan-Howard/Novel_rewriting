@@ -83,7 +83,7 @@ def test_a_deep_link_comes_back_as_the_same_index(client):
     """⭐ 前端是 `BrowserRouter`（`web/src/main.tsx`）：`/novels/<sid>/stage3`
     这种地址**在磁盘上没有对应文件**。
 
-    ⚠ 这一条查的是「刷新页面还在」——它是 `web/DELIVERY.md` §9 已实测清单里的一行，
+    ⚠ 这一条查的是「刷新页面还在」——对应 `web/AGENTS.md`「产品边界」的同源托管要求，
     而挂静态托管时最容易漏的正是它：只配 `StaticFiles` 不配 fallback 的话，
     首页好好的，一刷新就 404，且只在深链接上复现。
     """

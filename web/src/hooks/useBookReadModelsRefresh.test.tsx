@@ -7,6 +7,8 @@ import { api } from '@/api/endpoints'
 import { mockApi, SAMPLE_SID } from '@/api/mock'
 import { qk } from '@/api/queryKeys'
 import { Rail } from '@/components/app/Rail'
+import { BookLayout } from '@/components/app/BookLayout'
+import { Stage7Screen } from '@/screens/stage7/Stage7Screen'
 import { RunScreen } from '@/screens/run/RunScreen'
 import { ChromeProvider } from '@/hooks/useChrome'
 import { useRunProgress } from './useRunProgress'
@@ -163,6 +165,34 @@ async function refetch(qc: QueryClient, key: readonly unknown[]) {
 }
 
 describe('Agent 进展驱动书级读模型刷新', () => {
+  it('长驻 Stage7 页也挂载进度与终态观察，自动完成和拒绝即时刷新下载事实', async () => {
+    const live = await source()
+    const view = await mockApi.getStage7(SID)
+    const getStage7 = vi.spyOn(api, 'getStage7').mockResolvedValue({ ...view,
+      delivery: { state: 'stopped', reason: '尚待自动装配', checked_at: 1 },
+    })
+    const { qc } = atBook(<><BookLayout /><Stage7Screen /></>)
+    expect(await screen.findByText(/尚待自动装配/)).toBeVisible()
+    await settled(qc)
+    expect(live.getProgress).toHaveBeenCalledWith(SID)
+    expect(live.getRuns).toHaveBeenCalledWith(SID)
+
+    live.advance()
+    getStage7.mockResolvedValue({ ...view,
+      delivery: { state: 'ready_with_disclosures', reason: '当前交付已闭合', checked_at: 2 },
+    })
+    await refetch(qc, qk.run(SID))
+    expect(await screen.findByRole('button', { name: '下载 ' + view.book_filename })).toBeEnabled()
+
+    live.end('unknown')
+    getStage7.mockResolvedValue({ ...view,
+      delivery: { state: 'unknown', reason: '当前来源无法复验', checked_at: 3 },
+    })
+    await refetch(qc, qk.agentRuns(SID))
+    expect(await screen.findByText(/当前来源无法复验/)).toBeVisible()
+    expect(screen.queryByRole('button', { name: '下载 ' + view.book_filename })).not.toBeInTheDocument()
+  })
+
   it('真实进度轮询使同页旧 hard badge 与侧栏审批同步，计时轮询不重复全书检查', async () => {
     const live = await source()
     const { qc } = atBook(<ScreenAndRail />)

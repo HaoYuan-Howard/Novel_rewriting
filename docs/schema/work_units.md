@@ -2,7 +2,7 @@
 
 当前运行根由 `WorkflowManifestV2` 标记为 `pipeline-cost-latency-v2`。只接受独立空根初始化，
 既有 manifest v1 和 ledger v1 不迁移、不补版本。存量由与原审计匹配的冻结代码恢复；发布时
-按 `docs/PIPELINE_COST_LATENCY_PLAN.md` 整根归档和切换，不删除单本账本换取预算。
+按 `docs/OPERATIONS.md` 整根归档和切换，不删除单本账本换取预算。
 
 `WorkUnitLedgerV2` 位于 `novel/paths.py::work_unit_dir`。工作单元身份仍由工作流任务、书、
 节点、角色和 scope 决定。基础内容额度四次；新候选、新会话、新 run 和新 epoch 都沿用原账。

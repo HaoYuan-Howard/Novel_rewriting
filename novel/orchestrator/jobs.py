@@ -147,7 +147,7 @@ REGISTRY = JobRegistry()
 #: **agent 代跑那把锁住在这里**（`novel/orchestrator/agent.py` 共用），
 #: 这样 `run()`/`start()` 不 import agent 就能完成反向互斥——
 #: agent 会自己起 `novel.cli` 子进程写同一 base 的盘，「agent 在跑」与
-#: 「API 起作业」撞上的后果就是 SKILL 禁的并行写盘。
+#: 「API 起作业」必须共享同书写互斥，避免覆盖产物与审计。
 #: ⚠ 一本书一把（键见 `agent_lock_key`），所以这张表里**可以有多条**——
 #: 条数上限由 `agent.MAX_CONCURRENT` 那道并发闸管，不由这张表管。
 AGENT_REGISTRY = JobRegistry()
@@ -180,16 +180,8 @@ AGENT_LOCK_PREFIX = 'agent-run'
 def agent_lock_key(sid: str) -> str:
     """一本书在 agent 互斥表里的键。**一本书一把锁**，不是全局一把。
 
-    ⚠⚠ 这里曾经是一个不带 sid 的固定字符串，理由写着「SKILL：两本书不并行」。
-    那是把 SKILL 那条**读大了**：它管的是「**一个 agent 会话**别同时管两本书」——
-    会串的是证据、闸门裁决与终审包，而那些东西都长在单个会话里。
-    N 个 headless agent 各自只看见自己那一本，每个都完整遵守 SKILL。
-    ⇒ 锁该按它真正保护的资源分，而那个资源是**一本书**：同书两个 agent 会并行写
-    同一片盘（SKILL 明禁），异书两个 agent 谁也碰不到谁的目录。
-    ⚠ 那一次只改了代码对 SKILL 的解读、没动 SKILL 原文，于是那句话继续被读成
-    「系统不支持多书并行」（本次实测：它确实又误导了一轮）。⇒ SKILL.md 与
-    `references/runtime-profiles.md` 现已把**作用域**写进原文（「本次会话内」），
-    语义未变；`R-13.7` 才是跨书并行那一侧的权威。
+    同书写者共享产物、审批和审计，必须互斥；异书各自拥有目录与运行上下文，
+    可以并行。曾经不带 sid 的全局锁错误扩大了保护范围，见 `R-13.7`。
 
     ⚠ 「同时最多几个」是**另一件事**，不归锁管——它归
     `novel/orchestrator/agent.py::MAX_CONCURRENT` 那道并发闸。

@@ -154,11 +154,12 @@ def test_every_runtime_package_is_in_the_distribution():
         configured = set(tomllib.load(fh)['tool']['setuptools']['packages'])
     actual = {
         _rel(os.path.dirname(p)).replace('/', '.')
-        for p in _py_files('novel')
+        for package in ('novel', 'contracts') for p in _py_files(package)
         if os.path.basename(p) == '__init__.py'
     }
-    assert configured >= actual, (
+    assert configured == actual, (
         f'这些 runtime 包没有进 setuptools 清单：{sorted(actual - configured)}。'
+        f'这些已不存在的包仍在清单中：{sorted(configured - actual)}。'
         'pytest 的 pythonpath=["."] 会让源码树测试照常通过，非 editable 安装才会炸')
 
 
@@ -316,6 +317,10 @@ def test_only_the_store_reads_json_directly():
 #: 原型没有写口守卫，于是落盘闸门的失败支用**裸 `json.dump`** 写 `.INVALID`
 #: ——那份稿从此没有来源账，而提升路又「沿用原稿里那一份」。盘上留下 1 份铁证。
 _WRITE_ALLOWED = {
+    'novel/orchestrator/run_step.py': (
+        '正式 runner 的可选 --evidence-json 只导出 build_steps 的 argv/权限诊断；'
+        '写前校验代码与 permit、执行期还需有效 claim，既有不同字节拒绝覆盖。'
+        '该导出不是小说产物、费用账或授权来源；小说修改仍由受控 CLI 经 Store 完成'),
     'novel/work_units.py': '只写 _service 运行预算、内容寻址回答和恢复证明，不写小说产物。',
     'novel/orchestrator/reviewer_protocol_recovery.py': (
         '仅在 _service/runs/<sid>/reviewer_protocol_recoveries 写内容寻址的复验审计副本；'

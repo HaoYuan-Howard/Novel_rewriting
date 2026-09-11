@@ -95,7 +95,7 @@ producer 生成关联。关联范围变化只复核对应义务；关联规则�
 
 ### 1.1 人物与称谓
 
-本节的人物字段是 `characters.json` 与知识的显式只读组装视图。`grounding.py::compose`
+本节的人物字段是 `characters.json` 与知识的显式只读组装视图。`novel/stages/stage2/grounding.py::compose`
 供审阅、判据和下游消费，视图不登记为 artifact；知识写口以 `decompose` 拒绝任何静态修改。
 Global v5 存量不得自动拆分或手补成 v6；整根归档后由人物和知识两个 producer 重新生产。
 
@@ -182,7 +182,7 @@ HARD 验证与恢复；审阅 EvidenceRef 的 artifact 明确为 `stage1/hook_co
 
 候选 ID 的成员校验只保证证据来自所给原文，不证明段落支持主张；语义仍由两位 Commander
 按各自义务核验。此前取消的 candidate/locator A/B 没有真实模型或性能结论；本期收益必须
-按 `docs/PERFORMANCE_EXPERIMENTS.md` 另行实测。模型 locator 与 role/fate 窄修均已退役。
+按 `docs/OPERATIONS.md` 的性能配对执行协议 另行实测。模型 locator 与 role/fate 窄修均已退役。
 
 人工 `CharactersEdit` 和 `GlobalEdit` 的证据使用 `{chapter_ordinal, locator}`。合法指定章
 先 exact、后 normalized，且必须唯一命中；该章零命中才允许按相同尺子全书回取，并要求
@@ -216,11 +216,9 @@ GlobalReview 是随后执行的确定性工作：按当前人物与知识重建�
 
 ## 一之二、`blueprint_character_projection.json`
 
-这是 `stage2.global` 与 `stage2.blueprint` 之间的注册、版本化边界，而不是
-GlobalGrounding 的通用摘要。产地从当前 MainText 与盘上最新的 schema-valid
-GlobalGrounding（有 `.INVALID` 时取它，否则取 formal）确定性重算；因此
-global 的非称名 HARD 仍然会阻止它自身正式落盘，但不会让已有合法称名
-的 Blueprint 一起空等。
+这是人物 producer 与 `stage2.blueprint` 之间的注册、版本化边界。由
+`novel/stages/stage2/characters.py::_projection` 从当前 MainText 和人物产物确定性重算；
+Global 不写入该投影。Blueprint 仍须等待 Global 接受，投影存在不构成越过审阅闸的许可。
 
 顶层只含 `chapters[]`；每章三格全部必填：
 
@@ -230,7 +228,7 @@ global 的非称名 HARD 仍然会阻止它自身正式落盘，但不会让已�
 | `past_attested_surfaces` | `str[]` | 在当章之前已被原文证明出现的名册称名 |
 | `visible_character_refs` | `{char_id: str[]}` | 截止当章已出现、且能唯一区分 owner 的关闭式人物候选 |
 
-它没有通用 `_provenance`：freshness 先强类型校验完整 latest GlobalGrounding 与 MainText，再逐值
+它没有通用 `_provenance`：freshness 先强类型校验当前人物产物与 MainText，再逐值
 对账。`role` / `fate` / relation / secret / setting / evidence 等没有载体位置；
 只修这些字段且投影字节不变时，既有 Blueprint 不 stale。显示名、实际可用
 称呼或会改变 owner 的首现章变化时，投影变化并使 Blueprint stale。
@@ -540,8 +538,8 @@ GlobalEdit v1～v4 不迁移；人工免费获取 v5 模板后重新核对。Glo
 判据的权威定义在 `contracts/judges/stage2.py`，注册期会验证规则 id 唯一、严重度、需求落点、
 节点与 flag 的存在性。报告形状见 [`_report.md`](./_report.md)。
 
-两份现役 Blueprint 契约的选择口、`--patch` 修复阶梯，以及退役 Blueprint 实验臂的历史 A/B 读数，见
-`docs/stage2_contract_experiment.md`（操作手册与实验档案）。
+现役 Blueprint 的选择口与字段修复能力见 `novel/stages/stage2/contract.py`；
+`--patch` 按正式基线的登记能力执行。旧实验只解释裁决，见 `docs/DECISIONS.md` 的历史索引。
 # 免费复验与显式归一
 
 Global INVALID 的普通 `--revalidate` 从可信裁剪失败账恢复尚未被明确修改的原埋点意图，
