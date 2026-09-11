@@ -2855,6 +2855,7 @@ def test_blueprint_typed_patch_keeps_bound_actor_and_cross_review_identity(tmp_p
     action = reviewer_tasks.load_action(path, current, submission_options=options)
     assert action.node == 'stage2.blueprint'
     assert action.input_payload['post_edit_accept'] is False
+    assert action.input_payload['chapters'][0]['beat_patches'] == payload['chapters'][0]['beat_patches']
     payload['actor'] = 'foreign-commander'
     path.write_text(json.dumps(request), encoding='utf-8')
     with pytest.raises(reviewer_tasks.ReviewerTaskError, match='绑定字段 actor'):

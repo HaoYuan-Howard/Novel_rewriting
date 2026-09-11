@@ -12,7 +12,7 @@ import os
 import re
 import tempfile
 import time
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, BinaryIO, TYPE_CHECKING
 from uuid import uuid4
@@ -813,7 +813,26 @@ class WorkUnitBudget:
             self._replace(ledger, turn.model_copy(update={
                 'feedback_sha256': digest, 'state': 'failed', 'reason_code': 'typed_rejected'}))
 
-    def latest_feedback(self) -> dict[str, Any] | None:
+    def _reviewer_business_matches(
+            self, turn_id: str, recorded: Any, current: str, waiting_on: str) -> bool:
+        """旧审阅指纹只经原冻结包投影为当前业务身份；不改写账或拒因。"""
+        if recorded == current:
+            return True
+        from novel.orchestrator import reviewer_revalidation
+
+        if (waiting_on not in reviewer_revalidation.WAITING_ON
+                or self.turn(turn_id).request_payload_sha256 is None):
+            return False
+        request = self.request_payload(turn_id)
+        if (request.get('business_sha256') != recorded
+                or request.get('waiting_on') != waiting_on):
+            return False
+        try:
+            return reviewer_revalidation.request_business_sha256(request) == current
+        except reviewer_revalidation.RevalidationRefused as exc:
+            raise WorkUnitRefused(str(exc)) from exc
+
+    def latest_feedback(self, *, business_sha256: str | None = None) -> dict[str, Any] | None:
         ledger = self._read()
         for turn in reversed(ledger.turns):
             if turn.state == 'adopted':
@@ -824,7 +843,12 @@ class WorkUnitBudget:
             if (_digest(blob.model_dump(mode='json')) != turn.feedback_sha256
                     or blob.unit_id != self.unit_id or blob.turn_id != turn.turn_id):
                 raise WorkUnitRefused('模型拒因字节身份漂移')
-            return blob.payload
+            payload = blob.payload
+            if business_sha256 is not None and self._reviewer_business_matches(
+                    turn.turn_id, payload.get('business_sha256'), business_sha256,
+                    payload.get('waiting_on', '')):
+                return {**payload, 'business_sha256': business_sha256}
+            return payload
         return None
 
     def rejected_responses(
@@ -846,12 +870,14 @@ class WorkUnitBudget:
                     or blob.unit_id != self.unit_id or blob.turn_id != turn.turn_id):
                 raise WorkUnitRefused('纠错拒因的原始身份漂移')
             feedback = blob.payload
-            if (feedback.get('business_sha256') != business_sha256
-                    or feedback.get('waiting_on') != waiting_on):
+            if (feedback.get('waiting_on') != waiting_on
+                    or not self._reviewer_business_matches(
+                        turn.turn_id, feedback.get('business_sha256'), business_sha256, waiting_on)):
                 break
             response = self.response_payload(turn.turn_id)
-            if (response.get('business_sha256') != business_sha256
-                    or response.get('waiting_on') != waiting_on
+            if (response.get('waiting_on') != waiting_on
+                    or not self._reviewer_business_matches(
+                        turn.turn_id, response.get('business_sha256'), business_sha256, waiting_on)
                     or not isinstance(response.get('final_response'), str)
                     or not isinstance(feedback.get('reason'), str)
                     or not isinstance(feedback.get('response_sha256'), str)):
@@ -984,7 +1010,16 @@ def validate_reviewer_record(base: str | os.PathLike[str], sid: str, record: Any
                     action_sha256=reviewer_tasks.action_business_sha256(action),
                     provider_response_sha256=record.provider_response_sha256)
     if any(proof.get(key) != value for key, value in expected.items()):
-        raise WorkUnitRefused('typed 动作与原工作单元回答不一致')
+        from novel.orchestrator import reviewer_revalidation
+        try:
+            rebound = reviewer_revalidation.proof_matches(
+                budget.request_payload(turn_id), proof,
+                business_sha256=record.business_sha256, waiting_on=record.waiting_on,
+                action=asdict(action), provider_response_sha256=record.provider_response_sha256)
+        except reviewer_revalidation.RevalidationRefused as exc:
+            raise WorkUnitRefused(str(exc)) from exc
+        if not rebound:
+            raise WorkUnitRefused('typed 动作与原工作单元回答不一致')
     if turn.session_run_id != record.reviewer_session_run_id:
         raise WorkUnitRefused('typed 决定与原物理会话不一致')
     raw = _read(base, budget.directory / f'{turn.response_sha256}.json', WorkUnitBlobV1)

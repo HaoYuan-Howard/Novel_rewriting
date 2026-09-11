@@ -4,6 +4,11 @@
 继续保持原 PASS/FAIL/UNVER 状态。Blueprint 覆盖逐事实、逐章结构及逐章知识一致性，
 知识关联仍使用独立的 typed 关联决定，不扩展抽取主体。
 
+Blueprint Commander 的完整动作由 `novel/orchestrator/stage2_blueprint_wire.py` 下发原生
+JSON schema，知识关联使用 `KnowledgeLinkDecision.resolution` 的三种登记分支。接受与
+局部补丁继续进入同一现役 loader；补丁的字段缺席沿传输、落盘和 producer 保留，不能由
+schema 或序列化补成 `null`，也不靠放宽正式契约接纳格式错误。
+
 载体见 `contracts/schema/stage2_review.py`。Stage2ReviewScope 的 contract 为
 `stage2-review-obligations-v1`，包含 node、完整 scope_sha256 和 obligations。每项有稳定
 obligation_id、实际材料 subject_sha256、owner、chapter_ordinals、subject_path、kind 和

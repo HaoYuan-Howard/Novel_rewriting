@@ -275,6 +275,41 @@ def _business_chapters(artifact) -> dict[int, bytes]:
     }
 
 
+def test_commander_sparse_patch_reaches_producer_without_clearing_other_fields(tmp_path):
+    from novel.orchestrator import reviewer_tasks
+    from novel.orchestrator.stage2_blueprint_wire import response_model
+    from tests.test_reviewer_tasks import _new_blueprint_options
+
+    book = tmp_path / '平台_稀疏修订_1234567890123456789'
+    book.mkdir()
+    _seed(book, with_blueprints=True)
+    ctx = _ctx(book, 'stage2.blueprint', paid=False)
+    before = ArtifactStore(ctx).read_own(ChapterBlueprints, extract.BLUEPRINT_REL,
+                                        require_current=True)[0]
+    current, options = _new_blueprint_options()
+    template = relation_edit.edit_template(ctx)
+    template.pop('_schema_version')
+    template['actor'] = options[1]['exact_request']['action']['input_payload']['actor']
+    options[1]['exact_request']['action']['input_payload'] = template
+    document = copy.deepcopy(options[1]['exact_request'])
+    edit = document['action']['input_payload']
+    edit['reason'] = '只订正第一个拍的地点，保留其余事实和时间层'
+    edit['chapters'] = edit['chapters'][:1]
+    beat = before.blueprints[0].beats[0]
+    edit['chapters'][0]['beat_patches'] = [{'beat_id': beat.beat_id, 'place': '订正后的院中'}]
+    response_model().model_validate(document)
+    response_path = tmp_path / 'commander-response.json'
+    response_path.write_text(json.dumps(document, ensure_ascii=False), encoding='utf-8')
+    action = reviewer_tasks.load_action(response_path, current, submission_options=options)
+    request_path = book / STAGE2_BLUEPRINT_RELATION_EDIT
+    request_path.write_text(json.dumps(action.input_payload, ensure_ascii=False), encoding='utf-8')
+    applied, _report = relation_edit.apply_edit(ctx, str(request_path))
+    assert applied.blueprints[0].beats[0].model_dump() == {
+        **beat.model_dump(), 'place': '订正后的院中'}
+    assert applied.blueprints[0].fact_atoms == before.blueprints[0].fact_atoms
+    assert _business_chapters(applied) | {1: b''} == _business_chapters(before) | {1: b''}
+
+
 def test_relation_preview_and_apply_share_candidate_and_only_replace_target_chapter(
     tmp_path: Path,
 ):

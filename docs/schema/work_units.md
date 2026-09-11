@@ -22,6 +22,18 @@ reasoning 不重复加到 completion，缺失用量显示 unknown。默认追加
 外发授权。每个 role/scope 的额度互不流转，SessionAgentClient 恢复同一 logical request 时
 接受累计额度和全部历史 attempt links，不把第五次当成新的首次调用。
 
+已购 Blueprint、Stage6/7 审阅以实际主体、裁决契约和义务维护业务身份；临时 review token
+仍用于提交竞态，代码版本仍记入 epoch 与审计。恢复先核原工作单元的请求、回答、成本、
+session 和 owner 停止证明，再比对原包和当前包；只有登记的运输/validation 字段变化时，
+运行代码才更新提交凭证并交当前 typed loader/producer 免费重验。原始字节和首次 typed
+证明保持不可变，后继 action 逐字段保留决定、理由和编辑值；新记录先耐久并验证后才
+退休旧记录，两个记录之间中断可继续补尾。真实材料、finding、义务、裁决说明或输出 schema
+变化不属于这条恢复路径；格式或内容拒绝仍保存准确反馈，不把免费重验等同于验收通过。
+Blueprint 曾未向 CLI 下发完整动作 schema；`novel/orchestrator/stage2_blueprint_wire.py`
+登记补齐该同形状契约的免费重验入口。仅接受原 observation 协议摘要和未下发 schema 的
+冻结请求，不能借此兼容其他 schema。新的 provider 会话得到完整关联分支及稀疏补丁形状；
+旧回答仍用原 JSON 免费校验，既不重写业务值，也不把格式失败归因于版本变化。
+
 `WorkUnitView` 统一发布 content_base_limit、content_granted、grant_count、content_used、
 content_limit、content_remaining 和恢复入口，运行页与指标工具复用同一投影。
 

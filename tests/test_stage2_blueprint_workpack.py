@@ -439,6 +439,13 @@ def test_code_or_rules_roll_only_validation_seal_and_exact_review_token(
     assert after.review_identity_sha256 == before.review_identity_sha256
     assert after.validation_seal_sha256 != before.validation_seal_sha256
     assert after.review_token != before.review_token
+    from novel.orchestrator import queue, reviewer_tasks
+    waiting_on = queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW
+    before_business = reviewer_tasks._stage2_business_sha256(
+        {'blueprint': before.model_dump(mode='json')}, waiting_on)
+    after_business = reviewer_tasks._stage2_business_sha256(
+        {'blueprint': after.model_dump(mode='json')}, waiting_on)
+    assert after_business == before_business, '免费复检不得把同一审阅材料变成新内容轮'
 
 
 def test_seen_request_refuses_the_legacy_workpack_token() -> None:

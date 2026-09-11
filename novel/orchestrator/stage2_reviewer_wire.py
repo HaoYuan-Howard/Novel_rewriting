@@ -589,6 +589,9 @@ def response_schema(task: _ReviewerTaskLike) -> dict[str, Any]:
 
 def output_schema_for(task: object) -> dict[str, Any] | None:
     """只向现役 Stage2 typed 动作下发原生 schema；非 Stage2 不在此接管。"""
+    if getattr(task, 'waiting_on', None) == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
+        from novel.orchestrator import stage2_blueprint_wire
+        return stage2_blueprint_wire.response_schema()
     if stage2_scope_wire.exact_request(task) is not None:
         return agent_json_schema(stage2_scope_wire.response_model(task))
     if uses_compact_wire(task):

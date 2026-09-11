@@ -4611,6 +4611,132 @@ def test_restart_replay_current_loader_rejects_old_action_then_corrects(base, co
     assert not _reviewer_action_files(base)
 
 
+@pytest.mark.parametrize('window', ['raw_response', 'typed_proof', 'typed_record', 'record_retirement', 'typed_rejection'])
+@pytest.mark.parametrize('legacy_first', [False, True])
+def test_blueprint_paid_answer_survives_code_rollover_at_every_recovery_window(
+        base, corpus, monkeypatch, window, legacy_first):
+    """真实工作包/loader/账和零成本子进程；换代码绝不重购或改写已付费证据。"""
+    from tests.test_reviewer_revalidation import install_blueprint_tasks, response_for
+
+    # 运输恢复按真实协议登记；测试进程仍是零成本替身，不能伪造一个获准旧协议。
+    real_invocation = _PlanningDriver.build_invocation
+    monkeypatch.setattr(_PlanningDriver, 'build_invocation',
+        lambda *a, **k: replace(real_invocation(*a, **k), protocol=CodexCommanderDriver.protocol))
+    store, current, box, build = install_blueprint_tasks(monkeypatch, legacy_first=legacy_first)
+    monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build)
+    done = SimpleNamespace(
+        state='blocked', code_version=store.ctx.code, surface_seal='9' * 64,
+        action=SimpleNamespace(waiting_on='test-revalidation-finished', action_sha256='8' * 64))
+    applied, invocations = [], []
+    phase = {'value': 0}
+    monkeypatch.setattr(agent.operator, 'next_action_at_code',
+                        lambda *_a, **_k: done if applied else current)
+    stopped = AgentDeliveryOutcome(state='stopped', reason='免费恢复测试停点', checked_at=1)
+    monkeypatch.setattr(agent, '_assess_delivery', lambda *_a, **_k: stopped)
+    real_prepare = agent.reviewer_revalidation.prepare
+    monkeypatch.setattr(agent.reviewer_revalidation, 'prepare',
+        lambda *a, **k: None if legacy_first and phase['value'] == 0 else real_prepare(*a, **k))
+    real_schema = agent.stage2_reviewer_wire.output_schema_for
+    monkeypatch.setattr(agent.stage2_reviewer_wire, 'output_schema_for',
+        lambda task: None if legacy_first and phase['value'] == 0 else real_schema(task))
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            expected_calls = 2 if window == 'typed_rejection' else 1
+            assert len(invocations) <= expected_calls, '只有真实格式拒绝允许新增纠错调用'
+            response = response_for(box['task'])
+            if window == 'typed_rejection' and len(invocations) == 1:
+                response['action']['payload']['knowledge_links']['reason'] = '与整轮审阅不一致的理由'
+            if len(invocations) == 2:
+                assert '与整轮审阅不一致的理由' in invocation.stdin_text and 'typed' in invocation.stdin_text
+            on_registered()
+            return CommanderProcessResult(exit_code=0, wire_evidence=True,
+                observation=CommanderObservation(
+                    provider_session_id=f'provider-code-revalidation-{len(invocations)}',
+                    actual_model=invocation.profile.model,
+                    actual_effort=invocation.profile.reasoning_effort, usage=None),
+                final_response=json.dumps(response, ensure_ascii=False))
+        return spawn
+
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    real_materialize = agent._materialize_reviewer_document
+    real_save = agent.WorkUnitBudget.save_recovery
+    real_promote = agent._promote_reviewer_candidate
+    real_discard = agent.uploads.discard_edit_plan
+
+    def materialize(*args, **kwargs):
+        if phase['value'] == 0 and window in {'raw_response', 'typed_rejection'}:
+            raise OSError('synthetic crash after durable response')
+        return real_materialize(*args, **kwargs)
+
+    def save(budget, *args, **kwargs):
+        result = real_save(budget, *args, **kwargs)
+        if phase['value'] == 0 and window == 'typed_proof':
+            raise OSError('synthetic crash after immutable typed proof')
+        return result
+
+    def promote(*args, **kwargs):
+        if phase['value'] == 0 and window in {'typed_record', 'record_retirement'}:
+            raise OSError('synthetic crash after durable action')
+        return real_promote(*args, **kwargs)
+
+    def discard(*args, **kwargs):
+        if phase['value'] == 1 and window == 'record_retirement':
+            raise OSError('synthetic crash between successor save and old record retirement')
+        return real_discard(*args, **kwargs)
+
+    monkeypatch.setattr(agent, '_materialize_reviewer_document', materialize)
+    monkeypatch.setattr(agent.WorkUnitBudget, 'save_recovery', save)
+    monkeypatch.setattr(agent, '_promote_reviewer_candidate', promote)
+    monkeypatch.setattr(agent.uploads, 'discard_edit_plan', discard)
+
+    def approval_argv(_base, _sid, _epoch, action):
+        expected = box['task'].submission_options[0]['exact_request']['action']['payload']
+        assert action.payload['review_token'] == expected['review_token']
+        assert action.payload['decision'] == 'accept'
+        applied.append(action)
+        return [agent.sys.executable, '-c', 'raise SystemExit(0)']
+
+    monkeypatch.setattr(agent, '_reviewer_approval_argv', approval_argv)
+    first = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
+    assert agent.wait(first.run_id, 20)
+    assert len(invocations) == 1 and not applied
+    budget = _stage2_commander_unit(base, current.action.waiting_on)
+    original_turn = budget.latest_turn()
+    assert original_turn.state == 'delivered'
+    sealed = {path: path.read_bytes() for path in (
+        budget.directory / f'{original_turn.request_payload_sha256}.json',
+        budget.directory / f'{original_turn.response_sha256}.json',
+        agent.cost_ledger_path(base))}
+    if original_turn.recovery_sha256:
+        path = budget.directory / f'{original_turn.recovery_sha256}.json'
+        sealed[path] = path.read_bytes()
+
+    for ordinal in range(1, 3 if window == 'record_retirement' else 2):
+        phase['value'] = ordinal
+        store.ctx.code = current.code_version = f'new-code-{ordinal}'
+        done.code_version = current.code_version
+        current.surface_seal = str(ordinal + 3) * 64
+        current.action.action_sha256 = str(ordinal + 6) * 64
+        resumed = agent.start(base, '42', authorized=True, egress_authorized=True,
+                              profiles=_PROFILES, spawn=None)
+        assert agent.wait(resumed.run_id, 20)
+        if window == 'record_retirement' and ordinal == 1:
+            assert len(_reviewer_action_files(base)) == 2 and not applied
+
+    expected_calls = 2 if window == 'typed_rejection' else 1
+    assert len(invocations) == budget.used == expected_calls and len(applied) == 1
+    assert budget.latest_turn().state == 'adopted'
+    assert not _reviewer_action_files(base)
+    for path, original in sealed.items():
+        if window == 'typed_rejection' and path == agent.cost_ledger_path(base):
+            assert path.read_bytes().startswith(original), '真实纠错只可追加自己的费用'
+        else:
+            assert path.read_bytes() == original
+
+
 def test_stage2_typed_action_survives_pause_stop_and_new_parent_replay(
         base, corpus, monkeypatch, request):
     """内部恢复安全点暂停；stop 清 scratch 后新 parent 按 durable 决定零模型重放。"""

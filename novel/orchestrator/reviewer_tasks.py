@@ -80,7 +80,7 @@ from novel.errors import (
     ArtifactUnreadable, PathRefused, ProvenanceRefused, TerminalState,
     UpstreamMissing, UpstreamStale,
 )
-from novel.orchestrator import queue, reviewer_contract, service_lifecycle
+from novel.orchestrator import queue, reviewer_contract, reviewer_revalidation, service_lifecycle
 
 
 REQUEST_SCHEMA = 'novel-reviewer-action-v1'
@@ -2765,14 +2765,8 @@ def _stage2_business_sha256(
     pack: Mapping[str, Any], waiting_on: str,
 ) -> str:
     if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
-        identity = _blueprint_progress_identity(pack)
-        return _canonical_json_sha256({
-            'waiting_on': waiting_on,
-            'source_sha256': identity['source_sha256'],
-            'main_text_sha256': identity['main_text_sha256'],
-            'workpack_sha256': identity['workpack_sha256'],
-            'progress_sha256': identity['progress_sha256'],
-        })
+        return _canonical_json_sha256(reviewer_revalidation.business_identity(
+            pack, waiting_on, reviewer_contract.for_blocker(waiting_on)))
     global_pack = pack.get('global')
     binding = global_pack.get('binding') if isinstance(global_pack, Mapping) else None
     if not isinstance(binding, Mapping):
@@ -2930,6 +2924,9 @@ def _non_stage2_business_identity(
     submission_options: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """非 Stage2 席位只绑定业务主体，不绑定 code/surface/action 运输坐标。"""
+    if waiting_on in reviewer_revalidation.WAITING_ON:
+        return reviewer_revalidation.business_identity(
+            pack, waiting_on, reviewer_contract.for_blocker(waiting_on))
     contract_sha256 = hashlib.sha256(
         reviewer_contract.for_blocker(waiting_on).encode('utf-8')).hexdigest()
     if waiting_on == 'stage0.approve':
@@ -4246,7 +4243,9 @@ def load_action(
             allowed = {row['chapter_ordinal'] for row in template['chapters']}
             if not {row.chapter_ordinal for row in edit.chapters} <= allowed:
                 raise ReviewerTaskError('Blueprint patch 章范围越出当前工作包')
-            input_payload = encode_artifact(STAGE2_BLUEPRINT_RELATION_EDIT, edit.model_dump(mode='json'))
+            # producer 用字段缺席表示保留原值；不能在运输时给稀疏补丁补 null。
+            input_payload = encode_artifact(
+                STAGE2_BLUEPRINT_RELATION_EDIT, edit.model_dump(mode='json', exclude_unset=True))
         elif node == 'stage5.review':
             allowed_stage5_flags = {
                 ('--retain-pretrim-batch', '@reviewer-input'),

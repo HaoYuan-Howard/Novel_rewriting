@@ -99,7 +99,7 @@ from novel.model_slots import (
 from novel.orchestrator import (
     admission, commander_completion, execution_permit, jobs, operator, queue,
     review_seats, reviewer_action_evidence, reviewer_seat_ledger,
-    reviewer_protocol_recovery, reviewer_schema_recovery,
+    reviewer_protocol_recovery, reviewer_schema_recovery, reviewer_revalidation,
     reviewer_tasks, service_lifecycle,
     stage2_reviewer_wire, stage4_reviewer_wire, state, uploads,
 )
@@ -4702,7 +4702,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     prior_action.get('reason') or prior_action.get('payload', {}).get('reason')))
             if previous_decision.get('business_sha256') == task.business_sha256:
                 return stopped('同一业务主体的审阅决定已执行，当前没有新的审阅进展')
-        feedback = budget.latest_feedback()
+        feedback = budget.latest_feedback(business_sha256=task.business_sha256)
         if feedback is not None and (
                 feedback.get('business_sha256') != task.business_sha256
                 or feedback.get('waiting_on') != waiting_on):
@@ -4770,7 +4770,21 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                             end_code_version=(epoch.code_version
                                 if epoch.code_version == original.start_code_version else prov.CODE_UNKNOWN)))
         active_records = uploads.load_reviewer_actions(base, sid)
+        revalidation = None
+        original_request = None
+        if pending is not None and waiting_on in reviewer_revalidation.WAITING_ON:
+            original_request = budget.request_payload(pending[0].turn_id)
+            if original_request.get('business_sha256') != pending[1].get('business_sha256'):
+                raise WorkUnitRefused('原请求与已购回答的业务身份不一致')
+            if (budget.turn(pending[0].turn_id).run_id != run_id
+                    or original_request.get('epoch_id') != epoch.epoch_id):
+                try:
+                    revalidation = reviewer_revalidation.prepare(
+                        original_request, task, schema_sha256=output_schema_digest or schema_sha256)
+                except reviewer_revalidation.RevalidationRefused as exc:
+                    raise WorkUnitRefused(str(exc)) from exc
         pending_record: tuple[Path, ReviewerActionRecord] | None = None
+        pending_records: list[tuple[Path, ReviewerActionRecord]] = []
         for path, record in active_records:
             if record.work_unit_id != budget.unit_id:
                 continue
@@ -4781,9 +4795,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 continue
             validate_reviewer_record(base, sid, record)
             if pending is not None and record.work_unit_turn_id == pending[0].turn_id:
-                if pending_record is not None:
+                if pending_record is not None and revalidation is None:
                     raise WorkUnitRefused('同一回答出现多个活动 typed 决定记录')
                 pending_record = (path, record)
+                pending_records.append((path, record))
         submitted_patch_recovery = False
         partial_batch_recovery = False
         if pending is not None and pending[1].get('business_sha256') != task.business_sha256:
@@ -4812,11 +4827,12 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         partial_batch_recovery = True
                         task = replace(task, business_sha256=record.business_sha256,
                                        submission_options=partial.submission_options)
-            if not submitted_patch_recovery and pending[1].get('business_sha256') != task.business_sha256:
+            if (not submitted_patch_recovery and revalidation is None
+                    and pending[1].get('business_sha256') != task.business_sha256):
                 # 当前候选确已被其他正式动作替代；旧回答失效仍保留已用额度。
                 budget.mark_rejected(pending[0].turn_id, reason_code='subject_superseded')
-                if pending_record is not None:
-                    uploads.discard_edit_plan(base, pending_record[0])
+                for path, _record in pending_records:
+                    uploads.discard_edit_plan(base, path)
                 pending = None
 
         def rejected(reservation: ContentReservation, digest: str, reason: str) -> CommanderTurnResult:
@@ -4844,25 +4860,44 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             record_path: Path | None = None
             def persist(action: reviewer_tasks.ReviewerAction, digest: str) -> Path | None:
                 nonlocal record_path
-                proof = dict(business_sha256=task.business_sha256, waiting_on=task.waiting_on,
-                             action_sha256=reviewer_tasks.action_business_sha256(action),
-                             provider_response_sha256=digest, action=asdict(action))
-                budget.save_recovery(reservation.turn_id, proof)
+                candidate_proof = dict(
+                    business_sha256=task.business_sha256, waiting_on=task.waiting_on,
+                    action_sha256=reviewer_tasks.action_business_sha256(action),
+                    provider_response_sha256=digest, action=asdict(action))
+                if revalidation is not None and budget.turn(reservation.turn_id).recovery_sha256:
+                    existing_proof = budget.recovery_proof(reservation.turn_id)
+                    assert original_request is not None
+                    if not reviewer_revalidation.proof_matches(
+                            original_request, existing_proof,
+                            business_sha256=task.business_sha256, waiting_on=task.waiting_on,
+                            action=asdict(action), provider_response_sha256=digest):
+                        raise WorkUnitRefused('免费重验不得更改原 typed 决定')
+                else:
+                    budget.save_recovery(reservation.turn_id, candidate_proof)
                 # 重建 transport 包装与 typed loader 会先后调用本回调；必须复用
                 # 同一持久记录，否则跨秒的 recorded_at 会遗留第二份活动决定。
                 if record_path is None:
-                    record_path = (pending_record[0] if pending_record is not None
+                    # 后继记录绑定当前 token，原 typed proof 与原回答仍不可变。
+                    # 先写并验证新记录，再退休旧记录；中断后可逐份验证同源记录补尾。
+                    record_path = (pending_record[0] if pending_record is not None and revalidation is None
                                    else _record_reviewer_action(
                                        base, sid, run_id=run_id, epoch=epoch, task=task, action=action,
                                        reviewer_session_run_id=session_id, provider_response_sha256=digest,
                                        work_unit_id=budget.unit_id, work_unit_turn_id=reservation.turn_id))
                 if record_path is not None:
                     records_found = [(path, record) for path, record in uploads.load_reviewer_actions(base, sid)
-                                     if record.work_unit_id == budget.unit_id
-                                     and record.work_unit_turn_id == reservation.turn_id]
-                    if len(records_found) != 1 or records_found[0][0] != record_path:
+                                     if path == record_path]
+                    if len(records_found) != 1:
                         raise WorkUnitRefused('同一回答没有唯一活动 typed 决定记录')
                     validate_reviewer_record(base, sid, records_found[0][1])
+                    if revalidation is not None:
+                        for old_path, old_record in pending_records:
+                            # 每份源记录均已由 validate_reviewer_record 验过原 immutable
+                            # proof，不能把别的回答或语义不同的动作顺带退休。
+                            if old_record.provider_response_sha256 != digest:
+                                raise WorkUnitRefused('免费重验出现不同来源的活动决定')
+                            if old_path != record_path:
+                                uploads.discard_edit_plan(base, old_path)
                 return record_path
             try:
                 try:
@@ -4880,6 +4915,17 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         kind='node', node=record.node, flags=tuple(record.flags),
                         input_payload=record.input_payload)
                     digest = record.provider_response_sha256
+                elif revalidation is not None:
+                    document, digest = _reviewer_response_document(response)
+                    try:
+                        document = revalidation.rebind(document)
+                    except reviewer_revalidation.RevalidationRefused as exc:
+                        raise _ReviewerResponseTypedInvalid(str(exc)) from exc
+                    action, digest, record_path = _materialize_reviewer_document(
+                        task, current, document, response_digest=digest,
+                        persist_validated=persist,
+                        preserve_validated=lambda candidate, digest:
+                        _preserve_validated_reviewer_residue(base, sid, candidate, digest))
                 elif proof is not None:
                     row = proof['action']
                     if row['kind'] in ('stop', 'uncertain'):
