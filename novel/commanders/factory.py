@@ -12,6 +12,7 @@ from novel.commanders.base import (
 )
 from novel.commanders.claude_code import ClaudeCodeCommanderDriver
 from novel.commanders.codex import CodexCommanderDriver
+from novel.commanders.glm import GlmClaudeCodeCommanderDriver
 
 
 def create_commander_driver(
@@ -30,6 +31,8 @@ def create_commander_driver(
     }
     if resolved.driver == 'claude-code':
         return ClaudeCodeCommanderDriver(**kwargs)
+    if resolved.driver == 'claude-code-glm':
+        return GlmClaudeCodeCommanderDriver(**kwargs)
     if resolved.driver == 'codex':
         return CodexCommanderDriver(**kwargs)
     raise AssertionError(f'未实现 commander driver {resolved.driver!r}')

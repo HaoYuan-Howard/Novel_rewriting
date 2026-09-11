@@ -249,7 +249,7 @@ STAGE5_CLOSED_EXEMPT_FLAGS: Final = (
 #:
 #: ``unknown`` 只用于探针无法下结论；``missing`` 是 PATH 中没有 CLI；
 #: ``unauthenticated`` 留给能够在不发模型请求的前提下明确识别登录态的 driver。
-AgentDriver = Literal['claude-code', 'codex']
+AgentDriver = Literal['claude-code', 'claude-code-glm', 'codex']
 AgentRole = Literal['commander', 'executor']
 AgentAvailability = Literal['ready', 'missing', 'unknown', 'unauthenticated']
 AgentProfileSettingsState = Literal['unset', 'configured', 'unreadable']

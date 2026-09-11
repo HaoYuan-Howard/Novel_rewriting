@@ -87,9 +87,9 @@ def test_registry_publishes_exact_ids_labels_and_model_specific_options():
     assert response.executor_nodes == list(AGENT_EXECUTOR_NODES)
     assert response.default_profiles is None, (
         'Phase7 前没有 provider-neutral 默认；前端不得拿数组第一项猜')
-    assert set(drivers) == set(get_args(AgentDriver)) == {'claude-code', 'codex'}
+    assert set(drivers) == set(get_args(AgentDriver)) == {'claude-code', 'claude-code-glm', 'codex'}
     assert {driver_id: driver.provider for driver_id, driver in drivers.items()} == {
-        'claude-code': 'anthropic', 'codex': 'openai',
+        'claude-code': 'anthropic', 'claude-code-glm': 'bigmodel', 'codex': 'openai',
     }
     assert capabilities.provider_for_driver('claude-code') == 'anthropic'
     assert capabilities.provider_for_driver('codex') == 'openai'
@@ -239,11 +239,11 @@ def test_probe_only_executes_the_fixed_version_command():
         return subprocess.CompletedProcess(argv, 0, f'{name} 1.2.3\n', '')
 
     response = capabilities.get_agent_capabilities(which=which, runner=runner)
-    assert [driver.availability for driver in response.drivers] == ['ready', 'ready']
+    assert [driver.availability for driver in response.drivers] == ['ready', 'ready', 'ready']
     assert [driver.version for driver in response.drivers] == [
-        'Claude Code 1.2.3', 'Codex CLI 1.2.3',
+        'Claude Code 1.2.3', 'Claude Code 1.2.3', 'Codex CLI 1.2.3',
     ]
-    assert len(calls) == 2
+    assert len(calls) == 3
     for argv, kwargs in calls:
         assert argv[-1] == '--version' and len(argv) == 2
         assert kwargs['check'] is False and kwargs['capture_output'] is True
@@ -273,7 +273,7 @@ def test_http_capabilities_are_reprobed_instead_of_cached(monkeypatch, tmp_path)
 
     def changing_probe(spec, **_kwargs):
         nonlocal call
-        request_index = call // 2
+        request_index = call // len(capabilities._DRIVERS)
         call += 1
         if request_index == 0:
             return capabilities._ProbeResult(
@@ -290,4 +290,4 @@ def test_http_capabilities_are_reprobed_instead_of_cached(monkeypatch, tmp_path)
     assert first.headers['cache-control'] == second.headers['cache-control'] == 'no-store'
     assert {item['availability'] for item in first.json()['drivers']} == {'missing'}
     assert {item['availability'] for item in second.json()['drivers']} == {'ready'}
-    assert call == 4, '动态机器状态被缓存了，前端会一直看到旧安装/登录状态'
+    assert call == 2 * len(capabilities._DRIVERS), '动态机器状态被缓存了，前端会一直看到旧安装/登录状态'

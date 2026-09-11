@@ -25,6 +25,14 @@ reasoning 不重复加到 completion，缺失用量显示 unknown。默认追加
 `WorkUnitView` 统一发布 content_base_limit、content_granted、grant_count、content_used、
 content_limit、content_remaining 和恢复入口，运行页与指标工具复用同一投影。
 
+`contracts/schema/work_unit_recovery.py` 定义无回答 Commander 传输失败的工程收口请求、预览与回执。
+仅最后一轮 `unknown/commander_transport_failed`、全部 attempt 明确连接或超时失败、成本/session/
+原请求/日志及原 owner 排空证明一致时可用；已保存或孤立回答、待补提交和未结束尝试均拒绝。
+预览 token 绑定完整来源；提交在书级 writer、审批/工作单元锁及 owner 停止 lease 内复验。
+回执写入内容寻址 blob，现有 `processing.kind=mechanical` 绑定它，随后原子发布 failed 状态。
+读取及新 reserve 必须再次验证原轮次与回执；损坏保持拒绝。原轮次、attempt、追加额度与成本不变，
+缺失 token 仍未知；仅允许另开内容轮消耗原剩余额度，不恢复旧 provider 会话。工程操作入口见 OPERATIONS。
+
 Stage2 Commander 有剩余额度时，纠错请求从同一工作单元恢复最近两份同业务主体、同
 waiting_on 的被拒原回答及拒因，供新 provider 会话自足定位错误。每份原回答、拒因 blob
 及运输摘要必须相互匹配；损坏保持 unknown 并在调用前停止。遇到已采用回答或业务主体

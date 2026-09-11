@@ -67,6 +67,32 @@
           "execution_modes": ["standard"]
         }
       ]
+    },
+    {
+      "id": "claude-code-glm",
+      "provider": "bigmodel",
+      "label": "Claude Code · 智谱 GLM",
+      "roles": [
+        "commander",
+        "executor"
+      ],
+      "availability": "ready",
+      "availability_reason": "mock：CLI 可执行且版本探针成功；未发模型请求",
+      "version": "2.1.259 (mock)",
+      "models": [
+        {
+          "id": "glm-5.3-flash[1M]",
+          "label": "GLM 5.3 Flash · 1M",
+          "reasoning_efforts": [
+            "low",
+            "high",
+            "max"
+          ],
+          "execution_modes": [
+            "standard"
+          ]
+        }
+      ]
     }
   ],
   "legacy_providers": [

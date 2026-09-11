@@ -25,6 +25,7 @@ from contracts.schema.workflow import (
     WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV2, WorkUnitRegistryV1,
     WorkUnitProcessing,
 )
+from contracts.schema.work_unit_recovery import CommanderFailureRecoveryReceipt
 from novel import paths
 from novel.appendlog import path_transaction_lock
 from novel.errors import TerminalState
@@ -39,6 +40,13 @@ class WorkUnitRefused(TerminalState):
 
 class WorkUnitBudgetExhausted(WorkUnitRefused):
     pass
+
+
+COMMANDER_FAILURE_RECONCILED = 'commander_transport_failure_reconciled'
+
+
+def failure_recovery_input(turn_id: str) -> str:
+    return _digest({'kind': 'commander-failure-reconciliation-v1', 'turn_id': turn_id})
 
 
 def _bytes(value: Any) -> bytes:
@@ -313,7 +321,61 @@ class WorkUnitBudget:
         for row in ledger.processing:
             if self._processing(**row.model_dump(exclude={'processing_id'}, exclude_none=True)) != row:
                 raise WorkUnitRefused('工作单元处理来源回执损坏，禁止新调用')
+        for turn in ledger.turns:
+            if turn.reason_code == COMMANDER_FAILURE_RECONCILED:
+                self.failure_recovery_receipt(ledger, turn)
         return ledger
+
+    def failure_recovery_receipt(
+            self, ledger: WorkUnitLedgerV2,
+            turn: WorkUnitContentTurn) -> CommanderFailureRecoveryReceipt:
+        """历史失败一旦已收口，其原失败和工程裁决证明仍必须可验证。"""
+        found = [row for row in ledger.processing if row.kind == 'mechanical'
+                 and row.input_sha256 == failure_recovery_input(turn.turn_id)]
+        if len(found) != 1 or found[0].run_id != turn.run_id:
+            raise WorkUnitRefused('Commander 失败收口缺唯一工程证明')
+        row = found[0]
+        try:
+            target = _safe(self.base, self.directory / f'{row.evidence_sha256}.json')
+            with _open_snapshot(target) as stream:
+                raw = stream.read()
+            if hashlib.sha256(raw).hexdigest() != row.evidence_sha256:
+                raise ValueError('失败收口证明字节身份漂移')
+            blob = WorkUnitBlobV1.model_validate_json(raw)
+            receipt = CommanderFailureRecoveryReceipt.model_validate(blob.payload)
+            expected = receipt.before.model_copy(update={
+                'state': 'failed', 'reason_code': COMMANDER_FAILURE_RECONCILED})
+            original = WorkUnitLedgerV2.model_validate(receipt.evidence['ledger'])
+            if (_digest(blob.model_dump(mode='json')) != row.evidence_sha256
+                    or blob.unit_id != self.unit_id or blob.turn_id != turn.turn_id
+                    or receipt.unit_id != ledger.unit_id or receipt.sid != ledger.sid
+                    or ledger.role != 'commander' or expected != turn
+                    or original.unit_id != ledger.unit_id
+                    or self._turn(original, turn.turn_id) != receipt.before
+                    or _digest(receipt.evidence) != receipt.request.preview_token):
+                raise ValueError('失败收口证明主体不一致')
+        except (OSError, ValueError, KeyError) as exc:
+            raise WorkUnitRefused('Commander 失败收口证明损坏，禁止新调用') from exc
+        return receipt
+
+    def reconcile_failure_under_lock(self, receipt: CommanderFailureRecoveryReceipt) -> None:
+        """调用方已持有本账事务锁及 owner lease；不重入不支持重入的文件锁。"""
+        ledger = self._read()
+        turn = self._turn(ledger, receipt.before.turn_id)
+        if receipt.unit_id != self.unit_id or receipt.sid != ledger.sid or turn != receipt.before:
+            raise WorkUnitRefused('失败收口写入前主体已漂移')
+        blob = WorkUnitBlobV1(unit_id=self.unit_id, turn_id=turn.turn_id,
+                              payload=receipt.model_dump(mode='json'))
+        digest = _digest(blob.model_dump(mode='json'))
+        _write(self.base, self.directory / f'{digest}.json', blob)
+        processing = self._processing(run_id=turn.run_id, kind='mechanical',
+            input_sha256=failure_recovery_input(turn.turn_id), evidence_sha256=digest)
+        failed = turn.model_copy(update={'state': 'failed', 'reason_code': COMMANDER_FAILURE_RECONCILED})
+        updated = WorkUnitLedgerV2.model_validate({**ledger.model_dump(mode='json'),
+            'turns': [failed if row.turn_id == turn.turn_id else row for row in ledger.turns],
+            'processing': [*ledger.processing, processing]})
+        self.failure_recovery_receipt(updated, failed)
+        _write(self.base, self.path, updated)
 
     def _replace(self, ledger: WorkUnitLedgerV2, turn: WorkUnitContentTurn) -> None:
         rows = [row.model_dump(mode='json') if row.turn_id != turn.turn_id

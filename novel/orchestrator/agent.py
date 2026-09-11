@@ -66,7 +66,7 @@ from contracts.schema.orchestration import (
 )
 from novel import agent_session_audit, paths, prov, run_identity
 from novel.agent_capabilities import (
-    AgentProfileRefused, provider_for_driver, validate_pipeline_profiles,
+    AgentProfileRefused, provider_for_driver, reported_model_matches, validate_pipeline_profiles,
 )
 from novel.appendlog import (
     append_line, append_line_under_process_lock, append_transaction,
@@ -4174,8 +4174,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 base, sid, code_version=epoch.code_version)
 
         if (observation.actual_model is not None
-                and observation.actual_model
-                != plan.profiles.commander.model):
+                and not reported_model_matches(plan.profiles.commander, observation.actual_model)):
             integrity_error_kind = 'commander_model_drift'
         if (observation.actual_effort is not None
                 and observation.actual_effort

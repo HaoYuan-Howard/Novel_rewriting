@@ -45,6 +45,7 @@ from contracts.invariants import (                                  # noqa: E402
 from novel import (                                                  # noqa: E402
     agent_session_audit, operator_telemetry, prov,
 )
+from novel.agent_capabilities import reported_model_matches           # noqa: E402
 from novel.llm.ledger import (                                       # noqa: E402
     audit_path, ledger_path, read_jsonl_rows,
 )
@@ -384,7 +385,7 @@ def _commander_delivery_chain(
                 or row['reasoning_effort'] != start.profile.reasoning_effort
                 or row['model'] != event.actual_model
                 or row['actual_reasoning_effort'] != event.actual_effort
-                or (event.actual_model is not None and event.actual_model != start.profile.model)
+                or (event.actual_model is not None and not reported_model_matches(start.profile, event.actual_model))
                 or (event.actual_effort is not None and event.actual_effort != start.profile.reasoning_effort)
                 or row['code'] != event.start_code_version
                 or row['protocol_version'] != event.protocol_version
@@ -530,7 +531,7 @@ def linkage_check(
                 == record.start.profile.model
                 and row.get('reasoning_effort') == record.start.profile.reasoning_effort
                 and (turn.actual_model is None
-                     or turn.actual_model == record.start.profile.model)
+                     or reported_model_matches(record.start.profile, turn.actual_model))
                 and row.get('actual_reasoning_effort') == turn.actual_effort
                 and (turn.actual_effort is None
                      or turn.actual_effort == record.start.profile.reasoning_effort)

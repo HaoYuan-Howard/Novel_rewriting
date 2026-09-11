@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from contracts.invariants import AgentDriver, AgentModelEvidence
 from contracts.schema.orchestration import AgentProfile
 from novel.agent_capabilities import (
-    unreported_model_evidence_for_driver, validate_profile,
+    reported_model_matches, unreported_model_evidence_for_driver, validate_profile,
 )
 from novel.errors import AgentModelIdentityRefused
 
@@ -62,7 +62,8 @@ def resolve_agent_model_identity(
             raise AgentModelIdentityRefused(
                 'provider actual model 不是非空字符串',
                 loc='actual_model', kind='invalid_provider_metadata')
-        if actual_model != requested_model:
+        materialized = profile if isinstance(profile, AgentProfile) else AgentProfile.model_validate(profile)
+        if not reported_model_matches(materialized, actual_model):
             raise AgentModelIdentityRefused(
                 f'provider actual model={actual_model!r} 与 requested '
                 f'model={requested_model!r}（resolved profile）不一致',

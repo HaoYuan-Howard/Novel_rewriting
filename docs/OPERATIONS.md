@@ -75,7 +75,23 @@ token/耗时优化前的工程基线是 `24e4cf42c76309adaf1f4ee4df0dca3cdbea4d3
 Agent driver 与显式 legacy LLM transport 共用同一条 Stage0～Stage7 主链。付费节点由判别联合
 `executor_backend` 决定：`kind=agent` 携 `AgentProfile`，`kind=legacy` 携 `LegacyLlmProfile`；不得再用
 profile 是否存在推断模式。任一模式失败都不得自动降级到另一模式。当前 Legacy provider 为 DeepSeek；
-未来 GLM 必须作为独立 provider driver 接入。正文外发授权与费用确认彼此独立。
+如需 GLM 的直接 HTTP transport，仍须独立接入，不能复用 DeepSeek 的预算与 thinking 语义。
+正文外发授权与费用确认彼此独立。
+
+Claude CLI 的智谱路线使用独立 `claude-code-glm` driver，provider 为 `bigmodel`。开发维护者先在
+Claude CLI 用户配置中设置 `ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic` 及认证；
+运行代码检查并固定该接收端，不复制密钥或修改用户设置。当前发布 `glm-5.3-flash[1M]`，
+支持 `low/high/max` 三档，两角色按本次验收要求使用 `max`。`[1M]` 是上下文窗口请求后缀，
+只接受登记的同模型回显；实际模型、实际 effort 和用量未回显时仍保持未知，不能用请求值倒填。
+切换供应商或模型要在旧 owner 排空后显式开新配置的运行；原配置继续入口不承担换模型，
+工作单元额度与已购成果仍保留。版本探针不证明网络、账号或模型权限。
+
+无回答的 Commander 连接失败可由开发维护 agent 免费收口：先用
+`python -m novel.orchestrator.work_unit_recovery --base <根> --sid <sid> --unit-id <id> --turn-id <id>`
+取得预览；将 `preview_token`、执行者 `actor`、核实理由 `reason` 写入 JSON 后，同命令增加
+`--apply-request <JSON路径>`。该入口逐项核成本、session、原请求、日志和 owner 排空证据，
+只把已确认失败的 unknown 改为 failed，不生成语义决定、不退还额度、不清除未知用量。
+存在已购回答或证据缺失时继续阻断，先恢复原结果；同一请求重放幂等。该入口不是产品跑书步骤。
 
 对实际结束的 agent-only 整书做关闭式、0 模型请求验收：
 

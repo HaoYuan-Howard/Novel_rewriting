@@ -7339,6 +7339,150 @@ def _seat_result(exit_code, *, provider, failure_kind=None, retryable=False,
         wire_evidence=(provider is not None) if wire_evidence is None else wire_evidence)
 
 
+@pytest.fixture
+def failed_commander(base, corpus, monkeypatch, request):
+    """由真实 Supervisor 写出网络失败的三本账；fake 只替代付费进程。"""
+    from novel.orchestrator import work_unit_recovery
+    _, task_box, _ = _seat_harness(monkeypatch)
+    count = getattr(request, 'param', 1)
+    monkeypatch.setattr(agent, '_default_spawn', _spawn_sequence(task_box, [], [
+        _seat_result(1, provider='failed-provider', failure_kind='timeout', retryable=index < count - 1)
+        for index in range(count)]))
+    rec = agent.start(base, '42', authorized=True, egress_authorized=True,
+                      profiles=_PROFILES, spawn=None)
+    assert agent.wait(rec.run_id, 10)
+    budget = WorkUnitBudget(base, '42', 'stage0.approve', 'commander', 'book')
+    with agent.run_log_path(base, rec.run_id).open('a', encoding='utf-8') as log:
+        log.write('[stderr] 连接超时的纯诊断行\n')
+    turn = budget._read().turns[-1]
+    assert turn.state == 'unknown' and turn.reason_code == 'commander_transport_failed'
+    view = work_unit_recovery.inspect(base, '42', budget.unit_id, turn.turn_id)
+    assert view.available, view.reason
+    return SimpleNamespace(base=base, budget=budget, turn=turn, view=view, run_id=rec.run_id)
+
+
+@pytest.mark.parametrize('failed_commander', [1, 3], indirect=True)
+def test_commander_failure_reconciliation_keeps_budget_cost_and_proves_replay(
+        failed_commander, monkeypatch):
+    from contracts.schema.work_unit_recovery import CommanderFailureRecoveryRequest
+    from novel.orchestrator import work_unit_recovery
+    from novel.llm.ledger import ledger_path
+    f = failed_commander
+    cost = ledger_path(f.base).read_bytes()
+    original = f.budget.path.read_bytes()
+    again = work_unit_recovery.inspect(f.base, '42', f.budget.unit_id, f.turn.turn_id)
+    assert again == f.view and f.budget.path.read_bytes() == original
+    assert again.usage.failed_calls == again.usage.missing_usage_calls == len(f.turn.attempts)
+    assert again.usage.total_tokens is None
+    request = CommanderFailureRecoveryRequest(
+        preview_token=again.preview_token, actor='工程验收', reason='连接失败且没有回答')
+    receipt = work_unit_recovery.apply(f.base, '42', f.budget.unit_id, f.turn.turn_id, request)
+    assert work_unit_recovery.apply(f.base, '42', f.budget.unit_id, f.turn.turn_id, request) == receipt
+    assert ledger_path(f.base).read_bytes() == cost
+    assert f.budget.used == 1 and f.budget.remaining == 3
+    closed = f.budget._read().turns[-1]
+    assert closed.state == 'failed' and closed.attempts == f.turn.attempts
+    assert closed.response_sha256 is None
+    with pytest.raises(WorkUnitRefused, match='不同请求'):
+        work_unit_recovery.apply(f.base, '42', f.budget.unit_id, f.turn.turn_id,
+            request.model_copy(update={'reason': '不能改写原裁决'}))
+    # 真正的下一次 reserve 消费原累计额度；缺证明即拒绝，不是页面假解锁。
+    proof = next(row for row in f.budget._read().processing if row.kind == 'mechanical')
+    proof_path = f.budget.directory / f'{proof.evidence_sha256}.json'
+    saved = proof_path.read_bytes()
+    proof_path.write_bytes(saved + b' ')
+    with pytest.raises((WorkUnitRefused, ProvenanceRefused)):
+        f.budget.reserve('8' * 64, run_id='later')
+    proof_path.write_bytes(saved)
+    reservation = f.budget.reserve('8' * 64, run_id='later')
+    assert reservation.ordinal == 2 and f.budget.remaining == 2
+
+
+@pytest.mark.parametrize('damage', [
+    'missing_cost', 'duplicate_cost', 'model', 'effort', 'code', 'protocol', 'usage',
+    'provider', 'session_open', 'owner_open', 'log_answer', 'log_claude_answer', 'log_prefixed_answer',
+    'orphan_answer', 'request_blob', 'unfinished_attempt',
+])
+def test_commander_failure_reconciliation_refuses_incomplete_evidence(failed_commander, damage):
+    from novel import work_units
+    from novel.orchestrator import work_unit_recovery
+    from novel.llm.ledger import ledger_path
+    from contracts.schema.workflow import WorkUnitBlobV1
+    f = failed_commander
+    cost_path = ledger_path(f.base)
+    if damage in ('missing_cost', 'duplicate_cost', 'model', 'effort', 'code', 'protocol', 'usage', 'provider'):
+        rows = [json.loads(line) for line in cost_path.read_text(encoding='utf-8').splitlines()]
+        row = next(row for row in rows if row.get('attempt_id') == f.turn.attempts[0].attempt_id)
+        if damage == 'missing_cost':
+            rows.remove(row)
+        elif damage == 'duplicate_cost':
+            rows.append(row)
+        else:
+            key = {'model': 'model', 'effort': 'reasoning_effort', 'code': 'code',
+                   'protocol': 'protocol_version', 'usage': 'prompt_tokens',
+                   'provider': 'provider_session_id'}[damage]
+            row[key] = 9 if damage == 'usage' else 'drifted'
+        cost_path.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+    elif damage == 'session_open':
+        path = agent_session_audit.audit_path(f.base)
+        rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+        path.write_text(''.join(json.dumps(row) + '\n' for row in rows if row['kind'] != 'ended'), encoding='utf-8')
+    elif damage == 'owner_open':
+        path = agent.runs_path(f.base)
+        rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+        path.write_text(''.join(json.dumps(row) + '\n' for row in rows if row['kind'] != 'epoch_closed'), encoding='utf-8')
+    elif damage.startswith('log_'):
+        event = {'type': 'turn.completed'} if damage == 'log_answer' else {
+            'type': 'result', 'subtype': 'success', 'structured_output': {'answer': '已购'}}
+        with agent.run_log_path(f.base, f.run_id).open('a', encoding='utf-8') as out:
+            out.write(('[stdout] ' if damage == 'log_prefixed_answer' else '') + json.dumps(event) + '\n')
+    elif damage == 'orphan_answer':
+        blob = WorkUnitBlobV1(unit_id=f.budget.unit_id, turn_id=f.turn.turn_id, payload={'answer': '已购'})
+        digest = work_units._digest(blob.model_dump(mode='json'))
+        work_units._write(f.base, f.budget.directory / f'{digest}.json', blob)
+    elif damage == 'request_blob':
+        (f.budget.directory / f'{f.turn.request_payload_sha256}.json').write_bytes(b'{}')
+    elif damage == 'unfinished_attempt':
+        data = json.loads(f.budget.path.read_text(encoding='utf-8'))
+        data['turns'][-1]['attempts'][0]['outcome'] = 'unknown'
+        f.budget.path.write_text(json.dumps(data), encoding='utf-8')
+    view = work_unit_recovery.inspect(f.base, '42', f.budget.unit_id, f.turn.turn_id)
+    assert not view.available, damage
+    assert json.loads(f.budget.path.read_text(encoding='utf-8'))['turns'][-1]['state'] == 'unknown'
+
+
+@pytest.mark.parametrize('window', ['preview_drift', 'proof_before_ledger', 'commander_context'])
+def test_commander_failure_reconciliation_cas_crash_and_authority(failed_commander, monkeypatch, window):
+    from contracts.schema.work_unit_recovery import CommanderFailureRecoveryRequest
+    from novel import work_units
+    from novel.orchestrator import work_unit_recovery
+    f = failed_commander
+    request = CommanderFailureRecoveryRequest(preview_token=f.view.preview_token, actor='工程', reason='已核实')
+    if window == 'preview_drift':
+        with agent.run_log_path(f.base, f.run_id).open('a', encoding='utf-8') as out:
+            out.write('额外诊断\n')
+        with pytest.raises(WorkUnitRefused, match='预览已经漂移'):
+            work_unit_recovery.apply(f.base, '42', f.budget.unit_id, f.turn.turn_id, request)
+    elif window == 'commander_context':
+        monkeypatch.setenv(commander_context.COMMANDER_RUN_ID_ENV, f.run_id)
+        with pytest.raises(WorkUnitRefused, match='子上下文'):
+            work_unit_recovery.apply(f.base, '42', f.budget.unit_id, f.turn.turn_id, request)
+    else:
+        original_write = work_units._write
+        def crash(base, path, payload):
+            if path == f.budget.path:
+                raise OSError('在证明已写、账未发布处中断')
+            return original_write(base, path, payload)
+        with monkeypatch.context() as patcher:
+            patcher.setattr(work_units, '_write', crash)
+            with pytest.raises(OSError, match='账未发布'):
+                work_unit_recovery.apply(f.base, '42', f.budget.unit_id, f.turn.turn_id, request)
+        assert f.budget._read().turns[-1] == f.turn
+        assert work_unit_recovery.inspect(f.base, '42', f.budget.unit_id, f.turn.turn_id) == f.view
+        work_unit_recovery.apply(f.base, '42', f.budget.unit_id, f.turn.turn_id, request)
+        assert f.budget.used == 1 and f.budget._read().turns[-1].state == 'failed'
+
+
 def test_transient_failure_resumes_the_same_seat_without_a_new_session(
         base, corpus, monkeypatch):
     """connection reset 后同席 resume：同一 logical session、同一席位、两次 attempt。"""

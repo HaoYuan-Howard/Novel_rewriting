@@ -49,6 +49,8 @@ class _ModelSpec:
     label: str
     reasoning_efforts: tuple[AgentReasoningEffort, ...]
     execution_modes: tuple[str, ...] = (_STANDARD_MODE,)
+    # CLI 的上下文窗口后缀不是另一个模型；仅登记明确等价的回显，不做前缀猜测。
+    reported_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -74,6 +76,21 @@ class _ProbeResult:
 #: 完整稳定 id 与人读 label 分开。这里声明的是产品当前真正允许提交的组合；
 #: CLI 将来新增别名不会自动进入运行面，也不会静默改变旧审计记录的模型身份。
 _DRIVERS: tuple[_DriverSpec, ...] = (
+    _DriverSpec(
+        id='claude-code-glm',
+        provider='bigmodel',
+        label='Claude Code · 智谱 GLM',
+        executable='claude',
+        roles=('commander', 'executor'),
+        models=(
+            _ModelSpec(
+                id='glm-5.3-flash[1M]', label='GLM 5.3 Flash · 1M',
+                # 这里是 Claude CLI 请求档位；服务端未回显的 GLM 实际档位保持未知。
+                reasoning_efforts=('low', 'high', 'max'),
+                reported_ids=('glm-5.3-flash', 'glm-5.3-flash[1m]'),
+            ),
+        ),
+    ),
     _DriverSpec(
         id='claude-code',
         provider='anthropic',
@@ -127,6 +144,15 @@ def provider_for_driver(driver: AgentDriver) -> str:
     if spec is None:  # Pydantic 正常入口已会挡住；保留给内部关闭式调用。
         raise AgentProfileRefused(f'未知 agent driver {driver!r}')
     return spec.provider
+
+
+def reported_model_matches(profile: AgentProfile, actual_model: object) -> bool:
+    """实际回显只接受原 id 或登记过的上下文后缀等价名；不改写原始审计值。"""
+    spec = _DRIVER_BY_ID.get(profile.driver)
+    if spec is None or not isinstance(actual_model, str):
+        return False
+    model = next((row for row in spec.models if row.id == profile.model), None)
+    return model is not None and actual_model in (model.id, *model.reported_ids)
 
 
 def unreported_model_evidence_for_driver(

@@ -219,9 +219,9 @@ export function SettingsScreen() {
           <div>
             <div className="text-body font-semibold text-ink-2">两类 Executor</div>
             <div className="mt-4 text-body text-ink-4">
-              Agent CLI 使用 Claude Code / Codex；Legacy API 当前发布 DeepSeek。
+              Agent CLI 支持 Claude Code、Codex，以及通过 Claude Code 使用智谱 GLM；Legacy API 当前发布 DeepSeek。
               每个默认与节点覆盖都保存显式 <Mono>kind + profile</Mono>，运行时不会再靠
-              profile 是否为空猜模式。以后增加 GLM 时由后端 capability 发布新 provider。
+              profile 是否为空猜模式。可选模型与思考档位由后端 capability 提供。
             </div>
           </div>
           {capabilities.data.default_profiles === null ? (

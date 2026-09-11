@@ -59,7 +59,7 @@ CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1 = """\
 def agent_delivery_protocol(*, driver: str,
                             has_output_schema: bool) -> AgentDeliveryProtocol:
     """把 driver/schema 组合映射到唯一 stdin 交付协议。"""
-    if driver == 'claude-code' and has_output_schema:
+    if driver in ('claude-code', 'claude-code-glm') and has_output_schema:
         return CLAUDE_STRUCTURED_DELIVERY_V1
     return PLAIN_DELIVERY
 
