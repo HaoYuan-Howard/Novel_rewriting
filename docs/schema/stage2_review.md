@@ -5,8 +5,10 @@
 知识关联仍使用独立的 typed 关联决定，不扩展抽取主体。
 
 Blueprint Commander 的完整动作由 `novel/orchestrator/stage2_blueprint_wire.py` 下发原生
-JSON schema，知识关联使用 `KnowledgeLinkDecision.resolution` 的三种登记分支。接受与
-局部补丁继续进入同一现役 loader；补丁的字段缺席沿传输、落盘和 producer 保留，不能由
+JSON schema，知识关联使用 `KnowledgeLinkDecision.resolution` 的三种登记分支。运输格式
+`novel-stage2-blueprint-reviewer-v1` 用 ruling 关闭接受/返工参数的组合；关联 actor/reason
+只由运行代码复制本轮唯一审阅 actor/reason。旧完整回答原样复验，不替模型清除矛盾动作。
+接受与局部补丁继续进入同一现役 loader；补丁的字段缺席沿传输、落盘和 producer 保留，不能由
 schema 或序列化补成 `null`，也不靠放宽正式契约接纳格式错误。
 
 载体见 `contracts/schema/stage2_review.py`。Stage2ReviewScope 的 contract 为

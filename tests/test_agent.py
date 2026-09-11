@@ -4617,6 +4617,7 @@ def test_blueprint_paid_answer_survives_code_rollover_at_every_recovery_window(
         base, corpus, monkeypatch, window, legacy_first):
     """真实工作包/loader/账和零成本子进程；换代码绝不重购或改写已付费证据。"""
     from tests.test_reviewer_revalidation import install_blueprint_tasks, response_for
+    from tests.test_stage2_blueprint_wire import _wire_response
 
     # 运输恢复按真实协议登记；测试进程仍是零成本替身，不能伪造一个获准旧协议。
     real_invocation = _PlanningDriver.build_invocation
@@ -4651,6 +4652,9 @@ def test_blueprint_paid_answer_survives_code_rollover_at_every_recovery_window(
                 response['action']['payload']['knowledge_links']['reason'] = '与整轮审阅不一致的理由'
             if len(invocations) == 2:
                 assert '与整轮审阅不一致的理由' in invocation.stdin_text and 'typed' in invocation.stdin_text
+            if (not legacy_first or phase['value'] > 0) and (
+                    window != 'typed_rejection' or len(invocations) > 1):
+                response = _wire_response(response)
             on_registered()
             return CommanderProcessResult(exit_code=0, wire_evidence=True,
                 observation=CommanderObservation(
@@ -8257,6 +8261,9 @@ def _stage2_commander_unit(base, waiting_on=queue.WAITING_ON_STAGE2_REVIEW):
 
 
 def _stage2_work_unit_harness(base, monkeypatch, *, mode='invalid', both=False):
+    # 本夹具用 ordinal 模拟审阅内容，只测累计预算/连续会话；真实 Blueprint
+    # 运输与恢复由完整工作包夹具覆盖，不能把 ordinal 伪装成其合法 wire。
+    monkeypatch.setattr(agent.stage2_reviewer_wire, 'uses_compact_wire', lambda _task: False)
     from novel.work_units import WorkUnitBudget
     progress = {'node': 'stage2.global', 'loads': 0, 'applied': []}
     invocations = []

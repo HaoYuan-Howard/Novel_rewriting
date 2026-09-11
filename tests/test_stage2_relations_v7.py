@@ -277,7 +277,6 @@ def _business_chapters(artifact) -> dict[int, bytes]:
 
 def test_commander_sparse_patch_reaches_producer_without_clearing_other_fields(tmp_path):
     from novel.orchestrator import reviewer_tasks
-    from novel.orchestrator.stage2_blueprint_wire import response_model
     from tests.test_reviewer_tasks import _new_blueprint_options
 
     book = tmp_path / '平台_稀疏修订_1234567890123456789'
@@ -297,7 +296,6 @@ def test_commander_sparse_patch_reaches_producer_without_clearing_other_fields(t
     edit['chapters'] = edit['chapters'][:1]
     beat = before.blueprints[0].beats[0]
     edit['chapters'][0]['beat_patches'] = [{'beat_id': beat.beat_id, 'place': '订正后的院中'}]
-    response_model().model_validate(document)
     response_path = tmp_path / 'commander-response.json'
     response_path.write_text(json.dumps(document, ensure_ascii=False), encoding='utf-8')
     action = reviewer_tasks.load_action(response_path, current, submission_options=options)

@@ -6,6 +6,9 @@
 ``reviewer_tasks.load_action`` 仍拥有最终 binding 与业务判定。本模块只缩短
 Commander 必须返回的运输形状：
 
+本模块也分派 Blueprint 独立运输格式；其分支约束与审计字段组装只由
+``stage2_blueprint_wire`` 负责，最终仍共用同一 loader。
+
 * wrapper、collection SHA、review scope 与 subject SHA 等 immutable binding 都从
   ``submission_options[].exact_request`` 确定性注入；
 * Commander 只返回当前模板已经开放的 patch 行、collection operations、replacement
@@ -315,6 +318,8 @@ def wire_binding(task: _ReviewerTaskLike) -> Stage2ReviewerWireBinding:
 
 def uses_compact_wire(task: object) -> bool:
     """只按真实模板判断本轮是否属于 compact scope 或 apply-edit。"""
+    if getattr(task, 'waiting_on', None) == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
+        return True
     if stage2_scope_wire.exact_request(task) is not None:
         return True
     options = getattr(task, 'submission_options', None)
@@ -605,6 +610,9 @@ def prompt_addendum(task: object) -> str:
     不嵌 response schema；同一份 schema 会由 CLI 原生 structured-output 参数发送。
     示例只说明 envelope 与保留语义，业务行的精确闭集以该原生 schema 为准。
     """
+    if getattr(task, 'waiting_on', None) == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
+        from novel.orchestrator import stage2_blueprint_wire
+        return stage2_blueprint_wire.prompt_addendum()
     if stage2_scope_wire.exact_request(task) is not None:
         return stage2_scope_wire.prompt_addendum(task)
     if not uses_compact_wire(task):
@@ -1136,6 +1144,12 @@ def assemble(
     让 wrapper binding、GlobalEdit 业务 schema、sentinel、HARD 与 producer completeness
     保持唯一判定源。
     """
+    if getattr(task, 'waiting_on', None) == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
+        from novel.orchestrator import stage2_blueprint_wire
+        try:
+            return stage2_blueprint_wire.assemble(dict(response_document))
+        except ValueError as exc:
+            raise Stage2ReviewerWireError(str(exc)) from exc
     if stage2_scope_wire.exact_request(task) is not None:
         try:
             return stage2_scope_wire.assemble(task, response_document)

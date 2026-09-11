@@ -165,6 +165,12 @@ class ReviewRevalidation:
     def rebind(self, document: Mapping[str, Any]) -> dict[str, Any]:
         """先认旧包再换当前凭证；模型的决定、理由与编辑值逐字段原样保留。"""
         result = copy.deepcopy(dict(document))
+        if self.source['waiting_on'] == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
+            from novel.orchestrator import stage2_blueprint_wire
+            try:
+                result = stage2_blueprint_wire.assemble(result)
+            except ValueError as exc:
+                raise RevalidationRefused(str(exc)) from exc
         if (set(result) != {'schema', 'surface_seal', 'waiting_on', 'action'}
                 or result['surface_seal'] != self.source['surface_seal']
                 or result['waiting_on'] != self.source['waiting_on']):

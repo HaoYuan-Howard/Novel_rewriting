@@ -30,8 +30,9 @@ session 和 owner 停止证明，再比对原包和当前包；只有登记的�
 退休旧记录，两个记录之间中断可继续补尾。真实材料、finding、义务、裁决说明或输出 schema
 变化不属于这条恢复路径；格式或内容拒绝仍保存准确反馈，不把免费重验等同于验收通过。
 Blueprint 曾未向 CLI 下发完整动作 schema；`novel/orchestrator/stage2_blueprint_wire.py`
-登记补齐该同形状契约的免费重验入口。仅接受原 observation 协议摘要和未下发 schema 的
-冻结请求，不能借此兼容其他 schema。新的 provider 会话得到完整关联分支及稀疏补丁形状；
+登记已发布完整动作的免费重验入口。仅接受原 observation 协议摘要和未下发 schema 的
+冻结请求，或已登记完整 schema 的固定字节摘要，不能借此兼容其他 schema。
+新的 provider 会话得到完整关联分支及稀疏补丁形状；
 旧回答仍用原 JSON 免费校验，既不重写业务值，也不把格式失败归因于版本变化。
 
 `WorkUnitView` 统一发布 content_base_limit、content_granted、grant_count、content_used、
