@@ -1150,9 +1150,12 @@ def test_retired_adopter_cannot_touch_current_prepared_design_aggregate(
     formal_before = (book / STAGE4_BLIND_CANDIDATE).read_bytes()
 
     legacy_ctx = _legacy_ctx(book, 'stage4.design', paid=False)
+    from novel.stages.stage2.global_review import generation_grounding
     _truth, mapping = build_blind_projection(
         blueprints.model_dump(by_alias=True, mode='json'),
         root_clean_sha1=legacy_ctx.root_clean_sha1,
+        global_g=generation_grounding(ArtifactStore(legacy_ctx)).model_dump(
+            by_alias=True, mode='json'),
     )
     response = _retain_a_response(
         blueprints.model_dump(by_alias=True, mode='json'), mapping)

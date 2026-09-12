@@ -87,7 +87,7 @@ def test_old_version_keeps_reading_source_but_cannot_publish_review(incompatible
         assert payload['blueprint_state']['condition'] == 'unreadable'
         assert payload['_provenance'] is None
         assert payload['text_chars'] == len(payload['text']) > 0
-        assert payload['text'] == box.store.read_own(MainText, STAGE1_MAIN_TEXT).root[0].text
+        assert payload['text'] == box.store.read_own(MainText, STAGE1_MAIN_TEXT)[0].root[0].text
         response = client.get(f'/api/novels/{box.sid}/approvals/design/workpack')
         assert response.status_code >= 400, response.text
     _unchanged(box)

@@ -33,7 +33,8 @@ def test_current_review_progress_is_read_only_and_survives_http_restart(tmp_path
     assert review['review'] == dict(subject_sha256=expected.scope.scope_sha256,
                                    total=len(expected.scope.obligations),
                                    pending=len(expected.pending_obligation_ids),
-                                   decision_inherited=len(expected.inherited))
+                                   decision_inherited=len(expected.inherited),
+                                   plot_progress=None)
     assert budget.path.read_bytes() == before
     if not review['registered']:
         virtual = WorkUnitBudget(tmp_path, sid, 'stage2.global', 'commander', 'book')

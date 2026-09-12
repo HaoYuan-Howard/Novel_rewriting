@@ -124,7 +124,7 @@ def _response(task, decision):
             payload['chapters']['1'].update({
                 'decision': 'request_repair', 'reason': '场景目标没有承接事实义务',
                 'constraints': [{'code': 'scene_goal', 'scene_refs': ['c01s01'],
-                                 'opaque_aliases': [FACT], 'effect': None}],
+                                 'opaque_aliases': [FACT]}],
             })
         elif decision == 'replan':
             payload['strategy'].update({

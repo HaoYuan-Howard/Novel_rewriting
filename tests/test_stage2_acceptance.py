@@ -161,6 +161,21 @@ def test_current_workflow_report_cannot_enter_the_retired_five_run_acceptance() 
     assert result['claim_ready'] is False
 
 
+def test_current_plot_architecture_cannot_be_relabelled_as_a_historical_report() -> None:
+    from contracts.invariants import BLUEPRINT_ARCHITECTURE
+
+    reports = [_report(index) for index in range(5)]
+    for report in reports:
+        report['stage2']['architecture'] = BLUEPRINT_ARCHITECTURE
+        report['stage2']['expected_architecture'] = BLUEPRINT_ARCHITECTURE
+    result = A.evaluate(reports, manual_quality=_manual(reports),
+        baseline_seconds=3_044, minimum_speedup_percent=20)
+    assert result['stability']['state'] == 'fail'
+    assert all('expected_architecture_mismatch' in row['failures']
+               for row in result['stability']['observations'])
+    assert result['claim_ready'] is False
+
+
 def test_each_commander_gets_four_content_calls_and_network_attempts_do_not_count() -> None:
     reports = [_report(index) for index in range(5)]
     reports[0]['stage2']['commander']['calls'] = 12

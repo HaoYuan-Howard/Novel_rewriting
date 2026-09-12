@@ -430,9 +430,10 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         '/api/novels/{sid}/stage2/global-review',
         '/api/novels/{sid}/stage2/characters/edit',
         '/api/novels/{sid}/approvals/stage2-review',
-        # Stage2 v7 关系集合的 0-wire 完整替换与同尺 preview。
-        '/api/novels/{sid}/stage2/relations/edit',
-        '/api/novels/{sid}/stage2/relations/edit/preview',
+        # Blueprint 有据修订由 Stage2 持有；普通分场仍留在 Stage4。
+        '/api/novels/{sid}/stage2/blueprint/edit',
+        '/api/novels/{sid}/stage2/blueprint/edit/preview',
+        '/api/novels/{sid}/approvals/blueprint-refinement',
         # agent 代跑（行为在 `tests/test_api_agent.py`；preview 是 0 成本但仍是 POST）
         '/api/agent/runs',
         '/api/agent/runs/preview',

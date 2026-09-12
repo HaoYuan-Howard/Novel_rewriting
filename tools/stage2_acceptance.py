@@ -28,14 +28,13 @@ from typing import Any
 sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from contracts.invariants import (  # noqa: E402
-    BLUEPRINT_ARCHITECTURE, WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS,
-)
-
-
 REPORT_SCHEMA = 'novel-stage2-acceptance-v2'
 MANUAL_SCHEMA = 'novel-stage2-manual-quality-v1'
 WORKFLOW_SCHEMA = 'novel-workflow-metrics-v2'
+# 历史报告绑定当时的标准，不能随现役 Plot 架构/额度常量变化而重解释旧结果。
+# 这两个值不参与现役流水线执行或当前报告验收。
+HISTORICAL_BLUEPRINT_ARCHITECTURE = 'extraction-ir-v3.2'
+HISTORICAL_COMMANDER_MAX_CONTENT_CALLS = 4
 DEFAULT_MIN_RUNS = 5
 DEFAULT_TARGET_SECONDS = 30 * 60
 DEFAULT_MIN_SAMPLED_CHAPTERS = 5
@@ -124,7 +123,7 @@ def _run_observation(report: dict[str, Any]) -> dict[str, Any]:
         unknowns.append('not_target_run_scope')
     expected_architecture = stage2.get('expected_architecture')
     architecture = stage2.get('architecture')
-    if expected_architecture != BLUEPRINT_ARCHITECTURE:
+    if expected_architecture != HISTORICAL_BLUEPRINT_ARCHITECTURE:
         failures.append('expected_architecture_mismatch')
     if not isinstance(architecture, str):
         unknowns.append('architecture_unknown')
@@ -198,7 +197,7 @@ def _run_observation(report: dict[str, Any]) -> dict[str, Any]:
         used, limit = budget.get('content_used'), budget.get('content_limit')
         if type(used) is not int or type(limit) is not int:
             unknowns.append(f'{node}_content_budget_unknown')
-        elif limit != WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS or not 1 <= used <= limit:
+        elif limit != HISTORICAL_COMMANDER_MAX_CONTENT_CALLS or not 1 <= used <= limit:
             failures.append(f'{node}_content_budget_exceeded')
     commander_errors = commander.get('errors')
     if isinstance(commander_errors, int) and not isinstance(commander_errors, bool):

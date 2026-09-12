@@ -26,7 +26,7 @@ def _design_request(base):
     payload['chapters'][0].update({
         'decision': 'request_repair', 'reason': '当前章的具体入口事实需要重新安放',
         'constraints': [{'code': 'entry_anchor', 'scene_refs': [],
-                         'opaque_aliases': [FACT], 'effect': None}],
+                         'opaque_aliases': [FACT]}],
     })
     return DesignReviewRequest.model_validate(payload)
 

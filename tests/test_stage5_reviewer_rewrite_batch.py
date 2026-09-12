@@ -34,7 +34,7 @@ from tests.test_stage5_write_agent import _Driver, _payload, _profile
 
 
 def _dump(store, rel, artifact):
-    raw = artifact.model_dump(by_alias=True, mode='json', exclude_none=True)
+    raw = artifact.model_dump(by_alias=True, mode='json')
     if hasattr(artifact, 'provenance'):
         raw['_provenance'] = artifact.provenance.to_disk()
     path = store.path(rel)

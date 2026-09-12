@@ -54,7 +54,7 @@ def test_approval_show_is_a_read_only_json_surface(monkeypatch, capsys, tmp_path
 def test_headless_seen_and_early_gates_reuse_approval_services(
         monkeypatch, capsys, tmp_path):
     calls = []
-    seen_request = BlueprintSeenRequest(review_token='bpr4_' + 'b' * 64)
+    seen_request = BlueprintSeenRequest(review_token='bpr5_' + 'b' * 64)
     seen_path = tmp_path / 'blueprint-seen.json'
     seen_path.write_text(seen_request.model_dump_json(indent=2), encoding='utf-8')
     monkeypatch.setattr(
@@ -86,7 +86,7 @@ def _final_request() -> Stage2FinalReviewRequest:
     return Stage2FinalReviewRequest(
         actor='agent:final-seat', reason='独立通读全部 blocking 项与 Blueprint',
         global_review_token='s2gr1_' + 'c' * 64,
-        blueprint_review_token='bpr4_' + 'b' * 64)
+        blueprint_review_token='bpr5_' + 'b' * 64)
 
 
 def test_headless_global_seen_requires_and_parses_a_typed_subject(
@@ -171,7 +171,7 @@ def test_stage2_closure_checks_current_nodes_and_links_before_existing_services(
         ('gate', 'base', SID, 's0'),
         ('gate', 'base', SID, 's1'),
         ('seen', 'base', SID, 'read',
-         BlueprintSeenRequest(review_token='bpr4_' + 'b' * 64), None),
+         BlueprintSeenRequest(review_token='bpr5_' + 'b' * 64), None),
         ('seen', 'base', SID, 'global', None,
          Stage2GlobalSeenRequest(
              review_token='s2gr1_' + 'c' * 64, actor='global-commander')),

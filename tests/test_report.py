@@ -166,23 +166,23 @@ def test_a_valued_fix_route_without_an_argument_says_it_is_unavailable():
     assert route.unavailable_reason and '没有提供' in route.unavailable_reason
 
 
-def test_hinge_in_hole_carries_the_parsed_chapter_into_the_report(monkeypatch):
+def test_plot_evidence_carries_the_parsed_chapter_into_the_report(monkeypatch):
     from novel.stages.stage2.checks import finding as stage2_finding
 
     hit = stage2_finding(
-        'hinge_in_hole', detail='锚点落在漏抓区', evidence=['b11_02:「证据」'])
+        'plot_evidence', detail='共享证据锚点无法定位', evidence=['b11_02:「证据」'])
     assert hit.fix_args == {'--chapters': '11'}
     monkeypatch.setitem(acc.ACCOUNTING, 'stage2', ())
     rep = build(
         sid='7615069877019300633', node='stage2.blueprint', freshness=_fresh(),
-        outcomes=[ran('hinge_in_hole', [hit])],
+        outcomes=[ran('plot_evidence', [hit])],
     )
-    line = next(row for row in rep.rules if row.rule == 'hinge_in_hole')
+    line = next(row for row in rep.rules if row.rule == 'plot_evidence')
     assert line.fix is not None and line.fix.available
     assert line.fix.flags == ['--chapters', '11']
     from novel.views.inbox import _report_items
     inbox = _report_items(rep, 'stage2')
-    item = next(row for row in inbox if row.rule == 'hinge_in_hole')
+    item = next(row for row in inbox if row.rule == 'plot_evidence')
     assert item.kind == 'repairable' and '--chapters 11' in item.how
 
 

@@ -225,7 +225,7 @@ def test_stamp_chain_follows_current_gate_order_without_touching_stage3(monkeypa
     written = []
     seen = []
     pack = SimpleNamespace(
-        review_token='bpr4_' + 'b' * 64,
+        review_token='bpr5_' + 'b' * 64,
     )
     monkeypatch.setattr(
         approvals, 'mark_seen',
@@ -989,6 +989,11 @@ def test_final_gate_never_combines_old_typed_decision_with_new_unapproved_bytes(
     monkeypatch.setattr(box.approvals, '_require_typed_gate_decision', replace_after_typed_read)
     service_before = box.approvals._path(box.root, box.sid).read_bytes()
     with TestClient(create_app(box.root)) as client:
+        changed = client.get(f'/api/novels/{box.sid}/approvals')
+        assert changed.status_code == 409, changed.text
+        assert changed.json()['kind'] == 'ArtifactUnreadable'
+        assert '盘面发生变化' in changed.json()['message']
+        # 同请求内漂移不能拼接旧决定与新字节；重读稳定的新盘面仍须关闭该门。
         doc = _get_final_gate_doc(client, box)
     assert replaced
     assert doc['gate'][gate] is False

@@ -58,6 +58,7 @@ from novel.errors import (
 )
 from novel.orchestrator.agent import AgentBusy
 from novel.orchestrator.jobs import JobConflict
+from novel.stages.stage4.plot_refs import PlotReferenceRefused
 from novel.work_units import WorkUnitBudgetExhausted, WorkUnitRefused
 
 #: CSRF 闸门没过（`R-11.2`）。**不是一个异常** —— 它在请求进到业务代码**之前**就被拦下。
@@ -133,6 +134,9 @@ STATUS: dict[type[NovelError], int] = {
     #: ⚠ 500 的响应体里**只出类名与一句人话，不出栈**——那份正文是不外流的版权内容，
     #: 而栈里可能带着它。栈留在服务端日志里（`R-11.1` 第四条理由）。
     ProvenanceRefused: 500,
+    #: 正式计划的跨主体引用在编译后仍不闭合，是结构断言失败；候选阶段
+    #: 同一失败先落 placement_ref/typed repair，不借 HTTP 默认格掩盖编译器缺口。
+    PlotReferenceRefused: 500,
     #: accepted model 的独立 actual/session/ledger/driver 证据自相矛盾，
     #: 与一般来源账冲突同属代码或持久化契约错误，不是可重试的用户输入。
     AgentModelIdentityRefused: 500,

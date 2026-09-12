@@ -6,7 +6,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from novel import paths
+from novel import paths, stage2_run_state
 from novel.api.app import create_app
 from novel.llm import stage2_runs
 from novel.stages.stage2 import extract
@@ -56,14 +56,14 @@ def test_progress_survives_before_formal_commit_and_rejects_damaged_checkpoint(t
     assert snapshots[0] == snapshots[1]
     assert len(transport.calls) == 3
     inputs = read_input_digests(ArtifactStore(ctx))
-    changed = stage2_runs.plot_checkpoint_progress(ctx, run_id=ctx.run_id,
+    changed = stage2_run_state.plot_checkpoint_progress(ctx, run_id=ctx.run_id,
                                                    chapter=1, input_sha256='0' * 64)
     assert changed['state'] == 'expired'
     target = paths.stage2_blueprint_checkpoint_path(book, ctx.run_id, 'blueprint', 1)
     raw = json.loads(target.read_text(encoding='utf-8'))
     raw['response_payload']['blueprints'][0]['beats'][0]['content'] = '伪造剧情'
     target.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8')
-    damaged = stage2_runs.plot_checkpoint_progress(ctx, run_id=ctx.run_id, chapter=1,
+    damaged = stage2_run_state.plot_checkpoint_progress(ctx, run_id=ctx.run_id, chapter=1,
                                                   input_sha256=inputs['1'])
     assert damaged['state'] == 'unver'
     with TestClient(create_app(str(book.parent))) as http:

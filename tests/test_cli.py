@@ -309,7 +309,7 @@ def test_blueprint_cli_uses_real_global_acceptance_before_constructing_client(tm
     from tests.test_stage2_secret_edit import _seed
 
     initialize_workflow(tmp_path)
-    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
+    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'plot-blueprint-v1')
     book = tmp_path / '合成书_123'
     book.mkdir()
     _seed(book)

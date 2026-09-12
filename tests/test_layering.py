@@ -86,7 +86,7 @@ def test_invariants_and_artifact_paths_are_contract_leaves():
     artifact_path = os.path.join(ROOT, 'contracts', 'artifacts.py')
     invariant_imports = _import_paths(invariant_path)
     artifact_imports = _import_paths(artifact_path)
-    allowed_invariants = {'__future__', 'typing', 'contracts.artifacts'}
+    allowed_invariants = {'__future__', 're', 'typing', 'contracts.artifacts'}
     allowed_artifacts = {'__future__', 'typing'}
     assert invariant_imports <= allowed_invariants, (
         'contracts/invariants.py 长出了新依赖：'
@@ -274,6 +274,16 @@ _JSON_READ_ALLOWED = {
         '用户常用 Agent profiles 是当前 output base 的 `_service/` 设置，不是小说产物；'
         '读取保留 unset/configured/unreadable 三态并以原始字节 SHA-256 做 CAS，'
         '不进入 provenance，也不经 ArtifactStore 倒充 artifact'),
+    'novel/stage2_run_state.py': (
+        '只读解码 _service/runs 下的 Stage2 运行记录与验证后检查点；'
+        '它们不是正式产物，当前版本、自哈希和输入身份不闭合即 unver，'
+        '与 producer 共用载体协议，不含模型执行或 paid-response 恢复权威'),
+    'novel/stages/stage2/plot_sequence.py': (
+        '只解码调用方已构造在内存的章节请求 metadata，添加 entry_states 并冻结'
+        '本轮 compiler 允许引用的主体；原文/Global/状态来自已记账 producer 输入，不裸读产物'),
+    'novel/stages/stage2/plot_repair.py': (
+        '只解码内存章节请求 metadata 来附 baseline_identities；'
+        '修前蓝图、原文和修订模板均已通过 ArtifactStore/typed 路径读取，不打开盘上 JSON'),
     'novel/llm/stage2_runs.py': (
         'Stage2 验证后章节检查点与一次性 repair workpack 不是正式产物或普通缓存；'
         '它们在 `_service/runs/<sid>/stage2/` 按书、run_id 关闭式恢复，读取后仍须重跑'

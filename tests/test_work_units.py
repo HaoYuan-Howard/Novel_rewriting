@@ -115,7 +115,7 @@ def test_budget_survives_candidate_session_and_producer_changes(tmp_path):
     with pytest.raises(WorkUnitBudgetExhausted):
         WorkUnitBudget(tmp_path, '42', 'stage2.global', 'commander', 'book').reserve(
             sha('fifth'), run_id='another-epoch')
-    assert WorkUnitBudget(tmp_path, '42', 'stage2.blueprint', 'commander', 'book').remaining == 4
+    assert WorkUnitBudget(tmp_path, '42', 'stage2.blueprint', 'commander', 'chapter:1').remaining == 4
 
 
 def test_reserved_unknown_cannot_be_reissued_after_restart(tmp_path):

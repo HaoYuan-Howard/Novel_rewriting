@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from novel import runtime_layout
 import copy
-import hashlib
 import json
 import os
 import tempfile
@@ -47,8 +46,11 @@ from novel.errors import (
 from novel.llm.json_text import normalize_json_text
 from novel.run_identity import check_run_id
 
-VERSION = 1
-RUN_FILE = 'run.json'
+from novel.stage2_run_state import (
+    VERSION, RUN_FILE, canonical_bytes as _canonical_bytes,
+    checkpoint_sha256 as _checkpoint_hash, read_state as _read_json,
+    state_sha256 as _sha,
+)
 MANIFEST_FILE = 'repair_manifest.json'
 RESOLUTION_FILE = 'batch_resolution.json'
 COMMITTED_FILE = 'committed.json'
@@ -144,18 +146,6 @@ def repair_ownership_lock(novel_dir: Path):
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
-
-
-def _canonical_bytes(value: Any) -> bytes:
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
-    ).encode('utf-8')
-
-
-def _sha(value: Any) -> str:
-    return hashlib.sha256(
-        value if isinstance(value, bytes) else _canonical_bytes(value)
-    ).hexdigest()
 
 
 def _is_sha256(value: Any) -> bool:
@@ -500,20 +490,6 @@ def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
         except FileNotFoundError:
             pass
         raise
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        raw = path.read_bytes()
-        value = json.loads(raw.decode('utf-8'))
-    except FileNotFoundError:
-        raise UpstreamMissing(f'{path} 不在盘上') from None
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ArtifactUnreadable(f'Stage2 run 状态 {path} 读不出来：{exc}') from exc
-    if not isinstance(value, dict) or value.get('version') != VERSION:
-        raise ArtifactUnreadable(
-            f'Stage2 run 状态 {path} 不是当前内部 v{VERSION} 对象；不猜旧形状')
-    return value
 
 
 def _materialize_run_root(novel_dir: Path, run_id: str) -> Path:
@@ -899,47 +875,6 @@ def _checkpoint_identity(
         run = _read_json(_run_root(ctx) / RUN_FILE)
         identity['input_projection_sha256'] = (run.get('input_projections') or {}).get(str(chapter))
     return identity
-
-
-def _checkpoint_hash(payload: Mapping[str, Any]) -> str:
-    return _sha({key: value for key, value in payload.items()
-                 if key not in ('created_at', 'checkpoint_sha256')})
-
-
-def plot_checkpoint_progress(ctx: Any, *, run_id: str, chapter: int,
-                             input_sha256: str) -> dict[str, Any]:
-    """只读校验检查点载体及当前输入。不是已购响应的恢复许可或语义接受证明。"""
-    result = dict(chapter_ordinal=chapter, run_id=run_id, state='missing', reason=None)
-    root = paths.stage2_blueprint_run_path(ctx.novel_dir, check_run_id(run_id))
-    try:
-        run = _read_json(root / RUN_FILE)
-        if (run.get('architecture') != 'plot-blueprint-v1'
-                or run.get('sid') != ctx.sid or run.get('run_id') != run_id):
-            raise ProvenanceRefused('章节运行记录的书或契约身份不一致')
-        projected = (run.get('input_projections') or {}).get(str(chapter))
-        if projected is None:
-            return {**result, 'state': 'unver', 'reason': '运行记录缺章节消费身份'}
-        if projected != input_sha256:
-            return {**result, 'state': 'expired', 'reason': '当前原文或共享输入已变化'}
-        phase = 'repair' if run.get('operation') in ('chapters-refresh', 'commander-rework') else 'blueprint'
-        target = paths.stage2_blueprint_checkpoint_path(ctx.novel_dir, run_id, phase, chapter)
-        if not target.exists():
-            return result
-        record = _read_json(target)
-        if (record.get('checkpoint_sha256') != _checkpoint_hash(record)
-                or record.get('response_payload_sha256') != _sha(record.get('response_payload'))
-                or record.get('run_id') != run_id or record.get('sid') != ctx.sid
-                or record.get('chapter') != chapter or record.get('phase') != phase
-                or record.get('architecture') != 'plot-blueprint-v1'
-                or record.get('input_projection_sha256') != projected):
-            raise ArtifactUnreadable('章节检查点内容与身份摘要不闭合')
-        if record.get('code') != ctx.code:
-            return {**result, 'state': 'unver', 'reason': '代码验证身份变化，等待免费复检'}
-        if record.get('scope_violation') is not None:
-            return {**result, 'state': 'unver', 'reason': '检查点记录了章节范围问题'}
-        return {**result, 'state': 'current'}
-    except (TerminalState, OSError, ValueError) as exc:
-        return {**result, 'state': 'unver', 'reason': str(exc)}
 
 
 def _validate_channel_text(

@@ -786,7 +786,11 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
     assert result.returncode == 0, result.stdout + result.stderr
     default_nodes = (
         'test_system_prompt_contains_every_current_style_word',
-        'test_clean_compiled_plan_closes_all_new_scene_hard_rules',
+        'test_identity_source_order_is_not_automatically_a_hard_violation',
+        'test_scene_compiler_refuses_incomplete_or_duplicate_placement',
+        'test_split_state_requires_specific_binding_and_does_not_default_to_first_scene',
+        'test_knowledge_trigger_must_bind_to_its_parent_delivery',
+        'test_budget_allocator_postconditions_are_green_at_the_production_checker',
         'test_revalidate_promotes_only_plan_without_llm_or_context',
         'test_synthetic_stage6_gate_blocks_only_when_every_candidate_is_dirty',
         'test_synthetic_semantic_finding_can_be_marked_without_current_corpus',

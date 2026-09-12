@@ -26,7 +26,7 @@ from contracts.invariants import (
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
     AgentCapabilitiesResponse, AgentDriverCapability, AgentModelCapability,
-    AgentRunRequest, ApprovalDoc, ApprovalWorkpack, DesignReviewTemplate,
+    AgentRunRequest, AgentRunList, ApprovalDoc, ApprovalWorkpack, BlueprintReviewWorkpack, DesignReviewTemplate,
     DraftAlignView, DraftView, ErrorBody, GlobalView, NovelOverview,
     JobList, LogChunk, LogStreamEvent, NovelList, PreviewRequest, ReadingView,
     LegacyModelCapability, LegacyProviderCapability, LegacyThinkingCapability,
@@ -42,6 +42,7 @@ from contracts.schema.orchestration import (
     AgentProfile, AgentRunStart, ArtifactState, JobStart, RunProgressView, Step,
 )
 from contracts.schema.report import CheckReport
+from contracts.schema.run_metrics import RunMetricsView
 from contracts.schema.stage5 import ChapterSegment
 
 
@@ -118,6 +119,10 @@ def test_plot_flow_fixtures_are_closed_current_http_and_review_views():
         'http:stage1': Stage1View,
         'http:stage2/global': GlobalView,
         'http:run': RunProgressView,
+        'http:run/metrics': RunMetricsView,
+        'http:stage2/blueprint-review-workpack?scope=chapter%3A1': BlueprintReviewWorkpack,
+        'api:jobs': JobList,
+        'api:agent/runs': AgentRunList,
         'http:check/stage2': CheckReport,
         'http:check/stage5': CheckReport,
     }
@@ -128,6 +133,52 @@ def test_plot_flow_fixtures_are_closed_current_http_and_review_views():
         check = CheckReport.model_validate(captured['http:check/' + stage])
         assert [line.rule for line in check.rules] == sorted(
             rule.rule for rule in REGISTRY.of_stage(stage))
+
+
+def test_plot_flow_keeps_its_synthetic_source_semantics_through_context():
+    """已知合成书的语义回归；证据坐标与 schema 合法不证明剧情归属正确。"""
+    captured = json.loads((ROOT / 'web/src/fixtures/plot_v1/flow.json').read_text(
+        encoding='utf-8'))
+    sources = {ordinal: captured[f'http:reading/{ordinal}']['text']
+               for ordinal in range(1, 4)}
+    assert '信上说父亲已经回城。' in sources[1]
+    assert '其实母亲早就知道那封信的事。' in sources[2]
+    world = captured['http:stage2/global']
+    assert {row['char_id']: (row['canonical'], row['role'])
+            for row in world['characters']} == {
+        'char_001': ('李宝珠', '李宝珠，在家中翻阅账册'),
+        'char_002': ('母亲', '李宝珠的母亲'),
+    }
+    assert world['setting']['时代背景'] == '原文未明确年代'
+    assert world['world_rules'] == []
+    assert len(world['secrets']) == 1
+    secret = world['secrets'][0]
+    assert secret['fact'] == '母亲早就知道那封信的事。'
+    assert secret['first_reveal_chapter'] == 2
+    assert [(event['subject_kind'], event['subject']['raw'], event['known_from_chapter'])
+            for event in secret['knowledge_events']] == [('character', 'char_002', 2)]
+    assert [(row['valid_from_chapter'], row['visibility']['from_chapter'])
+            for row in world['relations']] == [(2, 2)]
+
+    pending = [world]
+    located = 0
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            evidence = item.get('source')
+            if isinstance(evidence, dict):
+                source = sources[item['chapter_ordinal']]
+                assert source[evidence['start']:evidence['end']] == evidence['text']
+                located += 1
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+    assert located > 0
+    for ordinal in sources:
+        chapter = captured[f'http:reading/{ordinal}']['blueprint']
+        planned = captured[f'http:stage4/{ordinal}']
+        assert planned['plan_chapter']['chapter_rewrite_brief'] == chapter['chapter_function']
+        assert planned['ctx_chapter']['chapter_rewrite_brief'] == chapter['chapter_function']
 
 
 def test_active_stage5_fixtures_are_exact_slim_http_views():

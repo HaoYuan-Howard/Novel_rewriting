@@ -227,15 +227,31 @@ def test_static_mutations_are_rejected_by_knowledge_edit_schema():
 
 def test_three_repair_owners_keep_exactly_two_commander_seats():
     from contracts.schema.api import Stage2NodeReviewRequest
+    from contracts.invariants import PLOT_REVIEW_DIMENSIONS
     from pydantic import ValidationError
     for reviewer, owners in (
         ('stage2.global', ('stage2.characters', 'stage2.global')),
         ('stage2.blueprint', ('stage2.characters', 'stage2.global', 'stage2.blueprint')),
     ):
         for owner in owners:
-            Stage2NodeReviewRequest(node=reviewer, review_token='current-token',
-                                    decision='rework', actor='test:reviewer', reason='原文有据的定向返工',
-                                    owner=owner, chapter_ordinals=[1] if owner == 'stage2.blueprint' else [])
+            reason = '原文有据的定向返工'
+            scoped = {} if reviewer == 'stage2.global' else {
+                'scope': 'chapter:1', 'plot_review': {
+                    'decision': 'revise', 'reason': reason,
+                    'coverage': {name: {'state': 'issue', 'issue_refs': ['new:1']}
+                                 if name == 'attribution' else {'state': 'pass', 'issue_refs': []}
+                                 for name in PLOT_REVIEW_DIMENSIONS},
+                    'new_issues': [{'issue_key': 'new:1', 'dimension': 'attribution',
+                        'problem': reason, 'subjects': [{'kind': 'beat', 'ref': 'b01_01'}],
+                        'evidence_refs': [{'chapter_ordinal': 1, 'evidence_ref': 'e01_01'}]}],
+                    'dispositions': []}}
+            request = Stage2NodeReviewRequest(node=reviewer, review_token='current-token',
+                decision='rework', actor='test:reviewer', reason=reason,
+                owner=owner, chapter_ordinals=[1] if owner == 'stage2.blueprint' else [], **scoped)
+            assert request.node == reviewer and request.owner == owner
+            if reviewer == 'stage2.blueprint':
+                assert request.scope == 'chapter:1'
+                assert set(type(request.plot_review.coverage).model_fields) == set(PLOT_REVIEW_DIMENSIONS)
     with pytest.raises(ValidationError):
         Stage2NodeReviewRequest(node='stage2.characters', review_token='current-token',
                                 decision='accept', actor='test:reviewer', reason='不能新增第三席')

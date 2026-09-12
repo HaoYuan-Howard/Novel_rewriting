@@ -13,7 +13,7 @@ from novel.store import ArtifactStore
 
 
 def get(base: str, sid: str, units: list[dict] | None) -> BlueprintRunProgress:
-    from novel.llm.stage2_runs import plot_checkpoint_progress
+    from novel.stage2_run_state import plot_checkpoint_progress
     from novel.stages.stage2.plot_inputs import read_input_digests
 
     missing = BlueprintRunProgress(artifact_state='unreadable', chapters=[])

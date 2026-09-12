@@ -8301,18 +8301,22 @@ def _stage2_work_unit_harness(base, monkeypatch, *, mode='invalid', both=False):
         progress['loads'] += 1
         if mode in {'invalid', 'repeat'} or (both and ordinal % 4 != 0):
             raise agent.reviewer_tasks.ReviewerTaskError('typed 字段仍未完整：' + str(ordinal))
-        from contracts.artifacts import STAGE2_BLUEPRINT_RELATION_EDIT
+        from contracts.artifacts import STAGE2_BLUEPRINT_EDIT
+        from tests.test_plot_blueprint import chapter_response
         payload = ({'actor': 'agent:test', 'reason': f'轮次:{ordinal}',
                     'characters': [{'char_id': 'char_001', 'fate': '订正结局'}]}
                    if progress['node'] == 'stage2.global' else {
                        'actor': 'agent:test', 'reason': f'轮次:{ordinal}',
-                       'review_token': 'brt1_' + 'a' * 64,
-                       'chapters': [{'chapter_ordinal': 1, 'constraints': []}]})
+                       'review_token': 'bpe1_' + 'a' * 64,
+                       'chapters': [{'chapter': chapter_response(), 'identities': [
+                           {'collection': 'beats', 'kind': 'preserve',
+                            'old_refs': [f'b01_0{index}'], 'new_keys': [f'b{index}']}
+                           for index in (1, 2)]}]})
         return agent.reviewer_tasks.ReviewerNodeAction(
             kind='node', node=progress['node'], flags=('--apply-edit', '@reviewer-input'),
             input_payload=encode_artifact(
                 STAGE2_GLOBAL_EDIT if progress['node'] == 'stage2.global'
-                else STAGE2_BLUEPRINT_RELATION_EDIT, payload))
+                else STAGE2_BLUEPRINT_EDIT, payload))
     monkeypatch.setattr(agent.reviewer_tasks, 'load_action', load_action)
 
     def execute(_base, _sid, action, _run_token, *, reviewer_action_record_path=None):

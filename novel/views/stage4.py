@@ -22,6 +22,7 @@ from contracts.artifacts import (
 )
 
 import os
+from pathlib import Path
 
 from contracts.schema.api import (
     CtxChapterView, PlanChapterLine, PlanSceneLine, Stage4IndexRow, Stage4View,
@@ -38,11 +39,11 @@ from novel.stages.stage4.beats import beat_index
 from novel.stages.stage4.context import build_writer_context
 from novel.stages.stage4.measure import (
     computed_structure_change_kinds, identity_plan, semantic_contract_of,
-    structure_metrics_of, structure_review_subject_sha256,
+    structure_metrics_of,
 )
 from novel.stages.stage5.prompts import target_band
 from novel.stages.stage5.measure import chapter_basis
-from novel.store import ArtifactStore
+from novel.store import ArtifactStore, readonly_snapshot_memo
 
 NODE = 'stage4.plan'
 PLAN_REL = STAGE4_PLAN_CHAPTERS
@@ -54,13 +55,26 @@ GLOBAL_GROUNDING = STAGE2_GLOBAL_GROUNDING
 
 def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4View:
     """S-07 的一章。**纯读**：恒等基线现算在内存里，一个字节不落盘。"""
+    from novel.orchestrator.inspection import read_surface_seal
+
     novel_dir = paths.resolve_novel_dir(base, sid)
-    store = ArtifactStore(readonly_ctx(novel_dir, NODE, prov.code_version()))
+    code = prov.code_version()
+    before = read_surface_seal(base, sid, code=code)
+    with readonly_snapshot_memo(novel_dir, code=code):
+        result = _stage4_view(novel_dir, ordinal, code)
+    if read_surface_seal(base, sid, code=code) != before:
+        raise SourceConflict('读取设计页面期间材料变化，请刷新')
+    return result
+
+
+def _stage4_view(novel_dir: Path, ordinal: int, code: str) -> Stage4View:
+    store = ArtifactStore(readonly_ctx(novel_dir, NODE, code))
 
     plan_state = artifact_state(store, PLAN_REL)
     ctx_state = artifact_state(store, CTX_REL)
     unavailable = None
-    blueprints = store.read(ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True)
+    blueprint_art, blueprint_raw = store.read_own(ChapterBlueprints, BLUEPRINTS)
+    blueprints = blueprint_art.model_dump(by_alias=True)
     blueprint_by_ordinal = {
         int(row['chapter_ordinal']): row
         for row in blueprints['blueprints']
@@ -77,22 +91,15 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
         if binding.status != 'bound':
             raise ArtifactUnreadable(
                 '正式 Plan 的最终结构审阅面要求 status=bound EvidenceBinding')
-        from novel.stages.stage4.binding_input_contract import inspect_binding_input_contract
-
-        binding_contract = inspect_binding_input_contract(binding)
-        # 屏仍展示这份正式 Plan 的同快照主体；它不是审阅许可。旧/未知
-        # 输入契约保持原业务 hash，审批服务会因 B 非 fresh 拒发 current token；
-        # 新回执才产生新的契约身份。不可把历史计划伪装为 identity 基线。
-        from novel.orchestrator.approvals import _structure_workpack_snapshot
-        from novel.consumption import consumed_digest
+        from novel.orchestrator.approvals import _structure_snapshot_from_artifacts
         try:
-            snapshot = _structure_workpack_snapshot(novel_dir)
+            snapshot = _structure_snapshot_from_artifacts(
+                store, (plan_art, _raw), (binding, _binding_raw),
+                (blueprint_art, blueprint_raw))
         except NovelError as exc:
             structure_subject = None
             unavailable = str(exc)
         else:
-            if consumed_digest(_raw) != snapshot.plan_payload_sha256:
-                raise SourceConflict('读取设计页面期间计划变化，请刷新')
             structure_subject = snapshot.subject_sha256
         plan_raw = plan_art.model_dump(by_alias=True)
         identity = False

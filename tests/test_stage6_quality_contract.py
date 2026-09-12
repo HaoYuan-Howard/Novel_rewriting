@@ -152,10 +152,7 @@ def test_hook_secret_literal_uses_the_shared_number_ruler_and_own_bytes():
 def test_story_map_consumes_scenes_keeps_slots_and_strips_private_rationale():
     goal = {
         'intent': 'advance',
-        # Stage6 consumes the writer-facing CtxGoal.  Typed PlanGoal IDs have
-        # already been resolved by Stage4 and must not be reintroduced here.
-        'facts': ['她在门口收到一封匿名信。'],
-        'rationale': '这是只供审计的自由理由，不得下发',
+        'subject_refs': [], 'anchor_beat_ref': 'b01_01', 'anchor_scene_ref': 's01',
     }
     rows = prompts.story_map({'chapters': [{
         'output_ordinal': 1,
@@ -165,26 +162,30 @@ def test_story_map_consumes_scenes_keeps_slots_and_strips_private_rationale():
         'end_hook_goal': goal,
         'semantic_contract': {'chapter_function': '建立匿名信冲突'},
         'chapter_rewrite_brief': '先显露匿名信，再完成反应。',
+        'rationale': '这是只供审计的自由理由，不得下发',
+        'beats': [{'beat_ref': 'b01_01', 'content': '她收到匿名信后决定追查。'}],
         'scenes': [
             {'slot': 's01', 'purpose': '显露匿名信',
-             'required_facts': ['事实一'], 'turn_fact': '事实一', 'exit_state': []},
+             'deliveries': [{'beat_ref': 'b01_01', 'presentation_instruction': '呈现收到信'}],
+             'turn_beat_ref': 'b01_01', 'state_events': []},
             {'slot': 's02', 'purpose': '完成反应',
-             'required_facts': ['事实二'], 'turn_fact': '事实二', 'exit_state': ['她决定追查']},
+             'deliveries': [{'beat_ref': 'b01_01', 'presentation_instruction': '呈现决定追查'}],
+             'turn_beat_ref': 'b01_01', 'state_events': [],
+             'rationale': '内部设计理由'},
         ],
     }]})
     assert rows[0]['semantic_contract'] == {'chapter_function': '建立匿名信冲突'}
     assert rows[0]['chapter_rewrite_brief'] == '先显露匿名信，再完成反应。'
-    assert rows[0]['scenes'] == [
-        {'slot': 's01', 'purpose': '显露匿名信', 'required_facts': ['事实一'],
-         'turn_fact': '事实一', 'exit_state': []},
-        {'slot': 's02', 'purpose': '完成反应', 'required_facts': ['事实二'],
-         'turn_fact': '事实二', 'exit_state': ['她决定追查']},
+    assert rows[0]['beats'] == [{'beat_ref': 'b01_01', 'content': '她收到匿名信后决定追查。'}]
+    assert [(scene['slot'], scene['purpose'], scene['deliveries'], scene['turn_beat_ref'], scene['state_events'])
+            for scene in rows[0]['scenes']] == [
+        ('s01', '显露匿名信', [{'beat_ref': 'b01_01', 'presentation_instruction': '呈现收到信'}], 'b01_01', []),
+        ('s02', '完成反应', [{'beat_ref': 'b01_01', 'presentation_instruction': '呈现决定追查'}], 'b01_01', []),
     ]
+    assert 'rationale' not in rows[0]
+    assert all('rationale' not in scene for scene in rows[0]['scenes'])
     for key in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
-        assert rows[0][key] == {
-            'intent': 'advance',
-            'facts': goal['facts'],
-        }
+        assert rows[0][key] == goal
         assert 'rationale' not in rows[0][key]
 
 
@@ -194,28 +195,30 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
             {
                 'output_ordinal': 1,
                 'from_source_ordinals': [2],
-                'chapter_goal': {'intent': 'advance', 'facts': ['事件：收到信。']},
-                'open_hook_goal': {'intent': 'open', 'facts': ['事件：从匿名信开场。']},
-                'end_hook_goal': {'intent': 'close', 'facts': ['事件：发现落款。']},
+                'chapter_goal': {'intent': 'advance', 'subject_refs': [], 'anchor_beat_ref': 'b01_01', 'anchor_scene_ref': 's01'},
+                'open_hook_goal': {'intent': 'open', 'subject_refs': [], 'anchor_beat_ref': 'b01_01', 'anchor_scene_ref': 's01'},
+                'end_hook_goal': {'intent': 'close', 'subject_refs': [], 'anchor_beat_ref': 'b01_01', 'anchor_scene_ref': 's01'},
                 'semantic_contract': {'chapter_function': '发现匿名信与落款'},
                 'chapter_rewrite_brief': '从匿名信切入，再揭示落款。',
+                'beats': [{'beat_ref': 'b01_01', 'content': '她在枕下发现匿名信，落款是仇人的名字。'}],
                 'scenes': [{
                     'slot': 's01', 'purpose': '发现匿名信',
-                    'required_facts': ['她在枕下发现匿名信。', '信的落款是仇人的名字。'],
-                    'turn_fact': '信的落款是仇人的名字。', 'exit_state': [],
+                    'deliveries': [{'beat_ref': 'b01_01', 'presentation_instruction': None}],
+                    'turn_beat_ref': 'b01_01', 'state_events': [],
                 }],
             },
             {
                 'output_ordinal': 2,
                 'from_source_ordinals': [3],
-                'chapter_goal': {'intent': 'advance', 'facts': ['事件：追查写信者。']},
-                'open_hook_goal': {'intent': 'open', 'facts': ['事件：当面对质。']},
-                'end_hook_goal': {'intent': 'close', 'facts': ['事件：对方承认一半。']},
+                'chapter_goal': {'intent': 'advance', 'subject_refs': [], 'anchor_beat_ref': 'b02_01', 'anchor_scene_ref': 's01'},
+                'open_hook_goal': {'intent': 'open', 'subject_refs': [], 'anchor_beat_ref': 'b02_01', 'anchor_scene_ref': 's01'},
+                'end_hook_goal': {'intent': 'close', 'subject_refs': [], 'anchor_beat_ref': 'b02_01', 'anchor_scene_ref': 's01'},
                 'semantic_contract': {'chapter_function': '追查写信者'},
                 'chapter_rewrite_brief': '在城门完成追查。',
+                'beats': [{'beat_ref': 'b02_01', 'content': '她去城门找人，当面对质后对方承认了一半。'}],
                 'scenes': [{'slot': 's01', 'purpose': '找到写信者',
-                            'required_facts': ['她去城门找人。'],
-                            'turn_fact': '她去城门找人。', 'exit_state': []}],
+                            'deliveries': [{'beat_ref': 'b02_01', 'presentation_instruction': None}],
+                            'turn_beat_ref': 'b02_01', 'state_events': []}],
             },
         ],
     }
@@ -245,11 +248,12 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
     packet = json.loads(user.split('\n\n', 1)[1])
     assert packet['source_hook'].startswith('原作文案')
     assert packet['story_truth'] == grounding
-    assert packet['whole_story_map'][1]['scenes'][0]['required_facts'] == ['她去城门找人。']
+    assert packet['whole_story_map'][1]['beats'] == ctx['chapters'][1]['beats']
+    assert packet['whole_story_map'][1]['scenes'][0]['deliveries'] == ctx['chapters'][1]['scenes'][0]['deliveries']
     assert packet['whole_story_map'][0]['scenes'][0]['slot'] == 's01'
     assert packet['whole_story_map'][0]['chapter_goal'] == {
         'intent': 'advance',
-        'facts': ['事件：收到信。'],
+        'subject_refs': [], 'anchor_beat_ref': 'b01_01', 'anchor_scene_ref': 's01',
     }
     assert 'fact_refs' not in packet['whole_story_map'][0]['chapter_goal']
     assert packet['story_truth']['source_blurb']['facts'][0]['claim'] in user
@@ -287,8 +291,10 @@ def test_weak_fact_attribution_metric_compares_gift_phrase_to_story_map():
         story_truth={'entities': {'characters': {
             'c1': {'canonical': '阿宁', 'address': []},
         }}},
-        story_map=({'chapter': 1, 'scenes': [{
-            'slot': 's01', 'required_facts': ['阿宁送给小禾玉佩。']} ]},),
+        story_map=({'chapter': 1,
+                    'beats': [{'beat_ref': 'b01_01', 'content': '阿宁送给小禾玉佩。'}],
+                    'scenes': [{'slot': 's01', 'deliveries': [{'beat_ref': 'b01_01',
+                                                            'presentation_instruction': None}]}]},),
     )
     outcomes = checks.check(
         texts=[('候选', '阿宁送给小禾玉佩。', [])],

@@ -50,7 +50,7 @@ CONTRACT_TEXT: Mapping[str, str] = {
 3. beats.content 是唯一完整剧情正文。普通因果、动作及即时反应保持整体；辅助状态仅表示持续作用，modality 不授予传播权限。原文有据的重要知识边界不得被合并抹去，后台真相、人物信念、自称和读者揭示不能混同。
 4. 普通 Stage4 换场或多 delivery 呈现不修改蓝图，不要求重新抽取。只有原文有据的错漏、归因错误或必要独立边界缺失才派修 stage2.blueprint；人物注册或共享知识错误分别归 stage2.characters、stage2.global。具体问题必须带主体与证据。Stage4 转交的疑点尚未证实，A 也没有读过原文；必须独立反查原文，误报明确 withdrawn，仅呈现安排问题撤销上游派修。无原文依据的新剧情要求拒绝，不能借修订制造真相。
 5. KnowledgeLinks 仅关联当前 pending 的必要知识主体。at_beats 用 candidate_subject_refs 中的节点明确 trigger_beat_ref；at_entry 只允许开放的 entry_subject_refs。不得根据事实首次出现猜测所有内容已知；伏笔不能携带未来答案。证据不足保持 unresolved 和 unver。
-6. 章级 accept 与跨章 accept 分开；全部章审有效接受仍不替代跨章反查原文。各范围使用自己的持久预算，返修、换会话或 epoch 不重置用量。已购响应优先免费恢复。未知使用 uncertain，必要停止使用 stop；不得把它们解释为再次生成。''',
+6. 章级 accept 与跨章 accept 分开；全部章审有效接受仍不替代跨章反查原文。各范围使用自己的持久预算，基础四次内容额度加已生效的不可变人工追加，模型不能自行加额；返修、换会话或 epoch 不重置用量，同受已授权总额度约束。有效历史范围接受由后端按实际消费依赖继承，修改或删除旧问题仍须复审；不以逐节点回执继承接受。已购响应优先免费恢复。未知使用 uncertain，必要停止使用 stop；不得把它们解释为再次生成。''',
     'stage4-design': '''1. 策略只决定 `accept / request_replan`。只有策略本身无法指导全书结构重构时才拒绝；单章问题不得
    借策略决定放大成整书重跑。
 2. 每章决定 `accept / request_repair`。拒绝理由必须指出该章可核证的问题；约束只选服务端枚举的

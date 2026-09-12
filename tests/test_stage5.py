@@ -145,7 +145,7 @@ def test_paragraph_budget_has_an_exact_shared_boundary_and_a_red_counterexample(
             'paragraph_count_report', 'paragraph_budget_missed']
 
 
-# ────────── 事实原子：「提不出」与「提错了」是两个层的账 ──────────
+# ────────── 节点词面探针：源文无据与下游未命中分属两层 ──────────
 
 def test_a_bad_upstream_atom_is_reported_as_stage2s_bill_not_as_ours():
     """⭐ **反例样本**：原子在**源章原文**里都找不到 ⇒ 抽取那一步错了。
@@ -159,7 +159,8 @@ def test_a_bad_upstream_atom_is_reported_as_stage2s_bill_not_as_ours():
     entry = {'output_ordinal': 1,
              'characters': [{'char_id': 'c1', 'display_name': '顾堇', 'role': '主角'}],
              'narration': [{'segment': '全章', 'grammatical_person': 'third'}],
-             'scenes': [{'slot': 's01', 'required_facts': ['顾堇打翻了茶盏']}]}
+             'beats': [{'beat_ref': 'b01_01', 'content': '顾堇打翻了茶盏'}],
+             'scenes': [{'slot': 's01', 'beat_refs': ['b01_01']}]}
     book = M.Book(title='t', ctx={'chapters': [entry]}, measurable={},
                   source_text={1: '这一章原文里根本没有那个人。'}, secrets=[])
     entry['from_source_ordinals'] = [1]
@@ -206,7 +207,10 @@ def _hook_book(facts, *, slots=('s01', 's02')):
         'narration': [{'segment': '全章', 'grammatical_person': 'third'}],
         'characters': [{'char_id': 'c1', 'display_name': '顾堇', 'role': '主角'}],
         'scenes': [{'slot': sl} for sl in slots],
-        'end_hook_goal': {'intent': 'open', 'facts': list(facts)},
+        'beats': [{'beat_ref': 'b01_01', 'content': '；'.join(facts)}] if facts else [],
+        'end_hook_goal': {'intent': 'open', 'anchor_beat_ref': 'b01_01' if facts else None,
+                          'anchor_scene_ref': slots[-1] if slots else None,
+                          'subject_refs': []},
     }
     book = M.Book(title='t', ctx={'chapters': [entry]}, measurable={},
                   source_text={}, secrets=[])
@@ -254,7 +258,7 @@ def test_end_hook_pronoun_delivery_and_same_name_collision_are_both_unver():
 def test_the_three_ways_of_not_being_able_to_judge_say_which_one_it_was():
     """⚠⚠ 三种「够不着」必须分得开，而且**都不是通过**（`docs/LESSONS.md` 第 4 条）。
 
-    `noatom` 那一桶预计不小：`CtxGoal.facts` 是人读事实，很可能既无数字也无专名。
+    `noatom` 那一桶预计不小：目标节点的正文可能既无数字也无专名。
     把它当成通过，就是 `R-7.22` 那两桶「统计出来了但没判过」的翻版。
     """
     book, entry = _hook_book(['顾堇被系统提示'])
@@ -409,10 +413,21 @@ def test_meta_leak_goes_red_on_narrative_shell(book, entry, shell):
     assert 'meta_leak' in _fire(body, entry, book)
 
 
+def _with_constraint(entry, kind, value):
+    """通过章级约束目录和场景引用送入真实保真投影。"""
+    from copy import deepcopy
+
+    result = deepcopy(entry)
+    ref = 'constraint_test_' + kind
+    result['constraints'].append({'constraint_ref': ref, 'kind': kind, 'value': value})
+    result['scenes'][0]['constraint_refs'].append(ref)
+    return result
+
+
 def test_verbatim_missing_goes_red_when_the_mandated_line_is_gone(book, entry):
     """⭐ 【原样写入】那一组**要求逐字**，改一个字就废。"""
     line = '这句话一个字都不能改，写手必须原样放回去。'
-    e = dict(entry, scenes=[{**(entry['scenes'][0]), 'verbatim': [line]}])
+    e = _with_constraint(entry, 'literal', line)
     anchored = _with_source_material(book, e, line)
     body = _clean_body(book, entry)
     assert 'verbatim_missing' in _fire(body, e, anchored)
@@ -430,7 +445,7 @@ def test_literal_typo_is_diagnostic_and_does_not_waive_missing(
     普通对白已改走语义义务，不再进入这个原句检查通道。
     """
     line = '这为公子的伤口已经溃烂了整整三日无人问津。'
-    e = dict(entry, scenes=[{**(entry['scenes'][0]), 'verbatim': [line]}])
+    e = _with_constraint(entry, 'literal', line)
     anchored = _with_source_material(book, e, line)
     fired = _fire(_clean_body(book, entry) + rewritten, e, anchored)
     assert {'verbatim_typo', 'verbatim_missing'} <= fired
@@ -439,7 +454,7 @@ def test_literal_typo_is_diagnostic_and_does_not_waive_missing(
 def test_verbatim_three_character_rewrite_is_still_missing(book, entry):
     """三字及以上已经不是局部错别字修正，仍须走 missing。"""
     line = '这为工子的伤口已经溃烂了整整三日无人问津。'
-    e = dict(entry, scenes=[{**(entry['scenes'][0]), 'verbatim': [line]}])
+    e = _with_constraint(entry, 'literal', line)
     rewritten = '这位年轻人的伤口已经溃烂了整整三日无人问津。'
     anchored = _with_source_material(book, e, line)
     fired = _fire(_clean_body(book, entry) + rewritten, e, anchored)
@@ -449,7 +464,7 @@ def test_verbatim_three_character_rewrite_is_still_missing(book, entry):
 def test_literal_split_by_a_speech_tag_keeps_missing_and_diagnostic(book, entry):
     """插入说话提示改变了剧情必需的字面序列，定位诊断不得覆盖 HARD。"""
     line = '「你要是真的想走，那就走吧，我不拦着你，一次都不会。」'
-    e = dict(entry, scenes=[{**(entry['scenes'][0]), 'verbatim': [line]}])
+    e = _with_constraint(entry, 'literal', line)
     split = '「你要是真的想走，」他说，「那就走吧，我不拦着你，一次都不会。」'
     anchored = _with_source_material(book, e, line)
     fired = _fire(_clean_body(book, entry) + split, e, anchored)
@@ -464,7 +479,7 @@ def test_real_stage5_report_keeps_verbatim_caveat_in_note_only(book, entry):
     from novel.report import build, render
 
     line = '「你要是真的想走，那就走吧，我不拦着你，一次都不会。」'
-    e = dict(entry, scenes=[{**entry['scenes'][0], 'verbatim': [line]}])
+    e = _with_constraint(entry, 'literal', line)
     split = '「你要是真的想走，」他说，「那就走吧，我不拦着你，一次都不会。」'
     anchored = _with_source_material(book, e, line)
     findings = checks.chapter_findings(
@@ -583,11 +598,14 @@ def test_review_material_denominators_follow_current_writer_context_scenes():
 
     artifact = Review.model_construct(judged={}, chapters=[], book=[], baselines={'verbatim_missing': '0/0', 'keep_value_missing': '0/0', 'must_appear_missing': '0/0', '_fact_landing': '0/0 事实有落点'}, baselines_identity={'verbatim_missing': '0/0', 'keep_value_missing': '0/0', 'must_appear_missing': '0/0'})
     current_ctx = {
-        'chapters': [{'scenes': [{
-            'verbatim': ['逐字保留'],
-            'keep_value': ['保留 30 岁'],
-            'must_appear': ['旧钥匙'],
-        }]}],
+        'chapters': [{
+            'constraints': [
+                {'constraint_ref': 'literal', 'kind': 'literal', 'value': '逐字保留'},
+                {'constraint_ref': 'value', 'kind': 'value', 'value': '保留 30 岁'},
+                {'constraint_ref': 'object', 'kind': 'object', 'value': '旧钥匙'},
+            ],
+            'scenes': [{'constraint_refs': ['literal', 'value', 'object']}],
+        }],
     }
 
     outcomes = review._outcomes(
@@ -612,7 +630,7 @@ def test_keep_value_missing_compares_the_value_not_the_literal(book, entry):
     ——而契约发给写手的原话是「数字必须保住，**措辞随你**」，写手做的正是它让做的事。
     """
     material = '她今年30岁了。'
-    e = dict(entry, scenes=[{**(entry['scenes'][0]), 'keep_value': [material]}])
+    e = _with_constraint(entry, 'value', material)
     anchored = _with_source_material(book, e, material)
     body = _clean_body(book, entry)
     assert 'keep_value_missing' in _fire(body, e, anchored)
@@ -624,7 +642,7 @@ def test_keep_value_missing_compares_the_value_not_the_literal(book, entry):
 def test_unattested_material_is_stage2s_bill_and_never_a_stage5_missing_target(book, entry):
     """源文不存在的锚不能沿 UNIQUE 路由付费塞进正文。"""
     fake = '源章从未出现过的伪造原话。'
-    e = dict(entry, scenes=[{**entry['scenes'][0], 'verbatim': [fake]}])
+    e = _with_constraint(entry, 'literal', fake)
     fired = _fire(_clean_body(book, entry), e, book)
     assert 'material_anchor_unattested' in fired
     assert 'verbatim_missing' not in fired
@@ -717,7 +735,7 @@ def test_the_two_phases_read_one_and_the_same_rule_table():
 
 
 def test_every_registered_rule_has_exactly_one_producer():
-    """⭐ 52 条判据**一条不多一条不少**地被实现覆盖。
+    """⭐ 53 条判据**一条不多一条不少**地被实现覆盖。
 
     ⚠ 少列一条，那一条在报告上就变 `skipped`——而 `skipped`（实现未被调用）与
     「跑了没命中」是**两种颜色**；多列一条，`builder` 会抛（那是「注册了没实现」的镜像病）。
@@ -728,8 +746,8 @@ def test_every_registered_rule_has_exactly_one_producer():
     assert set(mine) == reg, (f'注册了没实现：{sorted(reg - set(mine))}；'
                               f'实现了没注册：{sorted(set(mine) - reg)}')
     # secret_unknown 随重复 must_not_reveal 清单退役；paragraph_slot_report
-    # 与 dialogue_semantics_unver 加入后现役共 52 条。
-    assert len(reg) == 52
+    # 与 dialogue_semantics_unver、knowledge_position_unver 加入后现役共 53 条。
+    assert len(reg) == 53
 
 
 def test_every_unver_rule_must_say_why_it_cannot_check():
@@ -739,13 +757,14 @@ def test_every_unver_rule_must_say_why_it_cannot_check():
     **`unver` 是判据的边界，而边界要说得出在哪。**
     """
     unver = {r.rule for r in REGISTRY.of_stage('stage5') if r.sev == 'unver'}
-    assert unver == set(checks._UNVER) and len(unver) == 6
+    assert unver == set(checks._UNVER) and len(unver) == 7
+    assert 'knowledge_position_unver' in unver
 
 
 def test_the_badge_can_never_be_pass_on_this_layer():
     """⭐⭐ **本层徽章结构上永远到不了 `pass`**，而那是对的。
 
-    6 条 `unver`，其中 `must_hold_unver` **每本都产**（全书那一组按定义查不了文面）
+    7 条 `unver`，其中 `must_hold_unver` **每本都产**（全书那一组按定义查不了文面）
     ⇒ 最好情况是 `amber` + 退出码 0。**与 stage4 相反**（那一层没有一条 `unver`）。
     """
     from contracts.schema.report import RuleLine, badge_of

@@ -238,8 +238,13 @@ def test_rule_replacement_does_not_keep_old_version_as_current_or_reveal_new_ear
 
 def test_missing_or_incomplete_association_cannot_masquerade_as_no_secrets(pair):
     inputs = _inputs(pair)
+    assert _build(inputs), '完整关联是当前消费链的绿对照'
     inputs[4]['links'].pop()
-    with pytest.raises(RefusedByStructure, match='完整|覆盖'):
+    # KL2 自身先拒绝缺事件；无需等 WriterContext 的后置结构断言才发现。
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match='完整|覆盖'):
+        KnowledgeLinks.model_validate(inputs[4])
+    with pytest.raises(ValidationError, match='完整|覆盖'):
         _build(inputs)
 
 

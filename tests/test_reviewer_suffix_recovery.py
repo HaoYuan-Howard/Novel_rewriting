@@ -50,7 +50,7 @@ def design_document():
             'chapters': [{'output_ordinal': 1, 'decision': 'request_repair',
                           'reason': '最新章需补齐场景入口', 'constraints': [
                               {'code': 'entry_anchor', 'scene_refs': [],
-                               'opaque_aliases': ['a_' + '1' * 16], 'effect': None}]}],
+                               'opaque_aliases': ['a_' + '1' * 16]}]}],
         }},
     }
 

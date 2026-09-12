@@ -2188,6 +2188,26 @@ def _structure_workpack_snapshot(
     _require_fresh_json(store, STAGE2_CHAPTER_BLUEPRINTS)
     blueprints, blueprints_raw = store.read_own(
         ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)
+    return _structure_snapshot_from_artifacts(
+        store, (plan, plan_raw), (binding, binding_raw), (blueprints, blueprints_raw),
+        with_materials=with_materials)
+
+
+def _structure_snapshot_from_artifacts(
+    store: ArtifactStore,
+    plan_snapshot: tuple[PlanChapters, Any],
+    binding_snapshot: tuple[EvidenceBinding, Any],
+    blueprint_snapshot: tuple[ChapterBlueprints, Any],
+    *, with_materials: bool = False,
+) -> _StructureWorkpackSnapshot:
+    """从同一批已读取对象编译审阅主体；页面与审批共享完整材料依赖。
+
+    本函数不授予审批权限；正式工作包入口先核 freshness。页面可以展示历史
+    计划，但不能把缺少 Global/KL/原文依赖的简化 hash 冒充正式审阅主体。
+    """
+    plan, plan_raw = plan_snapshot
+    binding, binding_raw = binding_snapshot
+    blueprints, blueprints_raw = blueprint_snapshot
     concerns = _binding_concerns(binding)
     binding_input_contract = _binding_input_contract_identity(binding)
     try:

@@ -125,72 +125,130 @@ def test_stage4_view_rejects_an_unknown_synthetic_book(tmp_path):
         stage4_view(tmp_path, '9999999999999999999', 1)
 
 
-def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch):
-    """review rows 与 subject 只读一次 plan；不给 TOCTOU 留二次读缝。"""
-    import novel.views.stage4 as view_module
+@pytest.mark.parametrize('change', ['steady', 'character', 'missing_knowledge', 'surface_drift'])
+def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch, change):
+    """页面与正式审阅共享完整依赖，同一 plan 不重读，材料漂移不拼接。"""
+    import copy
     from pathlib import Path
+    import novel.views.stage4 as view_module
     from contracts.schema.orchestration import ArtifactState
-    from contracts.schema.stage4 import PlanChapters
-    from tests.hard_cases import _BPS4, _clean_plan4
+    from contracts.schema.stage1 import MainText
+    from contracts.schema.stage2 import ChapterBlueprints
+    from contracts.schema.stage4 import EvidenceBinding, PlanChapters
+    from contracts.schema.knowledge_links import KnowledgeLinks
+    from novel.orchestrator import approvals, inspection
+    from novel.stages.stage2 import global_review, knowledge_links
+    from novel.stages.stage4.plot_materials import chapter_materials_identity
+    from novel.errors import SourceConflict
+    from tests import plot_fixtures
+    from tests.stage2_fixtures import plot_blueprints
+    from tests.test_stage2 import global_grounding, main_text
+    from novel.stages.stage4.measure import identity_plan
 
-    raw = _clean_plan4()
+    fixture = SimpleNamespace(blueprint=plot_blueprints, MAIN=main_text(),
+                              GLOBAL=global_grounding(), links=plot_fixtures.links)
+    raw = identity_plan(fixture.blueprint(), fixture.MAIN)
     raw['_provenance'] = {
-        'code': 'test',
-        'root_clean_sha1': 'c' * 40,
-        'inputs': {},
-        'origin': 'compiled',
-        'blind_candidate_sha256': 'a' * 64,
-        'evidence_binding_sha256': 'b' * 64,
+        'code': 'test', 'root_clean_sha1': 'c' * 40, 'inputs': {}, 'origin': 'compiled',
+        'blind_candidate_sha256': 'a' * 64, 'evidence_binding_sha256': 'b' * 64,
     }
     snapshot = PlanChapters.model_validate(raw)
-    plan_reads = 0
+    blueprint_raw = {**fixture.blueprint(), '_provenance': {
+        'code': 'fixture', 'root_clean_sha1': 'c' * 40, 'inputs': {},
+        'prompts': {'FIXTURE': '0' * 10}, 'model': 'fixture', 'scope_violations': [],
+        'context': {'architecture': 'plot-blueprint-v1', 'source_format': 'numbered-paragraphs-v1',
+                    'global_projection_contract': 'plot-global-scope-v1'},
+    }}
+    blueprint = ChapterBlueprints.model_validate(blueprint_raw)
+    binding = EvidenceBinding.model_validate({
+        'status': 'bound', 'candidate_sha256': 'a' * 64,
+        'chapters': [{'output_ordinal': chapter['output_ordinal'], 'scenes': [{
+            'candidate_scene_id': f'c{chapter["output_ordinal"]:02d}{scene["slot"]}', 'deliveries': [{
+                'beat_ref': placement['beat_ref'], 'evidence_refs': delivery['evidence_refs'],
+                'source_context_refs': delivery['source_context_refs'],
+            } for placement in chapter['beat_placements']
+              for delivery in placement['deliveries'] if delivery['scene_ref'] == scene['slot']],
+        } for scene in chapter['scenes']]} for chapter in raw['output_chapters']],
+        '_provenance': {'origin': 'human', 'candidate_sha256': 'a' * 64,
+                        'code': 'fixture', 'root_clean_sha1': 'c' * 40, 'inputs': {}},
+    })
+    global_g = copy.deepcopy(fixture.GLOBAL)
+    links = KnowledgeLinks.model_validate(fixture.links())
+    reads, knowledge_reads = {}, []
 
     class FakeStore:
-        def __init__(self, _ctx):
-            pass
+        def __init__(self, ctx):
+            self.ctx = ctx
 
         def read_own(self, _model, rel):
-            nonlocal plan_reads
-            if rel == view_module.PLAN_REL:
-                plan_reads += 1
-                return snapshot, b'plan-snapshot'
-            if rel == view_module.STAGE4_EVIDENCE_BINDING:
-                return SimpleNamespace(status='bound', binding_concerns=[]), b'binding'
-            raise UpstreamMissing(rel)
-
-        def read(self, _model, rel):
-            if rel == view_module.BLUEPRINTS:
-                return type('Dumped', (), {
-                    'model_dump': lambda self, **_kwargs: _BPS4,
-                })()
-            raise UpstreamMissing(rel)
+            reads[rel] = reads.get(rel, 0) + 1
+            value = {view_module.PLAN_REL: snapshot,
+                     view_module.STAGE4_EVIDENCE_BINDING: binding,
+                     view_module.BLUEPRINTS: blueprint,
+                     view_module.MAIN_TEXT: MainText.model_validate(fixture.MAIN)}.get(rel)
+            if value is None:
+                raise UpstreamMissing(rel)
+            return value, value.model_dump(by_alias=True, mode='json')
 
     def state(_store, rel):
-        if rel == view_module.PLAN_REL:
-            return ArtifactState(
-                rel=rel, exists=True, bytes=1, mtime=1,
-                freshness='fresh', display_freshness='fresh', reason='match',
-                invalid_freshness=None, invalid_reason=None, condition='ready',
-            )
+        exists = rel == view_module.PLAN_REL
         return ArtifactState(
-            rel=rel, exists=False, bytes=None, mtime=None,
-            freshness='unknown', display_freshness='missing',
-            reason='no_provenance', invalid_freshness=None,
-            invalid_reason=None, condition='missing',
-        )
+            rel=rel, exists=exists, bytes=1 if exists else None, mtime=1 if exists else None,
+            freshness='fresh' if exists else 'unknown', display_freshness='fresh' if exists else 'missing',
+            reason='match' if exists else 'no_provenance', invalid_freshness=None,
+            invalid_reason=None, condition='ready' if exists else 'missing')
 
-    monkeypatch.setattr(view_module.paths, 'resolve_novel_dir',
-                        lambda _base, _sid: Path('测试_123'))
+    def current_knowledge(ctx):
+        knowledge_reads.append(ctx)
+        if change == 'missing_knowledge':
+            raise UpstreamMissing('知识关联缺失')
+        return links
+
+    monkeypatch.setattr(view_module.paths, 'resolve_novel_dir', lambda _base, _sid: Path('测试_123'))
     monkeypatch.setattr(view_module, 'readonly_ctx', lambda *_args: object())
     monkeypatch.setattr(view_module, 'ArtifactStore', FakeStore)
     monkeypatch.setattr(view_module, 'artifact_state', state)
+    monkeypatch.setattr(global_review, 'generation_grounding', lambda _store:
+                        SimpleNamespace(model_dump=lambda **_kw: copy.deepcopy(global_g)))
+    monkeypatch.setattr(knowledge_links, 'require_current', current_knowledge)
+    seals = iter(('before', 'after')) if change == 'surface_drift' else None
+    monkeypatch.setattr(inspection, 'read_surface_seal',
+                        lambda *_a, **_kw: next(seals) if seals else 'stable')
+    if change == 'surface_drift':
+        with pytest.raises(SourceConflict, match='材料变化'):
+            stage4_view('unused', '123', 1)
+        assert reads[view_module.PLAN_REL] == 1
+        return
 
     got = stage4_view('unused', '123', 1)
-    assert plan_reads == 1, 'subject 不许为了算 hash 重读 plan'
-    assert got.structure_subject_sha256 == structure_review_subject_sha256(snapshot, [], blueprints=_BPS4)
-    assert got.plan_chapter.structure_decision.mode == \
-        snapshot.output_chapters[0].structure_decision.mode
-    assert got.plan_chapter.structure_decision.computed_change_kinds == []
+    assert all(reads[rel] == 1 for rel in (
+        view_module.PLAN_REL, view_module.STAGE4_EVIDENCE_BINDING, view_module.BLUEPRINTS))
+    assert len(knowledge_reads) == 1
+    if change == 'missing_knowledge':
+        assert got.structure_subject_sha256 is None
+        assert '知识关联缺失' in got.structure_subject_unavailable_reason
+        return
+    chapter = snapshot.output_chapters[0]
+    materials = {row.output_ordinal: chapter_materials_identity(
+        row.output_ordinal, blueprint_raw, global_g, fixture.links(), fixture.MAIN,
+        [ref.model_dump(mode='json') for goal in
+         (row.chapter_goal, row.open_hook_goal, row.end_hook_goal) for ref in goal.subject_refs])
+        for row in snapshot.output_chapters}
+    expected = approvals._decision_sha256({
+        'plan_subject': structure_review_subject_sha256(snapshot, [], blueprints=blueprint),
+        'chapter_materials': materials})
+    assert got.structure_subject_sha256 == expected
+    assert got.plan_chapter.structure_decision.mode == chapter.structure_decision.mode
+    from novel.stages.stage4.measure import computed_structure_change_kinds, structure_metrics_of
+    assert got.plan_chapter.structure_decision.computed_change_kinds == computed_structure_change_kinds(
+        structure_metrics_of(blueprint_raw['blueprints'][0], chapter.model_dump(mode='json')))
+    assert reads[view_module.MAIN_TEXT] == 1
+    if change == 'character':
+        global_g['entities']['characters']['char_001']['role'] = '已经决定长住的受邀住客'
+        reads.clear()
+        changed = stage4_view('unused', '123', 1)
+        assert reads[view_module.PLAN_REL] == 1
+        assert changed.structure_subject_sha256 != expected, '必要人物语义必须进入正式审阅身份'
 
 
 def test_the_view_writes_nothing(box):

@@ -287,7 +287,7 @@ def test_split_compiler_and_assembler_close_unknown_alias_and_chapter_sets():
     _, private, raw = local[1]
     wrong = copy.deepcopy(raw)
     wrong['chapter_goal']['subject_aliases'] = ['u_' + '0' * 12]
-    with pytest.raises(BlindPlanError, match='主体|局部 alias'):
+    with pytest.raises(BlindPlanError, match='未登记 alias'):
         compile_blind_chapter_design(wrong, private, mapping,
             truth_chapter=truth['chapters'][0], chapter_weight='CH_EVEN')
     good = compile_blind_candidate(response, mapping, truth=truth)['output_chapters']

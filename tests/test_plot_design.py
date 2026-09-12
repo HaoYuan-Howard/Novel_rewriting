@@ -58,7 +58,8 @@ def design_response(projected, *, split=False):
     return {
         'structure_decision': {'mode': 'retain', 'reason': '连续推进', 'declared_change_kinds': []},
         'chapter_goal': goal(first, 's01'), 'open_hook_goal': goal(first, 's01'),
-        'end_hook_goal': goal(last, 's02'), 'chapter_rewrite_brief': '呈现施救与离开的完整因果',
+        'end_hook_goal': goal(last, 's02'),
+        'chapter_rewrite_brief': projected['chapter']['chapter_function'],
         'scenes': scenes, 'beat_placements': placements, 'anchor_bindings': [],
     }
 
@@ -77,6 +78,19 @@ def compile_response(raw, truth, mapping, private):
     return compile_blind_chapter_design(
         raw, private, mapping, truth_chapter=truth['chapters'][0],
         chapter_weight=next(iter(RESPONSE_CHAPTER_WEIGHTS)))
+
+
+@pytest.mark.parametrize('chapter_function', [
+    '回忆施救动机，呈现当前挽留与离开决定。',
+    '呈现李宝珠回忆来信、收起信纸及院中动静。',
+])
+def test_design_response_uses_current_chapter_function(chapter_function):
+    _bp, truth, mapping, public, private = inputs()
+    public['chapter']['chapter_function'] = chapter_function
+    raw = design_response(public)
+    assert raw['chapter_rewrite_brief'] == chapter_function
+    compiled = compile_response(raw, truth, mapping, private)
+    assert compiled['chapter_rewrite_brief'] == chapter_function
 
 
 def test_blind_distributed_design_and_human_roundtrip():
@@ -475,10 +489,15 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
             if capture is not None:
                 capture['http:' + suffix] = reply.json()
         if capture is not None:
-            for suffix in ('', 'approvals', 'stage1', 'stage2/global', 'check/stage2', 'check/stage5'):
+            for suffix in ('', 'approvals', 'stage1', 'stage2/global', 'check/stage2', 'check/stage5',
+                           'run/metrics', 'stage2/blueprint-review-workpack?scope=chapter%3A1'):
                 reply = http.get(f'/api/novels/{ctx.sid}' + ('/' + suffix if suffix else ''))
                 assert reply.status_code == 200, reply.text
                 capture['http:' + (suffix or 'overview')] = reply.json()
+            for endpoint in ('jobs', 'agent/runs'):
+                reply = http.get(f'/api/{endpoint}?sid={ctx.sid}')
+                assert reply.status_code == 200, reply.text
+                capture['api:' + endpoint] = reply.json()
         design_view = http.get(f'/api/novels/{ctx.sid}/stage4/1').json()
         assert design_view['structure_subject_sha256'] == structure.subject_sha256
         assert design_view['plan_chapter']['beat_placements']

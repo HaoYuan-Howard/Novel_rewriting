@@ -1,6 +1,7 @@
 """运行证据自洽的免费贯通夹具，从真实 HTTP/审阅返回值导出前端示例。
 
-使用 novel_refactor 环境。所有模型边界都是 FakeTransport，目录仅保存合成书；
+从仓根用 novel_refactor 环境执行 python -m scripts.export_plot_fixture。
+所有模型边界都是 FakeTransport，目录仅保存合成书；
 输出用于前端消费测试，不能作为真实模型质量、成本或生产配置的证明。
 """
 from __future__ import annotations
@@ -13,6 +14,7 @@ import tempfile
 import pytest
 
 from tests.test_plot_design import produce_through_first_chapter
+from tests.test_plot_pipeline import grounded_global
 
 
 def main() -> None:
@@ -27,7 +29,8 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix='plot-fixture-', dir=scratch) as directory:
         with pytest.MonkeyPatch.context() as patch:
             produce_through_first_chapter(
-                Path(directory), patch, distributed=True, capture=captured)
+                Path(directory), patch, distributed=True,
+                grounding=grounded_global(), capture=captured)
     output = root / 'web/src/fixtures/plot_v1/flow.json'
     output.write_text(json.dumps(captured, ensure_ascii=False, indent=2) + '\n',
                       encoding='utf-8', newline='')

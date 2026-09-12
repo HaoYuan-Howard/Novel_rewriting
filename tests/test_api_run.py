@@ -121,6 +121,7 @@ def test_stage2_chapter_fix_route_reaches_http_preview(client):
 
 
 def test_run_projects_current_review_states_and_only_current_role_recovery(client, monkeypatch):
+    from contextlib import nullcontext
     from types import SimpleNamespace
     from contracts.schema.orchestration import RunResumeFrontierView
     from novel.api.routes import run
@@ -133,7 +134,11 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
     assert len(reviews) == 9
     assert {row['node'] for row in reviews} == {
         node for node, spec in NODES.items() if spec.lifecycle.review_mode == 'commander'}
-    assert {row['state'] for row in reviews if row['node'].startswith('stage2.')} == {'missing'}
+    stage2 = [row for row in reviews if row['node'].startswith('stage2.')]
+    assert next(row for row in stage2 if row['node'] == 'stage2.global')['state'] == 'missing'
+    # 源章尚不存在，不能伪造章范围或把无法建立范围审阅身份说成已知 pending。
+    assert next(row for row in stage2 if row['node'] == 'stage2.blueprint') == {
+        'node': 'stage2.blueprint', 'scope': 'cross_chapter', 'state': 'unknown'}
     assert operator._review_state_projection(None) is None
     frontier = RunResumeFrontierView(
         state='blocked', node='stage2.blueprint', seq=list(NODES).index('stage2.blueprint') + 1,
@@ -142,14 +147,15 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
         next_handler='commander', review_states=reviews,
         verified_skipped_nodes=list(NODES)[:list(NODES).index('stage2.blueprint')],
         verified_skipped_count=list(NODES).index('stage2.blueprint'))
-    monkeypatch.setattr(operator, 'progress_snapshot', lambda *_args: (SimpleNamespace(stages=[]), frontier))
+    monkeypatch.setattr(operator, 'progress_read_snapshot',
+                        lambda *_args: nullcontext((SimpleNamespace(stages=[]), frontier)))
     def row(node, role, scope):
         return dict(unit_id=node+role+scope, node=node, role=role, scope=scope,
                     content_used=1, content_limit=4, content_remaining=3, state='delivered',
                     recovery_action='replay_response')
     monkeypatch.setattr(run.work_units, 'list_unit_views', lambda *_args: [
         row('stage2.global', 'commander', 'book'), row('stage2.global', 'executor', 'book'),
-        row('stage2.blueprint', 'commander', 'book')])
+        row('stage2.blueprint', 'commander', 'chapter:1')])
     response = c.get('/api/novels/42/run')
     assert response.status_code == 200
     assert response.json()['current_recovery_actions'] == ['book: replay_response']

@@ -100,6 +100,15 @@ def test_the_unreachable_table_says_why():
     assert H.UNREACHABLE_OVER_HTTP, '表是空的——本文件的对账多半在扫一个空表'
 
 
+def test_compiled_plot_reference_failure_keeps_structure_error_ownership():
+    from novel.stages.stage4.plot_refs import PlotReferenceRefused
+
+    failure = PlotReferenceRefused(2, '已编译计划引用了其他章的节点')
+    assert failure.chapter_ordinal == 2
+    assert H.status_of(failure) == 500
+    assert PlotReferenceRefused.__name__ not in H.UNREACHABLE_OVER_HTTP
+
+
 def test_launch_deferred_control_signal_is_explicitly_http_unreachable():
     """pause/stop 的 launch barrier 由 Supervisor 内部收口，不伪造 HTTP 409。"""
     from novel.orchestrator import agent_supervisor as supervisor

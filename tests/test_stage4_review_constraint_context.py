@@ -112,7 +112,7 @@ def _native_response(task, *, repair=False):
         if repair:
             value.update(decision='request_repair', reason='合成明确且独立的场景目标缺陷',
                          constraints=[{'code': 'scene_goal', 'scene_refs': ['c01s01'],
-                                       'opaque_aliases': [FACT], 'effect': None}])
+                                       'opaque_aliases': [FACT]}])
         active = option['allowed_values']['chapters[].constraint_operations.active'][
             str(row['output_ordinal'])]['items']
         if active:
@@ -190,7 +190,7 @@ def test_actual_native_cli_receives_no_seed_and_explicit_repair_reaches_approval
     _assert_unseeded(envelope)
     assert envelope['materials']['design_constraint_catalog']['1']['items'] == []
     assert '_design_template' not in envelope['materials']
-    # 正确修复恰好引用第一场/第一事实仍然合法；不能用黑名单替代去占位污染。
+    # 正确修复恰好引用第一场/第一节点仍然合法；不能用黑名单替代去占位污染。
     action = _materialize(base, current, task, delivered)
     doc = approvals.approve_design(base, SID, DesignReviewRequest.model_validate(action.payload))
     assert doc.design_review.state == 'repair_requested'
@@ -270,7 +270,7 @@ def test_expired_repair_has_explicit_history_and_requires_complete_operations(
     request = _accept_all(_template(base)).model_dump(mode='json')
     request['chapters'][0].update(decision='request_repair', reason='已经发生的明确修复决定',
         constraints=[{'code': 'scene_goal', 'scene_refs': ['c01s01'],
-                      'opaque_aliases': [FACT], 'effect': None}])
+                      'opaque_aliases': [FACT]}])
     saved = approvals.approve_design(base, SID, DesignReviewRequest.model_validate(request))
     source_sha = saved.design_review.current_decision.decision_sha256
     _changed_chapter(state)
