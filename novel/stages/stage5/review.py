@@ -752,15 +752,12 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
                                  ('must_appear_missing', 'must_appear', '个【必须在场】')):
         n_mat = sum(len(scene.get(field_) or [])
                     for c in ((book.ctx.get('chapters') if book else None) or [])
-                    for scene in (c.get('scenes') or []))
+                    for scene in checks.fidelity_scenes(c))
         scanned[rule_] = f'{n_mat} {what_}的材料（{scanned.get(rule_, "?")}）'
         if not n_mat:
             blind[rule_] = (
-                f'这本书的下发面上一条{what_}的材料都没有 ⇒ 本条没有分母。'
-                f'**这不是「守住了」**：闭卷写手拿原文的唯一通道就是这四组点，'
-                f'空的意味着它这一章什么原文都没拿到。先看 `stage4` 的 '
-                f'`ctx_hinge_delivered` 那一行——那里说得出是 stage2 没抽到，'
-                f'还是组装这一步把材料吃掉了')
+                f'本书未登记{what_}的稀疏约束，本探针没有分母。'
+                '完整剧情仍由 beats 提供；合法空约束不表示剧情缺失，也不证明语义完整。')
     # 人称探针只有“单 narration + 全章边界 + first/third + 非空锚”这一窄域可判。
     # 混合输入时每章的 metric 明写 UNVER；整本分母为零时，聚合规则也必须落 unver，
     # 不能把 0 finding 渲染成 OK。

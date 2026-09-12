@@ -28,14 +28,15 @@ from contracts.schema.orchestration import (
 from contracts.schema import encode_artifact
 from contracts.artifacts import (
     STAGE2_CHARACTERS_EDIT,
-    STAGE2_BLUEPRINT_RELATION_EDIT,
+    STAGE2_BLUEPRINT_EDIT,
     STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
 from contracts.schema.api import (
     BatchTrimResolutionRequest, Stage5ReviewerRewriteRequest,
 )
-from contracts.schema.stage2 import BlueprintRelationEdit, GlobalEdit
+from contracts.schema.plot_edit import PlotEdit
+from contracts.schema.stage2 import GlobalEdit
 from contracts.schema.characters import CharactersEdit
 from contracts.schema.stage5 import ChapterResponse, ReviewerRewriteBatchTrustedInput
 from novel import paths
@@ -307,12 +308,12 @@ def save_global_edit(
     return target.resolve()
 
 
-def save_blueprint_relation_edit(
+def save_blueprint_edit(
     base: str | os.PathLike[str],
     sid: str,
-    request: BlueprintRelationEdit,
+    request: PlotEdit,
 ) -> Path:
-    """把 Stage2 v7 typed relation request 落到 SID 专属的一次性目录。
+    """把 Stage2 完整剧情编辑请求 落到 SID 专属的一次性目录。
 
     HTTP 进程只写 ``_service/edits``；正式 Blueprint 仍只能由
     ``stage2.blueprint --apply-edit`` 子进程经 schema/HARD/归档口写回。
@@ -320,13 +321,13 @@ def save_blueprint_relation_edit(
     try:
         paths.check_sid(sid)
     except PathRefused as exc:
-        raise SourcePathRejected(f'关系编辑的书 id 不合法：{exc}') from exc
+        raise SourcePathRejected(f'蓝图编辑的书 id 不合法：{exc}') from exc
     root = service_dir(base) / EDITS_DIRNAME / sid
     root.mkdir(parents=True, exist_ok=True)
-    target = root / f'blueprint-relations-{uuid.uuid4().hex}.json'
+    target = root / f'blueprint-edit-{uuid.uuid4().hex}.json'
     tmp = target.with_suffix('.tmp')
     payload = encode_artifact(
-        STAGE2_BLUEPRINT_RELATION_EDIT,
+        STAGE2_BLUEPRINT_EDIT,
         request.model_dump(mode='json', by_alias=True),
     )
     try:
@@ -335,7 +336,7 @@ def save_blueprint_relation_edit(
             encoding='utf-8')
         os.replace(tmp, target)
     except OSError as exc:
-        raise ArtifactUnreadable(f'保存 Stage2 关系编辑请求失败：{exc!r}') from exc
+        raise ArtifactUnreadable(f'保存 Stage2 蓝图编辑请求失败：{exc!r}') from exc
     finally:
         try:
             tmp.unlink(missing_ok=True)

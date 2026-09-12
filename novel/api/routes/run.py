@@ -19,7 +19,7 @@ from contracts.schema.api import WorkUnitGrantPreview, WorkUnitGrantRequest, Wor
 from novel.api.deps import checked_sid, get_base
 from novel.errors import UpstreamMissing
 from novel.orchestrator import beacon, operator, work_unit_grants
-from novel.views import work_units, run_metrics
+from novel.views import work_units, run_metrics, blueprint_progress
 from contracts.schema.run_metrics import RunMetricsView
 
 router = APIRouter(prefix='/novels')
@@ -55,8 +55,10 @@ def get_run_progress(sid: str = Depends(checked_sid),
     """
     events = [e for e in beacon.read_events(base) if e.sid == sid]
     try:
-        ov, resume_frontier = operator.progress_snapshot(base, sid)
-        stage_done = {st.stage: st.done for st in ov.stages}
+        with operator.progress_read_snapshot(base, sid) as (ov, resume_frontier):
+            stage_done = {st.stage: st.done for st in ov.stages}
+            units, units_unavailable = work_units.get(base, sid)
+            blueprint = blueprint_progress.get(base, sid, units)
     except UpstreamMissing:
         stage_done = {s: None for s in STAGES}
         resume_frontier = RunResumeFrontierView(
@@ -66,14 +68,21 @@ def get_run_progress(sid: str = Depends(checked_sid),
             verified_skipped_nodes=[],
             verified_skipped_count=0,
         )
-    units, units_unavailable = work_units.get(base, sid)
+        units, units_unavailable = work_units.get(base, sid)
+        blueprint = blueprint_progress.get(base, sid, units)
     identity = commander_work_unit(resume_frontier.waiting_on or '')
     current_node = identity[0] if identity else resume_frontier.node
     current_scope = identity[1] if identity else None
+    if current_node == 'stage2.blueprint' and units is not None:
+        progress = next((row['review']['plot_progress'] for row in units
+                         if row['node'] == current_node and row.get('review', {}).get('plot_progress')), None)
+        if progress is not None:
+            current_scope = progress['next_scope'] or 'cross_chapter'
     recovery = None if units is None or resume_frontier.state == 'unknown' else [
         f"{row['scope']}: {row['recovery_action']}" for row in units
         if row['node'] == current_node and row['role'] == resume_frontier.next_handler
-        and (current_scope is None or row['scope'] == current_scope)
+        and (current_scope is None or row['scope'] == current_scope
+             or (current_node == 'stage2.blueprint' and row['state'] in {'reserved', 'unknown', 'delivered'}))
         and row['recovery_action'] is not None]
     return RunProgressView(
         sid=sid,
@@ -83,4 +92,5 @@ def get_run_progress(sid: str = Depends(checked_sid),
         events_tail=[beacon.event_view(event) for event in events[-beacon.TAIL:]],
         work_units=units, work_units_unavailable_reason=units_unavailable,
         current_recovery_actions=recovery,
+        blueprint_progress=blueprint,
     )

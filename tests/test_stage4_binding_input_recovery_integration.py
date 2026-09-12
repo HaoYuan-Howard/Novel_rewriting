@@ -192,7 +192,7 @@ def _http_next(case: _Book) -> OperatorNext:
 
 
 def _assert_display_subject_is_not_approval(case: _Book) -> None:
-    """S-07 展示旧业务事实；相同展示 hash 不能越过真实审批 freshness 闸。"""
+    """S-07 可读旧计划，但过期输入不再展示成当前审阅身份。"""
     pytest.importorskip('fastapi', reason='未安装 fastapi，HTTP 消费链未查')
     from fastapi.testclient import TestClient
     from novel.api.app import UI_HEADER, create_app
@@ -203,8 +203,9 @@ def _assert_display_subject_is_not_approval(case: _Book) -> None:
         assert shown.status_code == 200, shown.text
         view = shown.json()
         assert not view['identity_plan']
-        subject = view['structure_subject_sha256']
-        assert subject == structure_review_subject_sha256(
+        assert view['structure_subject_sha256'] is None
+        assert view['structure_subject_unavailable_reason']
+        subject = structure_review_subject_sha256(
             case.compiled, case.binding.binding_concerns,
             blueprints=json.loads((case.book / 'stage2/chapter_blueprints.json').read_text(encoding='utf-8')))
         assert subject is not None
@@ -214,7 +215,7 @@ def _assert_display_subject_is_not_approval(case: _Book) -> None:
         assert doc['structure']['current_subject_sha256'] is None
         assert doc['structure']['review_token'] is None
         assert not doc['gate']['s4']
-        # 故意把页面可见 hash 当 token 提交，HTTP typed producer 必须拒绝。
+        # 即使自行重算旧计划的业务 hash，HTTP producer 仍拒绝其审批权限。
         request = StructureApprovalRequest.model_validate({
             'actor': 'fixture-stale-display', 'reason': '验证展示身份没有审批权',
             'review_token': f's4sr1_{subject}',

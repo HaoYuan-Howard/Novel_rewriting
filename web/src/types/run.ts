@@ -159,4 +159,5 @@ export interface RunProgress {
   work_units?: RunWorkUnit[] | null
   work_units_unavailable_reason?: string | null
   current_recovery_actions?: string[] | null
+  blueprint_progress?: import('./plot.generated').BlueprintRunProgress | null
 }

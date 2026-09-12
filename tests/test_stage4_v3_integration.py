@@ -50,17 +50,17 @@ from novel.stages.stage2.character_refs import (
     materialize_blueprint_character_projection,
 )
 from novel.stages.stage4 import plan
-from novel.stages.stage4.blind import (
+from novel.stages.stage4.plot_design import (
     build_blind_projection,
     candidate_subject_sha256,
 )
 from novel.store import ArtifactStore
 from tests.factories import approved_global_review
-from tests.test_stage2 import blueprints, global_grounding, main_text
+from tests.test_stage2 import global_grounding, main_text
 
 
 MODEL = 'test-stage4-v3-model'
-CODE = 'test-stage4-v3-integration'
+CODE = 'test-code-version'
 
 
 def _ctx(book: Path, node: str, *, paid: bool = True) -> RunContext:
@@ -68,7 +68,7 @@ def _ctx(book: Path, node: str, *, paid: bool = True) -> RunContext:
         novel_dir=book,
         node=node,
         paid=paid,
-        code=CODE,
+        code=prov.code_version(),
         cache=CachePolicy.default(),
         ledger=CostLedger(path=ledger_path(book.parent)),
     )
@@ -88,7 +88,7 @@ def _book(tmp_path: Path) -> Path:
     return book
 
 
-def _seed_current_stage2(book: Path) -> ChapterBlueprints:
+def _seed_current_stage2(book: Path, *, chapter_responses: dict | None = None) -> ChapterBlueprints:
     """写 current Stage2 产物；来源边与 root 都走正式 ``RunContext`` 铸造口。"""
     from contracts.artifacts import STAGE1_HOOK_COPY
     from contracts.schema.stage1 import HookCopy
@@ -137,171 +137,86 @@ def _seed_current_stage2(book: Path) -> ChapterBlueprints:
         BlueprintCharacterProjection,
         STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
     )
-    blueprint_raw = copy.deepcopy(blueprints())
-    blueprint_extra = blueprint_raw.pop('_provenance')
-    blueprint_provenance = blueprint_ctx.llm_provenance(
-        BlueprintProvenance,
-        prompts={'BLUEPRINT_SYS': '测试用冻结 Stage2 原子事实契约'},
-        model=MODEL,
-        adopted_models=(MODEL,),
-        **blueprint_extra,
-    )
-    artifact = ChapterBlueprints.model_validate({
-        **blueprint_raw,
-        '_provenance': blueprint_provenance,
-    })
-    blueprint_store.write(STAGE2_CHAPTER_BLUEPRINTS, artifact)
+    from novel.stages.stage2 import extract
+    from tests.test_stage2_generation import _accept_fixture_global
+    _accept_fixture_global(blueprint_ctx)
+    from tests.test_plot_producer import responses
+    by_chapter = responses() if chapter_responses is None else copy.deepcopy(chapter_responses)
+    for ordinal, response in by_chapter.items():
+        for beat in response['beats']:
+            beat['source_contexts'] = [{
+                'time_layer': 'present', 'place': None, 'present_char_ids': None,
+                'evidence': beat['evidence'],
+            }]
+    client, _ = _client(blueprint_ctx, lambda req: {
+        'blueprints': [by_chapter[json.loads(req.user.splitlines()[0])['chapter_ordinal']]]})
+    assert extract.run_blueprint(blueprint_ctx, client).passed
+    artifact = blueprint_store.read_own(ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)[0]
     accept_and_materialize_links(blueprint_ctx)
     return artifact
 
 
 def _retain_a_response(blueprints_raw: dict[str, Any], mapping: dict[str, Any]) -> dict:
-    """从冻结事实身份构造一份最小合法 A 响应；只供 Fake LLM 回包。"""
-    formal_to_alias = {
-        formal: alias for alias, formal in mapping['fact_aliases'].items()
-    }
-    chapters = []
-    for chapter in sorted(
-        blueprints_raw['blueprints'], key=lambda row: row['chapter_ordinal'],
-    ):
-        atoms = list(chapter['fact_atoms'])
-        assert atoms and all(atom['obligation'] == 'land' for atom in atoms)
-        assert not chapter['causal_edges']
-        assert not chapter['entry_state_refs'] and not chapter['ending_state_refs']
-        aliases = [formal_to_alias[atom['fact_id']] for atom in atoms]
-
-        def goal(intent: str, alias: str) -> dict:
-            return {
-                'intent': intent,
-                'fact_aliases': [alias],
-            }
-
-        scenes = []
-        for index, alias in enumerate(aliases):
-            scenes.append({
-                'weight': 'W_MID',
-                'purpose': '落实冻结事实',
-                'role': 'R_BRIDGE',
-                'delivery': 'D_SCENE',
-                'transition': 'X_START' if index == 0 else 'X_CONTINUE',
-                'land_fact_aliases': [alias],
-                'context_fact_aliases': [],
-                'turn_fact_alias': alias,
-                'entry_state_aliases': [],
-                'exit_state_aliases': [],
-            })
-        chapters.append({
-            'output_ordinal': chapter['chapter_ordinal'],
-            'structure_decision': {
-                'mode': 'retain',
-                'reason': '事实、状态与因果已经构成不可交换的短链。',
-                'declared_change_kinds': [],
-            },
-            'chapter_goal': goal('G_ADVANCE', aliases[-1]),
-            'open_hook_goal': goal('G_OPEN', aliases[0]),
-            'end_hook_goal': goal('G_CLOSE', aliases[-1]),
-            'weight': 'CH_EVEN',
-            'chapter_rewrite_brief': '依照冻结事实逐项闭合。',
-            'scenes': scenes,
-        })
+    """整书历史入口拒绝反例的载荷；只沿用当前完整节点的语义和身份。"""
+    aliases = {row['ref']: alias for alias, row in mapping['subject_aliases'].items()
+               if row['kind'] == 'beat'}
     return {
-        'reconstruction_strategy': '逐章保持冻结事实、状态与因果闭合。',
-        'output_chapters': chapters,
+        'reconstruction_strategy': '按完整剧情逐章推进',
+        'output_chapters': [
+            {'output_ordinal': chapter['chapter_ordinal'], 'weight': 'CH_EVEN',
+             **_chapter_response({'chapter': {'beats': [
+                 {'alias': aliases[beat['beat_id']]} for beat in chapter['beats']]}})}
+            for chapter in blueprints_raw['blueprints']],
     }
 
 
-def _split_a_responder(blueprints_raw: dict[str, Any]) \
-        -> Callable[[ChatRequest], dict[str, Any]]:
-    """按新架构的 strategy / local chapter schema 返回最小合法候选。"""
-    ordinals = sorted(
-        int(row['chapter_ordinal']) for row in blueprints_raw['blueprints'])
+def _chapter_response(projection: dict) -> dict:
+    aliases = [row['alias'] for row in projection['chapter']['beats']]
+    def goal(intent, index):
+        return {'intent': intent, 'subject_aliases': [aliases[index]],
+                'anchor_beat_alias': aliases[index], 'anchor_scene_ref': f's{index + 1:02d}'}
+    return {
+        'structure_decision': {'mode': 'retain', 'reason': '保持关键因果与披露边界',
+                               'declared_change_kinds': []},
+        'chapter_goal': goal('G_ADVANCE', len(aliases) - 1),
+        'open_hook_goal': goal('G_OPEN', 0),
+        'end_hook_goal': goal('G_CLOSE', len(aliases) - 1),
+        'chapter_rewrite_brief': '按完整剧情节点组织场景。',
+        'scenes': [{
+            'scene_ref': f's{i + 1:02d}', 'weight': 'W_MID', 'purpose': '呈现完整剧情',
+            'role': 'R_BRIDGE', 'delivery': 'D_SCENE',
+            'transition': 'X_START' if i == 0 else 'X_CONTINUE',
+            'context_beat_aliases': [], 'turn_beat_alias': alias,
+        } for i, alias in enumerate(aliases)],
+        'beat_placements': [{
+            'beat_alias': alias, 'deliveries': [{'scene_ref': f's{i + 1:02d}',
+                                               'presentation_instruction': None}],
+        } for i, alias in enumerate(aliases)],
+        'anchor_bindings': [],
+    }
 
-    def answer(request: ChatRequest) -> dict[str, Any]:
+
+def _split_a_responder(blueprints_raw: dict[str, Any]) -> Callable[[ChatRequest], dict[str, Any]]:
+    """全书策略与各章设计独立回包；只消费实际 opaque 规划视图。"""
+    ordinals = sorted(row['chapter_ordinal'] for row in blueprints_raw['blueprints'])
+    def answer(request):
         if request.system == plan.prompts.blind_book_strategy_system():
-            return {
-                'reconstruction_strategy': '逐章保持冻结事实、状态与因果闭合。',
-                'chapter_weights': [
-                    {'chapter_ordinal': ordinal, 'weight': 'CH_EVEN'}
-                    for ordinal in ordinals
-                ],
-            }
-        lines = request.user.splitlines()
-        projection = json.loads(lines[lines.index(plan.prompts.BLOCK_BLIND_CHAPTER_TRUTH) + 1])
-        facts = list(projection['chapter']['facts'])
-        aliases = [
-            str(row['fact_alias']) for row in facts
-            if row['obligation'] == 'land'
-        ]
-        assert aliases
-
-        def goal(intent: str, alias: str) -> dict[str, Any]:
-            return {'intent': intent, 'fact_aliases': [alias]}
-
-        return {
-            'structure_decision': {
-                'mode': 'retain',
-                'reason': '事实、状态与因果已经构成不可交换的短链。',
-                'declared_change_kinds': [],
-            },
-            'chapter_goal': goal('G_ADVANCE', aliases[-1]),
-            'open_hook_goal': goal('G_OPEN', aliases[0]),
-            'end_hook_goal': goal('G_CLOSE', aliases[-1]),
-            'chapter_rewrite_brief': '依照冻结事实逐项闭合。',
-            'scenes': [{
-                'weight': 'W_MID',
-                'purpose': '落实冻结事实',
-                'role': 'R_BRIDGE',
-                'delivery': 'D_SCENE',
-                'transition': 'X_START' if index == 0 else 'X_CONTINUE',
-                'land_fact_aliases': [alias],
-                'context_fact_aliases': [],
-                'turn_fact_alias': alias,
-                'entry_state_aliases': [],
-                'exit_state_aliases': [],
-            } for index, alias in enumerate(aliases)],
-        }
-
+            return {'reconstruction_strategy': '按完整剧情逐章推进', 'chapter_weights': [
+                {'chapter_ordinal': ordinal, 'weight': 'CH_EVEN'} for ordinal in ordinals]}
+        body = request.user.split(plan.prompts.BLOCK_BLIND_CHAPTER_TRUTH + chr(10))[1]
+        public, _end = json.JSONDecoder().raw_decode(body)
+        return _chapter_response(public)
     return answer
 
 
-def _bound_b_response(
-    candidate: BlindCandidate,
-    blueprints_raw: dict[str, Any],
-) -> dict:
-    """按候选场精确绑定其正式事实所属的 Stage2 证据。"""
-    chapter_sources = {
-        row['chapter_ordinal']: row for row in blueprints_raw['blueprints']
-    }
-    chapters = []
-    for candidate_chapter in candidate.output_chapters:
-        source = chapter_sources[candidate_chapter.output_ordinal]
-        atoms = {row['fact_id']: row for row in source['fact_atoms']}
-        beats = {row['beat_id']: row for row in source['beats']}
-        scene_rows = []
-        for scene in candidate_chapter.scenes:
-            fact_ids = [candidate.fact_aliases[alias] for alias in scene.land_fact_aliases]
-            stage_refs = list(dict.fromkeys(
-                atoms[fact_id]['source_beat_ref'] for fact_id in fact_ids
-            ))
-            material_refs = [
-                hinge['hinge_id']
-                for stage_ref in stage_refs
-                for hinge in beats[stage_ref]['hinges']
-            ]
-            scene_rows.append({
-                'candidate_scene_id': scene.candidate_scene_id,
-                'material_refs': material_refs,
-                'stage_refs': stage_refs,
-            })
-        chapters.append({
-            'output_ordinal': candidate_chapter.output_ordinal,
-            'scenes': scene_rows,
-        })
-    return {
-        'status': 'bound',
-        'candidate_sha256': candidate_subject_sha256(_candidate_business(candidate)),
-        'chapters': chapters,
-    }
+def _bound_b_response(candidate: BlindCandidate, blueprints_raw: dict[str, Any]) -> dict:
+    """冻结 placement 的证据绑定；测试基线没有需要模型裁决的舞台歧义。"""
+    from novel.stages.stage4.plot_binding import build_mechanical_baseline
+    baseline = build_mechanical_baseline(_candidate_business(candidate), blueprints_raw)
+    assert baseline.fully_mechanical
+    return {'status': 'bound',
+            'candidate_sha256': candidate_subject_sha256(_candidate_business(candidate)),
+            'chapters': baseline.binding_chapters()}
 
 
 def _candidate_business(candidate: BlindCandidate) -> dict[str, Any]:
@@ -325,9 +240,9 @@ def _infeasible_b_response(candidate: BlindCandidate) -> dict:
             'reason': '冻结候选无法同时安放这些关闭式证据。',
             'closed_refs': [
                 first_scene.candidate_scene_id,
-                first_scene.land_fact_aliases[0],
+                candidate.output_chapters[0].beat_placements[0].beat_alias,
                 'b01_01',
-                'h01_011',
+                'e01_01',
             ],
         }],
     }
@@ -369,10 +284,7 @@ def _client(
 def _design(book: Path, blueprints_artifact: ChapterBlueprints) \
         -> tuple[RunContext, LlmClient, FakeTransport, BlindCandidate, dict, dict]:
     ctx = _ctx(book, 'stage4.design')
-    truth, mapping = build_blind_projection(
-        blueprints_artifact.model_dump(by_alias=True, mode='json'),
-        root_clean_sha1=ctx.root_clean_sha1,
-    )
+    _system, _user, _store, _up, truth, mapping, _public = plan._design_request(ctx)
     response = _split_a_responder(
         blueprints_artifact.model_dump(by_alias=True, mode='json'))
     client, transport = _client(ctx, response)
@@ -429,9 +341,11 @@ def test_run_design_is_blind_and_lands_a_reproducible_current_candidate(designed
     assert landed == candidate
     assert candidate.alias_algorithm == mapping['alias_algorithm']
     assert candidate.truth_sha256 == mapping['truth_sha256']
-    assert candidate.fact_aliases == mapping['fact_aliases']
+    assert {alias: row.model_dump(mode='json') for alias, row in candidate.subject_aliases.items()} == mapping['subject_aliases']
     assert candidate.participant_aliases == mapping['participant_aliases']
-    assert set(candidate.provenance.inputs) == {STAGE2_CHAPTER_BLUEPRINTS}
+    assert set(candidate.provenance.inputs) == {
+        STAGE2_CHAPTER_BLUEPRINTS, STAGE2_KNOWLEDGE_LINKS, STAGE2_GLOBAL_GROUNDING,
+        STAGE2_GLOBAL_REVIEW, STAGE2_CHARACTERS}
     assert candidate.provenance.model == MODEL
     assert candidate.provenance.adopted_models == [MODEL]
     assert candidate.provenance.architecture == 'book_strategy_chapters_v1'
@@ -452,10 +366,7 @@ def test_run_design_is_blind_and_lands_a_reproducible_current_candidate(designed
     # 冻结身份不是只在首次调用时算得出：同一 Stage2 字节与 root 可复算同一映射、
     # 同一 prompt、同一候选主体 hash。
     replay_ctx = _ctx(book, 'stage4.design')
-    replay_truth, replay_mapping = build_blind_projection(
-        blueprints_artifact.model_dump(by_alias=True, mode='json'),
-        root_clean_sha1=replay_ctx.root_clean_sha1,
-    )
+    _s, _u, _store, _up, replay_truth, replay_mapping, _public = plan._design_request(replay_ctx)
     assert replay_truth == truth
     assert replay_mapping == mapping
     assert plan.build_design_prompt(replay_ctx) == (request.system, request.user)
@@ -482,7 +393,7 @@ def test_run_plan_binds_evidence_then_compiles_plan_without_context(designed):
     assert binding.status == 'bound'
     assert not store.exists(plan.CTX_REL), \
         'stage4.plan 不得代写 stage4.context 的产物'
-    assert json.loads((book / plan.REL).read_text(encoding='utf-8'))['_schema_version'] == 4
+    assert json.loads((book / plan.REL).read_text(encoding='utf-8'))['_schema_version'] == 5
 
     binding_inputs = {
         plan.CANDIDATE_REL,
@@ -530,7 +441,7 @@ def test_minimal_context_producer_http_and_restart_share_derived_readings(
     assert plan.run_context(_ctx(book, 'stage4.context', paid=False)).passed
     context_bytes = (book / plan.CTX_REL).read_bytes()
     disk = json.loads(context_bytes)
-    assert disk['_schema_version'] == 7
+    assert disk['_schema_version'] == 8
     entry = disk['chapters'][0]
     assert not {'from_source_ordinals', 'budget_chars', 'source_chars'} & entry.keys()
     basis = chapter_basis(entry, {
@@ -636,7 +547,7 @@ def test_false_infeasible_is_rejected_and_never_lands_a_formal_terminal(designed
     prepared = plan.prepare_plan_candidate(ctx)
     why = prepared.validator(EvidenceBindingResponse.model_validate(
         _infeasible_b_response(candidate)), None)
-    assert '构造出了完整 bound' in why
+    assert '语义担忧不是机械不可行证明' in why
     assert len(transport.calls) == 0
     assert not (book / plan.BINDING_REL).exists()
     assert not (book / plan.REL).exists()
@@ -704,7 +615,7 @@ def _legacy_v2_binding_bytes(current_v3: bytes) -> bytes:
     本次测试的 A 主体保持真实一致。
     """
     raw = json.loads(current_v3)
-    assert raw['_schema_version'] == 4
+    assert raw['_schema_version'] == 5
     raw['_schema_version'] = 2
     raw.pop('binding_concerns', None)
     raw.pop('infeasibility_proof', None)
@@ -746,7 +657,7 @@ def test_apply_binding_mints_human_v3_and_builds_first_plan_without_context(desi
     assert compiled.provenance.origin == 'compiled'
     assert not store.exists(plan.CTX_REL)
     raw = json.loads((book / plan.BINDING_REL).read_text(encoding='utf-8'))
-    assert raw['_schema_version'] == 4
+    assert raw['_schema_version'] == 5
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -791,7 +702,7 @@ def test_first_v3_binding_replaces_real_v2_live_bytes_without_round_history(
     store = ArtifactStore(ctx)
     landed = store.read_own(EvidenceBinding, plan.BINDING_REL)[0]
     assert landed.provenance.origin == expected_origin
-    assert json.loads(formal.read_bytes())['_schema_version'] == 4
+    assert json.loads(formal.read_bytes())['_schema_version'] == 5
     assert not invalid.exists(), '退役 INVALID 应由 shape-break replace 原位丢弃'
     rounds = formal.parent / paths.ROUNDS_DIRNAME
     binding_rounds = [] if not rounds.exists() else [

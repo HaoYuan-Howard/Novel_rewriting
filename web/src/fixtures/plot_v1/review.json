@@ -1,0 +1,2286 @@
+{
+  "chapter": {
+    "sid": "123",
+    "title": "完整剧情测试",
+    "read_only": true,
+    "auto_decisions": false,
+    "review_contract_version": "stage2-plot-scope-review-v1",
+    "scope": "chapter:1",
+    "review_identity_sha256": "bed34ec8fb5da6e785a1966318498fc9df95e22c5639f57b47b120610ca87432",
+    "validation_seal_sha256": "793eaf3cff53a054168ea36501e951b26feb83ccb0aec528790609ae0470d296",
+    "review_token": "bpr5_02da530909a1b916d60e37c0855b2d3a897cadf90f8abfba9b1b858f4c1eb26d",
+    "subject_sha256": "bed34ec8fb5da6e785a1966318498fc9df95e22c5639f57b47b120610ca87432",
+    "binding_sha256": "02da530909a1b916d60e37c0855b2d3a897cadf90f8abfba9b1b858f4c1eb26d",
+    "binding": {
+      "blueprint_rel": "stage2/chapter_blueprints.json",
+      "subject_kind": "formal",
+      "main_text_artifact_sha256": "bce166f01e7fd031b07faaaec8229919bc50d30725947f5d00e65037c59f4aa8",
+      "blueprint_artifact_sha256": "a96abdc3e763396bac4adee24e29f22d0d22749587915dca046436e933a8e3d9",
+      "check_report_sha256": "f0d1cb43dfe742a37f402454d394fc9f8ab86482791243a81ff97ee30411aa09",
+      "chapter_ordinals": [
+        1,
+        2,
+        3
+      ]
+    },
+    "dependency_manifest": {
+      "contract": "stage2-plot-scope-review-v1",
+      "scope": "chapter:1",
+      "inputs": [
+        {
+          "selection": {
+            "input_rel": "stage1/main_text.json",
+            "projection": "source_chapter",
+            "chapter_ordinal": 1,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "ac8c4362bb3ce668e92e8c2261c0d36c7ac9e2e02efa237d9c24e13e62e0a3e5"
+        },
+        {
+          "selection": {
+            "input_rel": "stage2/chapter_blueprints.json",
+            "projection": "plot_chapter",
+            "chapter_ordinal": 1,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "bb9be70da3a68a73c239e071e8bc415bca272e82440167cd60648f6a48099fbd"
+        },
+        {
+          "selection": {
+            "input_rel": "stage2/global_grounding.json",
+            "projection": "plot_global",
+            "chapter_ordinal": 1,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "fe23286caa5cf7507df794da757dbd7ddbfed8fa168a949c4b63e6526e0e447a"
+        },
+        {
+          "selection": {
+            "input_rel": "stage2/chapter_blueprints.json",
+            "projection": "plot_inherited_states",
+            "chapter_ordinal": 1,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      ],
+      "depends_on_scopes": []
+    },
+    "knowledge_links": {
+      "scope": {
+        "contract": "stage2-knowledge-links-v2",
+        "chapter_ordinal": 1,
+        "scope_sha256": "4ad7ff6950ac77f9df3cbe4901b5eecb26265a788ad63af11216612d042a24cc",
+        "main_text_sha256": "bce166f01e7fd031b07faaaec8229919bc50d30725947f5d00e65037c59f4aa8",
+        "knowledge_sha256": "aa8ab5241be9a8d5de95f99aafde3c43c61cf070cb57ee4531838407b8f4461a",
+        "blueprint_sha256": "a96abdc3e763396bac4adee24e29f22d0d22749587915dca046436e933a8e3d9",
+        "obligations": [
+          {
+            "obligation_id": "knowledge_event:secret_01/char_001:1",
+            "kind": "knowledge_event",
+            "knowledge_ref": "secret_01/char_001",
+            "subject_ref": {
+              "kind": "secret",
+              "ref": "secret_01"
+            },
+            "audience": {
+              "kind": "character",
+              "char_id": "char_001"
+            },
+            "chapter_ordinal": 1,
+            "subject_sha256": "c56caa3fe6aac7bf1b84f0fb24c953316cb55f88fd2208bc08dfe572576750d3",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              }
+            ],
+            "entry_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              },
+              {
+                "kind": "secret",
+                "ref": "secret_01"
+              }
+            ]
+          },
+          {
+            "obligation_id": "relation:rel_01:1",
+            "kind": "relation",
+            "knowledge_ref": "rel_01",
+            "subject_ref": {
+              "kind": "relation",
+              "ref": "rel_01"
+            },
+            "audience": null,
+            "chapter_ordinal": 1,
+            "subject_sha256": "b7e0f3dae51ea2aca81da4555d3e716e3266ba899844aa4786e11096d4b35a48",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              }
+            ],
+            "entry_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              },
+              {
+                "kind": "beat",
+                "ref": "b02_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b02_02"
+              },
+              {
+                "kind": "relation",
+                "ref": "rel_01"
+              }
+            ]
+          },
+          {
+            "obligation_id": "relation_visibility:rel_01:1",
+            "kind": "relation_visibility",
+            "knowledge_ref": "rel_01",
+            "subject_ref": {
+              "kind": "relation",
+              "ref": "rel_01"
+            },
+            "audience": null,
+            "chapter_ordinal": 1,
+            "subject_sha256": "1d4925f93cedf7287f8cb15eb3525517b1f5f9aac9ce72ab53c25b15ddbcb0aa",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              }
+            ],
+            "entry_subject_refs": []
+          },
+          {
+            "obligation_id": "secret_setup:secret_01:1",
+            "kind": "secret_setup",
+            "knowledge_ref": "secret_01",
+            "subject_ref": {
+              "kind": "secret",
+              "ref": "secret_01"
+            },
+            "audience": null,
+            "chapter_ordinal": 1,
+            "subject_sha256": "6782f50455384864b8bb42d71726b9457c1ccc7db8e9dfb6d4a35346592f4f3e",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              }
+            ],
+            "entry_subject_refs": []
+          },
+          {
+            "obligation_id": "setting:时代背景:1",
+            "kind": "setting",
+            "knowledge_ref": "时代背景",
+            "subject_ref": {
+              "kind": "setting",
+              "ref": "时代背景"
+            },
+            "audience": null,
+            "chapter_ordinal": 1,
+            "subject_sha256": "e33fc7cdaecc17ce278160ff5e26f76816c74275f6669be30db9e3ca1a051122",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              }
+            ],
+            "entry_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              },
+              {
+                "kind": "setting",
+                "ref": "时代背景"
+              }
+            ]
+          },
+          {
+            "obligation_id": "world_rule:wr_01/1:1",
+            "kind": "world_rule",
+            "knowledge_ref": "wr_01/1",
+            "subject_ref": {
+              "kind": "world_rule",
+              "ref": "wr_01"
+            },
+            "audience": null,
+            "chapter_ordinal": 1,
+            "subject_sha256": "16180e3f997523615ebaefdce4cfa478da2e0fc6e85a116e8a667f67a5fe72d1",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              }
+            ],
+            "entry_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              },
+              {
+                "kind": "world_rule",
+                "ref": "wr_01"
+              }
+            ]
+          },
+          {
+            "obligation_id": "world_rule_reveal:wr_01/1:1",
+            "kind": "world_rule_reveal",
+            "knowledge_ref": "wr_01/1",
+            "subject_ref": {
+              "kind": "world_rule",
+              "ref": "wr_01"
+            },
+            "audience": null,
+            "chapter_ordinal": 1,
+            "subject_sha256": "50a2a6975c6aa95c2465fdea986c1153db8bf9020e17c988ee6a4c1b00a0be9c",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              }
+            ],
+            "entry_subject_refs": []
+          }
+        ]
+      },
+      "inherited": [],
+      "pending_obligation_ids": [
+        "knowledge_event:secret_01/char_001:1",
+        "relation:rel_01:1",
+        "relation_visibility:rel_01:1",
+        "secret_setup:secret_01:1",
+        "setting:时代背景:1",
+        "world_rule:wr_01/1:1",
+        "world_rule_reveal:wr_01/1:1"
+      ]
+    },
+    "material": {
+      "scope": "chapter:1",
+      "sources": [
+        {
+          "chapter_ordinal": 1,
+          "text": "\n春风吹过老宅的院墙。\n\n李宝珠站在廊下看着落花。\n\n她想起了昨夜那封信。\n\n信上说父亲已经回城。\n\n她把信折好收进袖中。\n\n远处传来更夫的梆子声。\n\n"
+        }
+      ],
+      "blueprints": [
+        {
+          "chapter_ordinal": 1,
+          "source_sha256": "add955492f46b033a690bd1ef3ece723c288808917abe4994be8911c2d4ee9a2",
+          "chapter_function": "推进家宅生活及家人之间的信息变化",
+          "beats": [
+            {
+              "beat_id": "b01_01",
+              "content": "昨夜来信告知李宝珠父亲已经回城。",
+              "participant_char_ids": [
+                "char_001"
+              ],
+              "evidence_refs": [
+                "e01_01"
+              ],
+              "source_contexts": []
+            },
+            {
+              "beat_id": "b01_02",
+              "content": "春日老宅中，李宝珠站在廊下看落花，回想来信，折信收袖，听见远处梆声。",
+              "participant_char_ids": [
+                "char_001"
+              ],
+              "evidence_refs": [
+                "e01_02"
+              ],
+              "source_contexts": []
+            }
+          ],
+          "evidence_anchors": [
+            {
+              "start_para": 3,
+              "end_para": 4,
+              "evidence_id": "e01_01",
+              "start": 27,
+              "end": 49
+            },
+            {
+              "start_para": 1,
+              "end_para": 6,
+              "evidence_id": "e01_02",
+              "start": 1,
+              "end": 74
+            }
+          ],
+          "states": [],
+          "inherited_state_endings": [],
+          "constraints": [],
+          "entry_state_refs": [],
+          "carry_out_refs": [],
+          "narration": [
+            {
+              "grammatical_person": "third",
+              "narrator_char_id": null,
+              "focalizer_char_id": "char_001",
+              "pronoun_surfaces": []
+            }
+          ]
+        }
+      ],
+      "dependencies": [
+        [
+          {
+            "kind": "setting",
+            "ref": "时代背景",
+            "value": {
+              "content": "架空古代江南的一座小城"
+            },
+            "evidence_sha256": "a4740d9a5a110d0ed7271362b2057fd7b00194a5c83ba94d59b9c0ff0edddd17"
+          },
+          {
+            "kind": "world_rule",
+            "ref": "wr_01",
+            "value": {
+              "kind": "social_norm",
+              "versions": [
+                {
+                  "effective_from_chapter": 1,
+                  "desc": "城中入夜有宵禁，更夫敲过梆子之后不许出门走动"
+                }
+              ]
+            },
+            "evidence_sha256": "ebcb78e94b102a57fcaae544a254a5ebfeade7813c65f86ad0c4da291dd34969"
+          }
+        ],
+        []
+      ],
+      "issues": [],
+      "chapter_acceptances": []
+    },
+    "progress": {
+      "total_chapters": 3,
+      "generated_chapters": 3,
+      "accepted_chapters": 0,
+      "next_scope": "chapter:1",
+      "scopes": [
+        {
+          "scope": "chapter:1",
+          "state": "missing",
+          "subject_sha256": "bed34ec8fb5da6e785a1966318498fc9df95e22c5639f57b47b120610ca87432",
+          "decision_sha256": null,
+          "open_issue_ids": []
+        },
+        {
+          "scope": "chapter:2",
+          "state": "missing",
+          "subject_sha256": "46bc0f2b32d25e85c4d1a0e165f0a2ac73391395c54c5b2c1e28a3093c6754d8",
+          "decision_sha256": null,
+          "open_issue_ids": []
+        },
+        {
+          "scope": "chapter:3",
+          "state": "missing",
+          "subject_sha256": "ccf42ea98d82ce78efc73960065154d16e390064ed3138d8cfbdedd532d9ffff",
+          "decision_sha256": null,
+          "open_issue_ids": []
+        },
+        {
+          "scope": "cross_chapter",
+          "state": "missing",
+          "subject_sha256": null,
+          "decision_sha256": null,
+          "open_issue_ids": []
+        }
+      ],
+      "unresolved_issues": 0,
+      "accepted": false
+    },
+    "check": {
+      "rules_scanned": 45,
+      "counts": {
+        "ok": 42,
+        "hit": 0,
+        "unver": 3,
+        "skipped": 0
+      },
+      "provenance": {
+        "freshness": "fresh",
+        "reason": "match",
+        "ghosts": [],
+        "edges": [
+          {
+            "key": "stage1/main_text.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "7527d7a23e",
+            "now_file": "7527d7a23e",
+            "recorded_consumed": "f870e94453",
+            "now_consumed": "f870e94453"
+          },
+          {
+            "key": "stage2/blueprint_character_projection.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "f9978988c3",
+            "now_file": "f9978988c3",
+            "recorded_consumed": "ae39a86b06",
+            "now_consumed": "ae39a86b06"
+          },
+          {
+            "key": "stage2/global_grounding.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "c894529657",
+            "now_file": "c894529657",
+            "recorded_consumed": "7e7a6b2bdd",
+            "now_consumed": "7e7a6b2bdd"
+          }
+        ],
+        "invalid": false,
+        "revalidated": null,
+        "origin": null
+      },
+      "attention": [
+        {
+          "rule": "plot_semantics",
+          "sev": "unver",
+          "status": "unver",
+          "item": "完整剧情、归因、因果与揭示经语义审阅",
+          "requirement": "R-3.13",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "剧情完整、归因、因果及披露由章审和跨章复核裁决",
+          "scanned": null,
+          "baseline": null,
+          "note": "普通 schema/坐标检查不能证明语义完整；由章审和跨章复核明确裁决。"
+        },
+        {
+          "rule": "role_fate_unverifiable",
+          "sev": "unver",
+          "status": "unver",
+          "item": "改写式结局泄漏有确定性防线",
+          "requirement": "R-2.6",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "词表只挡转抄式结局泄漏（8 个词，本次命中 0 处）；改写式泄漏没有任何确定性防线——实测某本词表命中 0/17 而人读真违规 6/17（role 写「…后成为某某的下属」，差一个字避开了 后被）。⚠ 本条与上面那条报绿灯还是红灯无关，每本每次都产：自动语义重划分可走 --purge-role（付费）；人工核对后的新 role 可走 stage2.global --apply-edit <书内json>（0 LLM）",
+          "scanned": "2 个角色的 role",
+          "baseline": null,
+          "note": "⚠⚠ 本仓改成无条件产出（同 F4-6 对 name_surface_survey 的处置）。原型把它挂在 if not leaky 那一支上——role_leaks_fate 命中的那两本根本走不到它，于是「这一维没有确定性防线」这句话在最需要说的两本上反而不说。⇒ 本条与 role_leaks_fate 报绿灯还是红灯无关，每本每次都产：词表只挡转抄式（实测头牌命中 0/17 而人读真违规 6/17），改写式泄漏仍须人读；人物 producer 返工也不能代替 Global Commander 的语义裁决，人工核对后的 typed role 可用 stage2.characters --apply-edit 0 LLM 写回。⚠ 它是本层徽章到不了 pass 的主因，而那是对的"
+        },
+        {
+          "rule": "secrets_absent",
+          "sev": "unver",
+          "status": "unver",
+          "item": "这本书有可查的秘密",
+          "requirement": "R-2.9b",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "这本书有 1 条 secret，剧透那一族有判别力样本 —— ⚠ 本行照常输出：「查过、有样本」与「根本没有样本」必须在报告上分得开",
+          "scanned": "1 条 secret",
+          "baseline": null,
+          "note": "一条 secret 都没有 ⇒ 逐章剧透闸门与「本章不许揭示什么」在这本书上恒不执行，任何「剧透闸门验过了」的说法对它都不成立。⚠ 它与「查过、没泄」必须分得开。盘上 0/3（三本都有秘密，这一支零样本）"
+        }
+      ],
+      "metrics": [
+        {
+          "rule": "context_scope",
+          "sev": "metric",
+          "status": "ok",
+          "item": "实际逐章抽取契约与正文边界",
+          "requirement": "R-3.16b",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "context_scope",
+              "sev": "metric",
+              "item": "实际逐章抽取契约与正文边界",
+              "detail": "{'architecture': 'plot-blueprint-v1', 'source_format': 'numbered-paragraphs-v1', 'global_projection_contract': 'plot-global-scope-v1'}",
+              "evidence": [
+                "{'architecture': 'plot-blueprint-v1', 'source_format': 'numbered-paragraphs-v1', 'global_projection_contract': 'plot-global-scope-v1'}"
+              ],
+              "fix_args": {},
+              "evidence_key": "{'architecture': 'plot-blueprint-v1', 'source_format': 'numbered-paragraphs-v1', 'global_projection_contract': 'plot-global-scope-v1'}",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "当前产物来源上下文",
+          "baseline": null,
+          "note": null
+        },
+        {
+          "rule": "fate_report",
+          "sev": "metric",
+          "status": "ok",
+          "item": "结局字段的缺失率",
+          "requirement": "R-2.7",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "fate_report",
+              "sev": "metric",
+              "item": "结局字段的缺失率",
+              "detail": "0/2 个角色有 fate",
+              "evidence": [
+                "0/2"
+              ],
+              "fix_args": {},
+              "evidence_key": "0/2",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "2 个角色",
+          "baseline": null,
+          "note": "⚠ 无条件报出（R-2.7 那一格写的就是 度量）：这一格答的是「结局有没有被单独接住」，不是「结局对不对」。盘上 12/12 · 9/15 · 48/48 —— 中间那本 6 个角色没有结局，⚠ 那不是违约（配角本来就可以没有归宿），所以它只能是读数"
+        },
+        {
+          "rule": "plot_shape",
+          "sev": "metric",
+          "status": "ok",
+          "item": "完整节点、状态、约束与共享证据数量",
+          "requirement": "R-3.13",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "plot_shape",
+              "sev": "metric",
+              "item": "完整节点、状态、约束与共享证据数量",
+              "detail": "{'chapters': 3, 'beats': 7, 'states': 0, 'constraints': 0, 'evidence_anchors': 7}",
+              "evidence": [
+                "{'chapters': 3, 'beats': 7, 'states': 0, 'constraints': 0, 'evidence_anchors': 7}"
+              ],
+              "fix_args": {},
+              "evidence_key": "{'chapters': 3, 'beats': 7, 'states': 0, 'constraints': 0, 'evidence_anchors': 7}",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "3 章",
+          "baseline": null,
+          "note": "只报告实际规模，不设节点配额，不把辅助结构变回事实数据库。"
+        },
+        {
+          "rule": "secret_cold_reveal",
+          "sev": "metric",
+          "status": "ok",
+          "item": "没有埋点的秘密条数",
+          "requirement": "R-2.9b",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "secret_cold_reveal",
+              "sev": "metric",
+              "item": "没有埋点的秘密条数",
+              "detail": "0/1 条 secret 没有埋点：[]",
+              "evidence": [
+                "cold=0/1",
+                "demoted=0"
+              ],
+              "fix_args": {},
+              "evidence_key": "cold=0/1|demoted=0",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "1 条 secret",
+          "baseline": null,
+          "note": "凭空点破。据实留空是允许的（作者确实可以不埋），所以它只能是读数。⚠⚠ 「冷揭示」与「被裁空」（产地把揭示章号抄进埋点、落盘前被裁）在字段值上完全同形 ⇒ 两者只能靠 setup_chapters_pruned 那个计数分开，因此该计数必须常驻来源账。"
+        }
+      ]
+    },
+    "accounting": [
+      {
+        "key": "setup_chapters_pruned",
+        "item": "哪几条秘密的埋点章被裁掉了？（「冷揭示」与「被裁空」只能靠它分开）",
+        "recorded": true,
+        "count": 0,
+        "detail": []
+      },
+      {
+        "key": "evidence_locator_failures",
+        "item": "哪些事实 locator 因错章、零命中、多命中或正式 span 漂移而失败？（非空即 GlobalGrounding 失败态）",
+        "recorded": true,
+        "count": 0,
+        "detail": []
+      },
+      {
+        "key": "verbatim_failures",
+        "item": "哪几处**锚不到**？（非空即失败态，按根因分）",
+        "recorded": false,
+        "count": 0,
+        "detail": []
+      },
+      {
+        "key": "fact_atom_failures",
+        "item": "哪几个事实原子的证据短语无法在所属证据拍内唯一回取？（与 hinge 失败共同进入 `verbatim_failed`）",
+        "recorded": false,
+        "count": 0,
+        "detail": []
+      },
+      {
+        "key": "hinge_ambiguous_pending",
+        "item": "哪几条 hinge 的短语在拍区间内多处命中、等着候选选择修复？（`extraction-ir-v1` 专属；失败态 hinge 不带短语，这笔账是字段级修复唯一不依赖 LLM cache 的输入）",
+        "recorded": false,
+        "count": 0,
+        "detail": []
+      }
+    ]
+  },
+  "reading": {
+    "sid": "123",
+    "title": "完整剧情测试",
+    "chapter_ordinal": 1,
+    "text": "\n春风吹过老宅的院墙。\n\n李宝珠站在廊下看着落花。\n\n她想起了昨夜那封信。\n\n信上说父亲已经回城。\n\n她把信折好收进袖中。\n\n远处传来更夫的梆子声。\n\n",
+    "text_chars": 76,
+    "blueprint": {
+      "chapter_ordinal": 1,
+      "source_sha256": "add955492f46b033a690bd1ef3ece723c288808917abe4994be8911c2d4ee9a2",
+      "chapter_function": "推进家宅生活及家人之间的信息变化",
+      "beats": [
+        {
+          "beat_id": "b01_01",
+          "content": "昨夜来信告知李宝珠父亲已经回城。",
+          "participant_char_ids": [
+            "char_001"
+          ],
+          "evidence_refs": [
+            "e01_01"
+          ],
+          "source_contexts": []
+        },
+        {
+          "beat_id": "b01_02",
+          "content": "春日老宅中，李宝珠站在廊下看落花，回想来信，折信收袖，听见远处梆声。",
+          "participant_char_ids": [
+            "char_001"
+          ],
+          "evidence_refs": [
+            "e01_02"
+          ],
+          "source_contexts": []
+        }
+      ],
+      "evidence_anchors": [
+        {
+          "start_para": 3,
+          "end_para": 4,
+          "evidence_id": "e01_01",
+          "start": 27,
+          "end": 49
+        },
+        {
+          "start_para": 1,
+          "end_para": 6,
+          "evidence_id": "e01_02",
+          "start": 1,
+          "end": 74
+        }
+      ],
+      "states": [],
+      "inherited_state_endings": [],
+      "constraints": [],
+      "entry_state_refs": [],
+      "carry_out_refs": [],
+      "narration": [
+        {
+          "grammatical_person": "third",
+          "narrator_char_id": null,
+          "focalizer_char_id": "char_001",
+          "pronoun_surfaces": []
+        }
+      ]
+    },
+    "blueprint_state": {
+      "rel": "stage2/chapter_blueprints.json",
+      "exists": true,
+      "bytes": 6235,
+      "mtime": 1789145779,
+      "freshness": "fresh",
+      "display_freshness": "fresh",
+      "reason": "match",
+      "ghosts": [],
+      "invalid": false,
+      "invalid_freshness": null,
+      "invalid_reason": null,
+      "readable": true,
+      "condition": "ready"
+    },
+    "_provenance": {
+      "code": "test-plot-ui-fixture",
+      "root_clean_sha1": "2b316027b79c3e7cc16d9678efd250852a308445",
+      "inputs": {
+        "stage1/main_text.json": {
+          "file": "7527d7a23e",
+          "consumed": "f870e94453"
+        },
+        "stage2/blueprint_character_projection.json": {
+          "file": "f9978988c3",
+          "consumed": "ae39a86b06"
+        },
+        "stage2/global_grounding.json": {
+          "file": "c894529657",
+          "consumed": "7e7a6b2bdd"
+        }
+      },
+      "usage": {
+        "calls_made": 3,
+        "calls_cached": 0,
+        "prompt_tokens": 30,
+        "completion_tokens": 60,
+        "reasoning_tokens": 15
+      },
+      "revalidated": null,
+      "gates_skipped": null,
+      "origin": null,
+      "input_basis": null,
+      "partial_rewrite": null,
+      "invalid_baseline_sha256": null,
+      "revalidation_audit": null,
+      "prompts": {
+        "BLUEPRINT_PLOT_SYS": "91f0d3b2e8"
+      },
+      "model": "test-model",
+      "adopted_models": [
+        "test-model"
+      ],
+      "scope_violations": [],
+      "context": {
+        "architecture": "plot-blueprint-v1",
+        "source_format": "numbered-paragraphs-v1",
+        "global_projection_contract": "plot-global-scope-v1"
+      }
+    }
+  },
+  "cross": {
+    "sid": "123",
+    "title": "完整剧情测试",
+    "read_only": true,
+    "auto_decisions": false,
+    "review_contract_version": "stage2-plot-scope-review-v1",
+    "scope": "cross_chapter",
+    "review_identity_sha256": "1c6edc0f571865b0c508e85947484b531a70b48bd9469da98b537aa3927bdd7a",
+    "validation_seal_sha256": "793eaf3cff53a054168ea36501e951b26feb83ccb0aec528790609ae0470d296",
+    "review_token": "bpr5_11dcdc4d23b55dbd90a8c103c68aec53ba72d4926b3e09806f0eff81abeae4f6",
+    "subject_sha256": "1c6edc0f571865b0c508e85947484b531a70b48bd9469da98b537aa3927bdd7a",
+    "binding_sha256": "11dcdc4d23b55dbd90a8c103c68aec53ba72d4926b3e09806f0eff81abeae4f6",
+    "binding": {
+      "blueprint_rel": "stage2/chapter_blueprints.json",
+      "subject_kind": "formal",
+      "main_text_artifact_sha256": "bce166f01e7fd031b07faaaec8229919bc50d30725947f5d00e65037c59f4aa8",
+      "blueprint_artifact_sha256": "a96abdc3e763396bac4adee24e29f22d0d22749587915dca046436e933a8e3d9",
+      "check_report_sha256": "f0d1cb43dfe742a37f402454d394fc9f8ab86482791243a81ff97ee30411aa09",
+      "chapter_ordinals": [
+        1,
+        2,
+        3
+      ]
+    },
+    "dependency_manifest": {
+      "contract": "stage2-plot-scope-review-v1",
+      "scope": "cross_chapter",
+      "inputs": [
+        {
+          "selection": {
+            "input_rel": "stage1/main_text.json",
+            "projection": "source_chapter",
+            "chapter_ordinal": 1,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "ac8c4362bb3ce668e92e8c2261c0d36c7ac9e2e02efa237d9c24e13e62e0a3e5"
+        },
+        {
+          "selection": {
+            "input_rel": "stage2/chapter_blueprints.json",
+            "projection": "plot_chapter",
+            "chapter_ordinal": 1,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "bb9be70da3a68a73c239e071e8bc415bca272e82440167cd60648f6a48099fbd"
+        },
+        {
+          "selection": {
+            "input_rel": "stage1/main_text.json",
+            "projection": "source_chapter",
+            "chapter_ordinal": 2,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "0e42a3c9970d10962e93886cad9c2d05e3aeddedc45340bb13aa0e9106f3c174"
+        },
+        {
+          "selection": {
+            "input_rel": "stage2/chapter_blueprints.json",
+            "projection": "plot_chapter",
+            "chapter_ordinal": 2,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "343eeef86822faf9bb5d376eb3e1e97acb55f05e0b10dca9ea9989ad9a405320"
+        },
+        {
+          "selection": {
+            "input_rel": "stage1/main_text.json",
+            "projection": "source_chapter",
+            "chapter_ordinal": 3,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "bd49aabec872f89123453bf10afee4f96f31136557c326564bdc11b8abf2a2ff"
+        },
+        {
+          "selection": {
+            "input_rel": "stage2/chapter_blueprints.json",
+            "projection": "plot_chapter",
+            "chapter_ordinal": 3,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "e0a2457152f60a8c2dd7d89e6e1b38bd1b4d6195e7f36b38c5dbd199aef31f41"
+        },
+        {
+          "selection": {
+            "input_rel": "stage2/global_grounding.json",
+            "projection": "plot_global",
+            "chapter_ordinal": 1,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "fe23286caa5cf7507df794da757dbd7ddbfed8fa168a949c4b63e6526e0e447a"
+        },
+        {
+          "selection": {
+            "input_rel": "stage2/chapter_blueprints.json",
+            "projection": "plot_inherited_states",
+            "chapter_ordinal": 1,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "selection": {
+            "input_rel": "stage2/global_grounding.json",
+            "projection": "plot_global",
+            "chapter_ordinal": 2,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "022f345bf0649adb6d1399c5cdbea970075c0b409a6b692a0e3edbe25b251bd9"
+        },
+        {
+          "selection": {
+            "input_rel": "stage2/chapter_blueprints.json",
+            "projection": "plot_inherited_states",
+            "chapter_ordinal": 2,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        {
+          "selection": {
+            "input_rel": "stage2/global_grounding.json",
+            "projection": "plot_global",
+            "chapter_ordinal": 3,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "022f345bf0649adb6d1399c5cdbea970075c0b409a6b692a0e3edbe25b251bd9"
+        },
+        {
+          "selection": {
+            "input_rel": "stage2/chapter_blueprints.json",
+            "projection": "plot_inherited_states",
+            "chapter_ordinal": 3,
+            "path": [],
+            "key_field": null,
+            "selected_ids": null
+          },
+          "consumed_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      ],
+      "depends_on_scopes": [
+        "chapter:1",
+        "chapter:2",
+        "chapter:3"
+      ]
+    },
+    "knowledge_links": {
+      "scope": {
+        "contract": "stage2-knowledge-links-v2",
+        "chapter_ordinal": null,
+        "scope_sha256": "2f159d48ac24abf0668a78ce22955f5f66937584aadfdba60026f931b3b17230",
+        "main_text_sha256": "bce166f01e7fd031b07faaaec8229919bc50d30725947f5d00e65037c59f4aa8",
+        "knowledge_sha256": "aa8ab5241be9a8d5de95f99aafde3c43c61cf070cb57ee4531838407b8f4461a",
+        "blueprint_sha256": "a96abdc3e763396bac4adee24e29f22d0d22749587915dca046436e933a8e3d9",
+        "obligations": [
+          {
+            "obligation_id": "knowledge_event:secret_01/char_001:1",
+            "kind": "knowledge_event",
+            "knowledge_ref": "secret_01/char_001",
+            "subject_ref": {
+              "kind": "secret",
+              "ref": "secret_01"
+            },
+            "audience": {
+              "kind": "character",
+              "char_id": "char_001"
+            },
+            "chapter_ordinal": 1,
+            "subject_sha256": "c56caa3fe6aac7bf1b84f0fb24c953316cb55f88fd2208bc08dfe572576750d3",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              }
+            ],
+            "entry_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              },
+              {
+                "kind": "secret",
+                "ref": "secret_01"
+              }
+            ]
+          },
+          {
+            "obligation_id": "knowledge_event:secret_01/group_0ec1715e1decc56def05fa17:2",
+            "kind": "knowledge_event",
+            "knowledge_ref": "secret_01/group_0ec1715e1decc56def05fa17",
+            "subject_ref": {
+              "kind": "secret",
+              "ref": "secret_01"
+            },
+            "audience": {
+              "kind": "group",
+              "label": "知情的沈家人"
+            },
+            "chapter_ordinal": 2,
+            "subject_sha256": "82ee43d60c1197e1c05d829d50ff4e06cbd2bddbf9586f493b0ba1f00de62995",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b02_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b02_02"
+              }
+            ],
+            "entry_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b02_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b02_02"
+              },
+              {
+                "kind": "secret",
+                "ref": "secret_01"
+              }
+            ]
+          },
+          {
+            "obligation_id": "relation:rel_01:1",
+            "kind": "relation",
+            "knowledge_ref": "rel_01",
+            "subject_ref": {
+              "kind": "relation",
+              "ref": "rel_01"
+            },
+            "audience": null,
+            "chapter_ordinal": 1,
+            "subject_sha256": "b7e0f3dae51ea2aca81da4555d3e716e3266ba899844aa4786e11096d4b35a48",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              }
+            ],
+            "entry_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              },
+              {
+                "kind": "beat",
+                "ref": "b02_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b02_02"
+              },
+              {
+                "kind": "relation",
+                "ref": "rel_01"
+              }
+            ]
+          },
+          {
+            "obligation_id": "relation_visibility:rel_01:1",
+            "kind": "relation_visibility",
+            "knowledge_ref": "rel_01",
+            "subject_ref": {
+              "kind": "relation",
+              "ref": "rel_01"
+            },
+            "audience": null,
+            "chapter_ordinal": 1,
+            "subject_sha256": "1d4925f93cedf7287f8cb15eb3525517b1f5f9aac9ce72ab53c25b15ddbcb0aa",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              }
+            ],
+            "entry_subject_refs": []
+          },
+          {
+            "obligation_id": "secret_reveal:secret_01:2",
+            "kind": "secret_reveal",
+            "knowledge_ref": "secret_01",
+            "subject_ref": {
+              "kind": "secret",
+              "ref": "secret_01"
+            },
+            "audience": null,
+            "chapter_ordinal": 2,
+            "subject_sha256": "944a6ab49c1d35e432391b8d4cdadd255093419b92e3a659c6b22e179ba88772",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b02_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b02_02"
+              }
+            ],
+            "entry_subject_refs": []
+          },
+          {
+            "obligation_id": "secret_setup:secret_01:1",
+            "kind": "secret_setup",
+            "knowledge_ref": "secret_01",
+            "subject_ref": {
+              "kind": "secret",
+              "ref": "secret_01"
+            },
+            "audience": null,
+            "chapter_ordinal": 1,
+            "subject_sha256": "6782f50455384864b8bb42d71726b9457c1ccc7db8e9dfb6d4a35346592f4f3e",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              }
+            ],
+            "entry_subject_refs": []
+          },
+          {
+            "obligation_id": "setting:世界观:2",
+            "kind": "setting",
+            "knowledge_ref": "世界观",
+            "subject_ref": {
+              "kind": "setting",
+              "ref": "世界观"
+            },
+            "audience": null,
+            "chapter_ordinal": 2,
+            "subject_sha256": "0f7332493333802eaf7d96572cff0e1edf0fc8eff22024aa56611562de1f46fc",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b02_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b02_02"
+              }
+            ],
+            "entry_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b02_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b02_02"
+              },
+              {
+                "kind": "setting",
+                "ref": "世界观"
+              }
+            ]
+          },
+          {
+            "obligation_id": "setting:时代背景:1",
+            "kind": "setting",
+            "knowledge_ref": "时代背景",
+            "subject_ref": {
+              "kind": "setting",
+              "ref": "时代背景"
+            },
+            "audience": null,
+            "chapter_ordinal": 1,
+            "subject_sha256": "e33fc7cdaecc17ce278160ff5e26f76816c74275f6669be30db9e3ca1a051122",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              }
+            ],
+            "entry_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              },
+              {
+                "kind": "setting",
+                "ref": "时代背景"
+              }
+            ]
+          },
+          {
+            "obligation_id": "world_rule:wr_01/1:1",
+            "kind": "world_rule",
+            "knowledge_ref": "wr_01/1",
+            "subject_ref": {
+              "kind": "world_rule",
+              "ref": "wr_01"
+            },
+            "audience": null,
+            "chapter_ordinal": 1,
+            "subject_sha256": "16180e3f997523615ebaefdce4cfa478da2e0fc6e85a116e8a667f67a5fe72d1",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              }
+            ],
+            "entry_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              },
+              {
+                "kind": "world_rule",
+                "ref": "wr_01"
+              }
+            ]
+          },
+          {
+            "obligation_id": "world_rule_reveal:wr_01/1:1",
+            "kind": "world_rule_reveal",
+            "knowledge_ref": "wr_01/1",
+            "subject_ref": {
+              "kind": "world_rule",
+              "ref": "wr_01"
+            },
+            "audience": null,
+            "chapter_ordinal": 1,
+            "subject_sha256": "50a2a6975c6aa95c2465fdea986c1153db8bf9020e17c988ee6a4c1b00a0be9c",
+            "candidate_subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              },
+              {
+                "kind": "beat",
+                "ref": "b01_02"
+              }
+            ],
+            "entry_subject_refs": []
+          }
+        ]
+      },
+      "inherited": [
+        {
+          "obligation_id": "knowledge_event:secret_01/char_001:1",
+          "expected_subject_sha256": "c56caa3fe6aac7bf1b84f0fb24c953316cb55f88fd2208bc08dfe572576750d3",
+          "resolution": {
+            "subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              }
+            ],
+            "kind": "at_beats",
+            "trigger_beat_ref": "b01_01"
+          },
+          "actor": "test:范围审阅者",
+          "reason": "合成语义审阅接受",
+          "source_decision_sha256": "85c6198a7020be173bc06ddec50f90c28723a6606b90c93739541b1e0479ae8f"
+        },
+        {
+          "obligation_id": "knowledge_event:secret_01/group_0ec1715e1decc56def05fa17:2",
+          "expected_subject_sha256": "82ee43d60c1197e1c05d829d50ff4e06cbd2bddbf9586f493b0ba1f00de62995",
+          "resolution": {
+            "subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b02_01"
+              }
+            ],
+            "kind": "at_beats",
+            "trigger_beat_ref": "b02_01"
+          },
+          "actor": "test:范围审阅者",
+          "reason": "合成语义审阅接受",
+          "source_decision_sha256": "92d635222c0da86423f1a62e22e6915871f50af834e6faf5bf08dba9ea62b6bb"
+        },
+        {
+          "obligation_id": "relation:rel_01:1",
+          "expected_subject_sha256": "b7e0f3dae51ea2aca81da4555d3e716e3266ba899844aa4786e11096d4b35a48",
+          "resolution": {
+            "subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              }
+            ],
+            "kind": "at_beats",
+            "trigger_beat_ref": "b01_01"
+          },
+          "actor": "test:范围审阅者",
+          "reason": "合成语义审阅接受",
+          "source_decision_sha256": "85c6198a7020be173bc06ddec50f90c28723a6606b90c93739541b1e0479ae8f"
+        },
+        {
+          "obligation_id": "relation_visibility:rel_01:1",
+          "expected_subject_sha256": "1d4925f93cedf7287f8cb15eb3525517b1f5f9aac9ce72ab53c25b15ddbcb0aa",
+          "resolution": {
+            "subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              }
+            ],
+            "kind": "at_beats",
+            "trigger_beat_ref": "b01_01"
+          },
+          "actor": "test:范围审阅者",
+          "reason": "合成语义审阅接受",
+          "source_decision_sha256": "85c6198a7020be173bc06ddec50f90c28723a6606b90c93739541b1e0479ae8f"
+        },
+        {
+          "obligation_id": "secret_reveal:secret_01:2",
+          "expected_subject_sha256": "944a6ab49c1d35e432391b8d4cdadd255093419b92e3a659c6b22e179ba88772",
+          "resolution": {
+            "subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b02_01"
+              }
+            ],
+            "kind": "at_beats",
+            "trigger_beat_ref": "b02_01"
+          },
+          "actor": "test:范围审阅者",
+          "reason": "合成语义审阅接受",
+          "source_decision_sha256": "92d635222c0da86423f1a62e22e6915871f50af834e6faf5bf08dba9ea62b6bb"
+        },
+        {
+          "obligation_id": "secret_setup:secret_01:1",
+          "expected_subject_sha256": "6782f50455384864b8bb42d71726b9457c1ccc7db8e9dfb6d4a35346592f4f3e",
+          "resolution": {
+            "subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              }
+            ],
+            "kind": "at_beats",
+            "trigger_beat_ref": "b01_01"
+          },
+          "actor": "test:范围审阅者",
+          "reason": "合成语义审阅接受",
+          "source_decision_sha256": "85c6198a7020be173bc06ddec50f90c28723a6606b90c93739541b1e0479ae8f"
+        },
+        {
+          "obligation_id": "setting:世界观:2",
+          "expected_subject_sha256": "0f7332493333802eaf7d96572cff0e1edf0fc8eff22024aa56611562de1f46fc",
+          "resolution": {
+            "subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b02_01"
+              }
+            ],
+            "kind": "at_beats",
+            "trigger_beat_ref": "b02_01"
+          },
+          "actor": "test:范围审阅者",
+          "reason": "合成语义审阅接受",
+          "source_decision_sha256": "92d635222c0da86423f1a62e22e6915871f50af834e6faf5bf08dba9ea62b6bb"
+        },
+        {
+          "obligation_id": "setting:时代背景:1",
+          "expected_subject_sha256": "e33fc7cdaecc17ce278160ff5e26f76816c74275f6669be30db9e3ca1a051122",
+          "resolution": {
+            "subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              }
+            ],
+            "kind": "at_beats",
+            "trigger_beat_ref": "b01_01"
+          },
+          "actor": "test:范围审阅者",
+          "reason": "合成语义审阅接受",
+          "source_decision_sha256": "85c6198a7020be173bc06ddec50f90c28723a6606b90c93739541b1e0479ae8f"
+        },
+        {
+          "obligation_id": "world_rule:wr_01/1:1",
+          "expected_subject_sha256": "16180e3f997523615ebaefdce4cfa478da2e0fc6e85a116e8a667f67a5fe72d1",
+          "resolution": {
+            "subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              }
+            ],
+            "kind": "at_beats",
+            "trigger_beat_ref": "b01_01"
+          },
+          "actor": "test:范围审阅者",
+          "reason": "合成语义审阅接受",
+          "source_decision_sha256": "85c6198a7020be173bc06ddec50f90c28723a6606b90c93739541b1e0479ae8f"
+        },
+        {
+          "obligation_id": "world_rule_reveal:wr_01/1:1",
+          "expected_subject_sha256": "50a2a6975c6aa95c2465fdea986c1153db8bf9020e17c988ee6a4c1b00a0be9c",
+          "resolution": {
+            "subject_refs": [
+              {
+                "kind": "beat",
+                "ref": "b01_01"
+              }
+            ],
+            "kind": "at_beats",
+            "trigger_beat_ref": "b01_01"
+          },
+          "actor": "test:范围审阅者",
+          "reason": "合成语义审阅接受",
+          "source_decision_sha256": "85c6198a7020be173bc06ddec50f90c28723a6606b90c93739541b1e0479ae8f"
+        }
+      ],
+      "pending_obligation_ids": []
+    },
+    "material": {
+      "scope": "cross_chapter",
+      "sources": [
+        {
+          "chapter_ordinal": 1,
+          "text": "\n春风吹过老宅的院墙。\n\n李宝珠站在廊下看着落花。\n\n她想起了昨夜那封信。\n\n信上说父亲已经回城。\n\n她把信折好收进袖中。\n\n远处传来更夫的梆子声。\n\n"
+        },
+        {
+          "chapter_ordinal": 2,
+          "text": "\n第二日清晨天色微亮。\n\n李宝珠推开院门往外走。\n\n街上已经有小贩在吆喝。\n\n她买了两个热腾腾的包子。\n\n回来时看见母亲在门口等她。\n\n其实母亲早就知道那封信的事。\n\n"
+        },
+        {
+          "chapter_ordinal": 3,
+          "text": "\n午后的日头晒得人发懒。\n\n李宝珠把账册摊在桌上一页页翻。\n\n管家在门外回话说米价又涨了。\n\n她皱着眉让管家去问问别家。\n\n窗外的槐树落了一地碎叶。\n\n她忽然想起父亲从前也这样翻账。\n\n那时她还够不着桌子。\n\n母亲进来给她添了一盏茶。\n\n茶是新沏的还烫着。\n\n她端起来吹了吹没有喝。"
+        }
+      ],
+      "blueprints": [
+        {
+          "chapter_ordinal": 1,
+          "source_sha256": "add955492f46b033a690bd1ef3ece723c288808917abe4994be8911c2d4ee9a2",
+          "chapter_function": "推进家宅生活及家人之间的信息变化",
+          "beats": [
+            {
+              "beat_id": "b01_01",
+              "content": "昨夜来信告知李宝珠父亲已经回城。",
+              "participant_char_ids": [
+                "char_001"
+              ],
+              "evidence_refs": [
+                "e01_01"
+              ],
+              "source_contexts": []
+            },
+            {
+              "beat_id": "b01_02",
+              "content": "春日老宅中，李宝珠站在廊下看落花，回想来信，折信收袖，听见远处梆声。",
+              "participant_char_ids": [
+                "char_001"
+              ],
+              "evidence_refs": [
+                "e01_02"
+              ],
+              "source_contexts": []
+            }
+          ],
+          "evidence_anchors": [
+            {
+              "start_para": 3,
+              "end_para": 4,
+              "evidence_id": "e01_01",
+              "start": 27,
+              "end": 49
+            },
+            {
+              "start_para": 1,
+              "end_para": 6,
+              "evidence_id": "e01_02",
+              "start": 1,
+              "end": 74
+            }
+          ],
+          "states": [],
+          "inherited_state_endings": [],
+          "constraints": [],
+          "entry_state_refs": [],
+          "carry_out_refs": [],
+          "narration": [
+            {
+              "grammatical_person": "third",
+              "narrator_char_id": null,
+              "focalizer_char_id": "char_001",
+              "pronoun_surfaces": []
+            }
+          ]
+        },
+        {
+          "chapter_ordinal": 2,
+          "source_sha256": "6bd4f5632468e49ab7c1f575114d6044b61fe0ff6a9523560664c13a6c2d2cda",
+          "chapter_function": "推进家宅生活及家人之间的信息变化",
+          "beats": [
+            {
+              "beat_id": "b02_01",
+              "content": "李宝珠清晨出门，在有小贩叫卖的街上买了两个包子，回来见母亲在门口等她。",
+              "participant_char_ids": [
+                "char_001",
+                "char_002"
+              ],
+              "evidence_refs": [
+                "e02_01"
+              ],
+              "source_contexts": []
+            },
+            {
+              "beat_id": "b02_02",
+              "content": "母亲其实早已知道那封信的事。",
+              "participant_char_ids": [
+                "char_002"
+              ],
+              "evidence_refs": [
+                "e02_02"
+              ],
+              "source_contexts": []
+            }
+          ],
+          "evidence_anchors": [
+            {
+              "start_para": 1,
+              "end_para": 5,
+              "evidence_id": "e02_01",
+              "start": 1,
+              "end": 66
+            },
+            {
+              "start_para": 6,
+              "end_para": 6,
+              "evidence_id": "e02_02",
+              "start": 68,
+              "end": 82
+            }
+          ],
+          "states": [],
+          "inherited_state_endings": [],
+          "constraints": [],
+          "entry_state_refs": [],
+          "carry_out_refs": [],
+          "narration": [
+            {
+              "grammatical_person": "third",
+              "narrator_char_id": null,
+              "focalizer_char_id": "char_001",
+              "pronoun_surfaces": []
+            }
+          ]
+        },
+        {
+          "chapter_ordinal": 3,
+          "source_sha256": "66b9a5de286f347279bdcd9b9caa6dab03ffede7fd37ab72086cb675f794d9e4",
+          "chapter_function": "推进家宅生活及家人之间的信息变化",
+          "beats": [
+            {
+              "beat_id": "b03_01",
+              "content": "李宝珠午后翻账册，听管家报告米价上涨后，让他询问其他商家。窗外槐叶零落。",
+              "participant_char_ids": [
+                "char_001"
+              ],
+              "evidence_refs": [
+                "e03_01"
+              ],
+              "source_contexts": []
+            },
+            {
+              "beat_id": "b03_02",
+              "content": "她回忆童年时父亲翻账，自己当时还够不到桌面。",
+              "participant_char_ids": [
+                "char_001"
+              ],
+              "evidence_refs": [
+                "e03_02"
+              ],
+              "source_contexts": []
+            },
+            {
+              "beat_id": "b03_03",
+              "content": "母亲给她添上刚沏的热茶，她端起吹了吹，没有喝。",
+              "participant_char_ids": [
+                "char_001",
+                "char_002"
+              ],
+              "evidence_refs": [
+                "e03_03"
+              ],
+              "source_contexts": []
+            }
+          ],
+          "evidence_anchors": [
+            {
+              "start_para": 1,
+              "end_para": 5,
+              "evidence_id": "e03_01",
+              "start": 1,
+              "end": 74
+            },
+            {
+              "start_para": 6,
+              "end_para": 7,
+              "evidence_id": "e03_02",
+              "start": 76,
+              "end": 103
+            },
+            {
+              "start_para": 8,
+              "end_para": 10,
+              "evidence_id": "e03_03",
+              "start": 105,
+              "end": 141
+            }
+          ],
+          "states": [],
+          "inherited_state_endings": [],
+          "constraints": [],
+          "entry_state_refs": [],
+          "carry_out_refs": [],
+          "narration": [
+            {
+              "grammatical_person": "third",
+              "narrator_char_id": null,
+              "focalizer_char_id": "char_001",
+              "pronoun_surfaces": []
+            }
+          ]
+        }
+      ],
+      "dependencies": [
+        [
+          {
+            "kind": "setting",
+            "ref": "时代背景",
+            "value": {
+              "content": "架空古代江南的一座小城"
+            },
+            "evidence_sha256": "a4740d9a5a110d0ed7271362b2057fd7b00194a5c83ba94d59b9c0ff0edddd17"
+          },
+          {
+            "kind": "world_rule",
+            "ref": "wr_01",
+            "value": {
+              "kind": "social_norm",
+              "versions": [
+                {
+                  "effective_from_chapter": 1,
+                  "desc": "城中入夜有宵禁，更夫敲过梆子之后不许出门走动"
+                }
+              ]
+            },
+            "evidence_sha256": "ebcb78e94b102a57fcaae544a254a5ebfeade7813c65f86ad0c4da291dd34969"
+          }
+        ],
+        [],
+        [
+          {
+            "kind": "relation",
+            "ref": "rel_01",
+            "value": {
+              "relation_id": "rel_01",
+              "subject_id": "char_001",
+              "object_id": "char_002",
+              "predicate": "母女",
+              "visibility": {
+                "kind": "public",
+                "from_chapter": 1
+              },
+              "valid_from_chapter": 1,
+              "valid_through_chapter": null
+            },
+            "evidence_sha256": "6fa1af128112c7f1f1c045807ef794a42b898a91232b7658abcaba0a04126c1f"
+          },
+          {
+            "kind": "secret",
+            "ref": "secret_01",
+            "value": {
+              "content": "父亲早已回城却一直不肯露面"
+            },
+            "evidence_sha256": "4ac4b5bd2c7c50b27e715de25a85cf64cdc674f58f48d704639d34e2c9c72665"
+          },
+          {
+            "kind": "setting",
+            "ref": "世界观",
+            "value": {
+              "content": "寻常人家的宅院生活，没有神怪，规矩由宗族与官府共同维持"
+            },
+            "evidence_sha256": "c92552eea2eddab374210910bca4dab00ebcd20612ef42779fe889a9344de04a"
+          },
+          {
+            "kind": "setting",
+            "ref": "时代背景",
+            "value": {
+              "content": "架空古代江南的一座小城"
+            },
+            "evidence_sha256": "a4740d9a5a110d0ed7271362b2057fd7b00194a5c83ba94d59b9c0ff0edddd17"
+          },
+          {
+            "kind": "world_rule",
+            "ref": "wr_01",
+            "value": {
+              "kind": "social_norm",
+              "versions": [
+                {
+                  "effective_from_chapter": 1,
+                  "desc": "城中入夜有宵禁，更夫敲过梆子之后不许出门走动"
+                }
+              ]
+            },
+            "evidence_sha256": "ebcb78e94b102a57fcaae544a254a5ebfeade7813c65f86ad0c4da291dd34969"
+          }
+        ],
+        [],
+        [
+          {
+            "kind": "relation",
+            "ref": "rel_01",
+            "value": {
+              "relation_id": "rel_01",
+              "subject_id": "char_001",
+              "object_id": "char_002",
+              "predicate": "母女",
+              "visibility": {
+                "kind": "public",
+                "from_chapter": 1
+              },
+              "valid_from_chapter": 1,
+              "valid_through_chapter": null
+            },
+            "evidence_sha256": "6fa1af128112c7f1f1c045807ef794a42b898a91232b7658abcaba0a04126c1f"
+          },
+          {
+            "kind": "secret",
+            "ref": "secret_01",
+            "value": {
+              "content": "父亲早已回城却一直不肯露面"
+            },
+            "evidence_sha256": "4ac4b5bd2c7c50b27e715de25a85cf64cdc674f58f48d704639d34e2c9c72665"
+          },
+          {
+            "kind": "setting",
+            "ref": "世界观",
+            "value": {
+              "content": "寻常人家的宅院生活，没有神怪，规矩由宗族与官府共同维持"
+            },
+            "evidence_sha256": "c92552eea2eddab374210910bca4dab00ebcd20612ef42779fe889a9344de04a"
+          },
+          {
+            "kind": "setting",
+            "ref": "时代背景",
+            "value": {
+              "content": "架空古代江南的一座小城"
+            },
+            "evidence_sha256": "a4740d9a5a110d0ed7271362b2057fd7b00194a5c83ba94d59b9c0ff0edddd17"
+          },
+          {
+            "kind": "world_rule",
+            "ref": "wr_01",
+            "value": {
+              "kind": "social_norm",
+              "versions": [
+                {
+                  "effective_from_chapter": 1,
+                  "desc": "城中入夜有宵禁，更夫敲过梆子之后不许出门走动"
+                }
+              ]
+            },
+            "evidence_sha256": "ebcb78e94b102a57fcaae544a254a5ebfeade7813c65f86ad0c4da291dd34969"
+          }
+        ],
+        []
+      ],
+      "issues": [],
+      "chapter_acceptances": [
+        {
+          "scope": "chapter:1",
+          "decision_sha256": "98e3d499fd1dfe4cbe71b3535ca62cdbd6a6759983e59c3e2acb590697e268b2",
+          "subject_sha256": "bed34ec8fb5da6e785a1966318498fc9df95e22c5639f57b47b120610ca87432"
+        },
+        {
+          "scope": "chapter:2",
+          "decision_sha256": "569e35c03d607222a338f0b0db866979ea94ac7dad2819440981c45dae6e8a03",
+          "subject_sha256": "46bc0f2b32d25e85c4d1a0e165f0a2ac73391395c54c5b2c1e28a3093c6754d8"
+        },
+        {
+          "scope": "chapter:3",
+          "decision_sha256": "3e627a2d0ca732e78d72188050fe824cc25bb45e2ff62cfc89546cfa0a165eba",
+          "subject_sha256": "ccf42ea98d82ce78efc73960065154d16e390064ed3138d8cfbdedd532d9ffff"
+        }
+      ]
+    },
+    "progress": {
+      "total_chapters": 3,
+      "generated_chapters": 3,
+      "accepted_chapters": 3,
+      "next_scope": "cross_chapter",
+      "scopes": [
+        {
+          "scope": "chapter:1",
+          "state": "accepted",
+          "subject_sha256": "bed34ec8fb5da6e785a1966318498fc9df95e22c5639f57b47b120610ca87432",
+          "decision_sha256": "98e3d499fd1dfe4cbe71b3535ca62cdbd6a6759983e59c3e2acb590697e268b2",
+          "open_issue_ids": []
+        },
+        {
+          "scope": "chapter:2",
+          "state": "accepted",
+          "subject_sha256": "46bc0f2b32d25e85c4d1a0e165f0a2ac73391395c54c5b2c1e28a3093c6754d8",
+          "decision_sha256": "569e35c03d607222a338f0b0db866979ea94ac7dad2819440981c45dae6e8a03",
+          "open_issue_ids": []
+        },
+        {
+          "scope": "chapter:3",
+          "state": "accepted",
+          "subject_sha256": "ccf42ea98d82ce78efc73960065154d16e390064ed3138d8cfbdedd532d9ffff",
+          "decision_sha256": "3e627a2d0ca732e78d72188050fe824cc25bb45e2ff62cfc89546cfa0a165eba",
+          "open_issue_ids": []
+        },
+        {
+          "scope": "cross_chapter",
+          "state": "missing",
+          "subject_sha256": "1c6edc0f571865b0c508e85947484b531a70b48bd9469da98b537aa3927bdd7a",
+          "decision_sha256": null,
+          "open_issue_ids": []
+        }
+      ],
+      "unresolved_issues": 0,
+      "accepted": false
+    },
+    "check": {
+      "rules_scanned": 45,
+      "counts": {
+        "ok": 42,
+        "hit": 0,
+        "unver": 3,
+        "skipped": 0
+      },
+      "provenance": {
+        "freshness": "fresh",
+        "reason": "match",
+        "ghosts": [],
+        "edges": [
+          {
+            "key": "stage1/main_text.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "7527d7a23e",
+            "now_file": "7527d7a23e",
+            "recorded_consumed": "f870e94453",
+            "now_consumed": "f870e94453"
+          },
+          {
+            "key": "stage2/blueprint_character_projection.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "f9978988c3",
+            "now_file": "f9978988c3",
+            "recorded_consumed": "ae39a86b06",
+            "now_consumed": "ae39a86b06"
+          },
+          {
+            "key": "stage2/global_grounding.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "c894529657",
+            "now_file": "c894529657",
+            "recorded_consumed": "7e7a6b2bdd",
+            "now_consumed": "7e7a6b2bdd"
+          }
+        ],
+        "invalid": false,
+        "revalidated": null,
+        "origin": null
+      },
+      "attention": [
+        {
+          "rule": "plot_semantics",
+          "sev": "unver",
+          "status": "unver",
+          "item": "完整剧情、归因、因果与揭示经语义审阅",
+          "requirement": "R-3.13",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "剧情完整、归因、因果及披露由章审和跨章复核裁决",
+          "scanned": null,
+          "baseline": null,
+          "note": "普通 schema/坐标检查不能证明语义完整；由章审和跨章复核明确裁决。"
+        },
+        {
+          "rule": "role_fate_unverifiable",
+          "sev": "unver",
+          "status": "unver",
+          "item": "改写式结局泄漏有确定性防线",
+          "requirement": "R-2.6",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "词表只挡转抄式结局泄漏（8 个词，本次命中 0 处）；改写式泄漏没有任何确定性防线——实测某本词表命中 0/17 而人读真违规 6/17（role 写「…后成为某某的下属」，差一个字避开了 后被）。⚠ 本条与上面那条报绿灯还是红灯无关，每本每次都产：自动语义重划分可走 --purge-role（付费）；人工核对后的新 role 可走 stage2.global --apply-edit <书内json>（0 LLM）",
+          "scanned": "2 个角色的 role",
+          "baseline": null,
+          "note": "⚠⚠ 本仓改成无条件产出（同 F4-6 对 name_surface_survey 的处置）。原型把它挂在 if not leaky 那一支上——role_leaks_fate 命中的那两本根本走不到它，于是「这一维没有确定性防线」这句话在最需要说的两本上反而不说。⇒ 本条与 role_leaks_fate 报绿灯还是红灯无关，每本每次都产：词表只挡转抄式（实测头牌命中 0/17 而人读真违规 6/17），改写式泄漏仍须人读；人物 producer 返工也不能代替 Global Commander 的语义裁决，人工核对后的 typed role 可用 stage2.characters --apply-edit 0 LLM 写回。⚠ 它是本层徽章到不了 pass 的主因，而那是对的"
+        },
+        {
+          "rule": "secrets_absent",
+          "sev": "unver",
+          "status": "unver",
+          "item": "这本书有可查的秘密",
+          "requirement": "R-2.9b",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "这本书有 1 条 secret，剧透那一族有判别力样本 —— ⚠ 本行照常输出：「查过、有样本」与「根本没有样本」必须在报告上分得开",
+          "scanned": "1 条 secret",
+          "baseline": null,
+          "note": "一条 secret 都没有 ⇒ 逐章剧透闸门与「本章不许揭示什么」在这本书上恒不执行，任何「剧透闸门验过了」的说法对它都不成立。⚠ 它与「查过、没泄」必须分得开。盘上 0/3（三本都有秘密，这一支零样本）"
+        }
+      ],
+      "metrics": [
+        {
+          "rule": "context_scope",
+          "sev": "metric",
+          "status": "ok",
+          "item": "实际逐章抽取契约与正文边界",
+          "requirement": "R-3.16b",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "context_scope",
+              "sev": "metric",
+              "item": "实际逐章抽取契约与正文边界",
+              "detail": "{'architecture': 'plot-blueprint-v1', 'source_format': 'numbered-paragraphs-v1', 'global_projection_contract': 'plot-global-scope-v1'}",
+              "evidence": [
+                "{'architecture': 'plot-blueprint-v1', 'source_format': 'numbered-paragraphs-v1', 'global_projection_contract': 'plot-global-scope-v1'}"
+              ],
+              "fix_args": {},
+              "evidence_key": "{'architecture': 'plot-blueprint-v1', 'source_format': 'numbered-paragraphs-v1', 'global_projection_contract': 'plot-global-scope-v1'}",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "当前产物来源上下文",
+          "baseline": null,
+          "note": null
+        },
+        {
+          "rule": "fate_report",
+          "sev": "metric",
+          "status": "ok",
+          "item": "结局字段的缺失率",
+          "requirement": "R-2.7",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "fate_report",
+              "sev": "metric",
+              "item": "结局字段的缺失率",
+              "detail": "0/2 个角色有 fate",
+              "evidence": [
+                "0/2"
+              ],
+              "fix_args": {},
+              "evidence_key": "0/2",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "2 个角色",
+          "baseline": null,
+          "note": "⚠ 无条件报出（R-2.7 那一格写的就是 度量）：这一格答的是「结局有没有被单独接住」，不是「结局对不对」。盘上 12/12 · 9/15 · 48/48 —— 中间那本 6 个角色没有结局，⚠ 那不是违约（配角本来就可以没有归宿），所以它只能是读数"
+        },
+        {
+          "rule": "plot_shape",
+          "sev": "metric",
+          "status": "ok",
+          "item": "完整节点、状态、约束与共享证据数量",
+          "requirement": "R-3.13",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "plot_shape",
+              "sev": "metric",
+              "item": "完整节点、状态、约束与共享证据数量",
+              "detail": "{'chapters': 3, 'beats': 7, 'states': 0, 'constraints': 0, 'evidence_anchors': 7}",
+              "evidence": [
+                "{'chapters': 3, 'beats': 7, 'states': 0, 'constraints': 0, 'evidence_anchors': 7}"
+              ],
+              "fix_args": {},
+              "evidence_key": "{'chapters': 3, 'beats': 7, 'states': 0, 'constraints': 0, 'evidence_anchors': 7}",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "3 章",
+          "baseline": null,
+          "note": "只报告实际规模，不设节点配额，不把辅助结构变回事实数据库。"
+        },
+        {
+          "rule": "secret_cold_reveal",
+          "sev": "metric",
+          "status": "ok",
+          "item": "没有埋点的秘密条数",
+          "requirement": "R-2.9b",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "secret_cold_reveal",
+              "sev": "metric",
+              "item": "没有埋点的秘密条数",
+              "detail": "0/1 条 secret 没有埋点：[]",
+              "evidence": [
+                "cold=0/1",
+                "demoted=0"
+              ],
+              "fix_args": {},
+              "evidence_key": "cold=0/1|demoted=0",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "1 条 secret",
+          "baseline": null,
+          "note": "凭空点破。据实留空是允许的（作者确实可以不埋），所以它只能是读数。⚠⚠ 「冷揭示」与「被裁空」（产地把揭示章号抄进埋点、落盘前被裁）在字段值上完全同形 ⇒ 两者只能靠 setup_chapters_pruned 那个计数分开，因此该计数必须常驻来源账。"
+        }
+      ]
+    },
+    "accounting": [
+      {
+        "key": "setup_chapters_pruned",
+        "item": "哪几条秘密的埋点章被裁掉了？（「冷揭示」与「被裁空」只能靠它分开）",
+        "recorded": true,
+        "count": 0,
+        "detail": []
+      },
+      {
+        "key": "evidence_locator_failures",
+        "item": "哪些事实 locator 因错章、零命中、多命中或正式 span 漂移而失败？（非空即 GlobalGrounding 失败态）",
+        "recorded": true,
+        "count": 0,
+        "detail": []
+      },
+      {
+        "key": "verbatim_failures",
+        "item": "哪几处**锚不到**？（非空即失败态，按根因分）",
+        "recorded": false,
+        "count": 0,
+        "detail": []
+      },
+      {
+        "key": "fact_atom_failures",
+        "item": "哪几个事实原子的证据短语无法在所属证据拍内唯一回取？（与 hinge 失败共同进入 `verbatim_failed`）",
+        "recorded": false,
+        "count": 0,
+        "detail": []
+      },
+      {
+        "key": "hinge_ambiguous_pending",
+        "item": "哪几条 hinge 的短语在拍区间内多处命中、等着候选选择修复？（`extraction-ir-v1` 专属；失败态 hinge 不带短语，这笔账是字段级修复唯一不依赖 LLM cache 的输入）",
+        "recorded": false,
+        "count": 0,
+        "detail": []
+      }
+    ]
+  },
+  "enum_values": {
+    "plot_review_dimensions": [
+      "completeness",
+      "attribution",
+      "causal_continuity",
+      "epistemic_reveal",
+      "carry_state"
+    ],
+    "plot_dimension_states": [
+      "pass",
+      "issue",
+      "unver",
+      "not_applicable"
+    ],
+    "design_repair_codes": [
+      "entry_anchor",
+      "ending_anchor",
+      "presentation_grouping",
+      "disclosure_order",
+      "noncontiguous_regroup",
+      "scene_goal",
+      "scene_goal_exclude",
+      "binding_constraint_unsat",
+      "semantic_constraint"
+    ],
+    "design_repair_constraint_arity": {
+      "structure_delta": [
+        0,
+        0
+      ],
+      "entry_anchor": [
+        0,
+        1
+      ],
+      "ending_anchor": [
+        0,
+        1
+      ],
+      "presentation_grouping": [
+        0,
+        2
+      ],
+      "disclosure_order": [
+        0,
+        2
+      ],
+      "noncontiguous_regroup": [
+        0,
+        2
+      ],
+      "scene_goal": [
+        1,
+        1
+      ],
+      "scene_goal_exclude": [
+        1,
+        1
+      ],
+      "binding_constraint_unsat": [
+        1,
+        0
+      ],
+      "semantic_constraint": [
+        0,
+        1
+      ]
+    }
+  }
+}

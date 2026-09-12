@@ -314,7 +314,7 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(approvals, '_now', lambda: '2026-08-28T00:00:00+00:00')
 
     def write(base, record):
-        state['record'] = approvals._ApprovalRecordV7.model_validate(
+        state['record'] = approvals._ApprovalRecordV8.model_validate(
             record.model_dump(mode='json'))
         return approvals._view(base, state['record'])
 

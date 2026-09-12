@@ -1873,6 +1873,11 @@ class _LandingStore:
     def read(self, _model, rel):
         return next(artifact for path, artifact in reversed(self.landed) if path == rel)
 
+    def read_own(self, model, rel, *, require_current):
+        assert require_current
+        artifact = self.read(model, rel)
+        return artifact, artifact.model_dump(by_alias=True, mode='json')
+
     @staticmethod
     def prospective_sha256(_rel, artifact):
         return hashlib.sha256(json.dumps(
@@ -1912,6 +1917,15 @@ class _LandingContext:
 
     def account(self, key, value):
         self._accounting[key] = value
+
+    @contextmanager
+    def validation_reads(self):
+        before = dict(self.edges)
+        try:
+            yield
+        finally:
+            self.edges.clear()
+            self.edges.update(before)
 
     @staticmethod
     def require_observed_roots_current():

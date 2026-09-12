@@ -58,6 +58,7 @@ from contracts.schema.common import (
 from contracts.schema.stage2 import (
     BEAT_ID_PATTERN, FACT_ID_PATTERN, HINGE_ID_PATTERN, CausalEdge,
 )
+from contracts.schema.plot import PlotEndpoint, PlotSubjectRef, BeatPlacement, PlotAnchorBinding
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -131,7 +132,7 @@ class BlindStructureDecision(StrictModel):
         return self
 
 class PlanScene(StrictModel):
-    """Stage4 新设计的一场；引用事实契约，不引用源事件清单。"""
+    """场景只保存组织决策；实际节点清单始终从章级 placement 派生。"""
 
     slot: str = Field(pattern=r'^s\d{2,4}$')
     budget_chars: int = Field(gt=0)
@@ -139,43 +140,13 @@ class PlanScene(StrictModel):
     role: Literal[STRUCTURAL_ROLES]
     delivery: Literal[DELIVERY_MODES]
     transition: Literal[TEMPORAL_LINKS]
-    land_fact_refs: list[str] = Field(min_length=1)
-    context_fact_refs: list[str]
-    material_refs: list[str]
-    turn_fact_ref: str = Field(pattern=FACT_ID_PATTERN)
-    #: **该场在故事时点边界上必须成立的状态。** 模型只交本场新增的那一部分，
-    #: 同一时间线上的承接由 `novel/stages/stage4/checks.py::derive_effective_states`
-    #: 在编译期补全 ⇒ 盘上这两格是**有效状态**（已含继承来的部分），不是模型原话。
-    #: ⚠ 让模型逐场把前面还成立的 ref 抄一遍，是要求它做代码本来就精确知道的累加账。
-    #: 实测代价：v8 那份被拒的真候选里 25 个 `continue` 场有 18 个没抄全，整本重出。
-    entry_state_refs: list[str]
-    exit_state_refs: list[str]
-    stage_refs: list[str] = Field(min_length=1)
+    context_beat_refs: list[str]
+    turn_beat_ref: str = Field(pattern=r'^b\d{2,}_\d{2,}$')
 
     @model_validator(mode='after')
-    def _scene_refs_are_coherent(self) -> PlanScene:
-        for label, refs in (
-            ('land_fact_refs', self.land_fact_refs),
-            ('context_fact_refs', self.context_fact_refs),
-            ('material_refs', self.material_refs),
-            ('entry_state_refs', self.entry_state_refs),
-            ('exit_state_refs', self.exit_state_refs),
-            ('stage_refs', self.stage_refs),
-        ):
-            if len(refs) != len(set(refs)):
-                raise ValueError(f'{self.slot}.{label} 不能重复引用')
-        if self.turn_fact_ref not in self.land_fact_refs:
-            raise ValueError(f'{self.slot}.turn_fact_ref 必须属于 land_fact_refs')
-        if any(not re.match(FACT_ID_PATTERN, ref)
-               for ref in self.land_fact_refs + self.context_fact_refs
-               + self.entry_state_refs + self.exit_state_refs):
-            raise ValueError(f'{self.slot} 存在非法 fact_id')
-        if any(not re.match(HINGE_ID_PATTERN, ref)
-               for ref in self.material_refs):
-            raise ValueError(f'{self.slot} 存在非法 hinge_id')
-        if any(not re.match(BEAT_ID_PATTERN, ref)
-               for ref in self.stage_refs):
-            raise ValueError(f'{self.slot} 存在非法 stage beat 引用')
+    def _unique_background(self):
+        if len(self.context_beat_refs) != len(set(self.context_beat_refs)):
+            raise ValueError('场景背景节点引用不能重复')
         return self
 
 
@@ -193,38 +164,27 @@ class FactRef(StrictModel):
 
 
 class PlanGoal(StrictModel):
-    """Stage4A 的 opaque alias 经 A+B 编译后得到的 typed goal。"""
+    """已接受目标与显式场景锚点；不保存第二份剧情文字。"""
 
     intent: Literal[GOAL_INTENTS]
-    fact_refs: list[FactRef] = Field(min_length=1)
+    subject_refs: list[PlotSubjectRef] = Field(min_length=1)
+    anchor_beat_ref: str = Field(pattern=r'^b\d{2,}_\d{2,}$')
+    anchor_scene_ref: str = Field(pattern=r'^s\d{2,4}$')
 
 
-class CtxGoal(StrictModel):
-    """Writer-facing goal with every internal fact reference already resolved.
-
-    ``PlanGoal`` is the durable audit decision and therefore keeps typed IDs.
-    ``CtxGoal`` is a deterministic projection: it carries only human-readable,
-    chapter-safe facts, so internal IDs cannot leak into a writer or hook prompt.
-    """
-
-    intent: Literal[GOAL_INTENTS]
-    facts: list[str] = Field(min_length=1)
+class CtxGoal(PlanGoal):
+    """目标引用章级唯一主体，不再复制剧情正文。"""
 
 
 class SemanticContract(StrictModel):
-    """由 Stage2 确定性投影的不可改章级真相；规划模型不能重写它。"""
+    """由 Blueprint 投影的引用契约；完整正文只在 beat.content。"""
 
     chapter_function: str = Field(min_length=1)
-    information_delta: list[str]
-    character_state_delta: list[str]
-    relationship_delta: list[str]
-    reader_knowledge_delta: list[str]
-    must_land_fact_refs: list[str] = Field(min_length=1)
-    context_fact_refs: list[str]
-    causal_edges: list[CausalEdge]
+    beat_refs: list[str] = Field(min_length=1)
+    state_refs: list[str]
+    constraint_refs: list[str]
     entry_state_refs: list[str]
-    ending_state_refs: list[str]
-    material_refs: list[str]
+    carry_out_refs: list[str]
 
 
 class PlanChapter(StrictModel):
@@ -251,6 +211,8 @@ class PlanChapter(StrictModel):
     structure_decision: StructureDecision
     chapter_rewrite_brief: str = Field(min_length=1)
     scenes: list[PlanScene] = Field(min_length=1)
+    beat_placements: list[BeatPlacement] = Field(min_length=1)
+    anchor_bindings: list[PlotAnchorBinding]
 
     @model_validator(mode='after')
     def _output_ordinal_equals_its_only_source(self) -> PlanChapter:
@@ -343,56 +305,81 @@ class BlindBookStrategyResponse(StrictModel):
         return self
 
 
-class BlindLocalGoalResponse(StrictModel):
-    """单章 wire goal；短 alias 只在该章请求内有意义。"""
+class BlindGoalResponse(StrictModel):
+    """目标引用完整主体；锚点是规划选择，不能借目标正文另造事实。"""
 
     intent: Literal[tuple(RESPONSE_GOAL_INTENTS)]
-    fact_aliases: list[str] = Field(min_length=1)
+    subject_aliases: list[str] = Field(min_length=1)
+    anchor_beat_alias: str = Field(pattern=r'^[au]_[0-9a-f]{6,64}$')
+    anchor_scene_ref: str = Field(pattern=r'^s\d{2,4}$')
 
     @model_validator(mode='after')
-    def _aliases_are_unique(self) -> BlindLocalGoalResponse:
-        if len(self.fact_aliases) != len(set(self.fact_aliases)):
-            raise ValueError('goal.fact_aliases 不能重复')
-        if any(not re.match(_BLIND_LOCAL_FACT_ALIAS_PATTERN, alias)
-               for alias in self.fact_aliases):
-            raise ValueError('goal.fact_aliases 存在非法 local fact alias')
+    def _unique_subjects(self) -> BlindGoalResponse:
+        if len(self.subject_aliases) != len(set(self.subject_aliases)):
+            raise ValueError('目标主体引用不能重复')
+        if any(not re.fullmatch(r'[au]_[0-9a-f]{6,64}', v) for v in self.subject_aliases):
+            raise ValueError('目标只能引用当前规划投影中的 opaque 主体')
         return self
 
 
-class BlindLocalSceneResponse(StrictModel):
-    """单章 wire scene；编译前不得出现正式 ``a_*`` alias。"""
+class BlindLocalGoalResponse(BlindGoalResponse):
+    """局部 alias 的章级目标；编译器核对本次局部映射。"""
 
+
+class BlindPresentationDelivery(StrictModel):
+    """A 只决定呈现任务；证据由 B 绑定，不在盲请求里伪造证据。"""
+
+    scene_ref: str = Field(pattern=r'^s\d{2,4}$')
+    presentation_instruction: str | None
+
+
+class BlindBeatPlacement(StrictModel):
+    beat_alias: str = Field(pattern=r'^[au]_[0-9a-f]{6,64}$')
+    deliveries: list[BlindPresentationDelivery] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _one_delivery_per_scene(self) -> BlindBeatPlacement:
+        refs = [row.scene_ref for row in self.deliveries]
+        if len(refs) != len(set(refs)):
+            raise ValueError('同一节点在同一场景只能有一条呈现安排')
+        if len(refs) > 1 and any(
+            not row.presentation_instruction or not row.presentation_instruction.strip()
+            for row in self.deliveries
+        ):
+            raise ValueError('分场节点的每条 delivery 必须说明呈现任务')
+        return self
+
+
+class BlindAnchorBinding(StrictModel):
+    endpoint_alias: str = Field(pattern=r'^[au]_[0-9a-f]{6,64}$')
+    scene_ref: str = Field(pattern=r'^s\d{2,4}$')
+
+
+class BlindSceneResponse(StrictModel):
+    scene_ref: str = Field(pattern=r'^s\d{2,4}$')
     weight: Literal[tuple(RESPONSE_UNIT_WEIGHTS)]
     purpose: str = Field(min_length=1)
     role: Literal[tuple(RESPONSE_STRUCTURAL_ROLES)]
     delivery: Literal[tuple(RESPONSE_DELIVERY_MODES)]
     transition: Literal[tuple(RESPONSE_TEMPORAL_LINKS)]
-    land_fact_aliases: list[str] = Field(min_length=1)
-    context_fact_aliases: list[str]
-    turn_fact_alias: str = Field(pattern=_BLIND_LOCAL_FACT_ALIAS_PATTERN)
-    entry_state_aliases: list[str]
-    exit_state_aliases: list[str]
+    context_beat_aliases: list[str]
+    turn_beat_alias: str = Field(pattern=r'^[au]_[0-9a-f]{6,64}$')
 
     @model_validator(mode='after')
-    def _alias_sets_are_coherent(self) -> BlindLocalSceneResponse:
-        for label, values in (
-            ('land_fact_aliases', self.land_fact_aliases),
-            ('context_fact_aliases', self.context_fact_aliases),
-            ('entry_state_aliases', self.entry_state_aliases),
-            ('exit_state_aliases', self.exit_state_aliases),
-        ):
-            if len(values) != len(set(values)):
-                raise ValueError(f'{label} 不能重复')
-            if any(not re.match(_BLIND_LOCAL_FACT_ALIAS_PATTERN, alias)
-                   for alias in values):
-                raise ValueError(f'{label} 存在非法 local fact alias')
-        if self.turn_fact_alias not in self.land_fact_aliases:
-            raise ValueError('turn_fact_alias 必须属于 land_fact_aliases')
+    def _context_unique(self) -> BlindSceneResponse:
+        if len(self.context_beat_aliases) != len(set(self.context_beat_aliases)):
+            raise ValueError('背景节点引用不能重复')
+        if any(not re.fullmatch(r'[au]_[0-9a-f]{6,64}', v) for v in self.context_beat_aliases):
+            raise ValueError('背景只能引用当前投影的 opaque 节点')
         return self
 
 
+class BlindLocalSceneResponse(BlindSceneResponse):
+    """局部响应与正式候选共享形状，alias 权限由本次请求映射核验。"""
+
+
 class BlindChapterDesignResponse(StrictModel):
-    """Stage4A 单章设计响应；章号与章权重均由请求身份确定性注入。"""
+    """章级设计响应只存场景与唯一 placement，不重复保存场景节点清单。"""
 
     structure_decision: BlindStructureDecision
     chapter_goal: BlindLocalGoalResponse
@@ -400,59 +387,24 @@ class BlindChapterDesignResponse(StrictModel):
     end_hook_goal: BlindLocalGoalResponse
     chapter_rewrite_brief: str = Field(min_length=1)
     scenes: list[BlindLocalSceneResponse] = Field(min_length=1)
-
-class BlindGoalResponse(StrictModel):
-    intent: Literal[tuple(RESPONSE_GOAL_INTENTS)]
-    fact_aliases: list[str] = Field(min_length=1)
+    beat_placements: list[BlindBeatPlacement] = Field(min_length=1)
+    anchor_bindings: list[BlindAnchorBinding] = Field(min_length=0)
 
     @model_validator(mode='after')
-    def _aliases_are_unique(self) -> BlindGoalResponse:
-        if len(self.fact_aliases) != len(set(self.fact_aliases)):
-            raise ValueError('goal.fact_aliases 不能重复')
-        if any(not re.match(_BLIND_ALIAS_PATTERN, alias) for alias in self.fact_aliases):
-            raise ValueError('goal.fact_aliases 存在非法 opaque alias')
-        return self
-
-
-class BlindSceneResponse(StrictModel):
-    weight: Literal[tuple(RESPONSE_UNIT_WEIGHTS)]
-    purpose: str = Field(min_length=1)
-    role: Literal[tuple(RESPONSE_STRUCTURAL_ROLES)]
-    delivery: Literal[tuple(RESPONSE_DELIVERY_MODES)]
-    transition: Literal[tuple(RESPONSE_TEMPORAL_LINKS)]
-    land_fact_aliases: list[str] = Field(min_length=1)
-    context_fact_aliases: list[str]
-    turn_fact_alias: str = Field(pattern=_BLIND_ALIAS_PATTERN)
-    entry_state_aliases: list[str]
-    exit_state_aliases: list[str]
-
-    @model_validator(mode='after')
-    def _alias_sets_are_coherent(self) -> BlindSceneResponse:
-        for label, values in (
-            ('land_fact_aliases', self.land_fact_aliases),
-            ('context_fact_aliases', self.context_fact_aliases),
-            ('entry_state_aliases', self.entry_state_aliases),
-            ('exit_state_aliases', self.exit_state_aliases),
+    def _unique_planning_identity(self) -> BlindChapterDesignResponse:
+        for values in (
+            [s.scene_ref for s in self.scenes],
+            [p.beat_alias for p in self.beat_placements],
+            [b.endpoint_alias for b in self.anchor_bindings],
         ):
             if len(values) != len(set(values)):
-                raise ValueError(f'{label} 不能重复')
-            if any(not re.match(_BLIND_ALIAS_PATTERN, alias) for alias in values):
-                raise ValueError(f'{label} 存在非法 opaque alias')
-        if self.turn_fact_alias not in self.land_fact_aliases:
-            raise ValueError('turn_fact_alias 必须属于 land_fact_aliases')
+                raise ValueError('场景、placement 或端点身份重复')
         return self
 
 
-class BlindChapterResponse(StrictModel):
+class BlindChapterResponse(BlindChapterDesignResponse):
     output_ordinal: int = Field(ge=1)
-    structure_decision: BlindStructureDecision
-    chapter_goal: BlindGoalResponse
-    open_hook_goal: BlindGoalResponse
-    end_hook_goal: BlindGoalResponse
     weight: Literal[tuple(RESPONSE_CHAPTER_WEIGHTS)]
-    chapter_rewrite_brief: str = Field(min_length=1)
-    scenes: list[BlindSceneResponse] = Field(min_length=1)
-
 
 class BlindChapterEditRequest(StrictModel):
     """Stage4A 零模型完整章替换请求（外部 artifact v1）。
@@ -628,46 +580,68 @@ class BlindCandidateCompiledProvenance(FreeProvenance):
     sources_sha256: Sha256
 
 
-class BlindCandidate(StrictModel):
+class BlindReferenceMaps(StrictModel):
+    """正式主体与端点的关闭映射；人物表是主体表的确定性投影。"""
+    subject_aliases: dict[str, PlotSubjectRef] = Field(min_length=1)
+    endpoint_aliases: dict[str, PlotEndpoint]
+    participant_aliases: dict[str, str]
+
+    @model_validator(mode='after')
+    def _alias_maps_are_bijective(self) -> BlindReferenceMaps:
+        for label, table in (
+            ('subject_aliases', self.subject_aliases),
+            ('endpoint_aliases', self.endpoint_aliases),
+            ('participant_aliases', self.participant_aliases),
+        ):
+            if any(not re.match(_BLIND_ALIAS_PATTERN, alias) for alias in table):
+                raise ValueError(f'{label} 的键必须是 opaque alias')
+            identities = [value if isinstance(value, str) else value.model_dump_json()
+                          for value in table.values()]
+            if len(identities) != len(set(identities)):
+                raise ValueError(f'{label} 的正式引用必须一一对应')
+        if set(self.subject_aliases) & set(self.endpoint_aliases):
+            raise ValueError('主体与端点 alias 不得占用同一身份')
+        if self.participant_aliases != {token: row.ref for token, row in self.subject_aliases.items()
+                                        if row.kind == 'character'}:
+            raise ValueError('人物映射必须完整对应主体表中的人物')
+        return self
+
+
+class BlindCandidate(BlindReferenceMaps):
     alias_algorithm: Literal[BLIND_ALIAS_ALGORITHM]
     truth_sha256: Sha256
-    fact_aliases: dict[str, str] = Field(min_length=1)
-    participant_aliases: dict[str, str]
     reconstruction_strategy: str = Field(min_length=1)
     output_chapters: list[BlindCandidateChapter] = Field(min_length=1)
     provenance: BlindCandidateProvenance | BlindCandidateHumanProvenance | BlindCandidateCompiledProvenance = Field(
         alias='_provenance')
 
-    @model_validator(mode='after')
-    def _alias_maps_are_bijective(self) -> BlindCandidate:
-        for label, table in (
-            ('fact_aliases', self.fact_aliases),
-            ('participant_aliases', self.participant_aliases),
-        ):
-            if any(not re.match(_BLIND_ALIAS_PATTERN, alias) for alias in table):
-                raise ValueError(f'{label} 的键必须是 opaque alias')
-            if len(table.values()) != len(set(table.values())):
-                raise ValueError(f'{label} 的正式引用必须一一对应')
-        return self
-
 
 # ── Stage4B：证据绑定响应与中间产物 ──────────────────────────────────────────
 
-class EvidenceSceneBinding(StrictModel):
-    candidate_scene_id: str = Field(pattern=_CANDIDATE_SCENE_PATTERN)
-    material_refs: list[str]
-    stage_refs: list[str] = Field(min_length=1)
+class EvidenceDeliveryBinding(StrictModel):
+    """B 只为 A 已登记的呈现补证据与有据舞台，不修改呈现任务。"""
+
+    beat_ref: str = Field(pattern=r'^b\d{2,}_\d{2,}$')
+    evidence_refs: list[str] = Field(min_length=1)
+    source_context_refs: list[str]
 
     @model_validator(mode='after')
-    def _binding_refs_are_unique(self) -> EvidenceSceneBinding:
-        for label, values, pattern in (
-            ('material_refs', self.material_refs, HINGE_ID_PATTERN),
-            ('stage_refs', self.stage_refs, BEAT_ID_PATTERN),
-        ):
-            if len(values) != len(set(values)):
-                raise ValueError(f'{self.candidate_scene_id}.{label} 不能重复')
-            if pattern is not None and any(not re.match(pattern, value) for value in values):
-                raise ValueError(f'{self.candidate_scene_id}.{label} 存在非法引用')
+    def _unique_refs(self):
+        for refs in (self.evidence_refs, self.source_context_refs):
+            if len(refs) != len(set(refs)):
+                raise ValueError('呈现的证据/舞台引用不能重复')
+        return self
+
+
+class EvidenceSceneBinding(StrictModel):
+    candidate_scene_id: str = Field(pattern=_CANDIDATE_SCENE_PATTERN)
+    deliveries: list[EvidenceDeliveryBinding] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _unique_parents(self):
+        refs = [r.beat_ref for r in self.deliveries]
+        if len(refs) != len(set(refs)):
+            raise ValueError('同场同节点只能绑定一条呈现')
         return self
 
 
@@ -676,7 +650,7 @@ class EvidenceChapterBinding(StrictModel):
     scenes: list[EvidenceSceneBinding] = Field(min_length=1)
 
     @model_validator(mode='after')
-    def _scene_bindings_are_unique(self) -> EvidenceChapterBinding:
+    def _scene_bindings_are_unique(self):
         ids = [scene.candidate_scene_id for scene in self.scenes]
         if len(ids) != len(set(ids)):
             raise ValueError('同章 candidate_scene_id 不能重复绑定')
@@ -684,16 +658,16 @@ class EvidenceChapterBinding(StrictModel):
 
 
 class ChapterBindingResolution(StrictModel):
-    """章级 B session 对一个机械基线歧义的闭合选择（批次 4）。
-
-    `ambiguity_id` 是基线铸造的内容寻址 id；`stage_ref` 解 stage 歧义，
-    `candidate_scene_id` 解 material 歧义。二选一按歧义类别在应用器里
-    关闭式校验，本模型只收形状。
-    """
+    """仅选择本章编译器登记的证据/舞台歧义；不能新增呈现或改 A。"""
 
     ambiguity_id: str = Field(pattern=r'^[0-9a-f]{16}$')
-    stage_ref: str | None = Field(default=None, min_length=1)
-    candidate_scene_id: str | None = Field(default=None, min_length=1)
+    selected_refs: list[str] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _unique(self):
+        if len(self.selected_refs) != len(set(self.selected_refs)):
+            raise ValueError('歧义选择不能重复')
+        return self
 
 
 class ChapterBindingResponse(StrictModel):
@@ -937,17 +911,8 @@ class CtxCausalEdge(StrictModel):
     after: str = Field(min_length=1)
 
 
-class CtxSemanticContract(StrictModel):
-    chapter_function: str = Field(min_length=1)
-    information_delta: list[str]
-    character_state_delta: list[str]
-    relationship_delta: list[str]
-    reader_knowledge_delta: list[str]
-    must_land_facts: list[str] = Field(min_length=1)
-    context_facts: list[str]
-    causal_edges: list[CtxCausalEdge]
-    entry_state: list[str]
-    ending_state: list[str]
+class CtxSemanticContract(SemanticContract):
+    """写作侧保持同一引用契约。"""
 
 
 class CtxSceneKnowledge(StrictModel):
@@ -977,33 +942,14 @@ class CtxDialogue(StrictModel):
     required_facts: list[str] = Field(min_length=1)
 
 
-class CtxScene(StrictModel):
-    """写手真正执行的场景任务；不携带源 beat/event 编号。"""
+from contracts.schema.plot_context import (
+    WriterBeat, WriterState, WriterConstraint, WriterGlobalSubject,
+    WriterKnowledgeEvent, WriterScene,
+)
 
-    slot: str = Field(pattern=r'^s\d{2,4}$')
-    purpose: str = Field(min_length=1)
-    role: Literal[STRUCTURAL_ROLES]
-    delivery: Literal[DELIVERY_MODES]
-    transition: Literal[TEMPORAL_LINKS]
-    budget_chars: int = Field(gt=0)
-    required_facts: list[str] = Field(min_length=1)
-    context_facts: list[str]
-    turn_fact: str = Field(min_length=1)
-    entry_state: list[str]
-    exit_state: list[str]
-    stages: list[CtxStage] = Field(min_length=1)
-    knowledge: list[CtxSceneKnowledge]
-    dialogue: list[CtxDialogue] = Field(default_factory=list)
-    verbatim: list[str] | None = None
-    keep_value: list[str] | None = None
-    must_appear: list[str] | None = None
-    must_hold: list[str] | None = None
 
-    @model_validator(mode='after')
-    def _turn_is_a_required_fact(self) -> CtxScene:
-        if self.turn_fact not in self.required_facts:
-            raise ValueError(f'{self.slot}.turn_fact 必须属于 required_facts')
-        return self
+class CtxScene(WriterScene):
+    """由 placement 派生的逐场呈现及许可。"""
 
 
 class ChapterCharacter(StrictModel):
@@ -1011,7 +957,8 @@ class ChapterCharacter(StrictModel):
     消费方：stage5 写手 + stage6 文案 roster。
     """
 
-    char_id: str = Field(min_length=1, json_schema_extra={'prompt_private': True})
+    # V8 编号连接剧情参与者、状态持有者与知识受众；是引用键，不是正文称呼。
+    char_id: str = Field(min_length=1)
     display_name: str = Field(min_length=1)
     role: str = Field(min_length=1)
 
@@ -1125,38 +1072,85 @@ class CtxNarration(StrictModel):
 
 
 class CtxChapter(StrictModel):
-    """一个输出章的完整任务书。
+    """整章任务书；同次调用能看到后场材料，表达仍按逐场许可。"""
 
-    章号唯一指向同号 Stage1 源章；总预算由场景预算求和，源字数由源正文计算。
-    这些运行时读数不在任务书保存副本，API 与执行守卫共用 measure.chapter_basis。
-    """
-
-    #: 三个目标由 PlanGoal 的 typed refs 确定性解析为 CtxGoal，不携带内部 id。
     output_ordinal: int = Field(ge=1)
     chapter_goal: CtxGoal
     open_hook_goal: CtxGoal
     end_hook_goal: CtxGoal
     semantic_contract: CtxSemanticContract
     chapter_rewrite_brief: str = Field(min_length=1)
-
+    beats: list[WriterBeat] = Field(min_length=1)
+    states: list[WriterState]
+    constraints: list[WriterConstraint]
+    global_subjects: list[WriterGlobalSubject]
+    restricted_subject_refs: list[PlotSubjectRef]
+    knowledge_events: list[WriterKnowledgeEvent]
     scenes: list[CtxScene] = Field(min_length=1)
-
-    #: **章级收窄**。
     characters: list[ChapterCharacter]
-
     narration: list[CtxNarration] = Field(min_length=1)
-    facts: CtxFacts
-    disclosure_windows: list[CtxDisclosureWindow]
+    address: list[CtxAddress]
 
     @model_validator(mode='after')
-    def _ctx_slots_are_unique(self) -> CtxChapter:
+    def _closed_view(self) -> CtxChapter:
         slots = [scene.slot for scene in self.scenes]
-        if len(slots) != len(set(slots)):
-            raise ValueError('writer-context segment slots must be unique')
-        for window in self.disclosure_windows:
-            if (len(set(window.allowed_slots)) != len(window.allowed_slots)
-                    or window.allowed_slots != [slot for slot in slots if slot in window.allowed_slots]):
-                raise ValueError('披露许可必须指向当前场景的唯一有序子集')
+        refs = [beat.beat_ref for beat in self.beats]
+        states = {row.state_ref: row for row in self.states}
+        constraints = {row.constraint_ref: row for row in self.constraints}
+        events = {row.event_ref: row for row in self.knowledge_events}
+        globals_ = {(row.subject_ref.kind, row.subject_ref.ref): row for row in self.global_subjects}
+        restricted = {(row.kind, row.ref) for row in self.restricted_subject_refs}
+        for size, values in (
+            (len(slots), slots), (len(refs), refs), (len(self.states), states),
+            (len(self.constraints), constraints), (len(self.knowledge_events), events),
+            (len(self.global_subjects), globals_), (len(self.restricted_subject_refs), restricted),
+        ):
+            if len(set(values)) != size:
+                raise ValueError('写作目录、场景和权限的身份必须唯一')
+        if set(globals_) & restricted:
+            raise ValueError('同一共享主体不能同时下发正文和声明未开放')
+        if (set(self.semantic_contract.beat_refs) != set(refs)
+                or set(self.semantic_contract.constraint_refs) != set(constraints)
+                or not set(self.semantic_contract.state_refs) <= states.keys()
+                or not set(self.semantic_contract.entry_state_refs) <= states.keys()
+                or not set(self.semantic_contract.carry_out_refs) <= states.keys()):
+            raise ValueError('语义契约必须指向当前章级目录')
+        completed = {ref: max((i for i, scene in enumerate(self.scenes)
+                              if any(d.beat_ref == ref for d in scene.deliveries)), default=-1)
+                     for ref in refs}
+        if any(index < 0 for index in completed.values()):
+            raise ValueError('剧情目录必须完整安排呈现')
+        for index, scene in enumerate(self.scenes):
+            current = {row.beat_ref for row in scene.deliveries}
+            if not (current | set(scene.context_beat_refs)) <= set(refs):
+                raise ValueError('场景引用不属于章级剧情目录')
+            if any(completed[ref] >= index for ref in scene.context_beat_refs):
+                raise ValueError('节点未完成全部呈现，不能作为完整背景')
+            expected_events = [ref for ref, row in events.items() if scene.slot in row.allowed_slots]
+            if scene.knowledge_event_refs != expected_events:
+                raise ValueError('逐场知识引用必须精确等于下发事件的许可')
+            if (not set(scene.constraint_refs) <= constraints.keys()
+                    or any(row.state_ref not in states for row in scene.state_events)):
+                raise ValueError('场景状态或约束引用不在目录')
+        for row in events.values():
+            expected = slots if row.timing == 'at_entry' else (
+                slots[slots.index(row.slot):] if row.slot in slots else [])
+            if row.allowed_slots != expected or (row.timing == 'at_entry') != (row.slot is None):
+                raise ValueError('知识事件位置与许可不一致')
+        for row in self.global_subjects:
+            if row.allowed_slots != [slot for slot in slots if slot in row.allowed_slots]:
+                raise ValueError('共享主体许可须是场景的唯一有序子集')
+            for permission in row.state_permissions:
+                state = states.get(permission.state_ref)
+                if (state is None or state.global_ref != row.subject_ref
+                        or state.modality != permission.modality
+                        or permission.allowed_slots != [slot for slot in slots
+                                                        if slot in permission.allowed_slots]):
+                    raise ValueError('命题表达许可必须指向同一主体及认识性质的状态')
+                reveals = [e for e in events.values() if e.kind == 'state_reveal'
+                           and e.subject_ref.ref == state.state_ref]
+                if len(reveals) != 1 or permission.allowed_slots != reveals[0].allowed_slots:
+                    raise ValueError('命题表达许可必须由已登记的状态披露事件编译')
         return self
 
 

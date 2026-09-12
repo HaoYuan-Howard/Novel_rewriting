@@ -5,7 +5,6 @@ import { ActorReasonFields } from '@/components/ui/ActorReasonFields'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { ErrorHint } from '@/components/state/States'
 import { errorBody } from '@/api/errors'
-import type { KnowledgeLinkDecision, KnowledgeLinkReview } from '@/types/knowledgeLinks'
 import type { Stage2ReviewCoverage, Stage2ReviewException } from '@/types/stage2Review'
 
 const labels: Record<string, string> = {
@@ -13,11 +12,10 @@ const labels: Record<string, string> = {
 }
 
 /** 节点接受与已读分开；只提交服务端工作包 token，不计算审核结论。 */
-export function Stage2NodeReviewPanel({ sid, node, token, knowledge, coverage }: {
+export function Stage2NodeReviewPanel({ sid, node, token, coverage }: {
   sid: string
-  node: string
+  node: 'stage2.global'
   token: string | null
-  knowledge?: KnowledgeLinkReview
   coverage?: Stage2ReviewCoverage | null
 }) {
   const approvals = useApprovals(sid)
@@ -29,13 +27,6 @@ export function Stage2NodeReviewPanel({ sid, node, token, knowledge, coverage }:
   const [chapters, setChapters] = useState('')
   const [reviewDefault, setReviewDefault] = useState('uncertain')
   const [reviewDraft, setReviewDraft] = useState<{ scope: string; text: string } | null>(null)
-  const [linkDraft, setLinkDraft] = useState<{ scope: string; text: string } | null>(null)
-  const scopeSha = knowledge?.scope.scope_sha256
-  const pending = new Set(knowledge?.pending_obligation_ids)
-  const linkText = linkDraft && linkDraft.scope === scopeSha ? linkDraft.text : JSON.stringify(
-    knowledge?.scope.obligations.filter((row) => pending.has(row.obligation_id))
-      .map((row) => ({ obligation_id: row.obligation_id, expected_subject_sha256: row.subject_sha256,
-        resolution: { kind: 'unresolved', reason: '待核对事实与时点' } })) ?? [], null, 2)
   useEffect(() => { setDecision(''); setReason(''); setReviewDraft(null); setReviewDefault('uncertain') }, [token])
   const mutation = approvals.approveStage2Review
   const options = enums.data?.stage2_node_review_decisions
@@ -58,17 +49,8 @@ export function Stage2NodeReviewPanel({ sid, node, token, knowledge, coverage }:
   }
   const ordinals = chapters.trim() ? chapters.trim().split(/[,，\s]+/).map(Number) : []
   const validChapters = ordinals.every((n) => Number.isInteger(n) && n > 0)
-  let linkDecisions: KnowledgeLinkDecision[] = []
-  let linkError = ''
-  if (knowledge) {
-    try {
-      const value: unknown = JSON.parse(linkText)
-      if (!Array.isArray(value)) throw new Error('知识关联决定必须是数组')
-      linkDecisions = value as KnowledgeLinkDecision[]
-    } catch (error) { linkError = error instanceof Error ? error.message : '知识关联 JSON 无法读取' }
-  }
   const ready = !!token && !!actor.trim() && !!reason.trim() && !!options?.includes(decision)
-    && !linkError && !reviewError && (node !== 'stage2.blueprint' || !!knowledge)
+    && !reviewError
     && (!isRework || (!!owners?.includes(owner) && validChapters
       && (owner !== 'stage2.blueprint' || ordinals.length > 0)))
   return (
@@ -115,36 +97,17 @@ export function Stage2NodeReviewPanel({ sid, node, token, knowledge, coverage }:
         <p>逐项填写问题与原因；只有亲自核实其余待审项后，才将“其余待审项”设为接受。</p>
         {reviewError ? <div role="alert">{reviewError}</div> : null}
       </div> : null}
-      {knowledge ? <details className="mb-12 rounded-block border border-line-2 p-12">
-        <summary>知识关联：待审 {knowledge.pending_obligation_ids.length} 项，继承 {knowledge.inherited.length} 项</summary>
-        <p>逐项核对下方事实引用。读者揭示和伏笔使用 at_facts；明确在章首已成立的世界状态，才使用开放的 at_entry。证据不足保留 unresolved。</p>
-        {knowledge.scope.obligations.filter((row) => pending.has(row.obligation_id)).map((row) => (
-          <div key={row.obligation_id} className="my-8 border-b border-line-2 pb-8">
-            <p>{row.obligation_id} · 第 {row.chapter_ordinal} 章：{row.claim}</p>
-            <p>候选事实：{row.candidate_fact_refs.join('、') || '无'}；章首证据：{row.entry_fact_refs.join('、') || '未开放'}</p>
-            {row.evidence.map((e, i) => <p key={i}>源文第 {e.chapter_ordinal} 章：{e.source?.text ?? '证据未定位'}</p>)}
-          </div>
-        ))}
-        <label>知识关联决定（JSON）<textarea aria-label="知识关联决定（JSON）" rows={12}
-          className="block w-full rounded-btn border border-line-2 p-8 font-mono text-sm2"
-          value={linkText} onChange={(event) => setLinkDraft({ scope: knowledge.scope.scope_sha256, text: event.target.value })} /></label>
-        <p>resolution 填写 kind 与 fact_refs 数组；at_facts 还须用 trigger_fact_ref 明确选择其中一条落地事实作为触发时点。只提交本次决定，后端复验历史与当前义务的完整覆盖。</p>
-        {linkError ? <div role="alert">{linkError}</div> : null}
-      </details> : null}
       <ActorReasonFields actor={actor} onActor={setActor} reason={reason} onReason={setReason}
         note={token ? '决定绑定当前已展示的完整工作包。' : '当前没有可提交的工作包 token。'}
         actions={<button type="button" className="rounded-btn border border-line-btn px-18 py-9" disabled={!ready || mutation.isPending || approvals.isError}
           onClick={() => token && mutation.mutate({
             node, review_token: token, actor: actor.trim(), reason: reason.trim(), decision,
             owner: isRework ? owner : null, chapter_ordinals: isRework ? ordinals : [],
-            knowledge_links: knowledge ? { scope_sha256: knowledge.scope.scope_sha256,
-              actor: actor.trim(), reason: reason.trim(), decisions: linkDecisions } : null,
+            knowledge_links: null,
             review: coverage ? { scope_sha256: coverage.scope.scope_sha256,
               default_decision: isRework ? reviewDefault : decision, exceptions } : null,
           })}>{mutation.isPending ? '提交中…' : '提交节点审阅决定'}</button>} />
       {mutation.isError ? <div role="alert">{errorBody(mutation.error)}<ErrorHint error={mutation.error} /></div> : null}
-      {node === 'stage2.blueprint' && current?.state === 'accepted' && !approvals.doc?.gate.s2 ?
-        <p role="status">关联决定已保存，等待运行队列免费物化关联并补齐审批。</p> : null}
     </Panel>
   )
 }

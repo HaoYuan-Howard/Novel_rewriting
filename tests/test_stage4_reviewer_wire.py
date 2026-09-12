@@ -77,8 +77,10 @@ def _task(waiting_on: str = queue.WAITING_ON_STAGE4_DESIGN_REVIEW) -> SimpleName
             wire.REFERENCE_CLOSURE: {
                 str(ordinal): {
                     'scene_refs': [f'c{ordinal:04d}_s001', f'c{ordinal:04d}_s002'],
-                    'fact_aliases': [_alias(ordinal), _alias(ordinal + 100)],
+                    'beat_aliases': [_alias(ordinal), _alias(ordinal + 100)],
                     'participant_aliases': [_alias(ordinal + 1000)],
+                    'constraint_aliases': [_alias(ordinal + 2000)],
+                    'endpoint_aliases': [], 'state_aliases': [], 'global_aliases': [],
                 } for ordinal in (2, 10)
             },
         })
@@ -105,7 +107,7 @@ def _response(task: SimpleNamespace, *, stop: bool = False) -> dict[str, Any]:
               if stop else task.submission_options[0])
     action = option['exact_request']['action']
     if stop:
-        payload = {'reason': '只读差异未证明 scene/fact/goal 结构损害，无法形成 typed 修订。'}
+        payload = {'reason': '只读差异未证明 场景/节点/目标 结构损害，无法形成 typed 修订。'}
     else:
         source = action['payload']
         payload = {
@@ -267,7 +269,7 @@ def test_current_constraints_reach_loader_and_reference_order_survives(tmp_path)
     response = _response(task)
     constraint = {
         'code': 'disclosure_order', 'scene_refs': ['c0002_s002', 'c0002_s001'],
-        'opaque_aliases': [_alias(102), _alias(2)], 'effect': None,
+        'opaque_aliases': [_alias(102), _alias(2)],
     }
     _repair(response, constraint)
     action = _load(tmp_path, task, wire.assemble(task, response))
@@ -286,7 +288,7 @@ def test_constraints_inherit_current_code_arity_and_chapter_closure(field, value
     response = _response(task)
     constraint = {
         'code': 'scene_goal', 'scene_refs': ['c0002_s001'],
-        'opaque_aliases': [_alias(2)], 'effect': None,
+        'opaque_aliases': [_alias(2)],
     }
     constraint[field] = value
     _repair(response, constraint)
@@ -294,19 +296,26 @@ def test_constraints_inherit_current_code_arity_and_chapter_closure(field, value
         wire.assemble(task, response)
 
 
-def test_relation_effect_separates_observer_and_fact_domains():
+def test_semantic_constraint_can_only_reference_registered_constraint_or_endpoint():
     task = _task()
     response = _response(task)
-    constraint = {
-        'code': 'narrative_relation', 'scene_refs': [], 'opaque_aliases': [],
-        'effect': {
-            'kind': 'observes', 'enforcement': 'hard', 'observer_alias': _alias(1002),
-            'observed_alias': _alias(2), 'observation_alias': _alias(102),
-        },
-    }
+    constraint = {'code': 'semantic_constraint', 'scene_refs': [], 'opaque_aliases': [_alias(2002)]}
     _repair(response, constraint)
     assert wire.assemble(task, response)['action']['payload']['chapters'][0]['constraints'] == [constraint]
-    constraint['effect']['observer_alias'] = _alias(2)
+    for invalid in (_alias(2), _alias(1002), _alias(2010)):
+        constraint['opaque_aliases'] = [invalid]
+        with pytest.raises(wire.Stage4ReviewerWireError):
+            wire.assemble(task, response)
+
+
+def test_old_relation_effect_cannot_create_new_observation_truth():
+    task = _task()
+    response = _response(task)
+    _repair(response, {
+        'code': 'narrative_relation', 'scene_refs': [], 'opaque_aliases': [],
+        'effect': {'kind': 'observes', 'enforcement': 'hard', 'observer_alias': _alias(1002),
+                   'observed_alias': _alias(2), 'observation_alias': _alias(102)},
+    })
     with pytest.raises(wire.Stage4ReviewerWireError):
         wire.assemble(task, response)
 
@@ -345,7 +354,7 @@ def test_schema_reuses_alias_definitions_and_absent_participant_has_no_observes(
     schema = wire.output_schema_for(task)
     assert schema is not None
     definitions = schema['$defs']
-    assert any(name.startswith('Stage4FactAlias_2_') for name in definitions)
+    assert any(definition.get('enum') == [_alias(2), _alias(102)] for definition in definitions.values())
     assert not any(name.startswith('Stage4DesignRepairObserves_2_') for name in definitions)
     assert model.model_validate(_response(task)).selection.payload.chapters
 
@@ -361,9 +370,10 @@ def test_nineteen_chapter_closed_domains_fit_native_enum_budget_without_losing_a
     closure = {}
     for ordinal in range(1, 20):
         closure[str(ordinal)] = {
+            'constraint_aliases': [], 'endpoint_aliases': [], 'state_aliases': [], 'global_aliases': [],
             'scene_refs': [f'c{ordinal:04d}_s{index:03d}'
                            for index in range(1, 7 if ordinal <= 2 else 6)],
-            'fact_aliases': [_alias(ordinal * 1000 + index)
+            'beat_aliases': [_alias(ordinal * 1000 + index)
                              for index in range(34 if ordinal <= 13 else 33)],
             'participant_aliases': [_alias(100000 + ordinal * 10 + index)
                                     for index in range(4 if ordinal <= 14 else 3)],
@@ -373,9 +383,22 @@ def test_nineteen_chapter_closed_domains_fit_native_enum_budget_without_losing_a
         ordinal: {'expected_constraint_set_sha256': 'c' * 64, 'items': []}
         for ordinal in closure
     }
-    assert sum(len(row['fact_aliases']) for row in closure.values()) == 640
+    assert sum(len(row['beat_aliases']) for row in closure.values()) == 640
     assert sum(len(row['participant_aliases']) for row in closure.values()) == 71
     assert sum(len(row['scene_refs']) for row in closure.values()) == 97
+    # 正常设计与异常上游转交同时下发，节点枚举仍只保存一次。
+    referral = copy.deepcopy(option['exact_request'])
+    referral['action'] = {'kind': 'approval', 'surface': 'blueprint_refinement', 'payload': {
+        'origin': 'design', 'review_token': payload['review_token'], 'actor': payload['actor'],
+        'chapter_ordinal': 1, 'dimension': 'completeness', 'subject_refs': ['chapter'],
+        'reason': '<说明疑似错漏>'}}
+    task.submission_options += ({
+        'id': 'approval:blueprint_refinement', 'exact_request': referral,
+        'allowed_values': {
+            'subjects_by_chapter': {key: ['chapter', *row['beat_aliases']] for key, row in closure.items()},
+            'beat_aliases_by_chapter': {key: row['beat_aliases'] for key, row in closure.items()},
+        },
+    },)
 
     def enums(node):
         if isinstance(node, dict):
@@ -385,14 +408,16 @@ def test_nineteen_chapter_closed_domains_fit_native_enum_budget_without_losing_a
         return 0
 
     raw = wire.response_model(task).model_json_schema(by_alias=True)
-    assert enums(raw) > 1000, '共享转换前必须能重现整份schema枚举超限'
+    # V9 按 code 分支共享主体目录，原始 schema 已能低于旧超限基线。
+    # 保留原来的 19 章、640 节点、71 人物、97 场景分母及真实下发上限。
+    assert enums(raw) >= 640 + 71 + 97
     sent = wire.output_schema_for(task)
     assert sent is not None and 800 <= enums(sent) <= 1000
     rendered = json.dumps(sent)
     for row in closure.values():
         for values in row.values():
             assert all(value in rendered for value in values)
-    # opaque只是fact/participant闭集的联合引用，没有另一份重复枚举。
+    # opaque只是节点/其他主体闭集的联合引用，没有另一份重复枚举。
     for name, definition in sent['$defs'].items():
         if name.startswith('Stage4OpaqueAlias_'):
             assert 'enum' not in definition
@@ -418,14 +443,15 @@ def test_reference_closure_is_projection_of_typed_subject():
     source = SimpleNamespace(chapters=[SimpleNamespace(
         output_ordinal=7, subject=SimpleNamespace(
             chapter=SimpleNamespace(scenes=[SimpleNamespace(candidate_scene_id='c0007_s001')]),
-            blind_truth=SimpleNamespace(facts=[
-                SimpleNamespace(fact_alias=_alias(7), participant_aliases=[_alias(1007)]),
-                SimpleNamespace(fact_alias=_alias(107), participant_aliases=[_alias(1007)]),
+            blind_truth=SimpleNamespace(constraints=[], endpoints=[], states=[], inherited_states=[], global_subjects=[], beats=[
+                SimpleNamespace(alias=_alias(7), participant_aliases=[_alias(1007)]),
+                SimpleNamespace(alias=_alias(107), participant_aliases=[_alias(1007)]),
             ]),
         ),
     )])
     assert reviewer_tasks._design_constraint_reference_closure(source) == {
-        '7': {'scene_refs': ['c0007_s001'], 'fact_aliases': [_alias(7), _alias(107)],
+        '7': {'scene_refs': ['c0007_s001'], 'beat_aliases': [_alias(7), _alias(107)],
+              'constraint_aliases': [], 'endpoint_aliases': [], 'state_aliases': [], 'global_aliases': [],
               'participant_aliases': [_alias(1007)]},
     }
 

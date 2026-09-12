@@ -25,6 +25,7 @@ from contracts.schema.api import (
     ReadingView, ReviewView,
     Stage4View, Stage5View, Stage6View, Stage7View,
 )
+from contracts.schema.plot_review import ReviewScope
 from novel.api.deps import checked_sid, get_base
 from novel import paths, prov
 from novel.orchestrator import state
@@ -95,9 +96,10 @@ def get_stage2_global(sid: str = Depends(checked_sid),
 )
 def get_stage2_blueprint_review_workpack(
     sid: str = Depends(checked_sid), base: str = Depends(get_base),
+    scope: ReviewScope | None = None,
 ) -> BlueprintReviewWorkpack:
-    """整本 Blueprint 的异常优先只读面；不产生决定，也不开任何 gate。"""
-    return blueprint_review_workpack(base, sid)
+    """自动取阅读序首个待审范围；人工可以选择章，跨章仍受全部章审闸门约束。"""
+    return blueprint_review_workpack(base, sid, scope=scope)
 
 
 @router.get('/{sid}/stage2/global-review', response_model=GlobalReviewView)

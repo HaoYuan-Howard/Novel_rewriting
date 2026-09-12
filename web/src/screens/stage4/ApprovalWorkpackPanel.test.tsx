@@ -1,65 +1,21 @@
 import { screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { plotFlowFixture } from '@/api/mock'
 import { api, realApi } from '@/api/endpoints'
 import { renderRoute } from '@/test/render'
 import type {
   ApprovalWorkpack,
   ApprovalWorkpackGroupKind,
   WorkpackChapterReading,
-  WorkpackSceneReading,
 } from '@/types/approvals'
 import { ApprovalWorkpackPanel } from './ApprovalWorkpackPanel'
 
-const SCENE: WorkpackSceneReading = {
-  scene_ref: 'c03s01',
-  weight: null,
-  budget_chars: 800,
-  purpose: '以新场景落下事实',
-  role: 'setup',
-  delivery: 'scene',
-  transition: 'start',
-  land: ['f03_001'],
-  context: [],
-  turn: 'f03_001',
-  entry_state: [],
-  exit_state: [],
-  stages: [{ ref: 'b03_01', found: true, time_layer: 'present', place: '门口', present: ['char_001'] }],
-  materials: [],
-  missing_material_refs: [],
-}
-
 function chapterReading(kind: 'design' | 'structure'): WorkpackChapterReading {
-  if (kind === 'design') {
-    return {
-      kind: 'stage4_design_chapter_reading_v1',
-      chapter_function: '建立冲突',
-      weight: 'CH_EVEN',
-      chapter_rewrite_brief: '直接推进',
-      structure_decision: { mode: 'retain' },
-      facts: [{
-        fact_alias: 'a_' + '1'.repeat(16), claim: '她发现门已经打开。',
-        kind: 'event', obligation: 'land', participant_aliases: [],
-      }],
-      goals: { chapter: { intent: 'advance', refs: ['a_' + '1'.repeat(16)] } },
-      causal_edges: [],
-      narrative_relations: [],
-      entry_state: [],
-      ending_state: [],
-      scenes: [{ ...SCENE, land: ['a_' + '1'.repeat(16)], turn: null, stages: [] }],
-    }
-  }
-  return {
-    kind: 'stage4_structure_chapter_reading_v1',
-    chapter_function: '建立冲突',
-    chapter_rewrite_brief: '直接推进',
-    structure_decision: { mode: 'retain' },
-    facts: [{ ref: 'f03_001', claim: '她发现门已经打开。', kind: 'event', obligation: 'land' }],
-    goals: { chapter: { intent: 'advance', refs: ['f03_001'] } },
-    scenes: [SCENE],
-    structure_metrics: { state: 'ok', alignment: { mode: 'retain' } },
-    binding_concerns: [],
-    signature_conflict_codes: [],
-  }
+  const fixture = plotFlowFixture()
+  const pack = kind === 'design' ? fixture.design_workpack : fixture.structure_workpack
+  const row = pack.groups.find((group) => group.group === 'coverage')!.items
+    .find((item) => item.chapter_ordinal === 3)!
+  return row.reading!
 }
 
 const GROUPS: ApprovalWorkpackGroupKind[] = [
@@ -134,9 +90,9 @@ function workpack(kind: 'design' | 'structure'): ApprovalWorkpack {
       }] : [],
     })),
     reading: {
-      kind: 'stage4_workpack_reading_v1',
+      kind: 'stage4_workpack_reading_v2',
       legend: { reading: '每个 coverage 行的 reading 是本章裁决材料' },
-      reconstruction_strategy: kind === 'design' ? '按事实义务重新组织场景' : null,
+      reconstruction_strategy: kind === 'design' ? '按完整剧情节点组织呈现' : null,
       chapter_weights: null,
       global_binding_concerns: [],
     },
@@ -194,10 +150,10 @@ describe('Stage4 exception-first 审阅工作包', () => {
     vi.spyOn(api, 'getStructureApprovalWorkpack').mockResolvedValue(workpack('structure'))
     renderRoute(<ApprovalWorkpackPanel kind="structure" />, '/n/book-1/stage4/3')
 
-    expect(await screen.findByText('逐章裁决材料（reading）')).toBeInTheDocument()
+    expect(await screen.findByText('逐章裁决材料')).toBeInTheDocument()
     expect(screen.getByText('字段说明（reading.legend）与整书材料')).toBeInTheDocument()
-    expect(screen.getAllByText(/她发现门已经打开/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/门口/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/李宝珠午后翻账册/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/槐叶/).length).toBeGreaterThan(0)
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 

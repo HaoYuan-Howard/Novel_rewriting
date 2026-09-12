@@ -25,6 +25,7 @@ from contracts.invariants import SOURCE_OVERLAP_MAX
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
+from novel.stages.stage5.plot_checks import fidelity_scenes, knowledge_position_findings
 from novel.core.bands import PARA_BANDS, SENT_BANDS, band, cut_distance
 from novel.core.facts import (
     first_reveal_chapter, locate_secret, num_unit_keys, num_values, number_tokens,
@@ -116,7 +117,7 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     反哺 prompt 与「两轮之间这条消没消」都按它对齐。
     """
     fs: list[Finding] = []
-    scenes = entry.get('scenes') or []
+    scenes = fidelity_scenes(entry)
     source_norm = norm(M.chapter_source(entry, book.source_text))
 
     # 字面例外只比较原字节：密码和识别符号中的标点、大小写也可能参与剧情。
@@ -325,6 +326,7 @@ def segment_fidelity_findings(
                 unresolved_rounds=hit.unresolved_rounds,
                 wontfix=hit.wontfix,
             ))
+    out.extend(knowledge_position_findings(segments, entry, book))
     return with_output_ordinal(out, entry.get('output_ordinal'))
 
 
@@ -575,7 +577,8 @@ def _end_hook_landing(
     目标、末段与上下文判断，不能进入付费 revise。
     """
     goal = entry.get('end_hook_goal') or {}
-    facts = [f for f in (goal.get('facts') or []) if f]
+    target = goal.get('anchor_beat_ref')
+    facts = [row['content'] for row in entry['beats'] if row['beat_ref'] == target]
     planned = entry.get('scenes') or []
     if not facts or not planned:
         return [
@@ -963,74 +966,23 @@ def _pronoun_named(entry: dict[str, Any]) -> set[str]:
 
 def fact_landing(entry: dict[str, Any], body: str, src_text: str
                  ) -> tuple[list, list, list, list]:
-    """每个必落事实在成稿里有没有落点 → `(落了, 没落, 提不出表面原子, 原子提错)`。
-
-    ⚠ **身份基线是这条判据能不能被解读的前提**：同一套原子先拿**源章原文**跑一遍
-    ——源章里都落不下的原子，说明是**抽取坏了不是成稿坏了**。
-    没有这个对照，「落点率 70%」这个数没有任何可解读性。
-    """
-    roster = {c.get('display_name') for c in (entry.get('characters') or [])}
-    roster = {n for n in roster if n} - _pronoun_named(entry)
-    landed: list = []
-    missed: list = []
-    noatom: list = []
-    ident_miss: list = []
-    for scene in (entry.get('scenes') or []):
-        for claim in (scene.get('required_facts') or []):
-            text = str(claim)
-            atoms = _surface_atoms(text, roster)
-            if not atoms:
-                noatom.append(text[:24])
-                continue
-            if src_text and not any(atom in src_text for atom in atoms):
-                # 原文里都找不到 → **事实 claim 的表面探针不可用**，不拿坏尺子量成稿。
-                ident_miss.append(text[:24])
-                continue
+    """每个完整父节点只计一次词面探针；命中不表示剧情及各次呈现已完成。"""
+    roster = {c['display_name'] for c in entry['characters']} - _pronoun_named(entry)
+    landed, missed, noatom, ident_miss = [], [], [], []
+    for beat in entry['beats']:
+        text = beat['content']
+        atoms = _surface_atoms(text, roster)
+        if not atoms:
+            noatom.append(text[:24])
+        elif src_text and not any(atom in src_text for atom in atoms):
+            ident_miss.append(text[:24])
+        else:
             (landed if any(atom in body for atom in atoms) else missed).append(
                 (text[:36], sorted(atoms)[:4]))
     return landed, missed, noatom, ident_miss
 
 
-def segment_fact_findings(
-    segments: list[dict[str, str]],
-    entry: dict[str, Any],
-    book: M.Book,
-) -> list[Finding]:
-    """逐场检查必落事实；事实数组没有源序含义，因此绝不做场内顺序判定。"""
-    contracts = {str(row.get('slot') or ''): row for row in (entry.get('scenes') or [])}
-    roster = {c.get('display_name') for c in (entry.get('characters') or [])}
-    roster = {name for name in roster if name} - _pronoun_named(entry)
-    source = M.chapter_source(entry, book.source_text)
-    out: list[Finding] = []
-    for returned in segments:
-        slot = str(returned.get('slot') or '')
-        contract = contracts.get(slot)
-        if contract is None:
-            continue
-        body = str(returned.get('text') or '')
-        missing: list[str] = []
-        unver: list[str] = []
-        for claim in (contract.get('required_facts') or []):
-            atoms = sorted(_surface_atoms(str(claim), roster))
-            source_atoms = [atom for atom in atoms if not source or atom in source]
-            if not atoms or not source_atoms:
-                unver.append(str(claim)[:36])
-            elif not any(atom in body for atom in source_atoms):
-                missing.append(str(claim)[:36])
-        if missing:
-            out.append(finding(
-                'fact_landing',
-                detail=f'slot {slot} 内 {len(missing)} 个必落事实缺少可回查落点：{missing[:3]}',
-                evidence=[slot, *missing],
-            ))
-        if unver:
-            out.append(finding(
-                'fact_landing_unver',
-                detail=f'slot {slot} 内 {len(unver)} 个事实缺少唯一确定性表面原子：'
-                       f'{unver[:3]}',
-                evidence=[slot, str(len(unver))],
-            ))
-    return with_output_ordinal(out, entry.get('output_ordinal'))
+from novel.stages.stage5.plot_checks import delivery_surface_findings as segment_fact_findings
 
 
 def material_anchor_findings(entry: dict[str, Any], book: M.Book) -> list[Finding]:
@@ -1045,7 +997,7 @@ def material_anchor_findings(entry: dict[str, Any], book: M.Book) -> list[Findin
         return []
     source_norm = norm(source)
     missed: list[tuple[str, str]] = []
-    for scene in (entry.get('scenes') or []):
+    for scene in fidelity_scenes(entry):
         for field in ('verbatim', 'keep_value', 'must_appear'):
             for raw in (scene.get(field) or []):
                 pieces = [str(raw)]
@@ -1268,6 +1220,7 @@ _FROM_CHAPTER: tuple[str, ...] = (
     'narration_person_report', 'narration_person_drift',
     'end_hook_surface_report', 'end_hook_unver',
     'fact_landing', 'fact_landing_unver',
+    'knowledge_position_unver',
 )
 
 #: **只有全书验收相**产得出来的：单章视角看不到，或者要跨章比。
@@ -1282,7 +1235,8 @@ _FROM_REVIEW: tuple[str, ...] = (
 #: 一条 `sev='unver'` 却没说出「这次为什么够不着」的判据）。
 _UNVER: frozenset[str] = frozenset({
     'must_hold_unver', 'fact_landing_unver', 'draft_missing',
-    'dialogue_semantics_unver', 'no_secrets_in_book', 'end_hook_unver'})
+    'dialogue_semantics_unver', 'no_secrets_in_book', 'end_hook_unver',
+    'knowledge_position_unver'})
 
 
 def _why_of(rule: str, fs: list[Finding], *, empty: str) -> str:

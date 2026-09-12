@@ -427,7 +427,7 @@ def test_retired_draft_in_old_s5_proof_revokes_s5_and_downstream(
         decided_at='2026-08-29T00:00:00+00:00',
         proof=current_gate_proofs['s5'],
     )
-    record = approvals._ApprovalRecordV7(
+    record = approvals._ApprovalRecordV8(
         sid='123',
         gate={gate: True for gate in approvals._GATE_ORDER},
         seen={key: True for key in seen_proofs},

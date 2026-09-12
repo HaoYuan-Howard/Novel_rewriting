@@ -37,156 +37,17 @@ def identity_goal(chapter: int, intent: str = 'advance') -> dict[str, Any]:
 
 
 def semantic_contract_of(blueprint: dict[str, Any]) -> dict[str, Any]:
-    atoms = list(blueprint.get('fact_atoms') or [])
-    land = [a for a in atoms if a.get('obligation') == 'land']
-    hinges = [hinge for beat in (blueprint.get('beats') or [])
-              for hinge in (beat.get('hinges') or [])]
     return {
-        'chapter_function': blueprint.get('chapter_function'),
-        'information_delta': [a.get('fact_id') for a in land
-                              if a.get('kind') == 'information'],
-        'character_state_delta': [a.get('fact_id') for a in land
-                                  if a.get('kind') == 'character_state'],
-        'relationship_delta': [a.get('fact_id') for a in land
-                               if a.get('kind') == 'relationship'],
-        'reader_knowledge_delta': [a.get('fact_id') for a in land
-                                   if a.get('kind') == 'reader_knowledge'],
-        'must_land_fact_refs': [a.get('fact_id') for a in land],
-        'context_fact_refs': [a.get('fact_id') for a in atoms
-                              if a.get('obligation') == 'context'],
-        'causal_edges': list(blueprint.get('causal_edges') or []),
-        'entry_state_refs': list(blueprint.get('entry_state_refs') or []),
-        'ending_state_refs': list(blueprint.get('ending_state_refs') or []),
-        'material_refs': [h.get('hinge_id') for h in hinges if h.get('hinge_id')],
+        'chapter_function': blueprint['chapter_function'],
+        'beat_refs': [row['beat_id'] for row in blueprint['beats']],
+        'state_refs': [row['state_id'] for row in blueprint['states']],
+        'constraint_refs': [row['constraint_id'] for row in blueprint['constraints']],
+        'entry_state_refs': list(blueprint['entry_state_refs']),
+        'carry_out_refs': list(blueprint['carry_out_refs']),
     }
 
 
-def structure_metrics_of(blueprint: dict[str, Any],
-                         chapter: dict[str, Any]) -> dict[str, Any]:
-    """逐章复算 Stage2 原子事实到 Stage4 场景的结构变化。
-
-    这一个函数是结构读数的唯一数学落点。源顺序只认 ``SourceSpan`` 的半开
-    区间：两段不重叠才建立先后，重叠证据合成同一个 source locus，不拿
-    ``fact_id`` 或数组位置伪造顺序。源分区则只认 ``source_beat_ref``；计划
-    分区只认 fact 最终落到的 scene。
-
-    任何 land fact 缺失、重复落场、越界落场或空场都会让全部结构读数进入
-    ``unver``。这是刻意的关闭式前件：残缺映射上的漂亮比例没有解释力。
-    返回值只含 JSON 可序列化的标量、列表与字典，不修改任一输入。
-    """
-
-    ordinal = int(chapter.get('output_ordinal') or 0)
-    source_ordinal = int(blueprint.get('chapter_ordinal') or 0)
-    atoms = list(blueprint.get('fact_atoms') or [])
-    land_atoms = [atom for atom in atoms if atom.get('obligation') == 'land']
-    land_ids = [str(atom.get('fact_id') or '') for atom in land_atoms]
-    scenes = list(chapter.get('scenes') or [])
-
-    mapping_problems: list[str] = []
-    if ordinal and source_ordinal and ordinal != source_ordinal:
-        mapping_problems.append(f'章号不一致：plan={ordinal},source={source_ordinal}')
-    if not land_ids:
-        mapping_problems.append('没有 land fact')
-    if any(not fact_id for fact_id in land_ids):
-        mapping_problems.append('land fact_id 为空')
-    duplicate_source_ids = sorted(
-        fact_id for fact_id, count in Counter(land_ids).items() if count != 1)
-    if duplicate_source_ids:
-        mapping_problems.append(f'Stage2 land fact_id 重复：{duplicate_source_ids}')
-    if not scenes:
-        mapping_problems.append('计划没有场景')
-
-    landed: list[str] = []
-    empty_scenes: list[str] = []
-    scene_of: dict[str, int] = {}
-    for index, scene in enumerate(scenes):
-        refs = [str(ref) for ref in (scene.get('land_fact_refs') or [])]
-        if not refs:
-            empty_scenes.append(str(scene.get('slot') or index + 1))
-        landed.extend(refs)
-        for ref in refs:
-            scene_of[ref] = index
-    if empty_scenes:
-        mapping_problems.append(f'空场景：{empty_scenes}')
-
-    landed_counts = Counter(landed)
-    land_set = set(land_ids)
-    missing = sorted(land_set - set(landed_counts))
-    duplicate_landing = sorted(
-        ref for ref in land_set if landed_counts.get(ref, 0) != 1)
-    unknown = sorted(set(landed_counts) - land_set)
-    if missing:
-        mapping_problems.append(f'land fact 缺失：{missing}')
-    if duplicate_landing:
-        mapping_problems.append(f'land fact 非恰落一次：{duplicate_landing}')
-    if unknown:
-        mapping_problems.append(f'场景含越界 land ref：{unknown}')
-
-    section_names = (
-        'partition', 'order', 'adjacency', 'boundary',
-        'noncontiguous', 'anchors', 'eligibility',
-    )
-    if mapping_problems:
-        reason = '；'.join(mapping_problems)
-        result: dict[str, Any] = {
-            'state': 'unver',
-            'chapter_ordinal': ordinal or source_ordinal,
-            'mapping': {
-                'state': 'unver', 'reason': reason,
-                'land_facts': len(land_ids), 'mapped_refs': len(landed),
-                'plan_scenes': len(scenes),
-            },
-        }
-        result.update({name: _structure_unver(reason) for name in section_names})
-        return result
-
-    # 映射闭合后才允许进入任何比例计算。上面的 Counter 已经证明每个 land id
-    # 恰好出现一次，因此此处的 scene_of 不会被 update 的最后一次命中掩盖重复。
-    mapping = {
-        'state': 'ok', 'land_facts': len(land_ids),
-        'mapped_facts': len(scene_of), 'plan_scenes': len(scenes),
-    }
-
-    partition = _partition_metrics(land_atoms, scene_of)
-    loci, locus_problem = _source_loci(land_atoms)
-    if loci is None:
-        source_reason = locus_problem or 'land fact 的 SourceSpan 不可用'
-        source_unver = _structure_unver(source_reason)
-        return {
-            'state': 'ok', 'chapter_ordinal': ordinal or source_ordinal,
-            'mapping': mapping,
-            'partition': partition,
-            'order': dict(source_unver),
-            'adjacency': dict(source_unver),
-            'boundary': _boundary_metrics(partition, land_atoms, scene_of),
-            'noncontiguous': dict(source_unver),
-            'anchors': dict(source_unver),
-            'eligibility': dict(source_unver),
-        }
-
-    locus_of = {
-        fact_id: index for index, locus in enumerate(loci)
-        for fact_id in locus['fact_ids']
-    }
-    order = _order_metrics(land_atoms, scene_of)
-    adjacency = _adjacency_metrics(loci, scene_of)
-    boundary = _boundary_metrics(partition, land_atoms, scene_of)
-    noncontiguous = _noncontiguous_metrics(scenes, locus_of)
-    anchors = _anchor_metrics(chapter, scenes, loci, locus_of)
-    eligibility = _eligibility_metrics(
-        atoms, land_atoms, blueprint.get('causal_edges') or [], locus_of,
-    )
-    return {
-        'state': 'ok', 'chapter_ordinal': ordinal or source_ordinal,
-        'mapping': mapping,
-        'partition': partition,
-        'order': order,
-        'adjacency': adjacency,
-        'boundary': boundary,
-        'noncontiguous': noncontiguous,
-        'anchors': anchors,
-        'eligibility': eligibility,
-    }
+from novel.stages.stage4.plot_measure import structure_metrics_of
 
 
 def computed_structure_change_kinds(metrics: dict[str, Any]) -> list[str]:
@@ -202,7 +63,7 @@ def computed_structure_change_kinds(metrics: dict[str, Any]) -> list[str]:
         changed.add('ending_anchor')
     boundary = metrics.get('boundary') or {}
     if boundary.get('state') == 'ok' and boundary.get('changed') is True:
-        changed.add('fact_grouping')
+        changed.add('presentation_grouping')
     order = metrics.get('order') or {}
     if order.get('state') == 'ok' and int(order.get('inverted_pairs') or 0) > 0:
         changed.add('disclosure_order')
@@ -228,7 +89,9 @@ def structure_subject(plan: Any) -> dict[str, Any]:
             return value
         return {
             'intent': value.get('intent'),
-            'fact_refs': value.get('fact_refs'),
+            'subject_refs': value.get('subject_refs'),
+            'anchor_beat_ref': value.get('anchor_beat_ref'),
+            'anchor_scene_ref': value.get('anchor_scene_ref'),
         }
 
     chapters: list[dict[str, Any]] = []
@@ -241,12 +104,12 @@ def structure_subject(plan: Any) -> dict[str, Any]:
             'open_hook_goal': goal(chapter.get('open_hook_goal')),
             'end_hook_goal': goal(chapter.get('end_hook_goal')),
             'chapter_rewrite_brief': chapter.get('chapter_rewrite_brief'),
+            'beat_placements': chapter.get('beat_placements'),
+            'anchor_bindings': chapter.get('anchor_bindings'),
             'scenes': [
                 {key: scene.get(key) for key in (
                     'slot', 'budget_chars', 'purpose', 'role', 'delivery',
-                    'transition', 'land_fact_refs', 'context_fact_refs', 'material_refs',
-                    'turn_fact_ref', 'entry_state_refs', 'exit_state_refs',
-                    'stage_refs',
+                    'transition', 'context_beat_refs', 'turn_beat_ref',
                 )}
                 for scene in (chapter.get('scenes') or [])
             ],
@@ -711,37 +574,30 @@ def chapter_source_chars(main_text: list[dict[str, Any]],
     return chars, cov
 
 
-def budget_basis(blueprints: dict[str, Any], _bidx: dict[str, dict[str, Any]] | None = None
+def budget_basis(blueprints: dict[str, Any], bidx: dict[str, dict[str, Any]] | None = None
                  ) -> tuple[dict[Any, int], dict[str, int], list[Any]]:
-    chapters: dict[Any, int] = {}
-    facts: dict[str, int] = {}
-    gaps: list[Any] = []
-    for bp in (blueprints.get('blueprints') or []):
-        ordinal = bp.get('chapter_ordinal')
-        sizes = [_source_chars(beat) for beat in (bp.get('beats') or [])]
-        known = [size for size in sizes if size is not None]
-        if not known:
+    """篇幅以经验证的源章正文为准；节点正文长度只作章内权重。"""
+    chapters, sizes, gaps = {}, {}, []
+    for bp in blueprints['blueprints']:
+        ordinal = bp['chapter_ordinal']
+        known = {row['source_chapter_chars'] for row in (bidx or {}).values()
+                 if row['ord'] == ordinal}
+        if len(known) != 1:
             gaps.append(ordinal)
         else:
-            chapters[ordinal] = sum(known)
-        for atom in (bp.get('fact_atoms') or []):
-            if atom.get('fact_id'):
-                facts[str(atom['fact_id'])] = max(1, len(str(atom.get('claim') or '')))
-    return chapters, facts, gaps
+            chapters[ordinal] = next(iter(known))
+        for beat in bp['beats']:
+            sizes[beat['beat_id']] = max(1, len(beat['content']))
+    return chapters, sizes, gaps
 
 
-def source_chars_table(blueprints: dict[str, Any], _bidx: dict[str, dict[str, Any]] | None = None,
+def source_chars_table(blueprints: dict[str, Any], bidx: dict[str, dict[str, Any]] | None = None,
                        *, book_total: bool = False) -> str | None:
-    chapter_sizes, _facts, gaps = budget_basis(blueprints)
-    if not chapter_sizes and not gaps:
-        return None
-    rows = [f'阅读序第{o}章：原子事实 {len(bp.get("fact_atoms") or [])} 条，'
-            f'可定位源区间 {chapter_sizes.get(o, "?")} 字'
-            for bp in (blueprints.get('blueprints') or [])
-            for o in [bp.get('chapter_ordinal')]]
+    sizes, _, gaps = budget_basis(blueprints, bidx)
+    rows = [f'阅读序第{bp["chapter_ordinal"]}章：完整剧情 {len(bp["beats"])} 个，'
+            f'源文 {sizes.get(bp["chapter_ordinal"], "未核算")} 字' for bp in blueprints['blueprints']]
     if book_total:
-        rows.append(f'全书可定位源区间合计 {sum(chapter_sizes.values())} 字；'
-                    f'{len(gaps)} 章基准未知')
+        rows.append(f'全书已核算源文 {sum(sizes.values())} 字；{len(gaps)} 章未核算')
     return '\n'.join(rows)
 
 
@@ -810,45 +666,17 @@ def _round_shares(raw: list[float], total: int) -> list[int]:
 
 
 def _validate_scene_refs(chapter: dict[str, Any], blueprint: dict[str, Any]) -> None:
-    # `checks` 本身复用本模块的结构读数，故在调用时导入以避开模块初始化环；
-    # context 的产品口径仍只落在 checks.context_ref_findings 一处。
-    from novel.stages.stage4 import checks
-
-    ordinal = chapter.get('output_ordinal')
-    atoms = {str(a.get('fact_id')): a for a in (blueprint.get('fact_atoms') or [])}
-    hinges = {str(h.get('hinge_id')) for beat in (blueprint.get('beats') or [])
-              for h in (beat.get('hinges') or [])}
-    beats = {str(b.get('beat_id')) for b in (blueprint.get('beats') or [])}
-    land = {fid for fid, atom in atoms.items() if atom.get('obligation') == 'land'}
-    context = {fid for fid, atom in atoms.items() if atom.get('obligation') == 'context'}
-    landed: list[str] = []
-    bad: list[str] = []
-    for index, scene in enumerate(chapter.get('scenes') or [], 1):
-        prefix = f'ch{ordinal}.scene{index}'
-        lrefs = [str(ref) for ref in (scene.get('land_fact_refs') or [])]
-        crefs = [str(ref) for ref in (scene.get('context_fact_refs') or [])]
-        landed.extend(lrefs)
-        if set(lrefs) - land:
-            bad.append(f'{prefix}.land_fact_refs 越界 {sorted(set(lrefs) - land)}')
-        if set(scene.get('material_refs') or []) - hinges:
-            bad.append(f'{prefix}.material_refs 越界')
-        if set(scene.get('stage_refs') or []) - beats:
-            bad.append(f'{prefix}.stage_refs 越界')
-        if scene.get('turn_fact_ref') not in lrefs:
-            bad.append(f'{prefix}.turn_fact_ref 不在本场落地事实中')
-    bad.extend(
-        f'ch{ordinal}.{row}.context_fact_refs 越界'
-        for row in checks.context_ref_findings(
-            list(chapter.get('scenes') or []),
-            context_obligation_refs=context,
-            land_key='land_fact_refs', context_key='context_fact_refs')
-    )
-    duplicates = sorted({ref for ref in landed if landed.count(ref) > 1})
-    missing = sorted(land - set(landed))
-    if missing or duplicates or bad:
-        raise RefusedByStructure(
-            f'ch{ordinal} 场景事实契约无法编译：缺失={missing}，重复={duplicates}，'
-            f'引用错误={bad[:8]}')
+    from contracts.schema.plot import PlotBlueprint
+    from novel.stages.stage4.plot_placements import compile_plan_placements
+    from contracts.schema.plot import PlotKnowledgeTrigger
+    # 已审知识的触发身份由 A+B 冻结；完整 KnowledgeLinks 一致性在联合正式检查再核验。
+    # 预算只核验其余呈现，不把缺失知识语义伪装成已通过。
+    checked = {**chapter, 'anchor_bindings': [
+        r for r in chapter['anchor_bindings'] if r['kind'] != 'knowledge']}
+    try:
+        compile_plan_placements(PlotBlueprint.model_validate(blueprint), checked)
+    except ValueError as exc:
+        raise RefusedByStructure(str(exc)) from exc
 
 
 def allocate_budgets(plan: dict[str, Any], blueprints: dict[str, Any],
@@ -907,8 +735,13 @@ def allocate_budgets(plan: dict[str, Any], blueprints: dict[str, Any],
         blueprint = bp_of.get(ordinal) or {}
         _validate_scene_refs(chapter, blueprint)
         scenes = list(chapter.get('scenes') or [])
-        raw = [sum(fact_sizes.get(str(ref), 1)
-                   for ref in (scene.get('land_fact_refs') or []))
+        # 父节点权重在其 deliveries 间均分，分场不会凭空抬高全章篇幅。
+        scene_weights = {scene['slot']: 0.0 for scene in scenes}
+        for placement in chapter['beat_placements']:
+            share = fact_sizes[placement['beat_ref']] / len(placement['deliveries'])
+            for delivery in placement['deliveries']:
+                scene_weights[delivery['scene_ref']] += share
+        raw = [scene_weights[scene['slot']]
                * UNIT_WEIGHT_FACTOR.get(scene.get('weight'), 1.0)
                for scene in scenes]
         budgets = _round_shares(raw, int(chapter_totals.get(ordinal, source.get(ordinal, 1))))
@@ -929,63 +762,57 @@ def adopt_plan_response(plan: dict[str, Any], blueprints: dict[str, Any],
 
 def identity_plan(blueprints: dict[str, Any], main_text: list[dict[str, Any]],
                   bidx: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
-    """一章一组源序场景的显式基线；用于免费预览，不冒充重构结果。"""
+    """按节点阅读序的免费参考；不是原文场景真值或已接受重构。"""
+    from novel.stages.stage4.plot_binding import source_context_catalog
+    from contracts.schema.plot import PlotBlueprint
     if bidx is None:
         bidx = beat_index(blueprints, main_text)
-    output: list[dict[str, Any]] = []
-    for bp in (blueprints.get('blueprints') or []):
-        ordinal = int(bp.get('chapter_ordinal') or 0)
-        atoms = list(bp.get('fact_atoms') or [])
-        by_beat: dict[str, list[dict[str, Any]]] = {}
-        for atom in atoms:
-            by_beat.setdefault(str(atom.get('source_beat_ref') or ''), []).append(atom)
-        scenes: list[dict[str, Any]] = []
-        pending_context: list[str] = []
-        pending_stages: list[str] = []
-        pending_materials: list[str] = []
-        for beat in (bp.get('beats') or []):
-            bid = str(beat.get('beat_id') or '')
-            beat_atoms = by_beat.get(bid, [])
-            land = [str(a.get('fact_id')) for a in beat_atoms
-                    if a.get('obligation') == 'land']
-            pending_context.extend(str(a.get('fact_id')) for a in beat_atoms
-                                   if a.get('obligation') == 'context')
-            pending_stages.append(bid)
-            pending_materials.extend(str(h.get('hinge_id'))
-                                     for h in (beat.get('hinges') or []))
-            if not land:
-                continue
+    output = []
+    for raw in blueprints['blueprints']:
+        bp = PlotBlueprint.model_validate(raw)
+        ids = [b.beat_id for b in bp.beats]
+        positions = {ref: i for i, ref in enumerate(ids)}
+        # 必须同场时收拢该闭区间，不凭证据坐标发明源场景。
+        boundaries = set(range(1, len(ids)))
+        for constraint in bp.constraints:
+            if constraint.kind == 'same_scene':
+                left, right = sorted((positions[constraint.before_beat_ref], positions[constraint.after_beat_ref]))
+                boundaries.difference_update(range(left + 1, right + 1))
+        groups, current = [], []
+        for i, ref in enumerate(ids):
+            if i in boundaries:
+                groups.append(current)
+                current = []
+            current.append(ref)
+        groups.append(current)
+        contexts = source_context_catalog(bp)
+        scenes, placements, scene_of = [], [], {}
+        for i, refs in enumerate(groups, 1):
+            slot = f's{i:02d}'
             scenes.append({
-                'weight': 'mid', 'purpose': IDENTITY_GOAL, 'role': 'bridge',
-                'delivery': 'scene', 'transition': 'start' if not scenes else 'continue',
-                'land_fact_refs': land, 'context_fact_refs': list(dict.fromkeys(pending_context)),
-                'material_refs': list(dict.fromkeys(pending_materials)),
-                'turn_fact_ref': land[-1], 'entry_state_refs': [],
-                'exit_state_refs': [],
-                'stage_refs': list(dict.fromkeys(pending_stages)),
+                'slot': slot, 'weight': 'mid', 'purpose': IDENTITY_GOAL, 'role': 'bridge',
+                'delivery': 'scene', 'transition': 'start' if i == 1 else 'continue',
+                'context_beat_refs': [], 'turn_beat_ref': refs[-1],
             })
-            pending_context, pending_stages, pending_materials = [], [], []
-        if not scenes:
-            raise RefusedByStructure(f'ch{ordinal} 没有 land 事实，无法构造 Stage4 场景基线')
-        scenes[0]['entry_state_refs'] = list(bp.get('entry_state_refs') or [])
-        scenes[-1]['exit_state_refs'] = list(bp.get('ending_state_refs') or [])
-        if pending_context or pending_stages or pending_materials:
-            scenes[-1]['context_fact_refs'] = list(dict.fromkeys(
-                scenes[-1]['context_fact_refs'] + pending_context))
-            scenes[-1]['stage_refs'] = list(dict.fromkeys(
-                scenes[-1]['stage_refs'] + pending_stages))
-            scenes[-1]['material_refs'] = list(dict.fromkeys(
-                scenes[-1]['material_refs'] + pending_materials))
+            for ref in refs:
+                scene_of[ref] = slot
+                beat = bp.beats[positions[ref]]
+                placements.append({'beat_ref': ref, 'deliveries': [{
+                    'scene_ref': slot, 'presentation_instruction': None,
+                    'evidence_refs': list(beat.evidence_refs),
+                    'source_context_refs': sorted(key for key, row in contexts.items()
+                                                  if row['beat_ref'] == ref),
+                }]})
+        def goal(intent, ref):
+            return {'intent': intent, 'subject_refs': [{'kind': 'beat', 'ref': ref}],
+                    'anchor_beat_ref': ref, 'anchor_scene_ref': scene_of[ref]}
         output.append({
-            'output_ordinal': ordinal, 'from_source_ordinals': [ordinal],
-            'chapter_goal': identity_goal(ordinal),
-            'open_hook_goal': identity_goal(ordinal, 'open'),
-            'end_hook_goal': identity_goal(ordinal, 'close'),
-            'structure_decision': {
-                'mode': 'retain', 'reason': IDENTITY_GOAL,
-                'declared_change_kinds': [],
-            },
-            'weight': 'even', 'chapter_rewrite_brief': IDENTITY_GOAL, 'scenes': scenes,
+            'output_ordinal': bp.chapter_ordinal, 'from_source_ordinals': [bp.chapter_ordinal],
+            'chapter_goal': goal('advance', ids[-1]), 'open_hook_goal': goal('open', ids[0]),
+            'end_hook_goal': goal('close', ids[-1]),
+            'structure_decision': {'mode': 'retain', 'reason': IDENTITY_GOAL, 'declared_change_kinds': []},
+            'weight': 'even', 'chapter_rewrite_brief': IDENTITY_GOAL,
+            'scenes': scenes, 'beat_placements': placements, 'anchor_bindings': [],
         })
     plan = {'output_chapters': output}
     adopt_plan_response(plan, blueprints, bidx)

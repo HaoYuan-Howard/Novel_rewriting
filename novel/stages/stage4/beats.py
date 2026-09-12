@@ -36,40 +36,28 @@ def _hinge_text(hinge: dict[str, Any]) -> str:
 
 def beat_index(blueprints: dict[str, Any],
                main_text: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """`beat_id` → 写作侧要的原文材料，**按引用取值**。
-
-    · `source_chars` 由 `beat.span` **确定性算出**（不是模型填的）；
-      算不出给 `None`，**绝不退回估算**——估算的方向会整个反过来。
-    · `hinges` 是 stage2 落盘时**已回取成原文字节**的片段，
-      所以这里搬运的一定是原文，不是模型打出来的串。
-      ⚠⚠ **原样搬运，不许在这里重建成别的形状**（只按「有没有原文字节」过滤）。
-      曾经这里归一成 `{'kind','text'}`，理由是「写作侧只要这两样」——它当时确实是
-      恒等的（那一版 stage2 的 hinge 就长这样）。后来 stage2 换成 `{'kind','source'}`，
-      这个中间形态就成了**第三种形态**，且它的 `text` 键与已废弃的旧契约同名；
-      一次「清理遗留兼容」把 `_hinge_text` 里读 `text` 的那条分支删掉，
-      下发通道当场断掉且无人出声（详见 `_hinge_text` 的注释）。
-      ⇒ 形态只留两种：**stage2 产物形态**（本函数搬运的）与**下发的点**
-      （`verbatim_pieces` 的产出）。中间不再有第三种。
-    · 舞台三样是事实 claim 之外仍需单独提供的执行条件：
-      一段转述若不标出来会被写成当场发生的戏；地点与在场者同理，闭卷时无从推断。
-    """
-    text = {m.get('chapter_ordinal'): (m.get('text') or '') for m in main_text}
-    bps = blueprints.get('blueprints') or []
-    spans, _problems = locate_spans(bps, text)
-    size = {bid: e - s for chs in spans.values() for bid, s, e in chs}
-    idx: dict[str, dict[str, Any]] = {}
-    for b in bps:
-        o = b.get('chapter_ordinal')
-        for be in (b.get('beats') or []):
-            idx[be.get('beat_id')] = {
-                'ord': o,
-                'source_chars': size.get(be.get('beat_id')),
-                'hinges': [h for h in (be.get('hinges') or []) if _hinge_text(h).strip()],
-                'time_layer': be.get('time_layer'),
-                'place': be.get('place'),
-                'present_char_ids': be.get('present_char_ids') or [],
+    """索引完整剧情及共享证据；源章篇幅取原文一次，不累加重叠证据。"""
+    from contracts.schema.plot import PlotBlueprint
+    from novel.stages.stage2.plot_compile import validate_evidence
+    texts = {m['chapter_ordinal']: m['text'] for m in main_text}
+    if len(texts) != len(main_text):
+        raise ValueError('原文章号重复')
+    result = {}
+    for raw in blueprints['blueprints']:
+        bp = PlotBlueprint.model_validate(raw)
+        source = texts[bp.chapter_ordinal]
+        validate_evidence(bp, source)
+        anchors = {a.evidence_id: a.model_dump(mode='json') for a in bp.evidence_anchors}
+        for beat in bp.beats:
+            if beat.beat_id in result:
+                raise ValueError('剧情节点身份重复')
+            result[beat.beat_id] = {
+                'ord': bp.chapter_ordinal, 'content': beat.content,
+                'source_chapter_chars': len(source),
+                'evidence': {ref: anchors[ref] for ref in beat.evidence_refs},
+                'source_contexts': [c.model_dump(mode='json') for c in beat.source_contexts],
             }
-    return idx
+    return result
 
 
 def verbatim_pieces(hinges: list[dict[str, Any]]) -> tuple[dict[str, list[str]], list[tuple[Any, str]]]:

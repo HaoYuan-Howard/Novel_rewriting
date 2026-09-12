@@ -18,6 +18,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from functools import reduce
+from functools import lru_cache
 from operator import or_
 from typing import Annotated, Any, Literal, Protocol, get_args
 
@@ -25,42 +26,38 @@ from pydantic import Field, ValidationError, create_model
 from pydantic_core import PydanticUndefined
 from typing_extensions import TypeAliasType
 
-from contracts.invariants import DESIGN_REPAIR_CODE_INSTRUCTIONS, commander_review_actions
+from contracts.invariants import (DESIGN_REPAIR_CODE_INSTRUCTIONS,
+    DESIGN_REPAIR_CONSTRAINT_ARITY, commander_review_actions)
 from contracts.schema.api import (
     DesignConstraintCatalog,
     DesignConstraintOperation,
     DesignConstraintOperations,
     DesignChapterRuling,
     DesignRepairConstraint,
-    DesignRepairObserves,
-    DesignRepairResponseTo,
-    DesignRepairSameScene,
-    DesignRepairStoryBefore,
     DesignReviewRequest,
     DesignStrategyReplanRuling,
     DesignStrategyRuling,
     StructureApprovalRequest,
     StructureChapterDecision,
+    BlueprintRefinementRequest,
 )
 from contracts.schema.base import StrictModel
 from contracts.schema.common import Sha256
 from novel.agents.session_client import agent_json_schema
 from novel.orchestrator import queue
+from contracts.schema.plot_review import Dimension
 
 
-WIRE_SCHEMA = 'novel-stage4-reviewer-rulings-v1'
+WIRE_SCHEMA = 'novel-stage4-reviewer-rulings-v2'
 REFERENCE_CLOSURE = 'chapters[].constraints[].reference_closure'
 CONSTRAINT_OPERATION_CATALOG = 'chapters[].constraint_operations.active'
+_RefinementDimension = TypeAliasType('BlueprintRefinementDimension', Dimension)
 _DESIGN_BLOCKERS = frozenset({
     queue.WAITING_ON_STAGE4_DESIGN_REVIEW,
     queue.WAITING_ON_STAGE4_BINDING_RESOLUTION,
     queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN,
 })
 _BLOCKERS = _DESIGN_BLOCKERS | {queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW}
-_EFFECT_MODELS = (
-    DesignRepairStoryBefore, DesignRepairResponseTo,
-    DesignRepairSameScene, DesignRepairObserves,
-)
 
 
 class Stage4ReviewerWireError(RuntimeError):
@@ -109,11 +106,16 @@ def _options(task: _ReviewerTaskLike) -> list[Mapping[str, Any]]:
                 raise Stage4ReviewerWireError('当前 Stage4 blocker 未登记此停止动作或动作重复')
             terminal_kinds.add(kind)
         elif (action.get('kind') != 'approval'
-                or action.get('surface') != expected_surface):
+                or action.get('surface') not in {expected_surface, 'blueprint_refinement'}):
             raise Stage4ReviewerWireError('Stage4 option 超出当前审批面')
+        elif action.get('surface') == 'blueprint_refinement' and (
+                option_id != 'approval:blueprint_refinement'
+                or action.get('payload', {}).get('origin') != expected_surface):
+            raise Stage4ReviewerWireError('疑点转交不能冒充另一审阅面的原文可见性')
     if ('approval:' + expected_surface not in seen
             or terminal_kinds != allowed_terminals
-            or len(seen) != 1 + len(allowed_terminals)):
+            or len(seen) != 1 + len(allowed_terminals)
+               + int('approval:blueprint_refinement' in seen)):
         raise Stage4ReviewerWireError('Stage4 option 必须完整保留当前合法选择')
     return options
 
@@ -122,6 +124,12 @@ def _literal(values: Sequence[Any]) -> Any:
     if not values or len(values) != len(set(values)):
         raise Stage4ReviewerWireError('Stage4 动态枚举为空或重复')
     return Literal[tuple(values)]
+
+
+@lru_cache(maxsize=256)
+def _reference_enum(values: tuple[str, ...]) -> Any:
+    """相同引用域在设计与异常分支共用枚举，避免重复触发供应商枚举上限。"""
+    return TypeAliasType('Stage4Refs_' + _sha256(values)[:20], _literal(values))
 
 
 def _field(model: type[StrictModel], name: str, annotation: Any = None) -> tuple[Any, Any]:
@@ -157,52 +165,54 @@ def _chapter_templates(exact: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return rows
 
 
-def _constraint_model(option: Mapping[str, Any], ordinal: int, digest: str) -> type[StrictModel]:
+def _constraint_model(option: Mapping[str, Any], ordinal: int, digest: str) -> Any:
     allowed = option.get('allowed_values')
     closures = allowed.get(REFERENCE_CLOSURE) if isinstance(allowed, Mapping) else None
     closure = closures.get(str(ordinal)) if isinstance(closures, Mapping) else None
+    keys = ('scene_refs', 'beat_aliases', 'constraint_aliases', 'endpoint_aliases',
+            'state_aliases', 'global_aliases', 'participant_aliases')
     if not isinstance(closure, Mapping):
         raise Stage4ReviewerWireError('Stage4 章级约束缺当前 subject 引用闭集')
-    for key in ('scene_refs', 'fact_aliases', 'participant_aliases'):
+    for key in keys:
         values = closure.get(key)
         if (not isinstance(values, list)
                 or any(not isinstance(value, str) or not value for value in values)
                 or len(values) != len(set(values))):
             raise Stage4ReviewerWireError('Stage4 subject 引用闭集缺失或重复')
-    # 同一章的多个 relation 端点复用 $defs；不要把完整 alias 表逐端点展开，
-    # 否则长书会因运输 schema 膨胀再次触发 provider 协议拒绝。
-    scenes = TypeAliasType(
-        f'Stage4SceneRef_{ordinal}_{digest}', _literal(closure['scene_refs']))
-    facts = TypeAliasType(
-        f'Stage4FactAlias_{ordinal}_{digest}', _literal(closure['fact_aliases']))
-    participants = (TypeAliasType(
-        f'Stage4ParticipantAlias_{ordinal}_{digest}',
-        _literal(closure['participant_aliases']))
-        if closure['participant_aliases'] else None)
-    aliases = TypeAliasType(
-        f'Stage4OpaqueAlias_{ordinal}_{digest}',
-        facts if participants is None else facts | participants)
-    effects = []
-    for model in _EFFECT_MODELS:
-        if model is DesignRepairObserves and participants is None:
-            # 真相章没有 participant 时不存在可填写的 observer，不能伪造占位值。
-            continue
-        # 当前 producer 在整条 truth relation 上检查行动权；这里只冻结端点域，
-        # 不从自由文字重新解释允许哪些关系，更不替 producer 批准关系。
-        effects.append(create_model(
-            f'Stage4{model.__name__}_{ordinal}_{digest}', __base__=model,
-            **{name: _field(
-                model, name, participants if name == 'observer_alias' else facts)
-               for name in model.model_fields if name.endswith('_alias')},
+    scenes = _reference_enum(tuple(sorted(closure['scene_refs'])))
+    beats = _reference_enum(tuple(sorted(closure['beat_aliases'])))
+    semantic_values = sorted(set(closure['constraint_aliases'] + closure['endpoint_aliases']))
+    semantic = (_reference_enum(tuple(semantic_values))
+        if semantic_values else None)
+    other_values = sorted(set(closure['participant_aliases'] + closure['state_aliases']
+                              + closure['global_aliases']))
+    others = (_reference_enum(tuple(other_values))
+              if other_values else None)
+    # 共享 alias $defs；分支只引用目录，既关闭每种 code 的引用域，也避免逐端点复制枚举。
+    all_aliases = TypeAliasType(f'Stage4OpaqueAlias_{ordinal}_{digest}',
+                               reduce(or_, [item for item in (beats, semantic, others) if item is not None]))
+    codes = get_args(_closed_enum(option, 'chapters[].constraints[].code',
+                                 DesignRepairConstraint, 'code'))
+    branches = []
+    for code in codes:
+        domain = all_aliases
+        if code == 'semantic_constraint':
+            if semantic is None:
+                continue  # 本章未登记语义约束/端点，不能开放可凭空填写的修订分支。
+            domain = semantic
+        elif code in {'entry_anchor', 'ending_anchor', 'presentation_grouping',
+                      'disclosure_order', 'noncontiguous_regroup'}:
+            domain = beats
+        min_scenes, min_aliases = DESIGN_REPAIR_CONSTRAINT_ARITY[code]
+        branches.append(create_model(
+            f'Stage4ReviewerConstraint_{code}_{ordinal}_{digest}', __base__=DesignRepairConstraint,
+            code=(Literal[code], ...),
+            scene_refs=(list[scenes], Field(..., min_length=min_scenes)),
+            opaque_aliases=(list[domain], Field(..., min_length=min_aliases)),
         ))
-    return create_model(
-        f'Stage4ReviewerConstraint_{ordinal}_{digest}', __base__=DesignRepairConstraint,
-        code=_field(DesignRepairConstraint, 'code', _closed_enum(
-            option, 'chapters[].constraints[].code', DesignRepairConstraint, 'code')),
-        scene_refs=_field(DesignRepairConstraint, 'scene_refs', list[scenes]),
-        opaque_aliases=_field(DesignRepairConstraint, 'opaque_aliases', list[aliases]),
-        effect=_field(DesignRepairConstraint, 'effect', reduce(or_, effects) | None),
-    )
+    if not branches:
+        raise Stage4ReviewerWireError('Stage4 当前章没有合法修订码')
+    return reduce(or_, branches)
 
 
 def _constraint_operation_scopes(
@@ -262,6 +272,26 @@ def _payload_model(option: Mapping[str, Any], digest: str) -> type[StrictModel]:
             f'Stage4ReviewerStop_{digest}', __base__=StrictModel,
             reason=(str, Field(..., min_length=1)),
         )
+    if action['surface'] == 'blueprint_refinement':
+        catalog = option.get('allowed_values', {}).get('subjects_by_chapter')
+        if not isinstance(catalog, Mapping) or not catalog:
+            raise Stage4ReviewerWireError('疑点转交缺少当前章主体闭集')
+        branches = []
+        for ordinal, refs in catalog.items():
+            if not str(ordinal).isdigit() or int(ordinal) < 1:
+                raise Stage4ReviewerWireError('疑点转交章号非法')
+            beat_refs = option.get('allowed_values', {}).get('beat_aliases_by_chapter', {}).get(ordinal, [])
+            if not set(beat_refs) <= set(refs):
+                raise Stage4ReviewerWireError('共享节点枚举超出转交目录')
+            domains = [_reference_enum(tuple(sorted(values))) for values in (
+                beat_refs, sorted(set(refs) - set(beat_refs))) if values]
+            branches.append(create_model(
+                f'BlueprintRefinementChapter_{ordinal}_{digest}', __base__=StrictModel,
+                chapter_ordinal=(Literal[int(ordinal)], ...),
+                dimension=_field(BlueprintRefinementRequest, 'dimension', _RefinementDimension),
+                subject_refs=_field(BlueprintRefinementRequest, 'subject_refs', list[reduce(or_, domains)]),
+                reason=_field(BlueprintRefinementRequest, 'reason')))
+        return reduce(or_, branches)
     rows = _chapter_templates(exact)
     design = action['surface'] == 'design'
     chapter_source = DesignChapterRuling if design else StructureChapterDecision
@@ -381,9 +411,11 @@ decision/reason/replan_constraints，chapters 是按 output_ordinal 的十进制
 固定键组成的 object，每章交 decision/reason/constraints；原生 schema 开放了
 constraint_operations 的章还必须逐项填写该 object。structure payload 只交
 reason 和同样固定键的 chapters，每章交 decision/reason。stop payload 只交 reason。
+blueprint_refinement 只交 chapter_ordinal/dimension/subject_refs/reason，具体说明疑似
+上游错漏。它仅转交原文核查，不授权改剧情或购买抽取；普通分场仍使用当前设计修订。
 原生 schema 只开放待审章节键；带 source_decision_sha256 的历史接受由组装器完整继承，
 不要回抄或改写其章节及策略。开放的全部键和字段必须出现；待审章为空交 chapters: {{}}。
-空约束交 []，无 relation effect 交 null。不要回抄
+空约束交 []。semantic_constraint 只引用已登记约束或端点，不新增关系正文。不要回抄
 actor、reviewer_kind、review_run_id、review_token、output_ordinal 或 surface_seal；
 Supervisor 只从该 immutable option 注入这些身份，随后仍走现役 typed loader 和审批。
 未审模板里的占位决定不是历史裁决，空 constraints 也不表示已无历史义务；
@@ -441,6 +473,9 @@ def assemble(task: _ReviewerTaskLike, response_document: Mapping[str, Any] | str
         action['reason'] = supplied['reason']
         return assembled
     payload = action['payload']
+    if action['surface'] == 'blueprint_refinement':
+        payload.update(supplied)
+        return assembled
     chapter_map = supplied.pop('chapters')
     for field, value in supplied.items():
         payload[field] = value

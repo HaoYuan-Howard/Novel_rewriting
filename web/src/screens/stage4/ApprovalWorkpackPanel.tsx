@@ -6,7 +6,6 @@ import type {
   ApprovalWorkpackEffect,
   ApprovalWorkpackGroupKind,
   WorkpackChapterReading,
-  WorkpackSceneReading,
 } from '@/types/approvals'
 
 const GROUP_LABEL: Record<ApprovalWorkpackGroupKind, string> = {
@@ -28,125 +27,29 @@ const EFFECT_LABEL: Record<ApprovalWorkpackEffect, string> = {
   coverage: '覆盖导航',
 }
 
-function RefList({ label, refs }: { label: string; refs: string[] }) {
-  if (!refs.length) return null
-  return (
-    <span className="text-micro text-ink-4">
-      {label}：{refs.join('、')}
-    </span>
-  )
-}
-
-function SceneReading({ scene }: { scene: WorkpackSceneReading }) {
-  return (
-    <div className="flex flex-col gap-2 border-t border-line-row pt-4">
-      <Mono className="text-micro text-ink-2">
-        {scene.scene_ref} · {scene.role} · {scene.delivery} · {scene.transition}
-        {scene.weight ? ' · ' + scene.weight : ''}
-        {scene.budget_chars !== null ? ' · ' + scene.budget_chars + ' 字' : ''}
-      </Mono>
-      <span className="text-micro text-ink-2">{scene.purpose}</span>
-      <RefList label="落地" refs={scene.land} />
-      <RefList label="语境" refs={scene.context} />
-      {scene.turn ? <RefList label="转折" refs={[scene.turn]} /> : null}
-      <RefList label="入口状态" refs={scene.entry_state} />
-      <RefList label="出口状态" refs={scene.exit_state} />
-      {scene.stages.length ? (
-        <span className="text-micro text-ink-4">
-          舞台：{scene.stages.map((stage) => (stage.found
-            ? stage.ref + '(' + (stage.time_layer ?? '—') + '/' + (stage.place ?? '—')
-              + '/' + (stage.present.join('、') || '—') + ')'
-            : stage.ref + '(蓝图缺此 beat)')).join('；')}
-        </span>
-      ) : null}
-      {scene.materials.length ? (
-        <span className="text-micro text-ink-4">
-          材料：{scene.materials.map((material) => (
-            material.group + '×' + material.count + '「' + material.excerpt + '」'
-          )).join('；')}
-        </span>
-      ) : null}
-      {scene.missing_material_refs.length ? (
-        <span className="text-micro text-warn-ink">
-          蓝图缺材料：{scene.missing_material_refs.join('、')}
-        </span>
-      ) : null}
-    </div>
-  )
-}
-
-/**
- * coverage 行的逐章裁决材料。默认折叠：它是给逐章裁决用的完整材料，不是异常摘要；
- * 这里只照画服务端渲染结果，不解析散文、不自算任何读数或结论。
- */
+/** 展示同一裁决包中的完整剧情、唯一 placement 与证据闭包。 */
 function ReadingBlock({ reading }: { reading: WorkpackChapterReading }) {
-  return (
-    <details className="rounded-btn border border-line-row bg-inset px-8 py-6">
-      <summary className="cursor-pointer text-micro font-semibold text-ink-2">
-        逐章裁决材料（reading）
-      </summary>
-      <div className="flex flex-col gap-4 pt-6">
-        <span className="text-micro text-ink-4">
-          章功能：{reading.chapter_function} · 重写要点：{reading.chapter_rewrite_brief}
-        </span>
-        <Mono className="break-all text-micro text-ink-4">
-          structure_decision：{JSON.stringify(reading.structure_decision)}
-        </Mono>
-        {Object.entries(reading.goals).map(([name, goal]) => (
-          <RefList key={name} label={name + '(' + goal.intent + ')'} refs={goal.refs} />
-        ))}
-        {reading.kind === 'stage4_design_chapter_reading_v1' ? (
-          <>
-            <span className="text-micro text-ink-4">章权重：{reading.weight}</span>
-            <span className="text-micro text-ink-4">
-              事实表：{reading.facts.map((fact) => fact.fact_alias + '「' + fact.claim + '」').join('；')}
-            </span>
-            {reading.causal_edges.length ? (
-              <span className="text-micro text-ink-4">
-                因果：{reading.causal_edges.map((edge) => edge.before_alias + ' → ' + edge.after_alias).join('；')}
-              </span>
-            ) : null}
-            {reading.narrative_relations.length ? (
-              <Mono className="break-all text-micro text-ink-4">
-                关系：{JSON.stringify(reading.narrative_relations)}
-              </Mono>
-            ) : null}
-            <RefList label="入口状态" refs={reading.entry_state} />
-            <RefList label="收束状态" refs={reading.ending_state} />
-          </>
-        ) : (
-          <>
-            <span className="text-micro text-ink-4">
-              事实表：{reading.facts.map((fact) => (
-                fact.ref + (fact.obligation ? '[' + fact.obligation + ']' : '') + '「' + fact.claim + '」'
-              )).join('；')}
-            </span>
-            <Mono className="break-all text-micro text-ink-4">
-              structure_metrics：{JSON.stringify(reading.structure_metrics)}
-            </Mono>
-            {reading.binding_concerns.map((concern, index) => (
-              <span key={concern.constraint_code + ':' + index} className="text-micro text-ink-4">
-                concern {concern.constraint_code}（{concern.scenes.join('、') || '全章'}）：{concern.reason}
-                {concern.closed_refs.length
-                  ? ' · ' + concern.closed_refs.map((ref) => (
-                    ref.ref + '[' + ref.kind + ']' + (ref.text ? '「' + ref.text + '」' : '')
-                  )).join('；')
-                  : ''}
-              </span>
-            ))}
-            {reading.signature_conflict_codes.length ? (
-              <span className="text-micro text-ink-4">
-                舞台签名冲突：{reading.signature_conflict_codes.join('、')}
-              </span>
-            ) : null}
-          </>
-        )}
-        {reading.scenes.map((scene) => (
-          <SceneReading key={scene.scene_ref} scene={scene} />
-        ))}
-      </div>
-    </details>
-  )
+  const chapter = reading.chapter
+  return <details className="rounded-btn border border-line-row bg-inset px-8 py-6">
+    <summary className="cursor-pointer text-sm2 font-semibold">逐章裁决材料</summary>
+    <p className="prose-cn">{chapter.chapter_rewrite_brief}</p>
+    {reading.kind === 'stage4_design_chapter_reading_v2' ? <>
+      {reading.truth.beats.map((beat) => <p key={beat.alias} className="prose-cn">{beat.content}</p>)}
+      <pre className="overflow-auto whitespace-pre-wrap text-sm2">{JSON.stringify({
+        states: reading.truth.states, inherited_states: reading.truth.inherited_states,
+        constraints: reading.truth.constraints, knowledge: reading.truth.knowledge,
+        endpoints: reading.truth.endpoints, global_subjects: reading.truth.global_subjects,
+        background_beats: reading.truth.background_beats,
+      }, null, 2)}</pre>
+    </> : <>
+      <pre className="overflow-auto whitespace-pre-wrap text-sm2">{JSON.stringify(reading.materials, null, 2)}</pre>
+      <pre className="overflow-auto whitespace-pre-wrap text-sm2">{JSON.stringify({
+        metrics: reading.structure_metrics, concerns: reading.binding_concerns,
+        signature_conflict_codes: reading.signature_conflict_codes,
+      }, null, 2)}</pre>
+    </>}
+    <pre className="overflow-auto whitespace-pre-wrap text-sm2">{JSON.stringify(chapter, null, 2)}</pre>
+  </details>
 }
 
 /**
@@ -208,7 +111,7 @@ export function ApprovalWorkpackEvidence({
         <span className="text-body font-semibold text-ink-2">{label}</span>
         <Mono className="rounded-tag bg-card px-7 py-2 text-micro">v{workpack.v}</Mono>
         <span className="text-tag text-ink-4">
-          展示当前审阅证据和有效历史决定；待审内容仍需逐项裁决
+          展示完整章节材料、实际问题与有效历史决定；按章节裁决
         </span>
         <span className={workpack.disposition === 'already_current'
           ? 'rounded-tag bg-gate-ok-bg px-8 py-2 text-tag font-semibold text-gate-ok-ink'

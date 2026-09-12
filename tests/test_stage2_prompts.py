@@ -7,24 +7,22 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.invariants import (
-    BARE_PRONOUNS, HINGE_KINDS,
+    BARE_PRONOUNS,
     KNOWLEDGE_SUBJECT_KINDS, NARRATIVE_PERSON, RELATION_VISIBILITY_KINDS,
-    RESPONSE_TIME_LAYERS, WORLD_RULE_KINDS,
+    TIME_LAYERS, WORLD_RULE_KINDS,
 )
 from contracts.schema.knowledge import KnowledgeAgentTurnResponse, KnowledgeResponse
-from novel.stages.stage2 import characters, knowledge_prompts, prompts
+from novel.stages.stage2 import characters, knowledge_prompts, plot_prompts as prompts
+from contracts.schema.plot import PlotBlueprintResponse
+from tests.test_plot_blueprint import chapter_response
 
 
 def test_all_current_prompt_arms_are_rendered():
-    assert prompts.BLUEPRINT_SYS_V2_REFS.startswith(prompts.BLUEPRINT_RULES)
-    assert prompts.BLUEPRINT_SYS_V31.startswith(prompts.BLUEPRINT_RULES)
-    assert prompts.BLUEPRINT_SYS_V32.startswith(prompts.BLUEPRINT_RULES)
+    assert prompts.response_system().startswith(prompts.BLUEPRINT_SYSTEM)
     assert '静态人物登记' in characters.SYSTEM and '不写经历、结局' in characters.SYSTEM
     assert '不得新增人物 ID' in knowledge_prompts.SYSTEM
-    rendered = (knowledge_prompts.SYSTEM + characters.SYSTEM + prompts.BOUNDARY_SYS_V2
-                + prompts.BLUEPRINT_SYS_V2_REFS + prompts.BLUEPRINT_SYS_V31
-                + prompts.BLUEPRINT_SYS_V32)
-    assert '$' not in rendered
+    # JSON Schema 的 $defs/$ref 是正式引用，不是未渲染模板。
+    assert '$' not in knowledge_prompts.SYSTEM + characters.SYSTEM + prompts.BLUEPRINT_SYSTEM
 
 
 def test_character_prompt_uses_the_complete_pronoun_contract_and_retired_arms_are_absent():
@@ -85,64 +83,53 @@ def test_knowledge_response_cannot_restore_static_character_patch_protocol():
 
 
 def test_removed_narration_fields_are_absent_from_model_surfaces():
-    for surface in (prompts.BLUEPRINT_SYS_V2_REFS, prompts.BLUEPRINT_SYS_V31,
-                    str(prompts.BLUEPRINT_HINT_V2_REFS),
-                    str(prompts.BLUEPRINT_HINT_V31)):
+    for surface in (prompts.BLUEPRINT_SYSTEM, str(PlotBlueprintResponse.model_json_schema())):
         for gone in ('last_beat_id', 'narrator_name', 'focalizer_name',
-                     'third_limited', 'omniscient'):
+                     'third_limited', 'omniscient', 'fact_atoms', 'hinges'):
             assert gone not in surface
 
 
 def test_person_values_match_the_current_contract():
     assert NARRATIVE_PERSON == ('first', 'second', 'third')
-    narration = prompts.BLUEPRINT_HINT_V31['blueprints'][0]['narration'][0]
-    assert narration['grammatical_person'] == NARRATIVE_PERSON[0]
+    definitions = PlotBlueprintResponse.model_json_schema()['$defs']
+    assert definitions['PlotNarration']['properties']['grammatical_person']['enum'] == list(NARRATIVE_PERSON)
 
 
-def test_chapter_edges_are_required_by_the_current_prompt():
-    """边界相必须从章首起步并到达章尾。"""
-    assert '从第 1 段自动起步' in prompts.BOUNDARY_SYS_V2
-    assert '到达本章最后一段' in prompts.BOUNDARY_SYS_V2
+def test_source_boundaries_are_semantic_not_forced_evidence_partition():
+    system = prompts.BLUEPRINT_SYSTEM
+    assert '独立重要事件、时间或揭示边界' in system
+    assert '不设节点数或字数配额' in system
+    assert 'Stage4 会处理呈现安排' in system
+    assert '同一段可支持多个节点' in system
+    assert '只读全部 content' in system
+    assert 'modality 不授予他人知情或读者披露' in system
 
 
 def test_the_prompt_asks_for_paragraph_numbers_not_transcribed_source():
-    """⭐⭐ 本次改造的**全部要点**：模型不再转写原文，它交段号。
-
-    ⚠ 反向断言那几个词是承重的：只要 `starts_with` / 「原样照抄 N 字」这类措辞还在，
-    就说明有人把逐字转写那条路补回来了一半——而那正是这次要砍掉的 reasoning 大头。
-    """
-    sys_prompt = prompts.BOUNDARY_SYS_V2
-    for gone in ('starts_with', 'ends_with', '原样照抄 8~30', '各 4~8 字', '凑长度'):
-        assert gone not in sys_prompt, f'{gone!r} 还在 —— 逐字转写那条路被补回来了'
-    assert 'end_para' in sys_prompt
-    assert '本章最后一段' in sys_prompt
+    system = prompts.BLUEPRINT_SYSTEM
+    for gone in ('starts_with', 'ends_with', '原样照抄 8~30', '各 4~8 字'):
+        assert gone not in system
+    assert '证据只选编号的段范围' in system
+    assert '不能抄写正文或编造坐标' in system
+    assert '正式 ID 与证据锚点由程序分配' in system
 
 
-def test_response_hints_derive_enums_from_the_contract_layer():
-    beat = prompts.BLUEPRINT_HINT_V31['blueprints'][0]['beats'][0]
-    assert beat['time_layer'] == '|'.join(RESPONSE_TIME_LAYERS)
-    assert beat['hinges'][0]['kind'] in HINGE_KINDS
-    assert all(kind in prompts.BLUEPRINT_SYS_V31 for kind in HINGE_KINDS)
-    assert 'dialogue' in beat['hinges'][0] and 'source_fact_refs' in beat['hinges'][0]
-    assert knowledge_prompts.HINT[
-        'canon']['world_rules'][0]['kind'] == WORLD_RULE_KINDS[0]
+def test_response_schema_derives_enums_from_the_contract_layer():
+    definitions = PlotBlueprintResponse.model_json_schema()['$defs']
+    properties = definitions['SourceContextResponse']['properties']
+    time_layer = properties['time_layer']['anyOf'][0]['enum']
+    assert time_layer == list(TIME_LAYERS)
+    assert knowledge_prompts.HINT['canon']['world_rules'][0]['kind'] == WORLD_RULE_KINDS[0]
     assert set(knowledge_prompts.HINT['source_blurb']['facts'][0]) == {
         'kind', 'claim_id', 'claim', 'evidence'}
 
 
-def test_response_hints_only_request_model_written_fields():
-    def keys(value):
-        if isinstance(value, dict):
-            return set(value).union(*(keys(child) for child in value.values()))
-        if isinstance(value, list):
-            return set().union(*(keys(child) for child in value))
-        return set()
-
-    surface = keys(prompts.BLUEPRINT_HINT_V31)
-    for field in ('narrator_name', 'focalizer_name', 'present_names', 'source',
-                  'summary'):
+def test_response_schema_only_requests_model_written_fields():
+    response = PlotBlueprintResponse.model_validate({'blueprints': [chapter_response()]})
+    row = response.blueprints[0].model_dump()
+    assert {'narrator_char_id', 'focalizer_char_id'} <= row['narration'][0].keys()
+    assert {'content', 'participant_char_ids', 'evidence', 'source_contexts'} <= row['beats'][0].keys()
+    surface = str(PlotBlueprintResponse.model_json_schema())
+    for field in ('narrator_name', 'focalizer_name', 'present_names', 'evidence_id',
+                  'source_sha256', 'source_text', 'fact_atoms'):
         assert field not in surface
-    narration = prompts.BLUEPRINT_HINT_V31['blueprints'][0]['narration'][0]
-    assert {'narrator_char_id', 'focalizer_char_id'} <= set(narration)
-    beat = prompts.BLUEPRINT_HINT_V31['blueprints'][0]['beats'][0]
-    assert 'present_char_ids' in beat and 'fact_atoms' in beat

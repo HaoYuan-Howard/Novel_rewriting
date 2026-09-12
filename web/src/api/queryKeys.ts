@@ -25,8 +25,9 @@ export const qk = {
   stage0Candidate: (sid: string) => ['stage0', sid, 'candidate'] as const,
   stage1: (sid: string) => ['stage1', sid] as const,
   reading: (sid: string, o: number) => ['reading', sid, o] as const,
-  blueprintReviewWorkpack: (sid: string) =>
-    ['stage2', sid, 'blueprint-review-workpack'] as const,
+  blueprintReviewWorkpack: (sid: string, scope?: string) =>
+    scope ? ['stage2', sid, 'blueprint-review-workpack', scope] as const
+      : ['stage2', sid, 'blueprint-review-workpack'] as const,
   global: (sid: string, spoilers = false) => ['global', sid, spoilers] as const,
   globalReview: (sid: string) => ['globalReview', sid] as const,
   stage4: (sid: string, o: number) => ['stage4', sid, o] as const,
@@ -70,6 +71,8 @@ export const qk = {
     ['approvals', sid, 'stage5', 'template', workpackSha256] as const,
   approvalWorkpack: (sid: string, kind: 'design' | 'structure') =>
     ['approvals', sid, kind, 'workpack'] as const,
+  blueprintRefinement: (sid: string, origin: 'design' | 'structure') =>
+    ['approvals', sid, 'blueprint-refinement', origin] as const,
   finalApprovalWorkpack: (sid: string, kind: 'stage6' | 'stage7') =>
     ['approvals', sid, kind, 'workpack'] as const,
   designReviewTemplate: (sid: string, query: DesignReviewTemplateQuery | null) =>

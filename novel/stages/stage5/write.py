@@ -3298,7 +3298,10 @@ def _record_legacy_chapter_delivery(
     if attempt_id is None:
         raise ProvenanceRefused('Stage5 已落盘候选缺真实 accepted attempt')
     if formal:
-        landed = store.read(Chapter, _rel(ordinal))
+        # 采纳后的正式读回是交付验证，不是同批其他章的写作输入。
+        # 否则共享 ctx 会把先提交章的正文混入随后章节的 provenance。
+        with _STAGE5_VALIDATION_LOCK, ctx.validation_reads():
+            landed, _raw = store.read_own(Chapter, _rel(ordinal), require_current=True)
         ctx.ledger.note_adoption(
             sid=ctx.sid, node=ctx.node, purpose=purpose,
             attempt_id=attempt_id, artifact=_rel(ordinal), chapter=ordinal,

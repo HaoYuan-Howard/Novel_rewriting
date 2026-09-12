@@ -1,0 +1,503 @@
+"""完整剧情的 Stage4A 盲投影与编译。证据和源序不进入规划请求。
+
+章请求、检查点与恢复共用同一投影。只有 placement 能分配节点；端点绑定仅把
+既有事件落到场景，不创设知识事件或可单独引用的子事实。
+"""
+from __future__ import annotations
+
+import copy
+import hashlib
+import hmac
+import json
+import re
+from collections.abc import Collection, Mapping
+from typing import Any
+
+from contracts.invariants import BLIND_ALIAS_ALGORITHM, RESPONSE_TEMPORAL_LINKS
+from contracts.schema.plot import PlotBlueprint, PlotEndpoint, PlotKnowledgeTrigger, PlotSubjectRef
+from contracts.schema.plot_planning import PlannerChapter
+from contracts.schema.stage4 import (
+    BlindBookStrategyResponse, BlindCandidateChapter, BlindChapterDesignResponse,
+    BlindChapterResponse, BlindPlanResponse,
+)
+from novel.consumption import plot_global_projection
+from novel.stages.stage4.plot_placements import required_endpoints
+
+BLIND_CONTRACT = 'stage4-plot-truth-v1'
+BLIND_BOOK_STRATEGY_CONTRACT = 'stage4-plot-book-strategy-v1'
+BLIND_CHAPTER_CONTRACT = 'stage4-plot-chapter-v1'
+
+
+class BlindPlanError(ValueError):
+    """当前剧情规划违反关闭式引用或呈现契约。"""
+
+
+def _sha256(value: object) -> str:
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+
+
+def _translate(value: Any, table: Mapping[str, str], field: str = '') -> Any:
+    """只替换已声明的引用字段，不对正文做字符串裁剪或全文代换。"""
+    if isinstance(value, list):
+        result = [_translate(v, table, field) for v in value]
+        return sorted(result) if field.endswith(('_refs', '_ids', '_aliases')) else result
+    if isinstance(value, dict):
+        return {k: _translate(v, table, k) for k, v in value.items()}
+    if isinstance(value, str) and (
+        field in {'alias', 'ref'} or field.endswith(
+            ('_alias', '_aliases', '_ref', '_refs', '_id', '_ids'))
+    ):
+        return table.get(value, value)
+    return value
+
+
+def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
+                           knowledge_links: object = None, global_g: object = None
+                           ) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not re.fullmatch(r'[0-9a-f]{40}', root_clean_sha1):
+        raise BlindPlanError('盲投影必须绑定正式源文 SHA-1')
+    raw = blueprints.get('blueprints') if isinstance(blueprints, dict) else blueprints
+    if not isinstance(raw, list) or not raw:
+        raise BlindPlanError('盲投影缺少完整章节')
+    chapters = sorted((PlotBlueprint.model_validate(v) for v in raw),
+                      key=lambda b: b.chapter_ordinal)
+    if [b.chapter_ordinal for b in chapters] != list(range(1, len(chapters) + 1)):
+        raise BlindPlanError('盲投影章节必须完整覆盖阅读序')
+    subjects: dict[str, dict] = {}
+    endpoints: dict[str, dict] = {}
+    aliases: dict[tuple[str, str], str] = {}
+
+    def alias(kind: str, ref: str) -> str:
+        key = (kind, ref)
+        if key not in aliases:
+            token = 'a_' + hmac.new(bytes.fromhex(root_clean_sha1),
+                ('plot-v1\0' + kind + '\0' + ref).encode(), hashlib.sha256).hexdigest()[:16]
+            if token in aliases.values():
+                raise BlindPlanError('盲 alias 碰撞，拒绝混淆主体')
+            aliases[key] = token
+        return aliases[key]
+
+    def subject(kind: str, ref: str) -> str:
+        value = PlotSubjectRef(kind=kind, ref=ref).model_dump(mode='json')
+        token = alias(kind, ref)
+        subjects[token] = value
+        return token
+
+    state_index = {s.state_id: s for b in chapters for s in b.states}
+    beat_index = {b.beat_id: b for c in chapters for b in c.beats}
+    for chapter in chapters:
+        for beat in chapter.beats:
+            subject('beat', beat.beat_id)
+            for cid in beat.participant_char_ids:
+                subject('character', cid)
+        for state in chapter.states:
+            subject('state', state.state_id)
+            if state.holder_char_id:
+                subject('character', state.holder_char_id)
+            if state.global_ref:
+                subject(state.global_ref.kind, state.global_ref.ref)
+        for constraint in chapter.constraints:
+            subject('constraint', constraint.constraint_id)
+            if getattr(constraint, 'observer_char_id', None):
+                subject('character', constraint.observer_char_id)
+    global_rows = {} if global_g is None else {
+        (r['kind'], r['ref']): r['value']
+        for r in plot_global_projection(global_g, len(chapters))
+    }
+    links_by_chapter: dict[int, list[tuple[dict, dict]]] = {}
+    if knowledge_links is not None:
+        from contracts.schema.knowledge_links import KnowledgeLinks
+        typed_links = KnowledgeLinks.model_validate(knowledge_links)
+        link_index = {r.obligation_id: r for r in typed_links.links}
+        for obligation in typed_links.scope.obligations:
+            links_by_chapter.setdefault(obligation.chapter_ordinal, []).append((
+                obligation.model_dump(mode='json'),
+                link_index[obligation.obligation_id].resolution.model_dump(mode='json')))
+    projected = []
+    for chapter in chapters:
+        number = chapter.chapter_ordinal
+        used: set[str] = set()
+
+        def use(kind: str, ref: str) -> str:
+            token = subject(kind, ref)
+            used.add(token)
+            return token
+
+        def project_state(state, *, inherited: bool = False) -> dict:
+            row = {'alias': use('state', state.state_id),
+                   'content': state.content, 'modality': state.modality,
+                   'holder_alias': (use('character', state.holder_char_id)
+                                    if state.holder_char_id else None),
+                   'global_subject_alias': (use(state.global_ref.kind, state.global_ref.ref)
+                                            if state.global_ref else None)}
+            if not inherited:
+                row['established_at_entry'] = state.established_at.kind == 'at_entry'
+                row['supersedes_state_aliases'] = sorted(
+                    use('state', ref) for ref in state.supersedes_state_refs)
+            return row
+
+        beats = [{'alias': use('beat', b.beat_id), 'content': b.content,
+                  'participant_aliases': sorted(use('character', cid)
+                                               for cid in b.participant_char_ids)}
+                 for b in chapter.beats]
+        states = [project_state(s) for s in chapter.states]
+        inherited = [project_state(state_index[ref], inherited=True)
+                     for ref in chapter.entry_state_refs
+                     if ref not in {s.state_id for s in chapter.states}]
+        constraints = []
+        for constraint in chapter.constraints:
+            row = constraint.model_dump(mode='json')
+            row.pop('evidence_refs')
+            row['alias'] = use('constraint', row.pop('constraint_id'))
+            for key in list(row):
+                if key.endswith('_beat_ref'):
+                    row[key.replace('_ref', '_alias')] = use('beat', row.pop(key))
+                elif key == 'observer_char_id':
+                    cid = row.pop(key)
+                    row['observer_alias'] = use('character', cid) if cid else None
+            constraints.append(row)
+        knowledge = []
+        triggers = []
+        background_beats = {}
+        for obligation, resolution in links_by_chapter.get(number, []):
+            sid = obligation['subject_ref']
+            token = use(sid['kind'], sid['ref'])
+            audience = obligation['audience']
+            if audience and audience.get('char_id'):
+                audience = {**audience, 'char_id': use('character', audience['char_id'])}
+            item = {'subject_alias': token, 'kind': obligation['kind'],
+                    'audience': audience, 'timing': resolution['kind']}
+            event_key = ('knowledge', obligation['obligation_id'], 'trigger')
+            event_alias = alias('endpoint', '\0'.join(event_key))
+            endpoints[event_alias] = PlotEndpoint(
+                kind='knowledge', ref=obligation['obligation_id'], endpoint='trigger'
+            ).model_dump(mode='json')
+            item['event_alias'] = event_alias
+            if resolution['kind'] == 'at_beats':
+                trigger = resolution['trigger_beat_ref']
+                triggers.append(PlotKnowledgeTrigger(
+                    knowledge_ref=obligation['obligation_id'], trigger_beat_ref=trigger))
+                item['trigger_beat_alias'] = use('beat', trigger)
+            # 知识主体可能是此前的剧情或状态；只带实际需要的完整主体，不带源位置。
+            if sid['kind'] == 'beat' and sid['ref'] not in {b.beat_id for b in chapter.beats}:
+                prior = beat_index.get(sid['ref'])
+                if prior is None:
+                    raise BlindPlanError('知识主体节点缺失')
+                background_beats[token] = {'alias': token, 'content': prior.content}
+            if sid['kind'] == 'state' and sid['ref'] not in {
+                s.state_id for s in chapter.states
+            } | set(chapter.entry_state_refs):
+                state = state_index.get(sid['ref'])
+                if state is None:
+                    raise BlindPlanError('知识主体状态缺失')
+                inherited.append(project_state(state, inherited=True))
+            knowledge.append(item)
+        endpoint_rows = []
+        for key, beat in required_endpoints(chapter, triggers, ()).items():
+            endpoint = PlotEndpoint(kind=key[0], ref=key[1], endpoint=key[2])
+            eid = alias('endpoint', '\0'.join(key))
+            endpoints[eid] = endpoint.model_dump(mode='json')
+            endpoint_rows.append({'endpoint_alias': eid, 'kind': key[0], 'endpoint': key[2],
+                                  'trigger_beat_alias': use('beat', beat)})
+            if key[0] in {'state', 'constraint'}:
+                endpoint_rows[-1]['subject_alias'] = use(key[0], key[1])
+            elif key[0] == 'knowledge':
+                endpoint_rows[-1]['subject_alias'] = next(
+                    item['subject_alias'] for item in knowledge if item['event_alias'] == eid)
+        global_material = []
+        for token in sorted(used):
+            ref = subjects[token]
+            if ref['kind'] in {'beat', 'state', 'constraint', 'character', 'chapter_boundary'}:
+                continue
+            payload = global_rows.get((ref['kind'], ref['ref']))
+            if payload is None:
+                raise BlindPlanError(f'规划引用的 Global 主体缺少有据正文：{ref}')
+            global_material.append({'alias': token, 'kind': ref['kind'],
+                                    'value': copy.deepcopy(payload)})
+        # Global 属性含人物引用时同样替换为 opaque；不夹带来源证据或源章编号。
+        formal_to_alias = {ref['ref']: token for token, ref in subjects.items()}
+        def clean_global(value):
+            if isinstance(value, list):
+                return [clean_global(v) for v in value]
+            if not isinstance(value, dict):
+                return value
+            return {k: clean_global(v) for k, v in value.items()
+                    if not k.endswith(('_evidence', '_chapter'))
+                    and k not in {'valid_from', 'first_reveal_chapter', 'visibility'}}
+        row = {'chapter_ordinal': number, 'chapter_function': chapter.chapter_function,
+               'beats': sorted(beats, key=lambda r: r['alias']),
+               'states': sorted(states, key=lambda r: r['alias']),
+               'inherited_states': sorted(inherited, key=lambda r: r['alias']),
+               'background_beats': sorted(background_beats.values(), key=lambda r: r['alias']),
+               'constraints': sorted(constraints, key=lambda r: r['alias']),
+               'knowledge': sorted(knowledge, key=_sha256),
+               'endpoints': sorted(endpoint_rows, key=lambda r: r['endpoint_alias']),
+               'entry_state_aliases': sorted(use('state', r) for r in chapter.entry_state_refs),
+               'carry_out_aliases': sorted(use('state', r) for r in chapter.carry_out_refs),
+               'global_subjects': _translate(clean_global(global_material), formal_to_alias)}
+        projected.append(PlannerChapter.model_validate(row).model_dump(mode='json'))
+    truth = {'blind_contract': BLIND_CONTRACT, 'chapters': projected}
+    mapping = {'alias_algorithm': BLIND_ALIAS_ALGORITHM, 'truth_sha256': _sha256(truth),
+               'subject_aliases': dict(sorted(subjects.items())),
+               'endpoint_aliases': dict(sorted(endpoints.items())),
+               'participant_aliases': {k: v['ref'] for k, v in sorted(subjects.items())
+                                       if v['kind'] == 'character'}}
+    return truth, mapping
+
+
+def _truth_chapter_rows(truth: object) -> dict[int, dict]:
+    if not isinstance(truth, dict) or truth.get('blind_contract') != BLIND_CONTRACT:
+        raise BlindPlanError('盲真相契约不匹配')
+    rows = truth.get('chapters')
+    if not isinstance(rows, list) or [r.get('chapter_ordinal') for r in rows] != list(
+        range(1, len(rows) + 1)
+    ):
+        raise BlindPlanError('盲真相章节不完整')
+    return {row['chapter_ordinal']: row for row in rows}
+
+
+def build_blind_executor_projection(truth: object) -> dict:
+    _truth_chapter_rows(truth)
+    return copy.deepcopy(truth)
+
+
+def build_blind_strategy_projection(truth: object) -> dict:
+    return {'blind_contract': BLIND_BOOK_STRATEGY_CONTRACT, 'chapters': [
+        {'chapter_ordinal': n, 'chapter_function': r['chapter_function'],
+         'beat_count': len(r['beats']), 'state_count': len(r['states']),
+         'constraint_count': len(r['constraints'])}
+        for n, r in _truth_chapter_rows(truth).items()]}
+
+
+def _formal_maps(mapping: object) -> dict:
+    if not isinstance(mapping, dict) or set(mapping) != {
+        'alias_algorithm', 'truth_sha256', 'subject_aliases',
+        'endpoint_aliases', 'participant_aliases'
+    } or mapping['alias_algorithm'] != BLIND_ALIAS_ALGORITHM:
+        raise BlindPlanError('正式盲映射契约不匹配')
+    if not re.fullmatch(r'[0-9a-f]{64}', mapping['truth_sha256']):
+        raise BlindPlanError('真相摘要缺失')
+    from contracts.schema.stage4 import BlindReferenceMaps
+    BlindReferenceMaps.model_validate({key: mapping[key] for key in (
+        'subject_aliases', 'endpoint_aliases', 'participant_aliases')})
+    return mapping
+
+
+def build_blind_chapter_projection(truth: object, formal_mapping: object, *,
+    chapter_ordinal: int, root_clean_sha1: str) -> tuple[dict, dict]:
+    mapping = _formal_maps(formal_mapping)
+    if mapping['truth_sha256'] != _sha256(truth):
+        raise BlindPlanError('真相与映射摘要不一致')
+    row = _truth_chapter_rows(truth).get(chapter_ordinal)
+    if row is None:
+        raise BlindPlanError('请求章不在盲真相中')
+    all_tokens = set(mapping['subject_aliases']) | set(mapping['endpoint_aliases'])
+    def used(value):
+        if isinstance(value, dict):
+            return set().union(*(used(v) for v in value.values()), set())
+        if isinstance(value, list):
+            return set().union(*(used(v) for v in value), set())
+        return {value} & all_tokens if isinstance(value, str) else set()
+    tokens = used(row)
+    table = {token: 'u_' + hmac.new(bytes.fromhex(root_clean_sha1),
+        f'plot-local\0{chapter_ordinal}\0{token}'.encode(), hashlib.sha256).hexdigest()[:12]
+        for token in tokens}
+    if len(set(table.values())) != len(table):
+        raise BlindPlanError('局部 alias 碰撞')
+    projected = _translate(row, table)
+    # 重新按局部 opaque 身份排序，不能让任何辅助数组泄漏源序。
+    for field in ('beats', 'states', 'inherited_states', 'background_beats',
+                  'constraints', 'global_subjects'):
+        projected[field].sort(key=lambda r: r['alias'])
+    projected['endpoints'].sort(key=lambda r: r['endpoint_alias'])
+    projected['knowledge'].sort(key=_sha256)
+    private = {'chapter_ordinal': chapter_ordinal, 'truth_sha256': mapping['truth_sha256'],
+               'subject_aliases': {table[t]: t for t in sorted(tokens & set(mapping['subject_aliases']))},
+               'endpoint_aliases': {table[t]: t for t in sorted(tokens & set(mapping['endpoint_aliases']))},
+               'participant_aliases': {table[t]: t for t in sorted(tokens & set(mapping['participant_aliases']))}}
+    return {'blind_contract': BLIND_CHAPTER_CONTRACT, 'chapter': projected}, private
+
+
+def _local_map(local: object, formal: object) -> dict[str, str]:
+    formal = _formal_maps(formal)
+    if not isinstance(local, dict) or local.get('truth_sha256') != formal['truth_sha256']:
+        raise BlindPlanError('局部映射与当前真相不匹配')
+    result = {}
+    for field in ('subject_aliases', 'endpoint_aliases', 'participant_aliases'):
+        rows = local[field]
+        if len(set(rows.values())) != len(rows):
+            raise BlindPlanError('局部映射不是一一对应')
+        for key, value in rows.items():
+            if not re.fullmatch(r'u_[0-9a-f]{6,64}', key) or value not in formal[field]:
+                raise BlindPlanError('局部映射超出正式主体')
+            if key in result and result[key] != value:
+                raise BlindPlanError('局部映射冲突')
+            result[key] = value
+    return result
+
+
+def blind_chapter_compilation_dependencies(local_mapping: object, formal_mapping: object) -> dict:
+    table = _local_map(local_mapping, formal_mapping)
+    return {'contract': 'stage4-plot-compilation-v1',
+            'chapter_ordinal': local_mapping['chapter_ordinal'],
+            'aliases': {key: {'opaque': value, 'subject': (
+                formal_mapping['subject_aliases'].get(value)
+                or formal_mapping['endpoint_aliases'].get(value))}
+                for key, value in sorted(table.items())}}
+
+
+def validate_chapter(chapter: dict, source: dict) -> dict:
+    """机械闭合映射与已登记端点；完整性/归因/隐含剧透仍由既有语义审阅裁决。"""
+    typed = BlindCandidateChapter.model_validate(chapter)
+    row = typed.model_dump(mode='json')
+    if row['output_ordinal'] != source['chapter_ordinal']:
+        raise BlindPlanError('候选章号与语义主体不一致')
+    scenes = row['scenes']
+    slots = [r['scene_ref'] for r in scenes]
+    if slots != [f's{i:02d}' for i in range(1, len(slots) + 1)]:
+        raise BlindPlanError('场景引用必须按目标阅读序连续编号')
+    if (RESPONSE_TEMPORAL_LINKS[scenes[0]['transition']] != 'start'
+            or any(RESPONSE_TEMPORAL_LINKS[s['transition']] == 'start' for s in scenes[1:])):
+        raise BlindPlanError('只有首场使用 start')
+    beats = {r['alias'] for r in source['beats']}
+    placements = {r['beat_alias']: r['deliveries'] for r in row['beat_placements']}
+    if set(placements) != beats:
+        raise BlindPlanError('placement 必须不重不漏覆盖本章完整节点')
+    placed = {slot: set() for slot in slots}
+    completion = {}
+    for beat, deliveries in placements.items():
+        targets = [d['scene_ref'] for d in deliveries]
+        if not set(targets) <= set(slots) or targets != sorted(targets, key=slots.index):
+            raise BlindPlanError('呈现目标缺失或未按场景阅读序排列')
+        completion[beat] = slots.index(targets[-1])
+        for target in targets:
+            placed[target].add(beat)
+    for scene in scenes:
+        slot = scene['scene_ref']
+        if not placed[slot] or scene['turn_beat_alias'] not in placed[slot]:
+            raise BlindPlanError('场景转折锚点必须属于本场实际呈现的节点')
+        if any(ref not in beats or completion[ref] >= slots.index(slot)
+               for ref in scene['context_beat_aliases']):
+            raise BlindPlanError('完整节点未呈现完毕，不能提前作为背景放开')
+    requirements = {r['endpoint_alias']: r for r in source['endpoints']}
+    bindings = {r['endpoint_alias']: r['scene_ref'] for r in row['anchor_bindings']}
+    if set(bindings) - set(requirements):
+        raise BlindPlanError('不能创建未登记的知识、状态或约束端点')
+    for token, endpoint in requirements.items():
+        targets = {d['scene_ref'] for d in placements[endpoint['trigger_beat_alias']]}
+        if token not in bindings:
+            if len(targets) != 1:
+                raise BlindPlanError('分场节点的必要端点必须明确指定场景')
+            bindings[token] = next(iter(targets))
+        if bindings[token] not in targets:
+            raise BlindPlanError('端点必须绑定父节点实际呈现的场景')
+    # 相同约束的两个端点共享 subject_alias，用于 must-cooccur，绝不取首次/末次兜底。
+    for constraint in source['constraints']:
+        if constraint['kind'] == 'same_scene':
+            selected = [bindings[e['endpoint_alias']] for e in source['endpoints']
+                        if e.get('subject_alias') == constraint['alias']]
+            if len(selected) != 2 or len(set(selected)) != 1:
+                raise BlindPlanError('必须同场约束未闭合')
+    allowed = beats | {r['alias'] for field in ('states', 'inherited_states',
+        'background_beats', 'constraints', 'global_subjects') for r in source[field]}
+    allowed |= {p for beat in source['beats'] for p in beat['participant_aliases']}
+    for label in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
+        goal = row[label]
+        if not set(goal['subject_aliases']) <= allowed:
+            raise BlindPlanError('目标引用超出本章实际消费的主体')
+        if goal['anchor_beat_alias'] not in placed.get(goal['anchor_scene_ref'], set()):
+            raise BlindPlanError('目标锚点不在指定场景呈现')
+        if label == 'open_hook_goal' and goal['anchor_scene_ref'] != slots[0]:
+            raise BlindPlanError('开篇目标必须绑定首场')
+        if label == 'end_hook_goal' and goal['anchor_scene_ref'] != slots[-1]:
+            raise BlindPlanError('结尾目标必须绑定末场')
+    row['anchor_bindings'] = [{'endpoint_alias': k, 'scene_ref': v}
+                              for k, v in sorted(bindings.items())]
+    row['beat_placements'].sort(key=lambda p: p['beat_alias'])
+    return row
+
+
+def _compile_chapter(raw: dict, source: dict) -> dict:
+    typed = BlindChapterResponse.model_validate(raw)
+    row = typed.model_dump(mode='json')
+    for index, scene in enumerate(row['scenes'], 1):
+        scene['candidate_scene_id'] = f'c{row["output_ordinal"]:02d}s{index:02d}'
+    return validate_chapter(row, source)
+
+
+def compile_blind_chapter_design(response: object, local_mapping: object,
+    formal_mapping: object, *, truth_chapter: object, chapter_weight: str) -> dict:
+    try:
+        table = _local_map(local_mapping, formal_mapping)
+        raw = BlindChapterDesignResponse.model_validate(response).model_dump(mode='json')
+        translated = _translate(raw, table)
+        translated.update(output_ordinal=local_mapping['chapter_ordinal'], weight=chapter_weight)
+        return _compile_chapter(translated, truth_chapter)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise BlindPlanError(str(exc)) from exc
+
+
+def compile_blind_chapter_edit(response: object, formal_mapping: object, *,
+    truth_chapter: object, expected_weight: str) -> dict:
+    _formal_maps(formal_mapping)
+    if not isinstance(response, dict) or response.get('weight') != expected_weight:
+        raise BlindPlanError('人工章稿不能顺带改变策略权重')
+    return _compile_chapter(response, truth_chapter)
+
+
+def localize_blind_chapter_edit(response: object, local_mapping: object,
+    formal_mapping: object, *, truth_chapter: object, chapter_weight: str) -> dict:
+    expected = compile_blind_chapter_edit(response, formal_mapping,
+        truth_chapter=truth_chapter, expected_weight=chapter_weight)
+    inverse = {v: k for k, v in _local_map(local_mapping, formal_mapping).items()}
+    raw = _translate(copy.deepcopy(response), inverse)
+    raw.pop('output_ordinal')
+    raw.pop('weight')
+    actual = compile_blind_chapter_design(raw, local_mapping, formal_mapping,
+        truth_chapter=truth_chapter, chapter_weight=chapter_weight)
+    if actual != expected:
+        raise BlindPlanError('人工章稿往返改变了实际呈现安排')
+    return raw
+
+
+def assemble_blind_candidate(strategy: object, compiled_chapters: Collection[object],
+    formal_mapping: object, *, truth: object) -> dict:
+    mapping = _formal_maps(formal_mapping)
+    if _sha256(truth) != mapping['truth_sha256']:
+        raise BlindPlanError('聚合映射与当前真相不一致')
+    typed = BlindBookStrategyResponse.model_validate(strategy)
+    sources = _truth_chapter_rows(truth)
+    weights = {r.chapter_ordinal: r.weight for r in typed.chapter_weights}
+    rows = [BlindCandidateChapter.model_validate(c).model_dump(mode='json') for c in compiled_chapters]
+    if (set(weights) != set(sources)
+        or sorted(c['output_ordinal'] for c in rows) != sorted(sources)):
+        raise BlindPlanError('候选与策略必须不重不漏覆盖全书')
+    result = []
+    for row in sorted(rows, key=lambda r: r['output_ordinal']):
+        if row['weight'] != weights[row['output_ordinal']]:
+            raise BlindPlanError('章稿权重与策略不一致')
+        canonical = validate_chapter(row, sources[row['output_ordinal']])
+        if canonical != row:
+            raise BlindPlanError('已编译章稿未使用当前完整端点与规范 placement')
+        result.append(canonical)
+    return {**copy.deepcopy(mapping), 'reconstruction_strategy': typed.reconstruction_strategy,
+            'output_chapters': result}
+
+
+def compile_blind_candidate(candidate: object, formal_mapping: object, *, truth: object) -> dict:
+    typed = BlindPlanResponse.model_validate(candidate)
+    sources = _truth_chapter_rows(truth)
+    rows = [_compile_chapter(c.model_dump(mode='json'), sources[c.output_ordinal])
+            for c in typed.output_chapters]
+    return assemble_blind_candidate(
+        {'reconstruction_strategy': typed.reconstruction_strategy,
+         'chapter_weights': [{'chapter_ordinal': c.output_ordinal, 'weight': c.weight}
+                             for c in typed.output_chapters]},
+        rows, formal_mapping, truth=truth)
+
+
+def candidate_subject_sha256(compiled_candidate: object) -> str:
+    if not isinstance(compiled_candidate, dict) or '_provenance' in compiled_candidate:
+        raise BlindPlanError('候选业务身份不包含来源账')
+    return _sha256(compiled_candidate)

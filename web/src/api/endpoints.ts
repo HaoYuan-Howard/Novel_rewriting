@@ -1,4 +1,5 @@
 import type { RunMetrics } from '@/types/runMetrics'
+import type { PlotEdit, PlotEditPreview, BlueprintRefinementCatalog } from '@/types/plot.generated'
 /**
  * 唯一的数据缝。屏与组件只认这个文件导出的 `api`。
  *
@@ -405,8 +406,19 @@ export const realApi: Api = {
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage1/partition')),
   getStage1: (sid) => get<Stage1View>(n(sid) + '/stage1'),
   getReading: (sid, o) => get<ReadingResponse>(n(sid) + '/reading/' + o),
-  getBlueprintReviewWorkpack: (sid) =>
-    get<BlueprintReviewWorkpack>(n(sid) + '/stage2/blueprint-review-workpack'),
+  getBlueprintReviewWorkpack: (sid, scope) =>
+    get<BlueprintReviewWorkpack>(n(sid) + '/stage2/blueprint-review-workpack'
+      + (scope ? '?scope=' + encodeURIComponent(scope) : '')),
+  getBlueprintEditTemplate: (sid, ordinal) =>
+    get<PlotEdit>(n(sid) + '/stage2/blueprint/edit/template?chapter_ordinal=' + ordinal),
+  getBlueprintRefinementCatalog: (sid, origin) =>
+    get<BlueprintRefinementCatalog>(n(sid) + '/approvals/blueprint-refinement/catalog?origin=' + origin),
+  submitBlueprintRefinement: (sid, request) =>
+    post<ApprovalDoc>(n(sid) + '/approvals/blueprint-refinement', request),
+  previewBlueprintEdit: (sid, request) =>
+    post<PlotEditPreview>(n(sid) + '/stage2/blueprint/edit/preview', request),
+  applyBlueprintEdit: async (sid, request) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage2/blueprint/edit', request)),
   getGlobal: async (sid, revealSpoilers = false) =>
     projectGlobalSpoilers(await get<Stage2Global>(n(sid) + '/stage2/global'), revealSpoilers),
   getCharacters: (sid) => get<CharacterRegistryView>(n(sid) + '/stage2/characters'),

@@ -1,4 +1,5 @@
 import type { RunMetrics } from './runMetrics'
+import type { PlotEdit, PlotEditPreview, BlueprintRefinementRequest, BlueprintRefinementCatalog } from '@/types/plot.generated'
 /**
  * 唯一的数据缝。
  *
@@ -110,7 +111,12 @@ export interface Api {
   partitionStage1(sid: string): Promise<Job>
   getStage1(sid: string): Promise<Stage1View>
   getReading(sid: string, ordinal: number): Promise<ReadingResponse>
-  getBlueprintReviewWorkpack(sid: string): Promise<BlueprintReviewWorkpack>
+  getBlueprintReviewWorkpack(sid: string, scope?: string): Promise<BlueprintReviewWorkpack>
+  getBlueprintEditTemplate(sid: string, ordinal: number): Promise<PlotEdit>
+  previewBlueprintEdit(sid: string, request: PlotEdit): Promise<PlotEditPreview>
+  applyBlueprintEdit(sid: string, request: PlotEdit): Promise<Job>
+  getBlueprintRefinementCatalog(sid: string, origin: 'design' | 'structure'): Promise<BlueprintRefinementCatalog>
+  submitBlueprintRefinement(sid: string, request: BlueprintRefinementRequest): Promise<ApprovalDoc>
   getGlobal(sid: string, revealSpoilers?: boolean): Promise<Stage2Global>
   getCharacters(sid: string): Promise<CharacterRegistryView>
   editCharacters(sid: string, request: CharactersEditRequest): Promise<Job>

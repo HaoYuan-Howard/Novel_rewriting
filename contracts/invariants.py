@@ -23,6 +23,10 @@ from typing import Final, Literal, Mapping, NamedTuple
 
 import contracts.artifacts as artifact_paths
 
+PLOT_REVIEW_DIMENSIONS: Final = ('completeness', 'attribution', 'causal_continuity',
+                                 'epistemic_reveal', 'carry_state')
+PLOT_DIMENSION_STATES: Final = ('pass', 'issue', 'unver', 'not_applicable')
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、状态三态 / 严重度四级 —— 「不知道」与「没问题」必须可区分（需求 Q-2）
 # ─────────────────────────────────────────────────────────────────────────────
@@ -75,7 +79,7 @@ RUN_NEXT_HANDLERS: Final = (
 EXECUTION_PERMIT_KINDS: Final = ('ready', 'recovery')
 
 #: 只登记本次章级 B 场景 alias→事实/材料证据 join；不随任意代码或提示词变化。
-STAGE4_BINDING_INPUT_CONTRACT: Final = 'stage4-chapter-binding-input-v3'
+STAGE4_BINDING_INPUT_CONTRACT: Final = 'stage4-chapter-binding-input-v4'
 STAGE4_BINDING_INPUT_RECEIPT_KEY: Final = 'CHAPTER_BIND_INPUT_CONTRACT'
 
 #: 一条来源边**为什么**得到那个结论。**用 id 不用措辞**（同 `STAGE0_WARNINGS` 的理由）：
@@ -453,10 +457,10 @@ APPROVAL_SEEN: Final = ('read', 'global')
 #: `reconstruct` 只声明要改变哪些可复算结构维度，实际变化仍由代码从最终计划重算。
 STRUCTURE_MODES: Final = ('retain', 'reconstruct')
 STRUCTURE_CHANGE_KINDS: Final = (
-    'entry_anchor', 'ending_anchor', 'fact_grouping',
+    'entry_anchor', 'ending_anchor', 'presentation_grouping',
     'disclosure_order', 'noncontiguous_regroup',
 )
-STRUCTURE_METRIC_CONTRACT: Final = 'atomic-structure-v2'
+STRUCTURE_METRIC_CONTRACT: Final = 'plot-presentation-structure-v1'
 BLIND_ALIAS_ALGORITHM: Final = 'hmac-sha256-v1'
 #: 默认仍为四并发；6/8 只在显式配置中启用，并继续受整书及供应商总槽限制。
 PIPELINE_DEFAULT_CONCURRENCY: Final = 4
@@ -478,7 +482,7 @@ STRUCTURE_APPROVAL_STATES: Final = (
 #: 最终结构审批的证据权威契约。它独立于结构度量契约：度量算法不变时，
 #: 审批能否把一项读数解释为行动依据仍可能变化。该值必须进入整书与逐章
 #: subject，使旧裁决只留历史而不能在新批准边界下继续铸造执行权。
-STRUCTURE_REVIEW_CONTRACT: Final = 'stage4-structure-review-v3'
+STRUCTURE_REVIEW_CONTRACT: Final = 'stage4-structure-review-v4'
 
 #: Stage4A 的正式设计审阅与 B 后最终计划审批是两张不同的票。前者只决定
 #: 当前盲候选能否进入付费 B，绝不打开 ``gate.s4``。决定与修复码都必须是
@@ -490,7 +494,7 @@ DESIGN_REVIEWER_KINDS: Final = ('human', 'delegated_operator', 'inherited')
 #: ``action.surface``、可重放决定记录与 blocker→surface 注册表共用这一张表。
 REVIEWER_APPROVAL_SURFACES: Final = (
     'design', 'structure', 'writing', 'stage5',
-    'stage2_global_review', 'stage2_blueprint_review',
+    'stage2_global_review', 'stage2_blueprint_review', 'blueprint_refinement',
 )
 #: v3：策略与章 subject 改绑稳定 strategy epoch /
 #: chapter strategy；逐章 repair 显式区分本轮与累计 typed 约束，并把
@@ -501,7 +505,7 @@ REVIEWER_APPROVAL_SURFACES: Final = (
 LEGACY_V3_DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v3'
 LEGACY_V4_DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v4'
 # v5：策略绑定同一宏观输入投影；局部事实变化只重开实际受影响的章义务。
-DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v5'
+DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v6'
 #: 仅供不可变历史决定解码；现役不提供 v6 读取、审批、恢复或交付权。
 FROZEN_V6_DESIGN_REVIEW_CONTRACT: Final = \
     'stage4-design-review-v3-legacy-frozen-v6'
@@ -513,7 +517,7 @@ DESIGN_STRATEGY_REPLAN_CONSTRAINTS: Final = (
 #: Stage2 v3 把 v7 narrative_relations 从“只进 subject hash”改为逐章
 #: claim 化可见面；v4 再把 execution code / rules 收回服务端 opaque seal。
 #: Stage6/7 v3 同样不再把 seal 原料作为公开 workpack 字段外发。
-BLUEPRINT_REVIEW_CONTRACT: Final = 'stage2-blueprint-review-v7'
+BLUEPRINT_REVIEW_CONTRACT: Final = 'stage2-plot-scope-review-v1'
 BLUEPRINT_REVIEW_CHANGE_KINDS: Final = ('added', 'removed', 'changed')
 BLUEPRINT_REVIEW_DELTA_MODES: Final = ('initial', 'unchanged', 'targeted', 'full')
 STAGE2_NODE_REVIEW_DECISIONS: Final = ('accept', 'rework', 'uncertain', 'stop')
@@ -542,11 +546,13 @@ APPROVAL_WORKPACK_KINDS: Final = ('design', 'structure')
 #: 工作包 v2 reading 的三种 typed 判别值：顶层、A 面章、B 面章。它们是 schema
 #: discriminator，不是前端选项，也不进 subject/token/proof。
 WORKPACK_READING_KINDS: Final = (
-    'stage4_workpack_reading_v1', 'stage4_design_chapter_reading_v1',
-    'stage4_structure_chapter_reading_v1',
+    'stage4_workpack_reading_v2', 'stage4_design_chapter_reading_v2',
+    'stage4_structure_chapter_reading_v2',
 )
 #: B concern 的 closed_ref 解析结果分类；unknown 表示当前蓝图找不到该引用。
-WORKPACK_CLOSED_REF_KINDS: Final = ('fact', 'beat', 'hinge', 'unknown')
+WORKPACK_CLOSED_REF_KINDS: Final = (
+    'beat', 'state', 'constraint', 'evidence', 'knowledge', 'character', 'global', 'unknown',
+)
 #: 审批工作包相对当前 typed 决定的处置态。``already_current`` 只表示
 #: **同一份工作包摘要**已有当前有效批准；旧根不再开放冻结兼容处置态。
 APPROVAL_WORKPACK_DISPOSITIONS: Final = (
@@ -579,13 +585,13 @@ DESIGN_CONSTRAINT_OPERATION_KINDS: Final = ('keep', 'withdraw', 'supersede')
 DESIGN_REPAIR_CODES: Final = (
     'entry_anchor',
     'ending_anchor',
-    'fact_grouping',
+    'presentation_grouping',
     'disclosure_order',
     'noncontiguous_regroup',
     'scene_goal',
     'scene_goal_exclude',
     'binding_constraint_unsat',
-    'narrative_relation',
+    'semantic_constraint',
 )
 #: 退役但仍可**解码**的修复码。`structure_delta` 是泛化重排指令：arity (0,0)
 #: 意味着它可以不带任何 scene/alias 证据提交，等于允许人用一句「重排一下」
@@ -598,14 +604,14 @@ DESIGN_REPAIR_CONSTRAINT_ARITY: Final = {
     'structure_delta': (0, 0),
     'entry_anchor': (0, 1),
     'ending_anchor': (0, 1),
-    'fact_grouping': (0, 2),
+    'presentation_grouping': (0, 2),
     'disclosure_order': (0, 2),
     'noncontiguous_regroup': (0, 2),
     'scene_goal': (1, 1),
     'scene_goal_exclude': (1, 1),
     'binding_constraint_unsat': (1, 0),
-    # typed effect 承担精确端点；不再往两个无类型数组里重复搬运。
-    'narrative_relation': (0, 0),
+    # 只引用已登记约束或端点，不复制第二份关系正文。
+    'semantic_constraint': (0, 1),
 }
 #: 每个 active repair code 的一句话语义。Executor 的 repair prompt 与 Commander
 #: 工作包 ``submission_options.allowed_values`` 共用这一份；退役码不登记。
@@ -613,7 +619,7 @@ DESIGN_REPAIR_CONSTRAINT_ARITY: Final = {
 DESIGN_REPAIR_CODE_INSTRUCTIONS: Final[Mapping[str, str]] = {
     'entry_anchor': '以给定 opaque_aliases 作为章首入口锚，按列表顺序优先。',
     'ending_anchor': '以给定 opaque_aliases 作为章尾收束锚，按列表顺序优先。',
-    'fact_grouping': '重新组合给定 opaque_aliases 的落地场景，不新增或删除事实。',
+    'presentation_grouping': '调整给定剧情节点的呈现分配与分场指令，不新增、删除或改变父节点语义。',
     'disclosure_order': '按 opaque_aliases 列表的目标顺序重排披露。',
     'noncontiguous_regroup': '将给定 opaque_aliases 做非相邻重组，并保持因果/状态边界。',
     'scene_goal': '只调整 scene_refs 指向场景的目标，必须覆盖给定 opaque_aliases。',
@@ -622,8 +628,9 @@ DESIGN_REPAIR_CODE_INSTRUCTIONS: Final[Mapping[str, str]] = {
         '写成这些场景的当前目标或已经进入当前场景的事件；不删除事实，也不改变其落地场景。'),
     'binding_constraint_unsat': (
         '调整 scene_refs 指向场景的结构，使其可在后续关闭式证据绑定中实现。'),
-    'narrative_relation': (
-        '必须满足 typed HARD relation effect，不得用自由文本改写其端点或语义。'),
+    'semantic_constraint': (
+        '修复 opaque_aliases 所指已有约束或必要端点的呈现；保持已审含义，明确场景绑定。'
+        '不得另造关系或知识窗口；联合保真仍交独立设计审阅。'),
 }
 #: 每个 active repair code 一份**最小合法**示例（纯 dict；本模块不得 import pydantic）。
 #: 发给 reviewer 前必须经 ``DesignRepairConstraint`` 现场校验，示例与 schema 漂移
@@ -636,8 +643,8 @@ DESIGN_REPAIR_CONSTRAINT_EXAMPLES: Final[Mapping[str, Mapping[str, object]]] = {
     'ending_anchor': {
         'code': 'ending_anchor', 'scene_refs': [],
         'opaque_aliases': ['a_00000000000000a1']},
-    'fact_grouping': {
-        'code': 'fact_grouping', 'scene_refs': [],
+    'presentation_grouping': {
+        'code': 'presentation_grouping', 'scene_refs': [],
         'opaque_aliases': ['a_00000000000000a1', 'a_00000000000000a2']},
     'disclosure_order': {
         'code': 'disclosure_order', 'scene_refs': [],
@@ -654,12 +661,9 @@ DESIGN_REPAIR_CONSTRAINT_EXAMPLES: Final[Mapping[str, Mapping[str, object]]] = {
     'binding_constraint_unsat': {
         'code': 'binding_constraint_unsat',
         'scene_refs': ['<本章 workpack scene_ref>'], 'opaque_aliases': []},
-    'narrative_relation': {
-        'code': 'narrative_relation', 'scene_refs': [], 'opaque_aliases': [],
-        'effect': {
-            'kind': 'story_before', 'enforcement': 'hard',
-            'before_alias': 'a_00000000000000a1',
-            'after_alias': 'a_00000000000000a2'}},
+    'semantic_constraint': {
+        'code': 'semantic_constraint', 'scene_refs': [],
+        'opaque_aliases': ['a_00000000000000a1']},
 }
 #: 策略驳回两种 typed 约束的语义与最小合法示例；与
 #: ``DesignStrategyReplanRuling._scope_matches_kind`` 的判据逐字对应。
@@ -733,6 +737,9 @@ STAGE4_FAILURE_OWNERS: Final[Mapping[str, str]] = {
     'one_to_one': 'stage4.design',
     'ordinal_seq': 'stage4.design',
     'empty_chapter': 'stage4.design',
+    'placement_ref': 'stage4.design',
+    'ctx_plot_exact': 'code',
+    'ctx_permission_exact': 'code',
     'fact_ref.land': 'stage4.design',
     'fact_ref.context': 'stage4.design',
     'fact_ref.state': 'stage4.design',
@@ -964,7 +971,7 @@ def hinge_heading(kind: str) -> str:
 #:   checkpoint/业务写盘前核成员与所属拍，再回取既有 SourceSpan。它是兼容扩张，
 #:   旧 v2/v3.1 正式字节仍成立，不升 artifact 版本。
 BLUEPRINT_ARCHITECTURES: Final = (
-    'extraction-ir-v2', 'extraction-ir-v3.1', 'extraction-ir-v3.2')
+    'plot-blueprint-v1',)
 
 #: 当前默认架构。`BLUEPRINT_ARCHITECTURES` 是取值面，这一格是默认值——
 #: 翻默认只动这一格（`novel/config.py::DEFAULT_STAGE2_BLUEPRINT_CONTRACT` 从它派生），
@@ -1002,7 +1009,7 @@ BLUEPRINT_ARCHITECTURES: Final = (
 #: v3.2 的默认切换只基于“响应中删去编译前即丢弃的重复字段、引用改由代码回取”
 #: 这一结构等价性，不冒充真实模型的质量或速度实证。下一次 clean run 仍须核首次
 #: 落盘、生产 HARD、人工事实抽查与 P50/P95；v2/v3.1 保留为显式回退。
-BLUEPRINT_ARCHITECTURE: Final = 'extraction-ir-v3.2'
+BLUEPRINT_ARCHITECTURE: Final = 'plot-blueprint-v1'
 assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 
 #: ``stage2.global`` 唯一现役模型证据 wire 身份。模型只交段落候选 ID，代码再铸成
@@ -1932,8 +1939,6 @@ PAID_FLAGS: Final = {
     '--replan': ('Stage4B 返回 infeasible 或人工结构审批 request_replan 后，'
                  '仅在当前正式 Stage4A 策略审阅明确 request_replan 后，'
                  '绕过同参数缓存重新采样整书策略与各章；不会自动串行 Stage4B'),
-    '--patch': 'stage2 逐章蓝图 extraction IR 族的字段级修复——逐条失败各调一次模型，'
-               '量级是条不是章',
 }
 
 #: 重算时**只对本次新引入的错误入终态** —— 旧违约照报但不挡路。
@@ -2396,11 +2401,11 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   `blueprint --chapters`（定向重生成那几章），而它此前只挂在 `stage5.write` 上。
     #   漏了它，那 19 条在 F5-4 注册的那一刻全被 `_validate` ⑧ 拒收。
     'stage2.blueprint': NodeSpec('stage2', 'R-3',  True,  'stage2 逐章抽取',
-                                  lifecycle=NodeLifecycleSpec('chapter', '已接受 Global 投影与本章正文', 'executor', 'commander', '全章 Blueprint 与原文的交叉核验', ('accept', 'typed_edit', 'targeted_rework', 'stop'), ('stage2.characters', 'stage2.global', 'stage2.blueprint'), 'executor:phase/purpose/chapter / commander:blueprint', ('--revalidate', '--apply-edit', '--close-review', '--chapters', 'saved_response', 'prepared_commit'), commander_bindings=(('approval:stage2-blueprint-review', 'book'),), review_actions=('accept', 'patch', 'rework', 'uncertain', 'stop'), approval_projection=('stage2_reviews', 'stage2.blueprint', 'state')),
+                                  lifecycle=NodeLifecycleSpec('chapter', '已接受 Global 投影与本章正文', 'executor', 'commander', '逐章五维审阅与最终跨章复核', ('accept', 'typed_edit', 'targeted_rework', 'stop'), ('stage2.characters', 'stage2.global', 'stage2.blueprint'), 'executor:chapter / commander:chapter:N、cross_chapter', ('--revalidate', '--apply-edit', '--close-review', '--chapters', 'saved_response', 'prepared_commit'), commander_bindings=(('approval:stage2-blueprint-review', 'book'),), review_actions=('accept', 'rework', 'uncertain', 'stop'), approval_projection=('stage2_reviews', 'stage2.blueprint', 'state')),
                                   flags=('--dry-run', '--check-only', '--renormalize',
                                          '--review-token', '--close-review',
-                                         '--chapters', '--patch',
-                                         '--emit-review-workpack',
+                                         '--chapters',
+                                         '--emit-review-workpack', '--review-scope',
                                          '--emit-edit-template', '--validate-edit',
                                          '--apply-edit',
                                          '--revalidate', '--actor', '--reason',
@@ -2579,6 +2584,14 @@ def commander_work_unit(waiting_on: str) -> tuple[str, str] | None:
     if len(found) > 1:
         raise ValueError(f'Commander blocker 重复登记：{waiting_on}')
     return found[0] if found else None
+
+
+def commander_scope_allowed(node: str, scope: str) -> bool:
+    """Blueprint 各章及跨章独立持久计账，不能借重排或执行 epoch 重发额度。"""
+    import re
+    if node == 'stage2.blueprint':
+        return scope == 'cross_chapter' or re.fullmatch(r'chapter:[1-9][0-9]*', scope) is not None
+    return scope in {value for _, value in NODES[node].lifecycle.commander_bindings}
 
 
 def commander_review_actions(waiting_on: str) -> tuple[str, ...]:

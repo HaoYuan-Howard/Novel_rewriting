@@ -19,9 +19,9 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from contracts.invariants import NODES, commander_work_unit
+from contracts.invariants import NODES, commander_work_unit, commander_scope_allowed
 from contracts.schema.workflow import (
-    WorkflowManifestV2, WorkUnitAttempt, WorkUnitBlobV1,
+    WorkflowManifestV3, WorkUnitAttempt, WorkUnitBlobV1,
     WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV2, WorkUnitRegistryV1,
     WorkUnitProcessing,
 )
@@ -204,9 +204,9 @@ def _read(base: str | os.PathLike[str], path: Path, model: type[BaseModel]) -> A
         raise WorkUnitRefused(f'工作单元账缺失或不符合当前契约：{target.name}') from exc
 
 
-def workflow_manifest(base: str | os.PathLike[str]) -> WorkflowManifestV2 | None:
+def workflow_manifest(base: str | os.PathLike[str]) -> WorkflowManifestV3 | None:
     path = _safe(base, paths.workflow_manifest_path(base))
-    return _read(base, path, WorkflowManifestV2) if path.exists() else None
+    return _read(base, path, WorkflowManifestV3) if path.exists() else None
 
 
 def _require_clean_base(base: str | os.PathLike[str]) -> None:
@@ -236,7 +236,7 @@ def check_workflow_write(base: str | os.PathLike[str]) -> None:
         _require_clean_base(base)
 
 
-def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV2:
+def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV3:
     """仅空 base 可初始化；旧书不能靠删账或换代码获得新额度。"""
     target = _safe(base, paths.workflow_manifest_path(base))
     # 拒绝存量 base 必须零写；锁本身会创建父目录，因此先作只读预检。
@@ -247,13 +247,13 @@ def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV2:
         if existing is not None:
             return existing
         _require_clean_base(base)
-        manifest = WorkflowManifestV2(task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
+        manifest = WorkflowManifestV3(task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
                                       created_at=int(time.time()))
         _write(base, target, manifest)
         return manifest
 
 
-def require_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV2:
+def require_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV3:
     manifest = workflow_manifest(base)
     if manifest is None:
         return initialize_workflow(base)
@@ -274,7 +274,7 @@ class WorkUnitBudget:
             raise WorkUnitRefused('未登记的工作单元节点或角色')
         spec = NODES[node].lifecycle
         if role == 'commander':
-            allowed_scope = scope in {unit_scope for _, unit_scope in spec.commander_bindings}
+            allowed_scope = commander_scope_allowed(node, scope)
             allowed_role = spec.commander_content_limit == 4
         else:
             allowed_role = spec.executor_content_limit == 4
@@ -981,6 +981,19 @@ def reconcile_commander_response(
                               provider_session_id=attempt.provider_session_id)
 
 
+def commander_budget_for_record(base: str | os.PathLike[str], sid: str, record: Any) -> WorkUnitBudget:
+    """从原不可变账恢复章级/整书属主，不按当前下一批次重造预算账户。"""
+    if not record.work_unit_id or record.sid != sid:
+        raise WorkUnitRefused('审阅记录缺当前书的原工作单元身份')
+    ledger = _read(base, paths.work_unit_dir(base, sid, record.work_unit_id) / 'ledger.json', WorkUnitLedgerV2)
+    identity = commander_work_unit(record.waiting_on)
+    budget = WorkUnitBudget(base, sid, ledger.node, 'commander', ledger.scope)
+    if (identity is None or identity[0] != ledger.node or ledger.role != 'commander'
+            or budget.unit_id != record.work_unit_id or not commander_scope_allowed(ledger.node, ledger.scope)):
+        raise WorkUnitRefused('审阅记录与原 Commander 属主或范围不一致')
+    return budget
+
+
 def validate_reviewer_record(base: str | os.PathLike[str], sid: str, record: Any) -> WorkUnitBudget:
     """所有决定消费者共用原回答、工作单元及 typed 动作的精确证明。"""
     from novel.orchestrator import reviewer_tasks
@@ -990,13 +1003,15 @@ def validate_reviewer_record(base: str | os.PathLike[str], sid: str, record: Any
     if not unit_id or not turn_id or record.sid != sid:
         raise WorkUnitRefused('审阅决定缺工作单元身份')
     ledger = _read(base, paths.work_unit_dir(base, sid, unit_id) / 'ledger.json', WorkUnitLedgerV2)
-    budget = WorkUnitBudget(base, sid, ledger.node, 'commander', ledger.scope)
+    budget = commander_budget_for_record(base, sid, record)
     if budget.unit_id != unit_id or ledger.role != 'commander':
         raise WorkUnitRefused('审阅决定串用了其他角色或工作单元')
     turn = budget._turn(ledger, turn_id)
-    if (commander_work_unit(record.waiting_on) != (ledger.node, ledger.scope)
-            or turn.state not in ('delivered', 'adopted')):
+    if turn.state not in ('delivered', 'adopted'):
         raise WorkUnitRefused('审阅决定不属于登记 owner 或回答已经拒绝')
+    if ledger.scope != commander_work_unit(record.waiting_on)[1]:
+        if budget.request_payload(turn_id).get('work_unit_scope') != ledger.scope:
+            raise WorkUnitRefused('分章审阅原请求缺精确批次绑定')
     reconcile_commander_response(budget, turn_id, read_only=True)
     from novel.orchestrator.reviewer_schema_recovery import validate_work_unit_recovery
     validate_work_unit_recovery(str(base), sid, budget=budget, turn_id=turn_id)
@@ -1077,6 +1092,20 @@ def unit_view(ledger: WorkUnitLedgerV2) -> dict[str, Any]:
                 state=state, latest_request_sha256=latest.request_sha256 if latest else None,
                 latest_response_sha256=latest.response_sha256 if latest else None,
                 recovery_action=recovery, processing=processing_view(ledger))
+
+
+def require_commander_scope_closed(base: str | os.PathLike[str], sid: str, node: str, scope: str) -> None:
+    """进入新 Blueprint 批次前，不能用新范围绕过旧范围的未知执行或未采用回答。"""
+    if node != 'stage2.blueprint':
+        return
+    rows = list_unit_views(base, sid)
+    if rows is None:
+        raise WorkUnitRefused('缺现役工作流身份，不能进入新的 Blueprint 审阅批次')
+    pending = [row for row in rows if row['node'] == node and row['role'] == 'commander'
+               and row['scope'] != scope and row['state'] in {'reserved', 'unknown', 'delivered'}]
+    if pending:
+        detail = '；'.join(f"{row['scope']}：{row['recovery_action']}" for row in pending)
+        raise WorkUnitRefused('旧 Blueprint 范围尚未收口，须先按原记录免费恢复，不能购买新批次：' + detail)
 
 
 def processing_view(ledger: WorkUnitLedgerV2) -> dict[str, Any] | None:

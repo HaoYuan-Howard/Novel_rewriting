@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""上游事实变化走真实 A producer、正式后继与来源消费者。"""
+"""上游节点变化走真实 A producer、正式后继与来源消费者。"""
 from types import SimpleNamespace
 
 import pytest
@@ -19,8 +19,11 @@ def _change_claim(book, ordinal, suffix='；这次先望向院门再行动'):
     store = ArtifactStore(_ctx(book, 'stage2.blueprint'))
     blueprint = store.read_own(ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)[0]
     raw = blueprint.model_dump(mode='json', by_alias=True)
-    raw['blueprints'][ordinal - 1]['fact_atoms'][0]['claim'] += suffix
+    raw['blueprints'][ordinal - 1]['beats'][0]['content'] += suffix
     store.write(STAGE2_CHAPTER_BLUEPRINTS, ChapterBlueprints.model_validate(raw))
+    # 上游真实修订必须先重新章审/跨章及知识汇合；不让 A 绕过失效的 Blueprint。
+    from tests.stage2_fixtures import accept_and_materialize_links
+    accept_and_materialize_links(_ctx(book, 'stage2.blueprint', paid=False))
     return raw
 
 
@@ -148,7 +151,7 @@ def test_upstream_rebuild_carries_active_constraints_and_keeps_review_obligation
     request = _accept_all(template)
     scene = parent.output_chapters[1].scenes[0]
     constraint = DesignRepairConstraint(code='scene_goal', scene_refs=[scene.candidate_scene_id],
-        opaque_aliases=[scene.land_fact_aliases[0]])
+        opaque_aliases=[parent.output_chapters[1].beat_placements[0].beat_alias])
     request.chapters[1] = request.chapters[1].model_copy(update={
         'decision': 'request_repair', 'constraints': [constraint], 'reason': '场景目标应明确落下本事实'})
     approvals.approve_design(tmp_path, original.sid, request)
@@ -203,25 +206,20 @@ def test_unknown_parent_never_starts_rebuild_wire(tmp_path, damage):
 
 def _nineteen_book(tmp_path, monkeypatch):
     import copy
-    import json
     from tests import test_stage4_v3_integration as fixtures
-    main, bp, global_g = fixtures.main_text(), fixtures.blueprints(), fixtures.global_grounding()
-    texts, chapters = [], []
+    from tests.test_plot_producer import responses
+    main, responses_by_chapter = fixtures.main_text(), responses()
+    texts, chapters = [], {}
     for ordinal in range(1, 20):
         source = (ordinal - 1) % 3 + 1
         texts.append({**main[source - 1], 'chapter_ordinal': ordinal})
-        raw = json.dumps(bp['blueprints'][source - 1], ensure_ascii=False)
-        for prefix in ('b', 'f', 'h'):
-            raw = raw.replace(f'{prefix}{source:02d}_', f'{prefix}{ordinal:02d}_')
-        chapter = json.loads(raw)
+        chapter = copy.deepcopy(responses_by_chapter[source])
         chapter['chapter_ordinal'] = ordinal
-        chapters.append(chapter)
+        chapters[ordinal] = chapter
     with monkeypatch.context() as patch:
         patch.setattr(fixtures, 'main_text', lambda: copy.deepcopy(texts))
-        patch.setattr(fixtures, 'global_grounding', lambda: copy.deepcopy(global_g))
-        patch.setattr(fixtures, 'blueprints', lambda: {**copy.deepcopy(bp), 'blueprints': copy.deepcopy(chapters)})
         book = fixtures._book(tmp_path)
-        blueprint = fixtures._seed_current_stage2(book)
+        blueprint = fixtures._seed_current_stage2(book, chapter_responses=chapters)
     return book, blueprint.model_dump(mode='json', by_alias=True)
 
 

@@ -16,11 +16,10 @@ from __future__ import annotations
 
 import warnings
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from contracts.schema.api import (
     BatchTrimResolutionRequest,
-    BlueprintRelationEditPreview,
     CharactersEditRequest,
     DraftEditPreview, DraftEditPreviewRequest, DraftEditRequest,
     HookApproveRequest, NameMapApproveRequest,
@@ -28,7 +27,7 @@ from contracts.schema.api import (
 )
 from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema.orchestration import JobRecord
-from contracts.schema.stage2 import BlueprintRelationEdit
+from contracts.schema.plot_edit import PlotEdit, PlotEditPreview
 from contracts.schema.stage5 import ChapterResponse
 from novel.api.approval_stamp import stamp_approval_after_landed as _stamp
 from novel.api.deps import checked_sid, get_base
@@ -38,7 +37,7 @@ from novel.errors import (
 )
 from novel.orchestrator import jobs, uploads
 from novel.run import RunContext
-from novel.stages.stage2 import relation_edit
+from novel.stages.stage2 import plot_edit
 from novel.stages.stage5 import write
 
 router = APIRouter(prefix='/novels')
@@ -109,20 +108,35 @@ def preview_draft_edit(
         raise
 
 
+@router.get('/{sid}/stage2/blueprint/edit/template', response_model=PlotEdit)
+def blueprint_edit_template(sid: str = Depends(checked_sid), base: str = Depends(get_base),
+                            chapter_ordinal: int | None = Query(default=None, ge=1)) -> PlotEdit:
+    from contracts.schema import decode_artifact
+    ctx = RunContext.open(base, sid, 'stage2.blueprint', paid=False, write_ledger=False)
+    template = PlotEdit.model_validate(decode_artifact(
+        plot_edit.REQUEST_REL, plot_edit.edit_template(ctx)).payload)
+    if chapter_ordinal is None:
+        return template
+    chapters = [row for row in template.chapters if row.chapter.chapter_ordinal == chapter_ordinal]
+    if not chapters:
+        raise SourceConflict('当前蓝图不含请求章节')
+    return template.model_copy(update={'chapters': chapters})
+
+
 @router.post(
-    '/{sid}/stage2/relations/edit/preview',
-    response_model=BlueprintRelationEditPreview,
+    '/{sid}/stage2/blueprint/edit/preview',
+    response_model=PlotEditPreview,
 )
-def preview_blueprint_relations(
-    request: BlueprintRelationEdit,
+def preview_blueprint_edit(
+    request: PlotEdit,
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
-) -> BlueprintRelationEditPreview:
-    """Stage2 v7 关系整章集合替换的只读预检。"""
+) -> PlotEditPreview:
+    """完整剧情与身份映射的只读预检。"""
     ctx = RunContext.open(
         base, sid, 'stage2.blueprint', paid=False, write_ledger=False)
     try:
-        return relation_edit.prepare_edit(ctx, request).preview()
+        return plot_edit.prepare_edit(ctx, request).preview()
     except TerminalState as exc:
         if type(exc) is TerminalState:
             raise SourceConflict(str(exc)) from exc
@@ -130,16 +144,16 @@ def preview_blueprint_relations(
 
 
 @router.post(
-    '/{sid}/stage2/relations/edit',
+    '/{sid}/stage2/blueprint/edit',
     response_model=JobRecord,
 )
-def apply_blueprint_relations(
-    request: BlueprintRelationEdit,
+def apply_blueprint_edit(
+    request: PlotEdit,
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
 ) -> JobRecord:
     """typed request → service 一次性文件 → canonical CLI 子进程。"""
-    path = uploads.save_blueprint_relation_edit(base, sid, request)
+    path = uploads.save_blueprint_edit(base, sid, request)
     try:
         return jobs.run(
             base,

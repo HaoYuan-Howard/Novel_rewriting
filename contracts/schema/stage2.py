@@ -1870,22 +1870,10 @@ class HingePhraseResponse(StrictModel):
 
 
 class BlueprintContext(StrictModel):
-    """蓝图调用的模型可见边界；只接受登记过的有界上下文架构。
-
-    ⚠ `architecture` 曾**故意是单值**（v2→v3 时旧产物语义已坏，放宽等于把
-    该重跑的旧蓝图读进来当成还能用）。2026-08-20 起逐步放宽为登记取值面：
-    `extraction-ir-v1` 的产物语义与 v3 **逐字段等价**（区间仍是段号查表出的
-    精确区间、下游消费面一个不动），后续契约同样只改响应边界而不改
-    正式产物。并存不欠迁移——收窄/放宽的裁决依据始终是
-    「旧字节语义还成不成立」，全案记录在
-    `contracts/invariants.py::BLUEPRINT_ARCHITECTURES` 的注释里。
-    """
-
+    """逐章原文与共享主体投影的契约身份，具体材料由来源账绑定。"""
     architecture: Literal[BLUEPRINT_ARCHITECTURES]
-    stable_prefix: Fp10
-    past_neighbor_chars_max: int = Field(ge=0)
-    continuity_chars_max: int = Field(ge=0)
-    past_names_chars_max: int = Field(ge=0)
+    source_format: Literal['numbered-paragraphs-v1']
+    global_projection_contract: Literal['plot-global-scope-v1']
 
 
 class BlueprintScopeViolation(StrictModel):
@@ -1955,82 +1943,59 @@ class BlueprintRelationEdit(StrictModel):
         return self
 
 
+from contracts.schema.plot_edit import PlotRevisionRecord
+
+
 class BlueprintProvenance(LlmProvenance):
-    """`chapter_blueprints._provenance`。"""
-
-    #: 某一批没按「本次任务范围」产出。**[HARD] 非空即失败**；
-    #: **键不在 = 「不知道」，不发绿灯**。
-    #: 产地无条件写这个键（没越界写空列表）。
+    """V9 只记录实际响应范围与调用身份；段号/引用失败由 durable 响应恢复。"""
     scope_violations: list[str]
-
     context: BlueprintContext
+    # 编辑身份账随同一份蓝图原子提交；审阅/写作投影不下发 provenance。
+    plot_revisions: list[PlotRevisionRecord] = Field(default_factory=list)
 
-    # ── verbatim 回取的两笔独立账 ─────────────────────────────────────────────
-    # 两个量纲的修复方式不同，因此分别记录，报告可准确指出需要处理的环节。
-    #
-    # ⚠⚠ **这里曾经是三笔**，第三笔 `verbatim_recovered`（按最长公共子串救回来的锚点）
-    # 随 `bounded-fidelity-v3` 一并删除：beat 的区间现在由**段号**算出、不存在「锚点被
-    # 模型改掉一两个字」这回事，而 hinge 那一侧的 LCS 兜底本来就是禁的
-    # （`novel/core/spans.py` 模块头：救回来的「玉镯」是一个**语义已经变了**的片段）。
-    # ⇒ 那个键在新架构下**结构性恒空**，留着就是一盏永远不亮的灯；
-    # 它唯一的消费方 `anchor_not_verbatim` 同批裁撤。
+from contracts.schema.plot import PlotBlueprint
 
-    #: `(beat_id, 位置, 根因)`。**锚不到。[HARD] 非空即失败态。**
-    #:
-    #: ⚠ 它替掉早先那条「靠 `hinges[].text` 的**缺席**去反推失败态」——
-    #: 失败态从此有**正面**的落点。根因**修法各不相同**，所以要分开报：
-    #: · `位置 == 'span'`  —— 段号越界 / 段号区间倒序 / 段号不是整数 /
-    #:   起段没越过上一拍的止段（区间重叠）
-    #: · `位置 == 'hinge'` —— 段号不在本 beat 的段区间内 / 短语在那一段里找不到
-    #: ⚠⚠ **`'hinge'` 那几条根因的中文字面是与 `novel/stages/stage2/checks.py` 的
-    #: 隐式契约**（四分流按子串匹配）。改措辞而不同批改分流，会让 `hinge_anchor_void`
-    #: 静默降级成 `hinge_drift`——守卫在 `tests/test_stage2_generation.py`。
-    #: ⚠ 非空时产地照旧入显式终态，但**账要先落盘**——「显式终态」在多命令流水线里
-    #: 只等于「这一步红了」，**不等于「链路被挡住了」**（§2.4 已记）。
-    #: 出口：**断言计数 + 逐条列出**，按根因分开。
-    verbatim_failures: list[tuple[str, str, str]]
-
-    #: `(fact_id, source_beat_ref, 根因)`。事实 claim 仍保留，但证据为空并使产物 INVALID；
-    #: 不允许 Stage4 把无证据的模型转述当作章级真相继续编译。
-    fact_atom_failures: list[tuple[str, str, str]]
-
-    #: `(beat_id, kind, phrase)`（`extraction-ir-v1` 专属账）：短语在所属拍区间内
-    #: **多处命中**、被打回失败态的那几条 hinge 的原始短语。
-    #: ⚠ 失败态的 hinge 只剩 `{kind, source: null}`——**短语本身不在产物里**，
-    #: 而候选选择修复（代码按短语在拍区间内枚举命中位、模型只挑 candidate_id）
-    #: 的输入正是这个短语。不落这笔账，字段级修复就只剩「回 LLM cache 捞原始响应」
-    #: 一条路，而缓存是可驱逐的。候选**位置**不落盘：由短语+区间确定性重算，零成本。
-    hinge_ambiguous_pending: list[tuple[str, str, str]] = Field(default_factory=list)
 
 class ChapterBlueprints(StrictModel):
-    """`stage2/chapter_blueprints.json` —— 顶层 2 个键。
-    **逐章产出：当前章全文、未来章不可见，历史正文只走有界窗口。**
+    """V9 完整剧情蓝图：每章一个逻辑抽取请求，齐章后原子提交。
 
-    一相契约每章一次调用；`extraction-ir-v2` 每章先取边界、再在冻结边界上取细节。
-
-    结构化调用点声明的必需顶层键 = `blueprints`。
-
-    ⚠ **已裁撤**：`source_id`。它**有一个读者**——把这个内部数字 id 原样插进规划节点的
-    **prompt 载荷**，而那正是删它的理由（`B-05`：prompt 不许泄漏内部结构名/编号）。
-    **移植时要连投影一起改**：只删字段不删投影，那处会安静地发一个 `None` 过去。
+    当前章原文、必要 Global 投影及持续状态是实际输入；后章只携带仍成立的状态，
+    不累计全部历史动作。身份编辑账保存在 provenance，不下发给规划或写作模型。
     """
 
-    #: 长度 = 正文章数（盘上 8~14）。
-    blueprints: list[Blueprint] = Field(min_length=1)
+    #: 长度等于源正文章数；跨产物检查逐章对应。
+    blueprints: list[PlotBlueprint] = Field(min_length=1)
 
-    #: `inputs` 恒两条：`stage1/main_text.json` ·
-    #: `stage2/blueprint_character_projection.json`。Blueprint 不读 global 其他字段。
+    #: 实际消费的正文、人物与已接受 Global 投影由来源及请求账绑定。
     provenance: BlueprintProvenance = Field(alias='_provenance')
 
     @model_validator(mode='after')
     def _chapter_ordinals_are_unique(self) -> ChapterBlueprints:
         """`chapter_ordinal` 是全链的章唯一键——重号会让下游按它做的每一次 join 取错章。
 
-        ⚠ 这里**只查唯一性，不查连续性**：章覆盖与事实覆盖是跨产物判据
+        ⚠ 这里**只查唯一性，不查连续性**：章覆盖与节点引用是跨产物判据
         （跨产物、要拿 `main_text` 比），归 stage2 的判据表，不归载体。
         """
         got = [b.chapter_ordinal for b in self.blueprints]
         if len(set(got)) != len(got):
             dup = sorted({o for o in got if got.count(o) > 1})
             raise ValueError(f'chapter_ordinal 重号：{dup}')
+        retired, known, requests = set(), set(), set()
+        for revision in self.provenance.plot_revisions:
+            if revision.request_sha256 in requests:
+                raise ValueError('同一编辑请求不能重复记入身份历史')
+            requests.add(revision.request_sha256)
+            for change in revision.changes:
+                if retired.intersection(change.old_refs):
+                    raise ValueError('不能再次修改已退役主体')
+                if change.kind != 'preserve' and known.intersection(change.new_refs):
+                    raise ValueError('新主体不能复用历史 ID')
+            known.update(ref for row in revision.changes for ref in [*row.old_refs, *row.new_refs])
+            retired.update(row.node_id for row in revision.tombstones)
+        live = {ref for chapter in self.blueprints for ref in (
+            *[row.beat_id for row in chapter.beats],
+            *[row.state_id for row in chapter.states],
+            *[row.constraint_id for row in chapter.constraints])}
+        if retired.intersection(live):
+            raise ValueError('当前蓝图不能复活退役主体')
         return self

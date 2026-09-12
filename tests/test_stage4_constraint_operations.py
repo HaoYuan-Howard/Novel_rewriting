@@ -84,7 +84,7 @@ def test_legacy_payload_history_and_scope_serialization_are_unchanged(isolated):
     assert full['chapters'][0]['source_decision_sha256'] is None
     assert full['chapters'][0]['constraints'][0]['effect'] is None
     saved = state['record'].model_dump_json()
-    assert A._ApprovalRecordV7.model_validate_json(saved).model_dump_json() == saved
+    assert A._ApprovalRecordV8.model_validate_json(saved).model_dump_json() == saved
     scope = _resolve(base, doc).chapters[0]
     assert 'constraint_operations' not in scope.model_dump(mode='json')
     assert scope.constraint_set_sha256 == A._decision_sha256({

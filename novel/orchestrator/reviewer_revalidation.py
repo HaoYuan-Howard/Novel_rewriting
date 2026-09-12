@@ -51,22 +51,13 @@ def business_identity(
             'reviewer_contract_sha256': hashlib.sha256(contract.encode('utf-8')).hexdigest(),
         }
         if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
-            coverage = material['review_coverage']
-            if 'scope' in coverage:
-                full = Stage2ReviewCoverage.model_validate(coverage)
-                scope_sha = full.scope.scope_sha256
-                pending = full.pending_obligation_ids
-                prior = [row.model_dump(mode='json') for row in full.prior_problems]
-            else:
-                scope_sha = _SHA.validate_python(coverage['scope_sha256'])
-                pending = [row['obligation_id'] for row in coverage['pending']]
-                prior = coverage['prior_problems']
             identity.update({
+                'scope': material['scope'],
                 'subject_sha256': _SHA.validate_python(material['subject_sha256']),
-                'main_text_sha256': _SHA.validate_python(
-                    material['binding']['main_text_artifact_sha256']),
-                'scope_sha256': scope_sha,
-                'pending_obligation_ids': pending, 'prior_problems': prior,
+                'material_sha256': _sha(material['material']),
+                'knowledge_scope_sha256': material['knowledge_links']['scope']['scope_sha256'],
+                'knowledge_decisions': material['knowledge_links']['inherited'],
+                'pending_knowledge': material['knowledge_links']['pending_obligation_ids'],
             })
         return identity
     except (KeyError, TypeError, ValidationError) as exc:
@@ -147,7 +138,12 @@ def _reading(envelope: Mapping[str, Any]) -> dict[str, Any]:
                     'binding_sha256' if surface == 'blueprint' else 'workpack_sha256'):
             material.pop(key)
         if surface == 'blueprint':
-            material['material_projection'].pop('full_workpack_sha256')
+            # 整书文件摘要只守本次读取竞态；实际消费内容仍全部比较。
+            for key in ('main_text_artifact_sha256', 'blueprint_artifact_sha256',
+                        'check_report_sha256'):
+                material['binding'].pop(key)
+            for key in ('main_text_sha256', 'knowledge_sha256', 'blueprint_sha256'):
+                material['knowledge_links']['scope'].pop(key)
         for option in result['submission_options']:
             exact = option['exact_request']
             exact.pop('surface_seal')

@@ -58,10 +58,9 @@ from contracts.schema.stage4 import (
     EvidenceBindingCompiledProvenance,
     CtxProvenance, EvidenceBinding, EvidenceBindingProvenance,
     EvidenceBindingHumanProvenance, EvidenceBindingResponse,
-    PlanChapters, PlanEdit, PlanProvenance, WriterContext,
+    PlanChapter, PlanChapters, PlanEdit, PlanProvenance, WriterContext,
 )
 from novel import paths, prov
-from novel.consumption import stage4_material_evidence
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, GateBlocked, HumanEditProtected,
     RefusedByStructure,
@@ -75,26 +74,28 @@ from novel.llm import aggregate_runs
 from novel.run import RunContext
 from novel.core.naming import display_names_at
 from novel.stages.stage4 import checks, prompts
-from novel.stages.stage4.blind import (
+from novel.stages.stage4.plot_design import (
     BlindPlanError, assemble_blind_candidate, build_blind_chapter_projection,
     blind_chapter_compilation_dependencies,
     build_blind_projection,
     build_blind_strategy_projection,
-    build_evidence_catalog, candidate_subject_sha256,
+    candidate_subject_sha256, validate_chapter as validate_plot_design_chapter,
     compile_blind_candidate, compile_blind_chapter_design,
     compile_blind_chapter_edit,
-    construct_feasible_binding_witness, merge_evidence_bindings,
-    prove_binding_infeasible, validate_infeasible_binding,
 )
-from novel.stages.stage4.baseline import (
+from novel.stages.stage4.plot_binding import (
+    build_evidence_catalog, construct_feasible_binding_witness,
+    merge_evidence_bindings, prove_binding_infeasible, validate_infeasible_binding,
+)
+from novel.stages.stage4.plot_binding import (
     apply_chapter_resolutions, build_mechanical_baseline,
 )
 from novel.stages.stage4.beats import beat_index
 from novel.stages.stage4.context import build_writer_context
-from novel.stages.stage4.fact_refs import catalog as fact_catalog, validate_plan_refs
+from novel.stages.stage4.plot_refs import validate_plan as validate_plot_plan
 from novel.stages.stage4.design_evolution import (
     DesignEvolutionError, chapter_strategy_sha256,
-    evaluate_relation_constraints, non_target_chapter_drift,
+    non_target_chapter_drift,
     replace_candidate_chapters, replan_affected_chapters,
     strategy_epoch_sha256,
 )
@@ -175,19 +176,18 @@ class _Upstreams:
 
 
 class _DesignUpstream:
-    """Stage4A 的唯一上游边：冻结的 Stage2 真相图。
-
-    这个类故意与 ``_Upstreams`` 分开。只要 A 的构造路径实例化后者，正文、源 beat、
-    材料或 grounding 就已经在进入 prompt 之前被读进了同一运行上下文，来源账也会
-    说出一条过宽的边；“提示词里不用它”无法恢复真正的隔离。
-    """
+    """规划只消费经接受的剧情、必要知识和共享主体；公开投影剔除源位置。"""
 
     def __init__(self, ctx: RunContext, store: ArtifactStore):
         if not store.exists(BLUEPRINTS):
-            raise UpstreamMissing(
-                f'{BLUEPRINTS} 不在盘上——stage4.design 只消费冻结的 Stage2 真相图')
+            raise UpstreamMissing(f'{BLUEPRINTS} 不在盘上')
         self.blueprints = store.read(
             ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True)
+        from novel.stages.stage2 import global_review
+        from novel.stages.stage2.knowledge_links import require_current
+        self.global_g = global_review.generation_grounding(store).model_dump(by_alias=True)
+        self.knowledge_links = require_current(ctx, consuming=True).model_dump(
+            by_alias=True, mode='json')
 
 
 @dataclass(frozen=True)
@@ -451,6 +451,7 @@ def _judge(store: ArtifactStore, plan_raw: dict[str, Any], up: _Upstreams, *,
             }).model_dump(by_alias=True, mode='json')
     return checks.check(
         plan_raw, blueprints=up.blueprints, main_text=up.main_text, global_g=up.global_g,
+        knowledge_links=up.knowledge_links,
         ctx=ctx_raw, expected_ctx=expected_ctx,
         ctx_link=_ctx_link(store, plan_raw) if with_ctx_link else None,
         ctx_source=(_ctx_source_line(store) if with_ctx_link
@@ -529,7 +530,8 @@ def _design_request(
     store = ArtifactStore(ctx)
     up = _DesignUpstream(ctx, store)
     truth, mapping = build_blind_projection(
-        up.blueprints, root_clean_sha1=ctx.root_clean_sha1)
+        up.blueprints, root_clean_sha1=ctx.root_clean_sha1,
+        knowledge_links=up.knowledge_links, global_g=up.global_g)
     projection = build_blind_strategy_projection(truth)
     system = prompts.blind_book_strategy_system()
     user = _design_strategy_user(projection)
@@ -635,99 +637,17 @@ def require_targeted_design_executor(ctx: RunContext) -> None:
 def _blind_chapter_problems(
     chapter: Mapping[str, Any], source: Mapping[str, Any],
 ) -> list[str]:
-    """单章编译结果的 HARD；整书终验与逐章 checkpoint 共用这一把尺子。"""
-    ordinal = int(source.get('chapter_ordinal') or 0)
-    problems: list[str] = []
-    if int(chapter.get('output_ordinal') or 0) != ordinal:
-        return [
-            f'ch{ordinal} 编译章号漂移：got={chapter.get("output_ordinal")!r}']
-    facts = {
-        str(row.get('fact_alias')): str(row.get('obligation'))
-        for row in (source.get('facts') or [])
-    }
-    land = {alias for alias, obligation in facts.items() if obligation == 'land'}
-    context = {alias for alias, obligation in facts.items() if obligation == 'context'}
-    scenes = list(chapter.get('scenes') or [])
-    landed = [str(alias) for scene in scenes
-              for alias in (scene.get('land_fact_aliases') or [])]
-    if sorted(landed) != sorted(land):
-        problems.append(
-            f'ch{ordinal} land 必须恰落一次：expected={sorted(land)},got={sorted(landed)}')
-    # A 相就把「因果端点根本没进任何场」挡下来，别等到 B 之后才发现整书要重出。
-    # 逆序只在正式计划上作 INFO 报读数，A 相不据此拒稿（倒叙本来就合法）。
-    positions = checks.causal_scene_positions(
-        scenes, land_key='land_fact_aliases',
-        context_key='context_fact_aliases')
-    missing_causal, _reversed_causal = checks.causal_scene_findings(
-        list(source.get('causal_edges') or []),
-        positions,
-        before_key='before_alias', after_key='after_alias')
-    if missing_causal:
-        problems.append(f'ch{ordinal} 因果端点未入候选场：{missing_causal}')
-    hard_relations = [
-        row for row in list(source.get('narrative_relations') or [])
-        if row.get('enforcement') == 'hard'
-    ]
-    relation_bad = checks.narrative_relation_scene_findings(
-        hard_relations,
-        positions, suffix='_alias')
-    story_time_bad, _story_time_unknown = checks.narrative_story_time_findings(
-        hard_relations, scenes,
-        suffix='_alias', land_key='land_fact_aliases')
-    relation_bad.extend(story_time_bad)
-    if relation_bad:
-        problems.append(f'ch{ordinal} HARD 叙事关系未满足：{relation_bad}')
-    problems.extend(
-        f'ch{ordinal}.{row} context 越界' for row in checks.context_ref_findings(
-            scenes, context_obligation_refs=context,
-            land_key='land_fact_aliases', context_key='context_fact_aliases'))
-    for index, scene in enumerate(scenes):
-        prefix = f'ch{ordinal}.scene{index + 1}'
-        state_refs = set(scene.get('entry_state_aliases') or []) | set(
-            scene.get('exit_state_aliases') or [])
-        if state_refs - set(facts):
-            problems.append(f'{prefix} state 越界：{sorted(state_refs - set(facts))}')
-    # ⚠ 章内时态与 transition 语法**只有一处判定**：A 相选中的候选被最终
-    #   checker 用另一套时态语义拒绝，是本仓最贵的一种自相矛盾。
-    #   `unknown` 在 A 相刻意丢弃——它是留给人审的读数，不是拒稿理由。
-    chapter_state_bad, chapter_transition_bad, _unknown = \
-        checks.temporal_state_findings(
-            scenes,
-            prefix=f'ch{ordinal}',
-            land_key='land_fact_aliases',
-            entry_key='entry_state_aliases',
-            exit_key='exit_state_aliases',
-        )
-    problems.extend(chapter_state_bad)
-    problems.extend(chapter_transition_bad)
-    if scenes:
-        # 章级边界仍是 HARD，与章内非线性正交。
-        if not set(scenes[0].get('entry_state_aliases') or []).issuperset(
-                set(source.get('entry_state_aliases') or [])):
-            problems.append(f'ch{ordinal} 首场未承接章首状态')
-        # 章尾比的是「本章有没有让它成立」：落地即算成立，不要求末场再抄一遍。
-        established = set(landed) | set(scenes[-1].get('exit_state_aliases') or [])
-        if not established.issuperset(set(source.get('ending_state_aliases') or [])):
-            problems.append(
-                f'ch{ordinal} 章尾状态未在本章确立：'
-                f'{sorted(set(source.get("ending_state_aliases") or []) - established)}')
-        for label, scene in (
-            ('open_hook_goal', scenes[0]), ('end_hook_goal', scenes[-1]),
-        ):
-            refs = set((chapter.get(label) or {}).get('fact_aliases') or [])
-            if not refs.intersection(scene.get('land_fact_aliases') or []):
-                problems.append(f'ch{ordinal}.{label} 没有落到对应首/末场')
-    for label in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
-        refs = set((chapter.get(label) or {}).get('fact_aliases') or [])
-        if refs - set(facts):
-            problems.append(f'ch{ordinal}.{label} 越界：{sorted(refs - set(facts))}')
-    style_bad = checks.style_word_findings(
+    """同一编译尺子验证节点、呈现与端点；语义保真由设计审阅承担。"""
+    try:
+        current = validate_plot_design_chapter(dict(chapter), dict(source))
+        if current != chapter:
+            return ['候选未按当前 placement 和必要端点规范编译']
+    except (ValueError, KeyError, TypeError) as exc:
+        return [str(exc)]
+    return checks.style_word_findings(
         [dict(chapter)], source_chapters=[dict(source)],
-        source_facts_key='facts', source_ref_key='fact_alias',
-        land_key='land_fact_aliases', context_key='context_fact_aliases')
-    if style_bad:
-        problems.append(f'盲设计自由文本命中无据纯写法词：{style_bad[:8]}')
-    return problems
+        source_facts_key='beats', source_ref_key='alias', source_content_key='content',
+        land_key='unused', context_key='context_beat_aliases', placement_key='beat_placements')
 
 
 def _blind_candidate_problem(
@@ -754,8 +674,8 @@ def _blind_candidate_problem(
     style_bad = checks.style_word_findings(
         list(compiled.get('output_chapters') or []),
         source_chapters=list(truth.get('chapters') or []),
-        source_facts_key='facts', source_ref_key='fact_alias',
-        land_key='land_fact_aliases', context_key='context_fact_aliases',
+        source_facts_key='beats', source_ref_key='alias', source_content_key='content',
+        land_key='unused', context_key='context_beat_aliases', placement_key='beat_placements',
         reconstruction_strategy=str(compiled.get('reconstruction_strategy') or ''),
     )
     if style_bad:
@@ -824,9 +744,9 @@ class _BlindStrategyValidator:
                 refs=[f'expected={list(self.chapters)},actual={list(actual)}']),)
             return f'策略章集不闭合：expected={list(self.chapters)},actual={list(actual)}'
         style_bad = checks.style_word_findings(
-            [], source_chapters=[], source_facts_key='facts',
-            source_ref_key='fact_alias', land_key='land_fact_aliases',
-            context_key='context_fact_aliases',
+            [], source_chapters=[], source_facts_key='beats', source_content_key='content',
+            source_ref_key='alias', land_key='unused',
+            context_key='context_beat_aliases', placement_key='beat_placements',
             reconstruction_strategy=response.reconstruction_strategy)
         if style_bad:
             self.typed_failures = (typed_failures.make(
@@ -894,31 +814,6 @@ def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[st
     return system, user
 
 
-def _build_user(ctx: RunContext, up: _Upstreams) -> str:
-    from novel.core.text import render_book
-    mt = MainText.model_validate(up.main_text)
-    book_text, secidx = render_book(mt)
-    projected = prompts.project_blueprints_for_planner(up.blueprints)
-    assert up.global_g is not None
-    refs = fact_catalog(up.global_g, up.blueprints, up.main_text)
-    # ⚠ 与原型的 `compact()` 同形：**最紧的 JSON**（无空格）——
-    #   规划的 user 里带着全书原文，骨架那一段每一个空格都在挤原文的预算。
-    bs = json.dumps(projected, ensure_ascii=False, separators=(',', ':'))
-    parts = [
-        f'《{ctx.title}》',
-        prompts.BLOCK_INDEX + '\n' + secidx,
-        prompts.BLOCK_FACT_REFS + '\n'
-        + json.dumps(refs, ensure_ascii=False, separators=(',', ':')),
-        prompts.BLOCK_SKELETON + '\n' + bs,
-    ]
-    # ⚠ `book_total=True` **只在整跑这一路**：它在表底多印一行全书合计与全书目标区间，
-    #   B 相拿到的是整书候选与整书证据，因此这里按整书口径下发。
-    if (tbl := source_chars_table(up.blueprints, up.bidx, book_total=True)):
-        parts.append(prompts.BLOCK_SIZES + '\n' + tbl)
-    parts.append(prompts.BLOCK_BODY + '\n' + book_text)
-    return '\n\n'.join(parts)
-
-
 def _candidate_business(candidate: BlindCandidate) -> dict[str, Any]:
     return candidate.model_dump(by_alias=True, mode='json', exclude={'provenance'})
 
@@ -926,13 +821,16 @@ def _candidate_business(candidate: BlindCandidate) -> dict[str, Any]:
 def _build_binding_user(
     ctx: RunContext, up: _Upstreams, candidate: dict[str, Any], subject: str,
 ) -> str:
-    """B 只在冻结候选之外追加证据；候选自身不经任何重排或再投影。"""
-    return '\n\n'.join((
-        prompts.BLOCK_CANDIDATE + '\n' + json.dumps(
-            candidate, ensure_ascii=False, sort_keys=True, separators=(',', ':')),
-        prompts.BLOCK_CANDIDATE_HASH + '\n' + subject,
-        prompts.BLOCK_EVIDENCE + '\n' + _build_user(ctx, up),
-    ))
+    """聚合身份只列章请求摘要；实际模型调用使用独立完整章包，不再构造整书正文包。"""
+    baseline = build_mechanical_baseline(candidate, up.blueprints)
+    return json.dumps({
+        'binding_input_contract': STAGE4_BINDING_INPUT_CONTRACT,
+        'candidate_sha256': subject,
+        'chapters': [{'chapter_ordinal': c.chapter_ordinal, 'mechanical': c.mechanical,
+                      'workpack_sha256': _chapter_input_sha(_chapter_binding_issue(
+                          ctx, up, candidate, c, c.chapter_ordinal))}
+                     for c in baseline.chapters],
+    }, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
 def _binding_request(
@@ -956,7 +854,7 @@ def _binding_request(
     up = _Upstreams(ctx, store, need_grounding=True)
     _assert_budget_basis(up)
     catalog = build_evidence_catalog(up.blueprints)
-    system = prompts.evidence_bind_system()
+    system = prompts.chapter_binding_system()
     user = _build_binding_user(ctx, up, candidate_raw, subject)
     return (
         system, user, store, up, candidate, candidate_raw, candidate_file_sha,
@@ -986,6 +884,7 @@ def _candidate_bundle_verdict(
         blueprints=up.blueprints,
         main_text=up.main_text,
         global_g=up.global_g,
+        knowledge_links=up.knowledge_links,
         ctx=candidate_ctx,
         expected_ctx=candidate_ctx,
         ctx_link=('ok', '候选内存中的 plan/context 同源'),
@@ -1072,116 +971,41 @@ class BindingPreflight:
 def preflight_binding_candidate(
         ctx: RunContext, *, store: ArtifactStore | None = None,
 ) -> BindingPreflight:
-    """唯一 A→formal 预检：**任何 driver/probe/provider 副作用之前**可重跑。
+    """购买 B 前复用正式编译尺子核验引用、呈现、端点与预算。
 
-    从当前 A 候选与 Stage2 关闭目录构造 canonical binding witness——
-    `construct_feasible_binding_witness` 先验证关闭目录可构造，再从同一机械基线
-    构造满足材料归属的存在性样本；多场材料取允许的最晚场以免提前泄露，再复用正式 `merge_evidence_bindings`、plan ref
-    validator、WriterContext 组装与 `_candidate_bundle_verdict` 同一联合 HARD。
-    因此预检暴露的每一条失败都只可能属于 A 的设计、上游 Stage2 或判据代码：
-    **「B 选得不好」在这个预检里结构性不存在**，不会拿任意舞台选择制造 A 假红。
-    失败分类 owner 由 `contracts.invariants` 的闭合表给；B 域失败（若将来出现）
-    只进入下一相，不阻断 A。
+    这里只证明机械上有可编译绑定；选择全部候选证据不能证明语义保真或舞台合理，
+    后两者继续由现有设计、结构审阅核验，不把语义未决升级为机械不可行。
     """
     from contracts.invariants import DESIGN_REVIEW_CONTRACT, FAILURE_STOP_OWNERS
-
     store = store or ArtifactStore(ctx)
-    if not store.exists(CANDIDATE_REL):
-        raise UpstreamMissing(
-            f'{CANDIDATE_REL} 不在盘上——预检只回答已存在的当前 A 候选')
     candidate = store.read(BlindCandidate, CANDIDATE_REL)
     candidate_raw = _candidate_business(candidate)
     subject = candidate_subject_sha256(candidate_raw)
-    _same, blueprint_sha = store.read_with_sha256(ChapterBlueprints, BLUEPRINTS)
-    catalog = build_evidence_catalog(
-        store.read(ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True))
-
-    def _finish(
-            *, failures: tuple[TypedFailure, ...] = (),
-            infeasibility: tuple[dict[str, Any], ...] = (),
-    ) -> BindingPreflight:
-        owners = sorted({f.repair_owner for f in failures
-                         if f.repair_owner in FAILURE_STOP_OWNERS})
-        blocked = bool(owners) or bool(infeasibility)
-        return BindingPreflight(
-            candidate_sha256=subject,
-            blueprint_sha256=blueprint_sha,
-            review_contract=DESIGN_REVIEW_CONTRACT,
-            code_version=ctx.code,
-            status='blocked' if blocked else 'pass',
-            blocked_owners=tuple(owners),
-            failures=tuple(failures),
-            infeasibility=tuple(infeasibility),
-        )
-
-    # ① 构造性绑定可行性：不可构造 ⇒ 代码在同一关闭约束集铸造 typed witness。
-    #    这是 B 正式 infeasible 的唯一合法来源，必须在授权 B 之前就摆到 A 面前。
-    proof = prove_binding_infeasible(candidate_raw, catalog)
-    if proof:
-        infeasible_failures = tuple(
-            typed_failures.make(
-                candidate_sha256=subject,
-                code=str(row.get('constraint_code') or 'missing_chapter_catalog'),
-                rule=str(row.get('constraint_code') or 'missing_chapter_catalog'),
-                chapter_ordinal=row.get('chapter_ordinal'),
-                surfacing='stage4.design',
-                refs=[str(ref) for ref in (row.get('closed_refs') or [])])
-            for row in proof)
-        return _finish(failures=infeasible_failures, infeasibility=tuple(proof))
-    constructive = construct_feasible_binding_witness(candidate_raw, catalog)
+    _, blueprint_sha = store.read_with_sha256(ChapterBlueprints, BLUEPRINTS)
     up = _Upstreams(ctx, store, need_grounding=True)
-    # 预检样本不能把有事实归属的材料随意塞到首场，再把该错误归责于 A。
-    # 这里只证明存在性，正式 B 仍须显式裁决各歧义，不采用这个样本充当模型决定。
-    baseline = build_mechanical_baseline(candidate_raw, up.blueprints)
-    constructive_rows = {
-        int(row['output_ordinal']): row['scenes']
-        for row in constructive['chapters']}
-    for chapter in baseline.chapters:
-        if chapter.mechanical:
-            constructive_rows[chapter.chapter_ordinal] = chapter.binding_rows()
-            continue
-        row = next(row for row in candidate_raw['output_chapters']
-                   if row['output_ordinal'] == chapter.chapter_ordinal)
-        scene_ids = [scene['candidate_scene_id'] for scene in row['scenes']]
-        resolutions = []
-        for ambiguity in chapter.ambiguities:
-            resolution: dict[str, Any] = {'ambiguity_id': ambiguity.ambiguity_id}
-            if ambiguity.kind == 'stage_signature_conflict':
-                resolution['stage_ref'] = ambiguity.candidates[0]
-            else:
-                allowed = ambiguity.candidates if ambiguity.kind == 'material_multi_scene' else scene_ids
-                resolution['candidate_scene_id'] = next(scene for scene in reversed(scene_ids)
-                                                        if scene in allowed)
-            resolutions.append(resolution)
-        constructive_rows[chapter.chapter_ordinal] = apply_chapter_resolutions(
-            chapter, resolutions, scene_ids=scene_ids)
-    canonical_witness = {
-        'status': constructive['status'],
-        'candidate_sha256': constructive['candidate_sha256'],
-        'chapters': [
-            {'output_ordinal': ordinal, 'scenes': constructive_rows[ordinal]}
-            for ordinal in sorted(constructive_rows)
-        ],
-        'binding_concerns': constructive.get('binding_concerns') or [],
-    }
-    try:
-        merged = merge_evidence_bindings(candidate_raw, canonical_witness, catalog)
-        adopt_plan_response(merged, up.blueprints, up.bidx)
-        assert up.global_g is not None
-        validate_plan_refs(
-            merged, fact_catalog(
-                up.global_g, up.blueprints, up.main_text))
-        build_writer_context(merged, up.global_g, up.blueprints, up.main_text, knowledge_links=up.knowledge_links)
-    except (BlindPlanError, RefusedByStructure) as exc:
-        return _finish(failures=(typed_failures.make(
-            candidate_sha256=subject, code='blind_compile_refused',
-            rule='blind_compile_refused', surfacing='stage4.design',
-            refs=[str(exc)[:200]]),))
-    witness = WitnessCollector()
-    _hits, _feedback = _candidate_bundle_verdict(
-        merged, up, witness=witness)
-    return _finish(failures=witness.finalize(
-        candidate_sha256=subject, surfacing='stage4.design'))
+    catalog = build_evidence_catalog(up.blueprints)
+    proof = prove_binding_infeasible(candidate_raw, catalog)
+    failures = ()
+    if not proof:
+        try:
+            constructive = construct_feasible_binding_witness(candidate_raw, catalog)
+            merged = merge_evidence_bindings(candidate_raw, constructive, catalog)
+            adopt_plan_response(merged, up.blueprints, up.bidx)
+            witness = WitnessCollector()
+            _candidate_bundle_verdict(merged, up, witness=witness)
+            failures = witness.finalize(candidate_sha256=subject, surfacing='stage4.design')
+        except (ValueError, RefusedByStructure) as exc:
+            failures = (typed_failures.make(
+                candidate_sha256=subject, code='blind_compile_refused',
+                rule='blind_compile_refused', surfacing='stage4.design',
+                refs=[str(exc)[:200]]),)
+    owners = tuple(sorted({f.repair_owner for f in failures
+                           if f.repair_owner in FAILURE_STOP_OWNERS}))
+    return BindingPreflight(
+        candidate_sha256=subject, blueprint_sha256=blueprint_sha,
+        review_contract=DESIGN_REVIEW_CONTRACT, code_version=ctx.code,
+        status='blocked' if owners or proof else 'pass',
+        blocked_owners=owners, failures=failures, infeasibility=tuple(proof))
 
 
 def _preflight_blocked_text(preflight: BindingPreflight) -> str:
@@ -1326,263 +1150,69 @@ def _chapter_binding_issue(
         ctx: RunContext, up: _Upstreams, candidate_raw: dict[str, Any],
         chapter_baseline, chapter_ordinal: int,
 ) -> _ChapterBindingIssue:
-    """铸造章级 B 的 prompt 与唯一 issued-ref 尺。
-
-    ⚠ **测试禁止出现其他章正文**：本构造器不下发全书原文，也不下发其他章的
-    blueprint 行；相邻章只给 entry/ending 状态引用的**一行摘要**（承接判断的
-    最小必要），不下发其正文、场景或材料。上一章摘要里的引用不进入本章
-    ``issued_ref_allowlist``，因此只能阅读、不能写进本章 concern。
-    """
-    chapter = next(
-        (row for row in (candidate_raw.get('output_chapters') or [])
-         if int(row.get('output_ordinal') or 0) == chapter_ordinal), None)
-    if chapter is None:
-        raise UpstreamMissing(f'候选没有第 {chapter_ordinal} 章')
-    source_by_ordinal = {
-        int(row.get('chapter_ordinal') or 0): str(row.get('text') or '')
-        for row in up.main_text}
-    source_text = source_by_ordinal.get(chapter_ordinal)
-    if not source_text:
-        raise UpstreamMissing(f'第 {chapter_ordinal} 章原文为空或缺失')
-    bp_by_ordinal = {
-        int(row.get('chapter_ordinal') or 0): row
-        for row in (up.blueprints.get('blueprints') or [])}
-    bp = bp_by_ordinal.get(chapter_ordinal) or {}
-    beats = {str(beat.get('beat_id')): beat for beat in (bp.get('beats') or [])}
-    atoms = {
-        str(atom.get('fact_id')): atom
-        for atom in (bp.get('fact_atoms') or [])}
-    neighbor = next(
-        (row for row in (candidate_raw.get('output_chapters') or [])
-         if int(row.get('output_ordinal') or 0) == chapter_ordinal - 1), None)
-
-    # B 要按已审 A 的真实语义选材料；opaque alias 本身没有词义，不能只给
-    # 场景 alias 列表和另一张无法联结的正式 fact 表。映射来自同一冻结候选，
-    # 只投影本章证据，绝不凭编号/场序猜关联或重新铸 alias。
-    alias_to_formal: dict[str, str] = {}
-    formal_to_alias: dict[str, str] = {}
-    alias_tables: dict[str, dict[str, str]] = {}
-    for field_name in ('fact_aliases', 'participant_aliases'):
-        table = candidate_raw.get(field_name)
-        if not isinstance(table, Mapping):
-            raise ProvenanceRefused(
-                f'stage4.plan ch{chapter_ordinal} 候选缺 {field_name} 映射')
-        alias_tables[field_name] = {}
-        for alias, formal in table.items():
-            if (not isinstance(alias, str) or not alias
-                    or not isinstance(formal, str) or not formal):
-                raise ProvenanceRefused(
-                    f'stage4.plan ch{chapter_ordinal} {field_name} 映射身份为空或非文本')
-            previous = formal_to_alias.get(formal)
-            if previous is not None:
-                raise ProvenanceRefused(
-                    f'stage4.plan ch{chapter_ordinal} 正式引用 {formal} '
-                    f'映到多个 opaque alias：{previous}, {alias}')
-            previous_formal = alias_to_formal.get(alias)
-            if previous_formal is not None:
-                raise ProvenanceRefused(
-                    f'stage4.plan ch{chapter_ordinal} opaque alias {alias} '
-                    f'映到多个正式引用：{previous_formal}, {formal}')
-            alias_to_formal[alias] = formal
-            formal_to_alias[formal] = alias
-            alias_tables[field_name][alias] = formal
-
-    chapter_participants = {
-        ref for atom in atoms.values()
-        for ref in (atom.get('participant_char_ids') or [])}
-    present_participants = {
-        ref for beat in beats.values()
-        for ref in (beat.get('present_char_ids') or [])}
-    dialogue_participants = {
-        party['char_id'] for beat in beats.values()
-        for hinge in beat.get('hinges') or []
-        for dialogue in [hinge.get('dialogue') or {}]
-        for party in [dialogue.get('speaker'), *(dialogue.get('addressees') or [])]
-        if isinstance(party, dict) and party.get('kind') == 'character'}
-    local_alias_tables: dict[str, dict[str, str]] = {}
-    for field_name, required_refs in (
-            ('fact_aliases', set(atoms)),
-            ('participant_aliases', chapter_participants)):
-        table = alias_tables[field_name]
-        missing = sorted(required_refs - set(table.values()))
-        if missing:
-            raise ProvenanceRefused(
-                f'stage4.plan ch{chapter_ordinal} {field_name} 缺本章映射：{missing}')
-        local_refs = required_refs
-        if field_name == 'participant_aliases':
-            # A 的 participant 表只保证 fact 参与者；纯舞台或对白人物可合法无
-            # opaque alias，仍以正式 char_id 阅读，不能为此发明映射/业务闸。
-            local_refs = local_refs | present_participants | dialogue_participants
-        local_alias_tables[field_name] = {
-            alias: formal for alias, formal in table.items()
-            if formal in local_refs}
-
-    candidate_payload = BlindCandidateChapter.model_validate(chapter).model_dump(
-        mode='json')
-    scene_fact_fields = (
-        'land_fact_aliases', 'context_fact_aliases',
-        'entry_state_aliases', 'exit_state_aliases')
-    referenced_aliases = {
-        alias for scene in candidate_payload['scenes']
-        for field_name in scene_fact_fields for alias in scene[field_name]}
-    referenced_aliases.update(
-        scene['turn_fact_alias'] for scene in candidate_payload['scenes'])
-    for field_name in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
-        referenced_aliases.update(candidate_payload[field_name]['fact_aliases'])
-    unknown = sorted(referenced_aliases - set(local_alias_tables['fact_aliases']))
-    if unknown:
-        raise ProvenanceRefused(
-            f'stage4.plan ch{chapter_ordinal} 冻结候选含非本章事实 alias：{unknown}')
-    # concern 的规范化也用这张实际送达的局部表，不能持有全书映射后另猜范围。
-    formal_to_alias = {
-        formal: alias for table in local_alias_tables.values()
-        for alias, formal in table.items()}
-
-    fact_payload = [
-        {'fact_id': atom.get('fact_id'), 'claim': atom.get('claim'),
-         'kind': atom.get('kind'),
-         'participant_char_ids': atom.get('participant_char_ids') or [],
-         'obligation': atom.get('obligation'),
-         'source_beat_ref': atom.get('source_beat_ref'),
-         'source_start': (atom.get('source') or {}).get('start'),
-         'source_end': (atom.get('source') or {}).get('end'),
-         'source_text': (
-             (atom.get('source') or {}).get('text')
-             if isinstance(atom.get('source'), dict) else None)}
-        for atom in atoms.values()]
-    stage_payload = [
-        {'stage_ref': beat.get('beat_id'),
-         'span_start': (beat.get('span') or {}).get('start'),
-         'span_end': (beat.get('span') or {}).get('end'),
-         'time_layer': beat.get('time_layer'),
-         'place': beat.get('place'),
-         'present_char_ids': beat.get('present_char_ids') or [],
-          'materials': [stage4_material_evidence(hinge)
-                        for hinge in (beat.get('hinges') or [])]}
-        for beat in beats.values()]
-    baseline_payload = {
-        'scene_stage_refs': {
-            scene_id: list(refs)
-            for scene_id, refs in chapter_baseline.scene_stage_refs.items()},
-        'scene_material_refs': {
-            scene_id: list(refs)
-            for scene_id, refs in chapter_baseline.scene_material_refs.items()},
-    }
-    ambiguity_payload = [
-        ambiguity.to_payload() for ambiguity in chapter_baseline.ambiguities]
-
-    scene_ids = frozenset(
-        str(scene['candidate_scene_id'])
-        for scene in candidate_payload['scenes']
-        if isinstance(scene.get('candidate_scene_id'), str))
-    issued_refs: set[str] = set(scene_ids)
-    issued_refs.update(dialogue_participants)
-
-    def issue(value: object) -> None:
-        if isinstance(value, str) and value:
-            issued_refs.add(value)
-
-    issued_refs.update(referenced_aliases)
-    for atom in fact_payload:
-        issue(atom.get('fact_id'))
-        issue(atom.get('source_beat_ref'))
-        for ref in atom['participant_char_ids']:
-            issue(ref)
-    for stage in stage_payload:
-        issue(stage.get('stage_ref'))
-        for ref in stage['present_char_ids']:
-            issue(ref)
-        for material in stage['materials']:
-            issue(material.get('material_ref'))
-    for scene_id, refs in baseline_payload['scene_stage_refs'].items():
-        issue(scene_id)
-        for ref in refs:
-            issue(ref)
-    for scene_id, refs in baseline_payload['scene_material_refs'].items():
-        issue(scene_id)
-        for ref in refs:
-            issue(ref)
-    for ambiguity in ambiguity_payload:
-        issue(ambiguity.get('candidate_scene_id'))
-        issue(ambiguity.get('material_ref'))
-        for ref in ambiguity.get('candidates') or []:
-            issue(ref)
-
-    neighbor_payload: dict[str, Any] | None = None
-    if neighbor is not None:
-        previous_bp = bp_by_ordinal.get(chapter_ordinal - 1) or {}
-        current_scenes = chapter.get('scenes') or []
-        previous_scenes = neighbor.get('scenes') or []
-        neighbor_payload = {
-            'previous_chapter_ordinal': neighbor.get('output_ordinal'),
-            'previous_ending_state_refs':
-                previous_bp.get('ending_state_refs') or [],
-            'previous_exit_state_aliases': (
-                previous_scenes[-1].get('exit_state_aliases') or []
-                if previous_scenes else []),
-            'current_entry_state_refs': bp.get('entry_state_refs') or [],
-            'current_entry_state_aliases': (
-                current_scenes[0].get('entry_state_aliases') or []
-                if current_scenes else []),
-            'note': '仅承接判断；不得引用、复述或推断上一章正文',
-        }
-        # 边界事实的文字也是实际依赖。只给 ID 会使“同一 ID 的状态改了”
-        # 既对模型不可见，也无法正确使相邻章的历史绑定失效；仍不下发邻章正文。
-        boundary_refs = set(neighbor_payload['previous_ending_state_refs'])
-        boundary_refs.update(
-            alias_to_formal.get(alias, alias)
-            for alias in neighbor_payload['previous_exit_state_aliases'])
-        neighbor_payload['previous_state_facts'] = [
-            {'fact_id': atom.get('fact_id'), 'claim': atom.get('claim'),
-             'kind': atom.get('kind'), 'obligation': atom.get('obligation')}
-            for atom in previous_bp.get('fact_atoms') or []
-            if atom.get('fact_id') in boundary_refs]
-        # 只把当前章一侧收入 concern 闭集；上一章一侧只是只读边界摘要。
-        for field_name in (
-                'current_entry_state_refs', 'current_entry_state_aliases'):
-            for ref in neighbor_payload[field_name]:
-                issue(ref)
-
-    # 章内正式 fact_id / char_id 既可被模型原样引用，也必须有一个聚合后仍在
-    # 同一闭集里的 canonical alias。映射的其他章值不会因此进入本章 allowlist。
-    issued_refs.update(
-        formal_to_alias[ref]
-        for ref in tuple(issued_refs)
-        if ref in formal_to_alias)
-    evidence_payload = {
+    """章级 B 与结构审阅共用同一必要证据闭包，聚合器只保留请求摘要。"""
+    from contracts.schema.plot import PlotBlueprint
+    from novel.stages.stage4.plot_binding import validate_request_references
+    from novel.stages.stage4.plot_materials import chapter_materials
+    try:
+        blueprint = PlotBlueprint.model_validate(next(r for r in up.blueprints['blueprints']
+                                                       if r['chapter_ordinal'] == chapter_ordinal))
+        chapter = validate_request_references(candidate_raw, blueprint, up.knowledge_links, chapter_ordinal)
+    except (ValueError, KeyError, TypeError, StopIteration) as exc:
+        raise ProvenanceRefused(f'章级 B 输入引用无法闭合：{exc}') from exc
+    allowed_aliases = set(candidate_raw['subject_aliases']) | set(candidate_raw['endpoint_aliases'])
+    def collect(value):
+        if isinstance(value, (list, tuple)):
+            return set().union(*(collect(v) for v in value), set())
+        if isinstance(value, dict):
+            return set().union(*(collect(v) for v in value.values()), set())
+        return {value} & allowed_aliases if isinstance(value, str) else set()
+    used = collect(chapter)
+    local_mapping = {key: {token: value for token, value in candidate_raw[key].items()
+                           if token in used}
+                     for key in ('subject_aliases', 'endpoint_aliases', 'participant_aliases')}
+    materials = chapter_materials(chapter_ordinal, up.blueprints, up.global_g,
+        up.knowledge_links, up.main_text, list(local_mapping['subject_aliases'].values()))
+    bp = materials.blueprint
+    # 场景直接引用之外，还要解释节点人物和实际依赖主体；别名与材料共用同一闭包。
+    # 只选择已登记 alias，不把其他章或未消费的 Global 主体整表下发。
+    needed = {(row.subject_ref.kind, row.subject_ref.ref)
+              for row in [*materials.global_subjects, *materials.support_subjects]}
+    needed.update(('beat', row.beat_id) for row in bp.beats)
+    needed.update(('state', row.state_id) for row in bp.states)
+    for token, value in candidate_raw['subject_aliases'].items():
+        if (value['kind'], value['ref']) in needed:
+            local_mapping['subject_aliases'][token] = value
+            used.add(token)
+    local_mapping['participant_aliases'] = {
+        token: value['ref'] for token, value in local_mapping['subject_aliases'].items()
+        if value['kind'] == 'character'}
+    scene_ids = frozenset(s['candidate_scene_id'] for s in chapter['scenes'])
+    issued = set(scene_ids) | used | set(materials.source_context_catalog)
+    issued.update(a.evidence_id for a in bp.evidence_anchors)
+    issued.update(a.evidence_ref for a in materials.evidence_anchors)
+    issued.update(b.beat_id for b in bp.beats)
+    issued.update(s.state_id for s in bp.states)
+    issued.update(c.constraint_id for c in bp.constraints)
+    issued.update(r.subject_ref.ref for r in [*materials.global_subjects, *materials.support_subjects])
+    issued.update(o['event']['obligation_id'] for o in materials.knowledge_events)
+    inverse = {}
+    for token, value in local_mapping['subject_aliases'].items():
+        inverse.setdefault(value['ref'], []).append(token)
+        issued.add(value['ref'])
+    formal_to_alias = {ref: values[0] for ref, values in inverse.items() if len(values) == 1}
+    material = {
         'binding_input_contract': STAGE4_BINDING_INPUT_CONTRACT,
-        'chapter_source_text': source_text,
-        **local_alias_tables,
-        'issued_ref_allowlist': sorted(issued_refs),
-        'fact_atoms': fact_payload,
-        'stages': stage_payload,
+        'candidate': chapter, 'mapping': local_mapping,
+        'materials': materials.model_dump(mode='json'),
+        'baseline': list(chapter_baseline.scenes),
+        'ambiguities': [a.to_payload() for a in chapter_baseline.ambiguities],
+        'issued_ref_allowlist': sorted(issued),
     }
-    parts = [
-        f'《{ctx.title}》第 {chapter_ordinal} 章（本章唯一；不含其他章）',
-        prompts.BLOCK_CHAPTER_CANDIDATE + _PROMPT_NL + json.dumps(
-            candidate_payload,
-            ensure_ascii=False, sort_keys=True, separators=(',', ':')),
-        prompts.BLOCK_CHAPTER_EVIDENCE + _PROMPT_NL + json.dumps(
-            evidence_payload,
-            ensure_ascii=False, sort_keys=True, separators=(',', ':')),
-        prompts.BLOCK_CHAPTER_BASELINE + _PROMPT_NL + json.dumps(
-            baseline_payload,
-            ensure_ascii=False, sort_keys=True, separators=(',', ':')),
-        prompts.BLOCK_CHAPTER_AMBIGUITIES + _PROMPT_NL + json.dumps(
-            ambiguity_payload,
-            ensure_ascii=False, sort_keys=True, separators=(',', ':')),
-    ]
-    if neighbor_payload is not None:
-        parts.append(prompts.BLOCK_CHAPTER_NEIGHBORS + _PROMPT_NL + json.dumps(
-            neighbor_payload,
-            ensure_ascii=False, sort_keys=True, separators=(',', ':')))
     return _ChapterBindingIssue(
-        chapter_ordinal=chapter_ordinal,
-        scene_ids=scene_ids,
-        issued_refs=frozenset(issued_refs),
-        user=_PROMPT_NL.join(parts),
-        formal_to_alias=formal_to_alias,
-    )
+        chapter_ordinal=chapter_ordinal, scene_ids=scene_ids, issued_refs=frozenset(issued),
+        user=json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(',', ':')),
+        formal_to_alias=formal_to_alias)
 
 
 def _business_witness_chain(ctx: RunContext, prepared: PlanCandidateContext) -> str:
@@ -1729,9 +1359,7 @@ class _BindingValidator:
                 self.candidate, raw, self.catalog)
             adopt_plan_response(data, self.up.blueprints, self.up.bidx)
             assert self.up.global_g is not None
-            validate_plan_refs(
-                data, fact_catalog(
-                    self.up.global_g, self.up.blueprints, self.up.main_text))
+            validate_plot_plan(data, self.up.blueprints, self.up.global_g, self.up.knowledge_links)
         except (BlindPlanError, RefusedByStructure) as exc:
             self.typed_failures = (typed_failures.make(
                 candidate_sha256=witness_sha, code='binding_compile_refused',
@@ -1885,8 +1513,7 @@ def _gate_and_write(ctx: RunContext, store: ArtifactStore, data: dict[str, Any],
     """
     data.pop('_provenance', None)
     assert up.global_g is not None
-    validate_plan_refs(
-        data, fact_catalog(up.global_g, up.blueprints, up.main_text))
+    validate_plot_plan(data, up.blueprints, up.global_g, up.knowledge_links)
     art = PlanChapters.model_validate({**data, '_provenance': provenance})
     outcomes = _judge(store, {**data, '_provenance': provenance.model_dump(by_alias=True)},
                       up, with_ctx_link=False)
@@ -2600,7 +2227,7 @@ def _design_source_response(source: Any, chapter: DesignChapterContext) -> Blind
     """同一正式来源入口接纳模型局部稿和人工完整章稿，保留原始来源账。"""
     raw = source.response_payload
     if source.origin == 'human':
-        from novel.stages.stage4.blind import localize_blind_chapter_edit
+        from novel.stages.stage4.plot_design import localize_blind_chapter_edit
         validator = chapter.validator
         raw = localize_blind_chapter_edit(raw, chapter.local_mapping, validator.formal_mapping,
             truth_chapter=validator.truth_chapter, chapter_weight=chapter.chapter_weight)
@@ -2995,7 +2622,7 @@ def _repair_instruction_rows(
         if isinstance(scene, Mapping)
     }
     global_to_local: dict[str, str] = {}
-    for label in ('fact_aliases', 'participant_aliases'):
+    for label in ('subject_aliases', 'endpoint_aliases', 'participant_aliases'):
         local_to_global = chapter.local_mapping.get(label)
         if not isinstance(local_to_global, Mapping):
             raise ProvenanceRefused(
@@ -3011,18 +2638,6 @@ def _repair_instruction_rows(
         unknown_scenes = sorted(set(constraint.scene_refs) - allowed_scenes)
         unknown_aliases = sorted(
             set(constraint.opaque_aliases) - set(global_to_local))
-        effect = None
-        if constraint.effect is not None:
-            raw_effect = constraint.effect.model_dump(mode='json')
-            effect = {}
-            for key, value in raw_effect.items():
-                if key.endswith('_alias'):
-                    if value not in global_to_local:
-                        unknown_aliases.append(str(value))
-                    else:
-                        effect[key] = global_to_local[str(value)]
-                else:
-                    effect[key] = value
         if unknown_scenes or unknown_aliases:
             raise ProvenanceRefused(
                 f'ch{scope.output_ordinal} repair constraint={constraint.code} '
@@ -3033,7 +2648,6 @@ def _repair_instruction_rows(
             # 顺序不排序：disclosure/anchor 契约明示它就是目标顺序。
             'opaque_aliases': [
                 global_to_local[alias] for alias in constraint.opaque_aliases],
-            'effect': effect,
             'instruction': DESIGN_REPAIR_CODE_INSTRUCTIONS[constraint.code],
         })
     return rows
@@ -3043,7 +2657,7 @@ def _assert_repair_constraint_set(
     scope: DesignRepairChapterScope, *, strategy_epoch: str,
     chapter: Mapping[str, Any] | None = None,
 ) -> None:
-    """运行时独立复核累计集身份，并让 typed relation 真正成为落盘 HARD。"""
+    """复核累计集身份；修复不能借换 scope 或父候选洗掉历史要求。"""
     if not scope.is_v3:
         return
     expected = _canonical_sha256({
@@ -3058,24 +2672,8 @@ def _assert_repair_constraint_set(
     if expected != scope.constraint_set_sha256:
         raise ProvenanceRefused(
             f'ch{scope.output_ordinal} repair constraint_set SHA 与累计内容不符')
-    if chapter is None:
-        return
-    relations = [
-        item.effect.model_dump(mode='json')
-        for item in scope.accumulated_constraints
-        if item.effect is not None
-    ]
-    if not relations:
-        return
-    try:
-        verdict = evaluate_relation_constraints(relations, chapter)
-    except DesignEvolutionError as exc:
-        raise ProvenanceRefused(
-            f'ch{scope.output_ordinal} 累计 typed relation 无法判定：{exc}') from exc
-    if verdict.unclosed:
-        raise ProvenanceRefused(
-            f'ch{scope.output_ordinal} 仍未关闭累计 typed relation：'
-            f'{[row.constraint_sha256 for row in verdict.unclosed]}')
+    # 语义约束仅引用当前 Blueprint 主体；端点和 placement 的确定性判据
+    # 由普通 A 编译与预检执行。语义保真仍由修复后的独立章审裁决。
 
 
 def _repair_chapter_context(
@@ -7300,6 +6898,7 @@ def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:
         {**asm.ctx, '_provenance': ctx.free_provenance(CtxProvenance)})
     outcomes = checks.check(
         base, blueprints=up.blueprints, main_text=up.main_text, global_g=up.global_g,
+        knowledge_links=up.knowledge_links,
         ctx=asm.ctx, expected_ctx=asm.ctx, ctx_link=None,
         ctx_source='本次内存现算的恒等基线，不比来源', bidx=up.bidx)
     return (sum(len(c['scenes']) for c in base['output_chapters']),

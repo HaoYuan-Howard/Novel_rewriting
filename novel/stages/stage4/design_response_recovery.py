@@ -69,6 +69,10 @@ def available(ctx: RunContext) -> bool:
     ctx = RunContext(novel_dir=ctx.novel_dir, node=ctx.node, paid=False, code=ctx.code,
         cache=ctx.cache, readonly=True, ledger=CostLedger(path=ledger_path(ctx.novel_dir.parent)),
         observer=lambda _event: None)
+    # 没有任何 Stage4 历史请求就不存在待恢复回答；进度查询不能为探测一个
+    # 空恢复槽位编译整套 Executor 请求。来源索引损坏仍由原读取器明确拒绝。
+    if not stage4_runs._plan_source_run_ids(ctx):
+        return False
     return any(next(_sources(ctx, unit), None) is not None for unit, _validator, _state in _units(ctx))
 
 

@@ -38,7 +38,7 @@ def _old_book(tmp_path, version):
     return book, sid, target
 
 
-@pytest.mark.parametrize('version', [1, 2, 3, 4, 5, 6, 8, None, 'missing', 7.0])
+@pytest.mark.parametrize('version', [1, 2, 3, 4, 5, 6, 7, 9, None, 'missing', 7.0, 8.0])
 @pytest.mark.parametrize('entry', ['service', 'http', 'cli'])
 def test_retired_approval_versions_refuse_all_real_entry_points_and_restart(
         tmp_path, capsys, version, entry):

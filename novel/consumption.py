@@ -17,7 +17,10 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Final, Mapping
+from typing import Any, Callable, Final, Mapping, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from contracts.schema.dependencies import DependencyManifest, ScopeSelection
 
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
@@ -118,131 +121,60 @@ def stage1_stage0_source(data: object) -> object:
 
 # ── stage4.plan / stage4.context ─────────────────────────────────────────────
 
-def _stage2_source(source: object) -> object:
-    if not isinstance(source, dict):
-        return None
-    return source.get('text'), source.get('start'), source.get('end')
 
 
-def stage4_material_evidence(hinge: object) -> object:
-    """B 请求与当前消费身份共用材料投影；证据坐标与语义均为实际依赖。"""
-    if not isinstance(hinge, dict):
-        return None
-    source = hinge.get('source')
-    source = source if isinstance(source, dict) else {}
-    return {
-        'material_ref': hinge.get('hinge_id'),
-        'kind': hinge.get('kind'),
-        'source_fact_refs': hinge.get('source_fact_refs'),
-        'dialogue': hinge.get('dialogue'),
-        'literal': hinge.get('literal'),
-        'source_start': source.get('start'),
-        'source_end': source.get('end'),
-        'text': source.get('text'),
-    }
 
 
-def _stage4_stages(blueprint: dict, *, material: Projection = stage4_material_evidence) -> tuple:
-    return tuple(
-        (be.get('beat_id'), be.get('time_layer'),
-         be.get('place'), tuple(be.get('present_char_ids') or []),
-         _stage2_source(be.get('span')),
-         tuple(material(h) for h in (be.get('hinges') or [])))
-        for be in (blueprint.get('beats') or []) if isinstance(be, dict)
-    )
 
 
-def _stage4_atoms(blueprint: dict) -> tuple:
-    return tuple(
-        (atom.get('fact_id'), atom.get('claim'), atom.get('kind'), atom.get('obligation'),
-         atom.get('source_beat_ref'), _stage2_source(atom.get('source')),
-         tuple(atom.get('participant_char_ids') or []))
-        for atom in (blueprint.get('fact_atoms') or []) if isinstance(atom, dict)
-    )
 
 
-def _stage4_contract(blueprint: dict) -> tuple:
-    return (
-        blueprint.get('chapter_function'),
-        _stage4_atoms(blueprint),
-        tuple((edge.get('before'), edge.get('after'))
-              for edge in (blueprint.get('causal_edges') or []) if isinstance(edge, dict)),
-        _stage4_narrative_relations(blueprint),
-        tuple(blueprint.get('entry_state_refs') or []),
-        tuple(blueprint.get('ending_state_refs') or []),
-    )
 
 
-def _stage4_narrative_relations(blueprint: dict) -> tuple:
-    """Stage4 真正消费的 typed 关系；不携带任何 SourceSpan。"""
-    fields = {
-        'story_before': ('before_fact_ref', 'after_fact_ref'),
-        'response_to': ('stimulus_fact_ref', 'response_fact_ref'),
-        'same_scene': ('left_fact_ref', 'right_fact_ref'),
-        'observes': (
-            'observer_char_id', 'observed_fact_ref', 'observation_fact_ref'),
-    }
-    rows = []
-    for relation in blueprint.get('narrative_relations') or []:
-        if not isinstance(relation, dict):
-            rows.append(('?', None, repr(relation)))
-            continue
-        kind = relation.get('kind')
-        rows.append((
-            kind,
-            relation.get('enforcement'),
-            *(relation.get(field) for field in fields.get(kind, ())),
-        ))
-    return tuple(sorted(rows, key=repr))
 
 
 def stage4_plan_blueprints(data: object) -> object:
-    """规划消费原子事实契约与舞台；叙述人称由 context 消费。"""
+    """B 的真实材料包括完整节点、状态、约束及证据；元数据不进入消费身份。"""
     if not isinstance(data, dict):
         return None
-    return sorted(
-        (b.get('chapter_ordinal'), _stage4_contract(b), _stage4_stages(b))
-        for b in (data.get('blueprints') or []) if isinstance(b, dict))
+    return sorted(data.get('blueprints') or [], key=lambda row: row['chapter_ordinal'])
 
 
 def stage4_design_blueprints(data: object) -> object:
-    """盲设计只消费去序真相图；不消费源位置、舞台、材料或数组顺序。"""
+    """规划消费完整剧情及稀疏语义，位置、原文证据和源数组顺序不属于 A 输入。"""
+    from contracts.schema.plot import PlotBlueprint
     if not isinstance(data, dict):
         return None
     rows = []
-    for blueprint in (data.get('blueprints') or []):
-        if not isinstance(blueprint, dict):
-            continue
-        atoms = sorted(
-            (atom.get('fact_id'), atom.get('claim'), atom.get('kind'),
-             atom.get('obligation'), tuple(sorted(atom.get('participant_char_ids') or [])))
-            for atom in (blueprint.get('fact_atoms') or []) if isinstance(atom, dict)
-        )
-        edges = sorted(
-            (edge.get('before'), edge.get('after'))
-            for edge in (blueprint.get('causal_edges') or []) if isinstance(edge, dict)
-        )
-        rows.append((
-            blueprint.get('chapter_ordinal'), blueprint.get('chapter_function'),
-            tuple(atoms), tuple(edges),
-            _stage4_narrative_relations(blueprint),
-            tuple(sorted(blueprint.get('entry_state_refs') or [])),
-            tuple(sorted(blueprint.get('ending_state_refs') or [])),
-        ))
-    return sorted(rows)
+    for raw in data.get('blueprints', []):
+        chapter = PlotBlueprint.model_validate(raw)
+        def semantic(values, key):
+            result = []
+            for value in values:
+                row = value.model_dump(mode='json')
+                row.pop('evidence_refs', None)
+                row.pop('source_contexts', None)
+                for field, item in row.items():
+                    if isinstance(item, list) and field.endswith(('_refs', '_ids')):
+                        row[field] = sorted(item)
+                result.append(row)
+            return sorted(result, key=lambda r: r[key])
+        rows.append({
+            'chapter_ordinal': chapter.chapter_ordinal,
+            'chapter_function': chapter.chapter_function,
+            'beats': semantic(chapter.beats, 'beat_id'),
+            'states': semantic(chapter.states, 'state_id'),
+            'constraints': semantic(chapter.constraints, 'constraint_id'),
+            'inherited_state_endings': semantic(chapter.inherited_state_endings, 'state_ref'),
+            'entry_state_refs': sorted(chapter.entry_state_refs),
+            'carry_out_refs': sorted(chapter.carry_out_refs),
+        })
+    return sorted(rows, key=lambda r: r['chapter_ordinal'])
 
 
 def stage4_context_blueprints(data: object) -> object:
-    """写作上下文消费叙述信息、原子事实契约与舞台。"""
-    if not isinstance(data, dict):
-        return None
-    return sorted(
-        (b.get('chapter_ordinal'),
-         tuple((n.get('grammatical_person'), n.get('narrator_char_id'),
-                n.get('focalizer_char_id'), tuple(n.get('pronoun_surfaces') or []))
-               for n in (b.get('narration') or []) if isinstance(n, dict)),
-          _stage4_contract(b), _stage4_stages(b))
-        for b in (data.get('blueprints') or []) if isinstance(b, dict))
+    """Context 编译同时校验剧情、证据、叙述和端点，不能漏掉新字段变化。"""
+    return stage4_plan_blueprints(data)
 
 
 def stage4_main_text(data: object) -> object:
@@ -460,37 +392,33 @@ def stage6_grounding(data: object) -> object:
 
 
 def stage6_context(data: object) -> object:
-    """文案消费全书故事地图。"""
+    """文案真实消费的全书剧情地图；正文只在章级节点目录保存一份。
+
+    同一投影直接进入 prompt，身份不能漏掉分场指令、状态性质或知识许可。
+    Stage6 文案允许剧透，但仍须区分真相、相信与声称，不将它们压成事实句。
+    """
     if not isinstance(data, dict):
         return None
-
-    def public_goal(value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-        return {key: value.get(key) for key in ('intent', 'facts')}
-
+    chapter_fields = (
+        'from_source_ordinals', 'semantic_contract', 'chapter_rewrite_brief',
+        'chapter_goal', 'open_hook_goal', 'end_hook_goal', 'beats', 'states',
+        'constraints', 'knowledge_events',
+    )
+    scene_fields = (
+        'slot', 'purpose', 'role', 'delivery', 'transition', 'deliveries',
+        'turn_beat_ref', 'context_beat_refs', 'state_events',
+        'knowledge_event_refs', 'constraint_refs',
+    )
     return [
         {
-            'output_ordinal': chapter.get('output_ordinal'),
-            'from_source_ordinals': chapter.get('from_source_ordinals'),
-            'semantic_contract': chapter.get('semantic_contract'),
-            'chapter_rewrite_brief': chapter.get('chapter_rewrite_brief'),
-            'chapter_goal': public_goal(chapter.get('chapter_goal')),
-            'open_hook_goal': public_goal(chapter.get('open_hook_goal')),
+            'chapter': chapter.get('output_ordinal'),
+            **{key: chapter.get(key) for key in chapter_fields},
             'scenes': [
-                {
-                    'slot': scene.get('slot'),
-                    'purpose': scene.get('purpose'),
-                    'required_facts': list(scene.get('required_facts') or []),
-                    'turn_fact': scene.get('turn_fact'),
-                    'exit_state': list(scene.get('exit_state') or []),
-                }
-                for scene in (chapter.get('scenes') or [])
-                if isinstance(scene, dict)
+                {key: scene.get(key) for key in scene_fields}
+                for scene in chapter.get('scenes') or [] if isinstance(scene, dict)
             ],
-            'end_hook_goal': public_goal(chapter.get('end_hook_goal')),
         }
-        for chapter in (data.get('chapters') or []) if isinstance(chapter, dict)
+        for chapter in data.get('chapters') or [] if isinstance(chapter, dict)
     ]
 
 
@@ -629,6 +557,10 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     },
     'stage4.design': {
         STAGE2_CHAPTER_BLUEPRINTS: stage4_design_blueprints,
+        STAGE2_CHARACTERS: stage4_characters,
+        STAGE2_KNOWLEDGE_LINKS: artifact_payload,
+        STAGE2_GLOBAL_GROUNDING: stage4_grounding,
+        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_BLIND_CHAPTER_EDIT: artifact_payload,
     },
     'stage4.plan': {
@@ -772,3 +704,225 @@ __all__ = [
     'producer_node', 'project_consumed',
     'projection_for',
 ]
+
+# 范围工作包和范围接受复用共享本模块，不能另算一份 ID-only freshness。
+def consumed_digest(value: object) -> str:
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+        allow_nan=False).encode('utf-8')).hexdigest()
+
+def plot_global_projection(data: object, chapter_ordinal: int) -> list[dict[str, Any]]:
+    """章节抽取只见截至本章已有原文依据的共享信息，不泄露未来版本或秘密。
+
+    返回的正文就是 prompt 材料，证据摘要另在同一对象记录，供审阅和请求身份使用；
+    不重新嵌入原文。没有合法证据的 Global 成员不能成为抽取许可。
+    """
+    if not isinstance(data, dict):
+        raise ValueError('Global 投影输入不可读')
+    entities = data.get('entities') or {}
+    canon = data.get('canon') or {}
+    result = []
+
+    def attested(evidence: object) -> bool:
+        return (isinstance(evidence, dict)
+                and type(evidence.get('chapter_ordinal')) is int
+                and 1 <= evidence['chapter_ordinal'] <= chapter_ordinal
+                and isinstance(evidence.get('source'), dict)
+                and bool(evidence['source'].get('text')))
+
+    def add(kind: str, ref: str, payload: object, evidence: object) -> None:
+        result.append({'kind': kind, 'ref': ref, 'value': payload,
+                       'evidence_sha256': consumed_digest(evidence)})
+
+    secrets = {row['secret_id']: row for row in canon.get('secrets', [])}
+    for row in entities.get('relations', []):
+        visibility = row['visibility']
+        if visibility['kind'] != 'public':
+            secret = secrets.get(visibility.get('secret_id'))
+            if secret is None or secret['first_reveal_chapter'] > chapter_ordinal:
+                continue
+        elif visibility['from_chapter'] > chapter_ordinal:
+            continue
+        if attested(row.get('predicate_evidence')):
+            add('relation', row['relation_id'],
+                {k: v for k, v in row.items() if k != 'predicate_evidence'},
+                row['predicate_evidence'])
+    for cid, row in entities.get('character_states', entities.get('characters', {})).items():
+        if attested(row.get('fate_evidence')):
+            add('character_state', cid, {'content': row['fate']}, row['fate_evidence'])
+    setting = canon.get('setting') or {}
+    for field, evidence_key, ref in (('时代背景', 'era_evidence', '时代背景'),
+                                      ('世界观', 'worldview_evidence', '世界观')):
+        if attested(setting.get(evidence_key)):
+            add('setting', ref, {'content': setting[field]}, setting[evidence_key])
+    for row in canon.get('world_rules', []):
+        versions = [version for version in row['versions']
+                    if attested(version.get('desc_evidence'))]
+        if versions:
+            add('world_rule', row['rule_id'], {
+                'kind': row['kind'],
+                'versions': [{k: v for k, v in version.items() if k != 'desc_evidence'}
+                             for version in versions],
+            }, [version['desc_evidence'] for version in versions])
+    for ref, row in secrets.items():
+        if (row['first_reveal_chapter'] <= chapter_ordinal
+                and attested(row.get('fact_evidence'))):
+            # 传播时间线由 KnowledgeLinks 消费；抽取只引用已揭示的共享命题。
+            add('secret', ref, {'content': row['fact']}, row['fact_evidence'])
+    return sorted(result, key=lambda row: (row['kind'], row['ref']))
+
+
+def select_scope_input(selection: 'ScopeSelection', raw: object) -> object:
+    """只输出本范围实际消费的字段；非法、缺失、重复成员都拒绝编译。"""
+    import copy
+    if selection.projection == 'plot_global_review':
+        from novel.stages.stage2.plot_review_dependencies import global_subjects
+        return global_subjects(raw, selection.selected_ids)
+    if selection.projection == 'source_ranges':
+        from novel.stages.stage2.paragraphs import span_of
+        rows = [row for row in raw if row['chapter_ordinal'] == selection.chapter_ordinal]
+        if len(rows) != 1:
+            raise ValueError('证据原文章缺失或重复')
+        source = rows[0]['text']
+        ranges = []
+        for ref in selection.selected_ids:
+            _, start, end = ref.split(':')
+            start, end = int(start), int(end)
+            left, right = span_of(source, start, end)
+            ranges.append({'evidence_ref': ref, 'start_para': start,
+                           'end_para': end, 'text': source[left:right]})
+        return {'chapter_ordinal': selection.chapter_ordinal, 'source_ranges': ranges}
+    if selection.projection == 'plot_global':
+        return plot_global_projection(raw, selection.chapter_ordinal)
+    if selection.projection == 'plot_inherited_states':
+        if not isinstance(raw, dict) or not isinstance(raw.get('blueprints'), list):
+            raise ValueError('持续状态输入不含蓝图集合')
+        chapters = raw['blueprints']
+        current = [r for r in chapters if r.get('chapter_ordinal') == selection.chapter_ordinal]
+        if len(current) != 1:
+            raise ValueError('持续状态消费章缺失或重复')
+        requested = set(current[0]['entry_state_refs'])
+        local = {r['state_id'] for r in current[0]['states']}
+        requested -= local
+        result = []
+        for chapter in chapters:
+            if chapter['chapter_ordinal'] >= selection.chapter_ordinal:
+                continue
+            anchors = {a['evidence_id']: a for a in chapter['evidence_anchors']}
+            for state in chapter['states']:
+                if state['state_id'] in requested:
+                    result.append({'chapter_ordinal': chapter['chapter_ordinal'],
+                                   'state': state,
+                                   'evidence': [{key: value for key, value in anchors[ref].items()
+                                                 if key not in ('start', 'end')}
+                                                for ref in state['evidence_refs']]})
+        if {r['state']['state_id'] for r in result} != requested:
+            raise ValueError('跨章持续状态缺少来源主体')
+        return copy.deepcopy(sorted(result, key=lambda r: r['state']['state_id']))
+    if selection.projection in ('plot_chapter', 'source_chapter'):
+        rows = (raw.get('blueprints') if isinstance(raw, dict) else None
+                ) if selection.projection == 'plot_chapter' else raw
+        if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
+            raise ValueError('范围输入不含合法章节集合')
+        matches = [r for r in rows if r.get('chapter_ordinal') == selection.chapter_ordinal]
+        if len(matches) != 1:
+            raise ValueError('消费范围必须存在唯一章节')
+        row = matches[0]
+        if selection.projection == 'source_chapter':
+            if not isinstance(row.get('text'), str):
+                raise ValueError('源章正文缺失')
+            return {'chapter_ordinal': selection.chapter_ordinal, 'text': row['text']}
+        return copy.deepcopy(row)
+    current = raw
+    for field in selection.path:
+        if not isinstance(current, dict) or field not in current:
+            raise ValueError('消费集合路径缺失')
+        current = current[field]
+    if not isinstance(current, list) or any(not isinstance(r, dict) for r in current):
+        raise ValueError('消费集合不是对象列表')
+    keyed = {}
+    for row in current:
+        key = row.get(selection.key_field)
+        if not isinstance(key, str) or not key or key in keyed:
+            raise ValueError('消费集合的主体标识缺失或重复')
+        keyed[key] = row
+    selected = (set(keyed) if selection.selected_ids is None
+                else set(selection.selected_ids))
+    if not selected <= keyed.keys():
+        raise ValueError('已登记的消费成员被删除')
+    # 全集合选择包含成员目录，新增和删除都会改变摘要。显式子集不扩大无关失效。
+    return [copy.deepcopy(keyed[key]) for key in sorted(selected)]
+
+
+def compile_scope_inputs(
+    inputs: Mapping[str, object], selections: tuple['ScopeSelection', ...], *,
+    scope: str, contract: str, depends_on_scopes: tuple[str, ...] = (),
+) -> tuple[list[object], 'DependencyManifest']:
+    from contracts.schema.dependencies import DependencyManifest, ScopeDependency
+    materials = []
+    dependencies = []
+    for selection in selections:
+        if selection.input_rel not in inputs:
+            raise ValueError(f'实际消费输入缺失：{selection.input_rel}')
+        material = select_scope_input(selection, inputs[selection.input_rel])
+        materials.append(material)
+        dependencies.append(ScopeDependency(
+            selection=selection, consumed_sha256=consumed_digest(material)))
+    manifest = DependencyManifest(
+        contract=contract, scope=scope, inputs=tuple(dependencies),
+        depends_on_scopes=depends_on_scopes)
+    return materials, manifest
+
+
+def scope_is_current(manifest: 'DependencyManifest', inputs: Mapping[str, object],
+                     *, contract: str) -> bool:
+    if manifest.contract != contract:
+        return False
+    try:
+        _, current = compile_scope_inputs(
+            inputs, tuple(row.selection for row in manifest.inputs),
+            scope=manifest.scope, contract=contract,
+            depends_on_scopes=manifest.depends_on_scopes)
+    except (KeyError, TypeError, ValueError):
+        return False
+    return current == manifest
+
+
+def invalidated_scopes(
+    manifests: tuple['DependencyManifest', ...], inputs: Mapping[str, object], *,
+    contracts: Mapping[str, str],
+) -> frozenset[str]:
+    """直接投影变化后沿实际消费者传播；失效不修改预算，也不创造新接受。"""
+    indexed = {row.scope: row for row in manifests}
+    if len(indexed) != len(manifests):
+        raise ValueError('当前范围依赖清单重复')
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(scope: str) -> None:
+        if scope in visiting:
+            raise ValueError('接受依赖出现环')
+        if scope in visited:
+            return
+        visiting.add(scope)
+        for parent in indexed[scope].depends_on_scopes:
+            if parent in indexed:
+                visit(parent)
+        visiting.remove(scope)
+        visited.add(scope)
+
+    for scope in indexed:
+        visit(scope)
+    invalid = {
+        row.scope for row in manifests
+        if row.scope not in contracts
+        or not scope_is_current(row, inputs, contract=contracts[row.scope])
+        or any(parent not in indexed for parent in row.depends_on_scopes)}
+    while True:
+        affected = {row.scope for row in manifests
+                    if invalid.intersection(row.depends_on_scopes)}
+        if affected <= invalid:
+            return frozenset(invalid)
+        invalid.update(affected)

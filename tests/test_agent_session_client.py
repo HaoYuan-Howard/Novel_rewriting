@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from contracts.schema.orchestration import AgentProfile
 from novel import agent_session_audit, prov, work_units
@@ -34,6 +34,13 @@ from novel.run import RunContext
 class _Answer(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     value: int
+
+
+class _SparseAnswer(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    endpoints: list[str] = Field(alias='anchor_bindings', min_length=0)
+    required_items: list[str]
+    enabled: bool
 
 
 class _FakeDriver(AgentDriver):
@@ -127,6 +134,49 @@ def _canonical_sha(value: object) -> str:
         value, ensure_ascii=False, sort_keys=True,
         separators=(',', ':'), allow_nan=False,
     ).encode('utf-8')).hexdigest()
+
+
+@pytest.mark.parametrize('patch,gate', [
+    ({}, None),
+    ({'anchor_bindings': None}, 'require'),
+    ({'anchor_bindings': ''}, 'require'),
+    ({'anchor_bindings': {}}, 'schema'),
+    ({'required_items': []}, 'require'),
+    ({'anchor_bindings': [1]}, 'schema'),
+    ({'anchor_bindings': '__missing__'}, 'require'),
+])
+def test_sparse_required_fields_match_llm_gate(tmp_path, patch, gate):
+    """稀疏合法空值可单次交付；缺失、null、错型和未声明的空壳仍拒绝。"""
+    from novel.llm.client import judge_payload
+    from novel.llm.prompts import required_top_level
+    from novel.llm.transport import ChatResponse
+
+    payload = {'anchor_bindings': [], 'required_items': ['必要项'], 'enabled': False}
+    payload.update(patch)
+    if payload.get('anchor_bindings') == '__missing__':
+        del payload['anchor_bindings']
+    body = json.dumps(payload, ensure_ascii=False)
+    obj, why, actual_gate, _ = judge_payload(
+        body, ChatResponse(content=body, finish_reason='stop'),
+        require=required_top_level(_SparseAnswer), model_cls=_SparseAnswer,
+        validator=None)
+    assert (None if why is None else actual_gate) == gate
+    driver = _FakeDriver([body])
+    client = SessionAgentClient(_ctx(tmp_path), _profile(), driver, max_semantic_turns=1)
+    try:
+        if gate is None:
+            result = client.ask_json('SYS', '稀疏端点表', model_cls=_SparseAnswer,
+                                     purpose='stage2.global')
+            assert result == obj and result.endpoints == [] and result.enabled is False
+        else:
+            with pytest.raises(LlmFailed):
+                client.ask_json('SYS', '稀疏端点表', model_cls=_SparseAnswer,
+                                purpose='stage2.global')
+            rows = _rows(tmp_path.joinpath(*AUDIT_REL))
+            assert any(row.get('gate') == gate for row in rows)
+        assert len(driver.calls) == 1
+    finally:
+        client.close()
 
 
 def test_parse_failure_resumes_same_session_and_links_both_ledgers(tmp_path):

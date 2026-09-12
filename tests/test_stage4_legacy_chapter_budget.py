@@ -7,7 +7,7 @@ import threading
 import pytest
 
 from contracts.schema.stage4 import EvidenceBinding
-from novel.stages.stage4 import baseline as B, plan
+from novel.stages.stage4 import plan
 from novel.store import ArtifactStore
 from novel.work_units import budget_for
 from tests.test_stage4_v3_integration import _book, _ctx, _seed_current_stage2, _design, _client
@@ -21,40 +21,17 @@ def _seed(tmp_path):
 
 
 def _one_ambiguous(monkeypatch, ordinals=(1,)):
-    build = plan.build_mechanical_baseline
-
-    def injected(candidate, blueprints):
-        original = build(candidate, blueprints)
-        chapters = []
-        for first in original.chapters:
-            if first.chapter_ordinal not in ordinals:
-                chapters.append(first)
-                continue
-            scene = sorted(first.scene_stage_refs)[0]
-            correct = first.scene_stage_refs[scene][0]
-            other = next(beat['beat_id'] for beat in blueprints['blueprints'][first.chapter_ordinal - 1]['beats']
-                         if beat['beat_id'] != correct)
-            chapters.append(B.ChapterBaseline(
-                chapter_ordinal=first.chapter_ordinal,
-                scene_stage_refs={key: () if key == scene else refs
-                                  for key, refs in first.scene_stage_refs.items()},
-                scene_material_refs=first.scene_material_refs,
-                ambiguities=(B.BaselineAmbiguity(
-                    ambiguity_id=str(first.chapter_ordinal) * 16, kind='stage_signature_conflict',
-                    chapter_ordinal=first.chapter_ordinal, candidate_scene_id=scene,
-                    candidates=(correct, other)),)))
-        return B.MechanicalBaseline(chapters=tuple(chapters))
-
-    monkeypatch.setattr(plan, 'build_mechanical_baseline', injected)
+    # 此处只验证预算与恢复调度；真实舞台歧义由 test_plot_binding 单独验证。
+    from tests.test_stage4_plan_chapters import _inject_stage_ambiguities
+    monkeypatch.setattr(plan, 'build_mechanical_baseline',
+                        _inject_stage_ambiguities(plan.build_mechanical_baseline, ordinals))
 
 
 def _answer(request):
-    lines = request.user.splitlines()
-    marker = lines.index(plan.prompts.BLOCK_CHAPTER_AMBIGUITIES)
-    ambiguities = json.loads(lines[marker + 1])
+    material = json.loads(request.user)
     return {'resolutions': [
-        {'ambiguity_id': row['ambiguity_id'], 'stage_ref': row['candidates'][0]}
-        for row in ambiguities], 'binding_concerns': []}
+        {'ambiguity_id': row['ambiguity_id'], 'selected_refs': [row['candidates'][0]]}
+        for row in material['ambiguities']], 'binding_concerns': []}
 
 
 def test_legacy_mechanical_book_needs_no_content_unit(tmp_path):

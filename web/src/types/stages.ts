@@ -3,19 +3,16 @@
  * 抓包证据在 `src/fixtures/backend_v1/`。
  */
 import type { Badge, Freshness, Severity, InboxKind } from '@/constants/vocabulary'
-import type { KnowledgeLinkReview } from './knowledgeLinks'
 import type {
-  Facts,
   Finding,
   NameRef,
-  PlanNarration,
   Provenance,
   RuleLine,
   Sources,
 } from './common'
 import type { Job } from './jobs'
+import type { Stage2ReviewCoverage } from './stage2Review'
 import type { AgentDeliveryOutcome } from './agent'
-import type { CompactApprovalCheck } from './approvals'
 
 /* ---------------------------------------------------------------- stage0 */
 
@@ -237,207 +234,10 @@ export interface ArtifactState {
 
 /* ------------------------------------------------- stage2 · 原文↔骨架 */
 
-/** 该章原文上的一个连续分区。`beat_id=null` ⇒ 空隙（hole）。服务端已切好 text。 */
-export interface ReadingSegment {
-  start: number
-  end: number
-  chars: number
-  /** 前端绝不按 start/end 自己切字符串（Python 码点 ≠ JS 码元） */
-  text: string
-  beat_id: string | null
-  /** 空隙且 ≥ uncovered_min_chars 才 true；beat 分区恒 false */
-  flagged: boolean
-}
+export type ReadingResponse = import('./plot.generated').ReadingView
 
-export interface ReadingHinge {
-  kind: string
-  hinge_id: string
-  source_fact_refs: string[]
-  dialogue: {
-    speaker: { kind: 'character'; char_id: string } | { kind: 'group'; label: string } | null
-    addressees: ({ kind: 'character'; char_id: string } | { kind: 'group'; label: string })[] | null
-    meaning: string
-    speech_act: string
-  } | null
-  literal: { kind: 'password' | 'code' | 'riddle' | 'identifier'; reason: string } | null
-  /** null = 未定位（INVALID 状态的 hinge 没有原文可引） */
-  text: string | null
-}
-
-export interface ReadingFact {
-  fact_id: string
-  claim: string
-  kind: string
-  obligation: string
-  evidence_text: string | null
-  participant_char_ids: string[]
-}
-
-export interface ReadingBeat {
-  beat_id: string
-  located: boolean
-  start: number | null
-  end: number | null
-  time_layer: string
-  place: string | null
-  present_char_ids: string[]
-  fact_atoms: ReadingFact[]
-  hinges: ReadingHinge[]
-}
-
-export interface ReadingNarration {
-  grammatical_person: string
-  narrator_char_id: string | null
-  focalizer_char_id: string | null
-  pronoun_surfaces: string[]
-}
-
-export interface ReadingResponse {
-  sid: string
-  title: string
-  chapter_ordinal: number
-  text_chars: number
-  /** false = stage2 没跑（或蓝图里没有这一章 / 读不回）。左半边仍是 stage1 的原文。 */
-  blueprint: boolean
-  segments: ReadingSegment[]
-  beats: ReadingBeat[]
-  narration: ReadingNarration[]
-  /** 没被任何 beat 覆盖的字数 */
-  loose: number
-  uncovered_min_chars: number
-  /** blueprint=false 的两种来路（没跑 / 读不回）靠它分 */
-  blueprint_state: ArtifactState
-  _provenance: Provenance | null
-}
-
-/** Stage2 Blueprint 只读异常优先工作包；它不是 approval，也不改变任何 gate。 */
-export interface BlueprintReviewCoverageSegment {
-  beat_order: number | null
-  chars: number
-  text: string
-  flagged: boolean
-}
-
-export interface BlueprintReviewFact {
-  fact_id: string
-  claim: string
-  kind: string
-  obligation: string
-  evidence_text: string | null
-  participant_char_ids: string[]
-}
-
-export interface BlueprintReviewBeat {
-  beat_id: string
-  beat_order: number
-  located: boolean
-  time_layer: string
-  place: string | null
-  present_char_ids: string[]
-  facts: BlueprintReviewFact[]
-  hinges: ReadingHinge[]
-}
-
-export type BlueprintReviewNarrativeRelation =
-  | {
-      kind: 'story_before'
-      enforcement: 'hard' | 'review'
-      before_claim: string
-      after_claim: string
-    }
-  | {
-      kind: 'response_to'
-      enforcement: 'hard' | 'review'
-      stimulus_claim: string
-      response_claim: string
-    }
-  | {
-      kind: 'same_scene'
-      enforcement: 'hard' | 'review'
-      left_claim: string
-      right_claim: string
-    }
-  | {
-      kind: 'observes'
-      enforcement: 'hard' | 'review'
-      observer_char_id: string
-      observed_claim: string
-      observation_claim: string
-    }
-
-export interface BlueprintReviewChapter {
-  chapter_ordinal: number
-  anomalous: boolean
-  attention_rules: string[]
-  chapter_function: string
-  coverage: {
-    text_chars: number
-    covered_chars: number
-    loose_chars: number
-    uncovered_min_chars: number
-    segments: BlueprintReviewCoverageSegment[]
-  }
-  beats: BlueprintReviewBeat[]
-  causal_links: { before_claim: string; after_claim: string }[]
-  narrative_relations: BlueprintReviewNarrativeRelation[]
-  entry_state_claims: string[]
-  ending_state_claims: string[]
-  narration: ReadingNarration[]
-}
-
-export interface BlueprintReviewGlobalChange {
-  item_id: string
-  subject_path: string
-  change: 'added' | 'removed' | 'changed'
-  changed_fields: string[]
-  previous_subject_sha256: string | null
-  current_subject_sha256: string | null
-  affected_chapter_ordinals: number[]
-  affected_references: string[]
-  scope_reason: string
-}
-
-export interface BlueprintReviewDelta {
-  mode: 'initial' | 'unchanged' | 'targeted' | 'full'
-  baseline_review_subject_sha256: string | null
-  current_review_subject_sha256: string
-  changed_global_items: BlueprintReviewGlobalChange[]
-  changed_blueprint_chapters: number[]
-  affected_chapter_ordinals: number[]
-  reusable_accepted_chapter_ordinals: number[]
-  reason: string
-}
-
-import type { Stage2ReviewCoverage } from './stage2Review'
-
-export interface BlueprintReviewWorkpack {
-  review_coverage?: Stage2ReviewCoverage | null
-  sid: string
-  title: string
-  read_only: true
-  auto_decisions: false
-  review_contract_version: 'stage2-blueprint-review-v7'
-  review_identity_sha256: string
-  validation_seal_sha256: string
-  review_token: string
-  global_review: Record<string, unknown>
-  knowledge_links: KnowledgeLinkReview
-  review_delta?: BlueprintReviewDelta | null
-  subject_sha256: string
-  binding_sha256: string
-  binding: {
-    blueprint_rel: string
-    subject_kind: 'formal' | 'invalid'
-    main_text_artifact_sha256: string
-    blueprint_artifact_sha256: string
-    check_report_sha256: string
-    chapter_ordinals: number[]
-  }
-  check: CompactApprovalCheck
-  accounting: CheckAccountingLine[]
-  mechanical_fields_hidden: string[]
-  /** 异常章在前；异常组和普通组内部各按章号升序。 */
-  chapters: BlueprintReviewChapter[]
+export type BlueprintReviewWorkpack = Omit<import('./plot.generated').BlueprintReviewWorkpack, 'material'> & {
+  material: import('./plot').PlotReviewMaterial
 }
 
 export interface BlueprintSeenRequest {
@@ -691,45 +491,14 @@ export interface FactRef {
   ref: string
 }
 
-export interface PlanGoal {
-  intent: 'establish' | 'advance' | 'open' | 'close' | 'withhold' | 'resolve'
-  fact_refs: FactRef[]
-}
+export type PlanGoal = import('./plot.generated').PlanGoal
 
 /** Writer-facing goal: every planning ID has already been resolved by Stage4. */
-export interface CtxGoal {
-  intent: PlanGoal['intent']
-  facts: string[]
-}
+export type CtxGoal = import('./plot.generated').CtxGoal
 
-export interface SemanticContract {
-  chapter_function: string
-  information_delta: string[]
-  character_state_delta: string[]
-  relationship_delta: string[]
-  reader_knowledge_delta: string[]
-  must_land_fact_refs: string[]
-  context_fact_refs: string[]
-  causal_edges: { before: string; after: string }[]
-  entry_state_refs: string[]
-  ending_state_refs: string[]
-}
+export type SemanticContract = import('./plot.generated').SemanticContract
 
-export interface PlanScene {
-  i: number
-  /** producer-owned 稳定槽位；模型不得重排或自造。 */
-  slot: string
-  budget_chars: number
-  purpose: string
-  role: string
-  delivery: string
-  transition: string
-  land_fact_refs: string[]
-  context_fact_refs: string[]
-  turn_fact_ref: string
-  entry_state_refs: string[]
-  exit_state_refs: string[]
-}
+export type PlanScene = import('./plot.generated').PlanSceneLine
 
 /** 持久化声明 + API 从当前计划现场复算的只读向量；取值域由 `/api/enums` 发布。 */
 export interface StructurePlanDecision {
@@ -739,17 +508,7 @@ export interface StructurePlanDecision {
   computed_change_kinds: string[]
 }
 
-export interface PlanChapterLine {
-  output_ordinal: number
-  from_source_ordinals: number[]
-  chapter_goal: PlanGoal
-  open_hook_goal: PlanGoal
-  end_hook_goal: PlanGoal
-  structure_decision: StructurePlanDecision
-  semantic_contract: SemanticContract
-  chapter_rewrite_brief: string
-  scenes: PlanScene[]
-}
+export type PlanChapterLine = import('./plot.generated').PlanChapterLine
 
 /** 章索引一行。⚠ 没有 in_band/style_hits —— 那是判据结论，去 join /check/stage4。 */
 export interface Stage4IndexRow {
@@ -760,91 +519,15 @@ export interface Stage4IndexRow {
   scenes: number
 }
 
-export interface CtxSemanticContract {
-  chapter_function: string
-  information_delta: string[]
-  character_state_delta: string[]
-  relationship_delta: string[]
-  reader_knowledge_delta: string[]
-  must_land_facts: string[]
-  context_facts: string[]
-  causal_edges: { before: string; after: string }[]
-  entry_state: string[]
-  ending_state: string[]
-}
+export type CtxSemanticContract = import('./plot.generated').CtxSemanticContract
 
 /** 写手直接执行的新场景任务（`CtxScene`）。 */
-export interface CtxScene {
-  dialogue: {
-    speaker: string | null
-    addressees: string[] | null
-    meaning: string
-    speech_act: string
-    required_facts: string[]
-  }[]
-  slot: string
-  purpose: string
-  role: string
-  delivery: string
-  transition: string
-  budget_chars: number
-  required_facts: string[]
-  context_facts: string[]
-  turn_fact: string
-  entry_state: string[]
-  exit_state: string[]
-  stages: { time_layer: string; place: string | null; present: string[] }[]
-  knowledge: {
-    kind: 'secret' | 'setup' | 'world_rule' | 'relation' | 'character_state' | 'setting'
-    content: string
-    usage: 'known' | 'reveal' | 'setup'
-    known_by: string[]
-  }[]
-  verbatim?: string[] | null
-  keep_value?: string[] | null
-  must_appear?: string[] | null
-  must_hold?: string[] | null
-}
+export type CtxScene = import('./plot.generated').CtxScene
 
 /** 一个输出章的完整任务书（`CtxChapter`）。 */
-export interface CtxChapter {
-  output_ordinal: number
-  from_source_ordinals: number[]
-  chapter_goal: CtxGoal
-  open_hook_goal: CtxGoal
-  end_hook_goal: CtxGoal
-  semantic_contract: CtxSemanticContract
-  chapter_rewrite_brief: string
-  budget_chars: number
-  /** 从当前 Stage1 正文现算；缺失或不可读时为 null。 */
-  source_chars: number | null
-  scenes: CtxScene[]
-  characters: { char_id: string; display_name: string; role: string }[]
-  narration: PlanNarration[]
-  facts: Facts
-  disclosure_windows: { subject_ref: string; content: string; allowed_slots: string[] }[]
-}
+export type CtxChapter = import('./plot.generated').CtxChapterView
 
-export interface Stage4Response {
-  sid: string
-  title: string
-  /** true = 恒等基线（没跑过 stage4，现算的「如果什么都不改」），不是真计划 */
-  identity_plan: boolean
-  /** 与 index / plan_chapter 同一份正式 plan 的结构主体；恒等基线为 null */
-  structure_subject_sha256: string | null
-  chapters: number[]
-  ordinal: number
-  index: Stage4IndexRow[]
-  plan_chapter: PlanChapterLine
-  /** null = 计划在而 ctx 不在盘上（右半边缺席，ctx_state 说明处境） */
-  ctx_chapter: CtxChapter | null
-  /** 与写手同一把尺子（prompts.target_band）；null ⇔ ctx_chapter=null */
-  writer_target: [number, number] | null
-  plan_state: ArtifactState
-  ctx_state: ArtifactState
-  _provenance: Provenance | null
-  _ctx_provenance: Provenance | null
-}
+export type Stage4Response = import('./plot.generated').Stage4View
 
 /* ---------------------------------------------------------------- stage5 */
 

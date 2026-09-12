@@ -11,15 +11,37 @@ from contracts.schema.api import (
     Stage6ApprovalWorkpack, Stage7ApprovalWorkpack,
     StructureApprovalRequest, WritingApprovalRequest,
     Stage2NodeReviewRequest,
+    BlueprintRefinementRequest, BlueprintRefinementCatalog,
 )
 from novel.api.deps import checked_sid, get_base
 from novel.errors import ApprovalRequired
-from novel.orchestrator import approvals
+from novel.orchestrator import approvals, inspection
 from novel.orchestrator.write_admission import operation_scope
 from novel.views.stage6 import stage6_approval_workpack
 from novel.views.stage7 import stage7_approval_workpack
 
 router = APIRouter(prefix='/novels/{sid}/approvals')
+
+
+@router.get('/blueprint-refinement/catalog', response_model=BlueprintRefinementCatalog)
+def get_blueprint_refinement_catalog(
+    origin: str = Query(pattern=r'^(design|structure)$'),
+    sid: str = Depends(checked_sid), base: str = Depends(get_base),
+) -> BlueprintRefinementCatalog:
+    from novel.orchestrator import blueprint_refinement
+    return blueprint_refinement.catalog(base, sid, origin=origin)
+
+
+@router.post('/blueprint-refinement', response_model=ApprovalDoc)
+def submit_blueprint_refinement(
+    request: BlueprintRefinementRequest,
+    sid: str = Depends(checked_sid), base: str = Depends(get_base),
+) -> ApprovalDoc:
+    from novel.orchestrator import blueprint_refinement
+    with operation_scope(base, sid, operation='approval-blueprint-refinement', details={
+            'origin': request.origin, 'review_token': request.review_token,
+            'chapter_ordinal': request.chapter_ordinal, 'actor': request.actor}):
+        return blueprint_refinement.submit(base, sid, request)
 
 
 @router.post('/stage2-review', response_model=ApprovalDoc)
@@ -38,7 +60,8 @@ def submit_stage2_review(
 def get_approvals(
     sid: str = Depends(checked_sid), base: str = Depends(get_base),
 ) -> ApprovalDoc:
-    return approvals.get(base, sid)
+    with inspection.approval_read_snapshot(base, sid) as (overview, code):
+        return approvals.get(base, sid, overview=overview, code=code)
 
 
 @router.get('/design/workpack', response_model=ApprovalWorkpack)
@@ -46,7 +69,8 @@ def get_design_workpack(
     sid: str = Depends(checked_sid), base: str = Depends(get_base),
 ) -> ApprovalWorkpack:
     """当前 Stage4A subject 的只读全章审阅包；不代签、不启动 B。"""
-    return approvals.design_workpack(base, sid)
+    with inspection.approval_read_snapshot(base, sid) as (overview, code):
+        return approvals.design_workpack(base, sid, overview=overview, code=code)
 
 
 @router.get('/structure/workpack', response_model=ApprovalWorkpack)
@@ -54,7 +78,8 @@ def get_structure_workpack(
     sid: str = Depends(checked_sid), base: str = Depends(get_base),
 ) -> ApprovalWorkpack:
     """当前 Stage4B 结构 subject 的只读全章审批包；不组装 Context。"""
-    return approvals.structure_workpack(base, sid)
+    with inspection.approval_read_snapshot(base, sid) as (overview, code):
+        return approvals.structure_workpack(base, sid, overview=overview, code=code)
 
 
 @router.get('/stage6/workpack', response_model=Stage6ApprovalWorkpack)

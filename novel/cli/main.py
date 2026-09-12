@@ -310,7 +310,7 @@ def _parser() -> argparse.ArgumentParser:
         'apply', help='提交 typed 审批 JSON；只写审批账，不启动作业')
     approval_apply.add_argument(
         'surface', choices=('design', 'structure', 'writing', 'stage5',
-                            'stage2_global_review', 'stage2_blueprint_review'))
+                            'stage2_global_review', 'stage2_blueprint_review', 'blueprint_refinement'))
     approval_apply.add_argument('sid')
     approval_apply.add_argument('--base', required=True)
     approval_apply.add_argument(
@@ -989,18 +989,19 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     if '--emit-review-workpack' in tokens:
         from novel.views.stage2 import blueprint_review_workpack
 
-        workpack = blueprint_review_workpack(ctx.novel_dir.parent, ctx.sid)
+        workpack = blueprint_review_workpack(ctx.novel_dir.parent, ctx.sid,
+                                             scope=_valued(flags, '--review-scope'))
         print(workpack.model_dump_json(by_alias=True, indent=2))
         return X.OK
 
     if '--emit-edit-template' in tokens:
-        from novel.stages.stage2.relation_edit import edit_template_json
+        from novel.stages.stage2.plot_edit import edit_template_json
 
         print(edit_template_json(ctx), end='')
         return X.OK
 
     if '--validate-edit' in tokens:
-        from novel.stages.stage2.relation_edit import validate_edit
+        from novel.stages.stage2.plot_edit import validate_edit
 
         preview = validate_edit(
             ctx, _valued(flags, '--validate-edit') or '')
@@ -1013,17 +1014,12 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         return X.OK
 
     if '--apply-edit' in tokens:
-        from novel.stages.stage2.relation_edit import apply_edit
+        from novel.stages.stage2.plot_edit import apply_edit
 
         artifact, report = apply_edit(
             ctx, _valued(flags, '--apply-edit') or '')
         print(render(report))
-        hard = sum(
-            relation.enforcement == 'hard'
-            for chapter in artifact.blueprints
-            for relation in chapter.narrative_relations)
-        print(f'  ✓ Stage2 v7 叙事关系已按 typed request 更新（HARD={hard}）；'
-              '未调用模型，Stage4 只会按真实消费变化转 stale')
+        print('  ✓ 完整剧情与身份映射已更新；受影响范围需重新审阅（0 模型）')
         return X.OK if report.passed else X.CHECK_FAILED
 
     if '--revalidate' in tokens:
@@ -1043,21 +1039,14 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     chapters = _chapters_of(_valued(flags, '--chapters'))
 
     if '--dry-run' in tokens:
-        system, user = extract.build_prompt(ctx, chapters=chapters)
+        system, user = extract.build_prompt(ctx, chapters=chapters,
+                                            review_token=_valued(flags, '--review-token'))
         print(f'── system（{len(system)} 字）──\n{system}')
         print(f'\n── user（{len(user)} 字）──\n{user}')
         return X.OK
 
     if '--renormalize' in tokens:
         return _report_exit(extract.run_renormalize(ctx))
-    if '--patch' in tokens:
-        # ⚠ 字段级修复用**默认缓存策略**（read+write）：中断恢复不再重复付费；
-        #   refresh-write 的语义是「明确要新采样」，不是「这是修复调用」。
-        from novel.stages.stage2.repair import run_field_patches
-        report = run_field_patches(ctx, _llm_client(ctx))
-        print('  ✓ stage2 逐章蓝图字段级修复已落盘（量级=条，未动章原字节保留）')
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
     if chapters:
         from novel.llm.cache import CachePolicy
         ctx.cache = CachePolicy.refresh()
@@ -2557,7 +2546,9 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
                 f'{a.surface} 审批模板身份不符合 typed 契约：{exc}') from exc
     else:
         raw = _approval_input(a.input)
+        from contracts.schema.api import BlueprintRefinementRequest
         model = {
+            'blueprint_refinement': BlueprintRefinementRequest,
             'design': DesignReviewRequest,
             'structure': StructureApprovalRequest,
             'writing': WritingApprovalRequest,
@@ -2575,6 +2566,9 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
             if request.node != expected_node:
                 raise TerminalState('Stage2 approval surface 与节点不匹配')
             result = approvals.approve_stage2_review(a.base, a.sid, request)
+        elif a.surface == 'blueprint_refinement':
+            from novel.orchestrator import blueprint_refinement
+            result = blueprint_refinement.submit(a.base, a.sid, request)
         elif a.surface == 'design':
             result = approvals.approve_design(a.base, a.sid, request)
         elif a.surface == 'structure':

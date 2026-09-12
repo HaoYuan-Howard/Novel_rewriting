@@ -6,6 +6,12 @@ Pydantic 载体以 `contracts/schema/stage5.py` 为准。
 
 ## 一、现役落盘面：单臂、单一正文位置
 
+当前写手输入为 WriterContext v8：章级节点目录只保存一次完整剧情，场景通过 delivery 引用
+节点及呈现指令。Stage5 仍一次生成整章，按计划 slot 确定性拼接。逐场知识许可约束输出，
+不能证明同一请求中前场没有见过后场内容。自由文本遗漏、重复、错误归因和隐含提前揭示
+由既有语义审阅及成稿检查承担；普通分场不增 Stage2 调用。正文 artifact 不机械升版，
+请求、验证和恢复身份必须绑定当前 Context、计划、知识许可及实际消费投影。
+
 ```text
 stage5/chNN.json                 canonical 正式章
 stage5/chNN.INVALID.json         同一 Chapter 载体的闸门问题稿
@@ -279,7 +285,7 @@ workpack/token，不能为“保险”再买一席或重跑 Review。旧 Review 
 `POST .../approvals/deep` 和 `DeepSelectionRequest` 都关闭式拒绝或已退役。
 
 `<base>/_service/approvals/<sid>.json` 不是产物，现役内部记录是
-`_ApprovalRecordV7(v=7)`：无 s3 的完整 gate/seen，design/structure/writing 的 current typed 决定与
+`_ApprovalRecordV8(v=8)`：无 s3 的完整 gate/seen，design/structure/writing 的 current typed 决定与
 history/proof，以及 `closure_decision/closure_history`。proof 绑定根 `clean_text` SHA-1、正式主体
 完整 SHA-256 与决定面规范 SHA-256；bool 必须与 proof/typed 决定逐格闭合。结构或写作主体变化会
 关闭依赖 gate；Review、章节、finding 或 trim 身份变化会使 closure 进入 `review_required/expired`，
@@ -467,7 +473,9 @@ artifact、不再由节点生成，也不参与完成度、Review freshness、�
 
 ## 六、判据注册表
 
-当前注册表共 **52 条**：**7 hard、26 info、13 metric、6 unver**。
+当前注册表共 **53 条**：**7 hard、26 info、13 metric、7 unver**。
+
+`knowledge_position_unver` 提供已登记逐场知识许可的成稿位置线索；未命中不能证明没有改写式泄漏。
 repair 分桶为 **12 UNIQUE、12 FREE、28 NONE**；repair 不是 severity，只有 UNIQUE 才能在
 `unresolved_rounds < 2` 时进入付费 `--revise`，FREE / NONE 不得被包装成自动修复。
 
@@ -550,9 +558,9 @@ repair 分桶为 **12 UNIQUE、12 FREE、28 NONE**；repair 不是 severity，�
 旧双臂盘面曾有 31 章（deep 11 / shallow 20），并留下逐章带极值 0.814 / 1.206、全书比值
 0.949 / 1.022 / 0.980、旧规则命中与对白差异等读数。这些数字只用于解释阈值来历和识别
 判据退化，是 **v1 旧布局历史基线**；它们不是 canonical v2 current-schema corpus，不能用于
-宣称现役 Stage5 通过率、当前 HARD“0 命中”或当前 52 条判据的质量结论。
+宣称现役 Stage5 通过率、当前 HARD“0 命中”或当前 53 条判据的质量结论。
 
-当前 52 条判据、对白语义材料及写作入口已有定向回归；整批非 corpus 与真实语料验收仍待完成。
+当前判据、完整剧情材料与写作入口以本批实际测试为准；整批非 corpus 与真实语料验收仍待完成。
 现役写作材料按场景事实、明确对白任务和披露许可组织，
 但原计划与旧 event-list 契约进行的受控双书付费 A/B 已在开跑前取消：没有实验正文、盲评结果
 或无正文 manifest。因此不得宣称 beat-material 在质量、成本或速度上胜出。

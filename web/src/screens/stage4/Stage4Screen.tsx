@@ -11,6 +11,7 @@ import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { cx } from '@/lib/cx'
 import { DesignReviewPanel } from './DesignReviewPanel'
 import { StructureApprovalPanel } from './StructureApprovalPanel'
+import { BlueprintRefinementPanel } from './BlueprintRefinementPanel'
 import { useStage4Screen, type PlanSceneView } from './useStage4Screen'
 
 /**
@@ -81,12 +82,13 @@ export function Stage4Screen() {
               </div>
               {vm.identity ? (
                 <div className="prose-cn text-tag text-ink-4">
-                  恒等基线不是重构计划：三个 goal 是显式标记；预算=源字数。它回答的是「上游产出够不够写手用」。
+                  恒等基线不是重构计划：这是按源节点列出的参考组织，不代表已经接受新的设计。
                 </div>
               ) : null}
+              {vm.subjectUnavailable ? <p role="alert">结构审阅身份不可用：{vm.subjectUnavailable}</p> : null}
               {vm.ctxMissing ? (
                 <div className="prose-cn text-tag text-ink-4">
-                  writer_context 不在盘上——右半边缺席。跑 stage4.context 重建任务书。
+                  当前没有可用写作上下文；可对照蓝图与分场安排，尚不能据此开写。
                 </div>
               ) : null}
             </header>
@@ -155,9 +157,9 @@ export function Stage4Screen() {
               }
               right={
                 <Panel className="flex h-full min-h-0 flex-col">
-                  <PaneHeader title="写手真正拿得到的材料" meta={vm.factsMeta} />
+                  <PaneHeader title="写手真正拿得到的材料" meta={vm.materialsMeta} />
                   <PaneScroll className="flex flex-col gap-12 px-16 pt-12 pb-16">
-                    {vm.factCards.map((f) => (
+                    {vm.materialCards.map((f) => (
                       <div key={f.title} className="flex flex-col gap-6">
                         <div className="flex items-baseline gap-8">
                           <span className="text-body font-semibold">{f.title}</span>
@@ -176,7 +178,7 @@ export function Stage4Screen() {
                             className="rounded-btn border border-dashed px-10 py-6 text-sm2"
                             style={{ borderColor: SEV.unver.border, color: SEV.unver.color }}
                           >
-                            这一项是空的 —— 空不等于「这一章没有」，也可能是没抽到
+                            该类材料为空；是否合理以原文和审阅结论为准。
                           </span>
                         )}
                         {f.more ? <span className="text-tag text-ink-5">{f.more}</span> : null}
@@ -184,7 +186,7 @@ export function Stage4Screen() {
                     ))}
 
                     <div className="prose-cn text-micro text-ink-5">
-                      语义契约与秘密时间线来自 Stage2；场景目的、边界、顺序与事实重新分布由 Stage4 编译。校验结论仍只来自 stage4 报告。
+                      普通分场只调整呈现安排。联合呈现是否完整、归因是否保持、是否提前揭示，由设计与结构审阅核对。
                     </div>
                   </PaneScroll>
                 </Panel>
@@ -195,6 +197,7 @@ export function Stage4Screen() {
         </QueryStates>
       </ScreenFrame>
       <DesignReviewPanel />
+      <BlueprintRefinementPanel key={vm.sid + ':' + vm.ordinal} sid={vm.sid} ordinal={vm.ordinal} />
       {vm.query.data ? (
         <StructureApprovalPanel
           rows={vm.structureRows}
@@ -207,116 +210,31 @@ export function Stage4Screen() {
   )
 }
 
-function PlanSceneRow({
-  scene,
-  selected,
-  onClick,
-}: {
-  scene: PlanSceneView
-  selected: boolean
-  onClick: () => void
+function PlanSceneRow({ scene, selected, onClick }: {
+  scene: PlanSceneView; selected: boolean; onClick: () => void
 }) {
-  return (
-    <div
-      onClick={onClick}
-      className={cx(
-        'flex cursor-pointer flex-col gap-9 border-b border-line-row px-18 py-14',
-        selected && 'bg-accent-bg',
-      )}
-    >
-      <div className="flex flex-wrap items-center gap-8">
-        <Mono className="rounded-tag bg-inset px-7 py-1 text-mini">
-          第 {scene.i} 场 · {scene.slot}
-        </Mono>
-        <span className="rounded-tag bg-inset px-7 py-1 text-mini text-ink-3">{scene.role}</span>
-        <span className="rounded-tag bg-inset px-7 py-1 text-mini text-ink-3">{scene.delivery}</span>
-        <span className="rounded-tag bg-inset px-7 py-1 text-mini text-ink-3">{scene.transition}</span>
-        <span className="ml-auto flex items-center gap-8">
-          <Mono className="text-micro text-ink-4">预算 {scene.budget}</Mono>
-        </span>
-      </div>
-
-      <div className="prose-cn text-section text-ink-2">
-        <span className="text-tag text-ink-4">场景目的　</span>{scene.purpose}
-      </div>
-
-      <ul className="m-0 flex list-none flex-col gap-4">
-        {scene.requiredFacts.map((fact, i) => (
-          <li key={i} className="prose-cn text-section text-ink-2">
-            <span className="text-tag text-ink-4">必须成立　</span>{fact}
-          </li>
-        ))}
-      </ul>
-
-      <div className="prose-cn rounded-btn bg-inset px-10 py-8 text-sm2 text-ink-2">
-        <span className="text-tag text-ink-4">转折　</span>{scene.turnFact}
-      </div>
-
-      {scene.entryState.length || scene.exitState.length ? (
-        <div className="grid gap-6 text-sm2" style={{ gridTemplateColumns: '1fr 1fr' }}>
-          <div><span className="text-tag text-ink-4">进入状态　</span>{scene.entryState.join('；') || '—'}</div>
-          <div><span className="text-tag text-ink-4">退出状态　</span>{scene.exitState.join('；') || '—'}</div>
-        </div>
-      ) : null}
-
-      {scene.contextFacts.length ? (
-        <div className="prose-cn text-sm2 text-ink-4">
-          上下文事实（不重复宣告）：{scene.contextFacts.join('；')}
-        </div>
-      ) : null}
-
-      {scene.knowledge?.map((item, i) => (
-        <div key={i} className="rounded-btn border border-line-2 px-10 py-8 text-sm2">
-          <div className="text-tag text-ink-4">{
-            { known: '本场起成立的知情状态', reveal: '本场起允许披露', setup: '伏笔只表现，不解释秘密答案' }[item.usage]
-          }</div>
-          <div>{item.content}</div>
-          {item.known_by.length ? <div>知情者：{item.known_by.join('、')}</div> : null}
-        </div>
-      ))}
-
-      {scene.dialogue?.map((row, i) => (
-        <div key={i} className="rounded-btn border border-line-2 px-10 py-8 text-sm2">
-          <div className="text-tag text-ink-4">对白可换措辞 · {row.speech_act}</div>
-          <div>{row.speaker ?? '未知说话者'} → {row.addressees === null ? '未知对象' : row.addressees.join('、') || '无特定对象'}</div>
-          <div>{row.meaning}</div>
-          <div>必保事实：{row.required_facts.join('；')}</div>
-        </div>
-      ))}
-
-      {scene.verbatim.map((v, i) => (
-        <div key={i} className="rounded-r-btn border-l-3 border-l-hinge bg-hinge-bg px-12 py-8">
-          <div className="text-micro text-hook-ink">剧情必需的字面例外（{scene.verbatimChars} 字）</div>
-          <div className="prose-cn text-sm2 text-ink-2">{v}</div>
-        </div>
-      ))}
-
-      {scene.holds.map((h, i) => (
-        <div key={i} className="flex items-baseline gap-8 text-sm2">
-          <span className="flex-none rounded-tag bg-inset px-6 py-1 text-micro text-ink-4">{h.k}</span>
-          <span className="prose-cn text-ink-2">{h.v}</span>
-        </div>
-      ))}
-
-      {scene.stages.length ? (
-        <div className="flex flex-col gap-4 rounded-btn border border-dashed border-line-btn px-10 py-8">
-          <span className="text-micro text-ink-5">场景舞台（跨时空时按这里分段）</span>
-          {scene.stages.map((stage, i) => (
-            <div key={i} className="flex items-center gap-7 text-tag text-ink-3">
-              <span
-                className={cx(
-                  'rounded-tag px-6 py-1 text-micro',
-                  stage.layerPresent ? 'bg-inset text-ink-3' : 'bg-recall-bg text-recall',
-                )}
-              >
-                {stage.layer}
-              </span>
-              <span>{stage.place}</span>
-              <span className="text-ink-4">{stage.present}</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  )
+  return <div className={cx('flex flex-col gap-9 border-b border-line-row px-18 py-14', selected && 'bg-accent-bg')}>
+    <button type="button" onClick={onClick} aria-expanded={selected} className="flex flex-wrap items-center gap-8 text-left">
+      <Mono>第 {scene.i} 场 · {scene.slot}</Mono>
+      <span>{scene.role} · {scene.delivery} · {scene.transition}</span>
+      <span className="ml-auto">预算 {scene.budget} 字</span>
+    </button>
+    <p className="prose-cn">{scene.purpose}</p>
+    {scene.presentations.map((delivery, i) => <div key={i} className="rounded-block border border-line-2 p-12">
+      <h3 className="text-body font-semibold">{delivery.label}</h3>
+      <p className="prose-cn">{delivery.instruction}</p>
+      <p className="text-tag text-ink-4">证据：{delivery.evidence.join('、') || '尚未绑定'}</p>
+      {delivery.stages === null ? <p className="text-tag text-ink-4">写作舞台尚不可读</p> : delivery.stages.map((stage, n) =>
+        <p key={n} className="text-tag text-ink-3">{stage.time_layer ?? '时层未知'} · {stage.place ?? '地点未知'} ·
+          {stage.present === null ? '在场人物未知' : stage.present.join('、') || '明确无人'}</p>)}
+    </div>)}
+    <p className="text-sm2">转折：{scene.turn}</p>
+    {scene.context.length ? <p className="text-sm2">已完整呈现的背景：{scene.context.join('、')}</p> : null}
+    {selected ? <div className="flex flex-col gap-6 text-sm2">
+      <p>明确端点：{scene.endpoints.length ? scene.endpoints.join('；') : '本场没有登记端点'}</p>
+      <p>状态变化：{scene.stateEvents === null ? '上下文未生成' : JSON.stringify(scene.stateEvents)}</p>
+      <p>知识许可：{scene.knowledge === null ? '上下文未生成' : scene.knowledge.join('、') || '无登记项'}</p>
+      <p>执行约束：{scene.constraints === null ? '上下文未生成' : scene.constraints.join('、') || '无登记项'}</p>
+    </div> : null}
+  </div>
 }

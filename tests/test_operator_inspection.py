@@ -35,6 +35,9 @@ def test_operator_snapshot_freezes_one_code_and_runs_each_check_once(
 
     def check_only(stage):
         def run(ctx):
+            # 真实 Stage4/5 复检会间接消费 Stage2/KL 的审批坐标。
+            # 它们也必须复用外层身份，不能按内部闸门数量再调用 Git。
+            assert A.projection_code() == 'code-v1'
             check_calls.append((stage, ctx))
             return SimpleNamespace(node=f'{stage}.canonical-check')
         return run
@@ -48,6 +51,7 @@ def test_operator_snapshot_freezes_one_code_and_runs_each_check_once(
     assert [stage for stage, _ctx in check_calls] == list(STAGES)
     assert all(ctx[2] == 'code-v1' for _stage, ctx in check_calls)
     assert snapshot.overview is overview
+    assert A._READ_CODE.get() is None
     assert all(snapshot.check(stage).report is not None for stage in STAGES)
     with pytest.raises(TypeError):
         snapshot.checks['stage0'] = I.CheckObservation()  # type: ignore[index]
@@ -99,6 +103,28 @@ def test_operator_snapshot_rejects_a_write_crossing_its_seven_checks(
 
     with pytest.raises(ArtifactUnreadable, match='混合时点'):
         I.capture_operator_snapshot(tmp_path, 'book-1')
+
+
+def test_approval_read_snapshot_releases_identity_between_requests(monkeypatch, tmp_path):
+    book = tmp_path / 'book'
+    book.mkdir()
+    codes = iter(('code-v1', 'code-v2'))
+    monkeypatch.setattr(I.paths, 'resolve_novel_dir', lambda *_a: book)
+    monkeypatch.setattr(I.prov, 'code_version', lambda: next(codes))
+    monkeypatch.setattr(I, 'overview_at', lambda _book, code: SimpleNamespace(sid='book-1', code=code))
+    monkeypatch.setattr(I, 'read_surface_seal', lambda *_a, code: 'seal:' + code)
+    for expected in ('code-v1', 'code-v2'):
+        with I.approval_read_snapshot(tmp_path, 'book-1') as (overview, code):
+            assert code == overview.code == expected
+            assert A.projection_code() == expected
+        assert A._READ_CODE.get() is None
+    seals = iter(('before', 'after'))
+    monkeypatch.setattr(I.prov, 'code_version', lambda: 'code-v3')
+    monkeypatch.setattr(I, 'read_surface_seal', lambda *_a, **_kw: next(seals))
+    with pytest.raises(ArtifactUnreadable, match='盘面发生变化'):
+        with I.approval_read_snapshot(tmp_path, 'book-1'):
+            pass
+    assert A._READ_CODE.get() is None
 
 
 def test_check_observation_only_downgrades_expected_unavailable_errors():
@@ -163,6 +189,7 @@ def test_structure_workpack_reuses_the_snapshot_stage4_report_and_code(
         plan_payload_sha256='c' * 64,
         binding_payload_sha256='d' * 64,
         blueprint_payload_sha256='e' * 64,
+        chapter_materials={},
     )
     # 这里只隔离快照编排，完整业务载荷由 Stage4 纵切覆盖；替身仍须明确
     # 携带全部快照身份，避免新增字段时绕过真实快照的前后比较面。
@@ -173,7 +200,8 @@ def test_structure_workpack_reuses_the_snapshot_stage4_report_and_code(
     monkeypatch.setattr(
         A.paths, 'resolve_novel_dir', lambda *_args: tmp_path)
 
-    def snapshot(_novel_dir):
+    def snapshot(_novel_dir, *, with_materials):
+        assert with_materials is True
         assert A._projection_code() == 'code-v1'
         return subject
 

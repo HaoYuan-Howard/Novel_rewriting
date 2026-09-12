@@ -16,20 +16,13 @@
 """
 from __future__ import annotations
 
-import copy
 import json
-from collections import Counter
-from collections.abc import Iterator
-import re
 from dataclasses import dataclass
 from typing import Any
 
 from contracts.invariants import (
-    HINGE_LABEL, LAYER_CN, LAYER_GLOSS,
-    TIME_LAYERS, hinge_heading,
+    LAYER_CN, LAYER_GLOSS, TIME_LAYERS,
 )
-from novel.core.text import norm
-from novel.errors import ProvenanceRefused
 from novel.core.style import dash_per_1k, short_run_per_1k
 from novel.llm.prompts import fill, with_json_shape
 from novel.stages.stage5 import measure as M
@@ -42,18 +35,16 @@ from novel.stages.stage5 import measure as M
 #: ⚠ 唯一 `WRITE_SYS` 用它（见模块 docstring ②）。
 LAYER_RULE = '；'.join(f'〔{LAYER_CN[k]}〕= {LAYER_GLOSS[k]}' for k in TIME_LAYERS)
 
-#: 四组保真材料在 system prompt 里的展开说明。同一条边界只保留一个文本落点。
-HINGE_LABEL_RULE = '\n'.join([
-    '【保真材料：按各自要求执行】',
-    f"- 【{hinge_heading('dialogue')}】：自由改写措辞，保留说话者、对象、语义、话语作用和必保事实。",
-    '  承诺、拒绝、请求和回应的对象、条件、时间与因果不能改变；未知对象不自行补造。',
-    f"- 【{hinge_heading('verbatim')}】：仅剧情必需的密码、口令、谜面谜底或识别符号，连标点、数字也原样保留。",
-    f"- 【{hinge_heading('keep_value')}】：数字必须保住（年数、次数、金额、人数…），**措辞随你**——",
-    '  你可以换一种说法把它说出来，但那个数不能变。',
-    f"- 【{hinge_heading('must_appear')}】：这件东西要在这一幕里出现、并起到它该起的作用；**怎么描写随你**。",
-    f"- 【{hinge_heading('must_hold')}】：这是这一幕之所以成立的前提。读者要能感到它成立，",
-    '  **但不要为了它硬塞一段背景交代**——把前提当台词写，是把叙事写成说明书。',
-])
+#: 稀疏约束与节点正文各司其职，不恢复逐动作保真清单。
+PLOT_CONSTRAINT_RULE = """\
+【剧情正文和稀疏约束】
+- 节点 content 完整说明动机、事件、施受关系和结果；对白可改写措辞，话语作用和对象不能改变。
+- literal：只对明确登记的口令、密码、谜面或识别符号保留原样，包括标点和数字。
+- value：保住登记数值及单位，允许改变表达。
+- object：指定物件在绑定场景出现并起原有作用，描写方式可以变化。
+- cause / story_before / response_to / observes / same_scene：执行已登记的因果、世界先后、回应、
+  观察或同场要求；合法倒叙改变读者看见的先后，不改变故事世界的因果。
+- State 只登记持续内容；人物相信或声称不等于客观成立。知识事件另行约束谁何时能知道。"""
 
 #: 发明边界。
 #:
@@ -90,11 +81,12 @@ ORDER_RULE = """\
   下方正文机械形态基线；一个场景也不是一个自然段，按本书实测节奏自然组织句段。
 - 相邻两场可以自然衔接，但它们在正文里出现的先后必须照计划。
 
-【事实是约束，不是源序事件脚本】
-- 每场列出的「必须成立」都要在该场留下可辨认的落点；「上下文事实」只供承接，不要重复宣告。
-- 事实列表没有隐含的源文先后。场内怎样调度、哪句先说、哪个动作先落，由场景目的、转折和退出状态决定。
-- `turn` 是这一场真正改变方向的事实，要让读者感到转折发生，而不是把清单逐条改写。
-- 篇幅在场与场之间本来就不平均。按每场自己的【约 N 字】执行，不要按事实条数平摊。"""
+【按父节点的呈现分配执行】
+- 同一父节点可分到本章多个场景；每场只完成该场的 presentation_instruction，联合保全父节点的含义。
+- context_beat_refs 是已完整呈现的背景，只供承接，不重复宣告。
+- 节点目录没有隐含的源文先后。场内调度服从目的、转折、状态和知识端点。
+- turn_beat_ref 定位本场转折；分场节点只表现本场承担的部分，不提前释放剩余信息。
+- 按每场 budget_chars 分配篇幅，不按节点条数平摊。"""
 
 #: 写法词的拆弹指令。
 #:
@@ -141,7 +133,7 @@ WRITE_SYS = """\
 - 一场里若标了「分①②③推进」，说明它跨了不同的时空：按标的顺序分段写，
   **各段只写各段在场的人**——在场者是分开标的，不要把后一段的人写进前一段的场。
 
-""" + HINGE_LABEL_RULE + """
+""" + PLOT_CONSTRAINT_RULE + """
 
 """ + FIDELITY_RULE + """
 
@@ -248,183 +240,6 @@ def target_paragraphs(entry: dict[str, Any], book: M.Book) -> tuple[int, int]:
     return M.target_paragraphs(entry, book)
 
 
-def _previous_context_entry(entry: dict[str, Any], book: M.Book) -> dict[str, Any] | None:
-    """只复制实际下发的衔接字段；未下发的上一章材料不能进入共用文字表。"""
-    pe = book.chapters.get(int(entry['output_ordinal']) - 1)
-    if not pe:
-        return None
-    tail = [scene for scene in (pe.get('scenes') or []) if scene]
-    return copy.deepcopy({
-        'chapter_goal': pe.get('chapter_goal'),
-        'end_hook_goal': pe.get('end_hook_goal'),
-        'scenes': [{key: tail[-1].get(key) for key in ('turn_fact', 'exit_state')}]
-        if tail else [],
-    })
-
-
-def _render_previous_context(pe: dict[str, Any] | None) -> str | None:
-    if pe is None:
-        return None
-    bits = [f"上一章的目标：{_goal_directive(pe.get('chapter_goal'))}"]
-    tail = [scene for scene in (pe.get('scenes') or []) if scene]
-    if tail:
-        last = tail[-1]
-        if last.get('turn_fact'):
-            bits.append('末场转折：' + str(last['turn_fact']))
-        if last.get('exit_state'):
-            bits.append('章末状态：' + '；'.join(str(v) for v in last['exit_state']))
-    if pe.get('end_hook_goal'):
-        bits.append(f"上一章结尾停在：{_goal_directive(pe['end_hook_goal'])}")
-    return '── 上一章写了什么（仅供衔接，不要复述、不要接着展开它）──\n' + '\n'.join(bits)
-
-
-def prev_context(entry: dict[str, Any], book: M.Book) -> str | None:
-    """章级收口与末场退出态的独立展示，选择与写手材料共用同一投影。"""
-    return _render_previous_context(_previous_context_entry(entry, book))
-
-
-def _stage_line(scene: dict[str, Any]) -> str:
-    """一场的舞台；跨时空时保留分段边界，不能把在场者取并集。"""
-    def one(d: dict[str, Any]) -> str:
-        bits = [LAYER_CN.get(d.get('time_layer') or '', d.get('time_layer') or '')]
-        if d.get('place'):
-            bits.append(d['place'])
-        if d.get('present'):
-            bits.append('在场：' + '、'.join(d['present']))
-        return '·'.join(b for b in bits if b)
-
-    stages = [stage for stage in (scene.get('stages') or []) if stage]
-    if len(stages) > 1:
-        return ('　分' + '①②③④⑤⑥'[:len(stages)] + ' 推进：'
-                + ' ｜ '.join(f'{n}{one(stage)}'
-                              for n, stage in zip('①②③④⑤⑥', stages)))
-    rendered = one(stages[0]) if stages else ''
-    return f'　〔{rendered}〕' if rendered else ''
-
-
-_ROLE_CN = {
-    'cold_open': '冷开场', 'setup': '建立', 'escalation': '升级',
-    'turn': '转折', 'payoff': '兑现', 'bridge': '过渡',
-}
-_DELIVERY_CN = {'scene': '场景展开', 'summary': '压缩交代'}
-_TRANSITION_CN = {
-    'start': '起笔', 'continue': '连续', 'earlier': '回到更早',
-    'later': '跳到更晚', 'parallel': '并行切换', 'return': '返回主线',
-}
-
-
-def chapter_facts(entry: dict[str, Any], slot_plan: list[int] | None = None) -> str:
-    """把 Stage4 新场景直接渲染成 Stage5 的唯一执行任务。
-
-    ``slot_plan`` 来自 `measure.paragraph_slot_plan`（与判据/反馈同一落点）：
-    每场的「约 N 段」是确定性分配结果，不是模型自选的余地。
-    """
-    lines: list[str] = []
-    for i, scene in enumerate(entry['scenes'], 1):
-        b = scene['budget_chars']
-        slot = str(scene['slot'])
-        raw_delivery = str(scene.get('delivery') or 'scene')
-        role = _ROLE_CN.get(scene.get('role'), scene.get('role') or '过渡')
-        delivery = _DELIVERY_CN.get(raw_delivery, raw_delivery)
-        transition = _TRANSITION_CN.get(scene.get('transition'), scene.get('transition') or '连续')
-        para_note = (
-            f'；约 {slot_plan[i - 1]} 段'
-            if slot_plan is not None and i - 1 < len(slot_plan) else '')
-        head = (f'{i}. 【slot={slot}；约 {b} 字{para_note}；叙事作用={role}；'
-                f'承载={delivery}；衔接={transition}】')
-        lines.append(head + _stage_line(scene))
-        lines.append(f"   场景目的：{scene['purpose']}")
-        lines.append('   执行方式：' + (
-            '把目的演成一个连贯场面，事实都融进冲突和反应，不要逐条转述。'
-            if raw_delivery == 'scene'
-            else '压缩交代场景结果，不要额外扩成一场戏。'))
-        if scene.get('entry_state'):
-            lines.append('   进入状态：' + '；'.join(scene['entry_state']))
-        lines.append('   必须成立（同场约束，无源文先后）：')
-        lines += [f'     · {fact}' for fact in scene.get('required_facts') or []]
-        if scene.get('context_facts'):
-            lines.append('   已知上下文（只承接，不重复宣告）：')
-            lines += [f'     · {fact}' for fact in scene['context_facts']]
-        lines.append(f"   转折：{scene['turn_fact']}")
-        if scene.get('exit_state'):
-            lines.append('   退出状态：' + '；'.join(scene['exit_state']))
-        for item in scene.get('knowledge') or []:
-            label = {'known': '本场起成立的知情状态', 'reveal': '本场起才允许披露',
-                     'setup': '伏笔只表现以下内容，不解释秘密答案'}[item['usage']]
-            knowers = ('；知情者：' + '、'.join(item['known_by'])) if item['known_by'] else ''
-            lines.append(f"   {label}：{item['content']}{knowers}")
-        for row in scene.get('dialogue') or []:
-            speaker = row['speaker'] if row['speaker'] is not None else '未知，不补造'
-            targets = ('未知，不补造' if row['addressees'] is None else
-                       '、'.join(row['addressees']) if row['addressees'] else '无特定对象')
-            lines.append(f"   对白：{speaker} → {targets}；话语作用：{row['speech_act']}")
-            lines.append(f"     语义：{row['meaning']}；必保事实：{'；'.join(row['required_facts'])}")
-        for key, label in HINGE_LABEL.items():
-            if key == 'dialogue':
-                continue
-            for t in (scene.get(key) or []):
-                lines.append(f'     · {label}：{(t or "").strip()}')
-    body = '\n'.join(lines)
-    # `focalizer` 在现役上游里恒为 null；只从叙事段下发面删这一格。
-    # 其他 null 仍保留——它们可能承载「不知道」的三态语义，不做全局 drop-null。
-    nar = [
-        {key: value for key, value in segment.items()
-         if not (key == 'focalizer' and value is None)}
-        for segment in (entry.get('narration') or [])
-    ]
-    return body + f'\n\n叙述视角（按段）：{_compact(nar)}' if nar else body
-
-
-_GOAL_INTENT = {
-    'establish': '建立', 'advance': '推进', 'open': '开篇',
-    'close': '收束', 'withhold': '暂不揭示', 'resolve': '解决',
-}
-
-
-def _goal_directive(goal: Any) -> str:
-    """只渲染已解析的人话目标；内部引用不会进入写手面。"""
-    if not isinstance(goal, dict):
-        return str(goal or '')
-    intent = _GOAL_INTENT.get(str(goal.get('intent') or ''), str(goal.get('intent') or ''))
-    facts = [str(fact).strip() for fact in (goal.get('facts') or []) if str(fact).strip()]
-    return intent + ('（' + '；'.join(facts) + '）' if facts else '')
-
-
-# ⚠ 这里曾有 `goal_quotes(*goals: str | None)` 与它的 `_GOAL_QUOTE_RX`：从 goal 里抠出
-#   引号包起来的短语，好把「原句用上」升一档。两个都**零引用**，而且签名已经与契约脱节
-#   ——它假定 goal 是**字符串**，而现行 goal 是 `{'intent': ..., 'facts': [...]}`
-#   （见上面的 `_goal_directive`）⇒ 就算有人调它，拿到的也永远是空列表。
-#   ⚠ 它写在 docstring 里的那条纪律仍然成立、且**已经在别处兑现**：goal 是 stage4 的模型
-#   写的，凡转抄必验。要恢复这个功能，得先按 dict 契约重写，不是把这段代码找回来。
-
-
-def chapter_directive(entry: dict[str, Any], book: M.Book) -> str:
-    """章级语义契约与 Stage4 编译出的安全重写 brief。"""
-    contract = entry['semantic_contract']
-    lines = [f"本章功能：{contract['chapter_function']}"]
-    lines.append(f"场景重写总纲：{entry['chapter_rewrite_brief']}")
-    lines.append('本章必须实现的事实变化：' + '；'.join(contract['must_land_facts']))
-    for key, label in (
-        ('information_delta', '信息增量'),
-        ('character_state_delta', '人物状态变化'),
-        ('relationship_delta', '关系变化'),
-        ('reader_knowledge_delta', '读者认知变化'),
-    ):
-        if contract.get(key):
-            lines.append(label + '：' + '；'.join(contract[key]))
-    if contract.get('causal_edges'):
-        lines.append('不得破坏的因果：' + '；'.join(
-            f"{edge['before']} → {edge['after']}" for edge in contract['causal_edges']))
-    if contract.get('entry_state'):
-        lines.append('章首输入状态：' + '；'.join(contract['entry_state']))
-    if contract.get('ending_state'):
-        lines.append('章尾输出状态：' + '；'.join(contract['ending_state']))
-    lines.append(f"本章目标：{_goal_directive(entry['chapter_goal'])}")
-    lines.append(f"开篇要达到（硬要求）：{_goal_directive(entry['open_hook_goal'])}")
-    lines.append(f"结尾要达到（硬要求）：{_goal_directive(entry['end_hook_goal'])}")
-    return '\n'.join(lines)
-
-
 def shape_block(book: M.Book) -> str:
     """Stage1 正文即时测量投影派生的五项档位；不接定性画像与文案实测。
 
@@ -434,39 +249,6 @@ def shape_block(book: M.Book) -> str:
     band_of = book.band_of
     return ('【正文机械形态基线（写出来要落在这些档上）】\n'
             + _compact(band_of)) if band_of else ''
-
-
-def facts_block(entry: dict[str, Any]) -> str:
-    """只渲染章首已经开放的事实，本章知识增量由场景知识和披露许可下发。
-
-    旧的 false 秘密行必须拒绝；不能把答案发给埋点写手后再用文字要求其保密。
-
-    从前是把 `{"reader_knows_by_now": false}` 这个布尔值直接扔进 JSON 让写手自己看——
-    它多半会当成已知事实正面写出来，**反而制造提前泄底**。所以在这里翻译成指令。
-    """
-    f = dict(entry.get('facts') or {})
-    secrets = f.pop('secrets', []) or []
-    # ⚠ `setting` **必须 pop 掉**：`build_user` 里它已经有自己那个带标题的块，
-    #   这里再把整个 `facts` 原样铺一遍，同一段世界观会在一份 prompt 里出现两次。
-    #   留哪一个：留带标题的那个——写手认的是「── 世界设定 ──」这个抬头，
-    #   而这里的抬头写着「称谓/关系/世界规则」，把设定塞进去本身就名不副实。
-    f.pop('setting', None)
-    # ``rule_id`` 是审计/关联用的内部键；写手只消费类别与人类可读规则正文。
-    # 这里必须显式投影，不能把整个 typed row compact 后寄希望于提示词叫模型忽略它。
-    f['world_rules'] = [
-        {key: rule[key] for key in ('kind', 'description') if rule.get(key)}
-        for rule in (f.get('world_rules') or [])
-    ]
-    known = [s for s in secrets if s.get('reader_knows_by_now')]
-    if any(not s.get('reader_knows_by_now') for s in secrets):
-        raise ProvenanceRefused('旧上下文把秘密答案放入伏笔；先免费重建当前场景披露上下文')
-    parts = ['── 章首已开放的事实（称谓/关系/世界规则；本章新增知识另见场景许可）──\n'
-             + _compact(f)]
-    if known:
-        parts.append('── 读者已经知道的内情（可以正面写）──\n'
-                     + '\n'.join(f"· {s.get('fact')}（知情者：{'、'.join(s.get('known_by') or [])}）"
-                                 for s in known))
-    return '\n\n'.join(parts)
 
 
 def writer_chars(entry: dict[str, Any], book: M.Book) -> list[dict[str, str]]:
@@ -480,9 +262,9 @@ def writer_chars(entry: dict[str, Any], book: M.Book) -> list[dict[str, str]]:
     登场或尚未揭名的人物提前下发给写手。
     """
     chars = entry['characters']
-    # char_id 只用于确定性关联；投影时丢弃，不进入写手 prompt。
+    # V8 的人物、状态持有者和知识 audience 共用编号；只作为目录引用，不写进正文。
     return [
-        {key: value[key] for key in ('display_name', 'role') if (value or {}).get(key)}
+        {key: value[key] for key in ('char_id', 'display_name', 'role') if (value or {}).get(key)}
         for value in chars
     ]
 
@@ -540,132 +322,10 @@ def density_guidance(book: M.Book) -> str:
     return '、'.join(rendered)
 
 
-def _constraint_text_slots(entry: dict[str, Any]) -> Iterator[tuple[Any, Any]]:
-    """枚举可无损索引的语义文字位置；不碰原句、人物、披露状态或舞台。"""
-    contract = entry.get('semantic_contract') or {}
-    for key in ('must_land_facts', 'information_delta', 'character_state_delta',
-                'relationship_delta', 'reader_knowledge_delta', 'entry_state', 'ending_state'):
-        values = contract.get(key) or []
-        for index in range(len(values)):
-            yield values, index
-    for edge in contract.get('causal_edges') or []:
-        for key in ('before', 'after'):
-            if key in edge:
-                yield edge, key
-    for key in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
-        goal = entry.get(key)
-        if isinstance(goal, dict):
-            values = goal.get('facts') or []
-            for index in range(len(values)):
-                yield values, index
-    for scene in entry.get('scenes') or []:
-        for key in ('required_facts', 'context_facts', 'entry_state', 'exit_state'):
-            values = scene.get(key) or []
-            for index in range(len(values)):
-                yield values, index
-        if 'turn_fact' in scene:
-            yield scene, 'turn_fact'
-        for item in scene.get('knowledge') or []:
-            yield item, 'content'
-        for item in scene.get('dialogue') or []:
-            yield item, 'meaning'
-            for index in range(len(item['required_facts'])):
-                yield item['required_facts'], index
-    for item in entry.get('disclosure_windows') or []:
-        yield item, 'content'
-    facts = entry.get('facts') or {}
-    for collection, field in (('secrets', 'fact'), ('world_rules', 'description'),
-                              ('relations', 'predicate')):
-        for row in facts.get(collection) or []:
-            yield row, field
-    for key in facts.get('setting') or {}:
-        yield facts['setting'], key
-
-
-def _disclosure_block(entry: dict[str, Any]) -> str:
-    windows = entry.get('disclosure_windows') or []
-    if not windows:
-        return ''
-    return ('── 场景披露许可 ──\n'
-            '以下许可同样约束全章目标、因果和进出状态：世界内已经成立，不等于读者已知。'
-            '许可之前只写各场允许的表现，不点破相关事实；正文仍整章输出。\n'
-            + '\n'.join(f"· {row['content']}：仅可在 {'、'.join(row['allowed_slots'])} 使用。"
-                        for row in windows))
-
-
-def _previous_text_slots(previous: dict[str, Any] | None) -> Iterator[tuple[Any, Any]]:
-    if previous is None:
-        return
-    for key in ('chapter_goal', 'end_hook_goal'):
-        goal = previous.get(key)
-        if isinstance(goal, dict):
-            values = goal.get('facts') or []
-            for index in range(len(values)):
-                yield values, index
-    for scene in previous['scenes']:
-        yield scene, 'turn_fact'
-        values = scene.get('exit_state') or []
-        for index in range(len(values)):
-            yield values, index
-
-
-def _chapter_task_blocks(entry: dict[str, Any], book: M.Book,
-                         slot_plan: list[int]) -> tuple[str, str, dict[str, Any], str | None]:
-    """从同一任务书构造无损文字索引；重复出现的角色/场景关系逐处保留。
-
-    共用文字不是事件 ID，不依据相似度合并事实。原 entry 仍交校验器，
-    原样材料保持逐字下发。目标中的「本章事实：」是 Stage4 编译的用途前缀，
-    只有其后全文等于当前事实正文时才拆开索引；前缀仍留在目标位置。
-    上一章的实际衔接字段纳入同一索引，各处仍保留对应目标和状态用途。
-    不删除、合并或靠相似度猜测事实，短事实也执行相同的单次正文规则。
-    """
-    original = (_disclosure_block(entry) + '\n\n' + chapter_directive(entry, book),
-                chapter_facts(entry, slot_plan), entry, prev_context(entry, book))
-    projected = copy.deepcopy(entry)
-    previous = _previous_context_entry(entry, book)
-    # 先收非目标位置的完整事实，不能把任意带冒号的自然语言当成可删包装。
-    goals = [projected.get(key) for key in ('chapter_goal', 'open_hook_goal', 'end_hook_goal')]
-    if previous is not None:
-        goals.extend(previous.get(key) for key in ('chapter_goal', 'end_hook_goal'))
-    goal_lists = {id(goal['facts']) for goal in goals
-                  if isinstance(goal, dict) and isinstance(goal.get('facts'), list)}
-    slots = [*_constraint_text_slots(projected), *_previous_text_slots(previous)]
-    anchors = {container[key] for container, key in slots
-               if id(container) not in goal_lists and isinstance(container[key], str)}
-    uses: list[tuple[Any, Any, str, str]] = []
-    for container, key in slots:
-        value = container[key]
-        if not isinstance(value, str) or not value:
-            continue
-        prefix = ''
-        if id(container) in goal_lists and value.startswith('本章事实：'):
-            body = value.removeprefix('本章事实：')
-            if body in anchors:
-                prefix, value = '本章事实：', body
-        uses.append((container, key, prefix, value))
-    counts = Counter(value for _container, _key, _prefix, value in uses)
-    repeated = [text for text, count in counts.items() if count > 1]
-    if not repeated:
-        return original
-    labels: dict[str, str] = {}
-    occupied = _compact({'current': entry, 'previous': previous})
-    number = 0
-    for text in repeated:
-        while True:
-            number += 1
-            label = f'〔文{number}〕'
-            if label not in occupied:
-                break
-        labels[text] = label
-    for container, key, prefix, value in uses:
-        if value in labels:
-            container[key] = prefix + labels[value]
-    table = ('共用文字表：编号只省略重复措辞，每处引用分别按其场景、目标或状态角色执行；'
-             '不合并事件，不把编号写入正文。\n'
-             + '\n'.join(f'{label}：{text}' for text, label in labels.items()))
-    compressed = (table + '\n\n' + _disclosure_block(projected) + '\n\n' + chapter_directive(projected, book),
-                  chapter_facts(projected, slot_plan), projected, _render_previous_context(previous))
-    return compressed
+from novel.stages.stage5.plot_prompts import (
+    chapter_directive, chapter_facts, facts_block, goal_directive as _goal_directive,
+    prev_context, chapter_task_blocks as _chapter_task_blocks,
+)
 
 
 def build_material(entry: dict[str, Any], book: M.Book) -> Material:
@@ -721,12 +381,6 @@ def build_material(entry: dict[str, Any], book: M.Book) -> Material:
         + scene_block,
         '── 人物（用这些名字，不要改名、不要另造称呼）──\n'
         + _compact(writer_chars(entry, book)),
-        # ⚠ **逐章投影，不是书级**：`setting` 曾是唯一一个书级直发、无闸门的事实块，
-        #   而实测某本的 setting 里就写着 ch14 才揭示的那条 secret 的全部内容。
-        '── 章首已开放的世界设定 ──\n' + _compact({
-            key: value for key, value in (writing_entry.get('facts') or {}).get('setting', {}).items()
-            if value is not None}),
-        # 逐章投影：只给到本章为止该知道的；未揭示秘密根本不进入上下文。
         facts_block(writing_entry),
         shape_block(book),
     ]

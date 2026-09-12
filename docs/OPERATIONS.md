@@ -41,8 +41,9 @@ blocked recovery 和诊断兼容，blocked action hash 本身不是恢复许可�
 
 ## 新旧工作流的执行边界
 
-当前 `pipeline-cost-latency-v2` 只用于独立空根；manifest v1 / 工作单元 ledger v1 不迁移。首次合法写入前固定
-`_service/workflow.json`；其后所有节点、直接 producer、审批和恢复共用该身份。
+当前 manifest v3 登记 `pipeline-cost-latency-v3`、`plot-blueprint-v1` 及产物版本组合，
+只用于独立空根；旧 manifest、事实蓝图和审批不自动迁移。首次合法写入前固定
+`_service/workflow.json`；其后所有节点、直接 producer、审批和恢复共用该身份，不另建执行 epoch。
 不得删除 manifest、工作单元账或原审批来重新初始化；旧 base 的读取与诊断不授予新写入权限。
 
 本分支改造前的冻结基线为 `6473b78053ddb66eb111e835e41eb8d1f120eec7`。存量中断任务先核对原

@@ -61,27 +61,18 @@ def test_every_registered_rule_id_need_is_satisfied_by_its_prompt_surface():
         assert set(rule.needs_id_spaces) <= set(surface.provides_id_spaces)
 
 
-def test_stage4_fact_atom_ids_are_the_same_space_the_scene_planner_receives():
+def test_stage4_registered_ids_match_the_current_plot_and_evidence_catalog():
     from contracts.rules import REGISTRY
-    from novel.stages.stage4.fact_refs import catalog
+    from novel.stages.stage4.plot_binding import build_evidence_catalog
+    from tests.plot_fixtures import blueprint
 
-    refs = catalog(
-        {'entities': {'characters': {}, 'relations': []},
-         'canon': {'world_rules': [], 'secrets': []}},
-        {'blueprints': [{
-            'chapter_ordinal': 1,
-            'fact_atoms': [{
-                'fact_id': 'f01_01', 'claim': '甲推门', 'kind': 'event',
-                'obligation': 'land', 'source_beat_ref': 'b01_01',
-            }],
-            'beats': [{'beat_id': 'b01_01'}],
-        }]},
-        [{'chapter_ordinal': 1, 'text': '甲推门。'}],
-    )
+    catalog = build_evidence_catalog(blueprint())[1]
     surface = REGISTRY.prompt_surface('stage4.plan')
-    assert {'fact_atoms', 'source_stages'} <= set(surface.provides_id_spaces)
-    assert refs['fact_atoms']['f01_01']['chapter'] == 1
-    assert refs['fact_atoms']['f01_01']['source_beat_ref'] == 'b01_01'
+    assert {'beats', 'states', 'constraints', 'evidence_anchors'} <= set(surface.provides_id_spaces)
+    assert not {'fact_atoms', 'source_stages'} & set(surface.provides_id_spaces)
+    assert catalog['blueprint']['beats'][0]['beat_id'] == 'b01_01'
+    assert catalog['blueprint']['beats'][0]['evidence_refs'] == ['e01_01']
+    assert 'e01_01' in catalog['evidence_refs']
 
 
 def test_bad_severity_raises():

@@ -43,7 +43,7 @@ from novel.agents.session_client import (
 from novel.appendlog import process_append_lock
 from novel.errors import ArtifactUnreadable, ProvenanceRefused, UpstreamMissing
 from novel.llm.json_text import normalize_json_text
-from novel.llm.prompts import required_top_level
+from novel.llm.prompts import missing_required_fields, required_top_level
 from novel.llm.transport import ChatResponse
 from novel.run_identity import check_run_id
 
@@ -731,10 +731,8 @@ def _validate_acceptance(
         raise ProvenanceRefused(f'{purpose}: normalized stdout 不是合法 JSON：{exc}') from exc
     if not isinstance(parsed_payload, dict):
         raise ProvenanceRefused(f'{purpose}: normalized stdout 不是 JSON object')
-    missing = [
-        key for key in required_top_level(response_model)
-        if key not in parsed_payload or parsed_payload[key] in (None, '', [], {})
-    ]
+    missing = missing_required_fields(
+        parsed_payload, required_top_level(response_model), response_model)
     if missing:
         raise ProvenanceRefused(f'{purpose}: stdout 当前缺必填或非空键 {missing}')
     try:

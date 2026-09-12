@@ -116,6 +116,17 @@ def _checkpoint_acceptance(
         prompt_tokens=10, completion_tokens=20, reasoning_tokens=15,
     )
     identity = ctx.ledger.request_identity_for_attempt(attempt_id)
+    if channel == 'reasoning':
+        # 沿实际留证入口保存原始通道及审计指针，不能只伪造 checkpoint 自身摘要。
+        client = LlmClient(ctx, FakeTransport.always(ChatResponse(content='{}')),
+                           model='test-model', enable_model_fallback=False)
+        client._keep_answer_lost(
+            purpose=purpose, attempt_id=attempt_id, source='wire', effort=effort,
+            thinking=thinking, json_mode=JSON_OBJECT_MODE, index=0, sample=0,
+            resample=False, resp=ChatResponse(content='', reasoning=raw_text,
+                                            model='test-model', finish_reason='stop'),
+            progress=SimpleNamespace(chapter=int(purpose.rsplit('ch', 1)[1])),
+            salvaged=True)
     return {
         'attempt_id': attempt_id,
         'request_fingerprint': request_fingerprint(request),
@@ -436,11 +447,11 @@ def test_code_changed_epoch_gets_new_stage2_run_without_weakening_drift_guard(
         parent_run_id=parent_run_id)
 
     first_run = _ensure_run(
-        first, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        first, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     second_run = _ensure_run(
-        second, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        second, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
 
     assert first_run['run_id'] == first.run_id
     assert second_run['run_id'] == second.run_id
@@ -454,8 +465,8 @@ def test_code_changed_epoch_gets_new_stage2_run_without_weakening_drift_guard(
         parent_run_id=parent_run_id)
     with pytest.raises(ProvenanceRefused, match='绑定已漂移'):
         _ensure_run(
-            drifted_same_producer, architecture='extraction-ir-v3.1',
-            topology='scaffolded_single', requests=requests)
+            drifted_same_producer, architecture='plot-blueprint-v1',
+            topology='single', requests=requests)
 
 
 @pytest.mark.parametrize('record', ['', 'run.json', 'ch0001.json', 'response_manifest.json'])
@@ -468,8 +479,8 @@ def test_retired_book_local_blueprint_state_is_never_materialized(tmp_path, reco
         (old / record).write_bytes(b'{"historical":"unproven"}\n')
     before = {p.name: p.read_bytes() for p in old.iterdir()}
     with pytest.raises(ProvenanceRefused, match='旧.*已退役'):
-        _ensure_run(ctx, architecture='extraction-ir-v3.1',
-                    topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')])
+        _ensure_run(ctx, architecture='plot-blueprint-v1',
+                    topology='single', requests=[(1, 'SYSTEM', 'USER')])
     assert {p.name: p.read_bytes() for p in old.iterdir()} == before
     assert not paths.stage2_blueprint_run_path(ctx.novel_dir, ctx.run_id).exists()
     assert ctx.ledger.usage() is None
@@ -481,8 +492,8 @@ def _write_single_agent_checkpoint(tmp_path: Path) -> tuple[RunContext, Path]:
     purpose = 'stage2.blueprint:ch1'
     ctx = _ctx(tmp_path, run_id, executor_profile=_AGENT_PROFILE)
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')],
         request_policy=_agent_request_policy(max_tokens=2048))
     text = '{"blueprints":[{"chapter_ordinal":1}]}'
     acceptance = _agent_checkpoint_acceptance(
@@ -490,7 +501,7 @@ def _write_single_agent_checkpoint(tmp_path: Path) -> tuple[RunContext, Path]:
         texts=[('1' * 16, text)], max_tokens=2048)
     checkpoint = stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
+        architecture='plot-blueprint-v1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance, scope_violation=None)
@@ -500,7 +511,7 @@ def _write_single_agent_checkpoint(tmp_path: Path) -> tuple[RunContext, Path]:
 def _historical_agent_candidates(ctx: RunContext):
     return stage2_runs.verified_blueprint_recovery_checkpoints(
         ctx,
-        architecture='extraction-ir-v3.1',
+        architecture='plot-blueprint-v1',
         response_model=_AgentChapterRows,
         system='SYSTEM',
         artifact_code='test-stage2-runs',
@@ -522,8 +533,8 @@ def test_agent_request_policy_is_discriminated_and_legacy_stays_exact(tmp_path):
         tmp_path, new_run_id(), executor_profile=_AGENT_PROFILE)
     agent_policy = _agent_request_policy(max_tokens=2048)
     agent_run = _ensure_run(
-        agent, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests,
+        agent, architecture='plot-blueprint-v1',
+        topology='single', requests=requests,
         request_policy=agent_policy)
 
     assert agent_run['request_policy'] == agent_policy
@@ -539,8 +550,8 @@ def test_agent_request_policy_is_discriminated_and_legacy_stays_exact(tmp_path):
     legacy = _ctx(tmp_path, new_run_id())
     legacy_policy = _test_request_policy(max_tokens=2048)
     legacy_run = _ensure_run(
-        legacy, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests,
+        legacy, architecture='plot-blueprint-v1',
+        topology='single', requests=requests,
         request_policy=legacy_policy)
     assert legacy_run['request_policy'] == legacy_policy
     assert 'protocol_version' not in legacy_run['request_policy']
@@ -571,8 +582,8 @@ def test_agent_request_policy_rejects_ambiguous_or_unresolved_shape(
 
     with pytest.raises(ProvenanceRefused, match='agent|profile|policy'):
         _ensure_run(
-            ctx, architecture='extraction-ir-v3.1',
-            topology='scaffolded_single',
+            ctx, architecture='plot-blueprint-v1',
+            topology='single',
             requests=[(1, 'SYSTEM', 'USER')], request_policy=policy)
     assert not (stage2_runs.paths.stage2_blueprint_run_path(
         ctx.novel_dir, run_id) / stage2_runs.RUN_FILE).exists()
@@ -588,8 +599,8 @@ def test_agent_checkpoint_restores_full_session_and_ledger_with_zero_wire(
         tmp_path, run_id, executor_profile=_AGENT_PROFILE)
     policy = _agent_request_policy(max_tokens=2048)
     _ensure_run(
-        first, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests,
+        first, architecture='plot-blueprint-v1',
+        topology='single', requests=requests,
         request_policy=policy)
     acceptance = _agent_checkpoint_acceptance(
         first, purpose=purpose, system='SYSTEM', user='USER',
@@ -597,7 +608,7 @@ def test_agent_checkpoint_restores_full_session_and_ledger_with_zero_wire(
                ('2' * 16, accepted_text)], max_tokens=2048)
     checkpoint = stage2_runs.write_checkpoint(
         first, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
+        architecture='plot-blueprint-v1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance, scope_violation=None)
@@ -612,12 +623,12 @@ def test_agent_checkpoint_restores_full_session_and_ledger_with_zero_wire(
     resumed = _ctx(
         tmp_path, run_id, executor_profile=_AGENT_PROFILE)
     _ensure_run(
-        resumed, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests,
+        resumed, architecture='plot-blueprint-v1',
+        topology='single', requests=requests,
         request_policy=policy)
     restored = stage2_runs.restore_checkpoint(
         resumed, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
+        architecture='plot-blueprint-v1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER')
 
     assert restored == stored
@@ -662,7 +673,7 @@ def test_live_agent_checkpoint_restore_still_refuses_current_profile_drift(
         stage2_runs.restore_checkpoint(
             drifted, phase='blueprint', chapter=1,
             purpose='stage2.blueprint:ch1',
-            architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
+            architecture='plot-blueprint-v1', response_model=_AgentChapterRows,
             system='SYSTEM', user='USER')
 
 
@@ -691,8 +702,8 @@ def test_claude_checkpoint_audit_hashes_the_final_structured_stdin(tmp_path):
     policy = _agent_request_policy(
         profile=_CLAUDE_AGENT_PROFILE, max_tokens=2048)
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')],
         request_policy=policy)
     text = '{"blueprints":[{"chapter_ordinal":1}]}'
     acceptance = _agent_checkpoint_acceptance(
@@ -709,7 +720,7 @@ def test_claude_checkpoint_audit_hashes_the_final_structured_stdin(tmp_path):
 
     checkpoint = stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
+        architecture='plot-blueprint-v1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance, scope_violation=None)
@@ -725,8 +736,8 @@ def test_agent_checkpoint_write_rejects_each_unclosed_identity(tmp_path, case):
     purpose = 'stage2.blueprint:ch1'
     ctx = _ctx(tmp_path, run_id, executor_profile=_AGENT_PROFILE)
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')],
         request_policy=_agent_request_policy(max_tokens=2048))
     text = '{"blueprints":[{"chapter_ordinal":1}]}'
     acceptance = _agent_checkpoint_acceptance(
@@ -757,7 +768,7 @@ def test_agent_checkpoint_write_rejects_each_unclosed_identity(tmp_path, case):
     with pytest.raises(ProvenanceRefused):
         stage2_runs.write_checkpoint(
             ctx, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
+            architecture='plot-blueprint-v1', response_model=_AgentChapterRows,
             system='SYSTEM', user='USER',
             response_payload={'blueprints': [{'chapter_ordinal': 1}]},
             acceptance=acceptance, scope_violation=None)
@@ -771,8 +782,8 @@ def test_agent_checkpoint_restore_rechecks_session_and_never_overwrites_first(
     purpose = 'stage2.blueprint:ch1'
     ctx = _ctx(tmp_path, run_id, executor_profile=_AGENT_PROFILE)
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')],
         request_policy=_agent_request_policy(max_tokens=2048))
     text = '{"blueprints":[{"chapter_ordinal":1}]}'
     first_acceptance = _agent_checkpoint_acceptance(
@@ -780,7 +791,7 @@ def test_agent_checkpoint_restore_rechecks_session_and_never_overwrites_first(
         texts=[('4' * 16, text)], max_tokens=2048)
     checkpoint = stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
+        architecture='plot-blueprint-v1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=first_acceptance, scope_violation=None)
@@ -792,7 +803,7 @@ def test_agent_checkpoint_restore_rechecks_session_and_never_overwrites_first(
     with pytest.raises(ProvenanceRefused, match='拒绝覆盖'):
         stage2_runs.write_checkpoint(
             ctx, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
+            architecture='plot-blueprint-v1', response_model=_AgentChapterRows,
             system='SYSTEM', user='USER',
             response_payload={'blueprints': [{'chapter_ordinal': 1}]},
             acceptance=replacement, scope_violation=None)
@@ -809,7 +820,7 @@ def test_agent_checkpoint_restore_rechecks_session_and_never_overwrites_first(
     with pytest.raises(ProvenanceRefused, match='session'):
         stage2_runs.restore_checkpoint(
             resumed, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
+            architecture='plot-blueprint-v1', response_model=_AgentChapterRows,
             system='SYSTEM', user='USER')
 
 
@@ -825,8 +836,8 @@ def test_agent_checkpoint_restore_refuses_legacy_prior_ledger_actual_model_drift
     ctx = _ctx(tmp_path, run_id, executor_profile=_AGENT_PROFILE)
     policy = _agent_request_policy(max_tokens=2048)
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')],
         request_policy=policy)
     text = '{"blueprints":[{"chapter_ordinal":1}]}'
     acceptance = _agent_checkpoint_acceptance(
@@ -835,7 +846,7 @@ def test_agent_checkpoint_restore_refuses_legacy_prior_ledger_actual_model_drift
                (accepted_attempt, text)], max_tokens=2048)
     checkpoint = stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
+        architecture='plot-blueprint-v1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance, scope_violation=None)
@@ -884,13 +895,13 @@ def test_agent_checkpoint_restore_refuses_legacy_prior_ledger_actual_model_drift
     resumed = _ctx(
         tmp_path, run_id, executor_profile=_AGENT_PROFILE)
     _ensure_run(
-        resumed, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        resumed, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')],
         request_policy=policy)
     with pytest.raises(ProvenanceRefused, match='resolved profile'):
         stage2_runs.restore_checkpoint(
             resumed, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
+            architecture='plot-blueprint-v1', response_model=_AgentChapterRows,
             system='SYSTEM', user='USER')
 
 
@@ -907,8 +918,8 @@ def test_agent_checkpoint_restore_refuses_legacy_audit_actual_profile_drift(
     ctx = _ctx(tmp_path, run_id, executor_profile=_AGENT_PROFILE)
     policy = _agent_request_policy(max_tokens=2048)
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')],
         request_policy=policy)
     text = '{"blueprints":[{"chapter_ordinal":1}]}'
     acceptance = _agent_checkpoint_acceptance(
@@ -916,7 +927,7 @@ def test_agent_checkpoint_restore_refuses_legacy_audit_actual_profile_drift(
         texts=[(attempt_id, text)], max_tokens=2048)
     stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
+        architecture='plot-blueprint-v1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance, scope_violation=None)
@@ -939,13 +950,13 @@ def test_agent_checkpoint_restore_refuses_legacy_audit_actual_profile_drift(
     resumed = _ctx(
         tmp_path, run_id, executor_profile=_AGENT_PROFILE)
     _ensure_run(
-        resumed, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        resumed, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')],
         request_policy=policy)
     with pytest.raises(ProvenanceRefused, match=message):
         stage2_runs.restore_checkpoint(
             resumed, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
+            architecture='plot-blueprint-v1', response_model=_AgentChapterRows,
             system='SYSTEM', user='USER')
 
 
@@ -958,8 +969,8 @@ def test_codex_unknown_actual_model_restores_with_ledger_and_session_unknown(
     ctx = _ctx(tmp_path, run_id, executor_profile=_AGENT_PROFILE)
     policy = _agent_request_policy(max_tokens=2048)
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')],
         request_policy=policy)
     text = '{"blueprints":[{"chapter_ordinal":1}]}'
     acceptance = _agent_checkpoint_acceptance(
@@ -967,19 +978,19 @@ def test_codex_unknown_actual_model_restores_with_ledger_and_session_unknown(
         texts=[(attempt_id, text)], max_tokens=2048, actual_model=None)
     stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
+        architecture='plot-blueprint-v1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance, scope_violation=None)
 
     resumed = _ctx(tmp_path, run_id, executor_profile=_AGENT_PROFILE)
     _ensure_run(
-        resumed, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')],
+        resumed, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')],
         request_policy=policy)
     restored = stage2_runs.restore_checkpoint(
         resumed, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_AgentChapterRows,
+        architecture='plot-blueprint-v1', response_model=_AgentChapterRows,
         system='SYSTEM', user='USER')
 
     assert restored is not None
@@ -998,8 +1009,8 @@ def test_validated_checkpoint_restores_cost_and_acceptance_with_zero_wire(tmp_pa
 
     first = _ctx(tmp_path, run_id)
     _ensure_run(
-        first, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        first, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     normalized = '{"blueprints":[{"chapter_ordinal":1}]}'
     raw_reasoning = f'```json\n{normalized}\n```'
     acceptance = _checkpoint_acceptance(
@@ -1008,7 +1019,7 @@ def test_validated_checkpoint_restores_cost_and_acceptance_with_zero_wire(tmp_pa
         normalized_text=normalized, channel='reasoning')
     stage2_runs.write_checkpoint(
         first, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='plot-blueprint-v1', response_model=_ChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance,
@@ -1018,11 +1029,11 @@ def test_validated_checkpoint_restores_cost_and_acceptance_with_zero_wire(tmp_pa
     events: list[dict[str, object]] = []
     resumed = _ctx(tmp_path, run_id, observer=events.append)
     _ensure_run(
-        resumed, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        resumed, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     record = stage2_runs.restore_checkpoint(
         resumed, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='plot-blueprint-v1', response_model=_ChapterRows,
         system='SYSTEM', user='USER')
     transport = FakeTransport(lambda _req, _index: AssertionError('checkpoint 不应上线'))
     client = LlmClient(
@@ -1079,8 +1090,8 @@ def test_checkpoint_drift_corruption_and_cross_run_copy_fail_closed(tmp_path):
     ctx = _ctx(tmp_path, run_id)
     requests = [(1, 'SYSTEM', 'USER')]
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     normalized = '{"blueprints":[{"chapter_ordinal":1}]}'
     acceptance = _checkpoint_acceptance(
         ctx, attempt_id=attempt_id, purpose=purpose,
@@ -1088,7 +1099,7 @@ def test_checkpoint_drift_corruption_and_cross_run_copy_fail_closed(tmp_path):
         normalized_text=normalized)
     checkpoint = stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='plot-blueprint-v1', response_model=_ChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance,
@@ -1098,7 +1109,7 @@ def test_checkpoint_drift_corruption_and_cross_run_copy_fail_closed(tmp_path):
     with pytest.raises(ProvenanceRefused, match='输入绑定'):
         stage2_runs.restore_checkpoint(
             ctx, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='plot-blueprint-v1', response_model=_ChapterRows,
             system='SYSTEM', user='CHANGED')
 
     other_run = new_run_id()
@@ -1107,10 +1118,11 @@ def test_checkpoint_drift_corruption_and_cross_run_copy_fail_closed(tmp_path):
     copied.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(checkpoint, copied)
     other = _ctx(tmp_path, other_run)
+    _ensure_run(other, architecture='plot-blueprint-v1', topology='single', requests=requests)
     with pytest.raises(ProvenanceRefused, match='run/代码/契约/输入绑定'):
         stage2_runs.restore_checkpoint(
             other, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='plot-blueprint-v1', response_model=_ChapterRows,
             system='SYSTEM', user='USER')
 
     raw = json.loads(checkpoint.read_text(encoding='utf-8'))
@@ -1120,7 +1132,7 @@ def test_checkpoint_drift_corruption_and_cross_run_copy_fail_closed(tmp_path):
     with pytest.raises(ArtifactUnreadable, match='checkpoint_sha256|SHA-256'):
         stage2_runs.restore_checkpoint(
             ctx, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='plot-blueprint-v1', response_model=_ChapterRows,
             system='SYSTEM', user='USER')
 
 
@@ -1130,8 +1142,8 @@ def test_checkpoint_rejects_normalized_text_that_points_to_another_payload(tmp_p
     ctx = _ctx(tmp_path, run_id)
     requests = [(1, 'SYSTEM', 'USER')]
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     normalized = '{"blueprints":[{"chapter_ordinal":1}]}'
     acceptance = _checkpoint_acceptance(
         ctx, attempt_id='e' * 16, purpose=purpose,
@@ -1139,7 +1151,7 @@ def test_checkpoint_rejects_normalized_text_that_points_to_another_payload(tmp_p
         normalized_text=normalized)
     checkpoint = stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='plot-blueprint-v1', response_model=_ChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance, scope_violation=None)
@@ -1152,7 +1164,7 @@ def test_checkpoint_rejects_normalized_text_that_points_to_another_payload(tmp_p
     with pytest.raises(ProvenanceRefused, match='唯一归一结果|指向不同内容'):
         stage2_runs.restore_checkpoint(
             ctx, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='plot-blueprint-v1', response_model=_ChapterRows,
             system='SYSTEM', user='USER')
 
 
@@ -1162,8 +1174,8 @@ def test_checkpoint_write_rejects_normalized_text_not_derived_from_raw_channel(
     ctx = _ctx(tmp_path, new_run_id())
     purpose = 'stage2.blueprint:ch1'
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')])
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')])
     normalized = '{"blueprints":[{"chapter_ordinal":1}]}'
     acceptance = _checkpoint_acceptance(
         ctx, attempt_id='7' * 16, purpose=purpose,
@@ -1173,7 +1185,7 @@ def test_checkpoint_write_rejects_normalized_text_not_derived_from_raw_channel(
     with pytest.raises(ProvenanceRefused, match='唯一归一结果'):
         stage2_runs.write_checkpoint(
             ctx, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='plot-blueprint-v1', response_model=_ChapterRows,
             system='SYSTEM', user='USER',
             response_payload={'blueprints': [{'chapter_ordinal': 1}]},
             acceptance=acceptance, scope_violation=None)
@@ -1186,8 +1198,8 @@ def test_checkpoint_write_requires_reasoning_iff_salvaged(
     ctx = _ctx(tmp_path, new_run_id())
     purpose = 'stage2.blueprint:ch1'
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')])
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')])
     normalized = '{"blueprints":[{"chapter_ordinal":1}]}'
     acceptance = _checkpoint_acceptance(
         ctx, attempt_id='6' * 16, purpose=purpose,
@@ -1198,7 +1210,7 @@ def test_checkpoint_write_requires_reasoning_iff_salvaged(
     with pytest.raises(ProvenanceRefused, match='salvaged'):
         stage2_runs.write_checkpoint(
             ctx, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='plot-blueprint-v1', response_model=_ChapterRows,
             system='SYSTEM', user='USER',
             response_payload={'blueprints': [{'chapter_ordinal': 1}]},
             acceptance=acceptance, scope_violation=None)
@@ -1209,8 +1221,8 @@ def test_checkpoint_restore_rejects_coherent_payload_split_from_raw_channel(tmp_
     purpose = 'stage2.blueprint:ch1'
     ctx = _ctx(tmp_path, run_id)
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')])
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')])
     original = '{"blueprints":[{"chapter_ordinal":1}]}'
     acceptance = _checkpoint_acceptance(
         ctx, attempt_id='5' * 16, purpose=purpose,
@@ -1218,7 +1230,7 @@ def test_checkpoint_restore_rejects_coherent_payload_split_from_raw_channel(tmp_
         normalized_text=original)
     checkpoint = stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='plot-blueprint-v1', response_model=_ChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance, scope_violation=None)
@@ -1239,7 +1251,7 @@ def test_checkpoint_restore_rejects_coherent_payload_split_from_raw_channel(tmp_
     with pytest.raises(ProvenanceRefused, match='唯一归一结果'):
         stage2_runs.restore_checkpoint(
             resumed, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='plot-blueprint-v1', response_model=_ChapterRows,
             system='SYSTEM', user='USER')
 
 
@@ -1249,8 +1261,8 @@ def test_checkpoint_metadata_corruption_is_closed_by_whole_record_hash(tmp_path)
     ctx = _ctx(tmp_path, run_id)
     requests = [(1, 'SYSTEM', 'USER')]
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     normalized = '{"blueprints":[{"chapter_ordinal":1}]}'
     acceptance = _checkpoint_acceptance(
         ctx, attempt_id='9' * 16, purpose=purpose,
@@ -1258,7 +1270,7 @@ def test_checkpoint_metadata_corruption_is_closed_by_whole_record_hash(tmp_path)
         normalized_text=normalized)
     checkpoint = stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='plot-blueprint-v1', response_model=_ChapterRows,
         system='SYSTEM', user='USER',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance, scope_violation=None)
@@ -1268,7 +1280,7 @@ def test_checkpoint_metadata_corruption_is_closed_by_whole_record_hash(tmp_path)
     with pytest.raises(ArtifactUnreadable, match='checkpoint_sha256'):
         stage2_runs.restore_checkpoint(
             ctx, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='plot-blueprint-v1', response_model=_ChapterRows,
             system='SYSTEM', user='USER')
 
 
@@ -1280,8 +1292,8 @@ def test_transport_retry_checkpoint_claims_every_attempt_and_real_resume_is_zero
     normalized = '{"blueprints":[{"chapter_ordinal":1}]}'
     first = _ctx(tmp_path, run_id)
     _ensure_run(
-        first, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        first, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
 
     def retry_then_succeed(_request, index):
         if index == 0:
@@ -1298,7 +1310,7 @@ def test_transport_retry_checkpoint_claims_every_attempt_and_real_resume_is_zero
         budget_checker=lambda *_args, **_kwargs: None)
     rows, violations, errors = extract._run_chapter_requests(
         first, first_client, requests, model_cls=_ChapterRows,
-        max_tokens=2048, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=2048, checkpoints=True, architecture='plot-blueprint-v1')
     assert errors == [] and violations == []
     assert rows == [{'chapter_ordinal': 1}]
     assert len(first_transport.calls) == 2 and first.ledger.calls_made == 2
@@ -1316,8 +1328,8 @@ def test_transport_retry_checkpoint_claims_every_attempt_and_real_resume_is_zero
     events: list[dict[str, object]] = []
     resumed = _ctx(tmp_path, run_id, observer=events.append)
     _ensure_run(
-        resumed, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        resumed, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     resumed_transport = FakeTransport(
         lambda _request, _index: AssertionError('checkpoint restore 不应新增 wire'))
     resumed_client = LlmClient(
@@ -1326,7 +1338,7 @@ def test_transport_retry_checkpoint_claims_every_attempt_and_real_resume_is_zero
         budget_checker=lambda *_args, **_kwargs: None)
     restored_rows, restored_violations, restored_errors = extract._run_chapter_requests(
         resumed, resumed_client, requests, model_cls=_ChapterRows,
-        max_tokens=2048, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=2048, checkpoints=True, architecture='plot-blueprint-v1')
     assert restored_errors == [] and restored_violations == []
     assert restored_rows == rows and resumed_transport.calls == []
     assert resumed.ledger.calls_made == 2
@@ -1342,8 +1354,8 @@ def test_fenced_reasoning_checkpoint_keeps_raw_and_normalized_channels(tmp_path)
     raw_reasoning = f'```json\n{normalized}\n```'
     ctx = _ctx(tmp_path, run_id)
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     transport = FakeTransport.always(ChatResponse(
         content='', reasoning=raw_reasoning, finish_reason='stop',
         model='test-model', usage={'completion_tokens': 9, 'reasoning_tokens': 9}))
@@ -1353,7 +1365,7 @@ def test_fenced_reasoning_checkpoint_keeps_raw_and_normalized_channels(tmp_path)
         budget_checker=lambda *_args, **_kwargs: None)
     rows, _violations, errors = extract._run_chapter_requests(
         ctx, client, requests, model_cls=_ChapterRows,
-        max_tokens=2048, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=2048, checkpoints=True, architecture='plot-blueprint-v1')
     assert errors == [] and rows == [{'chapter_ordinal': 1}]
     assert len(transport.calls) == 1, '合法 reasoning 已过完整闸，不得再发一采争取 content'
     checkpoint = json.loads(stage2_runs.paths.stage2_blueprint_checkpoint_path(
@@ -1382,8 +1394,8 @@ def test_checkpoint_request_config_drift_fails_closed_before_wire(
     requests = [(1, 'SYSTEM', 'USER')]
     first = _ctx(tmp_path, run_id)
     _ensure_run(
-        first, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        first, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     first_client = LlmClient(
         first, FakeTransport.always(ChatResponse(
             content='{"blueprints":[{"chapter_ordinal":1}]}',
@@ -1392,7 +1404,7 @@ def test_checkpoint_request_config_drift_fails_closed_before_wire(
         budget_checker=lambda *_args, **_kwargs: None)
     _rows, _violations, errors = extract._run_chapter_requests(
         first, first_client, requests, model_cls=_ChapterRows,
-        max_tokens=2048, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=2048, checkpoints=True, architecture='plot-blueprint-v1')
     assert errors == []
 
     resumed = _ctx(tmp_path, run_id)
@@ -1404,7 +1416,7 @@ def test_checkpoint_request_config_drift_fails_closed_before_wire(
         budget_checker=lambda *_args, **_kwargs: None)
     _rows, _violations, errors = extract._run_chapter_requests(
         resumed, client, requests, model_cls=_ChapterRows,
-        max_tokens=max_tokens, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=max_tokens, checkpoints=True, architecture='plot-blueprint-v1')
     assert len(errors) == 1 and isinstance(errors[0], ProvenanceRefused)
     assert message in str(errors[0]) and transport.calls == []
 
@@ -1414,8 +1426,8 @@ def test_response_model_version_suffix_restores_by_request_alias_with_zero_wire(
     requests = [(1, 'SYSTEM', 'USER')]
     first = _ctx(tmp_path, run_id)
     _ensure_run(
-        first, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        first, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     first_client = LlmClient(
         first, FakeTransport.always(ChatResponse(
             content='{"blueprints":[{"chapter_ordinal":1}]}',
@@ -1425,7 +1437,7 @@ def test_response_model_version_suffix_restores_by_request_alias_with_zero_wire(
         budget_checker=lambda *_args, **_kwargs: None)
     rows, _violations, errors = extract._run_chapter_requests(
         first, first_client, requests, model_cls=_ChapterRows,
-        max_tokens=2048, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=2048, checkpoints=True, architecture='plot-blueprint-v1')
     assert errors == [] and rows == [{'chapter_ordinal': 1}]
     checkpoint = json.loads(stage2_runs.paths.stage2_blueprint_checkpoint_path(
         first.novel_dir, run_id, 'blueprint', 1).read_text(encoding='utf-8'))
@@ -1441,7 +1453,7 @@ def test_response_model_version_suffix_restores_by_request_alias_with_zero_wire(
         budget_checker=lambda *_args, **_kwargs: None)
     restored, _violations, restored_errors = extract._run_chapter_requests(
         resumed, resumed_client, requests, model_cls=_ChapterRows,
-        max_tokens=2048, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=2048, checkpoints=True, architecture='plot-blueprint-v1')
     assert restored_errors == [] and restored == rows and transport.calls == []
 
 
@@ -1460,12 +1472,12 @@ def test_checkpoint_preserves_untyped_parse_then_revalidates_schema_coercion(tmp
         [('blueprint', _CoercingChapterRows, 2048, False)],
         recovery_policy='stage2-blueprint-v1')
     _ensure_run(
-        first, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests,
+        first, architecture='plot-blueprint-v1',
+        topology='single', requests=requests,
         request_policy=policy)
     rows, _violations, errors = extract._run_chapter_requests(
         first, first_client, requests, model_cls=_CoercingChapterRows,
-        max_tokens=2048, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=2048, checkpoints=True, architecture='plot-blueprint-v1')
     assert errors == []
     assert rows == [{
         'chapter_ordinal': 1, 'normalized_default': 'filled-by-schema'}]
@@ -1485,7 +1497,7 @@ def test_checkpoint_preserves_untyped_parse_then_revalidates_schema_coercion(tmp
         budget_checker=lambda *_args, **_kwargs: None)
     restored, _violations, restored_errors = extract._run_chapter_requests(
         resumed, resumed_client, requests, model_cls=_CoercingChapterRows,
-        max_tokens=2048, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=2048, checkpoints=True, architecture='plot-blueprint-v1')
     assert restored_errors == [] and restored == rows and transport.calls == []
 
 
@@ -1512,16 +1524,16 @@ def test_run_request_policy_drift_stops_pending_resume_before_any_wire(
         [('blueprint', _ChapterRows, 2048, False)],
         recovery_policy='stage2-blueprint-v1')
     _ensure_run(
-        first, architecture='extraction-ir-v3.1', topology='scaffolded_single',
+        first, architecture='plot-blueprint-v1', topology='single',
         requests=requests, request_policy=high_policy)
     _rows, _violations, pending = extract._run_chapter_requests(
         first, first_client, requests, model_cls=_ChapterRows,
-        max_tokens=2048, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=2048, checkpoints=True, architecture='plot-blueprint-v1')
     expected_pending = 2 if scenario == 'all_pending' else 1
     assert len(pending) == expected_pending
     assert all(isinstance(error, ResponseRepairRequired) for error in pending)
     manifest = stage2_runs.create_repair_manifest(
-        first, pending, architecture='extraction-ir-v3.1')
+        first, pending, architecture='plot-blueprint-v1')
     decisions = tmp_path / f'{scenario}-decisions.json'
     decisions.write_text(json.dumps({'decisions': [
         {'attempt_id': error.attempt_id, 'action': 'decline',
@@ -1543,8 +1555,8 @@ def test_run_request_policy_drift_stops_pending_resume_before_any_wire(
         recovery_policy='stage2-blueprint-v1')
     with pytest.raises(ProvenanceRefused, match='绑定已漂移'):
         _ensure_run(
-            resumed, architecture='extraction-ir-v3.1',
-            topology='scaffolded_single', requests=requests,
+            resumed, architecture='plot-blueprint-v1',
+            topology='single', requests=requests,
             request_policy=changed_policy)
     assert transport.calls == [] and resumed.ledger.calls_made == 0
 
@@ -1555,7 +1567,7 @@ def test_checkpoint_preflight_blocks_missing_chapter_before_any_wire(tmp_path):
     first = _ctx(tmp_path, run_id)
     policy = _test_request_policy(max_tokens=2048)
     _ensure_run(
-        first, architecture='extraction-ir-v3.1', topology='scaffolded_single',
+        first, architecture='plot-blueprint-v1', topology='single',
         requests=requests, request_policy=policy)
     purpose = 'stage2.blueprint:ch1'
     original = '{"blueprints":[{"chapter_ordinal":1}]}'
@@ -1565,7 +1577,7 @@ def test_checkpoint_preflight_blocks_missing_chapter_before_any_wire(tmp_path):
         normalized_text=original, max_tokens=2048)
     checkpoint = stage2_runs.write_checkpoint(
         first, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='plot-blueprint-v1', response_model=_ChapterRows,
         system='SYSTEM', user='USER 1',
         response_payload={'blueprints': [{'chapter_ordinal': 1}]},
         acceptance=acceptance, scope_violation=None)
@@ -1590,7 +1602,7 @@ def test_checkpoint_preflight_blocks_missing_chapter_before_any_wire(tmp_path):
         budget_checker=lambda *_args, **_kwargs: None)
     rows, violations, errors = extract._run_chapter_requests(
         resumed, client, requests, model_cls=_ChapterRows,
-        max_tokens=2048, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=2048, checkpoints=True, architecture='plot-blueprint-v1')
     assert rows == [] and violations == []
     assert len(errors) == 1 and isinstance(errors[0], ProvenanceRefused)
     assert transport.calls == [] and resumed.ledger.calls_made == 0
@@ -1600,12 +1612,12 @@ def test_checkpoint_write_remains_enabled_when_old_restore_is_disabled(tmp_path)
     ctx = _ctx(tmp_path, new_run_id())
     requests = [(1, 'SYSTEM', 'USER')]
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     rows, _violations, errors = extract._run_chapter_requests(
         ctx, _SyntheticChapterClient(ctx), requests,
         model_cls=_ChapterRows, checkpoints=True, restore_checkpoints=False,
-        architecture='extraction-ir-v3.1')
+        architecture='plot-blueprint-v1')
     assert errors == [] and rows == [{'chapter_ordinal': 1}]
     assert stage2_runs.paths.stage2_blueprint_checkpoint_path(
         ctx.novel_dir, ctx.run_id, 'blueprint', 1).is_file()
@@ -1617,13 +1629,13 @@ def test_delivery_exhaustion_preserves_same_run_and_only_resends_missing_chapter
     requests = [(1, 'SYSTEM', 'USER 1'), (2, 'SYSTEM', 'USER 2')]
     first = _ctx(tmp_path, run_id)
     _ensure_run(
-        first, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        first, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
 
     rows, violations, errors = extract._run_chapter_requests(
         first, _DeliveryFailureChapterClient(first), requests,
         model_cls=_ChapterRows, checkpoints=True, restore_checkpoints=False,
-        architecture='extraction-ir-v3.1')
+        architecture='plot-blueprint-v1')
 
     assert rows == [{'chapter_ordinal': 1}]
     assert violations == []
@@ -1646,7 +1658,7 @@ def test_delivery_exhaustion_preserves_same_run_and_only_resends_missing_chapter
     rows, violations, errors = extract._run_chapter_requests(
         resumed, resumed_client, requests,
         model_cls=_ChapterRows, checkpoints=True, restore_checkpoints=True,
-        architecture='extraction-ir-v3.1')
+        architecture='plot-blueprint-v1')
 
     assert errors == [] and violations == []
     assert [row['chapter_ordinal'] for row in rows] == [1, 2]
@@ -1661,8 +1673,8 @@ def test_delivery_recovery_refuses_permission_error_and_drifted_run(tmp_path):
     requests = [(1, 'SYSTEM', 'USER 1'), (2, 'SYSTEM', 'USER 2')]
     ctx = _ctx(tmp_path, run_id)
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
 
     with pytest.raises(ProvenanceRefused, match='failure 身份不合法'):
         stage2_runs.write_delivery_recovery(
@@ -1692,12 +1704,12 @@ def test_refresh_cannot_reuse_run_with_checkpoint_before_any_wire(tmp_path):
     requests = [(1, 'SYSTEM', 'USER')]
     first = _ctx(tmp_path, run_id)
     _ensure_run(
-        first, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        first, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     rows, _violations, errors = extract._run_chapter_requests(
         first, _SyntheticChapterClient(first), requests,
         model_cls=_ChapterRows, checkpoints=True,
-        architecture='extraction-ir-v3.1')
+        architecture='plot-blueprint-v1')
     assert errors == [] and rows == [{'chapter_ordinal': 1}]
     checkpoint = stage2_runs.paths.stage2_blueprint_checkpoint_path(
         first.novel_dir, run_id, 'blueprint', 1)
@@ -1713,8 +1725,8 @@ def test_refresh_cannot_reuse_run_with_checkpoint_before_any_wire(tmp_path):
         budget_checker=lambda *_args, **_kwargs: None)
     with pytest.raises(ProvenanceRefused, match='主动重采.*换新.*--run-id'):
         _ensure_run(
-            resumed, architecture='extraction-ir-v3.1',
-            topology='scaffolded_single', requests=requests, refresh=True)
+            resumed, architecture='plot-blueprint-v1',
+            topology='single', requests=requests, refresh=True)
 
     assert checkpoint.read_bytes() == before
     assert transport.calls == [] and resumed.ledger.calls_made == 0
@@ -1734,15 +1746,15 @@ def test_refresh_cannot_reuse_run_with_pending_manifest_before_any_wire(tmp_path
         [('blueprint', _ChapterRows, 2048, False)],
         recovery_policy='stage2-blueprint-v1')
     _ensure_run(
-        first, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests,
+        first, architecture='plot-blueprint-v1',
+        topology='single', requests=requests,
         request_policy=policy)
     _rows, _violations, pending = extract._run_chapter_requests(
         first, first_client, requests, model_cls=_ChapterRows,
-        max_tokens=2048, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=2048, checkpoints=True, architecture='plot-blueprint-v1')
     assert len(pending) == 1 and isinstance(pending[0], ResponseRepairRequired)
     manifest = stage2_runs.create_repair_manifest(
-        first, pending, architecture='extraction-ir-v3.1')
+        first, pending, architecture='plot-blueprint-v1')
     before = manifest.read_bytes()
 
     resumed = _ctx(tmp_path, run_id, repair=True)
@@ -1755,8 +1767,8 @@ def test_refresh_cannot_reuse_run_with_pending_manifest_before_any_wire(tmp_path
         budget_checker=lambda *_args, **_kwargs: None)
     with pytest.raises(ProvenanceRefused, match='主动重采.*换新.*--run-id'):
         _ensure_run(
-            resumed, architecture='extraction-ir-v3.1',
-            topology='scaffolded_single', requests=requests,
+            resumed, architecture='plot-blueprint-v1',
+            topology='single', requests=requests,
             request_policy=changed_client.json_request_policy(
                 [('blueprint', _ChapterRows, 2048, False)],
                 recovery_policy='stage2-blueprint-v1'),
@@ -1771,8 +1783,8 @@ def test_targeted_refresh_reusing_stage2_run_is_rejected_before_input_or_wire(tm
     run_id = new_run_id()
     first = _ctx(tmp_path, run_id)
     _ensure_run(
-        first, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')])
+        first, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')])
 
     resumed = _ctx(tmp_path, run_id)
     resumed.cache = CachePolicy.refresh()
@@ -1792,12 +1804,12 @@ def test_checkpoint_path_does_not_invent_a_9999_chapter_cap(tmp_path):
     ctx = _ctx(tmp_path, run_id)
     requests = [(10_000, 'SYSTEM', 'USER')]
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     rows, _violations, errors = extract._run_chapter_requests(
         ctx, _SyntheticChapterClient(ctx), requests,
         model_cls=_ChapterRows, checkpoints=True,
-        architecture='extraction-ir-v3.1')
+        architecture='plot-blueprint-v1')
     assert errors == [] and rows == [{'chapter_ordinal': 10_000}]
     assert stage2_runs.paths.stage2_blueprint_checkpoint_path(
         ctx.novel_dir, run_id, 'blueprint', 10_000).name \
@@ -1809,8 +1821,8 @@ def test_recovery_prompt_checkpoint_is_reconstructed_before_zero_wire_restore(tm
     requests = [(1, 'SYSTEM', 'USER')]
     first = _ctx(tmp_path, run_id, repair=True)
     _ensure_run(
-        first, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        first, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     bad_transport = FakeTransport.always(ChatResponse(
         content='{"blueprints":[}', finish_reason='stop', model='test-model'))
     first_client = LlmClient(
@@ -1819,10 +1831,10 @@ def test_recovery_prompt_checkpoint_is_reconstructed_before_zero_wire_restore(tm
         budget_checker=lambda *_args, **_kwargs: None)
     _rows, _violations, pending = extract._run_chapter_requests(
         first, first_client, requests, model_cls=_ChapterRows,
-        max_tokens=2048, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=2048, checkpoints=True, architecture='plot-blueprint-v1')
     assert len(pending) == 1 and isinstance(pending[0], ResponseRepairRequired)
     manifest = stage2_runs.create_repair_manifest(
-        first, pending, architecture='extraction-ir-v3.1')
+        first, pending, architecture='plot-blueprint-v1')
     decisions = tmp_path / 'recovery-decisions.json'
     decisions.write_text(json.dumps({'decisions': [{
         'attempt_id': pending[0].attempt_id,
@@ -1843,7 +1855,7 @@ def test_recovery_prompt_checkpoint_is_reconstructed_before_zero_wire_restore(tm
         budget_checker=lambda *_args, **_kwargs: None)
     rows, _violations, errors = extract._run_chapter_requests(
         resumed, recovery_client, requests, model_cls=_ChapterRows,
-        max_tokens=2048, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=2048, checkpoints=True, architecture='plot-blueprint-v1')
     assert errors == [] and rows == [{'chapter_ordinal': 1}]
     assert len(recovery_transport.calls) == 1
     assert recovery_transport.calls[0].user != 'USER'
@@ -1861,7 +1873,7 @@ def test_recovery_prompt_checkpoint_is_reconstructed_before_zero_wire_restore(tm
         budget_checker=lambda *_args, **_kwargs: None)
     final_rows, _violations, final_errors = extract._run_chapter_requests(
         final_ctx, final_client, requests, model_cls=_ChapterRows,
-        max_tokens=2048, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=2048, checkpoints=True, architecture='plot-blueprint-v1')
     assert final_errors == [] and final_rows == rows and final_transport.calls == []
 
 
@@ -1898,8 +1910,8 @@ def _write_repaired_checkpoint(
     ctx = _ctx(tmp_path, run_id)
     purpose = 'stage2.blueprint:ch1'
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')])
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')])
     errors, attempts = _seed_pending_attempts(ctx, 1)
     attempt_id = attempts[0]
     record = response_repair.find_attempt(ctx.novel_dir, attempt_id)
@@ -1910,7 +1922,7 @@ def _write_repaired_checkpoint(
         response_repair.candidate_path(record).write_text(
             json.dumps(payload, ensure_ascii=False), encoding='utf-8')
         manifest = stage2_runs.create_repair_manifest(
-            ctx, errors, architecture='extraction-ir-v3.1')
+            ctx, errors, architecture='plot-blueprint-v1')
         decisions = tmp_path / 'repair-checkpoint-decisions.json'
         decisions.write_text(json.dumps({'decisions': [{
             'attempt_id': attempt_id, 'action': 'submit',
@@ -1939,7 +1951,7 @@ def _write_repaired_checkpoint(
         'deterministic' if channel == 'deterministic' else 'agent_submit')
     checkpoint = stage2_runs.write_checkpoint(
         ctx, phase='blueprint', chapter=1, purpose=purpose,
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='plot-blueprint-v1', response_model=_ChapterRows,
         system='SYSTEM', user='USER', response_payload=payload,
         acceptance=acceptance, scope_violation=None)
     return ctx, checkpoint, source_path
@@ -1953,8 +1965,8 @@ def test_single_resolution_tamper_before_checkpoint_is_rejected(
     ctx = _ctx(tmp_path, run_id)
     purpose = 'stage2.blueprint:ch1'
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')])
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')])
     _errors, attempts = _seed_pending_attempts(ctx, 1)
     attempt_id = attempts[0]
     record = response_repair.find_attempt(ctx.novel_dir, attempt_id)
@@ -1989,7 +2001,7 @@ def test_single_resolution_tamper_before_checkpoint_is_rejected(
     with pytest.raises(ArtifactUnreadable, match='resolution_sha256'):
         stage2_runs.write_checkpoint(
             ctx, phase='blueprint', chapter=1, purpose=purpose,
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='plot-blueprint-v1', response_model=_ChapterRows,
             system='SYSTEM', user='USER', response_payload=payload,
             acceptance=acceptance, scope_violation=None)
 
@@ -2036,7 +2048,7 @@ def test_repaired_checkpoint_requires_immutable_resolution_on_restore(
     valid = _ctx(tmp_path, ctx.run_id)
     assert stage2_runs.restore_checkpoint(
         valid, phase='blueprint', chapter=1, purpose='stage2.blueprint:ch1',
-        architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+        architecture='plot-blueprint-v1', response_model=_ChapterRows,
         system='SYSTEM', user='USER') is not None
 
     if mutation == 'delete':
@@ -2048,7 +2060,7 @@ def test_repaired_checkpoint_requires_immutable_resolution_on_restore(
         stage2_runs.restore_checkpoint(
             resumed, phase='blueprint', chapter=1,
             purpose='stage2.blueprint:ch1',
-            architecture='extraction-ir-v3.1', response_model=_ChapterRows,
+            architecture='plot-blueprint-v1', response_model=_ChapterRows,
             system='SYSTEM', user='USER')
 
 
@@ -2056,13 +2068,13 @@ def test_eight_pending_make_one_manifest_and_one_atomic_resolution(tmp_path):
     ctx = _ctx(tmp_path, new_run_id())
     requests = [(index, 'SYSTEM', f'USER {index}') for index in range(1, 9)]
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     errors, attempts = _seed_pending_attempts(ctx, 8)
 
     with pytest.raises(ResponseRepairBatchRequired) as paused:
         extract._raise_response_repair(
-            ctx, errors, architecture='extraction-ir-v3.1')
+            ctx, errors, architecture='plot-blueprint-v1')
     manifest = Path(paused.value.manifest_path)
     assert paused.value.run_id == ctx.run_id
     assert paused.value.attempts == tuple(attempts)
@@ -2115,20 +2127,20 @@ def test_eight_pending_resume_once_then_all_checkpoints_replay_with_zero_wire(tm
         [('blueprint', _ChapterRows, 2048, False)],
         recovery_policy='stage2-blueprint-v1')
     _ensure_run(
-        first, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests,
+        first, architecture='plot-blueprint-v1',
+        topology='single', requests=requests,
         request_policy=policy)
 
     first_rows, first_violations, pending = extract._run_chapter_requests(
         first, first_client, requests, model_cls=_ChapterRows,
-        max_tokens=2048, checkpoints=True, architecture='extraction-ir-v3.1')
+        max_tokens=2048, checkpoints=True, architecture='plot-blueprint-v1')
     assert first_rows == [] and first_violations == []
     assert len(pending) == 8
     assert all(isinstance(error, ResponseRepairRequired) for error in pending)
     assert len(first_transport.calls) == 8
     with pytest.raises(ResponseRepairBatchRequired) as paused:
         extract._raise_response_repair(
-            first, pending, architecture='extraction-ir-v3.1')
+            first, pending, architecture='plot-blueprint-v1')
     manifest = Path(paused.value.manifest_path)
     assert paused.value.run_id == run_id
     assert len(paused.value.attempts) == 8
@@ -2179,8 +2191,8 @@ def test_eight_pending_resume_once_then_all_checkpoints_replay_with_zero_wire(tm
         sleep=lambda _seconds: None,
         budget_checker=lambda *_args, **_kwargs: None)
     _ensure_run(
-        resumed, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests,
+        resumed, architecture='plot-blueprint-v1',
+        topology='single', requests=requests,
         request_policy=resumed_client.json_request_policy(
             [('blueprint', _ChapterRows, 2048, False)],
             recovery_policy='stage2-blueprint-v1'))
@@ -2188,12 +2200,12 @@ def test_eight_pending_resume_once_then_all_checkpoints_replay_with_zero_wire(tm
         extract._run_chapter_requests(
             resumed, resumed_client, requests, model_cls=_ChapterRows,
             max_tokens=2048, checkpoints=True,
-            architecture='extraction-ir-v3.1')
+            architecture='plot-blueprint-v1')
     assert resumed_errors == [] and resumed_violations == []
     assert [row['chapter_ordinal'] for row in resumed_rows] == list(range(1, 9))
     assert len(resumed_transport.calls) == len(expected_wire_chapters) == 4
     extract._raise_response_repair(
-        resumed, resumed_errors, architecture='extraction-ir-v3.1')
+        resumed, resumed_errors, architecture='plot-blueprint-v1')
     assert list(manifest.parent.glob(stage2_runs.MANIFEST_FILE)) == [manifest]
     assert list(manifest.parent.glob(stage2_runs.RESOLUTION_FILE)) == [resolution]
 
@@ -2206,8 +2218,8 @@ def test_eight_pending_resume_once_then_all_checkpoints_replay_with_zero_wire(tm
         max_retries=0, sleep=lambda _seconds: None,
         budget_checker=lambda *_args, **_kwargs: None)
     _ensure_run(
-        replay, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests,
+        replay, architecture='plot-blueprint-v1',
+        topology='single', requests=requests,
         request_policy=replay_client.json_request_policy(
             [('blueprint', _ChapterRows, 2048, False)],
             recovery_policy='stage2-blueprint-v1'))
@@ -2215,7 +2227,7 @@ def test_eight_pending_resume_once_then_all_checkpoints_replay_with_zero_wire(tm
         extract._run_chapter_requests(
             replay, replay_client, requests, model_cls=_ChapterRows,
             max_tokens=2048, checkpoints=True,
-            architecture='extraction-ir-v3.1')
+            architecture='plot-blueprint-v1')
     assert replay_errors == [] and replay_violations == []
     assert replay_rows == resumed_rows
     assert replay_transport.calls == []
@@ -2225,137 +2237,67 @@ def test_eight_pending_resume_once_then_all_checkpoints_replay_with_zero_wire(tm
     assert replay.ledger.calls_made == 12
 
 
-def test_v2_detail_failure_after_boundary_batch_cannot_pause_a_second_time(
-        tmp_path, monkeypatch):
-    """v2 两相共享一次人工额度；第二相失败只能自动升级或明确终态。"""
-    from novel.stages.stage2 import global_review
-    # 本例专门测试退役两相响应恢复，不构造正文/Global；其语义准入在
-    # node lifecycle 纵切验证，这里把已满足的前置隔离在唯一调用点。
-    monkeypatch.setattr(global_review, 'require_global_accepted', lambda _ctx: None)
+def test_plot_failure_after_declined_batch_cannot_pause_again_or_reset_budget(tmp_path):
+    """实际 V9 抽取仅有一相；人工退回后累计预算与一次性批次仍绑定原 run。"""
+    from novel import prov
+    from novel.work_units import budget_for
+    from tests.test_plot_producer import prepare_book
+    book = prepare_book(tmp_path)
     run_id = new_run_id()
-    first = _ctx(tmp_path, run_id, repair=True)
-    main_text = [{'chapter_ordinal': 1, 'text': '第一段正文'}]
-    boundary_system = 'BOUNDARY SYSTEM'
-    detail_system = 'DETAIL SYSTEM'
-    requests = [(1, boundary_system, 'BOUNDARY USER 1')]
-    spec = SimpleNamespace(
-        architecture='extraction-ir-v2',
-        topology='boundary_then_detail',
-        boundary_system=boundary_system,
-        boundary_response_model=_ChapterRows,
-        response_model=_ChapterRows,
-        prefers_content_over_reasoning_salvage=False,
-        system=detail_system,
-    )
-    character_projection = extract.materialize_blueprint_character_projection(
-        {}, main_text)
-    character_projection_raw = character_projection.model_dump(
-        by_alias=True, mode='json')
+    def context():
+        return RunContext(novel_dir=book, node='stage2.blueprint', paid=True,
+            code=prov.code_version(), cache=CachePolicy.default(), run_id=run_id,
+            ledger=CostLedger(path=tmp_path / '_service' / 'ledger.jsonl', run_id=run_id),
+            repair_rejected_responses=True)
+    def client(ctx):
+        wire = FakeTransport.always(ChatResponse(
+            content='{"blueprints":[]}', finish_reason='stop', model=FLASH_MODEL))
+        return LlmClient(ctx, wire, model=FLASH_MODEL, max_retries=0,
+            concurrency=1, sleep=lambda _seconds: None,
+            budget_checker=lambda *_args, **_kwargs: None), wire
 
-    monkeypatch.setattr(extract, '_active_spec', lambda: spec)
-    monkeypatch.setattr(
-        extract, 'build_prompts',
-        lambda _ctx, chapters=(), **_kwargs: requests)
-    monkeypatch.setattr(extract, '_read_main_text', lambda _store: main_text)
-    monkeypatch.setattr(
-        extract, '_require_blueprint_character_projection',
-        lambda _store: (character_projection, character_projection_raw))
-    monkeypatch.setattr(
-        extract, 'build_blueprint_user',
-        lambda *_args, **_kwargs: 'DETAIL USER 1')
-    monkeypatch.setattr(
-        extract, '_boundary_validator',
-        lambda *_args, **_kwargs: (lambda _obj, _resp: None))
-    monkeypatch.setattr(
-        extract, '_detail_validator',
-        lambda *_args, **_kwargs: (lambda _obj, _resp: None))
-
-    bad = ChatResponse(
-        content='{"blueprints":[]}', finish_reason='stop', model=FLASH_MODEL)
-    first_transport = FakeTransport.always(bad)
-    first_client = LlmClient(
-        first, first_transport, model=FLASH_MODEL, max_retries=0,
-        concurrency=1, sleep=lambda _seconds: None,
-        budget_checker=lambda *_args, **_kwargs: None)
+    first = context()
+    first_client, first_wire = client(first)
     with pytest.raises(ResponseRepairBatchRequired) as paused:
         extract.request_blueprints(first, first_client)
-    assert len(first_transport.calls) == 1
+    assert len(first_wire.calls) == 1
+    assert len(paused.value.attempts) == 1 and paused.value.run_id == run_id
     manifest = Path(paused.value.manifest_path)
-    assert paused.value.run_id == run_id
-    assert len(paused.value.attempts) == 1
-
-    decisions = tmp_path / 'v2-boundary-decisions.json'
+    decisions = tmp_path / 'plot-decisions.json'
     decisions.write_text(json.dumps({'decisions': [{
-        'attempt_id': paused.value.attempts[0],
-        'action': 'decline',
-        'reason': '边界材料不足，进入登记的定向恢复动作',
+        'attempt_id': paused.value.attempts[0], 'action': 'decline',
+        'reason': '空响应没有可修复剧情，进入原批次的定向恢复。',
     }]}, ensure_ascii=False), encoding='utf-8')
-    resolution = stage2_runs.submit_batch(
-        first.novel_dir, manifest, decisions, actor='operator')
-    manifest_before = manifest.read_bytes()
+    resolution = stage2_runs.submit_batch(book, manifest, decisions, actor='operator')
+    before = manifest.read_bytes()
 
-    resumed = _ctx(tmp_path, run_id, repair=True)
-    boundary_ok = {
-        'blueprints': [{
-            'chapter_ordinal': 1,
-            'micro_events': [{'end_para': 1, 'event': '边界'}],
-            'beats': [{'end_para': 1, 'event': '边界'}],
-        }],
-    }
-
-    def respond(request, _index):
-        if request.system == boundary_system:
-            return ChatResponse(
-                content=json.dumps(boundary_ok, ensure_ascii=False),
-                finish_reason='stop', model=request.model)
-        return ChatResponse(
-            content='{"blueprints":[]}', finish_reason='stop',
-            model=request.model)
-
-    resumed_transport = FakeTransport(respond)
-    resumed_client = LlmClient(
-        resumed, resumed_transport, model=FLASH_MODEL, max_retries=0,
-        concurrency=1, sleep=lambda _seconds: None,
-        budget_checker=lambda *_args, **_kwargs: None)
-    from novel.work_units import WorkUnitBudgetExhausted
-    with pytest.raises(WorkUnitBudgetExhausted, match='4/4'):
+    resumed = context()
+    resumed_client, resumed_wire = client(resumed)
+    with pytest.raises(LlmFailed, match='均未拿到可用 JSON'):
         extract.request_blueprints(resumed, resumed_client)
-
-    assert [request.model for request in resumed_transport.calls] == [
-        FLASH_MODEL, FLASH_MODEL, FLASH_MODEL,
-    ]
-    from novel.work_units import budget_for
-    assert budget_for(resumed, scope='chapter:1').used == 4
-    assert stage2_runs.paths.stage2_blueprint_checkpoint_path(
-        resumed.novel_dir, run_id, 'boundaries', 1).is_file()
+    assert [req.model for req in resumed_wire.calls] == [FLASH_MODEL, PRO_FALLBACK_MODEL]
+    assert budget_for(resumed, scope='chapter:1').used == 3
     assert not stage2_runs.paths.stage2_blueprint_checkpoint_path(
-        resumed.novel_dir, run_id, 'detail', 1).exists()
-    assert manifest.read_bytes() == manifest_before
+        book, run_id, 'blueprint', 1).exists()
+    assert manifest.read_bytes() == before
     assert list(manifest.parent.glob(stage2_runs.MANIFEST_FILE)) == [manifest]
     assert list(manifest.parent.glob(stage2_runs.RESOLUTION_FILE)) == [resolution]
-    detail_rejections = [
-        json.loads(path.read_text(encoding='utf-8'))
-        for path in resumed.novel_dir.glob(
-            f'{response_repair.paths.REJECTED_RESPONSE_DIRNAME}/*/*/'
-            f'{response_repair.REJECTION_FILE}')
-        if json.loads(path.read_text(encoding='utf-8')).get('purpose')
-        == 'stage2.blueprint:ch1'
-    ]
-    # 边界失败与恢复各占一轮，detail 只剩两轮；第三轮不得绕开同章 4 次上限。
-    assert len(detail_rejections) == 2
-    assert all(row.get('repair_eligible') is False for row in detail_rejections)
+    records = [json.loads(path.read_text('utf-8')) for path in book.glob(
+        f'{response_repair.paths.REJECTED_RESPONSE_DIRNAME}/*/*/{response_repair.REJECTION_FILE}')]
+    assert len(records) == 3
+    assert sum(row.get('repair_eligible') is True for row in records) == 1
 
 
 @pytest.mark.parametrize('tamper', ['run', 'rejection'])
 def test_batch_consumption_rechecks_manifest_source_bytes(tmp_path, tamper):
     ctx = _ctx(tmp_path, new_run_id())
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'SYSTEM', 'USER')])
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'SYSTEM', 'USER')])
     errors, attempts = _seed_pending_attempts(ctx, 1)
     record_root = response_repair.find_attempt(ctx.novel_dir, attempts[0]).root
     manifest = stage2_runs.create_repair_manifest(
-        ctx, errors, architecture='extraction-ir-v3.1')
+        ctx, errors, architecture='plot-blueprint-v1')
     decisions = tmp_path / 'tamper-decisions.json'
     decisions.write_text(json.dumps({'decisions': [{
         'attempt_id': attempts[0], 'action': 'decline', 'reason': '材料不足',
@@ -2371,8 +2313,8 @@ def test_batch_consumption_rechecks_manifest_source_bytes(tmp_path, tamper):
 def test_manifest_refuses_attempt_with_existing_single_resolution(tmp_path):
     ctx = _ctx(tmp_path, new_run_id())
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'S', 'U')])
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'S', 'U')])
     errors, attempts = _seed_pending_attempts(ctx, 1)
     response_repair.submit(
         ctx.novel_dir, attempts[0], actor='legacy-operator',
@@ -2380,7 +2322,7 @@ def test_manifest_refuses_attempt_with_existing_single_resolution(tmp_path):
 
     with pytest.raises(TerminalState, match='已有单项或 batch resolution'):
         stage2_runs.create_repair_manifest(
-            ctx, errors, architecture='extraction-ir-v3.1')
+            ctx, errors, architecture='plot-blueprint-v1')
     assert not (stage2_runs.paths.stage2_blueprint_run_path(
         ctx.novel_dir, ctx.run_id) / stage2_runs.MANIFEST_FILE).exists()
 
@@ -2392,8 +2334,8 @@ def test_manifest_and_single_resolution_race_has_exactly_one_authority(
     """两个写手经 barrier 同时到达；ownership 胜者落盘，败者必须明确关闭。"""
     ctx = _ctx(tmp_path, new_run_id())
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'S', 'U')])
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'S', 'U')])
     errors, attempts = _seed_pending_attempts(ctx, 1)
     attempt_id = attempts[0]
     record = response_repair.find_attempt(ctx.novel_dir, attempt_id)
@@ -2425,7 +2367,7 @@ def test_manifest_and_single_resolution_race_has_exactly_one_authority(
         try:
             if current == 'manifest':
                 result = stage2_runs.create_repair_manifest(
-                    ctx, errors, architecture='extraction-ir-v3.1')
+                    ctx, errors, architecture='plot-blueprint-v1')
             elif single_kind == 'submit':
                 result = response_repair.submit(
                     ctx.novel_dir, attempt_id, actor='operator',
@@ -2467,14 +2409,14 @@ def test_manifest_and_single_resolution_race_has_exactly_one_authority(
 def test_checkpoint_or_terminal_error_precedes_batch_manifest(tmp_path):
     ctx = _ctx(tmp_path, new_run_id())
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'S', 'U')])
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'S', 'U')])
     pending, _attempts = _seed_pending_attempts(ctx, 1)
 
     with pytest.raises(ArtifactUnreadable, match='checkpoint broken'):
         extract._raise_response_repair(
             ctx, [pending[0], ArtifactUnreadable('checkpoint broken')],
-            architecture='extraction-ir-v3.1')
+            architecture='plot-blueprint-v1')
     assert not (stage2_runs.paths.stage2_blueprint_run_path(
         ctx.novel_dir, ctx.run_id) / stage2_runs.MANIFEST_FILE).exists()
 
@@ -2484,8 +2426,8 @@ def test_checkpoint_write_failure_still_drains_and_saves_other_successes(
     ctx = _ctx(tmp_path, new_run_id())
     requests = [(chapter, 'SYSTEM', f'USER {chapter}') for chapter in (1, 2, 3)]
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=requests)
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=requests)
     original_write = stage2_runs.write_checkpoint
     attempted: list[int] = []
 
@@ -2500,7 +2442,7 @@ def test_checkpoint_write_failure_still_drains_and_saves_other_successes(
     raw, _violations, errors = extract._run_chapter_requests(
         ctx, _SyntheticChapterClient(ctx), requests,
         model_cls=_ChapterRows, checkpoints=True,
-        architecture='extraction-ir-v3.1')
+        architecture='plot-blueprint-v1')
 
     assert sorted(attempted) == [1, 2, 3]
     assert [row['chapter_ordinal'] for row in raw] == [2, 3]
@@ -2513,11 +2455,11 @@ def test_checkpoint_write_failure_still_drains_and_saves_other_successes(
 def test_batch_decisions_are_exact_and_candidate_is_sealed(tmp_path):
     ctx = _ctx(tmp_path, new_run_id())
     _ensure_run(
-        ctx, architecture='extraction-ir-v3.1',
-        topology='scaffolded_single', requests=[(1, 'S', 'U')])
+        ctx, architecture='plot-blueprint-v1',
+        topology='single', requests=[(1, 'S', 'U')])
     errors, attempts = _seed_pending_attempts(ctx, 2)
     manifest = stage2_runs.create_repair_manifest(
-        ctx, errors, architecture='extraction-ir-v3.1')
+        ctx, errors, architecture='plot-blueprint-v1')
 
     incomplete = tmp_path / 'incomplete.json'
     incomplete.write_text(json.dumps({'decisions': [{

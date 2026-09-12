@@ -40,7 +40,7 @@ from typing import Any, BinaryIO, Iterator, NamedTuple
 from contracts.artifacts import (
     STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT,
     STAGE2_GLOBAL_EDIT_FAILURE, STAGE2_GLOBAL_REVIEW_DECISIONS,
-    STAGE2_BLUEPRINT_RELATION_EDIT,
+    STAGE2_BLUEPRINT_EDIT,
     STAGE5_REVIEWER_REWRITE_REQUEST,
 )
 from contracts.invariants import (
@@ -55,7 +55,8 @@ from contracts.schema.api import (
     Stage2FinalReviewRequest, Stage5ReviewerRewriteRequest,
 )
 from contracts.schema.evaluation import GlobalReviewDecisionSet
-from contracts.schema.stage2 import BlueprintRelationEdit, GlobalEdit, GlobalEditCommit, GlobalEditFailure
+from contracts.schema.plot_edit import PlotEdit
+from contracts.schema.stage2 import GlobalEdit, GlobalEditCommit, GlobalEditFailure
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected,
     AgentRunEvent, AgentRunExitOrigin,
@@ -112,7 +113,7 @@ from novel.orchestrator.nodes import shell_line
 from novel.store import ArtifactStore
 from novel.work_units import (
     COMMANDER_FAILURE_RECONCILED, WorkUnitBudget, WorkUnitRefused, ContentReservation,
-    require_workflow, validate_reviewer_record,
+    require_workflow, validate_reviewer_record, commander_budget_for_record,
 )
 
 RUNS_FILENAME = 'agent_runs.jsonl'
@@ -993,9 +994,9 @@ def _stage2_reviewer_input(
         path = uploads.save_global_review_decisions(base, sid, decisions)
     elif '--apply-edit' in tokens and '--review-decisions' not in tokens:
         if action.node == 'stage2.blueprint':
-            decoded = decode_artifact(STAGE2_BLUEPRINT_RELATION_EDIT, payload)
-            edit = BlueprintRelationEdit.model_validate(decoded.payload)
-            path = uploads.save_blueprint_relation_edit(base, sid, edit)
+            decoded = decode_artifact(STAGE2_BLUEPRINT_EDIT, payload)
+            edit = PlotEdit.model_validate(decoded.payload)
+            path = uploads.save_blueprint_edit(base, sid, edit)
         else:
             decoded = decode_artifact(STAGE2_GLOBAL_EDIT, payload)
             edit = GlobalEdit.model_validate(decoded.payload)
@@ -1192,6 +1193,7 @@ class _ReviewerSeat:
     waiting_on: str
     business_sha256: str
     output_schema_sha256: str | None = None
+    work_unit_scope: str | None = None
     provider_session_id: str | None = None
     turns_recorded: int = 0
     started: bool = False
@@ -1681,7 +1683,7 @@ def _reconcile_completed_work_unit_actions(
         if identity is None:
             raise WorkUnitRefused('活动审阅记录没有登记的工作单元属主')
         node, scope = identity
-        budget = WorkUnitBudget(base, sid, node, 'commander', scope)
+        budget = commander_budget_for_record(base, sid, record)
         if budget.unit_id != record.work_unit_id:
             raise WorkUnitRefused('活动审阅记录与登记工作单元不一致')
         if budget.turn(record.work_unit_turn_id).state not in ('delivered', 'adopted'):
@@ -1719,14 +1721,14 @@ def _reconcile_landed_stage2_work_unit_actions(
     逐项否定/UNVER 决定没有接受后继，不能因节点仍阻断而无限重放已落决定。
     """
     from novel.orchestrator import approvals
-    from novel.stages.stage2 import extract, global_review, relation_edit
+    from novel.stages.stage2 import extract, global_review, plot_edit
 
     for path, record in uploads.load_reviewer_actions(base, sid):
         if (record.work_unit_id is None or record.work_unit_turn_id is None
                 or record.waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON):
             continue
         node, scope = commander_work_unit(record.waiting_on)
-        budget = WorkUnitBudget(base, sid, node, 'commander', scope)
+        budget = commander_budget_for_record(base, sid, record)
         if budget.unit_id != record.work_unit_id:
             raise WorkUnitRefused('Stage2 退休记录与登记工作单元不一致')
         if budget.turn(record.work_unit_turn_id).state == 'failed':
@@ -1755,8 +1757,8 @@ def _reconcile_landed_stage2_work_unit_actions(
                     submitted = global_review.submitted_decisions_is_current(
                         base, sid, record.input_payload, require_action_complete=True)
                 elif record.node == 'stage2.blueprint' and '--apply-edit' in record.flags:
-                    submitted = relation_edit.submitted_patch_is_current(base, sid, record.input_payload)
-                if submitted and '--review-decisions' not in record.flags:
+                    submitted = plot_edit.submitted_edit_is_current(base, sid, record.input_payload)
+                if submitted and record.node != 'stage2.blueprint' and '--review-decisions' not in record.flags:
                     try:
                         approvals.require_stage2_node_accepted(base, sid, record.node)
                     except ApprovalRequired:
@@ -4419,7 +4421,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             return
         identity = commander_work_unit(seat.waiting_on)
         if identity is not None:
-            budget = WorkUnitBudget(base, sid, identity[0], 'commander', identity[1])
+            budget = WorkUnitBudget(base, sid, identity[0], 'commander', seat.work_unit_scope or identity[1])
             pending = budget.latest_pending_response()
             if pending is not None and pending[1].get('session_run_id') == seat.session_run_id:
                 try:
@@ -4671,8 +4673,6 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         if identity is None:
             return None
         node, scope = identity
-        budget = WorkUnitBudget(base, sid, node, 'commander', scope)
-        binding = (budget.unit_id, scope)
 
         def stopped(reason: str, *, unknown: bool = False) -> CommanderTurnResult:
             nonlocal latest_outcome, latest_rc, latest_error_kind
@@ -4692,6 +4692,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             return stopped(f'{exc.waiting_on} 工作包明确停止：{exc.reason}')
         if task is None:
             return None
+        scope = task.work_unit_scope or scope
+        budget = WorkUnitBudget(base, sid, node, 'commander', scope)
+        binding = (budget.unit_id, scope)
         previous_turn = budget.latest_turn()
         if previous_turn is not None and previous_turn.state == 'adopted' and previous_turn.recovery_sha256:
             previous_decision = budget.recovery_proof(previous_turn.turn_id)
@@ -4805,8 +4808,9 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             if pending_record is not None:
                 _path, record = pending_record
                 if record.node == 'stage2.blueprint' and record.input_payload is not None:
-                    from novel.stages.stage2.relation_edit import submitted_patch_is_current
-                    submitted_patch_recovery = submitted_patch_is_current(base, sid, record.input_payload)
+                    from novel.stages.stage2.plot_edit import submitted_edit_is_current
+                    submitted_patch_recovery = submitted_edit_is_current(
+                        base, sid, record.input_payload, require_action_complete=False)
                 elif record.node == 'stage2.global' and record.input_payload is not None:
                     if '--review-decisions' in record.flags:
                         from novel.stages.stage2.global_review import submitted_decisions_is_current
@@ -5005,6 +5009,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 provider_session_id=None, continue_ready=result.continue_ready,
                 outcome=result.outcome)
 
+        from novel.work_units import require_commander_scope_closed
+        require_commander_scope_closed(base, sid, node, scope)
         if budget.remaining == 0:
             return stopped('Commander 当前工作单元有效内容额度已用尽；可免费复验或人工编辑，追加额度须由操作者另行授权')
         if feedback is not None and waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
@@ -5029,7 +5035,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             seat = _ReviewerSeat(
                 session_run_id=jobs.new_job_id(), prompt_sha256=_sha256_bytes(reviewer_prompt.encode('utf-8')),
                 waiting_on=waiting_on, business_sha256=task.business_sha256,
-                output_schema_sha256=output_schema_digest)
+                output_schema_sha256=output_schema_digest, work_unit_scope=scope)
             open_reviewer_seats[binding] = seat
         reservation: ContentReservation | None = None
         reserve_error: BaseException | None = None
@@ -5039,6 +5045,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 reservation = budget.reserve(
                     request_sha256=request_sha256, run_id=run_id, session_run_id=seat.session_run_id,
                     request_payload=dict(prompt=reviewer_prompt, output_schema=output_schema,
+                                         work_unit_scope=scope,
                                          business_sha256=task.business_sha256, waiting_on=task.waiting_on,
                                          workpack_sha256=task.workpack_sha256, epoch_id=epoch.epoch_id,
                                          schema_sha256=output_schema_digest or schema_sha256,

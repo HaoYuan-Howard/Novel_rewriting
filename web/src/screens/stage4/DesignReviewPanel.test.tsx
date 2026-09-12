@@ -1,19 +1,25 @@
-import { act, screen, waitFor, within } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, realApi } from '@/api/endpoints'
-import { mockApi } from '@/api/mock'
+import { mockApi, plotFlowFixture } from '@/api/mock'
 import { qk } from '@/api/queryKeys'
 import { renderRoute } from '@/test/render'
 import type {
   ApprovalDoc,
   DesignReviewDecision,
-  DesignNarrativeRelation,
+  DesignRepairConstraint,
   DesignReviewRequest,
   DesignReviewTemplate,
 } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import { DesignReviewPanel } from './DesignReviewPanel'
+
+import type { PlannerRelation } from '@/types/plot.generated'
+
+const SAMPLE_TRUTH = plotFlowFixture().design_template.chapters.find((c) => c.output_ordinal === 3)!.subject.blind_truth
+const FIRST_BEAT = SAMPLE_TRUTH.beats[0].alias
+const SECOND_BEAT = SAMPLE_TRUTH.beats[1].alias
 
 const CANDIDATE = 'e'.repeat(64)
 const AGGREGATE = 'd'.repeat(64)
@@ -162,19 +168,17 @@ async function startReview() {
   return user
 }
 
-const REVIEW_RELATIONS: DesignNarrativeRelation[] = [
-  { kind: 'story_before', enforcement: 'review', before_alias: 'a_' + '1'.repeat(16), after_alias: 'a_' + '3'.repeat(16) },
-  { kind: 'response_to', enforcement: 'review', stimulus_alias: 'a_' + '1'.repeat(16), response_alias: 'a_' + '3'.repeat(16) },
-  { kind: 'same_scene', enforcement: 'review', left_alias: 'a_' + '1'.repeat(16), right_alias: 'a_' + '3'.repeat(16) },
-  { kind: 'observes', enforcement: 'review', observer_alias: 'a_' + '4'.repeat(16),
-    observed_alias: 'a_' + '1'.repeat(16), observation_alias: 'a_' + '3'.repeat(16) },
-]
+const REVIEW_RELATIONS: PlannerRelation[] = (['cause', 'story_before', 'response_to', 'same_scene', 'observes'] as const).map((kind) => ({
+  alias: 'a_' + 'f'.repeat(16), kind,
+  before_beat_alias: FIRST_BEAT, after_beat_alias: SECOND_BEAT,
+  observer_alias: kind === 'observes' ? SAMPLE_TRUTH.beats[0].participant_aliases[0] : null,
+}))
 
 function withActiveConstraint(template: DesignReviewTemplate): DesignReviewTemplate {
   return { ...template, constraint_catalog: {
     '3': { expected_constraint_set_sha256: 'b'.repeat(64), items: [{
       constraint_sha256: 'a'.repeat(64), source_decision_sha256s: ['c'.repeat(64)],
-      constraint: { code: 'scene_goal', scene_refs: ['c03s01'], opaque_aliases: ['a_' + '1'.repeat(16)] },
+      constraint: { code: 'scene_goal', scene_refs: ['c03s01'], opaque_aliases: [FIRST_BEAT] },
     }] },
   } }
 }
@@ -210,28 +214,24 @@ describe('Stage4A 正式设计审阅', () => {
     expect(screen.getByLabelText('第 3 章 Stage4A 已核对')).not.toBeChecked()
     await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
     expect(save()).toBeDisabled()
-    await user.click(screen.getByLabelText('第 3 章 scene_goal_exclude alias a_' + '1'.repeat(16)))
+    await user.click(screen.getByLabelText('第 3 章 scene_goal_exclude alias ' + FIRST_BEAT))
     await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
     expect(screen.getByLabelText('第 3 章 scene_goal_exclude 场景 c03s01')).toBeChecked()
-    expect(screen.getByLabelText('第 3 章 scene_goal_exclude alias a_' + '1'.repeat(16))).toBeChecked()
+    expect(screen.getByLabelText('第 3 章 scene_goal_exclude alias ' + FIRST_BEAT)).toBeChecked()
     expect(save()).toBeInTheDocument()
     expect(save()).toBeEnabled()
     expect(approve).not.toHaveBeenCalled()
   })
 
-  describe.each(['新增', '替代'])('%s关系约束', (mode) => {
-    it.each(REVIEW_RELATIONS)('显式选择 $kind 后真实 HTTP POST 保留端点并提升为hard', async (source) => {
+  describe.each(['新增', '替代'])('%s语义约束引用', (mode) => {
+    it.each(REVIEW_RELATIONS)('显式引用 $kind 后 HTTP POST 不复制或提升原关系', async (source) => {
       const approveOverHttp = realApi.approveDesignReview.bind(realApi)
       const { template, approve, doc } = await mount('expired')
       const original = structuredClone(source)
       template.mockImplementation(async (sid, query) => {
         const base = await mockApi.getDesignReviewTemplate(sid, query)
         const current = mode === '替代' ? withActiveConstraint(base) : base
-        current.chapters[0].subject.blind_truth.narrative_relations = [
-          source,
-          { kind: 'same_scene', enforcement: 'hard', left_alias: 'a_' + '1'.repeat(16), right_alias: 'a_' + '2'.repeat(16) },
-          { kind: 'unknown_relation', enforcement: 'review', before_alias: 'a_' + '1'.repeat(16), after_alias: 'a_' + '2'.repeat(16) },
-        ]
+        current.chapters[0].subject.blind_truth.constraints = [source]
         return current
       })
       approve.mockImplementation(approveOverHttp)
@@ -242,17 +242,13 @@ describe('Stage4A 正式设计审阅', () => {
       await writeReviewReasons(user)
       if (mode === '替代') {
         await user.selectOptions(screen.getByLabelText('第 3 章历史约束 1处置'), 'supersede')
-        await user.type(screen.getByLabelText('第 3 章历史约束 1理由'), '用本章已登记关系替换旧要求')
+        await user.type(screen.getByLabelText('第 3 章历史约束 1理由'), '按已登记关系修正呈现安排')
       }
       await user.click(screen.getByLabelText(mode === '替代'
-        ? '第 3 章历史约束 1替代码 narrative_relation' : '第 3 章返修码 narrative_relation'))
-      const select = screen.getByLabelText(mode === '替代'
-        ? '第 3 章历史约束 1替代关系约束' : '第 3 章新增关系约束')
-      expect(select).toHaveValue('')
-      expect(within(select).getAllByRole('option')).toHaveLength(2)
+        ? '第 3 章历史约束 1替代码 semantic_constraint' : '第 3 章返修码 semantic_constraint'))
       await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
       expect(screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })).toBeDisabled()
-      await user.selectOptions(select, '0')
+      await user.click(screen.getByLabelText('第 3 章 semantic_constraint alias ' + source.alias))
       expect(screen.getByLabelText('第 3 章 Stage4A 已核对')).not.toBeChecked()
       await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
       const save = screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })
@@ -264,41 +260,43 @@ describe('Stage4A 正式设计审阅', () => {
       const posted = JSON.parse(String(init?.body)) as DesignReviewRequest
       const constraints = mode === '替代'
         ? posted.chapters[0].constraint_operations!.items[0].replacements : posted.chapters[0].constraints
-      expect(constraints.find((value) => value.code === 'narrative_relation')).toEqual({
-        code: 'narrative_relation', scene_refs: [], opaque_aliases: [], effect: { ...source, enforcement: 'hard' },
+      expect(constraints.find((value) => value.code === 'semantic_constraint')).toEqual({
+        code: 'semantic_constraint', scene_refs: [], opaque_aliases: [source.alias],
       })
       expect(source).toEqual(original)
     })
   })
 
-  it.each(['无关系', '缺hard枚举'])('%s时不会提供或伪造关系修订', async (failure) => {
-    const { template } = await mount('expired', failure === '缺hard枚举'
-      ? { narrative_relation_enforcements: ['review'] } : {})
+  it('没有已登记语义约束或端点时，不允许现场补造关系', async () => {
+    const { template } = await mount('expired')
     template.mockImplementation(async (sid, query) => {
       const base = withActiveConstraint(await mockApi.getDesignReviewTemplate(sid, query))
-      if (failure === '缺hard枚举') base.chapters[0].subject.blind_truth.narrative_relations = REVIEW_RELATIONS
+      base.chapters[0].subject.blind_truth.constraints = []
+      base.chapters[0].subject.blind_truth.endpoints = []
       return base
     })
     const user = await startReview()
-    expect(screen.getByLabelText('第 3 章返修码 narrative_relation')).toBeDisabled()
+    expect(screen.getByLabelText('第 3 章返修码 semantic_constraint')).toBeDisabled()
     await user.selectOptions(screen.getByLabelText('第 3 章历史约束 1处置'), 'supersede')
-    expect(screen.getByLabelText('第 3 章历史约束 1替代码 narrative_relation')).toBeDisabled()
-    expect(screen.getByText('本章没有可选择的 review 关系，关系替换保持禁用。')).toBeVisible()
+    expect(screen.getByLabelText('第 3 章历史约束 1替代码 semantic_constraint')).toBeDisabled()
+    expect(screen.getByText('本章没有可引用的语义约束或端点，相关替换保持禁用。')).toBeVisible()
   })
 
-  it('已有非法effect不能因勾选确认而提交', async () => {
+  it.each(['复制effect', '未知引用'])('%s不能因勾选确认而提交', async (failure) => {
     const { template, approve } = await mount('expired')
     template.mockImplementation(async (sid, query) => {
       const base = await mockApi.getDesignReviewTemplate(sid, query)
-      base.chapters[0].subject.blind_truth.narrative_relations = REVIEW_RELATIONS
-      base.chapters[0].constraints = [{ code: 'narrative_relation', scene_refs: [], opaque_aliases: [],
-        effect: { ...REVIEW_RELATIONS[0], enforcement: 'hard', after_alias: 'a_' + 'f'.repeat(16) } }]
+      base.chapters[0].subject.blind_truth.constraints = REVIEW_RELATIONS.slice(0, 1)
+      base.chapters[0].constraints = [{
+        code: 'semantic_constraint', scene_refs: [],
+        opaque_aliases: [failure === '未知引用' ? 'a_' + '0'.repeat(16) : REVIEW_RELATIONS[0].alias],
+        ...(failure === '复制effect' ? { effect: REVIEW_RELATIONS[0] } : {}),
+      } as DesignRepairConstraint]
       return base
     })
     const user = await startReview()
     await writeReviewReasons(user)
     await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
-    expect(screen.getByLabelText('第 3 章新增关系约束')).toHaveValue('')
     expect(screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })).toBeDisabled()
     expect(approve).not.toHaveBeenCalled()
   })
@@ -309,7 +307,7 @@ describe('Stage4A 正式设计审阅', () => {
     template.mockImplementation(async (sid, query) => {
       const base = await mockApi.getDesignReviewTemplate(sid, query)
       if (failure === '未知code') base.chapters[0].constraints = [{
-        code: 'unknown_constraint', scene_refs: ['c03s01'], opaque_aliases: ['a_' + '1'.repeat(16)],
+        code: 'unknown_constraint', scene_refs: ['c03s01'], opaque_aliases: [FIRST_BEAT],
       }]
       return base
     })
@@ -332,7 +330,7 @@ describe('Stage4A 正式设计审阅', () => {
     await user.type(screen.getByLabelText('第 3 章历史约束 1理由'), '明确替换旧方向')
     await user.click(screen.getByLabelText('第 3 章历史约束 1替代码 scene_goal_exclude'))
     await user.click(screen.getByLabelText('第 3 章 scene_goal_exclude 场景 c03s01'))
-    await user.click(screen.getByLabelText('第 3 章 scene_goal_exclude alias a_' + '1'.repeat(16)))
+    await user.click(screen.getByLabelText('第 3 章 scene_goal_exclude alias ' + FIRST_BEAT))
     await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
     // 每次读当前按钮；禁用与启用之间旧 DOM 节点已经卸载。
     const save = () => screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })
@@ -370,7 +368,7 @@ describe('Stage4A 正式设计审阅', () => {
         output_ordinal: chapter.output_ordinal, decision: 'accept', reason: '本章已核对', constraints: [],
         constraint_operations: { expected_constraint_set_sha256: 'b'.repeat(64), items: [{
           kind: 'supersede', constraint_sha256: 'a'.repeat(64), reason: '仍要求替代修复',
-          replacements: [{ code: 'scene_goal_exclude', scene_refs: ['c03s01'], opaque_aliases: ['a_' + '1'.repeat(16)] }],
+          replacements: [{ code: 'scene_goal_exclude', scene_refs: ['c03s01'], opaque_aliases: [FIRST_BEAT] }],
         }] },
       })),
     }
@@ -389,7 +387,7 @@ describe('Stage4A 正式设计审阅', () => {
           items: [{
             constraint_sha256: sourceSha,
             constraint: {
-              code: 'scene_goal', scene_refs: ['c03s01'], opaque_aliases: ['a_' + '1'.repeat(16)],
+              code: 'scene_goal', scene_refs: ['c03s01'], opaque_aliases: [FIRST_BEAT],
             },
             source_decision_sha256s: ['c'.repeat(64)],
           }],
@@ -412,7 +410,7 @@ describe('Stage4A 正式设计审阅', () => {
     if (kind === 'supersede') {
       await user.click(screen.getByLabelText('第 3 章历史约束 1替代码 scene_goal_exclude'))
       await user.click(screen.getByLabelText('第 3 章 scene_goal_exclude 场景 c03s01'))
-      await user.click(screen.getByLabelText('第 3 章 scene_goal_exclude alias a_' + '1'.repeat(16)))
+      await user.click(screen.getByLabelText('第 3 章 scene_goal_exclude alias ' + FIRST_BEAT))
     }
     await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
     const save = screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })
@@ -424,7 +422,7 @@ describe('Stage4A 正式设计审阅', () => {
       items: [{
         kind, constraint_sha256: sourceSha, reason: '基于当前候选明确更正历史约束',
         replacements: kind === 'supersede' ? [{
-          code: 'scene_goal_exclude', scene_refs: ['c03s01'], opaque_aliases: ['a_' + '1'.repeat(16)],
+          code: 'scene_goal_exclude', scene_refs: ['c03s01'], opaque_aliases: [FIRST_BEAT],
         }] : [],
       }],
     })
@@ -469,9 +467,9 @@ describe('Stage4A 正式设计审阅', () => {
     expect(screen.getByLabelText('第 3 章 Stage4A 设计裁决')).toHaveValue('request_repair')
     expect(screen.getByLabelText('第 3 章返修码 entry_anchor')).toBeChecked()
     expect(screen.getAllByText('c03s01').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('主角在公开场合取得关键证据。').length).toBeGreaterThan(0)
-    expect(screen.getByText('atomic-structure-v2')).toBeVisible()
-    expect(screen.getByText('entry_anchor_changed')).toBeVisible()
+    expect(screen.getAllByText(SAMPLE_TRUTH.beats[0].content).length).toBeGreaterThan(0)
+    expect(screen.getByText('plot-presentation-structure-v1')).toBeVisible()
+    expect(screen.getAllByText(/entry_anchor/).length).toBeGreaterThan(0)
     expect(screen.getAllByText('ready').length).toBeGreaterThan(0)
     expect(screen.getByLabelText('第 3 章定向返修能力')).toHaveTextContent(
       '服务端判定：本章 request_repair 可用',
@@ -512,7 +510,7 @@ describe('Stage4A 正式设计审阅', () => {
         output_ordinal: 3,
         decision: 'request_repair',
         reason: '本章入口锚点仍沿用原结构，需要定向返修',
-        constraints: [{ code: 'entry_anchor', scene_refs: [], opaque_aliases: ['a_' + '1'.repeat(16)] }],
+        constraints: [{ code: 'entry_anchor', scene_refs: [], opaque_aliases: [FIRST_BEAT] }],
       }],
     })
   })
@@ -719,13 +717,13 @@ describe('Stage4A 正式设计审阅', () => {
         chapter_ordinal: 3,
         scenes: ['c03s01'],
         reason: '模型担忧仅作非阻断证据',
-        closed_refs: ['a_' + '1'.repeat(16)],
+        closed_refs: [FIRST_BEAT],
       }],
       infeasibility_proof: [{
         chapter_ordinal: 3,
         scenes: ['c03s01'],
         constraint_code: 'empty_stage_allowlist',
-        closed_refs: ['a_' + '1'.repeat(16)],
+        closed_refs: [FIRST_BEAT],
         proof_basis: '1'.repeat(64),
       }],
     }

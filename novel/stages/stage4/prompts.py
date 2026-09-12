@@ -40,138 +40,43 @@ BLIND_BOOK_STRATEGY_HINT: dict[str, Any] = {
 
 
 BLIND_CHAPTER_DESIGN_SYS = """\
-你是 Stage4A 单章盲结构设计器。你只看到本章去序的事实真相图：事实与人物都用仅在本请求
-有效的短 local alias，数组顺序也由确定性散列打乱。不要从 alias 字面或数组位置猜原文
-叙述顺序；你没有原文、源舞台、source_beat_ref 或逐字材料。输入中的全书策略与本章权重
-已经冻结；不要在响应中回显或修改它们，章号也由请求身份确定，不在响应中回显。
+你是 Stage4A 章级剧情规划者。输入是去源序的完整剧情、稀疏状态与约束、必要知识和目标端点。
+opaque alias 和数组顺序不表示原文顺序。你没有原文或证据坐标，不得猜测它们。
+全书策略和本章权重已冻结，不回显章号或权重。
 
-输入的 narrative_relations 是上游显式标注的语义关系，不是从数组邻接或同一 source beat
-猜出的源顺序。enforcement=hard 必须满足：story_before 表示 before 事实在故事世界中
-先于 after，但允许用 X_EARLIER 等倒叙先披露 after，不得把数组位置当故事时间；
-response_to 的 response 不得早于 stimulus；same_scene 两端必须落在同一场；observes 的
-observation 不得早于 observed。enforcement=review 只作为需要你谨慎核对的审阅证据，不要
-擅自把它硬化，也不要因为没有列关系就推断两个事实可以任意互换。
+每个 beat 是完整剧情语义，正文是唯一真相源。beat_placements 必须不重不漏覆盖本章节点，
+默认只有一条 delivery。普通换场、节奏调整、合法倒叙可用少量多场 delivery 完成，
+每条必须说明该场承担的呈现任务；不另写子 claim，不新增、改变或遗漏父节点含义。
+同一节点同一场景只有一条 delivery；场景不再保存第二份可编辑节点列表。
+presentation_instruction 是呈现安排，不能发明动机、施受关系、客观结果或知识。
 
-先按事实因果、人物状态和读者信息设计场景分组与披露顺序，再选择结构决定：
-- retain：本章适合直接、线性的真相推进，不主动声明结构变化；declared_change_kinds 必须为空；
-- reconstruct：本章有真实重构空间，必须声明至少两类变化。可选值及唯一合法排列顺序是：
-  $CHANGE_KINDS；只选需要的项，去重后仍须保持这个契约顺序。
+场景 scene_ref 按目标阅读序为 s01、s02……。每场 turn_beat_alias 属于本场实际呈现的节点。
+只有全部主要呈现都完成之后，完整节点才可进入后续场的 context_beat_aliases；
+首次出现不代表全部内容已披露。同一段意义不要在多个 delivery 中重复完整表现。
 
-每个 land alias 恰好落入一场；context_fact_aliases 只能引用「此刻读者已经知道」的事实：
-输入中 obligation=context 的 alias（它可以来自更早章已落地的事实），或**已经在本章更早场落地**
-的 land alias。较早章/较早场的已落地事实可作后续上下文，不得反向将未落地事实提前。**不得引用本场或
-后面才落地的 land alias**。turn 必须属于本场 land。entry_state_aliases / exit_state_aliases
-只填**本场新增**的状态，不要把前面已经成立的状态再抄一遍：
-- X_CONTINUE 表示同一时间线紧邻续接，代码自动继承上一场的有效 exit；
-- X_RETURN 回到离开主线前的锚点，代码自动恢复该锚点的有效状态；
-- 首场自动承接本章章首状态；
-- X_EARLIER 打开更早时点，X_PARALLEL 打开并行时层，二者不继承紧邻上一场 exit；
-- 一条 X_EARLIER/X_PARALLEL 支路用一次 X_RETURN 收口；当前输出没有 branch id，
-  不要嵌套支路，也不要在支路内再用 X_LATER；
-- X_LATER 跳到更晚时点，有时间空档，不承诺线性继承紧邻上一场 exit。
+对输入 endpoints，把必要状态、知识、因果、回应、观察与字面约束落到确定场景：
+分场父节点必须显式填 anchor_bindings；单场节点的唯一场景由编译器补齐。
+绑定只能引用已登记 endpoint_alias，不能创建知识事件、改变知晓者、把 belief/claim 升级为 world。
+same_scene 两端必须同场。故事世界先后与披露顺序分开，倒叙不能更改世界因果。
+三个 goal 使用 subject_aliases 引用当前材料，并用 anchor_beat_alias + anchor_scene_ref 明确目标锚点。
+开篇目标在首场，结尾目标在末场。不要用场景第一次/最后一次出现替代真实端点判断。
 
-机器无法从 alias 图完整判断非线性时序是否合理；必须如实标注边界留给人工判断，
-不得为了让状态看似连续而把未来事实带入过去。章尾必须真的把本章 ending 状态确立起来。
-三个 goal 只能引用本章 local fact alias，并分别落在章目标、首场和末场。场景数组就是新披露顺序。
-scene weight/role/delivery/transition 使用响应契约里的前缀枚举，首场 transition 必须 X_START。
-只谈事实组织，不指定文风，不写纯写法词：$STYLE_WORDS。只输出 JSON。""" \
+State 只说明持续状态性质；传播权限由 KnowledgeLinks 管理。父节点的重要原文语义错漏、
+知识窗口或独立依赖缺失才是上游问题，普通呈现分场不要求重新抽取 Stage2。
+语义问题如无法忠实安排，应如实交给已有设计审阅，不伪造机械闭合证明。
+
+retain 的 declared_change_kinds 为空；reconstruct 需声明至少两类实际结构变化。
+可选类别：$CHANGE_KINDS。使用响应契约的权重、role、delivery、transition 前缀枚举，
+首场 X_START。只谈剧情安排，不指定文风，不写纯写法词：$STYLE_WORDS。只输出 JSON。""" \
     .replace('$CHANGE_KINDS', '、'.join(STRUCTURE_CHANGE_KINDS)) \
     .replace('$STYLE_WORDS', '、'.join(f'「{word}」' for word in STYLE_WORDS))
 
-_BLIND_LOCAL_GOAL_HINT = {
-    'intent': '|'.join(RESPONSE_GOAL_INTENTS),
-    'fact_aliases': ['f_012345'],
-}
-_BLIND_LOCAL_SCENE_HINT = {
-    'weight': '|'.join(RESPONSE_UNIT_WEIGHTS),
-    'purpose': '本场要完成的事实局面变化',
-    'role': '|'.join(RESPONSE_STRUCTURAL_ROLES),
-    'delivery': '|'.join(RESPONSE_DELIVERY_MODES),
-    'transition': '|'.join(RESPONSE_TEMPORAL_LINKS),
-    'land_fact_aliases': ['f_012345'],
-    'context_fact_aliases': [],
-    'turn_fact_alias': 'f_012345',
-    'entry_state_aliases': [],
-    'exit_state_aliases': ['f_012345'],
-}
-BLIND_CHAPTER_DESIGN_HINT: dict[str, Any] = {
-    'structure_decision': {
-        'mode': 'retain|reconstruct', 'reason': '本章选择理由',
-        'declared_change_kinds': ['entry_anchor', 'fact_grouping'],
-    },
-    'chapter_goal': _BLIND_LOCAL_GOAL_HINT,
-    'open_hook_goal': _BLIND_LOCAL_GOAL_HINT,
-    'end_hook_goal': _BLIND_LOCAL_GOAL_HINT,
-    'chapter_rewrite_brief': '入口、事实组合与收束的可执行简报',
-    'scenes': [_BLIND_LOCAL_SCENE_HINT],
-}
+# 直接下发正式响应 schema；提示示例不能成为与载体分叉的第二份契约。
+from contracts.schema.stage4 import BlindChapterDesignResponse, BlindPlanResponse
 
-
-BLIND_DESIGN_SYS = """\
-你是 Stage4A 盲结构设计器。你只能看到去序的事实真相图：事实与人物都用无顺序含义的 opaque
-alias，数组顺序也由确定性散列打乱。不要从 alias 字面、数组位置或章内编号猜原文叙述顺序；
-你没有原文、源舞台、source_beat_ref 或逐字材料。
-
-每个输出章与同号输入章一一对应。先按事实因果、人物状态和读者信息设计场景分组与披露顺序，
-再选择结构决定：
-- retain：本章适合直接、线性的真相推进，不主动声明结构变化；declared_change_kinds 必须为空；
-- reconstruct：本章有真实重构空间，必须声明至少两类变化。可选值及唯一合法排列顺序是：
-  $CHANGE_KINDS；只选需要的项，去重后仍须保持这个契约顺序。
-
-每个 land alias 恰好落入一场；context_fact_aliases 只能引用「此刻读者已经知道」的事实：
-输入中 obligation=context 的 alias，或**已经在更早场落地**的 land alias。**不得引用本场或
-后面才落地的 land alias**——那是把还没披露的事实提前当成已成立。turn 必须属于本场 land。
-entry_state_aliases / exit_state_aliases 只填**本场新增**的状态：entry 填本场开场时必须
-额外成立、而上一时点尚未给出的状态，exit 填本场结束时新确立的状态。**不要把前面已经
-成立的状态再抄一遍**——同一时间线上的承接由代码按 transition 的定义自动补全：
-- X_CONTINUE 表示同一时间线紧邻续接，代码自动继承上一场的有效 exit；
-- X_RETURN 回到离开主线前的锚点，代码自动恢复该锚点的有效状态；
-- 首场自动承接本章章首状态。
-真正需要你判断的是**时点本身**：
-- X_EARLIER 打开更早时点，X_PARALLEL 打开并行时层，二者都不继承紧邻上一场 exit；
-- 一条 X_EARLIER/X_PARALLEL 支路用一次 X_RETURN 收口；当前输出没有 branch id，
-  不要嵌套支路，也不要在支路内再用 X_LATER；
-- X_LATER 跳到更晚时点，有时间空档，不承诺线性继承紧邻上一场 exit。
-机器无法从 alias 图完整判断非线性时序是否合理；必须如实标注边界留给人工判断，
-不得为了让状态看似连续而把未来事实带入过去。章尾必须真的把本章 ending 状态确立起来。
-三个 goal 只能引用本章 fact alias，并分别落在章目标、首场和末场。场景数组就是新披露顺序。
-weight/role/delivery/transition 使用响应契约里的前缀枚举，首场 transition 必须 X_START。
-只谈事实组织，不指定文风，不写纯写法词：$STYLE_WORDS。只输出 JSON。""" \
-    .replace('$CHANGE_KINDS', '、'.join(STRUCTURE_CHANGE_KINDS)) \
-    .replace('$STYLE_WORDS', '、'.join(f'「{word}」' for word in STYLE_WORDS))
-
-_BLIND_GOAL_HINT = {
-    'intent': '|'.join(RESPONSE_GOAL_INTENTS),
-    'fact_aliases': ['a_0123456789abcdef'],
-}
-_BLIND_SCENE_HINT = {
-    'weight': '|'.join(RESPONSE_UNIT_WEIGHTS),
-    'purpose': '本场要完成的事实局面变化',
-    'role': '|'.join(RESPONSE_STRUCTURAL_ROLES),
-    'delivery': '|'.join(RESPONSE_DELIVERY_MODES),
-    'transition': '|'.join(RESPONSE_TEMPORAL_LINKS),
-    'land_fact_aliases': ['a_0123456789abcdef'],
-    # 空数组是常态：多数场不需要额外上下文事实，示例给非空会诱导硬凑。
-    'context_fact_aliases': [],
-    'turn_fact_alias': 'a_0123456789abcdef',
-    'entry_state_aliases': [], 'exit_state_aliases': ['a_0123456789abcdef'],
-}
-BLIND_DESIGN_HINT: dict[str, Any] = {
-    'reconstruction_strategy': '只基于真相图的全书结构意图',
-    'output_chapters': [{
-        'output_ordinal': 1,
-        'structure_decision': {
-            'mode': 'retain|reconstruct', 'reason': '本章选择理由',
-            'declared_change_kinds': ['entry_anchor', 'fact_grouping'],
-        },
-        'chapter_goal': _BLIND_GOAL_HINT,
-        'open_hook_goal': _BLIND_GOAL_HINT,
-        'end_hook_goal': _BLIND_GOAL_HINT,
-        'weight': '|'.join(RESPONSE_CHAPTER_WEIGHTS),
-        'chapter_rewrite_brief': '入口、事实组合与收束的可执行简报',
-        'scenes': [_BLIND_SCENE_HINT],
-    }],
-}
+BLIND_CHAPTER_DESIGN_HINT = BlindChapterDesignResponse.model_json_schema()
+BLIND_DESIGN_SYS = BLIND_CHAPTER_DESIGN_SYS + '\n整书响应按阅读序覆盖所有章，逐章遵守相同契约。'
+BLIND_DESIGN_HINT = BlindPlanResponse.model_json_schema()
 
 EVIDENCE_BIND_SYS = """\
 你是 Stage4B 证据绑定器。盲设计候选已经冻结；你现在看到原文证据、源舞台与必须材料，
@@ -232,33 +137,25 @@ def evidence_bind_system() -> str:
 
 
 CHAPTER_BINDING_SYS = """\
-你是 Stage4B 的章级绑定解析器。本章的机械基线已由代码唯一确定：能唯一确定的
-舞台与材料归属不在你的职责内。代码只把**真正解析不了的自由度**交给你，每条
-带一个 16 位十六进制的 ambiguity_id：
-- stage_signature_conflict：该场的候选舞台 time/place/present 签名不同，你从
-  candidates 里为本场选一个 stage_ref；
-- material_multi_scene：这条必须材料可落多个场景，你从 candidates 里选一个
-  candidate_scene_id；
-- material_unplaceable：这条材料没有任何机械可落的场景，你为本章选一个合理
-  的 candidate_scene_id。
-
-规则：每个 ambiguity_id 恰好解析一次；选择只能来自该歧义下发的候选集合；
-不得改变任何已由机械基线确定的归属；不得请求或猜测其他章的任何内容。
-本章冻结候选包含完整 goal、brief 与每场 purpose/role/delivery/transition、事实和首尾状态。
-证据块的 fact_aliases / participant_aliases 是本章 opaque alias 到正式 fact_id / char_id
-的唯一映射；先用它联结场景、事实 claim/source_text、参与者与舞台，再结合材料原文及
-冻结的披露安排解析歧义。alias 无顺序含义，不从编号猜事实，也不以源文顺序覆盖 A。
-这些字段只供理解，不能改写 A；发现结构疑虑仍只能提交下述非阻断 concern。
-如果你对因果、舞台、材料或未来泄漏有语义担忧，写入 binding_concerns（非阻断
-证据）。每条 concern 的 scenes 只能取本章 candidate_scene_id，closed_refs 只能取
-本章证据块显式给出的 issued_ref_allowlist；相邻章边界摘要是只读信息，不属于该列表。
+你是 Stage4B 的章级证据与舞台绑定解析器。整章已经接受的设计骨架被冻结。
+每条 ambiguity_id 恰好解析一次，selected_refs 只能选自该条 candidates：
+- delivery_evidence：选择支持本次呈现任务的原文证据，可选多段；
+- source_context_selection：选择有据的时层、地点和实际在场人物上下文，可选多个。
+段级证据可以由不同呈现共用；不要为消除重叠而伪造细分位置。
+只解析真实歧义，不改变场景顺序、父节点分配、呈现指令、目标或语义端点。
+节点正文是完整剧情；delivery 是改编安排，不能当作独立新事实。
+使用本章 subject_aliases / endpoint_aliases / participant_aliases 的正式映射联结材料；
+opaque alias 无源序含义。必要继承状态只读，不推测其他章节。
+未知时层、地点和在场人物保持未知；被提及不代表在场。
+如发现联合呈现遗漏、重复、错误归因、因果变化或提前披露，记录 binding_concerns，
+供既有结构审阅处理，不自行改写 A 或上游。concern 的 scenes 只用本章场景，
+closed_refs 只用 issued_ref_allowlist。concern 不能代替接受决定。
 只输出 JSON。"""
 
 CHAPTER_BINDING_HINT: dict[str, Any] = {
     'resolutions': [{
         'ambiguity_id': '0123456789abcdef',
-        'stage_ref': 'b01_01',
-        'candidate_scene_id': 'c01s01',
+        'selected_refs': ['本条 candidates 中的引用'],
     }],
     'binding_concerns': [],
 }

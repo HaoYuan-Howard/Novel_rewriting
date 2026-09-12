@@ -8,7 +8,7 @@ test_schema_api.py —— HTTP 响应模型的载体层守卫（`docs/schema/_ap
   ② **契约层不许手抄取值面**（`Literal['a','b']`）：取值面的唯一落点是 `invariants`。
   ③ **契约层不许背上 web 栈**：离线产 TS 类型的脚本一行 HTTP 都不发。
 
-⚠ 本文件**不需要 fastapi**。ApprovalDoc v6 还须关闭式拒绝退役的 s3 gate。
+⚠ 本文件**不需要 fastapi**。ApprovalDoc v7 还须关闭式拒绝退役的 s3 gate。
 """
 from __future__ import annotations
 
@@ -26,7 +26,8 @@ from contracts.invariants import (
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
     AgentCapabilitiesResponse, AgentDriverCapability, AgentModelCapability,
-    AgentRunRequest, ApprovalDoc, DraftAlignView, DraftView, ErrorBody, GlobalView,
+    AgentRunRequest, ApprovalDoc, ApprovalWorkpack, DesignReviewTemplate,
+    DraftAlignView, DraftView, ErrorBody, GlobalView, NovelOverview,
     JobList, LogChunk, LogStreamEvent, NovelList, PreviewRequest, ReadingView,
     LegacyModelCapability, LegacyProviderCapability, LegacyThinkingCapability,
     RetentionApplyRequest, RetentionPlanView, RetentionPolicyRequest,
@@ -36,9 +37,9 @@ from contracts.schema.api import (
     Stage4View, Stage5View, Stage6View, Stage7View,
     TrashRestoreApplyRequest, TrashRestorePlanView, UploadResult,
 )
-from contracts.schema.api import ReadingBeatLine
+from contracts.schema.plot import SourceContext
 from contracts.schema.orchestration import (
-    AgentProfile, AgentRunStart, ArtifactState, JobStart, Step,
+    AgentProfile, AgentRunStart, ArtifactState, JobStart, RunProgressView, Step,
 )
 from contracts.schema.report import CheckReport
 from contracts.schema.stage5 import ChapterSegment
@@ -72,7 +73,7 @@ def test_retention_candidate_kind_uses_the_invariant_value_domain():
         RETENTION_CANDIDATE_KINDS
 
 
-def test_active_global_fixture_is_a_v3_view_and_every_located_span_matches_chapter_text():
+def test_global_evidence_fixture_matches_its_archived_source_snapshot():
     fixtures = ROOT / 'web' / 'src' / 'fixtures' / 'backend_v1'
     raw = json.loads((fixtures / 'global.json').read_text(encoding='utf-8'))
     view = GlobalView.model_validate(raw)
@@ -81,7 +82,9 @@ def test_active_global_fixture_is_a_v3_view_and_every_located_span_matches_chapt
         'character', 'group'}
 
     reading = json.loads((fixtures / 'reading_ch3.json').read_text(encoding='utf-8'))
-    ReadingView.model_validate(reading)
+    # 保留 Global 的七类证据反例；旧阅读快照只作源文，不能冒充 V9 HTTP 响应。
+    with pytest.raises(ValidationError):
+        ReadingView.model_validate(reading)
     check = json.loads((fixtures / 'check_stage2.json').read_text(encoding='utf-8'))
     CheckReport.model_validate(check)
     chapter = ''.join(segment['text'] for segment in reading['segments'])
@@ -97,7 +100,34 @@ def test_active_global_fixture_is_a_v3_view_and_every_located_span_matches_chapt
             pending.extend(item.values())
         elif isinstance(item, list):
             pending.extend(item)
-    assert located >= 7, '七类 evidence 没有都在 active fixture 里留下可回取正例'
+    assert located >= 7, '七类 evidence 没有都在 fixture 里留下可回取正例'
+
+
+def test_plot_flow_fixtures_are_closed_current_http_and_review_views():
+    captured = json.loads((ROOT / 'web/src/fixtures/plot_v1/flow.json').read_text(
+        encoding='utf-8'))
+    models = {
+        'design_workpack': ApprovalWorkpack,
+        'design_template': DesignReviewTemplate,
+        'structure_workpack': ApprovalWorkpack,
+        **{f'http:reading/{ordinal}': ReadingView for ordinal in range(1, 4)},
+        **{f'http:stage4/{ordinal}': Stage4View for ordinal in range(1, 4)},
+        'http:stage5/1': Stage5View,
+        'http:overview': NovelOverview,
+        'http:approvals': ApprovalDoc,
+        'http:stage1': Stage1View,
+        'http:stage2/global': GlobalView,
+        'http:run': RunProgressView,
+        'http:check/stage2': CheckReport,
+        'http:check/stage5': CheckReport,
+    }
+    assert captured.keys() == models.keys()
+    for name, model in models.items():
+        model.model_validate(captured[name])
+    for stage in ('stage2', 'stage5'):
+        check = CheckReport.model_validate(captured['http:check/' + stage])
+        assert [line.rule for line in check.rules] == sorted(
+            rule.rule for rule in REGISTRY.of_stage(stage))
 
 
 def test_active_stage5_fixtures_are_exact_slim_http_views():
@@ -116,8 +146,8 @@ def test_active_stage5_fixtures_are_exact_slim_http_views():
 
     check = CheckReport.model_validate_json(
         (fixtures / 'check_stage5.json').read_text(encoding='utf-8'))
-    assert [line.rule for line in check.rules] == sorted(
-        rule.rule for rule in REGISTRY.of_stage('stage5'))
+    # 历史报告不能补签后来增加的判据；当前完整取值面由 plot_flow 实际 HTTP 报告验证。
+    assert 'knowledge_position_unver' not in {line.rule for line in check.rules}
 
 
 def test_preview_sid_is_nullable_but_never_empty():
@@ -280,14 +310,14 @@ def test_stage1_continuous_view_and_chapter_index_reject_gaps():
         Stage1View(segments=[first, contiguous])
 
 
-def test_reading_present_is_always_an_array_not_nullable():
-    base = dict(
-        beat_id='b1', located=False, start=None, end=None,
-        time_layer='present', place=None, fact_atoms=[], hinges=[],
-    )
-    assert ReadingBeatLine(**base, present_char_ids=[]).present_char_ids == []
+def test_reading_source_presence_distinguishes_unknown_from_explicit_empty():
+    base = dict(evidence_refs=['e01_01'], time_layer='present', place=None)
+    assert SourceContext(**base, present_char_ids=[]).present_char_ids == []
+    assert SourceContext(**base, present_char_ids=None).present_char_ids is None
     with pytest.raises(ValidationError):
-        ReadingBeatLine(**base, present_char_ids=None)
+        SourceContext(**base)
+    with pytest.raises(ValidationError):
+        SourceContext(**base, present_char_ids=['char_001', 'char_001'])
 
 
 def test_anchor_coverage_warning_is_a_server_decision():
@@ -396,9 +426,9 @@ def test_the_contract_layer_never_imports_the_web_stack():
     assert 'pydantic' in mods, 'pydantic 都没 import 到——AST 多半解析错了'
 
 
-def test_approval_doc_v6_has_exactly_the_current_seven_gates():
+def test_approval_doc_v7_has_exactly_the_current_seven_gates():
     payload = {
-        'v': 6,
+        'v': 7,
         'sid': '123',
         'gate': {gate: False for gate in APPROVAL_GATES},
         'seen': {'read': False, 'global': False},
@@ -476,8 +506,8 @@ def test_a_name_ref_that_failed_to_resolve_keeps_the_raw_id():
         NameRef(raw='', display='x', resolved=True)
 
 
-def test_stage4_review_surface_subject_exists_exactly_for_a_formal_plan():
-    """rows 的 subject 不是可选装饰：正式计划必须绑，恒等基线不许绑。
+def test_stage4_review_subject_distinguishes_ready_unavailable_and_reference():
+    """参考基线不许绑；正式计划依赖不足时说明原因，不能伪造审阅身份。
 
     用 ``model_construct`` 只运行待测后置条件，不为这条守卫复制整份读屏夹具。
     """
@@ -488,21 +518,29 @@ def test_stage4_review_surface_subject_exists_exactly_for_a_formal_plan():
         'writer_target': None,
         'ctx_chapter': None,
     }
-    for identity, subject in ((True, None), (False, 'a' * 64)):
+    for identity, subject, reason in (
+        (True, None, '仅参考基线'), (False, 'a' * 64, None),
+        (False, None, '已保存计划但所需知识关联过期'),
+    ):
         view = Stage4View.model_construct(
             **common,
             identity_plan=identity,
             structure_subject_sha256=subject,
+            structure_subject_unavailable_reason=reason,
         )
         Stage4View._postconditions(view)
 
-    for identity, subject in ((True, 'a' * 64), (False, None)):
+    for identity, subject, reason in (
+        (True, 'a' * 64, None), (False, None, None),
+        (False, 'a' * 64, '不能与可用身份并存'),
+    ):
         view = Stage4View.model_construct(
             **common,
             identity_plan=identity,
             structure_subject_sha256=subject,
+            structure_subject_unavailable_reason=reason,
         )
-        with pytest.raises(ValueError, match='审批主体|结构 SHA-256'):
+        with pytest.raises(ValueError, match='审阅身份|审阅主体'):
             Stage4View._postconditions(view)
 
 

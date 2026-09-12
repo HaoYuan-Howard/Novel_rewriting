@@ -1,5 +1,6 @@
 import { DELIVERY_LABEL } from '@/constants/vocabulary'
 import { RunMetricsPanel } from './RunMetricsPanel'
+import { BlueprintProgressPanel } from './BlueprintProgressPanel'
 import { useEffect, useId, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { keepPreviousData, useQueries, useQuery } from '@tanstack/react-query'
@@ -571,14 +572,21 @@ export function RunScreen() {
         </div>
       </header>
 
-      {/* agent 代跑进程：独立查询，进度取数炸了也不挡这块 */}
+      <QueryStates q={q} loadingLabel="读跑书进度">
+        {(d) => <>
+          <BlueprintProgressPanel sid={sid} progress={d.blueprint_progress} />
+          <ResumeFrontier frontier={d.resume_frontier} steps={d.steps} />
+        </>}
+      </QueryStates>
+
+      {/* agent 代跑进程：独立查询，进度取数失败也不挡这块 */}
       <AgentRunBlock stoppedStageTarget={stoppedStageTarget} />
       <RunMetricsPanel key={sid} sid={sid} />
 
-      <QueryStates q={q} loadingLabel="读跑书进度">
+      {q.data && !q.isError && (
+      <QueryStates q={q} loadingLabel="读取运行明细">
         {(d) => (
           <>
-            <ResumeFrontier frontier={d.resume_frontier} steps={d.steps} />
 
             <Panel>
               <PaneHeader title="当前审阅与恢复" meta="审批状态与当前节点恢复动作均由后端提供" />
@@ -588,7 +596,7 @@ export function RunScreen() {
                 {d.resume_frontier.review_states == null ? <p className="m-0">审阅状态未知</p> : (
                   <ul className="m-0 pl-18" aria-label="当前审阅状态">
                     {d.resume_frontier.review_states.map((review) => (
-                      <li key={review.node}>{review.node} · {review.scope}：{review.state}</li>
+                      <li key={`${review.node}:${review.scope}`}>{review.node} · {review.scope}：{review.state}</li>
                     ))}
                   </ul>
                 )}
@@ -801,6 +809,7 @@ export function RunScreen() {
           </>
         )}
       </QueryStates>
+      )}
     </section>
   )
 }

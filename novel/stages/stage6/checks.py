@@ -353,11 +353,9 @@ def _character_names(mat: Material) -> list[str]:
 def _fact_attribution_probe(text: str, mat: Material) -> list[tuple[str, str, str, bool]]:
     """弱字面探针：人物 + 赠与动词 + 对象；只记账，不作真假裁决。"""
     truth_facts = [
-        str(fact)
+        str(beat['content'])
         for chapter in mat.story_map
-        for scene in (chapter.get('scenes') or [])
-        for fact in (scene.get('required_facts') or [])
-        if str(fact).strip()
+        for beat in chapter['beats']
     ]
     out: list[tuple[str, str, str, bool]] = []
     seen: set[tuple[str, str, str]] = set()
@@ -394,7 +392,7 @@ def _fact_attribution_metric(
     ]
     detail = (
         f'弱事实归因探针抽到 {len(rows)} 条“人物 + 送/给/赠 + 对象”，'
-        f'{supported} 条在 Stage4 场景事实中有同人物、同对象和赠与词字面支持'
+        f'{supported} 条在完整剧情节点中有同人物、同对象和赠与词字面支持'
         + (f'：{samples}' if samples else '。本轮未抽到可比短语')
         + '。这是低召回/低精度度量，不是矛盾门；未命中必须交语义审判或人工核对。'
     )

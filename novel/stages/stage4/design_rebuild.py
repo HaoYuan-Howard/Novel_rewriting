@@ -52,67 +52,38 @@ def _by_unit(value: DesignDependencies) -> dict[int | None, str]:
     return {None: value.strategy, **{row.chapter_ordinal: row.request_sha256 for row in value.chapters}}
 
 
-def _chapter_constraints(prepared: Any, chapter: Any) -> tuple[list[dict], list[dict], list[dict]]:
-    """同一目录生成局部指令与正式判据，消失端点另留待复审身份。"""
+def _chapter_constraints(prepared: Any, chapter: Any) -> tuple[list[dict], list[dict]]:
+    """原身份重绑当前目录；失去端点的历史要求保留待复审，不能静默消失。"""
     from contracts.invariants import DESIGN_REPAIR_CODE_INSTRUCTIONS
     parent = prepared.rebuild_parent
     old_to_new: dict[str, str] = {}
     global_to_local: dict[str, str] = {}
-    for label in ('fact_aliases', 'participant_aliases'):
-        current = {formal: alias for alias, formal in prepared.mapping[label].items()}
-        old_to_new.update({alias: current[formal] for alias, formal in getattr(parent.candidate, label).items()
-                           if formal in current})
-        global_to_local.update({formal: local for local, formal in chapter.local_mapping[label].items()})
-    rows, pending, relations = [], [], []
+    labels = ('subject_aliases', 'endpoint_aliases', 'participant_aliases')
+    parent_mapping = parent.candidate.model_dump(mode='json', include=set(labels))
+    for label in labels:
+        # 主体映射值可能是 typed ref，端点是 object；不能假定为可哈希字符串。
+        current = {agent_runs.canonical_sha256(formal): alias
+                   for alias, formal in prepared.mapping[label].items()}
+        old_to_new.update({alias: current[agent_runs.canonical_sha256(formal)]
+                           for alias, formal in parent_mapping[label].items()
+                           if agent_runs.canonical_sha256(formal) in current})
+        global_to_local.update({formal: local
+                                for local, formal in chapter.local_mapping[label].items()})
+    rows, pending = [], []
     catalog = parent.identity['constraints']['catalogs'][str(chapter.chapter_ordinal)]
     for item in catalog['items']:
         original = item['constraint']
-        effect = original.get('effect')
-        referenced = set(original['opaque_aliases']) | {
-            value for key, value in (effect or {}).items() if key.endswith('_alias')}
+        if original.get('effect') is not None or original['code'] not in DESIGN_REPAIR_CODE_INSTRUCTIONS:
+            raise ProvenanceRefused('旧关系复制式返修不属于当前契约，不能静默迁移')
+        referenced = set(original['opaque_aliases'])
         if any(alias not in old_to_new or old_to_new[alias] not in global_to_local for alias in referenced):
             pending.append({'constraint_sha256': item['constraint_sha256'], 'code': original['code'],
                             'reason_code': 'upstream_endpoint_changed_requires_review'})
             continue
-        formal_effect = {key: old_to_new[value] if key.endswith('_alias') else value
-                         for key, value in effect.items()} if effect else None
-        if formal_effect is not None:
-            relations.append(formal_effect)
         rows.append({'code': original['code'], 'scene_refs': original['scene_refs'],
             'opaque_aliases': [global_to_local[old_to_new[alias]] for alias in original['opaque_aliases']],
-            'effect': {key: global_to_local[value] if key.endswith('_alias') else value
-                       for key, value in formal_effect.items()} if formal_effect else None,
             'instruction': DESIGN_REPAIR_CODE_INSTRUCTIONS[original['code']]})
-    return rows, pending, relations
-
-
-class _RebuildChapterValidator:
-    """重建与正常修订共用 relation 判官，原有 typed 关系不能被上游变化抹掉。"""
-
-    def __init__(self, base: Any, relations: list[dict], ordinal: int) -> None:
-        self.base, self.relations, self.ordinal = base, relations, ordinal
-        self.compiled = None
-        self.typed_failures = ()
-
-    def __call__(self, response: Any, wire: Any) -> str | None:
-        from novel.stages.stage4 import plan
-        from novel.stages.stage4.design_evolution import evaluate_relation_constraints
-        self.compiled = None
-        why = self.base(response, wire)
-        self.typed_failures = self.base.typed_failures
-        if why is not None:
-            return why
-        if self.relations:
-            verdict = evaluate_relation_constraints(self.relations, self.base.compiled)
-            if verdict.unclosed:
-                why = '重建仍违反未关闭的 typed 关系：' + str([row.constraint_sha256 for row in verdict.unclosed])
-                self.typed_failures = (plan.typed_failures.make(
-                    candidate_sha256=plan._response_witness_sha(response), code='blind_chapter_problem',
-                    rule='blind_chapter_problem', surfacing='stage4.design',
-                    chapter_ordinal=self.ordinal, refs=[why]),)
-                return why
-        self.compiled = self.base.compiled
-        return None
+    return rows, pending
 
 
 def chapter_request(prepared: Any, chapter: Any) -> Any:
@@ -125,7 +96,7 @@ def chapter_request(prepared: Any, chapter: Any) -> Any:
     if _by_unit(parent.candidate.provenance.design_dependencies).get(chapter.chapter_ordinal) == digest:
         return chapter
     previous = next((row.response_payload for row in parent.sources if row.chapter == chapter.chapter_ordinal), None)
-    constraints, pending, relations = _chapter_constraints(prepared, chapter)
+    constraints, pending = _chapter_constraints(prepared, chapter)
     feedback = {'kind': 'stage4-upstream-changed-chapter/v1', 'previous_design': previous,
                 'accumulated_constraints': constraints, 'pending_changed_subjects': pending,
                 'constraint_history_sha256': agent_runs.canonical_sha256(
@@ -134,7 +105,7 @@ def chapter_request(prepared: Any, chapter: Any) -> Any:
     return replace(chapter,
         user=chapter.user + '\n【UPSTREAM_REBUILD_JSON】\n' + agent_runs.canonical_bytes(feedback).decode('utf-8'),
         input_sha256=agent_runs.canonical_sha256({'normal_input': chapter.input_sha256, 'feedback': feedback}),
-        validator=_RebuildChapterValidator(chapter.validator, relations, chapter.chapter_ordinal))
+        validator=chapter.validator)
 
 
 @dataclass(frozen=True)

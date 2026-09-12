@@ -60,7 +60,6 @@ import type {
   GlobalReviewDecisionSet,
   GlobalReviewResponse,
   InboxResponse,
-  ReadingResponse,
   ReviewResponse,
   Stage0EditRequest,
   Stage0Extras,
@@ -68,7 +67,6 @@ import type {
   Stage0Segments,
   Stage1View,
   Stage2Global,
-  Stage4Response,
   Stage5Response,
   Stage6Response,
   Stage7Response,
@@ -405,6 +403,7 @@ function seededStructureDecision(): StructureApprovalDecision {
 }
 
 function mockDesignReviewTemplate(query: DesignReviewTemplateQuery): DesignReviewTemplate {
+  const sample = plotFlowFixture().design_template.chapters.find((c) => c.output_ordinal === SAMPLE_ORDINAL)!.subject
   return {
     actor: query.actor,
     reviewer_kind: query.reviewer_kind,
@@ -456,79 +455,9 @@ function mockDesignReviewTemplate(query: DesignReviewTemplateQuery): DesignRevie
       output_ordinal: SAMPLE_ORDINAL,
       subject: {
         strategy_subject_sha256: MOCK_DESIGN_STRATEGY,
-        blind_truth: {
-          chapter_ordinal: SAMPLE_ORDINAL,
-          chapter_function: '冲突升级并改写人物关系',
-          facts: [
-            {
-              fact_alias: 'a_' + '1'.repeat(16),
-              claim: '主角在公开场合取得关键证据。',
-              kind: 'event',
-              obligation: 'must_land',
-              participant_aliases: ['a_' + '4'.repeat(16)],
-            },
-            {
-              fact_alias: 'a_' + '2'.repeat(16),
-              claim: '对手尚不知道证据已经转手。',
-              kind: 'knowledge',
-              obligation: 'context',
-              participant_aliases: ['a_' + '5'.repeat(16)],
-            },
-            {
-              fact_alias: 'a_' + '3'.repeat(16),
-              claim: '章节结尾必须保留证据来源悬念。',
-              kind: 'boundary',
-              obligation: 'must_land',
-              participant_aliases: [],
-            },
-          ],
-          causal_edges: [{
-            before_alias: 'a_' + '1'.repeat(16),
-            after_alias: 'a_' + '3'.repeat(16),
-          }],
-          entry_state_aliases: ['a_' + '2'.repeat(16)],
-          ending_state_aliases: ['a_' + '3'.repeat(16)],
-        },
-        chapter: {
-          output_ordinal: SAMPLE_ORDINAL,
-          structure_decision: {
-            mode: 'reconstruct',
-            reason: '改变入口与事实组合，避免逐段复述。',
-            declared_change_kinds: ['entry_anchor', 'fact_grouping'],
-          },
-          chapter_goal: { intent: 'advance', fact_aliases: ['a_' + '1'.repeat(16)] },
-          open_hook_goal: { intent: 'open', fact_aliases: ['a_' + '2'.repeat(16)] },
-          end_hook_goal: { intent: 'withhold', fact_aliases: ['a_' + '3'.repeat(16)] },
-          weight: 'medium',
-          chapter_rewrite_brief: '由结果切入，再倒推人物动机。',
-          scenes: [{
-            candidate_scene_id: 'c03s01',
-            weight: 'medium',
-            purpose: '用结果现场建立冲突，再回收前因。',
-            role: 'turn',
-            delivery: 'dramatize',
-            transition: 'flashback',
-            land_fact_aliases: ['a_' + '1'.repeat(16)],
-            context_fact_aliases: ['a_' + '2'.repeat(16)],
-            turn_fact_alias: 'a_' + '1'.repeat(16),
-            entry_state_aliases: ['a_' + '2'.repeat(16)],
-            exit_state_aliases: ['a_' + '3'.repeat(16)],
-          }],
-        },
-        structure_evidence: {
-          metric_contract: 'atomic-structure-v2',
-          state: 'adequate',
-          declared_change_kinds: ['entry_anchor', 'fact_grouping'],
-          computed_change_kinds: ['entry_anchor', 'fact_grouping'],
-          realized_declared: ['entry_anchor', 'fact_grouping'],
-          unrealized_declared: [],
-          undeclared_actual: [],
-          readings: {
-            entry_anchor_changed: true,
-            noncontiguous_groups: 1,
-            source_order_correlation: 0.4,
-          },
-        },
+        blind_truth: sample.blind_truth,
+        chapter: sample.chapter,
+        structure_evidence: sample.structure_evidence,
       },
       subject_sha256: MOCK_DESIGN_CHAPTER,
       placeholder: true,
@@ -540,7 +469,7 @@ function mockDesignReviewTemplate(query: DesignReviewTemplateQuery): DesignRevie
         scene_refs: [],
         // `structure_delta` 退役后首个 active 码是 entry_anchor（arity 0,1）：
         // 泛化重排指令不再可作为不带证据的默认脚手架。
-        opaque_aliases: ['a_' + '1'.repeat(16)],
+        opaque_aliases: [sample.blind_truth.beats[0].alias],
       }],
       source_decision_sha256: null,
     }],
@@ -1574,11 +1503,29 @@ export const mockApi: Api = {
   getStage1: (sid) => bookOnly(sid, `/novels/${sid}/stage1`, mockStage1View),
 
   getReading: (sid, o) =>
-    chapterOnly(sid, o, `/novels/${sid}/reading/${o}`, () => fx<ReadingResponse>('reading_ch3.json')),
+    fail(new ApiError('server', `/novels/${sid}/reading/${o}`, {
+      status: 501, message: '此历史示例使用已退役的事实蓝图。完整剧情阅读请连接当前后端。',
+      backendKind: 'MockCapabilityUnavailable',
+    })),
 
   getBlueprintReviewWorkpack: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/blueprint-review-workpack`, {
     status: 501, message: '知识关联需要当前源文、知识与 Blueprint 的完整工作包，请连接真实后端',
     backendKind: 'MockCapabilityUnavailable',
+  })),
+  getBlueprintEditTemplate: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/blueprint/edit/template`, {
+    status: 501, message: '旧示例没有当前完整剧情身份，编辑请连接真实后端', backendKind: 'MockCapabilityUnavailable',
+  })),
+  getBlueprintRefinementCatalog: (sid) => fail(new ApiError('server', `/novels/${sid}/approvals/blueprint-refinement/catalog`, {
+    status: 501, message: '疑点核查需要当前设计与蓝图身份，请连接真实后端', backendKind: 'MockCapabilityUnavailable',
+  })),
+  submitBlueprintRefinement: (sid) => fail(new ApiError('server', `/novels/${sid}/approvals/blueprint-refinement`, {
+    status: 501, message: '示例不写入疑点核查记录，请连接真实后端', backendKind: 'MockCapabilityUnavailable',
+  })),
+  previewBlueprintEdit: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/blueprint/edit/preview`, {
+    status: 501, message: '示例不执行剧情编辑预检，请连接真实后端', backendKind: 'MockCapabilityUnavailable',
+  })),
+  applyBlueprintEdit: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/blueprint/edit`, {
+    status: 501, message: '示例不写入剧情蓝图，请连接真实后端', backendKind: 'MockCapabilityUnavailable',
   })),
 
   getGlobal: (sid, revealSpoilers = false) =>
@@ -1695,7 +1642,10 @@ export const mockApi: Api = {
   },
 
   getStage4: (sid, o) =>
-    chapterOnly(sid, o, `/novels/${sid}/stage4/${o}`, () => fx<Stage4Response>('stage4_ch3.json')),
+    fail(new ApiError('server', `/novels/${sid}/stage4/${o}`, {
+      status: 501, message: '此历史示例没有现役分场呈现与章级上下文，请连接当前后端。',
+      backendKind: 'MockCapabilityUnavailable',
+    })),
 
   getStage5: (sid, o) =>
     chapterOnly(sid, o, `/novels/${sid}/stage5/${o}`, currentMockStage5),
@@ -2562,4 +2512,31 @@ export const mockApi: Api = {
   applyRetention: () => noBook('/maintenance/retention/apply'),
   previewTrashRestore: () => noBook('/maintenance/trash/restore/preview'),
   applyTrashRestore: () => noBook('/maintenance/trash/restore/apply'),
+}
+import plotReviewSample from '@/fixtures/plot_v1/review.json'
+import plotFlowSample from '@/fixtures/plot_v1/flow.json'
+export function plotFlowFixture() {
+  return structuredClone(plotFlowSample) as unknown as {
+    design_template: import('@/types/approvals').DesignReviewTemplate
+    design_workpack: import('@/types/approvals').ApprovalWorkpack
+    structure_workpack: import('@/types/approvals').ApprovalWorkpack
+    'http:reading/1': import('@/types/stages').ReadingResponse
+    'http:reading/2': import('@/types/stages').ReadingResponse
+    'http:reading/3': import('@/types/stages').ReadingResponse
+    'http:stage4/1': import('@/types/stages').Stage4Response
+    'http:stage4/2': import('@/types/stages').Stage4Response
+    'http:stage4/3': import('@/types/stages').Stage4Response
+    'http:stage5/1': import('@/types/stages').Stage5Response
+    'http:run': import('@/types/run').RunProgress
+  }
+}
+
+/** 正式合成链录制的界面测试材料；不与历史小说或审批自动拼接。 */
+export function plotReviewFixture() {
+  return structuredClone(plotReviewSample) as unknown as {
+    chapter: import('@/types/stages').BlueprintReviewWorkpack
+    cross: import('@/types/stages').BlueprintReviewWorkpack
+    reading: import('@/types/stages').ReadingResponse
+    enum_values: { plot_review_dimensions: string[]; plot_dimension_states: string[] }
+  }
 }

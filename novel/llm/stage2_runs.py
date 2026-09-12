@@ -613,6 +613,7 @@ def ensure_run(
         request_policy: Mapping[str, Any], refresh: bool = False,
         operation: str = 'full', subject_fingerprint: str | None = None,
         resume_flags: Sequence[str] = (),
+        input_projections: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """创建或逐字段核验不可变 run 绑定；输入/prompt 漂移绝不退化成 cache miss。
 
@@ -651,6 +652,8 @@ def ensure_run(
         'request_policy': normalized_policy,
         'request_policy_sha256': _sha(normalized_policy),
     }
+    if input_projections is not None:
+        identity['input_projections'] = dict(input_projections)
 
     def note_pending() -> None:
         if getattr(ctx, 'readonly', False):
@@ -878,7 +881,7 @@ def _checkpoint_identity(
         ctx: Any, *, phase: str, chapter: int, purpose: str,
         architecture: str, response_model: str, system: str, user: str,
 ) -> dict[str, Any]:
-    return {
+    identity = {
         'version': VERSION,
         'run_id': check_run_id(ctx.run_id),
         'sid': ctx.sid,
@@ -892,11 +895,51 @@ def _checkpoint_identity(
         'system_sha256': _sha(system.encode('utf-8')),
         'user_sha256': _sha(user.encode('utf-8')),
     }
+    if architecture == 'plot-blueprint-v1':
+        run = _read_json(_run_root(ctx) / RUN_FILE)
+        identity['input_projection_sha256'] = (run.get('input_projections') or {}).get(str(chapter))
+    return identity
 
 
 def _checkpoint_hash(payload: Mapping[str, Any]) -> str:
     return _sha({key: value for key, value in payload.items()
                  if key not in ('created_at', 'checkpoint_sha256')})
+
+
+def plot_checkpoint_progress(ctx: Any, *, run_id: str, chapter: int,
+                             input_sha256: str) -> dict[str, Any]:
+    """只读校验检查点载体及当前输入。不是已购响应的恢复许可或语义接受证明。"""
+    result = dict(chapter_ordinal=chapter, run_id=run_id, state='missing', reason=None)
+    root = paths.stage2_blueprint_run_path(ctx.novel_dir, check_run_id(run_id))
+    try:
+        run = _read_json(root / RUN_FILE)
+        if (run.get('architecture') != 'plot-blueprint-v1'
+                or run.get('sid') != ctx.sid or run.get('run_id') != run_id):
+            raise ProvenanceRefused('章节运行记录的书或契约身份不一致')
+        projected = (run.get('input_projections') or {}).get(str(chapter))
+        if projected is None:
+            return {**result, 'state': 'unver', 'reason': '运行记录缺章节消费身份'}
+        if projected != input_sha256:
+            return {**result, 'state': 'expired', 'reason': '当前原文或共享输入已变化'}
+        phase = 'repair' if run.get('operation') in ('chapters-refresh', 'commander-rework') else 'blueprint'
+        target = paths.stage2_blueprint_checkpoint_path(ctx.novel_dir, run_id, phase, chapter)
+        if not target.exists():
+            return result
+        record = _read_json(target)
+        if (record.get('checkpoint_sha256') != _checkpoint_hash(record)
+                or record.get('response_payload_sha256') != _sha(record.get('response_payload'))
+                or record.get('run_id') != run_id or record.get('sid') != ctx.sid
+                or record.get('chapter') != chapter or record.get('phase') != phase
+                or record.get('architecture') != 'plot-blueprint-v1'
+                or record.get('input_projection_sha256') != projected):
+            raise ArtifactUnreadable('章节检查点内容与身份摘要不闭合')
+        if record.get('code') != ctx.code:
+            return {**result, 'state': 'unver', 'reason': '代码验证身份变化，等待免费复检'}
+        if record.get('scope_violation') is not None:
+            return {**result, 'state': 'unver', 'reason': '检查点记录了章节范围问题'}
+        return {**result, 'state': 'current'}
+    except (TerminalState, OSError, ValueError) as exc:
+        return {**result, 'state': 'unver', 'reason': str(exc)}
 
 
 def _validate_channel_text(
@@ -1278,6 +1321,10 @@ def write_checkpoint(
             accepted_text.encode('utf-8')):
         raise ProvenanceRefused(
             f'{purpose}: content accepted 原文 SHA 与 ledger response 不闭合')
+    if channel == 'reasoning':
+        _validate_reasoning_acceptance(ctx, run_id=ctx.run_id, purpose=purpose,
+            chapter=chapter, attempt_id=attempt_id, model=model, accepted_text=accepted_text,
+            ledger_response_sha256=ledger_response_sha256, accepted_request=accepted_request)
 
     payload = dict(response_payload)
     try:
@@ -1473,6 +1520,14 @@ def restore_checkpoint(
     if channel == 'content' and record.get('ledger_response_sha256') != _sha(
             accepted_text.encode('utf-8')):
         raise ProvenanceRefused(f'{target} 的 content accepted 原文与 ledger response 不同')
+    if channel == 'reasoning':
+        binding = record.get('accepted_request')
+        if not isinstance(binding, dict):
+            raise ProvenanceRefused(f'{target} 缺 reasoning 原请求身份')
+        _validate_reasoning_acceptance(ctx, run_id=ctx.run_id, purpose=purpose,
+            chapter=chapter, attempt_id=accepted, model=str(record['model']),
+            accepted_text=accepted_text, ledger_response_sha256=record['ledger_response_sha256'],
+            accepted_request=binding)
     return record
 
 

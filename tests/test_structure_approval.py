@@ -90,7 +90,7 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         lambda _base, _sid: (state['record'], state['record']))
 
     def write(base, record):
-        record = approvals._ApprovalRecordV7.model_validate(record.model_dump())
+        record = approvals._ApprovalRecordV8.model_validate(record.model_dump())
         state['record'] = record
         effective = record
         if not record.gate['s4']:
@@ -181,7 +181,7 @@ def test_old_v5_record_cannot_use_current_approval_decoder():
     old_payload['v'] = 5
 
     with pytest.raises(ValueError):
-        approvals._ApprovalRecordV7.model_validate(old_payload)
+        approvals._ApprovalRecordV8.model_validate(old_payload)
 
 
 def test_structure_template_is_current_and_fail_closed_by_default(isolated):

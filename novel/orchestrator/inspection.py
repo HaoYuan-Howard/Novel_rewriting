@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 from contracts.artifacts import ARTIFACT_PATHS
 from contracts.invariants import STAGES
@@ -26,16 +27,37 @@ from novel.orchestrator import approvals
 from novel.orchestrator.nodes import check_node
 from novel.orchestrator.state import overview_at, readonly_ctx
 from novel.stages import check_only
+from novel.store import readonly_snapshot_memo
 
 
 _EXPECTED_UNAVAILABLE = (UpstreamMissing, ArtifactUnreadable, TerminalState)
+
+
+@contextmanager
+def approval_read_snapshot(
+    base: str | os.PathLike[str], sid: str,
+) -> Iterator[tuple[NovelOverview, str]]:
+    """审批 GET 在一个盘面内复用代码与消费投影，不构建 operator 动作。
+
+    审批页与进度页会同时读取本书。若每个内部闸门重算代码和依赖，
+    审批读锁会长期占用并拖住进度；此处只在本次请求内共享，结束复验。
+    """
+    novel_dir = paths.resolve_novel_dir(base, sid).resolve()
+    with readonly_snapshot_memo(novel_dir):
+        code = prov.code_version()
+        before = read_surface_seal(base, sid, code=code)
+        overview = overview_at(novel_dir, code)
+        with approvals.read_projection(overview=overview, code=code):
+            yield overview, code
+        if read_surface_seal(base, sid, code=code) != before:
+            raise ArtifactUnreadable('审批读取期间盘面发生变化；请重新读取当前状态')
 
 # 这些 schema-valid JSON 是一次性 typed request，不是 planner 的当前业务面。
 # 只有 exact node/flag 消费它时，execution permit 才按原始字节显式绑定；若在这里
 # 也全局扫描，一份尚未使用的人工草稿会让所有无关节点 token 一起过期。
 _EXTERNAL_REQUEST_ARTIFACTS = frozenset({
     ARTIFACT_PATHS['stage2.global_edit'],
-    ARTIFACT_PATHS['stage2.blueprint_relation_edit'],
+    ARTIFACT_PATHS['stage2.blueprint_edit'],
     ARTIFACT_PATHS['stage4.blind_chapter_edit'],
     ARTIFACT_PATHS['stage4.plan_edit'],
     ARTIFACT_PATHS['stage6.hook_edit'],
@@ -89,14 +111,17 @@ def capture_operator_snapshot(
     before = read_surface_seal(base_path, sid, code=code)
     overview = overview_at(novel_dir, code)
     checks: dict[str, CheckObservation] = {}
-    for stage in STAGES:
-        try:
-            report = check_only(stage)(
-                readonly_ctx(novel_dir, check_node(stage), code))
-        except Exception as exc:  # noqa: BLE001 —— 由消费者按原有策略解释
-            checks[stage] = CheckObservation(error=exc)
-        else:
-            checks[stage] = CheckObservation(report=report)
+    # 复检中的下游审批检查也属于本次读域；否则每个 KnowledgeLinks
+    # 消费者会再次读取 Git，给同一进度响应混入多个代码时点。
+    with approvals.read_projection(overview=overview, code=code):
+        for stage in STAGES:
+            try:
+                report = check_only(stage)(
+                    readonly_ctx(novel_dir, check_node(stage), code))
+            except Exception as exc:  # noqa: BLE001 —— 由消费者按原有策略解释
+                checks[stage] = CheckObservation(error=exc)
+            else:
+                checks[stage] = CheckObservation(report=report)
     after = read_surface_seal(base_path, sid, code=code)
     if after != before:
         raise ArtifactUnreadable(

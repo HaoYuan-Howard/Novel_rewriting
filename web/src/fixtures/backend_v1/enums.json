@@ -1,4 +1,17 @@
 {
+ "plot_review_dimensions": [
+  "completeness",
+  "attribution",
+  "causal_continuity",
+  "epistemic_reveal",
+  "carry_state"
+ ],
+ "plot_dimension_states": [
+  "pass",
+  "issue",
+  "unver",
+  "not_applicable"
+ ],
  "freshness": [
   "fresh",
   "stale",
@@ -272,7 +285,7 @@
  "structure_change_kinds": [
   "entry_anchor",
   "ending_anchor",
-  "fact_grouping",
+  "presentation_grouping",
   "disclosure_order",
   "noncontiguous_regroup"
  ],
@@ -406,13 +419,13 @@
  "design_repair_codes": [
   "entry_anchor",
   "ending_anchor",
-  "fact_grouping",
+  "presentation_grouping",
   "disclosure_order",
   "noncontiguous_regroup",
   "scene_goal",
   "scene_goal_exclude",
   "binding_constraint_unsat",
-  "narrative_relation"
+  "semantic_constraint"
  ],
  "design_repair_codes_retired": [
   "structure_delta"
@@ -430,7 +443,7 @@
    0,
    1
   ],
-  "fact_grouping": [
+  "presentation_grouping": [
    0,
    2
   ],
@@ -454,9 +467,9 @@
    1,
    0
   ],
-  "narrative_relation": [
+  "semantic_constraint": [
    0,
-   0
+   1
   ]
  },
  "binding_concern_codes": [
@@ -591,9 +604,7 @@
   "must_hold": "必须成立，但【不必写在纸面上】（别为它硬塞背景交代）"
  },
  "blueprint_architectures": [
-  "extraction-ir-v2",
-  "extraction-ir-v3.1",
-  "extraction-ir-v3.2"
+  "plot-blueprint-v1"
  ],
  "blueprint_review_subject_kinds": [
   "formal",
@@ -921,8 +932,7 @@
   "--revise": "stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手",
   "--reviewer-rewrite": "消费 Stage5 顶部 Commander 已落盘的单章关闭式改写 request，调用写手重写正文",
   "--resample": "stage2 人物或知识响应被闸门拦下后，由原 producer 重新采样自己的响应",
-  "--replan": "Stage4B 返回 infeasible 或人工结构审批 request_replan 后，仅在当前正式 Stage4A 策略审阅明确 request_replan 后，绕过同参数缓存重新采样整书策略与各章；不会自动串行 Stage4B",
-  "--patch": "stage2 逐章蓝图 extraction IR 族的字段级修复——逐条失败各调一次模型，量级是条不是章"
+  "--replan": "Stage4B 返回 infeasible 或人工结构审批 request_replan 后，仅在当前正式 Stage4A 策略审阅明确 request_replan 后，绕过同参数缓存重新采样整书策略与各章；不会自动串行 Stage4B"
  },
  "stage5_edit_confirmations": [
   "formal",
@@ -1438,8 +1448,8 @@
     "--review-token",
     "--close-review",
     "--chapters",
-    "--patch",
     "--emit-review-workpack",
+    "--review-scope",
     "--emit-edit-template",
     "--validate-edit",
     "--apply-edit",
@@ -1457,7 +1467,7 @@
     "input_workpack": "已接受 Global 投影与本章正文",
     "generation_mode": "executor",
     "review_mode": "commander",
-    "review_scope": "全章 Blueprint 与原文的交叉核验",
+    "review_scope": "逐章五维审阅与最终跨章复核",
     "repair_actions": [
      "accept",
      "typed_edit",
@@ -1469,7 +1479,7 @@
      "stage2.global",
      "stage2.blueprint"
     ],
-    "session_scope": "executor:phase/purpose/chapter / commander:blueprint",
+    "session_scope": "executor:chapter / commander:chapter:N、cross_chapter",
     "recovery_entries": [
      "--revalidate",
      "--apply-edit",
@@ -1488,7 +1498,6 @@
     ],
     "review_actions": [
      "accept",
-     "patch",
      "rework",
      "uncertain",
      "stop"
@@ -2651,19 +2660,6 @@
   },
   {
    "kind": "stage2.blueprint",
-   "label": "stage2 逐章抽取 --patch",
-   "extra": [
-    "--patch"
-   ],
-   "paid": true,
-   "free_flag": null,
-   "writes": "stage2/chapter_blueprints.json · stage2/knowledge_links.json",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage2.blueprint",
    "label": "stage2 逐章抽取 --emit-review-workpack",
    "extra": [
     "--emit-review-workpack"
@@ -2673,6 +2669,19 @@
    "writes": "",
    "writes_disk": false,
    "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.blueprint",
+   "label": "stage2 逐章抽取 --review-scope",
+   "extra": [
+    "--review-scope"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage2/chapter_blueprints.json · stage2/knowledge_links.json",
+   "writes_disk": true,
+   "needs_value": "只读复核输出的范围：`blocking`（默认，只出能挡 Stage4 的项）或 `all`（整份评测面）。它不改评测面，也不改任何判定",
    "required_inputs": []
   },
   {

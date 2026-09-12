@@ -12,6 +12,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from contextlib import contextmanager
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from contracts.artifacts import STAGE2_GLOBAL_EDIT
@@ -369,6 +371,15 @@ def _review_state_projection(approval_doc: ApprovalDoc | None) -> list[dict[str,
         life = spec.lifecycle
         if life is None or not life.approval_projection:
             continue
+        if node == 'stage2.blueprint':
+            review = approval_doc.stage2_reviews.get(node)
+            progress = None if review is None else review.plot_progress
+            if progress is not None:
+                rows.extend({'node': node, 'scope': row.scope, 'state': row.state}
+                            for row in progress.scopes)
+            else:
+                rows.append({'node': node, 'scope': 'cross_chapter', 'state': 'unknown'})
+            continue
         value = source
         for key in life.approval_projection:
             value = value.get(key) if isinstance(value, dict) else None
@@ -431,23 +442,31 @@ def progress_snapshot(
     base: str | os.PathLike[str], sid: str,
 ) -> tuple[NovelOverview, RunResumeFrontierView]:
     """给运行页复用一份 overview + operator lane，不生成沉重 Inbox。"""
+    with progress_read_snapshot(base, sid) as result:
+        return result
+
+
+@contextmanager
+def progress_read_snapshot(
+    base: str | os.PathLike[str], sid: str,
+) -> Iterator[tuple[NovelOverview, RunResumeFrontierView]]:
+    """进度及工作单元共用本次快照；离开读域前复验盘面，绝不跨请求缓存。"""
     novel_dir = paths.resolve_novel_dir(base, sid).resolve()
     with readonly_snapshot_memo(novel_dir):
         snapshot = capture_operator_snapshot(base, sid)
-        approval_doc = None
-        recovery = _prepared_commit_recovery_surface(snapshot)
-        if recovery is not None:
-            lane, _inbox = recovery
-        else:
-            with approvals.read_projection(
-                    overview=snapshot.overview, code=snapshot.code):
+        with approvals.read_projection(overview=snapshot.overview, code=snapshot.code):
+            approval_doc = None
+            recovery = _prepared_commit_recovery_surface(snapshot)
+            if recovery is not None:
+                lane, _inbox = recovery
+            else:
                 approval_doc = approvals.get(
                     snapshot.base, sid,
                     overview=snapshot.overview, code=snapshot.code,
                     include_spawns=False, operator_projection=True)
                 lane = _lane_from_snapshot(snapshot, approval_doc)
-        _require_snapshot_current(snapshot)
-        return snapshot.overview, _frontier_view(lane, approval_doc)
+            yield snapshot.overview, _frontier_view(lane, approval_doc)
+            _require_snapshot_current(snapshot)
 
 
 def next_action_at_code(

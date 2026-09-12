@@ -9,7 +9,6 @@ import type {
   DesignConstraintCatalog,
   DesignConstraintOperation,
   DesignConstraintOperations,
-  DesignNarrativeRelation,
   DesignReviewMaterialized,
   DesignRepairConstraint,
   DesignStrategyReview,
@@ -27,26 +26,6 @@ import { useApprovalWorkpack } from '@/hooks/useApprovalWorkpack'
 
 interface ConstraintInputDomain {
   arity: Record<string, [number, number]>
-  relationKinds: string[]
-  relationEnforcements: string[]
-}
-
-function reviewRelationChoices(
-  chapter: DesignChapterReview, domain: ConstraintInputDomain,
-): DesignNarrativeRelation[] {
-  const review = domain.relationEnforcements.find((value) => value === 'review')
-  const hard = domain.relationEnforcements.find((value) => value === 'hard')
-  if (!review || !hard) return []
-  return (chapter.subject.blind_truth.narrative_relations ?? [])
-    .filter((relation) => relation.enforcement === review && domain.relationKinds.includes(relation.kind))
-    .map((relation) => ({ ...relation, enforcement: hard }))
-}
-
-function sameRelation(effect: unknown, relation: DesignNarrativeRelation): boolean {
-  if (!effect || typeof effect !== 'object' || Array.isArray(effect)) return false
-  const actual = effect as Record<string, unknown>
-  return Object.keys(actual).length === Object.keys(relation).length
-    && Object.entries(relation).every(([key, value]) => actual[key] === value)
 }
 
 function constraintComplete(
@@ -57,15 +36,22 @@ function constraintComplete(
   if (!codes.includes(constraint.code) || !arity || arity.length !== 2
     || !arity.every((value) => Number.isInteger(value) && value >= 0)) return false
   const scenes = chapter.subject.chapter.scenes.map((scene) => scene.candidate_scene_id)
-  const aliases = chapter.subject.blind_truth.facts.flatMap((fact) => [fact.fact_alias, ...fact.participant_aliases])
+  const truth = chapter.subject.blind_truth
+  const aliases = [...truth.beats.flatMap((beat) => [beat.alias, ...beat.participant_aliases]),
+    ...truth.states.map((s) => s.alias), ...truth.inherited_states.map((s) => s.alias),
+    ...truth.constraints.map((c) => c.alias), ...truth.global_subjects.map((g) => g.alias),
+    ...truth.endpoints.map((e) => e.endpoint_alias)]
   if (constraint.scene_refs.length < arity[0] || constraint.opaque_aliases.length < arity[1]
     || new Set(constraint.scene_refs).size !== constraint.scene_refs.length
     || new Set(constraint.opaque_aliases).size !== constraint.opaque_aliases.length
     || !constraint.scene_refs.every((scene) => scenes.includes(scene))
     || !constraint.opaque_aliases.every((alias) => aliases.includes(alias))) return false
-  if (constraint.code !== 'narrative_relation') return constraint.effect == null
-  return constraint.scene_refs.length === 0 && constraint.opaque_aliases.length === 0
-    && reviewRelationChoices(chapter, domain).some((relation) => sameRelation(constraint.effect, relation))
+  if (Object.keys(constraint).some((key) => !['code', 'scene_refs', 'opaque_aliases'].includes(key))) return false
+  if (constraint.code === 'semantic_constraint') {
+    const allowed = [...truth.constraints.map((c) => c.alias), ...truth.endpoints.map((e) => e.endpoint_alias)]
+    return constraint.opaque_aliases.every((alias) => allowed.includes(alias))
+  }
+  return true
 }
 
 function reviewRunId(): string {
@@ -297,8 +283,6 @@ export function DesignReviewPanel() {
           operationKinds={enums.data?.design_constraint_operation_kinds ?? []}
           constraintDomain={{
             arity: enums.data?.design_repair_constraint_arity ?? {},
-            relationKinds: enums.data?.narrative_relation_kinds ?? [],
-            relationEnforcements: enums.data?.narrative_relation_enforcements ?? [],
           }}
           submit={review.submit}
           onReset={reset}
@@ -544,7 +528,6 @@ function DesignReviewForm({
               chapterDecisions={chapterDecisions}
               repairCodes={repairCodes}
               operationKinds={operationKinds}
-              constraintDomain={constraintDomain}
               constraintCatalog={template.constraint_catalog?.[chapter.output_ordinal]}
               onOperations={(operations) => setChapter(
                 chapter.output_ordinal,
@@ -574,12 +557,6 @@ function DesignReviewForm({
               onConstraint={(code, checked) => setChapter(
                 chapter.output_ordinal,
                 (current) => toggleConstraint(current, code, checked),
-              )}
-              onEffect={(code, effect) => setChapter(
-                chapter.output_ordinal,
-                (current) => ({ ...current, constraints: current.constraints.map((constraint) => (
-                  constraint.code === code ? { ...constraint, scene_refs: [], opaque_aliases: [], effect } : constraint
-                )) }),
               )}
               onScope={(code, field, value, checked, options) => setChapter(
                 chapter.output_ordinal,
@@ -667,7 +644,6 @@ function ChapterReviewEditor({
   chapterDecisions,
   repairCodes,
   operationKinds,
-  constraintDomain,
   constraintCatalog,
   onOperations,
   acceptedDecision,
@@ -680,14 +656,12 @@ function ChapterReviewEditor({
   onDecision,
   onReason,
   onConstraint,
-  onEffect,
   onScope,
 }: {
   chapter: DesignChapterReview
   chapterDecisions: string[]
   repairCodes: string[]
   operationKinds: string[]
-  constraintDomain: ConstraintInputDomain
   constraintCatalog: DesignConstraintCatalog | undefined
   onOperations: (operations: DesignConstraintOperations) => void
   acceptedDecision: string
@@ -700,7 +674,6 @@ function ChapterReviewEditor({
   onDecision: (decision: string) => void
   onReason: (reason: string) => void
   onConstraint: (code: string, checked: boolean) => void
-  onEffect: (code: string, effect: DesignNarrativeRelation | null) => void
   onScope: (
     code: string,
     field: 'scene_refs' | 'opaque_aliases',
@@ -710,25 +683,23 @@ function ChapterReviewEditor({
   ) => void
 }) {
   const candidate = chapter.subject.chapter
-  const relationOptions = reviewRelationChoices(chapter, constraintDomain)
+  const semanticAliases = [...chapter.subject.blind_truth.constraints.map((c) => c.alias),
+    ...chapter.subject.blind_truth.endpoints.map((e) => e.endpoint_alias)]
   const sceneOptions = candidate.scenes.map((scene) => scene.candidate_scene_id).sort()
   const aliasDescriptions = new Map<string, string>()
-  chapter.subject.blind_truth.facts.forEach((fact) => {
-    aliasDescriptions.set(fact.fact_alias, fact.claim)
-    fact.participant_aliases.forEach((alias) => {
-      if (!aliasDescriptions.has(alias)) aliasDescriptions.set(alias, '本章事实中的参与者 alias')
+  const truth = chapter.subject.blind_truth
+  truth.beats.forEach((beat) => {
+    aliasDescriptions.set(beat.alias, beat.content)
+    beat.participant_aliases.forEach((alias) => {
+      if (!aliasDescriptions.has(alias)) aliasDescriptions.set(alias, '剧情参与者')
     })
   })
-  chapter.subject.blind_truth.causal_edges.forEach((edge) => {
-    if (!aliasDescriptions.has(edge.before_alias)) aliasDescriptions.set(edge.before_alias, '因果边起点 alias')
-    if (!aliasDescriptions.has(edge.after_alias)) aliasDescriptions.set(edge.after_alias, '因果边终点 alias')
-  })
-  chapter.subject.blind_truth.entry_state_aliases.forEach((alias) => {
-    if (!aliasDescriptions.has(alias)) aliasDescriptions.set(alias, '章节入口状态 alias')
-  })
-  chapter.subject.blind_truth.ending_state_aliases.forEach((alias) => {
-    if (!aliasDescriptions.has(alias)) aliasDescriptions.set(alias, '章节结尾状态 alias')
-  })
+  for (const row of [...truth.states, ...truth.inherited_states]) {
+    aliasDescriptions.set(row.alias, row.content ?? '共享状态主体')
+  }
+  truth.constraints.forEach((c) => aliasDescriptions.set(c.alias, '约束 · ' + c.kind))
+  truth.global_subjects.forEach((g) => aliasDescriptions.set(g.alias, '共享主体 · ' + g.kind))
+  truth.endpoints.forEach((e) => aliasDescriptions.set(e.endpoint_alias, '端点 · ' + e.endpoint))
   const aliasEntries = [...aliasDescriptions.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
   const aliasOptions = aliasEntries.map(([alias]) => alias)
@@ -824,11 +795,13 @@ function ChapterReviewEditor({
             </div>
             <span className="prose-cn text-sm2 text-ink-2">{scene.purpose}</span>
             <div className="prose-cn text-micro text-ink-4">
-              落地 alias：{scene.land_fact_aliases.join('、')}；上下文 alias：{scene.context_fact_aliases.join('、') || '（无）'}；
-              转折 alias：{scene.turn_fact_alias}
+              背景节点：{scene.context_beat_aliases.join('、') || '（无）'}；转折节点：{scene.turn_beat_alias}
             </div>
             <div className="prose-cn text-micro text-ink-4">
-              进入状态：{scene.entry_state_aliases.join('、') || '（无）'}；退出状态：{scene.exit_state_aliases.join('、') || '（无）'}
+              {candidate.beat_placements.flatMap((p) => p.deliveries.filter((d) => d.scene_ref === scene.scene_ref)
+                .map((d) => <p key={p.beat_alias}>节点 {p.beat_alias}：{d.presentation_instruction ?? '完整呈现'}</p>))}
+              {candidate.anchor_bindings.filter((b) => b.scene_ref === scene.scene_ref)
+                .map((b) => <p key={b.endpoint_alias}>端点 {b.endpoint_alias}</p>)}
             </div>
           </div>
         ))}
@@ -845,7 +818,7 @@ function ChapterReviewEditor({
           catalog={constraintCatalog}
           operations={chapter.constraint_operations}
           operationKinds={operationKinds}
-          relationOptions={relationOptions}
+          semanticAliases={semanticAliases}
           repairCodes={repairCodes}
           sceneOptions={sceneOptions}
           aliasEntries={aliasEntries}
@@ -873,15 +846,15 @@ function ChapterReviewEditor({
                     type="checkbox"
                     aria-label={'第 ' + chapter.output_ordinal + ' 章返修码 ' + code}
                     checked={constraints.has(code)}
-                    disabled={disabled || (code === 'narrative_relation' && !relationOptions.length)}
+                    disabled={disabled || (code === 'semantic_constraint' && !semanticAliases.length)}
                     onChange={(event) => onConstraint(code, event.target.checked)}
                   />
                   <Mono>{code}</Mono>
                 </label>
               ))}
             </div>
-            {!relationOptions.length && repairCodes.includes('narrative_relation') ? (
-              <span className="text-sm2 text-ink-4">本章没有可选择的 review 关系，关系返修保持禁用。</span>
+            {!semanticAliases.length && repairCodes.includes('semantic_constraint') ? (
+              <span className="text-sm2 text-ink-4">本章没有可引用的语义约束或端点，相关返修保持禁用。</span>
             ) : null}
             {chapter.constraints.map((constraint) => (
               <ConstraintScope
@@ -892,9 +865,7 @@ function ChapterReviewEditor({
                 aliasEntries={aliasEntries}
                 aliasOptions={aliasOptions}
                 disabled={disabled}
-                relationOptions={relationOptions}
-                relationLabel={'第 ' + chapter.output_ordinal + ' 章新增关系约束'}
-                onEffect={(effect) => onEffect(constraint.code, effect)}
+                semanticAliases={semanticAliases}
                 onScope={onScope}
               />
             ))}
@@ -927,12 +898,12 @@ function constraintOperationsComplete(
 }
 
 function ConstraintHistoryEditor({
-  ordinal, catalog, operations, operationKinds, repairCodes, relationOptions,
+  ordinal, catalog, operations, operationKinds, repairCodes, semanticAliases,
   sceneOptions, aliasEntries, aliasOptions, disabled, onChange,
 }: {
   ordinal: number
   catalog: DesignConstraintCatalog
-  relationOptions: DesignNarrativeRelation[]
+  semanticAliases: string[]
   operations: DesignConstraintOperations | undefined
   operationKinds: string[]
   repairCodes: string[]
@@ -1015,7 +986,7 @@ function ConstraintHistoryEditor({
                     <label key={code} className="flex items-center gap-5 text-sm2 text-ink-2">
                       <input type="checkbox" aria-label={prefix + '替代码 ' + code}
                         checked={operation.replacements.some((item) => item.code === code)}
-                        disabled={disabled || (code === 'narrative_relation' && !relationOptions.length)}
+                        disabled={disabled || (code === 'semantic_constraint' && !semanticAliases.length)}
                         onChange={(event) => update(source.constraint_sha256, {
                           replacements: (event.target.checked
                             ? [...operation.replacements, { code, scene_refs: [], opaque_aliases: [] }]
@@ -1027,18 +998,14 @@ function ConstraintHistoryEditor({
                     </label>
                   ))}
                 </div>
-                {!relationOptions.length && repairCodes.includes('narrative_relation') ? (
-                  <span className="text-sm2 text-ink-4">本章没有可选择的 review 关系，关系替换保持禁用。</span>
+                {!semanticAliases.length && repairCodes.includes('semantic_constraint') ? (
+                  <span className="text-sm2 text-ink-4">本章没有可引用的语义约束或端点，相关替换保持禁用。</span>
                 ) : null}
                 {operation.replacements.map((constraint) => (
                   <ConstraintScope
                     key={constraint.code} ordinal={ordinal} constraint={constraint}
                     sceneOptions={sceneOptions} aliasEntries={aliasEntries} aliasOptions={aliasOptions} disabled={disabled}
-                    relationOptions={relationOptions} relationLabel={prefix + '替代关系约束'}
-                    onEffect={(effect) => update(source.constraint_sha256, {
-                      replacements: operation.replacements.map((item) => item.code === constraint.code
-                        ? { ...item, scene_refs: [], opaque_aliases: [], effect } : item),
-                    })}
+                    semanticAliases={semanticAliases}
                     onScope={(code, field, value, checked, options) => update(source.constraint_sha256, {
                       replacements: operation.replacements.map((item) => {
                         if (item.code !== code) return item
@@ -1217,46 +1184,31 @@ function GoalEvidence({
   goal,
 }: {
   label: string
-  goal: { intent: string; fact_aliases: string[] }
+  goal: { intent: string; subject_aliases: string[]; anchor_scene_ref: string }
 }) {
   return (
     <div className="flex flex-col gap-3 rounded-btn border border-line-row px-9 py-7">
       <span className="text-tag text-ink-4">{label} · {goal.intent}</span>
-      <Mono className="break-all text-micro text-ink-2">{goal.fact_aliases.join('、')}</Mono>
+      <Mono className="break-all text-micro text-ink-2">{goal.subject_aliases.join('、') + ' · ' + goal.anchor_scene_ref}</Mono>
     </div>
   )
 }
 
-function BlindTruthEvidence({
-  truth,
-}: {
-  truth: DesignChapterReview['subject']['blind_truth']
-}) {
-  return (
-    <div className="flex min-w-0 flex-col gap-6 rounded-btn bg-inset px-11 py-9">
-      <span className="text-tag text-ink-4">逐章盲证据 · {truth.chapter_function}</span>
-      {truth.facts.map((fact) => (
-        <div key={fact.fact_alias} className="flex min-w-0 flex-col gap-3 border-b border-line-row pb-5 text-micro last:border-0 last:pb-0">
-          <div className="flex flex-wrap items-center gap-5">
-            <Mono className="break-all text-ink-3">{fact.fact_alias}</Mono>
-            <Mono className="rounded-tag bg-card px-5 py-1 text-ink-4">{fact.kind}</Mono>
-            <Mono className="rounded-tag bg-card px-5 py-1 text-ink-4">{fact.obligation}</Mono>
-          </div>
-          <span className="prose-cn text-sm2 text-ink-2">{fact.claim}</span>
-          <Mono className="break-all text-ink-4">
-            参与者 {fact.participant_aliases.join('、') || '（无）'}
-          </Mono>
-        </div>
-      ))}
-      <span className="prose-cn text-micro text-ink-4">
-        因果边：{truth.causal_edges.map((edge) => edge.before_alias + ' → ' + edge.after_alias).join('；') || '（无）'}
-      </span>
-      <span className="prose-cn text-micro text-ink-4">
-        入口状态：{truth.entry_state_aliases.join('、') || '（无）'}；
-        结尾状态：{truth.ending_state_aliases.join('、') || '（无）'}
-      </span>
-    </div>
-  )
+function BlindTruthEvidence({ truth }: { truth: DesignChapterReview['subject']['blind_truth'] }) {
+  return <div className="flex min-w-0 flex-col gap-8 rounded-btn bg-inset px-11 py-9">
+    <span className="text-tag text-ink-4">规划剧情 · {truth.chapter_function}</span>
+    {truth.beats.map((beat) => <div key={beat.alias} className="border-b border-line-row pb-8">
+      <Mono className="text-micro">{beat.alias}</Mono><p className="prose-cn">{beat.content}</p>
+    </div>)}
+    <details><summary>持续状态、约束与知识端点</summary>
+      <pre className="overflow-auto whitespace-pre-wrap text-sm2">{JSON.stringify({
+        states: truth.states, inherited_states: truth.inherited_states,
+        constraints: truth.constraints, knowledge: truth.knowledge, endpoints: truth.endpoints,
+        entry_state_aliases: truth.entry_state_aliases, carry_out_aliases: truth.carry_out_aliases,
+        global_subjects: truth.global_subjects, background_beats: truth.background_beats,
+      }, null, 2)}</pre>
+    </details>
+  </div>
 }
 
 function StructureEvidence({
@@ -1306,9 +1258,7 @@ function ConstraintScope({
   aliasOptions,
   disabled,
   onScope,
-  relationOptions,
-  relationLabel,
-  onEffect,
+  semanticAliases,
 }: {
   ordinal: number
   constraint: DesignRepairConstraint
@@ -1316,9 +1266,7 @@ function ConstraintScope({
   aliasEntries: [string, string][]
   aliasOptions: string[]
   disabled: boolean
-  relationOptions: DesignNarrativeRelation[]
-  relationLabel: string
-  onEffect: (effect: DesignNarrativeRelation | null) => void
+  semanticAliases: string[]
   onScope: (
     code: string,
     field: 'scene_refs' | 'opaque_aliases',
@@ -1327,29 +1275,9 @@ function ConstraintScope({
     canonicalOptions: string[],
   ) => void
 }) {
-  if (constraint.code === 'narrative_relation') {
-    const selected = relationOptions.findIndex((relation) => sameRelation(constraint.effect, relation))
-    return (
-      <label className="flex flex-col gap-5 border-t border-line-row pt-9 text-tag text-ink-3">
-        选择本章 review 关系；端点原样提交，仅将 enforcement 设为服务端允许的 hard。
-        <select aria-label={relationLabel} value={selected < 0 ? '' : String(selected)}
-          disabled={disabled || !relationOptions.length}
-          onChange={(event) => {
-            const choice = event.target.value === '' ? undefined : relationOptions[Number(event.target.value)]
-            onEffect(choice ? { ...choice } : null)
-          }}
-          className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body text-ink"
-        >
-          <option value="">请选择关系</option>
-          {relationOptions.map((relation, index) => (
-            <option key={index} value={String(index)}>{relation.kind} · {Object.entries(relation)
-              .filter(([key]) => key.endsWith('_alias')).map(([key, value]) => key + '=' + value).join('；')}</option>
-          ))}
-        </select>
-        {!relationOptions.length ? <span>本章没有可选择的 review 关系。</span> : null}
-      </label>
-    )
-  }
+  const choices = constraint.code === 'semantic_constraint'
+    ? aliasEntries.filter(([alias]) => semanticAliases.includes(alias)) : aliasEntries
+  const options = constraint.code === 'semantic_constraint' ? choices.map(([alias]) => alias) : aliasOptions
   return (
     <div className="grid gap-10 border-t border-line-row pt-9 md:grid-cols-2">
       <div className="flex flex-col gap-5">
@@ -1371,7 +1299,7 @@ function ConstraintScope({
       </div>
       <div className="flex flex-col gap-5">
         <Mono className="text-mini font-semibold">{constraint.code} · opaque_aliases</Mono>
-        {aliasEntries.length ? aliasEntries.map(([alias, ref]) => (
+        {choices.length ? choices.map(([alias, ref]) => (
           <label key={alias} className="flex min-w-0 items-center gap-5 text-sm2 text-ink-2">
             <input
               type="checkbox"
@@ -1379,7 +1307,7 @@ function ConstraintScope({
               checked={constraint.opaque_aliases.includes(alias)}
               disabled={disabled}
               onChange={(event) => onScope(
-                constraint.code, 'opaque_aliases', alias, event.target.checked, aliasOptions,
+                constraint.code, 'opaque_aliases', alias, event.target.checked, options,
               )}
             />
             <Mono className="break-all">{alias}</Mono>

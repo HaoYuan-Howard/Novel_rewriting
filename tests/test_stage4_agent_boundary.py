@@ -32,7 +32,7 @@ from novel.llm.ledger import CostLedger, ledger_path
 from novel.run import RunContext
 from novel.node_agents import Stage4DesignSessionPool, Stage4PlanSessionPool
 from novel.stages.stage4 import plan
-from novel.stages.stage4.blind import build_blind_projection
+from novel.stages.stage4.plot_design import build_blind_projection
 from novel.store import ArtifactStore
 from tests.test_stage4_v3_integration import (
     _book, _bound_b_response, _infeasible_b_response, _seed_current_stage2,
@@ -147,7 +147,7 @@ class _RequestDriver(_OneTurnDriver):
 
 def _ctx(
         book: Path, node: str, *, run_id: str | None = None,
-        code: str | None = None, profile: AgentProfile | None = None,
+        code: str | None = None, profile: AgentProfile | None = None, paid: bool = True,
 ) -> RunContext:
     base = book.parent
     ledger = (CostLedger(path=ledger_path(base)) if run_id is None else
@@ -155,7 +155,7 @@ def _ctx(
     return RunContext(
         novel_dir=book,
         node=node,
-        paid=True,
+        paid=paid,
         code=code or prov.code_version(),
         cache=CachePolicy.default(),
         ledger=ledger,
@@ -185,13 +185,10 @@ def _plan_pool(ctx: RunContext, monkeypatch, *, first_response=None,
         nonlocal response, requests
         requests += 1
         if response is None:
-            lines = request.prompt.splitlines()
-            ambiguities = json.loads(lines[
-                lines.index(plan.prompts.BLOCK_CHAPTER_AMBIGUITIES) + 1])
+            ambiguities = json.loads(request.prompt)['ambiguities']
             response = {'resolutions': [
                 {'ambiguity_id': row['ambiguity_id'],
-                 ('stage_ref' if row['kind'] == 'stage_signature_conflict'
-                  else 'candidate_scene_id'): row['candidates'][0]}
+                 'selected_refs': [row['candidates'][0]]}
                 for row in ambiguities], 'binding_concerns': []}
         return first_response if requests == 1 and first_response is not None else response
 
@@ -487,7 +484,7 @@ def _scene_goal_constraint(candidate: Any) -> dict[str, Any]:
     return {
         'code': 'scene_goal',
         'scene_refs': [chapter.scenes[0].candidate_scene_id],
-        'opaque_aliases': [next(iter(candidate.fact_aliases))],
+        'opaque_aliases': [next(a for a, ref in candidate.subject_aliases.items() if ref.kind == 'beat')],
     }
 
 

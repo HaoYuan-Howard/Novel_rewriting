@@ -45,12 +45,12 @@ CONTRACT_TEXT: Mapping[str, str] = {
 4. 局部知识错误仅在 submission_options 开放时提交同包 GlobalEdit：稳定 subject/hash 与证据绑定不可修改；collection delta 只使用 add/delete/split 的现役 schema，外键必须在修后全集闭合。post_edit_review 必须精确覆盖修前未闭合项：修改的新主体要给修后结论，仍存活的旧 FAIL/UNVER 要显式复判。人物静态字段不由 GlobalEdit 修改。代码负责归一、HARD、归档和正式提交，模型不能写盘。
 5. 人物名册、静态身份或称名错误派修 owner=stage2.characters；必要知识、源文案或范围错误派修 owner=stage2.global。只使用本包开放的 typed rework，明确所需修订与证据，交回真正负责的 Executor。没有把握用 uncertain，必须停止用 stop。不得主动处理尚未生成的 Blueprint，也不新增人物 Commander。
 6. Global 接受后才开始 Blueprint 逐章并发；没有预审，也没有额外 Global-only 终审。任何新反馈都以本轮落盘工作包为依据，历史对话不能代替当前证据。''',
-    'stage2-blueprint': '''1. 你是与 Global Commander 独立的 Blueprint Commander。完整阅读本轮待审蓝图与正文，并结合必要知识、人物、证据、时序与隔离状态交叉核验；不得仅凭机械 HARD 通过接受。有效历史决定由后端按义务继承，修改或删除旧问题仍须复审。
-2. 本工作单元使用基础四次内容额度加已生效的不可变人工追加，同一修复过程连续审阅。候选修改、执行者返工、会话切换、进程恢复或回源都不重发预算，模型不能自行加额；Global Commander 的累计额度另计。
-3. 接受只用绑定当前工作包的 typed accept。局部问题仅按 submission_options 提交同包 Blueprint patch：只修改开放的 typed 候选或叙事关系，章号保持不变。post_edit_accept 声明修后核验，必须绑定修前交叉工作包；代码用 producer 同一 HARD、归一与来源口验证并落盘。
-4. 蓝图错误派修 owner=stage2.blueprint，并列出精确章节与有据问题；人物名册或称名错误回源 owner=stage2.characters，必要知识错误回源 owner=stage2.global，不能在蓝图里替上游事实打补丁。回源后保留自己的预算与工作单元，按实际依赖变化和本轮义务复核；未知范围不能冒充局部无变化。
-5. knowledge_links 只裁决当前 pending 关联，证据不足用 unresolved；读者揭示、人物知情、世界生效和伏笔表现分别核验，伏笔不能携带未来答案。关联决定先持久化，再由 Blueprint producer 免费物化，不回写 Global 或蓝图抽取主体。
-6. 不知道用 uncertain，停止用 stop；两者都不能被代码解释成重新生成。新决定与有效历史决定完整覆盖当前义务后，两份 current typed 接受才由确定性 producer 收口；seen 只是阅读事实，不授予接受。''',
+    'stage2-blueprint': '''1. 只审本轮 chapter:N 或 cross_chapter 范围。逐章完整阅读原文、beats.content 和必要依赖，检查 completeness、attribution、causal_continuity、epistemic_reveal、carry_state。schema 不证明完整剧情、正确归因或不泄密。
+2. 每维明确 pass/issue/unver/not_applicable；不适用与无法判断分别说明原因。只登记实际问题，不生成逐节点、逐约束或逐 delivery 正向回执。每个未解决历史问题必须显式保留、解决或撤销，删除主体不消除问题。
+3. beats.content 是唯一完整剧情正文。普通因果、动作及即时反应保持整体；辅助状态仅表示持续作用，modality 不授予传播权限。原文有据的重要知识边界不得被合并抹去，后台真相、人物信念、自称和读者揭示不能混同。
+4. 普通 Stage4 换场或多 delivery 呈现不修改蓝图，不要求重新抽取。只有原文有据的错漏、归因错误或必要独立边界缺失才派修 stage2.blueprint；人物注册或共享知识错误分别归 stage2.characters、stage2.global。具体问题必须带主体与证据。Stage4 转交的疑点尚未证实，A 也没有读过原文；必须独立反查原文，误报明确 withdrawn，仅呈现安排问题撤销上游派修。无原文依据的新剧情要求拒绝，不能借修订制造真相。
+5. KnowledgeLinks 仅关联当前 pending 的必要知识主体。at_beats 用 candidate_subject_refs 中的节点明确 trigger_beat_ref；at_entry 只允许开放的 entry_subject_refs。不得根据事实首次出现猜测所有内容已知；伏笔不能携带未来答案。证据不足保持 unresolved 和 unver。
+6. 章级 accept 与跨章 accept 分开；全部章审有效接受仍不替代跨章反查原文。各范围使用自己的持久预算，返修、换会话或 epoch 不重置用量。已购响应优先免费恢复。未知使用 uncertain，必要停止使用 stop；不得把它们解释为再次生成。''',
     'stage4-design': '''1. 策略只决定 `accept / request_replan`。只有策略本身无法指导全书结构重构时才拒绝；单章问题不得
    借策略决定放大成整书重跑。
 2. 每章决定 `accept / request_repair`。拒绝理由必须指出该章可核证的问题；约束只选服务端枚举的

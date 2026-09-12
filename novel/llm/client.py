@@ -95,7 +95,7 @@ from novel.llm.cache import (
 from novel.llm.keepsake import write_answer_lost
 from novel.llm import response_repair
 from novel.llm.json_text import normalize_json_text as _strip_fences
-from novel.llm.prompts import required_top_level
+from novel.llm.prompts import missing_required_fields, required_top_level
 from novel.llm.transport import ChatRequest, ChatResponse, Transport, TransportError
 from novel.llm.retry import RESOURCE_INTERRUPTED, TransportRetryPolicy
 from novel.model_slots import model_slot_from_environment, pipeline_model_slot, ModelSlotUnavailable
@@ -534,23 +534,6 @@ def _checkpoint_request_binding(req: ChatRequest) -> dict[str, Any]:
     }
 
 
-def _is_empty(v: Any) -> bool:
-    """这个顶层键的值算不算「结构上是空的」。**不是真值判断。**
-
-    `None` / `''` / `[]` / `{}` / 空集合叫空；**`False` 与 `0` 不叫空**。
-
-    ⚠ 原来这里写的是 `not data.get(k)`，于是一个**合法的 `False`**（或 `0`、
-    或一个刻意为空的集合语义）会被报成「模型没给这个键」——
-    白走四档阶梯、花四次钱，去救一个根本没坏的响应。
-    ⚠ 反过来这道闸**不能删**：F-125 那个形态（`{"reconstruction_strategy": "…"}`，
-    **0 个输出章**、正常结束、4477 token 里推理占 4317）是**合法 JSON**，
-    `model_validate` 对一个 `list` 字段收到 `[]` 也照样放行。
-    要让 pydantic 自己拦住它，响应模型得声明 `Field(min_length=1)`——
-    而「记得声明」正是判据 39 已经证明过靠不住的那种纪律。
-    """
-    if v is None:
-        return True
-    return isinstance(v, (str, bytes, list, tuple, dict, set, frozenset)) and len(v) == 0
 
 
 def judge_payload(
@@ -584,9 +567,7 @@ def judge_payload(
     except json.JSONDecodeError as e:
         why, detail = f'解析失败: {e}', _parse_detail(e, text, resp)
     else:
-        missing = [k for k in require
-                   if not isinstance(data, dict) or k not in data
-                   or _is_empty(data[k])]
+        missing = missing_required_fields(data, require, model_cls)
         if missing:
             why, gate = f'顶层缺必需键（或值为空）: {missing}', 'require'
             # 缺的是**顶层必需键**，键名来自 `model_cls` 的派生、不是模型正文。
@@ -988,7 +969,7 @@ class LlmClient:
 
         【一档之内三道闸，顺序是挑过的】
           ① `json.loads`      —— 截断就长这样（`finish_reason='length'`）；
-          ② **空壳闸**（`_is_empty`）—— F-125，合法 JSON 但结构上是空的；
+          ② **空壳闸**（`missing_required_fields`）—— F-125，合法 JSON 但结构上是空的；
           ③ `model_validate`  —— 形状/类型/`extra='forbid'`。
         ②在③之前：`require` 是按**盘上键名**（alias）定义的，而且这条路要报得出
         「缺的是哪一个顶层键」——那句话归②，不归 pydantic 的错误文本。

@@ -40,7 +40,7 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage2.blueprint_character_projection': 'stage2/blueprint_character_projection.json',
     'stage2.chapter_blueprints': 'stage2/chapter_blueprints.json',
     'stage2.knowledge_links': 'stage2/knowledge_links.json',
-    'stage2.blueprint_relation_edit': 'stage2/blueprint_relation_edit.json',
+    'stage2.blueprint_edit': 'stage2/blueprint_edit.json',
     'stage4.blind_candidate': 'stage4/blind_candidate.json',
     'stage4.blind_chapter_edit': 'stage4/blind_chapter_edit.json',
     'stage4.evidence_binding': 'stage4/evidence_binding.json',
@@ -70,6 +70,7 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
 
 # 只供识别并拒绝退役产物；不进入当前 artifact registry，不提供解码或迁移。
 RETIRED_ARTIFACT_PATHS: Final[dict[str, str]] = {
+    'stage2.blueprint_relation_edit': 'stage2/blueprint_relation_edit.json',
     'stage3.style_grounding': 'stage3/style_grounding.json',
 }
 
@@ -126,7 +127,9 @@ STAGE2_BLUEPRINT_CHARACTER_PROJECTION = artifact_rel(
     'stage2.blueprint_character_projection')
 STAGE2_CHAPTER_BLUEPRINTS = artifact_rel('stage2.chapter_blueprints')
 STAGE2_KNOWLEDGE_LINKS = artifact_rel('stage2.knowledge_links')
-STAGE2_BLUEPRINT_RELATION_EDIT = artifact_rel('stage2.blueprint_relation_edit')
+STAGE2_BLUEPRINT_EDIT = artifact_rel('stage2.blueprint_edit')
+# 仅供旧路径的明确拒绝与历史识别，不在现役 schema 注册表中。
+STAGE2_BLUEPRINT_RELATION_EDIT = RETIRED_ARTIFACT_PATHS['stage2.blueprint_relation_edit']
 RETIRED_STAGE3_STYLE_GROUNDING = RETIRED_ARTIFACT_PATHS['stage3.style_grounding']
 STAGE4_BLIND_CANDIDATE = artifact_rel('stage4.blind_candidate')
 STAGE4_BLIND_CHAPTER_EDIT = artifact_rel('stage4.blind_chapter_edit')

@@ -41,7 +41,7 @@ from novel.llm import typed_failures
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
 from novel.node_agents import Stage4PlanSessionPool
 from novel.store import ArtifactStore
-from novel.stages.stage4 import baseline as baseline_mod
+from novel.stages.stage4 import plot_binding as baseline_mod
 from novel.stages.stage4 import plan
 from tests.test_stage4_agent_boundary import (
     _book, _ctx, _land_design, _seed_current_stage2, _bound_b_response,
@@ -109,250 +109,92 @@ def test_fully_mechanical_book_is_zero_wire(prepared_design) -> None:
     assert all(row['content_used'] == 0 for row in units)
 
 
-def test_mixed_book_wires_only_the_ambiguous_chapter(
-        prepared_design, monkeypatch,
-) -> None:
+def test_mixed_book_wires_only_the_ambiguous_chapter(prepared_design, monkeypatch) -> None:
+    """章级请求保留完整设计、必要映射和证据；仅第一章进入会话。"""
+    from tests.test_stage4_agent_boundary import _RequestDriver
     book, blueprints, candidate = prepared_design
-    blueprints_raw = blueprints.model_dump(by_alias=True, mode='json')
     plan_ctx = _ctx(book, 'stage4.plan')
-
-    real_build = plan.build_mechanical_baseline
-    canonical = _bound_b_response(candidate, blueprints_raw)
-
-    def injected(candidate_raw: dict[str, Any], bp_raw: dict[str, Any]):
-        baseline = real_build(candidate_raw, bp_raw)
-        first = baseline.chapters[0]
-        scene_id = sorted(first.scene_stage_refs)[0]
-        correct_beat = first.scene_stage_refs[scene_id][0]
-        other_beat = next(
-            beat for beat in sorted(bp_beats(bp_raw, first.chapter_ordinal))
-            if beat != correct_beat)
-        hinges = bp_hinges(bp_raw, first.chapter_ordinal, correct_beat)
-        from novel.stages.stage4.baseline import (
-            BaselineAmbiguity, ChapterBaseline,
-        )
-        # 只把 s01 的归属变成歧义：其余场景的机械归属与材料保持真实基线。
-        s01_materials = first.scene_material_refs.get(scene_id, ())
-        fake_first = ChapterBaseline(
-            chapter_ordinal=first.chapter_ordinal,
-            scene_stage_refs={
-                key: () if key == scene_id else value
-                for key, value in first.scene_stage_refs.items()},
-            scene_material_refs={
-                key: value for key, value in first.scene_material_refs.items()
-                if key != scene_id},
-            ambiguities=(
-                BaselineAmbiguity(
-                    ambiguity_id='a' * 16, kind='stage_signature_conflict',
-                    chapter_ordinal=first.chapter_ordinal,
-                    candidate_scene_id=scene_id,
-                    candidates=(correct_beat, other_beat)),
-                *(BaselineAmbiguity(
-                    ambiguity_id=normalize_id(index),
-                    kind='material_multi_scene',
-                    chapter_ordinal=first.chapter_ordinal,
-                    candidate_scene_id=scene_id,
-                    candidates=(scene_id,),
-                    material_ref=hinge)
-                  for index, hinge in enumerate(s01_materials)),
-            ),
-        )
-        return baseline_mod.MechanicalBaseline(
-            chapters=(fake_first, *baseline.chapters[1:]))
-
-    monkeypatch.setattr(plan, 'build_mechanical_baseline', injected)
-
-    class _ChapterResponder(AgentDriver):
-        driver = 'codex'
-        provider = 'openai'
-
-        def __init__(self) -> None:
-            self.session_id = 'provider-plan-ch0001'
-            self.calls = 0
-            self.requests: list[AgentRequest] = []
-            self.concern_formal_refs: list[str] = []
-
-        def probe(self) -> AgentProbe:
-            return AgentProbe(
-                driver='codex', provider='openai', executable='fake-codex',
-                available=True, version='0.test')
-
-        def _answer(self, request: AgentRequest) -> AgentTurn:
-            self.requests.append(request)
-            lines = request.prompt.splitlines()
-            marker = lines.index(plan.prompts.BLOCK_CHAPTER_AMBIGUITIES)
-            ambiguities = json.loads(lines[marker + 1])
-            evidence_marker = lines.index(plan.prompts.BLOCK_CHAPTER_EVIDENCE)
-            evidence = json.loads(lines[evidence_marker + 1])
-            assert evidence['binding_input_contract'] == STAGE4_BINDING_INPUT_CONTRACT
-            candidate_marker = lines.index(plan.prompts.BLOCK_CHAPTER_CANDIDATE)
-            candidate_chapter = json.loads(lines[candidate_marker + 1])
-            # 钉真正交给 AgentDriver 的载荷，不能只证明构造器内存在映射。
-            frozen_chapter = candidate.output_chapters[0].model_dump(mode='json')
-            assert candidate_chapter == frozen_chapter
-            atoms = {row['fact_id']: row for row in evidence['fact_atoms']}
-            assert set(evidence['fact_aliases'].values()) == set(atoms)
-            for scene in candidate_chapter['scenes']:
-                for alias in scene['land_fact_aliases'] + scene['context_fact_aliases']:
-                    formal = evidence['fact_aliases'][alias]
-                    assert candidate.fact_aliases[alias] == formal
-                    assert atoms[formal]['claim']
-                    assert atoms[formal]['source_text']
-            participants = set(evidence['participant_aliases'].values())
-            assert all(set(atom['participant_char_ids']) <= participants
-                       for atom in atoms.values())
-            assert '唯一映射' in request.system
-            resolutions = []
-            for row in ambiguities:
-                resolution: dict[str, Any] = {'ambiguity_id': row['ambiguity_id']}
-                if row['kind'] == 'stage_signature_conflict':
-                    resolution['stage_ref'] = row['candidates'][0]
-                else:
-                    resolution['candidate_scene_id'] = row['candidates'][0]
-                resolutions.append(resolution)
-            self.concern_formal_refs = [evidence['fact_atoms'][0]['fact_id']]
-            self.concern_formal_refs.append(next(
-                ref for stage in evidence['stages']
-                for ref in stage['present_char_ids']))
-            assert set(self.concern_formal_refs).issubset(
-                evidence['issued_ref_allowlist'])
-            self.calls += 1
-            return AgentTurn(
-                session_id=self.session_id,
-                content=json.dumps(
-                    {
-                        'resolutions': resolutions,
-                        'binding_concerns': [{
-                            'constraint_code': 'future_leak',
-                            'scenes': [candidate_chapter['scenes'][0][
-                                'candidate_scene_id']],
-                            'reason': '测试正式事实与人物引用的规范化。',
-                            'closed_refs': self.concern_formal_refs,
-                        }],
-                    },
-                    ensure_ascii=False, sort_keys=True, separators=(',', ':')),
-                model=None, actual_reasoning_effort=None,
-                usage=AgentUsage(prompt_tokens=10, completion_tokens=5),
-                turn_count=1)
-
-        def start(self, profile, request) -> AgentTurn:
-            return self._answer(request)
-
-        def resume(self, profile, session_id, request) -> AgentTurn:
-            assert session_id == self.session_id
-            return self._answer(request)
-
-        def cancel(self, session_id=None) -> bool:
-            return False
-
-        def close(self) -> None:
-            return None
-
-    responder = _ChapterResponder()
-    pool = Stage4PlanSessionPool(
-        plan_ctx, driver_factory=lambda _purpose, _chapter: responder)
-    report = plan.run_plan(plan_ctx, pool)
-    pool.finish(process_state='ok', delivery_state='delivered')
-    pool.close()
-    assert report.passed
-    # 只有歧义章有 session：一次 wire。
-    assert responder.calls == 1
-    # 本章 prompt 不含其他章的任何正文/场景。
-    prompt = responder.requests[0].prompt
-    # 第 1 章没有上一章：相邻边界块不下发（下发条件是存在前一章）。
-    assert plan.prompts.BLOCK_CHAPTER_NEIGHBORS not in prompt
-    assert '第 1 章' in prompt
-    for forbidden in (plan.prompts.BLOCK_BODY, '第 2 章', '第 3 章'):
-        assert forbidden not in prompt
-    evidence_lines = prompt.splitlines()
-    evidence_marker = evidence_lines.index(plan.prompts.BLOCK_CHAPTER_EVIDENCE)
-    evidence = json.loads(evidence_lines[evidence_marker + 1])
-    main_text = ArtifactStore(plan_ctx).read(MainText, plan.MAIN_TEXT).model_dump(
-        by_alias=True, mode='json')
-    assert evidence['chapter_source_text'] == main_text[0]['text']
-    assert main_text[1]['text'] not in prompt
-    expected_materials = {
-        hinge['source']['text']
-        for beat in blueprints_raw['blueprints'][0]['beats']
-        for hinge in beat.get('hinges') or []
-        if hinge.get('source')}
-    prompt_materials = {
-        material['text']
-        for stage in evidence['stages']
-        for material in stage['materials']
-        if material.get('text')}
-    assert prompt_materials == expected_materials
+    monkeypatch.setattr(plan, 'build_mechanical_baseline',
+                        _inject_stage_ambiguities(plan.build_mechanical_baseline, (1,)))
+    formal_refs = []
+    def answer(request):
+        pack = json.loads(request.prompt)
+        assert pack['binding_input_contract'] == STAGE4_BINDING_INPUT_CONTRACT
+        chapter, materials, mapping = pack['candidate'], pack['materials'], pack['mapping']
+        assert chapter == candidate.output_chapters[0].model_dump(mode='json')
+        beats = {row['beat_id']: row for row in materials['blueprint']['beats']}
+        assert beats == {b.beat_id: b.model_dump(mode='json') for b in blueprints.blueprints[0].beats}
+        for placement in chapter['beat_placements']:
+            subject = mapping['subject_aliases'][placement['beat_alias']]
+            assert subject['kind'] == 'beat' and beats[subject['ref']]['content']
+        participants = {cid for beat in beats.values() for cid in beat['participant_char_ids']}
+        assert participants <= set(mapping['participant_aliases'].values())
+        assert all({'kind': 'character', 'ref': cid} in mapping['subject_aliases'].values()
+                   for cid in participants)
+        formal_refs[:] = [next(iter(beats)), sorted(participants)[0]]
+        assert set(formal_refs) <= set(pack['issued_ref_allowlist'])
+        return {'resolutions': [
+            {'ambiguity_id': row['ambiguity_id'], 'selected_refs': [row['candidates'][0]]}
+            for row in pack['ambiguities']],
+            'binding_concerns': [{'constraint_code': 'future_leak',
+                'scenes': [chapter['scenes'][0]['candidate_scene_id']],
+                'reason': '核对本章节点与人物引用。', 'closed_refs': list(formal_refs)}]}
+    responder = _RequestDriver(answer, session_id='provider-plan-ch0001')
+    pool = Stage4PlanSessionPool(plan_ctx, driver_factory=lambda _purpose, _chapter: responder)
+    try:
+        report = plan.run_plan(plan_ctx, pool)
+        pool.finish(process_state='ok', delivery_state='delivered')
+    finally:
+        pool.close()
+    assert report.passed and responder.calls == 1
+    pack = json.loads(responder.requests[0].prompt)
+    source = ArtifactStore(plan_ctx).read(MainText, plan.MAIN_TEXT).model_dump(mode='json')
+    local = next(row for row in pack['materials']['source_materials'] if row['chapter_ordinal'] == 1)
+    assert ''.join(row['text'] for row in local['ranges']) == source[0]['text']
+    for chapter in source[1:]:
+        assert chapter['text'] not in responder.requests[0].prompt
+    assert 'fact_atoms' not in responder.requests[0].prompt
     store = ArtifactStore(plan_ctx)
-    binding, _raw = store.read_own(EvidenceBinding, STAGE4_EVIDENCE_BINDING)
-    expected_aliases = [
-        next(alias for alias, formal in candidate.fact_aliases.items()
-             if formal == responder.concern_formal_refs[0]),
-        next(alias for alias, formal in candidate.participant_aliases.items()
-             if formal == responder.concern_formal_refs[1]),
-    ]
+    binding = store.read_own(EvidenceBinding, STAGE4_EVIDENCE_BINDING)[0]
+    expected = [next(alias for alias, formal in candidate.subject_aliases.items()
+                     if formal.ref == ref) for ref in formal_refs]
     assert len(binding.binding_concerns) == 1
-    concern = binding.binding_concerns[0]
-    assert concern.chapter_ordinal == 1
-    assert concern.closed_refs == expected_aliases
-    assert not (set(concern.closed_refs) & set(responder.concern_formal_refs))
-    prov_payload = binding.provenance.model_dump(by_alias=True, mode='json')
-    kinds = {row['chapter_ordinal']: row['kind']
-             for row in prov_payload['unit_lineage']}
-    assert kinds[1] == 'chapter_session'
-    assert all(kind == 'baseline'
-               for ordinal, kind in kinds.items() if ordinal != 1)
-    assert prov_payload['origin'] == 'llm'
-    assert prov_payload['prompts'][STAGE4_BINDING_INPUT_RECEIPT_KEY] == (
-        prov.fingerprint(STAGE4_BINDING_INPUT_CONTRACT))
+    assert binding.binding_concerns[0].chapter_ordinal == 1
+    assert binding.binding_concerns[0].closed_refs == expected
+    payload = binding.provenance.model_dump(mode='json')
+    kinds = {row['chapter_ordinal']: row['kind'] for row in payload['unit_lineage']}
+    assert kinds == {1: 'chapter_session', 2: 'baseline', 3: 'baseline'}
+    assert payload['origin'] == 'llm'
+    assert payload['prompts'][STAGE4_BINDING_INPUT_RECEIPT_KEY] == prov.fingerprint(
+        STAGE4_BINDING_INPUT_CONTRACT)
     assert store.exists(STAGE4_PLAN_CHAPTERS)
 
 
-def bp_beats(bp_raw: dict[str, Any], ordinal: int) -> list[str]:
-    for row in bp_raw['blueprints']:
-        if row['chapter_ordinal'] == ordinal:
-            return [beat['beat_id'] for beat in row['beats']]
-    raise KeyError(ordinal)
-
-
-def bp_hinges(bp_raw: dict[str, Any], ordinal: int, beat_id: str) -> list[str]:
-    for row in bp_raw['blueprints']:
-        if row['chapter_ordinal'] != ordinal:
-            continue
-        for beat in row['beats']:
-            if beat['beat_id'] == beat_id:
-                return [hinge['hinge_id'] for hinge in beat.get('hinges') or []]
-    raise KeyError(beat_id)
-
-
-def normalize_id(index: int) -> str:
-    return f'{index:016x}'
-
-
 def test_chapter_concern_uses_one_strict_issued_ref_surface() -> None:
-    from novel.stages.stage4.baseline import BaselineAmbiguity, ChapterBaseline
+    from novel.stages.stage4.plot_binding import BaselineAmbiguity, ChapterBaseline
 
     ambiguity = BaselineAmbiguity(
         ambiguity_id='a' * 16,
-        kind='stage_signature_conflict',
+        kind='source_context_selection',
         chapter_ordinal=1,
-        candidate_scene_id='c01s01',
-        candidates=('b01_01', 'b01_02'),
+        candidate_scene_id='c01s01', beat_ref='b01_01',
+        candidates=('scx_one', 'scx_two'),
     )
     baseline = ChapterBaseline(
         chapter_ordinal=1,
-        scene_stage_refs={'c01s01': ()},
-        scene_material_refs={'c01s01': ()},
+        scenes=({'candidate_scene_id': 'c01s01', 'deliveries': [
+            {'beat_ref': 'b01_01', 'evidence_refs': ['e01_01'], 'source_context_refs': []}]},),
         ambiguities=(ambiguity,),
     )
     issue = plan._ChapterBindingIssue(
         chapter_ordinal=1,
         scene_ids=frozenset({'c01s01'}),
         issued_refs=frozenset({
-            'c01s01', 'b01_01', 'b01_02', 'f01_001', 'char_001',
-            'a_fact', 'a_char',
+            'c01s01', 'b01_01', 'scx_one', 'scx_two', 'char_001',
+            'a_beat', 'a_char',
         }),
         user='test-only',
-        formal_to_alias={'f01_001': 'a_fact', 'char_001': 'a_char'},
+        formal_to_alias={'b01_01': 'a_beat', 'char_001': 'a_char'},
     )
     validator = plan._chapter_wire_validator(baseline, issue)
 
@@ -360,7 +202,7 @@ def test_chapter_concern_uses_one_strict_issued_ref_surface() -> None:
         return plan.ChapterBindingResponse.model_validate({
             'resolutions': [{
                 'ambiguity_id': ambiguity.ambiguity_id,
-                'stage_ref': ambiguity.candidates[0],
+                'selected_refs': [ambiguity.candidates[0]],
             }],
             'binding_concerns': [{
                 'constraint_code': 'future_leak',
@@ -368,7 +210,7 @@ def test_chapter_concern_uses_one_strict_issued_ref_surface() -> None:
                 'scenes': scenes if scenes is not None else ['c01s01'],
                 'reason': '测试章内关闭引用面。',
                 'closed_refs': refs if refs is not None else [
-                    'f01_001', 'char_001'],
+                    'b01_01', 'char_001'],
             }],
         })
 
@@ -376,19 +218,20 @@ def test_chapter_concern_uses_one_strict_issued_ref_surface() -> None:
     assert validator(accepted, None) is None
     canonical = issue.canonical_concern(accepted.binding_concerns[0])
     assert canonical['chapter_ordinal'] == 1
-    assert canonical['closed_refs'] == ['a_fact', 'a_char']
+    assert canonical['closed_refs'] == ['a_beat', 'a_char']
     assert '只能是本章' in validator(response(chapter=2), None)
     assert '非本章 candidate_scene_id' in validator(
         response(scenes=['c02s01']), None)
     assert '非本章 issued-ref' in validator(
-        response(refs=['f02_001']), None)
+        response(refs=['b02_01']), None)
 
 
 def _inject_stage_ambiguities(
         real_build, ordinals: tuple[int, ...],
 ):
-    """把指定章第一场的 stage 归属变成一个可控歧义。"""
-    from novel.stages.stage4.baseline import BaselineAmbiguity, ChapterBaseline
+    """把指定章第一场的真实舞台引用留给 B 选择，验证调度/恢复而非语义歧义。"""
+    import copy
+    from novel.stages.stage4.plot_binding import BaselineAmbiguity, ChapterBaseline
 
     def injected(candidate_raw: dict[str, Any], bp_raw: dict[str, Any]):
         baseline = real_build(candidate_raw, bp_raw)
@@ -397,23 +240,21 @@ def _inject_stage_ambiguities(
             if chapter.chapter_ordinal not in ordinals:
                 chapters.append(chapter)
                 continue
-            scene_id = sorted(chapter.scene_stage_refs)[0]
-            correct = chapter.scene_stage_refs[scene_id][0]
-            other = next(
-                beat for beat in sorted(bp_beats(bp_raw, chapter.chapter_ordinal))
-                if beat != correct)
+            scenes = copy.deepcopy(chapter.scenes)
+            first = scenes[0]
+            delivery = first['deliveries'][0]
+            choices = tuple(delivery['source_context_refs'])
+            assert choices, '调度 fixture 必须有原文支持的舞台候选'
+            delivery['source_context_refs'] = []
             chapters.append(ChapterBaseline(
                 chapter_ordinal=chapter.chapter_ordinal,
-                scene_stage_refs={
-                    key: () if key == scene_id else value
-                    for key, value in chapter.scene_stage_refs.items()},
-                scene_material_refs=dict(chapter.scene_material_refs),
+                scenes=scenes,
                 ambiguities=(BaselineAmbiguity(
                     ambiguity_id=f'{chapter.chapter_ordinal:016x}',
-                    kind='stage_signature_conflict',
+                    kind='source_context_selection',
                     chapter_ordinal=chapter.chapter_ordinal,
-                    candidate_scene_id=scene_id,
-                    candidates=(correct, other)),),
+                    candidate_scene_id=first['candidate_scene_id'],
+                    beat_ref=delivery['beat_ref'], candidates=choices),),
             ))
         return baseline_mod.MechanicalBaseline(chapters=tuple(chapters))
 
@@ -444,22 +285,18 @@ class _ConcernDriver(AgentDriver):
 
     def _answer(self, request: AgentRequest) -> AgentTurn:
         self.requests.append(request)
-        lines = request.prompt.splitlines()
-        if plan.prompts.BLOCK_CHAPTER_AMBIGUITIES in lines:
-            ambiguities = json.loads(lines[
-                lines.index(plan.prompts.BLOCK_CHAPTER_AMBIGUITIES) + 1])
-            evidence = json.loads(lines[
-                lines.index(plan.prompts.BLOCK_CHAPTER_EVIDENCE) + 1])
-            candidate = json.loads(lines[
-                lines.index(plan.prompts.BLOCK_CHAPTER_CANDIDATE) + 1])
+        try:
+            evidence = json.loads(request.prompt)
+        except json.JSONDecodeError:
+            evidence = {}
+        if 'ambiguities' in evidence:
+            ambiguities = evidence['ambiguities']
+            candidate = evidence['candidate']
             resolutions: list[dict[str, Any]] = []
             for row in ambiguities:
                 resolution: dict[str, Any] = {
                     'ambiguity_id': row['ambiguity_id']}
-                if row['kind'] == 'stage_signature_conflict':
-                    resolution['stage_ref'] = row['candidates'][0]
-                else:
-                    resolution['candidate_scene_id'] = row['candidates'][0]
+                resolution['selected_refs'] = [row['candidates'][0]]
                 resolutions.append(resolution)
             self._payload = {
                 'resolutions': resolutions,
@@ -502,7 +339,7 @@ def test_run_plan_rejects_cross_chapter_concern_before_terminal_checkpoint(
 
     def concern(evidence: dict[str, Any], candidate: dict[str, Any]):
         scene = candidate['scenes'][0]['candidate_scene_id']
-        ref = evidence['fact_atoms'][0]['fact_id']
+        ref = evidence['materials']['blueprint']['beats'][0]['beat_id']
         row = {
             'constraint_code': 'future_leak',
             'chapter_ordinal': 1,
@@ -515,7 +352,7 @@ def test_run_plan_rejects_cross_chapter_concern_before_terminal_checkpoint(
         elif violation == 'wrong_scene':
             row['scenes'] = ['c02s01']
         else:
-            row['closed_refs'] = ['f01_999']
+            row['closed_refs'] = ['b01_99']
         return row
 
     driver = _ConcernDriver(
@@ -555,9 +392,7 @@ def test_formal_concern_checkpoint_same_run_zero_wire_resume_and_aliases(
     formal_refs: list[str] = []
 
     def concern(evidence: dict[str, Any], candidate_chapter: dict[str, Any]):
-        formal_refs[:] = [evidence['fact_atoms'][0]['fact_id'], next(
-            ref for stage in evidence['stages']
-            for ref in stage['present_char_ids'])]
+        formal_refs[:] = [evidence['materials']['blueprint']['beats'][0]['beat_id'], evidence['materials']['blueprint']['beats'][0]['participant_char_ids'][0]]
         return {
             'constraint_code': 'future_leak',
             'scenes': [candidate_chapter['scenes'][0]['candidate_scene_id']],
@@ -634,8 +469,8 @@ def test_formal_concern_checkpoint_same_run_zero_wire_resume_and_aliases(
     binding, _ = ArtifactStore(recovery_ctx).read_own(
         EvidenceBinding, STAGE4_EVIDENCE_BINDING)
     expected_aliases = [
-        next(alias for alias, formal in candidate.fact_aliases.items()
-             if formal == formal_refs[0]),
+        next(alias for alias, formal in candidate.subject_aliases.items()
+             if formal.kind == 'beat' and formal.ref == formal_refs[0]),
         next(alias for alias, formal in candidate.participant_aliases.items()
              if formal == formal_refs[1]),
     ]
@@ -657,20 +492,18 @@ def test_real_chapter_issue_excludes_other_chapter_formal_and_alias(
         ctx, prepared.upstream, prepared.candidate_raw,
         baseline.chapter(2), 2)
 
-    chapter_one_formal = bp_raw['blueprints'][0]['fact_atoms'][0]['fact_id']
-    chapter_two_formal = bp_raw['blueprints'][1]['fact_atoms'][0]['fact_id']
+    chapter_one_formal = bp_raw['blueprints'][0]['beats'][0]['beat_id']
+    chapter_two_formal = bp_raw['blueprints'][1]['beats'][0]['beat_id']
     chapter_one_alias = next(
-        alias for alias, formal in prepared.candidate.fact_aliases.items()
-        if formal == chapter_one_formal)
+        alias for alias, formal in prepared.candidate.subject_aliases.items()
+        if formal.kind == 'beat' and formal.ref == chapter_one_formal)
     chapter_two_alias = next(
-        alias for alias, formal in prepared.candidate.fact_aliases.items()
-        if formal == chapter_two_formal)
+        alias for alias, formal in prepared.candidate.subject_aliases.items()
+        if formal.kind == 'beat' and formal.ref == chapter_two_formal)
     assert chapter_one_formal not in issue.issued_refs
     assert chapter_one_alias not in issue.issued_refs
     assert {chapter_two_formal, chapter_two_alias}.issubset(issue.issued_refs)
-    lines = issue.user.splitlines()
-    evidence = json.loads(lines[
-        lines.index(plan.prompts.BLOCK_CHAPTER_EVIDENCE) + 1])
+    evidence = json.loads(issue.user)
     assert set(evidence['issued_ref_allowlist']) == set(issue.issued_refs)
 
 
@@ -711,9 +544,7 @@ def test_ambiguous_chapters_really_run_concurrently_and_aggregate_in_order(
             barrier.wait()
             if self.chapter == 1:
                 time.sleep(0.08)
-            rows = json.loads(request.prompt.splitlines()[
-                request.prompt.splitlines().index(
-                    plan.prompts.BLOCK_CHAPTER_AMBIGUITIES) + 1])
+            rows = json.loads(request.prompt)['ambiguities']
             with lock:
                 active -= 1
                 finished.append(self.chapter)
@@ -723,7 +554,7 @@ def test_ambiguous_chapters_really_run_concurrently_and_aggregate_in_order(
                 content=json.dumps({
                     'resolutions': [{
                         'ambiguity_id': rows[0]['ambiguity_id'],
-                        'stage_ref': rows[0]['candidates'][0],
+                        'selected_refs': [rows[0]['candidates'][0]],
                     }], 'binding_concerns': []}, ensure_ascii=False),
                 model=None, actual_reasoning_effort=None,
                 usage=AgentUsage(prompt_tokens=10, completion_tokens=5),
@@ -792,16 +623,11 @@ class _DeliveryRecoveryDriver(AgentDriver):
                 usage=AgentUsage(), error_kind='usage_limit',
                 status=429, retryable=False)
         if self.fixed_response is None:
-            lines = request.prompt.splitlines()
-            ambiguities = json.loads(lines[
-                lines.index(plan.prompts.BLOCK_CHAPTER_AMBIGUITIES) + 1])
+            ambiguities = json.loads(request.prompt)['ambiguities']
             resolutions = []
             for row in ambiguities:
                 value: dict[str, Any] = {'ambiguity_id': row['ambiguity_id']}
-                if row['kind'] == 'stage_signature_conflict':
-                    value['stage_ref'] = row['candidates'][0]
-                else:
-                    value['candidate_scene_id'] = row['candidates'][0]
+                value['selected_refs'] = [row['candidates'][0]]
                 resolutions.append(value)
             payload = {'resolutions': resolutions, 'binding_concerns': []}
         else:
@@ -1022,13 +848,13 @@ def test_delivery_pause_during_b_owner_reask_resumes_from_checkpoint_in_new_sess
         inject_failures -= 1
         failure = typed_failures.make(
             candidate_sha256=evaluation.binding_sha256,
-            code='fact_ref.stage', rule='fact_ref.stage',
+            code='binding_compile_refused', rule='placement_ref',
             chapter_ordinal=1, refs=['test-only'],
             surfacing='stage4.plan')
         return replace(
-            evaluation, hard_hits=('fact_ref.stage',),
+            evaluation, hard_hits=('placement_ref',),
             typed_failures=(failure,),
-            feedback=({'rule': 'fact_ref.stage'},))
+            feedback=({'rule': 'placement_ref'},))
 
     monkeypatch.setattr(plan, 'evaluate_plan_candidate', inject_one_b_failure)
     first_pool = Stage4PlanSessionPool(
@@ -1172,14 +998,14 @@ def test_historical_unit_is_fresh_owned_before_reask_and_restart_commit(
             return evaluation
         failure = typed_failures.make(
             candidate_sha256=evaluation.binding_sha256,
-            code='fact_ref.stage', rule='fact_ref.stage',
+            code='binding_compile_refused', rule='placement_ref',
             chapter_ordinal=1,
             refs=[f'test-only-{len(observed_origins)}'],
             surfacing='stage4.plan')
         return replace(
-            evaluation, hard_hits=('fact_ref.stage',),
+            evaluation, hard_hits=('placement_ref',),
             typed_failures=(failure,),
-            feedback=({'rule': 'fact_ref.stage'},))
+            feedback=({'rule': 'placement_ref'},))
 
     monkeypatch.setattr(
         plan, 'evaluate_plan_candidate', inject_three_b_failures)
@@ -1296,7 +1122,7 @@ def test_dynamic_validator_tail_window_submit_and_same_run_zero_wire_resume(
                 content=json.dumps({
                     'resolutions': [{
                         'ambiguity_id': f'{1:016x}',
-                        'stage_ref': 'b99_99',
+                        'selected_refs': ['scx_unknown'],
                     }], 'binding_concerns': []}),
                 model=None, actual_reasoning_effort=None,
                 usage=AgentUsage(prompt_tokens=10, completion_tokens=5),
@@ -1329,7 +1155,7 @@ def test_dynamic_validator_tail_window_submit_and_same_run_zero_wire_resume(
                 content=json.dumps({
                     'resolutions': [{
                         'ambiguity_id': f'{1:016x}',
-                        'stage_ref': correct[1],
+                        'selected_refs': [correct[1]],
                     }], 'binding_concerns': []}),
                 model=None, actual_reasoning_effort=None,
                 usage=AgentUsage(prompt_tokens=10, completion_tokens=5),
@@ -1400,7 +1226,7 @@ def test_dynamic_validator_tail_window_submit_and_same_run_zero_wire_resume(
     assert record.rejection['chapter'] == 2
     response_repair.candidate_path(record).write_text(json.dumps({
         'resolutions': [{
-            'ambiguity_id': f'{2:016x}', 'stage_ref': correct[2]}],
+            'ambiguity_id': f'{2:016x}', 'selected_refs': [correct[2]]}],
         'binding_concerns': [],
     }, ensure_ascii=False), encoding='utf-8')
     response_repair.submit(
@@ -1460,8 +1286,8 @@ def test_representative_model_identity_uses_latest_revision_and_all_models() -> 
 
 def test_unscoped_b_owner_failure_is_a_code_failure() -> None:
     failure = typed_failures.make(
-        candidate_sha256='1' * 64, code='fact_ref.stage',
-        rule='fact_ref.stage', chapter_ordinal=None,
+        candidate_sha256='1' * 64, code='binding_compile_refused',
+        rule='placement_ref', chapter_ordinal=None,
         surfacing='stage4.plan')
     with pytest.raises(ProvenanceRefused, match='code failure'):
         plan._assert_plan_chapter_failure_scopes(
@@ -1494,10 +1320,12 @@ def test_b_owner_reasks_only_target_chapter_and_rewrites_anchor_checkpoint(
                 available=True, version='0.test')
 
         def _answer(self, request: AgentRequest) -> AgentTurn:
-            lines = request.prompt.splitlines()
-            if plan.prompts.BLOCK_CHAPTER_AMBIGUITIES in lines:
-                marker = lines.index(plan.prompts.BLOCK_CHAPTER_AMBIGUITIES)
-                self.row = json.loads(lines[marker + 1])[0]
+            try:
+                material = json.loads(request.prompt)
+            except json.JSONDecodeError:
+                material = {}
+            if 'ambiguities' in material:
+                self.row = material['ambiguities'][0]
             assert self.row is not None
             row = self.row
             self.calls += 1
@@ -1506,7 +1334,7 @@ def test_b_owner_reasks_only_target_chapter_and_rewrites_anchor_checkpoint(
                 content=json.dumps({
                     'resolutions': [{
                         'ambiguity_id': row['ambiguity_id'],
-                        'stage_ref': row['candidates'][0],
+                        'selected_refs': [row['candidates'][0]],
                     }], 'binding_concerns': []}),
                 model=None, actual_reasoning_effort=None,
                 usage=AgentUsage(prompt_tokens=10, completion_tokens=5),
@@ -1543,13 +1371,13 @@ def test_b_owner_reasks_only_target_chapter_and_rewrites_anchor_checkpoint(
             return evaluation
         failure = typed_failures.make(
             candidate_sha256=evaluation.binding_sha256,
-            code='fact_ref.stage', rule='fact_ref.stage',
+            code='binding_compile_refused', rule='placement_ref',
             chapter_ordinal=1, refs=['test-only'],
             surfacing='stage4.plan')
         return replace(
-            evaluation, hard_hits=('fact_ref.stage',),
+            evaluation, hard_hits=('placement_ref',),
             typed_failures=(failure,),
-            feedback=({'rule': 'fact_ref.stage'},))
+            feedback=({'rule': 'placement_ref'},))
 
     monkeypatch.setattr(plan, 'evaluate_plan_candidate', inject_one_b_failure)
     pool = Stage4PlanSessionPool(ctx, driver_factory=factory)
@@ -1599,23 +1427,16 @@ def test_new_binding_receipt_cannot_adopt_checkpoint_from_incomplete_input(
             return replace(request, system='旧章级绑定规则：' + request.system)
         if old_surface == 'input_contract':
             return replace(request, input_sha256='0' * 64)
-        lines = request.user.splitlines()
-        candidate_index = lines.index(plan.prompts.BLOCK_CHAPTER_CANDIDATE) + 1
-        chapter = json.loads(lines[candidate_index])
-        lines[candidate_index] = json.dumps({
+        material = json.loads(request.user)
+        chapter = material['candidate']
+        material['candidate'] = {
             'weight': chapter['weight'],
-            'scenes': [{key: scene[key] for key in (
-                'candidate_scene_id', 'land_fact_aliases', 'context_fact_aliases')}
-                for scene in chapter['scenes']],
-        }, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
-        evidence_index = lines.index(plan.prompts.BLOCK_CHAPTER_EVIDENCE) + 1
-        evidence = json.loads(lines[evidence_index])
-        evidence.pop('fact_aliases')
-        evidence.pop('participant_aliases')
-        evidence.pop('binding_input_contract')
-        lines[evidence_index] = json.dumps(
-            evidence, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
-        return replace(request, user=chr(10).join(lines))
+            'scenes': [{'candidate_scene_id': scene['candidate_scene_id']}
+                       for scene in chapter['scenes']]}
+        material.pop('mapping')
+        material.pop('binding_input_contract')
+        return replace(request, user=json.dumps(
+            material, ensure_ascii=False, sort_keys=True, separators=(',', ':')))
 
     with monkeypatch.context() as old_code:
         old_code.setattr(plan, '_plan_chapter_request', old_request)

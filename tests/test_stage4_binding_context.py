@@ -1,272 +1,217 @@
-"""章级 B 必须能把 opaque 场景语义联结到本章逐字证据，且仍由响应选场。"""
+"""章级 B 的完整设计、必要映射和证据闭包；当前输入必须可连接且能精确恢复。
+
+原 fact/hinge 的连接反例对应到 BeatPlacement、主体映射与共享证据表；
+输入身份仍区分本章材料、实际跨章依赖以及未消费的邻章正文。
+"""
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 import json
 from types import SimpleNamespace
 
 import pytest
 
 from contracts.schema.stage4 import BindingConcern
-from novel.errors import ProvenanceRefused
+from novel.errors import ProvenanceRefused, RefusedByStructure
+from novel.stages.stage2 import grounding
+from novel.stages.stage2.plot_compile import source_digest
 from novel.stages.stage4 import plan
+from novel.stages.stage4.plot_binding import apply_chapter_resolutions, build_mechanical_baseline
+from novel.stages.stage4.plot_design import build_blind_projection, compile_blind_candidate
+from tests.stage2_fixtures import plot_blueprints
+from tests.test_stage2 import main_text
+from tests.test_stage2_grounding import character_preparation, pair  # noqa: F401
+from tests.test_stage4_disclosure import _links
 from tests.test_stage4_v3_integration import _retain_a_response
 
 
-def _inputs():
-    # 材料显式涉及两个事实，且 alias 大小与事实/场景顺序相反。
-    # 多事实分属两场，不能靠源拍或 alias 顺序替模型选择。
-    mapping = {
-        'fact_aliases': {
-            'a_ffffffffffffffff': 'f02_001',
-            'a_0000000000000001': 'f02_002',
-            'a_1111111111111111': 'f01_001',
-        },
-        'participant_aliases': {
-            'a_2222222222222222': 'char_002',
-            'a_3333333333333333': 'char_001',
-        },
-    }
-    bp = {
-        'chapter_ordinal': 2, 'causal_edges': [],
-        'entry_state_refs': [], 'ending_state_refs': [],
-        'fact_atoms': [
-            {'fact_id': 'f02_001', 'claim': '来人宣告出发。',
-             'kind': 'event', 'obligation': 'land',
-             'source_beat_ref': 'b02_01', 'source': {'text': '出发。'},
-             'participant_char_ids': ['char_002']},
-            {'fact_id': 'f02_002', 'claim': '来人追问期限。',
-             'kind': 'event', 'obligation': 'land',
-             'source_beat_ref': 'b02_01', 'source': {'text': '几天？'},
-             'participant_char_ids': ['char_002']},
-        ],
-        'beats': [{
-            'beat_id': 'b02_01', 'time_layer': 'present', 'place': '山门',
-            'present_char_ids': ['char_002'],
-            'hinges': [{'hinge_id': 'h02_001', 'kind': '要害台词',
-                        'source_fact_refs': ['f02_001', 'f02_002'],
-                        'dialogue': {'speaker': {'kind': 'character', 'char_id': 'char_002'},
-                                     'addressees': None, 'meaning': '来人在出发前追问期限',
-                                     'speech_act': '询问'}, 'literal': None,
-                        'source': {'text': '几天？'}}],
-        }],
-    }
-    blueprints = {'blueprints': [bp]}
-    chapter = _retain_a_response(blueprints, mapping)['output_chapters'][0]
-    for index, scene in enumerate(chapter['scenes'], 1):
-        scene['candidate_scene_id'] = f'c02s{index:02}'
-    chapter['scenes'][0]['purpose'] = '发出行动指令。'
-    chapter['scenes'][1]['purpose'] = '接续追问行动期限。'
-    candidate = {
-        **mapping,
-        'output_chapters': [
-            {'output_ordinal': 1, 'scenes': [{
-                'candidate_scene_id': 'c01s01', 'land_fact_aliases': [],
-                'context_fact_aliases': [],
-                'exit_state_aliases': ['a_1111111111111111']}]},
-            chapter,
-        ],
-    }
-    up = SimpleNamespace(
-        main_text=[{'chapter_ordinal': 1, 'text': '临章私密正文'},
-                   {'chapter_ordinal': 2, 'text': '出发。几天？'}],
-        blueprints={'blueprints': [{
-            'chapter_ordinal': 1, 'ending_state_refs': ['f01_001']}, bp]},
-    )
-    baseline = plan.build_mechanical_baseline(candidate, blueprints).chapter(2)
+def _inputs(pair):
+    registry, knowledge = pair
+    bp = plot_blueprints()
+    first = bp['blueprints'][1]['beats'][0]
+    # 同一完整节点有两个有据舞台签名，B 需选择；编号大小不暗示选择。
+    first['source_contexts'] = [
+        {'evidence_refs': first['evidence_refs'], 'time_layer': 'present',
+         'place': '街上', 'present_char_ids': ['char_001']},
+        {'evidence_refs': first['evidence_refs'], 'time_layer': 'present',
+         'place': '门口', 'present_char_ids': ['char_001', 'char_002']},
+    ]
+    global_g = grounding.compose(registry, knowledge).model_dump(mode='json', by_alias=True)
+    links = _links(knowledge, bp)
+    truth, mapping = build_blind_projection(bp, root_clean_sha1='a' * 40,
+                                           global_g=global_g, knowledge_links=links)
+    candidate = compile_blind_candidate(_retain_a_response(bp, mapping), mapping, truth=truth)
+    up = SimpleNamespace(blueprints=bp, global_g=global_g, knowledge_links=links, main_text=main_text())
+    baseline = build_mechanical_baseline(candidate, bp).chapter(2)
+    assert len(baseline.ambiguities) == 1 and len(baseline.ambiguities[0].candidates) == 2
     return SimpleNamespace(title='映射反例'), up, candidate, baseline
 
 
-def _payload(issue, marker):
-    lines = issue.user.splitlines()
-    return json.loads(lines[lines.index(marker) + 1])
+def _alias(candidate, kind, ref):
+    return next(token for token, row in candidate['subject_aliases'].items()
+                if row == {'kind': kind, 'ref': ref})
 
 
-def test_binding_prompt_resolves_fact_material_join_without_choosing_for_model():
-    ctx, up, candidate, baseline = _inputs()
+def _request(ctx, up, candidate, baseline, prepared=None):
+    issue = plan._chapter_binding_issue(ctx, up, candidate, baseline, 2)
+    return plan._plan_chapter_request(ctx, prepared or SimpleNamespace(
+        subject_sha256='a' * 64, input_sha256='b' * 64), baseline, 2, issue)
+
+
+def test_binding_prompt_resolves_delivery_and_evidence_without_choosing_for_model(pair):
+    ctx, up, candidate, baseline = _inputs(pair)
     frozen = deepcopy(candidate)
     issue = plan._chapter_binding_issue(ctx, up, candidate, baseline, 2)
-    chapter = _payload(issue, plan.prompts.BLOCK_CHAPTER_CANDIDATE)
-    evidence = _payload(issue, plan.prompts.BLOCK_CHAPTER_EVIDENCE)
-    ambiguities = _payload(issue, plan.prompts.BLOCK_CHAPTER_AMBIGUITIES)
-    assert chapter == candidate['output_chapters'][1]
+    payload = json.loads(issue.user)
+    assert payload['candidate'] == candidate['output_chapters'][1]
     assert candidate == frozen
-    assert len(ambiguities) == 1
-    ambiguity = ambiguities[0]
-    assert ambiguity['candidates'] == ['c02s01', 'c02s02']
-    material = evidence['stages'][0]['materials'][0]
-    # 一个仅消费最终 prompt 的测试响应者：从逐字材料找事实，再找该场。
-    fact = next(row for row in evidence['fact_atoms']
-                if row['source_text'] == material['text'])
-    alias = next(alias for alias, formal in evidence['fact_aliases'].items()
-                 if formal == fact['fact_id'])
-    chosen = next(scene['candidate_scene_id'] for scene in chapter['scenes']
-                  if alias in scene['land_fact_aliases'])
-    assert chosen == 'c02s02'
-    rows = plan.apply_chapter_resolutions(baseline, [{
-        'ambiguity_id': ambiguity['ambiguity_id'], 'candidate_scene_id': chosen,
+    materials = payload['materials']
+    ambiguity = payload['ambiguities'][0]
+    selected = next(ref for ref, row in materials['source_context_catalog'].items()
+                    if row['place'] == '门口')
+    assert selected in ambiguity['candidates']
+    assert materials['blueprint']['beats'][0]['beat_id'] == ambiguity['beat_ref'] == 'b02_01'
+    aliases = payload['mapping']['subject_aliases']
+    assert any(row == {'kind': 'beat', 'ref': 'b02_01'} for row in aliases.values())
+    assert set(payload['mapping']['participant_aliases'].values()) == {'char_001', 'char_002'}
+    rows = apply_chapter_resolutions(baseline, [{
+        'ambiguity_id': ambiguity['ambiguity_id'], 'selected_refs': [selected],
     }])
-    assert rows[0]['material_refs'] == []
-    assert rows[1]['material_refs'] == ['h02_001']
-    assert evidence['participant_aliases'] == {'a_2222222222222222': 'char_002'}
-    assert set(issue.formal_to_alias) == {'f02_001', 'f02_002', 'char_002'}
-    assert '临章私密正文' not in issue.user
-    assert 'f01_001' not in json.dumps(evidence)
-    assert 'a_1111111111111111' not in json.dumps(evidence)
-    for neighbor_ref in ('f01_001', 'a_1111111111111111', 'char_001'):
-        concern = BindingConcern(
-            constraint_code='future_leak', scenes=['c02s01'],
-            reason='边界阅读不能成为本章写引用。', closed_refs=[neighbor_ref])
-        assert issue.concern_error(concern) is not None
+    delivery = next(d for scene in rows for d in scene['deliveries'] if d['beat_ref'] == 'b02_01')
+    assert delivery['source_context_refs'] == [selected]
+    assert delivery['evidence_refs'] == up.blueprints['blueprints'][1]['beats'][0]['evidence_refs']
+    assert up.main_text[1]['text'] in [r['text'] for s in materials['source_materials']
+                                     for r in s['ranges']]
+    assert up.main_text[2]['text'] not in issue.user
+    foreign = _alias(candidate, 'beat', 'b03_01')
+    for ref in ('b03_01', foreign):
+        assert ref not in issue.issued_refs
+        assert issue.concern_error(BindingConcern(constraint_code='future_leak',
+            scenes=[rows[0]['candidate_scene_id']], reason='不能把邻章材料当作本章呈现。',
+            closed_refs=[ref])) is not None
 
 
 @pytest.mark.parametrize('corruption', [
-    'missing_fact_table', 'missing_participant_table', 'missing_fact',
-    'missing_participant', 'duplicate_fact', 'duplicate_participant',
-    'cross_table_alias', 'cross_table_same_pair',
-    'foreign_land', 'foreign_context', 'foreign_entry', 'foreign_exit',
-    'foreign_goal',
+    'missing_subject_table', 'missing_participant_table', 'missing_beat',
+    'missing_participant', 'duplicate_subject', 'duplicate_participant',
+    'cross_table_alias', 'cross_table_same_pair', 'foreign_placement',
+    'foreign_context', 'foreign_turn', 'foreign_goal', 'foreign_endpoint',
 ])
-def test_binding_prompt_refuses_unjoinable_frozen_evidence(corruption):
-    ctx, up, candidate, baseline = _inputs()
-    scene = candidate['output_chapters'][1]['scenes'][0]
-    if corruption == 'missing_fact_table':
-        del candidate['fact_aliases']
+def test_binding_prompt_refuses_unjoinable_frozen_evidence(pair, corruption):
+    ctx, up, candidate, baseline = _inputs(pair)
+    chapter = candidate['output_chapters'][1]
+    own = _alias(candidate, 'beat', 'b02_01')
+    other = _alias(candidate, 'beat', 'b03_01')
+    person = _alias(candidate, 'character', 'char_001')
+    if corruption == 'missing_subject_table':
+        del candidate['subject_aliases']
     elif corruption == 'missing_participant_table':
         del candidate['participant_aliases']
-    elif corruption == 'missing_fact':
-        del candidate['fact_aliases']['a_ffffffffffffffff']
+    elif corruption == 'missing_beat':
+        del candidate['subject_aliases'][own]
     elif corruption == 'missing_participant':
-        del candidate['participant_aliases']['a_2222222222222222']
-    elif corruption == 'duplicate_fact':
-        candidate['fact_aliases']['a_4444444444444444'] = 'f02_001'
+        del candidate['participant_aliases'][person]
+    elif corruption == 'duplicate_subject':
+        candidate['subject_aliases']['a_' + 'f' * 16] = candidate['subject_aliases'][own]
     elif corruption == 'duplicate_participant':
-        candidate['participant_aliases']['a_4444444444444444'] = 'char_002'
-    elif corruption == 'cross_table_alias':
-        candidate['participant_aliases']['a_ffffffffffffffff'] = 'char_004'
-    elif corruption == 'cross_table_same_pair':
-        candidate['participant_aliases']['a_ffffffffffffffff'] = 'f02_001'
+        candidate['participant_aliases']['a_' + 'f' * 16] = 'char_001'
+    elif corruption in ('cross_table_alias', 'cross_table_same_pair'):
+        candidate['participant_aliases'][own] = 'char_001' if corruption == 'cross_table_alias' else 'b02_01'
+    elif corruption == 'foreign_placement':
+        chapter['beat_placements'][0]['beat_alias'] = other
+    elif corruption == 'foreign_context':
+        chapter['scenes'][0]['context_beat_aliases'] = [other]
+    elif corruption == 'foreign_turn':
+        chapter['scenes'][0]['turn_beat_alias'] = other
     elif corruption == 'foreign_goal':
-        candidate['output_chapters'][1]['chapter_goal']['fact_aliases'] = [
-            'a_1111111111111111']
+        chapter['chapter_goal']['subject_aliases'] = [other]
     else:
-        field = {
-            'foreign_land': 'land_fact_aliases',
-            'foreign_context': 'context_fact_aliases',
-            'foreign_entry': 'entry_state_aliases',
-            'foreign_exit': 'exit_state_aliases',
-        }[corruption]
-        scene[field].append('a_1111111111111111')
-    with pytest.raises(ProvenanceRefused):
+        other_endpoint = next(token for token, row in candidate['endpoint_aliases'].items()
+                              if token not in {r['endpoint_alias'] for r in chapter['anchor_bindings']})
+        chapter['anchor_bindings'].append({'endpoint_alias': other_endpoint, 'scene_ref': 's01'})
+    with pytest.raises((ProvenanceRefused, RefusedByStructure)):
         plan._chapter_binding_issue(ctx, up, candidate, baseline, 2)
 
 
-def test_stage_only_participant_does_not_require_invented_opaque_alias():
-    ctx, up, candidate, baseline = _inputs()
-    up.blueprints['blueprints'][1]['beats'][0]['present_char_ids'].append('char_009')
+def test_stage_only_participant_is_issued_without_invented_opaque_alias(pair):
+    ctx, up, candidate, baseline = _inputs(pair)
+    up.global_g['entities']['characters']['char_009'] = deepcopy(
+        up.global_g['entities']['characters']['char_001'])
+    up.blueprints['blueprints'][1]['beats'][0]['source_contexts'][0]['present_char_ids'].append('char_009')
     issue = plan._chapter_binding_issue(ctx, up, candidate, baseline, 2)
-    evidence = _payload(issue, plan.prompts.BLOCK_CHAPTER_EVIDENCE)
-    assert 'char_009' in evidence['stages'][0]['present_char_ids']
-    assert 'char_009' not in evidence['participant_aliases'].values()
+    material = json.loads(issue.user)
     assert 'char_009' in issue.issued_refs
+    assert 'char_009' not in material['mapping']['participant_aliases'].values()
+    assert any('char_009' in row['present_char_ids']
+               for row in material['materials']['source_context_catalog'].values())
 
 
-def test_binding_request_identity_does_not_reuse_old_input_contract(monkeypatch):
-    ctx, up, candidate, baseline = _inputs()
-    prepared = SimpleNamespace(subject_sha256='a' * 64, input_sha256='b' * 64)
-    issue = plan._chapter_binding_issue(ctx, up, candidate, baseline, 2)
-    current = plan._plan_chapter_request(ctx, prepared, baseline, 2, issue)
+def test_binding_request_identity_does_not_reuse_old_input_contract(pair, monkeypatch):
+    ctx, up, candidate, baseline = _inputs(pair)
+    current = _request(ctx, up, candidate, baseline)
     monkeypatch.setattr(plan, 'STAGE4_BINDING_INPUT_CONTRACT', 'old-input-contract')
-    previous = plan._plan_chapter_request(ctx, prepared, baseline, 2, issue)
+    previous = _request(ctx, up, candidate, baseline)
     assert current.input_sha256 != previous.input_sha256
-    assert current.user == previous.user == issue.user
-    assert current.system == previous.system
+    assert current.user != previous.user
 
 
-@pytest.mark.parametrize('has_alias', [False, True])
-def test_dialogue_only_participant_is_issued_without_inventing_alias(has_alias):
-    ctx, up, candidate, baseline = _inputs()
-    dialogue = up.blueprints['blueprints'][1]['beats'][0]['hinges'][0]['dialogue']
-    dialogue['speaker'] = {'kind': 'character', 'char_id': 'char_009'}
-    dialogue['addressees'] = [{'kind': 'group', 'label': '同行人'},
-                              {'kind': 'character', 'char_id': 'char_008'}]
-    if has_alias:
-        candidate['participant_aliases']['a_9999999999999999'] = 'char_009'
-    issue = plan._chapter_binding_issue(ctx, up, candidate, baseline, 2)
-    evidence = _payload(issue, plan.prompts.BLOCK_CHAPTER_EVIDENCE)
-    assert {'char_008', 'char_009'} <= issue.issued_refs
-    assert '同行人' not in issue.issued_refs
-    assert ('char_009' in evidence['participant_aliases'].values()) is has_alias
-    assert 'char_008' not in evidence['participant_aliases'].values()
-
-
-@pytest.mark.parametrize('change', ['facts', 'meaning', 'speaker', 'addressees', 'source_start', 'source_end'])
-def test_binding_request_invalidates_changed_material_evidence(change):
-    ctx, up, candidate, baseline = _inputs()
-    prepared = SimpleNamespace(subject_sha256='a' * 64, input_sha256='b' * 64)
-    before = plan._plan_chapter_request(ctx, prepared, baseline, 2,
-        plan._chapter_binding_issue(ctx, up, candidate, baseline, 2))
-    hinge = up.blueprints['blueprints'][1]['beats'][0]['hinges'][0]
-    if change == 'facts':
-        hinge['source_fact_refs'] = ['f02_002']
-    elif change == 'meaning':
-        hinge['dialogue']['meaning'] = '质疑能否及时出发'
-    elif change == 'speaker':
-        hinge['dialogue']['speaker'] = None
-    elif change == 'addressees':
-        hinge['dialogue']['addressees'] = [{'kind': 'group', 'label': '同伴'}]
+@pytest.mark.parametrize('change', ['content', 'participants', 'time_layer', 'place', 'presence', 'evidence'])
+def test_binding_request_invalidates_changed_material_evidence(pair, change):
+    ctx, up, candidate, baseline = _inputs(pair)
+    before = _request(ctx, up, candidate, baseline)
+    bp = up.blueprints['blueprints'][1]
+    beat = bp['beats'][0]
+    if change == 'content':
+        beat['content'] += '她打算向母亲问明来信。'
+    elif change == 'participants':
+        beat['participant_char_ids'] = ['char_001']
+    elif change in ('time_layer', 'place', 'presence'):
+        key = {'presence': 'present_char_ids'}.get(change, change)
+        beat['source_contexts'][0][key] = (
+            [] if change == 'presence' else 'recall' if change == 'time_layer' else '院内')
     else:
-        hinge['source'][change.removeprefix('source_')] = 4
-    updated = plan.build_mechanical_baseline(candidate, up.blueprints).chapter(2)
-    after = plan._plan_chapter_request(ctx, prepared, updated, 2,
-        plan._chapter_binding_issue(ctx, up, candidate, updated, 2))
+        anchor = bp['evidence_anchors'][0]
+        anchor['end'] -= 1
+    current = build_mechanical_baseline(candidate, up.blueprints).chapter(2)
+    after = _request(ctx, up, candidate, current)
     assert after.input_sha256 != before.input_sha256
 
 
 @pytest.mark.parametrize('changed', [
-    'foreign_text', 'foreign_fact', 'foreign_candidate', 'book_identity',
-    'own_source', 'own_source_range', 'own_fact', 'own_candidate', 'previous_boundary', 'previous_state_fact',
-    'candidates',
+    'foreign_text', 'foreign_beat', 'foreign_candidate', 'book_identity',
+    'own_source', 'own_beat', 'own_candidate', 'consumed_foreign_evidence', 'candidates',
 ])
-def test_binding_request_changes_only_for_actual_materials_and_boundary(changed):
-    ctx, up, candidate, baseline = _inputs()
+def test_binding_request_changes_only_for_actual_materials_and_boundary(pair, changed):
+    ctx, up, candidate, baseline = _inputs(pair)
     prepared = SimpleNamespace(subject_sha256='a' * 64, input_sha256='b' * 64)
-    before = plan._plan_chapter_request(
-        ctx, prepared, baseline, 2,
-        plan._chapter_binding_issue(ctx, up, candidate, baseline, 2))
+    before = _request(ctx, up, candidate, baseline, prepared)
     if changed == 'foreign_text':
-        up.main_text[0]['text'] = '改变上一章正文但边界不变。'
-    elif changed == 'foreign_fact':
-        up.blueprints['blueprints'][0]['fact_atoms'] = [{'claim': '改变未下发的事实。'}]
+        up.main_text[2]['text'] += '\n\n未消费的院外微风。'
+        up.blueprints['blueprints'][2]['source_sha256'] = source_digest(up.main_text[2]['text'])
+    elif changed == 'foreign_beat':
+        up.blueprints['blueprints'][2]['beats'][0]['content'] += '未消费的动作修饰。'
     elif changed == 'foreign_candidate':
-        candidate['output_chapters'][0]['chapter_rewrite_brief'] = '别章重写说明'
+        candidate['output_chapters'][2]['chapter_rewrite_brief'] += '别章说明'
     elif changed == 'book_identity':
-        prepared.subject_sha256 = 'c' * 64
-        prepared.input_sha256 = 'd' * 64
+        prepared.subject_sha256, prepared.input_sha256 = 'c' * 64, 'd' * 64
     elif changed == 'own_source':
-        up.main_text[1]['text'] += '第三日动身。'
-    elif changed == 'own_source_range':
-        up.blueprints['blueprints'][1]['fact_atoms'][0]['source']['start'] = 3
-    elif changed == 'previous_state_fact':
-        up.blueprints['blueprints'][0]['fact_atoms'] = [{
-            'fact_id': 'f01_001', 'claim': '上一章结束时角色已经离开。', 'kind': 'character_state',
-            'obligation': 'land'}]
-    elif changed == 'own_fact':
-        up.blueprints['blueprints'][1]['fact_atoms'][0]['source']['text'] = '明日出发。'
+        up.main_text[1]['text'] += '\n\n第三日动身。'
+        up.blueprints['blueprints'][1]['source_sha256'] = source_digest(up.main_text[1]['text'])
+    elif changed == 'own_beat':
+        up.blueprints['blueprints'][1]['beats'][0]['content'] += '她注意到母亲。'
     elif changed == 'own_candidate':
-        candidate['output_chapters'][1]['scenes'][0]['purpose'] = '拒绝行动指令。'
-    elif changed == 'previous_boundary':
-        up.blueprints['blueprints'][0]['ending_state_refs'] = []
+        candidate['output_chapters'][1]['scenes'][0]['purpose'] = '发问'
+    elif changed == 'consumed_foreign_evidence':
+        proof = up.global_g['canon']['secrets'][0]['fact_evidence']['source']
+        proof['end'] -= 1
+        proof['text'] = proof['text'][:-1]
     else:
-        from dataclasses import replace
         ambiguity = baseline.ambiguities[0]
         baseline = replace(baseline, ambiguities=(replace(
             ambiguity, candidates=ambiguity.candidates[:1]),))
-    after = plan._plan_chapter_request(
-        ctx, prepared, baseline, 2,
-        plan._chapter_binding_issue(ctx, up, candidate, baseline, 2))
-    should_change = changed in {'own_source', 'own_source_range', 'own_fact', 'own_candidate',
-                                'previous_boundary', 'previous_state_fact', 'candidates'}
+    after = _request(ctx, up, candidate, baseline, prepared)
+    should_change = changed in {'own_source', 'own_beat', 'own_candidate', 'consumed_foreign_evidence', 'candidates'}
     assert (after.input_sha256 != before.input_sha256) is should_change
     if not should_change:
         assert (after.user, after.system) == (before.user, before.system)

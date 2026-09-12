@@ -63,7 +63,6 @@ from novel.stages.stage1.partition import partition_text  # noqa: E402
 from novel.stages.stage1.audit import audit_surface  # noqa: E402
 from novel.stages.stage2 import extract as stage2_extract  # noqa: E402
 from novel.stages.stage2 import characters as stage2_characters  # noqa: E402
-from novel.stages.stage2.contract import active_contract  # noqa: E402
 from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable  # noqa: E402
 from novel.stages.stage4.prompts import (  # noqa: E402
     BLIND_BOOK_STRATEGY_MAX_TOKENS,
@@ -331,17 +330,8 @@ def _logical_topology(node: str, chapters: int, rung_count: int,
     conditional_wire = 0
     condition: str | None = None
     if node == 'stage2.blueprint':
-        # ⚠⚠ **不许写死 `chapters`。** 逐章调用几次由**现役契约的拓扑**决定，
-        #   而那一格会翻默认（`BLUEPRINT_ARCHITECTURE`）：
-        #     · `boundary_then_detail`（显式 v2）—— 每章两相（先切边界再填细节）；
-        #     · `single` / `scaffolded_single`   —— 每章一次；
-        #   Stage2 v5 的 summary 已由 fact atoms 确定性投影，不再另发模型请求，
-        #   所以当前默认 v3.1 是 **N**。
-        #   这段曾在默认 v2 时写死成 N，导致 17+25 章两本少报 44 个逻辑请求、
-        #   264 个 wire 上限；而这份预览的用途正是**开跑前拿它决定花不花这笔钱**。
-        spec = active_contract()
-        per_chapter = 2 if spec.topology == 'boundary_then_detail' else 1
-        base = chapters * per_chapter
+        # 当前首次抽取每章一个逻辑请求；下面仍计入内容重采与供应商恢复上限。
+        base = chapters
     elif node == 'stage4.design':
         # 对外仍是一个付费节点、一次 argv dispatch 与一次授权；节点内部的
         # 真实逻辑拓扑是「一份整书策略 + 每章一个私有 session」。预览必须
@@ -407,16 +397,6 @@ def _request_envelopes(node: str, models: tuple[str, ...],
         'models': list(models),
         'rungs': [list(row) for row in rungs],
     }]
-    if node == 'stage2.blueprint':
-        # 逐章细节请求之外，两段契约还会发边界相；它有自己的 `max_tokens`。
-        spec = active_contract()
-        if spec.topology == 'boundary_then_detail':
-            rows.append({
-                'kind': 'boundary_phase',
-                'max_tokens': stage2_extract.BOUNDARY_MAX_TOKENS,
-                'models': list(models),
-                'rungs': [list(row) for row in rungs],
-            })
     if node == 'stage6.hook':
         rows.append({
             'kind': 'conditional_candidate_retry',

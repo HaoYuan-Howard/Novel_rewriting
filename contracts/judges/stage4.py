@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage4 原子事实场景编译器的判据注册表。"""
+"""Stage4 完整剧情呈现编译器的判据注册表。"""
 from __future__ import annotations
 
 from contracts.rules import PromptSurface, REGISTRY, Rule
@@ -9,8 +9,8 @@ STAGE = 'stage4'
 PLAN_PROMPT_SURFACE = REGISTRY.register_prompt_surface(PromptSurface(
     surface='stage4.plan',
     provides_id_spaces=(
-        'chapter_boundaries', 'chapter_ordinals', 'characters', 'fact_atoms',
-        'materials', 'relations', 'secrets', 'settings', 'source_stages', 'world_rules',
+        'beats', 'chapter_boundaries', 'chapter_ordinals', 'characters', 'constraints',
+        'evidence_anchors', 'relations', 'secrets', 'settings', 'states', 'world_rules',
     ),
 ))
 _HUMAN_FIX = ('人工可改 `.INVALID` 后用 `--revalidate --actor <id> --reason <why>` '
@@ -38,12 +38,7 @@ for rule, item, req in (
     ('one_to_one', '一章对一章且同号', 'R-5.2'),
     ('ordinal_seq', 'output_ordinal 1..N 连续', 'R-5.1'),
     ('empty_chapter', '每章至少有一个新场景', 'R-5.7'),
-    ('fact_ref', '场景事实/舞台引用只来自同章关闭式目录', 'R-5.6'),
-    ('fact_coverage', '每个 land 事实恰好落一个场景', 'R-5.12'),
-    ('causal_closure', 'Stage2 因果边两端事实都落入实际场景（land 或 context）', 'R-5.6'),
-    ('narrative_relation', 'Stage2 v7 的 HARD 时序、回应、同场与观察关系在场景中成立', 'R-3.21b'),
-    ('state_closure', '章首/章尾状态闭合；章内只判可判的故事时态边界', 'R-5.6'),
-    ('material_coverage', '每条保真材料恰好落一个场景', 'R-5.6'),
+    ('placement_ref', '节点呈现齐全、证据合法、必要状态/知识/约束和目标端点明确', 'R-5.6'),
     ('scene_transition', '新场景 slot 与 transition 可执行', 'R-5.17'),
     ('goal_landing', '章首/章尾目标落在新首尾场景', 'R-5.6'),
     ('budget_int', '每场预算为正整数', 'R-5.7'),
@@ -52,19 +47,19 @@ for rule, item, req in (
     ('style_words', '无字段内完整事实引文证据的写法词不得代替设计', 'R-5.4'),
     ('phase_artifact_link', 'compiled 计划完整绑定盘上当前 A/B 两份版本化字节', 'R-5.10d'),
     ('context_link', 'writer_context 照的是盘上这份计划', 'R-5.10b'),
-    ('ctx_facts_exact', '写手场景事实由 typed refs 精确解析且没有旧骨架键', 'R-6.1'),
+    ('ctx_plot_exact', '写手章级目录、逐场呈现与同源编译的必要材料相等', 'R-6.1'),
     ('ctx_name_attested', '下发人名在本章为止有据', 'R-6.2'),
-    ('ctx_stage_explicit', '每个新场景带可执行舞台且不取并集', 'R-6.4'),
-    ('ctx_hinge_delivered', 'Stage2 保真材料条条进入写手场景', 'R-3.3b'),
+    ('ctx_permission_exact', '知识、状态和完整背景许可均与显式端点及完成位置一致', 'R-6.4'),
 ):
     _hard(rule, item, req, note=_HUMAN_FIX)
 
-_info('causal_disclosure', '按首次可见场算的披露逆因果读数', 'R-5.16',
+_info('presentation_semantics', '联合呈现完整性、归因、因果和披露须经语义审阅', 'R-5.16')
+_info('causal_disclosure', '已登记端点的披露顺序读数', 'R-5.16',
       note='逆序可能是合法倒叙，不设无真值阈值。')
 _info('verbatim_starved', '场景预算没有被逐字材料挤满', 'R-5.13')
 _info(
     'stage_signature_conflict',
-    '同场 land 事实指向多个不同 time/place/present 舞台签名',
+    '同场呈现绑定的 time/place/present 舞台签名读数',
     'R-5.24',
     note='冲突可能是合法的跨时空组场；全量披露，不设无真值阈值。',
 )

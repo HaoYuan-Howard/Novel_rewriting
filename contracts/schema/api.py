@@ -28,6 +28,12 @@ from __future__ import annotations
 
 from contracts.schema.workflow import BudgetGrant
 from contracts.schema.knowledge_links import KnowledgeLinkReview, KnowledgeLinkSubmission
+from contracts.schema.dependencies import DependencyManifest
+from contracts.schema.plot import PlotBlueprint
+from contracts.schema.plot_refinement import BlueprintRefinementRequest, BlueprintRefinementCatalog
+from contracts.schema.plot_review import (
+    ReviewScope, PlotReviewResponse, PlotReviewRecord, PlotReviewProgress,
+)
 from contracts.schema.stage2_review import (
     Stage2ReviewCoverage, Stage2ReviewReceipt, Stage2ReviewSubmission,
 )
@@ -84,11 +90,8 @@ from contracts.invariants import (
     DESIGN_REVIEW_STATES,
     DESIGN_STRATEGY_REPLAN_CONSTRAINTS,
     DESIGN_STRATEGY_DECISIONS,
-    FACT_ATOM_KINDS,
-    FACT_ATOM_OBLIGATIONS,
     GLOBAL_REVIEW_EFFECTS,
     GLOBAL_REVIEW_GENERATION_DISPOSITIONS,
-    HINGE_KINDS,
     HOOK_APPROACHES,
     STAGE6_JUDGE_ROLES,
     STAGE2_NODE_REVIEW_DECISIONS,
@@ -103,15 +106,12 @@ from contracts.invariants import (
     INBOX_ATTENTION,
     INBOX_DELIVERY_EFFECT,
     INBOX_KIND,
-    NARRATIVE_RELATION_ENFORCEMENTS,
-    NARRATIVE_RELATION_KINDS,
     NODES,
     EXECUTION_PERMIT_KINDS,
     OPERATOR_NEXT_STATES,
     RESUME_VERDICTS,
     KNOWLEDGE_SUBJECT_KINDS,
     NAME_DISTINCTIVENESS,
-    NARRATIVE_PERSON,
     NONBODY_KINDS,
     REMOVED_ORIGIN,
     RETENTION_CANDIDATE_KINDS,
@@ -148,13 +148,13 @@ from contracts.schema.orchestration import (
 from contracts.schema.stage0 import Stage0RevisionOrigin, Stage0Warning
 from contracts.schema.stage2 import (
     BlueprintProvenance, SourceBlurbGrounding, FactEvidence, GlobalProvenance, HookFactEvidence,
-    DialogueSemantics, LiteralRequirement, RelationVisibility, Setting, WorldRule,
+    RelationVisibility, Setting, WorldRule,
 )
 from contracts.schema.stage4 import (
     BindingConcern, BindingInfeasibilityWitness,
     BlindCandidateChapter, BlindChapterWeightResponse,
     CtxChapter, CtxProvenance, PlanGoal, PlanProvenance, SemanticContract,
-    StructureDecision,
+    StructureDecision, PlanScene,
 )
 from contracts.schema.stage5 import (
     ChapterSegment, JudgedDraft, RoundFreeProvenance, RoundLlmProvenance,
@@ -1004,123 +1004,14 @@ class DesignStrategySubject(FrozenModel):
         return self
 
 
-class DesignBlindFact(FrozenModel):
-    """A 相真正可见的事实原子；只含 opaque alias 与可读语义。"""
-
-    fact_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
-    claim: str = Field(min_length=1)
-    kind: Literal[FACT_ATOM_KINDS]
-    obligation: Literal[FACT_ATOM_OBLIGATIONS]
-    participant_aliases: list[str]
-
-    @field_validator('participant_aliases')
-    @classmethod
-    def _participants_are_canonical(cls, values: list[str]) -> list[str]:
-        if values != sorted(set(values)):
-            raise ValueError('blind truth participant_aliases 必须排序且不重复')
-        if any(not re.fullmatch(r'a_[0-9a-f]{16,64}', value) for value in values):
-            raise ValueError('blind truth participant_aliases 必须是 opaque alias')
-        return values
 
 
-class DesignBlindCausalEdge(FrozenModel):
-    before_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
-    after_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
+from contracts.schema.plot_planning import PlannerChapter
 
 
-class DesignBlindStoryBefore(FrozenModel):
-    kind: Literal[NARRATIVE_RELATION_KINDS[0]]
-    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS]
-    before_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
-    after_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
+class DesignBlindChapterTruth(PlannerChapter):
+    """设计审阅与 A 实际消费同一完整剧情投影。"""
 
-
-class DesignBlindResponseTo(FrozenModel):
-    kind: Literal[NARRATIVE_RELATION_KINDS[1]]
-    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS]
-    stimulus_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
-    response_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
-
-
-class DesignBlindSameScene(FrozenModel):
-    kind: Literal[NARRATIVE_RELATION_KINDS[2]]
-    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS]
-    left_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
-    right_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
-
-    @model_validator(mode='after')
-    def _pair_is_canonical(self) -> DesignBlindSameScene:
-        if self.left_alias >= self.right_alias:
-            raise ValueError('blind same_scene alias 必须升序且不能自指')
-        return self
-
-
-class DesignBlindObserves(FrozenModel):
-    kind: Literal[NARRATIVE_RELATION_KINDS[3]]
-    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS]
-    observer_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
-    observed_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
-    observation_alias: str = Field(pattern=r'^a_[0-9a-f]{16,64}$')
-
-
-DesignBlindNarrativeRelation = Annotated[
-    DesignBlindStoryBefore | DesignBlindResponseTo
-    | DesignBlindSameScene | DesignBlindObserves,
-    Field(discriminator='kind'),
-]
-
-
-class DesignBlindChapterTruth(FrozenModel):
-    """由当前 Stage2 blueprint 现场重建的 A 可见去序真相章。"""
-
-    chapter_ordinal: int = Field(ge=1)
-    chapter_function: str = Field(min_length=1)
-    facts: list[DesignBlindFact] = Field(min_length=1)
-    causal_edges: list[DesignBlindCausalEdge]
-    # v1/v2 已存人审历史没有这一面；新 v3 producer 显式
-    # 填写，历史解码则诚实视为“当时未可见”，不反向猜关系。
-    narrative_relations: list[DesignBlindNarrativeRelation] = Field(
-        default_factory=list)
-    entry_state_aliases: list[str]
-    ending_state_aliases: list[str]
-
-    @model_validator(mode='after')
-    def _blind_truth_is_closed(self) -> DesignBlindChapterTruth:
-        facts = [row.fact_alias for row in self.facts]
-        if len(facts) != len(set(facts)):
-            raise ValueError('blind truth fact_alias 不得重复')
-        fact_set = set(facts)
-        edges = [(row.before_alias, row.after_alias) for row in self.causal_edges]
-        if edges != sorted(set(edges)):
-            raise ValueError('blind truth causal_edges 必须排序且不重复')
-        referenced = {
-            alias for edge in self.causal_edges
-            for alias in (edge.before_alias, edge.after_alias)
-        } | set(self.entry_state_aliases) | set(self.ending_state_aliases)
-        for relation in self.narrative_relations:
-            if isinstance(relation, DesignBlindStoryBefore):
-                referenced.update((relation.before_alias, relation.after_alias))
-            elif isinstance(relation, DesignBlindResponseTo):
-                referenced.update((relation.stimulus_alias, relation.response_alias))
-            elif isinstance(relation, DesignBlindSameScene):
-                referenced.update((relation.left_alias, relation.right_alias))
-            else:
-                referenced.update((relation.observed_alias, relation.observation_alias))
-        if not referenced.issubset(fact_set):
-            raise ValueError('blind truth 因果/状态 alias 必须属于本章 facts')
-        relation_keys = [json.dumps(
-            row.model_dump(mode='json'), ensure_ascii=False,
-            sort_keys=True, separators=(',', ':'),
-        ) for row in self.narrative_relations]
-        if relation_keys != sorted(set(relation_keys)):
-            raise ValueError('blind truth narrative_relations 必须规范排序且不重复')
-        for label, values in (
-            ('entry_state_aliases', self.entry_state_aliases),
-            ('ending_state_aliases', self.ending_state_aliases),
-        ):
-            if values != sorted(set(values)):
-                raise ValueError(f'blind truth {label} 必须排序且不重复')
-        return self
 
 
 DesignStructureReadingValue = str | int | float | bool | None
@@ -1220,9 +1111,8 @@ class DesignPreflightFailure(FrozenModel):
 class DesignPreflightSummary(FrozenModel):
     """`preflight_binding_candidate` 的内存结论投影；不是产物、不落盘。
 
-    绑定 candidate / blueprint / review contract 三个 SHA；`failures` 只来自
-    构造性绑定（每场 catalog 首项舞台、材料全落首场）跑同一联合 HARD——
-    「B 选得不好」在这个预检里结构性不存在。
+    绑定 candidate / blueprint / review contract 三个 SHA；对冻结 placement
+    构造证据存在性见证并运行联合 HARD。见证不作为正式 B 选择，也不证明语义保真。
     """
 
     status: Literal[DESIGN_PREFLIGHT_STATUSES]
@@ -1398,51 +1288,18 @@ class DesignStrategyReview(FrozenModel):
         return self
 
 
-class DesignRepairStoryBefore(DesignBlindStoryBefore):
-    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS[0]]
-
-
-class DesignRepairResponseTo(DesignBlindResponseTo):
-    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS[0]]
-
-
-class DesignRepairSameScene(DesignBlindSameScene):
-    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS[0]]
-
-
-class DesignRepairObserves(DesignBlindObserves):
-    enforcement: Literal[NARRATIVE_RELATION_ENFORCEMENTS[0]]
-
-
-DesignRepairRelationEffect = Annotated[
-    DesignRepairStoryBefore | DesignRepairResponseTo
-    | DesignRepairSameScene | DesignRepairObserves,
-    Field(discriminator='kind'),
-]
-
-
 class DesignRepairConstraint(FrozenModel):
     """一条可执行的关闭式修订约束；数组顺序由具体 code 的模板解释。"""
 
     code: DesignRepairCode
     scene_refs: list[str] = Field(default_factory=list)
     opaque_aliases: list[str] = Field(default_factory=list)
-    effect: DesignRepairRelationEffect | None = None
-
     @model_validator(mode='after')
     def _refs_are_unique_without_destroying_order(self) -> DesignRepairConstraint:
         if len(self.scene_refs) != len(set(self.scene_refs)):
             raise ValueError('design constraint scene_refs 不得重复')
         if len(self.opaque_aliases) != len(set(self.opaque_aliases)):
             raise ValueError('design constraint opaque_aliases 不得重复')
-        if self.code == 'narrative_relation':
-            if self.effect is None:
-                raise ValueError('narrative_relation repair 必须携带 typed HARD effect')
-            if self.scene_refs or self.opaque_aliases:
-                raise ValueError(
-                    'narrative_relation 端点只存 effect，不得再复制到无类型数组')
-        elif self.effect is not None:
-            raise ValueError('只有 narrative_relation repair 可携带 relation effect')
         min_scenes, min_aliases = DESIGN_REPAIR_CONSTRAINT_ARITY[self.code]
         if len(self.scene_refs) < min_scenes or len(self.opaque_aliases) < min_aliases:
             raise ValueError(
@@ -2187,17 +2044,16 @@ class WorkpackCausalEdgeReading(FrozenModel):
     after_alias: str = Field(min_length=1)
 
 
+from contracts.schema.plot_materials import PlotChapterReviewMaterials
+from contracts.schema.stage4 import PlanChapter
+
+
 class StructureChapterReading(FrozenModel):
     """Stage4B 一章的裁决材料：由 plan + 当前蓝图确定性渲染（`R-5.25`）。"""
 
     kind: Literal[WORKPACK_READING_KINDS[2]] = WORKPACK_READING_KINDS[2]
-    chapter_function: str = Field(min_length=1)
-    chapter_rewrite_brief: str = Field(min_length=1)
-    structure_decision: dict[str, Any]
-    #: 本章计划引用到的全部 fact id → claim/kind/obligation，每个只出现一次。
-    facts: list[WorkpackFactReading] = Field(default_factory=list)
-    goals: dict[str, WorkpackGoalReading]
-    scenes: list[WorkpackSceneReading] = Field(min_length=1)
+    materials: PlotChapterReviewMaterials
+    chapter: PlanChapter
     #: 与 stage4.plan 复检同一函数现场复算的本章读数，外加 alignment；
     #: 只含 JSON 标量/列表/字典。
     structure_metrics: dict[str, Any]
@@ -2206,20 +2062,11 @@ class StructureChapterReading(FrozenModel):
 
 
 class DesignChapterReading(FrozenModel):
-    """Stage4A 一章的裁决材料：全部 ref 恒为 opaque alias，claim 表每章只出现一次。"""
+    """完整剧情正文只在 truth 中；设计仅通过 placement 与端点引用它。"""
 
     kind: Literal[WORKPACK_READING_KINDS[1]] = WORKPACK_READING_KINDS[1]
-    chapter_function: str = Field(min_length=1)
-    weight: str = Field(min_length=1)
-    chapter_rewrite_brief: str = Field(min_length=1)
-    structure_decision: dict[str, Any]
-    facts: list[DesignBlindFact] = Field(min_length=1)
-    goals: dict[str, WorkpackGoalReading]
-    causal_edges: list[WorkpackCausalEdgeReading] = Field(default_factory=list)
-    narrative_relations: list[dict[str, Any]] = Field(default_factory=list)
-    entry_state: list[str] = Field(default_factory=list)
-    ending_state: list[str] = Field(default_factory=list)
-    scenes: list[WorkpackSceneReading] = Field(min_length=1)
+    truth: DesignBlindChapterTruth
+    chapter: BlindCandidateChapter
 
 
 WorkpackChapterReading = Annotated[
@@ -3100,11 +2947,22 @@ class Stage2NodeReviewRequest(StrictModel):
     owner: Literal[STAGE2_NODE_REVIEW_OWNERS] | None = None
     knowledge_links: KnowledgeLinkSubmission | None = None
     review: Stage2ReviewSubmission | None = None
+    scope: ReviewScope | None = None
+    plot_review: PlotReviewResponse | None = None
 
     @model_validator(mode='after')
     def _closed_action(self) -> 'Stage2NodeReviewRequest':
         if not self.actor.strip() or not self.reason.strip():
             raise ValueError('Stage2 裁决必须有明确 actor/reason')
+        if self.node == 'stage2.blueprint':
+            if self.scope is None or self.plot_review is None or self.review is not None:
+                raise ValueError('Blueprint 必须提交范围与五维审阅，不接受逐项回执')
+            expected = {'accept': 'accept', 'rework': 'revise',
+                        'uncertain': 'unver', 'stop': 'unver'}[self.decision]
+            if self.plot_review.decision != expected or self.plot_review.reason != self.reason:
+                raise ValueError('范围决定与动作、理由冲突')
+        elif self.scope is not None or self.plot_review is not None:
+            raise ValueError('Global 不消费 Blueprint 范围审阅')
         if self.knowledge_links is not None:
             if self.node != 'stage2.blueprint':
                 raise ValueError('只有 Blueprint Commander 能提交知识关联决定')
@@ -3130,14 +2988,44 @@ class Stage2NodeReviewRequest(StrictModel):
 
 
 class Stage2NodeReviewDecision(Stage2NodeReviewRequest):
+    refinement_request: BlueprintRefinementRequest | None = None
+    refinement_proof_sha256: Sha256 | None = None
+    plot_record: PlotReviewRecord | None = None
     obligation_receipt: Stage2ReviewReceipt | None = None
     review_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     review_contract_version: str = Field(min_length=1)
     decided_at: str = Field(min_length=1)
     review_scope_sha256: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
 
+    @model_validator(mode='after')
+    def _plot_record(self) -> 'Stage2NodeReviewDecision':
+        if (self.refinement_request is None) != (self.refinement_proof_sha256 is None):
+            raise ValueError('疑点原请求与范围记录的联结证明必须同时保存')
+        if self.refinement_request is not None:
+            if (self.node != 'stage2.blueprint' or self.decision != 'uncertain'
+                    or self.scope != f'chapter:{self.refinement_request.chapter_ordinal}'
+                    or self.actor != self.refinement_request.actor):
+                raise ValueError('下游疑点只能作为本章待核查记录，不能授权返工或接受')
+            import hashlib
+            payload = {'request': self.refinement_request.model_dump(mode='json'),
+                       'decision_sha256': self.plot_record.decision_sha256 if self.plot_record else None}
+            digest = hashlib.sha256(json.dumps(
+                payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+            if self.refinement_proof_sha256 != digest:
+                raise ValueError('疑点原请求与范围记录的联结证明不一致')
+        if self.node == 'stage2.blueprint':
+            if (self.plot_record is None or self.obligation_receipt is not None
+                    or self.plot_record.scope != self.scope
+                    or self.plot_record.response != self.plot_review
+                    or self.plot_record.subject_sha256 != self.review_subject_sha256):
+                raise ValueError('Blueprint 持久决定必须绑定本次范围记录')
+        elif self.plot_record is not None:
+            raise ValueError('Global 决定不能保存 Blueprint 范围记录')
+        return self
+
 
 class Stage2NodeReviewView(StrictModel):
+    plot_progress: PlotReviewProgress | None = None
     coverage: Stage2ReviewCoverage | None = None
     unavailable_reason: str | None = None
     state: Literal[STAGE2_NODE_REVIEW_STATES] = 'missing'
@@ -3148,7 +3036,7 @@ class Stage2NodeReviewView(StrictModel):
 class ApprovalDoc(StrictModel):
     """公开审批面 v6：新增 Stage5 闭合回执投影。"""
 
-    v: Literal[6] = 6
+    v: Literal[7] = 7
     sid: str = Field(min_length=1)
     gate: dict[GateKey, bool]
     seen: dict[SeenKey, bool]
@@ -3793,128 +3681,28 @@ class Stage7View(StrictModel):
 # 二f、S-04 原文↔骨架（`GET /api/novels/:sid/reading/:o`）
 # ─────────────────────────────────────────────────────────────────────────────
 
-class ReadingSegment(FrozenModel):
-    """该章原文上的一个连续分区。**`beat_id=null` ⇒ 空隙（hole）**——
-    kind 不另立字符串（两态由可空性表达，api.py 不手抄取值面）。
-
-    坐标恒是 Python 码点半开区间；**服务端已切好 `text`**，前端绝不按 start/end
-    自己切字符串（Python 码点 ≠ JS 码元）。
-    """
-
-    start: int = Field(ge=0)
-    end: int = Field(ge=1)
-    chars: int = Field(ge=1)
-    text: str = Field(min_length=1)
-    beat_id: str | None
-    #: 空隙且 `chars >= uncovered_min_chars` 才 `true`（beat 分区恒 `false`）。
-    #: 阈值由响应自带（`uncovered_min_chars`），**是漏抓还是过渡交人工看摘录判断**。
-    flagged: bool
-
-    @model_validator(mode='after')
-    def _interval_is_sound(self) -> ReadingSegment:
-        if self.end <= self.start:
-            raise ValueError(f'[{self.start}, {self.end}) 不是非空半开区间')
-        if self.chars != self.end - self.start or self.chars != len(self.text):
-            raise ValueError('chars 必须同时等于 end-start 与 text 的码点长度')
-        if self.beat_id is not None and self.flagged:
-            raise ValueError('beat 分区不许 flagged——「漏」只属于空隙')
-        return self
-
-
-class ReadingHinge(FrozenModel):
-    """一条保真材料。`text=null` = 未定位（INVALID 状态的 hinge 没有原文可引）。"""
-
-    kind: Literal[HINGE_KINDS]
-    text: str | None
-    hinge_id: str = Field(min_length=1)
-    source_fact_refs: list[str] = Field(min_length=1)
-    dialogue: DialogueSemantics | None
-    literal: LiteralRequirement | None
-
-
-class ReadingFactLine(FrozenModel):
-    """所属拍内的一条原子事实；证据字节只作阅读对照。"""
-
-    fact_id: str = Field(min_length=1)
-    claim: str = Field(min_length=1)
-    kind: Literal[FACT_ATOM_KINDS]
-    obligation: Literal[FACT_ATOM_OBLIGATIONS]
-    evidence_text: str | None
-    participant_char_ids: list[str]
-
-
-class ReadingBeatLine(FrozenModel):
-    """一拍。`located=false` 时坐标为 `null`（定位失败不编区间）。"""
-
-    beat_id: str = Field(min_length=1)
-    located: bool
-    start: int | None
-    end: int | None
-    time_layer: Literal[TIME_LAYERS]
-    place: str | None
-    present_char_ids: list[str]
-    fact_atoms: list[ReadingFactLine]
-    hinges: list[ReadingHinge]
-
-    @model_validator(mode='after')
-    def _location_is_all_or_nothing(self) -> ReadingBeatLine:
-        if self.located != (self.start is not None and self.end is not None):
-            raise ValueError('located 与坐标必须说同一件事')
-        return self
-
-
-class ReadingNarrationLine(FrozenModel):
-    grammatical_person: Literal[NARRATIVE_PERSON]
-    narrator_char_id: str | None
-    focalizer_char_id: str | None
-    pronoun_surfaces: list[str]
 
 
 class ReadingView(StrictModel):
-    """`GET /api/novels/:sid/reading/:o`。**S-04 那一屏：原文 ↔ 骨架。**
-
-    左半边（原文）来自 **stage1**；右半边（骨架）来自 stage2 逐章蓝图。
-    ⚠ **stage2 没跑 ⇒ 200 且 `blueprint=false`**：整章一个 hole、beats 空
-    ——左半边与 stage2 无关（同 S-06 左右半分治的道理）。
-    stage1 不在 / `:o` 越界 ⇒ 404。
-    """
+    """原文与完整剧情同快照对照；证据定位不冒充语义覆盖。"""
 
     sid: str = Field(min_length=1)
     title: str = Field(min_length=1)
-
     chapter_ordinal: int = Field(ge=1)
+    text: str = Field(min_length=1)
     text_chars: int = Field(ge=1)
-    blueprint: bool
-    segments: list[ReadingSegment] = Field(min_length=1)
-    beats: list[ReadingBeatLine]
-    narration: list[ReadingNarrationLine]
-
-    #: 没被任何 beat 覆盖的字数（全部空隙之和，不只 flagged 的）。
-    loose: int = Field(ge=0)
-    uncovered_min_chars: int = Field(ge=1)
-
-    #: `stage2/chapter_blueprints.json` 的处境（formal 与活动 INVALID 分栏一次拿全）。
-    #: `blueprint=false` 的两种来路（没跑 / 读不回）靠它分：`exists` 与 `readable`。
+    blueprint: PlotBlueprint | None
     blueprint_state: ArtifactState
-
     provenance: BlueprintProvenance | None = Field(alias='_provenance')
 
     @model_validator(mode='after')
-    def _postconditions(self) -> ReadingView:
-        """① 分区连续覆盖整章；② `blueprint=false` 的形态整块成立；③ `loose` 对得上账。"""
-        if self.segments[0].start != 0 or self.segments[-1].end != self.text_chars:
-            raise ValueError('分区必须从 0 开始、到 text_chars 结束')
-        for left, right in zip(self.segments, self.segments[1:]):
-            if left.end != right.start:
-                raise ValueError('分区必须按顺序首尾连续')
-        if not self.blueprint:
-            if self.beats or self.provenance is not None:
-                raise ValueError('blueprint=false 时右半边必须整块缺席——那份内容是从哪儿来的？')
-            if any(s.beat_id is not None for s in self.segments):
-                raise ValueError('blueprint=false 时不该有 beat 分区')
-        holes = sum(s.chars for s in self.segments if s.beat_id is None)
-        if self.loose != holes:
-            raise ValueError(f'loose={self.loose} 而空隙合计 {holes}——两个数必须是同一个')
+    def _source_chapter(self) -> ReadingView:
+        if self.text_chars != len(self.text):
+            raise ValueError('原文字数必须来自当前实际文本')
+        if self.blueprint is not None and self.blueprint.chapter_ordinal != self.chapter_ordinal:
+            raise ValueError('阅读原文和剧情蓝图必须同章')
+        if self.blueprint is None and self.provenance is not None:
+            raise ValueError('缺少蓝图时不能下发半份来源账')
         return self
 
 
@@ -3922,152 +3710,6 @@ class ReadingView(StrictModel):
 # 二f、Stage2 Blueprint 只读审阅工作包（暂不是审批面）
 # ──────────────────────────────────────────────────────────────────────────
 
-class BlueprintReviewCoverageSegment(FrozenModel):
-    """一章原文的一个连续分区。
-
-    坐标和 ``beat_id`` 是机械面，工作包不重复展示；``beat_order``
-    只是当前工作包内的 1 起顺序，让 coverage 能与右侧语义拍对齐。
-    ``None`` 表示未被任何已定位 beat 覆盖的原文空隙。
-    """
-
-    beat_order: int | None = Field(default=None, ge=1)
-    chars: int = Field(ge=1)
-    text: str = Field(min_length=1)
-    flagged: bool
-
-    @model_validator(mode='after')
-    def _chars_and_flag_are_sound(self) -> 'BlueprintReviewCoverageSegment':
-        if self.chars != len(self.text):
-            raise ValueError('coverage segment chars 必须等于 text 的码点长度')
-        if self.beat_order is not None and self.flagged:
-            raise ValueError('已覆盖的 beat 分区不许标成空隙异常')
-        return self
-
-
-class BlueprintReviewCoverage(FrozenModel):
-    """一章正文的完整分区账。按 ``segments`` 顺序连接即是整章原文。"""
-
-    text_chars: int = Field(ge=1)
-    covered_chars: int = Field(ge=0)
-    loose_chars: int = Field(ge=0)
-    uncovered_min_chars: int = Field(ge=1)
-    segments: list[BlueprintReviewCoverageSegment] = Field(min_length=1)
-
-    @model_validator(mode='after')
-    def _segments_close_the_complete_chapter(self) -> 'BlueprintReviewCoverage':
-        covered = sum(
-            row.chars for row in self.segments if row.beat_order is not None)
-        loose = sum(
-            row.chars for row in self.segments if row.beat_order is None)
-        if covered != self.covered_chars or loose != self.loose_chars:
-            raise ValueError('coverage 的 covered/loose 分账与 segments 对不上')
-        if covered + loose != self.text_chars:
-            raise ValueError('coverage segments 必须不重不漏覆盖整章原文')
-        for row in self.segments:
-            expected = (
-                row.beat_order is None and row.chars >= self.uncovered_min_chars)
-            if row.flagged != expected:
-                raise ValueError('coverage flagged 必须只标记超阈值原文空隙')
-        return self
-
-
-class BlueprintReviewFact(FrozenModel):
-    fact_id: str = Field(min_length=1)
-    """人审真正需要看的事实面；稳定 id 与 locator 由机械报告守。"""
-
-    claim: str = Field(min_length=1)
-    kind: Literal[FACT_ATOM_KINDS]
-    obligation: Literal[FACT_ATOM_OBLIGATIONS]
-    evidence_text: str | None
-    participant_char_ids: list[str]
-
-
-class BlueprintReviewBeat(FrozenModel):
-    beat_id: str = Field(min_length=1)
-    """一拍紧凑语义面。``beat_order`` 是工作包内与 coverage 的连接键。"""
-
-    beat_order: int = Field(ge=1)
-    located: bool
-    time_layer: Literal[TIME_LAYERS]
-    place: str | None
-    present_char_ids: list[str]
-    facts: list[BlueprintReviewFact]
-    hinges: list[ReadingHinge]
-
-
-class BlueprintReviewCausalLink(FrozenModel):
-    """因果边的人读投影：直接给 claim → claim，不再逼人回查 fact_id。"""
-
-    before_claim: str = Field(min_length=1)
-    after_claim: str = Field(min_length=1)
-
-
-class BlueprintReviewStoryBefore(FrozenModel):
-    kind: Literal[NARRATIVE_RELATION_KINDS[0]]
-    enforcement: Literal[tuple(NARRATIVE_RELATION_ENFORCEMENTS)]
-    before_claim: str = Field(min_length=1)
-    after_claim: str = Field(min_length=1)
-
-
-class BlueprintReviewResponseTo(FrozenModel):
-    kind: Literal[NARRATIVE_RELATION_KINDS[1]]
-    enforcement: Literal[tuple(NARRATIVE_RELATION_ENFORCEMENTS)]
-    stimulus_claim: str = Field(min_length=1)
-    response_claim: str = Field(min_length=1)
-
-
-class BlueprintReviewSameScene(FrozenModel):
-    kind: Literal[NARRATIVE_RELATION_KINDS[2]]
-    enforcement: Literal[tuple(NARRATIVE_RELATION_ENFORCEMENTS)]
-    left_claim: str = Field(min_length=1)
-    right_claim: str = Field(min_length=1)
-
-
-class BlueprintReviewObserves(FrozenModel):
-    kind: Literal[NARRATIVE_RELATION_KINDS[3]]
-    enforcement: Literal[tuple(NARRATIVE_RELATION_ENFORCEMENTS)]
-    observer_char_id: str = Field(min_length=1)
-    observed_claim: str = Field(min_length=1)
-    observation_claim: str = Field(min_length=1)
-
-
-BlueprintReviewNarrativeRelation = Annotated[
-    BlueprintReviewStoryBefore | BlueprintReviewResponseTo
-    | BlueprintReviewSameScene | BlueprintReviewObserves,
-    Field(discriminator='kind'),
-]
-
-
-class BlueprintReviewChapter(FrozenModel):
-    """一章的完整 coverage + 紧凑语义审阅面。"""
-
-    chapter_ordinal: int = Field(ge=1)
-    anomalous: bool
-    attention_rules: list[str]
-    chapter_function: str = Field(min_length=1)
-    coverage: BlueprintReviewCoverage
-    beats: list[BlueprintReviewBeat] = Field(min_length=1)
-    causal_links: list[BlueprintReviewCausalLink]
-    narrative_relations: list[BlueprintReviewNarrativeRelation]
-    entry_state_claims: list[str]
-    ending_state_claims: list[str]
-    narration: list[ReadingNarrationLine] = Field(min_length=1)
-
-    @model_validator(mode='after')
-    def _chapter_surface_is_closed(self) -> 'BlueprintReviewChapter':
-        if self.anomalous != bool(self.attention_rules):
-            raise ValueError('anomalous 必须与本章 attention_rules 同进同出')
-        orders = [row.beat_order for row in self.beats]
-        if orders != list(range(1, len(orders) + 1)):
-            raise ValueError('Blueprint review beat_order 必须从 1 起连续')
-        known = set(orders)
-        used = {
-            row.beat_order for row in self.coverage.segments
-            if row.beat_order is not None
-        }
-        if used - known:
-            raise ValueError('coverage 引用了本章不存在的 beat_order')
-        return self
 
 
 class BlueprintReviewBinding(FrozenModel):
@@ -4113,59 +3755,33 @@ class BlueprintReviewDelta(FrozenModel):
 
 
 class BlueprintReviewWorkpack(FrozenModel):
-    """Stage2 Blueprint 的只读、异常优先审阅包。
-
-    它不是审批或产物：没有 actor/state/action，不开任何 gate。
-    ``subject_sha256`` 是排除 provenance 的当前 Blueprint 业务主体；
-    ``review_identity_sha256`` 覆盖人实际看到的内容与 finding；
-    ``binding_sha256/review_token`` 覆盖本次精确工作包，用于提交竞态。
-    """
+    """V9 范围材料：原文与完整节点各一份，问题与接受引用不展开历史。"""
 
     sid: str = Field(min_length=1)
     title: str = Field(min_length=1)
-    read_only: bool = True
-    auto_decisions: bool = False
+    read_only: Literal[True] = True
+    auto_decisions: Literal[False] = False
     review_contract_version: Literal[BLUEPRINT_REVIEW_CONTRACT] = BLUEPRINT_REVIEW_CONTRACT
-    review_identity_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    validation_seal_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    review_token: str = Field(pattern=r'^bpr4_[0-9a-f]{64}$')
-    global_review: dict[str, Any]
-    knowledge_links: KnowledgeLinkReview
-    review_coverage: Stage2ReviewCoverage | None = None
-    review_delta: BlueprintReviewDelta | None = None
-    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    binding_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    scope: ReviewScope
+    review_identity_sha256: Sha256
+    validation_seal_sha256: Sha256
+    review_token: str = Field(pattern=r'^bpr5_[0-9a-f]{64}$')
+    subject_sha256: Sha256
+    binding_sha256: Sha256
     binding: BlueprintReviewBinding
+    dependency_manifest: DependencyManifest
+    knowledge_links: KnowledgeLinkReview
+    material: dict[str, Any]
+    progress: PlotReviewProgress
     check: CompactApprovalCheck
     accounting: list[AccountingLine]
-    mechanical_fields_hidden: list[str] = Field(min_length=1)
-    chapters: list[BlueprintReviewChapter] = Field(min_length=1)
 
     @model_validator(mode='after')
-    def _read_only_complete_exception_first_surface(self) -> 'BlueprintReviewWorkpack':
-        if not self.read_only or self.auto_decisions:
-            raise ValueError('Blueprint review workpack 只读且绝不自动做决定')
-        if self.review_token != f'bpr4_{self.binding_sha256}':
-            raise ValueError('Blueprint review_token 必须封装当前 exact workpack')
-        ordinals = [row.chapter_ordinal for row in self.chapters]
-        if (len(ordinals) != len(set(ordinals))
-                or set(ordinals) != set(self.binding.chapter_ordinals)):
-            raise ValueError('Blueprint review chapters 必须不重不漏覆盖全部章')
-        seen_normal = False
-        anomalous: list[int] = []
-        normal: list[int] = []
-        for row in self.chapters:
-            if row.anomalous:
-                if seen_normal:
-                    raise ValueError('Blueprint review 必须把异常/命中章放在前面')
-                anomalous.append(row.chapter_ordinal)
-            else:
-                seen_normal = True
-                normal.append(row.chapter_ordinal)
-        if anomalous != sorted(anomalous) or normal != sorted(normal):
-            raise ValueError('异常章与普通章各自必须按章号升序')
-        if len(self.mechanical_fields_hidden) != len(set(self.mechanical_fields_hidden)):
-            raise ValueError('mechanical_fields_hidden 不得重复')
+    def _binding(self) -> 'BlueprintReviewWorkpack':
+        if self.review_token != f'bpr5_{self.binding_sha256}':
+            raise ValueError('Blueprint token 必须绑定当前范围工作包')
+        if self.scope != self.material.get('scope') or self.scope != self.dependency_manifest.scope:
+            raise ValueError('Blueprint 范围和实际材料不一致')
         return self
 
 
@@ -4177,7 +3793,7 @@ class BlueprintSeenRequest(StrictModel):
     面分层保存，但 Commander/UI 不再搬运五枚可相互矛盾的散装摘要。
     """
 
-    review_token: str = Field(pattern=r'^bpr4_[0-9a-f]{64}$')
+    review_token: str = Field(pattern=r'^bpr5_[0-9a-f]{64}$')
 
 
 class Stage2GlobalSeenRequest(StrictModel):
@@ -4212,7 +3828,7 @@ class Stage2FinalReviewRequest(StrictModel):
     actor: str = Field(min_length=1, max_length=256)
     reason: str = Field(min_length=1, max_length=4096)
     global_review_token: str = Field(pattern=r'^s2gr1_[0-9a-f]{64}$')
-    blueprint_review_token: str = Field(pattern=r'^bpr4_[0-9a-f]{64}$')
+    blueprint_review_token: str = Field(pattern=r'^bpr5_[0-9a-f]{64}$')
 
     @model_validator(mode='after')
     def _no_blank_audit_fields(self) -> Stage2FinalReviewRequest:
@@ -4234,21 +3850,10 @@ class Stage2FinalReviewRequest(StrictModel):
 # 二g、S-07 计划 ↔ 写作上下文（`GET /api/novels/:sid/stage4/:o`）
 # ─────────────────────────────────────────────────────────────────────────────
 
-class PlanSceneLine(FrozenModel):
-    """Stage4 编译出的一场：UI 展示决策与 typed 覆盖，不回退成源 beat 清单。"""
-
+class PlanSceneLine(PlanScene):
+    """只读场景视图；节点列表由 placement 派生，不作为编辑接口。"""
     i: int = Field(ge=1)
-    slot: str = Field(pattern=r'^s\d{2,4}$')
-    budget_chars: int = Field(gt=0)
-    purpose: str = Field(min_length=1)
-    role: Literal[STRUCTURAL_ROLES]
-    delivery: Literal[DELIVERY_MODES]
-    transition: Literal[TEMPORAL_LINKS]
-    land_fact_refs: list[str] = Field(min_length=1)
-    context_fact_refs: list[str]
-    turn_fact_ref: str = Field(min_length=1)
-    entry_state_refs: list[str]
-    exit_state_refs: list[str]
+    beat_refs: list[str] = Field(min_length=1)
 
 
 class StructureDecisionView(StructureDecision):
@@ -4257,18 +3862,20 @@ class StructureDecisionView(StructureDecision):
     computed_change_kinds: list[Literal[STRUCTURE_CHANGE_KINDS]]
 
 
-class PlanChapterLine(StrictModel):
-    """计划侧的一章：当前 blueprint 派生语义 + 持久化的新场景设计。"""
-
-    output_ordinal: int = Field(ge=1)
-    from_source_ordinals: list[int] = Field(min_length=1, max_length=1)
-    chapter_goal: PlanGoal
-    open_hook_goal: PlanGoal
-    end_hook_goal: PlanGoal
+class PlanChapterLine(PlanChapter):
+    """正式计划加同源阅读投影；映射只由 placement 拥有。"""
     structure_decision: StructureDecisionView
     semantic_contract: SemanticContract
-    chapter_rewrite_brief: str = Field(min_length=1)
     scenes: list[PlanSceneLine] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _derived_membership(self) -> PlanChapterLine:
+        for scene in self.scenes:
+            expected = [p.beat_ref for p in self.beat_placements
+                        if any(d.scene_ref == scene.slot for d in p.deliveries)]
+            if scene.beat_refs != expected:
+                raise ValueError('只读节点列表必须由 placement 派生')
+        return self
 
 
 class Stage4IndexRow(FrozenModel):
@@ -4310,6 +3917,8 @@ class Stage4View(StrictModel):
     #: 恒等基线不是盘上可审批对象，因此只能是 `null`；正式计划则必须给完整 SHA-256，
     #: 供前端与审批服务的 `structure.current_subject_sha256` 关闭式对齐。
     structure_subject_sha256: str | None = Field(pattern=r'^[0-9a-f]{64}$')
+    structure_subject_unavailable_reason: str | None
+    blueprint: PlotBlueprint
     chapters: list[int] = Field(min_length=1)
     ordinal: int = Field(ge=1)
     index: list[Stage4IndexRow] = Field(min_length=1)
@@ -4339,9 +3948,12 @@ class Stage4View(StrictModel):
             raise ValueError(f'ordinal={self.ordinal} 不在 chapters={self.chapters} 里')
         if self.identity_plan and self.plan_provenance is not None:
             raise ValueError('恒等基线是现算的，没有落盘来源账可发')
-        if self.identity_plan != (self.structure_subject_sha256 is None):
-            raise ValueError(
-                '恒等基线不是可审批主体；正式计划必须带同份计划的完整结构 SHA-256')
+        if self.identity_plan and self.structure_subject_sha256 is not None:
+            raise ValueError('参考基线不能拥有正式审阅身份')
+        if self.structure_subject_sha256 is None and not self.structure_subject_unavailable_reason:
+            raise ValueError('审阅主体不可用时必须说明原因')
+        if self.structure_subject_sha256 is not None and self.structure_subject_unavailable_reason:
+            raise ValueError('审阅主体可用时不能同时声称不可用')
         if (self.writer_target is None) != (self.ctx_chapter is None):
             raise ValueError('writer_target 与 ctx_chapter 必须同进同出（同一份任务书）')
         return self

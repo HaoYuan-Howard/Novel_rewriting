@@ -54,73 +54,13 @@ export interface DesignStrategySubject {
   chapter_weights: DesignChapterWeight[]
 }
 
-export interface DesignGoalSubject {
-  intent: string
-  fact_aliases: string[]
-}
+export type DesignGoalSubject = import('./plot.generated').BlindLocalGoalResponse
 
-export interface DesignSceneSubject {
-  candidate_scene_id: string
-  weight: string
-  purpose: string
-  role: string
-  delivery: string
-  transition: string
-  land_fact_aliases: string[]
-  context_fact_aliases: string[]
-  turn_fact_alias: string
-  entry_state_aliases: string[]
-  exit_state_aliases: string[]
-}
+export type DesignSceneSubject = import('./plot.generated').BlindCandidateScene
 
-export interface DesignChapterCandidate {
-  output_ordinal: number
-  structure_decision: {
-    mode: string
-    reason: string
-    declared_change_kinds: string[]
-  }
-  chapter_goal: DesignGoalSubject
-  open_hook_goal: DesignGoalSubject
-  end_hook_goal: DesignGoalSubject
-  weight: string
-  chapter_rewrite_brief: string
-  scenes: DesignSceneSubject[]
-}
+export type DesignChapterCandidate = import('./plot.generated').BlindCandidateChapter
 
-export interface DesignBlindFact {
-  fact_alias: string
-  claim: string
-  kind: string
-  obligation: string
-  participant_aliases: string[]
-}
-
-/** 后端当前章 typed 关系；端点按 kind 原样保留，页面不生成关系。 */
-export interface DesignNarrativeRelation {
-  kind: string
-  enforcement: string
-  before_alias?: string
-  after_alias?: string
-  stimulus_alias?: string
-  response_alias?: string
-  left_alias?: string
-  right_alias?: string
-  observer_alias?: string
-  observed_alias?: string
-  observation_alias?: string
-}
-
-export interface DesignBlindChapterTruth {
-  chapter_ordinal: number
-  chapter_function: string
-  facts: DesignBlindFact[]
-  causal_edges: { before_alias: string; after_alias: string }[]
-  /** 历史材料可能缺席；缺席没有关系修订选择权。 */
-  narrative_relations?: DesignNarrativeRelation[]
-  entry_state_aliases: string[]
-  ending_state_aliases: string[]
-}
+export type DesignBlindChapterTruth = import('./plot.generated').DesignBlindChapterTruth
 
 export interface DesignStructureEvidence {
   metric_contract: string
@@ -145,7 +85,6 @@ export interface DesignRepairConstraint {
   code: string
   scene_refs: string[]
   opaque_aliases: string[]
-  effect?: unknown | null
 }
 
 /** 操作种类来自服务端 design_constraint_operation_kinds，页面不定义第二套枚举。 */
@@ -703,6 +642,8 @@ export interface Stage5ClosureView {
 import type { Stage2ReviewCoverage, Stage2ReviewSubmission, Stage2ReviewUnit } from './stage2Review'
 
 export interface Stage2NodeReviewRequest {
+  scope?: string | null
+  plot_review?: import('./plot.generated').PlotReviewResponse | null
   node: string
   review_token: string
   decision: string
@@ -715,6 +656,7 @@ export interface Stage2NodeReviewRequest {
 }
 
 export interface Stage2NodeReviewView {
+  plot_progress?: import('./plot.generated').PlotReviewProgress | null
   coverage?: Stage2ReviewCoverage | null
   unavailable_reason?: string | null
   state: string
@@ -849,11 +791,7 @@ export interface WorkpackSceneReading {
   missing_material_refs: string[]
 }
 
-export interface WorkpackClosedRefReading {
-  ref: string
-  kind: 'fact' | 'beat' | 'hinge' | 'unknown'
-  text: string | null
-}
+export type WorkpackClosedRefReading = import('./plot.generated').WorkpackClosedRefReading
 
 export interface WorkpackConcernReading {
   constraint_code: string
@@ -868,52 +806,14 @@ export interface WorkpackCausalEdgeReading {
   after_alias: string
 }
 
-export interface StructureChapterReading {
-  kind: 'stage4_structure_chapter_reading_v1'
-  chapter_function: string
-  chapter_rewrite_brief: string
-  structure_decision: Record<string, unknown>
-  facts: WorkpackFactReading[]
-  goals: Record<string, WorkpackGoalReading>
-  scenes: WorkpackSceneReading[]
-  structure_metrics: Record<string, unknown>
-  binding_concerns: WorkpackConcernReading[]
-  signature_conflict_codes: string[]
-}
+export type StructureChapterReading = import('./plot.generated').StructureChapterReading
 
-export interface DesignBlindFactReading {
-  fact_alias: string
-  claim: string
-  kind: string
-  obligation: string
-  participant_aliases: string[]
-}
-
-export interface DesignChapterReading {
-  kind: 'stage4_design_chapter_reading_v1'
-  chapter_function: string
-  weight: string
-  chapter_rewrite_brief: string
-  structure_decision: Record<string, unknown>
-  facts: DesignBlindFactReading[]
-  goals: Record<string, WorkpackGoalReading>
-  causal_edges: WorkpackCausalEdgeReading[]
-  narrative_relations: Array<Record<string, unknown>>
-  entry_state: string[]
-  ending_state: string[]
-  scenes: WorkpackSceneReading[]
-}
+export type DesignChapterReading = import('./plot.generated').DesignChapterReading
 
 export type WorkpackChapterReading = DesignChapterReading | StructureChapterReading
 
 /** 工作包顶层只出现一次的字段说明与整书材料。 */
-export interface WorkpackReading {
-  kind: 'stage4_workpack_reading_v1'
-  legend: Record<string, string>
-  reconstruction_strategy: string | null
-  chapter_weights: Array<Record<string, unknown>> | null
-  global_binding_concerns: WorkpackConcernReading[]
-}
+export type WorkpackReading = import('./plot.generated').WorkpackReading
 
 export interface ApprovalWorkpackGroup {
   group: ApprovalWorkpackGroupKind

@@ -37,7 +37,7 @@ from contracts.artifacts import (
     RETIRED_ARTIFACT_PATHS,
     STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_CHARACTERS, STAGE2_CHARACTERS_EDIT,
-    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_BLUEPRINT_RELATION_EDIT,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_BLUEPRINT_EDIT,
     STAGE2_CHAPTER_BLUEPRINTS, STAGE2_KNOWLEDGE_LINKS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT,
     STAGE2_GLOBAL_EDIT_INPUT_COMMIT,
     STAGE2_GLOBAL_EDIT_FAILURE,
@@ -95,6 +95,7 @@ from contracts.schema.base import Fp10, FrozenModel, Sha1, StrictModel
 from contracts.schema.characters import CharacterRegistry, CharactersEdit
 from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.knowledge_links import KnowledgeLinks
+from contracts.schema.plot_edit import PlotEdit
 from contracts.schema.common import (
     Finding,
     FreeProvenance,
@@ -309,26 +310,26 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # v6 删除摘要、人物显示名、重复父键与无消费者 provenance 账；由
     # `stage2.blueprint` 整跑（付费）重建，不迁移或手补。称名投影
     # 只改通用 `inputs` 的运行时键，没改 BlueprintProvenance 载体形状，不升版。
-    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 8),
+    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 9),
     # 独立 typed 关联；Blueprint Commander 决定先耐久，producer --close-review 免费物化。
-    STAGE2_KNOWLEDGE_LINKS: ArtifactSpec(KnowledgeLinks),
+    STAGE2_KNOWLEDGE_LINKS: ArtifactSpec(KnowledgeLinks, 2),
     # v1：外部 hash-bound typed request；只被 CLI/API 读取，不是 producer 产物。
-    STAGE2_BLUEPRINT_RELATION_EDIT: ArtifactSpec(BlueprintRelationEdit),
+    STAGE2_BLUEPRINT_EDIT: ArtifactSpec(PlotEdit),
     # v2 删除 goal rationale；A 仍保留重构策略与预算权重，供 B/编译器消费。
     # v3 退役整书拒稿采用及无架构来源；由新根内当前策略/单章 producer 重建。
-    STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate, 3),
+    STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate, 4),
     # v1：外部 hash-bound 完整章替换请求；只被 Stage4A CLI/API 读取，
     # 不是 Executor 产物，也不进入正式产物展示面。
-    STAGE4_BLIND_CHAPTER_EDIT: ArtifactSpec(BlindChapterEditRequest),
+    STAGE4_BLIND_CHAPTER_EDIT: ArtifactSpec(BlindChapterEditRequest, 2),
     # v2 删除可由绑定舞台 present 唯一推出的 participant_refs。
-    STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding, 4),
+    STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding, 5),
     # v4 删除 A 相过程字段、Stage2 重复契约、派生结构向量与编译参数快照。
-    STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters, 4),
-    STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit, 4),
+    STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters, 5),
+    STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit, 5),
     # v5 删除文学 arc；由免费 context 节点从当前上游重建。
     # v6：场景知识与披露许可由独立知识关联导出；0 成本 stage4.context 重建。
     # v7 删除同号源章、总预算与源字数副本；仍由免费 context 节点重建。
-    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, 7),
+    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, 8),
     # ⚠ 2026-08-24 单臂折平：删除 `mode`，路径改为
     #   `stage5/chNN.json`。存量双臂稿是只读历史证据，不做迁移；
     #   current 产物由 `stage5.write` 重建。

@@ -24,7 +24,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, TypeAdapter, ValidationError, create_model
 
 from contracts.artifacts import (
-    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS, STAGE2_BLUEPRINT_RELATION_EDIT, artifact_rel,
+    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS, STAGE2_BLUEPRINT_EDIT, artifact_rel,
 )
 from contracts.invariants import (
     STAGE2_CHARACTER_REVIEW_KINDS,
@@ -49,6 +49,7 @@ from contracts.schema.api import (
     BatchTrimResolutionRequest,
     BlueprintSeenRequest,
     Stage2NodeReviewRequest,
+    BlueprintRefinementRequest, BlueprintRefinementCatalog,
     DesignRepairConstraint,
     DesignReviewRequest,
     DesignReviewTemplate,
@@ -63,13 +64,13 @@ from contracts.schema.api import (
 )
 from contracts.schema.evaluation import GlobalReviewDecisionSet, TrimAudit, TrimResolution
 from contracts.schema.orchestration import ReviewerActionRecord
+from contracts.schema.plot_edit import PlotEdit
 from contracts.schema.stage2 import (
     CharacterCollectionItem,
     GlobalCollectionAdd,
     GlobalCollectionDelete,
     GlobalCollectionSplit,
     GlobalEdit,
-    BlueprintRelationEdit,
     RelationResponse,
     SecretResponse,
     WorldRuleResponse,
@@ -151,6 +152,7 @@ class ReviewerTask:
     blocker_count: int | None = None
     stage5_review_sha256: str | None = None
     stage5_reviewer_contract_sha256: str | None = None
+    work_unit_scope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -206,10 +208,10 @@ _APPROVAL_FOR_BLOCKER: dict[str, frozenset[str]] = {
     queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW: frozenset({'stage2_blueprint_review'}),
     # Blueprint 已读不再是普通 review 席位的顺手动作：它随第四席只读终审的
     # confirm 回执一起提交，由 Supervisor 用 close-stage2 façade 收口。
-    queue.WAITING_ON_STAGE4_DESIGN_REVIEW: frozenset({'design'}),
-    queue.WAITING_ON_STAGE4_BINDING_RESOLUTION: frozenset({'design'}),
-    queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN: frozenset({'design'}),
-    queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW: frozenset({'structure'}),
+    queue.WAITING_ON_STAGE4_DESIGN_REVIEW: frozenset({'design', 'blueprint_refinement'}),
+    queue.WAITING_ON_STAGE4_BINDING_RESOLUTION: frozenset({'design', 'blueprint_refinement'}),
+    queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN: frozenset({'design', 'blueprint_refinement'}),
+    queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW: frozenset({'structure', 'blueprint_refinement'}),
     queue.WAITING_ON_WRITING_APPROVAL: frozenset({'writing'}),
     queue.WAITING_ON_STAGE5_CLOSURE: frozenset({'stage5'}),
 }
@@ -350,6 +352,12 @@ def _stage4_workpack(
                     '_design_template': template,
                     'design_constraint_catalog': copy.deepcopy(template['constraint_catalog']),
                 }
+            from novel.orchestrator import blueprint_refinement
+            pack['_refinement_catalog'] = (
+                blueprint_refinement.catalog(base_abs, sid, origin='structure')
+                if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW else
+                blueprint_refinement.design_catalog(DesignReviewTemplate.model_validate(template))
+            ).model_dump(mode='json')
             if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
                 report = run_check_only(state.readonly_ctx(
                     novel_dir, 'stage4.plan', current.code_version))
@@ -499,9 +507,6 @@ def _workpack(
             'blueprint': _json_command([
                 *cli, 'run', 'stage2.blueprint', sid, '--base', base,
                 '--emit-review-workpack']),
-            '_blueprint_edit_template': _json_command([
-                *cli, 'run', 'stage2.blueprint', sid, '--base', base,
-                '--emit-edit-template']),
         }
     if waiting_on == 'stage0.approve':
         return {'stage0': _json_command([
@@ -731,7 +736,7 @@ def replay_request_document(
             if record.node in ('stage2.global', 'stage2.blueprint'):
                 # 持久决定保存的是供 producer 读取的当前版本信封；重放到模型
                 # typed loader 前还原业务形状，再由该 loader 同尺校验并重封装。
-                artifact = (STAGE2_BLUEPRINT_RELATION_EDIT if record.node == 'stage2.blueprint'
+                artifact = (STAGE2_BLUEPRINT_EDIT if record.node == 'stage2.blueprint'
                             else STAGE2_GLOBAL_REVIEW_DECISIONS if '--review-decisions' in record.flags
                             else STAGE2_GLOBAL_EDIT)
                 payload = decode_artifact(artifact, payload).payload
@@ -1024,11 +1029,14 @@ def _design_constraint_reference_closure(
         str(row.output_ordinal): {
             'scene_refs': [scene.candidate_scene_id
                            for scene in row.subject.chapter.scenes],
-            'fact_aliases': sorted({fact.fact_alias
-                                    for fact in row.subject.blind_truth.facts}),
+            'beat_aliases': sorted(beat.alias for beat in row.subject.blind_truth.beats),
+            'constraint_aliases': sorted(c.alias for c in row.subject.blind_truth.constraints),
+            'endpoint_aliases': sorted(e.endpoint_alias for e in row.subject.blind_truth.endpoints),
+            'state_aliases': sorted(s.alias for s in (*row.subject.blind_truth.states,
+                                                      *row.subject.blind_truth.inherited_states)),
+            'global_aliases': sorted(s.alias for s in row.subject.blind_truth.global_subjects),
             'participant_aliases': sorted({
-                alias for fact in row.subject.blind_truth.facts
-                for alias in fact.participant_aliases
+                alias for beat in row.subject.blind_truth.beats for alias in beat.participant_aliases
             }),
         }
         for row in template.chapters
@@ -1444,11 +1452,7 @@ def _review_materials(
     pack: dict[str, Any], waiting_on: str,
 ) -> dict[str, Any]:
     if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
-        from contracts.schema.stage2_review import Stage2ReviewCoverage
-        from novel.stages.stage2.review_obligations import pending_materials
-        blueprint = pack['blueprint']
-        coverage = Stage2ReviewCoverage.model_validate(blueprint['review_coverage'])
-        return {'blueprint': pending_materials(blueprint, coverage)}
+        return {'blueprint': copy.deepcopy(pack['blueprint'])}
     if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
         return _stage4_structure_replan_materials(pack)
     if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
@@ -1966,67 +1970,96 @@ def _terminal_review_options(
     return result
 
 
-def _submission_options(
-    pack: dict[str, Any], current: OperatorNext, waiting_on: str,
-) -> list[dict[str, Any]]:
+def _blueprint_submission_options(pack, current, waiting_on):
+    from contracts.schema.plot_review import PlotReviewResponse
+    read_pack = pack['blueprint']
+    verdict = PlotReviewResponse(
+        decision='unver', reason=_REASON,
+        coverage={key: {'state': 'unver', 'issue_refs': [], 'reason': _REASON}
+                  for key in ('completeness', 'attribution', 'causal_continuity',
+                              'epistemic_reveal', 'carry_state')},
+        new_issues=[], dispositions=[])
+    payload = Stage2NodeReviewRequest(
+        node='stage2.blueprint', scope=read_pack['scope'],
+        review_token=read_pack['review_token'], decision='uncertain',
+        actor=_ACTOR, reason=_REASON, plot_review=verdict,
+        knowledge_links={'scope_sha256': read_pack['knowledge_links']['scope']['scope_sha256'],
+                         'actor': _ACTOR, 'reason': _REASON, 'decisions': []}).model_dump(mode='json')
+    request = _request_wrapper(current, waiting_on, {
+        'kind': 'approval', 'surface': 'stage2_blueprint_review', 'payload': payload})
+    return [_option(
+        'approval:stage2_blueprint_review', request,
+        editable_fields=['action.payload.decision/reason/owner/chapter_ordinals',
+                         'action.payload.plot_review', 'action.payload.knowledge_links.reason/decisions'],
+        binding_fields=['schema', 'surface_seal', 'waiting_on', 'action.kind', 'action.surface',
+                        'action.payload.node/actor/review_token/scope/review',
+                        'action.payload.knowledge_links.scope_sha256/actor'],
+        allowed_values={
+            'decision': ['accept', 'rework', 'uncertain', 'stop'],
+            'owner': ['stage2.characters', 'stage2.global', 'stage2.blueprint'],
+            'chapter_ordinals': [row['chapter_ordinal'] for row in read_pack['material']['sources']],
+            'plot_review': PlotReviewResponse.model_json_schema(),
+            'purpose': '按五个维度检查整个范围，只登记实际问题。Blueprint 返修须有原文证据；'
+                       '普通分场属于 Stage4，不派修 Stage2。不确定保持 unver，不能自动重购。'})]
+
+
+def _refinement_options(current, waiting_on, pack, bind):
+    value = pack.get('_refinement_catalog')
+    if value is None:
+        return []  # 已冻结旧运输包不追加当时未下发的动作。
+    catalog = BlueprintRefinementCatalog.model_validate(value)
+    payload = BlueprintRefinementRequest(
+        origin=catalog.origin, review_token=catalog.review_token, actor=_ACTOR,
+        chapter_ordinal=min(catalog.subjects_by_chapter), dimension='completeness',
+        subject_refs=['chapter'], reason=_REASON).model_dump(mode='json')
+    return [_option(
+        'approval:blueprint_refinement',
+        _request_wrapper(current, waiting_on, {
+            'kind': 'approval', 'surface': 'blueprint_refinement', 'payload': payload}),
+        editable_fields=['action.payload.chapter_ordinal/dimension/subject_refs/reason'],
+        binding_fields=bind + ['action.surface', 'action.payload.origin/actor/review_token'],
+        allowed_values={
+            'subjects_by_chapter': {str(key): refs for key, refs in catalog.subjects_by_chapter.items()},
+            'beat_aliases_by_chapter': ({
+                str(row.output_ordinal): sorted(beat.alias for beat in row.subject.blind_truth.beats)
+                for row in DesignReviewTemplate.model_validate(pack['_design_template']).chapters}
+                if catalog.origin == 'design' else {}),
+            'purpose': (
+                '仅转交疑似漏抽、错抽、错误归因或必要知识/状态/依赖边界缺失。'
+                '普通换场、节奏、分段表现和既有端点绑定留在 Stage4；不得借此新增剧情。'
+                '本动作只保存待核查问题，不购买抽取，不授权上游修订。'
+                '章级 Commander 必须对照原文确认或撤销；A 没有读过原文，不能宣称已核实。'
+                'subject_refs 只选当前章目录；没有可引用主体时选 chapter。'),
+        })]
+
+
+def _submission_options(pack: dict[str, Any], current: OperatorNext,
+                        waiting_on: str) -> list[dict[str, Any]]:
+    if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
+        return _blueprint_submission_options(pack, current, waiting_on)
     if waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON:
         return _terminal_review_options(
             _registered_submission_options(pack, current, waiting_on), current, waiting_on)
-    blueprint = waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW
-    node = 'stage2.blueprint' if blueprint else 'stage2.global'
-    surface = 'stage2_blueprint_review' if blueprint else 'stage2_global_review'
-    read_pack = pack['blueprint'] if blueprint else pack['global']
+    read_pack = pack['global']
     payload = Stage2NodeReviewRequest(
-        node=node, review_token=read_pack['review_token'], decision='uncertain',
+        node='stage2.global', review_token=read_pack['review_token'], decision='uncertain',
         actor=_ACTOR, reason=_REASON).model_dump(mode='json')
     coverage = read_pack.get('review_coverage')
     if not isinstance(coverage, dict):
-        raise ReviewerTaskError('Stage2 工作包缺当前义务覆盖面')
-    payload['review'] = {
-        'scope_sha256': coverage['scope']['scope_sha256'],
-        'default_decision': 'uncertain', 'exceptions': [],
-    }
-    if blueprint:
-        payload['knowledge_links'] = {
-            'scope_sha256': read_pack['knowledge_links']['scope']['scope_sha256'],
-            'actor': _ACTOR, 'reason': _REASON, 'decisions': [],
-        }
+        raise ReviewerTaskError('Global 工作包缺当前义务覆盖面')
+    payload['review'] = {'scope_sha256': coverage['scope']['scope_sha256'],
+                         'default_decision': 'uncertain', 'exceptions': []}
     request = _request_wrapper(current, waiting_on, {
-        'kind': 'approval', 'surface': surface, 'payload': payload})
+        'kind': 'approval', 'surface': 'stage2_global_review', 'payload': payload})
     control = _option(
-        f'approval:{surface}', request,
+        'approval:stage2_global_review', request,
         editable_fields=['action.payload.decision/reason/owner/chapter_ordinals',
-                         'action.payload.review.default_decision/exceptions',
-                         *(['action.payload.knowledge_links.reason/decisions'] if blueprint else [])],
-        binding_fields=['schema', 'surface_seal', 'waiting_on', 'action.kind',
-                        'action.surface', 'action.payload.node/actor/review_token'],
-        allowed_values={
-            'decision': ['accept', 'rework', 'uncertain', 'stop'],
-            'owner': (['stage2.characters', 'stage2.global', 'stage2.blueprint']
-                      if blueprint else ['stage2.characters', 'stage2.global']),
-            'chapter_ordinals': ([row['chapter_ordinal'] for row in read_pack['chapters']]
-                                 if blueprint else []),
-            'purpose': 'accept 只确认已经核实的当前产物，Blueprint 须补全待审知识关联；确定的大范围生产错误走定向返工，'
-                       '未知保持 uncertain，停止使用 stop。局部补丁走同包 producer option。',
-        })
-    if blueprint:
-        edit = dict(pack['_blueprint_edit_template'])
-        edit.pop('_schema_version', None)
-        edit.update(actor=_ACTOR, reason=_REASON, post_edit_accept=False,
-                    expected_cross_review_token=read_pack['review_token'])
-        patch_request = _request_wrapper(current, waiting_on, {
-            'kind': 'node', 'node': node, 'flags': ['--apply-edit', '@reviewer-input'],
-            'input_payload': edit})
-        patch = _option(
-            'node:stage2.blueprint.apply-edit', patch_request,
-            editable_fields=['action.input_payload.reason', 'action.input_payload.chapters'],
-            binding_fields=['schema', 'surface_seal', 'waiting_on', 'action.kind',
-                            'action.node', 'action.flags', 'action.input_payload.actor/review_token',
-                            'action.input_payload.expected_cross_review_token/post_edit_accept'],
-            allowed_values={'schema': BlueprintRelationEdit.model_json_schema(),
-                            'purpose': '只保留要改的章节；fact_patches/beat_patches 仅替换已有ID，'
-                                       '完整关系集合可订正；修后按变化义务复审，补丁不替代 typed 接受。'})
-        return [control, patch]
+                         'action.payload.review.default_decision/exceptions'],
+        binding_fields=['schema', 'surface_seal', 'waiting_on', 'action.kind', 'action.surface',
+                        'action.payload.node/actor/review_token/scope/plot_review'],
+        allowed_values={'decision': ['accept', 'rework', 'uncertain', 'stop'],
+                        'owner': ['stage2.characters', 'stage2.global'], 'chapter_ordinals': [],
+                        'purpose': '只接受已核实的 Global 主体；证据不足保持 uncertain。'})
     unresolved = any(
         row.get('current_state') in {'pending', 'FAIL'} or (
             row.get('current_state') == 'UNVER' and not _stage2_row_is_quarantined(row))
@@ -2398,29 +2431,6 @@ def _registered_submission_options(
         request = _request_wrapper(current, waiting_on, {
             'kind': 'approval', 'surface': 'design', 'payload': payload,
         })
-        relation_effects = {
-            'story_before': {
-                'kind': 'story_before', 'enforcement': 'hard',
-                'before_alias': '<workpack alias>',
-                'after_alias': '<workpack alias>',
-            },
-            'response_to': {
-                'kind': 'response_to', 'enforcement': 'hard',
-                'stimulus_alias': '<workpack alias>',
-                'response_alias': '<workpack alias>',
-            },
-            'same_scene': {
-                'kind': 'same_scene', 'enforcement': 'hard',
-                'left_alias': '<workpack alias; 必须小于 right>',
-                'right_alias': '<workpack alias>',
-            },
-            'observes': {
-                'kind': 'observes', 'enforcement': 'hard',
-                'observer_alias': '<workpack participant alias>',
-                'observed_alias': '<workpack fact alias>',
-                'observation_alias': '<workpack fact alias>',
-            },
-        }
         design_option = _option(
             'approval:design', request,
             editable_fields=[
@@ -2461,9 +2471,8 @@ def _registered_submission_options(
                     }
                     for code in DESIGN_REPAIR_CODES
                 },
-                'narrative_relation.effect_by_kind': relation_effects,
                 'resolution_requirement': (
-                    '只有交叉阅读后能指出独立、具体的 scene/fact/goal 结构损害时，'
+                    '只有交叉阅读后能指出独立、具体的 场景/节点/目标 结构损害时，'
                     '才把它闭合成 typed request_repair/request_replan；INFO、metric、'
                     'UNVER、binding_concern 或声明—实算差异本身都没有付费修订权。'
                     '若当前 B 拒绝仅由这些只读材料支撑，选择同包 stop option，'
@@ -2479,16 +2488,17 @@ def _registered_submission_options(
             },
         )
         if waiting_on != queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
-            return [design_option]
+            return [design_option, *_refinement_options(current, waiting_on, pack, bind)]
         stop_request = _request_wrapper(current, waiting_on, {
             'kind': 'stop',
             'reason': (
                 '<交叉阅读当前 B 决定、逐章 coverage 与 A 场景后，明确说明为何拒绝'
                 '仅由 INFO/metric/UNVER/binding_concern 等只读材料支撑，且没有可指向'
-                ' scene/fact/goal 结构损害；该动作只安全停机，不改写 B、也不铸 A 修订票>'),
+                ' 场景/节点/目标 结构损害；该动作只安全停机，不改写 B、也不铸 A 修订票>'),
         })
         return [
             design_option,
+            *_refinement_options(current, waiting_on, pack, bind),
             _option(
                 'stop:stage4-structure-replan', stop_request,
                 editable_fields=['action.reason'],
@@ -2533,7 +2543,7 @@ def _registered_submission_options(
             allowed_values={
                 'chapters[].decision': list(STRUCTURE_APPROVAL_DECISIONS),
             },
-        )]
+        ), *_refinement_options(current, waiting_on, pack, bind)]
 
     if waiting_on == queue.WAITING_ON_WRITING_APPROVAL:
         payload = WritingApprovalRequest.model_validate(
@@ -2808,33 +2818,21 @@ def _stage2_business_sha256(
 
 
 def _blueprint_progress_identity(pack: Mapping[str, Any]) -> dict[str, Any]:
-    """Blueprint 的进展来自本节点义务，不重读或复用 Global 的问题分母。"""
-    from contracts.schema.api import BlueprintReviewBinding
-    from contracts.schema.common import Sha256
-    from contracts.schema.stage2_review import Stage2ReviewCoverage
-
-    blueprint = pack.get('blueprint')
-    if not isinstance(blueprint, Mapping):
-        raise ReviewerTaskError('Blueprint progress identity 缺当前工作包')
+    """进展按范围和实际问题计数，不创建逐节点通过义务。"""
+    from contracts.schema.api import BlueprintReviewWorkpack
     try:
-        binding = BlueprintReviewBinding.model_validate(blueprint.get('binding'))
-        coverage = Stage2ReviewCoverage.model_validate(blueprint.get('review_coverage'))
-        source = TypeAdapter(Sha256).validate_python(blueprint.get('subject_sha256'))
-        workpack = TypeAdapter(Sha256).validate_python(blueprint.get('binding_sha256'))
+        blueprint = BlueprintReviewWorkpack.model_validate(pack.get('blueprint'))
     except ValidationError as exc:
-        raise ReviewerTaskError('Blueprint progress identity 的绑定或义务不完整') from exc
-    if coverage.scope.node != 'stage2.blueprint':
-        raise ReviewerTaskError('Blueprint progress identity 引用了其他节点的审阅义务')
+        raise ReviewerTaskError('Blueprint progress identity 缺完整范围绑定') from exc
     return {
-        'source_sha256': source,
-        'main_text_sha256': binding.main_text_artifact_sha256,
-        'workpack_sha256': workpack,
+        'source_sha256': blueprint.subject_sha256,
+        'main_text_sha256': _canonical_json_sha256(blueprint.material['sources']),
+        'workpack_sha256': blueprint.binding_sha256,
         'progress_sha256': _canonical_json_sha256({
-            'scope_sha256': coverage.scope.scope_sha256,
-            'pending_obligation_ids': coverage.pending_obligation_ids,
-            'prior_problems': [row.model_dump(mode='json') for row in coverage.prior_problems],
-        }),
-        'blocker_count': len(coverage.pending_obligation_ids),
+            'scope': blueprint.scope, 'issues': blueprint.material['issues'],
+            'progress': blueprint.progress.model_dump(mode='json')}),
+        'blocker_count': sum(row.state != 'accepted' for row in blueprint.progress.scopes)
+                         + blueprint.progress.unresolved_issues,
     }
 
 
@@ -3149,7 +3147,7 @@ def build_task(
             'request_replan 决定与当前 Stage4A design 工作包交叉阅读。coverage 仍可由'
             '人工独立发现工作包未预登记的真实语义缺陷；但 INFO、metric、UNVER、'
             'binding_concern、声明—实算差异以及 allowed_actions=[] 的行都只有阅读定位权，'
-            '不能单独制造付费返工。只有能指出独立、具体的 scene/fact/goal 结构损害时，'
+            '不能单独制造付费返工。只有能指出独立、具体的 场景/节点/目标 结构损害时，'
             '才选择 approval:design，并把该缺陷闭合成模板发布的 typed constraint；不得把'
             '自由文本或只读指标改写成 Executor 指令。若交叉阅读后确认 B 拒绝仅由这些'
             '只读材料支撑、没有可指向的结构损害，选择 stop:stage4-structure-replan：'
@@ -3212,9 +3210,9 @@ review.default_decision 只覆盖本轮待审义务。已核实项可填 accept�
 例外包含 obligation_id、decision 和具体 reason；整体 decision/owner 与例外及派修范围一致。
 继承由后端验证，不能重新编写原理由；任何未知不能借默认 accept 或删行消失。
 Blueprint 的 knowledge_links.pending 列出本轮关联义务，inherited_count 是已核验的继承数量。
-仅对 pending 返回关联决定：at_facts 选择当前 candidate_fact_refs 内能支持
+仅对 pending 返回关联决定：at_beats 选择当前 candidate_subject_refs 内能支持
 该时点的事实，并以 trigger_fact_ref 明确选择其中一条 land 事实作为触发时点，不能
-从多条支持事实猜测最早或最晚揭示。at_entry 仅限明确开放的 entry_fact_refs，表示
+从多条支持节点猜测最早或最晚揭示。at_entry 仅限明确开放的 entry_subject_refs，表示
 世界内在章首已成立。时代背景与世界观也分别核对首次可下发的设定时点。
 读者揭示、人物知情、世界生效、伏笔表现不能互相推导。伏笔只关联本章允许表现的事实，
 不得把秘密答案当作埋点内容。证据不足用 unresolved，并保持 uncertain 或派修相应 owner。
@@ -3228,6 +3226,12 @@ materials 已包含裁决所需的全部材料；Stage2 delta 包只在仍有 wh
 携一次完整正文，current_reason_ref / subject_ref / evidence_ref 分别指向同包去重表。
 """
         if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON else '')
+    if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
+        from novel.stages.stage2.plot_prompts import BLUEPRINT_REVIEW_SYSTEM
+        stage2_instruction = BLUEPRINT_REVIEW_SYSTEM + '\n' + (
+            '知识关联只从 candidate_subject_refs 或开放的 entry_subject_refs 选择；'
+            'at_beats 必须指定 trigger_beat_ref。只提交 pending 事件，继承不改写原决定。'
+            'scope、token 和摘要必须原样保留。五维 verdict 与动作、理由必须一致。')
     instructions = f"""你是本轮唯一 Commander/Reviewer，只审阅下面这份不可变工作包。
 先逐项审阅，再做一次跨项复核；两遍完成后只提交一个 typed 判断。你不是流水线调度器：
 不得启动任何小说节点，不得启动 Executor，不得维护 Markdown 报告，不得调用遥测，
@@ -3293,6 +3297,8 @@ allowed_values 的 shapes/示例只解释字段格式，不是本书的历史义
 """
     return ReviewerTask(
         waiting_on=waiting_on, surface_seal=current.surface_seal,
+        work_unit_scope=(envelope['materials']['blueprint']['scope']
+                         if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW else None),
         business_sha256=business_sha256,
         request_path=request, prompt=prompt,
         submission_options=tuple(options),
@@ -3665,8 +3671,9 @@ def _validate_approval_binding(
             f'{surface} approval payload 字段必须逐字保留工作包骨架')
 
     immutable: dict[str, tuple[str, ...]] = {
-        'stage2_global_review': ('node', 'actor', 'review_token'),
-        'stage2_blueprint_review': ('node', 'actor', 'review_token'),
+        'stage2_global_review': ('node', 'actor', 'review_token', 'scope', 'plot_review'),
+        'stage2_blueprint_review': ('node', 'actor', 'review_token', 'scope', 'review'),
+        'blueprint_refinement': ('actor', 'origin', 'review_token'),
         'design': ('actor', 'reviewer_kind', 'review_run_id', 'review_token'),
         'structure': ('actor', 'review_token'),
         'writing': ('actor', 'review_token'),
@@ -3680,7 +3687,7 @@ def _validate_approval_binding(
             raise ReviewerTaskError(
                 f'{surface} approval payload.{field} 是 immutable binding，不得修改')
 
-    if surface in {'stage2_global_review', 'stage2_blueprint_review'}:
+    if surface == 'stage2_global_review':
         got, frozen = submitted.get('review'), expected.get('review')
         if (not isinstance(got, dict) or not isinstance(frozen, dict)
                 or got.get('scope_sha256') != frozen.get('scope_sha256')):
@@ -4233,19 +4240,18 @@ def load_action(
             if not isinstance(template, dict):
                 raise ReviewerTaskError('Blueprint patch 缺不可变输入模板')
             try:
-                edit = BlueprintRelationEdit.model_validate(input_payload)
+                edit = PlotEdit.model_validate(input_payload)
             except ValidationError as exc:
                 raise ReviewerTaskError(_typed_validation_reason('Blueprint patch 不符合 typed 契约', exc)) from exc
-            for key in ('actor', 'review_token', 'review_contract_version',
-                        'post_edit_accept', 'expected_cross_review_token'):
+            for key in ('actor', 'review_token'):
                 if getattr(edit, key) != template.get(key):
                     raise ReviewerTaskError(f'Blueprint patch 不得修改绑定字段 {key}')
-            allowed = {row['chapter_ordinal'] for row in template['chapters']}
-            if not {row.chapter_ordinal for row in edit.chapters} <= allowed:
+            allowed = {row['chapter']['chapter_ordinal'] for row in template['chapters']}
+            if not {row.chapter.chapter_ordinal for row in edit.chapters} <= allowed:
                 raise ReviewerTaskError('Blueprint patch 章范围越出当前工作包')
             # producer 用字段缺席表示保留原值；不能在运输时给稀疏补丁补 null。
             input_payload = encode_artifact(
-                STAGE2_BLUEPRINT_RELATION_EDIT, edit.model_dump(mode='json', exclude_unset=True))
+                STAGE2_BLUEPRINT_EDIT, edit.model_dump(mode='json', exclude_unset=True))
         elif node == 'stage5.review':
             allowed_stage5_flags = {
                 ('--retain-pretrim-batch', '@reviewer-input'),
@@ -4299,6 +4305,7 @@ def load_action(
             raise ReviewerTaskError(
                 f'blocker={waiting_on!r} 不允许 approval surface={surface!r}')
         models = {
+            'blueprint_refinement': BlueprintRefinementRequest,
             'stage2_global_review': Stage2NodeReviewRequest,
             'stage2_blueprint_review': Stage2NodeReviewRequest,
             'design': DesignReviewRequest,
@@ -4322,6 +4329,13 @@ def load_action(
         expected_action = _approval_submission_template(
             body, submission_options)
         _validate_approval_binding(surface, payload, expected_action)
+        if surface == 'blueprint_refinement':
+            options = [option for option in submission_options
+                       if option.get('id') == 'approval:blueprint_refinement']
+            catalog = options[0]['allowed_values']['subjects_by_chapter']
+            allowed_refs = catalog.get(str(payload['chapter_ordinal']), [])
+            if not set(payload['subject_refs']) <= set(allowed_refs):
+                raise ReviewerTaskError('疑似上游问题引用越出本章已下发主体目录')
         if (
             surface == 'design'
             and waiting_on in {
@@ -4336,7 +4350,7 @@ def load_action(
             if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
                 raise ReviewerTaskError(
                     'Stage4 Structure resolution 不能原样提交 all-accept；'
-                    '有具体 scene/fact/goal 结构损害时才提交 typed request_repair/'
+                    '有具体 场景/节点/目标 结构损害时才提交 typed request_repair/'
                     'request_replan，否则选择同包 stop:stage4-structure-replan，'
                     '不得从 INFO/metric/UNVER/read-only 材料发明付费动作')
             raise ReviewerTaskError(

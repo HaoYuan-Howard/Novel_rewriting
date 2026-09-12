@@ -940,7 +940,7 @@ def _blocked_why(
     if waiting_on == WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
         return (
             'Global 已由自己的 Commander 接受；现在由独立 Blueprint Commander '
-            '结合 Global 与完整正文交叉审阅逐章蓝图，可局部订正、定向返工或停止。'
+            '结合 Global 逐章核对正文与蓝图，章审完成后进行跨章复核，可局部订正、定向返工或停止。'
             '两份当前 typed 接受齐备后零模型收口 Stage2；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE2_REVIEW:

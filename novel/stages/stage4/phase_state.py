@@ -14,7 +14,7 @@ from __future__ import annotations
 from contracts.artifacts import STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING
 from contracts.schema.stage4 import BlindCandidate, EvidenceBinding
 from novel.errors import NovelError
-from novel.stages.stage4.blind import BlindPlanError, candidate_subject_sha256
+from novel.stages.stage4.plot_design import BlindPlanError, candidate_subject_sha256
 from novel.store import ArtifactStore
 
 

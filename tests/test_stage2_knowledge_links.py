@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import re
 
 import pytest
 
@@ -14,7 +13,7 @@ from contracts.artifacts import (
 from contracts.schema.api import Stage2NodeReviewRequest
 from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.knowledge_links import (
-    KnowledgeAtFacts, KnowledgeLinkDecision, KnowledgeLinkHistory, KnowledgeLinkSubmission,
+    KnowledgeAtBeats, KnowledgeLinkDecision, KnowledgeLinkHistory, KnowledgeLinkSubmission,
 )
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints
@@ -22,17 +21,18 @@ from novel.errors import HumanEditProtected, ProvenanceRefused
 from novel.orchestrator import approvals, state
 from novel.stages.stage2 import knowledge_links as links
 from novel.store import ArtifactStore
-from tests.test_stage2 import blueprints, main_text
+from tests.test_stage2 import main_text
+from tests.stage2_fixtures import plot_blueprints as blueprints
 from tests.test_stage2_grounding import character_preparation, pair  # noqa: F401
 
 
-def _scope(knowledge, bp=None, *, digest='b' * 64):
+def _scope(knowledge, bp=None, *, digest='b' * 64, source=None):
     candidate = copy.deepcopy(bp or blueprints())
     candidate['_provenance'].update({key: value for key, value in
         knowledge.provenance.model_dump(mode='json').items()
         if key in {'code', 'root_clean_sha1', 'inputs', 'prompts', 'model', 'usage'}})
     return links.build_scope(
-        MainText.model_validate(main_text()), knowledge,
+        MainText.model_validate(main_text() if source is None else source), knowledge,
         ChapterBlueprints.model_validate(candidate),
         main_sha256='a' * 64, knowledge_sha256=digest, blueprint_sha256='c' * 64)
 
@@ -44,8 +44,8 @@ def _submission(scope, decisions=None):
         reason='合成关联边界测试', decisions=decisions if decisions is not None else [
             KnowledgeLinkDecision(obligation_id=row.obligation_id,
                 expected_subject_sha256=row.subject_sha256,
-                resolution=KnowledgeAtFacts(kind='at_facts', fact_refs=[row.candidate_fact_refs[0]],
-                                            trigger_fact_ref=row.candidate_fact_refs[0]))
+                resolution=KnowledgeAtBeats(kind='at_beats', subject_refs=[row.candidate_subject_refs[0]],
+                                            trigger_beat_ref=row.candidate_subject_refs[0].ref))
             for row in scope.obligations])
 
 
@@ -62,8 +62,8 @@ def test_scope_separates_world_knowledge_reader_reveal_and_setup(pair):
             'world_rule', 'world_rule_reveal', 'relation', 'relation_visibility'} <= kinds
     for row in scope.obligations:
         if row.kind in {'secret_reveal', 'secret_setup', 'world_rule_reveal', 'relation_visibility'}:
-            assert not row.entry_fact_refs
-    assert any(row.entry_fact_refs for row in scope.obligations if row.kind == 'knowledge_event')
+            assert not row.entry_subject_refs
+    assert any(row.entry_subject_refs for row in scope.obligations if row.kind == 'knowledge_event')
 
 
 @pytest.mark.parametrize('change', ['claim', 'hook_supported'])
@@ -81,7 +81,7 @@ def test_unrelated_knowledge_change_inherits_exact_obligations(pair, change):
             'hook_evidence': {'source': {'text': '钩子', 'start': 0, 'end': 2}},
         })
     current = _scope(changed, digest='e' * 64)
-    assert current.scope_sha256 != old.scope_sha256
+    assert current.scope_sha256 == old.scope_sha256
     assert current.obligations == old.obligations
     assert links.review(current, _history(old)).pending_obligation_ids == []
 
@@ -91,15 +91,15 @@ def test_current_candidate_bodies_evidence_and_ambiguity_invalidate_links(pair, 
     _registry, knowledge = pair
     old = _scope(knowledge)
     candidate = copy.deepcopy(blueprints())
-    fact = candidate['blueprints'][1]['fact_atoms'][0]
+    fact = candidate['blueprints'][1]['beats'][0]
     if change == 'claim':
-        fact['claim'] += '候选业务改变'
+        fact['content'] += '候选业务改变'
     elif change == 'evidence':
-        fact['source']['text'] += '证据改变'
+        fact['evidence_refs'] += candidate['blueprints'][1]['beats'][1]['evidence_refs']
     else:
         duplicate = copy.deepcopy(fact)
-        duplicate['fact_id'] = re.sub(r'\d+$', '999', duplicate['fact_id'])
-        candidate['blueprints'][1]['fact_atoms'].append(duplicate)
+        duplicate['beat_id'] = 'b02_999'
+        candidate['blueprints'][1]['beats'].append(duplicate)
     current = _scope(knowledge, candidate)
     pending = links.review(current, _history(old)).pending_obligation_ids
     assert pending
@@ -107,8 +107,8 @@ def test_current_candidate_bodies_evidence_and_ambiguity_invalidate_links(pair, 
         if row.chapter_ordinal == 2:
             assert row.obligation_id in pending
     unaffected = [row for row in old.obligations
-                  if row.chapter_ordinal == 3 and all(e.chapter_ordinal == 3 for e in row.evidence)]
-    assert all(row.obligation_id not in pending for row in unaffected)
+                  if row.kind == 'world_rule_reveal' and row.chapter_ordinal == 1]
+    assert unaffected and all(row.obligation_id not in pending for row in unaffected)
 
 
 def test_latest_unresolved_cannot_resurrect_prior_accept(pair):
@@ -125,43 +125,50 @@ def test_latest_unresolved_cannot_resurrect_prior_accept(pair):
         links.require_complete(scope, history)
 
 
+def test_reveal_only_foreign_proof_does_not_consume_entire_foreign_chapter(pair):
+    from novel.stages.stage2.plot_compile import source_digest
+    _registry, knowledge = pair
+    bp, source = blueprints(), main_text()
+    before = _scope(knowledge, bp, source=source)
+    source[0]['text'] += '\n\n院外微风吹过，无人经过。'
+    bp['blueprints'][0]['source_sha256'] = source_digest(source[0]['text'])
+    after = _scope(knowledge, bp, source=source)
+    reveal = next(r for r in before.obligations if r.kind == 'secret_reveal')
+    assert reveal.chapter_ordinal == 2 and knowledge.canon.secrets[0].fact_evidence.chapter_ordinal == 1
+    updated = next(r for r in after.obligations if r.obligation_id == reveal.obligation_id)
+    assert updated == reveal
+    assert reveal.obligation_id not in links.review(after, _history(before)).pending_obligation_ids
+    # 对外章开放了完整候选的事件仍应失效，不能把材料选择和单独证据混为一谈。
+    assert links.review(after, _history(before)).pending_obligation_ids
+
+
 def test_reveal_cannot_be_silently_promoted_to_chapter_entry(pair):
     _registry, knowledge = pair
     scope = _scope(knowledge)
     row = next(row for row in scope.obligations if row.kind == 'secret_reveal')
     submission = _submission(scope, [KnowledgeLinkDecision(
         obligation_id=row.obligation_id, expected_subject_sha256=row.subject_sha256,
-        resolution={'kind': 'at_entry', 'fact_refs': [row.candidate_fact_refs[0]]})])
+        resolution={'kind': 'at_entry', 'subject_refs': [row.candidate_subject_refs[0]]})])
     with pytest.raises(HumanEditProtected, match='时点'):
         links.validate_submission(scope, submission)
 
 
 @pytest.fixture
 def produced(tmp_path, monkeypatch):
-    from tests.test_stage2_knowledge_flow import _prepared, _run
-    from tests.test_stage2_generation import (
-        _accept_fixture_global, _client, _ctx, _respond_blueprints, _response_blueprints,
-    )
-    from novel.stages.stage2 import extract
-
-    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
-    ctx, _registry = _prepared(tmp_path)
-    _run(ctx)
-    _accept_fixture_global(ctx)
-    bp_ctx = _ctx(ctx.novel_dir, 'stage2.blueprint')
-    client, transport = _client(bp_ctx, lambda req, _index: _respond_blueprints(req, _response_blueprints()))
-    extract.run_blueprint(bp_ctx, client)
-    return bp_ctx, transport
+    from tests.test_plot_review_runtime import prepare_complete_book
+    from tests.test_plot_producer import generate_plot
+    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'plot-blueprint-v1')
+    book = prepare_complete_book(tmp_path)
+    return generate_plot(book)
 
 
 def _accept_current(ctx):
     from novel.views.stage2 import blueprint_review_workpack
-    pack = blueprint_review_workpack(ctx.novel_dir.parent, ctx.sid)
-    submission = _submission(pack.knowledge_links.scope)
-    request = Stage2NodeReviewRequest(
-        node='stage2.blueprint', review_token=pack.review_token, decision='accept',
-        actor=submission.actor, reason=submission.reason, knowledge_links=submission)
-    return approvals.approve_stage2_review(ctx.novel_dir.parent, ctx.sid, request), pack
+    from tests.test_plot_review_runtime import request
+    for scope in ('chapter:1', 'chapter:2', 'chapter:3', 'cross_chapter'):
+        pack = blueprint_review_workpack(ctx.novel_dir.parent, ctx.sid, scope=scope)
+        result = approvals.approve_stage2_review(ctx.novel_dir.parent, ctx.sid, request(pack))
+    return result, pack
 
 
 def test_real_accept_is_durable_before_independent_free_materialization(produced, monkeypatch):
@@ -227,38 +234,39 @@ def test_missing_typed_association_source_is_unknown_even_with_formal_file(produ
 def test_blueprint_http_persists_typed_association_before_free_commit_and_survives_restart(produced):
     from fastapi.testclient import TestClient
     from novel.api.app import UI_HEADER, create_app
+    from contracts.schema.api import BlueprintReviewWorkpack
+    from tests.test_plot_review_runtime import request
     ctx, transport = produced
     base, sid = ctx.novel_dir.parent, ctx.sid
     endpoint = f'/api/novels/{sid}/stage2/blueprint-review-workpack'
     with TestClient(create_app(str(base))) as client:
         client.headers[UI_HEADER] = '1'
-        response = client.get(endpoint)
-        assert response.status_code == 200, response.text
-        from contracts.schema.api import BlueprintReviewWorkpack
-        pack = BlueprintReviewWorkpack.model_validate(response.json())
-        submission = _submission(pack.knowledge_links.scope)
-        request = Stage2NodeReviewRequest(node='stage2.blueprint', review_token=pack.review_token,
-            actor=submission.actor, reason=submission.reason, decision='accept', knowledge_links=submission)
-        result = client.post(f'/api/novels/{sid}/approvals/stage2-review',
-                             json=request.model_dump(mode='json'))
-        assert result.status_code == 200, result.text
+        for scope in ('chapter:1', 'chapter:2', 'chapter:3', 'cross_chapter'):
+            response = client.get(endpoint, params={'scope': scope})
+            assert response.status_code == 200, response.text
+            pack = BlueprintReviewWorkpack.model_validate(response.json())
+            submitted = request(pack)
+            result = client.post(f'/api/novels/{sid}/approvals/stage2-review',
+                                 json=submitted.model_dump(mode='json'))
+            assert result.status_code == 200, result.text
         assert result.json()['stage2_reviews']['stage2.blueprint']['state'] == 'accepted'
         assert not result.json()['gate']['s2']
         assert not ArtifactStore(ctx).exists(STAGE2_KNOWLEDGE_LINKS)
     with TestClient(create_app(str(base))) as restarted:
         restarted.headers[UI_HEADER] = '1'
-        current = restarted.get(endpoint)
+        current = restarted.get(endpoint, params={'scope': 'cross_chapter'})
         assert current.status_code == 200, current.text
         after = BlueprintReviewWorkpack.model_validate(current.json())
         assert after.review_token == pack.review_token
         assert after.knowledge_links.pending_obligation_ids == []
         assert len(after.knowledge_links.inherited) == len(pack.knowledge_links.scope.obligations)
         history, _digest = approvals.current_knowledge_link_decisions(base, sid)
-        assert history[-1].submission == submission
+        assert history[-1].submission == submitted.knowledge_links
 
 
-def test_supporting_facts_do_not_implicitly_choose_the_disclosure_trigger():
-    with pytest.raises(ValueError, match='trigger_fact_ref'):
-        KnowledgeAtFacts.model_validate({'kind': 'at_facts', 'fact_refs': ['f01_001', 'f01_002']})
-    with pytest.raises(ValueError, match='支持事实'):
-        KnowledgeAtFacts(kind='at_facts', fact_refs=['f01_001'], trigger_fact_ref='f01_002')
+def test_supporting_beats_do_not_implicitly_choose_the_disclosure_trigger():
+    refs = [{'kind': 'beat', 'ref': 'b01_01'}, {'kind': 'beat', 'ref': 'b01_02'}]
+    with pytest.raises(ValueError, match='trigger_beat_ref'):
+        KnowledgeAtBeats.model_validate({'kind': 'at_beats', 'subject_refs': refs})
+    with pytest.raises(ValueError, match='支持主体'):
+        KnowledgeAtBeats(kind='at_beats', subject_refs=refs[:1], trigger_beat_ref='b01_02')

@@ -59,45 +59,6 @@ def global_catalog(pack: Mapping[str, Any]) -> list[Stage2ReviewObligation]:
     return catalog
 
 
-def blueprint_catalog(pack: Any, blueprints: Any) -> list[Stage2ReviewObligation]:
-    from novel.stages.stage2.review_delta import snapshot
-
-    cross = snapshot(pack)
-    global_rows = {global_key(row): row for row in pack.global_review['items']}
-    sources = {row.chapter_ordinal: row for row in pack.chapters}
-    catalog = []
-    for subject in blueprints.model_dump(mode='json', by_alias=True)['blueprints']:
-        ordinal = subject['chapter_ordinal']
-        scope = cross.chapters[ordinal]
-        refs = sorted(key for key, row in cross.global_items.items()
-                      if not row.collection_summary and (
-                          row.whole_book or ordinal in row.evidence_chapters
-                          or set(row.char_ids) & scope.char_references.keys()))
-        source = sources[ordinal].coverage.model_dump(mode='json')
-        # SHA 直接消费正式 Blueprint，取证坐标不能因展示层省略而脱离接受身份。
-        def add(key: str, kind: str, material: Any, *, context: list[str]) -> None:
-            catalog.append(Stage2ReviewObligation(
-                obligation_id=key, subject_sha256=sha({
-                    'contract': pack.review_contract_version, 'material': material}),
-                owner='stage2.blueprint', chapter_ordinals=[ordinal],
-                subject_path=f'chapters.{ordinal}', kind=kind, context_refs=context))
-        structure_key = f'structure:{ordinal}'
-        for fact in subject['fact_atoms']:
-            add(f"fact:{fact['fact_id']}", 'fact', {
-                'fact': fact, 'source': source}, context=[structure_key])
-        add(structure_key, 'structure', {
-            'chapter': subject, 'source': source,
-            'attention_rules': sources[ordinal].attention_rules,
-        }, context=[])
-        add(f'consistency:{ordinal}', 'consistency', {
-            'chapter': subject, 'source': source,
-            'global_items': {key: {name: value for name, value in global_rows[key].items()
-                                  if name != 'current_reason'}
-                             for key in refs},
-            'links': [row.model_dump(mode='json') for row in pack.knowledge_links.scope.obligations
-                      if row.chapter_ordinal == ordinal],
-        }, context=refs)
-    return catalog
 
 
 def _unit(row: Stage2ReviewUnit) -> review_inheritance.DecisionUnit:

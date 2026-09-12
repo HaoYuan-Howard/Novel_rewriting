@@ -148,7 +148,7 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `POST /api/novels/:sid/approvals/reset` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/backfill` | `ApprovalBackfillResult`（按盘面显式补录，不在 GET 时静默发生） | 新 |
 | `GET /api/novels/:sid/reading/:o` | `ReadingView` | 新 |
-| `GET /api/novels/:sid/stage2/blueprint-review-workpack` | `BlueprintReviewWorkpack` | 绑定 current formal/INVALID Blueprint、MainText、完整可见 check 与审阅契约，另携 validation seal 和 opaque review token；异常优先但全章保留，只读、不自动决定 |
+| `GET /api/novels/:sid/stage2/blueprint-review-workpack` | `BlueprintReviewWorkpack` | scope=chapter:N 或 cross_chapter；完整范围原文、剧情及必要依赖各一份，当前 opaque token 与实际问题；只读、不生成接受 |
 | `GET /api/novels/:sid/stage2/global` | `GlobalView` | 新 |
 | `GET /api/novels/:sid/stage2/global-review` | `GlobalReviewView`（含当前完整 subject 重算状态、逐项审计与 `review_token`） | `review_token` 只在 review/grounding/MainText 都 current 时现算，否则 `null`；页面据此决定是否提供 seen.global 确认动作 |
 | `POST /api/novels/:sid/stage2/global-review` | `JobRecord`（请求体 `GlobalReviewDecisionSet` v2：逐项决定，或绑定 source/scope/workpack hash 与正文章全集的 blocking scope + 逐项例外；exit 0 要求 blocking generation-safe：全部 PASS，或仅余显式完整组隔离的 secret/relation/world-rule UNVER） | 新 |
@@ -197,16 +197,14 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 > 的 opaque `review_token` 与 typed rulings；Stage4A 完整章 edit 使用独立 `s4er1_…` token。三者都由
 > 服务端现场重建内部 subject/contract/validation 身份，不共享也不要求调用方搬运多枚 SHA。
 >
-> v2 在外壳增加顶层 `reading`（`kind=stage4_workpack_reading_v1`：`legend`、design 面的
-> `reconstruction_strategy / chapter_weights`、structure 面的 `global_binding_concerns`），并让每个
-> coverage 行携带 `reading`（design 面 `stage4_design_chapter_reading_v1`：章功能/权重/重写要点/
-> `structure_decision`、盲真相 `facts` 表、goal/因果边/关系/入口收束状态与逐场的 alias；structure 面
-> `stage4_structure_chapter_reading_v1`：本章 `facts` 表（id→claim/kind/obligation）、逐场 slot/purpose/
-> role/delivery/transition/budget 与 land/context/turn/entry/exit 的 id、舞台 time_layer/place/present、
-> 材料四组计数与摘录、本章 `structure_metrics`
-> 与 `alignment`、解开 closed_refs 的 `binding_concerns`、`signature_conflict_codes`）。`reading` 只能出现在
-> coverage 行且类型随 `kind`，它不进 subject/token/proof；`metric_only` 只保留一行摘要（`refs=[]`），
-> 完整读数以逐章 reading 承载。渲染落点 `novel/stages/stage4/reading.py`。
+> 当前外壳保持顶层 `reading`，包含 legend、全书策略或必要全局 concerns。
+> coverage 行按类型携完整章材料：Design reading 为 `truth / chapter`，保留 opaque alias；
+> Structure reading 为 `materials / chapter / structure_metrics / binding_concerns /
+> signature_conflict_codes`，包含父节点、全部 deliveries、端点与原文证据闭包。
+> 节点正文只保存一次，场景通过 placement 引用；共享证据不等于重复剧情。
+> `reading` 不进 subject/token/proof，纯渲染变化不使接受过期；材料本身的身份仍由
+> 当前消费投影绑定。`metric_only` 只保留摘要，完整读数由逐章 reading 承载。
+> 渲染落点 `novel/stages/stage4/reading.py`。
 
 > #### Stage6/7 定稿 workpack 把“看到的证据”与 approve 乐观锁绑在一起
 >
@@ -386,8 +384,8 @@ parent/epoch 与 session 只用于关联，不从日志文字或时间接近补�
 | `TrashRestorePlanView` | `wire_version` · `generated_at` · `trash_id` · `sid` · `title` · `original_dirname` · metadata/manifest 三枚 SHA · `plan_token` | book/approval/service run 三面由 manifest 闭合；持锁后再次核 token/CAS，拒绝覆盖 live 位置 |
 | `ApprovalBackfillResult` | `approvals` · `backfilled[]` | `backfilled` 是本次**按正式盘面补录**的 gate id，空数组表示无事可补；界面必须明确这些不是用户逐屏点过的验收记录。该入口不制造 `seen.read/global`，也不因 Stage2 产物齐备越过未审的 s2 |
 | `Stage2GlobalSeenRequest / Stage2FinalReviewRequest` | 前者：`review_token`（`s2gr1_`）+ `actor`；后者：`actor` + `reason` + `global_review_token` + `blueprint_review_token` | 前者记录 `seen.global` 的当前已读主体；已读不授予节点接受。后者只核验已落盘的 Global/BP 两份当前节点接受并补齐 `s0 → s1 → seen.read → seen.global → s2`，经 `close_stage2_accepted` 或 CLI `stage2.blueprint --close-review` 零模型恢复，不产生第四席终审决定 |
-| `Stage2NodeReviewRequest / Stage2NodeReviewDecision / Stage2NodeReviewView` | 请求：`node / review_token / decision / actor / reason / chapter_ordinals / owner`；决定增加 `review_subject_sha256 / review_contract_version / decided_at / review_scope_sha256`；视图：`state / current_decision / history` | Global/BP 分别接受；`decision` 为 accept/rework/uncertain/stop。返工必须指向登记 owner，Blueprint owner 的返工明确章节；Global C 不拥有未生成 Blueprint 的修复权。HTTP/CLI 使用同一 shape；视图 missing/accepted/rework/uncertain/stopped/expired 不混同，未接受不给 paid 许可 |
-| `BlueprintReviewWorkpack / BlueprintSeenRequest` | 工作包：内部 review identity、`stage2-blueprint-review-v7`、opaque validation seal、`bpr4_` review token、全章语义面与 `review_delta`；已读请求：`review_token` | 页面、已读和节点接受均绑定同一份 current workpack；`seen.read` 只证明阅读，不能代替 Blueprint Commander 接受。模型/人工提交前服务端重建并核 token。代码复验与实际可见主体变化分别处理，旧 bpr2/bpr3 token 只读、不接受新提交；delta 接受基线前移不使当前 token 自失效 |
+| `Stage2NodeReviewRequest / Stage2NodeReviewDecision / Stage2NodeReviewView` | 请求：`node / scope / review_token / decision / actor / reason / chapter_ordinals / owner / plot_review / knowledge_links`；Blueprint 决定保存 `plot_record`、请求摘要及内部 subject/contract 身份；视图增加 `plot_progress` | Global 与 Blueprint 独立。Blueprint 使用 `chapter:N / cross_chapter`、五维 verdict、实际问题及其处置；Global 不携 plot_review。返工明确 owner/章节。HTTP/CLI 同一 shape，missing/accepted/rework/uncertain/stopped/expired 分开，未接受不给 paid 许可 |
+| `BlueprintReviewWorkpack / BlueprintSeenRequest` | stage2-plot-scope-review-v1、bpr5_ token、scope、material、dependency_manifest、progress、knowledge_links；已读请求只交 token | seen 仅证明阅读，不替代全章当前接受、独立跨章接受与知识闭合；代码 seal 与语义身份分开 |
 | `ApprovalDoc` | `v=6` · `sid` · `gate` · `seen` · `stage2_reviews` · `writing` · `design_review` · `structure` · `writing_approval` · `closure` · `spawns` | HTTP v6 不等于 `_service/approvals/<sid>.json` 的盘上 v7。`stage2_reviews` 分别投影 Global/BP 当前决定与历史，旧已读不生成接受。公开 gate 没有 s3；`design_review` 是 A 的独立相位，不是 gate：给出当前 candidate/aggregate hash、typed 当前决定、历史与 `unavailable / missing / repair_requested / strategy_replan_requested / accepted / suspended / expired`；只有 current `accepted` 才能授权 B，`suspended` 保留当前 raw 决定但不携 action token。`structure` 是 B 编译 Plan 后的另一张票，另给当前 subject、B `binding_concerns`、typed 当前裁决、历史与 `unavailable / missing / accepted / replan_requested / expired`；`gate.s4=true` 只可能来自这张当前 `accepted`。`writing_approval` 同样给出 available、current subject、typed current decision/history；新 typed writing 决定绑定 Stage1 正文、Stage4 Plan、fresh WriterContext 与测量契约。`closure` 是 Stage5 当前整书工作包、typed 决定与不可擦除历史，`gate.s5=true` 只可能来自 current `closed`。当前写入要求已有新 clean 工作流 manifest，backfill 只接受当前盘上 v7；旧版本、未来版本和损坏均返回明确错误，不迁移或重签。历史恢复使用配对的冻结旧代码与旧根。旧 read proof 不升级成节点接受，Structure subject 未携 current `STRUCTURE_REVIEW_CONTRACT` 的历史决定不重签 s4，普通 GET 不迁移 |
 | `Stage5ClosureView / Workpack` | `state` · `workpack?` · `next_step?` · `current_decision?` · `history[]`；工作包含 Review 身份、`planned/missing`、`chapter_subjects[]`、`.INVALID` / HARD、`unresolved_trim_items[]`、逐项 must-appear、fact/unver 组、披露/已处置计数与 `workpack_sha256` | `state ∈ missing｜review_required｜blocked｜ready｜closed｜expired`，只由服务端重算，页面不得按计数重判。`review_required` 表示没有可接受的 current 最终 Review，不能携 current workpack/decision，且 `next_step` 必须指出重跑；`chapter_subjects[]` 精确覆盖全部当前 canonical 计划章；`unresolved_trim_items[]` 是章号、audit SHA 与正文 SHA 的精确批量提交面，章号投影必须等于 `unresolved_trim_chapters`。决定或正文漂移后旧决定只留 history，不能继续充当 current |
 | `Stage5ClosureTemplate / Request / Decision` | Template 是服务端完整 materialized workpack + `review_token`；Request 只有 `actor/reason/review_token/must_appear[]/group_acks[]`；Decision 在 Request 上加 `decision_sha256/decided_at` | must-appear 与 group 的 finding/chapter/review/workpack SHA 只在模板和盘上完整决定中物化；调用方只提交 token 与 typed ruling。服务端展开 current workpack 后要求 ruling 精确覆盖；模板 placeholder/token 不进入 Request，确认不会把 UNVER 改写成 PASS |
@@ -441,25 +439,21 @@ S-08（ctx 不在仍 200，`materials=null`）。
 **③ 判据结论不在这里**（`R-11.4`），同 §四第 ⑦ 条——本屏及以下各屏的结论
 都只能来自 `/api/novels/:sid/check/:kind`。
 
-## 五c、`ReadingView` —— S-04 原文 ↔ 骨架
+## 五c、`ReadingView` —— S-04 原文 ↔ 完整剧情
 
-左半边（原文）来自 **stage1**；右半边（骨架）来自 stage2 逐章蓝图。
-⚠ **stage2 没跑 ⇒ 200 且 `blueprint=false`**：整章一个 hole、`beats` 空、
-`summary=null`、`_provenance=null`——右半边整块缺席（后置条件焊死，不编一句摘要），
-左半边与 stage2 无关（同 S-06 左右半分治的道理）。stage1 不在 / `:o` 越界 ⇒ 404。
+text 为 Stage1 完整本章原文，blueprint 为同章 PlotBlueprint 或 null。缺蓝图返回原文及
+明确 ArtifactState，不构造假节点；源章缺失或越界返回 404。浏览器不根据坐标裁剪原文。
 
-| 字段 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `chapter_ordinal` / `text_chars` | 整数 | 是 | 章号与全章码点数 |
-| `blueprint` | 布尔 | 是 | 右半边在不在 |
-| `summary` | 串 或 null | 是 | `blueprint=false` ⇒ `null`（没有蓝图就没有摘要，不编一句） |
-| `segments[]` | 数组 | 是 | 连续覆盖整章 `[0, text_chars)`（后置条件）。⚠ **服务端已切好 `text`**，前端绝不按 start/end 自己切字符串（Python 码点 ≠ JS 码元）。`beat_id=null` ⇒ 空隙（两态由可空性表达，不另立 kind 字符串）；`flagged` 只属于空隙且 `chars >= uncovered_min_chars` |
-| `beats[]` | 数组 | 是 | `located=false` 时坐标为 `null`（定位失败不编区间）；`hinges[].text=null` = 未定位 |
-| `narration[]` | 数组 | 是 | 叙述者 / 聚焦者 / 人称面 |
-| `loose` | 整数 | 是 | 没被任何 beat 覆盖的字数——与全部空隙合计**是同一个数**（后置条件） |
-| `uncovered_min_chars` | 整数 | 是 | 「漏」的阈值**随响应自带**，是漏抓还是过渡交人工看摘录判断 |
-| `blueprint_state` | 对象 | 是 | `stage2/chapter_blueprints.json` 的 `ArtifactState`（formal 与活动 `.INVALID` 分栏一次拿全）。`blueprint=false` 的两种来路——没跑 / 读不回——靠它的 `exists` 与 `readable` 分 |
-| `_provenance` | 对象 或 null | 是 | `BlueprintProvenance`；`blueprint=false` ⇒ `null` |
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| sid / title / chapter_ordinal | 标识与文字 | 当前书和章 |
+| text / text_chars | 原文与码点数 | 完整本章，长度一致 |
+| blueprint | PlotBlueprint 或 null | 完整节点、状态、约束、共享证据与叙述 |
+| blueprint_state | ArtifactState | formal / INVALID / missing / unreadable 分开 |
+| _provenance | BlueprintProvenance 或 null | 缺蓝图时无来源账 |
+
+当前章或跨章的材料和提交 token 来自同一个范围工作包。证据共享与重叠只用于定位，
+前端不得由证据覆盖生成语义重复或完整性结论。
 
 ## 五d、`Stage4View` —— S-07 计划 ↔ 写作上下文
 
@@ -471,12 +465,12 @@ S-08（ctx 不在仍 200，`materials=null`）。
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `identity_plan` | 布尔 | 是 | `true` = 本屏是恒等基线。此时计划侧三个 typed goal 的 `intent` / `fact_refs[]` 指向恒等事实，**不是真决策** |
+| `identity_plan` | 布尔 | 是 | `true` = 本屏是恒等基线。此时计划侧三个 typed goal 的 `intent` / `subject_refs[]` 指向完整节点，**不是真决策** |
 | `structure_subject_sha256` | SHA-256 或 null | 是 | 正式计划时由**本次读出的同一个 `PlanChapters` 对象**计算，并与 `index[]` / `plan_chapter` 同快照；恒等基线只能为 null。它只供显示与 currentness 对照；正式结构裁决必须从 Structure ApprovalWorkpack 取得 opaque `review_token`，不能拿本 view 的 SHA 自建提交载荷 |
 | `chapters` / `ordinal` | | 是 | `ordinal ∈ chapters`（后置条件） |
 | `index[]` | 数组 | 是 | 章索引；每行带 `chapter_goal`、完整 `structure_decision`、预算与场数，供一次提交时核对全章集合与逐章裁决，不额外发 N 次请求；它**不是**完整 canonical subject 的公开展开。⚠ **没有 `in_band` / `style_hits` / `span_chars` / `hidden`**；判据结论只来自 `/check/stage4`，派生结构向量由服务端 view 现场计算 |
-| `plan_chapter` | 对象 | 是 | 章级三个 typed goal、`retain/reconstruct` 声明、从当前 blueprint 派生的语义契约、改写 brief 与有序 `scenes[]`；`computed_change_kinds` 同样只在 API view 派生，不写回计划。每场只展示 purpose/role/delivery/transition、land/context/turn facts、state refs 与预算 |
-| `ctx_chapter` | 对象 或 null | 是 | 写手实际拿到的任务书。场景顺序以 `scenes[]` / `scenes[].slot` 为准；人物到场只在 `stages[].present`，`characters` 是带 `char_id` 的数组；不重复下发逐场源字数、participants、秘密/规则内部 id 或 must-not 清单 |
+| `plan_chapter` | 对象 | 是 | 章级三个 typed goal、`retain/reconstruct` 声明、从当前 blueprint 派生的语义契约、改写 brief 与有序 `scenes[]`；`computed_change_kinds` 同样只在 API view 派生，不写回计划。每场只展示 purpose/role/delivery/transition、context/turn 节点引用与预算；beat_placements 与 anchor_bindings 为唯一分场/端点映射 |
+| `ctx_chapter` | 对象 或 null | 是 | 写手实际拿到的任务书。场景顺序以 `scenes[]` / `scenes[].slot` 为准；人物到场只在 `deliveries[].stages[].present`，`characters` 是带 `char_id` 的数组；不重复下发逐场源字数、participants、重复剧情正文或源文证据 |
 | `writer_target` | 二元组 或 null | 是 | 写手被要求的篇幅区间，**与写手同一把尺子**（`prompts.target_band`）；`null` ⇔ `ctx_chapter=null`（同进同出，后置条件） |
 | `plan_state` / `ctx_state` | 对象 | 是 | 两份产物各自的 `ArtifactState` |
 | `_provenance` / `_ctx_provenance` | 对象 或 null | 是 | 两份来源账分两个键出，不合并 |
@@ -622,18 +616,30 @@ HTTP 侧「书 id 不合法」的产地是**客户端**，那是 400。
 就真的是我们的 bug。**「边界验过之后再抛就是 bug」是一条说得清的线。**
 
 
-### Blueprint 交叉复核差异
+### Blueprint 范围、问题与进度
 
-`BlueprintReviewWorkpack.review_delta` 是只读 `BlueprintReviewDelta`，包括 `mode`（initial/unchanged/targeted/full）、
-基线与当前 review subject SHA、`changed_global_items[]`、改变的 Blueprint 章、受影响章、可复用接受依据的章与原因。
-每项 `BlueprintReviewGlobalChange` 明示 item/path、added/removed/changed、changed_fields、前后主体 SHA、
-受影响章与 references、scope_reason。无法证明局部范围时保持 full；前端只呈现服务端范围，不重新计算依赖。
-`Stage2NodeReviewDecision.review_scope_sha256` 可为空，保存实际已审范围的摘要。delta 不进入 review token；
-接受后只推进基线，不让刚保存的当前接受自行过期。公共 TypeScript 与页面沿用同形字段。
+BlueprintReviewWorkpack 携 scope、material、dependency_manifest、knowledge_links、
+progress、check、accounting 及分层身份。范围是 chapter:N 或 cross_chapter，token 为 bpr5_。
+依赖清单绑定实际值、证据和集合；前端不重算失效。实际问题保留稳定 ID 和历史处置，
+旧逐事实 review_delta / receipt 不进入新链。
+
+Run.blueprint_progress 用轻量验证快照区分检查点、正式提交、有效章审、当前范围、
+跨章状态及未解决问题。轮询不构建 Commander 工作包，缺失/未知不作零；重启从持久数据读取。
+
+| 端点 | 请求/响应 | 行为 |
+|---|---|---|
+| GET /api/novels/:sid/stage2/blueprint/edit/template | PlotEdit | 当前完整章模板，可指定 chapter_ordinal |
+| POST /api/novels/:sid/stage2/blueprint/edit/preview | PlotEdit → PlotEditPreview | 同源编译预检，零写入 |
+| POST /api/novels/:sid/stage2/blueprint/edit | PlotEdit → JobRecord | 服务保存输入，由 CLI producer 编辑 |
+| GET /api/novels/:sid/approvals/blueprint-refinement/catalog | origin → BlueprintRefinementCatalog | 当前 A/B token 及章内允许主体 |
+| POST /api/novels/:sid/approvals/blueprint-refinement | BlueprintRefinementRequest → ApprovalDoc | 只登记疑点并重开受影响章审，不调用模型 |
+
+转交复验当前 origin/token/章内主体；A 使用 opaque 引用，B 使用正式引用。转交不代表缺陷
+已成立或已授权付费；exact 重放只证明已保存，不覆盖后来撤销/解决。
 
 ### 写作上下文的即时读数
 
-Stage4 `ctx_chapter` 使用 `CtxChapterView`；章节主体来自当前 WriterContext v7，
+Stage4 `ctx_chapter` 使用 `CtxChapterView`；章节主体来自当前 WriterContext v8，
 `from_source_ordinals / budget_chars / source_chars` 由章号、场景预算和 Stage1 源正文现算。
 源文缺失或不可读时 `source_chars=null`，界面显示“未知”。展示字段不能作为新任务书提交；
 Stage5 的成稿字数、预算及重合率也经后端唯一度量入口现算，不从 Chapter v3 读取副本。

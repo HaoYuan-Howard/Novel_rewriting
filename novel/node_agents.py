@@ -50,10 +50,7 @@ from novel.llm.client import LlmFailed
 from novel.observability import RequestProgress
 from novel.run import RunContext
 from novel.stages.stage2 import extract
-from novel.stages.stage2.character_refs import blueprint_inventory_from_projection
 from novel.stages.stage2.contract import active_contract, contract_for
-from novel.stages.stage2.paragraphs import paragraph_spans
-from novel.stages.stage2.references import hinge_candidates_by_chapter
 from novel.stages.stage4 import plan
 from novel.stages.stage5 import write
 from novel.stages.stage6 import hook, semantic
@@ -452,9 +449,7 @@ class BlueprintSessionPool:
 
     def _phase_of(self, purpose: str) -> str:
         if ':boundaries:' in purpose or ':repair-boundaries:' in purpose:
-            return 'boundaries'
-        if self._contract.topology == 'boundary_then_detail':
-            return 'detail'
+            raise ProvenanceRefused('当前 Blueprint 不支持已退役的边界相请求')
         return 'blueprint'
 
     def _new_client(
@@ -508,21 +503,7 @@ class BlueprintSessionPool:
             int(chapter) for chapter, _system, _user in requests
             if chapter is not None
         )
-        if self._contract.topology == 'boundary_then_detail':
-            keys = tuple(
-                (phase, (
-                    f'{self.ctx.node}:boundaries:ch{chapter}'
-                    if phase == 'boundaries'
-                    else f'{self.ctx.node}:ch{chapter}'
-                ), chapter)
-                for phase in ('boundaries', 'detail')
-                for chapter in chapters
-            )
-        else:
-            keys = tuple(
-                ('blueprint', f'{self.ctx.node}:ch{chapter}', chapter)
-                for chapter in chapters
-            )
+        keys = tuple(('blueprint', f'{self.ctx.node}:ch{chapter}', chapter) for chapter in chapters)
         may_restore = self.ctx.cache.name != 'refresh-write'
         with self._lock:
             for phase, purpose, chapter in keys:
@@ -978,51 +959,22 @@ class Stage2BlueprintAgent(NodeExecutorAgent[ChapterBlueprints]):
             raise ProvenanceRefused(
                 'stage2.blueprint agent revision 前称名投影已偏离 request batch；'
                 '拒绝让旧 session 按新名册继续修订')
-        inventory = blueprint_inventory_from_projection(frozen_projection)
-        visible = inventory['visible_character_refs']
-        paragraph_count = {
-            int(section.get('chapter_ordinal') or 0):
-            len(paragraph_spans(str(section.get('text') or '')))
-            for section in main_text
-        }
-        candidates = (
-            hinge_candidates_by_chapter(main_text)
-            if spec.uses_hinge_candidates else {}
-        )
+        from novel.stages.stage2.plot_sequence import request_validator
+        sources = {row['chapter_ordinal']: row['text'] for row in main_text}
         out: dict[int, _BlueprintRevisionSpec] = {}
         for chapter in sorted(set(int(value) for value in chapters)):
             if chapter not in request_of or chapter not in index_of:
                 continue
             system, user = request_of[chapter]
-            if spec.topology == 'boundary_then_detail':
-                phase = 'detail'
-                frozen = batch.get('frozen_boundaries') or {}
-                validator = extract._detail_validator(
-                    chapter,
-                    list(frozen[chapter]),
-                    set(visible.get(chapter, {})),
-                )
-            elif spec.topology == 'scaffolded_single':
-                phase = 'blueprint'
-                validator = extract._scaffolded_validator(
-                    chapter,
-                    paragraph_count[chapter],
-                    set(visible.get(chapter, {})),
-                    candidate_rows=candidates.get(chapter, []),
-                    narration_refs=True,
-                )
-            else:
-                phase = 'blueprint'
-                validator = None
             out[chapter] = _BlueprintRevisionSpec(
-                phase=phase,
+                phase='blueprint',
                 purpose=f'{self.ctx.node}:ch{chapter}',
                 chapter=chapter,
                 system=system,
                 user=user,
                 model_cls=spec.response_model,
                 max_tokens=extract.BLUEPRINT_MAX_TOKENS,
-                validator=validator,
+                validator=request_validator(user, sources[chapter]),
                 progress=RequestProgress(
                     chapter=chapter,
                     index=index_of[chapter],
@@ -1051,17 +1003,12 @@ class Stage2BlueprintAgent(NodeExecutorAgent[ChapterBlueprints]):
         updated['raw_blueprints'] = [
             by_chapter[chapter] for chapter in order if chapter in by_chapter
         ]
-        # agent 的 scope 已进 SessionAgentClient validator；默认单相契约中，目标章
-        # 修订成功即可退休那一章旧的 scope 结论。两相的 boundary 结论不在 detail
-        # 修订所有权内，保守保留。
-        if str(batch.get('contract')) != 'extraction-ir-v2':
-            targets = set(replacements)
-            # scope 载体的解析只有 producer 那一个落点；executor 不另造一把
-            # JSON 尺子。坏载体也沿用 producer 的关闭式「保留」语义。
-            updated['scope_violations'] = [
-                raw for raw in batch.get('scope_violations') or []
-                if extract._keep_scope_violation(raw, targets)
-            ]
+        targets = set(replacements)
+        # 只退休已通过本轮章节 validator 的范围结论；坏载体由 producer 保守保留。
+        updated['scope_violations'] = [
+            raw for raw in batch.get('scope_violations') or []
+            if extract._keep_scope_violation(raw, targets)
+        ]
         return updated
 
     def _revise_wave(

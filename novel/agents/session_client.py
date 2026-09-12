@@ -41,7 +41,7 @@ from novel.config import DEFAULT_BACKOFF_BASE, DEFAULT_MAX_RETRIES
 from novel.errors import ProvenanceRefused
 from novel.llm.client import LlmFailed
 from novel.llm.json_text import normalize_json_text
-from novel.llm.prompts import required_top_level
+from novel.llm.prompts import missing_required_fields, required_top_level
 from novel.llm.transport import ChatResponse
 from novel.model_slots import model_slot_from_environment, pipeline_model_slot, ModelSlotUnavailable
 from novel.observability import AttemptHeartbeat, RequestProgress
@@ -2089,11 +2089,7 @@ class SessionAgentClient:
                 gate = 'parse'
                 details = [{'loc': '', 'type': type(exc).__name__}]
             else:
-                missing = [
-                    key for key in require
-                    if not isinstance(payload, dict) or key not in payload
-                    or payload[key] in (None, '', [], {})
-                ]
+                missing = missing_required_fields(payload, require, model_cls)
                 if missing:
                     gate = 'require'
                     details = [

@@ -45,41 +45,108 @@ def _stage4_rules(plan: dict) -> set[str]:
     return {finding.rule for finding in _find4(plan)}
 
 
-def test_fact_coverage_rejects_both_missing_and_duplicate_atoms():
-    """事实守恒的两支都要见过红灯；它不再以 beat 完整性代替事实完整性。"""
-    from tests.hard_cases import _clean_plan4
-
-    missing = copy.deepcopy(_clean_plan4())
-    missing['output_chapters'][0]['scenes'][0]['land_fact_refs'] = []
-    assert 'fact_coverage' in _stage4_rules(missing)
-
-    duplicate = copy.deepcopy(_clean_plan4())
-    duplicate['output_chapters'][0]['scenes'][1]['land_fact_refs'].append('f01_001')
-    assert 'fact_coverage' in _stage4_rules(duplicate)
-
-    assert 'fact_coverage' not in _stage4_rules(_clean_plan4())
-
-
-def test_material_coverage_rejects_both_missing_and_duplicate_hinges():
-    from tests.hard_cases import _clean_plan4
-
-    missing = copy.deepcopy(_clean_plan4())
-    for scene in missing['output_chapters'][0]['scenes']:
-        scene['material_refs'] = []
-    assert 'material_coverage' in _stage4_rules(missing)
-
-    duplicate = copy.deepcopy(_clean_plan4())
-    target = next(scene for scene in duplicate['output_chapters'][0]['scenes']
-                  if scene['material_refs'])
-    target['material_refs'].append(target['material_refs'][0])
-    assert 'material_coverage' in _stage4_rules(duplicate)
-
-
-def test_scene_state_chain_rejects_an_unconsumed_previous_exit_state():
-    from tests.hard_cases import _clean_plan4
-
+@pytest.mark.parametrize('damage', [
+    'missing_node', 'duplicate_placement', 'duplicate_delivery', 'foreign_node', 'foreign_scene',
+    'early_context', 'missing_evidence', 'duplicate_evidence', 'foreign_evidence',
+    'missing_stage', 'foreign_stage', 'missing_state_endpoint', 'wrong_state_endpoint',
+    'missing_constraint_endpoint', 'wrong_constraint_endpoint', 'same_scene_violation',
+])
+def test_presentation_hazards_reject_at_the_production_guard(damage):
+    """旧事实/材料/状态反例迁入完整节点契约，各分支仍经过同一正式判据。"""
+    from tests.hard_cases import _clean_plan4, _find4, _BPS4
     plan = copy.deepcopy(_clean_plan4())
-    scenes = plan['output_chapters'][0]['scenes']
-    scenes[0]['exit_state_refs'] = ['f01_001']
-    scenes[1]['entry_state_refs'] = []
-    assert 'state_closure' in _stage4_rules(plan)
+    blueprint = copy.deepcopy(_BPS4)
+    chapter = plan['output_chapters'][0]
+    placements = chapter['beat_placements']
+    first = placements[0]['deliveries'][0]
+    if damage == 'missing_node':
+        placements.pop()
+    elif damage == 'duplicate_placement':
+        placements.append(copy.deepcopy(placements[0]))
+    elif damage == 'duplicate_delivery':
+        placements[0]['deliveries'].append(copy.deepcopy(first))
+    elif damage == 'foreign_node':
+        placements[0]['beat_ref'] = 'b02_01'
+    elif damage == 'foreign_scene':
+        first['scene_ref'] = 's99'
+    elif damage == 'early_context':
+        chapter['scenes'][0]['context_beat_refs'] = ['b01_03']
+    elif damage == 'missing_evidence':
+        first['evidence_refs'] = []
+    elif damage == 'duplicate_evidence':
+        first['evidence_refs'] *= 2
+    elif damage == 'foreign_evidence':
+        first['evidence_refs'] = ['e02_01']
+    elif damage == 'missing_stage':
+        first['source_context_refs'] = []
+    elif damage == 'foreign_stage':
+        first['source_context_refs'] = placements[1]['deliveries'][0]['source_context_refs']
+    elif damage == 'same_scene_violation':
+        blueprint['blueprints'][0]['constraints'][0]['kind'] = 'same_scene'
+    else:
+        last = placements[-1]['deliveries'][0]
+        last['presentation_instruction'] = '完成决定留下的呈现'
+        earlier = copy.deepcopy(last)
+        earlier.update(scene_ref='s02', presentation_instruction='先铺垫决定的犹豫')
+        placements[-1]['deliveries'].insert(0, earlier)
+        state = {'kind': 'state', 'ref': 'st01_01', 'endpoint': 'established', 'scene_ref': 's03'}
+        constraint = {'kind': 'constraint', 'ref': 'c01_01', 'endpoint': 'after', 'scene_ref': 's03'}
+        chapter['anchor_bindings'] = [state, constraint]
+        if damage == 'missing_state_endpoint':
+            chapter['anchor_bindings'].remove(state)
+        elif damage == 'wrong_state_endpoint':
+            state['scene_ref'] = 's01'
+        elif damage == 'missing_constraint_endpoint':
+            chapter['anchor_bindings'].remove(constraint)
+        elif damage == 'wrong_constraint_endpoint':
+            constraint['scene_ref'] = 's01'
+        else:
+            raise AssertionError(damage)
+    assert 'placement_ref' in {row.rule for row in _find4(plan, blueprints=blueprint)}
+    assert 'placement_ref' not in _stage4_rules(_clean_plan4())
+
+
+@pytest.mark.parametrize('damage', [
+    'missing_body', 'changed_body', 'missing_constraint', 'changed_stage', 'missing_state',
+    'changed_state_permission',
+])
+def test_context_does_not_drop_or_rewrite_plot_material(damage):
+    from tests.hard_cases import _clean_plan4, _ctx4, _find4
+    plan = _clean_plan4()
+    ctx = _ctx4(plan)
+    chapter = ctx['chapters'][0]
+    if damage == 'missing_body':
+        chapter['beats'].pop()
+    elif damage == 'changed_body':
+        chapter['beats'][0]['content'] = '邀请来自另一个人。'
+    elif damage == 'missing_constraint':
+        chapter['constraints'] = []
+    elif damage == 'changed_stage':
+        chapter['scenes'][0]['deliveries'][0]['stages'][0]['place'] = '错误地点'
+    elif damage == 'missing_state':
+        chapter['states'] = []
+    else:
+        chapter['scenes'][-1]['state_events'] = []
+    rules = {row.rule for row in _find4(plan, ctx=ctx)}
+    assert 'ctx_plot_exact' in rules
+    if damage == 'changed_state_permission':
+        assert 'ctx_permission_exact' in rules
+    assert not {row.rule for row in _find4(plan) if row.sev == 'hard'}
+
+
+def test_shared_evidence_and_ordinary_split_are_legal_without_full_background_release():
+    from tests.hard_cases import _clean_plan4, _find4
+    plan = _clean_plan4()
+    chapter = plan['output_chapters'][0]
+    target = chapter['beat_placements'][-1]
+    target['deliveries'][0]['presentation_instruction'] = '完成决定留下的呈现'
+    earlier = copy.deepcopy(target['deliveries'][0])
+    earlier.update(scene_ref='s02', presentation_instruction='先铺垫决定的犹豫')
+    target['deliveries'].insert(0, earlier)
+    chapter['anchor_bindings'] = [
+        {'kind': 'state', 'ref': 'st01_01', 'endpoint': 'established', 'scene_ref': 's03'},
+        {'kind': 'constraint', 'ref': 'c01_01', 'endpoint': 'after', 'scene_ref': 's03'},
+    ]
+    assert 'placement_ref' not in {row.rule for row in _find4(plan)}
+    chapter['scenes'][1]['context_beat_refs'] = ['b01_03']
+    assert 'placement_ref' in {row.rule for row in _find4(plan)}

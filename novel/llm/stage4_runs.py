@@ -3070,7 +3070,7 @@ def inspect_design_repair_capability(
             return unavailable('legacy_or_untracked_candidate')
         candidate, full_sha = _normalized_design_candidate_identity(
             raw_candidate, label='当前正式 blind candidate')
-        from novel.stages.stage4.blind import candidate_subject_sha256
+        from novel.stages.stage4.plot_design import candidate_subject_sha256
         business = {
             key: value for key, value in candidate.items()
             if key != '_provenance'

@@ -87,9 +87,6 @@ _REVALIDATION_DERIVED_PROVENANCE_FIELDS = {
     STAGE2_GLOBAL_GROUNDING: frozenset({
         'setup_chapters_pruned', 'evidence_locator_failures',
     }),
-    STAGE2_CHAPTER_BLUEPRINTS: frozenset({
-        'verbatim_failures', 'fact_atom_failures', 'hinge_ambiguous_pending',
-    }),
 }
 
 # These no-provenance artifacts have a deterministic freshness bridge and are

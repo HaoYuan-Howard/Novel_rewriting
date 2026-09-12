@@ -129,6 +129,11 @@ def reaggregate_available(ctx: RunContext) -> bool:
         ledger=CostLedger(path=ledger_path(ctx.novel_dir.parent)), observer=lambda _event: None)
     try:
         if ctx.node == 'stage4.design':
+            from contracts.artifacts import STAGE4_BLIND_CANDIDATE
+            from novel.store import ArtifactStore
+            if (not stage4_runs._plan_source_run_ids(ctx)
+                    and not ArtifactStore(ctx).exists(STAGE4_BLIND_CANDIDATE)):
+                return False
             return isinstance(plan.run_design_reaggregate(ctx), plan.DesignCandidateEvaluation)
         prepared = plan.prepare_plan_candidate(ctx)
         preview = plan._run_plan_with_chapters(ctx, plan._PlanRecoveryPool(ctx), prepared)

@@ -688,8 +688,9 @@ def stage2_reviewed_edit_correction_needed(
         # ``plan_book_from_overview`` 也供冻结/合成 overview 的只读消费者使用；
         # 书目录不存在时，盘上不可能同时存在 reviewed-edit 恢复事实。
         return False
+    from novel.orchestrator.approvals import projection_code
     store = ArtifactStore(readonly_ctx(
-        novel_dir, 'stage2.global', prov.code_version()))
+        novel_dir, 'stage2.global', projection_code()))
     if store.exists(STAGE2_GLOBAL_EDIT_FAILURE):
         # ``canonical_pending`` 只证明 producer 已接管 durable action，尚没有
         # Commander 可纠正的确定失败；Supervisor 应重放同一 action，不能耗一席
@@ -746,8 +747,9 @@ def stage2_reviewed_edit_revalidation_needed(
     novel_dir = paths.find_novel_dir(base, sid)
     if novel_dir is None:
         return False
+    from novel.orchestrator.approvals import projection_code
     ctx = readonly_ctx(
-        novel_dir, 'stage2.global', code or prov.code_version())
+        novel_dir, 'stage2.global', code or projection_code())
     from novel.stages.stage2 import extract as stage2_extract
     return stage2_extract.reviewed_invalid_auto_revalidation_needed(ctx)
 
@@ -759,8 +761,9 @@ def stage2_global_edit_terminal_failure_needed(
     novel_dir = paths.find_novel_dir(base, sid)
     if novel_dir is None:
         return False
+    from novel.orchestrator.approvals import projection_code
     ctx = readonly_ctx(
-        novel_dir, 'stage2.global', code or prov.code_version())
+        novel_dir, 'stage2.global', code or projection_code())
     store = ArtifactStore(ctx)
     if not store.exists(STAGE2_GLOBAL_EDIT_FAILURE):
         return False
@@ -798,8 +801,9 @@ def stage2_reviewed_edit_commit_recovery_flags(
     novel_dir = paths.find_novel_dir(base, sid)
     if novel_dir is None:
         return None
+    from novel.orchestrator.approvals import projection_code
     ctx = readonly_ctx(
-        novel_dir, 'stage2.global', code or prov.code_version())
+        novel_dir, 'stage2.global', code or projection_code())
     store = ArtifactStore(ctx)
     if store.exists(STAGE2_GLOBAL_EDIT_INPUT_COMMIT):
         # 完整 typed read 本身就是 planner 对 canonical WAL 的关闭式校验。

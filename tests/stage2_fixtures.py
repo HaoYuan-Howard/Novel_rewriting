@@ -16,7 +16,6 @@ from contracts.artifacts import (
 from contracts.schema.characters import CharacterRegistry, CharactersProvenance, CharactersResponse
 from contracts.schema.knowledge import KnowledgeResponse
 from contracts.schema.knowledge_links import (
-    KnowledgeAtFacts, KnowledgeLinkDecision, KnowledgeLinkSubmission,
     KnowledgeLinks, KnowledgeLinksProvenance,
 )
 from contracts.schema.stage1 import MainText
@@ -55,8 +54,8 @@ def character_response(*, source=None, view=None) -> dict:
     }}).model_dump(mode='json')
 
 
-def knowledge_response() -> dict:
-    raw = candidate_view()
+def knowledge_response(*, view=None) -> dict:
+    raw = candidate_view(view=view)
     raw['entities']['character_states'] = {
         cid: {key: row[key] for key in ('fate', 'fate_evidence')}
         for cid, row in raw['entities'].pop('characters').items() if row['fate'] is not None}
@@ -107,44 +106,54 @@ def seed_character_registry(ctx: RunContext):
 
 
 def accept_and_materialize_links(ctx: RunContext):
-    """Stage4 测试的已审边界：真实 typed 决定先落盘，再显式铸造免费关联输入。
+    """Stage4 专用的合成已审边界；真实逐章、跨章决定与 KL V2 来源落盘。
 
-    这里不声称 S0/S1 已审批；测试知识 producer 的完整收口必须直接调用
-    run_close_review。此夹具仅构造 Stage4 下游已满足的前置产物。
+    不补造 Stage0/1 接受。完整产品汇合由贯通测试直接运行 run_close_review。
     """
     from contracts.schema.api import Stage2NodeReviewRequest
     from novel.orchestrator import approvals
     from novel.stages.stage2 import global_review
     from novel.views.stage2 import blueprint_review_workpack
+    from tests.test_plot_review_runtime import request
+    from contracts.schema.stage2 import ChapterBlueprints
+    from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS
 
     approvals.approve_stage2_review(ctx.novel_dir.parent, ctx.sid, Stage2NodeReviewRequest(
         node='stage2.global', review_token=global_review.review_token(ctx),
         decision='accept', actor='fixture-global-commander', reason='合成下游前置材料'))
-    pack = blueprint_review_workpack(ctx.novel_dir.parent, ctx.sid)
-    scope = pack.knowledge_links.scope
-    submission = KnowledgeLinkSubmission(
-        scope_sha256=scope.scope_sha256, actor='fixture-blueprint-commander',
-        reason='显式合成关联，仅验证结构与消费链', decisions=[
-            KnowledgeLinkDecision(
-                obligation_id=row.obligation_id, expected_subject_sha256=row.subject_sha256,
-                resolution=KnowledgeAtFacts(kind='at_facts', fact_refs=[row.candidate_fact_refs[0]],
-                                            trigger_fact_ref=row.candidate_fact_refs[0]))
-            for row in scope.obligations])
-    approvals.approve_stage2_review(ctx.novel_dir.parent, ctx.sid, Stage2NodeReviewRequest(
-        node='stage2.blueprint', review_token=pack.review_token, decision='accept',
-        actor=submission.actor, reason=submission.reason, knowledge_links=submission))
+    blueprints = ArtifactStore(ctx).read_own(ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)[0]
+    scopes = [f'chapter:{row.chapter_ordinal}' for row in blueprints.blueprints] + ['cross_chapter']
+    for scope in scopes:
+        pack = blueprint_review_workpack(ctx.novel_dir.parent, ctx.sid, scope=scope)
+        approvals.approve_stage2_review(ctx.novel_dir.parent, ctx.sid, request(pack))
     child = RunContext(
         novel_dir=ctx.novel_dir, node='stage2.blueprint', paid=False, code=ctx.code,
         cache=CachePolicy.default(), ledger=CostLedger(path=ctx.ledger.path))
     store = ArtifactStore(child)
     actual_scope = knowledge_links.read_scope(store, consuming=True)
-    assert actual_scope == scope
     history, sha = approvals.current_knowledge_link_decisions(ctx.novel_dir.parent, ctx.sid)
     artifact = KnowledgeLinks(
-        scope=scope, links=knowledge_links.require_complete(scope, history),
+        scope=actual_scope, links=knowledge_links.require_complete(actual_scope, history),
         _provenance=child.free_provenance(KnowledgeLinksProvenance, decision_sha256=sha))
     store.write(STAGE2_KNOWLEDGE_LINKS, artifact)
     return knowledge_links.require_current(child)
+
+
+def plot_blueprints() -> dict:
+    """以同一三章原文编译当前正式形状；只供纯契约/消费投影测试。"""
+    from contracts.schema.plot import PlotChapterResponse
+    from novel.stages.stage2.plot_compile import compile_chapter
+    from tests.test_plot_producer import responses
+    sources = {row['chapter_ordinal']: row['text'] for row in main_text()}
+    return {
+        'blueprints': [compile_chapter(
+            PlotChapterResponse.model_validate(raw), sources[ordinal],
+            allowed_char_ids=frozenset(global_grounding()['entities']['characters']),
+        ).model_dump(mode='json') for ordinal, raw in responses().items()],
+        '_provenance': {'scope_violations': [], 'context': {
+            'architecture': 'plot-blueprint-v1', 'source_format': 'numbered-paragraphs-v1',
+            'global_projection_contract': 'plot-global-scope-v1'}},
+    }
 
 
 def formal_subjects(view: dict):

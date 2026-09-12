@@ -26,6 +26,7 @@ from typing import Any, Literal
 
 from pydantic import Field, ValidationError, model_validator
 from contracts.schema.knowledge_links import KnowledgeLinkHistory
+from contracts.schema.plot_materials import PlotChapterReviewMaterials
 
 from contracts.invariants import (
     DESIGN_REPAIR_CODES_RETIRED,
@@ -296,10 +297,10 @@ class _Stage2PatchReceipt(StrictModel):
     decision_timestamp: str | None = None
 
 
-class _ApprovalRecordV7(StrictModel):
+class _ApprovalRecordV8(StrictModel):
     """唯一现役盘上审批；当前主体与不可变历史仍完整校验，不继承旧版本读取器。"""
 
-    v: Literal[7] = 7
+    v: Literal[8] = 8
     sid: str = Field(min_length=1)
     gate: dict[str, bool]
     seen: dict[str, bool]
@@ -326,7 +327,7 @@ class _ApprovalRecordV7(StrictModel):
     stage2_blueprint_scope: CrossReviewScope | None = None
 
     @model_validator(mode='after')
-    def _record_is_complete_and_proved(self) -> _ApprovalRecordV7:
+    def _record_is_complete_and_proved(self) -> _ApprovalRecordV8:
         if set(self.gate) != set(APPROVAL_GATES):
             raise ValueError('gate must contain exactly s0,s1,s2,s4,s5,s6,s7')
         if set(self.seen) != set(APPROVAL_SEEN):
@@ -364,7 +365,7 @@ class _ApprovalRecordV7(StrictModel):
         return self
 
     @model_validator(mode='after')
-    def _design_history_has_one_current_tail(self) -> _ApprovalRecordV7:
+    def _design_history_has_one_current_tail(self) -> _ApprovalRecordV8:
         if (self.design_decision is None) != (not self.design_history):
             raise ValueError('design_decision 与非空 design_history 必须同进同出')
         if (
@@ -375,14 +376,14 @@ class _ApprovalRecordV7(StrictModel):
         return self
 
     @model_validator(mode='after')
-    def _stage2_history_has_current_heads(self) -> _ApprovalRecordV7:
+    def _stage2_history_has_current_heads(self) -> _ApprovalRecordV8:
         latest = {row.node: row for row in self.stage2_review_history}
         if self.stage2_reviews != latest:
             raise ValueError('Stage2 当前决定必须逐节点等于不可变历史的最后一项')
         return self
 
     @model_validator(mode='after')
-    def _closure_history_has_one_current_tail(self) -> _ApprovalRecordV7:
+    def _closure_history_has_one_current_tail(self) -> _ApprovalRecordV8:
         if (self.closure_decision is None) != (not self.closure_history):
             raise ValueError('closure_decision 与非空 closure_history 必须同进同出')
         if (
@@ -470,6 +471,8 @@ def _read_projection(
     *, overview: NovelOverview | None, code: str | None,
 ) -> Iterator[None]:
     """把同一次 operator 快照限制在当前只读投影调用栈内。"""
+    if overview is None and code is None:
+        overview, code = _READ_OVERVIEW.get(), _READ_CODE.get()
     overview_token = _READ_OVERVIEW.set(overview)
     code_token = _READ_CODE.set(code)
     try:
@@ -538,6 +541,10 @@ def _validate_read_projection(
     sid: str, *, overview: NovelOverview | None, code: str | None,
 ) -> None:
     """只接受完整且属于本书的 invocation-scoped 只读坐标。"""
+    if overview is None and code is None:
+        current = _READ_OVERVIEW.get()
+        if current is not None and current.sid != sid:
+            raise ValueError('审批只读投影属于另一书，不能共享快照')
     if (overview is None) != (code is None):
         raise ValueError('审批只读投影的 overview/code 必须成对提供')
     if overview is not None and overview.sid != sid:
@@ -603,9 +610,9 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
     return spawns
 
 
-def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecordV7:
+def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecordV8:
     del planned  # 兼容旧调用缝；结构章集只从当前正式计划读取
-    return _ApprovalRecordV7(
+    return _ApprovalRecordV8(
         sid=sid,
         gate={key: False for key in APPROVAL_GATES},
         seen={key: False for key in APPROVAL_SEEN},
@@ -615,7 +622,7 @@ def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecord
 
 
 def _view(
-    base: str | os.PathLike[str], record: _ApprovalRecordV7, *,
+    base: str | os.PathLike[str], record: _ApprovalRecordV8, *,
     include_spawns: bool = True,
     operator_projection: bool = False,
 ) -> ApprovalDoc:
@@ -686,7 +693,7 @@ def _planned(base: str | os.PathLike[str], sid: str) -> list[int] | None:
 
 def _read_raw(
     base: str | os.PathLike[str], sid: str, *, require_existing: bool = False,
-) -> _ApprovalRecordV7:
+) -> _ApprovalRecordV8:
     paths.resolve_novel_dir(base, sid)
     p = _path(base, sid)
     if not p.is_file():
@@ -696,12 +703,12 @@ def _read_raw(
     try:
         payload = json.loads(p.read_text(encoding='utf-8'))
         if (not isinstance(payload, dict) or type(payload.get('v')) is not int
-                or payload['v'] != 7):
-            raise ValueError('盘上审批必须显式声明当前整数版本 v=7')
-        record = _ApprovalRecordV7.model_validate(payload)
+                or payload['v'] != 8):
+            raise ValueError('盘上审批必须显式声明当前整数版本 v=8')
+        record = _ApprovalRecordV8.model_validate(payload)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise HumanEditProtected(
-            f'审批记录损坏或版本不是当前 v7（pre-v7 与未来版本均不迁移）；'
+            f'审批记录损坏或版本不是当前 v8（旧版本与未来版本均不迁移）；'
             f'旧代码与旧输出根配对读取：{exc}') from exc
     if record.sid != sid:
         raise HumanEditProtected(
@@ -735,10 +742,10 @@ def approval_head_bytes(
     if coordinate(before) != coordinate(after) or len(raw) != after.st_size:
         raise ArtifactUnreadable(f'审批当前 head 读取期间发生变化：{p}')
     try:
-        record = _ApprovalRecordV7.model_validate_json(raw)
+        record = _ApprovalRecordV8.model_validate_json(raw)
     except ValidationError as exc:
         raise ArtifactUnreadable(
-            f'审批当前 head 不是合法 v7 记录：{p}: {exc}') from exc
+            f'审批当前 head 不是合法 v8 记录：{p}: {exc}') from exc
     if record.sid != sid:
         raise ArtifactUnreadable(
             f'审批当前 head 属于 {record.sid!r}，不是 {sid!r}')
@@ -755,13 +762,13 @@ def approval_head_bytes(
     ).encode('utf-8')
 
 
-def _read_current(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV7:
+def _read_current(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV8:
     return _read_state(base, sid)[1]
 
 
 def _read_state(
     base: str | os.PathLike[str], sid: str,
-) -> tuple[_ApprovalRecordV7, _ApprovalRecordV7]:
+) -> tuple[_ApprovalRecordV8, _ApprovalRecordV8]:
     """同时给出 durable raw fact 与只读 effective 投影。
 
     freshness / prerequisite 漂移只能让 ``effective`` 暂停，绝不能把派生出的
@@ -775,11 +782,11 @@ def _read_state(
 
 
 def _write(
-    base: str | os.PathLike[str], record: _ApprovalRecordV7,
+    base: str | os.PathLike[str], record: _ApprovalRecordV8,
 ) -> ApprovalDoc:
     """审批 raw fact 的唯一落点；返回值始终是落盘后的 effective 投影。"""
     _require_approval_workflow(base)
-    record = _ApprovalRecordV7.model_validate(record.model_dump())
+    record = _ApprovalRecordV8.model_validate(record.model_dump())
     _refuse_if_frozen(record.sid)
     p = _path(base, record.sid)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -866,8 +873,10 @@ def _stage2_review_identity(novel_dir: Path, node: str) -> tuple[str, str, str]:
 
 
 def _stage2_review_view(
-    novel_dir: Path, record: _ApprovalRecordV7, node: str,
+    novel_dir: Path, record: _ApprovalRecordV8, node: str,
 ) -> Stage2NodeReviewView:
+    if node == 'stage2.blueprint':
+        return _plot_review_view(novel_dir, record)
     history = [row for row in record.stage2_review_history if row.node == node]
     decision = record.stage2_reviews.get(node)
     if decision is None:
@@ -893,6 +902,79 @@ def _stage2_review_view(
         decision.decision, decision.decision)
     return Stage2NodeReviewView(
         state=status, current_decision=decision, history=history, coverage=coverage)
+
+
+def _plot_snapshot(novel_dir: Path, record: _ApprovalRecordV8):
+    from novel.views.plot_review import PlotReviewSnapshot
+    return PlotReviewSnapshot.read(
+        ArtifactStore(state.readonly_ctx(novel_dir, 'stage2.blueprint', _projection_code())),
+        record.stage2_review_history)
+
+
+def _plot_review_view(novel_dir: Path, record: _ApprovalRecordV8) -> Stage2NodeReviewView:
+    history = [row for row in record.stage2_review_history if row.node == 'stage2.blueprint']
+    if not ArtifactStore(state.readonly_ctx(
+            novel_dir, 'stage2.blueprint', _projection_code())).exists(STAGE2_CHAPTER_BLUEPRINTS):
+        return Stage2NodeReviewView(history=history)
+    try:
+        snapshot = _plot_snapshot(novel_dir, record)
+        progress = snapshot.progress()
+        scope = progress.next_scope or 'cross_chapter'
+        current = snapshot.records.get(scope)
+        status = next(row.state for row in progress.scopes if row.scope == scope)
+        if _stage2_review_view(novel_dir, record, 'stage2.global').state != 'accepted':
+            status = 'expired' if history else 'missing'
+        return Stage2NodeReviewView(state=status, current_decision=current,
+                                    history=history, plot_progress=progress)
+    except (NovelError, OSError, ValueError) as exc:
+        return Stage2NodeReviewView(state='unknown', history=history,
+                                    unavailable_reason=str(exc))
+
+
+def _approve_plot_review(base, sid: str, request: Stage2NodeReviewRequest) -> ApprovalDoc:
+    """章级决定先耐久保存；全部章审和跨章明确接受才具备免费汇合资格。"""
+    from contracts.schema.knowledge_links import KnowledgeLinkHistory
+    from novel.stages.stage2 import global_review, knowledge_links
+    from novel.stages.stage2.plot_review import CONTRACT
+
+    with approval_file_lock(base, sid):
+        raw = _read_raw(base, sid)
+        novel_dir = paths.resolve_novel_dir(base, sid)
+        # 精确已购回答重放是幂等提交；不能因提交后问题历史变化要求再买一轮。
+        expected = request.model_dump(mode='json')
+        if any({key: value for key, value in row.model_dump(mode='json').items()
+                if key in Stage2NodeReviewRequest.model_fields} == expected
+               for row in raw.stage2_review_history):
+            return _view(base, _effective_record(novel_dir, raw))
+        snapshot = _plot_snapshot(novel_dir, raw)
+        pack = snapshot.workpack(request.scope)
+        if pack.review_token != request.review_token:
+            raise HumanEditProtected('Blueprint 范围、材料或验证身份已变化；旧 token 不落盘')
+        if not set(request.chapter_ordinals) <= set(snapshot.ordinals):
+            raise HumanEditProtected('Blueprint 返工包含当前原文不存在的章节')
+        if request.decision == 'accept':
+            global_review.require_global_accepted(snapshot.store.ctx)
+            global_review.require_approved(snapshot.store.ctx, require_acceptance=False)
+        if request.knowledge_links is not None:
+            scope = snapshot.knowledge_scope(request.scope)
+            knowledge_links.validate_submission(scope, request.knowledge_links)
+            if request.decision == 'accept':
+                knowledge_links.require_complete(scope, [
+                    *snapshot.knowledge_history, KnowledgeLinkHistory(
+                        decision_sha256=_decision_sha256(expected),
+                        accepted=True, submission=request.knowledge_links)])
+        plot_record = snapshot.apply(pack, request.plot_review, request.actor)
+        snapshot.verify()
+        if snapshot.store.ctx.code != _projection_code():
+            raise HumanEditProtected('提交期间代码身份变化，须免费复验')
+        decision = Stage2NodeReviewDecision(
+            **request.model_dump(), plot_record=plot_record,
+            review_subject_sha256=pack.subject_sha256,
+            review_contract_version=CONTRACT, decided_at=_now())
+        return _write(base, raw.model_copy(update={
+            'stage2_reviews': {**raw.stage2_reviews, request.node: decision},
+            'stage2_review_history': [*raw.stage2_review_history, decision],
+        }))
 
 
 def require_stage2_node_accepted(
@@ -929,6 +1011,9 @@ def stage2_review_coverage(
 def stage2_review_closure_available(base: str | os.PathLike[str], sid: str, *, node: str) -> bool:
     """只证明全部义务可继承；失败保持原等待，不把未知解释成可收口。"""
     try:
+        if node == 'stage2.blueprint':
+            return _plot_review_view(paths.resolve_novel_dir(base, sid),
+                                     _read_raw(base, sid)).state == 'accepted'
         coverage = stage2_review_coverage(base, sid, node)
         if coverage.pending_obligation_ids or not coverage.inherited:
             return False
@@ -956,6 +1041,8 @@ def _close_stage2_inherited(base: str | os.PathLike[str], sid: str, *, node: str
     raw = _read_raw(base, sid)
     if _stage2_review_view(novel_dir, raw, node).state == 'accepted':
         return _view(base, _effective_record(novel_dir, raw))
+    if node == 'stage2.blueprint':
+        raise ApprovalRequired('章级接受不能推导跨章接受；仍须明确的当前范围决定')
     coverage = stage2_review_coverage(base, sid, node)
     if coverage.pending_obligation_ids or not coverage.inherited:
         raise ApprovalRequired('Stage2 仍有待审义务，免费收口不能产生新决定')
@@ -976,7 +1063,7 @@ def _close_stage2_inherited(base: str | os.PathLike[str], sid: str, *, node: str
                                       default_decision='accept', exceptions=[])))
 
 
-def _knowledge_link_history(record: _ApprovalRecordV7) -> list[KnowledgeLinkHistory]:
+def _knowledge_link_history(record: _ApprovalRecordV8) -> list[KnowledgeLinkHistory]:
     from contracts.invariants import BLUEPRINT_REVIEW_CONTRACT
 
     return [KnowledgeLinkHistory(
@@ -998,7 +1085,8 @@ def current_knowledge_link_decisions(
     """原已接受决定的精确来源；免费物化不能发明新的 actor/reason。"""
     require_stage2_node_accepted(base, sid, 'stage2.blueprint')
     raw = _read_raw(base, sid)
-    decision = raw.stage2_reviews.get('stage2.blueprint')
+    decision = next((row for row in reversed(raw.stage2_review_history)
+                     if row.node == 'stage2.blueprint' and row.scope == 'cross_chapter'), None)
     if decision is None or decision.decision != 'accept' or decision.knowledge_links is None:
         raise ApprovalRequired('缺少已保存的 Blueprint 知识关联接受决定')
     return _knowledge_link_history(raw), _decision_sha256(decision.model_dump(mode='json'))
@@ -1010,6 +1098,8 @@ def approve_stage2_review(
     """Stage2 两个节点共用的 typed 提交边界；接受绝不来自 seen 布尔值。"""
     from novel.stages.stage2 import global_review
     _require_approval_workflow(base)
+    if request.node == 'stage2.blueprint':
+        return _approve_plot_review(base, sid, request)
     with approval_file_lock(base, sid):
         raw = _read_raw(base, sid)
         novel_dir = paths.resolve_novel_dir(base, sid)
@@ -1171,6 +1261,10 @@ def stage2_review_halt(
     for node in ('stage2.global', 'stage2.blueprint'):
         view = _stage2_review_view(paths.resolve_novel_dir(base, sid), raw, node)
         if view.state in ('uncertain', 'stopped') and view.current_decision is not None:
+            if view.current_decision.refinement_request is not None:
+                # Stage4 只发起一次原文核查；它没有替章级 Commander 作停止决定。
+                # 真正章审返回 uncertain/stop 后仍沿下面的持久人工出口停机。
+                continue
             return node, view.state, view.current_decision.reason
     return None
 
@@ -1272,65 +1366,47 @@ class _StructureWorkpackSnapshot(StrictModel):
     binding_input_contract: str | None = None
     #: v2 逐章 reading 的 claim/舞台/材料来源；与 plan/binding 同一次快照读出。
     blueprints: ChapterBlueprints
+    chapter_materials: dict[int, PlotChapterReviewMaterials]
     plan_payload_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     binding_payload_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     blueprint_payload_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
 
 
-def _formal_design_chapter(
-    chapter: Any,
-    fact_aliases: dict[str, str],
-) -> dict[str, Any]:
-    """只在内存中把 A 的 opaque alias 还原给唯一结构量尺。"""
-
-    def fact(alias: str, where: str) -> str:
-        formal = fact_aliases.get(alias)
-        if formal is None:
-            raise ArtifactUnreadable(f'{where} 引用了未知 opaque alias {alias}')
-        return formal
-
-    def goal(value: Any, where: str) -> dict[str, Any]:
-        return {
-            'intent': value.intent,
-            'fact_refs': [
-                {'kind': 'fact_atom', 'ref': fact(alias, where)}
-                for alias in value.fact_aliases
-            ],
-        }
-
-    scenes = []
-    for scene in chapter.scenes:
-        scenes.append({
-            'slot': scene.candidate_scene_id,
-            'land_fact_refs': [
-                fact(alias, f'{scene.candidate_scene_id}.land_fact_aliases')
-                for alias in scene.land_fact_aliases
-            ],
-            'context_fact_refs': [
-                fact(alias, f'{scene.candidate_scene_id}.context_fact_aliases')
-                for alias in scene.context_fact_aliases
-            ],
-            'entry_state_refs': [
-                fact(alias, f'{scene.candidate_scene_id}.entry_state_aliases')
-                for alias in scene.entry_state_aliases
-            ],
-            'exit_state_refs': [
-                fact(alias, f'{scene.candidate_scene_id}.exit_state_aliases')
-                for alias in scene.exit_state_aliases
-            ],
-        })
+def _formal_design_chapter(chapter: Any, subject_aliases: dict) -> dict[str, Any]:
+    """仅在服务内还原引用给结构量尺；不产生另一份可编辑节点到场景映射。"""
+    def subject(token):
+        value = subject_aliases.get(token)
+        if value is None:
+            raise ArtifactUnreadable('设计引用了当前目录之外的主体')
+        return value.model_dump(mode='json') if hasattr(value, 'model_dump') else value
+    def beat(token):
+        value = subject(token)
+        if value['kind'] != 'beat':
+            raise ArtifactUnreadable('呈现父主体必须是剧情节点')
+        return value['ref']
+    def goal(value):
+        return {'intent': value.intent,
+                'subject_refs': [subject(t) for t in value.subject_aliases],
+                'anchor_beat_ref': beat(value.anchor_beat_alias),
+                'anchor_scene_ref': value.anchor_scene_ref}
     return {
         'output_ordinal': chapter.output_ordinal,
         'structure_decision': chapter.structure_decision.model_dump(mode='json'),
-        'chapter_goal': goal(chapter.chapter_goal, 'chapter_goal.fact_aliases'),
-        'open_hook_goal': goal(chapter.open_hook_goal, 'open_hook_goal.fact_aliases'),
-        'end_hook_goal': goal(chapter.end_hook_goal, 'end_hook_goal.fact_aliases'),
-        'scenes': scenes,
+        'chapter_goal': goal(chapter.chapter_goal),
+        'open_hook_goal': goal(chapter.open_hook_goal),
+        'end_hook_goal': goal(chapter.end_hook_goal),
+        'scenes': [{'slot': s.scene_ref, 'context_beat_refs': [
+                       beat(t) for t in s.context_beat_aliases],
+                    'turn_beat_ref': beat(s.turn_beat_alias)}
+                   for s in chapter.scenes],
+        'beat_placements': [{'beat_ref': beat(p.beat_alias),
+                             'deliveries': [d.model_dump(mode='json') for d in p.deliveries]}
+                            for p in chapter.beat_placements],
     }
 
 
 def _safe_structure_evidence(
-    blueprint: dict[str, Any], chapter: Any, fact_aliases: dict[str, str],
+    blueprint: dict[str, Any], chapter: Any, subject_aliases: dict,
 ) -> DesignStructureEvidence:
     """复用正式量尺，仅发布无 formal id 的标量与关闭式变化集合。"""
     from novel.stages.stage4.measure import (
@@ -1338,7 +1414,7 @@ def _safe_structure_evidence(
     )
 
     metrics = structure_metrics_of(
-        blueprint, _formal_design_chapter(chapter, fact_aliases))
+        blueprint, _formal_design_chapter(chapter, subject_aliases))
     declared = list(chapter.structure_decision.declared_change_kinds)
     computed = computed_structure_change_kinds(metrics)
     declared_set, computed_set = set(declared), set(computed)
@@ -1356,12 +1432,14 @@ def _safe_structure_evidence(
 
     readings = {
         'mapping_state': scalar('mapping', 'state'),
-        'land_facts': scalar('mapping', 'land_facts'),
-        'mapped_facts': scalar('mapping', 'mapped_facts'),
+        'beats': scalar('mapping', 'beats'),
+        'mapped_beats': scalar('mapping', 'mapped_beats'),
+        'deliveries': scalar('mapping', 'deliveries'),
+        'distributed_beats': scalar('mapping', 'distributed_beats'),
         'plan_scenes': scalar('mapping', 'plan_scenes'),
         'partition_state': scalar('partition', 'state'),
-        'all_fact_pairs': scalar('partition', 'all_fact_pairs'),
-        'changed_fact_pairs': scalar('partition', 'changed_pairs'),
+        'all_beat_pairs': scalar('partition', 'all_beat_pairs'),
+        'changed_beat_pairs': scalar('partition', 'changed_pairs'),
         'partition_distance': scalar('partition', 'distance'),
         'order_state': scalar('order', 'state'),
         'source_comparable_pairs': scalar('order', 'source_comparable_pairs'),
@@ -1427,7 +1505,7 @@ def _current_design_subjects(novel_dir: Path) -> _DesignSubjects:
     if ordinals != sorted(set(ordinals)):
         raise ArtifactUnreadable('Stage4A 候选章号必须升序、去重')
 
-    from novel.stages.stage4.blind import (
+    from novel.stages.stage4.plot_design import (
         BlindPlanError, build_blind_projection, candidate_subject_sha256,
     )
     from novel.stages.stage4.design_evolution import (
@@ -1439,8 +1517,12 @@ def _current_design_subjects(novel_dir: Path) -> _DesignSubjects:
         ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)
     blueprint_payload = blueprints.model_dump(mode='json', by_alias=True)
     try:
+        from novel.stages.stage4.plan import _DesignUpstream
+        design_ctx = state.readonly_ctx(novel_dir, 'stage4.design', _projection_code())
+        upstream = _DesignUpstream(design_ctx, ArtifactStore(design_ctx))
         blind_truth, current_mapping = build_blind_projection(
-            blueprint_payload, root_clean_sha1=root_clean_sha1)
+            blueprint_payload, root_clean_sha1=root_clean_sha1,
+            knowledge_links=upstream.knowledge_links, global_g=upstream.global_g)
     except BlindPlanError as exc:
         raise ArtifactUnreadable(
             f'当前 Stage2 不能重建 Stage4A blind truth：{exc}') from exc
@@ -1456,7 +1538,8 @@ def _current_design_subjects(novel_dir: Path) -> _DesignSubjects:
     candidate_mapping = {
         'alias_algorithm': candidate.alias_algorithm,
         'truth_sha256': candidate.truth_sha256,
-        'fact_aliases': dict(candidate.fact_aliases),
+        'subject_aliases': {k: v.model_dump(mode='json') for k, v in candidate.subject_aliases.items()},
+        'endpoint_aliases': {k: v.model_dump(mode='json') for k, v in candidate.endpoint_aliases.items()},
         'participant_aliases': dict(candidate.participant_aliases),
     }
     if current_mapping != candidate_mapping:
@@ -1490,7 +1573,7 @@ def _current_design_subjects(novel_dir: Path) -> _DesignSubjects:
             'weight': row.weight,
         } for row in candidate.output_chapters],
     )
-    from novel.stages.stage4.blind import build_blind_strategy_projection
+    from novel.stages.stage4.plot_design import build_blind_strategy_projection
     strategy_sha256 = _decision_sha256({
         'kind': 'stage4_design_strategy_dependencies_v2',
         'basis': basis.model_dump(mode='json', exclude={'truth_sha256'}),
@@ -1512,7 +1595,7 @@ def _current_design_subjects(novel_dir: Path) -> _DesignSubjects:
             chapter=chapter,
             structure_evidence=_safe_structure_evidence(
                 blueprint_by_ordinal[chapter.output_ordinal],
-                chapter, candidate.fact_aliases),
+                chapter, candidate.subject_aliases),
         )
         subject_sha256 = _decision_sha256({
             'kind': 'stage4_design_chapter_subject',
@@ -2146,6 +2229,7 @@ def _current_structure_chapter_subject_sha256(
 
 def _structure_workpack_snapshot(
     novel_dir: Path,
+    *, with_materials: bool = False,
 ) -> _StructureWorkpackSnapshot:
     """从同一组 typed 对象铸造 B subject/coverage，并保留精确载荷摘要。"""
     store = _store_for(novel_dir)
@@ -2167,6 +2251,32 @@ def _structure_workpack_snapshot(
     subject = structure_review_subject_sha256(
         plan, concerns, blueprints=blueprints,
         binding_input_contract=binding_input_contract)
+    from novel.stages.stage2.global_review import generation_grounding
+    from novel.stages.stage2.knowledge_links import require_current
+    from novel.stages.stage4.plot_materials import (
+        chapter_materials, chapter_materials_identity, material_identity,
+    )
+    global_g = generation_grounding(store).model_dump(by_alias=True, mode='json')
+    knowledge = require_current(store.ctx).model_dump(by_alias=True, mode='json')
+    main, _ = store.read_own(MainText, STAGE1_MAIN_TEXT)
+    blueprint_payload = blueprints.model_dump(by_alias=True, mode='json')
+    main_payload = main.model_dump(by_alias=True, mode='json')
+    material_by, material_hashes = {}, {}
+    for row in plan.output_chapters:
+        args = (row.output_ordinal, blueprint_payload, global_g, knowledge, main_payload,
+                [ref.model_dump(mode='json') for goal in
+                 (row.chapter_goal, row.open_hook_goal, row.end_hook_goal) for ref in goal.subject_refs])
+        material_hashes[row.output_ordinal] = chapter_materials_identity(*args)
+        if with_materials:
+            material = chapter_materials(*args)
+            if material_identity(material) != material_hashes[row.output_ordinal]:
+                raise ArtifactUnreadable('结构工作包与轻量依赖摘要不一致')
+            material_by[row.output_ordinal] = material
+    subject = _decision_sha256({'plan_subject': subject, 'chapter_materials': material_hashes})
+    chapter_hashes = _structure_chapter_subject_sha256(
+        plan, concerns, blueprints=blueprints, binding_input_contract=binding_input_contract)
+    chapter_hashes = {n: _decision_sha256({'plan_subject': sha, 'materials': material_hashes[n]})
+                      for n, sha in chapter_hashes.items()}
     ordinals = [row.output_ordinal for row in plan.output_chapters]
     if ordinals != sorted(set(ordinals)) or any(value < 1 for value in ordinals):
         raise ArtifactUnreadable(
@@ -2174,13 +2284,12 @@ def _structure_workpack_snapshot(
     return _StructureWorkpackSnapshot(
         subject_sha256=subject,
         chapter_ordinals=ordinals,
-        chapter_subject_sha256=_structure_chapter_subject_sha256(
-            plan, concerns, blueprints=blueprints,
-            binding_input_contract=binding_input_contract),
+        chapter_subject_sha256=chapter_hashes,
         plan=plan,
         concerns=concerns,
         binding_input_contract=binding_input_contract,
         blueprints=blueprints,
+        chapter_materials=material_by,
         plan_payload_sha256=_decision_sha256(plan_raw),
         binding_payload_sha256=_decision_sha256(binding_raw),
         blueprint_payload_sha256=_decision_sha256(blueprints_raw),
@@ -2262,7 +2371,7 @@ def _proof_for_writing_decision(
 
 
 def _design_review_view(
-    novel_dir: Path, record: _ApprovalRecordV7,
+    novel_dir: Path, record: _ApprovalRecordV8,
     *, current: _DesignSubjects | None = None,
 ) -> DesignReviewView:
     """即时投影当前 Stage4A 人审态；旧决定只留历史，不自动拼成新批准。"""
@@ -2366,7 +2475,7 @@ def _design_review_view(
 
 
 def _structure_view(
-    novel_dir: Path, record: _ApprovalRecordV7,
+    novel_dir: Path, record: _ApprovalRecordV8,
 ) -> StructureApprovalView:
     """即时投影当前结构态；失效只影响有效性，不擦掉历史决定。"""
     history = [
@@ -2423,7 +2532,7 @@ def _structure_view(
 
 
 def _writing_view(
-    novel_dir: Path, record: _ApprovalRecordV7,
+    novel_dir: Path, record: _ApprovalRecordV8,
 ) -> WritingApprovalView:
     """即时投影写作授权；旧/stale 决定留在 history，但绝不冒充当前。"""
     history = [
@@ -2508,7 +2617,7 @@ def _closure_proof_payload(workpack_sha256: str) -> dict[str, str]:
     }
 
 
-def _closure_view(novel_dir: Path, record: _ApprovalRecordV7) -> Stage5ClosureView:
+def _closure_view(novel_dir: Path, record: _ApprovalRecordV8) -> Stage5ClosureView:
     """把当前盘面 + 盘上回执历史折成公开闭合视图；workpack 恒按当前盘面重算。
 
     书还没有进入 Stage5（无 stage5 目录）时 nothing to close ⇒ missing，
@@ -2709,7 +2818,7 @@ def _blueprint_seen_proof(
     novel_dir: Path, workpack: BlueprintReviewWorkpack,
 ) -> tuple[_ApprovalProof, dict[str, str]]:
     """把一份已构造工作包铸成可重算 proof，并拒绝构造后的主体竞态。"""
-    if workpack.binding.subject_kind != 'formal':
+    if workpack.binding.subject_kind != 'formal' or workpack.scope != 'cross_chapter':
         raise ApprovalRequired(
             'seen.read 只接受 current formal Blueprint 工作包；'
             'INVALID 工作包只能用于恢复，不能生成已读证明')
@@ -2737,14 +2846,28 @@ def _blueprint_seen_proof(
 
 
 def _blueprint_seen_snapshot(
-    novel_dir: Path,
+    novel_dir: Path, *, exact: bool = False,
 ) -> tuple[_ApprovalProof, dict[str, str]]:
     """用当前只读投影重建完整工作包，再读出 proof 与明文身份。"""
     from novel.views.stage2 import blueprint_review_workpack
 
     sid, _title, _platform = paths.derive_source_meta(novel_dir.name)
+    if not exact:
+        from novel.stages.stage2.plot_review import CONTRACT
+        snapshot = _plot_snapshot(novel_dir, _read_raw(novel_dir.parent, sid))
+        progress = snapshot.progress()
+        if not progress.accepted or snapshot.blueprint_rel != STAGE2_CHAPTER_BLUEPRINTS:
+            raise ApprovalRequired('Blueprint 全书阅读证明缺当前章审与跨章接受')
+        subject = next(row.subject_sha256 for row in progress.scopes if row.scope == 'cross_chapter')
+        proof = _ApprovalProof(
+            root_clean_sha1=_root_clean_sha1(novel_dir),
+            artifacts={STAGE2_CHAPTER_BLUEPRINTS: subject},
+            decision_sha256=_decision_sha256({
+                'kind': 'seen', 'key': 'read', 'contract': CONTRACT,
+                'review_identity_sha256': subject}))
+        return proof, {'review_identity': subject}
     workpack = blueprint_review_workpack(
-        novel_dir.parent, sid, code=_projection_code())
+        novel_dir.parent, sid, code=_projection_code(), scope='cross_chapter')
     return _blueprint_seen_proof(novel_dir, workpack)
 
 
@@ -2791,7 +2914,7 @@ def _proof_for_writing(novel_dir: Path) -> _ApprovalProof:
 
 
 def _stage5_subject_rels(
-    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV7,
+    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV8,
 ) -> list[str]:
     _require_stage5_complete(base, sid, record)
     planned = _planned(base, sid)
@@ -2807,7 +2930,7 @@ def _stage5_subject_rels(
 
 
 def _proof_for_gate(
-    novel_dir: Path, gate: str, record: _ApprovalRecordV7,
+    novel_dir: Path, gate: str, record: _ApprovalRecordV8,
 ) -> _ApprovalProof:
     if gate == 's4':
         decision = record.structure_decision
@@ -2865,7 +2988,7 @@ def _same_proof(expected: _ApprovalProof | None, current: _ApprovalProof) -> boo
 
 
 def _current_typed_gate_proof(
-    novel_dir: Path, gate: str, record: _ApprovalRecordV7,
+    novel_dir: Path, gate: str, record: _ApprovalRecordV8,
 ) -> _ApprovalProof:
     """只读复验正式 typed 决定；服务检查单缺章不构成另一道人工裁决。
 
@@ -2882,7 +3005,7 @@ def _current_typed_gate_proof(
     return second
 
 
-def _effective_record(novel_dir: Path, record: _ApprovalRecordV7) -> _ApprovalRecordV7:
+def _effective_record(novel_dir: Path, record: _ApprovalRecordV8) -> _ApprovalRecordV8:
     """Return the effective current projection without rewriting audit history."""
     seen = dict(record.seen)
     seen_proofs = dict(record.seen_proofs)
@@ -2986,14 +3109,14 @@ def _effective_record(novel_dir: Path, record: _ApprovalRecordV7) -> _ApprovalRe
 
 def _require_artifacts(
     base: str | os.PathLike[str], sid: str, gate: str,
-    record: _ApprovalRecordV7,
+    record: _ApprovalRecordV8,
 ) -> _ApprovalProof:
     novel_dir = paths.resolve_novel_dir(base, sid)
     return _proof_for_gate(novel_dir, gate, record)
 
 
 def _require_stage5_complete(
-    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV7,
+    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV8,
 ) -> None:
     planned = _planned(base, sid)
     if planned is None:
@@ -3121,6 +3244,9 @@ def reviewer_approval_payload_landed(
     新 token 均不参与；损坏证据必须暴露，不能被解释成尚未提交再购买模型。
     此查询不创建审批锁，也不授予当前主体任何新接受。
     """
+    if surface == 'blueprint_refinement':
+        from novel.orchestrator import blueprint_refinement
+        return blueprint_refinement.payload_landed(base, sid, payload)
     models = {
         'stage2_global_review': Stage2NodeReviewRequest,
         'stage2_blueprint_review': Stage2NodeReviewRequest,
@@ -3206,7 +3332,7 @@ def reviewer_approval_payload_landed(
 
 
 def _accepted_design_strategy_source(
-    record: _ApprovalRecordV7, current: _DesignSubjects,
+    record: _ApprovalRecordV8, current: _DesignSubjects,
     *, sources: dict[str, review_inheritance.DecisionReceipt] | None = None,
 ) -> _StoredDesignHistory | None:
     chosen = (sources if sources is not None else _design_inheritance_sources(record, current)).get('strategy')
@@ -3215,7 +3341,7 @@ def _accepted_design_strategy_source(
 
 
 def _accepted_design_chapter_source(
-    record: _ApprovalRecordV7,
+    record: _ApprovalRecordV8,
     subject: DesignChapterSubject,
     subject_sha256: str,
     *, sources: dict[str, review_inheritance.DecisionReceipt] | None = None,
@@ -3256,7 +3382,7 @@ def _review_decision_unit(row: Any, subject: str) -> review_inheritance.Decision
         subject, payload, getattr(row, 'source_decision_sha256', None))
 
 
-def _design_inheritance_history(record: _ApprovalRecordV7) -> list[review_inheritance.DecisionReceipt]:
+def _design_inheritance_history(record: _ApprovalRecordV8) -> list[review_inheritance.DecisionReceipt]:
     receipts = []
     for stored in record.design_history:
         slim = isinstance(stored, _StoredDesignDecisionSlim)
@@ -3277,7 +3403,7 @@ def _design_obligations(current: _DesignSubjects) -> dict[str, str]:
 
 
 def _design_inheritance_sources(
-    record: _ApprovalRecordV7, current: _DesignSubjects,
+    record: _ApprovalRecordV8, current: _DesignSubjects,
 ) -> dict[str, review_inheritance.DecisionReceipt]:
     if current.binding_infeasibility is not None:
         return {}
@@ -3285,7 +3411,7 @@ def _design_inheritance_sources(
 
 
 def _require_design_inheritance(
-    record: _ApprovalRecordV7, current: _DesignSubjects, request: DesignReviewRequest,
+    record: _ApprovalRecordV8, current: _DesignSubjects, request: DesignReviewRequest,
 ) -> None:
     units = {'strategy': _review_decision_unit(request.strategy, current.strategy_subject_sha256)}
     units.update({str(row.output_ordinal): _review_decision_unit(
@@ -3365,7 +3491,7 @@ def _design_preflight_actions(
 
 
 def _design_workpack_groups(
-    record: _ApprovalRecordV7, current: _DesignSubjects, novel_dir: Path,
+    record: _ApprovalRecordV8, current: _DesignSubjects, novel_dir: Path,
 ) -> list[WorkpackGroup]:
     inherited = _design_inheritance_sources(record, current)
     blocking: list[WorkpackItem] = []
@@ -3543,16 +3669,15 @@ def _design_workpack_groups(
             scene_refs=[scene.candidate_scene_id for scene in chapter.scenes],
             refs=[
                 *truth.entry_state_aliases,
-                *truth.ending_state_aliases,
-                *(edge.before_alias for edge in truth.causal_edges),
-                *(edge.after_alias for edge in truth.causal_edges),
+                *truth.carry_out_aliases,
+                *(endpoint.endpoint_alias for endpoint in truth.endpoints),
             ],
             detail=_compact({
                 'entry_state_aliases': truth.entry_state_aliases,
-                'ending_state_aliases': truth.ending_state_aliases,
-                'fact_count': len(truth.facts),
-                'causal_edge_count': len(truth.causal_edges),
-                'narrative_relation_count': len(truth.narrative_relations),
+                'carry_out_aliases': truth.carry_out_aliases,
+                'beat_count': len(truth.beats),
+                'constraint_count': len(truth.constraints),
+                'endpoint_count': len(truth.endpoints),
                 'scene_count': len(chapter.scenes),
                 'reading': f'design_chapter_coverage:ch{ordinal}',
             }),
@@ -3746,7 +3871,7 @@ def _report_item(
 
 
 def _accepted_structure_chapter_sources(
-    record: _ApprovalRecordV7, novel_dir: Path, subject_sha256: str,
+    record: _ApprovalRecordV8, novel_dir: Path, subject_sha256: str,
     chapter_subject_sha256: dict[int, str],
 ) -> dict[int, str]:
     """按实际审阅依赖找有效来源；没有逐章快照的旧决定不能用于局部继承。"""
@@ -3756,7 +3881,7 @@ def _accepted_structure_chapter_sources(
                 {str(key): value for key, value in chapter_subject_sha256.items()}).items()}
 
 
-def _structure_inheritance_history(record: _ApprovalRecordV7) -> list[review_inheritance.DecisionReceipt]:
+def _structure_inheritance_history(record: _ApprovalRecordV8) -> list[review_inheritance.DecisionReceipt]:
     return [review_inheritance.DecisionReceipt(
         stored.proof.decision_sha256,
         {str(row.output_ordinal): _review_decision_unit(
@@ -3767,7 +3892,7 @@ def _structure_inheritance_history(record: _ApprovalRecordV7) -> list[review_inh
 
 
 def _require_structure_inheritance(
-    record: _ApprovalRecordV7, chapter_subjects: dict[int, str], request: StructureApprovalRequest,
+    record: _ApprovalRecordV8, chapter_subjects: dict[int, str], request: StructureApprovalRequest,
 ) -> None:
     if not any(row.source_decision_sha256 for row in request.chapters):
         return
@@ -3814,10 +3939,11 @@ def _baseline_signature_items(
 
 
 def _structure_workpack_groups(
-    record: _ApprovalRecordV7, novel_dir: Path, *, subject_sha256: str,
+    record: _ApprovalRecordV8, novel_dir: Path, *, subject_sha256: str,
     chapter_subject_sha256: dict[int, str],
     plan: PlanChapters, concerns: list[BindingConcern], report: Any,
     blueprint_by_ordinal: Mapping[int, Mapping[str, Any]],
+    chapter_materials: Mapping[int, PlotChapterReviewMaterials],
 ) -> list[WorkpackGroup]:
     from novel.stages.stage4.reading import structure_chapter_reading
 
@@ -3919,7 +4045,7 @@ def _structure_workpack_groups(
         source_sha = accepted_sources.get(ordinal)
         reading = structure_chapter_reading(
             chapter,
-            blueprint=blueprint_by_ordinal.get(ordinal) or {},
+            materials=chapter_materials[ordinal],
             concerns=concerns,
             signature_conflict_codes=[
                 item.code for item in signature_items
@@ -4017,7 +4143,7 @@ def structure_workpack(
         with _LOCK:
             record = _read_current(base, sid)
             novel_dir = paths.resolve_novel_dir(base, sid)
-            snapshot = _structure_workpack_snapshot(novel_dir)
+            snapshot = _structure_workpack_snapshot(novel_dir, with_materials=True)
             if check_report is None:
                 from novel.stages.stage4.plan import run_check_only
                 report = run_check_only(state.readonly_ctx(
@@ -4027,7 +4153,7 @@ def structure_workpack(
             # view 的读取也必须落在首尾快照之间；放到末读之后会留下一个
             # 未经 rebound 校验的第三次整读，返回的处置态可能与 groups 混版。
             view = _structure_view(novel_dir, record)
-            after = _structure_workpack_snapshot(novel_dir)
+            after = _structure_workpack_snapshot(novel_dir, with_materials=True)
             if after != snapshot:
                 raise ArtifactUnreadable(
                     'Stage4B 审阅主体在工作包复检期间变化；请刷新后重试')
@@ -4053,13 +4179,14 @@ def structure_workpack(
                     concerns=snapshot.concerns,
                     report=report,
                     blueprint_by_ordinal=blueprint_by_ordinal,
+                    chapter_materials=snapshot.chapter_materials,
                 ),
                 reading=WorkpackReading(
                     legend={
                         **workpack_legend('structure'),
                         **({'binding_input_contract': (
                             snapshot.binding_input_contract
-                            + '：本次章级 B 收到场景 alias 与事实/材料的完整映射；'
+                            + '：本次章级 B 收到完整设计及剧情、证据与舞台的必要映射；'
                             '该真实输入契约参与本次结构审阅主体。')}
                            if snapshot.binding_input_contract is not None else {}),
                     },
@@ -4097,7 +4224,7 @@ def _design_chapter_template_constraints(
     scene = next(
         (scene.candidate_scene_id for scene in subject.chapter.scenes), None)
     alias = next(
-        (fact.fact_alias for fact in subject.blind_truth.facts), None)
+        (beat.alias for beat in subject.blind_truth.beats), None)
     if scene is None or alias is None:
         return []
     return [DesignRepairConstraint(
@@ -4338,13 +4465,14 @@ def _require_design_constraint_refs(
         scenes = {
             scene.candidate_scene_id for scene in row.subject.chapter.scenes
         }
-        aliases = {
-            fact.fact_alias for fact in row.subject.blind_truth.facts
-        } | {
-            alias
-            for fact in row.subject.blind_truth.facts
-            for alias in fact.participant_aliases
-        }
+        truth = row.subject.blind_truth
+        beat_aliases = {beat.alias for beat in truth.beats}
+        semantic_aliases = {c.alias for c in truth.constraints} | {
+            endpoint.endpoint_alias for endpoint in truth.endpoints}
+        aliases = beat_aliases | semantic_aliases | {
+            alias for beat in truth.beats for alias in beat.participant_aliases
+        } | {state.alias for state in (*truth.states, *truth.inherited_states)} | {
+            subject.alias for subject in truth.global_subjects}
         for constraint in (row.constraints if effective is None else effective[row.output_ordinal]):
             unknown_scenes = [
                 ref for ref in constraint.scene_refs if ref not in scenes
@@ -4356,34 +4484,13 @@ def _require_design_constraint_refs(
                 raise HumanEditProtected(
                     f'Stage4A 第 {row.output_ordinal} 章 constraint 越界：'
                     f'scenes={unknown_scenes}, aliases={unknown_aliases}')
-        relation_effects = [
-            constraint.effect.model_dump(mode='json')
-            for constraint in (row.constraints if effective is None else effective[row.output_ordinal])
-            if constraint.effect is not None
-        ]
-        if relation_effects:
-            # 新的关系约束只能把本章 blind truth 中明确标成 review 的关系
-            # 升级为本 strategy epoch 的 HARD 修复要求；不得从自由文本发明关系。
-            from novel.stages.stage4.design_evolution import (
-                DesignEvolutionError, accumulate_relation_constraints,
-            )
-            try:
-                accumulate_relation_constraints(
-                    parent_epoch_sha256=(
-                        row.subject.strategy_epoch_sha256 or '0' * 64),
-                    current_epoch_sha256=(
-                        row.subject.strategy_epoch_sha256 or '0' * 64),
-                    inherited=(),
-                    requested=relation_effects,
-                    truth_relations=[
-                        relation.model_dump(mode='json')
-                        for relation in row.subject.blind_truth.narrative_relations
-                    ],
-                )
-            except DesignEvolutionError as exc:
-                raise HumanEditProtected(
-                    f'Stage4A 第 {row.output_ordinal} 章 typed relation '
-                    f'不属于当前 review truth：{exc}') from exc
+            if constraint.code == 'semantic_constraint' and not set(
+                    constraint.opaque_aliases) <= semantic_aliases:
+                raise HumanEditProtected('语义修复只能引用本章已登记约束或端点')
+            if constraint.code in {'entry_anchor', 'ending_anchor', 'presentation_grouping',
+                                   'disclosure_order', 'noncontiguous_regroup'} and not set(
+                    constraint.opaque_aliases) <= beat_aliases:
+                raise HumanEditProtected('呈现修复只能引用本章完整剧情节点')
 
     # 批次 2：`binding_constraint_unsat` 是「B 失败升级为约束不可满足」的唯一
     # 合法通道，必须由机械 witness 支撑——代码铸造的预检不可行证明，或 fresh B
@@ -4805,7 +4912,7 @@ def _fold_design_constraints(
 
 
 def _design_constraint_catalog(
-    record: _ApprovalRecordV7, current: _DesignSubjects,
+    record: _ApprovalRecordV8, current: _DesignSubjects,
 ) -> dict[int, DesignConstraintCatalog]:
     return {
         row.chapter.output_ordinal: _fold_design_constraints(
@@ -4869,7 +4976,7 @@ def _require_design_constraint_directions(
 
 
 def _effective_design_submission_constraints(
-    record: _ApprovalRecordV7, request: DesignReviewMaterialized,
+    record: _ApprovalRecordV8, request: DesignReviewMaterialized,
 ) -> dict[int, list[DesignRepairConstraint]]:
     """新票必须显式处置完整 active 目录；旧票重放在调用本函数前处理。"""
     effective: dict[int, list[DesignRepairConstraint]] = {}
@@ -4901,7 +5008,7 @@ def _effective_design_submission_constraints(
 
 
 def _chapter_constraint_scope(
-    record: _ApprovalRecordV7,
+    record: _ApprovalRecordV8,
     decision: DesignReviewDecision,
     row: DesignChapterReview,
 ) -> DesignRepairChapterScope:
@@ -4975,7 +5082,7 @@ def _design_chapter_edit_review_token(
 
 
 def _strategy_replan_feedback(
-    record: _ApprovalRecordV7,
+    record: _ApprovalRecordV8,
     decision: DesignReviewDecision,
 ) -> DesignStrategyReplanFeedback:
     """把策略反馈、已接受章及章失败历史收成一个无自由文本的 typed 面。"""
@@ -5437,7 +5544,7 @@ def mark_seen(
                 raise ApprovalRequired(
                     'Blueprint 审阅主体在工作包校验后发生变化；'
                     '本次 seen.read 不落盘，请刷新工作包后重新确认')
-            after_proof, after_identity = _blueprint_seen_snapshot(novel_dir)
+            after_proof, after_identity = _blueprint_seen_snapshot(novel_dir, exact=True)
             if after_proof != proof or after_identity != proof_identity:
                 raise ApprovalRequired(
                     'Blueprint 审阅主体在确认提交期间发生变化；'
@@ -5537,7 +5644,7 @@ def _has_stage5_work(novel_dir: Path) -> bool:
 
 
 def _writing_prerequisites(
-    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV7,
+    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV8,
 ) -> tuple[Path, str, _ApprovalProof]:
     """写作 template/apply 共用的 current subject 判据；不写盘、不启动作业。"""
     novel_dir = paths.resolve_novel_dir(base, sid)

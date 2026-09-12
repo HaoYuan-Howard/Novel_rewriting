@@ -32,7 +32,7 @@ from contracts.schema.stage4 import (
     CtxChapter, EvidenceBinding, PlanChapters, WriterContext,
 )
 from novel import paths, prov
-from novel.errors import ArtifactUnreadable, UpstreamMissing
+from novel.errors import ArtifactUnreadable, UpstreamMissing, NovelError, SourceConflict
 from novel.orchestrator.state import artifact_state, readonly_ctx
 from novel.stages.stage4.beats import beat_index
 from novel.stages.stage4.context import build_writer_context
@@ -59,6 +59,7 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
 
     plan_state = artifact_state(store, PLAN_REL)
     ctx_state = artifact_state(store, CTX_REL)
+    unavailable = None
     blueprints = store.read(ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True)
     blueprint_by_ordinal = {
         int(row['chapter_ordinal']): row
@@ -82,9 +83,17 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
         # 屏仍展示这份正式 Plan 的同快照主体；它不是审阅许可。旧/未知
         # 输入契约保持原业务 hash，审批服务会因 B 非 fresh 拒发 current token；
         # 新回执才产生新的契约身份。不可把历史计划伪装为 identity 基线。
-        structure_subject = structure_review_subject_sha256(
-            plan_art, binding.binding_concerns, blueprints=blueprints,
-            binding_input_contract=binding_contract.identity)
+        from novel.orchestrator.approvals import _structure_workpack_snapshot
+        from novel.consumption import consumed_digest
+        try:
+            snapshot = _structure_workpack_snapshot(novel_dir)
+        except NovelError as exc:
+            structure_subject = None
+            unavailable = str(exc)
+        else:
+            if consumed_digest(_raw) != snapshot.plan_payload_sha256:
+                raise SourceConflict('读取设计页面期间计划变化，请刷新')
+            structure_subject = snapshot.subject_sha256
         plan_raw = plan_art.model_dump(by_alias=True)
         identity = False
         plan_prov = plan_art.provenance
@@ -92,6 +101,7 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
     else:
         plan_raw, ctx_chapters = _identity(store, blueprints)
         structure_subject = None
+        unavailable = '免费参考基线，尚无正式已审计划'
         identity = True
         plan_prov = None
         ctx_prov = None
@@ -117,6 +127,8 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
         title=paths.title_of(novel_dir),
         identity_plan=identity,
         structure_subject_sha256=structure_subject,
+        structure_subject_unavailable_reason=unavailable,
+        blueprint=blueprint_by_ordinal[ordinal],
         chapters=chapters,
         ordinal=ordinal,
         index=index,
@@ -131,19 +143,11 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
             semantic_contract=semantic_contract_of(
                 blueprint_by_ordinal[int(pc['output_ordinal'])]),
             chapter_rewrite_brief=pc['chapter_rewrite_brief'],
+            beat_placements=pc['beat_placements'],
+            anchor_bindings=pc['anchor_bindings'],
             scenes=[PlanSceneLine(
-                i=i,
-                slot=str(scene['slot']),
-                budget_chars=int(scene['budget_chars']),
-                purpose=str(scene['purpose']),
-                role=scene['role'],
-                delivery=scene['delivery'],
-                transition=scene['transition'],
-                land_fact_refs=list(scene['land_fact_refs']),
-                context_fact_refs=list(scene.get('context_fact_refs') or []),
-                turn_fact_ref=str(scene['turn_fact_ref']),
-                entry_state_refs=list(scene.get('entry_state_refs') or []),
-                exit_state_refs=list(scene.get('exit_state_refs') or []),
+                **scene, i=i, beat_refs=[p['beat_ref'] for p in pc['beat_placements']
+                    if any(d['scene_ref'] == scene['slot'] for d in p['deliveries'])]
             ) for i, scene in enumerate(pc['scenes'], start=1)]),
         ctx_chapter=_chapter_view(store, ctx_entry) if ctx_entry is not None else None,
         writer_target=target,
@@ -230,6 +234,6 @@ def _goal_label(goal: object) -> str:
     intent = str(goal.get('intent') or '')
     refs = [
         f'{ref.get("kind")}:{ref.get("ref")}'
-        for ref in (goal.get('fact_refs') or []) if isinstance(ref, dict)
+        for ref in (goal.get('subject_refs') or []) if isinstance(ref, dict)
     ]
     return ' · '.join(part for part in (intent, '、'.join(refs)) if part)

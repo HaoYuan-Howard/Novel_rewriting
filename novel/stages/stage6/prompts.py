@@ -210,36 +210,9 @@ class Material:
 
 
 def story_map(ctx: dict) -> list[dict]:
-    """全书 writer_context → 章级语义契约与 Stage4 新场景地图。"""
-    def goal(value: dict | None) -> dict:
-        # CtxGoal 已在 Stage4 把 typed refs 解析成人话；文案与 Stage5
-        # 共用它，不接触内部 id，也不另造一份目标解释。
-        raw = value or {}
-        return {'intent': raw.get('intent'), 'facts': raw.get('facts') or []}
-
-    out: list[dict] = []
-    for chapter in ctx.get('chapters') or []:
-        scenes = [
-            {
-                'slot': scene.get('slot'),
-                'purpose': scene.get('purpose'),
-                'required_facts': scene.get('required_facts') or [],
-                'turn_fact': scene.get('turn_fact'),
-                'exit_state': scene.get('exit_state') or [],
-            }
-            for scene in (chapter.get('scenes') or [])
-        ]
-        out.append({
-            'chapter': chapter.get('output_ordinal'),
-            'from_source_ordinals': chapter.get('from_source_ordinals') or [],
-            'semantic_contract': chapter.get('semantic_contract') or {},
-            'chapter_rewrite_brief': chapter.get('chapter_rewrite_brief'),
-            'chapter_goal': goal(chapter.get('chapter_goal')),
-            'open_hook_goal': goal(chapter.get('open_hook_goal')),
-            'scenes': scenes,
-            'end_hook_goal': goal(chapter.get('end_hook_goal')),
-        })
-    return out
+    """故事地图与恢复身份共用一个投影，保留完整节点和呈现分配。"""
+    from novel.consumption import stage6_context
+    return stage6_context(ctx)
 
 
 def build_material(*, title: str, ctx: dict, hook_mechanical: dict, grounding: dict,

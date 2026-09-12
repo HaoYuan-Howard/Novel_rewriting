@@ -3,7 +3,7 @@
 """Stage4/6/7 每条 HARD 判据的最小会红样本登记表（VAL-02）。
 
 每个 ``build`` 都调用真实判据入口。Stage4 的样本以生产的
-``identity_plan`` 为绿底座，再只破坏一条原子事实或场景契约；这里不保留退役分组
+``identity_plan`` 为绿底座，再只破坏一个完整节点、呈现端点或场景契约；这里不保留退役分组
 算法的测试替身。
 """
 from __future__ import annotations
@@ -82,90 +82,12 @@ def _norm7(value: str) -> str:
     return norm(value)
 
 
-# ═══ Stage4：原子事实契约 + 场景编译器 ════════════════════════════════════════
-
-_TEXT4 = '甲收到入住邀请。乙在门口拒绝甲。甲决定留下。'
-
-
-def _span4(fragment: str) -> dict:
-    start = _TEXT4.index(fragment)
-    return {'text': fragment, 'start': start, 'end': start + len(fragment),
-            'normalized': fragment.rstrip('。'), 'recovery': 'exact'}
-
-
-_MAIN4 = [{'chapter_ordinal': 1, 'text': _TEXT4}]
-_BPS4 = {'blueprints': [{
-    'chapter_ordinal': 1,
-    'chapter_function': '建立入住冲突并完成主角入局',
-    'fact_atoms': [
-        {'fact_id': 'f01_001', 'claim': '甲收到入住邀请', 'kind': 'information',
-         'obligation': 'land', 'source_beat_ref': 'b01_01',
-         'source': _span4('甲收到入住邀请。'), 'participant_char_ids': ['char_001']},
-        {'fact_id': 'f01_002', 'claim': '乙拒绝甲入住', 'kind': 'event',
-         'obligation': 'land', 'source_beat_ref': 'b01_02',
-         'source': _span4('乙在门口拒绝甲。'),
-         'participant_char_ids': ['char_001', 'char_002']},
-        {'fact_id': 'f01_003', 'claim': '甲决定留下', 'kind': 'character_state',
-         'obligation': 'land', 'source_beat_ref': 'b01_03',
-         'source': _span4('甲决定留下。'), 'participant_char_ids': ['char_001']},
-    ],
-    'causal_edges': [{'before': 'f01_002', 'after': 'f01_003'}],
-    'entry_state_refs': [], 'ending_state_refs': ['f01_003'],
-    'beats': [
-        {'beat_id': 'b01_01', 'span': _span4('甲收到入住邀请。'),
-         'time_layer': 'present', 'place': '门外',
-         'present_char_ids': ['char_001'], 'hinges': []},
-        {'beat_id': 'b01_02', 'span': _span4('乙在门口拒绝甲。'),
-         'time_layer': 'present', 'place': '门口',
-         'present_char_ids': ['char_001', 'char_002'],
-         'hinges': [{'hinge_id': 'h01_001', 'kind': '因果前提',
-                     'source_fact_refs': ['f01_002'], 'source': _span4('拒绝甲')}]},
-        {'beat_id': 'b01_03', 'span': _span4('甲决定留下。'),
-         'time_layer': 'present', 'place': '门口',
-         'present_char_ids': ['char_001'], 'hinges': []},
-    ],
-    'narration': [],
-}]}
-
-
-def _clean_plan4() -> dict:
-    from novel.stages.stage4.measure import identity_plan
-    return identity_plan(_BPS4, _MAIN4)
-
-
-def _ctx4(plan: dict) -> dict:
-    """由正式 plan 投影一份判据所需的最小 writer_context 绿底座。"""
-    from contracts.invariants import HINGE_GROUPS
-    from novel.stages.stage4.beats import beat_index, verbatim_pieces
-
-    bp = _BPS4['blueprints'][0]
-    atoms = {row['fact_id']: row['claim'] for row in bp['fact_atoms']}
-    bidx = beat_index(_BPS4, _MAIN4)
-    hinges = {hinge['hinge_id']: hinge for row in bidx.values()
-              for hinge in row.get('hinges') or []}
-    scenes = []
-    for planned in plan['output_chapters'][0].get('scenes') or []:
-        materials = {field: [] for field in dict.fromkeys(HINGE_GROUPS.values())}
-        for ref in planned.get('material_refs') or []:
-            pieces, _unknown = verbatim_pieces([hinges[ref]])
-            for field, values in pieces.items():
-                materials[field].extend(values)
-        scenes.append({
-            'slot': planned.get('slot'),
-            'required_facts': [atoms[ref] for ref in planned.get('land_fact_refs') or []],
-            'context_facts': [atoms[ref]
-                              for ref in planned.get('context_fact_refs') or []],
-            'stages': [{'time_layer': bidx[ref].get('time_layer'),
-                        'place': bidx[ref].get('place'),
-                        'present': []}
-                       for ref in planned.get('stage_refs') or []],
-            **materials,
-        })
-    return {'chapters': [{
-        'output_ordinal': 1, 'scenes': scenes,
-        'characters': [], 'narration': [], 'facts': {'secrets': []},
-    }]}
-
+# ═══ Stage4：完整剧情与呈现契约 ═══════════════════════════════════════════════
+from tests.plot_fixtures import (
+    TEXT as _TEXT4, MAIN as _MAIN4, GLOBAL as _GLOBAL4,
+    blueprint as _blueprints4, links as _links4, plan as _clean_plan4, context as _ctx4,
+)
+_BPS4 = _blueprints4()
 
 def _phase_links4(*, mismatch: bool = False) -> tuple:
     from contracts.artifacts import STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING
@@ -192,18 +114,20 @@ def _phase_links4(*, mismatch: bool = False) -> tuple:
 
 def _find4(plan: dict, *, ctx: dict | None = None,
            ctx_link: tuple[str, str] = ('ok', 'same plan'),
-           phase_links: tuple | None = None) -> list:
+           phase_links: tuple | None = None, blueprints: dict | None = None) -> list:
     from novel.stages.stage4 import checks
+    # 坏计划不能先经 Context 编译器拒绝，必须让目标生产判据看到反例。
+    expected = _ctx4(_clean_plan4())
     outcomes = checks.check(
-        plan, blueprints=_BPS4, main_text=_MAIN4,
-        ctx=_ctx4(plan) if ctx is None else ctx, ctx_link=ctx_link,
+        plan, blueprints=_BPS4 if blueprints is None else blueprints, main_text=_MAIN4,
+        global_g=_GLOBAL4, knowledge_links=_links4(),
+        ctx=expected if ctx is None else ctx, expected_ctx=expected, ctx_link=ctx_link,
         phase_links=_phase_links4() if phase_links is None else phase_links)
     return [finding_ for outcome in outcomes for finding_ in outcome.findings]
 
 
 def _bad_plan4(rule: str) -> list:
     plan = copy.deepcopy(_clean_plan4())
-    clean_ctx = _ctx4(plan)
     chapter = plan['output_chapters'][0]
     scenes = chapter['scenes']
     if rule == 'one_to_one':
@@ -212,29 +136,12 @@ def _bad_plan4(rule: str) -> list:
         chapter['output_ordinal'] = 2
     elif rule == 'empty_chapter':
         chapter['scenes'] = []
-    elif rule == 'fact_ref':
-        scenes[0]['context_fact_refs'] = ['f01_999']
-    elif rule == 'fact_coverage':
-        scenes[0]['land_fact_refs'] = []
-    elif rule == 'causal_closure':
-        scenes[-1]['land_fact_refs'] = [
-            ref for ref in scenes[-1]['land_fact_refs'] if ref != 'f01_003']
-    elif rule == 'state_closure':
-        # ⚠ 靶子必须打在**可判的**那一支上。章尾闭合现在按「本章有没有让它成立」
-        #   判（落地即成立），清空末场 declared exit 已经不是违约；`continue`
-        #   承接才是那条恒可判的边。
-        scenes[-2]['exit_state_refs'] = ['f01_002']   # 上一场确立了一个状态
-        scenes[-1]['entry_state_refs'] = []           # 同一时间线却没承接它
-    elif rule == 'material_coverage':
-        for scene in scenes:
-            scene['material_refs'] = []
+    elif rule == 'placement_ref':
+        chapter['beat_placements'].pop()
     elif rule == 'scene_transition':
         scenes[0]['transition'] = 'continue'
     elif rule == 'goal_landing':
-        chapter['open_hook_goal'] = {
-            'intent': 'open',
-            'fact_refs': [{'kind': 'fact_atom', 'ref': 'f01_002'}],
-        }
+        chapter['open_hook_goal']['anchor_scene_ref'] = 's02'
     elif rule == 'budget_int':
         scenes[0]['budget_chars'] = 0
     elif rule == 'budget_band':
@@ -247,48 +154,23 @@ def _bad_plan4(rule: str) -> list:
         chapter['chapter_rewrite_brief'] = '用张力强化整章'
     else:
         raise AssertionError(rule)
-    return _find4(plan, ctx=clean_ctx)
+    return _find4(plan)
 
 
 def _bad_context4(rule: str) -> list:
     plan = _clean_plan4()
     ctx = _ctx4(plan)
     chapter = ctx['chapters'][0]
-    if rule == 'ctx_facts_exact':
-        chapter['scenes'][0]['required_facts'] = ['被中间层改写过的事实']
+    if rule == 'ctx_plot_exact':
+        chapter['beats'][0]['content'] = '被中间层改写过的剧情'
     elif rule == 'ctx_name_attested':
         chapter['characters'] = [
-            {'char_id': 'char_999', 'display_name': 'char_999', 'role': '未知'}]
-    elif rule == 'ctx_stage_explicit':
-        chapter['scenes'][0]['stages'][0]['place'] = '错误地点'
-    elif rule == 'ctx_hinge_delivered':
-        for scene in chapter['scenes']:
-            for field in ('verbatim', 'keep_value', 'must_appear', 'must_hold'):
-                scene[field] = []
+            {'char_id': 'char_999', 'display_name': '虚构姓名', 'role': '未知'}]
+    elif rule == 'ctx_permission_exact':
+        chapter['scenes'][-1]['state_events'] = []
     else:
         raise AssertionError(rule)
     return _find4(plan, ctx=ctx)
-
-
-def _bad_narrative_relation4() -> list:
-    """给既有三场绿底座增加一条明确不成立的 HARD 同场关系。"""
-    from novel.stages.stage4 import checks
-    from novel.stages.stage4.measure import identity_plan
-
-    blueprints = copy.deepcopy(_BPS4)
-    blueprints['blueprints'][0]['narrative_relations'] = [{
-        'kind': 'same_scene',
-        'enforcement': 'hard',
-        'left_fact_ref': 'f01_001',
-        'right_fact_ref': 'f01_003',
-    }]
-    plan = identity_plan(blueprints, _MAIN4)
-    outcomes = checks.check(
-        plan, blueprints=blueprints, main_text=_MAIN4,
-        ctx=_ctx4(plan), ctx_link=('ok', 'same plan'),
-        phase_links=_phase_links4(),
-    )
-    return [finding_ for outcome in outcomes for finding_ in outcome.findings]
 
 
 # ═══ 登记表 ═══════════════════════════════════════════════════════════════════
@@ -334,17 +216,14 @@ CASES: dict[str, Case] = {
 
     **{rule: Case('stage4', lambda rule=rule: _bad_plan4(rule)) for rule in (
         'one_to_one', 'ordinal_seq', 'empty_chapter',
-        'fact_ref', 'fact_coverage', 'causal_closure', 'state_closure',
-        'material_coverage', 'scene_transition', 'goal_landing', 'budget_int',
+        'placement_ref', 'scene_transition', 'goal_landing', 'budget_int',
         'budget_band', 'plan_book_band', 'style_words',
     )},
     'context_link': Case('stage4', lambda: _find4(
         _clean_plan4(), ctx_link=('stale', '上下文照的是另一版计划'))),
     'phase_artifact_link': Case('stage4', lambda: _find4(
         _clean_plan4(), phase_links=_phase_links4(mismatch=True))),
-    'narrative_relation': Case('stage4', _bad_narrative_relation4),
     **{rule: Case('stage4', lambda rule=rule: _bad_context4(rule)) for rule in (
-        'ctx_facts_exact', 'ctx_name_attested', 'ctx_stage_explicit',
-        'ctx_hinge_delivered',
+        'ctx_plot_exact', 'ctx_name_attested', 'ctx_permission_exact',
     )},
 }
