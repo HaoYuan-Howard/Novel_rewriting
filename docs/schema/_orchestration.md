@@ -699,6 +699,8 @@ stale。producer 输出汇总为 `file_changed`、策略未登记或参数不唯
 | `verified_skipped_nodes / verified_skipped_count` | 同一 planner 快照已明确无需再次执行、且严格位于续跑点之前的有序前缀；只能来自 `NODES`，数量必须一致 |
 
 运行页默认折叠 `verified_skipped_nodes`，但允许展开审计；这只是呈现压缩，不删除步骤和信标历史。
+普通规划返回续跑点之前已验证的完整前缀；原 owner 或 prepared 提交优先恢复时，不重读可能半提交的
+审批材料，前缀可为空或短于续跑点。空前缀只表示尚未验证前置节点，不能按节点位置补造跳过证明。
 例如 Stage4B 的 `request_replan` 会先显示 `stage4.context` 上的
 `approval:stage4-structure-replan / commander`。若交叉核证得到具体结构损害，形成新的 non-all-accept
 typed A 决定后才显示 `stage4.design / recovery:stage4-design-action / executor`；若只有 read-only

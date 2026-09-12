@@ -686,7 +686,7 @@ class RunResumeFrontierView(StrictModel):
     writes: str | None = None
     next_handler: RunNextHandler
     review_states: list[RunReviewStateView] | None = None
-    #: 当前同一 planner 快照明确判为无需再次执行、且位于续跑点之前的节点。
+    #: 同一快照已验证的连续前缀；优先恢复未审前置节点时可为空，不虚构 skip。
     verified_skipped_nodes: list[str] = Field(default_factory=list)
     verified_skipped_count: int = Field(ge=0)
 
@@ -729,8 +729,8 @@ class RunResumeFrontierView(StrictModel):
         if any(rank[node] >= rank[self.node]
                for node in self.verified_skipped_nodes):
             raise ValueError('verified skipped 节点必须位于续跑点之前')
-        if self.verified_skipped_nodes != list(NODES)[:rank[self.node]]:
-            raise ValueError('verified skipped 必须是续跑点之前的完整 NODES 前缀')
+        if self.verified_skipped_nodes != list(NODES)[:len(self.verified_skipped_nodes)]:
+            raise ValueError('verified skipped 必须是续跑点之前的连续 NODES 前缀')
         if self.state == 'ready' and self.waiting_on is not None:
             raise ValueError('ready 续跑点不得携带 waiting_on')
         if self.state == 'ready':

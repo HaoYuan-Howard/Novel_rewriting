@@ -498,19 +498,25 @@ def _edit_candidate(ctx: RunContext, prepared: PreparedCharacters, previous: Cha
     receipt = previous.provenance.characters_edit
     raw = previous.model_dump(mode='json')['characters']
     before = copy.deepcopy(raw)
+    # 替换/删除只能指向请求绑定的原实体，不能猜中本批将分配的正式 ID。
+    # 先检查全部目标，使 add 与 replace/delete 的列表顺序不改变权限。
+    for op in edit.operations:
+        if isinstance(op, (CharacterReplace, CharacterDelete)) and op.char_id not in before:
+            raise TerminalState(f'{op.kind} 不能指向原基线不存在的人物')
+    # 原基线（包括本批稍后删除的实体）与退休集合共同保留身份；新局部引用
+    # 按数值排序分配，重排操作列表不改变映射。回执与批次候选冻结本次分配。
+    reserved = (set(raw) | set(previous.provenance.retired_character_ids)
+                | set(receipt.deleted_character_ids if receipt else []))
+    first_new_id = max((int(cid.removeprefix('char_')) for cid in reserved), default=0) + 1
+    added_refs = sorted((op.character_ref for op in edit.operations if isinstance(op, CharacterAdd)),
+                        key=lambda ref: int(ref.removeprefix('c')))
+    added_ids = {ref: f'char_{first_new_id + index:03d}' for index, ref in enumerate(added_refs)}
     for op in edit.operations:
         if isinstance(op, CharacterAdd):
-            if (op.char_id in raw or op.char_id in previous.provenance.retired_character_ids
-                    or (receipt and op.char_id in receipt.deleted_character_ids)):
-                raise TerminalState('add 不能覆盖或复用已经登记过的人物 ID')
-            raw[op.char_id] = op.character.model_dump(mode='json')
+            raw[added_ids[op.character_ref]] = op.character.model_dump(mode='json')
         elif isinstance(op, CharacterReplace):
-            if op.char_id not in raw:
-                raise TerminalState('replace 不能创建不存在的人物')
             raw[op.char_id] = op.character.model_dump(mode='json')
         elif isinstance(op, CharacterDelete):
-            if op.char_id not in raw:
-                raise TerminalState('delete 不能指向不存在的人物')
             del raw[op.char_id]
     try:
         raw, anchors = compile_manual_evidence_refs(
@@ -530,7 +536,8 @@ def _edit_candidate(ctx: RunContext, prepared: PreparedCharacters, previous: Cha
             source_sha256=sha, edit_sha256=agent_runs.canonical_sha256(edit.model_dump(mode='json')),
             deleted_character_ids=sorted(set(receipt.deleted_character_ids if receipt else []) |
                                          {op.char_id for op in edit.operations
-                                          if isinstance(op, CharacterDelete)})),
+                                          if isinstance(op, CharacterDelete)}),
+            added_character_ids=added_ids),
     })
     artifact = CharacterRegistry(characters=normalized, evidence_anchors=anchors, _provenance=provenance)
     outcomes = checks.check_characters(artifact.model_dump(mode='json', by_alias=True), list(prepared.main_text))

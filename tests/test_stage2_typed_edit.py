@@ -929,7 +929,7 @@ def test_joint_typed_preflight_uses_new_character_preview_for_relation(tmp_path)
                  role_evidence_refs=[evidence], first_appearance_evidence_refs=[evidence],
                  aliases=[{'surface': '管家', 'identity_revealed_from': 3, 'evidence_refs': [evidence]}])
     request['core_edits']['characters']['operations'] = [
-        {'kind': 'add', 'char_id': 'char_003', 'character': value}]
+        {'kind': 'add', 'character_ref': 'c1', 'character': value}]
     current = grounding_io.read_own(store, extract.GLOBAL_REL)[0]
     global_delta = {'collection_edits': [{
         'collection': 'relations',
@@ -944,6 +944,7 @@ def test_joint_typed_preflight_uses_new_character_preview_for_relation(tmp_path)
     with pytest.raises(extract.GlobalEditCandidateRejected, match='dangling_relation_endpoint:1'):
         extract.preflight_global_edit(ctx, GlobalEdit.model_validate(global_delta))
     assert _book_file_snapshot(ctx.novel_dir) == original
+    global_delta['collection_edits'][0]['operations'][0]['item']['subject_id'] = 'c1'
     request['core_edits']['global'] = global_delta
     ledger = ctx.ledger.path.read_bytes()
     identity = approve(ctx, Stage2NodeReviewRequest.model_validate(request))

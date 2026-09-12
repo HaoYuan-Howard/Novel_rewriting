@@ -22,7 +22,8 @@ export type EditableCharacter = RegisteredCharacter<string | { chapter_ordinal: 
 export interface CharactersEdit {
   source_sha256: string
   operations: (
-    | { kind: 'add' | 'replace'; char_id: string; character: EditableCharacter }
+    | { kind: 'add'; character_ref: string; character: EditableCharacter }
+    | { kind: 'replace'; char_id: string; character: EditableCharacter }
     | { kind: 'delete'; char_id: string; reason: string }
   )[]
 }
@@ -42,6 +43,7 @@ export interface CharactersProvenance extends Provenance {
     source_sha256: string
     edit_sha256: string
     deleted_character_ids: string[]
+    added_character_ids: Record<string, string>
   } | null
 }
 

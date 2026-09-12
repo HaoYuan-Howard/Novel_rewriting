@@ -237,7 +237,8 @@ def test_characters_delete_and_add_use_real_cli_and_keep_deletion_receipt(tmp_pa
         assert removed['registry']['_provenance']['characters_edit'][
             'deleted_character_ids'] == [cid]
         saved['kind'] = 'add'
-        saved['char_id'] = 'char_003'
+        del saved['char_id']
+        saved['character_ref'] = 'c1'
         restored = restarted.post(endpoint + '/edit', json={
             'actor': 'test:human', 'reason': '用原文证据重新登记人物',
             'edit': {'source_sha256': removed['source_sha256'], 'operations': [saved]}})
@@ -252,6 +253,7 @@ def test_characters_delete_and_add_use_real_cli_and_keep_deletion_receipt(tmp_pa
         expected = copy.deepcopy(before['registry']['characters'])
         expected['char_003'] = expected.pop(cid)
         assert after['registry']['characters'] == expected
+        assert after['registry']['_provenance']['characters_edit']['added_character_ids'] == {'c1': 'char_003'}
         assert after['artifact']['freshness'] == 'fresh'
     assert not (ctx.novel_dir / 'stage2/global_grounding.json').exists()
     assert ctx.ledger.path.read_bytes() == ledger

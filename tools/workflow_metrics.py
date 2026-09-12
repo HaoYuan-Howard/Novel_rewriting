@@ -15,6 +15,7 @@ CLI 跑了多少次、结构上动了什么」——**全部是读数，一条�
     | token / 缓存 | `<base>/_service/ledger.jsonl`（`novel/llm/ledger.py::ledger_path`） |
     | CLI 次数 / 退出码 / 时长 | `<base>/_service/agent_progress.jsonl`（`novel/orchestrator/beacon.py::read_events`） |
     | Stage2 章耗时 / Commander 分段 | 同 run 的 ledger `latency_ms` + 上述 CLI 信标；不拿 token 猜时间 |
+    | Gate A C 语义干预 / 原调用区间 | 永久 WorkUnit 原回答、typed 决定和已提交 owner 目标 / 原 receipt；人工 actor 不证明模型身份 |
     | Stage2 机械质量 | 生产 `stage2.blueprint --check-only` 的同一 `run_check_only` 读路径 |
     | 闸决定 / 修复 / 重采 / 采纳 | `<base>/_service/llm_audit.jsonl`（`novel/llm/ledger.py::audit_path`） |
     | 人审项 | `stage2/global_review.json` + `global_review_decisions*.json` + Stage4 逐章结构决定 |
@@ -1304,6 +1305,141 @@ def _gate_a_call_metrics(rows: list[dict[str, Any]], phases: dict) -> dict[str, 
             'wall_clock_seconds': None, 'wall_clock_state': 'unver'}
 
 
+def _gate_a_commander_evidence(base: Path, sid: str) -> dict[str, Any]:
+    """只读永久内容证明；活动 action 清理、人工 actor 字样均不改变模型归属。"""
+    from contracts.schema.workflow import WorkUnitRegistryV1
+    from novel import work_units
+
+    result = {'actions': [], 'intervals': {}, 'errors': [], 'action_errors': [],
+              'pending_turns': 0, 'executor_budgets': []}
+    try:
+        registry = WorkUnitRegistryV1.model_validate_json(paths.work_unit_registry_path(base, sid).read_bytes())
+        if registry.sid != sid:
+            raise ValueError('registry_identity')
+        for unit_id in registry.unit_ids:
+            budget = work_units.readonly_budget(base, sid, unit_id)
+            ledger = budget._read()
+            if ledger.role == 'executor' and ledger.node in {'stage2.characters', 'stage2.global'}:
+                result['executor_budgets'].append(budget)
+            if ledger.role != 'commander' or ledger.node != 'stage2.global':
+                continue
+            for turn in ledger.turns:
+                if not turn.response_sha256:
+                    result['pending_turns'] += int(turn.state in {'reserved', 'unknown'})
+                    continue
+                try:
+                    work_units.reconcile_commander_response(budget, turn.turn_id, read_only=True)
+                    receipt = budget.response_payload(turn.turn_id)['prepared_receipt']
+                    cost = receipt['cost_kwargs']
+                    key = (turn.run_id, cost['attempt_id'])
+                    end, latency = receipt['attempt_event']['ts'], cost.get('latency_ms')
+                    if type(end) is int and type(latency) is int and latency >= 0:
+                        interval = (end - latency / 1000, float(end))
+                        if key in result['intervals']:
+                            raise ValueError('commander_attempt_ambiguous')
+                        result['intervals'][key] = interval
+                except Exception:  # noqa: BLE001 —— 损坏原来源不补账、不公开含正文异常
+                    result['errors'].append('commander_response_unproved')
+                    continue
+                try:
+                    action = work_units.readonly_commander_action(budget, turn.turn_id)
+                    result['actions'].append({'action': action, 'unit_id': unit_id,
+                        'turn_id': turn.turn_id, 'run_id': turn.run_id})
+                except Exception:  # noqa: BLE001
+                    result['action_errors'].append('commander_action_unproved')
+    except Exception:  # noqa: BLE001
+        result['errors'].append('work_unit_history_unreadable')
+    return result
+
+
+def _gate_a_wall_clock(base, sid, run_id, rows, evidence) -> dict[str, Any]:
+    """节点 start/end 与原 C receipt 的实际执行跨度；账本补写时刻不是调用终点。"""
+    nodes = {'stage2.analyze', 'stage2.characters', 'stage2.global'}
+    wires = [row for row in rows if _performance_node(row)[0] in nodes and row.get('cached') is False]
+    intervals, errors, required_executors = [], [], set()
+    seen = set()
+    for row in wires:
+        node, role = _performance_node(row)
+        key = (row.get('run_id'), row.get('attempt_id'))
+        if not all(isinstance(value, str) and value for value in key):
+            errors.append('attempt_identity_missing')
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        if role == 'executor':
+            required_executors.add((key[0], node))
+        elif key in evidence['intervals']:
+            intervals.append(evidence['intervals'][key])
+        else:
+            errors.append('commander_original_interval_missing')
+    # E 信标是整个节点执行窗口，不能拆成或冒充某次模型往返。
+    runs = {value[0] for value in required_executors}
+    for current_run in runs:
+        try:
+            _spans, _errors, node_spans, node_errors = _performance_intervals(base, sid, current_run)
+        except Exception:  # noqa: BLE001
+            errors.append('execution_intervals_unreadable')
+            continue
+        for _run, node in sorted(required_executors):
+            if _run != current_run:
+                continue
+            intervals.extend(node_spans[node])
+            errors.extend(node_errors[node])
+            if not node_spans[node]:
+                errors.append('executor_execution_interval_missing')
+    if not intervals:
+        errors.append('no_observed_interval')
+    if not rows:
+        errors.append('ledger_missing')
+    return {'wall_clock_seconds': round(max(end for _, end in intervals) - min(start for start, _ in intervals), 3)
+            if intervals and not errors else None,
+        'wall_clock_state': 'unver' if errors else 'ok',
+        'wall_clock_basis': 'executor_cli_windows_and_original_commander_receipts',
+        'wall_clock_endpoint_precision_seconds': 1,
+        'known_interval_union_seconds': _interval_union(intervals),
+        'observed_intervals': len(intervals), 'wall_clock_errors': sorted(set(errors))}
+
+
+def _original_executor_system(base, sid, run_id, node, run, response_model, user):
+    """原请求 blob 证明历史 system；当前提示变化不是已经完成的首抽来源失效边。"""
+    from contracts.schema.workflow import WorkUnitRegistryV1
+    from novel import work_units
+    from novel.agents.session_client import agent_json_schema
+    from novel.llm import agent_runs
+
+    expected = run['request']
+    schema = agent_json_schema(response_model)
+    if (agent_runs.canonical_sha256(user.encode('utf-8')) != expected['user_sha256']
+            or agent_runs.canonical_sha256(schema) != expected['response_schema_sha256']):
+        raise ValueError('historical_user_or_schema_mismatch')
+    registry = WorkUnitRegistryV1.model_validate_json(paths.work_unit_registry_path(base, sid).read_bytes())
+    systems = set()
+    for unit_id in registry.unit_ids:
+        budget = work_units.readonly_budget(base, sid, unit_id)
+        if budget.identity['node'] != node or budget.identity['role'] != 'executor':
+            continue
+        for turn in budget._read().turns:
+            if turn.run_id != run_id:
+                continue
+            saved = budget.request_payload(turn.turn_id)
+            system, identity = saved.get('system'), saved.get('identity')
+            if not isinstance(system, str):
+                continue  # 同 provider 续轮不重复发送 system，原首轮仍必须在永久账里。
+            if (saved.get('kind') != 'executor-content-request-v1' or saved.get('prompt') != user
+                    or not isinstance(identity, dict) or identity.get('node') != node
+                    or saved.get('output_schema') != schema
+                    or identity.get('system_sha256') != expected['system_sha256']
+                    or identity.get('user_sha256') != expected['user_sha256']
+                    or identity.get('schema_sha256') != expected['response_schema_sha256']
+                    or agent_runs.canonical_sha256(system.encode('utf-8')) != expected['system_sha256']):
+                raise ValueError('historical_executor_request_mismatch')
+            systems.add(system)
+    if len(systems) != 1:
+        raise ValueError('historical_executor_system_missing_or_ambiguous')
+    return systems.pop()
+
+
 def _gate_a_source(ctx, store, base):
     """复用历史 run 的只读验证，绑定原回答、回执、账和 frozen ID；不重编新候选。"""
     from contracts.schema.analyze import AnalyzeReceipt
@@ -1320,8 +1456,14 @@ def _gate_a_source(ctx, store, base):
     table = GlobalEvidenceCandidateTable.build(rows)
     prepared = analyze.PreparedAnalyze(rows, source_sha, table, f'书名：{ctx.title}\n\n{table.render()}',
         agent_runs.canonical_sha256(dict(node=analyze.NODE, main_text_sha256=source_sha, table_sha256=table.sha256())))
+    _historical, original_run, _run_path = agent_runs._historical_run_context(
+        ctx, analyze.run_spec(), source_run_id=receipt.run_id, ledger_source_path=ledger_path(base))
+    original_system = _original_executor_system(base, ctx.sid, receipt.run_id, analyze.NODE,
+        original_run, analyze.AnalyzeResponse, prepared.user)
+    original_ceiling = original_run['request_policy']['phases'][0]['requested_output_token_ceiling']
     restored = agent_runs.restore_historical_run(ctx, analyze.run_spec(), source_run_id=receipt.run_id,
-        **prepared.request(), ledger_source_path=ledger_path(base))
+        input_sha256=prepared.input_sha256, system=original_system, user=prepared.user,
+        response_model=analyze.AnalyzeResponse, max_tokens=original_ceiling, ledger_source_path=ledger_path(base))
     checkpoint = restored.checkpoint
     commit = agent_runs.commit_state(restored.context, analyze.commit_spec())
     identity = restored.context.ledger.request_identity_for_attempt(receipt.attempt_id)
@@ -1338,27 +1480,205 @@ def _gate_a_source(ctx, store, base):
     return receipt, receipt_sha, checkpoint
 
 
-def _core_commander_changes(base, novel_dir, sid, store, *, initial=None) -> dict[str, Any]:
-    """只有不可变 C 决定 + 精确 prepared + 完成回执才算实际改写。"""
+def _metric_artifact_history(store, rel, model):
+    """读取正式和已有轮次，既不制造轮次，也不把当前内容当作旧提交。"""
+    candidates = [rel, *(paths.round_rel(rel, number) for number in sorted(paths.archived_rounds(
+        store.path(paths.rounds_dir_of(rel)), paths.stem_of(rel))))]
+    return [store.read_own(model, candidate)[0] for candidate in candidates if store.exists(candidate)]
+
+
+def _reviewed_global_changes(store, action):
+    from contracts.artifacts import STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT
+    from contracts.schema.stage2 import GlobalEdit, GlobalEditCommit
+
+    edit = GlobalEdit.model_validate(decode_artifact(STAGE2_GLOBAL_EDIT, action['input_payload']).payload)
+    if edit.post_edit_review is None:
+        raise ValueError('review_attestation_missing')
+    identity = store.prospective_sparse_sha256(STAGE2_GLOBAL_EDIT, edit)
+    matches = [journal for journal in _metric_artifact_history(store, STAGE2_GLOBAL_EDIT_COMMIT, GlobalEditCommit)
+        if journal.reviewed_edit and journal.failed_edit_sha256 == identity
+        and journal.expected_source_sha256 == edit.post_edit_review.expected_source_sha256
+        and journal.global_review_workpack_sha256 == edit.post_edit_review.expected_workpack_sha256]
+    # 同一个 prepared -> committed 会留两个状态轮次；只选唯一已闭合业务目标。
+    completed = {journal.target.global_sha256: journal for journal in matches if journal.state == 'committed'}
+    if not completed:
+        return identity, 'pending', []
+    if len(completed) != 1:
+        raise ValueError('global_edit_commit_ambiguous')
+    journal = next(iter(completed.values()))
+    if journal.action_kind != 'apply_edit':
+        # revalidate 可能消费了另一次手工 INVALID；不凭原 edit 身份吞并其变化。
+        raise ValueError('revalidation_delta_not_bound')
+    before = store.read_own_by_sha256(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING, journal.baseline.global_sha256)
+    after = store.read_own_by_sha256(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING, journal.target.global_sha256)
+    if after != journal.target.global_grounding:
+        raise ValueError('global_target_mismatch')
+    return identity, 'completed', [('global', before, after)]
+
+
+def _directed_executor_changes(base, novel_dir, sid, store, request, budgets):
+    """C 原 review_token -> E 原请求 -> 已提交 run；只描述 E 执行的语义变化。"""
+    from novel.llm import agent_runs, stage2_global_runs
+    from novel.orchestrator.state import readonly_ctx
+    from novel.stages.stage2 import characters, extract
+
+    owner = request.owner
+    rel, model = ((STAGE2_CHARACTERS, CharacterRegistry) if owner == 'stage2.characters'
+                  else (STAGE2_GLOBAL_GROUNDING, KnowledgeGrounding))
+    spec, commit_spec, response_model, ceiling = (
+        (characters.run_spec(), characters.commit_spec(), characters.CharactersResponse, characters.MAX_TOKENS)
+        if owner == 'stage2.characters' else (stage2_global_runs._run_spec(), stage2_global_runs._commit_spec(),
+            extract._active_global_spec().agent_response_model, extract.GLOBAL_MAX_TOKENS))
+    requests = {}
+    for budget in budgets:
+        if budget.identity['node'] != owner:
+            continue
+        for turn in budget._read().turns:
+            saved = budget.request_payload(turn.turn_id)
+            if saved.get('kind') != 'executor-content-request-v1':
+                continue
+            user = saved.get('prompt')
+            if not isinstance(user, str) or not isinstance(saved.get('system'), str):
+                continue
+            if user.startswith('{'):
+                try:
+                    envelope = json.loads(user)
+                    if envelope.get('kind') == 'checkpoint_recovery_task':
+                        user = envelope['original_task']
+                except (ValueError, AttributeError, KeyError):
+                    pass
+            if agent_runs.canonical_sha256(user.encode('utf-8')) != saved['identity']['user_sha256']:
+                continue
+            try:
+                directive = json.loads(user.rsplit('\n\n', 1)[-1])
+            except ValueError:
+                continue
+            if not isinstance(directive, dict) or directive.get('review_token') != request.review_token:
+                continue
+            expected_kind = 'character_revision_baseline' if owner == 'stage2.characters' else 'commander_rework_request'
+            if (directive.get('kind') != expected_kind or directive.get('reason') != request.reason
+                    or owner == 'stage2.global' and (directive.get('owner') != owner
+                        or directive.get('reviewer_node') != request.node
+                        or directive.get('chapter_ordinals') != request.chapter_ordinals)):
+                raise ValueError('executor_directive_mismatch')
+            value = (saved['system'], user)
+            if turn.run_id in requests and requests[turn.run_id] != value:
+                raise ValueError('executor_request_ambiguous')
+            requests[turn.run_id] = value
+    if not requests:
+        raise ValueError('executor_request_link_missing')
+    completed = []
+    for run_id, (system, user) in requests.items():
+        ctx, run, run_path = agent_runs._historical_run_context(
+            readonly_ctx(novel_dir, owner, prov.code_version()), spec,
+            source_run_id=run_id, ledger_source_path=ledger_path(base))
+        journal_path = commit_spec.commit_path(ctx)
+        if not journal_path.is_file():
+            continue
+        journal = agent_runs._validate_commit_state(ctx, commit_spec, journal_path)
+        if journal['state'] != 'committed':
+            continue
+        chain = agent_runs._read_checkpoint_chain(ctx, spec, run_sha=agent_runs.canonical_sha256(run_path.read_bytes()))
+        if not chain:
+            raise ValueError('executor_checkpoint_missing')
+        checkpoint = chain[-1][1]
+        if journal['attempt_id'] != checkpoint['attempt_id']:
+            raise ValueError('executor_commit_checkpoint_mismatch')
+        # 只把同 run 的精确 ledger 行装入隔离内存账；不调用恢复写口补账或重认领费用。
+        cost_path = ledger_path(base)
+        if not cost_path.read_bytes().endswith(b'\n'):
+            raise ValueError('executor_ledger_uncommitted')
+        cost_rows = read_jsonl_rows(cost_path)
+        for link in checkpoint['attempt_links']:
+            rows = [row for row in cost_rows if row.get('run_id') == run_id
+                    and row.get('attempt_id') == link['attempt_id']]
+            if (len(rows) != 1 or any(rows[0].get(key) != value for key, value in link.items())
+                    or rows[0].get('sid') != sid or rows[0].get('node') != owner
+                    or rows[0].get('purpose') != spec.purpose):
+                raise ValueError('executor_cost_identity_mismatch')
+            ctx.ledger._adopt_prior_row(link['attempt_id'], rows[0], sid=sid, node=owner, purpose=spec.purpose)
+        agent_runs._validate_acceptance(ctx, spec, system=system, user=user, response_model=response_model,
+            max_tokens=ceiling, response_payload=checkpoint['response_payload'],
+            acceptance={key: checkpoint[key] for key in agent_runs.AGENT_ACCEPTANCE_FIELDS},
+            claim_prior=False, response_repair=checkpoint.get('response_repair'))
+        frozen = run['initial_artifact_sha256s']
+        before_sha = frozen.get(paths.invalid_of(rel)) or frozen[rel]
+        after_sha = journal['post_file_sha256s'][rel]
+        before = store.read_own_by_sha256(model, rel, before_sha)
+        after = store.read_own_by_sha256(model, rel, after_sha)
+        if not agent_runs.verify_commit_primary(journal, after.model_dump(mode='json', by_alias=True)):
+            raise ValueError('executor_target_mismatch')
+        completed.append((owner.split('.')[1], before, after))
+    if len(completed) != 1:
+        raise ValueError('executor_committed_link_missing_or_ambiguous')
+    return completed
+
+
+def _core_commander_changes(base, novel_dir, sid, store, *, initial=None, evidence=None) -> dict[str, Any]:
+    """原模型 C 内容证明 + 精确决定/WAL + 完成回执才算实际语义干预。"""
+    from contracts.schema.api import Stage2NodeReviewRequest
     from novel.orchestrator.approvals import stage2_review_history
     from novel.stages.stage2 import core_edits
 
     result = {'state': 'ok', 'scope': 'sid_all_history', 'completed_batches': 0,
               'pending_batches': 0, 'unver_batches': 0, 'rewritten_owner_artifacts': 0,
               'semantic_subject_interventions': 0, 'semantic_intervention_events': 0,
-              'evidence_or_audit_only_owner_edits': 0, 'by_category': {},
+              'evidence_or_audit_only_owner_edits': 0, 'by_category': {}, 'unattributed_core_batches': 0,
+              'direct_edit_batches': {'core': 0, 'reviewed_global': 0},
+              'commander_directed_executor': {'requested': 0, 'completed': 0, 'unver': 0,
+                  'semantic_intervention_events': 0, 'rewritten_owner_artifacts': 0},
               'review_invalidations': {'state': 'unver', 'count': None,
                                        'reason': 'review_transition_not_recorded'}}
     try:
         decisions = stage2_review_history(base, sid)
     except Exception:  # noqa: BLE001 —— 只公开未知计数，不公开可能含正文的异常
-        return {**result, 'state': 'unver', 'reason': 'decision_history_unreadable'}
+        return {**result, 'state': 'unver', 'reason': 'decision_history_unreadable',
+                'semantic_subject_interventions': None, 'semantic_intervention_events': None,
+                'rewritten_owner_artifacts': None, 'known_semantic_subject_interventions': 0,
+                'known_semantic_intervention_events': 0, 'known_rewritten_owner_artifacts': 0}
+    evidence = evidence if evidence is not None else _gate_a_commander_evidence(base, sid)
+    source_errors = [*evidence['errors'], *evidence['action_errors']]
+    result['source_errors'] = sorted(set(source_errors))
+    result['source_pending_turns'] = evidence['pending_turns']
+    result['source_unver_turns'] = len(source_errors)
     seen = set()
     changed_subjects = {category: set() for category in (
         'characters', 'setting', 'world_rule_versions', 'relations', 'arc_secrets')}
     added_subjects = {category: set() for category in changed_subjects}
+    source_requests, source_nodes = {}, []
+    for source in evidence['actions']:
+        action = source['action']
+        if action.get('kind') == 'approval' and action.get('surface') == 'stage2_global_review':
+            try:
+                request = Stage2NodeReviewRequest.model_validate(action['payload'])
+                source_requests[core_edits.request_sha(request)] = request
+            except (ValueError, KeyError):
+                result['unver_batches'] += 1
+        elif (action.get('kind') == 'node' and action.get('node') == 'stage2.global'
+                and action.get('flags') == ['--apply-edit', '@reviewer-input']):
+            source_nodes.append(action)
+
+    batches, landed_requests = [], set()
     for decision in decisions:
+        request = Stage2NodeReviewRequest.model_validate({key: value for key, value in
+            decision.model_dump(mode='json', by_alias=True).items() if key in Stage2NodeReviewRequest.model_fields})
+        request_id = core_edits.request_sha(request)
+        if request_id not in source_requests:
+            result['unattributed_core_batches'] += int(decision.core_edits is not None)
+            continue
+        landed_requests.add(request_id)
         if decision.core_edits is None:
+            if decision.decision == 'rework' and decision.owner in {'stage2.characters', 'stage2.global'}:
+                if request_id in seen:
+                    continue
+                seen.add(request_id)
+                result['commander_directed_executor']['requested'] += 1
+                try:
+                    changes = _directed_executor_changes(base, novel_dir, sid, store, request, evidence['executor_budgets'])
+                    batches.append(('directed_executor', changes))
+                    result['commander_directed_executor']['completed'] += 1
+                except Exception:  # noqa: BLE001
+                    result['commander_directed_executor']['unver'] += 1
             continue
         try:
             frozen = core_edits._verify_prepared(novel_dir, decision)
@@ -1373,7 +1693,7 @@ def _core_commander_changes(base, novel_dir, sid, store, *, initial=None) -> dic
             if (completed.request_sha256 != frozen.request_sha256
                     or completed.prepared_sha256 != core_edits.prepared_sha(frozen)):
                 raise ValueError('completion_mismatch')
-            changes, changed_in_batch, added_in_batch = [], [], []
+            changes = []
             for owner, rel, model, candidate, expected in (
                 ('characters', STAGE2_CHARACTERS, CharacterRegistry, frozen.characters_candidate,
                  frozen.request.core_edits.expected_characters_sha256),
@@ -1383,25 +1703,54 @@ def _core_commander_changes(base, novel_dir, sid, store, *, initial=None) -> dic
                 if candidate is None:
                     continue
                 original = store.read_own_by_sha256(model, rel, expected)
+                changes.append((owner, original, candidate))
+            batches.append(('core', changes))
+            result['direct_edit_batches']['core'] += 1
+        except Exception:  # noqa: BLE001
+            result['unver_batches'] += 1
+    result['pending_batches'] += sum(request_id not in landed_requests and (
+        request.core_edits is not None or request.decision == 'rework')
+        for request_id, request in source_requests.items())
+    for action in source_nodes:
+        try:
+            identity, state, changes = _reviewed_global_changes(store, action)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            if state == 'pending':
+                result['pending_batches'] += 1
+                continue
+            batches.append(('reviewed_global', changes))
+            result['direct_edit_batches']['reviewed_global'] += 1
+        except Exception:  # noqa: BLE001
+            result['unver_batches'] += 1
+    for kind, changes in batches:
+        try:
+            counts, changed_in_batch, added_in_batch = [], [], []
+            for owner, original, candidate in changes:
                 old = _core_subjects(original.model_dump(mode='json', by_alias=True), owner)
                 new = _core_subjects(candidate.model_dump(mode='json', by_alias=True), owner)
                 delta = _subject_delta(old, new)
                 changed_in_batch.extend((_core_subject_category(key, owner), key) for key in old
                                         if key not in new or old[key] != new[key])
                 added_in_batch.extend((_core_subject_category(key, owner), key) for key in new.keys() - old.keys())
-                changes.append(sum(delta[key] for key in (
+                counts.append(sum(delta[key] for key in (
                     'added_subjects', 'removed_subjects', 'semantic_changed_subjects')))
             result['completed_batches'] += 1
             result['rewritten_owner_artifacts'] += len(changes)
-            result['semantic_intervention_events'] += sum(changes)
-            result['evidence_or_audit_only_owner_edits'] += sum(count == 0 for count in changes)
+            result['semantic_intervention_events'] += sum(counts)
+            result['evidence_or_audit_only_owner_edits'] += sum(count == 0 for count in counts)
+            if kind == 'directed_executor':
+                result['commander_directed_executor']['semantic_intervention_events'] += sum(counts)
+                result['commander_directed_executor']['rewritten_owner_artifacts'] += len(changes)
             for category, subject in changed_in_batch:
                 changed_subjects[category].add(subject)
             for category, subject in added_in_batch:
                 added_subjects[category].add(subject)
         except Exception:  # noqa: BLE001
             result['unver_batches'] += 1
-    if result['unver_batches']:
+    if (result['unver_batches'] or result['pending_batches'] or source_errors or evidence['pending_turns']
+            or result['commander_directed_executor']['unver']):
         result['state'] = 'unver'
     first = {category: None for category in changed_subjects}
     for owner, payload in (initial or {}).items():
@@ -1416,14 +1765,23 @@ def _core_commander_changes(base, novel_dir, sid, store, *, initial=None) -> dic
         count = len(baseline) if baseline is not None else None
         result['by_category'][category] = {
             'state': 'ok' if baseline is not None and result['state'] == 'ok' else 'unver',
-            'initial_subjects': count, 'modified_initial_subjects': modified,
-            'intervention_rate': _rate(modified, count) if count else None,
+            'initial_subjects': count, 'modified_initial_subjects': modified if result['state'] == 'ok' else None,
+            'known_modified_initial_subjects': modified,
+            'intervention_rate': _rate(modified, count) if count and result['state'] == 'ok' else None,
             'added_subjects': len(added_subjects[category]),
             'distinct_intervened_subjects': len(changed_subjects[category] | added_subjects[category])}
     result['semantic_subject_interventions'] = sum(
         row['distinct_intervened_subjects'] for row in result['by_category'].values())
-    # 小计的零不声称没有历史操作；独立 typed 编辑不冒充 C 干预。
-    result['count_basis'] = 'completed_typed_core_edit_batches_only'
+    for field in ('semantic_subject_interventions', 'semantic_intervention_events', 'rewritten_owner_artifacts'):
+        result['known_' + field] = result[field]
+        if result['state'] != 'ok':
+            result[field] = None
+    directed = result['commander_directed_executor']
+    directed['state'] = 'unver' if directed['unver'] or source_errors else 'ok'
+    directed['known_semantic_intervention_events'] = directed['semantic_intervention_events']
+    if directed['state'] != 'ok':
+        directed['semantic_intervention_events'] = None
+    result['count_basis'] = 'proved_commander_actions_and_committed_owner_targets'
     return result
 
 
@@ -1446,7 +1804,20 @@ def stage2_core_metrics(base: Path, novel_dir: Path, sid: str, *, run_id: str | 
         'recovery': {'state': 'unver', 'wire_calls': None, 'latency_seconds': None}}
     phases, phase_errors, _versions = _unit_attempt_phases(base, sid)
     rows = _run_rows(_jsonl(ledger_path(base)), sid, run_id)
+    evidence = _gate_a_commander_evidence(base, sid)
     result['calls'] = _gate_a_call_metrics(rows, phases)
+    cost_file = ledger_path(base)
+    cost_complete = cost_file.is_file() and cost_file.read_bytes().endswith(b'\n')
+    result['calls']['ledger_committed'] = cost_complete
+    if not cost_complete:
+        result['calls']['state'] = 'unver'
+        for category in result['calls']['categories'].values():
+            category.update(state='unver', wire_calls=None, latency_seconds=None)
+    result['calls'].update(_gate_a_wall_clock(base, sid, run_id, rows, evidence))
+    if result['calls']['state'] != 'ok':
+        result['calls']['wall_clock_seconds'] = None
+        result['calls']['wall_clock_state'] = 'unver'
+        result['calls']['wall_clock_errors'].append('ledger_attempts_incomplete')
     result['calls']['scope'] = 'target_run' if run_id else 'sid_all_history'
     result['calls']['phase_evidence_errors'] = phase_errors
     try:
@@ -1494,7 +1865,7 @@ def stage2_core_metrics(base: Path, novel_dir: Path, sid: str, *, run_id: str | 
         result['initial_materializations'] = {row.owner: row.state for row in receipt.materializations}
     except Exception:  # noqa: BLE001
         result['first_draft'] = {**unver, 'reason': 'initial_source_unproven'}
-        result['commander_changes'] = _core_commander_changes(base, novel_dir, sid, store)
+        result['commander_changes'] = _core_commander_changes(base, novel_dir, sid, store, evidence=evidence)
         return result
     try:
         if store.exists(STAGE2_ANALYZE_RECOVERY):
@@ -1527,7 +1898,8 @@ def stage2_core_metrics(base: Path, novel_dir: Path, sid: str, *, run_id: str | 
                 'reason': 'recovery_elapsed_not_recorded', 'target_invalid': bool(journal.hard_hits)}
     except Exception:  # noqa: BLE001
         result['recovery'] = {**unver, 'reason': 'recovery_source_unproven', 'wire_calls': None}
-    result['commander_changes'] = _core_commander_changes(base, novel_dir, sid, store, initial=original)
+    result['commander_changes'] = _core_commander_changes(
+        base, novel_dir, sid, store, initial=original, evidence=evidence)
     for owner, value in original.items():
         result['first_compiled'][owner] = (_core_size(value, result['main_text_chars'])
                                             if value is not None else dict(unver))

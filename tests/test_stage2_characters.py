@@ -6,6 +6,7 @@ import copy
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING
 from contracts.schema.characters import CharactersEdit, CharactersResponse
@@ -272,14 +273,86 @@ def test_character_edit_invalid_target_preserves_formal_projection_and_cost(tmp_
         row['char_id'] = 'char_999'
     if kind == 'delete':
         row = {'kind': kind, 'char_id': row['char_id'], 'reason': '核对不存在主体'}
-    with pytest.raises(TerminalState, match={
-            'add': '已经登记', 'replace': '不存在', 'delete': '不存在'}[kind]):
+    with pytest.raises(ValidationError if kind == 'add' else TerminalState, match={
+            'add': 'character_ref|char_id', 'replace': '不存在', 'delete': '不存在'}[kind]):
         characters.apply_edit(
             _free_ctx(ctx), CharactersEdit.model_validate({**template, 'operations': [row]}),
             actor='test:human', reason='验证目标存在性')
     assert {rel: store.path(rel).read_bytes() for rel in before} == before
     assert ctx.ledger.path.read_bytes() == ledger
     assert not store.exists(characters.INVALID)
+
+
+def test_character_add_compiles_stable_ids_avoids_retired_and_replays_without_cost(tmp_path):
+    ctx = _ctx(tmp_path)
+    previous, _ = _generate(ctx)
+    store = ArtifactStore(ctx)
+    ledger = ctx.ledger.path.read_bytes()
+    template = characters.edit_template(_free_ctx(ctx))
+    row = copy.deepcopy(template['operations'][-1])
+    retired_id = row['char_id']
+    characters.apply_edit(_free_ctx(ctx), CharactersEdit.model_validate({**template, 'operations': [
+        {'kind': 'delete', 'char_id': retired_id, 'reason': '验证退休身份不会再分配'}]}),
+        actor='test:human', reason='独立删除')
+    from novel.stages.stage2.core_evidence import evidence_slots, evidence_snippet
+    from tests.test_stage2 import main_text
+    for _path, owner, field in evidence_slots(row['character']):
+        owner[field] = [{'chapter_ordinal': previous.evidence_anchors[ref].chapter_ordinal,
+                         'locator': evidence_snippet(previous.evidence_anchors[ref].model_dump(), main_text())}
+                        for ref in owner[field]]
+    request = CharactersEdit.model_validate({
+        'source_sha256': characters.edit_template(_free_ctx(ctx))['source_sha256'],
+        'operations': [{'kind': 'add', 'character_ref': 'c7', 'character': row['character']}],
+    })
+    preview = characters.preflight_edit(_free_ctx(ctx), request, actor='test:human',
+                                        reason='按原文新增，程序分配身份')
+    assert preview.provenance.characters_edit.added_character_ids == {'c7': 'char_003'}
+    assert retired_id not in preview.characters
+    result = characters.apply_edit(_free_ctx(ctx), request, actor='test:human',
+                                   reason='按原文新增，程序分配身份', candidate=preview)
+    frozen = store.path(characters.REL).read_bytes()
+    assert characters.apply_edit(_free_ctx(ctx), request, actor='test:human',
+                                  reason='按原文新增，程序分配身份') == result
+    assert store.path(characters.REL).read_bytes() == frozen
+    assert ctx.ledger.path.read_bytes() == ledger
+
+
+def test_character_add_local_handles_cannot_repeat_or_supply_persistent_ids():
+    from tests.stage2_fixtures import character_response
+    character = character_response()['characters'][0].copy()
+    del character['character_ref']
+    # schema 层采用合法证据 ID；本例只验证身份权责，不跳过真实 producer 的证据检查。
+    from novel.stages.stage2.core_evidence import evidence_slots
+    for _path, owner, field in evidence_slots(character):
+        owner[field] = ['ev_' + 'a' * 24]
+    operation = {'kind': 'add', 'character_ref': 'c1', 'character': character}
+    with pytest.raises(ValidationError, match='局部引用不得重复'):
+        CharactersEdit.model_validate({'source_sha256': 'a' * 64, 'operations': [operation, operation]})
+    with pytest.raises(ValidationError, match='char_id'):
+        CharactersEdit.model_validate({'source_sha256': 'a' * 64, 'operations': [
+            {**operation, 'char_id': 'char_001'}]})
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('kind', ['replace', 'delete'])
+def test_character_edit_cannot_guess_and_modify_same_batch_new_id(tmp_path, reverse, kind):
+    ctx = _ctx(tmp_path)
+    _generate(ctx)
+    store = ArtifactStore(ctx)
+    original = store.path(characters.REL).read_bytes()
+    ledger = ctx.ledger.path.read_bytes()
+    template = characters.edit_template(_free_ctx(ctx))
+    row = copy.deepcopy(template['operations'][0]['character'])
+    guessed = ({'kind': kind, 'char_id': 'char_003', 'character': row} if kind == 'replace'
+               else {'kind': kind, 'char_id': 'char_003', 'reason': '试图删除本批新增身份'})
+    operations = [{'kind': 'add', 'character_ref': 'c9', 'character': row}, guessed]
+    if reverse:
+        operations.reverse()
+    request = CharactersEdit.model_validate({**template, 'operations': operations})
+    with pytest.raises(TerminalState, match='原基线不存在'):
+        characters.apply_edit(_free_ctx(ctx), request, actor='test', reason='不能猜新增正式 ID')
+    assert store.path(characters.REL).read_bytes() == original
+    assert ctx.ledger.path.read_bytes() == ledger
 
 
 @pytest.mark.parametrize('field,value,rule', [

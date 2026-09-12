@@ -45,6 +45,14 @@ class CharactersEditReceipt(HumanApproval):
     source_sha256: Sha256
     edit_sha256: Sha256
     deleted_character_ids: list[CharacterId]
+    added_character_ids: dict[LocalCharacterRef, CharacterId]
+
+    @model_validator(mode='after')
+    def _unique_added_ids(self):
+        ids = list(self.added_character_ids.values())
+        if len(ids) != len(set(ids)) or set(ids) & set(self.deleted_character_ids):
+            raise ValueError('新增人物映射必须一对一且不得复用已删除身份')
+        return self
 
 
 class CharactersProvenance(LlmProvenance):
@@ -86,7 +94,7 @@ class CharactersResponse(StrictModel):
 
 class CharacterAdd(StrictModel):
     kind: Literal['add']
-    char_id: CharacterId
+    character_ref: LocalCharacterRef
     character: RegisteredCharacter[CoreEvidenceEditRef]
 
 
@@ -119,7 +127,10 @@ class CharactersEdit(StrictModel):
 
     @model_validator(mode='after')
     def _unique_targets(self):
-        ids = [row.char_id for row in self.operations]
+        ids = [row.char_id for row in self.operations if not isinstance(row, CharacterAdd)]
         if len(ids) != len(set(ids)):
             raise ValueError('同一人物不能在一次编辑中重复操作')
+        refs = [row.character_ref for row in self.operations if isinstance(row, CharacterAdd)]
+        if len(refs) != len(set(refs)):
+            raise ValueError('新增人物的局部引用不得重复')
         return self

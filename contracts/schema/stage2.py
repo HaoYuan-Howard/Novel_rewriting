@@ -716,7 +716,13 @@ from contracts.schema.knowledge import (
 )
 
 ManualGlobalEvidence = EvidenceId | CoreEvidenceLocator
-RelationResponse = GlobalRelation[ManualGlobalEvidence]
+class RelationResponse(GlobalRelation[ManualGlobalEvidence]):
+    """编辑 wire 允许本批新增人物句柄；正式 GlobalRelation 仍只接受持久 ID。"""
+
+    subject_id: str = Field(pattern=r'^(char_\d{3,}|c[1-9]\d*)$')
+    object_id: str = Field(pattern=r'^(char_\d{3,}|c[1-9]\d*)$')
+
+
 WorldRuleVersionResponse = GlobalWorldRuleVersion[ManualGlobalEvidence]
 WorldRuleResponse = GlobalWorldRule[ManualGlobalEvidence]
 SecretResponse = GlobalArcSecret[ManualGlobalEvidence]

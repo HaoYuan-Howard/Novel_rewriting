@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from contracts.invariants import NODES, PIPELINE_STEPS
+from contracts.invariants import NODES, PIPELINE_STEPS, commander_work_unit
 from contracts.schema.api import OperatorNext, OperatorNode
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentRunEvent, AgentRunExitOrigin, ExecutionEpoch,
@@ -47,6 +47,14 @@ def range_boundary_reason(current: OperatorNext, boundary: OperatorNode) -> str 
     node = getattr(current.action, 'node', None)
     if node not in rank:
         return f'本次范围边界为 {boundary}；当前动作 owner 未登记，停止并排空'
+    # blocked.node 是被挡住的下游，尚不是本轮 Commander 的裁决属主。
+    # 复用预算的唯一 blocker→owner 登记，让 Global 在 Blueprint 上界前完成审阅；
+    # 不能因为“Blueprint 正等待 Global”就把 Global 的接受也截掉。
+    if current.state == 'blocked':
+        waiting_on = getattr(current.action, 'waiting_on', None)
+        review_owner = commander_work_unit(waiting_on) if isinstance(waiting_on, str) else None
+        if review_owner is not None:
+            node = review_owner[0]
     owners = (NODES[node].lifecycle.repair_owners if node == 'stage2.analyze'
               else ('stage0.remove',) if node == 'stage0.edit' else (node,))
     if not owners or any(owner not in rank for owner in owners):

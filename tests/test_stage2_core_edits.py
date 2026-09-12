@@ -31,6 +31,51 @@ def seed(tmp_path):
     return ctx
 
 
+def test_global_commander_built_prompt_matches_current_core_boundaries(tmp_path, monkeypatch):
+    """从真实 core 和工作包 producer 构造最终提示；仅省去只读 CLI 的进程运输。"""
+    from types import SimpleNamespace
+    from novel.orchestrator import inspection, reviewer_tasks
+    from tests.test_stage2 import main_text
+    ctx = seed(tmp_path)
+
+    def read_command(argv, **_kwargs):
+        if '--emit-review-workpack' in argv:
+            return global_review.review_workpack(ctx)
+        if '--emit-review-template' in argv:
+            return json.loads(global_review.review_template_json(ctx))
+        pytest.fail(f'Global 首轮不应读取其他阶段材料：{argv}')
+
+    monkeypatch.setattr(reviewer_tasks, '_json_command', read_command)
+    current = SimpleNamespace(
+        state='blocked', code_version=ctx.code,
+        surface_seal=inspection.read_surface_seal(tmp_path, ctx.sid, code=ctx.code),
+        action=SimpleNamespace(waiting_on=queue.WAITING_ON_STAGE2_REVIEW,
+                               action_sha256='a' * 64))
+    target = paths.scratch_session_dir(tmp_path, ctx.sid, 'core-prompt') / 'request.json'
+    task = reviewer_tasks.build_task(tmp_path, ctx.sid, current, target, epoch_id='core-prompt')
+    assert task is not None and not target.exists()
+    assert 'secret/secret_setup/reveal 项可以按完整 secret 组提交' in task.prompt
+    assert '人物、setting、关系、规则及集合完整性均为 must_fix，不得隔离' in task.prompt
+    assert '同响应 core_edits.global 的关系端点可引用本次 add 的 cN' in task.prompt
+    assert '独立 GlobalEdit 没有这份新增映射，不得使用 cN' in task.prompt
+    for obsolete in ('secret/relation/world_rule 才能', '钩子独立证据',
+                     'knowledge_links.pending', 'trigger_fact_ref', 'Blueprint producer --close-review'):
+        assert obsolete not in task.prompt
+    for required in ('role 只能描述首次公开身份', '关键匿名个体', '每实体每个 surface 只登记一次',
+                     '事实生效、失效、读者揭示和证据章独立', '同场产生并当场揭晓的局部惊喜不得晋升'):
+        assert required in task.prompt
+    envelope = json.loads(task.prompt.split('<immutable-workpack>\n', 1)[1].split(
+        '\n</immutable-workpack>', 1)[0])
+    material = envelope['materials']['global']
+    assert material['main_text_chapters'] == main_text()
+    assert any(row['kind'] == 'alias_identity'
+               for card in material['subject_cards'] for row in card['items'])
+    control = next(option for option in task.submission_options
+                   if option['id'] == 'approval:stage2_global_review')
+    assert 'core_edits.schema' in control['allowed_values']
+    assert '由代码冻结正式ID并统一重写' in control['allowed_values']['core_edits.purpose']
+
+
 def snapshot(ctx):
     return {rel: ArtifactStore(ctx).path(rel).read_bytes() for rel in (
         STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW)}
@@ -72,6 +117,164 @@ def request_for(ctx, *, evidence_only=False, global_edit=True):
             }} if global_edit else None,
         },
     })
+
+
+def _seed_with_relation(tmp_path):
+    from tests.test_stage2_analyze import _response
+    ctx = _ctx(tmp_path)
+    response = _response()
+    response['global']['relations'] = [dict(
+        relation_ref='r1', subject_ref='c2', object_ref='c1', predicate='母亲',
+        effective_from=2, effective_until=None, revealed_from=2, evidence_refs=['e000011'])]
+    Stage2AnalyzeAgent(ctx, driver=_driver(ctx, response)).run()
+    ctx = _free_ctx(ctx)
+    ctx.node = 'stage2.global'
+    return ctx
+
+
+def _add_character_request(ctx, *, shape='replacement'):
+    from novel.quality.global_review import subject_sha256
+    raw = request_for(ctx, global_edit=False).model_dump(mode='json', by_alias=True)
+    proof = {'chapter_ordinal': 1, 'locator': '信上说父亲已经回城。'}
+    raw['core_edits']['characters']['operations'] = [dict(kind='add', character_ref='c9', character=dict(
+        canonical='父亲', aliases=[dict(surface='父亲', identity_revealed_from=1, evidence_refs=[proof])],
+        first_chapter=1, first_appearance_evidence_refs=[proof], role='李宝珠之父',
+        role_evidence_refs=[proof], name_distinctiveness='common'))]
+    obligation = next(row for row in global_review.review_workpack(ctx)['review_coverage']['scope']['obligations']
+                      if row['subject_path'] == 'characters.characters')
+    raw['review']['exceptions'] = [dict(obligation_id=obligation['obligation_id'],
+        decision='rework', reason='正文已有父亲的独立前史，人物登记需补齐')]
+    relation = dict(relation_id='rel_02', subject_id='c9', object_id='char_001', predicate='父亲',
+                    effective_from=1, effective_until=None, revealed_from=1, evidence_refs=[proof])
+    current = ArtifactStore(ctx).read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+    if shape == 'replacement':
+        edit = {'relations_replace': [relation]}
+    elif shape == 'patch':
+        edit = {'relations': [{**relation, 'relation_id': 'rel_01'}]}
+    else:
+        if shape == 'add':
+            operation = {'op': 'add', 'item': relation}
+        else:
+            retained = current.relations[0].model_dump(mode='json')
+            retained['relation_id'] = 'rel_03'
+            operation = {'op': 'split', 'subject_id': 'rel_01', 'items': [relation, retained]}
+        edit = {'collection_edits': [dict(collection='relations',
+            expected_collection_sha256=subject_sha256([row.model_dump(mode='json') for row in current.relations]),
+            operations=[operation])]}
+    raw['core_edits']['global'] = edit
+    return Stage2NodeReviewRequest.model_validate(raw)
+
+
+@pytest.mark.parametrize('shape', ['replacement', 'patch', 'add', 'split'])
+def test_same_response_new_character_refs_compile_in_every_relation_edit_shape(tmp_path, shape):
+    ctx = _seed_with_relation(tmp_path)
+    original = snapshot(ctx)
+    ledger = ctx.ledger.path.read_bytes()
+    request = _add_character_request(ctx, shape=shape)
+    identity = approve(ctx, request)
+    directory = paths.stage2_core_edit_dir(ctx.novel_dir, identity)
+    frozen = core_edits.PreparedCoreEdits.model_validate_json((directory / 'prepared.json').read_bytes())
+    mapping = frozen.characters_candidate.provenance.characters_edit.added_character_ids
+    assert mapping == {'c9': 'char_003'}
+    assert frozen.request == request and snapshot(ctx) == original
+    target = next(row for row in frozen.global_candidate.relations if row.predicate == '父亲')
+    assert target.subject_id == mapping['c9'] and target.object_id == 'char_001'
+    assert 'c9' in json.dumps(request.model_dump(mode='json'), ensure_ascii=False)
+    core_edits.apply(ctx, identity)
+    landed = ArtifactStore(ctx).read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+    assert next(row for row in landed.relations if row.predicate == '父亲').subject_id == mapping['c9']
+    assert ArtifactStore(ctx).read_own(CharacterRegistry, STAGE2_CHARACTERS)[0].characters[mapping['c9']].canonical == '父亲'
+    assert ctx.ledger.path.read_bytes() == ledger
+    assert any(row.state == 'pending' for row in ArtifactStore(ctx).read_own(GlobalReview, STAGE2_GLOBAL_REVIEW)[0].items)
+
+
+def test_new_character_mapping_survives_partial_submit_and_cli_replay(tmp_path, monkeypatch):
+    from novel.cli.main import _run_stage2
+    ctx = _seed_with_relation(tmp_path)
+    request = _add_character_request(ctx)
+    identity = approve(ctx, request)
+    directory = paths.stage2_core_edit_dir(ctx.novel_dir, identity)
+    frozen = (directory / 'prepared.json').read_bytes()
+    ledger = ctx.ledger.path.read_bytes()
+    real_commit = extract.commit_core_edit
+
+    def interrupted(*_args, **_kwargs):
+        raise KeyboardInterrupt('新增人物已提交，Global 提交前退出')
+
+    monkeypatch.setattr(extract, 'commit_core_edit', interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        core_edits.apply(ctx, identity)
+    registry = ArtifactStore(ctx).read_own(CharacterRegistry, STAGE2_CHARACTERS)[0]
+    assert registry.provenance.characters_edit.added_character_ids == {'c9': 'char_003'}
+    monkeypatch.setattr(extract, 'commit_core_edit', real_commit)
+    assert _run_stage2(_free_ctx(ctx), ['--apply-core-edits', identity]) == 0
+    landed = snapshot(ctx)
+    assert _run_stage2(_free_ctx(ctx), ['--apply-core-edits', identity]) == 0
+    assert snapshot(ctx) == landed
+    assert (directory / 'prepared.json').read_bytes() == frozen
+    assert ctx.ledger.path.read_bytes() == ledger
+    assert len(ArtifactStore(ctx).read_own(CharacterRegistry, STAGE2_CHARACTERS)[0].characters) == 3
+
+
+def test_unknown_new_character_ref_is_rejected_before_any_owner_or_decision_write(tmp_path):
+    ctx = _seed_with_relation(tmp_path)
+    raw = _add_character_request(ctx).model_dump(mode='json', by_alias=True)
+    raw['core_edits']['global']['relations_replace'][0]['subject_id'] = 'c8'
+    request = Stage2NodeReviewRequest.model_validate(raw)
+    original = snapshot(ctx)
+    ledger = ctx.ledger.path.read_bytes()
+    with pytest.raises(NovelError, match='本批 Characters add'):
+        approvals.approve_stage2_review(tmp_path, ctx.sid, request)
+    assert snapshot(ctx) == original and approvals.stage2_review_history(tmp_path, ctx.sid) == []
+    assert ctx.ledger.path.read_bytes() == ledger
+    assert not (paths.stage2_core_edit_dir(ctx.novel_dir, core_edits.request_sha(request)) / 'prepared.json').exists()
+
+
+def test_core_global_endpoint_cannot_guess_this_batch_new_persistent_id(tmp_path):
+    ctx = _seed_with_relation(tmp_path)
+    raw = _add_character_request(ctx).model_dump(mode='json', by_alias=True)
+    # 编译器将为 c9 分配这个值；恰好猜中也没有局部句柄的语义绑定权。
+    raw['core_edits']['global']['relations_replace'][0]['subject_id'] = 'char_003'
+    request = Stage2NodeReviewRequest.model_validate(raw)
+    original = snapshot(ctx)
+    ledger = ctx.ledger.path.read_bytes()
+    with pytest.raises(NovelError, match='不能猜测正式 char_id'):
+        approvals.approve_stage2_review(tmp_path, ctx.sid, request)
+    assert snapshot(ctx) == original and approvals.stage2_review_history(tmp_path, ctx.sid) == []
+    assert ctx.ledger.path.read_bytes() == ledger
+    assert not (paths.stage2_core_edit_dir(ctx.novel_dir, core_edits.request_sha(request)) / 'prepared.json').exists()
+
+
+def test_previous_add_receipt_does_not_bind_a_later_global_only_request(tmp_path):
+    ctx = _seed_with_relation(tmp_path)
+    core_edits.apply(ctx, approve(ctx, _add_character_request(ctx)))
+    raw = request_for(ctx).model_dump(mode='json', by_alias=True)
+    raw['core_edits']['characters'] = None
+    raw['core_edits']['global'] = {'relations': [{'relation_id': 'rel_02', 'object_id': 'c9',
+        'evidence_refs': [{'chapter_ordinal': 1, 'locator': '信上说父亲已经回城。'}]}]}
+    request = Stage2NodeReviewRequest.model_validate(raw)
+    original = snapshot(ctx)
+    history = approvals.stage2_review_history(tmp_path, ctx.sid)
+    with pytest.raises(NovelError, match='本批 Characters add'):
+        approvals.approve_stage2_review(tmp_path, ctx.sid, request)
+    assert snapshot(ctx) == original and approvals.stage2_review_history(tmp_path, ctx.sid) == history
+
+
+def test_core_batch_cannot_guess_new_persistent_id_for_same_response_replace(tmp_path):
+    import copy
+    ctx = _seed_with_relation(tmp_path)
+    raw = _add_character_request(ctx).model_dump(mode='json', by_alias=True)
+    added = raw['core_edits']['characters']['operations'][0]
+    raw['core_edits']['characters']['operations'].append(dict(
+        kind='replace', char_id='char_003', character=copy.deepcopy(added['character'])))
+    request = Stage2NodeReviewRequest.model_validate(raw)
+    original = snapshot(ctx)
+    ledger = ctx.ledger.path.read_bytes()
+    with pytest.raises(NovelError):
+        approvals.approve_stage2_review(tmp_path, ctx.sid, request)
+    assert snapshot(ctx) == original and approvals.stage2_review_history(tmp_path, ctx.sid) == []
+    assert ctx.ledger.path.read_bytes() == ledger
+    assert not (paths.stage2_core_edit_dir(ctx.novel_dir, core_edits.request_sha(request)) / 'prepared.json').exists()
 
 
 def approve(ctx, request):

@@ -5,6 +5,7 @@ import copy
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from contracts.artifacts import STAGE2_ANALYZE_OWNER_DRAFT_EDIT
 from contracts.schema import encode_artifact
@@ -223,7 +224,7 @@ def test_full_character_revision_retires_removed_ids_without_inheriting_human_ac
     assert deletion.provenance.characters_edit is None
     template = characters.edit_template(_free_ctx(ctx))
     op = dict(template['operations'][0], kind='add', char_id='char_002')
-    with pytest.raises(TerminalState, match='复用'):
+    with pytest.raises(ValidationError, match='char_id'):
         characters.apply_edit(_free_ctx(ctx), CharactersEdit.model_validate({
             'source_sha256': template['source_sha256'], 'operations': [op]}), actor='test', reason='不能复用已退休身份')
     addition_ctx = _new_run_ctx(ctx)

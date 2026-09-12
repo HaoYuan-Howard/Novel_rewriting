@@ -12,16 +12,16 @@ from contracts.schema.orchestration import AgentDeliveryOutcome, AgentRunStart, 
 from novel.api.app import UI_HEADER, create_app
 from novel.orchestrator import admission, agent, agent_continuation
 from novel.orchestrator.agent_supervisor import (
-    RunSupervisor, SupervisorActionResult, range_boundary_reason,
+    CommanderTurnResult, RunSupervisor, SupervisorActionResult, range_boundary_reason,
 )
 from tests.test_agent_supervisor import _epoch
 from tests.test_agent import _PlanningDriver, _PROFILES
 
 
-def _current(node, *, state='ready'):
+def _current(node, *, state='ready', waiting_on='stage2.blueprint.review'):
     return SimpleNamespace(state=state, code_version='code-1',
         action=None if state == 'pipeline_complete' else SimpleNamespace(
-            node=node, waiting_on='stage2.blueprint.review' if state == 'blocked' else None),
+            node=node, waiting_on=waiting_on if state == 'blocked' else None),
         execution_token=SimpleNamespace(node=node) if state == 'ready' else None)
 
 
@@ -83,6 +83,115 @@ def test_joint_owner_and_repair_owner_cannot_evade_range_order():
     assert range_boundary_reason(_current('stage0.edit'), 'stage0.edit') is not None
     with pytest.raises(ValidationError):
         AgentRunRequest(sid='42', pause_before_node='stage3.retired')
+
+
+def test_range_uses_registered_commander_owner_not_blocked_consumer():
+    from novel.orchestrator.queue import WAITING_ON_STAGE2_REVIEW
+    current = _current('stage2.blueprint', state='blocked', waiting_on=WAITING_ON_STAGE2_REVIEW)
+    assert range_boundary_reason(current, 'stage2.blueprint') is None
+    assert range_boundary_reason(current, 'stage2.global') is not None
+    from contracts.invariants import NODES
+    for waiting_on, _scope in NODES['stage2.blueprint'].lifecycle.commander_bindings:
+        downstream = _current('stage4.design', state='blocked', waiting_on=waiting_on)
+        assert range_boundary_reason(downstream, 'stage2.blueprint') is not None
+
+
+@pytest.mark.stage_scope('stage2')
+def test_joint_initial_review_closes_before_blueprint_range_boundary(tmp_path):
+    """真实首抽与 C typed 接受走实际 planner；范围不得把上游审阅随下游截断。"""
+    from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS, STAGE2_KNOWLEDGE_LINKS
+    from novel.orchestrator import operator, queue
+    from novel.stages.stage2 import analyze
+    from novel.store import ArtifactStore
+    from novel import prov, work_units
+    from novel.llm.cache import CachePolicy
+    from novel.llm.ledger import CostLedger, ledger_path
+    from novel.node_agents import Stage2AnalyzeAgent
+    from novel.run import RunContext
+    from novel.stages.stage0.removal import _context, run_approve, run_source
+    from novel.stages.stage1.partition import run_partition
+    from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
+    from tests.stage2_fixtures import character_response, knowledge_response
+    from tests.test_stage2 import main_text
+    from tests.test_stage2_analyze import _driver
+    from tests.test_stage2_character_rebind import accept_current_with_one_response
+    from tests.test_stage2_global_agent import _profile
+
+    # 上游也经实际 producer 与 typed 批准建立；Stage1 保留章界换行，不能强行
+    # 归一正式正文。逐条核对 e000xxx 仍指向原 fixture 同章同段，随后冻结上游。
+    base = tmp_path / 'output'
+    work_units.initialize_workflow(base)
+    source = tmp_path / 'FQ_联合范围验收_2042.txt'
+    chapters = main_text()
+    text = '旧宅一封信，掀开了被隐瞒的往事。\n\n' + '\n\n'.join(
+        f'{row["chapter_ordinal"]}\n\n{row["text"]}' for row in chapters) + '\n\n（全文完）\n\n'
+    source.write_text(text, encoding='utf-8', newline='')
+    book, removal, _pending = run_source(source, base)
+    _approved, approval_report = run_approve(_context(book, 'stage0.approve'),
+        expected_revision_id=removal.report.revision_id,
+        actor='stage2-range-fixture', reason='核对完整合成正文与独立开篇后批准')
+    assert approval_report.passed
+    partitioned, partition_report = run_partition(_context(book, 'stage1.partition'))
+    assert partition_report is not None and partition_report.passed
+    partitioned_chapters = partitioned.main_text.model_dump(mode='json')
+    assert [{**row, 'text': row['text'].strip('\r\n')} for row in partitioned_chapters] == chapters
+    actual_candidates = GlobalEvidenceCandidateTable.build(partitioned_chapters)
+    expected_candidates = GlobalEvidenceCandidateTable.build(chapters)
+    assert [(row.evidence_candidate_id, row.chapter_ordinal, row.text)
+            for row in actual_candidates.rows] == [
+        (row.evidence_candidate_id, row.chapter_ordinal, row.text)
+        for row in expected_candidates.rows]
+    actual_texts = {row['chapter_ordinal']: row['text'] for row in partitioned_chapters}
+    assert all(actual_texts[row.chapter_ordinal][row.start:row.end] == row.text
+               for row in actual_candidates.rows)
+    upstream = {path: path.read_bytes() for directory in (book / 'stage0', book / 'stage1')
+                for path in directory.rglob('*') if path.is_file()}
+    ctx = RunContext(novel_dir=book, node=analyze.NODE, paid=True,
+        code=prov.code_version(), cache=CachePolicy.default(),
+        ledger=CostLedger(path=ledger_path(base)), executor_profile=_profile())
+    response = {'characters': character_response()['characters'], 'global': knowledge_response()}
+    Stage2AnalyzeAgent(ctx, driver=_driver(ctx, response)).run()
+    ctx.node = 'stage2.global'
+    store = ArtifactStore(ctx)
+    ledger = ctx.ledger.path.read_bytes()
+    receipt = store.path(analyze.REL).read_bytes()
+    before = operator.next_action(base, ctx.sid)
+    assert before.state == 'blocked' and before.action.node == 'stage2.blueprint'
+    assert before.action.waiting_on == queue.WAITING_ON_STAGE2_REVIEW
+    calls, events = [], []
+
+    def review(_epoch, current, _resume, ticket):
+        assert current.action.waiting_on == queue.WAITING_ON_STAGE2_REVIEW
+        ticket.commit()
+        calls.append('stage2.global')
+        accept_current_with_one_response(ctx)
+        return CommanderTurnResult(0, None, True, AgentDeliveryOutcome(
+            state='stopped', checked_at=1, reason='合成 C 响应经真实 typed 路径接受'))
+
+    supervisor = RunSupervisor(run_id='joint-range-review', append_event=events.append,
+        make_epoch=lambda *_: pytest.fail('本例代码与 owner 身份未变'), open_epoch=lambda _: None,
+        close_epoch=lambda *_: 'drained', run_commander_turn=lambda *_: pytest.fail('不用整轮 Commander'),
+        epoch_identity_current=lambda epoch: epoch.code_version == prov.code_version(),
+        cancel_commander=lambda: True,
+        initial_epoch=_epoch('range-epoch', 1, 'initial').model_copy(update={'code_version': ctx.code}),
+        read_operator_next=lambda _: operator.next_action(base, ctx.sid),
+        run_ready_action=lambda *_: pytest.fail('Blueprint Executor 不得启动'),
+        run_reviewer=review, finalize_run=lambda *_: pytest.fail('不得全链定稿'),
+        pause_before_node='stage2.blueprint')
+    result = supervisor.run()
+    after = operator.next_action(base, ctx.sid)
+    assert calls == ['stage2.global']
+    assert after.state == 'ready' and after.action.node == 'stage2.blueprint'
+    assert result.turn.exit_code == 2 and result.turn.outcome.state == 'stopped'
+    assert 'stage2.blueprint' in result.turn.outcome.reason
+    assert [event.kind for event in events] == ['epoch_closed']
+    assert events[-1].drain_state == 'drained'
+    assert not store.path(STAGE2_CHAPTER_BLUEPRINTS).exists()
+    assert not store.path(STAGE2_KNOWLEDGE_LINKS).exists()
+    assert ctx.ledger.path.read_bytes() == ledger
+    assert store.path(analyze.REL).read_bytes() == receipt
+    assert source.read_text(encoding='utf-8') == text
+    assert all(path.read_bytes() == raw for path, raw in upstream.items())
 
 
 def test_none_boundary_keeps_original_persistent_contract_identity():

@@ -2127,6 +2127,9 @@ def _submission_options(pack: dict[str, Any], current: OperatorNext,
             '免费订正可同一回答提交两owner typed编辑；只保留有实际变化的一侧，另一侧为null。'
             '非编辑决定core_edits必须为null。提交编辑时decision=rework、owner=null，'
             'review.exceptions须指出相应原义务的rework与证据；新产生义务仍待审。'
+            '新增人物使用本批character_ref（c1等），同批Global关系端点可引用该句柄，'
+            '由代码冻结正式ID并统一重写；已有实体仍用原char_id，不猜新增正式ID，'
+            '不引用本批add之外的局部句柄。'
             '不得修改两份expected SHA；characters.source_sha256等于expected_characters_sha256。')
     unresolved = any(
         row.get('current_state') in {'pending', 'FAIL'} or (
@@ -2318,7 +2321,7 @@ def _registered_submission_options(
                 options = options[1:]
                 options[0]['allowed_values']['purpose'] = (
                     '当前主体缺必要材料，必须先通过对应 owner typed 修订；'
-                    '补齐正文证据或钩子独立证据，并在同一 post_edit_review 复核全部旧项。'
+                    '补齐正文证据，并在同一 post_edit_review 复核全部旧项。'
                     '无法从本包确认的内容仍保持未解决，选择同包 uncertain/stop；'
                     '不得直接 PASS，也不得为了通过而捏造证据。')
             return options
@@ -3252,8 +3255,11 @@ delete/split 同交，仍由 GlobalEdit 跨写口静态规则拒绝。同一 col
 delete/split 触及的输入 ID 不重复；add/split 产生的输出 ID 不重复；
 全部输入 ID 与输出 ID 完全不相交。所有 collection operation 应用后，直接字段
 patch 的主体必须仍存在，不能一边 patch 同一主体、一边 delete/split；relation
-endpoint 与 secret knowledge subject 等外键也必须在相应现役主体集合中存在，
-新增人物只能回源 stage2.characters，不能经 GlobalEdit 创建人物或假设新人物 ID。仅当 native schema
+endpoint 与 secret.fact_ref 等外键也必须在相应现役主体集合中存在，
+新增人物归 stage2.characters；同包免费 core_edits.characters 的 add 只提交 c1 等 character_ref，
+同响应 core_edits.global 的关系端点可引用本次 add 的 cN，由代码冻结正式 ID 并统一重写。
+已有实体继续使用原 char_id，不猜新增 char_id；独立 GlobalEdit 没有这份新增映射，不得使用 cN。
+不能经 GlobalEdit 创建人物。仅当 native schema
 明示 ``novel-stage2-reviewer-delta-v3`` 时，compact 运输层把 ``collection_edits``
 表示为按本次模板开放集合固定键的 object，每个集合
 天然至多一次；{compact_empty_semantics} 任何空值都不代表把模板的 no-op 行抄入
@@ -3264,32 +3270,24 @@ endpoint 与 secret knowledge subject 等外键也必须在相应现役主体集
     compact v2 时，provider 行改为 item_id/state/reason/evidence/generation_disposition，
     expected_subject_sha256 由 Supervisor 可信注入，且 generation_disposition 无值时也必须
     显式写 null。无论哪种载体，没有可登记证据时 evidence 都必须写成 []，不能省略。
-证据仍不足的 UNVER 不得改名为 PASS：只有可整组删除的
-secret/relation/world_rule 才能写进 post_edit_review.quarantine_groups，
-写作侧会删除完整事实组并在终审保留披露。
+证据仍不足的 UNVER 不得改名为 PASS：只有 generation_impact=quarantine_or_fix 的
+secret/secret_setup/reveal 项可以按完整 secret 组提交 post_edit_review.quarantine_groups。
+人物、setting、关系、规则及集合完整性均为 must_fix，不得隔离；隔离须保持 UNVER，
+不能把 FAIL 或 pending 当成已隔离，也不能删除原问题记录。
 Global blocking 面安全后，由本 Global Commander 提交绑定当前主体的 typed 接受。
-Global 接受后才生成 Blueprint；Blueprint Commander 独立结合 Global 交叉审阅，
-允许 typed 局部补丁经 producer 验证后继续复核；不能让旧事实关联接受修改后的候选。
+Global 接受后才生成 Blueprint；本轮只核对 Characters 与 Global，不处理后续蓝图、
+人物知情事件或 Hook 文案，也不提前提交这些阶段的决定。
 人物名册、称谓归属与首次公开身份错误交给 stage2.characters，长期知识与时间判断错误
-交给 stage2.global，蓝图事实错误交给 stage2.blueprint；只使用本轮开放的 owner 和动作。
+交给 stage2.global；只使用本轮开放的 owner 和动作。
 review_coverage.pending 列出本轮义务，prior_problems 保留修改或删除前的问题；删除不等于通过。
 review.default_decision 只覆盖本轮待审义务。已核实项可填 accept，问题逐项写入 exceptions，
 例外包含 obligation_id、decision 和具体 reason；整体 decision/owner 与例外及派修范围一致。
 继承由后端验证，不能重新编写原理由；任何未知不能借默认 accept 或删行消失。
-Blueprint 的 knowledge_links.pending 列出本轮关联义务，inherited_count 是已核验的继承数量。
-仅对 pending 返回关联决定：at_beats 选择当前 candidate_subject_refs 内能支持
-该时点的事实，并以 trigger_fact_ref 明确选择其中一条 land 事实作为触发时点，不能
-从多条支持节点猜测最早或最晚揭示。at_entry 仅限明确开放的 entry_subject_refs，表示
-世界内在章首已成立。时代背景与世界观也分别核对首次可下发的设定时点。
-读者揭示、人物知情、世界生效、伏笔表现不能互相推导。伏笔只关联本章允许表现的事实，
-不得把秘密答案当作埋点内容。证据不足用 unresolved，并保持 uncertain 或派修相应 owner。
-关联 knowledge_links.actor/reason 与本次裁决一致；scope_sha256 与 expected_subject_sha256
-必须来自当前工作包。accept 只提交新增决定，全部有效继承时 decisions 为空。
-两份当前接受齐备后，Blueprint producer --close-review 零模型物化关联并补齐审批链。
-同一工作单元持续审阅与订正；Global 与 Blueprint 的会话和累计内容额度分别维护。
+事实生效、读者揭示、人物知情和证据位置彼此独立，不得互相推导。
+同一 Global Commander 工作单元持续审阅与订正，后续阶段另有自己的会话和累计额度。
 本轮工作包是当前证据依据，历史会话只保留修订上下文；重启不依赖旧物理会话可用。
 
-materials 已包含裁决所需的全部材料；Stage2 delta 包只在仍有 whole-book 项时
+materials 已包含裁决所需的全部材料；Stage2 delta 包在仍有 whole-book 项或删除义务时
 携一次完整正文，current_reason_ref / subject_ref / evidence_ref 分别指向同包去重表。
 """
         if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON else '')

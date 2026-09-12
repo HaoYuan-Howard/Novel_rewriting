@@ -34,6 +34,7 @@ from novel.appendlog import process_append_lock
 from novel.errors import GateBlocked, ProvenanceRefused, ResponseRepairRequired, TerminalState, UpstreamMissing
 from novel.llm import agent_runs, stage2_global_runs
 from novel.llm.ledger import ledger_path, read_strict_jsonl_objects
+from novel.llm.prompts import fill
 from novel.run import RunContext
 from novel.stages.stage2 import characters, checks, grounding
 from novel.stages.stage2.character_refs import materialize_blueprint_character_projection
@@ -51,7 +52,7 @@ GLOBAL_INVALID = paths.invalid_of(GLOBAL)
 TARGETS = (REL, CHARACTERS, CHARACTERS_INVALID, PROJECTION, GLOBAL, GLOBAL_INVALID)
 RECOVERY_POLICY = 'stage2-analyze-v1'
 MAX_TOKENS = 64_000
-SYSTEM = """通读所给全书，一次完成实体解析与最小长期知识抽取，只输出指定 JSON。
+SYSTEM = fill("""通读所给全书，一次完成实体解析与最小长期知识抽取，只输出指定 JSON。
 characters 与 global 是两个独立草稿，共享本轮语义理解。人物用 character_ref c1/c2，
 关系 relation_ref r1，规则 rule_ref w1、版本 version_ref v1，秘密 secret_ref s1。
 不要输出正式 char_id/rel_id、证据坐标、证据原文或审阅结论。所有 evidence_refs 只引用
@@ -64,6 +65,7 @@ aliases 包含 canonical 本身恰好一次；每实体每个不同 surface 仅�
 name_distinctiveness(high/medium/common)。role 不写隐藏身份、后续经历或结局。
 identity_revealed_from 只表示称谓与实体的同一性何时向读者揭示；不表示称谓何时可出现。
 不保存逐次称呼者、语境、出现次数或人物知情矩阵。疑似异写据上下文确认，不猜合并。
+相对代词 $PRONOUNS 不作为固定称谓登记。
 
 Global 只有 setting/world_rules/relations/arc_secrets。setting 的 era/social_context
 允许 null 表示源文未建立，对应 evidence_refs 空；有值必须举证。world_rules 只收持续
@@ -77,7 +79,7 @@ arc_secrets 只收跨章节持续隐藏的身份、动机或真相；同场当�
 fact 与 fact_ref 严格二选一，另一个为 null；fact_ref 仅消除与关系或某一规则版本
 完全同义的重复，不引用其他秘密。引用秘密的 evidence_refs=[]，复用目标证据，
 revealed_from 与目标一致；独立 fact 必须有证据。不输出状态/结局、knowledge_events、
-source_blurb、文学分析或 Hook。"""
+source_blurb、文学分析或 Hook。""")
 _LOCK = threading.RLock()
 
 

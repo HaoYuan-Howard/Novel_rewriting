@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -14,9 +15,45 @@ from tests.test_stage2_analyze import _ctx, _exhausted_raw, _response
 from tests.test_stage2_global_agent import _free_ctx
 
 
-def _files(base):
-    return {path.relative_to(base).as_posix(): path.read_bytes()
-            for path in base.rglob('*') if path.is_file()}
+def _files(base, *, active_slot_groups=()):
+    result = {}
+    for path in base.rglob('*'):
+        if not path.is_file():
+            continue
+        key = path.relative_to(base).as_posix()
+        if path.parent in active_slot_groups and re.fullmatch(r'slot-[0-9]{2}\.lock', path.name):
+            # Windows owner 正持有的 OS 字节锁不可读；仅这两个已知槽组中的锁
+            # 核对存在、身份、大小与写入时间，其他文件仍必须逐字节读取成功。
+            stat = path.stat()
+            result[key] = ('active-model-slot', stat.st_mode, stat.st_ino,
+                           stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        else:
+            result[key] = path.read_bytes()
+    return result
+
+
+def _assert_run_frontier_http(base, ctx, *, node, state, waiting_on, handler,
+                              active_slot_groups=()):
+    """真实路由穿过 operator/DTO；恢复优先不伪造前置节点已跳过。"""
+    from fastapi.testclient import TestClient
+    from contracts.invariants import NODES
+    from novel.api.app import create_app
+    before = _files(base, active_slot_groups=active_slot_groups)
+    with TestClient(create_app(str(base))) as client:
+        response = client.get(f'/api/novels/{ctx.sid}/run')
+        assert response.status_code == 200, response.text
+        result = response.json()
+    frontier = result['resume_frontier']
+    assert frontier['state'] == state and frontier['node'] == node
+    assert frontier['seq'] == list(NODES).index(node) + 1
+    assert frontier['label'] == NODES[node].label
+    assert frontier['waiting_on'] == waiting_on and frontier['next_handler'] == handler
+    assert frontier['paid'] is False
+    assert frontier['verified_skipped_nodes'] == [] and frontier['verified_skipped_count'] == 0
+    assert frontier['review_states'] is None, '未审前置审批不能冒充全部通过'
+    assert [step['node'] for step in result['steps']] == list(NODES)
+    assert _files(base, active_slot_groups=active_slot_groups) == before, (
+        '读取不能改写原响应、费用、checkpoint 或补恢复账')
 
 
 def _pending(base):
@@ -114,6 +151,29 @@ def test_missing_original_raw_blocks_instead_of_minting_paid_fallback(tmp_path):
     _assert_blocked(tmp_path, ctx, queue.WAITING_ON_ANALYZE_SOURCE, 'human_only')
 
 
+def test_run_http_reads_analyze_inflight_before_provider_response_without_mutation(tmp_path):
+    """实际 agent 已登记原 owner/内容轮，driver 尚未交回回答时也可读进度。"""
+    from novel.node_agents import Stage2AnalyzeAgent
+    from tests.test_stage2_global_agent import _Driver
+
+    ctx = _ctx(tmp_path)
+
+    class InspectDuringCall(_Driver):
+        def start(self, profile, request):
+            assert analyze.pending_initial_run(ctx.novel_dir) == ctx.run_id
+            _assert_run_frontier_http(tmp_path, ctx, node=analyze.NODE, state='blocked',
+                waiting_on=queue.WAITING_ON_ANALYZE_SOURCE, handler='human',
+                active_slot_groups=(
+                    paths.model_slot_group(tmp_path, 'book', ctx.novel_dir.name),
+                    paths.model_slot_group(tmp_path, 'provider', self.provider)))
+            return super().start(profile, request)
+
+    driver = InspectDuringCall([json.dumps(_response(), ensure_ascii=False)], ctx.novel_dir)
+    result = Stage2AnalyzeAgent(ctx, driver=driver).run()
+    assert result.passed and len(driver.calls) == 1
+    assert analyze.pending_initial_run(ctx.novel_dir) is None
+
+
 @pytest.mark.parametrize('owner', ['stage2.characters', 'stage2.global'])
 def test_uncompilable_owner_draft_blocks_paid_dispatch_and_offers_free_template(tmp_path, owner):
     from novel.node_agents import Stage2AnalyzeAgent
@@ -137,6 +197,8 @@ def test_uncompilable_owner_draft_blocks_paid_dispatch_and_offers_free_template(
     assert current.inbox.items[0].kind == 'repairable'
     assert '--repair-analyze-draft' in current.inbox.items[0].how
     assert _files(tmp_path) == before
+    _assert_run_frontier_http(tmp_path, ctx, node=owner, state='blocked',
+        waiting_on=queue.WAITING_ON_ANALYZE_DRAFT_REPAIR, handler='human')
 
 
 def test_prepared_owner_draft_dispatch_binds_exact_journal_and_never_buys_again(tmp_path, monkeypatch):
@@ -170,6 +232,8 @@ def test_prepared_owner_draft_dispatch_binds_exact_journal_and_never_buys_again(
     assert current.action.flags == ['--recover-analyze-draft']
     assert current.execution_token is not None and current.execution_token.paid is False
     assert _files(tmp_path) == before
+    _assert_run_frontier_http(tmp_path, ctx, node='stage2.global', state='ready',
+                             waiting_on=None, handler='code')
     journal = ArtifactStore(free).path(paths.analyze_draft_repair_rel('stage2.global'))
     journal.write_bytes(journal.read_bytes() + b' ')
     with pytest.raises(NovelError):

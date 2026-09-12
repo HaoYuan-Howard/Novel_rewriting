@@ -43,6 +43,13 @@ Global 的 typed patch、collection delta 和 post_edit_review 由 Global produc
 `Stage2NodeReviewRequest` 内提交 `core_edits`：包含两份源文件的完整 SHA-256、可选 CharactersEdit
 和可选 GlobalEdit，至少一侧非空；`decision=rework`、`owner=null`，并明确指出当前问题义务。
 人物 Edit 的 source SHA 必须等于批次人物基线，不能夹带独立 Global post_edit_review。
+新增人物使用本批局部 `character_ref`，人物 compiler 根据当前及退休 ID 冻结正式身份，
+在 `characters_edit.added_character_ids` 保存映射。同响应 GlobalEdit 的关系 patch、replacement
+和 collection add/split 端点可以引用这些局部句柄；批次只重写 `subject_id/object_id`，不改
+事实正文。原请求及其 SHA 保留局部句柄，prepared 同时冻结人物映射和正式 Global core。
+后续补尾复用该映射，不重新分配；不存在于本批 add 的句柄拒绝，不能借上一轮回执解释。
+原请求也不得直接填写本批将分配的正式 ID，即使猜中仍拒绝；原已有人物继续使用正式 ID。
+独立 Global 编辑没有新增人物映射，不接受这种临时端点。
 
 审批服务先对两侧整体预检，任何一侧失败都不改人物、知识或原决定。通过后先保存
 `stage2-core-edits-prepared-v1` 和绑定其原字节 SHA 的 Commander 原决定，再由免费

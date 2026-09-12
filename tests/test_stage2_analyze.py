@@ -478,9 +478,12 @@ def test_gate_a_metrics_count_only_completed_commander_semantic_edits(tmp_path, 
     from tests.test_stage2_core_edits import seed, request_for, approve
     from tools.workflow_metrics import stage2_core_metrics
     ctx = seed(tmp_path)
-    identity = approve(ctx, request_for(ctx, evidence_only=evidence_only, global_edit=False))
+    request = request_for(ctx, evidence_only=evidence_only, global_edit=False)
+    _metric_commander(ctx, request=request)
+    identity = approve(ctx, request)
     pending = stage2_core_metrics(tmp_path, ctx.novel_dir, ctx.sid, run_id=None)['commander_changes']
-    assert pending['pending_batches'] == 1 and pending['rewritten_owner_artifacts'] == 0
+    assert pending['pending_batches'] == 1 and pending['known_rewritten_owner_artifacts'] == 0
+    assert pending['state'] == 'unver' and pending['semantic_intervention_events'] is None
     core_edits.apply(ctx, identity)
     report = stage2_core_metrics(tmp_path, ctx.novel_dir, ctx.sid, run_id=None)['commander_changes']
     assert report['state'] == 'ok' and report['completed_batches'] == 1
@@ -493,3 +496,172 @@ def test_gate_a_metrics_count_only_completed_commander_semantic_edits(tmp_path, 
     assert characters['intervention_rate'] == (0 if evidence_only else round(1 / len(_response()['characters']), 4))
     assert report['by_category']['relations']['initial_subjects'] == 0
     assert report['by_category']['relations']['intervention_rate'] is None
+
+
+def _metric_commander(ctx, *, request=None, action=None):
+    from novel.orchestrator import queue, reviewer_tasks
+    from tests.test_reviewer_work_unit_evidence import seed_commander_response
+    if action is None:
+        action = reviewer_tasks.ReviewerApprovalAction(kind='approval', surface='stage2_global_review',
+            payload=request.model_dump(mode='json', by_alias=True))
+    return seed_commander_response(ctx.novel_dir.parent, sid=ctx.sid, node='stage2.global', scope='book',
+        waiting_on=queue.WAITING_ON_STAGE2_REVIEW, action=action)
+
+
+def test_gate_a_metrics_human_actor_cannot_impersonate_model_commander(tmp_path):
+    from novel.stages.stage2 import core_edits
+    from tests.test_stage2_core_edits import seed, request_for, approve
+    from tools.workflow_metrics import stage2_core_metrics
+    ctx = seed(tmp_path)
+    identity = approve(ctx, request_for(ctx, global_edit=False))
+    core_edits.apply(ctx, identity)
+    report = stage2_core_metrics(tmp_path, ctx.novel_dir, ctx.sid, run_id=None)['commander_changes']
+    assert report['state'] == 'ok' and report['completed_batches'] == 0
+    assert report['semantic_subject_interventions'] == 0
+    assert report['unattributed_core_batches'] == 1
+
+
+def test_gate_a_metrics_missing_original_c_proof_never_reports_zero_total(tmp_path):
+    from novel.stages.stage2 import core_edits
+    from tests.test_stage2_core_edits import seed, request_for, approve
+    from tools.workflow_metrics import stage2_core_metrics
+    ctx = seed(tmp_path)
+    request = request_for(ctx, global_edit=False)
+    budget, turn, _record, _cost = _metric_commander(ctx, request=request)
+    core_edits.apply(ctx, approve(ctx, request))
+    (budget.directory / (budget.turn(turn.turn_id).recovery_sha256 + '.json')).unlink()
+    report = stage2_core_metrics(tmp_path, ctx.novel_dir, ctx.sid, run_id=None)['commander_changes']
+    assert report['state'] == 'unver' and report['source_errors'] == ['commander_action_unproved']
+    assert report['semantic_subject_interventions'] is None and report['semantic_intervention_events'] is None
+    assert report['known_semantic_subject_interventions'] == 0
+
+
+def test_gate_a_metrics_read_original_system_after_prompt_change_without_relaxing_producer(tmp_path, monkeypatch):
+    from tools.workflow_metrics import stage2_core_metrics
+    ctx = _ctx(tmp_path)
+    Stage2AnalyzeAgent(ctx, driver=_driver(ctx)).run()
+    monkeypatch.setattr(analyze, 'SYSTEM', analyze.SYSTEM + '\n补充确定性称谓候选说明。')
+    before = {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}
+    report = stage2_core_metrics(tmp_path, ctx.novel_dir, ctx.sid, run_id=None)
+    assert report['first_draft']['state'] == 'ok'
+    assert report['first_compiled']['characters']['core_json_chars'] > 0
+    assert before == {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}
+    driver = _Driver([], ctx.novel_dir)
+    with pytest.raises(ProvenanceRefused):
+        Stage2AnalyzeAgent(_resume_ctx(ctx), driver=driver).run()
+    assert driver.calls == [], '只读历史计量不得放宽生产当前请求身份'
+
+
+def test_gate_a_metrics_refuse_changed_original_executor_request_blob(tmp_path):
+    from novel import work_units
+    from tools.workflow_metrics import stage2_core_metrics
+    ctx = _ctx(tmp_path)
+    Stage2AnalyzeAgent(ctx, driver=_driver(ctx)).run()
+    budget = work_units.budget_for(ctx, scope='book')
+    turn = budget.latest_turn()
+    path = budget.directory / (turn.request_payload_sha256 + '.json')
+    raw = json.loads(path.read_text(encoding='utf-8'))
+    raw['payload']['system'] += '\n修改历史提示'
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8')
+    report = stage2_core_metrics(tmp_path, ctx.novel_dir, ctx.sid, run_id=None)
+    assert report['first_draft']['state'] == 'unver'
+
+
+def test_gate_a_metrics_keeps_completed_c_edit_after_adoption_and_later_human_edit(tmp_path):
+    from novel.stages.stage2 import core_edits
+    from tests.test_stage2_core_edits import seed, request_for, approve
+    from tools.workflow_metrics import stage2_core_metrics
+    ctx = seed(tmp_path)
+    request = request_for(ctx, global_edit=False)
+    budget, turn, _record, _cost = _metric_commander(ctx, request=request)
+    core_edits.apply(ctx, approve(ctx, request))
+    budget.mark_adopted(turn.turn_id)
+    second = request_for(ctx, evidence_only=True, global_edit=False)
+    core_edits.apply(ctx, approve(ctx, second))
+    before = {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}
+    report = stage2_core_metrics(tmp_path, ctx.novel_dir, ctx.sid, run_id=None)['commander_changes']
+    assert report['state'] == 'ok' and report['completed_batches'] == 1
+    assert report['semantic_subject_interventions'] == 1 and report['unattributed_core_batches'] == 1
+    assert before == {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}
+
+
+def test_gate_a_metrics_count_reviewed_global_wal_after_later_independent_edit(tmp_path):
+    from contracts.schema.evaluation import GlobalReview
+    from novel.orchestrator import reviewer_tasks
+    from novel.quality.global_review import decide
+    from novel.stages.stage2 import extract, global_review
+    from tests.stage2_fixtures import approved_core_review
+    from tests.test_stage2_global_core_edits import seed, write_edit
+    from tests.test_stage2_global_agent import _free_ctx
+    from tools.workflow_metrics import stage2_core_metrics
+    ctx, _original = seed(tmp_path)
+    free = _free_ctx(ctx)
+    store = ArtifactStore(free)
+    review = approved_core_review(store)
+    target = next(row for row in review.items if row.kind == 'reveal')
+    review = decide(review, item_id=target.item_id, expected_subject_sha256=target.subject_sha256,
+        state='FAIL', actor='人工先指出问题', reason='揭示章错误', now='2026-09-12T00:00:00+00:00')
+    store.write(extract.GLOBAL_REVIEW_REL, review)
+    pack = global_review.review_workpack(free, scope='blocking', replaced_input_keys=(extract.GLOBAL_EDIT,))
+    edit = {'arc_secrets': [{'secret_id': 'secret_01', 'revealed_from': 3}],
+        'post_edit_review': {'actor': '模型审阅者', 'expected_source_sha256': review.source_sha256,
+            'reviewed_chapter_ordinals': [1, 2, 3], 'default_state': 'PASS', 'reason': '核对准确揭示章',
+            'expected_workpack_sha256': pack['workpack_sha256'],
+            'review_scope': [{'item_id': target.item_id, 'expected_subject_sha256': target.subject_sha256}],
+            'decisions': [], 'quarantine_groups': []}}
+    path = write_edit(ctx, edit)
+    action = reviewer_tasks.ReviewerNodeAction(kind='node', node='stage2.global',
+        flags=('--apply-edit', '@reviewer-input'), input_payload=json.loads(path.read_text(encoding='utf-8')))
+    budget, turn, _record, _cost = _metric_commander(ctx, action=action)
+    updated, report = extract.run_apply_edit(_free_ctx(ctx))
+    assert report.passed and updated.arc_secrets[0].revealed_from == 3
+    budget.mark_adopted(turn.turn_id)
+    # 后来人工改回，原 C 的 committed WAL/目标仍在历史，不能因当前文件不同漏计。
+    write_edit(ctx, {'arc_secrets': [{'secret_id': 'secret_01', 'revealed_from': 2}]})
+    extract.run_apply_edit(_free_ctx(ctx))
+    before = {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}
+    result = stage2_core_metrics(tmp_path, ctx.novel_dir, ctx.sid, run_id=None)['commander_changes']
+    assert result['state'] == 'ok', result
+    assert result['direct_edit_batches'] == {'core': 0, 'reviewed_global': 1}
+    assert result['completed_batches'] == 1 and result['semantic_intervention_events'] == 1
+    assert before == {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}
+
+
+@pytest.mark.parametrize('owner', ['stage2.characters', 'stage2.global'])
+def test_gate_a_metrics_prove_c_directed_owner_executor_separately(tmp_path, owner):
+    from contracts.schema.api import Stage2NodeReviewRequest
+    from novel.node_agents import build_node_agent
+    from novel.orchestrator import approvals
+    from tests.test_stage2_core_edits import seed
+    from tests.test_stage2_global_agent import _full
+    from tools.workflow_metrics import stage2_core_metrics
+    ctx = seed(tmp_path)
+    token = approvals._stage2_review_identity(ctx.novel_dir, 'stage2.global')[0]
+    request = Stage2NodeReviewRequest(node='stage2.global', review_token=token, decision='rework',
+        owner=owner, actor='模型审阅者', reason='根据原文订正首次公开身份或老宅生活背景')
+    _metric_commander(ctx, request=request)
+    approvals.approve_stage2_review(tmp_path, ctx.sid, request)
+    pending = stage2_core_metrics(tmp_path, ctx.novel_dir, ctx.sid, run_id=None)['commander_changes']
+    assert pending['commander_directed_executor']['requested'] == 1
+    assert pending['commander_directed_executor']['state'] == 'unver'
+    assert pending['semantic_intervention_events'] is None
+    revised = _new_run_ctx(ctx)
+    revised.node = owner
+    if owner == 'stage2.characters':
+        response = character_response()
+        response['characters'][0]['role'] = '站在老宅廊下的女子'
+        raw = json.dumps(response, ensure_ascii=False)
+    else:
+        response = _response()['global']
+        response['setting'].update(social_context='老宅里的家庭生活', social_context_evidence_refs=['e000001'])
+        raw = _full(response)
+    driver = _Driver([raw], ctx.novel_dir, session_id='metrics-' + owner)
+    assert build_node_agent(revised, driver=driver, review_token=token).run().passed
+    before = {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}
+    result = stage2_core_metrics(tmp_path, ctx.novel_dir, ctx.sid, run_id=None)['commander_changes']
+    assert result['state'] == 'ok', result
+    directed = result['commander_directed_executor']
+    assert directed['state'] == 'ok' and directed['completed'] == 1 and directed['unver'] == 0
+    assert directed['semantic_intervention_events'] == result['semantic_intervention_events'] == 1
+    assert result['direct_edit_batches'] == {'core': 0, 'reviewed_global': 0}
+    assert before == {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}

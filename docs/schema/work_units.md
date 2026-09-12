@@ -81,6 +81,9 @@ Commander、默认 Executor 和全部逐节点覆盖必须完整；缺失、冲�
 之后节点的任何 Executor、Reviewer、免费恢复或终验启动前结束本次范围；先关闭 epoch、
 排空并释放 owner，结果为 `stopped`，原因明确为范围边界，不伪造 `pipeline_complete`。
 返修按实际 owner 位置判断，联合首抽按两侧物化归属守界；未知节点归属关闭式停止。
+blocked 动作中的 node 是等待中的消费者，审阅范围则采用工作单元登记的
+waiting_on 对应 Commander owner；因此 Blueprint 等待 Global 时，仍允许上界前的
+Global 审阅，接受后才在真正的 Blueprint 启动点停下。
 
 continuation 返回并继承原上界：请求省略该字段保持原范围，显式新节点改变范围，显式
 `null` 解除上界。范围变化不改变已冻结 profiles、历史来源或工作单元累计额度；旧 contract

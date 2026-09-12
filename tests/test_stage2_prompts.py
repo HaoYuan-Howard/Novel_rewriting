@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from contracts.invariants import BARE_PRONOUNS, NARRATIVE_PERSON, TIME_LAYERS, WORLD_RULE_KINDS
 from contracts.schema.knowledge import KnowledgeAgentTurnResponse, KnowledgeResponse
-from novel.stages.stage2 import characters, knowledge_prompts, plot_prompts as prompts
+from novel.stages.stage2 import analyze, characters, knowledge_prompts, plot_prompts as prompts
 from contracts.schema.plot import PlotBlueprintResponse
 from tests.test_plot_blueprint import chapter_response
 
@@ -18,11 +18,12 @@ def test_all_current_prompt_arms_are_rendered():
     assert '静态人物登记' in characters.SYSTEM and '不写后续经历、结局' in characters.SYSTEM
     assert '不可增改人物身份' in knowledge_prompts.SYSTEM
     # JSON Schema 的 $defs/$ref 是正式引用，不是未渲染模板。
-    assert '$' not in knowledge_prompts.SYSTEM + characters.SYSTEM + prompts.BLUEPRINT_SYSTEM
+    assert '$' not in knowledge_prompts.SYSTEM + characters.SYSTEM + analyze.SYSTEM + prompts.BLUEPRINT_SYSTEM
 
 
 def test_character_prompt_uses_the_complete_pronoun_contract_and_retired_arms_are_absent():
-    assert all(f'「{word}」' in characters.SYSTEM for word in BARE_PRONOUNS)
+    assert all(f'「{word}」' in system for system in (characters.SYSTEM, analyze.SYSTEM)
+               for word in BARE_PRONOUNS)
     for retired in ('GLOBAL_CANDIDATE_SYS', 'GLOBAL_CANDIDATE_HINT',
                     'ROLE_SPLIT_SYS', 'ROLE_SPLIT_HINT', 'ROLE_FATE_RULE'):
         assert not hasattr(prompts, retired)

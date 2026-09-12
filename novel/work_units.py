@@ -269,7 +269,7 @@ class ContentReservation:
 
 class WorkUnitBudget:
     def __init__(self, base: str | os.PathLike[str], sid: str, node: str,
-                 role: str = 'executor', scope: str = 'book') -> None:
+                 role: str = 'executor', scope: str = 'book', *, read_only: bool = False) -> None:
         if node not in NODES or role not in ('executor', 'commander'):
             raise WorkUnitRefused('未登记的工作单元节点或角色')
         spec = NODES[node].lifecycle
@@ -289,7 +289,9 @@ class WorkUnitBudget:
         if not scope or len(scope) > 160 or any(ord(c) < 32 for c in scope):
             raise WorkUnitRefused('工作单元范围非法')
         self.base = Path(base)
-        manifest = require_workflow(base)
+        manifest = workflow_manifest(base) if read_only else require_workflow(base)
+        if manifest is None:
+            raise WorkUnitRefused('只读工作单元缺现役 workflow，不能初始化新账')
         self.identity = dict(task_id=manifest.task_id, sid=paths.check_sid(sid),
                              node=node, role=role, scope=scope)
         self.unit_id = _digest(self.identity)
@@ -914,6 +916,40 @@ def budget_for(ctx: RunContext, *, scope: str, role: str = 'executor',
     return WorkUnitBudget(ctx.novel_dir.parent, ctx.sid, node or ctx.node, role, scope)
 
 
+def readonly_budget(base: str | os.PathLike[str], sid: str, unit_id: str) -> WorkUnitBudget:
+    """观察既有工作单元；缺登记、缺账或身份漂移一律拒绝，不初始化额度。"""
+    registry = _read(base, paths.work_unit_registry_path(base, sid), WorkUnitRegistryV1)
+    ledger = _read(base, paths.work_unit_dir(base, sid, unit_id) / 'ledger.json', WorkUnitLedgerV2)
+    budget = WorkUnitBudget(base, sid, ledger.node, ledger.role, ledger.scope, read_only=True)
+    if (registry.sid != sid or registry.task_id != budget.identity['task_id']
+            or unit_id not in registry.unit_ids or budget.unit_id != unit_id):
+        raise WorkUnitRefused('只读工作单元登记身份不一致')
+    budget._read()
+    return budget
+
+
+def readonly_commander_action(budget: WorkUnitBudget, turn_id: str) -> dict[str, Any]:
+    """从永久原回答证明读取 typed 动作；不依赖已清理的活动重放记录或自由 actor。"""
+    from types import SimpleNamespace
+
+    turn = budget.turn(turn_id)
+    proof = budget.recovery_proof(turn_id)
+    action = proof.get('action')
+    if not isinstance(action, dict) or action.get('kind') not in {'node', 'approval'}:
+        raise WorkUnitRefused('原回答缺可验证的 typed 动作')
+    # 下列仅是既有证明器所需的内存投影，不是新的审批/恢复记录，也不补造 epoch。
+    record = SimpleNamespace(
+        sid=budget.identity['sid'], work_unit_id=budget.unit_id, work_unit_turn_id=turn_id,
+        waiting_on=proof.get('waiting_on'), business_sha256=proof.get('business_sha256'),
+        provider_response_sha256=proof.get('provider_response_sha256'),
+        reviewer_session_run_id=turn.session_run_id,
+        node=action.get('node') if action['kind'] == 'node' else None,
+        flags=action.get('flags'), input_payload=action.get('input_payload'),
+        surface=action.get('surface'), payload=action.get('payload'))
+    validate_reviewer_record(budget.base, budget.identity['sid'], record)
+    return action
+
+
 def reconcile_commander_response(
         budget: WorkUnitBudget, turn_id: str, *, read_only: bool = False) -> None:
     """原始回答的成本/会话尾账必须闭合后才能消费 typed 决定。"""
@@ -987,7 +1023,7 @@ def commander_budget_for_record(base: str | os.PathLike[str], sid: str, record: 
         raise WorkUnitRefused('审阅记录缺当前书的原工作单元身份')
     ledger = _read(base, paths.work_unit_dir(base, sid, record.work_unit_id) / 'ledger.json', WorkUnitLedgerV2)
     identity = commander_work_unit(record.waiting_on)
-    budget = WorkUnitBudget(base, sid, ledger.node, 'commander', ledger.scope)
+    budget = WorkUnitBudget(base, sid, ledger.node, 'commander', ledger.scope, read_only=True)
     if (identity is None or identity[0] != ledger.node or ledger.role != 'commander'
             or budget.unit_id != record.work_unit_id or not commander_scope_allowed(ledger.node, ledger.scope)):
         raise WorkUnitRefused('审阅记录与原 Commander 属主或范围不一致')

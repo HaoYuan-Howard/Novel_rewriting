@@ -136,6 +136,12 @@ def test_stage4_prepared_recovery_operator_action_is_exact_free_blocker(
     assert lane.action.waiting_on == Q.WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT
     assert lane.action.paid is False
     assert inbox.counts['repairable'] == inbox.total == 1
+    frontier = O._frontier_view(lane)
+    assert frontier.node == 'stage4.design'
+    assert frontier.next_handler == 'executor'
+    assert frontier.verified_skipped_nodes == []
+    assert frontier.verified_skipped_count == 0
+    assert frontier.review_states is None
 
 
 def test_precomputed_approval_projection_rejects_cross_book_reuse(tmp_path):
@@ -375,6 +381,55 @@ def test_resume_frontier_rejects_a_frontend_invented_node_label():
             verified_skipped_nodes=list(NODES)[:3],
             verified_skipped_count=3,
         )
+
+
+def _recovery_frontier_fields():
+    node = 'stage2.global'
+    return dict(
+        state='blocked', node=node, seq=list(NODES).index(node) + 1,
+        label=NODES[node].label, resume_verdict='run', why='原 owner 尚待免费恢复',
+        waiting_on=Q.WAITING_ON_ANALYZE_DRAFT_REPAIR, paid=False,
+        writes='stage2/global_grounding.json', next_handler='human')
+
+
+@pytest.mark.parametrize('prefix_length', [0, 2])
+def test_resume_frontier_accepts_only_actually_verified_short_prefix(prefix_length):
+    fields = _recovery_frontier_fields()
+    prefix = list(NODES)[:prefix_length]
+    for state in ('ready', 'blocked'):
+        current = {**fields, 'state': state}
+        if state == 'ready':
+            current.update(waiting_on=None, next_handler='code')
+        result = RunResumeFrontierView(**current, verified_skipped_nodes=prefix,
+                                      verified_skipped_count=prefix_length)
+        assert result.verified_skipped_nodes == prefix
+        assert result.verified_skipped_count < result.seq - 1
+
+
+@pytest.mark.parametrize('skipped,count,reason', [
+    ([list(NODES)[1]], 1, '连续 NODES 前缀'),
+    ([list(NODES)[0], list(NODES)[2]], 2, '连续 NODES 前缀'),
+    (['stage2.global'], 1, '位于续跑点之前'),
+    ([list(NODES)[1], list(NODES)[0]], 2, '按序且不重复'),
+    ([list(NODES)[0], list(NODES)[0]], 2, '按序且不重复'),
+    (['unregistered'], 1, '来自 NODES'),
+    ([], 1, '节点列表不一致'),
+])
+def test_resume_frontier_short_prefix_keeps_identity_order_and_count_guards(
+        skipped, count, reason):
+    with pytest.raises(ValidationError, match=reason):
+        RunResumeFrontierView(**_recovery_frontier_fields(),
+                              verified_skipped_nodes=skipped, verified_skipped_count=count)
+
+
+@pytest.mark.parametrize('state,handler,skipped', [
+    ('unknown', 'unknown', [list(NODES)[0]]),
+    ('pipeline_complete', 'none', []),
+])
+def test_resume_frontier_short_prefix_does_not_weaken_terminal_evidence(state, handler, skipped):
+    with pytest.raises(ValidationError, match='前缀不完整'):
+        RunResumeFrontierView(state=state, why='终态投影', next_handler=handler,
+                              verified_skipped_nodes=skipped, verified_skipped_count=len(skipped))
 
 
 def test_next_refuses_a_surface_that_changes_during_planning(monkeypatch, tmp_path):

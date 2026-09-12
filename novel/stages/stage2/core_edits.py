@@ -17,9 +17,10 @@ from pydantic import Field, ValidationError, model_validator
 from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING
 from contracts.schema.api import Stage2NodeReviewRequest
 from contracts.schema.base import StrictModel
-from contracts.schema.characters import CharacterRegistry
+from contracts.schema.characters import CharacterAdd, CharacterRegistry, CharactersEdit
 from contracts.schema.common import Sha256
 from contracts.schema.knowledge import KnowledgeCore, KnowledgeGrounding
+from contracts.schema.stage2 import GlobalEdit
 from novel import paths, prov
 from novel.appendlog import process_append_lock
 from novel.errors import ArtifactUnreadable, HumanEditProtected, ProvenanceRefused
@@ -49,6 +50,7 @@ class PreparedCoreEdits(StrictModel):
             raise ValueError('Core 批次原请求身份不完整')
         if (self.characters_candidate is None) != (self.request.core_edits.characters is None):
             raise ValueError('人物冻结候选必须与原请求的 owner 一致')
+        _new_character_mapping(self.request.core_edits.characters, self.characters_candidate)
         return self
 
 
@@ -67,6 +69,60 @@ def request_sha(request: Stage2NodeReviewRequest) -> str:
 def business_sha(registry: CharacterRegistry) -> str:
     return agent_runs.canonical_sha256(registry.model_dump(
         mode='json', by_alias=True, exclude={'provenance'}))
+
+
+def _new_character_mapping(edit: CharactersEdit | None,
+                           candidate: CharacterRegistry | None) -> dict[str, str]:
+    """局部句柄只属于本批新增；不能借上一轮人物编辑回执解释另一份请求。"""
+    refs = {op.character_ref for op in edit.operations if isinstance(op, CharacterAdd)} if edit else set()
+    if edit is None:
+        if candidate is not None:
+            raise ValueError('无人物编辑的批次不能携新增身份候选')
+        return {}
+    receipt = candidate.provenance.characters_edit if candidate is not None else None
+    if (receipt is None or receipt.source_sha256 != edit.source_sha256
+            or receipt.edit_sha256 != agent_runs.canonical_sha256(edit.model_dump(mode='json'))):
+        raise ValueError('本批新增身份缺匹配原人物请求的编译回执')
+    mapping = receipt.added_character_ids
+    if (set(mapping) != refs or len(set(mapping.values())) != len(mapping)
+            or any(cid not in candidate.characters for cid in mapping.values())):
+        raise ValueError('人物新增映射必须精确覆盖本批局部句柄并指向冻结候选')
+    return dict(mapping)
+
+
+def _bind_global_character_refs(edit: GlobalEdit | None,
+                                mapping: dict[str, str]) -> GlobalEdit | None:
+    """仅编译关系端点；事实正文、规则、集合主体 ID 等字段保持原请求字面。"""
+    if edit is None:
+        return None
+    import re
+
+    raw = edit.model_dump(mode='json', by_alias=True, exclude_unset=True)
+    new_ids = set(mapping.values())
+
+    def endpoints(row: dict) -> None:
+        for field in ('subject_id', 'object_id'):
+            ref = row.get(field)
+            if isinstance(ref, str) and ref in new_ids:
+                raise HumanEditProtected('本批新增人物端点必须引用 character_ref，不能猜测正式 char_id')
+            if isinstance(ref, str) and re.fullmatch(r'c[1-9]\d*', ref):
+                if ref not in mapping:
+                    raise HumanEditProtected(f'关系端点 {ref} 没有本批 Characters add 的编译映射')
+                row[field] = mapping[ref]
+
+    for field in ('relations', 'relations_replace'):
+        for row in raw.get(field) or []:
+            endpoints(row)
+    for collection in raw.get('collection_edits') or []:
+        if collection['collection'] != 'relations':
+            continue
+        for operation in collection['operations']:
+            if operation['op'] == 'add':
+                endpoints(operation['item'])
+            elif operation['op'] == 'split':
+                for row in operation['items']:
+                    endpoints(row)
+    return GlobalEdit.model_validate(raw)
 
 
 def _read(path, cls):
@@ -113,8 +169,10 @@ def prepare(base, sid: str, request: Stage2NodeReviewRequest, *, code: str) -> s
         if batch.characters is not None else None)
     registry = character_candidate or store.read_own(
         CharacterRegistry, STAGE2_CHARACTERS, require_current=True)[0]
+    mapping = _new_character_mapping(batch.characters, character_candidate)
+    global_edit = _bind_global_character_refs(batch.global_edit, mapping)
     global_candidate = extract.preflight_core_edit(
-        global_ctx, batch.global_edit, registry=registry,
+        global_ctx, global_edit, registry=registry,
         expected_global_sha256=batch.expected_global_sha256)
     previous_global = store.read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0]
     previous_core = KnowledgeCore.model_validate(previous_global.model_dump(

@@ -76,7 +76,8 @@ def seed_commander_response(base, *, sid='42', node='stage5.review', scope='clos
         reviewer_session_run_id=session_run_id, reviewer_seat_turn_id=reservation.turn_id,
         provider_response_sha256=digest, work_unit_id=budget.unit_id,
         work_unit_turn_id=reservation.turn_id, recorded_at=1)
-    [cost] = ledger.read_jsonl_rows(ledger.ledger_path(base))
+    [cost] = [row for row in ledger.read_jsonl_rows(ledger.ledger_path(base))
+              if row.get('run_id') == run_id and row.get('attempt_id') == attempt.attempt_id]
     return budget, reservation, record, cost
 
 

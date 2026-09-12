@@ -56,15 +56,19 @@ start/end 是章内字符区间 `[start,end)`，原文只由 MainText 精确回�
 ## 独立编辑与恢复
 
 `CharactersEdit` 绑定正式或优先 INVALID 的原始 SHA-256，操作为 add/replace/delete。
-一份输入每个 ID 只操作一次，不能覆盖 add、凭空 replace/delete 或删成空表。人物对象中的
+replace/delete 只引用既有 char_id，每个 ID 只操作一次。add 使用本次唯一的 character_ref
+（如 c1），不得自填 char_id；代码按局部引用数值顺序，避开当前与退休 ID 分配新身份，
+并把 added_character_ids 映射冻结在本次回执。不能凭空 replace/delete 或删成空表。人物对象中的
 证据可复用现有 EvidenceId，或提交 `{chapter_ordinal, locator}`，代码只接受指定章的唯一匹配。
 坏 locator 在写前拒绝；不存占位 source、不把未知改成成功。归一后的 no-op 不写轮次。
 
 免费 `--apply-edit` 须有 actor/reason，经过编译、HARD 判定、归档和 typed readback。
-`characters_edit` 回执保存源 SHA、edit SHA、actor/reason、时间及累计删除 ID；精确重复提交
+`characters_edit` 回执保存源 SHA、edit SHA、actor/reason、时间、本次新增映射及累计删除 ID；精确重复提交
 只补尾，不重复改写。HARD 候选落 INVALID，免费 `--revalidate --actor --reason` 重验及重建投影，
 不凭机械通过补语义 PASS。人物成功写回会按当前两份独立产物刷新统一 review，保留未变主体决定。
 统一 C 编辑先以 `preflight_edit` 冻结候选，两侧均无 HARD 后由各 owner 的 CAS 提交；完成回执不重开。
+同一 Core 决定的关系端点可引用本批新增 cN。只由 Core 编译器按本次人物回执改写为正式 ID；
+原请求保留局部句柄，WAL 保存冻结后的两侧候选。独立 Global 编辑没有人物新增映射，不能接受 cN。
 
 独立 agent run 在首 wire 前冻结请求、profile 和目标初始字节 SHA，accepted 回答先保存 checkpoint。
 提交沿 prepared → 正式/INVALID → typed readback → adoption → committed。自身已写盘的尾窗
@@ -123,8 +127,18 @@ CharactersProvenance 的 `retired_character_ids` 独立于 `characters_edit` 保
 ## Gate A 读数
 
 `tools/workflow_metrics.py::stage2_core_metrics` 只读取上述来源、独立产物和唯一 ledger。
+历史首抽使用原 run 与永久 Executor request 中已验证的 system/schema；当前提示文本改变
+不抹除原调用来源。MainText、候选表、user 与原 schema 仍须精确匹配；仅用于只读计量，
+不放宽生产恢复或新采用的当前请求身份，无法解码的旧 schema 保持 unver。
 首轮/接受后 core 采用无空白 JSON **字符数**与 MainText 字符数比较；证据、审计另外计量。
-候选去留按原 checkpoint 的稳定主体 ID 统计，无法证明的拆分/合并不推测。只有精确绑定
-completed CoreEdits 的变化才算 C 实际改写；证据或审计字段变化不算语义主体干预。
+候选去留按原 checkpoint 的稳定主体 ID 统计，无法证明的拆分/合并不推测。C 干预先验证
+永久 Commander WorkUnit 的原请求、回答、typed 动作、会话与唯一成本来源，再关联实际提交：
+Core 编辑绑定原审批、prepared 和 completed；reviewed GlobalEdit 绑定稀疏编辑 SHA 与已提交
+历史 WAL；C 指派的独立 E 修订按原 review_token/owner 关联 E 的冻结请求、checkpoint、基线与
+提交目标，并单列为 E 执行的变化。人工 Core 批次不会因 actor 字样被算作模型 C；缺少来源或
+提交联结保持 unver，并另列可证明的小计。证据或审计字段变化不算语义主体干预。
 调用累计耗时按唯一 ledger attempt 单列 Analyze E、Core C 和独立 executor；内容返工与网络重试
-依工作单元账区分，未知阶段不归零。免费恢复时长、审阅失效等没有权威记录时保持 unver。
+依工作单元账区分，未知阶段不归零。执行墙钟取 E 的成对 CLI start/end 与成功 C 原 receipt 的
+返回时刻、实测耗时；另列区间并集和首尾跨度，标明秒级端点。补账时生成的 ledger.at 不作为
+原调用结束时刻，E 节点窗口也不冒充单次模型往返。失败 C、缺尾、免费恢复时长、审阅失效等
+没有权威区间或变更记录时保持 unver。

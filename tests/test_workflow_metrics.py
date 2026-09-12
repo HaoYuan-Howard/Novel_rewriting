@@ -76,6 +76,98 @@ def test_gate_a_calls_deduplicate_shared_attempt_and_keep_repair_latency_unknown
     assert W._gate_a_call_metrics([], {})['state'] == 'unver'
 
 
+def test_gate_a_original_c_receipt_interval_survives_later_ledger_reconciliation(tmp_path):
+    from novel.llm.ledger import ledger_path, read_jsonl_rows
+    from novel.orchestrator import queue, reviewer_tasks
+    from novel.work_units import reconcile_commander_response
+    from tests.test_reviewer_work_unit_evidence import seed_commander_response
+    budget, turn, _record, row = seed_commander_response(tmp_path, sid=SID,
+        node='stage2.global', scope='book', waiting_on=queue.WAITING_ON_STAGE2_REVIEW,
+        action=reviewer_tasks.ReviewerApprovalAction(kind='approval', surface='stage2_global_review',
+            payload={'node': 'stage2.global', 'review_token': 'token', 'decision': 'uncertain',
+                     'actor': '模型审阅者', 'reason': '材料不足'}))
+    assert W._iso_epoch(row['at']) > 20, 'append 时刻不同于原 receipt 的 ts=20'
+    ledger_path(tmp_path).write_bytes(b'')
+    reconcile_commander_response(budget, turn.turn_id)
+    rows = read_jsonl_rows(ledger_path(tmp_path))
+    before = {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}
+    evidence = W._gate_a_commander_evidence(tmp_path, SID)
+    assert evidence['errors'] == evidence['action_errors'] == []
+    assert evidence['intervals'] == {(turn_run := budget.turn(turn.turn_id).run_id, row['attempt_id']): (19.98, 20.0)}
+    result = W._gate_a_wall_clock(tmp_path, SID, turn_run, rows, evidence)
+    assert result['wall_clock_state'] == 'ok' and result['wall_clock_seconds'] == 0.02
+    assert result['known_interval_union_seconds'] == 0.02
+    assert before == {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}
+
+
+def test_gate_a_missing_c_source_is_unknown_and_readonly(tmp_path):
+    from novel.orchestrator import queue
+    from tests.test_reviewer_work_unit_evidence import seed_commander_response
+    budget, turn, _record, row = seed_commander_response(tmp_path, sid=SID,
+        node='stage2.global', scope='book', waiting_on=queue.WAITING_ON_STAGE2_REVIEW)
+    (budget.directory / (budget.turn(turn.turn_id).response_sha256 + '.json')).unlink()
+    before = {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}
+    evidence = W._gate_a_commander_evidence(tmp_path, SID)
+    assert evidence['errors'] == ['commander_response_unproved'] and evidence['actions'] == []
+    result = W._gate_a_wall_clock(tmp_path, SID, row['run_id'], [row], evidence)
+    assert result['wall_clock_seconds'] is None and result['wall_clock_state'] == 'unver'
+    assert before == {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}
+
+
+def test_gate_a_readonly_budget_never_initializes_missing_workflow(tmp_path):
+    from novel.work_units import WorkUnitBudget, WorkUnitRefused
+    with pytest.raises(WorkUnitRefused, match='只读'):
+        WorkUnitBudget(tmp_path, SID, 'stage2.global', 'commander', 'book', read_only=True)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_gate_a_unreadable_decision_history_never_becomes_zero_interventions(tmp_path, monkeypatch):
+    from novel.orchestrator import approvals
+    def unreadable(*_args):
+        raise ValueError('损坏审批来源')
+    monkeypatch.setattr(approvals, 'stage2_review_history', unreadable)
+    result = W._core_commander_changes(tmp_path, tmp_path / ('book_' + SID), SID, None)
+    assert result['state'] == 'unver' and result['semantic_subject_interventions'] is None
+    assert result['known_semantic_subject_interventions'] == 0
+
+
+def test_gate_a_uncommitted_cost_tail_preserves_known_calls_without_complete_total(tmp_path):
+    from novel.llm.ledger import ledger_path
+    path = ledger_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    row = dict(sid=SID, node='stage2.analyze', run_id='run', attempt_id='attempt', cached=False, latency_ms=100)
+    path.write_text(json.dumps(row) + '\n' + json.dumps({**row, 'attempt_id': 'unfinished'}), encoding='utf-8')
+    result = W.stage2_core_metrics(tmp_path, tmp_path / ('book_' + SID), SID, run_id='run')['calls']
+    assert result['state'] == 'unver' and result['ledger_committed'] is False
+    analyze = result['categories']['analyze_executor']
+    assert analyze['wire_calls'] is None and analyze['known_wire_calls'] == 1
+    assert result['wall_clock_seconds'] is None
+
+
+@pytest.mark.parametrize('unclosed', [False, True])
+def test_gate_a_execution_wall_clock_unions_overlap_and_keeps_missing_tail_unknown(tmp_path, unclosed):
+    from novel.orchestrator.beacon import beacon_path
+    events = [dict(sid=SID, run_id='run', execution_id=identity, node=node,
+                   ts=at, phase=phase, exit_code=0 if phase == 'end' else None)
+              for identity, node, start, end in [('chars', 'stage2.characters', 10, 30),
+                                                ('global', 'stage2.global', 20, 40)]
+              for at, phase in [(start, 'start'), (end, 'end')]]
+    if unclosed:
+        events.pop()
+    path = beacon_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(''.join(json.dumps(event) + '\n' for event in events), encoding='utf-8')
+    rows = [dict(node=node, run_id='run', attempt_id=str(index), cached=False)
+            for index, node in enumerate(('stage2.characters', 'stage2.global'))]
+    result = W._gate_a_wall_clock(tmp_path, SID, 'run', rows, {'intervals': {}})
+    if unclosed:
+        assert result['wall_clock_seconds'] is None and result['wall_clock_state'] == 'unver'
+        assert result['known_interval_union_seconds'] == 20
+    else:
+        assert result['wall_clock_state'] == 'ok'
+        assert result['wall_clock_seconds'] == result['known_interval_union_seconds'] == 30
+
+
 def test_core_retention_keeps_relation_secret_and_rule_denominators_separate():
     import copy
     initial = {'setting': {'era': None, 'social_context': None}, 'world_rules': [
