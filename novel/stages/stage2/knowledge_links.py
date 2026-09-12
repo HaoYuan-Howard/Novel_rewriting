@@ -21,7 +21,7 @@ from contracts.schema.knowledge_links import (
     KnowledgeLinkHistory, KnowledgeLinkObligation, KnowledgeLinkRecord,
     KnowledgeLinkReview, KnowledgeLinkScope, KnowledgeLinks,
     KnowledgeLinksProvenance, KnowledgeLinkSubmission, ref_keys,
-    KnowledgeLinkDecision, RegisteredPlotKnowledgeEvent,
+    KnowledgeLinkDecision, RegisteredPlotKnowledgeEvent, validate_identity_resolution,
 )
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, FactEvidence
@@ -92,11 +92,11 @@ def build_scope(
     registered_events: Iterable[RegisteredPlotKnowledgeEvent] = (),
 ) -> KnowledgeLinkScope:
     """范围只包含必要知识事件；完整语义仍从既有主体读取，不另存 claim。"""
-    from contracts.schema.plot import PlotSubjectRef
+    from contracts.schema.plot import PlotSubjectRef, ActorRef, RelationActors
     from contracts.schema.dependencies import ScopeSelection
     from novel.consumption import select_scope_input
     from novel.stages.stage2.paragraphs import paragraph_range_of
-    from novel.stages.stage2.plot_compile import validate_book
+    from novel.stages.stage2.plot_compile import validate_book, actor_refs, state_materials
     texts = {row.chapter_ordinal: row.text for row in main.root}
     chapters = {row.chapter_ordinal: row for row in blueprints.blueprints}
     validate_book(blueprints.blueprints, texts)
@@ -118,11 +118,11 @@ def build_scope(
         proof = list(evidence)
         if chapter not in chapters or any(row.chapter_ordinal not in texts for row in proof):
             raise ProvenanceRefused(f'{ref} 的知识时点或证据章不在当前源文中')
-        domain = ('secret' if kind in ('secret_reveal', 'secret_setup', 'knowledge_event')
+        domain = ('secret' if kind in ('secret_reveal', 'secret_setup')
                   else 'world_rule' if kind in ('world_rule', 'world_rule_reveal')
                   else 'relation' if kind in ('relation', 'relation_visibility')
                   else kind)
-        target = subject_ref or PlotSubjectRef(kind=domain, ref=ref.split('/')[0])
+        target = subject_ref or PlotSubjectRef(kind=domain, ref=ref)
         proof_chapters = {row.chapter_ordinal for row in proof} | {chapter}
         candidates = refs(chapter)
         entry_candidates = [r for ordinal in sorted(proof_chapters) for r in refs(ordinal)] if entry else []
@@ -134,10 +134,16 @@ def build_scope(
             if row.chapter_ordinal not in candidate_chapters:
                 start, end = paragraph_range_of(texts[row.chapter_ordinal], row.source.start, row.source.end)
                 ranges.setdefault(row.chapter_ordinal, set()).add(f'p:{start}:{end}')
+        actor_support = state_materials(blueprints.blueprints,
+            [r for r in chapters[chapter].entry_state_refs if not any(
+                row.state_id == r for row in chapters[chapter].states)])
+        actor_material = [chapters[chapter], *actor_support]
+        candidate_actors = {actor.key(): actor for material in actor_material for actor in actor_refs(material)}
         identity = {
-            'contract': 'stage2-knowledge-links-v2', 'kind': kind, 'knowledge_ref': ref,
+            'contract': 'stage2-knowledge-links-v3', 'kind': kind, 'knowledge_ref': ref,
             'chapter_ordinal': chapter, 'subject': subject,
             'audience': None if audience is None else audience.model_dump(mode='json'),
+            'actor_support': actor_support,
             'evidence': [row.model_dump(mode='json') for row in proof],
             'candidate_chapters': {str(o): chapters[o].model_dump(mode='json')
                                    for o in sorted(candidate_chapters)},
@@ -151,49 +157,58 @@ def build_scope(
             obligation_id=f'{kind}:{ref}:{chapter}', kind=kind,
             knowledge_ref=ref, subject_ref=target, audience=audience,
             chapter_ordinal=chapter, subject_sha256=canonical_sha256(identity),
-            candidate_subject_refs=candidates, entry_subject_refs=entry_candidates))
+            candidate_subject_refs=candidates, entry_subject_refs=entry_candidates,
+            candidate_actors=[candidate_actors[key] for key in sorted(candidate_actors)]))
 
-    for secret in knowledge.canon.secrets:
-        data = secret.model_dump(mode='json')
-        reveal = {key: data[key] for key in ('secret_id', 'fact', 'fact_evidence',
-                                            'first_reveal_chapter')}
-        add('secret_reveal', secret.secret_id, secret.first_reveal_chapter,
-            [secret.fact_evidence], reveal)
-        if secret.setup.kind == 'foreshadowed':
-            for chapter in secret.setup.chapters:
-                add('secret_setup', secret.secret_id, chapter, [secret.fact_evidence], reveal)
-        for event in secret.knowledge_events:
-            who = (event.subject.char_id if event.subject.kind == 'character'
-                   else 'group_' + canonical_sha256(event.subject.model_dump())[:24])
-            add('knowledge_event', f'{secret.secret_id}/{who}', event.known_from_chapter,
-                [event.evidence], {'secret_id': secret.secret_id, 'fact': secret.fact,
-                                   'event': event.model_dump(mode='json')},
-                entry=True, audience=event.subject)
-    for rule in knowledge.canon.world_rules:
+    def proof_of(ids):
+        proof = []
+        for evidence_id in ids:
+            anchor = knowledge.evidence_anchors.get(evidence_id)
+            if anchor is None or anchor.chapter_ordinal not in texts:
+                raise ProvenanceRefused('Global 共享证据不在当前源文闭集')
+            text = texts[anchor.chapter_ordinal][anchor.start:anchor.end]
+            from hashlib import sha256
+            if (not 0 <= anchor.start < anchor.end <= len(texts[anchor.chapter_ordinal])
+                    or sha256(text.encode('utf-8')).hexdigest() != anchor.text_sha256):
+                raise ProvenanceRefused('Global 共享证据与源文字节不一致')
+            proof.append(FactEvidence.model_validate({'chapter_ordinal': anchor.chapter_ordinal,
+                'source': {'start': anchor.start, 'end': anchor.end, 'text': text}}))
+        return proof
+
+    relations = {row.relation_id: row for row in knowledge.relations}
+    versions = {(rule.rule_id, version.version_id): version for rule in knowledge.world_rules
+                for version in rule.versions}
+    for secret in knowledge.arc_secrets:
+        target = (relations[secret.fact_ref.relation_id] if secret.fact_ref.kind == 'relation'
+                  else versions[secret.fact_ref.rule_id, secret.fact_ref.version_id]) if secret.fact_ref else secret
+        proof = proof_of(target.evidence_refs)
+        data = {'secret': secret.model_dump(mode='json'), 'fact': target.model_dump(mode='json')}
+        add('secret_reveal', secret.secret_id, secret.revealed_from, proof, data)
+        for chapter in secret.setup_chapters:
+            add('secret_setup', secret.secret_id, chapter, proof, data)
+    for rule in knowledge.world_rules:
         for version in rule.versions:
-            ref = f'{rule.rule_id}/{version.effective_from_chapter}'
+            ref = f'{rule.rule_id}/{version.version_id}'
             data = {'kind': rule.kind, 'version': version.model_dump(mode='json')}
-            add('world_rule', ref, version.effective_from_chapter,
-                [version.desc_evidence], data, entry=True)
-            add('world_rule_reveal', ref, version.desc_evidence.chapter_ordinal,
-                [version.desc_evidence], data)
-    for relation in knowledge.entities.relations:
+            proof = proof_of(version.evidence_refs)
+            add('world_rule', ref, version.effective_from, proof, data, entry=True)
+            add('world_rule_reveal', ref, version.revealed_from, proof, data)
+    for relation in knowledge.relations:
         data = relation.model_dump(mode='json')
-        add('relation', relation.relation_id, relation.valid_from_chapter,
-            [relation.predicate_evidence], data, entry=True)
-        if relation.visibility.kind == 'public':
-            add('relation_visibility', relation.relation_id, relation.visibility.from_chapter,
-                [relation.predicate_evidence], data)
-    for cid, state in knowledge.entities.character_states.items():
-        add('character_state', cid, state.fate_evidence.chapter_ordinal,
-            [state.fate_evidence], state.model_dump(mode='json'))
-    setting = knowledge.canon.setting
-    for ref, value, evidence in (
-        ('时代背景', setting.era, setting.era_evidence),
-        ('世界观', setting.worldview, setting.worldview_evidence),
-    ):
-        add('setting', ref, evidence.chapter_ordinal, [evidence],
-            {'value': value, 'evidence': evidence.model_dump(mode='json')}, entry=True)
+        proof = proof_of(relation.evidence_refs)
+        # 这是内部事实身份；真正消费必须从 Blueprint 的显式 relation use 取得呈现端点。
+        target = PlotSubjectRef(kind='relation', ref=relation.relation_id,
+            relation_actors=RelationActors(subject=ActorRef(char_id=relation.subject_id),
+                                          object=ActorRef(char_id=relation.object_id)))
+        add('relation', relation.relation_id, relation.effective_from, proof, data, entry=True, subject_ref=target)
+        add('relation_visibility', relation.relation_id, relation.revealed_from, proof, data, subject_ref=target)
+    setting = knowledge.setting
+    for ref in ('era', 'social_context'):
+        value = getattr(setting, ref)
+        if value is not None:
+            proof = proof_of(getattr(setting, ref + '_evidence_refs'))
+            add('setting', ref, min(row.chapter_ordinal for row in proof), proof,
+                {'value': value, 'evidence_refs': getattr(setting, ref + '_evidence_refs')}, entry=True)
     # 只有 C 明确登记的必要传播事件进入闭集；普通叙述和 State 不自动产生披露义务。
     known_subjects = {(kind, getattr(row, field)): (chapter, row)
         for chapter in blueprints.blueprints
@@ -236,7 +251,7 @@ def build_scope(
                 'candidate_subject_refs': [*obligation.candidate_subject_refs, event.subject_ref]})
     obligations.sort(key=lambda row: row.obligation_id)
     semantic = {
-        'contract': 'stage2-knowledge-links-v2', 'chapter_ordinal': chapter_ordinal,
+        'contract': 'stage2-knowledge-links-v3', 'chapter_ordinal': chapter_ordinal,
         'obligations': [row.model_dump(mode='json') for row in obligations],
         'registered_events': [row.model_dump(mode='json') for row in (
             events if chapter_ordinal is None else events_for_chapter(events, chapters[chapter_ordinal]))],
@@ -283,13 +298,16 @@ def validate_submission(scope: KnowledgeLinkScope, submission: KnowledgeLinkSubm
         if (decision.resolution.kind == 'at_beats' and not decision.resolution.trigger_beat_ref.startswith(
                 f'b{subject.chapter_ordinal:02d}_')):
             raise HumanEditProtected('知识触发点必须属于登记的目标章；来源证据可以跨章')
+        try:
+            validate_identity_resolution(subject, decision.resolution)
+        except ValueError as exc:
+            raise HumanEditProtected(str(exc)) from exc
         allowed = (subject.entry_subject_refs if decision.resolution.kind == 'at_entry'
                    else subject.candidate_subject_refs)
         if not ref_keys(decision.resolution.subject_refs) <= ref_keys(allowed):
             raise HumanEditProtected('知识关联主体或 at_entry 时点不在当前关闭范围')
         if (subject.kind in ('reader_reveal', 'character_knowledge')
-                and (subject.subject_ref.kind, subject.subject_ref.ref)
-                not in ref_keys(decision.resolution.subject_refs)):
+                and subject.subject_ref.key() not in ref_keys(decision.resolution.subject_refs)):
             raise HumanEditProtected('必要剧情许可必须引用其完整主体，缺失主体只能修订或明确撤销事件')
 
 
@@ -329,6 +347,7 @@ def inherited_records(scope: KnowledgeLinkScope,
             if (decision.expected_subject_sha256 != subject.subject_sha256
                     or not event.accepted or decision.resolution.kind == 'unresolved'):
                 continue
+            validate_identity_resolution(subject, decision.resolution)
             allowed = (subject.entry_subject_refs if decision.resolution.kind == 'at_entry'
                        else subject.candidate_subject_refs)
             if not ref_keys(decision.resolution.subject_refs) <= ref_keys(allowed):
@@ -336,7 +355,7 @@ def inherited_records(scope: KnowledgeLinkScope,
             if (decision.resolution.kind == 'at_beats' and not decision.resolution.trigger_beat_ref.startswith(
                     f'b{subject.chapter_ordinal:02d}_')) or (
                     subject.kind in ('reader_reveal', 'character_knowledge') and
-                    (subject.subject_ref.kind, subject.subject_ref.ref) not in ref_keys(decision.resolution.subject_refs)):
+                    subject.subject_ref.key() not in ref_keys(decision.resolution.subject_refs)):
                 raise ProvenanceRefused('历史知识事件的触发章或完整主体不相容')
             chosen[decision.obligation_id] = KnowledgeLinkRecord(
                 **decision.model_dump(), actor=event.submission.actor,

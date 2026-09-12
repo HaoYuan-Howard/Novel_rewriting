@@ -11,10 +11,11 @@ def input_digests(title: str, main_text: list[dict[str, Any]], *,
                   character_inventory: dict, global_projections: dict) -> dict[str, str]:
     visible = character_inventory['visible_character_refs']
     return {str(row['chapter_ordinal']): consumed_digest({
-        'contract': 'plot-extraction-input-v1',
+        'contract': 'plot-extraction-input-v2',
         'title': title, 'chapter_ordinal': row['chapter_ordinal'],
         'source_sha256': source_digest(row['text']),
         'character_refs': visible.get(row['chapter_ordinal'], {}),
+        'character_bindings': character_inventory['character_bindings'].get(row['chapter_ordinal'], {}),
         'global_subjects': global_projections[str(row['chapter_ordinal'])],
     }) for row in main_text}
 

@@ -103,26 +103,3 @@ export interface Sources {
   /** 只有 stage5 验收有：成稿那一侧的来源账。 */
   drafts?: { stale: string[]; no_prov: string[] }
 }
-
-/** stage4 / stage5 共用的「写手真正拿得到的事实」（`CtxFacts`）。 */
-export interface Facts {
-  setting: { 时代背景: string | null; 世界观: string | null }
-  relations: { subject: string; predicate: string; object: string }[]
-  secrets: {
-    fact: string
-    known_by: string[]
-    reader_knows_by_now: true
-  }[]
-  /** 键名是 `description` 不是 `desc` —— 照抄后端。 */
-  world_rules: { kind: string; description: string }[]
-  address: { who: string; surface: string; by: string | null; context: string }[]
-}
-
-/** 逐章叙述任务（`CtxNarration`）。 */
-export interface PlanNarration {
-  segment: string
-  grammatical_person: string
-  narrator: string | null
-  focalizer: string | null
-  pronoun_surfaces: string[] | null
-}

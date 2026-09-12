@@ -14,7 +14,7 @@ from novel.orchestrator import stage4_reviewer_wire as wire
 from novel.views.stage2 import blueprint_review_workpack
 from tests.test_plot_design import produce_through_first_chapter
 from tests.test_plot_review_runtime import request
-from tests.test_stage4_reviewer_wire import _sha
+from tests.test_stage4_reviewer_wire import _sha, _wire_response
 
 
 @pytest.mark.parametrize('origin', ['design', 'structure'])
@@ -35,10 +35,10 @@ def test_referral_native_http_restart_and_withdrawal(tmp_path, monkeypatch, orig
     selected_ref = next(ref for ref in refs if ref != 'chapter')
     body = {'chapter_ordinal': 1, 'dimension': 'attribution', 'subject_refs': [selected_ref],
             'reason': '疑似将来信中的消息误认为当前在场人物说话，请对照原文核实。'}
-    native = {'schema': wire.WIRE_SCHEMA, 'selection': {
+    native = {'schema': wire.WIRE_SCHEMA, 'expected_options_sha256': wire.options_sha256(task), 'selection': {
         'option_id': option['id'], 'expected_exact_request_sha256': _sha(option['exact_request']),
         'payload': body}}
-    parsed = wire.assemble(task, native)
+    parsed = wire.assemble(task, _wire_response(task, native))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(parsed, ensure_ascii=False), encoding='utf-8')
     action = reviewer_tasks.load_action(path, current, submission_options=task.submission_options)
@@ -49,7 +49,7 @@ def test_referral_native_http_restart_and_withdrawal(tmp_path, monkeypatch, orig
     wrong['selection']['payload']['subject_refs'] = [
         next(ref for ref in option['allowed_values']['subjects_by_chapter']['2'] if ref != 'chapter')]
     with pytest.raises(wire.Stage4ReviewerWireError):
-        wire.assemble(task, wrong)
+        wire.assemble(task, _wire_response(task, wrong))
     with pytest.raises(Exception, match='旧 token'):
         blueprint_refinement.submit(base, sid, BlueprintRefinementRequest.model_validate(
             dict(payload, review_token='stale')))

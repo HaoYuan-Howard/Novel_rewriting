@@ -42,7 +42,7 @@ from pydantic import Field, field_validator, model_validator
 
 from contracts.invariants import (
     BLIND_ALIAS_ALGORITHM,
-    ADDRESS_CONTEXT, BINDING_CONCERN_CODES, BINDING_INFEASIBILITY_CODES,
+    BINDING_CONCERN_CODES, BINDING_INFEASIBILITY_CODES,
     DELIVERY_MODES, GOAL_INTENTS,
     NARRATIVE_PERSON, RESPONSE_CHAPTER_WEIGHTS,
     RESPONSE_DELIVERY_MODES, RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES,
@@ -55,7 +55,8 @@ from contracts.schema.common import (
     FreeProvenance, LlmProvenance, Sha256,
 )
 
-from contracts.schema.plot import PlotEndpoint, PlotSubjectRef, BeatPlacement, PlotAnchorBinding
+from contracts.schema.plot import ActorRef, PlotEndpoint, PlotSubjectRef, BeatPlacement, PlotAnchorBinding
+from contracts.schema.plot_context import ActorToken, WriterSubjectRef
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -156,8 +157,12 @@ class PlanGoal(StrictModel):
     anchor_scene_ref: str = Field(pattern=r'^s\d{2,4}$')
 
 
-class CtxGoal(PlanGoal):
-    """目标引用章级唯一主体，不再复制剧情正文。"""
+class CtxGoal(StrictModel):
+    """目标只引用写手公开目录；人物主体使用 opaque actor_ref。"""
+    intent: Literal[GOAL_INTENTS]
+    subject_refs: list[WriterSubjectRef] = Field(min_length=1)
+    anchor_beat_ref: str = Field(pattern=r'^b\d{2,}_\d{2,}$')
+    anchor_scene_ref: str = Field(pattern=r'^s\d{2,4}$')
 
 
 class SemanticContract(StrictModel):
@@ -568,7 +573,7 @@ class BlindReferenceMaps(StrictModel):
     """正式主体与端点的关闭映射；人物表是主体表的确定性投影。"""
     subject_aliases: dict[str, PlotSubjectRef] = Field(min_length=1)
     endpoint_aliases: dict[str, PlotEndpoint]
-    participant_aliases: dict[str, str]
+    participant_aliases: dict[str, ActorRef]
 
     @model_validator(mode='after')
     def _alias_maps_are_bijective(self) -> BlindReferenceMaps:
@@ -585,7 +590,7 @@ class BlindReferenceMaps(StrictModel):
                 raise ValueError(f'{label} 的正式引用必须一一对应')
         if set(self.subject_aliases) & set(self.endpoint_aliases):
             raise ValueError('主体与端点 alias 不得占用同一身份')
-        if self.participant_aliases != {token: row.ref for token, row in self.subject_aliases.items()
+        if self.participant_aliases != {token: row.actor for token, row in self.subject_aliases.items()
                                         if row.kind == 'character'}:
             raise ValueError('人物映射必须完整对应主体表中的人物')
         return self
@@ -907,72 +912,23 @@ class CtxScene(WriterScene):
 
 
 class ChapterCharacter(StrictModel):
-    """章级名册的一个人，**给模型**。盘上 31 章合计 518 项。
-    消费方：stage5 写手 + stage6 文案 roster。
-    """
-
-    # V8 编号连接剧情参与者、状态持有者与知识受众；是引用键，不是正文称呼。
-    char_id: str = Field(min_length=1)
+    """只给当前表面身份的公开描述；没有内部实体映射。"""
+    actor_ref: ActorToken
     display_name: str = Field(min_length=1)
-    role: str = Field(min_length=1)
-
-
-
-
-
-
-
-
-class CtxAddress(StrictModel):
-    """逐章投影后的一条称谓，按 `from_chapter <= o` 开闸。盘上共 1007 条。"""
-
-    #: 被称呼的那个人的**人名**（不是 `char_id`）。
-    who: str = Field(min_length=1)
-
-    surface: str = Field(min_length=1)
-
-    #: ⚠⚠ **它与 stage2 的 `by` 不是同一个取值面，别共用一个类型。**
-    #: stage2 那一份是 `char_\\d+ ∪ {narration, public}`（**派发键**）；
-    #: 这一份已经被逐章投影**解析成了人名**——盘上 27 个不同值，
-    #: 只有 `narration`(533) 与 `public`(110) 是原样留下的那两个字面，
-    #: 其余全是「念念」「李宝珠」这样的叫法。
-    #: ⇒ 拿 stage2 的模式来收它，**1007 条里有 364 条会当场被拒**。
-    #: （这条是盘上语料体检抓出来的：模型第一版正是共用了那个类型。）
-    #:
-    #: ⚠ **可为 `null`**：本章叫不出名字的 `char_id` **不发裸编号**——
-    #: 兜底成 `char_003` 会让写手把一个内部编号当成称呼。盘上 `by=null` 1 条。
-    by: str | None
-
-    context: Literal[ADDRESS_CONTEXT]
-
-
-
-
+    surfaces: list[str] = Field(min_length=1)
+    role: str | None
+    role_allowed_slots: list[str]
+    allowed_slots: list[str] = Field(min_length=1)
 
 
 class CtxNarration(StrictModel):
-    """盘上长度恒 1。"""
-
-    #: **位置标签**，不是段落边界描述：`全章`（单段）或 `第N段（共M段，按顺序写）`。
-    #: 盘上 31/31 恒为 `全章`。
-    #:
-    #: ⚠ **为什么不原样透传 stage2 那一份**：stage2 的界标里**常原样引用原文**当分界
-    #: （「正文主体（直至"……沉重的呼吸声"）」）——那对闭卷写手就是原文泄漏，
-    #: 而且泄的往往正是本章的**末句**。
-    #: 写手真正需要的只是「本章分几段、各段谁在说、什么顺序」。
     segment: str = Field(min_length=1)
-
     grammatical_person: Literal[NARRATIVE_PERSON]
-
-    #: 叙述者**人名**（不是 char_id）。⚠ **叫不出名字就不写这个键，不兜底成 `char_id`**：
-    #: 第一人称书的第 1 章正是这种情况（主角原文通篇写「我」），
-    #: 而写手要的东西 `grammatical_person` + `pronoun_surfaces` 已经给全了。盘上 27/31。
-    narrator: str | None = None
-
-    #: 视点人物，**只在与 narrator 不同时才写**。⚠ **盘上 0/31，零样本。**
-    focalizer: str | None = None
-
+    narrator: ActorToken | None = None
+    focalizer: ActorToken | None = None
     pronoun_surfaces: list[str] | None = None
+    beat_refs: list[str]
+    allowed_slots: list[str] = Field(min_length=1)
 
 
 class CtxChapter(StrictModel):
@@ -989,16 +945,56 @@ class CtxChapter(StrictModel):
     states: list[WriterState]
     constraints: list[WriterConstraint]
     global_subjects: list[WriterGlobalSubject]
-    restricted_subject_refs: list[PlotSubjectRef]
+    restricted_subject_refs: list[WriterSubjectRef]
     knowledge_events: list[WriterKnowledgeEvent]
     scenes: list[CtxScene] = Field(min_length=1)
     characters: list[ChapterCharacter]
     narration: list[CtxNarration] = Field(min_length=1)
-    address: list[CtxAddress]
 
     @model_validator(mode='after')
     def _closed_view(self) -> CtxChapter:
         slots = [scene.slot for scene in self.scenes]
+        actors = {row.actor_ref for row in self.characters}
+        if len(actors) != len(self.characters):
+            raise ValueError('写手表面身份目录不能重复')
+        used = {ref for beat in [*self.beats, *self.background_beats] for ref in beat.participants}
+        used.update(row.holder for row in self.states if row.holder)
+        used.update(row.observer for row in self.constraints if row.observer)
+        used.update(ref for scene in self.scenes for delivery in scene.deliveries
+                    for stage in delivery.stages for ref in stage.present or [])
+        used.update(ref for row in self.narration for ref in (row.narrator, row.focalizer) if ref)
+        used.update(row.audience.actor_ref for row in self.knowledge_events
+                    if row.audience and row.audience.kind == 'character')
+        used.update(ref for row in self.knowledge_events for ref in row.identity_actors)
+        used.update(ref.ref for goal in (self.chapter_goal, self.open_hook_goal, self.end_hook_goal)
+                    for ref in goal.subject_refs if ref.kind == 'character')
+        for row in self.global_subjects:
+            if row.subject_ref.kind == 'relation':
+                if not isinstance(row.value, dict):
+                    raise ValueError('关系正文必须明确两端 actor_ref')
+                used.update(row.value.get(field) for field in ('subject', 'object'))
+        if not used <= actors:
+            raise ValueError('所有人物位置必须闭合于 opaque actor_ref 目录')
+        for row in self.characters:
+            if row.allowed_slots != [slot for slot in slots if slot in row.allowed_slots]:
+                raise ValueError('表面身份许可必须是场景唯一有序子集')
+            if (row.role_allowed_slots != [slot for slot in row.allowed_slots if slot in row.role_allowed_slots]
+                    or (row.role is None) != (not row.role_allowed_slots)):
+                raise ValueError('角色描述及其许可必须同时存在，且不得早于表面身份许可')
+        def relation_actors(value):
+            if isinstance(value, dict):
+                for key, row in value.items():
+                    if key in ('subject', 'object'):
+                        used.add(row)
+                    else:
+                        relation_actors(row)
+            elif isinstance(value, list):
+                for row in value:
+                    relation_actors(row)
+        for row in self.global_subjects:
+            relation_actors(row.value)
+        if not used <= actors:
+            raise ValueError('共享命题嵌入的关系端点必须闭合于公开人物目录')
         refs = [beat.beat_ref for beat in self.beats]
         states = {row.state_ref: row for row in self.states}
         constraints = {row.constraint_ref: row for row in self.constraints}
@@ -1019,6 +1015,17 @@ class CtxChapter(StrictModel):
                 raise ValueError('写作目录、场景和权限的身份必须唯一')
         if set(globals_) & restricted:
             raise ValueError('同一共享主体不能同时下发正文和声明未开放')
+        for state in self.states:
+            if state.global_ref is None:
+                continue
+            ref = state.global_ref
+            if ((ref.kind == 'character' and ref.ref not in actors)
+                    or (ref.kind != 'character' and (ref.kind, ref.ref) not in globals_)):
+                raise ValueError('可见状态的共享命题必须有本章实际许可正文或公开人物目录')
+        for row in self.narration:
+            if (row.allowed_slots != [slot for slot in slots if slot in row.allowed_slots]
+                    or not set(row.beat_refs) <= set(refs)):
+                raise ValueError('叙述/视点必须绑定本章节点及合法场景许可')
         if (set(self.semantic_contract.beat_refs) != set(refs)
                 or set(self.semantic_contract.constraint_refs) != set(constraints)
                 or not set(self.semantic_contract.state_refs) <= state_refs
@@ -1067,7 +1074,8 @@ class CtxChapter(StrictModel):
 class CtxProvenance(FreeProvenance):
     """`writer_context._provenance` —— **没有 `prompts`、没有 `model`**（确定性组装）。
 
-    `inputs` 四条：stage1 正文 · stage2 两份 · **`stage4/plan_chapters.json`**。
+    `inputs` 绑定正文、独立人物/长期知识、Blueprint/KnowledgeLinks 与
+    **`stage4/plan_chapters.json`** 的实际消费投影。
 
     ⚠ 最后那条边是全仓唯一的一处「显式追踪」，它存在的理由就是 `context_link`（HARD）
     那个问题：「写手手里这份 ctx，是不是照盘上这份计划组的」。

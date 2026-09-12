@@ -1039,7 +1039,8 @@ def test_retired_prereview_and_non_stage2_get_no_stage2_schema() -> None:
 def test_real_stage2_unver_multioption_keeps_full_action_path_reachable(
     tmp_path, safe: bool, selected_id: str,
 ) -> None:
-    """多选面的 apply-edit 不能劫持其他合法 action 的运输协议。"""
+    """原有多选职责全部可经 native choice 进入完整 action 与真实 loader。"""
+    from novel.orchestrator import stage2_core_review_wire as choices
     current, options = _stage2_unver_options(safe=safe)
     task = reviewer_tasks.ReviewerTask(
         waiting_on=queue.WAITING_ON_STAGE2_REVIEW,
@@ -1061,15 +1062,11 @@ def test_real_stage2_unver_multioption_keeps_full_action_path_reachable(
         ]
     )
     assert [option['id'] for option in options] == [*expected_ids, 'approval:stage2_global_review']
-    assert wire.uses_compact_wire(task) is False
-    assert wire.output_schema_for(task) is None
-    assert wire.prompt_for(task, task.prompt) == task.prompt
-    with pytest.raises(wire.Stage2ReviewerWireError, match='唯一 submission option'):
-        wire.response_schema(task)
+    assert wire.uses_compact_wire(task) is True
+    assert wire.output_schema_for(task) is not None
+    assert choices.WIRE_SCHEMA in wire.prompt_for(task, task.prompt)
 
-    # 穿过 Agent 的真实物化入口逐项提交合法 full action；若这里仍被 compact
-    # assembler 截获，full action 会因缺 delta envelope 在现役 loader 前失败。
-    # 参数同时覆盖每个 apply-edit 分支，证明关闭 compact 没有让它本身不可达。
+    # 参数覆盖每个旧选项，不为 native schema 删除 quarantine/resolve/edit 分支。
     selected = next(option for option in options if option['id'] == selected_id)
     request = copy.deepcopy(selected['exact_request'])
     payload = request['action']['input_payload']
@@ -1094,8 +1091,24 @@ def test_real_stage2_unver_multioption_keeps_full_action_path_reachable(
                 '证据边界明确，隔离该组后不会污染后续生成')
         else:
             decision['state'] = 'PASS'
+    if selected_id.endswith('apply-edit-unver'):
+        post = payload['post_edit_review']
+        delta = {'edit': {'relations': payload['relations'], 'post_edit_review': {
+            'reason': post['reason'], 'quarantine_groups': [],
+            'decisions': [{key: value for key, value in row.items()
+                if key != 'expected_subject_sha256'} | {'generation_disposition': None}
+                for row in post['decisions']]}}}
+    else:
+        delta = {'blocking_scope': None, 'decisions': [{
+            'item_id': row['item_id'], 'state': row['state'], 'reason': row['reason'],
+            'evidence': row['evidence'], 'disposition_reason': (
+                row['generation_disposition']['reason'] if row.get('generation_disposition') else None)}
+            for row in payload['decisions']]}
+    response = {'schema': choices.WIRE_SCHEMA,
+        'expected_options_sha256': choices.options_sha256(task),
+        'choice': {'option_id': selected_id, 'payload': delta}}
     action, response_sha256, record_path = agent._materialize_reviewer_response(
-        task, current, json.dumps(request, ensure_ascii=False))
+        task, current, json.dumps(response, ensure_ascii=False))
 
     assert isinstance(action, reviewer_tasks.ReviewerNodeAction)
     expected_operation = (

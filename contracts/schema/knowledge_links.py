@@ -1,4 +1,4 @@
-"""必要知识 V2：只引用已有剧情/状态/Global 主体，不保存第二份剧情正文。"""
+"""必要知识 V3：只引用已有剧情/状态/Global 主体，不保存第二份剧情正文。"""
 from __future__ import annotations
 
 from typing import Annotated, Literal, Self
@@ -7,21 +7,35 @@ from pydantic import Field, model_validator
 
 from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import FreeProvenance, Sha256
-from contracts.schema.plot import PlotSubjectRef, BeatId
-from contracts.schema.stage2 import KnowledgeSubject
+from contracts.schema.plot import PlotSubjectRef, BeatId, ActorRef, unique_actors
+from contracts.schema.stage2 import GroupRef
 
 
-def ref_keys(refs) -> set[tuple[str, str]]:
-    return {(row.kind, row.ref) for row in refs}
+class KnowledgeCharacterAudience(FrozenModel):
+    kind: Literal['character']
+    actor: ActorRef
+
+
+KnowledgeSubject = Annotated[KnowledgeCharacterAudience | GroupRef, Field(discriminator='kind')]
+
+
+def ref_keys(refs) -> set[tuple[str, ...]]:
+    return {row.key() for row in refs}
 
 
 class KnowledgeEvidenceRefs(FrozenModel):
     subject_refs: list[PlotSubjectRef] = Field(min_length=1)
+    identity_actors: list[ActorRef] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _unique(self) -> Self:
         if len(ref_keys(self.subject_refs)) != len(self.subject_refs):
             raise ValueError('知识支持主体不能重复')
+        if self.identity_actors:
+            unique_actors(self.identity_actors, '身份披露的表面身份')
+            if (len(self.identity_actors) < 2 or len({row.char_id for row in self.identity_actors}) != 1
+                    or any(row.presentation_ref is None for row in self.identity_actors)):
+                raise ValueError('身份披露必须明确同一实体的至少两个不同表面身份')
         return self
 
 
@@ -31,7 +45,7 @@ class KnowledgeAtBeats(KnowledgeEvidenceRefs):
 
     @model_validator(mode='after')
     def _trigger_is_supported(self) -> Self:
-        if ('beat', self.trigger_beat_ref) not in ref_keys(self.subject_refs):
+        if not any(row.raw_subject_key() == ('beat', self.trigger_beat_ref) for row in self.subject_refs):
             raise ValueError('知识触发节点必须属于本次支持主体')
         return self
 
@@ -52,8 +66,8 @@ KnowledgeLinkResolution = Annotated[
 
 
 KnowledgeLinkKind = Literal[
-    'secret_reveal', 'secret_setup', 'knowledge_event', 'world_rule', 'world_rule_reveal',
-    'relation', 'relation_visibility', 'character_state', 'setting',
+    'secret_reveal', 'secret_setup', 'world_rule', 'world_rule_reveal',
+    'relation', 'relation_visibility', 'setting',
     'reader_reveal', 'character_knowledge',
 ]
 
@@ -129,6 +143,7 @@ class KnowledgeLinkObligation(FrozenModel):
     subject_sha256: Sha256
     candidate_subject_refs: list[PlotSubjectRef]
     entry_subject_refs: list[PlotSubjectRef]
+    candidate_actors: list[ActorRef] = Field(default_factory=list)
 
 
 class KnowledgeLinkDecision(FrozenModel):
@@ -158,7 +173,7 @@ class KnowledgeLinkSubmission(StrictModel):
 
 
 class KnowledgeLinkScope(FrozenModel):
-    contract: Literal['stage2-knowledge-links-v2'] = 'stage2-knowledge-links-v2'
+    contract: Literal['stage2-knowledge-links-v3'] = 'stage2-knowledge-links-v3'
     chapter_ordinal: int | None = None
     scope_sha256: Sha256
     # 文件 SHA 仅供本次读写竞态；继承依据各事件的真实消费摘要。
@@ -231,6 +246,7 @@ class KnowledgeLinks(StrictModel):
                 raise ValueError('关联决定必须绑定当前事件主体')
             if record.resolution.kind == 'unresolved':
                 raise ValueError('未解决的关联不能成为正式知识消费授权')
+            validate_identity_resolution(subject, record.resolution)
             allowed = (subject.entry_subject_refs if record.resolution.kind == 'at_entry'
                        else subject.candidate_subject_refs)
             if not ref_keys(record.resolution.subject_refs) <= ref_keys(allowed):
@@ -239,7 +255,20 @@ class KnowledgeLinks(StrictModel):
                     f'b{subject.chapter_ordinal:02d}_'):
                 raise ValueError('知识触发节点必须属于登记章')
             if (subject.kind in ('reader_reveal', 'character_knowledge')
-                    and (subject.subject_ref.kind, subject.subject_ref.ref)
-                    not in ref_keys(record.resolution.subject_refs)):
+                    and subject.subject_ref.key() not in ref_keys(record.resolution.subject_refs)):
                 raise ValueError('必要剧情许可必须引用其完整主体')
         return self
+
+
+def validate_identity_resolution(subject: KnowledgeLinkObligation, resolution: KnowledgeLinkResolution) -> None:
+    if resolution.kind == 'unresolved':
+        return
+    if subject.audience is not None and subject.audience.kind == 'character':
+        if subject.audience.actor.key() not in {row.key() for row in subject.candidate_actors}:
+            raise ValueError('知情受众必须指向本章已提供的明确人物呈现')
+    if not resolution.identity_actors:
+        return
+    if subject.kind not in ('secret_reveal', 'reader_reveal'):
+        raise ValueError('只有身份秘密或必要局部读者披露可开放同人映射')
+    if not {row.key() for row in resolution.identity_actors} <= {row.key() for row in subject.candidate_actors}:
+        raise ValueError('身份披露引用未在本章支持闭包提供的表面身份')

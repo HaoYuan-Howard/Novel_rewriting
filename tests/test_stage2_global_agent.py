@@ -154,6 +154,39 @@ def _full(candidate: dict) -> str:
     }, ensure_ascii=False)
 
 
+@pytest.mark.parametrize('collection', ['world_rules', 'relations', 'arc_secrets'])
+@pytest.mark.parametrize('shape', ['empty', 'missing', 'null'])
+def test_direct_global_producer_distinguishes_explicit_empty_from_missing_or_null(tmp_path, collection, shape):
+    """真实 LlmClient 空壳闸、compiler、Store：合法稀疏全空不造虚假事实。"""
+    from novel.errors import ResponseRepairRequired
+    from novel.llm import response_repair
+    ctx = _direct_ctx(_ctx(tmp_path))
+    # 与 CLI 的显式响应修复模式相同；默认非交互 client 会继续同配置重采。
+    ctx.repair_rejected_responses = True
+    candidate = {'setting': {'era': None, 'social_context': None,
+        'era_evidence_refs': [], 'social_context_evidence_refs': []},
+        'world_rules': [], 'relations': [], 'arc_secrets': []}
+    if shape == 'missing':
+        candidate.pop(collection)
+    elif shape == 'null':
+        candidate[collection] = None
+    client, transport = _client(ctx, lambda _req, _index: _ok(candidate))
+    store = ArtifactStore(ctx)
+    if shape == 'empty':
+        artifact = extract.run_global(ctx, client)
+        assert artifact.world_rules == artifact.relations == artifact.arc_secrets == []
+        assert store.exists(extract.GLOBAL_REL) and not store.exists(extract._GLOBAL_INVALID)
+    else:
+        with pytest.raises(ResponseRepairRequired) as refused:
+            extract.run_global(ctx, client)
+        record = response_repair.find_attempt(ctx.novel_dir, refused.value.attempt_id)
+        assert record.rejection['gate'] == 'require'
+        assert record.eligible and record.resolution is None
+        assert json.loads((record.root / response_repair.ORIGINAL_FILE).read_text(encoding='utf-8')) == candidate
+        assert not store.exists(extract.GLOBAL_REL) and not store.exists(extract._GLOBAL_INVALID)
+    assert len(transport.calls) == 1
+
+
 class _Driver(AgentDriver):
     driver = 'codex'
     provider = 'openai'

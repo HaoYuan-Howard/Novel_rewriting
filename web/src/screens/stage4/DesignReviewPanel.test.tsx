@@ -193,6 +193,61 @@ async function writeReviewReasons(user: ReturnType<typeof userEvent.setup>) {
 
 describe('Stage4A 正式设计审阅', () => {
 
+  it.each(['新增', '替代'])('%s场景约束可独立选择非 Beat 人物呈现并经 HTTP 原样提交', async (mode) => {
+    const actors = [
+      { alias: 'a_' + '1'.repeat(16), surfaces: ['来客'], role: null },
+      { alias: 'a_' + '2'.repeat(16), surfaces: ['送信人'], role: null },
+    ]
+    const approveOverHttp = realApi.approveDesignReview.bind(realApi)
+    const { template, approve, doc } = await mount('expired')
+    template.mockImplementation(async (sid, query) => {
+      const base = await mockApi.getDesignReviewTemplate(sid, query)
+      const current = mode === '替代' ? withActiveConstraint(base) : base
+      const truth = current.chapters[0].subject.blind_truth
+      expect(truth.beats.flatMap((beat) => beat.participant_aliases)).not.toContain(actors[0].alias)
+      expect(truth.beats.flatMap((beat) => beat.participant_aliases)).not.toContain(actors[1].alias)
+      truth.characters.push(...structuredClone(actors))
+      truth.states.push({ alias: 'a_' + '3'.repeat(16), content: '来客还相信信中所言。',
+        modality: 'belief', holder_alias: actors[0].alias, global_subject_alias: null,
+        established_at_entry: true, supersedes_state_aliases: [] })
+      truth.knowledge.push({ event_alias: 'a_' + '4'.repeat(16), subject_aliases: [FIRST_BEAT],
+        kind: 'character_knowledge', audience: { kind: 'character', actor_alias: actors[1].alias, label: null },
+        timing: 'future_chapter', trigger_beat_alias: null, identity_aliases: [] })
+      return current
+    })
+    approve.mockImplementation(approveOverHttp)
+    const send = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(doc), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    }))
+    const user = await startReview()
+    await writeReviewReasons(user)
+    if (mode === '替代') {
+      await user.selectOptions(screen.getByLabelText('第 3 章历史约束 1处置'), 'supersede')
+      await user.type(screen.getByLabelText('第 3 章历史约束 1理由'), '保留两份公开呈现的不同场景职责')
+    }
+    await user.click(screen.getByLabelText(mode === '替代'
+      ? '第 3 章历史约束 1替代码 scene_goal_exclude' : '第 3 章返修码 scene_goal_exclude'))
+    await user.click(screen.getByLabelText('第 3 章 scene_goal_exclude 场景 c03s01'))
+    for (const actor of actors) {
+      const option = screen.getByLabelText('第 3 章 scene_goal_exclude alias ' + actor.alias)
+      expect(option.closest('label')).toHaveTextContent(actor.surfaces[0])
+      await user.click(option)
+    }
+    await user.click(screen.getByLabelText('第 3 章 Stage4A 已核对'))
+    const save = screen.getByRole('button', { name: /保存 Stage4A 正式审阅/ })
+    expect(save).toBeEnabled()
+    await user.click(save)
+    await waitFor(() => expect(send.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true))
+    const [url, init] = send.mock.calls.find(([, value]) => value?.method === 'POST')!
+    expect(String(url)).toContain('/novels/book-1/approvals/design')
+    const posted = JSON.parse(String(init?.body)) as DesignReviewRequest
+    const constraints = mode === '替代'
+      ? posted.chapters[0].constraint_operations!.items[0].replacements : posted.chapters[0].constraints
+    expect(constraints.find((value) => value.code === 'scene_goal_exclude')).toEqual({
+      code: 'scene_goal_exclude', scene_refs: ['c03s01'], opaque_aliases: actors.map((actor) => actor.alias),
+    })
+  })
+
   it.each(['新增', '替代'])('%s scene_goal_exclude 缺少任一引用时不能保存', async (mode) => {
     const { template, approve } = await mount('expired')
     if (mode === '替代') template.mockImplementation(async (sid, query) => withActiveConstraint(

@@ -18,9 +18,11 @@
 正式契约分别在 `docs/schema/characters.md`、`docs/schema/stage2.md`、
 `docs/schema/stage2_review.md`；人物登记与 Global 保持各自证据、版本、编辑、失效及恢复。
 
-- [ ] Gate A：一次 Analyze Executor、两个独立编译器、Characters v2 / Global v7、统一
+- [x] Gate A：一次 Analyze Executor、两个独立编译器、Characters v2 / Global v7、统一
       Global Commander；闭合 CLI/API、待审、共享首抽统计、typed 编辑及已购回答/半边失败恢复。
-      工程反例通过后对照指定小说原文作语义验收；仅凭 schema 或 lint 不放行 Gate B。
+      已在 `f5a95aa` 完成指定小说原文核验及免费 typed 恢复，接受署名 `codex`。
+      C1 误接受、C2～C4 格式拒绝原样保留；不声明模型正常路径自动通过。
+      冻结证据为 `E:\NovelAcceptance_Stage2CoreV2\reports\gate-a-f5a95aa.json`。
 - [ ] Gate B：Blueprint / KnowledgeLinks / Stage4–5 接动态状态、稀疏知情和
       ActorRef/ActorBinding；直接检查 Writer 请求中的未来身份、关系、别名映射及同章揭示。
 - [ ] Gate C：Stage6 Prepare 独立 E/C 与免费编辑恢复，Stage7 改名、API/UI、下载及重启读回。

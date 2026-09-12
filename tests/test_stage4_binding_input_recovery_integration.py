@@ -3,7 +3,8 @@
 """章级 B 输入契约恢复：历史盘面 → HTTP/operator → 真实 producer → 新审阅主体。
 
 语料仅来自既有合成夹具；模型边界全部使用 FakeTransport/AgentDriver。
-历史文件由当前 typed Store 编码，只有夹具构造窗口临时采用旧年代的契约判定；
+人物/知识/蓝图/关联使用当前共享 seed，历史文件由当前 typed Store 编码，
+只有夹具构造窗口临时采用旧年代的 B 输入契约判定；
 窗口关闭后，freshness、审批、工作包、队列和新产物全部运行现役实现。
 """
 from __future__ import annotations

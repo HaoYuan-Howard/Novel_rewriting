@@ -49,3 +49,68 @@ def test_blueprint_edit_reaches_cli_and_survives_service_restart(tmp_path):
     assert landed.blueprints[1:] == baseline.blueprints[1:]
     assert landed.provenance.usage == baseline.provenance.usage
     assert len(transport.calls) == 3
+
+
+@pytest.mark.real_code_version
+@pytest.mark.parametrize('damage', ['missing', 'wrong_owner', 'ambiguous'])
+def test_unusable_actor_binding_is_409_and_free_cli_edit_retains_original_subject(tmp_path, damage):
+    from contracts.schema.plot import ActorRef, ActorBinding
+    from novel.stages.stage2.plot_diagnostics import read_repair_diagnostics
+    from novel.orchestrator import approvals
+    book = prepare_book(tmp_path)
+    producer, transport = generate_plot(book)
+    store = ArtifactStore(producer)
+    original, _ = store.read_own(ChapterBlueprints, extract.BLUEPRINT_REL)
+    candidate = original.model_copy(deep=True)
+    chapter = candidate.blueprints[0]
+    chapter.beats[0].participants[0] = ActorRef(char_id='char_001', presentation_ref='ap01_01')
+    anchor = next(row for row in chapter.evidence_anchors if row.start_para == 1)
+    if damage != 'missing':
+        chapter.actor_bindings = [ActorBinding(presentation_id='ap01_01',
+            char_id='char_002' if damage == 'wrong_owner' else 'char_001',
+            surfaces=['李宝珠'], evidence_refs=[anchor.evidence_id])]
+    if damage == 'ambiguous':
+        chapter.actor_bindings.append(chapter.actor_bindings[0].model_copy(update={'presentation_id': 'ap01_02'}))
+        chapter.beats[1].participants[0] = ActorRef(char_id='char_001', presentation_ref='ap01_02')
+        # narrator/focalizer 仍为默认引用，在两个呈现中没有唯一解。
+    store.write_invalid(extract.BLUEPRINT_REL, candidate, gates_skipped=[])
+    formal_before = store.full_sha256_or_none(extract.BLUEPRINT_REL)
+    invalid_before = store.full_sha256_or_none(extract._INVALID)
+    history_before = approvals.stage2_review_history(book.parent, '123')
+    diagnostic = read_repair_diagnostics(book.parent, '123', code=producer.code)
+    assert diagnostic['diagnostics']
+    assert all(row['owner'] == 'stage2.blueprint' for row in diagnostic['diagnostics'])
+
+    with TestClient(create_app(str(book.parent))) as http:
+        http.headers.update({UI_HEADER: '1'})
+        workpack = http.get('/api/novels/123/stage2/blueprint-review-workpack?scope=chapter:1')
+        assert workpack.status_code == 409, workpack.text
+        assert '免费' in workpack.text
+        response = http.get('/api/novels/123/stage2/blueprint/edit/template?chapter_ordinal=1')
+        assert response.status_code == 200, response.text
+        request = response.json()
+        assert request['chapters'][0]['chapter']['beats'][0]['content'] == chapter.beats[0].content
+        assert store.full_sha256_or_none(extract.BLUEPRINT_REL) == formal_before
+        assert store.full_sha256_or_none(extract._INVALID) == invalid_before
+        assert approvals.stage2_review_history(book.parent, '123') == history_before
+        request.update(actor='test:HTTP 免费订正者', reason='恢复当前原文支持的明确人物引用')
+        edited = request['chapters'][0]
+        edited['chapter']['actor_bindings'] = []
+        for row in edited['chapter']['beats']:
+            for actor in row['participants']:
+                actor['presentation_ref'] = None
+        for operation in edited['identities']:
+            if operation['collection'] == 'actor_bindings':
+                operation.update(kind='replace', new_keys=[])
+        preview = http.post('/api/novels/123/stage2/blueprint/edit/preview', json=request)
+        assert preview.status_code == 200 and preview.json()['would_apply'], preview.text
+        result = http.post('/api/novels/123/stage2/blueprint/edit', json=request)
+        assert result.status_code == 200, result.text
+        assert result.json()['state'] == 'ok', result.text
+        assert result.json()['start']['paid'] is False
+    with TestClient(create_app(str(book.parent))) as restarted:
+        response = restarted.get('/api/novels/123/stage2/blueprint/edit/template?chapter_ordinal=1')
+        assert response.status_code == 200, response.text
+        assert response.json()['chapters'][0]['chapter']['actor_bindings'] == []
+    assert not store.exists(extract._INVALID)
+    assert len(transport.calls) == 3

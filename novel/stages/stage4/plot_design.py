@@ -21,11 +21,12 @@ from contracts.schema.stage4 import (
     BlindChapterResponse, BlindPlanResponse,
 )
 from novel.consumption import plot_global_projection
+from novel.errors import RefusedByStructure
 from novel.stages.stage4.plot_placements import required_endpoints
 
-BLIND_CONTRACT = 'stage4-plot-truth-v1'
-BLIND_BOOK_STRATEGY_CONTRACT = 'stage4-plot-book-strategy-v1'
-BLIND_CHAPTER_CONTRACT = 'stage4-plot-chapter-v1'
+BLIND_CONTRACT = 'stage4-plot-truth-v2'
+BLIND_BOOK_STRATEGY_CONTRACT = 'stage4-plot-book-strategy-v2'
+BLIND_CHAPTER_CONTRACT = 'stage4-plot-chapter-v2'
 
 
 class BlindPlanError(ValueError):
@@ -53,8 +54,9 @@ def _translate(value: Any, table: Mapping[str, str], field: str = '') -> Any:
 
 
 def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
-                           knowledge_links: object = None, global_g: object = None
-                           ) -> tuple[dict[str, Any], dict[str, Any]]:
+                           characters: dict, main_text: list[dict], knowledge_links: object = None,
+                           global_g: object = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    from novel.stages.stage4.actors import ActorCatalog, actual_subject_uses
     if not re.fullmatch(r'[0-9a-f]{40}', root_clean_sha1):
         raise BlindPlanError('盲投影必须绑定正式源文 SHA-1')
     raw = blueprints.get('blueprints') if isinstance(blueprints, dict) else blueprints
@@ -64,48 +66,35 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
                       key=lambda b: b.chapter_ordinal)
     if [b.chapter_ordinal for b in chapters] != list(range(1, len(chapters) + 1)):
         raise BlindPlanError('盲投影章节必须完整覆盖阅读序')
-    subjects: dict[str, dict] = {}
-    endpoints: dict[str, dict] = {}
-    aliases: dict[tuple[str, str], str] = {}
+    texts = {row['chapter_ordinal']: row['text'] for row in main_text}
+    if any(chapter.chapter_ordinal not in texts for chapter in chapters):
+        raise BlindPlanError('呈现候选解析缺少当前源章，不能回退未知候选')
+    subjects, endpoints, aliases = {}, {}, {}
 
-    def alias(kind: str, ref: str) -> str:
-        key = (kind, ref)
+    def alias(key: tuple) -> str:
         if key not in aliases:
             token = 'a_' + hmac.new(bytes.fromhex(root_clean_sha1),
-                ('plot-v1\0' + kind + '\0' + ref).encode(), hashlib.sha256).hexdigest()[:16]
+                ('plot-v2\0' + json.dumps(key, ensure_ascii=False)).encode(),
+                hashlib.sha256).hexdigest()[:16]
             if token in aliases.values():
                 raise BlindPlanError('盲 alias 碰撞，拒绝混淆主体')
             aliases[key] = token
         return aliases[key]
 
-    def subject(kind: str, ref: str) -> str:
-        value = PlotSubjectRef(kind=kind, ref=ref).model_dump(mode='json')
-        token = alias(kind, ref)
-        subjects[token] = value
-        return token
-
     state_index = {s.state_id: s for b in chapters for s in b.states}
     beat_index = {b.beat_id: b for c in chapters for b in c.beats}
-    for chapter in chapters:
-        for beat in chapter.beats:
-            subject('beat', beat.beat_id)
-            for cid in beat.participant_char_ids:
-                subject('character', cid)
-        for state in chapter.states:
-            subject('state', state.state_id)
-            if state.holder_char_id:
-                subject('character', state.holder_char_id)
-            if state.global_ref:
-                subject(state.global_ref.kind, state.global_ref.ref)
-        for constraint in chapter.constraints:
-            subject('constraint', constraint.constraint_id)
-            if getattr(constraint, 'observer_char_id', None):
-                subject('character', constraint.observer_char_id)
+    subject_chapters = {(kind, getattr(row, field)): chapter.chapter_ordinal
+        for chapter in chapters for kind, rows, field in (
+            ('beat', chapter.beats, 'beat_id'), ('state', chapter.states, 'state_id'))
+        for row in rows}
+    catalogs = {chapter.chapter_ordinal: ActorCatalog(
+        characters, {'blueprints': raw}, chapter_ordinal=chapter.chapter_ordinal,
+        source_text='\n'.join(texts[n] for n in sorted(texts) if n <= chapter.chapter_ordinal),
+        seed=root_clean_sha1) for chapter in chapters}
     global_rows = {} if global_g is None else {
         (r['kind'], r['ref']): r['value']
-        for r in plot_global_projection(global_g, len(chapters))
-    }
-    character_rows = {} if global_g is None else global_g['entities']['characters']
+        for r in plot_global_projection(global_g, len(chapters))}
+    character_rows = characters['characters']
     links_by_chapter: dict[int, list[tuple[dict, dict]]] = {}
     if knowledge_links is not None:
         from contracts.schema.knowledge_links import KnowledgeLinks
@@ -117,30 +106,58 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
                 link_index[obligation.obligation_id].resolution.model_dump(mode='json')))
     projected = []
     for chapter in chapters:
-        number = chapter.chapter_ordinal
-        used: set[str] = set()
+        number, used = chapter.chapter_ordinal, set()
+        use_chapters = {}
 
-        def use(kind: str, ref: str) -> str:
-            token = subject(kind, ref)
+        def resolve_actor(actor, at_chapter=None):
+            try:
+                return catalogs[at_chapter or number].resolve(actor)
+            except RefusedByStructure as exc:
+                raise BlindPlanError(str(exc)) from exc
+
+        def use(kind, ref=None, *, actor=None, at_chapter=None) -> str:
+            scope = at_chapter or number
+            value = (PlotSubjectRef.model_validate(kind) if isinstance(kind, dict)
+                     else PlotSubjectRef.model_validate(kind.model_dump(mode='json'))
+                     if isinstance(kind, PlotSubjectRef) or hasattr(kind, 'relation_actors')
+                     else PlotSubjectRef(kind=kind, ref=ref, actor=actor))
+            if value.actor:
+                value = value.model_copy(update={'actor': resolve_actor(value.actor, scope)})
+            if value.relation_actors:
+                relation = global_rows.get(('relation', value.ref))
+                if relation is None or (value.relation_actors.subject.char_id,
+                        value.relation_actors.object.char_id) != (
+                        relation['subject_id'], relation['object_id']):
+                    raise BlindPlanError('关系呈现端点与登记关系归属不一致')
+                value = value.model_copy(update={'relation_actors': value.relation_actors.model_copy(
+                    update={key: resolve_actor(getattr(value.relation_actors, key), scope)
+                            for key in ('subject', 'object')})})
+            token = alias(value.key())
+            subjects[token] = value.model_dump(mode='json')
+            use_chapters[token] = min(scope, use_chapters.get(token, scope))
             used.add(token)
             return token
 
-        def project_state(state, *, inherited: bool = False) -> dict:
-            row = {'alias': use('state', state.state_id),
-                   'content': state.content, 'modality': state.modality,
-                   'holder_alias': (use('character', state.holder_char_id)
-                                    if state.holder_char_id else None),
-                   'global_subject_alias': (use(state.global_ref.kind, state.global_ref.ref)
-                                            if state.global_ref else None)}
+        def actor_alias(actor, at_chapter=None):
+            return use('character', actor.char_id if hasattr(actor, 'char_id')
+                       else actor['char_id'], actor=actor, at_chapter=at_chapter)
+
+        def project_state(state, *, inherited=False):
+            scope = subject_chapters['state', state.state_id]
+            row = {'alias': use('state', state.state_id), 'content': state.content,
+                   'modality': state.modality,
+                   'holder_alias': actor_alias(state.holder, scope) if state.holder else None,
+                   'global_subject_alias': use(state.global_ref, at_chapter=scope) if state.global_ref else None}
             if not inherited:
                 row['established_at_entry'] = state.established_at.kind == 'at_entry'
                 row['supersedes_state_aliases'] = sorted(
                     use('state', ref) for ref in state.supersedes_state_refs)
             return row
 
+        for relation in chapter.relation_uses:
+            use(relation)
         beats = [{'alias': use('beat', b.beat_id), 'content': b.content,
-                  'participant_aliases': sorted(use('character', cid)
-                                               for cid in b.participant_char_ids)}
+                  'participant_aliases': sorted(actor_alias(a) for a in b.participants)}
                  for b in chapter.beats]
         states = [project_state(s) for s in chapter.states]
         inherited = [project_state(state_index[ref], inherited=True)
@@ -154,13 +171,11 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
             for key in list(row):
                 if key.endswith('_beat_ref'):
                     row[key.replace('_ref', '_alias')] = use('beat', row.pop(key))
-                elif key == 'observer_char_id':
-                    cid = row.pop(key)
-                    row['observer_alias'] = use('character', cid) if cid else None
+                elif key == 'observer':
+                    observer = row.pop(key)
+                    row['observer_alias'] = actor_alias(observer) if observer else None
             constraints.append(row)
-        knowledge = []
-        triggers = []
-        background_beats = {}
+        knowledge, triggers, background_beats = [], [], {}
         chapter_events = list(links_by_chapter.get(number, []))
         own_subjects = {('beat', row.beat_id) for row in chapter.beats}
         own_subjects.update(('state', row.state_id) for row in chapter.states)
@@ -169,38 +184,53 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
             if target != number for obligation, resolution in rows
             if obligation['kind'] in ('reader_reveal', 'character_knowledge')
             and (obligation['subject_ref']['kind'], obligation['subject_ref']['ref']) in own_subjects)
+        available_tokens = [use(ref) for ref in chapter.relation_uses]
+        available_tokens.extend(use(state.global_ref,
+            at_chapter=subject_chapters['state', state.state_id])
+            for state in [*chapter.states, *(state_index[ref] for ref in chapter.entry_state_refs)]
+            if state.global_ref)
+        available = [subjects[token] for token in available_tokens]
         for obligation, resolution in chapter_events:
             sid = obligation['subject_ref']
-            token = use(sid['kind'], sid['ref'])
+            try:
+                event_subjects = actual_subject_uses(sid, available)
+            except RefusedByStructure as exc:
+                raise BlindPlanError(str(exc)) from exc
+            tokens = sorted(aliases[ref.key()] if ref.kind == 'relation' else
+                            use(ref, at_chapter=obligation['chapter_ordinal'])
+                            for ref in event_subjects)
             audience = obligation['audience']
-            if audience and audience.get('char_id'):
-                audience = {**audience, 'char_id': use('character', audience['char_id'])}
-            current_event = obligation['chapter_ordinal'] == number
-            timing = (resolution['kind'] if current_event else 'at_entry'
+            if audience and audience['kind'] == 'character':
+                audience = {'kind': 'character', 'actor_alias': actor_alias(
+                    audience['actor'], obligation['chapter_ordinal'])}
+            current = obligation['chapter_ordinal'] == number
+            timing = (resolution['kind'] if current else 'at_entry'
                       if obligation['chapter_ordinal'] < number else 'future_chapter')
-            item = {'subject_alias': token, 'kind': obligation['kind'],
-                    'audience': audience, 'timing': timing}
             event_key = ('knowledge', obligation['obligation_id'], 'trigger')
-            event_alias = alias('endpoint', '\0'.join(event_key))
+            event_alias = alias(('endpoint', *event_key))
             endpoints[event_alias] = PlotEndpoint(
                 kind='knowledge', ref=obligation['obligation_id'], endpoint='trigger'
             ).model_dump(mode='json')
-            item['event_alias'] = event_alias
-            if current_event and resolution['kind'] == 'at_beats':
+            item = {'event_alias': event_alias, 'subject_aliases': tokens, 'kind': obligation['kind'],
+                    'audience': audience, 'timing': timing,
+                    'identity_aliases': sorted(actor_alias(a, obligation['chapter_ordinal'])
+                        for a in resolution.get('identity_actors', []))}
+            if current and resolution['kind'] == 'at_beats':
                 trigger = resolution['trigger_beat_ref']
                 triggers.append(PlotKnowledgeTrigger(
                     knowledge_ref=obligation['obligation_id'], trigger_beat_ref=trigger))
                 item['trigger_beat_alias'] = use('beat', trigger)
-            # 知识主体可能是此前的剧情或状态；只带实际需要的完整主体，不带源位置。
             if sid['kind'] == 'beat' and sid['ref'] not in {b.beat_id for b in chapter.beats}:
+                token = use(sid)
                 prior = beat_index.get(sid['ref'])
                 if prior is None:
                     raise BlindPlanError('知识主体节点缺失')
                 background_beats[token] = {'alias': token, 'content': prior.content,
-                    'participant_aliases': sorted(use('character', ref) for ref in prior.participant_char_ids)}
+                    'participant_aliases': sorted(actor_alias(a, subject_chapters['beat', prior.beat_id])
+                                                  for a in prior.participants)}
             if sid['kind'] == 'state' and sid['ref'] not in {
-                s.state_id for s in chapter.states
-            } | set(chapter.entry_state_refs):
+                s.state_id for s in chapter.states} | set(chapter.entry_state_refs):
+                token = use(sid)
                 state = state_index.get(sid['ref'])
                 if state is None:
                     raise BlindPlanError('知识主体状态缺失')
@@ -209,69 +239,89 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
             knowledge.append(item)
         endpoint_rows = []
         for key, beat in required_endpoints(chapter, triggers, ()).items():
-            endpoint = PlotEndpoint(kind=key[0], ref=key[1], endpoint=key[2])
-            eid = alias('endpoint', '\0'.join(key))
-            endpoints[eid] = endpoint.model_dump(mode='json')
+            eid = alias(('endpoint', *key))
+            endpoints[eid] = PlotEndpoint(kind=key[0], ref=key[1], endpoint=key[2]).model_dump(mode='json')
+            subject_tokens = ([use(key[0], key[1])] if key[0] in {'state', 'constraint'}
+                else next(item['subject_aliases'] for item in knowledge if item['event_alias'] == eid))
             endpoint_rows.append({'endpoint_alias': eid, 'kind': key[0], 'endpoint': key[2],
-                                  'trigger_beat_alias': use('beat', beat)})
-            if key[0] in {'state', 'constraint'}:
-                endpoint_rows[-1]['subject_alias'] = use(key[0], key[1])
-            elif key[0] == 'knowledge':
-                endpoint_rows[-1]['subject_alias'] = next(
-                    item['subject_alias'] for item in knowledge if item['event_alias'] == eid)
-        global_material = []
-        # 关系两端即使没有直接参与本章动作，也必须能把正文中的人物与 opaque 引用对应。
-        for token in tuple(used):
+                'trigger_beat_alias': use('beat', beat), 'subject_aliases': subject_tokens})
+
+        # 引用只消除完全同义重复；其呈现必须来自显式、唯一的关系消费。
+        pending, examined = list(used), set()
+        while pending:
+            token = pending.pop()
+            if token in examined:
+                continue
+            examined.add(token)
             ref = subjects[token]
             payload = global_rows.get((ref['kind'], ref['ref']))
-            if ref['kind'] == 'relation' and payload is not None:
-                use('character', payload['subject_id'])
-                use('character', payload['object_id'])
-            elif ref['kind'] == 'character_state':
-                use('character', ref['ref'])
-        character_material = []
+            if ref['kind'] == 'relation':
+                for endpoint in ref['relation_actors'].values():
+                    actor_alias(endpoint, use_chapters[token])
+            if ref['kind'] == 'secret' and payload and payload.get('fact_ref'):
+                target = payload['fact_ref']
+                if target['kind'] == 'relation':
+                    matches = [t for t in used if subjects[t]['kind'] == 'relation'
+                               and subjects[t]['ref'] == target['relation_id']]
+                    if len(matches) != 1:
+                        raise BlindPlanError('秘密引用关系的呈现缺失或歧义，须由 Blueprint owner 订正')
+                else:
+                    use('world_rule', target['rule_id'] + '/' + target['version_id'])
+            pending.extend(used - examined)
+        character_material, global_material = [], []
         for token in sorted(used):
             ref = subjects[token]
-            if ref['kind'] != 'character':
+            if ref['kind'] == 'character':
+                scope = use_chapters[token]
+                catalog = catalogs[scope]
+                actor = resolve_actor(ref['actor'], scope)
+                character = character_rows[actor.char_id]
+                binding = catalog.bindings.get(actor.presentation_ref)
+                if binding:
+                    surfaces = binding['surfaces']
+                    if any(s not in {a['surface'] for a in character['aliases']} for s in surfaces):
+                        raise BlindPlanError('表面身份使用未登记称谓')
+                    state = catalog.states.get(binding['public_state_ref'])
+                    role = state['content'] if state else None
+                else:
+                    surfaces = sorted({a['surface'] for a in character['aliases']
+                                       if a['identity_revealed_from'] <= scope})
+                    role = character['role'] if character['first_chapter'] <= scope else None
+                if not surfaces:
+                    raise BlindPlanError('规划人物没有可辨认呈现，不能回退 canonical')
+                character_material.append({'alias': token, 'surfaces': surfaces, 'role': role})
                 continue
-            character = character_rows.get(ref['ref'])
-            if character is None:
-                raise BlindPlanError('规划人物缺少 Global 称呼与角色语义；不能只下发无从辨认的 alias')
-            surfaces = sorted({row['surface'] for row in character['address']
-                               if row['from_chapter'] <= number})
-            # PlannerTruth 可辨认关系端点及尚未出场人物；称呼公开仍由 WriterVisible 控制。
-            if not surfaces:
-                surfaces = [character['canonical']]
-            character_material.append({'alias': token, 'canonical': character['canonical'],
-                                       'surfaces': surfaces, 'role': character['role']})
-        for token in sorted(used):
-            ref = subjects[token]
-            if ref['kind'] in {'beat', 'state', 'constraint', 'character', 'chapter_boundary'}:
+            if ref['kind'] in {'beat', 'state', 'constraint', 'chapter_boundary'}:
                 continue
             payload = global_rows.get((ref['kind'], ref['ref']))
             if payload is None:
                 raise BlindPlanError(f'规划引用的 Global 主体缺少有据正文：{ref}')
             value = copy.deepcopy(payload)
+            for key in ('relation_id', 'rule_id', 'secret_id'):
+                value.pop(key, None)
             if ref['kind'] == 'relation':
-                # character_state 与 character 共用 char_id，不能用扁平 ref 表
-                # 覆盖人物 alias。关系自己的身份与施受者按各自类别解析。
-                value['relation_id'] = token
-                for field in ('subject_id', 'object_id'):
-                    value[field] = aliases['character', payload[field]]
-            global_material.append({'alias': token, 'kind': ref['kind'],
-                                    'value': value})
-        # Global 属性含人物引用时同样替换为 opaque；不夹带来源证据或源章编号。
+                for field, endpoint in (('subject_id', 'subject'), ('object_id', 'object')):
+                    value[field] = actor_alias(ref['relation_actors'][endpoint], use_chapters[token])
+            if ref['kind'] == 'secret' and value.get('fact_ref'):
+                target = value['fact_ref']
+                kind, rid = (('relation', target['relation_id']) if target['kind'] == 'relation'
+                             else ('world_rule', target['rule_id'] + '/' + target['version_id']))
+                matches = [t for t in used if (subjects[t]['kind'], subjects[t]['ref']) == (kind, rid)]
+                if len(matches) != 1:
+                    raise BlindPlanError('同义事实引用的呈现不唯一')
+                value['fact_ref'] = {'subject_alias': matches[0]}
+            global_material.append({'alias': token, 'kind': ref['kind'], 'value': value})
+
         def clean_global(value):
             if isinstance(value, list):
                 return [clean_global(v) for v in value]
             if not isinstance(value, dict):
                 return value
             return {k: clean_global(v) for k, v in value.items()
-                    if not k.endswith(('_evidence', '_chapter'))
-                    and k not in {'valid_from', 'first_reveal_chapter', 'visibility'}}
+                    if k not in {'evidence_refs', 'effective_from', 'effective_until', 'revealed_from',
+                                 'setup_chapters', 'first_chapter', 'version_id'}}
         row = {'chapter_ordinal': number, 'chapter_function': chapter.chapter_function,
-               'characters': character_material,
-               'beats': sorted(beats, key=lambda r: r['alias']),
+               'characters': character_material, 'beats': sorted(beats, key=lambda r: r['alias']),
                'states': sorted(states, key=lambda r: r['alias']),
                'inherited_states': sorted(inherited, key=lambda r: r['alias']),
                'background_beats': sorted(background_beats.values(), key=lambda r: r['alias']),
@@ -283,15 +333,12 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
                'global_subjects': clean_global(global_material)}
         projected.append(PlannerChapter.model_validate(row).model_dump(mode='json'))
     truth = {'blind_contract': BLIND_CONTRACT, 'chapters': projected}
-    # 正式引用在结构字段中均已换成 opaque。正文中的同书 ID 是源序旁路，
-    # 只能拒绝并要求上游改为自然语言，不替模型裁剪或重写剧情。
-    formal_ids = {ref['ref'] for ref in subjects.values()}
-    formal_ids.update(character_rows)
+    formal_ids = {ref['ref'] for ref in subjects.values()} | set(character_rows)
     formal_ids.update(ref for (_kind, ref) in global_rows)
     formal_ids.update(a.evidence_id for chapter in chapters for a in chapter.evidence_anchors)
-    pattern = re.compile(r'(?<![A-Za-z0-9_])(?:' + '|'.join(
-        re.escape(ref) for ref in sorted(formal_ids) if re.search(r'[A-Za-z]+\d|_', ref))
-        + r')(?![A-Za-z0-9_])')
+    formal_ids.update(a.presentation_id for chapter in chapters for a in chapter.actor_bindings)
+    patterns = [re.escape(ref) for ref in sorted(formal_ids) if re.search(r'[A-Za-z]+\d|_', ref)]
+    pattern = re.compile(r'(?<![A-Za-z0-9_])(?:' + '|'.join(patterns) + r')(?![A-Za-z0-9_])')
     def refuse_formal_text(value):
         if isinstance(value, dict):
             for item in value.values():
@@ -299,13 +346,13 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
         elif isinstance(value, list):
             for item in value:
                 refuse_formal_text(item)
-        elif isinstance(value, str) and pattern.search(value):
+        elif isinstance(value, str) and patterns and pattern.search(value):
             raise BlindPlanError('自由文本含本书正式 ID，不能旁路泄露源序')
     refuse_formal_text(truth)
     mapping = {'alias_algorithm': BLIND_ALIAS_ALGORITHM, 'truth_sha256': _sha256(truth),
                'subject_aliases': dict(sorted(subjects.items())),
                'endpoint_aliases': dict(sorted(endpoints.items())),
-               'participant_aliases': {k: v['ref'] for k, v in sorted(subjects.items())
+               'participant_aliases': {k: v['actor'] for k, v in sorted(subjects.items())
                                        if v['kind'] == 'character'}}
     return truth, mapping
 
@@ -403,7 +450,7 @@ def _local_map(local: object, formal: object) -> dict[str, str]:
 
 def blind_chapter_compilation_dependencies(local_mapping: object, formal_mapping: object) -> dict:
     table = _local_map(local_mapping, formal_mapping)
-    return {'contract': 'stage4-plot-compilation-v1',
+    return {'contract': 'stage4-plot-compilation-v2',
             'chapter_ordinal': local_mapping['chapter_ordinal'],
             'aliases': {key: {'opaque': value, 'subject': (
                 formal_mapping['subject_aliases'].get(value)
@@ -456,11 +503,11 @@ def validate_chapter(chapter: dict, source: dict) -> dict:
             bindings[token] = next(iter(targets))
         if bindings[token] not in targets:
             raise BlindPlanError('端点必须绑定父节点实际呈现的场景')
-    # 相同约束的两个端点共享 subject_alias，用于 must-cooccur，绝不取首次/末次兜底。
+    # 相同约束的两个端点共享主体，用于 must-cooccur，绝不取首次/末次兜底。
     for constraint in source['constraints']:
         if constraint['kind'] == 'same_scene':
             selected = [bindings[e['endpoint_alias']] for e in source['endpoints']
-                        if e.get('subject_alias') == constraint['alias']]
+                        if constraint['alias'] in e['subject_aliases']]
             if len(selected) != 2 or len(set(selected)) != 1:
                 raise BlindPlanError('必须同场约束未闭合')
     allowed = beats | {r['alias'] for field in ('states', 'inherited_states',

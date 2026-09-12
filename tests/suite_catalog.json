@@ -2,6 +2,11 @@
   "version": 1,
   "downstream": {"stage0": ["stage1"], "stage1": ["stage2"], "stage2": ["stage4"], "stage4": ["stage5"], "stage5": ["stage6"], "stage6": ["stage7"], "stage7": []},
   "modules": {
+    "tests/test_blueprint_repair_queue.py": {"layer": "stage", "stages": ["stage2", "stage4"]},
+    "tests/test_plot_actor_refs.py": {"layer": "unit_contract", "stages": ["stage2"]},
+    "tests/test_plot_actor_resolution.py": {"layer": "unit_contract", "stages": ["stage2", "stage4"]},
+    "tests/test_stage2_core_review_wire.py": {"layer": "unit_contract", "stages": ["stage2"], "cases": {"test_native_both_owner_edits_keep_local_handles_through_actual_free_commit": "stage"}},
+    "tests/test_writer_actor_contract.py": {"layer": "unit_contract", "stages": ["stage4", "stage5"]},
     "tests/test_stage2_analyze_draft_http.py": {"layer": "stage", "stages": ["stage2"]},
     "tests/test_stage2_analyze_draft_recovery.py": {"layer": "stage", "stages": ["stage2"]},
     "tests/test_stage2_global_core_edits.py": {"layer": "stage", "stages": ["stage2"]},
@@ -244,7 +249,7 @@
         "test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book": "stage"
       }
     },
-    "tests/test_stage2_global_agent.py": {"layer": "unit_contract", "stages": ["stage2"]},
+    "tests/test_stage2_global_agent.py": {"layer": "unit_contract", "stages": ["stage2"], "cases": {"test_direct_global_producer_distinguishes_explicit_empty_from_missing_or_null": "stage"}},
     "tests/test_stage2_global_candidate_contract.py": {
       "layer": "stage", "stages": ["stage2"],
       "cases": {
@@ -394,6 +399,7 @@
     "tests/test_work_units.py": {"layer": "unit_contract", "stages": []},
     "tests/test_workflow_metrics.py": {"layer": "unit_contract", "stages": []},
     "tests/test_workflow_pairs.py": {"layer": "unit_contract", "stages": []},
+    "tests/test_workflow_transition.py": {"layer": "stage", "stages": ["stage2", "stage4", "stage5"]},
     "tests/test_workflow_write_boundary.py": {"layer": "unit_contract", "stages": ["stage0", "stage1", "stage2", "stage4", "stage5", "stage6", "stage7"]},
     "tests/test_write_admission.py": {"layer": "unit_contract", "stages": []}
   }

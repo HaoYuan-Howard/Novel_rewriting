@@ -68,16 +68,16 @@ def stage5_book() -> Book:
         'beats': [{
             'beat_ref': 'b01_01',
             'content': '雨夜核账时，沈青发现账册末页的墨迹被换成陌生数字。她让周衡关门，暂不惊动旁人；周衡应下，挂好湿斗篷并拨亮灯芯。',
-            'participant_char_ids': ['char_001', 'char_002'],
+            'participants': ['actor_' + '1' * 24, 'actor_' + '2' * 24],
         }],
         'states': [{'state_ref': 'st01_01', 'content': '沈青与周衡暂不对外声张账册异常。',
-                    'global_ref': None, 'modality': 'world', 'holder_char_id': None}],
+                    'global_ref': None, 'modality': 'world', 'holder': None}],
         'constraints': [], 'restricted_subject_refs': [], 'knowledge_events': [],
         'global_subjects': [
-            {'subject_ref': {'kind': 'setting', 'ref': 'setting:era'}, 'value': '架空旧城',
+            {'subject_ref': {'kind': 'setting', 'ref': 'subject_' + '1' * 24}, 'value': {'content': '架空旧城'},
              'allowed_slots': ['s01'], 'state_permissions': []},
-            {'subject_ref': {'kind': 'setting', 'ref': 'setting:worldview'},
-             'value': '故事发生在临河茶馆及其旧城商路。',
+            {'subject_ref': {'kind': 'setting', 'ref': 'subject_' + '2' * 24},
+             'value': {'content': '故事发生在临河茶馆及其旧城商路。'},
              'allowed_slots': ['s01'], 'state_permissions': []},
         ],
         'scenes': [{
@@ -86,17 +86,22 @@ def stage5_book() -> Book:
             'budget_chars': len(source_one),
             'deliveries': [{'beat_ref': 'b01_01', 'presentation_instruction': None,
                             'stages': [{'time_layer': 'present', 'place': '茶馆',
-                                        'present': ['沈青', '周衡']}]}],
+                                        'present': ['actor_' + '1' * 24, 'actor_' + '2' * 24]}]}],
             'context_beat_refs': [], 'turn_beat_ref': 'b01_01',
             'state_events': [{'state_ref': 'st01_01', 'endpoint': 'established'}],
             'knowledge_event_refs': [], 'constraint_refs': [],
         }],
-        'characters': [{'char_id': 'char_001', 'display_name': character['display_name'],
-                        'role': character['role']},
-                       {'char_id': 'char_002', 'display_name': '周衡', 'role': '与沈青一同核账的人'}],
-        'narration': [{'segment': '全章', 'grammatical_person': 'third', 'narrator': '沈青'}],
-        'address': [],
+        'characters': [{'actor_ref': 'actor_' + '1' * 24, 'display_name': character['display_name'],
+                        'surfaces': ['沈青'], 'role': character['role'],
+                        'allowed_slots': ['s01'], 'role_allowed_slots': ['s01']},
+                       {'actor_ref': 'actor_' + '2' * 24, 'display_name': '周衡', 'surfaces': ['周衡'],
+                        'role': '与沈青一同核账的人', 'allowed_slots': ['s01'], 'role_allowed_slots': ['s01']}],
+        'narration': [{'segment': '全章', 'grammatical_person': 'third',
+                       'narrator': 'actor_' + '1' * 24, 'focalizer': None,
+                       'pronoun_surfaces': [], 'beat_refs': [], 'allowed_slots': ['s01']}],
     }
+    from contracts.schema.stage4 import CtxChapter
+    entry = CtxChapter.model_validate(entry).model_dump(mode='json')
     projected = body_style_metrics(measure_body(main))
     return Book(
         title='雨夜账册',

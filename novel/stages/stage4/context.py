@@ -43,66 +43,6 @@ class Assembly:
     held_rules: set[tuple[Any, Any, tuple[str, ...]]] = field(default_factory=set)
 
 
-# ── 一、名字：投影算法唯一落点在 `novel.core.naming` ─────────────────────
-
-
-def rename_all(obj: Any, subs: dict[str, str]) -> Any:
-    """把【整份下发内容】里的自造标签换成有据称呼（确定性替换，**长的先换**）。
-
-    只修结构化的那几处（`display_name` / `address` / `present`）是不够的：自造标签还会从
-    **任何一段 LLM 写的散文**里漏出去——实测三处、分属两层：
-    stage2 的 `event`（「苏父蹙眉说…」）与 `role`（「赵家小厮兼车夫」）·
-    计划的 `chapter_goal` / `end_hook_goal`。
-    **按字段名逐个去堵必然漏**（这已经是第二次了，上次是剧透的五条旁路）——
-    标签是**信息的属性**，它会从任何承载它的字段漏出去。所以在这里对整棵树做一遍。
-
-    ⚠ **这样做是安全的，而且是由构造保证的**：替换的键恰好是那些【在原文里出现 0 次】的串
-    （有据的 canonical 根本不会进 `subs`），所以在任何位置替换都**不可能破坏一个原文里真有的词**。
-    ⚠ **只换值不换键**：dict 的键是 `char_id` / `secret_id` 这类内部引用，动了就断链。
-    ⚠ **长的先换**：`赵家小厮(车夫)` 必须排在 `赵家小厮` 之前，否则会换出半截残串。
-    """
-    if not subs:
-        return obj
-    if isinstance(obj, dict):
-        return {k: rename_all(v, subs) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [rename_all(v, subs) for v in obj]
-    if isinstance(obj, str):
-        for form in sorted(subs, key=len, reverse=True):
-            obj = obj.replace(form, subs[form])
-    return obj
-
-
-# ── 二、逐章投影：六道闸门 ────────────────────────────────────────────────
-
-def _name_narration(seg: dict[str, Any], disp: dict[str, str], idx: int, total: int) -> dict[str, Any]:
-    """把一段叙述视角整理成写作侧能直接用的形式。**两处刻意的改动**：
-
-    · `char_id` → 人物本名。写作侧不该看见 `char_002` 这种内部编号（每一层只说自己的语言）。
-    · **段落边界描述 → 位置标签。** stage2 的 `segment` 是给人和工具看的界标，
-      里面**常原样引用原文**当分界（「正文主体（直至"……沉重的呼吸声"）」）——
-      那对闭卷写手就是原文泄漏，**而且泄的往往正是本章的末句**。
-      写手真正需要的只是「本章分几段、各段谁在说、什么顺序」。
-
-    ⚠ `disp` 是**章级**表。叫不出名字就**不写这个键**，不兜底成 `char_id`——
-    第一人称书的第 1 章正是这种情况（主角原文通篇写「我」，名字要到后面才出现），
-    而写手要的东西 `grammatical_person` + `pronoun_surfaces` 已经给全了：
-    **「用第一人称、自称『我』」本来就不需要知道他叫什么。**
-    """
-    out: dict[str, Any] = {
-        'segment': '全章' if total <= 1 else f'第{idx + 1}段（共{total}段，按顺序写）',
-        'grammatical_person': seg.get('grammatical_person'),
-    }
-    if disp.get(seg.get('narrator_char_id')):
-        out['narrator'] = disp[seg['narrator_char_id']]
-    if (seg.get('focalizer_char_id') != seg.get('narrator_char_id')
-            and disp.get(seg.get('focalizer_char_id'))):
-        out['focalizer'] = disp[seg['focalizer_char_id']]
-    if seg.get('pronoun_surfaces'):
-        out['pronoun_surfaces'] = seg['pronoun_surfaces']
-    return out
-
-
-# ── 三、组装 ──────────────────────────────────────────────────────────────
-
+# 公开身份解析在 actors.py，任务书编译在 plot_context.py；不保留旧 address 或
+# 按 char_id 判等删除 narration 的第二条兼容路径。
 from novel.stages.stage4.plot_context import build_writer_context

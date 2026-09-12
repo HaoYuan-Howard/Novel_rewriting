@@ -125,6 +125,34 @@ def test_stage4_view_rejects_an_unknown_synthetic_book(tmp_path):
         stage4_view(tmp_path, '9999999999999999999', 1)
 
 
+def test_goal_index_keeps_character_and_relation_presentations_distinct():
+    from contracts.schema.stage4 import PlanGoal
+    from novel.stages.stage4.measure import identity_plan
+    from novel.views.stage4 import _index_row
+    from tests.plot_fixtures import MAIN, blueprint
+
+    blueprints = blueprint()
+    chapter = identity_plan(blueprints, MAIN)['output_chapters'][0]
+    first = {'char_id': 'char_001', 'presentation_ref': 'ap01_01'}
+    second = {'char_id': 'char_001', 'presentation_ref': 'ap01_02'}
+    unspecified = {'char_id': 'char_002', 'presentation_ref': None}
+    refs = [
+        {'kind': 'character', 'ref': 'char_001', 'actor': first},
+        {'kind': 'character', 'ref': 'char_001', 'actor': second},
+        {'kind': 'character', 'ref': 'char_002', 'actor': unspecified},
+        *[{'kind': 'relation', 'ref': 'rel_01', 'relation_actors': {
+            'subject': actor, 'object': unspecified}} for actor in (first, second)],
+    ]
+    chapter['chapter_goal'] = PlanGoal.model_validate({
+        **chapter['chapter_goal'], 'subject_refs': refs}).model_dump(mode='json')
+    row = _index_row(chapter, blueprints['blueprints'][0])
+    assert row.chapter_goal == (
+        chapter['chapter_goal']['intent'] + ' · '
+        'character:ap01_01、character:ap01_02、character:char_002（未指定呈现）、'
+        'relation:rel_01（ap01_01 → char_002（未指定呈现））、'
+        'relation:rel_01（ap01_02 → char_002（未指定呈现））')
+
+
 @pytest.mark.parametrize('change', ['steady', 'character', 'missing_knowledge', 'surface_drift'])
 def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch, change):
     """页面与正式审阅共享完整依赖，同一 plan 不重读，材料漂移不拼接。"""
@@ -141,12 +169,15 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch, chan
     from novel.stages.stage4.plot_materials import chapter_materials_identity
     from novel.errors import SourceConflict
     from tests import plot_fixtures
-    from tests.stage2_fixtures import plot_blueprints
+    from tests.stage2_fixtures import plot_blueprints, formal_subjects
     from tests.test_stage2 import global_grounding, main_text
     from novel.stages.stage4.measure import identity_plan
 
+    registry, knowledge = formal_subjects(global_grounding())
+    character_payload = registry.model_dump(mode='json', by_alias=True)
     fixture = SimpleNamespace(blueprint=plot_blueprints, MAIN=main_text(),
-                              GLOBAL=global_grounding(), links=plot_fixtures.links)
+                              GLOBAL=knowledge.model_dump(mode='json', by_alias=True),
+                              links=plot_fixtures.links)
     raw = identity_plan(fixture.blueprint(), fixture.MAIN)
     raw['_provenance'] = {
         'code': 'test', 'root_clean_sha1': 'c' * 40, 'inputs': {}, 'origin': 'compiled',
@@ -157,7 +188,7 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch, chan
         'code': 'fixture', 'root_clean_sha1': 'c' * 40, 'inputs': {},
         'prompts': {'FIXTURE': '0' * 10}, 'model': 'fixture', 'scope_violations': [],
         'context': {'architecture': 'plot-blueprint-v1', 'source_format': 'numbered-paragraphs-v1',
-                    'global_projection_contract': 'plot-global-scope-v1'},
+                    'global_projection_contract': 'plot-global-scope-v2'},
     }}
     blueprint = ChapterBlueprints.model_validate(blueprint_raw)
     binding = EvidenceBinding.model_validate({
@@ -179,6 +210,15 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch, chan
     class FakeStore:
         def __init__(self, ctx):
             self.ctx = ctx
+
+        def exists(self, _rel):
+            return False  # 本例没有 INVALID；当前正式快照在下列读取口提供。
+
+        def read(self, model, rel):
+            from contracts.artifacts import STAGE2_CHARACTERS
+            assert rel == STAGE2_CHARACTERS
+            reads[rel] = reads.get(rel, 0) + 1
+            return model.model_validate(copy.deepcopy(character_payload))
 
         def read_own(self, _model, rel):
             reads[rel] = reads.get(rel, 0) + 1
@@ -232,7 +272,8 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch, chan
     materials = {row.output_ordinal: chapter_materials_identity(
         row.output_ordinal, blueprint_raw, global_g, fixture.links(), fixture.MAIN,
         [ref.model_dump(mode='json') for goal in
-         (row.chapter_goal, row.open_hook_goal, row.end_hook_goal) for ref in goal.subject_refs])
+         (row.chapter_goal, row.open_hook_goal, row.end_hook_goal) for ref in goal.subject_refs],
+        characters=character_payload)
         for row in snapshot.output_chapters}
     expected = approvals._decision_sha256({
         'plan_subject': structure_review_subject_sha256(snapshot, [], blueprints=blueprint),
@@ -244,7 +285,7 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch, chan
         structure_metrics_of(blueprint_raw['blueprints'][0], chapter.model_dump(mode='json')))
     assert reads[view_module.MAIN_TEXT] == 1
     if change == 'character':
-        global_g['entities']['characters']['char_001']['role'] = '已经决定长住的受邀住客'
+        character_payload['characters']['char_001']['role'] = '在老宅廊下看落花的家人'
         reads.clear()
         changed = stage4_view('unused', '123', 1)
         assert reads[view_module.PLAN_REL] == 1

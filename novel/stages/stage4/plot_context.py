@@ -1,309 +1,383 @@
-"""WriterVisibleView 的唯一编译器：章级正文目录、显式端点和逐场表达许可。
+"""WriterVisibleView V9：内部实体与公开表面身份分离的唯一编译器。
 
-整章材料一次下发；逐场许可不是模型物理隔离。这里不裁剪自由文本中的秘密，
-也不以证据命中证明剧情完整。语义保真仍由设计、结构与成稿审阅承担。
+整章请求仍看得到后场材料，表达受显式场景许可约束；代码不重写自由文本中的
+身份真相，语义保真由 Commander 审核。没有明确呈现或知识端点时拒绝并保留 owner 修复入口。
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 from contracts.schema.knowledge_links import KnowledgeLinks
-from contracts.schema.plot import PlotBlueprint
+from contracts.schema.plot import PlotBlueprint, PlotSubjectRef
 from contracts.schema.stage4 import CtxChapter
-from novel.core.naming import (
-    display_names_at, name_collisions, project_character_names,
-    person_naming_surfaces, rule_names_a_person, surface_first_chapter,
-)
 from novel.errors import RefusedByStructure
+from novel.stages.stage4.actors import ActorCatalog, actual_subject_uses
 from novel.stages.stage4.plot_binding import source_context_catalog
-from novel.stages.stage4.plot_placements import (
-    compile_plan_placements, knowledge_triggers_for_chapter,
-)
+from novel.stages.stage4.plot_placements import compile_plan_placements, knowledge_triggers_for_chapter
 from novel.stages.stage4.plot_refs import global_subjects, validate_plan
-
-
-def _key(ref: dict) -> tuple[str, str]:
-    return ref['kind'], ref['ref']
 
 
 def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
                          blueprints: dict[str, Any], main_text: list[dict[str, Any]], *,
-                         knowledge_links: dict[str, Any]):
-    from novel.stages.stage4.context import Assembly, _name_narration, rename_all
+                         knowledge_links: dict[str, Any], characters: dict[str, Any]):
+    from novel.stages.stage4.context import Assembly
+    from novel.stages.stage4.measure import semantic_contract_of
 
-    validate_plan(plan, blueprints, global_g, knowledge_links)
+    validate_plan(plan, blueprints, global_g, knowledge_links, characters=characters, main_text=main_text)
     links = KnowledgeLinks.model_validate(knowledge_links)
     records = {row.obligation_id: row for row in links.links}
-    bps = {row['chapter_ordinal']: PlotBlueprint.model_validate(row)
-           for row in blueprints['blueprints']}
+    bps = {row['chapter_ordinal']: PlotBlueprint.model_validate(row) for row in blueprints['blueprints']}
     states = {state.state_id: state for bp in bps.values() for state in bp.states}
     all_beats = {beat.beat_id: beat for bp in bps.values() for beat in bp.beats}
+    state_origins = {state.state_id: bp.chapter_ordinal for bp in bps.values() for state in bp.states}
+    state_endings = {}
+    for source_bp in bps.values():
+        for state in source_bp.states:
+            if state.ended_at is not None:
+                state_endings[state.state_id] = source_bp.chapter_ordinal
+            for ref in state.supersedes_state_refs:
+                state_endings[ref] = source_bp.chapter_ordinal
+        for ending in source_bp.inherited_state_endings:
+            state_endings[ending.state_ref] = source_bp.chapter_ordinal
+    beat_origins = {beat.beat_id: bp.chapter_ordinal for bp in bps.values() for beat in bp.beats}
     texts = {row['chapter_ordinal']: row['text'] for row in main_text}
-    characters = global_g['entities']['characters']
-    naming, available_names = person_naming_surfaces(characters), surface_first_chapter(characters)
-    globals_ = global_subjects(global_g)
-    registry, subs, unattested = project_character_names(
-        characters, '\n'.join(texts[o] for o in sorted(texts)))
-    if unattested:
-        raise RefusedByStructure(f'人物没有任何原文有据的可下发称呼：{unattested}')
-    asm = Assembly(subs=subs)
-    asm.collisions = name_collisions(
-        {ref: row['display_name'] for ref, row in registry.items()}, characters)
-    result = []
+    seed = hashlib.sha256(json.dumps(texts, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    globals_ = global_subjects(global_g, characters=characters)
+    catalogs = {}
+    def catalog_at(number):
+        if number not in catalogs:
+            catalogs[number] = ActorCatalog(characters, blueprints, chapter_ordinal=number,
+                source_text='\n'.join(texts[o] for o in sorted(texts) if o <= number), seed=seed)
+        return catalogs[number]
+    asm, result = Assembly(), []
     for chapter in plan['output_chapters']:
         ordinal = chapter['output_ordinal']
         bp = bps[ordinal]
-        compiled = compile_plan_placements(bp, chapter, knowledge=
-            knowledge_triggers_for_chapter(knowledge_links, ordinal))
+        actors = catalog_at(ordinal)
+        compiled = compile_plan_placements(bp, chapter, knowledge=knowledge_triggers_for_chapter(knowledge_links, ordinal))
         slots = [scene['slot'] for scene in chapter['scenes']]
         positions = {slot: i for i, slot in enumerate(slots)}
         endpoints = {row.key(): row.scene_ref for row in compiled.bindings}
         contexts = source_context_catalog(bp)
-        current_obligations = [row for row in links.scope.obligations if row.chapter_ordinal == ordinal]
-        current_state_ids = set(bp.entry_state_refs) | {s.state_id for s in bp.states}
-        current_state_ids.update(row.subject_ref.ref for row in current_obligations
-                                 if row.subject_ref.kind == 'state')
-        current_states = [states[ref] for ref in sorted(current_state_ids)]
-        hidden_states = {ref for ref in current_state_ids if any(
-            row.kind == 'reader_reveal' and row.subject_ref.kind == 'state' and row.subject_ref.ref == ref
-            and row.chapter_ordinal > ordinal for row in links.scope.obligations)}
-        visible_states = [row for row in current_states if row.state_id not in hidden_states]
-        background = {row.subject_ref.ref for row in current_obligations
-                      if row.subject_ref.kind == 'beat' and row.subject_ref.ref not in {b.beat_id for b in bp.beats}}
-        needed_chars = {cid for beat in bp.beats for cid in beat.participant_char_ids}
-        needed_chars.update(s.holder_char_id for s in current_states if s.holder_char_id)
-        needed_chars.update(cid for row in contexts.values() for cid in row['present_char_ids'] or [])
-        needed_chars.update(cid for segment in bp.narration
-            for cid in (segment.narrator_char_id, segment.focalizer_char_id) if cid)
-        needed_chars.update(c.observer_char_id for c in bp.constraints
-                            if getattr(c, 'observer_char_id', None))
-        needed_chars.update(cid for ref in background for cid in all_beats[ref].participant_char_ids)
-        needed = {('state', ref) for ref in current_state_ids}
-        needed.update(_key(s.global_ref.model_dump()) for s in current_states if s.global_ref)
-        for name in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
-            needed.update(_key(ref) for ref in chapter[name]['subject_refs'])
-        needed.update((r.subject_ref.kind, r.subject_ref.ref) for r in current_obligations)
-        for kind, ref in tuple(needed):
-            if kind == 'character':
-                needed_chars.add(ref)
-            if kind == 'relation' and (kind, ref) in globals_:
-                needed_chars.update(str(globals_[kind, ref][key])
-                                    for key in ('subject_id', 'object_id'))
-                visibility = globals_[kind, ref]['visibility']
-                if visibility['kind'] == 'via_secret':
-                    needed.add(('secret', visibility['secret_id']))
-        for row in current_obligations:
-            if row.audience is not None and row.audience.kind == 'character':
-                needed_chars.add(row.audience.char_id)
-        display_all = display_names_at(
-            characters, '\n'.join(texts[o] for o in sorted(texts) if o <= ordinal))
-        display = {ref: name for ref, name in display_all.items() if ref in needed_chars}
-        asm.withheld.extend((ordinal, ref) for ref in sorted(needed_chars - display.keys()))
-        asm.chapter_collisions.extend((ordinal, name, refs)
-            for name, refs, _ in name_collisions(display, characters))
+        obligations = [row for row in links.scope.obligations if row.chapter_ordinal == ordinal]
+        state_ids = set(bp.entry_state_refs) | {s.state_id for s in bp.states}
+        state_ids.update(row.subject_ref.ref for row in obligations if row.subject_ref.kind == 'state')
+        hidden = {ref for ref in state_ids if any(row.kind == 'reader_reveal'
+            and row.subject_ref.kind == 'state' and row.subject_ref.ref == ref and row.chapter_ordinal > ordinal
+            for row in links.scope.obligations)}
+        visible_states = [states[ref] for ref in sorted(state_ids - hidden)]
+        background = {row.subject_ref.ref for row in obligations if row.subject_ref.kind == 'beat'
+                      and row.subject_ref.ref not in {b.beat_id for b in bp.beats}}
+        needed = {}
+        subject_catalogs = {}
 
-        def event_slots(row) -> list[str]:
+        def normalize(ref, source_catalog=None):
+            selected = source_catalog or actors
+            ref = PlotSubjectRef.model_validate(ref.model_dump(mode='json') if hasattr(ref, 'model_dump') else ref)
+            data = ref.model_dump(mode='json')
+            if ref.actor:
+                data['actor'] = selected.resolve(ref.actor).model_dump(mode='json')
+            if ref.relation_actors:
+                data['relation_actors'] = {
+                    'subject': selected.resolve(ref.relation_actors.subject).model_dump(mode='json'),
+                    'object': selected.resolve(ref.relation_actors.object).model_dump(mode='json')}
+            return PlotSubjectRef.model_validate(data)
+
+        def need(ref, source_catalog=None):
+            selected = source_catalog or actors
+            ref = normalize(ref, selected)
+            needed[ref.key()] = ref
+            subject_catalogs.setdefault(ref.key(), selected)
+
+        def ref_catalog(ref):
+            return subject_catalogs.get(ref.key(), actors)
+
+        def public_ref(ref):
+            return ref_catalog(ref).subject(ref)
+
+        for ref in bp.relation_uses:
+            need(ref)
+        for ref in state_ids:
+            need({'kind': 'state', 'ref': ref})
+        for state in visible_states:
+            if state.global_ref:
+                need(state.global_ref, catalog_at(state_origins[state.state_id]))
+        for name in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
+            for ref in chapter[name]['subject_refs']:
+                need(ref)
+        for row in obligations:
+            if row.subject_ref.kind != 'relation':
+                need(row.subject_ref.model_dump())
+
+        def event_slots(row):
             if row.chapter_ordinal > ordinal:
                 return []
-            resolution = records[row.obligation_id].resolution
-            if row.chapter_ordinal < ordinal or resolution.kind == 'at_entry':
-                return list(slots)
-            if resolution.kind != 'at_beats':
+            record = records.get(row.obligation_id)
+            if record is None or record.resolution.kind == 'unresolved':
                 raise RefusedByStructure('未解决知识事件不能编译写作权限')
+            if row.chapter_ordinal < ordinal or record.resolution.kind == 'at_entry':
+                return list(slots)
             slot = endpoints.get(('knowledge', row.obligation_id, 'trigger'))
             if slot is None:
-                raise RefusedByStructure('知识事件缺少明确的场景端点')
+                raise RefusedByStructure('知识事件缺少明确场景端点')
             return slots[positions[slot]:]
+
+        def permission(kind, ref, *, revealed_from=None):
+            rows = [row for row in links.scope.obligations if row.kind == kind and row.knowledge_ref == ref]
+            if len(rows) != 1:
+                raise RefusedByStructure(f'知识事件未唯一登记：{kind}:{ref}')
+            if revealed_from is not None and rows[0].chapter_ordinal != revealed_from:
+                raise RefusedByStructure('知识披露端点与 Global revealed_from 不一致')
+            return event_slots(rows[0])
+
+        actor_uses = {}
+        def actor(value, allowed, source_catalog=None):
+            if value is None:
+                return None
+            selected = source_catalog or actors
+            resolved = selected.resolve(value)
+            token = selected.token(resolved)
+            entry = actor_uses.setdefault(token, [selected, resolved, set()])
+            entry[2].update(allowed)
+            return token
+
+        def public_subject(ref, allowed):
+            ref = PlotSubjectRef.model_validate(ref.model_dump(mode='json') if hasattr(ref, 'model_dump') else ref)
+            selected = ref_catalog(ref)
+            if ref.actor:
+                actor(ref.actor, allowed, selected)
+            if ref.relation_actors:
+                actor(ref.relation_actors.subject, allowed, selected)
+                actor(ref.relation_actors.object, allowed, selected)
+            return selected.subject(ref)
+
+        def relation_value(ref, value, allowed):
+            if ref.relation_actors is None:
+                raise RefusedByStructure('关系消费缺少明确两端表面身份')
+            ends = ref.relation_actors
+            if ends.subject.char_id != value['subject_id'] or ends.object.char_id != value['object_id']:
+                raise RefusedByStructure('关系呈现端点与知识底稿不一致')
+            selected = ref_catalog(ref)
+            return {'subject': actor(ends.subject, allowed, selected), 'predicate': value['predicate'],
+                    'object': actor(ends.object, allowed, selected), 'effective_from': value['effective_from'],
+                    'effective_until': value['effective_until'], 'revealed_from': value['revealed_from']}
+
+        def secret_value(value, allowed):
+            if value['fact'] is not None:
+                return {'fact': value['fact']}
+            target = value['fact_ref']
+            if target['kind'] == 'relation':
+                candidates = [ref for ref in needed.values() if ref.kind == 'relation'
+                              and ref.ref == target['relation_id']]
+                by_use = {public_ref(ref)['ref']: ref for ref in candidates}
+                if len(by_use) != 1:
+                    raise RefusedByStructure('秘密引用关系需要唯一显式关系呈现；交 Blueprint/Plan owner 订正')
+                ref = next(iter(by_use.values()))
+                return {'fact': relation_value(ref, globals_['relation', ref.ref], allowed)}
+            version = globals_.get(('world_rule', target['rule_id'] + '/' + target['version_id']))
+            if version is None:
+                raise RefusedByStructure('秘密引用规则版本缺失')
+            return {'fact': {k: version[k] for k in
+                            ('desc', 'effective_from', 'effective_until', 'revealed_from')}}
+
+
+        state_slots = {}
+        for state in visible_states:
+            reveals = [r for r in links.scope.obligations if r.kind == 'reader_reveal'
+                       and r.subject_ref.kind == 'state' and r.subject_ref.ref == state.state_id]
+            if len(reveals) > 1:
+                raise RefusedByStructure('同一状态不能有两套读者披露时间线')
+            if reveals:
+                state_slots[state.state_id] = event_slots(reveals[0])
+            elif state.state_id in bp.entry_state_refs or state.established_at.kind == 'at_entry':
+                state_slots[state.state_id] = list(slots)
+            else:
+                slot = endpoints.get(('state', state.state_id, 'established'))
+                if slot is None:
+                    raise RefusedByStructure('状态没有建立端点')
+                state_slots[state.state_id] = slots[positions[slot]:]
+
+        # 命题被允许作为历史表达，不代表可继续作为人物当前公开身份。
+        # 角色描述同时服从公开许可与已有 State 成立/解除端点；解除场仍包含在窗口内。
+        role_state_slots = {}
+        for state in visible_states:
+            permitted = list(state_slots[state.state_id])
+            if state_origins[state.state_id] == ordinal and state.established_at.kind == 'at_beat':
+                start = endpoints.get(('state', state.state_id, 'established'))
+                if start is None:
+                    raise RefusedByStructure('公开角色状态缺少成立端点')
+                permitted = [slot for slot in permitted if positions[slot] >= positions[start]]
+            ended = state_endings.get(state.state_id)
+            if ended is not None and ended < ordinal:
+                permitted = []
+            elif ended == ordinal:
+                end = endpoints.get(('state', state.state_id, 'ended'))
+                if end is None:
+                    raise RefusedByStructure('公开角色状态缺少解除端点')
+                permitted = [slot for slot in permitted if positions[slot] <= positions[end]]
+            role_state_slots[state.state_id] = permitted
+
+        global_rows = []
+        restricted = [{'kind': 'state', 'ref': ref} for ref in sorted(hidden)]
+        for ref in sorted(needed.values(), key=lambda r: r.key()):
+            if ref.kind in ('beat', 'state', 'constraint', 'chapter_boundary', 'character'):
+                continue
+            value = globals_.get(ref.raw_subject_key())
+            if value is None:
+                raise RefusedByStructure(f'共享主体不存在：{ref.kind}:{ref.ref}')
+            visible, factual = None, []
+            if ref.kind == 'secret':
+                factual = permission('secret_reveal', ref.ref, revealed_from=value['revealed_from'])
+                if factual:
+                    visible = secret_value(value, factual)
+            elif ref.kind == 'relation':
+                factual = permission('relation_visibility', ref.ref, revealed_from=value['revealed_from'])
+                if factual:
+                    visible = relation_value(ref, value, factual)
+            elif ref.kind == 'world_rule':
+                factual = permission('world_rule_reveal', ref.ref, revealed_from=value['revealed_from'])
+                if factual:
+                    visible = {k: value[k] for k in
+                               ('kind', 'desc', 'effective_from', 'effective_until', 'revealed_from')}
+            elif ref.kind == 'setting':
+                factual = permission('setting', ref.ref)
+                visible = {'content': value} if factual else None
+            state_permissions = []
+            for state in visible_states:
+                if not state.global_ref or normalize(state.global_ref,
+                        catalog_at(state_origins[state.state_id])).key() != ref.key():
+                    continue
+                permitted = state_slots[state.state_id]
+                if state.modality == 'world':
+                    if not factual or not set(permitted) <= set(factual):
+                        raise RefusedByStructure('客观状态不能越过引用命题的读者披露许可')
+                elif permitted:
+                    reveals = [r for r in links.scope.obligations if r.kind == 'reader_reveal'
+                               and r.subject_ref.kind == 'state' and r.subject_ref.ref == state.state_id]
+                    if not reveals:
+                        raise RefusedByStructure('未开放命题的信念/声称必须登记必要读者披露')
+                    state_permissions.append({'state_ref': state.state_id, 'modality': state.modality,
+                                              'allowed_slots': permitted})
+            all_allowed = [s for s in slots if s in factual or any(s in p['allowed_slots'] for p in state_permissions)]
+            if not all_allowed:
+                # 不为仅隐藏的关系创建端点人物；只有 opaque 命题身份。
+                restricted.append(public_ref(ref))
+                continue
+            if visible is None:
+                if ref.kind == 'relation':
+                    visible = relation_value(ref, value, all_allowed)
+                elif ref.kind == 'secret':
+                    visible = secret_value(value, all_allowed)
+                elif ref.kind == 'setting':
+                    visible = {'content': value}
+                else:
+                    raise RefusedByStructure('状态引用规则需要明确有据的版本')
+            global_rows.append({'subject_ref': public_subject(ref, all_allowed), 'value': visible,
+                                'allowed_slots': factual, 'state_permissions': state_permissions})
 
         events = []
         for row in links.scope.obligations:
-            if (row.subject_ref.kind, row.subject_ref.ref) not in needed:
+            actual_refs = actual_subject_uses(row.subject_ref, needed.values())
+            actual_refs = [ref for ref in actual_refs if ref.key() in needed]
+            if not actual_refs:
                 continue
             allowed = event_slots(row)
             if not allowed:
                 continue
             resolution = records[row.obligation_id].resolution
+            event_catalog = catalog_at(row.chapter_ordinal)
+            event_catalog.identity_event(resolution.identity_actors, chapter_ordinal=row.chapter_ordinal, kind=row.kind)
+            audience = None
+            if row.audience:
+                audience = ({'kind': 'character', 'actor_ref': actor(row.audience.actor, allowed, event_catalog)}
+                            if row.audience.kind == 'character' else row.audience.model_dump(mode='json'))
+            identity = [actor(a, allowed, event_catalog) for a in resolution.identity_actors]
             at_entry = row.chapter_ordinal < ordinal or resolution.kind == 'at_entry'
-            events.append({
-                'event_ref': row.obligation_id, 'kind': row.kind,
-                'subject_ref': row.subject_ref.model_dump(mode='json'),
-                'audience': row.audience.model_dump(mode='json') if row.audience else None,
-                'timing': 'at_entry' if at_entry else 'at_slot',
-                'slot': None if at_entry else allowed[0], 'allowed_slots': allowed,
-            })
+            # 一个底稿关系可能有多个合法呈现；只扩展实际使用，不发内部端点目录。
+            for ref in actual_refs:
+                public_subject_ref = public_ref(ref)
+                event_ref = actors.event(row.obligation_id, public_subject_ref)
+                events.append({'event_ref': event_ref, 'kind': row.kind,
+                    'subject_ref': public_subject_ref, 'audience': audience,
+                    'identity_actors': identity, 'timing': 'at_entry' if at_entry else 'at_slot',
+                    'slot': None if at_entry else allowed[0], 'allowed_slots': allowed})
 
-        def permission(kind: str, ref: str) -> list[str]:
-            rows = [row for row in links.scope.obligations
-                    if row.kind == kind and row.knowledge_ref == ref]
-            if len(rows) != 1:
-                raise RefusedByStructure(f'知识事件未唯一登记：{kind}:{ref}')
-            return event_slots(rows[0])
-
-        global_rows, restricted = [], [{'kind': 'state', 'ref': ref} for ref in sorted(hidden_states)]
-        for kind, ref in sorted(needed):
-            if kind in ('beat', 'state', 'constraint', 'chapter_boundary', 'character'):
-                continue
-            value = globals_.get((kind, ref))
-            if value is None:
-                raise RefusedByStructure(f'所需共享主体不存在：{kind}:{ref}')
-            visible: Any = None
-            factual_slots: list[str] = []
-            if kind == 'secret':
-                factual_slots = permission('secret_reveal', ref)
-                visible = {'fact': value['fact']}
-            elif kind == 'relation':
-                visibility = value['visibility']
-                reader = (permission('relation_visibility', ref) if visibility['kind'] == 'public'
-                          else permission('secret_reveal', visibility['secret_id']))
-                world = permission('relation', ref)
-                valid_through = value['valid_through_chapter']
-                if valid_through is not None and ordinal > valid_through:
-                    world = []
-                factual_slots = [slot for slot in slots if slot in world and slot in reader]
-                visible = {key: value[key] for key in
-                           ('subject_id', 'predicate', 'object_id',
-                            'valid_from_chapter', 'valid_through_chapter')}
-            elif kind == 'world_rule':
-                versions = []
-                active = max((v['effective_from_chapter'] for v in value['versions']
-                              if v['effective_from_chapter'] <= ordinal), default=None)
-                for version in value['versions']:
-                    if version['effective_from_chapter'] != active:
-                        continue
-                    version_ref = f"{ref}/{version['effective_from_chapter']}"
-                    world = permission('world_rule', version_ref)
-                    reader = permission('world_rule_reveal', version_ref)
-                    permitted = [slot for slot in slots if slot in world and slot in reader]
-                    names = rule_names_a_person(version['desc'], naming)
-                    if any(available_names.get(name, 1) > ordinal for name in names):
-                        # 延用叫法权限：整条规则暂不下发，不裁剪秘密或另写可见正文。
-                        asm.held_rules.add((ordinal, ref, tuple(sorted(names)[:3])))
-                        permitted = []
-                    if permitted:
-                        versions.append({'knowledge_ref': version_ref, 'desc': version['desc'],
-                                         'allowed_slots': permitted})
-                if versions:
-                    visible = {'kind': value['kind'], 'versions': versions}
-                    factual_slots = [slot for slot in slots
-                                     if any(slot in v['allowed_slots'] for v in versions)]
-            elif kind == 'character_state':
-                factual_slots = permission('character_state', ref)
-                visible = {'fate': value['fate']}
-            elif kind == 'setting':
-                factual_slots = permission('setting', ref)
-                visible = value
-            state_permissions = []
-            for state in visible_states:
-                if state.global_ref is None or _key(state.global_ref.model_dump()) != (kind, ref):
-                    continue
-                reader_events = [row for row in links.scope.obligations
-                    if row.kind == 'reader_reveal'
-                    and row.subject_ref.kind == 'state' and row.subject_ref.ref == state.state_id]
-                if len(reader_events) > 1:
-                    raise RefusedByStructure('状态不能具有两套读者披露时间线')
-                state_slots = event_slots(reader_events[0]) if reader_events else factual_slots
-                if state.modality == 'world':
-                    if not factual_slots or not set(state_slots) <= set(factual_slots):
-                        raise RefusedByStructure('客观状态的披露不能越过所引用主体的真相许可')
-                elif state_slots and reader_events:
-                    if kind == 'world_rule' and not factual_slots:
-                        raise RefusedByStructure('状态引用世界规则缺少可用版本；须明确有据命题，不能猜规则版本')
-                    state_permissions.append({'state_ref': state.state_id, 'modality': state.modality,
-                                              'allowed_slots': state_slots})
-                elif not factual_slots and not reader_events:
-                    raise RefusedByStructure('状态引用未开放的共享命题，须明确登记必要读者许可，不能默认为已知')
-            if not factual_slots and not state_permissions:
-                restricted.append({'kind': kind, 'ref': ref})
-            else:
-                if visible is None:
-                    raise RefusedByStructure('有表达许可但缺少可解析的共享主体正文')
-                global_rows.append({'subject_ref': {'kind': kind, 'ref': ref}, 'value': visible,
-                                    'allowed_slots': factual_slots,
-                                    'state_permissions': state_permissions})
-
-        # 目标可以要求暂不点破未开放主体，但不能把隐藏答案当作普通目标下发。
-        restricted_keys = {_key(row) for row in restricted}
+        goals = {}
+        restricted_keys = {(r['kind'], r['ref']) for r in restricted}
         for name in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
             goal = chapter[name]
-            if any(_key(ref) in restricted_keys for ref in goal['subject_refs']):
-                if goal['intent'] != 'withhold':
-                    raise RefusedByStructure('目标引用未开放主体，只能明确保留未知，不能提前落地')
+            normalized = [normalize(ref) for ref in goal['subject_refs']]
+            refs = [public_ref(ref) if (public_ref(ref)['kind'], public_ref(ref)['ref']) in restricted_keys
+                    else public_subject(ref, [goal['anchor_scene_ref']]) for ref in normalized]
+            if any((r['kind'], r['ref']) in restricted_keys for r in refs) and goal['intent'] != 'withhold':
+                raise RefusedByStructure('目标引用未开放命题，只能保留未知')
             for event in events:
-                if event['kind'] not in ('secret_reveal', 'relation_visibility',
-                                         'world_rule_reveal', 'reader_reveal', 'character_state'):
-                    continue
-                if (event['subject_ref'] in goal['subject_refs']
-                        and goal['intent'] != 'withhold'
-                        and goal['anchor_scene_ref'] not in event['allowed_slots']):
-                    raise RefusedByStructure('目标端点早于其必要知识披露许可')
+                if (event['subject_ref'] in refs and event['kind'] in
+                    ('secret_reveal', 'relation_visibility', 'world_rule_reveal', 'reader_reveal')
+                    and goal['intent'] != 'withhold' and goal['anchor_scene_ref'] not in event['allowed_slots']):
+                    raise RefusedByStructure('目标端点早于必要披露许可')
+            goals[name] = {**goal, 'subject_refs': refs}
 
-        scene_rows = []
+        def beat_slots(ref):
+            return [s for s in slots if any(p['beat_ref'] == ref and any(d['scene_ref'] == s
+                for d in p['deliveries']) for p in chapter['beat_placements'])]
+
+        beats = [{'beat_ref': b.beat_id, 'content': b.content,
+                  'participants': [actor(a, beat_slots(b.beat_id)) for a in b.participants]} for b in bp.beats]
+        background_rows = [{'beat_ref': ref, 'content': all_beats[ref].content,
+            'participants': [actor(a, slots, catalog_at(beat_origins[ref]))
+                             for a in all_beats[ref].participants]} for ref in sorted(background)]
+        state_rows = [{'state_ref': s.state_id, 'content': s.content,
+            'global_ref': public_subject(normalize(s.global_ref, catalog_at(state_origins[s.state_id])),
+                state_slots[s.state_id]) if s.global_ref else None,
+            'modality': s.modality, 'holder': actor(s.holder, state_slots[s.state_id],
+                catalog_at(state_origins[s.state_id]))} for s in visible_states]
+        constraints = []
+        for c in bp.constraints:
+            row = c.model_dump(exclude={'constraint_id', 'evidence_refs'}, mode='json')
+            if 'observer' in row:
+                row['observer'] = actor(c.observer, beat_slots(c.after_beat_ref))
+            constraints.append({'constraint_ref': c.constraint_id, **row})
+        scenes = []
         for scene in chapter['scenes']:
             slot = scene['slot']
             deliveries = []
-            for placement in chapter['beat_placements']:
-                for delivery in placement['deliveries']:
-                    if delivery['scene_ref'] != slot:
+            for p in chapter['beat_placements']:
+                for d in p['deliveries']:
+                    if d['scene_ref'] != slot:
                         continue
                     stages = []
-                    for ref in delivery['source_context_refs']:
+                    for ref in d['source_context_refs']:
                         stage = contexts[ref]
-                        present = stage['present_char_ids']
-                        stages.append({
-                            'time_layer': stage['time_layer'], 'place': stage['place'],
-                            'present': None if present is None or any(cid not in display for cid in present)
-                                       else [display[cid] for cid in present],
-                        })
-                    deliveries.append({
-                        'beat_ref': placement['beat_ref'],
-                        'presentation_instruction': delivery['presentation_instruction'],
-                        'stages': stages,
-                    })
-            scene_rows.append({
-                **scene, 'deliveries': deliveries,
-                'state_events': [{'state_ref': row.ref, 'endpoint': row.endpoint}
-                                 for row in compiled.bindings
-                                 if row.kind == 'state' and row.scene_ref == slot],
-                'knowledge_event_refs': [row['event_ref'] for row in events
-                                        if slot in row['allowed_slots']],
-                'constraint_refs': sorted({row.ref for row in compiled.bindings
-                                           if row.kind == 'constraint' and row.scene_ref == slot}),
-            })
-        address = []
-        for cid, character in characters.items():
-            if cid not in display:
-                continue
-            for item in character['address']:
-                if item['from_chapter'] <= ordinal:
-                    by = item['by']
-                    address.append({'who': display[cid], 'surface': item['surface'],
-                                    'by': display.get(by) if str(by).startswith('char_') else by,
-                                    'context': item['context']})
-        from novel.stages.stage4.measure import semantic_contract_of
-        row = {
-            **{key: chapter[key] for key in ('output_ordinal', 'chapter_goal', 'open_hook_goal',
-                    'end_hook_goal', 'chapter_rewrite_brief')},
+                        stages.append({'time_layer': stage['time_layer'], 'place': stage['place'],
+                            'present': None if stage['present'] is None else [actor(a, [slot]) for a in stage['present']]})
+                    deliveries.append({'beat_ref': p['beat_ref'],
+                        'presentation_instruction': d['presentation_instruction'], 'stages': stages})
+            scenes.append({**scene, 'deliveries': deliveries,
+                'state_events': [{'state_ref': r.ref, 'endpoint': r.endpoint} for r in compiled.bindings
+                                 if r.kind == 'state' and r.scene_ref == slot],
+                'knowledge_event_refs': [e['event_ref'] for e in events if slot in e['allowed_slots']],
+                'constraint_refs': sorted({r.ref for r in compiled.bindings if r.kind == 'constraint' and r.scene_ref == slot})})
+        narration = []
+        for i, segment in enumerate(bp.narration):
+            allowed = [slot for slot in slots if not segment.beat_refs
+                       or any(slot in beat_slots(ref) for ref in segment.beat_refs)]
+            narration.append({'segment': '全章' if len(bp.narration) == 1 else f'第{i+1}段',
+                'grammatical_person': segment.grammatical_person, 'narrator': actor(segment.narrator, allowed),
+                'focalizer': actor(segment.focalizer, allowed), 'pronoun_surfaces': segment.pronoun_surfaces,
+                'beat_refs': segment.beat_refs, 'allowed_slots': allowed})
+        roster = [source_catalog.describe(a, allowed_slots=[s for s in slots if s in allowed], public_states=role_state_slots)
+                  for _, (source_catalog, a, allowed) in sorted(actor_uses.items())]
+        row = {'output_ordinal': ordinal, **goals, 'chapter_rewrite_brief': chapter['chapter_rewrite_brief'],
             'semantic_contract': semantic_contract_of(bp.model_dump(mode='json')),
-            'beats': [{'beat_ref': b.beat_id, 'content': b.content,
-                       'participant_char_ids': b.participant_char_ids} for b in bp.beats],
-            'background_beats': [{'beat_ref': ref, 'content': all_beats[ref].content,
-                                  'participant_char_ids': all_beats[ref].participant_char_ids}
-                                 for ref in sorted(background)],
-            'states': [{'state_ref': s.state_id, 'content': s.content,
-                        'global_ref': s.global_ref.model_dump() if s.global_ref else None,
-                        'modality': s.modality, 'holder_char_id': s.holder_char_id}
-                       for s in visible_states],
-            'constraints': [{'constraint_ref': c.constraint_id,
-                             **c.model_dump(exclude={'constraint_id', 'evidence_refs'})}
-                            for c in bp.constraints],
-            'global_subjects': global_rows, 'restricted_subject_refs': restricted,
-            'knowledge_events': events, 'scenes': scene_rows, 'address': address,
-            'characters': [{'char_id': cid, 'display_name': name, 'role': characters[cid]['role']}
-                           for cid, name in sorted(display.items())],
-            'narration': [_name_narration(segment.model_dump(), display, i, len(bp.narration))
-                          for i, segment in enumerate(bp.narration)],
-        }
-        # 叫法替换不是秘密裁剪；仅使用已证实的记账标签替换规则。
-        typed = CtxChapter.model_validate(rename_all(row, subs))
-        result.append(typed.model_dump(mode='json', exclude_none=False))
+            'beats': beats, 'background_beats': background_rows, 'states': state_rows, 'constraints': constraints,
+            'global_subjects': global_rows, 'restricted_subject_refs': restricted, 'knowledge_events': events,
+            'scenes': scenes, 'characters': roster, 'narration': narration}
+        # 结构字段通过严格载体验证；自由文本夹带正式实体 ID 同样不能越过边界。
+        payload = json.dumps(row, ensure_ascii=False)
+        if any(cid in payload for cid in characters['characters']):
+            raise RefusedByStructure('写作材料自由文本夹带内部人物 ID；须由原 owner 免费订正')
+        result.append(CtxChapter.model_validate(row).model_dump(mode='json'))
     asm.ctx = {'chapters': result}
     return asm

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from itertools import combinations
+import json
 from typing import Any
 
 
@@ -42,7 +43,8 @@ def constraint_and_stage_readings(blueprint: dict, chapter: dict, *, knowledge_l
                     if d['scene_ref'] == slot for ref in d['source_context_refs']}
         signatures = {(
             contexts[ref]['time_layer'], contexts[ref]['place'],
-            None if contexts[ref]['present_char_ids'] is None else tuple(sorted(contexts[ref]['present_char_ids'])),
+            None if contexts[ref]['present'] is None else tuple(sorted(
+                json.dumps(actor, sort_keys=True) for actor in contexts[ref]['present'])),
         ) for ref in selected}
         stage.append({'slot': slot, 'context_refs': sorted(selected),
                       'signature_count': len(signatures), 'multiple_signatures': len(signatures) > 1,

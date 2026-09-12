@@ -173,7 +173,7 @@ def approved_core_review(store: ArtifactStore):
 
 
 def accept_and_materialize_links(ctx: RunContext):
-    """Stage4 专用的合成已审边界；真实逐章、跨章决定与 KL V2 来源落盘。
+    """Stage4 专用的合成已审边界；真实逐章、跨章决定与 KL V3 来源落盘。
 
     不补造 Stage0/1 接受。完整产品汇合由贯通测试直接运行 run_close_review。
     """
@@ -219,7 +219,7 @@ def plot_blueprints() -> dict:
         ).model_dump(mode='json') for ordinal, raw in responses().items()],
         '_provenance': {'scope_violations': [], 'context': {
             'architecture': 'plot-blueprint-v1', 'source_format': 'numbered-paragraphs-v1',
-            'global_projection_contract': 'plot-global-scope-v1'}},
+            'global_projection_contract': 'plot-global-scope-v2'}},
     }
 
 

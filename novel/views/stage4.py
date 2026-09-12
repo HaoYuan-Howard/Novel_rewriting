@@ -209,7 +209,10 @@ def _identity(store: ArtifactStore, blueprints: dict):
     plan_raw = identity_plan(blueprints, main_raw, bidx)
     from novel.stages.stage2.knowledge_links import require_current
     knowledge = require_current(store.ctx).model_dump(mode='json', by_alias=True)
-    asm = build_writer_context(plan_raw, gg_raw, blueprints, main_raw, knowledge_links=knowledge)
+    from novel.stages.stage2.grounding import read_registry
+    characters = read_registry(store).model_dump(mode='json', by_alias=True)
+    asm = build_writer_context(plan_raw, gg_raw, blueprints, main_raw,
+                               knowledge_links=knowledge, characters=characters)
     chapters = [CtxChapter.model_validate(c) for c in (asm.ctx.get('chapters') or [])]
     return plan_raw, chapters
 
@@ -239,8 +242,21 @@ def _goal_label(goal: object) -> str:
     if not isinstance(goal, dict):
         return str(goal)
     intent = str(goal.get('intent') or '')
-    refs = [
-        f'{ref.get("kind")}:{ref.get("ref")}'
-        for ref in (goal.get('subject_refs') or []) if isinstance(ref, dict)
-    ]
+    def actor_label(actor: dict) -> str:
+        # 审校页可见内部引用，不能把两份呈现压成同一 char_id，
+        # 也不能替 null 现场猜 canonical 或某个绑定。
+        return actor['presentation_ref'] if actor.get('presentation_ref') else (
+            f'{actor["char_id"]}（未指定呈现）')
+
+    def subject_label(ref: dict) -> str:
+        if ref['kind'] == 'character':
+            return 'character:' + actor_label(ref['actor'])
+        label = f'{ref["kind"]}:{ref["ref"]}'
+        if ref['kind'] == 'relation':
+            endpoints = ref['relation_actors']
+            label += f'（{actor_label(endpoints["subject"])} → {actor_label(endpoints["object"])}）'
+        return label
+
+    refs = [subject_label(ref) for ref in (goal.get('subject_refs') or [])
+            if isinstance(ref, dict)]
     return ' · '.join(part for part in (intent, '、'.join(refs)) if part)

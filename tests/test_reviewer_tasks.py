@@ -2916,7 +2916,7 @@ def test_blueprint_typed_edit_keeps_producer_identity_and_is_not_a_commander_sho
     payload = request_for(ctx)
     payload['chapters'][0]['chapter']['beats'][0]['content'] = '昨夜来信告知李宝珠，父亲已回城。'
     assert plot_edit.prepare_edit(ctx, PlotEdit.model_validate(payload)).preview().would_apply
-    stale = {**payload, 'review_token': 'bpe1_' + 'f' * 64}
+    stale = {**payload, 'review_token': 'bpe2_' + 'f' * 64}
     with pytest.raises(ProvenanceRefused, match='过期'):
         plot_edit.prepare_edit(ctx, PlotEdit.model_validate(stale))
     current, options = _new_blueprint_options(monkeypatch)

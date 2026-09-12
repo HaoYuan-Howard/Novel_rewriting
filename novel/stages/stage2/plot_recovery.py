@@ -1,10 +1,10 @@
-"""V9 的免费坐标重算与 INVALID 提升；不修改剧情，也不生成语义接受。"""
+"""V10 的免费坐标重算与 INVALID 提升；不修改剧情，也不生成语义接受。"""
 from __future__ import annotations
 
 from contracts.schema.stage2 import ChapterBlueprints
 from contracts.schema.knowledge import KnowledgeGrounding
 from novel.errors import ProvenanceRefused, UpstreamMissing
-from novel.stages.stage2.plot_compile import recompile_evidence
+from novel.stages.stage2.plot_compile import recompile_evidence, validate_book
 
 
 def rebuild(artifact: ChapterBlueprints, main_text: list[dict]) -> ChapterBlueprints:
@@ -17,6 +17,10 @@ def rebuild(artifact: ChapterBlueprints, main_text: list[dict]) -> ChapterBluepr
             chapters.append(recompile_evidence(chapter, sources[chapter.chapter_ordinal]))
         except ValueError as exc:
             raise ProvenanceRefused(str(exc)) from exc
+    try:
+        validate_book(chapters, sources)
+    except ValueError as exc:
+        raise ProvenanceRefused(str(exc)) from exc
     return artifact.model_copy(update={'blueprints': chapters})
 
 
@@ -31,7 +35,7 @@ def revalidate(ctx, store, main_text, *, actor: str, reason: str):
     candidate = rebuild(edited, main_text)
     both = extract._Both(store)
     outcomes = extract._judge_candidate(
-        both.global_g, candidate.model_dump(by_alias=True), main_text)
+        both.global_g, candidate.model_dump(by_alias=True), main_text, characters=both.characters)
     if extract._blueprint_hard_hits(outcomes):
         return False, extract._report(
             ctx, store, both, outcomes, judged_rel=extract._INVALID)
@@ -63,7 +67,7 @@ def renormalize(ctx, store, main_text):
         'provenance': ctx.rewrite_provenance(previous.provenance, by='--renormalize').model_copy(
             update={'gates_skipped': None})})
     outcomes = extract._judge_candidate(
-        both.global_g, candidate.model_dump(by_alias=True), main_text)
+        both.global_g, candidate.model_dump(by_alias=True), main_text, characters=both.characters)
     extract._require_blueprint_code_current(ctx, moment='免费证据重算提交前')
     ctx.require_observed_roots_current()
     if extract._blueprint_hard_hits(outcomes):

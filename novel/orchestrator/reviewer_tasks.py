@@ -485,6 +485,34 @@ def _stage5_trim_workpack(
     }
 
 
+def _core_wire_binding(base: str, sid: str, read_pack: dict, *, code: str | None) -> dict:
+    """冻结 Core 编辑引用目录；集合 SHA 取含证据正式主体，不能哈希阅读投影。"""
+    from contracts.artifacts import STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING
+    from contracts.schema.characters import CharacterRegistry
+    from contracts.schema.knowledge import KnowledgeGrounding
+    from novel.orchestrator.state import readonly_ctx
+    from novel.store import ArtifactStore
+    from novel import prov
+    store = ArtifactStore(readonly_ctx(paths.resolve_novel_dir(base, sid),
+        'stage2.global', prov.code_version() if code is None else code))
+    binding = read_pack['core_edit_binding']
+    characters, character_sha = store.read_own_with_sha256(CharacterRegistry, STAGE2_CHARACTERS)
+    knowledge, global_sha = store.read_own_with_sha256(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)
+    if (character_sha != binding['expected_characters_sha256']
+            or global_sha != binding['expected_global_sha256']):
+        raise ReviewerTaskError('Core native 编辑目录与本轮来源 SHA 不一致')
+    raw = knowledge.model_dump(mode='json', by_alias=True)
+    result = {'character_ids': sorted(characters.characters), 'collections': {
+        name: {'expected_collection_sha256': _canonical_json_sha256(raw[name]),
+               'subject_ids': sorted(row[key] for row in raw[name])}
+        for name, key in (('relations', 'relation_id'), ('world_rules', 'rule_id'),
+                          ('arc_secrets', 'secret_id'))}}
+    if (store.full_sha256_or_none(STAGE2_CHARACTERS) != character_sha
+            or store.full_sha256_or_none(STAGE2_GLOBAL_GROUNDING) != global_sha):
+        raise ReviewerTaskError('Core native 编辑目录读取期间来源发生变化')
+    return result
+
+
 def _workpack(
     base: str,
     sid: str,
@@ -529,6 +557,9 @@ def _workpack(
             for row in global_pack['items'] if isinstance(row, dict)
         }
         pack: dict[str, Any] = {'global': global_pack}
+        if correction is None and isinstance(global_pack.get('core_edit_binding'), dict):
+            pack['_core_wire_binding'] = _core_wire_binding(
+                base, sid, global_pack, code=None if current is None else current.code_version)
         if correction is not None:
             failure_kind = correction.get('failure_kind')
             recovery_fact_kind = correction.get('recovery_fact_kind')
@@ -1029,9 +1060,10 @@ def _design_constraint_reference_closure(
             'state_aliases': sorted(s.alias for s in (*row.subject.blind_truth.states,
                                                       *row.subject.blind_truth.inherited_states)),
             'global_aliases': sorted(s.alias for s in row.subject.blind_truth.global_subjects),
-            'participant_aliases': sorted({
-                alias for beat in row.subject.blind_truth.beats for alias in beat.participant_aliases
-            }),
+            # 人物还可只作状态持有者、观察者、关系端点或知情受众；
+            # 目录已按实际 ActorRef 呈现闭合，不能再缩成 Beat 参与者。
+            'participant_aliases': sorted(person.alias
+                for person in row.subject.blind_truth.characters),
         }
         for row in template.chapters
     }
@@ -2107,6 +2139,8 @@ def _submission_options(pack: dict[str, Any], current: OperatorNext,
         binding_fields=['schema', 'surface_seal', 'waiting_on', 'action.kind', 'action.surface',
                         'action.payload.node/actor/review_token/scope/plot_review'],
         allowed_values={'decision': ['accept', 'rework', 'uncertain', 'stop'],
+                        'review.obligation_ids': [row['obligation_id']
+                            for row in coverage['scope']['obligations']],
                         'owner': ['stage2.characters', 'stage2.global'], 'chapter_ordinals': [],
                         'purpose': '只接受已核实的 Global 主体；证据不足保持 uncertain。'})
     if isinstance(edit_binding, dict):
@@ -2114,6 +2148,9 @@ def _submission_options(pack: dict[str, Any], current: OperatorNext,
         control['editable_fields'].append('action.payload.core_edits.characters/global')
         control['binding_fields'].append('action.payload.core_edits.expected_characters_sha256/expected_global_sha256')
         control['allowed_values']['core_edits.schema'] = Stage2CoreEditBatch.model_json_schema(by_alias=True)
+        if not isinstance(pack.get('_core_wire_binding'), dict):
+            raise ReviewerTaskError('Core 免费编辑缺冻结引用目录')
+        control['allowed_values']['core_edits.native_binding'] = copy.deepcopy(pack['_core_wire_binding'])
         control['allowed_values']['core_edits.purpose'] = (
             '免费订正可同一回答提交两owner typed编辑；只保留有实际变化的一侧，另一侧为null。'
             '非编辑决定core_edits必须为null。提交编辑时decision=rework、owner=null，'

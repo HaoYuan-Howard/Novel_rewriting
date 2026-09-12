@@ -16,16 +16,23 @@ from novel.stages.stage4.plot_design import (
     build_blind_chapter_projection, compile_blind_chapter_design,
     localize_blind_chapter_edit,
 )
-from tests.test_plot_blueprint import blueprint, chapter_response
+from tests.test_plot_blueprint import blueprint, chapter_response, SOURCE
+from tests.plot_fixtures import GLOBAL
 
 
 def planner_characters():
-    return {'entities': {'characters': {
-        cid: {'canonical': label, 'role': role, 'address': [
-            {'surface': label, 'from_chapter': 1}]}
+    return {'characters': {
+        cid: {'canonical': label, 'role': role, 'first_chapter': 1,
+              'name_distinctiveness': 'common', 'first_appearance_evidence_refs': [],
+              'role_evidence_refs': [], 'aliases': [
+                  {'surface': label, 'identity_revealed_from': 1, 'evidence_refs': []}]}
         for cid, label, role in [('char_001', '娘子', '施救者与决定离开的人'),
                                   ('char_002', '夫君', '被救者与挽留的人')]
-    }}, 'canon': {}}
+    }, 'evidence_anchors': {}}
+
+
+def planner_main(count=2):
+    return [{'chapter_ordinal': number, 'text': SOURCE} for number in range(1, count + 1)]
 
 
 def key_for(values, value):
@@ -68,7 +75,7 @@ def inputs(response=None):
     first = blueprint(response=response)
     truth, mapping = build_blind_projection(
         [first.model_dump(mode='json'), blueprint(2).model_dump(mode='json')],
-        root_clean_sha1='a' * 40, global_g=planner_characters())
+        root_clean_sha1='a' * 40, characters=planner_characters(), global_g=GLOBAL, main_text=planner_main())
     public, private = build_blind_chapter_projection(
         truth, mapping, chapter_ordinal=1, root_clean_sha1='a' * 40)
     return first, truth, mapping, public, private
@@ -128,7 +135,7 @@ def test_blind_distributed_design_and_human_roundtrip():
 
 def test_planner_aliases_identify_characters_and_bind_consumed_meaning():
     _bp, truth, mapping, public, _private = inputs()
-    people = {row['canonical']: row for row in public['chapter']['characters']}
+    people = {row['surfaces'][0]: row for row in public['chapter']['characters']}
     assert set(people) == {'娘子', '夫君'}
     assert people['娘子']['alias'] != people['夫君']['alias']
     assert all(set(beat['participant_aliases']) == {p['alias'] for p in people.values()}
@@ -137,76 +144,69 @@ def test_planner_aliases_identify_characters_and_bind_consumed_meaning():
                for row in people.values())
     raw = [blueprint().model_dump(mode='json'), blueprint(2).model_dump(mode='json')]
     changed = planner_characters()
-    changed['entities']['characters']['char_001']['role'] = '修订后的有据人物身份'
-    newer, newer_mapping = build_blind_projection(raw, root_clean_sha1='a' * 40, global_g=changed)
+    changed['characters']['char_001']['role'] = '修订后的有据人物身份'
+    newer, newer_mapping = build_blind_projection(raw, root_clean_sha1='a' * 40, global_g=GLOBAL, characters=changed, main_text=planner_main())
     assert newer['chapters'][0]['characters'] != truth['chapters'][0]['characters']
     assert newer_mapping['truth_sha256'] != mapping['truth_sha256']
-    with pytest.raises(BlindPlanError, match='人物缺少'):
-        build_blind_projection(raw, root_clean_sha1='a' * 40)
+    with pytest.raises(ValueError, match='人物'):
+        build_blind_projection(raw, root_clean_sha1='a' * 40, characters={'characters': {}}, main_text=planner_main())
 
 
 def test_unconsumed_character_does_not_change_chapter_alias_payload():
     raw = [blueprint().model_dump(mode='json'), blueprint(2).model_dump(mode='json')]
-    original, _ = build_blind_projection(raw, root_clean_sha1='a' * 40, global_g=planner_characters())
+    original, _ = build_blind_projection(raw, root_clean_sha1='a' * 40, characters=planner_characters(), global_g=GLOBAL, main_text=planner_main())
     changed = planner_characters()
-    changed['entities']['characters']['char_999'] = {
+    changed['characters']['char_999'] = {
         'canonical': '无关人物', 'role': '不参与这些剧情',
-        'address': [{'surface': '无关人物', 'from_chapter': 1}]}
-    newer, _ = build_blind_projection(raw, root_clean_sha1='a' * 40, global_g=changed)
+        'aliases': [{'surface': '无关人物', 'identity_revealed_from': 1}]}
+    newer, _ = build_blind_projection(raw, root_clean_sha1='a' * 40, global_g=GLOBAL, characters=changed, main_text=planner_main())
     assert newer == original
 
 
-def test_character_state_keeps_its_alias_without_replacing_relation_participants():
+def test_dynamic_state_keeps_its_alias_without_replacing_relation_participants():
+    import hashlib
     from contracts.schema.plot import PlotChapterResponse
     from novel.stages.stage2.plot_compile import compile_chapter
     from tests.test_plot_blueprint import CHARS, SOURCE
-
     response = chapter_response()
+    endpoints = {'subject': {'char_id': 'char_001'}, 'object': {'char_id': 'char_002'}}
     response['states'] = [{
-        'state_key': key, 'content': None, 'global_ref': {'kind': kind, 'ref': ref},
-        'modality': 'world', 'holder_char_id': None,
+        'state_key': key, 'content': content, 'global_ref': ref,
+        'modality': 'world', 'holder': None,
         'established_at': {'kind': 'at_beat', 'beat_ref': 'b2'}, 'ended_at': None,
         'supersedes_state_refs': [], 'evidence': [{'start_para': 2, 'end_para': 2}],
-    } for key, kind, ref in [('st1', 'character_state', 'char_001'),
-                             ('st2', 'relation', 'rel_001')]]
+    } for key, content, ref in [('st1', '娘子仍决定离开', None),
+        ('st2', None, {'kind': 'relation', 'ref': 'rel_001', 'relation_actors': endpoints})]]
     bp = compile_chapter(PlotChapterResponse.model_validate(response), SOURCE,
-        allowed_char_ids=CHARS,
-        allowed_global_refs=frozenset({('character_state', 'char_001'), ('relation', 'rel_001')}))
-    grounding = planner_characters()
+        allowed_char_ids=CHARS, allowed_global_refs=frozenset({('relation', 'rel_001')}),
+        global_subjects={('relation', 'rel_001'): {'subject_id': 'char_001', 'object_id': 'char_002'}})
+    grounding = copy.deepcopy(GLOBAL)
     end = SOURCE.index('\n\n')
-    grounding['entities']['character_states'] = {'char_001': {
-        'fate': '仍决定离开', 'fate_evidence': {'chapter_ordinal': 1,
-            'source': {'start': end + 2, 'end': len(SOURCE), 'text': SOURCE[end + 2:]}},
-    }}
-    grounding['entities']['relations'] = [{
+    evidence = 'ev_' + '1' * 24
+    grounding['evidence_anchors'][evidence] = {
+        'chapter_ordinal': 1, 'start': 0, 'end': end,
+        'text_sha256': hashlib.sha256(SOURCE[:end].encode()).hexdigest()}
+    grounding['relations'] = [{
         'relation_id': 'rel_001', 'subject_id': 'char_001', 'object_id': 'char_002',
-        'predicate': '施救过', 'predicate_evidence': {'chapter_ordinal': 1,
-            'source': {'start': 0, 'end': end, 'text': SOURCE[:end]}},
-        'visibility': {'kind': 'public', 'from_chapter': 1},
-        'valid_from_chapter': 1, 'valid_through_chapter': None,
-    }]
-    truth, mapping = build_blind_projection(
-        [bp.model_dump(mode='json')], root_clean_sha1='a' * 40, global_g=grounding)
+        'predicate': '施救过', 'evidence_refs': [evidence],
+        'effective_from': 1, 'effective_until': None, 'revealed_from': 1}]
+    truth, mapping = build_blind_projection([bp.model_dump(mode='json')],
+        root_clean_sha1='a' * 40, global_g=grounding, characters=planner_characters(), main_text=planner_main(1))
     relation = next(row for row in truth['chapters'][0]['global_subjects'] if row['kind'] == 'relation')
-    fate = next(row for row in truth['chapters'][0]['global_subjects'] if row['kind'] == 'character_state')
-    assert mapping['subject_aliases'][relation['alias']] == {'kind': 'relation', 'ref': 'rel_001'}
-    assert mapping['subject_aliases'][fate['alias']] == {'kind': 'character_state', 'ref': 'char_001'}
+    state = next(row for row in truth['chapters'][0]['states'] if row['content'] == '娘子仍决定离开')
+    assert mapping['subject_aliases'][relation['alias']]['ref'] == 'rel_001'
+    assert mapping['subject_aliases'][state['alias']]['kind'] == 'state'
     for field, cid in [('subject_id', 'char_001'), ('object_id', 'char_002')]:
-        assert mapping['subject_aliases'][relation['value'][field]] == {'kind': 'character', 'ref': cid}
+        actor = mapping['subject_aliases'][relation['value'][field]]
+        assert actor['kind'] == 'character' and actor['actor']['char_id'] == cid
         assert relation['value'][field] in mapping['participant_aliases']
-        assert relation['value'][field] != fate['alias']
-    assert relation['value']['relation_id'] == relation['alias']
-
-    # 正式章级 A 请求再次局部化后仍保留正确施受者；命题不会进入人物目录。
+        assert relation['value'][field] != state['alias']
     public, private = build_blind_chapter_projection(
         truth, mapping, chapter_ordinal=1, root_clean_sha1='a' * 40)
     local_relation = next(row for row in public['chapter']['global_subjects'] if row['kind'] == 'relation')
     people = {row['alias'] for row in public['chapter']['characters']}
     assert {local_relation['value']['subject_id'], local_relation['value']['object_id']} <= people
-    local_fate = next(row for row in public['chapter']['global_subjects'] if row['kind'] == 'character_state')
-    assert local_fate['alias'] not in people
-    compiled = compile_response(design_response(public), truth, mapping, private)
-    assert compiled['output_ordinal'] == 1
+    assert compile_response(design_response(public), truth, mapping, private)['output_ordinal'] == 1
 
 
 def test_partial_delivery_does_not_release_full_parent_context():
@@ -221,7 +221,7 @@ def test_registered_endpoint_requires_explicit_distributed_scene():
     response = chapter_response()
     response['states'] = [{
         'state_key': 'st1', 'content': '娘子决定离开', 'global_ref': None,
-        'modality': 'world', 'holder_char_id': None,
+        'modality': 'world', 'holder': None,
         'established_at': {'kind': 'at_beat', 'beat_ref': 'b2'}, 'ended_at': None,
         'supersedes_state_refs': [], 'evidence': [{'start_para': 2, 'end_para': 2}],
     }]
@@ -256,6 +256,29 @@ def test_schema_rejects_old_fact_wire_and_duplicate_delivery():
         BlindChapterDesignResponse.model_validate(raw)
 
 
+def test_blind_keeps_two_faces_in_same_beat_and_never_inherits_hidden_role():
+    from tests.test_plot_actor_refs import compiled, INVENTORY, SOURCE as identity_source
+    people = {'characters': {cid: {
+        'canonical': rows[-1]['surface'], 'first_chapter': 1,
+        'role': '真实身份下的隐藏经历', 'aliases': [dict(row, evidence_refs=[]) for row in rows],
+    } for cid, rows in INVENTORY.items()}}
+    bp = compiled().model_dump(mode='json')
+    truth, mapping = build_blind_projection([bp], root_clean_sha1='a' * 40,
+        global_g=GLOBAL, characters=people, main_text=[{'chapter_ordinal': 1, 'text': identity_source}])
+    tokens = {key: row for key, row in mapping['participant_aliases'].items()
+              if row['char_id'] == 'char_001'}
+    assert len(tokens) == 2
+    beat = next(row for row in truth['chapters'][0]['beats'] if '认出' in row['content'])
+    assert set(beat['participant_aliases']) == set(tokens)
+    roster = [row for row in truth['chapters'][0]['characters'] if row['alias'] in tokens]
+    assert {tuple(row['surfaces']) for row in roster} == {('新邻居',), ('裴书远',)}
+    assert all(row['role'] is None and 'canonical' not in row for row in roster)
+    public, _ = build_blind_chapter_projection(truth, mapping,
+        chapter_ordinal=1, root_clean_sha1='a' * 40)
+    wire = json.dumps(public, ensure_ascii=False)
+    assert 'char_001' not in wire and 'ap01_' not in wire
+
+
 def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, grounding=None,
                                   stop_at_review=None, capture=None, blueprint_mutator=None,
                                   real_code_identity=False):
@@ -277,14 +300,14 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
     extracted = responses()
     if distributed:
         extracted[1]['beats'][1]['source_contexts'] = [
-            {'time_layer': 'present', 'place': '老宅廊下', 'present_char_ids': ['char_001'],
+            {'time_layer': 'present', 'place': '老宅廊下', 'present': [{'char_id': 'char_001'}],
              'evidence': [{'start_para': 1, 'end_para': 6}]},
-            {'time_layer': 'recall', 'place': None, 'present_char_ids': None,
+            {'time_layer': 'recall', 'place': None, 'present': None,
              'evidence': [{'start_para': 1, 'end_para': 6}]},
         ]
         extracted[1]['states'] = [{
             'state_key': 'st1', 'content': '李宝珠将来信收在袖中。',
-            'global_ref': None, 'modality': 'world', 'holder_char_id': None,
+            'global_ref': None, 'modality': 'world', 'holder': None,
             'established_at': {'kind': 'at_beat', 'beat_ref': 'b2'}, 'ended_at': None,
             'supersedes_state_refs': [], 'evidence': [{'start_para': 5, 'end_para': 5}],
         }]
@@ -394,7 +417,7 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
     compiled = merge_evidence_bindings(body, construct_feasible_binding_witness(body, catalog), catalog)
     adopt_plan_response(compiled, up.blueprints, up.bidx)
     context = build_writer_context(compiled, up.global_g, up.blueprints, up.main_text,
-                                   knowledge_links=up.knowledge_links).ctx
+                                   knowledge_links=up.knowledge_links, characters=up.characters).ctx
     assert len(context['chapters']) == 3
     rendered = json.dumps(context, ensure_ascii=False)
     assert all(key not in rendered for key in ('fact_atoms', 'required_facts', 'source_context_refs'))
@@ -489,8 +512,9 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
             if capture is not None:
                 capture['http:' + suffix] = reply.json()
         if capture is not None:
-            for suffix in ('', 'approvals', 'stage1', 'stage2/global', 'check/stage2', 'check/stage5',
-                           'run/metrics', 'stage2/blueprint-review-workpack?scope=chapter%3A1'):
+            for suffix in ('', 'approvals', 'stage1', 'stage2/global', 'stage2/characters', 'check/stage2', 'check/stage5',
+                           'run/metrics', 'stage2/blueprint-review-workpack?scope=chapter%3A1',
+                           'stage2/blueprint-review-workpack?scope=cross_chapter'):
                 reply = http.get(f'/api/novels/{ctx.sid}' + ('/' + suffix if suffix else ''))
                 assert reply.status_code == 200, reply.text
                 capture['http:' + (suffix or 'overview')] = reply.json()
@@ -498,6 +522,9 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
                 reply = http.get(f'/api/{endpoint}?sid={ctx.sid}')
                 assert reply.status_code == 200, reply.text
                 capture['api:' + endpoint] = reply.json()
+            reply = http.get('/api/enums')
+            assert reply.status_code == 200, reply.text
+            capture['api:enums'] = reply.json()
         design_view = http.get(f'/api/novels/{ctx.sid}/stage4/1').json()
         assert design_view['structure_subject_sha256'] == structure.subject_sha256
         assert design_view['plan_chapter']['beat_placements']

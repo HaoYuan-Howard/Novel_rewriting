@@ -19,6 +19,7 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     doctor --llm-transport          0 成本探测 DeepSeek DNS/TCP/TLS/HTTP；不发正文/密钥
     response-repair <sid>           0 成本：提交/放弃一份隔离的结构化响应修复稿
     approval <show|backfill|seen|gate|close-stage2|template|apply>  0 成本审批 façade
+    workflow transition <preview|apply|recover>  离线免费推进工作流 manifest，保留原任务与预算
 
 ⚠ **这张表就是 `--help` 打印出来的那一份**（argparse 的 `description` 直接取本 docstring），
 而操作规程让执行者第一步就跑 `--help`。少列一条 = 那条路对读它的人不存在。
@@ -316,6 +317,25 @@ def _parser() -> argparse.ArgumentParser:
     approval_apply.add_argument(
         '--input', required=True,
         help='模板 JSON 文件；传 - 时从 stdin 读取（正文不进入 argv）')
+
+    workflow = sub.add_parser('workflow', help='工作流契约的显式离线维护（0 成本）')
+    workflow_sub = workflow.add_subparsers(dest='workflow_cmd', required=True)
+    transition = workflow_sub.add_parser('transition', help='只推进已登记的相邻 manifest')
+    transition_sub = transition.add_subparsers(dest='transition_cmd', required=True)
+    transition_preview = transition_sub.add_parser('preview', help='核验离线来源并冻结不可变 prepared')
+    transition_preview.add_argument('--base', required=True)
+    transition_preview.add_argument('--source-code', required=True, help='干净的来源版本 checkout')
+    transition_preview.add_argument('--port', type=int, action='append', required=True, dest='service_ports')
+    transition_preview.add_argument('--stopped-pid', type=int, action='append', default=[], dest='stopped_pids')
+    transition_preview.add_argument('--offline-ack', action='store_true')
+    transition_preview.add_argument('--actor', required=True)
+    transition_preview.add_argument('--reason', required=True)
+    for command in ('apply', 'recover'):
+        transition_apply = transition_sub.add_parser(command, help='按精确 prepared SHA 免费提交或补尾')
+        transition_apply.add_argument('--base', required=True)
+        transition_apply.add_argument('--transition-id', required=True)
+        transition_apply.add_argument('--prepared-sha256', required=True)
+        transition_apply.add_argument('--yes', action='store_true')
 
     mk = sub.add_parser('mark', help='进度信标打点（0 成本，恒 exit 0）')
     mk.add_argument('sid')
@@ -2712,6 +2732,19 @@ def _cmd_mark(a: argparse.Namespace) -> int:
     return X.OK
 
 
+def _cmd_workflow(a: argparse.Namespace) -> int:
+    from novel.orchestrator import workflow_transition
+    if a.transition_cmd == 'preview':
+        result = workflow_transition.preview(base=Path(a.base), source_code=Path(a.source_code),
+            service_ports=tuple(a.service_ports), stopped_pids=tuple(a.stopped_pids),
+            actor=a.actor, reason=a.reason, offline_ack=a.offline_ack)
+    else:
+        result = getattr(workflow_transition, a.transition_cmd)(base=Path(a.base),
+            transition_id=a.transition_id, expected_prepared_sha256=a.prepared_sha256, yes=a.yes)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return X.OK
+
+
 _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
          'state': _cmd_state, 'inbox': _cmd_inbox, 'operator': _cmd_operator,
          'queue': _cmd_queue,
@@ -2720,6 +2753,7 @@ _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
          'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile, 'doctor': _cmd_doctor,
          'response-repair': _cmd_response_repair,
          'approval': _cmd_approval,
+         'workflow': _cmd_workflow,
          'mark': _cmd_mark}
 
 
@@ -2771,6 +2805,8 @@ def _normalize_operator_permit_argv(argv: list[str]) -> list[str]:
 
 def _commander_control_mutation(a: argparse.Namespace) -> bool:
     """Commander 子上下文不可递归操纵队列/恢复控制面；纯读模板仍允许。"""
+    if a.cmd == 'workflow':
+        return True
     if a.cmd == 'queue':
         return not bool(a.plan_only)
     if a.cmd in ('queue-cancel', 'queue-resume'):

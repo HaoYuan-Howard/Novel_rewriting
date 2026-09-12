@@ -314,6 +314,9 @@ def uses_compact_wire(task: object) -> bool:
     """只按真实模板判断本轮是否属于 compact scope 或 apply-edit。"""
     if getattr(task, 'waiting_on', None) == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
         return True
+    from novel.orchestrator import stage2_core_review_wire
+    if stage2_core_review_wire.matches(task):
+        return True
     if stage2_scope_wire.exact_request(task) is not None:
         return True
     options = getattr(task, 'submission_options', None)
@@ -515,6 +518,9 @@ def _post_review_wire_type(value: Any, digest: str) -> type[StrictModel]:
 
 def response_model(task: _ReviewerTaskLike) -> type[StrictModel]:
     """从当前 exact request 铸一份 portable、关闭式的动态响应模型。"""
+    from novel.orchestrator import stage2_core_review_wire
+    if stage2_core_review_wire.matches(task):
+        return stage2_core_review_wire.response_model(task)
     if stage2_scope_wire.exact_request(task) is not None:
         return stage2_scope_wire.response_model(task)
     option_id, exact = _apply_edit_option(task)
@@ -583,6 +589,9 @@ def response_model(task: _ReviewerTaskLike) -> type[StrictModel]:
 
 def response_schema(task: _ReviewerTaskLike) -> dict[str, Any]:
     """返回与 Executor 共用同一归一口的 provider structured-output schema。"""
+    from novel.orchestrator import stage2_core_review_wire
+    if stage2_core_review_wire.matches(task):
+        return stage2_core_review_wire.response_schema(task)
     return agent_json_schema(response_model(task))
 
 
@@ -607,6 +616,9 @@ def prompt_addendum(task: object) -> str:
     if getattr(task, 'waiting_on', None) == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
         from novel.orchestrator import stage2_blueprint_wire
         return stage2_blueprint_wire.prompt_addendum()
+    from novel.orchestrator import stage2_core_review_wire
+    if stage2_core_review_wire.matches(task):
+        return stage2_core_review_wire.prompt_addendum(task)
     if stage2_scope_wire.exact_request(task) is not None:
         return stage2_scope_wire.prompt_addendum(task)
     if not uses_compact_wire(task):
@@ -1122,6 +1134,12 @@ def assemble(
         from novel.orchestrator import stage2_blueprint_wire
         try:
             return stage2_blueprint_wire.assemble(dict(response_document))
+        except ValueError as exc:
+            raise Stage2ReviewerWireError(str(exc)) from exc
+    from novel.orchestrator import stage2_core_review_wire
+    if stage2_core_review_wire.matches(task):
+        try:
+            return stage2_core_review_wire.assemble(task, response_document)
         except ValueError as exc:
             raise Stage2ReviewerWireError(str(exc)) from exc
     if stage2_scope_wire.exact_request(task) is not None:

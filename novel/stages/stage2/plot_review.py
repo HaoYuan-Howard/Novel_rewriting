@@ -17,7 +17,7 @@ from contracts.schema.plot_review import (
 )
 from novel.consumption import compile_scope_inputs, consumed_digest
 from novel.stages.stage2.paragraphs import span_of
-from novel.stages.stage2.plot_compile import validate_evidence
+from novel.stages.stage2.plot_compile import validate_evidence, actor_refs
 
 CONTRACT = 'stage2-plot-scope-review-v1'
 
@@ -111,6 +111,22 @@ def build_workpack(
                               provided_sources[dependency['chapter_ordinal']])
         if isinstance(dependency, list):
             for subject in dependency:
+                if isinstance(subject, dict):
+                    for binding in subject.get('actor_bindings', []):
+                        for support in [binding, *([binding['public_state']] if binding.get('public_state') else [])]:
+                            from novel.stages.stage2.plot_compile import source_digest
+                            ordinal = support['chapter_ordinal']
+                            text = source_texts.get(ordinal)
+                            if text is None or source_digest(text) != support['source_sha256']:
+                                raise ValueError('携入身份的原文来源不一致')
+                            for anchor in support['evidence_anchors']:
+                                span = span_of(text, anchor['start_para'], anchor['end_para'])
+                                if span != (anchor['start'], anchor['end']):
+                                    raise ValueError('携入身份的证据坐标不一致')
+                                if ordinal not in provided_sources and not any(
+                                        left <= span[0] < span[1] <= right
+                                        for left, right in provided_ranges.get(ordinal, [])):
+                                    raise ValueError('携入身份的必要证据没有提供给本轮审阅')
                 if not isinstance(subject, dict) or 'kind' not in subject:
                     continue
                 for anchor in subject.get('evidence', []):
@@ -187,8 +203,7 @@ def apply_review(
         subjects.update(('beat', row.beat_id) for row in chapter.beats)
         subjects.update(('state', row.state_id) for row in chapter.states)
         subjects.update(('constraint', row.constraint_id) for row in chapter.constraints)
-        subjects.update(('character', cid)
-                        for row in chapter.beats for cid in row.participant_char_ids)
+        subjects.update(('character', row.char_id) for row in actor_refs(chapter))
         evidence[chapter.chapter_ordinal] = {
             row.evidence_id for row in chapter.evidence_anchors}
     support_ranges = {}
@@ -210,11 +225,15 @@ def apply_review(
                     subjects.add((row['subject_ref']['kind'], row['subject_ref']['ref']))
                     for anchor in row['evidence']:
                         support_ranges.setdefault(row['chapter_ordinal'], set()).add(anchor['evidence_id'])
+    provided_actors = {row.key() for row in actor_refs([blueprints, dependencies])}
     new_ids = {}
     updated = dict(existing)
     for issue in response.new_issues:
         if not {(row.kind, row.ref) for row in issue.subjects} <= subjects:
             raise ValueError('新问题必须指向当前可见主体；漏抽问题引用章边界')
+        for actor_ref in actor_refs(issue):
+            if actor_ref.presentation_ref and actor_ref.key() not in provided_actors:
+                raise ValueError('问题不能引用当前材料未提供的表面身份')
         for anchor in issue.evidence_refs:
             if anchor.evidence_ref in evidence.get(anchor.chapter_ordinal, set()):
                 continue

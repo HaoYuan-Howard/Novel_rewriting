@@ -16,12 +16,13 @@ from novel import paths
 from novel.consumption import consumed_digest, plot_global_projection
 from novel.errors import ProvenanceRefused, TerminalState, UpstreamMissing
 from novel.store import ArtifactStore
-from novel.stages.stage2.plot_compile import compile_chapter, response_projection
+from novel.stages.stage2.plot_compile import compile_chapter, response_projection, state_materials, validate_book
 
 REL, REQUEST_REL = STAGE2_CHAPTER_BLUEPRINTS, STAGE2_BLUEPRINT_EDIT
 COLLECTIONS = (('beats', 'beat_id', 'beat_key', 'b'),
                ('states', 'state_id', 'state_key', 'st'),
-               ('constraints', 'constraint_id', 'constraint_key', 'c'))
+               ('constraints', 'constraint_id', 'constraint_key', 'c'),
+               ('actor_bindings', 'presentation_id', 'presentation_key', 'ap'))
 
 
 def subject(artifact: ChapterBlueprints) -> str:
@@ -37,17 +38,21 @@ def _current(store):
     """
     from contracts.schema.stage1 import MainText
     from contracts.artifacts import STAGE1_MAIN_TEXT
-    from novel.stages.stage2.plot_compile import validate_book
+    from novel.stages.stage2.plot_compile import validate_book_sources
     rel = paths.invalid_of(REL) if store.exists(paths.invalid_of(REL)) else REL
     artifact = store.read_own(ChapterBlueprints, rel)[0]
     main = store.read(MainText, STAGE1_MAIN_TEXT)
-    validate_book(artifact.blueprints, {row.chapter_ordinal: row.text for row in main.root})
+    try:
+        validate_book_sources(artifact.blueprints, {row.chapter_ordinal: row.text for row in main.root})
+    except ValueError as exc:
+        from novel.errors import ArtifactUnreadable
+        raise ArtifactUnreadable('蓝图编辑基线的源文或证据尚未闭合：' + str(exc)) from exc
     return rel, artifact
 
 
 def _token(store, artifact) -> str:
     from novel.stages.stage2.plot_inputs import read_input_digests
-    return 'bpe1_' + consumed_digest({
+    return 'bpe2_' + consumed_digest({
         'subject': subject(artifact), 'inputs': read_input_digests(store),
         'history': [row.model_dump(mode='json') for row in artifact.provenance.plot_revisions],
         'code': store.ctx.code,
@@ -99,14 +104,16 @@ def _rewrite_refs(value, mapping):
     if not isinstance(value, dict):
         return value
     scalar = {'beat_id', 'state_id', 'constraint_id', 'beat_ref', 'before_beat_ref',
-              'after_beat_ref', 'target_beat_ref', 'state_ref', 'at_beat_ref'}
-    many = {'entry_state_refs', 'carry_out_refs', 'supersedes_state_refs'}
+              'after_beat_ref', 'target_beat_ref', 'state_ref', 'at_beat_ref',
+              'presentation_id', 'presentation_ref', 'public_state_ref'}
+    many = {'entry_state_refs', 'carry_out_refs', 'supersedes_state_refs', 'beat_refs'}
     return {key: (mapping.get(item, item) if key in scalar else
                   [mapping.get(ref, ref) for ref in item] if key in many else
                   _rewrite_refs(item, mapping)) for key, item in value.items()}
 
 
-def _compile_edit(edit, previous, source, *, available, chars, globals_, retired):
+def _compile_edit(edit, previous, source, *, available, chars, globals_, retired,
+                  character_bindings=None, actor_bindings=None, global_subjects=None):
     old = {collection: {getattr(row, field): row for row in getattr(previous, collection)}
            for collection, field, _, _ in COLLECTIONS}
     raw = edit.chapter.model_dump(mode='json')
@@ -117,7 +124,9 @@ def _compile_edit(edit, previous, source, *, available, chars, globals_, retired
                     if ref.startswith(f'{prefix}{previous.chapter_ordinal:02d}_')]
         starts[prefix] = max(matching, default=0) + 1
     compiled = compile_chapter(edit.chapter, source, allowed_char_ids=chars,
-        allowed_entry_state_refs=available, allowed_global_refs=globals_, next_ids=starts)
+        allowed_entry_state_refs=available, allowed_global_refs=globals_, next_ids=starts,
+        character_bindings=character_bindings, allowed_actor_bindings=actor_bindings,
+        global_subjects=global_subjects)
     mapping, changes, tombstones = {}, [], []
     for collection, field, key, _ in COLLECTIONS:
         outputs = {row[key]: getattr(formal, field) for row, formal in zip(
@@ -166,7 +175,8 @@ def prepare_edit(ctx, request: PlotEdit, *, allow_unchanged: bool = False) -> Pr
     store = ArtifactStore(ctx)
     main = extract._read_main_text(store)
     projection, _ = extract._require_blueprint_character_projection(store)
-    visible = blueprint_inventory_from_projection(projection)['visible_character_refs']
+    inventory = blueprint_inventory_from_projection(projection)
+    visible = inventory['visible_character_refs']
     knowledge = store.read(KnowledgeGrounding, extract.GLOBAL_REL).model_dump(mode='json', by_alias=True)
     _, previous = _current(store)
     if request.review_token != _token(store, previous):
@@ -182,12 +192,17 @@ def prepare_edit(ctx, request: PlotEdit, *, allow_unchanged: bool = False) -> Pr
     for chapter in previous.blueprints:
         ordinal = chapter.chapter_ordinal
         if ordinal in target:
-            # 允许预览旧依赖的断点；全书唯一 HARD 检查仍拒绝未重绑的状态。
+            # 问题稿保留在模板中；新候选只能消费上章实际携入的状态及呈现。
             candidate, identities, removed = _compile_edit(target[ordinal], chapter, sources[ordinal],
-                available=carried | frozenset(chapter.entry_state_refs),
+                available=carried,
                 chars=frozenset(visible.get(ordinal, {})),
                 globals_=frozenset((row['kind'], row['ref']) for row in plot_global_projection(knowledge, ordinal)),
-                retired=retired)
+                retired=retired,
+                character_bindings=inventory['character_bindings'].get(ordinal, {}),
+                actor_bindings={row['binding']['presentation_id']: row['binding']
+                    for material in state_materials(chapters, sorted(carried))
+                    for row in material['actor_bindings']},
+                global_subjects={(row['kind'], row['ref']): row for row in plot_global_projection(knowledge, ordinal)})
             if candidate != chapter:
                 changed.append(ordinal)
                 changes.extend(identities)
@@ -196,6 +211,7 @@ def prepare_edit(ctx, request: PlotEdit, *, allow_unchanged: bool = False) -> Pr
         else:
             chapters.append(chapter)
         carried = frozenset(chapters[-1].carry_out_refs)
+    validate_book(chapters, sources)
     if not changed and not allow_unchanged:
         raise TerminalState('Blueprint 编辑没有改变任何主体')
     rewritten = ctx.rewrite_provenance(previous.provenance, by='--apply-edit').model_copy(update={'origin': 'human'})
@@ -206,7 +222,8 @@ def prepare_edit(ctx, request: PlotEdit, *, allow_unchanged: bool = False) -> Pr
         tombstones=[row.model_copy(update={'reason': request.reason}) for row in tombstones])
     artifact = artifact.model_copy(update={'provenance': artifact.provenance.model_copy(
         update={'plot_revisions': [*previous.provenance.plot_revisions, record]})})
-    outcomes = extract._judge_candidate(None, artifact.model_dump(mode='json', by_alias=True), main)
+    outcomes = extract._judge_candidate(knowledge, artifact.model_dump(mode='json', by_alias=True),
+                                        main, characters=extract._read_characters(store))
     return PreparedPlotEdit(request, artifact, tuple(changed),
                             tuple(extract._blueprint_hard_hits(outcomes)), record)
 

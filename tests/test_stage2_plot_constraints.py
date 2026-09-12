@@ -18,7 +18,7 @@ from tests.test_stage2_generation import _ctx
 
 def _relation(kind='response_to', before='b1', after='b2'):
     return {'constraint_key': 'c1', 'kind': kind, 'before_beat_ref': before,
-            'after_beat_ref': after, 'observer_char_id': 'char_001' if kind == 'observes' else None,
+            'after_beat_ref': after, 'observer': {'char_id': 'char_001'} if kind == 'observes' else None,
             'evidence': [{'start_para': 1, 'end_para': 2}]}
 
 
@@ -33,7 +33,7 @@ def test_constraints_keep_explicit_semantic_endpoints_without_fact_database(kind
     chapter = _compile([_relation(kind)])
     row = chapter.constraints[0]
     assert (row.before_beat_ref, row.after_beat_ref) == ('b01_01', 'b01_02')
-    assert row.observer_char_id == ('char_001' if kind == 'observes' else None)
+    assert (row.observer.char_id if row.observer else None) == ('char_001' if kind == 'observes' else None)
     assert 'enforcement' not in row.model_dump()
 
 
@@ -48,7 +48,7 @@ def test_constraints_refuse_dangling_self_cycle_or_wrong_observer(damage):
     elif damage == 'observer_missing':
         row['kind'] = 'observes'
     elif damage == 'observer_wrong_kind':
-        row['observer_char_id'] = 'char_001'
+        row['observer'] = {'char_id': 'char_001'}
     else:
         row['kind'] = 'cause'
         relations.append({**_relation('cause', 'b2', 'b1'), 'constraint_key': 'c2'})
@@ -64,13 +64,18 @@ def test_retired_dual_enforcement_cannot_enter_current_response(enforcement):
 
 
 def test_planner_projection_preserves_constraint_semantics_without_source_ids():
-    chapter = _compile([_relation('observes')])
+    source = '我这娘子当初因夫君富有且好看而救了他。\n\n今天他跪下挽留，我仍决定离开。'
+    raw = chapter_response()
+    raw['constraints'] = [_relation('observes')]
+    chapter = compile_chapter(PlotChapterResponse.model_validate(raw), source, allowed_char_ids=CHARS)
     from tests.test_plot_design import planner_characters
+    from tests.plot_fixtures import GLOBAL
     view, mapping = build_blind_projection({'blueprints': [chapter.model_dump(mode='json')]},
-        root_clean_sha1='2' * 40, global_g=planner_characters())
+        root_clean_sha1='2' * 40, global_g=GLOBAL, characters=planner_characters(),
+        main_text=[{'chapter_ordinal': 1, 'text': source}])
     wire = json.dumps(view, ensure_ascii=False)
     observer = next(alias for alias, ref in mapping['subject_aliases'].items()
-                    if ref == {'kind': 'character', 'ref': 'char_001'})
+                    if ref['kind'] == 'character' and ref['ref'] == 'char_001')
     assert 'observes' in wire and observer in wire
     assert not any(forbidden in wire for forbidden in ('b01_', 'e01_', 'start_para', 'source_sha256'))
 
@@ -103,7 +108,7 @@ def test_bad_edit_cannot_modify_formal_artifact(tmp_path, damage):
     ctx = _ctx(book, 'stage2.blueprint', paid=False)
     raw = request_for(ctx)
     if damage == 'stale':
-        raw['review_token'] = 'bpe1_' + 'f' * 64
+        raw['review_token'] = 'bpe2_' + 'f' * 64
     elif damage == 'cycle':
         raw['chapters'][0]['chapter']['constraints'] = [
             _relation('cause'), {**_relation('cause', 'b2', 'b1'), 'constraint_key': 'c2'}]

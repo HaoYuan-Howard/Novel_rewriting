@@ -26,27 +26,28 @@ def chapter_response(ordinal: int = 1) -> dict:
         'chapter_ordinal': ordinal, 'chapter_function': '回顾施救动机并决定离开',
         'beats': [
             {'beat_key': 'b1', 'content': CONTENT,
-             'participant_char_ids': ['char_001', 'char_002'],
+             'participants': [{'char_id': 'char_001'}, {'char_id': 'char_002'}],
              'evidence': [{'start_para': 1, 'end_para': 1}],
              'source_contexts': [{
                  'evidence': [{'start_para': 1, 'end_para': 1}],
                  'time_layer': 'recall', 'place': None,
-                 'present_char_ids': ['char_001', 'char_002'],
+                 'present': [{'char_id': 'char_001'}, {'char_id': 'char_002'}],
              }]},
             {'beat_key': 'b2', 'content': '夫君恳切挽留，娘子仍决定离开。',
-             'participant_char_ids': ['char_001', 'char_002'],
+             'participants': [{'char_id': 'char_001'}, {'char_id': 'char_002'}],
              'evidence': [{'start_para': 2, 'end_para': 2}],
              'source_contexts': [{
                  'evidence': [{'start_para': 2, 'end_para': 2}],
                  'time_layer': 'present', 'place': None,
-                 'present_char_ids': ['char_001', 'char_002'],
+                 'present': [{'char_id': 'char_001'}, {'char_id': 'char_002'}],
              }]},
         ],
         'states': [], 'inherited_state_endings': [], 'constraints': [],
         'entry_state_refs': [], 'carry_out_refs': [],
         'narration': [{
-            'grammatical_person': 'first', 'narrator_char_id': 'char_001',
-            'focalizer_char_id': 'char_001', 'pronoun_surfaces': ['我'],
+            'grammatical_person': 'first', 'narrator': {'char_id': 'char_001'},
+            'focalizer': {'char_id': 'char_001'}, 'pronoun_surfaces': ['我'],
+            'beat_refs': [], 'evidence': [{'start_para': 1, 'end_para': 2}],
         }],
     }
 
@@ -103,11 +104,13 @@ def formal_writer_view(chapter, arrangement, *, knowledge=()):
         for delivery in p['deliveries']:
             delivery['source_context_refs'] = contexts[p['beat_ref']]
     current['anchor_bindings'] = [r.model_dump(mode='json') for r in arrangement.anchor_bindings]
-    ground = {'entities': {'characters': {
-        cid: {'canonical': name, 'role': role, 'name_distinctiveness': 'high', 'address': [
-            {'surface': name, 'by': 'narration', 'context': 'reference', 'from_chapter': 1}]}
+    from tests.plot_fixtures import GLOBAL
+    ground = GLOBAL
+    characters = {'characters': {
+        cid: {'canonical': name, 'role': role, 'name_distinctiveness': 'high', 'first_chapter': 1,
+              'aliases': [{'surface': name, 'identity_revealed_from': 1, 'evidence_refs': []}]}
         for cid, name, role in [('char_001', '我', '施救者'), ('char_002', '他', '被救者')]
-    }, 'relations': [], 'character_states': {}}, 'canon': {'secrets': [], 'world_rules': [], 'setting': {}}}
+    }, 'evidence_anchors': {}}
     knowledge_links = links()
     for i, trigger in enumerate(knowledge):
         event_id = f'ke_test_{i}'
@@ -125,7 +128,7 @@ def formal_writer_view(chapter, arrangement, *, knowledge=()):
             'obligation_id': trigger.knowledge_ref, 'expected_subject_sha256': 'b' * 64,
             'resolution': {'kind': 'at_beats', 'trigger_beat_ref': trigger.trigger_beat_ref, 'subject_refs': [subject]},
             'actor': 'test', 'reason': '显式许可反例', 'source_decision_sha256': 'c' * 64})
-    return build_writer_context(plan, ground, bps, main, knowledge_links=knowledge_links).ctx['chapters'][-1]
+    return build_writer_context(plan, ground, bps, main, knowledge_links=knowledge_links, characters=characters).ctx['chapters'][-1]
 
 
 def test_two_chapter_compile_and_single_copy_writer_projection():
@@ -137,7 +140,11 @@ def test_two_chapter_compile_and_single_copy_writer_projection():
         assert wire.count(view['beats'][0]['content']) == 1
         assert len(view['beats']) == 2
         assert 'fact_atoms' not in wire and 'required_facts' not in wire
-        assert len(chapter.evidence_anchors) == 2
+        # 两个 Beat 各自一段；叙述覆盖两段，形成第三个合法范围。相同范围仍只编译一次。
+        pairs = [(a.start_para, a.end_para) for a in chapter.evidence_anchors]
+        assert len(pairs) == len(set(pairs)) == 3
+        assert set(pairs) == {(1, 1), (2, 2), (1, 2)}
+        assert chapter.narration[0].evidence_refs == [chapter.evidence_anchors[2].evidence_id]
         assert 'text' not in chapter.evidence_anchors[0].model_dump()
         assert chapter.beats[0].source_contexts[0].evidence_refs == chapter.beats[0].evidence_refs
 
@@ -164,7 +171,8 @@ def test_distributed_knowledge_must_bind_explicitly_and_not_open_at_first_refere
     plan.anchor_bindings.append(PlotAnchorBinding(
         kind='knowledge', ref='decision:leave', endpoint='trigger', scene_ref='s02'))
     view = formal_writer_view(chapter, plan, knowledge=[trigger])
-    assert view['knowledge_events'][0]['event_ref'] == 'decision:leave'
+    assert view['knowledge_events'][0]['event_ref'].startswith('event_')
+    assert 'decision:leave' not in json.dumps(view['knowledge_events'])
     assert view['knowledge_events'][0]['allowed_slots'] == ['s02']
 
 
@@ -195,8 +203,8 @@ def test_evidence_source_drift_and_coordinates_refused():
 
 def test_unknown_character_and_unproven_entry_state_refused():
     response = chapter_response()
-    response['beats'][0]['participant_char_ids'].append('char_999')
-    with pytest.raises(ValueError, match='不可见人物'):
+    response['beats'][0]['participants'].append({'char_id': 'char_999'})
+    with pytest.raises(ValueError, match='未提供的人物'):
         blueprint(response=response)
     response = chapter_response()
     response['entry_state_refs'] = ['st99_01']
@@ -215,14 +223,14 @@ def test_literal_is_evidenced_and_claim_is_not_world_state():
     response['constraints'] = []
     response['states'] = [{
         'state_key': 'st1', 'content': '夫君声称自己有钱。', 'global_ref': None,
-        'modality': 'claim', 'holder_char_id': 'char_002',
+        'modality': 'claim', 'holder': {'char_id': 'char_002'},
         'established_at': {'kind': 'at_beat', 'beat_ref': 'b2'}, 'ended_at': None,
         'supersedes_state_refs': [], 'evidence': [{'start_para': 2, 'end_para': 2}],
     }]
     response['carry_out_refs'] = ['st1']
     result = blueprint(response=response)
     assert result.states[0].modality == 'claim'
-    response['states'][0]['holder_char_id'] = None
+    response['states'][0]['holder'] = None
     with pytest.raises(ValueError, match='明确持有者'):
         blueprint(response=response)
 
@@ -242,7 +250,8 @@ def test_planner_view_does_not_include_source_order_or_coordinates():
     from novel.stages.stage4.plot_design import build_blind_projection
     from tests.test_plot_design import planner_characters
     truth, mapping = build_blind_projection({'blueprints': [blueprint().model_dump()]},
-        root_clean_sha1='1' * 40, global_g=planner_characters())
+        root_clean_sha1='1' * 40, global_g=__import__('tests.plot_fixtures', fromlist=['GLOBAL']).GLOBAL,
+        characters=planner_characters(), main_text=[{'chapter_ordinal': 1, 'text': SOURCE}])
     view = truth['chapters'][0]
     wire = json.dumps(view, ensure_ascii=False)
     assert 'source_contexts' not in wire
@@ -261,7 +270,7 @@ def test_inherited_state_can_end_without_rewriting_previous_chapter():
     first_response = chapter_response()
     first_response['states'] = [{
         'state_key': 'st1', 'content': '娘子仍决定离开。', 'global_ref': None,
-        'modality': 'world', 'holder_char_id': None,
+        'modality': 'world', 'holder': None,
         'established_at': {'kind': 'at_beat', 'beat_ref': 'b2'}, 'ended_at': None,
         'supersedes_state_refs': [], 'evidence': [{'start_para': 2, 'end_para': 2}],
     }]
@@ -296,7 +305,8 @@ def test_inherited_state_can_end_without_rewriting_previous_chapter():
     from novel.stages.stage4.plot_design import build_blind_projection
     from tests.test_plot_design import planner_characters
     truth, mapping = build_blind_projection({'blueprints': [first.model_dump(), second.model_dump()]},
-        root_clean_sha1='2' * 40, global_g=planner_characters())
+        root_clean_sha1='2' * 40, global_g=__import__('tests.plot_fixtures', fromlist=['GLOBAL']).GLOBAL,
+        characters=planner_characters(), main_text=[{'chapter_ordinal': n, 'text': SOURCE} for n in (1, 2)])
     view = truth['chapters'][1]
     assert 'st01_01' not in json.dumps(view)
     assert next(k for k, v in mapping['subject_aliases'].items() if v['ref'] == 'st01_01').startswith('a_')

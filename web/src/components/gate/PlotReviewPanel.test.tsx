@@ -30,9 +30,10 @@ it('知识时点默认保持未决，明确选择已有节点并提交同一范�
   const id = 'secret_reveal:secret_01:1'
   pack.knowledge_links.scope.obligations = [{
     obligation_id: id, kind: 'secret_reveal', knowledge_ref: 'secret_01',
-    subject_ref: { kind: 'secret', ref: 'secret_01' }, audience: null,
+    subject_ref: { kind: 'secret', ref: 'secret_01', actor: null, relation_actors: null }, audience: null,
     chapter_ordinal: 1, subject_sha256: 'e'.repeat(64),
-    candidate_subject_refs: [{ kind: 'beat', ref: 'b01_01' }], entry_subject_refs: [],
+    candidate_subject_refs: [{ kind: 'beat', ref: 'b01_01', actor: null, relation_actors: null }],
+    entry_subject_refs: [], candidate_actors: [],
   }]
   pack.knowledge_links.pending_obligation_ids = [id]
   renderRoute(<PlotReviewPanel sid={SAMPLE_SID} pack={pack} />, '/n/' + SAMPLE_SID + '/read/1')
@@ -96,7 +97,7 @@ it('已有剧情和状态不会自动生成传播事件，空操作仍需显式�
   // 只添加有来信依据的持续信念；界面不能因此自行认定读者或其他人物的知晓时点。
   pack.material.blueprints[0].states = [{
     state_id: 'st01_01', content: '李宝珠相信父亲已经回城。', global_ref: null,
-    modality: 'belief', holder_char_id: 'char_001',
+    modality: 'belief', holder: { char_id: 'char_001', presentation_ref: null },
     established_at: { kind: 'at_beat', beat_ref: 'b01_01' }, ended_at: null,
     supersedes_state_refs: [], evidence_refs: ['e01_01'],
   }]
@@ -136,7 +137,8 @@ it('必要人物传播携原文证据、已有主体及触发点原样提交同�
 
 it('显示已登记事件与身份，显式撤回保留 CAS 和理由', async () => {
   const { pack, submit } = await setup()
-  const event = { kind: 'reader_reveal' as const, subject_ref: { kind: 'beat' as const, ref: 'b01_01' },
+  const event = { kind: 'reader_reveal' as const,
+    subject_ref: { kind: 'beat' as const, ref: 'b01_01', actor: null, relation_actors: null },
     audience: null, chapter_ordinal: 1, evidence_refs: [{ chapter_ordinal: 1, evidence_ref: 'e01_01' }] }
   const sha = 'e'.repeat(64)
   pack.knowledge_links.scope.registered_events = [{ event_id: 'ke_letter', event_sha256: sha,

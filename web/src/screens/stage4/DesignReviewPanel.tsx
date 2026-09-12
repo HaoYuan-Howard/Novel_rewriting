@@ -37,7 +37,7 @@ function constraintComplete(
     || !arity.every((value) => Number.isInteger(value) && value >= 0)) return false
   const scenes = chapter.subject.chapter.scenes.map((scene) => scene.candidate_scene_id)
   const truth = chapter.subject.blind_truth
-  const aliases = [...truth.beats.flatMap((beat) => [beat.alias, ...beat.participant_aliases]),
+  const aliases = [...truth.beats.map((beat) => beat.alias), ...truth.characters.map((person) => person.alias),
     ...truth.states.map((s) => s.alias), ...truth.inherited_states.map((s) => s.alias),
     ...truth.constraints.map((c) => c.alias), ...truth.global_subjects.map((g) => g.alias),
     ...truth.endpoints.map((e) => e.endpoint_alias)]
@@ -690,10 +690,8 @@ function ChapterReviewEditor({
   const truth = chapter.subject.blind_truth
   truth.beats.forEach((beat) => {
     aliasDescriptions.set(beat.alias, beat.content)
-    beat.participant_aliases.forEach((alias) => {
-      if (!aliasDescriptions.has(alias)) aliasDescriptions.set(alias, '剧情参与者')
-    })
   })
+  truth.characters.forEach((person) => aliasDescriptions.set(person.alias, person.surfaces.join('、')))
   for (const row of [...truth.states, ...truth.inherited_states]) {
     aliasDescriptions.set(row.alias, row.content ?? '共享状态主体')
   }

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from typing import Any, TypedDict
+from collections.abc import Mapping, Sequence
 
 from contracts.schema.stage2 import BlueprintCharacterProjection
 from novel.core.text import norm
@@ -20,6 +21,20 @@ from novel.core.text import norm
 class BlueprintCharacterPromptInventory(TypedDict):
     past_attested_surfaces: dict[int, list[str]]
     visible_character_refs: dict[int, dict[str, list[str]]]
+    character_bindings: dict[int, dict[str, list[dict[str, Any]]]]
+
+
+def null_binding_conflict(names: Sequence[Mapping[str, Any]], surfaces: Sequence[str], *,
+                          chapter_ordinal: int) -> bool:
+    """唯一显式绑定不能吸收另一个既有公开身份。
+
+    names 必须来自截至使用章已出现的登记称谓候选。若存在绑定外称谓，且候选中的身份
+    映射本章或未来才揭示，null 仍有两种解释；新旧绑定两个方向使用同一判据。这里只拒绝歧义，
+    不猜测对应关系、铸造历史绑定或代替同章 KnowledgeLinks 披露端点。
+    """
+    selected = set(surfaces)
+    return (any(row['identity_revealed_from'] >= chapter_ordinal for row in names)
+            and any(row['surface'] not in selected for row in names))
 
 
 def character_ref_inventory(
@@ -79,14 +94,12 @@ def visible_character_refs_with_drops(
     characters: dict[str, dict[str, Any]],
     main_text: list[dict[str, Any]],
 ) -> tuple[dict[int, dict[str, list[str]]], dict[int, list[list[str]]]]:
-    """返回逐章最终候选，以及因无法区分而整组剔除的 ``char_id``。
+    """返回逐章最终候选，以及需要原文语义消歧的同名字面组。
 
     这是分析侧内部实体候选，仅保留截止本章出现的字面；identity_revealed_from
     不能拿来禁用已经出现的称谓。隐秘同人关系的展示与映射由 Gate B 处理。
 
-    最后再按可见字面签名剔除仍无法区分的整组 id。这个「剔除后」结果
-    同时是 prompt、编译 validator 与 freshness 的权威；只投影中间 inventory
-    会把「时点改了，但最终仍整组 dropped」误报成 stale。
+    同名字面仍保留全部实体候选；歧义交给 Blueprint 归属审阅，不能以删除人物消除。
     """
     inventory, _owners = character_ref_inventory(characters)
 
@@ -103,6 +116,8 @@ def visible_character_refs_with_drops(
         }
         present = {
             cid: surfaces for cid, surfaces in visible.items() if surfaces
+            and (not isinstance(characters[cid].get('first_chapter'), int)
+                 or characters[cid]['first_chapter'] <= ordinal)
         }
         by_signature: dict[frozenset[str], list[str]] = {}
         for cid, surfaces in present.items():
@@ -112,9 +127,6 @@ def visible_character_refs_with_drops(
                       if len(cids) > 1]
         if collisions:
             dropped[ordinal] = sorted(collisions)
-            indistinguishable = {cid for group in collisions for cid in group}
-            present = {cid: surfaces for cid, surfaces in present.items()
-                       if cid not in indistinguishable}
         out[ordinal] = present
     return out, dropped
 
@@ -129,7 +141,14 @@ def blueprint_character_prompt_inventory(
     from novel.stages.stage2.normalize import past_attested_surfaces
 
     visible, _dropped = visible_character_refs_with_drops(characters, main_text)
+    inventory, _ = character_ref_inventory(characters)
+    bindings = {ordinal: {cid: [
+        {'surface': surface, 'identity_revealed_from': next(
+            chapter for candidate, chapter in inventory[cid] if candidate == surface)}
+        for surface in surfaces] for cid, surfaces in members.items()}
+        for ordinal, members in visible.items()}
     return {
+        'character_bindings': bindings,
         'past_attested_surfaces': past_attested_surfaces(characters, main_text),
         'visible_character_refs': visible,
     }
@@ -152,6 +171,7 @@ def materialize_blueprint_character_projection(
         'chapters': [
             {
                 'chapter_ordinal': ordinal,
+                'character_bindings': inventory['character_bindings'].get(ordinal, {}),
                 'past_attested_surfaces': list(past.get(ordinal, [])),
                 'visible_character_refs': {
                     cid: list(surfaces)
@@ -173,6 +193,10 @@ def blueprint_inventory_from_projection(
         else BlueprintCharacterProjection.model_validate(projection)
     )
     return {
+        'character_bindings': {row.chapter_ordinal: {cid: [
+            binding.model_dump(mode='json') for binding in bindings]
+            for cid, bindings in row.character_bindings.items()}
+            for row in artifact.chapters},
         'past_attested_surfaces': {
             row.chapter_ordinal: list(row.past_attested_surfaces)
             for row in artifact.chapters
@@ -193,4 +217,5 @@ __all__ = [
     'character_ref_inventory',
     'materialize_blueprint_character_projection',
     'visible_character_refs', 'visible_character_refs_with_drops',
+    'null_binding_conflict',
 ]

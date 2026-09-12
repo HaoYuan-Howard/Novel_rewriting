@@ -33,7 +33,8 @@ def delivery_surface_findings(segments: list[dict[str, str]], entry: dict[str, A
 
 def knowledge_position_findings(segments: list[dict[str, str]], entry: dict[str, Any], book):
     """只给同章许可前的转抄式命中线索，人物声称/信念与世界真相仍需语义区分。"""
-    secrets = {row['secret_id']: row for row in book.secrets}
+    secrets = {row['subject_ref']['ref']: row['value'] for row in entry['global_subjects']
+               if row['subject_ref']['kind'] == 'secret'}
     out = []
     for event in entry['knowledge_events']:
         subject = event['subject_ref']
@@ -46,7 +47,8 @@ def knowledge_position_findings(segments: list[dict[str, str]], entry: dict[str,
             if segment['slot'] in event['allowed_slots']:
                 continue
             body = segment['text']
-            spans = [locate_secret(needle, body) for needle in secret_keywords(secret['fact'])]
+            spans = [locate_secret(needle, body) for needle in secret_keywords(secret['fact'] if isinstance(secret['fact'], str) else
+                      ' '.join(str(v) for v in secret['fact'].values() if isinstance(v, str)))]
             hits = [body[a:b] for span in spans if span is not None for a, b in [span]]
             if hits:
                 out.append(finding('knowledge_position_unver',

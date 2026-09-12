@@ -23,7 +23,7 @@ def snapshot():
         'inputs': {}, 'prompts': {'FIXTURE_ONLY': '0' * 10}, 'model': 'fixture'})
     first = raw['blueprints'][0]
     first['states'] = [PlotState(state_id='st01_01', content='李宝珠知道父亲已经回城。',
-        global_ref=None, modality='belief', holder_char_id='char_001',
+        global_ref=None, modality='belief', holder={'char_id': 'char_001'},
         established_at={'kind': 'at_beat', 'beat_ref': first['beats'][-1]['beat_id']},
         ended_at=None, supersedes_state_refs=[], evidence_refs=first['beats'][-1]['evidence_refs']).model_dump()]
     first['carry_out_refs'] = ['st01_01']
@@ -43,7 +43,7 @@ def pack(current, scope='chapter:2'):
 def put(*, kind='character_knowledge', source_chapter=2, evidence_ref='e02_01'):
     return {'operation': 'put', 'event_id': 'ke_belief_shared', 'expected_event_sha256': None,
         'event': {'kind': kind, 'subject_ref': {'kind': 'state', 'ref': 'st01_01'},
-                  'audience': {'kind': 'character', 'char_id': 'char_002'} if kind == 'character_knowledge' else None,
+                  'audience': {'kind': 'character', 'actor': {'char_id': 'char_002'}} if kind == 'character_knowledge' else None,
                   'chapter_ordinal': 2, 'evidence_refs': [
                       {'chapter_ordinal': source_chapter, 'evidence_ref': evidence_ref}]},
         'resolution': {'kind': 'at_beats', 'trigger_beat_ref': 'b02_01', 'subject_refs': [
@@ -67,7 +67,7 @@ def test_same_review_registers_later_character_knowledge_without_copying_state_t
     application, after = current.propose_knowledge(pack(current), submission(current, [put()]), accepted=True)
     event = next(row for row in after.all_knowledge.obligations if row.kind == 'character_knowledge')
     assert event.chapter_ordinal == 2 and event.subject_ref.ref == 'st01_01'
-    assert event.audience.char_id == 'char_002'
+    assert event.audience.actor.char_id == 'char_002'
     assert application.decisions[0].resolution.trigger_beat_ref == 'b02_01'
     assert '李宝珠知道' not in application.model_dump_json()
     assert application.event_operations[0].event.evidence_refs[0].evidence_ref.startswith('p:')
@@ -143,9 +143,9 @@ def test_same_round_registration_is_current_durable_and_replay_is_idempotent(tmp
     by = responses()
     by[1]['states'] = [{
         'state_key': 'st1', 'content': '李宝珠知道父亲已经回城。', 'global_ref': None,
-        'modality': 'belief', 'holder_char_id': 'char_001',
+        'modality': 'belief', 'holder': {'char_id': 'char_001'},
         'established_at': {'kind': 'at_beat', 'beat_ref': 'b2'}, 'ended_at': None,
-        'supersedes_state_refs': [], 'evidence': [{'start_para': 5, 'end_para': 5}]}]
+        'supersedes_state_refs': [], 'evidence': [{'start_para': 3, 'end_para': 4}]}]
     by[1]['carry_out_refs'] = ['st1']
     by[2]['entry_state_refs'] = ['st01_01']
     book = prepare_book(tmp_path)
@@ -197,16 +197,19 @@ def test_future_state_disclosure_is_planner_truth_but_not_prior_writer_body():
     _, after = current.propose_knowledge(pack(current), submission(current, [put(kind='reader_reveal')]), accepted=True)
     links = formal_links(after)
     bp = after.blueprints.model_dump(mode='json', by_alias=True)
-    source, grounding = main_text(), global_grounding()
+    source = after.main.model_dump(mode='json')
+    grounding = after.knowledge.model_dump(mode='json', by_alias=True)
+    registry = after.characters.model_dump(mode='json', by_alias=True)
     truth, _ = build_blind_projection(bp, root_clean_sha1='1' * 40,
-                                     global_g=grounding, knowledge_links=links)
+                                     global_g=grounding, knowledge_links=links, characters=registry,
+                                     main_text=main_text())
     assert any(k['kind'] == 'reader_reveal' and k['timing'] == 'future_chapter'
                for k in truth['chapters'][0]['knowledge'])
-    material = chapter_materials(1, bp, grounding, links, source, [])
+    material = chapter_materials(1, bp, grounding, links, source, [], characters=registry)
     assert any(e['event']['kind'] == 'reader_reveal' and e['event']['chapter_ordinal'] == 2
                for e in material.knowledge_events)
     plan = identity_plan(bp, source)
-    ctx = build_writer_context(plan, grounding, bp, source, knowledge_links=links).ctx
+    ctx = build_writer_context(plan, grounding, bp, source, knowledge_links=links, characters=registry).ctx
     first, second = ctx['chapters'][:2]
     assert {'kind': 'state', 'ref': 'st01_01'} in first['restricted_subject_refs']
     assert not any(s['state_ref'] == 'st01_01' for s in first['states'])
@@ -231,14 +234,17 @@ def test_character_can_learn_prior_beat_without_new_fact_or_cross_chapter_delive
         blueprint_sha256='c' * 64, registered_events=[registered])
     bp = current.blueprints.model_dump(mode='json', by_alias=True)
     links = formal_links(current)
+    grounding = current.knowledge.model_dump(mode='json', by_alias=True)
+    registry = current.characters.model_dump(mode='json', by_alias=True)
     truth, _ = build_blind_projection(bp, root_clean_sha1='1' * 40,
-        global_g=global_grounding(), knowledge_links=links)
+        global_g=grounding, knowledge_links=links, characters=registry, main_text=main_text())
     background = truth['chapters'][1]['background_beats']
     assert len(background) == 1 and background[0]['participant_aliases']
-    ctx = build_writer_context(identity_plan(bp, main_text()), global_grounding(), bp,
-                               main_text(), knowledge_links=links).ctx['chapters'][1]
+    ctx = build_writer_context(identity_plan(bp, main_text()), grounding, bp,
+                               main_text(), knowledge_links=links, characters=registry).ctx['chapters'][1]
     assert [b['beat_ref'] for b in ctx['background_beats']] == ['b01_01']
     assert all(d['beat_ref'] != 'b01_01' for scene in ctx['scenes'] for d in scene['deliveries'])
-    assert any(e['kind'] == 'character_knowledge' and e['audience']['char_id'] == 'char_002'
+    mother = next(row['actor_ref'] for row in ctx['characters'] if '母亲' in row['surfaces'])
+    assert any(e['kind'] == 'character_knowledge' and e['audience'] == {'kind': 'character', 'actor_ref': mother, 'label': None}
                for e in ctx['knowledge_events'])
 

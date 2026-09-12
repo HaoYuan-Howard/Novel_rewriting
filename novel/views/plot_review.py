@@ -30,7 +30,6 @@ from novel.consumption import compile_scope_inputs, consumed_digest, select_scop
 from novel.errors import ApprovalRequired, ArtifactUnreadable, HumanEditProtected
 from novel.store import ArtifactStore
 from novel.stages.stage2 import knowledge_links, plot_review
-from novel.stages.stage2.plot_compile import validate_book
 
 
 @dataclass
@@ -63,18 +62,9 @@ class PlotReviewSnapshot:
         characters, hashes[STAGE2_CHARACTERS] = store.read_own_with_sha256(
             CharacterRegistry, STAGE2_CHARACTERS, require_current=True)
         snapshot = cls(store, *values, rel, hashes, tuple(history), characters)
-        validate_book(snapshot.blueprints.blueprints,
-                      {row.chapter_ordinal: row.text for row in snapshot.main.root})
-        from novel.stages.stage2 import grounding
-        from novel.stages.stage2.checks import _Ctx
-        from novel.stages.stage2.plot_checks import check_plot
-        global_view = grounding.compose(characters, snapshot.knowledge)
-        outcomes = check_plot(_Ctx(global_view.model_dump(mode='json', by_alias=True),
-            snapshot.blueprints.model_dump(mode='json', by_alias=True), snapshot.main.model_dump(mode='json')))
-        failures = [finding.detail for row in outcomes
-                    if row.rule in ('present_ids_dangling', 'plot_global_refs') for finding in row.findings]
-        if failures:
-            raise ArtifactUnreadable('当前人物或共享主体许可不支持已存蓝图：' + '; '.join(failures))
+        from novel.stages.stage2.plot_diagnostics import diagnostics, require_reviewable
+        require_reviewable(diagnostics(snapshot.main, snapshot.blueprints,
+                                       snapshot.characters, snapshot.knowledge))
         snapshot.verify()
         return snapshot
 
@@ -186,13 +176,15 @@ class PlotReviewSnapshot:
                         visible_subjects.add(('state', row['state']['state_id']))
                     elif 'subject_ref' in row:
                         visible_subjects.add((row['subject_ref']['kind'], row['subject_ref']['ref']))
-        def character_refs(value):
+        def actor_refs(value):
             if isinstance(value, dict):
-                return set().union(*(character_refs(v) for v in value.values()), set())
+                own = ({(value['char_id'], value.get('presentation_ref') or '')}
+                       if 'char_id' in value and set(value) <= {'char_id', 'presentation_ref'} else set())
+                return set().union(*(actor_refs(v) for v in value.values()), own)
             if isinstance(value, list):
-                return set().union(*(character_refs(v) for v in value), set())
-            return {value} if isinstance(value, str) and value.startswith('char_') else set()
-        visible_characters = character_refs(workpack.material)
+                return set().union(*(actor_refs(v) for v in value), set())
+            return set()
+        visible_actors = actor_refs(workpack.material)
         registered = {row.event_id: row for row in self.all_knowledge.registered_events}
         operations = []
         for operation in submission.event_operations:
@@ -213,8 +205,8 @@ class PlotReviewSnapshot:
                 if origin != event.chapter_ordinal:
                     raise HumanEditProtected('完整剧情节点不能借读者许可跨章迁移；必要语义边界缺失须修订上游')
             if (event.audience is not None and event.audience.kind == 'character'
-                    and event.audience.char_id not in visible_characters):
-                raise HumanEditProtected('知识事件受众没有在本轮材料中提供')
+                    and event.audience.actor.key() not in visible_actors):
+                raise HumanEditProtected('知识事件受众的具体表面身份没有在本轮材料中提供')
             proofs = []
             for proof in event.evidence_refs:
                 ordinal = proof.chapter_ordinal

@@ -48,7 +48,7 @@ from novel.orchestrator import queue
 from contracts.schema.plot_review import Dimension
 
 
-WIRE_SCHEMA = 'novel-stage4-reviewer-rulings-v2'
+WIRE_SCHEMA = 'novel-stage4-reviewer-rulings-v3'
 REFERENCE_CLOSURE = 'chapters[].constraints[].reference_closure'
 CONSTRAINT_OPERATION_CATALOG = 'chapters[].constraint_operations.active'
 _RefinementDimension = TypeAliasType('BlueprintRefinementDimension', Dimension)
@@ -74,6 +74,57 @@ def _sha256(value: object) -> str:
         value, ensure_ascii=False, sort_keys=True,
         separators=(',', ':'), allow_nan=False,
     ).encode('utf-8')).hexdigest()
+
+
+def options_sha256(task: _ReviewerTaskLike) -> str:
+    """绑定原始完整 options；局部引用表只能由该不可变来源重建。"""
+    return _sha256(_options(task))
+
+
+def reference_handles(task: _ReviewerTaskLike) -> dict[str, dict[str, str]]:
+    """每章局部导航 → 原始引用；不改变审阅主体、原始 task 或持久身份。"""
+    result: dict[str, dict[str, str]] = {}
+    prefixes = {'scene_refs': 's', 'beat_aliases': 'b', 'participant_aliases': 'p',
+                'constraint_aliases': 'c', 'endpoint_aliases': 'e', 'state_aliases': 't', 'global_aliases': 'g'}
+    options = _options(task)
+    for option in options:
+        closure = option.get('allowed_values', {}).get(REFERENCE_CLOSURE, {})
+        for ordinal, fields in closure.items():
+            mapping = result.setdefault(str(ordinal), {})
+            for field, prefix in prefixes.items():
+                values = fields.get(field)
+                if not isinstance(values, list) or any(not isinstance(value, str) or not value for value in values):
+                    raise Stage4ReviewerWireError('局部引用表缺少原始章级闭集')
+                if len(values) != len(set(values)):
+                    raise Stage4ReviewerWireError('局部引用表的原始身份重复')
+                for index, value in enumerate(sorted(values), 1):
+                    handle = f'{prefix}{index}'
+                    if (handle in mapping and mapping[handle] != value
+                            or value in mapping.values() and mapping.get(handle) != value):
+                        raise Stage4ReviewerWireError('不同引用域不能覆盖同一局部句柄或原始身份')
+                    mapping[handle] = value
+    for option in options:
+        for ordinal, refs in option.get('allowed_values', {}).get('subjects_by_chapter', {}).items():
+            mapping = result.setdefault(str(ordinal), {})
+            if not isinstance(refs, list) or len(refs) != len(set(refs)):
+                raise Stage4ReviewerWireError('转交引用表的原始身份缺失或重复')
+            for value in sorted(set(refs) - set(mapping.values())):
+                mapping['chapter' if value == 'chapter' else f'u{len(mapping) + 1}'] = value
+    return result
+
+
+def _native_option(option: Mapping[str, Any], mappings: Mapping[str, Mapping[str, str]]) -> dict:
+    result = copy.deepcopy(option)
+    allowed = result.get('allowed_values', {})
+    for ordinal, fields in allowed.get(REFERENCE_CLOSURE, {}).items():
+        reverse = {value: key for key, value in mappings[str(ordinal)].items()}
+        for field, values in fields.items():
+            fields[field] = [reverse[value] for value in values]
+    for field in ('subjects_by_chapter', 'beat_aliases_by_chapter'):
+        for ordinal, values in allowed.get(field, {}).items():
+            reverse = {value: key for key, value in mappings[str(ordinal)].items()}
+            allowed[field][ordinal] = [reverse[value] for value in values]
+    return result
 
 
 def uses_compact_wire(task: object) -> bool:
@@ -259,8 +310,8 @@ def _constraint_operations_model(
         ))
     return create_model(
         f'Stage4ConstraintOperations_{ordinal}_{digest}', __base__=StrictModel,
-        **{item['constraint_sha256']: (reduce(or_, choices), ...)
-           for item in scope['items']},
+        **{f'h{index}': (reduce(or_, choices), ...)
+           for index, _item in enumerate(scope['items'], 1)},
     )
 
 
@@ -364,6 +415,7 @@ def _payload_model(option: Mapping[str, Any], digest: str) -> type[StrictModel]:
 def response_model(task: _ReviewerTaskLike) -> type[StrictModel]:
     """由完整 frozen options 构造本轮专有 model，不静默删除 stop。"""
     choices = []
+    mappings = reference_handles(task)
     for option in _options(task):
         # 名称只绑定响应角色；候选/token 的变化不是 schema 结构变化。
         digest = _sha256(option['id'])[:16]
@@ -371,12 +423,13 @@ def response_model(task: _ReviewerTaskLike) -> type[StrictModel]:
             f'Stage4ReviewerChoice_{digest}', __base__=StrictModel,
             option_id=(_literal([option['id']]), ...),
             expected_exact_request_sha256=(Sha256, ...),
-            payload=(_payload_model(option, digest), ...),
+            payload=(_payload_model(_native_option(option, mappings), digest), ...),
         ))
     return create_model(
         f'Stage4ReviewerEnvelope_{_sha256([option["id"] for option in _options(task)])[:16]}',
         __base__=StrictModel,
         schema_=(Literal[WIRE_SCHEMA], Field(..., alias='schema')),
+        expected_options_sha256=(Sha256, ...),
         selection=(reduce(or_, choices), ...),
     )
 
@@ -384,7 +437,57 @@ def response_model(task: _ReviewerTaskLike) -> type[StrictModel]:
 def output_schema_for(task: object) -> dict[str, Any] | None:
     if not uses_compact_wire(task):
         return None
-    return agent_json_schema(response_model(task))  # type: ignore[arg-type]
+    return _compact_definitions(agent_json_schema(response_model(task)))  # type: ignore[arg-type]
+
+
+def _compact_definitions(schema: dict[str, Any]) -> dict[str, Any]:
+    """相同断言图共享短名；字段、章级闭集、顺序、arity 和所有联合分支原样保留。"""
+    from novel.agents.base import validate_agent_output_schema
+    def strip(value):
+        if isinstance(value, list):
+            return [strip(row) for row in value]
+        if not isinstance(value, dict):
+            return value
+        return {key: ({name: strip(row) for name, row in item.items()}
+                      if key in {'properties', '$defs'} else strip(item))
+                for key, item in value.items() if key not in {'title', 'description'}}
+    source = strip(schema)
+    definitions = source.get('$defs', {})
+    fingerprints = {}
+    def fingerprint(name, stack=()):
+        if name not in fingerprints:
+            if name in stack or name not in definitions:
+                raise Stage4ReviewerWireError('原生 schema 定义引用不闭合')
+            def normalized(value):
+                if isinstance(value, list):
+                    return [normalized(row) for row in value]
+                if not isinstance(value, dict):
+                    return value
+                if '$ref' in value:
+                    return {'$ref': fingerprint(value['$ref'].removeprefix('#/$defs/'), (*stack, name))}
+                return {key: normalized(row) for key, row in value.items()}
+            fingerprints[name] = _sha256(normalized(definitions[name]))
+        return fingerprints[name]
+    names, representatives, by_digest = {}, {}, {}
+    for name in definitions:
+        digest = fingerprint(name)
+        if digest not in by_digest:
+            short = f'd{len(by_digest)}'
+            by_digest[digest] = short
+            representatives[short] = name
+        names[name] = by_digest[digest]
+    def rewrite(value):
+        if isinstance(value, list):
+            return [rewrite(row) for row in value]
+        if not isinstance(value, dict):
+            return value
+        if '$ref' in value:
+            return {'$ref': '#/$defs/' + names[value['$ref'].removeprefix('#/$defs/')]}
+        return {key: rewrite(row) for key, row in value.items() if key != '$defs'}
+    result = rewrite(source)
+    result['$defs'] = {short: rewrite(definitions[name]) for short, name in representatives.items()}
+    validate_agent_output_schema(result)
+    return result
 
 
 def prompt_for(task: object, base_prompt: str) -> str:
@@ -402,9 +505,13 @@ def prompt_for(task: object, base_prompt: str) -> str:
 【Stage4 Reviewer 原生裁决输出】
 本轮使用 CLI 原生 JSON Schema；上文复制完整 exact_request 的运输要求由本段替换。
 最终只输出 {WIRE_SCHEMA} 裸 JSON object，结构为
-{{"schema":"{WIRE_SCHEMA}","selection":{{"option_id":...,"expected_exact_request_sha256":...,"payload":...}}}}。
+{{"schema":"{WIRE_SCHEMA}","expected_options_sha256":"{options_sha256(task)}","selection":{{"option_id":...,"expected_exact_request_sha256":...,"payload":...}}}}。
 selection 必须完整选择一个合法 option，不得把 id 写到 JSON 末尾或复制完整 action。
 当前选项与绑定摘要：{json.dumps(choices, ensure_ascii=False, separators=(',', ':'))}
+本轮每章局部引用表（局部句柄→原工作包身份）：{json.dumps(reference_handles(task), ensure_ascii=False, separators=(',', ':'))}
+scene_refs、opaque_aliases、转交的 subject_refs 只填写当前章局部句柄；不要填写原始长 ID。
+该表只缩短运输身份，全部原文、主体、修订码与约束语义仍按工作包审阅。相同句柄在不同章
+有各自含义，不得把另一章的引用混入当前章。expected_options_sha256 必须照抄本轮值。
 
 design payload 交 general_reason 和 chapters；只有策略待审时交 strategy，其中交
 decision/reason/replan_constraints，chapters 是按 output_ordinal 的十进制字符串
@@ -420,7 +527,7 @@ actor、reviewer_kind、review_run_id、review_token、output_ordinal 或 surfac
 Supervisor 只从该 immutable option 注入这些身份，随后仍走现役 typed loader 和审批。
 未审模板里的占位决定不是历史裁决，空 constraints 也不表示已无历史义务；
 真实历史只认工作包的 design_constraint_catalog。constraints 只添加本次新约束。
-对 active 非空的章，constraint_operations 按原生 schema 的每个固定 SHA 键逐项交
+对 active 非空的章，constraint_operations 按当前目录 items 的顺序，以 h1/h2 等固定键逐项交
 kind/reason/replacements：keep 与 withdraw 必须交 replacements: []，supersede 必须
 交非空 typed replacements。全键必填，不能遗漏、重复、添加其他章身份或交 null。
 Supervisor 从同一目录注入 expected_constraint_set_sha256 和 canonical items 的
@@ -451,8 +558,8 @@ def assemble(task: _ReviewerTaskLike, response_document: Mapping[str, Any] | str
                if isinstance(response_document, str) else response_document)
         if not isinstance(raw, Mapping):
             raise Stage4ReviewerWireError('Stage4 wire 响应必须是 JSON object')
-        if set(raw) != {'schema', 'selection'}:
-            raise Stage4ReviewerWireError('Stage4 wire 顶层字段必须是 schema/selection')
+        if set(raw) != {'schema', 'expected_options_sha256', 'selection'}:
+            raise Stage4ReviewerWireError('Stage4 wire 顶层字段必须是 schema/expected_options_sha256/selection')
         parsed = model.model_validate(dict(raw), strict=True).model_dump(mode='json', by_alias=True)
     except ValidationError as exc:
         # 不让不可信 extra-key、理由或 constraint 值进入公开拒因/成本账。
@@ -463,6 +570,8 @@ def assemble(task: _ReviewerTaskLike, response_document: Mapping[str, Any] | str
         # Python 的超长整数限制也会抛普通 ValueError，仍属于可订正的响应拒因。
         raise Stage4ReviewerWireError('Stage4 wire 响应不是唯一完整 JSON object') from exc
     selected = parsed['selection']
+    if parsed['expected_options_sha256'] != options_sha256(task):
+        raise Stage4ReviewerWireError('Stage4 wire 原始 options 或引用表已 stale')
     option = next(option for option in _options(task) if option['id'] == selected['option_id'])
     if selected['expected_exact_request_sha256'] != _sha256(option['exact_request']):
         raise Stage4ReviewerWireError('Stage4 wire exact-request SHA 已 stale')
@@ -473,7 +582,17 @@ def assemble(task: _ReviewerTaskLike, response_document: Mapping[str, Any] | str
         action['reason'] = supplied['reason']
         return assembled
     payload = action['payload']
+    mappings = reference_handles(task)
+    def restore(ordinal, values):
+        mapping = mappings.get(str(ordinal), {})
+        if any(value not in mapping for value in values):
+            raise Stage4ReviewerWireError('Stage4 wire 引用了当前章未提供的局部身份')
+        return [mapping[value] for value in values]
+    def restore_constraints(ordinal, values):
+        return [dict(row, scene_refs=restore(ordinal, row['scene_refs']),
+                     opaque_aliases=restore(ordinal, row['opaque_aliases'])) for row in values]
     if action['surface'] == 'blueprint_refinement':
+        supplied['subject_refs'] = restore(supplied['chapter_ordinal'], supplied['subject_refs'])
         payload.update(supplied)
         return assembled
     chapter_map = supplied.pop('chapters')
@@ -488,15 +607,17 @@ def assemble(task: _ReviewerTaskLike, response_document: Mapping[str, Any] | str
         ordinal = str(row['output_ordinal'])
         ruling = chapter_map[ordinal]
         if action['surface'] == 'design':
+            ruling['constraints'] = restore_constraints(ordinal, ruling['constraints'])
             # 待审项的模型判断全部取本次回答；不能继承未审脚手架。
             row.pop('constraint_operations', None)
             operations = ruling.pop('constraint_operations', None)
             if operations is not None:
                 scope = operation_scopes[ordinal]
                 items = []
-                for item in scope['items']:
-                    operation = dict(operations[item['constraint_sha256']],
+                for index, item in enumerate(scope['items'], 1):
+                    operation = dict(operations[f'h{index}'],
                                      constraint_sha256=item['constraint_sha256'])
+                    operation['replacements'] = restore_constraints(ordinal, operation['replacements'])
                     # 约束集合可规范排序，内部 refs 的业务顺序原样保留；重复仍交
                     # canonical validator 拒绝，不能去重后改写模型的实际回答。
                     operation['replacements'] = sorted(
@@ -518,5 +639,6 @@ def assemble(task: _ReviewerTaskLike, response_document: Mapping[str, Any] | str
 __all__ = [
     'WIRE_SCHEMA', 'REFERENCE_CLOSURE', 'CONSTRAINT_OPERATION_CATALOG',
     'Stage4ReviewerWireError',
+    'options_sha256', 'reference_handles',
     'uses_compact_wire', 'output_schema_for', 'response_model', 'prompt_for', 'assemble',
 ]

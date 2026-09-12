@@ -1,4 +1,4 @@
-"""V9 蓝图的结构、证据与许可检查；不以引用齐全冒充语义保真。"""
+"""V10 蓝图的结构、证据与许可检查；不以引用齐全冒充语义保真。"""
 from __future__ import annotations
 
 from typing import Any
@@ -7,8 +7,9 @@ from pydantic import ValidationError
 
 from contracts.schema.plot import PlotBlueprint
 from novel.report.findings import Outcome, ran, unverifiable
-from novel.stages.stage2.character_refs import visible_character_refs
-from novel.stages.stage2.plot_compile import validate_evidence, validate_entry_states
+from novel.stages.stage2.character_refs import blueprint_character_prompt_inventory
+from novel.stages.stage2.plot_compile import (validate_evidence, validate_entry_states,
+    validate_actors, actor_refs, available_actor_bindings)
 
 RULES = ('plot_contract', 'plot_evidence', 'plot_state_continuity', 'plot_global_refs',
          'present_ids_dangling', 'scope_violation', 'pronoun_surface_unattested',
@@ -36,20 +37,30 @@ def check_plot(c: Any) -> list[Outcome]:
                 for error in exc.errors(include_input=False, include_url=False)),
                 _output_ordinal(raw.get('chapter_ordinal')))
     carried: frozenset[str] = frozenset()
-    visible = visible_character_refs(
+    inventory = blueprint_character_prompt_inventory(
         c.chars, [{'chapter_ordinal': o, 'text': c.text_of[o]} for o in c.ords]
     ) if c.chars and c.has_mt else None
+    visible = inventory['visible_character_refs'] if inventory is not None else None
+    earlier = []
     for chapter in typed:
         ordinal = chapter.chapter_ordinal
         if c.has_gg:
             from novel.consumption import plot_global_projection
-            allowed_globals = {(row['kind'], row['ref'])
-                               for row in plot_global_projection(c.gg, ordinal)}
+            shared = {(row['kind'], row['ref']): row['value']
+                      for row in plot_global_projection(c.gg, ordinal)}
+            allowed_globals = set(shared)
             allowed_globals.update(('character', cid) for cid in (visible or {}).get(ordinal, {}))
-            for state in chapter.states:
-                if state.global_ref is not None and (
-                        state.global_ref.kind, state.global_ref.ref) not in allowed_globals:
-                    fail('plot_global_refs', f'{state.state_id} 引用本章未提供的共享主体', ordinal)
+            uses = [(state.state_id, state.global_ref) for state in chapter.states if state.global_ref]
+            uses.extend((f'relation_uses:{index}', use) for index, use in enumerate(chapter.relation_uses))
+            for label, use in uses:
+                if use.raw_subject_key() not in allowed_globals:
+                    fail('plot_global_refs', f'{label} 引用本章未提供的共享主体', ordinal)
+                if use.kind == 'relation':
+                    relation = shared.get(use.raw_subject_key())
+                    ends = use.relation_actors
+                    if relation is not None and (ends.subject.char_id, ends.object.char_id) != (
+                            relation['subject_id'], relation['object_id']):
+                        fail('plot_global_refs', f'{label} 改变有向关系的真实端点', ordinal)
         if c.has_mt:
             try:
                 validate_evidence(chapter, c.text_of.get(ordinal, ''))
@@ -60,14 +71,18 @@ def check_plot(c: Any) -> list[Outcome]:
         except ValueError as exc:
             fail('plot_state_continuity', str(exc), ordinal)
         carried = frozenset(chapter.carry_out_refs)
-        chars = {cid for beat in chapter.beats for cid in beat.participant_char_ids}
-        chars.update(cid for beat in chapter.beats for context in beat.source_contexts
-                     for cid in (context.present_char_ids or []))
-        chars.update(state.holder_char_id for state in chapter.states if state.holder_char_id)
-        chars.update(getattr(row, 'observer_char_id', None) for row in chapter.constraints)
-        chars.update(cid for row in chapter.narration
-                     for cid in (row.narrator_char_id, row.focalizer_char_id) if cid)
-        chars.discard(None)
+        chars = {actor.char_id for actor in actor_refs(chapter)}
+        if c.has_mt and inventory is not None:
+            try:
+                local = {row.presentation_id for row in chapter.actor_bindings}
+                inherited = {key: row for key, row in available_actor_bindings(
+                    [*earlier, chapter], ordinal).items() if key not in local}
+                validate_actors(chapter, c.text_of[ordinal],
+                    allowed_char_ids=frozenset(visible.get(ordinal, {})),
+                    character_bindings=inventory['character_bindings'].get(ordinal, {}), inherited=inherited)
+            except (ValueError, TypeError) as exc:
+                fail('present_ids_dangling', str(exc), ordinal)
+        earlier.append(chapter)
         if visible is not None and not chars <= set(visible.get(ordinal, {})):
             fail('present_ids_dangling',
                  f'本章不可引用的人物：{sorted(chars - set(visible.get(ordinal, {})))}', ordinal)

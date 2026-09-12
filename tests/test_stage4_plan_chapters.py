@@ -127,9 +127,10 @@ def test_mixed_book_wires_only_the_ambiguous_chapter(prepared_design, monkeypatc
         for placement in chapter['beat_placements']:
             subject = mapping['subject_aliases'][placement['beat_alias']]
             assert subject['kind'] == 'beat' and beats[subject['ref']]['content']
-        participants = {cid for beat in beats.values() for cid in beat['participant_char_ids']}
-        assert participants <= set(mapping['participant_aliases'].values())
-        assert all({'kind': 'character', 'ref': cid} in mapping['subject_aliases'].values()
+        participants = {actor['char_id'] for beat in beats.values() for actor in beat['participants']}
+        assert participants <= {actor['char_id'] for actor in mapping['participant_aliases'].values()}
+        assert all(any(row['kind'] == 'character' and row['ref'] == cid
+                       and row['actor']['char_id'] == cid for row in mapping['subject_aliases'].values())
                    for cid in participants)
         formal_refs[:] = [next(iter(beats)), sorted(participants)[0]]
         assert set(formal_refs) <= set(pack['issued_ref_allowlist'])
@@ -392,7 +393,8 @@ def test_formal_concern_checkpoint_same_run_zero_wire_resume_and_aliases(
     formal_refs: list[str] = []
 
     def concern(evidence: dict[str, Any], candidate_chapter: dict[str, Any]):
-        formal_refs[:] = [evidence['materials']['blueprint']['beats'][0]['beat_id'], evidence['materials']['blueprint']['beats'][0]['participant_char_ids'][0]]
+        beat = evidence['materials']['blueprint']['beats'][0]
+        formal_refs[:] = [beat['beat_id'], beat['participants'][0]['char_id']]
         return {
             'constraint_code': 'future_leak',
             'scenes': [candidate_chapter['scenes'][0]['candidate_scene_id']],
@@ -472,7 +474,7 @@ def test_formal_concern_checkpoint_same_run_zero_wire_resume_and_aliases(
         next(alias for alias, formal in candidate.subject_aliases.items()
              if formal.kind == 'beat' and formal.ref == formal_refs[0]),
         next(alias for alias, formal in candidate.participant_aliases.items()
-             if formal == formal_refs[1]),
+             if formal.char_id == formal_refs[1]),
     ]
     assert len(binding.binding_concerns) == 1
     assert binding.binding_concerns[0].chapter_ordinal == 1

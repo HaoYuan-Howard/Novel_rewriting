@@ -576,11 +576,6 @@ def _edit_static_character(book: Path, char_id: str, **changes):
     current, sha = store.read_own_with_sha256(
         characters.CharacterRegistry, characters.REL, require_current=True)
     value = current.characters[char_id].model_dump(mode='json')
-    evidence = value['role_evidence']
-    value['role_evidence'] = {
-        'chapter_ordinal': evidence['chapter_ordinal'],
-        'locator': evidence['source']['text'],
-    }
     value.update(changes)
     return characters.apply_edit(ctx, CharactersEdit.model_validate({
         'source_sha256': sha,
@@ -1478,7 +1473,7 @@ def test_name_change_with_interrupted_projection_write_closes_blueprint_and_stag
         mode='json', by_alias=True)
     renamed = raw['characters']['char_001']
     renamed['canonical'] = '宝珠'
-    renamed['address'][0]['surface'] = '宝珠'
+    renamed['aliases'][0]['surface'] = '宝珠'
     # 模拟硬杀留下已提交的人物与未补尾的旧投影；不改知识文件或替旧审批重签。
     (book / characters.REL).write_text(
         json.dumps(encode_artifact(characters.REL, raw), ensure_ascii=False) + '\n',
@@ -1673,7 +1668,7 @@ def test_stage4_plan_over_limit_with_candidate_stops_before_b_transport_or_outpu
         beat['source_contexts'] = [{
             'time_layer': 'recall' if index == 0 else 'present',
             'place': None if index == 0 else '老宅廊下',
-            'present_char_ids': ['char_001'], 'evidence': copy.deepcopy(beat['evidence']),
+            'present': [{'char_id': 'char_001'}], 'evidence': copy.deepcopy(beat['evidence']),
         }]
     blueprint_ctx, _ = generate_plot(book, rows)
     accept_and_materialize_links(blueprint_ctx)
@@ -1850,7 +1845,7 @@ def test_stage2_blueprint_renormalize_does_not_invent_character_refs():
 
         path = book / extract.BLUEPRINT_REL
         raw = json.loads(path.read_text(encoding='utf-8'))
-        raw['blueprints'][0]['beats'][0]['participant_char_ids'] = ['char_999']
+        raw['blueprints'][0]['beats'][0]['participants'] = [{'char_id': 'char_999'}]
         path.write_text(
             json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
             encoding='utf-8', newline='\n')
@@ -2141,33 +2136,40 @@ def test_blueprint_context_keeps_current_full_and_only_attested_subjects():
     sections[1]['text'] = '甲乙抱着包裹进了城。' + sections[1]['text']
     sections[5]['text'] = '丙丁掀帘进来。' + sections[5]['text']
     characters = {
-        'char_001': {'canonical': '甲乙', 'address': [{'surface': '甲乙', 'by': 'narration',
-            'context': 'reference', 'from_chapter': 2}]},
-        'char_002': {'canonical': '丙丁', 'address': []},
+        'char_001': {'canonical': '甲乙', 'first_chapter': 2,
+                     'aliases': [{'surface': '甲乙', 'identity_revealed_from': 2}]},
+        'char_002': {'canonical': '丙丁', 'first_chapter': 6,
+                     'aliases': [{'surface': '丙丁', 'identity_revealed_from': 6}]},
     }
     inventory = blueprint_character_prompt_inventory(characters, sections)
-    shared = {'entities': {}, 'canon': {'secrets': [{
-        'secret_id': 'sec_future', 'fact': '尚未揭示的后台身份',
-        'first_reveal_chapter': 6, 'fact_evidence': {'chapter_ordinal': 6,
-            'source': {'text': '丙丁掀帘进来。', 'start': 0, 'end': 7}},
-    }]}}
+    from tests.plot_fixtures import GLOBAL
+    shared = copy.deepcopy(GLOBAL)
+    proof = 'ev_' + '1' * 24
+    shared['evidence_anchors'][proof] = {'chapter_ordinal': 6, 'start': 0, 'end': 7,
+        'text_sha256': hashlib.sha256(sections[5]['text'][:7].encode('utf-8')).hexdigest()}
+    shared['arc_secrets'] = [{
+        'secret_id': 'secret_01', 'fact': '尚未揭示的后台身份', 'fact_ref': None,
+        'setup_chapters': [], 'revealed_from': 6, 'evidence_refs': [proof]}]
     projection = plot_global_projection(shared, 5)
     user = build_plot_user('边界测试', sections[4]['text'], 5,
-        character_refs=inventory['visible_character_refs'][5], global_projection=projection)
+        character_refs=inventory['visible_character_refs'][5], global_projection=projection,
+        character_bindings=inventory['character_bindings'][5])
     assert user.count(sections[4]['text']) == 1
     assert all(section['text'] not in user for section in sections if section['chapter_ordinal'] != 5)
     assert '甲乙' in user and '丙丁' not in user and '尚未揭示的后台身份' not in user
     assert json.loads(user.split('\n', 1)[0])['entry_states'] == []
     assert extract.blueprint_context('边界测试', sections) == {
         'architecture': 'plot-blueprint-v1', 'source_format': 'numbered-paragraphs-v1',
-        'global_projection_contract': 'plot-global-scope-v1',
+        'global_projection_contract': 'plot-global-scope-v2',
     }
 
 
 def test_past_attested_surfaces_only_hand_out_past_attested_forms():
     from novel.stages.stage2.normalize import past_attested_surfaces
+    from tests.stage2_fixtures import formal_subjects
+    registry, _ = formal_subjects(global_grounding())
     table = past_attested_surfaces(
-        global_grounding()['entities']['characters'], main_text())
+        registry.model_dump(mode='json')['characters'], main_text())
     assert table[1] == []
     assert table[2] == ['李宝珠']
     # 「沈母」只是 canonical、正文里从未出现过 ⇒ 不进清单；「母亲」按首现先后排在后面。
@@ -2218,7 +2220,7 @@ def test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book():
         previous, raw = store.read_own(
             ChapterBlueprints, extract.BLUEPRINT_REL)
         broken = copy.deepcopy(raw)
-        broken['blueprints'][0]['beats'][0]['participant_char_ids'] = ['char_999']
+        broken['blueprints'][0]['beats'][0]['participants'] = [{'char_id': 'char_999'}]
         store.write_invalid(
             extract.BLUEPRINT_REL,
             ChapterBlueprints.model_validate(broken),
@@ -2231,7 +2233,7 @@ def test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book():
             metadata = json.loads(req.user.split('\n', 1)[0])
             row = metadata['repair_baseline']
             row['identities'] = metadata['baseline_identities']
-            row['beats'][0]['participant_char_ids'] = ['char_001']
+            row['beats'][0]['participants'] = [{'char_id': 'char_001'}]
             return _ok({'blueprints': [row]})
         repair_client, repair_transport = _client(repair_ctx, repair)
         report = extract.run_blueprint(
@@ -2240,7 +2242,8 @@ def test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book():
         assert report.passed
         assert len(repair_transport.calls) == 1
         metadata = json.loads(repair_transport.calls[0].user.split('\n', 1)[0])
-        assert metadata['repair_baseline']['beats'][0]['participant_char_ids'] == ['char_999']
+        assert metadata['repair_baseline']['beats'][0]['participants'] == [
+            {'char_id': 'char_999', 'presentation_ref': None}]
         assert metadata['baseline_identities']
         assert 'b01_01' in repair_transport.calls[0].user
         assert len(_blueprint_transport.calls) == len(main_text())

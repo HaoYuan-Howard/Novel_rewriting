@@ -21,6 +21,7 @@ SOURCE = ('宋宁对周衡说：“明日卯时，带三两银子到西门见我
 CLAIMS = ['宋宁要求周衡次日卯时携三两银子在西门会面。',
           '周衡答应宋宁的约定，并提醒她门口凭口令 A-17 放行。']
 NAMES = {'char_001': '宋宁', 'char_002': '周衡'}
+ACTORS = {cid: 'actor_' + str(index) * 24 for index, cid in enumerate(NAMES, 1)}
 
 
 def _compiled():
@@ -44,7 +45,7 @@ def _entry():
     entry = copy.deepcopy(book.ctx['chapters'][0])
     entry['chapter_rewrite_brief'] = '从约定会面推进到入门口令。'
     entry['beats'] = [{'beat_ref': row.beat_id, 'content': row.content,
-                      'participant_char_ids': row.participant_char_ids} for row in chapter.beats]
+                      'participants': [ACTORS[actor.char_id] for actor in row.participants]} for row in chapter.beats]
     entry['states'] = []
     entry['constraints'] = [{'constraint_ref': row.constraint_id, 'kind': row.kind,
                             'value': row.value, 'target_beat_ref': row.target_beat_ref} for row in chapter.constraints]
@@ -61,10 +62,14 @@ def _entry():
     } for index in (1, 2)]
     for name in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
         entry[name]['subject_refs'] = [{'kind': 'beat', 'ref': 'b01_01'}]
-    entry['characters'] = [{'char_id': cid, 'display_name': value, 'role': '参与约定'}
+    entry['characters'] = [{'actor_ref': ACTORS[cid], 'display_name': value,
+                            'surfaces': [value], 'role': '参与约定',
+                            'allowed_slots': ['s01', 's02'], 'role_allowed_slots': ['s01', 's02']}
                            for cid, value in NAMES.items()]
     entry['global_subjects'] = []
-    entry['narration'] = [{'segment': '全章', 'grammatical_person': 'third', 'narrator': '宋宁'}]
+    entry['narration'] = [{'segment': '全章', 'grammatical_person': 'third',
+                           'narrator': ACTORS['char_001'], 'focalizer': None,
+                           'pronoun_surfaces': [], 'beat_refs': [], 'allowed_slots': ['s01', 's02']}]
     CtxChapter.model_validate(entry)
     book.ctx['chapters'] = [entry]
     book.source_text = {1: SOURCE}
@@ -132,10 +137,10 @@ def test_currency_unit_liang_is_not_mistaken_for_the_number_two():
 def test_unknown_dialogue_party_stays_explicit_in_content_not_guessed_by_compiler():
     raw = response_projection(_compiled().model_dump(mode='json'), SOURCE)
     raw['beats'][0]['content'] = '宋宁提出会面要求，原文未明确听者身份。'
-    raw['beats'][0]['participant_char_ids'] = ['char_001']
+    raw['beats'][0]['participants'] = [{'char_id': 'char_001'}]
     chapter = compile_chapter(PlotChapterResponse.model_validate(raw), SOURCE,
                                allowed_char_ids=frozenset(NAMES))
-    assert chapter.beats[0].participant_char_ids == ['char_001']
+    assert [actor.char_id for actor in chapter.beats[0].participants] == ['char_001']
     assert '未明确听者身份' in chapter.beats[0].content
 
 

@@ -1,0 +1,333 @@
+"""BP10 表面身份的真实编译、编辑与 KL3 闭集；不以结构通过声称语义接受。"""
+from __future__ import annotations
+
+import pytest
+
+from contracts.schema.knowledge import KnowledgeGrounding
+from contracts.schema.knowledge_links import KnowledgeLinkHistory, KnowledgeLinkSubmission
+from contracts.schema.plot import PlotChapterResponse, PlotSubjectRef
+from contracts.schema.plot_edit import PlotChapterEdit
+from contracts.schema.stage1 import MainText
+from contracts.schema.stage2 import ChapterBlueprints
+from novel.errors import HumanEditProtected
+from novel.stages.stage2 import knowledge_links, plot_edit
+from novel.stages.stage2.character_refs import blueprint_character_prompt_inventory
+from novel.stages.stage2.plot_compile import (
+    available_actor_bindings, compile_chapter, response_projection, state_materials,
+    validate_actors, validate_book,
+)
+from novel.stages.stage2.plot_sequence import request_compiler, with_entry_states
+from novel.stages.stage2.plot_prompts import build_plot_user
+
+SOURCE = '新邻居向娘子点头。\n\n门开了，新邻居竟是裴书远。'
+INVENTORY = {'char_001': [
+    {'surface': '新邻居', 'identity_revealed_from': 1},
+    {'surface': '裴书远', 'identity_revealed_from': 1}],
+    'char_002': [{'surface': '娘子', 'identity_revealed_from': 1}]}
+CHARS = frozenset(INVENTORY)
+
+
+def response(ordinal=1):
+    def evidence(n):
+        return [{'start_para': n, 'end_para': n}]
+    return {
+        'chapter_ordinal': ordinal, 'chapter_function': '拜访后揭示邻居的身份',
+        'actor_bindings': [
+            {'presentation_key': 'a1', 'char_id': 'char_001', 'surfaces': ['新邻居'],
+             'evidence': evidence(1), 'public_state_ref': None},
+            {'presentation_key': 'a2', 'char_id': 'char_001', 'surfaces': ['裴书远'],
+             'evidence': evidence(2), 'public_state_ref': None}],
+        'beats': [
+            {'beat_key': 'b1', 'content': '新邻居向娘子点头。',
+             'participants': [{'char_id': 'char_001', 'presentation_ref': 'a1'}, {'char_id': 'char_002'}],
+             'evidence': evidence(1), 'source_contexts': []},
+            {'beat_key': 'b2', 'content': '门开后，娘子认出新邻居就是裴书远。',
+             'participants': [{'char_id': 'char_001', 'presentation_ref': 'a1'},
+                              {'char_id': 'char_001', 'presentation_ref': 'a2'}],
+             'evidence': evidence(2), 'source_contexts': []}],
+        'states': [], 'entry_state_refs': [], 'carry_out_refs': [],
+        'inherited_state_endings': [], 'constraints': [],
+        'narration': [{'grammatical_person': 'third', 'narrator': None,
+            'focalizer': {'char_id': 'char_002'}, 'pronoun_surfaces': [],
+            'beat_refs': [], 'evidence': evidence(1)}]}
+
+
+def compiled(raw=None, *, inherited=None, available=frozenset()):
+    return compile_chapter(PlotChapterResponse.model_validate(raw or response()), SOURCE,
+        allowed_char_ids=CHARS, character_bindings=INVENTORY,
+        allowed_actor_bindings=inherited, allowed_entry_state_refs=available)
+
+
+def test_same_beat_keeps_two_presentations_and_roundtrip_keeps_handles():
+    chapter = compiled()
+    assert [actor.key() for actor in chapter.beats[1].participants] == [
+        ('char_001', 'ap01_01'), ('char_001', 'ap01_02')]
+    projection = response_projection(chapter.model_dump(mode='json'), SOURCE)
+    assert [row['presentation_ref'] for row in projection['beats'][1]['participants']] == ['a1', 'a2']
+    assert compiled(projection) == chapter
+    assert not any('role' in type(row).model_fields for row in chapter.actor_bindings)
+
+
+@pytest.mark.parametrize('failure', ['ambiguous_default', 'missing', 'wrong_owner', 'invented_surface', 'unattested_surface'])
+def test_compiler_rejects_unprovided_or_ambiguous_binding(failure):
+    raw = response()
+    if failure == 'ambiguous_default':
+        raw['beats'][0]['participants'][0]['presentation_ref'] = None
+    elif failure == 'missing':
+        raw['beats'][0]['participants'][0]['presentation_ref'] = 'ap01_99'
+    elif failure == 'wrong_owner':
+        raw['beats'][0]['participants'][0]['char_id'] = 'char_002'
+    elif failure == 'invented_surface':
+        raw['actor_bindings'][0]['surfaces'] = ['裴知远']
+    else:
+        raw['actor_bindings'][1]['evidence'] = [{'start_para': 1, 'end_para': 1}]
+    with pytest.raises(ValueError):
+        compiled(raw)
+
+
+def test_subject_use_key_keeps_presentations_while_raw_key_identifies_fact():
+    first = PlotSubjectRef(kind='character', ref='char_001',
+        actor={'char_id': 'char_001', 'presentation_ref': 'ap01_01'})
+    second = first.model_copy(update={'actor': first.actor.model_copy(update={'presentation_ref': 'ap01_02'})})
+    assert first.raw_subject_key() == second.raw_subject_key()
+    assert first.key() != second.key()
+
+
+def test_relation_uses_bind_actual_presentations_without_inventing_a_state():
+    raw = response()
+    raw['relation_uses'] = [dict(kind='relation', ref='rel_01', relation_actors={
+        'subject': {'char_id': 'char_001', 'presentation_ref': ref},
+        'object': {'char_id': 'char_002', 'presentation_ref': None}}) for ref in ('a1', 'a2')]
+    chapter = compile_chapter(PlotChapterResponse.model_validate(raw), SOURCE,
+        allowed_char_ids=CHARS, character_bindings=INVENTORY,
+        allowed_global_refs=frozenset({('relation', 'rel_01')}),
+        global_subjects={('relation', 'rel_01'): {'subject_id': 'char_001', 'object_id': 'char_002'}})
+    assert chapter.states == []
+    assert len({row.key() for row in chapter.relation_uses}) == 2
+    assert [row.relation_actors.subject.presentation_ref for row in chapter.relation_uses] == ['ap01_01', 'ap01_02']
+    projected = response_projection(chapter.model_dump(mode='json'), SOURCE)
+    assert [row['relation_actors']['subject']['presentation_ref'] for row in projected['relation_uses']] == ['a1', 'a2']
+    raw['relation_uses'][0]['relation_actors']['subject']['char_id'] = 'char_002'
+    with pytest.raises(ValueError, match='有向端点'):
+        compile_chapter(PlotChapterResponse.model_validate(raw), SOURCE,
+            allowed_char_ids=CHARS, character_bindings=INVENTORY,
+            allowed_global_refs=frozenset({('relation', 'rel_01')}),
+            global_subjects={('relation', 'rel_01'): {'subject_id': 'char_001', 'object_id': 'char_002'}})
+
+
+def test_canonical_first_appearance_does_not_hide_earlier_registered_persona():
+    people = {'char_001': {'canonical': '芸娘', 'first_chapter': 1,
+        'aliases': [{'surface': '娘子', 'identity_revealed_from': 4},
+                    {'surface': '芸娘', 'identity_revealed_from': 4}]}}
+    inventory = blueprint_character_prompt_inventory(people, [
+        {'chapter_ordinal': 1, 'text': '娘子，我等你。'}, {'chapter_ordinal': 4, 'text': '她名叫芸娘。'}])
+    assert inventory['visible_character_refs'][1] == {'char_001': ['娘子']}
+    assert inventory['character_bindings'][1]['char_001'] == [
+        {'surface': '娘子', 'identity_revealed_from': 4}]
+
+
+def test_plain_public_nicknames_can_share_one_binding():
+    raw = response()
+    raw['actor_bindings'] = [{**raw['actor_bindings'][0], 'surfaces': ['新邻居', '裴书远'],
+        'evidence': [{'start_para': 2, 'end_para': 2}]}]
+    raw['beats'][1]['participants'] = [{'char_id': 'char_001', 'presentation_ref': 'a1'}]
+    assert len(compiled(raw).actor_bindings) == 1
+
+
+def test_unique_public_binding_is_used_when_all_positions_omit_presentation():
+    raw = response(2)
+    raw['actor_bindings'] = [{**raw['actor_bindings'][0], 'surfaces': ['新邻居', '裴书远'],
+        'evidence': [{'start_para': 2, 'end_para': 2}]}]
+    for beat in raw['beats']:
+        beat['participants'] = [{'char_id': 'char_001'}, {'char_id': 'char_002'}]
+    chapter = compiled(raw)
+    assert len(chapter.actor_bindings) == 1
+    assert all(actor.presentation_ref is None for beat in chapter.beats for actor in beat.participants)
+
+
+@pytest.mark.parametrize('revealed_from', [2, 3])
+@pytest.mark.parametrize('binding_surface', ['新邻居', '裴书远'])
+def test_old_default_cannot_be_absorbed_by_new_binding_and_free_edit_resolves_it(revealed_from, binding_surface):
+    from copy import deepcopy
+    raw = response(2)
+    raw['actor_bindings'] = raw['actor_bindings'][:1]
+    raw['actor_bindings'][0].update(surfaces=[binding_surface],
+        evidence=[{'start_para': 2, 'end_para': 2}])
+    raw['beats'][1]['participants'] = [{'char_id': 'char_001'}, {'char_id': 'char_002'}]
+    old_names = deepcopy(INVENTORY)
+    old_names['char_001'][0]['identity_revealed_from'] = 1
+    # 构造此前机械检查曾放过的问题稿；它不是语义接受证据。
+    previous = compile_chapter(PlotChapterResponse.model_validate(raw), SOURCE,
+        allowed_char_ids=CHARS, character_bindings=old_names)
+    current_names = deepcopy(old_names)
+    current_names['char_001'][0]['identity_revealed_from'] = revealed_from
+    with pytest.raises(ValueError, match='不能吸入'):
+        compile_chapter(PlotChapterResponse.model_validate(raw), SOURCE,
+            allowed_char_ids=CHARS, character_bindings=current_names)
+    with pytest.raises(ValueError, match='不能吸入'):
+        validate_actors(previous, SOURCE, allowed_char_ids=CHARS, character_bindings=current_names)
+
+    projected = response_projection(previous.model_dump(mode='json'), SOURCE)
+    identities = [dict(collection=collection, kind='preserve', old_refs=[getattr(old, field)], new_keys=[new[key]])
+        for collection, field, key, _ in plot_edit.COLLECTIONS
+        for old, new in zip(getattr(previous, collection), projected[collection], strict=True)]
+    other_surface = '裴书远' if binding_surface == '新邻居' else '新邻居'
+    projected['actor_bindings'].append({'presentation_key': 'a2', 'char_id': 'char_001',
+        'surfaces': [other_surface], 'evidence': [{'start_para': 2, 'end_para': 2}], 'public_state_ref': None})
+    identities.append(dict(collection='actor_bindings', kind='add', old_refs=[], new_keys=['a2']))
+    projected['beats'][1]['participants'][0]['presentation_ref'] = 'a2'
+    repaired, _, _ = plot_edit._compile_edit(PlotChapterEdit(chapter=projected, identities=identities),
+        previous, SOURCE, available=frozenset(), chars=CHARS, globals_=frozenset(),
+        retired=set(), character_bindings=current_names)
+    assert repaired.beats[0].participants[0].presentation_ref == 'ap02_01'
+    assert repaired.beats[1].participants[0].presentation_ref == 'ap02_03'
+    assert repaired.beats[1].content == previous.beats[1].content
+
+
+def test_inherited_state_free_request_compiler_receives_exact_binding_closure():
+    raw = response()
+    raw['states'] = [{'state_key': 'st1', 'content': '新邻居声称来拜访。',
+        'global_ref': None, 'modality': 'claim',
+        'holder': {'char_id': 'char_001', 'presentation_ref': 'a1'},
+        'established_at': {'kind': 'at_beat', 'beat_ref': 'b1'}, 'ended_at': None,
+        'supersedes_state_refs': [], 'evidence': [{'start_para': 1, 'end_para': 1}]}]
+    raw['carry_out_refs'] = ['st1']
+    first = compiled(raw)
+    materials = state_materials([first], ['st01_01'])
+    assert [row['binding']['presentation_id'] for row in materials[0]['actor_bindings']] == ['ap01_01']
+    later = response(2)
+    later['actor_bindings'] = []
+    later['entry_state_refs'] = ['st01_01']
+    later['carry_out_refs'] = ['st01_01']
+    later['beats'] = [later['beats'][0]]
+    later['beats'][0]['participants'][0]['presentation_ref'] = 'ap01_01'
+    user = build_plot_user('合成', SOURCE, 2, character_refs={cid: [row['surface'] for row in names]
+        for cid, names in INVENTORY.items()}, character_bindings=INVENTORY, global_projection=[])
+    compiler = request_compiler(with_entry_states(user, materials), SOURCE)
+    second = compiler(PlotChapterResponse.model_validate(later))
+    assert second.beats[0].participants[0].presentation_ref == 'ap01_01'
+    validate_book([first, second], {1: SOURCE, 2: SOURCE})
+    with pytest.raises(ValueError):
+        request_compiler(with_entry_states(user, []), SOURCE)(PlotChapterResponse.model_validate(later))
+
+
+@pytest.mark.parametrize('declare_current', [False, True])
+def test_unconsumed_historical_bindings_do_not_enter_current_executor_candidates(declare_current):
+    import json
+    first = compiled()
+    later = response(2)
+    later['actor_bindings'] = ([{**later['actor_bindings'][0], 'surfaces': ['新邻居', '裴书远'],
+        'evidence': [{'start_para': 2, 'end_para': 2}]}] if declare_current else [])
+    for beat in later['beats']:
+        beat['participants'] = [{'char_id': 'char_001'}, {'char_id': 'char_002'}]
+    user = build_plot_user('历史候选边界', SOURCE, 2,
+        character_refs={cid: [row['surface'] for row in names] for cid, names in INVENTORY.items()},
+        character_bindings=INVENTORY, global_projection=[])
+    request = with_entry_states(user, state_materials([first], first.carry_out_refs))
+    assert json.loads(request.split('\n', 1)[0])['entry_states'] == []
+    compiler = request_compiler(request, SOURCE)
+    second = compiler(PlotChapterResponse.model_validate(later))
+    assert set(available_actor_bindings([first, second], 2)) == ({'ap02_01'} if declare_current else set())
+    validate_book([first, second], {1: SOURCE, 2: SOURCE})
+    later['beats'][0]['participants'][0]['presentation_ref'] = 'ap01_01'
+    with pytest.raises(ValueError, match='引用不存在'):
+        compiler(PlotChapterResponse.model_validate(later))
+
+
+def test_carried_default_state_includes_its_original_unique_binding_without_rewriting_identity():
+    raw = response()
+    raw['actor_bindings'] = [{**raw['actor_bindings'][0], 'surfaces': ['新邻居', '裴书远'],
+        'evidence': [{'start_para': 2, 'end_para': 2}]}]
+    for beat in raw['beats']:
+        beat['participants'] = [{'char_id': 'char_001'}, {'char_id': 'char_002'}]
+    raw['states'] = [{'state_key': 'st1', 'content': '新邻居声称来拜访。',
+        'global_ref': None, 'modality': 'claim', 'holder': {'char_id': 'char_001'},
+        'established_at': {'kind': 'at_beat', 'beat_ref': 'b1'}, 'ended_at': None,
+        'supersedes_state_refs': [], 'evidence': [{'start_para': 1, 'end_para': 1}]}]
+    raw['carry_out_refs'] = ['st1']
+    first = compiled(raw)
+    carried = state_materials([first], first.carry_out_refs)
+    assert carried[0]['state']['holder'] == {'char_id': 'char_001', 'presentation_ref': None}
+    assert [row['binding']['presentation_id'] for row in carried[0]['actor_bindings']] == ['ap01_01']
+    assert carried[0]['actor_bindings'][0]['source_sha256'] == first.source_sha256
+    later = response(2)
+    later['actor_bindings'] = later['actor_bindings'][:1]
+    later['beats'] = later['beats'][:1]
+    later['beats'][0]['participants'][0]['presentation_ref'] = None
+    later['entry_state_refs'] = ['st01_01']
+    later['carry_out_refs'] = []
+    user = build_plot_user('携入身份边界', SOURCE, 2,
+        character_refs={cid: [row['surface'] for row in names] for cid, names in INVENTORY.items()},
+        character_bindings=INVENTORY, global_projection=[])
+    compiler = request_compiler(with_entry_states(user, carried), SOURCE)
+    with pytest.raises(ValueError, match='多个表面身份'):
+        compiler(PlotChapterResponse.model_validate(later))
+    later['beats'][0]['participants'][0]['presentation_ref'] = 'a1'
+    second = compiler(PlotChapterResponse.model_validate(later))
+    assert set(available_actor_bindings([first, second], 2)) == {'ap01_01', 'ap02_01'}
+    assert state_materials([first, second], ['st01_01']) == carried
+    validate_book([first, second], {1: SOURCE, 2: SOURCE})
+    with pytest.raises(ValueError, match='原始使用章'):
+        available_actor_bindings([first, second], 3)
+
+
+def test_typed_presentation_replace_retires_old_id_and_reserves_next_id():
+    previous = compiled()
+    raw = response_projection(previous.model_dump(mode='json'), SOURCE)
+    identities = [dict(collection=collection, kind='preserve', old_refs=[getattr(old, field)], new_keys=[new[key]])
+        for collection, field, key, _ in plot_edit.COLLECTIONS
+        for old, new in zip(getattr(previous, collection), raw[collection], strict=True)]
+    next(row for row in identities if row['old_refs'] == ['ap01_01'])['kind'] = 'replace'
+    result, changes, tombstones = plot_edit._compile_edit(PlotChapterEdit(chapter=raw, identities=identities),
+        previous, SOURCE, available=frozenset(), chars=CHARS, globals_=frozenset(),
+        retired={'ap01_03'}, character_bindings=INVENTORY)
+    assert result.actor_bindings[0].presentation_id == 'ap01_04'
+    assert result.beats[0].participants[0].presentation_ref == 'ap01_04'
+    assert tombstones[0].node_id == 'ap01_01'
+    assert tombstones[0].superseded_by == ['ap01_04']
+
+
+def _scope_with_local_identity():
+    chapter = compiled()
+    provenance = {'code': 'fixture', 'root_clean_sha1': '0' * 40, 'inputs': {},
+        'prompts': {'FIXTURE_ONLY': '0' * 10}, 'model': 'fixture'}
+    book = ChapterBlueprints(blueprints=[chapter, compiled(response(2))], _provenance={**provenance, 'scope_violations': [],
+        'context': {'architecture': 'plot-blueprint-v1', 'source_format': 'numbered-paragraphs-v1',
+                    'global_projection_contract': 'plot-global-scope-v2'}})
+    global_ = KnowledgeGrounding.model_validate({'characters_reference_sha256': '0' * 64,
+        'setting': {'era': None, 'social_context': None, 'era_evidence_refs': [], 'social_context_evidence_refs': []},
+        'relations': [], 'world_rules': [], 'arc_secrets': [], 'evidence_anchors': {},
+        '_provenance': {**provenance, 'evidence_locator_failures': []}})
+    main = MainText.model_validate([{'chapter_ordinal': ordinal, 'text': SOURCE} for ordinal in (1, 2)])
+    kwargs = dict(main_sha256='1' * 64, knowledge_sha256='2' * 64, blueprint_sha256='3' * 64)
+    before = knowledge_links.build_scope(main, global_, book, **kwargs)
+    submission = KnowledgeLinkSubmission(scope_sha256=before.scope_sha256, actor='test', reason='同章局部揭示',
+        decisions=[], event_operations=[{'operation': 'put', 'event_id': 'ke_identity', 'expected_event_sha256': None,
+        'event': {'kind': 'reader_reveal', 'subject_ref': {'kind': 'beat', 'ref': 'b01_02'}, 'audience': None,
+            'chapter_ordinal': 1, 'evidence_refs': [{'chapter_ordinal': 1, 'evidence_ref': 'e01_02'}]},
+        'resolution': {'kind': 'at_beats', 'trigger_beat_ref': 'b01_02',
+            'subject_refs': [{'kind': 'beat', 'ref': 'b01_02'}],
+            'identity_actors': [{'char_id': 'char_001', 'presentation_ref': 'ap01_01'},
+                                {'char_id': 'char_001', 'presentation_ref': 'ap01_02'}]}}])
+    registry = knowledge_links.event_registry([KnowledgeLinkHistory(
+        decision_sha256='4' * 64, accepted=False, submission=submission)])
+    after = knowledge_links.build_scope(main, global_, book, registered_events=registry, **kwargs)
+    return before, after, submission
+
+
+def test_same_chapter_identity_reveal_is_sparse_event_at_explicit_beat_not_global_secret():
+    before, after, submitted = _scope_with_local_identity()
+    assert before.obligations == []
+    result = knowledge_links.materialize_submission(before, after, submitted)
+    decision = result.decisions[0]
+    assert decision.resolution.trigger_beat_ref == 'b01_02'
+    assert len(decision.resolution.identity_actors) == 2
+    assert [row.kind for row in after.obligations] == ['reader_reveal']
+
+
+def test_identity_reveal_cannot_invent_or_open_unprovided_presentation():
+    before, after, submitted = _scope_with_local_identity()
+    raw = submitted.model_dump(mode='json')
+    raw['event_operations'][0]['resolution']['identity_actors'][1]['presentation_ref'] = 'ap01_99'
+    with pytest.raises(HumanEditProtected, match='未在本章'):
+        knowledge_links.materialize_submission(before, after, KnowledgeLinkSubmission.model_validate(raw))

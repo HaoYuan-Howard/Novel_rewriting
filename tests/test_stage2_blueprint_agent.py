@@ -78,7 +78,7 @@ def _ctx(base: Path, book: Path, *, run_id: str | None = None) -> RunContext:
 
 def _bad_chapter(chapter: int) -> dict:
     value = copy.deepcopy(_response_blueprints()[chapter])
-    value['beats'][0]['participant_char_ids'] = ['char_999999']
+    value['beats'][0]['participants'] = [{'char_id': 'char_999999'}]
     return value
 
 
@@ -286,7 +286,7 @@ def test_live_hard_resumes_only_target_chapter_then_delivers(tmp_path):
     feedback = json.loads(resumed.prompt)
     assert feedback['kind'] == 'response_validation_failed'
     assert feedback['gate'] == 'validator'
-    assert '不可见人物' in json.dumps(feedback, ensure_ascii=False)
+    assert '请求未提供的人物' in json.dumps(feedback, ensure_ascii=False)
 
     store = ArtifactStore(ctx)
     landed = store.read(ChapterBlueprints, extract.BLUEPRINT_REL)
@@ -320,10 +320,12 @@ def test_initial_checkpoint_is_immutable_across_live_revision(tmp_path):
     checkpoint = json.loads(paths.stage2_blueprint_checkpoint_path(
         book, ctx.run_id, 'blueprint', 1).read_text(encoding='utf-8'))
     first_blueprint = checkpoint['response_payload']['blueprints'][0]
-    assert first_blueprint == good[1]
+    from contracts.schema.plot import PlotChapterResponse
+    assert first_blueprint == PlotChapterResponse.model_validate(good[1]).model_dump(mode='json')
     assert checkpoint['accepted_turn_index'] == 2
     landed = ArtifactStore(ctx).read(ChapterBlueprints, extract.BLUEPRINT_REL)
-    assert landed.blueprints[0].beats[0].participant_char_ids == good[1]['beats'][0]['participant_char_ids']
+    assert [actor.char_id for actor in landed.blueprints[0].beats[0].participants] == [
+        actor['char_id'] for actor in good[1]['beats'][0]['participants']]
 
 
 def test_crash_restore_opens_one_new_subject_and_never_builds_restored_drivers(

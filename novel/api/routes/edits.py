@@ -112,7 +112,9 @@ def preview_draft_edit(
 def blueprint_edit_template(sid: str = Depends(checked_sid), base: str = Depends(get_base),
                             chapter_ordinal: int | None = Query(default=None, ge=1)) -> PlotEdit:
     from contracts.schema import decode_artifact
-    ctx = RunContext.open(base, sid, 'stage2.blueprint', paid=False, write_ledger=False)
+    from novel.orchestrator.state import readonly_ctx
+    from novel import paths, prov
+    ctx = readonly_ctx(paths.resolve_novel_dir(base, sid), 'stage2.blueprint', prov.code_version())
     template = PlotEdit.model_validate(decode_artifact(
         plot_edit.REQUEST_REL, plot_edit.edit_template(ctx)).payload)
     if chapter_ordinal is None:
@@ -133,10 +135,13 @@ def preview_blueprint_edit(
     base: str = Depends(get_base),
 ) -> PlotEditPreview:
     """完整剧情与身份映射的只读预检。"""
-    ctx = RunContext.open(
-        base, sid, 'stage2.blueprint', paid=False, write_ledger=False)
+    from novel.orchestrator.state import readonly_ctx
+    from novel import paths, prov
+    ctx = readonly_ctx(paths.resolve_novel_dir(base, sid), 'stage2.blueprint', prov.code_version())
     try:
         return plot_edit.prepare_edit(ctx, request).preview()
+    except ValueError as exc:
+        raise SourceConflict(str(exc)) from exc
     except TerminalState as exc:
         if type(exc) is TerminalState:
             raise SourceConflict(str(exc)) from exc

@@ -246,8 +246,8 @@ def test_scene_and_summary_receive_distinct_execution_rules():
 def test_beats_have_no_implied_source_order_and_deliveries_are_not_new_facts(book):
     entry = copy.deepcopy(book.chapters[1])
     entry['beats'] = [
-        {'beat_ref': 'b01_02', 'content': '后果先被看见。', 'participant_char_ids': []},
-        {'beat_ref': 'b01_01', 'content': '原因随后补足。', 'participant_char_ids': []}]
+        {'beat_ref': 'b01_02', 'content': '后果先被看见。', 'participants': []},
+        {'beat_ref': 'b01_01', 'content': '原因随后补足。', 'participants': []}]
     rendered = prompts.chapter_directive(entry, book)
     assert rendered.index('后果先被看见。') < rendered.index('原因随后补足。')
     assert '节点目录没有隐含的源文先后' in prompts.ORDER_RULE
@@ -309,12 +309,12 @@ def test_chapter_directive_projects_semantic_contract_and_safe_brief(book):
 def test_prev_context_gives_only_completed_ending_beats_and_carry_refs(book):
     previous = copy.deepcopy(book.chapters[1])
     previous['beats'].append({'beat_ref': 'b01_02', 'content': '上一章末场转折。',
-                              'participant_char_ids': []})
+                              'participants': []})
     previous['scenes'].append(_scene('s02', 'scene', ['b01_02']))
     excluded = previous['beats'][0]['content']
     from dataclasses import replace
     sample = replace(book, ctx={'chapters': [previous]}, _cache={})
-    rendered = prompts.prev_context({'output_ordinal': 2, 'beats': [], 'background_beats': []}, sample)
+    rendered = prompts.prev_context({'output_ordinal': 2, 'beats': [], 'background_beats': [], 'characters': []}, sample)
     assert '上一章末场转折。' in rendered and '"carry_out_refs":["st01_01"]' in rendered
     assert excluded not in rendered and 'chapter_goal' not in rendered
 
@@ -344,15 +344,20 @@ def test_previous_chapter_shares_current_catalog_without_sending_other_material(
     from dataclasses import replace
     from novel.stages.stage5 import review
     previous = copy.deepcopy(book.chapters[1])
+    actor = previous['characters'][0]['actor_ref']
     ending = {'beat_ref': 'b01_02', 'content': '沈青已经拿到账册。',
-              'participant_char_ids': ['char_001']}
+              'participants': [actor]}
     previous['beats'].append(ending)
     previous['scenes'].append(_scene('s02', 'scene', ['b01_02']))
     excluded = previous['beats'][0]['content']
     entry = copy.deepcopy(book.chapters[1])
     entry['output_ordinal'] = 2
     entry['beats'] = [{'beat_ref': 'b02_01', 'content': '第二章开始继续核账。',
-                       'participant_char_ids': ['char_001']}]
+                       'participants': [actor]}]
+    entry['semantic_contract']['beat_refs'] = ['b02_01']
+    for field in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
+        entry[field]['subject_refs'] = [{'kind': 'beat', 'ref': 'b02_01'}]
+        entry[field]['anchor_beat_ref'] = 'b02_01'
     entry['scenes'][0]['deliveries'][0]['beat_ref'] = 'b02_01'
     entry['scenes'][0]['turn_beat_ref'] = 'b02_01'
     entry['background_beats'] = [copy.deepcopy(ending)] if also_current else []
@@ -404,8 +409,11 @@ def test_short_beats_and_preexisting_reference_labels_are_lossless(book):
     entry = copy.deepcopy(book.chapters[1])
     entry['chapter_rewrite_brief'] += '〔文1〕是原材料中的字样。'
     entry['beats'] = [
-        {'beat_ref': 'b01_01', 'content': '门开了。', 'participant_char_ids': []},
-        {'beat_ref': 'b01_02', 'content': '本章事实：门未开。', 'participant_char_ids': []}]
+        {'beat_ref': 'b01_01', 'content': '门开了。', 'participants': []},
+        {'beat_ref': 'b01_02', 'content': '本章事实：门未开。', 'participants': []}]
+    entry['semantic_contract']['beat_refs'] = ['b01_01', 'b01_02']
+    entry['scenes'][0]['deliveries'].append({
+        'beat_ref': 'b01_02', 'presentation_instruction': None, 'stages': []})
     given = prompts.build_material(entry, book).given
     assert given.count('门开了。') == 1
     assert '〔文1〕：' not in given
@@ -415,11 +423,12 @@ def test_short_beats_and_preexisting_reference_labels_are_lossless(book):
 def test_writer_does_not_receive_source_or_restricted_answers(book):
     from dataclasses import replace
     entry = copy.deepcopy(book.chapters[1])
-    entry['restricted_subject_refs'] = [{'kind': 'secret', 'ref': 'secret_99'}]
+    public_secret = 'subject_' + '9' * 24
+    entry['restricted_subject_refs'] = [{'kind': 'secret', 'ref': public_secret}]
     sample = replace(book, source_text={1: '绝密原文章节只能供本地测量。' * 100},
                      secrets=[{'secret_id': 'secret_99', 'fact': '本章不得下发的秘密真相'}], _cache={})
     given = prompts.build_material(entry, sample).given
-    assert 'secret_99' in given
+    assert public_secret in given and 'secret_99' not in given
     assert '绝密原文章节只能供本地测量' not in given
     assert '本章不得下发的秘密真相' not in given
     assert '同次请求可见后场材料，但前场不得提前表达' in given

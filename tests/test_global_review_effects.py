@@ -228,6 +228,108 @@ def test_relation_completeness_tracks_business_fields_but_not_evidence_location(
         assert new_complete.state == 'PASS'
 
 
+@pytest.mark.parametrize('negative_state', ['FAIL', 'UNVER'])
+def test_free_evidence_reaudit_restores_generation_consumed_but_new_denial_blocks(
+        tmp_path, negative_state):
+    """真实编辑和决定落盘后比较 Store 的 consumed，不把旧证据审批沿用到新主体。"""
+    from contracts.artifacts import STAGE2_CHARACTERS
+    from contracts.schema import encode_artifact
+    from novel.consumption import stage4_grounding
+    from novel.errors import ApprovalRequired
+    from novel.stages.stage2 import extract
+    from tests.test_stage2_global_core_edits import write_edit
+    from tests.test_stage2_global_agent import _free_ctx
+
+    ctx, original = seed(tmp_path)
+    ledger = ctx.ledger.path.read_bytes()
+    characters_bytes = (ctx.novel_dir / STAGE2_CHARACTERS).read_bytes()
+    registry = ArtifactStore(_free_ctx(ctx)).read_own(
+        CharacterRegistry, STAGE2_CHARACTERS)[0].model_dump(mode='json', by_alias=True)
+
+    def submit(review, *, state='PASS', kind=None):
+        payload = {'actor': 'test:free-reviewer', 'decisions': [{
+            'item_id': row.item_id, 'expected_subject_sha256': row.subject_sha256,
+            'state': state, 'reason': '按当前证据逐项重审的合成决定', 'evidence': [],
+        } for row in review.items if kind is None or row.kind == kind]}
+        path = ctx.novel_dir / global_review.DEFAULT_DECISIONS
+        path.write_text(json.dumps(encode_artifact(global_review.DEFAULT_DECISIONS, payload),
+                                   ensure_ascii=False), encoding='utf-8')
+        return global_review.apply_file(_free_ctx(ctx))
+
+    def consume():
+        consumer = _ctx(ctx.novel_dir, 'stage4.design', paid=False)
+        value = global_review.generation_grounding(ArtifactStore(consumer))
+        return value, consumer.edges[STAGE2_GLOBAL_REVIEW]
+
+    pending = ArtifactStore(_free_ctx(ctx)).read_own(GlobalReview, STAGE2_GLOBAL_REVIEW)[0]
+    accepted = submit(pending)
+    before_global, before_edge = consume()
+    assert before_edge.consumed is not None
+    old_relation = next(row for row in accepted.items if row.kind == 'relation')
+
+    write_edit(ctx, {'relations': [{'relation_id': original.relations[0].relation_id,
+        'evidence_refs': [{'chapter_ordinal': 3, 'locator': '母亲进来给她添了一盏茶。'}]}]})
+    changed, report = extract.run_apply_edit(_free_ctx(ctx))
+    assert report.passed
+    assert stage4_grounding(changed.model_dump(mode='json', by_alias=True)) == stage4_grounding(
+        before_global.model_dump(mode='json', by_alias=True))
+    with pytest.raises(HumanEditProtected, match='stale'):
+        review_domain.require_current(changed.model_dump(mode='json', by_alias=True),
+                                      accepted, characters=registry)
+    reopened = ArtifactStore(_free_ctx(ctx)).read_own(GlobalReview, STAGE2_GLOBAL_REVIEW)[0]
+    new_relation = next(row for row in reopened.items if row.kind == 'relation')
+    assert new_relation.subject_path == old_relation.subject_path
+    assert new_relation.item_id != old_relation.item_id
+    assert new_relation.subject_sha256 != old_relation.subject_sha256
+    assert new_relation.state == 'pending'
+    with pytest.raises(ApprovalRequired, match='未收口'):
+        consume()
+
+    reaccepted = submit(reopened)
+    after_global, after_edge = consume()
+    assert all(row.state == 'PASS' for row in reaccepted.items)
+    assert after_edge.file != before_edge.file
+    assert after_edge.consumed == before_edge.consumed
+    assert after_global == changed
+    global_bytes = (ctx.novel_dir / STAGE2_GLOBAL_GROUNDING).read_bytes()
+
+    denied = submit(reaccepted, state=negative_state, kind='relation')
+    assert next(row for row in denied.items if row.kind == 'relation').state == negative_state
+    with pytest.raises(ApprovalRequired, match='未收口'):
+        consume()
+    from novel.consumption import stage2_generation_review
+    assert stage2_generation_review(denied.model_dump(mode='json')) != stage2_generation_review(
+        reaccepted.model_dump(mode='json'))
+    assert (ctx.novel_dir / STAGE2_GLOBAL_GROUNDING).read_bytes() == global_bytes
+    assert (ctx.novel_dir / STAGE2_CHARACTERS).read_bytes() == characters_bytes
+    assert ctx.ledger.path.read_bytes() == ledger
+
+
+def test_generation_permission_keeps_subject_membership_and_quarantine_changes():
+    from novel.consumption import stage2_generation_review
+
+    core = _global()
+    accepted = _decide_all(build_review(core), set(GLOBAL_REVIEW_KINDS))
+    expected = stage2_generation_review(accepted.model_dump(mode='json'))
+    reversed_items = accepted.model_copy(update={'items': list(reversed(accepted.items))})
+    assert stage2_generation_review(reversed_items.model_dump(mode='json')) == expected
+    added = copy.deepcopy(core)
+    added['relations'].append(dict(added['relations'][0], relation_id='rel_02'))
+    expanded = _decide_all(build_review(added), set(GLOBAL_REVIEW_KINDS))
+    assert stage2_generation_review(expanded.model_dump(mode='json')) != expected
+    removed = copy.deepcopy(core)
+    removed['relations'] = []
+    reduced = _decide_all(build_review(removed), set(GLOBAL_REVIEW_KINDS))
+    assert stage2_generation_review(reduced.model_dump(mode='json')) != expected
+
+    quarantined = _quarantine_group(accepted, 'secret:secret_01')
+    # 同为 UNVER，是否隔离仍改变写作许可；不能只保留 state。
+    unquarantined = quarantined.model_copy(update={'items': [
+        row.model_copy(update={'generation_disposition': None}) for row in quarantined.items]})
+    assert stage2_generation_review(quarantined.model_dump(mode='json')) != stage2_generation_review(
+        unquarantined.model_dump(mode='json'))
+
+
 # ── ② 闸 ────────────────────────────────────────────────────────────────────
 
 def test_alias_identity_pending_cannot_be_treated_as_nonblocking_disclosure():

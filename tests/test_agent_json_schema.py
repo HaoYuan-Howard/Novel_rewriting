@@ -54,7 +54,7 @@ _VOCABULARY = frozenset({
 #: 反射出来的空表会让这条守卫静默失去判别力（判据 3）。
 def _models() -> dict[str, type]:
     from contracts.schema.analyze import AnalyzeResponse
-    from contracts.schema.plot import PlotChapterResponse
+    from contracts.schema.plot import PlotBlueprintResponse
     from contracts.schema.plot_edit import PlotRevisionResponse
     from contracts.schema.characters import CharactersResponse
     from contracts.schema.knowledge import KnowledgeAgentTurnResponse, KnowledgeResponse
@@ -72,7 +72,7 @@ def _models() -> dict[str, type]:
         'stage2.global': KnowledgeAgentTurnResponse,
         'stage2.global/legacy-direct': KnowledgeResponse,
         'stage2.characters': CharactersResponse,
-        'stage2.blueprint': PlotChapterResponse,
+        'stage2.blueprint': PlotBlueprintResponse,
         'stage2.blueprint/repair': PlotRevisionResponse,
         'stage4.design/strategy': BlindBookStrategyResponse,
         'stage4.design/chapter': BlindChapterDesignResponse,
@@ -428,3 +428,63 @@ def test_both_construction_sites_go_through_the_single_landing_point(where):
     assert source.count('model_json_schema(by_alias=True)') == 1, (
         '除 `agent_json_schema` 自己那一处外，不该再有第二个地方直接取 schema')
     assert source.count('agent_json_schema(') >= 3, where
+
+
+def _glm_native_argv(schema, *, commander, directory, monkeypatch):
+    """只构造真实默认驱动 invocation；runner 是禁止执行的反向哨兵。"""
+    from novel.agents.base import CLAUDE_STRUCTURED_DELIVERY_V1, ensure_command_line_fits
+    from novel.agents.glm import BIGMODEL_BASE_URL, GlmClaudeCodeDriver
+    from novel.commanders.glm import GlmClaudeCodeCommanderDriver
+
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(directory / 'no-cli-config'))
+    monkeypatch.setenv('ANTHROPIC_BASE_URL', BIGMODEL_BASE_URL)
+    profile = AgentProfile(driver='claude-code-glm', model='glm-5.3-flash[1M]',
+        reasoning_effort='high', execution_mode='standard')
+    def forbidden_runner(*args, **kwargs):
+        raise AssertionError('schema 预检不得启动模型或进程')
+    if commander:
+        driver = GlmClaudeCodeCommanderDriver(executable='claude', runner=forbidden_runner)
+        invocation = driver.build_invocation(profile, '完整审阅材料通过 stdin 提供。',
+            repo=directory, base=directory, structured_response=True, output_schema=schema)
+        argv = invocation.argv
+        assert invocation.output_schema == schema
+    else:
+        driver = GlmClaudeCodeDriver(executable='claude', runner=forbidden_runner)
+        driver._check_profile(profile)
+        request = AgentRequest(prompt='完整章节材料通过 stdin 提供。', execution_policy='executor-isolated',
+            cwd=directory, output_schema=schema, delivery_protocol=CLAUDE_STRUCTURED_DELIVERY_V1)
+        argv = driver._argv(profile, request, session_id=None)
+    assert argv[argv.index('--model') + 1] == profile.model
+    assert argv[argv.index('--effort') + 1] == profile.reasoning_effort
+    assert json.loads(argv[argv.index('--json-schema') + 1]) == schema
+    ensure_command_line_fits(argv, platform_name='nt')
+    return argv
+
+
+@pytest.mark.parametrize('label', [
+    'stage2.blueprint', 'stage2.blueprint/repair', 'stage2.blueprint/commander',
+    'stage4.design/strategy', 'stage4.design/chapter', 'stage4.plan', 'stage4.plan/chapter',
+    'stage4.design/commander', 'stage4.plan/commander',
+])
+def test_gate_b_real_response_schemas_reach_default_glm_without_model_request(label, tmp_path, monkeypatch):
+    from novel.orchestrator import queue, stage2_blueprint_wire, stage4_reviewer_wire
+    from novel.stages.stage2.contract import contract_for
+    from tests.test_stage4_reviewer_wire import _task
+
+    commander = label.endswith('/commander')
+    if label == 'stage2.blueprint':
+        model = contract_for('plot-blueprint-v1').response_model
+        assert model is _models()[label], '验证真实 wrapper，不能只扫描其中一个子模型'
+        schema = agent_json_schema(model)
+    elif label == 'stage2.blueprint/commander':
+        schema = stage2_blueprint_wire.response_schema()
+    elif label in {'stage4.design/commander', 'stage4.plan/commander'}:
+        task = _task(queue.WAITING_ON_STAGE4_DESIGN_REVIEW if label.startswith('stage4.design')
+                     else queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW)
+        schema = stage4_reviewer_wire.output_schema_for(task)
+    else:
+        schema = agent_json_schema(_models()[label])
+    assert schema is not None
+    assert not _object_contract_errors(schema)
+    assert not _keywords(schema) - _VOCABULARY
+    _glm_native_argv(schema, commander=commander, directory=tmp_path, monkeypatch=monkeypatch)

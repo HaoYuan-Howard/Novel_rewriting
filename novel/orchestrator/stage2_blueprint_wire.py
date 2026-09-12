@@ -82,7 +82,7 @@ def assemble(document: dict[str, Any]) -> dict[str, Any]:
         ruling = payload.pop('ruling')
         payload.update(decision=ruling['decision'], owner=ruling.get('owner'),
                        chapter_ordinals=ruling.get('chapter_ordinals', []),
-                       reason=payload['plot_review']['reason'], review=None)
+                       reason=payload['plot_review']['reason'], review=None, core_edits=None)
         payload['knowledge_links'].update(actor=payload['actor'], reason=payload['reason'])
         Stage2NodeReviewRequest.model_validate(payload)
     except ValidationError as exc:

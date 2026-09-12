@@ -83,7 +83,7 @@ def test_removed_narration_fields_are_absent_from_model_surfaces():
 def test_person_values_match_the_current_contract():
     assert NARRATIVE_PERSON == ('first', 'second', 'third')
     definitions = PlotBlueprintResponse.model_json_schema()['$defs']
-    assert definitions['PlotNarration']['properties']['grammatical_person']['enum'] == list(NARRATIVE_PERSON)
+    assert definitions['PlotNarrationResponse']['properties']['grammatical_person']['enum'] == list(NARRATIVE_PERSON)
 
 
 def test_source_boundaries_are_semantic_not_forced_evidence_partition():
@@ -118,8 +118,8 @@ def test_response_schema_derives_enums_from_the_contract_layer():
 def test_response_schema_only_requests_model_written_fields():
     response = PlotBlueprintResponse.model_validate({'blueprints': [chapter_response()]})
     row = response.blueprints[0].model_dump()
-    assert {'narrator_char_id', 'focalizer_char_id'} <= row['narration'][0].keys()
-    assert {'content', 'participant_char_ids', 'evidence', 'source_contexts'} <= row['beats'][0].keys()
+    assert {'narrator', 'focalizer', 'beat_refs', 'evidence'} <= row['narration'][0].keys()
+    assert {'content', 'participants', 'evidence', 'source_contexts'} <= row['beats'][0].keys()
     surface = str(PlotBlueprintResponse.model_json_schema())
     for field in ('narrator_name', 'focalizer_name', 'present_names', 'evidence_id',
                   'source_sha256', 'source_text', 'fact_atoms'):

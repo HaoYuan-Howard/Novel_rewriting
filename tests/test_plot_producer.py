@@ -1,4 +1,4 @@
-"""V9 接入真实 Stage2 producer、Store、checkpoint 的免费验证。
+"""V10 接入真实 Stage2 producer、Store、checkpoint 的免费验证。
 
 模型传输使用 FakeTransport，保留现有生成、Global 接受和读回检查；该结果
 不能替代模型质量、真实 CLI 子进程或最终 Stage2→Stage5 贯通验收。
@@ -42,13 +42,14 @@ def responses():
     return {ordinal: {
         'chapter_ordinal': ordinal, 'chapter_function': '推进家宅生活及家人之间的信息变化',
         'beats': [{
-            'beat_key': f'b{i}', 'content': content, 'participant_char_ids': chars,
+            'beat_key': f'b{i}', 'content': content, 'participants': [{'char_id': cid} for cid in chars],
             'evidence': [{'start_para': start, 'end_para': end}], 'source_contexts': [],
         } for i, (content, start, end, chars) in enumerate(rows, 1)],
         'states': [], 'inherited_state_endings': [], 'constraints': [],
         'entry_state_refs': [], 'carry_out_refs': [],
-        'narration': [{'grammatical_person': 'third', 'narrator_char_id': None,
-                       'focalizer_char_id': 'char_001', 'pronoun_surfaces': []}],
+        'narration': [{'grammatical_person': 'third', 'narrator': None,
+                       'focalizer': {'char_id': 'char_001'}, 'pronoun_surfaces': [],
+                       'beat_refs': [], 'evidence': [{'start_para': 1, 'end_para': 1}]}],
     } for ordinal, rows in contents.items()}
 
 
@@ -70,7 +71,7 @@ def prepare_book(tmp_path):
     return book
 
 
-def test_plot_blueprint_real_producer_commits_v9_and_reads_back(tmp_path):
+def test_plot_blueprint_real_producer_commits_v10_and_reads_back(tmp_path):
     book = prepare_book(tmp_path)
     ctx = _ctx(book, 'stage2.blueprint')
     by_chapter = responses()
@@ -117,7 +118,7 @@ def test_real_requests_receive_sparse_state_ids_from_previous_verified_chapter(t
     by_chapter = responses()
     by_chapter[1]['states'] = [{
         'state_key': 'st1', 'content': '李宝珠把父亲回城的来信收在袖中。',
-        'global_ref': None, 'modality': 'world', 'holder_char_id': None,
+        'global_ref': None, 'modality': 'world', 'holder': None,
         'established_at': {'kind': 'at_beat', 'beat_ref': 'b2'},
         'ended_at': None, 'supersedes_state_refs': [],
         'evidence': [{'start_para': 5, 'end_para': 5}],
@@ -151,6 +152,50 @@ def test_real_requests_receive_sparse_state_ids_from_previous_verified_chapter(t
     assert artifact.blueprints[2].carry_out_refs == ['st01_01']
 
 
+def test_real_requests_carry_only_used_actor_binding_with_original_evidence(tmp_path):
+    book = prepare_book(tmp_path)
+    ctx = _ctx(book, 'stage2.blueprint')
+    by_chapter = responses()
+    by_chapter[1]['actor_bindings'] = [{
+        'presentation_key': 'a1', 'char_id': 'char_001', 'surfaces': ['李宝珠'],
+        'evidence': [{'start_para': 2, 'end_para': 2}], 'public_state_ref': None}]
+    by_chapter[1]['states'] = [{
+        'state_key': 'st1', 'content': '李宝珠相信父亲已经回城。',
+        'global_ref': None, 'modality': 'belief',
+        'holder': {'char_id': 'char_001', 'presentation_ref': 'a1'},
+        'established_at': {'kind': 'at_beat', 'beat_ref': 'b2'}, 'ended_at': None,
+        'supersedes_state_refs': [], 'evidence': [{'start_para': 3, 'end_para': 4}]}]
+    by_chapter[1]['carry_out_refs'] = ['st1']
+    for ordinal, chapter in by_chapter.items():
+        ref = 'a1' if ordinal == 1 else 'ap01_01'
+        for beat in chapter['beats']:
+            for actor in beat['participants']:
+                if actor['char_id'] == 'char_001':
+                    actor['presentation_ref'] = ref
+        chapter['narration'][0]['focalizer']['presentation_ref'] = ref
+        if ordinal > 1:
+            chapter['entry_state_refs'] = ['st01_01']
+            chapter['carry_out_refs'] = ['st01_01']
+
+    def respond(req, _index):
+        metadata = json.loads(req.user.split('\n', 1)[0])
+        ordinal = metadata['chapter_ordinal']
+        if ordinal > 1:
+            support = metadata['entry_states'][0]['actor_bindings']
+            assert len(support) == 1
+            assert support[0]['chapter_ordinal'] == 1
+            assert support[0]['binding']['presentation_id'] == 'ap01_01'
+            assert support[0]['evidence_anchors'][0]['start_para'] == 2
+        return _ok({'blueprints': [by_chapter[ordinal]]})
+
+    client, transport = _client(ctx, respond)
+    assert extract.run_blueprint(ctx, client).passed
+    artifact, _ = ArtifactStore(ctx).read_own(ChapterBlueprints, extract.BLUEPRINT_REL)
+    assert len(transport.calls) == 3
+    assert [len(row.actor_bindings) for row in artifact.blueprints] == [1, 0, 0]
+    assert artifact.blueprints[2].narration[0].focalizer.presentation_ref == 'ap01_01'
+
+
 @pytest.mark.parametrize('route', ['revalidate', 'renormalize'])
 def test_plot_invalid_coordinates_recover_without_a_model_call(tmp_path, route):
     book = prepare_book(tmp_path)
@@ -174,6 +219,29 @@ def test_plot_invalid_coordinates_recover_without_a_model_call(tmp_path, route):
     assert recovered.provenance.usage == artifact.provenance.usage
     assert len(transport.calls) == len(main_text())
     assert not ArtifactStore(recovery).exists(extract._INVALID)
+
+
+def test_free_revalidation_does_not_accept_unregistered_presentation(tmp_path):
+    from contracts.schema.plot import ActorBinding, ActorRef
+    book = prepare_book(tmp_path)
+    producer, transport = generate_plot(book)
+    store = ArtifactStore(producer)
+    before = store.full_sha256_or_none(extract.BLUEPRINT_REL)
+    artifact, _ = store.read_own(ChapterBlueprints, extract.BLUEPRINT_REL)
+    candidate = artifact.model_copy(deep=True)
+    chapter = candidate.blueprints[0]
+    anchor = next(row for row in chapter.evidence_anchors if row.start_para == 1)
+    assert '春风' in main_text()[0]['text'][anchor.start:anchor.end]
+    chapter.actor_bindings = [ActorBinding(presentation_id='ap01_01', char_id='char_001',
+        surfaces=['春风'], evidence_refs=[anchor.evidence_id])]
+    chapter.beats[0].participants[0] = ActorRef(char_id='char_001', presentation_ref='ap01_01')
+    store.write_invalid(extract.BLUEPRINT_REL, candidate, gates_skipped=[])
+    promoted, report = extract.run_revalidate(_ctx(book, 'stage2.blueprint', paid=False),
+        actor='测试操作者', reason='复验字面存在但未登记的错误呈现')
+    assert not promoted and not report.passed
+    assert store.full_sha256_or_none(extract.BLUEPRINT_REL) == before
+    assert store.exists(extract._INVALID)
+    assert len(transport.calls) == 3
 
 
 def test_plot_commit_tail_resumes_without_rebuying_chapters(tmp_path, monkeypatch):

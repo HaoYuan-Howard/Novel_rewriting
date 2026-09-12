@@ -12,7 +12,7 @@ from contracts.schema.plot import PlotBlueprintResponse
 from novel import paths
 from novel.errors import ProvenanceRefused
 from novel.observability import ChapterProgressTracker
-from novel.stages.stage2.plot_compile import compile_chapter
+from novel.stages.stage2.plot_compile import compile_chapter, state_materials
 
 
 def with_entry_states(user: str, states: list[dict[str, Any]]) -> str:
@@ -34,7 +34,11 @@ def request_compiler(user: str, source: str):
         if response.chapter_ordinal != ordinal:
             raise ValueError(f'本轮必须只返回阅读序第 {ordinal} 章')
         return compile_chapter(response, source, allowed_char_ids=characters,
-            allowed_entry_state_refs=states, allowed_global_refs=subjects)
+            allowed_entry_state_refs=states, allowed_global_refs=subjects,
+            character_bindings=metadata['character_bindings'],
+            allowed_actor_bindings={entry['binding']['presentation_id']: entry['binding']
+                for row in metadata['entry_states'] for entry in row['actor_bindings']},
+            global_subjects={(row['kind'], row['ref']): row for row in metadata['global_subjects']})
 
     return compile_current
 
@@ -72,10 +76,10 @@ def execute(ctx, client, requests, *, main_text, character_inventory,
             gap = gap or not exists
     raw, violations, errors, actual_requests = [], [], [], []
     tracker = ChapterProgressTracker(ctx.observe, ordinals)
-    states: dict[str, dict] = {}
+    compiled = []
     carried: frozenset[str] = frozenset()
     for ordinal, system, seed_user in requests:
-        entry = [states[ref] for ref in sorted(carried)]
+        entry = state_materials(compiled, sorted(carried))
         user = with_entry_states(seed_user, entry)
         actual_requests.append((ordinal, system, user))
 
@@ -93,13 +97,6 @@ def execute(ctx, client, requests, *, main_text, character_inventory,
         if failures or not rows:
             break
         chapter = compile_current(PlotBlueprintResponse.model_validate({'blueprints': rows}).blueprints[0])
-        anchors = {row.evidence_id: row.model_dump(mode='json') for row in chapter.evidence_anchors}
-        for state in chapter.states:
-            states[state.state_id] = {
-                'chapter_ordinal': ordinal, 'state': state.model_dump(mode='json'),
-                'source_sha256': chapter.source_sha256,
-                'evidence_anchors': [anchors[ref] for ref in state.evidence_refs],
-            }
+        compiled.append(chapter)
         carried = frozenset(chapter.carry_out_refs)
-        states = {ref: states[ref] for ref in carried}
     return raw, violations, errors, actual_requests

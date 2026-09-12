@@ -54,6 +54,12 @@ class NewPlotIssue(StrictModel):
     subjects: list[PlotSubjectRef] = Field(min_length=1)
     evidence_refs: list[ReviewEvidenceRef] = Field(min_length=1)
 
+    @model_validator(mode='after')
+    def _subjects_unique(self) -> Self:
+        if len({row.key() for row in self.subjects}) != len(self.subjects):
+            raise ValueError('同一问题的主体使用不能重复；两种表面身份各自保留')
+        return self
+
 
 class PlotIssueDisposition(StrictModel):
     issue_id: IssueId

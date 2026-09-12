@@ -1,4 +1,8 @@
-"""同父运行的已排空来源只交给当前有授权的后继执行；不重新购买成果。"""
+"""同父运行的已排空来源只交给当前有授权的后继执行；不重新购买成果。
+
+共享 seed 经 Characters2/Global7/BP10/KL3 真实入口准备，恢复继续核验完整
+当前 Blind5 响应与 ActorRef 映射，不给旧来源补默认字段。
+"""
 from dataclasses import replace
 from types import SimpleNamespace
 

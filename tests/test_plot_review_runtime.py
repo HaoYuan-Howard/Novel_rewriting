@@ -10,7 +10,7 @@ def test_carried_state_has_source_and_is_an_issue_subject_without_expiring_unrel
     by = responses()
     by[1]['states'] = [{
         'state_key': 'st1', 'content': '李宝珠把父亲回城的来信收在袖中。',
-        'global_ref': None, 'modality': 'world', 'holder_char_id': None,
+        'global_ref': None, 'modality': 'world', 'holder': None,
         'established_at': {'kind': 'at_beat', 'beat_ref': 'b2'}, 'ended_at': None,
         'supersedes_state_refs': [], 'evidence': [{'start_para': 5, 'end_para': 5}],
     }]
@@ -234,6 +234,7 @@ def test_commander_scope_transport_and_persistent_budget(tmp_path, monkeypatch):
     assert task.work_unit_scope == 'chapter:1'
     assert 'candidate_fact_refs' not in task.prompt
     assert 'fact_patches' not in json.dumps(stage2_blueprint_wire.response_schema())
+    assert 'core_edits' not in json.dumps(stage2_blueprint_wire.response_schema())
     assert len(task.submission_options) == 1
     canonical = copy.deepcopy(task.submission_options[0]['exact_request'])
     submission = request(blueprint_review_workpack(book.parent, ctx.sid))
@@ -249,6 +250,7 @@ def test_commander_scope_transport_and_persistent_budget(tmp_path, monkeypatch):
     payload.pop('chapter_ordinals')
     payload.pop('reason')
     payload.pop('review')
+    payload.pop('core_edits')
     payload['knowledge_links'].pop('actor')
     payload['knowledge_links'].pop('reason')
     assert stage2_blueprint_wire.assemble(wire) == canonical

@@ -6,13 +6,13 @@ import type { PlotEdit, PlotEditPreview } from '@/types/plot.generated'
 import { BlueprintEditPanel } from './BlueprintEditPanel'
 
 const template: PlotEdit = {
-  actor: '待填', reason: '待填', review_token: 'bpe1_' + 'a'.repeat(64),
+  actor: '待填', reason: '待填', review_token: 'bpe2_' + 'a'.repeat(64),
   chapters: [{
     chapter: { chapter_ordinal: 1, chapter_function: '施救的原因',
       beats: [{ beat_key: 'b1', content: '她因对方富有且好看而施救。',
-        participant_char_ids: [], evidence: [{ start_para: 1, end_para: 1 }], source_contexts: [] }],
+        participants: [], evidence: [{ start_para: 1, end_para: 1 }], source_contexts: [] }],
       states: [], constraints: [], entry_state_refs: [], carry_out_refs: [],
-      inherited_state_endings: [], narration: [],
+      inherited_state_endings: [], narration: [], actor_bindings: [], relation_uses: [],
     }, identities: [{ collection: 'beats', kind: 'preserve', old_refs: ['b01_01'], new_keys: ['b1'] }],
   }],
 }

@@ -13,6 +13,7 @@ test_schema_api.py —— HTTP 响应模型的载体层守卫（`docs/schema/_ap
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 from pathlib import Path
 
@@ -27,7 +28,7 @@ from contracts.rules import REGISTRY
 from contracts.schema.api import (
     AgentCapabilitiesResponse, AgentDriverCapability, AgentModelCapability,
     AgentRunRequest, AgentRunList, ApprovalDoc, ApprovalWorkpack, BlueprintReviewWorkpack, DesignReviewTemplate,
-    DraftAlignView, DraftView, ErrorBody, GlobalView, NovelOverview,
+    CharacterRegistryView, DraftAlignView, DraftView, ErrorBody, GlobalView, NovelOverview,
     JobList, LogChunk, LogStreamEvent, NovelList, PreviewRequest, ReadingView,
     LegacyModelCapability, LegacyProviderCapability, LegacyThinkingCapability,
     RetentionApplyRequest, RetentionPlanView, RetentionPolicyRequest,
@@ -76,13 +77,22 @@ def test_retention_candidate_kind_uses_the_invariant_value_domain():
 
 def test_global_evidence_fixture_matches_its_archived_source_snapshot():
     fixtures = ROOT / 'web' / 'src' / 'fixtures' / 'backend_v1'
-    raw = json.loads((fixtures / 'global.json').read_text(encoding='utf-8'))
-    view = GlobalView.model_validate(raw)
-    assert {r.visibility.kind for r in view.relations} == {'public', 'via_secret'}
-    assert {e.subject_kind for s in view.secrets for e in s.knowledge_events} == {
+    # 冻结旧字节继续证明历史证据的坐标来源；不把旧知识图当成当前 Core HTTP 正例。
+    archived = {name: (fixtures / name).read_bytes()
+                for name in ('global.json', 'reading_ch3.json')}
+    assert {name: hashlib.sha256(data).hexdigest() for name, data in archived.items()} == {
+        'global.json': 'e296473948f158f13268a826ba1337dfea08efa71544220f71c5f2a8e71a6b20',
+        'reading_ch3.json': '1ad21dc8d156783080c38f410b0e8beab24d90e4bb37a47818b754c99fdb5588',
+    }
+    raw = json.loads(archived['global.json'])
+    with pytest.raises(ValidationError):
+        GlobalView.model_validate(raw)
+    assert {row['visibility']['kind'] for row in raw['relations']} == {'public', 'via_secret'}
+    assert {event['subject_kind'] for secret in raw['secrets']
+            for event in secret['knowledge_events']} == {
         'character', 'group'}
 
-    reading = json.loads((fixtures / 'reading_ch3.json').read_text(encoding='utf-8'))
+    reading = json.loads(archived['reading_ch3.json'])
     # 保留 Global 的七类证据反例；旧阅读快照只作源文，不能冒充 V9 HTTP 响应。
     with pytest.raises(ValidationError):
         ReadingView.model_validate(reading)
@@ -105,6 +115,8 @@ def test_global_evidence_fixture_matches_its_archived_source_snapshot():
 
 
 def test_plot_flow_fixtures_are_closed_current_http_and_review_views():
+    from novel.api.enums import payload as enum_payload
+
     captured = json.loads((ROOT / 'web/src/fixtures/plot_v1/flow.json').read_text(
         encoding='utf-8'))
     models = {
@@ -118,15 +130,19 @@ def test_plot_flow_fixtures_are_closed_current_http_and_review_views():
         'http:approvals': ApprovalDoc,
         'http:stage1': Stage1View,
         'http:stage2/global': GlobalView,
+        'http:stage2/characters': CharacterRegistryView,
         'http:run': RunProgressView,
         'http:run/metrics': RunMetricsView,
         'http:stage2/blueprint-review-workpack?scope=chapter%3A1': BlueprintReviewWorkpack,
+        'http:stage2/blueprint-review-workpack?scope=cross_chapter': BlueprintReviewWorkpack,
         'api:jobs': JobList,
         'api:agent/runs': AgentRunList,
         'http:check/stage2': CheckReport,
         'http:check/stage5': CheckReport,
     }
-    assert captured.keys() == models.keys()
+    # enums 的唯一取值面由纯发布器产生，刻意不另造一套响应模型。
+    assert captured.keys() == models.keys() | {'api:enums'}
+    assert captured['api:enums'] == enum_payload()
     for name, model in models.items():
         model.model_validate(captured[name])
     for stage in ('stage2', 'stage5'):
@@ -144,36 +160,55 @@ def test_plot_flow_keeps_its_synthetic_source_semantics_through_context():
     assert '信上说父亲已经回城。' in sources[1]
     assert '其实母亲早就知道那封信的事。' in sources[2]
     world = captured['http:stage2/global']
-    assert {row['char_id']: (row['canonical'], row['role'])
-            for row in world['characters']} == {
+    characters = captured['http:stage2/characters']
+    assert {char_id: (row['canonical'], row['role'])
+            for char_id, row in characters['registry']['characters'].items()} == {
         'char_001': ('李宝珠', '李宝珠，在家中翻阅账册'),
         'char_002': ('母亲', '李宝珠的母亲'),
     }
-    assert world['setting']['时代背景'] == '原文未明确年代'
+    assert 'characters' not in world
+    assert world['setting']['era'] == '原文未明确年代'
     assert world['world_rules'] == []
-    assert len(world['secrets']) == 1
-    secret = world['secrets'][0]
+    assert len(world['arc_secrets']) == 1
+    secret = world['arc_secrets'][0]
     assert secret['fact'] == '母亲早就知道那封信的事。'
-    assert secret['first_reveal_chapter'] == 2
-    assert [(event['subject_kind'], event['subject']['raw'], event['known_from_chapter'])
-            for event in secret['knowledge_events']] == [('character', 'char_002', 2)]
-    assert [(row['valid_from_chapter'], row['visibility']['from_chapter'])
+    assert secret['revealed_from'] == 2
+    assert 'knowledge_events' not in secret
+    assert [(row['effective_from'], row['revealed_from'])
             for row in world['relations']] == [(2, 2)]
+    assert [(row['subject']['raw'], row['predicate'], row['object']['raw'])
+            for row in world['relations']] == [('char_001', '母女', 'char_002')]
 
-    pending = [world]
-    located = 0
-    while pending:
-        item = pending.pop()
-        if isinstance(item, dict):
-            evidence = item.get('source')
-            if isinstance(evidence, dict):
-                source = sources[item['chapter_ordinal']]
-                assert source[evidence['start']:evidence['end']] == evidence['text']
-                located += 1
-            pending.extend(item.values())
-        elif isinstance(item, list):
-            pending.extend(item)
-    assert located > 0
+    # 两个真实 HTTP 响应分别拥有证据表；只用同次 Reading 响应还原原文，不能跨 owner 借表。
+    for anchors, snippets in (
+        (world['evidence_anchors'], world['evidence_snippets']),
+        (characters['registry']['evidence_anchors'], characters['evidence_snippets']),
+    ):
+        assert anchors and anchors.keys() == snippets.keys()
+        for evidence_id, evidence in anchors.items():
+            source = sources[evidence['chapter_ordinal']]
+            text = source[evidence['start']:evidence['end']]
+            assert text == snippets[evidence_id]
+            assert hashlib.sha256(text.encode('utf-8')).hexdigest() == evidence['text_sha256']
+
+    # “母亲知情”由完整 Beat 保留；Global 不再拥有逐人物知情记录。
+    chapter_two = captured['http:reading/2']['blueprint']
+    knowledge_beat = next(row for row in chapter_two['beats'] if row['beat_id'] == 'b02_02')
+    assert knowledge_beat['content'] == '母亲其实早已知道那封信的事。'
+    assert knowledge_beat['participants'] == [{'char_id': 'char_002', 'presentation_ref': None}]
+    context = captured['http:stage4/2']['ctx_chapter']
+    mother = next(row for row in context['characters'] if row['display_name'] == '母亲')
+    written_beat = next(row for row in context['beats'] if row['beat_ref'] == 'b02_02')
+    assert written_beat['content'] == knowledge_beat['content']
+    assert written_beat['participants'] == [mother['actor_ref']]
+    subject = next(row for row in context['global_subjects']
+                   if row['subject_ref']['kind'] == 'secret')
+    assert subject['value']['fact'] == secret['fact']
+    reveal = next(row for row in context['knowledge_events'] if row['kind'] == 'secret_reveal')
+    assert reveal['subject_ref'] == subject['subject_ref']
+    assert reveal['allowed_slots'] == subject['allowed_slots']
+    assert not any(row['subject_ref']['kind'] == 'secret'
+                   for row in captured['http:stage4/1']['ctx_chapter']['global_subjects'])
     for ordinal in sources:
         chapter = captured[f'http:reading/{ordinal}']['blueprint']
         planned = captured[f'http:stage4/{ordinal}']
@@ -363,10 +398,17 @@ def test_stage1_continuous_view_and_chapter_index_reject_gaps():
 
 def test_reading_source_presence_distinguishes_unknown_from_explicit_empty():
     base = dict(evidence_refs=['e01_01'], time_layer='present', place=None)
-    assert SourceContext(**base, present_char_ids=[]).present_char_ids == []
-    assert SourceContext(**base, present_char_ids=None).present_char_ids is None
+    assert SourceContext(**base, present=[]).present == []
+    assert SourceContext(**base, present=None).present is None
     with pytest.raises(ValidationError):
         SourceContext(**base)
+    actor = {'char_id': 'char_001', 'presentation_ref': 'ap01_01'}
+    with pytest.raises(ValidationError):
+        SourceContext(**base, present=[actor, actor])
+    distinct = SourceContext(**base, present=[actor,
+        {'char_id': 'char_001', 'presentation_ref': 'ap01_02'}])
+    assert [row.presentation_ref for row in distinct.present] == ['ap01_01', 'ap01_02']
+    # 旧字段保留拒绝反例；不能用它证明当前完整 ActorRef 的重复检查。
     with pytest.raises(ValidationError):
         SourceContext(**base, present_char_ids=['char_001', 'char_001'])
 

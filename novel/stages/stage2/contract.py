@@ -1,4 +1,4 @@
-"""stage2.blueprint 当前响应契约。旧事实链留在冻结旧代码，不进入 V9。"""
+"""stage2.blueprint 当前响应契约。旧事实链留在冻结旧代码，不进入 V10。"""
 from __future__ import annotations
 
 from dataclasses import dataclass

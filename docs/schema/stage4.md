@@ -7,21 +7,27 @@ Stage4 规划呈现，不重新抽取剧情。Beat.content 只有一份，BeatPl
 执行顺序是 stage4.design → 设计审阅 → stage4.plan → 结构审阅 → stage4.context。
 A 与章级 B 使用独立授权和 session；Context 独立零调用生成。Stage5 仍一次写整章。
 
+Commander 使用 `novel-stage4-reviewer-rulings-v3` 运输契约：每章完整引用目录映射为局部
+短句柄，历史约束按冻结目录映射为 `hN`；代码从不可变 submission_options 恢复原引用与
+摘要。完整 options SHA 与 exact request SHA 同时校验，未知或跨章引用拒绝。只共享完全
+同构的 schema 定义，不缩减章节、判断、修复码或引用基数；正式审批仍经过原 typed loader。
+原始请求、schema 和回答留在运行记录，旧运输回答不自动继承新 schema 的审批。
+
 ## 一、产物与版本
 
 | 文件 | 当前载体 | 职责 |
 |---|---|---|
-| blind_candidate.json | BlindCandidate v4 | A 整书策略、完整章设计、opaque 主体映射与来源 |
-| blind_chapter_edit.json | BlindChapterEdit v2 | 单章完整设计的免费 typed 编辑输入 |
+| blind_candidate.json | BlindCandidate v5 | A 整书策略、完整章设计、opaque 主体映射与来源 |
+| blind_chapter_edit.json | BlindChapterEdit v3 | 单章完整设计的免费 typed 编辑输入 |
 | evidence_binding.json | EvidenceBinding v5 | 每项呈现的证据、舞台与实际 B 来源 |
-| plan_chapters.json | PlanChapters v5 | 编译完成的正式场景、placements、端点和整数预算 |
-| plan_edit.json | PlanEdit v5 | 正式计划的完整 typed 编辑输入 |
-| writer_context.json | WriterContext v8 | 章级剧情目录、逐场呈现和表达许可 |
+| plan_chapters.json | PlanChapters v6 | 编译完成的正式场景、placements、端点和整数预算 |
+| plan_edit.json | PlanEdit v6 | 正式计划的完整 typed 编辑输入 |
+| writer_context.json | WriterContext v9 | 章级剧情目录、逐场呈现和表达许可 |
 
 路径完整名与版本以 contracts/schema/__init__.py::ARTIFACT_SPECS 为准，workflow manifest
 登记 plot-blueprint-v1 组合。旧数据配对旧代码保留，当前干净根重新生成；不手补字段或迁移审批。
 
-## 二、Stage4A：blind_candidate.json v4
+## 二、Stage4A：blind_candidate.json v5
 
 ### 2.1 A 的输入边界
 
@@ -154,7 +160,7 @@ checkpoint。默认并发受冻结节点/全书/供应商限制。首个失败�
 binding concerns 是结构审阅材料，不授予新剧情或付费动作。人工 --apply-binding 使用同一当前
 typed schema 和编译器，来源记 human，不伪造 model/usage。
 
-## 四、正式计划 v5
+## 四、正式计划 v6
 
 ### 4.1 编译与顶层
 
@@ -185,7 +191,7 @@ compiled Plan 精确绑定当前 A/B 版本化文件完整 SHA 和实际消费�
 人工替换记 human。业务消费投影变化与仅文件/证明变化分开，二者都不能绕开精确 A/B 链；
 未知来源不作 fresh。历史采用费用保留原 ledger 及来源关联，不重复计入新调用。
 
-## 五、writer_context.json v8
+## 五、writer_context.json v9
 
 PlannerTruthView 用于去源序设计；WriterVisibleView 由当前章计划及 KnowledgeLinks 编译。
 章级 beats 目录保存一次父节点正文，各 scenes[].deliveries 只引用节点和呈现指令/舞台，
@@ -201,6 +207,50 @@ Stage5 一次生成整章，模型同次会见后场材料。allowed_slots 是�
 
 Context 只在当前最终结构接受后独立零成本生成。它的目录、引用、材料和许可与同源编译结果
 逐项对证；结构通过不能替代独立 writing 授权。
+
+### 5.1 身份与披露消费
+
+内部 `ActorRef {char_id,presentation_ref?}` 在 Beat 参与人、State 持有者、知识受众、
+叙述/视点、观察者、舞台在场者、人物目标与关系两端的每个实际使用位置闭合。一个实体有多个
+表面身份时必须指明呈现；同一 Beat 可以同时携两个不同呈现。普通已公开昵称属于同一个
+ActorBinding，不因称呼不同创造两个身份。BlindReferenceMaps 的 participant_aliases 映到
+完整 ActorRef，不能按 char_id 去重；PlanGoal 同样保留完整呈现引用。
+
+WriterContext 只下发独立的 opaque `actor_ref` 与公开称谓，所有人物位置使用同一目录；
+不下发 char_id、presentation_ref、反向映射或共同实体分组。不同呈现使用不同 token，
+关系命题及知识事件的公开标识也绑定完整呈现，不能通过共同 rel_ID 或义务 ID 泄底。显式表面身份只可引用有据
+公开 State 的角色描述；role 只在 role_allowed_slots 许可场景表达，不继承真实身份的 role。
+角色描述还受该 State 的成立、解除和替代端点约束：解除场包含在有效窗口内，之后不再作为
+当前角色描述。State 本身仍按披露许可保留为历史命题，不能因 role 失效删除历史事实。
+缺失/歧义保留候选并交 Blueprint/Plan owner 免费订正，不择首项或回退 canonical。
+
+KnowledgeLinks 的 identity_actors 编译为现有表面身份 token 列表；只有对应事件开放后才允许
+陈述同人关系。标量 identity_revealed_from 不替代同章场景端点；称谓字面可出现不代表身份
+映射已知。跨章背景和上章收束沿原公开 token 携带必要名册，不附内部映射。
+继承 State、背景 Beat 和历史知识受众按引用所属章解析缺省呈现，再冻结其公开身份；
+后章增加另一种表面身份不会令原来唯一的旧引用歧义，也不会把旧身份吸收到新呈现。
+当前章的缺省引用则使用截至该章原文已出现的登记称谓候选：即便只有一个显式绑定，
+若候选中仍有未包含的称谓，且称谓间身份映射本章或未来才揭示，缺省引用仍须拒绝；
+只登记旧身份或只登记新身份都不能排除另一种已经出现的候选。
+Blueprint、盲规划、绑定与 Writer 共用该判据；真正唯一的此前公开绑定仍可省略 presentation。
+原文只供私有候选解析，不因这项校验进入盲模型请求；未出现的未来别名不使早章误报歧义。
+当前绑定候选仅含本章声明和上一章 carry_out 实际提供的 State／绑定闭包；不把其余历史
+绑定扩成当前歧义，也不允许显式引用未提供的旧绑定。携入 State 的原章 null 若有唯一绑定，
+携入材料保留原引用并带出实际绑定及证据，后续消费者仍按原章冻结解析。
+
+关系/规则的 effective_from、effective_until（包含该章）只描述世界成立窗口；revealed_from
+及 KnowledgeLinks 端点控制读者许可，不要求两种时间先后。已经结束的事实可以作为历史披露，
+提前透露未来事实也合法。规则引用精确到 rule_id/version_id；secret.fact_ref 展开关系时必须有
+唯一明确的实际关系呈现，缺失或多义不猜端点。完整自由文本仍由语义审阅核查。
+
+`Blueprint.relation_uses` 只声明本章实际关系使用的两端呈现，不重复关系正文或强造 State。
+知识义务中的默认实体端点不是呈现许可：仅记录事实成立、没有本章实际 use 的事件可保留内部
+时间锚；同一关系存在多个明确 use 时全部分别编译，不能择首项或按实体 ID 合并。
+
+Stage5 最终请求只消费此公开任务书。全量秘密、人物检测基线和原文保留为私有验证输入，
+不进入 Writer 提示。证据/审计变化可以重开受影响审阅，但不改变实际材料时不制造无关付费重抽。
+新版 Context 经严格载体和同源编译检查；旧 prepared/回答的 schema、输入或代码身份不符时
+只保留来源，不能靠默认字段或旧审批静默恢复成新版本。
 
 ## 六、结构度量与人工门
 

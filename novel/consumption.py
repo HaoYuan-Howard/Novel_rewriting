@@ -51,7 +51,8 @@ def stage2_generation_review(data: object) -> object:
     """下游只消费会改变写作视图的 blocking 决定与隔离动作。
 
     actor、判词措辞或展示 evidence 改字不会改变模型能看到的事实；state、主体身份
-    与 disposition 改变则必须让既有下游 stale。披露项本来就不进写作视图。
+    与 disposition 改变则必须让既有下游 stale。主体身份采用 kind + subject_path，
+    不采用内含证据摘要的 item_id；完整审阅身份仍由 require_current 校验。
     """
     if not isinstance(data, dict):
         return None
@@ -63,15 +64,15 @@ def stage2_generation_review(data: object) -> object:
         if not isinstance(kind, str) or review_effect_of(kind) != 'blocking':
             continue
         rows.append({
-            'item_id': item.get('item_id'),
-            'subject_sha256': item.get('subject_sha256'),
+            'kind': kind,
+            'subject_path': item.get('subject_path'),
             'state': item.get('state'),
             'generation_disposition': item.get('generation_disposition'),
         })
-    # 全 Global 的 source hash 只负责审阅当前性；把它带入消费投影会使未被
-    # 本节点消费的 disclosure/fate 改动也触发整链重做。主体 hash 已绑定每项
-    # blocking 知识，状态与隔离决定则绑定实际生成视图。
-    return {'blocking_items': rows}
+    # 审阅主体摘要含证据身份，不能变成付费材料的全对象依赖。业务内容由独立
+    # Characters/Global/WriterContext 消费边绑定；此边只负责许可状态与隔离动作。
+    return {'blocking_items': sorted(rows, key=lambda row: (
+        row['kind'], str(row['subject_path'])))}
 
 
 def stage2_main_text(data: object) -> object:
@@ -162,6 +163,8 @@ def stage4_design_blueprints(data: object) -> object:
         rows.append({
             'chapter_ordinal': chapter.chapter_ordinal,
             'chapter_function': chapter.chapter_function,
+            'actor_bindings': semantic(chapter.actor_bindings, 'presentation_id'),
+            'relation_uses': [r.model_dump(mode='json') for r in sorted(chapter.relation_uses, key=lambda r: r.key())],
             'beats': semantic(chapter.beats, 'beat_id'),
             'states': semantic(chapter.states, 'state_id'),
             'constraints': semantic(chapter.constraints, 'constraint_id'),
@@ -178,97 +181,58 @@ def stage4_context_blueprints(data: object) -> object:
 
 
 def stage4_main_text(data: object) -> object:
-    """计划的篇幅基准与 span 定位只依赖章号和正文。"""
+    """篇幅、span 与截至使用章的已出现称谓候选只依赖章号和正文。"""
     if not isinstance(data, list):
         return None
     return sorted((m.get('chapter_ordinal'), m.get('text')) for m in data)
 
 
-def _secret_setup_key(setup: object) -> object:
-    """把 `Secret.setup` 判别联合压成确定性可比较的键。
+def stage4_design_main_text(data: object, *, characters: object = None) -> object:
+    """A 私有解析只取原文中已出现的称谓候选；普通文字/坐标变化不重购设计。"""
+    from novel.core.text import norm
+    if not isinstance(data, list) or not isinstance(characters, dict):
+        raise ValueError('盲规划称谓投影缺少原文或人物登记')
+    people = characters.get('characters')
+    if not isinstance(people, dict):
+        raise ValueError('盲规划称谓投影缺少当前人物形状')
+    names = {}
+    for cid, person in people.items():
+        aliases = person.get('aliases') if isinstance(person, dict) else None
+        if (not isinstance(aliases, list) or any(not isinstance(row, dict)
+                or not isinstance(row.get('surface'), str) or not row['surface'] for row in aliases)):
+            raise ValueError('盲规划称谓投影含不可解释的登记称谓')
+        names[cid] = sorted({row['surface'] for row in aliases})
+    chapters = {}
+    for row in data:
+        if (not isinstance(row, dict) or type(row.get('chapter_ordinal')) is not int
+                or row['chapter_ordinal'] < 1 or not isinstance(row.get('text'), str)
+                or row['chapter_ordinal'] in chapters):
+            raise ValueError('盲规划称谓投影原文章域不唯一或不可读')
+        chapters[row['chapter_ordinal']] = row['text']
+    cumulative, result = '', []
+    for ordinal in sorted(chapters):
+        cumulative += norm(chapters[ordinal])
+        result.append([ordinal, {cid: [name for name in values if norm(name) in cumulative]
+                                 for cid, values in sorted(names.items())}])
+    return result
 
-    ⚠ **不能只取 `chapters`**：`{"kind":"cold"}` 与
-    `{"kind":"foreshadowed","chapters":[]}`（理论上载体拒收，但投影吃的是未校验的
-    JSON）在章号集合上同形，而前者说「没有隐瞒窗口」、后者是一份坏数据。
-    投影分不开它们，改一边就不会让下游 stale。
-    """
-    if not isinstance(setup, dict):
-        return ('?',)
-    kind = str(setup.get('kind') or '?')
-    return (kind, tuple(sorted(map(str, setup.get('chapters') or []))))
 
-
-def _relation_visibility_key(visibility: object) -> object:
-    """只收 Stage4 真正读取的显式可见性语义。"""
-    if not isinstance(visibility, dict):
-        return None
-    return (visibility.get('kind'), visibility.get('from_chapter'),
-            visibility.get('secret_id'))
-
-
-def _knowledge_subject_key(subject: object) -> object:
-    """typed CharacterRef / GroupRef 的确定性 freshness 键。"""
-    if not isinstance(subject, dict):
-        return None
-    return (subject.get('kind'), subject.get('char_id'), subject.get('label'))
-
-
-def _knowledge_events_key(events: object) -> tuple:
-    if not isinstance(events, list):
-        return ()
-    rows = [
-        (_knowledge_subject_key(event.get('subject')),
-         event.get('known_from_chapter'))
-        for event in events if isinstance(event, dict)
-    ]
-    return tuple(sorted(rows, key=repr))
+def _core_semantics(value: object) -> object:
+    """证据及审计不属于生成材料；不使用退役的 entities/canon 兼容视图。"""
+    if isinstance(value, list):
+        return [_core_semantics(row) for row in value]
+    if not isinstance(value, dict):
+        return value
+    return {key: _core_semantics(row) for key, row in value.items()
+            if key not in {'_provenance', 'evidence_anchors', 'characters_reference_sha256'}
+            and not key.endswith('evidence_refs')}
 
 
 def stage4_grounding(data: object) -> object:
-    """计划/上下文组装消费的人物、关系、秘密、设定与规则字段。
-
-    原文 ``SourceSpan`` 只给 Stage2 回取与人工复核；Stage4 实际 prompt 也剥掉它们，
-    所以 evidence-only 订正不应让两个 Stage4 制品 stale。
-    """
     if not isinstance(data, dict):
         return None
-    projected = without_global_evidence(data)
-    assert isinstance(projected, dict)
-    data = projected
-    ent = data.get('entities') or {}
-    canon = data.get('canon') or {}
-    return {
-        'characters': sorted(
-            (cid, (c or {}).get('canonical'), (c or {}).get('role'),
-             (c or {}).get('name_distinctiveness'),
-             tuple(sorted(((a or {}).get('surface'), (a or {}).get('from_chapter'),
-                           (a or {}).get('by'), (a or {}).get('context'))
-                          for a in ((c or {}).get('address') or []))))
-            for cid, c in (ent.get('characters') or {}).items()),
-        'relations': sorted(
-            ((r or {}).get('relation_id'), (r or {}).get('subject_id'),
-             (r or {}).get('predicate'), (r or {}).get('object_id'),
-             (r or {}).get('valid_from_chapter'),
-             (r or {}).get('valid_through_chapter'),
-             _relation_visibility_key((r or {}).get('visibility')))
-            for r in (ent.get('relations') or [])),
-        # ⚠ `setup` 整格进投影（不只是章号）：`{"kind":"cold"}` 与
-        #   `{"kind":"foreshadowed","chapters":[]}` 在「章号集合」上同形而语义不同。
-        #   首次揭示章直接决定下发边界。
-        'secrets': sorted(
-            ((s or {}).get('secret_id'), (s or {}).get('fact'),
-              _knowledge_events_key((s or {}).get('knowledge_events')),
-              _secret_setup_key((s or {}).get('setup')),
-              (s or {}).get('first_reveal_chapter'))
-             for s in (canon.get('secrets') or [])),
-        'setting': sorted((canon.get('setting') or {}).items()),
-        'world_rules': sorted(
-            ((r or {}).get('rule_id'), (r or {}).get('kind'),
-             tuple(sorted((str(v.get('effective_from_chapter')), v.get('desc'))
-                          for v in ((r or {}).get('versions') or []))))
-            for r in (canon.get('world_rules') or [])),
-
-    }
+    return {key: _core_semantics(data[key])
+            for key in ('setting', 'world_rules', 'relations', 'arc_secrets')}
 
 
 # ── stage5.write / stage5.review ─────────────────────────────────────────────
@@ -290,61 +254,15 @@ def stage5_main_text(data: object) -> object:
 
 
 def stage5_grounding(data: object) -> object:
-    """Stage5 写作只绑定 secret 语义；定位证据不进付费 freshness。"""
+    """全量私有泄漏探针依赖；正文只从 WriterContext 下发。"""
     if not isinstance(data, dict):
         return None
-    projected = without_global_evidence({
-        'canon': {'secrets': (data.get('canon') or {}).get('secrets')},
-    })
-    return {'secrets': ((projected or {}).get('canon') or {}).get('secrets')}
+    # fact_ref 的指向正文同样参与探针，不能仅绑定秘密指针。
+    return stage4_grounding(data)
 
 
 def stage5_review_grounding(data: object) -> object:
-    """Stage5 Review 的全书秘密与人名检测基线。
-
-    Review 与写作故意不共用这条边：写作的付费 freshness 仍只绑
-    secrets；Review 还会用 ``project_character_names`` 从当前 Stage2 人物表派生
-    ``Book.names`` / ``Book.name_stems``，所以必须绑定这个派生真正读到的四格。
-
-    ``address`` 的顺序、重复项以及 ``by/context/from_chapter`` 不影响全书
-    display-name 派生；因此只保留去空白后的唯一 surface 集。role/fate
-    与所有 evidence 也不属于这条 Review 依赖。
-    """
-    if not isinstance(data, dict):
-        return None
-    entities = data.get('entities')
-    if not isinstance(entities, dict):
-        entities = {}
-    raw_characters = entities.get('characters')
-    if not isinstance(raw_characters, dict):
-        raw_characters = {}
-
-    characters: list[dict[str, object]] = []
-    for raw_char_id, raw_character in sorted(
-        raw_characters.items(), key=lambda item: str(item[0]),
-    ):
-        character = raw_character if isinstance(raw_character, dict) else {}
-        raw_address = character.get('address')
-        if not isinstance(raw_address, list):
-            raw_address = []
-        surfaces = sorted({
-            surface.strip()
-            for row in raw_address if isinstance(row, dict)
-            for surface in [row.get('surface')]
-            if isinstance(surface, str) and surface.strip()
-        })
-        characters.append({
-            'char_id': str(raw_char_id),
-            'canonical': character.get('canonical'),
-            'address_surfaces': surfaces,
-            'name_distinctiveness': character.get('name_distinctiveness'),
-        })
-
-    secrets = stage5_grounding(data)
-    return {
-        'secrets': (secrets or {}).get('secrets') if isinstance(secrets, dict) else None,
-        'characters': characters,
-    }
+    return stage5_grounding(data)
 
 
 def stage5_context(data: object) -> object:
@@ -507,14 +425,27 @@ def _character_view(data: object) -> dict[str, object] | None:
 
 
 def stage4_characters(data: object) -> object:
-    projected = stage4_grounding(_character_view(data))
-    return projected.get('characters') if isinstance(projected, dict) else None
+    """A 与 Context 只解析叙事身份；姓名辨识度由 Stage5 私有检测消费。"""
+    projected = _core_semantics(data)
+    if isinstance(projected, dict) and isinstance(projected.get('characters'), dict):
+        for row in projected['characters'].values():
+            if isinstance(row, dict):
+                row.pop('name_distinctiveness', None)
+    return projected
+
+
+def stage4_plan_characters(data: object) -> object:
+    """B 的审阅材料包含选中人物登记字段，仍须绑定姓名辨识度。"""
+    return _core_semantics(data)
 
 
 def stage5_characters(data: object) -> object:
-    # 首写与返修也用 Book.names 做候选核验，和 Reviewer 共用有据名字基线。
-    projected = stage5_review_grounding(_character_view(data))
-    return projected.get('characters') if isinstance(projected, dict) else None
+    if not isinstance(data, dict):
+        return None
+    return {cid: {'canonical': row['canonical'],
+                  'surfaces': sorted({a['surface'] for a in row['aliases']}),
+                  'name_distinctiveness': row['name_distinctiveness']}
+            for cid, row in sorted(data['characters'].items())}
 
 
 def stage6_characters(data: object) -> object:
@@ -559,6 +490,7 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE2_BLUEPRINT_CHARACTER_PROJECTION: artifact_payload,
     },
     'stage4.design': {
+        STAGE1_MAIN_TEXT: stage4_design_main_text,
         STAGE2_CHAPTER_BLUEPRINTS: stage4_design_blueprints,
         STAGE2_CHARACTERS: stage4_characters,
         STAGE2_KNOWLEDGE_LINKS: artifact_payload,
@@ -568,7 +500,7 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     },
     'stage4.plan': {
         STAGE2_KNOWLEDGE_LINKS: artifact_payload,
-        STAGE2_CHARACTERS: stage4_characters,
+        STAGE2_CHARACTERS: stage4_plan_characters,
         STAGE1_MAIN_TEXT: stage4_main_text,
         STAGE2_CHAPTER_BLUEPRINTS: stage4_plan_blueprints,
         STAGE2_GLOBAL_GROUNDING: stage4_grounding,
@@ -654,7 +586,9 @@ def projection_for(node: str, rel: str) -> Projection | None:
 #: 「额外需要读哪个 current 载体」；语义仍在对应的纯投影函数里。
 #: 若 store 两侧不共用本表，一侧就会给两份书级输入各自算一份
 #: 看似合理、实际无法回放的 fingerprint。
-_CONTEXT_INPUTS: Final[dict[tuple[str, str], tuple[str, ...]]] = {}
+_CONTEXT_INPUTS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
+    ('stage4.design', STAGE1_MAIN_TEXT): (STAGE2_CHARACTERS,),
+}
 
 
 def context_inputs_for(node: str, rel: str) -> tuple[str, ...]:
@@ -679,6 +613,11 @@ def project_consumed(
     project = projection_for(node, canonical)
     if project is None:
         return False, None
+    if node == 'stage4.design' and canonical == STAGE1_MAIN_TEXT:
+        try:
+            return True, stage4_design_main_text(data, characters=(related or {}).get(STAGE2_CHARACTERS))
+        except (KeyError, TypeError, ValueError):
+            return False, None
     return True, project(data)
 
 
@@ -717,63 +656,50 @@ def consumed_digest(value: object) -> str:
         allow_nan=False).encode('utf-8')).hexdigest()
 
 def plot_global_projection(data: object, chapter_ordinal: int) -> list[dict[str, Any]]:
-    """章节抽取只见截至本章已有原文依据的共享信息，不泄露未来版本或秘密。
-
-    返回的正文就是 prompt 材料，证据摘要另在同一对象记录，供审阅和请求身份使用；
-    不重新嵌入原文。没有合法证据的 Global 成员不能成为抽取许可。
-    """
+    """plot-global-scope-v2：已有证据并到达披露章的命题，包含已结束的历史事实。"""
     if not isinstance(data, dict):
         raise ValueError('Global 投影输入不可读')
-    entities = data.get('entities') or {}
-    canon = data.get('canon') or {}
+    anchors = data['evidence_anchors']
     result = []
 
-    def attested(evidence: object) -> bool:
-        return (isinstance(evidence, dict)
-                and type(evidence.get('chapter_ordinal')) is int
-                and 1 <= evidence['chapter_ordinal'] <= chapter_ordinal
-                and isinstance(evidence.get('source'), dict)
-                and bool(evidence['source'].get('text')))
+    def evidence(refs):
+        if any(ref not in anchors for ref in refs):
+            raise ValueError('共享命题引用的证据不存在')
+        return {ref: anchors[ref] for ref in refs}
 
-    def add(kind: str, ref: str, payload: object, evidence: object) -> None:
-        result.append({'kind': kind, 'ref': ref, 'value': payload,
-                       'evidence_sha256': consumed_digest(evidence)})
+    def add(kind, ref, value, refs):
+        proof = evidence(refs)
+        if proof:
+            result.append({'kind': kind, 'ref': ref, 'value': _core_semantics(value),
+                           'evidence_sha256': consumed_digest(proof)})
 
-    secrets = {row['secret_id']: row for row in canon.get('secrets', [])}
-    for row in entities.get('relations', []):
-        visibility = row['visibility']
-        if visibility['kind'] != 'public':
-            secret = secrets.get(visibility.get('secret_id'))
-            if secret is None or secret['first_reveal_chapter'] > chapter_ordinal:
-                continue
-        elif visibility['from_chapter'] > chapter_ordinal:
-            continue
-        if attested(row.get('predicate_evidence')):
-            add('relation', row['relation_id'],
-                {k: v for k, v in row.items() if k != 'predicate_evidence'},
-                row['predicate_evidence'])
-    for cid, row in entities.get('character_states', entities.get('characters', {})).items():
-        if attested(row.get('fate_evidence')):
-            add('character_state', cid, {'content': row['fate']}, row['fate_evidence'])
-    setting = canon.get('setting') or {}
-    for field, evidence_key, ref in (('时代背景', 'era_evidence', '时代背景'),
-                                      ('世界观', 'worldview_evidence', '世界观')):
-        if attested(setting.get(evidence_key)):
-            add('setting', ref, {'content': setting[field]}, setting[evidence_key])
-    for row in canon.get('world_rules', []):
-        versions = [version for version in row['versions']
-                    if attested(version.get('desc_evidence'))]
-        if versions:
-            add('world_rule', row['rule_id'], {
-                'kind': row['kind'],
-                'versions': [{k: v for k, v in version.items() if k != 'desc_evidence'}
-                             for version in versions],
-            }, [version['desc_evidence'] for version in versions])
-    for ref, row in secrets.items():
-        if (row['first_reveal_chapter'] <= chapter_ordinal
-                and attested(row.get('fact_evidence'))):
-            # 传播时间线由 KnowledgeLinks 消费；抽取只引用已揭示的共享命题。
-            add('secret', ref, {'content': row['fact']}, row['fact_evidence'])
+    for row in data['relations']:
+        if row['revealed_from'] <= chapter_ordinal:
+            add('relation', row['relation_id'], row, row['evidence_refs'])
+    setting = data['setting']
+    for field in ('era', 'social_context'):
+        refs = setting[field + '_evidence_refs']
+        if setting[field] is not None and any(anchors[r]['chapter_ordinal'] <= chapter_ordinal for r in refs):
+            add('setting', field, {'content': setting[field]}, refs)
+    for row in data['world_rules']:
+        for version in row['versions']:
+            if version['revealed_from'] <= chapter_ordinal:
+                add('world_rule', row['rule_id'] + '/' + version['version_id'],
+                    {'kind': row['kind'], **version}, version['evidence_refs'])
+    for row in data['arc_secrets']:
+        if row['revealed_from'] <= chapter_ordinal:
+            refs = list(row['evidence_refs'])
+            target = row['fact_ref']
+            if target is not None:
+                if target['kind'] == 'relation':
+                    matches = [r for r in data['relations'] if r['relation_id'] == target['relation_id']]
+                else:
+                    matches = [v for r in data['world_rules'] if r['rule_id'] == target['rule_id']
+                               for v in r['versions'] if v['version_id'] == target['version_id']]
+                if len(matches) != 1:
+                    raise ValueError('秘密引用的证据来源不唯一或缺失')
+                refs.extend(matches[0]['evidence_refs'])
+            add('secret', row['secret_id'], row, refs)
     return sorted(result, key=lambda row: (row['kind'], row['ref']))
 
 
@@ -827,18 +753,15 @@ def select_scope_input(selection: 'ScopeSelection', raw: object) -> object:
         requested = set(current[0]['entry_state_refs'])
         local = {r['state_id'] for r in current[0]['states']}
         requested -= local
+        from novel.stages.stage2.plot_compile import state_materials
+        from contracts.schema.plot import PlotBlueprint
+        materials = state_materials([PlotBlueprint.model_validate(row) for row in chapters], sorted(requested))
         result = []
-        for chapter in chapters:
-            if chapter['chapter_ordinal'] >= selection.chapter_ordinal:
-                continue
-            anchors = {a['evidence_id']: a for a in chapter['evidence_anchors']}
-            for state in chapter['states']:
-                if state['state_id'] in requested:
-                    result.append({'chapter_ordinal': chapter['chapter_ordinal'],
-                                   'state': state,
-                                   'evidence': [{key: value for key, value in anchors[ref].items()
-                                                 if key not in ('start', 'end')}
-                                                for ref in state['evidence_refs']]})
+        for material in materials:
+            result.append({'chapter_ordinal': material['chapter_ordinal'], 'state': material['state'],
+                           'evidence': [{k: v for k, v in anchor.items() if k not in ('start', 'end')}
+                                        for anchor in material['evidence_anchors']],
+                           'actor_bindings': material['actor_bindings']})
         if {r['state']['state_id'] for r in result} != requested:
             raise ValueError('跨章持续状态缺少来源主体')
         return copy.deepcopy(sorted(result, key=lambda r: r['state']['state_id']))

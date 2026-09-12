@@ -123,7 +123,7 @@ def _subjects(
         blind_truth={
             'chapter_ordinal': 1,
             'chapter_function': '建立冲突',
-            'characters': [{'alias': PERSON, 'canonical': '她',
+            'characters': [{'alias': PERSON,
                 'surfaces': ['她'], 'role': '发现开门的人'}],
             'beats': [{'alias': FACT, 'content': '她发现门已经打开。',
                 'participant_aliases': [PERSON]},

@@ -48,7 +48,7 @@ def test_review_material_and_manifest_share_precise_foreign_evidence_dependencie
     assert after.subject_sha256 == before.subject_sha256
     registry, knowledge = pair
     changed = grounding.compose(registry, knowledge).model_dump(mode='json', by_alias=True)
-    changed['canon']['secrets'][0]['fact'] += '命题被修改'
+    changed['arc_secrets'][0]['fact'] += '命题被修改'
     assert _review_pack(pair, bp, source, changed).subject_sha256 != before.subject_sha256
 
 
@@ -78,13 +78,13 @@ def _inputs(pair):
         _provenance=KnowledgeLinksProvenance(code='fixture', root_clean_sha1='0' * 40,
                                             inputs={}, decision_sha256='d' * 64))
     return bp, grounding.compose(registry, knowledge).model_dump(mode='json', by_alias=True), \
-        links.model_dump(mode='json', by_alias=True), main_text()
+        links.model_dump(mode='json', by_alias=True), main_text(), registry.model_dump(mode='json', by_alias=True)
 
 
 def test_foreign_unconsumed_source_does_not_expire_chapter_materials(pair):
-    bp, global_g, links, source = _inputs(pair)
-    actual = chapter_materials(3, bp, global_g, links, source, [])
-    before = chapter_materials_identity(3, bp, global_g, links, source, [])
+    bp, global_g, links, source, characters = _inputs(pair)
+    actual = chapter_materials(3, bp, global_g, links, source, [], characters=characters)
+    before = chapter_materials_identity(3, bp, global_g, links, source, [], characters=characters)
     assert material_identity(actual) == before
     foreign = next(row for row in actual.source_materials if row.chapter_ordinal == 2)
     assert len(foreign.ranges) == 1
@@ -93,20 +93,23 @@ def test_foreign_unconsumed_source_does_not_expire_chapter_materials(pair):
     changed_source[1]['text'] += '\n\n院门外吹来一阵微风。'
     changed_bp = copy.deepcopy(bp)
     changed_bp['blueprints'][1]['source_sha256'] = source_digest(changed_source[1]['text'])
-    after = chapter_materials_identity(3, changed_bp, global_g, links, changed_source, [])
+    after = chapter_materials_identity(3, changed_bp, global_g, links, changed_source, [], characters=characters)
     assert after == before
-    changed_actual = chapter_materials(3, changed_bp, global_g, links, changed_source, [])
+    changed_actual = chapter_materials(3, changed_bp, global_g, links, changed_source, [], characters=characters)
     assert changed_actual == actual
     assert material_identity(changed_actual) == after
 
 
 def test_consumed_foreign_evidence_and_membership_still_invalidate(pair):
-    bp, global_g, links, source = _inputs(pair)
-    before = chapter_materials_identity(3, bp, global_g, links, source, [])
-    changed = copy.deepcopy(global_g)
-    evidence = changed['entities']['characters']['char_002']['role_evidence']['source']
+    import hashlib
+    bp, global_g, links, source, characters = _inputs(pair)
+    before = chapter_materials_identity(3, bp, global_g, links, source, [], characters=characters)
+    changed = copy.deepcopy(characters)
+    evidence_ref = changed['characters']['char_002']['role_evidence_refs'][0]
+    evidence = changed['evidence_anchors'][evidence_ref]
     evidence['start'] += 1
-    evidence['text'] = evidence['text'][1:]
-    assert chapter_materials_identity(3, bp, changed, links, source, []) != before
-    wider = [{'kind': 'world_rule', 'ref': 'wr_01'}]
-    assert chapter_materials_identity(3, bp, global_g, links, source, wider) != before
+    text = next(row['text'] for row in source if row['chapter_ordinal'] == evidence['chapter_ordinal'])
+    evidence['text_sha256'] = hashlib.sha256(text[evidence['start']:evidence['end']].encode()).hexdigest()
+    assert chapter_materials_identity(3, bp, global_g, links, source, [], characters=changed) != before
+    wider = [{'kind': 'world_rule', 'ref': 'wr_01/v01'}]
+    assert chapter_materials_identity(3, bp, global_g, links, source, wider, characters=characters) != before

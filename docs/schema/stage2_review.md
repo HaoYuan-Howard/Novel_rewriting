@@ -58,6 +58,16 @@ Global 的 typed patch、collection delta 和 post_edit_review 由 Global produc
 输入 provenance。每个 owner 提交都复验 CAS 和原回执；中断重放原请求，第三方改写不能覆盖。
 稀疏 patch 的缺省与显式 null 在审批与重启序列化中保留，不把未请求字段扩成修改。
 
+正常 Global 多选项 Commander 使用 `novel-stage2-core-review-choice-v1` 原生运输 schema。
+envelope 的 `expected_options_sha256` 绑定本轮全部 immutable options，`choice` 以
+`option_id/payload` 选择恰好一项；逐项审阅、节点裁决及双 owner 免费编辑都保持可达。
+代码注入 actor、token、源/主体/集合 SHA 和 scope；没有 blocking_scope 的节点只接受 null，
+不能由模型补造范围。逐项 FAIL/UNVER、乱序、重复和越界仍由原 loader 与 producer 拒收或保留。
+Core patch 的 `changes=[{field,value}]` 与 setting 变化列表精确保留 absent/null：空列表不改，
+显式 null 只清空允许清空的字段；秘密事实与引用仍须连同证据成对提交。完整替换 null 不提交，
+空数组清空集合。实际正式模型与稀疏序列化不变，单 scope 和单 reviewed-edit/correction wire
+仍沿用原运输协议。原生 schema 的局部定义短名仅压缩 Windows argv，不改变字段、分支或判据。
+
 原决定不会自动接受修订后的新语义义务。已完成批次保存 `stage2-core-edits-completed-v1`，
 后续独立编辑不重新打开它。人物证据订正而必要投影不变时不重写 Global。未闭合批次的原
 决定、prepared 原字节和完成标记进入读面 seal；已完成历史不成为新的业务依赖。恢复不运行

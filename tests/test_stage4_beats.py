@@ -33,7 +33,7 @@ def _state_blueprint():
     response = chapter_response()
     response['states'] = [{
         'state_key': 'st1', 'content': '娘子决定离开。', 'global_ref': None,
-        'modality': 'world', 'holder_char_id': None,
+        'modality': 'world', 'holder': None,
         'established_at': {'kind': 'at_beat', 'beat_ref': 'b2'},
         'ended_at': None, 'supersedes_state_refs': [],
         'evidence': [{'start_para': 2, 'end_para': 2}]}]
@@ -178,7 +178,7 @@ def test_reverse_disclosure_keeps_story_constraints_for_semantic_review(kind):
     response['constraints'] = [{
         'constraint_key': 'c1', 'kind': kind,
         'before_beat_ref': 'b1', 'after_beat_ref': 'b2',
-        'observer_char_id': 'char_001' if kind == 'observes' else None,
+        'observer': {'char_id': 'char_001'} if kind == 'observes' else None,
         'evidence': [{'start_para': 1, 'end_para': 2}]}]
     bp = blueprint(response=response)
     raw = arrangement().model_dump(mode='json')
@@ -194,7 +194,7 @@ def test_reverse_disclosure_keeps_story_constraints_for_semantic_review(kind):
 def test_same_scene_is_explicitly_enforced_instead_of_assumed_from_shared_evidence():
     response = chapter_response()
     response['constraints'] = [{
-        'constraint_key': 'c1', 'kind': 'same_scene', 'observer_char_id': None,
+        'constraint_key': 'c1', 'kind': 'same_scene', 'observer': None,
         'before_beat_ref': 'b1', 'after_beat_ref': 'b2',
         'evidence': [{'start_para': 1, 'end_para': 2}]}]
     bp = blueprint(response=response)
@@ -233,12 +233,13 @@ def _budget_case(sizes, weights):
         response = {
             'chapter_ordinal': ordinal, 'chapter_function': '测试源章预算',
             'beats': [{'beat_key': 'b1', 'content': '甲完成本章行动。',
-                       'participant_char_ids': [], 'evidence': [{'start_para': 1, 'end_para': 1}],
+                       'participants': [], 'evidence': [{'start_para': 1, 'end_para': 1}],
                        'source_contexts': []}],
             'states': [], 'constraints': [], 'inherited_state_endings': [],
             'entry_state_refs': [], 'carry_out_refs': [],
-            'narration': [{'grammatical_person': 'third', 'narrator_char_id': None,
-                           'focalizer_char_id': None, 'pronoun_surfaces': []}]}
+            'narration': [{'grammatical_person': 'third', 'narrator': None,
+                           'focalizer': None, 'pronoun_surfaces': [], 'beat_refs': [],
+                           'evidence': [{'start_para': 1, 'end_para': 1}]}]}
         chapters.append(compile_chapter(PlotChapterResponse.model_validate(response), text,
                                         allowed_char_ids=frozenset()).model_dump(mode='json'))
         main.append({'chapter_ordinal': ordinal, 'text': text})

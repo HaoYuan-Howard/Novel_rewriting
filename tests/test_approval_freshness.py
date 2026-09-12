@@ -13,10 +13,12 @@ from contracts.schema.api import StructureApprovalRequest
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import BlueprintProvenance, ChapterBlueprints
 from contracts.schema.stage4 import (
-    EvidenceBinding, EvidenceBindingHumanProvenance, PlanChapters, PlanProvenance,
+    CtxProvenance, EvidenceBinding, EvidenceBindingHumanProvenance, PlanChapters, PlanProvenance,
+    WriterContext,
 )
 from contracts.artifacts import (
-    STAGE2_CHAPTER_BLUEPRINTS, STAGE4_EVIDENCE_BINDING, STAGE4_WRITER_CONTEXT,
+    STAGE2_CHARACTERS, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
+    STAGE2_KNOWLEDGE_LINKS, STAGE4_EVIDENCE_BINDING, STAGE4_WRITER_CONTEXT,
 )
 from novel.orchestrator import approvals
 from novel.orchestrator import queue as Q
@@ -76,8 +78,10 @@ def _binding(ctx: RunContext) -> EvidenceBinding:
         'truth_sha256': approvals._decision_sha256([
             row.blind_truth.model_dump(mode='json') for row in subjects.chapters]),
         'subject_aliases': {FACT: {'kind': 'beat', 'ref': 'b01_01'},
-                            PERSON: {'kind': 'character', 'ref': 'char_001'}},
-        'endpoint_aliases': {}, 'participant_aliases': {PERSON: 'char_001'},
+                            PERSON: {'kind': 'character', 'ref': 'char_001',
+                                     'actor': {'char_id': 'char_001', 'presentation_ref': None}}},
+        'endpoint_aliases': {}, 'participant_aliases': {
+            PERSON: {'char_id': 'char_001', 'presentation_ref': None}},
         'reconstruction_strategy': subjects.strategy.reconstruction_strategy,
         'output_chapters': [row.chapter.model_dump(mode='json') for row in subjects.chapters],
     }
@@ -90,6 +94,42 @@ def _binding(ctx: RunContext) -> EvidenceBinding:
         _provenance=ctx.free_provenance(EvidenceBindingHumanProvenance, candidate_sha256=candidate_sha))
 
 
+def _seed_core(base: Path, main: MainText):
+    """合成有据人物及合法空知识；独立正式写入，不伪造模型或语义接受。"""
+    from contracts.schema.characters import CharacterRegistry, CharactersProvenance
+    from contracts.schema.knowledge import KnowledgeGrounding, GlobalProvenance
+    from novel.stages.stage2.grounding import knowledge_reference_sha256
+    from tests.plot_fixtures import GLOBAL
+
+    character_ctx = RunContext.open(base, SID, 'stage2.characters', paid=True, write_ledger=False)
+    character_store = ArtifactStore(character_ctx)
+    character_store.read(MainText, MAIN_REL)
+    text = main.root[0].text
+    evidence = 'ev_' + hashlib.sha256(text.encode('utf-8')).hexdigest()[:24]
+    registry = CharacterRegistry.model_validate({'characters': {'char_001': {
+        'canonical': '核账人', 'aliases': [{'surface': '核账人', 'identity_revealed_from': 1,
+            'evidence_refs': [evidence]}], 'first_chapter': 1,
+        'first_appearance_evidence_refs': [evidence], 'role': '核对计划的人',
+        'role_evidence_refs': [evidence], 'name_distinctiveness': 'common'}},
+        'evidence_anchors': {evidence: {'chapter_ordinal': 1, 'start': 0, 'end': len(text),
+            'text_sha256': hashlib.sha256(text.encode('utf-8')).hexdigest()}},
+        '_provenance': character_ctx.llm_provenance(CharactersProvenance,
+            model='fixture-model', adopted_models=('fixture-model',),
+            prompts={'FIXTURE_ONLY': '合成有据人物；未发模型'})})
+    character_store.write(STAGE2_CHARACTERS, registry)
+    global_ctx = RunContext.open(base, SID, 'stage2.global', paid=True, write_ledger=False)
+    global_store = ArtifactStore(global_ctx)
+    global_store.read(MainText, MAIN_REL)
+    global_store.read(CharacterRegistry, STAGE2_CHARACTERS)
+    grounding = KnowledgeGrounding.model_validate({**GLOBAL,
+        'characters_reference_sha256': knowledge_reference_sha256(registry),
+        '_provenance': global_ctx.llm_provenance(GlobalProvenance,
+            model='fixture-model', adopted_models=('fixture-model',),
+            prompts={'FIXTURE_ONLY': '合成空长期知识；未发模型'}, evidence_locator_failures=[])})
+    global_store.write(STAGE2_GLOBAL_GROUNDING, grounding)
+    return registry, grounding
+
+
 @pytest.fixture
 def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     from novel.work_units import initialize_workflow
@@ -97,12 +137,13 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     book = tmp_path / f'审批证明_{SID}'
     (book / 'stage0').mkdir(parents=True)
     (book / 'stage0' / 'clean_text.txt').write_text(
-        '第一章\n她核对了当前计划。\n', encoding='utf-8', newline='')
+        '第一章\n核账人核对了当前计划。\n', encoding='utf-8', newline='')
     main = MainText.model_validate([
-        {'chapter_ordinal': 1, 'text': '她核对了当前计划。'},
+        {'chapter_ordinal': 1, 'text': '核账人核对了当前计划。'},
         {'chapter_ordinal': 2, 'text': '另一章保持不变。'},
     ])
     _disk_json(book, MAIN_REL, main.model_dump(mode='json'))
+    registry, grounding = _seed_core(tmp_path, main)
 
     # 结构 Commander 实际读取的证据必须是真实 typed 产物；未发模型，来源明确标测试。
     from tests.test_stage2 import blueprints
@@ -117,46 +158,68 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
         ordinal, text = chapter.chapter_ordinal, chapter.text
         response = PlotChapterResponse.model_validate({
             'chapter_ordinal': ordinal, 'chapter_function': text,
-            'beats': [{'beat_key': 'b1', 'content': text, 'participant_char_ids': [],
+            'beats': [{'beat_key': 'b1', 'content': text,
+                'participants': [{'char_id': 'char_001'}] if ordinal == 1 else [],
                 'evidence': [{'start_para': 1, 'end_para': 1}], 'source_contexts': []}],
             'states': [], 'inherited_state_endings': [], 'constraints': [],
             'entry_state_refs': [], 'carry_out_refs': [],
-            'narration': [{'grammatical_person': 'third', 'narrator_char_id': None,
-                          'focalizer_char_id': None, 'pronoun_surfaces': []}]})
-        chapters.append(compile_chapter(response, text, allowed_char_ids=frozenset()).model_dump(mode='json'))
-    blueprint_store.write(STAGE2_CHAPTER_BLUEPRINTS, ChapterBlueprints(
+            'narration': [{'grammatical_person': 'third', 'narrator': None,
+                          'focalizer': None, 'pronoun_surfaces': [], 'beat_refs': [],
+                          'evidence': [{'start_para': 1, 'end_para': 1}]}]})
+        chapters.append(compile_chapter(response, text, allowed_char_ids=frozenset(registry.characters),
+            character_bindings={cid: [row.model_dump(mode='json') for row in character.aliases]
+                                for cid, character in registry.characters.items()}).model_dump(mode='json'))
+    blueprint_artifact = ChapterBlueprints(
         blueprints=chapters,
         _provenance=blueprint_ctx.llm_provenance(
             BlueprintProvenance, model='fixture-model',
             prompts={'BLUEPRINT_SYS': '合成审批夹具，无真实模型请求'},
             adopted_models=('fixture-model',), **blueprints()['_provenance']),
-    ))
+    )
+    blueprint_store.write(STAGE2_CHAPTER_BLUEPRINTS, blueprint_artifact)
 
-    # 本组只测审批来源身份；Global/KL 固定合法空目录，完整生成路径另有贯通测试。
-    from novel.stages.stage2 import global_review, knowledge_links
+    # 本组只测审批来源身份；旁路的是既有 Core/KL 语义审阅前置，仍读取真实当前 typed 文件。
+    from novel.stages.stage2 import global_review, grounding as grounding_io, knowledge_links
     from tests.plot_fixtures import links
-    from contracts.schema.knowledge_links import KnowledgeLinks
-    from tests.test_stage2 import global_grounding
-    grounding = {'entities': {'characters': {}, 'relations': [], 'character_states': {}},
-                 'canon': {'secrets': [], 'world_rules': [],
-                           'setting': global_grounding()['canon']['setting']}}
-    monkeypatch.setattr(global_review, 'generation_grounding',
-        lambda _store: SimpleNamespace(model_dump=lambda **_kwargs: grounding))
+    from contracts.schema.knowledge_links import KnowledgeLinks, KnowledgeLinksProvenance
+    link_ctx = RunContext.open(tmp_path, SID, 'stage2.blueprint', paid=False, write_ledger=False)
+    link_store = ArtifactStore(link_ctx)
+    link_store.read(MainText, MAIN_REL)
+    link_store.read(ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)
+    association = KnowledgeLinks.model_validate({**links(), '_provenance': link_ctx.free_provenance(
+        KnowledgeLinksProvenance, decision_sha256='5' * 64)})
+    link_store.write(STAGE2_KNOWLEDGE_LINKS, association)
+    monkeypatch.setattr(global_review, 'generation_grounding', grounding_io.read)
     monkeypatch.setattr(knowledge_links, 'require_current',
-        lambda _ctx: KnowledgeLinks.model_validate(links()))
+        lambda _ctx: ArtifactStore(_ctx).read(KnowledgeLinks, STAGE2_KNOWLEDGE_LINKS))
 
     plan_ctx = RunContext.open(
         tmp_path, SID, 'stage4.plan', paid=True, write_ledger=False)
     plan_store = ArtifactStore(plan_ctx)
     plan_store.read(MainText, MAIN_REL)
-    plan_store.write(PLAN_REL, _plan(plan_ctx))
+    plan_artifact = _plan(plan_ctx)
+    plan_store.write(PLAN_REL, plan_artifact)
     # B 是结构审批的真实 typed 输入；不能用裸 {} 配合 concerns 替身绕过它。
     plan_store.write(STAGE4_EVIDENCE_BINDING, _binding(plan_ctx))
     binding, _raw = plan_store.read_own(EvidenceBinding, STAGE4_EVIDENCE_BINDING)
     assert binding.provenance.inputs
     assert plan_store.freshness(STAGE4_EVIDENCE_BINDING).state == 'fresh'
-    context_path = book / STAGE4_WRITER_CONTEXT
-    context_path.write_text('{}', encoding='utf-8')
+    from contracts.schema.characters import CharacterRegistry
+    from contracts.schema.knowledge import KnowledgeGrounding
+    from novel.stages.stage4.plot_context import build_writer_context
+    context_ctx = RunContext.open(tmp_path, SID, 'stage4.context', paid=False, write_ledger=False)
+    context_store = ArtifactStore(context_ctx)
+    for model, rel in ((MainText, MAIN_REL), (CharacterRegistry, STAGE2_CHARACTERS),
+                       (KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING),
+                       (ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS),
+                       (KnowledgeLinks, STAGE2_KNOWLEDGE_LINKS), (PlanChapters, PLAN_REL)):
+        context_store.read(model, rel)
+    payload = build_writer_context(plan_artifact.model_dump(mode='json'),
+        grounding.model_dump(mode='json'), blueprint_artifact.model_dump(mode='json'),
+        main.model_dump(mode='json'), knowledge_links=association.model_dump(mode='json'),
+        characters=registry.model_dump(mode='json')).ctx
+    context_store.write(STAGE4_WRITER_CONTEXT, WriterContext.model_validate({**payload,
+        '_provenance': context_ctx.free_provenance(CtxProvenance)}))
 
     monkeypatch.setitem(approvals._GATE_REQUIREMENTS, 's4', ())
     monkeypatch.setattr(approvals.prov, 'code_version', lambda: 'fixture-readonly-code')
@@ -164,7 +227,7 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     require_fresh_json = approvals._require_fresh_json
 
     def require_synthetic_stage1(store, rel):
-        if rel in (MAIN_REL, STAGE4_WRITER_CONTEXT):
+        if rel == MAIN_REL:
             return hashlib.sha256(store.path(rel).read_bytes()).hexdigest()
         return require_fresh_json(store, rel)
 
@@ -420,13 +483,17 @@ def test_v1_or_corrupt_service_record_never_authorizes_queue(
         approvals.backfill_from_disk(base, SID)
 
     _queue_stage5(monkeypatch)
+    original = path.read_bytes()
     todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
-    assert todo == [] and blocked[0].waiting_on == Q.WAITING_ON_WRITING_APPROVAL
+    assert todo == [] and blocked[0].waiting_on == Q.WAITING_ON_INBOX
+    assert blocked[0].steps == [] and '审批记录损坏' in blocked[0].why
+    assert path.read_bytes() == original
 
     path.write_text('{broken', encoding='utf-8')
     assert not approvals.has_record(base, SID)
     todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
-    assert todo == [] and blocked[0].waiting_on == Q.WAITING_ON_WRITING_APPROVAL
+    assert todo == [] and blocked[0].waiting_on == Q.WAITING_ON_INBOX
+    assert blocked[0].steps == [] and path.read_text(encoding='utf-8') == '{broken'
 
 
 def _write_legacy_v2(base: Path, *, deep: list[int]) -> None:

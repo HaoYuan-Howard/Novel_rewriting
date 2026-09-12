@@ -479,26 +479,39 @@ from contracts.schema.knowledge import (
 )
 
 
+class BlueprintCharacterBinding(StrictModel):
+    surface: str = Field(min_length=1)
+    identity_revealed_from: ChapterOrdinal
+
+
 class BlueprintCharacterProjectionChapter(StrictModel):
     """某一章真正交给 Blueprint 的已现称名闭集。
 
-    这不是 GlobalGrounding 的摘要：只有最终 prompt/validator 消费的两格能进入这里。
-    ``role``、``fate``、关系、秘密、设定与证据一概没有载体位置，因而后续订正它们
-    不会靠调用方记得“忽略字段”来避免整书 Blueprint 过期。
+    只保存 Characters 中真实 prompt/validator 消费的称谓及身份映射时点。
+    role、关系、秘密、设定与证据不进入本投影；审阅另按实际支持材料建立依赖。
     """
 
     chapter_ordinal: ChapterOrdinal
     past_attested_surfaces: list[str]
-    # 与 ``Entities.characters`` 同一键域：这里是成员闭集载体，不新增一条仓内
-    # 明说不存在的 char_id 格式守卫。格式异常若需要阻断，必须先成为 Global 判据。
+    # 歧义实体仍保留候选；实际 ActorRef 编译使用 Characters 的持久 ID 文法。
     visible_character_refs: dict[str, list[str]]
+    character_bindings: dict[str, list[BlueprintCharacterBinding]]
+
+    @model_validator(mode='after')
+    def _binding_inventory(self) -> BlueprintCharacterProjectionChapter:
+        if self.character_bindings.keys() != self.visible_character_refs.keys():
+            raise ValueError('呈现候选必须覆盖全部已现人物，歧义人物不能丢弃')
+        for cid, rows in self.character_bindings.items():
+            if [row.surface for row in rows] != self.visible_character_refs[cid]:
+                raise ValueError('身份映射候选必须与实际下发称谓逐项相同')
+        return self
 
 
 class BlueprintCharacterProjection(StrictModel):
-    """``global + main_text`` 的确定性、版本化 Blueprint 称名投影。
+    """``characters + main_text`` 的确定性、版本化 Blueprint 称名投影。
 
     本产物没有通用 ``_provenance``：它的全部业务字节就是确定性投影本身，freshness
-    由当前最新 schema-valid GlobalGrounding（formal 或 INVALID）与 MainText 重算后
+    由当前最新 schema-valid Characters（formal 或 INVALID）与 MainText 重算后
     逐值对账。加入输入文件指纹反而会让一次 role-only 修订改动本产物字节，重新制造
     本产物要消除的无效 stale。
     """
@@ -1221,7 +1234,7 @@ class BlueprintContext(StrictModel):
     """逐章原文与共享主体投影的契约身份，具体材料由来源账绑定。"""
     architecture: Literal[BLUEPRINT_ARCHITECTURES]
     source_format: Literal['numbered-paragraphs-v1']
-    global_projection_contract: Literal['plot-global-scope-v1']
+    global_projection_contract: Literal['plot-global-scope-v2']
 
 
 class BlueprintScopeViolation(StrictModel):
@@ -1238,7 +1251,7 @@ from contracts.schema.plot_edit import PlotRevisionRecord
 
 
 class BlueprintProvenance(LlmProvenance):
-    """V9 只记录实际响应范围与调用身份；段号/引用失败由 durable 响应恢复。"""
+    """V10 只记录实际响应范围与调用身份；段号/引用失败由 durable 响应恢复。"""
     scope_violations: list[str]
     context: BlueprintContext
     # 编辑身份账随同一份蓝图原子提交；审阅/写作投影不下发 provenance。
@@ -1248,7 +1261,7 @@ from contracts.schema.plot import PlotBlueprint
 
 
 class ChapterBlueprints(StrictModel):
-    """V9 完整剧情蓝图：每章一个逻辑抽取请求，齐章后原子提交。
+    """V10 完整剧情蓝图：每章一个逻辑抽取请求，齐章后原子提交。
 
     当前章原文、必要 Global 投影及持续状态是实际输入；后章只携带仍成立的状态，
     不累计全部历史动作。身份编辑账保存在 provenance，不下发给规划或写作模型。
@@ -1286,7 +1299,8 @@ class ChapterBlueprints(StrictModel):
         live = {ref for chapter in self.blueprints for ref in (
             *[row.beat_id for row in chapter.beats],
             *[row.state_id for row in chapter.states],
-            *[row.constraint_id for row in chapter.constraints])}
+            *[row.constraint_id for row in chapter.constraints],
+            *[row.presentation_id for row in chapter.actor_bindings])}
         if retired.intersection(live):
             raise ValueError('当前蓝图不能复活退役主体')
         return self

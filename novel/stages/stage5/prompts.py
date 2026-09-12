@@ -151,8 +151,8 @@ WRITE_SYS = """\
      只按事件真实需要写对白。对白占比是机械参照，不是要求凑数的目标。
 3. 【视角按给定的叙述视角写】。若分了多段（如末尾是另一个人的视角），就按分段切换叙述者，
    换人时声音也要换（不是同一个人的腔调套另一个名字）。
-4. 【人名一律用给定的原名】，不要改名、不要替换称呼体系。
-5. 【不提前揭示后文才揭示的信息】。全书事实里包含后文才对读者揭开的秘密——本章只写本章该有的信息层级。
+4. 【人物称谓只用给定表面身份的 surfaces】，不要改名、不要从其他身份借用称谓或角色介绍。
+5. 【遵守本章逐场披露许可】。同次请求中的后场材料不能提前写入前场；不同表面身份只有在对应身份披露事件开放后才能合并。
 6. 【不把潜台词说破】人物心里清楚、读者自己能推出来的，不要再补一句解释。
    结尾尤其：给一个动作、一个画面、一句短的就收；不要总结陈词、不要自问自答把主题点明。
 
@@ -262,9 +262,9 @@ def writer_chars(entry: dict[str, Any], book: M.Book) -> list[dict[str, str]]:
     登场或尚未揭名的人物提前下发给写手。
     """
     chars = entry['characters']
-    # V8 的人物、状态持有者和知识 audience 共用编号；只作为目录引用，不写进正文。
+    # V9 只携独立表面身份；内部实体和审阅基线永不进入人物提示。
     return [
-        {key: value[key] for key in ('char_id', 'display_name', 'role') if (value or {}).get(key)}
+        {key: value[key] for key in ('actor_ref', 'display_name', 'surfaces', 'role', 'role_allowed_slots', 'allowed_slots') if (value or {}).get(key)}
         for value in chars
     ]
 

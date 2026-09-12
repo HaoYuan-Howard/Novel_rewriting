@@ -9,7 +9,7 @@ import { ChapterStrip } from '@/components/ui/ChapterStrip'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { useReadScreen } from './useReadScreen'
 import { BlueprintEditPanel } from './BlueprintEditPanel'
-import type { PlotBlueprint } from '@/types/plot.generated'
+import type { ActorRef, PlotBlueprint } from '@/types/plot.generated'
 
 /** 完整剧情与原文并排；证据范围不冒充语义覆盖结论。 */
 export function ReadScreen() {
@@ -69,6 +69,10 @@ export function ReadScreen() {
 }
 
 function PlotChapter({ chapter }: { chapter: PlotBlueprint }) {
+  const actor = (value: ActorRef) => {
+    const binding = chapter.actor_bindings.find((row) => row.presentation_id === value.presentation_ref)
+    return binding ? binding.surfaces.join(' / ') : value.char_id + (value.presentation_ref ? ' · ' + value.presentation_ref : '')
+  }
   const moment = (value: PlotBlueprint['states'][number]['established_at']) =>
     value.kind === 'at_entry' ? '章首' : '节点 ' + value.beat_ref
   const evidence = (refs: string[]) => refs.map((ref) => {
@@ -83,13 +87,13 @@ function PlotChapter({ chapter }: { chapter: PlotBlueprint }) {
       <p className="text-tag text-ink-4">原文证据：{evidence(beat.evidence_refs)}</p>
       {beat.source_contexts.map((context, n) => <p key={n} className="text-tag text-ink-3">
         {context.time_layer ?? '时层未知'} · {context.place ?? '地点未知'} ·
-        在场人物 {context.present_char_ids === null ? '未知' : context.present_char_ids.join('、') || '明确为空'}
+        在场人物 {context.present === null ? '未知' : context.present.map(actor).join('、') || '明确为空'}
       </p>)}
     </article>)}
     <details><summary>持续状态（{chapter.states.length}）与约束（{chapter.constraints.length}）</summary>
       {chapter.states.length ? chapter.states.map((state) => <article key={state.state_id}
         className="my-8 rounded-block border border-line-2 p-12" aria-label={'持续状态 ' + state.state_id}>
-        <p className="prose-cn">{state.modality} · {state.content ?? state.global_ref?.ref} · {state.holder_char_id ?? '无持有者'}</p>
+        <p className="prose-cn">{state.modality} · {state.content ?? state.global_ref?.ref} · {state.holder ? actor(state.holder) : '无持有者'}</p>
         <p className="text-tag text-ink-3">{state.state_id} · 成立：{moment(state.established_at)} ·
           结束：{state.ended_at === null ? '未登记结束' : moment(state.ended_at)}</p>
         <p className="text-tag text-ink-3">取代状态：{state.supersedes_state_refs.join('、') || '无登记项'}</p>
@@ -99,6 +103,7 @@ function PlotChapter({ chapter }: { chapter: PlotBlueprint }) {
         constraints: chapter.constraints, entry_state_refs: chapter.entry_state_refs,
         carry_out_refs: chapter.carry_out_refs, inherited_state_endings: chapter.inherited_state_endings,
         narration: chapter.narration,
+        actor_bindings: chapter.actor_bindings,
       }, null, 2)}</pre>
     </details>
     <details><summary>审阅定位引用</summary>

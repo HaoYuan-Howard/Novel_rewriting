@@ -9,7 +9,7 @@ from contracts.schema.base import FrozenModel
 from contracts.schema.common import Sha256
 
 
-class PipelineArtifactVersions(FrozenModel):
+class PipelineArtifactVersionsV4(FrozenModel):
     """初始化时的版本快照；各 Gate 的新产物仍由现役 ArtifactSpec 严格验证。"""
     characters: Literal[2] = 2
     global_grounding: Literal[7] = 7
@@ -28,9 +28,115 @@ class WorkflowManifestV4(FrozenModel):
     schema_version: Literal[4] = 4
     contract_version: Literal['stage2-core-v2'] = 'stage2-core-v2'
     pipeline_contract_epoch: Literal['joint-analysis-independent-artifacts-v1'] = 'joint-analysis-independent-artifacts-v1'
+    artifact_versions: PipelineArtifactVersionsV4 = Field(default_factory=PipelineArtifactVersionsV4)
+    task_id: Sha256
+    created_at: int
+
+
+class PipelineArtifactVersions(FrozenModel):
+    """Gate B 当前快照；V4 的冻结字面值不能随新 producer 漂移。"""
+    characters: Literal[2] = 2
+    global_grounding: Literal[7] = 7
+    analyze_receipt: Literal[1] = 1
+    chapter_blueprints: Literal[10] = 10
+    knowledge_links: Literal[3] = 3
+    blind_candidate: Literal[5] = 5
+    blind_chapter_edit: Literal[3] = 3
+    evidence_binding: Literal[5] = 5
+    plan_chapters: Literal[6] = 6
+    plan_edit: Literal[6] = 6
+    writer_context: Literal[9] = 9
+
+
+class WorkflowTransitionRefV1(FrozenModel):
+    transition_id: Sha256
+    source_manifest_sha256: Sha256
+
+
+class WorkflowManifestV5(FrozenModel):
+    schema_version: Literal[5] = 5
+    contract_version: Literal['stage2-actor-v1'] = 'stage2-actor-v1'
+    pipeline_contract_epoch: Literal['joint-analysis-actor-presentations-v1'] = 'joint-analysis-actor-presentations-v1'
     artifact_versions: PipelineArtifactVersions = Field(default_factory=PipelineArtifactVersions)
     task_id: Sha256
     created_at: int
+    transition_ref: WorkflowTransitionRefV1 | None = None
+
+
+class WorkflowTransitionBookProofV1(FrozenModel):
+    characters_sha256: Sha256
+    global_sha256: Sha256
+    review_sha256: Sha256
+
+
+class WorkflowTransitionProofV1(FrozenModel):
+    """来源代码的只读核验结果；不把旧 gate bool 当作审批采用权。"""
+    logs: dict[str, Sha256 | None]
+    owner_ids: tuple[str, ...]
+    counts: dict[str, int]
+    accepted_books: dict[str, WorkflowTransitionBookProofV1]
+
+
+class WorkflowTransitionProjectionV1(FrozenModel):
+    """唯一允许免费重编译的派生投影；Core、来源和批准记录不迁移。"""
+    relative_path: str
+    source_json: str | None
+    source_sha256: Sha256 | None
+    target_json: str
+    target_sha256: Sha256
+    characters_sha256: Sha256
+    main_text_sha256: Sha256
+
+    @model_validator(mode='after')
+    def _source_presence(self) -> WorkflowTransitionProjectionV1:
+        if (self.source_json is None) != (self.source_sha256 is None):
+            raise ValueError('投影原文件的存在性与原字节摘要必须一致')
+        return self
+
+
+class WorkflowTransitionPreparedV1(FrozenModel):
+    schema_version: Literal[1] = 1
+    transition_id: Sha256
+    source_manifest_json: str
+    source_manifest_sha256: Sha256
+    target_manifest_json: str
+    target_manifest_sha256: Sha256
+    source_code_directory: str
+    source_code_version: str = Field(pattern=r'^[0-9a-f]{40}$')
+    target_code_version: str = Field(pattern=r'^[0-9a-f]{40}$')
+    preserved_files: dict[str, Sha256]
+    projections: dict[str, WorkflowTransitionProjectionV1]
+    source_proof: WorkflowTransitionProofV1
+    service_ports: tuple[int, ...] = Field(min_length=1)
+    stopped_pids: tuple[int, ...]
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    prepared_at: int = Field(ge=0)
+
+    @model_validator(mode='after')
+    def _offline_controls(self) -> WorkflowTransitionPreparedV1:
+        if (not self.actor.strip() or not self.reason.strip()
+                or len(set(self.service_ports)) != len(self.service_ports)
+                or any(not 1 <= port <= 65535 for port in self.service_ports)
+                or len(set(self.stopped_pids)) != len(self.stopped_pids)
+                or any(pid <= 0 for pid in self.stopped_pids)):
+            raise ValueError('迁移须提供合法唯一端口/PID，以及明确 actor/reason')
+        return self
+
+
+class WorkflowTransitionPendingV1(FrozenModel):
+    schema_version: Literal[1] = 1
+    transition_id: Sha256
+    prepared_sha256: Sha256
+
+
+class WorkflowTransitionCompletedV1(FrozenModel):
+    schema_version: Literal[1] = 1
+    transition_id: Sha256
+    prepared_sha256: Sha256
+    source_manifest_sha256: Sha256
+    target_manifest_sha256: Sha256
+    completed_at: int = Field(ge=0)
 
 
 class WorkUnitAttempt(FrozenModel):

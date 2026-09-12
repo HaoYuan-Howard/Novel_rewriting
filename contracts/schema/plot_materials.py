@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal
 from pydantic import Field, JsonValue
 from contracts.schema.base import FrozenModel
-from contracts.schema.plot import PlotBlueprint, PlotSubjectRef
+from contracts.schema.plot import ActorBinding, PlotBlueprint, PlotSubjectRef
 
 
 class ReviewSourceRange(FrozenModel):
@@ -31,9 +31,10 @@ class ReviewSupportSubject(FrozenModel):
 
 
 class PlotChapterReviewMaterials(FrozenModel):
-    contract: Literal['plot-chapter-evidence-v1'] = 'plot-chapter-evidence-v1'
+    contract: Literal['plot-chapter-evidence-v2'] = 'plot-chapter-evidence-v2'
     blueprint: PlotBlueprint
     support_subjects: list[ReviewSupportSubject]
+    actor_bindings: list[ActorBinding]
     global_subjects: list[ReviewSupportSubject]
     knowledge_events: list[dict[str, JsonValue]]
     source_context_catalog: dict[str, JsonValue]

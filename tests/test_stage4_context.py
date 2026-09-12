@@ -12,12 +12,10 @@ import pytest
 from contracts.schema.stage4 import CtxScene, WriterContext
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.context import (
-    Assembly, _name_narration,
-    build_writer_context, rename_all,
+    Assembly, build_writer_context,
 )
 from novel.core.naming import display_names, display_names_at, name_collisions
 from tests import corpus
-from tests.test_stage2_grounding import character_preparation, pair  # noqa: F401
 
 
 def _by(rel: str) -> dict[str, object]:
@@ -27,6 +25,7 @@ def _by(rel: str) -> dict[str, object]:
 MAIN: dict[str, object] = {}
 BPS: dict[str, object] = {}
 GG: dict[str, object] = {}
+CHARACTERS: dict[str, object] = {}
 PLANS: dict[str, object] = {}
 CTX: dict[str, object] = {}
 LINKS: dict[str, object] = {}
@@ -35,20 +34,20 @@ _CORPUS_LOADED = False
 
 
 def _load_corpus() -> None:
-    global MAIN, BPS, GG, PLANS, CTX, LINKS, BOOKS, _CORPUS_LOADED
+    global MAIN, BPS, GG, CHARACTERS, PLANS, CTX, LINKS, BOOKS, _CORPUS_LOADED
     if _CORPUS_LOADED:
         return
     MAIN = _by('stage1/main_text.json')
     BPS = _by('stage2/chapter_blueprints.json')
     from contracts.schema.characters import CharacterRegistry
     from contracts.schema.knowledge import KnowledgeGrounding
-    from novel.stages.stage2.grounding import compose
     knowledge = _by('stage2/global_grounding.json')
     characters = _by('stage2/characters.json')
     LINKS = _by('stage2/knowledge_links.json')
     assert set(knowledge) <= set(characters), '当前语料缺少独立人物登记，不能伪装组合成功'
-    GG = {sid: compose(CharacterRegistry.model_validate(characters[sid]),
-                       KnowledgeGrounding.model_validate(raw)).model_dump(by_alias=True)
+    CHARACTERS = {sid: CharacterRegistry.model_validate(raw).model_dump(by_alias=True)
+                  for sid, raw in characters.items()}
+    GG = {sid: KnowledgeGrounding.model_validate(raw).model_dump(by_alias=True)
           for sid, raw in knowledge.items()}
     PLANS = _by('stage4/plan_chapters.json')
     CTX = _by('stage4/writer_context.json')
@@ -80,7 +79,7 @@ def test_ctx_scene_preserves_each_selected_stage_instead_of_flattening_them():
     raw = _ctx_scene()
     raw['deliveries'][0]['stages'] = [
         {'time_layer': 'present', 'place': '公寓', 'present': []},
-        {'time_layer': 'recall', 'place': '车站', 'present': ['主角']}]
+        {'time_layer': 'recall', 'place': '车站', 'present': ['actor_' + '1' * 24]}]
     scene = CtxScene.model_validate(raw).model_dump(mode='json')
     assert scene['deliveries'][0]['stages'][0]['present'] == []
     assert scene['deliveries'][0]['stages'][1]['time_layer'] == 'recall'
@@ -109,7 +108,7 @@ def test_scene_resolution_keeps_parent_content_once_and_stage_boundaries():
     from novel.stages.stage4.measure import identity_plan
     plan = identity_plan(raw, fixture.MAIN)
     asm = build_writer_context(plan, fixture.GLOBAL, raw, fixture.MAIN,
-                               knowledge_links=fixture.links())
+                               knowledge_links=fixture.links(), characters=fixture.REGISTRY)
     chapter = asm.ctx['chapters'][0]
     assert chapter['beats'][0]['content'] == raw['blueprints'][0]['beats'][0]['content']
     delivery = chapter['scenes'][0]['deliveries'][0]
@@ -139,7 +138,7 @@ def test_the_assembler_reproduces_every_context_on_disk():
     """
     for sid in BOOKS:
         asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid],
-                                   knowledge_links=LINKS[sid])
+                                   knowledge_links=LINKS[sid], characters=CHARACTERS[sid])
         mine = WriterContext.model_validate({**asm.ctx, '_provenance': CTX[sid]['_provenance']}).model_dump(
             by_alias=True, mode='json')
         disk = WriterContext.model_validate(CTX[sid]).model_dump(
@@ -154,7 +153,7 @@ def test_the_rebuilt_context_passes_the_carrier():
             'inputs': {'stage4/plan_chapters.json': {'file': '1' * 10, 'consumed': '2' * 10}}}
     for sid in BOOKS:
         asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid],
-                                   knowledge_links=LINKS[sid])
+                                   knowledge_links=LINKS[sid], characters=CHARACTERS[sid])
         WriterContext.model_validate({**asm.ctx, '_provenance': prov})
 
 
@@ -179,7 +178,7 @@ def test_the_side_ledger_is_returned_not_printed():
         f'副产物出现了非容器形状：{containers}'
     for sid in BOOKS:
         asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid],
-                                   knowledge_links=LINKS[sid])
+                                   knowledge_links=LINKS[sid], characters=CHARACTERS[sid])
         for name, origin in containers.items():
             got = getattr(asm, name)
             assert isinstance(got, origin), \
@@ -190,7 +189,7 @@ def test_the_side_ledger_is_returned_not_printed():
 def test_the_setting_gate_returns_structured_results():
     for sid in BOOKS:
         asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid],
-                                   knowledge_links=LINKS[sid])
+                                   knowledge_links=LINKS[sid], characters=CHARACTERS[sid])
         assert all(isinstance(chapter['restricted_subject_refs'], list)
                    for chapter in asm.ctx['chapters'])
 
@@ -202,23 +201,17 @@ def test_the_setting_gate_returns_structured_results():
 # ── 二·五、secret 的下发时点（`R-2.18`）───────────────────────────────────
 
 
-def test_writer_context_excludes_every_global_source_span_byte(pair):
-    """正式证据只用于关联和审计；付费 writer 材料不能读取原文片段或坐标。"""
+def test_writer_context_excludes_every_global_source_span_byte():
+    """共享坐标/证据摘要只供审计，不得进入实际 WriterContext。"""
     import json
-    from novel.core.evidence import iter_global_evidence_slots
-    from tests.test_stage4_disclosure import _inputs, _build
-    inputs = _inputs(pair)
-    markers, coordinates = [], []
-    for index, (_claim_path, owner, field) in enumerate(iter_global_evidence_slots(inputs[1]), 1):
-        marker = f'CONTEXT_EVIDENCE_ONLY_{index}'
-        start = 923_456_700 + index * 100
-        owner[field] = {'chapter_ordinal': 1,
-                        'source': {'text': marker, 'start': start, 'end': start + len(marker)}}
-        markers.append(marker)
-        coordinates.extend((start, start + len(marker)))
-    paid_context = json.dumps(_build(inputs), ensure_ascii=False, sort_keys=True)
-    assert markers and all(marker not in paid_context for marker in markers)
-    assert all(str(coordinate) not in paid_context for coordinate in coordinates)
+    from tests import plot_fixtures as fixture
+    knowledge = deepcopy(fixture.GLOBAL)
+    knowledge['evidence_anchors'] = {'ev_marker': {'chapter_ordinal': 1, 'start': 923456701,
+        'end': 923456729, 'text_sha256': 'CONTEXT_EVIDENCE_ONLY'}}
+    view = build_writer_context(fixture.plan(), knowledge, fixture.blueprint(), fixture.MAIN,
+                                knowledge_links=fixture.links(), characters=fixture.REGISTRY).ctx
+    wire = json.dumps(view)
+    assert 'CONTEXT_EVIDENCE_ONLY' not in wire and '923456701' not in wire
 
 
 # ── 三、名字表的三个方向 ─────────────────────────────────────────────────
@@ -230,7 +223,7 @@ def test_a_fabricated_canonical_is_replaced_by_an_attested_appellation():
     原文里从没有人管他叫「苏父」——那是 registry 的记账标签，不是这本书的语言。
     """
     chars = {'char_001': {'canonical': '苏父',
-                          'address': [{'surface': '爹爹'}, {'surface': '老爷'}]}}
+                          'aliases': [{'surface': '爹爹'}, {'surface': '老爷'}]}}
     book = '爹爹说了算。爹爹又说。老爷回来了。'
     disp, subs, unattested = display_names(chars, book)
     assert disp == {'char_001': '爹爹'} and subs == {'苏父': '爹爹'} and not unattested
@@ -238,12 +231,11 @@ def test_a_fabricated_canonical_is_replaced_by_an_attested_appellation():
 
 def test_a_character_with_no_attested_appellation_is_a_terminal_state():
     from tests import plot_fixtures as fixture
-    grounding = deepcopy(fixture.GLOBAL)
-    grounding['entities']['characters']['char_001'].update(
-        canonical='春江阁女子', address=[])
-    with pytest.raises(RefusedByStructure, match='没有任何原文有据'):
-        build_writer_context(fixture.plan(), grounding, fixture.blueprint(),
-                             fixture.MAIN, knowledge_links=fixture.links())
+    registry = deepcopy(fixture.REGISTRY)
+    registry['characters']['char_001'].update(canonical='春江阁女子', aliases=[])
+    with pytest.raises(RefusedByStructure, match='没有当前可辨认'):
+        build_writer_context(fixture.plan(), fixture.GLOBAL, fixture.blueprint(), fixture.MAIN,
+                             knowledge_links=fixture.links(), characters=registry)
 
 
 def test_the_chapter_level_table_withholds_a_name_the_book_level_one_would_give():
@@ -252,7 +244,7 @@ def test_the_chapter_level_table_withholds_a_name_the_book_level_one_would_give(
     书级表用全书正文判有据，于是一个到第 4 章才被指名的人，**在第 1 章就有了名字**。
     实测某本 10/12 人的 display_name 在 ch1 尚未出现。
     """
-    chars = {'char_003': {'canonical': '岑亦', 'address': []}}
+    chars = {'char_003': {'canonical': '岑亦', 'aliases': []}}
     whole = '第一章里没有名字。\n第四章：岑亦终于露面。'
     upto1 = '第一章里没有名字。'
     assert display_names(chars, whole)[0] == {'char_003': '岑亦'}
@@ -271,22 +263,15 @@ def test_a_collision_is_made_visible_not_resolved():
     assert len(cols) == 1 and cols[0][0] == '李嬷嬷' and sorted(cols[0][1]) == ['char_a', 'char_b']
 
 
-def test_rename_all_replaces_values_never_keys_and_longest_first():
-    """⚠ **只换值不换键**（键是 char_id 这类内部引用，动了就断链）· **长的先换**。"""
-    tree = {'char_001': {'role': '赵家小厮(车夫)兼跑腿', 'note': ['赵家小厮来了']}}
-    subs = {'赵家小厮(车夫)': '小厮', '赵家小厮': '小厮'}
-    out = rename_all(tree, subs)
-    assert list(out) == ['char_001'], '键被改了——内部引用会断'
-    assert out['char_001']['role'] == '小厮兼跑腿', '短的先换会切出半截残串'
-    assert out['char_001']['note'] == ['小厮来了']
-
-
-# ── 四、两条剩下的显式终态 ───────────────────────────────────────────────
-
-def _minimal(canon: dict) -> tuple[dict, dict, list]:
-    chars = {'char_001': {'canonical': '阿禾', 'address': [{'surface': '阿禾'}]}}
-    gg = {'entities': {'characters': chars}, 'canon': canon, }
-    return gg, {'blueprints': []}, [{'chapter_ordinal': 1, 'text': '阿禾走了进来。'}]
+def test_registry_label_never_replaces_distinct_presentations_in_writer_text():
+    """旧全树替换已退役；称谓归属必须由显式 ActorRef 保护，不能按字串改写别人的身份。"""
+    from tests.test_writer_actor_contract import presented, compile_view
+    bps, main, registry, old, new = presented()
+    registry['characters']['char_001']['canonical'] = '内部登记标签'
+    ctx = compile_view(bps, main, registry)
+    assert '内部登记标签' not in str(ctx)
+    roster = ctx['chapters'][0]['characters']
+    assert {'甲', '新客'} <= {row['display_name'] for row in roster}
 
 
 def test_a_rule_without_any_version_text_is_a_terminal_state():
@@ -300,70 +285,48 @@ def test_a_rule_without_any_version_text_is_a_terminal_state():
 # ── 五、冲突阶段的章覆盖 ──────────────────────────────────────────────────
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# `_name_narration` —— 那道判等闸。⚠ 2026-08-23 之前**两个分支都没有测试覆盖**
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# 这道闸是 `CtxNarration.focalizer` 盘上恒空的**唯一成因**：stage2 那一侧
-# `focalizer_name` 填充率 27/31，但它填的值恒等于 `narrator_name`
-# （两格在 `novel/stages/stage2/prompts.py` 里是**同一个占位符字符串**，
-# 且从头到尾没有定义什么是「视点人物」、没说「只在与叙述者不同时才填」），
-# 于是这里判等一律为真、键一律不写。
-# ⇒ **那不是死值，是一道从未成立过的闸**（`docs/LESSONS.md` 第 8 条：
-#   删字段前审计语义消费，不只搜字段名）。本批只补覆盖，不动 prompt、不删字段。
+# 叙述/视点是独立的实际人物位置，不能按 char_id 判等后丢掉不同呈现。
 
-_DISP = {'c1': '沈青', 'c2': '顾堇'}
+def narrated(narrator, focalizer):
+    from tests.test_writer_actor_contract import presented, compile_view
+    bps, main, registry, old, new = presented()
+    bps['blueprints'][0]['narration'][0].update(narrator=narrator, focalizer=focalizer)
+    return compile_view(bps, main, registry)['chapters'][0]['narration'][0]
 
 
-def _seg(**kw):
-    base = {'grammatical_person': 'first', 'segment': '正文主体（直至"……沉重的呼吸声"）'}
-    base.update(kw)
-    return base
+def test_same_presentation_narrator_and_focalizer_keep_same_public_reference():
+    value = {'char_id': 'char_001', 'presentation_ref': 'ap01_01'}
+    out = narrated(value, value)
+    assert out['narrator'] == out['focalizer']
+    assert out['narrator'].startswith('actor_')
 
 
-def test_focalizer_is_dropped_when_it_is_the_same_person_as_the_narrator():
-    """⭐ 盘上 100% 走的就是这一支。"""
-    out = _name_narration(
-        _seg(narrator_char_id='c1', focalizer_char_id='c1'), _DISP, 0, 1)
-    assert out['narrator'] == '沈青' and 'focalizer' not in out
+def test_focalizer_keeps_distinct_presentation_even_for_same_internal_entity():
+    out = narrated({'char_id': 'char_001', 'presentation_ref': 'ap01_01'},
+                   {'char_id': 'char_001', 'presentation_ref': 'ap01_02'})
+    assert out['narrator'] != out['focalizer']
 
 
-def test_focalizer_is_kept_when_it_really_is_a_different_person():
-    """⭐ 另一支——盘上零样本，只有这条测试见过它。"""
-    out = _name_narration(
-        _seg(narrator_char_id='c1', focalizer_char_id='c2'), _DISP, 0, 1)
-    assert out['narrator'] == '沈青' and out['focalizer'] == '顾堇'
+def test_missing_narrator_is_refused_instead_of_silently_dropping_the_binding():
+    with pytest.raises(RefusedByStructure, match='不存在的人物'):
+        narrated({'char_id': 'char_999'}, {'char_id': 'char_001', 'presentation_ref': 'ap01_01'})
 
 
-def test_an_unresolvable_narrator_does_not_suppress_a_resolvable_focalizer():
-    """⚠ **代码上可达的倒置路径**：叙述者叫不出名字、视点人物叫得出
-    ⇒ 只发 `focalizer` 不发 `narrator`。本语料从没走到过，但它不是死路。"""
-    out = _name_narration(
-        _seg(narrator_char_id='c9', focalizer_char_id='c2'), _DISP, 0, 1)
-    assert 'narrator' not in out and out['focalizer'] == '顾堇'
+def test_unspecified_narrator_keeps_explicit_focalizer_without_fallback_identity():
+    out = narrated(None, {'char_id': 'char_001', 'presentation_ref': 'ap01_02'})
+    assert out['narrator'] is None and out['focalizer'].startswith('actor_')
+    assert 'char_' not in str(out)
 
 
-def test_a_nameless_narrator_writes_neither_key_and_never_falls_back_to_char_id():
-    """第一人称书的第 1 章正是这样：主角通篇写「我」，名字要到后面才出现。
-    ⚠ **不许兜底成 `char_002`**——写作侧不该看见内部编号。"""
-    out = _name_narration(
-        _seg(narrator_char_id='c9', focalizer_char_id='c9'), _DISP, 0, 1)
-    assert 'narrator' not in out and 'focalizer' not in out
-    assert out['grammatical_person'] == 'first'
+def test_stage2_free_segment_label_cannot_enter_current_narration_schema():
+    from contracts.schema.plot import PlotNarration
+    with pytest.raises(ValueError, match='segment'):
+        PlotNarration.model_validate({'grammatical_person': 'first', 'narrator': None,
+            'focalizer': None, 'pronoun_surfaces': ['我'], 'beat_refs': [], 'evidence_refs': ['e01_01'],
+            'segment': '正文主体直至沉重的呼吸声'})
 
 
-def test_the_stage2_segment_label_never_reaches_the_writer():
-    """⚠⚠ **反原文泄漏**：stage2 的 `segment` 常原样引用原文当分界，
-    而泄的往往正是本章末句。写手要的只是「分几段、什么顺序」。"""
-    one = _name_narration(_seg(narrator_char_id='c1'), _DISP, 0, 1)
-    many = _name_narration(_seg(narrator_char_id='c1'), _DISP, 1, 3)
-    assert one['segment'] == '全章'
-    assert many['segment'] == '第2段（共3段，按顺序写）'
-    assert '沉重的呼吸声' not in str(one) and '沉重的呼吸声' not in str(many)
-
-
-def test_writer_context_no_longer_requires_or_emits_literary_arc(pair):
-    from tests.test_stage4_disclosure import _inputs, _build
-    inputs = _inputs(pair)
-    assert 'arc' not in inputs[1]
-    assert all('arc' not in chapter for chapter in _build(inputs))
+def test_writer_context_no_longer_requires_or_emits_literary_arc():
+    from tests import plot_fixtures as fixture
+    assert 'arc' not in fixture.GLOBAL
+    assert all('arc' not in chapter for chapter in fixture.context()['chapters'])

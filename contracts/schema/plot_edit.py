@@ -9,7 +9,7 @@ from contracts.schema.plot import NonEmpty, PlotChapterResponse, PlotNodeTombsto
 
 
 class PlotIdentityOperation(StrictModel):
-    collection: Literal['beats', 'states', 'constraints']
+    collection: Literal['beats', 'states', 'constraints', 'actor_bindings']
     kind: Literal['preserve', 'replace', 'add']
     old_refs: list[NonEmpty]
     new_keys: list[NonEmpty]
@@ -44,7 +44,7 @@ class PlotRevisionResponse(StrictModel):
 class PlotEdit(StrictModel):
     actor: NonEmpty
     reason: NonEmpty
-    review_token: str = Field(pattern=r'^bpe1_[0-9a-f]{64}$')
+    review_token: str = Field(pattern=r'^bpe2_[0-9a-f]{64}$')
     chapters: list[PlotChapterEdit] = Field(min_length=1)
 
     @model_validator(mode='after')
@@ -59,7 +59,7 @@ class PlotEdit(StrictModel):
 
 class PlotIdentityChange(StrictModel):
     chapter_ordinal: int = Field(ge=1)
-    collection: Literal['beats', 'states', 'constraints']
+    collection: Literal['beats', 'states', 'constraints', 'actor_bindings']
     kind: Literal['preserve', 'replace', 'add']
     old_refs: list[NonEmpty]
     new_refs: list[NonEmpty]
@@ -69,7 +69,7 @@ class PlotIdentityChange(StrictModel):
         import re
         PlotIdentityOperation(collection=self.collection, kind=self.kind,
                               old_refs=self.old_refs, new_keys=self.new_refs)
-        prefix = {'beats': 'b', 'states': 'st', 'constraints': 'c'}[self.collection]
+        prefix = {'beats': 'b', 'states': 'st', 'constraints': 'c', 'actor_bindings': 'ap'}[self.collection]
         if any(not re.fullmatch(rf'{prefix}{self.chapter_ordinal:02d}_\d{{2,}}', ref)
                for ref in [*self.old_refs, *self.new_refs]):
             raise ValueError('身份历史中的主体不属于该章或该集合')

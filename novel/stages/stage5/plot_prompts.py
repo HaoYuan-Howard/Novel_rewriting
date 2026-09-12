@@ -51,8 +51,11 @@ def chapter_facts(entry: dict[str, Any], slot_plan: list[int] | None = None) -> 
 def facts_block(entry: dict[str, Any]) -> str:
     return ('── 本章允许下发的共享主体与叫法 ──\n'
             'allowed_slots 允许陈述主体真相；state_permissions 仅允许按所指状态的信念、声称或未知表达，不能升级为真相。\n'
-            '世界成立不代表读者或所有人物已经知道；不同版本仍分别服从各自 allowed_slots。\n'
-            + compact({'global_subjects': entry['global_subjects'], 'address': entry['address']}))
+            'effective_from/until 是事实成立窗口（until 包含该章），不能当作披露许可；已结束的事实仍可作为历史披露。\n'
+            'actor_ref 是独立表面身份；只有 identity_actors 对应的知识事件开放后，才能断言两种身份是同一人。\n'
+            '普通昵称在同一 surfaces 中；role 仅在 role_allowed_slots 中使用，不从另一个身份继承。\n'
+            '不同版本仍分别服从各自 allowed_slots；局部称呼的施受、改口和对白语境依完整 Beat/State。\n'
+            + compact({'global_subjects': entry['global_subjects']}))
 
 
 def prev_context(entry: dict[str, Any], book) -> str | None:
@@ -68,7 +71,19 @@ def prev_context(entry: dict[str, Any], book) -> str | None:
     for row in ending:
         if row['beat_ref'] in current and current[row['beat_ref']] != row:
             raise ValueError('上章收束与本章目录含同 ID 不同剧情正文')
+    used = {token for row in ending for token in row['participants']}
+    current_actors = {row['actor_ref'] for row in entry['characters']}
+    previous_actors = {row['actor_ref']: row for row in previous['characters']}
+    if not used <= previous_actors.keys():
+        raise ValueError('上章收束人物缺少已公开表面身份')
+    last = previous['scenes'][-1]['slot']
+    roster = [{k: v for k, v in previous_actors[token].items()
+               if k not in ('allowed_slots', 'role_allowed_slots', 'role')}
+              | {'role': previous_actors[token]['role']
+                 if last in previous_actors[token]['role_allowed_slots'] else None}
+              for token in sorted(used - current_actors)]
     payload = {
+        'previous_public_actors': roster,
         'completed_ending_beat_refs': [r['beat_ref'] for r in ending],
         'completed_ending_beats': [r for r in ending if r['beat_ref'] not in current],
         'carry_out_refs': previous['semantic_contract']['carry_out_refs'],
@@ -77,6 +92,8 @@ def prev_context(entry: dict[str, Any], book) -> str | None:
 
 
 def chapter_task_blocks(entry: dict[str, Any], book, slot_plan: list[int]):
+    from contracts.schema.stage4 import CtxChapter
+    CtxChapter.model_validate(entry)
     # 正式 Context 已消除重复正文，不再构造第二份可编辑文字表或 visible_content。
     return (chapter_directive(entry, book), chapter_facts(entry, slot_plan), entry,
             prev_context(entry, book))

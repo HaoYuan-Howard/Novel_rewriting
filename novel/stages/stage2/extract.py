@@ -715,6 +715,7 @@ def build_prompts(
     visible = character_inventory['visible_character_refs']
     return [(o, spec.system, build_plot_user(
         ctx.title, sources[o], o, character_refs=visible.get(o, {}),
+        character_bindings=character_inventory['character_bindings'].get(o, {}),
         global_projection=global_projections[str(o)])) for o in targets]
 
 
@@ -758,19 +759,14 @@ def _chapter_index(main_text: list[dict[str, Any]]) -> str:
 def _observe_indistinguishable_refs(
     ctx: RunContext, dropped: dict[int, list[list[str]]],
 ) -> None:
-    """把「本章有几组人物在称呼上分不开、因此没有下发」如实报出来。
-
-    ⚠ 剔除本身在 `visible_character_refs_with_drops` 里（候选集只能有一个落点）；
-    这里只负责让它**不是静默的**——少标几个在场者不会有任何判据变红，
-    而「为什么这一章少标了」必须答得出来。
-    """
+    """报告同名字面候选；保留实体，交由剧情 owner 按原文消歧。"""
     if not dropped:
         return
     ctx.observe(
         'character_refs_indistinguishable',
         chapters=sorted(dropped),
         groups={str(ordinal): groups for ordinal, groups in sorted(dropped.items())},
-        dropped_ids=sum(len(cids) for groups in dropped.values()
+        ambiguous_ids=sum(len(cids) for groups in dropped.values()
                         for cids in groups),
     )
 
@@ -781,7 +777,7 @@ def blueprint_context(title: str, main_text: list[dict[str, Any]],
     return {
         'architecture': architecture,
         'source_format': 'numbered-paragraphs-v1',
-        'global_projection_contract': 'plot-global-scope-v1',
+        'global_projection_contract': 'plot-global-scope-v2',
     }
 
 

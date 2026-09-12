@@ -37,7 +37,7 @@ def test_identity_source_order_is_not_automatically_a_hard_violation():
     from tests import plot_fixtures as fixture
     semantic = next(row for row in plan.checks.check(_clean_plan4(),
         blueprints=fixture.blueprint(), main_text=fixture.MAIN,
-        global_g=fixture.GLOBAL, knowledge_links=fixture.links())
+        global_g=fixture.GLOBAL, knowledge_links=fixture.links(), characters=fixture.REGISTRY)
         if row.rule == 'presentation_semantics')
     assert semantic.unver_why and not semantic.findings
 
@@ -106,11 +106,14 @@ def test_goals_require_existing_subjects_without_silently_inventing_relations():
     from tests import plot_fixtures as fixture
     from novel.stages.stage4.plot_refs import validate_plan
     candidate = fixture.plan()
-    validate_plan(candidate, fixture.blueprint(), fixture.GLOBAL, fixture.links())
+    validate_plan(candidate, fixture.blueprint(), fixture.GLOBAL, fixture.links(),
+                  characters=fixture.REGISTRY, main_text=fixture.MAIN)
     candidate['output_chapters'][0]['chapter_goal']['subject_refs'] = [
-        {'kind': 'relation', 'ref': 'rel_missing'}]
+        {'kind': 'relation', 'ref': 'rel_99', 'relation_actors': {
+            'subject': {'char_id': 'char_001'}, 'object': {'char_id': 'char_002'}}}]
     with pytest.raises(RefusedByStructure, match='关闭主体'):
-        validate_plan(candidate, fixture.blueprint(), fixture.GLOBAL, fixture.links())
+        validate_plan(candidate, fixture.blueprint(), fixture.GLOBAL, fixture.links(),
+                      characters=fixture.REGISTRY, main_text=fixture.MAIN)
     # 关系成立/读者披露/包含式截止的独立反例在 test_stage4_disclosure 当前 KL 链验证。
 
 
@@ -137,6 +140,7 @@ def test_pre_context_gate_does_not_pair_a_new_candidate_with_old_context(monkeyp
     )
     upstream = type('Upstreams', (), {
         'blueprints': {}, 'main_text': [], 'global_g': {}, 'bidx': {}, 'knowledge_links': {},
+        'characters': {},
     })()
 
     assert plan._judge(OldContextStore(), {}, upstream, with_ctx_link=False) == []
@@ -207,15 +211,46 @@ def test_context_guard_compares_the_producer_projection_after_name_replacement()
                               for row in projected['chapters']]}
     outcomes = plan.checks.check(fixture.plan(), blueprints=blueprints,
         main_text=fixture.MAIN, global_g=fixture.GLOBAL, knowledge_links=fixture.links(),
-        ctx=expected, expected_ctx=expected)
+        characters=fixture.REGISTRY, ctx=expected, expected_ctx=expected)
     row = next(o for o in outcomes if o.rule == 'ctx_plot_exact')
     assert not row.findings
     altered = copy.deepcopy(expected)
     altered['chapters'][0]['beats'][0]['content'] += '未审的新剧情。'
     red = plan.checks.check(fixture.plan(), blueprints=blueprints,
         main_text=fixture.MAIN, global_g=fixture.GLOBAL, knowledge_links=fixture.links(),
-        ctx=altered, expected_ctx=expected)
+        characters=fixture.REGISTRY, ctx=altered, expected_ctx=expected)
     assert next(o for o in red if o.rule == 'ctx_plot_exact').findings
+
+
+def test_design_source_dependency_tracks_attested_candidates_without_unrelated_word_changes():
+    from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE2_CHARACTERS
+    from novel.consumption import context_inputs_for, project_consumed
+    from tests.plot_fixtures import REGISTRY
+    registry = copy.deepcopy(REGISTRY)
+    registry['characters']['char_001']['aliases'].append({
+        'surface': '新客', 'identity_revealed_from': 3, 'evidence_refs': []})
+    source = [{'chapter_ordinal': 1, 'text': '甲抵达小院。'},
+              {'chapter_ordinal': 2, 'text': '新客在门口停步。'}]
+    def project(value):
+        resolved, payload = project_consumed('stage4.design', STAGE1_MAIN_TEXT, value,
+                                             related={STAGE2_CHARACTERS: registry})
+        assert resolved
+        return payload
+    before = project(source)
+    source[0]['text'] = '甲安静地抵达小院。'
+    assert project(source) == before
+    source[0]['text'] += '新客随后敲门。'
+    assert project(source) != before
+    assert context_inputs_for('stage4.design', STAGE1_MAIN_TEXT) == (STAGE2_CHARACTERS,)
+
+
+def test_design_source_dependency_is_unknown_without_current_character_candidates():
+    from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE2_CHARACTERS
+    from novel.consumption import project_consumed
+    source = [{'chapter_ordinal': 1, 'text': '甲来到门口。'}]
+    assert project_consumed('stage4.design', STAGE1_MAIN_TEXT, source) == (False, None)
+    assert project_consumed('stage4.design', STAGE1_MAIN_TEXT, source,
+                            related={STAGE2_CHARACTERS: {'entities': {}}}) == (False, None)
 
 
 def test_identity_action_explicitly_reports_that_it_writes_nothing():

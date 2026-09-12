@@ -29,6 +29,19 @@ constraints 仅登记必要跨节点因果/先后、回应、观察、必须同�
 source_contexts 只记录有据的时层、地点和实际在场者；被提及不等于在场，无法确定写 null。
 原文证据只选编号的段范围，不能抄写正文或编造坐标、主张、人物编号。
 同一段可支持多个节点；证据重叠不等于语义重复，段范围也不证明剧情完整。
+人物位置统一 ActorRef(char_id, presentation_ref)。char_id 是内部身份，不能证明读者知道同人映射。
+普通已公开昵称/排行在同一 ActorBinding.surfaces 分组，不为每个别名创造独立人物。
+隐秘表面身份使用独立 actor_bindings，局部 presentation_key 用 a1/a2，引用用 presentation_ref。
+每条绑定仅列 character_bindings 提供的登记字面、本章原文证据和可选既有公开 State。
+不要将“我”等裸代词登记为 binding surface；第一人称在 narration.pronoun_surfaces 表达。
+同人有多个表面身份时各个出现位置必须明确 presentation_ref；同一 Beat 可有同 char_id 的两种呈现，不能去重。
+未揭示身份不继承实际人物 role。identity_revealed_from 只描述映射披露；本章揭示不代表章首已经知道。
+无长线秘密的局部身份揭示完整写入 Beat/State，交 Commander 按必要性登记稀疏 reader_reveal。
+narration 用 beat_refs 指明适用节点及原文 evidence；仅一条且整章一致时可用空 beat_refs。
+关系引用须 relation_actors 明确 subject/object 呈现；人物主体引用须 actor，与 ref 人物ID一致。
+实际需消费的已有关系在 relation_uses 提供端点绑定，不为引用关系虚构持续 State。
+没有本章关系呈现时可为空；隐藏/历史/未来事实的时间不能因此改写为当前成立。
+跨章 presentation_ref 只能引用 entry_states 实际提供的绑定，不凭正式编号猜测旧身份。
 局部节点用 b1/b2，状态 st1/st2，约束 c1/c2；正式 ID 与证据锚点由程序分配。
 只回答当前阅读序章节，用指定结构化响应出口。
 """
@@ -57,6 +70,7 @@ DESIGN_REVIEW_SYSTEM = """检查已接受完整父节点及其所有 presentatio
 def build_plot_user(
     title: str, source: str, ordinal: int, *,
     character_refs: dict[str, list[str]], global_projection: list[dict],
+    character_bindings: dict[str, list[dict]] | None = None,
     repair_baseline: dict | None = None, repair_findings: list[dict] | None = None,
 ) -> str:
     import json
@@ -64,6 +78,7 @@ def build_plot_user(
     instructions = {
         'title': title, 'chapter_ordinal': ordinal,
         'character_refs': character_refs, 'global_subjects': global_projection,
+        'character_bindings': character_bindings or {},
         'entry_states': [],
     }
     if repair_baseline is not None:

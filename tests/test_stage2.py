@@ -494,11 +494,11 @@ CASES: list[tuple[str, Mutator, str]] = [
      '章首状态必须由前章当前 carry_out 提供'),
     ('plot_global_refs', _m(lambda g, b, m: _ch(b, 1)['states'].append({
          'state_id': 'st01_01', 'content': None, 'global_ref': {'kind': 'secret', 'ref': 'secret_99'},
-         'modality': 'world', 'holder_char_id': None, 'established_at': {'kind': 'at_beat', 'beat_ref': 'b01_01'},
+         'modality': 'world', 'holder': None, 'established_at': {'kind': 'at_beat', 'beat_ref': 'b01_01'},
          'ended_at': None, 'supersedes_state_refs': [], 'evidence_refs': ['e01_01']})),
      '共享状态不得引用当前未提供的秘密主体'),
     ('present_ids_dangling', _m(lambda g, b, m: _ch(b, 1)['beats'][0].__setitem__(
-         'participant_char_ids', ['char_999'])),
+         'participants', [{'char_id': 'char_999', 'presentation_ref': None}])),
      '不能引用当前人物闭集之外的人物，参与与在场必须分别建模'),
     ('scope_violation', _m(lambda g, b, m: b['_provenance'].__setitem__(
          'scope_violations', ['批 1 被要求产 ch1，实际产了 ch1 与 ch5'])),

@@ -15,7 +15,6 @@ from novel.prov import FreshnessReport
 from novel.views import stage2 as view
 from novel.views.plot_review import PlotReviewSnapshot
 from tests.test_plot_knowledge_events import snapshot
-from tests.test_stage2 import global_grounding
 
 
 class Store:
@@ -40,7 +39,8 @@ def install(monkeypatch):
     store = Store()
     report = build(sid=store.ctx.sid, node='stage2.blueprint',
         freshness=FreshnessReport('fresh', 'match'), outcomes=checks.check(
-            global_g=global_grounding(),
+            global_g=store.values[STAGE2_GLOBAL_GROUNDING].model_dump(mode='json', by_alias=True),
+            characters=store.values[STAGE2_CHARACTERS].model_dump(mode='json', by_alias=True),
             blueprints=store.values[STAGE2_CHAPTER_BLUEPRINTS].model_dump(mode='json', by_alias=True),
             main_text=store.values[STAGE1_MAIN_TEXT].model_dump(mode='json')))
     monkeypatch.setattr(view.paths, 'resolve_novel_dir', lambda *_: store.ctx.novel_dir)

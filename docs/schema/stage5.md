@@ -135,27 +135,28 @@ canonical 只接受 v2 批请求；内部 v1 单章 request 只是执行单元�
 `surface_habits`、`chapter_styles` 或 `hook_style`，prompt 也不能接收整份 Stage3 包。
 对白适用性由 `dialogue_ratio is not None` 推出，不再保存一格重复布尔值。测量算法版本进入
 `novel/consumption.py::stage5_main_text`，所以正文或算法任一变化都会让 Stage5 来源账自然 stale。
-Stage2 的 secrets 仍从剥除原文 evidence 的全局事实投影读取，不因退役 Stage3 而缩小检查面。
-写作投影保持 secrets-only，以免人物展示信息变化让既有付费正文整体 stale；Review 另绑定
-`char_id/canonical/address[].surface/name_distinctiveness`，因为旧名、发明名和专名探针会实际读取
-这些叶子。人物 evidence-only 定位不进入消费指纹。
+Stage2 的全量 arc_secrets 及 fact_ref 指向的明确关系/规则版本保留为私有泄漏检测基线，
+不从已下发章节取并集。独立 Characters v2 的 canonical、唯一 aliases surfaces 和
+name_distinctiveness 用于专名检测；role 与人物证据不属于该私有检测依赖。
+Writer 只接收 WriterContext v9 的公开 actor_ref/称谓及许可；不携内部 char_id 或反向映射。
+身份、知识正文与证据坐标分开消费，免费 Context 重建的 provenance 不进入私有验证业务摘要。
 
 ### 1.2 Stage4 → Stage5：只执行新场景设计
 
-写手收到 `CtxChapter.semantic_contract`、`chapter_rewrite_brief` 与按 slot 排列的 `scenes[]`。
-章级契约把 `information_delta`、`character_state_delta`、`relationship_delta` 与
-`reader_knowledge_delta` 分栏下发，并同时给出完整 must-land/context、因果边和章首/章尾状态；
-这些都是 Stage2 atom 的确定性人话投影，不由 Stage4/5 转述出第二份真相。
-每场明确 purpose、进入/退出态、required/context facts、turn、舞台、人物、材料和预算；不接收
-fact_id/beat_id/hinge_id，也不接收旧源序 `events[]`。slot 顺序是唯一硬顺序，场内事实数组没有
-源文先后含义。
+写手收到 `CtxChapter.semantic_contract`、`chapter_rewrite_brief` 与按 slot 排列的 scenes。
+Beat 目录只存一次完整剧情，delivery 引用父节点；State 保留正文/共享命题二选一、modality 与
+opaque holder，约束携明确观察者，舞台、叙述/视点、知识受众、人物目标与关系两端都使用同一
+公开 actor_ref 目录。同实体不同呈现不按 char_id 合并，普通已公开昵称共享同一 surfaces。
 
-允许写手发明不改变持久状态的舞台表面：动作、走位、即时反应、符合身份且不新增信息的对白措辞、
-感官/心理/场景调度和不会被后文引用的承接细节。禁止新增因果、决定、结果、关系、知识、往事、
-秘密、规则及可被后文引用的新人物、地点、道具或事件。判准是写完后人物/关系/知识/世界状态是否
-产生契约外变化，不是“原文没写的动作一律禁止”。
+角色描述仅在 role_allowed_slots 中使用。identity_actors 是既有知识披露端点开放的同人陈述
+许可；不同表面身份不会因此在目录合并，也不会向写手暴露后台映射。effective_from/until 表示
+世界成立窗口而不是阅读许可，已经结束的关系/规则仍能在合法披露端点作为历史事实下发。
+同章一次完整请求看得到后场材料，allowed_slots 是表达约束；语义审阅仍核查前场是否偷泄。
 
-## 二、`stage5/chNN.json`（schema v2）
+上章收束只提供已经完成的必要剧情、原公开 token 与所需公开名册；后台身份或未开放 role
+不能通过 prev_context 回填。本章已拥有同一节点时只引用其目录，冲突不得择一隐藏。
+Writer 请求、私有验证摘要、schema/代码与来源分别核验，旧 Context/prepared 或回答不能靠
+补默认值继承新版接受。免费重建、编辑和已购来源恢复沿既有 producer 入口闭合。
 
 ### 2.1 模型响应与正式产物不是同一个形状
 

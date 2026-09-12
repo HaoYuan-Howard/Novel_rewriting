@@ -1,7 +1,6 @@
 """章审必要主体与来源选择；未来的后台真相可以供审阅核对，不能当作写作许可。"""
 from __future__ import annotations
 
-import hashlib
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING,
@@ -12,57 +11,56 @@ from novel.stages.stage2.paragraphs import paragraph_range_of
 
 
 def global_subjects(raw: dict, selected_ids) -> list[dict]:
-    entities, canon = raw['entities'], raw['canon']
-    states = entities.get('character_states', {})
     values = {
-        **{('relation', row['relation_id']): row for row in entities['relations']},
-        **{('secret', row['secret_id']): row for row in canon['secrets']},
-        **{('world_rule', row['rule_id']): row for row in canon['world_rules']},
-        **{('character_state', ref): row for ref, row in states.items()},
+        **{('relation', row['relation_id']): row for row in raw['relations']},
+        **{('secret', row['secret_id']): row for row in raw['arc_secrets']},
+        **{('world_rule', row['rule_id']): row for row in raw['world_rules']},
+        **{('world_rule', f"{rule['rule_id']}/{version['version_id']}"):
+            {'rule_id': rule['rule_id'], 'kind': rule['kind'], 'version': version}
+            for rule in raw['world_rules'] for version in rule['versions']},
     }
-    from contracts.schema.stage2 import Setting
-    for field, evidence in (('era', 'era_evidence'), ('worldview', 'worldview_evidence')):
-        ref = Setting.model_fields[field].alias or field
-        evidence_key = Setting.model_fields[evidence].alias or evidence
-        values['setting', ref] = {'content': canon['setting'][ref], 'evidence': canon['setting'][evidence_key]}
-    return _subjects(values, (selected.split(':', 1) for selected in selected_ids))
+    for field in ('era', 'social_context'):
+        values['setting', field] = {'content': raw['setting'][field],
+                                    'evidence_refs': raw['setting'][field + '_evidence_refs']}
+    # fact_ref 的权威命题与证据一起成为真实审阅输入，不能留下只有指针的空材料。
+    for secret in raw['arc_secrets']:
+        ref = secret['fact_ref']
+        if ref:
+            target = values['relation', ref['relation_id']] if ref['kind'] == 'relation' else values[
+                'world_rule', f"{ref['rule_id']}/{ref['version_id']}"]
+            values['secret', secret['secret_id']] = {**secret, 'referenced_fact': target}
+    return _subjects(values, (selected.split(':', 1) for selected in selected_ids), raw['evidence_anchors'])
 
 
 def character_subjects(raw: dict, selected_ids) -> list[dict]:
-    """模型实际看到的人物身份与称呼；证据只留锚点，不复制原文。"""
+    """人物登记与实际使用的共享证据；不在审阅材料重复原文。"""
     if not isinstance(raw, dict) or not isinstance(raw.get('characters'), dict):
         raise ValueError('人物审阅材料缺少当前正式名册')
     values = {('character', ref): row for ref, row in raw['characters'].items()}
-    return _subjects(values, (('character', ref) for ref in selected_ids))
+    return _subjects(values, (('character', ref) for ref in selected_ids), raw['evidence_anchors'])
 
 
-def _subjects(values, selected) -> list[dict]:
+def _subjects(values, selected, anchors) -> list[dict]:
     result = []
     for kind, ref in selected:
         if (kind, ref) not in values:
             raise ValueError(f'必要审阅主体缺失：{kind}:{ref}')
-        evidence = {}
-        def project(value):
+        needed = set()
+        def visit(value):
             if isinstance(value, list):
-                return [project(item) for item in value]
-            if not isinstance(value, dict):
-                return value
-            if 'chapter_ordinal' in value and 'source' in value:
-                chapter, source = value['chapter_ordinal'], value['source']
-                if not isinstance(source, dict):
-                    raise ValueError('必要共享主体缺少已定位原文证据')
-                key = f"source:{chapter}:{source['start']}:{source['end']}"
-                row = dict(evidence_ref=key, chapter_ordinal=chapter,
-                           start=source['start'], end=source['end'],
-                           text_sha256=hashlib.sha256(source['text'].encode('utf-8')).hexdigest())
-                if key in evidence and evidence[key] != row:
-                    raise ValueError('同一共享证据位置具有不同原文')
-                evidence[key] = row
-                return {'evidence_ref': key}
-            return {key: project(item) for key, item in value.items()}
-        body = project(values[kind, ref])
-        result.append({'kind': kind, 'ref': ref, 'value': body,
-                       'evidence': [evidence[key] for key in sorted(evidence)]})
+                for row in value:
+                    visit(row)
+            elif isinstance(value, dict):
+                for key, child in value.items():
+                    if key.endswith('evidence_refs'):
+                        needed.update(child)
+                    else:
+                        visit(child)
+        visit(values[kind, ref])
+        if not needed <= anchors.keys():
+            raise ValueError('必要主体缺少其共享证据定义')
+        result.append({'kind': kind, 'ref': ref, 'value': values[kind, ref],
+            'evidence': [dict(evidence_ref=key, **anchors[key]) for key in sorted(needed)]})
     return result
 
 
@@ -75,7 +73,7 @@ def character_references(value) -> set[str]:
     refs = set()
     for key, child in value.items():
         scalar = (key.endswith('_char_id') or key in ('char_id', 'subject_id', 'object_id', 'by')
-                  or key == 'ref' and value.get('kind') in ('character', 'character_state'))
+                  or key == 'ref' and value.get('kind') == 'character')
         if scalar and isinstance(child, str) and child.startswith('char_'):
             refs.add(child)
         if key.endswith('_char_ids') and isinstance(child, list):
@@ -124,6 +122,13 @@ def selections(snapshot, scope: str) -> tuple[ScopeSelection, ...]:
             if ordinal not in selected | source_chapters:
                 ranges.setdefault(ordinal, set()).update(
                     f"p:{e['start_para']}:{e['end_para']}" for e in row['evidence'])
+        for row in inherited:
+            for binding in row.get('actor_bindings', []):
+                for support in [binding, *([binding['public_state']] if binding.get('public_state') else [])]:
+                    ordinal = support['chapter_ordinal']
+                    if ordinal not in selected | source_chapters:
+                        ranges.setdefault(ordinal, set()).update(
+                            f"p:{e['start_para']}:{e['end_para']}" for e in support['evidence_anchors'])
         inherited_refs = {('state', row['state']['state_id']) for row in inherited}
         requested = {(row.subject_ref.kind, row.subject_ref.ref) for row in knowledge.obligations
                      if row.kind in ('reader_reveal', 'character_knowledge')

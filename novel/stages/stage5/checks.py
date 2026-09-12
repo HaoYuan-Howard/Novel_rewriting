@@ -28,7 +28,7 @@ from contracts.schema.report import finding
 from novel.stages.stage5.plot_checks import fidelity_scenes, knowledge_position_findings
 from novel.core.bands import PARA_BANDS, SENT_BANDS, band, cut_distance
 from novel.core.facts import (
-    first_reveal_chapter, locate_secret, num_unit_keys, num_values, number_tokens,
+    locate_secret, num_unit_keys, num_values, number_tokens,
     secret_contains, secret_keywords,
 )
 from novel.core.measure import measure
@@ -229,7 +229,7 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
             # ⚠ **首次**揭示章，与 `stage4/context.py` 的下发闸门同一个函数。
             #   这道复核闸的全部意义就是「能从权威时间线复原同一条边界」——
             #   两处各写一份 `min(全部事件)` 时，下次改判向必然漏掉一处。
-            first = first_reveal_chapter(secret)
+            first = secret['revealed_from']
             if first is not None and ordinal < first:
                 timeline_hidden.append(secret.get('secret_id'))
     hid = list(dict.fromkeys(sid for sid in timeline_hidden if sid))
@@ -1092,7 +1092,7 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
         kws = [k for k in secret_keywords(s.get('fact')) if norm(k)]
         seen = [o for o, b in sorted(bodies.items())
                 if any(secret_contains(k, b) for k in kws)]
-        reveal_at = s.get('first_reveal_chapter')
+        reveal_at = s.get('revealed_from')
         reveal = [reveal_at] if isinstance(reveal_at, int) else []
         blind = bool(reveal) and not (set(seen) & set(reveal))
         fs.append(finding(

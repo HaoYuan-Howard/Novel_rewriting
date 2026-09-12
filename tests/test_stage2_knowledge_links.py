@@ -58,28 +58,25 @@ def test_scope_separates_world_knowledge_reader_reveal_and_setup(pair):
     _registry, knowledge = pair
     scope = _scope(knowledge)
     kinds = {row.kind for row in scope.obligations}
-    assert {'secret_reveal', 'secret_setup', 'knowledge_event',
+    assert {'secret_reveal', 'secret_setup',
             'world_rule', 'world_rule_reveal', 'relation', 'relation_visibility'} <= kinds
     for row in scope.obligations:
         if row.kind in {'secret_reveal', 'secret_setup', 'world_rule_reveal', 'relation_visibility'}:
             assert not row.entry_subject_refs
-    assert any(row.entry_subject_refs for row in scope.obligations if row.kind == 'knowledge_event')
+    assert any(row.entry_subject_refs for row in scope.obligations if row.kind == 'relation')
+    assert not {'knowledge_event', 'character_state'} & kinds
 
 
-@pytest.mark.parametrize('change', ['claim', 'hook_supported'])
+@pytest.mark.parametrize('change', ['audit', 'evidence_id'])
 def test_unrelated_knowledge_change_inherits_exact_obligations(pair, change):
     _registry, knowledge = pair
     old = _scope(knowledge)
     changed = knowledge.model_copy(deep=True)
-    if change == 'claim':
-        changed.source_blurb.facts[0].claim += '订正'
+    if change == 'audit':
+        changed.provenance.evidence_locator_failures = [('audit', 1, 'old', '已订正')]
     else:
-        from contracts.schema.stage2 import HookSupportedBlurbFact, HookFactEvidence
-        changed.source_blurb.facts[0] = HookSupportedBlurbFact[HookFactEvidence].model_validate({
-            'kind': 'hook_supported', 'claim_id': changed.source_blurb.facts[0].claim_id,
-            'claim': '钩子中独立给出的信息',
-            'hook_evidence': {'source': {'text': '钩子', 'start': 0, 'end': 2}},
-        })
+        # 未被本轮任何主体消费的锚点不扩大义务失效（正式冗余锚点另由Core lint管理）。
+        changed.evidence_anchors['ev_' + 'f' * 24] = next(iter(changed.evidence_anchors.values())).model_copy()
     current = _scope(changed, digest='e' * 64)
     assert current.scope_sha256 == old.scope_sha256
     assert current.obligations == old.obligations
@@ -134,7 +131,7 @@ def test_reveal_only_foreign_proof_does_not_consume_entire_foreign_chapter(pair)
     bp['blueprints'][0]['source_sha256'] = source_digest(source[0]['text'])
     after = _scope(knowledge, bp, source=source)
     reveal = next(r for r in before.obligations if r.kind == 'secret_reveal')
-    assert reveal.chapter_ordinal == 2 and knowledge.canon.secrets[0].fact_evidence.chapter_ordinal == 1
+    assert reveal.chapter_ordinal == 2 and knowledge.evidence_anchors[knowledge.arc_secrets[0].evidence_refs[0]].chapter_ordinal == 1
     updated = next(r for r in after.obligations if r.obligation_id == reveal.obligation_id)
     assert updated == reveal
     assert reveal.obligation_id not in links.review(after, _history(before)).pending_obligation_ids

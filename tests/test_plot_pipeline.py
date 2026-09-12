@@ -141,6 +141,24 @@ def build_plot_pipeline(tmp_path, monkeypatch):
     return complete_stage7(book)
 
 
+def test_gate_b_finishes_all_written_chapters_and_reads_them_after_restart(tmp_path, monkeypatch):
+    """Gate B 停在 Stage5；完整成书仍由下面 Stage7 用例独立验收。"""
+    from contracts.schema.stage5 import Chapter
+    from novel.stages.stage5 import review
+    book = produce_through_first_chapter(tmp_path, monkeypatch, distributed=True,
+                                         grounding=grounded_global())
+    complete_stage5(book)
+    ctx = _ctx(book, 'stage5.review', paid=False)
+    store = ArtifactStore(ctx)
+    reopened = review.load_book(ctx, store)
+    assert set(reopened.chapters) == {1, 2, 3}
+    for ordinal in reopened.chapters:
+        artifact, _ = store.read_own(Chapter, f'stage5/ch{ordinal:02d}.json', require_current=True)
+        assert artifact.segments
+    assert approvals.get(book.parent, ctx.sid).gate['s5']
+    assert not store.exists('stage6/hook.json')
+
+
 def test_plot_pipeline_reaches_final_delivery_and_restarts(tmp_path, monkeypatch):
     from novel.stages.stage7 import assemble
     book = build_plot_pipeline(tmp_path, monkeypatch)

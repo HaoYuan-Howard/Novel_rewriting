@@ -340,7 +340,9 @@ provider observation protocol hash，不能在同一席位混用两种身份。
 
 公共 schema 编译器只移除 `$ref` 的 `title / description` 注解；仍有验证关键词的引用在 wire 前
 关闭式拒绝，不能把 `pattern / minLength` 等业务约束一起丢掉。完全同形的枚举可共享 `$defs`，
-Stage4 的通用 alias 通过 fact/participant 两类已关闭引用组成 union，避免把同一闭集重复展开。
+Stage4 native v3 从冻结 options 建立逐章局部引用表，保留节点、人物呈现、场景、状态、约束、
+知识端点与 Global 的完整闭集；历史约束句柄同样恢复原始身份。完整 options SHA 防止映射
+漂移，exact request SHA 继续绑定决定入口；只共享完全同构定义，避免重复展开相同验证条件。
 预检同时检查服务支持的 schema 资源上限；压缩只改变运输，不扩大合法回答集合。
 
 两家 CLI 只在运输方式上不同。Codex invocation 的 `--output-schema` 路径按 schema SHA 固定在本 epoch

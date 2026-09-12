@@ -2529,6 +2529,41 @@ class ArtifactStore:
                 f'→ 这是载体层的 bug（多半是某个三态键在落盘形态里被抹掉了），不是数据问题'
             ) from e
 
+    def apply_workflow_projection_transition(self, transition_id: str,
+                                             prepared_sha256: str) -> Path:
+        """离线迁移的唯一产物例外：按冻结输入免费重编译人物投影。
+
+        不开放普通写闸、不迁人物/Global。迁移 owner 持有全盘写锁；这里仍核验
+        prepared、pending、确切根路径、现役纯编译结果及 source/target 原字节 CAS。
+        原投影字节永久留在 prepared，任一窗口均可由同一免费事务补尾。
+        """
+        from novel import work_units
+        from novel.orchestrator.workflow_transition import (
+            WorkflowTransitionRefused, projection_commit_material,
+        )
+        path, source, target = projection_commit_material(self, transition_id, prepared_sha256)
+        current = path.read_bytes() if path.exists() else None
+        if current == target:
+            return path
+        if current != source:
+            raise WorkflowTransitionRefused('人物投影已不是冻结原字节；拒绝覆盖第三方修改')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix='.transition-', dir=_filesystem_path(path.parent))
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(target)
+                stream.flush()
+                os.fsync(stream.fileno())
+            # 写临时文件期间也可能有未遵循 owner 协议的第三方；提交前再次核验。
+            if (path.read_bytes() if path.exists() else None) != source:
+                raise WorkflowTransitionRefused('人物投影提交前原字节变化')
+            work_units._replace_snapshot(Path(temporary), path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+        if path.read_bytes() != target:
+            raise WorkflowTransitionRefused('人物投影提交后读回不等于冻结目标')
+        return path
+
     @staticmethod
     def _replace_atomically(p: Path, data: bytes) -> None:
         """写临时文件 → `os.replace`。**同目录**，否则 `replace` 跨卷就不是原子的了。"""

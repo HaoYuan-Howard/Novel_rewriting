@@ -8,13 +8,15 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import replace
 import json
+import hashlib
 from types import SimpleNamespace
 
 import pytest
 
 from contracts.schema.stage4 import BindingConcern
+from contracts.schema.plot import PlotSubjectRef
 from novel.errors import ProvenanceRefused, RefusedByStructure
-from novel.stages.stage2 import grounding
+from novel.stages.stage2 import knowledge_links
 from novel.stages.stage2.plot_compile import source_digest
 from novel.stages.stage4 import plan
 from novel.stages.stage4.plot_binding import apply_chapter_resolutions, build_mechanical_baseline
@@ -22,7 +24,7 @@ from novel.stages.stage4.plot_design import build_blind_projection, compile_blin
 from tests.stage2_fixtures import plot_blueprints
 from tests.test_stage2 import main_text
 from tests.test_stage2_grounding import character_preparation, pair  # noqa: F401
-from tests.test_stage4_disclosure import _links
+from tests.test_stage2_knowledge_links import _scope, _history
 from tests.test_stage4_v3_integration import _retain_a_response
 
 
@@ -33,16 +35,23 @@ def _inputs(pair):
     # 同一完整节点有两个有据舞台签名，B 需选择；编号大小不暗示选择。
     first['source_contexts'] = [
         {'evidence_refs': first['evidence_refs'], 'time_layer': 'present',
-         'place': '街上', 'present_char_ids': ['char_001']},
+         'place': '街上', 'present': [{'char_id': 'char_001'}]},
         {'evidence_refs': first['evidence_refs'], 'time_layer': 'present',
-         'place': '门口', 'present_char_ids': ['char_001', 'char_002']},
+         'place': '门口', 'present': [{'char_id': 'char_001'}, {'char_id': 'char_002'}]},
     ]
-    global_g = grounding.compose(registry, knowledge).model_dump(mode='json', by_alias=True)
-    links = _links(knowledge, bp)
+    global_g = knowledge.model_dump(mode='json', by_alias=True)
+    characters = registry.model_dump(mode='json', by_alias=True)
+    scope = _scope(knowledge, bp)
+    links = {'scope': scope.model_dump(mode='json'), 'links': [
+        row.model_dump(mode='json') for row in knowledge_links.require_complete(scope, _history(scope))],
+        '_provenance': {'code': 'test', 'root_clean_sha1': 'a' * 40,
+                        'inputs': {}, 'decision_sha256': 'd' * 64}}
     truth, mapping = build_blind_projection(bp, root_clean_sha1='a' * 40,
-                                           global_g=global_g, knowledge_links=links)
+                                           global_g=global_g, knowledge_links=links, characters=characters,
+                                           main_text=main_text())
     candidate = compile_blind_candidate(_retain_a_response(bp, mapping), mapping, truth=truth)
-    up = SimpleNamespace(blueprints=bp, global_g=global_g, knowledge_links=links, main_text=main_text())
+    up = SimpleNamespace(blueprints=bp, global_g=global_g, knowledge_links=links,
+                         characters=characters, main_text=main_text())
     baseline = build_mechanical_baseline(candidate, bp).chapter(2)
     assert len(baseline.ambiguities) == 1 and len(baseline.ambiguities[0].candidates) == 2
     return SimpleNamespace(title='映射反例'), up, candidate, baseline
@@ -50,7 +59,7 @@ def _inputs(pair):
 
 def _alias(candidate, kind, ref):
     return next(token for token, row in candidate['subject_aliases'].items()
-                if row == {'kind': kind, 'ref': ref})
+                if row['kind'] == kind and row['ref'] == ref)
 
 
 def _request(ctx, up, candidate, baseline, prepared=None):
@@ -73,8 +82,8 @@ def test_binding_prompt_resolves_delivery_and_evidence_without_choosing_for_mode
     assert selected in ambiguity['candidates']
     assert materials['blueprint']['beats'][0]['beat_id'] == ambiguity['beat_ref'] == 'b02_01'
     aliases = payload['mapping']['subject_aliases']
-    assert any(row == {'kind': 'beat', 'ref': 'b02_01'} for row in aliases.values())
-    assert set(payload['mapping']['participant_aliases'].values()) == {'char_001', 'char_002'}
+    assert PlotSubjectRef(kind='beat', ref='b02_01').model_dump(mode='json') in aliases.values()
+    assert {row['char_id'] for row in payload['mapping']['participant_aliases'].values()} == {'char_001', 'char_002'}
     rows = apply_chapter_resolutions(baseline, [{
         'ambiguity_id': ambiguity['ambiguity_id'], 'selected_refs': [selected],
     }])
@@ -115,9 +124,10 @@ def test_binding_prompt_refuses_unjoinable_frozen_evidence(pair, corruption):
     elif corruption == 'duplicate_subject':
         candidate['subject_aliases']['a_' + 'f' * 16] = candidate['subject_aliases'][own]
     elif corruption == 'duplicate_participant':
-        candidate['participant_aliases']['a_' + 'f' * 16] = 'char_001'
+        candidate['participant_aliases']['a_' + 'f' * 16] = deepcopy(candidate['participant_aliases'][person])
     elif corruption in ('cross_table_alias', 'cross_table_same_pair'):
-        candidate['participant_aliases'][own] = 'char_001' if corruption == 'cross_table_alias' else 'b02_01'
+        candidate['participant_aliases'][own] = ({'char_id': 'char_001'}
+            if corruption == 'cross_table_alias' else {'char_id': 'b02_01'})
     elif corruption == 'foreign_placement':
         chapter['beat_placements'][0]['beat_alias'] = other
     elif corruption == 'foreign_context':
@@ -136,14 +146,13 @@ def test_binding_prompt_refuses_unjoinable_frozen_evidence(pair, corruption):
 
 def test_stage_only_participant_is_issued_without_invented_opaque_alias(pair):
     ctx, up, candidate, baseline = _inputs(pair)
-    up.global_g['entities']['characters']['char_009'] = deepcopy(
-        up.global_g['entities']['characters']['char_001'])
-    up.blueprints['blueprints'][1]['beats'][0]['source_contexts'][0]['present_char_ids'].append('char_009')
+    up.characters['characters']['char_009'] = deepcopy(up.characters['characters']['char_001'])
+    up.blueprints['blueprints'][1]['beats'][0]['source_contexts'][0]['present'].append({'char_id': 'char_009'})
     issue = plan._chapter_binding_issue(ctx, up, candidate, baseline, 2)
     material = json.loads(issue.user)
     assert 'char_009' in issue.issued_refs
-    assert 'char_009' not in material['mapping']['participant_aliases'].values()
-    assert any('char_009' in row['present_char_ids']
+    assert 'char_009' not in {row['char_id'] for row in material['mapping']['participant_aliases'].values()}
+    assert any(any(actor['char_id'] == 'char_009' for actor in row['present'])
                for row in material['materials']['source_context_catalog'].values())
 
 
@@ -165,9 +174,9 @@ def test_binding_request_invalidates_changed_material_evidence(pair, change):
     if change == 'content':
         beat['content'] += '她打算向母亲问明来信。'
     elif change == 'participants':
-        beat['participant_char_ids'] = ['char_001']
+        beat['participants'] = [{'char_id': 'char_001'}]
     elif change in ('time_layer', 'place', 'presence'):
-        key = {'presence': 'present_char_ids'}.get(change, change)
+        key = {'presence': 'present'}.get(change, change)
         beat['source_contexts'][0][key] = (
             [] if change == 'presence' else 'recall' if change == 'time_layer' else '院内')
     else:
@@ -203,9 +212,11 @@ def test_binding_request_changes_only_for_actual_materials_and_boundary(pair, ch
     elif changed == 'own_candidate':
         candidate['output_chapters'][1]['scenes'][0]['purpose'] = '发问'
     elif changed == 'consumed_foreign_evidence':
-        proof = up.global_g['canon']['secrets'][0]['fact_evidence']['source']
+        evidence_ref = up.global_g['arc_secrets'][0]['evidence_refs'][0]
+        proof = up.global_g['evidence_anchors'][evidence_ref]
         proof['end'] -= 1
-        proof['text'] = proof['text'][:-1]
+        source = next(row['text'] for row in up.main_text if row['chapter_ordinal'] == proof['chapter_ordinal'])
+        proof['text_sha256'] = hashlib.sha256(source[proof['start']:proof['end']].encode('utf-8')).hexdigest()
     else:
         ambiguity = baseline.ambiguities[0]
         baseline = replace(baseline, ambiguities=(replace(

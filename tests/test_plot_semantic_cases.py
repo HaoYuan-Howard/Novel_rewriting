@@ -18,14 +18,18 @@ from contracts.schema.knowledge_links import (
 )
 from contracts.schema.plot import PlotChapterResponse
 from contracts.schema.plot_review import PlotReviewResponse
+from contracts.schema.characters import CharacterRegistry, CharactersProvenance, CharactersResponse
+from contracts.schema.knowledge import GlobalProvenance, KnowledgeResponse
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints
 from novel.llm.agent_runs import canonical_sha256
 from novel.stages.stage2 import checks, knowledge_links, plot_review
 from novel.stages.stage2.plot_compile import compile_chapter, validate_book
+from novel.stages.stage2.characters import compile_response
+from novel.stages.stage2.grounding import compile_global_draft
+from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
 from novel.stages.stage4.measure import identity_plan
 from novel.stages.stage4.plot_context import build_writer_context
-from tests.stage2_fixtures import formal_subjects
 
 SOURCES = (
     '古时，芸娘回忆：“当初我因他富有且好看而救了他。”\n\n如今，她与夫君已是夫妻。',
@@ -49,30 +53,40 @@ PROVENANCE = {'code': 'fixture', 'root_clean_sha1': '0' * 40, 'inputs': {},
               'prompts': {'FIXTURE_ONLY': '0' * 10}, 'model': 'fixture'}
 
 
-def evidence(chapter, paragraph):
-    text = SOURCES[chapter - 1]
-    quote = text.split('\n\n')[paragraph - 1]
-    start = text.index(quote)
-    return {'chapter_ordinal': chapter, 'source': {'text': quote, 'start': start, 'end': start + len(quote)}}
-
-
-def grounding():
+def core():
+    """四章合成源文各自编译人物和知识；不复用另一份小说的候选坐标。"""
+    table = GlobalEvidenceCandidateTable.build(MAIN)
+    def evidence(chapter, paragraph):
+        quote = SOURCES[chapter - 1].split('\n\n')[paragraph - 1]
+        return [next(row.evidence_candidate_id for row in table.rows
+                     if row.chapter_ordinal == chapter and row.text == quote)]
     rows = [('char_001', '芸娘', '回忆施救经历的女子', 1, 1),
             ('char_002', '夫君', '叙述当下与芸娘为夫妻的男子', 1, 2),
             ('char_003', '裴书远', '被夫君提及的男子', 2, 2)]
-    return {
-        'entities': {'characters': {
-            cid: {'canonical': name, 'role': role, 'role_evidence': evidence(chapter, para),
-                  'name_distinctiveness': 'high', 'fate': None, 'fate_evidence': None,
-                  'address': [{'surface': name, 'by': 'narration', 'context': 'reference',
-                               'from_chapter': chapter}]}
-            for cid, name, role, chapter, para in rows}, 'relations': []},
-        'canon': {'secrets': [], 'world_rules': [], 'setting': {
-            '时代背景': '古时', 'era_evidence': evidence(1, 1),
-            '世界观': '人物会施救并解释自己的动机', 'worldview_evidence': evidence(1, 1)}},
-        'source_blurb': {'facts': [], 'opening': {'kind': 'unresolved', 'reason': '合成反例未提供源文案'}},
-        '_provenance': {**PROVENANCE, 'setup_chapters_pruned': [], 'evidence_locator_failures': []},
-    }
+    compiled_people = compile_response(CharactersResponse(characters=[{
+        'character_ref': f'c{index}', 'canonical': name, 'role': role,
+        'first_chapter': chapter, 'first_appearance_evidence_refs': evidence(chapter, para),
+        'role_evidence_refs': evidence(chapter, para), 'name_distinctiveness': 'high',
+        'aliases': [{'surface': name, 'identity_revealed_from': chapter,
+                     'evidence_refs': evidence(chapter, para)}],
+    } for index, (_cid, name, role, chapter, para) in enumerate(rows, 1)]), table)
+    registry = CharacterRegistry(characters=compiled_people.characters,
+        evidence_anchors=compiled_people.evidence_anchors, _provenance=CharactersProvenance(**PROVENANCE))
+    knowledge = compile_global_draft(KnowledgeResponse.model_validate({
+        'setting': {'era': '古时', 'era_evidence_refs': evidence(1, 1),
+                    'social_context': None, 'social_context_evidence_refs': []},
+        'world_rules': [], 'relations': [], 'arc_secrets': [],
+    }), table, registry, provenance=GlobalProvenance(**PROVENANCE, evidence_locator_failures=[]),
+        character_handle_map=compiled_people.character_ids)
+    return registry, knowledge
+
+
+def grounding():
+    return core()[1].model_dump(by_alias=True, mode='json')
+
+
+def actor(cid):
+    return None if cid is None else {'char_id': cid}
 
 
 def responses():
@@ -99,7 +113,7 @@ def responses():
     for ordinal, contents in enumerate(CONTENTS, 1):
         local_states = [
             {'state_key': f'st{i}', 'content': content, 'global_ref': None,
-             'modality': modality, 'holder_char_id': holder,
+             'modality': modality, 'holder': actor(holder),
              'established_at': {'kind': 'at_beat', 'beat_ref': f'b{para}'},
              'ended_at': None, 'supersedes_state_refs': [],
              'evidence': [{'start_para': para, 'end_para': para}]}
@@ -108,18 +122,20 @@ def responses():
             'chapter_ordinal': ordinal, 'chapter_function': f'合成反例：对应用户原书第{(1, 5, 6, 11)[ordinal-1]}章风险',
             'beats': [
                 {'beat_key': f'b{para}', 'content': content,
-                 'participant_char_ids': participants[ordinal - 1][para - 1],
+                 'participants': [actor(cid) for cid in participants[ordinal - 1][para - 1]],
                  'evidence': [{'start_para': para, 'end_para': para}],
                  'source_contexts': [{
                      'evidence': [{'start_para': para, 'end_para': para}],
                      'time_layer': 'recall' if (ordinal, para) == (1, 1) else 'present',
-                     'place': None, 'present_char_ids': present[ordinal - 1][para - 1]}]}
+                     'place': None, 'present': None if present[ordinal - 1][para - 1] is None else
+                     [actor(cid) for cid in present[ordinal - 1][para - 1]]}]}
                 for para, content in enumerate(contents, 1)],
             'states': local_states, 'inherited_state_endings': [], 'constraints': [],
             'entry_state_refs': list(carried),
             'carry_out_refs': [*carried, *(row['state_key'] for row in local_states)],
-            'narration': [{'grammatical_person': 'third', 'narrator_char_id': None,
-                           'focalizer_char_id': 'char_001', 'pronoun_surfaces': []}],
+            'narration': [{'grammatical_person': 'third', 'narrator': None,
+                           'focalizer': actor('char_001'), 'pronoun_surfaces': [], 'beat_refs': [],
+                           'evidence': [{'start_para': 1, 'end_para': 1}]}],
         })
         carried += [f'st{ordinal:02d}_{i:02d}' for i in range(1, len(local_states) + 1)]
     return result
@@ -130,7 +146,7 @@ def compiled(raws=None):
     for raw in responses() if raws is None else raws:
         chapter = compile_chapter(PlotChapterResponse.model_validate(raw),
             SOURCES[raw['chapter_ordinal'] - 1],
-            allowed_char_ids=frozenset(grounding()['entities']['characters']),
+            allowed_char_ids=frozenset(core()[0].characters),
             allowed_entry_state_refs=carried)
         chapters.append(chapter)
         carried = frozenset(chapter.carry_out_refs)
@@ -139,15 +155,15 @@ def compiled(raws=None):
         'blueprints': [row.model_dump(mode='json') for row in chapters],
         '_provenance': {**PROVENANCE, 'scope_violations': [], 'context': {
             'architecture': 'plot-blueprint-v1', 'source_format': 'numbered-paragraphs-v1',
-            'global_projection_contract': 'plot-global-scope-v1'}},
+            'global_projection_contract': 'plot-global-scope-v2'}},
     })
 
 
 @pytest.fixture
 def consumer():
     bps = compiled()
-    ground = grounding()
-    _registry, knowledge = formal_subjects(ground)
+    registry, knowledge = core()
+    ground = knowledge.model_dump(mode='json', by_alias=True)
     # 这是人工标注的许可基线，不是运行模型所得或正式审批记录。
     declarations = (
         ('ke_knot_world', 2, 'st02_01', 1, None),
@@ -161,7 +177,7 @@ def consumer():
         body = {'event_id': event_id, 'retired': False, 'reason': None, 'event': {
             'kind': 'reader_reveal' if audience is None else 'character_knowledge',
             'subject_ref': {'kind': 'state', 'ref': state_ref},
-            'audience': None if audience is None else {'kind': 'character', 'char_id': audience},
+            'audience': None if audience is None else {'kind': 'character', 'actor': actor(audience)},
             'chapter_ordinal': ordinal,
             'evidence_refs': [{'chapter_ordinal': ordinal, 'evidence_ref': f'e{ordinal:02d}_{paragraph:02d}'}]}}
         registered.append(RegisteredPlotKnowledgeEvent(**body, event_sha256=canonical_sha256(body)))
@@ -190,7 +206,8 @@ def consumer():
     blueprint = bps.model_dump(mode='json', by_alias=True)
     links = link_artifact.model_dump(mode='json', by_alias=True)
     plan = identity_plan(blueprint, MAIN)
-    ctx = build_writer_context(plan, ground, blueprint, MAIN, knowledge_links=links).ctx
+    ctx = build_writer_context(plan, ground, blueprint, MAIN, knowledge_links=links,
+                               characters=registry.model_dump(mode='json', by_alias=True)).ctx
     return SimpleNamespace(blueprints=blueprint, ground=ground, links=links, plan=plan, ctx=ctx)
 
 
@@ -202,7 +219,7 @@ def test_rescue_cause_remains_whole_and_marriage_is_not_backdated(consumer):
     assert bp['states'][0]['established_at'] == {'kind': 'at_beat', 'beat_ref': 'b01_02'}
     assert not ctx['scenes'][0]['state_events']
     assert {'state_ref': 'st01_01', 'endpoint': 'established'} in ctx['scenes'][1]['state_events']
-    assert consumer.ground['entities']['relations'] == []
+    assert consumer.ground['relations'] == []
 
 
 def test_dead_knot_world_and_husband_wrong_attribution_survive_together(consumer):
@@ -210,10 +227,12 @@ def test_dead_knot_world_and_husband_wrong_attribution_survive_together(consumer
     ctx = consumer.ctx['chapters'][1]
     assert [row['content'] for row in ctx['beats']] == list(CONTENTS[1])
     states = {row['state_ref']: row for row in ctx['states']}
-    assert states['st02_01']['modality'] == 'world' and states['st02_01']['holder_char_id'] is None
-    assert states['st02_02']['modality'] == 'belief' and states['st02_02']['holder_char_id'] == 'char_002'
+    husband = next(row['actor_ref'] for row in ctx['characters'] if row['display_name'] == '夫君')
+    assert states['st02_01']['modality'] == 'world' and states['st02_01']['holder'] is None
+    assert states['st02_02']['modality'] == 'belief' and states['st02_02']['holder'] == husband
     # 被怀疑的人没有被当成当场观察者或实际在场者。
-    assert bp['beats'][1]['source_contexts'][0]['present_char_ids'] == ['char_002']
+    assert bp['beats'][1]['source_contexts'][0]['present'] == [dict(actor('char_002'), presentation_ref=None)]
+    assert ctx['scenes'][1]['deliveries'][0]['stages'][0]['present'] == [husband]
     events = {row['subject_ref']['ref']: row for row in ctx['knowledge_events'] if row['kind'] == 'reader_reveal'}
     assert events['st02_01']['allowed_slots'] == ['s01', 's02']
     assert events['st02_02']['allowed_slots'] == ['s02']
@@ -223,7 +242,8 @@ def test_private_judgment_and_public_obedience_keep_different_knowledge(consumer
     ctx = consumer.ctx['chapters'][2]
     assert [row['content'] for row in ctx['beats']] == list(CONTENTS[2])
     state = next(row for row in ctx['states'] if row['state_ref'] == 'st03_01')
-    assert (state['modality'], state['holder_char_id']) == ('belief', 'char_001')
+    protagonist = next(row['actor_ref'] for row in ctx['characters'] if row['display_name'] == '芸娘')
+    assert (state['modality'], state['holder']) == ('belief', protagonist)
     events = [row for row in ctx['knowledge_events'] if row['subject_ref']['ref'] == 'st03_01']
     assert len(events) == 1 and events[0]['kind'] == 'reader_reveal' and events[0]['audience'] is None
     assert events[0]['allowed_slots'] == ['s01', 's02']
@@ -235,12 +255,13 @@ def test_father_claim_keeps_modality_and_explicit_reader_reveal_scene(consumer):
     ctx = consumer.ctx['chapters'][3]
     assert [row['content'] for row in ctx['beats']] == list(CONTENTS[3])
     state = next(row for row in ctx['states'] if row['state_ref'] == 'st04_01')
-    assert (state['modality'], state['holder_char_id']) == ('claim', 'char_003')
+    speaker = next(row['actor_ref'] for row in ctx['characters'] if row['display_name'] == '裴书远')
+    assert (state['modality'], state['holder']) == ('claim', speaker)
     events = [row for row in ctx['knowledge_events'] if row['subject_ref']['ref'] == 'st04_01']
     assert {row['kind'] for row in events} == {'reader_reveal', 'character_knowledge'}
     assert all(row['slot'] == 's02' and row['allowed_slots'] == ['s02'] for row in events)
     assert all(row['event_ref'] not in ctx['scenes'][0]['knowledge_event_refs'] for row in events)
-    assert consumer.ground['entities']['relations'] == consumer.ground['canon']['secrets'] == []
+    assert consumer.ground['relations'] == consumer.ground['arc_secrets'] == []
     # 整章请求会见到第二场的正文；许可是表达位置约束，不声称前场物理看不到。
     assert CONTENTS[3][1] in json.dumps(ctx, ensure_ascii=False)
 
@@ -270,10 +291,11 @@ def test_attested_spans_do_not_prove_semantics_or_erase_actual_issue(ordinal, be
     raws = responses()
     raws[ordinal - 1]['beats'][beat_no - 1]['content'] = wrong
     if ordinal == 4:
-        raws[-1]['states'][0].update(content='裴书远是芸娘的亲生父亲。', modality='world', holder_char_id=None)
+        raws[-1]['states'][0].update(content='裴书远是芸娘的亲生父亲。', modality='world', holder=None)
     bp = compiled(raws).model_dump(mode='json', by_alias=True)
     # 全部证据与正式类型仍合法，机器不声称已经识别自由文本的错误。
-    outcomes = {row.rule: row for row in checks.check(global_g=grounding(), blueprints=bp, main_text=MAIN)}
+    outcomes = {row.rule: row for row in checks.check(global_g=grounding(), blueprints=bp, main_text=MAIN,
+        characters=core()[0].model_dump(mode='json', by_alias=True))}
     assert not outcomes['plot_contract'].findings and not outcomes['plot_evidence'].findings
     assert outcomes['plot_semantics'].unver_why and not outcomes['plot_semantics'].findings
     inputs = {STAGE1_MAIN_TEXT: MAIN, STAGE2_CHAPTER_BLUEPRINTS: bp}
@@ -303,3 +325,26 @@ def test_unver_dimension_cannot_be_promoted_by_an_empty_issue_list():
     raw['decision'] = 'unver'
     record = submit(pack, raw)
     assert not record.issues and plot_review.acceptance(record, pack) is None
+
+
+@pytest.mark.parametrize('position,old_field,new_field', [
+    ('beat', 'participant_char_ids', 'participants'),
+    ('source_context', 'present_char_ids', 'present'),
+    ('state', 'holder_char_id', 'holder'),
+    ('narration', 'narrator_char_id', 'narrator'),
+    ('narration', 'focalizer_char_id', 'focalizer'),
+])
+def test_old_identity_positions_cannot_enter_current_semantic_fixture(position, old_field, new_field):
+    """拒绝旧版输入本身，不在读取时自动补出可能错误的呈现绑定。"""
+    from pydantic import ValidationError
+    raw = responses()[1]
+    owners = {'beat': raw['beats'][1], 'source_context': raw['beats'][1]['source_contexts'][0],
+              'state': raw['states'][1], 'narration': raw['narration'][0]}
+    owner = owners[position]
+    value = owner.pop(new_field)
+    owner[old_field] = ([row['char_id'] for row in value] if isinstance(value, list)
+                        else value['char_id'] if value is not None else None)
+    with pytest.raises(ValidationError) as raised:
+        PlotChapterResponse.model_validate(raw)
+    assert any(row['type'] == 'extra_forbidden' and row['loc'][-1] == old_field
+               for row in raised.value.errors())

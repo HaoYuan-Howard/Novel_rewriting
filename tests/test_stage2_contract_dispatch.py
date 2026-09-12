@@ -11,7 +11,7 @@ import json
 import pytest
 
 from contracts.invariants import BLUEPRINT_ARCHITECTURES
-from contracts.schema.plot import PlotBlueprintResponse, PlotChapterResponse
+from contracts.schema.plot import ActorRefResponse, PlotBlueprintResponse, PlotChapterResponse
 from contracts.schema.stage2 import ChapterBlueprints
 from novel.config import load_config
 from novel.llm.cache import CachePolicy
@@ -95,7 +95,7 @@ def test_compiler_and_request_contract_keep_closed_evidence_and_identity(damage)
     elif damage == 'duplicate_key':
         row['beats'][1]['beat_key'] = row['beats'][0]['beat_key']
     else:
-        row['beats'][0]['participant_char_ids'] = ['char_999']
+        row['beats'][0]['participants'] = [{'char_id': 'char_999'}]
     with pytest.raises(ValueError):
         compile_chapter(PlotChapterResponse.model_validate(row), main_text()[0]['text'],
                         allowed_char_ids=frozenset({'char_001', 'char_002'}))
@@ -127,7 +127,7 @@ def test_rejected_initial_answer_stops_dependents_before_more_calls(tmp_path, da
     if damage == 'wrong_chapter':
         row['chapter_ordinal'] = 3
     elif damage == 'unknown_character':
-        row['beats'][0]['participant_char_ids'] = ['char_999']
+        row['beats'][0]['participants'] = [{'char_id': 'char_999'}]
     else:
         row['beats'][0]['evidence'][0]['end_para'] = 999
     client, wire = _client(ctx, lambda _r, _i: _ok({'blueprints': [row]}))
@@ -150,15 +150,15 @@ def test_targeted_revision_preserves_narration_and_unrelated_chapters(tmp_path):
         assert metadata['chapter_ordinal'] == 1
         row = metadata['repair_baseline']
         row['identities'] = metadata['baseline_identities']
-        row['narration'][0].update(grammatical_person='first', narrator_char_id='char_001',
-                                   focalizer_char_id='char_001', pronoun_surfaces=['我'])
+        row['narration'][0].update(grammatical_person='first', narrator={'char_id': 'char_001'},
+                                   focalizer={'char_id': 'char_001'}, pronoun_surfaces=[])
         return _ok({'blueprints': [row]})
     client, wire = _client(ctx, answer)
     assert extract.run_blueprint(ctx, client, chapters=(1,)).passed
     current = ArtifactStore(ctx).read_own(ChapterBlueprints, extract.BLUEPRINT_REL)[0]
     assert len(wire.calls) == 1
     assert current.blueprints[1:] == before.blueprints[1:]
-    assert current.blueprints[0].narration[0].narrator_char_id == 'char_001'
+    assert current.blueprints[0].narration[0].narrator.char_id == 'char_001'
     assert current.blueprints[0].narration[0].grammatical_person == 'first'
 
 
@@ -172,7 +172,7 @@ def test_rejected_targeted_revision_does_not_replace_formal_or_buy_other_chapter
         metadata = json.loads(req.user.split('\n', 1)[0])
         row = metadata['repair_baseline']
         row['identities'] = metadata['baseline_identities']
-        row['beats'][0]['participant_char_ids'] = ['char_999']
+        row['beats'][0]['participants'] = [{'char_id': 'char_999'}]
         return _ok({'blueprints': [row]})
     client, wire = _client(ctx, answer)
     with pytest.raises(LlmFailed):
@@ -217,7 +217,7 @@ def test_current_agent_uses_chapter_sessions_and_frozen_revision_validator(tmp_p
     spec = agent._revision_specs(batch, (1,))[1]
     current = PlotBlueprintResponse.model_validate({'blueprints': [responses()[1]]})
     assert spec.validator(current, None) is None
-    current.blueprints[0].beats[0].participant_char_ids = ['char_999']
+    current.blueprints[0].beats[0].participants = [ActorRefResponse(char_id='char_999')]
     assert spec.validator(current, None)
     current = PlotBlueprintResponse.model_validate({'blueprints': [responses()[1]]})
     current.blueprints[0].beats[0].evidence[0].end_para = 999

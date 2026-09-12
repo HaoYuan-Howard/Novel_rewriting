@@ -5,7 +5,7 @@ import copy
 from dataclasses import dataclass
 from typing import Any
 
-from contracts.schema.plot import PlotBlueprint
+from contracts.schema.plot import PlotBlueprint, PlotSubjectRef
 from contracts.schema.stage4 import EvidenceBindingResponse, EvidenceChapterBinding
 from novel.stages.stage4.plot_design import (
     BlindPlanError, candidate_subject_sha256, _sha256,
@@ -116,7 +116,7 @@ def _beat_ref(candidate: dict, token: str, number: int) -> str:
 
 def _signature(context: dict) -> str:
     # null 与 []、未知与合法空值始终分开。
-    return _sha256({key: context[key] for key in ('time_layer', 'place', 'present_char_ids')})
+    return _sha256({key: context[key] for key in ('time_layer', 'place', 'present')})
 
 
 def build_mechanical_baseline(candidate: dict, blueprints: dict) -> MechanicalBaseline:
@@ -175,7 +175,8 @@ def build_mechanical_baseline(candidate: dict, blueprints: dict) -> MechanicalBa
 
 
 def validate_request_references(candidate: dict, blueprint: PlotBlueprint,
-                                knowledge_links: dict, ordinal: int) -> dict:
+                                knowledge_links: dict, ordinal: int, *,
+                                characters: dict, blueprints: dict, main_text: list[dict]) -> dict:
     """B 调用前用当前主体复核冻结引用；复用 A 的分场/端点守卫，不重建全书真相正文。"""
     from contracts.schema.knowledge_links import KnowledgeLinks
     from novel.stages.stage4.plot_design import _formal_maps, validate_chapter
@@ -183,12 +184,26 @@ def validate_request_references(candidate: dict, blueprint: PlotBlueprint,
 
     mapping = _formal_maps({key: candidate[key] for key in (
         'alias_algorithm', 'truth_sha256', 'subject_aliases', 'endpoint_aliases', 'participant_aliases')})
-    inverse = {(row['kind'], row['ref']): token for token, row in mapping['subject_aliases'].items()}
+    inverse = {PlotSubjectRef.model_validate(row).key(): token
+               for token, row in mapping['subject_aliases'].items()}
+    from novel.stages.stage4.actors import ActorCatalog
+    actors = ActorCatalog(characters, blueprints, chapter_ordinal=ordinal,
+        source_text='\n'.join(row['text'] for row in sorted(main_text, key=lambda r: r['chapter_ordinal'])
+                              if row['chapter_ordinal'] <= ordinal), seed='private-binding-validation')
 
-    def alias(kind, ref):
-        if (kind, ref) not in inverse:
+    def alias(kind, ref=None, *, actor=None):
+        value = (kind if isinstance(kind, PlotSubjectRef) else
+                 PlotSubjectRef(kind=kind, ref=ref, actor=actor))
+        if value.actor:
+            value = value.model_copy(update={'actor': actors.resolve(value.actor)})
+        if value.relation_actors:
+            value = value.model_copy(update={'relation_actors': value.relation_actors.model_copy(
+                update={key: actors.resolve(getattr(value.relation_actors, key))
+                        for key in ('subject', 'object')})})
+        key = value.key()
+        if key not in inverse:
             raise BlindPlanError(f'冻结设计缺少必要主体映射：{kind}:{ref}')
-        return inverse[kind, ref]
+        return inverse[key]
 
     chapters = [row for row in candidate['output_chapters'] if row['output_ordinal'] == ordinal]
     if len(chapters) != 1:
@@ -208,14 +223,19 @@ def validate_request_references(candidate: dict, blueprint: PlotBlueprint,
         if key not in endpoint_map:
             raise BlindPlanError('冻结设计缺少本章必要端点映射')
         subject = events[key[1]].subject_ref if key[0] == 'knowledge' else None
-        subject_alias = (alias(subject.kind, subject.ref) if subject is not None
-                         else alias(key[0], key[1]))
+        if subject is not None and subject.kind == 'relation':
+            from novel.stages.stage4.actors import actual_subject_uses
+            available = [PlotSubjectRef.model_validate(row) for row in mapping['subject_aliases'].values()]
+            subject_aliases = [alias(row) for row in actual_subject_uses(subject, available)]
+        else:
+            subject_aliases = [alias(subject) if subject is not None else alias(key[0], key[1])]
         endpoints.append({'endpoint_alias': endpoint_map[key],
-                          'trigger_beat_alias': alias('beat', beat), 'subject_alias': subject_alias})
+                          'trigger_beat_alias': alias('beat', beat), 'subject_aliases': subject_aliases})
     source = {
         'chapter_ordinal': ordinal,
         'beats': [{'alias': alias('beat', row.beat_id),
-                   'participant_aliases': [alias('character', cid) for cid in row.participant_char_ids]}
+                   'participant_aliases': [alias('character', actor.char_id, actor=actor)
+                                           for actor in row.participants]}
                   for row in blueprint.beats],
         'states': [{'alias': alias('state', row.state_id)} for row in blueprint.states],
         'inherited_states': [{'alias': alias('state', ref)} for ref in blueprint.entry_state_refs],

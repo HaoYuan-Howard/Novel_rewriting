@@ -14,7 +14,9 @@ from contracts.invariants import (
 from contracts.schema.api import DesignRepairConstraint
 from novel.orchestrator import reviewer_tasks
 from novel.orchestrator import stage4_reviewer_wire as wire
-from tests.test_stage4_reviewer_wire import _alias, _load, _repair, _response, _sha, _task
+from tests.test_stage4_reviewer_wire import (
+    _alias, _load, _repair, _response, _sha, _task, _wire_response,
+)
 
 
 def _goal(code: str = 'scene_goal_exclude') -> dict:
@@ -28,7 +30,7 @@ def test_scene_goal_exclude_reaches_canonical_loader_without_reinterpreting_incl
     task = _task()
     response = _response(task)
     _repair(response, _goal())
-    assembled = wire.assemble(task, response)
+    assembled = wire.assemble(task, _wire_response(task, response))
     action = _load(tmp_path, task, assembled)
     assert action.payload['chapters'][0]['constraints'] == [_goal()]
     old = _goal('scene_goal')
@@ -50,7 +52,7 @@ def test_scene_goal_exclude_keeps_arity_and_current_chapter_domain(field, value)
     constraint[field] = value
     _repair(response, constraint)
     with pytest.raises(wire.Stage4ReviewerWireError):
-        wire.assemble(task, response)
+        wire.assemble(task, _wire_response(task, response))
 
 
 def _active_task():
@@ -95,7 +97,7 @@ def test_active_constraints_use_fixed_keys_and_reach_canonical_loader(tmp_path):
     response = _active_response(task)
     row = response['selection']['payload']['chapters']['2']
     row['constraint_operations'] = dict(reversed(list(row['constraint_operations'].items())))
-    action = _load(tmp_path, task, wire.assemble(task, response))
+    action = _load(tmp_path, task, wire.assemble(task, _wire_response(task, response)))
     canonical = action.payload['chapters'][0]['constraint_operations']
     assert canonical['expected_constraint_set_sha256'] == 'e' * 64
     assert [item['constraint_sha256'] for item in canonical['items']] == sorted(row['constraint_operations'])
@@ -152,12 +154,12 @@ def test_native_constraint_operations_reject_incomplete_or_unbound_answers(mutat
         else:
             supersede['replacements'] *= 2
     with pytest.raises(wire.Stage4ReviewerWireError):
-        wire.assemble(task, response)
+        wire.assemble(task, _wire_response(task, response))
 
 
 def test_native_constraint_operations_reject_duplicate_json_target():
     task = _active_task()
-    response = _active_response(task)
+    response = _wire_response(task, _active_response(task))
     row = response['selection']['payload']['chapters']['2']
     target, operation = next(iter(row['constraint_operations'].items()))
     rendered = json.dumps(response, ensure_ascii=False)
@@ -196,7 +198,7 @@ def test_replacement_collection_normalization_preserves_reference_order():
     order = {'code': 'disclosure_order', 'scene_refs': [],
              'opaque_aliases': [_alias(102), _alias(2)]}
     supersede['replacements'] = [_goal(), order]
-    row = wire.assemble(task, response)['action']['payload']['chapters'][0]
+    row = wire.assemble(task, _wire_response(task, response))['action']['payload']['chapters'][0]
     actual = next(item for item in row['constraint_operations']['items'] if item['kind'] == 'supersede')
     assert actual['replacements'] == [order, _goal()]
 
@@ -252,7 +254,27 @@ def test_nineteen_chapter_active_operations_fit_provider_schema_and_keep_every_d
     assert sum(len(row['scene_refs']) for row in closure.values()) == 97
     assert enum_count(schema) <= 1000
     rendered = json.dumps(schema)
-    for scope in closure.values():
-        assert all(value in rendered for values in scope.values() for value in values)
+    mappings = wire.reference_handles(task)
+    # 运行时基础 workpack 已携完整历史目录；运输层只追加句柄，不重复复制该目录。
+    prompt = wire.prompt_for(task, '逐章审阅所有当前主体与历史约束。\n'
+                             + json.dumps(task.submission_options, ensure_ascii=False))
+    for ordinal, scope in closure.items():
+        assert set(mappings[ordinal].values()) == {
+            value for values in scope.values() for value in values}
+        assert all(json.dumps(handle) in rendered for handle in mappings[ordinal])
+        assert all(value not in rendered and value in prompt
+                   for values in scope.values() for value in values)
     for scope in catalog.values():
-        assert scope['items'][0]['constraint_sha256'] in rendered
+        digest = scope['items'][0]['constraint_sha256']
+        assert digest not in rendered and digest in prompt
+    # 本轮句柄与完整历史目录均可还原；压缩 schema 不能减少章或遗漏旧义务。
+    response = _response(task)
+    for ordinal, ruling in response['selection']['payload']['chapters'].items():
+        ruling['constraint_operations'] = {
+            item['constraint_sha256']: {
+                'kind': 'keep', 'reason': '逐项核对历史义务，本章已经满足。', 'replacements': []}
+            for item in catalog[ordinal]['items']}
+    chapters = wire.assemble(task, _wire_response(task, response))['action']['payload']['chapters']
+    assert [row['output_ordinal'] for row in chapters] == list(range(1, 20))
+    assert [row['constraint_operations']['items'][0]['constraint_sha256'] for row in chapters] == [
+        catalog[str(ordinal)]['items'][0]['constraint_sha256'] for ordinal in range(1, 20)]

@@ -14,7 +14,7 @@ from novel.stages.stage4.plot_measure import structure_metrics_of
 
 
 def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
-          main_text: list[dict[str, Any]], global_g=None, knowledge_links=None,
+          main_text: list[dict[str, Any]], global_g=None, knowledge_links=None, characters=None,
           ctx=None, expected_ctx=None, ctx_link=None, ctx_source=None,
           phase_links=None, bidx=None, witness: WitnessCollector | None = None) -> list[Outcome]:
     from novel.stages.stage4.checks import style_word_findings
@@ -46,7 +46,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
     else:
         bad = []
         try:
-            validate_plan(plan, blueprints, global_g, knowledge_links)
+            validate_plan(plan, blueprints, global_g, knowledge_links, characters=characters, main_text=main_text)
         except (RefusedByStructure, ValueError, KeyError, StopIteration) as exc:
             bad.append((getattr(exc, 'chapter_ordinal', None), str(exc)))
         emit('placement_ref', bad, scanned='全部节点、目标、证据、舞台和必要语义端点')
@@ -124,7 +124,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
             available = '\n'.join(texts[o] for o in sorted(texts) if o <= ordinal)
             for character in chapter['characters']:
                 if character['display_name'] not in available:
-                    names_bad.append((ordinal, f"无本章以前的叫法证据：{character['char_id']}"))
+                    names_bad.append((ordinal, f"无本章以前的叫法证据：{character['actor_ref']}"))
         emit('ctx_name_attested', names_bad, scanned='逐章原文有据叫法')
         permissions = lambda rows: [
             (r['output_ordinal'], r['knowledge_events'], r['restricted_subject_refs'],

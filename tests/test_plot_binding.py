@@ -19,14 +19,15 @@ from novel.stages.stage4.plot_design import (
 from novel.stages.stage4.measure import adopt_plan_response
 from novel.stages.stage4.beats import beat_index
 from tests.test_plot_blueprint import blueprint, chapter_response, SOURCE
-from tests.test_plot_design import design_response, planner_characters
+from tests.test_plot_design import design_response, planner_characters, planner_main
 
 
 def candidate_book(response=None, *, split=False):
     blueprints = {'blueprints': [blueprint(response=response).model_dump(mode='json'),
                                  blueprint(2).model_dump(mode='json')]}
     truth, mapping = build_blind_projection(blueprints, root_clean_sha1='a' * 40,
-                                           global_g=planner_characters())
+        characters=planner_characters(), global_g=__import__('tests.plot_fixtures', fromlist=['GLOBAL']).GLOBAL,
+        main_text=planner_main())
     rows = []
     for ordinal in (1, 2):
         public, private = build_blind_chapter_projection(
@@ -84,9 +85,9 @@ def test_binding_cannot_move_remove_or_forge_delivery():
 def test_unknown_and_empty_presence_are_not_equivalent_stages():
     response = chapter_response()
     first = response['beats'][0]['source_contexts'][0]
-    first['present_char_ids'] = []
+    first['present'] = []
     unknown = copy.deepcopy(first)
-    unknown['present_char_ids'] = None
+    unknown['present'] = None
     response['beats'][0]['source_contexts'].append(unknown)
     blueprints, candidate = candidate_book(response)
     baseline = build_mechanical_baseline(candidate, blueprints)

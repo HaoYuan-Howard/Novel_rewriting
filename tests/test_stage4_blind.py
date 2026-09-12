@@ -31,6 +31,7 @@ from novel.stages.stage4.beats import beat_index
 from tests.test_plot_blueprint import blueprint, SOURCE
 from tests.test_plot_design import design_response, planner_characters
 from tests.test_plot_binding import candidate_book
+from tests.plot_fixtures import GLOBAL
 
 ROOT = 'a' * 40
 ALIAS_RE = re.compile(r'^a_[0-9a-f]{16,64}$')
@@ -41,8 +42,11 @@ def _blueprints(count=2):
 
 
 def _project(raw=None):
-    return build_blind_projection(raw or _blueprints(), root_clean_sha1=ROOT,
-                                  global_g=planner_characters())
+    source = raw or _blueprints()
+    return build_blind_projection(source, root_clean_sha1=ROOT,
+                                  characters=planner_characters(), global_g=GLOBAL,
+                                  main_text=[{'chapter_ordinal': row['chapter_ordinal'], 'text': SOURCE}
+                                             for row in source['blueprints']])
 
 
 def _permuted_blueprints():
@@ -52,9 +56,9 @@ def _permuted_blueprints():
         chapter['beats'].reverse()
         chapter['evidence_anchors'].reverse()
         for beat in chapter['beats']:
-            beat['participant_char_ids'].reverse()
+            beat['participants'].reverse()
             for context in beat['source_contexts']:
-                context['present_char_ids'].reverse()
+                context['present'].reverse()
     return raw
 
 
@@ -143,7 +147,7 @@ def test_blind_projection_is_order_invariant_and_hides_formal_ids_from_a():
     assert all(ALIAS_RE.fullmatch(token) for token in mapping['subject_aliases'])
     assert {ref['ref'] for ref in mapping['subject_aliases'].values() if ref['kind'] == 'beat'} == {
         'b01_01', 'b01_02', 'b02_01', 'b02_02'}
-    assert set(mapping['participant_aliases'].values()) == {'char_001', 'char_002'}
+    assert {row['char_id'] for row in mapping['participant_aliases'].values()} == {'char_001', 'char_002'}
     assert re.fullmatch(r'[0-9a-f]{64}', mapping['truth_sha256'])
 
 
@@ -152,14 +156,14 @@ def test_executor_projection_preserves_registered_constraints_without_upgrading_
     raw['blueprints'][0]['constraints'] = [{
         'constraint_id': 'c01_01', 'kind': 'story_before',
         'before_beat_ref': 'b01_01', 'after_beat_ref': 'b01_02',
-        'observer_char_id': None, 'evidence_refs': ['e01_01', 'e01_02']}]
+        'observer': None, 'evidence_refs': ['e01_01', 'e01_02']}]
     truth, mapping = _project(raw)
     executor = build_blind_executor_projection(truth)
     assert executor == truth and executor is not truth
     public, _ = build_blind_chapter_projection(truth, mapping,
         chapter_ordinal=1, root_clean_sha1=ROOT)
     assert public['chapter']['constraints'][0]['kind'] == 'story_before'
-    # V9 没有把未裁决关系混进正式约束再由不同消费者自行过滤的第二套职责。
+    # 未裁决关系不能混进正式约束，再由不同消费者自行过滤。
     raw['blueprints'][0]['constraints'][0]['enforcement'] = 'review'
     with pytest.raises(ValidationError, match='enforcement'):
         _project(raw)

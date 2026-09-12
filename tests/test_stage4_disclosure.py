@@ -1,8 +1,8 @@
-# -*- coding: utf-8 -*-
-"""当前知识决定 → 显式场景端点 → 章级 WriterContext。
+"""KL3 的明确端点 → BP10 场景 → Writer9 最终材料。
 
-保留旧链的披露、关系有效期、叫法、缺失关联和去重反例；V9 使用完整节点、
-目标及知识事件引用，不再通过 hinge/fact 分配推定自由文本的语义覆盖。
+保留原 17 条披露职责。旧称谓关键词屏蔽改为命题自身 revealed_from/端点守卫，
+不混淆称谓出现与身份映射；关系和规则结束后允许作为带 effective_until 的历史事实。
+独立 Characters2/Global7 输入，不再复合 entities/canon 或构造 Global 知情矩阵。
 """
 from __future__ import annotations
 
@@ -11,236 +11,337 @@ import json
 
 import pytest
 
-from contracts.schema.knowledge_links import (
-    KnowledgeAtEntry, KnowledgeAtBeats, KnowledgeLinkHistory, KnowledgeLinks,
-    KnowledgeLinksProvenance,
-)
+from contracts.schema.knowledge_links import KnowledgeLinks
+from contracts.schema.plot import PlotBlueprint
 from contracts.schema.stage4 import CtxChapter
 from novel.errors import RefusedByStructure
-from novel.stages.stage2 import grounding, knowledge_links
-from novel.stages.stage4.context import build_writer_context
 from novel.stages.stage4.measure import identity_plan
 from novel.stages.stage5.prompts import build_material, revise_user
-from tests.factories import stage5_book
-from tests.stage2_fixtures import plot_blueprints as blueprints
-from tests.test_stage2 import main_text
-from tests.test_stage2_grounding import character_preparation, pair  # noqa: F401
-from tests.test_stage2_knowledge_links import _scope, _submission
+from tests.plot_fixtures import GLOBAL, MAIN, REGISTRY, blueprint, links
+from tests.test_writer_actor_contract import add_event, book_for, compile_view
 
 
-def _links(knowledge, bp):
-    scope = _scope(knowledge, bp)
-    submission = _submission(scope)
-    updated = []
-    for decision in submission.decisions:
-        row = next(row for row in scope.obligations if row.obligation_id == decision.obligation_id)
-        if row.kind == 'secret_reveal':
-            # 多条支持证据，明确选择后场触发；不根据支持数组顺序猜时点。
-            refs = [ref for ref in row.candidate_subject_refs if ref.kind == 'beat']
-            resolution = KnowledgeAtBeats(kind='at_beats', subject_refs=list(reversed(refs)),
-                                         trigger_beat_ref=refs[-1].ref)
-        elif row.kind in {'setting', 'world_rule', 'relation'}:
-            resolution = KnowledgeAtEntry(kind='at_entry', subject_refs=[row.entry_subject_refs[0]])
-        else:
-            resolution = decision.resolution
-        updated.append(decision.model_copy(update={'resolution': resolution}))
-    submission.decisions = updated
-    history = [KnowledgeLinkHistory(decision_sha256='d' * 64, accepted=True, submission=submission)]
-    return KnowledgeLinks(scope=scope, links=knowledge_links.require_complete(scope, history),
-        _provenance=KnowledgeLinksProvenance(code='disclosure-fixture',
-            root_clean_sha1=knowledge.provenance.root_clean_sha1, inputs={},
-            decision_sha256='d' * 64)).model_dump(by_alias=True, mode='json')
+def _relation_ref(ref='rel_01'):
+    return {'kind': 'relation', 'ref': ref, 'relation_actors': {
+        'subject': {'char_id': 'char_001'}, 'object': {'char_id': 'char_002'}}}
 
 
-def _inputs(pair, *, subjects=()):
-    registry, knowledge = pair
-    bp, main = copy.deepcopy(blueprints()), main_text()
-    plan = identity_plan(bp, main)
-    # 当前上下文只消费必要主体。显式提出保留未知的目标，测试后章/隐藏主体的投影。
+def _core():
+    knowledge = copy.deepcopy(GLOBAL)
+    knowledge['relations'] = [{'relation_id': 'rel_01', 'subject_id': 'char_001',
+        'object_id': 'char_002', 'predicate': '共同受雇掌账', 'effective_from': 1,
+        'effective_until': None, 'revealed_from': 1, 'evidence_refs': []}]
+    knowledge['world_rules'] = [{'rule_id': 'wr_01', 'kind': 'social_norm', 'versions': [{
+        'version_id': 'v01', 'desc': '城中夜间不得外出。', 'effective_from': 1,
+        'effective_until': None, 'revealed_from': 1, 'evidence_refs': []}]}]
+    knowledge['arc_secrets'] = [{'secret_id': 'secret_01', 'fact': '失踪者一直藏在城里。',
+        'fact_ref': None, 'setup_chapters': [1], 'revealed_from': 2, 'evidence_refs': []}]
+    return knowledge
+
+
+def _links(knowledge, *, setting_chapter=1, relation_at_scene=False):
+    result = links()
+    for secret in knowledge['arc_secrets']:
+        subject = {'kind': 'secret', 'ref': secret['secret_id']}
+        for chapter in secret['setup_chapters']:
+            add_event(result, kind='secret_setup', ref=secret['secret_id'], chapter=chapter, subject=subject)
+        chapter = secret['revealed_from']
+        add_event(result, kind='secret_reveal', ref=secret['secret_id'], chapter=chapter,
+                  subject=subject, beat=f'b{chapter:02d}_03')
+        # 倒序排列两个支持节点；触发点必须显式选择后场，不从数组位置推断。
+        support = [{'kind': 'beat', 'ref': f'b{chapter:02d}_{n:02d}'} for n in (3, 1)]
+        result['scope']['obligations'][-1]['candidate_subject_refs'] = support
+        result['links'][-1]['resolution']['subject_refs'] = support
+    for relation in knowledge['relations']:
+        subject = _relation_ref(relation['relation_id'])
+        add_event(result, kind='relation', ref=relation['relation_id'],
+                  chapter=relation['effective_from'], subject=subject)
+        chapter = relation['revealed_from']
+        add_event(result, kind='relation_visibility', ref=relation['relation_id'], chapter=chapter,
+                  subject=subject, beat=f'b{chapter:02d}_03' if relation_at_scene else None)
+    for rule in knowledge['world_rules']:
+        for version in rule['versions']:
+            ref = rule['rule_id'] + '/' + version['version_id']
+            subject = {'kind': 'world_rule', 'ref': ref}
+            add_event(result, kind='world_rule', ref=ref, chapter=version['effective_from'], subject=subject)
+            add_event(result, kind='world_rule_reveal', ref=ref, chapter=version['revealed_from'], subject=subject)
+    for key in ('era', 'social_context'):
+        if knowledge['setting'][key] is not None:
+            add_event(result, kind='setting', ref=key, chapter=setting_chapter,
+                      subject={'kind': 'setting', 'ref': key})
+    KnowledgeLinks.model_validate(result)
+    return result
+
+
+def _bind(inputs):
+    plan, _knowledge, _bps, _main, association, _registry = inputs
+    records = {row['obligation_id']: row for row in association['links']}
     for chapter in plan['output_chapters']:
-        chapter['chapter_goal']['subject_refs'] += [
-            {'kind': kind, 'ref': ref} for kind, ref in subjects]
+        chapter['anchor_bindings'] = [row for row in chapter['anchor_bindings'] if row['kind'] != 'knowledge']
+        for obligation in association['scope']['obligations']:
+            if obligation['chapter_ordinal'] != chapter['output_ordinal']:
+                continue
+            resolution = records[obligation['obligation_id']]['resolution']
+            if resolution['kind'] == 'at_beats':
+                chapter['anchor_bindings'].append({'kind': 'knowledge', 'ref': obligation['obligation_id'],
+                    'endpoint': 'trigger', 'scene_ref': 's' + resolution['trigger_beat_ref'].split('_')[-1]})
+
+
+def _inputs(knowledge=None, *, subjects=(), setting_chapter=1, relation_at_scene=False):
+    knowledge = copy.deepcopy(_core() if knowledge is None else knowledge)
+    bps = blueprint()
+    bps['blueprints'][0]['constraints'] = []  # 三段独立动作，场景重排不跨因果边。
+    main = copy.deepcopy(MAIN)
+    for ordinal in (2, 3):
+        raw = json.dumps(bps['blueprints'][0])
+        for prefix in ('b', 'st', 'e', 'c', 'ap'):
+            raw = raw.replace(prefix + '01_', f'{prefix}{ordinal:02d}_')
+        chapter = json.loads(raw)
+        chapter['chapter_ordinal'] = ordinal
+        bps['blueprints'].append(chapter)
+        main.append({'chapter_ordinal': ordinal, 'text': MAIN[0]['text']})
+    for chapter in bps['blueprints']:
+        PlotBlueprint.model_validate(chapter)
+    plan = identity_plan(bps, main)
+    refs = [_relation_ref()] if knowledge['relations'] else []
+    refs += [{'kind': 'secret', 'ref': row['secret_id']} for row in knowledge['arc_secrets']]
+    refs += [{'kind': 'world_rule', 'ref': row['rule_id'] + '/' + version['version_id']}
+             for row in knowledge['world_rules'] for version in row['versions']]
+    for kind, ref in subjects:
+        value = _relation_ref(ref) if kind == 'relation' else {'kind': kind, 'ref': ref}
+        if value not in refs:
+            refs.append(value)
+    for chapter in plan['output_chapters']:
+        chapter['chapter_goal']['subject_refs'] += copy.deepcopy(refs)
         chapter['chapter_goal']['intent'] = 'withhold'
-    view = grounding.compose(registry, knowledge).model_dump(by_alias=True, mode='json')
-    return plan, view, bp, main, _links(knowledge, bp)
+    result = (plan, knowledge, bps, main, _links(knowledge,
+        setting_chapter=setting_chapter, relation_at_scene=relation_at_scene), copy.deepcopy(REGISTRY))
+    _bind(result)
+    return result
+
+
+def _context(inputs):
+    plan, knowledge, bps, main, association, registry = inputs
+    return compile_view(bps, main, registry, knowledge, association, plan)
+
+
+def _refresh_identity_plan(inputs):
+    """测试改 Blueprint 后重编机械计划，保留显式目标；刻意改分场的反例不调用。"""
+    plan, _knowledge, bps, main, _association, _registry = inputs
+    goals = {row['output_ordinal']: {key: copy.deepcopy(row[key])
+             for key in ('chapter_goal', 'open_hook_goal', 'end_hook_goal')}
+             for row in plan['output_chapters']}
+    current = identity_plan(bps, main)
+    for chapter in current['output_chapters']:
+        chapter.update(goals[chapter['output_ordinal']])
+    plan.clear()
+    plan.update(current)
+    _bind(inputs)
 
 
 def _build(inputs):
-    plan, view, bp, main, links = inputs
-    return build_writer_context(plan, view, bp, main, knowledge_links=links).ctx['chapters']
+    return _context(inputs)['chapters']
 
 
-def _global(entry, kind, ref):
-    return next((row for row in entry['global_subjects']
-                 if row['subject_ref'] == {'kind': kind, 'ref': ref}), None)
+def _global(entry, kind, *, contains=None):
+    rows = [row for row in entry['global_subjects'] if row['subject_ref']['kind'] == kind
+            and (contains is None or contains in json.dumps(row['value'], ensure_ascii=False))]
+    assert len(rows) <= 1, '测试须按命题区分版本，不能任取一个公开 opaque 引用'
+    return rows[0] if rows else None
 
 
 def _event(entry, kind, ref):
-    return next(row for row in entry['knowledge_events']
-                if row['kind'] == kind and row['subject_ref']['ref'] == ref)
+    rows = [row for row in entry['knowledge_events'] if row['kind'] == kind]
+    assert len(rows) == 1
+    assert ref not in json.dumps(rows[0]), '知识事件只携公开 opaque 引用'
+    return rows[0]
 
 
-def test_setup_has_only_permitted_performance_and_never_contains_secret_answer(pair):
-    inputs = _inputs(pair)
-    first = _build(inputs)[0]
-    answer = inputs[1]['canon']['secrets'][0]['fact']
+def test_setup_has_only_permitted_performance_and_never_contains_secret_answer():
+    inputs = _inputs()
+    ctx = _context(inputs)
+    first = ctx['chapters'][0]
+    answer = inputs[1]['arc_secrets'][0]['fact']
     assert answer not in json.dumps(first, ensure_ascii=False)
-    assert _global(first, 'secret', 'secret_01') is None
+    assert _global(first, 'secret') is None
     assert _event(first, 'secret_setup', 'secret_01')['allowed_slots']
-    assert answer not in build_material(first, stage5_book()).given
+    assert answer not in build_material(first, book_for(ctx, inputs[3])).given
     CtxChapter.model_validate(first)
 
 
-def test_scene_reorder_moves_disclosure_from_current_trigger_not_support_list_order(pair):
-    inputs = _inputs(pair)
+def test_scene_reorder_moves_disclosure_from_current_trigger_not_support_list_order():
+    inputs = _inputs()
     before = _build(inputs)[1]
-    assert _global(before, 'secret', 'secret_01')['allowed_slots'] == ['s02']
-    assert _event(before, 'secret_reveal', 'secret_01')['slot'] == 's02'
+    assert _global(before, 'secret')['allowed_slots'] == ['s03']
+    assert _event(before, 'secret_reveal', 'secret_01')['slot'] == 's03'
     chapter = inputs[0]['output_chapters'][1]
     chapter['scenes'].reverse()
-    chapter['scenes'][0]['transition'] = 'start'
-    chapter['scenes'][1]['transition'] = 'continue'
-    chapter['open_hook_goal'].update(anchor_scene_ref='s02', anchor_beat_ref='b02_02')
+    for index, scene in enumerate(chapter['scenes']):
+        scene['transition'] = 'start' if index == 0 else 'continue'
+    chapter['open_hook_goal'].update(anchor_scene_ref='s03', anchor_beat_ref='b02_03')
     chapter['end_hook_goal'].update(anchor_scene_ref='s01', anchor_beat_ref='b02_01')
     after = _build(inputs)[1]
-    assert _global(after, 'secret', 'secret_01')['allowed_slots'] == ['s02', 's01']
+    assert _global(after, 'secret')['allowed_slots'] == ['s03', 's02', 's01']
     CtxChapter.model_validate(after)
 
 
-def test_early_state_or_context_reference_cannot_bypass_scene_reveal(pair):
-    inputs = _inputs(pair)
-    inputs[0]['output_chapters'][1]['scenes'][0]['context_beat_refs'].append('b02_02')
+def test_early_state_or_context_reference_cannot_bypass_scene_reveal():
+    inputs = _inputs()
+    inputs[0]['output_chapters'][1]['scenes'][0]['context_beat_refs'].append('b02_03')
     with pytest.raises(RefusedByStructure, match='完整节点作为已知背景'):
+        _build(inputs)
+    inputs = _inputs()
+    inputs[2]['blueprints'][1]['states'][0].update(content=None,
+        global_ref={'kind': 'secret', 'ref': 'secret_01'}, established_at={'kind': 'at_entry', 'beat_ref': None})
+    inputs[2]['blueprints'][1]['entry_state_refs'].append(inputs[2]['blueprints'][1]['states'][0]['state_id'])
+    _refresh_identity_plan(inputs)
+    with pytest.raises(RefusedByStructure, match='客观状态不能越过.*披露许可'):
         _build(inputs)
 
 
 @pytest.mark.parametrize('goal_name', ['chapter_goal', 'open_hook_goal', 'end_hook_goal'])
-def test_goal_subject_reference_cannot_bypass_scene_reveal(pair, goal_name):
-    inputs = _inputs(pair)
-    chapter = inputs[0]['output_chapters'][1]
-    # 结尾目标仍位于末场；把秘密触发点移到其后的阅读场景不合法。
-    goal = chapter[goal_name]
+def test_goal_subject_reference_cannot_bypass_scene_reveal(goal_name):
+    inputs = _inputs()
+    goal = inputs[0]['output_chapters'][1][goal_name]
     goal.update(subject_refs=[{'kind': 'secret', 'ref': 'secret_01'}],
                 intent='advance', anchor_beat_ref='b02_01', anchor_scene_ref='s01')
     with pytest.raises(RefusedByStructure, match='披露许可|结尾目标必须落在末场'):
         _build(inputs)
 
 
-def test_dialogue_only_party_remains_in_writer_character_projection(pair):
-    inputs = _inputs(pair)
+def test_dialogue_only_party_remains_in_writer_character_projection():
+    knowledge = _core()
+    knowledge['relations'] = []  # 不能让关系目标替对白参与人提供另一条纳入路径。
+    inputs = _inputs(knowledge)
     chapter = inputs[2]['blueprints'][2]
     for beat in chapter['beats']:
-        beat['participant_char_ids'] = ['char_001']
-    # V9 对白含义在完整正文，收信人/被提及者也是参与者，但不是实际在场者。
+        beat['participants'] = [{'char_id': 'char_001'}]
+        for context in beat['source_contexts']:
+            context['present'] = [{'char_id': 'char_001'}]
     beat = chapter['beats'][0]
-    beat['content'] = '李宝珠托管家向母亲传话，询问家中账目。'
-    beat['participant_char_ids'].append('char_002')
-    assert all(not b['source_contexts'] for b in chapter['beats'])
+    beat['content'] = '甲托人向乙传话，询问家中账目。'
+    beat['participants'].append({'char_id': 'char_002'})
+    _refresh_identity_plan(inputs)
     result = _build(inputs)[2]
-    assert 'char_002' in {row['char_id'] for row in result['characters']}
+    target = next(row['actor_ref'] for row in result['characters'] if row['display_name'] == '乙')
+    assert target in result['beats'][0]['participants']
+    assert all(target not in stage['present'] for scene in result['scenes']
+               for delivery in scene['deliveries'] for stage in delivery['stages'])
     assert result['beats'][0]['content'] == beat['content']
+    assert 'char_002' not in json.dumps(result)
 
 
-def test_relation_goal_keeps_explicit_character_dependencies(pair):
-    inputs = _inputs(pair, subjects=[('relation', 'rel_01')])
+def test_relation_goal_keeps_explicit_character_dependencies():
+    inputs = _inputs(subjects=[('relation', 'rel_01')])
     result = _build(inputs)[2]
-    relation = inputs[1]['entities']['relations'][0]
-    assert {relation['subject_id'], relation['object_id']} <= {
-        row['char_id'] for row in result['characters']}
+    relation = _global(result, 'relation')['value']
+    assert {relation['subject'], relation['object']} <= {row['actor_ref'] for row in result['characters']}
+    assert relation['subject'] != relation['object']
+    assert 'char_' not in json.dumps(result)
 
 
-def test_association_does_not_bypass_the_rule_name_gate(pair):
-    registry, knowledge = pair
-    changed = knowledge.model_copy(deep=True)
-    changed.canon.world_rules[0].versions[0].desc = '母亲不得夜行'
-    inputs = _inputs((registry, changed), subjects=[('world_rule', 'wr_01')])
+def test_association_does_not_bypass_the_rule_name_gate():
+    # 称谓可出现不等于映射已公开；改测完整隐藏命题，不按“母亲”词面误封通用规则。
+    knowledge = _core()
+    rule = knowledge['world_rules'][0]['versions'][0]
+    rule.update(desc='乙作为账房继承人可以查阅密账。', revealed_from=2)
+    inputs = _inputs(knowledge)
     chapters = _build(inputs)
-    assert '母亲不得夜行' not in json.dumps(chapters[0], ensure_ascii=False)
-    assert '母亲不得夜行' in json.dumps(chapters[1], ensure_ascii=False)
+    assert rule['desc'] not in json.dumps(chapters[0], ensure_ascii=False)
+    assert rule['desc'] in json.dumps(chapters[1], ensure_ascii=False)
+    for row in inputs[4]['scope']['obligations']:
+        if row['kind'] == 'world_rule_reveal':
+            row['chapter_ordinal'] = 1
+    _bind(inputs)
+    with pytest.raises(RefusedByStructure, match='revealed_from|披露|揭示'):
+        _build(inputs)
 
 
 @pytest.mark.parametrize('visibility', ['public', 'via_secret'])
-def test_relation_world_reader_and_valid_through_boundaries_are_independent(pair, visibility):
-    registry, knowledge = pair
-    changed = knowledge.model_copy(deep=True)
-    relation = changed.entities.relations[0]
-    relation.predicate = '共同受雇掌账'
-    relation.valid_from_chapter = 1
-    relation.valid_through_chapter = 2
-    from contracts.schema.stage2 import Relation
-    data = relation.model_dump()
-    data['visibility'] = ({'kind': 'public', 'from_chapter': 2} if visibility == 'public'
-                          else {'kind': 'via_secret', 'secret_id': 'secret_01'})
-    changed.entities.relations[0] = Relation.model_validate(data)
-    chapters = _build(_inputs((registry, changed), subjects=[('relation', 'rel_01')]))
-    assert relation.predicate not in json.dumps(chapters[0], ensure_ascii=False)
-    assert _global(chapters[1], 'relation', 'rel_01')['allowed_slots'] == (
-        ['s01', 's02'] if visibility == 'public' else ['s02'])
-    assert _global(chapters[2], 'relation', 'rel_01') is None
+def test_relation_world_reader_and_valid_through_boundaries_are_independent(visibility):
+    knowledge = _core()
+    relation = knowledge['relations'][0]
+    relation.update(effective_from=1, effective_until=2, revealed_from=2)
+    if visibility == 'via_secret':
+        knowledge['arc_secrets'][0].update(fact=None, fact_ref={'kind': 'relation', 'relation_id': 'rel_01'})
+    chapters = _build(_inputs(knowledge, relation_at_scene=visibility == 'via_secret'))
+    assert relation['predicate'] not in json.dumps(chapters[0], ensure_ascii=False)
+    current = _global(chapters[1], 'relation')
+    assert current['allowed_slots'] == (['s01', 's02', 's03'] if visibility == 'public' else ['s03'])
+    historical = _global(chapters[2], 'relation')
+    assert historical['value']['effective_until'] == 2
+    assert historical['value']['revealed_from'] == 2
+    if visibility == 'via_secret':
+        fact = _global(chapters[1], 'secret')['value']['fact']
+        assert fact == current['value'] and 'char_' not in json.dumps(fact)
 
 
-def test_character_and_group_knowers_do_not_appear_before_their_current_scene(pair):
-    registry, knowledge = pair
-    changed = knowledge.model_copy(deep=True)
-    secret = changed.canon.secrets[0]
-    secret.first_reveal_chapter = 1
-    for event in secret.knowledge_events:
-        event.known_from_chapter = 2
-    chapters = _build(_inputs((registry, changed), subjects=[('secret', 'secret_01')]))
-    assert not any(e['kind'] == 'knowledge_event' for e in chapters[0]['knowledge_events'])
-    second = chapters[1]
-    assert _global(second, 'secret', 'secret_01')['allowed_slots'] == ['s01', 's02']
-    events = [e for e in second['knowledge_events'] if e['kind'] == 'knowledge_event']
+def test_character_and_group_knowers_do_not_appear_before_their_current_scene():
+    inputs = _inputs()
+    for ref, audience in [('ke_character', {'kind': 'character', 'actor': {'char_id': 'char_002'}}),
+                           ('ke_group', {'kind': 'group', 'label': '账房众人'})]:
+        subject = {'kind': 'beat', 'ref': 'b02_01'}
+        add_event(inputs[4], kind='character_knowledge', ref=ref, chapter=2,
+                  subject=subject, beat='b02_01')
+        inputs[4]['scope']['obligations'][-1]['audience'] = audience
+        if audience['kind'] == 'character':
+            inputs[4]['scope']['obligations'][-1]['candidate_actors'] = [audience['actor']]
+        inputs[4]['scope'].setdefault('registered_events', []).append({
+            'event_id': ref, 'event_sha256': 'f' * 64, 'retired': False, 'reason': None,
+            'event': {'kind': 'character_knowledge', 'subject_ref': subject, 'audience': audience,
+                'chapter_ordinal': 2, 'evidence_refs': [{'chapter_ordinal': 2, 'evidence_ref': 'e02_01'}]}})
+    _bind(inputs)
+    chapters = _build(inputs)
+    assert not any(e['kind'] == 'character_knowledge' for e in chapters[0]['knowledge_events'])
+    events = [e for e in chapters[1]['knowledge_events'] if e['kind'] == 'character_knowledge']
     assert {e['audience']['kind'] for e in events} == {'character', 'group'}
     assert all(e['timing'] == 'at_slot' and e['slot'] == 's01' for e in events)
+    assert next(e['audience']['actor_ref'] for e in events if e['audience']['kind'] == 'character').startswith('actor_')
 
 
-def test_split_secret_members_do_not_release_later_answers_together(pair):
-    registry, knowledge = pair
-    changed = knowledge.model_copy(deep=True)
-    later = changed.canon.secrets[0].model_copy(deep=True)
-    later.secret_id = 'secret_02'
-    later.fact = '父亲避开家人是为了追查失窃账银'
-    later.first_reveal_chapter = 3
-    changed.canon.secrets.append(later)
-    chapters = _build(_inputs((registry, changed), subjects=[('secret', 'secret_02')]))
-    assert later.fact not in json.dumps(chapters[0], ensure_ascii=False)
-    assert later.fact not in json.dumps(chapters[1], ensure_ascii=False)
-    assert later.fact in json.dumps(chapters[2], ensure_ascii=False)
+def test_split_secret_members_do_not_release_later_answers_together():
+    knowledge = _core()
+    later = copy.deepcopy(knowledge['arc_secrets'][0])
+    later.update(secret_id='secret_02', fact='失踪者隐居是为了追查失窃账银。', revealed_from=3)
+    knowledge['arc_secrets'].append(later)
+    chapters = _build(_inputs(knowledge))
+    assert later['fact'] not in json.dumps(chapters[0], ensure_ascii=False)
+    assert later['fact'] not in json.dumps(chapters[1], ensure_ascii=False)
+    assert later['fact'] in json.dumps(chapters[2], ensure_ascii=False)
 
 
-def test_setting_is_gated_by_explicit_association_without_relying_on_matching_words(pair):
-    registry, knowledge = pair
-    changed = knowledge.model_copy(deep=True)
-    changed.canon.setting.worldview = '一家人所寻之人其实一直藏在这座城里'
-    changed.canon.setting.worldview_evidence.chapter_ordinal = 3
-    chapters = _build(_inputs((registry, changed), subjects=[('setting', '世界观')]))
-    assert _global(chapters[0], 'setting', '世界观') is None
-    assert changed.canon.setting.worldview not in json.dumps(chapters[0], ensure_ascii=False)
-    assert _global(chapters[2], 'setting', '世界观')['value'] == changed.canon.setting.worldview
+def test_setting_is_gated_by_explicit_association_without_relying_on_matching_words():
+    knowledge = _core()
+    value = '当地只有同族家庭可以接手账房。'
+    knowledge['setting']['social_context'] = value
+    chapters = _build(_inputs(knowledge, subjects=[('setting', 'social_context')], setting_chapter=3))
+    assert _global(chapters[0], 'setting') is None
+    assert value not in json.dumps(chapters[0], ensure_ascii=False)
+    assert _global(chapters[2], 'setting')['value']['content'] == value
 
 
-def test_rule_replacement_does_not_keep_old_version_as_current_or_reveal_new_early(pair):
-    registry, knowledge = pair
-    changed = knowledge.model_copy(deep=True)
-    rule = changed.canon.world_rules[0]
-    later = rule.versions[0].model_copy(deep=True)
-    later.effective_from_chapter = 2
-    later.desc = '城中宵禁已经解除，夜间可以出门。'
-    later.desc_evidence.chapter_ordinal = 3
-    rule.versions.append(later)
-    chapters = _build(_inputs((registry, changed), subjects=[('world_rule', 'wr_01')]))
-    assert _global(chapters[0], 'world_rule', 'wr_01')['value']['versions'][0]['desc'] == rule.versions[0].desc
-    assert _global(chapters[1], 'world_rule', 'wr_01') is None
-    assert later.desc not in json.dumps(chapters[1], ensure_ascii=False)
-    assert [v['desc'] for v in _global(chapters[2], 'world_rule', 'wr_01')['value']['versions']] == [later.desc]
+def test_rule_replacement_does_not_keep_old_version_as_current_or_reveal_new_early():
+    knowledge = _core()
+    rule = knowledge['world_rules'][0]
+    old = rule['versions'][0]
+    old['effective_until'] = 1
+    later = dict(old, version_id='v02', effective_from=2, effective_until=None,
+                 revealed_from=3, desc='城中宵禁已经解除，夜间可以出门。')
+    rule['versions'].append(later)
+    chapters = _build(_inputs(knowledge))
+    assert _global(chapters[0], 'world_rule', contains=old['desc'])['value']['effective_until'] == 1
+    assert later['desc'] not in json.dumps(chapters[1], ensure_ascii=False)
+    historical = _global(chapters[1], 'world_rule', contains=old['desc'])
+    assert historical['value']['effective_until'] < chapters[1]['output_ordinal']
+    current = _global(chapters[2], 'world_rule', contains=later['desc'])
+    assert current['value']['effective_from'] == 2 and current['value']['effective_until'] is None
+    assert _global(chapters[2], 'world_rule', contains=old['desc'])['value']['effective_until'] == 1
 
 
-def test_missing_or_incomplete_association_cannot_masquerade_as_no_secrets(pair):
-    inputs = _inputs(pair)
+def test_missing_or_incomplete_association_cannot_masquerade_as_no_secrets():
+    inputs = _inputs()
     assert _build(inputs), '完整关联是当前消费链的绿对照'
     inputs[4]['links'].pop()
-    # KL2 自身先拒绝缺事件；无需等 WriterContext 的后置结构断言才发现。
     from pydantic import ValidationError
     with pytest.raises(ValidationError, match='完整|覆盖'):
         KnowledgeLinks.model_validate(inputs[4])
@@ -248,15 +349,29 @@ def test_missing_or_incomplete_association_cannot_masquerade_as_no_secrets(pair)
         _build(inputs)
 
 
-def test_writer_renders_each_beat_body_once_and_preserves_permission_for_revision(pair):
-    inputs = _inputs(pair)
-    entry = _build(inputs)[1]
+def test_writer_renders_each_beat_body_once_and_preserves_permission_for_revision():
+    inputs = _inputs()
+    from novel.stages.stage2.paragraphs import span_of
+    from novel.stages.stage2.plot_compile import source_digest, validate_evidence
+    for chapter, source, day in zip(inputs[2]['blueprints'], inputs[3], ('首日', '次日', '第三日'), strict=True):
+        content = f'甲在{day}决定留下。'
+        chapter['beats'][-1]['content'] = content
+        source['text'] = source['text'].replace('甲决定留下。', content)
+        chapter['source_sha256'] = source_digest(source['text'])
+        for anchor in chapter['evidence_anchors']:
+            anchor['start'], anchor['end'] = span_of(source['text'], anchor['start_para'], anchor['end_para'])
+        validate_evidence(PlotBlueprint.model_validate(chapter), source['text'])
+    _refresh_identity_plan(inputs)
+    ctx = _context(inputs)
+    entry = ctx['chapters'][1]
     before = copy.deepcopy(entry)
-    material = build_material(entry, stage5_book())
-    answer = inputs[1]['canon']['secrets'][0]['fact']
+    material = build_material(entry, book_for(ctx, inputs[3]))
+    answer = inputs[1]['arc_secrets'][0]['fact']
     trigger = inputs[2]['blueprints'][1]['beats'][-1]['content']
+    previous = inputs[2]['blueprints'][0]['beats'][-1]['content']
     assert material.given.count(answer) == 1
     assert material.given.count(trigger) == 1
+    assert material.given.count(previous) == 1
     assert '逐场表达许可' in material.given and '同次请求可见后场材料' in material.given
     assert '逐场表达许可' in revise_user(material, '上一版正文。', ['修复披露时点'])
     assert entry == before

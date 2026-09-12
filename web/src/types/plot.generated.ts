@@ -7,6 +7,32 @@ export type AccountingLine = {
   "detail": (string)[]
 }
 
+export type ActorBinding = {
+  "presentation_id": string
+  "char_id": string
+  "surfaces": (string)[]
+  "evidence_refs": (string)[]
+  "public_state_ref": string | null
+}
+
+export type ActorBindingResponse = {
+  "presentation_key": string
+  "char_id": string
+  "surfaces": (string)[]
+  "evidence": (ParagraphRange)[]
+  "public_state_ref": string | string | null
+}
+
+export type ActorRef = {
+  "char_id": string
+  "presentation_ref": string | null
+}
+
+export type ActorRefResponse = {
+  "char_id": string
+  "presentation_ref": string | string | null
+}
+
 export type ApprovalWorkpack = {
   "v": 2
   "sid": string
@@ -137,7 +163,7 @@ export type BlueprintChapterProgress = {
 export type BlueprintContext = {
   "architecture": "plot-blueprint-v1"
   "source_format": "numbered-paragraphs-v1"
-  "global_projection_contract": "plot-global-scope-v1"
+  "global_projection_contract": "plot-global-scope-v2"
 }
 
 export type BlueprintProvenance = {
@@ -147,6 +173,7 @@ export type BlueprintProvenance = {
     [key: string]: InputEdge
   }
   "usage": Usage | null
+  "shared_analysis_source": SharedAnalysisSource | null
   "revalidated": boolean | null
   "gates_skipped": (string)[] | null
   "origin": "human" | null
@@ -226,9 +253,12 @@ export type BlueprintRunProgress = {
 }
 
 export type ChapterCharacter = {
-  "char_id": string
+  "actor_ref": string
   "display_name": string
-  "role": string
+  "surfaces": (string)[]
+  "role": string | null
+  "role_allowed_slots": (string)[]
+  "allowed_slots": (string)[]
 }
 
 export type ChapterReviewCoverage = {
@@ -239,24 +269,12 @@ export type ChapterReviewCoverage = {
   "carry_state": DimensionVerdict
 }
 
-export type CharacterRef = {
-  "kind": "character"
-  "char_id": string
-}
-
 export type CompactApprovalCheck = {
   "rules_scanned": number
   "counts": StatusCounts
   "provenance": ProvenanceSection
   "attention": (RuleLine)[]
   "metrics": (RuleLine)[]
-}
-
-export type CtxAddress = {
-  "who": string
-  "surface": string
-  "by": string | null
-  "context": "address" | "reference"
 }
 
 export type CtxChapterView = {
@@ -271,12 +289,11 @@ export type CtxChapterView = {
   "states": (WriterState)[]
   "constraints": (WriterConstraint)[]
   "global_subjects": (WriterGlobalSubject)[]
-  "restricted_subject_refs": (PlotSubjectRef)[]
+  "restricted_subject_refs": (WriterSubjectRef)[]
   "knowledge_events": (WriterKnowledgeEvent)[]
   "scenes": (CtxScene)[]
   "characters": (ChapterCharacter)[]
   "narration": (CtxNarration)[]
-  "address": (CtxAddress)[]
   "from_source_ordinals": (number)[]
   "budget_chars": number
   "source_chars": number | null
@@ -284,7 +301,7 @@ export type CtxChapterView = {
 
 export type CtxGoal = {
   "intent": "establish" | "advance" | "open" | "close" | "withhold" | "resolve"
-  "subject_refs": (PlotSubjectRef)[]
+  "subject_refs": (WriterSubjectRef)[]
   "anchor_beat_ref": string
   "anchor_scene_ref": string
 }
@@ -295,6 +312,8 @@ export type CtxNarration = {
   "narrator": string | null
   "focalizer": string | null
   "pronoun_surfaces": (string)[] | null
+  "beat_refs": (string)[]
+  "allowed_slots": (string)[]
 }
 
 export type CtxProvenance = {
@@ -304,6 +323,7 @@ export type CtxProvenance = {
     [key: string]: InputEdge
   }
   "usage": Usage | null
+  "shared_analysis_source": SharedAnalysisSource | null
   "revalidated": boolean | null
   "gates_skipped": (string)[] | null
   "origin": "human" | null
@@ -578,8 +598,17 @@ export type FixRoute = {
 }
 
 export type GlobalSubjectRef = {
-  "kind": "character" | "relation" | "world_rule" | "secret" | "setting" | "character_state"
+  "kind": "character" | "relation" | "world_rule" | "secret" | "setting"
   "ref": string
+  "actor": ActorRef | null
+  "relation_actors": RelationActors | null
+}
+
+export type GlobalSubjectRefResponse = {
+  "kind": "character" | "relation" | "world_rule" | "secret" | "setting"
+  "ref": string
+  "actor": ActorRefResponse | null
+  "relation_actors": RelationActorsResponse | null
 }
 
 export type GroupRef = {
@@ -608,13 +637,20 @@ export type JsonValue = unknown
 
 export type KnowledgeAtBeats = {
   "subject_refs": (PlotSubjectRef)[]
+  "identity_actors": (ActorRef)[]
   "kind": "at_beats"
   "trigger_beat_ref": string
 }
 
 export type KnowledgeAtEntry = {
   "subject_refs": (PlotSubjectRef)[]
+  "identity_actors": (ActorRef)[]
   "kind": "at_entry"
+}
+
+export type KnowledgeCharacterAudience = {
+  "kind": "character"
+  "actor": ActorRef
 }
 
 export type KnowledgeLinkDecision = {
@@ -625,14 +661,15 @@ export type KnowledgeLinkDecision = {
 
 export type KnowledgeLinkObligation = {
   "obligation_id": string
-  "kind": "secret_reveal" | "secret_setup" | "knowledge_event" | "world_rule" | "world_rule_reveal" | "relation" | "relation_visibility" | "character_state" | "setting" | "reader_reveal" | "character_knowledge"
+  "kind": "secret_reveal" | "secret_setup" | "world_rule" | "world_rule_reveal" | "relation" | "relation_visibility" | "setting" | "reader_reveal" | "character_knowledge"
   "knowledge_ref": string
   "subject_ref": PlotSubjectRef
-  "audience": CharacterRef | GroupRef | null
+  "audience": KnowledgeCharacterAudience | GroupRef | null
   "chapter_ordinal": number
   "subject_sha256": string
   "candidate_subject_refs": (PlotSubjectRef)[]
   "entry_subject_refs": (PlotSubjectRef)[]
+  "candidate_actors": (ActorRef)[]
 }
 
 export type KnowledgeLinkRecord = {
@@ -651,7 +688,7 @@ export type KnowledgeLinkReview = {
 }
 
 export type KnowledgeLinkScope = {
-  "contract": "stage2-knowledge-links-v2"
+  "contract": "stage2-knowledge-links-v3"
   "chapter_ordinal": number | null
   "scope_sha256": string
   "main_text_sha256": string
@@ -728,6 +765,7 @@ export type PlanProvenance = {
     [key: string]: InputEdge
   }
   "usage": Usage | null
+  "shared_analysis_source": SharedAnalysisSource | null
   "revalidated": boolean | null
   "gates_skipped": (string)[] | null
   "origin": "compiled" | "human"
@@ -768,7 +806,7 @@ export type PlanSceneLine = {
 
 export type PlannerAudience = {
   "kind": "character" | "group"
-  "char_id": string | null
+  "actor_alias": string | null
   "label": string | null
 }
 
@@ -786,9 +824,8 @@ export type PlannerBeat = {
 
 export type PlannerCharacter = {
   "alias": string
-  "canonical": string
   "surfaces": (string)[]
-  "role": string
+  "role": string | null
 }
 
 export type PlannerEndpoint = {
@@ -796,22 +833,23 @@ export type PlannerEndpoint = {
   "kind": "state" | "constraint" | "knowledge"
   "endpoint": "established" | "ended" | "before" | "after" | "target" | "trigger"
   "trigger_beat_alias": string
-  "subject_alias": string
+  "subject_aliases": (string)[]
 }
 
 export type PlannerGlobalSubject = {
   "alias": string
-  "kind": "relation" | "world_rule" | "secret" | "setting" | "character_state"
+  "kind": "relation" | "world_rule" | "secret" | "setting"
   "value": JsonValue
 }
 
 export type PlannerKnowledge = {
   "event_alias": string
-  "subject_alias": string
-  "kind": "secret_reveal" | "secret_setup" | "knowledge_event" | "world_rule" | "world_rule_reveal" | "relation" | "relation_visibility" | "character_state" | "setting" | "reader_reveal" | "character_knowledge"
+  "subject_aliases": (string)[]
+  "kind": "secret_reveal" | "secret_setup" | "world_rule" | "world_rule_reveal" | "relation" | "relation_visibility" | "setting" | "reader_reveal" | "character_knowledge"
   "audience": PlannerAudience | null
   "timing": "at_entry" | "at_beats" | "future_chapter"
   "trigger_beat_alias": string | null
+  "identity_aliases": (string)[]
 }
 
 export type PlannerRelation = {
@@ -849,7 +887,7 @@ export type PlotAnchorBinding = {
 export type PlotBeat = {
   "beat_id": string
   "content": string
-  "participant_char_ids": (string)[]
+  "participants": (ActorRef)[]
   "evidence_refs": (string)[]
   "source_contexts": (SourceContext)[]
 }
@@ -857,7 +895,7 @@ export type PlotBeat = {
 export type PlotBeatResponse = {
   "beat_key": string
   "content": string
-  "participant_char_ids": (string)[]
+  "participants": (ActorRefResponse)[]
   "evidence": (ParagraphRange)[]
   "source_contexts": (SourceContextResponse)[]
 }
@@ -866,6 +904,8 @@ export type PlotBlueprint = {
   "chapter_ordinal": number
   "source_sha256": string
   "chapter_function": string
+  "actor_bindings": (ActorBinding)[]
+  "relation_uses": (RelationUse)[]
   "beats": (PlotBeat)[]
   "evidence_anchors": (EvidenceAnchor)[]
   "states": (PlotState)[]
@@ -884,19 +924,22 @@ export type PlotChapterEdit = {
 export type PlotChapterResponse = {
   "chapter_ordinal": number
   "chapter_function": string
+  "actor_bindings": (ActorBindingResponse)[]
+  "relation_uses": (RelationUseResponse)[]
   "beats": (PlotBeatResponse)[]
   "states": (PlotStateResponse)[]
   "inherited_state_endings": (InheritedStateEndingResponse)[]
   "constraints": (PlotRelationConstraintResponse | PlotValueConstraintResponse)[]
   "entry_state_refs": (string)[]
   "carry_out_refs": (string)[]
-  "narration": (PlotNarration)[]
+  "narration": (PlotNarrationResponse)[]
 }
 
 export type PlotChapterReviewMaterials = {
-  "contract": "plot-chapter-evidence-v1"
+  "contract": "plot-chapter-evidence-v2"
   "blueprint": PlotBlueprint
   "support_subjects": (ReviewSupportSubject)[]
+  "actor_bindings": (ActorBinding)[]
   "global_subjects": (ReviewSupportSubject)[]
   "knowledge_events": ({
     [key: string]: JsonValue
@@ -927,14 +970,14 @@ export type PlotEditPreview = {
 
 export type PlotIdentityChange = {
   "chapter_ordinal": number
-  "collection": "beats" | "states" | "constraints"
+  "collection": "beats" | "states" | "constraints" | "actor_bindings"
   "kind": "preserve" | "replace" | "add"
   "old_refs": (string)[]
   "new_refs": (string)[]
 }
 
 export type PlotIdentityOperation = {
-  "collection": "beats" | "states" | "constraints"
+  "collection": "beats" | "states" | "constraints" | "actor_bindings"
   "kind": "preserve" | "replace" | "add"
   "old_refs": (string)[]
   "new_keys": (string)[]
@@ -949,7 +992,7 @@ export type PlotIssueDisposition = {
 export type PlotKnowledgeEvent = {
   "kind": "reader_reveal" | "character_knowledge"
   "subject_ref": PlotSubjectRef
-  "audience": CharacterRef | GroupRef | null
+  "audience": KnowledgeCharacterAudience | GroupRef | null
   "chapter_ordinal": number
   "evidence_refs": (PlotKnowledgeEvidence)[]
 }
@@ -961,9 +1004,20 @@ export type PlotKnowledgeEvidence = {
 
 export type PlotNarration = {
   "grammatical_person": "first" | "second" | "third"
-  "narrator_char_id": string | null
-  "focalizer_char_id": string | null
+  "narrator": ActorRef | null
+  "focalizer": ActorRef | null
   "pronoun_surfaces": (string)[]
+  "beat_refs": (string)[]
+  "evidence_refs": (string)[]
+}
+
+export type PlotNarrationResponse = {
+  "grammatical_person": "first" | "second" | "third"
+  "narrator": ActorRefResponse | null
+  "focalizer": ActorRefResponse | null
+  "pronoun_surfaces": (string)[]
+  "beat_refs": (string)[]
+  "evidence": (ParagraphRange)[]
 }
 
 export type PlotNodeTombstone = {
@@ -978,7 +1032,7 @@ export type PlotRelationConstraint = {
   "kind": "cause" | "story_before" | "response_to" | "same_scene" | "observes"
   "before_beat_ref": string
   "after_beat_ref": string
-  "observer_char_id": string | null
+  "observer": ActorRef | null
   "evidence_refs": (string)[]
 }
 
@@ -987,7 +1041,7 @@ export type PlotRelationConstraintResponse = {
   "kind": "cause" | "story_before" | "response_to" | "same_scene" | "observes"
   "before_beat_ref": string
   "after_beat_ref": string
-  "observer_char_id": string | null
+  "observer": ActorRefResponse | null
   "evidence": (ParagraphRange)[]
 }
 
@@ -1032,7 +1086,7 @@ export type PlotState = {
   "content": string | null
   "global_ref": GlobalSubjectRef | null
   "modality": "world" | "belief" | "claim" | "unresolved"
-  "holder_char_id": string | null
+  "holder": ActorRef | null
   "established_at": BeatMoment
   "ended_at": BeatMoment | null
   "supersedes_state_refs": (string)[]
@@ -1042,9 +1096,9 @@ export type PlotState = {
 export type PlotStateResponse = {
   "state_key": string
   "content": string | null
-  "global_ref": GlobalSubjectRef | null
+  "global_ref": GlobalSubjectRefResponse | null
   "modality": "world" | "belief" | "claim" | "unresolved"
-  "holder_char_id": string | null
+  "holder": ActorRefResponse | null
   "established_at": BeatMomentResponse
   "ended_at": BeatMomentResponse | null
   "supersedes_state_refs": (string)[]
@@ -1052,8 +1106,10 @@ export type PlotStateResponse = {
 }
 
 export type PlotSubjectRef = {
-  "kind": "beat" | "state" | "constraint" | "character" | "relation" | "world_rule" | "secret" | "setting" | "character_state" | "chapter_boundary"
+  "kind": "beat" | "state" | "constraint" | "character" | "relation" | "world_rule" | "secret" | "setting" | "chapter_boundary"
   "ref": string
+  "actor": ActorRef | null
+  "relation_actors": RelationActors | null
 }
 
 export type PlotValueConstraint = {
@@ -1114,6 +1170,30 @@ export type RegisteredPlotKnowledgeEvent = {
   "event": PlotKnowledgeEvent
   "retired": boolean
   "reason": string | null
+}
+
+export type RelationActors = {
+  "subject": ActorRef
+  "object": ActorRef
+}
+
+export type RelationActorsResponse = {
+  "subject": ActorRefResponse
+  "object": ActorRefResponse
+}
+
+export type RelationUse = {
+  "kind": "relation"
+  "ref": string
+  "actor": ActorRef | null
+  "relation_actors": RelationActors | null
+}
+
+export type RelationUseResponse = {
+  "kind": "relation"
+  "ref": string
+  "actor": ActorRefResponse | null
+  "relation_actors": RelationActorsResponse | null
 }
 
 export type RetirePlotKnowledgeEvent = {
@@ -1204,18 +1284,25 @@ export type SemanticContract = {
   "carry_out_refs": (string)[]
 }
 
+export type SharedAnalysisSource = {
+  "receipt_rel": "stage2/analyze_receipt.json"
+  "receipt_sha256": string
+  "run_id": string
+  "attempt_id": string
+}
+
 export type SourceContext = {
   "evidence_refs": (string)[]
   "time_layer": "present" | "recall" | "hearsay" | null
   "place": string | null
-  "present_char_ids": (string)[] | null
+  "present": (ActorRef)[] | null
 }
 
 export type SourceContextResponse = {
   "evidence": (ParagraphRange)[]
   "time_layer": "present" | "recall" | "hearsay" | null
   "place": string | null
-  "present_char_ids": (string)[] | null
+  "present": (ActorRefResponse)[] | null
 }
 
 export type Stage4IndexRow = {
@@ -1345,10 +1432,16 @@ export type WorkpackReading = {
   "global_binding_concerns": (WorkpackConcernReading)[]
 }
 
+export type WriterAudience = {
+  "kind": "character" | "group"
+  "actor_ref": string | null
+  "label": string | null
+}
+
 export type WriterBeat = {
   "beat_ref": string
   "content": string
-  "participant_char_ids": (string)[]
+  "participants": (string)[]
 }
 
 export type WriterConstraint = {
@@ -1356,7 +1449,7 @@ export type WriterConstraint = {
   "kind": "cause" | "story_before" | "response_to" | "same_scene" | "observes" | "literal" | "value" | "object"
   "before_beat_ref": string | null
   "after_beat_ref": string | null
-  "observer_char_id": string | null
+  "observer": string | null
   "target_beat_ref": string | null
   "value": string | null
 }
@@ -1368,7 +1461,7 @@ export type WriterDelivery = {
 }
 
 export type WriterGlobalSubject = {
-  "subject_ref": GlobalSubjectRef
+  "subject_ref": WriterSubjectRef
   "value": JsonValue
   "allowed_slots": (string)[]
   "state_permissions": (WriterStatePermission)[]
@@ -1376,9 +1469,10 @@ export type WriterGlobalSubject = {
 
 export type WriterKnowledgeEvent = {
   "event_ref": string
-  "kind": "secret_reveal" | "secret_setup" | "knowledge_event" | "world_rule" | "world_rule_reveal" | "relation" | "relation_visibility" | "character_state" | "setting" | "reader_reveal" | "character_knowledge"
-  "subject_ref": PlotSubjectRef
-  "audience": CharacterRef | GroupRef | null
+  "kind": "secret_reveal" | "secret_setup" | "world_rule" | "world_rule_reveal" | "relation" | "relation_visibility" | "setting" | "reader_reveal" | "character_knowledge"
+  "subject_ref": WriterSubjectRef
+  "audience": WriterAudience | null
+  "identity_actors": (string)[]
   "timing": "at_entry" | "at_slot"
   "slot": string | null
   "allowed_slots": (string)[]
@@ -1393,9 +1487,9 @@ export type WriterStage = {
 export type WriterState = {
   "state_ref": string
   "content": string | null
-  "global_ref": GlobalSubjectRef | null
+  "global_ref": WriterSubjectRef | null
   "modality": "world" | "belief" | "claim" | "unresolved"
-  "holder_char_id": string | null
+  "holder": string | null
 }
 
 export type WriterStateEvent = {
@@ -1407,4 +1501,9 @@ export type WriterStatePermission = {
   "state_ref": string
   "modality": "belief" | "claim" | "unresolved"
   "allowed_slots": (string)[]
+}
+
+export type WriterSubjectRef = {
+  "kind": "character" | "relation" | "world_rule" | "secret" | "setting" | "beat" | "state" | "constraint" | "chapter_boundary"
+  "ref": string
 }

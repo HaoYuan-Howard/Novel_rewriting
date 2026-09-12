@@ -26,13 +26,7 @@ from contracts.artifacts import (
     STAGE2_KNOWLEDGE_LINKS,
 )
 from contracts.schema.stage1 import MainText
-from contracts.schema.stage2 import (
-    BlueprintCharacterProjection,
-    BlueprintProvenance,
-    ChapterBlueprints,
-    GlobalGrounding,
-    GlobalProvenance,
-)
+from contracts.schema.stage2 import BlueprintCharacterProjection, ChapterBlueprints
 from contracts.schema.stage4 import (
     BlindCandidate,
     EvidenceBinding,
@@ -46,17 +40,10 @@ from novel.llm.client import LlmClient, LlmFailed
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.run import RunContext
-from novel.stages.stage2.character_refs import (
-    materialize_blueprint_character_projection,
-)
 from novel.stages.stage4 import plan
-from novel.stages.stage4.plot_design import (
-    build_blind_projection,
-    candidate_subject_sha256,
-)
+from novel.stages.stage4.plot_design import candidate_subject_sha256
 from novel.store import ArtifactStore
-from tests.factories import approved_global_review
-from tests.test_stage2 import global_grounding, main_text
+from tests.test_stage2 import main_text
 
 
 MODEL = 'test-stage4-v3-model'
@@ -90,45 +77,20 @@ def _book(tmp_path: Path) -> Path:
 
 def _seed_current_stage2(book: Path, *, chapter_responses: dict | None = None) -> ChapterBlueprints:
     """写 current Stage2 产物；来源边与 root 都走正式 ``RunContext`` 铸造口。"""
-    from contracts.artifacts import STAGE1_HOOK_COPY
-    from contracts.schema.stage1 import HookCopy
-    from novel.stages.stage2 import grounding
-    from tests.stage2_fixtures import generate_characters, accept_and_materialize_links
+    from novel.stages.stage2 import extract
+    from tests.stage2_fixtures import (
+        seed_character_registry, knowledge_response, accept_and_materialize_links,
+    )
+    from tests.test_stage2_generation import _accept_fixture_global
 
     global_ctx = _ctx(book, 'stage2.global')
     global_store = ArtifactStore(global_ctx)
     main_artifact = MainText.model_validate(main_text())
     global_store.write(STAGE1_MAIN_TEXT, main_artifact)
-    global_store.write(STAGE1_HOOK_COPY, HookCopy(text='李宝珠收到父亲已经回城的来信。'))
-    generate_characters(global_ctx, view=global_grounding())
-    global_store.read(MainText, STAGE1_MAIN_TEXT)
-    global_store.read(HookCopy, STAGE1_HOOK_COPY)
-    grounding.read_registry(global_store)
-
-    global_raw = copy.deepcopy(global_grounding())
-    global_extra = global_raw.pop('_provenance')
-    global_provenance = global_ctx.llm_provenance(
-        GlobalProvenance,
-        prompts={'GLOBAL_SYS': '测试用冻结 Stage2 全局契约'},
-        model=MODEL,
-        adopted_models=(MODEL,),
-        **global_extra,
-    )
-    global_artifact = GlobalGrounding.model_validate({
-        **global_raw,
-        '_provenance': global_provenance,
-    })
-    global_store.write(STAGE2_GLOBAL_GROUNDING, grounding.for_write(global_store, global_artifact))
-    global_store.write(
-        STAGE2_GLOBAL_REVIEW,
-        approved_global_review(global_artifact),
-    )
-    projection = materialize_blueprint_character_projection(
-        global_artifact.model_dump(
-            by_alias=True, mode='json')['entities']['characters'],
-        [row.model_dump(by_alias=True, mode='json') for row in main_artifact.root],
-    )
-    global_store.write(STAGE2_BLUEPRINT_CHARACTER_PROJECTION, projection)
+    seed_character_registry(global_ctx)
+    global_client, _ = _client(global_ctx, knowledge_response())
+    extract.run_global(global_ctx, global_client)
+    _accept_fixture_global(global_ctx)
 
     blueprint_ctx = _ctx(book, 'stage2.blueprint')
     blueprint_store = ArtifactStore(blueprint_ctx)
@@ -137,15 +99,12 @@ def _seed_current_stage2(book: Path, *, chapter_responses: dict | None = None) -
         BlueprintCharacterProjection,
         STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
     )
-    from novel.stages.stage2 import extract
-    from tests.test_stage2_generation import _accept_fixture_global
-    _accept_fixture_global(blueprint_ctx)
     from tests.test_plot_producer import responses
     by_chapter = responses() if chapter_responses is None else copy.deepcopy(chapter_responses)
-    for ordinal, response in by_chapter.items():
+    for response in by_chapter.values():
         for beat in response['beats']:
             beat['source_contexts'] = [{
-                'time_layer': 'present', 'place': None, 'present_char_ids': None,
+                'time_layer': 'present', 'place': None, 'present': None,
                 'evidence': beat['evidence'],
             }]
     client, _ = _client(blueprint_ctx, lambda req: {
@@ -339,10 +298,11 @@ def test_run_design_is_blind_and_lands_a_reproducible_current_candidate(designed
 
     landed = ArtifactStore(ctx).read_own(BlindCandidate, plan.CANDIDATE_REL)[0]
     assert landed == candidate
+    assert json.loads((book / plan.CANDIDATE_REL).read_bytes())['_schema_version'] == 5
     assert candidate.alias_algorithm == mapping['alias_algorithm']
     assert candidate.truth_sha256 == mapping['truth_sha256']
     assert {alias: row.model_dump(mode='json') for alias, row in candidate.subject_aliases.items()} == mapping['subject_aliases']
-    assert candidate.participant_aliases == mapping['participant_aliases']
+    assert {alias: row.model_dump(mode='json') for alias, row in candidate.participant_aliases.items()} == mapping['participant_aliases']
     assert set(candidate.provenance.inputs) == {
         STAGE2_CHAPTER_BLUEPRINTS, STAGE2_KNOWLEDGE_LINKS, STAGE2_GLOBAL_GROUNDING,
         STAGE2_GLOBAL_REVIEW, STAGE2_CHARACTERS}
@@ -393,7 +353,7 @@ def test_run_plan_binds_evidence_then_compiles_plan_without_context(designed):
     assert binding.status == 'bound'
     assert not store.exists(plan.CTX_REL), \
         'stage4.plan 不得代写 stage4.context 的产物'
-    assert json.loads((book / plan.REL).read_text(encoding='utf-8'))['_schema_version'] == 5
+    assert json.loads((book / plan.REL).read_text(encoding='utf-8'))['_schema_version'] == 6
 
     binding_inputs = {
         plan.CANDIDATE_REL,
@@ -441,7 +401,7 @@ def test_minimal_context_producer_http_and_restart_share_derived_readings(
     assert plan.run_context(_ctx(book, 'stage4.context', paid=False)).passed
     context_bytes = (book / plan.CTX_REL).read_bytes()
     disk = json.loads(context_bytes)
-    assert disk['_schema_version'] == 8
+    assert disk['_schema_version'] == 9
     entry = disk['chapters'][0]
     assert not {'from_source_ordinals', 'budget_chars', 'source_chars'} & entry.keys()
     basis = chapter_basis(entry, {

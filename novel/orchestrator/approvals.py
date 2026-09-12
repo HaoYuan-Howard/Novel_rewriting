@@ -117,7 +117,7 @@ from novel.llm import stage5_runs
 from novel.orchestrator import review_inheritance, state
 from novel.quality.global_review import (
     review_status as global_review_status,
-    subject_sha256 as global_subject_sha256,
+    require_current as require_current_global_review,
 )
 from novel.stages.stage4.phase_state import current_infeasible_binding
 from novel.store import ArtifactStore
@@ -1490,7 +1490,8 @@ def _current_design_subjects(novel_dir: Path) -> _DesignSubjects:
         upstream = _DesignUpstream(design_ctx, ArtifactStore(design_ctx))
         blind_truth, current_mapping = build_blind_projection(
             blueprint_payload, root_clean_sha1=root_clean_sha1,
-            knowledge_links=upstream.knowledge_links, global_g=upstream.global_g)
+            knowledge_links=upstream.knowledge_links, global_g=upstream.global_g,
+            characters=upstream.characters, main_text=upstream.main_text)
     except BlindPlanError as exc:
         raise ArtifactUnreadable(
             f'当前 Stage2 不能重建 Stage4A blind truth：{exc}') from exc
@@ -1508,7 +1509,8 @@ def _current_design_subjects(novel_dir: Path) -> _DesignSubjects:
         'truth_sha256': candidate.truth_sha256,
         'subject_aliases': {k: v.model_dump(mode='json') for k, v in candidate.subject_aliases.items()},
         'endpoint_aliases': {k: v.model_dump(mode='json') for k, v in candidate.endpoint_aliases.items()},
-        'participant_aliases': dict(candidate.participant_aliases),
+        'participant_aliases': {key: value.model_dump(mode='json')
+                                for key, value in candidate.participant_aliases.items()},
     }
     if current_mapping != candidate_mapping:
         raise ApprovalRequired(
@@ -1752,14 +1754,10 @@ def _require_fresh_json(store: ArtifactStore, rel: str) -> str:
     # a definitive fresh provenance result.
     if rel == STAGE2_GLOBAL_REVIEW:
         review, _ = store.read_own(GlobalReview, STAGE2_GLOBAL_REVIEW)
-        grounding, raw = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING)
-        del grounding
-        source = {
-            key: value for key, value in raw.items()
-            if key not in {'_provenance', '_schema_version'}
-        }
-        if review.source_sha256 != global_subject_sha256(source):
-            raise ApprovalRequired('stage2 global review is bound to an older grounding subject')
+        _grounding, raw = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING)
+        registry = grounding_io.read_registry(store, own=True)
+        require_current_global_review(raw, review,
+            characters=registry.model_dump(mode='json', by_alias=True))
     else:
         report = store.freshness(rel)
         if report.state != 'fresh':
@@ -2245,6 +2243,8 @@ def _structure_snapshot_from_artifacts(
         chapter_materials, chapter_materials_identity, material_identity,
     )
     global_g = generation_grounding(store).model_dump(by_alias=True, mode='json')
+    from novel.stages.stage2.grounding import read_registry
+    characters = read_registry(store).model_dump(by_alias=True, mode='json')
     knowledge = require_current(store.ctx).model_dump(by_alias=True, mode='json')
     main, _ = store.read_own(MainText, STAGE1_MAIN_TEXT)
     blueprint_payload = blueprints.model_dump(by_alias=True, mode='json')
@@ -2254,9 +2254,9 @@ def _structure_snapshot_from_artifacts(
         args = (row.output_ordinal, blueprint_payload, global_g, knowledge, main_payload,
                 [ref.model_dump(mode='json') for goal in
                  (row.chapter_goal, row.open_hook_goal, row.end_hook_goal) for ref in goal.subject_refs])
-        material_hashes[row.output_ordinal] = chapter_materials_identity(*args)
+        material_hashes[row.output_ordinal] = chapter_materials_identity(*args, characters=characters)
         if with_materials:
-            material = chapter_materials(*args)
+            material = chapter_materials(*args, characters=characters)
             if material_identity(material) != material_hashes[row.output_ordinal]:
                 raise ArtifactUnreadable('结构工作包与轻量依赖摘要不一致')
             material_by[row.output_ordinal] = material
@@ -4458,7 +4458,7 @@ def _require_design_constraint_refs(
         semantic_aliases = {c.alias for c in truth.constraints} | {
             endpoint.endpoint_alias for endpoint in truth.endpoints}
         aliases = beat_aliases | semantic_aliases | {
-            alias for beat in truth.beats for alias in beat.participant_aliases
+            person.alias for person in truth.characters
         } | {state.alias for state in (*truth.states, *truth.inherited_states)} | {
             subject.alias for subject in truth.global_subjects}
         for constraint in (row.constraints if effective is None else effective[row.output_ordinal]):

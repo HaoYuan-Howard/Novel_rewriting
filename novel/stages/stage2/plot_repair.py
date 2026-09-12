@@ -19,6 +19,7 @@ from novel.stages.stage2.character_refs import blueprint_inventory_from_projecti
 from novel.stages.stage2.plot_inputs import read_input_digests
 from novel.stages.stage2.plot_prompts import BLUEPRINT_SYSTEM, build_plot_user
 from novel.stages.stage2.plot_sequence import with_entry_states
+from novel.stages.stage2.plot_compile import state_materials
 
 OPERATION = 'plot-blueprint-revision-v1'
 SYSTEM = BLUEPRINT_SYSTEM + """
@@ -115,7 +116,8 @@ def request_inputs(ctx, *, chapters, store, main_text, character_projection, rew
     baselines = {row.chapter.chapter_ordinal: row for row in template.chapters}
     if not chapters or not set(chapters) <= baselines.keys():
         raise TerminalState('定向修订必须指定当前书中已有的非空章节范围')
-    visible = blueprint_inventory_from_projection(character_projection)['visible_character_refs']
+    inventory = blueprint_inventory_from_projection(character_projection)
+    visible = inventory['visible_character_refs']
     knowledge = store.read(KnowledgeGrounding, extract.GLOBAL_REL).model_dump(mode='json', by_alias=True)
     sources = {row['chapter_ordinal']: row['text'] for row in main_text}
     globals_ = {ordinal: plot_global_projection(knowledge, ordinal) for ordinal in sources}
@@ -127,12 +129,14 @@ def request_inputs(ctx, *, chapters, store, main_text, character_projection, rew
         baseline = baselines[ordinal]
         user = build_plot_user(ctx.title, sources[ordinal], ordinal,
             character_refs=visible.get(ordinal, {}), global_projection=globals_[ordinal],
+            character_bindings=inventory['character_bindings'].get(ordinal, {}),
             repair_baseline=baseline.chapter.model_dump(mode='json'), repair_findings=issues)
         metadata, source = user.split('\n', 1)
         metadata = json.loads(metadata)
         metadata['baseline_identities'] = [row.model_dump(mode='json') for row in baseline.identities]
         requests.append((ordinal, system, json.dumps(metadata, ensure_ascii=False, separators=(',', ':')) + '\n' + source))
     return dict(previous=previous, template=template, visible=visible, globals_=globals_,
+                character_bindings=inventory['character_bindings'],
                 inputs=inputs, requests=requests, sources=sources, system=system)
 
 
@@ -152,17 +156,9 @@ def build_prompt(ctx, *, chapters=(), review_token=None):
     data = request_inputs(ctx, chapters=chapters, store=store, main_text=main,
                           character_projection=projection, rework=rework)
     first, system, user = data['requests'][0]
-    carried, states = frozenset(), {}
-    for chapter in data['previous'].blueprints:
-        if chapter.chapter_ordinal >= first:
-            break
-        anchors = {row.evidence_id: row.model_dump(mode='json') for row in chapter.evidence_anchors}
-        for state in chapter.states:
-            states[state.state_id] = dict(chapter_ordinal=chapter.chapter_ordinal,
-                state=state.model_dump(mode='json'), source_sha256=chapter.source_sha256,
-                evidence_anchors=[anchors[ref] for ref in state.evidence_refs])
-        carried = frozenset(chapter.carry_out_refs)
-    return system, with_entry_states(user, [states[ref] for ref in sorted(carried)])
+    earlier = [chapter for chapter in data['previous'].blueprints if chapter.chapter_ordinal < first]
+    carried = earlier[-1].carry_out_refs if earlier else []
+    return system, with_entry_states(user, state_materials(earlier, sorted(carried)))
 
 
 def run(ctx, client, *, chapters, store, main_text, character_projection, review_token=None):
@@ -202,12 +198,13 @@ def run(ctx, client, *, chapters, store, main_text, character_projection, review
     requested = {ordinal: (system, user) for ordinal, system, user in requests}
     retired = {ref for event in previous.provenance.plot_revisions for row in event.changes
                for ref in [*row.old_refs, *row.new_refs]}
-    carried, states, edits = frozenset(), {}, []
+    carried, compiled, edits = frozenset(), [], []
     for ordinal in sorted(by):
         chapter = by[ordinal]
         if ordinal in requested:
             _, seed = requested[ordinal]
-            user = with_entry_states(seed, [states[ref] for ref in sorted(carried)])
+            entry_materials = state_materials(compiled, sorted(carried))
+            user = with_entry_states(seed, entry_materials)
             def parse(row):
                 payload = row.model_dump(mode='json')
                 identities = payload.pop('identities')
@@ -216,7 +213,10 @@ def run(ctx, client, *, chapters, store, main_text, character_projection, review
                 return plot_edit._compile_edit(parse(row), chapter, sources[ordinal],
                     available=carried, chars=frozenset(visible.get(ordinal, {})),
                     globals_=frozenset((row['kind'], row['ref']) for row in globals_[ordinal]),
-                    retired=retired)[0]
+                    retired=retired, character_bindings=data['character_bindings'].get(ordinal, {}),
+                    actor_bindings={entry['binding']['presentation_id']: entry['binding']
+                        for row in entry_materials for entry in row['actor_bindings']},
+                    global_subjects={(row['kind'], row['ref']): row for row in globals_[ordinal]})[0]
             def validate(response, _wire):
                 if [row.chapter_ordinal for row in response.blueprints] != [ordinal]:
                     return f'本轮只可返回第 {ordinal} 章'
@@ -237,14 +237,8 @@ def run(ctx, client, *, chapters, store, main_text, character_projection, review
             response = PlotRevisionResponse.model_validate({'blueprints': rows}).blueprints[0]
             edits.append(parse(response))
             chapter = compile_row(response)
-        anchors = {row.evidence_id: row.model_dump(mode='json') for row in chapter.evidence_anchors}
-        for state in chapter.states:
-            states[state.state_id] = dict(chapter_ordinal=ordinal, state=state.model_dump(mode='json'),
-                source_sha256=chapter.source_sha256, evidence_anchors=[anchors[ref] for ref in state.evidence_refs])
+        compiled.append(chapter)
         carried = frozenset(chapter.carry_out_refs)
-        if not carried <= states.keys():
-            raise ProvenanceRefused(f'第 {ordinal} 章依赖被修订的状态，需明确重绑受影响章')
-        states = {ref: states[ref] for ref in carried}
     reason = rework.reason if rework is not None else '操作者请求按原文定向修订'
     request = PlotEdit(actor='stage2.blueprint Executor', reason=reason,
                        review_token=template.review_token, chapters=edits)

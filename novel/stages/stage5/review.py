@@ -19,7 +19,7 @@ review.py —— `stage5.review`：**全书验收**（0 成本，不调 LLM）�
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING,
+    STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING, STAGE2_CHARACTERS,
     STAGE4_WRITER_CONTEXT, STAGE5_REVIEW, artifact_rel,
 )
 from contracts.schema import artifact_spec
@@ -87,7 +87,10 @@ def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
     gg = stage2_global_review.generation_grounding(store)
     wc = store.read(WriterContext, WRITER_CONTEXT)
     measurable = body_style_metrics(measure_body(main))
-    global_projected = without_global_evidence(gg.model_dump(by_alias=True))
+    from novel.consumption import stage4_grounding
+    from contracts.schema.characters import CharacterRegistry
+    registry = store.read(CharacterRegistry, STAGE2_CHARACTERS).model_dump(by_alias=True)
+    global_projected = stage4_grounding(gg.model_dump(by_alias=True))
     assert isinstance(global_projected, dict)
     source_text = {s.chapter_ordinal: (s.text or '') for s in main.root}
     context_payload = wc.model_dump(by_alias=True)
@@ -98,19 +101,35 @@ def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
             raise TerminalState(
                 f'{exc}。请免费重建 stage4.context，不要继续用漂移的任务书。'
             ) from exc
-    characters = ((global_projected.get('entities') or {}).get('characters') or {})
+    characters = registry['characters']
     name_registry, _substitutions, unattested = project_character_names(
         characters, '\n'.join(source_text.values()))
     if unattested:
         raise TerminalState(
             f'Stage5 无法从当前 Stage1/2 派生有据名字基线：{unattested[:8]}。'
             '先修正 Stage2 人物称呼并免费重建 stage4.context。')
+    # 私有探针展开 exact fact_ref；绝不把这份全书真相传给 Writer 材料。
+    secrets = []
+    relations = {r['relation_id']: r for r in global_projected['relations']}
+    rules = {r['rule_id']: r for r in global_projected['world_rules']}
+    for source in global_projected['arc_secrets']:
+        row = dict(source)
+        if row['fact'] is None:
+            ref = row['fact_ref']
+            if ref['kind'] == 'relation':
+                relation = relations[ref['relation_id']]
+                row['fact'] = (characters[relation['subject_id']]['canonical'] + ' ' + relation['predicate']
+                               + ' ' + characters[relation['object_id']]['canonical'])
+            else:
+                row['fact'] = next(v['desc'] for v in rules[ref['rule_id']]['versions']
+                                   if v['version_id'] == ref['version_id'])
+        secrets.append(row)
     return M.Book(
         title=ctx.title,
         ctx=context_payload,
         measurable=measurable,
         source_text=source_text,
-        secrets=((global_projected.get('canon') or {}).get('secrets') or []),
+        secrets=secrets,
         characters=name_registry,
     )
 

@@ -56,7 +56,7 @@ from novel.cli import exit_codes as X
 from novel.cli.exit_codes import CRASH
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, BlockingFindingsUnresolved,
-    GateBlocked, QueueConflict, TerminalState, UpstreamMissing, UpstreamStale,
+    GateBlocked, HumanEditProtected, QueueConflict, TerminalState, UpstreamMissing, UpstreamStale,
     UpstreamUnproven,
 )
 from novel.orchestrator import approvals, jobs, state as st
@@ -257,7 +257,12 @@ def stage2_core_recovery_item(base, sid: str, *, code: str | None = None) -> Que
         return QueueItem(sid=sid, node='stage2.analyze', flags=flags,
             steps=[] if surface.waiting_on else build_steps('stage2.analyze', sid, flags, base=base),
             waiting_on=surface.waiting_on, why=surface.why)
-    identity = core_edits.pending(base, sid)
+    try:
+        identity = core_edits.pending(base, sid)
+    except HumanEditProtected as exc:
+        # 审批账不可读时不知道是否有未闭合跨 owner 决定；不能跳过它再安排购买。
+        return QueueItem(sid=sid, node='stage2.global', flags=[], steps=[],
+                         waiting_on=WAITING_ON_INBOX, why=str(exc))
     if identity is not None:
         flags = ['--apply-core-edits', identity]
         return QueueItem(sid=sid, node='stage2.global', flags=flags,
@@ -521,6 +526,7 @@ def plan_book_from_overview(
 
     for node in planned_nodes:
         spec = NODES[node]
+        blueprint_repair_reason = None
         stage4_design_action_flags: tuple[str, ...] | None = None
         stage5_reviewer_rewrite_flags: tuple[str, ...] | None = None
         stage5_reviewer_rewrite_no_action = False
@@ -600,7 +606,18 @@ def plan_book_from_overview(
                     BlockingFindingsUnresolved):
                 why_blocked = WAITING_ON_STAGE2_REVIEW
             else:
-                if (st.stage2_blueprint_extraction_current(ov)
+                from novel.stages.stage2.plot_diagnostics import read_repair_diagnostics
+                try:
+                    diagnostic = read_repair_diagnostics(base, sid, code=approvals.projection_code())
+                except (ArtifactUnreadable, UpstreamMissing, UpstreamStale, UpstreamUnproven) as exc:
+                    why_blocked = WAITING_ON_INBOX
+                    blueprint_repair_reason = str(exc)
+                else:
+                    if diagnostic is not None and diagnostic['diagnostics']:
+                        why_blocked = WAITING_ON_INBOX
+                        blueprint_repair_reason = '; '.join(
+                            row['detail'] + '。' + row['recovery'] for row in diagnostic['diagnostics'])
+                if (why_blocked is None and st.stage2_blueprint_extraction_current(ov)
                         and stage2_rework is None and not stage2_close):
                     view = current_approvals.stage2_reviews.get('stage2.blueprint')
                     if view is None or view.state != 'accepted':
@@ -634,6 +651,8 @@ def plan_book_from_overview(
                 why_blocked = WAITING_ON_INBOX
 
         verdict, why = st.resume_verdict(ov, node)
+        if blueprint_repair_reason is not None:
+            why = blueprint_repair_reason
         if stage2_rework is not None and why_blocked is None:
             verdict, why = st.RESUME_RUN, '执行当前 Commander 已落盘的定向返工'
         elif projection_recovery and why_blocked is None:

@@ -30,7 +30,7 @@ from novel.stages.stage4.plot_placements import compile_placements, required_end
 from novel.stages.stage4.plot_measure import constraint_and_stage_readings
 from tests.plot_fixtures import blueprint as fixture_blueprint, links
 from tests.test_plot_blueprint import blueprint as two_beat_blueprint
-from tests.test_plot_design import design_response, inputs, planner_characters
+from tests.test_plot_design import design_response, inputs, planner_characters, planner_main
 
 
 A, B, C = 'b01_01', 'b01_02', 'b01_03'
@@ -52,7 +52,7 @@ def _blueprint(relations=()):
     raw.update(states=[], carry_out_refs=[], constraints=[
         {'constraint_id': f'c01_{index:02d}', 'kind': kind,
          'before_beat_ref': before, 'after_beat_ref': after,
-         'observer_char_id': 'char_002' if kind == 'observes' else None,
+         'observer': {'char_id': 'char_002'} if kind == 'observes' else None,
          'evidence_refs': ['e01_01', 'e01_02', 'e01_03']}
         for index, (kind, before, after) in enumerate(relations, 1)])
     return PlotBlueprint.model_validate(raw)
@@ -101,7 +101,8 @@ def _plan(arrangement):
 def _design_book(count=3):
     blueprints = [two_beat_blueprint(n).model_dump(mode='json') for n in range(1, count + 1)]
     truth, mapping = build_blind_projection(blueprints, root_clean_sha1='a' * 40,
-                                            global_g=planner_characters())
+        characters=planner_characters(), global_g=__import__('tests.plot_fixtures', fromlist=['GLOBAL']).GLOBAL,
+        main_text=planner_main(count))
     responses, chapters = [], []
     for chapter in truth['chapters']:
         response = {**design_response({'chapter': chapter}),
@@ -208,7 +209,7 @@ def test_semantic_repair_can_only_reference_registered_constraint_or_endpoint():
     from tests.test_plot_blueprint import chapter_response
     response = chapter_response()
     response['constraints'] = [{'constraint_key': 'c1', 'kind': 'response_to',
-        'before_beat_ref': 'b1', 'after_beat_ref': 'b2', 'observer_char_id': None,
+        'before_beat_ref': 'b1', 'after_beat_ref': 'b2', 'observer': None,
         'evidence': [{'start_para': 1, 'end_para': 2}]}]
     _bp, truth, mapping, public, private = inputs(response)
     raw = compile_blind_chapter_design(design_response(public), private, mapping,
@@ -296,7 +297,7 @@ def test_observer_and_knowledge_truth_are_not_certified_by_position(reverse):
     reading = constraint_and_stage_readings(bp.model_dump(mode='json'), _plan(arrangement), knowledge_links=links())
     assert reading['causal'][0]['kind'] == 'observes'
     assert reading['causal'][0]['disclosure_order'] == ('reverse' if reverse else 'forward')
-    assert bp.constraints[0].observer_char_id == 'char_002'
+    assert bp.constraints[0].observer.char_id == 'char_002'
     assert not any('verified' in key for key in reading)
     assert 'character_knowledge' not in reading, '排序不铸造人物知晓许可'
 

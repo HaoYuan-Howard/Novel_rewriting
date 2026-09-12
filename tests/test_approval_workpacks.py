@@ -38,16 +38,17 @@ SID = '123'
 
 def _structure_fixtures(response=None):
     """两章当前编译链的裁决材料；不读取历史原子化样本。"""
-    from contracts.schema.plot import PlotBlueprint
-    from contracts.schema.plot_materials import PlotChapterReviewMaterials
     from novel.stages.stage4.plot_binding import (
         build_evidence_catalog, construct_feasible_binding_witness,
-        merge_evidence_bindings, source_context_catalog,
+        merge_evidence_bindings,
     )
+    from novel.stages.stage4.plot_materials import chapter_materials
     from novel.stages.stage4.measure import adopt_plan_response
     from novel.stages.stage4.beats import beat_index
     from tests.test_plot_binding import candidate_book
     from tests.test_plot_blueprint import SOURCE
+    from tests.test_plot_design import planner_characters
+    from tests.plot_fixtures import GLOBAL, links
     blueprints, candidate = candidate_book(response)
     catalog = build_evidence_catalog(blueprints)
     payload = merge_evidence_bindings(candidate,
@@ -57,13 +58,12 @@ def _structure_fixtures(response=None):
     chapters = [PlanChapter.model_validate(row) for row in payload['output_chapters']]
     bps = {row['chapter_ordinal']: row for row in blueprints['blueprints']}
     materials = {}
-    for ordinal, raw in bps.items():
-        bp = PlotBlueprint.model_validate(raw)
-        materials[ordinal] = PlotChapterReviewMaterials(
-            blueprint=bp, support_subjects=[], global_subjects=[], knowledge_events=[],
-            source_context_catalog=source_context_catalog(bp), evidence_anchors=[],
-            source_materials=[{'chapter_ordinal': ordinal,
-                'ranges': [{'start': 0, 'end': len(SOURCE), 'text': SOURCE}]}])
+    for chapter in chapters:
+        materials[chapter.output_ordinal] = chapter_materials(chapter.output_ordinal,
+            blueprints, GLOBAL, links(), source,
+            [ref.model_dump(mode='json') for goal in
+                (chapter.chapter_goal, chapter.open_hook_goal, chapter.end_hook_goal)
+                for ref in goal.subject_refs], characters=planner_characters())
     return bps, chapters, materials
 
 
@@ -541,7 +541,7 @@ def test_stage_signature_conflict_discloses_every_candidate_without_threshold() 
     response = chapter_response()
     response['beats'][0]['source_contexts'] = [{
         'time_layer': 'present' if index % 2 else 'recall',
-        'place': f'地点{index}', 'present_char_ids': ['char_001', 'char_002'],
+        'place': f'地点{index}', 'present': [{'char_id': 'char_001'}, {'char_id': 'char_002'}],
         'evidence': [{'start_para': 1, 'end_para': 1}],
     } for index in range(1, 11)]
     bps, chapters, _materials = _structure_fixtures(response)

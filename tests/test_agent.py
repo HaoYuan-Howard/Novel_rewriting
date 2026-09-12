@@ -3633,6 +3633,7 @@ def _design_review_response(task, reason, *, stop=False):
     ).encode('utf-8')).hexdigest()
     return {
         'schema': agent.stage4_reviewer_wire.WIRE_SCHEMA,
+        'expected_options_sha256': agent.stage4_reviewer_wire.options_sha256(task),
         'selection': {'option_id': option_id,
                       'expected_exact_request_sha256': exact_sha, 'payload': payload},
     }
@@ -8297,17 +8298,20 @@ def _stage2_work_unit_harness(base, monkeypatch, *, mode='invalid', both=False):
         document = json.loads(Path(path).read_text(encoding='utf-8'))
         ordinal = document.get('ordinal')
         if ordinal is None:
-            ordinal = int(document['action']['input_payload']['reason'].removeprefix('轮次:'))
+            payload = document['action']['input_payload']
+            marker = (payload['setting']['social_context'] if progress['node'] == 'stage2.global'
+                      else payload['reason'])
+            ordinal = int(marker.removeprefix('轮次:'))
         progress['loads'] += 1
         if mode in {'invalid', 'repeat'} or (both and ordinal % 4 != 0):
             raise agent.reviewer_tasks.ReviewerTaskError('typed 字段仍未完整：' + str(ordinal))
         from contracts.artifacts import STAGE2_BLUEPRINT_EDIT
         from tests.test_plot_blueprint import chapter_response
-        payload = ({'actor': 'agent:test', 'reason': f'轮次:{ordinal}',
-                    'characters': [{'char_id': 'char_001', 'fate': '订正结局'}]}
+        payload = ({'setting': {'social_context': f'轮次:{ordinal}',
+                    'social_context_evidence_refs': [{'chapter_ordinal': 1, 'locator': '预算夹具的背景订正'}]}}
                    if progress['node'] == 'stage2.global' else {
                        'actor': 'agent:test', 'reason': f'轮次:{ordinal}',
-                       'review_token': 'bpe1_' + 'a' * 64,
+                       'review_token': 'bpe2_' + 'a' * 64,
                        'chapters': [{'chapter': chapter_response(), 'identities': [
                            {'collection': 'beats', 'kind': 'preserve',
                             'old_refs': [f'b01_0{index}'], 'new_keys': [f'b{index}']}

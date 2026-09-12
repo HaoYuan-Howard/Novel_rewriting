@@ -768,11 +768,12 @@ def _book_validation_projection(book: M.Book) -> dict[str, object]:
     原文与 secrets 只在内存里参与 hash，不进入 agent prompt、checkpoint 或 service audit。
     用内容 hash 而非正文保存，是为了让长 session 期间的私有校验输入漂移也关闭式失败。
     """
+    from novel.consumption import stage5_context
     source = getattr(book, 'source_text', {}) or {}
     return {
         'title': getattr(book, 'title', ''),
         'writer_context_sha256': _canonical_sha256(
-            getattr(book, 'ctx', {}) or {}),
+            stage5_context(getattr(book, 'ctx', {}) or {})),
         'measurable_sha256': _canonical_sha256(
             getattr(book, 'measurable', {}) or {}),
         'source_text_sha256': [

@@ -20,8 +20,10 @@ def test_sparse_literal_is_checked_only_at_registered_scene():
 
 def test_registered_reveal_slot_produces_semantic_attention_not_false_truth_verdict():
     secret = '裴书远其实就是她失散的父亲'
-    entry = {'output_ordinal': 1, 'knowledge_events': [{
-        'kind': 'secret_reveal', 'subject_ref': {'kind': 'secret', 'ref': 'secret_01'},
+    entry = {'output_ordinal': 1, 'global_subjects': [{
+        'subject_ref': {'kind': 'secret', 'ref': 'subject_01'}, 'value': {'fact': secret}}],
+        'knowledge_events': [{
+        'kind': 'secret_reveal', 'subject_ref': {'kind': 'secret', 'ref': 'subject_01'},
         'allowed_slots': ['s02'],
     }]}
     book = SimpleNamespace(secrets=[{'secret_id': 'secret_01', 'fact': secret}])

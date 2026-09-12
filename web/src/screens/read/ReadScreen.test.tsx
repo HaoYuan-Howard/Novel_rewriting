@@ -116,20 +116,34 @@ describe('Blueprint 章级与跨章阅读', () => {
     expect(screen.queryByRole('button', { name: '提交范围审阅决定' })).not.toBeInTheDocument()
     expect(submit).not.toHaveBeenCalled()
   })
-  it('保留全部叙述身份、状态和约束供对照，不另造事实正文', async () => {
-    await stubApi()
+  it.each([false, true])('保留叙述身份与实际状态，明确区分合法空列表（空状态：%s）', async (empty) => {
+    const { getPack } = await stubApi()
+    const pack = workpack()
+    if (empty) {
+      pack.material.blueprints[0].states = []
+      pack.material.blueprints[0].entry_state_refs = []
+      pack.material.blueprints[0].carry_out_refs = []
+    }
+    getPack.mockResolvedValue(pack)
     renderRead()
     await screen.findByText('章节审阅决定')
     fireEvent.click(screen.getByText(/持续状态（/))
-    expect(screen.getByText(/"focalizer_char_id": "char_001"/)).toBeVisible()
-    expect(screen.getByText('没有登记新的持续状态。')).toBeVisible()
+    expect(screen.getByText(/"focalizer": \{/)).toBeVisible()
+    if (empty) {
+      expect(screen.getByText('没有登记新的持续状态。')).toBeVisible()
+    } else {
+      for (const state of pack.material.blueprints[0].states) {
+        expect(screen.getByRole('article', { name: '持续状态 ' + state.state_id })).toHaveTextContent(state.content ?? state.global_ref!.ref)
+      }
+      expect(screen.queryByText('没有登记新的持续状态。')).not.toBeInTheDocument()
+    }
   })
   it('持续状态按工作包展示成立、结束、替代和证据，不靠正文猜生命周期', async () => {
     const { getPack } = await stubApi()
     const pack = workpack()
     pack.material.blueprints[0].states = [{
       state_id: 'st01_01', content: '李宝珠相信父亲已经回城。', global_ref: null,
-      modality: 'belief', holder_char_id: 'char_001',
+      modality: 'belief', holder: { char_id: 'char_001', presentation_ref: null },
       established_at: { kind: 'at_entry', beat_ref: null },
       ended_at: { kind: 'at_beat', beat_ref: 'b01_02' },
       supersedes_state_refs: [], evidence_refs: ['e01_01'],

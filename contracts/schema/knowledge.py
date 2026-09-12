@@ -240,9 +240,9 @@ class ArcSecretDraft(StrictModel):
 
 class KnowledgeDraft(StrictModel):
     setting: GlobalSetting[CoreEvidenceCandidateRef]
-    world_rules: list[WorldRuleDraft]
-    relations: list[RelationDraft]
-    arc_secrets: list[ArcSecretDraft]
+    world_rules: list[WorldRuleDraft] = Field(min_length=0)
+    relations: list[RelationDraft] = Field(min_length=0)
+    arc_secrets: list[ArcSecretDraft] = Field(min_length=0)
 
     @model_validator(mode='after')
     def _unique_handles(self):

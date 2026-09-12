@@ -16,9 +16,8 @@ class PlannerBeat(FrozenModel):
 
 class PlannerCharacter(FrozenModel):
     alias: OpaqueAlias
-    canonical: str = Field(min_length=1)
     surfaces: list[str] = Field(min_length=1)
-    role: str = Field(min_length=1)
+    role: str | None
 
 
 class PlannerBackgroundBeat(PlannerBeat):
@@ -58,22 +57,35 @@ class PlannerValueConstraint(FrozenModel):
 
 class PlannerAudience(FrozenModel):
     kind: Literal['character', 'group']
-    char_id: OpaqueAlias | None = None
+    actor_alias: OpaqueAlias | None = None
     label: str | None = None
+
+    @model_validator(mode='after')
+    def _tag(self):
+        if self.kind == 'character':
+            if self.actor_alias is None or self.label is not None:
+                raise ValueError('人物受众只携带呈现 alias')
+        elif self.label is None or self.actor_alias is not None:
+            raise ValueError('群体受众只携带明确群体名称')
+        return self
 
 
 class PlannerKnowledge(FrozenModel):
     event_alias: OpaqueAlias
-    subject_alias: OpaqueAlias
-    kind: Literal['secret_reveal', 'secret_setup', 'knowledge_event', 'world_rule',
+    # 空集只表示未消费关系的内部时间锚；不下发默认人物或未登记呈现。
+    subject_aliases: list[OpaqueAlias]
+    kind: Literal['secret_reveal', 'secret_setup', 'world_rule',
                   'world_rule_reveal', 'relation', 'relation_visibility',
-                  'character_state', 'setting', 'reader_reveal', 'character_knowledge']
+                  'setting', 'reader_reveal', 'character_knowledge']
     audience: PlannerAudience | None
     timing: Literal['at_entry', 'at_beats', 'future_chapter']
     trigger_beat_alias: OpaqueAlias | None = None
+    identity_aliases: list[OpaqueAlias] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _trigger(self):
+        if not self.subject_aliases and self.kind not in ('relation', 'relation_visibility'):
+            raise ValueError('只有未消费的关系时间锚可以没有呈现主体')
         if (self.timing == 'at_beats') != (self.trigger_beat_alias is not None):
             raise ValueError('知识触发节点与时点类型不匹配')
         return self
@@ -84,12 +96,12 @@ class PlannerEndpoint(FrozenModel):
     kind: Literal['state', 'constraint', 'knowledge']
     endpoint: Literal['established', 'ended', 'before', 'after', 'target', 'trigger']
     trigger_beat_alias: OpaqueAlias
-    subject_alias: OpaqueAlias
+    subject_aliases: list[OpaqueAlias]
 
 
 class PlannerGlobalSubject(FrozenModel):
     alias: OpaqueAlias
-    kind: Literal['relation', 'world_rule', 'secret', 'setting', 'character_state']
+    kind: Literal['relation', 'world_rule', 'secret', 'setting']
     value: JsonValue
 
 
@@ -123,8 +135,9 @@ class PlannerChapter(FrozenModel):
                                      if state.holder_alias is not None)
         referenced_characters.update(row.observer_alias for row in self.constraints
                                      if isinstance(row, PlannerRelation) and row.observer_alias is not None)
-        referenced_characters.update(row.audience.char_id for row in self.knowledge
-                                     if row.audience is not None and row.audience.char_id is not None)
+        referenced_characters.update(row.audience.actor_alias for row in self.knowledge
+                                     if row.audience is not None and row.audience.actor_alias is not None)
+        referenced_characters.update(ref for row in self.knowledge for ref in row.identity_aliases)
         if not referenced_characters <= set(characters):
             raise ValueError('规划引用的人物必须带可辨认的称呼与角色语义')
         beats = {b.alias for b in self.beats}
@@ -134,7 +147,7 @@ class PlannerChapter(FrozenModel):
         endpoints = [r.endpoint_alias for r in self.endpoints]
         if len(endpoints) != len(set(endpoints)):
             raise ValueError('规划真相端点身份重复')
-        if any(r.trigger_beat_alias not in beats or r.subject_alias not in subjects
+        if any(r.trigger_beat_alias not in beats or not set(r.subject_aliases) <= set(subjects)
                for r in self.endpoints):
             raise ValueError('必要端点必须引用本章节点与已下发主体')
         return self

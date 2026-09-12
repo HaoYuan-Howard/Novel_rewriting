@@ -38,6 +38,7 @@ from tests.test_design_review import (
     FACT, SID, _subjects, _template, isolated as design_isolated,
 )
 from tests.test_reviewer_work_unit_evidence import seed_commander_response
+from tests.test_stage4_reviewer_wire import _wire_response
 from tests.test_structure_approval import isolated as structure_isolated
 
 
@@ -158,12 +159,13 @@ def _response(task, decision):
                            else '结构事实完整且因果闭合'),
             } for index, row in enumerate(exact['chapters'])
             if not row.get('source_decision_sha256')}}
-    return {'schema': wire.WIRE_SCHEMA, 'selection': {
+    return _wire_response(task, {'schema': wire.WIRE_SCHEMA,
+        'expected_options_sha256': wire.options_sha256(task), 'selection': {
         'option_id': option['id'],
         'expected_exact_request_sha256': hashlib.sha256(
             _canonical(option['exact_request'])).hexdigest(),
         'payload': payload,
-    }}
+    }})
 
 
 def _probe_driver(root, response, *, disconnect_first=False):
@@ -341,7 +343,8 @@ def test_structure_resolution_stop_survives_native_wire_without_an_approval(desi
         prompt='按当前 B 决定和 A 工作包裁决，只有具体结构损害才有修订权。',
         submission_options=tuple(options))
     option = next(row for row in options if row['id'].startswith('stop:'))
-    response = {'schema': wire.WIRE_SCHEMA, 'selection': {
+    response = {'schema': wire.WIRE_SCHEMA,
+        'expected_options_sha256': wire.options_sha256(task), 'selection': {
         'option_id': option['id'],
         'expected_exact_request_sha256': hashlib.sha256(_canonical(option['exact_request'])).hexdigest(),
         'payload': {'reason': '逐章交叉审阅只见度量差异，没有可指向场景或事实的结构损害'},

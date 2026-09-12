@@ -19,6 +19,7 @@ from novel.commanders import CodexCommanderDriver
 from novel.commanders import base as commander_base
 from novel.orchestrator import approvals, inspection, queue, reviewer_tasks, service_lifecycle
 from novel.orchestrator import stage4_reviewer_wire as wire
+from tests.test_stage4_reviewer_wire import _wire_response
 from tests.test_design_review import (
     FACT, SID, _accept_all, _mixed_repair_subjects, _subjects, _template,
     isolated as design_isolated,
@@ -124,12 +125,13 @@ def _native_response(task, *, repair=False):
     if not source['strategy'].get('source_decision_sha256'):
         payload['strategy'] = {'decision': 'accept', 'reason': '当前策略可承载事实',
                                'replan_constraints': []}
-    return {'schema': wire.WIRE_SCHEMA, 'selection': {
+    return _wire_response(task, {'schema': wire.WIRE_SCHEMA,
+        'expected_options_sha256': wire.options_sha256(task), 'selection': {
         'option_id': option['id'],
         'expected_exact_request_sha256': hashlib.sha256(
             _json_bytes(option['exact_request'])).hexdigest(),
         'payload': payload,
-    }}
+    }})
 
 
 def _actual_cli_prompt(base: Path, task, response: dict[str, Any]):
