@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes, useNavigate, useParams } from 'react-route
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { api } from '@/api/endpoints'
-import { mockApi, SAMPLE_SID } from '@/api/mock'
+import { mockApi, SAMPLE_SID, PLOT_SAMPLE_SID } from '@/api/mock'
 import { qk } from '@/api/queryKeys'
 import { Rail } from '@/components/app/Rail'
 import { BookLayout } from '@/components/app/BookLayout'
@@ -31,10 +31,10 @@ function client() {
   } })
 }
 
-function atBook(ui: ReactElement, qc = client()) {
+function atBook(ui: ReactElement, qc = client(), sid = SID) {
   return { qc, ...render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/n/' + SID + '/run']}
+      <MemoryRouter initialEntries={['/n/' + sid + '/run']}
         future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <ChromeProvider><Routes><Route path="/n/:sid/*" element={ui} /></Routes></ChromeProvider>
       </MemoryRouter>
@@ -42,11 +42,11 @@ function atBook(ui: ReactElement, qc = client()) {
   ) }
 }
 
-async function source() {
-  const novel = await mockApi.getNovel(SID)
-  const approvals = await mockApi.getApprovals(SID)
-  const inbox = await mockApi.getInbox(SID)
-  const sample = await mockApi.getCheck(SID, 'stage4')
+async function source(sid = SID) {
+  const novel = await mockApi.getNovel(sid)
+  const approvals = await mockApi.getApprovals(sid)
+  const inbox = await mockApi.getInbox(sid)
+  const sample = await mockApi.getCheck(sid, 'stage4')
   if (!sample || !sample.rules.length) throw new Error('Stage4 测试报告缺正式形状')
   const oldReport: CheckReport = {
     ...sample, badge: 'fail', passed: false,
@@ -70,7 +70,7 @@ async function source() {
   }
   const oldApprovals = { ...approvals, gate: { ...approvals.gate, s2: true, s4: false } }
   const freshApprovals = { ...oldApprovals, gate: { ...oldApprovals.gate, s4: true } }
-  const initial = await mockApi.getRunProgress(SID)
+  const initial = await mockApi.getRunProgress(sid)
   let progress: RunProgress = {
     ...initial,
     stage_done: { ...initial.stage_done, stage4: false },
@@ -82,7 +82,7 @@ async function source() {
     events_tail: [],
   }
   const active: AgentRunRecord = {
-    run_id: 'refresh-parent', start: { sid: SID, argv: [], prompt: '', authorized: true,
+    run_id: 'refresh-parent', start: { sid, argv: [], prompt: '', authorized: true,
       egress_authorized: true, code_version: 'a'.repeat(40), profiles: READY_PROFILES },
     contract: null, epochs: [], active_epoch_id: null, started: 1, ended: null,
     exit_code: null, state: 'running', note: null, outcome: null,
@@ -124,7 +124,7 @@ async function source() {
           ? { ...step, beacon: 'ok', last_exit: 0, last_ts: 12, elapsed: null }
           : step.node === 'stage5.write'
             ? { ...step, beacon: 'running', last_ts: 13, elapsed: 1 } : step),
-        events_tail: [{ ts: 12, sid: SID, run_id: active.run_id, execution_id: 'plan-complete',
+        events_tail: [{ ts: 12, sid, run_id: active.run_id, execution_id: 'plan-complete',
           node: 'stage4.plan', phase: 'end', exit_code: 0, note: null, beacon: 'ok' }],
       }
     },
@@ -166,29 +166,30 @@ async function refetch(qc: QueryClient, key: readonly unknown[]) {
 
 describe('Agent 进展驱动书级读模型刷新', () => {
   it('长驻 Stage7 页也挂载进度与终态观察，自动完成和拒绝即时刷新下载事实', async () => {
-    const live = await source()
-    const view = await mockApi.getStage7(SID)
+    const sid = PLOT_SAMPLE_SID
+    const live = await source(sid)
+    const view = await mockApi.getStage7(sid)
     const getStage7 = vi.spyOn(api, 'getStage7').mockResolvedValue({ ...view,
       delivery: { state: 'stopped', reason: '尚待自动装配', checked_at: 1 },
     })
-    const { qc } = atBook(<><BookLayout /><Stage7Screen /></>)
+    const { qc } = atBook(<><BookLayout /><Stage7Screen /></>, client(), sid)
     expect(await screen.findByText(/尚待自动装配/)).toBeVisible()
     await settled(qc)
-    expect(live.getProgress).toHaveBeenCalledWith(SID)
-    expect(live.getRuns).toHaveBeenCalledWith(SID)
+    expect(live.getProgress).toHaveBeenCalledWith(sid)
+    expect(live.getRuns).toHaveBeenCalledWith(sid)
 
     live.advance()
     getStage7.mockResolvedValue({ ...view,
       delivery: { state: 'ready_with_disclosures', reason: '当前交付已闭合', checked_at: 2 },
     })
-    await refetch(qc, qk.run(SID))
+    await refetch(qc, qk.run(sid))
     expect(await screen.findByRole('button', { name: '下载 ' + view.book_filename })).toBeEnabled()
 
     live.end('unknown')
     getStage7.mockResolvedValue({ ...view,
       delivery: { state: 'unknown', reason: '当前来源无法复验', checked_at: 3 },
     })
-    await refetch(qc, qk.agentRuns(SID))
+    await refetch(qc, qk.agentRuns(sid))
     expect(await screen.findByText(/当前来源无法复验/)).toBeVisible()
     expect(screen.queryByRole('button', { name: '下载 ' + view.book_filename })).not.toBeInTheDocument()
   })

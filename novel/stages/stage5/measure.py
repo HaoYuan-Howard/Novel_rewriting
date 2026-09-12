@@ -97,10 +97,11 @@ def legacy_stage5_paths(source: ArtifactStore | Path) -> list[str]:
     ]
 
 
-def load_drafts(store: ArtifactStore, *, require_current: bool = True
+def load_drafts(store: ArtifactStore, *, require_current: bool = True,
+                chapter_ordinals: frozenset[int] | None = None
                 ) -> tuple[dict[int, dict[str, Any]], list[str],
                            dict[str, JudgedDraft]]:
-    """全部 canonical 成稿 → `({output_ordinal: rec}, invalids, judged)`。**唯一落点。**
+    """指定范围（缺省全书）的 canonical 成稿 → `({output_ordinal: rec}, invalids, judged)`。**唯一落点。**
 
     ⚠⚠ **一律走 `store.read_judged`，绝不走 `store.read`**：canonical 路径只有
     两级，可以被消费指纹无损反查。
@@ -118,6 +119,10 @@ def load_drafts(store: ArtifactStore, *, require_current: bool = True
     pattern = os.path.join(store.path(directory_rel), 'ch*.json')
     for p in sorted(glob.glob(pattern)):
         base = os.path.basename(p)
+        if chapter_ordinals is not None:
+            selected = re.fullmatch(r'ch(\d+)(?:\.INVALID)?\.json', base)
+            if selected is None or int(selected.group(1)) not in chapter_ordinals:
+                continue
         rel = f'{directory_rel}/{base}'
         if re.fullmatch(r'ch\d+\.INVALID\.json', base):
             invalids.append(rel)

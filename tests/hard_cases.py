@@ -9,12 +9,14 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 from typing import Callable, NamedTuple
 
 
 class Case(NamedTuple):
     stage: str
-    build: Callable[[], list]
+    build: Callable[..., list]
+    uses_tmp_path: bool = False
 
 
 # ═══ Stage6 ══════════════════════════════════════════════════════════════════
@@ -29,6 +31,45 @@ def _hook(text: str, *, src_hook: str | None = None, characters: dict | None = N
 
 
 _SRC_HOOK = '她推开门，看见满地的信纸，和一段没有寄出的往事，写满了整面墙壁。'
+
+
+def _prepare_report(base: Path, *, broken: bool):
+    """只替换 E 运输；证据编译、INVALID 落盘和免费判据均执行生产入口。"""
+    import json
+
+    from novel.errors import GateBlocked
+    from novel.node_agents import Stage6PrepareAgent
+    from novel.stages.stage6 import prepare
+    from novel.store import ArtifactStore
+    from tests.test_stage6_prepare import prepare_ctx, response
+    from tests.test_stage2_global_agent import _Driver, _free_ctx
+
+    ctx = prepare_ctx(base)
+    payload = response()
+    if broken:
+        # 只破坏正文支持的段终点；章、支持类型与连续开篇边界仍合法。
+        payload['source_blurb']['facts'][0]['evidence']['end_para'] = 99
+    driver = _Driver([json.dumps(payload, ensure_ascii=False)], ctx.novel_dir,
+                     session_id=ctx.run_id)
+    try:
+        Stage6PrepareAgent(ctx, driver=driver).run()
+    except GateBlocked:
+        if not broken:
+            raise
+    else:
+        assert not broken, '越界段落不能被 Prepare 正式发布'
+    store = ArtifactStore(ctx)
+    assert store.exists(prepare.INVALID) is broken
+    assert store.exists(prepare.REL) is (not broken)
+    assert not store.exists(prepare.REVIEW), '机械绿底不能自行获得语义接受'
+    report = prepare.run_check_only(_free_ctx(ctx))
+    assert len(driver.calls) == 1, '免费重验不能再购买回答'
+    return report
+
+
+def _prepare_evidence_invalid(base: Path) -> list:
+    report = _prepare_report(base, broken=True)
+    return [finding for row in report.rules for finding in row.findings]
 
 
 # ═══ Stage7 ══════════════════════════════════════════════════════════════════
@@ -175,6 +216,7 @@ def _bad_context4(rule: str) -> list:
 # ═══ 登记表 ═══════════════════════════════════════════════════════════════════
 
 CASES: dict[str, Case] = {
+    'prepare_evidence_valid': Case('stage6', _prepare_evidence_invalid, uses_tmp_path=True),
     'hook_empty': Case('stage6', lambda: _hook('短。')),
     'hook_truncated': Case('stage6', lambda: _hook(
         '这条文案写到一半没有任何终止标点就停在这里像被拦腰截断')),

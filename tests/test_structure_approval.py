@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from tests.factories import missing_prepare_state
 from pydantic import ValidationError
 
 from contracts.artifacts import (
@@ -263,7 +265,7 @@ def test_all_accept_opens_s4_persists_current_history_and_is_idempotent(isolated
     base, _book, state = isolated
     request = _request('accept', 'accept')
     first = approvals.approve_structure(base, SID, request)
-    assert first.v == 7 and first.gate['s4']
+    assert first.v == 8 and first.gate['s4']
     assert first.structure.state == 'accepted'
     assert first.structure.current_decision is not None
     assert state['record'].v == 8
@@ -382,7 +384,8 @@ def test_fresh_infeasible_binding_requires_typed_resolution_and_hides_reused_b(
 
     monkeypatch.setattr(approvals, '_current_structure_subject_and_chapters', no_plan)
     monkeypatch.setattr(approvals, '_current_design_subjects', no_plan)
-    monkeypatch.setattr(approvals, '_store_for', lambda _novel_dir: object())
+    monkeypatch.setattr(approvals, '_store_for',
+                        lambda _novel_dir: SimpleNamespace(exists=lambda _rel: False))
     monkeypatch.setattr(
         approvals, 'current_infeasible_binding',
         lambda _store: SimpleNamespace(status='infeasible'),
@@ -543,6 +546,7 @@ def test_structure_route_accepts_the_typed_body(monkeypatch, tmp_path):
 
     captured = {}
     response = ApprovalDoc(
+        prepare=missing_prepare_state(),
         sid=SID,
         gate={key: False for key in APPROVAL_GATES},
         seen={key: False for key in APPROVAL_SEEN},
@@ -564,13 +568,14 @@ def test_structure_route_accepts_the_typed_body(monkeypatch, tmp_path):
             json=_request('accept', 'accept').model_dump(mode='json'),
         )
     assert got.status_code == 200, got.text
-    assert got.json()['v'] == 7
+    assert got.json()['v'] == 8
     assert captured['sid'] == SID
     assert isinstance(captured['request'], StructureApprovalRequest)
 
 
 def _empty_approval_response() -> ApprovalDoc:
     return ApprovalDoc(
+        prepare=missing_prepare_state(),
         sid=SID,
         gate={key: False for key in APPROVAL_GATES},
         seen={key: False for key in APPROVAL_SEEN},

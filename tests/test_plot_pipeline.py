@@ -78,7 +78,59 @@ def complete_stage5(book):
     assert approvals.approve_stage5_closure(book.parent, ctx.sid, closure).gate['s5']
 
 
+def complete_stage6_prepare(book):
+    """真实 Prepare session/落盘/独立接受；只替换模型传输，保留未接受阻断。"""
+    import pytest
+    from contracts.schema.stage6_prepare import PrepareDecision
+    from novel.errors import ProvenanceRefused
+    from novel.node_agents import Stage6PrepareAgent
+    from novel.stages.stage6 import hook, prepare
+    from tests.test_stage2_global_agent import _Driver, _profile
+
+    ctx = _ctx(book, 'stage6.prepare')
+    ctx.executor_profile = _profile()
+    response = {'source_blurb': {
+        'facts': [{'kind': 'supported', 'claim_id': 'hook_001',
+                   'claim': '李宝珠收到父亲已经回城的来信。',
+                   'evidence': {'chapter_ordinal': 1, 'start_para': 3, 'end_para': 4}}],
+        'opening': {'kind': 'proposed', 'through_chapter': 1,
+                    'rationale': '首章来信与收信行动完整承接原钩子，次章另起清晨场景',
+                    'boundary_evidence': {'chapter_ordinal': 1, 'start_para': 5, 'end_para': 6}},
+    }}
+    driver = _Driver([json.dumps(response, ensure_ascii=False)], book,
+                     session_id=f'prepare-{ctx.run_id}')
+    result = Stage6PrepareAgent(ctx, driver=driver).run()
+    assert result.passed and result.turns == len(driver.calls) == 1
+    request = driver.calls[0][1].prompt
+    assert request.count('春风吹过老宅的院墙。') == 1
+    assert request.count('李宝珠收到父亲已经回城的来信。') == 1
+    assert 'entities' not in request and 'arc_secrets' not in request
+
+    with pytest.raises(ProvenanceRefused, match='Prepare 未接受'):
+        hook.build_prompt(_ctx(book, 'stage6.hook', paid=False))
+    review_ctx = _ctx(book, 'stage6.prepare', paid=False)
+    pack = prepare.approval_workpack(ArtifactStore(review_ctx))
+    assert pack.state.state == 'pending'
+    assert not approvals.get(book.parent, ctx.sid).gate['s6']
+    decision = PrepareDecision(
+        review_token=pack.state.review_token, source_sha256=pack.state.subject_sha256,
+        decision='accept', actor='test:独立文案准备审阅者',
+        reason='全文与原钩子核对，来信支持与首章连续范围成立', edit=None)
+    prepare.submit_review(review_ctx, decision)
+    prepare_report = prepare.run_check_only(_ctx(book, 'stage6.prepare', paid=False))
+    assert prepare_report.passed and prepare_report.node == 'stage6.prepare'
+    assert {row.rule for row in prepare_report.rules} == {
+        'prepare_evidence_valid', 'prepare_semantic_review'}
+    assert prepare_report.counts.skipped == 0
+    reloaded = ArtifactStore(_ctx(book, 'stage6.hook', paid=False))
+    assert prepare.require_accepted(reloaded).source_blurb.opening.through_chapter == 1
+    assert not approvals.get(book.parent, ctx.sid).gate['s6'], 'Prepare 接受不得代替最终文案接受'
+    assert len(driver.calls) == 1, '免费审阅和重启读回不得重购原准备回答'
+    return result.artifact
+
+
 def complete_stage6(book):
+    complete_stage6_prepare(book)
     from novel.stages.stage6 import hook, semantic
     hook_ctx = _ctx(book, 'stage6.hook')
     texts = ['来信说，父亲已经回了城。\n\n廊下的李宝珠看过残花，把那封信折进衣袖。',
@@ -89,6 +141,7 @@ def complete_stage6(book):
         'rationale': '分别呈现回城来信、母亲知情与账房日常。'}))
     hook_art = hook.run_hook(hook_ctx, hook_client)
     assert len(hook_wire.calls) == 1
+    assert set(hook_art.judged) == {'stage5/ch01.json'}, 'Hook仅绑定实际开篇章稿'
     judge_ctx = _ctx(book, 'stage6.semantic')
     prepared = semantic.prepare_semantic_candidate(judge_ctx)
     from tests.test_stage6_semantic import _response_review
@@ -99,10 +152,26 @@ def complete_stage6(book):
     judge_client, judge_wire = _client(judge_ctx, judge)
     semantic.run_semantic(judge_ctx, judge_client)
     assert len(judge_wire.calls) == 2
+    assert set(prepared.judged) == {'stage5/ch01.json'}
     approve_ctx = _ctx(book, 'stage6.approve', paid=False)
     pack = hook.approval_workpack(ArtifactStore(approve_ctx))
+    assert [row.chapter_ordinal for row in pack.materials.rewritten_chapters] == [1, 2, 3]
+    assert pack.materials.prepare_subject_sha256
     hook.run_approve(approve_ctx, pick=1, actor='test:文案审阅者',
                      reason='合成候选与原文、全书成稿已对照', review_token=pack.review_token)
+    from contracts.rules import REGISTRY
+    checked = hook.run_check_only(_ctx(book, 'stage6.hook', paid=False))
+    assert checked.passed and checked.counts.skipped == 0, checked.model_dump_json()
+    assert {row.rule for row in checked.rules} == {rule.rule for rule in REGISTRY.of_stage('stage6')}
+    preparation = {row.rule: row for row in checked.rules if row.rule.startswith('prepare_')}
+    assert preparation['prepare_evidence_valid'].status == 'ok'
+    assert preparation['prepare_semantic_review'].status == 'unver'
+    assert '当前 Prepare 已经独立接受' in preparation['prepare_semantic_review'].why
+    assert approvals.get(book.parent, hook_ctx.sid).gate['s6']
+    grid, identity_report = hook.run_identity(_ctx(book, 'stage6.hook', paid=False))
+    assert not set(preparation).intersection(grid), '准备接受不是原作文案字符串的 0/1 恒等格'
+    identity_preparation = {row.rule: row for row in identity_report.rules if row.rule.startswith('prepare_')}
+    assert identity_preparation == preparation, '恒等报告也须实际核验同一 Prepare 前置'
 
 
 def complete_stage7(book):

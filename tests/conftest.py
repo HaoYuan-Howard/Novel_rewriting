@@ -60,6 +60,7 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_work_unit_grants.py',
     'tests/test_stage6_legacy_semantic_recovery.py',
     'tests/test_stage6_prepared_cli.py',
+    'tests/test_stage6_prepare_http.py',
     'tests/test_legacy_work_unit_recovery.py',
     'tests/test_agent_session_client.py',
     'tests/test_reviewer_protocol_recovery.py',

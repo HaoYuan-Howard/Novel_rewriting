@@ -125,8 +125,9 @@ session 或执行 epoch 不清空累计用量。格式错误和实际修订按�
 
 ## KnowledgeLinks 与收口
 
-KnowledgeLinks v2 只引用已有主体，State modality 不描述传播权限。必要知识义务保留
-typed 关联及有效历史闭合，不恢复全量事实审计清单。未决关联继续阻断。
+KnowledgeLinks v3 只引用已有主体，并以 ActorRef/ActorBinding 区分内部实体与表面呈现；
+人物受众和身份映射披露分别绑定实际事件及端点，State modality 不描述传播权限。必要知识义务
+保留 typed 关联及有效历史闭合，不恢复全量事实审计清单。未决关联继续阻断。
 
 Global 当前接受、Blueprint 全章有效接受、独立跨章接受及知识闭合齐全后，
 stage2.blueprint --close-review 免费物化关联、补 seen/gate。服务只写 _service，

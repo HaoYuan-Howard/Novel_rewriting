@@ -240,6 +240,10 @@ _WITHHELD: dict[str, str] = {
         'Stage6 workpack 已随包携带；UI 只回传 opaque token，不自行重算身份'),
     'STAGE7_REVIEW_CONTRACT': (
         'Stage7 workpack 已随包携带；UI 只回传 opaque token，不自行重算身份'),
+    'STAGE6_APPROVAL_CHECK_BASIS': (
+        '固定检查基准由 Stage6 workpack 的 check_basis 提供；不是可选项，前端不据此判定当前审批'),
+    'STAGE7_APPROVAL_CHECK_BASIS': (
+        '固定检查基准由 Stage7 workpack 的 check_basis 提供；不是可选项，当前交付仍读后端判定'),
     'BLIND_ALIAS_ALGORITHM': 'Stage4A 审计用的 opaque alias 算法身份；前端既不生成 alias，'
                              '也不据此判断候选是否可用',
     'PIPELINE_DEFAULT_CONCURRENCY': '并发默认由 Agent capability 发布，enums 不另复制',

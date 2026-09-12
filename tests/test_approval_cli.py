@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.factories import missing_prepare_state
+
 from contracts.invariants import APPROVAL_GATES, APPROVAL_SEEN
 from contracts.schema.api import (
     Stage2FinalReviewRequest, Stage2GlobalSeenRequest,
@@ -29,6 +31,7 @@ SUBJECT = 'a' * 64
 
 def _doc() -> ApprovalDoc:
     return ApprovalDoc(
+        prepare=missing_prepare_state(),
         sid=SID,
         gate={key: False for key in APPROVAL_GATES},
         seen={key: False for key in APPROVAL_SEEN},
@@ -85,7 +88,7 @@ def test_headless_seen_and_early_gates_reuse_approval_services(
 def _final_request() -> Stage2FinalReviewRequest:
     return Stage2FinalReviewRequest(
         actor='agent:final-seat', reason='独立通读全部 blocking 项与 Blueprint',
-        global_review_token='s2gr1_' + 'c' * 64,
+        global_review_token='s2gr2_' + 'c' * 64,
         blueprint_review_token='bpr5_' + 'b' * 64)
 
 
@@ -93,7 +96,7 @@ def test_headless_global_seen_requires_and_parses_a_typed_subject(
         monkeypatch, capsys, tmp_path):
     calls = []
     subject = Stage2GlobalSeenRequest(
-        review_token='s2gr1_' + 'c' * 64, actor='人工审阅者')
+        review_token='s2gr2_' + 'c' * 64, actor='人工审阅者')
     source = tmp_path / 'global-seen.json'
     source.write_text(subject.model_dump_json(indent=2), encoding='utf-8')
     monkeypatch.setattr(
@@ -174,7 +177,7 @@ def test_stage2_closure_checks_current_nodes_and_links_before_existing_services(
          BlueprintSeenRequest(review_token='bpr5_' + 'b' * 64), None),
         ('seen', 'base', SID, 'global', None,
          Stage2GlobalSeenRequest(
-             review_token='s2gr1_' + 'c' * 64, actor='global-commander')),
+             review_token='s2gr2_' + 'c' * 64, actor='global-commander')),
         ('gate', 'base', SID, 's2'),
     ]
 

@@ -574,6 +574,14 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
                if state.resume_verdict(overview, action.kind)[0] != state.RESUME_SKIP]
         for gate, actions in candidates.items()
     }
+    from novel.stages.stage6 import prepare as prepare_stage6
+    prepare_state = prepare_stage6.view_state(_store_for(paths.resolve_novel_dir(base, sid)))
+    if prepare_state.pending_commit:
+        spawns['s5'] = [ApprovalAction(kind='stage6.prepare', label='免费补齐原准备决定', extra=['--recover-edit'])]
+    elif prepare_state.state == 'missing':
+        spawns['s5'] = [ApprovalAction(kind='stage6.prepare', label='准备原钩子事实与开篇范围')]
+    elif prepare_state.state != 'accepted':
+        spawns['s5'] = []
     # Stage2 两份付费生成各自确认；只有 Global 当前接受才可发布 Blueprint。
     # 浏览器只渲染服务端动作，不从已读或逐项 PASS 反推节点接受。
     global_action = ApprovalAction(
@@ -634,6 +642,8 @@ def _view(
     structure = _structure_view(novel_dir, record)
     writing_approval = _writing_view(novel_dir, record)
     closure = _closure_view(novel_dir, record)
+    from novel.stages.stage6 import prepare as prepare_stage6
+    prepare_state = prepare_stage6.view_state(_store_for(novel_dir))
     spawns = _spawns(base, record.sid) if include_spawns else {}
     decision = design_review.current_decision
     if (
@@ -679,6 +689,7 @@ def _view(
         structure=structure,
         writing_approval=writing_approval,
         closure=closure,
+        prepare=prepare_state,
         spawns=spawns,
     )
 
@@ -1479,7 +1490,8 @@ def _current_design_subjects(novel_dir: Path) -> _DesignSubjects:
     from novel.stages.stage4.design_evolution import (
         chapter_strategy_sha256, strategy_epoch_sha256,
     )
-    root_clean_sha1 = _root_clean_sha1(novel_dir)
+    from novel.source_identity import artifact_body_root
+    root_clean_sha1 = artifact_body_root(store, STAGE2_CHAPTER_BLUEPRINTS)
     _require_fresh_json(store, STAGE2_CHAPTER_BLUEPRINTS)
     blueprints, _blueprints_raw = store.read_own(
         ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)
@@ -1794,6 +1806,27 @@ def _require_current_text(novel_dir: Path, rel: str) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _proof_source_root(store: ArtifactStore, rels: tuple[str, ...] | list[str]) -> str:
+    """正文证明保留原主体的来源根；钩子、未知输入仍绑定当前完整 clean 根。
+
+    每份主体仍先通过原 freshness 和字节核验。仅来源可证等价时保持已签内容的
+    原根，不写新票、不修改原产物；任一真实材料变化仍由 artifacts 摘要使票过期。
+    """
+    from novel.consumption import producer_node
+    from novel.source_identity import BODY_OWNERS, artifact_body_root
+    body_rels: list[str] = []
+    for rel in rels:
+        if rel in (STAGE1_MAIN_TEXT, STAGE2_GLOBAL_REVIEW):
+            continue  # 无 producer provenance；其当前性和字节仍属于 proof。
+        if producer_node(rel) not in BODY_OWNERS:
+            return store.ctx.root_clean_sha1
+        body_rels.append(rel)
+    if not body_rels:
+        return store.ctx.root_clean_sha1
+    roots = [artifact_body_root(store, rel) for rel in body_rels]
+    return roots[0]
+
+
 def _make_proof(
     novel_dir: Path,
     rels: tuple[str, ...] | list[str],
@@ -1810,7 +1843,7 @@ def _make_proof(
             else _require_fresh_json(store, rel)
         )
     return _ApprovalProof(
-        root_clean_sha1=_root_clean_sha1(novel_dir),
+        root_clean_sha1=_proof_source_root(store, rels),
         artifacts=subjects,
         decision_sha256=_decision_sha256(decision),
     )
@@ -2786,6 +2819,8 @@ def _require_typed_gate_decision(store: ArtifactStore, gate: str) -> str | None:
         from novel.stages.stage2 import global_review as stage2_global_review
         stage2_global_review.require_approved(store.ctx)
     elif gate == 's6':
+        from novel.stages.stage6 import prepare as prepare_stage6
+        prepare_stage6.require_accepted(store)
         hook, _ = store.read_own(Hook, STAGE6_HOOK)
         from novel.stages.stage6 import semantic
         semantic.require_approved_clear(store, hook)
@@ -2814,7 +2849,7 @@ def _blueprint_seen_proof(
     # 契约。代码/rules/provenance 改变会得到新 validation seal，但只要工作包
     # 的内容/finding identity 未变，旧人工阅读事实就能在免费复检后自动复活。
     proof = _ApprovalProof(
-        root_clean_sha1=_root_clean_sha1(novel_dir),
+        root_clean_sha1=_proof_source_root(_store_for(novel_dir), [STAGE2_CHAPTER_BLUEPRINTS]),
         artifacts={
             STAGE2_CHAPTER_BLUEPRINTS: workpack.review_identity_sha256,
         },
@@ -2848,7 +2883,7 @@ def _blueprint_seen_snapshot(
             raise ApprovalRequired('Blueprint 全书阅读证明缺当前章审与跨章接受')
         subject = next(row.subject_sha256 for row in progress.scopes if row.scope == 'cross_chapter')
         proof = _ApprovalProof(
-            root_clean_sha1=_root_clean_sha1(novel_dir),
+            root_clean_sha1=_proof_source_root(_store_for(novel_dir), [STAGE2_CHAPTER_BLUEPRINTS]),
             artifacts={STAGE2_CHAPTER_BLUEPRINTS: subject},
             decision_sha256=_decision_sha256({
                 'kind': 'seen', 'key': 'read', 'contract': CONTRACT,
@@ -2975,6 +3010,31 @@ def _same_proof(expected: _ApprovalProof | None, current: _ApprovalProof) -> boo
     return expected is not None and expected == current
 
 
+def _same_partition_confirmation(
+    novel_dir: Path, expected: _ApprovalProof | None, current: _ApprovalProof,
+) -> bool:
+    """原切分确认在只改钩子后仍有效；不把 Stage0 接受变成新的 Stage1 票。
+
+正文与切分必须逐字不变，且旧票的两份 SHA 都由旧 revision 原样重建。
+当前两份材料已经过普通 proof 的 freshness；此处只证明旧确认仍适用。
+"""
+    from novel.source_identity import revision_proof
+    subjects = {STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY}
+    if (expected is None or set(expected.artifacts) != subjects
+            or set(current.artifacts) != subjects
+            or expected.root_clean_sha1 == current.root_clean_sha1
+            or expected.decision_sha256 != current.decision_sha256):
+        return False
+    try:
+        proof = revision_proof(_store_for(novel_dir), expected.root_clean_sha1)
+    except (NovelError, ValueError, OSError):
+        return False
+    return (proof.body_unchanged and proof.target_root == current.root_clean_sha1
+            and expected.artifacts[STAGE1_MAIN_TEXT] == proof.main_text_sha256
+            and current.artifacts[STAGE1_MAIN_TEXT] == proof.main_text_sha256
+            and expected.artifacts[STAGE1_HOOK_COPY] == proof.source_hook_copy_sha256)
+
+
 def _current_typed_gate_proof(
     novel_dir: Path, gate: str, record: _ApprovalRecordV8,
 ) -> _ApprovalProof:
@@ -3026,7 +3086,8 @@ def _effective_record(novel_dir: Path, record: _ApprovalRecordV8) -> _ApprovalRe
             current = _proof_for_gate(novel_dir, gate, record)
         except NovelError:
             current = None
-        if current is None or not _same_proof(gate_proofs[gate], current):
+        if current is None or not (_same_proof(gate_proofs[gate], current)
+                or gate == 's1' and _same_partition_confirmation(novel_dir, gate_proofs[gate], current)):
             gates[gate] = False
             gate_proofs[gate] = None
 

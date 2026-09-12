@@ -23,8 +23,9 @@ from uuid import uuid4
 
 from contracts.artifacts import ARTIFACT_PATHS, STAGE1_MAIN_TEXT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHARACTERS
 from contracts.schema.workflow import (
-    WorkflowManifestV4, WorkflowManifestV5, WorkflowTransitionCompletedV1,
+    WorkflowManifestV4, WorkflowManifestV5, WorkflowManifestV6, WorkflowTransitionCompletedV1,
     WorkflowTransitionPendingV1, WorkflowTransitionPreparedV1, WorkflowTransitionProofV1,
+    WorkflowTransitionPreparedV2, WorkflowTransitionProofV2,
     WorkflowTransitionProjectionV1, WorkflowTransitionRefV1,
 )
 from novel import paths, work_units
@@ -36,8 +37,27 @@ class WorkflowTransitionRefused(TerminalState):
     """来源、离线证明或 CAS 不成立；保留原文件并等待同一事务恢复。"""
 
 
-_SOURCE_MODEL = WorkflowManifestV4
-_TARGET_MODEL = WorkflowManifestV5
+_MANIFEST_MODELS = {4: WorkflowManifestV4, 5: WorkflowManifestV5, 6: WorkflowManifestV6}
+_TRANSITION_PAIRS = {4: (WorkflowManifestV5, WorkflowTransitionPreparedV1, WorkflowTransitionProofV1),
+                     5: (WorkflowManifestV6, WorkflowTransitionPreparedV2, WorkflowTransitionProofV2)}
+
+
+def _manifest(raw: bytes):
+    try:
+        version = json.loads(raw, object_pairs_hook=_pairs)['schema_version']
+        if type(version) is not int:
+            raise ValueError('version')
+        model = _MANIFEST_MODELS[version]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WorkflowTransitionRefused('未登记的 manifest 契约版本') from exc
+    return _decode(raw, model)
+
+
+def _pair(source):
+    try:
+        return _TRANSITION_PAIRS[source.schema_version]
+    except KeyError as exc:
+        raise WorkflowTransitionRefused('没有登记此来源的下一版显式迁移') from exc
 _CORE_KEYS = frozenset({
     'stage2.analyze_receipt', 'stage2.analyze_recovery', 'stage2.analyze_owner_draft_edit',
     'stage2.analyze_characters_draft_repair', 'stage2.analyze_global_draft_repair',
@@ -319,12 +339,14 @@ def projection_commit_material(store, transition_id: str, prepared_sha256: str):
     return path, value.source_json.encode('utf-8') if value.source_json is not None else None, target
 
 
-def _assert_downstream_empty(base: Path, files: dict[str, str]) -> None:
+def _assert_downstream_empty(base: Path, files: dict[str, str], *, source_version: int = 4) -> None:
     """文件、历史及运行身份一起扫描；没有 formal 不证明尚未购买下游回答。"""
     allowed = {Path(ARTIFACT_PATHS[key]).stem for key in _CORE_KEYS}
     forbidden = {'stage3', 'stage4', 'stage5', 'stage6', 'stage7', '_stage4_runs',
                  '_stage5_runs', '_stage6_runs', '_stage7_runs', 'blueprint', 'blueprints',
                  'knowledge_links'}
+    if source_version == 5:
+        forbidden = {'stage6', 'stage7', '_stage6_runs', '_stage7_runs'}
     for path in base.rglob('*'):
         _plain(path)
         parts = path.relative_to(base).parts
@@ -337,11 +359,9 @@ def _assert_downstream_empty(base: Path, files: dict[str, str]) -> None:
         if not parts or parts[0] == '_service':
             continue
         for stage in parts[1:]:
-            if stage in {'stage3', 'stage4', 'stage5', 'stage6', 'stage7',
-                         '_stage4_runs', '_stage5_runs', '_stage6_runs', '_stage7_runs',
-                         'blueprint', 'blueprints', 'knowledge_links'}:
+            if stage in forbidden:
                 raise WorkflowTransitionRefused('目标契约的下游已有产物或历史；不能自动迁移')
-        if 'stage2' in parts:
+        if source_version == 4 and 'stage2' in parts:
             name = Path(rel).name
             if not any(name == stem + '.json' or name.startswith(stem + '.')
                        or stem == 'global_review_decisions' and name.startswith(stem + '_')
@@ -354,8 +374,7 @@ def _assert_downstream_empty(base: Path, files: dict[str, str]) -> None:
             if not path.is_file() or path.name.endswith('.lock'):
                 continue
             relative = path.relative_to(service).parts
-            if any(part in {'stage3', 'stage4', 'stage5', 'stage6', 'stage7',
-                            'blueprint', 'blueprints', 'knowledge_links'} for part in relative):
+            if any(part in forbidden for part in relative):
                 raise WorkflowTransitionRefused('下游存在 checkpoint/prepared/已购回答来源')
     # 只检查真实执行身份，不扫描 JSON schema、下一步计划或模型正文里的同名字段。
     # blob 的 node 归属由来源代码验证 work-unit 注册与完整账，不能从任意字符串猜。
@@ -388,7 +407,9 @@ def _assert_downstream_empty(base: Path, files: dict[str, str]) -> None:
             elif isinstance(value, dict):
                 for key, item in value.items():
                     if key in {'node', 'producer_node', 'purpose', 'activity'} and isinstance(item, str):
-                        if item.startswith('stage') and not (item.startswith(('stage0.', 'stage1.'))
+                        allowed_stage = item.startswith(('stage0.', 'stage1.')) or (
+                            source_version == 5 and item.startswith(('stage2.', 'stage4.', 'stage5.')))
+                        if item.startswith('stage') and not (allowed_stage
                                 or any(item == node or item.startswith(node + '.') for node in _CORE_NODES)):
                             raise WorkflowTransitionRefused('下游已有运行、工作单元或已购回答')
 
@@ -399,11 +420,13 @@ _SOURCE_PROOF = r'''
 import hashlib, json, sys
 from pathlib import Path
 from novel import paths, agent_session_audit, work_units
-from contracts.schema.workflow import WorkflowManifestV4, WorkUnitRegistryV1, WorkUnitLedgerV2
+from contracts.schema import workflow as workflow_schema
+from contracts.schema.workflow import WorkUnitRegistryV1, WorkUnitLedgerV2
 from novel.orchestrator import admission, agent, approvals, beacon, jobs, queue
 from novel.orchestrator.state import readonly_ctx
 from novel.stages.stage2 import global_review
 base, code = Path(sys.argv[1]), sys.argv[2]
+source_version = int(sys.argv[4])
 loaded, hashes = [], {}
 streams = [(admission.admission_path, admission.read_events),
            (beacon.beacon_path, beacon.read_events), (agent.runs_path, agent.read_events),
@@ -457,7 +480,8 @@ if any(row.state in ('pending','running','paused','unknown') for row in queue_ro
     raise ValueError('queue not terminal')
 books = {}
 if sys.argv[3] == 'accept':
-    source_manifest = WorkflowManifestV4.model_validate_json(paths.workflow_manifest_path(base).read_bytes())
+    source_model = getattr(workflow_schema, 'WorkflowManifestV' + str(source_version))
+    source_manifest = source_model.model_validate_json(paths.workflow_manifest_path(base).read_bytes())
     for book in paths.iter_novel_dirs(base):
         ctx = readonly_ctx(book, 'stage2.blueprint', code)
         with approvals._read_projection(overview=None, code=code):
@@ -466,6 +490,12 @@ if sys.argv[3] == 'accept':
             ('characters_sha256','stage2/characters.json'),
             ('global_sha256','stage2/global_grounding.json'),
             ('review_sha256','stage2/global_review.json'))}
+        if source_version == 5:
+            from novel.stages.stage5 import closure
+            from novel.store import ArtifactStore
+            with approvals._read_projection(overview=None, code=code):
+                closure.require_stage5_closed(ArtifactStore(readonly_ctx(book, 'stage5.review', code)))
+            books[ctx.sid]['closure_sha256'] = hashlib.sha256(approvals._path(base,ctx.sid).read_bytes()).hexdigest()
     if not books: raise ValueError('no accepted Stage2 source')
     for sid_root in paths.service_runs_dir(base).iterdir():
         registry_path = sid_root/'work_units.json'
@@ -483,7 +513,8 @@ if sys.argv[3] == 'accept':
             unit = WorkUnitLedgerV2.model_validate_json((unit_root/unit_id/'ledger.json').read_bytes())
             if unit.task_id != registry.task_id or unit.sid != registry.sid or unit.unit_id != unit_id:
                 raise ValueError('work unit identity mismatch')
-            if unit.node not in ('stage2.analyze', 'stage2.characters', 'stage2.global'):
+            if not (unit.node in ('stage2.analyze', 'stage2.characters', 'stage2.global') or
+                    source_version == 5 and unit.node.startswith(('stage0.', 'stage1.', 'stage2.', 'stage4.', 'stage5.'))):
                 raise ValueError('downstream paid response')
             if any(turn.state in ('reserved', 'unknown') for turn in unit.turns):
                 raise ValueError('work unit response unknown')
@@ -519,15 +550,15 @@ print(json.dumps({'logs':hashes,'owner_ids':sorted(parents),
 '''
 
 
-def _source_proof(base: Path, source_code: Path, code: str, *, accepted: bool) -> WorkflowTransitionProofV1:
+def _source_proof(base: Path, source_code: Path, code: str, *, accepted: bool, source_version: int = 4) -> WorkflowTransitionProofV1 | WorkflowTransitionProofV2:
     environment = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONPATH': str(source_code)}
     response = subprocess.run([sys.executable, '-B', '-X', 'utf8', '-c', _SOURCE_PROOF,
-        str(base), code, 'accept' if accepted else 'lifecycle'], cwd=source_code,
+        str(base), code, 'accept' if accepted else 'lifecycle', str(source_version)], cwd=source_code,
         env=environment, capture_output=True, timeout=60)
     if response.returncode:
         raise WorkflowTransitionRefused('来源代码不能证明全 owner 排空及 Stage2 语义接受；先按原代码恢复')
     try:
-        return WorkflowTransitionProofV1.model_validate_json(response.stdout)
+        return _TRANSITION_PAIRS[source_version][2].model_validate_json(response.stdout)
     except ValueError as exc:
         raise WorkflowTransitionRefused('来源代码的离线证明不可读取') from exc
 
@@ -535,18 +566,25 @@ def _source_proof(base: Path, source_code: Path, code: str, *, accepted: bool) -
 def _prepared(base: Path, transition_id: str) -> tuple[WorkflowTransitionPreparedV1, str]:
     path = paths.workflow_transition_dir(base, transition_id) / 'prepared.json'
     raw = _raw(path)
-    value = _decode(raw, WorkflowTransitionPreparedV1)
+    try:
+        model = {1: WorkflowTransitionPreparedV1, 2: WorkflowTransitionPreparedV2}[json.loads(raw)['schema_version']]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WorkflowTransitionRefused('未登记的 transition prepared 版本') from exc
+    value = _decode(raw, model)
     if value.transition_id != transition_id:
         raise WorkflowTransitionRefused('迁移记录与目录身份不一致')
-    source = _decode(value.source_manifest_json.encode('utf-8'), _SOURCE_MODEL)
-    target = _decode(value.target_manifest_json.encode('utf-8'), _TARGET_MODEL)
+    source = _manifest(value.source_manifest_json.encode('utf-8'))
+    target_model, prepared_model, _ = _pair(source)
+    if type(value) is not prepared_model:
+        raise WorkflowTransitionRefused('prepared 版本不属于源目标配对')
+    target = _decode(value.target_manifest_json.encode('utf-8'), target_model)
     if (source.task_id != target.task_id or source.created_at != target.created_at
             or _sha(value.source_manifest_json.encode('utf-8')) != value.source_manifest_sha256
             or _sha(value.target_manifest_json.encode('utf-8')) != value.target_manifest_sha256
             or target.transition_ref != WorkflowTransitionRefV1(
                 transition_id=transition_id, source_manifest_sha256=value.source_manifest_sha256)):
         raise WorkflowTransitionRefused('源目标身份、精确字节或迁移引用不闭合')
-    if set(value.projections) != set(value.source_proof.accepted_books):
+    if source.schema_version == 4 and set(value.projections) != set(value.source_proof.accepted_books):
         raise WorkflowTransitionRefused('人物投影集合与来源接受集合不一致')
     for sid, projection in value.projections.items():
         parts = Path(projection.relative_path).parts
@@ -574,7 +612,17 @@ def _completed(base: Path, prepared: WorkflowTransitionPreparedV1, digest: str):
     return value
 
 
-def require_transition_completed(base: Path, manifest: WorkflowManifestV5, raw: bytes) -> None:
+def _require_closed_predecessor(base: Path, pointer_raw: bytes, source_raw: bytes) -> None:
+    """只认可 target 恰为本次 source 的旧 completed 围栏；不在此处删指针。"""
+    pointer = _decode(pointer_raw, WorkflowTransitionPendingV1)
+    previous, digest = _prepared(base, pointer.transition_id)
+    if (pointer.prepared_sha256 != digest
+            or _completed(base, previous, digest) is None
+            or source_raw != previous.target_manifest_json.encode('utf-8')):
+        raise WorkflowTransitionRefused('已有迁移 prepared；请使用原 transition-id 免费恢复')
+
+
+def require_transition_completed(base: Path, manifest: WorkflowManifestV5 | WorkflowManifestV6, raw: bytes) -> None:
     """普通现役入口只消费闭合回执；不恢复、不创建任何迁移文件。"""
     pending_path = paths.workflow_transition_pending_path(base)
     pending = _read(pending_path, WorkflowTransitionPendingV1) if pending_path.exists() else None
@@ -599,11 +647,14 @@ def preview(*, base: Path, source_code: Path, service_ports: tuple[int, ...],
     if not offline_ack or not base.is_dir() or not paths.service_dir(base).is_dir():
         raise WorkflowTransitionRefused('必须确认服务、调度器及独立 CLI 已停止；仅接收现有工作流根')
     source_raw = _raw(paths.workflow_manifest_path(base))
-    source = _decode(source_raw, _SOURCE_MODEL)
+    source = _manifest(source_raw)
+    target_model, prepared_model, _ = _pair(source)
+    if source.schema_version == 5:
+        require_transition_completed(base, source, source_raw)
     source_commit = _code_identity(source_code)
     target_commit = _code_identity(Path(__file__).resolve().parents[2])
     identity = _sha(uuid4().bytes)
-    target = _TARGET_MODEL(task_id=source.task_id, created_at=source.created_at,
+    target = target_model(task_id=source.task_id, created_at=source.created_at,
         transition_ref=WorkflowTransitionRefV1(transition_id=identity,
                                              source_manifest_sha256=_sha(source_raw)))
     # 先验证请求的完整 typed 形状；不因坏参数创建控制锁和 prepared。
@@ -617,8 +668,10 @@ def preview(*, base: Path, source_code: Path, service_ports: tuple[int, ...],
         raise WorkflowTransitionRefused('迁移需要合法唯一端口/PID和非空 actor/reason')
     pointer = paths.workflow_transition_pending_path(base)
     with _offline(service_ports, stopped_pids), path_transaction_lock(pointer), _owners(base) as owners_unchanged:
+        closed_pointer_raw = None
         if pointer.exists():
-            raise WorkflowTransitionRefused('已有迁移 prepared；请使用原 transition-id 免费恢复')
+            closed_pointer_raw = _raw(pointer)
+            _require_closed_predecessor(base, closed_pointer_raw, source_raw)
         journal = paths.workflow_transition_dir(base, '0' * 64).parent
         for directory in sorted(journal.iterdir()) if journal.exists() else ():
             if not directory.is_dir():
@@ -630,13 +683,13 @@ def preview(*, base: Path, source_code: Path, service_ports: tuple[int, ...],
         if _raw(paths.workflow_manifest_path(base)) != source_raw:
             raise WorkflowTransitionRefused('来源 manifest 在 preview 前已变化')
         inventory = _inventory(base)
-        _assert_downstream_empty(base, inventory)
-        proof = _source_proof(base, source_code, source_commit, accepted=True)
-        projections = _projection_plans(base, proof, target_commit)
+        _assert_downstream_empty(base, inventory, source_version=source.schema_version)
+        proof = _source_proof(base, source_code, source_commit, accepted=True, source_version=source.schema_version)
+        projections = _projection_plans(base, proof, target_commit) if source.schema_version == 4 else {}
         if (inventory != _inventory(base) or source_commit != _code_identity(source_code)
                 or target_commit != _code_identity(Path(__file__).resolve().parents[2])):
             raise WorkflowTransitionRefused('preview 期间来源文件或代码变化')
-        prepared = WorkflowTransitionPreparedV1(transition_id=identity,
+        prepared = prepared_model(transition_id=identity,
             source_manifest_json=source_raw.decode('utf-8'), source_manifest_sha256=_sha(source_raw),
             target_manifest_json=work_units._bytes(target.model_dump(mode='json')).decode('utf-8'),
             target_manifest_sha256=_sha(work_units._bytes(target.model_dump(mode='json'))),
@@ -646,6 +699,10 @@ def preview(*, base: Path, source_code: Path, service_ports: tuple[int, ...],
         owners_unchanged()
         _immutable(base, paths.workflow_transition_dir(base, identity) / 'prepared.json', prepared)
         digest = _sha(work_units._bytes(prepared.model_dump(mode='json')))
+        if closed_pointer_raw is not None:
+            if _raw(pointer) != closed_pointer_raw:
+                raise WorkflowTransitionRefused('旧 completed 围栏在新 preview 期间变化；保留新 prepared')
+            pointer.unlink()
         _immutable(base, pointer, WorkflowTransitionPendingV1(
             transition_id=identity, prepared_sha256=digest))
     return {'state': 'prepared', 'transition_id': identity, 'prepared_sha256': digest,
@@ -660,7 +717,7 @@ def _cas_manifest(base: Path, prepared: WorkflowTransitionPreparedV1) -> None:
         return
     if raw != prepared.source_manifest_json.encode('utf-8'):
         raise WorkflowTransitionRefused('manifest 已不是冻结 source/target；拒绝覆盖第三方修改')
-    work_units._write(base, path, _decode(prepared.target_manifest_json.encode('utf-8'), _TARGET_MODEL))
+    work_units._write(base, path, _manifest(prepared.target_manifest_json.encode('utf-8')))
     if path.read_bytes() != prepared.target_manifest_json.encode('utf-8'):
         raise WorkflowTransitionRefused('manifest 原子发布后的目标字节不一致')
 
@@ -683,8 +740,11 @@ def apply(*, base: Path, transition_id: str, expected_prepared_sha256: str,
     with _offline(prepared.service_ports, prepared.stopped_pids), path_transaction_lock(pointer), _owners(base) as owners_unchanged:
         if _prepared(base, transition_id) != (prepared, digest):
             raise WorkflowTransitionRefused('提交前 prepared 变化')
+        closed_pointer_raw = None
         if pointer.exists() and _read(pointer, WorkflowTransitionPendingV1) != expected_pointer:
-            raise WorkflowTransitionRefused('另一迁移拥有当前 prepared 围栏')
+            closed_pointer_raw = _raw(pointer)
+            _require_closed_predecessor(
+                base, closed_pointer_raw, prepared.source_manifest_json.encode('utf-8'))
         if (prepared.source_code_version != _code_identity(source_code)
                 or prepared.target_code_version != _code_identity(Path(__file__).resolve().parents[2])):
             raise WorkflowTransitionRefused('来源或目标代码偏离冻结版本')
@@ -692,11 +752,17 @@ def apply(*, base: Path, transition_id: str, expected_prepared_sha256: str,
         if raw not in (prepared.source_manifest_json.encode('utf-8'), prepared.target_manifest_json.encode('utf-8')):
             raise WorkflowTransitionRefused('manifest 已不是冻结 source/target；拒绝覆盖第三方修改')
         _preserved_unchanged(base, prepared)
-        _assert_downstream_empty(base, prepared.preserved_files)
-        proof = _source_proof(base, source_code, prepared.source_code_version, accepted=False)
+        _assert_downstream_empty(base, prepared.preserved_files, source_version=_manifest(prepared.source_manifest_json.encode()).schema_version)
+        proof = _source_proof(base, source_code, prepared.source_code_version, accepted=False, source_version=_manifest(prepared.source_manifest_json.encode()).schema_version)
         expected_proof = prepared.source_proof.model_copy(update={'accepted_books': {}})
         if proof != expected_proof:
             raise WorkflowTransitionRefused('离线生命周期证明变化；不得追认迟到 owner')
+        if closed_pointer_raw is not None:
+            # 新 prepared 发布后、旧指针退休前可中断。只有所有新事务守卫
+            # 已复验且旧字节仍精确相同时，才交接围栏；不重开历史事务。
+            if _raw(pointer) != closed_pointer_raw:
+                raise WorkflowTransitionRefused('旧 completed 围栏在恢复期间变化')
+            pointer.unlink()
         _immutable(base, pointer, expected_pointer)
         owners_unchanged()
         from novel.orchestrator.state import readonly_ctx

@@ -219,6 +219,17 @@ def inbox_from_snapshot(
             items += _report_items_for_inbox(report, stage)
 
     items += _verification_items(novel_dir, code)
+    from novel.stages.stage6 import prepare as prepare_stage6
+    prepare_state = prepare_stage6.view_state(ArtifactStore(readonly_ctx(
+        novel_dir, 'stage6.prepare', code)))
+    if prepare_state.state not in {'missing', 'accepted'}:
+        items.append(InboxItem(
+            kind='approval' if prepare_state.state == 'pending' else 'verification',
+            stage='stage6', chapter=None, rule='stage6.prepare',
+            what=('独立文案准备待补提交：' if prepare_state.pending_commit else '独立文案准备待审阅：') + prepare_state.reason,
+            how=('运行 stage6.prepare --recover-edit 免费补齐原决定'
+                 if prepare_state.pending_commit else
+                 '读取 stage6.prepare --emit-review-workpack，对照正文和原钩子后提交独立 typed 决定或编辑；不替代最终文案批准')))
     items += _stage2_projection_recovery_items(ov)
     items += _trim_verification_items(novel_dir, code, audits=trim_audits)
     stage6_workpack = _stage6_workpack_or_none(novel_dir, code)
@@ -285,7 +296,7 @@ def _classify(item: InboxItem) -> InboxItem:
     """
     disclosure = (
         item.kind == 'human_only'
-        or (item.kind == 'verification' and item.stage == 'stage6')
+        or (item.kind == 'verification' and item.stage == 'stage6' and item.rule != 'stage6.prepare')
         or (item.kind == 'verification' and item.stage == 'stage2'
             and (
                 review_effect_of(review_item_kind(item.rule)) == 'disclosure'
@@ -699,7 +710,7 @@ def _approval_items(
         out.append(InboxItem(
             kind='approval', stage='stage6', chapter=None, rule='stage6.approve',
             what=('开篇三候选的当前代码/规则/证据工作包还没有有效人工定稿——'
-                  '定稿是本层现役的唯一闸门'),
+                  '这是准备接受之后的独立最终定稿闸门'),
             how=('先读 `approval workpack stage6 <sid> --base <base>`；选择候选 N 后跑 '
                  '`stage6.approve --pick N --actor <自报身份> --reason <理由> '
                  f'--review-token {stage6_workpack.review_token}`。'

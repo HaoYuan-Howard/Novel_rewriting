@@ -6,8 +6,9 @@ Pydantic 载体以 `contracts/schema/stage5.py` 为准。
 
 ## 一、现役落盘面：单臂、单一正文位置
 
-当前写手输入为 WriterContext v8：章级节点目录只保存一次完整剧情，场景通过 delivery 引用
-节点及呈现指令。Stage5 仍一次生成整章，按计划 slot 确定性拼接。逐场知识许可约束输出，
+当前写手输入为 WriterContext v9：章级节点目录只保存一次完整剧情，场景通过 delivery 引用
+节点及呈现指令；人物使用公开 opaque actor_ref，不下发内部 char_id 与表面身份的反向映射。
+Stage5 仍一次生成整章，按计划 slot 确定性拼接。逐场知识许可约束输出，
 不能证明同一请求中前场没有见过后场内容。自由文本遗漏、重复、错误归因和隐含提前揭示
 由既有语义审阅及成稿检查承担；普通分场不增 Stage2 调用。正文 artifact 不机械升版，
 请求、验证和恢复身份必须绑定当前 Context、计划、知识许可及实际消费投影。
@@ -185,7 +186,8 @@ slot、逐槽归一，再跑内容判据。缺槽、重槽、多槽、未知键�
 v1 → v2 是破坏形状：删除 `mode`，路径从 `stage5/{mode}/chNN.json` 折平为
 `stage5/chNN.json`。v3 同批删除来源章号、源字数、预算、字数、重合度与 warns/errs 副本。
 预算和重合度只按当前可读任务书计算，缺材料保持未知；检查不改变正文或创建身份。
-本仓没有迁移机制；当前 producer 只在新空根完整生成，旧稿不能补版本号或搬文件冒充 v3。
+业务产物不自动迁移；当前 producer 只消费当前契约来源，旧稿不能补版本号或搬文件冒充 v3。
+显式 manifest 过渡只保留已验证可复用的字节，不为旧业务载体签发新版本或审批。
 
 ### 2.2 正文归一、篇幅与来源账
 
@@ -275,11 +277,11 @@ currentness 出口。状态取值：
 workpack/token，不能为“保险”再买一席或重跑 Review。旧 Review v1 仍含
 `mode/mode_dir`；当前 v3 另删除来源状态、计数及章节展示副本，由 producer 免费重建，不做迁移。
 
-## 四、审批与人工服务账：HTTP v7，盘上 v8
+## 四、审批与人工服务账：HTTP v8，盘上 v8
 
 ### 4.1 审批版本与职责
 
-`ApprovalDoc.v=7` 是 HTTP 公共视图版本，字段为 `sid`、完整 `gate`、完整 `seen`、
+`ApprovalDoc.v=8` 是 HTTP 公共视图版本，字段为 `sid`、完整 `gate`、完整 `seen`、
 `writing`、typed `design_review`、typed `structure`、typed `writing_approval`、typed `closure` 与
 `spawns`；它不再暴露 `deep`。前三份 typed 决定分别服务 Stage4A、最终结构和写作授权，不能
 互相推出；`closure` 服务 Stage5 成稿后的整书人工闭合。`gate.s4=true` 只可能来自当前结构主体的

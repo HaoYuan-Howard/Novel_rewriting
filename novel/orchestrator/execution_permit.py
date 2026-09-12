@@ -93,6 +93,7 @@ _W4 = frozenset({
 })
 _W5 = frozenset({_INBOX, _RESUME, _STAGE5_REVIEW, _STAGE5_CLOSURE})
 _W6 = frozenset({_INBOX, _RESUME, _STAGE5_CLOSURE, _STAGE6_APPROVE})
+_W6_PREPARE = _W6 | frozenset({queue.WAITING_ON_STAGE6_PREPARE})
 _W7 = frozenset({_INBOX, _RESUME, _STAGE7_APPROVE})
 
 
@@ -232,6 +233,14 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
            '--reviewer-rewrite-request-sha256'),
         frozenset({_STAGE5_REVIEWER_REWRITE})),
 
+    RecoveryRunPolicy('stage6.prepare', _t('--revalidate'), _W6_PREPARE),
+    RecoveryRunPolicy('stage6.prepare', _t('--emit-edit-template'), _W6_PREPARE),
+    RecoveryRunPolicy('stage6.prepare', _t('--emit-review-template'), _W6_PREPARE),
+    RecoveryRunPolicy('stage6.prepare', _t('--emit-review-workpack'), _W6_PREPARE),
+    RecoveryRunPolicy('stage6.prepare', _t('--apply-edit'), _W6_PREPARE),
+    RecoveryRunPolicy('stage6.prepare', _t('--review-decisions'), _W6_PREPARE),
+    RecoveryRunPolicy('stage6.prepare', _t('--recover-edit'), frozenset({queue.WAITING_ON_STAGE6_PREPARE_COMMIT})),
+    RecoveryRunPolicy('stage6.prepare', _t('--recover-prepared', '--subject-sha256'), frozenset({_PREPARED_DELIVERY})),
     RecoveryRunPolicy('stage6.hook', _t('--check-only'), _W6),
     RecoveryRunPolicy('stage6.hook', _t('--identity'), _W6),
     RecoveryRunPolicy('stage6.hook', _t('--recheck'), _W6),
@@ -328,6 +337,8 @@ EXTERNAL_INPUT_POLICIES: Final[
     ('stage5.review', '--request-reviewer-rewrite'): 'book_or_service_edit',
     ('stage5.write', '--reviewer-rewrite'): 'book',
     ('stage6.hook', '--apply-edit'): 'book',
+    ('stage6.prepare', '--apply-edit'): 'book_or_service_edit',
+    ('stage6.prepare', '--review-decisions'): 'book_or_service_edit',
     ('stage7.rename', '--apply-edit'): 'book',
     ('stage7.rename', '--validate-edit'): 'book',
 }
@@ -495,6 +506,11 @@ def _require_recovery_policy(
     if waiting_on not in row.waiting_on:
         raise UnsupportedRunMode(
             f'{node} {list(tokens)} 不能处理当前 blocker {waiting_on!r}')
+    if waiting_on == queue.WAITING_ON_STAGE6_PREPARE_COMMIT:
+        recovery = queue.prepare_edit_recovery_item(current.base, current.sid, code=current.code_version)
+        if (node != 'stage6.prepare' or flags != ('--recover-edit',)
+                or recovery is None or tuple(current.action.flags) != flags):
+            raise UnsupportedRunMode('Prepare WAL 只能免费恢复当前冻结原决定')
     if (waiting_on == _STAGE2_EDIT_COMMIT
             and (node != 'stage2.global'
                  or flags != ('--apply-edit', STAGE2_GLOBAL_EDIT))):

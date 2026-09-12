@@ -24,6 +24,9 @@ STAGE7_REQUIRED = ('stage1/main_text.json', 'stage2/global_grounding.json',
 #: 的书，它的 `name_map` 把那份人工决策集记成了一条上游边；沙箱不带它 ⇒ 幽灵边 ⇒
 #: `name_map` 判 `unknown/ghost`，而 `stage7.assemble` 会正确地拒绝拿非 fresh 的映射拼书。
 STAGE7_OPTIONAL = ('stage6/hook.json', 'stage7/name_map_edit.json')
+# 独立登记是现役 Rename 的必读输入。沿用 books() 原选择面，缺失时显式失败，
+# 不因重构新增产物而把旧样本从 corpus 分母静默排除。
+STAGE7_IDENTITY_INPUTS = ('stage2/characters.json',)
 
 
 def books() -> list[str]:
@@ -46,7 +49,7 @@ def _box(book: str) -> sandbox.Sandbox:
     """当前契约 JSON 沙箱，并带上由 Stage7 生成的 `book.txt`。"""
     rels = STAGE7_REQUIRED + tuple(
         r for r in STAGE7_OPTIONAL if sandbox.cut(book, r) is not None)
-    box = sandbox.Sandbox(book, rels + _drafts_of(book))
+    box = sandbox.Sandbox(book, rels + STAGE7_IDENTITY_INPUTS + _drafts_of(book))
     src = corpus.corpus_root() / book / 'stage7' / 'book.txt'
     if src.exists():
         shutil.copy2(src, box.dir / 'stage7' / 'book.txt')

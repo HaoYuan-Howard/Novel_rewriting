@@ -79,6 +79,21 @@ session/ledger 继续保留 `null` / `unknown`，不能拿 adopted identity 倒�
 能立即把 Stage1~7 及其字节产物标为 stale。`RunContext` 从当前已批准的 Stage0 正文建立根身份；
 一次运行内读到不同根、或写入来源账声明另一根，均在写盘前显式拒绝。旧 v1 不手补、不猜迁移。
 
+源钩子独立编辑只有一条窄例外：`novel/source_identity.py::revision_proof` 逐条验证同书
+Stage0 revision 哈希链、当前批准和真实原文件，复用 Stage1 审计确认两份当前物化准确。
+旧根必须是当前 revision 的祖先；从首个章标记起的全部字节、确定性 MainText 原始编码和
+业务 payload 均未改变，才可对现役 Stage2–5 的已声明正文输入继续运行原 freshness。
+未知输入、HookCopy / clean 依赖、未批准或坏链均无此许可。来源 root、产物、模型费用与
+原审批不重写；稳定盲句柄及审批仍绑定经证明 current 的正文产物来源。未变输入的有效
+审批可以继续生效，任一业务、证据或决定变化仍按原完整身份失效。
+Stage1 原切分确认还须存在：旧票的 MainText 与 HookCopy 两份 SHA 必须均由该祖先
+revision 的确定性切分精确重建，并与当前不变正文及切点相符。只读面保留原票，不
+重签当前根；无原确认、旧任一 SHA 损坏、未批准或切分改变都不能继承。
+
+Prepare 实际消费新钩子，不取得正文等价例外。它只通过完整 typed draft 重编当前
+MainText / HookCopy，保存专属 `source_rebuild`（见 `stage6.md`）；通用局部修订不能
+借此跨源重挂。未完成提交遇源再次变化时拒绝补尾，不采用旧回答或继承旧接受。
+
 ---
 
 ## 二、两把尺子：40 位与 10 位，**故意的**

@@ -90,6 +90,9 @@ import type {
 
 import type { CharacterRegistryView, CharactersEditRequest } from './characters'
 import type { AnalyzeDraftView, AnalyzeDraftOwner, AnalyzeDraftEditRequest } from './analyzeDraft'
+import type {
+  PrepareView, PrepareWorkpack, PrepareEditRequest, PrepareEditPreview, PrepareDecisionRequest,
+} from './prepare'
 
 export interface Api {
   /* 读 */
@@ -130,6 +133,11 @@ export interface Api {
   getReview(sid: string, ordinal: number): Promise<ReviewResponse>
   getInbox(sid: string): Promise<InboxResponse>
   getStage6(sid: string): Promise<Stage6Response>
+  getStage6Prepare(sid: string): Promise<PrepareView>
+  getStage6PrepareWorkpack(sid: string): Promise<PrepareWorkpack>
+  previewStage6PrepareEdit(sid: string, req: PrepareEditRequest): Promise<PrepareEditPreview>
+  applyStage6PrepareEdit(sid: string, req: PrepareEditRequest): Promise<Job>
+  reviewStage6Prepare(sid: string, req: PrepareDecisionRequest): Promise<Job>
   getStage7(sid: string): Promise<Stage7Response>
   getStage7Chapter(sid: string, ordinal: number): Promise<Stage7Response>
   getStage7Book(sid: string): Promise<string>

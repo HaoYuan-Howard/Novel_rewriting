@@ -360,11 +360,22 @@ def test_explicit_relation_uses_keep_two_presentations_without_inventing_states(
     knowledge = links()
     add_event(knowledge, kind='relation', ref='rel_01', chapter=1, subject=relation(old))
     add_event(knowledge, kind='relation_visibility', ref='rel_01', chapter=1, subject=relation(old))
-    entry = compile_view(bps, main, registry, global_, knowledge)['chapters'][0]
+    # 支持节点明确使用旧呈现；同底稿另一个表面身份在揭示场才获得等同许可。
+    bp['beats'][0]['participants'] = [old, {'char_id': 'char_002'}]
+    registry['characters']['char_001']['aliases'][-1]['identity_revealed_from'] = 1
+    global_['arc_secrets'] = [{'secret_id': 'sec_01', 'fact': '新客就是甲。', 'fact_ref': None,
+        'setup_chapters': [], 'revealed_from': 1, 'evidence_refs': []}]
+    event = add_event(knowledge, kind='secret_reveal', ref='sec_01', chapter=1,
+        subject={'kind': 'secret', 'ref': 'sec_01'}, beat='b01_03', identity=[old, new])
+    plan = identity_plan(bps, main)
+    plan['output_chapters'][0]['anchor_bindings'].append({
+        'kind': 'knowledge', 'ref': event, 'endpoint': 'trigger', 'scene_ref': 's03'})
+    entry = compile_view(bps, main, registry, global_, knowledge, plan)['chapters'][0]
     facts = [r for r in entry['global_subjects'] if r['subject_ref']['kind'] == 'relation']
     assert len(facts) == 2
     assert len({r['subject_ref']['ref'] for r in facts}) == 2
     assert len({r['value']['subject'] for r in facts}) == 2
+    assert sorted(r['allowed_slots'] for r in facts) == [['s01', 's02', 's03'], ['s03']]
     assert len(entry['states']) == len(bp['states'])
     events = [r for r in entry['knowledge_events'] if r['kind'] == 'relation_visibility']
     assert len({r['event_ref'] for r in events}) == 2
@@ -659,3 +670,236 @@ def test_name_distinctiveness_only_invalidates_owners_that_actually_consume_it()
     before_book, after_book = private_book(registry, before_context), private_book(changed, after_context)
     assert '甲' in before_book.names and '甲' not in after_book.names
     assert _book_validation_projection(before_book) != _book_validation_projection(after_book)
+
+
+def _relation_identity_case(*, reveal=True, fact_ref=False):
+    """首次关系只用旧身份，后章用新身份；两章均为真实合法 BP/KL 输入。"""
+    bps, main, registry, old, new = two_chapters()
+    relation = lambda actor: {'kind': 'relation', 'ref': 'rel_01', 'relation_actors': {
+        'subject': actor, 'object': {'char_id': 'char_002'}}}
+    bps['blueprints'][0]['relation_uses'] = [relation(old)]
+    bps['blueprints'][1]['relation_uses'] = [relation(new)]
+    global_ = deepcopy(GLOBAL)
+    global_['relations'] = [{'relation_id': 'rel_01', 'subject_id': 'char_001', 'predicate': '曾是同窗',
+        'object_id': 'char_002', 'effective_from': 1, 'effective_until': 1,
+        'revealed_from': 1, 'evidence_refs': []}]
+    knowledge = links()
+    add_event(knowledge, kind='relation', ref='rel_01', chapter=1, subject=relation(old))
+    add_event(knowledge, kind='relation_visibility', ref='rel_01', chapter=1, subject=relation(old))
+    if fact_ref:
+        global_['arc_secrets'].append({'secret_id': 'sec_relation', 'fact': None,
+            'fact_ref': {'kind': 'relation', 'relation_id': 'rel_01'}, 'setup_chapters': [],
+            'revealed_from': 1, 'evidence_refs': []})
+        add_event(knowledge, kind='secret_reveal', ref='sec_relation', chapter=1,
+                  subject={'kind': 'secret', 'ref': 'sec_relation'})
+    plan = identity_plan(bps, main)
+    if fact_ref:
+        for chapter in plan['output_chapters']:
+            chapter['chapter_goal']['subject_refs'].append({'kind': 'secret', 'ref': 'sec_relation'})
+            chapter['chapter_goal']['intent'] = 'withhold'
+    if reveal:
+        global_['arc_secrets'].append({'secret_id': 'sec_identity', 'fact': '新客就是甲。', 'fact_ref': None,
+            'setup_chapters': [], 'revealed_from': 2, 'evidence_refs': []})
+        event = add_event(knowledge, kind='secret_reveal', ref='sec_identity', chapter=2,
+            subject={'kind': 'secret', 'ref': 'sec_identity'}, beat='b02_03', identity=[old, new])
+        plan['output_chapters'][1]['anchor_bindings'].append({
+            'kind': 'knowledge', 'ref': event, 'endpoint': 'trigger', 'scene_ref': 's03'})
+    return bps, main, registry, global_, knowledge, plan
+
+
+@pytest.mark.parametrize('reveal', [False, True])
+@pytest.mark.parametrize('fact_ref', [False, True])
+def test_old_relation_permission_cannot_identify_new_presentation_before_mapping(reveal, fact_ref):
+    inputs = _relation_identity_case(reveal=reveal, fact_ref=fact_ref)
+    ctx = compile_view(*inputs)
+    current = ctx['chapters'][1]
+    roster = {name: row['actor_ref'] for row in current['characters'] for name in row['surfaces']}
+    assert roster['新客'] != roster['甲']
+    relations = [r for r in current['global_subjects'] if r['subject_ref']['kind'] == 'relation']
+    relation_events = [e for e in current['knowledge_events'] if e['kind'] == 'relation_visibility']
+    if reveal:
+        assert len(relations) == len(relation_events) == 1
+        assert relations[0]['value']['subject'] == roster['新客']
+        assert relations[0]['value']['effective_until'] == 1  # 历史关系仍可在后章披露。
+        assert relations[0]['allowed_slots'] == relation_events[0]['allowed_slots'] == ['s03']
+        assert relation_events[0]['timing'] == 'at_slot' and relation_events[0]['slot'] == 's03'
+        if fact_ref:
+            secret = next(r for r in current['global_subjects'] if isinstance(r['value'].get('fact'), dict))
+            assert secret['value']['fact'] == relations[0]['value']
+            assert secret['allowed_slots'] == ['s03']
+    else:
+        assert relations == relation_events == []
+        assert any(r['kind'] == 'relation' for r in current['restricted_subject_refs'])
+    material = prompts.build_user(prompts.build_material(current, book_for(ctx, inputs[1])))
+    assert 'char_001' not in material and 'rel_01' not in material and 'ap01_' not in material
+
+
+def test_relation_mapping_without_unique_disclosure_support_refuses_instead_of_choosing_first():
+    bps, main, registry, global_, knowledge, plan = _relation_identity_case()
+    bps['blueprints'][0]['relation_uses'].append(deepcopy(bps['blueprints'][1]['relation_uses'][0]))
+    with pytest.raises(RefusedByStructure, match='披露支持材料缺少唯一明确'):
+        compile_view(bps, main, registry, global_, knowledge, plan)
+
+
+def test_fact_ref_secret_support_cannot_replace_the_relation_disclosure_identity():
+    bps, main, registry, global_, knowledge, plan = _relation_identity_case(reveal=False, fact_ref=True)
+    secret = global_['arc_secrets'][0]
+    secret['revealed_from'] = 2
+    for row in knowledge['scope']['obligations']:
+        if row['kind'] == 'secret_reveal':
+            row['chapter_ordinal'] = 2
+            row['candidate_subject_refs'] = row['entry_subject_refs'] = [{'kind': 'beat', 'ref': 'b02_01'}]
+    for row in knowledge['links']:
+        if row['obligation_id'] == 'secret_reveal:sec_relation':
+            row['resolution']['subject_refs'] = [{'kind': 'beat', 'ref': 'b02_01'}]
+    ctx = compile_view(bps, main, registry, global_, knowledge, plan)
+    current = ctx['chapters'][1]
+    assert current['global_subjects'] == []
+    assert all(e['kind'] != 'secret_reveal' for e in current['knowledge_events'])
+    assert {r['kind'] for r in current['restricted_subject_refs']} == {'relation', 'secret'}
+
+
+def test_explicit_supported_state_freezes_relation_presentation_when_chapter_has_two_uses():
+    bps, main, registry, global_, knowledge, plan = _relation_identity_case()
+    first = bps['blueprints'][0]
+    first['relation_uses'].append(deepcopy(bps['blueprints'][1]['relation_uses'][0]))
+    first['states'][1].update(content=None, modality='world', holder=None,
+                             global_ref=deepcopy(first['relation_uses'][0]))
+    support = {'kind': 'state', 'ref': first['states'][1]['state_id']}
+    for row in knowledge['scope']['obligations']:
+        if row['kind'] == 'relation_visibility':
+            row['candidate_subject_refs'] = row['entry_subject_refs'] = [support]
+    for row in knowledge['links']:
+        if row['obligation_id'] == 'relation_visibility:rel_01':
+            row['resolution']['subject_refs'] = [support]
+    ctx = compile_view(bps, main, registry, global_, knowledge, plan)
+    assert next(r['allowed_slots'] for r in ctx['chapters'][1]['global_subjects']
+                if r['subject_ref']['kind'] == 'relation') == ['s03']
+
+
+def test_world_state_cannot_use_new_relationship_identity_before_its_reader_permission():
+    bps, main, registry, global_, knowledge, plan = _relation_identity_case()
+    state = bps['blueprints'][1]['states'][0]
+    state.update(content=None, modality='world', holder=None,
+                 global_ref=deepcopy(bps['blueprints'][1]['relation_uses'][0]),
+                 established_at={'kind': 'at_beat', 'beat_ref': 'b02_01'})
+    current_plan = identity_plan(bps, main)
+    current_plan['output_chapters'][1]['anchor_bindings'].extend(
+        row for row in plan['output_chapters'][1]['anchor_bindings'] if row['kind'] == 'knowledge')
+    with pytest.raises(RefusedByStructure, match='客观状态不能越过'):
+        compile_view(bps, main, registry, global_, knowledge, current_plan)
+
+
+def test_relation_goal_cannot_borrow_old_disclosure_before_identity_scene():
+    from novel.stages.stage4.plot_refs import validate_plan
+    bps, main, registry, global_, knowledge, plan = _relation_identity_case()
+    goal = plan['output_chapters'][1]['chapter_goal']
+    goal['subject_refs'] = [deepcopy(bps['blueprints'][1]['relation_uses'][0])]
+    goal['anchor_beat_ref'] = 'b02_01'
+    goal['anchor_scene_ref'] = 's01'
+    goal['intent'] = 'establish'
+    # 目标父节点确实在首场，先证明不是 placement 的结构性假红。
+    validate_plan(plan, bps, global_, knowledge, characters=registry, main_text=main)
+    with pytest.raises(RefusedByStructure, match='目标端点早于必要披露许可'):
+        compile_view(bps, main, registry, global_, knowledge, plan)
+    goal['anchor_beat_ref'], goal['anchor_scene_ref'] = 'b02_03', 's03'
+    accepted = compile_view(bps, main, registry, global_, knowledge, plan)
+    assert accepted['chapters'][1]['chapter_goal']['anchor_scene_ref'] == 's03'
+
+
+def test_relation_after_previous_chapter_identity_reveal_keeps_historical_window():
+    bps, main, registry, global_, knowledge, original_plan = _relation_identity_case()
+    second = bps['blueprints'][1]
+    third = json.loads(json.dumps(second).replace('b02_', 'b03_').replace('st02_', 'st03_')
+                       .replace('e02_', 'e03_').replace('c02_', 'c03_'))
+    third['chapter_ordinal'] = 3
+    bps['blueprints'].append(third)
+    main.append({'chapter_ordinal': 3, 'text': main[1]['text']})
+    plan = identity_plan(bps, main)
+    plan['output_chapters'][1]['anchor_bindings'] = original_plan['output_chapters'][1]['anchor_bindings']
+    entry = compile_view(bps, main, registry, global_, knowledge, plan)['chapters'][2]
+    relation = next(r for r in entry['global_subjects'] if r['subject_ref']['kind'] == 'relation')
+    assert relation['allowed_slots'] == ['s01', 's02', 's03']
+    assert relation['value']['effective_until'] == 1
+    assert len([r for r in entry['characters'] if '甲' in r['surfaces'] or '新客' in r['surfaces']]) == 1
+
+
+def test_public_cross_chapter_bindings_merge_without_losing_late_surface_permissions():
+    from novel.stages.stage2.paragraphs import span_of
+    from novel.stages.stage2.plot_compile import source_digest
+    bps, main, registry, old, new = two_chapters()
+    first, second = bps['blueprints']
+    # 原章的两个独立表面身份此后已公开同属一人；本章新称谓仍只在末场首次出现。
+    registry['characters']['char_001']['aliases'][-1]['identity_revealed_from'] = 1
+    registry['characters']['char_001']['aliases'].append({
+        'surface': '苏姑娘', 'identity_revealed_from': 2, 'evidence_refs': []})
+    current = {'char_id': 'char_001', 'presentation_ref': 'ap02_01'}
+    second['actor_bindings'] = [{'presentation_id': 'ap02_01', 'char_id': 'char_001',
+        'surfaces': ['新客', '苏姑娘'], 'evidence_refs': ['e02_01', 'e02_03'], 'public_state_ref': None}]
+    second['beats'][2]['participants'] = [current]
+    second['beats'][2]['source_contexts'][0]['present'] = [current]
+    second['beats'][2]['content'] = '新客被叫作苏姑娘，决定留下。'
+    main[1]['text'] = main[1]['text'].replace('新客决定留下。', '新客被叫作苏姑娘，决定留下。')
+    second['source_sha256'] = source_digest(main[1]['text'])
+    for anchor in second['evidence_anchors']:
+        anchor['start'], anchor['end'] = span_of(main[1]['text'], anchor['start_para'], anchor['end_para'])
+    for bp in (first, second):
+        PlotBlueprint.model_validate(bp)
+    ctx = compile_view(bps, main, registry)
+    previous, entry = ctx['chapters']
+    rows = [r for r in entry['characters'] if '甲' in r['surfaces']]
+    assert len(rows) == 1
+    person = rows[0]
+    assert set(person['surfaces']) == {'甲', '新客', '苏姑娘'}
+    assert person['actor_ref'] == next(r['actor_ref'] for r in previous['characters'] if r['display_name'] == '甲')
+    assert person['surface_allowed_slots']['苏姑娘'] == ['s03']
+    assert person['surface_allowed_slots']['甲'] == ['s01', 's02', 's03']
+    assert person['role'] is None
+    assert entry['beats'][2]['participants'] == [person['actor_ref']]
+    assert len({t for r in entry['beats'] for t in r['participants'] if t == person['actor_ref']}) == 1
+    assert entry['knowledge_events'] == []  # 不给普通称谓捏造身份事件。
+    material = prompts.build_material(entry, book_for(ctx, main))
+    assert 'surface_allowed_slots' in prompts.build_user(material)
+    assert 'surface_allowed_slots' in prompts.write_system()
+
+
+def test_merged_public_presentations_cannot_pick_one_of_two_different_roles():
+    bps, main, registry, old, new = two_chapters()
+    registry['characters']['char_001']['aliases'][-1]['identity_revealed_from'] = 1
+    first = bps['blueprints'][0]
+    first['actor_bindings'][0]['public_state_ref'] = 'st01_02'
+    first['actor_bindings'][1]['public_state_ref'] = 'st01_01'
+    bps['blueprints'][1]['entry_state_refs'] = ['st01_01', 'st01_02']
+    with pytest.raises(RefusedByStructure, match='多个不同角色描述'):
+        compile_view(bps, main, registry)
+
+
+def test_surface_slot_contract_rejects_missing_or_widened_names():
+    from contracts.schema.stage4 import CtxChapter
+    from pydantic import ValidationError
+    bps, main, registry, old, new = presented()
+    entry = compile_view(bps, main, registry)['chapters'][0]
+    missing = deepcopy(entry)
+    missing['characters'][0].pop('surface_allowed_slots')
+    with pytest.raises(ValidationError, match='surface_allowed_slots'):
+        CtxChapter.model_validate(missing)
+    widened = deepcopy(entry)
+    name = widened['characters'][0]['surfaces'][0]
+    widened['characters'][0]['surface_allowed_slots'][name].append('s99')
+    with pytest.raises(ValidationError, match='公开称谓'):
+        CtxChapter.model_validate(widened)
+
+
+def test_previous_context_only_carries_names_permitted_at_the_completed_ending():
+    from types import SimpleNamespace
+    from novel.stages.stage5.plot_prompts import prev_context
+    bps, main, registry, old, new = presented()
+    previous = compile_view(bps, main, registry)['chapters'][0]
+    token = previous['beats'][-1]['participants'][0]
+    person = next(r for r in previous['characters'] if r['actor_ref'] == token)
+    person['surfaces'] = [*person['surfaces'], '早场限定称谓']
+    person['surface_allowed_slots']['早场限定称谓'] = ['s01']
+    current = {'output_ordinal': 2, 'characters': [], 'beats': [], 'background_beats': []}
+    material = prev_context(current, SimpleNamespace(chapters={1: previous}))
+    assert token in material and person['display_name'] in material
+    assert '早场限定称谓' not in material and 'surface_allowed_slots' not in material

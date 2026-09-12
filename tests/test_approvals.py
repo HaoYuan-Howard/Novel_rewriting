@@ -159,6 +159,9 @@ def _approved_name_artifact():
 
 def _isolated_s7_proof(monkeypatch, holder: dict[str, object]):
     class Store:
+        def exists(self, rel):
+            return rel == rename.REL
+
         def read_own(self, _model, _rel):
             if _rel != rename.REL:
                 raise UpstreamMissing('本用例只提供 Stage7 typed 产物')
@@ -254,7 +257,7 @@ def test_get_exposes_public_v7_without_retired_depth_and_is_read_only():
     box = _box()
     try:
         doc = approvals.get(box.root, box.sid)
-        assert doc.v == 7
+        assert doc.v == 8
         assert 'deep' not in doc.model_dump() and 'deep_proof' not in doc.model_dump()
         assert doc.writing is False
         assert not (box.root / '_service').exists(), 'GET must not persist service state'

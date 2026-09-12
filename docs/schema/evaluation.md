@@ -73,7 +73,7 @@
 ### 1.4 收口
 
 `stage6.semantic` 产的结论一律进入 `verification` 待办。唯一的收口是
-`stage6.approve --pick N --actor --reason --review-token <s6r3_…>`，落
+`stage6.approve --pick N --actor --reason --review-token <s6r4_…>`，落
 `basis='human_verification'`
 的 hash-bound resolution；下游 `require_approved_clear` 校验那份 resolution 仍绑着当前字节。
 

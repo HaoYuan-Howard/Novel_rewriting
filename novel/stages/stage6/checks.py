@@ -337,14 +337,14 @@ _ATTRIBUTION_VERBS = ('送给', '赠给', '交给', '给了', '送了', '赠了'
 
 
 def _character_names(mat: Material) -> list[str]:
-    chars = (((mat.story_truth or {}).get('entities') or {}).get('characters') or {})
+    chars = (mat.story_truth or {}).get('characters') or {}
     names: set[str] = set()
     for character in chars.values():
         if not isinstance(character, dict):
             continue
         if canonical := str(character.get('canonical') or '').strip():
             names.add(canonical)
-        for address in character.get('address') or []:
+        for address in character.get('aliases') or []:
             if isinstance(address, dict) and (surface := str(address.get('surface') or '').strip()):
                 names.add(surface)
     return sorted(names, key=lambda item: (-len(item), item))

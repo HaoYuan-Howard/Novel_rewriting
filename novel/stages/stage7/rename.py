@@ -19,7 +19,7 @@ from dataclasses import dataclass, replace
 from functools import wraps
 
 from contracts.artifacts import (
-    STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING, STAGE4_PLAN_CHAPTERS,
+    STAGE1_MAIN_TEXT, STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING, STAGE4_PLAN_CHAPTERS,
     STAGE4_WRITER_CONTEXT, STAGE6_HOOK, STAGE7_NAME_MAP, STAGE7_NAME_MAP_EDIT,
 )
 
@@ -31,7 +31,7 @@ from contracts.invariants import STAGE7_REVIEW_CONTRACT
 from contracts.schema.common import Finding
 from contracts.schema.api import NameDecisionLine, Stage7ApprovalWorkpack
 from contracts.schema.report import CheckReport
-from contracts.schema.stage2 import GlobalGrounding
+from contracts.schema.characters import CharacterRegistry
 from contracts.schema.stage4 import PlanChapters, WriterContext
 from contracts.schema.stage5 import ContextSource
 from contracts.schema import encode_artifact
@@ -40,7 +40,7 @@ from contracts.schema.stage7 import (
     NameMapFreeProvenance, NameMapProvenance, NameMapResponse,
 )
 from novel import agent_session_audit, paths, prov
-from novel.core.naming import family_groups, strip_distinguisher, surface_owners
+from novel.core.naming import family_groups, registered_surfaces, strip_distinguisher, surface_owners
 from novel.errors import (
     BlockingFindingsUnresolved, GateBlocked, ProvenanceRefused, TerminalState, UpstreamMissing,
 )
@@ -256,11 +256,12 @@ class _Upstreams:
     def __init__(self, ctx: RunContext, store: ArtifactStore) -> None:
         from novel.stages.stage5.review import require_accepted_review
         require_accepted_review(ctx, store)
-        for rel in (GLOBAL_GROUNDING, MAIN_TEXT, PLAN_CHAPTERS, WRITER_CONTEXT):
+        for rel in (STAGE2_CHARACTERS, GLOBAL_GROUNDING, MAIN_TEXT, PLAN_CHAPTERS, WRITER_CONTEXT):
             if not store.exists(rel):
                 raise UpstreamMissing(f'{rel} 不在盘上——先跑 {rel.split("/")[0]}')
         from novel.stages.stage2 import global_review as stage2_global_review
         gg = stage2_global_review.generation_grounding(store)
+        characters = store.read(CharacterRegistry, STAGE2_CHARACTERS)
         main_text = store.read(paths_model(MAIN_TEXT), MAIN_TEXT)
         plan_art = store.read(PlanChapters, PLAN_CHAPTERS)
         writer_context = store.read(WriterContext, WRITER_CONTEXT)
@@ -268,11 +269,11 @@ class _Upstreams:
 
         self.title: str = ctx.title
         self.registry: dict[str, dict] = {
-            cid: c.model_dump(by_alias=True) for cid, c in gg.entities.characters.items()}
-        self.relations: list[dict] = [r.model_dump(by_alias=True) for r in gg.entities.relations]
+            cid: c.model_dump(by_alias=True) for cid, c in characters.characters.items()}
+        self.relations: list[dict] = [r.model_dump(by_alias=True) for r in gg.relations]
         # prompt 只消费时代背景正文。直接取 typed 字段，不在这里制造一份
         # ``era`` / ``时代背景`` 双形态字典（上一版因此真实下发恒为「未知」）。
-        self.era: str = gg.canon.setting.era
+        self.era: str | None = gg.setting.era
         # 原文：`attested_surname` 与 `rn_stem_noise` 的取值面。
         # ⚠ `MainText` 顶层是**数组**（`RootModel`），所以要走 `.root`。
         self.source_text: str = '\n'.join(c.text or '' for c in main_text.root)
@@ -620,7 +621,7 @@ def _identity_baseline(up: _Upstreams) -> IdentityBaseline:
     rev: dict[str, str] = {}
     for cid, v in sorted(up.registry.items()):
         names = [strip_distinguisher(v.get('canonical') or ''), v.get('canonical') or '']
-        names += [(a or {}).get('surface', '').strip() for a in (v.get('address') or [])]
+        names += list(registered_surfaces(v))
         for i, nm in enumerate(dict.fromkeys(n for n in names if n)):
             ph = IDENTITY_PLACEHOLDER.format(f'{cid}_{i:02d}')
             fwd[nm], rev[ph] = ph, nm
@@ -2247,6 +2248,8 @@ def _approval_workpack_snapshot_uncached(
     decision_subject_sha256 = approval_subject_sha256(subject)
     character_rows = [
         approval_decision_line(row, subject) for row in subject.characters]
+    # check_basis 标注既有去审批/交付账报告，进入公开包的 exact token；
+    # 不改变长期 review identity，批准和正常组书也不重写候选检查。
     identity_body = {
         'review_contract_version': STAGE7_REVIEW_CONTRACT,
         'kind': 'stage7',

@@ -95,8 +95,10 @@ HOOK_SYS = """\
 你是中文商业网文的资深开篇文案作者。你的第一目标只有一个：让目标读者看完文案后立刻继续读第一章。
 
 你会看到原始文案、完整故事事实、全书逐章故事地图、重写后的开篇正文，以及原作文案的机械基线。
-source_blurb 中 hook_supported 表示原作者在钩子中独立给出的信息，可用于新文案；
+story_truth.prepare 中 hook_supported 表示原作者在钩子中独立给出的信息，可用于新文案；
 正文无需重复这些信息，不因正文未出现就判成编造，也不把它们改成正文必须补写的剧情。
+unresolved 是尚未证实的材料，不能将该 claim 当成已成立事实。正文反证优先，原文案不豁免实质矛盾。
+whole_story_map 的 actor_ref 只在各章公开人物目录内解释；不得靠姓名猜测跨章或真实身份映射。
 你知道全书，不等于必须把全书都说出来；由你选择披露多少。剧透不是违规，也不是目的，只是一种吸引读者的
 工具：能增强期待就用，会把悬念彻底说死就不用。
 
@@ -216,14 +218,11 @@ def story_map(ctx: dict) -> list[dict]:
 
 
 def build_material(*, title: str, ctx: dict, hook_mechanical: dict, grounding: dict,
+                   characters: dict, preparation: dict,
                    source_hook: str, lead: list[dict], missing: list[int],
                    upto: int) -> Material:
     """组装从 Stage1 文案即时测量的完整创作包。"""
-    truth = {
-        'entities': grounding.get('entities'),
-        'canon': grounding.get('canon'),
-        'source_blurb': grounding.get('source_blurb'),
-    }
+    truth = {'characters': characters, 'global': grounding, 'prepare': preparation}
     full_map = story_map(ctx)
     mechanical = dict(hook_mechanical)
     packet = {

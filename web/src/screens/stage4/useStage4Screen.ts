@@ -4,6 +4,7 @@ import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { FRESH, SEV, chNo } from '@/constants/vocabulary'
 import type { PlanGoal, CtxScene } from '@/types/stages'
+import type { ChapterCharacter } from '@/types/plot.generated'
 import { useOrdinal, useSid } from '@/hooks/useRouteParams'
 
 export interface PlanSceneView {
@@ -25,6 +26,20 @@ export interface PlanSceneView {
 function goalLabel(goal: PlanGoal | undefined): string {
   return goal ? goal.intent + ' · ' + goal.subject_refs.map((ref) => ref.kind + ':' + ref.ref).join('、')
     + ' · 场景 ' + goal.anchor_scene_ref : ''
+}
+function allowedScenes(slots: string[] | undefined): string {
+  if (slots === undefined) return '许可缺失'
+  return slots.join('、') || '无许可'
+}
+function characterMaterial(character: ChapterCharacter): string {
+  return [
+    character.display_name + ' · ' + character.actor_ref,
+    '人物可出现场景：' + allowedScenes(character.allowed_slots),
+    ...character.surfaces.map((surface) => '称谓「' + surface + '」可用场景：'
+      + allowedScenes(character.surface_allowed_slots?.[surface])),
+    '公开身份：' + (character.role ?? '未提供公开身份描述'),
+    '身份描述可用场景：' + allowedScenes(character.role_allowed_slots),
+  ].join('\n')
 }
 export function useStage4Screen() {
   const sid = useSid()
@@ -59,7 +74,7 @@ export function useStage4Screen() {
   })
   const materialCards = ctx ? [
     { title: '章级剧情目录', count: ctx.beats.length + ' 个完整节点', lines: ctx.beats.map((b) => beatLabel(b.beat_ref) + '：' + b.content), more: '正文只下发一份；场景按呈现指令引用。' },
-    { title: '人物名册', count: ctx.characters.length + ' 人', lines: ctx.characters.map((c) => c.display_name + ' · ' + c.role), more: '' },
+    { title: '人物名册', count: ctx.characters.length + ' 个公开呈现', lines: ctx.characters.map(characterMaterial), more: '称谓与身份描述分别按所列场景使用；人物标识仅用于对照本章材料。' },
     { title: '持续状态', count: ctx.states.length + ' 项', lines: ctx.states.map((s) => s.modality + ' · ' + (s.content ?? s.global_ref?.ref)), more: '性质不等于传播权限。' },
     { title: '稀疏约束', count: ctx.constraints.length + ' 项', lines: ctx.constraints.map((c) => JSON.stringify(c)), more: '' },
     { title: '知识许可', count: ctx.knowledge_events.length + ' 项', lines: ctx.knowledge_events.map((e) => JSON.stringify(e)), more: '整章一次生成，同一次请求会看到本章后场材料；提前揭示仍需成稿审阅。' },

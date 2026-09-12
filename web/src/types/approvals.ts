@@ -332,8 +332,8 @@ export interface StructureApprovalView {
 }
 
 /** Stage6/7 终审包公共绑定面；屏只提交 opaque review token。 */
-export interface FinalApprovalWorkpack {
-  v: 3
+export interface FinalApprovalWorkpack<V extends number = 3> {
+  v: V
   sid: string
   review_contract_version: string
   review_identity_sha256: string
@@ -424,10 +424,12 @@ export interface Stage6WorkpackCandidate {
   quality_rank: number | null
 }
 
-export interface Stage6ApprovalWorkpack extends FinalApprovalWorkpack {
+export interface Stage6ApprovalWorkpack extends FinalApprovalWorkpack<4> {
   kind: 'stage6'
+  check_basis: 'candidate_without_approval'
   rationale: string
   materials: {
+    prepare_subject_sha256: string
     source_hook: string
     source_blurb: import('./stages').SourceBlurbMaterials
     rewritten_chapters: { chapter_ordinal: number; text: string }[]
@@ -447,6 +449,7 @@ export interface Stage6ApprovalWorkpack extends FinalApprovalWorkpack {
 
 export interface Stage7ApprovalWorkpack extends FinalApprovalWorkpack {
   kind: 'stage7'
+  check_basis: 'name_map_without_approval_or_delivery'
   decision_subject_sha256: string
   check: CompactApprovalCheck
   surname_map: Record<string, string>
@@ -673,11 +676,12 @@ export interface Stage2NodeReviewView {
 }
 
 export interface ApprovalDoc {
-  v: 7
+  v: 8
   sid: string
   gate: Record<GateKey, boolean>
   seen: Record<SeenKey, boolean>
   stage2_reviews?: Record<string, Stage2NodeReviewView>
+  prepare: import('./prepare').PrepareState
   /** 是否已经批准全书闭卷开写。 */
   writing: boolean
   /** Stage4A 候选的正式 hash-bound 审阅；accepted 也不会打开最终 s4 闸。 */

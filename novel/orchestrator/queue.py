@@ -111,6 +111,8 @@ WAITING_ON_STAGE4_REPLAN = WAITING_ON_STAGE4_BINDING_RESOLUTION
 WAITING_ON_WRITING_APPROVAL = 'approval:stage5-writing'
 WAITING_ON_REVIEW = 'stage5:review-currentness'
 WAITING_ON_STAGE5_CLOSURE = 'approval:stage5-closure'
+WAITING_ON_STAGE6_PREPARE = 'approval:stage6-prepare'
+WAITING_ON_STAGE6_PREPARE_COMMIT = 'recovery:stage6-prepare-edit'
 WAITING_ON_STAGE5_REVIEWER_REWRITE = 'recovery:stage5-reviewer-rewrite'
 WAITING_ON_PREPARED_DELIVERY = 'recovery:prepared-delivery'
 WAITING_ON_PREPARED_DELIVERY_UNKNOWN = 'human:prepared-unknown'
@@ -129,6 +131,7 @@ DETERMINISTIC_RECOVERY_WAITING_ON: frozenset[str] = frozenset({
     WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT,
     WAITING_ON_STAGE5_REVIEWER_REWRITE,
     WAITING_ON_PREPARED_DELIVERY,
+    WAITING_ON_STAGE6_PREPARE_COMMIT,
 })
 
 
@@ -371,12 +374,28 @@ def _stage4_replan_required(base: str | os.PathLike[str], sid: str) -> bool:
     return current_infeasible_binding(store) is not None
 
 
+def prepare_edit_recovery_item(base, sid, *, code) -> QueueItem | None:
+    """独立准备 WAL 比形式上的 formal/pending 审批优先；不购买新回答。"""
+    from novel.stages.stage6 import prepare
+    book = paths.find_novel_dir(base, sid)
+    if book is None:
+        return None
+    current = prepare.view_state(ArtifactStore(st.readonly_ctx(book, 'stage6.prepare', code)))
+    if not current.pending_commit:
+        return None
+    flags = ['--recover-edit']
+    return QueueItem(sid=sid, node='stage6.prepare', flags=flags,
+        steps=build_steps('stage6.prepare', sid, flags, base=base, follow_check=False),
+        waiting_on=WAITING_ON_STAGE6_PREPARE_COMMIT,
+        why='已保存独立准备编辑或决定；先免费补齐原提交，不重审或重买')
+
+
 def prepared_delivery_recovery_item(
     base: str | os.PathLike[str], sid: str, *, code: str, until_stage: str = 'stage7',
 ) -> QueueItem | None:
     """producer 严格检查后才发布免费补尾；此查询不补账、不因文件存在发命令。"""
     from novel.stages.stage4 import design_recovery, plan_recovery
-    from novel.stages.stage6 import hook, semantic
+    from novel.stages.stage6 import hook, semantic, prepare
     from novel.stages.stage7 import rename
     from novel.work_units import workflow_manifest
 
@@ -386,7 +405,7 @@ def prepared_delivery_recovery_item(
     if book is None:
         return None
     pending = []
-    for node, producer in (('stage4.design', design_recovery), ('stage4.plan', plan_recovery), ('stage6.hook', hook), ('stage6.semantic', semantic), ('stage7.rename', rename)):
+    for node, producer in (('stage4.design', design_recovery), ('stage4.plan', plan_recovery), ('stage6.prepare', prepare), ('stage6.hook', hook), ('stage6.semantic', semantic), ('stage7.rename', rename)):
         if STAGES.index(NODES[node].stage) > STAGES.index(until_stage):
             continue
         inspected = producer.inspect_prepared_recovery(st.readonly_ctx(book, node, code))
@@ -449,6 +468,10 @@ def plan_book_from_overview(
         core_recovery = stage2_core_recovery_item(base, sid, code=approvals.projection_code())
         if core_recovery is not None:
             return ([], [core_recovery]) if core_recovery.waiting_on else ([core_recovery], [])
+    if STAGES.index(until_stage) >= STAGES.index('stage6'):
+        recovery = prepare_edit_recovery_item(base, sid, code=approvals.projection_code())
+        if recovery is not None:
+            return [], [recovery]
     if STAGES.index(until_stage) >= STAGES.index('stage4'):
         recovery = prepared_delivery_recovery_item(base, sid, code=approvals.projection_code(), until_stage=until_stage)
         if recovery is not None:
@@ -846,6 +869,23 @@ def plan_book_from_overview(
                 'unreadable' if closure_view is None else closure_view.state)
             if stage5_write_will_run or closure_state != 'closed':
                 why_blocked = WAITING_ON_STAGE5_CLOSURE
+        if why_blocked is None and spec.stage == 'stage6':
+            if approval_doc is not None:
+                current_prepare = approval_doc.prepare
+            else:
+                from novel.stages.stage6 import prepare
+                book = paths.resolve_novel_dir(base, sid)
+                current_prepare = prepare.view_state(ArtifactStore(st.readonly_ctx(
+                    book, 'stage6.prepare', approvals.projection_code())))
+            if node == 'stage6.prepare':
+                if current_prepare.state == 'accepted':
+                    continue
+                if current_prepare.state != 'missing':
+                    why_blocked = (WAITING_ON_STAGE6_PREPARE
+                        if current_prepare.state in {'pending', 'invalid', 'stale'}
+                        else WAITING_ON_PREPARED_DELIVERY_UNKNOWN)
+            elif current_prepare.state != 'accepted' or any(row.node == 'stage6.prepare' for row in todo):
+                why_blocked = WAITING_ON_STAGE6_PREPARE
         review_follows_planned_write = (
             node == 'stage5.review'
             and stage5_write_will_run

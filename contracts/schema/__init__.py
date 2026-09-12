@@ -202,6 +202,10 @@ from contracts.schema.stage6 import (
     ApprovedHook, Candidate, Hook, HookApprovalResolution, HookEdit,
     HookSemanticResponse, HookSemanticReview, Mech,
 )
+from contracts.artifacts import (STAGE6_PREPARE, STAGE6_PREPARE_EDIT, STAGE6_PREPARE_REVIEW,
+    STAGE6_PREPARE_REVIEW_DECISIONS, STAGE6_PREPARE_COMMIT)
+from contracts.schema.stage6_prepare import (Stage6Prepare, PrepareEdit, Stage6PrepareReview,
+    PrepareDecision, PrepareMutationJournal)
 from contracts.schema.stage7 import (
     BookTxt, CharacterPatch, ExtraSub, IdentityBaseline, NameDecision, NameMap,
     NameMapEdit, NameMapResponse, Residual, StemBaseline,
@@ -356,13 +360,18 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE5_WONTFIX: ArtifactSpec(WontFix),
     # v3 同槽可持续修订，attempt 按槽连续唯一；总内容预算仍属整书工作单元。
     # 旧 v2 只在冻结代码读取，新 clean base 由 Hook producer 重建，不迁移。
-    STAGE6_HOOK: ArtifactSpec(Hook, 3),
+    STAGE6_PREPARE: ArtifactSpec(Stage6Prepare),
+    STAGE6_PREPARE_EDIT: ArtifactSpec(PrepareEdit),
+    STAGE6_PREPARE_REVIEW: ArtifactSpec(Stage6PrepareReview),
+    STAGE6_PREPARE_REVIEW_DECISIONS: ArtifactSpec(PrepareDecision),
+    STAGE6_PREPARE_COMMIT: ArtifactSpec(PrepareMutationJournal),
+    STAGE6_HOOK: ArtifactSpec(Hook, 4),
     STAGE6_HOOK_EDIT: ArtifactSpec(HookEdit, 2),
     # v2 新增判官实际看见的 Stage5 开篇成稿 `judged`绑定；
     # 旧 v1 不能证明正文改字后语义结论仍然 current。
-    STAGE6_SEMANTIC: ArtifactSpec(HookSemanticReview, 2),
+    STAGE6_SEMANTIC: ArtifactSpec(HookSemanticReview, 3),
     STAGE6_WONTFIX: ArtifactSpec(WontFix),
-    STAGE7_NAME_MAP: ArtifactSpec(NameMap, 2),
+    STAGE7_NAME_MAP: ArtifactSpec(NameMap, 3),
     STAGE7_NAME_MAP_EDIT: ArtifactSpec(NameMapEdit),
 }
 ARTIFACTS: dict[str, type[BaseModel]] = {

@@ -8,11 +8,19 @@ from typing import Any
 from contracts.invariants import HOOK_RECIPE, HOOK_SLOTS
 from contracts.schema.report import finding
 from contracts.schema.stage6 import Hook
+from contracts.schema.stage6_prepare import PrepareState
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from novel.core.measure import body_style_metrics, measure_body
 from novel.quality.global_review import build_review
 from novel.stages.stage5.measure import Book
+
+
+def missing_prepare_state() -> PrepareState:
+    """审批接口最小样例明确登记未运行准备，不把缺字段当成未运行。"""
+    return PrepareState(state='missing', reason='测试样例尚未运行文案准备',
+        subject_sha256=None, review_token=None, prepare=None, review=None,
+        pending_commit=False)
 
 
 def approved_global_review(grounding: Any) -> GlobalReview:
@@ -93,8 +101,10 @@ def stage5_book() -> Book:
         }],
         'characters': [{'actor_ref': 'actor_' + '1' * 24, 'display_name': character['display_name'],
                         'surfaces': ['沈青'], 'role': character['role'],
+                        'surface_allowed_slots': {'沈青': ['s01']},
                         'allowed_slots': ['s01'], 'role_allowed_slots': ['s01']},
                        {'actor_ref': 'actor_' + '2' * 24, 'display_name': '周衡', 'surfaces': ['周衡'],
+                        'surface_allowed_slots': {'周衡': ['s01']},
                         'role': '与沈青一同核账的人', 'allowed_slots': ['s01'], 'role_allowed_slots': ['s01']}],
         'narration': [{'segment': '全章', 'grammatical_person': 'third',
                        'narrator': 'actor_' + '1' * 24, 'focalizer': None,

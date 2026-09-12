@@ -265,6 +265,10 @@ const RAW_V1 = import.meta.glob([
   // 这些历史材料只作 Global 证据与拒绝旧结构的反例，不再作为页面响应打包。
   '!../fixtures/backend_v1/reading_ch3.json',
   '!../fixtures/backend_v1/check_stage2.json',
+  '!../fixtures/backend_v1/global.json',
+  '!../fixtures/backend_v1/stage6.json',
+  '!../fixtures/backend_v1/stage7.json',
+  '!../fixtures/backend_v1/stage7_ch3.json',
 ], {
   eager: true,
   import: 'default',
@@ -296,6 +300,31 @@ function noBook(path: string): Promise<never> {
 /** 这一章不在样本里 */
 function noChapter(path: string): Promise<never> {
   return fail(new ApiError('nosample', path, { scope: 'chapter' }))
+}
+
+/** 完整合成书只读快照：缺键不回退其他小说或历史批准。 */
+function plotRead<T>(sid: string, suffix: string, final = false,
+  scope: 'book' | 'chapter' = 'book'): Promise<T> {
+  const path = `/novels/${sid}/${suffix}`
+  if (sid !== PLOT_SAMPLE_SID) return noBook(path)
+  const data = plotFlowSample as Record<string, unknown>
+  const key = suffix || 'overview'
+  const value = data['final:http:' + key] ?? (final ? undefined : data['http:' + key])
+  return value === undefined
+    ? fail(new ApiError('nosample', path, { scope }))
+    : later(structuredClone(value) as T)
+}
+
+function readonlyPlot(path: string): Promise<never> {
+  return fail(new ApiError('server', path, { status: 501,
+    message: '此样例只录制正式读回，不执行编辑、批准或作业；请连接真实后端。',
+    backendKind: 'MockCapabilityUnavailable' }))
+}
+
+async function plotNovel(): Promise<NovelOverview> {
+  // 复用真实 HTTP 适配器；延后加载避免 endpoints 选择 mock 时的初始化循环。
+  const { adaptNovel } = await import('./endpoints')
+  return adaptNovel(await plotRead<Parameters<typeof adaptNovel>[0]>(PLOT_SAMPLE_SID, 'overview', true))
 }
 
 function bookOnly<T>(sid: string, path: string, load: () => T): Promise<T> {
@@ -621,8 +650,10 @@ function mockDesignHistoryEntry(decision: DesignReviewDecision) {
 
 function freshDoc(sid: string): ApprovalDoc {
   return {
-    v: 7,
+    v: 8,
     sid,
+    prepare: { state: 'unknown', reason: '此历史样例未记录独立 Prepare，不能继承为已接受。',
+      subject_sha256: null, review_token: null, prepare: null, review: null, pending_commit: false },
     gate: { s0: false, s1: false, s2: false, s4: false, s5: false, s6: false, s7: false },
     seen: { read: false, global: false },
     writing: false,
@@ -672,8 +703,9 @@ function seededDoc(sid: string): ApprovalDoc {
   const decision = seededStructureDecision()
   const designDecision = seededDesignReviewDecision()
   return {
-    v: 7,
+    v: 8,
     sid,
+    prepare: freshDoc(sid).prepare,
     gate: { s0: true, s1: true, s2: true, s4: true, s5: true, s6: false, s7: false },
     seen: { read: true, global: true },
     writing: true,
@@ -722,8 +754,8 @@ function seededDoc(sid: string): ApprovalDoc {
 
 function loadDoc(sid: string): ApprovalDoc {
   const got = lsRead<unknown>('approvals.' + sid)
-  // spawns 是服务端的事；只接受当前公开 v7，旧本地记录不沿用审批。
-  if (got && typeof got === 'object' && (got as { v?: unknown }).v === 7) {
+  // spawns 是服务端的事；只接受当前公开 v8，旧本地记录不沿用审批。
+  if (got && typeof got === 'object' && (got as { v?: unknown }).v === 8) {
     return withMockSpawns(got as ApprovalDoc)
   }
   const seed = !got && sid === SAMPLE_SID ? seededDoc(sid) : freshDoc(sid)
@@ -1019,9 +1051,8 @@ function withMockSpawns(doc: ApprovalDoc): ApprovalDoc {
   const spawns: Partial<Record<GateKey, ActionRef[]>> = {
     s1,
     s2: [{ kind: 'stage4.plan', label: 'stage4 重构计划', extra: null }],
-    s5: [{ kind: 'stage6.hook', label: 'stage6 开篇文案（产三候选）', extra: null }],
-    s6: [{ kind: 'stage7.rename', label: 'stage7 人名替换（产新人物表）', extra: null }],
-    s7: [{ kind: 'stage7.assemble', label: 'stage7 · 组装成书 txt', extra: null }],
+    // 历史样本未经过现役独立 Prepare，不能提供本轮 Hook/改名/交付动作。
+    s5: [], s6: [], s7: [],
   }
   return { ...doc, spawns }
 }
@@ -1308,16 +1339,22 @@ export const mockApi: Api = {
   approveStage2Review: async () => {
     throw new Error('离线样本未提供 Stage2 节点接受，请连接真实服务')
   },
-  getNovels: () => later(mockNovels()),
+  getNovels: async () => {
+    const legacy = mockNovels()
+    const data = plotFlowSample as Record<string, unknown>
+    return data['final:http:overview']
+      ? { ...legacy, novels: [await plotNovel(), ...legacy.novels] } : legacy
+  },
 
-  getNovel: (sid) =>
+  getNovel: (sid) => sid === PLOT_SAMPLE_SID ? plotNovel() :
     bookOnly(sid, `/novels/${sid}`, () =>
       currentMockNovel(raw<LegacyNovel>('novel_overview.json')),
     ),
 
   // 进度屏在 stage0.remove 前就要能开（书目录可能还没建）——任何 sid 都给静态样例，不走 bookOnly
-  getRunProgress: (sid) => later(mockRunProgress(sid)),
-  getRunMetrics: async () => { throw new Error('当前模拟样例没有运行成本账；请使用实际运行记录') },
+  getRunProgress: (sid) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'run', true) : later(mockRunProgress(sid)),
+  getRunMetrics: (sid, runId) => runId ? noBook(`/novels/${sid}/run/metrics?run_id=${runId}`)
+    : plotRead(sid, 'run/metrics', true),
   previewWorkUnitGrant: async () => { throw new Error('离线样本未提供工作单元额度授权，请连接真实服务') },
   grantWorkUnit: async () => { throw new Error('离线样本未提供工作单元额度授权，请连接真实服务') },
 
@@ -1397,15 +1434,18 @@ export const mockApi: Api = {
       ordinal: null,
     })),
 
-  getStage1: (sid) => bookOnly(sid, `/novels/${sid}/stage1`, mockStage1View),
+  getStage1: (sid) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'stage1')
+    : bookOnly(sid, `/novels/${sid}/stage1`, mockStage1View),
 
-  getReading: (sid, o) =>
+  getReading: (sid, o) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'reading/' + o, false, 'chapter') :
     fail(new ApiError('server', `/novels/${sid}/reading/${o}`, {
       status: 501, message: '此历史示例使用已退役的事实蓝图。完整剧情阅读请连接当前后端。',
       backendKind: 'MockCapabilityUnavailable',
     })),
 
-  getBlueprintReviewWorkpack: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/blueprint-review-workpack`, {
+  getBlueprintReviewWorkpack: (sid, scope = 'cross_chapter') => sid === PLOT_SAMPLE_SID
+    ? plotRead(sid, 'stage2/blueprint-review-workpack?scope=' + encodeURIComponent(scope), true)
+    : fail(new ApiError('server', `/novels/${sid}/stage2/blueprint-review-workpack`, {
     status: 501, message: '知识关联需要当前源文、知识与 Blueprint 的完整工作包，请连接真实后端',
     backendKind: 'MockCapabilityUnavailable',
   })),
@@ -1426,6 +1466,8 @@ export const mockApi: Api = {
   })),
 
   getGlobal: (sid, revealSpoilers = false) => {
+    if (sid === PLOT_SAMPLE_SID) return plotRead<Stage2Global>(sid, 'stage2/global')
+      .then((value) => projectGlobalSpoilers(value, revealSpoilers))
     const current = stage2CoreFixture().global
     return sid === current.sid
       ? later(projectGlobalSpoilers(current, revealSpoilers))
@@ -1433,6 +1475,7 @@ export const mockApi: Api = {
   },
 
   getCharacters: (sid) => {
+    if (sid === PLOT_SAMPLE_SID) return plotRead(sid, 'stage2/characters')
     const current = stage2CoreFixture().characters
     return sid === current.sid ? later(current)
       : fail(new ApiError('nosample', `/novels/${sid}/stage2/characters`, { scope: 'book' }))
@@ -1447,7 +1490,8 @@ export const mockApi: Api = {
     status: 501, message: '人物订正请使用真实后端写回', backendKind: 'MockCapabilityUnavailable',
   })),
 
-  getGlobalReview: (sid) => sid === stage2CoreFixture().global.sid
+  getGlobalReview: (sid) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'stage2/global-review', true)
+    : sid === stage2CoreFixture().global.sid
     ? later(loadGlobalReview(sid))
     : fail(new ApiError('nosample', `/novels/${sid}/stage2/global-review`, { scope: 'book' })),
 
@@ -1549,98 +1593,36 @@ export const mockApi: Api = {
     return later(job)
   },
 
-  getStage4: (sid, o) =>
+  getStage4: (sid, o) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'stage4/' + o, false, 'chapter') :
     fail(new ApiError('server', `/novels/${sid}/stage4/${o}`, {
       status: 501, message: '此历史示例没有现役分场呈现与章级上下文，请连接当前后端。',
       backendKind: 'MockCapabilityUnavailable',
     })),
 
-  getStage5: (sid, o) =>
+  getStage5: (sid, o) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'stage5/' + o, true, 'chapter') :
     chapterOnly(sid, o, `/novels/${sid}/stage5/${o}`, currentMockStage5),
 
-  getReview: (sid, o) =>
+  getReview: (sid, o) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'review/' + o, true, 'chapter') :
     chapterOnly(sid, o, `/novels/${sid}/review/${o}`, currentMockReview),
 
-  getInbox: (sid) => bookOnly(sid, `/novels/${sid}/inbox`, mockInbox),
+  getInbox: (sid) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'inbox', true)
+    : bookOnly(sid, `/novels/${sid}/inbox`, mockInbox),
 
-  getStage6: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage6`, () => {
-      const base = fx<Stage6Response>('stage6.json')
-      const edit = lsRead<{
-        index: number
-        actor: string
-        reason: string
-        subject_sha256: string
-        workpack_sha256: string
-      }>('hook.' + sid)
-      if (!edit) return base
-      const cand = base.candidates.find((c) => c.index === edit.index)
-      if (!cand) return base
-      // 定稿 = 候选那一份的拷贝（--pick 的语义；改字不在浏览器，走 CLI）。
-      return {
-        ...base,
-        approved: {
-          // 定稿记的是「从哪条候选来」（位置身份），策略名由服务端现算后一并下发。
-          slot: 'c' + edit.index,
-          approach: cand.approach,
-          chars: cand.chars,
-          text: cand.text,
-          origin: 'human',
-          mech: cand.mech,
-          findings: cand.findings,
-          resolution: {
-            actor: edit.actor,
-            reason: edit.reason,
-            subject_sha256: edit.subject_sha256,
-            basis: 'human_verification' as const,
-            semantic_review_seq: cand.semantic_state === 'unreviewed' ? null : 1,
-            workpack_sha256: edit.workpack_sha256,
-          },
-        },
-        candidates: base.candidates.map((c) => ({ ...c, approved: c.index === edit.index })),
-      }
-    }),
-
-  getStage7: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage7`, () => {
-      const base = fx<Stage7Response>('stage7.json')
-      const approved = lsRead<NonNullable<Stage7Response['approved']>>('names.' + sid)
-      return {
-        ...base,
-        approved: approved ?? base.approved,
-        // 冻结抓包记录的是“账在、txt 不在”的历史故障；假服务端把专用文本端点
-        // 也做成可达，开发时才能走通预览 / 下载这条新增 UX。
-        book_txt_on_disk: true,
-        delivery: { state: 'unknown', reason: '冻结样例没有当前交付证明；请连接真实后端重验', checked_at: 0 },
-        // 抓包日期（2026-08-17）早于成书改名，那份 fixture 里没有这个字段。
-        // ⚠ 兼容推导只许留在**适配边界**（本文件），不许进屏幕组件
-        // （`docs/LESSONS.md` 第 13 条）；真实服务端由
-        // `novel/views/stage7.py` 从 `paths.book_txt_rel` 下发。
-        book_filename: base.book_filename ?? base.title + '_rewriting.txt',
-      }
-    }),
-
-  getStage7Chapter: (sid, o) =>
-    chapterOnly(sid, o, `/novels/${sid}/stage7/${o}`, () => {
-      const base = fx<Stage7Response>('stage7_ch3.json')
-      const approved = lsRead<NonNullable<Stage7Response['approved']>>('names.' + sid)
-      return { ...base, approved: approved ?? base.approved,
-        delivery: { state: 'unknown', reason: '冻结样例没有当前交付证明；请连接真实后端重验', checked_at: 0 } }
-    }),
-
-  getStage7Book: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage7/book.txt`, () =>
-      '《mock 成书》\n\n这是最终成书的预览样例。\n'),
-
-  downloadStage7Book: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage7/book.txt?download=true`, () =>
-      new Blob(['《mock 成书》\n\n这是最终成书的下载样例。\n'], {
-        type: 'text/plain;charset=utf-8',
-      }),
-    ),
+  getStage6Prepare: (sid) => plotRead(sid, 'stage6/prepare', true),
+  getStage6PrepareWorkpack: (sid) => plotRead(sid, 'stage6/prepare/workpack', true),
+  previewStage6PrepareEdit: (sid) => readonlyPlot('/novels/' + sid + '/stage6/prepare/edit/preview'),
+  applyStage6PrepareEdit: (sid) => readonlyPlot('/novels/' + sid + '/stage6/prepare/edit'),
+  reviewStage6Prepare: (sid) => readonlyPlot('/novels/' + sid + '/stage6/prepare/review'),
+  getStage6: (sid) => plotRead(sid, 'stage6', true),
+  getStage7: (sid) => plotRead(sid, 'stage7', true),
+  getStage7Chapter: (sid, ordinal) => plotRead(sid, 'stage7/' + ordinal, true, 'chapter'),
+  getStage7Book: (sid) => plotRead(sid, 'stage7/book.txt', true),
+  downloadStage7Book: async (sid) => new Blob(
+    [await plotRead<string>(sid, 'stage7/book.txt', true)], { type: 'text/plain;charset=utf-8' }),
 
   getCheck: (sid, kind: CheckKind) => {
     const path = `/novels/${sid}/check/${kind}`
+    if (sid === PLOT_SAMPLE_SID) return plotRead(sid, 'check/' + kind, true)
     if (sid !== SAMPLE_SID) return noBook(path)
     // stage0/1 在样本书上没跑过（真后端答 404）—— null = 「还没跑」，不是「通过」。
     if (kind === 'stage0' || kind === 'stage1') return later(null)
@@ -1651,7 +1633,9 @@ export const mockApi: Api = {
     return later(mockCheck(kind))
   },
 
-  getSampleCoverage: () => later({ sid: SAMPLE_SID, ordinals: [SAMPLE_ORDINAL] }),
+  getSampleCoverage: () => later({ sid: PLOT_SAMPLE_SID, ordinals: Object.keys(plotFlowSample)
+    .filter((key) => /^final:http:stage7\/\d+$/.test(key))
+    .map((key) => Number(key.split('/').at(-1))).sort((a, b) => a - b) }),
 
   getJobs: (sid) => later(publicJobs(sid)),
 
@@ -1702,9 +1686,11 @@ export const mockApi: Api = {
     }
   },
 
-  previewJob: (req) => later(mockJobPreview(req)),
+  previewJob: (req) => req.sid === PLOT_SAMPLE_SID || /^stage[67]\./.test(req.kind)
+    ? readonlyPlot('/jobs/preview') : later(mockJobPreview(req)),
 
-  startJob: (req) => later(spawn(req)),
+  startJob: (req) => req.sid === PLOT_SAMPLE_SID || /^stage[67]\./.test(req.kind)
+    ? readonlyPlot('/jobs') : later(spawn(req)),
 
   /* agent 代跑：静态样例 —— 列表恒空（mock 不养 agent 进程），start 回一条 running 记录 */
   getAgentCapabilities: () => later(fx<AgentCapabilitiesResponse>('agent_capabilities.json')),
@@ -1774,180 +1760,14 @@ export const mockApi: Api = {
   getAgentQueue: () =>
     later<AgentQueueView>({ running: [], pending: [], rejected: [], max_concurrent: 3 }),
 
-  getApprovals: (sid) => later(loadDoc(sid)),
+  getApprovals: (sid) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'approvals', true) : later(loadDoc(sid)),
 
-  getDesignApprovalWorkpack: (sid) => later(mockApprovalWorkpack(sid, 'design')),
-  getStructureApprovalWorkpack: (sid) => later(mockApprovalWorkpack(sid, 'structure')),
-  getStage6ApprovalWorkpack: (sid) =>
-    bookOnly(sid, `/novels/${sid}/approvals/stage6/workpack`, () => {
-      const workpack_sha256 = '6'.repeat(64)
-      const review_identity_sha256 = '8'.repeat(64)
-      const current = lsRead<{
-        index: number
-        actor: string
-        reason: string
-        subject_sha256: string
-        workpack_sha256: string
-        review_identity_sha256: string
-      }>('hook.' + sid)
-      const view = fx<Stage6Response>('stage6.json')
-      const decisionOf = (subject_sha256: string, text: string) => ({
-        ability: 'reference_boundary',
-        subject_key: subject_sha256,
-        verdict: 'UNVER' as const,
-        reason: 'mock 两名盲评证据交给人工终审，不自动放行',
-        evidence: [{
-          artifact: 'stage6/hook.json', subject_sha256, start: 0, end: text.length,
-        }],
-        judges: ['A', 'B'].map((judge) => ({
-          judge,
-          verdict: 'UNVER' as const,
-          reason: `mock 判官 ${judge}：需人工结合开篇正文核验`,
-          evidence: [{
-            artifact: 'stage6/hook.json', subject_sha256, start: 0, end: text.length,
-          }],
-        })),
-      })
-      return {
-        v: 3,
-        kind: 'stage6',
-        sid,
-        review_contract_version: 'stage6-final-review-v4',
-        review_identity_sha256,
-        validation_seal_sha256: '9'.repeat(64),
-        review_token: 's6r3_' + workpack_sha256,
-        artifact_subject_sha256: 'a'.repeat(64),
-        rationale: view.rationale,
-        materials: {
-          source_hook: view.source_hook_text,
-          source_blurb: fx<{ source_blurb: import('@/types/stages').SourceBlurbMaterials }>('global.json').source_blurb,
-          rewritten_chapters: [{ chapter_ordinal: 1, text: '合成终审正文，仅用于界面测试。' }],
-        },
-        check: {
-          rules_scanned: 0,
-          counts: { ok: 0, hit: 0, unver: 0, skipped: 0 },
-          provenance: {
-            freshness: 'fresh', reason: 'match', ghosts: [], edges: [],
-            invalid: false, revalidated: null, origin: null,
-          },
-          attention: [], metrics: [],
-        },
-        judge_rankings: {
-          A: view.candidates.map((candidate) => 'c' + candidate.index),
-          B: [...view.candidates].reverse().map((candidate) => 'c' + candidate.index),
-        },
-        candidates: view.candidates.map((candidate) => ({
-          index: candidate.index,
-          slot: 'c' + candidate.index,
-          approach: candidate.approach,
-          chars: candidate.chars,
-          text: candidate.text,
-          subject_sha256: candidate.subject_sha256,
-          mech: candidate.mech,
-          findings: candidate.findings,
-          semantic_state: candidate.semantic_state,
-          semantic_reason: candidate.semantic_reason,
-          semantic_review_seq: candidate.semantic_state === 'unreviewed' ? null : 1,
-          semantic_review: {
-            label: 'c' + candidate.index,
-            coverage: 'complete',
-            uncertainty_reason: null,
-            contradictions: candidate.contradictions,
-            quality: {
-              read_on_desire: 8,
-              body_voice_match: 8,
-              concrete_scene_and_specificity: 8,
-              curiosity_and_payoff_promise: 8,
-              hook_craft: 8,
-              synopsis_penalty: 0,
-            },
-            concise_reason: candidate.semantic_reason,
-            text_sha1: candidate.subject_sha256.slice(0, 10),
-          },
-          semantic_decision: decisionOf(candidate.subject_sha256, candidate.text),
-          quality_score: candidate.quality_score,
-          quality_rank: candidate.quality_rank,
-        })),
-        workpack_sha256,
-        disposition: current?.review_identity_sha256 === review_identity_sha256
-          ? 'already_current'
-          : 'review_required',
-        current_slot: current?.review_identity_sha256 === review_identity_sha256
-          ? 'c' + current.index
-          : null,
-        current_approval: current?.review_identity_sha256 === review_identity_sha256
-          ? {
-              actor: current.actor,
-              reason: current.reason,
-              subject_sha256: current.subject_sha256,
-              workpack_sha256: current.workpack_sha256,
-              review_identity_sha256: current.review_identity_sha256,
-            }
-          : null,
-      } satisfies Stage6ApprovalWorkpack
-    }),
-  getStage7ApprovalWorkpack: (sid) =>
-    bookOnly(sid, `/novels/${sid}/approvals/stage7/workpack`, () => {
-      const workpack_sha256 = '7'.repeat(64)
-      const review_identity_sha256 = 'a'.repeat(64)
-      const current = lsRead<{
-        actor: string
-        reason: string
-        subject_sha256: string
-        workpack_sha256: string
-        review_identity_sha256: string
-      }>('names.' + sid)
-      const view = fx<Stage7Response>('stage7.json')
-      return {
-        v: 3,
-        kind: 'stage7',
-        sid,
-        review_contract_version: 'stage7-final-review-v3',
-        review_identity_sha256,
-        validation_seal_sha256: 'b'.repeat(64),
-        review_token: 's7r3_' + workpack_sha256,
-        artifact_subject_sha256: 'b'.repeat(64),
-        decision_subject_sha256: view.approval_subject_sha256,
-        check: {
-          rules_scanned: 0,
-          counts: { ok: 0, hit: 0, unver: 0, skipped: 0 },
-          provenance: {
-            freshness: 'fresh', reason: 'match', ghosts: [], edges: [],
-            invalid: false, revalidated: null, origin: null,
-          },
-          attention: [], metrics: [],
-        },
-        surname_map: view.surname_map,
-        characters: view.characters,
-        extra_subs: view.extra_subs,
-        subs_count: view.subs_count,
-        kept_count: view.kept_count,
-        kept: Array.from(
-          { length: view.kept_count },
-          (_value, index) => `mock明确保留${index + 1}`,
-        ),
-        replacement_hits: Object.fromEntries(
-          view.characters.map((character) => [character.old_canonical, character.hits]),
-        ),
-        residual: view.residual,
-        baselines: view.baselines,
-        book: view.book,
-        identity: view.identity,
-        workpack_sha256,
-        disposition: current?.review_identity_sha256 === review_identity_sha256
-          ? 'already_current'
-          : 'review_required',
-        current_approval: current?.review_identity_sha256 === review_identity_sha256
-          ? {
-              actor: current.actor,
-              reason: current.reason,
-              subject_sha256: current.subject_sha256,
-              workpack_sha256: current.workpack_sha256,
-              review_identity_sha256: current.review_identity_sha256,
-            }
-          : null,
-      } satisfies Stage7ApprovalWorkpack
-    }),
+  getDesignApprovalWorkpack: (sid) => sid === PLOT_SAMPLE_SID
+    ? plotRead(sid, 'approvals/design/workpack', true) : later(mockApprovalWorkpack(sid, 'design')),
+  getStructureApprovalWorkpack: (sid) => sid === PLOT_SAMPLE_SID
+    ? plotRead(sid, 'approvals/structure/workpack', true) : later(mockApprovalWorkpack(sid, 'structure')),
+  getStage6ApprovalWorkpack: (sid) => plotRead(sid, 'approvals/stage6/workpack', true),
+  getStage7ApprovalWorkpack: (sid) => plotRead(sid, 'approvals/stage7/workpack', true),
 
   getStage5ClosureTemplate: (sid): Promise<Stage5ClosureTemplate> => {
     const workpack = loadDoc(sid).closure.workpack
@@ -2339,69 +2159,9 @@ export const mockApi: Api = {
     }))
   },
 
-  approveHook: (sid, req) => {
-    const candidate = fx<Stage6Response>('stage6.json').candidates.find(
-      (row) => row.index === req.pick)
-    if (!candidate || req.review_token !== 's6r3_' + '6'.repeat(64)) {
-      return fail(new ApiError('server', `/novels/${sid}/stage6/approve`, {
-        message: 'review token 已过期',
-      }))
-    }
-    lsWrite('hook.' + sid, {
-      index: req.pick,
-      actor: req.actor,
-      reason: req.reason,
-      subject_sha256: candidate.subject_sha256,
-      workpack_sha256: '6'.repeat(64),
-      review_identity_sha256: '8'.repeat(64),
-    })
-    return later(finish({
-      kind: 'stage6.approve',
-      label: '文案定稿 --pick ' + req.pick,
-      extra: [
-        '--pick', String(req.pick),
-        '--actor', req.actor,
-        '--reason', req.reason,
-        '--review-token', req.review_token,
-      ],
-      sid,
-      ordinal: null,
-    }))
-  },
-
-  approveNames: (sid, req) => {
-    const view = fx<Stage7Response>('stage7.json')
-    if (req.review_token !== 's7r3_' + '7'.repeat(64)) {
-      return fail(new ApiError('server', `/novels/${sid}/stage7/approve`, {
-        message: 'review token 已过期',
-      }))
-    }
-    lsWrite('names.' + sid, {
-      origin: 'human', actor: req.actor, reason: req.reason,
-      subject_sha256: view.approval_subject_sha256,
-      workpack_sha256: '7'.repeat(64),
-      review_identity_sha256: 'a'.repeat(64),
-    })
-    return later(finish({
-      kind: 'stage7.approve',
-      label: '人名表定稿',
-      extra: [
-        '--actor', req.actor,
-        '--reason', req.reason,
-        '--review-token', req.review_token,
-      ],
-      sid,
-      ordinal: null,
-    }))
-  },
-
-  adoptResidual: (sid, req) => later(finish({
-    kind: 'stage7.rename',
-    label: '采纳 high 漏网叫法候选',
-    extra: ['--adopt-residual', req.confidence],
-    sid,
-    ordinal: null,
-  })),
+  approveHook: (sid) => readonlyPlot('/novels/' + sid + '/stage6/approve'),
+  approveNames: (sid) => readonlyPlot('/novels/' + sid + '/stage7/approve'),
+  adoptResidual: (sid) => readonlyPlot('/novels/' + sid + '/stage7/adopt-residual'),
 
   uploadCorpus: (file) => {
     // mock 里只有这一本真书。上传等于把它重置回第 0 步。
@@ -2428,6 +2188,8 @@ export const mockApi: Api = {
 }
 import plotReviewSample from '@/fixtures/plot_v1/review.json'
 import plotFlowSample from '@/fixtures/plot_v1/flow.json'
+/** sid 来自正式合成书，不能把历史小说的批准移植到这里。 */
+export const PLOT_SAMPLE_SID = plotFlowSample['http:overview'].sid
 export function plotFlowFixture() {
   return structuredClone(plotFlowSample) as unknown as {
     design_template: import('@/types/approvals').DesignReviewTemplate
@@ -2441,6 +2203,15 @@ export function plotFlowFixture() {
     'http:stage4/3': import('@/types/stages').Stage4Response
     'http:stage5/1': import('@/types/stages').Stage5Response
     'http:run': import('@/types/run').RunProgress
+    metadata: { synthetic: true; sid: string; source: string; scope: string }
+    'final:http:stage6/prepare': import('@/types/prepare').PrepareView
+    'final:http:stage6/prepare/workpack': import('@/types/prepare').PrepareWorkpack
+    'final:http:stage6': Stage6Response
+    'final:http:stage7': Stage7Response
+    'final:http:stage7/book.txt': string
+    'final:http:approvals': ApprovalDoc
+    'final:http:approvals/stage6/workpack': Stage6ApprovalWorkpack
+    'final:http:approvals/stage7/workpack': Stage7ApprovalWorkpack
   }
 }
 
@@ -2450,6 +2221,9 @@ export function plotReviewFixture() {
     chapter: import('@/types/stages').BlueprintReviewWorkpack
     cross: import('@/types/stages').BlueprintReviewWorkpack
     reading: import('@/types/stages').ReadingResponse
+    prepare: import('@/types/prepare').PrepareWorkpack
+    hook: Stage6ApprovalWorkpack
+    rename: Stage7ApprovalWorkpack
     enum_values: { plot_review_dimensions: string[]; plot_dimension_states: string[] }
   }
 }

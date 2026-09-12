@@ -243,7 +243,7 @@ STAGE5_CLOSED_EXEMPT_FLAGS: Final = (
     '--dry-run', '--check-only', '--identity', '--recheck',
     '--revalidate', '--apply-edit', '--wontfix',
     '--emit-edit-template', '--adopt-residual', '--validate-edit',
-    '--rebind-review',
+    '--rebind-review', '--emit-review-template', '--emit-review-workpack',
 )
 
 #: agent 运行配置的四个基础取值域。它们刻意做成类型别名而不是新的
@@ -525,8 +525,11 @@ STAGE2_NODE_REVIEWERS: Final = ('stage2.global', 'stage2.blueprint')
 STAGE2_NODE_REVIEW_OWNERS: Final = ('stage2.characters', 'stage2.global', 'stage2.blueprint')
 STAGE2_NODE_REVIEW_STATES: Final = (
     'missing', 'accepted', 'rework', 'uncertain', 'stopped', 'expired', 'unknown')
-STAGE6_REVIEW_CONTRACT: Final = 'stage6-final-review-v4'
-STAGE7_REVIEW_CONTRACT: Final = 'stage7-final-review-v3'
+STAGE6_REVIEW_CONTRACT: Final = 'stage6-final-review-v5'
+STAGE6_APPROVAL_CHECK_BASIS: Final = 'candidate_without_approval'
+STAGE6_PREPARE_DECISIONS: Final = ('accept', 'rework', 'uncertain')
+STAGE7_REVIEW_CONTRACT: Final = 'stage7-final-review-v4'
+STAGE7_APPROVAL_CHECK_BASIS: Final = 'name_map_without_approval_or_delivery'
 #: `R-5.22` 预检结论的两态。pass = 构造性绑定过整书联合 HARD；
 #: blocked = 存在 stop-owner 失败或代码铸造的不可行 witness。
 DESIGN_PREFLIGHT_STATUSES: Final = ('pass', 'blocked')
@@ -1688,7 +1691,8 @@ FREE_ENTRIES: Final = {
     '--identity': '恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外',
     '--apply-edit': '把人工改过的内容落成新的一轮',
     '--preview-edit': '只读预检 Stage5 人工稿，不调用模型、不写盘',
-    '--review-decisions': '应用带 actor、理由和 subject hash 乐观锁的 stage2 人工复核决策',
+    '--review-decisions': '应用带 actor、理由和 subject hash 乐观锁的独立 typed 复核决策',
+    '--recover-edit': '免费补齐本 owner 已耐久的原编辑或复核决定，不重新审阅、不调用模型',
     '--close-review': '核验当前节点所需的 typed 接受覆盖，零模型补齐审批与闸门',
     # ⚠⚠ **它是 2026-08-15 补的，而漏它的后果正是本表开头那条**：
     #   `--wontfix` 原来只挂在 `stage5.review` 上，而那是个 `paid=False` 节点
@@ -2008,6 +2012,11 @@ WRITE_EFFECTS: Final = {
 #:
 #: `stage4.plan --identity` 与 Stage6 一样只做内存诊断；Stage7 仍写正式人物表。
 NODE_WRITE_EFFECTS: Final = {
+    ('stage6.prepare', '--recover-prepared'):
+        '按原回答补 stage6/prepare.json 与原采用尾账（0 模型）',
+    ('stage6.prepare', '--recover-edit'):
+        '按不可变原决定免费补齐 Prepare 编辑及独立审阅提交',
+    ('stage6.prepare', '--revalidate'): '',
     ('stage4.design', '--recover-prepared'):
         '原 producer 已停止后，以独立免费 committer 补完 Stage4A 聚合与原采用尾账',
     ('stage4.plan', '--recover-prepared'):
@@ -2342,6 +2351,14 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   它挂在本层的 0 成本复检节点上，理由与 stage5 一样：反查要拿到**当前**结论池，
     #   而结论池是复检算出来的。⚠⚠ 本层的两条语义判据此前**没有任何人工闭环**，
     #   而待人工清单在建议人去跑一个这一层根本没有的 flag（见 `views/inbox.py::_human_how`）。
+    'stage6.prepare':   NodeSpec('stage6', 'R-9', True, 'stage6 文案准备',
+                                 lifecycle=NodeLifecycleSpec('book', '完整源正文、原钩子与独立准备产物', 'executor', 'commander', '事实支持与连续开篇范围独立接受', ('accept', 'typed_edit', 'stop'), ('stage6.prepare',), 'executor:book / commander:prepare', ('--revalidate', '--apply-edit', '--review-decisions', '--recover-edit', '--recover-prepared', 'saved_response', 'prepared_commit'), commander_bindings=(('approval:stage6-prepare', 'prepare'),), review_actions=('accept', 'rework', 'uncertain', 'stop'), approval_projection=('prepare', 'state')),
+                                 flags=('--dry-run', '--revalidate', '--emit-edit-template',
+                                        '--emit-review-template', '--emit-review-workpack',
+                                        '--apply-edit', '--review-decisions', '--recover-edit',
+                                        '--recover-prepared', '--subject-sha256', '--response-repair'),
+                                 produces=(artifact_paths.STAGE6_PREPARE,),
+                                 operator_redo='canonical'),
     'stage6.hook':      NodeSpec('stage6', 'R-9',  True,  'stage6 开篇文案',
                                  lifecycle=NodeLifecycleSpec('candidate_batch', '原文文案、限定正文与全书事实地图', 'executor', 'none', '三候选经独立 judge 与定稿', ('typed_edit', 'targeted_rework', 'stop'), ('stage6.hook',), 'executor:hook', ('--revalidate', '--apply-edit', '--recheck', '--recover-prepared', 'saved_response', 'prepared_commit'), commander_content_limit=0),
                                  flags=('--dry-run', '--check-only', '--identity',
@@ -2442,7 +2459,7 @@ AGENT_EXECUTOR_NODES: Final = (
     'stage2.analyze', 'stage2.characters', 'stage2.global', 'stage2.blueprint',
     'stage4.design', 'stage4.plan',
     'stage5.write',
-    'stage6.hook', 'stage6.semantic',
+    'stage6.prepare', 'stage6.hook', 'stage6.semantic',
     'stage7.rename',
 )
 
@@ -2503,6 +2520,7 @@ CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
     ('stage6.hook', '--revalidate'): ('--actor', '--reason'),
     ('stage4.plan', '--recover-prepared'): ('--subject-sha256',),
     ('stage4.design', '--recover-prepared'): ('--subject-sha256',),
+    ('stage6.prepare', '--recover-prepared'): ('--subject-sha256',),
     ('stage6.hook', '--recover-prepared'): ('--subject-sha256',),
     ('stage6.semantic', '--recover-prepared'): ('--subject-sha256',),
     ('stage7.rename', '--recover-prepared'): ('--subject-sha256',),

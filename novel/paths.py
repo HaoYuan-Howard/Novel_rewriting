@@ -1285,6 +1285,16 @@ def legacy_stage6_semantic_run_path(
             / check_run_id(run_id) / 'semantic')
 
 
+def stage6_prepare_run_path(novel_dir: str | os.PathLike[str], run_id: str) -> Path:
+    """Prepare 独占的 durable run；不复用 Hook 或 semantic 会话。"""
+    from novel.run_identity import check_run_id
+    return _service_stage_runs_dir(novel_dir, 'stage6') / check_run_id(run_id) / 'prepare'
+
+
+def stage6_prepare_commit_lock_path(novel_dir: str | os.PathLike[str]) -> Path:
+    return stage6_commit_lock_path(novel_dir).with_name('prepare.commit.lock')
+
+
 def stage6_hook_run_path(
         novel_dir: str | os.PathLike[str], run_id: str,
 ) -> Path:

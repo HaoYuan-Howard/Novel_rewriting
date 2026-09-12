@@ -18,6 +18,7 @@ import { SevChip, SevMark } from '@/components/vocab/Sev'
 import type { Finding } from '@/types/common'
 import type { CompactApprovalCheck } from '@/types/approvals'
 import { cx } from '@/lib/cx'
+import { PreparePanel } from './PreparePanel'
 
 /**
  * 开篇文案。
@@ -97,6 +98,7 @@ export function Stage6Screen() {
 
   return (
     <ScreenFrame screen="stage6">
+      <PreparePanel key={sid} sid={sid} />
       <QueryStates q={q} loadingLabel="读开篇文案候选" missing={{ title: '开篇文案 · stage6' }}>
         {(d) => {
           const approvedIdx = d.candidates.find((c) => c.approved)?.index ?? null
@@ -162,8 +164,13 @@ export function Stage6Screen() {
               ) : null}
 
               <div className="prose-cn text-tag text-ink-4">
-                判据只看下发范围（lead_upto 前 {d.lead_upto} 章）；{d.rationale}
+                A/B 审判只看开篇前 {d.lead_upto} 章；最终定稿工作包提供完整重写正文。{d.rationale}
               </div>
+              {workpackQ.data?.check_basis === 'candidate_without_approval' ? (
+                <p className="prose-cn text-tag text-ink-3">
+                  机械核验以未附审批的候选为基准，其中“未定稿”提示不表示当前审批状态；是否已定稿以上方审批状态为准。
+                </p>
+              ) : null}
 
               {!finalPhase ? (
                 <>
@@ -435,7 +442,7 @@ export function Stage6Screen() {
 function CompactCheckEvidence({ check }: { check: CompactApprovalCheck }) {
   const rows = [...check.attention, ...check.metrics]
   return (
-    <div className="flex flex-col gap-5 border-t border-line-soft pt-7">
+    <div role="region" aria-label="文案机械核验材料" className="flex flex-col gap-5 border-t border-line-soft pt-7">
       <span>
         机械规则 {check.rules_scanned} 条：ok {check.counts.ok} · hit {check.counts.hit} ·
         {' '}unver {check.counts.unver} · skipped {check.counts.skipped}；来源{' '}
@@ -449,8 +456,9 @@ function CompactCheckEvidence({ check }: { check: CompactApprovalCheck }) {
             {row.scanned ? <span>扫描：{row.scanned}</span> : null}
           </div>
           {row.why ? <div className="prose-cn">{row.why}</div> : null}
-          {row.findings.map((finding) => (
-            <div key={finding.evidence_key ?? finding.detail} className="prose-cn text-ink-2">
+          {row.findings.map((finding, index) => (
+            // 不同候选可以共享相同证据键（如引号计数 0/0），每条发现仍须独立显示。
+            <div key={`${row.rule}:${index}:${finding.evidence_key ?? ''}`} className="prose-cn text-ink-2">
               {finding.detail}
             </div>
           ))}

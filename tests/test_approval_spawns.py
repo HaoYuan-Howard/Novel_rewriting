@@ -71,8 +71,8 @@ def test_default_approval_value_is_not_mistaken_for_a_saved_human_choice(
         lambda _overview, node: (approvals.state.RESUME_RUN, node))
 
     doc = approvals.get(tmp_path, '123')
-    assert doc.v == 7 and not doc.writing
-    assert 'deep' not in type(doc).model_fields, 'public v7 不得重新暴露已退役的双臂决定'
+    assert doc.v == 8 and not doc.writing
+    assert 'deep' not in type(doc).model_fields, 'public v8 不得重新暴露已退役的双臂决定'
     assert not approvals.has_record(tmp_path, '123')
 
     # 盘上即使已有一份 v8 记录，writing 没有当前 subject proof 仍不是花钱授权。

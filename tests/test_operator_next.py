@@ -8,6 +8,8 @@ from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 
 import pytest
+
+from tests.factories import missing_prepare_state
 from pydantic import ValidationError
 
 from contracts.invariants import INBOX_KIND, NODES, OPERATOR_NEXT_STATES, RESUME_VERDICTS
@@ -164,6 +166,7 @@ def _wire(
     calls: list[object] = []
     raw = A._fresh_record(snapshot.sid)
     frozen_approval_doc = ApprovalDoc(
+        prepare=missing_prepare_state(),
         sid=snapshot.sid, gate=raw.gate, seen=raw.seen,
         structure=StructureApprovalView(state='unavailable'))
     monkeypatch.setattr(

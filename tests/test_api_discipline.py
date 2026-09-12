@@ -353,7 +353,7 @@ def test_the_enums_cost_column_comes_from_that_one_function():
 # ───────────────────────── `R-11.13` 剧透标注 ─────────────────────────
 
 def test_the_spoiler_disclosure_boundary_is_published():
-    """TODO-25：剧透开关的四路径与非安全边界由一份机器契约发布。
+    """当前 Global 长线秘密的显示范围与非安全边界由一份机器契约发布。
 
     在 E 期之前它**没有任何机器可读的落点**——需求表标着 `INFO`（要一条注册判据），
     而 UI 层没有 stage 可以挂判据，于是它落在反向覆盖率表之外
@@ -368,8 +368,8 @@ def test_the_spoiler_disclosure_boundary_is_published():
     assert disclosure['mode'] == 'display_only'
     assert disclosure['security_boundary'] is False
     assert disclosure['server_sends_full_data'] is True
-    assert disclosure['hidden_paths'] == [
-        'characters[].fate', 'secrets', 'source_blurb.facts', 'source_blurb.opening']
+    # Global v7 只隐藏长线秘密；退役 fate/旧 secrets/源钩子不能继续构成显示承诺。
+    assert disclosure['hidden_paths'] == ['arc_secrets']
     assert disclosure['known_leakage_surfaces']
     assert disclosure['consumers']
     assert '不是安全边界' in disclosure['notice']
@@ -424,11 +424,17 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         '/api/novels/{sid}/review/{ordinal}/edit/preview',
         '/api/novels/{sid}/stage5/trim/{ordinal}/retain-pretrim',
         '/api/novels/{sid}/stage5/trim/retain-pretrim-batch',
+        # Prepare 独立预检/编辑/接受；均为免费 POST，仍通过全局 CSRF。
+        '/api/novels/{sid}/stage6/prepare/edit/preview',
+        '/api/novels/{sid}/stage6/prepare/edit',
+        '/api/novels/{sid}/stage6/prepare/review',
         '/api/novels/{sid}/stage6/approve',
         '/api/novels/{sid}/stage7/approve',
         '/api/novels/{sid}/stage7/adopt-residual',
         '/api/novels/{sid}/stage2/global-review',
         '/api/novels/{sid}/stage2/characters/edit',
+        # 已购联合回答按 owner 免费修复，不另起付费首抽。
+        '/api/novels/{sid}/stage2/analyze-draft',
         '/api/novels/{sid}/approvals/stage2-review',
         # Blueprint 有据修订由 Stage2 持有；普通分场仍留在 Stage4。
         '/api/novels/{sid}/stage2/blueprint/edit',
@@ -462,6 +468,15 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
     J.REGISTRY.acquire(key, holder)
     try:
         with TestClient(app) as client:
+            core_posts = {
+                path for path in posts
+                if '/stage6/prepare/' in path or path.endswith('/stage2/analyze-draft')
+            }
+            assert len(core_posts) == 4
+            for path in sorted(core_posts):
+                refused = client.post(path.replace('{sid}', sid), json={})
+                assert refused.status_code == 403, (path, refused.text)
+                assert refused.json()['kind'] == 'CsrfRefused'
             response = client.post(
                 f'/api/novels/{sid}/stage0/approve',
                 headers={UI_HEADER: '1'},

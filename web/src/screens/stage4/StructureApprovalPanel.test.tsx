@@ -1,3 +1,4 @@
+import { missingPrepareState } from '@/test/prepare'
 import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -58,7 +59,7 @@ const rows: Stage4IndexRow[] = [
 
 function undecided(): ApprovalDoc {
   return {
-    v: 7,
+    v: 8, prepare: missingPrepareState(),
     sid: 'book-1',
     gate: {
       s0: true, s1: true, s2: true,

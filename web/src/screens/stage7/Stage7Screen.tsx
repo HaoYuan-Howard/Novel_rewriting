@@ -684,6 +684,11 @@ function Stage7WorkpackEvidence({ workpack }: { workpack: Stage7ApprovalWorkpack
         hash-bound 人名终审包 · {workpack.disposition} · {workpack.characters.length} 人
       </summary>
       <div className="flex flex-col gap-12 border-t border-line-row px-16 py-12">
+        {workpack.check_basis === 'name_map_without_approval_or_delivery' ? (
+          <p className="prose-cn text-tag text-ink-3">
+            机械核验以未附审批和交付记录的人物表为基准，其中未审批、未组书的提示不表示当前状态；当前批准看审批状态，下载看成书状态。
+          </p>
+        ) : null}
         <Mono className="break-all text-micro text-ink-4">
           workpack {workpack.workpack_sha256}
         </Mono>

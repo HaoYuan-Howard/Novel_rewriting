@@ -1,3 +1,4 @@
+import { missingPrepareState } from '@/test/prepare'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -71,7 +72,7 @@ function approvalDoc({
   nextStep?: string | null
 }): ApprovalDoc {
   return {
-    v: 7,
+    v: 8, prepare: missingPrepareState(),
     sid: SID,
     gate: { s0: true, s1: true, s2: true, s4: true, s5: false, s6: false, s7: false },
     seen: { read: true, global: true },

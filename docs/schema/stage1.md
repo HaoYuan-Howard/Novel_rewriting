@@ -66,6 +66,12 @@ producer 在落盘前处理「不可构造」的终态（无文案、少于两�
 0 成本恢复语义。freshness 和 s1 审批不只绑输入：任意一份材料被单独篡改，
 都会分别变为 stale 并撤销批准有效性。
 
+已确认切分后，仅经 Stage0 批准修订钩子并准确重新物化两份材料，才可按
+`novel/source_identity.py::revision_proof` 证明原切点与正文逐字不变。Stage1 只读审批
+还要从祖先 revision 重建原 MainText / HookCopy 两份字节 SHA，与旧确认全部对上；
+通过后沿用旧票而不改根、不补票。正文或章标记改变、原票缺失、任一旧 SHA 损坏
+或当前源未批准时，仍需现役审计与显式切分确认。
+
 ---
 
 ## 四、视图与版本
@@ -75,5 +81,5 @@ Stage1 的 HTTP 面只有 `GET /api/novels/:sid/stage1 -> Stage1View`。响应�
 `source_chapter_no` / `label_delta` / `anomaly`。这些是视图诊断，不是产物字段。
 
 `main_text.json` 因删除 `source_chapter_no` 从 v2 升到 v3；`hook_copy.json` 形状不变，
-仍是 v2。仓内没有迁移机制，低版本不允许手补字段或改版本号冒充新产地。
+仍是 v2。业务产物不自动迁移，低版本不允许手补字段或改版本号冒充新产地。
 当前两本存量书按用户裁决，待 Stage0–7 减法全部完成后一并从 producer 重建。

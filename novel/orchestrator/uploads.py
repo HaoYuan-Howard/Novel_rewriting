@@ -548,3 +548,39 @@ def discard_edit_plan(base: str | os.PathLike[str], plan_path: str | os.PathLike
         candidate.unlink(missing_ok=True)
     except OSError as exc:
         raise ArtifactUnreadable(f'删除一次性编辑计划失败：{exc!r}') from exc
+
+
+def save_prepare_input(base: str | os.PathLike[str], sid: str, request) -> Path:
+    """保留内容寻址的 Prepare 原编辑/决定；服务不删除尚待 CLI 补尾的来源。"""
+    from contracts.artifacts import STAGE6_PREPARE_EDIT, STAGE6_PREPARE_REVIEW_DECISIONS
+    from contracts.schema.stage6_prepare import PrepareEdit, PrepareDecision
+
+    paths.check_sid(sid)
+    if isinstance(request, PrepareEdit):
+        rel, kind = STAGE6_PREPARE_EDIT, 'edit'
+    elif isinstance(request, PrepareDecision):
+        rel, kind = STAGE6_PREPARE_REVIEW_DECISIONS, 'decision'
+    else:
+        raise SourcePathRejected('Prepare 输入必须为完整 typed 编辑或决定')
+    payload = encode_artifact(rel, request.model_dump(mode='json'))
+    raw = (json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + NL).encode('utf-8')
+    root = service_dir(base) / EDITS_DIRNAME / sid
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f'prepare-{kind}-{hashlib.sha256(raw).hexdigest()}.json'
+    if target.exists():
+        if not target.is_file() or target.is_symlink() or target.read_bytes() != raw:
+            raise SourceConflict('Prepare 原请求内容地址已有不同字节，拒绝覆盖')
+        return target.resolve()
+    tmp = target.with_name(f'.{target.name}.{uuid.uuid4().hex}.tmp')
+    try:
+        tmp.write_bytes(raw)
+        try:
+            os.link(tmp, target)
+        except FileExistsError:
+            if target.is_symlink() or target.read_bytes() != raw:
+                raise SourceConflict('Prepare 原请求并发写入不同字节，拒绝覆盖')
+    except OSError as exc:
+        raise ArtifactUnreadable(f'保存 Prepare 原请求失败：{exc!r}') from exc
+    finally:
+        tmp.unlink(missing_ok=True)
+    return target.resolve()

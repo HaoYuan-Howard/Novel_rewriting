@@ -34,7 +34,7 @@ from contracts.schema.api import ErrorBody
 from novel.api.errors import CSRF_REFUSED, status_of
 from novel.api.routes import (
     agent, agent_capabilities, approvals, checks, edits, enums, ingest, jobs,
-    maintenance, novels, queues, run, screens, settings,
+    maintenance, novels, queues, run, screens, settings, stage6_prepare,
 )
 from novel.errors import NovelError
 from novel.output_root import require_active
@@ -223,7 +223,7 @@ def create_app(base: str | os.PathLike[str],
         enums.router, novels.router, checks.router, jobs.router, queues.router,
         ingest.router, approvals.router, screens.router, edits.router,
         run.router, agent_capabilities.router, agent.router, settings.router,
-        maintenance.router,
+        maintenance.router, stage6_prepare.router,
     ):
         app.include_router(router, prefix='/api')
 

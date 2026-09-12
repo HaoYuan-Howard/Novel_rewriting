@@ -52,7 +52,7 @@ class Alias(StrictModel):
     """一条别名映射。盘上 136 条，其中 **88 条 `old == new`**
     （＝这一条不换，**是决定不是错误**）。
 
-    ⚠ **canonical 不得在这里再列一遍**——实测 registry 的 `address` 重复收了 canonical，
+    ⚠ **canonical 不得在这里再列一遍**——Characters v2 的 `aliases` 必含 canonical 一次，
     模型于是同时交出 `new_canonical` 与一条同名 alias，被判成「一旧名两新名」。
     """
 

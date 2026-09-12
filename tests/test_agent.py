@@ -4186,6 +4186,114 @@ def test_validated_reviewer_response_survives_durable_save_failure_and_epoch_cle
     assert _reviewer_action_files(base) == []
 
 
+@pytest.mark.parametrize('window', ['raw_response', 'typed_proof', 'typed_record'])
+def test_prepare_commander_restarts_with_original_answer_after_surface_rollover(
+        base, monkeypatch, window):
+    """真实 Supervisor/内容账/Prepare 提交；仅运输与无关上游调度用替身。"""
+    from novel.commanders import ClaudeCodeCommanderDriver
+    from novel.orchestrator import inspection, reviewer_tasks, stage6_prepare_wire
+    from novel.stages.stage6 import prepare
+    from novel.store import ArtifactStore
+    from tests.test_stage2_global_agent import _free_ctx
+    from tests.test_stage6_prepare import seed_prepare
+    from tests.test_stage6_prepare_workflow import answer
+
+    ctx, executor, _ = seed_prepare(Path(base))
+    profiles = PipelineAgentProfiles(
+        commander=AgentProfile(driver='claude-code-glm', model='glm-5.3-flash[1M]',
+            reasoning_effort='high', execution_mode='standard'),
+        executor_default=_CLAUDE, executor_overrides={})
+    original_invocation = _PlanningDriver.build_invocation
+    monkeypatch.setattr(_PlanningDriver, 'build_invocation',
+        lambda *a, **k: replace(original_invocation(*a, **k), protocol=ClaudeCodeCommanderDriver.protocol))
+    current = SimpleNamespace(state='blocked', code_version=ctx.code,
+        surface_seal='1' * 64, execution_token=None,
+        action=SimpleNamespace(waiting_on=queue.WAITING_ON_STAGE6_PREPARE, action_sha256='2' * 64))
+    done = SimpleNamespace(state='blocked', code_version=ctx.code,
+        surface_seal='9' * 64,
+        action=SimpleNamespace(waiting_on='test-prepare-recovery-finished', action_sha256='8' * 64))
+    applied, invocations = [], []
+    phase, box = {'value': 0}, {}
+    monkeypatch.setattr(agent.operator, 'next_action_at_code', lambda *_a, **_k: done if applied else current)
+    monkeypatch.setattr(inspection, 'read_surface_seal', lambda *_a, **_k: current.surface_seal)
+    monkeypatch.setattr(agent, '_assess_delivery', lambda *_a, **_k:
+        AgentDeliveryOutcome(state='stopped', reason='恢复验收停点', checked_at=1))
+    monkeypatch.setattr(reviewer_tasks, '_json_command', lambda *_a, **_k:
+        prepare.review_workpack(ArtifactStore(_free_ctx(ctx))).model_dump(mode='json', by_alias=True))
+    real_build = reviewer_tasks.build_task
+    def build(*args, **kwargs):
+        box['task'] = real_build(*args, **kwargs)
+        return box['task']
+    monkeypatch.setattr(reviewer_tasks, 'build_task', build)
+
+    def default_spawn(_run_id, *, on_registered=None):
+        def spawn(invocation, env, log):
+            del env, log
+            invocations.append(invocation)
+            assert len(invocations) == 1, '同材料原回答恢复不得新增 Commander 内容调用'
+            assert invocation.profile == profiles.commander
+            on_registered()
+            return CommanderProcessResult(exit_code=0, wire_evidence=True,
+                observation=CommanderObservation(provider_session_id='prepare-c-original',
+                    actual_model=invocation.profile.model, actual_effort='high', usage=None),
+                final_response=json.dumps(answer(box['task']), ensure_ascii=False))
+        return spawn
+    monkeypatch.setattr(agent, '_default_spawn', default_spawn)
+    real_materialize = agent._materialize_reviewer_response
+    real_save = WorkUnitBudget.save_recovery
+    real_promote = agent._promote_reviewer_candidate
+    def materialize(*args, **kwargs):
+        if phase['value'] == 0 and window == 'raw_response':
+            raise OSError('原 raw 回答落盘后中断')
+        return real_materialize(*args, **kwargs)
+    def save(budget, *args, **kwargs):
+        result = real_save(budget, *args, **kwargs)
+        if phase['value'] == 0 and window == 'typed_proof':
+            raise OSError('原 typed proof 落盘后中断')
+        return result
+    def promote(*args, **kwargs):
+        if phase['value'] == 0 and window == 'typed_record':
+            raise OSError('原 typed record 落盘后中断')
+        return real_promote(*args, **kwargs)
+    monkeypatch.setattr(agent, '_materialize_reviewer_response', materialize)
+    monkeypatch.setattr(WorkUnitBudget, 'save_recovery', save)
+    monkeypatch.setattr(agent, '_promote_reviewer_candidate', promote)
+    # 前置 Stage5/permit 的全链 HTTP 另验；本例真正消费封存服务输入并执行 Prepare WAL。
+    monkeypatch.setattr(agent.operator, 'permit', lambda _b, _s, node, flags:
+        SimpleNamespace(node=node, flags=tuple(flags)))
+    def run_step(_base, _sid, _epoch, permit, *, stem):
+        assert permit.node == prepare.NODE and permit.flags[0] == '--review-decisions'
+        assert stem == 'reviewer-stage6.prepare'
+        prepare.run_review_decisions(_free_ctx(ctx), permit.flags[1])
+        applied.append(permit)
+        return [agent.sys.executable, '-c', 'raise SystemExit(0)']
+    monkeypatch.setattr(agent, '_run_step_argv', run_step)
+
+    first = agent.start(base, ctx.sid, authorized=True, egress_authorized=True, profiles=profiles, spawn=None)
+    assert agent.wait(first.run_id, 20)
+    budget = WorkUnitBudget(base, ctx.sid, prepare.NODE, 'commander', 'prepare')
+    original_turn = budget.latest_turn()
+    assert original_turn.state == 'delivered' and budget.used == 1 and not applied
+    old_task = box['task']
+    immutable_paths = [budget.directory / f'{digest}.json' for digest in (
+        original_turn.request_payload_sha256, original_turn.response_sha256, original_turn.recovery_sha256) if digest]
+    immutable_paths.append(agent.cost_ledger_path(base))
+    sealed = {path: path.read_bytes() for path in immutable_paths}
+    phase['value'] = 1
+    current.surface_seal, current.action.action_sha256 = '4' * 64, '5' * 64
+    second = agent.start(base, ctx.sid, authorized=True, egress_authorized=True, profiles=profiles, spawn=None)
+    assert agent.wait(second.run_id, 20)
+    new_task = box['task']
+    assert old_task.business_sha256 == new_task.business_sha256
+    with pytest.raises(stage6_prepare_wire.PrepareReviewerWireError):
+        stage6_prepare_wire.assemble(new_task, answer(old_task))
+    assert len(invocations) == budget.used == 1 and len(applied) == 1 and len(executor.calls) == 1
+    assert budget.latest_turn().state == 'adopted' and budget.remaining == 3
+    assert prepare.view_state(ArtifactStore(_free_ctx(ctx))).state == 'accepted'
+    assert agent.uploads.load_reviewer_actions(base, ctx.sid) == []
+    assert all(path.read_bytes() == original for path, original in sealed.items())
+
+
 def test_reviewer_response_decoder_normalizes_python_int_limit_to_typed_rejection():
     with pytest.raises(
             agent.reviewer_tasks.ReviewerTaskError,

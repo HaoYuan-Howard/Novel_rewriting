@@ -19,7 +19,8 @@ from tests import corpus, factories, sandbox
 from tests.markers import corpus_params
 
 #: 一条 stage6 纵切跑起来要的五份。
-STAGE6_INPUTS = ('stage1/hook_copy.json', 'stage2/global_grounding.json',
+STAGE6_INPUTS = ('stage1/hook_copy.json', 'stage2/characters.json',
+                 'stage6/prepare.json', 'stage6/prepare_review.json', 'stage2/global_grounding.json',
                  'stage4/writer_context.json',
                  'stage6/hook.json')
 
@@ -214,7 +215,8 @@ def test_identity_grid_excludes_semantic_rules(box):
     semantic_rules = {r.rule for r in REGISTRY.of_stage('stage6')
                       if r.check_kind == 'semantic'}
     assert semantic_rules == {
-        'hook_semantic_contradiction', 'hook_candidate_contradiction', 'hook_quality_rank'}
+        'prepare_semantic_review', 'hook_semantic_contradiction',
+        'hook_candidate_contradiction', 'hook_quality_rank'}
     assert not semantic_rules & set(grid)
 
 
@@ -241,7 +243,7 @@ def test_identity_baseline_runs_and_excludes_the_constructed_one(box):
     assert 'hook_reuses_source' not in grid
     want = {r.rule for r in REGISTRY.of_stage('stage6')
             if r.sev in ('hard', 'info') and r.check_kind != 'semantic'
-            and r.rule != 'hook_reuses_source'}
+            and r.rule not in {'hook_reuses_source', 'prepare_evidence_valid'}}
     assert set(grid) == want
     assert all(v in ('0/1', '1/1') for v in grid.values())
     assert len(rep.rules) == len(REGISTRY.of_stage('stage6'))
@@ -316,7 +318,7 @@ def test_approve_refuses_an_out_of_range_pick(box, pick):
     with pytest.raises(TerminalState, match='候选'):
         hook.run_approve(
             ctx, pick, actor='test-editor', reason='已核验',
-            review_token='s6r3_' + '0' * 64)
+            review_token='s6r4_' + '0' * 64)
 
 
 # ── 落盘闸门与提升路：**盘上零样本，只能合成** ──────────────────────────────
@@ -411,7 +413,9 @@ def test_synthetic_stage6_gate_blocks_only_when_every_candidate_is_dirty(
         def history_transaction(self, *_rels):
             yield
 
+    from tests.test_stage6_core_consumption import _accepted_prepare_outcomes
     upstreams = SimpleNamespace(
+        prepare_outcomes=_accepted_prepare_outcomes(),
         mat=prompts.Material(blocks=('合成完整创作包。',), upto=1),
         upto=1,
         judged={},
@@ -636,7 +640,7 @@ def test_prompt_carries_source_full_story_and_minimal_hook_mechanical(box):
     gg = sandbox.cut(box.book, 'stage2/global_grounding.json')
     assert packet['source_hook'] == source['text'].strip()
     assert mat.source_hook == source['text'].strip()
-    assert mat.story_truth['source_blurb'] == packet['story_truth']['source_blurb']
+    assert mat.story_truth['prepare'] == packet['story_truth']['prepare']
     assert 'arc' not in packet['story_truth']
     expected = hook_style_metrics(measure(source['text'].strip()))
     assert packet['source_hook_mechanical'] == mat.hook_mechanical == expected
@@ -650,30 +654,25 @@ def test_paid_hook_prompt_excludes_global_source_spans(monkeypatch):
     import json
     from types import SimpleNamespace
 
-    from novel.core.evidence import iter_global_evidence_slots
     from novel.stages.stage2 import global_review as stage2_global_review
     from novel.stages.stage5 import review as stage5_review
-    from tests.test_stage2 import global_grounding
+    from tests.plot_fixtures import REGISTRY, GLOBAL
+    from novel.consumption import prepare_projection
 
     seed = factories.stage5_book()
-    grounding = global_grounding()
-    markers: list[str] = []
-    coordinates: list[int] = []
-    for index, (_claim_path, owner, field) in enumerate(
-        iter_global_evidence_slots(grounding), 1,
-    ):
-        marker = f'STAGE6_EVIDENCE_ONLY_{index}'
-        start = 945_678_900 + index * 100
-        owner[field] = {
-            'chapter_ordinal': 1,
-            'source': {
-                'text': marker,
-                'start': start,
-                'end': start + len(marker),
-            },
-        }
-        markers.append(marker)
-        coordinates.extend((start, start + len(marker)))
+    registry = copy.deepcopy(REGISTRY)
+    grounding = copy.deepcopy(GLOBAL)
+    markers = ['STAGE6_EVIDENCE_ONLY_registry', 'STAGE6_EVIDENCE_ONLY_global']
+    coordinates = [945678901, 945678999]
+    for data, marker in zip((registry, grounding), markers):
+        data['evidence_anchors'] = {'ev_fake': {
+            'chapter_ordinal': 1, 'start': coordinates[0], 'end': coordinates[1],
+            'text_sha256': marker}}
+    preparation = {'source_blurb': {
+        'facts': [{'kind': 'supported', 'claim_id': 'hook_001', 'claim': '主角离家。',
+                   'evidence': {'source': {'text': markers[0], 'start': coordinates[0], 'end': coordinates[1]}}}],
+        'opening': {'kind': 'proposed', 'through_chapter': 1, 'rationale': '开篇',
+                    'boundary_evidence': {'source': {'text': markers[1]}}}}}
 
     class Dumped:
         def __init__(self, value):
@@ -683,15 +682,15 @@ def test_paid_hook_prompt_excludes_global_source_spans(monkeypatch):
             return copy.deepcopy(self.value)
 
     from contracts.artifacts import STAGE2_CHARACTERS
-    from tests.stage2_fixtures import formal_subjects
-    registry, knowledge = formal_subjects(grounding)
     stored = {
-        hook.GLOBAL_GROUNDING: knowledge,
-        STAGE2_CHARACTERS: registry,
-        stage2_global_review.REL: factories.approved_global_review(grounding),
+        hook.GLOBAL_GROUNDING: Dumped(grounding),
+        STAGE2_CHARACTERS: Dumped(registry),
         hook.WRITER_CONTEXT: Dumped(seed.ctx),
         hook.HOOK_COPY: SimpleNamespace(text='原作开篇文案。'),
     }
+    monkeypatch.setattr(stage2_global_review, 'generation_grounding',
+                        lambda store: store.read(None, hook.GLOBAL_GROUNDING))
+    monkeypatch.setattr(hook.prepare, 'require_accepted', lambda _store: Dumped(preparation))
 
     class Store:
         @staticmethod

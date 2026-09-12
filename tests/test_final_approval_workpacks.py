@@ -40,6 +40,7 @@ class _Report(SimpleNamespace):
 
 def _stage6_materials() -> Stage6ApprovalMaterials:
     return Stage6ApprovalMaterials.model_validate({
+        'prepare_subject_sha256': 'd' * 64,
         'source_hook': '新婚夜收到来信。',
         'source_blurb': {
             'facts': [{'kind': 'hook_supported', 'claim_id': 'hook_001',
@@ -82,10 +83,20 @@ def test_stage6_workpack_hash_is_stable_after_approval_and_old_approval_is_not_c
     monkeypatch,
 ) -> None:
     store, art = _stage6_snapshot_env(monkeypatch)
-    before, _ = hook._approval_workpack_snapshot(store, art)
+    checked_subjects = []
+
+    def judge_candidate(subject, *_args):
+        checked_subjects.append(subject)
+        return []
+
+    monkeypatch.setattr(hook, '_judge_artifact', judge_candidate)
+    before, before_report = hook._approval_workpack_snapshot(store, art)
     public = before.model_dump(mode='json')
-    assert before.v == 3
-    assert before.review_contract_version == 'stage6-final-review-v4'
+    assert before.v == 4
+    assert before.review_contract_version == 'stage6-final-review-v5'
+    assert public['check_basis'] == 'candidate_without_approval'
+    with pytest.raises(ValidationError, match='check_basis'):
+        Stage6ApprovalWorkpack.model_validate({**public, 'check_basis': 'current_approval'})
     assert 'code_version' not in public and 'rules_fingerprint' not in public
     with pytest.raises(ValidationError, match='disposition'):
         Stage6ApprovalWorkpack.model_validate({
@@ -105,9 +116,14 @@ def test_stage6_workpack_hash_is_stable_after_approval_and_old_approval_is_not_c
         resolution=resolution,
     )
 
-    current, _ = hook._approval_workpack_snapshot(
+    current, current_report = hook._approval_workpack_snapshot(
         store, art.model_copy(update={'approved': approved}))
 
+    assert len(checked_subjects) == 2
+    assert all(subject.approved is None for subject in checked_subjects)
+    assert current.check == before.check
+    assert current_report.model_dump() == before_report.model_dump()
+    assert current.review_identity_sha256 == before.review_identity_sha256
     assert current.workpack_sha256 == before.workpack_sha256
     assert current.artifact_subject_sha256 == before.artifact_subject_sha256
     assert current.disposition == 'already_current'
@@ -519,14 +535,24 @@ def test_stage7_workpack_keeps_real_hits_residual_context_and_stable_subject(
     monkeypatch,
 ) -> None:
     store, art, rules = _stage7_snapshot_env(monkeypatch)
-    before, _ = rename._approval_workpack_snapshot(store, art)
+    checked_subjects = []
+
+    def judge_candidate(_ctx, _store, subject, _up):
+        checked_subjects.append(subject)
+        return []
+
+    monkeypatch.setattr(rename, '_judge', judge_candidate)
+    before, before_report = rename._approval_workpack_snapshot(store, art)
     with pytest.raises(ValidationError, match='disposition'):
         Stage7ApprovalWorkpack.model_validate({
             **before.model_dump(mode='json'), 'disposition': 'suspended',
         })
     public = before.model_dump(mode='json')
     assert before.v == 3
-    assert before.review_contract_version == 'stage7-final-review-v3'
+    assert before.review_contract_version == 'stage7-final-review-v4'
+    assert public['check_basis'] == 'name_map_without_approval_or_delivery'
+    with pytest.raises(ValidationError, match='check_basis'):
+        Stage7ApprovalWorkpack.model_validate({**public, 'check_basis': 'current_delivery'})
     assert 'code_version' not in public and 'rules_fingerprint' not in public
 
     assert before.kept == ['沈大娘'] and before.kept_count == 1
@@ -541,12 +567,18 @@ def test_stage7_workpack_keeps_real_hits_residual_context_and_stable_subject(
         review_identity_sha256=before.review_identity_sha256,
     )
     approved_art = art.model_copy(update={'approved': approval})
-    current, _ = rename._approval_workpack_snapshot(store, approved_art)
-    delivered, _ = rename._approval_workpack_snapshot(
+    current, current_report = rename._approval_workpack_snapshot(store, approved_art)
+    delivered, delivered_report = rename._approval_workpack_snapshot(
         store, approved_art.model_copy(update={
             'book_txt': {'sha1': 'd' * 40, 'chars': 123, 'chapters': 2},
         }))
 
+    assert len(checked_subjects) == 3
+    assert all(subject.approved is None and subject.book_txt is None
+               for subject in checked_subjects)
+    assert current.check == delivered.check == before.check
+    assert current_report.model_dump() == delivered_report.model_dump() == before_report.model_dump()
+    assert current.review_identity_sha256 == delivered.review_identity_sha256 == before.review_identity_sha256
     assert current.workpack_sha256 == before.workpack_sha256
     assert delivered.workpack_sha256 == before.workpack_sha256
     assert current.artifact_subject_sha256 == before.artifact_subject_sha256

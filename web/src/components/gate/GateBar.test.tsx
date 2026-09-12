@@ -1,3 +1,4 @@
+import { missingPrepareState } from '@/test/prepare'
 import { api } from '@/api/endpoints'
 import { ApiError } from '@/api/errors'
 import type { ApprovalDoc } from '@/types/approvals'
@@ -20,7 +21,7 @@ import { useApprovals } from '@/hooks/useApprovals'
  */
 
 const doc: ApprovalDoc = {
-  v: 7,
+  v: 8, prepare: missingPrepareState(),
   sid: 'book-1',
   gate: { s0: true, s1: true, s2: true, s4: false, s5: false, s6: false, s7: false },
   seen: { read: true, global: true },

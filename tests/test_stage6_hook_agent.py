@@ -74,6 +74,7 @@ def _ctx(
 
 
 def _patch_business(monkeypatch) -> SimpleNamespace:
+    from tests.test_stage6_core_consumption import _accepted_prepare_outcomes
     upstream = SimpleNamespace(
         mat=prompts.Material(blocks=('完整而封闭的合成创作包。',), upto=1),
         src_hook='',
@@ -83,6 +84,7 @@ def _patch_business(monkeypatch) -> SimpleNamespace:
         hook_mechanical={},
         upto=1,
         judged={},
+        prepare_outcomes=_accepted_prepare_outcomes(),
     )
     monkeypatch.setattr(
         hook, '_Upstreams', lambda _ctx, _store: upstream)

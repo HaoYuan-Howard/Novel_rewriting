@@ -5,3 +5,6 @@ novel/llm/resources/deepseek_v4_tokenizer.json -text
 # These fixtures are verified by byte-level sha256 in tests/fixtures/manifest.json.
 # Git must not rewrite LF to CRLF on a fresh Windows checkout.
 tests/fixtures/** -text
+
+# 历史 HTTP 证据按原始字节验 SHA，混合换行也必须在新 checkout 原样保留。
+web/src/fixtures/backend_v1/** -text

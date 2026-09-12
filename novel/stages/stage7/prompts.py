@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from novel.core.naming import strip_distinguisher
+from novel.core.naming import registered_surfaces, strip_distinguisher
 from novel.llm.prompts import fill, with_json_shape
 from novel.stages.stage7.subs import surface_hits
 
@@ -105,7 +105,7 @@ class Material:
 
 
 def build_material(*, title: str, registry: dict[str, dict], relations: list[dict],
-                   era: str, groups: dict[int, list[str]],
+                   era: str | None, groups: dict[int, list[str]],
                    sur: dict[str, str | None], book_text: str,
                    targets: list[str]) -> Material:
     """按现行 Stage 7 契约组装下发材料。
@@ -124,19 +124,10 @@ def build_material(*, title: str, registry: dict[str, dict], relations: list[dic
     for cid, v in sorted((registry or {}).items()):
         raw = (v or {}).get('canonical') or ''
         canon = strip_distinguisher(raw)
-        # 称呼**去重但保序**：`address[]` 里实测有重复条目（不同 by/from_chapter），
-        # 直接发下去会让模型以为某个叫法更重要。
-        seen: set[str] = set()
-        surs: list[str] = []
-        for a in ((v or {}).get('address') or []):
-            s = ((a or {}).get('surface') or '').strip()
-            # ⚠ canonical 有自己的 `new_canonical` 决策位，**不得再作为 alias 下发一次**。
-            #   实跑某本时 registry 的 address 重复收了 canonical，模型于是同时交出
-            #   `new_canonical` 与一条同名 alias，替换器只能正确地判成「一旧名两新名」。
-            #   **那是接口把同一个 surface 要了两遍，不是模型需要猜哪一份才算数。**
-            if s and s != canon and s not in seen:
-                seen.add(s)
-                surs.append(s)
+        # Characters v2 每种有据字面只登记一次；canonical 有独立回答位，
+        # 其余别名必须逐项交代去向，共享称谓不因去重而合并不同人物。
+        surs = sorted({surface for surface in registered_surfaces(v)
+                       if surface not in (raw, canon)})
         # ⚠ `universe` 收**剥掉区分词的** canonical，不收 `raw`：带区分词的形态
         #   （`书童(陆明洲)`）是 registry 为满足键唯一造出来的，**按构造在正文里出现 0 次**，
         #   拿它去查覆盖只会得到一条必然命中的假阳（实测两本各 2 条）。

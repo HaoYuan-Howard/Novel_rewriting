@@ -31,7 +31,7 @@ from contracts.artifacts import (
     STAGE4_BLIND_CHAPTER_EDIT, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT,
     STAGE4_WRITER_CONTEXT, STAGE5_REVIEW, STAGE5_TRIM_AUDIT,
-    STAGE6_HOOK, STAGE6_HOOK_EDIT,
+    STAGE6_HOOK, STAGE6_HOOK_EDIT, STAGE6_PREPARE,
     STAGE7_NAME_MAP_EDIT,
 )
 from contracts.invariants import NODES, STYLE_MEASUREMENT_CONTRACT, review_effect_of
@@ -298,15 +298,22 @@ def stage6_hook_copy(data: object) -> object:
     }
 
 
-def stage6_grounding(data: object) -> object:
-    """开篇文案消费完整 claim 真相面，但不消费原文定位证据。"""
-    if not isinstance(data, dict):
+def prepare_projection(data: object) -> object:
+    """Prepare 的实际创作语义；证据和审计只约束独立接受，不触发重购。"""
+    if not isinstance(data, dict) or not isinstance(data.get('source_blurb'), dict):
         return None
-    return without_global_evidence({
-        'entities': data.get('entities'),
-        'canon': data.get('canon'),
-        'source_blurb': data.get('source_blurb'),
-    })
+    blurb = data['source_blurb']
+    facts = [{key: row[key] for key in ('kind', 'claim_id', 'claim', 'reason')
+              if key in row}
+             for row in blurb.get('facts', []) if isinstance(row, dict)]
+    opening = blurb.get('opening') or {}
+    return {'facts': facts, 'opening': {
+        key: opening[key] for key in ('kind', 'through_chapter', 'reason') if key in opening}}
+
+
+def stage6_grounding(data: object) -> object:
+    """文案消费四类全书长期事实；人物和准备材料各自有独立来源。"""
+    return stage4_grounding(data)
 
 
 def stage6_context(data: object) -> object:
@@ -318,9 +325,10 @@ def stage6_context(data: object) -> object:
     if not isinstance(data, dict):
         return None
     chapter_fields = (
-        'from_source_ordinals', 'semantic_contract', 'chapter_rewrite_brief',
-        'chapter_goal', 'open_hook_goal', 'end_hook_goal', 'beats', 'states',
-        'constraints', 'knowledge_events',
+        'semantic_contract', 'chapter_rewrite_brief',
+        'chapter_goal', 'open_hook_goal', 'end_hook_goal', 'beats', 'background_beats', 'states',
+        'constraints', 'knowledge_events', 'characters', 'global_subjects',
+        'narration', 'restricted_subject_refs',
     )
     scene_fields = (
         'slot', 'purpose', 'role', 'delivery', 'transition', 'deliveries',
@@ -359,32 +367,14 @@ def stage6_semantic_hook(data: object) -> object:
 # ── stage7.rename ─────────────────────────────────────────────────────────────
 
 def stage7_grounding(data: object) -> object:
-    """改名只消费人物表、关系与时代背景。
-
-    ⚠ ``stage7.prompts.build_material`` 会把 ``role`` 与显示名、称呼一起交给改名模型；
-    这里若漏掉它，人工订正 role 后旧 name map 仍会显示 fresh。消费投影必须照真实 prompt，
-    不能凭“role 通常不影响取名”的直觉删字段。
-
-    setting 只投影真实下发的 ``时代背景`` 正文；世界观与两份 evidence 没进 prompt，
-    不得因为它们改字制造一次无消费者的 stale。
-    """
+    """改名只消费有向关系与时代；登记人物由独立 Characters 提供。"""
     if not isinstance(data, dict):
         return None
-    ent = data.get('entities') or {}
-    chars = ent.get('characters') or {}
     return {
-        'characters': sorted(
-            (cid, (c or {}).get('canonical'),
-             (c or {}).get('role'),
-             tuple(sorted((a or {}).get('surface') or ''
-                          for a in ((c or {}).get('address') or []))))
-            for cid, c in chars.items()),
         'relations': sorted(
-            ((r or {}).get('subject_id'), (r or {}).get('predicate'), (r or {}).get('object_id'))
-            for r in (ent.get('relations') or [])),
-        'setting': {
-            '时代背景': (((data.get('canon') or {}).get('setting') or {}).get('时代背景')),
-        },
+            (r.get('subject_id'), r.get('predicate'), r.get('object_id'))
+            for r in data.get('relations', [])),
+        'era': (data.get('setting') or {}).get('era'),
     }
 
 
@@ -417,12 +407,6 @@ def stage7_hook(data: object) -> object:
     return ((data.get('approved') or {}).get('text') or '')
 
 
-def _character_view(data: object) -> dict[str, object] | None:
-    """将独立登记表交给同一消费公式；不另造与实际材料不一致的字段清单。"""
-    if not isinstance(data, dict):
-        return None
-    return {'entities': {'characters': data.get('characters')}}
-
 
 def stage4_characters(data: object) -> object:
     """A 与 Context 只解析叙事身份；姓名辨识度由 Stage5 私有检测消费。"""
@@ -449,13 +433,20 @@ def stage5_characters(data: object) -> object:
 
 
 def stage6_characters(data: object) -> object:
-    projected = without_global_evidence(_character_view(data))
-    return (projected.get('entities') or {}).get('characters') if isinstance(projected, dict) else None
+    if not isinstance(data, dict):
+        return None
+    return _core_semantics(data.get('characters'))
 
 
 def stage7_characters(data: object) -> object:
-    projected = stage7_grounding(_character_view(data))
-    return projected.get('characters') if isinstance(projected, dict) else None
+    """改名材料及确定性姓名检测的业务目录，不消费披露时点或定位证据。"""
+    if not isinstance(data, dict):
+        return None
+    return {cid: {'canonical': row.get('canonical'),
+                  'surfaces': sorted({a['surface'] for a in row.get('aliases', [])}),
+                  'role': row.get('role'),
+                  'name_distinctiveness': row.get('name_distinctiveness')}
+            for cid, row in sorted(data.get('characters', {}).items())}
 
 
 # 每一格的键都是 ArtifactStore 写进 ``_provenance.inputs`` 的两级相对路径。
@@ -537,7 +528,12 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         # retain_pretrim 的人工裁决绑定完整 audit bytes；任一审计事实变化都应过期。
         STAGE5_TRIM_AUDIT: artifact_payload,
     },
+    'stage6.prepare': {
+        STAGE1_MAIN_TEXT: stage2_main_text,
+        STAGE1_HOOK_COPY: _hook_text,
+    },
     'stage6.hook': {
+        STAGE6_PREPARE: prepare_projection,
         STAGE2_CHARACTERS: stage6_characters,
         STAGE1_HOOK_COPY: stage6_hook_copy,
         STAGE2_GLOBAL_GROUNDING: stage6_grounding,
@@ -546,6 +542,7 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE6_HOOK_EDIT: artifact_payload,
     },
     'stage6.semantic': {
+        STAGE6_PREPARE: prepare_projection,
         STAGE2_CHARACTERS: stage6_characters,
         STAGE1_HOOK_COPY: stage6_hook_copy,
         STAGE2_GLOBAL_GROUNDING: stage6_grounding,

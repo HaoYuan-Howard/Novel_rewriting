@@ -84,6 +84,7 @@ EXECUTOR_PROFILED_RUNS: dict[str, tuple[frozenset[str], ...]] = {
         frozenset({'--revise', '--chapters'}),
         frozenset({'--reviewer-rewrite'}),
     ),
+    'stage6.prepare': (frozenset(),),
     'stage6.hook': (frozenset(),),
     'stage6.semantic': (frozenset(),),
     'stage7.rename': (frozenset(),),
@@ -136,6 +137,11 @@ _PRIMARY_OPERATIONS = {
     'stage5.review': frozenset({
         '--retain-pretrim', '--retain-pretrim-batch',
         '--request-reviewer-rewrite', '--wontfix', '--check-only',
+    }),
+    'stage6.prepare': frozenset({
+        '--dry-run', '--revalidate', '--emit-edit-template', '--emit-review-template',
+        '--emit-review-workpack', '--apply-edit', '--review-decisions',
+        '--recover-edit', '--recover-prepared',
     }),
     'stage6.hook': frozenset({
         '--dry-run', '--check-only', '--identity', '--recheck', '--revalidate',
@@ -295,7 +301,7 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
                 'stage5.write --recover-prepared 只接受 source run_id 与必填的 '
                 '--actor/--reason/--subject-sha256；不得与 chapters/revise/'
                 'response-repair 或其他操作混用')
-    if node in ('stage4.design', 'stage4.plan', 'stage6.hook', 'stage6.semantic', 'stage7.rename') and '--recover-prepared' in tokens:
+    if node in ('stage4.design', 'stage4.plan', 'stage6.prepare', 'stage6.hook', 'stage6.semantic', 'stage7.rename') and '--recover-prepared' in tokens:
         expected = {'--recover-prepared', '--subject-sha256'}
         if set(tokens) != expected or len(flags) != 2 * len(expected):
             raise UnsupportedRunMode(
@@ -311,7 +317,7 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
         if (not (allow_placeholders and digest == placeholder_for('--subject-sha256'))
                 and re.fullmatch(r'[0-9a-f]{64}', digest) is None):
             raise UnsupportedRunMode('--subject-sha256 必须是 64 位小写十六进制 SHA-256')
-    if (node in ('stage4.design', 'stage4.plan', 'stage6.hook', 'stage6.semantic', 'stage7.rename') and '--subject-sha256' in tokens
+    if (node in ('stage4.design', 'stage4.plan', 'stage6.prepare', 'stage6.hook', 'stage6.semantic', 'stage7.rename') and '--subject-sha256' in tokens
             and '--recover-prepared' not in tokens):
         raise UnsupportedRunMode(f'{node} --subject-sha256 只绑定 --recover-prepared')
     if node == 'stage5.write' and '--reviewer-rewrite' in tokens:

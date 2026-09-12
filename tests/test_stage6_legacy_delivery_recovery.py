@@ -19,6 +19,7 @@ from novel.stages.stage6 import hook, prompts
 from novel.store import ArtifactStore
 from novel.work_units import WorkUnitRefused, budget_for
 from tests.test_stage2_generation import _ctx
+from tests.test_stage6_core_consumption import _accepted_prepare_outcomes
 
 
 def _response(payload):
@@ -34,7 +35,7 @@ def _rig(tmp_path, monkeypatch, *, cached=False, fail_last=False):
     up = SimpleNamespace(
         mat=prompts.Material(blocks=('完整合成创作包。',), upto=1),
         src_hook='', secrets=[],  characters={},
-        hook_mechanical={}, upto=1, judged={})
+        hook_mechanical={}, upto=1, judged={}, prepare_outcomes=_accepted_prepare_outcomes())
     def upstreams(_current, store):
         # 真实消费边由 ArtifactStore 读取建立；不手填 provenance.inputs。
         store.read(HookCopy, hook.HOOK_COPY)

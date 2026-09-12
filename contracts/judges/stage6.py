@@ -47,7 +47,16 @@ def _unver(rule: str, item: str, requirement: str, *, who_checks: str, **kw) -> 
                                   requirement=requirement, **kw))
 
 
-# ── 五条阻断级 ──────────────────────────────────────────────────────────────
+# ── 独立准备与文案可用性 ────────────────────────────────────────────────────
+
+PREPARE_RULES = (
+    _hard('prepare_evidence_valid', '文案准备证据与连续开篇范围可机械回证', 'R-9.2',
+          fix=('stage6.prepare', '--revalidate'),
+          note='只编译段范围并验证源文切片；错误保存已购候选，支持免费 typed 编辑与恢复。'),
+    _unver('prepare_semantic_review', '文案准备已独立核对事实支持与开篇范围', 'R-9.2',
+           who_checks='HUMAN', check_kind='semantic', owner=STAGE,
+           note='独立 Commander 决定绑定当前 Prepare；不能继承最终 gate.s6 或把未决事实当支持。'),
+)
 
 _hard('hook_empty', '文案不是空的或残的', 'R-9.13',
       note='内容字符 < 20 就早退，除 `R-9.23` 明定无条件报出的结构距离度量外，'

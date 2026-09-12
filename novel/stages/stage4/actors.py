@@ -1,7 +1,7 @@
 """呈现身份的私有解析器；公开目录不携可反查共同实体的分组或映射。
 
-同一个实体的不同呈现保持独立 token。普通公开昵称由同一 ActorBinding 合并，
-身份等同的许可由 KnowledgeLinks 端点给出，不能由 scalar 名字时点替代。
+不同呈现默认保持独立 token。两个绑定各有本章开始前已公开归属同一实体的
+登记称谓时，才归一为同一公共呈现；本章的新映射仍由 KnowledgeLinks 端点许可。
 """
 from __future__ import annotations
 
@@ -53,6 +53,7 @@ class ActorCatalog:
         self.source_text = source_text
         self.seed = seed.encode('utf-8')
         self.bindings = {}
+        self.binding_origins = {}
         self.states = {}
         chapters = []
         for bp in blueprints['blueprints']:
@@ -64,6 +65,7 @@ class ActorCatalog:
                 if key in self.bindings and self.bindings[key] != binding:
                     raise RefusedByStructure('同一表面身份在不同章的定义冲突')
                 self.bindings[key] = binding
+                self.binding_origins.setdefault(key, bp['chapter_ordinal'])
             self.states.update({s['state_id']: s for s in bp['states']})
         try:
             self.available_bindings = {key: value.model_dump(mode='json')
@@ -96,9 +98,21 @@ class ActorCatalog:
             raise RefusedByStructure('本章或未来才公开的多称谓映射必须明确表面身份，不能章首合并')
         return actor
 
-    def token(self, value) -> str:
+    def token(self, value, *, public_catalog=None) -> str:
         actor = self.resolve(value)
-        identity = ('presentation', actor.presentation_ref) if actor.presentation_ref else (
+        public = public_catalog or self
+        presentation = actor.presentation_ref
+        if presentation:
+            # 两边均须有此前已公开的登记映射，不按内部 char_id 合并秘密身份。
+            # 历史引用仍在其拥有章 resolve；公开 token 可使用当前章之前的已知等同。
+            aliases = {r['surface'] for r in public.characters[actor.char_id]['aliases']
+                       if r['identity_revealed_from'] < public.ordinal}
+            candidates = {key: set(row['surfaces']) & aliases for key, row in public.bindings.items()
+                          if row['char_id'] == actor.char_id}
+            if candidates.get(presentation):
+                presentation = min((key for key, names in candidates.items() if names),
+                    key=lambda key: (public.binding_origins[key], int(key.split('_')[-1])))
+        identity = ('presentation', presentation) if presentation else (
             'public_entity', actor.char_id)
         return 'actor_' + hmac.new(self.seed, json.dumps(identity).encode(), hashlib.sha256).hexdigest()[:24]
 
@@ -142,20 +156,21 @@ class ActorCatalog:
         if role is None or not role_slots:
             role, role_slots = None, []
         return {'actor_ref': self.token(actor), 'display_name': surfaces[0],
-                'surfaces': surfaces, 'role': role, 'role_allowed_slots': role_slots,
+                'surfaces': surfaces, 'surface_allowed_slots': {s: list(allowed_slots) for s in surfaces},
+                'role': role, 'role_allowed_slots': role_slots,
                 'allowed_slots': allowed_slots}
 
-    def subject(self, value) -> dict:
+    def subject(self, value, *, public_catalog=None) -> dict:
         ref = PlotSubjectRef.model_validate(_payload(value))
         if ref.kind == 'character':
-            return {'kind': ref.kind, 'ref': self.token(ref.actor)}
+            return {'kind': ref.kind, 'ref': self.token(ref.actor, public_catalog=public_catalog)}
         if ref.kind in ('beat', 'state', 'constraint', 'chapter_boundary'):
             return {'kind': ref.kind, 'ref': ref.ref}
         # 同一关系底稿的不同呈现不能通过相同 rel_ID 向写手泄露共同身份。
         key = list(ref.key())
         if ref.relation_actors:
-            key = [ref.kind, ref.ref, self.token(ref.relation_actors.subject),
-                   self.token(ref.relation_actors.object)]
+            key = [ref.kind, ref.ref, self.token(ref.relation_actors.subject, public_catalog=public_catalog),
+                   self.token(ref.relation_actors.object, public_catalog=public_catalog)]
         token = hmac.new(self.seed, json.dumps(key).encode(), hashlib.sha256).hexdigest()[:24]
         return {'kind': ref.kind, 'ref': 'subject_' + token}
 

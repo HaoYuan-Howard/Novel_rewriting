@@ -1,3 +1,4 @@
+import { missingPrepareState } from '@/test/prepare'
 import { api } from '@/api/endpoints'
 import { ApiError } from '@/api/errors'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
@@ -50,7 +51,7 @@ describe('GlobalScreen disclosure', () => {
       extra: null,
     }
     const approvals: ApprovalDoc = {
-      v: 7,
+      v: 8, prepare: missingPrepareState(),
       sid: 'book-1',
       gate: { s0: true, s1: true, s2: false, s4: false, s5: false, s6: false, s7: false },
       seen: { read: false, global: true },
@@ -283,7 +284,7 @@ function safeReview(token: string | null): GlobalReviewResponse {
 
 function unseenApprovals(): ApprovalDoc {
   return {
-    v: 7,
+    v: 8, prepare: missingPrepareState(),
     sid: 'book-1',
     gate: { s0: true, s1: true, s2: false, s4: false, s5: false, s6: false, s7: false },
     seen: { read: false, global: false },

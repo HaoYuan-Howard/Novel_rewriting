@@ -27,7 +27,7 @@ from functools import wraps
 from typing import Any, Literal, Protocol
 
 from contracts.artifacts import (
-    STAGE1_HOOK_COPY, STAGE2_GLOBAL_GROUNDING,
+    STAGE1_HOOK_COPY, STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING,
     STAGE4_WRITER_CONTEXT, STAGE6_HOOK, STAGE6_HOOK_EDIT,
 )
 
@@ -41,7 +41,7 @@ from contracts.schema.api import (
     Stage6ApprovalCandidate, Stage6ApprovalMaterials, Stage6ApprovalWorkpack,
 )
 from contracts.schema.report import CheckReport
-from contracts.schema.stage2 import GlobalGrounding
+from contracts.schema.characters import CharacterRegistry
 from contracts.schema.stage4 import WriterContext
 from contracts.schema.stage5 import ContextSource
 from contracts.schema.stage6 import (
@@ -49,7 +49,7 @@ from contracts.schema.stage6 import (
     HookCandidateRetryResponse, HookProvenance, HookResponse, HookSources, Mech,
 )
 from novel import agent_session_audit, paths, prov, wontfix
-from novel.core.evidence import without_global_evidence
+from novel.consumption import prepare_projection, stage6_characters, stage6_grounding
 from novel.core.measure import hook_style_metrics, measure
 from novel.errors import (
     ArtifactUnreadable, GateBlocked, ProvenanceRefused, TerminalState,
@@ -63,7 +63,7 @@ from novel.report import build
 from novel.report.findings import Outcome
 from novel.report.workpack import compact_approval_check
 from novel.run import RunContext
-from novel.stages.stage6 import checks, prompts
+from novel.stages.stage6 import checks, prepare, prompts
 from novel.stages.stage6.measure import (
     lead_drafts, lead_upto, normalize_hook, quote_problems_of,
 )
@@ -100,13 +100,16 @@ class _Upstreams:
     """三份上游 + 从它们算出来的下发材料。**装载与判定分开，两条路共用这一份。**"""
 
     def __init__(self, ctx: RunContext, store: ArtifactStore) -> None:
+        self._store = store
         from novel.stages.stage5.review import require_accepted_review
         require_accepted_review(ctx, store)
-        for rel in (GLOBAL_GROUNDING, WRITER_CONTEXT):
+        for rel in (STAGE2_CHARACTERS, GLOBAL_GROUNDING, WRITER_CONTEXT):
             if not store.exists(rel):
                 raise UpstreamMissing(f'{rel} 不在盘上——先跑 {rel.split("/")[0]}')
         from novel.stages.stage2 import global_review as stage2_global_review
+        preparation = prepare.require_accepted(store)
         gg = stage2_global_review.generation_grounding(store)
+        registry = store.read(CharacterRegistry, STAGE2_CHARACTERS)
         wc = store.read(WriterContext, WRITER_CONTEXT)
         # ⚠ 原作文案段**允许缺**吗？`R-1.12` 已把无文案段的书挡在 stage1 ⇒ 走不到。
         # 但它是**上游产物**不是本层的不变量，缺了就是显式终态而不是一句兜底。
@@ -116,30 +119,33 @@ class _Upstreams:
                 f'`R-1.12` 已经把那种书挡在 stage1 了，所以走到这里说明上游缺了一份')
         hook_copy = store.read(paths_hook_copy_model(), HOOK_COPY)
 
-        self.gg, self.wc = gg, wc
+        self.gg, self.wc, self.prepare = gg, wc, preparation
         self.source_hook: str = hook_copy.text
         self.src_hook: str = (hook_copy.text or '').strip()
         mechanical = hook_style_metrics(measure(self.src_hook))
         if not mechanical:
             raise ArtifactUnreadable(
                 f'{HOOK_COPY} 的正文为空，无法即时计算文案机械基线')
-        projected = without_global_evidence(gg.model_dump(by_alias=True))
-        assert isinstance(projected, dict)
-        self.grounding_raw: dict = projected
-        self.secrets: list[dict] = ((projected.get('canon') or {}).get('secrets') or [])
-        self.characters: dict = (
-            (projected.get('entities') or {}).get('characters') or {})
-        self.upto: int = lead_upto(projected['source_blurb']['opening'])
+        self.grounding_raw: dict = stage6_grounding(gg.model_dump(by_alias=True))
+        self.characters: dict = stage6_characters(registry.model_dump(by_alias=True))
+        self.preparation_raw: dict = prepare_projection(preparation.model_dump(by_alias=True))
+        self.secrets: list[dict] = self.grounding_raw['arc_secrets']
+        self.upto = lead_upto(self.preparation_raw['opening'])
         lead, missing, self.judged = lead_drafts(store, self.upto)
         self.mat = prompts.build_material(
             title=ctx.title, ctx=wc.model_dump(by_alias=True),
             hook_mechanical=mechanical,
-            grounding=self.grounding_raw, source_hook=self.src_hook,
+            grounding=self.grounding_raw, characters=self.characters,
+            preparation=self.preparation_raw, source_hook=self.src_hook,
             lead=lead, missing=missing, upto=self.upto)
 
     @property
     def hook_mechanical(self) -> dict:
         return self.mat.hook_mechanical
+
+    @property
+    def prepare_outcomes(self) -> list[Outcome]:
+        return prepare.check_outcomes(self._store)
 
 
 def paths_hook_copy_model():
@@ -241,7 +247,7 @@ def _outcomes_for_rows(
         lead_upto_ch=art.lead_upto,
         hook_chars=up.hook_mechanical.get('chars'),
         approved=approved, stale=list(stale), missing=list(missing),
-    ) + semantic.outcomes(store, art)
+    ) + semantic.outcomes(store, art) + up.prepare_outcomes
 
 
 def _require_matching_approval_baseline(
@@ -488,19 +494,22 @@ def run_identity(ctx: RunContext) -> tuple[dict[str, str], CheckReport]:
         mat=up.mat, secrets=up.secrets,
         lead_upto_ch=up.upto, hook_chars=up.hook_mechanical.get('chars'),
         approved=False, stale=[], missing=[]
-    ) + semantic.unavailable_outcomes('恒等基线是 0 成本路，不跑付费语义审判')
+    ) + semantic.unavailable_outcomes('恒等基线是 0 成本路，不跑付费语义审判') + up.prepare_outcomes
     return grid, _report(ctx, store, outcomes, None)
 
 
 def _judgeable_rules():
     """恒等基线要占格子的那些：hard + info 的**机械**判据。
 
-    metric 与 unver 不占格；三条语义判据也不占——恒等基线是 0 成本路，
-    不跑付费审判，给它们占格就是两个永远 `0/1` 的假格子。
+    metric 与 unver 不占格；语义判据也不占——恒等基线是 0 成本路，
+    不跑付费审判。Prepare 两项单独核验实际产物与接受来源，不是源文字符串的 0/1 格子。
     """
     from contracts.rules import REGISTRY
+    from contracts.judges.stage6 import PREPARE_RULES
+    preparation = {rule.rule for rule in PREPARE_RULES}
     return [r for r in REGISTRY.of_stage('stage6')
-            if r.sev in ('hard', 'info') and r.check_kind != 'semantic']
+            if r.sev in ('hard', 'info') and r.check_kind != 'semantic'
+            and r.rule not in preparation]
 
 
 @_commit_owned
@@ -2563,7 +2572,8 @@ def _approval_materials(store: ArtifactStore, up: _Upstreams) -> Stage6ApprovalM
         raise UpstreamMissing(f'文案终审缺少正式正文第 {missing} 章，不能用空材料代替核验')
     return Stage6ApprovalMaterials(
         source_hook=up.source_hook,
-        source_blurb=up.gg.source_blurb,
+        source_blurb=up.prepare.source_blurb,
+        prepare_subject_sha256=prepare.subject_sha256(up.prepare),
         rewritten_chapters=[{
             'chapter_ordinal': row['output_ordinal'], 'text': row['text'],
         } for row in chapters],
@@ -2594,6 +2604,8 @@ def _approval_workpack_snapshot_uncached(
     check = compact_approval_check(report)
     judge_rankings = semantic.current_judge_rankings(store, subject)
     artifact_subject_sha256 = _approval_subject_sha256(subject)
+    # check_basis 只说明既有报告的检查基准，进入公开包的 exact token；
+    # 不改变这份去审批报告的长期 review identity，避免接受动作使自身失效。
     identity_body = {
         'review_contract_version': STAGE6_REVIEW_CONTRACT,
         'kind': 'stage6',
@@ -2617,7 +2629,7 @@ def _approval_workpack_snapshot_uncached(
         sid=store.ctx.sid,
         review_identity_sha256=review_identity_sha256,
         validation_seal_sha256=validation_seal_sha256,
-        review_token='s6r3_' + '0' * 64,
+        review_token='s6r4_' + '0' * 64,
         artifact_subject_sha256=artifact_subject_sha256,
         rationale=subject.rationale,
         materials=materials,
@@ -2651,7 +2663,7 @@ def _approval_workpack_snapshot_uncached(
     )
     return base.model_copy(update={
         'workpack_sha256': digest,
-        'review_token': f's6r3_{digest}',
+        'review_token': f's6r4_{digest}',
         'disposition': 'already_current' if current_bound else 'review_required',
         'current_slot': current.slot if current_bound and current is not None else None,
         'current_approval': current_resolution if current_bound else None,

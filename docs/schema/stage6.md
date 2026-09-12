@@ -1,6 +1,7 @@
 # Stage6 产物与质量契约
 
-Stage6 生成放在正文前的开篇文案。一次模型调用产三个候选，随后由两名互不可见的
+Stage6 先由独立 Prepare E/C 接受原钩子事实支持和连续开篇范围，再生成放在正文前的开篇文案。
+Hook 一次模型调用产三个候选，随后由两名互不可见的
 匿名 judge 独立完成实质矛盾核对与吸引力排序，最后由人定稿。
 
 ⚠⚠ **合并决议恒是带证据的 `UNVER`**：本仓没有把 judge 结论升级成自动 `PASS`/`FAIL` 的装置
@@ -9,13 +10,33 @@ Stage6 生成放在正文前的开篇文案。一次模型调用产三个候选�
 
 对应需求：`docs/BACKEND_CONTRACT.md` 的 R-9。
 
+Prepare 仅消费 MainText 与 HookCopy，完整正文和原钩子各提供一次。`supported` 表示正文支持，
+`hook_supported` 表示原钩子独立支持；`unresolved` 保留未决主张和原因，不能作为已确定事实。
+正文未重复不等于反证，正文明确反证也不能被原钩子覆盖。未决开篇不得默认第一章；
+未接受 Prepare 不得生成 Hook。Prepare 接受与最终 `gate.s6` 各自绑定自己的主体。
+
+源材料经 Stage0 审计修订后，免费完整 typed 编辑重新编译当前两份材料。若全 clean 根
+改变，Prepare 专属 provenance 的 `source_rebuild` 绑定旧候选完整 SHA、旧／新根、两端
+Stage0 revision、当前材料 SHA 和最初模型的生成根；旧候选仍从历史原字节回读。
+当前候选声明当前根，保留的 model/prompts/usage 明确属于历史生成，并非模型看过新源。
+同根后续订正保留这条来源证明；WAL 复算原请求、源链及候选后补尾，不能用新材料重包
+旧提交，也不能借一次免费修订继承原接受。仅原钩子变化且正文完全相同时，Stage2–5
+依 `source_identity` 的窄证明保留自身来源与有效审批，Prepare / Hook 仍按真实输入失效。
+
+Hook 和 A/B 的 `judged` 只记录实际下发的连续开篇章稿；最终文案 Commander 的 v4 工作包
+另绑定全书成稿、原钩子和 `prepare_subject_sha256`，token 前缀 `s6r4_`。Prepare 证据定位
+或 rationale 订正可重开 Prepare 审阅，但不改变创作语义时不扩大 Hook / A/B 付费输入。
+全书故事地图保留 Writer9 的公开人物、global_subjects、narration、background_beats 和所有
+状态、知识事件、分场许可目录。opaque actor_ref 在各章目录中解释，不提供反向 char_id 映射。
+
 ## 一、质量语义
 
-三本书快速 A/B 中，最佳实验候选的匿名主编均分为 8.78，当前定稿为 4.88，提升
-+3.90/10，且实验候选 3/3 获胜。因此生产设计采用以下已验证变化：
+此前三本书文案设计 A/B 中，最佳实验候选的匿名主编均分为 8.78，当时定稿为 4.88，差值
++3.90/10，且实验候选 3/3 获胜。这份历史实验不作为本批 Prepare 或全链验收通过的证明。
+当前生产保持该文案设计，并接入以下独立材料边界：
 
 - 原作文案作为创作金标准下发，保留其信息顺序、升级节拍、反差、对白密度和最后一击；
-- 下发完整 `entities` / `canon` / `source_blurb` 与全书逐章事件地图，使候选可选择后期兑现；
+- 下发独立 Characters v2、Global v7 四类长期事实、已接受 Prepare 语义投影与全书逐章事件地图，使候选可选择后期兑现；
 - 从 Stage1 原作文案即时计算机械五叶（字符数、平均句/段长、引号体、对白比例），不再下发任何定性文风包；
 - 剧透不再是错误，也不因剧透本身加减分；
 - 合法体裁自由包括重写台词、时间压缩、倒叙、合并数章和合成场面；
@@ -26,6 +47,11 @@ Stage6 生成放在正文前的开篇文案。一次模型调用产三个候选�
 ## 二、产物
 
 ```text
+stage6/prepare.json          原文案事实支持与连续开篇范围，独立 E/C 生命周期
+stage6/prepare_review.json   对当前 Prepare 完整字节的独立接受
+stage6/prepare_edit.json     段引用形式的免费完整修订请求
+stage6/prepare_review_decisions.json  当前主体的 accept/rework/uncertain 原决定
+stage6/prepare_commit.json   内部 prepared/completed 提交记录，不是创作知识库
 stage6/hook.json             生成候选、机械判定与人工定稿
 stage6/_rounds/hook.rN.json  上一轮 hook.json 的整份归档
 stage6/semantic_N.json       A/B 双盲质量审判；决议按完整 SHA-256 绑定
@@ -33,32 +59,72 @@ stage6/hook_edit.json        人工编辑一条候选，或修改当前定稿的
 stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 记账，纯 0 成本）
 ```
 
-本层产物分三档（见 `_README.md`「版本与路径注册表」；本仓**没有迁移机制**，
-破坏形状就 +1 并同批回答「存量由谁重建」）：
+本层业务载体按以下版本登记（见 `_README.md`「版本与路径注册表」）；不自动迁移业务产物，
+破坏形状就 +1 并同批明确重建 owner。离线 workflow manifest 过渡另见 `work_units.md`，
+不能借工作流过渡给旧 Hook、审判或批准补字段：
 
-- `hook.json` 与轮次归档**都是 schema v3**。2026-09-08 取消每槽只修一次的限制：
+- `hook.json` 与轮次归档**都是 schema v4**。本批改为独立 Prepare / Characters / Global 来源，
+  旧 v3 不自动继承生成、审阅或 prepared 身份。2026-09-08 取消每槽只修一次的限制：
   legacy 的 `candidate_retry_limit=4` 表示整书工作单元的内容上限，Agent 完整替换协议为 0；
   同槽 `candidate_retries.attempt` 按实际请求连续编号 1..4，不能重复或跳号。
-  旧 v1/v2 base 保留原代码和原账，不迁移、不手改版本标记；新 clean base 从原材料逐层重建，
-  `stage6.hook` 经显式付费与正文外发授权生成 v3，再由独立双 judge 与当前 typed pick 定稿。
-  新 v3 的已封存提交尾窗可走 `--recover-prepared` 免费补尾，这不适用于旧 base。
-- `hook_edit.json` 与下文语义审判**都是 schema v2**。编辑请求的候选由位置身份 `c1/c2/c3`
+  旧 v1/v2/v3 产物保留原代码和原账，不迁移、不手改版本标记；当前根在接受 Prepare 后，
+  `stage6.hook` 经显式付费与正文外发授权生成 v4，再由独立双 judge 与当前 typed pick 定稿。
+  v4 的已封存提交尾窗可走 `--recover-prepared` 免费补尾，不追认旧 schema 的提交来源。
+- 各份 `hook_edit.json` 编辑请求**都是 schema v2**。候选由位置身份 `c1/c2/c3`
   定位；本轮未改编辑形状。
   2026-08-23 的候选身份与策略名解耦仍保持：策略可重复，位置才唯一。旧实验快照只读，
   不纳入 current-schema corpus；存量重建归属见 `tests/test_artifact_versions.py::_SHAPE_BREAKS`。
-- `semantic_<n>.json` ——**schema v2**。2026-08-27 新增 `judged`，把 A/B 判官实际
+- 各轮 `semantic_<n>.json` **都是 schema v3**，独立 Prepare 及 Writer9 公开目录参与实际请求。2026-08-27 新增 `judged`，把 A/B 判官实际
   看见的 Stage5 开篇成稿按 `JudgedDraft.consumed.text_sha1` 绑定。旧 v1 只绑
   hook 候选文本，正文改字后仍可被误当 current，因此不迁移、不手补；由
   `stage6.semantic` 在当前 hook + canonical Stage5 上重跑（legacy 是 A/B 各一次调用；显式 executor
-  profile 是 A/B 各一条可多轮 session，wire 数由代码反馈轮次决定）。v2 不把
+  profile 是 A/B 各一条可多轮 session，wire 数由代码反馈轮次决定）。当前 v3 不把
   未进入判官 prompt 的后半书稿塞进 `judged`；全书 Stage5 accepted Review 仍是既有前置门，
-  后半书改字先令 Review 暂不可用，零成本重跑 Review 后若实际 prompt 输入未变，旧 v2
+  后半书改字先令 Review 暂不可用，零成本重跑 Review 后若实际 prompt 输入未变，原 v3
   semantic 可以重新成为 current，不白做 A/B。
   Agent 的 run、A/B acceptance 与 checkpoint 恢复共用
   `novel/agents/session_client.py::agent_json_schema` 归一后的实际发送 schema 指纹；
   不得用 Pydantic 原始 schema 另算一套身份。旧 run 的指纹不改写、不冒充当前请求；
   未能落下有效 checkpoint 的历史调用保留成本证据，由前端 Agent 在当前输入上重新执行该节点。
-- v1 档（当前只有 `wontfix.json`）——**都是 schema v1**。
+- 五份 Prepare 载体与 `wontfix.json` **都是 schema v1**。
+
+### 2.0 Prepare v1
+
+五份 Prepare 载体均从 v1 登记。`prepare.json.source_blurb` 保留 `facts` 和 `opening`：
+事实严格判别为正文 `supported`、原钩子 `hook_supported` 或 `unresolved`；未决项保存原因。
+范围是从第 1 章到 `through_chapter` 的连续 `proposed`，或显式 `unresolved`。
+模型与 typed 编辑只引用 `chapter_ordinal/start_para/end_para`；Hook 证据没有章号。
+代码从对应段落编译精确 `SourceSpan`，机械检查证据切片、章范围与结束章证据。
+坏引用保留为 INVALID，不补造证据；编辑工作包对无法按当前材料反投影的旧引用明确标未决。
+全文和原钩子各提供一次，正式证据仅存所选片段。E/C 的文本编号都来自 `paragraph_spans`；
+C formatter 用带编号原文替换 API 原文呈现，并以段号版 `candidate_source_blurb` 代替
+正式 Prepare 中的重复证据片段。原 API workpack 不变，实际格式进入 immutable 请求摘要。
+`novel-stage6-prepare-review-v1` 同时绑定 options SHA 与 exact request；来源、actor 和 token
+由可信代码注入，accept/rework/uncertain 均通过独立 typed 决定，stop 不冒充审阅接受。
+
+`main_text_sha256`、`hook_copy_sha256` 是正文阅读序与文本、原钩子文本的 canonical SHA-256，
+不把源文件排版或无关审计元数据变成业务依赖。`_provenance` 保留原模型和用量；免费编辑
+另记 `prepare_edit` 来源与理由。`subject_sha256()` 是支持分类、主张、连续范围及两份材料的
+语义摘要；它与独立审阅使用的候选完整字节 SHA 职责不同。
+
+`PrepareEdit` 和 `PrepareDecision` 都绑定当前完整候选 SHA 与 `s6p1_` 令牌；令牌还绑定
+当前材料和上一份审阅的字节身份。新否定即使没有改候选，也会令旧编辑/旧接受失效。
+同批决定可以携带完整 edit；actor、reason、主体和 token 必须一致。没有当前材料修订的
+stale 候选不得先写负决定再卡进提交，必须先编辑或同批提交 edit。未决事实可以诚实保留，
+未决开篇不得接受；Prepare 接受不生成 Hook，也不产生最终定稿许可。
+
+所有业务写入共用 owner 锁。先整体预检，再将原请求、两材料身份、候选、审阅和全部目标
+基线写入提交记录，随后按逐文件 CAS 补尾；全部目标、费用采用及会话尾账闭合后才 completed。
+`--recover-edit` 只恢复已冻结请求，不能提交新 payload；第三方修改保留并拒绝覆盖。
+`--recover-prepared <run> --subject-sha256 <proof>` 免费恢复原购回答，proof 为 typed checkpoint
+SHA，或尚未生成 checkpoint 时的原 stdout SHA。JSON/形状损坏沿既有 `response-repair` 封存
+修复稿，原 stdout、请求、费用不改写；生成 checkpoint 后原 stdout proof 仍可幂等补尾。
+`stage6.prepare --revalidate` 只报告该节点固定的 `prepare_evidence_valid` 与
+`prepare_semantic_review` 两项；机械通过可返回成功退出码，语义行仍为带当前独立决定状态的
+`unver`，不能借此打开 `gate.s6`。Hook、恒等复检和最终 Stage6 报告复用 Prepare owner 的
+实际证据核验与接受来源检查，并保留整层全部登记规则；恒等 0/1 表不为这两项生成假格子。
+Hook 的接受闸校验材料与原决定时不把完整 MainText 再登记成模型输入；实际消费只读取
+Prepare 语义投影，因此纯证据订正只重开受影响审阅，不无谓购买新 Hook。
 
 ### 2.1 `hook.json`
 
@@ -191,7 +257,7 @@ producer 在归一后、落盘前再守一次正式文本唯一性。这里**不
 `prompts.build_material` 是生成 prompt 与机械“给过什么”探针的唯一材料落点：
 
 - `source_hook`：原作文案全文；
-- `story_truth`：完整 `entities`、`canon`、`source_blurb`；
+- `story_truth`：`characters` 为独立登记人物业务投影，`global` 为 setting/world_rules/relations/arc_secrets，`prepare` 为已接受事实支持与开篇范围；
 - `whole_story_map`：每章章号、源章号、章目标、开头目标、全部 beat events、结尾目标；
 - `rewritten_opening`：第 1 章至 `lead_upto` 的连续成稿；
 - `source_hook_mechanical`：由 `novel/core/measure.py::hook_style_metrics` 从同一份 `source_hook` 即时计算，只有 `chars`、
@@ -243,12 +309,17 @@ validator 必须确认：
    开篇投影及其余 prompt 输入没变，不得让未下发正文继续制造假 stale。
 
 批准动作 `stage6.approve --pick N --actor <id> --reason <why>
---review-token <s6r3_…>` 在归档和写盘之前执行两道硬检查：
+--review-token <s6r4_…>` 在归档和写盘之前执行两道硬检查：
 
 - 该候选没有机械 HARD；
 - 服务端在同书锁内重建工作包，opaque token 必须同时绑定当前 review identity 与本次
-  validation seal，不允许旧页面误批。公开 v3 工作包只输出 opaque seal，不输出
-  `code_version` / `rules_fingerprint` 原料；旧 v2 包只读，不能再提交批准。
+  validation seal，不允许旧页面误批。公开 v4 工作包只输出 opaque seal，不输出
+  `code_version` / `rules_fingerprint` 原料；旧版本包不能再提交批准。
+
+公开工作包固定 `check_basis=candidate_without_approval`：`check` 是去除 `approved`
+后的候选检查，批准后也保留同一报告中的“尚未定稿”提示，不冒充当前审批状态。当前接受只看
+`disposition/current_slot/current_approval`。基准说明进入本次 exact workpack/token，
+不改变既有报告的 `review_identity_sha256`；批准动作本身不能使授权它的审阅身份失效。
 
 ⚠ 这里曾有第三道（所以上面那句原本写作“三道”）：「当前合并决议不是校准 FAIL，
 也不存在与本文本绑定的历史校准 FAIL」。
@@ -282,10 +353,12 @@ hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本�
 
 ## 六、现役判据
 
-当前注册表共 **23 条**：**5 hard、8 info、6 metric、4 unver**。
+当前注册表共 **25 条**：**6 hard、8 info、6 metric、5 unver**。
 
 | 判据 | 级别 | 作用 |
 |---|---|---|
+| `prepare_evidence_valid` | HARD | 准备事实的证据与连续开篇范围可从当前来源机械回证 |
+| `prepare_semantic_review` | unver/semantic | 当前 Prepare 的事实支持与开篇范围已独立语义接受；机械通过不能替代接受 |
 | `hook_empty` | HARD | 至少 20 个内容字符 |
 | `hook_truncated` | HARD | 以完整句末标点收束 |
 | `hook_reuses_source` | HARD | 与原作文案无任何相同 20 内容字窗口 |

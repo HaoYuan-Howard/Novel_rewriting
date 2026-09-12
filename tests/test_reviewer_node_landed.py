@@ -157,6 +157,10 @@ def test_final_producer_approval_requires_original_token_and_exact_statement(
         assert not _landed(base, node, tuple(wrong))
     if node == 'stage6.approve':
         assert not _landed(base, node, ('--pick', '2', *flags[2:]))
+        assert pack.review_token.startswith('s6r4_')
+        old = list(flags)
+        old[old.index('--review-token') + 1] = pack.review_token.replace('s6r4_', 's6r3_', 1)
+        assert not _landed(base, node, tuple(old)), '相同 workpack 摘要不能认领旧契约令牌'
 
     art, _ = store.read_own(model, module.REL)
     approval = art.approved.resolution if node == 'stage6.approve' else art.approved

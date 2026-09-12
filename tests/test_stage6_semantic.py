@@ -296,7 +296,7 @@ def test_human_edit_resolution_and_approval_require_explicit_binding():
     with pytest.raises(ValueError, match='空白'):
         HookApproveRequest(
             pick=1, actor=' ', reason='已核验',
-            review_token='s6r3_' + 'f' * 64)
+            review_token='s6r4_' + 'f' * 64)
     with pytest.raises(ValueError):
         HookApproveRequest(
             pick=1, actor='reviewer', reason='旧包只读',
@@ -318,12 +318,12 @@ def test_approve_http_adapter_forwards_audited_optimistic_lock(monkeypatch):
         lambda *_args: (_ for _ in ()).throw(AssertionError('失败作业不许盖章')))
     request = HookApproveRequest(
         pick=2, actor='editor-a', reason='核验完成',
-        review_token='s6r3_' + 'b' * 64)
+        review_token='s6r4_' + 'b' * 64)
     edits.approve_hook(request, sid='book-a', base='out')
     assert captured == {
         'base': 'out', 'node': 'stage6.approve', 'sid': 'book-a',
         'extra': ['--pick', '2', '--actor', 'editor-a', '--reason', '核验完成',
-                  '--review-token', 's6r3_' + 'b' * 64],
+                  '--review-token', 's6r4_' + 'b' * 64],
     }
 
 
@@ -467,8 +467,8 @@ def test_build_prompt_is_anonymous_and_carries_all_quality_references(monkeypatc
     )
     mat = SimpleNamespace(
         lead=({'output_ordinal': 1, 'text': '这是重写后的第一章。'},),
-        story_truth={'entities': {'characters': {'c1': {'canonical': '她'}}},
-                     'canon': {'secrets': []}, 'source_blurb': {'facts': [{'kind': 'supported', 'claim_id': 'hook_001', 'claim': '她收到匿名信'}], 'opening': {'kind': 'proposed', 'through_chapter': 1}}},
+        story_truth={'characters': {'c1': {'canonical': '她'}},
+                     'global': {'arc_secrets': []}, 'prepare': {'facts': [{'kind': 'supported', 'claim_id': 'hook_001', 'claim': '她收到匿名信'}], 'opening': {'kind': 'proposed', 'through_chapter': 1}}},
         story_map=({'chapter': 1, 'scenes': [{
             'slot': 's01', 'required_facts': ['她收到匿名信']} ]},),
         hook_mechanical={'chars': 100},
@@ -494,7 +494,7 @@ def test_build_prompt_is_anonymous_and_carries_all_quality_references(monkeypatc
     payload = json.loads(user.split('\n\n', 1)[1])
     assert payload['source_reference'] == '原作文案金句。'
     assert payload['rewritten_opening'][0]['text'] == '这是重写后的第一章。'
-    assert payload['story_truth']['source_blurb']['facts'][0]['claim'] == '她收到匿名信'
+    assert payload['story_truth']['prepare']['facts'][0]['claim'] == '她收到匿名信'
     assert payload['whole_story_map'][0]['scenes'][0]['required_facts'] == ['她收到匿名信']
     assert 'style' not in payload
     assert 'hook_mechanical' not in payload

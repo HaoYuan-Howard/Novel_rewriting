@@ -18,14 +18,21 @@
 正式契约分别在 `docs/schema/characters.md`、`docs/schema/stage2.md`、
 `docs/schema/stage2_review.md`；人物登记与 Global 保持各自证据、版本、编辑、失效及恢复。
 
+**2026-09-13 验收范围更新**：用户将本轮真书验收收在 `stage2.blueprint`；完成原文核对、
+免费订正、章级及跨章审阅后停止，不再推进 Stage4～7 真书或付费调用。Gate A～C 的代码仍须
+完整闭合，Stage4～7 以工程消费者、恢复、API/UI 与回归验证；不据此声称真书成稿或交付质量通过。
+
 - [x] Gate A：一次 Analyze Executor、两个独立编译器、Characters v2 / Global v7、统一
       Global Commander；闭合 CLI/API、待审、共享首抽统计、typed 编辑及已购回答/半边失败恢复。
       已在 `f5a95aa` 完成指定小说原文核验及免费 typed 恢复，接受署名 `codex`。
       C1 误接受、C2～C4 格式拒绝原样保留；不声明模型正常路径自动通过。
       冻结证据为 `E:\NovelAcceptance_Stage2CoreV2\reports\gate-a-f5a95aa.json`。
 - [ ] Gate B：Blueprint / KnowledgeLinks / Stage4–5 接动态状态、稀疏知情和
-      ActorRef/ActorBinding；直接检查 Writer 请求中的未来身份、关系、别名映射及同章揭示。
+      ActorRef/ActorBinding；按 BP v10 / KnowledgeLinks v3 / WriterContext v9，直接检查
+      工程 Writer 请求中的未来身份、关系、别名映射及同章揭示；真书只闭合 Blueprint 原文审阅。
 - [ ] Gate C：Stage6 Prepare 独立 E/C 与免费编辑恢复，Stage7 改名、API/UI、下载及重启读回。
+      验证 Prepare 五载体 v1、Hook v4、HookSemanticReview v3、NameMap v3，以及显式
+      V5→V6 离线过渡保留 Stage4–5 产物、审批、profiles 和累计用量。
       最终新工作流基线统一执行非 corpus 回归与前端 test/typecheck/seams/build，并附页面截图。
 
 Gate A 使用 `E:\NovelAcceptance_Stage2CoreV2`：source 为指定小说的字节一致副本，output
@@ -52,12 +59,15 @@ Executor / Commander 固定 `claude-code-glm / glm-5.3-flash[1M] / high`，已�
 现役设计见 BACKEND_CONTRACT 与 schema，性能配对协议见 `docs/OPERATIONS.md`；首轮、局部返工和故障恢复分开验收，最终一次整根切换。
 现役完整剧情与分场边界见 `docs/schema/plot_blueprint.md`；工程验证记录保留在 Git。
 
+本轮执行边界以 TODO-51 的 2026-09-13 更新为准；以下真书 Stage4～7、成稿与性能实验保留为
+未验事项，不属于当前继续执行的授权范围，也不因工程回归通过而勾销。
+
 - [ ] 待 `stage2.global` 与 `stage2.characters` 重构完成后，固定新代码与干净数据根，
       完成第 1/5/6/11 章重点语义及原书 11 章成稿验收，
       记录请求体、用量、耗时、调用/返修与 ledger 成本；工程合成测试不代替真实模型验收。
 
 
-已接入人物/知识/Blueprint 三 producer、两 Commander、Stage4 实际依赖与历史采用、义务继承、
+已接入 Analyze 联合首抽、独立人物/知识修订与 Blueprint producer、两类 Stage2 Commander、Stage4 实际依赖与历史采用、义务继承、
 知识关联及披露边界、Stage5 紧凑整章任务书、不可变人工追加额度、原 profiles 续跑和指标 v3。
 旧版兼容通道已按授权退役。这些工程能力仍须完成以下验收，不能视为性能目标已经通过：
 
@@ -153,12 +163,13 @@ B 只绑定证据，不静默改变 A 的场景顺序、事实分组、首尾锚
 
 ### TODO-31 · 下一次新 base 同批收紧 Stage4→5 盘上契约
 
-**当前状态**：最小主体的前一批基线已通过默认非 corpus 回归；本轮 V9 重构仍须按最终改动集合重新验收，
-旧结果不作为本轮通过证明。WriterContext v8 保留章级唯一剧情目录和逐场许可，不重复保存同号来源、
+**当前状态**：最小主体的前一批基线已通过默认非 corpus 回归；本轮 WriterContext v9 重构仍须按最终改动集合重新验收，
+旧结果不作为本轮通过证明。WriterContext v9 保留章级唯一剧情目录、opaque 人物呈现与逐场许可，不重复保存同号来源、
 源字数和预算副本；API 从当前场景与 Stage1 现场派生。
 逐章人物名单被写手、Stage6/7 实际读取，因此保留。Chapter v3、Review v3、Rejected v2、
 TrimAudit/TrimResolution v3 均只保存承重主体、必要历史基线或精确绑定证据。
-这些 shape break 与 TODO-49 同批发布；不原地迁移或补签旧产物，新链使用干净输出根。
+这些 shape break 与 TODO-49 / TODO-51 同批验收；不原地迁移或补签旧业务产物。新根使用当前
+manifest，满足已登记来源与下游空证明的旧根仅可走显式离线 manifest 过渡。
 
 **验收**：相关 shape break 均登记 current version 与 `_SHAPE_BREAKS`；不迁移、不手补旧产物；
 Stage5 写作、recheck/revalidate、Review、trim、s5 审批及 Stage6/7 只读最小主体；删字段前后 prompt、

@@ -247,9 +247,10 @@ def _stage4_design_repair_commit_recovery_surface(
 
 def _prepared_delivery_recovery_surface(
     snapshot: OperatorReadSnapshot,
+    *, item: QueueItem | None = None,
 ) -> tuple[_LanePlan, InboxView] | None:
     """原组提交尾窗先于审批投影；正式文件存在不能掩盖未闭采纳。"""
-    item = queue.prepared_delivery_recovery_item(snapshot.base, snapshot.sid, code=snapshot.code)
+    item = item or queue.prepared_delivery_recovery_item(snapshot.base, snapshot.sid, code=snapshot.code)
     if item is None:
         return None
     lane = _LanePlan(
@@ -258,14 +259,15 @@ def _prepared_delivery_recovery_surface(
             base=os.fspath(snapshot.base), sid=snapshot.sid, code=snapshot.code,
             surface_seal=snapshot.surface_seal, overview=snapshot.overview, item=item),
         verified_skipped_nodes=())
-    kind = ('repairable' if item.waiting_on == queue.WAITING_ON_PREPARED_DELIVERY
+    kind = ('repairable' if item.waiting_on in {
+                queue.WAITING_ON_PREPARED_DELIVERY, queue.WAITING_ON_STAGE6_PREPARE_COMMIT}
             else 'human_only')
     counts = {key: 0 for key in INBOX_KIND}
     counts[kind] = 1
     return lane, InboxView(items=[InboxItem(
         kind=kind, stage=NODES[item.node].stage, chapter=None, rule='prepared_delivery',
         what=item.why,
-        how=('执行原 source run 与 proof SHA 锁定的 --recover-prepared；不构造模型客户端'
+        how=('按后端当前冻结的原提交恢复动作免费补尾；不构造模型客户端'
              if kind == 'repairable' else '保留原完成组、成本与采纳记录，核对未知证据；不能重新生成'))],
         counts=counts, total=1, wontfix=0)
 
@@ -277,7 +279,9 @@ def _prepared_commit_recovery_surface(
     stage2 = _stage2_commit_recovery_surface(snapshot)
     stage4 = _stage4_design_repair_commit_recovery_surface(snapshot)
     delivery = _prepared_delivery_recovery_surface(snapshot)
-    pending = [entry for entry in (stage2, stage4, delivery) if entry is not None]
+    item = queue.prepare_edit_recovery_item(snapshot.base, snapshot.sid, code=snapshot.code)
+    prepare = _prepared_delivery_recovery_surface(snapshot, item=item) if item is not None else None
+    pending = [entry for entry in (stage2, stage4, delivery, prepare) if entry is not None]
     if len(pending) > 1:
         raise ArtifactUnreadable(
             'operator 同时发现多个阶段的 prepared 提交尾窗；'

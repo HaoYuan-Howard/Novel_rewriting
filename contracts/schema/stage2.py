@@ -383,7 +383,7 @@ class HookFactEvidence(StrictModel):
 
 
 class SupportedBlurbFact(StrictModel, Generic[EvidenceT]):
-    """源文案的一条事实主张及正文支持；语义支持仍交 Global Commander。"""
+    """源文案的一条事实主张及正文支持；语义支持交 Stage6 Prepare 独立审阅。"""
 
     kind: Literal['supported']
     claim_id: str = Field(pattern=r'^hook_\d{3}$')
@@ -408,7 +408,7 @@ class UnresolvedBlurbFact(StrictModel):
 
 
 class ProposedOpeningScope(StrictModel, Generic[EvidenceT]):
-    """从首章到 through_chapter 的连续材料范围；接受由既有 Global 审阅负责。"""
+    """从首章到 through_chapter 的连续材料范围；接受由 Stage6 Prepare 独立审阅负责。"""
 
     kind: Literal['proposed']
     through_chapter: ChapterOrdinal

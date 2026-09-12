@@ -5,8 +5,8 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 
 | 路径 | 模型 | 角色 |
 |---|---|---|
-| `stage7/name_map.json` | `NameMap` v2 | 当前正式改名产物 |
-| `stage7/_rounds/name_map.rN.json` | `NameMap` v2 | 归档轮次，与正式产物同形 |
+| `stage7/name_map.json` | `NameMap` v3 | 当前正式改名产物 |
+| `stage7/_rounds/name_map.rN.json` | `NameMap` v3 | 归档轮次，与正式产物同形 |
 | `stage7/name_map_edit.json` | `NameMapEdit` v1 | 人工输入，不是节点产物 |
 | `stage7/{title}_rewriting.txt` | 纯文本 | 最终交付物。**书级参数化路径**（`contracts/artifacts.py::BOOK_SCOPED_PATHS`）：占位符由「这本书是谁」决定，每本书恰好解析出一份具名产物，落点唯一在 `novel/paths.py::book_txt_rel` |
 
@@ -15,7 +15,7 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 `stage7.rename` 的 agent wire 为兼容 Claude/Codex 公共严格 JSON Schema，把动态姓氏表表达为
 `surname_map: [{old_surname, new_surname}]`；代码拒绝重复 `old_surname` 后还原为下表所列的
 `dict[str,str]`。该数组只属于 provider 传输，`name_map.json`、轮次归档、人工编辑与新 checkpoint
-payload 继续使用正式 dict 形状，NameMap 不升版；旧 checkpoint 不改字节，但旧 schema SHA 不再
+payload 继续使用正式 dict 形状；本批 NameMap v3 改为独立 Characters v2 / Global v7 来源，旧来源不得继承审批；旧 checkpoint 不改字节，但旧 schema SHA 不再
 满足 current restore，必须由新 run 重建。
 
 ## 一、`name_map.json`
@@ -42,10 +42,16 @@ payload 继续使用正式 dict 形状，NameMap 不升版；旧 checkpoint 不�
 | `identity` | `IdentityBaseline｜null` | 恒等替换基线 |
 | `_provenance` | `NameMapProvenance｜NameMapFreeProvenance` | 模型或纯人工来源账 |
 
-`stage7.rename` 的人物材料实际包含 `canonical / aliases / role` 与 `时代背景` 正文；因此
-provenance 对 `stage2/global_grounding.json` 的 consumed 投影包含 role，但 setting 只包含
-真实下发的 `时代背景`。role / 时代背景改字会使旧 name map stale；未下发的 fate、secret、
-arc、世界观与 setting evidence 不进入这条指纹，避免无消费者变化制造重跑。
+`stage7.rename` 的人物材料由独立 `stage2/characters.json` 提供：canonical、唯一 aliases、
+首次公开 role；确定性姓名检测另消费 name_distinctiveness。Global 只提供有向关系端点、
+predicate 与 setting.era。人物 role / alias 归属及时代、关系变化使实际消费失效；证据坐标、
+别名身份披露章和未进入改名材料的规则、秘密不扩大这条付费依赖。共同称谓继续保留多owner，
+不按同字面合并人物；排行、头衔、最长词屏蔽、一旧名两新名与新名碰撞守卫保持。
+
+旧 NameMap v2、旧来源 prepared 与旧批准保留历史，不手补当前版本或伪造通过；当前版本
+仍经原有完整响应恢复、typed 编辑、复验、定稿和成书重建入口。下载通过
+`delivery.read_deliverable_book` 与 `assemble.read_current_book` 核对当前映射、正式章稿、
+文案接受和最终文件字节；重启读回不绕过这些门。
 
 ### 1.1 人物决定
 
@@ -79,6 +85,12 @@ arc、世界观与 setting evidence 不进入这条指纹，避免无消费者�
   `surname_map`、`characters`、`extra_subs`、可见 finding 与显式审阅契约；代码、规则、
   provenance 和免费机械复检结果属于 `validation_seal`，不再级联撤销内容未变的人工决定。
   提交时服务端仍在同书锁内重建 exact workpack，旧 token 关闭式拒绝。
+- 当前审阅契约是 `stage7-final-review-v4`，公开工作包为 v3，二者分别版本化。
+  工作包固定 `check_basis=name_map_without_approval_or_delivery`：`check` 对去掉 `approved`
+  和 `book_txt` 的人物表进行核验，批准或正常组书后仍保留同一基准报告。
+  当前批准由 `disposition/current_approval` 证明，可下载由独立 `delivery` 判定；
+  页面不能用基准里的“尚未批准”提示覆盖这两者。基准说明绑定本次 exact token，
+  不改变已有报告的长期 `review_identity_sha256`。
 - 服务检查单的 `s7` proof 绑定上述完整决策面和完整 typed `ApprovedNameMap`
   （含 actor/reason/origin/subject），并在每次读取时复核 `subject_sha256` 仍等于当前
   决策面。它不绑定 `book_txt`、residual、book findings 等确定性派生字段：正常

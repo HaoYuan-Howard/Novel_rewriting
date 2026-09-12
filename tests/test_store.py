@@ -1176,50 +1176,31 @@ def test_blueprint_character_inventory_marks_missing_character_maps_empty(
 
 
 def test_stage7_grounding_projection_tracks_role_sent_to_rename_prompt():
-    """投影只跟真实下发的 role / 时代背景走，不跟结局或 setting 证据走。"""
-    from novel.consumption import stage7_grounding
+    """角色与时代各绑定实际owner；证据/披露时点不扩大改名付费依赖。"""
+    from contracts.artifacts import STAGE2_CHARACTERS
+    from novel.consumption import stage7_characters, stage7_grounding
+    from tests.plot_fixtures import REGISTRY, GLOBAL
 
-    assert projection_for('stage7.rename', STAGE2_GLOBAL_GROUNDING) \
-        is stage7_grounding
+    assert projection_for('stage7.rename', STAGE2_GLOBAL_GROUNDING) is stage7_grounding
+    assert projection_for('stage7.rename', STAGE2_CHARACTERS) is stage7_characters
+    registry = copy.deepcopy(REGISTRY)
+    after = copy.deepcopy(registry)
+    after['characters']['char_001']['role'] = '商户之女'
+    assert stage7_characters(registry) != stage7_characters(after)
+    evidence_only = copy.deepcopy(registry)
+    evidence_only['characters']['char_001']['role_evidence_refs'] = ['ev_new']
+    evidence_only['characters']['char_001']['aliases'][0]['identity_revealed_from'] = 3
+    assert stage7_characters(registry) == stage7_characters(evidence_only)
 
-    before = {
-        'entities': {
-            'characters': {
-                'char_001': {
-                    'canonical': '甲',
-                    'role': '县令之女',
-                    'address': [{'surface': '甲娘子'}],
-                },
-            },
-            'relations': [],
-        },
-        'canon': {'setting': {
-            '时代背景': '架空古代江南',
-            'era_evidence': {'chapter_ordinal': 1, 'source': None},
-            '世界观': '女性掌握主要社会权力',
-            'worldview_evidence': {'chapter_ordinal': 1, 'source': None},
-        }},
-    }
-    after = copy.deepcopy(before)
-    after['entities']['characters']['char_001']['role'] = '商户之女'
-
-    assert stage7_grounding(before) != stage7_grounding(after)
-
-    era_changed = copy.deepcopy(before)
-    era_changed['canon']['setting']['时代背景'] = '当代都市'
-    assert stage7_grounding(before) != stage7_grounding(era_changed)
-
-    not_consumed = copy.deepcopy(before)
-    not_consumed['entities']['characters']['char_001']['fate'] = '最终远走他乡'
-    not_consumed['canon']['setting']['era_evidence'] = {
-        'chapter_ordinal': 2, 'source': None,
-    }
-    not_consumed['canon']['setting']['世界观'] = '另一段未下发的世界观说明'
-    not_consumed['canon']['setting']['worldview_evidence'] = {
-        'chapter_ordinal': 2, 'source': None,
-    }
-    assert stage7_grounding(before) == stage7_grounding(not_consumed), \
-        '改名 prompt 没下发 fate/世界观/evidence，不能为它们制造一次付费 stale'
+    grounding = copy.deepcopy(GLOBAL)
+    era_changed = copy.deepcopy(grounding)
+    era_changed['setting']['era'] = '当代都市'
+    assert stage7_grounding(grounding) != stage7_grounding(era_changed)
+    unused = copy.deepcopy(grounding)
+    unused['setting']['social_context'] = '女性掌握主要社会权力'
+    unused['setting']['era_evidence_refs'] = ['ev_new']
+    unused['arc_secrets'] = [{'secret_id': 'secret_01', 'fact': '后来远走他乡。'}]
+    assert stage7_grounding(grounding) == stage7_grounding(unused)
 
 
 def test_projection_registry_resolves_dynamic_and_invalid_artifact_paths():

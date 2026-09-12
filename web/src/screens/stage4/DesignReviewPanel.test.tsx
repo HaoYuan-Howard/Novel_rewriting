@@ -1,3 +1,4 @@
+import { missingPrepareState } from '@/test/prepare'
 import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -100,7 +101,7 @@ function repairCapability({
 
 function approval(state = 'missing'): ApprovalDoc {
   return {
-    v: 7,
+    v: 8, prepare: missingPrepareState(),
     sid: 'book-1',
     gate: { s0: true, s1: true, s2: true, s4: false, s5: false, s6: false, s7: false },
     seen: { read: true, global: true },

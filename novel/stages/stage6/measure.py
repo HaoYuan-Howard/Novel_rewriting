@@ -12,7 +12,6 @@ import re
 from contracts.schema.stage5 import JudgedDraft
 from contracts.schema.stage6 import Mech
 from novel.core.bands import BAND_SEP, sep_band_of_text
-from novel.core.facts import first_reveal_chapter
 from novel.core.normalize import (
     dominant_quote_style, normalize_paragraphs, normalize_punctuation, normalize_quotes,
     quote_pair,
@@ -33,14 +32,14 @@ QUOTE_MIN = 6
 # ── 下发范围 ────────────────────────────────────────────────────────────────
 
 def lead_upto(opening: dict | None) -> int:
-    """只消费已由 Global 审阅接受的显式范围；调用方负责接受与 freshness。"""
+    """只消费已由 Prepare 独立审阅接受的显式范围；调用方负责接受与 freshness。"""
     from novel.errors import TerminalState
 
     if not isinstance(opening, dict) or opening.get('kind') != 'proposed':
-        raise TerminalState('开篇材料范围尚未确定，须由 Global typed 裁决；不能缺省第 1 章')
+        raise TerminalState('开篇材料范围尚未确定，须由 Stage6 Prepare typed 裁决；不能缺省第 1 章')
     upto = opening.get('through_chapter')
     if type(upto) is not int or upto < 1:
-        raise TerminalState('Global 开篇范围终点不是合法章号')
+        raise TerminalState('Prepare 开篇范围终点不是合法章号')
     return upto
 
 
@@ -50,16 +49,15 @@ def hidden_secrets(secrets: list[dict], upto: int) -> tuple[list[dict], list[str
     返回 `(还没揭示的 secret 列表, 说不出揭示时点的 secret_id 列表)`。
     口径与逐章闸门一致：**揭示章 ≤ upto 即为已揭示**。
 
-    ⚠ 没有合法 `first_reveal_chapter` 的那些**按未揭示处理并单独报出来**——
+    ⚠ 没有合法 `revealed_from` 的那些**按未揭示处理并单独报出来**——
     「不知道什么时候揭示」不是「已经揭示了」，倒向安全的一边，**但要出声**。
     """
     hid: list[dict] = []
     no_time: list[str] = []
     for s in secrets or []:
-        # ⚠ **首次**揭示章，与逐章下发闸门同一个函数（`first_reveal_chapter`）。
-        #   说不出首次揭示时点的走 `no_time` 那条：
-        #   「不知道什么时候揭示」不是「已经揭示了」。
-        first = first_reveal_chapter(s)
+        first = s.get('revealed_from')
+        if type(first) is not int or first < 1:
+            first = None
         if first is None:
             no_time.append(s.get('secret_id'))
             hid.append(s)
@@ -77,7 +75,7 @@ def lead_drafts(store: ArtifactStore, upto: int) -> tuple[list[dict], list[int],
     ⚠ **装载走产地那一份**（`novel/stages/stage5/measure.py::load_drafts`）：
     成稿是 stage5 的产物，本层只是下游读者。这里只加本层的**口径**——
     「开篇到第几章」。canonical Stage5 每章只有一个结构化落点，
-    本层不再保留旧双臂布局下的选择语义。
+    本层不再保留旧双臂布局下的选择语义。读取前按范围筛选，未下发后文章稿不进入 judged。
     ⚠⚠ 那份装载器里那条「绝不走 `store.read`」的告诫仍然承重，去那边读。
 
     ⚠ `.INVALID` 由装载器排除并单列，本层不消费那个计数：文案只看正式稿。
@@ -90,7 +88,8 @@ def lead_drafts(store: ArtifactStore, upto: int) -> tuple[list[dict], list[int],
         raise TerminalState(
             f'legacy_incompatible：Stage6 不消费旧 Stage5 双臂路径 {legacy[:8]}。'
             '保留旧 base 为历史证据，在 canonical Stage5 base 重建后再运行 Stage6')
-    by_ord, _invalids, judged = load_drafts(store)
+    by_ord, _invalids, judged = load_drafts(
+        store, chapter_ordinals=frozenset(range(1, upto + 1)))
     lead: list[dict] = []
     missing: list[int] = []
     for o in range(1, upto + 1):

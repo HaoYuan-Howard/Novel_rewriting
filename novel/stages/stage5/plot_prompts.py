@@ -53,7 +53,7 @@ def facts_block(entry: dict[str, Any]) -> str:
             'allowed_slots 允许陈述主体真相；state_permissions 仅允许按所指状态的信念、声称或未知表达，不能升级为真相。\n'
             'effective_from/until 是事实成立窗口（until 包含该章），不能当作披露许可；已结束的事实仍可作为历史披露。\n'
             'actor_ref 是独立表面身份；只有 identity_actors 对应的知识事件开放后，才能断言两种身份是同一人。\n'
-            '普通昵称在同一 surfaces 中；role 仅在 role_allowed_slots 中使用，不从另一个身份继承。\n'
+            '普通昵称在同一 surfaces 中；每个称谓分别遵守 surface_allowed_slots，不能借同一 actor_ref 的其他称谓提前出现。role 仅在 role_allowed_slots 中使用，不从另一个身份继承。\n'
             '不同版本仍分别服从各自 allowed_slots；局部称呼的施受、改口和对白语境依完整 Beat/State。\n'
             + compact({'global_subjects': entry['global_subjects']}))
 
@@ -77,11 +77,15 @@ def prev_context(entry: dict[str, Any], book) -> str | None:
     if not used <= previous_actors.keys():
         raise ValueError('上章收束人物缺少已公开表面身份')
     last = previous['scenes'][-1]['slot']
-    roster = [{k: v for k, v in previous_actors[token].items()
-               if k not in ('allowed_slots', 'role_allowed_slots', 'role')}
-              | {'role': previous_actors[token]['role']
-                 if last in previous_actors[token]['role_allowed_slots'] else None}
-              for token in sorted(used - current_actors)]
+    roster = []
+    for token in sorted(used - current_actors):
+        previous_actor = previous_actors[token]
+        surfaces = [s for s in previous_actor['surfaces']
+                    if last in previous_actor['surface_allowed_slots'][s]]
+        if not surfaces:
+            raise ValueError('上章收束人物缺少末场可用称谓')
+        roster.append({'actor_ref': token, 'display_name': surfaces[0], 'surfaces': surfaces,
+                       'role': previous_actor['role'] if last in previous_actor['role_allowed_slots'] else None})
     payload = {
         'previous_public_actors': roster,
         'completed_ending_beat_refs': [r['beat_ref'] for r in ending],

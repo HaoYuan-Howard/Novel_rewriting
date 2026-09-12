@@ -64,7 +64,7 @@ from novel.consumption import (
 )
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
-    ProvenanceRefused, UpstreamMissing, UpstreamStale,
+    ProvenanceRefused, TerminalState, UpstreamMissing, UpstreamStale,
 )
 from novel.prov import FreshnessReport
 from novel.run import RunContext
@@ -1610,7 +1610,7 @@ class ArtifactStore:
                 root_now = self._content_sha1_or_none(STAGE0_CLEAN_TEXT)
                 if not isinstance(root_was, str):
                     return FreshnessReport('unknown', 'no_provenance')
-                if root_now != root_was:
+                if root_now != root_was and not self.equivalent_body_root(rel, root_was):
                     edge = self._content_edge(STAGE0_CLEAN_TEXT, root_was, root_now)
                     return self._content_report((edge,))
             recorded = (block or {}).get('inputs') if isinstance(block, dict) else None
@@ -1680,7 +1680,8 @@ class ArtifactStore:
         ⚠ `rel` 只用来定位 `producer_node`（决定 `consumed` 那一半怎么投影），
         **不读它的字节**。
         """
-        node = producer_node(rel, fallback=self.ctx.node)
+        from novel.source_identity import body_owner
+        node = body_owner(rel) or producer_node(rel, fallback=self.ctx.node)
         return prov.freshness(
             recorded,
             file_now=self._file_fp_of_key,
@@ -2451,6 +2452,25 @@ class ArtifactStore:
         if callable(record):
             record(rel, self._root_of(artifact))
 
+    def equivalent_body_root(self, rel: str, root: str, *, source: Provenance | None = None) -> bool:
+        """只承认已审源钩子修订下的相同正文；原来源字节、费用和审批均不重挂。"""
+        from novel.source_identity import BODY_OWNERS, body_owner, same_body_source
+        owner = body_owner(rel)
+        if owner not in BODY_OWNERS:
+            return False
+        with self.ctx.validation_reads():
+            if source is None:
+                spec = artifact_spec(rel)
+                if spec is None:
+                    return False
+                try:
+                    artifact = self.read_own(spec.model, rel)[0]
+                    source = self._provenance_of(artifact)
+                except (TerminalState, ProvenanceRefused, ValueError, OSError):
+                    return False
+            return (source is not None and source.root_clean_sha1 == root
+                    and same_body_source(self, root, node=owner, inputs=source.inputs))
+
     def _refuse_bad_provenance(self, rel: str, src: Provenance) -> None:
         """写盘口的闸。**拒绝，不是打印一句警告然后照写。**
 
@@ -2468,7 +2488,8 @@ class ArtifactStore:
         """
         prompts = getattr(src, 'prompts', None)
         current_root = self.ctx.root_clean_sha1
-        if src.root_clean_sha1 != current_root:
+        if src.root_clean_sha1 != current_root and not self.equivalent_body_root(
+                rel, src.root_clean_sha1, source=src):
             raise ProvenanceRefused(
                 f'{self.ctx.node} 要往 {rel} 写 root_clean_sha1={src.root_clean_sha1} 的产物，'
                 f'但当前 stage0/clean_text.txt 是 {current_root}；拒绝混根或伪造重挂')

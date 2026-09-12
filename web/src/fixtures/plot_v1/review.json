@@ -8,9 +8,9 @@
     "scope": "chapter:1",
     "review_identity_sha256": "027c25006f885c6e1e471490d4aec53474535264ea69f2881c5995ad2d0c789f",
     "validation_seal_sha256": "e1cb7fa0fe97e541da9d551b4d036c9f272b3abcc8f3fba788e895f0d71793ea",
-    "review_token": "bpr5_3dcc127fd87002ee7002f995e26242aae584ac7412aba2f22814037cbcf653b6",
+    "review_token": "bpr5_9c3984371afa07ca7a6245ee1eb076ebd402b79cdc2ca7b6f2d74e953a821166",
     "subject_sha256": "027c25006f885c6e1e471490d4aec53474535264ea69f2881c5995ad2d0c789f",
-    "binding_sha256": "3dcc127fd87002ee7002f995e26242aae584ac7412aba2f22814037cbcf653b6",
+    "binding_sha256": "9c3984371afa07ca7a6245ee1eb076ebd402b79cdc2ca7b6f2d74e953a821166",
     "binding": {
       "blueprint_rel": "stage2/chapter_blueprints.json",
       "subject_kind": "formal",
@@ -199,7 +199,7 @@
           },
           "actor": "test:范围审阅者",
           "reason": "合成语义审阅接受",
-          "source_decision_sha256": "0a163078728bf98a52f3090083cb2d4f58a32f3853ba3bac1eed3b92c7568967"
+          "source_decision_sha256": "33b10a46f12d65e1f3bfa2d5caa2b1b24015d39e8e01f956dd16b9f0a36a9127"
         }
       ],
       "pending_obligation_ids": []
@@ -652,9 +652,9 @@
     "scope": "cross_chapter",
     "review_identity_sha256": "af7775ad3f3358f70438b94e8801e99450b4d3b286ee786a38157c3560fa8cb8",
     "validation_seal_sha256": "e1cb7fa0fe97e541da9d551b4d036c9f272b3abcc8f3fba788e895f0d71793ea",
-    "review_token": "bpr5_fa2817eae3352e4e541c66bf375385cf1f91c5da97ce7295e07cf6b21c21deea",
+    "review_token": "bpr5_eda0b8483569f93c9275eea0e4904d20de6ab497c381b0129730fe01b14bf5d8",
     "subject_sha256": "af7775ad3f3358f70438b94e8801e99450b4d3b286ee786a38157c3560fa8cb8",
-    "binding_sha256": "fa2817eae3352e4e541c66bf375385cf1f91c5da97ce7295e07cf6b21c21deea",
+    "binding_sha256": "eda0b8483569f93c9275eea0e4904d20de6ab497c381b0129730fe01b14bf5d8",
     "binding": {
       "blueprint_rel": "stage2/chapter_blueprints.json",
       "subject_kind": "formal",
@@ -1092,7 +1092,7 @@
           },
           "actor": "test:范围审阅者",
           "reason": "合成语义审阅接受",
-          "source_decision_sha256": "f85ae77042d55518f7eaae7426c6f21e14444397b074766d03349bc8bef01e3c"
+          "source_decision_sha256": "a7ab0e66bdcaf8317163c082fee7e601c2bbc374b376a0f5507459d03361266f"
         },
         {
           "obligation_id": "relation_visibility:rel_01:2",
@@ -1112,7 +1112,7 @@
           },
           "actor": "test:范围审阅者",
           "reason": "合成语义审阅接受",
-          "source_decision_sha256": "f85ae77042d55518f7eaae7426c6f21e14444397b074766d03349bc8bef01e3c"
+          "source_decision_sha256": "a7ab0e66bdcaf8317163c082fee7e601c2bbc374b376a0f5507459d03361266f"
         },
         {
           "obligation_id": "secret_reveal:secret_01:2",
@@ -1132,7 +1132,7 @@
           },
           "actor": "test:范围审阅者",
           "reason": "合成语义审阅接受",
-          "source_decision_sha256": "f85ae77042d55518f7eaae7426c6f21e14444397b074766d03349bc8bef01e3c"
+          "source_decision_sha256": "a7ab0e66bdcaf8317163c082fee7e601c2bbc374b376a0f5507459d03361266f"
         },
         {
           "obligation_id": "setting:era:1",
@@ -1152,7 +1152,7 @@
           },
           "actor": "test:范围审阅者",
           "reason": "合成语义审阅接受",
-          "source_decision_sha256": "0a163078728bf98a52f3090083cb2d4f58a32f3853ba3bac1eed3b92c7568967"
+          "source_decision_sha256": "33b10a46f12d65e1f3bfa2d5caa2b1b24015d39e8e01f956dd16b9f0a36a9127"
         },
         {
           "obligation_id": "setting:social_context:2",
@@ -1172,7 +1172,7 @@
           },
           "actor": "test:范围审阅者",
           "reason": "合成语义审阅接受",
-          "source_decision_sha256": "f85ae77042d55518f7eaae7426c6f21e14444397b074766d03349bc8bef01e3c"
+          "source_decision_sha256": "a7ab0e66bdcaf8317163c082fee7e601c2bbc374b376a0f5507459d03361266f"
         }
       ],
       "pending_obligation_ids": []
@@ -2056,7 +2056,7 @@
       "rel": "stage2/chapter_blueprints.json",
       "exists": true,
       "bytes": 9168,
-      "mtime": 1789243642,
+      "mtime": 1789251587,
       "freshness": "fresh",
       "display_freshness": "fresh",
       "reason": "match",
@@ -2113,6 +2113,1799 @@
         "global_projection_contract": "plot-global-scope-v2"
       },
       "plot_revisions": []
+    }
+  },
+  "prepare": {
+    "state": {
+      "state": "accepted",
+      "reason": "全文与原钩子核对，来信支持与首章连续范围成立",
+      "subject_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
+      "review_token": "s6p1_e71475f7353e9676585d4dd735904d0d05b7f920eae6a5bfbc91af4be5b244a8",
+      "prepare": {
+        "source_blurb": {
+          "facts": [
+            {
+              "kind": "supported",
+              "claim_id": "hook_001",
+              "claim": "李宝珠收到父亲已经回城的来信。",
+              "evidence": {
+                "chapter_ordinal": 1,
+                "source": {
+                  "text": "她想起了昨夜那封信。\n\n信上说父亲已经回城。",
+                  "start": 27,
+                  "end": 49
+                }
+              }
+            }
+          ],
+          "opening": {
+            "kind": "proposed",
+            "through_chapter": 1,
+            "rationale": "首章来信与收信行动完整承接原钩子，次章另起清晨场景",
+            "boundary_evidence": {
+              "chapter_ordinal": 1,
+              "source": {
+                "text": "她把信折好收进袖中。\n\n远处传来更夫的梆子声。",
+                "start": 51,
+                "end": 74
+              }
+            }
+          }
+        },
+        "main_text_sha256": "6ace0b1e2048ec3193f0d9595a740d5c37c572f441dbac92e9dfd991b0df006c",
+        "hook_copy_sha256": "bcb04e32665861d445b523c0cd11761cb27b5f6af92b700c068ba21db4b6e76a",
+        "_provenance": {
+          "code": "test-plot-producer",
+          "root_clean_sha1": "2b316027b79c3e7cc16d9678efd250852a308445",
+          "inputs": {
+            "stage1/hook_copy.json": {
+              "file": "e600788372",
+              "consumed": "1f0622cd38"
+            },
+            "stage1/main_text.json": {
+              "file": "7527d7a23e",
+              "consumed": "f870e94453"
+            }
+          },
+          "usage": {
+            "calls_made": 1,
+            "calls_cached": 0,
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "reasoning_tokens": 10
+          },
+          "shared_analysis_source": null,
+          "revalidated": null,
+          "gates_skipped": null,
+          "origin": null,
+          "input_basis": null,
+          "partial_rewrite": null,
+          "invalid_baseline_sha256": null,
+          "revalidation_audit": null,
+          "prompts": {
+            "PREPARE_SYS": "30b28c6b08"
+          },
+          "model": "gpt-5.6-sol",
+          "adopted_models": [
+            "gpt-5.6-sol"
+          ],
+          "prepare_edit": null
+        }
+      },
+      "review": {
+        "actor": "test:独立文案准备审阅者",
+        "reason": "全文与原钩子核对，来信支持与首章连续范围成立",
+        "source_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
+        "request_sha256": "0581be281f1a3be6114b951252da3a98cb702aaf6920680971346b984383f235",
+        "decision": "accept",
+        "at": "2026-09-12T22:20:27.061643+00:00"
+      },
+      "pending_commit": false
+    },
+    "main_text": [
+      {
+        "chapter_ordinal": 1,
+        "text": "\n春风吹过老宅的院墙。\n\n李宝珠站在廊下看着落花。\n\n她想起了昨夜那封信。\n\n信上说父亲已经回城。\n\n她把信折好收进袖中。\n\n远处传来更夫的梆子声。\n\n"
+      },
+      {
+        "chapter_ordinal": 2,
+        "text": "\n第二日清晨天色微亮。\n\n李宝珠推开院门往外走。\n\n街上已经有小贩在吆喝。\n\n她买了两个热腾腾的包子。\n\n回来时看见母亲在门口等她。\n\n其实母亲早就知道那封信的事。\n\n"
+      },
+      {
+        "chapter_ordinal": 3,
+        "text": "\n午后的日头晒得人发懒。\n\n李宝珠把账册摊在桌上一页页翻。\n\n管家在门外回话说米价又涨了。\n\n她皱着眉让管家去问问别家。\n\n窗外的槐树落了一地碎叶。\n\n她忽然想起父亲从前也这样翻账。\n\n那时她还够不着桌子。\n\n母亲进来给她添了一盏茶。\n\n茶是新沏的还烫着。\n\n她端起来吹了吹没有喝。"
+      }
+    ],
+    "hook_copy": {
+      "text": "李宝珠收到父亲已经回城的来信。\n\n"
+    },
+    "edit_template": {
+      "actor": "operator",
+      "reason": "请填写本次原文核对结论",
+      "review_token": "s6p1_e71475f7353e9676585d4dd735904d0d05b7f920eae6a5bfbc91af4be5b244a8",
+      "source_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
+      "main_text_sha256": "6ace0b1e2048ec3193f0d9595a740d5c37c572f441dbac92e9dfd991b0df006c",
+      "hook_copy_sha256": "bcb04e32665861d445b523c0cd11761cb27b5f6af92b700c068ba21db4b6e76a",
+      "source_blurb": {
+        "facts": [
+          {
+            "kind": "supported",
+            "claim_id": "hook_001",
+            "claim": "李宝珠收到父亲已经回城的来信。",
+            "evidence": {
+              "start_para": 3,
+              "end_para": 4,
+              "chapter_ordinal": 1
+            }
+          }
+        ],
+        "opening": {
+          "kind": "proposed",
+          "through_chapter": 1,
+          "rationale": "首章来信与收信行动完整承接原钩子，次章另起清晨场景",
+          "boundary_evidence": {
+            "start_para": 5,
+            "end_para": 6,
+            "chapter_ordinal": 1
+          }
+        }
+      }
+    },
+    "decision_template": {
+      "actor": "operator",
+      "reason": "请填写本次原文核对结论",
+      "review_token": "s6p1_e71475f7353e9676585d4dd735904d0d05b7f920eae6a5bfbc91af4be5b244a8",
+      "source_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
+      "decision": "uncertain",
+      "edit": null
+    },
+    "review_contract": "stage6-prepare-review/v1：对照完整正文与原钩子审每个事实的支持分类、\n证据语义及连续开篇范围；原钩子独立事实不得伪装正文事实，正文反证不得当支持。\n确认无漏项、无过推且范围明确后 accept；存在错误可同时交完整 typed edit，或 rework/uncertain。\n未决事实可以诚实保留但不可作为已获支持事实；开篇范围 unresolved 不得 accept。\n不生成 Hook，不改变人物/Global，不替最终 gate.s6 定稿。",
+    "sid": "123",
+    "title": "完整剧情测试"
+  },
+  "hook": {
+    "v": 4,
+    "kind": "stage6",
+    "sid": "123",
+    "review_contract_version": "stage6-final-review-v5",
+    "review_identity_sha256": "ba8da72030314f235900cc0dcdc2a5817c7134ae077b58b559271dc99103d287",
+    "validation_seal_sha256": "89e5c3fc3173aa6756ee3547f3fcb8db9a08f8bf976b96aac9067ba7a5c40432",
+    "review_token": "s6r4_430ef8fd707d2bd10391edd3560fe140f0a83e90ea8f0d57555df01dde785b36",
+    "artifact_subject_sha256": "4162bced330c4c6043cb1dc9c0f264c30eeb16f6a0ce3289a1d72ae2655a0a57",
+    "rationale": "分别呈现回城来信、母亲知情与账房日常。",
+    "materials": {
+      "prepare_subject_sha256": "37dfd5b51348d6cbea64852f76d312d3c7ae3640ddd4f95a96fb8e808705c619",
+      "source_hook": "李宝珠收到父亲已经回城的来信。\n\n",
+      "source_blurb": {
+        "facts": [
+          {
+            "kind": "supported",
+            "claim_id": "hook_001",
+            "claim": "李宝珠收到父亲已经回城的来信。",
+            "evidence": {
+              "chapter_ordinal": 1,
+              "source": {
+                "text": "她想起了昨夜那封信。\n\n信上说父亲已经回城。",
+                "start": 27,
+                "end": 49
+              }
+            }
+          }
+        ],
+        "opening": {
+          "kind": "proposed",
+          "through_chapter": 1,
+          "rationale": "首章来信与收信行动完整承接原钩子，次章另起清晨场景",
+          "boundary_evidence": {
+            "chapter_ordinal": 1,
+            "source": {
+              "text": "她把信折好收进袖中。\n\n远处传来更夫的梆子声。",
+              "start": 51,
+              "end": 74
+            }
+          }
+        }
+      },
+      "rewritten_chapters": [
+        {
+          "chapter_ordinal": 1,
+          "text": "李宝珠倚着老宅的廊柱。\n\n春风卷着残花掠过院墙。\n\n她想起昨夜的来信：父亲已经回城。\n\n廊下风声轻响。\n\n她将信纸折起，收进衣袖，目光仍停在院中落花上。\n\n远处传来几声梆子。"
+        },
+        {
+          "chapter_ordinal": 2,
+          "text": "天色才亮。\n\n李宝珠打开院门，走到街上。\n\n小贩们已开始叫卖。\n\n她买了两个包子，还热着。\n\n回到家时，母亲正守在门边等她。\n\n那封信的消息，母亲其实早已知晓。"
+        },
+        {
+          "chapter_ordinal": 3,
+          "text": "母亲进来了，给她添上茶水。\n\n新沏的茶还烫着。\n\n她捧起茶盏吹了吹，仍未喝下。\n\n午后的阳光叫人犯懒。\n\n李宝珠翻开账簿，逐页看去。\n\n管家在门外禀报，米价又抬高了。\n\n她蹙眉让他去别家打听。\n\n窗外散着槐树的碎叶。\n\n父亲从前也是这样翻账的。\n\n她那时尚小，连桌沿都够不着。"
+        }
+      ]
+    },
+    "check_basis": "candidate_without_approval",
+    "check": {
+      "rules_scanned": 25,
+      "counts": {
+        "ok": 18,
+        "hit": 2,
+        "unver": 5,
+        "skipped": 0
+      },
+      "provenance": {
+        "freshness": "fresh",
+        "reason": "match",
+        "ghosts": [],
+        "edges": [
+          {
+            "key": "stage1/hook_copy.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "e600788372",
+            "now_file": "e600788372",
+            "recorded_consumed": "0de55bb5be",
+            "now_consumed": "0de55bb5be"
+          },
+          {
+            "key": "stage2/characters.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "5eaefd5f7c",
+            "now_file": "5eaefd5f7c",
+            "recorded_consumed": "4106a3c4f7",
+            "now_consumed": "4106a3c4f7"
+          },
+          {
+            "key": "stage2/global_grounding.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "2c7388747c",
+            "now_file": "2c7388747c",
+            "recorded_consumed": "bc82fe4bc8",
+            "now_consumed": "bc82fe4bc8"
+          },
+          {
+            "key": "stage2/global_review.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "8f5d8478b1",
+            "now_file": "8f5d8478b1",
+            "recorded_consumed": "d0a9881bd8",
+            "now_consumed": "d0a9881bd8"
+          },
+          {
+            "key": "stage4/writer_context.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "e67d22596b",
+            "now_file": "e67d22596b",
+            "recorded_consumed": "e5b63f32ce",
+            "now_consumed": "e5b63f32ce"
+          },
+          {
+            "key": "stage6/prepare.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "5c2486c58b",
+            "now_file": "5c2486c58b",
+            "recorded_consumed": "37aea8237b",
+            "now_consumed": "37aea8237b"
+          }
+        ],
+        "invalid": false,
+        "revalidated": null,
+        "origin": null
+      },
+      "attention": [
+        {
+          "rule": "hook_body_missing",
+          "sev": "unver",
+          "status": "unver",
+          "item": "开篇那几章都有成稿",
+          "requirement": "R-9.16",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "第 1~1 章全部有成稿。⚠ 「成稿够不够撑起一段文案」不由本层判",
+          "scanned": "第 1~1 章",
+          "baseline": null,
+          "note": "下发范围内某几章还没写 ⇒ 文案是照一份不完整的开篇写的。前提不成立要出声，不许静默按「有几章算几章」跑完"
+        },
+        {
+          "rule": "hook_body_stale",
+          "sev": "unver",
+          "status": "unver",
+          "item": "判的是照盘上这份正文写的那一版文案",
+          "requirement": "R-9.17",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "1 份开篇成稿的 consumed 投影与这份文案记的逐条相同——它判的就是盘上这一版正文",
+          "scanned": "1 份开篇成稿",
+          "baseline": null,
+          "note": "consumed（字段投影）判过期，sha1 只作审计。当前 JudgedDraft 必须携带 consumed，逐条正文投影不一致即 stale。"
+        },
+        {
+          "rule": "hook_candidate_contradiction",
+          "sev": "info",
+          "status": "hit",
+          "item": "逐候选列出实质矛盾或审判不确定项，供定稿时避开",
+          "requirement": "R-9.20",
+          "check_kind": "semantic",
+          "remediation": "human",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "hook_candidate_contradiction",
+              "sev": "info",
+              "item": "逐候选列出实质矛盾或审判不确定项，供定稿时避开",
+              "detail": "[c1] 双盲合并为 UNVER：A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验；判官 A（PASS）：具体场面强，最后一击有效（T1 侧写）。 ｜ 判官 B（PASS）：具体场面强，最后一击有效（T1 侧写）。",
+              "evidence": [
+                "c1:2d52ae642e"
+              ],
+              "fix_args": {},
+              "evidence_key": "c1:2d52ae642e",
+              "owner": "stage6",
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            },
+            {
+              "output_ordinal": null,
+              "rule": "hook_candidate_contradiction",
+              "sev": "info",
+              "item": "逐候选列出实质矛盾或审判不确定项，供定稿时避开",
+              "detail": "[c2] 双盲合并为 UNVER：A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验；判官 A（PASS）：具体场面强，最后一击有效（T3 侧写）。 ｜ 判官 B（PASS）：具体场面强，最后一击有效（T3 侧写）。",
+              "evidence": [
+                "c2:ee94702266"
+              ],
+              "fix_args": {},
+              "evidence_key": "c2:ee94702266",
+              "owner": "stage6",
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            },
+            {
+              "output_ordinal": null,
+              "rule": "hook_candidate_contradiction",
+              "sev": "info",
+              "item": "逐候选列出实质矛盾或审判不确定项，供定稿时避开",
+              "detail": "[c3] 双盲合并为 UNVER：A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验；判官 A（PASS）：具体场面强，最后一击有效（T2 侧写）。 ｜ 判官 B（PASS）：具体场面强，最后一击有效（T2 侧写）。",
+              "evidence": [
+                "c3:97dc2ff35c"
+              ],
+              "fix_args": {},
+              "evidence_key": "c3:97dc2ff35c",
+              "owner": "stage6",
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "3 份去重文本",
+          "baseline": null,
+          "note": "证据必须是候选文案的连续原字节；只报告候选自己的问题，不因另一条干净候选存在而隐藏。"
+        },
+        {
+          "rule": "hook_length",
+          "sev": "info",
+          "status": "hit",
+          "item": "篇幅贴合本书自己的文案段",
+          "requirement": "R-9.14",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "hook_length",
+              "sev": "info",
+              "item": "篇幅贴合本书自己的文案段",
+              "detail": "[c1] 32 字，本书文案段 15 字（提示带 9~24）",
+              "evidence": [
+                "32/15"
+              ],
+              "fix_args": {},
+              "evidence_key": "32/15",
+              "owner": "stage6",
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            },
+            {
+              "output_ordinal": null,
+              "rule": "hook_length",
+              "sev": "info",
+              "item": "篇幅贴合本书自己的文案段",
+              "detail": "[c2] 37 字，本书文案段 15 字（提示带 9~24）",
+              "evidence": [
+                "37/15"
+              ],
+              "fix_args": {},
+              "evidence_key": "37/15",
+              "owner": "stage6",
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            },
+            {
+              "output_ordinal": null,
+              "rule": "hook_length",
+              "sev": "info",
+              "item": "篇幅贴合本书自己的文案段",
+              "detail": "[c3] 35 字，本书文案段 15 字（提示带 9~24）",
+              "evidence": [
+                "35/15"
+              ],
+              "fix_args": {},
+              "evidence_key": "35/15",
+              "owner": "stage6",
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "3 份文本（c1, c2, c3）",
+          "baseline": null,
+          "note": "∈ (0.6, 1.6) × 原作文案段字数。⚠ 必须用产出 measurable.hook 的那把尺子来量——三个口径实测互不相同（某本 measure()[chars]=319 / len(norm())=274 / len(strip())=347），拿其中一个去比另一个算出来的基准，错的不是某个数，是那个跨口径的运算，而它不会报错，只会让整条判据系统性偏 15%。盘上 0/9。〔人能 0 成本改掉：--pick 换一条候选〕"
+        },
+        {
+          "rule": "hook_not_approved",
+          "sev": "unver",
+          "status": "unver",
+          "item": "有人给这份文案定过稿",
+          "requirement": "R-9.6",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "这份文案还没有人定稿——先看质量排序，再跑 stage6.approve --pick N",
+          "scanned": "approved 一格",
+          "baseline": null,
+          "note": "定稿仍由人负责，但人现在会看到匿名质量排序，且批准路会拒绝矛盾、不确定或未经审判的候选。"
+        },
+        {
+          "rule": "hook_semantic_contradiction",
+          "sev": "unver",
+          "status": "unver",
+          "item": "定稿候选不改变人物身份、关系、关键因果或故事结果",
+          "requirement": "R-9.19",
+          "check_kind": "semantic",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "还没有定稿；三条候选的矛盾线索见 hook_candidate_contradiction。本仓没有自动放行门，实质矛盾一律由人读判官证据后裁决",
+          "scanned": "3 份去重文本",
+          "baseline": null,
+          "note": "⚠ 它曾经是 HARD。命中 HARD 的两条路都要求候选处于 contradiction，而那个状态只由 automated FAIL 产生——自动放行门随 evaluator profile 整批下线后不可达，一条 Finding 都产不出来。继续挂 HARD 就只剩两条路：伪造一个绕开真实契约的反例，或给 tests/test_hard_counterexamples.py 那条双向守卫开豁免口，两条本仓都禁止。降为 unver 说的是实话——矛盾要人自己看：badge 是 amber（不是绿），修复路由仍是 human，收口只认 actor / reason / 完整 subject SHA-256 绑定的 human_verification。剧透、时间压缩、合成场面和为真实关系重写台词不算矛盾。"
+        },
+        {
+          "rule": "prepare_semantic_review",
+          "sev": "unver",
+          "status": "unver",
+          "item": "文案准备已独立核对事实支持与开篇范围",
+          "requirement": "R-9.2",
+          "check_kind": "semantic",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "当前 Prepare 已经独立接受；支持类型及连续开篇范围由该决定承担，机械证据通过不替代语义裁决，亦不表示最终文案已定稿。",
+          "scanned": "当前准备、材料与独立决定提交证明",
+          "baseline": null,
+          "note": "独立 Commander 决定绑定当前 Prepare；不能继承最终 gate.s6 或把未决事实当支持。"
+        }
+      ],
+      "metrics": [
+        {
+          "rule": "hook_fact_attribution",
+          "sev": "metric",
+          "status": "ok",
+          "item": "人物赠与类事实的弱字面归因读数",
+          "requirement": "R-9.15",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "hook_fact_attribution",
+              "sev": "metric",
+              "item": "人物赠与类事实的弱字面归因读数",
+              "detail": "弱事实归因探针抽到 0 条“人物 + 送/给/赠 + 对象”，0 条在完整剧情节点中有同人物、同对象和赠与词字面支持。本轮未抽到可比短语。这是低召回/低精度度量，不是矛盾门；未命中必须交语义审判或人工核对。",
+              "evidence": [],
+              "fix_args": {},
+              "evidence_key": "",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "3 份文本（c1, c2, c3）",
+          "baseline": null,
+          "note": "抽取“人物 + 送/给/赠 + 对象”，与 Stage4 故事地图事件做同人物、同对象、同赠与词的字面并排。低召回/低精度，只是度量，不是矛盾门；未同字面命中不能自动判错，须交语义审判或人工核对。"
+        },
+        {
+          "rule": "hook_quality_rank",
+          "sev": "metric",
+          "status": "ok",
+          "item": "候选吸引力六维评分、固定权重总分与匿名排序",
+          "requirement": "R-9.21",
+          "check_kind": "semantic",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "hook_quality_rank",
+              "sev": "metric",
+              "item": "候选吸引力六维评分、固定权重总分与匿名排序",
+              "detail": "匿名排序 ['c1', 'c2', 'c3']；c1 总分 8.15（阅读欲 9 / 声线 8 / 场面 7 / 期待 9 / 技法 8 / 摘要罚 2） · c3 总分 8.15（阅读欲 9 / 声线 8 / 场面 7 / 期待 9 / 技法 8 / 摘要罚 2） · c2 总分 8.15（阅读欲 9 / 声线 8 / 场面 7 / 期待 9 / 技法 8 / 摘要罚 2）",
+              "evidence": [
+                "c1:8.15",
+                "c3:8.15",
+                "c2:8.15"
+              ],
+              "fix_args": {},
+              "evidence_key": "c1:8.15|c3:8.15|c2:8.15",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "3 份去重文本",
+          "baseline": null,
+          "note": "总分由代码计算：阅读欲 30% + 正文声线 20% + 具体场面 15% + 期待承诺 20% + 文案技法 15% - 摘要感 10%；模型不能自报总分。剧透本身不加分也不扣分。"
+        },
+        {
+          "rule": "hook_quote_shape",
+          "sev": "metric",
+          "status": "ok",
+          "item": "引语条数 · 最长一条字数 · 对白比，与原作并排",
+          "requirement": "R-9.5",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "hook_quote_shape",
+              "sev": "metric",
+              "item": "引语条数 · 最长一条字数 · 对白比，与原作并排",
+              "detail": "[c1] 引语 0 条 / 最长 0 字（≥6 字才计）；原作文案 0 条 / 最长 0 字。仍是度量不是门：禁令已撤，但要不要设阈值得先量方差",
+              "evidence": [
+                "0/0"
+              ],
+              "fix_args": {},
+              "evidence_key": "0/0",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            },
+            {
+              "output_ordinal": null,
+              "rule": "hook_quote_shape",
+              "sev": "metric",
+              "item": "引语条数 · 最长一条字数 · 对白比，与原作并排",
+              "detail": "[c2] 引语 0 条 / 最长 0 字（≥6 字才计）；原作文案 0 条 / 最长 0 字。仍是度量不是门：禁令已撤，但要不要设阈值得先量方差",
+              "evidence": [
+                "0/0"
+              ],
+              "fix_args": {},
+              "evidence_key": "0/0",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            },
+            {
+              "output_ordinal": null,
+              "rule": "hook_quote_shape",
+              "sev": "metric",
+              "item": "引语条数 · 最长一条字数 · 对白比，与原作并排",
+              "detail": "[c3] 引语 0 条 / 最长 0 字（≥6 字才计）；原作文案 0 条 / 最长 0 字。仍是度量不是门：禁令已撤，但要不要设阈值得先量方差",
+              "evidence": [
+                "0/0"
+              ],
+              "fix_args": {},
+              "evidence_key": "0/0",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "3 份文本（c1, c2, c3）",
+          "baseline": null,
+          "note": "度量不是门，当前不给阈值。 报告把候选与原作文案的引语形态并排展示，供人工定稿时判断；不得把它提升成引语必须逐字来自正文的机械门。"
+        },
+        {
+          "rule": "hook_report",
+          "sev": "metric",
+          "status": "ok",
+          "item": "下发范围 · 各候选字数 · 原作文案段字数",
+          "requirement": "R-9.15",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "hook_report",
+              "sev": "metric",
+              "item": "下发范围 · 各候选字数 · 原作文案段字数",
+              "detail": "下发范围到第 1 章；各文本字数 c1 32 · c2 37 · c3 35；原作文案段 15 字",
+              "evidence": [
+                "1"
+              ],
+              "fix_args": {},
+              "evidence_key": "1",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "3 份文本（c1, c2, c3）",
+          "baseline": null,
+          "note": "⚠ candidates[].chars 已被新契约裁掉（能 0 成本现算的字段不落盘），所以这三个数一律现算，不许读产物"
+        },
+        {
+          "rule": "hook_secret_literal",
+          "sev": "metric",
+          "status": "ok",
+          "item": "与秘密原文的逐字重合条数（按读者时点分已揭示/未揭示）",
+          "requirement": "R-9.15",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "hook_secret_literal",
+              "sev": "metric",
+              "item": "与秘密原文的逐字重合条数（按读者时点分已揭示/未揭示）",
+              "detail": "[c1] 与秘密原文逐字重合 0/1 条——0 条是常态，它不代表卖点没用上：文案按体裁在改写，字面探针在这个产物类上结构性失效（同 hook_spoiler_unver）",
+              "evidence": [],
+              "fix_args": {},
+              "evidence_key": "",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            },
+            {
+              "output_ordinal": null,
+              "rule": "hook_secret_literal",
+              "sev": "metric",
+              "item": "与秘密原文的逐字重合条数（按读者时点分已揭示/未揭示）",
+              "detail": "[c2] 与秘密原文逐字重合 0/1 条——0 条是常态，它不代表卖点没用上：文案按体裁在改写，字面探针在这个产物类上结构性失效（同 hook_spoiler_unver）",
+              "evidence": [],
+              "fix_args": {},
+              "evidence_key": "",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            },
+            {
+              "output_ordinal": null,
+              "rule": "hook_secret_literal",
+              "sev": "metric",
+              "item": "与秘密原文的逐字重合条数（按读者时点分已揭示/未揭示）",
+              "detail": "[c3] 与秘密原文逐字重合 0/1 条——0 条是常态，它不代表卖点没用上：文案按体裁在改写，字面探针在这个产物类上结构性失效（同 hook_spoiler_unver）",
+              "evidence": [],
+              "fix_args": {},
+              "evidence_key": "",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "3 份文本（c1, c2, c3）",
+          "baseline": null,
+          "note": "盘上 9/9 候选恒 0 条。⚠ 0 条是常态，不是「卖点没用上」：secret_keywords 切的是整个分句，而文案按体裁在改写，字面探针在这个产物类上结构性失效，这里只保留为创作材料使用读数。⚠ 非 0 条也不是违约：说破秘密现在是授权的（R-9.9），这条只是记账。⚠ 凭据必须经 core.text.locate_norm 回映成文案自己的字节——命中的片段来自 secret.fact，直接拿它当凭据展示等于把秘密原文抄进报告"
+        },
+        {
+          "rule": "hook_source_distance",
+          "sev": "metric",
+          "status": "ok",
+          "item": "与原作文案段的呈现结构距离：窗口重合率 · 最长逐字重合 · 末行重合",
+          "requirement": "R-9.23",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "hook_source_distance",
+              "sev": "metric",
+              "item": "与原作文案段的呈现结构距离：窗口重合率 · 最长逐字重合 · 末行重合",
+              "detail": "[c1] 与原作文案段的窗口重合率：4 字 8.0% / 8 字 0.0% / 20 字 0.0%；最长逐字重合 5 字（hook_reuses_source 的闸线是 20）；末行与原作末行最长逐字重合 3 字。度量不是门：结构贴近本身不违约（R-9.11 尾注明许学结构），阈值要先量跑间方差再谈",
+              "evidence": [
+                "5/3"
+              ],
+              "fix_args": {},
+              "evidence_key": "5/3",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            },
+            {
+              "output_ordinal": null,
+              "rule": "hook_source_distance",
+              "sev": "metric",
+              "item": "与原作文案段的呈现结构距离：窗口重合率 · 最长逐字重合 · 末行重合",
+              "detail": "[c2] 与原作文案段的窗口重合率：4 字 0.0% / 8 字 0.0% / 20 字 0.0%；最长逐字重合 3 字（hook_reuses_source 的闸线是 20）；末行与原作末行最长逐字重合 1 字。度量不是门：结构贴近本身不违约（R-9.11 尾注明许学结构），阈值要先量跑间方差再谈",
+              "evidence": [
+                "3/1"
+              ],
+              "fix_args": {},
+              "evidence_key": "3/1",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            },
+            {
+              "output_ordinal": null,
+              "rule": "hook_source_distance",
+              "sev": "metric",
+              "item": "与原作文案段的呈现结构距离：窗口重合率 · 最长逐字重合 · 末行重合",
+              "detail": "[c3] 与原作文案段的窗口重合率：4 字 0.0% / 8 字 0.0% / 20 字 0.0%；最长逐字重合 3 字（hook_reuses_source 的闸线是 20）；末行与原作末行最长逐字重合 3 字。度量不是门：结构贴近本身不违约（R-9.11 尾注明许学结构），阈值要先量跑间方差再谈",
+              "evidence": [
+                "3/3"
+              ],
+              "fix_args": {},
+              "evidence_key": "3/3",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "3 份文本（c1, c2, c3）",
+          "baseline": null,
+          "note": "度量不是门，当前不给阈值。 它补的是 hook_reuses_source 看不见的那一带：那条闸只查「连续 20 个内容字符相同」，而 R-9.11 的尾注明许学结构、节拍与最后一击的功能 ⇒ 一条候选可以逐句改写措辞、却完整复用原作的信息出场顺序并落在同一句收尾上，闸报 0 违规。实测一本书三条候选的最长逐字重合是 10 / 6 / 3 字（闸线 20）、4 字窗口重合率 19.7% / 8.2% / 0.0%——贴合度差 20 倍，而闸对三条一律报 0 违规。⚠ 结构贴近本身不是违约：source_architecture 当初正是被 prompt 要求继承原作结构的（该策略已于 2026-08-23 退场，HOOK_RECIPE 不再排它）。⚠⚠ 但这条读数不能反过来当「哪条策略该退场」的论据：2026-08-23 同一本书再采 9 条（docs/stage6-hook-recipe-ab.md），一条 scene_punchline 拿到最长逐字 10 字 / 4 字窗口 4.4%，比那条 source_architecture 的 9 字还长 ⇒ 贴着原作写不是某种策略的专利，是采样波动里本来就会出现的形态。它答的始终是「这一条离原作多近」，与策略名无关。⚠ 阈值必须先量跑间方差再谈（本仓机械探针有过同条件重跑 4.41→0.00 的实测），同 hook_quote_shape 的纪律。算法一律复用 core.spans.lcs 与 core.text.window_overlap——与 hook_reuses_source 同一对函数，另写一份口径就会漂。"
+        }
+      ]
+    },
+    "judge_rankings": {
+      "A": [
+        "c1",
+        "c3",
+        "c2"
+      ],
+      "B": [
+        "c1",
+        "c3",
+        "c2"
+      ]
+    },
+    "candidates": [
+      {
+        "index": 1,
+        "slot": "c1",
+        "approach": "payoff_preview",
+        "chars": 32,
+        "text": "来信说，父亲已经回了城。\n廊下的李宝珠看过残花，把那封信折进衣袖。",
+        "subject_sha256": "f6d8274494e5f1eaec8d2bb0b51855ff1a2f8aa58524fa85ed0a1a8a9b87d339",
+        "mech": {
+          "punct_fixed": 0,
+          "quotes_fixed": 0,
+          "paras_fixed": 1
+        },
+        "findings": [
+          {
+            "output_ordinal": null,
+            "rule": "hook_secret_literal",
+            "sev": "metric",
+            "item": "与秘密原文的逐字重合条数（按读者时点分已揭示/未揭示）",
+            "detail": "[c1] 与秘密原文逐字重合 0/1 条——0 条是常态，它不代表卖点没用上：文案按体裁在改写，字面探针在这个产物类上结构性失效（同 hook_spoiler_unver）",
+            "evidence": [],
+            "fix_args": {},
+            "evidence_key": "",
+            "owner": null,
+            "actionable": false,
+            "identity_hit": false,
+            "identity_dead": null,
+            "converge": "new",
+            "unresolved_rounds": 0,
+            "wontfix": null
+          },
+          {
+            "output_ordinal": null,
+            "rule": "hook_length",
+            "sev": "info",
+            "item": "篇幅贴合本书自己的文案段",
+            "detail": "[c1] 32 字，本书文案段 15 字（提示带 9~24）",
+            "evidence": [
+              "32/15"
+            ],
+            "fix_args": {},
+            "evidence_key": "32/15",
+            "owner": "stage6",
+            "actionable": false,
+            "identity_hit": false,
+            "identity_dead": null,
+            "converge": "new",
+            "unresolved_rounds": 0,
+            "wontfix": null
+          },
+          {
+            "output_ordinal": null,
+            "rule": "hook_quote_shape",
+            "sev": "metric",
+            "item": "引语条数 · 最长一条字数 · 对白比，与原作并排",
+            "detail": "[c1] 引语 0 条 / 最长 0 字（≥6 字才计）；原作文案 0 条 / 最长 0 字。仍是度量不是门：禁令已撤，但要不要设阈值得先量方差",
+            "evidence": [
+              "0/0"
+            ],
+            "fix_args": {},
+            "evidence_key": "0/0",
+            "owner": null,
+            "actionable": false,
+            "identity_hit": false,
+            "identity_dead": null,
+            "converge": "new",
+            "unresolved_rounds": 0,
+            "wontfix": null
+          },
+          {
+            "output_ordinal": null,
+            "rule": "hook_source_distance",
+            "sev": "metric",
+            "item": "与原作文案段的呈现结构距离：窗口重合率 · 最长逐字重合 · 末行重合",
+            "detail": "[c1] 与原作文案段的窗口重合率：4 字 8.0% / 8 字 0.0% / 20 字 0.0%；最长逐字重合 5 字（hook_reuses_source 的闸线是 20）；末行与原作末行最长逐字重合 3 字。度量不是门：结构贴近本身不违约（R-9.11 尾注明许学结构），阈值要先量跑间方差再谈",
+            "evidence": [
+              "5/3"
+            ],
+            "fix_args": {},
+            "evidence_key": "5/3",
+            "owner": null,
+            "actionable": false,
+            "identity_hit": false,
+            "identity_dead": null,
+            "converge": "new",
+            "unresolved_rounds": 0,
+            "wontfix": null
+          }
+        ],
+        "semantic_state": "uncertain",
+        "semantic_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
+        "semantic_review_seq": 1,
+        "semantic_review": {
+          "label": "c1",
+          "coverage": "uncertain",
+          "uncertainty_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
+          "contradictions": [],
+          "quality": {
+            "read_on_desire": 9.0,
+            "body_voice_match": 8.0,
+            "concrete_scene_and_specificity": 7.0,
+            "curiosity_and_payoff_promise": 9.0,
+            "hook_craft": 8.0,
+            "synopsis_penalty": 2.0
+          },
+          "concise_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
+          "text_sha1": "2d52ae642e"
+        },
+        "semantic_decision": {
+          "ability": "reference_boundary",
+          "subject_key": "f6d8274494e5f1eaec8d2bb0b51855ff1a2f8aa58524fa85ed0a1a8a9b87d339",
+          "verdict": "UNVER",
+          "evidence": [
+            {
+              "artifact": "stage6/hook.json#candidate/c1",
+              "subject_sha256": "f6d8274494e5f1eaec8d2bb0b51855ff1a2f8aa58524fa85ed0a1a8a9b87d339",
+              "start": 0,
+              "end": 33
+            }
+          ],
+          "reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
+          "judges": [
+            {
+              "judge": "A",
+              "verdict": "PASS",
+              "evidence": [
+                {
+                  "artifact": "stage6/hook.json#candidate/c1",
+                  "subject_sha256": "f6d8274494e5f1eaec8d2bb0b51855ff1a2f8aa58524fa85ed0a1a8a9b87d339",
+                  "start": 0,
+                  "end": 33
+                }
+              ],
+              "reason": "具体场面强，最后一击有效（T1 侧写）。"
+            },
+            {
+              "judge": "B",
+              "verdict": "PASS",
+              "evidence": [
+                {
+                  "artifact": "stage6/hook.json#candidate/c1",
+                  "subject_sha256": "f6d8274494e5f1eaec8d2bb0b51855ff1a2f8aa58524fa85ed0a1a8a9b87d339",
+                  "start": 0,
+                  "end": 33
+                }
+              ],
+              "reason": "具体场面强，最后一击有效（T1 侧写）。"
+            }
+          ]
+        },
+        "quality_score": 8.15,
+        "quality_rank": 1
+      },
+      {
+        "index": 2,
+        "slot": "c2",
+        "approach": "scene_punchline",
+        "chars": 37,
+        "text": "李宝珠清早买回两个包子，母亲就在门口等着她。\n那封信的消息，母亲早就知道了。",
+        "subject_sha256": "0952b6e4df07a969534dc7d579c993c7c2389aeb2f43c8496672b65096d9bd2a",
+        "mech": {
+          "punct_fixed": 0,
+          "quotes_fixed": 0,
+          "paras_fixed": 1
+        },
+        "findings": [
+          {
+            "output_ordinal": null,
+            "rule": "hook_secret_literal",
+            "sev": "metric",
+            "item": "与秘密原文的逐字重合条数（按读者时点分已揭示/未揭示）",
+            "detail": "[c2] 与秘密原文逐字重合 0/1 条——0 条是常态，它不代表卖点没用上：文案按体裁在改写，字面探针在这个产物类上结构性失效（同 hook_spoiler_unver）",
+            "evidence": [],
+            "fix_args": {},
+            "evidence_key": "",
+            "owner": null,
+            "actionable": false,
+            "identity_hit": false,
+            "identity_dead": null,
+            "converge": "new",
+            "unresolved_rounds": 0,
+            "wontfix": null
+          },
+          {
+            "output_ordinal": null,
+            "rule": "hook_length",
+            "sev": "info",
+            "item": "篇幅贴合本书自己的文案段",
+            "detail": "[c2] 37 字，本书文案段 15 字（提示带 9~24）",
+            "evidence": [
+              "37/15"
+            ],
+            "fix_args": {},
+            "evidence_key": "37/15",
+            "owner": "stage6",
+            "actionable": false,
+            "identity_hit": false,
+            "identity_dead": null,
+            "converge": "new",
+            "unresolved_rounds": 0,
+            "wontfix": null
+          },
+          {
+            "output_ordinal": null,
+            "rule": "hook_quote_shape",
+            "sev": "metric",
+            "item": "引语条数 · 最长一条字数 · 对白比，与原作并排",
+            "detail": "[c2] 引语 0 条 / 最长 0 字（≥6 字才计）；原作文案 0 条 / 最长 0 字。仍是度量不是门：禁令已撤，但要不要设阈值得先量方差",
+            "evidence": [
+              "0/0"
+            ],
+            "fix_args": {},
+            "evidence_key": "0/0",
+            "owner": null,
+            "actionable": false,
+            "identity_hit": false,
+            "identity_dead": null,
+            "converge": "new",
+            "unresolved_rounds": 0,
+            "wontfix": null
+          },
+          {
+            "output_ordinal": null,
+            "rule": "hook_source_distance",
+            "sev": "metric",
+            "item": "与原作文案段的呈现结构距离：窗口重合率 · 最长逐字重合 · 末行重合",
+            "detail": "[c2] 与原作文案段的窗口重合率：4 字 0.0% / 8 字 0.0% / 20 字 0.0%；最长逐字重合 3 字（hook_reuses_source 的闸线是 20）；末行与原作末行最长逐字重合 1 字。度量不是门：结构贴近本身不违约（R-9.11 尾注明许学结构），阈值要先量跑间方差再谈",
+            "evidence": [
+              "3/1"
+            ],
+            "fix_args": {},
+            "evidence_key": "3/1",
+            "owner": null,
+            "actionable": false,
+            "identity_hit": false,
+            "identity_dead": null,
+            "converge": "new",
+            "unresolved_rounds": 0,
+            "wontfix": null
+          }
+        ],
+        "semantic_state": "uncertain",
+        "semantic_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
+        "semantic_review_seq": 1,
+        "semantic_review": {
+          "label": "c2",
+          "coverage": "uncertain",
+          "uncertainty_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
+          "contradictions": [],
+          "quality": {
+            "read_on_desire": 9.0,
+            "body_voice_match": 8.0,
+            "concrete_scene_and_specificity": 7.0,
+            "curiosity_and_payoff_promise": 9.0,
+            "hook_craft": 8.0,
+            "synopsis_penalty": 2.0
+          },
+          "concise_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
+          "text_sha1": "ee94702266"
+        },
+        "semantic_decision": {
+          "ability": "reference_boundary",
+          "subject_key": "0952b6e4df07a969534dc7d579c993c7c2389aeb2f43c8496672b65096d9bd2a",
+          "verdict": "UNVER",
+          "evidence": [
+            {
+              "artifact": "stage6/hook.json#candidate/c2",
+              "subject_sha256": "0952b6e4df07a969534dc7d579c993c7c2389aeb2f43c8496672b65096d9bd2a",
+              "start": 0,
+              "end": 38
+            }
+          ],
+          "reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
+          "judges": [
+            {
+              "judge": "A",
+              "verdict": "PASS",
+              "evidence": [
+                {
+                  "artifact": "stage6/hook.json#candidate/c2",
+                  "subject_sha256": "0952b6e4df07a969534dc7d579c993c7c2389aeb2f43c8496672b65096d9bd2a",
+                  "start": 0,
+                  "end": 38
+                }
+              ],
+              "reason": "具体场面强，最后一击有效（T3 侧写）。"
+            },
+            {
+              "judge": "B",
+              "verdict": "PASS",
+              "evidence": [
+                {
+                  "artifact": "stage6/hook.json#candidate/c2",
+                  "subject_sha256": "0952b6e4df07a969534dc7d579c993c7c2389aeb2f43c8496672b65096d9bd2a",
+                  "start": 0,
+                  "end": 38
+                }
+              ],
+              "reason": "具体场面强，最后一击有效（T3 侧写）。"
+            }
+          ]
+        },
+        "quality_score": 8.15,
+        "quality_rank": 2
+      },
+      {
+        "index": 3,
+        "slot": "c3",
+        "approach": "scene_punchline",
+        "chars": 35,
+        "text": "管家来报，米价又涨了。\n李宝珠皱着眉，让他到别家问问，手边的热茶没有喝。",
+        "subject_sha256": "0b257921dc992822de747a52cf076b5ca37de084e2be030dcf6a89c9549a1bde",
+        "mech": {
+          "punct_fixed": 0,
+          "quotes_fixed": 0,
+          "paras_fixed": 1
+        },
+        "findings": [
+          {
+            "output_ordinal": null,
+            "rule": "hook_secret_literal",
+            "sev": "metric",
+            "item": "与秘密原文的逐字重合条数（按读者时点分已揭示/未揭示）",
+            "detail": "[c3] 与秘密原文逐字重合 0/1 条——0 条是常态，它不代表卖点没用上：文案按体裁在改写，字面探针在这个产物类上结构性失效（同 hook_spoiler_unver）",
+            "evidence": [],
+            "fix_args": {},
+            "evidence_key": "",
+            "owner": null,
+            "actionable": false,
+            "identity_hit": false,
+            "identity_dead": null,
+            "converge": "new",
+            "unresolved_rounds": 0,
+            "wontfix": null
+          },
+          {
+            "output_ordinal": null,
+            "rule": "hook_length",
+            "sev": "info",
+            "item": "篇幅贴合本书自己的文案段",
+            "detail": "[c3] 35 字，本书文案段 15 字（提示带 9~24）",
+            "evidence": [
+              "35/15"
+            ],
+            "fix_args": {},
+            "evidence_key": "35/15",
+            "owner": "stage6",
+            "actionable": false,
+            "identity_hit": false,
+            "identity_dead": null,
+            "converge": "new",
+            "unresolved_rounds": 0,
+            "wontfix": null
+          },
+          {
+            "output_ordinal": null,
+            "rule": "hook_quote_shape",
+            "sev": "metric",
+            "item": "引语条数 · 最长一条字数 · 对白比，与原作并排",
+            "detail": "[c3] 引语 0 条 / 最长 0 字（≥6 字才计）；原作文案 0 条 / 最长 0 字。仍是度量不是门：禁令已撤，但要不要设阈值得先量方差",
+            "evidence": [
+              "0/0"
+            ],
+            "fix_args": {},
+            "evidence_key": "0/0",
+            "owner": null,
+            "actionable": false,
+            "identity_hit": false,
+            "identity_dead": null,
+            "converge": "new",
+            "unresolved_rounds": 0,
+            "wontfix": null
+          },
+          {
+            "output_ordinal": null,
+            "rule": "hook_source_distance",
+            "sev": "metric",
+            "item": "与原作文案段的呈现结构距离：窗口重合率 · 最长逐字重合 · 末行重合",
+            "detail": "[c3] 与原作文案段的窗口重合率：4 字 0.0% / 8 字 0.0% / 20 字 0.0%；最长逐字重合 3 字（hook_reuses_source 的闸线是 20）；末行与原作末行最长逐字重合 3 字。度量不是门：结构贴近本身不违约（R-9.11 尾注明许学结构），阈值要先量跑间方差再谈",
+            "evidence": [
+              "3/3"
+            ],
+            "fix_args": {},
+            "evidence_key": "3/3",
+            "owner": null,
+            "actionable": false,
+            "identity_hit": false,
+            "identity_dead": null,
+            "converge": "new",
+            "unresolved_rounds": 0,
+            "wontfix": null
+          }
+        ],
+        "semantic_state": "uncertain",
+        "semantic_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
+        "semantic_review_seq": 1,
+        "semantic_review": {
+          "label": "c3",
+          "coverage": "uncertain",
+          "uncertainty_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
+          "contradictions": [],
+          "quality": {
+            "read_on_desire": 9.0,
+            "body_voice_match": 8.0,
+            "concrete_scene_and_specificity": 7.0,
+            "curiosity_and_payoff_promise": 9.0,
+            "hook_craft": 8.0,
+            "synopsis_penalty": 2.0
+          },
+          "concise_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
+          "text_sha1": "97dc2ff35c"
+        },
+        "semantic_decision": {
+          "ability": "reference_boundary",
+          "subject_key": "0b257921dc992822de747a52cf076b5ca37de084e2be030dcf6a89c9549a1bde",
+          "verdict": "UNVER",
+          "evidence": [
+            {
+              "artifact": "stage6/hook.json#candidate/c3",
+              "subject_sha256": "0b257921dc992822de747a52cf076b5ca37de084e2be030dcf6a89c9549a1bde",
+              "start": 0,
+              "end": 36
+            }
+          ],
+          "reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
+          "judges": [
+            {
+              "judge": "A",
+              "verdict": "PASS",
+              "evidence": [
+                {
+                  "artifact": "stage6/hook.json#candidate/c3",
+                  "subject_sha256": "0b257921dc992822de747a52cf076b5ca37de084e2be030dcf6a89c9549a1bde",
+                  "start": 0,
+                  "end": 36
+                }
+              ],
+              "reason": "具体场面强，最后一击有效（T2 侧写）。"
+            },
+            {
+              "judge": "B",
+              "verdict": "PASS",
+              "evidence": [
+                {
+                  "artifact": "stage6/hook.json#candidate/c3",
+                  "subject_sha256": "0b257921dc992822de747a52cf076b5ca37de084e2be030dcf6a89c9549a1bde",
+                  "start": 0,
+                  "end": 36
+                }
+              ],
+              "reason": "具体场面强，最后一击有效（T2 侧写）。"
+            }
+          ]
+        },
+        "quality_score": 8.15,
+        "quality_rank": 3
+      }
+    ],
+    "workpack_sha256": "430ef8fd707d2bd10391edd3560fe140f0a83e90ea8f0d57555df01dde785b36",
+    "disposition": "already_current",
+    "current_slot": "c1",
+    "current_approval": {
+      "actor": "test:文案审阅者",
+      "reason": "合成候选与原文、全书成稿已对照",
+      "subject_sha256": "f6d8274494e5f1eaec8d2bb0b51855ff1a2f8aa58524fa85ed0a1a8a9b87d339",
+      "basis": "human_verification",
+      "semantic_review_seq": 1,
+      "workpack_sha256": "430ef8fd707d2bd10391edd3560fe140f0a83e90ea8f0d57555df01dde785b36",
+      "review_identity_sha256": "ba8da72030314f235900cc0dcdc2a5817c7134ae077b58b559271dc99103d287"
+    }
+  },
+  "rename": {
+    "v": 3,
+    "kind": "stage7",
+    "sid": "123",
+    "review_contract_version": "stage7-final-review-v4",
+    "review_identity_sha256": "392986d13696ee8b5fe2f4919619d54bb42d78aba75a4752bd1379142042eaf7",
+    "validation_seal_sha256": "47f8ac1ff9cda8731853693d005547e515215ddd1c2b71b24f746c3d817a89f5",
+    "review_token": "s7r3_28c8f7d81098fee63ec7990bb904845149f9c29facdbb9191c7c764c8820eaf3",
+    "artifact_subject_sha256": "e23cd1ef5d113552745e7b91487be54231246606d46cecaeabcaba933f3a8c20",
+    "decision_subject_sha256": "1b3b7a14b101cc67424ee1322ea2b85fa4c9e5bede06b49060727c403006033c",
+    "check_basis": "name_map_without_approval_or_delivery",
+    "check": {
+      "rules_scanned": 35,
+      "counts": {
+        "ok": 28,
+        "hit": 0,
+        "unver": 7,
+        "skipped": 0
+      },
+      "provenance": {
+        "freshness": "fresh",
+        "reason": "match",
+        "ghosts": [],
+        "edges": [
+          {
+            "key": "stage1/main_text.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "7527d7a23e",
+            "now_file": "7527d7a23e",
+            "recorded_consumed": "b213b0507a",
+            "now_consumed": "b213b0507a"
+          },
+          {
+            "key": "stage2/characters.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "5eaefd5f7c",
+            "now_file": "5eaefd5f7c",
+            "recorded_consumed": "8b7c6d50e5",
+            "now_consumed": "8b7c6d50e5"
+          },
+          {
+            "key": "stage2/global_grounding.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "2c7388747c",
+            "now_file": "2c7388747c",
+            "recorded_consumed": "fd5a975a59",
+            "now_consumed": "fd5a975a59"
+          },
+          {
+            "key": "stage2/global_review.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "8f5d8478b1",
+            "now_file": "8f5d8478b1",
+            "recorded_consumed": "d0a9881bd8",
+            "now_consumed": "d0a9881bd8"
+          },
+          {
+            "key": "stage4/plan_chapters.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "02ff5dddbf",
+            "now_file": "02ff5dddbf",
+            "recorded_consumed": "9ef50cc82a",
+            "now_consumed": "9ef50cc82a"
+          },
+          {
+            "key": "stage4/writer_context.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "e67d22596b",
+            "now_file": "e67d22596b",
+            "recorded_consumed": "f7636c4de9",
+            "now_consumed": "f7636c4de9"
+          },
+          {
+            "key": "stage6/hook.json",
+            "state": "fresh",
+            "reason": "match",
+            "recorded_file": "920034de9d",
+            "now_file": "920034de9d",
+            "recorded_consumed": "6a4ac27ec7",
+            "now_consumed": "6a4ac27ec7"
+          }
+        ],
+        "invalid": false,
+        "revalidated": null,
+        "origin": null
+      },
+      "attention": [
+        {
+          "rule": "rn_body_stale",
+          "sev": "unver",
+          "status": "unver",
+          "item": "判的是照盘上这些成稿做的替换",
+          "requirement": "R-10.9",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "逐份成稿的 consumed 投影都对得上、文案定稿文本也没变过。⚠ 它仍然登记为「查不了」而不是绿灯：整文件 sha1 只作审计，而投影只覆盖本层真正消费的那几个字段",
+          "scanned": "3 份成稿 + 文案",
+          "baseline": null,
+          "note": "⚠ 口径同 stage6 的 hook_body_stale（两层同形，合成一套）：judged[].consumed（字段投影）判过期、整文件 sha1 只作审计；没有 consumed ⇒ 说不清，不是 fresh 也不是 stale。sha1 是整文件指纹，而新契约裁过 stage5 产物的字段 ⇒ 迁移后它必然对不上"
+        },
+        {
+          "rule": "rn_coverage_unver",
+          "sev": "unver",
+          "status": "unver",
+          "item": "替换面覆盖了正文里所有指称人物的字面",
+          "requirement": "R-10.18",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "「替换面覆盖了正文里所有指称人物的字面」验不了：只能替换人物表里有的称呼，而人物表漏收的角色这一层结构上够不着。rn_residual_stem 只是候选探针，不是覆盖率证明——别把它的 0 条读成「一个都没漏」",
+          "scanned": "人物表里有的那些称呼",
+          "baseline": null,
+          "note": "⚠ R-10.10 原样保留「无守卫 → B-21」，本条指的是新补的 R-10.18（「这件事查不了」本身要常驻列出）——同 stage6 补 R-9.18 那一笔。够不着的理由是结构性的：只能替换人物表里有的称呼，人物表漏掉的角色这一层结构上够不着。旧姓残留与派生尾字昵称都只是候选探针，不是覆盖率证明"
+        },
+        {
+          "rule": "rn_hook_missing",
+          "sev": "unver",
+          "status": "unver",
+          "item": "开篇文案已定稿，可以拼进成书",
+          "requirement": "R-10.14",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "开篇文案的定稿状态由 hook_consumed.present 记着；文案未定稿时 stage7.assemble 会直接拒写 txt（那道闸在组装那一步，不在这里）。⚠ 正因为那道闸挡在前面，「成书里没有文案」这一态结构上不可达",
+          "scanned": "hook_consumed 一格",
+          "baseline": null,
+          "note": "⚠ 根因第一嫌疑层其实是 stage6（文案没定稿是上一层的账），而 owner 仍然留 None —— 全链的口径是 owner is None ⟺ 它不是一条结论（metric/unver 恒 None，由规则注册器统一校验）。给一条 unver 填 owner 会让那条口径出现第一个例外，而它买不到任何东西。它是 R-10.14 四类拒写里的一类，而正因为这道闸挡在前面，book_txt.has_hook=false 结构上不可达 ⇒ 那个字段已按待决④ 裁掉"
+        },
+        {
+          "rule": "rn_identity_blind",
+          "sev": "unver",
+          "status": "unver",
+          "item": "恒等基线验不了的三样已经与它的结论印在一起",
+          "requirement": "R-10.7b",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "恒等基线验不了这三样：正向替换对【真名】安不安全——占位符天然无歧义，真名不是；漏网覆盖率——人物表够不到的角色，这一层结构上够不着；新名好不好——没有确定性判据，现役闸门是人定稿。⚠ 它们由 pytest 的对抗性合成映射覆盖，不由这条 CLI——别把基线跑绿了读成「替换是安全的」",
+          "scanned": "3 条登记在案的盲区",
+          "baseline": null,
+          "note": "取值面 invariants.IDENTITY_BLIND。⚠ 它是常量不是现算，而它必须跟结论存在一起——分开放，下一个人就会把基线跑绿了读成「替换是安全的」。那三样由 pytest 的对抗性合成映射覆盖，不由这条 CLI"
+        },
+        {
+          "rule": "rn_not_approved",
+          "sev": "unver",
+          "status": "unver",
+          "item": "有人给这份人物表定过稿",
+          "requirement": "R-10.11",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "映射表在盘上但没有人拍板——跑 stage7.approve（0 成本）。新名的时代感与雅俗没有确定性判据，人定稿是这一维唯一的闸门",
+          "scanned": "产物的 approved 键",
+          "baseline": null,
+          "note": "本条由复检产出，不落产物。⚠ 与 stage6 不同：本层的定稿是给整份人物表盖章，没有候选序号；但 stage7.approve 仍强制提交 actor/reason 与当前 decision-surface SHA-256。盘上三本都已定稿 ⇒ 0 命中"
+        },
+        {
+          "rule": "rn_taste_unver",
+          "sev": "unver",
+          "status": "unver",
+          "item": "新名的时代感与雅俗合适",
+          "requirement": "R-10.11",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "新名的时代感 / 性别气质 / 雅俗没有确定性判据——「顾清棠」贴不贴这本书的时代与题材不是结构不变量。本节点这一维的现役闸门是人定稿那一步，不是代码",
+          "scanned": "全部新名",
+          "baseline": null,
+          "note": "R-10.11 那一格是 人（见 B-22）——现役闸门是人定稿。没有结构不变量：一个名字「串不串味」量不出来"
+        },
+        {
+          "rule": "rn_title_unver",
+          "sev": "unver",
+          "status": "unver",
+          "item": "书名里的人名替换正确",
+          "requirement": "R-10.16",
+          "check_kind": "mechanical",
+          "remediation": "human",
+          "fix": null,
+          "findings": [],
+          "why": "书名「完整剧情测试」→「完整剧情测试」：恒等（书名里没有出现任何一个旧名）　※ 书名替换的语义质量仍需人工确认",
+          "scanned": "书名一行",
+          "baseline": null,
+          "note": "⚠ title_new 已裁（现算 0 成本，盘上 3/3 与原书名逐字节相同）⇒ 本条报的是现算的结果与换了几处。⚠ 三本书名都不含 registry 专名 ⇒ 这一条从来没有过失败样本，只能常驻报出，不能当绿灯读"
+        }
+      ],
+      "metrics": [
+        {
+          "rule": "rn_report",
+          "sev": "metric",
+          "status": "ok",
+          "item": "替换总账：几条映射、换了几处、篇幅变化、几个族群多少人",
+          "requirement": "R-10.17",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "rn_report",
+              "sev": "metric",
+              "item": "替换总账：几条映射、换了几处、篇幅变化、几个族群多少人",
+              "detail": "1 条映射，正文+文案共替换 4 处；1 条保留；1 个姓氏族群；成书正文 305 字　※ 篇幅变化不再落盘（替换不改篇幅，实测 3/3 都是 1.000×~1.001×）",
+              "evidence": [
+                "1",
+                "4"
+              ],
+              "fix_args": {},
+              "evidence_key": "1|4",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "2 个角色 · 1 条映射 · 1 条保留 · 3 章成稿",
+          "baseline": null,
+          "note": "⚠ applied.chapters{*}.chars_before/after 与 _groups 已被新契约裁掉（唯一读者就是本条，而替换不改篇幅：3/3 都是 1.000×~1.001×）⇒ 这几个数一律现算，不许读产物"
+        },
+        {
+          "rule": "rn_stem_noise",
+          "sev": "metric",
+          "status": "ok",
+          "item": "新姓字在原文里另有多少次非人名用法",
+          "requirement": "R-10.17",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "rn_stem_noise",
+              "sev": "metric",
+              "item": "新姓字在原文里另有多少次非人名用法",
+              "detail": "新姓字在原文里的非人名用法次数：{'顾': 0}　※ 数字大不等于错，只是新名会带来这么多读感噪声　※ 取值面是姓氏映射的值——原型取「新名的第一个字」，实测三本全破（「东街张媒婆→东街薛媒婆」取到「东」12 次，与任何新姓无关）",
+              "evidence": [
+                "顾"
+              ],
+              "fix_args": {},
+              "evidence_key": "顾",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "2 个角色 · 1 条映射 · 1 条保留 · 3 章成稿",
+          "baseline": null,
+          "note": "⚠⚠ 取值面与原型不同，而这是被实测逼出来的。 原型取 subs 的新值的第一个字，假定它是新姓——三本上这个假设全破：姓苏的→姓容的 取到 姓(3 次) · 东街张媒婆→东街薛媒婆 取到 东(12 次) · 胭脂铺赵婶→胭脂铺程婶 取到 胭(3 次)。于是报告写着「新姓字在原文里的非人名用法次数：{'东': 12, …}」——东 与任何新姓都无关。⇒ 取值面改成 surname_map 的值（那才是新姓），叠字小名与描述性称呼不进这个统计。名字先于证据定下来，读报告的人就会按这个名字去解释数字。"
+        },
+        {
+          "rule": "rn_style_report",
+          "sev": "metric",
+          "status": "ok",
+          "item": "成书写法密度（正文／文案／原作三列）",
+          "requirement": "R-10.17",
+          "check_kind": "mechanical",
+          "remediation": "none",
+          "fix": null,
+          "findings": [
+            {
+              "output_ordinal": null,
+              "rule": "rn_style_report",
+              "sev": "metric",
+              "item": "成书写法密度（正文／文案／原作三列）",
+              "detail": "成书写法密度（每千内容字）：正文 破折号 0 处（0.00）／短段成串 12.88　｜　文案 破折号 0 处（0.00）／短段成串 0.00　｜　原作 破折号 0 处（0.00）／短段成串 8.55　※ 语料 p95：破折号 2.25／短段成串 7.68　※ 只量不判；逐章判定在全书验收相，文案这一列全链只有这里量",
+              "evidence": [
+                "0.00",
+                "12.88"
+              ],
+              "fix_args": {},
+              "evidence_key": "0.00|12.88",
+              "owner": null,
+              "actionable": false,
+              "identity_hit": false,
+              "identity_dead": null,
+              "converge": "new",
+              "unresolved_rounds": 0,
+              "wontfix": null
+            }
+          ],
+          "why": null,
+          "scanned": "2 个角色 · 1 条映射 · 1 条保留 · 3 章成稿",
+          "baseline": null,
+          "note": "⚠ 「文案」那一列全链只有这里量——逐章判定够不到它，因为文案不属于任何一章。⚠⚠ 原型这一条的「原作」列永远不输出：它读 data[\"_source_text\"]，而装载器从来没设过这个键（实际存在的是 _orig，而且是 str 不是 dict）⇒ 那一列恒空而没有任何东西出声。F2 修掉。⚠ 文案那一列的密度不稳，因为分母只有几十到两百字：实测三本新文案各含 1 处破折号（原作文案 5/5 都是 0 处），密度显示成语料 p95 的 2~4 倍，而绝对量就是一处。读这一列看绝对处数，不看倍率 ⇒ 永远不给它阈值"
+        }
+      ]
+    },
+    "surname_map": {
+      "李": "顾"
+    },
+    "characters": [
+      {
+        "char_id": "char_001",
+        "old_canonical": "李宝珠",
+        "new_canonical": "顾清棠",
+        "renamed": true,
+        "not_renamed_reason": null,
+        "reason": "替换真实姓名。",
+        "aliases": [],
+        "hits": 4
+      },
+      {
+        "char_id": "char_002",
+        "old_canonical": "母亲",
+        "new_canonical": "母亲",
+        "renamed": false,
+        "not_renamed_reason": "只有亲属称谓，无本名。",
+        "reason": "保留亲属称谓。",
+        "aliases": [],
+        "hits": 0
+      }
+    ],
+    "extra_subs": [],
+    "subs_count": 1,
+    "kept_count": 1,
+    "kept": [
+      "母亲"
+    ],
+    "replacement_hits": {
+      "李宝珠": 4
+    },
+    "residual": [],
+    "baselines": {
+      "李": {
+        "total": 4,
+        "covered": 4,
+        "residual": 0,
+        "ratio": 1.0
+      }
+    },
+    "book": [
+      {
+        "output_ordinal": null,
+        "rule": "rn_stem_noise",
+        "sev": "metric",
+        "item": "新姓字在原文里另有多少次非人名用法",
+        "detail": "新姓字在原文里的非人名用法次数：{'顾': 0}　※ 数字大不等于错，只是新名会带来这么多读感噪声　※ 取值面是姓氏映射的值——原型取「新名的第一个字」，实测三本全破（「东街张媒婆→东街薛媒婆」取到「东」12 次，与任何新姓无关）",
+        "evidence": [
+          "顾"
+        ],
+        "fix_args": {},
+        "evidence_key": "顾",
+        "owner": null,
+        "actionable": false,
+        "identity_hit": false,
+        "identity_dead": null,
+        "converge": "new",
+        "unresolved_rounds": 0,
+        "wontfix": null
+      },
+      {
+        "output_ordinal": null,
+        "rule": "rn_report",
+        "sev": "metric",
+        "item": "替换总账：几条映射、换了几处、篇幅变化、几个族群多少人",
+        "detail": "1 条映射，正文+文案共替换 4 处；1 条保留；1 个姓氏族群；成书正文 305 字　※ 篇幅变化不再落盘（替换不改篇幅，实测 3/3 都是 1.000×~1.001×）",
+        "evidence": [
+          "1",
+          "4"
+        ],
+        "fix_args": {},
+        "evidence_key": "1|4",
+        "owner": null,
+        "actionable": false,
+        "identity_hit": false,
+        "identity_dead": null,
+        "converge": "new",
+        "unresolved_rounds": 0,
+        "wontfix": null
+      },
+      {
+        "output_ordinal": null,
+        "rule": "rn_style_report",
+        "sev": "metric",
+        "item": "成书写法密度（正文／文案／原作三列）",
+        "detail": "成书写法密度（每千内容字）：正文 破折号 0 处（0.00）／短段成串 12.88　｜　文案 破折号 0 处（0.00）／短段成串 0.00　｜　原作 破折号 0 处（0.00）／短段成串 8.55　※ 语料 p95：破折号 2.25／短段成串 7.68　※ 只量不判；逐章判定在全书验收相，文案这一列全链只有这里量",
+        "evidence": [
+          "0.00",
+          "12.88"
+        ],
+        "fix_args": {},
+        "evidence_key": "0.00|12.88",
+        "owner": null,
+        "actionable": false,
+        "identity_hit": false,
+        "identity_dead": null,
+        "converge": "new",
+        "unresolved_rounds": 0,
+        "wontfix": null
+      },
+      {
+        "output_ordinal": null,
+        "rule": "rn_taste_unver",
+        "sev": "unver",
+        "item": "新名的时代感与雅俗合适",
+        "detail": "新名的时代感 / 性别气质 / 雅俗没有确定性判据——「顾清棠」贴不贴这本书的时代与题材不是结构不变量。本节点这一维的现役闸门是人定稿那一步，不是代码",
+        "evidence": [
+          "顾清棠"
+        ],
+        "fix_args": {},
+        "evidence_key": "顾清棠",
+        "owner": null,
+        "actionable": false,
+        "identity_hit": false,
+        "identity_dead": null,
+        "converge": "new",
+        "unresolved_rounds": 0,
+        "wontfix": null
+      },
+      {
+        "output_ordinal": null,
+        "rule": "rn_coverage_unver",
+        "sev": "unver",
+        "item": "替换面覆盖了正文里所有指称人物的字面",
+        "detail": "「替换面覆盖了正文里所有指称人物的字面」验不了：只能替换人物表里有的称呼，而人物表漏收的角色这一层结构上够不着。rn_residual_stem 只是候选探针，不是覆盖率证明——别把它的 0 条读成「一个都没漏」",
+        "evidence": [],
+        "fix_args": {},
+        "evidence_key": "",
+        "owner": null,
+        "actionable": false,
+        "identity_hit": false,
+        "identity_dead": null,
+        "converge": "new",
+        "unresolved_rounds": 0,
+        "wontfix": null
+      },
+      {
+        "output_ordinal": null,
+        "rule": "rn_title_unver",
+        "sev": "unver",
+        "item": "书名里的人名替换正确",
+        "detail": "书名「完整剧情测试」→「完整剧情测试」：恒等（书名里没有出现任何一个旧名）　※ 书名替换的语义质量仍需人工确认",
+        "evidence": [],
+        "fix_args": {},
+        "evidence_key": "",
+        "owner": null,
+        "actionable": false,
+        "identity_hit": false,
+        "identity_dead": null,
+        "converge": "new",
+        "unresolved_rounds": 0,
+        "wontfix": null
+      }
+    ],
+    "identity": {
+      "roundtrip_ok": true,
+      "chapters": 3,
+      "mismatches": [],
+      "blind": [
+        "正向替换对【真名】安不安全——占位符天然无歧义，真名不是",
+        "漏网覆盖率——人物表够不到的角色，这一层结构上够不着",
+        "新名好不好——没有确定性判据，现役闸门是人定稿"
+      ]
+    },
+    "workpack_sha256": "28c8f7d81098fee63ec7990bb904845149f9c29facdbb9191c7c764c8820eaf3",
+    "disposition": "already_current",
+    "current_approval": {
+      "actor": "test:改名审阅者",
+      "reason": "合成角色姓名替换与亲属关系已复核",
+      "subject_sha256": "1b3b7a14b101cc67424ee1322ea2b85fa4c9e5bede06b49060727c403006033c",
+      "origin": "human",
+      "workpack_sha256": "28c8f7d81098fee63ec7990bb904845149f9c29facdbb9191c7c764c8820eaf3",
+      "review_identity_sha256": "392986d13696ee8b5fe2f4919619d54bb42d78aba75a4752bd1379142042eaf7"
     }
   },
   "enum_values": {

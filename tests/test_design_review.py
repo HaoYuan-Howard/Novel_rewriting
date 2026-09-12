@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+
+from tests.factories import missing_prepare_state
 from pydantic import ValidationError
 
 from contracts.invariants import (
@@ -312,7 +315,8 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(
         approvals, '_current_structure_subject_and_chapters',
         lambda _dir: (_ for _ in ()).throw(UpstreamMissing('no plan')))
-    monkeypatch.setattr(approvals, '_store_for', lambda _dir: object())
+    monkeypatch.setattr(approvals, '_store_for',
+                        lambda _dir: SimpleNamespace(exists=lambda _rel: False))
     monkeypatch.setattr(approvals, 'current_infeasible_binding', lambda _store: None)
     monkeypatch.setattr(approvals, '_now', lambda: '2026-08-28T00:00:00+00:00')
 
@@ -968,6 +972,7 @@ def test_design_http_routes_keep_template_read_only_and_apply_typed(
         route.approvals, 'design_template',
         lambda base, sid, **kwargs: calls.append(('get', sid, kwargs)) or template)
     response = ApprovalDoc(
+        prepare=missing_prepare_state(),
         sid=SID,
         gate={key: False for key in APPROVAL_GATES},
         seen={key: False for key in APPROVAL_SEEN},

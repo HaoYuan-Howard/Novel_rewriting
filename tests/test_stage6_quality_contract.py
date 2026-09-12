@@ -135,7 +135,7 @@ def test_hook_secret_literal_uses_the_shared_number_ruler_and_own_bytes():
         secrets=[{
             'secret_id': 'secret_x',
             'fact': fact,
-            'first_reveal_chapter': 9,
+            'revealed_from': 9,
         }],
 
         characters={},
@@ -230,15 +230,17 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
         'quote_styles': ['“”'],
     }
     grounding = {
-        'entities': {'characters': {'c1': {'canonical': '阿宁'}}},
-        'canon': {'secrets': [{'secret_id': 's1', 'fact': '写信者是仇人。'}]},
-        'source_blurb': {'facts': [{'kind': 'supported', 'claim_id': 'hook_001', 'claim': '她收到匿名信。'}], 'opening': {'kind': 'proposed', 'through_chapter': 1, 'rationale': '收到来信引出冲突'}},
+        'setting': {'era': None, 'social_context': None},
+        'world_rules': [], 'relations': [],
+        'arc_secrets': [{'secret_id': 'secret_01', 'fact': '写信者是仇人。', 'revealed_from': 2}],
     }
+    characters = {'char_001': {'canonical': '阿宁', 'aliases': [{'surface': '阿宁'}]}}
+    preparation = {'facts': [{'kind': 'supported', 'claim_id': 'hook_001', 'claim': '她收到匿名信。'}], 'opening': {'kind': 'proposed', 'through_chapter': 1, 'rationale': '收到来信引出冲突'}}
     material = prompts.build_material(
         title='匿名信',
         ctx=ctx,
         hook_mechanical=hook_mechanical,
-        grounding=grounding,
+        grounding=grounding, characters=characters, preparation=preparation,
         source_hook='原作文案先抛匿名信，再用仇人落款收尾。',
         lead=[{'output_ordinal': 1, 'text': '重写后的第一章正文。'}],
         missing=[],
@@ -247,7 +249,7 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
     user = prompts.build_user(material)
     packet = json.loads(user.split('\n\n', 1)[1])
     assert packet['source_hook'].startswith('原作文案')
-    assert packet['story_truth'] == grounding
+    assert packet['story_truth'] == {'characters': characters, 'global': grounding, 'prepare': preparation}
     assert packet['whole_story_map'][1]['beats'] == ctx['chapters'][1]['beats']
     assert packet['whole_story_map'][1]['scenes'][0]['deliveries'] == ctx['chapters'][1]['scenes'][0]['deliveries']
     assert packet['whole_story_map'][0]['scenes'][0]['slot'] == 's01'
@@ -256,7 +258,7 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
         'subject_refs': [], 'anchor_beat_ref': 'b01_01', 'anchor_scene_ref': 's01',
     }
     assert 'fact_refs' not in packet['whole_story_map'][0]['chapter_goal']
-    assert packet['story_truth']['source_blurb']['facts'][0]['claim'] in user
+    assert packet['story_truth']['prepare']['facts'][0]['claim'] in user
     expected = {
         'chars': 100,
         'avg_sentence_chars': 10,
@@ -288,9 +290,9 @@ def test_current_stage6_freshness_binds_source_hook_and_measurement_contract():
 def test_weak_fact_attribution_metric_compares_gift_phrase_to_story_map():
     material = prompts.Material(
         blocks=('完整创作包。',),
-        story_truth={'entities': {'characters': {
-            'c1': {'canonical': '阿宁', 'address': []},
-        }}},
+        story_truth={'characters': {
+            'c1': {'canonical': '阿宁', 'aliases': [{'surface': '阿宁'}]},
+        }},
         story_map=({'chapter': 1,
                     'beats': [{'beat_ref': 'b01_01', 'content': '阿宁送给小禾玉佩。'}],
                     'scenes': [{'slot': 's01', 'deliveries': [{'beat_ref': 'b01_01',

@@ -11,6 +11,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
@@ -22,6 +23,7 @@ from novel.orchestrator import queue
 
 WAITING_ON = frozenset({
     queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW, 'stage6.approve', 'stage7.approve',
+    queue.WAITING_ON_STAGE6_PREPARE,
 })
 _OBJECT = TypeAdapter(dict[str, Any])
 _SHA = TypeAdapter(Sha256)
@@ -42,6 +44,18 @@ def business_identity(
 ) -> dict[str, Any]:
     """完整生产包和模型实际阅读投影共同使用的长期审阅身份。"""
     try:
+        if waiting_on == queue.WAITING_ON_STAGE6_PREPARE:
+            # 延续已购 Prepare 的原业务身份；token 绑定候选、正文/Hook 和原审阅。
+            # 这里只允许换运输 wrapper，不把 Prepare token 当可更新凭证。
+            token = materials['prepare']['state']['review_token']
+            if not isinstance(token, str) or not token.startswith('s6p1_'):
+                raise RevalidationRefused('Prepare 材料缺原审阅凭证')
+            _SHA.validate_python(token.removeprefix('s6p1_'))
+            return {
+                'kind': 'review-token-business-v1', 'waiting_on': waiting_on,
+                'review_token': token,
+                'reviewer_contract_sha256': hashlib.sha256(contract.encode('utf-8')).hexdigest(),
+            }
         surface = ('blueprint' if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW
                    else waiting_on.removesuffix('.approve'))
         material = materials[surface]
@@ -95,6 +109,8 @@ def _token_path(action: Mapping[str, Any]) -> tuple[str | int, ...]:
         return ('payload', 'review_token')
     if action.get('kind') == 'node' and action.get('node') == 'stage2.blueprint':
         return ('input_payload', 'expected_cross_review_token')
+    if action.get('kind') == 'node' and action.get('node') == 'stage6.prepare':
+        return ('input_payload', 'review_token')
     if action.get('kind') == 'node' and action.get('node') in {'stage6.approve', 'stage7.approve'}:
         flags = action.get('flags')
         if isinstance(flags, (list, tuple)) and flags.count('--review-token') == 1:
@@ -119,7 +135,8 @@ def _logical_action(action: Mapping[str, Any]) -> dict[str, Any]:
     result = copy.deepcopy(dict(action))
     if isinstance(result.get('flags'), tuple):
         result['flags'] = list(result['flags'])
-    if result.get('kind') not in {'stop', 'uncertain'}:
+    if (result.get('kind') not in {'stop', 'uncertain'}
+            and result.get('node') != 'stage6.prepare'):
         _set(result, _token_path(result), '<current-review-token>')
     return result
 
@@ -131,6 +148,11 @@ def _reading(envelope: Mapping[str, Any]) -> dict[str, Any]:
         result.pop('surface_seal')
         result.pop('action_sha256')
         waiting_on = result['waiting_on']
+        if waiting_on == queue.WAITING_ON_STAGE6_PREPARE:
+            # 全部实际阅读材料、决定域、来源和 token 逐字不变；只去当前盘面 CAS。
+            for option in result['submission_options']:
+                option['exact_request'].pop('surface_seal')
+            return result
         surface = ('blueprint' if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW
                    else waiting_on.removesuffix('.approve'))
         material = result['materials'][surface]
@@ -153,6 +175,26 @@ def _reading(envelope: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _prepare_schema_bound(request: Mapping[str, Any], source: dict[str, Any],
+                          task: Any, schema_sha256: str | None) -> bool:
+    """动态 schema 可随 wrapper 变，但原 schema 必须闭合原 options，不能追认。"""
+    from novel.commanders.base import _prepare_output_schema
+    from novel.orchestrator import stage6_prepare_wire
+
+    original = SimpleNamespace(submission_options=source['submission_options'])
+    try:
+        old_schema, _, old_sha = _prepare_output_schema(
+            stage6_prepare_wire.output_schema_for(original))
+        recorded_schema, _, recorded_sha = _prepare_output_schema(request.get('output_schema'))
+        _, _, current_sha = _prepare_output_schema(stage6_prepare_wire.output_schema_for(task))
+    except (ValueError, RuntimeError) as exc:
+        raise RevalidationRefused('Prepare 原 schema/options 证明不可读') from exc
+    if (recorded_schema != old_schema or recorded_sha != old_sha
+            or request.get('schema_sha256') != old_sha):
+        raise RevalidationRefused('Prepare 原 schema 未绑定原工作包闭集')
+    return current_sha == schema_sha256
+
+
 @dataclass(frozen=True)
 class ReviewRevalidation:
     source: dict[str, Any]
@@ -161,6 +203,14 @@ class ReviewRevalidation:
     def rebind(self, document: Mapping[str, Any]) -> dict[str, Any]:
         """先认旧包再换当前凭证；模型的决定、理由与编辑值逐字段原样保留。"""
         result = copy.deepcopy(dict(document))
+        if self.source['waiting_on'] == queue.WAITING_ON_STAGE6_PREPARE:
+            from novel.orchestrator import stage6_prepare_wire
+            original = SimpleNamespace(submission_options=self.source['submission_options'])
+            try:
+                # 先用原 native 闭集认回答，再交当前 loader；当前 wire 一律不放宽。
+                result = stage6_prepare_wire.assemble(original, result)
+            except stage6_prepare_wire.PrepareReviewerWireError as exc:
+                raise RevalidationRefused(str(exc)) from exc
         if self.source['waiting_on'] == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
             from novel.orchestrator import stage2_blueprint_wire
             try:
@@ -204,6 +254,8 @@ def prepare(
     old_prefix, old, _old_contract = _frozen(request.get('prompt'))
     new_prefix, new, _new_contract = _frozen(task.prompt)
     same_schema = request.get('schema_sha256') == schema_sha256
+    if task.waiting_on == queue.WAITING_ON_STAGE6_PREPARE:
+        same_schema = _prepare_schema_bound(request, old, task, schema_sha256)
     if not same_schema and task.waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
         from novel.orchestrator.stage2_blueprint_wire import allows_schema_publication_revalidation
         same_schema = allows_schema_publication_revalidation(request, schema_sha256)

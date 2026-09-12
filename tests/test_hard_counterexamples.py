@@ -32,12 +32,31 @@ def test_every_hard_rule_of_stage4_6_7_has_a_counterexample():
 
 
 @pytest.mark.parametrize('rule', sorted(CASES))
-def test_each_counterexample_actually_reddens_its_target_rule(rule):
-    findings = CASES[rule].build()
+def test_each_counterexample_actually_reddens_its_target_rule(rule, tmp_path):
+    case = CASES[rule]
+    findings = case.build(tmp_path) if case.uses_tmp_path else case.build()
     assert findings, f'{rule} 的样本一条结论都没产出来'
     assert all(isinstance(finding, Finding) for finding in findings)
     got = {finding.rule for finding in findings}
     assert rule in got, f'{rule} 的样本只命中了 {sorted(got)}'
+
+
+def test_prepare_evidence_green_control_checks_all_facts_and_opening(tmp_path):
+    from tests.hard_cases import _prepare_report
+
+    report = _prepare_report(tmp_path, broken=False)
+    row = next(line for line in report.rules if line.rule == 'prepare_evidence_valid')
+    assert row.status == 'ok' and row.findings == []
+    assert row.scanned == '4', '正文支持、钩子支持、未决事实及连续开篇范围不能漏检'
+    assert report.node == 'stage6.prepare' and report.stage == 'stage6'
+    assert {line.rule for line in report.rules} == {
+        'prepare_evidence_valid', 'prepare_semantic_review'}
+    assert report.passed and report.badge == 'amber' and report.counts.skipped == 0
+    semantic = next(line for line in report.rules if line.rule == 'prepare_semantic_review')
+    assert semantic.status == 'unver', '机械证据通过不能替代独立语义接受'
+    assert '未独立接受（pending）' in semantic.why
+    from novel.orchestrator import approvals
+    assert not approvals.get(tmp_path, report.sid).gate['s6'], '节点两规则通过不代表最终文案已接受'
 
 
 def _stage4_rules(plan: dict) -> set[str]:

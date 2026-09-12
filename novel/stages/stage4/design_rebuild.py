@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
-from contracts.artifacts import STAGE4_BLIND_CANDIDATE
+from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS, STAGE4_BLIND_CANDIDATE
 from contracts.schema.stage4 import BlindCandidate, BlindBookStrategyResponse, DesignDependencies
 from novel.errors import ArtifactUnreadable, ProvenanceRefused, UpstreamStale, UpstreamUnproven
 from novel.llm import agent_runs, stage4_runs
@@ -20,9 +20,11 @@ from novel.store import ArtifactStore
 def _constraint_snapshot(ctx: Any, candidate: BlindCandidate, history_prefix: list[str] | None = None) -> dict:
     from contracts.invariants import DESIGN_REVIEW_CONTRACT
     from novel.orchestrator.approvals import freeze_design_constraint_history
+    from novel.source_identity import artifact_body_root
     from novel.stages.stage4.design_evolution import strategy_epoch_sha256
     epoch = strategy_epoch_sha256({
-        'review_contract': DESIGN_REVIEW_CONTRACT, 'root_clean_sha1': ctx.root_clean_sha1,
+        'review_contract': DESIGN_REVIEW_CONTRACT,
+        'root_clean_sha1': artifact_body_root(ArtifactStore(ctx), STAGE2_CHAPTER_BLUEPRINTS),
         'truth_sha256': candidate.truth_sha256, 'alias_algorithm': candidate.alias_algorithm},
         candidate.reconstruction_strategy)
     return freeze_design_constraint_history(ctx.novel_dir.parent, ctx.sid, epoch=epoch,

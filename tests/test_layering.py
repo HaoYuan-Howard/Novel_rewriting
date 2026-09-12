@@ -204,7 +204,7 @@ _JSON_READ_ALLOWED = {
         '新根须有同事务的 committed 证明，服务/CLI/Store 共用这一判定'),
     'novel/orchestrator/approvals.py': (
         '审批记录是 _service/approvals 下的服务自有状态，不是小说 artifact；'
-        '唯一审批 owner 显式检查当前 v7、SID 与 typed 决定，旧版本不迁移。'
+        '唯一审批 owner 显式检查当前 v8、SID 与 typed 决定，旧版本不迁移。'
         '章节产物及来源证据仍必须通过 ArtifactStore 读取'),
     'novel/model_slots.py': '只读 _service/model_slots 的容量配置，不读小说产物；损坏配置关闭式拒绝。',
     'novel/work_units.py': '只读 _service 工作单元账和已保存响应，不读小说产物。',
@@ -274,6 +274,10 @@ _JSON_READ_ALLOWED = {
         '用户常用 Agent profiles 是当前 output base 的 `_service/` 设置，不是小说产物；'
         '读取保留 unset/configured/unreadable 三态并以原始字节 SHA-256 做 CAS，'
         '不进入 provenance，也不经 ArtifactStore 倒充 artifact'),
+    'novel/orchestrator/workflow_transition.py': (
+        '离线迁移只解码 `_service/` 的 workflow manifest、prepared/completed 与运行账，'
+        '用于显式版本、全字段、原字节 CAS 和下游未启动证明；这些是服务控制账而非小说产物。'
+        '人物/正文投影仍经 ArtifactStore 读取，迁移不能补造旧审批或小说知识'),
     'novel/stage2_run_state.py': (
         '只读解码 _service/runs 下的 Stage2 运行记录与验证后检查点；'
         '它们不是正式产物，当前版本、自哈希和输入身份不闭合即 unver，'
@@ -284,6 +288,12 @@ _JSON_READ_ALLOWED = {
     'novel/stages/stage2/plot_repair.py': (
         '只解码内存章节请求 metadata 来附 baseline_identities；'
         '修前蓝图、原文和修订模板均已通过 ArtifactStore/typed 路径读取，不打开盘上 JSON'),
+    'novel/stages/stage2/analyze.py': (
+        '只把 SessionAgentClient 已验证来源的内存 normalized_text 解码为原回答修复候选；'
+        '这是已购模型 stdout 的格式诊断，不裸读正式产物；编译、证据、来源与正式写盘仍走 Store'),
+    'novel/stages/stage6/prepare_recovery.py': (
+        '只解码已购回答验收记录中的内存 normalized_text，保留格式错误的原模型候选；'
+        '来源 custody 由 SessionAgentClient 验证，正式 Prepare 仍由 producer 经 ArtifactStore 写入'),
     'novel/llm/stage2_runs.py': (
         'Stage2 验证后章节检查点与一次性 repair workpack 不是正式产物或普通缓存；'
         '它们在 `_service/runs/<sid>/stage2/` 按书、run_id 关闭式恢复，读取后仍须重跑'
@@ -406,6 +416,11 @@ _WRITE_ALLOWED = {
         '显式 preview/apply：允许回收已 ended 日志、已闭合 telemetry、完整 v3 trash，'
         '以及 delivery+commit+当前正式字节可逐项对证的 checkpoint 正文。回执、manifest、'
         'ledger、admission/beacon/agent/job/session 小账永久保留；四项 TTL 默认关闭'),
+    'novel/orchestrator/workflow_transition.py': (
+        '显式离线迁移仅在 `_service/workflow_transitions/` 物化不可变 prepared/completed，'
+        '清理自己的临时文件，并在全部原字节和旧 owner 证明闭合后交接 pending 指针。'
+        '工作流 manifest 仍由 work_units 的 CAS 写入；唯一人物派生投影仍经 ArtifactStore，'
+        '不允许直接覆盖小说产物或删除历史来源记录'),
     'novel/orchestrator/reviewer_seat_ledger.py': (
         '非 Stage2 reviewer blocker 的席位账，只原子写 '
         '`_service/runs/<sid>/reviewer_seats/<blocker>/`；有效面只有 blocker/business SHA、'
@@ -628,6 +643,7 @@ _SERVICE_MUTATORS = {
     ('uploads', 'save_upload'),
     ('uploads', 'save_edit_plan'),
     ('uploads', 'save_draft_edit'),
+    ('uploads', 'save_prepare_input'),
     ('uploads', 'discard_edit_plan'),
     ('approvals', 'approve_gate'),
     ('approvals', 'mark_seen'),
@@ -707,6 +723,10 @@ def test_service_mutations_are_narrowly_owned_by_mutation_routes():
         'novel/api/routes/edits.py': {
             ('jobs', 'run'), ('uploads', 'save_draft_edit'),
             ('uploads', 'discard_edit_plan'),
+        },
+        'novel/api/routes/stage6_prepare.py': {
+            # 只保存内容寻址的免费输入；正式 Prepare/Review 仍交 CLI 子进程。
+            ('jobs', 'run'), ('uploads', 'save_prepare_input'),
         },
         'novel/api/routes/maintenance.py': {
             ('trash', 'run'), ('trash', 'run_restore'),

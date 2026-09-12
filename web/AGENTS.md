@@ -86,7 +86,7 @@ npm run build                       # web/dist，供后端同源托管
 | `/n/:sid/stage4/:o` | A 候选设计审阅与 B 最终结构审阅；分别消费异常优先工作包，展示主体身份、全章 retain/reconstruct、声明/复算变化及 concerns，再展开父节点、分场呈现和明确端点。普通分场在本层完成；上游疑点可登记转交，明确不会立即调用模型。尚无 plan 时可展示后端 identity plan，Context 缺席仍显式标出 |
 | `/n/:sid/stage5/:o` | canonical 正文、材料、finding、改稿与 Commander 闭合；`materials=null` 表示材料缺席，不画假任务书。正文只取当前 Draft，Review 只提供 finding 与计数 |
 | `/n/:sid/inbox` | 全书待办与对应审阅入口；不建立第二套编辑面或校验结论 |
-| `/n/:sid/stage6` | 文案候选与 typed 定稿；从同一终审 workpack 展开原钩子、接受主张和完整重写正文，独立区分两类事实支持 |
+| `/n/:sid/stage6` | 独立文案准备、免费 typed 修订和准备接受；即使尚无 Hook 仍可审阅或恢复。随后展示文案候选与 typed 定稿；同一终审 workpack 展开原钩子、接受主张和完整重写正文，区分正文支持、原钩子独立支持和未决事实 |
 | `/n/:sid/stage7`、`/n/:sid/stage7/:o` | 改名表、漏网候选、成书状态与逐章替换对照 |
 
 `stage5` 无章号时转第 1 章，非法章序也走同一守卫。旧 `review/:o` 与 `check` 仅重定向至 `stage5/:o`
@@ -120,6 +120,7 @@ npm run build                       # web/dist，供后端同源托管
 - Stage5 改稿走专用只读 preview → 明示正式稿/工作稿 → 双 SHA apply，正文一变就废弃旧 preview；完整 CLI 仍经通用 preview 核对。
   多次改稿不自动重复 Review，顶部显式做一次最终 Review。closure 只消费 current workpack/next_step，
   batch trim 原样复制每项审计/章节身份；模板主体不一致、枚举缺失或占位未填完均禁用提交。闭合不得由 finding 数量推导。
+- Stage6 准备状态独立于最终 `gate.s6`；页面只消费后端 `prepare` 状态与动作。修订先免费预检，写回使用同一请求快照，任一编辑使旧预检失效；接受与写回均带本包 opaque token，HTTP 作业成功后刷新当前读模型，不由返回码推导接受。提交待补尾时隐藏旧表单，保留后端登记的免费恢复动作。
 - Stage6/7 的正式 typed 决定由后端 current 证明公开；不因来自 CLI/Agent 就要求再补 HTTP 盖章。
   缺失或过期仍进入对应审阅，不能用“补录验收链”代签。两屏使用专用审批面，不再挂通用 GateBar；
   批准不代表后续作业已发起，人物表批准不代表成书可下载。

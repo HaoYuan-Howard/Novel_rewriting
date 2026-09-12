@@ -256,6 +256,9 @@ export type ChapterCharacter = {
   "actor_ref": string
   "display_name": string
   "surfaces": (string)[]
+  "surface_allowed_slots": {
+    [key: string]: (string)[]
+  }
   "role": string | null
   "role_allowed_slots": (string)[]
   "allowed_slots": (string)[]

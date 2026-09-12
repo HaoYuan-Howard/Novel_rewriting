@@ -160,7 +160,7 @@ export function Stage4Screen() {
                   <PaneHeader title="写手真正拿得到的材料" meta={vm.materialsMeta} />
                   <PaneScroll className="flex flex-col gap-12 px-16 pt-12 pb-16">
                     {vm.materialCards.map((f) => (
-                      <div key={f.title} className="flex flex-col gap-6">
+                      <section key={f.title} aria-label={f.title} className="flex flex-col gap-6">
                         <div className="flex items-baseline gap-8">
                           <span className="text-body font-semibold">{f.title}</span>
                           <Mono className="text-mini text-ink-4">{f.count}</Mono>
@@ -168,7 +168,7 @@ export function Stage4Screen() {
                         {f.lines.length ? (
                           <ul className="m-0 flex list-none flex-col gap-4">
                             {f.lines.map((l, i) => (
-                              <li key={i} className="prose-cn text-sm2 text-ink-2">
+                              <li key={i} className="prose-cn whitespace-pre-wrap text-sm2 text-ink-2">
                                 {l}
                               </li>
                             ))}
@@ -182,7 +182,7 @@ export function Stage4Screen() {
                           </span>
                         )}
                         {f.more ? <span className="text-tag text-ink-5">{f.more}</span> : null}
-                      </div>
+                      </section>
                     ))}
 
                     <div className="prose-cn text-micro text-ink-5">

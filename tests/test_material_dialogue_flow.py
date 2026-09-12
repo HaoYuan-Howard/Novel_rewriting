@@ -64,6 +64,7 @@ def _entry():
         entry[name]['subject_refs'] = [{'kind': 'beat', 'ref': 'b01_01'}]
     entry['characters'] = [{'actor_ref': ACTORS[cid], 'display_name': value,
                             'surfaces': [value], 'role': '参与约定',
+                            'surface_allowed_slots': {value: ['s01', 's02']},
                             'allowed_slots': ['s01', 's02'], 'role_allowed_slots': ['s01', 's02']}
                            for cid, value in NAMES.items()]
     entry['global_subjects'] = []

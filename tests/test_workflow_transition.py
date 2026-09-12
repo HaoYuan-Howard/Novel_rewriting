@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from contracts.schema.api import Stage2NodeReviewRequest
-from contracts.schema.workflow import WorkflowManifestV4, WorkflowManifestV5
+from contracts.schema.workflow import WorkflowManifestV4, WorkflowManifestV5, WorkflowManifestV6, WorkUnitLedgerV2
 from novel import paths, prov, work_units
 from novel.cli import main as cli
 from novel.errors import TerminalState
@@ -138,7 +138,10 @@ def test_exact_manifest_transition_and_crash_recovery_preserve_task_budget_and_a
                 work_units.require_workflow(base)
     result = _apply(setup, plan, recovery=True)
     assert result['state'] == 'completed'
-    target = work_units.require_workflow(base)
+    target = WorkflowManifestV5.model_validate_json(paths.workflow_manifest_path(base).read_bytes())
+    transition.require_transition_completed(base, target, paths.workflow_manifest_path(base).read_bytes())
+    with pytest.raises(TerminalState):
+        work_units.require_workflow(base)  # 当前 V6 普通写口不自动接纳中间 V5。
     assert isinstance(target, WorkflowManifestV5)
     assert (target.task_id, target.created_at) == (frozen_core[2].task_id, frozen_core[2].created_at)
     assert paths.workflow_manifest_path(base).read_bytes() == prepared.target_manifest_json.encode('utf-8')
@@ -156,9 +159,8 @@ def test_exact_manifest_transition_and_crash_recovery_preserve_task_budget_and_a
                                work_units.WorkUnitRegistryV1)
     assert registry.unit_ids
     for unit_id in registry.unit_ids:
-        budget = work_units.readonly_budget(base, frozen_core[1], unit_id)
-        ledger = budget._read()
-        assert budget.identity['task_id'] == frozen_core[2].task_id
+        ledger = WorkUnitLedgerV2.model_validate_json(paths.work_unit_dir(base, frozen_core[1], unit_id).joinpath('ledger.json').read_bytes())
+        assert ledger.task_id == frozen_core[2].task_id
         assert ledger.base_content_limit == 4 and len(ledger.turns) > 0
         assert ledger.content_limit - len(ledger.turns) < 4
     assert _apply(setup, plan) == result
@@ -341,7 +343,10 @@ def test_live_service_pid_and_port_refuse_before_prepared(setup):
     assert not paths.workflow_transition_pending_path(setup['base']).exists()
 
 
-def test_prepared_or_target_without_completed_fences_all_ordinary_writes(setup, monkeypatch):
+def test_prepared_or_target_without_completed_fences_all_ordinary_writes(setup_stage5):
+    # V4→V5 的中间目标已不是普通写口接受的 current shape；本例须使用
+    # V5→V6 当前目标，才能实际越过 schema 解码而验证 completed 围栏。
+    setup = setup_stage5
     base = setup['base']
     plan = transition.preview(**setup)
     prepared, _ = transition._prepared(base, plan['transition_id'])
@@ -370,15 +375,16 @@ def test_cli_preview_apply_and_completed_recover_are_reachable(setup, capsys):
     assert json.loads(capsys.readouterr().out) == applied
 
 
-def test_ordinary_workflow_rejects_v4_and_initializes_only_clean_v5(setup, tmp_path):
+def test_ordinary_workflow_rejects_v4_and_initializes_only_clean_v6(setup, tmp_path):
     raw = paths.workflow_manifest_path(setup['base']).read_bytes()
     with pytest.raises(TerminalState):
         work_units.require_workflow(setup['base'])
     assert paths.workflow_manifest_path(setup['base']).read_bytes() == raw
     current = work_units.initialize_workflow(tmp_path / 'clean')
-    assert current.schema_version == 5 and current.transition_ref is None
+    assert current.schema_version == 6 and current.transition_ref is None
     assert current.artifact_versions.chapter_blueprints == 10
     assert current.artifact_versions.writer_context == 9
+    assert current.artifact_versions.stage6_prepare == 1
 
 
 def test_unreadable_subtree_and_hardlink_never_become_complete_inventory(setup, monkeypatch):
@@ -397,3 +403,187 @@ def test_unreadable_subtree_and_hardlink_never_become_complete_inventory(setup, 
     os.link(source, target)
     with pytest.raises(TerminalState, match='硬链接'):
         transition.preview(**setup)
+
+
+@pytest.fixture(scope='module')
+def frozen_stage5(tmp_path_factory):
+    """经真实 BP→A/B→Writer/Review/closure 形成 V5 来源，只有模型响应是合成材料。"""
+    from tests.test_plot_design import produce_through_first_chapter
+    from tests.test_plot_pipeline import complete_stage5
+    base = tmp_path_factory.mktemp('transition-stage5')
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(prov, 'code_version', lambda: CODE)
+        book = produce_through_first_chapter(base, mp, real_code_identity=True)
+        complete_stage5(book)
+        source = work_units.require_workflow(book.parent)
+        old = WorkflowManifestV5(task_id=source.task_id, created_at=source.created_at)
+        work_units._write(book.parent, paths.workflow_manifest_path(book.parent), old)
+    return book.parent, paths.derive_source_meta(book.name)[0], old
+
+
+@pytest.fixture
+def setup_stage5(tmp_path, monkeypatch, frozen_stage5):
+    original, sid, _ = frozen_stage5
+    base = tmp_path / '输出'
+    shutil.copytree(original, base)
+    monkeypatch.setattr(prov, 'code_version', lambda: CODE)
+    monkeypatch.setattr(transition, '_code_identity', lambda root: CODE)
+    with socket.socket() as sock:
+        sock.bind(('127.0.0.1', 0))
+        port = sock.getsockname()[1]
+    return dict(base=base, source_code=REPO, service_ports=(port,), stopped_pids=(),
+        actor='codex', reason='Stage5 闭合后进入独立文案准备', offline_ack=True)
+
+
+@pytest.mark.parametrize('window', ['none', 'before_cas', 'after_cas', 'before_completed', 'after_completed'])
+def test_v5_to_v6_retains_all_stage4_stage5_sources_and_recovers_exactly(
+        setup_stage5, frozen_stage5, monkeypatch, window):
+    setup = setup_stage5
+    before = transition._inventory(setup['base'])
+    plan = transition.preview(**setup)
+    prepared, digest = transition._prepared(setup['base'], plan['transition_id'])
+    assert prepared.schema_version == 2 and prepared.projections == {}
+    assert prepared.source_proof.accepted_books[frozen_stage5[1]].closure_sha256
+    assert any('/stage4/' in key for key in before)
+    assert any('/stage5/' in key for key in before)
+    if window != 'none':
+        with monkeypatch.context() as crash:
+            if window.endswith('cas'):
+                original = transition._cas_manifest
+                def interrupted(base, value):
+                    if window == 'after_cas': original(base, value)
+                    raise OSError('模拟迁移中断')
+                crash.setattr(transition, '_cas_manifest', interrupted)
+            else:
+                original = transition._immutable
+                def interrupted(base, path, value):
+                    if path.name != 'completed.json' or window == 'after_completed':
+                        original(base, path, value)
+                    if path.name == 'completed.json': raise OSError('模拟迁移中断')
+                crash.setattr(transition, '_immutable', interrupted)
+            with pytest.raises(OSError, match='模拟'):
+                _apply(setup, plan)
+    result = _apply(setup, plan, recovery=True)
+    assert result['state'] == 'completed'
+    current = work_units.require_workflow(setup['base'])
+    assert isinstance(current, WorkflowManifestV6)
+    assert (current.task_id, current.created_at) == (frozen_stage5[2].task_id, frozen_stage5[2].created_at)
+    assert transition._inventory(setup['base']) == before
+    assert _apply(setup, plan) == result
+
+
+@pytest.mark.parametrize('residue', ['stage6/hook.json', 'stage6/prepare.INVALID.json',
+    'stage6/rounds/0001.json', '_stage6_runs/old/prepare/run.json',
+    'stage7/name_map.json', 'stage7/name_map.INVALID.json'])
+def test_v5_transition_refuses_only_affected_downstream_residue(setup_stage5, residue):
+    book = next(iter(paths.iter_novel_dirs(setup_stage5['base'])))
+    path = book / residue
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{}', encoding='utf-8')
+    before = paths.workflow_manifest_path(setup_stage5['base']).read_bytes()
+    with pytest.raises(TerminalState, match='下游'):
+        transition.preview(**setup_stage5)
+    assert paths.workflow_manifest_path(setup_stage5['base']).read_bytes() == before
+
+
+def _closed_predecessor_for_stage5(setup):
+    """给定严格闭合的历史回执；本轮 Stage5 接受与离线证明仍走真实来源代码。
+
+    历史迁移 producer 的完整生成/中断另由本模块 V4→V5 用例覆盖。
+    这里只构造旧回执前置，不用改当前产物或伪造本轮 Stage5 接受结论。
+    """
+    from contracts.schema.workflow import (
+        WorkflowTransitionRefV1, WorkflowTransitionPreparedV1,
+        WorkflowTransitionProofV1, WorkflowTransitionProjectionV1,
+        WorkflowTransitionPendingV1, WorkflowTransitionCompletedV1)
+
+    base = setup['base']
+    current = WorkflowManifestV5.model_validate_json(paths.workflow_manifest_path(base).read_bytes())
+    source = WorkflowManifestV4(task_id=current.task_id, created_at=current.created_at)
+    source_raw = work_units._bytes(source.model_dump(mode='json'))
+    old_id = transition._sha(b'closed-predecessor:' + source_raw)
+    target = current.model_copy(update={'transition_ref': WorkflowTransitionRefV1(
+        transition_id=old_id, source_manifest_sha256=transition._sha(source_raw))})
+    target_raw = work_units._bytes(target.model_dump(mode='json'))
+    proof = transition._source_proof(base, REPO, CODE, accepted=True, source_version=5)
+    core_proof = WorkflowTransitionProofV1.model_validate({**proof.model_dump(mode='json'),
+        'accepted_books': {sid: {k: v for k, v in row.model_dump(mode='json').items()
+            if k != 'closure_sha256'} for sid, row in proof.accepted_books.items()}})
+    projections = {}
+    inventory = transition._inventory(base)
+    for book in paths.iter_novel_dirs(base):
+        sid = paths.derive_source_meta(book.name)[0]
+        path = book / 'stage2/blueprint_character_projection.json'
+        raw = path.read_bytes()
+        rel = path.relative_to(base).as_posix()
+        projections[sid] = WorkflowTransitionProjectionV1(relative_path=rel,
+            source_json=raw.decode('utf-8'), source_sha256=transition._sha(raw),
+            target_json=raw.decode('utf-8'), target_sha256=transition._sha(raw),
+            characters_sha256=core_proof.accepted_books[sid].characters_sha256,
+            main_text_sha256=transition._sha((book / 'stage1/main_text.json').read_bytes()))
+    previous = WorkflowTransitionPreparedV1(transition_id=old_id,
+        source_manifest_json=source_raw.decode(), source_manifest_sha256=transition._sha(source_raw),
+        target_manifest_json=target_raw.decode(), target_manifest_sha256=transition._sha(target_raw),
+        source_code_directory=str(REPO), source_code_version=CODE, target_code_version=CODE,
+        preserved_files=inventory, projections=projections, source_proof=core_proof,
+        service_ports=setup['service_ports'], stopped_pids=(), actor='codex',
+        reason='给定旧迁移闭合记录，测试下一迁移指针交接', prepared_at=1)
+    transition._immutable(base, paths.workflow_transition_dir(base, old_id) / 'prepared.json', previous)
+    _, digest = transition._prepared(base, old_id)
+    completed = WorkflowTransitionCompletedV1(transition_id=old_id, prepared_sha256=digest,
+        source_manifest_sha256=previous.source_manifest_sha256,
+        target_manifest_sha256=previous.target_manifest_sha256, completed_at=2)
+    transition._immutable(base, paths.workflow_transition_dir(base, old_id) / 'completed.json', completed)
+    work_units._write(base, paths.workflow_manifest_path(base), target)
+    transition._immutable(base, paths.workflow_transition_pending_path(base),
+        WorkflowTransitionPendingV1(transition_id=old_id, prepared_sha256=digest))
+    return old_id
+
+
+@pytest.mark.parametrize('fault', ['none', 'old_pointer_sha', 'old_completed_missing', 'source_bytes', 'new_inventory'])
+def test_new_prepared_recovers_before_closed_predecessor_pointer_is_retired(setup_stage5, monkeypatch, fault):
+    setup, base = setup_stage5, setup_stage5['base']
+    previous_id = _closed_predecessor_for_stage5(setup)
+    pointer = paths.workflow_transition_pending_path(base)
+    old_pointer = pointer.read_bytes()
+    before = transition._inventory(base)
+    original = transition._immutable
+    with monkeypatch.context() as crash:
+        def after_prepared(base_, path, value):
+            original(base_, path, value)
+            if path.name == 'prepared.json':
+                raise OSError('新 prepared 已保存，旧 pointer 尚未退休')
+        crash.setattr(transition, '_immutable', after_prepared)
+        with pytest.raises(OSError, match='尚未退休'):
+            transition.preview(**setup)
+    assert pointer.read_bytes() == old_pointer
+    new_id = next(p.name for p in paths.workflow_transition_dir(base, previous_id).parent.iterdir()
+                  if p.name != previous_id)
+    prepared, digest = transition._prepared(base, new_id)
+    plan = {'transition_id': new_id, 'prepared_sha256': digest}
+    if fault == 'old_pointer_sha':
+        value = json.loads(old_pointer)
+        value['prepared_sha256'] = 'f' * 64
+        pointer.write_bytes(work_units._bytes(value))
+    elif fault == 'old_completed_missing':
+        (paths.workflow_transition_dir(base, previous_id) / 'completed.json').unlink()
+    elif fault == 'source_bytes':
+        path = paths.workflow_manifest_path(base)
+        path.write_bytes(path.read_bytes() + b'\n')
+    elif fault == 'new_inventory':
+        (base / 'late-file.txt').write_text('第三方写入', encoding='utf-8')
+    if fault != 'none':
+        pointer_before = pointer.read_bytes()
+        manifest_before = paths.workflow_manifest_path(base).read_bytes()
+        with pytest.raises(TerminalState):
+            _apply(setup, plan, recovery=True)
+        assert pointer.read_bytes() == pointer_before
+        assert paths.workflow_manifest_path(base).read_bytes() == manifest_before
+        assert not _record(setup, plan, 'completed.json').exists()
+    else:
+        result = _apply(setup, plan, recovery=True)
+        assert work_units.require_workflow(base).schema_version == 6
+        assert not pointer.exists()
+        assert transition._inventory(base) == before
+        assert paths.workflow_manifest_path(base).read_bytes() == prepared.target_manifest_json.encode('utf-8')
+        assert _apply(setup, plan, recovery=True) == result

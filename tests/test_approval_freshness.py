@@ -276,7 +276,7 @@ def test_current_writing_proof_binds_stage1_plan_and_context_without_s3(
 
     raw = json.loads(approvals._path(base, SID).read_text(encoding='utf-8'))
     public = approvals.get(base, SID)
-    assert raw['v'] == 8 and public.v == 7
+    assert raw['v'] == 8 and public.v == 8
     assert set(raw['gate']) == {'s0', 's1', 's2', 's4', 's5', 's6', 's7'}
     assert set(raw['writing_proof']['artifacts']) == {
         MAIN_REL, PLAN_REL, STAGE4_WRITER_CONTEXT}

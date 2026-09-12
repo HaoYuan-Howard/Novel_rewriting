@@ -851,7 +851,7 @@ def test_approve_closure_opens_gate_s5_and_unblocks_downstream(rig, monkeypatch)
 
     request = _ruling_request(store)
     doc = approvals.approve_stage5_closure(base, sid, request)
-    assert doc.v == 7
+    assert doc.v == 8
     assert doc.gate['s5'] is True
     assert doc.closure.state == 'closed'
     assert doc.closure.current_decision is not None
@@ -1090,7 +1090,7 @@ def test_new_blocker_takes_priority_over_an_expired_old_decision(
 def test_public_doc_projects_a_computable_workpack_for_fresh_records(rig):
     ctx, store = rig
     doc = approvals.get(ctx.novel_dir.parent, ctx.sid)
-    assert doc.v == 7
+    assert doc.v == 8
     # 没有 blockers 也没有回执 ⇒ ready；「missing」只留给没有 Review 的书。
     assert doc.closure.state == 'ready'
     assert doc.closure.workpack is not None

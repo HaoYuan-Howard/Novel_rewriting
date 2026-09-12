@@ -27,6 +27,7 @@ api.py —— 对应 `docs/schema/_api.md`。**一次 HTTP 响应长什么样。
 from __future__ import annotations
 
 from contracts.schema.workflow import BudgetGrant
+from contracts.invariants import STAGE6_PREPARE_DECISIONS
 from contracts.schema.analyze_draft import AnalyzeOwnerDraftEdit, DraftOwner, DraftSourceState
 from contracts.schema.knowledge_links import KnowledgeLinkReview, KnowledgeLinkSubmission
 from contracts.schema.dependencies import DependencyManifest
@@ -98,6 +99,8 @@ from contracts.invariants import (
     STAGE2_NODE_REVIEW_STATES,
     STAGE6_REVIEW_CONTRACT,
     STAGE7_REVIEW_CONTRACT,
+    STAGE6_APPROVAL_CHECK_BASIS,
+    STAGE7_APPROVAL_CHECK_BASIS,
     HOOK_SLOTS,
     slot_of,
     HOOK_SEMANTIC_STATES,
@@ -136,6 +139,7 @@ from contracts.invariants import (
 
 from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import Finding, HashBoundHumanApproval, Sha256
+from contracts.schema.stage6_prepare import PrepareDraft, PrepareState, PrepareWorkpack
 from contracts.schema.characters import CharacterRegistry, CharactersEdit
 from contracts.schema.evaluation import GlobalReviewItem, SemanticDecision
 from contracts.schema.orchestration import (
@@ -2255,6 +2259,44 @@ class CompactApprovalCheck(FrozenModel):
         return self
 
 
+class Stage6PrepareView(StrictModel):
+    """准备产物缺席也返回明确状态；不依赖 Hook 已经生成。"""
+
+    sid: str = Field(min_length=1)
+    title: str
+    status: PrepareState
+
+
+class Stage6PrepareWorkpack(PrepareWorkpack):
+    sid: str = Field(min_length=1)
+    title: str
+
+
+class Stage6PrepareEditRequest(StrictModel):
+    """浏览器只回交 opaque 基线和本次内容，不计算来源摘要。"""
+
+    review_token: str = Field(pattern=r'^s6p1_[0-9a-f]{64}$')
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    source_blurb: PrepareDraft
+
+
+class Stage6PrepareDecisionRequest(StrictModel):
+    review_token: str = Field(pattern=r'^s6p1_[0-9a-f]{64}$')
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    decision: Literal[STAGE6_PREPARE_DECISIONS]
+    edit: PrepareDraft | None = None
+
+
+class Stage6PrepareEditPreview(StrictModel):
+    """复用 producer 编译结果的免费预览；不是语义接受。"""
+
+    would_apply: bool
+    findings: list[Finding]
+    source_blurb: SourceBlurbGrounding[FactEvidence, HookFactEvidence]
+
+
 class Stage6ApprovalCandidate(FrozenModel):
     """Stage6 终审的一条候选：文本、机械结论与 A/B 原始证据同包。"""
 
@@ -2292,6 +2334,7 @@ class Stage6ApprovalChapter(FrozenModel):
 class Stage6ApprovalMaterials(FrozenModel):
     """终审可实际核验的事实来源；原钩子与重写正文各只下发一次。"""
 
+    prepare_subject_sha256: Sha256
     source_hook: str = Field(min_length=1)
     source_blurb: SourceBlurbGrounding[FactEvidence, HookFactEvidence]
     rewritten_chapters: list[Stage6ApprovalChapter] = Field(min_length=1)
@@ -2312,16 +2355,18 @@ class Stage6ApprovalWorkpack(FrozenModel):
     但 execution code / rules 只在服务端参与 seal，不再作为公开字段外发。
     """
 
-    v: Literal[3] = 3
+    v: Literal[4] = 4
     kind: FinalApprovalWorkpackKind
     sid: str = Field(min_length=1)
     review_contract_version: Literal[STAGE6_REVIEW_CONTRACT] = STAGE6_REVIEW_CONTRACT
     review_identity_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     validation_seal_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    review_token: str = Field(pattern=r'^s6r3_[0-9a-f]{64}$')
+    review_token: str = Field(pattern=r'^s6r4_[0-9a-f]{64}$')
     artifact_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     rationale: str = Field(min_length=1)
     materials: Stage6ApprovalMaterials
+    #: 检查固定针对去审批候选；当前接受状态只由 disposition/current_approval 表达。
+    check_basis: Literal[STAGE6_APPROVAL_CHECK_BASIS] = STAGE6_APPROVAL_CHECK_BASIS
     check: CompactApprovalCheck
     #: 两名盲评各自的原始完整排序；逐候选 verdict/reason/evidence 在
     #: ``candidates[].semantic_decision.judges``，两者合起来才是未压扁的 A/B 证据。
@@ -2336,7 +2381,7 @@ class Stage6ApprovalWorkpack(FrozenModel):
     def _currentness_and_candidate_set_are_closed(self) -> 'Stage6ApprovalWorkpack':
         if self.kind != 'stage6':
             raise ValueError('Stage6ApprovalWorkpack.kind 必须是 stage6')
-        if self.review_token != f's6r3_{self.workpack_sha256}':
+        if self.review_token != f's6r4_{self.workpack_sha256}':
             raise ValueError('Stage6 review_token 必须封装当前 exact workpack')
         if [row.index for row in self.candidates] != [1, 2, 3]:
             raise ValueError('Stage6 workpack 必须按产物顺序完整覆盖 1..3')
@@ -2368,6 +2413,8 @@ class Stage7ApprovalWorkpack(FrozenModel):
     review_token: str = Field(pattern=r'^s7r3_[0-9a-f]{64}$')
     artifact_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     decision_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    #: 检查固定针对去审批、去交付账的人物表；交付状态由 delivery 单独判定。
+    check_basis: Literal[STAGE7_APPROVAL_CHECK_BASIS] = STAGE7_APPROVAL_CHECK_BASIS
     check: CompactApprovalCheck
     surname_map: dict[str, str]
     characters: list['NameDecisionLine'] = Field(min_length=1)
@@ -3024,13 +3071,14 @@ class Stage2NodeReviewView(StrictModel):
 
 
 class ApprovalDoc(StrictModel):
-    """公开审批面 v6：新增 Stage5 闭合回执投影。"""
+    """公开审批面 v8：准备接受与 Stage6 最终定稿分别投影。"""
 
-    v: Literal[7] = 7
+    v: Literal[8] = 8
     sid: str = Field(min_length=1)
     gate: dict[GateKey, bool]
     seen: dict[SeenKey, bool]
     stage2_reviews: dict[str, Stage2NodeReviewView] = Field(default_factory=dict)
+    prepare: PrepareState
     writing: bool = False
     design_review: DesignReviewView = Field(
         default_factory=lambda: DesignReviewView(state='unavailable'))
@@ -4154,7 +4202,7 @@ class HookApproveRequest(StrictModel):
     pick: int = Field(ge=1)
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
-    review_token: str = Field(pattern=r'^s6r3_[0-9a-f]{64}$')
+    review_token: str = Field(pattern=r'^s6r4_[0-9a-f]{64}$')
 
     @model_validator(mode='after')
     def _audit_text_is_not_blank(self) -> 'HookApproveRequest':

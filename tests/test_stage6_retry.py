@@ -20,6 +20,8 @@ from novel.llm.client import LlmClient, MAX_SAMPLES_PER_RUNG
 from novel.llm.transport import ChatResponse, FakeTransport, TransportError
 from novel.stages.stage6 import hook, prompts
 from tests.test_stage2_generation import _ctx
+from tests.test_final_approval_workpacks import _stage6_materials
+from tests.test_stage6_core_consumption import _accepted_prepare_outcomes
 
 
 def _response(data):
@@ -36,7 +38,7 @@ def _run_case(monkeypatch, root: Path, initial_texts: list[str], retry_responder
     material = prompts.Material(blocks=('完整创作包。',), upto=1)
     upstreams = SimpleNamespace(
         mat=material, src_hook='', secrets=[],  characters={},
-        hook_mechanical={}, upto=1, judged={})
+        hook_mechanical={}, upto=1, judged={}, prepare_outcomes=_accepted_prepare_outcomes())
     written = []
     state = {}
 
@@ -69,6 +71,8 @@ def _run_case(monkeypatch, root: Path, initial_texts: list[str], retry_responder
 
     monkeypatch.setattr(hook, 'ArtifactStore', Store)
     monkeypatch.setattr(hook, '_Upstreams', lambda _ctx, _store: upstreams)
+    # 本例只替换合成业务材料；重试、来源与整组提交仍走真实 producer。
+    monkeypatch.setattr(hook, '_approval_materials', lambda *_args: _stage6_materials())
 
     def deterministic_judge(text, _up):
         mech = Mech(punct_fixed=0, quotes_fixed=0, paras_fixed=0)
@@ -113,7 +117,7 @@ def test_each_single_hard_candidate_improves_once_and_usage_includes_retries(mon
         material = prompts.Material(blocks=('完整创作包。',), upto=1)
         upstreams = SimpleNamespace(
             mat=material, src_hook='', secrets=[],  characters={},
-            hook_mechanical={}, upto=1, judged={})
+            hook_mechanical={}, upto=1, judged={}, prepare_outcomes=_accepted_prepare_outcomes())
         written = []
         state = {}
 
@@ -146,6 +150,7 @@ def test_each_single_hard_candidate_improves_once_and_usage_includes_retries(mon
 
         monkeypatch.setattr(hook, 'ArtifactStore', Store)
         monkeypatch.setattr(hook, '_Upstreams', lambda _ctx, _store: upstreams)
+        monkeypatch.setattr(hook, '_approval_materials', lambda *_args: _stage6_materials())
 
         def deterministic_judge(text, _up):
             mech = Mech(punct_fixed=0, quotes_fixed=0, paras_fixed=0)

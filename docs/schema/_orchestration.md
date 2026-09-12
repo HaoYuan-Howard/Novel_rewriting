@@ -443,7 +443,7 @@ lock 内截回 committed prefix、fsync，并分别追加 `authorized / applied`
 `AGENT_DELIVERY_OUTCOME`：`ready` / `ready_with_disclosures` / `stopped` / `failed` /
 `unknown`。终验从盘面重新核 Stage2 正式 Global + 称名投影 + Blueprint current、联合 HARD 通过、
 global review 的 generation-safe 面（blocking 逐项 PASS，或仅含已显式完整组隔离的
-secret/relation/world-rule UNVER；后者仍是 disclosure-ready 而不是 PASS）、当前可下载成书、阻塞待办与
+secret 组 UNVER；关系与规则不允许隔离，前者仍是 disclosure-ready 而不是 PASS）、当前可下载成书、阻塞待办与
 启动/结束代码指纹；不解析 agent 自述。两轴不许互推，尤其 `state=ok` 不推出可交付。
 一次 Commander reviewer turn `exit_code=0` 但 fresh outcome=`stopped` 时，RunSupervisor 再读一次
 `operator next`：ready 交确定性 execution-token 主路；只有下一个状态仍是登记的 reviewer blocker 才
@@ -451,11 +451,21 @@ secret/relation/world-rule UNVER；后者仍是 disclosure-ready 而不是 PASS�
 连续审阅，局部返修的 surface 或候选变化不重置预算，也不强制换审阅者。Stage4 A/B 分别隔离，
 Stage6 双盲 judge 分别隔离；这些业务边界不因共用基础设施而合并。
 
-Stage2 严格执行 Characters E → Global E → Global C 接受 → 逐章并发 Blueprint E → Blueprint C 逐章及跨章接受。
+Stage2 冷启动执行 Analyze E → 独立 Characters/Global 编译 → Global C 统一接受 →
+逐章并发 Blueprint E → Blueprint C 逐章及跨章接受。cold-start 判定先排除历史回答、checkpoint、
+prepared 与任一侧既有产物；已有来源优先恢复，后续问题只交对应 Characters 或 Global owner。
 Global 必须正式有效、逐项审阅 generation-safe 且节点接受 current；`.INVALID` 与称名投影不能释放
-Blueprint。Characters E、Global E、每章 Blueprint E、Global C 与每个 Blueprint 审阅范围各有独立工作单元，
+Blueprint。联合首抽只记 Analyze 的一次真实 attempt，两份产物共享来源但独立编辑、失效与恢复，
+不把完整联合回答挂为可变人物文件的失效边。Analyze E、独立 owner 修订 E、每章 Blueprint E、
+Global C 与每个 Blueprint 审阅范围各有独立工作单元，
 内容额度为基础 4 次加已生效的不可变人工追加，包含首次、格式和内容纠错。
 不存在人物 Commander、预审、额外 Global 终审或按序号保留的第四席。
+
+Stage5 当前闭合后才进入 Prepare E / C；两席各有独立累计额度。Prepare C 只消费完整正文、
+原钩子和准备主体，使用同源段号并去掉正式证据中重复的原文。native wire 绑定 options SHA 与
+exact request，accept/rework/uncertain 均落本 owner 的 PrepareDecision，stop 只结束当前席位。
+独立接受后才生成 Hook 三候选，再经既有 A/B 与最终定稿；Prepare 不能替代 gate.s6。
+已购回答与 prepared 提交先走免费恢复；pending_commit 在队列与人工页给出 --recover-edit。
 
 网络 attempts 是每次内容请求的独立有界预算，逐次记成本与会话事实；模型纠错仍占角色内容额度。
 E/C 的工作单元不含 run/epoch/candidate/provider session，重启或换会话不补发。确定性 typed 提交
@@ -474,10 +484,11 @@ direct patch 主体不从 enum 剔除；若同交 delete/split，仍由现役 Gl
 只开放 add，最终仍由现役 GlobalEdit 复验。
 `submission_options[].exact_request` 仍是本地 canonical action 的完整模板；只有 headless Stage2 task
 唯一开放的 submission option 恰为 `--apply-edit` 时，provider 回答才换成
-`novel-stage2-reviewer-delta-v2` compact wire。若任务同时开放 review-decisions、隔离或其他合法选项，
-仍使用完整 action response，不能让 transport 优化吞掉分支。compact 只交被开放的
+`novel-stage2-reviewer-delta-v3` compact wire。多选项或非单一 scope 的任务使用
+`novel-stage2-core-review-choice-v1`，覆盖当前所有已开放 typed 选项；单一 scope 沿用专用 scope wire。
+这些运输最终都交原完整 action loader，不能让格式缩减吞掉分支。compact 只交被开放的
 patch 行、collection operations、replacement 与 `post_edit_review` 判断，并以 option id 与
-exact-request SHA 绑定当前模板。compact v2 的 `collection_edits` 是只含本模板开放集合的固定键
+exact-request SHA 绑定当前模板。compact v3 的 `collection_edits` 是只含本模板开放集合的固定键
 object：所有键 required、额外键关闭、每键值直接是专型 operation 数组；空数组默认表示本轮不提交。
 只有 task 与 exact request 的 `waiting_on` 同为 `WAITING_ON_STAGE2_EDIT_CORRECTION` 且携 durable failed
 edit 时才启用 merge/drop：此时空数组保留 failed baseline，撤销只走 opaque `drop_targets`；ledger
@@ -502,7 +513,7 @@ provider-response digest 记回该席并删除 action，不启动 canonical Exec
 unknown 停止并保留 action 供零模型重放。
 返工可在同一 typed 输入合并 GlobalEdit 与 `post_edit_review`；后者只准对模板 `review_scope` 中仍保持同一
 `item_id + subject_sha256` 的旧项提交 `decisions`，且这类 surviving 旧 FAIL/UNVER 必须全部显式复判；
-不能因 edit 逻辑上似乎修好就漏掉 hash 未变的集合完整性（例如只改 relation 成员字段而 ID 集未变时的
+不能因 edit 逻辑上似乎修好就漏掉 hash 未变的集合完整性（例如只订正 relation 的证据定位，业务字段和 ID 集均未变时的
 `relation_set_complete`）。新打开项才使用默认证明。typed loader 拒绝或 canonical action exit 2 时，
 Supervisor 在仍有预算且可修复时把完整紧凑包与确定性拒因交回同一工作单元继续修订，
 物理会话按当前 schema/profile 续用或重建；相同请求字节且无进展立即停。新内容调用计入该 Commander
@@ -1025,7 +1036,7 @@ trim/report/committed，不造新轮。公开读视图只认 committed，同一 
 正文身份由 SHA 联结，
 账本不能反向充当产物或 Review。
 
-`approvals/<sid>.json` 的盘上服务记录当前为 **v8**；HTTP 投影 `ApprovalDoc.v=7` 是另一条
+`approvals/<sid>.json` 的盘上服务记录当前为 **v8**；HTTP 投影 `ApprovalDoc.v=8` 是另一条
 版本轴，不能据同一个数字互推。每个已盖 gate、已阅状态、typed Stage4A 设计审阅、最终结构裁决和 writing 授权
 都必须带一份 current-subject proof：当前 `stage0/clean_text.txt` 的完整 SHA-1、所裁决正式
 产物的完整 SHA-256，以及决定本身的规范 JSON SHA-256。读取时必须重新走当前 schema、typed
@@ -1200,6 +1211,11 @@ Stage2 Global、Stage4 design/plan、Stage5 write、Stage6 hook 与 Stage7 renam
 允许触碰的正式/伴生路径和同书 foreign prepared 排斥：Global 是 `stage2-knowledge-v2` 且 per-node；
 Stage4 分别是 `stage4-design-v1` / `stage4-plan-v1` 且 per-node；Stage5 是 `stage5-write-v2` 且
 per-chapter；Hook 是 `stage6-hook-v1`、Rename 是 `stage7-rename-v1`，后二者均 per-node。
+
+Analyze 的联合首次提交另以 AnalyzeReceipt/AnalyzeRecoveryJournal 冻结两侧基线、局部到正式
+ID 映射及共享已购来源。Prepare 复用 agent_runs 的原请求/回答/checkpoint 保管，recovery policy
+为 `stage6-prepare-v1`、session 为 per-node；首次发布与免费修订/决定共用 PrepareMutationJournal
+冻结 CAS 目标，费用采用与会话尾账闭合后才 completed，不把它冒充第三份创作知识产物。
 
 Global 每个 accepted turn 保存完整 Knowledge candidate、MainText 身份和候选表身份；静态人物由
 独立 `stage2.characters` 完整候选负责。旧 role/fate 窄修信封、accepted patch 计数与编译入口退役。

@@ -916,6 +916,7 @@ class ChapterCharacter(StrictModel):
     actor_ref: ActorToken
     display_name: str = Field(min_length=1)
     surfaces: list[str] = Field(min_length=1)
+    surface_allowed_slots: dict[str, list[str]]
     role: str | None
     role_allowed_slots: list[str]
     allowed_slots: list[str] = Field(min_length=1)
@@ -978,6 +979,11 @@ class CtxChapter(StrictModel):
         for row in self.characters:
             if row.allowed_slots != [slot for slot in slots if slot in row.allowed_slots]:
                 raise ValueError('表面身份许可必须是场景唯一有序子集')
+            if (len(set(row.surfaces)) != len(row.surfaces) or row.display_name not in row.surfaces
+                    or set(row.surface_allowed_slots) != set(row.surfaces)
+                    or any(not allowed or allowed != [s for s in row.allowed_slots if s in allowed]
+                           for allowed in row.surface_allowed_slots.values())):
+                raise ValueError('每个公开称谓必须保留自己的完整有序场景许可，不能借公共人物范围扩大')
             if (row.role_allowed_slots != [slot for slot in row.allowed_slots if slot in row.role_allowed_slots]
                     or (row.role is None) != (not row.role_allowed_slots)):
                 raise ValueError('角色描述及其许可必须同时存在，且不得早于表面身份许可')

@@ -153,6 +153,11 @@ def build(*, sid: str, node: str, freshness: FreshnessReport,
         by_rule[o.rule] = o
 
     rules = registry.of_stage(stage)
+    if node == 'stage6.prepare':
+        # Prepare 是前置独立节点，其免费重验不能声称检查过尚未生成的 Hook。
+        # 范围只由契约中的两条原始注册对象决定；调用方没有任意删减规则的参数。
+        from contracts.judges.stage6 import PREPARE_RULES
+        rules = tuple(registry.get(rule.rule) for rule in PREPARE_RULES)
     if not rules:
         # 守卫的守卫：一份零判据的报告**看起来是绿的**，而它什么也没说。
         raise RefusedByStructure(

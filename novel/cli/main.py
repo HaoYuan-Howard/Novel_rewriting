@@ -749,6 +749,40 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
 
     tokens = set(N.flag_tokens(flags))
 
+    if ctx.node == 'stage6.prepare':
+        from contracts.artifacts import STAGE6_PREPARE_EDIT, STAGE6_PREPARE_REVIEW_DECISIONS
+        from contracts.schema import encode_artifact
+        from novel.stages.stage6 import prepare
+        from novel.store import ArtifactStore
+        store = ArtifactStore(ctx)
+        if '--dry-run' in tokens:
+            print(prepare.build_prompt(ctx))
+        elif '--emit-review-workpack' in tokens:
+            print(prepare.review_workpack(store).model_dump_json(by_alias=True))
+        elif '--emit-review-template' in tokens:
+            print(json.dumps(encode_artifact(STAGE6_PREPARE_REVIEW_DECISIONS,
+                prepare.review_template(store).model_dump(mode='json')), ensure_ascii=False))
+        elif '--emit-edit-template' in tokens:
+            print(json.dumps(encode_artifact(STAGE6_PREPARE_EDIT,
+                prepare.review_workpack(store).edit_template.model_dump(mode='json')), ensure_ascii=False))
+        elif '--apply-edit' in tokens:
+            prepare.run_apply_edit(ctx, _valued(flags, '--apply-edit') or '')
+        elif '--review-decisions' in tokens:
+            prepare.run_review_decisions(ctx, _valued(flags, '--review-decisions') or '')
+        elif '--recover-edit' in tokens:
+            prepare.run_recover_edit(ctx)
+        elif '--recover-prepared' in tokens:
+            prepare.recover_prepared(ctx,
+                source_run_id=_valued(flags, '--recover-prepared') or '',
+                subject_sha256=_valued(flags, '--subject-sha256') or '')
+        elif '--revalidate' in tokens:
+            report = prepare.run_check_only(ctx)
+            print(render(report))
+            return X.OK if report.passed else X.CHECK_FAILED
+        else:
+            prepare.run_prepare(ctx, _llm_client(ctx))
+        return X.OK
+
     if ctx.node in ('stage6.hook', 'stage6.semantic') and '--recover-prepared' in tokens:
         coordinates = {
             'source_run_id': _valued(flags, '--recover-prepared') or '',
@@ -2064,11 +2098,13 @@ def _cmd_run(a: argparse.Namespace) -> int:
     # 当前 typed closure 回执已打开 gate.s5。0 成本只读跑法（--check-only 等）
     # 仍可运行，否则人连开闸需要的证据都拿不到（R 系硬闸与恢复面同批交付）。
     prepared_delivery_recovery = (
-        a.node in ('stage6.hook', 'stage6.semantic', 'stage7.rename')
+        a.node in ('stage6.prepare', 'stage6.hook', 'stage6.semantic', 'stage7.rename')
         and run_tokens == {'--recover-prepared', '--subject-sha256'})
-    if (a.node in ('stage6.hook', 'stage6.semantic', 'stage7.rename', 'stage7.assemble')
+    prepared_delivery_recovery = prepared_delivery_recovery or (
+        a.node == 'stage6.prepare' and run_tokens == {'--recover-edit'})
+    if (a.node in ('stage6.prepare', 'stage6.hook', 'stage6.semantic', 'stage7.rename', 'stage7.assemble')
             and not prepared_delivery_recovery
-            and not run_tokens <= set(STAGE5_CLOSED_EXEMPT_FLAGS)):
+            and not (run_tokens and run_tokens <= set(STAGE5_CLOSED_EXEMPT_FLAGS))):
         from novel.stages.stage5 import closure as stage5_closure
         from novel.store import ArtifactStore
         stage5_closure.require_stage5_closed(ArtifactStore(ctx))

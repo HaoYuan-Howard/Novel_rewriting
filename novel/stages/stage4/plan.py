@@ -534,8 +534,9 @@ def _design_request(
     """Stage4A 首个策略请求与真发共用的唯一构造口。"""
     store = ArtifactStore(ctx)
     up = _DesignUpstream(ctx, store)
+    from novel.source_identity import artifact_body_root
     truth, mapping = build_blind_projection(
-        up.blueprints, root_clean_sha1=ctx.root_clean_sha1,
+        up.blueprints, root_clean_sha1=artifact_body_root(store, STAGE2_CHAPTER_BLUEPRINTS),
         knowledge_links=up.knowledge_links, global_g=up.global_g, characters=up.characters, main_text=up.main_text)
     projection = build_blind_strategy_projection(truth)
     system = prompts.blind_book_strategy_system()
@@ -1932,9 +1933,11 @@ def _design_chapter_contexts(
         int(row.get('chapter_ordinal') or 0): row
         for row in (prepared.truth.get('chapters') or [])
     }
+    from novel.source_identity import artifact_body_root
+    body_root = artifact_body_root(ArtifactStore(ctx), STAGE2_CHAPTER_BLUEPRINTS)
     epoch = strategy_epoch_sha256({
         'review_contract': DESIGN_REVIEW_CONTRACT,
-        'root_clean_sha1': ctx.root_clean_sha1,
+        'root_clean_sha1': body_root,
         'truth_sha256': str(prepared.mapping['truth_sha256']),
         'alias_algorithm': BLIND_ALIAS_ALGORITHM,
     }, strategy.reconstruction_strategy)
@@ -1942,7 +1945,7 @@ def _design_chapter_contexts(
     for ordinal in sorted(truth_by):
         projection, local_mapping = build_blind_chapter_projection(
             prepared.truth, prepared.mapping,
-            chapter_ordinal=ordinal, root_clean_sha1=ctx.root_clean_sha1)
+            chapter_ordinal=ordinal, root_clean_sha1=body_root)
         accepted = {
             'reconstruction_strategy': strategy.reconstruction_strategy,
             'chapter_ordinal': ordinal,

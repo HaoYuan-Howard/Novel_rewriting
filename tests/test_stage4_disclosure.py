@@ -101,6 +101,7 @@ def _inputs(knowledge=None, *, subjects=(), setting_chapter=1, relation_at_scene
         bps['blueprints'].append(chapter)
         main.append({'chapter_ordinal': ordinal, 'text': MAIN[0]['text']})
     for chapter in bps['blueprints']:
+        chapter['relation_uses'] = [_relation_ref(row['relation_id']) for row in knowledge['relations']]
         PlotBlueprint.model_validate(chapter)
     plan = identity_plan(bps, main)
     refs = [_relation_ref()] if knowledge['relations'] else []

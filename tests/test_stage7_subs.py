@@ -24,7 +24,7 @@ from pydantic import ValidationError
 from contracts.schema import decode_artifact
 from contracts.schema.stage7 import ExtraSub, NameDecision, NameMapEdit, Residual
 from novel import prov
-from novel.consumption import stage7_grounding
+from novel.consumption import stage7_characters
 from novel.core.naming import family_groups, strip_distinguisher, surface_owners
 from novel.errors import ApprovalRequired, BlockingFindingsUnresolved, TerminalState
 from novel.stages.stage7 import assemble, checks, prompts, rename
@@ -108,10 +108,10 @@ def test_rename_prompt_receives_the_typed_era_instead_of_an_alias_mismatch():
 def test_stage7_material_keeps_pure_titles_but_does_not_dispatch_a_ghost_family():
     """最终模型材料里人物仍在，但族群表不能把两个纯位号交成「皇姓一家」。"""
     registry = {
-        'char_001': {'canonical': '皇贵夫', 'name_distinctiveness': 'medium', 'address': []},
-        'char_002': {'canonical': '皇太女', 'name_distinctiveness': 'high', 'address': []},
-        'char_003': {'canonical': '王夫人', 'name_distinctiveness': 'medium', 'address': []},
-        'char_004': {'canonical': '王姑娘', 'name_distinctiveness': 'high', 'address': []},
+        'char_001': {'canonical': '皇贵夫', 'name_distinctiveness': 'medium', 'aliases': [{'surface': '皇贵夫'}, *[]]},
+        'char_002': {'canonical': '皇太女', 'name_distinctiveness': 'high', 'aliases': [{'surface': '皇太女'}, *[]]},
+        'char_003': {'canonical': '王夫人', 'name_distinctiveness': 'medium', 'aliases': [{'surface': '王夫人'}, *[]]},
+        'char_004': {'canonical': '王姑娘', 'name_distinctiveness': 'high', 'aliases': [{'surface': '王姑娘'}, *[]]},
     }
     book = '皇贵夫拜见皇太女，王夫人携王姑娘入宫。'
     groups, surnames, _accounting = family_groups(
@@ -286,11 +286,11 @@ def test_renamed_true_requires_a_real_canonical_or_alias_change():
     """真实改动必须绑定这个角色**实际收到**的 canonical/alias。"""
     registry = {
         'char_001': {
-            'canonical': '胖婶', 'address': [
+            'canonical': '胖婶', 'aliases': [
                 {'surface': '王婶'}, {'surface': '王婶'}, {'surface': '胖婶'},
             ],
         },
-        'char_002': {'canonical': '皇贵夫', 'address': []},
+        'char_002': {'canonical': '皇贵夫', 'aliases': [{'surface': '皇贵夫'}, *[]]},
     }
     mat = prompts.build_material(
         title='测试书', registry=registry, relations=[], era='架空古代',
@@ -354,7 +354,7 @@ def test_renamed_true_requires_a_real_canonical_or_alias_change():
 
 def test_removing_only_a_registry_distinguisher_is_not_a_real_rename():
     registry = {
-        'char_001': {'canonical': '皇贵夫(宫中消重标签)', 'address': []},
+        'char_001': {'canonical': '皇贵夫(宫中消重标签)', 'aliases': [{'surface': '皇贵夫(宫中消重标签)'}, *[]]},
     }
     mat = prompts.build_material(
         title='测试书', registry=registry, relations=[], era='架空古代',
@@ -935,40 +935,33 @@ def _atomic_harness(
     return ctx, store, retired
 
 
-def _stage7_grounding_with(*, role: str, fate: str | None = None) -> dict:
-    return {
-        'entities': {
-            'characters': {
-                'char_001': {
-                    'canonical': '沈清禾', 'role': role, 'fate': fate,
-                    'address': [{'surface': '沈娘子'}],
-                },
-            },
-            'relations': [],
-        },
-        'canon': {'setting': {'时代背景': '架空古代江南'}},
-    }
+def _stage7_characters_with(*, role: str, evidence: str = 'ev_before') -> dict:
+    return {'characters': {'char_001': {
+        'canonical': '沈清禾', 'role': role, 'name_distinctiveness': 'high',
+        'role_evidence_refs': [evidence],
+        'aliases': [{'surface': '沈清禾'}, {'surface': '沈娘子'}],
+    }}, 'evidence_anchors': {}}
 
 
 def _input_freshness_between(before: dict, after: dict):
-    key = rename.GLOBAL_GROUNDING
+    key = rename.STAGE2_CHARACTERS
     recorded = {
         key: {
             'file': 'before-file',
-            'consumed': prov.projection_fingerprint(stage7_grounding(before)),
+            'consumed': prov.projection_fingerprint(stage7_characters(before)),
         },
     }
     report = prov.freshness(
         recorded,
         file_now=lambda _key: 'after-file',
-        consumed_now=lambda _key: prov.projection_fingerprint(stage7_grounding(after)),
+        consumed_now=lambda _key: prov.projection_fingerprint(stage7_characters(after)),
     )
     return recorded, report
 
 
 def test_recheck_revokes_approval_after_role_drift_and_assemble_stays_closed(monkeypatch):
-    before = _stage7_grounding_with(role='县令之女')
-    after = _stage7_grounding_with(role='商户之女')
+    before = _stage7_characters_with(role='县令之女')
+    after = _stage7_characters_with(role='商户之女')
     recorded, freshness = _input_freshness_between(before, after)
     assert (freshness.state, freshness.reason) == ('stale', 'consumed_changed')
     ctx, store, _retired = _atomic_harness(
@@ -985,8 +978,8 @@ def test_recheck_revokes_approval_after_role_drift_and_assemble_stays_closed(mon
 
 
 def test_recheck_preserves_approval_when_only_an_unconsumed_field_changed(monkeypatch):
-    before = _stage7_grounding_with(role='县令之女', fate='最终留在故乡')
-    after = _stage7_grounding_with(role='县令之女', fate='最终远走他乡')
+    before = _stage7_characters_with(role='县令之女', evidence='ev_before')
+    after = _stage7_characters_with(role='县令之女', evidence='ev_after')
     recorded, freshness = _input_freshness_between(before, after)
     assert (freshness.state, freshness.reason) == ('fresh', 'match')
     ctx, store, _retired = _atomic_harness(
@@ -1001,8 +994,8 @@ def test_recheck_preserves_approval_when_only_an_unconsumed_field_changed(monkey
 
 
 def test_identity_revokes_approval_after_role_drift_and_assemble_stays_closed(monkeypatch):
-    before = _stage7_grounding_with(role='县令之女')
-    after = _stage7_grounding_with(role='商户之女')
+    before = _stage7_characters_with(role='县令之女')
+    after = _stage7_characters_with(role='商户之女')
     recorded, freshness = _input_freshness_between(before, after)
     assert (freshness.state, freshness.reason) == ('stale', 'consumed_changed')
     ctx, store, retired = _atomic_harness(
@@ -1042,8 +1035,8 @@ def test_identity_revokes_approval_when_old_inputs_are_unprovable(monkeypatch):
 
 
 def test_identity_preserves_approval_when_only_an_unconsumed_field_changed(monkeypatch):
-    before = _stage7_grounding_with(role='县令之女', fate='最终留在故乡')
-    after = _stage7_grounding_with(role='县令之女', fate='最终远走他乡')
+    before = _stage7_characters_with(role='县令之女', evidence='ev_before')
+    after = _stage7_characters_with(role='县令之女', evidence='ev_after')
     recorded, freshness = _input_freshness_between(before, after)
     assert (freshness.state, freshness.reason) == ('fresh', 'match')
     ctx, store, retired = _atomic_harness(

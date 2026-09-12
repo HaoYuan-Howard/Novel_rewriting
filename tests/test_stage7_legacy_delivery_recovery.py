@@ -29,7 +29,7 @@ def _rig(tmp_path, monkeypatch, *, cached=False):
         {'chapter_ordinal': 1, 'text': '张明走到门前。'},
         {'chapter_ordinal': 2, 'text': '张明带着信回来了。'},
     ]))
-    registry = {'char_001': {'canonical': '张明', 'address': [], 'role': '主角'}}
+    registry = {'char_001': {'canonical': '张明', 'aliases': [{'surface': '张明'}, *[]], 'role': '主角'}}
     source_text = '张明走到门前。张明带着信回来了。'
     owners = surface_owners(registry)
     groups, surnames, _how = family_groups(registry, source_text, owners)

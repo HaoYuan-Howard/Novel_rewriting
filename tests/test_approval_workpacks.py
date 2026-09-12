@@ -10,6 +10,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from tests.factories import missing_prepare_state
 from pydantic import ValidationError
 
 from contracts.invariants import (
@@ -613,6 +615,7 @@ def _approval_doc(
     subjects, structure: StructureApprovalView,
 ) -> ApprovalDoc:
     return ApprovalDoc(
+        prepare=missing_prepare_state(),
         sid=SID,
         gate={key: False for key in APPROVAL_GATES},
         seen={key: False for key in APPROVAL_SEEN},

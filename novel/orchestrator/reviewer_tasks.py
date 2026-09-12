@@ -42,6 +42,7 @@ from contracts.invariants import (
     STAGE5_CLOSURE_GROUPS,
     STAGE5_MUST_APPEAR_RULINGS,
     STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES,
+    STAGE6_PREPARE_DECISIONS,
     STRUCTURE_APPROVAL_DECISIONS,
 )
 from contracts.schema import ArtifactVersionError, decode_artifact, encode_artifact
@@ -192,6 +193,7 @@ _NODE_FOR_BLOCKER: dict[str, frozenset[str]] = {
     # 只能填写 hash-bound batch manifest，Supervisor 只执行 0 成本 node action；
     # ready/expired 时才由下方 approval 注册表开放闭合回执。
     queue.WAITING_ON_STAGE5_CLOSURE: frozenset({'stage5.review'}),
+    queue.WAITING_ON_STAGE6_PREPARE: frozenset({'stage6.prepare'}),
     'stage6.approve': frozenset({'stage6.approve'}),
     'stage7.approve': frozenset({'stage7.approve'}),
 }
@@ -678,6 +680,10 @@ def _workpack(
                 *cli, 'approval', 'template', 'stage5', sid, '--base', base,
                 '--actor', _ACTOR, '--reason', _REASON]),
         }
+    if waiting_on == queue.WAITING_ON_STAGE6_PREPARE:
+        return {'prepare': _json_command([
+            *cli, 'run', 'stage6.prepare', sid, '--base', base,
+            '--emit-review-workpack'])}
     if waiting_on == 'stage6.approve':
         return {'stage6': _json_command([
             *cli, 'approval', 'workpack', 'stage6', sid, '--base', base])}
@@ -724,6 +730,9 @@ def approval_review_token(
                 payload.get('review_token')
                 if isinstance(payload, Mapping) else None)
         elif action.get('kind') == 'node':
+            payload = action.get('input_payload')
+            if action.get('node') == 'stage6.prepare' and isinstance(payload, Mapping):
+                token = payload.get('review_token')
             flags = action.get('flags')
             if isinstance(flags, list) and '--review-token' in flags:
                 marker = flags.index('--review-token') + 1
@@ -765,6 +774,9 @@ def replay_request_document(
                             else STAGE2_GLOBAL_REVIEW_DECISIONS if '--review-decisions' in record.flags
                             else STAGE2_GLOBAL_EDIT)
                 payload = decode_artifact(artifact, payload).payload
+            elif record.node == 'stage6.prepare':
+                from contracts.artifacts import STAGE6_PREPARE_REVIEW_DECISIONS
+                payload = decode_artifact(STAGE6_PREPARE_REVIEW_DECISIONS, payload).payload
             action['input_payload'] = payload
     else:
         action = {
@@ -915,6 +927,7 @@ def stage5_trim_partial_replay_options(
         rel = artifact_rel('stage5.trim_resolution', nn=row.output_ordinal)
         try:
             resolution, _raw = store.read_own(TrimResolution, rel)
+            resolution_root = trim_resolution.current_resolution_root(store, resolution, rel)
         except (
             ArtifactUnreadable, ProvenanceRefused, TerminalState,
             UpstreamMissing, UpstreamStale,
@@ -928,7 +941,7 @@ def stage5_trim_partial_replay_options(
             actor=request.actor,
             reason=row.reason.strip(),
             audit_sha256=row.audit_sha256,
-            root_clean_sha1=ctx.root_clean_sha1,
+            root_clean_sha1=resolution_root,
         ):
             raise ReviewerTaskError(
                 f'Stage5 durable batch 已落前缀第 {row.output_ordinal} 章与原决定'
@@ -1542,6 +1555,24 @@ def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
 def _review_materials(
     pack: dict[str, Any], waiting_on: str,
 ) -> dict[str, Any]:
+    if waiting_on == queue.WAITING_ON_STAGE6_PREPARE:
+        from novel.stages.stage2.paragraphs import render_numbered
+
+        # API 工作包保留正式证据；模型只看同一候选段号的反投影，避免把
+        # SourceSpan.text 与完整原文重复购买。编号与编译器使用同一张段表。
+        source = pack['prepare']
+        visible = {key: copy.deepcopy(value) for key, value in source.items()
+                   if key not in {'edit_template', 'decision_template'}}
+        visible['state'].pop('prepare')
+        visible['candidate_source_blurb'] = copy.deepcopy(
+            source['edit_template']['source_blurb'])
+        for chapter in visible['main_text']:
+            chapter['text'] = render_numbered(chapter['text'])
+        visible['hook_copy']['text'] = render_numbered(visible['hook_copy']['text'])
+        visible['paragraph_contract'] = (
+            '每段行首 <n> 是该章 start_para/end_para 候选；正文按 chapter_ordinal '
+            '逐章独立编号，原钩子另从 1 编号。事实和连续范围只引用这些段号。')
+        return {'prepare': visible}
     if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
         return {'blueprint': copy.deepcopy(pack['blueprint'])}
     if waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN:
@@ -2113,6 +2144,10 @@ def _submission_options(pack: dict[str, Any], current: OperatorNext,
                         waiting_on: str) -> list[dict[str, Any]]:
     if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
         return _blueprint_submission_options(pack, current, waiting_on)
+    if waiting_on == queue.WAITING_ON_STAGE6_PREPARE:
+        # uncertain 必须落独立 PrepareDecision/Review；不再增加只结束席位、
+        # 却没有准备审阅决定的通用 uncertain option。stop 已由本 owner 提供。
+        return _registered_submission_options(pack, current, waiting_on)
     if waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON:
         return _terminal_review_options(
             _registered_submission_options(pack, current, waiting_on), current, waiting_on)
@@ -2831,6 +2866,26 @@ def _registered_submission_options(
             },
         )]
 
+    if waiting_on == queue.WAITING_ON_STAGE6_PREPARE:
+        from contracts.schema.stage6_prepare import PrepareWorkpack
+        workpack = PrepareWorkpack.model_validate(pack['prepare'])
+        payload = workpack.decision_template.model_dump(mode='json')
+        payload.update(actor=_ACTOR, reason=_REASON, edit=None)
+        request = _request_wrapper(current, waiting_on, {
+            'kind': 'node', 'node': 'stage6.prepare',
+            'flags': ['--review-decisions', '@reviewer-input'], 'input_payload': payload})
+        stop = _request_wrapper(current, waiting_on, {'kind': 'stop', 'reason': _REASON})
+        option = _option('node:stage6.prepare:decision', request,
+            editable_fields=['action.input_payload.decision/reason/edit'],
+            binding_fields=bind + ['action.node/flags', 'action.input_payload.actor/review_token/source_sha256'],
+            allowed_values={'decision': list(STAGE6_PREPARE_DECISIONS),
+                'edit': '可选当前 PrepareDraft 整体免费订正；actor/reason/来源由可信组装器冻结'},
+            )
+        option['prepare_input_binding'] = {
+            key: getattr(workpack.edit_template, key)
+            for key in ('review_token', 'source_sha256', 'main_text_sha256', 'hook_copy_sha256')}
+        return [option, _option('stop:stage6.prepare', stop,
+            editable_fields=['action.reason'], binding_fields=bind + ['action.kind'])]
     if waiting_on == 'stage6.approve':
         token = pack['stage6'].get('review_token')
         if not isinstance(token, str):
@@ -4351,6 +4406,28 @@ def load_action(
             # producer 用字段缺席表示保留原值；不能在运输时给稀疏补丁补 null。
             input_payload = encode_artifact(
                 STAGE2_BLUEPRINT_EDIT, edit.model_dump(mode='json', exclude_unset=True))
+        elif node == 'stage6.prepare':
+            from contracts.artifacts import STAGE6_PREPARE_REVIEW_DECISIONS
+            from contracts.schema.stage6_prepare import PrepareDecision
+            if tuple(flags) != ('--review-decisions', '@reviewer-input') or input_payload is None:
+                raise ReviewerTaskError('Prepare Commander 只接受当前独立 typed 决定')
+            expected = _non_stage2_node_submission_template(body, submission_options)['input_payload']
+            try:
+                decision = PrepareDecision.model_validate(input_payload)
+            except ValidationError as exc:
+                raise ReviewerTaskError(_typed_validation_reason('Prepare 决定形状不合法', exc)) from exc
+            for key in ('actor', 'review_token', 'source_sha256'):
+                if getattr(decision, key) != expected[key]:
+                    raise ReviewerTaskError(f'Prepare 决定绑定字段 {key} 不可修改')
+            if decision.edit is not None:
+                selected = [option for option in submission_options or ()
+                    if option.get('exact_request', {}).get('action', {}).get('node') == node]
+                binding = selected[0].get('prepare_input_binding') if len(selected) == 1 else None
+                if not isinstance(binding, dict) or any(
+                        getattr(decision.edit, key) != value for key, value in binding.items()):
+                    raise ReviewerTaskError('Prepare 编辑必须逐字保留当前材料与 token 绑定')
+            input_payload = encode_artifact(STAGE6_PREPARE_REVIEW_DECISIONS,
+                decision.model_dump(mode='json'))
         elif node == 'stage5.review':
             allowed_stage5_flags = {
                 ('--retain-pretrim-batch', '@reviewer-input'),

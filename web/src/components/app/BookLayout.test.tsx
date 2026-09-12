@@ -1,3 +1,4 @@
+import { missingPrepareState } from '@/test/prepare'
 import { api } from '@/api/endpoints'
 import { useLocation } from 'react-router-dom'
 import { qk } from '@/api/queryKeys'
@@ -9,7 +10,7 @@ import { Rail } from './Rail'
 import type { ApprovalDoc } from '@/types/approvals'
 
 const pending: ApprovalDoc = {
-  v: 7,
+  v: 8, prepare: missingPrepareState(),
   sid: 'book-1',
   gate: { s0: false, s1: false, s2: false, s4: false, s5: false, s6: false, s7: false },
   seen: { read: false, global: false },

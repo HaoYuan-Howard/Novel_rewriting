@@ -217,12 +217,18 @@ ActorBinding，不因称呼不同创造两个身份。BlindReferenceMaps 的 par
 完整 ActorRef，不能按 char_id 去重；PlanGoal 同样保留完整呈现引用。
 
 WriterContext 只下发独立的 opaque `actor_ref` 与公开称谓，所有人物位置使用同一目录；
-不下发 char_id、presentation_ref、反向映射或共同实体分组。不同呈现使用不同 token，
+不下发 char_id、presentation_ref、反向映射或共同实体分组。不同呈现默认使用不同 token，
 关系命题及知识事件的公开标识也绑定完整呈现，不能通过共同 rel_ID 或义务 ID 泄底。显式表面身份只可引用有据
 公开 State 的角色描述；role 只在 role_allowed_slots 许可场景表达，不继承真实身份的 role。
 角色描述还受该 State 的成立、解除和替代端点约束：解除场包含在有效窗口内，之后不再作为
 当前角色描述。State 本身仍按披露许可保留为历史命题，不能因 role 失效删除历史事实。
 缺失/歧义保留候选并交 Blueprint/Plan owner 免费订正，不择首项或回退 canonical。
+
+跨章普通称谓只有在两个绑定各自至少一个登记称谓的 identity_revealed_from 严格早于
+当前章、且登记归属相同时，才归一为同一公开 token；不要求重复的字面称谓，也不为普通昵称
+制造身份事件。归一保留双方有据称谓。每个称谓另有 surface_allowed_slots：此前原文已出现的
+称谓沿当前人物使用范围；本章首次出现的称谓从支持它的实际 Beat 呈现场开始，不能借同一
+actor_ref 的早场使用提前开放。角色描述仍服从各自公开 State，不同角色描述不能择首项。
 
 KnowledgeLinks 的 identity_actors 编译为现有表面身份 token 列表；只有对应事件开放后才允许
 陈述同人关系。标量 identity_revealed_from 不替代同章场景端点；称谓字面可出现不代表身份
@@ -242,6 +248,12 @@ Blueprint、盲规划、绑定与 Writer 共用该判据；真正唯一的此前
 及 KnowledgeLinks 端点控制读者许可，不要求两种时间先后。已经结束的事实可以作为历史披露，
 提前透露未来事实也合法。规则引用精确到 rule_id/version_id；secret.fact_ref 展开关系时必须有
 唯一明确的实际关系呈现，缺失或多义不猜端点。完整自由文本仍由语义审阅核查。
+
+关系披露同时绑定已接受 KnowledgeLinks 决定支持的公开端点：优先取明确支持 State 的
+global_ref；仅有 Beat 支持时，必须在其来源章实际关系 use 中唯一定位。默认内部实体端点
+不能充当披露证明。当前 use 与已公开端点不同，只能通过现有 identity_actors 端点连接，
+两端映射许可与关系披露许可取交集；secret.fact_ref、知识事件与目标使用同一守卫。
+没有映射则不下发该呈现的关系真相；支持缺失或多义交 Blueprint/KnowledgeLinks 免费订正。
 
 `Blueprint.relation_uses` 只声明本章实际关系使用的两端呈现，不重复关系正文或强造 State。
 知识义务中的默认实体端点不是呈现许可：仅记录事实成立、没有本章实际 use 的事件可保留内部

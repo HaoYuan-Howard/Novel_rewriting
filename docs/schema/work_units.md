@@ -1,13 +1,14 @@
 # 工作单元与人工追加
 
-当前运行根由 `WorkflowManifestV5` 标记 `stage2-actor-v1` 与 `joint-analysis-actor-presentations-v1`。
+当前运行根由 `WorkflowManifestV6` 标记 `stage6-prepare-v1` 与 `independent-hook-preparation-v1`。
 `artifact_versions` 保存当前版本快照，产物读取仍以现役 schema 为准。普通入口只读当前 manifest，
 独立空根初始化时 `transition_ref=null`；既有 manifest v1/v2/v3 和 ledger v1 不迁移、不补版本。
-仅明确登记的 v4 → v5 可以经离线 `workflow transition` 免费推进：prepared 固定源/目标原字节、
+仅明确登记的 v4 → v5、v5 → v6 可以经离线 `workflow transition` 免费推进：prepared 固定源/目标原字节、
 冻结代码、原 task_id/created_at、实际 Core 接受、owner 排空及全盘保留清单，completed 闭合后才放行
 当前写口。目标 `transition_ref` 绑定 transition_id 与 source_manifest_sha256；缺 completed 不自动恢复。
 人物投影可按冻结 Characters/MainText 免费重编译呈现绑定，其源/目标字节同属 CAS；人物、Global、
 profiles、审批、已购回答和所有工作单元累计账保持原字节。不以旧 gate bool 继承批准，也不为升级重发额度。
+v5 → v6 使用独立 prepared v2，原冻结代码必须另行证明 Stage5 当前闭合；保留全部 Stage4–5 产物、审批和历史，不重编译投影，仅拒绝 Stage6/7 已存在的产物、INVALID、checkpoint 或已购来源。旧 v4 → v5 回执与恢复保持原形，普通写口只接当前 v6。
 操作及中断补尾见 `docs/OPERATIONS.md`。其他存量仍由与原审计匹配的冻结代码恢复，不能删账换取预算。
 
 `WorkUnitLedgerV2` 位于 `novel/paths.py::work_unit_dir`。工作单元身份仍由工作流任务、书、

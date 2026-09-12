@@ -1,4 +1,5 @@
 import type { RunMetrics } from '@/types/runMetrics'
+import type { PrepareView, PrepareWorkpack, PrepareEditPreview } from '@/types/prepare'
 import type { PlotEdit, PlotEditPreview, BlueprintRefinementCatalog } from '@/types/plot.generated'
 /**
  * 唯一的数据缝。屏与组件只认这个文件导出的 `api`。
@@ -437,6 +438,14 @@ export const realApi: Api = {
   getReview: (sid, o) => get<ReviewResponse>(n(sid) + '/review/' + o),
   getInbox: (sid) => get<InboxResponse>(n(sid) + '/inbox'),
   getStage6: (sid) => get<Stage6Response>(n(sid) + '/stage6'),
+  getStage6Prepare: (sid) => get<PrepareView>(n(sid) + '/stage6/prepare'),
+  getStage6PrepareWorkpack: (sid) => get<PrepareWorkpack>(n(sid) + '/stage6/prepare/workpack'),
+  previewStage6PrepareEdit: (sid, req) =>
+    post<PrepareEditPreview>(n(sid) + '/stage6/prepare/edit/preview', req),
+  applyStage6PrepareEdit: async (sid, req) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage6/prepare/edit', req)),
+  reviewStage6Prepare: async (sid, req) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage6/prepare/review', req)),
   getStage7: (sid) => get<Stage7Response>(n(sid) + '/stage7'),
   getStage7Chapter: (sid, o) => get<Stage7Response>(n(sid) + '/stage7/' + o),
   getStage7Book: (sid) => getText(n(sid) + '/stage7/book.txt'),

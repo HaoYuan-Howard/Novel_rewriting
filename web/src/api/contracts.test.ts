@@ -57,11 +57,12 @@ describe('request-shaped cache and diagnostics', () => {
     await expect(mockApi.getCheck(SAMPLE_SID, 'stage2')).rejects.toMatchObject({ status: 501 })
   })
 
-  it('旧本地审批不能升级为新契约接受或写作授权', async () => {
+  it.each([6, 7])('旧 v%s 本地审批不能升级为新契约接受或写作授权', async (version) => {
     const key = 'nrc.v1.approvals.' + SAMPLE_SID
-    localStorage.setItem(key, JSON.stringify({ v: 6, gate: { s2: true, s4: true }, writing: true }))
+    localStorage.setItem(key, JSON.stringify({ v: version, gate: { s2: true, s4: true }, writing: true }))
     const current = await mockApi.getApprovals(SAMPLE_SID)
-    expect(current.v).toBe(7)
+    expect(current.v).toBe(8)
+    expect(current.prepare.state).toBe('unknown')
     expect(current.gate.s2).toBe(false)
     expect(current.gate.s4).toBe(false)
     expect(current.writing).toBe(false)
@@ -77,7 +78,8 @@ describe('request-shaped cache and diagnostics', () => {
       chapters: [{ output_ordinal: 1, decision: 'accept', reason: '本章可执行' }],
     }
     const response = {
-      v: 7,
+      ...await mockApi.getApprovals(SAMPLE_SID),
+      v: 8,
       sid: 'book /1',
       gate: {
         s0: true, s1: true, s2: true,
@@ -141,7 +143,8 @@ describe('request-shaped cache and diagnostics', () => {
       })),
     }
     const response = {
-      v: 7,
+      ...await mockApi.getApprovals(SAMPLE_SID),
+      v: 8,
       sid: 'book /1',
       gate: {
         s0: true, s1: true, s2: true,

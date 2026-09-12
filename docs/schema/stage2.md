@@ -38,8 +38,9 @@ terminal 等待人工后继时存活，不计作阶段输出：
 | `stage2/global_edit_failure.json` | `GlobalEditFailure` v1 | `stage2.global` 内部恢复事实 | reviewed 动作精确区分 `canonical_pending / hard_gate / candidate_validation / post_edit_review` 并绑定 failed edit、修前 formal、source/workpack；普通 edit 以 `ordinary_hard_gate / ordinary_candidate_validation` 留下不伪造 reviewed 身份的 terminal |
 | `stage2/global_edit_commit.json` | `GlobalEditCommit` v3 | `stage2.global` 内部 WAL | 在改知识/review/INVALID/failure 前冻结 baseline、完整 typed target 与正式渲染 SHA；`action_kind` 区分 `apply_edit / revalidate`，后者从 target audit 冻结原 actor/reason，generic INVALID 可用 `null` 精确表达没有 action-owned canonical edit identity/既有 formal |
 
-正式产物与人工输入都使用当前 Pydantic StrictModel，未知字段拒收。新链使用干净数据根，
-旧根配对旧代码保留；不自动迁移旧事实、补字段或继承旧审批。GlobalEdit v1～v5 不能提交当前 v6 写口。
+正式产物与人工输入都使用当前 Pydantic StrictModel，未知字段拒收。新根初始化当前 manifest；
+旧根配对旧代码保留，符合 `docs/schema/work_units.md` 的已登记版本对只能显式离线过渡，
+不自动迁移旧事实、补字段或继承旧审批。GlobalEdit v1～v5 不能提交当前 v6 写口。
 
 ## 人物订正后的免费知识重绑
 
@@ -325,7 +326,8 @@ typed 编辑与完整 owner 修订均继承已退休集合，并追加本轮删�
 ### Headless Reviewer 与真实 producer
 
 完整 canonical action 沿用 `novel-reviewer-action-v1`。唯一 scope 决定使用
-`novel-stage2-scope-review-delta-v1`，唯一 GlobalEdit 使用 `novel-stage2-reviewer-delta-v2`。
+`novel-stage2-scope-review-delta-v1`，唯一 GlobalEdit 使用 `novel-stage2-reviewer-delta-v3`；
+多选项或非单一 scope 使用 `novel-stage2-core-review-choice-v1` 绑定完整 options 与所选请求。
 Supervisor 仅从 immutable exact request 注入 actor、身份、SHA、覆盖章集合与固定 wrapper；
 provider 只提交开放的值。patch 行必须是模板的无重复有序子序列，collection 仅开放当前
 模板允许的固定键。空数组/null 表示本次不提交，不能自动生成 no-op 业务编辑。异常字段、

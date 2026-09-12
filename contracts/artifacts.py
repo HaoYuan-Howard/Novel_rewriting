@@ -61,6 +61,11 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage5.trim_audit': 'stage5/trim_audit_ch{nn}.json',
     'stage5.trim_resolution': 'stage5/trim_resolution_ch{nn}.json',
     'stage5.wontfix': 'stage5/wontfix.json',
+    'stage6.prepare': 'stage6/prepare.json',
+    'stage6.prepare_edit': 'stage6/prepare_edit.json',
+    'stage6.prepare_review': 'stage6/prepare_review.json',
+    'stage6.prepare_review_decisions': 'stage6/prepare_review_decisions.json',
+    'stage6.prepare_commit': 'stage6/prepare_commit.json',
     'stage6.hook': 'stage6/hook.json',
     'stage6.hook_edit': 'stage6/hook_edit.json',
     'stage6.semantic': 'stage6/semantic_{n}.json',
@@ -155,6 +160,11 @@ STAGE5_REVIEW = artifact_rel('stage5.review')
 STAGE5_TRIM_AUDIT = artifact_rel('stage5.trim_audit')
 STAGE5_TRIM_RESOLUTION = artifact_rel('stage5.trim_resolution')
 STAGE5_WONTFIX = artifact_rel('stage5.wontfix')
+STAGE6_PREPARE = artifact_rel('stage6.prepare')
+STAGE6_PREPARE_EDIT = artifact_rel('stage6.prepare_edit')
+STAGE6_PREPARE_REVIEW = artifact_rel('stage6.prepare_review')
+STAGE6_PREPARE_REVIEW_DECISIONS = artifact_rel('stage6.prepare_review_decisions')
+STAGE6_PREPARE_COMMIT = artifact_rel('stage6.prepare_commit')
 STAGE6_HOOK = artifact_rel('stage6.hook')
 STAGE6_HOOK_EDIT = artifact_rel('stage6.hook_edit')
 STAGE6_SEMANTIC = artifact_rel('stage6.semantic')

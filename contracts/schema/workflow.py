@@ -33,8 +33,8 @@ class WorkflowManifestV4(FrozenModel):
     created_at: int
 
 
-class PipelineArtifactVersions(FrozenModel):
-    """Gate B 当前快照；V4 的冻结字面值不能随新 producer 漂移。"""
+class PipelineArtifactVersionsV5(FrozenModel):
+    """Gate B 冻结快照；不能随新 producer 漂移。"""
     characters: Literal[2] = 2
     global_grounding: Literal[7] = 7
     analyze_receipt: Literal[1] = 1
@@ -57,6 +57,27 @@ class WorkflowManifestV5(FrozenModel):
     schema_version: Literal[5] = 5
     contract_version: Literal['stage2-actor-v1'] = 'stage2-actor-v1'
     pipeline_contract_epoch: Literal['joint-analysis-actor-presentations-v1'] = 'joint-analysis-actor-presentations-v1'
+    artifact_versions: PipelineArtifactVersionsV5 = Field(default_factory=PipelineArtifactVersionsV5)
+    task_id: Sha256
+    created_at: int
+    transition_ref: WorkflowTransitionRefV1 | None = None
+
+
+class PipelineArtifactVersions(PipelineArtifactVersionsV5):
+    """Gate C 当前快照；准备、文案和改名分别保有自己的来源身份。"""
+    stage6_prepare: Literal[1] = 1
+    stage6_prepare_edit: Literal[1] = 1
+    stage6_prepare_review: Literal[1] = 1
+    stage6_prepare_decision: Literal[1] = 1
+    hook: Literal[4] = 4
+    hook_semantic_review: Literal[3] = 3
+    name_map: Literal[3] = 3
+
+
+class WorkflowManifestV6(FrozenModel):
+    schema_version: Literal[6] = 6
+    contract_version: Literal['stage6-prepare-v1'] = 'stage6-prepare-v1'
+    pipeline_contract_epoch: Literal['independent-hook-preparation-v1'] = 'independent-hook-preparation-v1'
     artifact_versions: PipelineArtifactVersions = Field(default_factory=PipelineArtifactVersions)
     task_id: Sha256
     created_at: int
@@ -75,6 +96,15 @@ class WorkflowTransitionProofV1(FrozenModel):
     owner_ids: tuple[str, ...]
     counts: dict[str, int]
     accepted_books: dict[str, WorkflowTransitionBookProofV1]
+
+
+class WorkflowTransitionBookProofV2(WorkflowTransitionBookProofV1):
+    closure_sha256: Sha256
+
+
+class WorkflowTransitionProofV2(WorkflowTransitionProofV1):
+    """V5 来源额外证明 Stage5 闭合；旧 Core proof 不获得此资格。"""
+    accepted_books: dict[str, WorkflowTransitionBookProofV2]
 
 
 class WorkflowTransitionProjectionV1(FrozenModel):
@@ -121,6 +151,18 @@ class WorkflowTransitionPreparedV1(FrozenModel):
                 or len(set(self.stopped_pids)) != len(self.stopped_pids)
                 or any(pid <= 0 for pid in self.stopped_pids)):
             raise ValueError('迁移须提供合法唯一端口/PID，以及明确 actor/reason')
+        return self
+
+
+class WorkflowTransitionPreparedV2(WorkflowTransitionPreparedV1):
+    """V5→V6 不重编译任何已验收产物，保留 V1 的独立历史恢复。"""
+    schema_version: Literal[2] = 2
+    source_proof: WorkflowTransitionProofV2
+
+    @model_validator(mode='after')
+    def _no_projection_rewrite(self) -> WorkflowTransitionPreparedV2:
+        if self.projections:
+            raise ValueError('V5→V6 不允许改写原人物投影或其他产物')
         return self
 
 

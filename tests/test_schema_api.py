@@ -8,7 +8,7 @@ test_schema_api.py —— HTTP 响应模型的载体层守卫（`docs/schema/_ap
   ② **契约层不许手抄取值面**（`Literal['a','b']`）：取值面的唯一落点是 `invariants`。
   ③ **契约层不许背上 web 栈**：离线产 TS 类型的脚本一行 HTTP 都不发。
 
-⚠ 本文件**不需要 fastapi**。ApprovalDoc v7 还须关闭式拒绝退役的 s3 gate。
+⚠ 本文件**不需要 fastapi**。ApprovalDoc v8 还须关闭式拒绝退役的 s3 gate。
 """
 from __future__ import annotations
 
@@ -116,6 +116,9 @@ def test_global_evidence_fixture_matches_its_archived_source_snapshot():
 
 def test_plot_flow_fixtures_are_closed_current_http_and_review_views():
     from novel.api.enums import payload as enum_payload
+    from contracts.schema.api import (GlobalReviewView, InboxView,
+        Stage6PrepareView, Stage6PrepareWorkpack, Stage6ApprovalWorkpack,
+        Stage7ApprovalWorkpack)
 
     captured = json.loads((ROOT / 'web/src/fixtures/plot_v1/flow.json').read_text(
         encoding='utf-8'))
@@ -140,11 +143,39 @@ def test_plot_flow_fixtures_are_closed_current_http_and_review_views():
         'http:check/stage2': CheckReport,
         'http:check/stage5': CheckReport,
     }
-    # enums 的唯一取值面由纯发布器产生，刻意不另造一套响应模型。
-    assert captured.keys() == models.keys() | {'api:enums'}
+    # 同一次贯通分别保留 Stage5 前检查点与最终交付，不把最终接受盖到旧材料上。
+    models.update({f'final:{name}': model for name, model in list(models.items())
+                   if name.startswith('http:')})
+    models.update({
+        'final:http:inbox': InboxView,
+        'final:http:stage2/global-review': GlobalReviewView,
+        'final:http:stage6/prepare': Stage6PrepareView,
+        'final:http:stage6/prepare/workpack': Stage6PrepareWorkpack,
+        'final:http:stage6': Stage6View,
+        'final:http:stage7': Stage7View,
+        'final:http:approvals/stage6/workpack': Stage6ApprovalWorkpack,
+        'final:http:approvals/stage7/workpack': Stage7ApprovalWorkpack,
+        'final:http:approvals/design/workpack': ApprovalWorkpack,
+        'final:http:approvals/structure/workpack': ApprovalWorkpack,
+        'final:http:check/stage4': CheckReport,
+        'final:http:check/stage6': CheckReport,
+        'final:http:check/stage7': CheckReport,
+        **{f'final:http:stage5/{ordinal}': Stage5View for ordinal in range(1, 4)},
+        **{f'final:http:review/{ordinal}': ReviewView for ordinal in range(1, 4)},
+        **{f'final:http:stage7/{ordinal}': Stage7View for ordinal in range(1, 4)},
+    })
+    # enums 唯一取值面由纯发布器产生；下载仍为纯文本，不伪造 JSON 响应。
+    assert captured.keys() == models.keys() | {'api:enums', 'metadata', 'final:http:stage7/book.txt'}
     assert captured['api:enums'] == enum_payload()
     for name, model in models.items():
         model.model_validate(captured[name])
+    assert captured['metadata']['synthetic'] is True
+    assert captured['metadata']['sid'] == captured['final:http:overview']['sid']
+    assert '顾清棠' in captured['final:http:stage7/book.txt']
+    assert '李宝珠' not in captured['final:http:stage7/book.txt']
+    assert captured['final:http:approvals']['prepare'] == captured['final:http:stage6/prepare']['status']
+    assert captured['final:http:stage6/prepare']['status']['state'] == 'accepted'
+    assert captured['final:http:approvals/stage6/workpack']['disposition'] == 'already_current'
     for stage in ('stage2', 'stage5'):
         check = CheckReport.model_validate(captured['http:check/' + stage])
         assert [line.rule for line in check.rules] == sorted(
@@ -519,13 +550,16 @@ def test_the_contract_layer_never_imports_the_web_stack():
     assert 'pydantic' in mods, 'pydantic 都没 import 到——AST 多半解析错了'
 
 
-def test_approval_doc_v7_has_exactly_the_current_seven_gates():
+def test_approval_doc_v8_has_exactly_the_current_seven_gates():
     payload = {
-        'v': 7,
+        'v': 8,
         'sid': '123',
         'gate': {gate: False for gate in APPROVAL_GATES},
         'seen': {'read': False, 'global': False},
         'writing': False,
+        'prepare': {'state': 'missing', 'reason': '尚未生成文案准备',
+            'subject_sha256': None, 'review_token': None, 'prepare': None,
+            'review': None, 'pending_commit': False},
         'structure': {
             'state': 'unavailable', 'current_subject_sha256': None,
             'current_decision': None, 'history': [],
@@ -534,6 +568,8 @@ def test_approval_doc_v7_has_exactly_the_current_seven_gates():
     }
     doc = ApprovalDoc.model_validate(payload)
     assert set(doc.gate) == {'s0', 's1', 's2', 's4', 's5', 's6', 's7'}
+    with pytest.raises(ValidationError):
+        ApprovalDoc.model_validate({**payload, 'v': 7})
     with pytest.raises(ValidationError):
         ApprovalDoc.model_validate({
             **payload,

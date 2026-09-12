@@ -102,7 +102,7 @@ from novel.orchestrator import (
     review_seats, reviewer_action_evidence, reviewer_seat_ledger,
     reviewer_protocol_recovery, reviewer_schema_recovery, reviewer_revalidation,
     reviewer_tasks, service_lifecycle,
-    stage2_reviewer_wire, stage4_reviewer_wire, state, uploads,
+    stage2_reviewer_wire, stage4_reviewer_wire, stage6_prepare_wire, state, uploads,
 )
 from novel.orchestrator.agent_supervisor import (
     CommanderTurnResult, LaunchTicket, PrelaunchIdentityDrift, RunSupervisor,
@@ -1041,6 +1041,16 @@ def _stage2_reviewer_input(
 
 
 @contextmanager
+def _prepare_reviewer_input(base: str, sid: str, action) -> Iterator[Path]:
+    """保留内容寻址的原决定；CLI 完成与中断都可从同一 durable 输入恢复。"""
+    from contracts.artifacts import STAGE6_PREPARE_REVIEW_DECISIONS
+    from contracts.schema.stage6_prepare import PrepareDecision
+    decoded = decode_artifact(STAGE6_PREPARE_REVIEW_DECISIONS, action.input_payload)
+    request = PrepareDecision.model_validate(decoded.payload)
+    yield uploads.save_prepare_input(base, sid, request)
+
+
+@contextmanager
 def _stage5_trim_reviewer_input(
         base: str, sid: str, action: reviewer_tasks.ReviewerNodeAction,
 ) -> Iterator[Path]:
@@ -1134,6 +1144,8 @@ def _reviewer_node_flags(
         return
     if action.node == 'stage2.global':
         input_context = _stage2_reviewer_input(base, sid, action)
+    elif action.node == 'stage6.prepare':
+        input_context = _prepare_reviewer_input(base, sid, action)
     elif (
         action.node == 'stage5.review'
         and action.flags == ('--retain-pretrim-batch', '@reviewer-input')
@@ -1725,6 +1737,10 @@ def _reconcile_completed_work_unit_actions(
                 elif record.node in ('stage0.approve', 'stage6.approve', 'stage7.approve'):
                     landed = reviewer_node_landed.approval_action_landed(
                         base, sid, node=record.node, flags=tuple(record.flags), code=code)
+                elif record.node == 'stage6.prepare' and record.input_payload is not None:
+                    from novel.stages.stage6 import prepare
+                    landed = prepare.submitted_decision_is_current(
+                        base, sid, record.input_payload, code=code)
                 else:
                     # typed 生产补丁仍由各 producer 的 committed journal 证明。
                     continue
@@ -2664,12 +2680,14 @@ def _materialize_reviewer_response(
         document, response_digest = _reviewer_response_document(response)
     except reviewer_tasks.ReviewerTaskError as exc:
         raise _ReviewerResponseTypedInvalid(str(exc)) from exc
-    wire = (stage4_reviewer_wire if stage4_reviewer_wire.uses_compact_wire(task)
+    wire = (stage6_prepare_wire if stage6_prepare_wire.uses_compact_wire(task)
+            else stage4_reviewer_wire if stage4_reviewer_wire.uses_compact_wire(task)
             else stage2_reviewer_wire)
     if wire.uses_compact_wire(task):
         try:
             document = wire.assemble(task, document)
-        except (stage2_reviewer_wire.Stage2ReviewerWireError,
+        except (stage6_prepare_wire.PrepareReviewerWireError,
+                stage2_reviewer_wire.Stage2ReviewerWireError,
                 stage4_reviewer_wire.Stage4ReviewerWireError) as exc:
             # compact wire 只是运输层；所有拒绝仍进入现役 ReviewerTaskError
             # 的有界纠错/持久拒因路径，不能越级变成 Supervisor runtime crash。
@@ -4746,7 +4764,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             prompt = reviewer_tasks.correction_prompt(
                 task, str(feedback['reason']),
                 request_sha256=str(feedback['response_sha256']), attempt=budget.used)
-        wire = (stage4_reviewer_wire if stage4_reviewer_wire.uses_compact_wire(task)
+        wire = (stage6_prepare_wire if stage6_prepare_wire.uses_compact_wire(task)
+                else stage4_reviewer_wire if stage4_reviewer_wire.uses_compact_wire(task)
                 else stage2_reviewer_wire)
         reviewer_prompt = wire.prompt_for(task, prompt)
         output_schema = wire.output_schema_for(task)
@@ -4811,7 +4830,11 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             if original_request.get('business_sha256') != pending[1].get('business_sha256'):
                 raise WorkUnitRefused('原请求与已购回答的业务身份不一致')
             if (budget.turn(pending[0].turn_id).run_id != run_id
-                    or original_request.get('epoch_id') != epoch.epoch_id):
+                    or original_request.get('epoch_id') != epoch.epoch_id
+                    or (waiting_on == queue.WAITING_ON_STAGE6_PREPARE
+                        and original_request.get('schema_sha256') != output_schema_digest)):
+                # Prepare native schema 也绑定运输 surface；同 epoch 的无关盘面
+                # 变化仍须先认原请求，不能把已购回答直接交新 options 判格式失败。
                 try:
                     revalidation = reviewer_revalidation.prepare(
                         original_request, task, schema_sha256=output_schema_digest or schema_sha256)
@@ -5019,6 +5042,12 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 budget.mark_adopted(reservation.turn_id)
                 if record_path is not None:
                     uploads.discard_edit_plan(base, record_path)
+                if (isinstance(action, reviewer_tasks.ReviewerNodeAction)
+                        and action.node == 'stage6.prepare'):
+                    from contracts.artifacts import STAGE6_PREPARE_REVIEW_DECISIONS
+                    decision = decode_artifact(STAGE6_PREPARE_REVIEW_DECISIONS, action.input_payload).payload
+                    if decision['decision'] != 'accept' and decision.get('edit') is None:
+                        return stopped('Commander 已保留独立准备未决/返修结论：' + decision['reason'])
                 if (isinstance(action, reviewer_tasks.ReviewerApprovalAction)
                         and action.payload.get('decision') in ('uncertain', 'stop')):
                     return stopped(f'Commander 对 {waiting_on} 明确{action.payload["decision"]}：'

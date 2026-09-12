@@ -1,9 +1,9 @@
 import { api } from '@/api/endpoints'
-import { mockApi, SAMPLE_SID } from '@/api/mock'
+import { mockApi, PLOT_SAMPLE_SID } from '@/api/mock'
 import { qk } from '@/api/queryKeys'
 import { ConfirmDialog } from '@/components/job/ConfirmDialog'
 import { SEV } from '@/constants/vocabulary'
-import { act, fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
 import { Stage6Screen } from './Stage6Screen'
@@ -13,10 +13,17 @@ afterEach(() => {
   localStorage.clear()
 })
 
+async function pendingWorkpack() {
+  const pack = await mockApi.getStage6ApprovalWorkpack(PLOT_SAMPLE_SID)
+  // 终态样本保留真实批准；仅此交互反例显式模拟当前尚未接受。
+  return { ...pack, disposition: 'review_required' as const,
+    current_slot: null, current_approval: null }
+}
+
 describe('Stage6Screen audited approval', () => {
   it('shows hook-only evidence and the exact rewritten body from the approval workpack', async () => {
-    const fixture = await mockApi.getStage6(SAMPLE_SID)
-    const workpack = await mockApi.getStage6ApprovalWorkpack(SAMPLE_SID)
+    const fixture = await mockApi.getStage6(PLOT_SAMPLE_SID)
+    const workpack = await pendingWorkpack()
     workpack.materials.source_hook = '新婚夜收到来信。'
     workpack.materials.source_blurb.facts = [{
       kind: 'hook_supported', claim_id: 'hook_001', claim: '新婚夜收到来信',
@@ -26,7 +33,7 @@ describe('Stage6Screen audited approval', () => {
     vi.spyOn(api, 'getStage6').mockResolvedValue(fixture)
     vi.spyOn(api, 'getStage6ApprovalWorkpack').mockResolvedValue(workpack)
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
-    renderRoute(<Stage6Screen />, `/n/${SAMPLE_SID}/stage6`)
+    renderRoute(<Stage6Screen />, `/n/${PLOT_SAMPLE_SID}/stage6`)
     fireEvent.click(await screen.findByText('核验材料 · 1 章正文 · 1 条钩子主张'))
     expect(screen.getByText('hook_001 · 钩子独立支持')).toBeVisible()
     expect(screen.getByText('收到来信')).toBeVisible()
@@ -35,8 +42,8 @@ describe('Stage6Screen audited approval', () => {
   })
 
   it('shows every contradiction field as an UNVER clue the human must read', async () => {
-    const fixture = await mockApi.getStage6(SAMPLE_SID)
-    const workpack = await mockApi.getStage6ApprovalWorkpack(SAMPLE_SID)
+    const fixture = await mockApi.getStage6(PLOT_SAMPLE_SID)
+    const workpack = await pendingWorkpack()
     vi.spyOn(api, 'getStage6').mockResolvedValue({
       ...fixture,
       approved: null,
@@ -75,7 +82,7 @@ describe('Stage6Screen audited approval', () => {
     })
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
 
-    renderRoute(<Stage6Screen />, `/n/${SAMPLE_SID}/stage6`)
+    renderRoute(<Stage6Screen />, `/n/${PLOT_SAMPLE_SID}/stage6`)
 
     const label = await screen.findByText('判官线索（UNVER）：人物动机与前文冲突')
     expect(label).toBeVisible()
@@ -93,9 +100,10 @@ describe('Stage6Screen audited approval', () => {
   })
 
   it('previews and sends actor, reason, pick, and the exact opaque review token', async () => {
-    const fixture = await mockApi.getStage6(SAMPLE_SID)
-    const workpack = await mockApi.getStage6ApprovalWorkpack(SAMPLE_SID)
-    const candidate = workpack.candidates[0]
+    const fixture = await mockApi.getStage6(PLOT_SAMPLE_SID)
+    const workpack = await pendingWorkpack()
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const candidate = [...workpack.candidates].sort((a, b) => (a.quality_rank ?? 999) - (b.quality_rank ?? 999))[0]
     vi.spyOn(api, 'getStage6').mockResolvedValue({
       ...fixture,
       approved: null,
@@ -119,7 +127,7 @@ describe('Stage6Screen audited approval', () => {
       paid: false,
       started: 1,
       finished: 2,
-      sid: SAMPLE_SID,
+      sid: PLOT_SAMPLE_SID,
       ordinal: null,
     })
 
@@ -128,14 +136,24 @@ describe('Stage6Screen audited approval', () => {
         <Stage6Screen />
         <ConfirmDialog />
       </>,
-      `/n/${SAMPLE_SID}/stage6`,
+      `/n/${PLOT_SAMPLE_SID}/stage6`,
     )
-    expect(await screen.findByText(/A 原始排序：c1 → c2 → c3/)).toBeVisible()
-    expect(screen.getAllByText('盲评 A · UNVER').length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/mock 判官 A：需人工结合开篇正文核验/).length)
+    expect(await screen.findByText('A 原始排序：' + workpack.judge_rankings!.A.join(' → '))).toBeVisible()
+    const decision = workpack.candidates[0].semantic_decision!
+    expect(decision.verdict).toBe('UNVER')
+    const judge = decision.judges.find((row) => row.judge === 'A')!
+    expect(screen.getAllByText('盲评 A · ' + judge.verdict).length).toBeGreaterThan(0)
+    const reason = judge.reason
+    expect(screen.getAllByText(reason).length)
       .toBeGreaterThan(0)
-    expect(screen.getAllByText(/证据 stage6\/hook\.json · subject/).length)
+    expect(screen.getAllByText('证据 ' + judge.evidence[0].artifact + ' · subject ' +
+      judge.evidence[0].subject_sha256 + ' · [' + judge.evidence[0].start + ', ' + judge.evidence[0].end + ']').length)
       .toBeGreaterThan(0)
+    const quoteRows = workpack.check.metrics.find((row) => row.rule === 'hook_quote_shape')!.findings
+    expect(quoteRows.filter((row) => row.evidence_key === '0/0')).toHaveLength(3)
+    const checkEvidence = within(screen.getByRole('region', { name: '文案机械核验材料' }))
+    for (const row of quoteRows) expect(checkEvidence.getByText(row.detail)).toBeVisible()
+    expect(errors.mock.calls.some((args) => args.some((value) => String(value).includes('same key')))).toBe(false)
     fireEvent.change(await screen.findByLabelText(/自报身份/), {
       target: { value: 'reviewer-a' },
     })
@@ -146,7 +164,7 @@ describe('Stage6Screen audited approval', () => {
 
     await waitFor(() => expect(preview).toHaveBeenCalled())
     fireEvent.click(await screen.findByRole('button', { name: '发起' }))
-    await waitFor(() => expect(approve).toHaveBeenCalledWith(SAMPLE_SID, {
+    await waitFor(() => expect(approve).toHaveBeenCalledWith(PLOT_SAMPLE_SID, {
       pick: candidate.index,
       actor: 'reviewer-a',
       reason: '逐项核对人物关系与关键因果',
@@ -155,8 +173,8 @@ describe('Stage6Screen audited approval', () => {
   })
 
   it('shows already_current and keeps the default approval action closed', async () => {
-    const fixture = await mockApi.getStage6(SAMPLE_SID)
-    const current = await mockApi.getStage6ApprovalWorkpack(SAMPLE_SID)
+    const fixture = await mockApi.getStage6(PLOT_SAMPLE_SID)
+    const current = await mockApi.getStage6ApprovalWorkpack(PLOT_SAMPLE_SID)
     vi.spyOn(api, 'getStage6').mockResolvedValue({
       ...fixture,
       approved: null,
@@ -177,10 +195,17 @@ describe('Stage6Screen audited approval', () => {
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
     const approve = vi.spyOn(api, 'approveHook')
 
-    renderRoute(<Stage6Screen />, `/n/${SAMPLE_SID}/stage6`)
+    renderRoute(<Stage6Screen />, `/n/${PLOT_SAMPLE_SID}/stage6`)
 
-    expect(await screen.findByText('已定稿：候选 1 · payoff_preview（人工核验）')).toBeVisible()
+    expect(await screen.findByText(`已定稿：候选 1 · ${current.candidates[0].approach}（人工核验）`)).toBeVisible()
+    expect(current.check_basis).toBe('candidate_without_approval')
+    expect(screen.getByText(/机械核验以未附审批的候选为基准/)).toBeVisible()
+    expect(screen.getByText(/A\/B 审判只看开篇前.*最终定稿工作包提供完整重写正文/)).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: '回去重挑候选' }))
+    const checks = within(screen.getByRole('region', { name: '文案机械核验材料' }))
+    const unapproved = current.check.attention.find((row) => row.rule === 'hook_not_approved')!
+    expect(unapproved.why).toBeTruthy()
+    expect(checks.getByText(unapproved.why!)).toBeVisible()
     const buttons = await screen.findAllByRole('button', {
       name: '当前工作包已批准 · 跳过',
     })
@@ -190,8 +215,8 @@ describe('Stage6Screen audited approval', () => {
   })
 
   it('keeps the approved slot visible when two candidates share one approach', async () => {
-    const fixture = await mockApi.getStage6(SAMPLE_SID)
-    const pack = await mockApi.getStage6ApprovalWorkpack(SAMPLE_SID)
+    const fixture = await mockApi.getStage6(PLOT_SAMPLE_SID)
+    const pack = await mockApi.getStage6ApprovalWorkpack(PLOT_SAMPLE_SID)
     vi.spyOn(api, 'getStage6').mockResolvedValue({
       ...fixture,
       approved: {
@@ -224,7 +249,7 @@ describe('Stage6Screen audited approval', () => {
     })
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
 
-    renderRoute(<Stage6Screen />, `/n/${SAMPLE_SID}/stage6`)
+    renderRoute(<Stage6Screen />, `/n/${PLOT_SAMPLE_SID}/stage6`)
 
     expect(
       await screen.findByText('已定稿：候选 3 · scene_punchline（人工核验）'),
@@ -232,8 +257,8 @@ describe('Stage6Screen audited approval', () => {
   })
 
   it('does not present stale already_current during refresh or after refresh failure', async () => {
-    const fixture = await mockApi.getStage6(SAMPLE_SID)
-    const pack = await mockApi.getStage6ApprovalWorkpack(SAMPLE_SID)
+    const fixture = await mockApi.getStage6(PLOT_SAMPLE_SID)
+    const pack = await mockApi.getStage6ApprovalWorkpack(PLOT_SAMPLE_SID)
     const currentPack = {
       ...pack,
       disposition: 'already_current' as const,
@@ -250,8 +275,8 @@ describe('Stage6Screen audited approval', () => {
     const getWorkpack = vi.spyOn(api, 'getStage6ApprovalWorkpack').mockResolvedValue(currentPack)
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
 
-    const { queryClient } = renderRoute(<Stage6Screen />, `/n/${SAMPLE_SID}/stage6`)
-    const currentLabel = '已定稿：候选 1 · payoff_preview（人工核验）'
+    const { queryClient } = renderRoute(<Stage6Screen />, `/n/${PLOT_SAMPLE_SID}/stage6`)
+    const currentLabel = `已定稿：候选 1 · ${pack.candidates[0].approach}（人工核验）`
     expect(await screen.findByText(currentLabel)).toBeVisible()
 
     let rejectRefresh!: (error: Error) => void
@@ -260,7 +285,7 @@ describe('Stage6Screen audited approval', () => {
     }))
     await act(async () => {
       void queryClient.refetchQueries({
-        queryKey: qk.finalApprovalWorkpack(SAMPLE_SID, 'stage6'),
+        queryKey: qk.finalApprovalWorkpack(PLOT_SAMPLE_SID, 'stage6'),
         type: 'active',
       })
     })

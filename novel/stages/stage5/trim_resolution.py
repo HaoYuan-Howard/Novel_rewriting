@@ -61,6 +61,14 @@ def matches_current_audit(
 
 
 
+def current_resolution_root(store: ArtifactStore, resolution: TrimResolution, rel: str) -> str:
+    """原人审根只有经已批准同正文修订及完整 freshness 证明才可继续使用。"""
+    if resolution.provenance.root_clean_sha1 == store.ctx.root_clean_sha1:
+        return store.ctx.root_clean_sha1
+    from novel.source_identity import artifact_body_root
+    return artifact_body_root(store, rel)
+
+
 def matching_current_resolution(
     store: ArtifactStore, audit: TrimAudit, audit_sha256: str, *, ordinal: int,
 ) -> tuple[TrimResolution, str] | None:
@@ -76,7 +84,7 @@ def matching_current_resolution(
     identity_errors: list[str] = []
     if resolution.output_ordinal != ordinal:
         identity_errors.append(f'ordinal={resolution.output_ordinal}，期望 {ordinal}')
-    if resolution.provenance.root_clean_sha1 != store.ctx.root_clean_sha1:
+    if resolution.provenance.root_clean_sha1 != current_resolution_root(store, resolution, rel):
         identity_errors.append('root_clean_sha1 不属于当前书根')
     if identity_errors:
         raise ProvenanceRefused(
@@ -243,7 +251,7 @@ def _validate_batch_frontier(
                 actor=request.actor,
                 reason=reason,
                 audit_sha256=audit_sha256,
-                root_clean_sha1=store.ctx.root_clean_sha1,
+                root_clean_sha1=current_resolution_root(store, resolution, rel),
             ):
                 if ordinal in unresolved:
                     raise TerminalState(
@@ -384,7 +392,7 @@ def _retain_pretrim_batch_locked(
                 actor=request.actor,
                 reason=reason,
                 audit_sha256=audit_sha256,
-                root_clean_sha1=ctx.root_clean_sha1,
+                root_clean_sha1=current_resolution_root(store, current, rel),
             ):
                 written.append(current)
                 continue

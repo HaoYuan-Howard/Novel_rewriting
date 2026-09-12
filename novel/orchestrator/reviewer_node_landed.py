@@ -82,7 +82,7 @@ def approval_action_landed(
         if (resolution.actor != actor or resolution.reason != reason
                 or resolution.workpack_sha256 is None
                 or resolution.review_identity_sha256 is None
-                or values['--review-token'] != f's6r3_{resolution.workpack_sha256}'):
+                or values['--review-token'] != f's6r4_{resolution.workpack_sha256}'):
             return False
         pack = hook.approval_workpack(store)
         selected = next((row for row in pack.candidates if row.slot == approved.slot), None)

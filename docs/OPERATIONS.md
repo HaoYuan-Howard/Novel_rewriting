@@ -41,13 +41,14 @@ blocked recovery 和诊断兼容，blocked action hash 本身不是恢复许可�
 
 ## 新旧工作流的执行边界
 
-当前 manifest v5 登记 `stage2-actor-v1`、`joint-analysis-actor-presentations-v1` 及初始化产物版本快照，
+当前 manifest v6 登记 `stage6-prepare-v1`、`independent-hook-preparation-v1` 及初始化产物版本快照，
 普通入口只接受当前版本，独立空根才可初始化；旧 manifest、事实蓝图和审批不自动迁移。首次合法写入前固定
 `_service/workflow.json`；其后所有节点、直接 producer、审批和恢复共用该身份，不另建执行 epoch。
 不得删除 manifest、工作单元账或原审批来重新初始化；旧 base 的读取与诊断不授予新写入权限。
 
-唯一已登记的版本推进是 Gate A 的 v4 → Gate B 的 v5。先用冻结来源代码收口 Stage2 的实际语义
-接受并排空所有 owner，停止服务、队列调度器和独立 CLI，再在干净、固定提交的目标代码中执行：
+已登记的版本推进为 Gate A 的 v4 → Gate B 的 v5、Gate B 的 v5 → Gate C 的 v6。前者用冻结来源
+代码收口 Stage2 实际语义接受，后者还须证明 Stage5 当前闭合。排空所有 owner，停止服务、队列调度器
+和独立 CLI，再在干净、固定提交的目标代码中执行：
 
 ```powershell
 conda run -n novel_refactor python -m novel.cli workflow transition preview --base <原输出根> --source-code <冻结来源checkout> --port <原服务端口> --stopped-pid <已退出的服务PID> --offline-ack --actor codex --reason <推进理由>
@@ -74,8 +75,13 @@ conda run -n novel_refactor python -m novel.cli workflow transition recover --ba
 若 preview 在返回前中断，从该目录的不可变 prepared 取 ID，并对原始文件计算 SHA-256；不能重新生成
 另一份 prepared。第三方改动不是可恢复的 source/target 窗口，必须停下核对。completed 未闭合时普通写口
 拒绝；completed 重放只返回原回执，不重新检查已开始的下游或重开事务。这些命令不调用模型、不增加或重置
-内容额度；后续运行仍开新 execution epoch，并按原 profiles、原累计额度继续。B → C 尚未登记，须等其最终
-契约确定后增加明确的版本对，不能泛开任意 manifest 升级。
+内容额度；后续运行仍开新 execution epoch，并按原 profiles、原累计额度继续。v5 → v6 保留全部 Stage4–5
+产物、审批、运行来源，不重建人物投影；仅拒绝 Stage6/7 的 formal、INVALID、history、prepared、checkpoint
+和已购回答残留。两个版本对保留各自不可变回执与恢复，不能泛开任意 manifest 升级。
+
+上一迁移已写 completed、但 pending 指针尚未清理时，下一迁移只在旧回执闭合且旧 target 原字节
+恰等于新 source 时接管围栏。新 prepared 已保存而指针交接中断，仍用新 ID/SHA recover；代码在
+离线、来源清单和生命周期证明全部通过后才清理旧指针。不要手删 pending 或改写旧 completed。
 
 本分支改造前的冻结基线为 `6473b78053ddb66eb111e835e41eb8d1f120eec7`。存量中断任务先核对原
 run 审计中的代码身份，再在匹配的旧代码工作区使用该版本的恢复入口；不能仅因主分支名相同就认为版本匹配。
