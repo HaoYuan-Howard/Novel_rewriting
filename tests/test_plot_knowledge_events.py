@@ -72,7 +72,7 @@ def test_same_review_registers_later_character_knowledge_without_copying_state_t
     assert '李宝珠知道' not in application.model_dump_json()
     assert application.event_operations[0].event.evidence_refs[0].evidence_ref.startswith('p:')
     assert knowledge_links.review(after.knowledge_scope('chapter:2'), after.knowledge_history).inherited[0].obligation_id == event.obligation_id
-    assert after.identity('chapter:1')[0] != current.identity('chapter:1')[0]
+    assert after.identity('chapter:1')[0] == current.identity('chapter:1')[0]
     assert after.identity('chapter:3')[0] == current.identity('chapter:3')[0]
 
 
@@ -134,7 +134,8 @@ def test_unprovided_subject_or_evidence_cannot_register_new_permission():
         current.propose_knowledge(pack(current), submission(current, [operation]), accepted=True)
 
 
-def test_same_round_registration_is_current_durable_and_replay_is_idempotent(tmp_path):
+@pytest.mark.parametrize('kind', ['character_knowledge', 'reader_reveal'])
+def test_same_round_registration_is_current_durable_and_replay_is_idempotent(tmp_path, kind):
     from tests.test_plot_producer import prepare_book, generate_plot, responses
     from tests.test_plot_review_runtime import request
     from novel.views.stage2 import blueprint_review_workpack
@@ -154,18 +155,33 @@ def test_same_round_registration_is_current_durable_and_replay_is_idempotent(tmp
     for ordinal in (1, 3):
         workpack = blueprint_review_workpack(base, sid, scope=f'chapter:{ordinal}')
         approvals.approve_stage2_review(base, sid, request(workpack))
+    first_before = blueprint_review_workpack(base, sid, scope='chapter:1')
+    first_decision = next(row for row in approvals.stage2_review_history(base, sid)
+                          if row.node == 'stage2.blueprint' and row.scope == 'chapter:1')
     workpack = blueprint_review_workpack(base, sid, scope='chapter:2')
     outgoing = request(workpack)
     outgoing.knowledge_links.event_operations = KnowledgeLinkSubmission.model_validate({
-        **outgoing.knowledge_links.model_dump(mode='json'), 'event_operations': [put()]}).event_operations
+        **outgoing.knowledge_links.model_dump(mode='json'), 'event_operations': [put(kind=kind)]}).event_operations
     before_calls = len(transport.calls)
     approvals.approve_stage2_review(base, sid, outgoing)
     approvals.approve_stage2_review(base, sid, outgoing)
     current = PlotReviewSnapshot.read(ArtifactStore(ctx), approvals.stage2_review_history(base, sid))
     assert {r.scope: r.state for r in current.progress().scopes} == {
-        'chapter:1': 'expired', 'chapter:2': 'accepted', 'chapter:3': 'accepted', 'cross_chapter': 'missing'}
+        'chapter:1': 'accepted' if kind == 'character_knowledge' else 'expired',
+        'chapter:2': 'accepted', 'chapter:3': 'accepted', 'cross_chapter': 'missing'}
     history = [r for r in current.history if r.node == 'stage2.blueprint']
     assert len(history) == 3
+    assert current.records['chapter:1'] == first_decision
+    first_after = current.workpack('chapter:1')
+    if kind == 'character_knowledge':
+        assert first_after.subject_sha256 == first_before.subject_sha256
+        assert first_after.dependency_manifest == first_before.dependency_manifest
+        assert first_after.material == first_before.material
+        assert first_after.knowledge_links == first_before.knowledge_links
+    else:
+        assert first_after.subject_sha256 != first_before.subject_sha256
+        assert any(row.event.kind == 'reader_reveal'
+                   for row in first_after.knowledge_links.scope.registered_events)
     assert current.records['chapter:2'].knowledge_links == outgoing.knowledge_links
     assert current.records['chapter:2'].knowledge_application.event_operations[0].event.evidence_refs[0].evidence_ref.startswith('p:')
     assert len(transport.calls) == before_calls
@@ -248,3 +264,40 @@ def test_character_can_learn_prior_beat_without_new_fact_or_cross_chapter_delive
     assert any(e['kind'] == 'character_knowledge' and e['audience'] == {'kind': 'character', 'actor_ref': mother, 'label': None}
                for e in ctx['knowledge_events'])
 
+
+
+@pytest.mark.parametrize('kind', ['character_knowledge', 'reader_reveal'])
+def test_sparse_event_chapter_closure_preserves_current_and_carried_history(kind):
+    from dataclasses import replace
+
+    current = snapshot()
+    raw = current.blueprints.model_dump(mode='json', by_alias=True)
+    raw['blueprints'][1]['carry_out_refs'] = ['st01_01']
+    raw['blueprints'][2]['entry_state_refs'] = ['st01_01']
+    current = replace(current, blueprints=ChapterBlueprints.model_validate(raw))
+    before = {n: pack(current, f'chapter:{n}') for n in (1, 2, 3)}
+    _application, after = current.propose_knowledge(
+        pack(current), submission(current, [put(kind=kind)]), accepted=True)
+    for ordinal in (1, 2, 3):
+        scope = after.knowledge_scope(f'chapter:{ordinal}')
+        direct = knowledge_links.build_scope(after.main, after.knowledge, after.blueprints,
+            main_sha256=after.hashes[STAGE1_MAIN_TEXT],
+            knowledge_sha256=after.hashes[STAGE2_GLOBAL_GROUNDING],
+            blueprint_sha256=after.hashes[STAGE2_CHAPTER_BLUEPRINTS],
+            chapter_ordinal=ordinal, registered_events=after.all_knowledge.registered_events)
+        expected = ordinal >= 2 or kind == 'reader_reveal'
+        assert bool(scope.registered_events) == expected
+        assert direct.registered_events == scope.registered_events
+        assert direct.scope_sha256 == scope.scope_sha256
+        assert (after.identity(f'chapter:{ordinal}')[0] != before[ordinal].subject_sha256) == expected
+        if ordinal == 1 and kind == 'character_knowledge':
+            assert pack(after, 'chapter:1').material == before[1].material
+            assert after.additional_selections('chapter:1') == current.additional_selections('chapter:1')
+    # 同章接受有实际关联；后章 carry 仅带历史事件，不新造第三章的知情义务。
+    own = knowledge_links.review(after.knowledge_scope('chapter:2'), after.knowledge_history)
+    assert any(row.obligation_id.startswith(kind + ':ke_belief_shared:2') for row in own.inherited)
+    assert not any(row.kind == kind for row in after.knowledge_scope('chapter:3').obligations)
+    # 历史事件实际证据仍进入后章的精确来源闭包。
+    assert any(row.input_rel == STAGE1_MAIN_TEXT and row.chapter_ordinal == 2
+               and row.projection in ('source_ranges', 'source_chapter')
+               for row in after.additional_selections('chapter:3'))

@@ -69,11 +69,14 @@ def event_registry(history: Iterable[KnowledgeLinkHistory]) -> list[RegisteredPl
 
 
 def events_for_chapter(events, chapter):
+    """事件本章必读；未来读者揭示约束早章，未来人物获知不反向改变早章。"""
     subjects = {('beat', row.beat_id) for row in chapter.beats}
     subjects.update(('state', row.state_id) for row in chapter.states)
     subjects.update(('state', ref) for ref in chapter.entry_state_refs)
     return [row for row in events if row.event.chapter_ordinal == chapter.chapter_ordinal
-            or (row.event.subject_ref.kind, row.event.subject_ref.ref) in subjects]
+            or ((row.event.subject_ref.kind, row.event.subject_ref.ref) in subjects
+                and (row.event.kind == 'reader_reveal'
+                     or row.event.chapter_ordinal < chapter.chapter_ordinal))]
 
 
 @contextmanager
