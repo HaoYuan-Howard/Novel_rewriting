@@ -21,10 +21,10 @@ from novel.errors import HumanEditProtected
 
 UNBOUND_WORKPACK_SHA256 = '0' * 64
 
-# 只有删除整组后仍能由 ``GlobalGrounding`` schema 关闭式复验、且不会删掉
-# 人物/主线骨架的三类事实可以隔离。集合完整性、人物、setting 与源文案范围都不在
-# 这里：它们必须经 typed GlobalEdit 修正，不能借 UNVER 处置静默越过。
-QUARANTINABLE_REVIEW_GROUP_PREFIXES = ('secret:', 'relation:', 'world_rule:')
+# 只有 secret/reveal/secret_setup 的完整秘密组允许隔离，并仍须经
+# ``GlobalGrounding`` schema 复验。人物、setting、关系、规则和集合完整性均为
+# must_fix，交对应 owner 订正或明确裁决，不能借 UNVER 处置静默越过。
+QUARANTINABLE_REVIEW_GROUP_PREFIXES = ('secret:',)
 
 
 @dataclass(frozen=True)

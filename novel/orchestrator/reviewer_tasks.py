@@ -81,6 +81,7 @@ from novel.errors import (
     UpstreamMissing, UpstreamStale,
 )
 from novel.orchestrator import queue, reviewer_contract, reviewer_revalidation, service_lifecycle
+from novel.quality.global_review import review_group_key
 
 
 REQUEST_SCHEMA = 'novel-reviewer-action-v1'
@@ -1392,7 +1393,6 @@ def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
     subject_catalog: dict[str, Any] = {}
     evidence_catalog: dict[str, Any] = {}
     cards: dict[str, list[dict[str, Any]]] = {}
-    claim_evidence_index: list[dict[str, Any]] = []
 
     def actionable(row: dict[str, Any]) -> bool:
         if pending_ids is not None:
@@ -1469,16 +1469,7 @@ def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
         evidence_ref = intern_material(evidence, evidence_catalog, 'e')
         row['subject_ref'] = subject_ref
         row['evidence_ref'] = evidence_ref
-        claim_evidence_index.append({
-            'item_id': row.get('item_id'),
-            'subject_path': row.get('subject_path'),
-            'subject_sha256': row.get('subject_sha256'),
-            'subject_ref': subject_ref,
-            'evidence_ref': evidence_ref,
-            'evidence_mode': row.get('evidence_mode'),
-            'generation_impact': row.get('generation_impact'),
-            'context_only': bool(row.get('context_only')),
-        })
+        # 卡片已保留 item/path/hash 与两个 catalog 引用；不再复制第二张同义索引。
         return row
 
     for row in selected:
@@ -1505,7 +1496,6 @@ def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
     ]
     global_pack['subject_catalog'] = subject_catalog
     global_pack['evidence_catalog'] = evidence_catalog
-    global_pack['claim_evidence_index'] = claim_evidence_index
     global_pack['current_reason_catalog'] = reason_catalog
     global_pack['delta'] = {
         'full_item_count': len(full_items),
@@ -1815,7 +1805,7 @@ def _current_collection_subject_ids(
         if isinstance(row, Mapping)
         and row.get('kind') == expected_kind
         and row.get('subject_path') == expected_path
-        and row.get('group_key') == f'set:{collection}'
+        and row.get('group_key') == review_group_key(expected_path)
     ]
     if len(matches) != 1:
         raise ReviewerTaskError(
@@ -1956,10 +1946,11 @@ def _post_edit_review_allowed_values() -> dict[str, Any]:
         'post_edit_review.review_scope[].surviving_decision_rule': (
             'review_scope 中每个 edit 后仍以相同 item_id + subject_sha256 存活的旧 '
             'FAIL/UNVER 都必须显式出现在 decisions；不能因为本 edit 在逻辑上顺带修好它'
-            '就省略。尤其只修改既有 relation 的字段而不改变 relation ID 集时，'
+            '就省略。尤其只订正既有 relation 的证据定位，业务字段与 relation ID 集不变时，'
             'relation_set_complete 的主体 hash 不变，仍必须显式复判。'),
         'post_edit_review.review_scope[].same_hash_completeness_counterexample': {
-            'edit': '只修改既有 relation 的字段',
+            'edit': '只订正既有 relation 的证据定位，业务字段与 relation ID 集不变',
+            'relation_business_fields_changed': False,
             'relation_id_set_changed': False,
             'surviving_item_kind': 'relation_set_complete',
             'required_action': '把原 item_id + subject_sha256 显式列入 decisions',
@@ -3242,7 +3233,7 @@ Global 首轮及其订正必须接受当前 Global 后，才允许 Blueprint 生
 跨项核对本 edit 会打开的主体；post_edit_review 对新项用 default/quarantine，对未
 变化旧项必须用 hash-bound decisions 显式复判，不能把未读旧 FAIL 洗绿。这里的
 “未变化”只看 item_id + subject_sha256 是否仍存活，不看你是否认为编辑逻辑上已经
-顺带解决：例如只改既有 relation 的字段而不改变 relation ID 集，
+顺带解决：例如只订正既有 relation 的证据定位，业务字段与 relation ID 集不变，
 relation_set_complete 的 hash 不变，它仍必须出现在 decisions。
 `exact_request` 的 canonical collection_edits[].operations 不是通用 value patch：add 只允许 op + item，delete
 只允许 op + subject_id，split 只允许 op + subject_id + items 且 items 至少两项；
@@ -4171,7 +4162,7 @@ operations 应用后，直接 patch 主体必须仍存在，修后外键必须�
 已有字段 patch 仍须保留模板
 subject binding。post_edit_review.decisions 只列 edit 后仍保持原 hash、且已在
 review_scope 中的旧项；是否存活只看 item_id + subject_sha256，不看编辑在逻辑上是否
-顺带修好它；只改 relation 字段而未改 relation ID 集时，同 hash 的
+顺带修好它；只订正既有 relation 的证据定位，业务字段与 relation ID 集不变时，同 hash 的
     relation_set_complete 仍必须显式复判。canonical full-action 每行显式带
     item_id/expected_subject_sha256/state/reason/evidence；compact v2 每行只带
     item_id/state/reason/evidence/generation_disposition，subject hash 由 Supervisor 注入且

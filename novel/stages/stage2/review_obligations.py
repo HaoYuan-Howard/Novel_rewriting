@@ -108,9 +108,13 @@ def _global_material_context(rows: Sequence[Mapping[str, Any]],
 
 
 def _unit(row: Stage2ReviewUnit) -> review_inheritance.DecisionUnit:
+    # context_refs 只是当前工作包的阅读导航；同组增删主体会改变它，却不改变
+    # 本项已审业务。原回执的完整 scope 仍逐字绑定摘要，继承只比较其语义载荷。
+    payload = row.model_dump(mode='json', exclude={'source_decision_sha256'})
+    payload['obligation'].pop('context_refs')
     return review_inheritance.DecisionUnit(
         subject_sha256=row.obligation.subject_sha256,
-        payload=row.model_dump(mode='json', exclude={'source_decision_sha256'}),
+        payload=payload,
         source_decision_sha256=row.source_decision_sha256)
 
 
@@ -161,8 +165,15 @@ def coverage(node: str, catalog: Sequence[Stage2ReviewObligation],
         _history(history), {key: row.subject_sha256 for key, row in current.items()})
     inherited = []
     for key, receipt in sorted(sources.items()):
-        unit = Stage2ReviewUnit.model_validate(receipt.units[key].payload)
-        inherited.append(unit.model_copy(update={'source_decision_sha256': receipt.decision_sha256}))
+        payload = receipt.units[key].payload
+        obligation = current[key]
+        if payload['obligation'] != obligation.model_dump(mode='json', exclude={'context_refs'}):
+            raise ArtifactUnreadable(f'Stage2 继承义务 {key} 的业务身份不一致')
+        # 来源已由 accepted_sources 逐层核验；只恢复当前导航，不重写原决定或理由。
+        inherited.append(Stage2ReviewUnit.model_validate({
+            **payload, 'obligation': obligation,
+            'source_decision_sha256': receipt.decision_sha256,
+        }))
     pending = sorted(current.keys() - sources.keys())
     return Stage2ReviewCoverage(
         scope=scope, inherited=inherited, pending_obligation_ids=pending,

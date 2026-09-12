@@ -510,6 +510,104 @@ def test_deleted_character_keeps_original_commander_problem_pending(tmp_path):
                for row in coverage.prior_problems)
 
 
+def test_alias_add_and_global_deletions_preserve_mixed_review_coverage_in_final_workpack(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from contracts.schema.stage1 import MainText
+    from contracts.schema.stage2_review import Stage2ReviewCoverage
+    from novel.orchestrator import inspection, reviewer_tasks
+    from novel.stages.stage2 import review_obligations
+    from tests.stage2_fixtures import knowledge_response
+    from tests.test_stage2 import main_text
+    from tests.test_stage2_analyze import _response
+
+    ctx = _ctx(tmp_path)
+    source = main_text()
+    source[0]['text'] = source[0]['text'].replace(
+        '李宝珠站在廊下看着落花。', '李宝珠又名小珠，站在廊下看着落花。')
+    ArtifactStore(ctx).write(extract.MAIN_TEXT, MainText.model_validate(source))
+    response = _response()
+    response['global'] = knowledge_response()
+    Stage2AnalyzeAgent(ctx, driver=_driver(ctx, response)).run()
+    ctx = _free_ctx(ctx)
+    ctx.node = 'stage2.global'
+    original = global_review.review_workpack(ctx)
+    obligations = original['review_coverage']['scope']['obligations']
+    character_set = next(row['obligation_id'] for row in obligations
+                         if row['subject_path'] == 'characters.characters')
+    stable = next(row for row in obligations if row['obligation_id'].startswith(
+        'alias_identity:characters.characters.char_001.'))
+    deleted = {row['obligation_id'] for row in obligations if row['subject_path'].startswith(
+        ('global.world_rules.wr_01.', 'global.arc_secrets.secret_01'))}
+    assert deleted
+    approvals.approve_stage2_review(tmp_path, ctx.sid, Stage2NodeReviewRequest(
+        node='stage2.global', review_token=original['review_token'], decision='uncertain',
+        actor='test:first-commander', reason='原文有遗漏称谓，其余合成主体已核对',
+        review={'scope_sha256': original['review_coverage']['scope']['scope_sha256'],
+            'default_decision': 'accept', 'exceptions': [dict(
+                obligation_id=character_set, decision='uncertain', reason='需要补齐原文称谓')]}))
+    first = approvals.stage2_review_history(tmp_path, ctx.sid)[-1]
+    first_raw = first.model_dump(mode='json')
+    assert all(unit.decision == 'accept' for unit in first.obligation_receipt.units
+               if unit.obligation.obligation_id in deleted)
+
+    char_ctx = _free_ctx(ctx)
+    char_ctx.node = characters.NODE
+    edit = characters.edit_template(char_ctx)
+    edit['operations'] = edit['operations'][:1]
+    edit['operations'][0]['character']['aliases'].append(dict(
+        surface='小珠', identity_revealed_from=1,
+        evidence_refs=[dict(chapter_ordinal=1, locator='李宝珠又名小珠')]))
+    current = global_review.review_workpack(ctx)
+    request = Stage2NodeReviewRequest.model_validate({
+        'node': 'stage2.global', 'review_token': current['review_token'], 'decision': 'rework',
+        'actor': 'test:second-commander', 'reason': '补称谓并纠正长期规则与秘密的过度晋升',
+        'review': {'scope_sha256': current['review_coverage']['scope']['scope_sha256'],
+            'default_decision': 'accept', 'exceptions': [dict(
+                obligation_id=key, decision='rework', reason='较新反查确认本项需订正')
+                for key in sorted(deleted | {character_set})]},
+        'core_edits': {**current['core_edit_binding'], 'characters': edit,
+            'global': {'world_rules_replace': [], 'arc_secrets_replace': []}},
+    })
+    ledger = ctx.ledger.path.read_bytes()
+    core_edits.apply(ctx, approve(ctx, request))
+    pack = global_review.review_workpack(ctx)
+    coverage = Stage2ReviewCoverage.model_validate(pack['review_coverage'])
+    inherited = next(unit for unit in coverage.inherited
+                     if unit.obligation.obligation_id == stable['obligation_id'])
+    assert inherited.obligation.subject_sha256 == stable['subject_sha256']
+    assert set(inherited.obligation.context_refs) > set(stable['context_refs'])
+    assert inherited.actor == first.actor and inherited.reason == first.reason
+    history = approvals.stage2_review_history(tmp_path, ctx.sid)
+    assert inherited.source_decision_sha256 == review_obligations.sha(history[-1].model_dump(mode='json'))
+    assert history[0].model_dump(mode='json') == first_raw
+    assert deleted <= set(coverage.pending_obligation_ids)
+    assert deleted <= {unit.obligation.obligation_id for unit in coverage.prior_problems
+                       if unit.decision == 'rework'}
+    assert {row['obligation_id'] for row in pack['removed_problem_materials']} == deleted
+    assert all(row['available'] for row in pack['removed_problem_materials'])
+    assert len(coverage.scope.obligations) == len(coverage.inherited) + len(coverage.pending_obligation_ids)
+
+    def read_command(argv, **_kwargs):
+        if '--emit-review-workpack' in argv:
+            return global_review.review_workpack(ctx)
+        if '--emit-review-template' in argv:
+            return json.loads(global_review.review_template_json(ctx))
+        pytest.fail(f'本轮不应读取其他阶段：{argv}')
+
+    monkeypatch.setattr(reviewer_tasks, '_json_command', read_command)
+    frontier = SimpleNamespace(state='blocked', code_version=ctx.code,
+        surface_seal=inspection.read_surface_seal(tmp_path, ctx.sid, code=ctx.code),
+        action=SimpleNamespace(waiting_on=queue.WAITING_ON_STAGE2_REVIEW, action_sha256='a' * 64))
+    target = paths.scratch_session_dir(tmp_path, ctx.sid, 'mixed-core-review') / 'request.json'
+    task = reviewer_tasks.build_task(tmp_path, ctx.sid, frontier, target, epoch_id='mixed-core-review')
+    envelope = json.loads(task.prompt.split('<immutable-workpack>\n', 1)[1].split(
+        '\n</immutable-workpack>', 1)[0])
+    material = envelope['materials']['global']
+    assert {row['obligation_id'] for row in material['removed_problem_materials']} == deleted
+    assert material['main_text_chapters'] == source
+    assert not target.exists() and ctx.ledger.path.read_bytes() == ledger
+
+
 def _only_removed_problem(ctx):
     """第一轮删除角色；第二轮明确接受当前父集合，仍保留原 role 疑点。"""
     pack = global_review.review_workpack(ctx)

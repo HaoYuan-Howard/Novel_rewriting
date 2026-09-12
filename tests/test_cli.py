@@ -61,22 +61,20 @@ def box():
 
 
 @pytest.fixture
-def reviewed_box():
-    """带 `stage2/global_review.json` 的沙箱。
+def current_core_review(tmp_path):
+    """当前独立人物与知识的确定性 producer 底座；CLI 反例不再依赖语料而跳过。"""
+    from novel.orchestrator.state import readonly_ctx
+    from novel.store import ArtifactStore
+    from tests.test_stage2_global_core_edits import seed as seed_current_core
 
-    ⚠⚠ **两条复核模板用例曾经挂在 `box` 上，而 `box` 不带这一份** ⇒ 它们从落地起
-    就恒 exit 2（「global_review 不在盘上」）。没被发现是因为**没设 `NOVEL_OUTPUT` 时
-    `box` 整个 skip**：绿的是 skip，不是断言。⇒ 缺哪份就把哪份搬进来，
-    别把断言放松成「exit 2 也算过」。
-    """
-    books = [book for book in sandbox.books_with_stage3()
-             if sandbox.current(book, 'stage2/global_review.json') is not None]
-    if not books:
-        pytest.skip('盘上没有带 stage2 全局复核的语料——这两条**没在查**')
-    s = sandbox.Sandbox(
-        books[0], sandbox.STAGE3_INPUTS + ('stage2/global_review.json',))
-    yield s
-    s.close()
+    ctx, _ = seed_current_core(tmp_path)
+    return ctx, ArtifactStore(readonly_ctx(ctx.novel_dir, ctx.node, ctx.code))
+
+
+def _file_bytes(root):
+    """包含服务账的全部字节；只读 CLI 不得借生成材料改变任何盘面。"""
+    return {p.relative_to(root).as_posix(): p.read_bytes()
+            for p in root.rglob('*') if p.is_file()}
 
 
 @pytest.fixture(autouse=True)
@@ -192,48 +190,55 @@ def test_stage6_and_stage7_rebind_flags_dispatch_only_to_zero_wire_recovery(
 
 
 def test_stage2_emit_review_template_binds_current_rows_and_stays_closed(
-        reviewed_box, capsys):
+        current_core_review, capsys):
     """模板省掉 hash/evidence 手抄，但默认 UNVER 绝不能顺手打开事实闸。"""
-    rc = _run('run', 'stage2.global', reviewed_box.sid, '--emit-review-template',
-              '--base', str(reviewed_box.root))
+    ctx, store = current_core_review
+    before = _file_bytes(ctx.novel_dir.parent)
+    capsys.readouterr()
+    rc = _run('run', 'stage2.global', ctx.sid, '--emit-review-template',
+              '--base', str(ctx.novel_dir.parent))
 
     assert rc == X.OK
     template_raw = json.loads(capsys.readouterr().out)
-    assert template_raw['_schema_version'] == 2
+    assert template_raw['_schema_version'] == 3
     template = GlobalReviewDecisionSet.model_validate(decode_artifact(
         'stage2/global_review_decisions.json', template_raw).payload)
-    # ⚠ `Sandbox.read` 出来的已经是**解码后的载荷**；再套一层 `decode_artifact`
-    #   会去找版本标记而当场炸——这条用例从落地起就没真跑过，别照抄那一层。
-    review = GlobalReview.model_validate(
-        reviewed_box.read('stage2/global_review.json'))
+    review = store.read_own(GlobalReview, 'stage2/global_review.json')[0]
     blocking = [item for item in review.items
                 if review_effect_of(item.kind) == 'blocking']
     assert template.decisions == []
     assert template.blocking_scope is not None
     assert template.blocking_scope.state == 'UNVER'
     assert template.blocking_scope.expected_source_sha256 == review.source_sha256
+    assert template.blocking_scope.expected_workpack_sha256 == '0' * 64
     assert template.blocking_scope.expected_item_count == len(blocking)
+    assert len(blocking) == len(review.items)
+    assert all(item.state == 'pending' for item in review.items)
+    assert _file_bytes(ctx.novel_dir.parent) == before
 
 
-def test_stage2_review_workpack_is_read_only_and_never_auto_decides(reviewed_box, capsys):
+def test_stage2_review_workpack_is_read_only_and_never_auto_decides(current_core_review, capsys):
     """workpack 只缩小人工阅读面；生成它不能顺手改变任何正式字节。"""
-    before = {p.relative_to(reviewed_box.dir).as_posix(): p.read_bytes()
-              for p in reviewed_box.dir.rglob('*') if p.is_file()}
+    from contracts.schema.stage1 import MainText
 
-    rc = _run('run', 'stage2.global', reviewed_box.sid, '--emit-review-workpack',
-              '--base', str(reviewed_box.root))
+    ctx, store = current_core_review
+    before = _file_bytes(ctx.novel_dir.parent)
+    capsys.readouterr()
+
+    rc = _run('run', 'stage2.global', ctx.sid, '--emit-review-workpack',
+              '--base', str(ctx.novel_dir.parent))
 
     assert rc == X.OK
     workpack = json.loads(capsys.readouterr().out)
-    assert workpack['kind'] == 'stage2-global-review-workpack-v4'
+    assert workpack['kind'] == 'stage2-global-review-workpack-v6'
     assert len(workpack['workpack_sha256']) == 64
     assert workpack['binding']['expected_item_count'] == len(workpack['items'])
     assert workpack['read_only'] is True and workpack['auto_decisions'] is False
     assert workpack['items']
     assert sorted(workpack['legend']) == [
-        'decision', 'evidence_mode', 'fate_companion', 'reading_scope',
-        'whole_book_text']
-    main = reviewed_box.read('stage1/main_text.json')
+        'arc_secret', 'decision', 'evidence_mode', 'generation_impact',
+        'identity', 'reading_scope', 'time', 'whole_book_text']
+    main = store.read_own(MainText, 'stage1/main_text.json')[0].model_dump(mode='json')
     assert workpack['main_text_chapters'] == [{
         'chapter_ordinal': row['chapter_ordinal'], 'text': row['text'],
     } for row in main]
@@ -244,9 +249,23 @@ def test_stage2_review_workpack_is_read_only_and_never_auto_decides(reviewed_box
                    'claim_literal', 'none'}
                and isinstance(row['exact_literal_hits'], list)
                for row in workpack['items'])
-    after = {p.relative_to(reviewed_box.dir).as_posix(): p.read_bytes()
-             for p in reviewed_box.dir.rglob('*') if p.is_file()}
-    assert after == before
+    assert all(row['effect'] == 'blocking' and row['current_state'] == 'pending'
+               and 'fate_companion' not in row for row in workpack['items'])
+    subject_paths = [row['subject_path'] for row in workpack['items']]
+    assert any(path.startswith('characters.characters.') for path in subject_paths)
+    assert any(path.startswith('global.') for path in subject_paths)
+    assert not any(retired in path for path in subject_paths
+                   for retired in ('fate', 'source_blurb', 'knowledge_events'))
+    assert workpack['material_source'] == {
+        key: store.full_sha256_or_none(rel) for key, rel in (
+            ('characters_sha256', 'stage2/characters.json'),
+            ('global_sha256', 'stage2/global_grounding.json'),
+            ('review_sha256', 'stage2/global_review.json'),
+            ('main_text_sha256', 'stage1/main_text.json'))}
+    assert workpack['core_edit_binding'] == {
+        'expected_characters_sha256': workpack['material_source']['characters_sha256'],
+        'expected_global_sha256': workpack['material_source']['global_sha256']}
+    assert _file_bytes(ctx.novel_dir.parent) == before
 
 
 def test_r_2_16_requires_global_acceptance_before_blueprint_and_cross_acceptance_before_stage4(

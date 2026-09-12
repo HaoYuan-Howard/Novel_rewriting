@@ -1,8 +1,8 @@
 # 语义评测契约
 
 本文件覆盖 `contracts/schema/evaluation.py` 的两族模型：**语义 judge 的结论**
-（`EvidenceRef` / `JudgeDecision` / `SemanticDecision`）与 **Stage2 全局逐项人工复核**
-（`GlobalReview` 一族）。前者是付费判官的产出形状，后者是 s2 闸的人工决策面。
+（`EvidenceRef` / `JudgeDecision` / `SemanticDecision`）与 **Stage2 人物和长期知识统一复核**
+（`GlobalReview` 一族）。前者是 advisory judge 的产出，后者由受托 Commander 或人工明确裁决。
 
 > **2026-08-18：evaluator profile 与 ground-truth 标定装置整批下线。**
 >
@@ -86,107 +86,101 @@
 
 ---
 
-## 二、Stage2 全局逐项复核与 s2 gate
+## 二、Stage2 人物与长期知识的统一审阅
 
-`stage2/global_review.json` 不是对「已经抽出来的行」逐行盖章后就算完整。确定性枚举器覆盖的
-主体按「**能不能被单独修正**」分两档（`R-2.17`）：
+`stage2/global_review.json` 同时审阅独立的 Characters v2 与 Global v7。它是审阅账，
+不是第三份知识产物。GlobalReview 与 GlobalReviewDecisionSet 均为 v3；旧版本不自动迁移
+或继承审批。源钩子事实和连续开篇范围归 Stage6 Prepare，不属于当前 Stage2 审阅面。
 
-- **事实逐条**——人物辨识度与称谓语境、每个角色的 `role` 与 `fate`、`canon.setting` 的每个键、
-  每条 relation、每条世界规则的 kind/version、每条秘密的 fact / known-by / **埋点章** / reveal；
-- **源文案与范围**——源文案事实逐条核对，完整性和连续开篇范围各占一项。
-  文学 arc 已退役；范围须有正式边界证据，未知时先 typed 修订，不能直接 PASS。
+### 2.1 必要主体与依赖
 
-外加四个集合级 subject：`entities.characters` 的 `character_set_complete`、`entities.relations`
-的 `relation_set_complete`、`canon.world_rules` 的 `world_rule_set_complete` 与 `canon.secrets` 的
-`secret_set_complete`。即使集合为空，这四项仍存在且初始为 `pending`；只有人工对照来源后才能
-裁为 `PASS｜FAIL｜UNVER`。它们绑定 Global producer 实际读取的 MainText 输入身份；
-源文案事实、完整性与开篇范围还绑定 HookCopy 输入身份，任一依赖变化重开受影响项。
-因此「一个人/一条关系/一条规则/一个秘密都没抽到」不能借空循环变成全绿。
+确定性枚举器按可独立订正的主体建立义务（`R-2.17`）：
 
-⚠ **没被枚举出来的字段等于没人审。** 下一段说的「缺任一必审项就不能开 gate」守的是这份清单
-**自身**的完整性，不是「整份 grounding 都过了人眼」。2026-08-23 之前，`role` 的结局旁路
-（`R-2.6` 词表实测命中 0/17 而人读真违规 6/17）、`setting.世界观` 的泄底（逐章字面闸门实测
-0/8）、relations 这条第二剧透通道，以及两道下发闸门共同的前件 `setup_chapters`，就全都落在
-清单之外——闸照开，人却从没看过它们。
+- Characters：人物身份及首次出场、每个去重称谓的实体归属与 `identity_revealed_from`、
+  首次公开 `role`、`name_distinctiveness`。
+- Global：`setting.era` 与 `setting.social_context`、规则类别及各版本、重要有向关系及
+  成立与披露时间、arc secret 的命题、铺垫章和揭示时间。
+- 四项集合完整性：人物、关系、规则、秘密。空集合仍须对照全书明确审阅，不能借空循环通过。
 
-每次生成或编辑 `GlobalGrounding` 后，review 的 `source_sha256` 绑定去除 schema/provenance 后的
-完整 typed subject。普通事实的旧决定只在 `(item_id, kind, subject_path, subject_sha256)` 四项完全不变时
-继承；整书项还须实际输入身份不变，变过的项回到 `pending`。`resolution_required` 是代码派生的
-待修订状态；审阅账不能篡改该字段来放行未知范围。读 API 与 s2 gate 不信任盘上 `approved` 推论，而是从当前
-`GlobalGrounding` 重算完整 subject SHA 和现役必审 item surface：hash 过期、缺任一必审项、
-顺序/身份不一致或 blocking 面存在非 PASS 项，`approved=false`；这格继续只表示“真值面全部
-PASS”，不得把 UNVER 改名。生成闸另算 `generation_safe`：除 PASS 外，只接受逐项携带
-`generation_disposition={action: quarantine_group, reason}`、且所属完整组在服务端删除白名单内的
-blocking UNVER；disclosure 未决项继续披露。
+Commander 判断事实支持性、实体误合并、遗漏、过度概括、时间语义与秘密晋升；ID、引用存在、
+坐标、重复、合法章范围及 `fact` / `fact_ref` 二选一由代码检查。同场景局部惊喜不进入 Global；
+同章跨独立情节单元的例外须有语义说明，Stage2 不用段落数量冒充分场验证。
 
-真实决策入口为：
+每项摘要绑定实际主张与所用证据，集合完整性剥除坐标但绑定 MainText。称谓路径按精确 surface
+稳定标识，重排不转移原问题。关系只绑定端点的必要身份；无关人物证据订正不重开全部知识。
+完整审阅来源 SHA 与读取 token 另守本轮并发快照，不能用它推导所有消费者失效。
+
+`GlobalReview` 的当前性从两份正式产物重算，不能信任盘上旧的 approved 推论。缺项、身份漂移、
+过期或必要材料缺失均不放行；`resolution_required` 是代码派生值，不能改审阅账来解除它。
+`approved` 只表示当前事实面全部 PASS。`generation_safe` 独立计算：当前 Core 各项均为 blocking，
+仅秘密的完整闭合组可对 UNVER 显式 `quarantine_group`；人物、关系、规则、背景及集合完整性
+不能隔离。FAIL、pending 与未处置 UNVER 仍阻断，隔离不改写为 PASS。
+
+### 2.2 读取材料与决定入口
+
+当前工作包为 `stage2-global-review-workpack-v6`，token 为 `s2gr2_`，节点接受契约为
+`stage2-global-acceptance-v2`。工作包独立呈现人物、知识与各自产物证据，不携带旧 fate、
+逐次 address、人物知情矩阵或源钩子准备材料。
+
+`reading_scope=whole_book｜localized` 表达是否需通读，`evidence_mode=`
+`unresolved_formal_evidence｜formal_evidence｜claim_literal｜none` 表达证据来源。正式槽存在但缺失、
+无来源或坐标无效时保留 unresolved，不得回退到字面命中。需要全书反查时 MainText 各章完整
+提供一次；删除问题的复审同样提供原问题材料与当前正文。legend、主体、证据、正文和完整
+binding 一并进入 workpack SHA。
+
+Commander 传输面由不可变工作包确定性投影为 `stage2-global-review-delta-v2`：待审项进入
+subject cards，理解它们所需的已接受主体进入只读 context cards；其余接受只保留数量和摘要。
+每张卡保留 item、path、hash 及 `subject_ref` / `evidence_ref`，可从内容寻址 catalog 完整回读；
+不再复制同义 `claim_evidence_index`。正文各章仍只出现一次，已接受上下文不变成新的待审项。
+传输裁剪不改变原工作包、binding 或 workpack SHA。
+
+正式逐项决定入口为：
 
 ```powershell
 python -m novel.cli run stage2.global <sid> `
   --review-decisions <书内或服务私有目录中的 GlobalReviewDecisionSet.json>
 ```
 
-同形服务入口为 `POST /api/novels/:sid/stage2/global-review`，读面为对应 GET。请求有两种关闭式形状：
+同形服务入口为 `POST /api/novels/:sid/stage2/global-review`，对应 GET 提供只读状态。决定有两种
+关闭式形状：
 
-- 逐项 `decisions[]`：每项恰好一次，并带非空 `reason`、显式 `evidence[]` 与
-  `expected_subject_sha256`；只有 `state=UNVER` 可选带
-  `generation_disposition={action: quarantine_group, reason}`，PASS/FAIL 在 schema 上不能携带；
-- 压缩 `blocking_scope`：绑定当前 `source_sha256`、完整 blocking
-  `(item_id, subject_sha256)` 集合 SHA、项目数、正文章全集与实际只读 workpack SHA-256，
-  给未列入 `decisions[]` 的 blocking
-  项一个显式默认 `PASS｜UNVER`。服务端仍展开成逐项持久决定；`decisions[]` 是例外，disclosure
-  永不被 scope 自动裁决。workpack 的 binding 含完整 typed MainText SHA-256，整书完整性决定也绑定
-  MainText 输入身份；正文变化会重开这些决定。emit 模板默认 `UNVER`，actor/reason 与
-  `expected_workpack_sha256` 都是不可提交的占位值；后者只能从实际读过的 workpack 顶层手工复制，
-  只改状态、重新生成模板代替阅读或换用旧 workpack 都会关闭式拒绝。
+- `decisions[]`：每项一次，携非空 reason、显式 evidence 和 expected_subject_sha256；仅 UNVER
+  可附 generation_disposition，且仍受服务端完整组白名单限制。
+- `blocking_scope`：绑定当前 source SHA、完整 item/hash 范围 SHA、项目数、正文章全集及实际
+  阅读的 workpack SHA。未列入 decisions 的项采用明确 PASS 或 UNVER，代码展开逐项保存，
+  FAIL/UNVER 例外不能丢失。
 
-当前只读包为 `stage2-global-review-workpack-v4`。v3 把旧 `review_note` 混写的语义拆成两根正交轴，
-v4 在不改变这两轴的前提下补齐 whole-book 证据：
-`reading_scope=whole_book｜localized` 表示是否必须通读全书，`evidence_mode=`
-`unresolved_formal_evidence｜formal_evidence｜claim_literal｜none` 表示当前展示材料的来源；顶层
-`legend` 是上述两轴闭集的唯一解释。正式 evidence 在场时不再复制一份 `exact_literal_hits`；正式槽
-存在但 `source=None`、缺失或坐标无效时固定为 `unresolved_formal_evidence`，不得回退到 claim 字面
-命中。只要存在 `reading_scope=whole_book`，顶层 `main_text_chapters[]` 就按章完整携带 MainText，
-每章正文恰好一份；只有 SHA 与局部 snippet 的 v3 不能作为完整阅读证据。每行 `generation_impact`
-由登记表 `review_generation_impact_of` 唯一派生，取 `must_fix｜quarantine_or_fix｜disclose`；`effect`
-再由它投影为 blocking/disclosure，`group_key` 由 `review_group_key` 派生。含 blocking
-项的组优先，同优先级按 `GlobalReview.items` 中该组第一次出现的顺序，组内保持原序。
+`--emit-review-template` 默认 UNVER；actor、reason 与 workpack SHA 的占位不能直接提交。
+服务端锁内重建当前材料，旧 SHA、缺项、未读正文声明或来源损坏均拒绝。旧版本只能免费获取
+当前模板后重新审阅，不能通过重写版本号继承接受。
 
-默认 blocking 包中的每条 `role` 另带同人物 `fate_companion`：只复制 fate 的 item/subject/hash、
-当前状态、delivery effect 与正式/未决 evidence，`read_only=true`，不复制 claim-literal 或另造正文
-材料，也不新增、删除或代替 decision item；无唯一同人物 fate 时生成即关闭。legend、两轴、派生
-分组、完整 MainText 与 companion 全部纳入 workpack SHA。应用口只现算 v4；旧 v2/v3 SHA 必须在正式
-`global_grounding.json`、`global_review.json` 与 `_rounds/` 的首个写动作前拒绝，人工重新生成并实际复核 v4、绑定新 SHA 后
-才可提交。workpack 版本是阅读凭证版本，不改变 `GlobalReviewDecisionSet` v2 或正式 artifact 版本。
+### 2.3 统一接受、typed 编辑与恢复
 
-Commander 的传输面从上述 immutable v4 包确定性投影为 `stage2-global-review-delta-v1`：只携
-pending/FAIL/未隔离 UNVER 的 subject cards；PASS 与已隔离项只留数量和 identity digest。主体、证据与
-重复理由分别进入内容寻址 catalog，`claim_evidence_index` 把 item/path/hash 与引用闭合。只有本轮仍含
-whole-book 卡时才携一次完整 MainText；成功且依赖未失效的卡不再重复发送。该投影不改变正式
-workpack、binding 或 workpack SHA。
+正常首抽的一次 Commander scope 决定经免费 CLI 落盘后，同时保存 Global 节点接受，不额外
+购买一轮接受。正式事实通过不能顺带接受已删除问题：统一 Commander 必须明确审阅当前
+`removed_problem` 的原主张与处置。当前义务由本轮决定与可证明继承完整覆盖，较新否定遮住
+较早接受；删除或回滚不能抹去问题。
 
-Stage2 Global Commander 按整书工作单元最多 4 次内容调用，包含首次与格式/内容纠错；
-同一单元连续审阅，候选、run、epoch、物理会话和进程重启不重置。Global 正式有效、逐项审阅
-当前且 generation-safe 后，仍须提交绑定当前主体的 Global 节点接受，才能启动按章独立计账的
-Blueprint Executor。全章产物由另一工作单元的 Blueprint Commander 完成跨章审阅并接受，
-其内容上限也为 4；本流程没有预审或额外 Global 终审。两份节点接受后由确定性收口补齐 seen/gate，
-已读与落盘都不能代替语义接受。确认 Global 事实有错时取得
-当前 v3 骨架，通过 `--apply-edit` 同时提交真实修改和 `post_edit_review`；证明的 `review_scope`
-绑定修前未闭合项，`decisions` 显式复判 edit 后仍保持同一 hash 的旧红项，而新打开项才使用默认
-PASS/登记隔离。原样/no-op、未闭合 blocking、身份漂移、无进展 fingerprint 或预算耗尽均在当前动作
-写盘或下一次 wire 前关闭。只有 `secret:<id>`、
-`relation:<id>`、`world_rule:<id>` 三类完整组可以选择 quarantine。隔离只生成下游内存视图：原始
-`global_grounding.json`、`global_review.json`
-及其 UNVER 审计不改写；下游 provenance 同时记录 grounding 与 review，并从写作视图删除完整组，
-秘密被删时还级联删除引用它的 `via_secret` relation。隔离后必须重新通过 `GlobalGrounding` schema，
-否则仍关闭并回到 GlobalEdit。
+继承比较业务身份与实际证据，不把 `context_refs` 阅读导航当作新业务。原历史 scope 仍校验
+完整摘要；继承保留原 actor、理由及决定来源，仅绑定当前义务的导航。新增主体产生自己的待审
+义务，原问题与引用材料不得因导航调整丢失。未经决定覆盖的新语义继续待审。
 
-`GlobalReviewDecisionSet` 因新增第二种形状由 v1 升为 v2。旧 v1 没有 scope hash 与正文章全集
-阅读声明，不自动迁移；由 `--emit-review-template` 零成本重发当前模板，人工复核后重新提交。
+单 owner 修订分别使用 CharactersEdit 或 GlobalEdit；同一 Commander 回答可通过
+`Stage2NodeReviewRequest.core_edits` 同时提交两侧 typed 编辑。审批先整体预检，保存原决定与
+冻结 prepared，再由 `stage2.global --apply-core-edits <request_sha256>` 免费按 owner 提交。
+两侧 CAS、正式 ID 映射和完成标记在重启后继续有效；补尾不覆盖第三方修改，不重复分配身份，
+不重购联合首抽。字段、服务边界与恢复凭证见 [stage2_review.md](./stage2_review.md)。
 
-两种形状都必须带自报 `actor`；这些字段是乐观锁与审计声明，不是认证身份。CLI 在写前再次读取当前完整底座并拒绝
-过期/缺项 review。CLI exit `0` 表示当前 blocking 面已 generation-safe：可能是全部 PASS，也可能
-仍有显式隔离的 UNVER；后者不能冒充 `approved=true`，交付态固定为
-`ready_with_disclosures`。exit `1` 表示决定已落盘但仍有 FAIL/pending、未处置或不可隔离 UNVER，
-作业为 `landed_red`，gate 保持关闭。Inbox 始终保留非 PASS verification；已隔离 UNVER 标为
-`reviewed_retained + disclosure`，GlobalScreen 提供逐项或批量提交入口。
+独立 GlobalEdit 的 `post_edit_review` 绑定修前未闭合范围；保持原 hash 的旧红项须显式复判，
+新打开项才可使用明确默认决定。原样/no-op、未闭合 blocking、身份漂移、无进展或预算耗尽均
+关闭。隔离仅改变下游内存视图：原 Global、GlobalReview 与 UNVER 审计保留，消费视图删除完整
+秘密组并重新通过正式 schema，不能顺带删除被引用关系或规则。
+
+Global Commander 每个持久工作单元基础最多四次内容调用，包含首次及格式/内容纠错；换候选、
+run、epoch 或物理进程不重置。恢复和机械重验免费。Global 当前有效且必要义务接受后才允许
+Blueprint；Blueprint 的按章及跨章审阅、知识闭合仍属于独立工作单元，见
+[stage2_review.md](./stage2_review.md)。
+
+两种事实决定形状都显式声明 actor，它是审计声明，不是认证。CLI exit 0 表示当前 blocking
+事实面 generation-safe，显式隔离的 UNVER 仍不能冒充 approved；exit 1 表示决定已落盘但仍红，
+gate 保持关闭。Inbox 保留非 PASS 项和隔离披露，Global 页面提供逐项、批量及 typed 订正入口。

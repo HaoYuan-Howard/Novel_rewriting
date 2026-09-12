@@ -60,6 +60,50 @@ def test_partial_acceptance_preserves_unrelated_original_decisions():
     assert {row.obligation.obligation_id for row in final.inherited} == {'one', 'two'}
 
 
+@pytest.mark.parametrize('context_refs', [[], ['two', 'new']])
+def test_navigation_changes_keep_original_acceptance_and_exact_current_scope(context_refs):
+    rows = [_obligation('one', '甲', refs=['two']), _obligation('two', '乙')]
+    first = _decide(review.coverage('stage2.global', rows, []))
+    original = first.model_dump(mode='json')
+    current_rows = [rows[0].model_copy(update={'context_refs': context_refs}), rows[1]]
+    if 'new' in context_refs:
+        current_rows.append(_obligation('new', '新增的阅读上下文'))
+    current = review.coverage('stage2.global', current_rows, [first])
+    inherited = next(row for row in current.inherited if row.obligation.obligation_id == 'one')
+    assert inherited.obligation == current_rows[0]
+    assert inherited.source_decision_sha256 == review.sha(original)
+    assert inherited.actor == first.actor and inherited.reason == first.reason
+    assert current.pending_obligation_ids == (['new'] if 'new' in context_refs else [])
+    assert len(current.inherited) + len(current.pending_obligation_ids) == len(current_rows)
+    second = _decide(current, [first])
+    final = review.coverage('stage2.global', current_rows, [first, second])
+    assert not final.pending_obligation_ids and final.scope == current.scope
+    assert first.model_dump(mode='json') == original
+
+
+def test_navigation_rebinding_does_not_restore_an_acceptance_after_a_newer_negative():
+    rows = [_obligation('one', '甲', refs=['two']), _obligation('two', '乙')]
+    first = _decide(review.coverage('stage2.global', rows, []))
+    second = _decide(review.coverage('stage2.global', rows, [first]), [first],
+        decision='rework', exceptions=[dict(obligation_id='one', decision='rework', reason='较新反证')])
+    changed = [rows[0].model_copy(update={'context_refs': []}), rows[1]]
+    current = review.coverage('stage2.global', changed, [first, second])
+    assert current.pending_obligation_ids == ['one']
+    assert current.prior_problems[0].reason == '较新反证'
+    assert {row.obligation.obligation_id for row in current.inherited} == {'two'}
+
+
+@pytest.mark.parametrize('changed', [
+    {'owner': 'stage2.characters'}, {'chapter_ordinals': [2]}, {'subject_path': 'global.relations.other'},
+])
+def test_navigation_rebinding_never_ignores_changed_business_identity(changed):
+    row = _obligation('one', '原主张', refs=['context'])
+    first = _decide(review.coverage('stage2.global', [row], []))
+    current = row.model_copy(update={**changed, 'context_refs': []})
+    with pytest.raises(ArtifactUnreadable, match='业务身份不一致'):
+        review.coverage('stage2.global', [current], [first])
+
+
 def test_removed_problem_stays_pending_and_is_stable_after_explicit_review():
     rows = [_obligation('collection', ['bad']), _obligation('bad', '错误事实', refs=['collection'])]
     first = _decide(review.coverage('stage2.global', rows, []), decision='rework', exceptions=[
@@ -85,7 +129,7 @@ def test_latest_negative_blocks_old_positive_even_after_bytes_return():
     assert review.coverage('stage2.global', old, [first, second]).pending_obligation_ids == ['one']
 
 
-@pytest.mark.parametrize('damage', ['original_reason', 'scope_hash', 'source_reference'])
+@pytest.mark.parametrize('damage', ['original_reason', 'scope_hash', 'source_reference', 'context_refs'])
 def test_damaged_receipt_is_unknown_not_a_license_to_fall_back(damage):
     rows = [_obligation('one', '原内容')]
     first = _decide(review.coverage('stage2.global', rows, []))
@@ -95,6 +139,13 @@ def test_damaged_receipt_is_unknown_not_a_license_to_fall_back(damage):
     elif damage == 'scope_hash':
         first = first.model_copy(update={'obligation_receipt': first.obligation_receipt.model_copy(update={
             'scope': first.obligation_receipt.scope.model_copy(update={'scope_sha256': 'f' * 64})})})
+    elif damage == 'context_refs':
+        # 导航不参与语义继承比较，也不能回写到历史 scope 冒充原始阅读材料。
+        receipt = first.obligation_receipt
+        altered = receipt.scope.obligations[0].model_copy(update={'context_refs': ['forged']})
+        first = first.model_copy(update={'obligation_receipt': receipt.model_copy(update={
+            'scope': receipt.scope.model_copy(update={'obligations': [altered]}),
+            'units': [receipt.units[0].model_copy(update={'obligation': altered})]})})
     else:
         second = second.model_copy(update={'obligation_receipt': second.obligation_receipt.model_copy(update={
             'units': [second.obligation_receipt.units[0].model_copy(update={'source_decision_sha256': 'f' * 64})]})})

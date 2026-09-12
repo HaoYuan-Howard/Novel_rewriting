@@ -805,7 +805,7 @@ class SettingPatch(StrictModel):
 class GlobalEditQuarantineGroup(StrictModel):
     """第二轮自检仍无法证实、但可从写作视图整组删除的事实。"""
 
-    group_key: str = Field(pattern=r'^(?:secret|relation|world_rule):.+$')
+    group_key: str = Field(pattern=r'^secret:.+$')
     reason: str = Field(min_length=1)
 
     @model_validator(mode='after')

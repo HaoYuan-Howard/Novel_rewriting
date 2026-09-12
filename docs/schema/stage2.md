@@ -285,6 +285,9 @@ patch，新增主体可在同轮 patch。最终 exact fact_ref、人物端点、
 订正后 `--apply-edit` 保留 Characters、联合来源与唯一账务 attempt，经同一 HARD 通过后将
 Global 和首次 pending 审阅一起提交。任意写点中断按原 WAL 免费补尾，不能重买联合首抽。
 只有携带已有 current review 证明的 `post_edit_review` 才可提交编辑后的语义决定。
+其中 `quarantine_groups[].group_key` 只接受 `secret:<id>`，用于完整秘密组的显式 UNVER
+处置；关系、规则、人物、setting 和集合完整性不得隔离。隔离仅删除下游内存视图中的秘密，
+不删除其引用的独立已接受关系或规则，不改写正式 Core 或原审计决定。
 
 GlobalProvenance 的 `retired_global_ids` 独立记录已删除主体，采用 `relation:rel_01`、
 `rule:wr_01`、`secret:secret_01`、`version:wr_01:v01` 等正式身份键；初始为空。

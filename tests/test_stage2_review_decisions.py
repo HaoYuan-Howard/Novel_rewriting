@@ -382,8 +382,13 @@ def test_s2_service_approval_cannot_outvote_a_joint_hard_failure(
         approvals.approve_gate(tmp_path, '126', 's2')
 
 
-def test_core_material_rows_prefers_anchors_and_never_fabricates_missing_evidence():
-    """现役 Core 的材料完整性；旧 Hook/动态 fate 的消费反例另待各自 Gate。"""
+@pytest.mark.parametrize('evidence_failure', ['missing', 'digest_mismatch'])
+def test_core_material_rows_prefers_anchors_and_never_fabricates_missing_evidence(evidence_failure):
+    """空 setting 与坏 anchor 不混淆；坏证据即使命中原文也不能退回字面证明。
+
+    旧 SourceSpan/source=None 的证据职责由本反例承接。Opening 的连续开篇及
+    Hook 独立支持属于 Gate C；这里不复活 source_blurb 或动态 fate companion。
+    """
     from novel.stages.stage2.core_evidence import evidence_id
     chapter_text = 'exact开头。两人以掌柜与账房相称。世界观事实就在这里。结尾。'
     literal = '两人以掌柜与账房相称'
@@ -391,7 +396,15 @@ def test_core_material_rows_prefers_anchors_and_never_fabricates_missing_evidenc
     anchor = dict(chapter_ordinal=1, start=start, end=start + len(literal),
                   text_sha256=hashlib.sha256(literal.encode()).hexdigest())
     ref = evidence_id(anchor)
-    missing = 'ev_' + 'f' * 24
+    unresolved = 'ev_' + 'f' * 24
+    anchors = {ref: anchor}
+    if evidence_failure == 'digest_mismatch':
+        context_start = chapter_text.index('世界观事实就在这里')
+        bad_anchor = dict(chapter_ordinal=1, start=context_start,
+                          end=context_start + len('世界观事实就在这里'),
+                          text_sha256='0' * 64)
+        unresolved = evidence_id(bad_anchor)
+        anchors[unresolved] = bad_anchor
     registry = dict(characters={}, evidence_anchors={ref: anchor})
     for index, surface in enumerate(('掌柜', '账房'), 1):
         registry['characters'][f'char_{index:03d}'] = dict(canonical=surface,
@@ -400,11 +413,11 @@ def test_core_material_rows_prefers_anchors_and_never_fabricates_missing_evidenc
             role_evidence_refs=[ref], name_distinctiveness='high')
     payload = dict(characters_reference_sha256='a' * 64,
         setting=dict(era=None, era_evidence_refs=[], social_context='世界观事实就在这里',
-                     social_context_evidence_refs=[missing]),
+                     social_context_evidence_refs=[unresolved]),
         relations=[dict(relation_id='rel_01', subject_id='char_001', object_id='char_002',
                         predicate='雇佣', effective_from=1, effective_until=None,
                         revealed_from=1, evidence_refs=[ref])],
-        world_rules=[], arc_secrets=[], evidence_anchors={ref: anchor})
+        world_rules=[], arc_secrets=[], evidence_anchors=anchors)
     review = build_review(payload, characters=registry)
     main = SimpleNamespace(root=[SimpleNamespace(chapter_ordinal=1, text=chapter_text)])
     rows = global_review._material_rows(payload, review, main, registry, 'all')
@@ -423,162 +436,78 @@ def test_core_material_rows_prefers_anchors_and_never_fabricates_missing_evidenc
     assert context['formal_evidence'] == [] and context['exact_literal_hits'] == []
     assert context['evidence_mode'] == 'unresolved_formal_evidence'
     assert 'anchor' in context['unresolved_formal_evidence'][0]['reason']
+    absent = by_path['global.setting.era']
+    assert absent['subject'] is None
+    assert absent['formal_evidence'] == absent['unresolved_formal_evidence'] == []
+    assert absent['exact_literal_hits'] == [] and absent['evidence_mode'] == 'none'
+    assert absent['current_state'] == context['current_state'] == 'pending'
+    assert absent['effect'] == context['effect'] == 'blocking'
     # 字面搜索可辅助名字判别，不能替代已有但缺失的正式 anchor。
     name = by_path['characters.characters.char_001.name_distinctiveness']
     assert name['evidence_mode'] == 'claim_literal' and name['exact_literal_hits']
     complete = by_path['global.arc_secrets']
     assert complete['reading_scope'] == 'whole_book' and complete['evidence_mode'] == 'none'
     assert all('fate_companion' not in row for row in rows)
+    blocking = global_review._material_rows(payload, review, main, registry, 'blocking')
+    assert [row['item_id'] for row in blocking] == [row['item_id'] for row in rows]
 
 
-def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
-        monkeypatch, tmp_path):
-    """正式 SourceSpan 转 EvidenceRef；失败态不能退回 claim 字面搜索。
 
-    反例刻意让 ``世界观`` claim 原样出现在正文里：若 source=None 后仍递归搜 claim，
-    就会制造一条看似可用的证据，掩掉抽取阶段明确留下的失败态。
-    """
-    # 把 SourceSpan.recovery 的字面 ``exact`` 也放进正文；旧递归会把它误当
-    # 第二条 claim 搜出来，正式 evidence 路只能产下面那一条原文坐标。
-    chapter_text = 'exact开头。两人以掌柜与账房相称。世界观事实就在这里。结尾。'
-    literal = '两人以掌柜与账房相称'
-    start = chapter_text.index(literal)
-    source = {
-        'text': literal,
-        'start': start,
-        'end': start + len(literal),
-        'normalized': literal,
-        'recovery': 'exact',
-    }
-    valid = {'chapter_ordinal': 1, 'source': source}
-    unresolved = {'chapter_ordinal': 1, 'source': None}
-    payload = {
-        'entities': {
-            'characters': {
-                'char_001': {
-                    'canonical': '掌柜', 'name_distinctiveness': 'high',
-                    'role': '客栈掌柜', 'role_evidence': valid,
-                    'fate': '后来成为客栈东家', 'fate_evidence': valid,
-                    'address': [],
-                },
-                'char_002': {
-                    'canonical': '账房', 'name_distinctiveness': 'high',
-                    'role': '客栈账房', 'role_evidence': valid,
-                    'fate': None, 'fate_evidence': None, 'address': [],
-                },
-            },
-            'relations': [{
-                'relation_id': 'rel_01', 'subject_id': 'char_001',
-                'object_id': 'char_002', 'predicate': '雇佣',
-                'predicate_evidence': valid,
-                'visibility': {'kind': 'public', 'from_chapter': 1},
-                'valid_from_chapter': 1, 'valid_through_chapter': None,
-            }],
-        },
-        'canon': {
-            'setting': {
-                '时代背景': '架空年代', 'era_evidence': valid,
-                '世界观': '世界观事实就在这里', 'worldview_evidence': unresolved,
-            },
-            'world_rules': [],
-            'secrets': [],
-        },
-        'source_blurb': {'facts': [], 'opening': {'kind': 'proposed', 'through_chapter': 1, 'rationale': '开篇交代掌柜', 'boundary_evidence': valid}},
-    }
-    review = build_review(payload)
-    grounding = SimpleNamespace(model_dump=lambda **_kwargs: payload)
-    main = SimpleNamespace(
-        root=[SimpleNamespace(chapter_ordinal=1, text=chapter_text)],
-        model_dump=lambda **_kwargs: [{
-            'chapter_ordinal': 1,
-            'text': chapter_text,
-        }],
-    )
+def test_role_hidden_identity_change_reopens_acceptance_without_fate_companion():
+    """原首次公开 role 的接受不能覆盖新增泄底描述；不是声称代码自动判断文学泄底。"""
+    from contracts.schema.stage1 import MainText
+    from novel.stages.stage2.core_evidence import evidence_id
 
-    class FakeStore:
-        def read_own(self, _model, rel, **_kwargs):
-            if rel == global_review.REL:
-                return review, None
-            if rel == global_review.STAGE1_HOOK_COPY:
-                return SimpleNamespace(text='掌柜面临新的经营挑战。'), None
-            if rel == global_review.STAGE1_MAIN_TEXT:
-                return main, None
-            return grounding, None
+    texts = ['掌柜照管这间客栈。', '掌柜其实是失踪多年的东家。']
+    anchors = []
+    for ordinal, text in enumerate(texts, 1):
+        anchor = dict(chapter_ordinal=ordinal, start=0, end=len(text),
+                      text_sha256=hashlib.sha256(text.encode()).hexdigest())
+        anchors.append((evidence_id(anchor), anchor))
+    role_ref, role_anchor = anchors[0]
+    secret_ref, secret_anchor = anchors[1]
+    registry = dict(characters={'char_001': dict(
+        canonical='掌柜', aliases=[dict(surface='掌柜', identity_revealed_from=1,
+                                       evidence_refs=[role_ref])],
+        first_chapter=1, first_appearance_evidence_refs=[role_ref],
+        role='照管客栈的掌柜', role_evidence_refs=[role_ref], name_distinctiveness='common')},
+        evidence_anchors={role_ref: role_anchor})
+    payload = dict(characters_reference_sha256='a' * 64,
+        setting=dict(era=None, era_evidence_refs=[], social_context=None,
+                     social_context_evidence_refs=[]), relations=[], world_rules=[],
+        arc_secrets=[dict(secret_id='secret_01', fact='掌柜是失踪多年的东家',
+                         fact_ref=None, setup_chapters=[], revealed_from=2,
+                         evidence_refs=[secret_ref])],
+        evidence_anchors={secret_ref: secret_anchor})
+    accepted = build_review(payload, characters=registry)
+    for item in tuple(accepted.items):
+        accepted = decide(accepted, item_id=item.item_id,
+            expected_subject_sha256=item.subject_sha256, state='PASS', actor='fixture-commander',
+            reason='分别核对首次身份和后来揭示的真相', now='2026-09-12T00:00:00Z')
+    role_path = 'characters.characters.char_001.role'
+    original_role = next(item for item in accepted.items if item.subject_path == role_path)
+    changed = copy.deepcopy(registry)
+    changed['characters']['char_001']['role'] = '照管客栈、实为失踪多年东家的掌柜'
+    changed['characters']['char_001']['role_evidence_refs'].append(secret_ref)
+    changed['evidence_anchors'][secret_ref] = secret_anchor
+    before = copy.deepcopy((changed, payload, accepted))
 
-        def read(self, _model, _rel):
-            return main
+    current = build_review(payload, accepted, characters=changed)
 
-    monkeypatch.setattr(global_review, 'ArtifactStore', lambda _ctx: FakeStore())
-    monkeypatch.setattr(global_review.grounding_io, 'read_own', lambda *_args, **_kwargs: (grounding, None))
-    from novel.orchestrator import approvals
-    monkeypatch.setattr(approvals, 'stage2_review_history', lambda *_args: [])
-    workpack = global_review.review_workpack(SimpleNamespace(sid='synthetic-book', novel_dir=tmp_path / '书_synthetic-book'))
-    by_path = {row['subject_path']: row for row in workpack['items']}
-    full_workpack = global_review.review_workpack(
-        SimpleNamespace(sid='synthetic-book', novel_dir=tmp_path / '书_synthetic-book'), scope='all')
-    full_by_path = {row['subject_path']: row for row in full_workpack['items']}
-
-    role = by_path['entities.characters.char_001.role']
-    assert len(role['formal_evidence']) == 1
-    assert role['exact_literal_hits'] == [], \
-        'formal evidence 已含坐标与上下文，不得再复制成 literal hit'
-    assert role['reading_scope'] == 'localized'
-    assert role['evidence_mode'] == 'formal_evidence'
-    ref = EvidenceRef.model_validate(role['formal_evidence'][0]['evidence_ref'])
-    assert ref.artifact == 'stage1/main_text.json#chapter/1'
-    assert ref.subject_sha256 == hashlib.sha256(
-        chapter_text.encode('utf-8')).hexdigest()
-
-    relation = by_path['entities.relations.rel_01']
-    assert 'predicate_evidence' not in relation['subject']
-    assert relation['exact_literal_hits'] == []
-    assert relation['evidence_mode'] == 'formal_evidence'
-
-    worldview = by_path['canon.setting.世界观']
-    assert worldview['formal_evidence'] == []
-    assert worldview['exact_literal_hits'] == [], \
-        'source=None 不得拿恰好出现的 claim 字面制造 evidence'
-    assert worldview['unresolved_formal_evidence'][0]['reason'].endswith('source=None')
-    assert worldview['evidence_mode'] == 'unresolved_formal_evidence'
-
-    opening = by_path['source_blurb.opening']
-    assert opening['reading_scope'] == 'whole_book'
-    assert opening['evidence_mode'] == 'formal_evidence', \
-        '整书阅读与 evidence 模式是正交轴，不能互相覆盖'
-
-    companion = role['fate_companion']
-    fate_item = next(item for item in review.items
-                     if item.subject_path == 'entities.characters.char_001.fate')
-    assert set(companion) == {
-        'read_only', 'kind', 'item_id', 'subject_path', 'subject_sha256',
-        'current_state', 'current_reason', 'generation_disposition',
-        'effect', 'generation_impact', 'subject', 'formal_evidence',
-        'unresolved_formal_evidence',
-    }
-    assert companion['read_only'] is True
-    assert companion['kind'] == 'fate'
-    assert companion['item_id'] == fate_item.item_id
-    assert companion['subject_path'] == fate_item.subject_path
-    assert companion['subject_sha256'] == fate_item.subject_sha256
-    assert companion['current_state'] == 'pending'
-    assert companion['current_reason'] is None
-    assert companion['generation_disposition'] is None
-    assert companion['effect'] == 'disclosure'
-    assert companion['generation_impact'] == 'disclose'
-    assert companion['subject'] == '后来成为客栈东家'
-    assert companion['unresolved_formal_evidence'] == []
-    assert len(companion['formal_evidence']) == 1
-    empty_companion = by_path['entities.characters.char_002.role']['fate_companion']
-    assert empty_companion['subject'] is None
-    assert empty_companion['formal_evidence'] == []
-    assert empty_companion['unresolved_formal_evidence'] == [], \
-        'fate=null 是合法主体，不得伪报成证据回取失败'
-
-    name = full_by_path['entities.characters.char_001.name_distinctiveness']
-    assert name['evidence_mode'] == 'claim_literal'
-    assert name['exact_literal_hits']
-    complete = by_path['source_blurb.facts']
-    assert complete['reading_scope'] == 'whole_book'
-    assert complete['evidence_mode'] == 'none'
-    assert 'fate_companion' not in full_by_path['entities.characters.char_001.role'], \
-        'all scope 已有同组 fate 正式行，不得再复制一份 companion'
+    role = next(item for item in current.items if item.subject_path == role_path)
+    assert original_role.state == 'PASS' and role.state == 'pending'
+    assert role.subject_sha256 != original_role.subject_sha256
+    assert role.actor is None and role.reason is None and role.evidence == []
+    assert all(item.state == 'PASS' for item in current.items
+               if item.subject_path.startswith('global.'))
+    assert not global_review.generation_safety(payload, current, characters=changed).safe
+    main = MainText.model_validate([
+        dict(chapter_ordinal=ordinal, text=text) for ordinal, text in enumerate(texts, 1)])
+    rows = global_review._material_rows(payload, current, main, changed, 'blocking')
+    by_path = {row['subject_path']: row for row in rows}
+    assert by_path[role_path]['subject'] == changed['characters']['char_001']['role']
+    secret = by_path['global.arc_secrets.secret_01']
+    assert secret['subject']['fact'] == '掌柜是失踪多年的东家'
+    assert secret['current_state'] == 'PASS' and secret['effect'] == 'blocking'
+    assert all('fate_companion' not in row and '.fate' not in row['subject_path'] for row in rows)
+    assert (changed, payload, accepted) == before

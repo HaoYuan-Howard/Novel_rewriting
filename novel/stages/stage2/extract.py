@@ -3411,7 +3411,7 @@ def global_edit_template(ctx: RunContext) -> GlobalEdit:
                                   ('arc_secrets', 'secret', 'secret_id')):
             groups.update(prefix + ':' + row[key] for row in raw[name])
             if not raw[name]:
-                groups.add('set:' + name)
+                groups.add(review_group_key('global.' + name))
     else:
         review = store.read_own(GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
         require_current_review(raw, review, characters=_read_characters(store))
@@ -3423,7 +3423,7 @@ def global_edit_template(ctx: RunContext) -> GlobalEdit:
     for name, prefix, key in (('relations', 'relation', 'relation_id'),
                               ('world_rules', 'world_rule', 'rule_id'),
                               ('arc_secrets', 'secret', 'secret_id')):
-        if 'set:' + name in groups:
+        if review_group_key('global.' + name) in groups:
             deltas.append({'collection': name,
                            'expected_collection_sha256': subject_sha256(raw[name]), 'operations': []})
         rows = [copy.deepcopy(row) for row in raw[name] if prefix + ':' + row[key] in groups]

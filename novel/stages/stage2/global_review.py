@@ -722,9 +722,9 @@ def generation_grounding(store: ArtifactStore) -> GlobalGrounding:
     """读取下游唯一可消费的 Stage2 视图，并如实记录 review 输入边。
 
     正式 ``global_grounding.json`` 仍保留完整审计事实；这里不迁移、不覆写它。
-    对已逐项处置的 UNVER，只从本次下游内存视图删除所属 secret/relation/world-rule
-    完整组，再以 ``GlobalGrounding`` schema 复验。这样终审仍看得到原事实与决定，
-    写作模型却不可能收到被隔离的未知事实。
+    对已逐项处置的 UNVER，只从本次下游内存视图删除所属完整秘密组，再以
+    ``GlobalGrounding`` schema 复验。终审仍看得到原事实与决定；秘密引用的
+    独立已接受关系或规则保持原样，不因秘密隔离而连带删除。
     """
     grounding = grounding_io.read(store)
     review = store.read(GlobalReview, REL)
@@ -740,15 +740,8 @@ def generation_grounding(store: ArtifactStore) -> GlobalGrounding:
 
     payload = grounding.model_dump(mode='json', by_alias=True)
     secret_ids = {group.split(':', 1)[1] for group in safety.quarantined_groups if group.startswith('secret:')}
-    relation_ids = {group.split(':', 1)[1] for group in safety.quarantined_groups if group.startswith('relation:')}
-    rule_ids = {group.split(':', 1)[1] for group in safety.quarantined_groups if group.startswith('world_rule:')}
-    payload['relations'] = [row for row in payload['relations'] if row['relation_id'] not in relation_ids]
-    payload['world_rules'] = [row for row in payload['world_rules'] if row['rule_id'] not in rule_ids]
     payload['arc_secrets'] = [row for row in payload['arc_secrets']
-                              if row['secret_id'] not in secret_ids and not (
-                                  row.get('fact_ref') is not None and (
-                                      (row['fact_ref']['kind'] == 'relation' and row['fact_ref']['relation_id'] in relation_ids)
-                                      or (row['fact_ref']['kind'] == 'world_rule_version' and row['fact_ref']['rule_id'] in rule_ids)))]
+                              if row['secret_id'] not in secret_ids]
     try:
         return GlobalGrounding.model_validate(payload)
     except ValidationError as exc:  # 校验细节不应变成一条模糊的继续路径
@@ -785,8 +778,8 @@ def require_global_valid(ctx: RunContext) -> None:
             hint=('先运行 `stage2.global --emit-review-template`（默认只出 blocking 面，'
                   '要整份加 `--review-scope all`），逐项核验后用 '
                   '`stage2.global --review-decisions <书内json>` 提交；'
-                  'FAIL 必须经 typed GlobalEdit 修复；UNVER 只有可确定性隔离的 '
-                  'secret/relation/world_rule 组能显式 quarantine，不能改名为 PASS。'
+                  'FAIL 必须交对应 owner 修复；UNVER 只有完整 secret 组能显式 '
+                  'quarantine，不能改名为 PASS；关系、规则及集合完整性不得隔离。'
                   '人物身份、公开角色与称谓归属必须明确接受，不许自动 PASS'))
 
     global_freshness = store.freshness(STAGE2_GLOBAL_GROUNDING)

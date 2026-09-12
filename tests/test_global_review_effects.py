@@ -180,6 +180,54 @@ def test_dependency_hash_reopens_only_the_changed_subject_card():
                 if item.kind == 'role').state == 'PASS'
 
 
+@pytest.mark.parametrize('change', ['predicate', 'evidence_locator'])
+def test_relation_completeness_tracks_business_fields_but_not_evidence_location(change):
+    """同一 ID 的业务修改重开完整性；合法证据订正只重开引用该证据的判断。"""
+    from novel.stages.stage2.core_evidence import (
+        compile_manual_evidence_refs, validate_evidence_anchors,
+    )
+
+    grounding = _global()
+    main_text = [{'chapter_ordinal': 1, 'text': '甲是邻居。甲乙同窗。甲乙曾一同求学。'}]
+    assert not validate_evidence_anchors(
+        grounding, grounding['evidence_anchors'], main_text)
+    approved = _decide_all(build_review(grounding), set(GLOBAL_REVIEW_KINDS))
+    changed = copy.deepcopy(grounding)
+    if change == 'predicate':
+        changed['relations'][0]['predicate'] = '旧友'
+    else:
+        changed['relations'][0]['evidence_refs'] = [
+            {'chapter_ordinal': 1, 'locator': '甲乙曾一同求学。'}]
+        changed, anchors = compile_manual_evidence_refs(
+            changed, changed['evidence_anchors'], main_text)
+        changed['evidence_anchors'] = anchors
+        assert changed['relations'][0]['evidence_refs'] != grounding['relations'][0]['evidence_refs']
+    assert not validate_evidence_anchors(changed, changed['evidence_anchors'], main_text)
+    assert [row['relation_id'] for row in changed['relations']] == [
+        row['relation_id'] for row in grounding['relations']]
+    assert (review_domain.without_review_evidence(changed['relations']) ==
+            review_domain.without_review_evidence(grounding['relations'])) == (
+                change == 'evidence_locator')
+
+    refreshed = build_review(changed, approved)
+    old_relation = next(row for row in approved.items if row.kind == 'relation')
+    new_relation = next(row for row in refreshed.items if row.kind == 'relation')
+    assert new_relation.subject_path == old_relation.subject_path
+    assert new_relation.item_id != old_relation.item_id
+    assert new_relation.subject_sha256 != old_relation.subject_sha256
+    assert new_relation.state == 'pending'
+    old_complete = next(row for row in approved.items if row.kind == 'relation_set_complete')
+    new_complete = next(row for row in refreshed.items if row.kind == 'relation_set_complete')
+    assert new_complete.subject_path == old_complete.subject_path
+    if change == 'predicate':
+        assert new_complete.item_id != old_complete.item_id
+        assert new_complete.subject_sha256 != old_complete.subject_sha256
+        assert new_complete.state == 'pending'
+    else:
+        assert new_complete == old_complete
+        assert new_complete.state == 'PASS'
+
+
 # ── ② 闸 ────────────────────────────────────────────────────────────────────
 
 def test_alias_identity_pending_cannot_be_treated_as_nonblocking_disclosure():
@@ -246,22 +294,25 @@ def test_generation_safety_never_quarantines_core_structure_or_fail(subject_path
     grounding = _global()
     all_pass = _decide_all(
         build_review(grounding), set(GLOBAL_REVIEW_KINDS))
-    setting = next(
+    subject = next(
         item for item in all_pass.items
         if item.subject_path == subject_path)
     disposition = GlobalReviewGenerationDisposition(
-        action='quarantine_group', reason='请求隔离 setting')
+        action='quarantine_group', reason='请求隔离当前主体')
     unsafe = decide(
-        all_pass, item_id=setting.item_id,
-        expected_subject_sha256=setting.subject_sha256,
+        all_pass, item_id=subject.item_id,
+        expected_subject_sha256=subject.subject_sha256,
         state='UNVER', actor='tester', reason='证据不足',
         generation_disposition=disposition,
         now='2026-09-02T00:00:00+00:00')
-    assert generation_safety(grounding, unsafe).safe is False
+    safety = generation_safety(grounding, unsafe)
+    assert safety.safe is False
+    assert safety.quarantined_groups == ()
+    assert subject.item_id in safety.blocking_item_ids
 
     failed = decide(
-        all_pass, item_id=setting.item_id,
-        expected_subject_sha256=setting.subject_sha256,
+        all_pass, item_id=subject.item_id,
+        expected_subject_sha256=subject.subject_sha256,
         state='FAIL', actor='tester', reason='与原文冲突',
         now='2026-09-02T00:00:00+00:00')
     assert generation_safety(grounding, failed).safe is False
@@ -774,6 +825,8 @@ def test_quarantined_secret_is_removed_from_generation_but_retained_in_inbox(tmp
     generated = global_review.generation_grounding(ArtifactStore(downstream_ctx))
     assert generated.arc_secrets == []
     assert generated.relations == grounding.relations
+    assert generated.world_rules == grounding.world_rules
+    assert generated.setting == grounding.setting
     assert set(downstream_ctx.edges) >= {STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW}
     assert store.path(STAGE2_GLOBAL_GROUNDING).read_bytes() == before
     from novel.views.inbox import inbox_view

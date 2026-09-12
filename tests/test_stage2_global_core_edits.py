@@ -32,6 +32,40 @@ def snapshot(ctx):
     return {rel: (ctx.novel_dir / rel).read_bytes() for rel in paths}
 
 
+@pytest.mark.parametrize('collection, id_field', [
+    ('relations', 'relation_id'), ('arc_secrets', 'secret_id'), ('world_rules', 'rule_id'),
+])
+def test_failed_collection_produces_free_edit_and_current_commander_member_schema(
+        tmp_path, collection, id_field):
+    """集合字段与审阅分组不必同名；秘密集合的真实免费返修不能卡在字符串拼接。"""
+    from novel.orchestrator import reviewer_tasks
+    from novel.stages.stage2 import global_review
+    from novel.quality.global_review import review_group_key
+
+    ctx, artifact = seed(tmp_path)
+    free = _free_ctx(ctx)
+    store = ArtifactStore(free)
+    review = store.read_own(GlobalReview, extract.GLOBAL_REVIEW_REL)[0]
+    target = 'global.' + collection
+    review.items = [row.model_copy(update={
+        'state': 'FAIL', 'actor': 'test:commander', 'decided_at': '2026-09-13T00:00:00Z',
+        'reason': '本集合仍有长期事实遗漏，需要通过当前集合编辑订正',
+    }) if row.subject_path == target else row for row in review.items]
+    store.write_round(extract.GLOBAL_REVIEW_REL, review)
+    before = snapshot(ctx)
+    ledger = ctx.ledger.path.read_bytes()
+    pack = global_review.review_workpack(free)
+    raw = decode_artifact(extract.GLOBAL_EDIT, json.loads(extract.global_edit_template_json(free))).payload
+    assert [row['collection'] for row in raw['collection_edits']] == [collection]
+    row, = [row for row in pack['items'] if row['subject_path'] == target]
+    assert row['group_key'] == review_group_key(target)
+    expected_ids = tuple(sorted(getattr(item, id_field) for item in getattr(artifact, collection)))
+    assert reviewer_tasks._current_collection_subject_ids(pack, collection) == expected_ids
+    values = reviewer_tasks._collection_edit_allowed_values(raw, pack)
+    assert collection in values['collection_operation_contract.pydantic_schema_by_collection']
+    assert snapshot(ctx) == before and ctx.ledger.path.read_bytes() == ledger
+
+
 def test_real_free_edit_changes_only_global_and_reopens_affected_review(tmp_path):
     ctx, original = seed(tmp_path)
     before = snapshot(ctx)
@@ -254,11 +288,20 @@ def test_pending_secret_keeps_accepted_reference_semantics_in_real_commander_mat
     wire = reviewer_tasks._compact_stage2_materials({'global': current})['global']
     assert current == before  # 只读投影不重开任何已接受义务。
     assert ctx.ledger.path.read_bytes() == ledger
+    assert 'claim_evidence_index' not in wire
+    assert wire['workpack_sha256'] == before['workpack_sha256']
     sent = [row for card in wire['subject_cards'] for row in card['items']]
     assert [row['item_id'] for row in sent] == [secret['item_id']]
     context = [row for card in wire['context_cards'] for row in card['items']]
     assert context and all(row['context_only'] and row['inherited_decision']['decision'] == 'accept'
                            for row in context)
+    original_rows = {row['item_id']: row for row in before['items']}
+    for row in sent + context:
+        previous = original_rows[row['item_id']]
+        for field in ('item_id', 'subject_path', 'subject_sha256'):
+            assert row[field] == previous[field]
+        assert wire['subject_catalog'][row['subject_ref']] == previous['subject']
+        assert row['evidence_ref'] in wire['evidence_catalog']
     referenced = next(row for row in context if row['kind'] == target_kind)
     target = wire['subject_catalog'][referenced['subject_ref']]
     if target_kind == 'relation':
@@ -289,16 +332,44 @@ def test_initial_commander_materials_provide_original_text_once(tmp_path):
     ctx, _ = seed(tmp_path)
     pack = global_review.review_workpack(_free_ctx(ctx))
     before = copy.deepcopy(pack)
+    before_sha = reviewer_tasks._canonical_json_sha256(pack)
+    before_files = snapshot(ctx)
+    ledger = ctx.ledger.path.read_bytes()
     wire = reviewer_tasks._compact_stage2_materials({'global': pack})['global']
     assert pack == before
+    assert reviewer_tasks._canonical_json_sha256(pack) == before_sha
+    assert wire['workpack_sha256'] == before['workpack_sha256']
+    assert wire['binding'] == before['binding']
+    assert snapshot(ctx) == before_files
+    assert ctx.ledger.path.read_bytes() == ledger
+    assert 'claim_evidence_index' not in wire
     assert wire['main_text_chapters'] == pack['main_text_chapters']
     assert wire['source_passages'] == {}
     assert 'disclose' not in wire['legend']['generation_impact']
     assert wire['context_cards'] == []
-    for evidence in wire['evidence_catalog'].values():
-        for row in evidence['formal_evidence'] + evidence['exact_literal_hits']:
-            assert 'literal' not in row and 'context' not in row
-            assert row['source_text_ref'] == f"chapter:{row['chapter_ordinal']}"
+    cards = [row for card in wire['subject_cards'] for row in card['items']]
+    original = {row['item_id']: row for row in before['items']}
+    assert cards and len(cards) == len(original)
+    assert {row['item_id'] for row in cards} == original.keys()
+    sources = {row['chapter_ordinal']: row['text'] for row in wire['main_text_chapters']}
+    serialized = json.dumps(wire, ensure_ascii=False)
+    for text in sources.values():
+        assert serialized.count(json.dumps(text, ensure_ascii=False)) == 1
+    for row in cards:
+        previous = original[row['item_id']]
+        for field in ('item_id', 'subject_path', 'subject_sha256', 'evidence_mode', 'generation_impact'):
+            assert row[field] == previous[field]
+        assert wire['subject_catalog'][row['subject_ref']] == previous['subject']
+        evidence = wire['evidence_catalog'][row['evidence_ref']]
+        for field in ('registered_evidence', 'unresolved_formal_evidence'):
+            assert evidence[field] == previous[field]
+        for field in ('formal_evidence', 'exact_literal_hits'):
+            assert len(evidence[field]) == len(previous[field])
+            for proof, old_proof in zip(evidence[field], previous[field], strict=True):
+                assert {key: value for key, value in proof.items() if key != 'source_text_ref'} == {
+                    key: value for key, value in old_proof.items() if key not in ('literal', 'context')}
+                assert proof['source_text_ref'] == f"chapter:{proof['chapter_ordinal']}"
+                assert sources[proof['chapter_ordinal']][proof['start']:proof['end']] == old_proof['literal']
 
 
 @pytest.mark.parametrize('patch', [

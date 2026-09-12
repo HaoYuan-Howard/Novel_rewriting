@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""RunSupervisor reviewer 闭集任务的零模型边界测试。"""
+"""RunSupervisor reviewer 闭集任务的零模型边界测试。
+
+Global 不再接收人物动态状态与 Hook 准备材料；旧 Hook 形状在此保留拒收反例。
+source_blurb/opening_scope 的准备、未决出口和恢复正向职责待 Gate C 由 Stage6 覆盖。
+"""
 from __future__ import annotations
 
 import copy
@@ -22,7 +26,7 @@ from contracts.schema.api import (
     Stage5ClosureRequest, Stage5ClosureTemplate, Stage5ClosureView,
 )
 from contracts.schema.evaluation import GlobalReviewDecisionSet
-from contracts.schema.stage2 import GlobalEdit
+from contracts.schema.stage2 import GlobalEdit, GlobalEditQuarantineGroup
 from novel.orchestrator import queue, reviewer_tasks
 
 
@@ -1585,7 +1589,7 @@ def test_stage2_options_bind_global_workpack_and_offer_explicit_node_decision(
     options = reviewer_tasks._submission_options({
         'global': {
             'workpack_sha256': '7' * 64,
-            'review_token': 's2gr1_' + 'a' * 64,
+            'review_token': 's2gr2_' + 'a' * 64,
             'review_coverage': _node_review_coverage('stage2.global'),
             'items': [{'current_state': 'pending', 'item_id': 'item-1',
                        'subject_sha256': '1' * 64}],
@@ -1604,12 +1608,12 @@ def test_stage2_options_bind_global_workpack_and_offer_explicit_node_decision(
     closed = reviewer_tasks._submission_options({
         'global': {'items': [{'current_state': 'PASS'}],
                    'review_coverage': _node_review_coverage('stage2.global'),
-                   'review_token': 's2gr1_' + 'a' * 64},
+                   'review_token': 's2gr2_' + 'a' * 64},
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
     assert [row['id'] for row in closed] == ['approval:stage2_global_review']
 
     # Commander 只编辑逻辑 payload；可信 loader 必须在交给 CLI 前恢复同一份
-    # v2 信封，否则下一步 ``store.read_external`` 会因缺版本标记再次停机。
+    # v3 信封，否则下一步 ``store.read_external`` 会因缺版本标记再次停机。
     scope['reason'] = '已逐章核对当前 blocking workpack，证据不足项保留 UNVER'
     options[0]['exact_request']['action']['input_payload']['decisions'] = []
     request_path = tmp_path / 'stage2-reviewer-request.json'
@@ -1620,7 +1624,7 @@ def test_stage2_options_bind_global_workpack_and_offer_explicit_node_decision(
         request_path, current, submission_options=options)
     assert isinstance(action, reviewer_tasks.ReviewerNodeAction)
     assert action.input_payload is not None
-    assert action.input_payload['_schema_version'] == 2
+    assert action.input_payload['_schema_version'] == 3
     logical = decode_artifact(
         STAGE2_GLOBAL_REVIEW_DECISIONS, action.input_payload).payload
     GlobalReviewDecisionSet.model_validate(logical)
@@ -1657,9 +1661,9 @@ def _node_review_coverage(node: str, ids: tuple[str, ...] = ('item-1',)) -> dict
 
 def _global_edit_envelope() -> dict:
     return encode_artifact(STAGE2_GLOBAL_EDIT, {
-        'characters': [{
-            'char_id': 'char_001',
-            'fate': None,
+        'relations': [{
+            'relation_id': 'rel_01',
+            'effective_from': 1,
         }],
     })
 
@@ -1681,13 +1685,13 @@ def _relation_item(relation_id: str) -> dict:
         'subject_id': 'char_001',
         'object_id': 'char_002',
         'predicate': '彼此信任',
-        'predicate_evidence': {
+        'evidence_refs': [{
             'chapter_ordinal': 1,
             'locator': '两人约定共同查清真相',
-        },
-        'visibility': {'kind': 'public', 'from_chapter': 1},
-        'valid_from_chapter': 1,
-        'valid_through_chapter': None,
+        }],
+        'revealed_from': 1,
+        'effective_from': 1,
+        'effective_until': None,
     }
 
 
@@ -1697,17 +1701,37 @@ def _stage2_failed_global(
     current_collections: dict[str, object] | None = None,
 ) -> dict:
     normalized = []
+    collection_paths = {
+        'characters': 'characters.characters', 'relations': 'global.relations',
+        'secrets': 'global.arc_secrets', 'world_rules': 'global.world_rules',
+    }
+    subject_prefixes = {
+        'character': ('character_identity', 'characters.characters'),
+        'relation': ('relation', 'global.relations'),
+        'secret': ('secret', 'global.arc_secrets'),
+        'world_rule': ('world_rule_kind', 'global.world_rules'),
+    }
     for index, source in enumerate(items, start=1):
         row = copy.deepcopy(source)
         group_key = str(row.get('group_key') or f'arc:{index}')
+        prefix, ref = group_key.split(':', 1)
+        if prefix == 'set':
+            row.setdefault('kind', {
+                'characters': 'character_set_complete', 'relations': 'relation_set_complete',
+                'secrets': 'secret_set_complete', 'world_rules': 'world_rule_set_complete',
+            }[ref])
+            row.setdefault('subject_path', collection_paths[ref])
+        elif prefix in subject_prefixes:
+            kind, path = subject_prefixes[prefix]
+            row.setdefault('kind', kind)
+            row.setdefault('subject_path', f'{path}.{ref}')
         row.setdefault('item_id', f'item-{index}')
         row.setdefault('subject_sha256', f'{index:x}' * 64)
         row.setdefault('subject_path', group_key.replace(':', '.'))
         row.setdefault('effect', 'blocking')
         row.setdefault(
             'generation_impact',
-            'quarantine_or_fix' if group_key.startswith(
-                ('secret:', 'relation:', 'world_rule:')) else 'must_fix')
+            'quarantine_or_fix' if group_key.startswith('secret:') else 'must_fix')
         row.setdefault('generation_disposition', None)
         row.setdefault('registered_evidence', [])
         row.setdefault('formal_evidence', [])
@@ -1719,17 +1743,23 @@ def _stage2_failed_global(
         normalized.append(row)
     bindings = {
         'characters': (
-            'character_set_complete', 'entities.characters'),
+            'character_set_complete', 'characters.characters'),
         'relations': (
-            'relation_set_complete', 'entities.relations'),
-        'secrets': (
-            'secret_set_complete', 'canon.secrets'),
+            'relation_set_complete', 'global.relations'),
+        'arc_secrets': (
+            'secret_set_complete', 'global.arc_secrets'),
         'world_rules': (
-            'world_rule_set_complete', 'canon.world_rules'),
+            'world_rule_set_complete', 'global.world_rules'),
     }
     for offset, (collection, subject) in enumerate(
             (current_collections or {}).items(), start=len(normalized) + 1):
         kind, path = bindings[collection]
+        matching = [row for row in normalized
+                    if row['kind'] == kind and row['subject_path'] == path]
+        if matching:
+            assert len(matching) == 1
+            matching[0]['subject'] = copy.deepcopy(subject)
+            continue  # 真实工作包每个集合只有一个主体；保留其本轮 FAIL/UNVER。
         normalized.append({
             'item_id': f'current-set-{collection}',
             'kind': kind,
@@ -1740,7 +1770,7 @@ def _stage2_failed_global(
             'generation_disposition': None,
             'current_state': 'PASS',
             'current_reason': '测试冻结 current collection',
-            'group_key': f'set:{collection}',
+            'group_key': f"set:{'secrets' if collection == 'arc_secrets' else collection}",
             'registered_evidence': [],
             'formal_evidence': [],
             'unresolved_formal_evidence': [],
@@ -1750,8 +1780,8 @@ def _stage2_failed_global(
             'subject': copy.deepcopy(subject),
         })
     return {
-        'kind': 'stage2-global-review-workpack-v4',
-        'review_token': 's2gr1_' + '7' * 64,
+        'kind': 'stage2-global-review-workpack-v6',
+        'review_token': 's2gr2_' + '7' * 64,
         'workpack_sha256': '7' * 64,
         'main_text_subject_sha256': '9' * 64,
         'main_text_chapters': [],
@@ -1785,13 +1815,13 @@ def test_stage2_durable_correction_uses_failed_edit_without_loading_blueprint(
         'invalid_sha256': '2' * 64,
         'expected_source_sha256': '8' * 64,
         'global_review_workpack_sha256': '7' * 64,
-        'hard_hits': ['role_repeats_name'],
-        'hard_outcomes': [{'rule': 'role_repeats_name', 'findings': [{
-            'detail': 'char_001 的 role 与 canonical 完全同字',
+        'hard_hits': ['global_temporal_contract'],
+        'hard_outcomes': [{'rule': 'global_temporal_contract', 'findings': [{
+            'detail': 'rel_01 的成立时间不在源章节范围',
         }]}],
         'failed_edit': _global_edit_envelope(),
         'global_review_workpack': _stage2_failed_global([{
-            'current_state': 'FAIL', 'group_key': 'character:char_001'}]),
+            'current_state': 'FAIL', 'group_key': 'relation:rel_01'}]),
     }
 
     def command(argv):
@@ -1808,14 +1838,14 @@ def test_stage2_durable_correction_uses_failed_edit_without_loading_blueprint(
     assert len(calls) == 1
     assert 'blueprint' not in pack
     assert 'failed_edit' not in pack['edit_correction']
-    assert pack['edit_correction']['hard_hits'] == ['role_repeats_name']
+    assert pack['edit_correction']['hard_hits'] == ['global_temporal_contract']
     current = _current(queue.WAITING_ON_STAGE2_EDIT_CORRECTION)
     option, control = reviewer_tasks._submission_options(
         pack, current, queue.WAITING_ON_STAGE2_EDIT_CORRECTION)
     assert control['id'] == 'approval:stage2_global_review'
     assert option['id'] == 'node:stage2.global.apply-edit'
-    assert option['exact_request']['action']['input_payload']['characters'][0][
-        'char_id'] == 'char_001'
+    assert option['exact_request']['action']['input_payload']['relations'][0][
+        'relation_id'] == 'rel_01'
 
 
 def test_stage2_post_review_correction_accepts_empty_hard_and_binds_failure_identity(
@@ -1841,7 +1871,7 @@ def test_stage2_post_review_correction_accepts_empty_hard_and_binds_failure_iden
         'failure_summary': 'reviewed GlobalEdit 仍有未消解 blocking 项；count=1',
         'failed_edit': _global_edit_envelope(),
         'global_review_workpack': _stage2_failed_global([{
-            'current_state': 'FAIL', 'group_key': 'character:char_001'}]),
+            'current_state': 'FAIL', 'group_key': 'relation:rel_01'}]),
     }
     monkeypatch.setattr(reviewer_tasks, '_json_command', lambda _argv: correction)
 
@@ -1874,12 +1904,12 @@ def test_stage2_post_review_correction_accepts_empty_hard_and_binds_failure_iden
             'workpack_sha256'] != identity['workpack_sha256']
 
 
-def test_stage2_fail_routes_only_to_typed_global_edit_and_loader_restores_v5(
+def test_stage2_fail_routes_only_to_typed_global_edit_and_loader_restores_v6(
         tmp_path) -> None:
     current = _current(queue.WAITING_ON_STAGE2_REVIEW)
     options = reviewer_tasks._submission_options({
         'global': _stage2_failed_global([{
-            'current_state': 'FAIL', 'group_key': 'character:char_001'}]),
+            'current_state': 'FAIL', 'group_key': 'relation:rel_01'}]),
         'global_edit_template': _global_edit_envelope(),
         'blueprint': {'review_token': 'bpr4_' + 'a' * 64},
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
@@ -1928,7 +1958,7 @@ def test_stage2_fail_routes_only_to_typed_global_edit_and_loader_restores_v5(
     assert isinstance(action, reviewer_tasks.ReviewerNodeAction)
     assert action.input_payload is not None
     decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
-    assert decoded.version == 5
+    assert decoded.version == 6
     GlobalEdit.model_validate(decoded.payload)
 
     # 真机回归：第三席曾完整审完 76 个旧主体，却把每行必需的空 evidence
@@ -1979,13 +2009,13 @@ def test_all_stage2_apply_edit_options_publish_collection_operation_schema(
     elif case == 'unsafe_unver':
         item = {
             'current_state': 'UNVER',
-            'group_key': 'set:characters',
+            'group_key': 'set:relations',
             'generation_impact': 'must_fix',
         }
     else:
         item = {
             'current_state': 'UNVER',
-            'group_key': 'relation:rel_01',
+            'group_key': 'secret:secret_01',
             'generation_impact': 'quarantine_or_fix',
         }
     edit = _relation_collection_edit_envelope()
@@ -2040,9 +2070,9 @@ def test_all_stage2_apply_edit_options_publish_collection_operation_schema(
                 '同一 GlobalEdit 的直接字段 patch 主体在 collection operations '
                 '应用后必须仍存在；不得一边 patch 同一主体、一边 delete/split 它'),
             'post_edit_references_resolve': (
-                'relation endpoint、secret knowledge subject、address 等外键必须在'
-                '整份 edit 应用后的主体集合中存在；引用新主体时必须在同一 edit '
-                '的 collection add/split 中实际提交该主体'),
+                'relation 人物端点必须属于独立人物登记；secret.fact_ref 必须引用'
+                '整份 edit 应用后存在的关系或明确规则版本。新增 Global 主体须在'
+                '本 edit 的 collection add/split 中提交，人物变化走 Characters owner'),
         }
     assert allowed['collection_operation_contract.member_model_by_collection'] == {
         'relations': 'RelationResponse'}
@@ -2089,7 +2119,7 @@ def test_stage2_collection_operation_scaffold_reaches_real_load_action(
     options = reviewer_tasks._submission_options({
         'global': _stage2_failed_global([{
             'current_state': 'FAIL',
-            'group_key': 'character:char_001',
+            'group_key': 'world_rule:wr_01',
         }], current_collections={
             'relations': [_relation_item('rel_08')],
         }),
@@ -2103,7 +2133,7 @@ def test_stage2_collection_operation_scaffold_reaches_real_load_action(
         'item_id': 'item-1',
         'expected_subject_sha256': '1' * 64,
         'state': 'PASS',
-        'reason': '该人物主体未被本次 relation 集合变更改写，复判仍与原文一致',
+        'reason': '该规则分类未被本次 relation 集合变更改写，复判仍与原文一致',
         'evidence': [],
     }]
     path = tmp_path / f"collection-{operation['op']}.json"
@@ -2125,7 +2155,7 @@ def test_stage2_collection_add_value_is_rejected_by_real_load_action(
     options = reviewer_tasks._submission_options({
         'global': _stage2_failed_global([{
             'current_state': 'FAIL',
-            'group_key': 'character:char_001',
+            'group_key': 'world_rule:wr_01',
         }], current_collections={
             'relations': [_relation_item('rel_08')],
         }),
@@ -2210,7 +2240,7 @@ def test_stage2_direct_patch_and_collection_delete_has_safe_reason_code(
     template = encode_artifact(STAGE2_GLOBAL_EDIT, {
         'relations': [{
             'relation_id': 'rel_08',
-            'valid_from_chapter': 1,
+            'effective_from': 1,
         }],
         'collection_edits': [{
             'collection': 'relations',
@@ -2244,28 +2274,28 @@ def test_stage2_direct_patch_and_collection_delete_has_safe_reason_code(
 
 
 def test_stage2_same_hash_completeness_is_explicitly_not_logically_fixed() -> None:
-    """只改成员字段不改 ID 集时，集合完整性仍是 surviving 旧决定。"""
+    """只订正关系证据定位时，语义集合完整性仍是 surviving 旧决定。"""
     current = _current(queue.WAITING_ON_STAGE2_REVIEW)
     options = reviewer_tasks._submission_options({
         'global': _stage2_failed_global([{
             'item_id': 'relation-detail',
             'subject_sha256': '1' * 64,
             'kind': 'relation',
-            'subject_path': 'entities.relations.0',
+            'subject_path': 'global.relations.rel_01',
             'current_state': 'FAIL',
             'group_key': 'relation:rel_01',
         }, {
             'item_id': 'relation-completeness',
             'subject_sha256': '2' * 64,
             'kind': 'relation_set_complete',
-            'subject_path': 'entities.relations',
+            'subject_path': 'global.relations',
             'current_state': 'FAIL',
             'group_key': 'set:relations',
         }]),
         'global_edit_template': encode_artifact(STAGE2_GLOBAL_EDIT, {
             'relations': [{
                 'relation_id': 'rel_01',
-                'valid_from_chapter': 2,
+                'evidence_refs': [{'chapter_ordinal': 1, 'locator': '甲乙同窗'}],
             }],
         }),
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
@@ -2273,13 +2303,15 @@ def test_stage2_same_hash_completeness_is_explicitly_not_logically_fixed() -> No
     rule = options[0]['allowed_values'][
         'post_edit_review.review_scope[].surviving_decision_rule']
     assert 'item_id + subject_sha256' in rule
-    assert 'relation ID 集' in rule
+    precise_example = '只订正既有 relation 的证据定位，业务字段与 relation ID 集不变'
+    assert precise_example in rule
     assert 'relation_set_complete' in rule
     assert '仍必须显式复判' in rule
     counterexample = options[0]['allowed_values'][
         'post_edit_review.review_scope[].same_hash_completeness_counterexample']
     assert counterexample == {
-        'edit': '只修改既有 relation 的字段',
+        'edit': precise_example,
+        'relation_business_fields_changed': False,
         'relation_id_set_changed': False,
         'surviving_item_kind': 'relation_set_complete',
         'required_action': '把原 item_id + subject_sha256 显式列入 decisions',
@@ -2295,23 +2327,24 @@ def test_stage2_same_hash_completeness_is_explicitly_not_logically_fixed() -> No
     correction = reviewer_tasks.correction_prompt(
         task, '上轮漏了 surviving completeness',
         request_sha256='c' * 64, attempt=1)
+    assert precise_example in correction
     assert 'relation_set_complete 仍必须显式复判' in correction
 
 
 def test_stage2_global_edit_cannot_invent_a_patch_subject(tmp_path) -> None:
-    """真实故障回归：patch 模板只有 char_001 时，不能追加看似合法的 char_002。"""
+    """真实故障回归：patch 模板只有 rel_01 时，不能追加看似合法的 rel_02。"""
     current = _current(queue.WAITING_ON_STAGE2_REVIEW)
     options = reviewer_tasks._submission_options({
         'global': _stage2_failed_global([{
-            'current_state': 'FAIL', 'group_key': 'character:char_001'}]),
+            'current_state': 'FAIL', 'group_key': 'relation:rel_01'}]),
         'global_edit_template': _global_edit_envelope(),
         'blueprint': {'review_token': 'bpr4_' + 'a' * 64},
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
     request = json.loads(json.dumps(options[0]['exact_request']))
     request['action']['input_payload']['post_edit_review']['reason'] = (
         '已复核这份精确返工会打开的完整 blocking 主体')
-    request['action']['input_payload']['characters'].append({
-        'char_id': 'char_002', 'fate': None,
+    request['action']['input_payload']['relations'].append({
+        'relation_id': 'rel_02', 'effective_from': 1,
     })
     path = tmp_path / 'invented-subject.json'
     path.write_text(json.dumps(request, ensure_ascii=False), encoding='utf-8')
@@ -2328,14 +2361,14 @@ def _sparse_global_edit_options() -> tuple[
     current = _current(queue.WAITING_ON_STAGE2_REVIEW)
     template = encode_artifact(STAGE2_GLOBAL_EDIT, {
         'relations': [
-            {'relation_id': 'rel_01', 'valid_from_chapter': 2},
-            {'relation_id': 'rel_02', 'valid_through_chapter': 5},
-            {'relation_id': 'rel_03', 'valid_from_chapter': 3},
+            {'relation_id': 'rel_01', 'effective_from': 2},
+            {'relation_id': 'rel_02', 'effective_until': 5},
+            {'relation_id': 'rel_03', 'effective_from': 3},
         ],
         'setting': {
-            '时代背景': '模板时代',
-            'era_evidence': {
-                'chapter_ordinal': 1, 'locator': '模板时代证据'},
+            'era': '模板时代',
+            'era_evidence_refs': [{
+                'chapter_ordinal': 1, 'locator': '模板时代证据'}],
         },
         'collection_edits': [
             {
@@ -2344,7 +2377,7 @@ def _sparse_global_edit_options() -> tuple[
                 'operations': [],
             },
             {
-                'collection': 'secrets',
+                'collection': 'arc_secrets',
                 'expected_collection_sha256': 'b' * 64,
                 'operations': [],
             },
@@ -2355,7 +2388,7 @@ def _sparse_global_edit_options() -> tuple[
             'current_state': 'FAIL', 'group_key': 'relation:rel_01'}],
             current_collections={
                 'relations': [_relation_item('rel_01')],
-                'secrets': [],
+                'arc_secrets': [],
             }),
         'global_edit_template': template,
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
@@ -2378,8 +2411,8 @@ def _reviewed_sparse_request(options: list[dict]) -> dict:
         # 只选第 1/3 行：这是可信模板的有序子序列，
         # 第 2 行与 setting 的 no-op 骨架都不应进 canonical edit。
         'relations': [
-            {'relation_id': 'rel_01', 'valid_from_chapter': 4},
-            {'relation_id': 'rel_03', 'valid_from_chapter': 6},
+            {'relation_id': 'rel_01', 'effective_from': 4},
+            {'relation_id': 'rel_03', 'effective_from': 6},
         ],
         'collection_edits': [{
             'collection': 'relations',
@@ -2440,7 +2473,7 @@ def test_stage2_sparse_global_edit_rejects_reordered_or_widened_rows(
     if mutation == 'patch-order':
         payload['relations'] = list(reversed(payload['relations']))
     elif mutation == 'patch-fields':
-        payload['relations'][0]['valid_through_chapter'] = 8
+        payload['relations'][0]['effective_until'] = 8
     else:
         payload['collection_edits'] = list(reversed(payload['collection_edits']))
     path = tmp_path / f'{mutation}.json'
@@ -2604,13 +2637,13 @@ def test_stage2_main_prompt_distinguishes_sparse_retry_from_failed_edit_merge(
     assert '最多四次内容调用' not in instructions
     assert 'stage2.characters' in instructions
     assert 'stage2.global' in instructions
-    assert 'stage2.blueprint' in instructions
+    assert 'stage2.blueprint' not in instructions  # 本轮只提供两侧 Core owner 的订正权限。
 
 
 def test_stage2_after_edit_reviews_only_changed_pending_items() -> None:
     current = _current(queue.WAITING_ON_STAGE2_REVIEW)
     options = reviewer_tasks._submission_options({
-        'global': {'review_token': 's2gr1_' + '7' * 64,
+        'global': {'review_token': 's2gr2_' + '7' * 64,
                    'review_coverage': _node_review_coverage(
                        'stage2.global', ('changed-item', 'inherited-item')), 'items': [
             {
@@ -2673,16 +2706,25 @@ def test_stage2_safe_unver_offers_quarantine_redecision_or_real_edit() -> None:
         'PASS', 'FAIL', 'UNVER']
 
 
-def test_stage2_unsafe_unver_can_be_redecided_without_forcing_a_noop_edit() -> None:
+@pytest.mark.parametrize('group_key', ['relation:rel_01', 'world_rule:wr_01'])
+def test_global_edit_quarantine_schema_rejects_non_secret_groups(group_key) -> None:
+    with pytest.raises(ValidationError) as caught:
+        GlobalEditQuarantineGroup.model_validate({
+            'group_key': group_key, 'reason': '不能隔离必须明确裁决的长期约束'})
+    assert caught.value.errors()[0]['type'] == 'string_pattern_mismatch'
+
+
+@pytest.mark.parametrize('group_key', ['set:relations', 'relation:rel_01', 'world_rule:wr_01'])
+def test_stage2_unsafe_unver_can_be_redecided_without_forcing_a_noop_edit(group_key) -> None:
     current = _current(queue.WAITING_ON_STAGE2_REVIEW)
     options = reviewer_tasks._submission_options({
         'global': _stage2_failed_global([{
-            'item_id': 'character-set-complete',
+            'item_id': 'unver-core-subject',
             'subject_sha256': '4' * 64,
             'current_state': 'UNVER',
             'current_reason': '旧 workpack 没有提供完整正文',
             'registered_evidence': [],
-            'group_key': 'set:characters',
+            'group_key': group_key,
         }]),
         'global_edit_template': _global_edit_envelope(),
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
@@ -2706,42 +2748,44 @@ def test_stage2_unsafe_unver_can_be_redecided_without_forcing_a_noop_edit() -> N
         'PASS', 'FAIL', 'UNVER']
 
 
+@pytest.mark.parametrize('group_key', ['set:characters', 'character:char_001'])
+@pytest.mark.parametrize('state', ['FAIL', 'UNVER'])
+def test_character_problems_never_offer_global_edit_even_when_template_exists(group_key, state) -> None:
+    """Global Commander 审人物问题，但不能用知识编辑模板取得人物写入权。"""
+    current = _current(queue.WAITING_ON_STAGE2_REVIEW)
+    options = reviewer_tasks._submission_options({
+        'global': _stage2_failed_global([{
+            'current_state': state, 'group_key': group_key}]),
+        'global_edit_template': _global_edit_envelope(),
+    }, current, queue.WAITING_ON_STAGE2_REVIEW)
+    assert [row['id'] for row in options] == ['approval:stage2_global_review']
+    control, = options
+    assert control['exact_request']['action']['kind'] == 'approval'
+    assert 'stage2.characters' in control['allowed_values']['owner']
+    assert control['allowed_values']['decision'] == ['rework', 'uncertain', 'stop']
+
+
 @pytest.mark.parametrize('kind', ['source_blurb_fact', 'opening_scope'])
-def test_unresolved_source_subject_offers_typed_edit_and_closed_stop_only(tmp_path, kind):
+def test_retired_source_preparation_is_rejected_by_global_edit_loader(tmp_path, kind):
+    """旧未决 Hook 不再借 Global 消费；原准备/stop 正向职责待 Gate C 迁入 Stage6。"""
     current = _current(queue.WAITING_ON_STAGE2_REVIEW)
     blurb = {
-        'facts': [{'kind': 'unresolved', 'claim_id': 'hook_001',
-                   'claim': '新婚夜收到来信', 'reason': '尚未绑定钩子证据'}],
+        'facts': ([{'kind': 'unresolved', 'claim_id': 'hook_001',
+                   'claim': '新婚夜收到来信', 'reason': '尚未绑定钩子证据'}]
+                  if kind == 'source_blurb_fact' else []),
         'opening': {'kind': 'unresolved', 'reason': '开篇范围尚未确定'},
     }
-    pack = _stage2_failed_global([{
-        'kind': kind, 'current_state': 'UNVER', 'resolution_required': True,
-        'group_key': 'source_blurb:hook_001', 'subject': {'kind': 'unresolved'},
-    }])
     options = reviewer_tasks._submission_options({
-        'global': pack,
-        'global_edit_template': encode_artifact(STAGE2_GLOBAL_EDIT, {'source_blurb_replace': blurb}),
+        'global': _stage2_failed_global([{
+            'current_state': 'FAIL', 'group_key': 'relation:rel_01'}]),
+        'global_edit_template': _global_edit_envelope(),
     }, current, queue.WAITING_ON_STAGE2_REVIEW)
-    assert [row['id'] for row in options] == [
-        'node:stage2.global.apply-edit-unver', 'approval:stage2_global_review']
-    edit, control = options
-    assert control['allowed_values']['decision'] == ['rework', 'uncertain', 'stop']
-    schema = edit['allowed_values']['source_blurb_replace.schema']
-    hook_branches = [row for row in schema['$defs'].values()
-                     if row.get('properties', {}).get('kind', {}).get('const') == 'hook_supported']
-    assert len(hook_branches) == 1
-    assert set(hook_branches[0]['required']) == {'kind', 'claim_id', 'claim', 'hook_evidence'}
-    assert hook_branches[0]['additionalProperties'] is False
-    assert 'evidence' not in hook_branches[0]['properties']
-    request = copy.deepcopy(control['exact_request'])
-    request['action']['payload']['reason'] = '仍有范围未确定，保留未知'
+    request = copy.deepcopy(options[0]['exact_request'])
+    request['action']['input_payload']['post_edit_review']['reason'] = '旧准备材料仍未决'
+    request['action']['input_payload']['source_blurb_replace'] = blurb
     action_path = tmp_path / 'request.json'
     action_path.write_text(json.dumps(request), encoding='utf-8')
-    action = reviewer_tasks.load_action(action_path, current, submission_options=options)
-    assert action.payload['decision'] == 'uncertain'
-    request['action']['payload']['decision'] = 'accept'
-    action_path.write_text(json.dumps(request), encoding='utf-8')
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='未开放'):
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='extra_forbidden'):
         reviewer_tasks.load_action(action_path, current, submission_options=options)
 
 
