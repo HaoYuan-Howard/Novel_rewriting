@@ -239,11 +239,11 @@ class ChapterBasis:
     """当前写作任务的唯一运行时基准。
 
     ``source_ordinal`` 只认 ``output_ordinal``；``source_chars`` 只认当前
-    Stage1 源章正文；``budget_chars`` 只认场景预算之和。WriterContext v7 与
+    Stage1 源章正文；``budget_chars`` 只认场景预算之和。当前 WriterContext 与
     Chapter v3 都不保存这三份副本；API 只在读取时投影。
 
-    源字数是含空白的整章长度，规划预算仍受各源 span 合计约束；两者口径不同。
-    不因删除展示副本而把预算基准改为整章长度，否则会误拒合法计划。
+    源字数按含空白的完整源章计；共享证据不会按节点或分场重复计数。
+    规划按该源章基准分配预算，写作目标再从已接受的场景预算派生。
 
     ``source_text is None`` 只服务 ``target_range`` 这类只需预算的纯函数；
     真实 Stage5 Book 一定传源章表，并由 ``require_chapter_basis`` 对账。
@@ -275,7 +275,7 @@ def chapter_basis(
         )
     elif entry.get('budget_chars') is not None:
         # 保留 target_range 对「只给一个预算」的纯函数输入的旧契约。
-        # WriterContext v7 要求 scenes 非空，真实路径不会走这条。
+        # 当前 WriterContext 要求 scenes 非空，真实路径不会走这条。
         budget_chars = int(entry['budget_chars'])
     else:
         # 部分机械 helper 的反例夹具只构造自己所需的字段；源章派生不应

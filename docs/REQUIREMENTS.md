@@ -23,18 +23,10 @@
 ### TODO-49 · 小说流水线 token 与耗时优化
 
 现役设计见 BACKEND_CONTRACT 与 schema，性能配对协议见 `docs/OPERATIONS.md`；首轮、局部返工和故障恢复分开验收，最终一次整根切换。
-工程基线由 `24e4cf4` 推进至当前 worktree；已实现行为见当前契约，历史验证只见 DECISIONS/Git。
+现役完整剧情与分场边界见 `docs/schema/plot_blueprint.md`；工程验证记录保留在 Git。
 
-**本轮批准的契约重构**：`plot-blueprint-v1` 使用完整 beat 正文、稀疏状态/约束、统一证据和
-KnowledgeLinks；Blueprint V9 按章及跨章审阅，Stage4 以 placement/delivery 在本章分场，
-普通分场不重开 Stage2。保留章级 B、两次 Stage4 审阅和章级写作。详细责任边界见
-`docs/schema/plot_blueprint.md`。贯通、依赖失效、身份/问题历史和免费恢复须同批闭合。
-
-- [ ] 清理 V8 正式消费与编辑路径，迁移共享测试夹具并保留拒绝、漂移、恢复反例。
-- [ ] 至少两章的完整生成/章审/跨章/KL/A/设计审阅/B/结构审阅/Context/写作与交付贯通。
-- [ ] 验证普通分场不重开 Blueprint、必要端点准确绑定、实际依赖精确失效及问题不会被删除或回滚消除。
-- [ ] 验证轻量进度、完整节点与分场对照页面，HTTP/CLI、刷新和服务重启结果一致。
-- [ ] 固定新代码与干净数据根，完成第 1/5/6/11 章重点语义及原书 11 章成稿验收，
+- [ ] 待 `stage2.global` 与 `stage2.characters` 重构完成后，固定新代码与干净数据根，
+      完成第 1/5/6/11 章重点语义及原书 11 章成稿验收，
       记录请求体、用量、耗时、调用/返修与 ledger 成本；工程合成测试不代替真实模型验收。
 
 
@@ -139,7 +131,7 @@ B 只绑定证据，不静默改变 A 的场景顺序、事实分组、首尾锚
 源字数和预算副本；API 从当前场景与 Stage1 现场派生。
 逐章人物名单被写手、Stage6/7 实际读取，因此保留。Chapter v3、Review v3、Rejected v2、
 TrimAudit/TrimResolution v3 均只保存承重主体、必要历史基线或精确绑定证据。
-这些 shape break 与 TODO-49 同批发布；旧书只留在整根归档，不原地迁移。
+这些 shape break 与 TODO-49 同批发布；不原地迁移或补签旧产物，新链使用干净输出根。
 
 **验收**：相关 shape break 均登记 current version 与 `_SHAPE_BREAKS`；不迁移、不手补旧产物；
 Stage5 写作、recheck/revalidate、Review、trim、s5 审批及 Stage6/7 只读最小主体；删字段前后 prompt、
