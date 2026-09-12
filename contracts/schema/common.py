@@ -157,6 +157,15 @@ class RevalidationAudit(HumanApproval):
         return self
 
 
+class SharedAnalysisSource(StrictModel):
+    """共享首抽的不可变来源身份；费用只由回执及唯一 ledger attempt 认领。"""
+
+    receipt_rel: Literal['stage2/analyze_receipt.json']
+    receipt_sha256: Sha256
+    run_id: str = Field(min_length=1)
+    attempt_id: Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{16}$')]
+
+
 class Provenance(StrictModel):
     """产物的来源账。**付费层用 `LlmProvenance`，0 成本层用 `FreeProvenance`。**
 
@@ -184,6 +193,9 @@ class Provenance(StrictModel):
 
     #: 见 `Usage`。可选：0 成本节点没有它。
     usage: Usage | None = None
+
+    #: 非空时 usage 不重复认领共享调用；模型与请求身份仍保留真实生成来源。
+    shared_analysis_source: SharedAnalysisSource | None = None
 
     # ── 以下四个是**三态**字段：`None` 一律表示「键不在」，落盘时必须 exclude ──
 

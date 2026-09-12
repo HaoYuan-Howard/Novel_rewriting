@@ -20,13 +20,12 @@ from novel.stages.stage2 import grounding as grounding_io
 import os
 
 from contracts.artifacts import (
-    STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
+    STAGE1_MAIN_TEXT, STAGE2_CHARACTERS, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
 )
 from contracts.invariants import BLUEPRINT_REVIEW_CONTRACT
 from contracts.schema.api import (
-    CharacterRegistryView,
-    GlobalAddressLine, GlobalCharacterLine,
-    GlobalKnowledgeEventLine, GlobalRelationLine, GlobalSecretLine, GlobalView, NameRef,
+    AnalyzeDraftView, CharacterRegistryView,
+    GlobalRelationLine, GlobalSecretLine, GlobalView, NameRef,
     BlueprintReviewBinding, BlueprintReviewWorkpack, CompactApprovalCheck, ReadingView,
 )
 from contracts.schema.stage1 import MainText
@@ -44,6 +43,23 @@ BP_REL = STAGE2_CHAPTER_BLUEPRINTS
 MAIN_TEXT = STAGE1_MAIN_TEXT
 
 
+def _core_evidence_snippets(store: ArtifactStore, anchors) -> dict[str, str | None]:
+    """Python 坐标只由后端读取；无当前原文或摘要漂移保持未知，不让 UI 猜定位。"""
+    from novel.errors import NovelError
+    from novel.stages.stage2.core_evidence import evidence_snippet
+    try:
+        main = store.read_own(MainText, MAIN_TEXT, require_current=True)[0].model_dump(mode='json')
+    except NovelError:
+        return {ref: None for ref in anchors}
+    result = {}
+    for ref, anchor in anchors.items():
+        try:
+            result[ref] = evidence_snippet(anchor, main)
+        except ValueError:
+            result[ref] = None
+    return result
+
+
 def character_registry_view(base: str | os.PathLike[str], sid: str) -> CharacterRegistryView:
     """人物独立可读，知识未生成或过期不妨碍查看人物当前问题稿。"""
     from contracts.schema.characters import CharacterRegistry, CharactersEdit
@@ -53,7 +69,7 @@ def character_registry_view(base: str | os.PathLike[str], sid: str) -> Character
     ctx = readonly_ctx(paths.resolve_novel_dir(base, sid), characters.NODE, prov.code_version())
     store = ArtifactStore(ctx)
     snapshots = {rel: store.full_sha256_or_none(rel)
-                 for rel in (characters.REL, characters.INVALID)}
+                 for rel in (characters.REL, characters.INVALID, MAIN_TEXT)}
     source = characters.INVALID if snapshots[characters.INVALID] is not None else characters.REL
     registry, sha = store.read_own_with_sha256(CharacterRegistry, source)
     state = artifact_state(store, characters.REL)
@@ -63,105 +79,62 @@ def character_registry_view(base: str | os.PathLike[str], sid: str) -> Character
         template = CharactersEdit.model_validate(characters.edit_template(ctx))
     except (NovelError, ValidationError) as exc:
         unavailable = f'当前人物模板不可执行：{exc}'
+    snippets = _core_evidence_snippets(store, registry.evidence_anchors)
     if sha != snapshots[source] or any(
         store.full_sha256_or_none(rel) != expected for rel, expected in snapshots.items()
     ):
         raise SourceConflict('读取人物编辑视图期间主体改变，请重新读取')
     return CharacterRegistryView(
         sid=sid, source_sha256=sha, artifact=state, registry=registry,
+        evidence_snippets=snippets,
         edit_template=template, template_unavailable_reason=unavailable)
 
 
-def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:
-    """S-05 的一屏。**纯读**：不写一个字节，不发一个请求，不产生任何判定。
+def analyze_draft_view(base: str | os.PathLike[str], sid: str, owner: str) -> AnalyzeDraftView:
+    """编译前候选只由其 producer 证明来源，不借正式人物/知识视图伪造状态。"""
+    from novel.stages.stage2.analyze_draft_recovery import workpack
+    return AnalyzeDraftView(sid=sid, **workpack(base, sid, owner))
 
-    ⚠ 不带 `badge` / `passed` / `counts`——结论只能来自 `/check/stage2`（`R-11.4`）。
-    ⚠ 剧透遮蔽不在这里做：`fate` / `secrets` / 源文案事实 / 开篇范围 全量下发，
-    开关是前端的纯展示行为（`R-11.13`，那句话作为 `spoiler_disclosure.notice`
-    随 `/api/enums` 整份下发——**不单独发一个标量**，免得一句话与结构化契约分家）。
-    """
+
+def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:
+    """独立读取知识与人物显示名；来源如实保留 shared_analysis_source，不重复认领费用。"""
+    from contracts.schema.characters import CharacterRegistry
+    from contracts.schema.knowledge import KnowledgeGrounding
+    from novel.errors import SourceConflict
     novel_dir = paths.resolve_novel_dir(base, sid)
     store = ArtifactStore(readonly_ctx(novel_dir, NODE, prov.code_version()))
-
-    # 产物不在 ⇒ 404；在而读不回 ⇒ `read_own` 抛 `ArtifactUnreadable` ⇒ 409。
-    # （`artifact_state` 不抛，所以「不在」这一态要自己升成终态。）
+    tracked = (REL, paths.invalid_of(REL), STAGE2_CHARACTERS, MAIN_TEXT)
+    snapshots = {rel: store.full_sha256_or_none(rel) for rel in tracked}
     st = artifact_state(store, REL)
-    art, _raw = grounding_io.read_own(store, REL)
-
+    source = paths.invalid_of(REL) if st.invalid else REL
+    art = store.read_own(KnowledgeGrounding, source)[0]
+    chars = (store.read_own(CharacterRegistry, STAGE2_CHARACTERS)[0].characters
+             if store.exists(STAGE2_CHARACTERS) else {})
     misses = _Misses()
-    chars = {cid: c for cid, c in art.entities.characters.items()}
 
     def ref(raw: str) -> NameRef:
-        """`char_id` / `narration` / `public` / `reader` / `rel_XX` → 人话。"""
-        if raw in chars:
-            return NameRef(raw=raw, display=chars[raw].canonical, resolved=True)
-        if raw == 'narration':
-            return NameRef(raw=raw, display='叙述', resolved=True)
-        if raw == 'public':
-            return NameRef(raw=raw, display='众人', resolved=True)
-        if raw == 'reader':
-            return NameRef(raw=raw, display='读者', resolved=True)
-        if raw.startswith('rel_'):
-            rel = next((r for r in art.entities.relations if r.relation_id == raw), None)
-            if rel is not None and rel.subject_id in chars and rel.object_id in chars:
-                return NameRef(
-                    raw=raw, resolved=True,
-                    display=f'{chars[rel.subject_id].canonical}—{rel.predicate}—'
-                            f'{chars[rel.object_id].canonical}')
-        return misses.unresolved(raw)
+        person = chars.get(raw)
+        return (NameRef(raw=raw, display=person.canonical, resolved=True)
+                if person is not None else misses.unresolved(raw))
 
-    characters = [
-        GlobalCharacterLine(
-            char_id=cid, canonical=c.canonical,
-            name_distinctiveness=c.name_distinctiveness, role=c.role, fate=c.fate,
-            role_evidence=c.role_evidence, fate_evidence=c.fate_evidence,
-            address=[GlobalAddressLine(surface=a.surface, by=ref(a.by),
-                                       context=a.context, from_chapter=a.from_chapter)
-                     for a in c.address])
-        for cid, c in chars.items()]
-    relations = [
-        GlobalRelationLine(
-            relation_id=r.relation_id, subject=ref(r.subject_id),
-            predicate=r.predicate, predicate_evidence=r.predicate_evidence,
-            object=ref(r.object_id), visibility=r.visibility,
-            valid_from_chapter=r.valid_from_chapter,
-            valid_through_chapter=r.valid_through_chapter)
-        for r in art.entities.relations]
-
-    def knowledge_subject(event) -> NameRef:
-        if event.subject.kind == 'character':
-            return ref(event.subject.char_id)
-        return NameRef(raw=event.subject.label, display=event.subject.label, resolved=True)
-
-    secrets = [
-        GlobalSecretLine(
-            secret_id=s.secret_id, fact=s.fact, fact_evidence=s.fact_evidence,
-            knowledge_events=[GlobalKnowledgeEventLine(
-                subject_kind=e.subject.kind,
-                subject=knowledge_subject(e),
-                known_from_chapter=e.known_from_chapter,
-                evidence=e.evidence,
-            ) for e in s.knowledge_events],
-            setup_kind=s.setup.kind,
-            setup_chapters=list(getattr(s.setup, 'chapters', None) or []),
-            first_reveal_chapter=s.first_reveal_chapter)
-        for s in art.canon.secrets]
-    return GlobalView(
-        sid=paths.derive_source_meta(novel_dir.name)[0],
-        title=paths.title_of(novel_dir),
-        setting=art.canon.setting,
-        characters=characters,
-        relations=relations,
-        world_rules=art.canon.world_rules,
-        secrets=secrets,
-        source_blurb=art.source_blurb,
+    relations = [GlobalRelationLine(
+        relation_id=row.relation_id, subject=ref(row.subject_id), object=ref(row.object_id),
+        predicate=row.predicate, effective_from=row.effective_from,
+        effective_until=row.effective_until, revealed_from=row.revealed_from,
+        evidence_refs=row.evidence_refs) for row in art.relations]
+    result = GlobalView(
+        sid=sid, title=paths.title_of(novel_dir), setting=art.setting,
+        relations=relations, world_rules=art.world_rules,
+        arc_secrets=[GlobalSecretLine.model_validate(row.model_dump(mode='json'))
+                     for row in art.arc_secrets],
+        evidence_anchors=art.evidence_anchors,
+        evidence_snippets=_core_evidence_snippets(store, art.evidence_anchors),
         unresolved_refs=misses.count,
-        invalid_exists=st.invalid,
-        freshness=st.freshness,
-        reason=st.reason,
-        ghosts=list(st.ghosts),
-        _provenance=art.provenance,
-    )
+        invalid_exists=st.invalid, freshness=st.freshness, reason=st.reason,
+        ghosts=list(st.ghosts), _provenance=art.provenance)
+    if any(store.full_sha256_or_none(rel) != value for rel, value in snapshots.items()):
+        raise SourceConflict('读取 Stage2 视图期间人物或知识改变，请重新读取')
+    return result
 
 
 class _Misses:

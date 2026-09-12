@@ -36,7 +36,7 @@ from pydantic import BaseModel
 from contracts.artifacts import (
     RETIRED_ARTIFACT_PATHS,
     STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE2_CHARACTERS, STAGE2_CHARACTERS_EDIT,
+    STAGE2_ANALYZE_RECEIPT, STAGE2_CHARACTERS, STAGE2_CHARACTERS_EDIT,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_BLUEPRINT_EDIT,
     STAGE2_CHAPTER_BLUEPRINTS, STAGE2_KNOWLEDGE_LINKS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT,
     STAGE2_GLOBAL_EDIT_INPUT_COMMIT,
@@ -93,6 +93,14 @@ from contracts.schema.api import (
 )
 from contracts.schema.base import Fp10, FrozenModel, Sha1, StrictModel
 from contracts.schema.characters import CharacterRegistry, CharactersEdit
+from contracts.schema.analyze import AnalyzeReceipt
+from contracts.schema.analyze_recovery import AnalyzeRecoveryJournal
+from contracts.schema.analyze_draft import AnalyzeOwnerDraftEdit, AnalyzeDraftRepairJournal
+from contracts.artifacts import (
+    STAGE2_ANALYZE_OWNER_DRAFT_EDIT, STAGE2_ANALYZE_CHARACTERS_DRAFT_REPAIR,
+    STAGE2_ANALYZE_GLOBAL_DRAFT_REPAIR,
+)
+from contracts.artifacts import STAGE2_ANALYZE_RECOVERY
 from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.knowledge_links import KnowledgeLinks
 from contracts.schema.plot_edit import PlotEdit
@@ -150,10 +158,10 @@ from contracts.schema.stage0 import (
 )
 from contracts.schema.stage1 import HookCopy, MainText, MainTextSection
 from contracts.schema.stage2 import (
-    Address, AddressContextPatch, Canon,
+    Address, Canon,
     BlueprintCharacterProjection, BlueprintCharacterProjectionChapter,
     ChapterBlueprints, Character,
-    CharacterAddressReplacement, CharacterRef, CharacterResponse,
+    CharacterRef, CharacterResponse,
     Entities, EvidenceLocator,
     FactEvidence, GlobalEdit,
     CharacterCollectionItem, GlobalCollectionAdd, GlobalCollectionDelete,
@@ -162,7 +170,7 @@ from contracts.schema.stage2 import (
     GlobalEditInputCommit,
     GlobalEditFailure, GlobalEditQuarantineGroup, GlobalEditReviewAttestation,
     GlobalEditReviewTarget,
-    GlobalGrounding, GlobalCharacterPatch,
+    GlobalGrounding,
     GroupRef, KnowledgeEvent, KnowledgeEventResponse,
     Relation, RelationPatch, RelationVisibility,
     Secret, SecretPatch, Setting, SettingPatch, SourceSpan, WorldRule,
@@ -270,35 +278,36 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # Stage0～7 减法完成后，两本现役书统一从头重建，不做迁移或手补字段。
     STAGE1_MAIN_TEXT: ArtifactSpec(MainText, 3),
     STAGE1_HOOK_COPY: ArtifactSpec(HookCopy, 2),
-    # ⚠ v5 删除文学 arc，新增源文案证据与开篇范围；存量
-    #   只能由 `stage2.global` 付费重建。完整版本账见 artifact version 守卫。
-    STAGE2_CHARACTERS: ArtifactSpec(CharacterRegistry),
-    STAGE2_CHARACTERS_EDIT: ArtifactSpec(CharactersEdit),
-    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(KnowledgeGrounding, 6),
-    # v2 换用源文案/范围义务；未知主体必须先 typed 修订，不允许直接 PASS。
-    STAGE2_GLOBAL_REVIEW: ArtifactSpec(GlobalReview, 2),
-    # v2（2026-08-28）：新增完整 blocking scope 默认决定与逐项例外；旧 v1 没有
-    # scope hash / 正文章全集阅读声明，由人免费重发模板后重新提交，不迁移。
-    STAGE2_GLOBAL_REVIEW_DECISIONS: ArtifactSpec(GlobalReviewDecisionSet, 2),
+    # 联合首抽只新增来源回执；人物与知识分别编译/存储，不继承旧版本审批。
+    STAGE2_ANALYZE_RECEIPT: ArtifactSpec(AnalyzeReceipt),
+    STAGE2_ANALYZE_RECOVERY: ArtifactSpec(AnalyzeRecoveryJournal),
+    STAGE2_ANALYZE_OWNER_DRAFT_EDIT: ArtifactSpec(AnalyzeOwnerDraftEdit),
+    STAGE2_ANALYZE_CHARACTERS_DRAFT_REPAIR: ArtifactSpec(AnalyzeDraftRepairJournal),
+    STAGE2_ANALYZE_GLOBAL_DRAFT_REPAIR: ArtifactSpec(AnalyzeDraftRepairJournal),
+    STAGE2_CHARACTERS: ArtifactSpec(CharacterRegistry, 2),
+    STAGE2_CHARACTERS_EDIT: ArtifactSpec(CharactersEdit, 2),
+    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(KnowledgeGrounding, 7),
+    # v3 统一人物身份与四类长期事实义务；未知主体先 typed 修订，不直接 PASS。
+    STAGE2_GLOBAL_REVIEW: ArtifactSpec(GlobalReview, 3),
+    # v3 配合 Core 新义务与独立人物输入；旧决定免费重发当前模板后重新审阅。
+    STAGE2_GLOBAL_REVIEW_DECISIONS: ArtifactSpec(GlobalReviewDecisionSet, 3),
     # ⚠ 人产的 Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它）——
     #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
     #   被 `store.read` 当上游边记账 ⇒ 形状同样是契约。
-    # v4 删除 arc patch/replacement，新增 source_blurb_replace；旧输入由人
-    # 免费重发模板后按当前 typed 契约重写，不迁移或伪造事实与范围。
-    STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit, 5),
+    # v6 编辑四类 Core；旧输入免费重发当前模板，不迁移已退役场景事实与文案字段。
+    STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit, 6),
     # v1：canonical reviewed edit 被拒后由 ``stage2.global --apply-edit`` 免费
     # 重建；它是 transient correction fact，不进入 NodeSpec.produces。
     STAGE2_GLOBAL_EDIT_FAILURE: ArtifactSpec(GlobalEditFailure),
     # v1：canonical sparse input + pending/superseded failure 的 transient WAL。
-    STAGE2_GLOBAL_EDIT_INPUT_COMMIT: ArtifactSpec(GlobalEditInputCommit),
+    STAGE2_GLOBAL_EDIT_INPUT_COMMIT: ArtifactSpec(GlobalEditInputCommit, 2),
     # v1：Stage2 Global 正式三件套的 transient prepared/committed journal；
     # reviewed 额外绑定 failure/workpack，generic INVALID 提升可显式表达没有
     # action-owned edit identity / formal baseline；不进入 NodeSpec.produces。
-    STAGE2_GLOBAL_EDIT_COMMIT: ArtifactSpec(GlobalEditCommit, 2),
-    # v1：由当前 schema-valid global（正式或 INVALID）+ main_text 免费物化；
-    # 无存量兼容负担，缺/坏时由 `stage2.global --renormalize` 0-LLM 重建。
+    STAGE2_GLOBAL_EDIT_COMMIT: ArtifactSpec(GlobalEditCommit, 3),
+    # v2：由独立人物登记免费物化；缺/坏时由人物 owner 免费重验重建。
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION: ArtifactSpec(
-        BlueprintCharacterProjection),
+        BlueprintCharacterProjection, 2),
     # ⚠⚠ 2026-08-19 首次破坏：beat 区间改由**段号**算出，升 v2。
     #   2026-08-23 第二次破坏：`BlueprintContext.architecture` 从七值收窄为
     #   v1.1/v2/v3.1 三值，升 v3；2026-08-24 再收成 v2/v3.1 两值，升 v4。
@@ -524,8 +533,7 @@ __all__ = [
     'GlobalEditReviewTarget', 'GlobalCollectionEdit', 'GlobalCollectionAdd',
     'GlobalCollectionDelete', 'GlobalCollectionSplit', 'CharacterCollectionItem',
     'SecretPatch', 'WorldRulePatch', 'RelationPatch', 'SettingPatch',
-    'GlobalCharacterPatch',
-    'AddressContextPatch', 'CharacterAddressReplacement', 'CharacterResponse',
+    'CharacterResponse',
     'ChapterBlueprints',
     'SourceSpan',
     'BlindCandidate', 'BlindChapterEditRequest', 'EvidenceBinding',

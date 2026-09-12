@@ -136,6 +136,7 @@ export interface RunContinuationSource {
 }
 
 export interface AgentRunContinuationView {
+  pause_before_node?: string | null
   run_id: string
   sid: string | null
   available: boolean
@@ -145,6 +146,8 @@ export interface AgentRunContinuationView {
 }
 
 export interface AgentRunRequest {
+  /** 省略时继承 continuation 原边界；显式 null 解除范围上界。节点取自服务端登记。 */
+  pause_before_node?: string | null
   continuation?: RunContinuationSource | null
   sid: string
   /** 只控制是否允许产生外部调用费用。 */
@@ -157,6 +160,7 @@ export interface AgentRunRequest {
 
 /** preview 的返回：与真跑同一构造函数，0 成本。前端不拼 argv / prompt。 */
 export interface AgentRunPreview {
+  pause_before_node?: string | null
   continuation?: RunContinuationSource | null
   argv: string[]
   prompt: string
@@ -167,6 +171,8 @@ export interface AgentRunPreview {
 }
 
 export interface AgentRunStart {
+  /** 历史无边界时省略；当前受管范围的排他节点上界。 */
+  pause_before_node?: string | null
   sid: string
   /** 规范化绝对 base；旧事件可能没有。 */
   base?: string | null
@@ -183,6 +189,7 @@ export interface AgentRunStart {
 }
 
 export interface RunContractV2 {
+  pause_before_node?: string | null
   continuation?: RunContinuationSource | null
   wire_version: 2
   sid: string

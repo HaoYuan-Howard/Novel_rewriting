@@ -3,9 +3,13 @@
 """
 test_stage2_secret_edit.py —— `stage2.global --apply-edit`：Stage2 typed facts 的 0 成本人工订正。
 
-【它守的是什么】细粒度 patch 先补上已有 secret 字段的修订入口；完整 replace surface
-继续接住 patch 无法表达的集合级决定：拆分复合 secret、增删 world rule、重建 address 列表。
+【它守的是什么】细粒度 patch 与完整 replace 接住长期秘密和规则的修订，
 两条路都必须有严格 schema、来源账、同一归一/判据、轮次归档和 global-review 刷新。
+
+本批迁出：人物身份由 Characters 免费 typed 入口修订；knowledge_events 与动态状态
+转归 Gate B 的 KnowledgeLinks / PlotState，旧 Global 输入在此明确拒收；逐次 address
+的正向呈现与下游失效用例留待 Gate B 迁移。文案事实由 Gate C Stage6 Prepare 承接。
+这些归属声明不代表新 owner 的正向消费已通过。
 
 【四条各对应一次会静默发生的损失】
   · **越界章号**  —— 越界的揭示章让逐章剧透闸门**永不触发**（`R-6.3` 按它开闸），
@@ -52,7 +56,7 @@ from novel.quality.global_review import decide
 from novel.stages.stage2 import global_review as global_review_ops
 from novel.stages.stage2 import extract
 from novel.store import ArtifactStore
-from tests.factories import approved_global_review
+from tests.stage2_fixtures import approved_core_review
 from tests.test_stage2_generation import (
     _client, _ctx, _ok, _respond_blueprints, _response_blueprints,
     _response_global, _edit_static_character,
@@ -133,6 +137,16 @@ def _apply(book: Path):
     return extract.run_apply_edit(_ctx(book, 'stage2.global', paid=False))
 
 
+def _overlapping_rule(book: Path) -> dict:
+    """构造 schema 可解析、现役时间 HARD 会拒绝的两段规则。"""
+    store = ArtifactStore(_ctx(book, 'stage2.global', paid=False))
+    rule = grounding_io.read(store).world_rules[0].model_dump(mode='json')
+    second = copy.deepcopy(rule['versions'][0])
+    second.update(version_id='v02', effective_from=2, revealed_from=2)
+    rule['versions'].append(second)
+    return {'rule_id': rule['rule_id'], 'versions': rule['versions']}
+
+
 def test_character_set_fail_emits_a_complete_typed_recovery_instead_of_crashing():
     root, book = _sandbox('人物集合恢复_002c')
     try:
@@ -140,7 +154,7 @@ def test_character_set_fail_emits_a_complete_typed_recovery_instead_of_crashing(
         ctx = _ctx(book, 'stage2.global', paid=False)
         store = ArtifactStore(ctx)
         grounding = grounding_io.read(store)
-        review = approved_global_review(grounding)
+        review = approved_core_review(store)
         target = next(item for item in review.items
                       if item.kind == 'character_set_complete')
         review = decide(
@@ -170,11 +184,11 @@ def test_second_round_reviewed_edit_commits_global_and_closed_review_together():
         ctx = _ctx(book, 'stage2.global', paid=False)
         store = ArtifactStore(ctx)
         grounding = grounding_io.read(store)
-        review = approved_global_review(grounding)
+        review = approved_core_review(store)
         target = next(
             item for item in review.items
             if item.kind == 'reveal'
-            and item.subject_path == 'canon.secrets.secret_01.first_reveal_chapter')
+            and item.subject_path == 'global.arc_secrets.secret_01.revealed_from')
         review = decide(
             review,
             item_id=target.item_id,
@@ -184,7 +198,7 @@ def test_second_round_reviewed_edit_commits_global_and_closed_review_together():
             now='2026-09-02T00:00:00+00:00')
         store.write(extract.GLOBAL_REVIEW_REL, review)
         _write_edit(book, {
-            'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 3}],
+            'arc_secrets': [{'secret_id': 'secret_01', 'revealed_from': 3}],
             'post_edit_review': {
                 'actor': 'agent:novel-pipeline-operator',
                 'expected_source_sha256': review.source_sha256,
@@ -202,11 +216,11 @@ def test_second_round_reviewed_edit_commits_global_and_closed_review_together():
         corrected = next(
             item for item in closed.items
             if item.kind == 'reveal'
-            and item.subject_path == 'canon.secrets.secret_01.first_reveal_chapter')
+            and item.subject_path == 'global.arc_secrets.secret_01.revealed_from')
         assert corrected.state == 'PASS'
         assert corrected.actor == 'agent:novel-pipeline-operator'
         assert corrected.subject_sha256 != target.subject_sha256
-        assert artifact.canon.secrets[0].first_reveal_chapter == 3
+        assert artifact.arc_secrets[0].revealed_from == 3
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -217,7 +231,7 @@ def test_reviewed_correction_reapplies_to_formal_after_first_edit_left_invalid(t
     _seed(book)
     ctx = _ctx(book, 'stage2.global', paid=False)
     store = ArtifactStore(ctx)
-    review = approved_global_review(grounding_io.read(store))
+    review = approved_core_review(store)
     target = next(item for item in review.items if item.kind == 'reveal')
     review = decide(
         review, item_id=target.item_id, expected_subject_sha256=target.subject_sha256,
@@ -237,29 +251,30 @@ def test_reviewed_correction_reapplies_to_formal_after_first_edit_left_invalid(t
         'decisions': [],
     }
     _write_edit(book, {
-        'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 1}],
+        'arc_secrets': [{'secret_id': 'secret_01', 'revealed_from': 1}],
+        'world_rules': [_overlapping_rule(book)],
         'post_edit_review': attestation,
     })
     formal = store.path(extract.GLOBAL_REL).read_bytes()
     ledger = ctx.ledger.path.read_bytes()
-    with pytest.raises(GateBlocked, match='secret_setup_order'):
+    with pytest.raises(GateBlocked, match='global_temporal_contract'):
         _apply(book)
     assert store.path(extract.GLOBAL_REL).read_bytes() == formal
     correction = extract.global_edit_correction_workpack(_ctx(book, 'stage2.global', paid=False))
     assert correction['recovery_fact_kind'] == 'registered_sidecar'
     assert correction['failure_kind'] == 'hard_gate'
-    assert correction['hard_hits'] == ['secret_setup_order']
+    assert correction['hard_hits'] == ['global_temporal_contract']
     assert correction['hard_outcomes'][0]['findings']
     assert len(correction['failure_sha256']) == 64
     failed = decode_artifact(extract.GLOBAL_EDIT, correction['failed_edit']).payload
-    assert failed['secrets'][0]['first_reveal_chapter'] == 1
+    assert failed['arc_secrets'][0]['revealed_from'] == 1
     assert orchestrator_state.stage2_reviewed_edit_correction_needed(
         root, '0025', orchestrator_state.overview(root, '0025'))
 
     invalid = store.path(extract._GLOBAL_INVALID)
     invalid_bytes = invalid.read_bytes()
     human = json.loads(invalid_bytes)
-    human['canon']['secrets'][0]['fact'] = '人工补充但尚未复核的事实'
+    human['arc_secrets'][0]['fact'] = '人工补充但尚未复核的事实'
     invalid.write_text(json.dumps(human, ensure_ascii=False), encoding='utf-8')
     assert not orchestrator_state.stage2_reviewed_edit_correction_needed(
         root, '0025', orchestrator_state.overview(root, '0025'))
@@ -284,12 +299,12 @@ def test_reviewed_correction_reapplies_to_formal_after_first_edit_left_invalid(t
     failure.write_bytes(failure_bytes)
 
     _write_edit(book, {
-        'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 3}],
+        'arc_secrets': [{'secret_id': 'secret_01', 'revealed_from': 3}],
         'post_edit_review': attestation,
     })
     artifact, report = _apply(book)
-    assert report.passed and artifact.canon.secrets[0].first_reveal_chapter == 3
-    assert artifact.canon.secrets[0].setup.chapters == [1], '必须从原 formal 纠错，不能继承失败稿的裁剪'
+    assert report.passed and artifact.arc_secrets[0].revealed_from == 3
+    assert artifact.arc_secrets[0].setup_chapters == [1], '必须从原 formal 纠错，不能继承失败稿的规则重叠'
     assert not invalid.exists()
     assert not failure.exists()
     closed = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
@@ -306,11 +321,11 @@ def test_post_review_failure_builds_correction_and_only_new_decision_can_land(
         ctx = _ctx(book, 'stage2.global', paid=False)
         store = ArtifactStore(ctx)
         grounding = grounding_io.read(store)
-        review = approved_global_review(grounding)
+        review = approved_core_review(store)
         target = next(
             item for item in review.items
             if item.kind == 'role'
-            and item.subject_path == 'entities.characters.char_001.role')
+            and item.subject_path == 'characters.characters.char_001.role')
         review = decide(
             review,
             item_id=target.item_id,
@@ -336,8 +351,8 @@ def test_post_review_failure_builds_correction_and_only_new_decision_can_land(
             'decisions': [],
         }
         business = {
-            'secrets': [{
-                'secret_id': 'secret_01', 'first_reveal_chapter': 3,
+            'arc_secrets': [{
+                'secret_id': 'secret_01', 'revealed_from': 3,
             }],
         }
         _write_edit(book, {**business, 'post_edit_review': attestation})
@@ -354,7 +369,7 @@ def test_post_review_failure_builds_correction_and_only_new_decision_can_land(
         assert pack['failure_code'] == 'blocking_remaining'
         failed = GlobalEdit.model_validate(
             decode_artifact(extract.GLOBAL_EDIT, pack['failed_edit']).payload)
-        assert failed.secrets[0].first_reveal_chapter == 3
+        assert failed.arc_secrets[0].revealed_from == 3
         ov = orchestrator_state.overview(root, '002f')
         assert orchestrator_state.stage2_reviewed_edit_correction_needed(
             root, '002f', ov)
@@ -396,7 +411,7 @@ def test_post_review_failure_builds_correction_and_only_new_decision_can_land(
         landed, report = _apply(book)
 
         assert report.passed
-        assert landed.canon.secrets[0].first_reveal_chapter == 3
+        assert landed.arc_secrets[0].revealed_from == 3
         closed = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
         assert next(item for item in closed.items
                     if item.item_id == target.item_id).state == 'PASS'
@@ -426,9 +441,9 @@ def test_service_global_edit_is_staged_canonically_and_survives_transport_cleanu
     try:
         _seed(book)
         edit = GlobalEdit.model_validate({
-            'secrets': [{
+            'arc_secrets': [{
                 'secret_id': 'secret_01',
-                'first_reveal_chapter': 3,
+                'revealed_from': 3,
             }],
         })
         service_path = uploads.save_global_edit(root, '321', edit)
@@ -439,7 +454,7 @@ def test_service_global_edit_is_staged_canonically_and_survives_transport_cleanu
 
         artifact, _report = extract.run_apply_edit(
             _ctx(book, 'stage2.global', paid=False), str(service_path))
-        assert artifact.canon.secrets[0].first_reveal_chapter == 3
+        assert artifact.arc_secrets[0].revealed_from == 3
         assert extract.GLOBAL_EDIT in artifact.provenance.inputs
         assert (book / extract.GLOBAL_EDIT).is_file()
 
@@ -461,7 +476,8 @@ def test_ordinary_hard_human_revalidate_prepared_replays_exact_audit_identity(
     ctx = _ctx(book, 'stage2.global', paid=False)
     store = ArtifactStore(ctx)
     _write_edit(book, {
-        'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 1}],
+        'arc_secrets': [{'secret_id': 'secret_01', 'revealed_from': 1}],
+        'world_rules': [_overlapping_rule(book)],
     })
     original_retire = extract._retire_nonreviewed_global_edit_input_commit
     monkeypatch.setattr(
@@ -489,7 +505,8 @@ def test_ordinary_hard_human_revalidate_prepared_replays_exact_audit_identity(
 
     invalid_path = book / extract._GLOBAL_INVALID
     raw = json.loads(invalid_path.read_text(encoding='utf-8'))
-    raw['canon']['secrets'][0]['first_reveal_chapter'] = 3
+    raw['arc_secrets'][0]['revealed_from'] = 3
+    raw['world_rules'][0]['versions'][0]['effective_until'] = 1
     invalid_path.write_text(
         json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
         encoding='utf-8', newline='\n')
@@ -558,14 +575,14 @@ def test_generic_global_revalidate_prepared_recovers_every_hard_kill_write_point
     store = ArtifactStore(ctx)
     store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
     response = _response_global()
-    response['canon']['secrets'][0]['first_reveal_chapter'] = 99
+    response['arc_secrets'][0]['revealed_from'] = 99
     client, _transport = _client(ctx, lambda _req, _index: _ok(response))
     with pytest.raises(GateBlocked, match='canon_chapter_refs_dangling'):
         extract.run_global(ctx, client)
 
     invalid_path = book / extract._GLOBAL_INVALID
     raw = json.loads(invalid_path.read_text(encoding='utf-8'))
-    raw['canon']['secrets'][0]['first_reveal_chapter'] = 3
+    raw['arc_secrets'][0]['revealed_from'] = 3
     invalid_path.write_text(
         json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
         encoding='utf-8', newline='\n')
@@ -631,8 +648,8 @@ def test_ordinary_candidate_terminal_closes_input_wal_after_hard_kill(
     _seed(book)
     ctx = _ctx(book, 'stage2.global', paid=False)
     _write_edit(book, {
-        'secrets': [{
-            'secret_id': 'secret_01', 'first_reveal_chapter': 3,
+        'arc_secrets': [{
+            'secret_id': 'secret_01', 'revealed_from': 3,
         }],
     })
     original_validate = GlobalGrounding.model_validate
@@ -642,7 +659,7 @@ def test_ordinary_candidate_terminal_closes_input_wal_after_hard_kill(
         inputs = getattr(provenance, 'inputs', {})
         if extract.GLOBAL_EDIT in inputs:
             broken = copy.deepcopy(value)
-            broken.pop('entities', None)
+            broken.pop('setting', None)
             return original_validate(broken, *args, **kwargs)
         return original_validate(value, *args, **kwargs)
 
@@ -683,14 +700,18 @@ def test_new_ordinary_edit_explicitly_supersedes_old_terminal_failure(tmp_path):
     _seed(book)
     ctx = _ctx(book, 'stage2.global', paid=False)
     _write_edit(book, {
-        'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 1}],
+        'arc_secrets': [{'secret_id': 'secret_01', 'revealed_from': 1}],
+        'world_rules': [_overlapping_rule(book)],
     })
     with pytest.raises(GateBlocked):
         _apply(book)
     assert (book / extract.GLOBAL_EDIT_FAILURE).is_file()
 
+    corrected_rule = _overlapping_rule(book)
+    corrected_rule['versions'][0]['effective_until'] = 1
     replacement = GlobalEdit.model_validate({
-        'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 3}],
+        'arc_secrets': [{'secret_id': 'secret_01', 'revealed_from': 3}],
+        'world_rules': [corrected_rule],
     })
     service_path = uploads.save_global_edit(root, '328', replacement)
     terminal = operator.next_action(root, '328')
@@ -701,7 +722,7 @@ def test_new_ordinary_edit_explicitly_supersedes_old_terminal_failure(tmp_path):
 
     landed, report = extract.run_apply_edit(ctx, str(service_path))
     assert report.passed
-    assert landed.canon.secrets[0].first_reveal_chapter == 3
+    assert landed.arc_secrets[0].revealed_from == 3
     assert not (book / extract.GLOBAL_EDIT_FAILURE).exists()
     assert not orchestrator_state.stage2_global_edit_terminal_failure_needed(
         root, '328', code=ctx.code)
@@ -712,9 +733,9 @@ def test_a_noop_service_global_edit_is_rejected_before_canonical_staging():
     try:
         _seed(book)
         edit = GlobalEdit.model_validate({
-            'secrets': [{
+            'arc_secrets': [{
                 'secret_id': 'secret_01',
-                'first_reveal_chapter': 2,
+                'revealed_from': 2,
             }],
         })
         service_path = uploads.save_global_edit(root, '322', edit)
@@ -735,9 +756,9 @@ def test_wal_only_first_service_edit_is_reachable_via_canonical_recovery(
     try:
         _seed(book)
         edit = GlobalEdit.model_validate({
-            'secrets': [{
+            'arc_secrets': [{
                 'secret_id': 'secret_01',
-                'first_reveal_chapter': 3,
+                'revealed_from': 3,
             }],
         })
         service_path = uploads.save_global_edit(root, '323', edit)
@@ -768,7 +789,7 @@ def test_wal_only_first_service_edit_is_reachable_via_canonical_recovery(
 
         artifact, report = _apply(book)
         assert report.passed
-        assert artifact.canon.secrets[0].first_reveal_chapter == 3
+        assert artifact.arc_secrets[0].revealed_from == 3
         assert not (book / extract.GLOBAL_EDIT_INPUT_COMMIT).exists()
     finally:
         shutil.rmtree(root)
@@ -780,17 +801,17 @@ def test_new_wal_is_not_swallowed_by_previous_committed_formal_journal(
     root, book = _tmp_book(tmp_path, '旧提交新WAL_324')
     try:
         _seed(book)
-        _write_edit(book, {'secrets': [{
-            'secret_id': 'secret_01', 'first_reveal_chapter': 3,
+        _write_edit(book, {'arc_secrets': [{
+            'secret_id': 'secret_01', 'revealed_from': 3,
         }]})
         first, _report = _apply(book)
-        assert first.canon.secrets[0].first_reveal_chapter == 3
+        assert first.arc_secrets[0].revealed_from == 3
         old_canonical = (book / extract.GLOBAL_EDIT).read_bytes()
         old_commit = (book / extract.GLOBAL_EDIT_COMMIT).read_bytes()
 
         edit = GlobalEdit.model_validate({
-            'secrets': [{
-                'secret_id': 'secret_01', 'first_reveal_chapter': 2,
+            'arc_secrets': [{
+                'secret_id': 'secret_01', 'revealed_from': 2,
             }],
         })
         service_path = uploads.save_global_edit(root, '324', edit)
@@ -809,7 +830,7 @@ def test_new_wal_is_not_swallowed_by_previous_committed_formal_journal(
             extract, '_reconcile_global_edit_input_commit', original)
         landed, report = _apply(book)
         assert report.passed
-        assert landed.canon.secrets[0].first_reveal_chapter == 2
+        assert landed.arc_secrets[0].revealed_from == 2
         assert (book / extract.GLOBAL_EDIT).read_bytes() != old_canonical
         assert not (book / extract.GLOBAL_EDIT_INPUT_COMMIT).exists()
     finally:
@@ -827,11 +848,11 @@ def test_reviewed_prepared_bundle_recovers_every_hard_kill_write_point(
         ctx = _ctx(book, 'stage2.global', paid=False)
         store = ArtifactStore(ctx)
         grounding = grounding_io.read(store)
-        review = approved_global_review(grounding)
+        review = approved_core_review(store)
         target_item = next(
             item for item in review.items
             if item.kind == 'reveal'
-            and item.subject_path == 'canon.secrets.secret_01.first_reveal_chapter')
+            and item.subject_path == 'global.arc_secrets.secret_01.revealed_from')
         review = decide(
             review,
             item_id=target_item.item_id,
@@ -843,7 +864,7 @@ def test_reviewed_prepared_bundle_recovers_every_hard_kill_write_point(
         workpack = global_review_ops.review_workpack(
             ctx, scope='blocking', replaced_input_keys=(extract.GLOBAL_EDIT,))
         _write_edit(book, {
-            'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 3}],
+            'arc_secrets': [{'secret_id': 'secret_01', 'revealed_from': 3}],
             'post_edit_review': {
                 'actor': 'agent:novel-pipeline-operator',
                 'expected_source_sha256': review.source_sha256,
@@ -886,7 +907,7 @@ def test_reviewed_prepared_bundle_recovers_every_hard_kill_write_point(
         assert extract.submitted_global_patch_is_current(str(root), sid, submitted)
         assert {path: path.read_bytes() for path in book.rglob('*') if path.is_file()} == snapshot
         other_request = copy.deepcopy(submitted)
-        other_request['secrets'][0]['first_reveal_chapter'] = 1
+        other_request['arc_secrets'][0]['revealed_from'] = 1
         assert not extract.submitted_global_patch_is_current(str(root), sid, other_request)
         formal_path = book / extract.GLOBAL_REL
         formal_bytes = formal_path.read_bytes()
@@ -905,7 +926,7 @@ def test_reviewed_prepared_bundle_recovers_every_hard_kill_write_point(
 
         landed, report = _apply(book)
         assert report.passed
-        assert landed.canon.secrets[0].first_reveal_chapter == 3
+        assert landed.arc_secrets[0].revealed_from == 3
         assert not (book / extract.GLOBAL_EDIT_INPUT_COMMIT).exists()
         assert not (book / extract.GLOBAL_EDIT_FAILURE).exists()
         committed = ArtifactStore(ctx).read_own(
@@ -937,19 +958,18 @@ def test_a_wrong_reveal_chapter_is_corrected_and_the_downstream_turns_stale():
         inputs_before = read_input_digests(ArtifactStore(bp_ctx))
         blueprint_before = ArtifactStore(bp_ctx).read_own(ChapterBlueprints, extract.BLUEPRINT_REL)[0]
         ledger_before = bp_ctx.ledger.path.read_bytes()
-        _write_edit(book, {'secrets': [
-            {'secret_id': 'secret_01', 'first_reveal_chapter': 3}]})
+        _write_edit(book, {'arc_secrets': [
+            {'secret_id': 'secret_01', 'revealed_from': 3}]})
         artifact, report = _apply(book)
 
         # ① 改真的落进产物
-        secret = artifact.canon.secrets[0]
-        assert secret.first_reveal_chapter == 3
+        secret = artifact.arc_secrets[0]
+        assert secret.revealed_from == 3
         reloaded = grounding_io.read(ArtifactStore(_ctx(book, 'stage2.global', paid=False)))
-        assert reloaded.canon.secrets[0].first_reveal_chapter == 3
+        assert reloaded.arc_secrets[0].revealed_from == 3
 
         # ② 重走归一：埋点章 1 < 新揭示章 3 ⇒ 不该被裁掉
-        assert secret.setup.chapters == [1]
-        assert reloaded.provenance.setup_chapters_pruned == []
+        assert secret.setup_chapters == [1]
 
         # ③ 重判真的跑过（不是把旧报告抄一遍）
         assert report.node == 'stage2.global' and report.rules
@@ -979,73 +999,54 @@ def test_a_wrong_reveal_chapter_is_corrected_and_the_downstream_turns_stale():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_correcting_the_reveal_chapter_backwards_reprunes_and_then_hits_the_same_gate():
-    """⭐ 人把揭示章往**前**改时，走的是与生成路**一模一样**的那三步。
-
-    埋点章 `[1]` 在揭示章改到第 1 章之后不再严格早于它（`R-2.9`）⇒
-      ① `_prune_setups` 把它裁掉，并把裁剪账记进 `_provenance.setup_chapters_pruned`
-         （「冷揭示」与「被裁空」在字段值上完全同形，只能靠那个计数分开）；
-      ② `secret_setup_order`（HARD）**断言的正是那个计数**⇒ 命中 ⇒ 问题稿进 `.INVALID`，
-         正式底座不动。⚠ **这不是人工路的特例**：`run_global` 在同一份数据上
-         也是这个下场（见 `test_stage2_global_renormalize_promotes_deterministically_pruned_invalid`）
-         ——「裁过一刀」这件事必须让人看见，不许静默应用；
-      ③ 0 成本出路是 `--renormalize`：再归一时已经没什么可裁，计数归零、提升为正式稿。
-
-    ⚠ 本条是「人工稿要重走 normalize、当前判据和落盘闸门」这句话的完整形态：
-    只测到 ① 会让人以为人工路可以绕过 ②。
-    """
+def test_correcting_the_reveal_chapter_backwards_preserves_same_chapter_setup():
+    """同章铺垫合法且免费归一不裁剪；晚于揭示的铺垫由明确 schema 拒绝。"""
     root, book = _sandbox('揭示章前移_002')
     try:
         _seed(book)
-        before = (book / extract.GLOBAL_REL).read_bytes()
-        _write_edit(book, {'secrets': [
-            {'secret_id': 'secret_01', 'first_reveal_chapter': 1}]})
-
-        with pytest.raises(GateBlocked, match='secret_setup_order'):
-            _apply(book)
-        assert (book / extract.GLOBAL_REL).read_bytes() == before, '正式底座被覆盖了'
-
-        invalid = json.loads((book / extract._GLOBAL_INVALID).read_text(encoding='utf-8'))
-        assert invalid['canon']['secrets'][0]['setup'] == {'kind': 'cold'}
-        assert invalid['_provenance']['setup_chapters_pruned'] == [['secret_01', [1], []]]
-
-        passed, report = extract.run_revalidate(
-            _ctx(book, 'stage2.global', paid=False), actor='test:human', reason='仅复验不确认裁剪')
-        assert not passed and not report.passed
-        assert (book / extract.GLOBAL_REL).read_bytes() == before
-        report = extract.run_renormalize(_ctx(book, 'stage2.global', paid=False))
+        ctx = _ctx(book, 'stage2.global', paid=False)
+        ledger = ctx.ledger.path.read_bytes()
+        _write_edit(book, {'arc_secrets': [
+            {'secret_id': 'secret_01', 'revealed_from': 1}]})
+        artifact, report = _apply(book)
         assert report.passed
-        stored = grounding_io.read(ArtifactStore(_ctx(book, 'stage2.global', paid=False)))
-        assert stored.canon.secrets[0].first_reveal_chapter == 1
-        assert stored.canon.secrets[0].setup.kind == 'cold'
-        assert stored.provenance.setup_chapters_pruned == []
+        assert artifact.arc_secrets[0].setup_chapters == [1]
+        assert artifact.arc_secrets[0].revealed_from == 1
+        assert extract.run_renormalize(ctx).passed
+        stored = grounding_io.read(ArtifactStore(ctx))
+        assert stored.arc_secrets[0].setup_chapters == [1]
+        before = (book / extract.GLOBAL_REL).read_bytes()
+        _write_edit(book, {'arc_secrets': [
+            {'secret_id': 'secret_01', 'setup_chapters': [2]}]})
+        with pytest.raises(extract.GlobalEditCandidateRejected):
+            _apply(book)
+        assert (book / extract.GLOBAL_REL).read_bytes() == before
         assert not (book / extract._GLOBAL_INVALID).exists()
+        assert ctx.ledger.path.read_bytes() == ledger
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_fact_and_typed_knowledge_timeline_land_together():
-    """secret 事实与 CharacterRef/GroupRef 知情时间线同样能走 typed 写回。"""
+@pytest.mark.parametrize('events', [
+    [_knowledge_character('char_001', 1)],
+    [_knowledge_group('知情的沈家人', 2)],
+])
+def test_global_rejects_retired_typed_knowledge_timeline(events):
+    """人物及群体知情转归 KnowledgeLinks，Global 不能静默接回旧知情矩阵。"""
     root, book = _sandbox('知情人订正_003')
     try:
         _seed(book)
-        _write_edit(book, {'secrets': [{
+        before = (book / extract.GLOBAL_REL).read_bytes()
+        _write_edit(book, {'arc_secrets': [{
             'secret_id': 'secret_01',
             'fact': '父亲早已回城，只是被债主扣在城南客栈里',
-            'fact_evidence': _fact_locator(),
-                'knowledge_events': [
-                    _knowledge_character('char_001', 1),
-                    _knowledge_group('知情的沈家人', 2),
-                ],
+            'fact_ref': None, 'evidence_refs': [_fact_locator()],
+            'knowledge_events': events,
         }]})
-        artifact, _report = _apply(book)
-        secret = artifact.canon.secrets[0]
-        assert secret.fact.endswith('客栈里')
-        assert [event.subject.kind for event in secret.knowledge_events] == [
-            'character', 'group']
-        assert [event.known_from_chapter for event in secret.knowledge_events] == [1, 2]
-        # 没给的字段一个都不许动
-        assert secret.first_reveal_chapter == 2
+        with pytest.raises(ArtifactUnreadable, match='knowledge_events'):
+            _apply(book)
+        assert (book / extract.GLOBAL_REL).read_bytes() == before
+        assert not (book / extract._GLOBAL_INVALID).exists()
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1061,7 +1062,7 @@ def test_a_reviewed_role_can_be_corrected_without_an_llm_and_reopens_only_its_re
         old_item = next(
             item for item in review.items
             if item.kind == 'role'
-            and item.subject_path == 'entities.characters.char_001.role')
+            and item.subject_path == 'characters.characters.char_001.role')
         stable_item = next(
             item for item in review.items
             if item.kind == 'role'
@@ -1088,19 +1089,26 @@ def test_a_reviewed_role_can_be_corrected_without_an_llm_and_reopens_only_its_re
 
         corrected = '沈家账房，负责核对往来账目'
         ledger = ctx.ledger.path.read_bytes()
-        _edit_static_character(book, 'char_001', role=corrected, role_evidence=_role_locator())
+        from contracts.schema.characters import CharacterRegistry, CharactersEdit
+        from novel.stages.stage2 import characters
+        character_ctx = _ctx(book, 'stage2.characters', paid=False)
+        template = characters.edit_template(character_ctx)
+        row = next(op for op in template['operations'] if op['char_id'] == 'char_001')
+        row['character'].update(role=corrected, role_evidence_refs=[_role_locator()])
+        characters.apply_edit(character_ctx, CharactersEdit.model_validate(
+            {**template, 'operations': [row]}), actor='test:human', reason='核对首次公开身份')
         assert store.freshness(extract.GLOBAL_REL).state == 'stale'
         report = extract.run_renormalize(_ctx(book, 'stage2.global', paid=False))
         assert report.node == 'stage2.global' and report.passed
-        reloaded = grounding_io.read(ArtifactStore(ctx))
-        assert reloaded.entities.characters['char_001'].role == corrected
+        reloaded = store.read_own(CharacterRegistry, characters.REL)[0]
+        assert reloaded.characters['char_001'].role == corrected
         assert ctx.ledger.path.read_bytes() == ledger
 
         rebuilt = ArtifactStore(ctx).read(GlobalReview, extract.GLOBAL_REVIEW_REL)
         new_item = next(
             item for item in rebuilt.items
             if item.kind == 'role'
-            and item.subject_path == 'entities.characters.char_001.role')
+            and item.subject_path == 'characters.characters.char_001.role')
         assert new_item.subject_sha256 != old_item.subject_sha256
         assert new_item.item_id != old_item.item_id
         assert new_item.state == 'pending'
@@ -1130,7 +1138,7 @@ def test_a_leaky_role_invalid_is_repaired_by_the_typed_zero_llm_path(tmp_path):
     template = characters.edit_template(ctx)
     row = next(op for op in template['operations'] if op['char_id'] == 'char_001')
     row['character'].update(
-        role='沈家账房，最终下狱', role_evidence=_locator(3, '不存在的身份原文'))
+        role='沈家账房，最终下狱')
     with pytest.raises(GateBlocked, match='role_leaks_fate'):
         characters.apply_edit(
             ctx, CharactersEdit.model_validate({**template, 'operations': [row]}),
@@ -1138,12 +1146,12 @@ def test_a_leaky_role_invalid_is_repaired_by_the_typed_zero_llm_path(tmp_path):
     assert formal.read_bytes() == before
     invalid_bytes = invalid.read_bytes()
     failed = store.read_own(CharacterRegistry, characters.INVALID)[0]
-    assert failed.characters['char_001'].role_evidence.source is None
-    assert failed.provenance.evidence_locator_failures
+    assert failed.characters['char_001'].role_evidence_refs
+    assert all(ref in failed.evidence_anchors for ref in failed.characters['char_001'].role_evidence_refs)
     repair = characters.edit_template(_ctx(book, 'stage2.characters', paid=False))
     fixed = next(op for op in repair['operations'] if op['char_id'] == 'char_001')
     fixed['character'].update(
-        role='沈家账房，负责核对往来账目', role_evidence=_role_locator())
+        role='沈家账房，负责核对往来账目', role_evidence_refs=[_role_locator()])
     edit = CharactersEdit.model_validate({**repair, 'operations': [fixed]})
     main = store.path(extract.MAIN_TEXT)
     main_bytes = main.read_bytes()
@@ -1159,8 +1167,7 @@ def test_a_leaky_role_invalid_is_repaired_by_the_typed_zero_llm_path(tmp_path):
     corrected = characters.apply_edit(
         _ctx(book, 'stage2.characters', paid=False), edit,
         actor='test:human', reason='核对静态身份与证据')
-    assert corrected.characters['char_001'].role_evidence.source is not None
-    assert not corrected.provenance.evidence_locator_failures
+    assert all(ref in corrected.evidence_anchors for ref in corrected.characters['char_001'].role_evidence_refs)
     assert not invalid.exists()
     rounds = book / 'stage2/_rounds'
     assert any(p.read_bytes() == invalid_bytes for p in rounds.glob('characters.INVALID.r*.json'))
@@ -1169,31 +1176,33 @@ def test_a_leaky_role_invalid_is_repaired_by_the_typed_zero_llm_path(tmp_path):
     assert ctx.ledger.path.read_bytes() == ledger
 
 
-def test_typed_edit_uses_cross_chapter_unique_recovery_and_hash_only_audit():
+def test_typed_edit_requires_explicit_chapter_correction_and_keeps_audit_compact():
+    """人工定位符只在声明章唯一匹配；错章拒绝后显式修正，全程不购买模型。"""
     root, book = _sandbox('人工证据错章恢复_003ab')
     try:
         _seed(book)
         locator = '李宝珠把账册摊在桌上一页页翻。'
-        _write_edit(book, {'secrets': [{
-            'secret_id': 'secret_01', 'fact': '账册已被摊开逐页核对',
-            'fact_evidence': _locator(1, locator),
-        }]})
         ctx = _ctx(book, 'stage2.global', paid=False)
-
-        artifact, report = extract.run_apply_edit(ctx)
-
+        before = (book / extract.GLOBAL_REL).read_bytes()
+        ledger = ctx.ledger.path.read_bytes()
+        patch = {'arc_secrets': [{
+            'secret_id': 'secret_01', 'fact': '账册已被摊开逐页核对',
+            'fact_ref': None, 'evidence_refs': [_locator(1, locator)],
+        }]}
+        _write_edit(book, patch)
+        with pytest.raises(extract.GlobalEditCandidateRejected):
+            _apply(book)
+        assert (book / extract.GLOBAL_REL).read_bytes() == before
+        assert not (book / extract._GLOBAL_INVALID).exists()
+        patch['arc_secrets'][0]['evidence_refs'] = [_locator(3, locator)]
+        _write_edit(book, patch)
+        artifact, report = _apply(book)
         assert report.passed
-        evidence = artifact.canon.secrets[0].fact_evidence
-        assert evidence.chapter_ordinal == 3 and evidence.source is not None
-        event, = [row for row in ctx.ledger.audit_events
-                  if row['kind'] == 'evidence_locator_rewrite']
-        assert event['claim_path'] == 'canon.secrets.secret_01.fact'
-        assert (event['original_chapter_ordinal'],
-                event['resolved_chapter_ordinal']) == (1, 3)
-        assert event['artifact'] == extract.GLOBAL_REL
-        assert event['artifact_sha256'] == ArtifactStore(
-            ctx).full_sha256_or_none(extract.GLOBAL_REL)
-        assert locator not in json.dumps(event, ensure_ascii=False)
+        anchor = artifact.evidence_anchors[artifact.arc_secrets[0].evidence_refs[0]]
+        assert anchor.chapter_ordinal == 3
+        assert ctx.ledger.path.read_bytes() == ledger
+        assert not [row for row in ctx.ledger.audit_events if row['kind'] == 'evidence_locator_rewrite']
+        assert locator not in json.dumps(ctx.ledger.audit_events, ensure_ascii=False)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1208,7 +1217,7 @@ def test_complete_typed_surfaces_reach_disk_and_rebuild_the_human_review():
         old_review = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
         old_secret_rows = [
             item for item in old_review.items
-            if item.kind in {'secret_set_complete', 'secret', 'known_by', 'reveal'}]
+            if item.kind in {'secret_set_complete', 'secret', 'secret_setup', 'reveal'}]
         assert old_secret_rows
         for item in old_secret_rows:
             old_review = decide(
@@ -1224,47 +1233,47 @@ def test_complete_typed_surfaces_reach_disk_and_rebuild_the_human_review():
         old_item_ids = {item.item_id for item in old_secret_rows}
 
         _write_edit(book, {
-            'secrets_replace': [{
+            'arc_secrets_replace': [{
                 'secret_id': 'secret_01',
                 'fact': '父亲已经回城',
-                'fact_evidence': _fact_locator(),
-                'knowledge_events': [_knowledge_character('char_002', 2)],
-                'setup': {'kind': 'foreshadowed', 'chapters': [1]},
-                'first_reveal_chapter': 3,
+                'fact_ref': None, 'evidence_refs': [_fact_locator()],
+                'setup_chapters': [1],
+                'revealed_from': 3,
             }, {
                 'secret_id': 'secret_02',
                 'fact': '母亲早就知道那封信的事',
-                'fact_evidence': _locator(2, '其实母亲早就知道那封信的事。'),
-                'knowledge_events': [_knowledge_character('char_001', 1)],
-                'setup': {'kind': 'cold'},
-                'first_reveal_chapter': 2,
+                'fact_ref': None,
+                'evidence_refs': [_locator(2, '其实母亲早就知道那封信的事。')],
+                'setup_chapters': [],
+                'revealed_from': 2,
             }],
             'world_rules_replace': [{
                 'rule_id': 'wr_02',
                 'kind': 'legal_rule',
                 'versions': [{
-                    'effective_from_chapter': 1,
+                    'version_id': 'v01', 'effective_from': 1,
+                    'effective_until': None, 'revealed_from': 1,
                     'desc': '城中夜间梆子响过以后实行宵禁，行人须留在住所直到天明',
-                    'desc_evidence': _locator(1, '远处传来更夫的梆子声。'),
+                    'evidence_refs': [_locator(1, '远处传来更夫的梆子声。')],
                 }],
             }],
         })
         artifact, report = _apply(book)
 
         assert report.node == 'stage2.global'
-        assert [row.secret_id for row in artifact.canon.secrets] == [
+        assert [row.secret_id for row in artifact.arc_secrets] == [
             'secret_01', 'secret_02']
-        assert [row.rule_id for row in artifact.canon.world_rules] == ['wr_02']
+        assert [row.rule_id for row in artifact.world_rules] == ['wr_02']
         rebuilt = ArtifactStore(_ctx(book, 'stage2.global', paid=False)).read(
             GlobalReview, extract.GLOBAL_REVIEW_REL)
         secret_rows = [
             item for item in rebuilt.items
-            if item.kind in {'secret_set_complete', 'secret', 'knowledge_event', 'reveal'}]
-        assert len(secret_rows) == 7  # set completeness + 2 × fact/knowledge-event/reveal
+            if item.kind in {'secret_set_complete', 'secret', 'secret_setup', 'reveal'}]
+        assert len(secret_rows) == 7  # 集合完整性 + 2 × 事实 / 长线准入 / 揭示
         assert all(item.state == 'pending' for item in secret_rows)
         assert old_item_ids.isdisjoint({item.item_id for item in secret_rows})
         assert {item.subject_path for item in secret_rows if item.kind == 'secret'} == {
-            'canon.secrets.secret_01.fact', 'canon.secrets.secret_02.fact'}
+            'global.arc_secrets.secret_01', 'global.arc_secrets.secret_02'}
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1286,9 +1295,9 @@ def test_the_human_round_inherits_the_paid_ledger_and_marks_the_partial_rewrite(
         store = ArtifactStore(_ctx(book, 'stage2.global', paid=False))
         before = grounding_io.read(store).provenance
 
-        _write_edit(book, {'secrets': [
+        _write_edit(book, {'arc_secrets': [
             {'secret_id': 'secret_01', 'fact': '父亲早已回城，只是不肯认这笔账',
-             'fact_evidence': _fact_locator()}]})
+             'fact_ref': None, 'evidence_refs': [_fact_locator()]}]})
         artifact, _report = _apply(book)
 
         after = artifact.provenance
@@ -1308,9 +1317,9 @@ def test_the_previous_round_is_archived_before_the_human_round_lands():
     try:
         _seed(book)
         before = (book / extract.GLOBAL_REL).read_bytes()
-        _write_edit(book, {'secrets': [
+        _write_edit(book, {'arc_secrets': [
             {'secret_id': 'secret_01',
-             'knowledge_events': [_knowledge_character('char_002', 2)]}]})
+             'revealed_from': 3}]})
         _apply(book)
         archived = sorted(p.name for p in (book / 'stage2' / '_rounds').iterdir())
         assert {
@@ -1328,12 +1337,9 @@ def test_global_and_review_partial_write_is_resumed_from_prepared_bundle(
     root, book = _sandbox('组合事务_005b')
     try:
         _seed(book)
-        _write_edit(book, {'secrets': [{
+        _write_edit(book, {'arc_secrets': [{
             'secret_id': 'secret_01',
-            'knowledge_events': [
-                _knowledge_character('char_001', 1),
-                _knowledge_group('知情的沈家长辈', 2),
-            ],
+            'revealed_from': 3,
         }]})
         formal_before = (book / extract.GLOBAL_REL).read_bytes()
         review_before = (book / extract.GLOBAL_REVIEW_REL).read_bytes()
@@ -1360,7 +1366,7 @@ def test_global_and_review_partial_write_is_resumed_from_prepared_bundle(
         artifact, report = _apply(book)
 
         assert report.passed
-        assert artifact.canon.secrets[0].knowledge_events[1].subject.kind == 'group'
+        assert artifact.arc_secrets[0].revealed_from == 3
         assert not (book / extract.GLOBAL_EDIT_INPUT_COMMIT).exists()
         committed_raw = json.loads(
             (book / extract.GLOBAL_EDIT_COMMIT).read_bytes())
@@ -1378,8 +1384,8 @@ def test_an_unknown_field_is_refused_by_the_carrier():
     """未知字段 ⇒ 载体当场拒收。**拼错一个键不许被静默忽略**——
     那会让「我改过了」与「什么都没改」在盘上同形。"""
     with pytest.raises(ValidationError):
-        GlobalEdit.model_validate({'secrets': [
-            {'secret_id': 'secret_01', 'reveal_chapter': 3}]})           # 正确的是 first_reveal_chapter
+        GlobalEdit.model_validate({'arc_secrets': [
+            {'secret_id': 'secret_01', 'reveal_chapter': 3}]})           # 正确的是 revealed_from
     with pytest.raises(ValidationError):
         GlobalEdit.model_validate({'secret': [{'secret_id': 'secret_01', 'fact': 'x'}]})
 
@@ -1388,24 +1394,24 @@ def test_an_empty_patch_is_refused():
     """一个字段都没给的补丁 ⇒ 拒收。空补丁什么都不改，
     而它在盘上与「人看过并改了」长得一样。"""
     with pytest.raises(ValidationError):
-        GlobalEdit.model_validate({'secrets': [{'secret_id': 'secret_01'}]})
+        GlobalEdit.model_validate({'arc_secrets': [{'secret_id': 'secret_01'}]})
     with pytest.raises(ValidationError):
-        GlobalEdit.model_validate({'secrets': []})
+        GlobalEdit.model_validate({'arc_secrets': []})
 
 
 def test_two_patches_for_one_secret_are_refused():
     """同一条 secret 给两份补丁 ⇒ 拒收：哪一份生效取决于遍历顺序，
     而那意味着**人的决定被实现细节改写**。"""
     with pytest.raises(ValidationError):
-        GlobalEdit.model_validate({'secrets': [
-            {'secret_id': 'secret_01', 'fact': 'A', 'fact_evidence': _fact_locator()},
-            {'secret_id': 'secret_01', 'fact': 'B', 'fact_evidence': _fact_locator()}]})
+        GlobalEdit.model_validate({'arc_secrets': [
+            {'secret_id': 'secret_01', 'fact': 'A', 'fact_ref': None, 'evidence_refs': [_fact_locator()]},
+            {'secret_id': 'secret_01', 'fact': 'B', 'fact_ref': None, 'evidence_refs': [_fact_locator()]}]})
 
 
 @pytest.mark.parametrize('payload,why', [
-    ({'secrets': [{'secret_id': 'secret_01', 'first_reveal_chapter': 9}]},
+    ({'arc_secrets': [{'secret_id': 'secret_01', 'revealed_from': 9}]},
      '揭示章越界'),
-    ({'secrets': [{'secret_id': 'secret_01', 'setup': {'kind': 'foreshadowed', 'chapters': [7]}}]},
+    ({'arc_secrets': [{'secret_id': 'secret_01', 'setup_chapters': [7]}]},
      '埋点章越界'),
 ])
 def test_an_out_of_range_chapter_is_refused_before_anything_is_written(payload, why):
@@ -1438,9 +1444,9 @@ def test_an_unknown_secret_id_is_refused_without_echoing_model_payload():
     root, book = _sandbox('未知secret_007')
     try:
         _seed(book)
-        _write_edit(book, {'secrets': [{
+        _write_edit(book, {'arc_secrets': [{
             'secret_id': 'secret_09', 'fact': '凭空一条',
-            'fact_evidence': _fact_locator()}]})
+            'fact_ref': None, 'evidence_refs': [_fact_locator()]}]})
         with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
             _apply(book)
         assert 'missing_patch_subject:1' in caught.value.safe_summary
@@ -1451,23 +1457,16 @@ def test_an_unknown_secret_id_is_refused_without_echoing_model_payload():
 
 
 def test_a_dangling_known_by_reference_is_rejected_before_any_artifact_write():
-    """A typed registry reference is an invalid decision, not a bad candidate.
-
-    Waiting for ``secret_known_by_dangling`` would first mutate/normalize the
-    candidate and then create an INVALID round.  Target and reference validity
-    are instead checked atomically before any artifact or archive write.
-    """
+    """退休的 Global 知情槽在读入时拒绝；真实 KnowledgeLinks 外键由 Gate B 验证。"""
     root, book = _sandbox('闸门拦下_008')
     try:
         _seed(book)
         before = (book / extract.GLOBAL_REL).read_bytes()
-        _write_edit(book, {'secrets': [
+        _write_edit(book, {'arc_secrets': [
             {'secret_id': 'secret_01',
              'knowledge_events': [_knowledge_character('char_777', 1)]}]})
-        with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
+        with pytest.raises(ArtifactUnreadable, match='knowledge_events'):
             _apply(book)
-        assert 'dangling_character_reference:1' in caught.value.safe_summary
-        assert 'char_777' not in caught.value.safe_summary
         assert (book / extract.GLOBAL_REL).read_bytes() == before
         assert not (book / extract._GLOBAL_INVALID).exists()
         assert not (book / 'stage2' / '_rounds').exists()
@@ -1490,9 +1489,9 @@ def test_a_missing_edit_file_and_a_missing_base_are_two_different_terminal_state
         (book2 / 'stage2').mkdir(parents=True)
         ArtifactStore(_ctx(book2, 'stage2.global')).write(
             extract.MAIN_TEXT, MainText.model_validate(main_text()))
-        _write_edit(book2, {'secrets': [{
+        _write_edit(book2, {'arc_secrets': [{
             'secret_id': 'secret_01', 'fact': 'x',
-            'fact_evidence': _fact_locator()}]})
+            'fact_ref': None, 'evidence_refs': [_fact_locator()]}]})
         with pytest.raises(Exception) as caught:
             _apply(book2)
         assert 'stage2.global' in str(caught.value), \
@@ -1538,9 +1537,9 @@ def test_the_blueprint_node_has_a_distinct_typed_plot_edit_entry():
     root, book = _sandbox('走错节点_011')
     try:
         _seed(book)
-        _write_edit(book, {'secrets': [{
+        _write_edit(book, {'arc_secrets': [{
             'secret_id': 'secret_01', 'fact': 'x',
-            'fact_evidence': _fact_locator()}]})
+            'fact_ref': None, 'evidence_refs': [_fact_locator()]}]})
         with pytest.raises(TerminalState, match='stage2.global'):
             extract.run_apply_edit(_ctx(book, 'stage2.blueprint', paid=False))
     finally:
@@ -1555,9 +1554,9 @@ def test_the_edit_file_is_recorded_as_an_input_edge():
     root, book = _sandbox('来源边_012')
     try:
         _seed(book)
-        _write_edit(book, {'secrets': [{
+        _write_edit(book, {'arc_secrets': [{
             'secret_id': 'secret_01', 'fact': '改一个字',
-            'fact_evidence': _fact_locator()}]})
+            'fact_ref': None, 'evidence_refs': [_fact_locator()]}]})
         artifact, _report = _apply(book)
         assert extract.GLOBAL_EDIT in artifact.provenance.inputs, \
             f'来源账里没有 {extract.GLOBAL_EDIT} 这条边：{sorted(artifact.provenance.inputs)}'
@@ -1636,8 +1635,8 @@ def test_the_patch_does_not_touch_anything_outside_the_named_secret():
         _seed(book)
         store = ArtifactStore(_ctx(book, 'stage2.global', paid=False))
         _artifact_before, before = grounding_io.read_own(store, extract.GLOBAL_REL)
-        _write_edit(book, {'secrets': [
-            {'secret_id': 'secret_01', 'first_reveal_chapter': 3}]})
+        _write_edit(book, {'arc_secrets': [
+            {'secret_id': 'secret_01', 'revealed_from': 3}]})
         _apply(book)
         _artifact_after, after = grounding_io.read_own(ArtifactStore(
             _ctx(book, 'stage2.global', paid=False)), extract.GLOBAL_REL)
@@ -1645,7 +1644,7 @@ def test_the_patch_does_not_touch_anything_outside_the_named_secret():
         expected = copy.deepcopy(before)
         # ⚠ 决策集里没写 `kind`，落盘那一格仍然要带上它（载体默认 `first`）：
         #   这里跟着写全，才是「这一格整格被替换」而不是「少写一个键也算没溢出」。
-        expected['canon']['secrets'][0]['first_reveal_chapter'] = 3
+        expected['arc_secrets'][0]['revealed_from'] = 3
         expected.pop('_provenance')
         got = copy.deepcopy(after)
         got.pop('_provenance')

@@ -15,7 +15,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterator, NoReturn
+from typing import Any, Callable, Iterable, Iterator, Mapping, NoReturn
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
@@ -40,7 +40,8 @@ from novel.llm.transport import ChatResponse
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
-from novel.stages.stage2 import checks
+from novel.stages.stage2 import character_checks as checks
+from novel.stages.stage2.core_evidence import compile_evidence_refs, compile_manual_evidence_refs
 from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
 from novel.stages.stage2.normalize import normalize_characters
 from novel.stages.stage2.character_refs import materialize_blueprint_character_projection
@@ -51,21 +52,25 @@ NODE = 'stage2.characters'
 REL = STAGE2_CHARACTERS
 INVALID = paths.invalid_of(REL)
 PROJECTION = STAGE2_BLUEPRINT_CHARACTER_PROJECTION
-RECOVERY_POLICY = 'stage2-characters-v1'
+RECOVERY_POLICY = 'stage2-characters-v2'
 MAX_TOKENS = 64_000
-SYSTEM = fill("""通读所给全书，提取静态人物登记，只返回指定 JSON。
-按 char_001…登记所有有原文名字、固定称呼、推动情节的动作或必要前史因果的人物；
-主角优先 char_001。保留已给修订基线的 ID，不因增删重新编号。无名背景群体不编人物。
-canonical 用原文写法；真实重名才加最小区分词。address 是唯一称谓表，不另写 aliases。
-每条 address 记录 surface、by（char_id 或 $BY_SPECIAL）、context（$CONTEXTS）、
-from_chapter（阅读序号）。叙述称名不能漏，无名群体称呼者写 public。
-surface 不含相对代词 $PRONOUNS，不能把相对说话人的叫法当作固定称名。
-name_distinctiveness 从 $NAME_DISTINCT 选择，分别表示完整专名、单字名或通用称谓、亲属或共享词。
-role 只写人物初次出场即可公开的静态身份；不写经历、结局、隐秘身份或中段才揭示的关系。
-身份不明时忠实写原文可证的最低限度身份，不编补、不把名字再抄作身份。
-role_evidence 只填支持该静态身份的段落 evidence_candidate_id（e000001…）；
-章号和原文区间由代码从同一关闭候选表回取。不写 fate、关系、世界规则、秘密或文学分析。
-人物齐全和证据语义由后续 Global Commander 核验；本任务不输出接受结论。""")
+SYSTEM = fill("""通读所给全书，提取最小充分的静态人物登记，只返回指定 JSON。
+characters 使用列表；每行 character_ref 为本回答局部引用 c1、c2……，主角优先。
+已给修订基线的局部引用必须保留；新增人物使用新的局部引用。正式 ID 由代码分配。
+登记有名字、固定称呼、推动情节的动作或必要前史因果的人物，包括必要的匿名功能人物；
+无名背景群体不编实体。canonical 采用原文实际表面称谓，不能附加编造的区分词。
+aliases 是每实体每唯一称谓的归属登记，必须包含 canonical 恰好一次；
+每项写 surface、identity_revealed_from 与 evidence_refs。共同称谓可属于多个人，各自有证据。
+identity_revealed_from 是读者知道此称谓属于该实体的章，不是称谓开始可出现的章。
+例如新邻居在第10章出现、第11章才知是裴书远：新邻居可在第10章写出，同人映射到第11章才公开。
+不要把每次 mention、称呼者或场景建表；相对代词 $PRONOUNS 不作为固定称谓。
+源文异写只凭上下文身份语义归并，不自动按字符串相似合并。不要漏掉只在前史推动因果的人物。
+first_chapter 是该实体首次出场章，first_appearance_evidence_refs 支持首次出场。
+role 只写人物首次公开的身份，不写后续经历、结局、隐藏身份或后来公开的关系；
+role_evidence_refs 支持该身份。未知身份用原文支持的最低限度描述，不编补、不重复人名。
+name_distinctiveness 从 $NAME_DISTINCT 选择。全部 evidence_refs 只引用所给 e000001…候选，
+每组至少一条，证据须支持对应主张；正式锚点由代码生成。不输出 fate、动态状态或人物知情表。
+人物齐全、称谓归属和证据语义由 Commander 核验，本回答不替审阅盖章。""")
 _LOCKS: dict[str, threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()
 
@@ -89,7 +94,16 @@ def commit_spec() -> agent_runs.CommitBundleSpec:
 
 
 @contextmanager
-def ownership(ctx: RunContext, *, allow_current: bool = False) -> Iterator[None]:
+def ownership(ctx: RunContext, *, allow_current: bool = False,
+              allow_analysis_recovery: bool = False) -> Iterator[None]:
+    from novel.stages.stage2.analyze_draft_recovery import refuse_pending
+    refuse_pending(ctx.novel_dir)
+    from novel.stages.stage2.analyze import refuse_pending_analysis
+    refuse_pending_analysis(ctx.novel_dir,
+                            allow_run_id=ctx.run_id if ctx.node == 'stage2.analyze' else None)
+    if not allow_analysis_recovery:
+        from novel.stages.stage2.analyze_recovery import refuse_pending_recovery
+        refuse_pending_recovery(ctx.novel_dir)
     lock_path = paths.stage2_characters_commit_lock_path(ctx.novel_dir)
     key = str(lock_path.resolve()).casefold()
     with _LOCKS_GUARD:
@@ -116,6 +130,8 @@ class PreparedCharacters:
     table: GlobalEvidenceCandidateTable
     user: str
     input_sha256: str
+    identity_map: Mapping[str, str]
+    reserved_ids: tuple[str, ...]
 
     def request(self) -> dict[str, Any]:
         return {
@@ -141,24 +157,46 @@ def prepare(ctx: RunContext, *, review_token: str | None = None) -> PreparedChar
         raise ProvenanceRefused('人物抽取读取期间 MainText 漂移')
     table = GlobalEvidenceCandidateTable.build(main)
     user = build_user(ctx.title, table)
+    identity_map: dict[str, str] = {}
+    reserved_ids: tuple[str, ...] = ()
+    request = None
     if review_token is not None:
         from novel.orchestrator.approvals import stage2_rework_request
         request = stage2_rework_request(
             ctx.novel_dir.parent, ctx.sid, NODE, review_token)
-        with ctx.validation_reads():
-            baseline = store.read_own(
-                CharacterRegistry, INVALID if store.exists(INVALID) else REL,
-                require_current=True)[0]
+    baseline = None
+    with ctx.validation_reads():
+        if ctx.executor_profile is not None and (run_spec().run_path(ctx) / agent_runs.RUN_FILE).exists():
+            frozen = agent_runs.initial_artifact_sha256s(ctx, run_spec())
+            baseline_rel = INVALID if frozen[INVALID] is not None else REL
+            if frozen[baseline_rel] is not None:
+                baseline = store.read_own_by_sha256(CharacterRegistry, baseline_rel, frozen[baseline_rel])
+        elif store.exists(INVALID) or store.exists(REL):
+            baseline = store.read_own(CharacterRegistry, INVALID if store.exists(INVALID) else REL,
+                                      require_current=True)[0]
+    if review_token is not None and baseline is None:
+        raise ProvenanceRefused('人物返工缺冻结的原始登记')
+    if baseline is not None:
+        baseline_characters = baseline.model_dump(mode='json')['characters']
+        identity_map = {f'c{index}': cid for index, cid in enumerate(sorted(baseline_characters), 1)}
+        receipt = baseline.provenance.characters_edit
+        reserved_ids = tuple(sorted(set(baseline_characters) | set(baseline.provenance.retired_character_ids) |
+                                    set(receipt.deleted_character_ids if receipt else [])))
         user += '\n\n' + json.dumps({
-            'kind': 'commander_rework_request', 'review_token': review_token,
-            'reason': request.reason,
-            'characters': baseline.model_dump(mode='json')['characters'],
+            'kind': 'character_revision_baseline', 'review_token': review_token,
+            'reason': request.reason if request is not None else '独立修订保留原有人物身份',
+            'characters': [dict(baseline_characters[cid], character_ref=ref)
+                           for ref, cid in identity_map.items()],
+            'evidence_anchors': baseline.model_dump(mode='json')['evidence_anchors'],
         }, ensure_ascii=False, sort_keys=True)
     return PreparedCharacters(
         main_text=tuple(main), source_sha256=before, table=table, user=user,
+        identity_map=identity_map, reserved_ids=reserved_ids,
         input_sha256=agent_runs.canonical_sha256({
             'node': NODE, 'main_text_sha256': before, 'table_sha256': table.sha256(),
             'review_token': review_token,
+            'identity_map': identity_map,
+            'reserved_ids': reserved_ids,
         }))
 
 
@@ -169,19 +207,59 @@ def assert_current(ctx: RunContext, prepared: PreparedCharacters) -> None:
         raise ProvenanceRefused('人物 executor 运行期间 MainText 改变，拒绝旧候选提交')
 
 
-def compile_response(response: CharactersResponse, table: GlobalEvidenceCandidateTable) -> dict[str, Any]:
-    raw = response.model_dump(mode='json')['characters']
-    for character in raw.values():
-        row = table.lookup(character['role_evidence']['evidence_candidate_id'])
-        character['role_evidence'] = {
-            'chapter_ordinal': row.chapter_ordinal, 'source': row.source_span()}
-    return raw
+@dataclass(frozen=True)
+class CompiledCharacters:
+    characters: dict[str, Any]
+    evidence_anchors: dict[str, Any]
+    character_ids: dict[str, str]
+
+
+def allocate_character_ids(
+        response: CharactersResponse, table: GlobalEvidenceCandidateTable, *,
+        identity_map: Mapping[str, str] | None = None, reserved_ids: Iterable[str] = (),
+) -> dict[str, str]:
+    """引用编译前冻结完整身份；证据失败不能丢失原实体映射。"""
+    import re
+    mapping = dict(identity_map or {})
+    if (len(mapping.values()) != len(set(mapping.values()))
+            or any(re.fullmatch(r'c[1-9]\d*', ref) is None for ref in mapping)
+            or any(re.fullmatch(r'char_\d{3,}', cid) is None for cid in mapping.values())):
+        raise ValueError('人物局部引用到持久 ID 的冻结映射不合法')
+    reserved = set(reserved_ids) | set(mapping.values())
+    if any(re.fullmatch(r'char_\d{3,}', cid) is None for cid in reserved):
+        raise ValueError('保留人物 ID 不合法')
+    next_id = max((int(cid.removeprefix('char_')) for cid in reserved), default=0) + 1
+    used_mapping = {}
+    for row in sorted(response.characters, key=lambda row: int(row.character_ref[1:])):
+        ref = row.character_ref
+        cid = mapping.get(ref)
+        if cid is None:
+            cid = f'char_{next_id:03d}'
+            next_id += 1
+        used_mapping[ref] = cid
+    return used_mapping
+
+
+def compile_response(
+        response: CharactersResponse, table: GlobalEvidenceCandidateTable, *,
+        identity_map: Mapping[str, str] | None = None, reserved_ids: Iterable[str] = (),
+) -> CompiledCharacters:
+    """局部引用铸成持久身份；已冻结的映射永不按回答顺序重编号。"""
+    used_mapping = allocate_character_ids(response, table, identity_map=identity_map, reserved_ids=reserved_ids)
+    characters = {}
+    for row in response.characters:
+        cid = used_mapping[row.character_ref]
+        characters[cid] = row.model_dump(mode='json', exclude={'character_ref'})
+    compiled, anchors = compile_evidence_refs(characters, table)
+    normalized, _ = normalize_characters(compiled, [])
+    return CompiledCharacters(normalized, anchors, used_mapping)
 
 
 def _validator(prepared: PreparedCharacters) -> Callable[[CharactersResponse, ChatResponse], str | None]:
     def validate(value: CharactersResponse, _response: ChatResponse) -> str | None:
         try:
-            compile_response(value, prepared.table)
+            compile_response(value, prepared.table, identity_map=prepared.identity_map,
+                             reserved_ids=prepared.reserved_ids)
         except ValueError as exc:
             return str(exc)
         return None
@@ -197,13 +275,15 @@ def _materialize(
         ctx: RunContext, client: SessionAgentClient | LlmClient,
         prepared: PreparedCharacters, response: CharactersResponse, *, settle: bool = False,
 ) -> tuple[CharacterRegistry, list[Outcome]]:
-    characters, accounting = normalize_characters(
-        compile_response(response, prepared.table), list(prepared.main_text))
+    compiled = compile_response(response, prepared.table, identity_map=prepared.identity_map,
+                                reserved_ids=prepared.reserved_ids)
     provenance = ctx.llm_provenance(
         CharactersProvenance, prompts={'CHARACTERS_SYS': SYSTEM}, model=client.model,
-        adopted_models=client.accepted_models(NODE), settle=settle,
-        evidence_locator_failures=accounting['evidence_locator_failures'])
-    artifact = CharacterRegistry(characters=characters, _provenance=provenance)
+        adopted_models=client.accepted_models(NODE), settle=settle)
+    provenance = provenance.model_copy(update={'retired_character_ids':
+        sorted(set(prepared.reserved_ids) - set(compiled.characters))})
+    artifact = CharacterRegistry(characters=compiled.characters,
+                                 evidence_anchors=compiled.evidence_anchors, _provenance=provenance)
     outcomes = checks.check_characters(
         artifact.model_dump(mode='json', by_alias=True), list(prepared.main_text))
     return artifact, outcomes
@@ -381,29 +461,107 @@ def edit_template(ctx: RunContext) -> dict[str, Any]:
     store = ArtifactStore(ctx)
     source = INVALID if store.exists(INVALID) else REL
     artifact, sha = store.read_own_with_sha256(CharacterRegistry, source, require_current=True)
-    rows = []
-    for cid, row in artifact.model_dump(mode='json')['characters'].items():
-        evidence = row['role_evidence']
-        span = evidence['source']
-        if span is None:
-            failures = [failure for failure in artifact.provenance.evidence_locator_failures
-                        if failure[0] == f'entities.characters.{cid}.role'
-                        and failure[1] == evidence['chapter_ordinal'] and failure[2].strip()]
-            if len(failures) != 1:
-                raise TerminalState(
-                    f'{cid} 的静态身份缺可恢复定位；请按当前 source_sha256 '
-                    '提交含该人物完整字段与原文定位的 typed replace')
-            locator = failures[0][2]
-        else:
-            locator = span['text']
-        row['role_evidence'] = {
-            'chapter_ordinal': evidence['chapter_ordinal'], 'locator': locator[:160]}
-        rows.append({'kind': 'replace', 'char_id': cid, 'character': row})
+    rows = [{'kind': 'replace', 'char_id': cid, 'character': row}
+            for cid, row in artifact.model_dump(mode='json')['characters'].items()]
     return {'source_sha256': sha, 'operations': rows}
 
 
+def _refresh_review(store: ArtifactStore, registry: CharacterRegistry) -> None:
+    """人物编辑只重建审阅义务；知识正文和已有未受影响裁决仍各自归原 owner。"""
+    from contracts.artifacts import STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW
+    from contracts.schema.evaluation import GlobalReview
+    from contracts.schema.knowledge import KnowledgeGrounding
+    from novel.quality.global_review import build_review
+    from novel.stages.stage2.grounding import knowledge_reference_sha256
+    if not store.exists(STAGE2_GLOBAL_GROUNDING):
+        return
+    knowledge = store.read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+    if knowledge.characters_reference_sha256 != knowledge_reference_sha256(registry):
+        # 先让 Global owner 绑定新的真实人物投影；旧 review 自然过期，不能在
+        # 两侧来源尚不闭合时制造一份看似新的联合审阅。证据-only 编辑仍可直接刷新。
+        return
+    previous = (store.read_own(GlobalReview, STAGE2_GLOBAL_REVIEW)[0]
+                if store.exists(STAGE2_GLOBAL_REVIEW) else None)
+    current = build_review(knowledge.model_dump(mode='json', by_alias=True), previous,
+                           characters=registry.model_dump(mode='json', by_alias=True))
+    if current != previous:
+        store.write_round(STAGE2_GLOBAL_REVIEW, current)
+
+
+def _edit_candidate(ctx: RunContext, prepared: PreparedCharacters, previous: CharacterRegistry,
+                    sha: str, edit: CharactersEdit, *, actor: str, reason: str,
+                    at: str | None = None) -> tuple[CharacterRegistry, list[Outcome]]:
+    if not actor.strip() or not reason.strip():
+        raise TerminalState('人物编辑必须提供 actor 与 reason')
+    if sha != edit.source_sha256:
+        raise ProvenanceRefused('人物编辑基线已变化，须按当前主体重取工作包')
+    receipt = previous.provenance.characters_edit
+    raw = previous.model_dump(mode='json')['characters']
+    before = copy.deepcopy(raw)
+    for op in edit.operations:
+        if isinstance(op, CharacterAdd):
+            if (op.char_id in raw or op.char_id in previous.provenance.retired_character_ids
+                    or (receipt and op.char_id in receipt.deleted_character_ids)):
+                raise TerminalState('add 不能覆盖或复用已经登记过的人物 ID')
+            raw[op.char_id] = op.character.model_dump(mode='json')
+        elif isinstance(op, CharacterReplace):
+            if op.char_id not in raw:
+                raise TerminalState('replace 不能创建不存在的人物')
+            raw[op.char_id] = op.character.model_dump(mode='json')
+        elif isinstance(op, CharacterDelete):
+            if op.char_id not in raw:
+                raise TerminalState('delete 不能指向不存在的人物')
+            del raw[op.char_id]
+    try:
+        raw, anchors = compile_manual_evidence_refs(
+            raw, previous.model_dump(mode='json')['evidence_anchors'], list(prepared.main_text))
+    except ValueError as exc:
+        raise TerminalState(f'人物编辑证据不能编译：{exc}') from exc
+    normalized, _ = normalize_characters(raw, list(prepared.main_text))
+    if normalized == before:
+        raise TerminalState('人物编辑归一后未改变事实，不产生新轮次')
+    provenance = ctx.rewrite_provenance(previous.provenance, by='--apply-edit')
+    provenance = provenance.model_copy(update={
+        'gates_skipped': None,
+        'retired_character_ids': sorted(set(previous.provenance.retired_character_ids) |
+                                      (set(before) - set(normalized))),
+        'characters_edit': CharactersEditReceipt(
+            actor=actor, reason=reason, at=at or datetime.now(timezone.utc).isoformat(),
+            source_sha256=sha, edit_sha256=agent_runs.canonical_sha256(edit.model_dump(mode='json')),
+            deleted_character_ids=sorted(set(receipt.deleted_character_ids if receipt else []) |
+                                         {op.char_id for op in edit.operations
+                                          if isinstance(op, CharacterDelete)})),
+    })
+    artifact = CharacterRegistry(characters=normalized, evidence_anchors=anchors, _provenance=provenance)
+    outcomes = checks.check_characters(artifact.model_dump(mode='json', by_alias=True), list(prepared.main_text))
+    return artifact, outcomes
+
+
+def preflight_edit(ctx: RunContext, edit: CharactersEdit, *,
+                   actor: str, reason: str, at: str | None = None) -> CharacterRegistry:
+    """批量裁决写盘前的全量内存检查；返回可冻结的精确 typed 候选。"""
+    prepared = prepare(ctx)
+    store = ArtifactStore(ctx)
+    source = INVALID if store.exists(INVALID) else REL
+    previous, sha = store.read_own_with_sha256(CharacterRegistry, source, require_current=True)
+    artifact, outcomes = _edit_candidate(ctx, prepared, previous, sha, edit,
+                                        actor=actor, reason=reason, at=at)
+    assert_current(ctx, prepared)
+    if hits := _hits(outcomes):
+        raise TerminalState(f'人物编辑预检有 HARD：{hits}；尚未写入候选')
+    return artifact
+
+
+def commit_prepared_edit(ctx: RunContext, edit: CharactersEdit, candidate: CharacterRegistry, *,
+                         expected_source_sha256: str, actor: str, reason: str) -> CharacterRegistry:
+    """WAL 补尾仍由人物 owner 提交；冻结候选不能绕过基线、来源或 HARD 复验。"""
+    if expected_source_sha256 != edit.source_sha256:
+        raise ProvenanceRefused('人物批次冻结 SHA 与 typed edit 不一致')
+    return apply_edit(ctx, edit, actor=actor, reason=reason, candidate=candidate)
+
+
 def apply_edit(ctx: RunContext, edit: CharactersEdit, *,
-               actor: str, reason: str) -> CharacterRegistry:
+               actor: str, reason: str, candidate: CharacterRegistry | None = None) -> CharacterRegistry:
     if not actor.strip() or not reason.strip():
         raise TerminalState('人物编辑必须提供 actor 与 reason')
     store = ArtifactStore(ctx)
@@ -420,41 +578,22 @@ def apply_edit(ctx: RunContext, edit: CharactersEdit, *,
                 raise GateBlocked('同一人物编辑仍待修复', invalid_path=store.path(INVALID))
             if store.freshness(REL).state != 'fresh':
                 raise ProvenanceRefused('人物编辑回执已落盘，但当前来源不再新鲜，不能声称修复完成')
+            if candidate is not None and previous != candidate:
+                raise ProvenanceRefused('人物编辑回执已落盘但不等于批次冻结候选')
+            if _hits(checks.check_characters(previous.model_dump(mode='json', by_alias=True),
+                                             list(prepared.main_text))):
+                raise ProvenanceRefused('人物编辑回执已落盘但当前 HARD 不通过')
             _publish_projection(store, prepared, previous)
+            _refresh_review(store, previous)
             return previous
-        if sha != edit.source_sha256:
-            raise ProvenanceRefused('人物编辑基线已变化，须按当前主体重取工作包')
-        raw = previous.model_dump(mode='json')['characters']
-        before = copy.deepcopy(raw)
-        for op in edit.operations:
-            if isinstance(op, CharacterAdd):
-                if op.char_id in raw:
-                    raise TerminalState('add 不能覆盖已经登记的人物')
-                raw[op.char_id] = op.character.model_dump(mode='json')
-            elif isinstance(op, CharacterReplace):
-                if op.char_id not in raw:
-                    raise TerminalState('replace 不能创建不存在的人物')
-                raw[op.char_id] = op.character.model_dump(mode='json')
-            elif isinstance(op, CharacterDelete):
-                if op.char_id not in raw:
-                    raise TerminalState('delete 不能指向不存在的人物')
-                del raw[op.char_id]
-        normalized, accounting = normalize_characters(raw, list(prepared.main_text))
-        if normalized == before:
-            raise TerminalState('人物编辑归一后未改变事实，不产生新轮次')
-        provenance = ctx.rewrite_provenance(previous.provenance, by='--apply-edit')
-        provenance = provenance.model_copy(update={
-            'evidence_locator_failures': accounting['evidence_locator_failures'],
-            'gates_skipped': None,
-            'characters_edit': CharactersEditReceipt(
-                actor=actor, reason=reason, at=datetime.now(timezone.utc).isoformat(),
-                source_sha256=sha, edit_sha256=edit_sha,
-                deleted_character_ids=[op.char_id for op in edit.operations
-                                       if isinstance(op, CharacterDelete)]),
-        })
-        artifact = CharacterRegistry(characters=normalized, _provenance=provenance)
-        outcomes = checks.check_characters(
-            artifact.model_dump(mode='json', by_alias=True), list(prepared.main_text))
+        candidate_receipt = candidate.provenance.characters_edit if candidate is not None else None
+        if candidate is not None and candidate_receipt is None:
+            raise ProvenanceRefused('冻结人物编辑候选缺编辑回执')
+        artifact, outcomes = _edit_candidate(
+            ctx, prepared, previous, sha, edit, actor=actor, reason=reason,
+            at=candidate_receipt.at if candidate_receipt else None)
+        if candidate is not None and candidate != artifact:
+            raise ProvenanceRefused('人物预检候选与锁内重算结果不一致，拒绝提交')
         assert_current(ctx, prepared)
         store.write_sparse_input(STAGE2_CHARACTERS_EDIT, edit)
         hits = _hits(outcomes)
@@ -466,6 +605,7 @@ def apply_edit(ctx: RunContext, edit: CharactersEdit, *,
             store.write_round(REL, artifact)
             _publish_projection(store, prepared, artifact)
         assert_current(ctx, prepared)
+        _refresh_review(store, artifact)
         return store.read_own(CharacterRegistry, REL, require_current=True)[0]
 
 
@@ -477,15 +617,7 @@ def revalidate(ctx: RunContext, *, actor: str, reason: str) -> tuple[bool, Check
         prepared = prepare(ctx)
         source = INVALID if store.exists(INVALID) else REL
         previous, _ = store.read_own(CharacterRegistry, source, require_current=True)
-        normalized, accounting = normalize_characters(
-            previous.model_dump(mode='json')['characters'], list(prepared.main_text))
-        artifact = previous.model_copy(update={
-            'characters': CharacterRegistry.model_validate({
-                'characters': normalized, '_provenance': previous.provenance,
-            }).characters,
-            'provenance': previous.provenance.model_copy(update={
-                'evidence_locator_failures': accounting['evidence_locator_failures']}),
-        })
+        artifact = previous
         outcomes = checks.check_characters(
             artifact.model_dump(mode='json', by_alias=True), list(prepared.main_text))
         passed = not _hits(outcomes)
@@ -498,6 +630,7 @@ def revalidate(ctx: RunContext, *, actor: str, reason: str) -> tuple[bool, Check
                 elif artifact.characters != previous.characters:
                     raise ProvenanceRefused('正式人物仍需归一修订，使用 typed 编辑后再重建称名投影')
                 _publish_projection(store, prepared, artifact)
+            _refresh_review(store, artifact)
         judged = REL if passed else source
         report = build(sid=ctx.sid, node=NODE, freshness=store.freshness(judged),
                        outcomes=outcomes, invalid=not passed)

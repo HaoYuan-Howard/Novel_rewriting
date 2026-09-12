@@ -41,7 +41,7 @@ blocked recovery 和诊断兼容，blocked action hash 本身不是恢复许可�
 
 ## 新旧工作流的执行边界
 
-当前 manifest v3 登记 `pipeline-cost-latency-v3`、`plot-blueprint-v1` 及产物版本组合，
+当前 manifest v4 登记 `stage2-core-v2`、`joint-analysis-independent-artifacts-v1` 及初始化产物版本快照，
 只用于独立空根；旧 manifest、事实蓝图和审批不自动迁移。首次合法写入前固定
 `_service/workflow.json`；其后所有节点、直接 producer、审批和恢复共用该身份，不另建执行 epoch。
 不得删除 manifest、工作单元账或原审批来重新初始化；旧 base 的读取与诊断不授予新写入权限。
@@ -82,7 +82,8 @@ profile 是否存在推断模式。任一模式失败都不得自动降级到另
 Claude CLI 的智谱路线使用独立 `claude-code-glm` driver，provider 为 `bigmodel`。开发维护者先在
 Claude CLI 用户配置中设置 `ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic` 及认证；
 运行代码检查并固定该接收端，不复制密钥或修改用户设置。当前发布 `glm-5.3-flash[1M]`，
-支持 `low/high/max` 三档，两角色按本次验收要求使用 `max`。`[1M]` 是上下文窗口请求后缀，
+支持 `low/high/max` 三档；当前 Stage2 Core 验收两角色固定 `high`，以 `TODO-51` 的授权配置为准。
+`[1M]` 是上下文窗口请求后缀，
 只接受登记的同模型回显；实际模型、实际 effort 和用量未回显时仍保持未知，不能用请求值倒填。
 切换供应商或模型要在旧 owner 排空后显式开新配置的运行；原配置继续入口不承担换模型，
 工作单元额度与已购成果仍保留。版本探针不证明网络、账号或模型权限。

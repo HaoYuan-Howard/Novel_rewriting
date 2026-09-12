@@ -12,3 +12,8 @@
 
 形状变化时先更新生产与测试链，再重新导出；不手工补造审批、身份或来源。
 运行导出脚本需使用 `novel_refactor` 环境及独立短临时根，不能与使用同一临时根的 pytest 并行。
+
+`core.json` 由 `scripts/export_stage2_core_fixture.py` 从免费联合首抽、独立正式产物及真实
+Global/Characters/Review 只读投影导出。它是独立合成书，包含 Characters v2、Global v7
+与 GlobalReview v3，以及同一次响应的共享来源。当前未接受状态原样保留，不与历史小说或
+`flow.json` 的审批拼接。临时书在 worktree 内清理；它不证明真实模型质量或实际费用。

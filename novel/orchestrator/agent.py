@@ -46,12 +46,12 @@ from contracts.artifacts import (
 from contracts.invariants import (
     AGENT_EXECUTOR_NODES, COMMANDER_MAX_ATTEMPTS_PER_SEAT,
     COMMANDER_RETRY_BACKOFF_SECONDS,
-    STAGE2_BLUEPRINT_MAX_CONCURRENCY,
+    STAGE2_BLUEPRINT_MAX_CONCURRENCY, NODES,
     commander_work_unit,
 )
 from contracts.schema import decode_artifact
 from contracts.schema.api import (
-    BatchTrimResolutionRequest, ExecutionPermit, OperatorNext,
+    BatchTrimResolutionRequest, ExecutionPermit, OperatorNext, OperatorNode,
     Stage2FinalReviewRequest, Stage5ReviewerRewriteRequest,
 )
 from contracts.schema.evaluation import GlobalReviewDecisionSet
@@ -368,12 +368,21 @@ class AgentRunPlan:
     prompt: str
     invocation: CommanderInvocation
     continuation: RunContinuationSource | None = None
+    pause_before_node: OperatorNode | None = None
+
+
+class _UnspecifiedRunBoundary:
+    """只用于 Python 调用口区分省略与显式解除；不进入任何持久载体。"""
+
+
+_RUN_BOUNDARY_UNSPECIFIED = _UnspecifiedRunBoundary()
 
 
 def _plan_resolved(
         base: str | os.PathLike[str], sid: str, *, authorized: bool,
         egress_authorized: bool, profiles: PipelineAgentProfiles,
-        code_version: str | None = None) -> AgentRunPlan:
+        code_version: str | None = None,
+        pause_before_node: OperatorNode | None = None) -> AgentRunPlan:
     base_abs = os.path.abspath(os.fspath(base))
     frozen = _copy_profiles(profiles)
     code = code_version or prov.code_version()
@@ -381,6 +390,12 @@ def _plan_resolved(
         sid, base_abs, authorized=authorized,
         egress_authorized=egress_authorized, profiles=frozen,
         code_version=code)
+    if pause_before_node is not None:
+        if pause_before_node not in NODES:
+            raise UnsupportedRunMode('运行范围上界必须是当前已登记节点')
+        prompt += (f'\n本次受管范围在 {pause_before_node} 之前结束；'
+                   'Supervisor 会在该节点及后续节点的任何动作或审阅启动前停止并排空 owner。'
+                   '这是本次范围收口，不能报告整书完成；后续续跑须保留原配置与累计用量。\n')
     driver: CommanderDriver | None = None
     try:
         driver = create_commander_driver(frozen.commander)
@@ -396,22 +411,32 @@ def _plan_resolved(
     return AgentRunPlan(
         base=base_abs, sid=sid, authorized=authorized,
         egress_authorized=egress_authorized, code_version=code,
-        profiles=frozen, prompt=prompt, invocation=invocation)
+        profiles=frozen, prompt=prompt, invocation=invocation,
+        pause_before_node=pause_before_node)
 
 
 def plan(
         base: str | os.PathLike[str], sid: str, *, authorized: bool,
         egress_authorized: bool,
         profiles: PipelineAgentProfiles | None,
-        continuation: RunContinuationSource | None = None) -> AgentRunPlan:
+        continuation: RunContinuationSource | None = None,
+        pause_before_node: OperatorNode | None | _UnspecifiedRunBoundary = _RUN_BOUNDARY_UNSPECIFIED,
+        ) -> AgentRunPlan:
     """preview、单本启动与批量入队的唯一 planner；不发模型请求、不写盘。"""
     if continuation is not None:
         from novel.orchestrator import agent_continuation
         profiles = agent_continuation.validate(base, sid, continuation, profiles)
+        if isinstance(pause_before_node, _UnspecifiedRunBoundary):
+            source = agent_continuation.inspect(base, continuation.run_id)
+            if not source.available or source.source != continuation:
+                raise UnsupportedRunMode('续跑范围来源已漂移，不能猜测旧边界')
+            pause_before_node = source.pause_before_node
+    elif isinstance(pause_before_node, _UnspecifiedRunBoundary):
+        pause_before_node = None
     planned = _plan_resolved(
         base, sid, authorized=authorized,
         egress_authorized=egress_authorized,
-        profiles=_freeze_profiles(profiles))
+        profiles=_freeze_profiles(profiles), pause_before_node=pause_before_node)
     return replace(planned, continuation=continuation)
 
 
@@ -2986,6 +3011,7 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
           egress_authorized: bool,
           profiles: PipelineAgentProfiles | None,
           continuation: RunContinuationSource | None = None,
+          pause_before_node: OperatorNode | None | _UnspecifiedRunBoundary = _RUN_BOUNDARY_UNSPECIFIED,
           spawn: Spawn | None = None,
           registry: JobRegistry = REGISTRY) -> AgentRunRecord:
     """解析一次冻结 plan 后拉起 Commander；缺任一授权时不触碰 CLI。"""
@@ -2993,7 +3019,8 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
         authorized=authorized, egress_authorized=egress_authorized)
     return _start_planned(
         plan(base, sid, authorized=authorized,
-             egress_authorized=egress_authorized, profiles=profiles, continuation=continuation),
+             egress_authorized=egress_authorized, profiles=profiles, continuation=continuation,
+             pause_before_node=pause_before_node),
         spawn=spawn, registry=registry)
 
 
@@ -3014,6 +3041,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     _require_start_authorization(
         authorized=plan.authorized,
         egress_authorized=plan.egress_authorized)
+    if plan.pause_before_node is not None and spawn is not None:
+        raise UnsupportedRunMode('范围运行必须由确定性 Supervisor 管理，不支持整轮自定义 Commander 分派')
     base = plan.base
     sid = plan.sid
     require_workflow(base)
@@ -3033,12 +3062,13 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         authorized=plan.authorized,
         egress_authorized=plan.egress_authorized,
         code_version=code_version, identity_version=2,
-        profiles=plan.profiles)
+        profiles=plan.profiles, pause_before_node=plan.pause_before_node)
     contract_payload = RunContractV2(
         sid=sid, base=base,
         authorized=plan.authorized,
         egress_authorized=plan.egress_authorized,
-        profiles=plan.profiles, continuation=plan.continuation)
+        profiles=plan.profiles, continuation=plan.continuation,
+        pause_before_node=plan.pause_before_node)
     initial_epoch = ExecutionEpoch(
         epoch_id=run_id, ordinal=1, reason='initial',
         argv=list(invocation.argv), prompt_sha256=prompt_sha256,
@@ -3294,7 +3324,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             epoch_plan = _plan_resolved(
                 base, sid, authorized=plan.authorized,
                 egress_authorized=plan.egress_authorized,
-                profiles=plan.profiles, code_version=current_code)
+                profiles=plan.profiles, code_version=current_code,
+                pause_before_node=plan.pause_before_node)
             epoch_invocation = epoch_plan.invocation
             session_run_id = jobs.new_job_id()
             turn_index = 0
@@ -5156,6 +5187,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         cancel_commander=_cancel_active,
         set_commander_quiesced=_set_commander_quiesced,
         initial_epoch=initial_epoch,
+        pause_before_node=plan.pause_before_node,
         **deterministic_callbacks)
     with _SUPERVISORS_LOCK:
         _SUPERVISORS[run_id] = supervisor

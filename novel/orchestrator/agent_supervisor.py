@@ -21,7 +21,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from contracts.schema.api import OperatorNext
+from contracts.invariants import NODES, PIPELINE_STEPS
+from contracts.schema.api import OperatorNext, OperatorNode
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentRunEvent, AgentRunExitOrigin, ExecutionEpoch,
 )
@@ -30,6 +31,29 @@ from novel.orchestrator.jobs import JobConflict
 
 class PrelaunchIdentityDrift(RuntimeError):
     """callback 在 launch ticket commit 前证明 execution identity 已漂移。"""
+
+
+def range_boundary_reason(current: OperatorNext, boundary: OperatorNode) -> str | None:
+    """按登记工作流与实际动作 owner 守排他上界，返修不按发现问题的下游位置猜。
+
+    联合首抽会物化两侧，不能借其较早的编排名跨过 Characters/Global 上界。
+    Stage0 edit 仍修改剔除 revision，使用该产物 owner 的位置；未知闭拒。
+    """
+    rank = {node: index for index, node in enumerate(PIPELINE_STEPS)}
+    if boundary not in rank or set(rank) != set(NODES):
+        return '运行范围登记未知或不完整；停止并排空，不能猜测节点先后'
+    if current.state == 'pipeline_complete':
+        return f'本次范围边界为 {boundary}；已无待执行节点，停止范围运行，不启动全链交付终验'
+    node = getattr(current.action, 'node', None)
+    if node not in rank:
+        return f'本次范围边界为 {boundary}；当前动作 owner 未登记，停止并排空'
+    owners = (NODES[node].lifecycle.repair_owners if node == 'stage2.analyze'
+              else ('stage0.remove',) if node == 'stage0.edit' else (node,))
+    if not owners or any(owner not in rank for owner in owners):
+        return f'本次范围边界为 {boundary}；当前动作物化归属未知，停止并排空'
+    if max(rank[owner] for owner in owners) >= rank[boundary] or node == boundary:
+        return f'已到本次运行范围边界：{boundary}；当前动作 {node} 未启动，停止并排空 owner'
+    return None
 
 
 class _LaunchDeferredByControl(JobConflict):
@@ -174,6 +198,7 @@ class RunSupervisor:
         fresh_epoch_blockers: frozenset[str] = frozenset(),
         run_reviewer: RunReviewer | None = None,
         finalize_run: FinalizeRun | None = None,
+        pause_before_node: OperatorNode | None = None,
     ) -> None:
         self.run_id = run_id
         self._append = append_event
@@ -190,6 +215,10 @@ class RunSupervisor:
         if any(callback is not None for callback in deterministic) and not all(
                 callback is not None for callback in deterministic):
             raise ValueError('Supervisor 确定性主路的四个 callback 必须同时提供')
+        if pause_before_node is not None and (
+                pause_before_node not in NODES or not all(callback is not None for callback in deterministic)):
+            raise ValueError('运行范围上界必须是登记节点，且只能用于受管确定性主路')
+        self._pause_before_node = pause_before_node
         if ready_requires_fresh_epoch is not None and not all(callback is not None for callback in deterministic):
             raise ValueError('ready producer 边界只随完整确定性主路提供')
         if (run_blocked_action is not None or deterministic_blockers) and not all(
@@ -659,6 +688,19 @@ class RunSupervisor:
                         provider_session_id = None
                         reason = 'code_change'
                         break
+
+                    boundary_reason = (range_boundary_reason(current, self._pause_before_node)
+                                       if self._pause_before_node is not None else None)
+                    if boundary_reason is not None:
+                        boundary_turn = CommanderTurnResult(
+                            exit_code=2, provider_session_id=provider_session_id,
+                            continue_ready=False, outcome=AgentDeliveryOutcome(
+                                state='stopped', checked_at=int(time.time()), reason=boundary_reason))
+                        last = epoch_last = active_epoch_last = boundary_turn
+                        close_epoch(epoch, boundary_turn)
+                        # stopped 标志只用于外部 stop 控制。范围终止保留本条准确原因，
+                        # 不让 worker 改写成“用户刚请求停止”，也不冒充 pipeline_complete。
+                        return SupervisorResult(turn=boundary_turn, stopped=False)
 
                     if current.state == 'pipeline_complete':
                         finalized = self._launch(

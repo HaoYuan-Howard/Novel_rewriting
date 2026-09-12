@@ -67,6 +67,7 @@ FOLLOW_CHECK_NOTE = '自动追跑：退出码 0 也可能是残缺产物'
 #: 因此唯一判据是 ``(node, flag token set)``，值只列**已经完整迁移**的组合。
 #: 带值参数只以 token 入表，值仍由 ``validate_run`` 与 producer 校验。
 EXECUTOR_PROFILED_RUNS: dict[str, tuple[frozenset[str], ...]] = {
+    'stage2.analyze': (frozenset(),),
     'stage2.characters': (frozenset(), frozenset({'--review-token'})),
     'stage2.global': (frozenset(), frozenset({'--review-token'})),
     'stage2.blueprint': (frozenset(), frozenset({'--review-token'})),
@@ -100,10 +101,14 @@ EXECUTOR_PROFILED_NODES = tuple(EXECUTOR_PROFILED_RUNS)
 #: 可能被排在后面的 ``--dry-run`` / ``--check-only`` 盖成“不写盘”，preview 就会
 #: 对实际写盘说假话。这里关闭式拒收，展示与执行共用同一道门。
 _PRIMARY_OPERATIONS = {
+    'stage2.analyze': frozenset({'--dry-run', '--recover-analyze-run'}),
     'stage2.characters': frozenset({
         '--dry-run', '--revalidate', '--apply-edit', '--emit-edit-template', '--resample',
+        '--emit-analyze-draft-template', '--repair-analyze-draft', '--recover-analyze-draft',
     }),
     'stage2.global': frozenset({
+        '--apply-core-edits', '--recover-analyze',
+        '--emit-analyze-draft-template', '--repair-analyze-draft', '--recover-analyze-draft',
         '--renormalize', '--resample', '--revalidate', '--close-review',
         '--apply-edit', '--review-decisions', '--emit-edit-template',
         '--emit-review-template', '--emit-review-workpack',

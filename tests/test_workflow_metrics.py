@@ -25,6 +25,87 @@ TITLE = '读数样书'
 CODE_CLEAN = 'a' * 40 + '.1234567890abcdef'
 
 
+def test_core_size_counts_unicode_characters_and_separates_evidence_audit():
+    payload = {'characters': {'char_001': {'canonical': '甲乙', 'role_evidence_refs': ['ev_x']}},
+               'evidence_anchors': {'ev_x': {'start': 0, 'end': 2}}, '_provenance': {'model': 'm'}}
+    core, evidence, audit = W._core_partition(payload)
+    expected = len(json.dumps(core, ensure_ascii=False, sort_keys=True, separators=(',', ':')))
+    result = W._core_size(payload, 200)
+    assert result['core_json_chars'] == expected < W.canonical_bytes(core)
+    assert result['core_to_main_text_ratio'] == round(expected / 200, 4)
+    assert '/characters/char_001/role_evidence_refs' in evidence
+    assert '/evidence_anchors' in evidence and '/_provenance' in audit
+    assert W._core_size(payload, None)['core_to_main_text_ratio'] is None
+
+
+def test_core_delta_ignores_evidence_and_does_not_guess_split_lineage():
+    import copy
+    before = {'characters': {'char_001': {'canonical': '同名', 'role': '邻居',
+        'role_evidence_refs': ['ev_a']}, 'char_002': {'canonical': '同名', 'role': '教师'}},
+        'evidence_anchors': {'ev_a': {'start': 1}}, '_provenance': {'model': 'm'}}
+    after = copy.deepcopy(before)
+    after['characters']['char_001']['role_evidence_refs'] = ['ev_b']
+    after['evidence_anchors'] = {'ev_b': {'start': 2}}
+    after['_provenance'] = {'model': 'm2'}
+    assert W._core_subject_delta(before, after, 'characters')['semantic_changed_subjects'] == 0
+    del after['characters']['char_002']
+    after['characters']['char_003'] = {'canonical': '同名', 'role': '教师'}
+    after['characters']['char_004'] = {'canonical': '同名', 'role': '商人'}
+    delta = W._core_subject_delta(before, after, 'characters')
+    assert (delta['retained_subjects'], delta['added_subjects'], delta['removed_subjects']) == (1, 2, 1)
+    assert delta['split_subjects'] is None and delta['merged_subjects'] is None
+
+
+def test_gate_a_calls_deduplicate_shared_attempt_and_keep_repair_latency_unknown():
+    row = {'node': 'stage2.analyze', 'run_id': 'joint', 'attempt_id': 'a' * 16,
+           'cached': False, 'latency_ms': 2000, 'prompt_tokens': 100,
+           'completion_tokens': 40, 'reasoning_tokens': 20}
+    repair = {**row, 'node': 'stage2.characters', 'run_id': 'repair',
+              'attempt_id': 'b' * 16, 'latency_ms': None}
+    phases = {('repair', 'b' * 16): ('stage2.characters', 'executor', 2, False)}
+    result = W._gate_a_call_metrics([row, dict(row), repair], phases)
+    analyze = result['categories']['analyze_executor']
+    assert analyze['wire_calls'] == 1 and analyze['total_tokens'] == 140
+    assert analyze['latency_seconds'] == 2 and result['duplicate_identical_rows'] == 1
+    repaired = result['categories']['independent_characters_executor']
+    assert repaired['content_repair_wire_calls'] == 1 and repaired['latency_seconds'] is None
+    assert result['wall_clock_seconds'] is None
+    conflicting = W._gate_a_call_metrics([row, {**row, 'completion_tokens': 99}], phases)
+    assert conflicting['state'] == 'unver' and conflicting['conflicting_attempts'] == 1
+    assert conflicting['categories']['analyze_executor']['wire_calls'] is None
+    assert W._gate_a_call_metrics([], {})['state'] == 'unver'
+
+
+def test_core_retention_keeps_relation_secret_and_rule_denominators_separate():
+    import copy
+    initial = {'setting': {'era': None, 'social_context': None}, 'world_rules': [
+        {'rule_id': 'wr_001', 'kind': 'mechanism', 'versions': [
+            {'version_id': 'v_001', 'rule': '有代价'}]}],
+        'relations': [{'relation_id': 'rel_001', 'predicate': '同窗', 'evidence_refs': ['ev_1']}],
+        'arc_secrets': [{'secret_id': 'sec_001', 'fact': '秘密', 'setup_chapters': [2, 1]}]}
+    current = copy.deepcopy(initial)
+    current['relations'][0]['evidence_refs'] = ['ev_2']
+    current['arc_secrets'][0]['setup_chapters'] = [1, 2]
+    current['world_rules'][0]['versions'][0]['rule'] = '代价需由施术者支付'
+    current['arc_secrets'].append({'secret_id': 'sec_002', 'fact': '另一秘密', 'setup_chapters': []})
+    report = W._core_subject_delta(initial, current, 'global')['by_category']
+    assert report['relations']['initial_subjects'] == 1
+    assert report['relations']['semantic_changed_subjects'] == 0
+    assert report['world_rule_versions']['semantic_changed_subjects'] == 1
+    assert report['arc_secrets']['initial_subjects'] == 1
+    assert report['arc_secrets']['semantic_changed_subjects'] == 0
+    assert report['arc_secrets']['added_subjects'] == 1
+    assert report['setting']['initial_subjects'] == 0
+
+
+def test_gate_a_missing_source_is_unver_and_never_fabricates_empty_core(base):
+    report = W.stage2_core_metrics(base, base / f'{TITLE}_{SID}', SID, run_id=None)
+    assert report['first_draft']['state'] == report['accepted']['state'] == 'unver'
+    assert report['first_compiled'] == {} and report['candidate_retention'] == {}
+    assert report['recovery']['wire_calls'] is None
+    assert TITLE not in json.dumps(report, ensure_ascii=False)
+
+
 def _write(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding='utf-8')
@@ -455,8 +536,9 @@ def test_human_surface_keeps_items_and_decisions_apart(base: Path) -> None:
     assert human['stage2_review_items'] == 2
     assert human['stage2_items_by_state'] == {'PASS': 1, 'pending': 1}
     # 「多少项」与「人要点开多少张卡」是两个读数；分级只从生产落点取。
+    # fixture 中历史 fate 已退役，必须显示 unregistered，不能套用新 Core 的披露分类。
     assert human['stage2_items_by_effect'] == {
-        'blocking': 1, 'disclosure': 1, 'unregistered': 0}
+        'blocking': 1, 'disclosure': 0, 'unregistered': 1}
     assert human['stage2_cards_by_effect']['blocking'] == 1
     assert human['stage2_decision_files'] == {'global_review_decisions_a.json': 1}
     assert human['stage4_structure_decisions'] == 2
@@ -682,11 +764,16 @@ def test_stage2_current_report_counts_characters_and_both_commanders_with_shared
 def test_formal_run_binding_uses_real_producer_typed_identity(
         tmp_path: Path, node: str, rel: str, condition: str, expected: str) -> None:
     """真实提交省略默认字段；统计仍须对上 producer 的 adoption，损坏不得假绿。"""
-    from tests.test_stage2_knowledge_flow import _prepared, _run
+    from tests.test_stage2_characters import _ctx, _generate
+    from tests.test_stage2_global_agent import _new_run_ctx, _Driver, _full, _response_global
+    from novel.node_agents import Stage2GlobalAgent
 
-    ctx, _registry = _prepared(tmp_path)
+    ctx = _ctx(tmp_path)
+    _generate(ctx)
     if node == 'stage2.global':
-        _run(ctx)
+        ctx = _new_run_ctx(ctx)
+        ctx.node = node
+        Stage2GlobalAgent(ctx, driver=_Driver([_full(_response_global())], ctx.novel_dir)).run()
     payload, current, invalid = W._current_artifact(ctx.novel_dir, rel)
     assert current and not invalid and payload is not None
     adoptions = W.read_jsonl_rows(W.audit_path(ctx.novel_dir.parent))

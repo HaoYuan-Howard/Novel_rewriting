@@ -1,13 +1,23 @@
-import type { ArtifactState, GlobalAddress, GlobalCharacter } from './stages'
+import type { ArtifactState, CoreEvidenceAnchors, CoreEvidenceSnippets } from './stages'
 import type { Provenance } from './common'
 
-export type RegisteredCharacter = Omit<GlobalCharacter, 'char_id' | 'fate' | 'fate_evidence' | 'address'> & {
-  address: (Omit<GlobalAddress, 'by'> & { by: string })[]
+export interface CharacterNameBinding<Ref = string> {
+  surface: string
+  identity_revealed_from: number
+  evidence_refs: Ref[]
 }
 
-export type EditableCharacter = Omit<RegisteredCharacter, 'role_evidence'> & {
-  role_evidence: { chapter_ordinal: number; locator: string }
+export interface RegisteredCharacter<Ref = string> {
+  canonical: string
+  aliases: CharacterNameBinding<Ref>[]
+  first_chapter: number
+  first_appearance_evidence_refs: Ref[]
+  role: string
+  role_evidence_refs: Ref[]
+  name_distinctiveness: 'high' | 'medium' | 'common'
 }
+
+export type EditableCharacter = RegisteredCharacter<string | { chapter_ordinal: number; locator: string }>
 
 export interface CharactersEdit {
   source_sha256: string
@@ -23,11 +33,28 @@ export interface CharactersEditRequest {
   edit: CharactersEdit
 }
 
+export interface CharactersProvenance extends Provenance {
+  retired_character_ids: string[]
+  characters_edit: {
+    actor: string
+    reason: string
+    at: string
+    source_sha256: string
+    edit_sha256: string
+    deleted_character_ids: string[]
+  } | null
+}
+
 export interface CharacterRegistryView {
   sid: string
   source_sha256: string
   artifact: ArtifactState
-  registry: { characters: Record<string, RegisteredCharacter>; _provenance: Provenance }
+  registry: {
+    characters: Record<string, RegisteredCharacter>
+    evidence_anchors: CoreEvidenceAnchors
+    _provenance: CharactersProvenance
+  }
+  evidence_snippets: CoreEvidenceSnippets
   edit_template: CharactersEdit | null
   template_unavailable_reason: string | null
 }

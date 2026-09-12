@@ -12,6 +12,31 @@
 
 ## P0 · 当前工程实施
 
+### TODO-51 · Stage2 联合分析、独立产物与分阶段验收
+
+按用户 2026-09-12 最终计划实施；本条的新授权覆盖 TODO-49 中暂缓本书重构后验收的旧停点。
+正式契约分别在 `docs/schema/characters.md`、`docs/schema/stage2.md`、
+`docs/schema/stage2_review.md`；人物登记与 Global 保持各自证据、版本、编辑、失效及恢复。
+
+- [ ] Gate A：一次 Analyze Executor、两个独立编译器、Characters v2 / Global v7、统一
+      Global Commander；闭合 CLI/API、待审、共享首抽统计、typed 编辑及已购回答/半边失败恢复。
+      工程反例通过后对照指定小说原文作语义验收；仅凭 schema 或 lint 不放行 Gate B。
+- [ ] Gate B：Blueprint / KnowledgeLinks / Stage4–5 接动态状态、稀疏知情和
+      ActorRef/ActorBinding；直接检查 Writer 请求中的未来身份、关系、别名映射及同章揭示。
+- [ ] Gate C：Stage6 Prepare 独立 E/C 与免费编辑恢复，Stage7 改名、API/UI、下载及重启读回。
+      最终新工作流基线统一执行非 corpus 回归与前端 test/typecheck/seams/build，并附页面截图。
+
+Gate A 使用 `E:\NovelAcceptance_Stage2CoreV2`：source 为指定小说的字节一致副本，output
+为独立产物根；`NOVEL_DATA` / `NOVEL_CORPUS` 指 source，`NOVEL_OUTPUT` 指 output。
+已核验源 SHA-256 为 `c717b0e567cf7aff7ac35caf3c665be00341a39b246e205327f8686ec75a234c`。
+Executor / Commander 固定 `claude-code-glm / glm-5.3-flash[1M] / high`，已获付费与全文外发授权；
+每个 E/C 单元基础四次，不自动追加、重置或切模型。跨 Gate 冻结新代码、排空旧 owner、开新
+执行 epoch，保留任务身份、原 profiles、累计费用和可证明复用产物。
+
+首轮与接受后的 core 字符压缩、实际草稿候选去留、语义主体干预、修复影响、调用/耗时从
+不可变回答与唯一 ledger attempt 取证。证据/审计另列，未知保持 unver；无同配置旧基线不报
+相对性能改善。单书 Gate 语义验收、工程回归与项目 golden set 分开结论。
+
 ### TODO-50 · Stage6/7 人工前端免费编辑范围待裁决
 
 开发 harness、操作 skill 退役、运行身份、无 Markdown 交付及前端统计已闭合，规则归所属指南与契约。

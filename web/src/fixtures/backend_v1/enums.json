@@ -589,23 +589,18 @@
   "world_rule_version",
   "secret",
   "reveal",
-  "known_by",
-  "knowledge_event",
   "name_distinctiveness",
-  "address_context",
+  "character_identity",
+  "alias_identity",
   "world_rule_kind",
   "character_set_complete",
   "relation_set_complete",
   "world_rule_set_complete",
   "secret_set_complete",
   "role",
-  "fate",
   "relation",
   "setting_fact",
-  "secret_setup",
-  "source_blurb_complete",
-  "source_blurb_fact",
-  "opening_scope"
+  "secret_setup"
  ],
  "global_review_effects": [
   "blocking",
@@ -829,6 +824,12 @@
   "--emit-review-template": "向 stdout 输出绑定当前 stage2 全局复核项 hash/evidence 的安全 UNVER 决策骨架，不写盘",
   "--emit-review-workpack": "向 stdout 输出 Stage2 Global 逐项证据包，或 Blueprint 异常优先全章包；只辅助人工核验，不自动做决定",
   "--refresh-review": "从当前人物登记与必要知识免费重建 Global 审阅；不改知识、不生成接受决定",
+  "--apply-core-edits": "按已保存的 Commander 决定分别提交人物和知识 typed 编辑（0 LLM）",
+  "--recover-analyze": "人物修好后免费编译已购 GlobalDraft；不重开联合首抽或重新调用模型",
+  "--recover-analyze-run": "同冻结代码下免费补齐原联合首抽提交，显式绑定原 run",
+  "--emit-analyze-draft-template": "输出原已购 owner 草稿与 receipt、原草稿、冻结映射绑定；只读",
+  "--repair-analyze-draft": "免费编译 typed owner 草稿编辑，保留原联合来源并独立物化",
+  "--recover-analyze-draft": "按独立 owner 草稿 WAL 的原编辑和身份免费补尾",
   "--adopt-residual": "显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链",
   "--rebind-review": "将可机械证明语义等价的旧人工决定绑定到当前 stable review identity；旧盘未持久化 immutable workpack/evidence digest 时关闭式拒绝",
   "--apply-binding": "把完整人工 EvidenceBinding 按与 Stage4B 相同的 schema、编译和 HARD 闸写回；0 次模型调用，也允许首次 B 无正式计划时恢复",
@@ -876,6 +877,9 @@
   "--reviewer-rewrite-recovery-journal-sha256": "已落 prepared recovery WAL 的 immutable self SHA-256；必须与 target run_id 同有同无",
   "--apply-edit-plan": "审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）",
   "--review-decisions": "stage2/global_review 的人工决策集（相对当前书目录）",
+  "--apply-core-edits": "不可变 Stage2 跨 owner 编辑请求的完整 SHA-256",
+  "--recover-analyze-run": "尚未闭合的 Stage2 Analyze 原 run_id",
+  "--repair-analyze-draft": "当前书或 SID 服务目录中的 AnalyzeOwnerDraftEdit v1 文件",
   "--review-scope": "只读复核输出的范围：`blocking`（默认，只出能挡 Stage4 的项）或 `all`（整份评测面）。它不改评测面，也不改任何判定",
   "--apply-candidate-plan": "审校台生成的 stage0 候选裁决（采纳 / 否掉整版 + 乐观锁）",
   "--actor": "人工决定的自报身份（不是认证身份）",
@@ -911,6 +915,12 @@
   "--apply-edit": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
   "--renormalize": "按当前契约重算代码派生字段与原文定位并写回",
   "--refresh-review": "只刷新 stage2/global_review.json；保留有效决定，变化主体保持待审",
+  "--apply-core-edits": "分 owner 提交已通过整体预检的 Characters/Global 决定，并补齐中断窗口",
+  "--recover-analyze": "由原 Analyze checkpoint 免费物化 Global，保留原始来源与独立新恢复账",
+  "--recover-analyze-run": "复验原联合 checkpoint 并按冻结目标补尾；不调用模型或重开已完成事务",
+  "--emit-analyze-draft-template": "",
+  "--repair-analyze-draft": "保存独立 owner 草稿修复 WAL 并物化正式或 INVALID 产物",
+  "--recover-analyze-draft": "按原 owner 草稿修复 WAL 补齐当前目标和审阅",
   "--wontfix": "把一条豁免记进 <stage>/wontfix.json（**本节点的正式产物一份都不产**）",
   "--retain-pretrim": "写 stage5/trim_resolution_chNN.json；旧 resolution 归档，不改正文、不采用收缩候选",
   "--retain-pretrim-batch": "按 manifest 逐章写 trim_resolution；已销账章幂等跳过，不改正文、不采用收缩候选",
@@ -979,6 +989,7 @@
   "stage0.approve",
   "stage0.edit",
   "stage1.partition",
+  "stage2.analyze",
   "stage2.characters",
   "stage2.global",
   "stage2.blueprint",
@@ -1035,14 +1046,12 @@
   "security_boundary": false,
   "server_sends_full_data": true,
   "hidden_paths": [
-   "characters[].fate",
-   "secrets",
-   "source_blurb.facts",
-   "source_blurb.opening"
+   "arc_secrets"
   ],
   "known_leakage_surfaces": [
-   "characters[].role",
-   "relations[].valid_from_chapter",
+   "characters[].canonical",
+   "characters[].aliases",
+   "relations[].effective_from",
    "world_rules[].versions[].desc",
    "network_response_and_devtools"
   ],
@@ -1051,7 +1060,7 @@
    "web/src/screens/global/GlobalScreen.tsx",
    "web/src/api/mock.ts"
   ],
-  "notice": "这是显示辅助，不是安全边界；服务端仍下发完整数据。关闭时只隐藏 fate、secrets、源文案事实、开篇范围四处核心字段，role、关系时点、规则正文与网络响应仍可能剧透。"
+  "notice": "这是显示辅助，不是安全边界；服务端仍下发完整数据。关闭时只隐藏长线秘密，人物登记、身份映射、关系时点、规则正文与网络响应仍可能剧透。"
  },
  "job_kinds": {
   "stage0.remove": {
@@ -1220,6 +1229,45 @@
     "approval_projection": []
    }
   },
+  "stage2.analyze": {
+   "label": "stage2 联合语义分析（共享首抽）",
+   "paid": true,
+   "stage": "stage2",
+   "section": "R-2",
+   "flags": [
+    "--dry-run",
+    "--response-repair",
+    "--recover-analyze-run"
+   ],
+   "produces": [
+    "stage2/analyze_receipt.json"
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "完整 MainText 与关闭的证据候选",
+    "generation_mode": "executor",
+    "review_mode": "none",
+    "review_scope": "联合人物与长期知识草稿，分别编译并交 Global Commander 审阅",
+    "repair_actions": [
+     "typed_edit",
+     "stop"
+    ],
+    "repair_owners": [
+     "stage2.characters",
+     "stage2.global"
+    ],
+    "session_scope": "executor:book",
+    "recovery_entries": [
+     "saved_response",
+     "prepared_commit"
+    ],
+    "executor_content_limit": 4,
+    "commander_content_limit": 0,
+    "commander_bindings": [],
+    "review_actions": [],
+    "approval_projection": []
+   }
+  },
   "stage2.characters": {
    "label": "stage2 静态人物登记",
    "paid": true,
@@ -1233,6 +1281,9 @@
     "--emit-edit-template",
     "--actor",
     "--reason",
+    "--emit-analyze-draft-template",
+    "--repair-analyze-draft",
+    "--recover-analyze-draft",
     "--review-token",
     "--response-repair"
    ],
@@ -1282,6 +1333,11 @@
     "--apply-edit",
     "--review-decisions",
     "--refresh-review",
+    "--apply-core-edits",
+    "--recover-analyze",
+    "--emit-analyze-draft-template",
+    "--repair-analyze-draft",
+    "--recover-analyze-draft",
     "--emit-edit-template",
     "--emit-edit-correction-workpack",
     "--emit-review-template",
@@ -2196,6 +2252,56 @@
    "required_inputs": []
   },
   {
+   "kind": "stage2.analyze",
+   "label": "stage2 联合语义分析（共享首抽）",
+   "extra": null,
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage2/analyze_receipt.json",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.analyze",
+   "label": "stage2 联合语义分析（共享首抽） --dry-run",
+   "extra": [
+    "--dry-run"
+   ],
+   "paid": false,
+   "free_flag": "--dry-run",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.analyze",
+   "label": "stage2 联合语义分析（共享首抽） --response-repair",
+   "extra": [
+    "--response-repair"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage2/analyze_receipt.json",
+   "writes_disk": true,
+   "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.analyze",
+   "label": "stage2 联合语义分析（共享首抽） --recover-analyze-run",
+   "extra": [
+    "--recover-analyze-run"
+   ],
+   "paid": false,
+   "free_flag": "--recover-analyze-run",
+   "writes": "复验原联合 checkpoint 并按冻结目标补尾；不调用模型或重开已完成事务",
+   "writes_disk": true,
+   "needs_value": "尚未闭合的 Stage2 Analyze 原 run_id",
+   "required_inputs": []
+  },
+  {
    "kind": "stage2.characters",
    "label": "stage2 静态人物登记",
    "extra": null,
@@ -2286,6 +2392,54 @@
    "free_flag": "--emit-edit-template",
    "writes": "",
    "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.characters",
+   "label": "stage2 静态人物登记 --emit-analyze-draft-template",
+   "extra": [
+    "--emit-analyze-draft-template"
+   ],
+   "paid": false,
+   "free_flag": "--emit-analyze-draft-template",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.characters",
+   "label": "stage2 静态人物登记 --repair-analyze-draft",
+   "extra": [
+    "--repair-analyze-draft"
+   ],
+   "paid": false,
+   "free_flag": "--repair-analyze-draft",
+   "writes": "保存独立 owner 草稿修复 WAL 并物化正式或 INVALID 产物",
+   "writes_disk": true,
+   "needs_value": "当前书或 SID 服务目录中的 AnalyzeOwnerDraftEdit v1 文件",
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    }
+   ]
+  },
+  {
+   "kind": "stage2.characters",
+   "label": "stage2 静态人物登记 --recover-analyze-draft",
+   "extra": [
+    "--recover-analyze-draft"
+   ],
+   "paid": false,
+   "free_flag": "--recover-analyze-draft",
+   "writes": "按原 owner 草稿修复 WAL 补齐当前目标和审阅",
+   "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },
@@ -2409,6 +2563,80 @@
    "paid": false,
    "free_flag": "--refresh-review",
    "writes": "只刷新 stage2/global_review.json；保留有效决定，变化主体保持待审",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.global",
+   "label": "stage2 全书级抽取 --apply-core-edits",
+   "extra": [
+    "--apply-core-edits"
+   ],
+   "paid": false,
+   "free_flag": "--apply-core-edits",
+   "writes": "分 owner 提交已通过整体预检的 Characters/Global 决定，并补齐中断窗口",
+   "writes_disk": true,
+   "needs_value": "不可变 Stage2 跨 owner 编辑请求的完整 SHA-256",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.global",
+   "label": "stage2 全书级抽取 --recover-analyze",
+   "extra": [
+    "--recover-analyze"
+   ],
+   "paid": false,
+   "free_flag": "--recover-analyze",
+   "writes": "由原 Analyze checkpoint 免费物化 Global，保留原始来源与独立新恢复账",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.global",
+   "label": "stage2 全书级抽取 --emit-analyze-draft-template",
+   "extra": [
+    "--emit-analyze-draft-template"
+   ],
+   "paid": false,
+   "free_flag": "--emit-analyze-draft-template",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.global",
+   "label": "stage2 全书级抽取 --repair-analyze-draft",
+   "extra": [
+    "--repair-analyze-draft"
+   ],
+   "paid": false,
+   "free_flag": "--repair-analyze-draft",
+   "writes": "保存独立 owner 草稿修复 WAL 并物化正式或 INVALID 产物",
+   "writes_disk": true,
+   "needs_value": "当前书或 SID 服务目录中的 AnalyzeOwnerDraftEdit v1 文件",
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    }
+   ]
+  },
+  {
+   "kind": "stage2.global",
+   "label": "stage2 全书级抽取 --recover-analyze-draft",
+   "extra": [
+    "--recover-analyze-draft"
+   ],
+   "paid": false,
+   "free_flag": "--recover-analyze-draft",
+   "writes": "按原 owner 草稿修复 WAL 补齐当前目标和审阅",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []

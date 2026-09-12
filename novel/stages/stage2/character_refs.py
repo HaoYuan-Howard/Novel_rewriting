@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import Any, TypedDict
 
 from contracts.schema.stage2 import BlueprintCharacterProjection
-from novel.core.naming import strip_distinguisher
 from novel.core.text import norm
 
 
@@ -29,11 +28,9 @@ def character_ref_inventory(
     dict[str, tuple[tuple[str, int | None], ...]],
     dict[str, frozenset[str]],
 ]:
-    """返回 ``(char_id -> (surface, effective_from), normalized surface -> owners)``。
+    """内部分析库存；时间字段描述同人映射，不是称谓的禁用时间。
 
-    ``effective_from=None`` 表示 canonical：是否可见只由正文实际首现决定。
-    canonical 与 address 归一后相同时，canonical 覆盖 address 的登记时点；同一人物
-    重复登记同一归一字面时，也只保留运行时真正会消费的第一项。
+    Writer 的 ActorRef 隔离由 Gate B 负责，不能将本内部 char_id 映射直接交给 Writer。
     """
     inventory: dict[str, tuple[tuple[str, int | None], ...]] = {}
     if not isinstance(characters, dict):
@@ -42,15 +39,13 @@ def character_ref_inventory(
     for cid, raw_character in characters.items():
         if not isinstance(cid, str) or not isinstance(raw_character, dict):
             continue
-        surfaces: list[tuple[str, int | None]] = [
-            (strip_distinguisher(str(raw_character.get('canonical') or '')), None),
-        ]
-        addresses = raw_character.get('address')
+        surfaces: list[tuple[str, int | None]] = []
+        addresses = raw_character.get('aliases')
         if isinstance(addresses, list):
             for raw_address in addresses:
                 if not isinstance(raw_address, dict):
                     continue
-                chapter = raw_address.get('from_chapter')
+                chapter = raw_address.get('identity_revealed_from')
                 surfaces.append((
                     str(raw_address.get('surface') or '').strip(),
                     chapter if isinstance(chapter, int) and chapter > 0 else 1,
@@ -61,9 +56,7 @@ def character_ref_inventory(
             key = norm(surface)
             if not key:
                 continue
-            # canonical 的 None 表示正文首现，比 address 登记时点更直接；因此
-            # 同一字面同时出现在 canonical/address 时，时点不参与实际消费。
-            if key not in distinct or from_chapter is None:
+            if key not in distinct:
                 distinct[key] = (surface, from_chapter)
         inventory[cid] = tuple(distinct.values())
 
@@ -88,15 +81,14 @@ def visible_character_refs_with_drops(
 ) -> tuple[dict[int, dict[str, list[str]]], dict[int, list[list[str]]]]:
     """返回逐章最终候选，以及因无法区分而整组剔除的 ``char_id``。
 
-    global 名册带未来信息，所以只保留截止本章已在正文出现的字面。
-    同一归一字面挂多人时，address 还必须到了 ``from_chapter``；唯一字面
-    只看真实首现，canonical 又会覆盖同字面 address 的保守时点。
+    这是分析侧内部实体候选，仅保留截止本章出现的字面；identity_revealed_from
+    不能拿来禁用已经出现的称谓。隐秘同人关系的展示与映射由 Gate B 处理。
 
     最后再按可见字面签名剔除仍无法区分的整组 id。这个「剔除后」结果
     同时是 prompt、编译 validator 与 freshness 的权威；只投影中间 inventory
     会把「时点改了，但最终仍整组 dropped」误报成 stale。
     """
-    inventory, owners = character_ref_inventory(characters)
+    inventory, _owners = character_ref_inventory(characters)
 
     out: dict[int, dict[str, list[str]]] = {}
     dropped: dict[int, list[list[str]]] = {}
@@ -106,9 +98,7 @@ def visible_character_refs_with_drops(
         cumulative += norm(str(section.get('text') or ''))
         visible = {
             cid: [surface for surface, from_chapter in surfaces
-                  if norm(surface) in cumulative
-                  and (len(owners.get(norm(surface), set())) <= 1
-                       or from_chapter is None or from_chapter <= ordinal)]
+                  if norm(surface) in cumulative]
             for cid, surfaces in inventory.items()
         }
         present = {

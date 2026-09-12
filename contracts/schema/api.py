@@ -27,6 +27,7 @@ api.py —— 对应 `docs/schema/_api.md`。**一次 HTTP 响应长什么样。
 from __future__ import annotations
 
 from contracts.schema.workflow import BudgetGrant
+from contracts.schema.analyze_draft import AnalyzeOwnerDraftEdit, DraftOwner, DraftSourceState
 from contracts.schema.knowledge_links import KnowledgeLinkReview, KnowledgeLinkSubmission
 from contracts.schema.dependencies import DependencyManifest
 from contracts.schema.plot import PlotBlueprint
@@ -35,7 +36,7 @@ from contracts.schema.plot_review import (
     ReviewScope, PlotReviewResponse, PlotReviewRecord, PlotReviewProgress,
 )
 from contracts.schema.stage2_review import (
-    Stage2ReviewCoverage, Stage2ReviewReceipt, Stage2ReviewSubmission,
+    Stage2CoreEditBatch, Stage2ReviewCoverage, Stage2ReviewMaterialSource, Stage2ReviewReceipt, Stage2ReviewSubmission,
 )
 from contracts.schema.orchestration import AgentDeliveryOutcome, RunContinuationSource, WorkUnitView, PipelineConcurrency
 
@@ -144,8 +145,11 @@ from contracts.schema.orchestration import (
 )
 from contracts.schema.stage0 import Stage0RevisionOrigin, Stage0Warning
 from contracts.schema.stage2 import (
-    BlueprintProvenance, SourceBlurbGrounding, FactEvidence, GlobalProvenance, HookFactEvidence,
-    RelationVisibility, Setting, WorldRule,
+    BlueprintProvenance, SourceBlurbGrounding, FactEvidence, HookFactEvidence,
+)
+from contracts.schema.core_evidence import CoreEvidenceAnchor, EvidenceId
+from contracts.schema.knowledge import (
+    GlobalArcSecret, GlobalProvenance, GlobalSetting, GlobalTimeWindow, GlobalWorldRule,
 )
 from contracts.schema.stage4 import (
     BindingConcern, BindingInfeasibilityWitness,
@@ -751,6 +755,8 @@ class AgentRunRequest(StrictModel):
     profiles: PipelineAgentProfiles | None = None
 
     continuation: RunContinuationSource | None = None
+    #: 省略时续跑继承原范围；显式 null 表示解除本次范围上界。
+    pause_before_node: OperatorNode | None = None
 
 
 class AgentRunContinuationView(StrictModel):
@@ -760,6 +766,7 @@ class AgentRunContinuationView(StrictModel):
     reason: str
     profiles: PipelineAgentProfiles | None = None
     source: RunContinuationSource | None = None
+    pause_before_node: OperatorNode | None = None
 
 
 class AgentBatchRequest(StrictModel):
@@ -790,6 +797,7 @@ class AgentRunPreview(StrictModel):
     profiles: PipelineAgentProfiles
 
     continuation: RunContinuationSource | None = None
+    pause_before_node: OperatorNode | None = None
 
 
 class AgentModelCapability(FrozenModel):
@@ -2841,6 +2849,41 @@ class Stage5ClosureView(FrozenModel):
         return self
 
 
+class AnalyzeDraftEvidenceCandidate(StrictModel):
+    evidence_candidate_id: str = Field(pattern=r'^e\d{6}$')
+    chapter_ordinal: int = Field(ge=1)
+    excerpt: str = Field(min_length=1)
+
+
+class AnalyzeDraftView(StrictModel):
+    """原联合候选的只读工作包；语法可读不代表能编译或已获审阅接受。"""
+
+    sid: str
+    owner: DraftOwner
+    source_state: DraftSourceState
+    template: AnalyzeOwnerDraftEdit
+    diagnostics: list[str]
+    evidence_candidates: list[AnalyzeDraftEvidenceCandidate]
+
+    @model_validator(mode='after')
+    def _owned_template(self):
+        if self.owner != self.template.owner:
+            raise ValueError('草稿工作包与编辑模板必须属于同一 owner')
+        return self
+
+
+class AnalyzeDraftEditRequest(StrictModel):
+    actor: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=4096)
+    edit: AnalyzeOwnerDraftEdit
+
+    @model_validator(mode='after')
+    def _visible_author(self):
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('联合草稿订正必须有明确 actor 与 reason')
+        return self
+
+
 class CharactersEditRequest(StrictModel):
     actor: str = Field(min_length=1, max_length=256)
     reason: str = Field(min_length=1, max_length=4096)
@@ -2858,6 +2901,7 @@ class CharacterRegistryView(StrictModel):
     source_sha256: Sha256
     artifact: ArtifactState
     registry: CharacterRegistry
+    evidence_snippets: dict[EvidenceId, str | None]
     edit_template: CharactersEdit | None
     template_unavailable_reason: str | None
 
@@ -2884,6 +2928,7 @@ class Stage2NodeReviewRequest(StrictModel):
     review: Stage2ReviewSubmission | None = None
     scope: ReviewScope | None = None
     plot_review: PlotReviewResponse | None = None
+    core_edits: Stage2CoreEditBatch | None = None
 
     @model_validator(mode='after')
     def _closed_action(self) -> 'Stage2NodeReviewRequest':
@@ -2908,9 +2953,13 @@ class Stage2NodeReviewRequest(StrictModel):
         if self.chapter_ordinals != sorted(set(self.chapter_ordinals)) or any(
                 ordinal < 1 for ordinal in self.chapter_ordinals):
             raise ValueError('Stage2 返工章号必须升序、唯一且为正数')
+        if self.core_edits is not None:
+            if (self.node != 'stage2.global' or self.decision != 'rework'
+                    or self.owner is not None or self.chapter_ordinals or self.review is None):
+                raise ValueError('免费 Core 批次必须由 Global Commander 以完整义务 rework 提交，不混单 owner 付费派修')
         if self.decision == 'rework':
-            if self.owner is None:
-                raise ValueError('返工必须指向知识生产节点')
+            if self.owner is None and self.core_edits is None:
+                raise ValueError('返工必须指向知识生产节点或明确免费 Core 批次')
             if self.owner == 'stage2.blueprint' and not self.chapter_ordinals:
                 raise ValueError('Blueprint 定向返工必须列出章节')
             if self.owner != 'stage2.blueprint' and self.chapter_ordinals:
@@ -2929,6 +2978,8 @@ class Stage2NodeReviewDecision(Stage2NodeReviewRequest):
     refinement_proof_sha256: Sha256 | None = None
     plot_record: PlotReviewRecord | None = None
     obligation_receipt: Stage2ReviewReceipt | None = None
+    material_source: Stage2ReviewMaterialSource | None = None
+    core_edit_prepared_sha256: Sha256 | None = None
     review_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     review_contract_version: str = Field(min_length=1)
     decided_at: str = Field(min_length=1)
@@ -2936,6 +2987,8 @@ class Stage2NodeReviewDecision(Stage2NodeReviewRequest):
 
     @model_validator(mode='after')
     def _plot_record(self) -> 'Stage2NodeReviewDecision':
+        if (self.core_edits is None) != (self.core_edit_prepared_sha256 is None):
+            raise ValueError('Core 编辑原决定必须绑定不可变预检计划')
         if (self.refinement_request is None) != (self.refinement_proof_sha256 is None):
             raise ValueError('疑点原请求与范围记录的联结证明必须同时保存')
         if self.refinement_request is not None:
@@ -3270,103 +3323,36 @@ class NameRef(FrozenModel):
     resolved: bool
 
 
-class GlobalAddressLine(FrozenModel):
-    """一条称谓（`stage2.Address` 的视图行：`by` 已解引用）。"""
-
-    surface: str = Field(min_length=1)
-    by: NameRef
-    context: Literal[ADDRESS_CONTEXT]
-    from_chapter: int = Field(ge=1)
-
-
-class GlobalCharacterLine(FrozenModel):
-    """一个人（`entities.characters` 的 dict 展平成带 `char_id` 的行）。
-
-    ⚠ **`fate` 全量下发**：剧透遮蔽是前端的纯展示行为（`R-11.13`，四个字段名
-    写在 `SPOILER_DISCLOSURE['hidden_paths']` 里），服务端不做第二把尺子。
-    """
-
-    char_id: str = Field(min_length=1)
-    canonical: str = Field(min_length=1)
-    name_distinctiveness: Literal[NAME_DISTINCTIVENESS]
-    role: str = Field(min_length=1)
-    role_evidence: FactEvidence
-    fate: str | None
-    fate_evidence: FactEvidence | None
-    address: list[GlobalAddressLine] = Field(min_length=1)
-
-
-class GlobalRelationLine(FrozenModel):
-    """一条有向关系（两端已解引用）。"""
+class GlobalRelationLine(GlobalTimeWindow):
+    """有向长期关系；显示名只用于审阅 UI，不授予 Writer 身份披露。"""
 
     relation_id: str = Field(min_length=1)
     subject: NameRef
     predicate: str = Field(min_length=1)
-    predicate_evidence: FactEvidence
     object: NameRef
-    visibility: RelationVisibility
-    valid_from_chapter: int = Field(ge=1)
-    valid_through_chapter: int | None
+    evidence_refs: list[EvidenceId]
 
 
-class GlobalKnowledgeEventLine(FrozenModel):
-    """一条世界内知情事件；人物已解引用，无名群体原样显示。"""
-
-    subject_kind: Literal[KNOWLEDGE_SUBJECT_KINDS]
-    subject: NameRef
-    known_from_chapter: int = Field(ge=1)
-    evidence: FactEvidence
-
-
-class GlobalSecretLine(FrozenModel):
-    """一条秘密。⚠ **没有 `reader_knows_by_now`**——那是「相对当前章」的量，
-    而本屏是全书视图，没有「当前章」；揭示章原样给，让人自己对。
-    """
-
-    secret_id: str = Field(min_length=1)
-    fact: str = Field(min_length=1)
-    fact_evidence: FactEvidence
-
-    knowledge_events: list[GlobalKnowledgeEventLine] = Field(min_length=1)
-
-    #: ⚠ **必须连 `setup_kind` 一起读。** `cold`（声明没有埋点）与
-    #: `foreshadowed` 但章号被落盘前裁空，在 `setup_chapters` 上都是 `[]`；
-    #: 界面拿空数组当「没有埋点」是对的，拿它当「模型声明了冷揭示」是错的。
-    setup_kind: Literal[SECRET_SETUP_KINDS]
-    setup_chapters: list[int]
-
-    #: **逐章剧透闸门按它开**。
-    first_reveal_chapter: int = Field(ge=1)
+class GlobalSecretLine(GlobalArcSecret[EvidenceId]):
+    """保持 fact/fact_ref 的真实分支，不在视图中复制或猜测秘密事实。"""
 
 
 class GlobalView(StrictModel):
-    """`GET /api/novels/:sid/stage2/global`。**S-05 那一屏的全部数据。**
-
-    ⚠ 与 S-06 不同，本屏**没有「左半边」**：stage2 没跑就没有任何东西可看
-    ⇒ 产物不在盘上是 **404**（`UpstreamMissing`），不是 `exists=False` 的 200。
-    ⚠ `setting` 经 `by_alias` 出线，键是那两个固定中文 key（`时代背景` / `世界观`）。
-    """
+    """四类长期约束的只读视图；人物登记通过独立 endpoint 提供。"""
 
     sid: str = Field(min_length=1)
     title: str = Field(min_length=1)
-
-    setting: Setting
-    characters: list[GlobalCharacterLine] = Field(min_length=1)
+    setting: GlobalSetting[EvidenceId]
     relations: list[GlobalRelationLine]
-    world_rules: list[WorldRule]
-    #: 空数组 = 这本书没抽到秘密。**那可能是漏抽了，不是「无」**（探针盲区）。
-    secrets: list[GlobalSecretLine]
-    source_blurb: SourceBlurbGrounding[FactEvidence, HookFactEvidence]
-
-    #: 全屏解引用失败的总数（relations 两端 + secrets.knowledge_events）。
-    #: **读数不是判定**——它是给人看「这份产物里有几个说不出名字的 id」。
+    world_rules: list[GlobalWorldRule[EvidenceId]]
+    arc_secrets: list[GlobalSecretLine]
+    evidence_anchors: dict[EvidenceId, CoreEvidenceAnchor]
+    evidence_snippets: dict[EvidenceId, str | None]
     unresolved_refs: int = Field(ge=0)
-
     invalid_exists: bool
     freshness: Freshness
     reason: FreshnessReason
     ghosts: list[str] = Field(default_factory=list)
-
     provenance: GlobalProvenance = Field(alias='_provenance')
 
 
@@ -3408,7 +3394,7 @@ class GlobalReviewView(StrictModel):
     #: ``seen.global`` 的 opaque 阅读凭证；只有 review 与 grounding/MainText 都
     #: current 时才现算，否则为 ``None``——界面不得在 ``None`` 时提供确认动作。
     review_token: str | None = Field(
-        default=None, pattern=r'^s2gr1_[0-9a-f]{64}$')
+        default=None, pattern=r'^s2gr2_[0-9a-f]{64}$')
 
     #: ``{effect: {四态: n}}``。两层键都**恒全出**（0 也出）：
     #: 「没有这个键」与「值是 0」不许混（同 `InboxView.counts`）。
@@ -3718,7 +3704,7 @@ class Stage2GlobalSeenRequest(StrictModel):
     session，永远不会是提交过 GlobalEdit 的那一个会话。
     """
 
-    review_token: str = Field(pattern=r'^s2gr1_[0-9a-f]{64}$')
+    review_token: str = Field(pattern=r'^s2gr2_[0-9a-f]{64}$')
     actor: str = Field(min_length=1, max_length=256)
 
     @field_validator('actor')
@@ -3739,7 +3725,7 @@ class Stage2FinalReviewRequest(StrictModel):
 
     actor: str = Field(min_length=1, max_length=256)
     reason: str = Field(min_length=1, max_length=4096)
-    global_review_token: str = Field(pattern=r'^s2gr1_[0-9a-f]{64}$')
+    global_review_token: str = Field(pattern=r'^s2gr2_[0-9a-f]{64}$')
     blueprint_review_token: str = Field(pattern=r'^bpr5_[0-9a-f]{64}$')
 
     @model_validator(mode='after')

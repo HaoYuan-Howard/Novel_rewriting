@@ -41,11 +41,13 @@ def preview_run(req: AgentRunRequest, base: str = Depends(get_base)) -> AgentRun
     planned = agent.plan(
         base, sid, authorized=req.authorized,
         egress_authorized=req.egress_authorized, profiles=req.profiles,
-        **({'continuation': req.continuation} if req.continuation is not None else {}))
+        **({'continuation': req.continuation} if req.continuation is not None else {}),
+        **({'pause_before_node': req.pause_before_node} if 'pause_before_node' in req.model_fields_set else {}))
     return AgentRunPreview(argv=list(planned.invocation.argv), prompt=planned.prompt,
                            authorized=req.authorized,
                            egress_authorized=req.egress_authorized,
-                           profiles=planned.profiles, continuation=planned.continuation)
+                           profiles=planned.profiles, continuation=planned.continuation,
+                           pause_before_node=planned.pause_before_node)
 
 
 @router.post('', response_model=AgentRunRecord, status_code=202)
@@ -59,7 +61,8 @@ def start_run(req: AgentRunRequest, base: str = Depends(get_base)) -> AgentRunRe
     return agent.start(base, sid, authorized=req.authorized,
                        egress_authorized=req.egress_authorized,
                        profiles=req.profiles,
-                       **({'continuation': req.continuation} if req.continuation is not None else {}))
+                       **({'continuation': req.continuation} if req.continuation is not None else {}),
+                       **({'pause_before_node': req.pause_before_node} if 'pause_before_node' in req.model_fields_set else {}))
 
 
 @router.get('/{run_id}/continuation', response_model=AgentRunContinuationView)

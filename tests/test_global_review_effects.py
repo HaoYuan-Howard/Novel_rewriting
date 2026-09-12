@@ -1,18 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-test_global_review_effects.py —— Stage2 复核项的 blocking / disclosure 分级。
+"""Stage2 Core 当前语义全部阻断；隔离不洗白 UNVER、不吞审计。
 
-【它守什么】分级的失败方向只有一个，而且很贵：**一类高影响事实被静默放行**。
-所以每条守卫都成对写——放宽的那一格要真的放宽，没放宽的那一格要真的没松：
-
-  ① 分类表是白名单 + 关闭式：未登记的 kind 当场炸，不给默认值；
-  ② 闸只看 blocking：disclosure 全 pending 也要能开 Stage4；
-     blocking 缺一条就必须关着；
-  ③ **不阻断 ≠ 不列出**：disclosure 的未决项照旧逐条进 inbox，只是标成 disclosure；
-  ④ `current` 仍要求 item/path/hash 集合完全一致——分级只改「谁能拦」，
-     不改「谁必须在场」；
-  ⑤ 分类与卡片键**只在服务端算**并随行下发，前端拿不到分类表。
+保留集合完整性、逐项覆盖、原文身份、工作包绑定、HTTP 展示和下游内存隔离反例。
+旧 fate/address_context/knowledge_event 披露层已退役，身份、关系、规则均必须明确接受。
 """
 from __future__ import annotations
 
@@ -20,7 +11,6 @@ from novel.stages.stage2 import grounding as grounding_io
 
 import json
 import copy
-import shutil
 
 import pytest
 from pydantic import ValidationError
@@ -39,16 +29,53 @@ from contracts.schema.evaluation import (
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import GlobalGrounding
 from novel.errors import HumanEditProtected
+from novel.quality import global_review as review_domain
 from novel.quality.global_review import (
-    apply_decision_set, blocking_scope_sha256, build_review, decide,
-    generation_safety, review_effect_counts, review_group_key, review_status,
+    apply_decision_set, blocking_scope_sha256, decide,
+    review_effect_counts, review_group_key,
     subject_sha256, UNBOUND_WORKPACK_SHA256,
 )
 from novel.stages.stage2 import global_review
 from novel.store import ArtifactStore
-from tests.test_quality_evaluator import _global
+from tests.test_stage2_core_review import core_pair
+from contracts.schema.characters import CharacterRegistry
 from tests.test_stage2_generation import _ctx
-from tests.test_stage2_secret_edit import _sandbox, _seed
+from tests.test_stage2_global_core_edits import seed
+
+
+
+def _characters():
+    registry, _ = core_pair()
+    registry['characters']['char_002'] = copy.deepcopy(registry['characters']['char_001'])
+    registry['characters']['char_002']['canonical'] = '乙'
+    registry['characters']['char_002']['aliases'] = [dict(
+        registry['characters']['char_001']['aliases'][0], surface='乙')]
+    return registry
+
+
+def _global():
+    _registry, core = core_pair()
+    secret = core['arc_secrets'][0]
+    secret.update(fact='隐瞒的身世', fact_ref=None,
+                  evidence_refs=list(core['relations'][0]['evidence_refs']))
+    core['world_rules'] = [{'rule_id': 'wr_01', 'kind': 'social', 'versions': [{
+        'version_id': 'v01', 'desc': '本地家族的继承规矩', 'effective_from': 1,
+        'effective_until': None, 'revealed_from': 1,
+        'evidence_refs': list(core['relations'][0]['evidence_refs'])}]}]
+    return core
+
+
+def build_review(core, previous=None, *, characters=None):
+    """纯判据样例显式提供固定独立人物登记，盘面用例仍读取真实 registry。"""
+    return review_domain.build_review(core, previous, characters=_characters() if characters is None else characters)
+
+
+def review_status(core, review):
+    return review_domain.review_status(core, review, characters=_characters())
+
+
+def generation_safety(core, review):
+    return review_domain.generation_safety(core, review, characters=_characters())
 
 
 def _decide_all(review: GlobalReview, kinds, state: str = 'PASS') -> GlobalReview:
@@ -94,17 +121,19 @@ def test_every_kind_has_an_explicit_generation_impact_and_no_default_route():
         GLOBAL_REVIEW_GENERATION_IMPACTS)
     assert review_generation_impact_of('role') == 'must_fix'
     assert review_generation_impact_of('secret') == 'quarantine_or_fix'
-    assert review_generation_impact_of('fate') == 'disclose'
+    assert review_generation_impact_of('alias_identity') == 'must_fix'
+    assert review_generation_impact_of('relation') == 'must_fix'
+    assert review_generation_impact_of('world_rule_version') == 'must_fix'
     with pytest.raises(ValueError, match='未登记'):
         review_generation_impact_of('new_semantic_guess')
 
 
-def test_only_the_three_calibrated_kinds_are_disclosure():
-    """名单是冻结决策，不是「看起来差不多」。改它要连同理由一起改。"""
-    assert sorted(GLOBAL_REVIEW_DISCLOSURE_KINDS) == [
-        'address_context', 'fate', 'name_distinctiveness']
-    # legacy `known_by` 只为读存量 v1 保留 ⇒ 保守按 blocking 读，不替历史项开门。
-    assert review_effect_of('known_by') == 'blocking'
+def test_all_current_core_kinds_block_and_retired_kinds_are_refused():
+    assert GLOBAL_REVIEW_DISCLOSURE_KINDS == ()
+    assert all(review_effect_of(kind) == 'blocking' for kind in GLOBAL_REVIEW_KINDS)
+    for retired in ('fate', 'address_context', 'knowledge_event', 'known_by'):
+        with pytest.raises(ValueError, match='未登记'):
+            review_effect_of(retired)
 
 
 def test_the_producer_never_emits_a_kind_the_classifier_cannot_place():
@@ -117,31 +146,27 @@ def test_the_producer_never_emits_a_kind_the_classifier_cannot_place():
 
 
 def test_a_group_key_has_no_fallback_bucket():
-    with pytest.raises(ValueError, match='卡片收敛键'):
+    with pytest.raises(ValueError, match='未登记'):
         review_group_key('some.unregistered.subject.path')
 
 
 def test_a_card_collects_every_item_of_the_same_subject():
     review = build_review(_global())
-    keys = {item.subject_path: review_group_key(item.subject_path)
-            for item in review.items}
-    # 同一个人物的 role / fate / 名字 / 称谓进同一张卡。
-    assert keys['entities.characters.char_001.role'] == 'character:char_001'
-    assert keys['entities.characters.char_001.fate'] == 'character:char_001'
-    # 同一条秘密的事实 / 埋点 / 揭示 / 知情事件进同一张卡。
-    assert keys['canon.secrets.secret_01.fact'] == 'secret:secret_01'
-    assert keys['canon.secrets.secret_01.first_reveal_chapter'] == 'secret:secret_01'
-    assert keys['canon.secrets.secret_01.knowledge_events.0'] == 'secret:secret_01'
-    # 集合完整性各自成卡，不并进任何主体。
-    assert keys['entities.characters'] == 'set:characters'
-    assert keys['source_blurb.opening'] == 'source_blurb'
+    keys = {item.subject_path: review_group_key(item.subject_path) for item in review.items}
+    assert keys['characters.characters.char_001.role'] == 'character:char_001'
+    assert keys['characters.characters.char_001.name_distinctiveness'] == 'character:char_001'
+    assert keys['global.arc_secrets.secret_01'] == 'secret:secret_01'
+    assert keys['global.arc_secrets.secret_01.revealed_from'] == 'secret:secret_01'
+    assert keys['global.arc_secrets.secret_01.setup_chapters'] == 'secret:secret_01'
+    assert keys['characters.characters'] == 'set:characters'
+    assert keys['global.setting.era'] == 'setting'
 
 
 def test_dependency_hash_reopens_only_the_changed_subject_card():
     grounding = _global()
     approved = _decide_all(build_review(grounding), set(GLOBAL_REVIEW_KINDS))
     changed = copy.deepcopy(grounding)
-    changed['canon']['secrets'][0]['fact'] = '修正后的真相'
+    changed['arc_secrets'][0]['fact'] = '修正后的真相'
 
     refreshed = build_review(changed, approved)
     secret_rows = [
@@ -150,23 +175,23 @@ def test_dependency_hash_reopens_only_the_changed_subject_card():
     ]
     assert secret_rows and all(item.state == 'pending' for item in secret_rows)
     assert next(item for item in refreshed.items
-                if item.kind == 'secret_set_complete').state == 'PASS'
+                if item.kind == 'secret_set_complete').state == 'pending'
     assert next(item for item in refreshed.items
                 if item.kind == 'role').state == 'PASS'
 
 
 # ── ② 闸 ────────────────────────────────────────────────────────────────────
 
-def test_disclosure_items_never_hold_the_gate_closed():
+def test_alias_identity_pending_cannot_be_treated_as_nonblocking_disclosure():
     grounding = _global()
-    review = _decide_all(build_review(grounding), set(GLOBAL_REVIEW_KINDS)
-                         - set(GLOBAL_REVIEW_DISCLOSURE_KINDS))
+    review = _decide_all(build_review(grounding), set(GLOBAL_REVIEW_KINDS) - {'alias_identity'})
     _subject, current, approved = review_status(grounding, review)
-
-    assert current and approved, '全部 blocking PASS ⇒ Stage4 可开'
+    assert current and not approved
+    pending = [row for row in review.items if row.state == 'pending']
+    assert pending and all(row.kind == 'alias_identity' for row in pending)
     counts = review_effect_counts(review)
-    assert counts['disclosure']['pending'] > 0, 'disclosure 仍然一条没被裁决'
-    assert counts['disclosure']['PASS'] == 0, '不许自动 PASS'
+    assert counts['blocking']['pending'] == len(pending)
+    assert counts['disclosure']['pending'] == 0
 
 
 def test_one_missing_blocking_decision_still_holds_the_gate_closed():
@@ -213,13 +238,17 @@ def test_generation_safety_keeps_unver_but_allows_only_closed_group_quarantine()
     assert generation_safety(grounding, undecided).safe is False
 
 
-def test_generation_safety_never_quarantines_core_structure_or_fail():
+@pytest.mark.parametrize('subject_path', [
+    'global.setting.era', 'global.relations.rel_01',
+    'global.world_rules.wr_01.versions.v01', 'characters.characters.char_001.role',
+])
+def test_generation_safety_never_quarantines_core_structure_or_fail(subject_path):
     grounding = _global()
     all_pass = _decide_all(
         build_review(grounding), set(GLOBAL_REVIEW_KINDS))
     setting = next(
         item for item in all_pass.items
-        if item.subject_path == 'canon.setting.时代背景')
+        if item.subject_path == subject_path)
     disposition = GlobalReviewGenerationDisposition(
         action='quarantine_group', reason='请求隔离 setting')
     unsafe = decide(
@@ -248,33 +277,26 @@ def test_generation_disposition_is_structurally_unavailable_to_pass_or_fail():
         )
 
 
-def test_a_failed_disclosure_item_is_carried_not_swallowed():
-    """`FAIL` 的披露项不挡门，但它必须仍然可数、可读、可追责。"""
+def test_failed_identity_mapping_blocks_and_preserves_audit():
     grounding = _global()
-    review = _decide_all(build_review(grounding), set(GLOBAL_REVIEW_KINDS)
-                         - set(GLOBAL_REVIEW_DISCLOSURE_KINDS))
-    review = _decide_all(review, set(GLOBAL_REVIEW_DISCLOSURE_KINDS), state='FAIL')
-
-    assert review_status(grounding, review)[2] is True
+    review = _decide_all(build_review(grounding), set(GLOBAL_REVIEW_KINDS) - {'alias_identity'})
+    review = _decide_all(review, {'alias_identity'}, state='FAIL')
+    assert review_status(grounding, review)[2] is False
     counts = review_effect_counts(review)
-    assert counts['disclosure']['FAIL'] == len(
-        [i for i in review.items if i.kind in GLOBAL_REVIEW_DISCLOSURE_KINDS])
-    failed = next(i for i in review.items if i.state == 'FAIL')
+    assert counts['blocking']['FAIL'] == len([row for row in review.items if row.kind == 'alias_identity'])
+    failed = next(row for row in review.items if row.state == 'FAIL')
     assert failed.actor and failed.reason and failed.decided_at
 
 
 # ── ④ 评测面完整性一格没松 ──────────────────────────────────────────────────
 
-def test_the_required_surface_still_demands_every_item_including_disclosure():
+def test_the_required_surface_still_demands_every_alias_identity_item():
     grounding = _global()
     full = build_review(grounding)
-    trimmed = full.model_copy(update={'items': [
-        item for item in full.items
-        if review_effect_of(item.kind) == 'blocking'
-    ]})
+    trimmed = full.model_copy(update={'items': [row for row in full.items if row.kind != 'alias_identity']})
+    assert len(trimmed.items) < len(full.items)
     _subject, current, approved = review_status(grounding, trimmed)
-    assert not current, '少一条披露项也不是当前评测面'
-    assert not approved, '面不 current 就绝不许开门'
+    assert not current and not approved
 
 
 def test_a_new_main_text_identity_reopens_only_whole_book_review_decisions():
@@ -293,7 +315,6 @@ def test_a_new_main_text_identity_reopens_only_whole_book_review_decisions():
     whole_book = {
         'character_set_complete', 'relation_set_complete',
         'world_rule_set_complete', 'secret_set_complete',
-        'source_blurb_complete', 'source_blurb_fact', 'opening_scope',
     }
 
     assert all(item.state == 'pending' for item in refreshed.items
@@ -311,10 +332,9 @@ def test_effect_counts_always_emit_every_key_even_at_zero():
 
 # ── ③⑤ 只读输出面：CLI scope 与 API row ─────────────────────────────────────
 
-def _book_with_review():
-    _root, book = _sandbox('书_456')
-    _seed(book)
-    return book
+def _book_with_review(tmp_path):
+    ctx, _artifact = seed(tmp_path)
+    return ctx.novel_dir
 
 
 def _bind_scope_to_workpack(template, workpack_sha256: str):
@@ -326,8 +346,8 @@ def _bind_scope_to_workpack(template, workpack_sha256: str):
     })
 
 
-def test_the_review_template_defaults_to_blocking_and_all_is_opt_in():
-    book = _book_with_review()
+def test_the_review_template_defaults_to_blocking_and_all_is_opt_in(tmp_path):
+    book = _book_with_review(tmp_path)
     ctx = _ctx(book, 'stage2.global', paid=False)
     everything = ArtifactStore(ctx).read(GlobalReview, global_review.REL).items
 
@@ -349,12 +369,12 @@ def test_the_review_template_defaults_to_blocking_and_all_is_opt_in():
     assert {row.item_id for row in full.decisions} == {
         item.item_id for item in everything}
     assert full.blocking_scope is None
-    assert len(full.decisions) > len(blocking_ids), '这本书必须真有披露项'
+    assert len(full.decisions) == len(blocking_ids), '当前 Core 全部语义项均阻断'
 
 
-def test_a_scoped_template_never_decides_anything_on_its_own():
+def test_a_scoped_template_never_decides_anything_on_its_own(tmp_path):
     """裁剪的是阅读范围，不是评测面：没进模板的项在盘上仍是 pending。"""
-    book = _book_with_review()
+    book = _book_with_review(tmp_path)
     ctx = _ctx(book, 'stage2.global', paid=False)
     global_review.review_template_json(ctx)
     on_disk = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
@@ -368,8 +388,8 @@ def test_a_scoped_template_never_decides_anything_on_its_own():
     assert template.blocking_scope.state == 'UNVER'
 
 
-def test_a_compact_scope_pass_expands_to_every_blocking_item_but_not_disclosure():
-    book = _book_with_review()
+def test_a_compact_scope_pass_expands_to_every_current_core_item(tmp_path):
+    book = _book_with_review(tmp_path)
     ctx = _ctx(book, 'stage2.global', paid=False)
     current = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
     template = _bind_scope_to_workpack(
@@ -400,8 +420,8 @@ def test_a_compact_scope_pass_expands_to_every_blocking_item_but_not_disclosure(
     assert global_review.is_approved(ctx, updated) is True
 
 
-def test_a_compact_scope_rejects_a_stale_surface_or_incomplete_chapter_claim():
-    book = _book_with_review()
+def test_a_compact_scope_rejects_a_stale_surface_or_incomplete_chapter_claim(tmp_path):
+    book = _book_with_review(tmp_path)
     ctx = _ctx(book, 'stage2.global', paid=False)
     current = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
     template = _bind_scope_to_workpack(
@@ -437,8 +457,8 @@ def test_a_compact_scope_rejects_a_stale_surface_or_incomplete_chapter_claim():
     assert all(item.state == 'pending' for item in current.items)
 
 
-def test_a_compact_scope_rejects_a_stale_workpack_or_template_placeholders():
-    book = _book_with_review()
+def test_a_compact_scope_rejects_a_stale_workpack_or_template_placeholders(tmp_path):
+    book = _book_with_review(tmp_path)
     ctx = _ctx(book, 'stage2.global', paid=False)
     current = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
     template = global_review.review_template(ctx)
@@ -500,9 +520,9 @@ def test_a_compact_scope_rejects_a_stale_workpack_or_template_placeholders():
         )
 
 
-def test_a_new_template_cannot_refresh_an_old_workpack_reading_claim(monkeypatch):
+def test_a_new_template_cannot_refresh_an_old_workpack_reading_claim(monkeypatch, tmp_path):
     """读 A 后生成 B 模板，不能只改三格就把“读过 B”凭证一起刷新。"""
-    book = _book_with_review()
+    book = _book_with_review(tmp_path)
     ctx = _ctx(book, 'stage2.global', paid=False)
     current = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
     workpack_a = global_review.review_workpack(ctx)
@@ -559,8 +579,8 @@ def test_a_new_template_cannot_refresh_an_old_workpack_reading_claim(monkeypatch
                if review_effect_of(item.kind) == 'blocking')
 
 
-def test_an_explicit_item_decision_overrides_the_compact_scope_default():
-    book = _book_with_review()
+def test_an_explicit_item_decision_overrides_the_compact_scope_default(tmp_path):
+    book = _book_with_review(tmp_path)
     ctx = _ctx(book, 'stage2.global', paid=False)
     current = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
     template = _bind_scope_to_workpack(
@@ -601,21 +621,21 @@ def test_an_explicit_item_decision_overrides_the_compact_scope_default():
                and item.item_id != exception.item_id)
 
 
-def test_an_unknown_review_scope_is_refused_instead_of_silently_widening():
+def test_an_unknown_review_scope_is_refused_instead_of_silently_widening(tmp_path):
     from novel.errors import TerminalState
 
-    book = _book_with_review()
+    book = _book_with_review(tmp_path)
     ctx = _ctx(book, 'stage2.global', paid=False)
     with pytest.raises(TerminalState, match='review-scope'):
         global_review.review_template(ctx, scope='blocking_only')
 
 
-def test_the_workpack_follows_the_same_scope_rule():
-    book = _book_with_review()
+def test_the_workpack_follows_the_same_scope_rule(tmp_path):
+    book = _book_with_review(tmp_path)
     ctx = _ctx(book, 'stage2.global', paid=False)
     default = json.loads(global_review.review_workpack_json(ctx))
     full = json.loads(global_review.review_workpack_json(ctx, scope='all'))
-    assert len(full['items']) > len(default['items'])
+    assert len(full['items']) == len(default['items']) > 0
     assert all(review_effect_of(row['kind']) == 'blocking'
                for row in default['items'])
     assert default['main_text_subject_sha256'] == \
@@ -623,8 +643,8 @@ def test_the_workpack_follows_the_same_scope_rule():
     assert len(default['main_text_subject_sha256']) == 64
 
 
-def test_workpack_v5_preserves_items_and_includes_whole_book_text_once():
-    book = _book_with_review()
+def test_workpack_v6_preserves_items_and_includes_whole_book_text_once(tmp_path):
+    book = _book_with_review(tmp_path)
     ctx = _ctx(book, 'stage2.global', paid=False)
     review = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
 
@@ -632,7 +652,7 @@ def test_workpack_v5_preserves_items_and_includes_whole_book_text_once():
     second = global_review.review_workpack(ctx, scope='all')
     assert first == second
     assert first['workpack_sha256'] == second['workpack_sha256']
-    assert first['kind'] == 'stage2-global-review-workpack-v5'
+    assert first['kind'] == 'stage2-global-review-workpack-v6'
     main = ArtifactStore(ctx).read(MainText, 'stage1/main_text.json')
     assert first['main_text_chapters'] == [
         {'chapter_ordinal': chapter.chapter_ordinal, 'text': chapter.text}
@@ -674,12 +694,8 @@ def test_workpack_v5_preserves_items_and_includes_whole_book_text_once():
         item.item_id for item in review.items
         if review_effect_of(item.kind) == 'blocking'}
     assert {row['item_id'] for row in blocking['items']} == blocking_ids
-    for role in (row for row in blocking['items'] if row['kind'] == 'role'):
-        companion = role['fate_companion']
-        assert companion['read_only'] is True
-        assert companion['kind'] == 'fate'
-        assert companion['item_id'] not in blocking_ids
-        assert review_group_key(companion['subject_path']) == role['group_key']
+    assert all('fate_companion' not in row for row in blocking['items'])
+    assert any(row['kind'] == 'alias_identity' for row in blocking['items'])
 
 
 def test_workpack_group_priority_is_stable_by_first_appearance():
@@ -697,17 +713,18 @@ def test_workpack_group_priority_is_stable_by_first_appearance():
         'b1', 'm1', 'm2', 'd1', 'd2']
 
 
-def test_the_api_row_carries_the_server_derived_effect_and_group_key():
+def test_the_api_row_carries_the_server_derived_effect_and_group_key(tmp_path):
     from novel.views.global_review import global_review_view
 
-    book = _book_with_review()
+    book = _book_with_review(tmp_path)
     view = global_review_view(str(book.parent), book.name.split('_')[-1])
 
     assert view.approved is False
     assert view.generation_safe is False
     assert view.quarantined_groups == []
     assert sorted(view.effect_counts) == ['blocking', 'disclosure']
-    assert view.effect_counts['disclosure']['pending'] > 0
+    assert view.effect_counts['disclosure']['pending'] == 0
+    assert view.effect_counts['blocking']['pending'] == len(view.items)
     for row in view.items:
         assert row.effect == review_effect_of(row.kind)
         assert row.group_key == review_group_key(row.subject_path)
@@ -721,77 +738,50 @@ def test_the_api_row_carries_the_server_derived_effect_and_group_key():
     assert 'global_review_kinds' in published
 
 
-def test_disclosure_items_stay_in_the_inbox_with_a_disclosure_effect():
-    """**不阻断 ≠ 不列出。** 顺手让它们消失，这次分级就成了一次静默删审计。"""
+def test_current_core_pending_items_stay_in_inbox_and_block(tmp_path):
     from novel.views.inbox import inbox_view
-
-    book = _book_with_review()
+    book = _book_with_review(tmp_path)
     view = inbox_view(str(book.parent), book.name.split('_')[-1])
     rows = [row for row in view.items if row.kind == 'verification']
-    assert rows, '复核项必须在清单里'
-
-    by_effect = {'blocking': 0, 'disclosure': 0}
-    for row in rows:
-        by_effect[row.delivery_effect] += 1
-    assert by_effect['disclosure'] > 0 and by_effect['blocking'] > 0
-    assert all('只披露，不挡 Stage4' in row.what
-               for row in rows if row.delivery_effect == 'disclosure')
-    # 阻断数只读 delivery_effect，不拿类别总数冒充。
-    assert view.delivery_counts['disclosure'] >= by_effect['disclosure']
+    assert rows
+    review = ArtifactStore(_ctx(book, 'stage2.global', paid=False)).read(GlobalReview, global_review.REL)
+    assert {row.rule for row in rows} >= {item.item_id for item in review.items}
+    assert all(row.delivery_effect == 'blocking' for row in rows)
 
 
-def test_quarantined_secret_is_removed_from_generation_but_retained_in_inbox():
-    """隔离只改下游内存视图；正式事实、UNVER 与审计卡片都必须留下。"""
-    root, book = _sandbox('安全隔离_901')
-    try:
-        _seed(book)
-        stage2_ctx = _ctx(book, 'stage2.global', paid=False)
-        store = ArtifactStore(stage2_ctx)
-        grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING)[0]
-        payload = grounding.model_dump(mode='json', by_alias=True)
-        payload['entities']['relations'][0]['visibility'] = {
-            'kind': 'via_secret', 'secret_id': 'secret_01'}
-        grounding = GlobalGrounding.model_validate(payload)
-        store.write(STAGE2_GLOBAL_GROUNDING, grounding_io.for_write(store, grounding))
-
-        review = _decide_all(
-            build_review(payload), set(GLOBAL_REVIEW_KINDS))
-        review = _quarantine_group(review, 'secret:secret_01')
-        store.write(STAGE2_GLOBAL_REVIEW, review)
-
-        from novel.views.global_review import global_review_view
-        public = global_review_view(root, '901')
-        assert public.approved is False, 'UNVER 事实不能被 UI/API 洗成 PASS'
-        assert public.generation_safe is True
-        assert public.quarantined_groups == ['secret:secret_01']
-
-        downstream_ctx = _ctx(book, 'stage4.plan', paid=False)
-        generated = global_review.generation_grounding(
-            ArtifactStore(downstream_ctx))
-        assert generated.canon.secrets == []
-        assert generated.entities.relations == [], \
-            '引用已隔离 secret 的 via_secret relation 也必须级联移除'
-        assert set(downstream_ctx.edges) >= {
-            STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW}
-
-        persisted = grounding_io.read_own(ArtifactStore(stage2_ctx), STAGE2_GLOBAL_GROUNDING)[0]
-        assert [row.secret_id for row in persisted.canon.secrets] == ['secret_01']
-
-        from novel.views.inbox import inbox_view
-        inbox = inbox_view(root, '901')
-        quarantined_ids = {
-            item.item_id for item in review.items
-            if item.state == 'UNVER'
-            and review_group_key(item.subject_path) == 'secret:secret_01'
-        }
-        rows = [row for row in inbox.items if row.rule in quarantined_ids]
-        assert {row.rule for row in rows} == quarantined_ids
-        assert all(row.delivery_effect == 'disclosure' for row in rows)
-        assert all(row.attention == 'reviewed_retained' for row in rows)
-        assert all(
-            row.decision is not None
-            and row.decision.state == 'UNVER'
-            and row.decision.generation_disposition == 'quarantine_group'
-            for row in rows)
-    finally:
-        shutil.rmtree(root)
+def test_quarantined_secret_is_removed_from_generation_but_retained_in_inbox(tmp_path):
+    """隔离秘密不抹去同义且已接受的权威关系，也不改写正式事实或 UNVER。"""
+    book = _book_with_review(tmp_path)
+    stage2_ctx = _ctx(book, 'stage2.global', paid=False)
+    store = ArtifactStore(stage2_ctx)
+    grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING)[0]
+    registry = store.read(CharacterRegistry, 'stage2/characters.json').model_dump(mode='json', by_alias=True)
+    payload = grounding.model_dump(mode='json', by_alias=True)
+    secret = payload['arc_secrets'][0]
+    secret.update(fact=None, fact_ref={'kind': 'relation', 'relation_id': payload['relations'][0]['relation_id']},
+                  revealed_from=payload['relations'][0]['revealed_from'], evidence_refs=[])
+    grounding = GlobalGrounding.model_validate(payload)
+    store.write(STAGE2_GLOBAL_GROUNDING, grounding_io.for_write(store, grounding))
+    before = store.path(STAGE2_GLOBAL_GROUNDING).read_bytes()
+    review = _quarantine_group(_decide_all(build_review(payload, characters=registry), set(GLOBAL_REVIEW_KINDS)),
+                               'secret:secret_01')
+    store.write(STAGE2_GLOBAL_REVIEW, review)
+    from novel.views.global_review import global_review_view
+    public = global_review_view(book.parent, stage2_ctx.sid)
+    assert not public.approved and public.generation_safe
+    assert public.quarantined_groups == ['secret:secret_01']
+    downstream_ctx = _ctx(book, 'stage4.plan', paid=False)
+    generated = global_review.generation_grounding(ArtifactStore(downstream_ctx))
+    assert generated.arc_secrets == []
+    assert generated.relations == grounding.relations
+    assert set(downstream_ctx.edges) >= {STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW}
+    assert store.path(STAGE2_GLOBAL_GROUNDING).read_bytes() == before
+    from novel.views.inbox import inbox_view
+    inbox = inbox_view(book.parent, stage2_ctx.sid)
+    quarantined_ids = {row.item_id for row in review.items if row.state == 'UNVER'
+                       and review_group_key(row.subject_path) == 'secret:secret_01'}
+    rows = [row for row in inbox.items if row.rule in quarantined_ids]
+    assert {row.rule for row in rows} == quarantined_ids
+    assert all(row.delivery_effect == 'disclosure' and row.attention == 'reviewed_retained' for row in rows)
+    assert all(row.decision is not None and row.decision.state == 'UNVER'
+               and row.decision.generation_disposition == 'quarantine_group' for row in rows)

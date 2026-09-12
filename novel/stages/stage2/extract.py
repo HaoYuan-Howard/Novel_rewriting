@@ -3,13 +3,13 @@
 """`stage2.global` 与 `stage2.blueprint` 的当前生成、归一和判定路径。
 
 两类产物都以 ``checks.check()`` 为唯一判定入口。global 模型响应只引用关闭的
-段落候选 ID，由代码直接铸成 ``SourceSpan``；人工编辑与存量 ``.INVALID`` 恢复
+段落候选 ID，由代码铸成共享证据锚点；人工编辑与当前 ``.INVALID`` 恢复
 仍可使用 locator，但不属于 provider wire。
 """
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+    STAGE1_MAIN_TEXT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
     STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT,
     STAGE2_GLOBAL_EDIT_FAILURE, STAGE2_GLOBAL_EDIT_INPUT_COMMIT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
@@ -37,7 +37,7 @@ from contracts.schema.report import CheckReport
 from contracts.schema.evaluation import (
     GlobalReview, GlobalReviewGenerationDisposition,
 )
-from contracts.schema.stage1 import HookCopy, MainText
+from contracts.schema.stage1 import MainText
 from contracts.schema.characters import CharacterRegistry
 from contracts.schema.knowledge import (
     KnowledgeGrounding,
@@ -47,7 +47,7 @@ from contracts.schema.knowledge import (
 )
 from contracts.schema.stage2 import (
     BlueprintCharacterProjection, BlueprintProvenance, BlueprintScopeViolation,
-    CharacterCollectionItem, GlobalCollectionAdd, GlobalCollectionDelete,
+    GlobalCollectionAdd, GlobalCollectionDelete,
     GlobalCollectionSplit,
     ChapterBlueprints,
     GlobalEdit, GlobalEditCommit, GlobalEditFailure, GlobalEditInputCommit,
@@ -84,10 +84,8 @@ from novel.stages.stage2.global_contract import GlobalEvidenceContractSpec
 from novel.stages.stage2.global_evidence_candidates import (
     GlobalEvidenceCandidateTable,
 )
-from novel.stages.stage2.normalize import (
-    EvidenceLocatorCorrection, GlobalNormalizationAccounting,
-    normalize_global,
-    restore_failed_global_evidence_locators,
+from novel.stages.stage2.global_normalize import (
+    EvidenceLocatorCorrection, GlobalNormalizationAccounting, normalize_global,
 )
 from novel.store import ArtifactStore
 
@@ -220,14 +218,15 @@ class GlobalCandidateContext:
     input_sha256: str
     main_text_sha256: str
     evidence_candidates_sha256: str
-    source_hook_sha256: str
     characters_reference_sha256: str
     _characters: CharacterRegistry = field(repr=False)
     _main_text: tuple[dict[str, Any], ...] = field(repr=False)
-    _source_hook: str = field(repr=False)
     _downstream: _GlobalDownstreamGuard = field(repr=False)
     _contract: GlobalEvidenceContractSpec = field(repr=False)
     _evidence_candidates: GlobalEvidenceCandidateTable = field(repr=False)
+    _global_id_map: dict[str, str] = field(default_factory=dict, repr=False)
+    _global_previous_ids: frozenset[str] = field(default_factory=frozenset, repr=False)
+    _global_retired_ids: frozenset[str] = field(default_factory=frozenset, repr=False)
 
     @property
     def response_model(self) -> type[BaseModel]:
@@ -349,12 +348,12 @@ class _Both:
         self.global_g = _read_raw(store, GlobalGrounding, GLOBAL_REL)
         self.blueprints = _read_raw(store, ChapterBlueprints, BLUEPRINT_REL)
         self.main_text = _read_main_text(store)
-        self.source_hook = _read_source_hook(store)
+        self.characters = _read_characters(store)
 
     def judge(self) -> list[Outcome]:
         """跑全部注册判据。**唯一判定落点**——落盘闸门与复检共用它。"""
         return checks.check(global_g=self.global_g, blueprints=self.blueprints,
-                            main_text=self.main_text, source_hook=self.source_hook)
+                            main_text=self.main_text, characters=self.characters)
 
 
 def _read_raw(store: ArtifactStore, model: type, rel: str) -> dict[str, Any] | None:
@@ -383,10 +382,11 @@ def _older_version_error(exc: ArtifactUnreadable) -> ArtifactVersionError | None
     return None
 
 
-def _read_source_hook(store: ArtifactStore) -> str | None:
-    if not store.exists(STAGE1_HOOK_COPY):
+def _read_characters(store: ArtifactStore) -> dict[str, Any] | None:
+    from contracts.artifacts import STAGE2_CHARACTERS
+    if not store.exists(STAGE2_CHARACTERS):
         return None
-    return store.read_own(HookCopy, STAGE1_HOOK_COPY)[0].text
+    return grounding_io.read_registry(store, own=True).model_dump(mode='json', by_alias=True)
 
 
 def _read_main_text(store: ArtifactStore) -> list[dict[str, Any]] | None:
@@ -396,7 +396,6 @@ def _read_main_text(store: ArtifactStore) -> list[dict[str, Any]] | None:
     if store.ctx.node == 'stage2.global':
         # 生成、免费修订和复验共同保留实际输入边；遗漏会使未变的源文案
         # 审阅身份变化，并把局部订正错误扩大成 Blueprint 全量复审。
-        hook = store.read(HookCopy, STAGE1_HOOK_COPY)
         registry = grounding_io.read_registry(store)
         hard = _hard_hits(checks.check_characters(
             registry.model_dump(mode='json', by_alias=True), art.model_dump(mode='json')))
@@ -404,8 +403,6 @@ def _read_main_text(store: ArtifactStore) -> list[dict[str, Any]] | None:
             raise BlockingFindingsUnresolved(
                 '人物正式登记仍有 HARD；先由 stage2.characters 修复，不购买知识重试',
                 rules=hard, hint='stage2.characters --revalidate --actor <id> --reason <why>（0 LLM）')
-        if not hook.text.strip():
-            raise ArtifactUnreadable('源文案为空，不能核验 Global 的事实与开篇范围')
     return [s.model_dump(by_alias=True) for s in art.root]
 
 
@@ -450,7 +447,7 @@ def _require_blueprint_character_projection(
 
 #: 两份产物的记账键 → 报告的记账节。⚠ **只放产物里真有的键**：
 #: 键不在 ⇒ 报告打「未记录」，那与「记了 0 次」不是一回事（`Q-2` 的三态）。
-_GLOBAL_KEYS = ('setup_chapters_pruned', 'evidence_locator_failures')
+_GLOBAL_KEYS = ('evidence_locator_failures',)
 
 
 def _accounting_of(both: _Both) -> dict[str, Any]:
@@ -543,12 +540,7 @@ def _prepare_global_revalidation_evaluation(
     artifact, raw = grounding_io.read_own(store, _GLOBAL_INVALID)
     data = copy.deepcopy(raw)
     data.pop('_provenance', None)
-    restore_failed_global_evidence_locators(
-        data, baseline.provenance.evidence_locator_failures)
-    from novel.stages.stage2.normalize import restore_pruned_secret_setups
-    restore_pruned_secret_setups(data, baseline.provenance.setup_chapters_pruned)
-    source_hook = _read_source_hook(store)
-    data, accounting = normalize_global(data, main_text, source_hook=source_hook)
+    data, accounting = normalize_global(data, main_text)
     rebuilt = GlobalGrounding.model_validate({
         **data,
         '_provenance': GlobalProvenance.model_validate({
@@ -556,7 +548,7 @@ def _prepare_global_revalidation_evaluation(
         }),
     })
     candidate = rebuilt.model_dump(by_alias=True)
-    outcomes = tuple(_judge_candidate(candidate, None, main_text, source_hook=source_hook))
+    outcomes = tuple(_judge_candidate(candidate, None, main_text, characters=_read_characters(store)))
     hard_hits = tuple(_hard_hits(
         list(outcomes), ignore={'upstream_missing'}))
     return _GlobalRevalidationEvaluation(
@@ -647,7 +639,7 @@ def run_revalidate(
                 if store.exists(GLOBAL_REVIEW_REL) else None
             )
             target_review = build_review(
-                promoted.model_dump(by_alias=True), previous_review)
+                promoted.model_dump(by_alias=True), previous_review, characters=_read_characters(store))
             journal = _prepare_reviewed_edit_commit(
                 store,
                 artifact=promoted,
@@ -698,7 +690,7 @@ def build_prompts(
     if ctx.node == 'stage2.global':
         spec = _active_global_spec()
         system, user, _candidates = build_global_request(
-            ctx.title, mt, spec, source_hook=store.read(HookCopy, STAGE1_HOOK_COPY).text,
+            ctx.title, mt, spec,
             character_reference=grounding_io.knowledge_reference(grounding_io.read_registry(store)))
         return [(None, system, user)]
 
@@ -798,16 +790,15 @@ def build_global_user(
     main_text: list[dict[str, Any]],
     *,
     evidence_candidates: GlobalEvidenceCandidateTable,
-    source_hook: str,
     character_reference: dict[str, dict[str, Any]],
 ) -> str:
     """全书 user；段标记与 lookup 来自同一张关闭候选表。"""
     body = evidence_candidates.render()
     return '\n\n'.join([
         f'《{title}》',
-        '── 源文案（不可变材料）──\n' + source_hook,
         '── 冻结人物引用（只读）──\n' + json.dumps(
-            character_reference, ensure_ascii=False, sort_keys=True, separators=(',', ':')),
+            {f'c{number}': character_reference[cid] for number, cid in enumerate(sorted(character_reference), 1)},
+            ensure_ascii=False, sort_keys=True, separators=(',', ':')),
         '── 章节索引（一切对章的引用用阅读序章号）──\n' + _chapter_index(main_text),
         '── 全书证据候选（不可变原文；行首 ID 不属于正文）──\n' + body,
     ])
@@ -818,7 +809,6 @@ def build_global_request(
     main_text: list[dict[str, Any]],
     spec: GlobalEvidenceContractSpec,
     *,
-    source_hook: str,
     character_reference: dict[str, dict[str, Any]],
     agent_envelope: bool = False,
 ) -> tuple[str, str, GlobalEvidenceCandidateTable]:
@@ -827,7 +817,7 @@ def build_global_request(
     return (
         build_global_agent_system(spec) if agent_envelope else spec.system,
         build_global_user(
-            title, main_text, evidence_candidates=candidates, source_hook=source_hook,
+            title, main_text, evidence_candidates=candidates,
             character_reference=character_reference),
         candidates,
     )
@@ -880,10 +870,10 @@ def _judge_candidate(
     global_g: dict[str, Any] | None,
     blueprints: dict[str, Any] | None,
     main_text: list[dict[str, Any]],
-    *, source_hook: str | None = None,
+    *, characters: dict[str, Any] | None = None,
 ) -> list[Outcome]:
     return checks.check(
-        global_g=global_g, blueprints=blueprints, main_text=main_text, source_hook=source_hook)
+        global_g=global_g, blueprints=blueprints, main_text=main_text, characters=characters)
 
 
 def _canonical_sha256(value: object) -> str:
@@ -943,7 +933,8 @@ def _compile_global_response(
     if not isinstance(response, GlobalGroundingCandidateResponse):
         raise ValueError('stage2.global 只接受 必要知识候选响应')
     compiled = grounding_io.compile_response(
-        response, prepared._evidence_candidates, prepared._characters)
+        response, prepared._evidence_candidates, prepared._characters, id_map=prepared._global_id_map,
+        reserved_ids=prepared._global_retired_ids)
     return grounding_io.compiled_view_payload(compiled, prepared._characters)
 
 
@@ -990,6 +981,8 @@ def ensure_global_agent_run(
     # foreign prepared 代表另一 run 已写正式 bundle、只差 adoption/committed 尾窗。
     # 必须在任何 provider turn 前拒绝新 run，不能先花钱再到 finalize 才发现所有权冲突。
     with stage2_global_runs.commit_ownership(ctx.novel_dir):
+        from novel.stages.stage2.analyze_recovery import refuse_pending_recovery
+        refuse_pending_recovery(ctx.novel_dir)
         stage2_global_runs.refuse_foreign_commit_reservations(ctx)
     stage2_global_runs.ensure_run(
         ctx,
@@ -1485,7 +1478,7 @@ def _read_global_downstream_guard(
         )
 
     before = frozenset(_hard_hits(
-        _judge_candidate(old_global, blueprint.raw, main_text, source_hook=_read_source_hook(store))))
+        _judge_candidate(old_global, blueprint.raw, main_text, characters=_read_characters(store))))
     return _GlobalDownstreamGuard(
         blueprint=blueprint,
         baseline_state='absent' if old_global is None else 'current',
@@ -1502,7 +1495,7 @@ def prepare_global_candidate(
     """冻结一次 global 候选循环的 prompt、正文与下游差分基线。
 
     本函数不调用模型、不铸 provenance、不写盘。blueprint/旧 global 的差分守卫用
-    ``validation_reads`` 隔离；显式 Commander 返工才把本节点旧稿作为修订基线下发，
+    ``validation_reads`` 隔离；独立修订使用冻结原稿作为局部句柄基线下发，
     并将当前 typed 请求绑定进候选身份，不新增反向依赖。
     """
     if ctx.node != 'stage2.global':
@@ -1526,33 +1519,37 @@ def prepare_global_candidate(
     if store.full_sha256_or_none(MAIN_TEXT) != main_text_sha256:
         raise ProvenanceRefused(
             f'{MAIN_TEXT} 在 Global prompt 读取期间发生漂移；拒绝冻结混合主体')
-    source_hook_sha256 = store.full_sha256_or_none(STAGE1_HOOK_COPY)
-    if source_hook_sha256 is None:
-        raise UpstreamMissing(f'{STAGE1_HOOK_COPY} 缺失，不能提出开篇范围')
-    source_hook = store.read(HookCopy, STAGE1_HOOK_COPY).text
-    if not source_hook.strip():
-        raise ArtifactUnreadable('源文案为空，不能提出开篇范围')
-    if store.full_sha256_or_none(STAGE1_HOOK_COPY) != source_hook_sha256:
-        raise ProvenanceRefused('源文案在 Global prompt 读取期间漂移')
     registry = grounding_io.read_registry(store)
     reference = grounding_io.knowledge_reference(registry)
     reference_sha256 = grounding_io.knowledge_reference_sha256(registry)
     spec = _active_global_spec()
     system, user, evidence_candidates = build_global_request(
-        ctx.title, main_text, spec, source_hook=source_hook,
+        ctx.title, main_text, spec,
         character_reference=reference, agent_envelope=agent_envelope)
     rework = None
+    global_id_map: dict[str, str] = {}
+    previous = None
+    with ctx.validation_reads():
+        from novel.llm import agent_runs
+        run_spec = stage2_global_runs._run_spec()
+        if ctx.executor_profile is not None and (run_spec.run_path(ctx) / agent_runs.RUN_FILE).exists():
+            frozen = agent_runs.initial_artifact_sha256s(ctx, run_spec)
+            source_rel = _GLOBAL_INVALID if frozen[_GLOBAL_INVALID] is not None else GLOBAL_REL
+            if frozen[source_rel] is not None:
+                previous = store.read_own_by_sha256(KnowledgeGrounding, source_rel, frozen[source_rel])
+        elif store.exists(_GLOBAL_INVALID) or store.exists(GLOBAL_REL):
+            source_rel = _GLOBAL_INVALID if store.exists(_GLOBAL_INVALID) else GLOBAL_REL
+            previous = store.read_own(KnowledgeGrounding, source_rel, require_current=True)[0]
+    if previous is not None:
+        draft, global_id_map = grounding_io.draft_projection(previous, evidence_candidates, registry=registry)
+        user += '\n\n' + json.dumps({'kind': 'current_global_baseline',
+            'candidate': draft.model_dump(mode='json'),
+            'instruction': '保留未变主体的局部句柄；删除显式省略，新主体使用未占用的新句柄。'},
+            ensure_ascii=False, sort_keys=True)
     if review_token is not None:
         from novel.orchestrator.approvals import stage2_rework_request
         rework = stage2_rework_request(
             ctx.novel_dir.parent, ctx.sid, ctx.node, review_token)
-        source_rel = _GLOBAL_INVALID if store.exists(_GLOBAL_INVALID) else GLOBAL_REL
-        # 返修只下发本 owner 的知识载体；静态身份已经在 character_reference 出现一次。
-        from contracts.schema.knowledge import KnowledgeGrounding
-        previous, _raw = store.read_own(KnowledgeGrounding, source_rel, require_current=True)
-        baseline = previous.model_dump(by_alias=True)
-        baseline.pop('_provenance', None)
-        baseline.pop('characters_reference_sha256', None)
         user += '\n\n' + json.dumps({
             'kind': 'commander_rework_request',
             'reviewer_node': rework.node,
@@ -1560,7 +1557,6 @@ def prepare_global_candidate(
             'reason': rework.reason,
             'chapter_ordinals': rework.chapter_ordinals,
             'review_token': review_token,
-            'baseline': baseline,
             'instruction': ('按明确反馈修订本节点候选，保留未受影响的事实；'
                             '证据仍只返回本次候选表 ID，由代码校验与提交。'),
         }, ensure_ascii=False, sort_keys=True)
@@ -1573,8 +1569,10 @@ def prepare_global_candidate(
         'contract_name': spec.name,
         'main_text_file_sha256': main_text_sha256,
         'evidence_candidates_sha256': candidate_sha256,
-        'source_hook_file_sha256': source_hook_sha256,
         'characters_reference_sha256': reference_sha256,
+        'frozen_global_id_map': global_id_map,
+        'retired_global_ids': [] if previous is None else previous.provenance.retired_global_ids,
+        'request_user_sha256': _canonical_sha256(user),
         **({'review_token': review_token} if rework is not None else {}),
     })
     return GlobalCandidateContext(
@@ -1584,14 +1582,15 @@ def prepare_global_candidate(
         input_sha256=input_sha256,
         main_text_sha256=main_text_sha256,
         evidence_candidates_sha256=candidate_sha256,
-        source_hook_sha256=source_hook_sha256,
         characters_reference_sha256=reference_sha256,
         _characters=registry.model_copy(deep=True),
         _main_text=tuple(copy.deepcopy(main_text)),
         _downstream=downstream,
         _contract=spec,
         _evidence_candidates=evidence_candidates,
-        _source_hook=source_hook,
+        _global_id_map=global_id_map,
+        _global_previous_ids=frozenset() if previous is None else frozenset(previous.identity_keys()),
+        _global_retired_ids=frozenset() if previous is None else frozenset(previous.provenance.retired_global_ids),
     )
 
 
@@ -1599,12 +1598,9 @@ def assert_global_main_text_current(
         ctx: RunContext, prepared: GlobalCandidateContext,
 ) -> None:
     """逐尾窗重读盘上 MainText 主体 SHA，不拿冻结内存正文冒充 freshness。"""
-    current_hook = ArtifactStore(ctx).full_sha256_or_none(STAGE1_HOOK_COPY)
     registry = grounding_io.read_registry(ArtifactStore(ctx), own=True)
     if grounding_io.knowledge_reference_sha256(registry) != prepared.characters_reference_sha256:
         raise ProvenanceRefused('stage2.global 实际人物引用在 executor 期间漂移；拒绝旧候选提交')
-    if current_hook != prepared.source_hook_sha256:
-        raise ProvenanceRefused('stage2.global 源文案在 executor 期间漂移；拒绝旧候选补尾')
     current = ArtifactStore(ctx).full_sha256_or_none(MAIN_TEXT)
     if current != prepared.main_text_sha256:
         raise ProvenanceRefused(
@@ -1648,12 +1644,12 @@ def _global_candidate_outcomes(
 ) -> tuple[list[Outcome], tuple[str, ...]]:
     """复用现有判据并严格保留 blueprint 的 before/after 差分口径。"""
     main_text = copy.deepcopy(list(prepared._main_text))
-    outcomes = _judge_candidate(candidate, None, main_text, source_hook=prepared._source_hook)
+    outcomes = _judge_candidate(candidate, None, main_text, characters=prepared._characters.model_dump(mode='json', by_alias=True))
     hits = set(_hard_hits(outcomes, ignore={'upstream_missing'}))
     guard = prepared._downstream
     if guard.blueprint.state == 'current':
         assert guard.blueprint.raw is not None
-        after = _judge_candidate(candidate, guard.blueprint.raw, main_text, source_hook=prepared._source_hook)
+        after = _judge_candidate(candidate, guard.blueprint.raw, main_text, characters=prepared._characters.model_dump(mode='json', by_alias=True))
         outcomes.extend(after)
         after_hits = set(_hard_hits(after))
         if guard.baseline_hard_hits is None:
@@ -1706,13 +1702,16 @@ def _materialize_global_evaluation(
     """归一、铸候选来源账并判定；``settle=False`` 时严格无终态副作用。"""
     main_text = copy.deepcopy(list(prepared._main_text))
     data, accounting = normalize_global(
-        _compile_global_response(prepared, response), main_text, source_hook=prepared._source_hook)
+        _compile_global_response(prepared, response), main_text)
+    from contracts.schema.knowledge import KnowledgeCore
+    current_ids = KnowledgeCore.model_validate(data).identity_keys()
     provenance = ctx.llm_provenance(
         GlobalProvenance,
         prompts={prepared._contract.sys_name: prepared.system},
         model=requested_model,
         adopted_models=adopted_models,
         settle=settle,
+        retired_global_ids=sorted(prepared._global_retired_ids | (prepared._global_previous_ids - current_ids)),
         **accounting,
     )
     artifact = GlobalGrounding.model_validate({
@@ -1760,7 +1759,7 @@ def _refresh_global_review(store: ArtifactStore, artifact: GlobalGrounding) -> N
         store.read_own(GlobalReview, GLOBAL_REVIEW_REL)[0]
         if store.exists(GLOBAL_REVIEW_REL) else None
     )
-    review = build_review(artifact.model_dump(by_alias=True), previous)
+    review = build_review(artifact.model_dump(by_alias=True), previous, characters=_read_characters(store))
     store.write_round(GLOBAL_REVIEW_REL, review)
 
 
@@ -1768,7 +1767,10 @@ def _write_formal(
     store: ArtifactStore, rel: str, artifact: Any,
     *, review_override: GlobalReview | None = None,
 ) -> None:
-    """Commit a new round; global grounding and its review are indivisible."""
+    """提交正式产物；Global 与审阅属于同一写回集合。"""
+    if rel == GLOBAL_REL:
+        from novel.stages.stage2.analyze_recovery import refuse_pending_recovery
+        refuse_pending_recovery(store.ctx.novel_dir)
     if rel == GLOBAL_REL and store.exists(GLOBAL_EDIT_INPUT_COMMIT):
         raise ProvenanceRefused(
             'GlobalEdit canonical WAL 尚未收敛；其他 Global 写口不得覆盖')
@@ -1790,7 +1792,7 @@ def _write_formal(
                 _refresh_global_review(store, artifact)
             else:
                 require_current_review(
-                    artifact.model_dump(by_alias=True), review_override)
+                    artifact.model_dump(by_alias=True), review_override, characters=_read_characters(store))
                 store.write_round(GLOBAL_REVIEW_REL, review_override)
             # reviewed edit 的 failure/pending sidecar 只描述“formal bundle 尚未
             # 提交”。知识 + review 全部落稳后才在同一回滚域退休；
@@ -1822,7 +1824,10 @@ def _write_invalid(
     store: ArtifactStore, rel: str, artifact: Any, *,
     owned_global_edit_sha256: str | None = None,
 ) -> str:
-    """Store a failed round; the store atomically preserves its predecessor."""
+    """保存失败候选并保留前稿；付费草稿不能被其他owner覆盖。"""
+    if rel == GLOBAL_REL:
+        from novel.stages.stage2.analyze_recovery import refuse_pending_recovery
+        refuse_pending_recovery(store.ctx.novel_dir)
     if rel != GLOBAL_REL:
         return str(store.write_invalid(rel, artifact, gates_skipped=[]))
     if store.exists(GLOBAL_EDIT_INPUT_COMMIT):
@@ -1922,8 +1927,6 @@ def _note_adopted(ctx: RunContext, client: _GlobalResponseSource, *, rel: str,
     「同 purpose 最后一条 ok 行」猜。本 run 没有采纳新响应的 purpose
     （定向重生成合并进来的未动章、0 成本路）没有登记项 ⇒ 无行，缺行即「沿用旧稿」。
     """
-    if rel == GLOBAL_REL and 'characters' in candidate.get('entities', {}):
-        candidate = grounding_io.payload(ArtifactStore(ctx), GlobalGrounding.model_validate(candidate))
     fp = prov.projection_fingerprint(candidate)
     for purpose, chapter in purposes.items():
         attempt_id = client.accepted_attempt(purpose)
@@ -1993,7 +1996,7 @@ def verify_global_delivery(
         raise ProvenanceRefused(
             f'{GLOBAL_REVIEW_REL} readback freshness='
             f'{review_freshness.state}/{review_freshness.reason}，拒绝 delivered')
-    require_current_review(landed_raw, review)
+    require_current_review(landed_raw, review, characters=_read_characters(store))
 
     _outcomes, hits = _global_candidate_outcomes(landed_raw, prepared)
     if hits:
@@ -2036,7 +2039,7 @@ def _expected_global_review(
         store.read_own(GlobalReview, GLOBAL_REVIEW_REL)[0]
         if store.exists(GLOBAL_REVIEW_REL) else None)
     payload = artifact.model_dump(by_alias=True, mode='json')
-    return build_review(payload, previous)
+    return build_review(payload, previous, characters=_read_characters(store))
 
 
 def _refresh_current_global_review(store: ArtifactStore, artifact: GlobalGrounding) -> GlobalReview:
@@ -2046,7 +2049,7 @@ def _refresh_current_global_review(store: ArtifactStore, artifact: GlobalGroundi
             GLOBAL_REVIEW_REL, expected):
         store.write_round(GLOBAL_REVIEW_REL, expected)
     landed = store.read_own(GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
-    require_current_review(artifact.model_dump(mode='json', by_alias=True), landed)
+    require_current_review(artifact.model_dump(mode='json', by_alias=True), landed, characters=_read_characters(store))
     if landed != expected or store.freshness(GLOBAL_REVIEW_REL).state != 'fresh':
         raise ProvenanceRefused('确定性审阅刷新后的主体或新鲜度不闭合')
     return landed
@@ -3316,20 +3319,20 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
                 raw = rebound.view.model_dump(mode='json', by_alias=True)
             data = copy.deepcopy(raw)
             data.pop('_provenance', None)
-            source_hook = _read_source_hook(store)
-            data, accounting = normalize_global(data, main_text, source_hook=source_hook)
+            data, accounting = normalize_global(data, main_text)
             rewritten = ctx.rewrite_provenance(
                 previous.provenance, by='--renormalize')
             provenance = GlobalProvenance.model_validate({
                 **rewritten.model_dump(),
                 **accounting,
                 'gates_skipped': None,
+                'core_edit': None,
             })
             artifact = GlobalGrounding.model_validate({
                 **data, '_provenance': provenance,
             })
             candidate = artifact.model_dump(by_alias=True)
-            outcomes = _judge_candidate(candidate, None, main_text, source_hook=source_hook)
+            outcomes = _judge_candidate(candidate, None, main_text, characters=_read_characters(store))
             hits = _hard_hits(outcomes, ignore={'upstream_missing'})
             if rebound is not None:
                 rebound.assert_current(store)
@@ -3395,164 +3398,43 @@ def _manual_locator(
         f'{subject} 找不到 ≤160 字且章内唯一的 locator；拒绝生成会落 INVALID 的模板')
 
 
-def _manualize_evidence(
-    value: Any, chapters: dict[int, str], *, subject: str,
-    source_hook: str | None = None,
-) -> Any:
-    if isinstance(value, dict):
-        if set(value) == {'chapter_ordinal', 'source'}:
-            return _manual_locator(value, chapters, subject=subject)
-        if value.get('kind') == 'hook_supported':
-            from novel.stages.stage2.source_blurb import manual_hook_evidence
-            return {**copy.deepcopy(value), 'hook_evidence': manual_hook_evidence(
-                value['hook_evidence'], source_hook)}
-        return {
-            key: _manualize_evidence(child, chapters, subject=subject, source_hook=source_hook)
-            for key, child in value.items()
-        }
-    if isinstance(value, list):
-        return [
-            _manualize_evidence(child, chapters, subject=subject, source_hook=source_hook)
-            for child in value
-        ]
-    return copy.deepcopy(value)
-
-
 def global_edit_template(ctx: RunContext) -> GlobalEdit:
-    """从当前 FAIL/不可隔离 UNVER 生成一份可执行、默认 no-op 的 typed 修订骨架。
-
-    骨架只开放 ``GlobalEdit`` 已能真实表达的组。它故意保留当前值，Commander 必须
-    根据 workpack 修改；``run_apply_edit`` 会拒绝原样提交。这样模板本身先通过
-    schema，真正修改再由同一归一/HARD 判断，而不是让模型手写一份未知形状。
-    """
+    """从最新问题稿或正式失败组给 typed no-op 模板；不伪造缺失审阅。"""
     store = ArtifactStore(ctx)
-    grounding = grounding_io.read_own(store, GLOBAL_REL, require_current=True)[0]
-    review = store.read_own(GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
-    require_current_review(grounding.model_dump(by_alias=True), review)
-    main = store.read_own(MainText, MAIN_TEXT, require_current=True)[0]
-    chapters = {
-        int(section.chapter_ordinal): str(section.text or '')
-        for section in main.root
-    }
-    attention = [
-        item for item in review.items
-        if review_effect_of(item.kind) == 'blocking'
-        and (
-            item.state == 'FAIL'
-            or (item.state == 'UNVER' and quarantined_group(item) is None)
-        )
-    ]
-    if not attention:
-        raise TerminalState(
-            '当前没有需要 GlobalEdit 的 blocking FAIL/未处置 UNVER；'
-            '请提交复核决定或继续 Blueprint 审阅')
-    # ``Any`` 只用于局部容器，元素仍是已由 GlobalReview schema 验过的 item。
-    grouped: dict[str, list[Any]] = {}
-    for item in attention:
-        grouped.setdefault(review_group_key(item.subject_path), []).append(item)
-
-    raw = grounding.model_dump(mode='json', by_alias=True)
-    entities = raw['entities']
-    canon = raw['canon']
-    characters = entities['characters']
-    relations = {row['relation_id']: row for row in entities['relations']}
-    rules = {row['rule_id']: row for row in canon['world_rules']}
-    secrets = {row['secret_id']: row for row in canon['secrets']}
+    artifact, raw, source_rel = _global_source(store)
+    if source_rel == _GLOBAL_INVALID:
+        # 首抽 HARD 可能还没有正式 Global/Review。问题稿保留全部可编辑主体，
+        # 提交仍需真实变化与相同 HARD 校验；模板读取不创建 review 或接受证明。
+        groups = {'setting'}
+        for name, prefix, key in (('relations', 'relation', 'relation_id'),
+                                  ('world_rules', 'world_rule', 'rule_id'),
+                                  ('arc_secrets', 'secret', 'secret_id')):
+            groups.update(prefix + ':' + row[key] for row in raw[name])
+            if not raw[name]:
+                groups.add('set:' + name)
+    else:
+        review = store.read_own(GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
+        require_current_review(raw, review, characters=_read_characters(store))
+        groups = {review_group_key(item.subject_path) for item in review.items
+                  if review_effect_of(item.kind) == 'blocking' and (
+                      item.state == 'FAIL' or (item.state == 'UNVER' and quarantined_group(item) is None))}
     edit: dict[str, Any] = {}
-
-    collection_edits: list[dict[str, Any]] = []
-
-    def collection_delta(name: str, value: Any) -> None:
-        collection_edits.append({
-            'collection': name,
-            'expected_collection_sha256': subject_sha256(value),
-            'operations': [],
-        })
-
-    relation_groups = {
-        group for group in grouped if group.startswith('relation:')
-    }
-    if 'set:relations' in grouped:
-        collection_delta('relations', entities['relations'])
-    if relation_groups:
-        edit['relations'] = [
-            _manualize_evidence(
-                relations[group.split(':', 1)[1]], chapters, subject=group)
-            for group in sorted(relation_groups)
-        ]
-
-    rule_groups = {group for group in grouped if group.startswith('world_rule:')}
-    if 'set:world_rules' in grouped:
-        collection_delta('world_rules', canon['world_rules'])
-    if rule_groups:
-        edit['world_rules'] = [
-            _manualize_evidence(
-                rules[group.split(':', 1)[1]], chapters, subject=group)
-            for group in sorted(rule_groups)
-        ]
-
-    secret_groups = {group for group in grouped if group.startswith('secret:')}
-    if 'set:secrets' in grouped:
-        collection_delta('secrets', canon['secrets'])
-    if secret_groups:
-        edit['secrets'] = [
-            _manualize_evidence(
-                secrets[group.split(':', 1)[1]], chapters, subject=group)
-            for group in sorted(secret_groups)
-        ]
-
-    character_patches: list[dict[str, Any]] = []
-    for group, items in sorted(grouped.items()):
-        if not group.startswith('character:'):
-            continue
-        char_id = group.split(':', 1)[1]
-        character = characters[char_id]
-        patch: dict[str, Any] = {'char_id': char_id}
-        for item in items:
-            if item.kind == 'fate':
-                patch['fate'] = character['fate']
-                patch['fate_evidence'] = _manualize_evidence(
-                    character['fate_evidence'], chapters, subject=item.subject_path)
-                if character['fate'] is None:
-                    patch['fate_evidence'] = None
-            elif item.kind not in {'name_distinctiveness', 'role', 'address_context'}:
-                raise TerminalState(f'{item.kind} 尚无可执行知识编辑映射')
-        if len(patch) > 1:
-            character_patches.append(patch)
-    if character_patches:
-        edit['characters'] = character_patches
-    if collection_edits:
-        edit['collection_edits'] = collection_edits
-
-    setting_items = grouped.get('setting', [])
-    if setting_items:
-        setting = canon['setting']
-        patch = {}
-        for item in setting_items:
-            if item.subject_path.endswith('.时代背景'):
-                patch['时代背景'] = setting['时代背景']
-                patch['era_evidence'] = _manualize_evidence(
-                    setting['era_evidence'], chapters, subject=item.subject_path)
-            elif item.subject_path.endswith('.世界观'):
-                patch['世界观'] = setting['世界观']
-                patch['worldview_evidence'] = _manualize_evidence(
-                    setting['worldview_evidence'], chapters, subject=item.subject_path)
-        edit['setting'] = patch
-
-    if grouped.get('source_blurb'):
-        edit['source_blurb_replace'] = _manualize_evidence(
-            raw['source_blurb'], chapters, subject='source_blurb', source_hook=_read_source_hook(store))
-
-    known = {
-        'set:characters', 'set:relations', 'set:world_rules', 'set:secrets',
-        'setting', 'source_blurb', *relation_groups, *rule_groups, *secret_groups,
-        *(group for group in grouped if group.startswith('character:')),
-    }
-    unknown = sorted(set(grouped) - known)
-    if unknown:
-        raise TerminalState(f'这些 review 组没有 GlobalEdit 映射：{unknown}')
+    deltas = []
+    for name, prefix, key in (('relations', 'relation', 'relation_id'),
+                              ('world_rules', 'world_rule', 'rule_id'),
+                              ('arc_secrets', 'secret', 'secret_id')):
+        if 'set:' + name in groups:
+            deltas.append({'collection': name,
+                           'expected_collection_sha256': subject_sha256(raw[name]), 'operations': []})
+        rows = [copy.deepcopy(row) for row in raw[name] if prefix + ':' + row[key] in groups]
+        if rows:
+            edit[name] = rows
+    if 'setting' in groups:
+        edit['setting'] = copy.deepcopy(raw['setting'])
+    if deltas:
+        edit['collection_edits'] = deltas
     if not edit:
-        raise TerminalState('当前问题属于静态人物，须派修 stage2.characters')
+        raise TerminalState('当前没有需要 GlobalEdit 的长期知识组；人物问题须派修 stage2.characters')
     return GlobalEdit.model_validate(edit)
 
 
@@ -4316,7 +4198,7 @@ def _validate_reviewed_edit_commit(
             'reviewed-edit commit staging payload 与 prospective SHA 不互验')
     target_global = target.global_grounding.model_dump(
         mode='json', by_alias=True)
-    require_current_review(target_global, target.global_review)
+    require_current_review(target_global, target.global_review, characters=_read_characters(store))
     return edit, main_text
 
 
@@ -4340,7 +4222,7 @@ def _reviewed_edit_commit_readback(
     review = store.read_own(
         GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
     require_current_review(
-        landed.model_dump(mode='json', by_alias=True), review)
+        landed.model_dump(mode='json', by_alias=True), review, characters=_read_characters(store))
     return landed
 
 
@@ -4654,7 +4536,7 @@ _SAFE_GLOBAL_EDIT_REJECTION_CATEGORIES = frozenset({
     'missing_patch_subject',
 })
 _SAFE_GLOBAL_EDIT_COLLECTIONS = frozenset({
-    'characters', 'relations', 'secrets', 'world_rules',
+    'relations', 'arc_secrets', 'world_rules',
 })
 
 
@@ -4720,408 +4602,131 @@ class _GlobalEditCandidate:
 
 
 def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
-                           ordinals: set[int]) -> list[str]:
-    """把 typed 人工决定应用到内存候选，并在任何写盘前关闭式校验引用/章号。
-
-    历史函数名为兼容测试与仓外调用保留；当前编辑面已覆盖全部会被 2b/2c HARD
-    拦住的自由事实。修改 claim 必须同交 locator，归一随后仍走 ``normalize_global``。
-    """
-    from novel.core.evidence import iter_global_evidence_slots
-
-    # 校验失败时连调用者手里的内存对象也不改：完整 replacement 若先落进 ``data``
-    # 再发现悬空引用，虽然不会写盘，后续同轮代码仍可能误读半应用候选。
+                           ordinals: set[int], *,
+                           characters: dict[str, Any] | None = None) -> list[str]:
+    """纯内存应用四类 typed 编辑；集合前置身份先聚合拒因，再原子更新输入。"""
     candidate = copy.deepcopy(data)
-    entities = candidate.get('entities') or {}
-    canon = candidate.get('canon') or {}
     changed: list[str] = []
-    removed_or_split: dict[str, set[str]] = {
-        name: set() for name in (
-            'characters', 'relations', 'secrets', 'world_rules')
-    }
-
-    def collection_value(name: str) -> Any:
-        if name == 'characters':
-            return entities.get('characters') or {}
-        if name == 'relations':
-            return entities.get('relations') or []
-        if name == 'secrets':
-            return canon.get('secrets') or []
-        return canon.get('world_rules') or []
-
-    def member_id(name: str, value: dict[str, Any]) -> str:
-        key = {
-            'characters': 'char_id',
-            'relations': 'relation_id',
-            'secrets': 'secret_id',
-            'world_rules': 'rule_id',
-        }[name]
-        identity = value.get(key)
-        if not isinstance(identity, str) or not identity:
-            raise TerminalState(f'{name} collection operation 缺 {key}')
-        return identity
-
-    def dumped_member(name: str, item: Any) -> tuple[str, dict[str, Any]]:
-        payload = item.model_dump(mode='json', by_alias=True)
-        if name == 'characters':
-            if not isinstance(item, CharacterCollectionItem):
-                raise TerminalState('characters collection operation 成员类型错误')
-            identity = str(payload.pop('char_id'))
-        else:
-            identity = member_id(name, payload)
-        return identity, payload
-
-    # 先在修前 current collection 上一次性预扫**全部**集合，再开始应用任一
-    # operation。否则一个回答若同时把 relations / world_rules / secrets 都写坏，
-    # 第一席只会得到首个集合的拒因，有限 correction 席可能被逐组耗尽。这里冻结
-    # 各集合的 ordered 副本供后续应用复用；任何诊断都在 candidate 变化前汇总。
-    collection_rows: dict[str, list[dict[str, Any]]] = {}
-    operation_diagnostics: list[dict[str, Any]] = []
-    for collection_edit in edit.collection_edits:
-        name = collection_edit.collection
-        current_value = collection_value(name)
-        actual_collection_sha256 = subject_sha256(current_value)
-        if collection_edit.expected_collection_sha256 != actual_collection_sha256:
-            operation_diagnostics.append({
-                'category': 'collection_expected_sha_stale',
-                'collection': name,
-                'expected_collection_sha256': (
-                    collection_edit.expected_collection_sha256),
-                'actual_collection_sha256': actual_collection_sha256,
-            })
-        if name == 'characters':
-            ordered = [
-                {'char_id': identity, **copy.deepcopy(value)}
-                for identity, value in current_value.items()
-            ]
-        else:
-            ordered = copy.deepcopy(current_value)
-        collection_rows[name] = ordered
-
-        # delete/split 的 subject 必须来自**修前 current collection**。先完整
-        # 扫描全部集合再应用，才能把真实的 988 个坏 delete 聚合成
-        # collection/category/count，而不是在第一项抛一条
-        # ``candidate_application:1``。诊断可保留 ID 供本地 hash；对外摘要只投影
-        # 可信 collection 与代码 category。native compact schema 也用同一 current
-        # ID 闭集提前拒绝，但 canonical full action 仍必须经过这道 producer 权威。
-        existing_ids = {member_id(name, row) for row in ordered}
-        for operation_index, operation in enumerate(collection_edit.operations):
-            if isinstance(operation, GlobalCollectionAdd):
-                identity, _payload = dumped_member(name, operation.item)
-                if identity in existing_ids:
-                    operation_diagnostics.append({
-                        'category': 'collection_add_subject_exists',
-                        'collection': name,
-                        'operation_index': operation_index,
-                        'subject_id': identity,
-                    })
-            elif isinstance(operation, GlobalCollectionDelete):
-                if operation.subject_id not in existing_ids:
-                    operation_diagnostics.append({
-                        'category': 'collection_delete_subject_missing',
-                        'collection': name,
-                        'operation_index': operation_index,
-                        'subject_id': operation.subject_id,
-                    })
-            elif isinstance(operation, GlobalCollectionSplit):
-                if operation.subject_id not in existing_ids:
-                    operation_diagnostics.append({
-                        'category': 'collection_split_subject_missing',
-                        'collection': name,
-                        'operation_index': operation_index,
-                        'subject_id': operation.subject_id,
-                    })
-                for item_index, item in enumerate(operation.items):
-                    replacement_id, _payload = dumped_member(name, item)
-                    if replacement_id in existing_ids:
-                        operation_diagnostics.append({
-                            'category': 'collection_split_output_subject_exists',
-                            'collection': name,
-                            'operation_index': operation_index,
-                            'item_index': item_index,
-                            'subject_id': replacement_id,
-                        })
-
-    if operation_diagnostics:
-        raise GlobalEditCandidateRejected(operation_diagnostics)
-
-    for collection_edit in edit.collection_edits:
-        name = collection_edit.collection
-        ordered = collection_rows[name]
-        for operation in collection_edit.operations:
-            positions = {
-                member_id(name, row): index for index, row in enumerate(ordered)
-            }
-            if isinstance(operation, GlobalCollectionAdd):
-                identity, payload = dumped_member(name, operation.item)
-                if identity in positions:
-                    raise TerminalState(
-                        f'{name} add 的 id 已存在：{identity}')
-                ordered.append({'char_id': identity, **payload}
-                               if name == 'characters' else payload)
-                changed.append(f'{name}.add.{identity}')
-            elif isinstance(operation, GlobalCollectionDelete):
-                identity = operation.subject_id
-                if identity not in positions:
-                    raise TerminalState(
-                        f'{name} delete 的 id 不存在：{identity}')
-                ordered.pop(positions[identity])
-                removed_or_split[name].add(identity)
-                changed.append(f'{name}.delete.{identity}')
-            elif isinstance(operation, GlobalCollectionSplit):
-                identity = operation.subject_id
-                if identity not in positions:
-                    raise TerminalState(
-                        f'{name} split 的 id 不存在：{identity}')
-                replacements: list[dict[str, Any]] = []
-                replacement_ids: list[str] = []
-                for item in operation.items:
-                    replacement_id, payload = dumped_member(name, item)
-                    if replacement_id in positions:
-                        raise TerminalState(
-                            f'{name} split 输出 id 已存在：{replacement_id}')
-                    replacement_ids.append(replacement_id)
-                    replacements.append(
-                        {'char_id': replacement_id, **payload}
-                        if name == 'characters' else payload)
-                ordered[positions[identity]:positions[identity] + 1] = replacements
-                removed_or_split[name].add(identity)
-                changed.append(
-                    f'{name}.split.{identity}->{",".join(replacement_ids)}')
-            else:  # pragma: no cover —— schema discriminator 已闭合
-                raise AssertionError(f'未知 collection operation：{operation!r}')
-        if name == 'characters':
-            entities['characters'] = {
-                str(row['char_id']): {
-                    key: value for key, value in row.items() if key != 'char_id'
-                }
-                for row in ordered
-            }
-        elif name == 'relations':
-            entities['relations'] = ordered
-        elif name == 'secrets':
-            canon['secrets'] = ordered
-        else:
-            canon['world_rules'] = ordered
-
-    characters = entities.get('characters') or {}
-    if edit.source_blurb_replace is not None:
-        candidate['source_blurb'] = edit.source_blurb_replace.model_dump(by_alias=True)
-    secret_by_id = {str(row.get('secret_id') or ''): row
-                    for row in (canon.get('secrets') or [])}
-    rule_by_id = {str(row.get('rule_id') or ''): row
-                  for row in (canon.get('world_rules') or [])}
-    relation_by_id = {str(row.get('relation_id') or ''): row
-                      for row in (entities.get('relations') or [])}
-
-    direct_targets = {
-        'secret': {patch.secret_id for patch in edit.secrets},
-        'world rule': {patch.rule_id for patch in edit.world_rules},
-        'relation': {patch.relation_id for patch in edit.relations},
-        'character': {
-            patch.char_id for patch in [
-                *edit.characters]
-        },
-    }
-    collection_names = {
-        'secret': 'secrets',
-        'world rule': 'world_rules',
-        'relation': 'relations',
-        'character': 'characters',
-    }
-    conflicts = {
-        kind: sorted(targets & removed_or_split[collection_names[kind]])
-        for kind, targets in direct_targets.items()
-    }
-    conflicts = {kind: values for kind, values in conflicts.items() if values}
-    unknown = {
-        'secret': sorted(p.secret_id for p in edit.secrets
-                         if p.secret_id not in secret_by_id
-                         and p.secret_id not in conflicts.get('secret', ())),
-        'world rule': sorted(p.rule_id for p in edit.world_rules
-                             if p.rule_id not in rule_by_id
-                             and p.rule_id not in conflicts.get('world rule', ())),
-        'relation': sorted(p.relation_id for p in edit.relations
-                           if p.relation_id not in relation_by_id
-                           and p.relation_id not in conflicts.get('relation', ())),
-        'character': sorted(p.char_id for p in [
-            *edit.characters]
-                            if p.char_id not in characters
-                            and p.char_id not in conflicts.get('character', ())),
-    }
-    unknown = {kind: values for kind, values in unknown.items() if values}
-    candidate_diagnostics: list[dict[str, Any]] = []
-    for kind, values in sorted(conflicts.items()):
-        collection = collection_names[kind]
-        candidate_diagnostics.extend({
-            'category': 'direct_collection_subject_conflict',
-            'collection': collection,
-            'subject_id': identity,
-        } for identity in values)
-    for kind, values in sorted(unknown.items()):
-        candidate_diagnostics.extend({
-            'category': 'missing_patch_subject',
-            'subject_kind': kind,
-            'subject_id': identity,
-        } for identity in values)
-    def dump(value: Any) -> Any:
-        if isinstance(value, StrictModel):
-            return value.model_dump(by_alias=True)
-        if isinstance(value, list):
-            return [dump(item) for item in value]
-        return copy.deepcopy(value)
-
-    if edit.source_blurb_replace is not None:
-        changed.append('source_blurb')
-
-    def apply_fields(target: dict[str, Any], patch: StrictModel,
-                     identity: str, *, skip: set[str]) -> None:
-        for field in patch.model_fields_set - skip:
-            target[field] = dump(getattr(patch, field))
-            changed.append(f'{identity}.{field}')
-
-    if edit.secrets_replace is not None:
-        canon['secrets'] = [row.model_dump(by_alias=True) for row in edit.secrets_replace]
-        changed.append('canon.secrets')
-    else:
-        for patch in edit.secrets:
-            if patch.secret_id not in secret_by_id:
+    keys = {'relations': 'relation_id', 'world_rules': 'rule_id', 'arc_secrets': 'secret_id'}
+    diagnostics = []
+    for delta in edit.collection_edits:
+        name, key = delta.collection, keys[delta.collection]
+        current = candidate[name]
+        actual = subject_sha256(current)
+        if actual != delta.expected_collection_sha256:
+            diagnostics.append({'category': 'collection_expected_sha_stale', 'collection': name,
+                                'actual_collection_sha256': actual,
+                                'expected_collection_sha256': delta.expected_collection_sha256})
+        existing = {row[key] for row in current}
+        for index, operation in enumerate(delta.operations):
+            if isinstance(operation, (GlobalCollectionDelete, GlobalCollectionSplit)):
+                if operation.subject_id not in existing:
+                    diagnostics.append({'category': 'collection_' + operation.op + '_subject_missing',
+                                        'collection': name, 'operation_index': index,
+                                        'subject_id': operation.subject_id})
+            outputs = ([operation.item] if isinstance(operation, GlobalCollectionAdd)
+                       else operation.items if isinstance(operation, GlobalCollectionSplit) else [])
+            for item in outputs:
+                identity = getattr(item, key)
+                if identity in existing:
+                    diagnostics.append({'category': ('collection_add_subject_exists' if isinstance(operation, GlobalCollectionAdd)
+                                                     else 'collection_split_output_subject_exists'),
+                                        'collection': name, 'operation_index': index,
+                                        'subject_id': identity})
+    for name, key in keys.items():
+        existing = {row[key] for row in candidate[name]}
+        for delta in edit.collection_edits:
+            if delta.collection != name:
                 continue
-            apply_fields(secret_by_id[patch.secret_id], patch, patch.secret_id,
-                         skip={'secret_id'})
-
-    if edit.world_rules_replace is not None:
-        canon['world_rules'] = [row.model_dump(by_alias=True)
-                                for row in edit.world_rules_replace]
-        changed.append('canon.world_rules')
-    else:
-        for patch in edit.world_rules:
-            if patch.rule_id not in rule_by_id:
+            for operation in delta.operations:
+                if isinstance(operation, (GlobalCollectionDelete, GlobalCollectionSplit)):
+                    existing.discard(operation.subject_id)
+                additions = ([operation.item] if isinstance(operation, GlobalCollectionAdd)
+                             else operation.items if isinstance(operation, GlobalCollectionSplit) else [])
+                existing.update(getattr(row, key) for row in additions)
+        for patch in getattr(edit, name):
+            removed = {operation.subject_id for delta in edit.collection_edits
+                       if delta.collection == name for operation in delta.operations
+                       if isinstance(operation, (GlobalCollectionDelete, GlobalCollectionSplit))}
+            if getattr(patch, key) in removed:
+                diagnostics.append({'category': 'direct_collection_subject_conflict', 'collection': name,
+                                    'subject_id': getattr(patch, key)})
                 continue
-            apply_fields(rule_by_id[patch.rule_id], patch, patch.rule_id,
-                         skip={'rule_id'})
-
-    if edit.relations_replace is not None:
-        entities['relations'] = [row.model_dump(by_alias=True)
-                                 for row in edit.relations_replace]
-        changed.append('entities.relations')
-    else:
+            if getattr(patch, key) not in existing:
+                diagnostics.append({'category': 'missing_patch_subject', 'collection': name,
+                                    'subject_id': getattr(patch, key)})
+    if characters is not None:
+        # 引用有效性属于编辑输入预检，不能等 canonical WAL 已写后才报 HARD。
+        # 联合 Core 批次传预览人物登记，允许同一决定先新增人物再引用该身份。
+        registered = set(characters.get('characters') or {})
+        endpoints = {row['relation_id']: copy.deepcopy(row) for row in candidate['relations']}
+        if edit.relations_replace is not None:
+            endpoints = {row.relation_id: row.model_dump(mode='json') for row in edit.relations_replace}
+        for delta in edit.collection_edits:
+            if delta.collection != 'relations':
+                continue
+            for operation in delta.operations:
+                if isinstance(operation, (GlobalCollectionDelete, GlobalCollectionSplit)):
+                    endpoints.pop(operation.subject_id, None)
+                outputs = ([operation.item] if isinstance(operation, GlobalCollectionAdd)
+                           else operation.items if isinstance(operation, GlobalCollectionSplit) else [])
+                for row in outputs:
+                    endpoints[row.relation_id] = row.model_dump(mode='json')
         for patch in edit.relations:
-            if patch.relation_id not in relation_by_id:
-                continue
-            apply_fields(relation_by_id[patch.relation_id], patch, patch.relation_id,
-                         skip={'relation_id'})
-
-    for patch in edit.characters:
-        if patch.char_id not in characters:
-            continue
-        target = characters[patch.char_id]
-        apply_fields(target, patch, patch.char_id, skip={'char_id'})
-        if 'fate' in patch.model_fields_set and patch.fate is None:
-            target['fate_evidence'] = None
+            if patch.relation_id in endpoints:
+                endpoints[patch.relation_id].update(patch.model_dump(mode='json', exclude_unset=True))
+        for identity, relation in endpoints.items():
+            for field in ('subject_id', 'object_id'):
+                if relation[field] not in registered:
+                    diagnostics.append({'category': 'dangling_relation_endpoint', 'collection': 'relations',
+                                        'relation_id': identity, 'field': field, 'target_id': relation[field]})
+    if diagnostics:
+        raise GlobalEditCandidateRejected(diagnostics)
+    for delta in edit.collection_edits:
+        name, key = delta.collection, keys[delta.collection]
+        for operation in delta.operations:
+            if isinstance(operation, GlobalCollectionAdd):
+                candidate[name].append(operation.item.model_dump(mode='json', by_alias=True))
+            else:
+                position = next(index for index, row in enumerate(candidate[name])
+                                if row[key] == operation.subject_id)
+                replacement = ([row.model_dump(mode='json', by_alias=True) for row in operation.items]
+                               if isinstance(operation, GlobalCollectionSplit) else [])
+                candidate[name][position:position + 1] = replacement
+            changed.append(name + '.' + operation.op)
+    for name, key in keys.items():
+        replacement = getattr(edit, name + '_replace')
+        if replacement is not None:
+            candidate[name] = [row.model_dump(mode='json', by_alias=True) for row in replacement]
+            changed.append(name)
+        else:
+            by_id = {row[key]: row for row in candidate[name]}
+            for patch in getattr(edit, name):
+                value = patch.model_dump(mode='json', by_alias=True, exclude_unset=True)
+                identity = value.pop(key)
+                by_id[identity].update(value)
+                changed.extend(f'{name}.{identity}.{field}' for field in value)
     if edit.setting is not None:
-        dumped = edit.setting.model_dump(by_alias=True, exclude_unset=True)
-        canon.setdefault('setting', {}).update(dumped)
-        changed.extend(f'canon.setting.{key}' for key in dumped)
-    # 校验**应用后的完整候选**，这样“删了 secret 却留下 via_secret 引用”也会在写盘前出声。
-    bad_refs: list[dict[str, Any]] = []
-    bad_chapters: list[dict[str, Any]] = []
-
-    def chapter(path: str, value: Any) -> None:
-        if type(value) is not int or value not in ordinals:
-            bad_chapters.append({
-                'category': 'invalid_chapter_reference',
-                'path': path,
-                'value': repr(value),
-            })
-
-    resulting_secrets = canon.get('secrets') or []
-    secret_ids = {row.get('secret_id') for row in resulting_secrets
-                  if isinstance(row, dict)}
-    for relation in (entities.get('relations') or []):
-        rid = relation.get('relation_id')
-        for key in ('subject_id', 'object_id'):
-            if relation.get(key) not in characters:
-                bad_refs.append({
-                    'category': 'dangling_relation_endpoint',
-                    'relation_id': rid,
-                    'endpoint': key,
-                    'target_id': relation.get(key),
-                })
-        start = relation.get('valid_from_chapter')
-        chapter(f'{rid}.valid_from_chapter', start)
-        through = relation.get('valid_through_chapter')
-        if through is not None:
-            chapter(f'{rid}.valid_through_chapter', through)
-        if type(start) is int and type(through) is int and through < start:
-            bad_refs.append({
-                'category': 'invalid_relation_window',
-                'relation_id': rid,
-                'valid_from_chapter': start,
-                'valid_through_chapter': through,
-            })
-        visibility = relation.get('visibility') or {}
-        if visibility.get('kind') == 'public':
-            chapter(f'{rid}.visibility.from_chapter', visibility.get('from_chapter'))
-        elif visibility.get('kind') == 'via_secret':
-            if visibility.get('secret_id') not in secret_ids:
-                bad_refs.append({
-                    'category': 'dangling_secret_reference',
-                    'relation_id': rid,
-                    'target_id': visibility.get('secret_id'),
-                })
-
-    for secret in resulting_secrets:
-        sid = secret.get('secret_id')
-        setup = secret.get('setup') or {}
-        for value in (setup.get('chapters') or []):
-            chapter(f'{sid}.setup.chapters', value)
-        chapter(f'{sid}.first_reveal_chapter', secret.get('first_reveal_chapter'))
-        for event in (secret.get('knowledge_events') or []):
-            chapter(f'{sid}.knowledge_events.known_from_chapter',
-                    event.get('known_from_chapter'))
-            subject = event.get('subject') or {}
-            if (subject.get('kind') == 'character'
-                    and subject.get('char_id') not in characters):
-                bad_refs.append({
-                    'category': 'dangling_character_reference',
-                    'owner_kind': 'secret_knowledge_event',
-                    'owner_id': sid,
-                    'target_id': subject.get('char_id'),
-                })
-    for rule in (canon.get('world_rules') or []):
-        for version in (rule.get('versions') or []):
-            chapter(f'{rule.get("rule_id")}.versions.effective_from_chapter',
-                    version.get('effective_from_chapter'))
-    for cid, character in characters.items():
-        if ((character.get('fate') is None)
-                != (character.get('fate_evidence') is None)):
-            bad_refs.append({
-                'category': 'invalid_fate_evidence_pair',
-                'character_id': cid,
-            })
-        for index, address in enumerate(character.get('address') or []):
-            chapter(f'{cid}.address.{index}.from_chapter', address.get('from_chapter'))
-            by = address.get('by')
-            if (isinstance(by, str) and re.fullmatch(r'char_\d+', by)
-                    and by not in characters):
-                bad_refs.append({
-                    'category': 'dangling_character_reference',
-                    'owner_kind': 'character_address',
-                    'owner_id': cid,
-                    'index': index,
-                    'target_id': by,
-                })
-    for path, owner, field in iter_global_evidence_slots(candidate):
-        evidence = owner.get(field) or {}
-        chapter(f'{path}.{field}.chapter_ordinal', evidence.get('chapter_ordinal'))
-
-    if edit.source_blurb_replace is not None:
-        measured = checks.measure_opening_scope(candidate['source_blurb']['opening'], ordinals)
-        candidate_diagnostics.extend({'category': 'invalid_opening_scope', 'detail': error}
-                                     for error in measured.errors)
-    diagnostics = [
-        *candidate_diagnostics, *bad_refs, *bad_chapters,
-    ]
+        value = edit.setting.model_dump(mode='json', by_alias=True, exclude_unset=True)
+        candidate['setting'].update(value)
+        changed.extend('setting.' + key for key in value)
+    # 章号不能静默裁剪；这里返回可一次修复的聚合诊断。
+    def chapters(value: Any, path: str = ''):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                where = f'{path}.{key}'.strip('.')
+                if key in ('effective_from', 'effective_until', 'revealed_from', 'chapter_ordinal'):
+                    if child is not None and child not in ordinals:
+                        diagnostics.append({'category': 'invalid_chapter_reference', 'path': where})
+                elif key == 'setup_chapters':
+                    if not set(child) <= ordinals:
+                        diagnostics.append({'category': 'invalid_chapter_reference', 'path': where})
+                elif key != '_provenance':
+                    chapters(child, where)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                chapters(child, f'{path}.{index}')
+    chapters(candidate)
     if diagnostics:
         raise GlobalEditCandidateRejected(diagnostics)
     data.clear()
@@ -5134,7 +4739,7 @@ def _build_global_edit_candidate(
     raw: dict[str, Any],
     edit: GlobalEdit,
     main_text: list[dict[str, Any]],
-    *, source_hook: str | None = None,
+    *, characters: dict[str, Any] | None = None,
 ) -> _GlobalEditCandidate:
     """构造并验证完整业务候选；纯内存且是 apply/preflight 的唯一判据。"""
     previous_business = copy.deepcopy(raw)
@@ -5144,7 +4749,7 @@ def _build_global_edit_candidate(
         int(section.get('chapter_ordinal') or 0) for section in main_text
     }
     try:
-        changed = _apply_secret_patches(data, edit, ordinals)
+        changed = _apply_secret_patches(data, edit, ordinals, characters=characters)
     except GlobalEditCandidateRejected:
         raise
     except TerminalState as exc:
@@ -5154,8 +4759,8 @@ def _build_global_edit_candidate(
             'detail': str(exc),
         }]) from exc
     try:
-        data, accounting = normalize_global(data, main_text, source_hook=source_hook)
-    except TerminalState as exc:
+        data, accounting = normalize_global(data, main_text)
+    except (TerminalState, ValueError) as exc:
         # normalize 是纯内存 producer 判据。它明确给出的 TerminalState 属于
         # 候选业务拒绝；OSError/结构性异常等其他失败仍原样上抛为 unknown。
         raise GlobalEditCandidateRejected([{
@@ -5171,13 +4776,19 @@ def _build_global_edit_candidate(
                 '写成一轮“已修复”并重新触发 reviewer'),
         }])
 
+    from contracts.schema.knowledge import KnowledgeCore
     # 这里只借前稿 provenance 验证完整业务形状，不声称新动作已经 canonical；
     # 真正 inputs/by 仍只由 run_apply_edit 在 WAL 之后重写。
     provisional_provenance = previous.provenance.model_dump(
         mode='json', by_alias=True)
     provisional_provenance.update(accounting)
     provisional_provenance['gates_skipped'] = None
+    provisional_provenance['core_edit'] = None
     try:
+        current_ids = KnowledgeCore.model_validate(data).identity_keys()
+        accounting['retired_global_ids'] = sorted(
+            set(previous.provenance.retired_global_ids) | (previous.identity_keys() - current_ids))
+        provisional_provenance.update(accounting)
         GlobalGrounding.model_validate({
             **data, '_provenance': provisional_provenance})
     except ValidationError as exc:
@@ -5214,16 +4825,16 @@ def preflight_global_edit(ctx: RunContext, edit: GlobalEdit) -> None:
         if live_commit.state == 'prepared':
             raise ProvenanceRefused(
                 'reviewed-edit prepared commit 尚未补完；拒绝预检新的 apply-edit')
-    previous_review = store.read_own(
-        GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
     if edit.post_edit_review is not None:
+        previous_review = store.read_own(
+            GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
         previous = grounding_io.read_own(store, GLOBAL_REL, require_current=True, replaced_input_keys=(GLOBAL_EDIT,))[0]
         raw = previous.model_dump(mode='json', by_alias=True)
-        require_current_review(raw, previous_review)
+        require_current_review(raw, previous_review, characters=_read_characters(store))
     else:
         previous, raw, _source_rel = _global_source(
             store, replaced_edit_rel=GLOBAL_EDIT)
-    _build_global_edit_candidate(previous, raw, edit, main_text, source_hook=_read_source_hook(store))
+    _build_global_edit_candidate(previous, raw, edit, main_text, characters=_read_characters(store))
 
 
 class _PostEditReviewRejected(TerminalState):
@@ -5237,11 +4848,12 @@ class _PostEditReviewRejected(TerminalState):
 
 def _review_after_global_edit(
     artifact: GlobalGrounding,
-    previous: GlobalReview,
+    previous: GlobalReview | None,
     edit: GlobalEdit,
     chapter_ordinals: list[int],
     *,
     expected_workpack_sha256: str | None = None,
+    characters: dict[str, Any] | None = None,
 ) -> GlobalReview | None:
     """原子合并本轮 edit、新打开项自检与仍存活旧项的 hash-bound 复判。
 
@@ -5252,7 +4864,7 @@ def _review_after_global_edit(
     attestation = edit.post_edit_review
     if attestation is None:
         return None
-    if previous.source_sha256 != attestation.expected_source_sha256:
+    if previous is None or previous.source_sha256 != attestation.expected_source_sha256:
         raise _PostEditReviewRejected(
             'source_changed',
             'post_edit_review 绑定的 Stage2 source 已变化；拒绝把旧返工证明应用到新主体')
@@ -5286,7 +4898,7 @@ def _review_after_global_edit(
                 'post_edit_review.review_scope 未精确覆盖修前全部未闭合 blocking 项')
 
     payload = artifact.model_dump(mode='json', by_alias=True)
-    updated = build_review(payload, previous)
+    updated = build_review(payload, previous, characters=characters)
     previous_identities = {
         (item.item_id, item.kind, item.subject_path, item.subject_sha256)
         for item in previous.items
@@ -5354,7 +4966,7 @@ def _review_after_global_edit(
             generation_disposition=disposition,
         )
 
-    safety = generation_safety(payload, updated)
+    safety = generation_safety(payload, updated, characters=characters)
     if not safety.safe:
         raise _PostEditReviewRejected(
             'blocking_remaining',
@@ -5369,29 +4981,14 @@ def _review_after_global_edit(
 def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGrounding, CheckReport]:
     """`--apply-edit`：吃 typed 人工订正，走与生成稿**同一道**归一、判定与闸门。0 成本。
 
-    【它补的是什么】既能逐格订正已有 secret/world-rule/枚举，也能完整替换 secret、
-    world-rule、冲突阶段和单个人物的 address 集合，从而表达新增、删除、复合时间线拆分
-    与全书冲突分段重画；所有字段仍由同一严格 schema 收口，来源账明确记录这是人工
-    partial rewrite。
+    普通 typed 编辑以最新 INVALID（若有）为底座，允许首抽尚无正式 Global/Review。
+    带 post_edit_review 的 Commander 编辑仍须绑定正式底座与已有审阅，不能把无审阅的
+    问题稿当作已审来源。全部候选先走统一证据编译与 HARD；通过后以 WAL 一起提交
+    Global 和审阅。普通编辑只生成或刷新 pending 义务，不授予语义接受。
 
-    四条纪律（与 stage4/6/7 的现役人工路同款）：
-      · **同一归一落点**（`normalize_global`）——人改完的埋点章照样过 `_prune_setups`，
-        人工稿与生成稿不许有两套归一；
-      · **同一判定落点**（`_judge_candidate`）——没有免检写口；
-        HARD ⇒ `.INVALID` **不覆盖正式全书底座**；
-      · **轮次归档**——旧轮进 `_rounds/`，覆盖前有处可回；
-      · **来源账不伪造**——`rewrite_provenance(prev, by='--apply-edit')`：
-        继承 `prompts`/`model`/`adopted_models` 一个字不动，
-        换成本次真读到的 `inputs`，
-        标 `partial_rewrite`（这一份此后是混版的：未编辑字段出自当初那次付费产出，
-        被改的 typed facts 是**现在**由人给的）。
-
-    ⚠ **下游 stale 是由构造保证的，不额外做一件事**：这一份的字节变了 ⇒
-    `stage2/chapter_blueprints.json` / stage4 及更下游记的 `inputs[].file` 全部失配；
-    按字段投影算的 `consumed` 也跟着失配（其中 `R-6.3` 的逐章剧透闸门直接消费
-    secrets；规则与 address 也各有下游消费投影）。
-
-    ⚠ **无前稿（正式与 `.INVALID` 皆无）⇒ 显式终态**：这是修订路，不是生成路。
+    provenance 保留原 model/prompts/adopted_models 和共享首抽身份，更新实际输入并标明
+    partial_rewrite。人物由独立 owner 持有；下游仅由实际消费投影判断失效。
+    正式与 INVALID 都缺失时显式终止，这条修订路不购买或猜测新底座。
     """
     store = ArtifactStore(ctx)
     if ctx.node != 'stage2.global':
@@ -5435,10 +5032,11 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
             if live_commit.state == 'prepared':
                 raise ProvenanceRefused(
                     'reviewed-edit prepared commit 尚未补完；拒绝进入新的 apply-edit')
-        previous_review = store.read_own(
-            GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
+        previous_review = None
         reviewed_formal_sha256: str | None = None
         if submitted_edit.post_edit_review is not None:
+            previous_review = store.read_own(
+                GlobalReview, GLOBAL_REVIEW_REL, require_current=True)[0]
             # Commander 的纠正轮可能是在上一份 reviewed edit 被 HARD 闸门
             # 拒绝、并留下 live INVALID 后到达。证明绑定的是修前正式 Global
             # 与它的 current review；纠正稿必须重新应用到该正式底座，不能在
@@ -5448,10 +5046,12 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
             # 可与同一次 read 得到的 raw SHA 共同关闭 TOCTOU。
             raw = previous.model_dump(mode='json', by_alias=True)
             require_current_review(
-                previous.model_dump(mode='json', by_alias=True), previous_review)
+                previous.model_dump(mode='json', by_alias=True), previous_review, characters=_read_characters(store))
         else:
             previous, raw, source_rel = _global_source(
                 store, replaced_edit_rel=GLOBAL_EDIT)
+            if store.exists(GLOBAL_REVIEW_REL):
+                previous_review = store.read_own(GlobalReview, GLOBAL_REVIEW_REL)[0]
             reviewed_formal_sha256 = store.full_sha256_or_none(source_rel)
             if reviewed_formal_sha256 is None:  # pragma: no cover —— source 已读
                 raise UpstreamMissing(f'{source_rel} 不在盘上')
@@ -5462,7 +5062,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
                 ctx, scope='blocking',
                 replaced_input_keys=(GLOBAL_EDIT,))['workpack_sha256'])
         prepared_candidate = _build_global_edit_candidate(
-            previous, raw, submitted_edit, main_text, source_hook=_read_source_hook(store))
+            previous, raw, submitted_edit, main_text, characters=_read_characters(store))
         data = prepared_candidate.data
         accounting = prepared_candidate.accounting
         changed = prepared_candidate.changed
@@ -5500,13 +5100,14 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
             **rewritten.model_dump(),
             **accounting,
             'gates_skipped': None,
+                'core_edit': None,
         })
         try:
             artifact = GlobalGrounding.model_validate({
                 **data, '_provenance': provenance})
         except ValidationError as exc:
             failure = TerminalState(
-                '人工 GlobalEdit 应用后的完整候选不符合当前 KnowledgeGrounding v6；'
+                '人工 GlobalEdit 应用后的完整候选不符合当前 KnowledgeGrounding v7；'
                 '字段位置可从异常链诊断，恢复事实不会持久化 input_value/正文')
             if reviewed_edit:
                 locations = sorted({
@@ -5524,7 +5125,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
                     candidate_business_sha256=_canonical_sha256(data),
                     reason_code='candidate_schema_invalid',
                     reason_summary=(
-                        'GlobalEdit 候选不符合 KnowledgeGrounding v6；fields='
+                        'GlobalEdit 候选不符合 KnowledgeGrounding v7；fields='
                         + ','.join(locations[:12]))[:512],
                 )
                 _retire_global_edit_input_commit_after_failure(
@@ -5540,14 +5141,14 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
                     candidate_business_sha256=_canonical_sha256(data),
                     reason_code='candidate_schema_invalid',
                     reason_summary=(
-                        '普通 GlobalEdit 候选不符合 KnowledgeGrounding v6'),
+                        '普通 GlobalEdit 候选不符合 KnowledgeGrounding v7'),
                 )
                 _retire_nonreviewed_global_edit_input_commit(
                     store, canonical_edit_sha256=canonical_edit_sha256)
             raise failure from exc
 
         candidate = artifact.model_dump(by_alias=True)
-        outcomes = _judge_candidate(candidate, None, main_text, source_hook=_read_source_hook(store))
+        outcomes = _judge_candidate(candidate, None, main_text, characters=_read_characters(store))
         hits = _hard_hits(outcomes, ignore={'upstream_missing'})
         if hits:
             failure_rels = (
@@ -5624,7 +5225,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
         try:
             reviewed = _review_after_global_edit(
                 artifact, previous_review, submitted_edit, chapter_ordinals,
-                expected_workpack_sha256=reviewed_workpack_sha256)
+                expected_workpack_sha256=reviewed_workpack_sha256, characters=_read_characters(store))
         except TerminalState as exc:
             if reviewed_edit:
                 if isinstance(exc, _PostEditReviewRejected):
@@ -5656,7 +5257,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
         attestation = submitted_edit.post_edit_review
         target_review = (
             reviewed if reviewed is not None
-            else build_review(candidate, previous_review)
+            else build_review(candidate, previous_review, characters=_read_characters(store))
         )
         journal = _prepare_reviewed_edit_commit(
             store,
@@ -5680,3 +5281,98 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
         return artifact, _report(
             ctx, store, both, both.judge(),
             judged_rel=GLOBAL_REL, invalid_rel=_GLOBAL_INVALID)
+
+def _characters_business_sha256(registry: CharacterRegistry) -> str:
+    raw = registry.model_dump(mode='json', by_alias=True)
+    raw.pop('_provenance')
+    return _canonical_sha256(raw)
+
+
+def _require_same_core_main(store: ArtifactStore, previous: KnowledgeGrounding) -> list[dict[str, Any]]:
+    """免费批次只允许人物依赖重绑，不能顺带追认已改变的正文。"""
+    main = store.read(MainText, MAIN_TEXT).model_dump(mode='json', by_alias=True)
+    old, current = previous.provenance.inputs.get(MAIN_TEXT), store.ctx.edges.get(MAIN_TEXT)
+    if old is None or current is None or old.consumed is None or old.consumed != current.consumed:
+        raise ProvenanceRefused('Global core 修订缺少同一 MainText 的实际输入证明')
+    return main
+
+
+def preflight_core_edit(
+    ctx: RunContext, edit: GlobalEdit | None, *, registry: CharacterRegistry,
+    expected_global_sha256: str,
+):
+    """跨 owner 批次先冻结业务目标；未来人物未落盘时不伪造其 InputEdge。"""
+    from contracts.schema.knowledge import KnowledgeCore
+    if ctx.node != 'stage2.global':
+        raise ProvenanceRefused('Global core 预检只能由所属 producer 执行')
+    store = ArtifactStore(ctx)
+    previous, sha = store.read_own_with_sha256(KnowledgeGrounding, GLOBAL_REL)
+    if sha != expected_global_sha256:
+        raise ProvenanceRefused('Global core 预检基线已改变')
+    main = _require_same_core_main(store, previous)
+    raw = previous.model_dump(mode='json', by_alias=True)
+    if edit is None:
+        data = {key: value for key, value in raw.items() if key != '_provenance'}
+    else:
+        if edit.post_edit_review is not None:
+            raise ProvenanceRefused('跨 owner 批次不把旧 GlobalEdit attestation 当作新主体接受')
+        data = _build_global_edit_candidate(
+            previous, raw, edit, main, characters=registry.model_dump(mode='json', by_alias=True)).data
+    data['characters_reference_sha256'] = grounding_io.knowledge_reference_sha256(registry)
+    core = KnowledgeCore.model_validate(data)
+    outcomes = checks.check_global(core.model_dump(mode='json'), main,
+                                    characters=registry.model_dump(mode='json', by_alias=True))
+    hits = _hard_hits(outcomes)
+    if hits:
+        raise GlobalEditCandidateRejected([{'category': 'core_hard_gate', 'rule': rule} for rule in hits])
+    if store.full_sha256_or_none(GLOBAL_REL) != expected_global_sha256:
+        raise ProvenanceRefused('Global core 预检期间基线漂移')
+    return core
+
+
+def commit_core_edit(
+    ctx: RunContext, business_candidate, *, expected_global_sha256: str,
+    expected_characters_business_sha256: str, actor: str, reason: str, request_sha256: str,
+) -> GlobalGrounding:
+    """外层批次 WAL 的 Global 落点：CAS 或同请求精确幂等，真实输入落稳后才生成来源账。"""
+    from contracts.schema.knowledge import GlobalCoreEditReceipt, KnowledgeCore
+    from novel.llm import stage2_global_runs
+    core = KnowledgeCore.model_validate(business_candidate.model_dump(mode='json')
+        if isinstance(business_candidate, BaseModel) else business_candidate)
+    receipt = GlobalCoreEditReceipt(actor=actor, reason=reason, source_sha256=expected_global_sha256,
+        request_sha256=request_sha256, characters_business_sha256=expected_characters_business_sha256)
+    store = ArtifactStore(ctx)
+    with stage2_global_runs.mutation_ownership(ctx):
+        registry = grounding_io.read_registry(store)
+        if _characters_business_sha256(registry) != expected_characters_business_sha256:
+            raise ProvenanceRefused('Global core 提交的人物业务目标与批次冻结候选不同')
+        if core.characters_reference_sha256 != grounding_io.knowledge_reference_sha256(registry):
+            raise ProvenanceRefused('Global core 目标没有绑定当前真实人物投影')
+        previous, current_sha = store.read_own_with_sha256(KnowledgeGrounding, GLOBAL_REL)
+        main = _require_same_core_main(store, previous)
+        from contracts.artifacts import STAGE2_CHARACTERS
+        frozen = {rel: store.full_sha256_or_none(rel) for rel in (MAIN_TEXT, STAGE2_CHARACTERS, GLOBAL_REL)}
+        hits = _hard_hits(checks.check_global(core.model_dump(mode='json'), main,
+            characters=registry.model_dump(mode='json', by_alias=True)))
+        if hits:
+            raise ProvenanceRefused(f'Global core 冻结候选复验仍有 HARD：{hits}')
+        if current_sha != expected_global_sha256:
+            previous_core = KnowledgeCore.model_validate({key: value for key, value in
+                previous.model_dump(mode='json', by_alias=True).items() if key != '_provenance'})
+            if previous.provenance.core_edit != receipt or previous_core != core:
+                raise ProvenanceRefused('Global core 既非原基线，也不是同请求已提交目标')
+            _refresh_current_global_review(store, previous)
+            return previous
+        provenance = ctx.rewrite_provenance(previous.provenance, by='--apply-edit')
+        provenance = provenance.model_copy(update={'gates_skipped': None, 'core_edit': receipt,
+            'evidence_locator_failures': [], 'retired_global_ids': sorted(
+                set(previous.provenance.retired_global_ids) | (previous.identity_keys() - core.identity_keys()))})
+        target = GlobalGrounding.model_validate({**core.model_dump(mode='json'), '_provenance': provenance})
+        if frozen != {rel: store.full_sha256_or_none(rel) for rel in frozen}:
+            raise ProvenanceRefused('Global core 提交前真实输入漂移')
+        _write_formal(store, GLOBAL_REL, target)
+        landed = store.read_own(KnowledgeGrounding, GLOBAL_REL, require_current=True)[0]
+        if landed != target:
+            raise ProvenanceRefused('Global core 正式写回不等于批次目标')
+        _refresh_current_global_review(store, landed)
+        return landed

@@ -77,8 +77,9 @@ class AgentDeliveryUnavailable(LlmFailed):
 # executor 分别使用 per-chapter / per-purpose / per-node；policy 也同时绑定唯一 node，
 # 不能借同名协议把一个节点的 checkpoint 接到另一个节点。
 _RECOVERY_SESSION_ISOLATION = {
-    'stage2-characters-v1': 'per-node',
-    'stage2-knowledge-v2': 'per-node',
+    'stage2-analyze-v1': 'per-node',
+    'stage2-characters-v2': 'per-node',
+    'stage2-knowledge-v3': 'per-node',
     'stage2-blueprint-v1': 'per-purpose-chapter',
     'stage4-design-v1': 'per-node',
     'stage4-design-v2': 'per-purpose',
@@ -90,8 +91,9 @@ _RECOVERY_SESSION_ISOLATION = {
     'stage7-rename-v1': 'per-node',
 }
 _RECOVERY_POLICY_NODE = {
-    'stage2-characters-v1': 'stage2.characters',
-    'stage2-knowledge-v2': 'stage2.global',
+    'stage2-analyze-v1': 'stage2.analyze',
+    'stage2-characters-v2': 'stage2.characters',
+    'stage2-knowledge-v3': 'stage2.global',
     'stage2-blueprint-v1': 'stage2.blueprint',
     'stage4-design-v1': 'stage4.design',
     'stage4-design-v2': 'stage4.design',
@@ -1809,6 +1811,11 @@ class SessionAgentClient:
             provider_session_id=turn.session_id, request_fingerprint=expected_fingerprint)
         self.ctx.ledger.claim_work_unit_attempts(budget, reservation.turn_id, purpose=purpose)
         prior_links = seed.get('prior_attempt_links')
+        if isinstance(prior_links, list) and prior_links and all(isinstance(row, dict) for row in prior_links):
+            self.ctx.ledger.claim_prior_attempts(
+                [str(row.get('attempt_id')) for row in prior_links], sid=self.ctx.sid,
+                node=self.ctx.node, purpose=purpose,
+                request_fingerprints=[str(row.get('request_fingerprint')) for row in prior_links])
         if not isinstance(prior_links, list) or any(
             not isinstance(row, dict)
             or row != self.ctx.ledger.request_identity_for_attempt(str(row.get('attempt_id')))
@@ -1867,7 +1874,48 @@ class SessionAgentClient:
             recovered = budget.pending_recovery(request_sha)
             if recovered is None:
                 raise ProvenanceRefused('原回答已补账但恢复证明仍缺失')
-        reservation, evidence = recovered
+        return self._restore_saved_response(*recovered, budget=budget, purpose=purpose,
+            system=system, user=user, max_tokens=max_tokens, recovery_policy=recovery_policy)
+
+    def recover_saved_response(
+        self, system: str, user: str, *, model_cls: type[BaseModel], purpose: str,
+        max_tokens: int, recovery_policy: str,
+    ) -> tuple[AgentTurn, str] | None:
+        """显式零 wire 回取原 run 的最后完整响应，包括已拒绝的原 stdout。
+
+        仅恢复运输 custody；不声明 JSON 合法、不增加内容轮、不启动或探测 driver。
+        缺失尾账沿原 prepared receipt 补齐；修复后的候选由 producer 的独立封存来源负责。
+        """
+        if self.ctx.paid or self.driver is not None or self._started:
+            raise ProvenanceRefused('原响应恢复只接受免费且无 driver 的新 client')
+        schema = agent_json_schema(model_cls)
+        identity = self._identity(system, user, schema, purpose=purpose, max_tokens=max_tokens)
+        budget = self._bind_work_unit(purpose)
+        last = budget.latest_turn()
+        if last is None or last.response_sha256 is None:
+            return None
+        request_payload = budget.request_payload(last.turn_id)
+        if (last.run_id != self.ctx.run_id
+                or request_payload.get('kind') != 'executor-content-request-v1'
+                or request_payload.get('identity') != identity
+                or request_payload.get('output_schema') != schema):
+            raise ProvenanceRefused('最后原响应不属于当前原 run/request/schema，不能回退挑旧回答')
+        request = self._agent_request(prompt=request_payload['prompt'],
+            system=request_payload['system'], schema=schema)
+        request_sha = _canonical_sha256({'identity': identity,
+            'stdin_sha256': _sha256_bytes(request.stdin_bytes())})
+        if last.request_sha256 != request_sha:
+            raise ProvenanceRefused('原始请求包与工作单元请求摘要漂移')
+        reservation = work_units.ContentReservation(budget.unit_id, last.turn_id, last.ordinal)
+        if last.recovery_sha256 is None:
+            self._reconcile_content_receipt(budget, reservation, budget.response_payload(last.turn_id),
+                request=request, identity=identity, purpose=purpose)
+        evidence = budget.recovery_proof(last.turn_id)
+        return self._restore_saved_response(reservation, evidence, budget=budget, purpose=purpose,
+            system=system, user=user, max_tokens=max_tokens, recovery_policy=recovery_policy)
+
+    def _restore_saved_response(self, reservation, evidence, *, budget, purpose,
+                                system, user, max_tokens, recovery_policy):
         if evidence.get('kind') != 'executor-response-custody-v1':
             raise ProvenanceRefused('工作单元回答不属于当前 Executor 运输契约')
         acceptance = evidence.get('acceptance')
@@ -1879,6 +1927,10 @@ class SessionAgentClient:
             raise ProvenanceRefused('工作单元回答缺成本请求联结')
         self.ctx.ledger.claim_work_unit_attempts(
             budget, reservation.turn_id, purpose=purpose)
+        self.ctx.ledger.claim_prior_attempts(
+            [str(row.get('attempt_id')) for row in links], sid=self.ctx.sid,
+            node=self.ctx.node, purpose=purpose,
+            request_fingerprints=[str(row.get('request_fingerprint')) for row in links])
         policy = recovery_policy or next(
             name for name, node in _RECOVERY_POLICY_NODE.items() if node == self.ctx.node)
         self.restore_checkpoint_acceptance(

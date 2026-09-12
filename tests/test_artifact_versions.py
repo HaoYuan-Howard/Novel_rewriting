@@ -65,6 +65,22 @@ def test_schema_model_map_is_derived_from_the_current_registry():
 #: 「盘上的旧字节从此读不进来」，而本仓**没有迁移机制** ⇒ 每一次都必须同批回答
 #: 「存量产物由谁重建」。答不出来的破坏不许落。
 _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
+    'stage2/characters.json': (
+        2, '去除逐次 address；唯一 aliases/identity_revealed_from、首次身份与共享证据表，正式 ID 由代码分配',
+        '新根 stage2.analyze 联合首抽或 stage2.characters 独立重建；旧人物与旧审批不自动迁移',
+    ),
+    'stage2/characters_edit.json': (
+        2, '编辑人物新契约与共享证据引用；原 SHA 及稳定人物 ID 绑定',
+        '人物 owner 免费重发编辑模板，人工依据原文填写当前形状，不改旧版本号追认',
+    ),
+    'stage2/blueprint_character_projection.json': (
+        2, '去除称呼 occurrence，投影独立登记与唯一身份映射',
+        'stage2.characters 免费 --revalidate 按当前人物重建，旧产物先完成 v2 人物生产',
+    ),
+    'stage2/global_edit_input_commit.json': (
+        2, '冻结 v6 Core sparse 编辑输入及原问题；退役状态/知情/源钩子字段',
+        '旧 owner 在旧代码补尾；当前 v6 typed 编辑由 Global 免费生成新的输入提交记录',
+    ),
     'stage1/main_text.json': (
         3,
         '两次破坏。v2（2026-08-22）：`section_id` 删除，`source_chapter_label: str` '
@@ -90,7 +106,7 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '同 `stage1/main_text.json`：`stage1.partition` 免费重跑',
     ),
     'stage2/global_grounding.json': (
-        6,
+        7,
         '两次破坏。v2（2026-08-23）secret 时间线三刀：① `setup_chapters: list[int]` 换成 `setup` '
         '判别联合（`{"kind":"cold"}` / `{"kind":"foreshadowed","chapters":[…]}`）'
         '——v1 的 `[]` 同时表示「声明冷揭示」与「模型压根没想过」，而这一格是两道'
@@ -106,40 +122,41 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '④ `valid_to_chapter` 改名 `valid_through_chapter`，把原本即包含式的端点语义写进字段名。'
         'v4（2026-08-26）删除 SourceSpan.normalized/recovery、secret group_id/确认事件，'
         '把唯一消费的首次揭示收成 first_reveal_chapter 标量，并删除 arc dimension/change_type。'
-        'v5 删除文学 arc，新增源文案事实及显式开篇范围，正式读取 HookCopy；v6 静态人物拆至独立 CharacterRegistry，只保存必要知识与人物引用',
+        'v5 删除文学 arc，新增源文案事实及显式开篇范围，正式读取 HookCopy；v6 静态人物拆至独立 CharacterRegistry；'
+        'v7 仅四类长期事实、独立共享证据表与 effective/revealed 双时间轴，删除动态状态、知识事件和源文案',
         '`stage2.global` 整跑（**付费**）；`.INVALID` 与 `_rounds/` 一律作废，'
         'v1/v2 都不手补字段冒充当前产地。重建后 review 按 claim+evidence 新 hash 重新 pending；'
         '这是形状破坏的真实人工成本，不能靠迁移伪装成旧决定仍有效。',
     ),
     'stage2/global_review.json': (
-        2,
-        '源文案与开篇范围取代文学 arc 审阅；新增 resolution_required，未知提案不能直接 PASS',
+        3,
+        '统一独立人物与四类长期事实审阅；删除源文案和场景事件义务，保留未解决问题',
         '`stage2.global --renormalize` 从当前 Global 免费重建审阅，新增或变化主体重新 pending；'
         '旧 Global 必须先由 producer 付费重建，不把旧决定迁移成新事实的结论',
     ),
     'stage2/global_review_decisions.json': (
-        2,
+        3,
         '2026-08-28：新增 hash-bound `blocking_scope`，允许 `decisions[]` 为空并只承载逐项'
         '例外；服务端把 scope 默认决定展开回完整 blocking item 面。旧 v1 只能表达逐项决定，'
-        '也没有正文章全集与实际 workpack SHA-256 阅读声明',
-        '`stage2.global --emit-review-template` 免费重发 v2 模板；人工核对 scope、正文章全集与'
+        '也没有正文章全集与实际 workpack SHA-256 阅读声明；v3 切换独立人物/四类 Core 主体',
+        '`stage2.global --emit-review-template` 免费重发 v3 模板；人工核对 scope、正文章全集与'
         '逐项例外后重新提交。旧 v1 文件原样保留为历史输入，不改版本号冒充新阅读声明',
     ),
     'stage2/global_edit.json': (
-        5,
+        6,
         '2026-08-24：secret patch/replacement 从 `character_known_by` 换成带 locator 的 '
         '`knowledge_events`，并新增 relation visibility、setting、fate、arc 与全部自由事实证据的 '
         'typed patch/replacement；旧 v1 决策文件不能表达知情时点或证据',
         'v3（2026-08-26）随 GlobalGrounding v4 删除同批冗余字段；v4 删除 arc 修改协议，'
         '新增带 locator 的 source_blurb_replace；v5 删除静态人物写权限，仅保留必要状态、知识与源文案订正。'
-        '它是人产决策集，不由模型重建：人工用 --emit-edit-template 免费取得当前 `GlobalEdit` v5 模板并重写书内 JSON。'
+        'v6 仅编辑四类Core与共享证据引用。它是人产决策集，不由模型重建：人工用 --emit-edit-template 免费取得当前 v6 模板并重写书内 JSON。'
         '不根据旧 known_by 猜 known_from_chapter，不为旧 claim 伪造 locator；盘上 v1 字节原样保留'
         '只能作为历史输入，当前运行时关闭式拒读',
     ),
     'stage2/global_edit_commit.json': (
-        2,
-        '人物与知识分离后，免费知识写回回执只冻结 KnowledgeGrounding 当前主体与人物引用；不再携静态人物修改',
-        '旧 v1 回执保留历史字节；由 stage2.global --apply-edit 按当前 v5 输入与来源重新生成 v2，不迁移旧回执',
+        3,
+        '免费知识写回回执冻结 Global v7 当前主体与人物引用、Core v3审阅及当前投影',
+        '旧回执与原代码配对恢复；新 v6 typed 输入由 stage2.global --apply-edit 免费生成 v3 回执，不迁移旧提交',
     ),
     'stage2/chapter_blueprints.json': (
         9,

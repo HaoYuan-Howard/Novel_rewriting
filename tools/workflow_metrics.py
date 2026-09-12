@@ -52,7 +52,8 @@ sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from contracts.artifacts import (                                      # noqa: E402
-    ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_CHARACTERS,
+    ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE1_MAIN_TEXT, STAGE2_ANALYZE_RECEIPT,
+    STAGE2_ANALYZE_RECOVERY, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_CHARACTERS,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
 )
 from contracts.invariants import (                                # noqa: E402
@@ -73,12 +74,11 @@ from novel.quality.global_review import (                          # noqa: E402
     generation_safety, review_group_key,
 )
 from novel.stages.stage4.measure import structure_metrics_of      # noqa: E402
-from novel.stages.stage2.grounding import compose                  # noqa: E402
 
 #: 长串阈值。短串大多是 id 与 ref（`f01_02` / `b03_01`），它们重复本来就是设计目标；
 #: 「重复业务语义」说的是被内联复制的自然语言。两档一起报，不合成一个数。
 LONG_STRING_MIN_CHARS = 16
-WORKFLOW_REPORT_SCHEMA = 'novel-workflow-metrics-v3'
+WORKFLOW_REPORT_SCHEMA = 'novel-workflow-metrics-v4'
 
 #: 一次跑的观察分组：CLI 次数按节点收敛，节点名来自信标本身，不在这里手抄一张表。
 _CODE_DIRTY = '-dirty'
@@ -1163,6 +1163,387 @@ def _stage2_role_lifecycle(
     return result
 
 
+def _core_partition(payload: Any) -> tuple[Any, dict[str, Any], dict[str, Any]]:
+    """体积口径：正文主体、证据字段及审计字段各自紧凑 JSON 字符数。
+
+    证据/审计用字段路径映射单列，三者不是原文件字节的可加分区。证据引用随证据
+    单列；事实引用仍属 core。证据与 provenance 的变化不参与语义主体干预计数。
+    """
+    evidence, audit = {}, {}
+
+    def visit(value, path):
+        if isinstance(value, list):
+            return [visit(row, f'{path}/{i}') for i, row in enumerate(value)]
+        if not isinstance(value, dict):
+            return value
+        result = {}
+        for key, item in value.items():
+            field = f'{path}/{key}'
+            if key == 'evidence_anchors' or key == 'evidence_refs' or key.endswith('_evidence_refs'):
+                evidence[field] = item
+            elif key in {'_provenance', '_schema_version', 'characters_reference_sha256'}:
+                audit[field] = item
+            else:
+                result[key] = visit(item, field)
+        return result
+
+    core = visit(payload, '')
+    return core, evidence, audit
+
+
+def _core_size(payload: Any, main_text_chars: int | None) -> dict[str, Any]:
+    core, evidence, audit = _core_partition(payload)
+    def chars(value):
+        return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')))
+    size = chars(core)
+    return {'state': 'ok', 'core_json_chars': size,
+            'core_to_main_text_ratio': _rate(size, main_text_chars or 0),
+            'evidence_json_chars': chars(evidence), 'audit_json_chars': chars(audit)}
+
+
+def _draft_subject_counts(payload: dict[str, Any]) -> dict[str, int]:
+    global_draft = payload['global']
+    return {'characters': len(payload['characters']),
+            'setting': sum(global_draft['setting'][key] is not None for key in ('era', 'social_context')),
+            'world_rule_versions': sum(len(rule['versions']) for rule in global_draft['world_rules']),
+            'relations': len(global_draft['relations']), 'arc_secrets': len(global_draft['arc_secrets'])}
+
+
+def _core_subjects(payload: dict[str, Any], owner: str) -> dict[str, Any]:
+    """只用实际稳定 ID 比较主体；不从名字或正文相似度编造拆分、合并谱系。"""
+    core = _core_partition(payload)[0]
+    if owner == 'characters':
+        return {key: {**value, **({'aliases': sorted(value['aliases'], key=lambda row: row['surface'])}
+                                 if 'aliases' in value else {})}
+                for key, value in core['characters'].items()}
+    subjects = {f'setting:{key}': value for key, value in core['setting'].items() if value is not None}
+    for rule in core['world_rules']:
+        for version in rule['versions']:
+            subjects[f"rule:{rule['rule_id']}:{version['version_id']}"] = {'kind': rule['kind'], **version}
+    subjects.update({f"relation:{row['relation_id']}": row for row in core['relations']})
+    subjects.update({f"secret:{row['secret_id']}": {**row, 'setup_chapters': sorted(row['setup_chapters'])}
+                     for row in core['arc_secrets']})
+    return subjects
+
+
+def _core_subject_category(subject: str, owner: str) -> str:
+    if owner == 'characters':
+        return 'characters'
+    return {'setting': 'setting', 'rule': 'world_rule_versions',
+            'relation': 'relations', 'secret': 'arc_secrets'}[subject.split(':', 1)[0]]
+
+
+def _subject_delta(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    retained = old.keys() & new.keys()
+    changed = sum(old[key] != new[key] for key in retained)
+    return {'state': 'ok', 'initial_subjects': len(old), 'current_subjects': len(new),
+            'retained_subjects': len(retained), 'removed_subjects': len(old.keys() - new.keys()),
+            'added_subjects': len(new.keys() - old.keys()), 'semantic_changed_subjects': changed,
+            'unchanged_subjects': len(retained) - changed,
+            'split_subjects': None, 'merged_subjects': None, 'lineage_state': 'unver'}
+
+
+def _core_subject_delta(before: dict[str, Any], after: dict[str, Any], owner: str) -> dict[str, Any]:
+    old, new = _core_subjects(before, owner), _core_subjects(after, owner)
+    categories = ('characters',) if owner == 'characters' else (
+        'setting', 'world_rule_versions', 'relations', 'arc_secrets')
+    return {**_subject_delta(old, new), 'by_category': {category: _subject_delta(
+        {key: value for key, value in old.items() if _core_subject_category(key, owner) == category},
+        {key: value for key, value in new.items() if _core_subject_category(key, owner) == category})
+        for category in categories}}
+
+
+def _gate_a_call_metrics(rows: list[dict[str, Any]], phases: dict) -> dict[str, Any]:
+    """只按 ledger 的唯一 run/attempt 计费；共享 provenance 不产生第二次调用。"""
+    groups = {key: [] for key in ('analyze_executor', 'core_commander',
+        'independent_characters_executor', 'independent_global_executor')}
+    unique, conflicts, missing, duplicates = {}, set(), 0, 0
+    for row in rows:
+        node, role = _performance_node(row)
+        if node not in {'stage2.analyze', 'stage2.characters', 'stage2.global'}:
+            continue
+        key = (row.get('run_id'), row.get('attempt_id'))
+        if not all(isinstance(value, str) and value for value in key):
+            missing += 1
+        elif key in unique:
+            if unique[key] == row:
+                duplicates += 1
+            else:
+                conflicts.add(key)
+        else:
+            unique[key] = row
+    for key, row in unique.items():
+        if key in conflicts:
+            continue
+        node, role = _performance_node(row)
+        category = ('core_commander' if role == 'commander' else 'analyze_executor'
+                    if node == 'stage2.analyze' else 'independent_' + node.split('.')[1] + '_executor')
+        groups[category].append(row)
+    result = {}
+    for category, values in groups.items():
+        wires = [row for row in values if row.get('cached') is False]
+        latencies = [row['latency_ms'] for row in wires
+                     if type(row.get('latency_ms')) is int and row['latency_ms'] >= 0]
+        linked = [phases.get((row['run_id'], row['attempt_id'])) for row in wires]
+        complete = bool(rows) and not (missing or conflicts or any(
+            row.get('cached') is not True and row.get('cached') is not False for row in values))
+        result[category] = {
+            **_wire_usage_metrics(wires), 'state': 'ok' if complete else 'unver',
+            'wire_calls': len(wires) if complete else None, 'known_wire_calls': len(wires),
+            'cache_hits': sum(row.get('cached') is True for row in values),
+            'latency_seconds': sum(latencies) / 1000 if complete and len(latencies) == len(wires) else None,
+            'known_latency_seconds': sum(latencies) / 1000,
+            'content_repair_wire_calls': sum(phase is not None and phase[2] > 1 for phase in linked),
+            'first_content_wire_calls': sum(phase is not None and phase[2] == 1 for phase in linked),
+            'content_phase_unknown_calls': sum(phase is None for phase in linked),
+            'network_retry_wire_calls': sum(phase is not None and phase[3] for phase in linked),
+        }
+    return {'state': 'unver' if not rows or missing or conflicts else 'ok', 'categories': result,
+            'duplicate_identical_rows': duplicates, 'conflicting_attempts': len(conflicts),
+            'identity_missing_rows': missing, 'latency_basis': 'sum_unique_ledger_attempt_latency',
+            'wall_clock_seconds': None, 'wall_clock_state': 'unver'}
+
+
+def _gate_a_source(ctx, store, base):
+    """复用历史 run 的只读验证，绑定原回答、回执、账和 frozen ID；不重编新候选。"""
+    from contracts.schema.analyze import AnalyzeReceipt
+    from contracts.schema.stage1 import MainText
+    from novel.llm import agent_runs
+    from novel.stages.stage2 import analyze
+    from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
+
+    receipt, receipt_sha = store.read_own_with_sha256(AnalyzeReceipt, STAGE2_ANALYZE_RECEIPT)
+    main, source_sha = store.read_own_with_sha256(MainText, STAGE1_MAIN_TEXT)
+    if source_sha != receipt.source_sha256:
+        raise ValueError('source_changed')
+    rows = main.model_dump(mode='json')
+    table = GlobalEvidenceCandidateTable.build(rows)
+    prepared = analyze.PreparedAnalyze(rows, source_sha, table, f'书名：{ctx.title}\n\n{table.render()}',
+        agent_runs.canonical_sha256(dict(node=analyze.NODE, main_text_sha256=source_sha, table_sha256=table.sha256())))
+    restored = agent_runs.restore_historical_run(ctx, analyze.run_spec(), source_run_id=receipt.run_id,
+        **prepared.request(), ledger_source_path=ledger_path(base))
+    checkpoint = restored.checkpoint
+    commit = agent_runs.commit_state(restored.context, analyze.commit_spec())
+    identity = restored.context.ledger.request_identity_for_attempt(receipt.attempt_id)
+    if (commit is None or commit['state'] != 'committed'
+            or not agent_runs.verify_commit_primary(commit, receipt.model_dump(mode='json', by_alias=True))
+            or checkpoint.checkpoint_sha256 != receipt.checkpoint_sha256
+            or checkpoint.acceptance['attempt_id'] != receipt.attempt_id
+            or identity['response_sha256'] != receipt.response_sha256
+            or prepared.input_sha256 != receipt.input_sha256
+            or identity['request_fingerprint'] != receipt.request_sha256
+            or checkpoint.state_payload['character_handles'] != receipt.character_handles
+            or checkpoint.state_payload['global_handles'] != receipt.global_handles):
+        raise ValueError('source_identity_mismatch')
+    return receipt, receipt_sha, checkpoint
+
+
+def _core_commander_changes(base, novel_dir, sid, store, *, initial=None) -> dict[str, Any]:
+    """只有不可变 C 决定 + 精确 prepared + 完成回执才算实际改写。"""
+    from novel.orchestrator.approvals import stage2_review_history
+    from novel.stages.stage2 import core_edits
+
+    result = {'state': 'ok', 'scope': 'sid_all_history', 'completed_batches': 0,
+              'pending_batches': 0, 'unver_batches': 0, 'rewritten_owner_artifacts': 0,
+              'semantic_subject_interventions': 0, 'semantic_intervention_events': 0,
+              'evidence_or_audit_only_owner_edits': 0, 'by_category': {},
+              'review_invalidations': {'state': 'unver', 'count': None,
+                                       'reason': 'review_transition_not_recorded'}}
+    try:
+        decisions = stage2_review_history(base, sid)
+    except Exception:  # noqa: BLE001 —— 只公开未知计数，不公开可能含正文的异常
+        return {**result, 'state': 'unver', 'reason': 'decision_history_unreadable'}
+    seen = set()
+    changed_subjects = {category: set() for category in (
+        'characters', 'setting', 'world_rule_versions', 'relations', 'arc_secrets')}
+    added_subjects = {category: set() for category in changed_subjects}
+    for decision in decisions:
+        if decision.core_edits is None:
+            continue
+        try:
+            frozen = core_edits._verify_prepared(novel_dir, decision)
+            if frozen.request_sha256 in seen:
+                continue
+            seen.add(frozen.request_sha256)
+            target = paths.stage2_core_edit_dir(novel_dir, frozen.request_sha256) / 'completed.json'
+            if not target.exists():
+                result['pending_batches'] += 1
+                continue
+            completed = core_edits._read(target, core_edits.CoreEditsCompleted)
+            if (completed.request_sha256 != frozen.request_sha256
+                    or completed.prepared_sha256 != core_edits.prepared_sha(frozen)):
+                raise ValueError('completion_mismatch')
+            changes, changed_in_batch, added_in_batch = [], [], []
+            for owner, rel, model, candidate, expected in (
+                ('characters', STAGE2_CHARACTERS, CharacterRegistry, frozen.characters_candidate,
+                 frozen.request.core_edits.expected_characters_sha256),
+                ('global', STAGE2_GLOBAL_GROUNDING, KnowledgeGrounding, frozen.global_candidate,
+                 frozen.request.core_edits.expected_global_sha256),
+            ):
+                if candidate is None:
+                    continue
+                original = store.read_own_by_sha256(model, rel, expected)
+                old = _core_subjects(original.model_dump(mode='json', by_alias=True), owner)
+                new = _core_subjects(candidate.model_dump(mode='json', by_alias=True), owner)
+                delta = _subject_delta(old, new)
+                changed_in_batch.extend((_core_subject_category(key, owner), key) for key in old
+                                        if key not in new or old[key] != new[key])
+                added_in_batch.extend((_core_subject_category(key, owner), key) for key in new.keys() - old.keys())
+                changes.append(sum(delta[key] for key in (
+                    'added_subjects', 'removed_subjects', 'semantic_changed_subjects')))
+            result['completed_batches'] += 1
+            result['rewritten_owner_artifacts'] += len(changes)
+            result['semantic_intervention_events'] += sum(changes)
+            result['evidence_or_audit_only_owner_edits'] += sum(count == 0 for count in changes)
+            for category, subject in changed_in_batch:
+                changed_subjects[category].add(subject)
+            for category, subject in added_in_batch:
+                added_subjects[category].add(subject)
+        except Exception:  # noqa: BLE001
+            result['unver_batches'] += 1
+    if result['unver_batches']:
+        result['state'] = 'unver'
+    first = {category: None for category in changed_subjects}
+    for owner, payload in (initial or {}).items():
+        if payload is not None:
+            subjects = _core_subjects(payload, owner)
+            categories = ('characters',) if owner == 'characters' else tuple(first)[1:]
+            for category in categories:
+                first[category] = {key for key in subjects if _core_subject_category(key, owner) == category}
+    for category in changed_subjects:
+        baseline = first[category]
+        modified = len(changed_subjects[category] & baseline) if baseline is not None else None
+        count = len(baseline) if baseline is not None else None
+        result['by_category'][category] = {
+            'state': 'ok' if baseline is not None and result['state'] == 'ok' else 'unver',
+            'initial_subjects': count, 'modified_initial_subjects': modified,
+            'intervention_rate': _rate(modified, count) if count else None,
+            'added_subjects': len(added_subjects[category]),
+            'distinct_intervened_subjects': len(changed_subjects[category] | added_subjects[category])}
+    result['semantic_subject_interventions'] = sum(
+        row['distinct_intervened_subjects'] for row in result['by_category'].values())
+    # 小计的零不声称没有历史操作；独立 typed 编辑不冒充 C 干预。
+    result['count_basis'] = 'completed_typed_core_edit_batches_only'
+    return result
+
+
+def stage2_core_metrics(base: Path, novel_dir: Path, sid: str, *, run_id: str | None) -> dict[str, Any]:
+    """Gate A 只读观察；缺来源、未接受与合法零候选分别表达。"""
+    from contracts.schema.analyze_recovery import AnalyzeRecoveryJournal
+    from contracts.schema.stage1 import MainText
+    from novel.orchestrator.state import readonly_ctx
+    from novel.stages.stage2.global_review import require_global_accepted
+    from novel.store import ArtifactStore
+
+    ctx = readonly_ctx(novel_dir, 'stage2.analyze', prov.code_version())
+    store = ArtifactStore(ctx)
+    unver = {'state': 'unver'}
+    result = {'artifact_scope': 'current_sid_with_immutable_initial_source',
+        'main_text_chars': None, 'first_draft': dict(unver), 'first_compiled': {},
+        'current': {}, 'accepted': dict(unver), 'candidate_retention': {},
+        'independent_repair_changes': {'state': 'unver', 'count': None,
+            'reason': 'independent_edit_lineage_not_bound_to_calls'},
+        'recovery': {'state': 'unver', 'wire_calls': None, 'latency_seconds': None}}
+    phases, phase_errors, _versions = _unit_attempt_phases(base, sid)
+    rows = _run_rows(_jsonl(ledger_path(base)), sid, run_id)
+    result['calls'] = _gate_a_call_metrics(rows, phases)
+    result['calls']['scope'] = 'target_run' if run_id else 'sid_all_history'
+    result['calls']['phase_evidence_errors'] = phase_errors
+    try:
+        main = store.read_own(MainText, STAGE1_MAIN_TEXT)[0]
+        result['main_text_chars'] = sum(len(section.text) for section in main.root)
+    except Exception:  # noqa: BLE001
+        pass
+    current = {}
+    for owner, rel, model in (('characters', STAGE2_CHARACTERS, CharacterRegistry),
+                              ('global', STAGE2_GLOBAL_GROUNDING, KnowledgeGrounding)):
+        try:
+            value = store.read_own(model, rel)[0]
+            current[owner] = value.model_dump(mode='json', by_alias=True)
+            result['current'][owner] = {**_core_size(current[owner], result['main_text_chars']),
+                'invalid_present': store.exists(paths.invalid_of(rel)),
+                'freshness': store.freshness(rel).state}
+        except Exception:  # noqa: BLE001
+            result['current'][owner] = dict(unver)
+    if len(current) == 2:
+        result['current']['combined'] = _core_size(current, result['main_text_chars'])
+    try:
+        require_global_accepted(readonly_ctx(novel_dir, 'stage2.blueprint', ctx.code))
+        if len(current) != 2:
+            raise ValueError('core_missing')
+        result['accepted'] = {'state': 'ok', **{key: _core_size(value, result['main_text_chars'])
+                                               for key, value in current.items()}}
+        result['accepted']['combined'] = _core_size(current, result['main_text_chars'])
+    except Exception:  # noqa: BLE001
+        result['accepted']['reason'] = 'current_global_acceptance_unproven'
+    try:
+        receipt, receipt_sha, checkpoint = _gate_a_source(ctx, store, base)
+        raw = checkpoint.value.model_dump(mode='json', by_alias=True)
+        result['first_draft'] = {'state': 'ok', 'basis': 'verified_analyze_checkpoint',
+            'characters': _core_size({'characters': raw['characters']}, result['main_text_chars']),
+            'global': _core_size(raw['global'], result['main_text_chars']),
+            'combined': _core_size(raw, result['main_text_chars']),
+            'candidate_subjects': _draft_subject_counts(raw)}
+        if checkpoint.response_repair is not None:
+            # .value 此时来自独立修复决定；坏原 stdout 没有可比的 typed 首轮主体。
+            result['repaired_draft'] = {**result['first_draft'], 'basis': 'sealed_response_repair'}
+            result['first_draft'] = {**unver, 'reason': 'original_wire_failed_schema',
+                'original_stdout_chars': len(checkpoint.acceptance['accepted_text'])}
+        original = {key: checkpoint.state_payload[field] for key, field in (
+            ('characters', 'characters'), ('global', 'global_candidate'))}
+        result['initial_materializations'] = {row.owner: row.state for row in receipt.materializations}
+    except Exception:  # noqa: BLE001
+        result['first_draft'] = {**unver, 'reason': 'initial_source_unproven'}
+        result['commander_changes'] = _core_commander_changes(base, novel_dir, sid, store)
+        return result
+    try:
+        if store.exists(STAGE2_ANALYZE_RECOVERY):
+            journal = store.read_own(AnalyzeRecoveryJournal, STAGE2_ANALYZE_RECOVERY)[0]
+            if (journal.source_receipt_sha256 != receipt_sha
+                    or journal.source_checkpoint_sha256 != checkpoint.checkpoint_sha256
+                    or journal.source_run_id != receipt.run_id):
+                raise ValueError('recovery_source_mismatch')
+            if journal.state == 'committed':
+                # 历史轮次精确原字节证明已实际落盘；当前后续修订不改写首物化基线。
+                landed = store.read_own_by_sha256(
+                    KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING, journal.target_sha256)
+                if landed.model_dump(exclude={'provenance'}) != journal.candidate.model_dump(exclude={'provenance'}):
+                    raise ValueError('recovery_candidate_mismatch')
+                adoptions = [row for row in _jsonl(audit_path(base))
+                    if row.get('sid') == sid and row.get('run_id') == journal.run_id
+                    and row.get('kind') == 'deterministic_aggregate_adoption'
+                    and row.get('finalization_sha256') == journal.target_sha256
+                    and row.get('artifact') == journal.target_rel]
+                if not adoptions:
+                    raise ValueError('recovery_adoption_unproven')
+                if original['global'] is None:
+                    original['global'] = journal.candidate.model_dump(mode='json', by_alias=True)
+            recovery_rows = [row for row in _jsonl(ledger_path(base))
+                             if row.get('sid') == sid and row.get('run_id') == journal.run_id]
+            result['recovery'] = {'state': journal.state, 'scope': 'source_recovery_run',
+                'calls': _gate_a_call_metrics(recovery_rows, phases),
+                'wire_calls': (0 if not recovery_rows else None),
+                'latency_seconds': None, 'latency_state': 'unver',
+                'reason': 'recovery_elapsed_not_recorded', 'target_invalid': bool(journal.hard_hits)}
+    except Exception:  # noqa: BLE001
+        result['recovery'] = {**unver, 'reason': 'recovery_source_unproven', 'wire_calls': None}
+    result['commander_changes'] = _core_commander_changes(base, novel_dir, sid, store, initial=original)
+    for owner, value in original.items():
+        result['first_compiled'][owner] = (_core_size(value, result['main_text_chars'])
+                                            if value is not None else dict(unver))
+        result['candidate_retention'][owner] = (_core_subject_delta(value, current[owner], owner)
+            if value is not None and owner in current else {**unver, 'reason': 'stable_initial_subjects_unavailable'})
+    if all(value is not None for value in original.values()):
+        result['first_compiled']['combined'] = _core_size(original, result['main_text_chars'])
+    result['candidate_retention']['target'] = 'accepted' if result['accepted']['state'] == 'ok' else 'current_unaccepted'
+    result['candidate_retention']['basis'] = (
+        'sealed_repair_first_materialization' if checkpoint.response_repair is not None
+        else 'original_analyze_first_materialization')
+    if checkpoint.response_repair is not None:
+        result['candidate_retention']['original_wire'] = {**unver, 'reason': 'original_wire_failed_schema'}
+    return result
+
+
 def stage2_metrics(
     base: Path, novel_dir: Path, sid: str, *, run_id: str | None,
     identity: dict[str, Any], audit: dict[str, Any], performance: dict[str, Any],
@@ -1269,11 +1650,12 @@ def stage2_metrics(
     try:
         if not characters_current or characters_invalid or not global_current or global_invalid:
             raise ValueError('人物与知识必须都是当前正式载体')
-        grounding = compose(CharacterRegistry.model_validate(characters),
-                            KnowledgeGrounding.model_validate(global_payload))
-        review = GlobalReview.model_validate(review_payload)
+        registry = CharacterRegistry.model_validate(decode_artifact(STAGE2_CHARACTERS, characters).payload)
+        knowledge = KnowledgeGrounding.model_validate(decode_artifact(STAGE2_GLOBAL_GROUNDING, global_payload).payload)
+        review = GlobalReview.model_validate(decode_artifact(STAGE2_GLOBAL_REVIEW, review_payload).payload)
         safety = generation_safety(
-            grounding.model_dump(by_alias=True, mode='json'), review)
+            knowledge.model_dump(by_alias=True, mode='json'), review,
+            characters=registry.model_dump(by_alias=True, mode='json'))
         global_review_safety = {
             'state': 'ok' if safety.safe else 'fail',
             'current': safety.current,
@@ -1291,6 +1673,7 @@ def stage2_metrics(
     codes = identity.get('code_identities') or []
     check_code = codes[0] if len(codes) == 1 else None
     return {
+        'core_gate_a': stage2_core_metrics(base, novel_dir, sid, run_id=run_id),
         'scope': 'target_run' if run_id is not None else 'sid_all_history',
         'expected_architecture': BLUEPRINT_ARCHITECTURE,
         'architecture': architecture,
@@ -1684,8 +2067,17 @@ def render(report: dict[str, Any]) -> str:
     stage2 = report['stage2']
     bp = stage2['blueprint_wire']
     bp_latency = bp['chapter_latency_seconds']
+    core = stage2['core_gate_a']
     out += [
         '## Stage2 当前载体与审阅取证', '',
+        f'- Gate A MainText {core["main_text_chars"]} 字；原联合草稿 '
+        f'{core["first_draft"]["state"]} / 当前接受 {core["accepted"]["state"]}；'
+        f'core 紧凑 JSON 字符比（首物化→接受后）：'
+        f'{core["first_compiled"].get("combined", {}).get("core_to_main_text_ratio")} → '
+        f'{core["accepted"].get("combined", {}).get("core_to_main_text_ratio")}。证据、审计另列。',
+        f'- Core C 已闭合编辑批次 {core["commander_changes"]["completed_batches"]}；'
+        f'语义主体干预 {core["commander_changes"]["semantic_subject_interventions"]}'
+        f'（{core["commander_changes"]["state"]}）；审阅失效次数 unver。',
         f'- 契约：实际 `{stage2["architecture"]}` / '
         f'预期 `{stage2["expected_architecture"]}`；冷缓存 '
         f'**{stage2["cold_cache"]["state"]}** '

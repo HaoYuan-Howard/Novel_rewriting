@@ -2,66 +2,19 @@ import { describe, expect, it, vi } from 'vitest'
 import { qk } from './queryKeys'
 import { adaptNovel, realApi, splitLog } from './endpoints'
 import { projectGlobalSpoilers, SPOILER_PLACEHOLDER } from './spoilers'
-import type { GlobalFactEvidence, Stage2Global } from '@/types/stages'
+import type { Stage2Global } from '@/types/stages'
 import type { BackendJobRecord } from '@/types/jobs'
 import { READY_PROFILES } from '@/test/agent'
-import { mockApi, SAMPLE_SID } from './mock'
-
-function evidence(text: string): GlobalFactEvidence {
-  return {
-    chapter_ordinal: 2,
-    source: { text, start: 3, end: 3 + text.length },
-  }
-}
+import { mockApi, SAMPLE_SID, stage2CoreFixture } from './mock'
 
 function globalFixture(): Stage2Global {
-  return {
-    sid: 's',
-    title: 't',
-    setting: {
-      时代背景: '古代',
-      era_evidence: evidence('古代证据'),
-      世界观: '现实世界',
-      worldview_evidence: evidence('世界观证据'),
-    },
-    characters: [
-      {
-        char_id: 'c1',
-        canonical: '甲',
-        name_distinctiveness: 'high',
-        role: '主角',
-        role_evidence: evidence('主角证据'),
-        fate: '真实 fate',
-        fate_evidence: evidence('真实 fate 证据'),
-        address: [],
-      },
-    ],
-    relations: [],
-    world_rules: [],
-    secrets: [
-      {
-        secret_id: 'secret-1',
-        fact: '真实秘密',
-        fact_evidence: evidence('真实秘密证据'),
-        knowledge_events: [],
-        setup_kind: 'foreshadowed',
-        setup_chapters: [1],
-        first_reveal_chapter: 4,
-      },
-    ],
-    source_blurb: {
-      facts: [{ kind: 'supported', claim_id: 'hook_001', claim: '真实文案事实',
-        evidence: evidence('真实文案事实证据') }],
-      opening: { kind: 'proposed', through_chapter: 2, rationale: '开篇事件横跨前两章',
-        boundary_evidence: evidence('终点证据') },
-    },
-    unresolved_refs: 0,
-    invalid_exists: false,
-    freshness: 'fresh',
-    reason: '',
-    ghosts: [],
-    _provenance: { root_clean_sha1: '0000000000000000000000000000000000000000' },
-  }
+  const value = stage2CoreFixture().global
+  const ref = 'ev_' + '9'.repeat(24)
+  value.evidence_anchors[ref] = { chapter_ordinal: 2, start: 3, end: 9, text_sha256: '9'.repeat(64) }
+  value.evidence_snippets[ref] = '秘密独有证据'
+  value.arc_secrets = [{ secret_id: 'secret_01', fact: '真实秘密', fact_ref: null,
+    evidence_refs: [ref], setup_chapters: [1], revealed_from: 4 }]
+  return value
 }
 
 function backendJobRecord(node: string, flags: string[]): BackendJobRecord {
@@ -512,43 +465,28 @@ describe('request-shaped cache and diagnostics', () => {
 })
 
 describe('display-only spoiler projection', () => {
-  it('masks hook evidence and failed locators while preserving their distinct source state', () => {
+  it('隐藏秘密的共享表引用与独有证据，同时保留其它事实的证据', () => {
     const raw = globalFixture()
-    raw.source_blurb.facts = [{
-      kind: 'hook_supported', claim_id: 'hook_001', claim: '钩子独有秘密',
-      hook_evidence: { source: { text: '钩子证据', start: 0, end: 4 }, unresolved_locator: null },
-    }, {
-      kind: 'hook_supported', claim_id: 'hook_002', claim: '待定位的钩子主张',
-      hook_evidence: { source: null, unresolved_locator: '不能暴露的失败定位' },
-    }]
+    const publicRef = raw.setting.era_evidence_refs[0]
     const hidden = projectGlobalSpoilers(raw, false)
-    expect(hidden.source_blurb.facts[0]).toMatchObject({
-      kind: 'hook_supported', claim: SPOILER_PLACEHOLDER,
-      hook_evidence: { source: { text: SPOILER_PLACEHOLDER }, unresolved_locator: null },
-    })
-    expect(hidden.source_blurb.facts[1]).toMatchObject({
-      hook_evidence: { source: null, unresolved_locator: SPOILER_PLACEHOLDER },
-    })
-    expect(JSON.stringify(hidden)).not.toContain('钩子独有秘密')
-    expect(JSON.stringify(hidden)).not.toContain('不能暴露的失败定位')
+    expect(hidden.arc_secrets).toHaveLength(1)
+    expect(hidden.arc_secrets[0]?.fact).toBe(SPOILER_PLACEHOLDER)
+    expect(hidden.arc_secrets[0]?.evidence_refs).toEqual([])
+    expect(hidden.evidence_snippets[publicRef]).toBe(raw.evidence_snippets[publicRef])
+    expect(JSON.stringify(hidden)).not.toContain('真实秘密')
+    expect(JSON.stringify(hidden)).not.toContain('秘密独有证据')
     expect(projectGlobalSpoilers(raw, true)).toBe(raw)
   })
 
-  it('projects all four configured paths before screens consume them', () => {
+  it('展示遮蔽不改动原响应，空列表和隐藏态保持不同', () => {
     const raw = globalFixture()
+    const before = structuredClone(raw)
     const hidden = projectGlobalSpoilers(raw, false)
-    expect(hidden.characters[0]?.fate).toBe(SPOILER_PLACEHOLDER)
-    expect(hidden.characters[0]?.fate_evidence?.source?.text).toBe(SPOILER_PLACEHOLDER)
-    expect(hidden.secrets).toHaveLength(1)
-    expect(hidden.secrets[0]?.fact).toBe(SPOILER_PLACEHOLDER)
-    expect(hidden.source_blurb.facts[0]?.claim).toBe(SPOILER_PLACEHOLDER)
-    expect(hidden.source_blurb.opening.kind === 'proposed' && hidden.source_blurb.opening.rationale).toBe(SPOILER_PLACEHOLDER)
-    expect(hidden.source_blurb.facts[0]?.kind === 'supported' && hidden.source_blurb.facts[0].evidence.source?.text).toBe(
-      SPOILER_PLACEHOLDER,
-    )
-    expect(JSON.stringify(hidden)).not.toContain('真实秘密')
-    expect(JSON.stringify(hidden)).not.toContain('真实 fate 证据')
-    expect(JSON.stringify(hidden)).not.toContain('真实弧线证据')
-    expect(projectGlobalSpoilers(raw, true)).toBe(raw)
+    expect(raw).toEqual(before)
+    expect(hidden.relations).toEqual(raw.relations)
+    expect(hidden.world_rules).toEqual(raw.world_rules)
+    raw.arc_secrets = []
+    expect(projectGlobalSpoilers(raw, false).arc_secrets[0]?.fact).toBe(SPOILER_PLACEHOLDER)
+    expect(projectGlobalSpoilers(raw, true).arc_secrets).toEqual([])
   })
 })

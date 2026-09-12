@@ -10,6 +10,10 @@ from contracts.schema.common import Sha256
 
 
 class PipelineArtifactVersions(FrozenModel):
+    """初始化时的版本快照；各 Gate 的新产物仍由现役 ArtifactSpec 严格验证。"""
+    characters: Literal[2] = 2
+    global_grounding: Literal[7] = 7
+    analyze_receipt: Literal[1] = 1
     chapter_blueprints: Literal[9] = 9
     knowledge_links: Literal[2] = 2
     blind_candidate: Literal[4] = 4
@@ -20,10 +24,10 @@ class PipelineArtifactVersions(FrozenModel):
     writer_context: Literal[8] = 8
 
 
-class WorkflowManifestV3(FrozenModel):
-    schema_version: Literal[3] = 3
-    contract_version: Literal['pipeline-cost-latency-v3'] = 'pipeline-cost-latency-v3'
-    pipeline_contract_epoch: Literal['plot-blueprint-v1'] = 'plot-blueprint-v1'
+class WorkflowManifestV4(FrozenModel):
+    schema_version: Literal[4] = 4
+    contract_version: Literal['stage2-core-v2'] = 'stage2-core-v2'
+    pipeline_contract_epoch: Literal['joint-analysis-independent-artifacts-v1'] = 'joint-analysis-independent-artifacts-v1'
     artifact_versions: PipelineArtifactVersions = Field(default_factory=PipelineArtifactVersions)
     task_id: Sha256
     created_at: int

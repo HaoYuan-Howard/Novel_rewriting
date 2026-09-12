@@ -21,11 +21,12 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import PlainTextResponse
 
 from contracts.schema.api import (
-    BlueprintReviewWorkpack, CharacterRegistryView, GlobalReviewView, GlobalView, InboxView,
+    AnalyzeDraftView, BlueprintReviewWorkpack, CharacterRegistryView, GlobalReviewView, GlobalView, InboxView,
     ReadingView, ReviewView,
     Stage4View, Stage5View, Stage6View, Stage7View,
 )
 from contracts.schema.plot_review import ReviewScope
+from contracts.schema.analyze_draft import DraftOwner
 from novel.api.deps import checked_sid, get_base
 from novel import paths, prov
 from novel.orchestrator import state
@@ -33,7 +34,7 @@ from novel.stages.stage7 import assemble
 from novel.views.inbox import inbox_view
 from novel.views.global_review import global_review_view
 from novel.views.stage2 import (
-    blueprint_review_workpack, character_registry_view, global_view, reading_view,
+    analyze_draft_view, blueprint_review_workpack, character_registry_view, global_view, reading_view,
 )
 from novel.views.stage4 import stage4_view
 from novel.views.stage5 import review_view, stage5_view
@@ -80,6 +81,13 @@ def get_review(ordinal: int, sid: str = Depends(checked_sid),
 def get_stage2_characters(sid: str = Depends(checked_sid),
                          base: str = Depends(get_base)) -> CharacterRegistryView:
     return character_registry_view(base, sid)
+
+
+@router.get('/{sid}/stage2/analyze-draft', response_model=AnalyzeDraftView,
+            response_model_by_alias=True)
+def get_stage2_analyze_draft(owner: DraftOwner, sid: str = Depends(checked_sid),
+                            base: str = Depends(get_base)) -> AnalyzeDraftView:
+    return analyze_draft_view(base, sid, owner)
 
 
 @router.get('/{sid}/stage2/global', response_model=GlobalView, response_model_by_alias=True)

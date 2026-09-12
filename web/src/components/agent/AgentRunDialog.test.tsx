@@ -89,11 +89,12 @@ describe('AgentRunDialog', () => {
     } }
     vi.spyOn(api, 'getAgentRunContinuation').mockResolvedValue({
       run_id: source.run_id, sid: 'book-1', available: true, reason: '原 owner 已停止',
-      profiles: originalProfiles, source,
+      profiles: originalProfiles, source, pause_before_node: 'stage2.blueprint',
     })
     vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities(null))
     const preview = vi.spyOn(api, 'previewAgentRun').mockImplementation(async (req) => ({
       ...previewOf(req.profiles, req.authorized, req.egress_authorized), continuation: req.continuation,
+      pause_before_node: 'stage2.blueprint',
     }))
     const start = vi.spyOn(api, 'startAgentRun').mockImplementation(async (req) => runningRecord(req))
     renderRoute(<AgentRunDialog sid="book-1" sourceRunId="old-run" onClose={vi.fn()} onStarted={vi.fn()} />)
@@ -101,6 +102,7 @@ describe('AgentRunDialog', () => {
     expect(api.getAgentProfileSettings).not.toHaveBeenCalled()
     expect(preview.mock.calls[0]?.[0]).toMatchObject({ profiles: originalProfiles, continuation: source,
       authorized: false, egress_authorized: false })
+    expect(preview.mock.calls[0]?.[0]).not.toHaveProperty('pause_before_node')
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
     const boxes = screen.getAllByRole('checkbox')
     fireEvent.click(boxes[0]!)
@@ -110,6 +112,26 @@ describe('AgentRunDialog', () => {
     fireEvent.click(launch)
     await waitFor(() => expect(start).toHaveBeenCalledTimes(1))
     expect(start.mock.calls[0]?.[0]).toEqual(preview.mock.calls.at(-1)?.[0])
+    expect(start.mock.calls[0]?.[0]).not.toHaveProperty('pause_before_node')
+  })
+
+  it('续跑预览意外解除原范围时拒绝启动，不把默认 null 当成用户扩权', async () => {
+    const source = { run_id: 'bounded-run', source_sha256: 'b'.repeat(64) }
+    vi.spyOn(api, 'getAgentRunContinuation').mockResolvedValue({
+      run_id: source.run_id, sid: 'book-1', available: true, reason: '原范围已安全排空',
+      profiles: READY_PROFILES, source, pause_before_node: 'stage2.blueprint',
+    })
+    vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities(null))
+    vi.spyOn(api, 'previewAgentRun').mockImplementation(async (req) => ({
+      ...previewOf(req.profiles, req.authorized, req.egress_authorized),
+      continuation: source, pause_before_node: null,
+    }))
+    const start = vi.spyOn(api, 'startAgentRun')
+    renderRoute(<AgentRunDialog sid="book-1" sourceRunId="bounded-run" onClose={vi.fn()} onStarted={vi.fn()} />)
+    await waitFor(() => expect(api.previewAgentRun).toHaveBeenCalled())
+    for (const box of screen.getAllByRole('checkbox')) fireEvent.click(box)
+    expect(await screen.findByRole('button', { name: '授权并开始跑书' })).toBeDisabled()
+    expect(start).not.toHaveBeenCalled()
   })
 
   it('并发选项来自 capability，目标与两个总上限随同一预览启动', async () => {

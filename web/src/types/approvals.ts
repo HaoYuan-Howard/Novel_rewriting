@@ -1,6 +1,5 @@
 import type { Finding, RuleLine } from './common'
 import type { KnowledgeLinkSubmission } from './knowledgeLinks'
-import type { Stage2Global } from './stages'
 
 /**
  * 人工验收记录。
@@ -430,7 +429,7 @@ export interface Stage6ApprovalWorkpack extends FinalApprovalWorkpack {
   rationale: string
   materials: {
     source_hook: string
-    source_blurb: Stage2Global['source_blurb']
+    source_blurb: import('./stages').SourceBlurbMaterials
     rewritten_chapters: { chapter_ordinal: number; text: string }[]
   }
   check: CompactApprovalCheck
@@ -653,6 +652,7 @@ export interface Stage2NodeReviewRequest {
   owner: string | null
   knowledge_links: KnowledgeLinkSubmission | null
   review?: Stage2ReviewSubmission | null
+  core_edits?: import('./globalEdit').Stage2CoreEditBatch | null
 }
 
 export interface Stage2NodeReviewView {
@@ -661,7 +661,9 @@ export interface Stage2NodeReviewView {
   unavailable_reason?: string | null
   state: string
   current_decision: (Stage2NodeReviewRequest & {
+    core_edit_prepared_sha256?: string | null
     obligation_receipt?: { scope: Stage2ReviewCoverage['scope']; units: Stage2ReviewUnit[] } | null
+    material_source?: { characters_sha256: string; global_sha256: string; review_sha256: string; main_text_sha256: string } | null
     review_subject_sha256: string
     review_scope_sha256?: string | null
     review_contract_version: string

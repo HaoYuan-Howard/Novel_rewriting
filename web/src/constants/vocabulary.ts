@@ -357,16 +357,15 @@ export function chNo(n: number): string {
 export const REVIEW_GROUP_LABEL: Record<string, string> = {
   character: '人物',
   relation: '关系',
-  secret: '秘密时间线',
+  secret: '跨章秘密',
   world_rule: '规则',
   setting: '设定',
-  source_blurb: '源文案与开篇范围',
   set: '集合完整性',
 }
 
 /** Stable card order; unknown prefixes sort last without being hidden. */
 export const REVIEW_GROUP_ORDER: readonly string[] = [
-  'set', 'character', 'relation', 'secret', 'world_rule', 'setting', 'source_blurb',
+  'set', 'character', 'relation', 'secret', 'world_rule', 'setting',
 ]
 
 

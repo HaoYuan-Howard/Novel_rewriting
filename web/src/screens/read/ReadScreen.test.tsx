@@ -170,12 +170,12 @@ describe('mock Blueprint 审阅审批契约', () => {
     await expect(mockApi.markSeen(SID, 'global', {
       review_token: 's2gr1_' + '0'.repeat(64), actor: '人工审阅者',
     })).rejects.toThrow(/当前 review 的 review_token/)
-    const global = await mockApi.markSeen(SID, 'global', {
+    await expect(mockApi.markSeen(SID, 'global', {
       review_token: MOCK_GLOBAL_SEEN_TOKEN, actor: '人工审阅者',
-    })
-    expect(global.seen).toEqual({ read: false, global: true })
+    })).rejects.toThrow(/当前 review 的 review_token/)
+    expect((await mockApi.getApprovals(SID)).seen).toEqual({ read: false, global: false })
     const filled = await mockApi.backfillApprovals(SID)
-    // 现役历史示例的开篇范围未知；读完并不能代替 typed 修订及语义审阅。
+    // 历史示例没有当前Core，不能套用新合成书的共享首抽或接受。
     expect(filled.approvals.gate).toMatchObject({ s2: false, s4: false })
   })
 

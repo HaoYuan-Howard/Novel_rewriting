@@ -424,6 +424,23 @@ def characters_edit_input(novel_dir: str | os.PathLike[str], supplied: str | Non
     return target
 
 
+def analyze_draft_edit_input(novel_dir: str | os.PathLike[str], supplied: str | None) -> Path:
+    """免费 owner 草稿输入与人物 typed 编辑保持相同的本书/SID 路径边界。"""
+    from contracts.artifacts import STAGE2_ANALYZE_OWNER_DRAFT_EDIT
+    return characters_edit_input(novel_dir, supplied or STAGE2_ANALYZE_OWNER_DRAFT_EDIT)
+
+
+def analyze_draft_repair_rel(owner: str) -> str:
+    from contracts.artifacts import (
+        STAGE2_ANALYZE_CHARACTERS_DRAFT_REPAIR, STAGE2_ANALYZE_GLOBAL_DRAFT_REPAIR,
+    )
+    if owner == 'stage2.characters':
+        return STAGE2_ANALYZE_CHARACTERS_DRAFT_REPAIR
+    if owner == 'stage2.global':
+        return STAGE2_ANALYZE_GLOBAL_DRAFT_REPAIR
+    raise ValueError('只有 Characters/Global 拥有独立 Analyze 草稿修复')
+
+
 def invalid_of(rel: str) -> str:
     """`stage4/plan_chapters.json` → `stage4/plan_chapters.INVALID.json`。"""
     norm = check_rel_deep(rel)
@@ -437,6 +454,11 @@ def invalid_of(rel: str) -> str:
 
 def is_invalid(rel: str) -> bool:
     return INVALID_INFIX + '.' in os.path.basename(check_rel_deep(rel))
+
+
+def formal_of(rel: str) -> str:
+    """正式路径或其 INVALID 孪生 → 唯一正式路径。"""
+    return check_rel_deep(rel).replace(INVALID_INFIX + '.', '.', 1)
 
 
 def stem_of(rel: str) -> str:
@@ -865,6 +887,29 @@ def legacy_stage2_blueprint_run_path(
 
     return (_legacy_stage_runs_dir(novel_dir, STAGE2_RUNS_DIRNAME)
             / check_run_id(run_id) / 'blueprint')
+
+
+def stage2_analyze_run_path(
+        novel_dir: str | os.PathLike[str], run_id: str,
+) -> Path:
+    """联合首抽独占的请求、回答、映射、checkpoint 和提交记录。"""
+    from novel.run_identity import check_run_id
+
+    return (_service_stage_runs_dir(novel_dir, 'stage2')
+            / check_run_id(run_id) / 'analyze')
+
+
+def stage2_analyze_commit_lock_path(
+        novel_dir: str | os.PathLike[str],
+) -> Path:
+    return _service_stage_runs_dir(novel_dir, 'stage2') / 'analyze-commit.lock'
+
+
+def stage2_core_edit_dir(novel_dir: str | os.PathLike[str], request_sha256: str) -> Path:
+    """跨 owner typed 决定的服务侧 WAL，不是运行知识产物。"""
+    if not re.fullmatch(r'[0-9a-f]{64}', request_sha256):
+        raise PathRefused('Core edit request_sha256 必须是完整 SHA-256')
+    return _service_stage_runs_dir(novel_dir, 'stage2') / 'core_edits' / request_sha256
 
 
 def stage2_characters_run_path(

@@ -12,7 +12,7 @@ from typing import Final
 from pydantic import ValidationError
 
 from contracts.artifacts import (
-    STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+    STAGE1_MAIN_TEXT, STAGE2_CHARACTERS, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
     STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
     STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
@@ -23,20 +23,20 @@ from contracts.schema.evaluation import (
 )
 from contracts.schema import encode_artifact
 from contracts.schema.stage2 import GlobalGrounding
-from contracts.schema.stage1 import HookCopy, MainText
+from contracts.schema.stage1 import MainText
+from contracts.schema.characters import CharacterRegistry
 
 from novel import paths
-from novel.core.evidence import iter_global_evidence_slots, iter_hook_evidence_slots, without_global_evidence
-from novel.core.spans import exact_span
 from novel.errors import (
     ApprovalRequired, BlockingFindingsUnresolved, GateBlocked, PathRefused,
     TerminalState, UpstreamMissing, UpstreamStale, UpstreamUnproven,
 )
 from novel.orchestrator.jobs import service_dir
 from novel.quality.global_review import (
-    apply_decision_set, blocking_scope_sha256, require_current,
+    alias_review_key, apply_decision_set, blocking_scope_sha256, require_current,
     GenerationSafety, generation_safety, review_effect_counts,
-    review_group_key, review_status, subject_sha256, UNBOUND_WORKPACK_SHA256,
+    review_group_key, review_status, review_source, review_evidence_slots,
+    without_review_evidence, subject_sha256, UNBOUND_WORKPACK_SHA256,
 )
 from novel.run import RunContext
 from novel.store import ArtifactStore
@@ -148,9 +148,10 @@ def _subject_at(root: object, subject_path: str) -> object:
                 current = next(
                     item for item in current
                     if isinstance(item, dict)
-                    and segment in {
+                    and (segment in {
                         str(value) for key, value in item.items() if key.endswith('_id')
-                    })
+                    } or (isinstance(item.get('surface'), str)
+                          and segment == alias_review_key(item['surface']))))
         else:
             raise KeyError(segment)
     return current
@@ -173,129 +174,60 @@ def _text_sha256(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
-def _formal_materials(
-    slots: list[tuple[str, object]],
-    chapters: dict[int, object],
-) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    """把正式 FactEvidence 转成人工可提交的 hash-bound 证据候选。
+def _characters_payload(store: ArtifactStore, *, require_current: bool = False) -> dict[str, object]:
+    return store.read_own(CharacterRegistry, STAGE2_CHARACTERS,
+                          require_current=require_current)[0].model_dump(mode='json', by_alias=True)
 
-    缺失或无效的 source 显式留在第二个返回值里；调用方尤其不能用 claim 字面
-    搜索命中替换它。
-    """
-    materials: list[dict[str, object]] = []
-    unresolved: list[dict[str, object]] = []
-    seen: set[tuple[str, int, int, int]] = set()
-    for claim_path, evidence in slots:
-        if not isinstance(evidence, dict):
-            unresolved.append({
-                'claim_path': claim_path,
-                'chapter_ordinal': None,
-                'reason': 'formal evidence 缺失',
-            })
+
+def _formal_materials(
+    slots: list[tuple[str, object]], chapters: dict[int, object],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """本地产物 anchors 编译成阅读定位；正文只取自当前 MainText。"""
+    materials = []
+    unresolved = []
+    seen = set()
+    for claim_path, anchor in slots:
+        ordinal = anchor.get('chapter_ordinal') if isinstance(anchor, dict) else None
+        text = getattr(chapters.get(ordinal), 'text', None)
+        start = anchor.get('start') if isinstance(anchor, dict) else None
+        end = anchor.get('end') if isinstance(anchor, dict) else None
+        valid = (isinstance(text, str) and type(start) is int and type(end) is int
+                 and 0 <= start < end <= len(text)
+                 and _text_sha256(text[start:end]) == anchor.get('text_sha256'))
+        if not valid:
+            unresolved.append({'claim_path': claim_path, 'chapter_ordinal': ordinal,
+                               'reason': '正式 anchor 缺失、坐标非法或正文摘要不一致'})
             continue
-        ordinal = evidence.get('chapter_ordinal')
-        source = evidence.get('source')
-        if not isinstance(ordinal, int) or source is None:
-            unresolved.append({
-                'claim_path': claim_path,
-                'chapter_ordinal': ordinal if isinstance(ordinal, int) else None,
-                'reason': 'formal evidence source=None',
-            })
-            continue
-        chapter = chapters.get(ordinal)
-        text = getattr(chapter, 'text', None)
-        if not isinstance(text, str):
-            unresolved.append({
-                'claim_path': claim_path,
-                'chapter_ordinal': ordinal,
-                'reason': 'formal evidence 指向不存在的正文章',
-            })
-            continue
-        start, end, problem = exact_span(source, text)
-        if problem:
-            unresolved.append({
-                'claim_path': claim_path,
-                'chapter_ordinal': ordinal,
-                'reason': problem,
-            })
-            continue
-        identity = claim_path, ordinal, start, end
+        identity = ordinal, start, end
         if identity in seen:
             continue
         seen.add(identity)
-        ref = EvidenceRef(
-            artifact=f'{STAGE1_MAIN_TEXT}#chapter/{ordinal}',
-            subject_sha256=_text_sha256(text),
-            start=start,
-            end=end,
-        )
-        lo = max(0, start - 60)
-        hi = min(len(text), end + 60)
-        materials.append({
-            'claim_path': claim_path,
-            'evidence_ref': ref.model_dump(mode='json'),
-            'chapter_ordinal': ordinal,
-            'literal': text[start:end],
-            'start': start,
-            'end': end,
-            'context': text[lo:hi],
-        })
+        ref = EvidenceRef(artifact=f'{STAGE1_MAIN_TEXT}#chapter/{ordinal}',
+                          subject_sha256=_text_sha256(text), start=start, end=end)
+        materials.append({'evidence_ref': ref.model_dump(mode='json'),
+                          'chapter_ordinal': ordinal, 'literal': text[start:end],
+                          'start': start, 'end': end,
+                          'context': text[max(0, start - 60):min(len(text), end + 60)]})
     return materials, unresolved
 
 
-#: 必须通读全书才能裁的几类：集合完整性问「有没有漏收」，开篇范围问「是否覆盖
-#: 源文案必需事实」；二者不能靠单段命中证明，精确命中 0 条仍须阅读裁决。
-#: ⚠ 判成另一类会给出一句「命中只是缩小阅读范围」的提示，读的人容易误以为
-#: 「找不到命中 ⇒ 没问题」，而这几类恰恰是 0 命中最需要人真的去读的。
-_WHOLE_BOOK_KINDS = frozenset({
-    'character_set_complete', 'relation_set_complete',
-    'world_rule_set_complete', 'secret_set_complete',
-    'source_blurb_complete', 'opening_scope',
-})
-
-# 这些主体的问题不是“这一条事实有没有出处”，不能把其下所有正式 evidence
-# 拼起来冒充集合完整性的证据。开篇范围有独立边界证据，虽仍需整体阅读判断，
-# workpack 应优先展示该正式坐标。
-_NO_FORMAL_EVIDENCE_KINDS = frozenset({
-    'character_set_complete', 'relation_set_complete',
-    'world_rule_set_complete', 'secret_set_complete', 'source_blurb_complete',
-})
-
-
-#: v3 把旧 ``review_note`` 里混在一句话中的两条正交语义拆开：是否必须通读
-#: 全书，与当前展示的是哪一类证据，互不覆盖。legend 只在顶层出现一次；每行只交
-#: 两个闭集标签，避免 100 多行重复同一段安全说明。
+_WHOLE_BOOK_KINDS = frozenset({'character_set_complete', 'relation_set_complete',
+                              'world_rule_set_complete', 'secret_set_complete'})
+_NO_FORMAL_EVIDENCE_KINDS = _WHOLE_BOOK_KINDS
 _WORKPACK_LEGEND: Final = {
-    'reading_scope': {
-        'whole_book': '必须通读全书核对；0 个命中不等于 PASS。',
-        'localized': '所列正文上下文只缩小阅读范围，不产生自动裁决。',
-    },
-    'evidence_mode': {
-        'unresolved_formal_evidence': (
-            '正式 evidence 含 source=None、缺失或无效坐标；不得用 claim 字面命中替代。'),
-        'formal_evidence': (
-            '优先展示 hash-bound EvidenceRef、正式坐标与上下文；不重复写入字面命中。'),
-        'claim_literal': (
-            '没有正式 evidence 槽；展示 claim 的正文精确字面命中，仅供定位。'),
-        'none': '没有可展示的正式证据或 claim 字面命中；不得据此自动 PASS。',
-    },
-    'generation_impact': {
-        'must_fix': '不能安全从写作视图删除；FAIL/UNVER 必须修正或显式人工裁决。',
-        'quarantine_or_fix': 'UNVER 可整组隔离，FAIL 仍须修正；不会改名为 PASS。',
-        'disclose': '不进入写作事实面，不拦下游，但保留审计与最终披露。',
-    },
-    'fate_companion': (
-        'blocking role 行附带同人物 fate 的只读主体、状态与正式证据，'
-        '只供成对阅读，不增加或代替任何 decision item。'),
-    'decision': 'workpack 只提供只读材料；PASS/FAIL/UNVER 必须由人显式提交。',
-    'source_blurb': (
-        '源文案就是原作者的开头钩子。supported 引用正文章；hook_supported 引用 HookCopy，'
-        '允许正文不再重复。后者只支持文案创作，不要求正文补写，也不扩大正文知识披露。'
-        '核对钩子是否明确给出主张及有无正文矛盾；歧义、矛盾或范围不明保持 unresolved，'
-        '先通过 typed 编辑解决，不能因开头已有某句话就忽略正文反证。'),
-    'whole_book_text': (
-        '只要本包含 reading_scope=whole_book，main_text_chapters 就逐章给出完整正文；'
-        '每章只出现一次，行级证据仍只负责定位，不能代替通读。'),
+    'reading_scope': {'whole_book': '通读完整正文反查遗漏，空集合也必须明确审阅。',
+                      'localized': '证据只定位主体；支持性、归属与披露时间仍须语义判断。'},
+    'evidence_mode': {'unresolved_formal_evidence': '证据不完整；由对应 owner 免费订正。',
+                      'formal_evidence': '共享 anchor 回取的正式正文定位。',
+                      'claim_literal': '字面命中仅供定位，不替代正式证据。',
+                      'none': '无局部定位材料，不等于 PASS。'},
+    'generation_impact': {'must_fix': '未知或否定保持待审，由对应 owner 修订。',
+                         'quarantine_or_fix': '只有显式 UNVER 整组处置才可隔离；不是 PASS。'},
+    'identity': 'canonical 是内部登记名；role 只允许首次公开身份。identity_revealed_from 只约束称谓与实体的映射，不禁止称谓先出现。',
+    'time': 'effective_until 包含该章。生效、失效、读者揭示与证据位置独立；允许先透露未来事实，也允许结束后揭示。',
+    'arc_secret': '同场产生并当场揭晓的惊喜不进入 Global。默认跨章；同章例外须说明独立情节单元间的持续约束，不能凭段落数冒充已验分场。冷揭示不虚构铺垫。',
+    'whole_book_text': '完整正文按章只提供一次，行级证据不能代替反向漏抽检查。',
+    'decision': '所有语义决定必须由 Commander 明确提交。机械 lint 不是语义通过。',
 }
 
 
@@ -319,69 +251,12 @@ def _ordered_workpack_rows(
     return [row for key in keys for row in groups[key]]
 
 
-def _attach_blocking_role_fate_companions(
-    rows: list[dict[str, object]], *, review: GlobalReview,
-    claim_payload: dict[str, object],
-    evidence_slots: list[tuple[str, object]], chapters: dict[int, object],
-) -> None:
-    """给 blocking role 行附上同人物 fate，只供成对阅读，不增加决定项。
-
-    ``enumerate_required`` 保证每个人物各有一条 role 与 fate；这里仍按生产
-    ``review_group_key`` 关闭式核对唯一配对，避免路径截字符串另造第二套人物归属尺子。
-    companion 不复制 claim-literal、registered decision evidence 或 group 元数据，只带
-    fate 主体身份、当前状态及正式证据材料。
-    """
-    fate_by_group: dict[str, list[GlobalReviewItem]] = {}
-    for item in review.items:
-        if item.kind == 'fate':
-            fate_by_group.setdefault(
-                review_group_key(item.subject_path), []).append(item)
-    for row in rows:
-        if row['kind'] != 'role' or row['effect'] != 'blocking':
-            continue
-        group_key = str(row['group_key'])
-        matches = fate_by_group.get(group_key, [])
-        if len(matches) != 1:
-            raise TerminalState(
-                f'blocking role 卡 {group_key!r} 必须恰有一条同人物 fate 复核项，'
-                f'实得 {len(matches)} 条')
-        fate = matches[0]
-        prefix = f'{fate.subject_path}.'
-        relevant_slots = [
-            (path, evidence) for path, evidence in evidence_slots
-            if path == fate.subject_path or path.startswith(prefix)
-        ]
-        formal, unresolved = _formal_materials(relevant_slots, chapters)
-        try:
-            subject = _subject_at(claim_payload, fate.subject_path)
-        except (KeyError, IndexError, StopIteration) as exc:
-            raise TerminalState(
-                f'blocking role 卡 {group_key!r} 的 fate 主体无法从当前 Global 回取') from exc
-        row['fate_companion'] = {
-            'read_only': True,
-            'kind': fate.kind,
-            'item_id': fate.item_id,
-            'subject_path': fate.subject_path,
-            'subject_sha256': fate.subject_sha256,
-            'current_state': fate.state,
-            'current_reason': fate.reason,
-            'generation_disposition': (
-                None if fate.generation_disposition is None
-                else fate.generation_disposition.model_dump(mode='json')),
-            'effect': review_effect_of(fate.kind),
-            'generation_impact': review_generation_impact_of(fate.kind),
-            'subject': subject,
-            'formal_evidence': formal,
-            'unresolved_formal_evidence': unresolved,
-        }
-
-
-GLOBAL_REVIEW_TOKEN_PREFIX: Final = 's2gr1_'
+GLOBAL_REVIEW_TOKEN_PREFIX: Final = 's2gr2_'
 
 
 def review_identity(
     grounding_payload: dict[str, object], review: GlobalReview,
-    main_text_subject_sha256: str,
+    main_text_subject_sha256: str, *, characters: dict[str, object] | None = None,
 ) -> dict[str, str]:
     """``seen.global`` 与终审席位共用的无正文阅读身份。
 
@@ -390,7 +265,7 @@ def review_identity(
     token，所以旧阅读事实不可能配新主体提交；同时它不含 workpack 的逐项命中
     材料，审批投影在每次 GET 时重算也不必重建整份 workpack。
     """
-    subject = subject_sha256(grounding_payload)
+    subject = subject_sha256(review_source(grounding_payload, characters))
     review_sha256 = subject_sha256(review.model_dump(mode='json'))
     identity = {
         'source_sha256': review.source_sha256,
@@ -400,7 +275,7 @@ def review_identity(
         'blocking_scope_sha256': blocking_scope_sha256(review),
     }
     token = GLOBAL_REVIEW_TOKEN_PREFIX + hashlib.sha256(json.dumps(
-        {'kind': 'stage2-global-review-seen-v1', **identity},
+        {'kind': 'stage2-global-review-seen-v2', **identity},
         ensure_ascii=False, sort_keys=True, separators=(',', ':'),
     ).encode('utf-8')).hexdigest()
     return {**identity, 'review_token': token}
@@ -408,61 +283,21 @@ def review_identity(
 
 def review_token(ctx: RunContext) -> str:
     """现算当前 Global 审阅面的 opaque token；主体不 current 时按现役异常拒绝。"""
-    store = ArtifactStore(ctx)
-    grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING, require_current=True)[0]
-    review = store.read_own(GlobalReview, REL, require_current=True)[0]
-    main = store.read_own(MainText, STAGE1_MAIN_TEXT, require_current=True)[0]
-    grounding_payload = grounding.model_dump(mode='json', by_alias=True)
-    require_current(grounding_payload, review)
-    return review_identity(
-        grounding_payload, review,
-        subject_sha256(main.model_dump(mode='json', by_alias=True)),
-    )['review_token']
+    return str(review_workpack(ctx)['review_token'])
 
 
-def review_workpack(
-    ctx: RunContext, *, scope: str = DEFAULT_REVIEW_SCOPE,
-    replaced_input_keys: tuple[str, ...] = (),
-) -> dict[str, object]:
-    """只读人工核验材料；精确命中是证据候选，不是自动裁决。
-
-    ⚠ 与 `review_template` 同一条 `scope` 纪律：默认只出 blocking 面，
-    裁剪的是**阅读范围**而不是评测面；披露项没进 workpack 不等于被放行。
-
-    ``replaced_input_keys`` 只供 reviewed GlobalEdit 被 HARD 拒绝后的中断恢复：
-    正式 Global 仍是该次审阅的原主体，只是书内 edit 输入已经换成失败动作。
-    普通工作包不给这个参数，不能把任意 stale Global 伪装成 current。
-    """
-    store = ArtifactStore(ctx)
-    grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING, require_current=True, replaced_input_keys=replaced_input_keys)[0]
-    review = store.read_own(GlobalReview, REL, require_current=True)[0]
-    main = store.read_own(MainText, STAGE1_MAIN_TEXT, require_current=True)[0]
-    main_text_subject_sha256 = subject_sha256(
-        main.model_dump(mode='json', by_alias=True))
-    payload = grounding.model_dump(mode='json', by_alias=True)
-    claim_payload = without_global_evidence(payload)
-    assert isinstance(claim_payload, dict)
-    evidence_slots = [
-        (path, owner.get(field))
-        for path, owner, field in iter_global_evidence_slots(payload)
-    ]
-    hook_slots = [(path, owner.get(field)) for path, owner, field in iter_hook_evidence_slots(payload)]
-    source_hook = store.read_own(HookCopy, STAGE1_HOOK_COPY, require_current=True)[0].text
+def _material_rows(payload, review, main, characters_payload, scope):
+    """当前与原归档材料使用同一语义/证据展开器，历史不由另一套投影猜测。"""
+    review_payload = review_source(payload, characters_payload)
+    claim_payload = without_review_evidence(review_payload)
+    evidence_slots = review_evidence_slots(review_payload)
+    require_current(payload, review, characters=characters_payload)
     chapters = {chapter.chapter_ordinal: chapter for chapter in main.root}
     rows: list[dict[str, object]] = []
     for item in _scoped_items(review.items, scope):
         subject_path = item.subject_path
         lookup_path = subject_path
-        if item.kind == 'address_context' and lookup_path.endswith('.context'):
-            lookup_path = lookup_path.rsplit('.', 1)[0]
-        elif item.kind == 'name_distinctiveness':
-            lookup_path = lookup_path.rsplit('.', 1)[0]
-        elif item.kind == 'secret_setup':
-            # `setup_chapters` 恒是 `list[int]` ⇒ `_strings` 恒空、命中恒 0。
-            # 回退到整条 secret，人读到的是那条秘密的 `fact` 在原文里的位置——
-            # 「这些章到底埋没埋」正要拿它去对。⚠ 与 `address_context` /
-            # `name_distinctiveness` 同一形状：`subject` 是给人看的上下文，
-            # 而 `subject_path` / `subject_sha256` 仍严格绑在被裁决的那个字段上。
+        if item.kind in {'name_distinctiveness', 'secret_setup', 'reveal'}:
             lookup_path = lookup_path.rsplit('.', 1)[0]
         try:
             # 人读的 subject 与 claim 搜索面都剥掉正式 evidence；否则
@@ -480,16 +315,8 @@ def review_workpack(
                 if path == item.subject_path or path.startswith(prefix)
             ]
         formal, unresolved = _formal_materials(relevant_slots, chapters)
-        relevant_hook_slots = ([(path, evidence) for path, evidence in hook_slots
-                                if path == item.subject_path or path.startswith(item.subject_path + '.')]
-                               if item.kind not in _NO_FORMAL_EVIDENCE_KINDS else [])
-        if relevant_hook_slots:
-            from novel.stages.stage2.source_blurb import hook_evidence_materials
-            hook_formal, hook_unresolved = hook_evidence_materials(relevant_hook_slots, source_hook)
-            formal.extend(hook_formal)
-            unresolved.extend(hook_unresolved)
         hits: list[dict[str, object]] = []
-        if not relevant_slots and not relevant_hook_slots:
+        if not relevant_slots:
             for literal in literals:
                 if len(hits) >= 24:
                     break
@@ -510,11 +337,7 @@ def review_workpack(
                             'origin': 'claim_literal',
                         })
                         start = found + max(1, len(literal))
-        reading_scope = (
-            'whole_book' if (item.kind in _WHOLE_BOOK_KINDS
-                             or (item.kind == 'source_blurb_fact' and isinstance(subject, dict)
-                                 and subject.get('kind') in {'hook_supported', 'unresolved'}))
-            else 'localized')
+        reading_scope = 'whole_book' if item.kind in _WHOLE_BOOK_KINDS else 'localized'
         if unresolved:
             evidence_mode = 'unresolved_formal_evidence'
         elif formal:
@@ -545,15 +368,38 @@ def review_workpack(
             'unresolved_formal_evidence': unresolved,
             'exact_literal_hits': hits,
         })
-    if scope == 'blocking':
-        _attach_blocking_role_fate_companions(
-            rows, review=review, claim_payload=claim_payload,
-            evidence_slots=evidence_slots, chapters=chapters)
     rows = _ordered_workpack_rows(rows)
+    return rows
+
+
+def review_workpack(
+    ctx: RunContext, *, scope: str = DEFAULT_REVIEW_SCOPE,
+    replaced_input_keys: tuple[str, ...] = (),
+) -> dict[str, object]:
+    """只读人工核验材料；精确命中是证据候选，不是自动裁决。
+
+    ⚠ 与 `review_template` 同一条 `scope` 纪律：默认只出 blocking 面，
+    裁剪的是**阅读范围**而不是评测面；披露项没进 workpack 不等于被放行。
+
+    ``replaced_input_keys`` 只供 reviewed GlobalEdit 被 HARD 拒绝后的中断恢复：
+    正式 Global 仍是该次审阅的原主体，只是书内 edit 输入已经换成失败动作。
+    普通工作包不给这个参数，不能把任意 stale Global 伪装成 current。
+    """
+    store = ArtifactStore(ctx)
+    grounding, global_sha = grounding_io.read_own_with_sha256(store, STAGE2_GLOBAL_GROUNDING,
+        require_current=True, replaced_input_keys=replaced_input_keys)
+    review, review_sha = store.read_own_with_sha256(GlobalReview, REL, require_current=True)
+    main, main_sha = store.read_own_with_sha256(MainText, STAGE1_MAIN_TEXT, require_current=True)
+    registry, characters_sha = store.read_own_with_sha256(CharacterRegistry, STAGE2_CHARACTERS, require_current=True)
+    main_text_subject_sha256 = subject_sha256(
+        main.model_dump(mode='json', by_alias=True))
+    payload = grounding.model_dump(mode='json', by_alias=True)
+    characters_payload = registry.model_dump(mode='json', by_alias=True)
+    rows = _material_rows(payload, review, main, characters_payload, scope)
     needs_whole_book = any(
         row.get('reading_scope') == 'whole_book' for row in rows)
     payload: dict[str, object] = {
-        'kind': 'stage2-global-review-workpack-v5',
+        'kind': 'stage2-global-review-workpack-v6',
         'sid': ctx.sid,
         'scope': scope,
         'read_only': True,
@@ -562,7 +408,7 @@ def review_workpack(
         # ``seen.global`` / 终审席位提交时回填的 opaque 阅读凭证；它绑定 review
         # 完整字节而不是本包的逐项命中材料，因而与 ``workpack_sha256`` 是两枚。
         'review_token': review_identity(
-            payload, review, main_text_subject_sha256)['review_token'],
+            payload, review, main_text_subject_sha256, characters=characters_payload)['review_token'],
         # 绑定完整 typed MainText 主体，不只绑定章号或最多 24 个展示命中；
         # 未展示上下文之外改一个字，也必须让旧 workpack/scope 失效。
         'main_text_subject_sha256': main_text_subject_sha256,
@@ -570,7 +416,6 @@ def review_workpack(
         # 正确地把这种材料不足判成 UNVER，随后误入 GlobalEdit，形成“模型成功、
         # 交付失败”。v4 对 whole-book 包把 current MainText 只放一遍；行仍引用
         # 同一主体/证据，不复制正文，workpack SHA 也会绑定实际读到的全部字节。
-        'source_hook': source_hook,
         'main_text_chapters': ([{
             'chapter_ordinal': int(chapter.chapter_ordinal),
             'text': chapter.text,
@@ -584,20 +429,81 @@ def review_workpack(
                 int(chapter.chapter_ordinal) for chapter in main.root],
         } if scope == 'blocking' else None),
         'items': rows,
+        'material_source': {'characters_sha256': characters_sha, 'global_sha256': global_sha,
+                            'review_sha256': review_sha, 'main_text_sha256': main_sha},
+        'core_edit_binding': {
+            'expected_characters_sha256': store.full_sha256_or_none(STAGE2_CHARACTERS),
+            'expected_global_sha256': store.full_sha256_or_none(STAGE2_GLOBAL_GROUNDING),
+        },
     }
     # 哈希故意不含它自己；模板与应用口都调本函数现算，
     # 不从 grounding/review 另拼一份“看起来相同”的阅读面。
-    payload['workpack_sha256'] = subject_sha256(payload)
     # 覆盖导航不进入材料身份；保存接受本身不能令同一份包自行过期。
     # Global 节点接受的义务是 blocking 面，披露项继续沿原 typed UNVER 账展示。
     from novel.orchestrator.approvals import stage2_review_history
     from novel.stages.stage2 import review_obligations
     commander_pack = {**payload, 'items': [row for row in rows if row['effect'] == 'blocking']}
+    history = stage2_review_history(ctx.novel_dir.parent, ctx.sid)
     coverage = review_obligations.coverage(
         'stage2.global', review_obligations.global_catalog(commander_pack),
-        stage2_review_history(ctx.novel_dir.parent, ctx.sid))
+        history)
+    removed = _removed_problem_materials(store, coverage, history)
+    if removed:
+        payload['removed_problem_materials'] = removed
+        # 已明确接受的删除义务仍保留原材料身份，避免接受自己令 token 过期。
+        payload['review_token'] = GLOBAL_REVIEW_TOKEN_PREFIX + subject_sha256({
+            'current_token': payload['review_token'], 'removed_problem_materials': removed})
+    payload['workpack_sha256'] = subject_sha256(payload)
     payload['review_coverage'] = coverage.model_dump(mode='json')
     return payload
+
+
+def _removed_problem_materials(store, coverage, history) -> list[dict]:
+    """按原否定义务与四份归档字节恢复旧主张；不从当前稿或名称猜回被删内容。"""
+    from novel.errors import NovelError
+    from novel.stages.stage2 import review_obligations
+    result = []
+    for obligation in coverage.scope.obligations:
+        if obligation.kind != 'removed_problem':
+            continue
+        origin = obligation.problem_subject_sha256
+        original = next((decision for decision in reversed(history)
+            if decision.node == 'stage2.global' and decision.obligation_receipt is not None
+            and any(unit.obligation.obligation_id == obligation.obligation_id
+                    and unit.obligation.kind != 'removed_problem'
+                    and unit.obligation.subject_sha256 == origin
+                    and unit.decision != 'accept' for unit in decision.obligation_receipt.units)), None)
+        item = {'obligation_id': obligation.obligation_id, 'problem_subject_sha256': origin,
+                'source_decision_sha256': None if original is None else review_obligations.sha(original.model_dump(mode='json')),
+                'source': None if original is None or original.material_source is None
+                          else original.material_source.model_dump(mode='json'),
+                'available': False, 'row': None, 'context_rows': [], 'unavailable_reason': None}
+        try:
+            if original is None or original.material_source is None:
+                raise ValueError('原否定未绑定可核对的历史材料')
+            source = original.material_source
+            chars = store.read_own_by_sha256(CharacterRegistry, STAGE2_CHARACTERS, source.characters_sha256)
+            global_ = store.read_own_by_sha256(GlobalGrounding, STAGE2_GLOBAL_GROUNDING, source.global_sha256)
+            old_review = store.read_own_by_sha256(GlobalReview, REL, source.review_sha256)
+            old_main = store.read_own_by_sha256(MainText, STAGE1_MAIN_TEXT, source.main_text_sha256)
+            rows = _material_rows(global_.model_dump(mode='json', by_alias=True), old_review, old_main,
+                                  chars.model_dump(mode='json', by_alias=True), 'blocking')
+            restored = next(row for row in rows if review_obligations.global_key(row) == obligation.obligation_id)
+            old_catalog = review_obligations.global_catalog({'items': rows,
+                'main_text_subject_sha256': subject_sha256(old_main.model_dump(mode='json', by_alias=True))})
+            proven = next(row for row in old_catalog if row.obligation_id == obligation.obligation_id)
+            if proven.subject_sha256 != origin:
+                raise ValueError('原归档材料与被删问题义务 SHA 不一致')
+            context = review_obligations._global_material_context(rows,
+                {row.obligation_id: row for row in old_catalog}, {obligation.obligation_id})
+            item.update(available=True, row=restored, context_rows=[
+                row for row in rows if review_obligations.global_key(row) in context
+                and row['reading_scope'] != 'whole_book'])
+        except (NovelError, ValueError, StopIteration) as exc:
+            item['unavailable_reason'] = (f'原删除问题材料不可验证：{exc}。恢复所列完整 SHA 的原归档后免费刷新审阅；'
+                                           '在原主张可核对前保持不确定，不能接受删除。')
+        result.append(item)
+    return result
 
 
 def review_workpack_json(
@@ -661,7 +567,7 @@ def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
         grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING)[0]
         grounding_payload = grounding.model_dump(by_alias=True)
         current = store.read_own(GlobalReview, REL)[0]
-        require_current(grounding_payload, current)
+        require_current(grounding_payload, current, characters=_characters_payload(store))
         main_text = store.read_own(MainText, STAGE1_MAIN_TEXT)[0]
         from novel.orchestrator.approvals import (
             prepare_stage2_patch_receipt, stage2_patch_receipt,
@@ -690,7 +596,7 @@ def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
                 expected_workpack_sha256=(
                     str(blocking_workpack['workpack_sha256'])
                     if blocking_workpack is not None else None))
-            require_current(grounding_payload, updated)
+            require_current(grounding_payload, updated, characters=_characters_payload(store))
             prepare_stage2_patch_receipt(
                 ctx.novel_dir.parent, ctx.sid, request_sha256=request_sha,
                 before_token=review_token(ctx),
@@ -698,10 +604,14 @@ def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
                 global_sha256=subject_sha256(grounding_payload),
                 decision_timestamp=decision_timestamp)
             store.write_round(REL, updated)
-        if generation_safety(grounding_payload, updated).safe:
+        if generation_safety(grounding_payload, updated, characters=_characters_payload(store)).safe:
             from contracts.schema.api import Stage2NodeReviewRequest
             from novel.orchestrator.approvals import approve_stage2_review
             from novel.errors import ArtifactSubmittedReviewPending, NovelError
+            if pending_removed_problems(ctx):
+                # 本回答只决定当前 formal items；已删除的问题必须由统一 C 以
+                # 含原主张材料的当前 token 明确裁决，重放旧 PASS 不授予该权限。
+                return updated
             try:
                 approve_stage2_review(ctx.novel_dir.parent, ctx.sid, Stage2NodeReviewRequest(
                     node='stage2.global', review_token=review_token(ctx),
@@ -739,7 +649,9 @@ def submitted_decisions_is_current(
     if (receipt.global_sha256 != subject_sha256(payload)
             or receipt.result_subject_sha256 != subject_sha256(current.model_dump(mode='json'))):
         return False
-    if require_action_complete and generation_safety(payload, current).safe:
+    if require_action_complete and generation_safety(payload, current, characters=_characters_payload(store)).safe:
+        if pending_removed_problems(ctx):
+            return True  # 当前事实决定已落；下一步是同一 C 的删除义务，不重放本回答。
         from novel.errors import ApprovalRequired
         from novel.orchestrator.approvals import require_stage2_node_accepted
         try:
@@ -749,18 +661,26 @@ def submitted_decisions_is_current(
     return True
 
 
+def pending_removed_problems(ctx: RunContext) -> bool:
+    pack = review_workpack(ctx)
+    coverage = pack['review_coverage']
+    pending = set(coverage['pending_obligation_ids'])
+    return any(row['kind'] == 'removed_problem' and row['obligation_id'] in pending
+               for row in coverage['scope']['obligations'])
+
+
 def is_approved(ctx: RunContext, review: GlobalReview) -> bool:
     """Bind approval to the complete, current Stage2 subject (blocking surface)."""
     grounding = grounding_io.read_own(ArtifactStore(ctx))[0]
     return review_status(
-        grounding.model_dump(by_alias=True), review)[2]
+        grounding.model_dump(by_alias=True), review, characters=_characters_payload(ArtifactStore(ctx)))[2]
 
 
 def is_generation_safe(ctx: RunContext, review: GlobalReview) -> bool:
     """是否可把当前 review 经确定性隔离后交给写作消费方。"""
     grounding = grounding_io.read_own(ArtifactStore(ctx))[0]
     return generation_safety(
-        grounding.model_dump(by_alias=True), review).safe
+        grounding.model_dump(by_alias=True), review, characters=_characters_payload(ArtifactStore(ctx))).safe
 
 
 def _counts(review: GlobalReview) -> dict[str, int]:
@@ -783,7 +703,7 @@ def approval_status(ctx: RunContext) -> tuple[bool, bool, dict[str, int]]:
     grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING)[0]
     review = store.read_own(GlobalReview, REL)[0]
     _subject, current, approved = review_status(
-        grounding.model_dump(by_alias=True), review)
+        grounding.model_dump(by_alias=True), review, characters=_characters_payload(ArtifactStore(ctx)))
     return current, approved, _counts(review)
 
 
@@ -793,7 +713,7 @@ def generation_status(ctx: RunContext) -> tuple[GenerationSafety, dict[str, int]
     grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING)[0]
     review = store.read_own(GlobalReview, REL)[0]
     return (
-        generation_safety(grounding.model_dump(by_alias=True), review),
+        generation_safety(grounding.model_dump(by_alias=True), review, characters=_characters_payload(store)),
         _counts(review),
     )
 
@@ -809,7 +729,7 @@ def generation_grounding(store: ArtifactStore) -> GlobalGrounding:
     grounding = grounding_io.read(store)
     review = store.read(GlobalReview, REL)
     safety = generation_safety(
-        grounding.model_dump(by_alias=True), review)
+        grounding.model_dump(by_alias=True), review, characters=_characters_payload(store))
     if not safety.safe:
         raise ApprovalRequired(
             'Stage2 写作视图未收口：仍有 pending/FAIL、不可隔离 UNVER，'
@@ -819,38 +739,16 @@ def generation_grounding(store: ArtifactStore) -> GlobalGrounding:
         return grounding
 
     payload = grounding.model_dump(mode='json', by_alias=True)
-    entities = payload['entities']
-    canon = payload['canon']
-    secret_ids = {
-        group.split(':', 1)[1] for group in safety.quarantined_groups
-        if group.startswith('secret:')
-    }
-    relation_ids = {
-        group.split(':', 1)[1] for group in safety.quarantined_groups
-        if group.startswith('relation:')
-    }
-    world_rule_ids = {
-        group.split(':', 1)[1] for group in safety.quarantined_groups
-        if group.startswith('world_rule:')
-    }
-    canon['secrets'] = [
-        row for row in canon['secrets']
-        if row['secret_id'] not in secret_ids
-    ]
-    canon['world_rules'] = [
-        row for row in canon['world_rules']
-        if row['rule_id'] not in world_rule_ids
-    ]
-    # 一条 via_secret relation 在秘密被隔离后也必须一起消失；留下悬空引用
-    # 既过不了 schema，也会从关系通道把同一未知事实重新泄给写手。
-    entities['relations'] = [
-        row for row in entities['relations']
-        if row['relation_id'] not in relation_ids
-        and not (
-            row['visibility']['kind'] == 'via_secret'
-            and row['visibility']['secret_id'] in secret_ids
-        )
-    ]
+    secret_ids = {group.split(':', 1)[1] for group in safety.quarantined_groups if group.startswith('secret:')}
+    relation_ids = {group.split(':', 1)[1] for group in safety.quarantined_groups if group.startswith('relation:')}
+    rule_ids = {group.split(':', 1)[1] for group in safety.quarantined_groups if group.startswith('world_rule:')}
+    payload['relations'] = [row for row in payload['relations'] if row['relation_id'] not in relation_ids]
+    payload['world_rules'] = [row for row in payload['world_rules'] if row['rule_id'] not in rule_ids]
+    payload['arc_secrets'] = [row for row in payload['arc_secrets']
+                              if row['secret_id'] not in secret_ids and not (
+                                  row.get('fact_ref') is not None and (
+                                      (row['fact_ref']['kind'] == 'relation' and row['fact_ref']['relation_id'] in relation_ids)
+                                      or (row['fact_ref']['kind'] == 'world_rule_version' and row['fact_ref']['rule_id'] in rule_ids)))]
     try:
         return GlobalGrounding.model_validate(payload)
     except ValidationError as exc:  # 校验细节不应变成一条模糊的继续路径
@@ -862,6 +760,13 @@ def generation_grounding(store: ArtifactStore) -> GlobalGrounding:
 def require_global_valid(ctx: RunContext) -> None:
     """Global 自身当前、机械有效且逐项决定闭合；不反向要求 Blueprint 存在。"""
     store = ArtifactStore(ctx)
+    characters_invalid = paths.invalid_of(STAGE2_CHARACTERS)
+    if store.exists(characters_invalid):
+        raise GateBlocked(
+            '人物登记存在更新的问题稿；不能用旧人物与 Global 接受覆盖当前身份问题',
+            invalid_path=str(store.path(characters_invalid)),
+            hint='stage2.characters --revalidate（0 成本），或提交人物 typed 编辑')
+    _characters_payload(store, require_current=True)
     global_invalid = paths.invalid_of(STAGE2_GLOBAL_GROUNDING)
     if store.exists(global_invalid):
         raise GateBlocked(
@@ -882,8 +787,7 @@ def require_global_valid(ctx: RunContext) -> None:
                   '`stage2.global --review-decisions <书内json>` 提交；'
                   'FAIL 必须经 typed GlobalEdit 修复；UNVER 只有可确定性隔离的 '
                   'secret/relation/world_rule 组能显式 quarantine，不能改名为 PASS。'
-                  'disclosure 项（名字区分度 / 称谓场合 / 结局）不挡门，'
-                  '但仍必须在 inbox 与终审包里逐条披露，不许自动 PASS'))
+                  '人物身份、公开角色与称谓归属必须明确接受，不许自动 PASS'))
 
     global_freshness = store.freshness(STAGE2_GLOBAL_GROUNDING)
     if global_freshness.state == 'stale':
@@ -902,7 +806,7 @@ def require_global_valid(ctx: RunContext) -> None:
     main = store.read_own(MainText, STAGE1_MAIN_TEXT)[0]
     hard = extract._hard_hits(extract._judge_candidate(
         grounding.model_dump(by_alias=True, mode='json'), None,
-        main.model_dump(mode='json'), source_hook=extract._read_source_hook(store)), ignore={'upstream_missing'})
+        main.model_dump(mode='json'), characters=_characters_payload(store)), ignore={'upstream_missing'})
     if hard:
         raise BlockingFindingsUnresolved(
             'Global 当前正式稿仍违反生产 HARD；不能授予或消费语义接受',

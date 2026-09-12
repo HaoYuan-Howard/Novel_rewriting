@@ -474,33 +474,9 @@ class Entities(StrictModel):
         return self
 
 
-class GlobalProvenance(LlmProvenance):
-    """`global_grounding._provenance` —— 只保留会驱动闸门或恢复的归一账。"""
-
-    #: `(secret_id, 原埋点章, 裁完的)`。**校验器断言的是它，不是字段值。**
-    #: 空列表 = 这一趟没裁过；**键不在 = 「不知道」，不发绿灯**。
-    #: ⚠ 裁完为 `[]` 的那一条在产物里**降级成 `{"kind": "cold"}`**，与真·冷揭示同形
-    #: ——v2 的判别联合消除的是「模型意图」那层歧义，这一层仍然只有这个账说得清。
-    setup_chapters_pruned: list[tuple[str, list[int], list[int]]]
-
-    #: `(claim_path, chapter, locator, reason)`；非空时正式证据为 `source=None`，
-    #: 由 `global_evidence_unlocated` HARD 拦到可恢复的 `.INVALID`。
-    evidence_locator_failures: list[tuple[str, int, str, str]]
-
-
-class GlobalGrounding(StrictModel):
-    """人物与知识的只读领域视图，不登记 ARTIFACT_SPECS，不可作为落盘模型。
-
-    人物来自 CharacterRegistry，知识来自 KnowledgeGrounding。共享事实判据消费
-    这个完整视图；任何 producer 都不能将其写成另一份静态人物表。
-    """
-
-    entities: Entities
-    canon: Canon
-    source_blurb: SourceBlurbGrounding[FactEvidence, HookFactEvidence]
-
-    #: `inputs` 绑定实际读取的 MainText 与 HookCopy；不能用正文身份替代源文案身份。
-    provenance: GlobalProvenance = Field(alias='_provenance')
+from contracts.schema.knowledge import (
+    KnowledgeGrounding as GlobalGrounding, GlobalProvenance,
+)
 
 
 class BlueprintCharacterProjectionChapter(StrictModel):
@@ -732,142 +708,92 @@ class CanonCandidateResponse(StrictModel):
         return self
 
 
-class SecretPatch(StrictModel):
-    """一条 secret 的 typed 人工订正；claim 改动必须同交新 locator。"""
 
-    secret_id: str = Field(pattern=r'^secret_\d{2}$')
+from contracts.schema.core_evidence import CoreEvidenceLocator, EvidenceId
+from contracts.schema.knowledge import (
+    GlobalArcSecret, GlobalFactRef, GlobalRelation, GlobalSetting,
+    GlobalWorldRule, GlobalWorldRuleVersion,
+)
+
+ManualGlobalEvidence = EvidenceId | CoreEvidenceLocator
+RelationResponse = GlobalRelation[ManualGlobalEvidence]
+WorldRuleVersionResponse = GlobalWorldRuleVersion[ManualGlobalEvidence]
+WorldRuleResponse = GlobalWorldRule[ManualGlobalEvidence]
+SecretResponse = GlobalArcSecret[ManualGlobalEvidence]
+
+
+class SecretPatch(StrictModel):
+    secret_id: str = Field(pattern=r'^secret_\d{2,}$')
     fact: str | None = Field(default=None, min_length=1)
-    fact_evidence: EvidenceLocator | None = None
-    knowledge_events: list[KnowledgeEventResponse] | None = Field(
-        default=None, min_length=1)
-    setup: SecretSetup | None = None
-    first_reveal_chapter: ChapterOrdinal | None = None
+    fact_ref: GlobalFactRef | None = None
+    setup_chapters: list[ChapterOrdinal] | None = None
+    revealed_from: ChapterOrdinal | None = None
+    evidence_refs: list[ManualGlobalEvidence] | None = None
 
     @model_validator(mode='after')
-    def _valid_patch(self) -> SecretPatch:
+    def _valid_patch(self):
         changed = self.model_fields_set - {'secret_id'}
         if not changed:
-            raise ValueError(f'{self.secret_id}: empty secret patch')
-        for field in ('fact', 'knowledge_events', 'setup', 'first_reveal_chapter'):
-            if field in changed and getattr(self, field) is None:
-                raise ValueError(f'{self.secret_id}: {field} 不能显式置空')
-        if 'fact' in changed and 'fact_evidence' not in changed:
-            raise ValueError(f'{self.secret_id}: 修改 fact 必须同交 fact_evidence locator')
-        if 'fact_evidence' in changed and self.fact_evidence is None:
-            raise ValueError(f'{self.secret_id}: fact_evidence 不能显式置空')
-        if self.knowledge_events is not None:
-            subjects = [
-                (event.subject.kind,
-                 getattr(event.subject, 'char_id', None),
-                 getattr(event.subject, 'label', None))
-                for event in self.knowledge_events
-            ]
-            if len(subjects) != len(set(subjects)):
-                raise ValueError(f'{self.secret_id}: duplicate knowledge subject')
+            raise ValueError('秘密 patch 不能为空')
+        if {'fact', 'fact_ref'} & changed and not {'fact', 'fact_ref', 'evidence_refs'} <= changed:
+            raise ValueError('修改秘密事实须同时提交 fact、fact_ref 与 evidence_refs')
+        if any(getattr(self, key) is None for key in changed - {'fact', 'fact_ref'}):
+            raise ValueError('秘密非可空字段不得置 null')
         return self
 
 
 class WorldRulePatch(StrictModel):
-    rule_id: str = Field(pattern=r'^wr_\d{2}$')
+    rule_id: str = Field(pattern=r'^wr_\d{2,}$')
     kind: Literal[WORLD_RULE_KINDS] | None = None
     versions: list[WorldRuleVersionResponse] | None = Field(default=None, min_length=1)
 
     @model_validator(mode='after')
-    def _has_change(self) -> WorldRulePatch:
+    def _valid_patch(self):
         changed = self.model_fields_set - {'rule_id'}
-        if not changed:
-            raise ValueError(f'{self.rule_id}: empty world-rule patch')
-        for field in changed:
-            if getattr(self, field) is None:
-                raise ValueError(f'{self.rule_id}: {field} 不能显式置空')
+        if not changed or any(getattr(self, key) is None for key in changed):
+            raise ValueError('规则 patch 必须修改非空字段')
         if self.versions is not None:
-            starts = [row.effective_from_chapter for row in self.versions]
-            if len(starts) != len(set(starts)):
-                raise ValueError(f'{self.rule_id}: duplicate effective_from_chapter')
-        return self
-
-
-class GlobalCharacterPatch(StrictModel):
-    """按人物稳定 ID 订正必要动态状态；静态身份只由 CharactersEdit 修改。"""
-
-    char_id: str = Field(pattern=r'^char_\d{3}$')
-    fate: str | None = None
-    fate_evidence: EvidenceLocator | None = None
-
-    @model_validator(mode='after')
-    def _has_change(self) -> GlobalCharacterPatch:
-        changed = self.model_fields_set - {'char_id'}
-        if not changed:
-            raise ValueError(f'{self.char_id}: empty character patch')
-        if 'fate' in changed and self.fate is not None and 'fate_evidence' not in changed:
-            raise ValueError(f'{self.char_id}: 写入 fate 必须同交 fate_evidence locator')
-        if 'fate' in changed and self.fate is None and self.fate_evidence is not None:
-            raise ValueError(f'{self.char_id}: fate=null 时不能携带非空 fate_evidence')
-        if 'fate_evidence' in changed and self.fate_evidence is None \
-                and not ('fate' in changed and self.fate is None):
-            raise ValueError(f'{self.char_id}: fate_evidence 只能随 fate=null 清空')
+            identities = [version.version_id for version in self.versions]
+            if len(identities) != len(set(identities)):
+                raise ValueError('同一规则的 version_id 不得重复')
         return self
 
 
 class RelationPatch(StrictModel):
-    relation_id: str = Field(pattern=r'^rel_\d{2}$')
+    relation_id: str = Field(pattern=r'^rel_\d{2,}$')
     subject_id: str | None = Field(default=None, min_length=1)
     object_id: str | None = Field(default=None, min_length=1)
     predicate: str | None = Field(default=None, min_length=1)
-    predicate_evidence: EvidenceLocator | None = None
-    visibility: RelationVisibility | None = None
-    valid_from_chapter: ChapterOrdinal | None = None
-    valid_through_chapter: ChapterOrdinal | None = None
+    effective_from: ChapterOrdinal | None = None
+    effective_until: ChapterOrdinal | None = None
+    revealed_from: ChapterOrdinal | None = None
+    evidence_refs: list[ManualGlobalEvidence] | None = Field(default=None, min_length=1)
 
     @model_validator(mode='after')
-    def _valid_patch(self) -> RelationPatch:
+    def _valid_patch(self):
         changed = self.model_fields_set - {'relation_id'}
-        if not changed:
-            raise ValueError(f'{self.relation_id}: empty relation patch')
-        for field in ('subject_id', 'object_id', 'predicate', 'visibility',
-                      'valid_from_chapter'):
-            if field in changed and getattr(self, field) is None:
-                raise ValueError(f'{self.relation_id}: {field} 不能显式置空')
-        if 'predicate' in changed and 'predicate_evidence' not in changed:
-            raise ValueError(
-                f'{self.relation_id}: 修改 predicate 必须同交 predicate_evidence locator')
-        if 'predicate_evidence' in changed and self.predicate_evidence is None:
-            raise ValueError(f'{self.relation_id}: predicate_evidence 不能显式置空')
+        if not changed or any(getattr(self, key) is None for key in changed - {'effective_until'}):
+            raise ValueError('关系 patch 只能将 effective_until 显式置 null')
+        if {'predicate', 'subject_id', 'object_id'} & changed and 'evidence_refs' not in changed:
+            raise ValueError('修改关系事实必须同时提交 evidence_refs')
         return self
 
 
 class SettingPatch(StrictModel):
-    era: str | None = Field(default=None, alias='时代背景', min_length=1)
-    era_evidence: EvidenceLocator | None = None
-    worldview: str | None = Field(default=None, alias='世界观', min_length=1)
-    worldview_evidence: EvidenceLocator | None = None
+    era: str | None = Field(default=None, min_length=1)
+    social_context: str | None = Field(default=None, min_length=1)
+    era_evidence_refs: list[ManualGlobalEvidence] | None = None
+    social_context_evidence_refs: list[ManualGlobalEvidence] | None = None
 
     @model_validator(mode='after')
-    def _valid_patch(self) -> SettingPatch:
+    def _valid_patch(self):
         changed = self.model_fields_set
-        if not changed:
-            raise ValueError('empty setting patch')
-        for claim, evidence in (
-            ('era', 'era_evidence'), ('worldview', 'worldview_evidence'),
-        ):
-            if claim in changed and getattr(self, claim) is None:
-                raise ValueError(f'setting.{claim} 不能显式置空')
-            if claim in changed and evidence not in changed:
-                raise ValueError(f'修改 setting.{claim} 必须同交 {evidence} locator')
-            if evidence in changed and getattr(self, evidence) is None:
-                raise ValueError(f'{evidence} 不能显式置空')
+        if not changed or any(getattr(self, key) is None for key in changed - {'era', 'social_context'}):
+            raise ValueError('setting patch 必须修改非空字段')
+        for claim in ('era', 'social_context'):
+            if claim in changed and claim + '_evidence_refs' not in changed:
+                raise ValueError('修改背景事实必须同时提交证据')
         return self
-
-
-class AddressContextPatch(StrictModel):
-    char_id: str = Field(pattern=r'^char_\d{3}$')
-    address_index: int = Field(ge=0)
-    context: Literal[ADDRESS_CONTEXT]
-
-
-class CharacterAddressReplacement(StrictModel):
-    char_id: str = Field(pattern=r'^char_\d{3}$')
-    address: list[Address] = Field(min_length=1)
 
 
 class GlobalEditQuarantineGroup(StrictModel):
@@ -985,7 +911,7 @@ GlobalCollectionOperation = Annotated[
 class GlobalCollectionEdit(StrictModel):
     """集合完整性修订 DSL；只传 delta，不复制整组既有成员。"""
 
-    collection: Literal['relations', 'secrets', 'world_rules']
+    collection: Literal['relations', 'arc_secrets', 'world_rules']
     expected_collection_sha256: Sha256
     # 空数组只供 producer 生成 schema-valid no-op 模板；apply 仍会拒绝无业务变化。
     operations: list[GlobalCollectionOperation] = Field(default_factory=list)
@@ -994,7 +920,7 @@ class GlobalCollectionEdit(StrictModel):
     def _operations_match_collection(self) -> GlobalCollectionEdit:
         expected_type = {
             'relations': RelationResponse,
-            'secrets': SecretResponse,
+            'arc_secrets': SecretResponse,
             'world_rules': WorldRuleResponse,
         }[self.collection]
 
@@ -1035,65 +961,49 @@ class GlobalCollectionEdit(StrictModel):
 
 
 class GlobalEdit(StrictModel):
-    """知识 v6 的 0 LLM 恢复面；人物静态身份、称谓和集合只能走 CharactersEdit。"""
+    """Global v7 的免费四类事实编辑；不能承载人物或文案。"""
 
-    secrets: list[SecretPatch] = Field(default_factory=list)
+    arc_secrets: list[SecretPatch] = Field(default_factory=list)
     world_rules: list[WorldRulePatch] = Field(default_factory=list)
-    characters: list[GlobalCharacterPatch] = Field(default_factory=list)
     relations: list[RelationPatch] = Field(default_factory=list)
     setting: SettingPatch | None = None
-    secrets_replace: list[SecretResponse] | None = None
+    arc_secrets_replace: list[SecretResponse] | None = None
     world_rules_replace: list[WorldRuleResponse] | None = None
     relations_replace: list[RelationResponse] | None = None
-    source_blurb_replace: SourceBlurbGrounding[EvidenceLocator, HookEvidenceLocator] | None = None
     collection_edits: list[GlobalCollectionEdit] = Field(default_factory=list)
     post_edit_review: GlobalEditReviewAttestation | None = None
 
     @model_validator(mode='after')
-    def _one_patch_per_subject(self) -> GlobalEdit:
-        if not (self.secrets or self.world_rules or self.characters or self.relations
-                or self.setting is not None or self.secrets_replace is not None
+    def _closed_edits(self):
+        if not (self.arc_secrets or self.world_rules or self.relations
+                or self.setting is not None or self.arc_secrets_replace is not None
                 or self.world_rules_replace is not None or self.relations_replace is not None
-                or self.source_blurb_replace is not None or self.collection_edits):
+                or self.collection_edits):
             raise ValueError('global edit must contain at least one typed patch')
-        for label, keys in (
-            ('secret', [p.secret_id for p in self.secrets]),
-            ('world rule', [p.rule_id for p in self.world_rules]),
-            ('character state', [p.char_id for p in self.characters]),
-            ('relation', [p.relation_id for p in self.relations]),
-        ):
-            if len(keys) != len(set(keys)):
-                raise ValueError(f'duplicate {label} patches are order-dependent')
         collections = [row.collection for row in self.collection_edits]
         if len(collections) != len(set(collections)):
             raise ValueError('每个集合最多一条 collection edit')
-        for name, patch, replacement, key in (
-            ('secrets', self.secrets, self.secrets_replace, 'secret_id'),
-            ('world_rules', self.world_rules, self.world_rules_replace, 'rule_id'),
-            ('relations', self.relations, self.relations_replace, 'relation_id'),
-        ):
+        for name, key in (('arc_secrets', 'secret_id'), ('world_rules', 'rule_id'),
+                          ('relations', 'relation_id')):
+            patches = getattr(self, name)
+            replacement = getattr(self, name + '_replace')
+            ids = [getattr(row, key) for row in patches]
+            if len(ids) != len(set(ids)):
+                raise ValueError('同一主体不能多次 patch')
             if replacement is not None:
-                if patch:
-                    raise ValueError(f'{name} cannot be patched and completely replaced together')
-                if name in collections:
-                    raise ValueError('集合不能同时走 delta edit 与完整 replacement')
-                ids = [getattr(row, key) for row in replacement]
-                if len(ids) != len(set(ids)):
-                    raise ValueError(f'duplicate {name} ids in complete replacement')
-            targets = {getattr(row, key) for row in patch}
-            for collection in self.collection_edits:
-                if collection.collection != name:
+                if patches or name in collections:
+                    raise ValueError('完整替换不能与同集合 patch/delta 混用')
+                values = [getattr(row, key) for row in replacement]
+                if len(values) != len(set(values)):
+                    raise ValueError('替换集合 ID 不得重复')
+            for edit in self.collection_edits:
+                if edit.collection != name:
                     continue
-                removed = {row.subject_id for row in collection.operations
+                removed = {row.subject_id for row in edit.operations
                            if isinstance(row, (GlobalCollectionDelete, GlobalCollectionSplit))}
-                if targets & removed:
-                    raise ValueError('直接字段 patch 主体不得同时被同集合 delete/split')
+                if set(ids) & removed:
+                    raise ValueError('直接 patch 不得同时 delete/split 同一主体')
         return self
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 二、`chapter_blueprints.json`
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 class GlobalEditFailure(StrictModel):

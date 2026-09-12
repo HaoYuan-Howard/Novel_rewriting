@@ -24,13 +24,12 @@ export function Stage2NodeReviewPanel({ sid, node, token, coverage }: {
   const [reason, setReason] = useState('')
   const [decision, setDecision] = useState('')
   const [owner, setOwner] = useState('')
-  const [chapters, setChapters] = useState('')
   const [reviewDefault, setReviewDefault] = useState('uncertain')
   const [reviewDraft, setReviewDraft] = useState<{ scope: string; text: string } | null>(null)
   useEffect(() => { setDecision(''); setReason(''); setReviewDraft(null); setReviewDefault('uncertain') }, [token])
   const mutation = approvals.approveStage2Review
   const options = enums.data?.stage2_node_review_decisions
-  const owners = enums.data?.stage2_node_review_owners
+  const owners = enums.data?.stage2_node_review_owners?.filter((value) => value !== 'stage2.blueprint')
   const current = approvals.doc?.stage2_reviews?.[node]
   const isRework = decision === 'rework'
   const coverageSha = coverage?.scope.scope_sha256
@@ -47,12 +46,9 @@ export function Stage2NodeReviewPanel({ sid, node, token, coverage }: {
       exceptions = value as Stage2ReviewException[]
     } catch (error) { reviewError = error instanceof Error ? error.message : '审阅例外 JSON 无法读取' }
   }
-  const ordinals = chapters.trim() ? chapters.trim().split(/[,，\s]+/).map(Number) : []
-  const validChapters = ordinals.every((n) => Number.isInteger(n) && n > 0)
   const ready = !!token && !!actor.trim() && !!reason.trim() && !!options?.includes(decision)
     && !reviewError
-    && (!isRework || (!!owners?.includes(owner) && validChapters
-      && (owner !== 'stage2.blueprint' || ordinals.length > 0)))
+    && (!isRework || !!owners?.includes(owner))
   return (
     <Panel className="px-18 py-14">
       <PaneHeader title={node + ' · 节点审阅决定'} meta={current?.state ?? '节点审阅状态未知'} />
@@ -60,6 +56,12 @@ export function Stage2NodeReviewPanel({ sid, node, token, coverage }: {
       {approvals.isError ? <div role="alert">{errorBody(approvals.error)}<ErrorHint error={approvals.error} /></div> : null}
       {enums.isError ? <div role="alert">{errorBody(enums.error)}<ErrorHint error={enums.error} /></div> : null}
       {current?.current_decision ? <p className="text-body">{current.current_decision.actor}：{current.current_decision.reason}</p> : null}
+      {current?.current_decision?.core_edits ? <details className="mb-12 rounded-block border border-line-2 p-12">
+        <summary>已保存免费 Core 修订批次</summary>
+        <p>人物与全局知识分别由所属节点写回。此记录保留原修订请求，新产生的待审义务仍需复核。</p>
+        <pre className="max-h-280 overflow-auto whitespace-pre-wrap break-all text-mini">{JSON.stringify(current.current_decision.core_edits, null, 2)}</pre>
+        <span className="break-all font-mono text-micro">预检身份：{current.current_decision.core_edit_prepared_sha256 ?? '不可验证'}</span>
+      </details> : null}
       {current?.unavailable_reason ? <p role="alert">审阅来源未知：{current.unavailable_reason}</p> : null}
       {coverage ? <details className="mb-12 rounded-block border border-line-2 p-12">
         <summary>审阅义务：待审 {coverage.pending_obligation_ids.length} 项，继承 {coverage.inherited.length} 项</summary>
@@ -82,7 +84,6 @@ export function Stage2NodeReviewPanel({ sid, node, token, coverage }: {
             <option value="">选择生产节点</option>
             {owners?.map((value) => <option key={value}>{value}</option>)}
           </select></label>
-          <label>返工章号 <input aria-label="返工章号" value={chapters} onChange={(e) => setChapters(e.target.value)} placeholder="按顺序填写，用逗号分隔" /></label>
         </> : null}
       </div>
       {coverage && isRework ? <div className="mb-12">
@@ -102,7 +103,7 @@ export function Stage2NodeReviewPanel({ sid, node, token, coverage }: {
         actions={<button type="button" className="rounded-btn border border-line-btn px-18 py-9" disabled={!ready || mutation.isPending || approvals.isError}
           onClick={() => token && mutation.mutate({
             node, review_token: token, actor: actor.trim(), reason: reason.trim(), decision,
-            owner: isRework ? owner : null, chapter_ordinals: isRework ? ordinals : [],
+            owner: isRework ? owner : null, chapter_ordinals: [],
             knowledge_links: null,
             review: coverage ? { scope_sha256: coverage.scope.scope_sha256,
               default_decision: isRework ? reviewDefault : decision, exceptions } : null,

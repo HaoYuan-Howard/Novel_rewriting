@@ -1,6 +1,7 @@
 import type { CheckKind } from '@/types/stages'
 import type { JobRequest } from '@/types/jobs'
 import type { AgentRunRequest } from '@/types/agent'
+import type { AnalyzeDraftOwner } from '@/types/analyzeDraft'
 import type { DesignReviewTemplateQuery } from '@/types/approvals'
 
 /**
@@ -10,6 +11,7 @@ import type { DesignReviewTemplateQuery } from '@/types/approvals'
  */
 export const qk = {
   characters: (sid: string) => ['characters', sid] as const,
+  analyzeDraft: (sid: string, owner: AnalyzeDraftOwner) => ['stage2', sid, 'analyzeDraft', owner] as const,
   novels: () => ['novels'] as const,
   novel: (sid: string) => ['novel', sid] as const,
   run: (sid: string) => ['run', sid] as const,

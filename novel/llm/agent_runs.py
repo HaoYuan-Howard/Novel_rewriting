@@ -54,6 +54,7 @@ from novel.run_identity import check_run_id
 
 M = TypeVar('M', bound=BaseModel)
 VERSION = 1
+REPAIRED_CHECKPOINT_VERSION = 2
 RUN_FILE = 'run.json'
 COMMIT_FILE = 'committed.json'
 
@@ -139,6 +140,8 @@ class SingleSessionRunSpec:
     initial_artifacts: tuple[str, ...] = ()
     # 聚合配置记录不对应模型工作单元；逐章/策略请求仍显式登记待执行。
     track_pending: bool = True
+    # 只允许显式 owner 采用独立 response-repair resolution；普通 stdout 验证不变。
+    allow_response_repair: bool = False
 
 
 @dataclass(frozen=True)
@@ -167,6 +170,7 @@ class RestoredCheckpoint(Generic[M]):
     revision: int
     revision_key: str
     checkpoint_sha256: str
+    response_repair: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -318,26 +322,27 @@ def _remove_sidecar(path: Path) -> None:
 
 
 def _decode_json_bytes(
-        raw: bytes, *, path: Path, label: str,
+        raw: bytes, *, path: Path, label: str, allowed_versions: tuple[int, ...] = (VERSION,),
 ) -> dict[str, Any]:
     try:
         value = json.loads(raw.decode('utf-8'))
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise ArtifactUnreadable(f'{label} {path} 读不出来：{exc}') from exc
-    if not isinstance(value, dict) or value.get('version') != VERSION:
+    if (not isinstance(value, dict) or type(value.get('version')) is not int
+            or value.get('version') not in allowed_versions):
         raise ArtifactUnreadable(
             f'{label} {path} 不是当前内部 v{VERSION} 对象；不猜旧形状')
     return value
 
 
-def _read_json(path: Path, *, label: str) -> dict[str, Any]:
+def _read_json(path: Path, *, label: str, allowed_versions: tuple[int, ...] = (VERSION,)) -> dict[str, Any]:
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
         raise UpstreamMissing(f'{path} 不在盘上') from None
     except OSError as exc:
         raise ArtifactUnreadable(f'{label} {path} 读不出来：{exc}') from exc
-    return _decode_json_bytes(raw, path=path, label=label)
+    return _decode_json_bytes(raw, path=path, label=label, allowed_versions=allowed_versions)
 
 
 def _resolved_profile(ctx: Any, value: object, *, label: str) -> dict[str, Any]:
@@ -728,11 +733,75 @@ def _validate_session_turn(
                 f'{spec.label}: 与互斥节点 {event.node} 复用了 provider session')
 
 
+def response_repair_identity(ctx: Any, spec: SingleSessionRunSpec,
+                             acceptance: Mapping[str, Any]) -> dict[str, Any]:
+    """封存原 run 与完整运输身份；修复稿不进入供应商 stdout 的字段。"""
+    if not spec.allow_response_repair:
+        raise ProvenanceRefused(f'{spec.label} 未登记独立响应修复')
+    path = _read_run_file(ctx, spec)
+    _validate_run_record(ctx, spec, _read_json(path, label=spec.label))
+    return {'protocol': 'agent-response-repair-v1', 'sid': ctx.sid, 'node': spec.node,
+            'run_id': ctx.run_id, 'code': ctx.code, 'purpose': spec.purpose,
+            'run_file_sha256': canonical_sha256(path.read_bytes()),
+            'acceptance_sha256': canonical_sha256(dict(acceptance)),
+            'attempt_id': acceptance['attempt_id'],
+            'source_response_sha256': acceptance['ledger_response_sha256']}
+
+
+def response_repair_binding(ctx: Any, spec: SingleSessionRunSpec,
+                            acceptance: Mapping[str, Any], record: Any) -> dict[str, str]:
+    """调用方只能绑定已封存单项决定，不能把可变 candidate 文件铸成接受。"""
+    from novel.llm import response_repair
+    if record.resolution is None:
+        raise ProvenanceRefused('响应修复尚无封存决定')
+    binding = {'chain_id': str(record.rejection['chain_id']),
+        'rejection_file_sha256': canonical_sha256((record.root / response_repair.REJECTION_FILE).read_bytes()),
+        'resolution_file_sha256': canonical_sha256((record.root / response_repair.RESOLUTION_FILE).read_bytes()),
+        'resolution_sha256': record.resolution['resolution_sha256'],
+        'candidate_payload_sha256': record.resolution.get('candidate_payload_sha256'),
+        'candidate_raw_sha256': record.resolution.get('candidate_sha256')}
+    _verified_repair_candidate(ctx, spec, acceptance=acceptance, binding=binding)
+    return binding
+
+
+def _verified_repair_candidate(ctx, spec, *, acceptance, binding):
+    from novel.llm import response_repair
+    fields = {'chain_id', 'rejection_file_sha256', 'resolution_file_sha256',
+              'resolution_sha256', 'candidate_payload_sha256', 'candidate_raw_sha256'}
+    if (not isinstance(binding, dict) or set(binding) != fields
+            or any(not is_sha256(value) for value in binding.values())):
+        raise ProvenanceRefused('响应修复来源字段/摘要不完整')
+    identity = response_repair_identity(ctx, spec, acceptance)
+    if binding['chain_id'] != canonical_sha256(identity):
+        raise ProvenanceRefused('响应修复链与原 run/运输身份漂移')
+    records = response_repair.records_for_chain(ctx.novel_dir, binding['chain_id'])
+    if len(records) != 1:
+        raise ProvenanceRefused('响应修复链必须恰好一份原响应')
+    record = records[0]
+    resolution = record.resolution
+    if (record.attempt_id != acceptance['attempt_id']
+            or record.rejection.get('agent_response_repair_identity') != identity
+            or canonical_sha256((record.root / response_repair.REJECTION_FILE).read_bytes())
+            != binding['rejection_file_sha256']
+            or canonical_sha256((record.root / response_repair.ORIGINAL_FILE).read_bytes())
+            != acceptance['ledger_response_sha256']
+            or resolution is None or resolution.get('action') != 'submit'
+            or canonical_sha256((record.root / response_repair.RESOLUTION_FILE).read_bytes())
+            != binding['resolution_file_sha256']
+            or resolution.get('resolution_sha256') != binding['resolution_sha256']
+            or resolution.get('candidate_sha256') != binding['candidate_raw_sha256']
+            or resolution.get('candidate_payload_sha256') != binding['candidate_payload_sha256']
+            or canonical_sha256(resolution.get('candidate')) != binding['candidate_payload_sha256']
+            or (record.outcome is not None and record.outcome.get('decision') in {'rejected', 'declined'})):
+        raise ProvenanceRefused('封存响应修复的原文/决定/候选摘要不闭合')
+    return resolution['candidate']
+
+
 def _validate_acceptance(
         ctx: Any, spec: SingleSessionRunSpec, *, system: str, user: str,
         response_model: type[M], max_tokens: int,
         response_payload: Mapping[str, Any], acceptance: Mapping[str, Any],
-        claim_prior: bool,
+        claim_prior: bool, response_repair: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if (set(acceptance) != AGENT_ACCEPTANCE_FIELDS
             or acceptance.get('acceptance_protocol') != SESSION_PROTOCOL_VERSION):
@@ -795,10 +864,13 @@ def _validate_acceptance(
         raise ProvenanceRefused(f'{spec.label}: normalized stdout 不是唯一归一结果')
     if response_sha != canonical_sha256(accepted_text.encode('utf-8')):
         raise ProvenanceRefused(f'{spec.label}: stdout SHA 与 ledger 不闭合')
-    try:
-        parsed_payload = json.loads(normalized_text)
-    except json.JSONDecodeError as exc:
-        raise ProvenanceRefused(f'{spec.label}: stdout 不是 JSON：{exc}') from exc
+    if response_repair is not None:
+        parsed_payload = _verified_repair_candidate(ctx, spec, acceptance=acceptance, binding=response_repair)
+    else:
+        try:
+            parsed_payload = json.loads(normalized_text)
+        except json.JSONDecodeError as exc:
+            raise ProvenanceRefused(f'{spec.label}: stdout 不是 JSON：{exc}') from exc
     if not isinstance(parsed_payload, dict):
         raise ProvenanceRefused(f'{spec.label}: stdout 不是 JSON object')
     missing = missing_required_fields(
@@ -891,9 +963,10 @@ def _checkpoint_hash(payload: Mapping[str, Any]) -> str:
     })
 
 
-def read_checkpoint_sha256(path: Path) -> str:
+def read_checkpoint_sha256(path: Path, *, spec: SingleSessionRunSpec | None = None) -> str:
     """复读刚写入的 checkpoint 摘要；不能把坏字节挂到后续 execution journal。"""
-    record = _read_json(path, label='checkpoint 写后复读')
+    versions = ((VERSION, REPAIRED_CHECKPOINT_VERSION) if spec is not None and spec.allow_response_repair else (VERSION,))
+    record = _read_json(path, label='checkpoint 写后复读', allowed_versions=versions)
     digest = record.get('checkpoint_sha256')
     if not is_sha256(digest) or digest != _checkpoint_hash(record):
         raise ArtifactUnreadable(f'{path} checkpoint 写后 self SHA 不闭合')
@@ -928,12 +1001,17 @@ def _validate_checkpoint_envelope(
         record: Mapping[str, Any], *, run_sha: str, revision: int,
         previous_checkpoint_sha256: str | None,
 ) -> dict[str, Any]:
-    if set(record) != _CHECKPOINT_EXTRA_FIELDS | AGENT_ACCEPTANCE_FIELDS:
+    repaired = record.get('version') == REPAIRED_CHECKPOINT_VERSION
+    if (type(record.get('version')) is not int
+            or record.get('version') not in (VERSION, REPAIRED_CHECKPOINT_VERSION)
+            or (repaired and not spec.allow_response_repair)):
+        raise ArtifactUnreadable(f'{path} checkpoint 版本未登记')
+    if set(record) != _CHECKPOINT_EXTRA_FIELDS | AGENT_ACCEPTANCE_FIELDS | ({'response_repair'} if repaired else set()):
         raise ArtifactUnreadable(f'{path} checkpoint 字段漂移')
     if record.get('checkpoint_sha256') != _checkpoint_hash(record):
         raise ArtifactUnreadable(f'{path} checkpoint SHA 不闭合')
     expected = {
-        'version': VERSION, 'run_id': check_run_id(ctx.run_id),
+        'version': REPAIRED_CHECKPOINT_VERSION if repaired else VERSION, 'run_id': check_run_id(ctx.run_id),
         'sid': ctx.sid, 'node': spec.node, 'code': ctx.code,
         'session_owner': spec.session_owner, 'chapter': spec.chapter,
         'run_sha256': run_sha, 'purpose': spec.purpose,
@@ -1033,6 +1111,10 @@ def _validate_checkpoint_envelope(
         if (not isinstance(payload, dict)
                 or record.get(f'{name}_sha256') != canonical_sha256(payload)):
             raise ArtifactUnreadable(f'{path} 的 {name} SHA 不闭合')
+    if repaired:
+        _verified_repair_candidate(ctx, spec,
+            acceptance={key: record[key] for key in AGENT_ACCEPTANCE_FIELDS},
+            binding=record['response_repair'])
     return dict(record)
 
 
@@ -1085,8 +1167,9 @@ def _read_checkpoint_chain(
         if path.name != expected_path.name:
             raise ArtifactUnreadable(
                 f'{path} checkpoint revision 文件名不是 canonical 形状')
+        versions = (VERSION, REPAIRED_CHECKPOINT_VERSION) if spec.allow_response_repair else (VERSION,)
         record = _validate_checkpoint_envelope(
-            ctx, spec, path, _read_json(path, label=spec.label),
+            ctx, spec, path, _read_json(path, label=spec.label, allowed_versions=versions),
             run_sha=run_sha, revision=revision,
             previous_checkpoint_sha256=previous,
         )
@@ -1108,6 +1191,7 @@ def write_checkpoint(
         system: str, user: str, response_model: type[BaseModel], max_tokens: int,
         response_payload: Mapping[str, Any], acceptance: Mapping[str, Any],
         revision_key: str, state_payload: Mapping[str, Any],
+        response_repair: dict[str, str] | None = None,
 ) -> Path:
     """追加一份验证后候选；同 attempt 只允许逐字幂等。"""
     if (not isinstance(revision_key, str)
@@ -1128,7 +1212,7 @@ def write_checkpoint(
     validated = _validate_acceptance(
         ctx, spec, system=system, user=user, response_model=response_model,
         max_tokens=max_tokens, response_payload=response_payload,
-        acceptance=acceptance, claim_prior=False)
+        acceptance=acceptance, claim_prior=False, response_repair=response_repair)
     with _LOCK:
         with process_append_lock(_checkpoint_lock_path(spec, ctx)):
             records = _read_checkpoint_chain(ctx, spec, run_sha=run_sha)
@@ -1150,6 +1234,8 @@ def write_checkpoint(
                 'response_payload_sha256': canonical_sha256(
                     validated['response_payload']),
             }
+            if response_repair is not None:
+                semantic['response_repair'] = dict(response_repair)
             if latest is not None and latest.get('attempt_id') == semantic['attempt_id']:
                 ignored = {
                     'version', 'created_at', 'revision',
@@ -1185,7 +1271,8 @@ def write_checkpoint(
                         f'{spec.label}: 新 revision 丢失了 prior ledger attempts')
             revision = len(records) + 1
             record: dict[str, Any] = {
-                'version': VERSION, 'created_at': _now(),
+                'version': REPAIRED_CHECKPOINT_VERSION if response_repair is not None else VERSION,
+                'created_at': _now(),
                 'revision': revision,
                 'previous_checkpoint_sha256': (
                     None if latest is None else latest['checkpoint_sha256']),
@@ -1227,7 +1314,7 @@ def restore_checkpoint(
     validated = _validate_acceptance(
         ctx, spec, system=system, user=user, response_model=response_model,
         max_tokens=max_tokens, response_payload=record['response_payload'],
-        acceptance=acceptance, claim_prior=True)
+        acceptance=acceptance, claim_prior=True, response_repair=record.get('response_repair'))
     if validated['parsed_payload'] != record['parsed_payload']:
         raise ProvenanceRefused(f'{target} 的 stdout 与封存 parsed payload 漂移')
     typed = validated['typed']
@@ -1245,6 +1332,7 @@ def restore_checkpoint(
         revision=int(record['revision']),
         revision_key=str(record['revision_key']),
         checkpoint_sha256=str(record['checkpoint_sha256']),
+        response_repair=record.get('response_repair'),
     )
 
 
@@ -1262,10 +1350,11 @@ def _historical_run_context(
     })()
     run_path = _read_run_file(bootstrap, spec)
     record = _read_json(run_path, label=f'{spec.label} historical run')
-    if set(record) != _RUN_FIELDS:
+    fields = _RUN_FIELDS | ({'initial_artifact_sha256s'} if spec.initial_artifacts else set())
+    if set(record) != fields:
         raise ArtifactUnreadable(f'{run_path} historical run.json 字段漂移')
     identity = {
-        key: record[key] for key in _RUN_FIELDS
+        key: record[key] for key in fields
         if key not in ('identity_sha256', 'created_at')
     }
     if record.get('identity_sha256') != canonical_sha256(identity):

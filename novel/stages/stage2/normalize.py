@@ -381,22 +381,15 @@ def _normalize_global_evidence(
 def normalize_characters(
         characters: dict[str, dict[str, Any]], main_text: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], GlobalNormalizationAccounting]:
-    """人物 producer 与人工编辑共用的称谓及静态证据归一，不创建知识占位。"""
-    data = {'entities': {'characters': copy.deepcopy(characters)}}
-    current = data['entities']['characters']
-    whole = ''.join(str(section.get('text') or '') for section in main_text)
-    chapters = [(int(section.get('chapter_ordinal') or 0), str(section.get('text') or ''))
-                for section in main_text]
-    _normalize_distinguishers(current)
-    _normalize_address_surfaces(current, whole)
-    _dedupe_addresses(current)
-    _normalize_from_chapter(current, chapters)
-    _resolve_address_by(current)
-    failures, corrections = _normalize_global_evidence(
-        data, main_text, character_only=True)
+    """仅整理空白；称谓归属、身份揭示时点和源文异写必须由有据裁决建立。"""
+    current = copy.deepcopy(characters)
+    for character in current.values():
+        for field in ('canonical', 'role'):
+            character[field] = character[field].strip()
+        for binding in character.get('aliases', []):
+            binding['surface'] = binding['surface'].strip()
     return current, GlobalNormalizationAccounting(
-        setup_chapters_pruned=[], evidence_locator_failures=failures,
-        evidence_locator_corrections=corrections)
+        setup_chapters_pruned=[], evidence_locator_failures=[], evidence_locator_corrections=[])
 
 
 def normalize_global(data: dict[str, Any], main_text: list[dict[str, Any]], *,
@@ -445,9 +438,8 @@ def past_attested_surfaces(characters: dict[str, dict[str, Any]] | None,
     """
     inventory: dict[str, str] = {}
     for char in (characters or {}).values():
-        names = [strip_distinguisher(str((char or {}).get('canonical') or ''))]
-        names += [str((a or {}).get('surface') or '').strip()
-                  for a in ((char or {}).get('address') or [])]
+        names = [str((a or {}).get('surface') or '').strip()
+                 for a in ((char or {}).get('aliases') or [])]
         for name in names:
             key = norm(name)
             if key and key not in inventory:

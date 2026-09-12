@@ -6,11 +6,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from contracts.invariants import (
-    BARE_PRONOUNS,
-    KNOWLEDGE_SUBJECT_KINDS, NARRATIVE_PERSON, RELATION_VISIBILITY_KINDS,
-    TIME_LAYERS, WORLD_RULE_KINDS,
-)
+from contracts.invariants import BARE_PRONOUNS, NARRATIVE_PERSON, TIME_LAYERS, WORLD_RULE_KINDS
 from contracts.schema.knowledge import KnowledgeAgentTurnResponse, KnowledgeResponse
 from novel.stages.stage2 import characters, knowledge_prompts, plot_prompts as prompts
 from contracts.schema.plot import PlotBlueprintResponse
@@ -19,8 +15,8 @@ from tests.test_plot_blueprint import chapter_response
 
 def test_all_current_prompt_arms_are_rendered():
     assert prompts.response_system().startswith(prompts.BLUEPRINT_SYSTEM)
-    assert '静态人物登记' in characters.SYSTEM and '不写经历、结局' in characters.SYSTEM
-    assert '不得新增人物 ID' in knowledge_prompts.SYSTEM
+    assert '静态人物登记' in characters.SYSTEM and '不写后续经历、结局' in characters.SYSTEM
+    assert '不可增改人物身份' in knowledge_prompts.SYSTEM
     # JSON Schema 的 $defs/$ref 是正式引用，不是未渲染模板。
     assert '$' not in knowledge_prompts.SYSTEM + characters.SYSTEM + prompts.BLUEPRINT_SYSTEM
 
@@ -32,48 +28,42 @@ def test_character_prompt_uses_the_complete_pronoun_contract_and_retired_arms_ar
         assert not hasattr(prompts, retired)
 
 
-def test_global_prompt_requires_evidence_bound_opening_without_default_chapter():
-    assert 'source_blurb' in knowledge_prompts.SYSTEM
-    assert 'boundary_evidence' in knowledge_prompts.SYSTEM
-    assert 'unresolved' in knowledge_prompts.SYSTEM
-    assert '不能默认第 1 章' in knowledge_prompts.SYSTEM
+def test_global_prompt_leaves_hook_and_opening_to_their_independent_owner():
+    # 正向正文/钩子支持和未决开篇在 Gate C 的 Prepare 验证；Core 拒收旧职责。
+    assert 'source_blurb' not in knowledge_prompts.HINT
+    assert 'boundary_evidence' not in str(KnowledgeResponse.model_json_schema())
+    with pytest.raises(ValidationError):
+        KnowledgeResponse.model_validate({**knowledge_prompts.HINT, 'source_blurb': {}})
+    assert '源文未建立时填 null' in knowledge_prompts.SYSTEM
     assert 'conflict_stages' not in knowledge_prompts.SYSTEM
 
 
 def test_global_prompt_separates_opening_premises_from_later_hidden_truths():
-    assert '第一章直接明牌的普通背景不列秘密' in knowledge_prompts.SYSTEM
-    assert '最早知情' in knowledge_prompts.SYSTEM
-    assert '世界内知情、读者揭示、事实发生三者分开' in knowledge_prompts.SYSTEM
-    assert '范围不是秘密披露授权' in knowledge_prompts.SYSTEM
+    assert '第一章已明牌的普通背景不作秘密' in knowledge_prompts.SYSTEM
+    assert '人物各自知情都留给' in knowledge_prompts.SYSTEM
+    assert '不能由生效章推测' in knowledge_prompts.SYSTEM
+    assert '不虚构场景编号或章内坐标' in knowledge_prompts.SYSTEM
 
 
-def test_global_prompt_requests_typed_visibility_and_candidate_ids_only():
-    assert '读者知情单独用 visibility' in knowledge_prompts.SYSTEM
-    assert 'knowledge_events' in knowledge_prompts.SYSTEM
-    assert 'character_known_by' not in knowledge_prompts.SYSTEM
-    assert '本次表内 evidence_candidate_id' in knowledge_prompts.SYSTEM
-    assert '不抄 locator、章号或 SourceSpan' in knowledge_prompts.SYSTEM
+def test_global_prompt_requests_independent_truth_reveal_times_and_candidate_ids_only():
+    assert 'effective_from' in knowledge_prompts.SYSTEM and 'revealed_from' in knowledge_prompts.SYSTEM
+    assert '末章包含在内' in knowledge_prompts.SYSTEM
+    assert '本次证据表内字符串 e000001' in knowledge_prompts.SYSTEM
+    assert '不抄原文、locator、坐标、摘要或正式ID' in knowledge_prompts.SYSTEM
 
     hint = knowledge_prompts.HINT
     KnowledgeResponse.model_validate(hint)
-    assert set(hint['entities']) == {'character_states', 'relations'}
-    relations = hint['entities']['relations']
-    assert [row['visibility']['kind'] for row in relations] == list(
-        RELATION_VISIBILITY_KINDS)
-    knowledge = hint['canon']['secrets'][0]['knowledge_events']
-    assert [row['subject']['kind'] for row in knowledge] == list(KNOWLEDGE_SUBJECT_KINDS)
-
-    candidate_ref_keys = {'evidence_candidate_id'}
-    seven_families = [
-        hint['entities']['character_states'][0]['fate_evidence'],
-        relations[0]['predicate_evidence'],
-        hint['canon']['setting']['era_evidence'],
-        hint['canon']['world_rules'][0]['versions'][0]['desc_evidence'],
-        hint['canon']['secrets'][0]['fact_evidence'],
-        knowledge[0]['evidence'],
-        hint['source_blurb']['opening']['boundary_evidence'],
-    ]
-    assert all(set(row) == candidate_ref_keys for row in seven_families)
+    assert set(hint) == {'setting', 'world_rules', 'relations', 'arc_secrets'}
+    assert hint['relations'][0]['subject_ref'] == 'c1'
+    assert hint['relations'][0]['effective_from'] < hint['relations'][0]['revealed_from']
+    refs = [hint['setting']['social_context_evidence_refs'], hint['relations'][0]['evidence_refs'],
+            hint['world_rules'][0]['versions'][0]['evidence_refs']]
+    assert all(isinstance(ref, str) and ref.startswith('e') for group in refs for ref in group)
+    assert hint['arc_secrets'][0]['evidence_refs'] == []
+    assert hint['arc_secrets'][0]['fact_ref'] == {'kind': 'relation', 'relation_ref': 'r1'}
+    for removed in ('character_states', 'knowledge_events'):
+        with pytest.raises(ValidationError):
+            KnowledgeResponse.model_validate({**hint, removed: []})
 
 
 def test_knowledge_response_cannot_restore_static_character_patch_protocol():
@@ -119,9 +109,9 @@ def test_response_schema_derives_enums_from_the_contract_layer():
     properties = definitions['SourceContextResponse']['properties']
     time_layer = properties['time_layer']['anyOf'][0]['enum']
     assert time_layer == list(TIME_LAYERS)
-    assert knowledge_prompts.HINT['canon']['world_rules'][0]['kind'] == WORLD_RULE_KINDS[0]
-    assert set(knowledge_prompts.HINT['source_blurb']['facts'][0]) == {
-        'kind', 'claim_id', 'claim', 'evidence'}
+    assert knowledge_prompts.HINT['world_rules'][0]['kind'] == WORLD_RULE_KINDS[0]
+    knowledge_defs = KnowledgeResponse.model_json_schema()['$defs']
+    assert knowledge_defs['WorldRuleDraft']['properties']['kind']['enum'] == list(WORLD_RULE_KINDS)
 
 
 def test_response_schema_only_requests_model_written_fields():

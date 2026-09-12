@@ -90,6 +90,26 @@ def _stage2_commit_recovery_surface(
     snapshot: OperatorReadSnapshot,
 ) -> tuple[_LanePlan, InboxView] | None:
     """Stage2 action/terminal 必须在 approvals/reviewer workpack 读取前分流。"""
+    item = queue.stage2_core_recovery_item(snapshot.base, snapshot.sid, code=snapshot.code)
+    if item is not None:
+        lane = _LanePlan(state='blocked' if item.waiting_on else 'ready', action=_action(
+            base=os.fspath(snapshot.base), sid=snapshot.sid, code=snapshot.code,
+            surface_seal=snapshot.surface_seal, overview=snapshot.overview, item=item),
+            verified_skipped_nodes=())
+        counts = {kind: 0 for kind in INBOX_KIND}
+        if item.waiting_on:
+            draft_repair = item.waiting_on == queue.WAITING_ON_ANALYZE_DRAFT_REPAIR
+            kind = ('repairable' if draft_repair or item.waiting_on == queue.WAITING_ON_ANALYZE_RESPONSE_REPAIR
+                    else 'human_only')
+            counts[kind] = 1
+            return lane, InboxView(items=[InboxItem(kind=kind, stage='stage2', chapter=None,
+                rule='analyze_owner_draft_repair' if draft_repair else 'analyze_response_repair', what=item.why,
+                how=('导出原 owner 草稿模板，语义订正后使用 --repair-analyze-draft 免费编译'
+                     if draft_repair else
+                     '通过 response-repair 封存唯一修复决定，再使用原 --recover-analyze-run 免费恢复'
+                     if kind == 'repairable' else '保留原响应、费用与 owner，先解决已明确的终态或来源缺口'))],
+                counts=counts, total=1, wontfix=0)
+        return lane, InboxView(items=[], counts=counts, total=0, wontfix=0)
     recovery_flags = state.stage2_reviewed_edit_commit_recovery_flags(
         snapshot.base, snapshot.sid, code=snapshot.code)
     action_kind = (

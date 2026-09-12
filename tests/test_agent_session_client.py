@@ -712,7 +712,7 @@ def test_codex_missing_actual_model_uses_driver_evidence_without_backfill(tmp_pa
     restarted.restore_checkpoint_acceptance(
         'stage2.global', checkpoint,
         system='SYS', user='subject', max_tokens=64_000,
-        recovery_policy='stage2-knowledge-v2')
+        recovery_policy='stage2-knowledge-v3')
     assert restarted.accepted_model('stage2.global') == 'gpt-5.6-sol'
     restarted.close()
 

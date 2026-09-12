@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """``stage2.global`` 唯一现役 evidence wire 契约。
 
-正式 ``GlobalGrounding`` 始终只保存 ``SourceSpan``；provider 只交关闭的
-``evidence_candidate_id``。system、hint、直接响应与 agent 信封绑在同一份 spec，
+正式 ``GlobalGrounding`` 只保存共享证据锚点与引用；provider 只交关闭的
+证据候选 ID 与请求局部实体句柄。system、hint、直接响应与 agent 信封绑在同一份 spec，
 避免真实 executor 与预览/编译边界分家。人工 ``GlobalEdit`` 与存量 ``.INVALID``
 仍可交 locator；那是 0 LLM 恢复面，不是本模块的 provider wire。
 """

@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from contracts.invariants import NODES, commander_work_unit, commander_scope_allowed
 from contracts.schema.workflow import (
-    WorkflowManifestV3, WorkUnitAttempt, WorkUnitBlobV1,
+    WorkflowManifestV4, WorkUnitAttempt, WorkUnitBlobV1,
     WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV2, WorkUnitRegistryV1,
     WorkUnitProcessing,
 )
@@ -204,9 +204,9 @@ def _read(base: str | os.PathLike[str], path: Path, model: type[BaseModel]) -> A
         raise WorkUnitRefused(f'工作单元账缺失或不符合当前契约：{target.name}') from exc
 
 
-def workflow_manifest(base: str | os.PathLike[str]) -> WorkflowManifestV3 | None:
+def workflow_manifest(base: str | os.PathLike[str]) -> WorkflowManifestV4 | None:
     path = _safe(base, paths.workflow_manifest_path(base))
-    return _read(base, path, WorkflowManifestV3) if path.exists() else None
+    return _read(base, path, WorkflowManifestV4) if path.exists() else None
 
 
 def _require_clean_base(base: str | os.PathLike[str]) -> None:
@@ -236,7 +236,7 @@ def check_workflow_write(base: str | os.PathLike[str]) -> None:
         _require_clean_base(base)
 
 
-def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV3:
+def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV4:
     """仅空 base 可初始化；旧书不能靠删账或换代码获得新额度。"""
     target = _safe(base, paths.workflow_manifest_path(base))
     # 拒绝存量 base 必须零写；锁本身会创建父目录，因此先作只读预检。
@@ -247,13 +247,13 @@ def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV3:
         if existing is not None:
             return existing
         _require_clean_base(base)
-        manifest = WorkflowManifestV3(task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
+        manifest = WorkflowManifestV4(task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
                                       created_at=int(time.time()))
         _write(base, target, manifest)
         return manifest
 
 
-def require_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV3:
+def require_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV4:
     manifest = workflow_manifest(base)
     if manifest is None:
         return initialize_workflow(base)
@@ -1048,7 +1048,7 @@ def validate_reviewer_record(base: str | os.PathLike[str], sid: str, record: Any
 
 def executor_scope(node: str, purpose: str, progress: Any = None) -> str:
     """只从登记的业务拓扑取 scope，修复 purpose 不铸新单元。"""
-    if node in ('stage2.characters', 'stage2.global', 'stage6.hook', 'stage7.rename'):
+    if node in ('stage2.analyze', 'stage2.characters', 'stage2.global', 'stage6.hook', 'stage7.rename'):
         return 'book'
     chapter = getattr(progress, 'chapter_ordinal', None)
     if chapter is None:

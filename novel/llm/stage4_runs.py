@@ -4305,6 +4305,10 @@ def inspect_prepared_design_repair_aggregate_recovery(
         ctx: Any,
 ) -> DesignRepairAggregateRecovery | None:
     """给 operator 的 0-wire 发现口；返回值已绑定 journal 与 candidate CAS。"""
+    # 未进入 Stage4 的书没有该层 owner；纯读前沿不能为它创建运行目录或锁。
+    # 布局检查仍先拒绝 legacy 空间；已有运行根继续在原所有权锁内完整扫描。
+    if not any(root.exists() for root in runtime_layout.stage_run_roots(ctx.novel_dir, 'stage4')):
+        return None
     with commit_ownership(ctx.novel_dir):
         found = _prepared_design_repair_aggregate_recovery_locked(ctx)
         if found is None:

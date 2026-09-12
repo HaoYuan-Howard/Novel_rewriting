@@ -1,61 +1,28 @@
-import type { GlobalFactEvidence, Stage2Global } from '@/types/stages'
+import type { Stage2Global } from '@/types/stages'
 
 export const SPOILER_PLACEHOLDER = '（核心剧透字段已隐藏）'
 export const MASKED_SECRET_ID = '__display_masked__'
 
-/**
- * Display-only projection. The server intentionally sends the complete stage2 document;
- * this adapter prevents Screen components from receiving the configured raw fields or
- * the source text attached to their evidence.
- * Browser/network/devtools visibility is unchanged, so this is not a security boundary.
- */
-function maskEvidence<T extends GlobalFactEvidence | null>(evidence: T): T {
-  if (evidence === null || evidence.source === null) return evidence
-  return {
-    ...evidence,
-    source: {
-      ...evidence.source,
-      text: SPOILER_PLACEHOLDER,
-    },
-  } as T
-}
-
+/** 仅做展示遮蔽。完整响应已到达浏览器，关系和规则也可能暗示同一事实。 */
 export function projectGlobalSpoilers(raw: Stage2Global, reveal: boolean): Stage2Global {
   if (reveal) return raw
+  const visibleRefs = new Set([
+    ...raw.setting.era_evidence_refs,
+    ...raw.setting.social_context_evidence_refs,
+    ...raw.relations.flatMap((row) => row.evidence_refs),
+    ...raw.world_rules.flatMap((rule) => rule.versions.flatMap((row) => row.evidence_refs)),
+  ])
   return {
     ...raw,
-    characters: raw.characters.map((character) => ({
-      ...character,
-      fate: SPOILER_PLACEHOLDER,
-      fate_evidence: maskEvidence(character.fate_evidence),
-    })),
-    secrets: [
-      {
-        secret_id: MASKED_SECRET_ID,
-        fact: SPOILER_PLACEHOLDER,
-        fact_evidence: { chapter_ordinal: 1, source: null },
-        knowledge_events: [],
-        setup_kind: 'cold',
-        setup_chapters: [],
-        first_reveal_chapter: 1,
-      },
-    ],
-    source_blurb: {
-      facts: raw.source_blurb.facts.map((fact) => fact.kind === 'supported'
-        ? { ...fact, claim: SPOILER_PLACEHOLDER, evidence: maskEvidence(fact.evidence) }
-        : fact.kind === 'hook_supported'
-          ? { ...fact, claim: SPOILER_PLACEHOLDER,
-            hook_evidence: {
-              source: fact.hook_evidence.source === null ? null
-                : { ...fact.hook_evidence.source, text: SPOILER_PLACEHOLDER },
-              unresolved_locator: fact.hook_evidence.unresolved_locator === null
-                ? null : SPOILER_PLACEHOLDER,
-            } }
-          : { ...fact, claim: SPOILER_PLACEHOLDER, reason: SPOILER_PLACEHOLDER }),
-      opening: raw.source_blurb.opening.kind === 'proposed'
-        ? { ...raw.source_blurb.opening, rationale: SPOILER_PLACEHOLDER,
-          boundary_evidence: maskEvidence(raw.source_blurb.opening.boundary_evidence) }
-        : { ...raw.source_blurb.opening, reason: SPOILER_PLACEHOLDER },
-    },
+    arc_secrets: [{
+      secret_id: MASKED_SECRET_ID,
+      fact: SPOILER_PLACEHOLDER,
+      fact_ref: null,
+      evidence_refs: [],
+      setup_chapters: [],
+      revealed_from: 1,
+    }],
+    evidence_anchors: Object.fromEntries(Object.entries(raw.evidence_anchors).filter(([ref]) => visibleRefs.has(ref))),
+    evidence_snippets: Object.fromEntries(Object.entries(raw.evidence_snippets).filter(([ref]) => visibleRefs.has(ref))),
   }
 }

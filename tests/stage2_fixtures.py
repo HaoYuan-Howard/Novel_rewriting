@@ -48,18 +48,68 @@ def candidate_view(*, source=None, view=None) -> dict:
 
 
 def character_response(*, source=None, view=None) -> dict:
-    return CharactersResponse.model_validate({'characters': {
-        cid: {key: value for key, value in row.items() if key not in {'fate', 'fate_evidence'}}
-        for cid, row in candidate_view(source=source, view=view)['entities']['characters'].items()
-    }}).model_dump(mode='json')
+    """显式合成旧领域样例到 v2 wire；转换仅属于测试，不进入生产恢复。"""
+    table = GlobalEvidenceCandidateTable.build(main_text() if source is None else source)
+    rows = []
+    for index, row in enumerate((global_grounding() if view is None else view)['entities']['characters'].values(), 1):
+        surfaces = list(dict.fromkeys([row['canonical']] + [item['surface'] for item in row['address']]))
+        bindings = []
+        for surface in surfaces:
+            matches = [item for item in table.rows if surface in item.text]
+            if matches:
+                first = matches[0]
+                bindings.append({'surface': surface, 'identity_revealed_from': first.chapter_ordinal,
+                                 'evidence_refs': [first.evidence_candidate_id]})
+        assert bindings, '合成人物必须至少有一项源文称谓'
+        first = min((item for item in table.rows if any(binding['surface'] in item.text for binding in bindings)),
+                    key=lambda item: (item.chapter_ordinal, item.start))
+        role_source = row['role_evidence']
+        role_evidence = next(item.evidence_candidate_id for item in table.rows
+                             if item.chapter_ordinal == role_source['chapter_ordinal']
+                             and item.text == role_source['source']['text'])
+        rows.append({'character_ref': f'c{index}', 'canonical': bindings[0]['surface'],
+                     'aliases': bindings, 'first_chapter': first.chapter_ordinal,
+                     'first_appearance_evidence_refs': [first.evidence_candidate_id],
+                     'role': row['role'], 'role_evidence_refs': [role_evidence],
+                     'name_distinctiveness': row['name_distinctiveness']})
+    return CharactersResponse.model_validate({'characters': rows}).model_dump(mode='json')
 
 
 def knowledge_response(*, view=None) -> dict:
+    """明确把历史合成领域样例投影为本轮四类草稿；不用于运行时旧产物恢复。"""
     raw = candidate_view(view=view)
-    raw['entities']['character_states'] = {
-        cid: {key: row[key] for key in ('fate', 'fate_evidence')}
-        for cid, row in raw['entities'].pop('characters').items() if row['fate'] is not None}
-    return KnowledgeResponse.model_validate(raw).model_dump(mode='json')
+    char_refs = {cid: f'c{index}' for index, cid in enumerate(raw['entities']['characters'], 1)}
+    setting = raw['canon']['setting']
+    def refs(value):
+        return [value['evidence_candidate_id']]
+    rules = []
+    for index, rule in enumerate(raw['canon']['world_rules'], 1):
+        versions = []
+        for number, version in enumerate(rule['versions'], 1):
+            start = version['effective_from_chapter']
+            end = (rule['versions'][number]['effective_from_chapter'] - 1
+                   if number < len(rule['versions']) else None)
+            versions.append(dict(version_ref=f'v{number}', desc=version['desc'], effective_from=start,
+                                 effective_until=end, revealed_from=start, evidence_refs=refs(version['desc_evidence'])))
+        rules.append(dict(rule_ref=f'w{index}', kind=rule['kind'], versions=versions))
+    secrets = {row['secret_id']: row for row in raw['canon']['secrets']}
+    relations = []
+    for index, row in enumerate(raw['entities']['relations'], 1):
+        visibility = row['visibility']
+        reveal = (visibility['from_chapter'] if visibility['kind'] == 'public'
+                  else secrets[visibility['secret_id']]['first_reveal_chapter'])
+        relations.append(dict(relation_ref=f'r{index}', subject_ref=char_refs[row['subject_id']],
+                             object_ref=char_refs[row['object_id']], predicate=row['predicate'],
+                             effective_from=row['valid_from_chapter'], effective_until=row['valid_through_chapter'],
+                             revealed_from=reveal, evidence_refs=refs(row['predicate_evidence'])))
+    payload = dict(setting=dict(era=setting['时代背景'], social_context=setting['世界观'],
+                               era_evidence_refs=refs(setting['era_evidence']),
+                               social_context_evidence_refs=refs(setting['worldview_evidence'])),
+                   world_rules=rules, relations=relations,
+                   arc_secrets=[dict(secret_ref=f's{index}', fact=row['fact'], fact_ref=None,
+                       setup_chapters=row['setup'].get('chapters', []), revealed_from=row['first_reveal_chapter'],
+                       evidence_refs=refs(row['fact_evidence'])) for index, row in enumerate(secrets.values(), 1)])
+    return KnowledgeResponse.model_validate(payload).model_dump(mode='json')
 
 
 def generate_characters(ctx: RunContext, *, view=None):
@@ -93,16 +143,33 @@ def seed_character_registry(ctx: RunContext):
     store = ArtifactStore(child)
     source = store.read(MainText, STAGE1_MAIN_TEXT).model_dump(mode='json')
     assert source == main_text(), '人物夹具必须绑定明确的合成正文'
-    rows = {cid: {key: value for key, value in row.items() if key not in {'fate', 'fate_evidence'}}
-            for cid, row in global_grounding()['entities']['characters'].items()}
+    compiled = characters.compile_response(CharactersResponse.model_validate(character_response(source=source)),
+                                            GlobalEvidenceCandidateTable.build(source))
+    rows = compiled.characters
     artifact = CharacterRegistry(
-        characters=rows, _provenance=child.llm_provenance(
+        characters=rows, evidence_anchors=compiled.evidence_anchors, _provenance=child.llm_provenance(
             CharactersProvenance, model='fixture-characters', adopted_models=('fixture-characters',),
-            prompts={'SYSTEM': '测试预置人物输入；未执行模型'}, evidence_locator_failures=[]))
+            prompts={'SYSTEM': '测试预置人物输入；未执行模型'}))
     store.write(STAGE2_CHARACTERS, artifact)
     store.write(STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
                 materialize_blueprint_character_projection(rows, source))
     return artifact
+
+
+def approved_core_review(store: ArtifactStore):
+    """从当前独立两份 Core 显式构造合成审阅前置，不遗漏人物审阅面。"""
+    from contracts.artifacts import STAGE2_GLOBAL_GROUNDING
+    from contracts.schema.knowledge import KnowledgeGrounding
+    from novel.quality.global_review import build_review
+
+    global_payload = store.read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0].model_dump(
+        mode='json', by_alias=True)
+    registry = store.read_own(CharacterRegistry, STAGE2_CHARACTERS)[0].model_dump(mode='json', by_alias=True)
+    review = build_review(global_payload, characters=registry)
+    return review.model_copy(update={'items': [item.model_copy(update={
+        'state': 'PASS', 'actor': 'test-reviewer', 'decided_at': '2026-09-02T00:00:00+00:00',
+        'reason': '合成 fixture 明确核对当前人物与长期知识；非真书语义验收',
+    }) for item in review.items]})
 
 
 def accept_and_materialize_links(ctx: RunContext):
@@ -157,20 +224,18 @@ def plot_blueprints() -> dict:
 
 
 def formal_subjects(view: dict):
-    """将合成领域视图分成当前 typed 输入；明确标记未执行模型的测试来源。"""
-    from contracts.schema.stage2 import GlobalGrounding
-    from novel.stages.stage2.grounding import decompose
-    view = copy.deepcopy(view)
-    view['_provenance'] = {
-        **view['_provenance'],
-        'code': 'fixture', 'root_clean_sha1': '0' * 40, 'inputs': {},
-        'prompts': {'FIXTURE_ONLY': '0' * 10}, 'model': 'fixture',
-    }
-    registry = CharacterRegistry(
-        characters={cid: {key: value for key, value in row.items()
-                          if key not in {'fate', 'fate_evidence'}}
-                    for cid, row in view['entities']['characters'].items()},
-        _provenance=CharactersProvenance(**{
-            key: value for key, value in view['_provenance'].items()
-            if key in CharactersProvenance.model_fields}))
-    return registry, decompose(GlobalGrounding.model_validate(view), registry)
+    """从显式合成样例编译两份独立正式core；不把旧领域形状直接标记为新版。"""
+    from contracts.schema.knowledge import GlobalProvenance
+    from novel.stages.stage2.grounding import compile_global_draft
+    source = main_text()
+    table = GlobalEvidenceCandidateTable.build(source)
+    provenance = dict(code='fixture', root_clean_sha1='0' * 40, inputs={},
+                      prompts={'FIXTURE_ONLY': '0' * 10}, model='fixture')
+    compiled = characters.compile_response(CharactersResponse.model_validate(
+        character_response(source=source, view=view)), table)
+    registry = CharacterRegistry(characters=compiled.characters, evidence_anchors=compiled.evidence_anchors,
+                                  _provenance=CharactersProvenance(**provenance))
+    knowledge = compile_global_draft(KnowledgeResponse.model_validate(knowledge_response(view=view)), table, registry,
+        provenance=GlobalProvenance(**provenance, evidence_locator_failures=[]),
+        character_handle_map=compiled.character_ids)
+    return registry, knowledge

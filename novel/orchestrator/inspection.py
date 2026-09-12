@@ -233,4 +233,31 @@ def read_surface_seal(
         digest.update(approval_head)
     else:
         digest.update(b'approval-head\0missing')
+    # 尚未闭合的双 owner 编辑决定即使已不在审批 head，仍是本次免费提交的输入。
+    # 完成后由独立产物/当前审批承担依赖，不把无限增长的历史目录加入所有动作。
+    from novel.stages.stage2 import analyze, analyze_draft_recovery, core_edits
+    digest.update(b'\nstage2-core-pending\0')
+    digest.update(core_edits.source_bytes(base_path, sid))
+    for path in core_edits.source_paths(base_path, sid):
+        if path.exists():
+            _update_entry(digest, base_path, path)
+        else:
+            digest.update(path.relative_to(base_path).as_posix().encode('utf-8') + b'\0missing')
+    for path in analyze_draft_recovery.source_paths(novel_dir, code=code):
+        if path.exists():
+            _update_entry(digest, base_path, path)
+        else:
+            digest.update(path.relative_to(base_path).as_posix().encode('utf-8') + b'\0missing')
+    pending_run = analyze.pending_initial_run(novel_dir)
+    if pending_run is not None:
+        from novel.orchestrator import queue
+        root = paths.stage2_analyze_run_path(novel_dir, pending_run)
+        for path in sorted(root.rglob('*.json')):
+            _update_entry(digest, base_path, path)
+        surface = queue.analyze_initial_recovery_surface(base_path, sid, pending_run, code=code)
+        for path in surface.source_paths:
+            if path.exists():
+                _update_entry(digest, base_path, path)
+            else:
+                digest.update(path.relative_to(base_path).as_posix().encode('utf-8') + b'\0missing\n')
     return digest.hexdigest()

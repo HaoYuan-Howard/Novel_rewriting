@@ -107,7 +107,7 @@ def required_artifacts(stage: str, *,
     """
     seen: dict[str, None] = {}
     for spec in NODES.values():
-        if spec.stage != stage:
+        if spec.stage != stage or not spec.stage_required:
             continue
         for rel in spec.produces:
             resolved = _resolve_book_scoped(rel, novel_dir)
@@ -533,6 +533,8 @@ def artifacts_for_node(ov: NovelOverview, node: str) -> list[ArtifactState]:
         # 逐章路径是模板，Stage5 完成度只把问题章物化进 artifacts。
         return list(stage.artifacts)
     selected = [item for item in stage.artifacts if item.rel in spec.produces]
+    if not spec.stage_required:
+        return selected
     return selected or list(stage.artifacts)
 
 
@@ -940,6 +942,10 @@ def resume_verdict(
     # typed 返工或接受补提交。队列负责凭据当前性，producer 在执行时再核验。
     if node == 'stage2.blueprint' and flags == ('--close-review',):
         return RESUME_RUN, '零模型核验已有两份节点接受并补齐审批链'
+    if node == 'stage2.analyze':
+        return RESUME_RUN, '联合首抽由 producer 在请求前复验无历史来源，分别保存人物与知识'
+    if node == 'stage2.global' and flags and flags[0] in {'--apply-core-edits', '--recover-analyze'}:
+        return RESUME_RUN, '按已购来源或已保存的 typed 决定执行免费恢复'
     if node in {'stage4.design', 'stage4.plan'} and flags == ('--close-review',):
         return RESUME_RUN, '零模型复验全部审阅义务的历史覆盖并绑定当前审批证据'
     if (node in STAGE2_NODE_REVIEW_OWNERS and len(flags) == 2

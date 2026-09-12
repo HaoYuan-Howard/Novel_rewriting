@@ -3,24 +3,22 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
 import { api } from '@/api/endpoints'
 import { renderRoute } from '@/test/render'
-import type { CharacterRegistryView } from '@/types/characters'
+import { stage2CoreFixture } from '@/api/mock'
 import type { Job } from '@/types/jobs'
 import { CharactersPanel } from './CharactersPanel'
 
-const character = {
-  canonical: '沈青', name_distinctiveness: 'high', role: '茶馆掌柜',
-  role_evidence: { chapter_ordinal: 1, locator: '沈青守着茶馆' },
-  address: [{ surface: '沈青', by: 'narration', context: 'reference', from_chapter: 1 }],
-}
-const view = {
-  sid: 'book-1', source_sha256: 'a'.repeat(64),
-  artifact: { invalid: false, freshness: 'fresh' },
-  registry: { characters: { char_001: character } },
-  edit_template: { source_sha256: 'a'.repeat(64), operations: [
-    { kind: 'replace', char_id: 'char_001', character },
-  ] },
-  template_unavailable_reason: null,
-} as unknown as CharacterRegistryView
+const view = stage2CoreFixture().characters
+view.sid = 'book-1'
+const character = view.registry.characters.char_001
+character.canonical = '沈青'
+character.role = '茶馆掌柜'
+character.aliases = [{ surface: '沈青', identity_revealed_from: 1,
+  evidence_refs: character.first_appearance_evidence_refs },
+{ surface: '掌柜', identity_revealed_from: 2, evidence_refs: character.role_evidence_refs }]
+view.registry.characters = { char_001: character }
+view.edit_template = { source_sha256: view.source_sha256, operations: [
+  { kind: 'replace', char_id: 'char_001', character },
+] }
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -47,11 +45,24 @@ it('无效 JSON 留在本地，不发送写回请求', async () => {
   const user = userEvent.setup()
   renderRoute(<CharactersPanel sid="book-1" />)
   await user.click(screen.getByRole('button', { name: '独立人物登记与免费订正' }))
-  await screen.findByText(/沈青/)
+  await screen.findByText('沈青')
   await user.type(screen.getByLabelText('人物订正 JSON'), '不是 JSON')
   await user.type(screen.getByLabelText('人物订正人'), '人工复核员')
   await user.type(screen.getByLabelText('人物订正依据'), '原文证据')
   await user.click(screen.getByRole('button', { name: '提交人物订正（0 模型）' }))
   expect(screen.getByRole('alert')).toHaveTextContent('不是有效 JSON')
   expect(write).not.toHaveBeenCalled()
+})
+
+it('显示称谓归属时点和实体证据，来源来自独立人物登记', async () => {
+  vi.spyOn(api, 'getCharacters').mockResolvedValue(view)
+  const user = userEvent.setup()
+  renderRoute(<CharactersPanel sid="book-1" />)
+  await user.click(screen.getByRole('button', { name: '独立人物登记与免费订正' }))
+  expect(await screen.findByText('沈青')).toBeVisible()
+  expect(screen.getByText('实体首次出场：第 1 章')).toBeVisible()
+  expect(screen.getByText('掌柜 · 第 2 章起可绑定此实体')).toBeVisible()
+  expect(screen.getByText('共享首抽')).toBeVisible()
+  expect(screen.getAllByText(/^证据 ch/).length).toBeGreaterThan(0)
+  expect(screen.queryByText(/by|from_chapter/)).not.toBeInTheDocument()
 })

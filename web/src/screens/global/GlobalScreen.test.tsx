@@ -5,93 +5,36 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup } from '@testing-library/react'
 import { renderRoute } from '@/test/render'
 import type { ApprovalDoc } from '@/types/approvals'
-import type { GlobalFactEvidence, GlobalReviewResponse, Stage2Global } from '@/types/stages'
+import type { GlobalReviewResponse, Stage2Global } from '@/types/stages'
 import { GlobalScreen } from './GlobalScreen'
+import { stage2CoreFixture } from '@/api/mock'
 
 const disclosure = {
   mode: 'display_only' as const,
   security_boundary: false as const,
   server_sends_full_data: true as const,
-  hidden_paths: ['characters[].fate', 'secrets', 'source_blurb.facts', 'source_blurb.opening'],
+  hidden_paths: ['arc_secrets'],
   known_leakage_surfaces: ['network'],
   consumers: ['GlobalScreen'],
   notice: '测试说明：服务端仍全量下发；这不是安全边界。',
 }
 
-function evidence(text: string): GlobalFactEvidence {
-  return {
-    chapter_ordinal: 3,
-    source: { text, start: 10, end: 10 + text.length },
-  }
-}
-
 function globalView(): Stage2Global {
-  const name = { raw: 'char_001', display: '李宝珠', resolved: true }
-  return {
-    sid: 'book-1',
-    title: '测试书',
-    setting: {
-      时代背景: '古代',
-      era_evidence: evidence('古代证据'),
-      世界观: '现实世界',
-      worldview_evidence: evidence('世界观证据'),
-    },
-    characters: [
-      {
-        char_id: 'char_001',
-        canonical: '李宝珠',
-        name_distinctiveness: 'high',
-        role: '主角',
-        role_evidence: evidence('主角证据'),
-        fate: '最终掌管怡红院',
-        fate_evidence: { chapter_ordinal: 8, source: null },
-        address: [],
-      },
-    ],
-    relations: [
-      {
-        relation_id: 'rel_01',
-        subject: name,
-        predicate: '暗中结盟',
-        predicate_evidence: evidence('结盟证据'),
-        object: name,
-        visibility: { kind: 'via_secret', secret_id: 'secret_01' },
-        valid_from_chapter: 2,
-        valid_through_chapter: null,
-      },
-    ],
-    world_rules: [],
-    secrets: [
-      {
-        secret_id: 'secret_01',
-        fact: '一条秘密',
-        fact_evidence: evidence('秘密证据'),
-        knowledge_events: [
-          {
-            subject_kind: 'group',
-            subject: { raw: '在场众人', display: '在场众人', resolved: true },
-            known_from_chapter: 2,
-            evidence: evidence('众人知情证据'),
-          },
-        ],
-        setup_kind: 'cold',
-        setup_chapters: [],
-        first_reveal_chapter: 3,
-      },
-    ],
-    source_blurb: {
-      facts: [{ kind: 'supported', claim_id: 'hook_001', claim: '真实文案事实',
-        evidence: evidence('真实文案事实证据') }],
-      opening: { kind: 'proposed', through_chapter: 2, rationale: '开篇事件横跨前两章',
-        boundary_evidence: evidence('终点证据') },
-    },
-    unresolved_refs: 0,
-    invalid_exists: true,
-    freshness: 'stale',
-    reason: 'file_changed',
-    ghosts: [],
-    _provenance: { root_clean_sha1: '0'.repeat(40) },
-  }
+  const value = stage2CoreFixture().global
+  const era = 'ev_' + '1'.repeat(24)
+  const missing = 'ev_' + '2'.repeat(24)
+  value.sid = 'book-1'
+  value.setting = { era: '古代', era_evidence_refs: [era], social_context: null, social_context_evidence_refs: [] }
+  value.evidence_anchors[era] = { chapter_ordinal: 3, start: 10, end: 14, text_sha256: '1'.repeat(64) }
+  value.evidence_anchors[missing] = { chapter_ordinal: 8, start: 10, end: 14, text_sha256: '2'.repeat(64) }
+  value.evidence_snippets[era] = '古代证据'
+  value.evidence_snippets[missing] = null
+  value.relations[0] = { ...value.relations[0], evidence_refs: [missing],
+    effective_from: 2, effective_until: 3, revealed_from: 4 }
+  value.arc_secrets = [{ secret_id: 'secret_01', fact: null,
+    fact_ref: { kind: 'relation', relation_id: value.relations[0].relation_id },
+    evidence_refs: [], setup_chapters: [4], revealed_from: 4 }]
+  return value
 }
 
 afterEach(() => {
@@ -265,7 +208,7 @@ describe('GlobalScreen disclosure', () => {
     expect(screen.getByRole('button', { name: /隐藏核心剧透字段（非完整遮蔽）/ })).toBeVisible()
   })
 
-  it('shows formal evidence failures, explicit relation visibility, and timed group knowledge', async () => {
+  it('展示独立时间轴、精确事实引用、合法空背景和不可验证证据', async () => {
     vi.spyOn(api, 'getEnums').mockResolvedValue({
       nonbody_kinds: [],
       time_layers: [],
@@ -301,25 +244,23 @@ describe('GlobalScreen disclosure', () => {
     })
     vi.spyOn(api, 'getGlobal').mockResolvedValue(globalView())
 
-    const withHook = globalView()
-    withHook.source_blurb.facts.push({
-      kind: 'hook_supported', claim_id: 'hook_002', claim: '钩子独有的背景',
-      hook_evidence: { source: { text: '仅源文案支持', start: 0, end: 6 }, unresolved_locator: null },
-    })
-    vi.mocked(api.getGlobal).mockResolvedValue(withHook)
     renderRoute(<GlobalScreen />, '/n/book-1/global')
     expect(await screen.findByText('证据 ch3 · “古代证据”')).toBeVisible()
-    expect(screen.getByText('证据定位失败 · 第 8 章')).toBeVisible()
+    expect(screen.getByText('源文未建立')).toBeVisible()
+    expect(screen.getByText('共享首抽')).toBeVisible()
+    expect(screen.getAllByRole('tab')).toHaveLength(4)
+    expect(screen.getByRole('tab', { name: /^世界规则/ })).toBeVisible()
+    expect(screen.queryByText('源文案与开篇')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: /^关系/ }))
-    expect(screen.getByText('随 secret_01 揭示')).toBeVisible()
+    fireEvent.click(screen.getByRole('tab', { name: /^长期关系/ }))
+    expect(screen.getByText(/至第 3 章（含）/)).toHaveTextContent('读者第 4 章起可见')
+    expect(screen.getByText(/证据不可验证 · 第 8 章/)).toBeVisible()
 
     fireEvent.click(screen.getByRole('button', { name: /隐藏核心剧透字段（非完整遮蔽）/ }))
-    fireEvent.click(await screen.findByRole('button', { name: /^秘密/ }))
-    expect(await screen.findByText('在场众人（群体 · 第 2 章起）')).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: /^源文案与开篇/ }))
-    expect(screen.getByText('原钩子独立支持；正文无需重复，审阅状态另行裁决。')).toBeVisible()
-    expect(screen.getByText('文案证据 · “仅源文案支持”')).toBeVisible()
+    fireEvent.click(await screen.findByRole('tab', { name: /^跨章秘密/ }))
+    expect(await screen.findByText(/引用关系 rel_01/)).toBeVisible()
+    expect(screen.getByText('读者第 4 章首次揭示')).toBeVisible()
+    expect(screen.getByText(/同章情节先后由审阅核实/)).toBeVisible()
   })
 })
 

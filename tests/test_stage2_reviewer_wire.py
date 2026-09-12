@@ -35,10 +35,10 @@ def _task(
         'relations': [{
             'relation_id': 'rel_01',
             'predicate': '旧关系',
-            'predicate_evidence': {
+            'evidence_refs': [{
                 'chapter_ordinal': 1,
                 'locator': '旧关系证据',
-            },
+            }],
         }],
         'collection_edits': [{
             'collection': 'world_rules',
@@ -78,12 +78,11 @@ def _task(
         'editable_fields': [],
         'binding_fields': [],
         # 真实 task 由 reviewer_tasks 从同一冻结 current collection 生成这张表。
-        # 测试 helper 覆盖会动态切换的四个 collection，wire 只消费模板实际开放键。
+        # 测试 helper 覆盖三个现役集合，wire 只消费模板实际开放键。
         'allowed_values': {
             'collection_operation_contract.existing_subject_ids_by_collection': {
-                'characters': ['char_001', 'char_009'],
                 'relations': ['rel_01', 'rel_08', 'rel_09'],
-                'secrets': ['secret_01', 'secret_02'],
+                'arc_secrets': ['secret_01', 'secret_02'],
                 'world_rules': ['wr_01', 'wr_02'],
             },
         },
@@ -113,13 +112,13 @@ def _relation_item(relation_id: str) -> dict[str, Any]:
         'subject_id': 'char_001',
         'object_id': 'char_002',
         'predicate': '彼此信任',
-        'predicate_evidence': {
+        'evidence_refs': [{
             'chapter_ordinal': 1,
             'locator': '两人约定共同查清真相',
-        },
-        'visibility': {'kind': 'public', 'from_chapter': 1},
-        'valid_from_chapter': 1,
-        'valid_through_chapter': None,
+        }],
+        'revealed_from': 1,
+        'effective_from': 1,
+        'effective_until': None,
     }
 
 
@@ -128,12 +127,15 @@ def _world_rule_item(rule_id: str, desc: str) -> dict[str, Any]:
         'rule_id': rule_id,
         'kind': 'institution',
         'versions': [{
-            'effective_from_chapter': 1,
+            'version_id': 'v01',
+            'effective_from': 1,
+            'effective_until': None,
+            'revealed_from': 1,
             'desc': desc,
-            'desc_evidence': {
+            'evidence_refs': [{
                 'chapter_ordinal': 1,
                 'locator': f'{desc}的正文证据',
-            },
+            }],
         }],
     }
 
@@ -145,10 +147,10 @@ def _response(task: SimpleNamespace, *, scope_count: int = 3) -> dict[str, Any]:
             'relations': [{
                 'relation_id': 'rel_01',
                 'predicate': '新关系',
-                'predicate_evidence': {
+                'evidence_refs': [{
                     'chapter_ordinal': 2,
                     'locator': '新关系证据',
-                },
+                }],
             }],
             'collection_edits': {
                 'world_rules': [{
@@ -157,12 +159,15 @@ def _response(task: SimpleNamespace, *, scope_count: int = 3) -> dict[str, Any]:
                         'rule_id': 'wr_09',
                         'kind': 'ability_system',
                         'versions': [{
-                            'effective_from_chapter': 1,
+                            'version_id': 'v01',
+                            'effective_from': 1,
+                            'effective_until': None,
+                            'revealed_from': 1,
                             'desc': '新增规则',
-                            'desc_evidence': {
+                            'evidence_refs': [{
                                 'chapter_ordinal': 1,
                                 'locator': '新增规则证据',
-                            },
+                            }],
                         }],
                     },
                 }],
@@ -186,25 +191,45 @@ def _response(task: SimpleNamespace, *, scope_count: int = 3) -> dict[str, Any]:
     }
 
 
-def test_hook_supported_edit_survives_compact_wire_with_its_own_locator():
+def test_secret_replacement_survives_compact_wire_with_its_own_locator():
     task = _task(scope_count=1)
     template = task.submission_options[0]['exact_request']['action']['input_payload']
-    template['source_blurb_replace'] = {
-        'facts': [{'kind': 'unresolved', 'claim_id': 'hook_001',
-                   'claim': '钩子独有信息', 'reason': '未找到正文重复表述'}],
-        'opening': {'kind': 'unresolved', 'reason': '范围另待裁决'},
-    }
+    template['arc_secrets_replace'] = [{
+        'secret_id': 'secret_01', 'fact': '信中揭示了失踪缘由', 'fact_ref': None,
+        'setup_chapters': [1], 'revealed_from': 2,
+        'evidence_refs': [{'chapter_ordinal': 2, 'locator': '原登记信件证据'}],
+    }]
     response = _response(task, scope_count=1)
-    replacement = {
-        'facts': [{'kind': 'hook_supported', 'claim_id': 'hook_001',
-                   'claim': '钩子独有信息', 'hook_evidence': {'locator': '原钩子定位'}}],
-        'opening': {'kind': 'unresolved', 'reason': '范围另待裁决'},
-    }
-    response['payload']['edit']['source_blurb_replace'] = replacement
+    replacement = [{
+        'secret_id': 'secret_01', 'fact': '他为保护家人主动离开', 'fact_ref': None,
+        'setup_chapters': [], 'revealed_from': 2,
+        'evidence_refs': [{'chapter_ordinal': 2, 'locator': '信中坦言主动离开的缘由'}],
+    }]
+    response['payload']['edit']['arc_secrets_replace'] = replacement
     assembled = wire.assemble(task, json.dumps(response, ensure_ascii=False))
     edit = GlobalEdit.model_validate(assembled['action']['input_payload'])
-    assert edit.source_blurb_replace.facts[0].hook_evidence.locator == '原钩子定位'
-    assert edit.source_blurb_replace.opening.kind == 'unresolved', '允许文案来源不能自动确认开篇范围'
+    secret = edit.arc_secrets_replace[0]
+    assert secret.evidence_refs[0].locator == '信中坦言主动离开的缘由'
+    assert secret.setup_chapters == [], '正文支持冷揭示不允许自动补造铺垫'
+    assert secret.revealed_from == 2
+
+
+def test_retired_source_blurb_is_rejected_by_global_edit_and_wire():
+    """文案准备迁至 Stage6 后，Global typed 与窄 wire 均不能重新接管。"""
+    from pydantic import ValidationError
+    retired = {
+        'facts': [], 'opening': {'kind': 'unresolved', 'reason': '范围待裁决'},
+    }
+    task = _task(scope_count=1)
+    template = copy.deepcopy(
+        task.submission_options[0]['exact_request']['action']['input_payload'])
+    template['source_blurb_replace'] = retired
+    with pytest.raises(ValidationError, match='source_blurb_replace'):
+        GlobalEdit.model_validate(template)
+    response = _response(task, scope_count=1)
+    response['payload']['edit']['source_blurb_replace'] = retired
+    with pytest.raises(wire.Stage2ReviewerWireError, match='动态 schema'):
+        wire.assemble(task, response)
 
 
 def _stage2_unver_options(*, safe: bool) -> tuple[SimpleNamespace, list[dict[str, Any]]]:
@@ -221,7 +246,7 @@ def _stage2_unver_options(*, safe: bool) -> tuple[SimpleNamespace, list[dict[str
     item = {
         'item_id': 'item-1',
         'subject_sha256': '1' * 64,
-        'subject_path': group_key.replace(':', '.'),
+        'subject_path': ('global.arc_secrets.secret_01' if safe else 'global.relations'),
         'effect': 'blocking',
         'current_state': 'UNVER',
         'current_reason': '当前证据不足',
@@ -238,9 +263,9 @@ def _stage2_unver_options(*, safe: bool) -> tuple[SimpleNamespace, list[dict[str
     }
     pack = {
         'global': {
-            'kind': 'stage2-global-review-workpack-v4',
+            'kind': 'stage2-global-review-workpack-v6',
             'workpack_sha256': '7' * 64,
-            'review_token': 's2gr1_' + '7' * 64,
+            'review_token': 's2gr2_' + '7' * 64,
             'main_text_subject_sha256': '9' * 64,
             'main_text_chapters': [],
             'items': [item],
@@ -254,10 +279,10 @@ def _stage2_unver_options(*, safe: bool) -> tuple[SimpleNamespace, list[dict[str
             },
         },
         'global_edit_template': encode_artifact(STAGE2_GLOBAL_EDIT, {
-            'characters': [{
-                'char_id': 'char_001',
-                'fate': None,
-                'fate_evidence': None,
+            'relations': [{
+                'relation_id': 'rel_01',
+                'predicate': '旧关系',
+                'evidence_refs': [{'chapter_ordinal': 1, 'locator': '旧关系证据'}],
             }],
         }),
     }
@@ -297,32 +322,23 @@ def test_assembler_emits_only_explicit_business_delta() -> None:
         {
             'relation_id': f'rel_{index:02d}',
             'predicate': f'旧关系 {index}',
-            'predicate_evidence': {
+            'evidence_refs': [{
                 'chapter_ordinal': 1,
                 'locator': f'旧关系证据 {index}',
-            },
+            }],
         }
         for index in range(1, 4)
     ]
-    edit['secrets'] = [{
+    edit['arc_secrets'] = [{
         'secret_id': 'secret_01',
         'fact': '未提交的旧秘密',
-        'fact_evidence': {'chapter_ordinal': 1, 'locator': '旧秘密证据'},
+        'fact_ref': None,
+        'evidence_refs': [{'chapter_ordinal': 1, 'locator': '旧秘密证据'}],
     }]
-    edit['world_rules'] = [{
-        'rule_id': 'wr_01',
-        'versions': [{
-            'effective_from_chapter': 1,
-            'desc': '未提交的旧规则',
-            'desc_evidence': {'chapter_ordinal': 1, 'locator': '旧规则证据'},
-        }],
-    }]
+    edit['world_rules_replace'] = [_world_rule_item('wr_01', '未提交的旧规则')]
     edit['setting'] = {
-        '时代背景': '未提交的旧时代',
-        'era_evidence': {'chapter_ordinal': 1, 'locator': '旧时代证据'},
-    }
-    edit['source_blurb_replace'] = {
-        'facts': [], 'opening': {'kind': 'unresolved', 'reason': '未提交的旧范围'},
+        'era': '未提交的旧时代',
+        'era_evidence_refs': [{'chapter_ordinal': 1, 'locator': '旧时代证据'}],
     }
     edit['collection_edits'] = [{
         'collection': 'relations',
@@ -338,15 +354,14 @@ def test_assembler_emits_only_explicit_business_delta() -> None:
         'relations': [{
             'relation_id': 'rel_03',
             'predicate': '修正后的唯一显式关系',
-            'predicate_evidence': {
+            'evidence_refs': [{
                 'chapter_ordinal': 2,
                 'locator': '唯一新关系证据',
-            },
+            }],
         }],
-        'secrets': [],
-        'world_rules': [],
+        'arc_secrets': [],
+        'world_rules_replace': None,
         'setting': None,
-        'source_blurb_replace': None,
         'collection_edits': {
             'relations': [
                 {'op': 'add', 'item': _relation_item(f'rel_{index:02d}')}
@@ -382,13 +397,13 @@ def test_correction_merges_failed_sparse_edit_and_replaces_collection_operations
     edit['relations'] = [{
         'relation_id': 'rel_01',
         'predicate': '上一轮已经修好的 A',
-        'predicate_evidence': {
-            'chapter_ordinal': 1, 'locator': 'A 的正文证据'},
+        'evidence_refs': [{
+            'chapter_ordinal': 1, 'locator': 'A 的正文证据'}],
     }, {
         'relation_id': 'rel_02',
         'predicate': '上一轮仍有问题的 B',
-        'predicate_evidence': {
-            'chapter_ordinal': 1, 'locator': 'B 的坏证据'},
+        'evidence_refs': [{
+            'chapter_ordinal': 1, 'locator': 'B 的坏证据'}],
     }]
     add_x = {'op': 'add', 'item': _world_rule_item('wr_09', '保留新增规则 X')}
     edit['collection_edits'] = [{
@@ -410,8 +425,8 @@ def test_correction_merges_failed_sparse_edit_and_replaces_collection_operations
     response['payload']['edit']['relations'] = [{
         'relation_id': 'rel_02',
         'predicate': '纠正后的 B',
-        'predicate_evidence': {
-            'chapter_ordinal': 2, 'locator': 'B 的正确正文证据'},
+        'evidence_refs': [{
+            'chapter_ordinal': 2, 'locator': 'B 的正确正文证据'}],
     }]
     response['payload']['edit']['collection_edits'] = {
         'world_rules': [copy.deepcopy(add_x)],
@@ -449,12 +464,14 @@ def test_correction_drop_targets_are_closed_explicit_and_conflict_free() -> None
     task = _task(scope_count=1, correction=True)
     edit = task.submission_options[0]['exact_request']['action']['input_payload']
     edit['setting'] = {
-        '时代背景': '上一轮误改的时代',
-        'era_evidence': {'chapter_ordinal': 1, 'locator': '时代证据'},
+        'era': '上一轮误改的时代',
+        'era_evidence_refs': [{'chapter_ordinal': 1, 'locator': '时代证据'}],
     }
-    edit['source_blurb_replace'] = {
-        'facts': [], 'opening': {'kind': 'unresolved', 'reason': '上一轮误替换的范围'},
-    }
+    edit['arc_secrets_replace'] = [{
+        'secret_id': 'secret_01', 'fact': '上一轮误替换的秘密', 'fact_ref': None,
+        'setup_chapters': [], 'revealed_from': 2,
+        'evidence_refs': [{'chapter_ordinal': 2, 'locator': '上一轮信件证据'}],
+    }]
     GlobalEdit.model_validate(edit)
     target_map = wire._drop_target_map(edit)
     setting_target = next(
@@ -462,21 +479,21 @@ def test_correction_drop_targets_are_closed_explicit_and_conflict_free() -> None
         if target.description == 'setting')
     replacement_target = next(
         token for token, target in target_map.items()
-        if target.description == 'source_blurb_replace')
+        if target.description == 'arc_secrets_replace')
     collection_target = next(
         token for token, target in target_map.items()
         if target.description == 'collection_edits[collection=world_rules]')
 
     response = _response(task, scope_count=1)
     response['payload']['edit']['setting'] = None
-    response['payload']['edit']['source_blurb_replace'] = None
+    response['payload']['edit']['arc_secrets_replace'] = None
     response['payload']['edit']['collection_edits'] = {'world_rules': []}
     response['payload']['drop_targets'] = [
         setting_target, replacement_target, collection_target]
     merged = wire.assemble(task, response)['action']['input_payload']
 
     assert 'setting' not in merged
-    assert 'source_blurb_replace' not in merged
+    assert 'arc_secrets_replace' not in merged
     assert 'collection_edits' not in merged
     assert merged['relations'][0]['predicate'] == '新关系'
 
@@ -524,16 +541,16 @@ def test_consecutive_correction_templates_keep_prior_merged_changes() -> None:
     first_edit['relations'].append({
         'relation_id': 'rel_02',
         'predicate': 'B 的失败版本',
-        'predicate_evidence': {
-            'chapter_ordinal': 1, 'locator': 'B 的失败证据'},
+        'evidence_refs': [{
+            'chapter_ordinal': 1, 'locator': 'B 的失败证据'}],
     })
     GlobalEdit.model_validate(first_edit)
     response = _response(first, scope_count=1)
     response['payload']['edit']['relations'] = [{
         'relation_id': 'rel_02',
         'predicate': 'B 的第一轮纠正',
-        'predicate_evidence': {
-            'chapter_ordinal': 2, 'locator': 'B 的第一轮正确证据'},
+        'evidence_refs': [{
+            'chapter_ordinal': 2, 'locator': 'B 的第一轮正确证据'}],
     }]
     merged_once = wire.assemble(first, response)['action']['input_payload']
 
@@ -544,8 +561,8 @@ def test_consecutive_correction_templates_keep_prior_merged_changes() -> None:
     second_response['payload']['edit']['relations'] = [{
         'relation_id': 'rel_01',
         'predicate': 'A 的第二轮纠正',
-        'predicate_evidence': {
-            'chapter_ordinal': 2, 'locator': 'A 的第二轮正确证据'},
+        'evidence_refs': [{
+            'chapter_ordinal': 2, 'locator': 'A 的第二轮正确证据'}],
     }]
     second_response['payload']['edit']['collection_edits'] = {'world_rules': []}
     merged_twice = wire.assemble(second, second_response)[
@@ -616,7 +633,7 @@ def test_direct_relation_patch_and_collection_delete_has_safe_reason() -> None:
     task = _task(scope_count=1)
     edit = task.submission_options[0]['exact_request']['action']['input_payload']
     edit['relations'] = [{'relation_id': 'rel_09', 'predicate': '旧关系',
-                         'predicate_evidence': {'chapter_ordinal': 1, 'locator': '旧证据'}}]
+                         'evidence_refs': [{'chapter_ordinal': 1, 'locator': '旧证据'}]}]
     edit['collection_edits'] = [{
         'collection': 'relations', 'expected_collection_sha256': _sha(2),
         'operations': [],
@@ -625,7 +642,7 @@ def test_direct_relation_patch_and_collection_delete_has_safe_reason() -> None:
     response = _response(task, scope_count=1)
     response['payload']['edit']['relations'] = [
         {'relation_id': 'rel_09', 'predicate': '新关系',
-         'predicate_evidence': {'chapter_ordinal': 1, 'locator': '新证据'}}]
+         'evidence_refs': [{'chapter_ordinal': 1, 'locator': '新证据'}]}]
     response['payload']['edit']['collection_edits'] = {
         'relations': [{'op': 'delete', 'subject_id': 'rel_09'}],
     }
@@ -636,6 +653,20 @@ def test_direct_relation_patch_and_collection_delete_has_safe_reason() -> None:
     assert '直接字段 patch 主体不得同时被同集合 delete/split' in reason
     assert 'rel_09' not in reason
 
+    # full action 也经同一 canonical validator；两个运输面的安全分类不得漂移。
+    from pydantic import ValidationError
+    canonical = copy.deepcopy(edit)
+    canonical['relations'] = response['payload']['edit']['relations']
+    canonical['collection_edits'][0]['operations'] = (
+        response['payload']['edit']['collection_edits']['relations'])
+    with pytest.raises(ValidationError) as validation:
+        GlobalEdit.model_validate(canonical)
+    full_reason = reviewer_tasks._typed_validation_reason(
+        'GlobalEdit', validation.value)
+    assert 'direct_patch_subject_removed_by_collection_edit' in full_reason
+    assert 'rel_09' not in full_reason
+    assert 'input_value' not in full_reason
+
 
 
 def test_response_schema_is_portable_and_task_specific() -> None:
@@ -643,7 +674,7 @@ def test_response_schema_is_portable_and_task_specific() -> None:
     schema = wire.response_schema(task)
     encoded = json.dumps(schema, ensure_ascii=False)
 
-    assert wire.WIRE_SCHEMA == 'novel-stage2-reviewer-delta-v2'
+    assert wire.WIRE_SCHEMA == 'novel-stage2-reviewer-delta-v3'
     assert schema['type'] == 'object'
     assert schema['additionalProperties'] is False
     assert wire.WIRE_SCHEMA in encoded
@@ -786,10 +817,10 @@ def test_same_shape_patch_rows_share_schema_and_fit_windows_argv() -> None:
         {
             'relation_id': f'rel_{index:02d}',
             'predicate': f'关系{index}',
-            'predicate_evidence': {
+            'evidence_refs': [{
                 'chapter_ordinal': 1,
                 'locator': f'证据{index}',
-            },
+            }],
         }
         for index in range(60)
     ]
@@ -813,8 +844,8 @@ def test_large_fixed_collection_schema_fits_real_claude_windows_argv(
         {
             'relation_id': f'rel_{index:02d}',
             'predicate': f'关系{index}',
-            'predicate_evidence': {
-                'chapter_ordinal': 1, 'locator': f'证据{index}'},
+            'evidence_refs': [{
+                'chapter_ordinal': 1, 'locator': f'证据{index}'}],
         }
         for index in range(60)
     ]
@@ -825,7 +856,7 @@ def test_large_fixed_collection_schema_fits_real_claude_windows_argv(
             'operations': [],
         }
         for index, collection in enumerate(
-            ('relations', 'secrets', 'world_rules'))
+            ('relations', 'arc_secrets', 'world_rules'))
     ]
     GlobalEdit.model_validate(edit)
     driver = ClaudeCodeCommanderDriver(
@@ -1043,8 +1074,9 @@ def test_real_stage2_unver_multioption_keeps_full_action_path_reachable(
     request = copy.deepcopy(selected['exact_request'])
     payload = request['action']['input_payload']
     if selected_id.endswith('apply-edit-unver'):
-        payload['characters'][0].update(fate='最终获救', fate_evidence={
-            'chapter_ordinal': 2, 'locator': '他终于获救了'})
+        payload['relations'][0].update(
+            predicate='彼此信任', evidence_refs=[{
+                'chapter_ordinal': 2, 'locator': '两人约定共同查清真相'}])
         payload['post_edit_review']['reason'] = (
             '已修改错误主体，并复核 review scope 的所有存活旧项')
         payload['post_edit_review']['decisions'] = [{

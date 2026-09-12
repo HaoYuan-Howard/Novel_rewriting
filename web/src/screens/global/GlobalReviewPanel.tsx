@@ -209,8 +209,8 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
   return (
     <Panel>
       <PaneHeader
-        title="全局逐项复核"
-        meta="严格 PASS 与写作安全分开呈现；安全隔离的 UNVER 仍留在审计面，但不再拖死成书"
+        title="人物与全局逐项复核"
+        meta="人物与四类长期知识均须复核；仅规定的秘密组可明确隔离，UNVER 仍保留在审计记录中。"
       />
       <QueryStates
         q={review}
@@ -236,12 +236,12 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
                 阻断 PASS {data.effect_counts.blocking.PASS}/
                 {Object.values(data.effect_counts.blocking).reduce((a, b) => a + b, 0)}
               </span>
-              <span className="text-ink-4">
+              {Object.values(data.effect_counts.disclosure).some((count) => count > 0) ? <span className="text-ink-4">
                 披露未决 {data.effect_counts.disclosure.pending
                   + data.effect_counts.disclosure.FAIL
                   + data.effect_counts.disclosure.UNVER}
                 （不挡 Stage4，仍须逐条裁决）
-              </span>
+              </span> : null}
               <Mono
                 className="ml-auto text-micro text-ink-5"
                 title={data.current_subject_sha256}
@@ -277,7 +277,7 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
                 className="rounded-block border px-14 py-10 text-body"
                 style={{ color: SEV.hard.color, borderColor: SEV.hard.border, background: SEV.hard.bg }}
               >
-                盘上复核没有绑定当前完整 GlobalGrounding，或缺少现役必审项。旧决定不可提交、不可开门；先重建复核面。
+                盘上复核没有绑定当前人物与全局知识，或缺少现役必审项。旧决定不可提交、不可开门；先重建复核面。
               </div>
             ) : null}
 

@@ -8,6 +8,7 @@ import type { PlotEdit, PlotEditPreview, BlueprintRefinementCatalog } from '@/ty
  */
 import type { Api } from '@/types/api'
 import type { CharacterRegistryView } from '@/types/characters'
+import type { AnalyzeDraftView } from '@/types/analyzeDraft'
 import type {
   AgentCapabilitiesResponse,
   AgentProfileSettingsView,
@@ -422,6 +423,9 @@ export const realApi: Api = {
   getGlobal: async (sid, revealSpoilers = false) =>
     projectGlobalSpoilers(await get<Stage2Global>(n(sid) + '/stage2/global'), revealSpoilers),
   getCharacters: (sid) => get<CharacterRegistryView>(n(sid) + '/stage2/characters'),
+  getAnalyzeDraft: (sid, owner) => get<AnalyzeDraftView>(n(sid) + '/stage2/analyze-draft?owner=' + encodeURIComponent(owner)),
+  editAnalyzeDraft: async (sid, request) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage2/analyze-draft', request)),
   editCharacters: async (sid, request) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage2/characters/edit', request)),
   getGlobalReview: (sid) =>

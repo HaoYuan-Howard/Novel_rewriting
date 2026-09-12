@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { MASKED_SECRET_ID } from '@/api/spoilers'
-import { FRESH, MUTED, SEV, SPOILER_ON } from '@/constants/vocabulary'
+import { MUTED, SPOILER_ON } from '@/constants/vocabulary'
 import { useApprovals } from '@/hooks/useApprovals'
 import { useEnums } from '@/hooks/useEnums'
 import { useSampleCoverage } from '@/hooks/useSample'
@@ -18,9 +18,11 @@ import { LinkButton } from '@/components/ui/ActionButton'
 import { Mono } from '@/components/ui/Mono'
 import { Panel } from '@/components/ui/Panel'
 import { cx } from '@/lib/cx'
-import type { GlobalFactEvidence, GlobalReviewResponse } from '@/types/stages'
+import type { GlobalReviewResponse, GlobalTimeWindow } from '@/types/stages'
 import { GlobalReviewPanel } from './GlobalReviewPanel'
 import { CharactersPanel } from './CharactersPanel'
+import { AnalyzeDraftPanel } from './AnalyzeDraftPanel'
+import { CoreEvidence, SharedAnalysisSource } from './CoreEvidence'
 import type { ApprovalDoc } from '@/types/approvals'
 import type { UseMutationResult } from '@tanstack/react-query'
 import type { Stage2GlobalSeenRequest } from '@/types/stages'
@@ -89,42 +91,23 @@ function GlobalSeenConfirm({
   )
 }
 
-type Tab = 'chars' | 'rels' | 'rules' | 'secrets' | 'opening'
+type Tab = 'setting' | 'rels' | 'rules' | 'secrets'
 
-function EvidenceLine({ evidence }: { evidence: GlobalFactEvidence | null }) {
-  if (evidence === null) return null
-  if (evidence.source === null) {
-    return (
-      <span className="text-mini text-warn-ink" role="status">
-        证据定位失败 · 第 {evidence.chapter_ordinal} 章
-      </span>
-    )
-  }
-  return (
-    <span
-      className="prose-cn text-mini text-ink-5"
-      title={`原文 ${evidence.source.start}–${evidence.source.end}`}
-    >
-      证据 ch{evidence.chapter_ordinal} · “{evidence.source.text}”
-    </span>
-  )
+function TimeWindow({ value }: { value: GlobalTimeWindow }) {
+  return <span className="text-mini text-ink-4">
+    成立：第 {value.effective_from} 章起{value.effective_until === null ? '，未声明截止章' : `，至第 ${value.effective_until} 章（含）`}
+    {' · '}读者第 {value.revealed_from} 章起可见
+  </span>
 }
 
-/**
- * 全局设定。人物、关系、世界规则、秘密、弧线 —— 抽对了吗、抽全了吗。
- *
- * 两条最要紧的：
- *   · 剧透开关是**部分遮蔽**，服务端下发的那句 spoiler_disclosure.notice 必须常驻显示，
- *     不能收进 tooltip：一个没标注的部分遮蔽，会被当成完整遮蔽用。
- *   · secrets 是空数组 ≠ 这本书没有秘密。
- */
+/** 人物登记独立读取；Global 只展示四类长期约束与服务端证据。 */
 export function GlobalScreen() {
   const sid = useSid()
   const nav = useNavigate()
   const { doc, markGlobalSeen } = useApprovals()
   const { defaultOrdinal } = useSampleCoverage()
   const [spoilers, setSpoilers] = useState(false)
-  const [tab, setTab] = useState<Tab>('chars')
+  const [tab, setTab] = useState<Tab>('setting')
 
   const q = useQuery({
     queryKey: qk.global(sid, spoilers),
@@ -134,7 +117,7 @@ export function GlobalScreen() {
   const enums = useEnums()
   const maskNote =
     enums.data?.spoiler_disclosure?.notice ??
-    '仅在屏幕展示层隐藏 fate / secrets / climax / ending；服务端仍全量下发，浏览器网络与缓存仍可能看到。'
+    '仅在屏幕展示层隐藏跨章秘密；服务端仍全量下发，关系、规则及浏览器网络与缓存仍可能透露相同信息。'
   const blueprintAction = doc?.spawns.s1?.find(
     (action) => action.kind === 'stage2.blueprint',
   )
@@ -152,7 +135,7 @@ export function GlobalScreen() {
           <div className="flex flex-col gap-5">
             <h1 className="m-0 text-screen font-semibold">全局设定 · stage2</h1>
             <div className="text-body text-ink-3">
-              人物、关系、世界规则、秘密和源文案——抽对了吗、抽全了吗。
+              独立人物登记，以及背景、世界规则、长期关系和跨章秘密。
             </div>
           </div>
           <div className="flex max-w-[620px] flex-col items-end gap-7">
@@ -187,6 +170,7 @@ export function GlobalScreen() {
           </div>
         </header>
         <CharactersPanel key={sid} sid={sid} />
+        <AnalyzeDraftPanel key={'analyze:' + sid} sid={sid} />
         {blueprintAction ? (
           <div role="group" aria-label="接受全局后生成逐章骨架">
             <Panel className="flex flex-wrap items-center justify-between gap-14 px-18 py-14">
@@ -213,301 +197,77 @@ export function GlobalScreen() {
         ) : null}
         <QueryStates q={q} loadingLabel="读全局设定" missing={{ title: '全局设定 · stage2' }}>
         {(d) => {
-          const tabs: { key: Tab; label: string; n: number }[] = [
-            { key: 'chars', label: '人物', n: d.characters.length },
-            { key: 'rels', label: '关系', n: d.relations.length },
+          const tabs: { key: Tab; label: string; n: number | null }[] = [
+            { key: 'setting', label: '背景', n: null },
+            { key: 'rels', label: '长期关系', n: d.relations.length },
             { key: 'rules', label: '世界规则', n: d.world_rules.length },
-            { key: 'secrets', label: '秘密', n: spoilers ? d.secrets.length : 0 },
-            { key: 'opening', label: '源文案与开篇', n: d.source_blurb.facts.length },
+            { key: 'secrets', label: '跨章秘密', n: spoilers ? d.arc_secrets.length : null },
           ]
-          const chapters = Math.max(
-            8,
-            ...d.relations.map((r) => r.valid_through_chapter ?? r.valid_from_chapter),
-          )
+          const evidence = (refs: string[]) => <CoreEvidence refs={refs} anchors={d.evidence_anchors} snippets={d.evidence_snippets} />
           const settingRows = [
-            { label: '时代背景', value: d.setting.时代背景, evidence: d.setting.era_evidence },
-            { label: '世界观', value: d.setting.世界观, evidence: d.setting.worldview_evidence },
+            { label: '时代背景', value: d.setting.era, refs: d.setting.era_evidence_refs },
+            { label: '社会背景', value: d.setting.social_context, refs: d.setting.social_context_evidence_refs },
           ]
-
+          const empty = (label: string) => <EmptyIsSuspicious title={`未提取到${label}`}
+            body="空列表仍需结合全书检查完整性，不能自动等同于原文没有。"
+            action={<LinkButton onClick={() => nav('/n/' + sid + '/read/' + defaultOrdinal(sid))}>对着原文看一遍</LinkButton>} />
           return (
             <div className="flex flex-col gap-16">
-              <div className="grid gap-12" style={{ gridTemplateColumns: 'repeat(2,1fr)' }}>
-                {settingRows.map((row) => (
-                  <Panel key={row.label} className="flex flex-col gap-4 px-16 py-13">
-                    <span className="text-tag text-ink-4">{row.label}</span>
-                    <span className="prose-cn text-section text-ink-2">{row.value}</span>
-                    <EvidenceLine evidence={row.evidence} />
-                  </Panel>
-                ))}
+              <SharedAnalysisSource provenance={d._provenance} />
+              <div className="text-mini text-ink-4">
+                当前展示：{d.invalid_exists ? '问题稿' : '正式稿'} · 正式稿状态：{d.freshness} · {d.reason || '未提供原因'}
+                {d.invalid_exists ? ' · 问题稿须修复后再接受' : ''}
               </div>
-
-              <div className="flex flex-wrap gap-8">
-                {tabs.map((t) => (
-                  <button
-                    key={t.key}
-                    type="button"
-                    onClick={() => setTab(t.key)}
-                    className={cx(
-                      'cursor-pointer rounded-btn-lg border px-14 py-7 text-body-lg',
-                      tab === t.key
-                        ? 'border-ink bg-ink text-card'
-                        : 'border-line-btn bg-card text-ink-2',
-                    )}
-                  >
-                    {t.label}
-                    <Mono
-                      className="ml-7 rounded-tag px-6 py-1 text-mini"
-                      // 计数为 0 的用「过期」橙 —— 空要读起来可疑，不是干净
-                      title={t.n === 0 ? '这一类一条都没抽到，可能是漏抽了' : undefined}
-                    >
-                      <span
-                        className={tab === t.key ? 'text-card' : 'text-ink-4'}
-                        style={t.n === 0 ? { color: FRESH.stale.color } : undefined}
-                      >
-                        {t.n}
-                      </span>
-                    </Mono>
-                  </button>
-                ))}
+              <div className="flex flex-wrap gap-8" role="tablist" aria-label="全局长期约束">
+                {tabs.map((t) => <button key={t.key} type="button" role="tab" aria-selected={tab === t.key}
+                  onClick={() => setTab(t.key)} className={cx('cursor-pointer rounded-btn-lg border px-14 py-7 text-body-lg',
+                    tab === t.key ? 'border-ink bg-ink text-card' : 'border-line-btn bg-card text-ink-2')}>
+                  {t.label}{t.n === null ? null : <Mono className="ml-7 text-mini">{t.n}</Mono>}
+                </button>)}
               </div>
-
-              {tab === 'chars' ? (
-                <div
-                  className="grid gap-12"
-                  style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(400px,1fr))' }}
-                >
-                  {d.characters.map((c) => (
-                    <Panel key={c.char_id} className="flex flex-col gap-8 px-16 py-13">
-                      <div className="flex flex-wrap items-center gap-8">
-                        <span className="text-h3 font-semibold">{c.canonical}</span>
-                        <Mono className="text-micro text-ink-5">{c.char_id}</Mono>
-                        <span className="ml-auto rounded-tag bg-inset px-7 py-1 text-micro text-ink-4">
-                          辨识度 {c.name_distinctiveness}
-                        </span>
-                      </div>
-                      <div className="flex flex-col gap-3">
-                        <div className="prose-cn text-body-lg text-ink-2">{c.role}</div>
-                        <EvidenceLine evidence={c.role_evidence} />
-                      </div>
-                      <div className="flex flex-wrap gap-5">
-                        {c.address.map((a, i) => (
-                          <span
-                            key={i}
-                            className="rounded-[11px] bg-inset px-8 py-2 text-mini text-ink-3"
-                          >
-                            {/* by 是对象，取 display —— 设计稿这里拼出了 [object Object] */}
-                            {a.surface}（{a.by.display}·{a.context}，第{a.from_chapter}章起）
-                          </span>
-                        ))}
-                      </div>
-                      {/* 遮住 / 没有这个字段 / 可见，是三件事 */}
-                      <div
-                        className={cx(
-                          'rounded-btn px-12 py-8 text-sm2',
-                          spoilers ? 'border border-line-2 bg-sunken-2 text-ink-2' : 'hatch-tight border border-dashed border-line-dash text-ink-5',
-                        )}
-                      >
-                        <div className="flex flex-col gap-3">
-                          <span>{c.fate ?? '（这个人没有 fate 字段）'}</span>
-                          <EvidenceLine evidence={c.fate_evidence} />
-                        </div>
-                      </div>
-                    </Panel>
-                  ))}
-                </div>
-              ) : null}
-
-              {tab === 'rels' ? (
-                <Panel>
-                  <div
-                    className="grid gap-12 border-b border-line-soft px-18 py-10 text-tag text-ink-4"
-                    style={{ gridTemplateColumns: '64px minmax(0,1fr) minmax(120px,170px) minmax(0,1fr) 170px 210px' }}
-                  >
-                    <span>id</span>
-                    <span>主</span>
-                    <span>谓</span>
-                    <span>宾</span>
-                    <span>读者可见</span>
-                    <span>成立区间（章）</span>
-                  </div>
-                  {d.relations.map((r) => {
-                    const from = r.valid_from_chapter
-                    const to = r.valid_through_chapter ?? chapters
-                    const visibility =
-                      r.visibility.kind === 'public'
-                        ? `公开 · 第 ${r.visibility.from_chapter} 章起`
-                        : `随 ${r.visibility.secret_id} 揭示`
-                    return (
-                      <div
-                        key={r.relation_id}
-                        className="grid items-center gap-12 border-b border-line-row px-18 py-10"
-                        style={{ gridTemplateColumns: '64px minmax(0,1fr) minmax(120px,170px) minmax(0,1fr) 170px 210px' }}
-                      >
-                        <Mono className="text-micro text-ink-5">{r.relation_id}</Mono>
-                        <span className="text-body">{r.subject.display}</span>
-                        <span className="flex min-w-0 flex-col gap-2">
-                          <span className="truncate text-body text-ink-3" title={r.predicate}>
-                            {r.predicate}
-                          </span>
-                          <EvidenceLine evidence={r.predicate_evidence} />
-                        </span>
-                        <span className="text-body">{r.object.display}</span>
-                        <span className="text-mini text-ink-4">{visibility}</span>
-                        <span className="flex items-center gap-8">
-                          <span className="relative h-7 min-w-0 flex-1 overflow-hidden rounded-tag bg-inset">
-                            <span
-                              className="absolute top-0 bottom-0 bg-accent-bar"
-                              style={{
-                                left: ((from - 1) / chapters) * 100 + '%',
-                                width: ((to - from + 1) / chapters) * 100 + '%',
-                              }}
-                            />
-                          </span>
-                          <Mono className="w-52 flex-none text-micro text-ink-5">
-                            {from}–{to} 章
-                          </Mono>
-                        </span>
-                      </div>
-                    )
-                  })}
-                </Panel>
-              ) : null}
-
-              {tab === 'rules' ? (
-                <div className="flex flex-col gap-12">
-                  {d.world_rules.map((w) => (
-                    <Panel key={w.rule_id} className="flex gap-16 px-18 py-14">
-                      <div className="flex w-150 flex-none flex-col gap-3">
-                        <Mono className="text-mini text-ink-4">{w.rule_id}</Mono>
-                        <span className="text-tag text-ink-3">{w.kind}</span>
-                      </div>
-                      <div className="flex min-w-0 flex-1 flex-col gap-8">
-                        {w.versions.map((v, i) => (
-                          <div key={i} className="flex gap-10">
-                            <Mono className="flex-none text-mini text-ink-5">
-                              第 {v.effective_from_chapter} 章起
-                            </Mono>
-                            <span className="flex min-w-0 flex-col gap-2">
-                              <span className="prose-cn text-section text-ink-2">{v.desc}</span>
-                              <EvidenceLine evidence={v.desc_evidence} />
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </Panel>
-                  ))}
-                </div>
-              ) : null}
-
-              {tab === 'secrets' ? (
-                d.secrets.length ? (
-                  <div className="flex flex-col gap-10">
-                    {d.secrets.map((s) => (
-                      <Panel key={s.secret_id} className="flex flex-col gap-5 px-18 py-14">
-                        {s.secret_id === MASKED_SECRET_ID ? null : (
-                          <Mono className="text-mini text-ink-4">{s.secret_id}</Mono>
-                        )}
-                        <span className="flex flex-col gap-2">
-                          <span className="prose-cn text-section text-ink-2">{s.fact}</span>
-                          {s.secret_id === MASKED_SECRET_ID ? null : (
-                            <EvidenceLine evidence={s.fact_evidence} />
-                          )}
-                        </span>
-                        {s.secret_id === MASKED_SECRET_ID ? null : (
-                          <div className="flex flex-col gap-4">
-                            <span className="text-tag text-ink-4">世界内知情：</span>
-                            <div className="flex flex-wrap gap-6">
-                              {s.knowledge_events.map((event, i) => (
-                                <span
-                                  key={`${event.subject.raw}-${event.known_from_chapter}-${i}`}
-                                  className="flex flex-col rounded-btn bg-inset px-8 py-4 text-mini text-ink-3"
-                                >
-                                  <span>
-                                    {event.subject.display}（
-                                    {event.subject_kind === 'group' ? '群体' : '人物'} · 第{' '}
-                                    {event.known_from_chapter} 章起）
-                                  </span>
-                                  <EvidenceLine evidence={event.evidence} />
-                                </span>
-                              ))}
-                            </div>
-                            <span className="text-tag text-ink-4">
-                              读者第 {s.first_reveal_chapter} 章首次揭示
-                              {/* cold 是模型显式声明的答案，不是「这一格空着」——照它说的显示 */}
-                              {s.setup_kind === 'foreshadowed'
-                                ? ' · 埋点 ch' + s.setup_chapters.join('/')
-                                : ' · 冷揭示（无埋点）'}
-                            </span>
-                          </div>
-                        )}
-                      </Panel>
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyIsSuspicious
-                    title="secrets 是空数组 —— 一条秘密都没抽到"
-                    body="空数组的意思是「这本书没抽到秘密」，不等于「这本书没有秘密」。这一屏不替你下结论：要判断是真没有还是漏抽了，去对着原文看一遍。"
-                    extra={
-                      !spoilers && d.secrets.length ? (
-                        <div
-                          className="rounded-btn border border-dashed px-12 py-8 text-sm2"
-                          style={{ borderColor: SEV.unver.border, color: SEV.unver.color }}
-                        >
-                          剧透开关关着时另有 {d.secrets.length} 条被遮住的秘密字段——遮蔽和空是两回事。
-                        </div>
-                      ) : null
-                    }
-                    action={
-                      <LinkButton onClick={() => nav('/n/' + sid + '/read/' + defaultOrdinal(sid))}>
-                        对着原文看一遍
-                      </LinkButton>
-                    }
-                  />
-                )
-              ) : null}
-
-              {tab === 'opening' ? (
-                <div className="grid items-start gap-16 lg:grid-cols-2">
-                  <Panel className="flex flex-col gap-10 px-18 py-14">
-                    <span className="text-section font-semibold">连续开篇材料范围</span>
-                    {d.source_blurb.opening.kind === 'proposed' ? (
-                      <>
-                        <span>第 1～{d.source_blurb.opening.through_chapter} 章</span>
-                        <span className="prose-cn text-ink-2">{d.source_blurb.opening.rationale}</span>
-                        <EvidenceLine evidence={d.source_blurb.opening.boundary_evidence} />
-                        <span className="text-tag text-ink-4">这是 Global 提案；有效接受以审阅状态为准。</span>
-                      </>
-                    ) : (
-                      <span className="prose-cn text-ink-2">范围待裁决：{d.source_blurb.opening.reason}</span>
-                    )}
-                  </Panel>
-                  <Panel className="flex flex-col gap-10 px-18 py-14">
-                    <span className="text-section font-semibold">源文案事实证据</span>
-                    {d.source_blurb.facts.map((fact) => (
-                      <div key={fact.claim_id} className="flex flex-col gap-3">
-                        <Mono>{fact.claim_id}</Mono>
-                        <span className="prose-cn text-ink-2">{fact.claim}</span>
-                        {fact.kind === 'supported'
-                          ? <EvidenceLine evidence={fact.evidence} />
-                          : fact.kind === 'hook_supported'
-                            ? <>
-                              <span className="text-tag text-ink-4">原钩子独立支持；正文无需重复，审阅状态另行裁决。</span>
-                              {fact.hook_evidence.source === null
-                                ? <span className="text-tag text-warn-ink">源文案证据定位失败</span>
-                                : <span className="prose-cn text-mini text-ink-5"
-                                  title={`文案码点 ${fact.hook_evidence.source.start}–${fact.hook_evidence.source.end}`}>
-                                  文案证据 · “{fact.hook_evidence.source.text}”
-                                </span>}
-                            </>
-                            : <span className="text-tag text-ink-4">待裁决：{fact.reason}</span>}
-                      </div>
-                    ))}
-                    {d.source_blurb.facts.length === 0
-                      ? <span className="text-ink-4">未列出事实，完整性仍须审阅。</span>
-                      : null}
-                  </Panel>
-                </div>
-              ) : null}
+              {tab === 'setting' ? <div className="grid gap-12 lg:grid-cols-2">
+                {settingRows.map((row) => <Panel key={row.label} className="flex flex-col gap-5 px-18 py-14">
+                  <span className="text-tag text-ink-4">{row.label}</span>
+                  <span className="prose-cn text-section text-ink-2">{row.value ?? '源文未建立'}</span>
+                  {evidence(row.refs)}
+                </Panel>)}
+              </div> : null}
+              {tab === 'rels' ? <div className="flex flex-col gap-12">
+                {d.relations.length === 0 ? empty('长期关系') : d.relations.map((row) => <Panel key={row.relation_id} className="flex flex-col gap-6 px-18 py-14">
+                  <Mono className="text-mini text-ink-5">{row.relation_id}</Mono>
+                  <span className="prose-cn text-section">{row.subject.display} · {row.predicate} · {row.object.display}</span>
+                  <span className="text-mini text-ink-5">{row.subject.raw} → {row.object.raw}</span>
+                  <TimeWindow value={row} />
+                  {evidence(row.evidence_refs)}
+                </Panel>)}
+              </div> : null}
+              {tab === 'rules' ? <div className="flex flex-col gap-12">
+                {d.world_rules.length === 0 ? empty('世界规则') : d.world_rules.map((rule) => <Panel key={rule.rule_id} className="flex flex-col gap-10 px-18 py-14">
+                  <span className="text-tag text-ink-4">{rule.rule_id} · {rule.kind}</span>
+                  {rule.versions.map((version) => <div key={version.version_id} className="flex flex-col gap-4 border-t border-line-soft pt-8">
+                    <Mono className="text-mini text-ink-5">{version.version_id}</Mono>
+                    <span className="prose-cn text-section">{version.desc}</span>
+                    <TimeWindow value={version} />
+                    {evidence(version.evidence_refs)}
+                  </div>)}
+                </Panel>)}
+              </div> : null}
+              {tab === 'secrets' ? <div className="flex flex-col gap-12">
+                {d.arc_secrets.length === 0 ? empty('跨章秘密') : d.arc_secrets.map((secret) => <Panel key={secret.secret_id} className="flex flex-col gap-6 px-18 py-14">
+                  {secret.secret_id === MASKED_SECRET_ID ? <span className="text-body text-ink-4">{secret.fact}</span> : <>
+                    <Mono className="text-mini text-ink-5">{secret.secret_id}</Mono>
+                    {secret.fact_ref === null
+                      ? <><span className="prose-cn text-section">{secret.fact}</span>{evidence(secret.evidence_refs)}</>
+                      : <span className="text-body">引用{secret.fact_ref.kind === 'relation'
+                        ? `关系 ${secret.fact_ref.relation_id}`
+                        : `世界规则 ${secret.fact_ref.rule_id} / ${secret.fact_ref.version_id}`}；事实与证据见对应主体。</span>}
+                    <span className="text-tag text-ink-4">读者第 {secret.revealed_from} 章首次揭示</span>
+                    <span className="text-mini text-ink-4">{secret.setup_chapters.length
+                      ? `埋点：第 ${secret.setup_chapters.join('、')} 章；同章情节先后由审阅核实`
+                      : '冷揭示（未登记埋点）'}</span>
+                  </>}
+                </Panel>)}
+              </div> : null}
             </div>
           )
         }}

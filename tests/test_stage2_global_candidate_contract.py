@@ -6,6 +6,7 @@ from __future__ import annotations
 from novel.stages.stage2 import grounding as grounding_io
 
 import copy
+import hashlib
 import json
 
 import pytest
@@ -32,7 +33,7 @@ from tests.test_stage2_generation import (
     _response_global,
 )
 from tests.test_stage2_global_agent import (
-    _Driver, _ctx, _profile, _resume_ctx, _rows,
+    _Driver, _ctx, _profile, _resume_ctx, _rows, _full,
 )
 
 
@@ -44,18 +45,6 @@ def _candidate_response() -> dict:
     return copy.deepcopy(_response_global())
 
 
-def _full(candidate: dict) -> str:
-    wire = copy.deepcopy(candidate)
-    characters = wire['entities']['character_states']
-    wire['entities']['character_states'] = [
-        {'char_id': char_id, **character}
-        for char_id, character in characters.items()
-    ]
-    return json.dumps({
-        'payload': {'kind': 'full_candidate', 'candidate': wire},
-    }, ensure_ascii=False)
-
-
 def _session_client(ctx, driver, *, max_turns: int = 2) -> SessionAgentClient:
     return SessionAgentClient(
         ctx, _profile(), driver,
@@ -64,13 +53,13 @@ def _session_client(ctx, driver, *, max_turns: int = 2) -> SessionAgentClient:
 
 def _unknown_candidate():
     value = _candidate_response()
-    value['entities']['relations'][0]['predicate_evidence'] = {'evidence_candidate_id': 'e999999'}
+    value['relations'][0]['evidence_refs'] = ['e999999']
     return value
 
 
 def _offer_knowledge_custody(ctx, *, prior_count):
     candidate = _candidate_response()
-    candidate['canon']['secrets'][0]['first_reveal_chapter'] = 99
+    candidate['arc_secrets'][0]['revealed_from'] = 99
     driver = _Driver([_full(candidate)] * prior_count + [_full(_unknown_candidate())], ctx.novel_dir)
     with pytest.raises(LlmFailed, match=f'已用尽 {prior_count + 1} 轮'):
         Stage2GlobalAgent(ctx, driver=driver, max_turns=prior_count + 1).run()
@@ -110,7 +99,7 @@ def test_global_provider_has_one_candidate_only_contract_and_schema():
     assert CONTRACT.name == GLOBAL_EVIDENCE_CONTRACT
     assert CONTRACT.response_model is GlobalGroundingCandidateResponse
     assert CONTRACT.agent_response_model is GlobalCandidateAgentTurnResponse
-    assert 'evidence_candidate_id' in CONTRACT.system
+    assert 'e000001' in CONTRACT.system
     serialized = json.dumps(CONTRACT.hint, ensure_ascii=False)
     assert '"locator"' not in serialized
     assert 'chapter_ordinal' not in serialized
@@ -123,14 +112,13 @@ def test_knowledge_agent_schema_only_accepts_complete_knowledge_candidates():
     schema = json.dumps(structured, ensure_ascii=False)
     assert 'full_candidate' in schema
     assert 'role_fate_patch' not in schema and 'evidence_patch' not in schema
-    # 正文仍只接受候选引用；独立钩子证据有自己的定位域，不能混作正文章。
+    # Global 已无 Hook 定位域；所有证据只接受段落候选引用。
     locator_models = {name for name, definition in structured['$defs'].items()
                       if 'locator' in definition.get('properties', {})}
-    assert locator_models == {'HookEvidenceLocator'}
-    assert structured['$defs']['HookEvidenceLocator']['required'] == ['locator']
-    assert '"evidence_candidate_id":' in schema
+    assert locator_models == set()
+    assert '"evidence_refs":' in schema
     assert '"characters":' not in schema
-    assert '"character_states":' in schema
+    assert '"character_states":' not in schema and 'HookEvidenceLocator' not in schema
 
 
 def test_retired_global_selector_is_not_configurable_and_fails_closed(
@@ -185,7 +173,7 @@ def test_candidate_agent_compiles_ids_to_formal_source_spans(
     assert request.output_schema == agent_json_schema(
         GlobalCandidateAgentTurnResponse)
     assert '<e000001>' in request.prompt
-    assert 'evidence_candidate_id' in request.system
+    assert 'e000001' in request.system
     landed = grounding_io.read(ArtifactStore(ctx))
     dumped = landed.model_dump(by_alias=True, mode='json')
     assert 'evidence_candidate_id' not in json.dumps(dumped, ensure_ascii=False)
@@ -194,13 +182,12 @@ def test_candidate_agent_compiles_ids_to_formal_source_spans(
         for value in _walk(dumped) if isinstance(value, dict)
         for key in value
     )
-    relation = landed.entities.relations[0]
-    assert relation.predicate_evidence.source is not None
-    source = relation.predicate_evidence.source
+    relation = landed.relations[0]
+    source = landed.evidence_anchors[relation.evidence_refs[0]]
     chapter = next(
         row for row in main_text()
-        if row['chapter_ordinal'] == relation.predicate_evidence.chapter_ordinal)
-    assert chapter['text'][source.start:source.end] == source.text
+        if row['chapter_ordinal'] == source.chapter_ordinal)
+    assert hashlib.sha256(chapter['text'][source.start:source.end].encode('utf-8')).hexdigest() == source.text_sha256
 
 
 def _walk(value):
@@ -218,9 +205,7 @@ def test_unknown_candidate_id_is_rejected_before_acceptance_or_invalid_write(
 ):
     ctx = _ctx(tmp_path)
     invalid = _candidate_response()
-    invalid['entities']['relations'][0]['predicate_evidence'] = {
-        'evidence_candidate_id': 'e999999',
-    }
+    invalid['relations'][0]['evidence_refs'] = ['e999999']
     driver = _Driver([
         _full(invalid),
         _full(_candidate_response()),
@@ -249,9 +234,7 @@ def test_unknown_id_typed_replacement_recovers_same_run_without_wire(
 ):
     ctx = _ctx(tmp_path)
     invalid = _candidate_response()
-    invalid['entities']['relations'][0]['predicate_evidence'] = {
-        'evidence_candidate_id': 'e999999',
-    }
+    invalid['relations'][0]['evidence_refs'] = ['e999999']
     with pytest.raises(LlmFailed, match='已用尽 1 轮'):
         Stage2GlobalAgent(
             ctx, driver=_Driver([_full(invalid)], ctx.novel_dir),
@@ -455,8 +438,8 @@ def test_retired_locator_wire_payloads_are_rejected_without_durable_adoption(
     ctx = _ctx(tmp_path)
     if retired_payload == 'locator_full':
         candidate = _candidate_response()
-        candidate['canon']['setting']['era_evidence'] = {
-            'chapter_ordinal': 1, 'locator': '原文明示的时代背景'}
+        candidate['setting']['era_evidence_refs'] = [{
+            'chapter_ordinal': 1, 'locator': '原文明示的时代背景'}]
         raw = _full(candidate)
     elif retired_payload == 'static_full':
         from tests.stage2_fixtures import candidate_view

@@ -18,13 +18,14 @@ from novel.quality.global_review import (
     generation_safety, review_effect_counts, review_group_key, review_status,
     subject_sha256,
 )
-from novel.stages.stage2.global_review import review_identity
+from novel.stages.stage2.global_review import review_token as current_review_token, _characters_payload
 from novel.store import ArtifactStore
 
 
 def global_review_view(base: str, sid: str) -> GlobalReviewView:
     novel_dir = paths.resolve_novel_dir(base, sid)
-    store = ArtifactStore(state.readonly_ctx(novel_dir, 'stage2.global', prov.code_version()))
+    ctx = state.readonly_ctx(novel_dir, 'stage2.global', prov.code_version())
+    store = ArtifactStore(ctx)
     if not store.exists(STAGE2_GLOBAL_REVIEW):
         raise UpstreamMissing(f'{STAGE2_GLOBAL_REVIEW} 不在盘上')
     if not store.exists(STAGE2_GLOBAL_GROUNDING):
@@ -32,8 +33,9 @@ def global_review_view(base: str, sid: str) -> GlobalReviewView:
     review = store.read_own(GlobalReview, STAGE2_GLOBAL_REVIEW)[0]
     grounding = grounding_io.read_own(store, STAGE2_GLOBAL_GROUNDING)[0]
     grounding_payload = grounding.model_dump(by_alias=True)
-    subject, current, approved = review_status(grounding_payload, review)
-    safety = generation_safety(grounding_payload, review)
+    characters_payload = _characters_payload(store)
+    subject, current, approved = review_status(grounding_payload, review, characters=characters_payload)
+    safety = generation_safety(grounding_payload, review, characters=characters_payload)
     review_token: str | None = None
     if current:
         # token 只对 current 主体有意义；MainText 缺失/过期时保持 None，
@@ -44,10 +46,10 @@ def global_review_view(base: str, sid: str) -> GlobalReviewView:
         except NovelError:
             main = None
         if main is not None:
-            review_token = review_identity(
-                grounding_payload, review,
-                subject_sha256(main.model_dump(mode='json', by_alias=True)),
-            )['review_token']
+            try:
+                review_token = current_review_token(ctx)
+            except NovelError:
+                review_token = None
     from novel.orchestrator.approvals import stage2_review_coverage
     return GlobalReviewView(
         review_coverage=(stage2_review_coverage(base, sid, 'stage2.global')

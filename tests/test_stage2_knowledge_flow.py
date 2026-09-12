@@ -51,10 +51,12 @@ def test_global_wire_and_disk_have_no_static_character_copy(tmp_path):
     assert [kind for kind, _request in driver.calls] == ['start']
     artifact = store.read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0]
     assert artifact.characters_reference_sha256 == grounding.knowledge_reference_sha256(registry)
-    assert 'characters' not in artifact.model_dump(mode='json')['entities']
+    assert 'characters' not in artifact.model_dump(mode='json')
+    assert 'entities' not in artifact.model_dump(mode='json')
     assert store.full_sha256_or_none(STAGE2_CHARACTERS) == character_sha
     assert store.freshness(STAGE2_GLOBAL_GROUNDING).state == 'fresh'
-    assert grounding.read_own(store)[0].entities.characters.keys() == registry.characters.keys()
+    assert grounding.read_own(store)[0] == artifact
+    assert grounding.read_registry(store, own=True) == registry
 
 
 def test_global_refuses_missing_static_registry_before_driver(tmp_path):
@@ -82,10 +84,25 @@ def test_knowledge_commit_does_not_own_missing_character_projection(tmp_path):
 def test_saved_knowledge_cannot_overwrite_character_identity(tmp_path):
     ctx, registry = _prepared(tmp_path)
     result, _ = _run(ctx)
-    result.artifact.entities.characters['char_001'].role += '越权修改'
-    with pytest.raises(ProvenanceRefused, match='stage2.characters'):
-        grounding.for_write(ArtifactStore(ctx), result.artifact)
-    assert grounding.read_registry(ArtifactStore(ctx), own=True) == registry
+    store = ArtifactStore(ctx)
+    original = {rel: store.path(rel).read_bytes() for rel in (
+        STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING, STAGE2_BLUEPRINT_CHARACTER_PROJECTION)}
+    mixed = result.artifact.model_dump(mode='json', by_alias=True)
+    mixed['characters'] = {'char_001': {'role': '越权修改'}}
+    with pytest.raises(ValueError, match='Extra inputs'):
+        KnowledgeGrounding.model_validate(mixed)
+    from novel.views.stage2 import global_view
+    from contracts.schema.api import GlobalView
+    from contracts.schema import ARTIFACT_SPECS
+    view = global_view(ctx.novel_dir.parent, ctx.sid)
+    assert type(view) is GlobalView
+    assert all(spec.model is not GlobalView for spec in ARTIFACT_SPECS.values())
+    displayed = view.model_dump(mode='json', by_alias=True)
+    assert 'characters' not in displayed
+    displayed['relations'][0]['subject']['display'] = '只改展示副本'
+    assert global_view(ctx.novel_dir.parent, ctx.sid).relations[0].subject.display == registry.characters['char_001'].canonical
+    assert {rel: store.path(rel).read_bytes() for rel in original} == original
+    assert grounding.read_registry(store, own=True) == registry
 
 
 @pytest.mark.parametrize('window', ['answer', 'checkpoint', 'formal', 'review'])
@@ -113,18 +130,49 @@ def test_knowledge_recovery_reuses_saved_result_at_every_commit_window(tmp_path,
     assert stage2_global_runs.committed(resumed)['state'] == 'committed'
 
 
-def test_unused_character_address_change_keeps_knowledge_current(tmp_path):
+def _edit_unused_character_evidence(free):
+    """补入父亲翻账的真实旁证段，不改 canonical/surfaces/role 的知识依赖。"""
+    from contracts.schema.stage1 import MainText
+    from novel.stages.stage2.core_evidence import evidence_snippet
+    store = ArtifactStore(free)
+    registry = grounding.read_registry(store, own=True)
+    main = store.read_own(MainText, extract.MAIN_TEXT)[0].model_dump(mode='json')
+    edit = characters.edit_template(free)
+    edit['operations'] = edit['operations'][:1]
+    operation = edit['operations'][0]
+    previous = registry.characters[operation['char_id']]
+    anchor = registry.evidence_anchors[previous.role_evidence_refs[0]]
+    extra_locator = '她忽然想起父亲从前也这样翻账。'
+    assert previous.canonical == '李宝珠' and '替父亲掌管家中账目' in previous.role
+    chapter = next(row for row in main if row['chapter_ordinal'] == 3)
+    assert extra_locator in chapter['text']
+    assert extra_locator not in evidence_snippet(anchor, main)
+    operation['character']['role_evidence_refs'] = [*previous.role_evidence_refs, {
+        'chapter_ordinal': 3, 'locator': extra_locator}]
+    updated = characters.apply_edit(free, CharactersEdit.model_validate(edit),
+        actor='test:editor', reason='补入父亲翻账旁证段，保留既有角色事实')
+    assert grounding.knowledge_reference_sha256(updated) == grounding.knowledge_reference_sha256(registry)
+    assert updated.evidence_anchors != registry.evidence_anchors
+    return updated
+
+
+def test_unused_character_evidence_change_keeps_knowledge_current(tmp_path, monkeypatch):
     ctx, _ = _prepared(tmp_path)
     _run(ctx)
     before_store = ArtifactStore(ctx)
     knowledge_sha = before_store.full_sha256_or_none(STAGE2_GLOBAL_GROUNDING)
     free = _free_ctx(ctx)
     free.node = characters.NODE
-    edit = characters.edit_template(free)
-    edit['operations'] = edit['operations'][:1]
-    row = edit['operations'][0]['character']['address'][0]
-    row['by'] = 'public' if row['by'] != 'public' else 'narration'
-    characters.apply_edit(free, CharactersEdit.model_validate(edit), actor='test:editor', reason='核对称名归属')
+    # 人物正式证据已落、审阅后继硬杀：知识仍fresh，但审阅必须明确待刷新。
+    # 正常人物写口已经会自动刷新义务，不能把这项能力误测为永久过期。
+    original_refresh = characters._refresh_review
+    def interrupted(*args, **kwargs):
+        raise RuntimeError('模拟人物证据落盘后的审阅尾窗')
+    monkeypatch.setattr(characters, '_refresh_review', interrupted)
+    with pytest.raises(RuntimeError, match='审阅尾窗'):
+        _edit_unused_character_evidence(free)
+    monkeypatch.setattr(characters, '_refresh_review', original_refresh)
+    updated = grounding.read_registry(ArtifactStore(free), own=True)
     assert before_store.full_sha256_or_none(STAGE2_GLOBAL_GROUNDING) == knowledge_sha
     assert before_store.freshness(STAGE2_GLOBAL_GROUNDING).state == 'fresh'
     from contracts.artifacts import STAGE2_GLOBAL_REVIEW
@@ -134,7 +182,8 @@ def test_unused_character_address_change_keeps_knowledge_current(tmp_path):
     assert state.stage2_global_review_refresh_needed(ov)
     free.node = 'stage2.global'
     review = extract.run_refresh_review(free)
-    require_current(grounding.read_own(before_store)[1], review)
+    require_current(grounding.read_own(before_store)[1], review,
+        characters=updated.model_dump(mode='json', by_alias=True))
     assert before_store.full_sha256_or_none(STAGE2_GLOBAL_GROUNDING) == knowledge_sha
     assert before_store.freshness(STAGE2_GLOBAL_REVIEW).state == 'fresh'
     assert not state.stage2_global_review_refresh_needed(state.overview(ctx.novel_dir.parent, ctx.sid))
@@ -159,16 +208,13 @@ def test_unused_character_change_during_recovery_requires_no_second_purchase(tmp
     monkeypatch.setattr(owner, name, original)
     free = _free_ctx(ctx)
     free.node = characters.NODE
-    edit = characters.edit_template(free)
-    edit['operations'] = edit['operations'][:1]
-    address = edit['operations'][0]['character']['address'][0]
-    address['by'] = 'public' if address['by'] != 'public' else 'narration'
-    characters.apply_edit(free, CharactersEdit.model_validate(edit), actor='test:editor', reason='订正知识未读取的称名归属')
+    updated = _edit_unused_character_evidence(free)
     resumed = _resume_ctx(ctx)
     driver = _Driver([], resumed.novel_dir, session_id='unused-character-recovery')
     result = Stage2GlobalAgent(resumed, driver=driver).run()
     assert result.passed and not driver.calls
-    assert result.artifact.entities.characters['char_001'].address[0].by == address['by']
+    assert 'characters' not in result.artifact.model_dump(mode='json')
+    assert grounding.read_registry(ArtifactStore(resumed), own=True) == updated
     assert ArtifactStore(resumed).freshness(STAGE2_GLOBAL_GROUNDING).state == 'fresh'
 
 
@@ -178,19 +224,17 @@ def test_free_knowledge_edit_changes_no_static_or_blueprint_projection(tmp_path)
     store = ArtifactStore(ctx)
     hashes = {rel: store.full_sha256_or_none(rel) for rel in (
         STAGE2_CHARACTERS, STAGE2_BLUEPRINT_CHARACTER_PROJECTION)}
-    setting = copy.deepcopy(result.artifact.canon.setting.model_dump(mode='json', by_alias=True))
-    setting['时代背景'] = '中国古代架空时代'
-    for field in ('era_evidence', 'worldview_evidence'):
-        value = setting[field]
-        setting[field] = {'chapter_ordinal': value['chapter_ordinal'], 'locator': value['source']['text']}
+    setting = copy.deepcopy(result.artifact.setting.model_dump(mode='json'))
+    setting['era'] = '中国古代架空时代'
+    # 新主张显式同交当前有据 refs；验证回写不会改人物或称名投影。
     edit = GlobalEdit.model_validate({'setting': setting})
     free = _free_ctx(ctx)
     ArtifactStore(free).write_sparse_input(extract.GLOBAL_EDIT, edit)
     changed, _report = extract.run_apply_edit(free, extract.GLOBAL_EDIT)
-    assert changed.canon.setting.era == '中国古代架空时代'
+    assert changed.setting.era == '中国古代架空时代'
     assert {rel: store.full_sha256_or_none(rel) for rel in hashes} == hashes
     assert store.freshness(STAGE2_GLOBAL_GROUNDING).state == 'fresh'
-    assert 'characters' not in store.read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0].model_dump(mode='json')['entities']
+    assert 'characters' not in store.read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0].model_dump(mode='json')
 
 
 @pytest.mark.parametrize('node', [
@@ -265,7 +309,7 @@ def test_knowledge_validator_custody_replays_sealed_replacement_without_wire(tmp
     prepared = extract.prepare_global_candidate(ctx, agent_envelope=True)
     candidate = _knowledge_response().model_dump(mode='json', by_alias=True)
     wrong = copy.deepcopy(candidate)
-    wrong['canon']['setting']['era_evidence'] = {'evidence_candidate_id': 'e999999'}
+    wrong['setting']['era_evidence_refs'] = ['e999999']
     def wire(value):
         return json.dumps({'payload': {'kind': 'full_candidate', 'candidate': value}}, ensure_ascii=False)
     driver = _Driver([wire(wrong)], ctx.novel_dir, session_id='knowledge-rejected')

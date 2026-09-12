@@ -94,10 +94,10 @@ def character_knowledge_reference(data: object) -> object:
         return None
     rows = {}
     for cid, value in sorted(data['characters'].items()):
-        if not isinstance(value, dict) or not isinstance(value.get('address'), list):
+        if not isinstance(value, dict) or not isinstance(value.get('aliases'), list):
             return None
         surfaces = []
-        for address in value['address']:
+        for address in value['aliases']:
             if not isinstance(address, dict) or not isinstance(address.get('surface'), str):
                 return None
             surfaces.append(address['surface'])
@@ -533,12 +533,15 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE0_REVISIONS: stage1_stage0_source,
         STAGE0_CLEAN_TEXT: artifact_payload,
     },
+    'stage2.analyze': {
+        STAGE1_MAIN_TEXT: stage2_main_text,
+        STAGE2_CHARACTERS: character_knowledge_reference,
+    },
     'stage2.characters': {
         STAGE1_MAIN_TEXT: stage2_main_text,
     },
     'stage2.global': {
         STAGE1_MAIN_TEXT: stage2_main_text,
-        STAGE1_HOOK_COPY: artifact_payload,
         STAGE2_CHARACTERS: character_knowledge_reference,
         # ``--apply-edit`` consumes the typed human decision set as a real
         # provenance edge.  Without this projection a just-written grounding

@@ -24,6 +24,12 @@ export interface StaleRef {
 /** 来源记录。形状随 stage 而异，`{}` 很常见 —— 空对象即「没有来源记录」。 */
 export interface Provenance {
   root_clean_sha1: string
+  shared_analysis_source?: {
+    receipt_rel: string
+    receipt_sha256: string
+    run_id: string
+    attempt_id: string
+  } | null
   model?: string
   adopted_models?: string[]
   code?: string

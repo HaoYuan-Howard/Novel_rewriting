@@ -858,6 +858,26 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
 
     tokens = set(N.flag_tokens(flags))
 
+    if ctx.node in ('stage2.characters', 'stage2.global') and tokens & {
+            '--emit-analyze-draft-template', '--repair-analyze-draft', '--recover-analyze-draft'}:
+        from contracts.artifacts import STAGE2_ANALYZE_OWNER_DRAFT_EDIT
+        from contracts.schema import encode_artifact
+        from contracts.schema.analyze_draft import AnalyzeOwnerDraftEdit
+        from novel.stages.stage2 import analyze_draft_recovery
+        if '--emit-analyze-draft-template' in tokens:
+            print(json.dumps(encode_artifact(STAGE2_ANALYZE_OWNER_DRAFT_EDIT,
+                analyze_draft_recovery.edit_template(ctx)), ensure_ascii=False, indent=2))
+            return X.OK
+        if '--recover-analyze-draft' in tokens:
+            analyze_draft_recovery.recover(ctx)
+        else:
+            source = paths.analyze_draft_edit_input(ctx.novel_dir, _valued(flags, '--repair-analyze-draft'))
+            request = ArtifactStore(ctx).read_external(AnalyzeOwnerDraftEdit, STAGE2_ANALYZE_OWNER_DRAFT_EDIT, source)
+            analyze_draft_recovery.repair(ctx, request, actor=_valued(flags, '--actor') or '',
+                                          reason=_valued(flags, '--reason') or '')
+        print('  ✓ 已免费物化该 owner 的联合草稿；仍需统一审阅')
+        return X.OK
+
     if ctx.node == 'stage2.blueprint' and '--close-review' in tokens:
         from novel.stages.stage2.knowledge_links import run_close_review
         run_close_review(ctx)
@@ -869,6 +889,19 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         close_stage2_inherited(ctx.novel_dir.parent, ctx.sid, node=ctx.node)
         print('  ✓ 已核验并继承全部 Global 审阅义务（0 模型）')
         return X.OK
+
+    if ctx.node == 'stage2.analyze':
+        from novel.stages.stage2 import analyze
+        if '--recover-analyze-run' in tokens:
+            from novel.stages.stage2 import analyze_recovery
+            analyze_recovery.recover_initial(ctx, _valued(flags, '--recover-analyze-run') or '')
+            print('  ✓ 已按原冻结目标补齐共享首抽提交（0 模型）')
+            return X.OK
+        if '--dry-run' in tokens:
+            print(analyze.SYSTEM)
+            print(analyze.prepare(ctx).user)
+            return X.OK
+        raise TerminalState('stage2.analyze 需要已登记的 Executor agent profile；不静默切换模型')
 
     if ctx.node == 'stage2.characters':
         from contracts.artifacts import STAGE2_CHARACTERS_EDIT
@@ -906,6 +939,16 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         return X.OK
 
     if ctx.node == 'stage2.global':
+        if '--apply-core-edits' in tokens:
+            from novel.stages.stage2 import core_edits
+            core_edits.apply(ctx, _valued(flags, '--apply-core-edits') or '')
+            print('  ✓ 已分别提交当前人物与知识 typed 编辑（0 模型）；新增语义义务继续待审')
+            return X.OK
+        if '--recover-analyze' in tokens:
+            from novel.stages.stage2 import analyze_recovery
+            analyze_recovery.recover(ctx)
+            print('  ✓ 已从原共享首抽回答免费物化 Global；等待统一审阅')
+            return X.OK
         if '--refresh-review' in tokens:
             review = extract.run_refresh_review(ctx)
             print(f'已免费刷新知识与人物审阅，共 {len(review.items)} 项；变更主体继续待审。')
@@ -958,9 +1001,9 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
                             'Global typed 补丁已落盘；重放同一 --apply-edit 文件零模型补接受。')) from exc
             print(render(report))
             print(f'  ✓ Stage2 typed 人工订正已落为新一轮'
-                  f'（{len(artifact.canon.secrets)} 条 secret / '
-                  f'{len(artifact.canon.world_rules)} 条 world rule）；'
-                  f'称谓与时间线已重走归一，下游全部按真实输入变化转 stale')
+                  f'（{len(artifact.arc_secrets)} 条跨章秘密 / '
+                  f'{len(artifact.world_rules)} 条世界规则）；'
+                  f'证据与时间窗口已复验，后续按真实业务依赖判定新鲜度')
             return X.OK if report.passed else X.CHECK_FAILED
         if '--review-decisions' in tokens:
             from novel.stages.stage2 import global_review
@@ -2418,6 +2461,16 @@ def _cmd_response_repair_admitted(a: argparse.Namespace) -> int:
     record = response_repair.submit(
         novel_dir, a.attempt, actor=a.actor, reason=a.reason,
         decline=a.decline)
+    if record.rejection.get('resume_node') == 'stage2.analyze':
+        source_run = run_identity.check_run_id(record.rejection.get('run_id'))
+        if a.decline:
+            print('  ✓ 已保留原响应和放弃决定；共享首抽保持停止，不自动购买下一采')
+        else:
+            print(f'  ✓ 已封存修复候选：{record.root / response_repair.CANDIDATE_FILE}')
+            print('  ⚠ 封存不是接受；免费入口仍复验原 schema、来源和两侧编译结果。')
+            print(f'  → python -X utf8 -u -m novel.cli run stage2.analyze {a.sid} '
+                  f'--base "{a.base}" --recover-analyze-run {source_run}')
+        return X.OK
     if a.decline:
         print(f'  ✓ 已放弃 attempt={a.attempt} 的唯一修复额度；请重跑原节点进入下一采')
     else:

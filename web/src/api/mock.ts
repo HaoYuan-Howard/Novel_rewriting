@@ -740,126 +740,17 @@ function saveDoc(doc: ApprovalDoc): ApprovalDoc {
 
 /* ------------------------------------------------------ Stage2 全局复核 */
 
-const MOCK_SHA = {
-  source: 'a'.repeat(64),
-  characters: 'd'.repeat(64),
-  relations: 'e'.repeat(64),
-  rules: 'b'.repeat(64),
-  secrets: 'c'.repeat(64),
-}
 
 function freshGlobalReview(): GlobalReviewResponse {
-  const decided = {
-    resolution_required: false,
-    state: 'PASS' as const,
-    evidence: [],
-    actor: 'mock-reviewer',
-    decided_at: '2026-08-16T00:00:00+00:00',
-    reason: 'mock 样本已经逐项核对',
-    generation_disposition: null,
-  }
-  // ⚠ `effect` / `group_key` 由服务端派生，mock 只是**转录**后端会下发的值——
-  //   这里不许现算一份分类逻辑，那正是屏幕侧被禁止的第二个判官。
-  return {
-    source_sha256: MOCK_SHA.source,
-    current_subject_sha256: MOCK_SHA.source,
-    current: true,
-    approved: false,
-    generation_safe: false,
-    quarantined_groups: [],
-    review_token: MOCK_GLOBAL_SEEN_TOKEN,
-    effect_counts: {
-      blocking: { pending: 1, PASS: 4, FAIL: 0, UNVER: 1 },
-      disclosure: { pending: 1, PASS: 0, FAIL: 0, UNVER: 0 },
-    },
-    items: [
-      {
-        item_id: 'source_blurb_complete:source_blurb.facts:' + MOCK_SHA.source.slice(0, 12),
-        kind: 'source_blurb_complete',
-        subject_path: 'source_blurb.facts',
-        subject_sha256: MOCK_SHA.source,
-        effect: 'blocking',
-        group_key: 'source_blurb',
-        ...decided,
-        state: 'pending',
-        actor: null,
-        decided_at: null,
-        reason: null,
-      },
-      {
-        item_id: 'opening_scope:source_blurb.opening:' + MOCK_SHA.source.slice(0, 12),
-        kind: 'opening_scope',
-        subject_path: 'source_blurb.opening',
-        subject_sha256: MOCK_SHA.source,
-        effect: 'blocking',
-        group_key: 'source_blurb',
-        ...decided,
-        resolution_required: true,
-        state: 'UNVER',
-        reason: '历史示例未生成开篇范围，须由当前 producer 重建',
-      },
-      {
-        item_id: 'character_set_complete:entities.characters:' + MOCK_SHA.characters.slice(0, 12),
-        kind: 'character_set_complete',
-        subject_path: 'entities.characters',
-        subject_sha256: MOCK_SHA.characters,
-        effect: 'blocking',
-        group_key: 'set:characters',
-        ...decided,
-      },
-      {
-        item_id: 'relation_set_complete:entities.relations:' + MOCK_SHA.relations.slice(0, 12),
-        kind: 'relation_set_complete',
-        subject_path: 'entities.relations',
-        subject_sha256: MOCK_SHA.relations,
-        effect: 'blocking',
-        group_key: 'set:relations',
-        ...decided,
-      },
-      {
-        item_id: 'world_rule_set_complete:canon.world_rules:' + MOCK_SHA.rules.slice(0, 12),
-        kind: 'world_rule_set_complete',
-        subject_path: 'canon.world_rules',
-        subject_sha256: MOCK_SHA.rules,
-        effect: 'blocking',
-        group_key: 'set:world_rules',
-        ...decided,
-      },
-      {
-        item_id: 'secret_set_complete:canon.secrets:' + MOCK_SHA.secrets.slice(0, 12),
-        kind: 'secret_set_complete',
-        subject_path: 'canon.secrets',
-        subject_sha256: MOCK_SHA.secrets,
-        effect: 'blocking',
-        group_key: 'set:secrets',
-        ...decided,
-      },
-      // 一条**未决的披露项**：它不挡 Stage4，但界面必须把它画出来。
-      {
-        item_id: 'fate:entities.characters.char_001.fate:' + MOCK_SHA.characters.slice(0, 12),
-        kind: 'fate',
-        resolution_required: false,
-        subject_path: 'entities.characters.char_001.fate',
-        subject_sha256: MOCK_SHA.characters,
-        effect: 'disclosure',
-        group_key: 'character:char_001',
-        state: 'pending',
-        evidence: [],
-        actor: null,
-        decided_at: null,
-        reason: null,
-        generation_disposition: null,
-      },
-    ],
-  }
+  return stage2CoreFixture().review
 }
 
 function loadGlobalReview(sid: string): GlobalReviewResponse {
-  return lsRead<GlobalReviewResponse>('global-review.' + sid) ?? freshGlobalReview()
+  return lsRead<GlobalReviewResponse>('global-review-core-v7.' + sid) ?? freshGlobalReview()
 }
 
 function saveGlobalReview(sid: string, review: GlobalReviewResponse): GlobalReviewResponse {
-  lsWrite('global-review.' + sid, review)
+  lsWrite('global-review-core-v7.' + sid, review)
   return review
 }
 
@@ -875,7 +766,7 @@ function enums(): EnumsResponse {
       mode: 'display_only',
       security_boundary: false,
       server_sends_full_data: true,
-      hidden_paths: ['characters[].fate', 'secrets', 'source_blurb.facts', 'source_blurb.opening'],
+      hidden_paths: ['arc_secrets'],
       known_leakage_surfaces: [
         'HTTP response body',
         'browser network/devtools/cache',
@@ -1269,6 +1160,7 @@ function mockRunProgress(sid: string): RunProgress {
 /** 真 argv / prompt 由后端同一构造函数产出；这里是形状样例（拼装只许住在数据层）。 */
 function mockAgentRunPreview(req: AgentRunRequest): AgentRunPreview {
   return {
+    pause_before_node: req.pause_before_node ?? null,
     argv: ['agent-cli', '--sid', req.sid, '--base', '/mock/base'],
     prompt:
       '由自动流水线完成本书并校验交付条件（sid ' + req.sid + '）。\n' +
@@ -1288,6 +1180,7 @@ function mockAgentRunPreview(req: AgentRunRequest): AgentRunPreview {
 function mockAgentRunRecord(req: AgentRunRequest): AgentRunRecord {
   const preview = mockAgentRunPreview(req)
   const start = {
+    ...(preview.pause_before_node ? { pause_before_node: preview.pause_before_node } : {}),
     sid: req.sid,
     base: '/mock/base',
     argv: preview.argv,
@@ -1303,6 +1196,7 @@ function mockAgentRunRecord(req: AgentRunRequest): AgentRunRecord {
     start,
     contract: {
       wire_version: 2,
+      ...(preview.pause_before_node ? { pause_before_node: preview.pause_before_node } : {}),
       sid: start.sid,
       base: start.base,
       authorized: start.authorized,
@@ -1394,14 +1288,14 @@ function mockInbox(): InboxResponse {
   }
 }
 
-/** mock review 的 seen.global 凭证；测试用它模拟“读完当前 review 后确认”。 */
+/** 历史 seen.global token，仅作旧来源不能授予当前接受的拒绝反例。 */
 export const MOCK_GLOBAL_SEEN_TOKEN = 's2gr1_' + '5'.repeat(64)
 
 function isCurrentGlobalSeenRequest(
   sid: string,
   request: BlueprintSeenRequest | Stage2GlobalSeenRequest | undefined,
 ): request is Stage2GlobalSeenRequest {
-  if (!request || !('actor' in request)) return false
+  if (sid !== stage2CoreFixture().global.sid || !request || !('actor' in request)) return false
   const keys = Object.keys(request).sort()
   if (keys.join(',') !== 'actor,review_token') return false
   if (!request.actor.trim()) return false
@@ -1531,24 +1425,35 @@ export const mockApi: Api = {
     status: 501, message: '示例不写入剧情蓝图，请连接真实后端', backendKind: 'MockCapabilityUnavailable',
   })),
 
-  getGlobal: (sid, revealSpoilers = false) =>
-    bookOnly(sid, `/novels/${sid}/stage2/global`, () =>
-      projectGlobalSpoilers(fx<Stage2Global>('global.json'), revealSpoilers),
-    ),
+  getGlobal: (sid, revealSpoilers = false) => {
+    const current = stage2CoreFixture().global
+    return sid === current.sid
+      ? later(projectGlobalSpoilers(current, revealSpoilers))
+      : fail(new ApiError('nosample', `/novels/${sid}/stage2/global`, { scope: 'book' }))
+  },
 
-  getCharacters: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/characters`, {
-    status: 501, message: '独立人物登记请连接真实后端读取', backendKind: 'MockCapabilityUnavailable',
+  getCharacters: (sid) => {
+    const current = stage2CoreFixture().characters
+    return sid === current.sid ? later(current)
+      : fail(new ApiError('nosample', `/novels/${sid}/stage2/characters`, { scope: 'book' }))
+  },
+  getAnalyzeDraft: (sid) => fail(new ApiError('nosample', `/novels/${sid}/stage2/analyze-draft`, {
+    scope: 'book', message: '冻结样本不含待修复联合草稿，请连接真实后端读取。',
+  })),
+  editAnalyzeDraft: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/analyze-draft`, {
+    status: 501, message: '草稿订正请使用真实后端写回', backendKind: 'MockCapabilityUnavailable',
   })),
   editCharacters: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/characters/edit`, {
     status: 501, message: '人物订正请使用真实后端写回', backendKind: 'MockCapabilityUnavailable',
   })),
 
-  getGlobalReview: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage2/global-review`, () => loadGlobalReview(sid)),
+  getGlobalReview: (sid) => sid === stage2CoreFixture().global.sid
+    ? later(loadGlobalReview(sid))
+    : fail(new ApiError('nosample', `/novels/${sid}/stage2/global-review`, { scope: 'book' })),
 
   decideGlobalReview: (sid, request: GlobalReviewDecisionSet) => {
     const path = `/novels/${sid}/stage2/global-review`
-    if (sid !== SAMPLE_SID) return noBook(path)
+    if (sid !== stage2CoreFixture().global.sid) return noBook(path)
     // Commander 的 compact scope 绑定 CLI workpack SHA；浏览器 mock 没有那份
     // 只读材料，不能忽略 scope 后假装提交成功。真实后端/API 原样支持该形状。
     if (request.blocking_scope) {
@@ -1915,7 +1820,7 @@ export const mockApi: Api = {
         rationale: view.rationale,
         materials: {
           source_hook: view.source_hook_text,
-          source_blurb: fx<Stage2Global>('global.json').source_blurb,
+          source_blurb: fx<{ source_blurb: import('@/types/stages').SourceBlurbMaterials }>('global.json').source_blurb,
           rewritten_chapters: [{ chapter_ordinal: 1, text: '合成终审正文，仅用于界面测试。' }],
         },
         check: {
@@ -2309,8 +2214,9 @@ export const mockApi: Api = {
 
   backfillApprovals: (sid) => {
     const doc = loadDoc(sid)
-    // 阅读声明与后端审阅安全状态共同限制补批；未知的开篇范围不能被 seen 越过。
-    const stage2Seen = doc.seen.read && doc.seen.global && loadGlobalReview(sid).generation_safe
+    // 历史书缺当前Core证据，不能借独立合成书的审阅状态补批。
+    const stage2Seen = sid === stage2CoreFixture().global.sid
+      && doc.seen.read && doc.seen.global && loadGlobalReview(sid).generation_safe
     const backfillable = GATE_KEYS.slice(0, stage2Seen ? 3 : 2)
     const backfilled = backfillable.filter((key) => !doc.gate[key])
     const approvals = saveDoc({
@@ -2545,5 +2451,16 @@ export function plotReviewFixture() {
     cross: import('@/types/stages').BlueprintReviewWorkpack
     reading: import('@/types/stages').ReadingResponse
     enum_values: { plot_review_dimensions: string[]; plot_dimension_states: string[] }
+  }
+}
+
+/** 当前 Core 真实只读响应，独立于历史小说及完整剧情链的审批材料。 */
+import stage2CoreSample from '@/fixtures/plot_v1/core.json'
+export function stage2CoreFixture() {
+  return structuredClone(stage2CoreSample) as unknown as {
+    metadata: { synthetic: true; source: string; schemas: Record<string, number>; scope: string }
+    global: Stage2Global
+    characters: import('@/types/characters').CharacterRegistryView
+    review: GlobalReviewResponse
   }
 }

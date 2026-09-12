@@ -519,7 +519,7 @@ BLUEPRINT_REVIEW_CONTRACT: Final = 'stage2-plot-scope-review-v1'
 STAGE2_NODE_REVIEW_DECISIONS: Final = ('accept', 'rework', 'uncertain', 'stop')
 # 两位 Commander 与三位生产/派修 owner 分开登记，人物不新增第三个审阅席位。
 STAGE2_CHARACTER_REVIEW_KINDS: Final = frozenset({
-    'character_set_complete', 'name_distinctiveness', 'role', 'address_context',
+    'character_set_complete', 'character_identity', 'name_distinctiveness', 'role', 'alias_identity',
 })
 STAGE2_NODE_REVIEWERS: Final = ('stage2.global', 'stage2.blueprint')
 STAGE2_NODE_REVIEW_OWNERS: Final = ('stage2.characters', 'stage2.global', 'stage2.blueprint')
@@ -1055,12 +1055,11 @@ FATE_WORDS: Final = (
 #: ⚠ **加一个 kind 必须同时选一边**：`review_effect_of` 对未登记 kind 关闭式失败，
 #: 而不是给一个「默认 disclosure」——默认放行是这张表唯一不能有的方向。
 GLOBAL_REVIEW_KINDS: Final = (
-    'world_rule_version', 'secret', 'reveal', 'known_by', 'knowledge_event',
-    'name_distinctiveness', 'address_context', 'world_rule_kind',
+    'world_rule_version', 'secret', 'reveal',
+    'name_distinctiveness', 'character_identity', 'alias_identity', 'world_rule_kind',
     'character_set_complete', 'relation_set_complete',
     'world_rule_set_complete', 'secret_set_complete',
-    'role', 'fate', 'relation', 'setting_fact', 'secret_setup',
-    'source_blurb_complete', 'source_blurb_fact', 'opening_scope',
+    'role', 'relation', 'setting_fact', 'secret_setup',
 )
 
 # 钩子可独立提供文案事实；审阅行动权变化要进入业务身份，不能复用旧策略的停机结论。
@@ -1079,37 +1078,25 @@ GLOBAL_REVIEW_GENERATION_IMPACTS: Final = (
     'must_fix', 'quarantine_or_fix', 'disclose',
 )
 GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND: Final = {
-    'world_rule_version': 'quarantine_or_fix',
+    'world_rule_version': 'must_fix',
     'secret': 'quarantine_or_fix',
     'reveal': 'quarantine_or_fix',
-    'known_by': 'quarantine_or_fix',
-    'knowledge_event': 'quarantine_or_fix',
-    'name_distinctiveness': 'disclose',
-    'address_context': 'disclose',
-    'world_rule_kind': 'quarantine_or_fix',
+    'name_distinctiveness': 'must_fix',
+    'character_identity': 'must_fix',
+    'alias_identity': 'must_fix',
+    'world_rule_kind': 'must_fix',
     'character_set_complete': 'must_fix',
     'relation_set_complete': 'must_fix',
     'world_rule_set_complete': 'must_fix',
     'secret_set_complete': 'must_fix',
     'role': 'must_fix',
-    'fate': 'disclose',
-    'relation': 'quarantine_or_fix',
+    'relation': 'must_fix',
     'setting_fact': 'must_fix',
     'secret_setup': 'quarantine_or_fix',
-    'source_blurb_complete': 'must_fix',
-    'source_blurb_fact': 'must_fix',
-    'opening_scope': 'must_fix',
 }
 
-#: 只披露、不阻断的那三类。保留这个派生常量供 API/文档兼容消费；权威分类是上表。
-#:
-#: · `name_distinctiveness`：名字够不够独特是改名质量问题，`novel/core/naming.py`
-#:   与 Stage7 的人名表审批 + 恒等检查已经在守，而它判错不会造出假剧情。
-#: · `address_context`：称谓用在什么场合同样受 naming 约束，且是措辞层。
-#: · `fate`：**本来就不下发写手**——它是剧透面，Stage4/5 的 packet 里没有它。
-#:
-#: ⚠ 这三条的 P1→P2 窗口风险由「继续披露」承接：它们不得从审计面消失，
-#: inbox 与终审包必须逐条列出，否则「不阻断」就变成了「没人看」。
+#: 由权威分类派生；当前 Core 审阅全部阻断，因此本集合为空。
+#: 保留 API 的分类读数，不能将旧 address/fate 项迁入当前审阅或自动接受。
 GLOBAL_REVIEW_DISCLOSURE_KINDS: Final = tuple(
     kind for kind in GLOBAL_REVIEW_KINDS
     if GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND[kind] == 'disclose'
@@ -1127,8 +1114,7 @@ def review_effect_of(kind: str) -> str:
 
     ⚠ **未登记的 kind 当场炸，不给默认值。** 这张表的失败方向是「新加一类高影响
     事实被静默放行」，所以它必须是白名单 + 关闭式：加 kind 的人被强制选一边。
-    ⚠ legacy `known_by`（只为读存量 v1 review 保留）保守按 `blocking` 读：
-    读不准的历史项宁可挡住，也不替它开门。
+    旧版本 kind 不属于当前载体；历史统计将它标为未登记，不迁入当前审阅。
     """
     impact = review_generation_impact_of(kind)
     return 'disclosure' if impact == 'disclose' else 'blocking'
@@ -1160,10 +1146,10 @@ SPOILER_DISCLOSURE: Final = {
     'security_boundary': False,
     'server_sends_full_data': True,
     'hidden_paths': (
-        'characters[].fate', 'secrets', 'source_blurb.facts', 'source_blurb.opening',
+        'arc_secrets',
     ),
     'known_leakage_surfaces': (
-        'characters[].role', 'relations[].valid_from_chapter',
+        'characters[].canonical', 'characters[].aliases', 'relations[].effective_from',
         'world_rules[].versions[].desc', 'network_response_and_devtools',
     ),
     'consumers': (
@@ -1171,8 +1157,8 @@ SPOILER_DISCLOSURE: Final = {
         'web/src/api/mock.ts',
     ),
     'notice': (
-        '这是显示辅助，不是安全边界；服务端仍下发完整数据。关闭时只隐藏 fate、secrets、'
-        '源文案事实、开篇范围四处核心字段，role、关系时点、规则正文与网络响应仍可能剧透。'
+        '这是显示辅助，不是安全边界；服务端仍下发完整数据。关闭时只隐藏长线秘密，'
+        '人物登记、身份映射、关系时点、规则正文与网络响应仍可能剧透。'
     ),
 }
 
@@ -1734,6 +1720,12 @@ FREE_ENTRIES: Final = {
     '--emit-review-workpack': ('向 stdout 输出 Stage2 Global 逐项证据包，或 Blueprint '
                                 '异常优先全章包；只辅助人工核验，不自动做决定'),
     '--refresh-review': '从当前人物登记与必要知识免费重建 Global 审阅；不改知识、不生成接受决定',
+    '--apply-core-edits': '按已保存的 Commander 决定分别提交人物和知识 typed 编辑（0 LLM）',
+    '--recover-analyze': '人物修好后免费编译已购 GlobalDraft；不重开联合首抽或重新调用模型',
+    '--recover-analyze-run': '同冻结代码下免费补齐原联合首抽提交，显式绑定原 run',
+    '--emit-analyze-draft-template': '输出原已购 owner 草稿与 receipt、原草稿、冻结映射绑定；只读',
+    '--repair-analyze-draft': '免费编译 typed owner 草稿编辑，保留原联合来源并独立物化',
+    '--recover-analyze-draft': '按独立 owner 草稿 WAL 的原编辑和身份免费补尾',
     '--adopt-residual': '显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链',
     '--rebind-review': ('将可机械证明语义等价的旧人工决定绑定到当前 stable review '
                         'identity；旧盘未持久化 immutable workpack/evidence digest 时关闭式拒绝'),
@@ -1871,6 +1863,9 @@ VALUED_FLAGS: Final = {
         '已落 prepared recovery WAL 的 immutable self SHA-256；必须与 target run_id 同有同无'),
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--review-decisions': 'stage2/global_review 的人工决策集（相对当前书目录）',
+    '--apply-core-edits': '不可变 Stage2 跨 owner 编辑请求的完整 SHA-256',
+    '--recover-analyze-run': '尚未闭合的 Stage2 Analyze 原 run_id',
+    '--repair-analyze-draft': '当前书或 SID 服务目录中的 AnalyzeOwnerDraftEdit v1 文件',
     # ⚠ 它只裁剪**只读输出面**，不裁剪评测面本身：`global_review.json` 仍枚举全部
     #   145 类主体，`current` 仍要求集合完全一致。默认 `blocking` 是为了把人的注意力
     #   放在真能挡住成书的那 95 项上；`all` 一格不少地交出整份，供审计与终审包使用。
@@ -1967,6 +1962,12 @@ WRITE_EFFECTS: Final = {
     '--apply-edit': '把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）',
     '--renormalize': '按当前契约重算代码派生字段与原文定位并写回',
     '--refresh-review': '只刷新 stage2/global_review.json；保留有效决定，变化主体保持待审',
+    '--apply-core-edits': '分 owner 提交已通过整体预检的 Characters/Global 决定，并补齐中断窗口',
+    '--recover-analyze': '由原 Analyze checkpoint 免费物化 Global，保留原始来源与独立新恢复账',
+    '--recover-analyze-run': '复验原联合 checkpoint 并按冻结目标补尾；不调用模型或重开已完成事务',
+    '--emit-analyze-draft-template': '',
+    '--repair-analyze-draft': '保存独立 owner 草稿修复 WAL 并物化正式或 INVALID 产物',
+    '--recover-analyze-draft': '按原 owner 草稿修复 WAL 补齐当前目标和审阅',
     # ⚠ 它写的是**另一份**产物（`<stage>/wontfix.json`），不是本节点 `produces` 里那一份
     # ⇒ 不登记的后果是**方向反的**：`/api/enums` 会把它派生成「写 `stage5/review_{n}.json`」，
     # 而它一份验收报告都不产。同 `--names-only` 那一格的病，只是方向相反。
@@ -2124,6 +2125,8 @@ class NodeSpec(NamedTuple):
     # 未登记 = 没有唯一、安全的重放 argv，绝不能从 ``paid`` 或空 flags 猜。
     operator_redo: str | None = None
     lifecycle: NodeLifecycleSpec | None = None
+    # 联合首抽回执只在采用该计算路径时产生，不是每本书必备的运行知识。
+    stage_required: bool = True
 
 
 #: 全部作业单元。⚠ 顺序即处理链顺序，队列与断点续跑都按它排。
@@ -2198,10 +2201,15 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   `reader_reveal_events` / 知情人 / secret 事实抽错时，此前唯一的路是手改产物
     #   ——没有 schema 管形状，来源账上也留不下「这是人改的」。
     #   当时除 Stage1 外的 stage0/3/4/5/6/7 都已有这条 0 成本人工路；Stage3 后来整层退役。
+    'stage2.analyze': NodeSpec('stage2', 'R-2', True, 'stage2 联合语义分析（共享首抽）',
+                                 lifecycle=NodeLifecycleSpec('book', '完整 MainText 与关闭的证据候选', 'executor', 'none', '联合人物与长期知识草稿，分别编译并交 Global Commander 审阅', ('typed_edit', 'stop'), ('stage2.characters', 'stage2.global'), 'executor:book', ('saved_response', 'prepared_commit'), commander_content_limit=0),
+                                 flags=('--dry-run', '--response-repair', '--recover-analyze-run'),
+                                 produces=(artifact_paths.STAGE2_ANALYZE_RECEIPT,), stage_required=False),
     'stage2.characters': NodeSpec('stage2', 'R-2', True, 'stage2 静态人物登记',
                                   lifecycle=NodeLifecycleSpec('book', '完整 MainText 与人物证据闭集', 'executor', 'none', '静态身份、称谓及来源证据；由 Global Commander 审阅', ('typed_edit', 'targeted_rework', 'stop'), ('stage2.characters',), 'executor:book', ('--revalidate', '--apply-edit', 'saved_response', 'prepared_commit'), commander_content_limit=0),
                                   flags=('--dry-run', '--revalidate', '--apply-edit', '--resample',
                                          '--emit-edit-template', '--actor', '--reason',
+                                         '--emit-analyze-draft-template', '--repair-analyze-draft', '--recover-analyze-draft',
                                          '--review-token', '--response-repair'),
                                   produces=(artifact_paths.STAGE2_CHARACTERS,
                                             artifact_paths.STAGE2_BLUEPRINT_CHARACTER_PROJECTION),
@@ -2212,6 +2220,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--review-token', '--close-review',
                                          '--revalidate',
                                          '--apply-edit', '--review-decisions', '--refresh-review',
+                                         '--apply-core-edits', '--recover-analyze',
+                                         '--emit-analyze-draft-template', '--repair-analyze-draft', '--recover-analyze-draft',
                                          '--emit-edit-template',
                                          '--emit-edit-correction-workpack',
                                          '--emit-review-template', '--emit-review-workpack',
@@ -2429,7 +2439,7 @@ def commander_review_actions(waiting_on: str) -> tuple[str, ...]:
 #: 本表显式列值而不从 ``NODES`` 现算，配套闭合测试守 ``spec.paid`` 双向一致：
 #: 新增付费节点却没接 agent、或代码节点误标 paid，两种漂移都必须响亮地红。
 AGENT_EXECUTOR_NODES: Final = (
-    'stage2.characters', 'stage2.global', 'stage2.blueprint',
+    'stage2.analyze', 'stage2.characters', 'stage2.global', 'stage2.blueprint',
     'stage4.design', 'stage4.plan',
     'stage5.write',
     'stage6.hook', 'stage6.semantic',
@@ -2440,7 +2450,7 @@ AGENT_EXECUTOR_NODES: Final = (
 #: Blueprint 的首次生成与返工另由 producer 强制核验当前 Global 接受。这里只登记
 #: 整体 Stage2 下游闸，不能用这个例外绕过 Global → Blueprint 的先后关系。
 _STAGE2_REVIEW_PRODUCERS: Final = frozenset({
-    'stage2.characters', 'stage2.global', 'stage2.blueprint',
+    'stage2.analyze', 'stage2.characters', 'stage2.global', 'stage2.blueprint',
 })
 
 #: 这两项自身不花钱，却会把未复核的 Stage2 主体投影给写手或交付物；若只用
@@ -2475,6 +2485,8 @@ def stage2_review_required(node: str, *, paid: bool) -> bool:
 CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
     ('stage0.edit', '--apply-edit'): ('--actor', '--reason'),
     ('stage2.characters', '--apply-edit'): ('--actor', '--reason'),
+    ('stage2.characters', '--repair-analyze-draft'): ('--actor', '--reason'),
+    ('stage2.global', '--repair-analyze-draft'): ('--actor', '--reason'),
     ('stage2.characters', '--revalidate'): ('--actor', '--reason'),
     ('stage2.global', '--revalidate'): ('--actor', '--reason'),
     ('stage2.blueprint', '--revalidate'): ('--actor', '--reason'),

@@ -861,7 +861,7 @@ def _stage2_review_identity(novel_dir: Path, node: str) -> tuple[str, str, str]:
     """token 守提交竞态，subject/contract 守长期接受；不读取审批 effective 投影。"""
     if node == 'stage2.global':
         token = _stage2_global_review_token(novel_dir)
-        return token, token.removeprefix('s2gr1_'), 'stage2-global-acceptance-v1'
+        return token, token.removeprefix('s2gr2_'), 'stage2-global-acceptance-v2'
     if node != 'stage2.blueprint':
         raise ApprovalRequired(f'未登记 Stage2 审阅节点：{node}')
     from novel.views.stage2 import blueprint_review_workpack
@@ -1077,6 +1077,14 @@ def approve_stage2_review(
         return _approve_plot_review(base, sid, request)
     with approval_file_lock(base, sid):
         raw = _read_raw(base, sid)
+        if request.core_edits is not None:
+            expected_request = request.model_dump(mode='json')
+            if any({key: value for key, value in row.model_dump(mode='json').items()
+                    if key in Stage2NodeReviewRequest.model_fields} == expected_request
+                   for row in raw.stage2_review_history):
+                # 原决定先于产物提交；部分提交后 token 已变，重放不能购买新 Commander。
+                return _view(base, _effective_record(paths.resolve_novel_dir(base, sid), raw))
+
         novel_dir = paths.resolve_novel_dir(base, sid)
         ctx = state.readonly_ctx(novel_dir, request.node, _projection_code())
         if request.chapter_ordinals:
@@ -1093,12 +1101,24 @@ def approve_stage2_review(
         if before != _stage2_review_identity(novel_dir, request.node):
             raise HumanEditProtected('Stage2 提交期间主体变化；拒绝混合快照')
         from novel.stages.stage2 import review_obligations
-        coverage = stage2_review_coverage(base, sid, request.node)
+        material_pack = global_review.review_workpack(ctx)
+        coverage = Stage2ReviewCoverage.model_validate(material_pack['review_coverage'])
         receipt = review_obligations.materialize(
             coverage, raw.stage2_review_history, decision=request.decision,
             actor=request.actor, reason=request.reason, submission=request.review)
+        unavailable = {item['obligation_id'] for item in material_pack.get('removed_problem_materials', [])
+                       if not item['available']}
+        if any(unit.obligation.obligation_id in unavailable and unit.decision == 'accept'
+               for unit in receipt.units):
+            raise HumanEditProtected('被删问题的原主张/证据来源尚不可验证；恢复原归档并免费刷新后再审，当前保持不确定')
         if before != _stage2_review_identity(novel_dir, request.node):
             raise HumanEditProtected('Stage2 义务覆盖核验期间主体变化；拒绝混合回执')
+        core_prepared_sha = None
+        if request.core_edits is not None:
+            from novel.stages.stage2 import core_edits
+            core_prepared_sha = core_edits.prepare(base, sid, request, code=_projection_code())
+            if before != _stage2_review_identity(novel_dir, request.node):
+                raise HumanEditProtected('Core 整体预检期间主体变化；原决定未提交')
         prior = raw.stage2_reviews.get(request.node)
         if prior is not None and request.model_dump() == {
                 key: value for key, value in prior.model_dump().items()
@@ -1107,7 +1127,8 @@ def approve_stage2_review(
         else:
             decision = Stage2NodeReviewDecision(
                 **request.model_dump(), review_subject_sha256=before[1],
-                obligation_receipt=receipt,
+                obligation_receipt=receipt, core_edit_prepared_sha256=core_prepared_sha,
+                material_source=material_pack['material_source'],
                 review_contract_version=before[2], decided_at=_now())
             result = _write(base, raw.model_copy(update={
                 'stage2_reviews': {**raw.stage2_reviews, request.node: decision},

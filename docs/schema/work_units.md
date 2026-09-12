@@ -1,7 +1,8 @@
 # 工作单元与人工追加
 
-当前运行根由 `WorkflowManifestV3` 标记 `pipeline-cost-latency-v3` 与 `plot-blueprint-v1`。只接受独立空根初始化，
-既有 manifest v1/v2 和 ledger v1 不迁移、不补版本。存量由与原审计匹配的冻结代码恢复；发布时
+当前运行根由 `WorkflowManifestV4` 标记 `stage2-core-v2` 与 `joint-analysis-independent-artifacts-v1`。
+`artifact_versions` 保存初始化时的版本快照，产物读取仍以现役 schema 为准。只接受独立空根初始化，
+既有 manifest v1/v2/v3 和 ledger v1 不迁移、不补版本。存量由与原审计匹配的冻结代码恢复；发布时
 按 `docs/OPERATIONS.md` 整根归档和切换，不删除单本账本换取预算。
 
 `WorkUnitLedgerV2` 位于 `novel/paths.py::work_unit_dir`。工作单元身份仍由工作流任务、书、
@@ -74,3 +75,14 @@ Commander、默认 Executor 和全部逐节点覆盖必须完整；缺失、冲�
 启动在书级 writer 与原 owner 停止 lease 内复验；新的 `RunContractV2.continuation` 保存原来源。
 旧 contract 没有该字段时不向旧 hash 加入 null。原配置续跑重新明确付费与正文外发，保留
 原工作单元累计额度；正在暂停的同一运行继续沿用原有 pause/resume 协议。
+
+单本 `AgentRunRequest.pause_before_node` 是可选的登记节点上界，preview 回显最终范围，
+`AgentRunStart` 与 `RunContractV2` 共同持久化。Supervisor 按登记工作流顺序，在该节点及
+之后节点的任何 Executor、Reviewer、免费恢复或终验启动前结束本次范围；先关闭 epoch、
+排空并释放 owner，结果为 `stopped`，原因明确为范围边界，不伪造 `pipeline_complete`。
+返修按实际 owner 位置判断，联合首抽按两侧物化归属守界；未知节点归属关闭式停止。
+
+continuation 返回并继承原上界：请求省略该字段保持原范围，显式新节点改变范围，显式
+`null` 解除上界。范围变化不改变已冻结 profiles、历史来源或工作单元累计额度；旧 contract
+没有上界时不向原内容地址补入 `null`。Gate A 验收传 `stage2.blueprint`，Global 接受后
+不会启动 Blueprint 的 Executor 或 Commander；再次继续仍须显式沿用或扩大范围。

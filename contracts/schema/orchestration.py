@@ -865,6 +865,9 @@ class AgentRunStart(FrozenModel):
     #: ``None``，只能显示 unknown，绝不按今天的默认配置回填昨天的运行身份。
     profiles: PipelineAgentProfiles | None = None
 
+    #: 本次受管运行的排他上界；到达该节点或后续节点时停止并排空 owner。
+    pause_before_node: Literal[tuple(NODES)] | None = None
+
 
     #: v1 只解释历史 skill 身份；v2 由 code/prompt/schema/input 覆盖运行资源。
     identity_version: Literal[1, 2] = 1
@@ -874,6 +877,8 @@ class AgentRunStart(FrozenModel):
         payload = handler(self)
         if self.identity_version == 1:
             payload.pop('identity_version', None)
+        if self.pause_before_node is None:
+            payload.pop('pause_before_node', None)
         return payload
 
     @model_validator(mode='after')
@@ -909,12 +914,15 @@ class RunContractV2(FrozenModel):
     profiles: PipelineAgentProfiles
 
     continuation: RunContinuationSource | None = None
+    pause_before_node: Literal[tuple(NODES)] | None = None
 
     @model_serializer(mode='wrap')
     def _preserve_original_contract_identity(self, handler: Any) -> dict[str, Any]:
         result = handler(self)
         if self.continuation is None:
             result.pop('continuation', None)
+        if self.pause_before_node is None:
+            result.pop('pause_before_node', None)
         return result
 
     legacy_argv: list[str] | None = Field(
@@ -940,7 +948,7 @@ class RunContractV2(FrozenModel):
             code_version=self.legacy_code_version,
             skill_sha256=self.legacy_skill_sha256,
             identity_version=self.legacy_identity_version,
-            profiles=self.profiles)
+            profiles=self.profiles, pause_before_node=self.pause_before_node)
 
 
 class ExecutionEpoch(FrozenModel):

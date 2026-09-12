@@ -119,6 +119,7 @@ export function AgentRunDialog({
       )
       && (preview.data.response.continuation?.source_sha256 ?? null) === (preview.data.request.continuation?.source_sha256 ?? null)
       && (preview.data.response.continuation?.run_id ?? null) === (preview.data.request.continuation?.run_id ?? null)
+      && (preview.data.response.pause_before_node ?? null) === (original.data?.pause_before_node ?? null)
     : false
   const conflict = isApiError(start.error) && start.error.backendKind === 'JobConflict'
   const disabled = !preview.data || !echoed || !authorized || !egressAuthorized || start.isPending

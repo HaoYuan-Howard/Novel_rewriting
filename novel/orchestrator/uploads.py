@@ -38,6 +38,7 @@ from contracts.schema.api import (
 from contracts.schema.plot_edit import PlotEdit
 from contracts.schema.stage2 import GlobalEdit
 from contracts.schema.characters import CharactersEdit
+from contracts.schema.analyze_draft import AnalyzeOwnerDraftEdit
 from contracts.schema.stage5 import ChapterResponse, ReviewerRewriteBatchTrustedInput
 from novel import paths
 from novel.errors import (
@@ -267,6 +268,26 @@ def save_characters_edit(base: str | os.PathLike[str], sid: str, edit: Character
         os.replace(tmp, target)
     except OSError as exc:
         raise ArtifactUnreadable(f'保存人物编辑请求失败：{exc!r}') from exc
+    finally:
+        tmp.unlink(missing_ok=True)
+    return target.resolve()
+
+
+def save_analyze_draft_edit(base: str | os.PathLike[str], sid: str,
+                            edit: AnalyzeOwnerDraftEdit) -> Path:
+    """浏览器候选只暂存在本书服务目录，版本与正式草稿修复入口一致。"""
+    from contracts.artifacts import STAGE2_ANALYZE_OWNER_DRAFT_EDIT
+    paths.check_sid(sid)
+    root = service_dir(base) / EDITS_DIRNAME / sid
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f'analyze-draft-edit-{uuid.uuid4().hex}.json'
+    tmp = target.with_suffix('.tmp')
+    payload = encode_artifact(STAGE2_ANALYZE_OWNER_DRAFT_EDIT, edit.model_dump(mode='json'))
+    try:
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + NL, encoding='utf-8')
+        os.replace(tmp, target)
+    except OSError as exc:
+        raise ArtifactUnreadable(f'保存联合草稿订正请求失败：{exc!r}') from exc
     finally:
         tmp.unlink(missing_ok=True)
     return target.resolve()

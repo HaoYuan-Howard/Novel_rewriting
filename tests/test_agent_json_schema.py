@@ -53,6 +53,7 @@ _VOCABULARY = frozenset({
 #: 现役会被送进 agent CLI 的响应模型。**逐个点名**，不从字符串反射——
 #: 反射出来的空表会让这条守卫静默失去判别力（判据 3）。
 def _models() -> dict[str, type]:
+    from contracts.schema.analyze import AnalyzeResponse
     from contracts.schema.plot import PlotChapterResponse
     from contracts.schema.plot_edit import PlotRevisionResponse
     from contracts.schema.characters import CharactersResponse
@@ -67,6 +68,7 @@ def _models() -> dict[str, type]:
     )
     from contracts.schema.stage7 import NameMapResponse
     return {
+        'stage2.analyze': AnalyzeResponse,
         'stage2.global': KnowledgeAgentTurnResponse,
         'stage2.global/legacy-direct': KnowledgeResponse,
         'stage2.characters': CharactersResponse,
@@ -174,7 +176,7 @@ def test_every_agent_response_schema_only_uses_json_schema_keywords():
     """任何词表外的关键字都会让 CLI 整份拒收 ⇒ 真跑时一次模型都调不到。"""
     models = _models()
     # 边界/逐事实/hinge 五种响应退役，现役抽取与显式修订分别验证。
-    assert len(models) == 15, '现役响应模型清单变化，须同步核对各 producer'
+    assert len(models) == 16, '新增 Analyze 首抽；独立人物和知识仍分别覆盖修订 wire'
     for label, model_cls in models.items():
         outside = sorted(_keywords(agent_json_schema(model_cls)) - _VOCABULARY)
         assert not outside, f'{label} 的 schema 含词表外关键字 {outside}'
@@ -376,45 +378,43 @@ def test_unreferenced_definitions_still_require_valid_local_reference_targets(re
 
 
 def test_dynamic_business_maps_use_keyed_rows_on_wire_and_round_trip_to_dict():
-    """人物、必要经历和姓氏映射在线上都是显式行；当前 checkpoint 保存规范 dict。"""
+    """实体局部句柄由代码编译；全书 wire 不回到动态知识数据库。"""
     from contracts.schema.characters import CharactersResponse
-    from contracts.schema.knowledge import KnowledgeEntitiesResponse, KnowledgeResponse
+    from contracts.schema.analyze import AnalyzeResponse
+    from contracts.schema.knowledge import KnowledgeResponse
     from contracts.schema.stage7 import NameMapResponse
 
     assert agent_json_schema(CharactersResponse)['properties']['characters']['type'] == 'array'
     knowledge_schema = agent_json_schema(KnowledgeResponse)
-    assert knowledge_schema['$defs']['KnowledgeEntitiesResponse']['properties']['character_states']['type'] == 'array'
+    assert set(knowledge_schema['properties']) == {'setting', 'relations', 'world_rules', 'arc_secrets'}
     assert agent_json_schema(NameMapResponse)['properties']['surname_map']['type'] == 'array'
     character = {
-        'char_id': 'char_001', 'canonical': '账房',
-        'address': [{'surface': '账房', 'by': 'public', 'context': 'address', 'from_chapter': 1}],
+        'character_ref': 'c1', 'canonical': '账房',
+        'aliases': [{'surface': '账房', 'identity_revealed_from': 1, 'evidence_refs': ['e000001']}],
+        'first_chapter': 1, 'first_appearance_evidence_refs': ['e000001'],
         'name_distinctiveness': 'medium', 'role': '负责核账',
-        'role_evidence': {'evidence_candidate_id': 'e000001'},
+        'role_evidence_refs': ['e000001'],
     }
     registry = CharactersResponse.model_validate({'characters': [character]})
-    assert registry.model_dump(mode='json')['characters'] == {
-        'char_001': {key: value for key, value in character.items() if key != 'char_id'},
-    }
-    state = {'char_id': 'char_001', 'fate': '后来继续核账',
-             'fate_evidence': {'evidence_candidate_id': 'e000002'}}
-    entities = KnowledgeEntitiesResponse.model_validate({
-        'character_states': [state], 'relations': [],
-    })
-    assert entities.model_dump(mode='json')['character_states'] == {
-        'char_001': {key: value for key, value in state.items() if key != 'char_id'},
-    }
+    assert registry.model_dump(mode='json')['characters'] == [character]
+    joint = AnalyzeResponse.model_validate({'characters': [character], 'global': {
+        'setting': {'era': None, 'era_evidence_refs': [], 'social_context': None,
+                    'social_context_evidence_refs': []},
+        'relations': [], 'world_rules': [], 'arc_secrets': [],
+    }})
+    assert AnalyzeResponse.model_validate(joint.model_dump(mode='json', by_alias=True)) == joint
     assert CharactersResponse.model_validate(registry.model_dump(mode='json')) == registry
-    assert KnowledgeEntitiesResponse.model_validate(entities.model_dump(mode='json')) == entities
     renamed = NameMapResponse.model_validate({
         'surname_map': [{'old_surname': '沈', 'new_surname': '林'}],
         'characters': [{'char_id': 'char_001', 'new_canonical': '林昭', 'renamed': True,
                         'not_renamed_reason': None, 'aliases': [], 'reason': '贴合时代'}],
     })
     assert renamed.surname_map == {'沈': '林'}
-    with pytest.raises(ValidationError, match='不能重复'):
+    with pytest.raises(ValidationError, match='重复'):
         CharactersResponse.model_validate({'characters': [character, dict(character)]})
-    with pytest.raises(ValidationError, match='不能重复'):
-        KnowledgeEntitiesResponse.model_validate({'character_states': [state, dict(state)], 'relations': []})
+    with pytest.raises(ValidationError, match='重复'):
+        AnalyzeResponse.model_validate({**joint.model_dump(mode='json', by_alias=True),
+                                       'characters': [character, dict(character)]})
 
 
 @pytest.mark.parametrize('where', ['request', 'policy'])

@@ -6,7 +6,6 @@ import hashlib
 import json
 from typing import Any
 
-from contracts.artifacts import STAGE1_HOOK_COPY
 from contracts.invariants import STAGE2_CHARACTER_REVIEW_KINDS
 from contracts.schema.stage2_review import (
     Stage2ReviewCoverage, Stage2ReviewObligation, Stage2ReviewReceipt,
@@ -39,17 +38,12 @@ def global_catalog(pack: Mapping[str, Any]) -> list[Stage2ReviewObligation]:
         # 正式证据/命中已经绑定当前章字节；没有局部证明的完整性义务绑定全部源文。
         if row['reading_scope'] == 'whole_book':
             material['source'] = pack['main_text_subject_sha256']
-            material['source_hook'] = pack.get('source_hook')
         chapters = set()
         for evidence in row.get('formal_evidence', []):
             ordinal = evidence.get('chapter_ordinal')
-            if (evidence.get('evidence_ref') or {}).get('artifact') == STAGE1_HOOK_COPY:
-                if ordinal is not None:
-                    raise ArtifactUnreadable('HookCopy 证据不得伪装为正文章')
-            elif type(ordinal) is not int or ordinal < 1:
+            if type(ordinal) is not int or ordinal < 1:
                 raise ArtifactUnreadable('正文正式证据缺合法章号，不能构造审阅义务')
-            else:
-                chapters.add(ordinal)
+            chapters.add(ordinal)
         catalog.append(Stage2ReviewObligation(
             obligation_id=key, subject_sha256=sha(material),
             owner=('stage2.characters' if row['kind'] in STAGE2_CHARACTER_REVIEW_KINDS
@@ -57,6 +51,58 @@ def global_catalog(pack: Mapping[str, Any]) -> list[Stage2ReviewObligation]:
             chapter_ordinals=sorted(chapters),
             subject_path=path, kind='global_item', context_refs=sorted(context)))
     return catalog
+
+
+def _global_material_context(rows: Sequence[Mapping[str, Any]],
+                             obligations: Mapping[str, Stage2ReviewObligation],
+                             pending: set[str]) -> set[str]:
+    """补齐实际引用的阅读前提；不改义务身份，不重签已接受决定。
+
+    fact_ref 指向的命题、规则版本的类型、关系端点的实体身份都可能已经接受。
+    它们仍是理解待审项的必要材料，不能因无需再次决定而只发一个裸 ID。
+    """
+    by_key = {global_key(row): row for row in rows}
+    by_path = {row['subject_path']: global_key(row) for row in rows}
+
+    def paths(value: Any) -> set[str]:
+        found: set[str] = set()
+        if isinstance(value, Mapping):
+            if {'subject_id', 'object_id', 'predicate'} <= value.keys():
+                found.update(f'characters.characters.{value[field]}'
+                             for field in ('subject_id', 'object_id'))
+            ref = value.get('fact_ref')
+            if isinstance(ref, Mapping):
+                if ref.get('kind') == 'relation':
+                    found.add(f"global.relations.{ref['relation_id']}")
+                elif ref.get('kind') == 'world_rule_version':
+                    rule = f"global.world_rules.{ref['rule_id']}"
+                    found.update((rule + '.kind', rule + f".versions.{ref['version_id']}"))
+            for child in value.values():
+                found.update(paths(child))
+        elif isinstance(value, list):
+            for child in value:
+                found.update(paths(child))
+        return found
+
+    selected = set(pending)
+    frontier = list(pending)
+    while frontier:
+        key = frontier.pop()
+        obligation = obligations[key]
+        dependencies = set(obligation.context_refs)
+        row = by_key.get(key)
+        # 已接受的父集合只提供当前集合上下文，不把它的每个无关成员递归展开。
+        if row is not None and (key in pending or row['reading_scope'] != 'whole_book'):
+            for path in paths(row.get('subject')):
+                target = by_path.get(path)
+                if target is None:
+                    raise ArtifactUnreadable(f'Global 审阅缺少被引用主体的阅读上下文：{path}')
+                dependencies.add(target)
+        for ref in dependencies:
+            if ref in obligations and ref not in selected:
+                selected.add(ref)
+                frontier.append(ref)
+    return selected - pending
 
 
 
@@ -169,8 +215,13 @@ def pending_materials(pack: Mapping[str, Any], coverage_: Stage2ReviewCoverage) 
     refs = {ref for key in pending for ref in obligations[key].context_refs}
     result['review_coverage'] = coverage_.model_dump(mode='json')
     if coverage_.scope.node == 'stage2.global':
+        removed = [row for row in result.get('removed_problem_materials', [])
+                   if row['obligation_id'] in pending]
+        result['removed_problem_materials'] = removed
+        refs = _global_material_context(result['items'], obligations, pending)
         result['items'] = [row for row in result['items'] if global_key(row) in pending | refs]
-        if not any(row['reading_scope'] == 'whole_book' for row in result['items']):
+        if not removed and not any(row['reading_scope'] == 'whole_book' and global_key(row) in pending
+                   for row in result['items']):
             result['main_text_chapters'] = []
     else:
         ordinals = {ordinal for key in pending for ordinal in obligations[key].chapter_ordinals}
@@ -191,7 +242,8 @@ def pending_materials(pack: Mapping[str, Any], coverage_: Stage2ReviewCoverage) 
         }
     result['material_projection'] = {
         'full_workpack_sha256': sha(pack), 'complete_scope_sha256': coverage_.scope.scope_sha256,
-        'purpose': '这里只省略已验证继承的正文；提交仍校验完整义务，删除问题仍须明确复审。',
+        'context_obligation_ids': sorted(refs - pending),
+        'purpose': '待审项引用的已接受主体仅作只读上下文，不重开义务；提交仍校验完整义务，删除问题仍须明确复审。',
     }
     # 完整范围已由 exact_request 绑定。wire 不重复发送每项继承的元数据和理由，
     # 原始完整回执仍在 API/审批历史里，由提交服务逐层核验。

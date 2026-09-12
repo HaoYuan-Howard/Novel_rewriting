@@ -20,6 +20,11 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage0.clean_text': 'stage0/clean_text.txt',
     'stage1.main_text': 'stage1/main_text.json',
     'stage1.hook_copy': 'stage1/hook_copy.json',
+    'stage2.analyze_receipt': 'stage2/analyze_receipt.json',
+    'stage2.analyze_recovery': 'stage2/analyze_recovery.json',
+    'stage2.analyze_owner_draft_edit': 'stage2/analyze_owner_draft_edit.json',
+    'stage2.analyze_characters_draft_repair': 'stage2/analyze_characters_draft_repair.json',
+    'stage2.analyze_global_draft_repair': 'stage2/analyze_global_draft_repair.json',
     'stage2.characters': 'stage2/characters.json',
     'stage2.characters_edit': 'stage2/characters_edit.json',
     'stage2.global_grounding': 'stage2/global_grounding.json',
@@ -113,6 +118,11 @@ STAGE0_REVISIONS = artifact_rel('stage0.revisions')
 STAGE0_CLEAN_TEXT = artifact_rel('stage0.clean_text')
 STAGE1_MAIN_TEXT = artifact_rel('stage1.main_text')
 STAGE1_HOOK_COPY = artifact_rel('stage1.hook_copy')
+STAGE2_ANALYZE_RECEIPT = artifact_rel('stage2.analyze_receipt')
+STAGE2_ANALYZE_RECOVERY = artifact_rel('stage2.analyze_recovery')
+STAGE2_ANALYZE_OWNER_DRAFT_EDIT = artifact_rel('stage2.analyze_owner_draft_edit')
+STAGE2_ANALYZE_CHARACTERS_DRAFT_REPAIR = artifact_rel('stage2.analyze_characters_draft_repair')
+STAGE2_ANALYZE_GLOBAL_DRAFT_REPAIR = artifact_rel('stage2.analyze_global_draft_repair')
 STAGE2_CHARACTERS = artifact_rel('stage2.characters')
 STAGE2_CHARACTERS_EDIT = artifact_rel('stage2.characters_edit')
 STAGE2_GLOBAL_GROUNDING = artifact_rel('stage2.global_grounding')

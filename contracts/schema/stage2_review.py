@@ -3,11 +3,42 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, model_serializer, model_validator
 
 from contracts.invariants import STAGE2_NODE_REVIEWERS, STAGE2_NODE_REVIEW_OWNERS
 from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import Sha256
+from contracts.schema.characters import CharactersEdit
+from contracts.schema.stage2 import GlobalEdit
+
+
+class Stage2CoreEditBatch(StrictModel):
+    """统一 Commander 的免费编辑批次；两份源字节都冻结，owner 始终独立。"""
+
+    expected_characters_sha256: Sha256
+    expected_global_sha256: Sha256
+    characters: CharactersEdit | None = None
+    global_edit: GlobalEdit | None = Field(default=None, alias='global')
+
+    @model_serializer(mode='wrap')
+    def _preserve_sparse_edits(self, handler, info):
+        data = handler(self)
+        if self.global_edit is not None:
+            key = 'global' if info.by_alias else 'global_edit'
+            # Patch 的 absent 与显式 null 不同；审批及恢复重启不能放大原编辑。
+            data[key] = self.global_edit.model_dump(
+                mode=info.mode, by_alias=info.by_alias, exclude_unset=True)
+        return data
+
+    @model_validator(mode='after')
+    def _owned_changes(self) -> 'Stage2CoreEditBatch':
+        if self.characters is None and self.global_edit is None:
+            raise ValueError('人物或知识编辑至少提交一侧')
+        if self.characters is not None and self.characters.source_sha256 != self.expected_characters_sha256:
+            raise ValueError('人物编辑必须绑定批次冻结的同一人物源字节')
+        if self.global_edit is not None and self.global_edit.post_edit_review is not None:
+            raise ValueError('联合编辑的原审阅决定由批次保存，不能夹带另一份 Global post_edit_review')
+        return self
 
 
 class Stage2ReviewObligation(FrozenModel):
@@ -19,6 +50,15 @@ class Stage2ReviewObligation(FrozenModel):
     kind: Literal['global_item', 'fact', 'structure', 'consistency', 'removed_problem']
     context_refs: list[str]
     problem_subject_sha256: Sha256 | None = None
+
+
+class Stage2ReviewMaterialSource(FrozenModel):
+    """原审阅阅读面的精确归档来源；来源无法查回时保持未知，不借当前稿重造历史。"""
+
+    characters_sha256: Sha256
+    global_sha256: Sha256
+    review_sha256: Sha256
+    main_text_sha256: Sha256
 
 
 class Stage2ReviewScope(FrozenModel):

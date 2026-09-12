@@ -45,7 +45,7 @@ from novel.agents.session_client import (
 from novel.agents.unit_session_pool import UnitSessionPool
 from novel.config import MAX_CONCURRENCY
 from novel.errors import GateBlocked, ProvenanceRefused
-from novel.llm import stage4_runs, stage5_runs
+from novel.llm import stage2_global_runs, stage4_runs, stage5_runs
 from novel.llm.client import LlmFailed
 from novel.observability import RequestProgress
 from novel.run import RunContext
@@ -145,6 +145,25 @@ class NodeExecutorAgent(ABC, Generic[A]):
                     'agent_driver' if self.client.driver_failed
                     else 'node_executor'),
             )
+
+
+class Stage2AnalyzeAgent(NodeExecutorAgent[BaseModel]):
+    """一次语义分析，两侧分别提交；后续修订不再进入本 owner。"""
+
+    node = 'stage2.analyze'
+
+    def run(self) -> NodeAgentResult[BaseModel]:
+        from novel.stages.stage2 import analyze
+
+        try:
+            artifact = analyze.run(self.ctx, self.client)
+            self.client.finish(process_state='ok', delivery_state='delivered')
+            return NodeAgentResult(artifact=artifact, turns=self.client.turns_used, passed=True)
+        except Exception as exc:
+            self._finish_exception(exc)
+            raise
+        finally:
+            self.client.close()
 
 
 class Stage2CharactersAgent(NodeExecutorAgent[CharacterRegistry]):
@@ -291,7 +310,7 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
                         purpose=self.ctx.node,
                         max_tokens=extract.GLOBAL_MAX_TOKENS,
                         validator=turn_validator,
-                        recovery_policy='stage2-knowledge-v2',
+                        recovery_policy=stage2_global_runs.RECOVERY_POLICY,
                         retain_validator_rejection=True,
                     )
                 except LlmFailed:
@@ -3061,6 +3080,7 @@ class Stage7RenameAgent(NodeExecutorAgent[NameMap]):
 
 
 EXECUTOR_FACTORIES: dict[str, Callable[..., NodeExecutorAgent[BaseModel]]] = {
+    'stage2.analyze': Stage2AnalyzeAgent,
     'stage2.characters': Stage2CharactersAgent,
     'stage2.global': Stage2GlobalAgent,
     'stage2.blueprint': Stage2BlueprintAgent,

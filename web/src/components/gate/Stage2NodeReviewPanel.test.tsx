@@ -13,7 +13,7 @@ it('展示后端复审义务，部分接受和原问题例外绑定当前范围�
   vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())
   const submit = vi.spyOn(api, 'approveStage2Review').mockResolvedValue(doc)
   const obligation = { obligation_id: 'rule:bad', subject_sha256: 'a'.repeat(64), owner: 'stage2.global',
-    chapter_ordinals: [1], subject_path: 'canon.world_rules.rule_bad', kind: 'removed_problem',
+    chapter_ordinals: [1], subject_path: 'world_rules.wr_01', kind: 'removed_problem',
     context_refs: ['world_rule_set_complete'], problem_subject_sha256: 'b'.repeat(64) }
   const coverage = { scope: { contract: 'stage2-review-obligations-v1' as const, node: 'stage2.global',
     scope_sha256: 'c'.repeat(64), obligations: [obligation] }, inherited: [],
@@ -36,4 +36,24 @@ it('展示后端复审义务，部分接受和原问题例外绑定当前范围�
       exceptions: [{ obligation_id: 'rule:bad', decision: 'rework', reason: '删除后仍缺必要知识' }],
     },
   })))
+})
+
+it('原双侧批次展示冻结请求与预检身份，不把保存请求显示为接受', async () => {
+  const doc = await mockApi.getApprovals(SAMPLE_SID)
+  const batch = { expected_characters_sha256: 'a'.repeat(64), expected_global_sha256: 'b'.repeat(64),
+    characters: null, global: { arc_secrets: [{ secret_id: 'secret_01', revealed_from: 3 }] } }
+  doc.stage2_reviews = { 'stage2.global': { state: 'rework', history: [], current_decision: {
+    node: 'stage2.global', review_token: 'frozen', decision: 'rework', actor: '复核员', reason: '纠正揭示章',
+    chapter_ordinals: [], owner: null, knowledge_links: null, core_edits: batch,
+    core_edit_prepared_sha256: 'c'.repeat(64), review_subject_sha256: 'd'.repeat(64),
+    review_contract_version: 'stage2-global-review-v3', decided_at: '2026-09-12T00:00:00Z',
+  } } }
+  vi.spyOn(api, 'getApprovals').mockResolvedValue(doc)
+  vi.spyOn(api, 'getEnums').mockResolvedValue(await mockApi.getEnums())
+  renderRoute(<Stage2NodeReviewPanel sid={SAMPLE_SID} node="stage2.global" token={null} />,
+    `/n/${SAMPLE_SID}/global`)
+  expect(await screen.findByText('已保存免费 Core 修订批次')).toBeVisible()
+  expect(screen.getByText(/新产生的待审义务仍需复核/)).toBeInTheDocument()
+  expect(screen.getByText('预检身份：' + 'c'.repeat(64))).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '提交节点审阅决定' })).toBeDisabled()
 })

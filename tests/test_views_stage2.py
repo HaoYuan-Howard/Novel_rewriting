@@ -4,32 +4,37 @@
 test_views_stage2.py —— S-05「全局设定」那一屏的组装。
 
 【与 `test_schema_api.py` 的分界线】那一份测**载体**（后置条件、反例会红），
-合成数据不读盘；本份测**组装**：解引用对不对、异常面对不对，拿盘上真语料跑。
+合成数据不读盘；本份测**组装**：当前 Core 从真实 producer 到视图；Blueprint 另读冻结语料。
 
-⚠ 遗留 `mkdtemp()` 由 conftest 收进受管根；新增用例使用 `tmp_path`。
+Core 使用 `tmp_path` 工程样本；Blueprint 的 corpus 检查不冒充模型质量验收。
 ⚠ **原语料一个字节都不许动**——它是只读证据。
 """
 from __future__ import annotations
 
 import os
+import json
+from types import SimpleNamespace
 
 import pytest
 
 from novel.errors import ArtifactUnreadable, UpstreamMissing
-from novel.views.stage2 import global_view, reading_view
+from novel.views.stage2 import global_view, reading_view, character_registry_view
+from novel.store import ArtifactStore
+from tests.test_stage2_global_core_edits import seed
 from tests import corpus, sandbox
 from tests.markers import corpus_params
 
 REL = 'stage2/global_grounding.json'
 
 
-@pytest.fixture(params=corpus_params(
-    sandbox.books_with_stage3(), reason='盘上没有 stage2/3 语料——这些集成用例没在查'),
-    ids=lambda b: b.rsplit('_', 1)[0] if b else 'no-corpus')
-def box(request):
-    s = sandbox.Sandbox(request.param)
-    yield s
-    s.close()
+@pytest.fixture
+def box(tmp_path):
+    """当前 Core 实际 producer 生成工程样本，旧 corpus v6 不冒充当前 v7。"""
+    ctx, _artifact = seed(tmp_path)
+    return SimpleNamespace(root=tmp_path, dir=ctx.novel_dir, sid=ctx.sid, ctx=ctx,
+        read=lambda rel: json.loads((ctx.novel_dir / rel).read_text(encoding='utf-8')),
+        write=lambda rel, value: (ctx.novel_dir / rel).write_text(
+            json.dumps(value, ensure_ascii=False), encoding='utf-8'))
 
 
 def _tree(root) -> set:
@@ -43,40 +48,37 @@ def _tree(root) -> set:
 
 
 def test_the_view_resolves_ids_and_counts_what_it_could_not(box):
-    """⭐ 解引用是 view 唯一的新事：**解开的给名字，解不开的保留 raw 并计数。**"""
-    v = global_view(box.root, box.sid)
-    refs = ([a.by for c in v.characters for a in c.address]
-            + [r.subject for r in v.relations] + [r.object for r in v.relations]
-            + [e.subject for s in v.secrets for e in s.knowledge_events])
-    assert refs, '一个引用都没收到——组装多半漏了整块'
-    for ref in refs:
-        if ref.resolved:
-            assert ref.display, f'{ref.raw} 解开了却没有名字'
-        else:
-            assert ref.display == ref.raw, 'view 不编名字：解不开必须保留 raw'
-    assert v.unresolved_refs == sum(1 for r in refs if not r.resolved), (
-        'unresolved_refs 与 payload 里数出来的不一致——计数器漏了某一块')
+    """解析已登记身份；缺人物登记仍保留原 ID，并按真实未解析端点计数。"""
+    known = global_view(box.root, box.sid)
+    refs = [ref for relation in known.relations for ref in (relation.subject, relation.object)]
+    assert refs and all(ref.resolved and ref.display != ref.raw for ref in refs)
+    assert known.unresolved_refs == 0
+    (box.dir / 'stage2/characters.json').unlink()
+    unresolved = global_view(box.root, box.sid)
+    refs = [ref for relation in unresolved.relations for ref in (relation.subject, relation.object)]
+    assert refs and all(not ref.resolved and ref.display == ref.raw for ref in refs)
+    assert unresolved.unresolved_refs == len(refs)
 
 
 def test_the_setting_keys_survive_the_alias_round_trip(box):
-    """`setting` 经 `by_alias` 出线，键是全链仅有的两个固定中文 key。"""
     v = global_view(box.root, box.sid)
     body = v.model_dump(by_alias=True, mode='json')
-    assert set(body['setting']) == {'时代背景', '世界观'}
+    assert set(body['setting']) == {'era', 'social_context', 'era_evidence_refs', 'social_context_evidence_refs'}
     assert '_provenance' in body and 'provenance' not in body
+    assert body['evidence_snippets'] and all(body['evidence_snippets'].values())
 
 
 def test_spoiler_fields_are_sent_in_full(box):
-    """⭐ 剧透遮蔽是**前端的纯展示行为**（`R-11.13`）：服务端全量下发，不做第二把尺子。
-
-    `fate` / `secrets` / `climax` / `ending` 四处必须都在响应里——
-    「服务端替你遮了」与「前端替你遮了」是两种承诺，本仓只做后者。
-    """
-    v = global_view(box.root, box.sid)
-    assert v.source_blurb.opening.kind == 'proposed'
-    body = v.model_dump(by_alias=True, mode='json')
-    assert all('fate' in c for c in body['characters']), 'fate 键必须恒在（可为 null）'
-    assert 'secrets' in body
+    """管理页完整呈现 Core 真相；后台ID/注册称谓仍不等于写手许可。"""
+    body = global_view(box.root, box.sid).model_dump(by_alias=True, mode='json')
+    assert body['arc_secrets'] and body['relations']
+    assert 'fact' in body['arc_secrets'][0] and 'revealed_from' in body['arc_secrets'][0]
+    assert all({'effective_from', 'effective_until', 'revealed_from'} <= set(row) for row in body['relations'])
+    assert 'source_blurb' not in body and 'characters' not in body
+    characters = character_registry_view(box.root, box.sid)
+    assert characters.registry.characters
+    assert all(person.aliases for person in characters.registry.characters.values())
+    assert all(not hasattr(person, 'fate') for person in characters.registry.characters.values())
 
 
 def test_a_missing_artifact_is_a_terminal_state_not_an_empty_screen(box):
@@ -110,7 +112,7 @@ def test_the_view_writes_nothing(box):
     global_view(box.root, box.sid)
     global_view(box.root, box.sid)
     assert _tree(box.root) == before, '视图往盘上写了东西'
-    assert not (box.root / '_service').exists()
+    assert (box.root / '_service').exists(), '真实 producer 的已有运行来源必须保留'
     assert len(before) >= 4, f'只扫到 {len(before)} 个文件——沙箱多半没建起来'
 
 

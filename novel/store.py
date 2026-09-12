@@ -32,6 +32,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import tempfile
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -44,7 +45,7 @@ from pydantic import BaseModel, ValidationError
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_CHARACTERS,
+    STAGE2_ANALYZE_RECEIPT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_CHARACTERS,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
@@ -83,9 +84,9 @@ REVALIDATION_REFERENCE_VERSION = 1
 #: 否则 Stage2 ``--revalidate`` 虽然提升了新 SourceSpan，正式 provenance
 #: 却会被旧 ``evidence_locator_failures`` 再次判红。
 _REVALIDATION_DERIVED_PROVENANCE_FIELDS = {
-    STAGE2_CHARACTERS: frozenset({'evidence_locator_failures'}),
+    STAGE2_CHARACTERS: frozenset(),
     STAGE2_GLOBAL_GROUNDING: frozenset({
-        'setup_chapters_pruned', 'evidence_locator_failures',
+        'evidence_locator_failures',
     }),
 }
 
@@ -527,6 +528,31 @@ class ArtifactStore:
             replaced_input_keys=replaced_input_keys,
         )
         return obj, hashlib.sha256(raw).hexdigest()
+
+    def read_own_by_sha256(self, model: type[M], rel: str, sha256: str) -> M:
+        """按原始字节冻结自身基线，只查该产物正式、INVALID 及已有轮次。
+
+        用于人物修订在自身写盘后恢复原请求；不迁移旧版本，不以当前稿冒充原基线。
+        """
+        if re.fullmatch(r'[0-9a-f]{64}', sha256) is None:
+            raise ProvenanceRefused('冻结基线需要完整 SHA-256')
+        formal = canonical_rel(paths.check_rel_deep(rel))
+        candidates = [formal, paths.invalid_of(formal)]
+        for current in tuple(candidates):
+            directory = self.path(paths.rounds_dir_of(current))
+            candidates.extend(paths.round_rel(current, number) for number in sorted(
+                paths.archived_rounds(directory, paths.stem_of(current))))
+        for candidate in candidates:
+            if not self.exists(candidate):
+                continue
+            raw = self._read_bytes(candidate)
+            if hashlib.sha256(raw).hexdigest() != sha256:
+                continue
+            data = self._loads(candidate, raw)
+            obj, _ = self._validate_payload(model, rel, data)
+            self._record_artifact_root(rel, obj)
+            return obj
+        raise ProvenanceRefused(f'{rel} 没有完整 SHA 匹配的冻结基线或历史轮次')
 
     def _read_own_validated(
         self,
@@ -1069,6 +1095,26 @@ class ArtifactStore:
         """
         rel = paths.check_rel_deep(rel)
         inv_rel = paths.invalid_of(rel)
+        _final, data, locator = self._prepare_invalid(rel, artifact, gates_skipped=gates_skipped)
+        baseline = self.path(self._revalidation_baseline_rel(inv_rel, locator))
+        p = self.path(inv_rel)
+        with self.history_transaction(inv_rel):
+            if self.exists(inv_rel):
+                self.archive_round(inv_rel)
+            self._write_immutable(baseline, data)
+            os.makedirs(_filesystem_path(p.parent), exist_ok=True)
+            self._replace_atomically(p, data)
+        return p
+
+    def prospective_invalid_sha256(self, rel: str, artifact: BaseModel, *,
+                                   gates_skipped: list[str]) -> str:
+        """冻结将落 INVALID 的准确字节身份；与真实写口共用唯一渲染算法。"""
+        _final, data, _locator = self._prepare_invalid(rel, artifact, gates_skipped=gates_skipped)
+        return hashlib.sha256(data).hexdigest()
+
+    def _prepare_invalid(self, rel: str, artifact: M, *,
+                         gates_skipped: list[str]) -> tuple[M, bytes, str]:
+        inv_rel = paths.invalid_of(paths.check_rel_deep(rel))
         src = self._provenance_of(artifact)
         if src is None:
             raise ProvenanceRefused(
@@ -1092,18 +1138,8 @@ class ArtifactStore:
         data = self._render(inv_rel, artifact, prov_override=final_src)
         self._verify_round_trip(inv_rel, type(artifact), data)
 
-        baseline = self.path(self._revalidation_baseline_rel(inv_rel, locator))
-        p = self.path(inv_rel)
-        # Replacing an INVALID is a new failed round.  Its old live bytes, the
-        # numbered archive, the immutable baseline and the replacement are one
-        # transaction; callers must never pre-archive the sibling themselves.
-        with self.history_transaction(inv_rel):
-            if self.exists(inv_rel):
-                self.archive_round(inv_rel)
-            self._write_immutable(baseline, data)
-            os.makedirs(_filesystem_path(p.parent), exist_ok=True)
-            self._replace_atomically(p, data)
-        return p
+        final, _payload = self._validate_payload(type(artifact), inv_rel, self._loads(inv_rel, data))
+        return final, data, locator
 
     def write_text(self, rel: str, text: str) -> Path:
         """落一份**字节形态**产物。**显式按字节写 `\\n`，不带 BOM。**
@@ -1581,12 +1617,55 @@ class ArtifactStore:
             if block is not None and recorded is None:
                 recorded = {}                # 有来源账但没有 `inputs` ⇒ `no_inputs`，不是 `no_provenance`
         report = self.freshness_of_inputs(rel, recorded)
+        if isinstance(data, dict) and (data.get(PROVENANCE_KEY) or {}).get('shared_analysis_source'):
+            report = self._shared_analysis_freshness(data, report)
+        if canonical_rel(rel) == STAGE2_GLOBAL_GROUNDING and isinstance(data, dict):
+            return self._knowledge_character_freshness(data, report)
         if canonical_rel(rel) == STAGE4_EVIDENCE_BINDING:
             return self._stage4_binding_input_freshness(data, report)
         if canonical_rel(rel) == STAGE4_PLAN_CHAPTERS and isinstance(data, dict):
             return self._stage4_plan_phase_freshness(data, report)
         return report
 
+
+    def _shared_analysis_freshness(self, data: dict, ordinary: FreshnessReport) -> FreshnessReport:
+        """共享来源核验不可变回执，不展开可变人物文件的全对象依赖。"""
+        if ordinary.state != 'fresh':
+            return ordinary
+        from contracts.schema.common import SharedAnalysisSource
+        try:
+            shared = SharedAnalysisSource.model_validate(data[PROVENANCE_KEY]['shared_analysis_source'])
+        except (ValidationError, KeyError):
+            return FreshnessReport('unknown', 'consumed_unresolved', ordinary.edges)
+        actual = self.full_sha256_or_none(STAGE2_ANALYZE_RECEIPT)
+        if actual == shared.receipt_sha256:
+            return ordinary
+        edge = prov.EdgeVerdict(key=STAGE2_ANALYZE_RECEIPT,
+            state='unknown', reason='ghost' if actual is None else 'consumed_unresolved',
+            recorded_file=shared.receipt_sha256, now_file=actual,
+            recorded_consumed=None, now_consumed=None)
+        return FreshnessReport(edge.state, edge.reason, (*ordinary.edges, edge))
+
+    def _knowledge_character_freshness(self, data: dict, ordinary: FreshnessReport) -> FreshnessReport:
+        """Global 编译依赖按必要身份投影复算；生成来源单独证明。"""
+        if ordinary.state != 'fresh':
+            return ordinary
+        from contracts.schema.characters import CharacterRegistry
+        from novel.stages.stage2.grounding import knowledge_reference_sha256
+        recorded = data.get('characters_reference_sha256')
+        try:
+            if self.exists(paths.invalid_of(STAGE2_CHARACTERS)):
+                raise ProvenanceRefused('当前人物仍有 INVALID')
+            registry = self.read_own(CharacterRegistry, STAGE2_CHARACTERS)[0]
+            current = knowledge_reference_sha256(registry)
+        except (ArtifactUnreadable, UpstreamMissing, ProvenanceRefused, ValueError):
+            return FreshnessReport('unknown', 'consumed_unresolved', ordinary.edges)
+        if recorded == current:
+            return ordinary
+        edge = prov.EdgeVerdict(key=STAGE2_CHARACTERS, state='stale', reason='consumed_changed',
+            recorded_file=None, now_file=self._file_fp_of_key(STAGE2_CHARACTERS),
+            recorded_consumed=recorded, now_consumed=current)
+        return FreshnessReport('stale', 'consumed_changed', (*ordinary.edges, edge))
 
     def freshness_of_inputs(self, rel: str, recorded: dict | None) -> FreshnessReport:
         """同 `freshness`，但**来源账由调用方给**——用于还没落盘的那一份。
@@ -1755,9 +1834,8 @@ class ArtifactStore:
 
             grounding = CharacterRegistry.model_validate(characters_payload)
             main_text = MainText.model_validate(main_payload)
-            grounding_payload = {'entities': {'characters': grounding.model_dump(
-                by_alias=True, mode='json')['characters']}}
-            characters = grounding_payload['entities']['characters']
+            grounding_payload = grounding.model_dump(by_alias=True, mode='json')
+            characters = grounding_payload['characters']
             sections = [
                 section.model_dump(by_alias=True, mode='json')
                 for section in main_text.root
@@ -1984,6 +2062,7 @@ class ArtifactStore:
             return FreshnessReport('unknown', 'no_provenance')
 
         from contracts.schema.evaluation import GlobalReview
+        from contracts.schema.characters import CharacterRegistry
         from novel.quality.global_review import build_review, review_status
         try:
             review = GlobalReview.model_validate(review_payload)
@@ -2004,10 +2083,11 @@ class ArtifactStore:
                 recorded_file=None, now_file=self._file_fp_of_key(STAGE2_CHARACTERS),
                 recorded_consumed=None, now_consumed=None)
             return FreshnessReport('unknown', reason, (edge,))
-        expected_subject, exact_current, _approved = review_status(source, review)
+        character_source = self.read_own(CharacterRegistry, STAGE2_CHARACTERS)[1]
+        expected_subject, exact_current, _approved = review_status(source, review, characters=character_source)
         # Approval completeness is a gate/UI fact, not freshness.  Pending/FAIL/
         # UNVER decisions remain fresh as long as they describe the exact surface.
-        expected = build_review(source)
+        expected = build_review(source, characters=character_source)
 
         def identity_rows(value: Any) -> list[tuple[str, str, str, str]]:
             return [

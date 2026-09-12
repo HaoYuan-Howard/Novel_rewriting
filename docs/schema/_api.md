@@ -150,8 +150,11 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/novels/:sid/reading/:o` | `ReadingView` | 新 |
 | `GET /api/novels/:sid/stage2/blueprint-review-workpack` | `BlueprintReviewWorkpack` | scope=chapter:N 或 cross_chapter；完整范围原文、剧情及必要依赖各一份，当前 opaque token 与实际问题；只读、不生成接受 |
 | `GET /api/novels/:sid/stage2/global` | `GlobalView` | 新 |
+| `GET /api/novels/:sid/stage2/characters` | `CharacterRegistryView` | 独立人物正式或 INVALID 视图、当前编辑模板与服务端证据片段；不依赖 Global 已生成 |
+| `GET /api/novels/:sid/stage2/analyze-draft?owner=` | `AnalyzeDraftView` | 只读验证已购来源，返回单 owner 原候选、诊断、原文候选及三项来源 SHA；不是正式或已接受产物；prepared 只展示冻结请求 |
+| `POST /api/novels/:sid/stage2/analyze-draft` | `JobRecord`（请求体 `AnalyzeDraftEditRequest`：actor/reason 与 typed `AnalyzeOwnerDraftEdit`） | 服务只写 `_service` 输入；免费 CLI 验证来源、编译并提交单 owner WAL。补尾走已登记 `--recover-analyze-draft`，不重开联合首抽 |
 | `GET /api/novels/:sid/stage2/global-review` | `GlobalReviewView`（含当前完整 subject 重算状态、逐项审计与 `review_token`） | `review_token` 只在 review/grounding/MainText 都 current 时现算，否则 `null`；页面据此决定是否提供 seen.global 确认动作 |
-| `POST /api/novels/:sid/stage2/global-review` | `JobRecord`（请求体 `GlobalReviewDecisionSet` v2：逐项决定，或绑定 source/scope/workpack hash 与正文章全集的 blocking scope + 逐项例外；exit 0 要求 blocking generation-safe：全部 PASS，或仅余显式完整组隔离的 secret/relation/world-rule UNVER） | 新 |
+| `POST /api/novels/:sid/stage2/global-review` | `JobRecord`（请求体 `GlobalReviewDecisionSet` v3：逐项决定，或绑定 source/scope/workpack hash 与正文章全集的 blocking scope + 逐项例外；exit 0 要求当前义务均已安全闭合，只有明确允许且完整组的秘密 UNVER 可隔离） | 人物与知识统一审阅；关系、规则、人物与完整性义务不得隔离 |
 | `GET /api/novels/:sid/stage4/:o` | `Stage4View` | 新 |
 | `GET /api/novels/:sid/stage5/:o` | `Stage5View` | 新 |
 | `GET /api/novels/:sid/review/:o` | `ReviewView` | 新 |

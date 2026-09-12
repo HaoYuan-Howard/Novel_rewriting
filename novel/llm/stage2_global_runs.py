@@ -28,7 +28,7 @@ from novel.llm.transport import ChatResponse
 
 
 M = TypeVar('M', bound=BaseModel)
-RECOVERY_POLICY = 'stage2-knowledge-v2'
+RECOVERY_POLICY = 'stage2-knowledge-v3'
 _INVALID = paths.invalid_of(STAGE2_GLOBAL_GROUNDING)
 _OWNERSHIP_REGISTRY_LOCK = threading.Lock()
 _OWNERSHIP_THREAD_LOCKS: dict[str, threading.RLock] = {}
@@ -48,6 +48,7 @@ def _run_spec() -> agent_runs.SingleSessionRunSpec:
         session_owner='stage2.global', purpose='stage2.global',
         chapter=None, phase='global', recovery_policy=RECOVERY_POLICY,
         session_isolation='per-node',
+        initial_artifacts=(STAGE2_GLOBAL_GROUNDING, _INVALID),
         run_path=_current_run_path,
         checkpoint_dir=lambda ctx: _current_run_path(ctx) / 'checkpoints',
     )
@@ -162,6 +163,11 @@ def _refuse_commit_reservations(
         ctx: Any, *, include_current: bool,
 ) -> None:
     _require_ownership(ctx)
+    from novel.stages.stage2.analyze_draft_recovery import refuse_pending
+    refuse_pending(ctx.novel_dir)
+    from novel.stages.stage2.analyze import refuse_pending_analysis
+    refuse_pending_analysis(ctx.novel_dir,
+        allow_run_id=ctx.run_id if ctx.node == 'stage2.analyze' else None)
     _current_run_path(ctx)
     current = _commit_spec().commit_path(ctx).resolve()
     targets: dict[str, Path] = {}

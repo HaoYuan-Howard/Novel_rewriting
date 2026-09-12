@@ -89,6 +89,7 @@ import type {
 } from './stages'
 
 import type { CharacterRegistryView, CharactersEditRequest } from './characters'
+import type { AnalyzeDraftView, AnalyzeDraftOwner, AnalyzeDraftEditRequest } from './analyzeDraft'
 
 export interface Api {
   /* 读 */
@@ -120,6 +121,8 @@ export interface Api {
   getGlobal(sid: string, revealSpoilers?: boolean): Promise<Stage2Global>
   getCharacters(sid: string): Promise<CharacterRegistryView>
   editCharacters(sid: string, request: CharactersEditRequest): Promise<Job>
+  getAnalyzeDraft(sid: string, owner: AnalyzeDraftOwner): Promise<AnalyzeDraftView>
+  editAnalyzeDraft(sid: string, request: AnalyzeDraftEditRequest): Promise<Job>
   getGlobalReview(sid: string): Promise<GlobalReviewResponse>
   decideGlobalReview(sid: string, request: GlobalReviewDecisionSet): Promise<Job>
   getStage4(sid: string, ordinal: number): Promise<Stage4Response>

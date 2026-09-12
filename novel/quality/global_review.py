@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY
+from contracts.artifacts import STAGE1_MAIN_TEXT
 from contracts.invariants import (
     GLOBAL_REVIEW_EFFECTS, GLOBAL_REVIEW_KINDS, review_effect_of,
     review_generation_impact_of,
@@ -16,7 +16,6 @@ from contracts.schema.evaluation import (
     GlobalReview, GlobalReviewDecisionSet, GlobalReviewGenerationDisposition,
     GlobalReviewItem,
 )
-from novel.core.evidence import iter_global_evidence_slots, iter_hook_evidence_slots, without_global_evidence
 from novel.errors import HumanEditProtected
 
 
@@ -47,6 +46,11 @@ def _canonical(value: Any) -> bytes:
 
 def subject_sha256(value: Any) -> str:
     return hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def alias_review_key(surface: str) -> str:
+    """称谓无正式 ID；审阅按精确字面稳定定位，新增或重排不改变已有问题身份。"""
+    return 'alias_' + subject_sha256(surface)[:24]
 
 
 def blocking_scope_sha256(review: GlobalReview) -> str:
@@ -129,267 +133,196 @@ def _whole_book_item(
     })
 
 
+def review_source(global_grounding: dict[str, Any], characters: dict[str, Any] | None) -> dict[str, Any]:
+    """只读审阅信封；两份正式产物仍各自拥有证据和生命周期。"""
+    def business(value: dict[str, Any]) -> dict[str, Any]:
+        return {key: child for key, child in value.items()
+                if key not in {'_provenance', '_schema_version'}}
+    return {'characters': None if characters is None else business(characters),
+            'global': business(global_grounding)}
+
+
+def without_review_evidence(value: Any) -> Any:
+    """语义投影不混入坐标；证据变更只重开引用该锚点的判断。"""
+    if isinstance(value, dict):
+        return {key: without_review_evidence(child) for key, child in value.items()
+                if key != 'evidence_anchors' and not key.endswith('evidence_refs')}
+    if isinstance(value, list):
+        rows = [without_review_evidence(child) for child in value]
+        if rows and all(isinstance(row, dict) and isinstance(row.get('surface'), str) for row in rows):
+            rows.sort(key=lambda row: row['surface'])
+        return rows
+    return value
+
+
+def review_evidence_slots(source: dict[str, Any]) -> list[tuple[str, Any]]:
+    """展开产物本地 anchor 引用，路径属于审阅信封而非跨产物外键。"""
+    slots = []
+    for owner in ('characters', 'global'):
+        artifact = source.get(owner)
+        if not isinstance(artifact, dict):
+            continue
+        anchors = artifact.get('evidence_anchors') or {}
+        def visit(value: Any, path: str) -> None:
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if key == 'evidence_anchors':
+                        continue
+                    if key.endswith('evidence_refs'):
+                        claim = path if key == 'evidence_refs' else path + '.' + key[:-len('_evidence_refs')]
+                        for ref in child:
+                            slots.append((claim, anchors.get(ref)))
+                    else:
+                        visit(child, f'{path}.{key}')
+            elif isinstance(value, list):
+                for index, child in enumerate(value):
+                    stable = (child.get('relation_id') or child.get('rule_id') or
+                              child.get('secret_id') or child.get('version_id')) if isinstance(child, dict) else None
+                    if isinstance(child, dict) and path.endswith('.aliases'):
+                        stable = alias_review_key(child['surface'])
+                    visit(child, f'{path}.{stable or index}')
+        visit(artifact, owner)
+        if owner == 'global':
+            relations = {row['relation_id']: row for row in artifact.get('relations', [])}
+            versions = {(rule['rule_id'], row['version_id']): row
+                        for rule in artifact.get('world_rules', []) for row in rule['versions']}
+            for secret in artifact.get('arc_secrets', []):
+                ref = secret.get('fact_ref')
+                if ref is None:
+                    continue
+                target = (relations.get(ref['relation_id']) if ref['kind'] == 'relation'
+                          else versions.get((ref['rule_id'], ref['version_id'])))
+                for evidence_ref in (target or {}).get('evidence_refs', []):
+                    slots.append((f"global.arc_secrets.{secret['secret_id']}", anchors.get(evidence_ref)))
+
+    return slots
+
+
 def enumerate_required(
-    global_grounding: dict[str, Any], *, main_text_input: Any = None,
-    source_hook_input: Any = None,
+    global_grounding: dict[str, Any], *, characters: dict[str, Any] | None = None,
+    main_text_input: Any = None,
 ) -> list[GlobalReviewItem]:
-    """从 typed Stage2 表面派生全部人工复核主体。
+    """人物身份与四类长期约束的高熵判断；机械引用、坐标和时间范围由 lint 负责。
 
-    ⚠⚠ **没被枚举出来的字段等于没人审。** 这份清单是 `R-2.16` 那道硬闸的评测面，
-    下游全部付费执行与成书组装都压在它上面；`R-2.16` 说的「与当前 grounding 完整
-    一致」指的是**这里枚举的那些主体**一致，不是「整份 grounding 都过了人眼」。
-    此前只覆盖九类（枚举、规则、秘密三格），于是四处已知风险面全程无人裁决：
-    `role` 的结局旁路、`setting.世界观` 的泄底、relations 这条第二剧透通道、
-    以及 `setup_chapters`——它是 `_relation_gates` 隐瞒窗口与 secret 闸门第②臂
-    **两道下发闸门共同的前件**。
-
-    【粒度的分界线是「能不能被单独修正」】事实逐条、解读分组。`role` / `fate` /
-    setting 的两项事实 / 每条 relation / 每条 secret 的埋点章都能单独改，各占一项；
-    源文案事实逐条裁决；完整性与开篇范围需要同时核对源文案和整书，不能从局部命中
-    推断通过。未确定的事实或范围必须先经 typed 修订提供可核验的主体。
-
-    ⚠ 取值面在 `contracts/invariants.py::GLOBAL_REVIEW_KINDS`（`GlobalReviewItem.kind`
-    从那里派生），交付效果在同文件的 `review_effect_of`；新增一类必须同批在两处登记。
-    ⚠ 主体路径的形状同时是 `review_group_key` 的输入：新增一类主体路径要同批登记
-    卡片收敛键，否则那一类没人分组，而没有兜底键会让它当场炸出来。
+    集合完整性必须通读正文反查。证据只绑定实际引用它的主体；完整性绑定语义集合，
+    不因坐标订正重购全文分析。未提供人物登记是缺材料，不是合法的空人物集合。
     """
+    source = review_source(global_grounding, characters)
+    projected = without_review_evidence(source)
+    slots = review_evidence_slots(source)
     rows: list[GlobalReviewItem] = []
-    projected = without_global_evidence(global_grounding)
-    assert isinstance(projected, dict)
-    evidence_by_path = {
-        path: owner.get(field)
-        for path, owner, field in (
-            *iter_global_evidence_slots(global_grounding), *iter_hook_evidence_slots(global_grounding))
-    }
 
-    def evidence_for(path: str, *, grouped: bool = False) -> Any:
-        """只按 evidence 单一路径表关联主体，不在复核层重抄字段名。"""
-        if not grouped and path in evidence_by_path:
-            return evidence_by_path[path]
-        prefix = f'{path}.'
-        matches = [
-            evidence for claim_path, evidence in evidence_by_path.items()
-            if claim_path.startswith(prefix)
-        ]
-        if not matches:
-            return [] if grouped else None
-        if grouped or len(matches) > 1:
-            return matches
-        return matches[0]
+    def evidence(path: str) -> list[Any]:
+        anchors = {subject_sha256(anchor): anchor for claim_path, anchor in slots
+                   if claim_path == path or claim_path.startswith(path + '.')}
+        return [anchors[key] for key in sorted(anchors)]
 
-    entities = global_grounding.get('entities') or {}
-    projected_entities = projected.get('entities') or {}
-    # 逐条复核只能判「已经抽出来的这一条对不对」，不能发现整个人物或关系根本没被
-    # 抽出来。两项集合裁决故意绑定剥掉 evidence 的完整集合：改坐标不重开，增删或
-    # 改写事实则必须重新通读来源确认没有漏项。
-    projected_characters = projected_entities.get('characters') or {}
-    projected_relations = projected_entities.get('relations') or []
-    character_members = sorted(str(key) for key in projected_characters)
-    relation_members = sorted(
-        str(row.get('relation_id')) for row in projected_relations
-        if isinstance(row, dict))
-    rows.append(_whole_book_item(
-        'character_set_complete', 'entities.characters', character_members,
-        main_text_input))
-    rows.append(_whole_book_item(
-        'relation_set_complete', 'entities.relations', relation_members,
-        main_text_input))
-    for cid, character in sorted((entities.get('characters') or {}).items()):
-        rows.append(_item(
-            'name_distinctiveness', f'entities.characters.{cid}.name_distinctiveness',
-            character.get('name_distinctiveness')))
-        # `role` 是一条已知的、未修的结局旁路：词表只抓转抄式结局词，实测某本上
-        # 命中 0/17 而人读真违规 6/17（「后成为…的下属」差一个字避开了「后被」）
-        # ⇒ 「判据没报违规」在这一维上不等于「没问题」，只能靠人裁。
-        role_path = f'entities.characters.{cid}.role'
-        rows.append(_fact_item(
-            'role', role_path, character.get('role'), evidence_for(role_path)))
-        # `fate` 与 `role` 拆成两个字段的全部意义是**它不下发给写手**；写错等于白拆。
-        # ⚠ 它可以是 `null`（据实留空合法），空值同样需要一句「确实没有」的人工决定。
-        fate_path = f'entities.characters.{cid}.fate'
-        rows.append(_fact_item(
-            'fate', fate_path, character.get('fate'), evidence_for(fate_path)))
-        for index, address in enumerate(character.get('address') or []):
-            rows.append(_item(
-                'address_context', f'entities.characters.{cid}.address.{index}.context',
-                address.get('context')))
+    def fact(kind: str, path: str, value: Any, dependency: Any = None) -> None:
+        rows.append(_fact_item(kind, path, value, evidence(path), dependency=dependency))
 
-    # relations 是 secrets 之外的**第二条剧透通道**：`valid_from_chapter` 记的是
-    # 【世内生效时点】而不是【读者知情时点】，秘密类关系上两者系统性错位。
-    # 下发侧那道补救闸门靠「`fact` 是否同时含两端人名」的启发式命中，
-    # 判不准的那部分只能在这里由人兜住。
-    projected_secret_by_id = {
-        str(row.get('secret_id')): row
-        for row in ((projected.get('canon') or {}).get('secrets') or [])
-        if isinstance(row, dict)
-    }
-    for index, relation in enumerate(entities.get('relations') or []):
-        rid = relation.get('relation_id') or str(index)
-        path = f'entities.relations.{rid}'
-        claim = projected_relations[index] if index < len(projected_relations) else relation
-        visibility = claim.get('visibility') if isinstance(claim, dict) else None
-        linked_secret = (
-            projected_secret_by_id.get(str(visibility.get('secret_id')))
-            if isinstance(visibility, dict)
-            and visibility.get('kind') == 'via_secret' else None)
-        rows.append(_fact_item(
-            'relation', path, claim, evidence_for(path),
-            dependency=linked_secret))
+    registry = (characters or {}).get('characters') or {}
+    semantic_characters = (projected.get('characters') or {}).get('characters') or {}
+    complete = _whole_book_item('character_set_complete', 'characters.characters',
+                               semantic_characters, main_text_input)
+    rows.append(complete.model_copy(update={'resolution_required': characters is None}))
+    for cid, person in sorted(registry.items()):
+        path = f'characters.characters.{cid}'
+        fact('character_identity', path, {
+            'canonical': person['canonical'], 'first_chapter': person['first_chapter']},
+            dependency={'aliases': sorted(row['surface'] for row in person['aliases'])})
+        rows.append(_item('name_distinctiveness', path + '.name_distinctiveness',
+                          person['name_distinctiveness']))
+        fact('role', path + '.role', person['role'],
+             dependency={'first_chapter': person['first_chapter'], 'canonical': person['canonical']})
+        for alias in sorted(person['aliases'], key=lambda row: row['surface']):
+            fact('alias_identity', f'{path}.aliases.{alias_review_key(alias["surface"])}', without_review_evidence(alias),
+                 dependency={'char_id': cid, 'canonical': person['canonical']})
 
-    canon = global_grounding.get('canon') or {}
-    projected_canon = projected.get('canon') or {}
-    # ⚠ 键是**中文别名**（`by_alias=True` 落盘），全链仅有的三处固定中文 JSON key 之二。
-    # `世界观` 是已知泄底面：逐章字面闸门在唯一有 secrets 的那本上命中 **0/8**，
-    # 其中包括一条已知的真泄漏 ⇒ 机械闸门在这一维上没有判别力。
-    setting = canon.get('setting') or {}
-    # ⚠ 这里只能显式列 schema 的两条事实。遍历 setting 会把新增的 evidence 键
-    # 当成第三、第四条 claim，制造没有人类语义的复核主体。
-    for key in ('时代背景', '世界观'):
-        path = f'canon.setting.{key}'
-        rows.append(_fact_item(
-            'setting_fact', path, setting.get(key), evidence_for(path)))
+    def character_identity(char_id: str) -> Any:
+        person = registry.get(char_id)
+        if person is None:
+            return None
+        return {'canonical': person['canonical'], 'role': person['role'],
+                'surfaces': sorted(alias['surface'] for alias in person['aliases'])}
 
-    world_rules = canon.get('world_rules') or []
-    secrets = canon.get('secrets') or []
-    projected_world_rules = projected_canon.get('world_rules') or []
-    projected_secrets = projected_canon.get('secrets') or []
-    # 逐条核已抽出的内容，不能证明集合没有整项漏抽；即使列表为空，也必须由人明确判断
-    # 原文中确实没有被漏掉的规则或秘密。
-    rows.append(_whole_book_item(
-        'world_rule_set_complete', 'canon.world_rules', sorted(
-            str(row.get('rule_id')) for row in projected_world_rules
-            if isinstance(row, dict)), main_text_input))
-    rows.append(_whole_book_item(
-        'secret_set_complete', 'canon.secrets', sorted(
-            str(row.get('secret_id')) for row in projected_secrets
-            if isinstance(row, dict)), main_text_input))
-    for ri, rule in enumerate(world_rules):
-        rid = rule.get('rule_id') or str(ri)
-        rule_dependency = (
-            projected_world_rules[ri]
-            if ri < len(projected_world_rules) else rule)
-        rows.append(_item(
-            'world_rule_kind', f'canon.world_rules.{rid}.kind',
-            rule.get('kind'), dependency=rule_dependency))
-        for vi, version in enumerate(rule.get('versions') or []):
-            path = f'canon.world_rules.{rid}.versions.{vi}'
-            projected_version = projected_world_rules[ri]['versions'][vi]
-            rows.append(_fact_item(
-                'world_rule_version', path, projected_version, evidence_for(path),
-                dependency=rule_dependency))
-    for si, secret in enumerate(secrets):
-        sid = secret.get('secret_id') or str(si)
-        secret_dependency = (
-            projected_secrets[si] if si < len(projected_secrets) else secret)
-        fact_path = f'canon.secrets.{sid}.fact'
-        rows.append(_fact_item(
-            'secret', fact_path, secret.get('fact'), evidence_for(fact_path),
-            dependency=secret_dependency))
-        for ei, event in enumerate(secret.get('knowledge_events') or []):
-            path = f'canon.secrets.{sid}.knowledge_events.{ei}'
-            projected_event = projected_secrets[si]['knowledge_events'][ei]
-            rows.append(_fact_item(
-                'knowledge_event', path, projected_event, evidence_for(path),
-                dependency=secret_dependency))
-        # 埋点是 `_relation_gates` 的隐瞒窗口与 secret 闸门第②臂**两道闸门的前件**。
-        # v2 的判别联合逼模型在 cold / foreshadowed 之间显式选一边，但**归一裁空
-        # 降级成 cold** 的那一条与真·冷揭示仍然同形（只有
-        # `_provenance.setup_chapters_pruned` 分得开）⇒ 判据看不出来，人必须看。
-        rows.append(_item(
-            'secret_setup', f'canon.secrets.{sid}.setup', secret.get('setup'),
-            dependency=secret_dependency))
-        rows.append(_item(
-            'reveal', f'canon.secrets.{sid}.first_reveal_chapter',
-            secret.get('first_reveal_chapter'), dependency=secret_dependency))
+    def relation_identity(relation: dict[str, Any]) -> dict[str, Any]:
+        return {'subject': character_identity(relation['subject_id']),
+                'object': character_identity(relation['object_id'])}
 
-    blurb = global_grounding.get('source_blurb') or {}
-    projected_blurb = projected.get('source_blurb') or {}
-    source_dependency = {'main_text': main_text_input, 'source_hook': source_hook_input}
-    rows.append(_whole_book_item(
-        'source_blurb_complete', 'source_blurb.facts',
-        projected_blurb.get('facts'), source_dependency))
-    for fact in blurb.get('facts') or []:
-        path = f"source_blurb.facts.{fact['claim_id']}"
-        row = _fact_item('source_blurb_fact', path,
-                         {key: value for key, value in fact.items()
-                          if key not in {'evidence', 'hook_evidence'}},
-                         evidence_for(path), dependency=source_dependency)
-        rows.append(row.model_copy(update={'resolution_required': fact.get('kind') == 'unresolved'}))
-    opening = blurb.get('opening') or {}
-    row = _fact_item('opening_scope', 'source_blurb.opening',
-                     projected_blurb.get('opening'), evidence_for('source_blurb.opening'),
-                     dependency={'source': source_dependency, 'facts': blurb.get('facts')})
-    rows.append(row.model_copy(update={'resolution_required': opening.get('kind') != 'proposed'}))
+    core = projected['global']
+    for collection, kind in (('relations', 'relation_set_complete'),
+                             ('world_rules', 'world_rule_set_complete'),
+                             ('arc_secrets', 'secret_set_complete')):
+        rows.append(_whole_book_item(kind, f'global.{collection}', core[collection], main_text_input))
+    for key in ('era', 'social_context'):
+        fact('setting_fact', f'global.setting.{key}', core['setting'][key])
+    for relation in core['relations']:
+        fact('relation', f"global.relations.{relation['relation_id']}", relation,
+             dependency=relation_identity(relation))
+    for rule in core['world_rules']:
+        path = f"global.world_rules.{rule['rule_id']}"
+        rows.append(_item('world_rule_kind', path + '.kind', rule['kind'], dependency=rule))
+        for version in rule['versions']:
+            fact('world_rule_version', f"{path}.versions.{version['version_id']}", version,
+                 dependency={'kind': rule['kind']})
+    relations = {row['relation_id']: row for row in core['relations']}
+    rules = {row['rule_id']: row for row in core['world_rules']}
+    for secret in core['arc_secrets']:
+        path = f"global.arc_secrets.{secret['secret_id']}"
+        ref = secret.get('fact_ref')
+        reference = None
+        if ref is not None:
+            if ref['kind'] == 'relation':
+                target = relations.get(ref['relation_id'])
+                reference = {'fact': target, 'characters': relation_identity(target)} if target else None
+            else:
+                reference = next((row for row in rules.get(ref['rule_id'], {}).get('versions', [])
+                                  if row['version_id'] == ref['version_id']), None)
+        fact('secret', path, secret, dependency=reference)
+        rows.append(_item('secret_setup', path + '.setup_chapters', secret['setup_chapters'],
+                          dependency={'fact': secret.get('fact'), 'fact_ref': ref, 'revealed_from': secret['revealed_from']}))
+        rows.append(_item('reveal', path + '.revealed_from', secret['revealed_from'],
+                          dependency={'fact': secret.get('fact'), 'fact_ref': ref}))
     return rows
 
 
 def build_review(
-    global_grounding: dict[str, Any],
-    previous: GlobalReview | None = None,
+    global_grounding: dict[str, Any], previous: GlobalReview | None = None, *,
+    characters: dict[str, Any] | None = None,
 ) -> GlobalReview:
-    """Carry decisions only when their exact subject hash survives an edit."""
+    """仅继承同一主体与其实际证据仍完全一致的决定。"""
     provenance = global_grounding.get('_provenance') or {}
     inputs = provenance.get('inputs') if isinstance(provenance, dict) else None
-    main_text_input = (
-        inputs.get(STAGE1_MAIN_TEXT) if isinstance(inputs, dict) else None)
-    source_hook_input = inputs.get(STAGE1_HOOK_COPY) if isinstance(inputs, dict) else None
-    source = {
-        key: value for key, value in global_grounding.items()
-        if key not in {'_provenance', '_schema_version'}
-    }
-    prior = {
-        (item.item_id, item.kind, item.subject_path, item.subject_sha256): item
-        for item in (previous.items if previous else [])
-    }
+    main_text_input = inputs.get(STAGE1_MAIN_TEXT) if isinstance(inputs, dict) else None
+    prior = {(row.item_id, row.kind, row.subject_path, row.subject_sha256): row
+             for row in (previous.items if previous else [])}
     items = []
-    for fresh in enumerate_required(source, main_text_input=main_text_input,
-                                    source_hook_input=source_hook_input):
-        inherited = prior.get((
-            fresh.item_id, fresh.kind, fresh.subject_path, fresh.subject_sha256))
+    for fresh in enumerate_required(global_grounding, characters=characters, main_text_input=main_text_input):
+        inherited = prior.get((fresh.item_id, fresh.kind, fresh.subject_path, fresh.subject_sha256))
         items.append(inherited if inherited is not None else fresh)
-    return GlobalReview(source_sha256=subject_sha256(source), items=items)
+    return GlobalReview(source_sha256=subject_sha256(review_source(global_grounding, characters)), items=items)
 
 
-#: 卡片收敛键的路径文法。**闭集**：产地是 `enumerate_required` 拼出的
-#: `subject_path`，两处必须同进同出，因此未知形状当场炸而不是回落成一个兜底键——
-#: 兜底键会让「这一类没人分组」看起来和「分好了」一模一样。
 _GROUP_PREFIXES: tuple[tuple[str, str], ...] = (
-    ('entities.characters.', 'character'),
-    ('entities.relations.', 'relation'),
-    ('canon.world_rules.', 'world_rule'),
-    ('canon.secrets.', 'secret'),
+    ('characters.characters.', 'character'), ('global.relations.', 'relation'),
+    ('global.world_rules.', 'world_rule'), ('global.arc_secrets.', 'secret'),
 )
 _GROUP_COLLECTIONS: dict[str, str] = {
-    'entities.characters': 'set:characters',
-    'entities.relations': 'set:relations',
-    'canon.world_rules': 'set:world_rules',
-    'canon.secrets': 'set:secrets',
+    'characters.characters': 'set:characters', 'global.relations': 'set:relations',
+    'global.world_rules': 'set:world_rules', 'global.arc_secrets': 'set:secrets',
 }
 
 
 def review_group_key(subject_path: str) -> str:
-    """一条复核项归哪张人审卡。**同一个主体的全部项进同一张卡。**
-
-    人不是逐条读 145 行的，他是按「这个人物 / 这条关系 / 这条秘密的时间线」读的。
-    收敛键因此绑**主体**而不是 kind：`role` 与 `fate` 是同一个人的两格，
-    `secret` / `setup` / `reveal` / `knowledge_event` 是同一条秘密时间线的四格。
-    ⚠ 它只决定**怎么摆**，不决定**能不能提交**：批量提交仍逐项展开为 hash-bound
-    decision，允许单项覆盖，且永不自动 PASS。
-    """
-    path = str(subject_path)
-    if path in _GROUP_COLLECTIONS:
-        return _GROUP_COLLECTIONS[path]
+    """闭集主体卡；新增审阅路径必须明确登记归属，不能静默落入兜底组。"""
+    if subject_path in _GROUP_COLLECTIONS:
+        return _GROUP_COLLECTIONS[subject_path]
     for prefix, group in _GROUP_PREFIXES:
-        if path.startswith(prefix):
-            return f'{group}:{path[len(prefix):].split(".", 1)[0]}'
-    if path == 'canon.setting' or path.startswith('canon.setting.'):
+        if subject_path.startswith(prefix):
+            return f'{group}:{subject_path[len(prefix):].split(".", 1)[0]}'
+    if subject_path == 'global.setting' or subject_path.startswith('global.setting.'):
         return 'setting'
-    if path == 'source_blurb' or path.startswith('source_blurb.'):
-        return 'source_blurb'
-    raise ValueError(
-        f'复核项路径 {path!r} 没有登记的卡片收敛键。'
-        f'`enumerate_required` 新增一类主体路径时必须同批在这里登记，'
-        f'不给兜底键——兜底会让「没人分组」看起来和「分好了」一样')
+    raise ValueError(f'未登记的 Stage2 审阅主体路径：{subject_path!r}')
 
 
 def review_effect_counts(review: GlobalReview) -> dict[str, dict[str, int]]:
@@ -409,7 +342,7 @@ def review_effect_counts(review: GlobalReview) -> dict[str, dict[str, int]]:
 
 def review_status(
     global_grounding: dict[str, Any],
-    review: GlobalReview,
+    review: GlobalReview, *, characters: dict[str, Any] | None = None,
 ) -> tuple[str, bool, bool]:
     """Return ``(current subject hash, exact-current, blocking-approved)``.
 
@@ -425,7 +358,7 @@ def review_status(
     ⚠ **评测面 current 仍要求 item/path/hash 集合完全一致**，一格没松：
     分级只改「谁能拦」，不改「谁必须在场」。
     """
-    expected = build_review(global_grounding)
+    expected = build_review(global_grounding, characters=characters)
     def identity(item: GlobalReviewItem) -> tuple[str, str, str, str, bool]:
         return (item.item_id, item.kind, item.subject_path, item.subject_sha256,
                 item.resolution_required)
@@ -457,7 +390,8 @@ def quarantined_group(item: GlobalReviewItem) -> str | None:
 
 
 def generation_safety(
-    global_grounding: dict[str, Any], review: GlobalReview,
+    global_grounding: dict[str, Any], review: GlobalReview, *,
+    characters: dict[str, Any] | None = None,
 ) -> GenerationSafety:
     """判断能否继续写作，同时保留 ``all_pass`` 这一条正交真值事实。
 
@@ -465,7 +399,7 @@ def generation_safety(
     group 可从下游视图确定性删除时才不阻断“产出一本书”。任何 pending/FAIL、
     不可隔离组、缺处置或 stale surface 都保持关闭。
     """
-    _expected, current, approved = review_status(global_grounding, review)
+    _expected, current, approved = review_status(global_grounding, review, characters=characters)
     blocking = [
         item for item in review.items
         if review_effect_of(item.kind) == 'blocking'
@@ -492,9 +426,10 @@ def generation_safety(
     )
 
 
-def require_current(global_grounding: dict[str, Any], review: GlobalReview) -> None:
+def require_current(global_grounding: dict[str, Any], review: GlobalReview, *,
+                    characters: dict[str, Any] | None = None) -> None:
     """Reject decisions against a stale or incomplete review surface."""
-    _subject, current, _approved = review_status(global_grounding, review)
+    _subject, current, _approved = review_status(global_grounding, review, characters=characters)
     if not current:
         raise HumanEditProtected(
             'stage2 global review is stale or omits required subjects; '
@@ -527,7 +462,7 @@ def decide(
             continue
         found = True
         if item.resolution_required and state == 'PASS':
-            raise HumanEditProtected('该事实或开篇范围仍为 unresolved，必须先提交 typed 修订')
+            raise HumanEditProtected('该主体仍缺必要材料，必须先提交对应 owner 的 typed 修订')
         if item.subject_sha256 != expected_subject_sha256:
             raise HumanEditProtected(
                 'global-review subject changed; stale decision rejected')

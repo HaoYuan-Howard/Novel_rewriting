@@ -115,18 +115,8 @@ class GlobalReviewGenerationDisposition(StrictModel):
 
 class GlobalReviewItem(StrictModel):
     item_id: str = Field(min_length=1)
-    #: ⚠ **加一个值是放宽**（旧字节照样读得进来）⇒ 不升产物版本；**少一个值却等于
-    #: 「这个主体没人审」**——这份枚举就是 `R-2.16` 那道硬闸的评测面，而下游全部
-    #: 付费执行都压在它上面。与 `novel/quality/global_review.py::enumerate_required`
-    #: 必须同时改：那边枚举得出、这边收不下，是落盘时才炸的一对。
-    #: ⚠ 取值面已收到 `contracts/invariants.py::GLOBAL_REVIEW_KINDS`——那里同时
-    #: 住着 `review_generation_impact_of`（must_fix / quarantine_or_fix / disclose）
-    #: 与由它派生的 `review_effect_of`；三者必须同进同出。一个 kind 存在却没有
-    #: 生成影响，等于一条谁也说不清该修、该隔离还是只披露的复核项。
-    #: `known_by` 只为读取存量 global_review v1 保留；当前 grounding 的
-    #: knowledge_events 有时间与逐事件证据，生产面改用 `knowledge_event`。
-    #: role/fate、关系、setting 和埋点都须单独裁决；源文案与开篇范围取代文学分析。
-    #: 新增或删除取值必须与枚举器、版本和免费恢复面同步，不能留下无人审阅的消费字段。
+    #: v3 同时覆盖独立人物登记与四类长期约束；取值及阻断效果由 invariants 唯一定义。
+    #: alias_identity 只审称谓与实体映射，role 只审首次公开身份。
     kind: Literal[GLOBAL_REVIEW_KINDS]
     subject_path: str = Field(min_length=1)
     subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
@@ -141,7 +131,7 @@ class GlobalReviewItem(StrictModel):
     @model_validator(mode='after')
     def _decision_has_audit_fields(self) -> 'GlobalReviewItem':
         if self.resolution_required and self.state == 'PASS':
-            raise ValueError('未解决的源文案事实或开篇范围必须先 typed 修订，不能直接 PASS')
+            raise ValueError('缺必要材料的主体必须先由对应 owner typed 修订，不能直接 PASS')
         decided = self.state != 'pending'
         values = (self.actor, self.decided_at, self.reason)
         if decided and any(not value for value in values):

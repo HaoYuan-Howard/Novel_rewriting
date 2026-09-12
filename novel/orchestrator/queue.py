@@ -33,6 +33,7 @@ import time
 import traceback
 import uuid
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from contracts.invariants import (
@@ -83,6 +84,10 @@ WAITING_ON_STAGE2_EDIT_COMMIT = 'recovery:stage2-global-reviewed-edit-commit'
 WAITING_ON_STAGE2_EDIT_REVALIDATE = (
     'recovery:stage2-global-reviewed-edit-revalidate')
 WAITING_ON_STAGE2_EDIT_TERMINAL = 'human:stage2-global-edit-terminal'
+WAITING_ON_ANALYZE_RESPONSE_REPAIR = 'human:stage2-analyze-response-repair'
+WAITING_ON_ANALYZE_RESPONSE_TERMINAL = 'human:stage2-analyze-response-terminal'
+WAITING_ON_ANALYZE_SOURCE = 'human:stage2-analyze-source-unavailable'
+WAITING_ON_ANALYZE_DRAFT_REPAIR = 'human:stage2-analyze-owner-draft-repair'
 #: Global 复核已 generation-safe、但 ``gate.s2`` 尚未由独立只读终审打开。
 #: 它是 Stage2 第四席的唯一入口：终审者读全部 blocking 项、整书正文与 Blueprint
 #: 工作包后只能 confirm（Supervisor 以 ``approval close-stage2`` 收口）或
@@ -159,6 +164,131 @@ def nodes_up_to(until_stage: str) -> list[str]:
         raise ValueError(f'未知 stage {until_stage!r}，取值面是 {list(STAGES)}')
     cap = _stage_index(until_stage)
     return [n for n, spec in NODES.items() if _stage_index(spec.stage) <= cap]
+
+
+@dataclass(frozen=True)
+class AnalyzeInitialRecoverySurface:
+    """原 Analyze 待恢复来源的只读坐标；不解析修复候选为通过，也不补任何账。"""
+    waiting_on: str | None
+    why: str
+    source_paths: tuple[Path, ...]
+
+
+def analyze_initial_recovery_surface(base, sid: str, source_run: str, *, code: str | None = None
+                                     ) -> AnalyzeInitialRecoverySurface:
+    from novel import work_units
+    from novel.llm import agent_runs, response_repair
+    from novel.llm.ledger import ledger_path
+    from novel.stages.stage2 import analyze
+    book = paths.resolve_novel_dir(base, sid)
+    current_code = code if code is not None else prov.code_version()
+    current = st.readonly_ctx(book, analyze.NODE, current_code)
+    historical, _record, run_path = agent_runs._historical_run_context(
+        current, analyze.run_spec(), source_run_id=source_run, ledger_source_path=ledger_path(base))
+    source_paths = [run_path]
+    budget = work_units.budget_for(current, scope=work_units.executor_scope(
+        analyze.NODE, analyze.NODE, {'chapter': None}))
+    source_paths.append(budget.path)
+    last = budget.latest_turn()
+    if last is not None:
+        if last.run_id != source_run:
+            raise ArtifactUnreadable('原 Analyze owner 与工作单元最后内容轮不一致')
+        source_paths.extend(budget.directory / f'{digest}.json' for digest in (
+            last.request_payload_sha256, last.response_sha256, last.recovery_sha256) if digest is not None)
+    checkpoint_dir = analyze.run_spec().checkpoint_dir(historical)
+    # 已形成 checkpoint/prepared 的恢复仍由原 producer 验证；调度不重建同一候选。
+    has_checkpoint = checkpoint_dir.is_dir() and any(checkpoint_dir.glob('rev-*.json'))
+    waiting_on = None
+    why = '复验原联合回答并补齐首次冻结提交（0 模型；必须使用原代码）'
+    if historical.code != current_code:
+        waiting_on = WAITING_ON_ANALYZE_SOURCE
+        why = '原 Analyze 代码与当前不同；用冻结原代码排空旧 owner，不能跨代码恢复或重新首抽'
+    elif not has_checkpoint and (last is None or last.response_sha256 is None):
+        waiting_on = WAITING_ON_ANALYZE_SOURCE
+        why = '原 Analyze 尚无可核验的完整响应或 checkpoint；保留原 owner，核对原执行状态，不能重新购买'
+    if last is not None and last.recovery_sha256 is not None:
+        custody = budget.recovery_proof(last.turn_id)
+        acceptance = custody.get('acceptance')
+        if custody.get('kind') != 'executor-response-custody-v1' or not isinstance(acceptance, dict):
+            raise ArtifactUnreadable('原 Analyze 完整响应缺运输 custody')
+        identity = agent_runs.response_repair_identity(historical, analyze.run_spec(), acceptance)
+        chain = agent_runs.canonical_sha256(identity)
+        directory = paths.rejected_response_path(book, chain, str(acceptance['attempt_id']))
+        source_paths.extend(directory / name for name in (
+            response_repair.REJECTION_FILE, response_repair.ORIGINAL_FILE,
+            response_repair.RESOLUTION_FILE, response_repair.OUTCOME_FILE))
+        records = response_repair.records_for_chain(book, chain)
+        if len(records) > 1:
+            raise ArtifactUnreadable('原 Analyze 响应修复链有多个候选，不能猜测调度')
+        if records:
+            record = records[0]
+            if (record.root != directory
+                    or record.rejection.get('agent_response_repair_identity') != identity
+                    or record.rejection.get('run_id') != source_run):
+                raise ArtifactUnreadable('原 Analyze 响应修复记录与原 owner 不一致')
+            if record.resolution is None:
+                source_paths.append(directory / response_repair.CANDIDATE_FILE)
+                waiting_on = WAITING_ON_ANALYZE_RESPONSE_REPAIR
+                why = (f'原 Analyze 响应待免费修复：attempt={record.attempt_id}；编辑隔离 candidate.json '
+                       '并以 response-repair 封存决定后，再恢复同一原 run')
+            elif (record.resolution.get('action') == 'decline'
+                    or (record.outcome is not None and record.outcome.get('decision') in {'rejected', 'declined'})):
+                waiting_on = WAITING_ON_ANALYZE_RESPONSE_TERMINAL
+                why = '原 Analyze 响应修复已放弃或复验失败；唯一修复额度已用，保留原响应与 owner，禁止自动重买'
+            else:
+                # 提交只证明候选封存；真实 schema/HARD 仍由免费 producer 重验。
+                agent_runs.response_repair_binding(historical, analyze.run_spec(), acceptance, record)
+                if historical.code == current_code:
+                    waiting_on = None
+                    why = '原 Analyze 响应修复决定已封存；免费复验同一原 schema 并补原 run 提交，不新增内容轮'
+    return AnalyzeInitialRecoverySurface(waiting_on, why, tuple(sorted(set(source_paths))))
+
+
+def stage2_core_recovery_item(base, sid: str, *, code: str | None = None) -> QueueItem | None:
+    """先完成已保存的跨 owner 决定；部分提交不能被重新审阅或重新抽取遮蔽。"""
+    from novel.stages.stage2 import analyze, analyze_draft_recovery, analyze_recovery, core_edits
+    book = paths.find_novel_dir(base, sid)
+    if book is None:
+        return None
+    source_run = analyze.pending_initial_run(book)
+    if source_run is not None:
+        flags = ['--recover-analyze-run', source_run]
+        surface = analyze_initial_recovery_surface(base, sid, source_run, code=code)
+        return QueueItem(sid=sid, node='stage2.analyze', flags=flags,
+            steps=[] if surface.waiting_on else build_steps('stage2.analyze', sid, flags, base=base),
+            waiting_on=surface.waiting_on, why=surface.why)
+    identity = core_edits.pending(base, sid)
+    if identity is not None:
+        flags = ['--apply-core-edits', identity]
+        return QueueItem(sid=sid, node='stage2.global', flags=flags,
+            steps=build_steps('stage2.global', sid, flags, base=base),
+            why='按原 Commander 决定分别补交 Characters 与 Global typed 编辑（0 模型）')
+    drafts = analyze_draft_recovery.status(book, code=code)
+    prepared = [row for row in drafts if row['state'] == 'prepared']
+    if prepared:
+        # 独立 owner WAL 在正式文件存在后也必须先补尾；不能启动另一侧普通写。
+        owner = prepared[0]['owner']
+        flags = ['--recover-analyze-draft']
+        return QueueItem(sid=sid, node=owner, flags=flags,
+            steps=build_steps(owner, sid, flags, base=base),
+            why='按原 owner 草稿订正决定补齐冻结提交（0 模型）')
+    if analyze_recovery.pending(base, sid, code=code) is not None:
+        issue = analyze_recovery.pending_compilation_issue(base, sid, code=code)
+        if issue is not None:
+            return QueueItem(sid=sid, node='stage2.global', flags=['--emit-analyze-draft-template'],
+                steps=[], waiting_on=WAITING_ON_ANALYZE_DRAFT_REPAIR, why=issue)
+        flags = ['--recover-analyze']
+        return QueueItem(sid=sid, node='stage2.global', flags=flags,
+            steps=build_steps('stage2.global', sid, flags, base=base),
+            why='人物已修好，从原联合回答免费编译 GlobalDraft（0 模型）')
+    invalid_drafts = [row for row in drafts if row['state'] == 'draft_invalid']
+    if invalid_drafts:
+        owner = invalid_drafts[0]['owner']
+        return QueueItem(sid=sid, node=owner, flags=['--emit-analyze-draft-template'], steps=[],
+            waiting_on=WAITING_ON_ANALYZE_DRAFT_REPAIR,
+            why=(f'原联合回答的 {owner} 草稿尚不能编译；使用 --emit-analyze-draft-template '
+                 '查看原候选与冻结身份，订正后 --repair-analyze-draft 提交；不重新购买联合首抽'))
+    return None
 
 
 def _upstream_invalid(ov, stage: str) -> list[str]:
@@ -310,6 +440,10 @@ def plan_book_from_overview(
     if approval_doc is not None and approval_doc.sid != sid:
         raise ValueError(
             f'审批投影属于 {approval_doc.sid!r}，不是当前书 {sid!r}')
+    if STAGES.index(until_stage) >= STAGES.index('stage2'):
+        core_recovery = stage2_core_recovery_item(base, sid, code=approvals.projection_code())
+        if core_recovery is not None:
+            return ([], [core_recovery]) if core_recovery.waiting_on else ([core_recovery], [])
     if STAGES.index(until_stage) >= STAGES.index('stage4'):
         recovery = prepared_delivery_recovery_item(base, sid, code=approvals.projection_code(), until_stage=until_stage)
         if recovery is not None:
@@ -328,6 +462,14 @@ def plan_book_from_overview(
     # blocked writer 仍由 ``stuck`` 传递，不伪装成会在本次改变主体。
     stage5_write_will_run = False
     planned_nodes = nodes_up_to(until_stage)
+    if 'stage2.analyze' in planned_nodes:
+        from novel.stages.stage2 import analyze
+        book = paths.find_novel_dir(base, sid)
+        joint = book is None or analyze.cold_start_reason(book) is None
+        if joint:
+            planned_nodes = [node for node in planned_nodes if node not in {'stage2.characters', 'stage2.global'}]
+        else:
+            planned_nodes.remove('stage2.analyze')
     stage2_halt = (approvals.stage2_review_halt(base, sid)
                    if any(node in planned_nodes for node in
                           ('stage2.global', 'stage2.blueprint', 'stage4.design')) else None)

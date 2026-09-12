@@ -4,7 +4,7 @@
 
 只投影可信 scope 模板，不生成任何审阅判断。scope 的完整身份、逐项 subject SHA
 和 wrapper 均从同一 exact request 注入；仍由 Reviewer loader 与 CLI producer
-复核所有身份、证据和业务条件。预审与 live review 共用此口，避免二者格式漂移。
+复核所有身份、证据和业务条件。只接现役全局审阅，不保留已退役的预审入口。
 """
 from __future__ import annotations
 
@@ -21,34 +21,22 @@ from contracts.schema.evaluation import EvidenceRef, GlobalReviewDecisionSet
 from novel.orchestrator import queue
 
 
-WIRE_SCHEMA = 'novel-stage2-scope-review-delta-v1'
+WIRE_SCHEMA = 'novel-stage2-scope-review-delta-v2'
 
 
 def exact_request(task: object) -> dict[str, Any] | None:
-    """只接管完整 scope 的预审或唯一 review 选项，不劫持多选/终审。"""
-    if (hasattr(task, 'input_template')
-            and hasattr(task, 'business_sha256')
-            and hasattr(task, 'workpack_sha256')
-            and not hasattr(task, 'submission_options')):
-        payload = getattr(task, 'input_template')
-        exact = {
-            'schema': 'novel-stage2-global-prereview-v1',
-            'business_sha256': getattr(task, 'business_sha256'),
-            'workpack_sha256': getattr(task, 'workpack_sha256'),
-            'input_payload': payload,
-        }
-    else:
-        options = getattr(task, 'submission_options', ())
-        if (getattr(task, 'waiting_on', None) != queue.WAITING_ON_STAGE2_REVIEW
-                or len(options) != 1):
-            return None
-        exact = options[0].get('exact_request', {})
-        action = exact.get('action', {})
-        if (action.get('kind') != 'node'
-                or action.get('node') != 'stage2.global'
-                or action.get('flags') != ['--review-decisions', '@reviewer-input']):
-            return None
-        payload = action.get('input_payload')
+    """只接管唯一全局 review 选项，不劫持多选或其他 Commander。"""
+    options = getattr(task, 'submission_options', ())
+    if (getattr(task, 'waiting_on', None) != queue.WAITING_ON_STAGE2_REVIEW
+            or len(options) != 1):
+        return None
+    exact = options[0].get('exact_request', {})
+    action = exact.get('action', {})
+    if (action.get('kind') != 'node'
+            or action.get('node') != 'stage2.global'
+            or action.get('flags') != ['--review-decisions', '@reviewer-input']):
+        return None
+    payload = action.get('input_payload')
     if not isinstance(payload, dict) or not isinstance(payload.get('blocking_scope'), dict):
         return None
     GlobalReviewDecisionSet.model_validate(payload)
@@ -56,8 +44,7 @@ def exact_request(task: object) -> dict[str, Any] | None:
 
 
 def _payload(exact: dict[str, Any]) -> dict[str, Any]:
-    return (exact['input_payload'] if 'input_payload' in exact
-            else exact['action']['input_payload'])
+    return exact['action']['input_payload']
 
 
 def _sha(exact: dict[str, Any]) -> str:

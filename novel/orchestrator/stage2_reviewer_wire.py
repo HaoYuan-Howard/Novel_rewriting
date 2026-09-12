@@ -38,7 +38,6 @@ from typing import Annotated, Any, Literal, Protocol
 from pydantic import Field, ValidationError, create_model
 
 from contracts.schema.base import StrictModel
-from contracts.schema.stage2 import HookEvidenceLocator
 from contracts.schema.common import Sha256
 from contracts.schema.evaluation import (
     EvidenceRef,
@@ -46,14 +45,10 @@ from contracts.schema.evaluation import (
     GlobalReviewDecisionSet,
 )
 from contracts.schema.stage2 import (
-    AddressContextPatch,
-    CharacterAddressReplacement,
-    CharacterCollectionItem,
     GlobalCollectionAdd,
     GlobalCollectionDelete,
     GlobalCollectionSplit,
-    GlobalCharacterPatch,
-    SourceBlurbGrounding, EvidenceLocator, GlobalEdit,
+    GlobalEdit,
     GlobalEditQuarantineGroup,
     RelationPatch,
     RelationResponse,
@@ -67,10 +62,11 @@ from novel.agents.session_client import agent_json_schema
 from novel.orchestrator import queue, stage2_scope_wire
 
 
-WIRE_SCHEMA = 'novel-stage2-reviewer-delta-v2'
+WIRE_SCHEMA = 'novel-stage2-reviewer-delta-v3'
 
 
-# 这些文本逐字来自 ``GlobalCollectionEdit._operations_match_collection`` 的静态
+# 这些文本逐字来自 ``GlobalCollectionEdit._operations_match_collection`` 与
+# ``GlobalEdit._closed_edits`` 的静态
 # model-validator 分支。这里只在完全相等时投影成无输入的稳定 reason code；未知
 # ``msg`` 仍只输出 Pydantic error type，绝不把可能含模型值的消息带进拒因/账本。
 _SAFE_VALIDATION_REASONS: dict[str, tuple[str, str]] = {
@@ -90,7 +86,7 @@ _SAFE_VALIDATION_REASONS: dict[str, tuple[str, str]] = {
         'collection_input_output_id_overlap',
         'collection operation 的输入 id 与输出 id 不得重叠',
     ),
-    'Value error, 直接字段 patch 主体不得同时被同集合 delete/split': (
+    'Value error, 直接 patch 不得同时 delete/split 同一主体': (
         'direct_patch_subject_removed_by_collection_edit',
         '直接字段 patch 主体不得同时被同集合 delete/split',
     ),
@@ -127,23 +123,21 @@ class _DropTarget:
 
 
 _PATCH_MODELS: dict[str, tuple[type[StrictModel], tuple[str, ...]]] = {
-    'secrets': (SecretPatch, ('secret_id',)),
+    'arc_secrets': (SecretPatch, ('secret_id',)),
     'world_rules': (WorldRulePatch, ('rule_id',)),
-    'characters': (GlobalCharacterPatch, ('char_id',)),
     'relations': (RelationPatch, ('relation_id',)),
 }
 
 _REPLACEMENT_WIRE_TYPES: dict[str, Any] = {
-    'secrets_replace': list[SecretResponse] | None,
+    'arc_secrets_replace': list[SecretResponse] | None,
     'world_rules_replace': list[WorldRuleResponse] | None,
     'relations_replace': list[RelationResponse] | None,
-    'source_blurb_replace': SourceBlurbGrounding[EvidenceLocator, HookEvidenceLocator] | None,
 }
 
 
 _COLLECTION_MEMBER_MODELS: dict[str, tuple[str, type[StrictModel]]] = {
     'relations': ('Relation', RelationResponse),
-    'secrets': ('Secret', SecretResponse),
+    'arc_secrets': ('Secret', SecretResponse),
     'world_rules': ('WorldRule', WorldRuleResponse),
 }
 
@@ -825,24 +819,6 @@ def _overlay_patch_rows(
     return selected, bool(selected)
 
 
-def _wire_characters_replace(value: Any) -> dict[str, Any] | None:
-    if value is None:
-        return None
-    if not isinstance(value, list):
-        raise Stage2ReviewerWireError('characters_replace compact wire 必须是行数组或 null')
-    output: dict[str, Any] = {}
-    for row in value:
-        if not isinstance(row, dict):
-            raise Stage2ReviewerWireError('characters_replace compact wire 行不是 object')
-        char_id = row.get('char_id')
-        if not isinstance(char_id, str) or char_id in output:
-            raise Stage2ReviewerWireError('characters_replace char_id 缺失或重复')
-        output[char_id] = {
-            key: copy.deepcopy(item) for key, item in row.items() if key != 'char_id'
-        }
-    return output
-
-
 def _overlay_collection_object(
     baseline: Any, submitted: Any,
 ) -> tuple[list[dict[str, Any]], bool]:
@@ -1041,9 +1017,7 @@ def _assemble_correction_edit(
             if value is None:
                 local_changed = False
             else:
-                replacement = (
-                    _wire_characters_replace(value)
-                    if key == 'characters_replace' else copy.deepcopy(value))
+                replacement = copy.deepcopy(value)
                 if replacement == template_edit[key]:
                     raise Stage2ReviewerWireError(
                         f'GlobalEdit.{key} 没有形成实际变更')
@@ -1207,9 +1181,7 @@ def assemble(
                     # 初始轮中 null 是“本次不提交”，绝不猜成“清空”。
                     local_changed = False
                 else:
-                    replacement = (
-                        _wire_characters_replace(value)
-                        if key == 'characters_replace' else copy.deepcopy(value))
+                    replacement = copy.deepcopy(value)
                     if replacement == template_edit[key]:
                         raise Stage2ReviewerWireError(
                             f'GlobalEdit.{key} 没有形成实际变更')

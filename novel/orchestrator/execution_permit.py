@@ -116,6 +116,9 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     ),
 
     RecoveryRunPolicy('stage2.global', _t('--renormalize'), _W2),
+    RecoveryRunPolicy('stage2.global', _t('--apply-core-edits'), _W2),
+    RecoveryRunPolicy('stage2.global', _t('--recover-analyze'), _W2),
+    RecoveryRunPolicy('stage2.analyze', _t('--recover-analyze-run'), _W2),
     RecoveryRunPolicy(
         'stage2.global', _t('--revalidate', '--actor', '--reason'),
         _W2 | frozenset({

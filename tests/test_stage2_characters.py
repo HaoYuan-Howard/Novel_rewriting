@@ -14,7 +14,7 @@ from novel.llm import agent_runs
 from novel.node_agents import Stage2CharactersAgent, build_node_agent
 from novel.stages.stage2 import characters
 from novel.store import ArtifactStore
-from tests.stage2_fixtures import candidate_view as _response_global
+from tests.stage2_fixtures import character_response
 from tests.test_stage2_global_agent import (
     _ctx as _global_ctx, _Driver, _free_ctx, _new_run_ctx, _resume_ctx,
 )
@@ -27,12 +27,7 @@ def _ctx(base):
 
 
 def _response():
-    rows = _response_global()['entities']['characters']
-    return {'characters': [
-        {'char_id': cid, **{key: value for key, value in row.items()
-                           if key not in {'fate', 'fate_evidence'}}}
-        for cid, row in rows.items()
-    ]}
+    return character_response()
 
 
 def _wire(value=None):
@@ -62,7 +57,7 @@ def test_independent_characters_generate_through_real_agent_and_store(tmp_path):
 def test_static_hard_failure_resumes_same_session_without_global_write(tmp_path):
     ctx = _ctx(tmp_path)
     bad = _response()
-    bad['characters'][1]['canonical'] = bad['characters'][0]['canonical']
+    bad['characters'][1]['role'] = '最终遇害'
     driver = _Driver([_wire(bad), _wire()], ctx.novel_dir)
     result = Stage2CharactersAgent(ctx, driver=driver).run()
     assert result.passed
@@ -149,7 +144,7 @@ def test_character_static_contract_rejects_fate_and_outside_evidence(tmp_path):
     ctx = _ctx(tmp_path)
     prepared = characters.prepare(ctx)
     outside = _response()
-    outside['characters'][0]['role_evidence']['evidence_candidate_id'] = 'e999999'
+    outside['characters'][0]['role_evidence_refs'] = ['e999999']
     with pytest.raises(ValueError, match='闭集'):
         characters.compile_response(CharactersResponse.model_validate(outside), prepared.table)
 
@@ -288,8 +283,8 @@ def test_character_edit_invalid_target_preserves_formal_projection_and_cost(tmp_
 
 
 @pytest.mark.parametrize('field,value,rule', [
-    ('by', 'char_999', 'address_by_unresolved'),
-    ('from_chapter', 99, 'address_from_out_of_range'),
+    ('identity_revealed_from', 99, 'address_from_out_of_range'),
+    ('surface', '不存在的称谓', 'address_unlocatable'),
 ])
 def test_character_address_hard_gate_and_free_repair_share_the_real_producer(
         tmp_path, field, value, rule):
@@ -300,8 +295,11 @@ def test_character_address_hard_gate_and_free_repair_share_the_real_producer(
     ledger = ctx.ledger.path.read_bytes()
     template = characters.edit_template(_free_ctx(ctx))
     row = copy.deepcopy(template['operations'][0])
-    original = row['character']['address'][0][field]
-    row['character']['address'][0][field] = value
+    # 添加第二称谓，保留 canonical 恰好一次这一结构约束。
+    row['character']['aliases'].append(copy.deepcopy(row['character']['aliases'][0]))
+    row['character']['aliases'][-1]['surface'] = '宝珠'
+    original = row['character']['aliases'][-1][field]
+    row['character']['aliases'][-1][field] = value
     with pytest.raises(GateBlocked):
         characters.apply_edit(
             _free_ctx(ctx), CharactersEdit.model_validate({**template, 'operations': [row]}),
@@ -315,10 +313,85 @@ def test_character_address_hard_gate_and_free_repair_share_the_real_producer(
                     if hit.sev == 'hard' and hit.status in {'hit', 'skipped'}}
     repair = characters.edit_template(_free_ctx(ctx))
     fixed = next(op for op in repair['operations'] if op['char_id'] == row['char_id'])
-    fixed['character']['address'][0][field] = original
+    fixed['character']['aliases'][-1][field] = original
     characters.apply_edit(
         _free_ctx(ctx), CharactersEdit.model_validate({**repair, 'operations': [fixed]}),
         actor='test:human', reason='按原文修复称谓引用')
     assert not store.exists(characters.INVALID)
     assert store.freshness(characters.REL).state == 'fresh'
     assert ctx.ledger.path.read_bytes() == ledger
+
+
+def test_local_character_ids_are_frozen_and_evidence_deduplicates():
+    from tests.test_stage2 import main_text
+    from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
+    table = GlobalEvidenceCandidateTable.build(main_text())
+    response = CharactersResponse.model_validate(_response())
+    compiled = characters.compile_response(response, table, identity_map={'c1': 'char_017'},
+                                           reserved_ids=('char_099',))
+    assert compiled.character_ids == {'c1': 'char_017', 'c2': 'char_100'}
+    first = compiled.characters['char_017']
+    assert first['aliases'][0]['evidence_refs'] == first['first_appearance_evidence_refs']
+    assert all(set(anchor) == {'chapter_ordinal', 'start', 'end', 'text_sha256'}
+               for anchor in compiled.evidence_anchors.values())
+    reversed_response = response.model_copy(update={'characters': list(reversed(response.characters))})
+    assert characters.compile_response(reversed_response, table,
+        identity_map={'c1': 'char_017'}, reserved_ids=('char_099',)) == compiled
+
+
+def test_same_surface_multiple_entities_is_allowed_but_each_binding_needs_ownership_evidence():
+    raw = _response()
+    second = copy.deepcopy(raw['characters'][0])
+    second['character_ref'] = 'c3'
+    raw['characters'].append(second)
+    assert len(CharactersResponse.model_validate(raw).characters) == 3
+    raw['characters'][0]['aliases'].append(copy.deepcopy(raw['characters'][0]['aliases'][0]))
+    with pytest.raises(ValueError, match='唯一称谓'):
+        CharactersResponse.model_validate(raw)
+
+
+def test_identity_reveal_does_not_ban_a_previously_visible_surface():
+    from novel.stages.stage2.character_refs import visible_character_refs
+    inventory = {'char_001': {'canonical': '裴书远', 'aliases': [
+        {'surface': '新邻居', 'identity_revealed_from': 11},
+        {'surface': '裴书远', 'identity_revealed_from': 11}]}}
+    visible = visible_character_refs(inventory, [
+        {'chapter_ordinal': 10, 'text': '新邻居搬来。'},
+        {'chapter_ordinal': 11, 'text': '新邻居原来是裴书远。'}])
+    assert visible[10] == {'char_001': ['新邻居']}
+    assert visible[11] == {'char_001': ['新邻居', '裴书远']}
+
+
+def test_character_edit_preflight_is_readonly_and_exact_candidate_commits(tmp_path):
+    ctx = _ctx(tmp_path)
+    _generate(ctx)
+    store = ArtifactStore(ctx)
+    before = store.path(characters.REL).read_bytes()
+    free = _free_ctx(ctx)
+    template = characters.edit_template(free)
+    row = template['operations'][0]
+    row['character']['role'] += '，负责家事'
+    edit = CharactersEdit.model_validate({**template, 'operations': [row]})
+    candidate = characters.preflight_edit(free, edit, actor='test', reason='独立预检', at='2026-09-12T00:00:00Z')
+    assert store.path(characters.REL).read_bytes() == before
+    assert not store.exists(characters.STAGE2_CHARACTERS_EDIT)
+    landed = characters.commit_prepared_edit(_free_ctx(ctx), edit, candidate,
+        expected_source_sha256=edit.source_sha256, actor='test', reason='独立预检')
+    assert landed == candidate
+    assert characters.commit_prepared_edit(_free_ctx(ctx), edit, candidate,
+        expected_source_sha256=edit.source_sha256, actor='test', reason='独立预检') == candidate
+
+
+def test_frozen_character_baseline_is_read_from_exact_archived_bytes(tmp_path):
+    ctx = _ctx(tmp_path)
+    previous, _ = _generate(ctx)
+    store = ArtifactStore(ctx)
+    old_sha = store.full_sha256_or_none(characters.REL)
+    template = characters.edit_template(_free_ctx(ctx))
+    row = template['operations'][0]
+    row['character']['role'] += '，负责家事'
+    characters.apply_edit(_free_ctx(ctx), CharactersEdit.model_validate({**template, 'operations': [row]}),
+                          actor='test', reason='制造历史基线')
+    assert store.read_own_by_sha256(type(previous), characters.REL, old_sha) == previous
+    with pytest.raises(ProvenanceRefused, match='没有完整 SHA'):
+        store.read_own_by_sha256(type(previous), characters.REL, 'f' * 64)

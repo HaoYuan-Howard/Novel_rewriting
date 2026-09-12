@@ -18,14 +18,14 @@ const review: GlobalReviewResponse = {
   quarantined_groups: [],
   review_token: null,
   effect_counts: {
-    blocking: { pending: 1, PASS: 0, FAIL: 1, UNVER: 1 },
-    disclosure: { pending: 1, PASS: 0, FAIL: 0, UNVER: 0 },
+    blocking: { pending: 2, PASS: 0, FAIL: 1, UNVER: 1 },
+    disclosure: { pending: 0, PASS: 0, FAIL: 0, UNVER: 0 },
   },
   items: [
     {
       item_id: 'rules',
       kind: 'world_rule_set_complete',
-      subject_path: 'canon.world_rules',
+      subject_path: 'world_rules',
       subject_sha256: hashes[0],
       state: 'pending',
       resolution_required: false,
@@ -40,7 +40,7 @@ const review: GlobalReviewResponse = {
     {
       item_id: 'secrets',
       kind: 'secret_set_complete',
-      subject_path: 'canon.secrets',
+      subject_path: 'arc_secrets',
       subject_sha256: hashes[1],
       state: 'FAIL',
       resolution_required: false,
@@ -53,9 +53,9 @@ const review: GlobalReviewResponse = {
       group_key: 'set:secrets',
     },
     {
-      item_id: 'known-by',
-      kind: 'known_by',
-      subject_path: 'canon.secrets.secret_01.character_known_by',
+      item_id: 'reveal',
+      kind: 'reveal',
+      subject_path: 'arc_secrets.secret_01.revealed_from',
       subject_sha256: hashes[2],
       state: 'UNVER',
       resolution_required: false,
@@ -68,9 +68,10 @@ const review: GlobalReviewResponse = {
       group_key: 'secret:secret_01',
     },
     {
-      item_id: 'fate',
-      kind: 'fate',
-      subject_path: 'entities.characters.char_001.fate',
+      // 当前 Characters v2 的身份义务与长期知识一起阻断。
+      item_id: 'identity',
+      kind: 'character_identity',
+      subject_path: 'characters.char_001',
       subject_sha256: hashes[2],
       state: 'pending',
       resolution_required: false,
@@ -79,7 +80,7 @@ const review: GlobalReviewResponse = {
       decided_at: null,
       reason: null,
       generation_disposition: null,
-      effect: 'disclosure',
+      effect: 'blocking',
       group_key: 'character:char_001',
     },
   ],
@@ -150,7 +151,7 @@ describe('GlobalReviewPanel', () => {
       ...review,
       generation_safe: true,
       quarantined_groups: ['secret:secret_01'],
-      items: review.items.map((item) => item.item_id === 'known-by'
+      items: review.items.map((item) => item.item_id === 'reveal'
         ? {
             ...item,
             generation_disposition: {
@@ -199,9 +200,9 @@ describe('GlobalReviewPanel', () => {
     })
     renderRoute(<Harness />)
 
-    expect(await screen.findByText('canon.world_rules')).toBeVisible()
-    expect(screen.getByText('canon.secrets')).toBeVisible()
-    expect(screen.getByText('canon.secrets.secret_01.character_known_by')).toBeVisible()
+    expect(await screen.findByLabelText('选择 world_rules')).toBeVisible()
+    expect(screen.getByText('arc_secrets')).toBeVisible()
+    expect(screen.getByText('arc_secrets.secret_01.revealed_from')).toBeVisible()
     expect(screen.getAllByText('pending').length).toBeGreaterThan(0)
     expect(screen.getAllByText('FAIL').some((element) => element.tagName === 'SPAN')).toBe(true)
     expect(screen.getAllByText('UNVER').some((element) => element.tagName === 'SPAN')).toBe(true)
@@ -210,23 +211,23 @@ describe('GlobalReviewPanel', () => {
     fireEvent.change(screen.getByLabelText(/自报身份/), {
       target: { value: 'reviewer-a' },
     })
-    fireEvent.click(screen.getByLabelText('选择 canon.world_rules'))
-    fireEvent.change(screen.getByLabelText('canon.world_rules 结论'), {
+    fireEvent.click(screen.getByLabelText('选择 world_rules'))
+    fireEvent.change(screen.getByLabelText('world_rules 结论'), {
       target: { value: 'PASS' },
     })
-    fireEvent.change(screen.getByLabelText('canon.world_rules 理由'), {
+    fireEvent.change(screen.getByLabelText('world_rules 理由'), {
       target: { value: '已逐项对照来源' },
     })
-    fireEvent.change(screen.getByLabelText('canon.world_rules evidence artifact'), {
+    fireEvent.change(screen.getByLabelText('world_rules evidence artifact'), {
       target: { value: 'private/source.txt' },
     })
-    fireEvent.change(screen.getByLabelText('canon.world_rules evidence sha256'), {
+    fireEvent.change(screen.getByLabelText('world_rules evidence sha256'), {
       target: { value: 'e'.repeat(64) },
     })
-    fireEvent.change(screen.getByLabelText('canon.world_rules evidence start'), {
+    fireEvent.change(screen.getByLabelText('world_rules evidence start'), {
       target: { value: '10' },
     })
-    fireEvent.change(screen.getByLabelText('canon.world_rules evidence end'), {
+    fireEvent.change(screen.getByLabelText('world_rules evidence end'), {
       target: { value: '20' },
     })
 
@@ -255,31 +256,31 @@ describe('GlobalReviewPanel', () => {
     vi.spyOn(api, 'getEnums').mockResolvedValue(enums)
     vi.spyOn(api, 'getGlobalReview').mockResolvedValue({ ...review, current: false })
     renderRoute(<GlobalReviewPanel sid="book-1" />)
-    expect(await screen.findByText(/盘上复核没有绑定当前完整 GlobalGrounding/)).toBeVisible()
+    expect(await screen.findByText(/盘上复核没有绑定当前人物与全局知识/)).toBeVisible()
     expect(screen.getByRole('button', { name: /提交 0 项复核/ })).toBeDisabled()
   })
 })
 
 describe('Stage2 复核卡片', () => {
-  it('按主体成卡、阻断卡在前，且分级只读服务端下发的那一格', async () => {
+  it('当前人物与长期知识按主体成卡，完整呈现服务端阻断义务', async () => {
     vi.spyOn(api, 'getGlobalReview').mockResolvedValue(review)
     vi.spyOn(api, 'getEnums').mockResolvedValue(enums)
     renderRoute(<Harness />)
 
     const cards = await screen.findAllByLabelText(/^复核卡 /)
-    // 能挡住 Stage4 的卡排在前面；只披露的那张不因此消失。
+    // 当前所有义务均阻断，按稳定主体类别排序。
     expect(cards.map((card) => card.getAttribute('aria-label'))).toEqual([
       '复核卡 set:secrets',
       '复核卡 set:world_rules',
-      '复核卡 secret:secret_01',
       '复核卡 character:char_001',
+      '复核卡 secret:secret_01',
     ])
-    expect(screen.getByText('秘密时间线')).toBeVisible()
+    expect(screen.getByText('跨章秘密')).toBeVisible()
     expect(screen.getByText('人物')).toBeVisible()
     // 逐项徽标直接转录服务端的 effect，不在这里重算一份分类。
-    expect(screen.getAllByText('只披露')).toHaveLength(1)
-    expect(screen.getAllByText('阻断 Stage4')).toHaveLength(3)
-    expect(screen.getByText(/披露未决 1/)).toBeVisible()
+    expect(screen.queryByText('只披露')).not.toBeInTheDocument()
+    expect(screen.getAllByText('阻断 Stage4')).toHaveLength(4)
+    expect(screen.queryByText(/披露未决/)).not.toBeInTheDocument()
   })
 
   it('卡片全选展开成逐项选择，仍允许单项撤销', async () => {
@@ -290,7 +291,7 @@ describe('Stage2 复核卡片', () => {
     await screen.findAllByLabelText(/^复核卡 /)
     fireEvent.click(screen.getByLabelText('全选 secret:secret_01'))
     const single = screen.getByLabelText(
-      '选择 canon.secrets.secret_01.character_known_by') as HTMLInputElement
+      '选择 arc_secrets.secret_01.revealed_from') as HTMLInputElement
     expect(single.checked).toBe(true)
 
     fireEvent.click(single)

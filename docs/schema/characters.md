@@ -1,53 +1,130 @@
-# Stage2 人物登记契约
+# Stage2 人物登记与联合首抽来源
 
-`stage2.characters` 只生成静态人物登记，不新增 Commander。人物与必要知识的整批集成状态
-记录在 `docs/REQUIREMENTS.md::TODO-49`；独立节点通过测试不能替代 Global 统一审阅和下游消费验收。
+人物登记只保存实体、称谓归属及首次公开身份。`stage2.analyze` 从 MainText 一次提取
+人物与 Global 草稿，代码分别物化两份独立产物；后续修订由各自 producer 负责。
+Global Commander 统一审阅两侧，人物不新增 Commander。Gate A 的实际验收范围见
+`docs/REQUIREMENTS.md::TODO-49`，下游 presentation/ActorRef 的 Gate B 消费不能由本层落盘代替。
 
-| 路径 | 模型与版本 | 归属 |
+| 路径 | 模型与版本 | 用途 |
 |---|---|---|
-| `stage2/characters.json` | `CharacterRegistry` v1 | 人物 producer |
-| `stage2/characters_edit.json` | `CharactersEdit` v1 | 显式人工或受托 typed 输入 |
+| `stage2/characters.json` | `CharacterRegistry` v2 | 独立人物正式产物 |
+| `stage2/characters_edit.json` | `CharactersEdit` v2 | 人工或受托 typed 编辑输入 |
+| `stage2/blueprint_character_projection.json` | `BlueprintCharacterProjection` v2 | 人物 producer 的确定性章内闭集投影 |
+| `stage2/analyze_receipt.json` | `AnalyzeReceipt` v1 | 不可变联合首抽来源和首次物化去向 |
+| `stage2/analyze_recovery.json` | `AnalyzeRecoveryJournal` v1 | 原 GlobalDraft 免费物化的 transient WAL |
+| `stage2/analyze_owner_draft_edit.json` | `AnalyzeOwnerDraftEdit` v1 | 只替换已购但不能编译的单 owner 草稿 |
+| `stage2/analyze_characters_draft_repair.json` / `stage2/analyze_global_draft_repair.json` | `AnalyzeDraftRepairJournal` v1 | 各自独立的免费草稿物化 WAL |
 
-`CharacterRegistry.characters` 是非空的 `char_001` 格式 ID 映射。每个人只存
-`canonical`、`address[]`、`name_distinctiveness`、`role`、`role_evidence`；
-`address` 是唯一称谓表，不另存 aliases。`fate`、关系、世界规则与秘密不属于此载体。
-`role` 必须是人物首次出场时可公开的静态身份，不能夹入中段揭示或结局。
+只读当前登记版本；v1 人物/编辑/投影不迁移，不补造原文证据或身份时点。
 
-provider wire 为 `CharactersResponse`，人物以带显式 `char_id` 的数组返回；证据只交
-本次 MainText 段落表中的 `evidence_candidate_id`，代码从同一表回取 `FactEvidence/SourceSpan`。
-生成、人工编辑与重验证复用 `normalize_characters`、`checks.check_characters`；代码只验证
-可机械判断的称谓、时点及证据区间，事实语义与身份是否泄底仍须由 Global Commander 核验。
+## 人物字段
 
-`CharactersProvenance` 绑定实际 MainText 输入、代码、模型及 ledger 用量，保留
-`evidence_locator_failures`。HARD 候选进入 `.INVALID`；`--revalidate --actor --reason`
-免费重判，不能给原本未通过的语义判断补 PASS。人工修改沿 `--apply-edit` 路径归一、判断、
-归档并继承真实模型来源，不能重新声明模型或把历史费用写成零。
+`characters` 为非空 `char_001` 格式 ID 映射。每项包含：
 
-`CharactersEdit` 绑定正式文件或优先的 `.INVALID` 原始 SHA-256，列出
-`add / replace / delete` 操作。每个 ID 在一份输入中最多出现一次；add 不覆盖既有人物，
-replace/delete 不创建不存在的目标，不能删除到空表。replacement 的证据使用 locator，
-由同一算法回取；归一后的 no-op 不写轮次。CLI 必须提交非空 actor/reason。
-正式或问题候选的 `characters_edit` 回执绑定输入 SHA、基线、actor/reason、时间与删除 ID，
-重复操作不重复落盘；回执不能替代当前新鲜度检查，也不能把删除当作审阅接受。
+| 字段 | 含义 |
+|---|---|
+| `canonical` | 实体的登记名，字符串 |
+| `aliases[]` | 每实体每唯一称谓一项：`surface`、`identity_revealed_from`、非空 `evidence_refs` |
+| `first_chapter` | 实体首次出场章，阅读序整数 |
+| `first_appearance_evidence_refs` | 首次出场的非空归属证据 |
+| `role` / `role_evidence_refs` | 首次公开身份及非空证据，不收后期身份变化或结局 |
+| `name_distinctiveness` | 沿用 `NAME_DISTINCTIVENESS`，为改名提供专名程度 |
 
-agent 的首 wire 前 run 记录冻结请求、profile 和目标文件初始 SHA。每个 accepted 回答先经
-通用 `agent_runs` 写不可变 checkpoint；正式提交以 `prepared → 写盘 → typed readback →
-adoption → committed` 闭合。foreign prepared、原回答后发生的第三方修改、身份或来源损坏
-保持 unknown；不得覆盖或再购买结果。同一已保存问题候选的恢复不制造新的 INVALID 历史轮次。
-显式 legacy backend 继续使用自己的 transport/cache/工作单元来源，不能接管 agent run。
+同一实体的 surface 唯一，`canonical` 在 aliases 中恰好出现一次。不同实体可以有相同称谓，
+包括“师尊”等共同称谓或同名人物；归属必须由各自证据建立。源文异写可经语义审阅归并，
+代码只修剪空白，不按模糊字符串自动合并实体。删除的正式 ID 不复用；独立修订冻结局部
+句柄到既有 ID 的映射，新实体在保留及删除 ID 之后分配。
 
-单元基础额度为 4，追加只走既有人工不可变授权。人物生成是否实际完成、模型调用是否发生、
-Global Commander 是否接受是三件独立事实；节点落盘不能替代后续接受。
+`identity_revealed_from` 表示读者得知这个称谓属于该实体的时点，**不表示称谓首次能出现的章**。
+“新邻居”在第 10 章可以出现，第 11 章才揭示是某已登记人物；不能以此字段禁用第 10 章称谓，
+也不能把内部 char_id 或未公开 canonical 的映射发给 Writer。章内称谓出现与表面身份的
+选择由原文和 Blueprint 支持；跨章同人关系的揭示归 Global `arc_secrets` 与既有 KnowledgeLinks。
+registry 不保存 mention、by/context、局部动态状态或第二份披露图。
 
-称名投影同属人物 producer：默认生成、typed 编辑与免费复验都发布
-`blueprint_character_projection.json`，知识 producer 只读校验。人物正式登记 current 时，
-缺失或损坏的投影可通过 `--revalidate --actor ... --reason ...` 免费重建。静态人物
-HARD 的显式模型修复是 `stage2.characters --resample`，只接受已有 INVALID，沿 legacy
-transport/cache/额度入口刷新问题回答；默认工作流定向返工由 Commander 的 review token
-驱动人物 executor。两种动作都不替 Global Commander 接受，也不允许覆盖其他 run 的 prepared。
-# 人物恢复模板的证据边界
+## 证据与编译
 
-人物的 `role_evidence.source` 为 null 时，编辑模板只能取同一人物、同一声明章的唯一正向
-locator 失败记录，不得漏掉该人物或猜测原文。缺少唯一记录时显式返回模板不可用原因；操作者仍可
-按当前 `source_sha256` 提交完整 typed replace。未知 `char_id` 引用保留给 `address_by_unresolved`
-硬闸，不能归一成 `public` 后通过。
+人物和 Global 共用 `CoreEvidenceAnchor`：`chapter_ordinal/start/end/text_sha256`。
+start/end 是章内字符区间 `[start,end)`，原文只由 MainText 精确回取并核 SHA。
+每个正式产物保有自己的 `evidence_anchors: dict[EvidenceId, CoreEvidenceAnchor]`，
+相同区间得到相同稳定 `ev_…` ID，不内嵌第二份原文。证据表必须覆盖全部引用，无悬空或无用 anchor。
+
+`CharactersResponse.characters` 与 `AnalyzeResponse.characters` 都返回局部 `character_ref`
+（如 c1），不返回正式 char_id。证据只引用本轮段落候选 e000001；
+`characters.compile_response` 从冻结段落表编译 anchors 和稳定 ID，并可接受冻结 identity_map。
+跨人物共同称谓、源文错字和匿名功能角色的实体语义由统一审阅确认，不能用全书最早字面命中代替归属。
+
+## 独立编辑与恢复
+
+`CharactersEdit` 绑定正式或优先 INVALID 的原始 SHA-256，操作为 add/replace/delete。
+一份输入每个 ID 只操作一次，不能覆盖 add、凭空 replace/delete 或删成空表。人物对象中的
+证据可复用现有 EvidenceId，或提交 `{chapter_ordinal, locator}`，代码只接受指定章的唯一匹配。
+坏 locator 在写前拒绝；不存占位 source、不把未知改成成功。归一后的 no-op 不写轮次。
+
+免费 `--apply-edit` 须有 actor/reason，经过编译、HARD 判定、归档和 typed readback。
+`characters_edit` 回执保存源 SHA、edit SHA、actor/reason、时间及累计删除 ID；精确重复提交
+只补尾，不重复改写。HARD 候选落 INVALID，免费 `--revalidate --actor --reason` 重验及重建投影，
+不凭机械通过补语义 PASS。人物成功写回会按当前两份独立产物刷新统一 review，保留未变主体决定。
+统一 C 编辑先以 `preflight_edit` 冻结候选，两侧均无 HARD 后由各 owner 的 CAS 提交；完成回执不重开。
+
+独立 agent run 在首 wire 前冻结请求、profile 和目标初始字节 SHA，accepted 回答先保存 checkpoint。
+提交沿 prepared → 正式/INVALID → typed readback → adoption → committed。自身已写盘的尾窗
+按原始 SHA 从本产物正式、INVALID 或 `_rounds` 回读冻结基线，不迁移、不取当前稿冒充原稿。
+foreign prepared、第三方写回和损坏来源拒绝覆盖；付费原响应优先免费恢复，未知账不能用重买掩盖。
+
+## Analyze v1 来源生命周期
+
+首抽仅在人物与 Global 均无正式、INVALID、历史轮次及旧 run/调用来源时进入。
+联合回执分别绑定 MainText、输入投影 `input_sha256`、真实 ledger 请求指纹 `request_sha256`、
+response/schema/checkpoint SHA、原 run/attempt、冻结人物和
+Global 句柄映射。`materializations` 恰好记录两个 owner，各自状态为 formal、invalid、
+draft_invalid 或 awaiting_characters。人物 HARD 时保存人物候选和原 GlobalDraft，
+Global 不凭失败人物映射偷渡正式产物；Global HARD 不撤销已合法物化的人物。
+
+两份子产物继承真实 model/prompts/adopted_models，并以 `shared_analysis_source`
+指向回执原字节 SHA 与原 run/attempt。子产物 `usage=null` 表示共享成本由回执和唯一 ledger
+attempt 认领，不表示零费用。独立修订保留原来源并记实际新调用/编辑，不能把两份子产物的同一
+Analyze E 重复计费。回执和原首次提交记录在后续独立编辑后仍不可变，不成为第三份运行知识库。
+
+原 Analyze prepared 尾窗同时占有两侧 owner；免费 `stage2.analyze --recover-analyze-run <id>`
+复验原 run/checkpoint/ledger/profile，仅在 exact-code 下以原 run 补原 `_commit`，不发 wire、
+不重算本轮零 usage。已有完整 raw 而尚无 checkpoint 时，从原 custody 免费编译 checkpoint；
+原 raw 形状损坏时建立既有 response-repair 工作项，封存唯一修复决定后仍运行同一免费 flag。
+普通 checkpoint 沿用 v1；只有 Analyze 显式登记的修复 checkpoint 使用 v2，另存
+`response_repair` 的原 rejection/封存 resolution/候选双 SHA，原 stdout 与成本身份不变。
+无 raw、放弃修复或修复复验失败明确停止，不自动重购或重置已用四轮预算。代码改变时
+必须先用冻结原代码排空旧 owner，不能跨 Gate 携 prepared 或重新首抽。
+
+人物修好且原回执为 awaiting_characters 时，`stage2.global --recover-analyze` 从原
+GlobalDraft 免费编译。它用只读 historical restore 验证原来源，在新的恢复 run 建立独立
+AnalyzeRecoveryJournal：prepared/committed、原回执/checkpoint/run SHA、当前人物 SHA、
+精确目标 SHA、冻结 Global 候选与 HARD 列表。未知、已删除或合并的原人物 ID 不按名字猜回。
+prepared 冻结两侧 owner，恢复只补同一目标、review 和确定性采用审计；已 committed 不因后续
+独立修订重开。最终 HARD 仍落 INVALID，交 Global 独立免费编辑，不重复购买联合回答。
+
+如果人物证据候选或 Global 外键尚不能编译，代码仍在首次编译前冻结全部局部句柄与正式 ID。
+对应 owner 的 `--emit-analyze-draft-template` 保留原坏引用，输出 AnalyzeOwnerDraftEdit v1：
+owner、原 receipt SHA、原 owner 草稿 SHA、原完整冻结映射 SHA，以及恰好一侧的替换草稿。
+Characters 不接受人工指定正式 ID；Global 的 `character_bindings` 默认复制原人物句柄，只有
+typed 明确订正才能将漏人、删除或合并后的悬空引用绑定到当前正式人物，不能凭称谓猜回。
+证据候选仍以原 MainText 闭集解析，不接受占位人物、伪造 source SHA 或放宽正式 schema。
+
+`--repair-analyze-draft <file> --actor ... --reason ...` 在独立 owner WAL 保存原请求、编辑身份、
+receipt/checkpoint/run SHA、当前 MainText 和必要人物基线，以及精确正式/INVALID 和人物投影目标。
+整体 CAS 预检后才写目标；任何尾窗由同 owner `--recover-analyze-draft` 使用冻结请求免费补齐。
+prepared 阻止两侧竞争写，闭合后回到独立产物编辑，不重开原联合提交或覆盖第三方修改。
+API 工作包返回原草稿、诊断及原段落候选一次；读取不建目录、不追加账。草稿修复未调用模型，
+原 receipt、raw、checkpoint 和唯一 ledger attempt 均不改变。
+
+CharactersProvenance 的 `retired_character_ids` 独立于 `characters_edit` 保存删除过的持久 ID。
+模型全量修订和人工 typed 编辑都继承退休集合，新增 ID 同时避让当前与退休身份；模型新产出
+不会把旧的人工作用重新记成自己的人审。首次联合或独立生成明确保存空集合，局部草稿删除
+也保留初始冻结 ID 的退休事实；禁止以列表重排、删除再新增复用旧身份。
+
+## Gate A 读数
+
+`tools/workflow_metrics.py::stage2_core_metrics` 只读取上述来源、独立产物和唯一 ledger。
+首轮/接受后 core 采用无空白 JSON **字符数**与 MainText 字符数比较；证据、审计另外计量。
+候选去留按原 checkpoint 的稳定主体 ID 统计，无法证明的拆分/合并不推测。只有精确绑定
+completed CoreEdits 的变化才算 C 实际改写；证据或审计字段变化不算语义主体干预。
+调用累计耗时按唯一 ledger attempt 单列 Analyze E、Core C 和独立 executor；内容返工与网络重试
+依工作单元账区分，未知阶段不归零。免费恢复时长、审阅失效等没有权威记录时保持 unver。

@@ -66,7 +66,6 @@ from contracts.schema.evaluation import GlobalReviewDecisionSet, TrimAudit, Trim
 from contracts.schema.orchestration import ReviewerActionRecord
 from contracts.schema.plot_edit import PlotEdit
 from contracts.schema.stage2 import (
-    CharacterCollectionItem,
     GlobalCollectionAdd,
     GlobalCollectionDelete,
     GlobalCollectionSplit,
@@ -100,9 +99,8 @@ _JSON_OBJECT = TypeAdapter(dict[str, Any])
 # 复制成员字段，只把生产 model 映射到 collection，并在下方现场生成当前集合专用的
 # operation schema。
 _COLLECTION_MEMBER_MODELS = {
-    'characters': CharacterCollectionItem,
     'relations': RelationResponse,
-    'secrets': SecretResponse,
+    'arc_secrets': SecretResponse,
     'world_rules': WorldRuleResponse,
 }
 
@@ -113,14 +111,9 @@ _COLLECTION_MEMBER_MODELS = {
 # collection 提取稳定 ID，供 delete/split 的 provider schema 枚举。add 的新 ID
 # 刻意不走这个枚举，仍由成员 model 与 producer 的完整候选校验负责。
 _COLLECTION_REVIEW_BINDINGS: dict[str, tuple[str, str, str]] = {
-    'characters': (
-        'character_set_complete', 'entities.characters', 'char_id'),
-    'relations': (
-        'relation_set_complete', 'entities.relations', 'relation_id'),
-    'secrets': (
-        'secret_set_complete', 'canon.secrets', 'secret_id'),
-    'world_rules': (
-        'world_rule_set_complete', 'canon.world_rules', 'rule_id'),
+    'relations': ('relation_set_complete', 'global.relations', 'relation_id'),
+    'arc_secrets': ('secret_set_complete', 'global.arc_secrets', 'secret_id'),
+    'world_rules': ('world_rule_set_complete', 'global.world_rules', 'rule_id'),
 }
 
 
@@ -1155,7 +1148,7 @@ def _typed_validation_reason(prefix: str, exc: ValidationError) -> str:
             'collection_output_duplicate',
         '集合操作的输入 id 与输出 id 不得重叠':
             'collection_input_output_overlap',
-        '直接字段 patch 主体不得同时被同集合 delete/split':
+        '直接 patch 不得同时 delete/split 同一主体':
             'direct_patch_subject_removed_by_collection_edit',
     }
 
@@ -1299,6 +1292,61 @@ def _stage2_row_is_quarantined(row: Mapping[str, Any]) -> bool:
     )
 
 
+def _stage2_source_once(global_pack: dict[str, Any], rows: list[dict[str, Any]],
+                        source_chapters: list[dict[str, Any]]) -> None:
+    """正文集中存一次：整书轮只引用章，局部轮合并重叠证据上下文。
+
+    当前 workpack 已从 Store 验证 MainText；这里不重新读盘、补字或找另一版正文。
+    缺正文的历史材料仍保留已有定位文本，不能为了压缩把材料不足伪装成完整。
+    """
+    source = {row['chapter_ordinal']: row['text'] for row in source_chapters
+              if isinstance(row, dict) and type(row.get('chapter_ordinal')) is int
+              and isinstance(row.get('text'), str)}
+    full_text = bool(global_pack.get('main_text_chapters'))
+    entries = []
+    intervals: dict[int, list[tuple[int, int]]] = {}
+    for row in rows:
+        for field in ('formal_evidence', 'exact_literal_hits'):
+            for evidence in row.get(field, []):
+                ordinal, start, end = (evidence.get('chapter_ordinal'),
+                                       evidence.get('start'), evidence.get('end'))
+                text = source.get(ordinal)
+                if (not isinstance(text, str) or type(start) is not int or type(end) is not int
+                        or not 0 <= start < end <= len(text)
+                        or evidence.get('literal') != text[start:end]):
+                    continue
+                entries.append((evidence, ordinal, start, end))
+                intervals.setdefault(ordinal, []).append((max(0, start - 60), min(len(text), end + 60)))
+    passages: dict[str, dict[str, Any]] = {}
+    indexed: dict[int, list[tuple[int, int, str]]] = {}
+    if not full_text:
+        for ordinal, spans in sorted(intervals.items()):
+            merged: list[tuple[int, int]] = []
+            for start, end in sorted(spans):
+                if merged and start <= merged[-1][1]:
+                    merged[-1] = merged[-1][0], max(merged[-1][1], end)
+                else:
+                    merged.append((start, end))
+            for start, end in merged:
+                passage = {'chapter_ordinal': ordinal, 'start': start, 'end': end,
+                           'text': source[ordinal][start:end]}
+                ref = 'p' + _canonical_json_sha256(passage)[:16]
+                if ref in passages and passages[ref] != passage:
+                    raise ReviewerTaskError('Stage2 source passage 短 hash 冲突')
+                passages[ref] = passage
+                indexed.setdefault(ordinal, []).append((start, end, ref))
+    for evidence, ordinal, start, end in entries:
+        ref = (f'chapter:{ordinal}' if full_text else next(
+            ref for lo, hi, ref in indexed[ordinal] if lo <= start < end <= hi))
+        evidence.pop('literal', None)
+        evidence.pop('context', None)
+        evidence['source_text_ref'] = ref
+    global_pack['source_passages'] = passages
+    global_pack.setdefault('legend', {})['source_text_ref'] = (
+        'chapter:N 引用 main_text_chapters 的第 N 章；p 开头引用 source_passages。'
+        'start/end 均为原章坐标；正文只集中提供一次，context_cards 仅供理解待审项，不重新裁决。')
+
+
 def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
     """把完整 workpack 投影成只含未闭合项的 subject-card delta。
 
@@ -1314,17 +1362,27 @@ def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
     global_pack = visible.get('global')
     if not isinstance(global_pack, dict):
         return visible
+    source_chapters = copy.deepcopy(global_pack.get('main_text_chapters', []))
+    full_items = copy.deepcopy(global_pack.get('items', []))
     coverage = global_pack.get('review_coverage')
     required_problem_context: set[str] = set()
+    pending_ids: set[str] | None = None
+    context_ids: set[str] = set()
+    inherited_context: dict[str, dict[str, Any]] = {}
     if isinstance(coverage, dict):
         from contracts.schema.stage2_review import Stage2ReviewCoverage
         from novel.stages.stage2.review_obligations import global_key, pending_materials
         current_coverage = Stage2ReviewCoverage.model_validate(coverage)
+        pending_ids = set(current_coverage.pending_obligation_ids)
+        inherited_context = {row.obligation.obligation_id: {
+            'decision': row.decision, 'source_decision_sha256': row.source_decision_sha256,
+        } for row in current_coverage.inherited}
         required_problem_context = {row.obligation.obligation_id for row in current_coverage.prior_problems}
         required_problem_context.update(ref for row in current_coverage.scope.obligations
             if row.kind == 'removed_problem' and row.obligation_id in current_coverage.pending_obligation_ids
             for ref in row.context_refs)
         global_pack = pending_materials(global_pack, current_coverage)
+        context_ids = set(global_pack['material_projection']['context_obligation_ids'])
         visible['global'] = global_pack
     items = global_pack.pop('items', None)
     if not isinstance(items, list):
@@ -1337,6 +1395,8 @@ def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
     claim_evidence_index: list[dict[str, Any]] = []
 
     def actionable(row: dict[str, Any]) -> bool:
+        if pending_ids is not None:
+            return global_key(row) in pending_ids
         state = row.get('current_state')
         return (
             (bool(required_problem_context) and global_key(row) in required_problem_context)
@@ -1348,6 +1408,18 @@ def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
         copy.deepcopy(row) for row in items
         if isinstance(row, dict) and actionable(row)
     ]
+    context_rows = [copy.deepcopy(row) for row in items
+                    if isinstance(row, dict) and context_ids
+                    and global_key(row) in context_ids]
+    for row in context_rows:
+        row['context_only'] = True
+        row['inherited_decision'] = inherited_context[global_key(row)]
+    removed_materials = global_pack.get('removed_problem_materials', [])
+    if not removed_materials and not any(row.get('reading_scope') == 'whole_book' for row in selected):
+        global_pack['main_text_chapters'] = []
+    historical_rows = [row for item in removed_materials if item.get('available') and item.get('row')
+                       for row in (item['row'], *item.get('context_rows', []))]
+    _stage2_source_once(global_pack, selected + context_rows + historical_rows, source_chapters)
     retained = [
         {
             'item_id': row.get('item_id'),
@@ -1355,7 +1427,8 @@ def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
             'state': row.get('current_state'),
             'generation_disposition': row.get('generation_disposition'),
         }
-        for row in items if isinstance(row, dict) and not actionable(row)
+        for row in full_items if isinstance(row, dict) and not actionable(row)
+        and (not context_ids or global_key(row) not in context_ids)
     ]
 
     def intern(owner: dict[str, Any]) -> None:
@@ -1396,19 +1469,6 @@ def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
         evidence_ref = intern_material(evidence, evidence_catalog, 'e')
         row['subject_ref'] = subject_ref
         row['evidence_ref'] = evidence_ref
-        companion = row.get('fate_companion')
-        if isinstance(companion, dict):
-            intern(companion)
-            companion_subject = companion.pop('subject', None)
-            companion['subject_ref'] = intern_material(
-                companion_subject, subject_catalog, 's')
-            companion_evidence = {
-                'formal_evidence': companion.pop('formal_evidence', []),
-                'unresolved_formal_evidence': companion.pop(
-                    'unresolved_formal_evidence', []),
-            }
-            companion['evidence_ref'] = intern_material(
-                companion_evidence, evidence_catalog, 'e')
         claim_evidence_index.append({
             'item_id': row.get('item_id'),
             'subject_path': row.get('subject_path'),
@@ -1417,6 +1477,7 @@ def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
             'evidence_ref': evidence_ref,
             'evidence_mode': row.get('evidence_mode'),
             'generation_impact': row.get('generation_impact'),
+            'context_only': bool(row.get('context_only')),
         })
         return row
 
@@ -1425,26 +1486,34 @@ def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
         if not key:
             raise ReviewerTaskError('Stage2 delta row 缺 group_key')
         cards.setdefault(key, []).append(compact_row(row))
+    context_cards: dict[str, list[dict[str, Any]]] = {}
+    for row in context_rows:
+        key = str(row.get('group_key') or '')
+        if not key:
+            raise ReviewerTaskError('Stage2 context row 缺 group_key')
+        context_cards.setdefault(key, []).append(compact_row(row))
 
     full_kind = global_pack.get('kind')
-    global_pack['kind'] = 'stage2-global-review-delta-v1'
+    global_pack['kind'] = 'stage2-global-review-delta-v2'
     global_pack['full_workpack_kind'] = full_kind
     global_pack['subject_cards'] = [
         {'group_key': key, 'items': rows} for key, rows in cards.items()
+    ]
+    global_pack['context_cards'] = [
+        {'group_key': key, 'context_only': True, 'items': rows}
+        for key, rows in context_cards.items()
     ]
     global_pack['subject_catalog'] = subject_catalog
     global_pack['evidence_catalog'] = evidence_catalog
     global_pack['claim_evidence_index'] = claim_evidence_index
     global_pack['current_reason_catalog'] = reason_catalog
     global_pack['delta'] = {
-        'full_item_count': len(items),
+        'full_item_count': len(full_items),
         'sent_item_count': len(selected),
+        'sent_context_item_count': len(context_rows),
         'omitted_resolved_count': len(retained),
         'omitted_resolved_sha256': _canonical_json_sha256(retained),
     }
-    if not any(row.get('reading_scope') == 'whole_book' for row in selected):
-        # 局部增量已有精确 formal evidence；不把完整正文作为固定税重复发送。
-        global_pack['main_text_chapters'] = []
     return visible
 
 
@@ -1832,9 +1901,9 @@ def _collection_edit_allowed_values(
                 '同一 GlobalEdit 的直接字段 patch 主体在 collection operations '
                 '应用后必须仍存在；不得一边 patch 同一主体、一边 delete/split 它'),
             'post_edit_references_resolve': (
-                'relation endpoint、secret knowledge subject、address 等外键必须在'
-                '整份 edit 应用后的主体集合中存在；引用新主体时必须在同一 edit '
-                '的 collection add/split 中实际提交该主体'),
+                'relation 人物端点必须属于独立人物登记；secret.fact_ref 必须引用'
+                '整份 edit 应用后存在的关系或明确规则版本。新增 Global 主体须在'
+                '本 edit 的 collection add/split 中提交，人物变化走 Characters owner'),
         },
         'collection_operation_contract.member_model_by_collection': {
             name: _COLLECTION_MEMBER_MODELS[name].__name__
@@ -1902,25 +1971,9 @@ def _global_edit_allowed_values(
     edit: Mapping[str, Any], global_pack: Mapping[str, Any],
 ) -> dict[str, Any]:
     """一处组装 reviewed GlobalEdit 的结构闭集，供三类 option 共用。"""
-    blurb = {}
-    if 'source_blurb_replace' in edit:
-        # 多动作工作包未使用 apply-edit 的原生 compact schema，仍须把新分支
-        # 的完整闭合形状下发；不能只展示 unresolved 模板让模型猜证据字段。
-        field = GlobalEdit.model_fields['source_blurb_replace']
-        blurb = {
-            'source_blurb_replace.schema': TypeAdapter(
-                field.rebuild_annotation()).json_schema(by_alias=True),
-            'source_blurb_replace.purpose': (
-                'resolution_required=true 的事实或开篇范围必须先通过本 replacement '
-                '修订，不能直接 review-decisions PASS。supported 使用 evidence '
-                '{chapter_ordinal,locator}；hook_supported 使用 hook_evidence {locator}，'
-                '不携带正文章号，也不能把 hook_evidence 写成 evidence。unresolved '
-                '仍保持未解决，不得凭默认 PASS 放行；证据不足可选 uncertain/stop。'),
-        }
     return {
         **_collection_edit_allowed_values(edit, global_pack),
         **_post_edit_review_allowed_values(),
-        **blurb,
     }
 
 
@@ -2049,6 +2102,11 @@ def _submission_options(pack: dict[str, Any], current: OperatorNext,
         raise ReviewerTaskError('Global 工作包缺当前义务覆盖面')
     payload['review'] = {'scope_sha256': coverage['scope']['scope_sha256'],
                          'default_decision': 'uncertain', 'exceptions': []}
+    edit_binding = read_pack.get('core_edit_binding')
+    if isinstance(edit_binding, dict):
+        # 只读 scaffold 的空 owner 表示不提交；实际非空业务仍由 typed schema 和两侧预检验证。
+        payload['core_edits'] = {**edit_binding, 'characters': None, 'global': None}
+
     request = _request_wrapper(current, waiting_on, {
         'kind': 'approval', 'surface': 'stage2_global_review', 'payload': payload})
     control = _option(
@@ -2060,6 +2118,16 @@ def _submission_options(pack: dict[str, Any], current: OperatorNext,
         allowed_values={'decision': ['accept', 'rework', 'uncertain', 'stop'],
                         'owner': ['stage2.characters', 'stage2.global'], 'chapter_ordinals': [],
                         'purpose': '只接受已核实的 Global 主体；证据不足保持 uncertain。'})
+    if isinstance(edit_binding, dict):
+        from contracts.schema.stage2_review import Stage2CoreEditBatch
+        control['editable_fields'].append('action.payload.core_edits.characters/global')
+        control['binding_fields'].append('action.payload.core_edits.expected_characters_sha256/expected_global_sha256')
+        control['allowed_values']['core_edits.schema'] = Stage2CoreEditBatch.model_json_schema(by_alias=True)
+        control['allowed_values']['core_edits.purpose'] = (
+            '免费订正可同一回答提交两owner typed编辑；只保留有实际变化的一侧，另一侧为null。'
+            '非编辑决定core_edits必须为null。提交编辑时decision=rework、owner=null，'
+            'review.exceptions须指出相应原义务的rework与证据；新产生义务仍待审。'
+            '不得修改两份expected SHA；characters.source_sha256等于expected_characters_sha256。')
     unresolved = any(
         row.get('current_state') in {'pending', 'FAIL'} or (
             row.get('current_state') == 'UNVER' and not _stage2_row_is_quarantined(row))
@@ -2249,7 +2317,7 @@ def _registered_submission_options(
                 # 会让新会话反复购买同一份必被拒绝的判断；修后复核可同轮闭合。
                 options = options[1:]
                 options[0]['allowed_values']['purpose'] = (
-                    '当前未解决事实或开篇范围必须先 typed 修订；使用 source_blurb_replace '
+                    '当前主体缺必要材料，必须先通过对应 owner typed 修订；'
                     '补齐正文证据或钩子独立证据，并在同一 post_edit_review 复核全部旧项。'
                     '无法从本包确认的内容仍保持未解决，选择同包 uncertain/stop；'
                     '不得直接 PASS，也不得为了通过而捏造证据。')
@@ -2781,10 +2849,9 @@ def _stage2_business_sha256(
     binding = global_pack.get('binding') if isinstance(global_pack, Mapping) else None
     if not isinstance(binding, Mapping):
         raise ReviewerTaskError('Stage2 global workpack 缺业务 binding')
-    from contracts.invariants import SOURCE_BLURB_EVIDENCE_POLICY
     business: dict[str, Any] = {
         'waiting_on': waiting_on,
-        'source_blurb_evidence_policy': SOURCE_BLURB_EVIDENCE_POLICY,
+        'stage2_core_contract': 'characters-v2-global-v7-review-v3',
         'expected_source_sha256': binding.get('expected_source_sha256'),
         'main_text_subject_sha256': binding.get('main_text_subject_sha256'),
     }
@@ -3187,7 +3254,7 @@ delete/split 触及的输入 ID 不重复；add/split 产生的输出 ID 不重�
 patch 的主体必须仍存在，不能一边 patch 同一主体、一边 delete/split；relation
 endpoint 与 secret knowledge subject 等外键也必须在相应现役主体集合中存在，
 新增人物只能回源 stage2.characters，不能经 GlobalEdit 创建人物或假设新人物 ID。仅当 native schema
-明示 ``novel-stage2-reviewer-delta-v2`` 时，compact 运输层把 ``collection_edits``
+明示 ``novel-stage2-reviewer-delta-v3`` 时，compact 运输层把 ``collection_edits``
 表示为按本次模板开放集合固定键的 object，每个集合
 天然至多一次；{compact_empty_semantics} 任何空值都不代表把模板的 no-op 行抄入
     canonical edit；一旦提交 canonical patch 行，只能是模板无重复有序子序列；compact
@@ -3203,7 +3270,7 @@ secret/relation/world_rule 才能写进 post_edit_review.quarantine_groups，
 Global blocking 面安全后，由本 Global Commander 提交绑定当前主体的 typed 接受。
 Global 接受后才生成 Blueprint；Blueprint Commander 独立结合 Global 交叉审阅，
 允许 typed 局部补丁经 producer 验证后继续复核；不能让旧事实关联接受修改后的候选。
-人物名册、静态身份与称名错误交给 stage2.characters，必要知识、源文案与范围错误
+人物名册、称谓归属与首次公开身份错误交给 stage2.characters，长期知识与时间判断错误
 交给 stage2.global，蓝图事实错误交给 stage2.blueprint；只使用本轮开放的 owner 和动作。
 review_coverage.pending 列出本轮义务，prior_problems 保留修改或删除前的问题；删除不等于通过。
 review.default_decision 只覆盖本轮待审义务。已核实项可填 accept，问题逐项写入 exceptions，
@@ -3388,15 +3455,8 @@ def _placeholder_paths(value: Any, path: str = '$') -> list[str]:
 
 
 _GLOBAL_EDIT_PATCH_IDENTITIES: dict[str, tuple[str, ...]] = {
-    'secrets': ('secret_id',),
-    'world_rules': ('rule_id',),
-    'characters': ('char_id',),
+    'arc_secrets': ('secret_id',), 'world_rules': ('rule_id',),
     'relations': ('relation_id',),
-    'arc_tracks': ('track_index',),
-    'addresses': ('char_id', 'address_index'),
-    # 这是“某个人物的完整称呼列表替换”，不是整个 characters 集合的 replacement；
-    # char_id 仍只能取模板点名的现有 subject。
-    'addresses_replace': ('char_id',),
 }
 
 
@@ -3692,6 +3752,18 @@ def _validate_approval_binding(
         if (not isinstance(got, dict) or not isinstance(frozen, dict)
                 or got.get('scope_sha256') != frozen.get('scope_sha256')):
             raise ReviewerTaskError('Stage2 review.scope_sha256 是 immutable binding，不得修改')
+        edits = submitted.get('core_edits')
+        frozen_edits = expected.get('core_edits')
+        if edits is not None:
+            if not isinstance(edits, dict) or not isinstance(frozen_edits, dict):
+                raise ReviewerTaskError('本轮未开放 Core 免费编辑批次')
+            for key in ('expected_characters_sha256', 'expected_global_sha256'):
+                if edits.get(key) != frozen_edits.get(key):
+                    raise ReviewerTaskError(f'Core 编辑 {key} 是 immutable binding')
+            character_edit = edits.get('characters')
+            if character_edit is not None and character_edit.get('source_sha256') != edits['expected_characters_sha256']:
+                raise ReviewerTaskError('人物 typed 编辑必须使用本轮冻结人物源字节')
+
 
     if surface == 'stage2_blueprint_review':
         got, frozen = submitted.get('knowledge_links'), expected.get('knowledge_links')
@@ -4087,7 +4159,7 @@ object，不用 Markdown/代码围栏，不写文件、不调用工具；Supervi
 只处理本包仍未闭合的 subject cards。
 {rejected_context_rule}
 canonical exact_request 的 collection_edits 只可填写 operations；collection/expected SHA
-不可改；仅当 native schema 明示 novel-stage2-reviewer-delta-v2 时，实际回答改在
+不可改；仅当 native schema 明示 novel-stage2-reviewer-delta-v3 时，实际回答改在
 payload.edit.collection_edits.<collection>[] 填 operations。operation 绝非
 通用 value patch：add={{op,item}}、delete={{op,subject_id}}、
 split={{op,subject_id,items}} 且 items 至少两项，不得出现 value；item/items 使用原包

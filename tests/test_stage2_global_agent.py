@@ -57,9 +57,6 @@ def _ctx(base: Path, *, with_characters: bool = True) -> RunContext:
         ledger=CostLedger(path=ledger_path(base)), executor_profile=_profile())
     ArtifactStore(ctx).write(
         extract.MAIN_TEXT, MainText.model_validate(main_text()))
-    from contracts.artifacts import STAGE1_HOOK_COPY
-    from contracts.schema.stage1 import HookCopy
-    ArtifactStore(ctx).write(STAGE1_HOOK_COPY, HookCopy(text='李宝珠收到父亲已经回城的来信。'))
     if with_characters:
         from tests.stage2_fixtures import seed_character_registry
         seed_character_registry(ctx)
@@ -146,15 +143,12 @@ def _free_ctx(ctx: RunContext) -> RunContext:
 
 def _bad_global() -> dict:
     bad = copy.deepcopy(_response_global())
-    bad['canon']['secrets'][0]['first_reveal_chapter'] = 99
+    bad['arc_secrets'][0]['revealed_from'] = 99
     return bad
 
 
 def _full(candidate: dict) -> str:
     wire = copy.deepcopy(candidate)
-    states = wire['entities']['character_states']
-    wire['entities']['character_states'] = [
-        {'char_id': char_id, **state} for char_id, state in states.items()]
     return json.dumps({
         'payload': {'kind': 'full_candidate', 'candidate': wire},
     }, ensure_ascii=False)
@@ -518,16 +512,21 @@ def test_prepared_global_bundle_blocks_every_side_writer_then_owner_recovers(
     # 两份人产输入可在 reservation 外准备；真正受保护的是 Global bundle 写口。
     input_ctx = _free_ctx(owner)
     input_store = ArtifactStore(input_ctx)
-    edit_payload = {'secrets': [{
-        'secret_id': 'secret_01', 'first_reveal_chapter': 3,
+    edit_payload = {'arc_secrets': [{
+        'secret_id': 'secret_01', 'revealed_from': 3,
     }]}
     (owner.novel_dir / extract.GLOBAL_EDIT).write_text(
         json.dumps(
             encode_artifact(extract.GLOBAL_EDIT, edit_payload),
             ensure_ascii=False, indent=2),
         encoding='utf-8', newline='\n')
-    from tests.factories import approved_global_review
-    current_review = approved_global_review(grounding_io.read(input_store))
+    # 审阅是知识提交完成后的独立后继；本 killpoint 尚未写审阅，不能
+    # 为准备一份无写盘效力的人产输入，假定它已先于采用账落盘。
+    from novel.quality.global_review import build_review
+    landed = input_store.read_own(GlobalGrounding, extract.GLOBAL_REL)[0]
+    current_review = build_review(
+        landed.model_dump(mode='json', by_alias=True),
+        characters=extract._read_characters(input_store))
     item = current_review.items[0]
     input_store.write(
         global_review.DEFAULT_DECISIONS,
@@ -774,7 +773,8 @@ def test_legacy_global_cannot_bypass_prepared_journal_but_foreign_committed_allo
     # foreign committed 是已闭合历史，不应永久阻断后续新 run；这里只准备，0 wire。
     allowed = _direct_ctx(owner)
     prepared = extract.prepare_global_candidate(allowed)
-    assert prepared.contract_name == 'knowledge-paragraph-candidate-v2'
+    from contracts.invariants import GLOBAL_EVIDENCE_CONTRACT
+    assert prepared.contract_name == GLOBAL_EVIDENCE_CONTRACT
 
 
 def test_main_text_drift_refuses_checkpoint_restore_before_wire(

@@ -22,7 +22,7 @@ def _request() -> GlobalReviewDecisionSet:
         'actor': 'reviewer-a',
         'decisions': [{
             'item_id': (
-                'knowledge_event:canon.secrets.secret_01.knowledge_events.0:'
+                'alias_identity:characters.characters.char_001.aliases.alias_01:'
                 'aaaaaaaaaaaa'),
             'expected_subject_sha256': 'a' * 64,
             'state': 'PASS',
@@ -146,7 +146,7 @@ def test_api_upload_uses_the_same_versioned_decision_contract(tmp_path):
     path = uploads.save_global_review_decisions(tmp_path, 'book-a', decisions)
 
     raw = json.loads(path.read_text(encoding='utf-8'))
-    assert raw['_schema_version'] == 2
+    assert raw['_schema_version'] == 3
     decoded = decode_artifact('stage2/global_review_decisions.json', raw).payload
     assert GlobalReviewDecisionSet.model_validate(decoded) == decisions
 

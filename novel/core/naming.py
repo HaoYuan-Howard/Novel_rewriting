@@ -192,6 +192,12 @@ def strip_distinguisher(canonical: str | None) -> str:
     return _DISTINGUISHER.sub('', canonical or '').strip()
 
 
+def registered_surfaces(character: dict | None) -> tuple[str, ...]:
+    """当前注册表的全部有据表面称谓；不推断首次出现，也不展开同人披露图。"""
+    return tuple(row['surface'] for row in (character or {}).get('aliases', [])
+                 if isinstance(row, dict) and isinstance(row.get('surface'), str) and row['surface'])
+
+
 def display_names(characters: dict[str, dict] | None, book_text: str
                   ) -> tuple[dict[str, str], dict[str, str], list[tuple[str, object]]]:
     """从当前人物表派生全书有据称呼；不给自造 registry 标签兜底。"""
@@ -205,10 +211,7 @@ def display_names(characters: dict[str, dict] | None, book_text: str
         if canonical and canonical in book_text:
             display[char_id] = canonical
             continue
-        surfaces = {
-            (address.get('surface') or '').strip()
-            for address in ((character or {}).get('address') or [])
-        }
+        surfaces = set(registered_surfaces(character))
         best = max(
             ((book_text.count(surface), len(surface), surface)
              for surface in surfaces if surface),
@@ -256,10 +259,7 @@ def display_names_at(characters: dict[str, dict] | None, text_upto: str) -> dict
         if canonical and canonical in text_upto:
             display[char_id] = canonical
             continue
-        surfaces = {
-            (address.get('surface') or '').strip()
-            for address in ((character or {}).get('address') or [])
-        }
+        surfaces = set(registered_surfaces(character))
         best = max(
             ((text_upto.count(surface), len(surface), surface)
              for surface in surfaces if surface),
@@ -315,9 +315,7 @@ def surface_owners(characters: dict[str, dict] | None) -> dict[str, frozenset[st
     """
     owners: dict[str, set[str]] = {}
     for cid, v in (characters or {}).items():
-        names = [strip_distinguisher((v or {}).get('canonical') or '')]
-        names += [(a or {}).get('surface', '').strip()
-                  for a in ((v or {}).get('address') or [])]
+        names = registered_surfaces(v)
         for nm in names:
             key = norm(nm)
             if key:
@@ -369,6 +367,8 @@ def surface_first_chapter(characters: dict[str, dict] | None) -> dict[str, int]:
     键空间差一格，闸门就会在某几个叫法上静默失效。
     """
     out: dict[str, int] = {}
+    if any('aliases' in (row or {}) for row in (characters or {}).values()):
+        raise ValueError('Characters v2 的身份映射时点不能作为称谓首次可用章；消费方须读源文或 presentation')
     for _cid, v in (characters or {}).items():
         ads = [a for a in ((v or {}).get('address') or []) if (a.get('surface') or '').strip()]
         earliest = min((int(a.get('from_chapter') or 1) for a in ads), default=1)

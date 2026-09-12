@@ -31,6 +31,9 @@ def inspect(base: str | Path, run_id: str) -> AgentRunContinuationView:
         profiles = run.contract.profiles if run.contract is not None else run.start.profiles
         if profiles is None or (run.start.profiles is not None and profiles != run.start.profiles):
             raise TerminalState('原完整 profiles 缺失或与不可变契约冲突，不能猜默认值')
+        boundary = run.contract.pause_before_node if run.contract is not None else run.start.pause_before_node
+        if run.contract is not None and boundary != run.start.pause_before_node:
+            raise TerminalState('原运行范围与不可变契约冲突，不能扩大续跑范围')
         for epoch in run.epochs:
             closes = [row for row in own if row.kind == 'epoch_closed' and row.epoch_id == epoch.epoch_id]
             if len(closes) != 1 or closes[0].drain_state != 'drained':
@@ -46,12 +49,12 @@ def inspect(base: str | Path, run_id: str) -> AgentRunContinuationView:
             resolved = agent._freeze_profiles(profiles)
         except TerminalState as exc:
             return AgentRunContinuationView(run_id=checked, sid=run.start.sid, available=False,
-                reason=str(exc), profiles=profiles)
+                reason=str(exc), profiles=profiles, pause_before_node=boundary)
         if resolved != profiles:
             raise TerminalState('当前 profile 解析会改变历史配置，拒绝静默改写')
         return AgentRunContinuationView(run_id=checked, sid=run.start.sid, available=True,
             reason='复用原 Commander、默认执行者与逐节点覆盖；重新明确本次两项授权',
-            profiles=profiles, source=source)
+            profiles=profiles, source=source, pause_before_node=boundary)
     except (TerminalState, OSError, ValueError) as exc:
         return AgentRunContinuationView(run_id=checked, available=False, reason=str(exc))
 

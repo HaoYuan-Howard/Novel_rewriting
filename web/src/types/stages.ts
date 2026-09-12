@@ -268,84 +268,80 @@ export interface GlobalFactEvidence {
   source: GlobalSourceSpan | null
 }
 
-export interface GlobalAddress {
-  surface: string
-  by: NameRef
-  context: string
-  from_chapter: number
+export interface CoreEvidenceAnchor {
+  chapter_ordinal: number
+  start: number
+  end: number
+  text_sha256: string
 }
 
-export interface GlobalCharacter {
-  char_id: string
-  canonical: string
-  name_distinctiveness: string
-  role: string
-  role_evidence: GlobalFactEvidence
-  /** 全量下发；剧透遮蔽是前端的纯展示行为（R-11.13） */
-  fate: string | null
-  fate_evidence: GlobalFactEvidence | null
-  address: GlobalAddress[]
+export type CoreEvidenceAnchors = Record<string, CoreEvidenceAnchor>
+/** 由后端校验当前 MainText 后回取；null 为不可验证，UI 不切正文偏移。 */
+export type CoreEvidenceSnippets = Record<string, string | null>
+
+export interface GlobalTimeWindow {
+  effective_from: number
+  /** 含此章；null 表示未声明截止章。 */
+  effective_until: number | null
+  revealed_from: number
 }
 
-export type GlobalRelationVisibility =
-  | { kind: 'public'; from_chapter: number }
-  | { kind: 'via_secret'; secret_id: string }
-
-export interface GlobalRelation {
+export interface GlobalRelation extends GlobalTimeWindow {
   relation_id: string
   subject: NameRef
   predicate: string
-  predicate_evidence: GlobalFactEvidence
   object: NameRef
-  visibility: GlobalRelationVisibility
-  valid_from_chapter: number
-  valid_through_chapter: number | null
+  evidence_refs: string[]
 }
 
 export interface GlobalWorldRule {
   rule_id: string
   kind: string
-  versions: {
-    effective_from_chapter: number
+  versions: (GlobalTimeWindow & {
+    version_id: string
     desc: string
-    desc_evidence: GlobalFactEvidence
-  }[]
+    evidence_refs: string[]
+  })[]
 }
 
-export interface GlobalKnowledgeEvent {
-  subject_kind: 'character' | 'group'
-  subject: NameRef
-  known_from_chapter: number
-  evidence: GlobalFactEvidence
-}
+export type GlobalFactRef =
+  | { kind: 'relation'; relation_id: string }
+  | { kind: 'world_rule_version'; rule_id: string; version_id: string }
 
 export interface GlobalSecret {
   secret_id: string
-  fact: string
-  fact_evidence: GlobalFactEvidence
-  knowledge_events: GlobalKnowledgeEvent[]
-  /** ⚠ 必须连它一起读：cold 与「foreshadowed 但章号被裁空」在 setup_chapters 上同形 */
-  setup_kind: 'cold' | 'foreshadowed'
+  fact: string | null
+  fact_ref: GlobalFactRef | null
+  evidence_refs: string[]
   setup_chapters: number[]
-  /** 逐章剧透闸门按它开 */
-  first_reveal_chapter: number
+  revealed_from: number
 }
 
 export interface Stage2Global {
   sid: string
   title: string
   setting: {
-    时代背景: string
-    era_evidence: GlobalFactEvidence
-    世界观: string
-    worldview_evidence: GlobalFactEvidence
+    era: string | null
+    era_evidence_refs: string[]
+    social_context: string | null
+    social_context_evidence_refs: string[]
   }
-  characters: GlobalCharacter[]
   relations: GlobalRelation[]
   world_rules: GlobalWorldRule[]
-  /** 空数组 = 这本书没抽到秘密。那**可能是漏抽了**，不是「无」。 */
-  secrets: GlobalSecret[]
-  source_blurb: {
+  /** 空列表表示未提取到跨章秘密，完整性仍须审阅。 */
+  arc_secrets: GlobalSecret[]
+  evidence_anchors: CoreEvidenceAnchors
+  evidence_snippets: CoreEvidenceSnippets
+  unresolved_refs: number
+  invalid_exists: boolean
+  freshness: Freshness
+  reason: string
+  ghosts: string[]
+  _provenance: Provenance
+}
+
+/** Stage6 当前读模型自有材料，独立于 Stage2 Global v7。 */
+export type SourceBlurbMaterials = {
     facts: (
       | { kind: 'supported'; claim_id: string; claim: string; evidence: GlobalFactEvidence }
       | { kind: 'hook_supported'; claim_id: string; claim: string;
@@ -356,14 +352,6 @@ export interface Stage2Global {
       | { kind: 'proposed'; through_chapter: number; rationale: string; boundary_evidence: GlobalFactEvidence }
       | { kind: 'unresolved'; reason: string }
   }
-  /** 全屏解引用失败的总数（读数，不是判定） */
-  unresolved_refs: number
-  invalid_exists: boolean
-  freshness: Freshness
-  reason: string
-  ghosts: string[]
-  _provenance: Provenance
-}
 
 export interface EvidenceRef {
   artifact: string
@@ -375,26 +363,11 @@ export interface EvidenceRef {
 export type GlobalReviewState = 'pending' | 'PASS' | 'FAIL' | 'UNVER'
 
 export type GlobalReviewKind =
-  | 'world_rule_version'
-  | 'secret'
-  | 'reveal'
-  | 'known_by'
-  | 'name_distinctiveness'
-  | 'address_context'
-  | 'world_rule_kind'
-  | 'character_set_complete'
-  | 'relation_set_complete'
-  | 'world_rule_set_complete'
-  | 'secret_set_complete'
-  | 'role'
-  | 'fate'
-  | 'relation'
-  | 'knowledge_event'
-  | 'setting_fact'
-  | 'secret_setup'
-  | 'source_blurb_complete'
-  | 'source_blurb_fact'
-  | 'opening_scope'
+  | 'world_rule_version' | 'secret' | 'reveal'
+  | 'name_distinctiveness' | 'character_identity' | 'alias_identity'
+  | 'world_rule_kind' | 'character_set_complete' | 'relation_set_complete'
+  | 'world_rule_set_complete' | 'secret_set_complete' | 'role' | 'relation'
+  | 'setting_fact' | 'secret_setup'
 
 /** Server-side verdict: does this item hold Stage4 closed, or is it audit-only? */
 export type GlobalReviewEffect = 'blocking' | 'disclosure'

@@ -39,12 +39,13 @@ CONTRACT_TEXT: Mapping[str, str] = {
    凭词表命中就判广告会把正文当垃圾删掉；
 3. 通读完整 retained clean_text，反向查找纯数字章号下的番外语义等零模式信号漏剔；再抽查首尾边界：生产词法识别到首个章号时，号前非空片段应是后续 Stage1 必须保留的开篇文案。叙事性概述、提前呈现后文情节或对白、与正文形成重复钩子，都是合法文案体裁，不能仅因它不是第一章正文首句或与后文重复就判为漏剔；只把书名/作者署名、平台网址、站内导航、更新订阅/票赏推广、作者站务元话语等不属于作品叙事文案的站务或元数据残留视为问题。尾行应为完结标记或正常收束，且不得截断句子；
 4. 顺带核一次结构分母（总行数/非空行、生产词法识别的独占章号行集合、第一个章号之前是否形成非空开篇文案）；开篇文案是 `R-1.12` 的必填下游材料，不是待删除前缀。若已识别到首个章号但号前没有非空文案，应关闭式停止并说明 Stage1 将缺少必填 hook；这些读数只服务材料分区与反向漏剔审阅，不在 Stage0 判断章号顺序或连续性。''',
-    'stage2': '''1. Global Commander 与 Executor 独立；同一工作单元连续审阅和订正，基础四次内容额度加已生效的不可变人工追加，首次、格式纠错与语义纠错都计入；换候选、会话或进程不补预算，模型不能自行加额。网络重试独立计账，确定性重放不调用模型。
-2. 逐项核对当前待审的人物登记、必要知识、源文案范围与正式证据；集合完整性要正向和反向核对。有效历史决定由后端按义务继承，不要求本轮重复裁决；修改或删除旧问题仍须复审。PASS 必须有位置与分母，FAIL 必须指出具体冲突或漏抽，无法判断保持 UNVER/uncertain，不因材料不足发明事实或返工。范围不明不缺省为第一章。源文案就是开头钩子；hook_supported 可用钩子独立证据，但须通读正文排查明确矛盾，不要求正文重复或补写。来源不明、歧义和矛盾仍用 unresolved，先 typed 修订再复审。
-3. 当前逐项决定通过 producer 并使 blocking 面 generation-safe 时，同时构成该 Global Commander 的 typed 接受；未处置的 FAIL/pending/UNVER 不得接受。可隔离 UNVER 仅按既有 secret/relation/world_rule 组白名单处理，disclosure 不自动 PASS。
-4. 局部知识错误仅在 submission_options 开放时提交同包 GlobalEdit：稳定 subject/hash 与证据绑定不可修改；collection delta 只使用 add/delete/split 的现役 schema，外键必须在修后全集闭合。post_edit_review 必须精确覆盖修前未闭合项：修改的新主体要给修后结论，仍存活的旧 FAIL/UNVER 要显式复判。人物静态字段不由 GlobalEdit 修改。代码负责归一、HARD、归档和正式提交，模型不能写盘。
-5. 人物名册、静态身份或称名错误派修 owner=stage2.characters；必要知识、源文案或范围错误派修 owner=stage2.global。只使用本包开放的 typed rework，明确所需修订与证据，交回真正负责的 Executor。没有把握用 uncertain，必须停止用 stop。不得主动处理尚未生成的 Blueprint，也不新增人物 Commander。
-6. Global 接受后才开始 Blueprint 逐章并发；没有预审，也没有额外 Global-only 终审。任何新反馈都以本轮落盘工作包为依据，历史对话不能代替当前证据。''',
+    'stage2': '''1. Global Commander 同时审两份独立产物 Characters v2 与 Global v7。首抽来自一次 stage2.analyze；后续问题按 owner 独立修订，不重新购买联合首抽。同一持久工作单元基础四次内容额度加已生效的不可变人工追加；格式纠错与语义纠错都计入，换候选、会话或进程不补预算。保存的响应或决定优先免费恢复。
+2. 人物逐一反查遗漏、误合并、关键匿名个体及异写归属。canonical 是内部登记名，不自动获得写作许可；role 只能描述首次公开身份，不能写隐藏身份、后续经历或结局。每实体每个 surface 只登记一次；identity_revealed_from 只表示读者何时知道称谓与实体是同一人，不限制称谓本身此前出现。疑似异写须依据原文语义确认，不能模糊合并或截短字面。人物问题归 stage2.characters。
+3. Global 只审 setting、world_rules、relations、arc_secrets。setting 允许源文未建立，不能凭时代常识补事实。规则须持续约束，关系须重要且方向正确。effective_until 包含末章；事实生效、失效、读者揭示和证据章独立，允许提前透露未来事实和事实结束后才揭示，不能要求 revealed_from >= effective_from。
+4. arc_secret 默认长期跨章；同场产生并当场揭晓的局部惊喜不得晋升。极少同章跨独立情节单元的例外必须结合全文说明持续约束；Stage2 没有权威分场，段落距离或两个证据片段不证明跨场景。不同揭示时点的真相分开，冷揭示不虚构铺垫。fact 与 fact_ref 严格二选一，引用只消除与关系或具体规则版本完全同义的重复，不产生引用链。知识问题归 stage2.global。
+5. 所有集合完整性均通读正文正反核对；合法空集合仍须明确审阅。逐项主体、共享证据、当前 lint 和历史未解决问题共同构成材料。机械 ID、引用、坐标、去重、章范围和 XOR 已由代码检查，本轮重点审支持性、归属、时间和抽取边界；lint 通过不证明语义正确。PASS 要说明实际核对，FAIL 指出具体冲突或遗漏，材料不足保持 UNVER/uncertain，不能发明事实、范围或付费修复。
+6. 只使用 submission_options 中开放的 typed 编辑和决定；稳定 subject/hash、证据来源绑定不改写。人物与知识分别由自己的 producer 提交，优先同包免费订正，需要 Executor 才派对应 owner。整批编辑由代码先预检、保存原决定，再按 owner 提交和恢复；未被决定覆盖的新义务仍待审。删除主体不能删除问题，较新否定不得被旧接受覆盖。有效历史决定按实际依赖继承，本轮不重审已证明未变的义务。
+7. 当前所有评测项均为 blocking；人物、setting、关系、规则和集合完整性均为 must_fix，不能隔离。只有 generation_impact=quarantine_or_fix 的 secret/secret_setup/reveal 项可在保持 UNVER 时按完整秘密组提交显式隔离决定；须符合当前模板的 group_key、item/hash 及证据绑定，不能改名为 PASS，也不能把 FAIL 或 pending 当成已隔离。当前完整 blocking 面仍有 pending/FAIL/未处置 UNVER 时不得接受；没有 disclose 旁路。Global Commander 接受后才开放 Blueprint；本轮不处理尚未生成的蓝图、人物知情事件或 Hook 文案，不新增人物 Commander。''',
     'stage2-blueprint': '''1. 只审本轮 chapter:N 或 cross_chapter 范围。逐章完整阅读原文、beats.content 和必要依赖，检查 completeness、attribution、causal_continuity、epistemic_reveal、carry_state。schema 不证明完整剧情、正确归因或不泄密。
 2. 每维明确 pass/issue/unver/not_applicable；不适用与无法判断分别说明原因。只登记实际问题，不生成逐节点、逐约束或逐 delivery 正向回执。每个未解决历史问题必须显式保留、解决或撤销，删除主体不消除问题。
 3. beats.content 是唯一完整剧情正文。普通因果、动作及即时反应保持整体；辅助状态仅表示持续作用，modality 不授予传播权限。原文有据的重要知识边界不得被合并抹去，后台真相、人物信念、自称和读者揭示不能混同。
