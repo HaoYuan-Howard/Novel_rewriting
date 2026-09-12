@@ -877,6 +877,150 @@ def test_reviewer_correction_keeps_frozen_workpack_before_global_replan():
     assert [event.kind for event in events] == ['epoch_closed']
 
 
+@pytest.mark.parametrize('branch', ['ready', 'reviewer', 'finalize'])
+@pytest.mark.parametrize('control', ['pause', 'stop'])
+def test_control_between_operator_read_and_launch_never_calls_old_action(branch, control):
+    """next 已取到、票尚未发放时的控制请求不能变成 70 或执行旧快照。"""
+    read_entered = threading.Event()
+    return_snapshot = threading.Event()
+    paused = threading.Event()
+    events: list[AgentRunEvent] = []
+    calls: list[tuple[str, int]] = []
+    results, errors, closed, quiesced, cancelled = [], [], [], [], []
+    reads = 0
+    epoch = _epoch(f'epoch-before-launch-{branch}-{control}', 1, 'initial')
+    old = SimpleNamespace(
+        state={'ready': 'ready', 'reviewer': 'blocked', 'finalize': 'pipeline_complete'}[branch],
+        code_version='code-1', surface_seal='1' * 64,
+        action=SimpleNamespace(waiting_on='stage2_global_review', action_sha256='2' * 64),
+        execution_token=SimpleNamespace(node='stage0.remove'))
+    refreshed = SimpleNamespace(
+        state='pipeline_complete', code_version='code-1', surface_seal='3' * 64,
+        action=None, execution_token=None)
+
+    def read_next(current_epoch):
+        nonlocal reads
+        assert current_epoch is epoch
+        reads += 1
+        if reads == 1:
+            read_entered.set()
+            assert return_snapshot.wait(5)
+            return old
+        assert reads == 2, 'resume 只需重读一次当前 next'
+        return refreshed
+
+    def append(event):
+        events.append(event)
+        if event.kind == 'paused':
+            paused.set()
+
+    def ready(_epoch, current, _provider, ticket):
+        calls.append(('ready', reads))
+        ticket.commit()
+        return SupervisorActionResult(0, _outcome(), False)
+
+    def reviewer(_epoch, current, _provider, ticket):
+        calls.append(('reviewer', reads))
+        ticket.commit()
+        return CommanderTurnResult(0, None, False, _outcome())
+
+    def finalize(current_epoch, ticket):
+        assert current_epoch is epoch
+        calls.append(('finalize', reads))
+        ticket.commit()
+        return SupervisorActionResult(0, _outcome('ready'), False)
+
+    def close(current_epoch, turn):
+        assert current_epoch is epoch
+        closed.append(turn)
+        return 'drained'
+
+    supervisor = RunSupervisor(
+        run_id=f'run-before-launch-{branch}-{control}', append_event=append,
+        make_epoch=lambda *_args: pytest.fail('控制请求不能新增 epoch'),
+        open_epoch=lambda _epoch: None, close_epoch=close,
+        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
+        epoch_identity_current=lambda _epoch: True,
+        cancel_commander=lambda: cancelled.append(True) or True,
+        set_commander_quiesced=lambda value: quiesced.append(value) or True,
+        initial_epoch=epoch, read_operator_next=read_next,
+        run_ready_action=ready, run_reviewer=reviewer, finalize_run=finalize)
+
+    def run():
+        try:
+            results.append(supervisor.run())
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    try:
+        assert read_entered.wait(5)
+        (supervisor.request_pause if control == 'pause' else supervisor.request_stop)()
+        assert calls == []
+        return_snapshot.set()
+        if control == 'pause':
+            assert paused.wait(5), errors
+            assert supervisor.paused and errors == []
+            assert calls == [] and reads == 1 and closed == []
+            assert [event.kind for event in events] == ['paused']
+            supervisor.request_resume()
+        worker.join(5)
+        assert not worker.is_alive()
+        assert errors == []
+        assert len(results) == len(closed) == 1
+        result = results[0]
+        assert result.stopped is (control == 'stop')
+        assert closed[0] is result.turn
+        assert events[-1].kind == 'epoch_closed'
+        assert events[-1].epoch_id == epoch.epoch_id
+        assert events[-1].drain_state == 'drained'
+        assert events[-1].exit_code != 70
+        if control == 'pause':
+            assert calls == [('finalize', 2)], 'resume 不得执行暂停前的旧 action'
+            assert reads == 2 and result.turn.exit_code == 0
+            assert [event.kind for event in events] == ['paused', 'resumed', 'epoch_closed']
+            assert quiesced == [True, False] and cancelled == []
+        else:
+            assert calls == [] and reads == 1
+            assert result.turn.exit_code == 2 and result.turn.outcome.state == 'stopped'
+            assert [event.kind for event in events] == ['epoch_closed']
+            assert quiesced == [True] and cancelled == [True]
+    finally:
+        return_snapshot.set()
+        if worker.is_alive():
+            supervisor.request_stop()
+            worker.join(5)
+
+
+@pytest.mark.parametrize('branch', ['ready', 'reviewer', 'finalize'])
+def test_dispatch_failure_is_not_reclassified_as_control(branch):
+    """统一控制 catch 不能吞掉已启动 callback 的真实故障。"""
+    events: list[AgentRunEvent] = []
+    current = SimpleNamespace(
+        state={'ready': 'ready', 'reviewer': 'blocked', 'finalize': 'pipeline_complete'}[branch],
+        code_version='code-1', action=SimpleNamespace(waiting_on='stage2_global_review'),
+        execution_token=SimpleNamespace(node='stage0.remove'))
+
+    def broken(*args):
+        args[-1].commit()
+        raise RuntimeError('真实 callback 故障')
+
+    supervisor = RunSupervisor(
+        run_id=f'run-dispatch-failure-{branch}', append_event=events.append,
+        make_epoch=lambda *_args: pytest.fail('不能以换 epoch 隐去异常'),
+        open_epoch=lambda _epoch: None, close_epoch=lambda _epoch, _turn: 'drained',
+        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
+        epoch_identity_current=lambda _epoch: True, cancel_commander=lambda: True,
+        initial_epoch=_epoch('epoch-dispatch-failure', 1, 'initial'),
+        read_operator_next=lambda _epoch: current,
+        run_ready_action=broken, run_reviewer=broken, finalize_run=broken)
+    with pytest.raises(RuntimeError, match='真实 callback 故障'):
+        supervisor.run()
+    assert [event.kind for event in events] == ['epoch_closed']
+    assert events[0].exit_code == 70
+
+
 @pytest.mark.parametrize('control', ['pause', 'stop'])
 def test_launch_ticket_never_accepts_control_before_process_is_registered(control):
     """pause/stop 返回即代表它已经看见本次 Popen，不能随后再冒出新进程。"""
