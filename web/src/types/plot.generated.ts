@@ -63,7 +63,7 @@ export type BindingConcern = {
 export type BindingInfeasibilityWitness = {
   "chapter_ordinal": number
   "scenes": (string)[]
-  "constraint_code": "missing_chapter_catalog" | "empty_stage_allowlist"
+  "constraint_code": "missing_chapter_catalog"
   "closed_refs": (string)[]
   "proof_basis": string
 }
@@ -267,6 +267,7 @@ export type CtxChapterView = {
   "semantic_contract": CtxSemanticContract
   "chapter_rewrite_brief": string
   "beats": (WriterBeat)[]
+  "background_beats": (WriterBeat)[]
   "states": (WriterState)[]
   "constraints": (WriterConstraint)[]
   "global_subjects": (WriterGlobalSubject)[]
@@ -361,6 +362,7 @@ export type DesignBindingInfeasibility = {
 export type DesignBlindChapterTruth = {
   "chapter_ordinal": number
   "chapter_function": string
+  "characters": (PlannerCharacter)[]
   "beats": (PlannerBeat)[]
   "states": (PlannerState)[]
   "inherited_states": (PlannerState)[]
@@ -623,7 +625,7 @@ export type KnowledgeLinkDecision = {
 
 export type KnowledgeLinkObligation = {
   "obligation_id": string
-  "kind": "secret_reveal" | "secret_setup" | "knowledge_event" | "world_rule" | "world_rule_reveal" | "relation" | "relation_visibility" | "character_state" | "setting" | "state_reveal"
+  "kind": "secret_reveal" | "secret_setup" | "knowledge_event" | "world_rule" | "world_rule_reveal" | "relation" | "relation_visibility" | "character_state" | "setting" | "reader_reveal" | "character_knowledge"
   "knowledge_ref": string
   "subject_ref": PlotSubjectRef
   "audience": CharacterRef | GroupRef | null
@@ -656,6 +658,7 @@ export type KnowledgeLinkScope = {
   "knowledge_sha256": string
   "blueprint_sha256": string
   "obligations": (KnowledgeLinkObligation)[]
+  "registered_events": (RegisteredPlotKnowledgeEvent)[]
 }
 
 export type KnowledgeLinkSubmission = {
@@ -663,6 +666,7 @@ export type KnowledgeLinkSubmission = {
   "actor": string
   "reason": string
   "decisions": (KnowledgeLinkDecision)[]
+  "event_operations": (PutPlotKnowledgeEvent | RetirePlotKnowledgeEvent)[]
 }
 
 export type KnowledgeLinkUnresolved = {
@@ -771,12 +775,20 @@ export type PlannerAudience = {
 export type PlannerBackgroundBeat = {
   "alias": string
   "content": string
+  "participant_aliases": (string)[]
 }
 
 export type PlannerBeat = {
   "alias": string
   "content": string
   "participant_aliases": (string)[]
+}
+
+export type PlannerCharacter = {
+  "alias": string
+  "canonical": string
+  "surfaces": (string)[]
+  "role": string
 }
 
 export type PlannerEndpoint = {
@@ -796,9 +808,9 @@ export type PlannerGlobalSubject = {
 export type PlannerKnowledge = {
   "event_alias": string
   "subject_alias": string
-  "kind": "secret_reveal" | "secret_setup" | "knowledge_event" | "world_rule" | "world_rule_reveal" | "relation" | "relation_visibility" | "character_state" | "setting" | "state_reveal"
+  "kind": "secret_reveal" | "secret_setup" | "knowledge_event" | "world_rule" | "world_rule_reveal" | "relation" | "relation_visibility" | "character_state" | "setting" | "reader_reveal" | "character_knowledge"
   "audience": PlannerAudience | null
-  "timing": "at_entry" | "at_beats"
+  "timing": "at_entry" | "at_beats" | "future_chapter"
   "trigger_beat_alias": string | null
 }
 
@@ -934,6 +946,19 @@ export type PlotIssueDisposition = {
   "reason": string
 }
 
+export type PlotKnowledgeEvent = {
+  "kind": "reader_reveal" | "character_knowledge"
+  "subject_ref": PlotSubjectRef
+  "audience": CharacterRef | GroupRef | null
+  "chapter_ordinal": number
+  "evidence_refs": (PlotKnowledgeEvidence)[]
+}
+
+export type PlotKnowledgeEvidence = {
+  "chapter_ordinal": number
+  "evidence_ref": string
+}
+
 export type PlotNarration = {
   "grammatical_person": "first" | "second" | "third"
   "narrator_char_id": string | null
@@ -1064,6 +1089,14 @@ export type ProvenanceSection = {
   "origin": string | null
 }
 
+export type PutPlotKnowledgeEvent = {
+  "operation": "put"
+  "event_id": string
+  "expected_event_sha256": string | null
+  "event": PlotKnowledgeEvent
+  "resolution": KnowledgeAtBeats | KnowledgeLinkUnresolved
+}
+
 export type ReadingView = {
   "sid": string
   "title": string
@@ -1073,6 +1106,21 @@ export type ReadingView = {
   "blueprint": PlotBlueprint | null
   "blueprint_state": ArtifactState
   "_provenance": BlueprintProvenance | null
+}
+
+export type RegisteredPlotKnowledgeEvent = {
+  "event_id": string
+  "event_sha256": string
+  "event": PlotKnowledgeEvent
+  "retired": boolean
+  "reason": string | null
+}
+
+export type RetirePlotKnowledgeEvent = {
+  "operation": "retire"
+  "event_id": string
+  "expected_event_sha256": string
+  "reason": string
 }
 
 export type RevalidationAudit = {
@@ -1140,7 +1188,7 @@ export type ScopeDependency = {
 
 export type ScopeSelection = {
   "input_rel": string
-  "projection": "plot_chapter" | "source_chapter" | "collection_members" | "plot_global" | "plot_inherited_states" | "source_ranges" | "plot_global_review"
+  "projection": "plot_chapter" | "source_chapter" | "collection_members" | "plot_global" | "plot_inherited_states" | "source_ranges" | "plot_global_review" | "plot_subjects" | "plot_characters"
   "chapter_ordinal": number | null
   "path": (string)[]
   "key_field": string | null
@@ -1328,7 +1376,7 @@ export type WriterGlobalSubject = {
 
 export type WriterKnowledgeEvent = {
   "event_ref": string
-  "kind": "secret_reveal" | "secret_setup" | "knowledge_event" | "world_rule" | "world_rule_reveal" | "relation" | "relation_visibility" | "character_state" | "setting" | "state_reveal"
+  "kind": "secret_reveal" | "secret_setup" | "knowledge_event" | "world_rule" | "world_rule_reveal" | "relation" | "relation_visibility" | "character_state" | "setting" | "reader_reveal" | "character_knowledge"
   "subject_ref": PlotSubjectRef
   "audience": CharacterRef | GroupRef | null
   "timing": "at_entry" | "at_slot"

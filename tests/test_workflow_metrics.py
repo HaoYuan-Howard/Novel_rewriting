@@ -31,29 +31,23 @@ def _write(path: Path, payload: object) -> None:
 
 
 def _blueprint(ordinal: int) -> dict:
-    return {
-        'chapter_ordinal': ordinal,
-        'fact_atoms': [
-            {'fact_id': f'f{ordinal:02d}_01', 'obligation': 'land',
-             'kind': 'information', 'claim': '这一句足够长，用来验证长串重复率的分母'},
-            {'fact_id': f'f{ordinal:02d}_02', 'obligation': 'land',
-             'kind': 'relationship', 'claim': '第二条同样足够长的事实主张文本'},
-        ],
-        'beats': [], 'causal_edges': [],
-        'entry_state_refs': [], 'ending_state_refs': [],
-    }
+    from tests.test_plot_blueprint import blueprint, chapter_response
+    response = chapter_response(ordinal)
+    response['beats'][0]['content'] = '这一句足够长，用来验证长串重复率的分母'
+    response['beats'][1]['content'] = '第二条同样足够长的完整剧情节点文本'
+    return blueprint(ordinal, response).model_dump(mode='json')
 
 
 def _plan_chapter(ordinal: int) -> dict:
-    return {
-        'output_ordinal': ordinal,
-        'scenes': [
-            {'slot': 's01', 'land_fact_refs': [f'f{ordinal:02d}_01'],
-             'purpose': '这一句足够长，用来验证长串重复率的分母'},
-            {'slot': 's02', 'land_fact_refs': [f'f{ordinal:02d}_02'],
-             'purpose': '这一句足够长，用来验证长串重复率的分母'},
-        ],
-    }
+    from novel.stages.stage4.measure import identity_plan
+    from tests.test_plot_blueprint import SOURCE
+    chapters = [_blueprint(n) for n in range(1, ordinal + 1)]
+    current = identity_plan({'blueprints': chapters}, [
+        {'chapter_ordinal': n, 'text': SOURCE} for n in range(1, ordinal + 1)
+    ])['output_chapters'][-1]
+    for scene in current['scenes']:
+        scene['purpose'] = '这一句足够长，用来验证长串重复率的分母'
+    return current
 
 
 @pytest.fixture()
@@ -76,21 +70,21 @@ def base(tmp_path: Path) -> Path:
            {'_schema_version': 1, 'actor': 'tester',
             'decisions': [{'item_id': 'role:a:0', 'state': 'PASS'}]})
     _write(book / 'stage2/chapter_blueprints.json', {
-        '_schema_version': 6, '_provenance': {'code': CODE_CLEAN},
+        '_schema_version': 9, '_provenance': {'code': CODE_CLEAN},
         'blueprints': [_blueprint(1), _blueprint(2)],
     })
     _write(book / 'stage4/blind_candidate.json', {
-        '_schema_version': 2, '_provenance': {'code': CODE_CLEAN},
+        '_schema_version': 4, '_provenance': {'code': CODE_CLEAN},
         'output_chapters': [
             {'output_ordinal': 1,
              'structure_decision': {'mode': 'retain', 'declared_change_kinds': []}},
             {'output_ordinal': 2,
              'structure_decision': {'mode': 'reconstruct',
-                                    'declared_change_kinds': ['fact_grouping']}},
+                                    'declared_change_kinds': ['presentation_grouping']}},
         ],
     })
     _write(book / 'stage4/plan_chapters.json', {
-        '_schema_version': 4, '_provenance': {'code': CODE_CLEAN},
+        '_schema_version': 5, '_provenance': {'code': CODE_CLEAN},
         'output_chapters': [_plan_chapter(1), _plan_chapter(2)],
     })
     (book / 'stage7').mkdir(parents=True, exist_ok=True)
@@ -481,6 +475,7 @@ def test_structure_section_is_exactly_what_production_returns(base: Path) -> Non
         for chapter in plan['output_chapters']
     ]
     got = report['structure']['rows']
+    assert all('adjacency' not in row['section_states'] for row in got)
     assert [row['state'] for row in got] == [row['state'] for row in expected]
     assert [row['chapter_ordinal'] for row in got] == \
         [row['chapter_ordinal'] for row in expected]

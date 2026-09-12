@@ -22,7 +22,7 @@ from novel.orchestrator import approvals
 from novel.orchestrator import queue as Q
 from novel.run import RunContext
 from novel.store import ArtifactStore
-from novel.stages.stage4.blind import candidate_subject_sha256
+from novel.stages.stage4.plot_design import candidate_subject_sha256
 from tests.test_design_review import FACT, PERSON, _subjects
 
 
@@ -41,71 +41,53 @@ def _disk_json(book: Path, rel: str, value: object) -> None:
 
 
 def _plan(ctx: RunContext) -> PlanChapters:
-    goal = lambda intent: {
-        'intent': intent,
-        'fact_refs': [{
-            'kind': 'chapter_boundary', 'ref': 'chapter:1',
-        }],
-    }
-    provenance = ctx.free_provenance(
-        PlanProvenance,
-        origin='human',
-        blind_candidate_sha256=None,
-        evidence_binding_sha256=None,
-    )
-    return PlanChapters(
-        output_chapters=[{
-            'output_ordinal': 1, 'from_source_ordinals': [1],
-            'chapter_goal': goal('advance'),
-            'open_hook_goal': goal('open'),
+    """身份反例使用完整两章，不能用缺章计划绕过正式章集。"""
+    chapters = []
+    for ordinal in (1, 2):
+        beat = f'b{ordinal:02d}_01'
+        def goal(intent):
+            return {'intent': intent, 'subject_refs': [{'kind': 'beat', 'ref': beat}],
+                    'anchor_beat_ref': beat, 'anchor_scene_ref': 's01'}
+        chapters.append({
+            'output_ordinal': ordinal, 'from_source_ordinals': [ordinal],
+            'chapter_goal': goal('advance'), 'open_hook_goal': goal('open'),
             'end_hook_goal': goal('close'),
-            'structure_decision': {
-                'mode': 'retain',
-                'reason': '本夹具只核对当前审批主体。',
-                'declared_change_kinds': [],
-            },
-            'chapter_rewrite_brief': '用一场核对完成本章。',
-            'scenes': [{
-                'slot': 's01', 'budget_chars': 20,
-                'purpose': '核对当前计划',
+            'structure_decision': {'mode': 'retain', 'reason': '只核对审批身份。',
+                                   'declared_change_kinds': []},
+            'chapter_rewrite_brief': '一场完整呈现本章剧情。',
+            'scenes': [{'slot': 's01', 'budget_chars': 20, 'purpose': '呈现本章',
                 'role': 'setup', 'delivery': 'scene', 'transition': 'start',
-                'land_fact_refs': ['f01_001'], 'context_fact_refs': [],
-                'material_refs': [], 'turn_fact_ref': 'f01_001',
-                'entry_state_refs': [], 'exit_state_refs': [],
-                'stage_refs': ['b01_01'],
-            }],
-        }],
-        _provenance=provenance,
-    )
+                'context_beat_refs': [], 'turn_beat_ref': beat}],
+            'beat_placements': [{'beat_ref': beat, 'deliveries': [
+                {'scene_ref': 's01', 'presentation_instruction': None,
+                 'evidence_refs': [f'e{ordinal:02d}_01'], 'source_context_refs': []}]}],
+            'anchor_bindings': [],
+        })
+    return PlanChapters(output_chapters=chapters, _provenance=ctx.free_provenance(
+        PlanProvenance, origin='human', blind_candidate_sha256=None, evidence_binding_sha256=None))
 
 
 def _binding(ctx: RunContext) -> EvidenceBinding:
-    """绑定合成 A 的真实业务摘要；human 来源只记录本夹具实际读取的输入。"""
-    subjects = _subjects()
-    chapter = subjects.chapters[0]
+    """合成绑定仍保留完整两章身份和真实上游读取边。"""
+    from tests.test_design_review import _mixed_repair_subjects
+    subjects = _mixed_repair_subjects()
     candidate = {
         'alias_algorithm': subjects.strategy.basis.alias_algorithm,
-        'truth_sha256': approvals._decision_sha256(
-            chapter.blind_truth.model_dump(mode='json')),
-        'fact_aliases': {FACT: 'f01_001'},
-        'participant_aliases': {PERSON: 'char_fixture'},
+        'truth_sha256': approvals._decision_sha256([
+            row.blind_truth.model_dump(mode='json') for row in subjects.chapters]),
+        'subject_aliases': {FACT: {'kind': 'beat', 'ref': 'b01_01'},
+                            PERSON: {'kind': 'character', 'ref': 'char_001'}},
+        'endpoint_aliases': {}, 'participant_aliases': {PERSON: 'char_001'},
         'reconstruction_strategy': subjects.strategy.reconstruction_strategy,
-        'output_chapters': [chapter.chapter.model_dump(mode='json')],
+        'output_chapters': [row.chapter.model_dump(mode='json') for row in subjects.chapters],
     }
     candidate_sha = candidate_subject_sha256(candidate)
-    provenance = ctx.free_provenance(
-        EvidenceBindingHumanProvenance, candidate_sha256=candidate_sha)
-    return EvidenceBinding(
-        status='bound', candidate_sha256=candidate_sha,
-        chapters=[{
-            'output_ordinal': 1,
-            'scenes': [{
-                'candidate_scene_id': chapter.chapter.scenes[0].candidate_scene_id,
-                'stage_refs': ['b01_01'], 'material_refs': [],
-            }],
-        }],
-        binding_concerns=[], _provenance=provenance,
-    )
+    return EvidenceBinding(status='bound', candidate_sha256=candidate_sha,
+        chapters=[{'output_ordinal': n, 'scenes': [{
+            'candidate_scene_id': f'c{n:02d}s01', 'deliveries': [{
+                'beat_ref': f'b{n:02d}_01', 'evidence_refs': [f'e{n:02d}_01'],
+                'source_context_refs': []}]}]} for n in (1, 2)], binding_concerns=[],
+        _provenance=ctx.free_provenance(EvidenceBindingHumanProvenance, candidate_sha256=candidate_sha))
 
 
 @pytest.fixture
@@ -128,29 +110,20 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
         tmp_path, SID, 'stage2.blueprint', paid=True, write_ledger=False)
     blueprint_store = ArtifactStore(blueprint_ctx)
     blueprint_store.read(MainText, MAIN_REL)
+    from contracts.schema.plot import PlotChapterResponse
+    from novel.stages.stage2.plot_compile import compile_chapter
     chapters = []
     for chapter in main.root:
         ordinal, text = chapter.chapter_ordinal, chapter.text
-        beat_id, fact_id = f'b{ordinal:02d}_01', f'f{ordinal:02d}_001'
-        source = {'text': text, 'start': 0, 'end': len(text)}
-        chapters.append({
+        response = PlotChapterResponse.model_validate({
             'chapter_ordinal': ordinal, 'chapter_function': text,
-            'beats': [{
-                'beat_id': beat_id, 'span': source, 'time_layer': 'present',
-                'place': None, 'present_char_ids': [], 'hinges': [],
-            }],
-            'fact_atoms': [{
-                'fact_id': fact_id, 'claim': text, 'kind': 'event',
-                'obligation': 'land', 'source_beat_ref': beat_id,
-                'source': source, 'participant_char_ids': [],
-            }],
-            'causal_edges': [], 'narrative_relations': [],
-            'entry_state_refs': [], 'ending_state_refs': [],
-            'narration': [{
-                'grammatical_person': 'third', 'narrator_char_id': None,
-                'focalizer_char_id': None, 'pronoun_surfaces': [],
-            }],
-        })
+            'beats': [{'beat_key': 'b1', 'content': text, 'participant_char_ids': [],
+                'evidence': [{'start_para': 1, 'end_para': 1}], 'source_contexts': []}],
+            'states': [], 'inherited_state_endings': [], 'constraints': [],
+            'entry_state_refs': [], 'carry_out_refs': [],
+            'narration': [{'grammatical_person': 'third', 'narrator_char_id': None,
+                          'focalizer_char_id': None, 'pronoun_surfaces': []}]})
+        chapters.append(compile_chapter(response, text, allowed_char_ids=frozenset()).model_dump(mode='json'))
     blueprint_store.write(STAGE2_CHAPTER_BLUEPRINTS, ChapterBlueprints(
         blueprints=chapters,
         _provenance=blueprint_ctx.llm_provenance(
@@ -158,6 +131,19 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
             prompts={'BLUEPRINT_SYS': '合成审批夹具，无真实模型请求'},
             adopted_models=('fixture-model',), **blueprints()['_provenance']),
     ))
+
+    # 本组只测审批来源身份；Global/KL 固定合法空目录，完整生成路径另有贯通测试。
+    from novel.stages.stage2 import global_review, knowledge_links
+    from tests.plot_fixtures import links
+    from contracts.schema.knowledge_links import KnowledgeLinks
+    from tests.test_stage2 import global_grounding
+    grounding = {'entities': {'characters': {}, 'relations': [], 'character_states': {}},
+                 'canon': {'secrets': [], 'world_rules': [],
+                           'setting': global_grounding()['canon']['setting']}}
+    monkeypatch.setattr(global_review, 'generation_grounding',
+        lambda _store: SimpleNamespace(model_dump=lambda **_kwargs: grounding))
+    monkeypatch.setattr(knowledge_links, 'require_current',
+        lambda _ctx: KnowledgeLinks.model_validate(links()))
 
     plan_ctx = RunContext.open(
         tmp_path, SID, 'stage4.plan', paid=True, write_ledger=False)
@@ -227,7 +213,7 @@ def test_current_writing_proof_binds_stage1_plan_and_context_without_s3(
 
     raw = json.loads(approvals._path(base, SID).read_text(encoding='utf-8'))
     public = approvals.get(base, SID)
-    assert raw['v'] == 7 and public.v == 6
+    assert raw['v'] == 8 and public.v == 7
     assert set(raw['gate']) == {'s0', 's1', 's2', 's4', 's5', 's6', 's7'}
     assert set(raw['writing_proof']['artifacts']) == {
         MAIN_REL, PLAN_REL, STAGE4_WRITER_CONTEXT}
@@ -303,7 +289,7 @@ def test_current_subject_changes_revoke_writing(current_book, monkeypatch, mutat
         changed = book / STAGE2_CHAPTER_BLUEPRINTS
         original = changed.read_bytes()
         data = json.loads(changed.read_text(encoding='utf-8'))
-        data['blueprints'][0]['fact_atoms'][0]['claim'] = '她发现当前计划有一处矛盾。'
+        data['blueprints'][0]['beats'][0]['content'] = '她发现当前计划有一处矛盾。'
         changed.write_text(
             json.dumps(data, ensure_ascii=False), encoding='utf-8', newline='')
     elif mutation == 'context':
@@ -428,7 +414,7 @@ def test_v1_or_corrupt_service_record_never_authorizes_queue(
     }), encoding='utf-8')
 
     assert not approvals.has_record(base, SID)
-    with pytest.raises(approvals.HumanEditProtected, match='pre-v7'):
+    with pytest.raises(approvals.HumanEditProtected, match='当前 v8'):
         approvals.get(base, SID)
     with pytest.raises(approvals.HumanEditProtected, match='均不迁移'):
         approvals.backfill_from_disk(base, SID)

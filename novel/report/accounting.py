@@ -38,30 +38,13 @@ class AccountingSpec:
 ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
     'stage0': (),
     'stage1': (),
-    # ⚠⚠ **全链唯一一层的记账横跨两份产物**（`stage2.md` §3.3 列全出口）：
-    #    前一组在 `global_grounding._provenance`、后一组在 `chapter_blueprints`。
-    #    合成一节而不是两节，理由与「判据表只有一张」同源：两个节点是**同一层**，
-    #    拆成两节，「这一层落盘前改写了多少」就要读两屏才拼得出来。
-    # ⚠ 这一层的记账**不是可选的装饰**：本层有一整族判据**断言的就是这些计数而不是字段值**
-    #    （`secret_setup_order` 断言 `setup_chapters_pruned` · `verbatim_failed` 断言
-    #    `verbatim_failures`）——因为那几件事都跑在**落盘前**，
-    #    再去断言字段值就是一条**永远为真**的判定。
-    # ⚠ 这里曾经是 11 个出口，`verbatim_recovered` 随 `bounded-fidelity-v3` 删掉了
-    #    （beat 的区间改由段号算出 ⇒ 「按最长公共子串救回来的锚点」结构性不存在），
-    #    它唯一的消费方 `anchor_not_verbatim` 同批裁撤。
+    # Global 只记录不可静默丢弃的定位失败；Blueprint 失败保存在已购响应恢复账。
     'stage2': (
         AccountingSpec('setup_chapters_pruned', '哪几条秘密的埋点章被裁掉了？'
                                                 '（「冷揭示」与「被裁空」只能靠它分开）'),
         AccountingSpec('evidence_locator_failures',
                        '哪些事实 locator 因错章、零命中、多命中或正式 span 漂移而失败？'
                        '（非空即 GlobalGrounding 失败态）'),
-        AccountingSpec('verbatim_failures', '哪几处**锚不到**？（非空即失败态，按根因分）'),
-        AccountingSpec('fact_atom_failures', '哪几个事实原子的证据短语无法在所属证据拍内唯一回取？'
-                                             '（与 hinge 失败共同进入 `verbatim_failed`）'),
-        AccountingSpec('hinge_ambiguous_pending',
-                       '哪几条 hinge 的短语在拍区间内多处命中、等着候选选择修复？'
-                       '（`extraction-ir-v1` 专属；失败态 hinge 不带短语，'
-                       '这笔账是字段级修复唯一不依赖 LLM cache 的输入）'),
     ),
     # ⚠ **刻意不声明 `partial_rewrite`**：本层没有一条 0 成本路会把计划改成混版的
     #    （`--identity` 只作内存诊断、`--apply-edit` 落的是新一轮）。

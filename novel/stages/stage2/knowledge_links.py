@@ -21,6 +21,7 @@ from contracts.schema.knowledge_links import (
     KnowledgeLinkHistory, KnowledgeLinkObligation, KnowledgeLinkRecord,
     KnowledgeLinkReview, KnowledgeLinkScope, KnowledgeLinks,
     KnowledgeLinksProvenance, KnowledgeLinkSubmission, ref_keys,
+    KnowledgeLinkDecision, RegisteredPlotKnowledgeEvent,
 )
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, FactEvidence
@@ -37,6 +38,44 @@ _LOCKS: dict[str, threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()
 
 
+def event_registry(history: Iterable[KnowledgeLinkHistory]) -> list[RegisteredPlotKnowledgeEvent]:
+    """重放已审计的显式登记；否定裁决可以登记未决事件，不能赋予知识许可。"""
+    events: dict[str, RegisteredPlotKnowledgeEvent] = {}
+    for record in history:
+        for operation in record.submission.event_operations:
+            current = events.get(operation.event_id)
+            expected = None if current is None else current.event_sha256
+            if operation.expected_event_sha256 != expected:
+                raise ProvenanceRefused('知识事件历史不是当前身份的合法后继')
+            if operation.operation == 'retire' and current is None:
+                raise ProvenanceRefused('不能撤销不存在的知识事件')
+            body = {
+                'event_id': operation.event_id,
+                'event': (operation.event if operation.operation == 'put' else current.event).model_dump(mode='json'),
+                'retired': operation.operation == 'retire',
+                'reason': operation.reason if operation.operation == 'retire' else None,
+            }
+            events[operation.event_id] = RegisteredPlotKnowledgeEvent(
+                **body, event_sha256=canonical_sha256(body))
+    active = []
+    for row in events.values():
+        if not row.retired:
+            key = (row.event.kind, row.event.subject_ref.kind, row.event.subject_ref.ref,
+                   canonical_sha256(row.event.audience.model_dump() if row.event.audience else None))
+            if key in active:
+                raise ProvenanceRefused('同一主体与受众的必要许可已登记；应修订原事件而不是另铸并行时间线')
+            active.append(key)
+    return [events[key] for key in sorted(events)]
+
+
+def events_for_chapter(events, chapter):
+    subjects = {('beat', row.beat_id) for row in chapter.beats}
+    subjects.update(('state', row.state_id) for row in chapter.states)
+    subjects.update(('state', ref) for ref in chapter.entry_state_refs)
+    return [row for row in events if row.event.chapter_ordinal == chapter.chapter_ordinal
+            or (row.event.subject_ref.kind, row.event.subject_ref.ref) in subjects]
+
+
 @contextmanager
 def _commit_lock(ctx: RunContext):
     target = paths.stage2_knowledge_links_commit_lock_path(ctx.novel_dir)
@@ -50,6 +89,7 @@ def build_scope(
     main: MainText, knowledge: KnowledgeGrounding, blueprints: ChapterBlueprints,
     *, main_sha256: str, knowledge_sha256: str, blueprint_sha256: str,
     chapter_ordinal: int | None = None,
+    registered_events: Iterable[RegisteredPlotKnowledgeEvent] = (),
 ) -> KnowledgeLinkScope:
     """范围只包含必要知识事件；完整语义仍从既有主体读取，不另存 claim。"""
     from contracts.schema.plot import PlotSubjectRef
@@ -63,6 +103,7 @@ def build_scope(
     if chapter_ordinal is not None and chapter_ordinal not in chapters:
         raise ProvenanceRefused('知识关联章范围不存在')
     obligations: list[KnowledgeLinkObligation] = []
+    events = list(registered_events)
 
     def refs(ordinal: int) -> list[PlotSubjectRef]:
         row = chapters[ordinal]
@@ -153,16 +194,52 @@ def build_scope(
     ):
         add('setting', ref, evidence.chapter_ordinal, [evidence],
             {'value': value, 'evidence': evidence.model_dump(mode='json')}, entry=True)
-    # 稀疏状态的性质不授予读者知情；其首次表达仍需要 C 显式关联到节点。
-    for chapter in blueprints.blueprints:
-        for state in chapter.states:
-            add('state_reveal', state.state_id, chapter.chapter_ordinal, [],
-                state.model_dump(mode='json'),
-                subject_ref=PlotSubjectRef(kind='state', ref=state.state_id))
+    # 只有 C 明确登记的必要传播事件进入闭集；普通叙述和 State 不自动产生披露义务。
+    known_subjects = {(kind, getattr(row, field)): (chapter, row)
+        for chapter in blueprints.blueprints
+        for kind, field, rows in (('beat', 'beat_id', chapter.beats), ('state', 'state_id', chapter.states))
+        for row in rows}
+    for registered in events:
+        event = registered.event
+        if registered.retired or chapter_ordinal is not None and event.chapter_ordinal != chapter_ordinal:
+            continue
+        target = known_subjects.get((event.subject_ref.kind, event.subject_ref.ref))
+        source_chapter, subject = target if target is not None else (None, None)
+        proof = []
+        for item in event.evidence_refs:
+            if item.chapter_ordinal not in chapters:
+                raise ProvenanceRefused('知识事件证据章不在当前原文中')
+            evidence_chapter = chapters[item.chapter_ordinal]
+            anchors = {row.evidence_id: row for row in evidence_chapter.evidence_anchors}
+            if item.evidence_ref in anchors:
+                anchor = anchors[item.evidence_ref]
+                start, end = anchor.start, anchor.end
+            else:
+                from novel.stages.stage2.paragraphs import span_of
+                parts = item.evidence_ref.split(':')
+                if len(parts) != 3 or parts[0] != 'p':
+                    raise ProvenanceRefused('知识事件证据没有当前锚点或明确段范围')
+                start, end = span_of(texts[item.chapter_ordinal], int(parts[1]), int(parts[2]))
+            proof.append(FactEvidence.model_validate({'chapter_ordinal': item.chapter_ordinal,
+                'source': {'start': start, 'end': end, 'text': texts[item.chapter_ordinal][start:end]}}))
+        add(event.kind, registered.event_id, event.chapter_ordinal, proof,
+            {'registration': registered.model_dump(mode='json'),
+             'subject': None if subject is None else subject.model_dump(mode='json'),
+             'subject_evidence': [] if subject is None else [
+                 {'start_para': anchor.start_para, 'end_para': anchor.end_para,
+                  'text': texts[source_chapter.chapter_ordinal][anchor.start:anchor.end]}
+                 for anchor in source_chapter.evidence_anchors if anchor.evidence_id in subject.evidence_refs]},
+            subject_ref=event.subject_ref, audience=event.audience)
+        obligation = obligations[-1]
+        if subject is not None and event.subject_ref not in obligation.candidate_subject_refs:
+            obligations[-1] = obligation.model_copy(update={
+                'candidate_subject_refs': [*obligation.candidate_subject_refs, event.subject_ref]})
     obligations.sort(key=lambda row: row.obligation_id)
     semantic = {
         'contract': 'stage2-knowledge-links-v2', 'chapter_ordinal': chapter_ordinal,
         'obligations': [row.model_dump(mode='json') for row in obligations],
+        'registered_events': [row.model_dump(mode='json') for row in (
+            events if chapter_ordinal is None else events_for_chapter(events, chapters[chapter_ordinal]))],
     }
     return KnowledgeLinkScope(
         **semantic, scope_sha256=canonical_sha256(semantic),
@@ -185,9 +262,12 @@ def read_scope(store: ArtifactStore, *, blueprint_rel: str = STAGE2_CHAPTER_BLUE
         raise HumanEditProtected('构造知识关联期间源文、知识或 Blueprint 漂移')
     if any(value is None for value in before.values()):
         raise ProvenanceRefused('知识关联不能绑定缺失的输入')
+    from novel.orchestrator import approvals
+    events = event_registry(approvals.knowledge_link_history(store.ctx.novel_dir.parent, store.ctx.sid))
     return build_scope(*values, main_sha256=before[STAGE1_MAIN_TEXT],
                        knowledge_sha256=before[STAGE2_GLOBAL_GROUNDING],
-                       blueprint_sha256=before[blueprint_rel], chapter_ordinal=chapter_ordinal)
+                       blueprint_sha256=before[blueprint_rel], chapter_ordinal=chapter_ordinal,
+                       registered_events=events)
 
 
 def validate_submission(scope: KnowledgeLinkScope, submission: KnowledgeLinkSubmission) -> None:
@@ -200,10 +280,39 @@ def validate_submission(scope: KnowledgeLinkScope, submission: KnowledgeLinkSubm
             raise HumanEditProtected('知识关联引用了过期或未开放的义务')
         if decision.resolution.kind == 'unresolved':
             continue
+        if (decision.resolution.kind == 'at_beats' and not decision.resolution.trigger_beat_ref.startswith(
+                f'b{subject.chapter_ordinal:02d}_')):
+            raise HumanEditProtected('知识触发点必须属于登记的目标章；来源证据可以跨章')
         allowed = (subject.entry_subject_refs if decision.resolution.kind == 'at_entry'
                    else subject.candidate_subject_refs)
         if not ref_keys(decision.resolution.subject_refs) <= ref_keys(allowed):
             raise HumanEditProtected('知识关联主体或 at_entry 时点不在当前关闭范围')
+        if (subject.kind in ('reader_reveal', 'character_knowledge')
+                and (subject.subject_ref.kind, subject.subject_ref.ref)
+                not in ref_keys(decision.resolution.subject_refs)):
+            raise HumanEditProtected('必要剧情许可必须引用其完整主体，缺失主体只能修订或明确撤销事件')
+
+
+def materialize_submission(scope: KnowledgeLinkScope, resulting: KnowledgeLinkScope,
+                           submission: KnowledgeLinkSubmission) -> KnowledgeLinkSubmission:
+    """C 同轮登记和关联的代码展开；不发明接受，也不要求模型计算新事件摘要。"""
+    validate_submission(scope, submission)
+    decisions = {row.obligation_id: row for row in submission.decisions}
+    obligations = {row.knowledge_ref: row for row in resulting.obligations
+                   if row.kind in ('reader_reveal', 'character_knowledge')}
+    changed = {row.event_id for row in submission.event_operations}
+    if any(row.knowledge_ref in changed and row.obligation_id in decisions for row in scope.obligations):
+        raise HumanEditProtected('同轮修改的事件须在 put 内给关联，不能同时提交旧身份决定')
+    for operation in submission.event_operations:
+        if operation.operation == 'put':
+            obligation = obligations[operation.event_id]
+            decisions[obligation.obligation_id] = KnowledgeLinkDecision(
+                obligation_id=obligation.obligation_id, expected_subject_sha256=obligation.subject_sha256,
+                resolution=operation.resolution)
+    result = submission.model_copy(update={'scope_sha256': resulting.scope_sha256,
+                                            'decisions': list(decisions.values())})
+    validate_submission(resulting, result)
+    return result
 
 
 def inherited_records(scope: KnowledgeLinkScope,
@@ -224,6 +333,11 @@ def inherited_records(scope: KnowledgeLinkScope,
                        else subject.candidate_subject_refs)
             if not ref_keys(decision.resolution.subject_refs) <= ref_keys(allowed):
                 raise ProvenanceRefused('历史知识关联来源与当前义务不相容，不能降格为空结果')
+            if (decision.resolution.kind == 'at_beats' and not decision.resolution.trigger_beat_ref.startswith(
+                    f'b{subject.chapter_ordinal:02d}_')) or (
+                    subject.kind in ('reader_reveal', 'character_knowledge') and
+                    (subject.subject_ref.kind, subject.subject_ref.ref) not in ref_keys(decision.resolution.subject_refs)):
+                raise ProvenanceRefused('历史知识事件的触发章或完整主体不相容')
             chosen[decision.obligation_id] = KnowledgeLinkRecord(
                 **decision.model_dump(), actor=event.submission.actor,
                 reason=event.submission.reason, source_decision_sha256=event.decision_sha256)

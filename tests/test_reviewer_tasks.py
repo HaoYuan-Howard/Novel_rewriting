@@ -563,7 +563,10 @@ def test_design_option_publishes_constraint_semantics_and_validated_shapes(
     assert set(shapes) == set(DESIGN_REPAIR_CODES)
     for code, shape in shapes.items():
         assert DesignRepairConstraint.model_validate(shape).code == code
-    assert shapes['narrative_relation']['effect']['enforcement'] == 'hard'
+    assert 'effect' not in shapes['semantic_constraint']
+    assert shapes['semantic_constraint']['opaque_aliases']
+    assert values['chapters[].constraints[].minimum_refs']['semantic_constraint'] == {
+        'scene_refs': 0, 'opaque_aliases': 1}
     assert set(values['strategy.replan_constraints[].semantics']) == set(
         DESIGN_STRATEGY_REPLAN_CONSTRAINTS)
     replans = values['strategy.replan_constraints[].shapes']
@@ -722,11 +725,28 @@ def test_design_template_projects_to_compact_single_token_request() -> None:
     assert 'candidate_sha256' not in json.dumps(payload)
 
 
-def test_stage4_structure_replan_is_a_design_resolution_task() -> None:
+def test_stage4_structure_replan_is_a_design_resolution_task(monkeypatch) -> None:
     assert reviewer_tasks.is_registered(
         queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN) is True
     assert reviewer_tasks._APPROVAL_FOR_BLOCKER[
-        queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN] == {'design'}
+        queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN] == {'design', 'blueprint_refinement'}
+    # 普通分场仍由 A 裁决；当前包显式下发疑点目录时，才开放异常上游转交。
+    from novel.orchestrator import blueprint_refinement
+    template = _design_template_fixture(monkeypatch)
+    catalog = blueprint_refinement.design_catalog(template)
+    options = reviewer_tasks._submission_options({
+        '_design_template': template.model_dump(mode='json'),
+        '_refinement_catalog': catalog.model_dump(mode='json'),
+    }, _current(queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN),
+        queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN)
+    by_id = {row['id']: row for row in options}
+    assert by_id['approval:design']['exact_request']['action']['surface'] == 'design'
+    refinement = by_id['approval:blueprint_refinement']
+    action = refinement['exact_request']['action']
+    assert action['surface'] == 'blueprint_refinement' and action['kind'] == 'approval'
+    assert action['payload']['review_token'] == catalog.review_token
+    assert '普通换场、节奏、分段表现和既有端点绑定留在 Stage4' in refinement['allowed_values']['purpose']
+    assert '不购买抽取，不授权上游修订' in refinement['allowed_values']['purpose']
 
 
 def test_stage4_structure_replan_offers_bound_stop_without_weakening_design(
@@ -742,13 +762,13 @@ def test_stage4_structure_replan_offers_bound_stop_without_weakening_design(
         'approval:design', 'stop:stage4-structure-replan',
         'uncertain:approval:stage4-structure-replan']
     design_values = options[0]['allowed_values']
-    assert '具体的 scene/fact/goal' in design_values['resolution_requirement']
+    assert '具体的 场景/节点/目标' in design_values['resolution_requirement']
     assert 'INFO、metric、UNVER' in design_values['resolution_requirement']
     stop_request = copy.deepcopy(options[1]['exact_request'])
     assert stop_request['surface_seal'] == current.surface_seal
     stop_request['action']['reason'] = (
         '逐章交叉阅读后，现有拒绝只引用 alignment metric 与 causal INFO；'
-        '未发现任何可指向 scene、fact 或 goal 的结构损害')
+        '未发现任何可指向场景、节点或目标的结构损害')
     path = tmp_path / 'structure-replan-stop.json'
     path.write_text(json.dumps(stop_request, ensure_ascii=False), encoding='utf-8')
 
@@ -818,7 +838,9 @@ def test_stage4_structure_replan_workpack_uses_one_frozen_in_process_snapshot(
     from novel.orchestrator import approvals, inspection, state
     from novel.stages.stage4 import plan as stage4_plan
 
-    catalog = _design_template_fixture(monkeypatch).model_dump(mode='json')['constraint_catalog']
+    template = _design_template_fixture(monkeypatch)
+    template_payload = template.model_dump(mode='json')
+    catalog = template_payload['constraint_catalog']
     seals: list[str] = []
     monkeypatch.setattr(
         reviewer_tasks.paths, 'resolve_novel_dir',
@@ -833,9 +855,7 @@ def test_stage4_structure_replan_workpack_uses_one_frozen_in_process_snapshot(
             model_dump=lambda **_dump: {'kind': 'design-workpack'}))
     monkeypatch.setattr(
         approvals, 'design_template',
-        lambda *_args, **_kwargs: SimpleNamespace(
-            model_dump=lambda **_dump: {
-                'kind': 'design-template', 'constraint_catalog': catalog}))
+        lambda *_args, **_kwargs: template)
     monkeypatch.setattr(state, 'readonly_ctx', lambda *_args: 'stage4-read-ctx')
     monkeypatch.setattr(stage4_plan, 'run_check_only', lambda ctx: {'ctx': ctx})
     monkeypatch.setattr(
@@ -862,8 +882,11 @@ def test_stage4_structure_replan_workpack_uses_one_frozen_in_process_snapshot(
     assert pack['design'] == {'kind': 'design-workpack'}
     assert pack['structure'] == {'kind': 'structure-workpack'}
     assert pack['structure_replan_decision'] == current_b
-    assert '_design_template' in pack
+    assert pack['_design_template'] == template_payload
     assert pack['design_constraint_catalog'] == catalog
+    from novel.orchestrator import blueprint_refinement
+    assert pack['_refinement_catalog'] == blueprint_refinement.design_catalog(
+        template).model_dump(mode='json')
     assert seals == ['read', 'read']
 
 
@@ -978,9 +1001,9 @@ def test_design_loader_canonicalizes_set_order_but_keeps_duplicates_invalid(
             'reason': '锚点需修正',
             'constraints': [
                 {'code': 'scene_goal', 'scene_refs': ['scene-2'],
-                 'opaque_aliases': ['F_2'], 'effect': None},
+                 'opaque_aliases': ['a_0000000000000002']},
                 {'code': 'entry_anchor', 'scene_refs': [],
-                 'opaque_aliases': ['F_1'], 'effect': None},
+                 'opaque_aliases': ['a_0000000000000001']},
             ],
         }, {
             'output_ordinal': 1, 'decision': 'accept',
@@ -2778,20 +2801,12 @@ def test_multiple_trim_chapters_share_one_batch_before_review(tmp_path):
             reviewer_tasks.load_action(path, current, submission_options=options)
 
 
-def _new_blueprint_options():
+def _new_blueprint_options(monkeypatch):
+    from tests.test_stage2_blueprint_workpack import install, view
     current = _current(queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW)
-    from contracts.invariants import BLUEPRINT_RELATION_REVIEW_CONTRACT
-    pack = {
-        'blueprint': {'review_token': 'bpr4_' + 'a' * 64,
-                      'review_coverage': _node_review_coverage('stage2.blueprint'),
-                      'knowledge_links': {'scope': {'scope_sha256': 'c' * 64}},
-                      'chapters': [{'chapter_ordinal': 1}]},
-        '_blueprint_edit_template': {
-            'actor': 'template', 'reason': 'template', 'review_token': 'brt1_' + 'b' * 64,
-            'review_contract_version': BLUEPRINT_RELATION_REVIEW_CONTRACT,
-            'chapters': [{'chapter_ordinal': 1, 'narrative_relations': []}],
-        },
-    }
+    store, _report = install(monkeypatch)
+    pack = {'blueprint': view.blueprint_review_workpack(
+        'unused', store.ctx.sid, scope='chapter:1').model_dump(mode='json')}
     return current, reviewer_tasks._submission_options(pack, current, queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW)
 
 
@@ -2806,12 +2821,12 @@ def test_blueprint_workpack_reads_only_blueprint_producer(monkeypatch):
     monkeypatch.setattr(reviewer_tasks, '_json_command', read)
     pack = reviewer_tasks._workpack('unused', '42', queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW,
                                     review_run_id='current-review')
-    assert [argv[-1] for argv in calls] == ['--emit-review-workpack', '--emit-edit-template']
-    assert set(pack) == {'blueprint', '_blueprint_edit_template'}
+    assert [argv[-1] for argv in calls] == ['--emit-review-workpack']
+    assert set(pack) == {'blueprint'}
 
 
 def test_blueprint_progress_refuses_missing_own_binding_instead_of_using_global():
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='绑定或义务不完整'):
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='完整范围绑定'):
         reviewer_tasks._stage2_progress_identity({
             'blueprint': {'subject_sha256': 'a' * 64},
             'global': {'binding': {'expected_source_sha256': 'b' * 64,
@@ -2820,45 +2835,54 @@ def test_blueprint_progress_refuses_missing_own_binding_instead_of_using_global(
         }, queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW)
 
 
-def test_blueprint_commander_has_bound_accept_rework_uncertain_stop_and_local_patch(tmp_path):
-    current, options = _new_blueprint_options()
-    assert [row['id'] for row in options] == [
-        'approval:stage2_blueprint_review', 'node:stage2.blueprint.apply-edit']
+def test_blueprint_commander_has_bound_scope_decisions_and_no_direct_patch(tmp_path, monkeypatch):
+    from tests.test_reviewer_revalidation import response_for
+    current, options = _new_blueprint_options(monkeypatch)
+    assert [row['id'] for row in options] == ['approval:stage2_blueprint_review']
+    task = SimpleNamespace(submission_options=options)
     path = tmp_path / 'typed-review.json'
     for decision in ('accept', 'uncertain', 'stop', 'rework'):
-        document = copy.deepcopy(options[0]['exact_request'])
-        payload = document['action']['payload']
-        payload.update(decision=decision, reason='依据全书原文及 Global 交叉材料作出明确决定')
-        payload['knowledge_links']['reason'] = payload['reason']
-        payload['review']['default_decision'] = decision if decision != 'rework' else 'uncertain'
-        if decision == 'rework':
-            payload.update(owner='stage2.blueprint', chapter_ordinals=[1])
+        document = response_for(task, decision=decision,
+            owner='stage2.blueprint' if decision == 'rework' else None)
         path.write_text(json.dumps(document), encoding='utf-8')
         action = reviewer_tasks.load_action(path, current, submission_options=options)
         assert action.payload['decision'] == decision
         assert action.payload['node'] == 'stage2.blueprint'
-    altered = copy.deepcopy(document)
-    altered['action']['payload']['review_token'] = 'bpr4_' + 'c' * 64
-    path.write_text(json.dumps(altered), encoding='utf-8')
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='immutable'):
-        reviewer_tasks.load_action(path, current, submission_options=options)
+        assert action.payload['scope'] == 'chapter:1'
+    for field, value in [('review_token', 'bpr5_' + 'c' * 64), ('scope', 'chapter:2'),
+                         ('actor', 'foreign-commander')]:
+        altered = copy.deepcopy(document)
+        altered['action']['payload'][field] = value
+        path.write_text(json.dumps(altered), encoding='utf-8')
+        with pytest.raises(reviewer_tasks.ReviewerTaskError, match='immutable|绑定字段|typed.*root:value_error'):
+            reviewer_tasks.load_action(path, current, submission_options=options)
 
 
-def test_blueprint_typed_patch_keeps_bound_actor_and_cross_review_identity(tmp_path):
-    current, options = _new_blueprint_options()
-    request = copy.deepcopy(options[1]['exact_request'])
-    payload = request['action']['input_payload']
-    payload['reason'] = '原文明确在室内，订正当前拍地点，修后按变化义务复审'
-    payload['chapters'][0]['beat_patches'] = [{'beat_id': 'b01_01', 'place': '室内'}]
+def test_blueprint_typed_edit_keeps_producer_identity_and_is_not_a_commander_shortcut(tmp_path, monkeypatch):
+    from contracts.schema.plot_edit import PlotEdit
+    from novel.errors import ProvenanceRefused
+    from novel.stages.stage2 import plot_edit
+    from tests.test_plot_producer import prepare_book, generate_plot
+    from tests.test_plot_edit import request_for
+    from tests.test_stage2_generation import _ctx
+    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'plot-blueprint-v1')
+    book = prepare_book(tmp_path)
+    generate_plot(book)
+    ctx = _ctx(book, 'stage2.blueprint', paid=False)
+    payload = request_for(ctx)
+    payload['chapters'][0]['chapter']['beats'][0]['content'] = '昨夜来信告知李宝珠，父亲已回城。'
+    assert plot_edit.prepare_edit(ctx, PlotEdit.model_validate(payload)).preview().would_apply
+    stale = {**payload, 'review_token': 'bpe1_' + 'f' * 64}
+    with pytest.raises(ProvenanceRefused, match='过期'):
+        plot_edit.prepare_edit(ctx, PlotEdit.model_validate(stale))
+    current, options = _new_blueprint_options(monkeypatch)
+    request = copy.deepcopy(options[0]['exact_request'])
+    request['action'] = {'kind': 'node', 'node': 'stage2.blueprint',
+        'flags': ['--apply-edit', '@reviewer-input'],
+        'input_payload': encode_artifact(plot_edit.REQUEST_REL, payload)}
     path = tmp_path / 'typed-patch.json'
     path.write_text(json.dumps(request), encoding='utf-8')
-    action = reviewer_tasks.load_action(path, current, submission_options=options)
-    assert action.node == 'stage2.blueprint'
-    assert action.input_payload['post_edit_accept'] is False
-    assert action.input_payload['chapters'][0]['beat_patches'] == payload['chapters'][0]['beat_patches']
-    payload['actor'] = 'foreign-commander'
-    path.write_text(json.dumps(request), encoding='utf-8')
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='绑定字段 actor'):
+    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='immutable'):
         reviewer_tasks.load_action(path, current, submission_options=options)
 
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage4 原子事实场景编译器的节点、提示词与维护路径契约。"""
+"""Stage4 完整剧情呈现编译器的节点、提示词与维护路径契约。"""
 from __future__ import annotations
 
 import copy
@@ -33,38 +33,38 @@ def test_identity_source_order_is_not_automatically_a_hard_violation():
     assert {
         'partition_change', 'disclosure_order', 'noncontiguous_regroup',
         'anchor_migration', 'structure_eligibility', 'structure_alignment',
-        'semantic_closure_reading',
     } <= hit
+    from tests import plot_fixtures as fixture
+    semantic = next(row for row in plan.checks.check(_clean_plan4(),
+        blueprints=fixture.blueprint(), main_text=fixture.MAIN,
+        global_g=fixture.GLOBAL, knowledge_links=fixture.links())
+        if row.rule == 'presentation_semantics')
+    assert semantic.unver_why and not semantic.findings
 
 
 def test_blind_design_prompt_names_only_the_alias_skeleton():
-    system = prompts.blind_design_system()
-    assert '去序的事实真相图' in system
-    assert 'opaque' in system and 'alias' in system
-    for retired in ('end_beat', 'from_beats', 'events[]'):
+    system = prompts.blind_chapter_design_system()
+    assert '去源序的完整剧情' in system and 'opaque' in system
+    for required in ('beat_placements', 'turn_beat_alias', 'anchor_bindings'):
+        assert required in system
+    for retired in ('land_fact_aliases', 'source_contexts', 'fact_atoms'):
         assert retired not in system
-    hint = prompts.BLIND_DESIGN_HINT['output_chapters'][0]['scenes'][0]
-    assert {'land_fact_aliases', 'turn_fact_alias'} <= set(hint)
-    assert {'land_fact_refs', 'turn_fact_ref', 'stage_refs'}.isdisjoint(hint)
 
 
 def test_evidence_binding_prompt_cannot_modify_the_frozen_candidate():
-    system = prompts.evidence_bind_system()
-    assert '盲设计候选已经冻结' in system
-    assert '不得改变候选' in system
-    scene = prompts.EVIDENCE_BIND_HINT['chapters'][0]['scenes'][0]
-    assert set(scene) == {'candidate_scene_id', 'material_refs', 'stage_refs'}
+    system = prompts.chapter_binding_system()
+    assert '整章已经接受的设计骨架被冻结' in system
+    assert '不改变场景顺序' in system
+    assert set(prompts.CHAPTER_BINDING_HINT) == {'resolutions', 'binding_concerns'}
 
 
-def test_planner_projection_contains_claims_but_excludes_source_span_bytes():
-    from novel.stages.stage4.prompts import project_blueprints_for_planner
-    from tests.test_stage2 import blueprints
-
-    projected = project_blueprints_for_planner(blueprints())
+def test_planner_projection_contains_complete_content_but_excludes_source_span_bytes():
+    from tests.test_plot_design import inputs
+    blueprint, _truth, _mapping, projected, _private = inputs()
     serialized = json.dumps(projected, ensure_ascii=False)
-    assert 'fact_atoms' in serialized and 'source_beat_ref' in serialized
-    assert 'normalized' not in serialized and 'recovery' not in serialized
-    assert '"start"' not in serialized and '"end"' not in serialized
+    assert blueprint.beats[0].content in serialized
+    for forbidden in ('fact_atoms', 'source_contexts', 'evidence_refs', 'start_para', 'b01_01'):
+        assert forbidden not in serialized
 
 
 def test_no_artifact_side_enum_value_reaches_the_planner_prompt():
@@ -102,58 +102,16 @@ def test_book_band_can_fail_while_the_chapter_stays_in_its_wider_band():
     assert 'plan_book_band' in hit
 
 
-def test_relation_fact_refs_share_explicit_visibility_and_inclusive_endpoints():
-    from novel.stages.stage4.fact_refs import catalog, validate_plan_refs
-
-    global_g = {
-        'entities': {
-            'characters': {'char_001': {}, 'char_002': {}},
-            'relations': [
-                {
-                    'relation_id': 'rel_public',
-                    'subject_id': 'char_001', 'predicate': '同事',
-                    'object_id': 'char_002', 'valid_from_chapter': 3,
-                    'valid_through_chapter': 5,
-                    'visibility': {'kind': 'public', 'from_chapter': 2},
-                },
-                {
-                    'relation_id': 'rel_secret',
-                    'subject_id': 'char_001', 'predicate': '盟友',
-                    'object_id': 'char_002', 'valid_from_chapter': 2,
-                    'valid_through_chapter': 5,
-                    'visibility': {'kind': 'via_secret', 'secret_id': 'secret_01'},
-                },
-            ],
-        },
-        'canon': {'secrets': [{
-            'secret_id': 'secret_01',
-            'first_reveal_chapter': 4,
-        }]},
-    }
-    refs = catalog(
-        global_g, {'blueprints': []},
-        [{'chapter_ordinal': ordinal} for ordinal in range(1, 7)],
-    )
-    assert refs['relations'] == {
-        'rel_public': {'from': 3, 'to': 5},
-        'rel_secret': {'from': 4, 'to': 5},
-    }
-
-    def plan_for(ordinal: int, relation_id: str) -> dict:
-        return {'output_chapters': [{
-            'output_ordinal': ordinal,
-            'chapter_goal': {'intent': 'advance', 'fact_refs': [{
-                'kind': 'relation', 'ref': relation_id,
-            }]},
-        }]}
-
-    validate_plan_refs(plan_for(3, 'rel_public'), refs)
-    with pytest.raises(RefusedByStructure, match='validity window'):
-        validate_plan_refs(plan_for(3, 'rel_secret'), refs)
-    validate_plan_refs(plan_for(4, 'rel_secret'), refs)
-    validate_plan_refs(plan_for(5, 'rel_secret'), refs)
-    with pytest.raises(RefusedByStructure, match='validity window'):
-        validate_plan_refs(plan_for(6, 'rel_secret'), refs)
+def test_goals_require_existing_subjects_without_silently_inventing_relations():
+    from tests import plot_fixtures as fixture
+    from novel.stages.stage4.plot_refs import validate_plan
+    candidate = fixture.plan()
+    validate_plan(candidate, fixture.blueprint(), fixture.GLOBAL, fixture.links())
+    candidate['output_chapters'][0]['chapter_goal']['subject_refs'] = [
+        {'kind': 'relation', 'ref': 'rel_missing'}]
+    with pytest.raises(RefusedByStructure, match='关闭主体'):
+        validate_plan(candidate, fixture.blueprint(), fixture.GLOBAL, fixture.links())
+    # 关系成立/读者披露/包含式截止的独立反例在 test_stage4_disclosure 当前 KL 链验证。
 
 
 def test_pre_context_gate_does_not_pair_a_new_candidate_with_old_context(monkeypatch):
@@ -172,12 +130,13 @@ def test_pre_context_gate_does_not_pair_a_new_candidate_with_old_context(monkeyp
             raise AssertionError('前置计划闸门也不应读取旧 writer_context 的来源账')
 
     captured = {}
+    monkeypatch.setattr(plan, 'verify_plan_phase_artifacts', lambda *_a, **_kw: [])
     monkeypatch.setattr(
         plan.checks, 'check',
         lambda *_args, **kwargs: captured.update(kwargs) or [],
     )
     upstream = type('Upstreams', (), {
-        'blueprints': {}, 'main_text': [], 'global_g': {}, 'bidx': {},
+        'blueprints': {}, 'main_text': [], 'global_g': {}, 'bidx': {}, 'knowledge_links': {},
     })()
 
     assert plan._judge(OldContextStore(), {}, upstream, with_ctx_link=False) == []
@@ -227,7 +186,7 @@ def test_revalidate_failure_reports_the_invalid_subject(monkeypatch):
     monkeypatch.setattr(plan, 'ArtifactStore', lambda _ctx: store)
     monkeypatch.setattr(plan, '_Upstreams', lambda *_args, **_kwargs: object())
     monkeypatch.setattr(plan, '_judge', lambda *_args, **_kwargs: outcomes)
-    monkeypatch.setattr(plan, '_hard_hits', lambda _outcomes: ['state_closure'])
+    monkeypatch.setattr(plan, '_hard_hits', lambda _outcomes: ['placement_ref'])
     monkeypatch.setattr(
         plan, '_report',
         lambda *_args, **kwargs: captured.update(kwargs) or 'report',
@@ -240,33 +199,23 @@ def test_revalidate_failure_reports_the_invalid_subject(monkeypatch):
 
 
 def test_context_guard_compares_the_producer_projection_after_name_replacement():
-    """上下文产地替换 canonical 标签后，守卫不能拿替换前 claim 误报漂移。"""
-    chapter = {
-        'output_ordinal': 1,
-        'scenes': [{
-            'slot': 's01', 'land_fact_refs': ['f01_001'],
-            'context_fact_refs': [], 'stage_refs': [],
-        }],
-    }
-    blueprint = {'fact_atoms': [{
-        'fact_id': 'f01_001', 'claim': '苏父来到公寓',
-    }]}
-    projected = {
-        'chapters': [{
-            'output_ordinal': 1,
-            'scenes': [{
-                'required_facts': ['父亲来到公寓'], 'context_facts': [],
-                'stages': [],
-            }],
-            'characters': [], 'facts': {'secrets': []},
-        }],
-    }
-
-    outcomes = plan.checks._context_outcomes(
-        projected, [chapter], {1: blueprint}, {}, expected_ctx=projected,
-    )
-    facts = next(outcome for outcome in outcomes if outcome.rule == 'ctx_facts_exact')
-    assert not facts.findings
+    from tests import plot_fixtures as fixture
+    from contracts.schema.stage4 import CtxChapter
+    blueprints = fixture.blueprint()
+    projected = fixture.context()
+    expected = {'chapters': [CtxChapter.model_validate(row).model_dump(mode='json')
+                              for row in projected['chapters']]}
+    outcomes = plan.checks.check(fixture.plan(), blueprints=blueprints,
+        main_text=fixture.MAIN, global_g=fixture.GLOBAL, knowledge_links=fixture.links(),
+        ctx=expected, expected_ctx=expected)
+    row = next(o for o in outcomes if o.rule == 'ctx_plot_exact')
+    assert not row.findings
+    altered = copy.deepcopy(expected)
+    altered['chapters'][0]['beats'][0]['content'] += '未审的新剧情。'
+    red = plan.checks.check(fixture.plan(), blueprints=blueprints,
+        main_text=fixture.MAIN, global_g=fixture.GLOBAL, knowledge_links=fixture.links(),
+        ctx=altered, expected_ctx=expected)
+    assert next(o for o in red if o.rule == 'ctx_plot_exact').findings
 
 
 def test_identity_action_explicitly_reports_that_it_writes_nothing():
@@ -290,21 +239,10 @@ def test_stage4_has_two_paid_phases_plus_one_free_context_node():
     assert NODES['stage4.context'].flags == ()
 
 
-def test_blind_design_prompt_teaches_the_same_temporal_rule_the_validator_enforces():
-    """判据放宽了非线性边界，prompt 必须同批说清每个 transition 的状态义务。
-
-    ⚠ 钉的是**最终渲染出去的那一段**，不是常量片段（判据 7）。
-    """
-    from novel.stages.stage4 import prompts
-
-    rendered = prompts.blind_design_system()
-    for clause in (
-        'X_CONTINUE', 'X_EARLIER', 'X_PARALLEL', 'X_RETURN', 'X_LATER',
-        # 承接由代码补全 ⇒ prompt 必须明说「不要再抄一遍」，否则它与判据打架。
-        '不要把前面已经',  # 换行处断开，只钉住这半句的存在
-        '成立的状态再抄一遍',
-        '代码自动继承上一场的有效 exit',
-        '不得为了让状态看似连续而把未来事实带入过去',
-    ):
-        assert clause in rendered, clause
-    assert 'obligation=context' in rendered, 'context alias 的取值面必须写明'
+def test_blind_design_prompt_teaches_explicit_endpoints_and_completed_background():
+    rendered = prompts.blind_chapter_design_system()
+    for clause in ('全部主要呈现都完成', '首次出现不代表全部内容已披露',
+                   '分场父节点必须显式填 anchor_bindings', '倒叙不能更改世界因果',
+                   '不能创建知识事件', '普通呈现分场不要求重新抽取'):
+        assert clause in rendered
+    assert 'obligation=context' not in rendered

@@ -14,9 +14,15 @@ class PlannerBeat(FrozenModel):
     participant_aliases: list[OpaqueAlias]
 
 
-class PlannerBackgroundBeat(FrozenModel):
+class PlannerCharacter(FrozenModel):
     alias: OpaqueAlias
-    content: str = Field(min_length=1)
+    canonical: str = Field(min_length=1)
+    surfaces: list[str] = Field(min_length=1)
+    role: str = Field(min_length=1)
+
+
+class PlannerBackgroundBeat(PlannerBeat):
+    """既往剧情沿用完整正文与参与者语义，不产生本章呈现义务。"""
 
 
 class PlannerState(FrozenModel):
@@ -61,9 +67,9 @@ class PlannerKnowledge(FrozenModel):
     subject_alias: OpaqueAlias
     kind: Literal['secret_reveal', 'secret_setup', 'knowledge_event', 'world_rule',
                   'world_rule_reveal', 'relation', 'relation_visibility',
-                  'character_state', 'setting', 'state_reveal']
+                  'character_state', 'setting', 'reader_reveal', 'character_knowledge']
     audience: PlannerAudience | None
-    timing: Literal['at_entry', 'at_beats']
+    timing: Literal['at_entry', 'at_beats', 'future_chapter']
     trigger_beat_alias: OpaqueAlias | None = None
 
     @model_validator(mode='after')
@@ -90,6 +96,7 @@ class PlannerGlobalSubject(FrozenModel):
 class PlannerChapter(FrozenModel):
     chapter_ordinal: int = Field(ge=1)
     chapter_function: str = Field(min_length=1)
+    characters: list[PlannerCharacter]
     beats: list[PlannerBeat] = Field(min_length=1)
     states: list[PlannerState]
     inherited_states: list[PlannerState]
@@ -107,6 +114,19 @@ class PlannerChapter(FrozenModel):
                     self.background_beats, self.constraints, self.global_subjects) for row in field]
         if len(subjects) != len(set(subjects)):
             raise ValueError('规划真相主体不能重复保存')
+        characters = [row.alias for row in self.characters]
+        if len(characters) != len(set(characters)) or set(characters).intersection(subjects):
+            raise ValueError('规划人物身份必须唯一且不与其他主体混淆')
+        referenced_characters = {ref for beat in [*self.beats, *self.background_beats]
+                                 for ref in beat.participant_aliases}
+        referenced_characters.update(state.holder_alias for state in [*self.states, *self.inherited_states]
+                                     if state.holder_alias is not None)
+        referenced_characters.update(row.observer_alias for row in self.constraints
+                                     if isinstance(row, PlannerRelation) and row.observer_alias is not None)
+        referenced_characters.update(row.audience.char_id for row in self.knowledge
+                                     if row.audience is not None and row.audience.char_id is not None)
+        if not referenced_characters <= set(characters):
+            raise ValueError('规划引用的人物必须带可辨认的称呼与角色语义')
         beats = {b.alias for b in self.beats}
         states = {s.alias for s in [*self.states, *self.inherited_states]}
         if not set(self.entry_state_aliases + self.carry_out_aliases) <= states:

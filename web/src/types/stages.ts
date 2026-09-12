@@ -479,18 +479,6 @@ export interface GlobalReviewDecisionSet {
 
 /* ---------------------------------------------------------------- stage4 */
 
-export interface FactRef {
-  kind:
-    | 'character'
-    | 'fact_atom'
-    | 'world_rule'
-    | 'secret'
-    | 'relation'
-    | 'setting'
-    | 'chapter_boundary'
-  ref: string
-}
-
 export type PlanGoal = import('./plot.generated').PlanGoal
 
 /** Writer-facing goal: every planning ID has already been resolved by Stage4. */

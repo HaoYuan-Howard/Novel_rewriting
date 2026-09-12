@@ -66,10 +66,6 @@
   --color-recall: oklch(0.42 0.1 300);
   --color-recall-bg: oklch(0.95 0.03 300);
 
-  /* 必须保真的点（hinge） */
-  --color-hinge: oklch(0.72 0.11 60);
-  --color-hinge-bg: oklch(0.98 0.02 75);
-
   /* 文案段（钩子） */
   --color-hook: oklch(0.62 0.14 62);
   --color-hook-ink: oklch(0.42 0.13 55);

@@ -317,17 +317,6 @@
   "replace_reconstruction_strategy",
   "change_chapter_weights"
  ],
- "blueprint_review_change_kinds": [
-  "added",
-  "removed",
-  "changed"
- ],
- "blueprint_review_delta_modes": [
-  "initial",
-  "unchanged",
-  "targeted",
-  "full"
- ],
  "stage2_node_review_decisions": [
   "accept",
   "rework",
@@ -480,8 +469,7 @@
   "insufficient_evidence"
  ],
  "binding_infeasibility_codes": [
-  "missing_chapter_catalog",
-  "empty_stage_allowlist"
+  "missing_chapter_catalog"
  ],
  "design_review_states": [
   "unavailable",
@@ -533,76 +521,6 @@
   "recall": "视角人自己想起的往事",
   "hearsay": "别人讲给她听的事"
  },
- "hinge_kinds": [
-  "硬数字",
-  "要害台词",
-  "物件",
-  "因果前提",
-  "字面例外"
- ],
- "literal_requirement_kinds": [
-  "password",
-  "code",
-  "riddle",
-  "identifier"
- ],
- "fact_atom_kinds": [
-  "event",
-  "information",
-  "character_state",
-  "relationship",
-  "reader_knowledge"
- ],
- "fact_atom_obligations": [
-  "land",
-  "context"
- ],
- "narrative_relation_kinds": [
-  "story_before",
-  "response_to",
-  "same_scene",
-  "observes"
- ],
- "narrative_relation_enforcements": [
-  "hard",
-  "review"
- ],
- "hinge_groups": {
-  "要害台词": "dialogue",
-  "字面例外": "verbatim",
-  "硬数字": "keep_value",
-  "物件": "must_appear",
-  "因果前提": "must_hold"
- },
- "hinge_label_parts": {
-  "dialogue": [
-   "对白语义",
-   "可换措辞，保留说话关系、话语作用与必保事实"
-  ],
-  "verbatim": [
-   "字面例外原样写入",
-   "密码、口令、谜面或识别符号，一个字都不能改"
-  ],
-  "keep_value": [
-   "数值不得改动",
-   "措辞随你"
-  ],
-  "must_appear": [
-   "必须在场并起作用",
-   "怎么描写随你"
-  ],
-  "must_hold": [
-   "必须成立，但【不必写在纸面上】",
-   "别为它硬塞背景交代"
-  ]
- },
- "hinge_label": {
-  "dialogue": "对白语义（可换措辞，保留说话关系、话语作用与必保事实）",
-  "verbatim": "字面例外原样写入（密码、口令、谜面或识别符号，一个字都不能改）",
-  "keep_value": "数值不得改动（措辞随你）",
-  "must_appear": "必须在场并起作用（怎么描写随你）",
-  "must_hold": "必须成立，但【不必写在纸面上】（别为它硬塞背景交代）"
- },
  "blueprint_architectures": [
   "plot-blueprint-v1"
  ],
@@ -610,15 +528,6 @@
   "formal",
   "invalid"
  ],
- "repair_route": {
-  "短语不在本章原文里": "field_patch",
-  "段号越界，本章没有那一段": "chapter_regen",
-  "段号落在没有被任何 beat 覆盖的空档": "chapter_regen",
-  "短语不在它指定的那一段里，而出现在别处": "chapter_regen",
-  "已落盘的 source 与它所属 beat 的区间对不上": "chapter_regen",
-  "短语在本拍区间内多处命中": "field_patch",
-  "短语不在它所属拍的区间里，而出现在别处": "chapter_regen"
- },
  "response_time_layers": {
   "T_PRESENT": "present",
   "T_RECALL": "recall",

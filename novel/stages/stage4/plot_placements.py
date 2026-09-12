@@ -8,9 +8,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-import hashlib
-import hmac
-from typing import Any
 
 from contracts.schema.plot import (
     PlotAnchorBinding, PlotBlueprint, PlotChapterArrangement, PlotGoalAnchor,
@@ -149,98 +146,6 @@ def compile_placements(
         completed_at=completion,
         shared_evidence=tuple(shared),
     )
-
-
-def planner_truth_view(blueprint: PlotBlueprint, *, alias_key: str
-                       ) -> tuple[dict[str, Any], dict[str, str]]:
-    """只输出去源序语义与局部 opaque 引用，映射留在编译器内。"""
-    rows = [*blueprint.beats, *blueprint.states, *blueprint.constraints]
-    mapping: dict[str, str] = {}
-    if not alias_key:
-        raise ValueError('盲规划必须绑定不下发的 alias key')
-
-    def alias(identity: str) -> str:
-        if identity not in mapping:
-            token = 'p_' + hmac.new(alias_key.encode(), identity.encode(),
-                                    hashlib.sha256).hexdigest()[:16]
-            if token in mapping.values():
-                raise ValueError('opaque alias 碰撞，拒绝混淆主体')
-            mapping[identity] = token
-        return mapping[identity]
-
-    for row in rows:
-        identity = next(getattr(row, key) for key in
-                        ('beat_id', 'state_id', 'constraint_id') if hasattr(row, key))
-        alias(identity)
-
-    def project(value: Any, field: str = '') -> Any:
-        if isinstance(value, list):
-            values = [project(v, field) for v in value]
-            return sorted(values) if field.endswith(('_refs', '_ids')) else values
-        if isinstance(value, str):
-            if field == 'ref' or field.endswith(('_ref', '_refs', '_id', '_ids')):
-                return alias(value)
-            return mapping.get(value, value)
-        if not isinstance(value, dict):
-            return value
-        return {key: project(item, key) for key, item in value.items()
-                if key not in {'evidence_refs', 'evidence_anchors', 'source_contexts',
-                               'source_sha256'}}
-
-    body = blueprint.model_dump(mode='json')
-    result = {
-        'chapter_function': blueprint.chapter_function,
-        'beats': sorted(({'alias': mapping[b.beat_id], 'content': b.content,
-                          'participants': project(b.participant_char_ids, 'participant_char_ids')}
-                         for b in blueprint.beats), key=lambda row: row['alias']),
-        'states': project(body['states']),
-        'inherited_state_endings': project(body['inherited_state_endings']),
-        'constraints': project(body['constraints']),
-        'entry_state_refs': project(body['entry_state_refs'], 'entry_state_refs'),
-        'carry_out_refs': project(body['carry_out_refs'], 'carry_out_refs'),
-    }
-    # 只保留 opaque 排序；节点编号和 source_contexts 不得通过状态/约束旁路泄漏。
-    for key, id_field in (('states', 'state_id'), ('constraints', 'constraint_id')):
-        for row in result[key]:
-            row['alias'] = row.pop(id_field)
-        result[key].sort(key=lambda row: row['alias'])
-    return result, mapping
-
-
-def writer_plot_view(
-    blueprint: PlotBlueprint, arrangement: PlotChapterArrangement, *,
-    knowledge: Sequence[PlotKnowledgeTrigger] = (),
-    goals: Sequence[PlotGoalAnchor] = (),
-) -> dict[str, Any]:
-    """章级正文目录只存一次；场景许可不是同一请求内的模型输入隔离。"""
-    compiled = compile_placements(blueprint, arrangement, knowledge=knowledge, goals=goals)
-    labels = {beat.beat_id: f'剧情{index}' for index, beat in enumerate(blueprint.beats, 1)}
-    scenes: list[dict[str, Any]] = []
-    for scene in arrangement.scenes:
-        deliveries = [
-            {'plot_ref': labels[row.beat_ref],
-             'presentation_instruction': delivery.presentation_instruction}
-            for row in arrangement.beat_placements for delivery in row.deliveries
-            if delivery.scene_ref == scene.slot
-        ]
-        scenes.append({
-            'slot': scene.slot, 'purpose': scene.purpose,
-            'role': scene.role, 'delivery': scene.delivery, 'transition': scene.transition,
-            'plot_deliveries': deliveries,
-            'context_plot_refs': [labels[ref] for ref in scene.context_beat_refs],
-        })
-    indices = {scene.slot: index for index, scene in enumerate(arrangement.scenes)}
-    slots = list(indices)
-    return {
-        'plot_catalog': [{'plot_ref': labels[beat.beat_id], 'content': beat.content}
-                         for beat in blueprint.beats],
-        'scenes': scenes,
-        'knowledge_permissions': [
-            {'knowledge_ref': row.ref,
-             'allowed_slots': slots[indices[row.scene_ref]:]}
-            for row in compiled.bindings if row.kind == 'knowledge'
-        ],
-    }
 
 
 def compile_plan_placements(blueprint: PlotBlueprint, chapter: dict, *,

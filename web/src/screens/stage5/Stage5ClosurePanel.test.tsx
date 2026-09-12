@@ -71,7 +71,7 @@ function approvalDoc({
   nextStep?: string | null
 }): ApprovalDoc {
   return {
-    v: 6,
+    v: 7,
     sid: SID,
     gate: { s0: true, s1: true, s2: true, s4: true, s5: false, s6: false, s7: false },
     seen: { read: true, global: true },

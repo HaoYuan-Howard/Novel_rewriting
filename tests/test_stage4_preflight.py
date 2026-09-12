@@ -26,6 +26,8 @@ from contracts.rules import REGISTRY
 from novel import prov
 from novel.errors import ProvenanceRefused, TerminalState
 from novel.report.builder import remediation_of
+from novel.report.findings import ran
+from contracts.schema.report import finding
 from novel.stages.stage4 import checks, plan
 from tests.test_stage4_agent_boundary import (
     _book, _bound_b_response, _client, _ctx, _land_design, _NoWireDriver,
@@ -58,7 +60,7 @@ def test_preflight_pass_on_clean_book_and_writes_nothing(tmp_path: Path) -> None
         for path in book.rglob('*') if path.is_file())
     assert report.status == 'pass'
     assert report.failures == () and report.infeasibility == ()
-    from novel.stages.stage4.blind import candidate_subject_sha256
+    from novel.stages.stage4.plot_design import candidate_subject_sha256
     assert report.candidate_sha256 == candidate_subject_sha256(
         candidate.model_dump(by_alias=True, mode='json', exclude={'provenance'}))
     assert len(report.blueprint_sha256) == 64
@@ -84,12 +86,12 @@ def test_preflight_classifies_a_owned_failure_as_blocked(
     def injecting(plan_dict: dict[str, Any], *, witness=None, **kwargs):
         outcomes = real_check(plan_dict, witness=witness, **kwargs)
         # 与生产同形：Outcome 与 witness 行成对出现，且任何一次重算都重现。
-        outcomes.append(checks.ran('causal_closure', [checks.finding(
-            'causal_closure', detail='注入的因果边漂移',
+        outcomes.append(ran('placement_ref', [finding(
+            'placement_ref', detail='注入的因果边漂移',
             evidence=['synthetic-edge'], output_ordinal=1)],
             scanned='测试注入'))
         if witness is not None:
-            witness.add(code='causal_closure', rule='causal_closure',
+            witness.add(code='placement_ref', rule='placement_ref',
                         chapter_ordinal=1, refs=['synthetic-edge'])
         return outcomes
 
@@ -98,9 +100,9 @@ def test_preflight_classifies_a_owned_failure_as_blocked(
     assert report.blocked
     assert report.blocked_owners == ('stage4.design',)
     codes = {f.code for f in report.failures}
-    assert 'causal_closure' in codes
+    assert 'placement_ref' in codes
     assert all(f.repair_owner == 'stage4.design'
-               for f in report.failures if f.code == 'causal_closure')
+               for f in report.failures if f.code == 'placement_ref')
 
 
 def test_preflight_infeasibility_routes_to_stage2(
@@ -111,7 +113,7 @@ def test_preflight_infeasibility_routes_to_stage2(
     ctx = _ctx(book, 'stage4.plan')
     witness_row = {
         'chapter_ordinal': 1, 'scenes': [],
-        'constraint_code': 'empty_stage_allowlist',
+        'constraint_code': 'missing_chapter_catalog',
         'closed_refs': [], 'proof_basis': ['测试注入'],
     }
     monkeypatch.setattr(
@@ -120,7 +122,7 @@ def test_preflight_infeasibility_routes_to_stage2(
     assert report.blocked
     assert report.infeasibility == (witness_row,)
     assert report.blocked_owners == ('stage2.blueprint',)
-    assert report.failures[0].code == 'empty_stage_allowlist'
+    assert report.failures[0].code == 'missing_chapter_catalog'
     assert report.failures[0].repair_owner == 'stage2.blueprint'
 
 
@@ -134,7 +136,7 @@ def test_prepare_plan_candidate_refuses_blocked_preflight_before_any_wire(
 
     def injecting(plan_dict: dict[str, Any], *, witness=None, **kwargs):
         outcomes = real_check(plan_dict, witness=witness, **kwargs)
-        outcomes.append(checks.ran('goal_landing', [checks.finding(
+        outcomes.append(ran('goal_landing', [finding(
             'goal_landing', detail='注入的首尾目标未落场',
             evidence=['synthetic-goal'], output_ordinal=1)],
             scanned='测试注入'))

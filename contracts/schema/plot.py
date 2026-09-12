@@ -221,11 +221,14 @@ class PlotBlueprint(StrictModel):
         if len(spans) != len(set(spans)):
             raise ValueError('相同段范围必须复用一个证据锚点')
         graph = {ref: set() for ref in beats}
+        strict_edges: list[tuple[str, str]] = []
         for row in self.constraints:
             if isinstance(row, PlotRelationConstraint):
                 endpoints.extend((row.before_beat_ref, row.after_beat_ref))
-                if row.kind in ('cause', 'story_before'):
+                if row.kind in ('cause', 'story_before', 'response_to', 'observes'):
                     graph.get(row.before_beat_ref, set()).add(row.after_beat_ref)
+                if row.kind in ('cause', 'story_before'):
+                    strict_edges.append((row.before_beat_ref, row.after_beat_ref))
             else:
                 endpoints.append(row.target_beat_ref)
         for state in self.states:
@@ -264,22 +267,18 @@ class PlotBlueprint(StrictModel):
                 visit_state(parent, seen | {ref})
         for ref in state_graph:
             visit_state(ref, frozenset())
-        visiting: set[str] = set()
-        visited: set[str] = set()
-
-        def visit(ref: str) -> None:
-            if ref in visiting:
-                raise ValueError('故事因果与先后关系存在环')
-            if ref in visited:
-                return
-            visiting.add(ref)
-            for target in graph[ref]:
-                visit(target)
-            visiting.remove(ref)
-            visited.add(ref)
-
-        for ref in graph:
-            visit(ref)
+        # cause/story_before 是严格先后；回应/观察允许同时。只有严格边处于
+        # 可达回路才矛盾；纯非严格回路和同场关系不能被擅自升级成时间先后。
+        # 这里检查已登记故事关系，完全不消费场景披露顺序。
+        for before, after in strict_edges:
+            pending, visited = [after], set()
+            while pending:
+                ref = pending.pop()
+                if ref == before:
+                    raise ValueError('故事因果与先后关系存在严格顺序环')
+                if ref not in visited:
+                    visited.add(ref)
+                    pending.extend(graph[ref] - visited)
         return self
 
 

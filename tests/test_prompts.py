@@ -25,7 +25,6 @@ from novel.llm.prompts import (
 #: `块名 → 它的源`。**逐条声明，不自动发现**：自动发现会让「哪些表进了 prompt」
 #: 取决于命名巧合，而这张表要能被人读着核对。
 _SOURCES: dict[str, tuple] = {
-    'KINDS': inv.HINGE_KINDS,
     'LAYERS': inv.TIME_LAYERS,
     'RULE_KINDS': inv.WORLD_RULE_KINDS,
     'NAME_DISTINCT': inv.NAME_DISTINCTIVENESS,
@@ -121,10 +120,10 @@ def test_safe_substitute_is_never_called():
 
 def test_enum_blocks_are_merged_so_a_hand_written_subset_is_impossible():
     """调用点不必也不许自己传枚举块——**手抄一个子集在结构上做不到**。"""
-    out = fill('禁用：$WORDS\n保真类型：$KINDS')
+    out = fill('禁用：$WORDS\n时层：$LAYERS')
     for w in inv.STYLE_WORDS:
         assert w in out
-    for k in inv.HINGE_KINDS:
+    for k in inv.TIME_LAYERS:
         assert k in out
 
 

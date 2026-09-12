@@ -55,9 +55,6 @@ from contracts.schema.common import (
     FreeProvenance, LlmProvenance, Sha256,
 )
 
-from contracts.schema.stage2 import (
-    BEAT_ID_PATTERN, FACT_ID_PATTERN, HINGE_ID_PATTERN, CausalEdge,
-)
 from contracts.schema.plot import PlotEndpoint, PlotSubjectRef, BeatPlacement, PlotAnchorBinding
 
 
@@ -148,19 +145,6 @@ class PlanScene(StrictModel):
         if len(self.context_beat_refs) != len(set(self.context_beat_refs)):
             raise ValueError('场景背景节点引用不能重复')
         return self
-
-
-class FactRef(StrictModel):
-    """A recomputable Stage1/2 fact reference, not a free-text justification."""
-
-    kind: Literal[
-        'character', 'fact_atom', 'world_rule', 'secret', 'relation',
-        'setting', 'chapter_boundary',
-    ]
-    # Internal joins are valid in the planning artifact, but they are never a
-    # writer-facing language.  Marking the value private makes the final-message
-    # guard catch any future shortcut that sends PlanGoal itself to Stage5/6.
-    ref: str = Field(min_length=1, json_schema_extra={'prompt_private': True})
 
 
 class PlanGoal(StrictModel):
@@ -898,48 +882,18 @@ class PlanEdit(StrictModel):
 # 二、`writer_context.json`
 # ─────────────────────────────────────────────────────────────────────────────
 
-class CtxStage(StrictModel):
-    """一个可执行舞台；多个源区间可以合成同一新场，也可以被拆到不同新场。"""
-
-    time_layer: Literal[TIME_LAYERS]
-    place: str | None
-    present: list[str]
 
 
-class CtxCausalEdge(StrictModel):
-    before: str = Field(min_length=1)
-    after: str = Field(min_length=1)
 
 
 class CtxSemanticContract(SemanticContract):
     """写作侧保持同一引用契约。"""
 
 
-class CtxSceneKnowledge(StrictModel):
-    """只在指定场景开放的知识；伏笔 content 只能是关联的表现事实。"""
-
-    kind: Literal['secret', 'setup', 'world_rule', 'relation', 'character_state', 'setting']
-    content: str = Field(min_length=1)
-    usage: Literal['known', 'reveal', 'setup']
-    known_by: list[str]
 
 
-class CtxDisclosureWindow(StrictModel):
-    """整章请求中的每条受限事实仍携带允许使用的场景；不得当作全章已知。"""
-
-    subject_ref: str = Field(min_length=1, json_schema_extra={'prompt_private': True})
-    content: str = Field(min_length=1)
-    allowed_slots: list[str] = Field(min_length=1)
 
 
-class CtxDialogue(StrictModel):
-    """闭卷对白任务；人名按当前章解析，原句不进入写手输入。"""
-
-    speaker: str | None
-    addressees: list[str] | None
-    meaning: str = Field(min_length=1)
-    speech_act: str = Field(min_length=1)
-    required_facts: list[str] = Field(min_length=1)
 
 
 from contracts.schema.plot_context import (
@@ -963,34 +917,10 @@ class ChapterCharacter(StrictModel):
     role: str = Field(min_length=1)
 
 
-class CtxRelation(StrictModel):
-    """**两端都是人名**；一端叫不出名字则整条不发。盘上共 359 条。"""
-
-    subject: str = Field(min_length=1)
-    predicate: str = Field(min_length=1)
-    object: str = Field(min_length=1)
 
 
-class CtxSecret(StrictModel):
-    """逐章投影后的一条秘密。盘上共 114 条。"""
-
-    fact: str = Field(min_length=1)
-    known_by: list[str]
-
-    #: **唯一的读者时点标志**：`true` = 读者已知情、可以正面写；
-    #: `false` = 事实可以作为伏笔出现，但本章绝不能点破。
-    reader_knows_by_now: Literal[True]
 
 
-class CtxWorldRule(StrictModel):
-    """逐章投影后的一条规则。盘上共 87 条。
-
-    ⚠ 键名是 `description` 不是 `desc`：正文的唯一落点是 stage2 的 `versions[].desc`，
-    **无兜底，缺失即显式终态**（`or description` 那个兜底就是漏洞本身）。
-    """
-
-    kind: Literal[WORLD_RULE_KINDS]
-    description: str = Field(min_length=1)
 
 
 class CtxAddress(StrictModel):
@@ -1016,34 +946,8 @@ class CtxAddress(StrictModel):
     context: Literal[ADDRESS_CONTEXT]
 
 
-class CtxSetting(StrictModel):
-    """Stage4 写手面只保留两条 claim，不携带 Stage2 的原文证据。
-
-    两个中文 alias 仍与 Stage2 盘上字节完全同形；这里必须是独立的**消费投影**类型，
-    因为 GlobalGrounding v3 的 ``Setting`` 另有 ``*_evidence`` 必填格，而证据既不属于
-    写手故事材料，也已在组装入口被刻意剥掉。复用 producer 模型会让合法投影反而拒收。
-    """
-
-    era: str | None = Field(alias='时代背景', min_length=1)
-    worldview: str | None = Field(alias='世界观', min_length=1)
 
 
-class CtxFacts(StrictModel):
-    """必要事实，全部逐章投影。
-
-    ⚠⚠ **它是【整份 dict 铺进 prompt】的**（`facts_block` 做 `compact(f)`）：
-    `relations` / `world_rules` / `address` 全部逐条进了
-    模型的注意力，**键名只是从不字面出现**。
-    **拿 grep 审这一块，默认结论是错的。**
-    """
-
-    #: 两个**中文键**的 claim 投影。Stage2 evidence 明确不进入 writer context。
-    setting: CtxSetting
-
-    relations: list[CtxRelation]
-    secrets: list[CtxSecret]
-    world_rules: list[CtxWorldRule]
-    address: list[CtxAddress]
 
 
 class CtxNarration(StrictModel):
@@ -1081,6 +985,7 @@ class CtxChapter(StrictModel):
     semantic_contract: CtxSemanticContract
     chapter_rewrite_brief: str = Field(min_length=1)
     beats: list[WriterBeat] = Field(min_length=1)
+    background_beats: list[WriterBeat] = Field(default_factory=list)
     states: list[WriterState]
     constraints: list[WriterConstraint]
     global_subjects: list[WriterGlobalSubject]
@@ -1100,6 +1005,11 @@ class CtxChapter(StrictModel):
         events = {row.event_ref: row for row in self.knowledge_events}
         globals_ = {(row.subject_ref.kind, row.subject_ref.ref): row for row in self.global_subjects}
         restricted = {(row.kind, row.ref) for row in self.restricted_subject_refs}
+        restricted_states = {ref for kind, ref in restricted if kind == 'state'}
+        state_refs = states.keys() | restricted_states
+        background = {row.beat_ref for row in self.background_beats}
+        if len(background) != len(self.background_beats) or background.intersection(refs):
+            raise ValueError('必要背景节点只保存一次，不能重复当前章剧情正文')
         for size, values in (
             (len(slots), slots), (len(refs), refs), (len(self.states), states),
             (len(self.constraints), constraints), (len(self.knowledge_events), events),
@@ -1111,9 +1021,9 @@ class CtxChapter(StrictModel):
             raise ValueError('同一共享主体不能同时下发正文和声明未开放')
         if (set(self.semantic_contract.beat_refs) != set(refs)
                 or set(self.semantic_contract.constraint_refs) != set(constraints)
-                or not set(self.semantic_contract.state_refs) <= states.keys()
-                or not set(self.semantic_contract.entry_state_refs) <= states.keys()
-                or not set(self.semantic_contract.carry_out_refs) <= states.keys()):
+                or not set(self.semantic_contract.state_refs) <= state_refs
+                or not set(self.semantic_contract.entry_state_refs) <= state_refs
+                or not set(self.semantic_contract.carry_out_refs) <= state_refs):
             raise ValueError('语义契约必须指向当前章级目录')
         completed = {ref: max((i for i, scene in enumerate(self.scenes)
                               if any(d.beat_ref == ref for d in scene.deliveries)), default=-1)
@@ -1130,7 +1040,7 @@ class CtxChapter(StrictModel):
             if scene.knowledge_event_refs != expected_events:
                 raise ValueError('逐场知识引用必须精确等于下发事件的许可')
             if (not set(scene.constraint_refs) <= constraints.keys()
-                    or any(row.state_ref not in states for row in scene.state_events)):
+                    or any(row.state_ref not in state_refs for row in scene.state_events)):
                 raise ValueError('场景状态或约束引用不在目录')
         for row in events.values():
             expected = slots if row.timing == 'at_entry' else (
@@ -1147,7 +1057,7 @@ class CtxChapter(StrictModel):
                         or permission.allowed_slots != [slot for slot in slots
                                                         if slot in permission.allowed_slots]):
                     raise ValueError('命题表达许可必须指向同一主体及认识性质的状态')
-                reveals = [e for e in events.values() if e.kind == 'state_reveal'
+                reveals = [e for e in events.values() if e.kind == 'reader_reveal'
                            and e.subject_ref.ref == state.state_ref]
                 if len(reveals) != 1 or permission.allowed_slots != reveals[0].allowed_slots:
                     raise ValueError('命题表达许可必须由已登记的状态披露事件编译')
@@ -1169,8 +1079,8 @@ class CtxProvenance(FreeProvenance):
 class WriterContext(StrictModel):
     """`stage4/writer_context.json`：确定性组装的当前写作输入。
 
-    顶层只保存逐章上下文和来源账。组装结果由 `ctx_facts_exact`、
-    `ctx_name_attested`、`ctx_stage_explicit` 与 `ctx_hinge_delivered`
+    顶层只保存逐章上下文和来源账。组装结果由 `ctx_plot_exact`、
+    `ctx_name_attested` 与 `ctx_permission_exact`
     四条后置条件规则验证；未知字段由
     `StrictModel.extra='forbid'` 拒收。
     """

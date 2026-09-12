@@ -20,6 +20,7 @@ from novel import agent_session_audit, paths, prov
 from novel.agents import AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage
 from novel.errors import GateBlocked, ProvenanceRefused
 from novel.llm.cache import CachePolicy
+from novel.llm.client import LlmFailed
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.node_agents import BlueprintSessionPool, Stage2BlueprintAgent
 from novel.run import RunContext
@@ -35,7 +36,7 @@ from tests.test_stage2_generation import (
 @pytest.fixture(autouse=True)
 def _stable_contract_and_code(monkeypatch):
     monkeypatch.setenv(
-        'NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
+        'NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'plot-blueprint-v1')
     monkeypatch.setattr(
         prov, 'code_version', lambda: 'test-stage2-blueprint-node-agent')
 
@@ -77,8 +78,7 @@ def _ctx(base: Path, book: Path, *, run_id: str | None = None) -> RunContext:
 
 def _bad_chapter(chapter: int) -> dict:
     value = copy.deepcopy(_response_blueprints()[chapter])
-    for beat in value['beats']:
-        beat['hinges'] = []
+    value['beats'][0]['participant_char_ids'] = ['char_999999']
     return value
 
 
@@ -123,8 +123,10 @@ class _Driver(AgentDriver):
             driver=self.driver, provider=self.provider,
             executable='fake-codex', available=True, version='0.blueprint-test')
 
-    def _turn(self) -> AgentTurn:
+    def _turn(self, request: AgentRequest) -> AgentTurn:
         response = self.responses.pop(0)
+        if callable(response):
+            response = response(request)
         return AgentTurn(
             session_id=self.session_id,
             content=json.dumps(
@@ -139,7 +141,7 @@ class _Driver(AgentDriver):
     def start(self, profile: AgentProfile, request: AgentRequest) -> AgentTurn:
         assert profile == _profile()
         self.calls.append(('start', request))
-        return self._turn()
+        return self._turn(request)
 
     def resume(
         self, profile: AgentProfile, session_id: str, request: AgentRequest,
@@ -153,7 +155,7 @@ class _Driver(AgentDriver):
         assert not list((self.book / 'stage2/_rounds').glob(
             'chapter_blueprints*.json'))
         self.calls.append(('resume', request))
-        return self._turn()
+        return self._turn(request)
 
     def cancel(self, session_id: str | None = None) -> bool:
         return False
@@ -210,26 +212,41 @@ def test_commander_rework_only_revises_requested_chapter_and_preserves_others(tm
     from novel import work_units
     from novel.node_agents import build_node_agent
     from novel.orchestrator import approvals
-    from tests.test_stage2_review_decisions import _approve_all_review
+    from contracts.schema.plot_review import PlotReviewResponse
+    from novel.views.stage2 import blueprint_review_workpack
+    from tests.test_plot_review_runtime import response
 
     book = tmp_path / '蓝图定向返工_690'
     book.mkdir()
     _land_global(book)
-    _approve_all_review(book)
-    global_token = approvals._stage2_review_identity(book, 'stage2.global')[0]
-    approvals.approve_stage2_review(tmp_path, '690', Stage2NodeReviewRequest(
-        node='stage2.global', review_token=global_token, decision='accept',
-        actor='test-commander', reason='全局必需事实已核验'))
     good = _response_blueprints()
     initial = _ctx(tmp_path, book)
     first = Stage2BlueprintAgent(initial, driver_factory=_Factory(
         book, {(chapter, 1): [good[chapter]] for chapter in (1, 2, 3)})).run()
-    token = approvals._stage2_review_identity(book, initial.node)[0]
+    pack = blueprint_review_workpack(tmp_path, initial.sid, scope='chapter:2')
+    token = pack.review_token
+    verdict = response().model_dump(mode='json')
+    verdict.update(decision='revise', reason='仅核对第 2 章因果依据')
+    verdict['coverage']['causal_continuity'] = {'state': 'issue', 'issue_refs': ['new:1']}
+    verdict['new_issues'] = [{
+        'issue_key': 'new:1', 'dimension': 'causal_continuity',
+        'problem': '需复核行动动机的完整表达。',
+        'subjects': [{'kind': 'beat', 'ref': 'b02_01'}],
+        'evidence_refs': [{'chapter_ordinal': 2, 'evidence_ref': 'e02_01'}],
+    }]
     approvals.approve_stage2_review(tmp_path, initial.sid, Stage2NodeReviewRequest(
-        node=initial.node, review_token=token, decision='rework', owner=initial.node,
-        actor='test-commander', reason='仅核对第 2 章因果依据', chapter_ordinals=[2]))
+        node=initial.node, scope=pack.scope, review_token=token,
+        decision='rework', owner=initial.node, actor='test-commander',
+        reason=verdict['reason'], chapter_ordinals=[2],
+        plot_review=PlotReviewResponse.model_validate(verdict)))
     repaired = _ctx(tmp_path, book)
-    factory = _Factory(book, {(2, 1): [good[2]]}, session_namespace='commander-')
+    def answer(req):
+        metadata = json.loads(req.prompt.split('\n', 1)[0])
+        row = metadata['repair_baseline']
+        row['identities'] = metadata['baseline_identities']
+        row['chapter_function'] += '；明确行动动机'
+        return row
+    factory = _Factory(book, {(2, 1): [answer]}, session_namespace='commander-')
     result = build_node_agent(repaired, driver_factory=factory, review_token=token).run()
     assert result.passed
     assert [row[2] for row in factory.created] == [2]
@@ -267,14 +284,9 @@ def test_live_hard_resumes_only_target_chapter_then_delivers(tmp_path):
     first, resumed = (request for _kind, request in ch1.calls)
     assert first.system is not None and resumed.system is None
     feedback = json.loads(resumed.prompt)
-    assert feedback['kind'] == 'code_validation_failed'
-    assert feedback['failures']
-    assert set(feedback['failures'][0]) == {
-        'rule', 'item', 'requirement', 'count', 'chapter'}
-    assert all(
-        forbidden not in json.dumps(feedback['failures'], ensure_ascii=False)
-        for forbidden in ('findings', 'detail', 'evidence')
-    )
+    assert feedback['kind'] == 'response_validation_failed'
+    assert feedback['gate'] == 'validator'
+    assert '不可见人物' in json.dumps(feedback, ensure_ascii=False)
 
     store = ArtifactStore(ctx)
     landed = store.read(ChapterBlueprints, extract.BLUEPRINT_REL)
@@ -308,97 +320,50 @@ def test_initial_checkpoint_is_immutable_across_live_revision(tmp_path):
     checkpoint = json.loads(paths.stage2_blueprint_checkpoint_path(
         book, ctx.run_id, 'blueprint', 1).read_text(encoding='utf-8'))
     first_blueprint = checkpoint['response_payload']['blueprints'][0]
-    assert all(not beat['hinges'] for beat in first_blueprint['beats'])
-    landed = ArtifactStore(ctx).read(
-        ChapterBlueprints, extract.BLUEPRINT_REL)
-    final_ch1 = next(
-        row for row in landed.blueprints if row.chapter_ordinal == 1)
-    assert any(beat.hinges for beat in final_ch1.beats)
+    assert first_blueprint == good[1]
+    assert checkpoint['accepted_turn_index'] == 2
+    landed = ArtifactStore(ctx).read(ChapterBlueprints, extract.BLUEPRINT_REL)
+    assert landed.blueprints[0].beats[0].participant_char_ids == good[1]['beats'][0]['participant_char_ids']
 
 
 def test_crash_restore_opens_one_new_subject_and_never_builds_restored_drivers(
-        tmp_path):
+        tmp_path, monkeypatch):
+    """两章响应已购并验证后中断，重启只购买尚未完成的第三章。"""
+    from novel import work_units
     book = tmp_path / '蓝图恢复新会话_603'
     book.mkdir()
     _land_global(book)
     first_ctx = _ctx(tmp_path, book)
     good = _response_blueprints()
-    first_factory = _Factory(book, {
-        (1, 1): [_bad_chapter(1)],
-        (2, 1): [good[2]],
-        (3, 1): [good[3]],
-    })
-    first_pool = BlueprintSessionPool(
-        first_ctx, driver_factory=first_factory, max_turns=3)
+    first_factory = _Factory(book, {(ch, 1): [good[ch]] for ch in (1, 2, 3)})
+    first_pool = BlueprintSessionPool(first_ctx, driver_factory=first_factory, max_turns=3)
     first_pool.prepare_initial_sessions()
-    batch = extract.request_blueprints(first_ctx, first_pool)
-    evaluation = extract.evaluate_blueprint_candidate(
-        first_ctx, first_pool, batch)
-    assert not evaluation.passed
-    checkpoint_path = paths.stage2_blueprint_checkpoint_path(
-        book, first_ctx.run_id, 'blueprint', 1)
-    checkpoint_before = checkpoint_path.read_bytes()
-    # 不写终态来模拟修订前进程中断；只释放本进程 driver。
+    original = extract._run_chapter_requests
+    def interrupted(ctx, pool, requests, **kwargs):
+        result = original(ctx, pool, requests, **kwargs)
+        if requests[0][0] == 2:
+            raise RuntimeError('第二章检查点封存后中断')
+        return result
+    with monkeypatch.context() as patch:
+        patch.setattr(extract, '_run_chapter_requests', interrupted)
+        with pytest.raises(RuntimeError, match='封存后中断'):
+            extract.request_blueprints(first_ctx, first_pool)
+    saved = {ch: paths.stage2_blueprint_checkpoint_path(
+        book, first_ctx.run_id, 'blueprint', ch).read_bytes() for ch in (1, 2)}
     first_pool.close()
-
-    resumed_ctx = _ctx(
-        tmp_path, book, run_id=first_ctx.run_id)
-    resumed_factory = _Factory(
-        book, {(1, 1): [good[1]]}, session_namespace='restored-')
-    result = Stage2BlueprintAgent(
-        resumed_ctx, driver_factory=resumed_factory, max_turns=3).run()
-
-    # 三章 checkpoint 的历史 turns 与第一章恢复新 session 的新 turn 一起累计，
-    # crash 不会把逐章预算/计数清零。
-    assert result.turns == 4
-    assert [(phase, chapter) for phase, _purpose, chapter, _n, _driver
-            in resumed_factory.created] == [('blueprint', 1)]
-    replacement, = resumed_factory.chapter(1)
-    assert replacement.probe_calls == 1
-    assert [kind for kind, _request in replacement.calls] == ['start']
-    request = replacement.calls[0][1]
-    assert request.system is not None
-    feedback = json.loads(request.prompt)
-    assert feedback['kind'] == 'checkpoint_recovery_task'
-    assert '<1> 春风吹过老宅的院墙。' in feedback['original_task']
-    assert feedback['recovery']['kind'] \
-        == 'checkpoint_recovery_validation_failed'
-    assert 'previous_candidate' in feedback['recovery']
-    assert set(feedback['recovery']['failures'][0]) == {
-        'rule', 'item', 'requirement', 'count', 'chapter'}
-    assert checkpoint_path.read_bytes() == checkpoint_before
-    landed = ArtifactStore(resumed_ctx).read(
-        ChapterBlueprints, extract.BLUEPRINT_REL)
-    assert landed.provenance.usage is not None
-    assert landed.provenance.usage.calls_made == 4
+    resumed_ctx = _ctx(tmp_path, book, run_id=first_ctx.run_id)
+    resumed_factory = _Factory(book, {(3, 1): [good[3]]}, session_namespace='restored-')
+    result = Stage2BlueprintAgent(resumed_ctx, driver_factory=resumed_factory, max_turns=3).run()
+    assert result.turns == 3
+    assert [row[2] for row in resumed_factory.created] == [3]
+    assert [kind for kind, _ in resumed_factory.chapter(3)[0].calls] == ['start']
+    assert all(paths.stage2_blueprint_checkpoint_path(
+        book, first_ctx.run_id, 'blueprint', ch).read_bytes() == raw for ch, raw in saved.items())
+    assert result.artifact.provenance.usage.calls_made == 3
+    assert [work_units.budget_for(resumed_ctx, scope=f'chapter:{ch}').used for ch in (1, 2, 3)] == [1, 1, 1]
     records = _records(tmp_path)
-    assert len(records) == 4
-    old = [
-        record for record in records
-        if (record.start.chapter == 1
-            and record.end is not None
-            and record.end.error_kind == 'checkpoint_business_rejected')
-    ]
-    assert len(old) == 1
-    assert old[0].delivery_state == 'blocked'
-    assert old[0].end is not None
-    newer = [
-        record for record in records
-        if record.start.chapter == 1 and record.session_run_id != old[0].session_run_id
-    ]
-    assert len(newer) == 1 and newer[0].delivery_state == 'delivered'
-    original_request = AgentRequest(
-        prompt=feedback['original_task'], system=request.system,
-        output_schema=request.output_schema,
-        delivery_protocol=request.delivery_protocol,
-        execution_policy=request.execution_policy, cwd=request.cwd,
-    )
-    assert newer[0].turns
-    assert newer[0].start.prompt_sha256 == hashlib.sha256(
-        request.stdin_bytes()).hexdigest()
-    assert newer[0].start.prompt_sha256 == newer[0].turns[0].prompt_sha256
-    assert newer[0].start.prompt_sha256 != hashlib.sha256(
-        original_request.stdin_bytes()).hexdigest()
+    assert len(records) == 3
+    assert all(row.delivery_state == 'delivered' for row in records)
 
 
 def test_clean_checkpoint_restore_is_zero_driver_and_closes_old_sessions(
@@ -445,84 +410,59 @@ def test_clean_checkpoint_restore_is_zero_driver_and_closes_old_sessions(
         for record in records)
 
 
-def test_exhausted_restored_budget_adds_no_probe_or_provider_start(tmp_path):
+def test_exhausted_restored_budget_adds_no_provider_start(tmp_path):
+    """第四次坏响应耗尽持久额度；执行 epoch 与新 driver 都不能重置额度。"""
+    from novel import work_units
     book = tmp_path / '蓝图恢复预算耗尽_608'
     book.mkdir()
     _land_global(book)
     good = _response_blueprints()
     first_ctx = _ctx(tmp_path, book)
-    # 第一轮给错章，触发同一 provider session 的 scope validator resume；第二轮
-    # wire/schema/scope 合格但仍有整书业务 HARD，因此 checkpoint 已累计两轮。
-    first_factory = _Factory(book, {
-        (1, 1): [good[2], _bad_chapter(1)],
-        (2, 1): [good[2]],
-        (3, 1): [good[3]],
-    })
-    first_pool = BlueprintSessionPool(
-        first_ctx, driver_factory=first_factory, max_turns=2)
-    first_pool.prepare_initial_sessions()
-    batch = extract.request_blueprints(first_ctx, first_pool)
-    assert not extract.evaluate_blueprint_candidate(
-        first_ctx, first_pool, batch).passed
-    checkpoint = json.loads(paths.stage2_blueprint_checkpoint_path(
-        book, first_ctx.run_id, 'blueprint', 1).read_text(encoding='utf-8'))
-    assert checkpoint['accepted_turn_index'] == 2
-    old_session = checkpoint['session_run_id']
-    first_pool.close()
-
+    first_factory = _Factory(book, {(1, 1): [good[1]], (2, 1): [good[2]],
+                                    (3, 1): [_bad_chapter(3)] * 4})
+    with pytest.raises(LlmFailed, match="已用尽 4 轮"):
+        Stage2BlueprintAgent(first_ctx, driver_factory=first_factory, max_turns=4).run()
+    assert work_units.budget_for(first_ctx, scope='chapter:3').used == 4
+    first_calls = len(agent_session_audit.read_events(tmp_path))
     resumed_ctx = _ctx(tmp_path, book, run_id=first_ctx.run_id)
-    resumed_factory = _Factory(book, {(1, 1): []})
-    with pytest.raises(GateBlocked):
-        Stage2BlueprintAgent(
-            resumed_ctx, driver_factory=resumed_factory, max_turns=2).run()
-
-    replacement, = resumed_factory.chapter(1)
-    assert replacement.probe_calls == 0
-    assert replacement.calls == []
-    assert replacement.close_calls == 1
-    assert not any(
-        event.kind == 'started' and event.session_run_id != old_session
-        and event.chapter == 1
-        for event in agent_session_audit.read_events(tmp_path)
-    )
-    old_record, = [
-        record for record in _records(tmp_path)
-        if record.session_run_id == old_session
-    ]
-    assert old_record.end is not None
-    assert (old_record.end.process_state, old_record.end.delivery_state,
-            old_record.end.error_kind) == (
-                'ok', 'blocked', 'checkpoint_business_rejected')
+    resumed_factory = _Factory(book, {(3, 1): []}, session_namespace='exhausted-')
+    with pytest.raises((GateBlocked, ProvenanceRefused, LlmFailed)):
+        Stage2BlueprintAgent(resumed_ctx, driver_factory=resumed_factory, max_turns=4).run()
+    assert all(not driver.calls for *_head, driver in resumed_factory.created)
+    assert work_units.budget_for(resumed_ctx, scope='chapter:3').used == 4
+    recovered_events = agent_session_audit.read_events(tmp_path)[first_calls:]
+    assert all(row.kind != 'turn' for row in recovered_events)
+    assert all(not row.provider_session_ids for row in _records(tmp_path)
+               if row.start.chapter == 3
+               and row.session_run_id not in {event.session_run_id for event in agent_session_audit.read_events(tmp_path)[:first_calls]})
 
 
-def test_turn_limit_writes_one_invalid_and_ends_every_live_session(tmp_path):
+def test_turn_limit_writes_one_invalid_and_ends_every_live_session(tmp_path, monkeypatch):
+    """已购合法章节在聚合中缺失，真实齐章 HARD 只能终态写一次 INVALID。"""
     book = tmp_path / '蓝图终态拒稿_604'
     book.mkdir()
     _land_global(book)
     good = _response_blueprints()
-    factory = _Factory(book, {
-        (1, 1): [_bad_chapter(1), _bad_chapter(1)],
-        (2, 1): [good[2]],
-        (3, 1): [good[3]],
-    })
+    factory = _Factory(book, {(ch, 1): [good[ch]] for ch in (1, 2, 3)})
     ctx = _ctx(tmp_path, book)
-
+    original = extract.request_blueprints
+    def lose_aggregate_chapter(*args, **kwargs):
+        batch = original(*args, **kwargs)
+        # 注入聚合故障，既不篡改已购 checkpoint，也不伪造通过/失败判据。
+        batch['raw_blueprints'] = batch['raw_blueprints'][:2]
+        return batch
+    monkeypatch.setattr(extract, 'request_blueprints', lose_aggregate_chapter)
     with pytest.raises(GateBlocked):
-        Stage2BlueprintAgent(
-            ctx, driver_factory=factory, max_turns=2).run()
-
+        Stage2BlueprintAgent(ctx, driver_factory=factory, max_turns=1).run()
     store = ArtifactStore(ctx)
     assert store.exists(extract._INVALID)
     assert not store.exists(extract.BLUEPRINT_REL)
     invalid = store.read(ChapterBlueprints, extract._INVALID)
-    assert invalid.provenance.usage is not None
-    assert invalid.provenance.usage.calls_made == 4
-    assert not list((book / 'stage2/_rounds').glob(
-        'chapter_blueprints.INVALID.r*.json'))
+    assert invalid.provenance.usage.calls_made == 3
+    assert not list((book / 'stage2/_rounds').glob('chapter_blueprints.INVALID.r*.json'))
     records = _records(tmp_path)
     assert len(records) == 3
-    assert all(record.process_state == 'ok' for record in records)
-    assert all(record.delivery_state == 'blocked' for record in records)
+    assert all(row.process_state == 'ok' and row.delivery_state == 'blocked' for row in records)
     assert all(driver.close_calls == 1 for *_head, driver in factory.created)
 
 
@@ -532,8 +472,6 @@ def test_static_book_hard_is_broadcast_only_to_detail_targets():
         chapters=(), findings=(object(), object()))
     evaluation = SimpleNamespace(
         purposes=(
-            ('stage2.blueprint:boundaries:ch1', 1),
-            ('stage2.blueprint:boundaries:ch2', 2),
             ('stage2.blueprint:ch1', 1),
             ('stage2.blueprint:ch2', 2),
         ),
@@ -596,13 +534,13 @@ def test_provider_session_id_cannot_be_reused_across_chapters(tmp_path):
     assert not (book / extract.BLUEPRINT_REL).exists()
     # 冲突 turn 留作协议违规证据但不取得 ownership，因此整份审计账仍必须可折叠。
     records = _records(tmp_path)
-    assert len(records) == 3
+    assert len(records) == 2
     assert sum(bool(record.provider_session_ids) for record in records) == 1
     ended = [
         event for event in agent_session_audit.read_events(tmp_path)
         if event.kind == 'ended'
     ]
-    assert len(ended) == 3
+    assert len(ended) == 2
     assert all(event.process_state == 'failed' for event in ended)
     assert all(event.delivery_state == 'unknown' for event in ended)
     assert all(event.error_kind == 'session_isolation' for event in ended)

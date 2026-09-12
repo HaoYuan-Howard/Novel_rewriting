@@ -5,6 +5,7 @@
 由 test_delivery_modes 在真实干净 Git 快照中执行，不绕过启动身份守卫。
 """
 from pathlib import Path
+import json
 import sys
 import time
 
@@ -27,22 +28,44 @@ from novel.stages.stage7 import rename
 from novel.orchestrator import jobs
 from tests.test_stage2_uploaded_flow import uploaded, _ctx, SID, PREFIX, _get
 from tests.test_stage2_generation import _client as blueprint_client, _respond_blueprints, _response_blueprints
-from tests.test_stage2_knowledge_links import _submission
+from tests.test_plot_review_runtime import request as plot_review_request
+from tests.test_plot_pipeline import REWRITTEN_BEATS
 from tests.test_stage4_v3_integration import _client, _split_a_responder
 
 
-FACT_TEXT = {
-    'f01_001': '老宅院墙外掠过春风。\n\n李宝珠倚在廊下。\n\n她静静望着飘落的花瓣。',
-    'f01_002': '昨夜的信浮上心头。\n\n父亲回城的消息写在信里。\n\n她折信藏袖，远处梆声响起。',
-    'f02_001': '翌日的晨光尚淡。\n\n李宝珠拉开院门。\n\n她迈步走了出去。',
-    'f02_002': '街头小贩正喊卖。\n\n她拎着买好的两个包子回家，热气未散。\n\n母亲已候在门前，早已知晓信里的事。',
-    'f03_001': '午后暑意催人困倦。\n\n李宝珠摊账逐页翻检。',
-    'f03_002': '管家在门外回话。\n\n米价又涨了一回。',
-    'f03_003': '她蹙起眉头。\n\n让管家向别家问价。',
-    'f03_004': '槐叶落在窗外。\n\n碎叶已铺了一地。',
-    'f03_005': '她又想起父亲当年翻账的模样。\n\n那时她还没桌子高。',
-    'f03_006': '母亲进屋添了一盏新茶。\n\n她捧起吹凉，却没喝。',
+BEAT_TEXT = {
+    'b01_01': '昨夜来信。\n\n信里说起父亲。\n\n他已回城。',
+    'b01_02': '李宝珠倚着老宅的廊柱。\n\n春风卷着残花掠过院墙。\n\n她想起昨夜的信，将信纸折起，收进衣袖。\n\n目光仍停在院中落花上，远处传来几声梆子。',
+    **REWRITTEN_BEATS,
 }
+
+
+def design_response(blueprints):
+    answer = _split_a_responder(blueprints)
+
+    def respond(request):
+        raw = answer(request)
+        if 'scenes' not in raw:
+            return raw
+        public = json.loads(request.user.split(plan.prompts.BLOCK_BLIND_CHAPTER_TRUTH + '\n')[1])
+        ordinal = public['chapter']['chapter_ordinal']
+        if ordinal == 2:
+            # 母亲已知来信是归家段落的披露，完整节点仍独立引用，不另造一个等长空场。
+            first = raw['scenes'][0]['scene_ref']
+            raw['scenes'] = raw['scenes'][:1]
+            for placement in raw['beat_placements']:
+                placement['deliveries'][0]['scene_ref'] = first
+            for key in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
+                raw[key]['anchor_scene_ref'] = first
+        elif ordinal == 3:
+            by_alias = {beat['alias']: beat['content'] for beat in public['chapter']['beats']}
+            for scene in raw['scenes']:
+                content = by_alias[scene['turn_beat_alias']]
+                # 长行动段、短回忆和添茶按真实呈现任务分配篇幅；不靠补写重复剧情凑段数。
+                scene['weight'] = 'W_STRONG' if '管家' in content else 'W_QUICK' if '童年' in content else 'W_MID'
+        assert len(raw['beat_placements']) == len(public['chapter']['beats'])
+        return raw
+    return respond
 
 
 def post(http, suffix, payload=None):
@@ -78,9 +101,10 @@ def _run_free_next(http, *, node, flags):
 def build(base):
     with pytest.MonkeyPatch.context() as env:
         env.delenv('DEEPSEEK_API_KEY', raising=False)
-        env.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
+        env.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'plot-blueprint-v1')
         if paths.find_novel_dir(base, SID) is None:
             uploaded.__wrapped__(base, env)
+        env.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'plot-blueprint-v1')
         book = paths.resolve_novel_dir(base, SID)
         with TestClient(create_app(base)) as http:
             http.headers[UI_HEADER] = '1'
@@ -88,32 +112,46 @@ def build(base):
                 ctx = _ctx(base, 'stage2.blueprint', paid=True)
                 client, wire = blueprint_client(ctx, lambda request, _n: _respond_blueprints(request, _response_blueprints()))
                 assert extract.run_blueprint(ctx, client).passed
-                pack = BlueprintReviewWorkpack.model_validate(_get(http, '/stage2/blueprint-review-workpack'))
-                submission = _submission(pack.knowledge_links.scope)
-                post(http, '/approvals/stage2-review', {
-                    'node': 'stage2.blueprint', 'review_token': pack.review_token, 'decision': 'accept',
-                    'actor': submission.actor, 'reason': submission.reason,
-                    'knowledge_links': submission.model_dump(mode='json'),
-                    'review': {'scope_sha256': pack.review_coverage.scope.scope_sha256,
-                              'default_decision': 'accept', 'exceptions': []}})
+                assert len(wire.calls) == 3
+            # 生成、章审、跨章复核与免费知识汇合分别恢复；已有完整文件不等于接受。
+            if not _get(http, '/approvals')['gate']['s2']:
+                for scope in ('chapter:1', 'chapter:2', 'chapter:3', 'cross_chapter'):
+                    progress = _get(http, '/approvals')['stage2_reviews']['stage2.blueprint']['plot_progress']
+                    assert progress is not None
+                    current = next(row for row in progress['scopes'] if row['scope'] == scope)
+                    if current['state'] == 'accepted':
+                        continue
+                    response = http.get(PREFIX + '/stage2/blueprint-review-workpack', params={'scope': scope})
+                    assert response.status_code == 200, response.text
+                    pack = BlueprintReviewWorkpack.model_validate(response.json())
+                    assert pack.scope == scope
+                    if scope == 'cross_chapter':
+                        assert pack.progress.accepted_chapters == 3
+                        assert not _get(http, '/approvals')['gate']['s2']
+                    accepted = post(http, '/approvals/stage2-review',
+                                    plot_review_request(pack).model_dump(mode='json'))
+                    if scope.startswith('chapter:'):
+                        assert not accepted['gate']['s2'], '全部章审尚不能代替独立跨章接受'
+                    print('BLUEPRINT_SCOPE_OK', scope, flush=True)
                 _run_free_next(http, node='stage2.blueprint', flags=['--close-review'])
+                assert _get(http, '/approvals')['gate']['s2']
             bp = ArtifactStore(_ctx(base, 'stage4.design')).read_own(ChapterBlueprints, 'stage2/chapter_blueprints.json')[0]
             bp_json = bp.model_dump(by_alias=True, mode='json')
             if not (book / plan.CANDIDATE_REL).is_file():
                 ctx = _ctx(base, 'stage4.design', paid=True)
-                client, wire = _client(ctx, _split_a_responder(bp_json))
+                client, wire = _client(ctx, design_response(bp_json))
                 plan.run_design(ctx, client)
             if _get(http, '/approvals')['design_review']['state'] != 'accepted':
                 response = http.get(PREFIX + '/approvals/design/template', params={
                     'actor': 'human-ui', 'reviewer_kind': 'human', 'review_run_id': 'offline-design',
-                    'reason': '仅合成链验证，明确接受已给定事实与结构'})
+                    'reason': '仅合成链验证，明确接受完整剧情与分场结构'})
                 assert response.status_code == 200, response.text
                 template = response.json()
                 post(http, '/approvals/design', {
                     'actor': template['actor'], 'reviewer_kind': template['reviewer_kind'],
                     'review_run_id': template['review_run_id'], 'general_reason': template['general_reason'],
-                    'review_token': template['review_token'], 'strategy': {'decision': 'accept', 'reason': '保留已给定事实'},
-                    'chapters': [{'output_ordinal': row['output_ordinal'], 'decision': 'accept', 'reason': '合成事实与原顺序一致'} for row in template['chapters']]})
+                    'review_token': template['review_token'], 'strategy': {'decision': 'accept', 'reason': '保留完整剧情语义'},
+                    'chapters': [{'output_ordinal': row['output_ordinal'], 'decision': 'accept', 'reason': '完整节点的联合呈现、归因与披露一致'} for row in template['chapters']]})
             if not (book / plan.REL).is_file():
                 route = _get(http, '/operator-next')
                 print('PLAN_ACTION', route['action'], flush=True)
@@ -121,10 +159,10 @@ def build(base):
             if _get(http, '/approvals')['structure']['state'] != 'accepted':
                 pack = _get(http, '/approvals/structure/workpack')
                 post(http, '/approvals/structure', {
-                    'actor': 'human-ui', 'reason': '合成联调逐章确认事实和结构',
+                    'actor': 'human-ui', 'reason': '合成联调逐章确认节点、证据和分场结构',
                     'review_token': pack['review_token'],
                     'chapters': [{'output_ordinal': ordinal, 'decision': 'accept',
-                                  'reason': '测试事实逐项覆盖，未更改原章顺序'}
+                                  'reason': '完整节点联合呈现，无新增剧情或提前披露，原章顺序保留'}
                                  for ordinal in pack['chapter_ordinals']]})
             if not (book / plan.CTX_REL).is_file():
                 _run_free_next(http, node='stage4.context', flags=[])
@@ -142,10 +180,13 @@ def build(base):
                 ordinal = chapter.output_ordinal
                 if store.exists(write._rel(ordinal)):
                     continue
-                paragraph_plan = measure.paragraph_slot_plan(material.chapters[ordinal], material)
+                chapter_material = material.chapters[ordinal]
+                paragraph_plan = measure.paragraph_slot_plan(chapter_material, material)
+                assert len(chapter_material['scenes']) == len(chapter.scenes) == len(paragraph_plan)
                 segments = []
-                for scene, paragraphs in zip(chapter.scenes, paragraph_plan):
-                    text = '\n\n'.join(FACT_TEXT[ref] for ref in scene.land_fact_refs)
+                for scene, delivery_scene, paragraphs in zip(chapter.scenes, chapter_material['scenes'], paragraph_plan):
+                    assert scene.slot == delivery_scene['slot']
+                    text = '\n\n'.join(BEAT_TEXT[row['beat_ref']] for row in delivery_scene['deliveries'])
                     shaped = measure.reflow_shadow(text, target=paragraphs)
                     assert shaped, (ordinal, scene.slot, paragraphs, text)
                     segments.append({'slot': scene.slot, 'text': shaped})
@@ -161,7 +202,7 @@ def build(base):
                 template = _get(http, '/approvals/stage5/template')
                 assert not template['must_appear'], template['must_appear']
                 post(http, '/approvals/stage5', {
-                    'actor': 'human-ui', 'reason': '合成联调逐项核对事实；统计与语义未知仍披露',
+                    'actor': 'human-ui', 'reason': '合成联调核对完整剧情、归因与揭示；统计与语义未知仍披露',
                     'review_token': template['review_token'], 'must_appear': [],
                     'group_acks': [{'group': row['group'], 'acknowledged': True}
                                    for row in template['group_acks']]})
@@ -205,7 +246,7 @@ def build(base):
                                  'aliases': [{'old': row['surface'], 'new': names.get(row['surface'], row['surface'])}
                                              for row in character['aliases']],
                                  'reason': '合成改名保持身份与称谓结构'})
-                client, wire = _client(ctx, {'surname_map': {'李': '顾'}, 'characters': rows})
+                client, wire = _client(ctx, {'surname_map': [{'old_surname': '李', 'new_surname': '顾'}], 'characters': rows})
                 rename.run_rename(ctx, client)
                 print('RENAME_OK', len(wire.calls), flush=True)
             stage7 = _get(http, '/approvals/stage7/workpack')
@@ -249,7 +290,7 @@ def automatic(base):
 
     with pytest.MonkeyPatch.context() as env:
         env.delenv('DEEPSEEK_API_KEY', raising=False)
-        env.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
+        env.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'plot-blueprint-v1')
         env.setattr(agent, 'create_commander_driver', lambda profile, **_kw: NoModelDriver(profile))
         env.setattr(agent, '_run_step_argv', only_free_assembly)
         target.unlink()

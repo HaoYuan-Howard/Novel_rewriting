@@ -249,12 +249,12 @@ def test_s7_current_typed_reapproval_replaces_obsolete_service_proof(monkeypatch
 
 
 @_corpus_test
-def test_get_exposes_public_v6_without_retired_depth_and_is_read_only():
-    """GET 只公开 v6 审批面，且不落服务状态。"""
+def test_get_exposes_public_v7_without_retired_depth_and_is_read_only():
+    """GET 只公开 v7 审批面，且不落服务状态。"""
     box = _box()
     try:
         doc = approvals.get(box.root, box.sid)
-        assert doc.v == 6
+        assert doc.v == 7
         assert 'deep' not in doc.model_dump() and 'deep_proof' not in doc.model_dump()
         assert doc.writing is False
         assert not (box.root / '_service').exists(), 'GET must not persist service state'
@@ -280,7 +280,7 @@ def test_get_exposes_public_v6_without_retired_depth_and_is_read_only():
 
 
 @_corpus_test
-def test_writing_approval_is_independent_and_persists_as_internal_v6():
+def test_writing_approval_is_independent_and_persists_as_internal_v8():
     box = _box()
     try:
         _approve_for_writing(box)
@@ -288,7 +288,7 @@ def test_writing_approval_is_independent_and_persists_as_internal_v6():
         doc = approvals.begin_writing(box.root, box.sid)
         assert doc.writing and approvals.writing_is_current(box.root, box.sid)
         raw = approvals._path(box.root, box.sid).read_text(encoding='utf-8')
-        assert '"v": 6' in raw and '"deep"' not in raw and 'deep_proof' not in raw
+        assert '"v": 8' in raw and '"deep"' not in raw and 'deep_proof' not in raw
     finally:
         box.close()
 

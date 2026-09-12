@@ -3,6 +3,7 @@
 """`writer_context` 当前契约的确定性组装与结构守卫。"""
 from __future__ import annotations
 
+from copy import deepcopy
 from functools import wraps
 from typing import get_origin, get_type_hints
 
@@ -11,7 +12,7 @@ import pytest
 from contracts.schema.stage4 import CtxScene, WriterContext
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.context import (
-    Assembly, _name_narration, _resolve_scenes,
+    Assembly, _name_narration,
     build_writer_context, rename_all,
 )
 from novel.core.naming import display_names, display_names_at, name_collisions
@@ -71,25 +72,18 @@ _GENERATED_TOP = frozenset({'_provenance'})
 
 
 def _ctx_scene(**overrides):
-    base = {
-        'slot': 's01', 'purpose': '让拒绝当场爆发', 'role': 'setup',
-        'delivery': 'scene', 'transition': 'start', 'budget_chars': 120,
-        'required_facts': ['三位住客拒绝接受主角'], 'context_facts': [],
-        'turn_fact': '三位住客拒绝接受主角', 'entry_state': [], 'exit_state': [],
-        'stages': [{'time_layer': 'present', 'place': '公寓', 'present': ['主角']}],
-        'knowledge': [],
-    }
-    return {**base, **overrides}
+    from tests import plot_fixtures as fixture
+    return {**deepcopy(fixture.context()['chapters'][0]['scenes'][0]), **overrides}
 
 
 def test_ctx_scene_preserves_each_selected_stage_instead_of_flattening_them():
-    scene = CtxScene.model_validate(_ctx_scene(stages=[
+    raw = _ctx_scene()
+    raw['deliveries'][0]['stages'] = [
         {'time_layer': 'present', 'place': '公寓', 'present': []},
-        {'time_layer': 'recall', 'place': '车站', 'present': ['主角']},
-    ]))
-    dumped = scene.model_dump(mode='json')
-    assert dumped['stages'][0]['present'] == []
-    assert dumped['stages'][1]['time_layer'] == 'recall'
+        {'time_layer': 'recall', 'place': '车站', 'present': ['主角']}]
+    scene = CtxScene.model_validate(raw).model_dump(mode='json')
+    assert scene['deliveries'][0]['stages'][0]['present'] == []
+    assert scene['deliveries'][0]['stages'][1]['time_layer'] == 'recall'
 
 
 def test_ctx_scene_rejects_every_retired_writing_skeleton_key():
@@ -101,39 +95,26 @@ def test_ctx_scene_rejects_every_retired_writing_skeleton_key():
             CtxScene.model_validate({**_ctx_scene(), key: value})
 
 
-def test_ctx_scene_turn_must_be_one_of_its_required_facts():
-    with pytest.raises(ValueError, match='turn_fact'):
-        CtxScene.model_validate(_ctx_scene(turn_fact='本场没有承载的事实'))
+def test_ctx_scene_turn_must_belong_to_current_delivery():
+    with pytest.raises(ValueError, match='turn'):
+        CtxScene.model_validate(_ctx_scene(turn_beat_ref='b01_99'))
 
 
-def test_scene_resolution_uses_atom_claims_and_keeps_stage_boundaries():
-    scenes, dropped, withheld = _resolve_scenes(
-        {'scenes': [{
-            'slot': 's01', 'purpose': '先给结果再追原因', 'role': 'setup',
-            'delivery': 'scene', 'transition': 'start', 'budget_chars': 120,
-            'land_fact_refs': ['f01_002'], 'context_fact_refs': ['f01_001'],
-            'material_refs': [], 'turn_fact_ref': 'f01_002',
-            'entry_state_refs': [], 'exit_state_refs': [],
-            'stage_refs': ['b01_02', 'b01_01'],
-        }]},
-        {
-            'b01_01': {'source_chars': 30, 'time_layer': 'present', 'place': '门口',
-                       'present_char_ids': ['char_001'], 'hinges': []},
-            'b01_02': {'source_chars': 50, 'time_layer': 'recall', 'place': '车站',
-                       'present_char_ids': ['char_001'], 'hinges': []},
-        },
-        {
-            'f01_001': {'claim': '主角此前收到邀请'},
-            'f01_002': {'claim': '住客当面拒绝主角'},
-        },
-        {'char_001': '阿青'},
-    )
-    assert dropped == [] and withheld == []
-    assert scenes[0]['required_facts'] == ['住客当面拒绝主角']
-    assert scenes[0]['context_facts'] == ['主角此前收到邀请']
-    assert [stage['place'] for stage in scenes[0]['stages']] == ['车站', '门口']
-    assert 'source_chars' not in scenes[0]
-    assert 'participants' not in scenes[0]
+def test_scene_resolution_keeps_parent_content_once_and_stage_boundaries():
+    from tests import plot_fixtures as fixture
+    raw = fixture.blueprint()
+    context = deepcopy(raw['blueprints'][0]['beats'][0]['source_contexts'][0])
+    context.update(time_layer='recall', place='旧车站')
+    raw['blueprints'][0]['beats'][0]['source_contexts'].append(context)
+    from novel.stages.stage4.measure import identity_plan
+    plan = identity_plan(raw, fixture.MAIN)
+    asm = build_writer_context(plan, fixture.GLOBAL, raw, fixture.MAIN,
+                               knowledge_links=fixture.links())
+    chapter = asm.ctx['chapters'][0]
+    assert chapter['beats'][0]['content'] == raw['blueprints'][0]['beats'][0]['content']
+    delivery = chapter['scenes'][0]['deliveries'][0]
+    assert {stage['place'] for stage in delivery['stages']} == {'门外', '旧车站'}
+    assert 'content' not in delivery and 'source_chars' not in delivery
 
 
 @needs_corpus
@@ -193,7 +174,7 @@ def test_the_side_ledger_is_returned_not_printed():
     hints = get_type_hints(Assembly)
     containers = {rows: get_origin(hints[rows]) for rows in
                   ('subs', 'collisions', 'chapter_collisions', 'withheld',
-                   'dropped_hinges', 'held_rules', 'withheld_setting')}
+                   'held_rules')}
     assert set(containers.values()) <= {dict, list, set}, \
         f'副产物出现了非容器形状：{containers}'
     for sid in BOOKS:
@@ -210,7 +191,8 @@ def test_the_setting_gate_returns_structured_results():
     for sid in BOOKS:
         asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid],
                                    knowledge_links=LINKS[sid])
-        assert isinstance(asm.withheld_setting, list)
+        assert all(isinstance(chapter['restricted_subject_refs'], list)
+                   for chapter in asm.ctx['chapters'])
 
 
 # ── 二·四、关系截止章的包含式边界（`R-2.8`）──────────────────────────────
@@ -255,12 +237,13 @@ def test_a_fabricated_canonical_is_replaced_by_an_attested_appellation():
 
 
 def test_a_character_with_no_attested_appellation_is_a_terminal_state():
-    """一个有据称呼都没有 ⇒ **显式终态**，不许静默下发一个自造标签。"""
-    chars = {'char_001': {'canonical': '春江阁女子', 'address': []}}
-    with pytest.raises(RefusedByStructure, match='没有任何【原文里有据】的称呼'):
-        build_writer_context({'output_chapters': []},
-                             {'entities': {'characters': chars}}, {'blueprints': []},
-                             [{'chapter_ordinal': 1, 'text': '街上人来人往。'}], knowledge_links={})
+    from tests import plot_fixtures as fixture
+    grounding = deepcopy(fixture.GLOBAL)
+    grounding['entities']['characters']['char_001'].update(
+        canonical='春江阁女子', address=[])
+    with pytest.raises(RefusedByStructure, match='没有任何原文有据'):
+        build_writer_context(fixture.plan(), grounding, fixture.blueprint(),
+                             fixture.MAIN, knowledge_links=fixture.links())
 
 
 def test_the_chapter_level_table_withholds_a_name_the_book_level_one_would_give():
@@ -307,16 +290,11 @@ def _minimal(canon: dict) -> tuple[dict, dict, list]:
 
 
 def test_a_rule_without_any_version_text_is_a_terminal_state():
-    """⚠⚠ **兜底才是漏洞本身。**
-
-    旧契约把 `versions` 写成「仅会改版的规则才给」，于是绝大多数规则的正文只存在于
-    平级的 `description` 里，而这里曾用 `or description` 兜底——某本 5/5 都恰好有
-    versions，看起来没事；而另外 3 本一条 versions 都没有，**同一行兜底让带人名的
-    description 直接成为下发给写手的文本**。
-    """
-    gg, bps, mt = _minimal({'world_rules': [{'rule_id': 'wr_01', 'versions': []}]})
-    with pytest.raises(RefusedByStructure, match='没有任何带 desc 的 version'):
-        build_writer_context({'output_chapters': []}, gg, bps, mt, knowledge_links={})
+    from contracts.schema.stage2 import WorldRule
+    # 当前正式 Global 载体在规则进入消费链之前就关闭缺版本的旧平级兜底。
+    with pytest.raises(ValueError, match='versions'):
+        WorldRule.model_validate({'rule_id': 'wr_01', 'kind': 'legal_rule',
+                                  'versions': [], 'description': '旧平级兜底不可下发'})
 
 
 # ── 五、冲突阶段的章覆盖 ──────────────────────────────────────────────────
@@ -388,4 +366,4 @@ def test_writer_context_no_longer_requires_or_emits_literary_arc(pair):
     from tests.test_stage4_disclosure import _inputs, _build
     inputs = _inputs(pair)
     assert 'arc' not in inputs[1]
-    assert all('arc' not in chapter['facts'] for chapter in _build(inputs))
+    assert all('arc' not in chapter for chapter in _build(inputs))

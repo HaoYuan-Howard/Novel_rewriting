@@ -53,10 +53,8 @@ _VOCABULARY = frozenset({
 #: 现役会被送进 agent CLI 的响应模型。**逐个点名**，不从字符串反射——
 #: 反射出来的空表会让这条守卫静默失去判别力（判据 3）。
 def _models() -> dict[str, type]:
-    from contracts.schema.stage2 import (
-        ChapterBlueprintsResponseV2Refs, ChapterBlueprintsResponseV31,
-        ChapterBoundariesResponse, HingePhraseResponse, HingeSelectResponse,
-    )
+    from contracts.schema.plot import PlotChapterResponse
+    from contracts.schema.plot_edit import PlotRevisionResponse
     from contracts.schema.characters import CharactersResponse
     from contracts.schema.knowledge import KnowledgeAgentTurnResponse, KnowledgeResponse
     from contracts.schema.stage4 import (
@@ -72,11 +70,8 @@ def _models() -> dict[str, type]:
         'stage2.global': KnowledgeAgentTurnResponse,
         'stage2.global/legacy-direct': KnowledgeResponse,
         'stage2.characters': CharactersResponse,
-        'stage2.blueprint/boundaries': ChapterBoundariesResponse,
-        'stage2.blueprint/v2': ChapterBlueprintsResponseV2Refs,
-        'stage2.blueprint/v3.1': ChapterBlueprintsResponseV31,
-        'stage2.blueprint/hinge_select': HingeSelectResponse,
-        'stage2.blueprint/hinge_phrase': HingePhraseResponse,
+        'stage2.blueprint': PlotChapterResponse,
+        'stage2.blueprint/repair': PlotRevisionResponse,
         'stage4.design/strategy': BlindBookStrategyResponse,
         'stage4.design/chapter': BlindChapterDesignResponse,
         'stage4.design/legacy-rejected-replay': BlindPlanResponse,
@@ -178,7 +173,8 @@ def _enum_values(node: object) -> int:
 def test_every_agent_response_schema_only_uses_json_schema_keywords():
     """任何词表外的关键字都会让 CLI 整份拒收 ⇒ 真跑时一次模型都调不到。"""
     models = _models()
-    assert len(models) >= 18, '扫描面缩小了；新增/退役响应模型要同批改这里'
+    # 边界/逐事实/hinge 五种响应退役，现役抽取与显式修订分别验证。
+    assert len(models) == 15, '现役响应模型清单变化，须同步核对各 producer'
     for label, model_cls in models.items():
         outside = sorted(_keywords(agent_json_schema(model_cls)) - _VOCABULARY)
         assert not outside, f'{label} 的 schema 含词表外关键字 {outside}'

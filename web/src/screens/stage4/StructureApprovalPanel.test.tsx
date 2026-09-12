@@ -58,7 +58,7 @@ const rows: Stage4IndexRow[] = [
 
 function undecided(): ApprovalDoc {
   return {
-    v: 6,
+    v: 7,
     sid: 'book-1',
     gate: {
       s0: true, s1: true, s2: true,

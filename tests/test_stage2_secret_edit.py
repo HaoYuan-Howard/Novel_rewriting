@@ -62,10 +62,10 @@ from tests.test_stage2 import main_text
 BLUEPRINT_EDGE = 'stage2/blueprint_character_projection.json'
 
 
-#: 通用底座固定在默认 v3.1；契约特有拓扑由 dispatch 测试覆盖。
+#: 通用底座固定在当前完整剧情契约；契约特有拓扑由 dispatch 测试覆盖。
 @pytest.fixture(autouse=True)
 def _pin_ir31_arm(monkeypatch):
-    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
+    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'plot-blueprint-v1')
 
 
 def _seed(book: Path, *, with_blueprints: bool = False) -> None:
@@ -921,25 +921,10 @@ def test_reviewed_prepared_bundle_recovers_every_hard_kill_write_point(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_a_wrong_reveal_chapter_is_corrected_and_the_downstream_turns_stale():
-    """⭐⭐ TODO-05 的验收样本，四段一次跑完。
+    """揭示修订真实落盘并重判；当前 Plot 的 Global 依赖失效后可免费复验。
 
-    合成底座里 `secret_01` 的读者揭示章是第 2 章。假设那是抽错的（真相其实在第 3 章
-    才点破）⇒ 人写一份决策集把它改到 3，跑 `--apply-edit`：
-
-      ① **改真的落进产物**（不是只改了报告）；
-      ② **重走归一**：埋点章 `[1]` 仍严格早于新揭示章 ⇒ 留着；
-      ③ **重判**：闸门跑过、报告出得来；
-      ④ **下游按各自消费什么分开判**：逐章蓝图只绑定物化称名投影；
-         secret 编辑不改变投影字节——blueprint 从 global 只取已现称名表，
-         改 secret 不该让全链最贵的付费节点重跑一遍。
-         ⚠ 这一段 2026-08-23 改过判向。此前它断言投影也失配，理由写着
-         「逐章剧透闸门正是消费它的那一个」——**那句话是错的**：剧透闸门在
-         `stage4.context`，blueprint 不消费 secrets。是过宽的整份投影
-         （`artifact_payload`）让那句错理由一直绿着。
-         ⚠ 「改 secrets 会让谁 stale」并没有因此没人查：真正消费它的那一层由
-         `tests/test_store.py::test_stage4_grounding_edits_invalidate_real_store_freshness`
-         的 `known_by` 那一格钉着。**底座改了而下游还按旧的算**仍是全链最贵的
-         一类错，只是「下游」要指对层。
+    人物称名投影没有变化，不能把它误判为失效。Plot 还消费必要 Global，
+    揭示章修订必须使真实消费边过期；免费重新编译只重绑来源，不生成语义接受。
     """
     root, book = _sandbox('揭示章订正_001')
     try:
@@ -948,6 +933,10 @@ def test_a_wrong_reveal_chapter_is_corrected_and_the_downstream_turns_stale():
         assert ArtifactStore(bp_ctx).freshness(extract.BLUEPRINT_REL).state == 'fresh', \
             '底座还没动，下游就已经 stale？那这条测试后面什么也证明不了'
 
+        from novel.stages.stage2.plot_inputs import read_input_digests
+        inputs_before = read_input_digests(ArtifactStore(bp_ctx))
+        blueprint_before = ArtifactStore(bp_ctx).read_own(ChapterBlueprints, extract.BLUEPRINT_REL)[0]
+        ledger_before = bp_ctx.ledger.path.read_bytes()
         _write_edit(book, {'secrets': [
             {'secret_id': 'secret_01', 'first_reveal_chapter': 3}]})
         artifact, report = _apply(book)
@@ -967,17 +956,25 @@ def test_a_wrong_reveal_chapter_is_corrected_and_the_downstream_turns_stale():
         assert {r.rule for r in report.rules if r.status == 'skipped'} == set(), \
             '有判据没排上——那一行会绿着而什么都没查'
 
-        # ④ Blueprint 不伪记 global 边；非称名修订保持投影字节与消费指纹不变。
+        # ④ 人物投影仍相同；真实 Global 消费改变不能沿用旧来源身份。
         fresh = ArtifactStore(bp_ctx).freshness(extract.BLUEPRINT_REL)
         edge = next(e for e in fresh.edges if e.key == BLUEPRINT_EDGE)
-        assert edge.recorded_file == edge.now_file, \
-            '非称名编辑不应重写投影字节，否则仍会制造一次付费 Blueprint stale'
-        assert edge.recorded_consumed == edge.now_consumed, \
-            'blueprint 只取已现称名投影 ⇒ 改 secret 不该让它重跑'
-        assert (fresh.state, edge.state) == ('fresh', 'fresh'), \
-            'consumed 对得上就该是 fresh——判定顺序是 consumed 优先于 file，不是反过来'
-        assert extract.GLOBAL_REL not in {e.key for e in fresh.edges}, \
-            'Blueprint 来源账不得伪造一条没有读取的 global 输入边'
+        assert edge.recorded_file == edge.now_file
+        assert edge.recorded_consumed == edge.now_consumed
+        assert edge.state == 'fresh'
+        global_edge = next(e for e in fresh.edges if e.key == extract.GLOBAL_REL)
+        assert (fresh.state, global_edge.state) == ('stale', 'stale')
+        assert global_edge.recorded_consumed != global_edge.now_consumed
+        inputs_after = read_input_digests(ArtifactStore(bp_ctx))
+        assert inputs_before['1'] == inputs_after['1']
+        assert inputs_before['2'] != inputs_after['2']
+        assert inputs_before['3'] == inputs_after['3']
+
+        assert extract.run_renormalize(bp_ctx).passed
+        rebuilt = ArtifactStore(bp_ctx).read_own(ChapterBlueprints, extract.BLUEPRINT_REL,
+                                                require_current=True)[0]
+        assert rebuilt.blueprints == blueprint_before.blueprints
+        assert bp_ctx.ledger.path.read_bytes() == ledger_before
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1522,20 +1519,20 @@ def test_the_entry_is_registered_everywhere_it_has_to_be():
     assert '--apply-edit' in FREE_ENTRIES and '--apply-edit' in VALUED_FLAGS
 
 
-def test_the_blueprint_node_has_a_distinct_typed_relation_edit_entry():
-    """Blueprint 现役 ``--apply-edit`` 只替换指定章的完整关系集。
+def test_the_blueprint_node_has_a_distinct_typed_plot_edit_entry():
+    """Blueprint 现役 ``--apply-edit`` 按章修订完整剧情及显式身份操作。
 
     Global 同名 flag 仍只吃 ``GlobalEdit``；两条路由各自的注册载体、
     producer 和上游边分开，不再靠“一个 flag 全仓只能有一个语义”的旧断言。
     """
-    from contracts.artifacts import STAGE2_BLUEPRINT_RELATION_EDIT
+    from contracts.artifacts import STAGE2_BLUEPRINT_EDIT
     from contracts.invariants import NODES
     from contracts.schema import ARTIFACTS
-    from contracts.schema.stage2 import BlueprintRelationEdit
+    from contracts.schema.plot_edit import PlotEdit
 
     assert {'--emit-edit-template', '--validate-edit', '--apply-edit'} <= set(
         NODES['stage2.blueprint'].flags)
-    assert ARTIFACTS[STAGE2_BLUEPRINT_RELATION_EDIT] is BlueprintRelationEdit
+    assert ARTIFACTS[STAGE2_BLUEPRINT_EDIT] is PlotEdit
 
     # 同名 flag 没有让 Global producer 窃取 Blueprint 语义。
     root, book = _sandbox('走错节点_011')

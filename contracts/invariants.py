@@ -514,12 +514,8 @@ FROZEN_V6_DESIGN_REVIEW_CONTRACT: Final = \
 DESIGN_STRATEGY_REPLAN_CONSTRAINTS: Final = (
     'replace_reconstruction_strategy', 'change_chapter_weights',
 )
-#: Stage2 v3 把 v7 narrative_relations 从“只进 subject hash”改为逐章
-#: claim 化可见面；v4 再把 execution code / rules 收回服务端 opaque seal。
-#: Stage6/7 v3 同样不再把 seal 原料作为公开 workpack 字段外发。
+#: Blueprint 按章与跨章审阅；代码验证身份由服务端 opaque seal 持有。
 BLUEPRINT_REVIEW_CONTRACT: Final = 'stage2-plot-scope-review-v1'
-BLUEPRINT_REVIEW_CHANGE_KINDS: Final = ('added', 'removed', 'changed')
-BLUEPRINT_REVIEW_DELTA_MODES: Final = ('initial', 'unchanged', 'targeted', 'full')
 STAGE2_NODE_REVIEW_DECISIONS: Final = ('accept', 'rework', 'uncertain', 'stop')
 # 两位 Commander 与三位生产/派修 owner 分开登记，人物不新增第三个审阅席位。
 STAGE2_CHARACTER_REVIEW_KINDS: Final = frozenset({
@@ -690,11 +686,10 @@ BINDING_CONCERN_CODES: Final = (
     'insufficient_evidence',
 )
 #: Stage4B 关闭约束编译器目前能够机械铸造的不可行证明码。顺序与
-#: ``novel.stages.stage4.blind::prove_binding_infeasible`` 的两类 witness 对齐；
+#: ``novel.stages.stage4.plot_binding::prove_binding_infeasible`` 的证据目录 witness 对齐；
 #: 模型无权直接返回这些正式证明。
 BINDING_INFEASIBILITY_CODES: Final = (
     'missing_chapter_catalog',
-    'empty_stage_allowlist',
 )
 DESIGN_REVIEW_STATES: Final = (
     'unavailable', 'missing', 'repair_requested',
@@ -716,10 +711,8 @@ FAILURE_STOP_OWNERS: Final = ('stage4.design', 'stage2.blueprint', 'code')
 #: ``code`` owner（停下来给人看），绝不默认成可重试。
 #:
 #: 分域依据（B 只绑定舞台与保真材料；场景设计、预算、目标、状态都是 A 的）：
-#: · A 的设计域（``stage4.design``）：章集/序号/空章、land 事实落场、因果闭合、
-#:   状态承接、首尾目标、预算、写法词、slot/transition、ctx 事实投影与人名。
-#: · B 的绑定域（``stage4.plan``）：舞台引用、材料恰好落一次、材料送达、
-#:   舞台投影，以及 sha 回显 / infeasible 证明 / 绑定编译拒绝这些 B 自己的响应错。
+#: · A 的设计域（``stage4.design``）：章集、节点呈现、必要端点、目标、预算与转场。
+#: · B 的绑定域（``stage4.plan``）：父节点的证据与舞台闭集，以及摘要回显、绑定编译错误。
 #: · 上游（``stage2.blueprint``）：人名证据缺位。
 #: · 代码（``code``）：来源边与 A/B 字节绑定是 provenance 机制自身；
 #:   ctx 事实投影的两侧都是代码组装，命中即代码漂移。
@@ -740,17 +733,6 @@ STAGE4_FAILURE_OWNERS: Final[Mapping[str, str]] = {
     'placement_ref': 'stage4.design',
     'ctx_plot_exact': 'code',
     'ctx_permission_exact': 'code',
-    'fact_ref.land': 'stage4.design',
-    'fact_ref.context': 'stage4.design',
-    'fact_ref.state': 'stage4.design',
-    'fact_ref.turn': 'stage4.design',
-    'fact_ref.stage': 'stage4.plan',
-    'fact_ref.material': 'stage4.plan',
-    'fact_coverage': 'stage4.design',
-    'causal_closure': 'stage4.design',
-    'narrative_relation': 'stage4.design',
-    'state_closure': 'stage4.design',
-    'material_coverage': 'stage4.plan',
     'scene_transition': 'stage4.design',
     'goal_landing': 'stage4.design',
     'budget_int': 'stage4.design',
@@ -759,16 +741,10 @@ STAGE4_FAILURE_OWNERS: Final[Mapping[str, str]] = {
     'style_words': 'stage4.design',
     'phase_artifact_link': 'code',
     'context_link': 'code',
-    'ctx_facts_exact': 'code',
     'ctx_name_attested': 'stage2.blueprint',
-    'ctx_stage_explicit': 'stage4.plan',
-    'ctx_hinge_delivered': 'stage4.plan',
-    # B 不可行证明的两类 witness（批次 2 预检复用同一分类）：关闭目录缺章/
-    # 空舞台allowlist 都是 Stage2 锚点/目录问题，不是 A 的场景设计错。
+    # 目录缺章才是机械不可行；未知舞台或共享证据不构成不可行证明。
     'missing_chapter_catalog': 'stage2.blueprint',
-    'empty_stage_allowlist': 'stage2.blueprint',
 }
-
 
 def stage4_failure_owner(code: str) -> str:
     """失败发射点 → 修复 owner 的唯一读法；未登记的 code 关闭式归 ``code``。"""
@@ -835,84 +811,6 @@ LAYER_GLOSS: Final = {'present': '当下正在发生',
                       'hearsay': '别人讲给她听的事'}
 assert tuple(LAYER_CN) == tuple(LAYER_GLOSS) == TIME_LAYERS, \
     '叙述层的短名/释义与 `TIME_LAYERS` 分家了——渲染顺序会跟着漂，而没有东西会出声'
-
-#: 从原文抽出来的保真「点」。
-#: **以「点」不以「段」**：离散原子无法被模仿成文风，只能被放进去或不放进去；
-#: 连续文本段一律不下发——写作节点必然沿着它的句序和节奏走，那正是重写要避免的。
-HINGE_KINDS: Final = ('硬数字', '要害台词', '物件', '因果前提', '字面例外')
-
-#: 仅剧情依赖字面本身时保留原样；普通承诺、问答和威胁均属对白语义。
-LITERAL_REQUIREMENT_KINDS: Final = ('password', 'code', 'riddle', 'identifier')
-
-#: Stage2 原子事实的关闭式语义分类。它回答「这条章内真相改变了什么」，不回答
-#: 「Stage5 应怎样写」；场景归组、先后与篇幅属于 Stage4 的职责。
-FACT_ATOM_KINDS: Final = (
-    'event', 'information', 'character_state', 'relationship', 'reader_knowledge',
-)
-
-#: `land` 必须由且只由一个新场景落地；`context` 是场景进入时已经成立的事实，
-#: 可以被多个场景读取但不算本章新增剧情。两者不能靠 kind 推断，否则「既有关系」与
-#: 「关系在本章改变」会再次被压成一个状态。
-FACT_ATOM_OBLIGATIONS: Final = ('land', 'context')
-
-#: Stage2 明示的叙事关系。它们只保存「重构时不能丢掉的关系」，不是把原文
-#: 顺序整体搬进 Stage4：普通相邻、同一个 source beat 或数组位置都不会自动
-#: 生成关系。这样既补上回应/见证等语义缺口，又不撤销 A 相的去序边界。
-NARRATIVE_RELATION_KINDS: Final = (
-    'story_before', 'response_to', 'same_scene', 'observes',
-)
-
-#: ``review`` 只进入 Commander 阅读面；``hard`` 才成为 Stage4 的确定性约束。
-#: 模型响应只能提出 review 关系，hard 必须经 hash-bound typed relation edit 晋升。
-NARRATIVE_RELATION_ENFORCEMENTS: Final = ('hard', 'review')
-
-#: 人审语义的显式版本。实现、文档或测试改字不应借全仓指纹让旧决定失效；
-#: 真正改变关系判定语义时才主动 bump 这一格。
-BLUEPRINT_RELATION_REVIEW_CONTRACT: Final = 'blueprint-relations-v1'
-
-#: 每类保真点各守各的维度。
-#: ⚠ **这张表不许用 `dict.get(kind, 默认值)` 取**——把写歪的类型兜底成
-#: 「原样写入，一个字都不能改」，会让一段叙述文变成逐字要求，而全链没有一层出声。
-#: 认不出的类型：产地一侧入显式终态，消费侧丢弃 + 告警。
-HINGE_GROUPS: Final = {
-    '要害台词': 'dialogue',      # 说话关系、语义、话语作用与必保事实；不下发源句
-    '字面例外': 'verbatim',      # 仅有剧情依据的密码、口令、谜面谜底、识别符号
-    '硬数字': 'keep_value',      # 比【数值】不比字面：下发「30岁」、成稿「三十岁」= 满足
-    '物件': 'must_appear',       # 必须出现
-    '因果前提': 'must_hold',     # 必须成立，不必写在纸面上 —— 按定义查不了文面，恒 unver
-}
-
-#: 四组保真材料**给写手看的标签**，拆成「标签名 + 限定语」两截。
-#:
-#: 【为什么拆两截】下发面逐条渲染的是**合起来的全串**（`· 原样写入（一个字都不能改）：…`），
-#: 而 system prompt 里逐条展开时用的是**短名**（`- 【原样写入】：…`）。两种写法都要，
-#: 且必须来自同一个源——从前 system 那一份是手抄的，改标签措辞时它不会跟着改、也不会报错。
-#:
-#: ⚠ **把四种都当成「必须逐字出现」是最常见的错法**：`must_hold` 要的只是命题成立，
-#: 当台词写就会逼出一段背景交代。四条限定语正是在防这件事，**一个字都不许省**。
-HINGE_LABEL_PARTS: Final = {
-    'dialogue': ('对白语义', '可换措辞，保留说话关系、话语作用与必保事实'),
-    'verbatim': ('字面例外原样写入', '密码、口令、谜面或识别符号，一个字都不能改'),
-    'keep_value': ('数值不得改动', '措辞随你'),
-    'must_appear': ('必须在场并起作用', '怎么描写随你'),
-    'must_hold': ('必须成立，但【不必写在纸面上】', '别为它硬塞背景交代'),
-}
-assert set(HINGE_LABEL_PARTS) == set(HINGE_GROUPS.values()), \
-    '保真标签与 `HINGE_GROUPS` 分家了'
-
-#: 合起来的全串（下发面逐条用）。**由上表派生，不另存一份。**
-HINGE_LABEL: Final = {k: f'{name}（{qual}）' for k, (name, qual) in HINGE_LABEL_PARTS.items()}
-
-
-def hinge_heading(kind: str) -> str:
-    """标签名当**小节标题**用时的写法：去掉名字内部的强调号。
-
-    `must_hold` 的标签名自带一对【】（「必须成立，但【不必写在纸面上】」），
-    而小节标题本身又要套一层【】——不去掉就渲染成
-    「【必须成立，但【不必写在纸面上】】」。另三个不含【】，本函数对它们是恒等的。
-    """
-    return HINGE_LABEL_PARTS[kind][0].replace('【', '').replace('】', '')
-
 
 #: `stage2.blueprint` 那一次调用的**模型可见边界身份**，落在
 #: `_provenance.context.architecture`（`contracts/schema/stage2.py::BlueprintContext`）。
@@ -1020,81 +918,6 @@ GLOBAL_EVIDENCE_CONTRACT: Final = 'knowledge-paragraph-candidate-v2'
 #: Stage2 Blueprint 只读工作包当前绑定的是正式稿还是 live 问题稿。
 #: 只有 formal 工作包能提交 ``seen.read``；invalid 包只辅助修复。
 BLUEPRINT_REVIEW_SUBJECT_KINDS: Final = ('formal', 'invalid')
-
-#: `_provenance.verbatim_failures` 里 `位置 == 'span'` 那一族的根因取值面。
-#: 判据 `verbatim_failed` 只按根因**计数**，不按根因分流，所以这一张表存在的意义是
-#: 「产地只许说这几句话」——措辞漂了，报告上同一种病会分裂成两行。
-SPAN_FAILURE_CAUSES: Final = (
-    '段号不是整数',
-    '段号越界',
-    '段号区间倒序',
-    '起段没有越过上一拍的止段（区间重叠或顺序倒置）',
-    '本章没有可编号的段落',
-    'span 里既没有段号也不是正式区间',
-    '已落盘的精确区间与原文对不上',
-    # ── `extraction-ir-v1` 专属（beat 只交 `end_para`，起点由代码推导）──
-    # ⚠ compiler 对非法响应逐项发这些措辞、不抛裸异常：抛异常是「进程崩了，
-    #   结论未知」，而这几件事都是**数据的病**，该走 `.INVALID` + 修复路由。
-    '止段没有越过上一拍的止段（区间倒序或同段重复）',
-    '末拍没有到达本章最后一段',
-)
-
-#: `位置 == 'hinge'` 那一族的根因 → **该由哪条判据收**。
-#:
-#: 【为什么是一张表而不是几个 `if`】判据侧此前按**中文子串**猜（`'空档' in cause` /
-#: `'本章原文' in cause`）——那是产地与判据之间一条**没有任何东西在守的隐式契约**：
-#: 改一句措辞，`hinge_anchor_void` 就静默降级成 `hinge_drift`，报告照样绿。
-#: ⇒ 改成按**相等**查这一张表，分家立刻是 `KeyError` 级别的显性失败，
-#: 并配一条「产地只许发这几种根因」的守卫（`tests/test_stage2_generation.py`）。
-#:
-#: ⚠ 四分流里**没有 `hinge_cascade`**：那一条由「本拍的 span 自己没定位成功」推出，
-#: 不经这张表（判据侧先看 `beat_id` 在不在已定位集合里）。
-#: ⚠ 也没有 `hinge_cross_chapter`：引了别章原文的那一档由判据侧现场回扫全书判定，
-#: 产地手里只有本章正文，说不出这句话。
-HINGE_FAILURE_ROUTE: Final = {
-    '短语不在本章原文里': 'hinge_anchor_void',
-    '段号越界，本章没有那一段': 'hinge_anchor_void',
-    '段号落在没有被任何 beat 覆盖的空档': 'hinge_in_hole',
-    '短语不在它指定的那一段里，而出现在别处': 'hinge_drift',
-    '已落盘的 source 与它所属 beat 的区间对不上': 'hinge_drift',
-    # ── `extraction-ir-v1` 专属（hinge 只交 `kind + phrase`，无段号）──
-    # ⚠ 「多处命中」是新契约信息不足的**预期产物**，不是编的：交接实测 189 条
-    #   hinge 反投影后 187 条拍内唯一、2 条双命中（约 1.06%）。它的修法是
-    #   **候选选择**（代码枚举命中位，模型只挑 candidate_id），与 anchor_void
-    #   （短语是编的，要重给）完全不同 ⇒ 单立一条判据，不并进既有四分流。
-    '短语在本拍区间内多处命中': 'hinge_ambiguous',
-    '短语不在它所属拍的区间里，而出现在别处': 'hinge_drift',
-}
-
-#: hinge 根因 → **修复走哪一级**。与 `HINGE_FAILURE_ROUTE`（根因 → 判据）是
-#: **两个消费方的两张表**：那张归判据分流，这张归修复阶梯——混成一张，
-#: 改判据措辞就会牵动修复行为。键域必须与 `HINGE_FAILURE_ROUTE` 相同（assert 在下）。
-#:
-#: 取值面（`extraction-ir-v1` 修复阶梯，`Stage2_improvement.md` §五）：
-#:   · `field_patch`    —— 字段级局部修复（候选选择 / phrase 重给），不整章重付；
-#:   · `chapter_regen`  —— 整章定向重生成（`stage2.blueprint --chapters`），最后手段。
-#: ⚠ 首版刻意只有两级：`beat_patch` / `boundary_patch` 等更细的层级要等
-#:   六章高难包付费冒烟的真实 finding 分布出来再立（数据驱动，不预建框架）。
-#: 【7A 实测（2026-08-21，无情道 6 章 40 hinge）】drift 3 例、末拍不到底 1 例，
-#:   四例同一个根因：**模型的 `end_para` 比它自己 `event` 里写到的内容早收 1–2 段**
-#:   （证据逐条在 `outputs/_ab/smoke_extraction_ir_v1_20260821.md`）。
-#:   ⇒ 「drift 一律整章重生成」在真数据上是**过度反应**：四例全部可由确定性边界
-#:   外扩修好、0 次付费调用。改路由前要先有裁决（见实验手册 §六），本表未动。
-REPAIR_ROUTE: Final = {
-    '短语不在本章原文里': 'field_patch',              # 编的短语 → 局部重给 phrase
-    '段号越界，本章没有那一段': 'chapter_regen',
-    '段号落在没有被任何 beat 覆盖的空档': 'chapter_regen',
-    '短语不在它指定的那一段里，而出现在别处': 'chapter_regen',
-    '已落盘的 source 与它所属 beat 的区间对不上': 'chapter_regen',
-    '短语在本拍区间内多处命中': 'field_patch',        # 候选选择，模型只挑 candidate_id
-    # ⚠ ir1 的 drift 可能是 phrase 错、也可能是 end_para 边界切错——首版一律整章兜底，
-    #   不许用改锚点遮住错误分段；boundary patch 等 7A 读数后再立（5B）。
-    '短语不在它所属拍的区间里，而出现在别处': 'chapter_regen',
-}
-assert set(REPAIR_ROUTE) == set(HINGE_FAILURE_ROUTE), \
-    '修复路由与判据分流的键域分家了——新根因必须同时回答「归哪条判据」与「怎么修」'
-assert set(REPAIR_ROUTE.values()) <= {'field_patch', 'chapter_regen'}, \
-    '修复层级出现了未定义的取值——新层级要先在这里立取值面'
 
 #: `extraction-ir-v1` 响应侧的叙述层枚举 → 产物侧取值。**前缀化只在响应侧**：
 #: 产物侧 `TIME_LAYERS` 一个不动（下游 + 盘上数据的硬约束），compiler 是唯一映射落点。
@@ -1524,7 +1347,7 @@ for _resp, _art, _field in _PLAN_RESPONSE_ENUMS:
 #: ⚠⚠ **这条断言才是前缀化买的那件东西**：任意两个响应侧取值互不相等、
 #: **且互不为子串**——串表串出来的值必须在 schema 闸当场死掉，而不是在另一张表里合法。
 #: 一起比进来的还有 `TIME_LAYERS`（它的值出现在**下发面**上，`narrative_role='recall'`
-#: 就是从那里抄过来的）与 `HINGE_KINDS`。
+#: 就是从那里抄过来的）。
 _PLAN_RESPONSE_KEYS: Final = tuple(
     k for _resp, _a, _f in _PLAN_RESPONSE_ENUMS for k in _resp)
 for _a in _PLAN_RESPONSE_KEYS:

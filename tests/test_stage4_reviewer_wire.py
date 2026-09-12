@@ -299,20 +299,24 @@ def test_constraints_inherit_current_code_arity_and_chapter_closure(field, value
 def test_semantic_constraint_can_only_reference_registered_constraint_or_endpoint():
     task = _task()
     response = _response(task)
+    task.submission_options[0]['allowed_values'][wire.REFERENCE_CLOSURE]['2']['endpoint_aliases'] = [_alias(3002)]
     constraint = {'code': 'semantic_constraint', 'scene_refs': [], 'opaque_aliases': [_alias(2002)]}
     _repair(response, constraint)
-    assert wire.assemble(task, response)['action']['payload']['chapters'][0]['constraints'] == [constraint]
+    for valid in (_alias(2002), _alias(3002)):
+        constraint['opaque_aliases'] = [valid]
+        assert wire.assemble(task, response)['action']['payload']['chapters'][0]['constraints'] == [constraint]
     for invalid in (_alias(2), _alias(1002), _alias(2010)):
         constraint['opaque_aliases'] = [invalid]
         with pytest.raises(wire.Stage4ReviewerWireError):
             wire.assemble(task, response)
 
 
-def test_old_relation_effect_cannot_create_new_observation_truth():
+@pytest.mark.parametrize('code', ['narrative_relation', 'semantic_constraint'])
+def test_old_relation_effect_cannot_create_new_observation_truth(code):
     task = _task()
     response = _response(task)
     _repair(response, {
-        'code': 'narrative_relation', 'scene_refs': [], 'opaque_aliases': [],
+        'code': code, 'scene_refs': [], 'opaque_aliases': [_alias(2002)],
         'effect': {'kind': 'observes', 'enforcement': 'hard', 'observer_alias': _alias(1002),
                    'observed_alias': _alias(2), 'observation_alias': _alias(102)},
     })
@@ -346,7 +350,7 @@ def test_malformed_template_never_falls_back_or_omits_stop():
         wire.output_schema_for(task)
 
 
-def test_schema_reuses_alias_definitions_and_absent_participant_has_no_observes():
+def test_schema_reuses_aliases_and_has_no_parallel_observation_authoring():
     task = _task()
     closure = task.submission_options[0]['allowed_values'][wire.REFERENCE_CLOSURE]['2']
     closure['participant_aliases'] = []
@@ -356,6 +360,8 @@ def test_schema_reuses_alias_definitions_and_absent_participant_has_no_observes(
     definitions = schema['$defs']
     assert any(definition.get('enum') == [_alias(2), _alias(102)] for definition in definitions.values())
     assert not any(name.startswith('Stage4DesignRepairObserves_2_') for name in definitions)
+    assert all('observer_alias' not in row.get('properties', {}) and 'effect' not in row.get('properties', {})
+               for row in definitions.values()), '修订只引用已登记约束，不携另一份观察命题'
     assert model.model_validate(_response(task)).selection.payload.chapters
 
 

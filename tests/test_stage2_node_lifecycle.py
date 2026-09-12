@@ -6,14 +6,14 @@ import json
 
 import pytest
 
-from contracts.artifacts import STAGE2_BLUEPRINT_RELATION_EDIT, STAGE2_CHAPTER_BLUEPRINTS
+from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS
 from contracts.schema import encode_artifact
 from contracts.schema.api import Stage2NodeReviewRequest
 from contracts.schema.stage2 import ChapterBlueprints
 from novel.consumption import stage2_generation_review
-from novel.errors import ApprovalRequired, ArtifactSubmittedReviewPending, HumanEditProtected
+from novel.errors import ApprovalRequired, ArtifactSubmittedReviewPending, HumanEditProtected, ArtifactUnreadable
 from novel.orchestrator import approvals
-from novel.stages.stage2 import extract, global_review, relation_edit
+from novel.stages.stage2 import extract, global_review, plot_edit
 from novel.store import ArtifactStore
 from novel.views.stage2 import blueprint_review_workpack
 from tests.test_stage2_generation import _client, _ctx, _respond_blueprints, _response_blueprints
@@ -25,7 +25,7 @@ from tests.test_stage2_secret_edit import _seed
 def book(tmp_path, monkeypatch):
     from novel.work_units import initialize_workflow
     initialize_workflow(tmp_path)
-    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
+    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'plot-blueprint-v1')
     path = tmp_path / '书_123'
     path.mkdir()
     _seed(path)
@@ -66,32 +66,42 @@ def test_global_acceptance_releases_blueprint_without_requiring_blueprint(book):
 def test_blueprint_cross_workpack_exposes_global_and_stable_patch_ids(book):
     _produce_blueprints(book)
     pack = blueprint_review_workpack(book.parent, '123')
-    assert pack.review_token.startswith('bpr4_')
-    assert pack.global_review['scope'] == 'all'
-    assert pack.global_review['items']
-    assert pack.chapters[0].beats[0].beat_id
-    assert pack.chapters[0].beats[0].facts[0].fact_id
+    assert pack.scope == 'chapter:1'
+    assert len(pack.material['sources']) == len(pack.material['blueprints']) == 1
+    assert pack.material['blueprints'][0]['beats'][0]['content']
+    assert pack.material['blueprints'][0]['evidence_anchors']
+    assert 'fact_atoms' not in pack.material['blueprints'][0]
     with pytest.raises(ApprovalRequired):
         global_review.require_approved(_ctx(book, 'stage4.design', paid=False))
 
 
 @pytest.mark.parametrize('owner', ['stage2.characters', 'stage2.global', 'stage2.blueprint'])
 def test_typed_rework_routes_to_owner_with_exact_current_chapter_range(book, owner):
+    from contracts.schema.plot_review import PlotReviewResponse
+    from tests.test_plot_review_runtime import response
     _produce_blueprints(book)
-    token = blueprint_review_workpack(book.parent, '123').review_token
+    pack = blueprint_review_workpack(book.parent, '123', scope='chapter:2')
+    token = pack.review_token
+    verdict = response().model_dump(mode='json')
+    verdict.update(decision='revise', reason='按问题归属派回人物、知识或章蓝图核证')
+    verdict['coverage']['attribution'] = {'state': 'issue', 'issue_refs': ['new:1']}
+    verdict['new_issues'] = [{'issue_key': 'new:1', 'dimension': 'attribution',
+        'problem': '复核本章施受关系', 'subjects': [{'kind': 'beat', 'ref': 'b02_01'}],
+        'evidence_refs': [{'chapter_ordinal': 2, 'evidence_ref': 'e02_01'}]}]
     request = Stage2NodeReviewRequest(
-        node='stage2.blueprint', review_token=token, decision='rework',
+        node='stage2.blueprint', scope=pack.scope, review_token=token, decision='rework',
         actor='blueprint-commander', reason='按问题归属派回人物、知识或章蓝图核证',
-        owner=owner, chapter_ordinals=[2] if owner == 'stage2.blueprint' else [])
+        owner=owner, chapter_ordinals=[2] if owner == 'stage2.blueprint' else [],
+        plot_review=PlotReviewResponse.model_validate(verdict))
+    with pytest.raises(HumanEditProtected, match='不存在的章'):
+        approvals.approve_stage2_review(book.parent, '123', request.model_copy(update={
+            'owner': 'stage2.blueprint', 'chapter_ordinals': [999]}))
     approvals.approve_stage2_review(book.parent, '123', request)
     if owner != 'stage2.blueprint':
         assert approvals.pending_stage2_rework(book.parent, '123', 'stage2.blueprint') is None
     assert approvals.stage2_rework_request(book.parent, '123', owner, token).owner == owner
     approvals.mark_stage2_rework_landed(book.parent, '123', owner, token)
     assert approvals.pending_stage2_rework(book.parent, '123', owner) is None
-    with pytest.raises(HumanEditProtected, match='不存在的章'):
-        approvals.approve_stage2_review(book.parent, '123', request.model_copy(update={
-            'owner': 'stage2.blueprint', 'chapter_ordinals': [999]}))
 
 
 def test_raw_acceptance_expires_and_revives_without_being_erased(book):
@@ -115,30 +125,15 @@ def test_landed_patch_replays_original_request_without_reapplying_or_model(book,
     _accept_blueprint_node(book, monkeypatch)
     ctx = _ctx(book, 'stage2.blueprint', paid=False)
     before = ArtifactStore(ctx).read_own(ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)[0]
-    payload = relation_edit.edit_template(ctx)
-    payload.pop('_schema_version', None)
-    payload.update(actor='blueprint-commander', reason='依据原文订正第一拍地点',
-                   post_edit_accept=True,
-                   expected_cross_review_token=blueprint_review_workpack(book.parent, '123').review_token)
-    payload['chapters'] = payload['chapters'][:1]
-    payload['chapters'][0]['beat_patches'] = [{
-        'beat_id': before.blueprints[0].beats[0].beat_id, 'place': '原文核对地点'}]
-    request_path = book / STAGE2_BLUEPRINT_RELATION_EDIT
-    request_path.write_text(json.dumps(encode_artifact(STAGE2_BLUEPRINT_RELATION_EDIT, payload),
-                                       ensure_ascii=False), encoding='utf-8')
-    original_accept = approvals.approve_stage2_review
-    def fail_accept(*_args, **_kwargs):
-        raise OSError('模拟审批写盘中断')
-    monkeypatch.setattr(approvals, 'approve_stage2_review', fail_accept)
-    with pytest.raises(ArtifactSubmittedReviewPending):
-        relation_edit.apply_edit(ctx, str(request_path))
+    from tests.test_plot_edit import request_for, save_request
+    payload = request_for(ctx)
+    payload['chapters'][0]['chapter']['beats'][0]['content'] = '昨夜来信说，李宝珠父亲已经回城。'
+    request_path = save_request(ctx, payload)
+    plot_edit.apply_edit(ctx, request_path)
     landed = (book / STAGE2_CHAPTER_BLUEPRINTS).read_bytes()
-    monkeypatch.setattr(approvals, 'approve_stage2_review', original_accept)
-    # 本测试只验证节点接受提交；s0/s1 的独立审批链由 façade 测试覆盖。
-    monkeypatch.setattr(approvals, 'close_stage2_accepted', lambda base, sid: approvals.get(base, sid, include_spawns=False))
-    relation_edit.apply_edit(ctx, str(request_path))
+    plot_edit.apply_edit(_ctx(book, 'stage2.blueprint', paid=False), request_path)
     assert (book / STAGE2_CHAPTER_BLUEPRINTS).read_bytes() == landed
-    assert approvals.get(book.parent, '123', include_spawns=False).stage2_reviews['stage2.blueprint'].state == 'accepted'
+    assert approvals.get(book.parent, '123', include_spawns=False).stage2_reviews['stage2.blueprint'].state == 'expired'
     after = ArtifactStore(ctx).read_own(ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)[0]
     assert after.blueprints[1:] == before.blueprints[1:]
 
@@ -276,10 +271,17 @@ def test_typed_halt_survives_next_queue_projection_without_model_action(book, mo
     from novel.orchestrator import queue
     from contracts.schema.api import Stage2NodeReviewRequest
     _produce_blueprints(book)
-    token = blueprint_review_workpack(book.parent, '123').review_token
+    from contracts.schema.plot_review import PlotReviewResponse
+    from tests.test_plot_review_runtime import response
+    pack = blueprint_review_workpack(book.parent, '123')
+    token = pack.review_token
+    verdict = response().model_dump(mode='json')
+    verdict.update(decision='unver', reason='当前证据不足，需要保留人工裁决')
+    verdict['coverage']['attribution'] = {'state': 'unver', 'issue_refs': [], 'reason': verdict['reason']}
     approvals.approve_stage2_review(book.parent, '123', Stage2NodeReviewRequest(
-        node='stage2.blueprint', review_token=token, decision=decision,
-        actor='blueprint-commander', reason='当前证据不足，需要保留人工裁决'))
+        node='stage2.blueprint', scope=pack.scope, review_token=token, decision=decision,
+        actor='blueprint-commander', reason=verdict['reason'],
+        plot_review=PlotReviewResponse.model_validate(verdict)))
     monkeypatch.setattr(queue, 'nodes_up_to', lambda _stage: ['stage2.blueprint', 'stage4.design'])
     todo, blocked = queue.plan_book(book.parent, '123', until_stage='stage4', follow_check=False)
     assert todo == [] and blocked
@@ -290,16 +292,13 @@ def test_typed_halt_survives_next_queue_projection_without_model_action(book, mo
 def test_blueprint_acceptance_saves_bound_scope_without_changing_current_token(book, monkeypatch):
     from tests.test_stage2_review_decisions import _accept_blueprint_node
     _produce_blueprints(book)
-    before = blueprint_review_workpack(book.parent, '123')
-    assert before.review_delta.mode == 'initial'
+    before = blueprint_review_workpack(book.parent, '123', scope='chapter:1')
     _accept_blueprint_node(book, monkeypatch)
-    after = blueprint_review_workpack(book.parent, '123')
-    scope = approvals.stage2_cross_review_scope(book.parent, '123')
-    assert scope is not None
-    assert scope.review_subject_sha256 == before.review_identity_sha256
-    assert before.review_token == after.review_token
-    assert after.review_delta.mode == 'unchanged'
-    assert after.review_delta.reusable_accepted_chapter_ordinals == [1, 2, 3]
+    after = blueprint_review_workpack(book.parent, '123', scope='chapter:1')
+    assert before.subject_sha256 == after.subject_sha256
+    progress = approvals.get(book.parent, '123', include_spawns=False).stage2_reviews['stage2.blueprint'].plot_progress
+    assert progress.accepted_chapters == 3 and progress.accepted
+    assert all(row.state == 'accepted' for row in progress.scopes)
 
 
 def test_cross_review_reuse_refuses_scope_without_matching_accepted_proof(book, monkeypatch):
@@ -308,9 +307,10 @@ def test_cross_review_reuse_refuses_scope_without_matching_accepted_proof(book, 
     _accept_blueprint_node(book, monkeypatch)
     path = approvals._path(book.parent, '123')
     raw = json.loads(path.read_text(encoding='utf-8'))
-    raw['stage2_blueprint_scope']['chapters']['1']['subject_sha256'] = 'e' * 64
+    raw['stage2_reviews']['stage2.blueprint']['plot_record'] = None
+    raw['stage2_review_history'][-1]['plot_record'] = None
     path.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8')
-    with pytest.raises(HumanEditProtected, match='精确 typed 决定证明'):
+    with pytest.raises(HumanEditProtected, match='审批记录损坏'):
         blueprint_review_workpack(book.parent, '123')
 
 
@@ -318,6 +318,13 @@ def test_static_role_rebind_routes_only_affected_cross_review_without_regenerati
     from tests.test_stage2_review_decisions import _accept_blueprint_node, _accept_global_node
     from tests.test_stage2_secret_edit import _locator
     from tests.test_stage2_generation import _edit_static_character
+    from tests.test_stage2_secret_edit import _write_edit, _apply
+    # 原共享 fixture 把关系声明在第一章，其章审依法会消费母亲；此处先经正式编辑
+    # 让关系从第二章成立/披露，建立确实不依赖母亲的第一章作为复用对照。
+    _write_edit(book, {'relations': [{'relation_id': 'rel_01', 'valid_from_chapter': 2,
+        'visibility': {'kind': 'public', 'from_chapter': 2}}]})
+    _apply(book)
+    _approve_all_review(book)
     _produce_blueprints(book)
     _accept_blueprint_node(book, monkeypatch)
     blueprint_bytes = (book / STAGE2_CHAPTER_BLUEPRINTS).read_bytes()
@@ -328,11 +335,18 @@ def test_static_role_rebind_routes_only_affected_cross_review_without_regenerati
     assert report.passed
     _approve_all_review(book)
     _accept_global_node(book)
-    pack = blueprint_review_workpack(book.parent, '123')
+    progress = approvals.get(book.parent, '123', include_spawns=False).stage2_reviews['stage2.blueprint'].plot_progress
     assert (book / STAGE2_CHAPTER_BLUEPRINTS).read_bytes() == blueprint_bytes
-    assert pack.review_delta.mode == 'targeted'
-    assert pack.review_delta.affected_chapter_ordinals == [2, 3]
-    assert pack.review_delta.reusable_accepted_chapter_ordinals == [1]
-    assert any(row.subject_path == 'entities.characters.char_002.role'
-               for row in pack.review_delta.changed_global_items)
-    assert approvals.get(book.parent, '123', include_spawns=False).stage2_reviews['stage2.blueprint'].state == 'expired'
+    states = {row.scope: row.state for row in progress.scopes}
+    assert states['chapter:1'] == 'accepted'
+    assert states['chapter:2'] == states['chapter:3'] == states['cross_chapter'] == 'expired'
+    free = _ctx(book, 'stage2.blueprint', paid=False)
+    ledger_before = free.ledger.path.read_bytes()
+    blueprint_before = ArtifactStore(free).read_own(ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)[0]
+    assert extract.run_renormalize(free).passed
+    blueprint_after = ArtifactStore(free).read_own(ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS,
+                                                  require_current=True)[0]
+    assert blueprint_after.blueprints == blueprint_before.blueprints
+    assert free.ledger.path.read_bytes() == ledger_before
+    current = approvals.get(book.parent, '123', include_spawns=False).stage2_reviews['stage2.blueprint'].plot_progress
+    assert {row.scope: row.state for row in current.scopes} == states

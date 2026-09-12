@@ -6,6 +6,8 @@ from __future__ import annotations
 import ast
 import hashlib
 import inspect
+import copy
+import json
 
 import pytest
 
@@ -53,7 +55,7 @@ def test_production_material_is_the_scene_compiler_contract(book):
     assert '语义契约' in system and 'Stage4 新设计的场景顺序' in system
     assert '本章功能：发现账册异常并决定秘密追查' in user
     assert '场景重写总纲：从雨夜核账切入' in user
-    assert 'slot=s01' in user and '场景目的：让墨迹异常在核账过程中暴露' in user
+    assert '"slot":"s01"' in user and '"purpose":"让墨迹异常在核账过程中暴露"' in user
     for retired in ('from_beats', 'end_beat', 'events[]'):
         assert retired not in system + user
 
@@ -67,7 +69,7 @@ def test_material_given_is_only_the_deterministic_blocks_projection():
 
 
 @pytest.mark.parametrize('fragment', [
-    'HINGE_LABEL_RULE', 'FIDELITY_RULE', 'ORDER_RULE', 'STYLE_WORD_RULE',
+    'PLOT_CONSTRAINT_RULE', 'FIDELITY_RULE', 'ORDER_RULE', 'STYLE_WORD_RULE',
 ])
 def test_shared_rules_reach_the_writer(fragment):
     value = getattr(prompts, fragment)
@@ -144,11 +146,14 @@ def test_invention_boundary_contains_the_complete_contract():
     assert '唯一判准：' in prompts.FIDELITY_RULE
 
 
-def test_all_fidelity_labels_are_explained_to_the_writer():
-    from contracts.invariants import HINGE_LABEL_PARTS, hinge_heading
-
-    for kind in HINGE_LABEL_PARTS:
-        assert f'【{hinge_heading(kind)}】' in prompts.HINGE_LABEL_RULE
+def test_all_sparse_constraint_kinds_are_explained_to_the_writer():
+    from typing import get_args
+    from contracts.schema.plot_context import WriterConstraint
+    kinds = get_args(WriterConstraint.model_fields['kind'].annotation)
+    assert len(kinds) == 8
+    assert all(kind in prompts.PLOT_CONSTRAINT_RULE for kind in kinds)
+    assert '人物相信或声称不等于客观成立' in prompts.PLOT_CONSTRAINT_RULE
+    assert not hasattr(prompts, 'HINGE_LABEL_RULE')
 
 
 def test_writer_system_has_no_arm_selector():
@@ -200,61 +205,70 @@ def test_density_guidance_contains_each_measured_value_and_key():
 # Stage4 场景编译结果的唯一 Stage5 下发面
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _scene(slot: str, delivery: str, facts: list[str], *, budget: int = 200,
+def _scene(slot: str, delivery: str, refs: list[str], *, budget: int = 200,
            **kw) -> dict:
     scene = {
         'slot': slot, 'purpose': f'完成 {slot} 的场景目的',
         'role': 'setup', 'delivery': delivery, 'transition': 'continue',
-        'budget_chars': budget, 'source_chars': budget,
-        'required_facts': list(facts), 'context_facts': [],
-        'turn_fact': facts[-1], 'entry_state': [], 'exit_state': [],
-        'participants': ['沈青'],
-        'stages': [{'time_layer': 'present', 'place': '茶馆', 'present': ['沈青']}],
-        'verbatim': [], 'keep_value': [], 'must_appear': [], 'must_hold': [],
+        'budget_chars': budget,
+        'deliveries': [{'beat_ref': ref, 'presentation_instruction': None, 'stages': []}
+                       for ref in refs],
+        'context_beat_refs': [], 'turn_beat_ref': refs[-1],
+        'state_events': [], 'knowledge_event_refs': [], 'constraint_refs': [],
     }
     scene.update(kw)
     return scene
 
 
+def _render_scenes(scenes, **kw):
+    return prompts.chapter_facts({'scenes': scenes, 'narration': [], **kw})
+
+
 def test_a_scene_is_rendered_as_one_purpose_driven_execution_task():
-    rendered = prompts.chapter_facts({'scenes': [
-        _scene('s01', 'scene', ['墨迹已被替换。', '沈青确认异常。'],
-               purpose='让异常在核账冲突中暴露',
-               entry_state=['沈青尚未发现异常'], exit_state=['沈青决定追查'])]})
-    assert '场景目的：让异常在核账冲突中暴露' in rendered
-    assert '把目的演成一个连贯场面' in rendered
-    assert '进入状态：沈青尚未发现异常' in rendered
-    assert '退出状态：沈青决定追查' in rendered
-    assert '转折：沈青确认异常。' in rendered
+    rendered = _render_scenes([
+        _scene('s01', 'scene', ['b01_01', 'b01_02'], purpose='让异常在核账冲突中暴露',
+               state_events=[{'state_ref': 'st01_01', 'endpoint': 'established'}])])
+    assert '"purpose":"让异常在核账冲突中暴露"' in rendered
+    assert '"turn_beat_ref":"b01_02"' in rendered
+    assert '"state_ref":"st01_01","endpoint":"established"' in rendered
+    assert '联合保全父节点的含义' in prompts.ORDER_RULE
+    assert '把完整父节点在多场重复讲一遍' in rendered
 
 
 def test_scene_and_summary_receive_distinct_execution_rules():
-    scene = prompts.chapter_facts({'scenes': [
-        _scene('s01', 'scene', ['甲。'])]})
-    summary = prompts.chapter_facts({'scenes': [
-        _scene('s01', 'summary', ['甲。'], budget=40)]})
-    assert '连贯场面' in scene and '连贯场面' not in summary
-    assert '压缩交代场景结果' in summary and '约 40 字' in summary
+    scene = _render_scenes([_scene('s01', 'scene', ['b01_01'])])
+    summary = _render_scenes([_scene('s01', 'summary', ['b01_01'], budget=40)])
+    assert '"delivery":"scene"' in scene and '"budget_chars":200' in scene
+    assert '"delivery":"summary"' in summary and '"budget_chars":40' in summary
+    assert '`scene` 写成可见可听的场面，`summary` 压缩交代' in prompts.ORDER_RULE
 
 
-def test_required_facts_are_same_scene_constraints_without_source_order():
-    rendered = prompts.chapter_facts({'scenes': [
-        _scene('s01', 'scene', ['后果先被看见。', '原因随后补足。'])]})
-    assert '必须成立（同场约束，无源文先后）' in rendered
-    assert '· 后果先被看见。' in rendered and '· 原因随后补足。' in rendered
-    assert '①' not in rendered and '②' not in rendered
-    assert '事实列表没有隐含的源文先后' in prompts.ORDER_RULE
+def test_beats_have_no_implied_source_order_and_deliveries_are_not_new_facts(book):
+    entry = copy.deepcopy(book.chapters[1])
+    entry['beats'] = [
+        {'beat_ref': 'b01_02', 'content': '后果先被看见。', 'participant_char_ids': []},
+        {'beat_ref': 'b01_01', 'content': '原因随后补足。', 'participant_char_ids': []}]
+    rendered = prompts.chapter_directive(entry, book)
+    assert rendered.index('后果先被看见。') < rendered.index('原因随后补足。')
+    assert '节点目录没有隐含的源文先后' in prompts.ORDER_RULE
+    assert '合法倒叙改变读者看见的先后，不改变故事世界的因果' in prompts.PLOT_CONSTRAINT_RULE
+    assert 'delivery 只安排呈现，不增加子事实' in _render_scenes(entry['scenes'])
 
 
-def test_every_fidelity_point_stays_anchored_to_its_scene():
-    rendered = prompts.chapter_facts({'scenes': [
-        _scene('s01', 'scene', ['甲。'], verbatim=['第一场的原话']),
-        _scene('s02', 'summary', ['乙。'], verbatim=['第二场的原话']),
-    ]})
-    lines = rendered.split('\n')
-    at = {needle: next(i for i, line in enumerate(lines) if needle in line)
-          for needle in ('slot=s01', 'slot=s02', '第一场的原话', '第二场的原话')}
-    assert at['slot=s01'] < at['第一场的原话'] < at['slot=s02'] < at['第二场的原话']
+def test_every_fidelity_point_stays_anchored_to_its_scene(book):
+    entry = copy.deepcopy(book.chapters[1])
+    entry['constraints'] = [
+        {'constraint_ref': f'c01_0{i}', 'kind': 'literal', 'target_beat_ref': 'b01_01',
+         'value': value} for i, value in enumerate(['第一场的原话', '第二场的原话'], 1)]
+    entry['scenes'] = [
+        _scene('s01', 'scene', ['b01_01'], constraint_refs=['c01_01']),
+        _scene('s02', 'summary', ['b01_01'], constraint_refs=['c01_02'])]
+    body = prompts.chapter_directive(entry, book)
+    assert all(body.count(c['value']) == 1 for c in entry['constraints'])
+    rendered = prompts.chapter_facts(entry)
+    rows = json.loads(rendered[rendered.index('[{'):rendered.index('\n叙述视角：')])
+    assert [row['constraint_refs'] for row in rows] == [['c01_01'], ['c01_02']]
+    assert all(c['value'] not in rendered for c in entry['constraints'])
 
 
 def test_material_names_the_scene_design_and_preserves_invention_boundary(book):
@@ -265,22 +279,20 @@ def test_material_names_the_scene_design_and_preserves_invention_boundary(book):
     assert '不得新增会改变人物、关系、知识或世界状态的剧情事实' in given
 
 
-def test_narration_drops_only_null_focalizer_from_the_prompt():
-    rendered = prompts.chapter_facts({
-        'scenes': [_scene('s01', 'scene', ['她进门。'])],
-        'narration': [{
-            'segment': '全章', 'grammatical_person': 'third',
-            'focalizer': None, 'pronoun_surfaces': None,
-        }],
-    })
-    assert 'focalizer' not in rendered
-    assert 'pronoun_surfaces' in rendered and 'null' in rendered
+def test_narration_preserves_unknown_and_stage_empty_is_not_unknown():
+    scene = _scene('s01', 'scene', ['b01_01'])
+    scene['deliveries'][0]['stages'] = [{'time_layer': None, 'place': None, 'present': []}]
+    rendered = _render_scenes([scene], narration=[{
+        'segment': '全章', 'grammatical_person': 'third', 'narrator': None}])
+    assert '"narrator":null' in rendered
+    assert '"time_layer":null,"place":null,"present":[]' in rendered
+    assert 'null 表示未知，present=[] 表示有据的无人在场' in rendered
 
 
 def test_slot_order_is_the_only_locked_writing_order():
     assert '严格按给定 slot 顺序写' in prompts.ORDER_RULE
     assert '不要改回源章顺序' in prompts.ORDER_RULE
-    assert '场内怎样调度' in prompts.ORDER_RULE
+    assert '场内调度服从目的、转折、状态和知识端点' in prompts.ORDER_RULE
     assert prompts.ORDER_RULE in prompts.WRITE_SYS
 
 
@@ -288,137 +300,137 @@ def test_chapter_directive_projects_semantic_contract_and_safe_brief(book):
     entry = book.chapters[1]
     rendered = prompts.chapter_directive(entry, book)
     assert '本章功能：发现账册异常并决定秘密追查' in rendered
-    assert '本章必须实现的事实变化：沈青发现账册末页的墨迹被人换过。' in rendered
-    assert '信息增量：沈青发现账册末页的墨迹被人换过。' in rendered
+    assert rendered.count(entry['beats'][0]['content']) == 1
+    assert '"subject_refs":[{"kind":"beat","ref":"b01_01"}]' in rendered
     assert '场景重写总纲：从雨夜核账切入' in rendered
     assert 'must_land_fact_refs' not in rendered
 
 
-def test_prev_context_gives_goals_and_last_scene_state_not_previous_fact_list():
-    from novel.stages.stage5 import measure as M
-
-    prev = {
-        'output_ordinal': 1,
-        'chapter_goal': {'intent': 'advance', 'facts': ['上一章的目标事实']},
-        'end_hook_goal': {'intent': 'close', 'facts': ['上一章的结尾事实']},
-        'scenes': [
-            _scene('s01', 'scene', ['不应重发的前场事实。'], turn_fact='前场转折。'),
-            _scene('s02', 'scene', ['不应重发的末场约束。'],
-                   turn_fact='上一章末场转折。', exit_state=['主角已经拿到账册。']),
-        ],
-    }
-    book = M.Book(
-        title='t', ctx={'chapters': [prev]}, measurable={}, source_text={}, secrets=[])
-    rendered = prompts.prev_context({'output_ordinal': 2}, book)
-
-    assert '上一章的目标事实' in rendered and '上一章的结尾事实' in rendered
-    assert '上一章末场转折。' in rendered and '主角已经拿到账册。' in rendered
-    assert '不应重发的前场事实。' not in rendered
-    assert '不应重发的末场约束。' not in rendered
+def test_prev_context_gives_only_completed_ending_beats_and_carry_refs(book):
+    previous = copy.deepcopy(book.chapters[1])
+    previous['beats'].append({'beat_ref': 'b01_02', 'content': '上一章末场转折。',
+                              'participant_char_ids': []})
+    previous['scenes'].append(_scene('s02', 'scene', ['b01_02']))
+    excluded = previous['beats'][0]['content']
+    from dataclasses import replace
+    sample = replace(book, ctx={'chapters': [previous]}, _cache={})
+    rendered = prompts.prev_context({'output_ordinal': 2, 'beats': [], 'background_beats': []}, sample)
+    assert '上一章末场转折。' in rendered and '"carry_out_refs":["st01_01"]' in rendered
+    assert excluded not in rendered and 'chapter_goal' not in rendered
 
 
-
-def test_writer_material_indexes_repeated_text_without_merging_scene_obligations(book):
-    import copy
-    import re
+def test_writer_material_indexes_repeated_beats_without_merging_scene_deliveries(book):
     entry = copy.deepcopy(book.chapters[1])
-    fact = '她必须在天亮之前把父亲留下的完整账册交给门外等候的旧友，并明确要求对方保守这件事的秘密。'
-    entry['semantic_contract']['must_land_facts'] = [fact]
-    entry['semantic_contract']['information_delta'] = [fact]
-    entry['semantic_contract']['causal_edges'] = [{'before': fact, 'after': '旧友接受了请求。'}]
-    entry['chapter_goal']['facts'] = [fact]
-    for scene in entry['scenes']:
-        scene['required_facts'] = [fact]
-        scene['entry_state'] = [fact]
-        scene['turn_fact'] = fact
-        scene['exit_state'] = [fact]
+    content = '她须在天亮前把父亲留下的账册交给旧友，并请对方保守秘密。'
+    entry['beats'][0]['content'] = content
+    entry['scenes'] = [
+        _scene('s01', 'scene', ['b01_01'], budget=400),
+        _scene('s02', 'scene', ['b01_01'], budget=300)]
+    entry['scenes'][0]['deliveries'][0]['presentation_instruction'] = '交出账册。'
+    entry['scenes'][1]['deliveries'][0]['presentation_instruction'] = '说明保密要求。'
     frozen = copy.deepcopy(entry)
     material = prompts.build_material(entry, book)
     given = material.given
-    assert entry == frozen, '传输压缩不能修改校验器的原任务书'
-    assert given.count(fact) == 1
-    label = re.search(r'(〔文[0-9]+〕)：' + re.escape(fact), given).group(1)
-    assert f'进入状态：{label}' in given and f'退出状态：{label}' in given
-    assert f'转折：{label}' in given and f'{label} → 旧友接受了请求。' in given
-    assert all(f'slot={scene["slot"]}' in given for scene in entry['scenes'])
+    assert entry == frozen
+    assert given.count(content) == 1
+    assert '交出账册。' in given and '说明保密要求。' in given
+    assert all(f'"slot":"{scene["slot"]}"' in given for scene in entry['scenes'])
     assert prompts.revise_user(material, '上一版正文', ['修正目标']).startswith(given)
-    assert '不合并事件' in given
+    assert '完整节点由它的全部呈现共同完成' in given
 
 
 @pytest.mark.parametrize('also_current', [False, True])
-def test_previous_chapter_uses_the_same_text_table_without_sending_other_material(book, also_current):
-    import copy
-    import re
+def test_previous_chapter_shares_current_catalog_without_sending_other_material(book, also_current):
     from dataclasses import replace
     from novel.stages.stage5 import review
-
-    fact = '沈青已经拿到账册。'
     previous = copy.deepcopy(book.chapters[1])
-    previous['chapter_goal']['facts'] = ['本章事实：' + fact]
-    previous['end_hook_goal']['facts'] = [fact, '〔文1〕是保留的字面标记。']
-    previous['scenes'][-1]['turn_fact'] = fact
-    previous['scenes'][-1]['exit_state'] = [fact]
-    excluded = '上一章未下发的证据细节，不得进入文字表。'
-    previous['scenes'][0]['required_facts'] = [excluded]
-    previous['semantic_contract']['must_land_facts'] = [excluded]
+    ending = {'beat_ref': 'b01_02', 'content': '沈青已经拿到账册。',
+              'participant_char_ids': ['char_001']}
+    previous['beats'].append(ending)
+    previous['scenes'].append(_scene('s02', 'scene', ['b01_02']))
+    excluded = previous['beats'][0]['content']
     entry = copy.deepcopy(book.chapters[1])
     entry['output_ordinal'] = 2
-    if also_current:
-        entry['semantic_contract']['entry_state'] = [fact]
-        entry['scenes'][0]['entry_state'] = [fact]
-    sample = replace(book, ctx={**book.ctx, 'chapters': [previous, entry]},
-                     source_text={**book.source_text, 2: book.source_text[1]}, _cache={})
+    entry['beats'] = [{'beat_ref': 'b02_01', 'content': '第二章开始继续核账。',
+                       'participant_char_ids': ['char_001']}]
+    entry['scenes'][0]['deliveries'][0]['beat_ref'] = 'b02_01'
+    entry['scenes'][0]['turn_beat_ref'] = 'b02_01'
+    entry['background_beats'] = [copy.deepcopy(ending)] if also_current else []
+    entry['chapter_rewrite_brief'] = '〔文1〕是本章有据的字面标记。'
+    sample = replace(book, ctx={**book.ctx, 'chapters': [previous, entry]}, _cache={})
     frozen = copy.deepcopy(sample.ctx)
     material = prompts.build_material(entry, sample)
     given = material.given
-    assert given.count(fact) == 1 and excluded not in given
-    label = re.search(r'(〔文[0-9]+〕)：' + re.escape(fact), given).group(1)
-    assert label != '〔文1〕' and '〔文1〕是保留的字面标记。' in given
-    assert f'末场转折：{label}' in given and f'章末状态：{label}' in given
-    assert '本章事实：' + label in given
-    if also_current:
-        assert f'章首输入状态：{label}' in given and f'进入状态：{label}' in given
-    assert sample.ctx == frozen, '不能修改校验器、其他章或其他并发写手的原始材料'
+    assert given.count(ending['content']) == 1 and excluded not in given
+    assert '〔文1〕是本章有据的字面标记。' in given
+    assert '"completed_ending_beat_refs":["b01_02"]' in given
+    assert sample.ctx == frozen
     assert review._material(entry, sample) == given
     assert prompts.revise_user(material, '上一版正文。', ['修正重复']).startswith(given)
 
 
-def test_writer_text_table_keeps_similar_facts_and_verbatim_material_separate(book):
-    import copy
-    entry = copy.deepcopy(book.chapters[1])
+def test_writer_keeps_similar_beats_and_verbatim_material_separate(book):
+    from tests.test_material_dialogue_flow import _entry
+    _, _, entry, sample = _entry()
     first, second = '她承诺明日交出账册。', '她拒绝明日交出账册。'
-    entry['semantic_contract']['must_land_facts'] = [first, second]
-    entry['scenes'][0]['required_facts'] = [first, second]
-    given = prompts.build_material(entry, book).given
-    assert first in given and second in given
-    for key in prompts.HINGE_LABEL:
-        for scene in entry['scenes']:
-            assert all(text.strip() in given for text in scene.get(key) or [])
+    for row, content in zip(entry['beats'], (first, second)):
+        row['content'] = content
+    given = prompts.build_material(entry, sample).given
+    assert given.count(first) == given.count(second) == 1
+    assert all(c['value'] in given for c in entry['constraints'])
+    assert '"constraint_refs":["c01_02"]' in given
 
 
-def test_compiled_goal_prefix_does_not_duplicate_the_fact_body(book):
-    """真实 Context 的目标包装与场景事实仍指向同一段正文。"""
-    import re
+def test_previous_and_current_catalog_conflict_is_explicit(book):
+    previous = book.chapters[1]['beats'][0]
+    current = copy.deepcopy(previous)
+    current['content'] = '同一 ID 被换成不同剧情。'
+    with pytest.raises(ValueError, match='同 ID 不同剧情正文'):
+        prompts.prev_context({'output_ordinal': 2, 'beats': [],
+                              'background_beats': [current]}, book)
+
+
+def test_compiled_goal_references_do_not_duplicate_the_beat_body(book):
     from novel.stages.stage5 import review
     entry = book.chapters[1]
-    fact = entry['scenes'][0]['required_facts'][0]
-    assert '本章事实：' + fact in entry['chapter_goal']['facts']
+    content = entry['beats'][0]['content']
     given = prompts.build_material(entry, book).given
-    assert given.count(fact) == 1
-    label = re.search(r'(〔文[0-9]+〕)：' + re.escape(fact), given).group(1)
-    assert '本章事实：' + label in given
+    assert given.count(content) == 1
+    assert '"anchor_beat_ref":"b01_01"' in given
     assert review._material(entry, book) == given
 
 
-def test_short_facts_and_preexisting_reference_labels_are_lossless(book):
-    import copy
+def test_short_beats_and_preexisting_reference_labels_are_lossless(book):
     entry = copy.deepcopy(book.chapters[1])
     entry['chapter_rewrite_brief'] += '〔文1〕是原材料中的字样。'
-    first = entry['scenes'][0]
-    first['required_facts'] = ['门开了。', '本章事实：门未开。']
-    first['turn_fact'] = '门开了。'
-    entry['chapter_goal']['facts'] = ['本章事实：门开了。', '本章事实：门未开。']
+    entry['beats'] = [
+        {'beat_ref': 'b01_01', 'content': '门开了。', 'participant_char_ids': []},
+        {'beat_ref': 'b01_02', 'content': '本章事实：门未开。', 'participant_char_ids': []}]
     given = prompts.build_material(entry, book).given
     assert given.count('门开了。') == 1
     assert '〔文1〕：' not in given
     assert '本章事实：门未开。' in given
+
+
+def test_writer_does_not_receive_source_or_restricted_answers(book):
+    from dataclasses import replace
+    entry = copy.deepcopy(book.chapters[1])
+    entry['restricted_subject_refs'] = [{'kind': 'secret', 'ref': 'secret_99'}]
+    sample = replace(book, source_text={1: '绝密原文章节只能供本地测量。' * 100},
+                     secrets=[{'secret_id': 'secret_99', 'fact': '本章不得下发的秘密真相'}], _cache={})
+    given = prompts.build_material(entry, sample).given
+    assert 'secret_99' in given
+    assert '绝密原文章节只能供本地测量' not in given
+    assert '本章不得下发的秘密真相' not in given
+    assert '同次请求可见后场材料，但前场不得提前表达' in given
+
+
+def test_scene_budget_and_paragraph_targets_use_the_production_measurement(book):
+    from novel.stages.stage5 import measure
+    entry = book.chapters[1]
+    material = prompts.build_material(entry, book).given
+    lo, hi = measure.target_range(entry)
+    assert f'本章目标 **{lo}~{hi} 字**' in material
+    for scene, paragraphs in zip(entry['scenes'], measure.paragraph_slot_plan(entry, book)):
+        assert f'"budget_chars":{scene["budget_chars"]}' in material
+        assert f'"paragraph_target":{paragraphs}' in material

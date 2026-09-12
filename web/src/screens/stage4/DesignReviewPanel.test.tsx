@@ -100,7 +100,7 @@ function repairCapability({
 
 function approval(state = 'missing'): ApprovalDoc {
   return {
-    v: 6,
+    v: 7,
     sid: 'book-1',
     gate: { s0: true, s1: true, s2: true, s4: false, s5: false, s6: false, s7: false },
     seen: { read: true, global: true },
@@ -722,7 +722,7 @@ describe('Stage4A 正式设计审阅', () => {
       infeasibility_proof: [{
         chapter_ordinal: 3,
         scenes: ['c03s01'],
-        constraint_code: 'empty_stage_allowlist',
+        constraint_code: 'missing_chapter_catalog',
         closed_refs: [FIRST_BEAT],
         proof_basis: '1'.repeat(64),
       }],
@@ -732,7 +732,7 @@ describe('Stage4A 正式设计审阅', () => {
     renderRoute(<DesignReviewPanel />, '/n/book-1/stage4/1')
 
     expect(await screen.findByText('当前 Stage4B 不可行证明')).toBeVisible()
-    expect(screen.getByText('empty_stage_allowlist')).toBeVisible()
+    expect(screen.getByText('missing_chapter_catalog')).toBeVisible()
     expect(screen.getByText(/模型担忧仅作非阻断证据/)).toBeVisible()
     expect(screen.getByText(/模型 concern 不会被前端升级/)).toBeVisible()
   })

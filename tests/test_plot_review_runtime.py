@@ -63,9 +63,12 @@ def test_cross_review_has_one_global_catalog_and_source_once(tmp_path):
         approvals.approve_stage2_review(book.parent, ctx.sid, request(pack))
     cross = blueprint_review_workpack(book.parent, ctx.sid, scope='cross_chapter')
     catalogs = [value for value in cross.material['dependencies'] if isinstance(value, list)]
-    assert len(catalogs) == 1
-    assert len({(row['kind'], row['ref']) for row in catalogs[0]}) == len(catalogs[0])
-    assert all('source' not in row for row in catalogs[0])
+    # 动态知识与独立人物名册各有一个权威输入；所有主体在工作包中仍只保存一次。
+    assert len(catalogs) == 2
+    rows = [row for catalog in catalogs for row in catalog]
+    assert len({(row['kind'], row['ref']) for row in rows}) == len(rows)
+    assert all('source' not in row for row in rows)
+    assert {row['kind'] for row in catalogs[1]} == {'character'}
     assert not any(isinstance(value, dict) and ('text' in value or 'beats' in value)
                    for value in cross.material['dependencies'])
 

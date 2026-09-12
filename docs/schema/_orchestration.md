@@ -449,17 +449,18 @@ secret/relation/world-rule UNVER；后者仍是 disclosure-ready 而不是 PASS�
 连续审阅，局部返修的 surface 或候选变化不重置预算，也不强制换审阅者。Stage4 A/B 分别隔离，
 Stage6 双盲 judge 分别隔离；这些业务边界不因共用基础设施而合并。
 
-Stage2 严格执行 Characters E → Global E → Global C 接受 → 逐章并发 Blueprint E → 独立 Blueprint C 交叉接受。
+Stage2 严格执行 Characters E → Global E → Global C 接受 → 逐章并发 Blueprint E → Blueprint C 逐章及跨章接受。
 Global 必须正式有效、逐项审阅 generation-safe 且节点接受 current；`.INVALID` 与称名投影不能释放
-Blueprint。Characters E、Global E、每章 Blueprint E、Global C 与整书 Blueprint C 各有独立工作单元，
+Blueprint。Characters E、Global E、每章 Blueprint E、Global C 与每个 Blueprint 审阅范围各有独立工作单元，
 内容额度为基础 4 次加已生效的不可变人工追加，包含首次、格式和内容纠错。
 不存在人物 Commander、预审、额外 Global 终审或按序号保留的第四席。
 
 网络 attempts 是每次内容请求的独立有界预算，逐次记成本与会话事实；模型纠错仍占角色内容额度。
 E/C 的工作单元不含 run/epoch/candidate/provider session，重启或换会话不补发。确定性 typed 提交
 本身不调用模型；已保存 request/raw/receipt、typed 决定和 producer journal 优先重验、幂等补尾。
-工作包持续传递未闭合或依赖变化的 subject cards 与存活决定；独立 Blueprint C 检查跨章事实与
-`review_delta`，其接受范围落为 `review_scope_sha256`。两份接受闭合后仅运行确定性 seen/gate 收口。
+Blueprint 工作包消费当前章完整剧情、原文、必要人物与知识依赖和实际问题，不传逐事实义务目录。
+范围接受绑定实际消费投影摘要；跨章范围独立反查原文和全书连续性。全部章级接受、KnowledgeLinks
+与跨章接受同时有效后，运行确定性 seen/gate 收口；旧逐项回执和 `review_delta` 不参与新链。
 
 `submission_options` 同时是可执行 binding：Stage2 既有字段 patch 的行数、顺序、subject id 与字段集合
 逐字保留；集合新增/删除/拆分走模板给出的 hash-bound `collection_edits.operations`，不复制整组成功主体。
@@ -1020,7 +1021,7 @@ trim/report/committed，不造新轮。公开读视图只认 committed，同一 
 正文身份由 SHA 联结，
 账本不能反向充当产物或 Review。
 
-`approvals/<sid>.json` 的盘上服务记录当前为 **v7**；HTTP 投影 `ApprovalDoc.v=6` 是另一条
+`approvals/<sid>.json` 的盘上服务记录当前为 **v8**；HTTP 投影 `ApprovalDoc.v=7` 是另一条
 版本轴，不能据同一个数字互推。每个已盖 gate、已阅状态、typed Stage4A 设计审阅、最终结构裁决和 writing 授权
 都必须带一份 current-subject proof：当前 `stage0/clean_text.txt` 的完整 SHA-1、所裁决正式
 产物的完整 SHA-256，以及决定本身的规范 JSON SHA-256。读取时必须重新走当前 schema、typed
@@ -1030,9 +1031,9 @@ trim/report/committed，不造新轮。公开读视图只认 committed，同一 
 `surname_map + characters + extra_subs` 决策面与完整 typed `ApprovedNameMap` 的规范摘要。
 因此 `stage7.assemble` 写回 `book_txt` 交付账不会自废 s7，而决策面、actor/reason/origin
 或 subject hash 变化仍会失效；读取还必须先证明 approval 存在且 subject 与当前决策面一致。
-当前工作流只在新 clean base 写入 v7 记录；审批变更和新写作业的公开入口先验证当前 workflow manifest，
-不能用 reset/backfill 把旧 base 收进新协议。旧 v1～v6 审批解码与迁移分支已删除；
-HTTP、CLI 及服务补录只接受当前 v7，缺版本、未来版本和损坏均拒绝且保留原字节；旧版本、旧 token、旧 Binding 不手工补字段冒充现役来源。
+当前工作流只在新 clean base 写入 v8 记录；审批变更和新写作业的公开入口先验证当前 workflow manifest，
+不能用 reset/backfill 把旧 base 收进新协议。旧 v1～v7 审批解码与迁移分支已删除；
+HTTP、CLI 及服务补录只接受当前 v8，缺版本、未来版本和损坏均拒绝且保留原字节；旧版本、旧 token、旧 Binding 不手工补字段冒充现役来源。
 普通 GET、事件观测与历史读取保持只读，损坏或证据不够保持 unknown。当前 Stage4 必须先有真实 A 审阅，
 由 B producer 产出当前 Binding/Plan，再经独立 B 结构审阅；不得从既有产物或付费记录倒造审阅。
 队列在一把锁内读取 current 结构裁决、

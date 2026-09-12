@@ -51,9 +51,8 @@ KnowledgeLinks；Blueprint V9 按章及跨章审阅，Stage4 以 placement/deliv
 - [ ] 完成追加额度、原配置续跑及重启累计账的真实链路；无进展或 unknown 不因追加而解除。
 - [ ] 与 TODO-21/28/31 同批闭合 current-schema corpus、真实 API fixture 和产物形状验收。
 - [ ] 最终冻结批次完成根 AGENTS 规定的回归及前端门槛；备份 main 后按已授权方案用验收通过的 worktree 替换。
-- [ ] 停止 admission、排空并证明 owner 停止，通过 preview/apply 整根归档旧输出；新生产使用独立空根，回滚配对旧代码与旧根。
 
-**当前授权与交付范围（2026-09-11）**：继续隔离根中的《夫君的报恩》，并验收
+**历史授权范围（2026-09-11，当前暂停执行）**：继续隔离根中的《夫君的报恩》，并验收
 《夫君不行，但我有孕啦》。用户因 Codex 连接超时改用已配置的 Claude CLI / 智谱 GLM 5.3 Flash，
 两书的 Executor、Commander 均明确设为 `max`，能力仅发布 `low/high/max`。
 原 OpenAI 配置、失败尝试及已购成果作为原始证据保留；换模型走显式新运行，累计预算不重置。
@@ -65,8 +64,10 @@ KnowledgeLinks；Blueprint V9 按章及跨章审阅，Stage4 以 placement/deliv
 未执行的 Terra 请求不能记作 Terra 实测结果。
 上述两书交付不代表本条其他 corpus、九组配对或局部恢复实验已完成，也不自动归档既有输出根。
 
-**2026-09-12 执行边界更新**：用户明确“先不跑真实的全书验收”。本轮先完成工程实现、
-合成书贯通与页面验证；真实全书模型质量、性能和成本验收保持待办，正式切换继续等待验收条件。
+**2026-09-12 执行边界更新**：本轮只收尾 Blueprint 工程、合成书贯通与页面验证。
+真实模型质量、性能和成本验收待后续 `stage2.global` 与 `stage2.characters` 重构完成后再安排。
+用户取消旧数据归档，`E:\NovelAcceptance` 由用户自行处置；不再执行归档、恢复或数据删除。
+新契约真实运行仍使用干净输出根，不沿用旧审批；正式切换继续等待验收条件。
 
 TODO-45～48 的有效恢复/质量反例并入本条；旧书恢复和“五轮三十分钟”不再是活动目标。
 失败、追加额度调用和未知保留分母；未完成或质量失败不能因便宜计作节约。
@@ -94,9 +95,10 @@ skip、缺书、缺产物或版本漂移。命令与失败口径只引用 `tests
 
 ### TODO-28 · backend_v1 fixture 与真实 API 响应契约闭环
 
-**缺口**：`web/src/fixtures/backend_v1/*.json` 是 mock 的现役数据源，但当前只有少数文件被
-Pydantic 响应模型直接校验。Stage2、Stage4、Stage5 与 Stage7 的形状变化已经让部分 fixture
-无法通过对应的 `contracts/schema` 模型，而前端 seam 只检查“谁能读取”，检查不到载荷漂移。
+**缺口**：完整剧情链的 `web/src/fixtures/plot_v1/flow.json` 已由合成贯通与真实 HTTP 投影生成，
+并由响应模型闭合校验；`backend_v1` 保留的辅助样例和历史拒绝态仍缺完整登记表。
+历史 Stage2 原文和检查仅作证据反例，不进入运行包。前端 seam 检查读取边界与退役字段，
+不能代替载荷的 Pydantic 校验。
 
 **工作**：
 
@@ -104,10 +106,11 @@ Pydantic 响应模型直接校验。Stage2、Stage4、Stage5 与 Stage7 的形�
   合成示例只保留无法安全抓取且确有专门判别价值的分支，并明确标注来源。
 - 建立闭合登记表：每个 JSON 必须映射到对应后端响应模型，或登记显式例外及独立守卫；登记表键集
   必须等于目录 JSON 文件集，新增文件不得静默漏验。
-- `enums.json` 继续由既有 `payload()` 对账；`style.json` 的 legacy adapter 例外必须显式登记；
-  其余映射使用 `StrictModel(extra='forbid')` 双向抓缺字段和退役字段。
+- `enums.json` 继续由既有 `payload()` 对账；无消费者的 Stage3 `style.json` 与旧 Stage4 示例
+  已退役，不再保留 legacy adapter 例外。保留的历史证据须有独立守卫；其余映射使用
+  `StrictModel(extra='forbid')` 双向抓缺字段和退役字段。
 
-**验收**：全部 fixture 均被登记表覆盖；普通 fixture 通过现役响应模型；两个例外各有独立守卫；
+**验收**：全部 fixture 均被登记表覆盖；普通 fixture 通过现役响应模型；历史证据例外各有独立守卫；
 故意删登记项、增加字段或删除必填字段时测试都会失败。
 
 ### TODO-30 · 盲规划、结构读数与独立人工批准闭环
@@ -115,6 +118,10 @@ Pydantic 响应模型直接校验。Stage2、Stage4、Stage5 与 Stage7 的形�
 **定位**：这是独立质量研究，不阻塞稳定工作流交付。Stage4 已有去序 A/B、可复算结构读数与
 hash-bound 人工结构门；尚缺 current-schema 真书对照来回答“重构是否可辨认且不伤事实安全”。
 没有 ground truth 时，不能用非 corpus 测试或自动阈值替代人工盲评。
+
+研究入口须使用当前完整剧情及 placement 契约。旧 BPv5/Planv2 双臂实验与固定 Flash 配置的
+JSON mode 探针不属于现役接口，其工具及专属旧协议测试已退役；历史代码可从 `bbc3a71` 恢复。
+这不取消下面的独立质量研究，也不代替正式管线的别名隔离、来源闭合或付费恢复反例。
 
 **工作**：在不覆盖正式产物的实验面冻结同一份 current Stage2 主体，比较旧规划与当前盲规划；
 B 只绑定证据，不静默改变 A 的场景顺序、事实分组、首尾锚点或 retain/reconstruct。两臂、书名、

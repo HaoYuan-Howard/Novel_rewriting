@@ -671,7 +671,7 @@ export interface Stage2NodeReviewView {
 }
 
 export interface ApprovalDoc {
-  v: 6
+  v: 7
   sid: string
   gate: Record<GateKey, boolean>
   seen: Record<SeenKey, boolean>
@@ -743,67 +743,6 @@ export interface ApprovalWorkpackItem {
   review_token?: string | null
   /** v2：coverage 行的逐章裁决材料，服务端确定性渲染；页面只折叠呈现，不自算。 */
   reading?: WorkpackChapterReading | null
-}
-
-/** 本章 facts 表的一行：claim 只在这里出现一次，其余处只引用 ref。 */
-export interface WorkpackFactReading {
-  ref: string
-  claim: string
-  kind: string | null
-  obligation: string | null
-}
-
-export interface WorkpackStageReading {
-  ref: string
-  found: boolean
-  time_layer: string | null
-  place: string | null
-  present: string[]
-}
-
-export interface WorkpackMaterialReading {
-  group: string
-  count: number
-  chars: number
-  excerpt: string
-}
-
-export interface WorkpackGoalReading {
-  intent: string
-  refs: string[]
-}
-
-export interface WorkpackSceneReading {
-  scene_ref: string
-  weight: string | null
-  budget_chars: number | null
-  purpose: string
-  role: string
-  delivery: string
-  transition: string
-  land: string[]
-  context: string[]
-  turn: string | null
-  entry_state: string[]
-  exit_state: string[]
-  stages: WorkpackStageReading[]
-  materials: WorkpackMaterialReading[]
-  missing_material_refs: string[]
-}
-
-export type WorkpackClosedRefReading = import('./plot.generated').WorkpackClosedRefReading
-
-export interface WorkpackConcernReading {
-  constraint_code: string
-  chapter_ordinal: number | null
-  scenes: string[]
-  reason: string
-  closed_refs: WorkpackClosedRefReading[]
-}
-
-export interface WorkpackCausalEdgeReading {
-  before_alias: string
-  after_alias: string
 }
 
 export type StructureChapterReading = import('./plot.generated').StructureChapterReading

@@ -90,3 +90,77 @@ it('无法判定和不适用须说明，实际问题与处置原样送后端验�
     }),
   })))
 })
+
+it('已有剧情和状态不会自动生成传播事件，空操作仍需显式五维接受', async () => {
+  const { pack, submit } = await setup()
+  // 只添加有来信依据的持续信念；界面不能因此自行认定读者或其他人物的知晓时点。
+  pack.material.blueprints[0].states = [{
+    state_id: 'st01_01', content: '李宝珠相信父亲已经回城。', global_ref: null,
+    modality: 'belief', holder_char_id: 'char_001',
+    established_at: { kind: 'at_beat', beat_ref: 'b01_01' }, ended_at: null,
+    supersedes_state_refs: [], evidence_refs: ['e01_01'],
+  }]
+  expect(pack.material.blueprints[0].states.length).toBeGreaterThan(0)
+  renderRoute(<PlotReviewPanel sid={SAMPLE_SID} pack={pack} />, '/n/' + SAMPLE_SID + '/read/1')
+  expect(screen.getByLabelText('必要知识事件操作（JSON）')).toHaveValue('[]')
+  expect(screen.getByRole('button', { name: '提交范围审阅决定' })).toBeDisabled()
+  await fill()
+  fireEvent.click(screen.getByRole('button', { name: '提交范围审阅决定' }))
+  await waitFor(() => expect(submit).toHaveBeenCalledWith(SAMPLE_SID, expect.objectContaining({
+    knowledge_links: expect.objectContaining({ event_operations: [] }),
+  })))
+})
+
+it('必要人物传播携原文证据、已有主体及触发点原样提交同一范围', async () => {
+  const { pack, submit } = await setup()
+  const operation = {
+    operation: 'put', event_id: 'ke_receive_letter', expected_event_sha256: null,
+    event: { kind: 'character_knowledge', subject_ref: { kind: 'beat', ref: 'b01_01' },
+      audience: { kind: 'character', char_id: 'char_001' }, chapter_ordinal: 1,
+      evidence_refs: [{ chapter_ordinal: 1, evidence_ref: 'e01_01' }] },
+    resolution: { kind: 'at_beats', trigger_beat_ref: 'b01_02',
+      subject_refs: [{ kind: 'beat', ref: 'b01_02' }, { kind: 'beat', ref: 'b01_01' }] },
+  }
+  renderRoute(<PlotReviewPanel sid={SAMPLE_SID} pack={pack} />, '/n/' + SAMPLE_SID + '/read/1')
+  fireEvent.change(screen.getByLabelText('必要知识事件操作（JSON）'), {
+    target: { value: JSON.stringify([operation]) },
+  })
+  await fill()
+  fireEvent.click(screen.getByRole('button', { name: '提交范围审阅决定' }))
+  await waitFor(() => expect(submit).toHaveBeenCalledWith(SAMPLE_SID, expect.objectContaining({
+    scope: pack.scope, review_token: pack.review_token,
+    knowledge_links: expect.objectContaining({ scope_sha256: pack.knowledge_links.scope.scope_sha256,
+      event_operations: [operation] }),
+  })))
+})
+
+it('显示已登记事件与身份，显式撤回保留 CAS 和理由', async () => {
+  const { pack, submit } = await setup()
+  const event = { kind: 'reader_reveal' as const, subject_ref: { kind: 'beat' as const, ref: 'b01_01' },
+    audience: null, chapter_ordinal: 1, evidence_refs: [{ chapter_ordinal: 1, evidence_ref: 'e01_01' }] }
+  const sha = 'e'.repeat(64)
+  pack.knowledge_links.scope.registered_events = [{ event_id: 'ke_letter', event_sha256: sha,
+    event, retired: false, reason: null }]
+  const operation = { operation: 'retire', event_id: 'ke_letter', expected_event_sha256: sha,
+    reason: '同一披露已有正式事件，撤回重复登记' }
+  renderRoute(<PlotReviewPanel sid={SAMPLE_SID} pack={pack} />, '/n/' + SAMPLE_SID + '/read/1')
+  expect(screen.getByText('ke_letter · 当前登记 · 第 1 章')).toBeVisible()
+  fireEvent.change(screen.getByLabelText('必要知识事件操作（JSON）'), {
+    target: { value: JSON.stringify([operation]) },
+  })
+  await fill()
+  fireEvent.click(screen.getByRole('button', { name: '提交范围审阅决定' }))
+  await waitFor(() => expect(submit).toHaveBeenCalledWith(SAMPLE_SID, expect.objectContaining({
+    knowledge_links: expect.objectContaining({ event_operations: [operation] }),
+  })))
+})
+
+it('知识事件操作必须可解析为数组，错误草稿不能提交', async () => {
+  const { pack, submit } = await setup()
+  renderRoute(<PlotReviewPanel sid={SAMPLE_SID} pack={pack} />, '/n/' + SAMPLE_SID + '/read/1')
+  await fill()
+  fireEvent.change(screen.getByLabelText('必要知识事件操作（JSON）'), { target: { value: '{}' } })
+  expect(screen.getByRole('alert')).toHaveTextContent('请填写 JSON 数组')
+  expect(screen.getByRole('button', { name: '提交范围审阅决定' })).toBeDisabled()
+  expect(submit).not.toHaveBeenCalled()
+})

@@ -57,7 +57,8 @@ npm run build                       # web/dist，供后端同源托管
 - `realApi` 与 `mockApi` 共同满足 `web/src/types/api.ts` 的 `Api`。真实模式不得在缺端点时回退 mock，
   不用 localStorage、空数组或普通 404 伪装后端能力。新增字段追完整 types → endpoints → hook → 页面及 fixture。
 - `web/src/mocks/` 是冻结历史证据，字节/hash 由 `web/scripts/mock-baseline.json` 与 seams 守护，不能用新输出覆盖。
-  现役模拟数据放 `web/src/fixtures/`；两类材料只由 `web/src/api/mock.ts` 接入，不让组件直接消费。
+  完整剧情链的现役模拟数据放 `web/src/fixtures/plot_v1/`；历史 Stage2 证据和旧检查退出运行包，
+  不作为新链接受依据。两类材料只由 `web/src/api/mock.ts` 接入，不让组件直接消费。
   模拟延迟、作业与 localStorage 覆盖仅服务离线开发，不作为真实链路证据。
 - 动作、枚举、费用、写盘语义来自后端；driver/model/effort/执行模式来自 capability，不能手抄节点数量或能力矩阵。
   `default_profiles=null` 不从数组首项代选；用户偏好与产品默认、已受理 run 分开，不保存凭据或两项授权。
@@ -105,8 +106,11 @@ npm run build                       # web/dist，供后端同源托管
 - 运行页消费 `resume_frontier`、`work_units`、`allowed_controls` 和恢复投影。显示实际生成、机械处理、历史采用、
   决定继承及基础/追加/累计额度；缺失保持 unknown，空单元列表表示尚无登记，界面不计算剩余额度。
   暂停、恢复、熄火、追加额度与原配置续跑分别走对应后端入口，不能借其中一个解除其他阻断或重置累计账。
-- Stage2 已读和节点接受是两件事；不能开页即全书已读。Global 未接受不能生成 Blueprint，Blueprint 未接受不能进入 Stage4。
-  typed 决定与返工属主来自后端模板/枚举；分组、交付效果、计数也由后端提供，全选仍展开为可单独撤销的逐项决定。
+- Stage2 已读和接受是两件事；不能开页即全书已读。Global 未接受不能生成 Blueprint；Blueprint 全部章审、
+  必要知识闭合和跨章复核均有效接受后才能进入 Stage4。Global 主体复核保留逐项决定；Blueprint 只填五个固定维度
+  和实际问题，不生成逐节点、逐约束或逐 delivery 的正向回执。typed 决定、返工属主和计数来自后端模板/枚举。
+- 必要知识事件在同一范围审阅中稀疏登记、更新或撤回，只引用已有 Beat/State 与原文证据；
+  更新和撤回绑定当前事件身份，不从 State modality 推导读者披露，不自动为所有节点或状态新增事件。
 - 各审阅面只从本次完整工作包填表，提交 opaque review token、actor/reason 与 typed 判断；不从其他查询重拼身份或在浏览器算 SHA。
   待审与继承范围、历史来源均照后端呈现，不能从摘要相似、主体删除、空组或旧绿色状态推导接受；主体漂移须重新取包。
 - Stage4A 接受只授权 B，B 结构接受只打开结构闸，Stage5 写作授权仍独立。A/B 的工作包、query key 与 typed 表单分开；

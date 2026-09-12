@@ -19,6 +19,15 @@ from novel.stages.stage4.plot_design import (
 from tests.test_plot_blueprint import blueprint, chapter_response
 
 
+def planner_characters():
+    return {'entities': {'characters': {
+        cid: {'canonical': label, 'role': role, 'address': [
+            {'surface': label, 'from_chapter': 1}]}
+        for cid, label, role in [('char_001', '娘子', '施救者与决定离开的人'),
+                                  ('char_002', '夫君', '被救者与挽留的人')]
+    }}, 'canon': {}}
+
+
 def key_for(values, value):
     return next(k for k, v in values.items() if v == value)
 
@@ -58,7 +67,7 @@ def inputs(response=None):
     first = blueprint(response=response)
     truth, mapping = build_blind_projection(
         [first.model_dump(mode='json'), blueprint(2).model_dump(mode='json')],
-        root_clean_sha1='a' * 40)
+        root_clean_sha1='a' * 40, global_g=planner_characters())
     public, private = build_blind_chapter_projection(
         truth, mapping, chapter_ordinal=1, root_clean_sha1='a' * 40)
     return first, truth, mapping, public, private
@@ -101,6 +110,89 @@ def test_blind_distributed_design_and_human_roundtrip():
     }, [compiled, second], mapping, truth=truth)
     assert len(candidate['output_chapters']) == 2
     assert 'fact_aliases' not in candidate
+
+
+def test_planner_aliases_identify_characters_and_bind_consumed_meaning():
+    _bp, truth, mapping, public, _private = inputs()
+    people = {row['canonical']: row for row in public['chapter']['characters']}
+    assert set(people) == {'娘子', '夫君'}
+    assert people['娘子']['alias'] != people['夫君']['alias']
+    assert all(set(beat['participant_aliases']) == {p['alias'] for p in people.values()}
+               for beat in public['chapter']['beats'])
+    assert all('char_' not in json.dumps(row) and 'evidence' not in json.dumps(row)
+               for row in people.values())
+    raw = [blueprint().model_dump(mode='json'), blueprint(2).model_dump(mode='json')]
+    changed = planner_characters()
+    changed['entities']['characters']['char_001']['role'] = '修订后的有据人物身份'
+    newer, newer_mapping = build_blind_projection(raw, root_clean_sha1='a' * 40, global_g=changed)
+    assert newer['chapters'][0]['characters'] != truth['chapters'][0]['characters']
+    assert newer_mapping['truth_sha256'] != mapping['truth_sha256']
+    with pytest.raises(BlindPlanError, match='人物缺少'):
+        build_blind_projection(raw, root_clean_sha1='a' * 40)
+
+
+def test_unconsumed_character_does_not_change_chapter_alias_payload():
+    raw = [blueprint().model_dump(mode='json'), blueprint(2).model_dump(mode='json')]
+    original, _ = build_blind_projection(raw, root_clean_sha1='a' * 40, global_g=planner_characters())
+    changed = planner_characters()
+    changed['entities']['characters']['char_999'] = {
+        'canonical': '无关人物', 'role': '不参与这些剧情',
+        'address': [{'surface': '无关人物', 'from_chapter': 1}]}
+    newer, _ = build_blind_projection(raw, root_clean_sha1='a' * 40, global_g=changed)
+    assert newer == original
+
+
+def test_character_state_keeps_its_alias_without_replacing_relation_participants():
+    from contracts.schema.plot import PlotChapterResponse
+    from novel.stages.stage2.plot_compile import compile_chapter
+    from tests.test_plot_blueprint import CHARS, SOURCE
+
+    response = chapter_response()
+    response['states'] = [{
+        'state_key': key, 'content': None, 'global_ref': {'kind': kind, 'ref': ref},
+        'modality': 'world', 'holder_char_id': None,
+        'established_at': {'kind': 'at_beat', 'beat_ref': 'b2'}, 'ended_at': None,
+        'supersedes_state_refs': [], 'evidence': [{'start_para': 2, 'end_para': 2}],
+    } for key, kind, ref in [('st1', 'character_state', 'char_001'),
+                             ('st2', 'relation', 'rel_001')]]
+    bp = compile_chapter(PlotChapterResponse.model_validate(response), SOURCE,
+        allowed_char_ids=CHARS,
+        allowed_global_refs=frozenset({('character_state', 'char_001'), ('relation', 'rel_001')}))
+    grounding = planner_characters()
+    end = SOURCE.index('\n\n')
+    grounding['entities']['character_states'] = {'char_001': {
+        'fate': '仍决定离开', 'fate_evidence': {'chapter_ordinal': 1,
+            'source': {'start': end + 2, 'end': len(SOURCE), 'text': SOURCE[end + 2:]}},
+    }}
+    grounding['entities']['relations'] = [{
+        'relation_id': 'rel_001', 'subject_id': 'char_001', 'object_id': 'char_002',
+        'predicate': '施救过', 'predicate_evidence': {'chapter_ordinal': 1,
+            'source': {'start': 0, 'end': end, 'text': SOURCE[:end]}},
+        'visibility': {'kind': 'public', 'from_chapter': 1},
+        'valid_from_chapter': 1, 'valid_through_chapter': None,
+    }]
+    truth, mapping = build_blind_projection(
+        [bp.model_dump(mode='json')], root_clean_sha1='a' * 40, global_g=grounding)
+    relation = next(row for row in truth['chapters'][0]['global_subjects'] if row['kind'] == 'relation')
+    fate = next(row for row in truth['chapters'][0]['global_subjects'] if row['kind'] == 'character_state')
+    assert mapping['subject_aliases'][relation['alias']] == {'kind': 'relation', 'ref': 'rel_001'}
+    assert mapping['subject_aliases'][fate['alias']] == {'kind': 'character_state', 'ref': 'char_001'}
+    for field, cid in [('subject_id', 'char_001'), ('object_id', 'char_002')]:
+        assert mapping['subject_aliases'][relation['value'][field]] == {'kind': 'character', 'ref': cid}
+        assert relation['value'][field] in mapping['participant_aliases']
+        assert relation['value'][field] != fate['alias']
+    assert relation['value']['relation_id'] == relation['alias']
+
+    # 正式章级 A 请求再次局部化后仍保留正确施受者；命题不会进入人物目录。
+    public, private = build_blind_chapter_projection(
+        truth, mapping, chapter_ordinal=1, root_clean_sha1='a' * 40)
+    local_relation = next(row for row in public['chapter']['global_subjects'] if row['kind'] == 'relation')
+    people = {row['alias'] for row in public['chapter']['characters']}
+    assert {local_relation['value']['subject_id'], local_relation['value']['object_id']} <= people
+    local_fate = next(row for row in public['chapter']['global_subjects'] if row['kind'] == 'character_state')
+    assert local_fate['alias'] not in people
+    compiled = compile_response(design_response(public), truth, mapping, private)
+    assert compiled['output_ordinal'] == 1
 
 
 def test_partial_delivery_does_not_release_full_parent_context():

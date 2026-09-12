@@ -42,6 +42,25 @@ start_para/end_para。编译器分配正式 ID、共享证据表及坐标并核�
 确实消费另一章完整候选或持续状态时，仍绑定相应候选/状态内容和证据，不能缩成 ID。
 工作包与依赖摘要由同一投影生成，问题可以引用该包中实际可见的外章证据。
 
+## 稀疏知识登记
+
+KnowledgeLinks V2 保留 Global 的必要知识候选；State 的存在不自动生成读者披露。
+章级 Commander 在同轮 knowledge_links.event_operations 显式 put 或 retire 必要事件，
+不增加固定模型工位。put 引用已有 Beat/State，kind 为 reader_reveal 或
+character_knowledge；后者带受众。证据给 chapter_ordinal/evidence_ref，代码核对本轮
+实际原文并规范为段范围；证据章、命题来源章与事件目标章可以不同。
+
+put 同时给 at_beats 关联或 unresolved 原因。触发节点属于目标章，支持引用包含完整命题；
+缺必要知识边界仍由五维语义审阅登记问题，不能声称机械枚举了全部知识。
+完整 Beat 的读者呈现不能借知识登记跨章移动；跨章人物得知既有剧情可以独立登记。
+retire 必须给理由。稳定 event_id 与 expected_event_sha256 防止覆写错误版本，
+原始请求和代码物化的 knowledge_application 同时留在审批审计中，退役身份不复用。
+注册、修改与撤销按实际消费集合和内容使相关范围过期，不清除既有问题。
+
+State 的未来读者披露会进入当前 PlannerTruth 与结构审阅材料，尚未开放的 State 正文
+不进入此前章节 WriterVisible；当前章已开放的命题仍保持 belief/claim 等性质。
+必要的跨章剧情正文在 background_beats 中只保存一次，不成为新的本章落地义务。
+
 ## 改编安排
 
 PlotChapterArrangement 保存场景、唯一 beat_placements 和 anchor_bindings。
@@ -58,6 +77,9 @@ goal 为 open/close/turn/chapter。端点目录从既有主体派生；不能自
 所有主要呈现完成前，不能把整个节点作为背景引用。
 
 A 只读去源序的 opaque 语义投影；证据和源舞台留给章级 B。
+引用人物的 alias 同时带 canonical、可辨认称呼及 role；规划者可以辨认未来人物，
+Writer 的称呼仍按原文证据开放。自由文本回显本书已登记正式 ID 时拒绝构包，
+不裁剪正文，也不误拒未登记的编号字面。局部响应只接受本章下发的局部 alias。
 opaque alias 使用冻结且不下发给模型的密钥，不能仅散列可枚举的源序编号；
 跨章状态及 Global 引用也经过同一映射，不能从旁路暴露源序。
 Writer 的章级剧情目录只保存父正文一次，各场引用该目录并带呈现指令。

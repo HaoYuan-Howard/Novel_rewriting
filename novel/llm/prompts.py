@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, BARE_PRONOUNS,
-    BOOK_BAND, FATE_WORDS, HINGE_KINDS, INVENT_ALLOW,
+    BOOK_BAND, FATE_WORDS, INVENT_ALLOW,
     INVENT_FORBID, INVENT_PRINCIPLE, NAME_DISTINCTIVENESS,
     PLAN_BUDGET_BAND, RESPONSE_CHAPTER_WEIGHTS,
     RESPONSE_DELIVERY_MODES, RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES,
@@ -45,7 +45,6 @@ _BY_SPECIAL = tuple(b for b in ADDRESS_BY if b != 'char_id')
 #: `$NAME` → 渲染好的文字。**call site 不许自己造同名的一份**（`fill()` 会拒）。
 ENUM_BLOCKS: Final[dict[str, str]] = {
     # stage2 逐章抽取
-    'KINDS': '|'.join(HINGE_KINDS),
     'LAYERS': '|'.join(TIME_LAYERS),
     # Stage2 响应侧的叙述层前缀枚举（产物侧取值面不动，映射在 compiler）。
     'T_LAYERS': '|'.join(RESPONSE_TIME_LAYERS),

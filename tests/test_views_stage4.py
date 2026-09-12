@@ -24,7 +24,8 @@ from tests import corpus, sandbox
 from tests.markers import corpus_params
 
 INPUTS = ('stage1/main_text.json', 'stage2/global_grounding.json',
-          'stage2/chapter_blueprints.json',
+          'stage2/chapter_blueprints.json', 'stage2/characters.json',
+          'stage2/knowledge_links.json',
           'stage4/evidence_binding.json',
           'stage4/plan_chapters.json', 'stage4/writer_context.json')
 
@@ -72,8 +73,8 @@ def test_the_real_plan_forwards_goals_and_sums_budgets(box):
         'rows 与 subject 必须来自同一份 plan，不许在 view 里二次读盘'
     pc = plan['output_chapters'][0]
     assert v.plan_chapter.chapter_goal.model_dump(mode='json') == pc['chapter_goal']
-    assert [scene.land_fact_refs for scene in v.plan_chapter.scenes] == \
-        [scene['land_fact_refs'] for scene in pc['scenes']]
+    assert [row.model_dump(mode='json') for row in v.plan_chapter.beat_placements] == \
+        pc['beat_placements']
     assert [scene.slot for scene in v.plan_chapter.scenes] == \
         [scene['slot'] for scene in pc['scenes']]
     row = next(r for r in v.index if r.output_ordinal == o)

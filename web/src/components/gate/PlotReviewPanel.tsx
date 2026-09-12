@@ -7,7 +7,7 @@ import { ErrorHint } from '@/components/state/States'
 import { errorBody } from '@/api/errors'
 import type { BlueprintReviewWorkpack } from '@/types/stages'
 import type { Dimension } from '@/types/plot'
-import type { DimensionVerdict, PlotReviewResponse, KnowledgeLinkDecision } from '@/types/plot.generated'
+import type { DimensionVerdict, PlotReviewResponse, KnowledgeLinkDecision, KnowledgeLinkSubmission } from '@/types/plot.generated'
 
 const dimensionLabels: Record<string, string> = {
   completeness: '剧情完整', attribution: '归因与人物立场', causal_continuity: '因果连续',
@@ -43,6 +43,8 @@ export function PlotReviewPanel({ sid, pack }: { sid: string; pack: BlueprintRev
     obligation_id: row.obligation_id, expected_subject_sha256: row.subject_sha256,
     resolution: { kind: 'unresolved', reason: '' },
   })), null, 2))
+  const [eventOperations, setEventOperations] = useState('[]')
+  const registeredEvents = pack.knowledge_links.scope.registered_events ?? []
   const dimensions = enums.data?.plot_review_dimensions as Dimension[] | undefined
   const states = enums.data?.plot_dimension_states as DimensionVerdict['state'][] | undefined
   const choices = enums.data?.stage2_node_review_decisions
@@ -54,10 +56,12 @@ export function PlotReviewPanel({ sid, pack }: { sid: string; pack: BlueprintRev
   let parsedIssues: PlotReviewResponse['new_issues'] = []
   let parsedDispositions: PlotReviewResponse['dispositions'] = []
   let parsedLinks: KnowledgeLinkDecision[] = []
+  let parsedEventOperations: KnowledgeLinkSubmission['event_operations'] = []
   try {
     parsedIssues = arrayJson(newIssues)
     parsedDispositions = arrayJson(dispositions)
     parsedLinks = arrayJson(links)
+    parsedEventOperations = arrayJson(eventOperations)
   } catch (error) { jsonError = error instanceof Error ? error.message : 'JSON 无法读取' }
   const completed = !!dimensions?.length && dimensions.every((dimension) => {
     const row = verdicts[dimension]
@@ -90,7 +94,8 @@ export function PlotReviewPanel({ sid, pack }: { sid: string; pack: BlueprintRev
         reason: reason.trim(), coverage, new_issues: parsedIssues, dispositions: parsedDispositions,
       },
       knowledge_links: { scope_sha256: pack.knowledge_links.scope.scope_sha256,
-        actor: actor.trim(), reason: reason.trim(), decisions: parsedLinks },
+        actor: actor.trim(), reason: reason.trim(), decisions: parsedLinks,
+        event_operations: parsedEventOperations },
     })
   }
   return <Panel className="px-18 py-14">
@@ -125,7 +130,7 @@ export function PlotReviewPanel({ sid, pack }: { sid: string; pack: BlueprintRev
     </details>
     <details className="my-12 rounded-block border border-line-2 p-12" open={obligations.length > 0}>
       <summary>必要知识时点 · 待处理 {obligations.length} 项</summary>
-      <p>只处理已登记知识事件。at_beats 选择支持主体 subject_refs 和触发节点 trigger_beat_ref；at_entry 只使用开放的章首主体。证据不足保持 unresolved。</p>
+      <p>at_beats 选择支持主体 subject_refs 和触发节点 trigger_beat_ref；at_entry 只使用开放的章首主体。证据不足保持 unresolved。</p>
       {obligations.map((row) => <div key={row.obligation_id} className="my-8 border-b border-line-2 pb-8">
         <p>{row.kind} · {row.subject_ref.kind} / {row.subject_ref.ref} · 第 {row.chapter_ordinal} 章</p>
         <pre className="overflow-auto whitespace-pre-wrap text-sm2">{JSON.stringify(row, null, 2)}</pre>
@@ -133,6 +138,21 @@ export function PlotReviewPanel({ sid, pack }: { sid: string; pack: BlueprintRev
       <label>知识时点决定（JSON）<textarea aria-label="知识时点决定（JSON）" rows={8}
         className="block w-full rounded-btn border border-line-2 p-8 font-mono text-sm2"
         value={links} onChange={(e) => setLinks(e.target.value)} /></label>
+    </details>
+    <details className="my-12 rounded-block border border-line-2 p-12" open={registeredEvents.length > 0}>
+      <summary>必要知识传播与读者披露 · 已登记 {registeredEvents.length} 项</summary>
+      <p>只登记需要独立管理的传播或披露时点，引用已有节点或持续状态；状态性质不代表读者已经知道，不为每个节点或状态自动登记。</p>
+      {registeredEvents.map((row) => <div key={row.event_id} className="my-8 border-b border-line-2 pb-8">
+        <p>{row.event_id} · {row.retired ? '已撤回' : '当前登记'} · 第 {row.event.chapter_ordinal} 章</p>
+        <pre className="overflow-auto whitespace-pre-wrap text-sm2">{JSON.stringify(row, null, 2)}</pre>
+      </div>)}
+      <p>新增或更新使用 put：填写 event_id、已有 Beat/State 引用、受众、披露章和原文证据，并在同轮选择触发节点。
+        新增的 expected_event_sha256 为 null；更新或 retire 撤回须复制当前事件身份，撤回须填写理由。
+        reader_reveal 的 audience 为 null，character_knowledge 必须指定受众。</p>
+      <label>必要知识事件操作（JSON）<textarea aria-label="必要知识事件操作（JSON）" rows={8}
+        className="block w-full rounded-btn border border-line-2 p-8 font-mono text-sm2"
+        value={eventOperations} onChange={(e) => setEventOperations(e.target.value)} /></label>
+      <p>操作和本范围审阅一起提交。证据或主体不足应记录实际问题；登记事件不能增写剧情或绕过上游修订。</p>
     </details>
     {jsonError ? <p role="alert">{jsonError}</p> : null}
     <div className="my-12 flex flex-wrap gap-12">

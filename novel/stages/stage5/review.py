@@ -746,7 +746,7 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
     #   真发生过：`beat_index` → `verbatim_pieces` 的形态断过一版，五本书下发面全空，
     #   这三条 HARD 一路报绿，**而闭卷写手手里一个原文字节都没有**。
     #   ⇒ 分母无条件打出来；分母为零时落 `unver`（「没东西可查」≠「查过、干净」）。
-    #   根因判据在上一层：`stage4` 的 `ctx_hinge_delivered`。
+    #   根因判据在上一层：`stage4` 的 `ctx_plot_exact`。
     for rule_, field_, what_ in (('verbatim_missing', 'verbatim', '句【原样写入】'),
                                  ('keep_value_missing', 'keep_value', '处【数值不得改动】'),
                                  ('must_appear_missing', 'must_appear', '个【必须在场】')):

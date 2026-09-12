@@ -101,7 +101,7 @@ def _chapter_request(chapter: int) -> stage4_runs.PlanChapterRequest:
 def _resolution_payload(ambiguity_id: str) -> dict[str, Any]:
     return {
         'resolutions': [{'ambiguity_id': ambiguity_id,
-                         'stage_ref': 'b01_02'}],
+                         'selected_refs': ['b01_02:context:1']}],
         'binding_concerns': [],
     }
 
@@ -177,7 +177,7 @@ def test_chapter_feedback_routes_to_its_own_session(tmp_path) -> None:
     stage4_runs.ensure_plan_chapter_run(ctx, request)
     pool.ask_chapter(1, request)
     queued = pool.queue_chapter_feedback(1, [
-        {'rule': 'material_coverage', 'findings': ['ch1:missing=h1']}])
+        {'rule': 'binding_compile_refused', 'findings': ['ch1:missing=e01_01']}])
     assert queued is True
     client = pool._client(1)
     assert client._pending_feedback is not None

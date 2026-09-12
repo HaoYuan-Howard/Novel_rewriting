@@ -5,7 +5,7 @@ import { projectGlobalSpoilers, SPOILER_PLACEHOLDER } from './spoilers'
 import type { GlobalFactEvidence, Stage2Global } from '@/types/stages'
 import type { BackendJobRecord } from '@/types/jobs'
 import { READY_PROFILES } from '@/test/agent'
-import { mockApi } from './mock'
+import { mockApi, SAMPLE_SID } from './mock'
 
 function evidence(text: string): GlobalFactEvidence {
   return {
@@ -98,6 +98,23 @@ function backendJobRecord(node: string, flags: string[]): BackendJobRecord {
 }
 
 describe('request-shaped cache and diagnostics', () => {
+  it('历史事实样例不再提供当前阅读、分场或蓝图检查结论', async () => {
+    await expect(mockApi.getReading(SAMPLE_SID, 3)).rejects.toMatchObject({ status: 501 })
+    await expect(mockApi.getStage4(SAMPLE_SID, 3)).rejects.toMatchObject({ status: 501 })
+    await expect(mockApi.getCheck(SAMPLE_SID, 'stage2')).rejects.toMatchObject({ status: 501 })
+  })
+
+  it('旧本地审批不能升级为新契约接受或写作授权', async () => {
+    const key = 'nrc.v1.approvals.' + SAMPLE_SID
+    localStorage.setItem(key, JSON.stringify({ v: 6, gate: { s2: true, s4: true }, writing: true }))
+    const current = await mockApi.getApprovals(SAMPLE_SID)
+    expect(current.v).toBe(7)
+    expect(current.gate.s2).toBe(false)
+    expect(current.gate.s4).toBe(false)
+    expect(current.writing).toBe(false)
+    localStorage.removeItem(key)
+  })
+
   it('sends the full typed Stage4 decision through the one real HTTP seam', async () => {
     const subject = 'a'.repeat(64)
     const request = {
@@ -107,7 +124,7 @@ describe('request-shaped cache and diagnostics', () => {
       chapters: [{ output_ordinal: 1, decision: 'accept', reason: '本章可执行' }],
     }
     const response = {
-      v: 6,
+      v: 7,
       sid: 'book /1',
       gate: {
         s0: true, s1: true, s2: true,
@@ -171,7 +188,7 @@ describe('request-shaped cache and diagnostics', () => {
       })),
     }
     const response = {
-      v: 6,
+      v: 7,
       sid: 'book /1',
       gate: {
         s0: true, s1: true, s2: true,

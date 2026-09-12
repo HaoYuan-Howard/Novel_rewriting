@@ -8,18 +8,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from contracts.invariants import BLUEPRINT_RELATION_REVIEW_CONTRACT
 from novel.orchestrator import inspection, queue, reviewer_revalidation as recovery, reviewer_tasks
-from tests.test_stage2_blueprint_workpack import _Store, _book_subjects, _install, _report, view
+from tests.test_stage2_blueprint_workpack import install
+from novel.views.plot_review import PlotReviewSnapshot
 
 
 def install_blueprint_tasks(monkeypatch, *, legacy_first=False):
     """真实阅读投影、构包与 typed loader；只替换底层素材读取。"""
-    main, blueprints, _ = _book_subjects()
-    store = _Store(main, blueprints)
-    store.ctx.sid, store.ctx.code = '42', 'test-code-version'
     resolve_novel_dir = reviewer_tasks.paths.resolve_novel_dir
-    _install(monkeypatch, store, _report())
+    store, _report = install(monkeypatch)
+    store.ctx.sid, store.ctx.code = '42', 'test-code-version'
     monkeypatch.setattr(reviewer_tasks.paths, 'resolve_novel_dir', resolve_novel_dir)
     current = SimpleNamespace(
         state='blocked', code_version=store.ctx.code, surface_seal='1' * 64,
@@ -28,14 +26,8 @@ def install_blueprint_tasks(monkeypatch, *, legacy_first=False):
     box = {'task': None}
 
     def workpack(*_args, **_kwargs):
-        return {
-            'blueprint': view._blueprint_review_snapshot(store, title='测试书').model_dump(mode='json'),
-            '_blueprint_edit_template': {
-                'actor': 'fixture', 'reason': 'fixture', 'review_token': 'brt1_' + '3' * 64,
-                'review_contract_version': BLUEPRINT_RELATION_REVIEW_CONTRACT,
-                'chapters': [{'chapter_ordinal': 1, 'narrative_relations': []}],
-            },
-        }
+        return {'blueprint': PlotReviewSnapshot.read(store, []).workpack(
+            'chapter:1').model_dump(mode='json')}
 
     monkeypatch.setattr(reviewer_tasks, '_workpack', workpack)
     monkeypatch.setattr(inspection, 'read_surface_seal', lambda *_a, **_k: current.surface_seal)
@@ -57,12 +49,30 @@ def install_blueprint_tasks(monkeypatch, *, legacy_first=False):
     return store, current, box, build
 
 
-def response_for(task):
+def response_for(task, *, decision='accept', owner=None):
+    from contracts.schema.api import Stage2NodeReviewRequest
     response = copy.deepcopy(task.submission_options[0]['exact_request'])
     payload = response['action']['payload']
-    payload.update(decision='accept', reason='已逐章核实事实、关系和完整阅读范围')
-    payload['review']['default_decision'] = 'accept'
-    payload['knowledge_links']['reason'] = payload['reason']
+    reason = '已核实本章完整剧情、归因、因果、揭示与持续状态'
+    verdict = {
+        'decision': 'accept', 'reason': reason,
+        'coverage': {key: {'state': 'pass', 'issue_refs': []} for key in (
+            'completeness', 'attribution', 'causal_continuity', 'epistemic_reveal', 'carry_state')},
+        'new_issues': [], 'dispositions': []}
+    if decision in {'uncertain', 'stop'}:
+        verdict['decision'] = 'unver'
+        verdict['coverage'] = {key: {'state': 'unver', 'issue_refs': [], 'reason': '材料待核验'}
+                               for key in verdict['coverage']}
+    elif decision == 'rework':
+        verdict['decision'] = 'revise'
+        verdict['coverage']['attribution'] = {'state': 'issue', 'issue_refs': ['new:1']}
+        verdict['new_issues'] = [{'issue_key': 'new:1', 'dimension': 'attribution',
+            'problem': '复核施受关系', 'subjects': [{'kind': 'beat', 'ref': 'b01_01'}],
+            'evidence_refs': [{'chapter_ordinal': 1, 'evidence_ref': 'e01_01'}]}]
+    payload.update(decision=decision, reason=reason, plot_review=verdict,
+                   owner=owner, chapter_ordinals=[1] if owner == 'stage2.blueprint' else [])
+    payload['knowledge_links']['reason'] = reason
+    response['action']['payload'] = Stage2NodeReviewRequest.model_validate(payload).model_dump(mode='json')
     return response
 
 
@@ -107,7 +117,7 @@ def test_legacy_rejection_keeps_original_answer_and_reason_for_current_correctio
     from novel.work_units import WorkUnitBudget
 
     request, old, new, _current = pair
-    budget = WorkUnitBudget(tmp_path, '42', 'stage2.blueprint', 'commander', 'book')
+    budget = WorkUnitBudget(tmp_path, '42', 'stage2.blueprint', 'commander', 'chapter:1')
     turn = budget.reserve('1' * 64, run_id='old-parent', request_payload=request)
     identity = dict(business_sha256=old.business_sha256, waiting_on=old.waiting_on)
     budget.save_response(turn.turn_id, {**identity, 'final_response': '原格式错误的回答'})
@@ -128,7 +138,7 @@ def test_legacy_rejection_keeps_original_answer_and_reason_for_current_correctio
 
 
 @pytest.mark.parametrize('driver', ['claude', 'codex'])
-def test_publishing_existing_blueprint_schema_still_revalidates_original_full_answer(pair, driver):
+def test_publishing_new_schema_cannot_resign_an_unbound_original_answer(pair, driver):
     import hashlib
     from novel.commanders import ClaudeCodeCommanderDriver, CodexCommanderDriver
     from novel.commanders.base import _prepare_output_schema
@@ -139,8 +149,8 @@ def test_publishing_existing_blueprint_schema_still_revalidates_original_full_an
     request.update(output_schema=None, schema_sha256=hashlib.sha256(
         f'commander-observation:{protocol}'.encode()).hexdigest())
     schema_sha = _prepare_output_schema(response_schema())[2]
-    replay = recovery.prepare(request, new, schema_sha256=schema_sha)
-    assert replay is not None and replay.rebind(response_for(old))['surface_seal'] == new.surface_seal
+    # 发布新运输 schema 不具备原冻结 schema 的证明，不能续签成当前响应。
+    assert recovery.prepare(request, new, schema_sha256=schema_sha) is None
     assert recovery.prepare(request, new, schema_sha256='9' * 64) is None
     request['output_schema'] = {'type': 'object'}
     assert recovery.prepare(request, new, schema_sha256=schema_sha) is None
@@ -152,11 +162,11 @@ def test_changed_reading_obligations_or_schema_cannot_reuse(pair, change):
     prefix, envelope, _contract = recovery._frozen(new.prompt)
     material = envelope['materials']['blueprint']
     if change == 'body':
-        material['chapters'][0]['coverage']['segments'][0]['text'] += '新的证据'
+        material['material']['sources'][0]['text'] += '新的证据'
     elif change == 'finding':
         material['check']['new_finding'] = '现有检查发现新问题'
     elif change == 'scope':
-        material['review_coverage']['scope_sha256'] = '7' * 64
+        material['scope'] = 'chapter:2'
     elif change == 'option':
         envelope['submission_options'][0]['allowed_values']['decision'] = ['stop']
     elif change == 'contract':
@@ -175,7 +185,7 @@ def test_revalidation_does_not_launder_an_unbound_original_answer(pair, field):
     if field == 'surface_seal':
         response[field] = '9' * 64
     else:
-        response['action']['payload'][field] = 'bpr4_' + '9' * 64
+        response['action']['payload'][field] = 'bpr5_' + '9' * 64
     with pytest.raises(recovery.RevalidationRefused, match='原工作包'):
         replay.rebind(response)
 

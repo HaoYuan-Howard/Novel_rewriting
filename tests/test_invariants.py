@@ -23,7 +23,7 @@ def test_stage4_binding_codes_have_one_closed_contract_surface():
         'future_leak', 'insufficient_evidence',
     )
     assert inv.BINDING_INFEASIBILITY_CODES == (
-        'missing_chapter_catalog', 'empty_stage_allowlist',
+        'missing_chapter_catalog',
     )
     assert set(inv.BINDING_CONCERN_CODES).isdisjoint(
         inv.BINDING_INFEASIBILITY_CODES)
@@ -93,9 +93,9 @@ def test_plan_budget_band_is_a_single_ordered_interval():
     assert 0 < inv.PLAN_BUDGET_BAND[0] <= inv.PLAN_BUDGET_BAND[1]
 
 
-def test_hinge_groups_cover_every_kind_exactly():
-    assert set(inv.HINGE_GROUPS) == set(inv.HINGE_KINDS)
-    assert len(set(inv.HINGE_GROUPS.values())) == len(inv.HINGE_KINDS)
+def test_retired_hinge_domains_are_not_current_contracts():
+    assert not any(hasattr(inv, name) for name in (
+        'HINGE_GROUPS', 'HINGE_KINDS', 'HINGE_LABEL', 'HINGE_LABEL_PARTS'))
 
 
 def test_invent_guarded_covers_every_forbidden_item():
@@ -111,11 +111,11 @@ def test_invent_guard_coverage_is_explicit():
     ]
 
 
-def test_fact_atom_contract_has_closed_kinds_and_obligations():
-    assert set(inv.FACT_ATOM_KINDS) == {
-        'event', 'information', 'character_state', 'relationship', 'reader_knowledge',
-    }
-    assert inv.FACT_ATOM_OBLIGATIONS == ('land', 'context')
+def test_retired_fact_domains_cannot_reenter_the_current_contract():
+    assert not any(hasattr(inv, name) for name in (
+        'FACT_ATOM_KINDS', 'FACT_ATOM_OBLIGATIONS',
+        'NARRATIVE_RELATION_KINDS', 'NARRATIVE_RELATION_ENFORCEMENTS',
+        'BLUEPRINT_RELATION_REVIEW_CONTRACT'))
 
 
 def test_node_ids_are_stage_dot_verb():

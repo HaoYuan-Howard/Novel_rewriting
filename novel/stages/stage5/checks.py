@@ -988,7 +988,7 @@ from novel.stages.stage5.plot_checks import delivery_surface_findings as segment
 def material_anchor_findings(entry: dict[str, Any], book: M.Book) -> list[Finding]:
     """把三组要求写进正文的材料逐条回查到源章，伪锚记到 Stage2。
 
-    这些材料来自源 beat 的 hinge；若规范化后的原始片段连同章源文都没有，Stage5 无论
+    这些材料来自已登记的字面、数值及必须出现约束；若片段连同章源文都没有，Stage5 无论
     怎么重写都无法“忠实”满足它。尤其不能让 ``verbatim_missing`` 的 UNIQUE 路由把伪造
     原话付费塞回正文。此处只产 owner=stage2 的 finding，不提供 Stage5 修订指令。
     """
@@ -1019,26 +1019,26 @@ def material_anchor_findings(entry: dict[str, Any], book: M.Book) -> list[Findin
 
 def review_chapter_findings(body: str, entry: dict[str, Any], book: M.Book,
                             ) -> tuple[list[Finding], collections.Counter]:
-    """验收相相对落盘闸门的逐章增量：必落事实表面探针。"""
+    """验收相的逐章增量：完整剧情词面探针，不证明语义落地。"""
     fs: list[Finding] = []
     src_text = M.chapter_source(entry, book.source_text)
     landed, missed, noatom, ident = fact_landing(entry, body, src_text)
     if missed:
         fs.append(finding('fact_landing',
-                          detail=f'{len(missed)} 个必落事实在成稿里找不到任何表面落点'
-                                 f'（这些事实提得出可回查原子，但一个都没出现）：'
+                          detail=f'{len(missed)} 个剧情节点在成稿里找不到任何词面探针'
+                                 f'（可回查姓名或数值均未出现，仍需语义审阅）：'
                                  f'{[m[0] for m in missed[:3]]}',
                           evidence=[m[0] for m in missed]))
     if ident:
         fs.append(finding('fact_atom_unattested',
-                          detail=f'{len(ident)} 个事实 claim 的表面原子在**源章原文**里找不到'
-                                 f'——上游原子契约或名字投影有误，不是成稿的问题：'
+                          detail=f'{len(ident)} 个剧情节点的词面探针在源章原文里找不到'
+                                 f'——上游内容或名字投影需要核查：'
                                  f'{[t for t in ident[:3]]}',
                           evidence=[t for t in ident]))
     if noatom:
         fs.append(finding('fact_landing_unver',
-                          detail=f'{len(noatom)} 个必落事实提不出可回查的表面原子'
-                                 f'（claim 既没有数字+单位也没有章级名册专名）',
+                          detail=f'{len(noatom)} 个剧情节点提不出可回查的词面探针'
+                                 f'（正文既没有数字+单位也没有章级名册专名）',
                           evidence=[str(len(noatom))]))
     land = collections.Counter({'ok': len(landed), 'missed': len(missed),
                                 'noatom': len(noatom), 'ident': len(ident)})
@@ -1270,7 +1270,7 @@ def check(*, chapter_findings_by_rule: dict[str, list[Finding]],
       · **分母为零**：四组保真材料一条都没下发时，`verbatim_missing` 那三条 HARD
         查的东西根本不存在。真发生过——`beat_index` → `verbatim_pieces` 的形态断过一版，
         五本书下发面全空，三条 HARD 一路报绿而闭卷写手手里一个原文字节都没有
-        （根因那一条是 `stage4` 的 `ctx_hinge_delivered`）。
+        （根因那一条是 `stage4` 的 `ctx_plot_exact`）。
         **「查过、干净」与「没东西可查」必须长得不一样**（判据 4 的三态）。
     """
     out: list[Outcome] = []

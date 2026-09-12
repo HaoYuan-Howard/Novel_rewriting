@@ -8,7 +8,7 @@ checks.py —— Stage2 判据的**实现**。行在 `contracts/judges/stage2.py
 
 ⚠⚠ **本模块吃 `dict` 不吃模型。** 一旦判据跑在已经过了 Pydantic 的对象上，
 「必填齐全」那一类（`role_missing` / `address_missing` / `world_rule_no_desc` /
-`fact_atom_empty`）在**结构上构造不出会红的样本**
+`plot_contract`）在**结构上构造不出会红的样本**
 ——它们必然全绿。纯函数保留 dict 输入面，是为了让当前候选在写入前能产出带规则 id、
 证据与修复路由的完整报告；正式读取仍只接受当前 Pydantic schema。
 
@@ -30,27 +30,21 @@ from contracts.artifacts import (
 )
 
 import re
-import statistics
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
-from contracts.invariants import (
-    BARE_PRONOUNS, BLUEPRINT_ARCHITECTURES, FATE_WORDS, HINGE_FAILURE_ROUTE,
-    TIME_LAYERS,
-)
+from contracts.invariants import BARE_PRONOUNS, FATE_WORDS
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.report import finding as _finding
-from contracts.schema.stage2 import BlueprintScopeViolation, Hinge
-from pydantic import ValidationError
+from contracts.schema.stage2 import BlueprintScopeViolation
 from novel.core.evidence import iter_global_evidence_slots
 from novel.core.facts import heuristic_relation_gates, relation_visibility_gates
 from novel.core.naming import (
     person_naming_surfaces, rule_names_a_person, strip_distinguisher,
     surface_first_chapter,
 )
-from novel.core.spans import content_only, exact_span, locate_spans
-from novel.stages.stage2.coverage import hole_intervals
+from novel.core.spans import exact_span
 from novel.core.text import norm
 from novel.report.findings import Outcome, ran, unverifiable
 
@@ -73,7 +67,7 @@ def finding(rule: str, *, detail: str, evidence: list[str], **kwargs) -> Finding
     fix_args: dict[str, str] = {}
     if '--chapters' in row.fix_args_from_finding:
         # 章级 producer 已经知道所属章时，修复实参必须以 typed 字段为准。
-        # 例如 hinge_cross_chapter 的 evidence 同时含「所属章的 beat_id」与
+        # 例如跨章引用错误的 evidence 同时含「所属章的 beat_id」与
         # 「误引到的另一章」；继续扫 evidence 会把无辜的被引章也塞进付费重跑。
         output_ordinal = kwargs.get('output_ordinal')
         chapters = ({output_ordinal} if output_ordinal is not None else {
@@ -90,16 +84,6 @@ def finding(rule: str, *, detail: str, evidence: list[str], **kwargs) -> Finding
 def _output_ordinal(value: Any) -> int | None:
     """原始候选里的合法阅读序章号；坏形状仍由原判据报告，不让 Finding 自己崩。"""
     return value if type(value) is int and value >= 1 else None
-
-
-def _group_chapter_evidence(
-        rows: Iterable[tuple[Any, str]],
-) -> list[tuple[int | None, list[str]]]:
-    """按 producer 手里的 typed 章号分组，不从 evidence/detail 反解析。"""
-    grouped: dict[int | None, list[str]] = {}
-    for raw_ordinal, evidence in rows:
-        grouped.setdefault(_output_ordinal(raw_ordinal), []).append(evidence)
-    return sorted(grouped.items(), key=lambda row: (row[0] is None, row[0] or 0))
 
 
 def _scope_violation_ordinal(row: Any) -> int | None:
@@ -172,32 +156,6 @@ REVEAL_MARKS: tuple[str, ...] = (
     '其实', '原来', '竟', '早已', '早就', '根本', '一直', '故意', '安排', '授意',
     '买通', '收买', '假的', '骗', '真相', '实则', '暗中', '背地', '设计', '算计')
 
-#: 切分粒度的两条线。逐字搬自原型 `check_blueprints`。
-#: ⚠⚠ **两条都不做跨书比较**，理由原型自己写着：章级 字/拍 最大值在两本健康的书上
-#: 分别到 280 与 411，定 200 会误报、定 300 又拦不住第三本 318——
-#: **拿其中任何一本的分布当守门线，都是在量「这本书的章有多长」，不是在量「切得够不够细」**。
-#:   ① 绝对下限只用**契约自己的反例**当锚：抽取 prompt 里写着「一个 440 字的章只切了 2 条，
-#:      而它实际写了六件事」⇒ 300 字以上的章交 1 拍，按这条反例就是没切；
-#:   ② 其余用**本书自己的中位数**——同一本书内部的章之间才是可比的。
-COARSE_MIN_CHARS = 300
-COARSE_MAX_BEATS = 1
-COARSE_MEDIAN_MULT = 3.0
-
-#: 「值得人看一眼」的未覆盖区间阈值。`edge_hole` 与 `uncovered_holes` **共用这一个数**
-#: （判据 14：一个量纲只能有一个口径）。
-#: ⚠ 标定：两本 18 个 ≥12 字的洞里，章首/章尾的 ≥30 字共 **2 处，都是真漏**
-#: （整段小报头条 / 「这孩子竟真给婆母怀上了」）；线下的都不是漏（引子、叙述者收尾的吐槽）。
-#: 精度 2/2、误伤 0/2，**而 n=2**——第三本上误报时先问「是数据错了还是判据把合法情况排除了」。
-HOLE_MIN_CHARS = 30
-
-#: 碎片档：30 字那条线会把**短的真漏**一起滤掉（实测 ch4 章首 14 字「这事儿说起来还得怪我」
-#: ——那是整章的起头交代，与「几个字的换行空隙」不是一回事）。
-#: 只进 `uncovered_holes` 那条度量，**不改 `edge_hole` 的档**。
-HOLE_FINE_CHARS = 12
-
-#: `beat_id` 里的章号。⚠ **别按定宽切片**：`b{ord:02d}_{seq:02d}` 在三位数的章上会溢出宽度。
-_BEAT_ID = re.compile(r'^b(\d+)_(\d+)$')
-
 #: 上游缺一份时，那一族判据的说辞。**一句，多条共用。**
 #: ⚠ 它落 `unver` 而不是 `skipped`：两者是两种颜色——`skipped` 说的是「实现忘了调」
 #: （一个 bug），而这里是「**这一次没有可判的东西**」（判据的边界）。
@@ -210,11 +168,6 @@ _NO_MAIN_TEXT = ('盘上没有 `stage1/main_text.json`——本条要拿原文�
                  '没有原文时它**判不了**，而不是「没问题」')
 
 
-def _ch_of(beat_id: Any) -> int | None:
-    m = _BEAT_ID.match(str(beat_id or ''))
-    return int(m.group(1)) if m else None
-
-
 def _cut(items: Iterable[Any], n: int = 8) -> str:
     """明细的展示版：截到前 n 条。⚠ **只用于 `detail`，不用于 `evidence`**——
     凭据要能机器对齐（收敛键按它算），截断过的串对不上。"""
@@ -225,7 +178,7 @@ def _cut(items: Iterable[Any], n: int = 8) -> str:
 class _Ctx:
     """一次判定要用到的、**算一次就够**的中间量。
 
-    ⚠ 它不是缓存优化：`spans` / `cum`（到本章为止的正文）这些东西**被七八条判据共用**，
+    ⚠ `cum`（到本章为止的正文）等输入投影被多条 Global 判据共用，
     各算各的就会出现「这条按 A 口径、那条按 B 口径」——而两条判据对同一份数据
     给出不一致的结论时，报告上看不出是哪一条错了。
     """
@@ -264,8 +217,6 @@ class _Ctx:
             self.cum[o] = '\n'.join(acc)
         self.whole: str = self.cum.get(self.ords[-1], '') if self.ords else ''
 
-        self.spans: dict[Any, list[tuple[str, int, int]]] = {}
-        self.span_problems: list[tuple[Any, str]] = []
 
     def first_seen(self, names: Iterable[str]) -> Any | None:
         """这些字面里最早出现的那一章；一个都没出现过返回 `None`。"""

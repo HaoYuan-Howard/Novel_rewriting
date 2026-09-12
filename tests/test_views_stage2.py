@@ -152,8 +152,8 @@ def test_reading_beats_carry_their_located_spans(rbox):
     v = reading_view(rbox.root, rbox.sid, 1)
     located = [b for b in v.beats if b.located]
     assert located, '这一章一条 beat 都没定位成功——语料多半坏了'
-    assert any(b.fact_atoms for b in v.beats), \
-        '阅读视图必须传递真正的事实原子，不再伪造 event 摘要'
+    assert all(b.content for b in v.beats), \
+        '阅读视图必须传递完整剧情正文'
     seg_beats = {s.beat_id for s in v.segments if s.beat_id is not None}
     assert seg_beats <= {b.beat_id for b in located}
 

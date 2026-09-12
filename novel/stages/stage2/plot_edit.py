@@ -29,8 +29,20 @@ def subject(artifact: ChapterBlueprints) -> str:
 
 
 def _current(store):
+    """读取显式修订基线，允许已被当前 Global/称名变更标旧的自身产物。
+
+    这不是接受旧结论：Store 仍验证当前 schema 与来源根，逐章源文摘要和证据
+    必须与当前 MainText 完全一致。编辑 token 另绑定当前输入，候选在写回前按
+    当前可见人物、Global 与章集合重编译/检查；审阅接受没有随基线继承。
+    """
+    from contracts.schema.stage1 import MainText
+    from contracts.artifacts import STAGE1_MAIN_TEXT
+    from novel.stages.stage2.plot_compile import validate_book
     rel = paths.invalid_of(REL) if store.exists(paths.invalid_of(REL)) else REL
-    return rel, store.read_own(ChapterBlueprints, rel, require_current=True)[0]
+    artifact = store.read_own(ChapterBlueprints, rel)[0]
+    main = store.read(MainText, STAGE1_MAIN_TEXT)
+    validate_book(artifact.blueprints, {row.chapter_ordinal: row.text for row in main.root})
+    return rel, artifact
 
 
 def _token(store, artifact) -> str:
@@ -214,7 +226,9 @@ def apply_edit(ctx, edit_path: str = ''):
         # 硬杀可能发生在 formal 原子替换后、旧 INVALID 归档前。只按原请求的
         # 同文件身份账收尾，不让更新的问题稿被历史成功覆盖。
         if store.exists(REL):
-            formal = store.read_own(ChapterBlueprints, REL, require_current=True)[0]
+            # 旧 formal 可以是本次显式编辑的基线；只有发现原请求的提交记录时才
+            # 进入下面要求 fresh 的重放收尾，不能先因基线 stale 封死修订入口。
+            formal = store.read_own(ChapterBlueprints, REL)[0]
             landed_record = next((row for row in formal.provenance.plot_revisions
                                  if row.request_sha256 == request_sha), None)
             if landed_record is not None and subject(formal) == landed_record.result_subject_sha256:

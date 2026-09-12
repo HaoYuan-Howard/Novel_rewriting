@@ -7,7 +7,7 @@ paragraphs.py —— 章正文的**段落编号表**：下发、回取、反投�
 这件事有三个消费方，而它们必须用**同一张表**：
 
   · 下发侧  `extract.build_blueprint_user`   —— 把当前章正文渲染成 `[n] …`
-  · 回取侧  `normalize.normalize_verbatim`   —— 把段号换回 `SourceSpan` 的字符区间
+  · 回取侧  `plot_compile.compile_chapter` —— 将段号物化成 EvidenceAnchor 的字符区间
   · 反投影  `normalize.response_shape`       —— 把已有区间反算回段号（定向重生成的基线）
 
 三边各切一次段，就是同一件事的三个落点：渲染时把某一行算成第 12 段、回取时算成第 13 段，
@@ -51,8 +51,7 @@ LINE_FORMAT = '<{n}> {text}'
 
 
 class ParagraphIndexError(ValueError):
-    """段号解析不出区间。**消息即失败根因**，由 `normalize` 原样记进
-    `_provenance.verbatim_failures`——所以措辞要说得出「该修哪里」。
+    """段号解析不出区间。消息原样进入当前章节编译反馈，明确说明修复位置。
     """
 
 
@@ -127,7 +126,7 @@ def paragraph_range_of(text: str, start: int, end: int) -> tuple[int, int]:
 
 
 def paragraph_slice(text: str, para: int) -> tuple[int, int]:
-    """单段的区间。hinge 的段内定位用它——搜索面从整章缩到这一段。"""
+    """单段的正式区间；只定位原文，不推导剧情内容。"""
     spans = paragraph_spans(text)
     if type(para) is not int or not 1 <= para <= len(spans):
         raise ParagraphIndexError(

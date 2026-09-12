@@ -1,178 +1,87 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""TODO-45 批次 4：Stage4B 确定性机械基线。
-
-- 干净书：基线完全机械，且绑定行与正式 B 响应（`_bound_b_response`）逐字同构
-  ——代码唯一确定的绑定就是模型本来唯一能给出的那份。
-- 签名等价的多候选舞台：语义无选择，取规范首项，不算歧义。
-- time/place/present 签名不同：`stage_signature_conflict`；材料多场可落：
-  `material_multi_scene`；无处可落：`material_unplaceable`；id 跨轮稳定。
-"""
+"""章级 B 机械基线：等价舞台、真实歧义、完整绑定与关闭式解答。"""
 from __future__ import annotations
 
 import copy
-from typing import Any
 
-from novel.stages.stage4.baseline import (
-    apply_chapter_resolutions, build_mechanical_baseline,
+import pytest
+
+from novel.stages.stage4.plot_binding import (
+    BlindPlanError, apply_chapter_resolutions, build_evidence_catalog,
+    build_mechanical_baseline, construct_feasible_binding_witness,
 )
-from tests.test_stage4_agent_boundary import (
-    _book, _bound_b_response, _land_design, _seed_current_stage2,
-)
-from novel import prov
+from tests.test_plot_binding import candidate_book
+from tests.test_plot_blueprint import chapter_response
 
 
-def setup_module(module) -> None:  # noqa: ANN001
-    prov_code = prov.code_version
+def _ambiguous():
+    response = chapter_response()
+    _blueprints, candidate = candidate_book(response, split=True)
+    placement = next(p for p in candidate['output_chapters'][0]['beat_placements']
+                     if len(p['deliveries']) > 1)
+    ref = candidate['subject_aliases'][placement['beat_alias']]['ref']
+    index = int(ref.rsplit('_', 1)[1]) - 1
+    # 分场节点有两段证据和不等价舞台，分别形成呈现证据与舞台选择。
+    beat = response['beats'][index]
+    other = 2 if index == 0 else 1
+    beat['evidence'].append({'start_para': other, 'end_para': other})
+    second = copy.deepcopy(beat['source_contexts'][0])
+    second['place'] = '门外'
+    beat['source_contexts'].append(second)
+    return candidate_book(response, split=True)
 
 
-def _blueprint(*beat_rows: tuple[str, str, str, str, list[str]],
-               atoms: list[tuple[str, str]], materials: dict[str, list[str]],
-               contexts: tuple[str, ...] = ()) -> dict[str, Any]:
-    """(beat_id, time_layer, place, present, hinges) × N + (fact_id, beat)。"""
-    return {'blueprints': [{
-        'chapter_ordinal': 1,
-        'beats': [
-            {'beat_id': beat_id, 'time_layer': layer, 'place': place,
-             'present_char_ids': present.split(',') if present else [],
-             'hinges': [{'hinge_id': hinge, 'source_fact_refs': materials[hinge]}
-                        for hinge in hinges]}
-            for beat_id, layer, place, present, hinges in beat_rows
-        ],
-        'fact_atoms': [
-            {'fact_id': fact_id, 'claim': f'{fact_id} 的 claim',
-             'kind': 'event', 'obligation': 'context' if fact_id in contexts else 'land',
-             'source_beat_ref': beat,
-             'participant_char_ids': []}
-            for fact_id, beat in atoms
-        ],
-    }]}
-
-
-def _candidate(*scenes: tuple[str, list[str]]) -> dict[str, Any]:
-    aliases: dict[str, str] = {}
-    rows = []
-    for index, (scene_id, fact_ids) in enumerate(scenes, start=1):
-        scene_aliases = []
-        for fact_id in fact_ids:
-            alias = f'a_{fact_id}'
-            aliases[alias] = fact_id
-            scene_aliases.append(alias)
-        rows.append({'candidate_scene_id': scene_id,
-                     'land_fact_aliases': scene_aliases,
-                     'context_fact_aliases': []})
-    return {'fact_aliases': aliases, 'output_chapters': [
-        {'output_ordinal': 1, 'scenes': rows}]}
-
-
-def test_identical_signature_stages_are_canonically_resolved() -> None:
-    """签名等价的多候选舞台没有真自由度：取规范首项，不产歧义。"""
-    blueprints = _blueprint(
-        ('b01_01', 'now', '庭院', 'c1', ['h1']),
-        ('b01_02', 'now', '正厅', 'c1', ['h2']),
-        ('b01_03', 'now', '庭院', 'c1', []),       # 与 b01_01 签名等价
-        atoms=[('f_01', 'b01_01'), ('f_02', 'b01_02'), ('f_03', 'b01_03')],
-        materials={'h1': ['f_01'], 'h2': ['f_02']})
-    candidate = _candidate(
-        ('cs1', ['f_01', 'f_03']), ('cs2', ['f_02']))
+def test_identical_signature_stages_are_canonically_resolved():
+    response = chapter_response()
+    context = copy.deepcopy(response['beats'][0]['source_contexts'][0])
+    context['evidence'] = [{'start_para': 2, 'end_para': 2}]
+    response['beats'][0]['evidence'].append({'start_para': 2, 'end_para': 2})
+    response['beats'][0]['source_contexts'].append(context)
+    blueprints, candidate = candidate_book(response)
     baseline = build_mechanical_baseline(candidate, blueprints)
     assert baseline.fully_mechanical
-    chapter = baseline.chapter(1)
-    assert chapter.scene_stage_refs['cs1'] == ('b01_01',)
-    assert chapter.binding_rows() == [
-        {'candidate_scene_id': 'cs1', 'stage_refs': ['b01_01'],
-         'material_refs': ['h1']},
-        {'candidate_scene_id': 'cs2', 'stage_refs': ['b01_02'],
-         'material_refs': ['h2']},
+    rows = baseline.chapter(1).binding_rows()
+    refs = [delivery['source_context_refs'] for scene in rows
+            for delivery in scene['deliveries'] if delivery['beat_ref'] == 'b01_01']
+    # 证据来源不同、舞台语义相同：两条来源都保留，无需模型重复选择。
+    assert len(refs) == 1 and len(refs[0]) == 2
+
+
+def test_signature_conflict_and_material_ambiguities_are_stable():
+    blueprints, candidate = _ambiguous()
+    baseline = build_mechanical_baseline(candidate, blueprints)
+    other = build_mechanical_baseline(copy.deepcopy(candidate), copy.deepcopy(blueprints))
+    assert baseline == other
+    ambiguities = baseline.chapter(1).ambiguities
+    assert sorted(a.kind for a in ambiguities) == [
+        'delivery_evidence', 'delivery_evidence',
+        'source_context_selection', 'source_context_selection',
     ]
+    assert len({a.ambiguity_id for a in ambiguities}) == 4
+    assert all(len(a.candidates) == 2 for a in ambiguities)
+    assert baseline.chapter(1).binding_rows() is None
 
 
-def test_signature_conflict_and_material_ambiguities_are_stable() -> None:
-    blueprints = _blueprint(
-        ('b01_01', 'now', '庭院', 'c1', ['h1']),
-        ('b01_02', 'now', '正厅', 'c1', ['h2']),
-        ('b01_04', 'recall', '旧宅', 'c1,c2', ['h4']),   # 无人引用：无处可落
-        atoms=[('f_01', 'b01_01'), ('f_02', 'b01_02'), ('f_03', 'b01_02'),
-               ('f_04', 'b01_04')], contexts=('f_04',),
-        materials={'h1': ['f_01'], 'h2': ['f_02', 'f_03'], 'h4': ['f_04']})
-    candidate = _candidate(
-        ('cs1', ['f_01', 'f_03']), ('cs2', ['f_02']))
+def test_clean_book_baseline_matches_the_canonical_bound_response():
+    blueprints, candidate = candidate_book(split=True)
     baseline = build_mechanical_baseline(candidate, blueprints)
-    kinds = sorted(a.kind for a in baseline.ambiguities)
-    assert kinds == [
-        'material_multi_scene', 'material_unplaceable',
-        'stage_signature_conflict']
-    by_kind = {a.kind: a for a in baseline.ambiguities}
-    conflict = by_kind['stage_signature_conflict']
-    assert conflict.candidates == ('b01_01', 'b01_02')
-    assert conflict.candidate_scene_id == 'cs1'
-    # cs1 歧义未决：舞台与材料都留空；cs2 机械确定。
-    chapter = baseline.chapter(1)
-    assert chapter.scene_stage_refs['cs1'] == ()
-    assert chapter.scene_stage_refs['cs2'] == ('b01_02',)
-    assert chapter.binding_rows() is None
-    assert not baseline.fully_mechanical
-    # 未决材料的 h1 仍唯一可落 cs1（allowlist 命中）；h2 两场都可落 → multi。
-    multi = [a for a in baseline.ambiguities if a.kind == 'material_multi_scene']
-    assert len(multi) == 1 and multi[0].material_ref == 'h2'
-    # id 由内容决定：同输入同 id，候选集变化则 id 变。
-    again = build_mechanical_baseline(candidate, blueprints)
-    assert again.ambiguities == baseline.ambiguities
-    assert again.ambiguities[0].ambiguity_id == \
-        baseline.ambiguities[0].ambiguity_id
-    mutated = copy.deepcopy(candidate)
-    mutated['output_chapters'][0]['scenes'][0]['land_fact_aliases'] = (
-        ['a_f_01'])
-    drift = build_mechanical_baseline(mutated, blueprints)
-    # 候选集变化 → 冲突歧义消失（h4 无处可落与本场无关，仍保留）。
-    assert not any(a.kind == 'stage_signature_conflict'
-                   for a in drift.ambiguities)
+    bound = construct_feasible_binding_witness(candidate, build_evidence_catalog(blueprints))
+    assert baseline.fully_mechanical
+    assert baseline.binding_chapters() == bound['chapters']
 
 
-def test_clean_book_baseline_matches_the_canonical_bound_response(
-        tmp_path,
-) -> None:
-    """真实链条：基线的确定性绑定 ≡ 模型在唯一解下给出的正式绑定。"""
-    book = _book(tmp_path)
-    blueprints = _seed_current_stage2(book)
-    blueprints_raw = blueprints.model_dump(by_alias=True, mode='json')
-    _design_ctx, candidate = _land_design(book, blueprints_raw)
-    candidate_business = candidate.model_dump(
-        by_alias=True, mode='json', exclude={'provenance'})
-    baseline = build_mechanical_baseline(candidate_business, blueprints_raw)
-    assert baseline.fully_mechanical, (
-        '夹具书的绑定应当唯一可解；出现歧义说明基线判定过严')
-    canonical = _bound_b_response(candidate, blueprints_raw)
-    assert baseline.binding_chapters() == canonical['chapters']
-
-
-def test_apply_chapter_resolutions_closes_ambiguities() -> None:
-    """解析逐项闭合歧义：越界/重复/缺漏都关闭式拒绝。"""
-    blueprints = _blueprint(
-        ('b01_01', 'now', '庭院', 'c1', ['h1']),
-        ('b01_02', 'now', '正厅', 'c1', ['h2']),
-        atoms=[('f_01', 'b01_01'), ('f_02', 'b01_02'), ('f_03', 'b01_02')],
-        materials={'h1': ['f_01'], 'h2': ['f_02', 'f_03']})
-    candidate = _candidate(('cs1', ['f_01', 'f_03']), ('cs2', ['f_02']))
-    baseline = build_mechanical_baseline(candidate, blueprints)
-    chapter = baseline.chapter(1)
-    conflict = next(a for a in chapter.ambiguities
-                    if a.kind == 'stage_signature_conflict')
-    multi = next(a for a in chapter.ambiguities
-                 if a.kind == 'material_multi_scene')
-    rows = apply_chapter_resolutions(chapter, [
-        {'ambiguity_id': conflict.ambiguity_id, 'stage_ref': 'b01_02'},
-        {'ambiguity_id': multi.ambiguity_id, 'candidate_scene_id': 'cs2'},
-    ])
-    # cs1 舞台解析为 b01_02；h1 唯一可落 cs1；h2 由解析落 cs2。
-    by_scene = {row['candidate_scene_id']: row for row in rows}
-    assert set(by_scene) == {'cs1', 'cs2'}
-    assert by_scene['cs1']['stage_refs'] == ['b01_02']
-    assert by_scene['cs1']['material_refs'] == ['h1']
-    assert by_scene['cs2']['material_refs'] == ['h2']
-    import pytest
-    with pytest.raises(ValueError, match='越界'):
-        apply_chapter_resolutions(chapter, [
-            {'ambiguity_id': conflict.ambiguity_id, 'stage_ref': 'b01_04'}])
-    with pytest.raises(ValueError, match='未解析歧义'):
-        apply_chapter_resolutions(chapter, [])
+def test_apply_chapter_resolutions_closes_ambiguities():
+    blueprints, candidate = _ambiguous()
+    chapter = build_mechanical_baseline(candidate, blueprints).chapter(1)
+    resolutions = [{'ambiguity_id': a.ambiguity_id, 'selected_refs': [a.candidates[0]]}
+                   for a in chapter.ambiguities]
+    result = apply_chapter_resolutions(chapter, resolutions)
+    assert len(result) == len(chapter.scenes)
+    assert all(d['evidence_refs'] for s in result for d in s['deliveries'])
+    with pytest.raises(BlindPlanError):
+        apply_chapter_resolutions(chapter, resolutions[:-1])
+    with pytest.raises(BlindPlanError):
+        apply_chapter_resolutions(chapter, resolutions + resolutions[:1])
+    wrong = copy.deepcopy(resolutions)
+    wrong[0]['selected_refs'] = ['foreign_reference']
+    with pytest.raises(BlindPlanError):
+        apply_chapter_resolutions(chapter, wrong)

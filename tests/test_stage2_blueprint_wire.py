@@ -29,6 +29,8 @@ def _wire_response(document):
     if wire['action']['kind'] == 'approval':
         payload = wire['action']['payload']
         ruling = {'decision': payload.pop('decision')}
+        payload.pop('reason')
+        payload.pop('review')
         owner, chapters = payload.pop('owner'), payload.pop('chapter_ordinals')
         if ruling['decision'] == 'rework':
             ruling['owner'] = owner
@@ -46,11 +48,7 @@ def _wire_response(document):
 ])
 def test_all_blueprint_decisions_reach_real_loader_with_native_schema(blueprint, decision, owner):
     task, current = blueprint
-    document = response_for(task)
-    payload = document['action']['payload']
-    payload['decision'] = decision
-    if decision == 'rework':
-        payload.update(owner=owner, chapter_ordinals=[1] if owner == 'stage2.blueprint' else [])
+    document = response_for(task, decision=decision, owner=owner)
     document = _wire_response(document)
     response_model().model_validate(document)
     action, _sha, _path = agent._materialize_reviewer_response(
@@ -62,17 +60,17 @@ def test_all_blueprint_decisions_reach_real_loader_with_native_schema(blueprint,
     assert WIRE_SCHEMA in stage2_reviewer_wire.prompt_for(task, task.prompt)
 
 
-@pytest.mark.parametrize('kind', ['at_facts', 'at_entry', 'unresolved'])
+@pytest.mark.parametrize('kind', ['at_beats', 'at_entry', 'unresolved'])
 def test_knowledge_resolution_nested_shape_is_published_and_flat_guess_rejected(blueprint, kind):
     task, current = blueprint
-    document = response_for(task)
+    document = response_for(task, decision='uncertain' if kind == 'unresolved' else 'accept')
     resolution = {'kind': kind}
     if kind == 'unresolved':
         resolution['reason'] = '原文证据不足'
     else:
-        resolution['fact_refs'] = ['1:F001']
-        if kind == 'at_facts':
-            resolution['trigger_fact_ref'] = '1:F001'
+        resolution['subject_refs'] = [{'kind': 'beat', 'ref': 'b01_01'}]
+        if kind == 'at_beats':
+            resolution['trigger_beat_ref'] = 'b01_01'
     row = dict(obligation_id='link:1', expected_subject_sha256='1' * 64, resolution=resolution)
     document['action']['payload']['knowledge_links']['decisions'] = [row]
     document = _wire_response(document)
@@ -96,26 +94,29 @@ def test_knowledge_resolution_nested_shape_is_published_and_flat_guess_rejected(
             current, json.dumps(document, ensure_ascii=False))
 
 
-def test_native_sparse_patch_does_not_inject_nulls_into_unchanged_fields(blueprint):
+def test_native_sparse_knowledge_event_preserves_only_selected_operation_and_rejects_fact_patch(blueprint):
     task, current = blueprint
-    document = copy.deepcopy(task.submission_options[1]['exact_request'])
-    edit = document['action']['input_payload']
-    edit['reason'] = '只修订有证据的事实表述'
-    edit['chapters'][0].update(
-        fact_patches=[{'fact_id': 'f01_001', 'claim': '已核实的事实表述'}],
-        beat_patches=[{'beat_id': 'b01_01', 'place': '院中'}])
-    document = _wire_response(document)
-    parsed = response_model().model_validate(document)
-    native = stage2_reviewer_wire.output_schema_for(task)
-    fact = parsed.action.input_payload.chapters[0].fact_patches[0]
-    assert set(fact.model_fields_set) == {'fact_id', 'claim'}
-    allowed = native['$defs'][type(fact).__name__]
-    assert set(allowed['required']) == {'fact_id', 'claim'}
-    assert set(allowed['properties']) == {'fact_id', 'claim'}
+    from tests.test_plot_knowledge_events import put
+    operation = put(source_chapter=1, evidence_ref='e01_01')
+    operation['event']['chapter_ordinal'] = 1
+    operation['resolution']['trigger_beat_ref'] = 'b01_01'
+    operation['resolution']['subject_refs'][-1]['ref'] = 'b01_01'
+    document = response_for(task)
+    document['action']['payload']['knowledge_links']['event_operations'] = [operation]
+    native = _wire_response(document)
+    parsed = response_model().model_validate(native)
+    assert parsed.action.payload.knowledge_links.event_operations[0].model_dump(mode='json') == operation
     action, _sha, _path = agent._materialize_reviewer_response(
-        task, current, json.dumps(document, ensure_ascii=False))
-    assert action.input_payload['chapters'][0]['fact_patches'] == edit['chapters'][0]['fact_patches']
-    assert action.input_payload['chapters'][0]['beat_patches'] == edit['chapters'][0]['beat_patches']
+        task, current, json.dumps(native, ensure_ascii=False))
+    assert action.payload['knowledge_links']['event_operations'] == [operation]
+    assert action.payload['knowledge_links']['decisions'] == []
+    assert len(task.submission_options) == 1
+    old_patch = copy.deepcopy(native)
+    old_patch['action'] = {'kind': 'node', 'node': 'stage2.blueprint', 'input_payload': {
+        'chapters': [{'chapter_ordinal': 1, 'fact_patches': [
+            {'fact_id': 'f01_001', 'claim': '不得静默升级的旧事实'}]}]}}
+    with pytest.raises(ValidationError):
+        response_model().model_validate(old_patch)
 
 
 @pytest.mark.parametrize('ruling', [
@@ -140,9 +141,13 @@ def test_old_full_answer_keeps_conflicting_business_and_audit_fields(blueprint):
     document = response_for(task)
     document['action']['payload'].update(owner='stage2.blueprint', chapter_ordinals=[1])
     document['action']['payload']['knowledge_links']['reason'] = '不能替换掉的原关联理由'
-    assert stage2_reviewer_wire.assemble(task, document) == document
-    with pytest.raises(agent.reviewer_tasks.ReviewerTaskError, match='typed'):
+    frozen = copy.deepcopy(document)
+    with pytest.raises(stage2_reviewer_wire.Stage2ReviewerWireError):
+        stage2_reviewer_wire.assemble(task, document)
+    assert document == frozen
+    with pytest.raises(agent.reviewer_tasks.ReviewerTaskError):
         agent._materialize_reviewer_response(task, current, json.dumps(document, ensure_ascii=False))
+    assert document == frozen
 
 
 def test_complete_blueprint_schema_fits_actual_claude_invocation(blueprint, tmp_path):

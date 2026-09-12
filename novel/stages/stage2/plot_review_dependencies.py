@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import hashlib
 
-from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING
+from contracts.artifacts import (
+    STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING,
+)
 from contracts.schema.dependencies import ScopeSelection
 from novel.consumption import plot_global_projection, select_scope_input
 from novel.stages.stage2.paragraphs import paragraph_range_of
@@ -23,9 +25,20 @@ def global_subjects(raw: dict, selected_ids) -> list[dict]:
         ref = Setting.model_fields[field].alias or field
         evidence_key = Setting.model_fields[evidence].alias or evidence
         values['setting', ref] = {'content': canon['setting'][ref], 'evidence': canon['setting'][evidence_key]}
+    return _subjects(values, (selected.split(':', 1) for selected in selected_ids))
+
+
+def character_subjects(raw: dict, selected_ids) -> list[dict]:
+    """模型实际看到的人物身份与称呼；证据只留锚点，不复制原文。"""
+    if not isinstance(raw, dict) or not isinstance(raw.get('characters'), dict):
+        raise ValueError('人物审阅材料缺少当前正式名册')
+    values = {('character', ref): row for ref, row in raw['characters'].items()}
+    return _subjects(values, (('character', ref) for ref in selected_ids))
+
+
+def _subjects(values, selected) -> list[dict]:
     result = []
-    for selected in selected_ids:
-        kind, ref = selected.split(':', 1)
+    for kind, ref in selected:
         if (kind, ref) not in values:
             raise ValueError(f'必要审阅主体缺失：{kind}:{ref}')
         evidence = {}
@@ -51,6 +64,24 @@ def global_subjects(raw: dict, selected_ids) -> list[dict]:
         result.append({'kind': kind, 'ref': ref, 'value': body,
                        'evidence': [evidence[key] for key in sorted(evidence)]})
     return result
+
+
+def character_references(value) -> set[str]:
+    """只枚举正式人物引用字段，不从剧情正文猜人名或人物身份。"""
+    if isinstance(value, list):
+        return set().union(*(character_references(row) for row in value), set())
+    if not isinstance(value, dict):
+        return set()
+    refs = set()
+    for key, child in value.items():
+        scalar = (key.endswith('_char_id') or key in ('char_id', 'subject_id', 'object_id', 'by')
+                  or key == 'ref' and value.get('kind') in ('character', 'character_state'))
+        if scalar and isinstance(child, str) and child.startswith('char_'):
+            refs.add(child)
+        if key.endswith('_char_ids') and isinstance(child, list):
+            refs.update(child)
+        refs.update(character_references(child))
+    return refs
 
 
 def selections(snapshot, scope: str) -> tuple[ScopeSelection, ...]:
@@ -93,6 +124,56 @@ def selections(snapshot, scope: str) -> tuple[ScopeSelection, ...]:
             if ordinal not in selected | source_chapters:
                 ranges.setdefault(ordinal, set()).update(
                     f"p:{e['start_para']}:{e['end_para']}" for e in row['evidence'])
+        inherited_refs = {('state', row['state']['state_id']) for row in inherited}
+        requested = {(row.subject_ref.kind, row.subject_ref.ref) for row in knowledge.obligations
+                     if row.kind in ('reader_reveal', 'character_knowledge')
+                     and (row.subject_ref.kind, row.subject_ref.ref) in origin
+                     and origin[row.subject_ref.kind, row.subject_ref.ref] not in selected | support_chapters}
+        requested -= inherited_refs
+        if requested:
+            selection = ScopeSelection(input_rel=STAGE2_CHAPTER_BLUEPRINTS, projection='plot_subjects',
+                chapter_ordinal=min(selected), selected_ids=tuple(f'{kind}:{ref}' for kind, ref in sorted(requested)))
+            result.append(selection)
+            for row in select_scope_input(selection, snapshot.inputs[STAGE2_CHAPTER_BLUEPRINTS]):
+                ranges.setdefault(row['chapter_ordinal'], set()).update(
+                    f"p:{anchor['start_para']}:{anchor['end_para']}" for anchor in row['evidence'])
+    # 声明的证据章与传播目标章独立；倒叙、后见证据按实际段范围进入依赖。
+    for registered in knowledge.registered_events:
+        if registered.retired:
+            continue
+        for proof in registered.event.evidence_refs:
+            ordinal = proof.chapter_ordinal
+            if ordinal in selected | source_chapters:
+                continue
+            parts = proof.evidence_ref.split(':')
+            if len(parts) == 3 and parts[0] == 'p':
+                ranges.setdefault(ordinal, set()).add(proof.evidence_ref)
+            else:
+                chapter = next(row for row in bp if row.chapter_ordinal == ordinal)
+                anchor = next(row for row in chapter.evidence_anchors if row.evidence_id == proof.evidence_ref)
+                ranges.setdefault(ordinal, set()).add(f'p:{anchor.start_para}:{anchor.end_para}')
+    # 人物来自本章与真正下发的依赖闭包，包含对白参与者、观察者、状态持有者和知识受众。
+    # 源文中的身份判断仍交 Commander；本投影不把“提及”推断为“在场”。
+    character_material = [row.model_dump(mode='json') for row in bp if row.chapter_ordinal in selected]
+    character_material.extend(select_scope_input(row, snapshot.inputs[row.input_rel]) for row in result)
+    character_material.append({'knowledge': [row.model_dump(mode='json') for row in knowledge.obligations],
+                               'events': [row.model_dump(mode='json') for row in knowledge.registered_events]})
+    character_ids = character_references(character_material)
+    # 名册称呼中的 by 也是需要解释的正式人物引用；只扩展被消费人物的依赖。
+    while True:
+        people = character_subjects(snapshot.inputs[STAGE2_CHARACTERS], sorted(character_ids))
+        expanded = character_ids | character_references(people)
+        if expanded == character_ids:
+            break
+        character_ids = expanded
+    result.append(ScopeSelection(input_rel=STAGE2_CHARACTERS, projection='plot_characters',
+        chapter_ordinal=min(selected), selected_ids=tuple(sorted(character_ids))))
+    for row in people:
+        for anchor in row['evidence']:
+            ordinal = anchor['chapter_ordinal']
+            if ordinal not in selected | source_chapters:
+                start, end = paragraph_range_of(texts[ordinal], anchor['start'], anchor['end'])
+                ranges.setdefault(ordinal, set()).add(f'p:{start}:{end}')
     result.extend(ScopeSelection(input_rel=STAGE1_MAIN_TEXT, projection='source_chapter', chapter_ordinal=o)
                   for o in sorted(source_chapters))
     result.extend(ScopeSelection(input_rel=STAGE1_MAIN_TEXT, projection='source_ranges',

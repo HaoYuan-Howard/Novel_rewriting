@@ -48,7 +48,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
         try:
             validate_plan(plan, blueprints, global_g, knowledge_links)
         except (RefusedByStructure, ValueError, KeyError, StopIteration) as exc:
-            bad.append((None, str(exc)))
+            bad.append((getattr(exc, 'chapter_ordinal', None), str(exc)))
         emit('placement_ref', bad, scanned='全部节点、目标、证据、舞台和必要语义端点')
     budget_bad, band_bad, transition_bad, goal_bad = [], [], [], []
     total = 0

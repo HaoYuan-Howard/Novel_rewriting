@@ -1990,7 +1990,7 @@ def _blueprint_submission_options(pack, current, waiting_on):
     return [_option(
         'approval:stage2_blueprint_review', request,
         editable_fields=['action.payload.decision/reason/owner/chapter_ordinals',
-                         'action.payload.plot_review', 'action.payload.knowledge_links.reason/decisions'],
+                         'action.payload.plot_review', 'action.payload.knowledge_links.reason/decisions/event_operations'],
         binding_fields=['schema', 'surface_seal', 'waiting_on', 'action.kind', 'action.surface',
                         'action.payload.node/actor/review_token/scope/review',
                         'action.payload.knowledge_links.scope_sha256/actor'],

@@ -78,8 +78,26 @@ def structure_metrics_of(blueprint: dict[str, Any], chapter: dict[str, Any]) -> 
     positions = {ref: sorted(slots.index(slot) for slot in targets)
                  for ref, targets in selected.items()}
     anchors = {a['evidence_id']: a for a in blueprint['evidence_anchors']}
-    spans = {ref: (min(anchors[e]['start'] for e in b['evidence_refs']),
-                   max(anchors[e]['end'] for e in b['evidence_refs'])) for ref, b in beats.items()}
+    mapping = {'state': 'ok', 'beats': len(beats), 'mapped_beats': len(selected),
+               'deliveries': sum(len(v) for v in positions.values()),
+               'distributed_beats': sum(len(v) > 1 for v in positions.values()),
+               'plan_scenes': len(slots)}
+    # 展示读数可面对手工损坏的材料；缺证据仍保留已能核算的映射分母，
+    # 不能因异常返回空表，也不能用数组位置代替源披露位置。
+    spans = {}
+    for ref, beat in beats.items():
+        evidence = [anchors.get(e) for e in beat['evidence_refs']]
+        if not evidence or any(
+                row is None or type(row.get('start')) is not int
+                or type(row.get('end')) is not int or row['end'] <= row['start']
+                for row in evidence):
+            result = {'state': 'ok', 'chapter_ordinal': ordinal, 'mapping': mapping}
+            result.update({key: unknown('源证据不足，无法核算；不按节点数组猜顺序')
+                           for key in ('order', 'partition', 'boundary', 'noncontiguous',
+                                       'anchors', 'eligibility')})
+            return result
+        spans[ref] = (min(row['start'] for row in evidence),
+                      max(row['end'] for row in evidence))
     comparable = inverted = interleaved = 0
     for a, b in combinations(beats, 2):
         if spans[a][1] <= spans[b][0]:
@@ -104,10 +122,7 @@ def structure_metrics_of(blueprint: dict[str, Any], chapter: dict[str, Any]) -> 
     grouping_reason = 'Blueprint 节点不是源场景，证据相邻或重叠不证明原文同场'
     return {
         'state': 'ok', 'chapter_ordinal': ordinal,
-        'mapping': {'state': 'ok', 'beats': len(beats), 'mapped_beats': len(selected),
-                    'deliveries': sum(len(v) for v in positions.values()),
-                    'distributed_beats': sum(len(v) > 1 for v in positions.values()),
-                    'plan_scenes': len(slots)},
+        'mapping': mapping,
         'order': {'state': 'ok', 'source_comparable_pairs': comparable,
                   'inverted_pairs': inverted, 'interleaved_pairs': interleaved,
                   'cross_scene_inversion_rate': inverted / comparable if comparable else None,

@@ -86,12 +86,8 @@ const review: GlobalReviewResponse = {
 }
 
 const enums: EnumsResponse = {
-  hinge_kinds: [],
-  fact_atom_kinds: [],
-  fact_atom_obligations: [],
   nonbody_kinds: [],
   time_layers: [],
-  hinge_groups: {},
   style_words: [],
   invent: { allow: [], forbid: [], principle: '' },
   job_kinds: { 'stage2.global': { label: 'stage2', paid: true } },
@@ -104,8 +100,6 @@ const enums: EnumsResponse = {
   design_reviewer_kinds: [],
   design_repair_codes: [],
   design_constraint_operation_kinds: [],
-  narrative_relation_kinds: [],
-  narrative_relation_enforcements: [],
   design_repair_constraint_arity: {},
   design_review_states: [],
   design_preflight_statuses: [],

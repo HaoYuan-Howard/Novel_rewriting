@@ -19,13 +19,14 @@ from novel.stages.stage4.plot_design import (
 from novel.stages.stage4.measure import adopt_plan_response
 from novel.stages.stage4.beats import beat_index
 from tests.test_plot_blueprint import blueprint, chapter_response, SOURCE
-from tests.test_plot_design import design_response
+from tests.test_plot_design import design_response, planner_characters
 
 
 def candidate_book(response=None, *, split=False):
     blueprints = {'blueprints': [blueprint(response=response).model_dump(mode='json'),
                                  blueprint(2).model_dump(mode='json')]}
-    truth, mapping = build_blind_projection(blueprints, root_clean_sha1='a' * 40)
+    truth, mapping = build_blind_projection(blueprints, root_clean_sha1='a' * 40,
+                                           global_g=planner_characters())
     rows = []
     for ordinal in (1, 2):
         public, private = build_blind_chapter_projection(

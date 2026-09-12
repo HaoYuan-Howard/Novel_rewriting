@@ -206,18 +206,16 @@ def test_targeted_repair_prompt_carries_entire_unclosed_constraint_lineage(
     first = DesignRepairConstraint(
         code='scene_goal',
         scene_refs=[scene.candidate_scene_id],
-        opaque_aliases=[scene.turn_fact_alias],
+        opaque_aliases=[scene.turn_beat_alias],
     )
     # repair scope 使用 formal candidate 的全局 opaque alias；只从目标章
     # local mapping 反取，避免夹具碰巧拿到其他章 alias 后制造假越界红。
-    aliases = [
-        str(global_alias)
-        for label in ('fact_aliases', 'participant_aliases')
-        for global_alias in target.local_mapping[label].values()
-    ]
+    aliases = [alias for alias in target.local_mapping['subject_aliases'].values()
+               if parent.subject_aliases[alias].kind == 'beat'
+               and parent.subject_aliases[alias].ref.startswith('b02_')]
     assert len(aliases) >= 2
     second = DesignRepairConstraint(
-        code='fact_grouping', opaque_aliases=aliases[:2])
+        code='presentation_grouping', opaque_aliases=aliases[:2])
     accumulated = sorted(
         (first, second),
         key=lambda row: json.dumps(
@@ -274,7 +272,7 @@ def test_targeted_repair_prompt_carries_entire_unclosed_constraint_lineage(
     )
     pool.finish_all(delivered=True)
     pool.close()
-    assert set(seen_codes) == {'scene_goal', 'fact_grouping'}
+    assert set(seen_codes) == {'scene_goal', 'presentation_grouping'}
     assert repaired.output_chapters[0] == parent.output_chapters[0]
     assert repaired.output_chapters[2] == parent.output_chapters[2]
     assert repaired.provenance.architecture \
@@ -294,7 +292,7 @@ def test_full_chapter_edit_preview_apply_is_zero_wire_and_non_target_exact(
     constraint = DesignRepairConstraint(
         code='scene_goal',
         scene_refs=[parent.output_chapters[1].scenes[0].candidate_scene_id],
-        opaque_aliases=[parent.output_chapters[1].scenes[0].turn_fact_alias],
+        opaque_aliases=[parent.output_chapters[1].scenes[0].turn_beat_alias],
     )
     constraint_sha = plan._canonical_sha256({
         'kind': 'stage4-design-repair-constraint-set-v1',

@@ -42,6 +42,7 @@ A = 'a_' + '1' * 16
 B = 'a_' + '2' * 16
 OBSERVER = 'a_' + '3' * 16
 SHA = 'd' * 64
+CONSTRAINT = 'a_' + '4' * 16
 
 
 def _chapter(*, ordinal: int = 1, candidate: bool = True) -> dict[str, object]:
@@ -51,19 +52,20 @@ def _chapter(*, ordinal: int = 1, candidate: bool = True) -> dict[str, object]:
             'mode': 'retain', 'reason': '按因果线直接推进。',
             'declared_change_kinds': [],
         },
-        'chapter_goal': {'intent': 'G_ADVANCE', 'fact_aliases': [B]},
-        'open_hook_goal': {'intent': 'G_OPEN', 'fact_aliases': [A]},
-        'end_hook_goal': {'intent': 'G_CLOSE', 'fact_aliases': [B]},
+        'chapter_goal': {'intent': 'G_ADVANCE', 'subject_aliases': [B], 'anchor_beat_alias': B, 'anchor_scene_ref': 's01'},
+        'open_hook_goal': {'intent': 'G_OPEN', 'subject_aliases': [A], 'anchor_beat_alias': A, 'anchor_scene_ref': 's01'},
+        'end_hook_goal': {'intent': 'G_CLOSE', 'subject_aliases': [B], 'anchor_beat_alias': B, 'anchor_scene_ref': 's01'},
         'weight': 'CH_EVEN',
         'chapter_rewrite_brief': '先落入口事实，再完成回应。',
         'scenes': [{
-            'weight': 'W_STRONG', 'purpose': '落入口事实',
+            'scene_ref': 's01', 'weight': 'W_STRONG', 'purpose': '呈现敲门和回应',
             'role': 'R_COLD_OPEN', 'delivery': 'D_SCENE',
             'transition': 'X_START',
-            'land_fact_aliases': [A, B], 'context_fact_aliases': [],
-            'turn_fact_alias': B,
-            'entry_state_aliases': [], 'exit_state_aliases': [B],
+            'context_beat_aliases': [], 'turn_beat_alias': B,
         }],
+        'beat_placements': [{'beat_alias': alias, 'deliveries': [
+            {'scene_ref': 's01', 'presentation_instruction': None}]} for alias in (A, B)],
+        'anchor_bindings': [],
     }
     if candidate:
         row['scenes'][0]['candidate_scene_id'] = f'c{ordinal:02d}s01'  # type: ignore[index]
@@ -74,16 +76,15 @@ def _truth(*, ordinal: int = 1) -> dict[str, object]:
     return {
         'chapter_ordinal': ordinal,
         'chapter_function': '建立回应关系',
-        'facts': [
-            {'fact_alias': A, 'claim': '她敲门。', 'kind': 'event',
-             'obligation': 'land', 'participant_aliases': [OBSERVER]},
-            {'fact_alias': B, 'claim': '对方回应。', 'kind': 'event',
-             'obligation': 'land', 'participant_aliases': [OBSERVER]},
+        'characters': [{'alias': OBSERVER, 'canonical': '来访者',
+            'surfaces': ['来访者'], 'role': '敲门求见的人'}],
+        'beats': [
+            {'alias': A, 'content': '她敲门。', 'participant_aliases': [OBSERVER]},
+            {'alias': B, 'content': '对方回应。', 'participant_aliases': [OBSERVER]},
         ],
-        'causal_edges': [],
-        'narrative_relations': [],
-        'entry_state_aliases': [],
-        'ending_state_aliases': [],
+        'states': [], 'inherited_states': [], 'background_beats': [],
+        'constraints': [], 'knowledge': [], 'endpoints': [],
+        'entry_state_aliases': [], 'carry_out_aliases': [], 'global_subjects': [],
     }
 
 
@@ -91,7 +92,7 @@ def _evidence() -> DesignStructureEvidence:
     return DesignStructureEvidence(
         state='ok', declared_change_kinds=[], computed_change_kinds=[],
         realized_declared=[], unrealized_declared=[], undeclared_actual=[],
-        readings={'mapping_state': 'ok', 'land_facts': 2},
+        readings={'mapping_state': 'ok', 'beats': 2},
     )
 
 
@@ -106,13 +107,7 @@ def _v3_subject() -> DesignChapterSubject:
 
 
 def _relation_constraint() -> DesignRepairConstraint:
-    return DesignRepairConstraint.model_validate({
-        'code': 'narrative_relation',
-        'effect': {
-            'kind': 'response_to', 'enforcement': 'hard',
-            'stimulus_alias': A, 'response_alias': B,
-        },
-    })
+    return DesignRepairConstraint(code='semantic_constraint', opaque_aliases=[CONSTRAINT])
 
 
 def _v3_capability() -> DesignReviewRepairCapability:
@@ -129,8 +124,8 @@ def _v3_capability() -> DesignReviewRepairCapability:
     )
 
 
-def test_design_review_contract_is_v5_and_chapter_subject_identity_is_exclusive():
-    assert DESIGN_REVIEW_CONTRACT == 'stage4-design-review-v5'
+def test_design_review_contract_is_v6_and_chapter_subject_identity_is_exclusive():
+    assert DESIGN_REVIEW_CONTRACT == 'stage4-design-review-v6'
     assert _v3_subject().strategy_subject_sha256 is None
 
     legacy = DesignChapterSubject(
@@ -216,21 +211,22 @@ def test_v2_and_v3_decisions_remain_readable_but_v4_uses_split_identities():
     assert restored_v3.chapters[0].subject.strategy_epoch_sha256 == '1' * 64
 
 
-def test_narrative_relation_repair_effect_is_typed_and_always_hard():
+def test_semantic_constraint_references_existing_subject_without_creating_relation():
     constraint = _relation_constraint()
-    assert constraint.effect is not None
-    assert constraint.effect.enforcement == 'hard'
-
-    bad = constraint.model_dump(mode='json')
-    bad['effect']['enforcement'] = 'review'  # type: ignore[index]
+    assert 'effect' not in constraint.model_dump()
+    assert constraint.opaque_aliases == [CONSTRAINT]
+    # 旧边式指令会在 Stage4 制造新的语义主体，当前请求关闭式拒绝。
+    for enforcement in ('hard', 'review'):
+        with pytest.raises(ValidationError):
+            DesignRepairConstraint.model_validate({
+                'code': 'narrative_relation', 'effect': {
+                    'kind': 'response_to', 'enforcement': enforcement,
+                    'stimulus_alias': A, 'response_alias': B}})
     with pytest.raises(ValidationError):
-        DesignRepairConstraint.model_validate(bad)
-    with pytest.raises(ValidationError, match='typed HARD effect'):
-        DesignRepairConstraint(code='narrative_relation')
-    with pytest.raises(ValidationError, match='只存 effect'):
-        DesignRepairConstraint.model_validate({
-            **constraint.model_dump(mode='json'), 'opaque_aliases': [A],
-        })
+        DesignRepairConstraint(code='semantic_constraint')
+    with pytest.raises(ValidationError):
+        DesignRepairConstraint.model_validate({**constraint.model_dump(mode='json'),
+            'effect': {'kind': 'response_to', 'stimulus_alias': A, 'response_alias': B}})
 
 
 def test_repair_capability_separates_agent_from_full_chapter_edit_and_reads_v2():
@@ -324,7 +320,7 @@ def test_strategy_replan_has_typed_cumulative_feedback_and_accepted_constraints(
             placeholder=False, decision='request_replan', reason='策略需重做。')
 
 
-def test_complete_chapter_edit_request_is_registered_v1_and_ordinal_bound():
+def test_complete_chapter_edit_request_is_registered_v2_and_ordinal_bound():
     payload = {
         'actor': 'reviewer', 'reason': '修正动作与台词回应关系。',
         'review_token': 's4er1_' + '1' * 64,
@@ -334,7 +330,7 @@ def test_complete_chapter_edit_request_is_registered_v1_and_ordinal_bound():
     request = BlindChapterEditRequest.model_validate(payload)
     spec = ARTIFACT_SPECS[STAGE4_BLIND_CHAPTER_EDIT]
     assert spec.model is BlindChapterEditRequest
-    assert spec.current_version == 1
+    assert spec.current_version == 2
     assert request.chapter.output_ordinal == 1
     assert set(request.model_dump()) == {
         'actor', 'reason', 'review_token', 'output_ordinal', 'chapter'}

@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Stage4 原子事实场景编译器的确定性单元测试。"""
+"""完整剧情呈现编译的反例；稀疏状态使用显式端点，不重建旧逐事实进出状态表。"""
 from __future__ import annotations
 
 import copy
@@ -11,575 +9,299 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.invariants import CHAPTER_WEIGHT_RATIO, PLAN_BUDGET_BAND
-from contracts.schema.stage4 import BlindSceneResponse, PlanChapters
-from novel.errors import RefusedByStructure
-from novel.stages.stage4 import checks
-from novel.stages.stage4.beats import beat_index, verbatim_pieces
-from novel.stages.stage4.measure import (
-    _bounded_round_shares, adopt_plan_response, computed_structure_change_kinds,
-    identity_plan, semantic_contract_of, source_chars_table, structure_metrics_of,
+from contracts.schema.plot import (
+    PlotBlueprint, PlotChapterArrangement, PlotChapterResponse, PlotKnowledgeTrigger,
 )
+from contracts.schema.stage4 import BlindSceneResponse, PlanChapter
+from novel.stages.stage2.plot_compile import compile_chapter
+from novel.stages.stage4 import checks
+from novel.stages.stage4.beats import beat_index
+from novel.stages.stage4.measure import (
+    _bounded_round_shares, adopt_plan_response, identity_plan,
+    semantic_contract_of, source_chars_table, structure_metrics_of,
+)
+from novel.stages.stage4.plot_placements import compile_placements
+from tests import plot_fixtures as fixture
+from tests.test_plot_blueprint import blueprint, arrangement, chapter_response
 
 
-TEXT = '甲收到入住邀请。\n乙在门口拒绝甲。\n甲决定留下。'
+def _compile(raw, bp=None, **kwargs):
+    return compile_placements(bp or blueprint(), PlotChapterArrangement.model_validate(raw), **kwargs)
 
 
-def _source(fragment: str) -> dict:
-    start = TEXT.index(fragment)
-    return {'text': fragment, 'start': start, 'end': start + len(fragment)}
+def _state_blueprint():
+    response = chapter_response()
+    response['states'] = [{
+        'state_key': 'st1', 'content': '娘子决定离开。', 'global_ref': None,
+        'modality': 'world', 'holder_char_id': None,
+        'established_at': {'kind': 'at_beat', 'beat_ref': 'b2'},
+        'ended_at': None, 'supersedes_state_refs': [],
+        'evidence': [{'start_para': 2, 'end_para': 2}]}]
+    response['carry_out_refs'] = ['st1']
+    return blueprint(response=response)
 
 
-def _blueprints() -> dict:
-    spans = [_source('甲收到入住邀请。'), _source('乙在门口拒绝甲。'), _source('甲决定留下。')]
-    return {'blueprints': [{
-        'chapter_ordinal': 1,
-        'chapter_function': '建立入住冲突并完成主角入局',
-        'fact_atoms': [
-            {'fact_id': 'f01_001', 'claim': '甲收到入住邀请', 'kind': 'information',
-             'obligation': 'land', 'source_beat_ref': 'b01_01', 'source': spans[0],
-             'participant_char_ids': ['char_001']},
-            {'fact_id': 'f01_002', 'claim': '乙拒绝甲入住', 'kind': 'event',
-             'obligation': 'land', 'source_beat_ref': 'b01_02', 'source': spans[1],
-             'participant_char_ids': ['char_001', 'char_002']},
-            {'fact_id': 'f01_003', 'claim': '甲决定留下', 'kind': 'character_state',
-             'obligation': 'land', 'source_beat_ref': 'b01_03', 'source': spans[2],
-             'participant_char_ids': ['char_001']},
-        ],
-        'causal_edges': [{'before': 'f01_002', 'after': 'f01_003'}],
-        'entry_state_refs': [], 'ending_state_refs': ['f01_003'],
-        'beats': [
-            {'beat_id': 'b01_01', 'span': spans[0], 'time_layer': 'present',
-             'place': '门外', 'present_char_ids': ['char_001'],
-             'hinges': []},
-            {'beat_id': 'b01_02', 'span': spans[1], 'time_layer': 'present',
-             'place': '门口', 'present_char_ids': ['char_001', 'char_002'],
-             'hinges': [{'hinge_id': 'h01_001', 'kind': '要害台词',
-                         'source_fact_refs': ['f01_002'], 'literal': None,
-                         'dialogue': {'speaker': {'kind': 'character', 'char_id': 'char_002'},
-                                      'addressees': [{'kind': 'character', 'char_id': 'char_001'}],
-                                      'meaning': '乙拒绝甲入住', 'speech_act': '拒绝'},
-                         'source': _source('拒绝甲')}]},
-            {'beat_id': 'b01_03', 'span': spans[2], 'time_layer': 'present',
-             'place': '门口', 'present_char_ids': ['char_001'],
-             'hinges': []},
-        ],
-        'narration': [],
-    }]}
+def test_beat_index_keeps_unique_content_and_shared_evidence_without_atomic_claims():
+    bp = fixture.blueprint()
+    index = beat_index(bp, fixture.MAIN)
+    assert len(index) == len(bp['blueprints'][0]['beats']) == 3
+    for beat in bp['blueprints'][0]['beats']:
+        row = index[beat['beat_id']]
+        assert row['content'] == beat['content']
+        assert set(row['evidence']) == set(beat['evidence_refs'])
+        assert row['source_chapter_chars'] == len(fixture.TEXT)
+        assert 'fact_atoms' not in row and 'hinges' not in row
 
 
-def _main() -> list[dict]:
-    return [{'chapter_ordinal': 1, 'text': TEXT}]
+@pytest.mark.parametrize('field', ['events', 'from_beats', 'end_beat', 'land_fact_aliases',
+                                  'context_fact_aliases', 'exit_state_aliases'])
+def test_plan_response_rejects_retired_atomic_and_skeleton_keys(field):
+    from tests.test_plot_design import inputs, design_response
+    _bp, _truth, _mapping, public, _private = inputs()
+    raw = design_response(public)['scenes'][0]
+    with pytest.raises(ValidationError, match=field):
+        BlindSceneResponse.model_validate({**raw, field: []})
 
 
-def _goal(intent: str, ref: str) -> dict:
-    return {'intent': intent,
-            'fact_refs': [{'kind': 'fact_atom', 'ref': ref}]}
+def test_scene_compiler_decodes_enums_and_strips_budget_scaffolding():
+    plan = fixture.plan()
+    chapter = PlanChapter.model_validate(plan['output_chapters'][0])
+    assert [s.slot for s in chapter.scenes] == ['s01', 's02', 's03']
+    assert sum(s.budget_chars for s in chapter.scenes) == len(fixture.TEXT)
+    assert all('weight' not in s.model_dump() for s in chapter.scenes)
+    contract = semantic_contract_of(fixture.blueprint()['blueprints'][0])
+    assert contract['beat_refs'] == ['b01_01', 'b01_02', 'b01_03']
+    assert contract['carry_out_refs'] == ['st01_01']
 
 
-def _response() -> dict:
-    return {
-        'reconstruction_strategy': '先展示拒绝，再补出邀请原因，章尾完成留下的选择。',
-        'output_chapters': [{
-            'output_ordinal': 1, 'from_source_ordinals': [1],
-            'chapter_goal': _goal('G_ADVANCE', 'f01_003'),
-            'open_hook_goal': _goal('G_OPEN', 'f01_002'),
-            'end_hook_goal': _goal('G_CLOSE', 'f01_003'),
-            'structure_decision': {
-                'mode': 'reconstruct',
-                'reason': '从拒绝切入并重组邀请与选择。',
-                'declared_change_kinds': ['entry_anchor', 'fact_grouping'],
-            },
-            'weight': 'CH_EVEN',
-            'chapter_rewrite_brief': '从门口拒绝切入，再补足邀请原因，最后让甲决定留下。',
-            'scenes': [
-                {'weight': 'W_STRONG', 'purpose': '让拒绝立即发生',
-                 'role': 'R_COLD_OPEN', 'delivery': 'D_SCENE', 'transition': 'X_START',
-                 'land_fact_refs': ['f01_002'], 'context_fact_refs': [],
-                 'material_refs': ['h01_001'], 'turn_fact_ref': 'f01_002',
-                 'entry_state_refs': [], 'exit_state_refs': ['f01_002'],
-                 'stage_refs': ['b01_02']},
-                {'weight': 'W_PEAK', 'purpose': '补出邀请并完成留下的选择',
-                 'role': 'R_PAYOFF', 'delivery': 'D_SCENE', 'transition': 'X_EARLIER',
-                 'land_fact_refs': ['f01_001', 'f01_003'], 'context_fact_refs': [],
-                 'material_refs': [], 'turn_fact_ref': 'f01_003',
-                 'entry_state_refs': ['f01_002'], 'exit_state_refs': ['f01_003'],
-                 'stage_refs': ['b01_01', 'b01_03']},
-            ],
-        }],
-    }
+@pytest.mark.parametrize('mutation', ['missing', 'duplicate', 'unknown', 'empty'])
+def test_scene_compiler_refuses_incomplete_or_duplicate_placement(mutation):
+    raw = arrangement().model_dump(mode='json')
+    if mutation == 'missing':
+        raw['beat_placements'].pop()
+    elif mutation == 'duplicate':
+        raw['beat_placements'].append(copy.deepcopy(raw['beat_placements'][0]))
+    elif mutation == 'unknown':
+        raw['beat_placements'][0]['beat_ref'] = 'b01_99'
+    else:
+        raw['beat_placements'][0]['deliveries'] = []
+    with pytest.raises(ValueError):
+        _compile(raw)
 
 
-def _compiled() -> dict:
-    plan = _response()
-    bps = _blueprints()
-    adopt_plan_response(plan, bps, beat_index(bps, _main()))
-    return plan
+@pytest.mark.parametrize('mutation', ['foreign_scene', 'foreign_evidence', 'duplicate_delivery',
+                                     'missing_instruction', 'reverse_delivery'])
+def test_delivery_reference_order_and_instruction_are_closed(mutation):
+    raw = arrangement(distributed=True).model_dump(mode='json')
+    delivery = raw['beat_placements'][1]['deliveries']
+    if mutation == 'foreign_scene':
+        delivery[0]['scene_ref'] = 's99'
+    elif mutation == 'foreign_evidence':
+        delivery[0]['evidence_refs'] = ['e02_01']
+    elif mutation == 'duplicate_delivery':
+        delivery.append(copy.deepcopy(delivery[0]))
+    elif mutation == 'missing_instruction':
+        delivery[0]['presentation_instruction'] = None
+    else:
+        delivery.reverse()
+    with pytest.raises(ValueError):
+        _compile(raw)
 
 
-def _findings(plan: dict) -> dict[str, list]:
-    return {outcome.rule: list(outcome.findings) for outcome in checks.check(
-        plan, blueprints=_blueprints(), main_text=_main())}
+def test_background_is_available_only_after_all_parent_deliveries_complete():
+    raw = arrangement(distributed=True).model_dump(mode='json')
+    raw['scenes'][1]['context_beat_refs'] = ['b01_01']
+    good = _compile(raw)
+    assert good.completed_at['b01_01'] == 's01'
+    assert good.completed_at['b01_02'] == 's02'
+    assert good.shared_evidence == (('b01_02', 's01/s02', ('e01_02',)),)
 
 
-def test_beat_index_is_evidence_only_and_has_no_event_payload():
-    index = beat_index(_blueprints(), _main())
-    assert index['b01_02']['place'] == '门口'
-    assert index['b01_02']['source_chars'] == len('乙在门口拒绝甲。')
-    assert 'event' not in index['b01_02']
+@pytest.mark.parametrize('slot,ref', [('s01', 'b01_01'), ('s01', 'b01_02'),
+                                    ('s02', 'b01_02'), ('s02', 'b99_01')])
+def test_early_same_scene_or_foreign_background_is_refused(slot, ref):
+    raw = arrangement(distributed=True).model_dump(mode='json')
+    next(s for s in raw['scenes'] if s['slot'] == slot)['context_beat_refs'] = [ref]
+    with pytest.raises(ValueError):
+        _compile(raw)
 
 
-def test_cross_paragraph_premise_is_split_without_changing_its_words():
-    pieces, unknown = verbatim_pieces([{
-        'hinge_id': 'h01_001', 'kind': '因果前提',
-        'source': {'text': '第一句。\n\n第二句。'},
-    }])
-    assert pieces['must_hold'] == ['第一句。', '第二句。'] and unknown == []
+def test_single_scene_state_endpoint_is_derived_without_changing_blueprint():
+    bp = _state_blueprint()
+    before = bp.model_dump_json()
+    compiled = compile_placements(bp, arrangement())
+    state = next(b for b in compiled.bindings if b.kind == 'state')
+    assert state.ref == 'st01_01' and state.endpoint == 'established'
+    assert state.scene_ref == 's02'
+    assert bp.model_dump_json() == before
 
 
-def test_plan_response_rejects_every_retired_skeleton_key():
-    alias = 'a_0123456789abcdef'
-    scene = {
-        'weight': 'W_STRONG', 'purpose': '让拒绝立即发生',
-        'role': 'R_COLD_OPEN', 'delivery': 'D_SCENE', 'transition': 'X_START',
-        'land_fact_aliases': [alias], 'context_fact_aliases': [],
-        'turn_fact_alias': alias, 'entry_state_aliases': [],
-        'exit_state_aliases': [alias],
-    }
-    for key, value in (
-        ('events', ['旧事件']), ('from_beats', ['b01_01']), ('end_beat', 'b01_01'),
-    ):
-        raw = {**scene, key: value}
-        with pytest.raises(ValidationError, match=key):
-            BlindSceneResponse.model_validate(raw)
+def test_split_state_requires_specific_binding_and_does_not_default_to_first_scene():
+    bp = _state_blueprint()
+    raw = arrangement(distributed=True).model_dump(mode='json')
+    with pytest.raises(ValueError, match='明确绑定'):
+        _compile(raw, bp)
+    raw['anchor_bindings'] = [{'kind': 'state', 'ref': 'st01_01',
+                              'endpoint': 'established', 'scene_ref': 's02'}]
+    compiled = _compile(raw, bp)
+    assert next(b for b in compiled.bindings if b.kind == 'state').scene_ref == 's02'
 
 
-def test_scene_compiler_decodes_enums_allocates_slots_and_strips_budget_scaffolding():
-    chapter = _compiled()['output_chapters'][0]
-    assert 'weight' not in chapter
-    assert [scene['slot'] for scene in chapter['scenes']] == ['s01', 's02']
-    assert all('weight' not in scene for scene in chapter['scenes'])
-    assert [scene['transition'] for scene in chapter['scenes']] == ['start', 'earlier']
-    assert sum(scene['budget_chars'] for scene in chapter['scenes']) == sum(
-        len(row) for row in ('甲收到入住邀请。', '乙在门口拒绝甲。', '甲决定留下。'))
-    assert 'semantic_contract' not in chapter
-    derived = semantic_contract_of(_blueprints()['blueprints'][0])
-    assert derived['information_delta'] == ['f01_001']
-    assert derived['character_state_delta'] == ['f01_003']
+@pytest.mark.parametrize('kind,endpoint', [('state', 'established'), ('knowledge', 'trigger'),
+                                         ('constraint', 'target'), ('goal', 'open')])
+def test_unregistered_endpoint_cannot_create_new_truth_or_permission(kind, endpoint):
+    raw = arrangement().model_dump(mode='json')
+    raw['anchor_bindings'] = [{'kind': kind, 'ref': 'unregistered',
+                              'endpoint': endpoint, 'scene_ref': 's01'}]
+    with pytest.raises(ValueError, match='不能创造'):
+        _compile(raw)
 
 
-def test_compiled_scene_order_is_the_new_order_not_the_source_atom_order():
-    scenes = _compiled()['output_chapters'][0]['scenes']
-    assert scenes[0]['land_fact_refs'] == ['f01_002']
-    assert scenes[1]['land_fact_refs'] == ['f01_001', 'f01_003']
+def test_knowledge_trigger_must_bind_to_its_parent_delivery():
+    raw = arrangement(distributed=True).model_dump(mode='json')
+    knowledge = [PlotKnowledgeTrigger(knowledge_ref='k1', trigger_beat_ref='b01_02')]
+    with pytest.raises(ValueError, match='明确绑定'):
+        _compile(raw, knowledge=knowledge)
+    raw['anchor_bindings'] = [{'kind': 'knowledge', 'ref': 'k1',
+                              'endpoint': 'trigger', 'scene_ref': 's02'}]
+    compiled = _compile(raw, knowledge=knowledge)
+    assert next(b for b in compiled.bindings if b.kind == 'knowledge').scene_ref == 's02'
+    # 有显式绑定也不能把知识端点移到不呈现它的场。
+    raw['beat_placements'][1]['deliveries'] = raw['beat_placements'][1]['deliveries'][:1]
+    with pytest.raises(ValueError):
+        _compile(raw, knowledge=knowledge)
 
 
-def test_scene_compiler_refuses_missing_or_duplicate_land_atoms():
-    for mutate in ('missing', 'duplicate'):
-        raw = _response()
-        if mutate == 'missing':
-            raw['output_chapters'][0]['scenes'][1]['land_fact_refs'].remove('f01_001')
-        else:
-            raw['output_chapters'][0]['scenes'][1]['land_fact_refs'].append('f01_002')
-        with pytest.raises(RefusedByStructure, match='缺失=|重复='):
-            adopt_plan_response(raw, _blueprints(), beat_index(_blueprints(), _main()))
+@pytest.mark.parametrize('kind', ['cause', 'story_before', 'response_to', 'observes'])
+def test_reverse_disclosure_keeps_story_constraints_for_semantic_review(kind):
+    response = chapter_response()
+    response['constraints'] = [{
+        'constraint_key': 'c1', 'kind': kind,
+        'before_beat_ref': 'b1', 'after_beat_ref': 'b2',
+        'observer_char_id': 'char_001' if kind == 'observes' else None,
+        'evidence': [{'start_para': 1, 'end_para': 2}]}]
+    bp = blueprint(response=response)
+    raw = arrangement().model_dump(mode='json')
+    raw['beat_placements'][0]['deliveries'][0]['scene_ref'] = 's02'
+    raw['beat_placements'][1]['deliveries'][0]['scene_ref'] = 's01'
+    raw['scenes'][1]['transition'] = 'earlier'
+    compiled = _compile(raw, bp)
+    ends = {b.endpoint: b.scene_ref for b in compiled.bindings if b.kind == 'constraint'}
+    assert ends == {'before': 's02', 'after': 's01'}
+    assert bp.constraints[0].kind == kind
 
 
-def test_scene_compiler_refuses_unknown_stage_refs():
-    raw = _response()
-    raw['output_chapters'][0]['scenes'][0]['stage_refs'] = ['b02_01']
-    with pytest.raises(RefusedByStructure, match='stage_refs'):
-        adopt_plan_response(raw, _blueprints(), beat_index(_blueprints(), _main()))
+def test_same_scene_is_explicitly_enforced_instead_of_assumed_from_shared_evidence():
+    response = chapter_response()
+    response['constraints'] = [{
+        'constraint_key': 'c1', 'kind': 'same_scene', 'observer_char_id': None,
+        'before_beat_ref': 'b1', 'after_beat_ref': 'b2',
+        'evidence': [{'start_para': 1, 'end_para': 2}]}]
+    bp = blueprint(response=response)
+    with pytest.raises(ValueError, match='必须同场'):
+        compile_placements(bp, arrangement())
+    raw = arrangement().model_dump(mode='json')
+    raw['scenes'] = raw['scenes'][:1]
+    raw['beat_placements'][1]['deliveries'][0]['scene_ref'] = 's01'
+    assert _compile(raw, bp).scene_beats == {'s01': ('b01_01', 'b01_02')}
 
 
-def test_scene_compiler_reuses_the_context_ruler_and_accepts_a_prior_land(
-        monkeypatch):
-    """完整场景编译不能另留一份「context 只许引用 context 原子」的旧规则。"""
-    raw = _response()
-    raw['output_chapters'][0]['scenes'][1]['context_fact_refs'] = ['f01_002']
-    calls: list[tuple[list[dict], set[str]]] = []
-    production = checks.context_ref_findings
-
-    def traced(scenes, *, context_obligation_refs, land_key, context_key):
-        calls.append((scenes, context_obligation_refs))
-        return production(
-            scenes, context_obligation_refs=context_obligation_refs,
-            land_key=land_key, context_key=context_key)
-
-    monkeypatch.setattr(checks, 'context_ref_findings', traced)
-    adopt_plan_response(raw, _blueprints(), beat_index(_blueprints(), _main()))
-
-    assert len(calls) == 1, 'allocator/场景编译必须走 checks 的唯一 context 判据口'
-    assert raw['output_chapters'][0]['scenes'][1]['context_fact_refs'] == ['f01_002']
+@pytest.mark.parametrize('transition', ['earlier', 'parallel', 'return', 'later'])
+def test_nonlinear_presentations_do_not_fabricate_a_second_state_history(transition):
+    bp = _state_blueprint()
+    raw = arrangement().model_dump(mode='json')
+    raw['scenes'][1]['transition'] = transition
+    before = bp.model_dump_json()
+    compiled = _compile(raw, bp)
+    assert compiled.completed_at['b01_02'] == 's02'
+    assert bp.model_dump_json() == before
+    assert all('entry_state' not in s and 'exit_state' not in s for s in raw['scenes'])
 
 
-@pytest.mark.parametrize(('scene_index', 'ref'), ((0, 'f01_003'), (0, 'f01_002')))
-def test_scene_compiler_still_refuses_future_or_same_scene_context_land(
-        scene_index: int, ref: str):
-    raw = _response()
-    raw['output_chapters'][0]['scenes'][scene_index]['context_fact_refs'] = [ref]
-    with pytest.raises(RefusedByStructure, match='context_fact_refs'):
-        adopt_plan_response(raw, _blueprints(), beat_index(_blueprints(), _main()))
+@pytest.mark.parametrize('scene,transition', [(0, 'continue'), (1, 'start')])
+def test_transition_start_syntax_is_closed(scene, transition):
+    raw = arrangement().model_dump(mode='json')
+    raw['scenes'][scene]['transition'] = transition
+    with pytest.raises(ValueError, match='start'):
+        _compile(raw)
 
 
-def _budget_case(sizes: list[int], weights: list[str]) -> tuple[dict, dict]:
-    blueprints: list[dict] = []
-    chapters: list[dict] = []
-    for ordinal, (size, weight) in enumerate(zip(sizes, weights), 1):
-        fact_id = f'f{ordinal:02d}_001'
-        beat_id = f'b{ordinal:02d}_01'
-        span = {'text': '甲' * size, 'start': 0, 'end': size}
-        blueprints.append({
-            'chapter_ordinal': ordinal,
-            'chapter_function': '验证确定性预算分配',
-            'fact_atoms': [{
-                'fact_id': fact_id, 'claim': f'第{ordinal}章事实', 'kind': 'event',
-                'obligation': 'land', 'source_beat_ref': beat_id, 'source': span,
-                'participant_char_ids': [],
-            }],
-            'causal_edges': [], 'entry_state_refs': [], 'ending_state_refs': [fact_id],
-            'beats': [{
-                'beat_id': beat_id, 'span': span, 'time_layer': 'present',
-                'place': '室内', 'present_char_ids': [], 'hinges': [],
-            }],
-            'narration': [],
-        })
-        chapters.append({
-            'output_ordinal': ordinal, 'weight': weight,
-            'scenes': [{
-                'weight': 'mid', 'role': 'payoff', 'delivery': 'scene',
-                'transition': 'start', 'purpose': '落地本章事实',
-                'land_fact_refs': [fact_id], 'context_fact_refs': [],
-                'material_refs': [], 'stage_refs': [beat_id],
-                'turn_fact_ref': fact_id, 'entry_state_refs': [],
-                'exit_state_refs': [fact_id],
-            }],
-        })
-    return {'blueprints': blueprints}, {'output_chapters': chapters}
-
-
-def _chapter_budget_totals(plan: dict) -> list[int]:
-    return [sum(scene['budget_chars'] for scene in chapter['scenes'])
-            for chapter in plan['output_chapters']]
+def _budget_case(sizes, weights):
+    chapters, main = [], []
+    for ordinal, size in enumerate(sizes, 1):
+        text = '甲' * size
+        response = {
+            'chapter_ordinal': ordinal, 'chapter_function': '测试源章预算',
+            'beats': [{'beat_key': 'b1', 'content': '甲完成本章行动。',
+                       'participant_char_ids': [], 'evidence': [{'start_para': 1, 'end_para': 1}],
+                       'source_contexts': []}],
+            'states': [], 'constraints': [], 'inherited_state_endings': [],
+            'entry_state_refs': [], 'carry_out_refs': [],
+            'narration': [{'grammatical_person': 'third', 'narrator_char_id': None,
+                           'focalizer_char_id': None, 'pronoun_surfaces': []}]}
+        chapters.append(compile_chapter(PlotChapterResponse.model_validate(response), text,
+                                        allowed_char_ids=frozenset()).model_dump(mode='json'))
+        main.append({'chapter_ordinal': ordinal, 'text': text})
+    bp = {'blueprints': chapters}
+    index = beat_index(bp, main)
+    plan = identity_plan(bp, main, index)
+    for chapter, weight in zip(plan['output_chapters'], weights):
+        chapter['weight'] = weight
+        for scene in chapter['scenes']:
+            scene['weight'] = 'mid'
+    return bp, plan, index, main
 
 
 def test_chapter_budget_allocator_clamps_and_redistributes_the_real_failure_shape():
-    """minor 小章的裸归一份额会是 48.8/65；应夹到 52，再把残差给另一章。"""
-    sizes = [288, 65]
-    blueprints, plan = _budget_case(sizes, ['major', 'minor'])
-    adopt_plan_response(plan, blueprints, {})
-
-    assert _chapter_budget_totals(plan) == [301, 52]
-    assert sum(_chapter_budget_totals(plan)) == sum(sizes)
+    bp, plan, index, _ = _budget_case([288, 65], ['major', 'minor'])
+    adopt_plan_response(plan, bp, index)
+    totals = [sum(s['budget_chars'] for s in c['scenes']) for c in plan['output_chapters']]
+    assert totals == [301, 52]
 
 
 def test_bounded_rounding_preserves_total_band_and_determinism_for_all_weight_pairs():
     sizes = [65, 288]
     lo, hi = PLAN_BUDGET_BAND
-    lower = [math.ceil(size * lo) for size in sizes]
-    upper = [math.floor(size * hi) for size in sizes]
-    for weights in itertools.product(CHAPTER_WEIGHT_RATIO, repeat=len(sizes)):
-        raw = [size * CHAPTER_WEIGHT_RATIO[weight]
-               for size, weight in zip(sizes, weights)]
+    lower, upper = [math.ceil(n * lo) for n in sizes], [math.floor(n * hi) for n in sizes]
+    for weights in itertools.product(CHAPTER_WEIGHT_RATIO, repeat=2):
+        raw = [n * CHAPTER_WEIGHT_RATIO[w] for n, w in zip(sizes, weights)]
         first = _bounded_round_shares(raw, sum(sizes), lower, upper)
-        second = _bounded_round_shares(raw, sum(sizes), lower, upper)
-        assert first == second
+        assert first == _bounded_round_shares(raw, sum(sizes), lower, upper)
         assert sum(first) == sum(sizes)
-        assert all(left <= value <= right
-                   for value, left, right in zip(first, lower, upper))
+        assert all(a <= b <= c for a, b, c in zip(lower, first, upper))
 
 
 def test_budget_allocator_postconditions_are_green_at_the_production_checker():
-    sizes = [37, 65, 288, 411, 73]
-    weights = ['minor', 'below', 'even', 'above', 'major']
-    blueprints, plan = _budget_case(sizes, weights)
-    adopt_plan_response(plan, blueprints, {})
-
-    outcomes = {outcome.rule: outcome for outcome in checks.check(
-        plan, blueprints=blueprints,
-        main_text=[{'chapter_ordinal': ordinal, 'text': '甲' * size}
-                   for ordinal, size in enumerate(sizes, 1)])}
-    assert list(outcomes['budget_band'].findings) == []
-    assert list(outcomes['plan_book_band'].findings) == []
-    assert sum(_chapter_budget_totals(plan)) == sum(sizes)
+    bp, plan, index, main = _budget_case([37, 65, 288, 411, 73],
+                                       ['minor', 'below', 'even', 'above', 'major'])
+    adopt_plan_response(plan, bp, index)
+    outcomes = {o.rule: o for o in checks.check(plan, blueprints=bp, main_text=main)}
+    assert not outcomes['budget_band'].findings
+    assert not outcomes['plan_book_band'].findings
+    assert sum(s['budget_chars'] for c in plan['output_chapters'] for s in c['scenes']) == 874
 
 
-def test_identity_plan_is_an_explicit_source_order_baseline_but_uses_scenes():
-    chapter = identity_plan(_blueprints(), _main())['output_chapters'][0]
-    assert [scene['slot'] for scene in chapter['scenes']] == ['s01', 's02', 's03']
-    assert [scene['land_fact_refs'][0] for scene in chapter['scenes']] == [
-        'f01_001', 'f01_002', 'f01_003']
-    assert not any(key in scene for scene in chapter['scenes']
-                   for key in ('events', 'from_beats', 'end_beat'))
+@pytest.mark.parametrize('field', ['weight', 'semantic_contract', 'reconstruction_strategy',
+                                  'land_fact_refs', 'entry_state_refs', 'ending_state_refs'])
+def test_plan_rejects_retired_persistent_chapter_fields(field):
+    raw = fixture.plan()['output_chapters'][0]
+    with pytest.raises(ValidationError, match=field):
+        PlanChapter.model_validate({**raw, field: []})
 
 
-def test_structure_dimensions_are_computed_from_the_current_plan_not_persisted():
-    chapter = _compiled()['output_chapters'][0]
+def test_source_size_table_uses_source_once_and_counts_complete_beats():
+    bp = fixture.blueprint()
+    table = source_chars_table(bp, beat_index(bp, fixture.MAIN), book_total=True)
+    assert '完整剧情 3 个' in table and f'源文 {len(fixture.TEXT)} 字' in table
+    assert '原子' not in table
+
+
+def test_structure_measurement_never_mutates_presentation():
+    chapter = fixture.plan()['output_chapters'][0]
     before = copy.deepcopy(chapter)
-    decision = chapter['structure_decision']
-    assert decision['declared_change_kinds'] == ['entry_anchor', 'fact_grouping']
-    assert 'computed_change_kinds' not in decision
-    metrics = structure_metrics_of(_blueprints()['blueprints'][0], chapter)
-    assert computed_structure_change_kinds(metrics) == [
-        'entry_anchor', 'fact_grouping', 'disclosure_order',
-        'noncontiguous_regroup',
-    ]
-    assert chapter == before, '现场结构读数不得反向修改计划业务字节'
-
-
-@pytest.mark.parametrize('retired,mutate', [
-    ('reconstruction_strategy', lambda p: p.__setitem__(
-        'reconstruction_strategy', '旧策略副本')),
-    ('chapter.weight', lambda p: p['output_chapters'][0].__setitem__('weight', 'even')),
-    ('semantic_contract', lambda p: p['output_chapters'][0].__setitem__(
-        'semantic_contract', {})),
-    ('computed_change_kinds', lambda p: p['output_chapters'][0][
-        'structure_decision'].__setitem__('computed_change_kinds', [])),
-    ('scene.weight', lambda p: p['output_chapters'][0]['scenes'][0].__setitem__(
-        'weight', 'mid')),
-    ('participant_refs', lambda p: p['output_chapters'][0]['scenes'][0].__setitem__(
-        'participant_refs', [])),
-    ('FactRef.chapter', lambda p: p['output_chapters'][0]['chapter_goal'][
-        'fact_refs'][0].__setitem__('chapter', 1)),
-    ('goal.rationale', lambda p: p['output_chapters'][0]['chapter_goal'].__setitem__(
-        'rationale', '旧展示理由')),
-    ('provenance.params', lambda p: p['_provenance'].__setitem__('params', {})),
-])
-def test_plan_v4_rejects_every_retired_persistent_field(retired, mutate):
-    payload = copy.deepcopy(_compiled())
-    payload.pop('reconstruction_strategy')
-    payload['_provenance'] = {
-        'code': 'test', 'root_clean_sha1': '1' * 40, 'inputs': {},
-        'origin': 'human', 'blind_candidate_sha256': None,
-        'evidence_binding_sha256': None,
-    }
-    mutate(payload)
-    with pytest.raises(ValidationError, match=retired.rsplit('.', 1)[-1]):
-        PlanChapters.model_validate(payload)
-
-
-def test_source_size_table_reports_atoms_not_source_event_units():
-    table = source_chars_table(_blueprints(), book_total=True)
-    assert table and '原子事实 3 条' in table and '全书可定位源区间合计' in table
-    assert '源事件' not in table and '分组' not in table
-
-
-def test_clean_compiled_plan_closes_all_new_scene_hard_rules():
-    findings = _findings(_compiled())
-    for rule in (
-        'one_to_one', 'fact_ref', 'fact_coverage',
-        'causal_closure', 'state_closure', 'material_coverage', 'scene_transition',
-        'goal_landing', 'budget_int', 'budget_band', 'plan_book_band', 'style_words',
-    ):
-        assert findings[rule] == [], f'{rule}: {findings[rule]}'
-
-
-def test_fact_coverage_and_state_closure_fail_independently():
-    """两条判据互不搭便车：覆盖坏了，可判的状态边界也要独立红。
-
-    ⚠ 拿来破坏状态的**必须是一条可判边界**——章首 entry 是章级契约，与章内
-    是否回溯正交。拿 `earlier` 支路的 entry 去破坏，那是判据 21 说的假红：
-    产品明说那种边界机器判不了。
-    """
-    plan = _compiled()
-    scenes = plan['output_chapters'][0]['scenes']
-    scenes[1]['land_fact_refs'].remove('f01_001')       # 覆盖坏了
-    scenes[1]['transition'] = 'continue'                # 同一时间线……
-    scenes[1]['entry_state_refs'] = []                  # ……却没承接上一场
-    findings = _findings(plan)
-    assert findings['fact_coverage'] and findings['state_closure']
-    assert 'continue 未承接' in findings['state_closure'][0].detail
-
-
-def test_a_nonlinear_branch_entry_is_unverifiable_rather_than_a_violation():
-    """`earlier` 支路不继承紧邻上一场的 exit——旧线性口径在这里恒假红。
-
-    盘上的 `transition` 已经如实标了回溯，判据却按披露数组读，于是一次整书
-    计划被判掉。现在它落 `unver` 并带扫描分母，逐项证据留给结构人审。
-    """
-    plan = _compiled()
-    plan['output_chapters'][0]['scenes'][1]['entry_state_refs'] = []
-    outcomes = {outcome.rule: outcome for outcome in checks.check(
-        plan, blueprints=_blueprints(), main_text=_main())}
-    state = outcomes['state_closure']
-    assert list(state.findings) == []
-    assert state.unver_why, '机器够不着的边界不许洗成绿'
-    assert '场' in (state.scanned or ''), '绿灯/unver 都必须带扫描分母'
-
-    reading = _findings(plan)['semantic_closure_reading']
-    assert reading and 'state_unknown_findings' in reading[0].detail
-
-
-def test_story_before_uses_typed_story_time_instead_of_disclosure_order():
-    plan = _compiled()
-    blueprints = _blueprints()
-    # 计划先披露拒绝 f002，再用 earlier 回到邀请 f001。真实时序仍是邀请在前。
-    blueprints['blueprints'][0]['narrative_relations'] = [{
-        'kind': 'story_before', 'enforcement': 'hard',
-        'before_fact_ref': 'f01_001', 'after_fact_ref': 'f01_002',
-    }]
-    outcome_by_rule = {row.rule: row for row in checks.check(
-        plan, blueprints=blueprints, main_text=_main())}
-    relation = outcome_by_rule['narrative_relation']
-    assert list(relation.findings) == []
-    assert relation.unver_why is None
-
-    # 数组顺序看似 f002 在 f001 前，若契约反过来声称 f002 的故事时间更早，
-    # X_EARLIER 提供的 typed 时层会证明它实际反向，必须 HARD 红。
-    blueprints['blueprints'][0]['narrative_relations'] = [{
-        'kind': 'story_before', 'enforcement': 'hard',
-        'before_fact_ref': 'f01_002', 'after_fact_ref': 'f01_001',
-    }]
-    reversed_outcome = {row.rule: row for row in checks.check(
-        plan, blueprints=blueprints, main_text=_main())}['narrative_relation']
-    assert reversed_outcome.findings
-    assert '故事时序反向' in reversed_outcome.findings[0].detail
-
-
-def test_a_continue_scene_that_drops_the_previous_exit_state_is_still_hard():
-    """放宽的只有非线性边界；`continue` 那一条一格没松。"""
-    plan = _compiled()
-    scene = plan['output_chapters'][0]['scenes'][1]
-    scene['transition'] = 'continue'
-    scene['entry_state_refs'] = []
-    findings = _findings(plan)
-    assert findings['state_closure'], 'continue 必须承接紧邻上一场退出状态'
-    assert 'continue 未承接' in findings['state_closure'][0].detail
-
-
-def test_reconstruction_metrics_are_always_reported_without_a_threshold():
-    findings = _findings(_compiled())
-    for rule in (
-        'scene_budget_distribution', 'verbatim_share',
-        'partition_change', 'disclosure_order', 'noncontiguous_regroup',
-        'anchor_migration', 'structure_eligibility', 'structure_alignment',
-        'semantic_closure_reading',
-    ):
-        assert findings[rule], f'{rule} 应常驻给读数，不应设自动放行阈值'
-
-
-def _scenes(*rows: tuple[str, list[str], list[str], list[str]]) -> list[dict]:
-    """`(transition, land, entry, exit)` 四元组的最小场序列。"""
-    return [
-        {'transition': transition, 'land_fact_refs': land,
-         'entry_state_refs': entry, 'exit_state_refs': exit_refs}
-        for transition, land, entry, exit_refs in rows
-    ]
-
-
-def _temporal(*rows):
-    return checks.temporal_state_findings(
-        _scenes(*rows), prefix='ch1', land_key='land_fact_refs',
-        entry_key='entry_state_refs', exit_key='exit_state_refs')
-
-
-def test_a_single_unambiguous_return_must_restore_the_anchor_state():
-    """`earlier → return` 是唯一能配对的支路形状，那一条恢复检查仍是 HARD。"""
-    bad, transition_bad, unknown = _temporal(
-        ('start', ['a'], [], ['a']),
-        ('earlier', ['b'], [], ['b']),
-        ('return', ['c'], [], ['c']),
-    )
-    assert transition_bad == []
-    assert any('return 未恢复支路前锚点状态' in row for row in bad)
-    assert unknown, '支路入口本身仍然是人审读数'
-
-    ok_bad, _t, _u = _temporal(
-        ('start', ['a'], [], ['a']),
-        ('earlier', ['b'], [], ['b']),
-        ('return', ['c'], ['a'], ['c']),
-    )
-    assert ok_bad == []
-
-
-def test_two_branch_openers_make_the_pairing_unjudgeable_instead_of_inventing_lifo():
-    """当前 schema 没有 branch id/depth ⇒ 第二个 opener 之后只能报不可判。"""
-    bad, _transition_bad, unknown = _temporal(
-        ('start', ['a'], [], ['a']),
-        ('earlier', ['b'], [], ['b']),
-        ('parallel', ['c'], [], ['c']),
-        ('return', ['d'], [], ['d']),
-    )
-    assert bad == [], '配不出唯一锚点时不许硬判违约'
-    assert any('没有唯一可证明的本章支路锚点' in row for row in unknown)
-
-
-def test_an_unclosed_branch_at_chapter_end_is_reported_not_swallowed():
-    _bad, _transition_bad, unknown = _temporal(
-        ('start', ['a'], [], ['a']),
-        ('earlier', ['b'], [], ['b']),
-    )
-    assert any('章末仍有未显式 return' in row for row in unknown)
-
-
-def test_transition_syntax_stays_hard_in_both_directions():
-    _bad, transition_bad, _unknown = _temporal(('continue', ['a'], [], ['a']))
-    assert any('首场 transition=continue' in row for row in transition_bad)
-
-    _bad, transition_bad, _unknown = _temporal(
-        ('start', ['a'], [], ['a']), ('start', ['b'], ['a'], ['b']))
-    assert any('非首场不得 start' in row for row in transition_bad)
-
-    _bad, transition_bad, _unknown = _temporal(
-        ('start', ['a'], [], ['a']), ('teleport', ['b'], ['a'], ['b']))
-    assert any('未知 transition=teleport' in row for row in transition_bad)
-
-
-def test_the_response_prefixed_transitions_use_the_very_same_ruler():
-    """A 相拿 `X_` 前缀，正式计划拿产物取值——两侧必须判出同一个结论。"""
-    prefixed = checks.temporal_state_findings(
-        _scenes(('X_START', ['a'], [], ['a']), ('X_CONTINUE', ['b'], [], ['b'])),
-        prefix='ch1', land_key='land_fact_refs',
-        entry_key='entry_state_refs', exit_key='exit_state_refs')
-    plain = _temporal(('start', ['a'], [], ['a']), ('continue', ['b'], [], ['b']))
-    assert prefixed == plain
-    assert any('continue 未承接' in row for row in plain[0])
-
-
-def test_a_causal_endpoint_that_enters_as_context_still_counts_as_landed():
-    """端点落在 context 不是「因果边漂移」——旧口径只看 land，那是判据够不着。"""
-    plan = _compiled()
-    scenes = plan['output_chapters'][0]['scenes']
-    # f01_003 改由第二场以 context 身份引用；它仍在本章的披露面里。
-    positions = checks.causal_scene_positions(
-        scenes, land_key='land_fact_refs', context_key='context_fact_refs')
-    assert positions['f01_002'] == [0] and positions['f01_003'] == [1]
-
-    moved = [
-        {**scenes[0], 'context_fact_refs': ['f01_003']},
-        {**scenes[1], 'land_fact_refs': ['f01_001', 'f01_003']},
-    ]
-    missing, reversed_order = checks.causal_scene_findings(
-        [{'before': 'f01_002', 'after': 'f01_003'}],
-        checks.causal_scene_positions(
-            moved, land_key='land_fact_refs', context_key='context_fact_refs'))
-    assert missing == [], 'context 身份的端点同样算入场'
-    # 两端首次可见场都是 scene1 ⇒ 没有可判的逆序；同场披露不是倒叙。
-    assert reversed_order == []
-
-
-def test_a_causal_endpoint_in_no_scene_at_all_is_still_hard():
-    """放宽的只有「算不算入场」；真的一场都没进，因果链就是断的。"""
-    missing, reversed_order = checks.causal_scene_findings(
-        [{'before': 'f01_002', 'after': 'f01_009'}],
-        checks.causal_scene_positions(
-            _compiled()['output_chapters'][0]['scenes'],
-            land_key='land_fact_refs', context_key='context_fact_refs'))
-    assert missing == ['f01_002>f01_009:未落入场景']
-    assert reversed_order == []
-
-
-def test_reverse_disclosure_uses_the_first_visible_scene_not_the_last():
-    """`context` 可以在多场复用；只留最后一个会让先后取决于数组尾部。"""
-    scenes = [
-        {'land_fact_refs': ['b'], 'context_fact_refs': []},
-        {'land_fact_refs': ['a'], 'context_fact_refs': ['b']},
-    ]
-    positions = checks.causal_scene_positions(
-        scenes, land_key='land_fact_refs', context_key='context_fact_refs')
-    assert positions['b'] == [0, 1]
-    _missing, reversed_order = checks.causal_scene_findings(
-        [{'before': 'a', 'after': 'b'}], positions)
-    assert reversed_order == ['a>b'], '按首次可见场，b 先于 a'
+    metrics = structure_metrics_of(fixture.blueprint()['blueprints'][0], chapter)
+    assert chapter == before and metrics['mapping']['beats'] == 3
+    assert metrics['partition']['state'] == 'unver'
 
 
 def _style_sites(brief: str, purpose: str, claim: str) -> list[str]:
@@ -589,15 +311,15 @@ def _style_sites(brief: str, purpose: str, claim: str) -> list[str]:
             'output_ordinal': 1,
             'chapter_rewrite_brief': brief,
             'scenes': [{'purpose': purpose,
-                        'land_fact_refs': ['f01_001'],
-                        'context_fact_refs': []}],
+                        'beat_refs': ['b01_01'],
+                        'context_beat_refs': []}],
         }],
         source_chapters=[{
             'chapter_ordinal': 1,
-            'fact_atoms': [{'fact_id': 'f01_001', 'claim': claim}],
+            'beats': [{'beat_id': 'b01_01', 'content': claim}],
         }],
-        source_facts_key='fact_atoms', source_ref_key='fact_id',
-        land_key='land_fact_refs', context_key='context_fact_refs')
+        source_facts_key='beats', source_ref_key='beat_id', source_content_key='content',
+        land_key='beat_refs', context_key='context_beat_refs')
 
 
 def test_a_style_word_used_as_a_writing_instruction_is_still_hard():
@@ -630,17 +352,17 @@ def test_the_exemption_never_leaks_past_the_quoted_span_or_the_field():
         [{'output_ordinal': 1, 'chapter_rewrite_brief': f'先落「{claim}」。',
           'scenes': []}],
         source_chapters=[{'chapter_ordinal': 2,
-                          'fact_atoms': [{'fact_id': 'f02_001', 'claim': claim}]}],
-        source_facts_key='fact_atoms', source_ref_key='fact_id',
-        land_key='land_fact_refs', context_key='context_fact_refs')
+                          'beats': [{'beat_id': 'b02_01', 'content': claim}]}],
+        source_facts_key='beats', source_ref_key='beat_id', source_content_key='content',
+        land_key='beat_refs', context_key='context_beat_refs')
     assert other, '跨章不共享事实证据'
 
 
 def test_the_book_level_strategy_has_no_typed_ref_and_therefore_no_exemption():
     hits = checks.style_word_findings(
-        [], source_chapters=[], source_facts_key='fact_atoms',
-        source_ref_key='fact_id', land_key='land_fact_refs',
-        context_key='context_fact_refs',
+        [], source_chapters=[], source_facts_key='beats',
+        source_ref_key='beat_id', source_content_key='content', land_key='beat_refs',
+        context_key='context_beat_refs',
         reconstruction_strategy='全书用「乙评价甲的画只有意象没有骨架」的意象串起来。')
     assert [row for row in hits if row.startswith('reconstruction_strategy:')]
 
@@ -649,142 +371,3 @@ def test_style_word_scan_survives_punctuation_changes_in_the_claim():
     """标点不是事实词义：claim 从逗号改成顿号不该让守卫变红。"""
     assert _style_sites('先落「甲收到邀请，随后察觉画里的意象」。', '正常组场。',
                         '甲收到邀请、随后察觉画里的意象') == []
-
-
-def _derived(*rows: tuple[str, list[str], list[str], list[str]],
-             chapter_entry: list[str] | None = None) -> list[dict]:
-    scenes = _scenes(*rows)
-    checks.derive_effective_states(
-        scenes, chapter_entry_refs=chapter_entry or [],
-        entry_key='entry_state_refs', exit_key='exit_state_refs')
-    return scenes
-
-
-def test_same_timeline_carry_forward_is_computed_by_code_not_asked_of_the_model():
-    """v8 实测：25 个 `continue` 场有 18 个没把前面的状态抄全，整本 A 相白重出一次。
-
-    累加账是代码本来就精确知道的事；`continue` 这个标签的**定义**就是「上一场结束时
-    成立的事现在仍然成立」。派生之后判据变成永远不该红的后置条件。
-    """
-    scenes = _derived(
-        ('start', ['a'], [], ['a']),
-        ('continue', ['b'], [], ['b']),
-        ('continue', ['c'], [], ['c']),
-        chapter_entry=['z'])
-
-    assert scenes[0]['entry_state_refs'] == ['z'], '首场自动承接章首状态'
-    assert scenes[1]['entry_state_refs'] == ['a', 'z']
-    assert scenes[2]['exit_state_refs'] == ['a', 'b', 'c', 'z']
-
-    bad, transition_bad, _unknown = checks.temporal_state_findings(
-        scenes, prefix='ch1', land_key='land_fact_refs',
-        entry_key='entry_state_refs', exit_key='exit_state_refs')
-    assert (bad, transition_bad) == ([], [])
-
-
-def test_a_return_restores_the_anchor_state_by_derivation_too():
-    scenes = _derived(
-        ('start', ['a'], [], ['a']),
-        ('earlier', ['b'], [], ['b']),
-        ('return', ['c'], [], ['c']))
-    assert scenes[1]['entry_state_refs'] == [], 'earlier 支路不继承主线状态'
-    assert 'a' in scenes[2]['entry_state_refs'], 'return 恢复锚点'
-    assert 'b' not in scenes[2]['entry_state_refs'], '不把支路末场状态带回主线'
-    bad, _t, _u = checks.temporal_state_findings(
-        scenes, prefix='ch1', land_key='land_fact_refs',
-        entry_key='entry_state_refs', exit_key='exit_state_refs')
-    assert bad == []
-
-
-def test_an_ambiguous_branch_is_left_alone_instead_of_being_guessed():
-    """配不出唯一锚点时**不派生**——那里只报 unver，交人判断。"""
-    scenes = _derived(
-        ('start', ['a'], [], ['a']),
-        ('earlier', ['b'], [], ['b']),
-        ('parallel', ['c'], [], ['c']),
-        ('return', ['d'], [], ['d']))
-    assert scenes[3]['entry_state_refs'] == [], '支路不唯一 ⇒ 不替它编一个锚点'
-    _bad, _t, unknown = checks.temporal_state_findings(
-        scenes, prefix='ch1', land_key='land_fact_refs',
-        entry_key='entry_state_refs', exit_key='exit_state_refs')
-    assert any('没有唯一可证明的本章支路锚点' in row for row in unknown)
-
-
-def test_derivation_never_manufactures_a_chapter_ending_that_was_not_established():
-    """派生**不掩盖真问题**：land 一个事实不等于把它写进状态面。"""
-    scenes = _derived(
-        ('start', ['a'], [], ['a']),
-        ('continue', ['ending_fact'], [], []))
-    assert 'ending_fact' not in scenes[-1]['exit_state_refs']
-
-
-def test_the_state_closure_rule_is_still_a_real_guard_on_hand_edited_plans():
-    """判据一条都不撤：`--apply-edit` 的人工计划不经过派生，那里它仍会红。"""
-    plan = _compiled()
-    scene = plan['output_chapters'][0]['scenes'][1]
-    scene['transition'] = 'continue'
-    scene['entry_state_refs'] = []          # 人手写出来的、没承接的一场
-    findings = _findings(plan)
-    assert findings['state_closure'], '人工稿绕过编译器 ⇒ 后置条件仍是真守卫'
-
-
-def _ctx_scenes(*rows: tuple[list[str], list[str]]) -> list[dict]:
-    return [{'land_fact_refs': land, 'context_fact_refs': ctx} for land, ctx in rows]
-
-
-def test_a_land_fact_may_be_referenced_as_background_only_after_it_lands():
-    """判据防的是「提前引用还没披露的事实」，不是「已经发生过的事别再提」。
-
-    ⚠ v8 实测：被拒候选里 54 条 context 引用，**43 条已在更早场落地**、真泄漏 0 条
-    ⇒ 旧口径在那本书上 43/44 是误红。
-    """
-    scenes = _ctx_scenes((['a'], []), (['b'], ['a']))
-    assert checks.context_ref_findings(
-        scenes, context_obligation_refs=set(),
-        land_key='land_fact_refs', context_key='context_fact_refs') == []
-
-
-def test_referencing_a_fact_before_or_at_its_landing_scene_is_still_hard():
-    """真泄漏方向一格没松：还没披露就当背景引用，照旧红。"""
-    early = _ctx_scenes((['a'], ['b']), (['b'], []))
-    assert checks.context_ref_findings(
-        early, context_obligation_refs=set(),
-        land_key='land_fact_refs', context_key='context_fact_refs') == ["scene1:['b']"]
-
-    # 同一场既 land 又 context 不算已确立：那是同一个时点。
-    same = _ctx_scenes((['a'], ['a']),)
-    assert checks.context_ref_findings(
-        same, context_obligation_refs=set(),
-        land_key='land_fact_refs', context_key='context_fact_refs') == ["scene1:['a']"]
-
-
-def test_a_context_ref_that_never_lands_anywhere_is_still_hard():
-    scenes = _ctx_scenes((['a'], ['ghost']),)
-    assert checks.context_ref_findings(
-        scenes, context_obligation_refs=set(),
-        land_key='land_fact_refs', context_key='context_fact_refs') == ["scene1:['ghost']"]
-    # 真 context 义务的原子不需要落地。
-    assert checks.context_ref_findings(
-        scenes, context_obligation_refs={'ghost'},
-        land_key='land_fact_refs', context_key='context_fact_refs') == []
-
-
-def test_chapter_ending_is_closed_by_landing_the_fact_not_by_declaring_it_twice():
-    """v8 实测：7 条「章尾未闭合」7/7 都已在第 2~3 场落地——那是要模型写两遍。"""
-    plan = _compiled()
-    scenes = plan['output_chapters'][0]['scenes']
-    scenes[-1]['exit_state_refs'] = []       # 末场不再复述状态
-    assert 'f01_003' in scenes[-1]['land_fact_refs'], '但它确实在本章落了地'
-    assert _findings(plan)['state_closure'] == []
-
-
-def test_an_ending_fact_that_never_lands_still_fails_chapter_closure():
-    plan = _compiled()
-    chapter = plan['output_chapters'][0]
-    for scene in chapter['scenes']:
-        scene['land_fact_refs'] = [r for r in scene['land_fact_refs'] if r != 'f01_003']
-        scene['exit_state_refs'] = [r for r in scene['exit_state_refs'] if r != 'f01_003']
-    findings = _findings(plan)
-    assert findings['state_closure'], '章尾要求的事实压根没落进本章 ⇒ 必须红'
-    assert '章尾状态未在本章确立' in findings['state_closure'][0].detail
-    assert findings['fact_coverage'], 'fact_coverage 同向再报一次'

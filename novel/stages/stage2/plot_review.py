@@ -206,6 +206,10 @@ def apply_review(
                     subjects.add(('state', row['state']['state_id']))
                     for anchor in row['evidence']:
                         support_ranges.setdefault(row['chapter_ordinal'], set()).add(anchor['evidence_id'])
+                if isinstance(row, dict) and 'subject_ref' in row and 'evidence' in row:
+                    subjects.add((row['subject_ref']['kind'], row['subject_ref']['ref']))
+                    for anchor in row['evidence']:
+                        support_ranges.setdefault(row['chapter_ordinal'], set()).add(anchor['evidence_id'])
     new_ids = {}
     updated = dict(existing)
     for issue in response.new_issues:

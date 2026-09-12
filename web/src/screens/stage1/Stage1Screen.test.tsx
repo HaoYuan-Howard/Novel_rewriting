@@ -37,7 +37,7 @@ describe('Stage1Screen 信息与操作布局', () => {
       anomaly_count: 0,
     })
     vi.spyOn(api, 'getApprovals').mockResolvedValue({
-      v: 6,
+      v: 7,
       sid: 'book-1',
       gate: {
         s0: true,
@@ -114,7 +114,7 @@ describe('Stage1Screen 信息与操作布局', () => {
       anomaly_count: 3,
     })
     vi.spyOn(api, 'getApprovals').mockResolvedValue({
-      v: 6,
+      v: 7,
       sid: 'book-1',
       gate: { s0: true, s1: false, s2: false, s4: false, s5: false, s6: false, s7: false },
       seen: { read: false, global: false },
@@ -148,7 +148,7 @@ describe('Stage1Screen 信息与操作布局', () => {
   it('正文接口失败时仍保留校验与确认恢复面', async () => {
     vi.spyOn(api, 'getStage1').mockRejectedValue(new Error('正文接口读取失败'))
     vi.spyOn(api, 'getApprovals').mockResolvedValue({
-      v: 6,
+      v: 7,
       sid: 'book-1',
       gate: { s0: true, s1: false, s2: false, s4: false, s5: false, s6: false, s7: false },
       seen: { read: false, global: false },

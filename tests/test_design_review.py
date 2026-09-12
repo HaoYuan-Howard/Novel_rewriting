@@ -28,6 +28,7 @@ from novel.stages.stage4.design_evolution import (
 SID = '123'
 FACT = 'a_' + '1' * 16
 PERSON = 'a_' + '2' * 16
+BEAT2 = 'a_' + '3' * 16
 
 
 def test_design_history_summary_constructs_and_roundtrips_without_workpack_copy():
@@ -99,20 +100,21 @@ def _subjects(
             'mode': 'retain', 'reason': '单章夹具保持直接推进。',
             'declared_change_kinds': [],
         },
-        'chapter_goal': {'intent': 'G_ADVANCE', 'fact_aliases': [FACT]},
-        'open_hook_goal': {'intent': 'G_OPEN', 'fact_aliases': [FACT]},
-        'end_hook_goal': {'intent': 'G_CLOSE', 'fact_aliases': [FACT]},
+        'chapter_goal': {'intent': 'G_ADVANCE', 'subject_aliases': [FACT], 'anchor_beat_alias': FACT, 'anchor_scene_ref': 's01'},
+        'open_hook_goal': {'intent': 'G_OPEN', 'subject_aliases': [FACT], 'anchor_beat_alias': FACT, 'anchor_scene_ref': 's01'},
+        'end_hook_goal': {'intent': 'G_CLOSE', 'subject_aliases': [FACT], 'anchor_beat_alias': FACT, 'anchor_scene_ref': 's01'},
         'weight': 'CH_EVEN',
         'chapter_rewrite_brief': brief,
         'scenes': [{
-            'candidate_scene_id': 'c01s01',
+            'candidate_scene_id': 'c01s01', 'scene_ref': 's01',
             'weight': 'W_MID', 'purpose': '以新场景落下事实',
             'role': 'R_SETUP', 'delivery': 'D_SCENE',
             'transition': 'X_START',
-            'land_fact_aliases': [FACT], 'context_fact_aliases': [],
-            'turn_fact_alias': FACT,
-            'entry_state_aliases': [], 'exit_state_aliases': [],
+            'context_beat_aliases': [], 'turn_beat_alias': FACT,
         }],
+        'beat_placements': [{'beat_alias': alias, 'deliveries': [
+            {'scene_ref': 's01', 'presentation_instruction': None}]} for alias in (FACT, BEAT2)],
+        'anchor_bindings': [],
     })
     subject = DesignChapterSubject(
         strategy_epoch_sha256=strategy_epoch,
@@ -121,19 +123,20 @@ def _subjects(
         blind_truth={
             'chapter_ordinal': 1,
             'chapter_function': '建立冲突',
-            'facts': [{
-                'fact_alias': FACT, 'claim': '她发现门已经打开。',
-                'kind': 'event', 'obligation': 'land',
-                'participant_aliases': [PERSON],
-            }],
-            'causal_edges': [],
-            'entry_state_aliases': [], 'ending_state_aliases': [],
+            'characters': [{'alias': PERSON, 'canonical': '她',
+                'surfaces': ['她'], 'role': '发现开门的人'}],
+            'beats': [{'alias': FACT, 'content': '她发现门已经打开。',
+                'participant_aliases': [PERSON]},
+                {'alias': BEAT2, 'content': '她随后走进门内。', 'participant_aliases': [PERSON]}],
+            'states': [], 'inherited_states': [], 'background_beats': [],
+            'constraints': [], 'knowledge': [], 'endpoints': [],
+            'entry_state_aliases': [], 'carry_out_aliases': [], 'global_subjects': [],
         },
         chapter=chapter,
         structure_evidence=DesignStructureEvidence(
             state='ok', declared_change_kinds=[], computed_change_kinds=[],
             realized_declared=[], unrealized_declared=[], undeclared_actual=[],
-            readings={'mapping_state': 'ok', 'land_facts': 1},
+            readings={'mapping_state': 'ok', 'beats': 2},
         ),
     )
     chapter_sha = approvals._decision_sha256({
@@ -842,8 +845,8 @@ def test_repair_constraints_accumulate_and_complete_edit_uses_one_opaque_token(
                            for item in second_template.constraint_catalog[1].items],
                 ),
                 'constraints': [DesignRepairConstraint(
-                    code='fact_grouping', scene_refs=[],
-                    opaque_aliases=[FACT, PERSON])],
+                    code='presentation_grouping', scene_refs=[],
+                    opaque_aliases=[FACT, BEAT2])],
             })],
         }))
     doc = approvals.approve_design(base, SID, second_request)
@@ -855,7 +858,7 @@ def test_repair_constraints_accumulate_and_complete_edit_uses_one_opaque_token(
     chapter_scope = resolved.chapters[0]
     assert chapter_scope.new_constraints == second_request.chapters[0].constraints
     assert {row.code for row in chapter_scope.accumulated_constraints} == {
-        'scene_goal', 'fact_grouping'}
+        'scene_goal', 'presentation_grouping'}
 
     chapter = second_template.chapters[0].subject.chapter.model_dump(mode='json')
     for scene in chapter['scenes']:
@@ -1019,7 +1022,7 @@ def _template_for_http() -> DesignReviewTemplate:
             'constraints': [{
                 'code': 'scene_goal',
                 'scene_refs': [subject.chapter.scenes[0].candidate_scene_id],
-                'opaque_aliases': [subject.blind_truth.facts[0].fact_alias],
+                'opaque_aliases': [subject.blind_truth.beats[0].alias],
             }],
         }],
     )
@@ -1027,9 +1030,9 @@ def _template_for_http() -> DesignReviewTemplate:
 
 def _blocked_preflight() -> DesignPreflightSummary:
     return _pass_preflight(status='blocked', failures=[DesignPreflightFailure(
-        code='fact_coverage', rule='fact_coverage', chapter_ordinal=1,
-        refs=['f_1'], repair_owner='stage4.design',
-        detail='land 事实未恰好落一次（测试注入）')])
+        code='placement_ref', rule='placement_ref', chapter_ordinal=1,
+        refs=['b01_01'], repair_owner='stage4.design',
+        detail='剧情节点 placement 不完整（测试注入）')])
 
 
 def test_blocked_preflight_refuses_accept_but_allows_repair(isolated):
@@ -1049,12 +1052,12 @@ def test_blocked_preflight_refuses_accept_but_allows_repair(isolated):
             'decision': 'request_repair',
             'reason': '按预检 witness 修订本章',
             'constraints': [DesignRepairConstraint(
-                code='fact_grouping',
+                code='presentation_grouping',
                 scene_refs=[row.subject.chapter.scenes[0].candidate_scene_id],
                 opaque_aliases=[
-                    row.subject.blind_truth.facts[0].fact_alias,
-                    # arity (0,2)：fact_grouping 至少要两个 opaque alias。
-                    row.subject.blind_truth.facts[0].participant_aliases[0],
+                    row.subject.blind_truth.beats[0].alias,
+                    # arity (0,2)：presentation_grouping 至少要两个 opaque alias。
+                    row.subject.blind_truth.beats[1].alias,
                 ])],
             'source_decision_sha256': None}) for row in template.chapters],
     }))

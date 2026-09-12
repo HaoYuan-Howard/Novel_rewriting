@@ -36,6 +36,7 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
     bps = {row['chapter_ordinal']: PlotBlueprint.model_validate(row)
            for row in blueprints['blueprints']}
     states = {state.state_id: state for bp in bps.values() for state in bp.states}
+    all_beats = {beat.beat_id: beat for bp in bps.values() for beat in bp.beats}
     texts = {row['chapter_ordinal']: row['text'] for row in main_text}
     characters = global_g['entities']['characters']
     naming, available_names = person_naming_surfaces(characters), surface_first_chapter(characters)
@@ -57,8 +58,17 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
         positions = {slot: i for i, slot in enumerate(slots)}
         endpoints = {row.key(): row.scene_ref for row in compiled.bindings}
         contexts = source_context_catalog(bp)
+        current_obligations = [row for row in links.scope.obligations if row.chapter_ordinal == ordinal]
         current_state_ids = set(bp.entry_state_refs) | {s.state_id for s in bp.states}
+        current_state_ids.update(row.subject_ref.ref for row in current_obligations
+                                 if row.subject_ref.kind == 'state')
         current_states = [states[ref] for ref in sorted(current_state_ids)]
+        hidden_states = {ref for ref in current_state_ids if any(
+            row.kind == 'reader_reveal' and row.subject_ref.kind == 'state' and row.subject_ref.ref == ref
+            and row.chapter_ordinal > ordinal for row in links.scope.obligations)}
+        visible_states = [row for row in current_states if row.state_id not in hidden_states]
+        background = {row.subject_ref.ref for row in current_obligations
+                      if row.subject_ref.kind == 'beat' and row.subject_ref.ref not in {b.beat_id for b in bp.beats}}
         needed_chars = {cid for beat in bp.beats for cid in beat.participant_char_ids}
         needed_chars.update(s.holder_char_id for s in current_states if s.holder_char_id)
         needed_chars.update(cid for row in contexts.values() for cid in row['present_char_ids'] or [])
@@ -66,12 +76,11 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
             for cid in (segment.narrator_char_id, segment.focalizer_char_id) if cid)
         needed_chars.update(c.observer_char_id for c in bp.constraints
                             if getattr(c, 'observer_char_id', None))
+        needed_chars.update(cid for ref in background for cid in all_beats[ref].participant_char_ids)
         needed = {('state', ref) for ref in current_state_ids}
         needed.update(_key(s.global_ref.model_dump()) for s in current_states if s.global_ref)
         for name in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
             needed.update(_key(ref) for ref in chapter[name]['subject_refs'])
-        current_obligations = [row for row in links.scope.obligations
-                               if row.chapter_ordinal == ordinal]
         needed.update((r.subject_ref.kind, r.subject_ref.ref) for r in current_obligations)
         for kind, ref in tuple(needed):
             if kind == 'character':
@@ -129,7 +138,7 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
                 raise RefusedByStructure(f'知识事件未唯一登记：{kind}:{ref}')
             return event_slots(rows[0])
 
-        global_rows, restricted = [], []
+        global_rows, restricted = [], [{'kind': 'state', 'ref': ref} for ref in sorted(hidden_states)]
         for kind, ref in sorted(needed):
             if kind in ('beat', 'state', 'constraint', 'chapter_boundary', 'character'):
                 continue
@@ -183,18 +192,25 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
                 factual_slots = permission('setting', ref)
                 visible = value
             state_permissions = []
-            for state in current_states:
+            for state in visible_states:
                 if state.global_ref is None or _key(state.global_ref.model_dump()) != (kind, ref):
                     continue
-                state_slots = permission('state_reveal', state.state_id)
+                reader_events = [row for row in links.scope.obligations
+                    if row.kind == 'reader_reveal'
+                    and row.subject_ref.kind == 'state' and row.subject_ref.ref == state.state_id]
+                if len(reader_events) > 1:
+                    raise RefusedByStructure('状态不能具有两套读者披露时间线')
+                state_slots = event_slots(reader_events[0]) if reader_events else factual_slots
                 if state.modality == 'world':
-                    if not set(state_slots) <= set(factual_slots):
+                    if not factual_slots or not set(state_slots) <= set(factual_slots):
                         raise RefusedByStructure('客观状态的披露不能越过所引用主体的真相许可')
-                elif state_slots:
+                elif state_slots and reader_events:
                     if kind == 'world_rule' and not factual_slots:
                         raise RefusedByStructure('状态引用世界规则缺少可用版本；须明确有据命题，不能猜规则版本')
                     state_permissions.append({'state_ref': state.state_id, 'modality': state.modality,
                                               'allowed_slots': state_slots})
+                elif not factual_slots and not reader_events:
+                    raise RefusedByStructure('状态引用未开放的共享命题，须明确登记必要读者许可，不能默认为已知')
             if not factual_slots and not state_permissions:
                 restricted.append({'kind': kind, 'ref': ref})
             else:
@@ -213,7 +229,7 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
                     raise RefusedByStructure('目标引用未开放主体，只能明确保留未知，不能提前落地')
             for event in events:
                 if event['kind'] not in ('secret_reveal', 'relation_visibility',
-                                         'world_rule_reveal', 'state_reveal', 'character_state'):
+                                         'world_rule_reveal', 'reader_reveal', 'character_state'):
                     continue
                 if (event['subject_ref'] in goal['subject_refs']
                         and goal['intent'] != 'withhold'
@@ -269,10 +285,13 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
             'semantic_contract': semantic_contract_of(bp.model_dump(mode='json')),
             'beats': [{'beat_ref': b.beat_id, 'content': b.content,
                        'participant_char_ids': b.participant_char_ids} for b in bp.beats],
+            'background_beats': [{'beat_ref': ref, 'content': all_beats[ref].content,
+                                  'participant_char_ids': all_beats[ref].participant_char_ids}
+                                 for ref in sorted(background)],
             'states': [{'state_ref': s.state_id, 'content': s.content,
                         'global_ref': s.global_ref.model_dump() if s.global_ref else None,
                         'modality': s.modality, 'holder_char_id': s.holder_char_id}
-                       for s in current_states],
+                       for s in visible_states],
             'constraints': [{'constraint_ref': c.constraint_id,
                              **c.model_dump(exclude={'constraint_id', 'evidence_refs'})}
                             for c in bp.constraints],

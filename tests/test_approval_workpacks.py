@@ -19,13 +19,12 @@ from contracts.rules import REGISTRY
 from contracts.schema.api import (
     ApprovalDoc, ApprovalWorkpack, DesignReviewView, StructureApprovalDecision,
     StructureApprovalView, StructureChapterReading, WorkpackGroup, WorkpackItem,
-    WorkpackSceneReading,
 )
 from contracts.schema.stage4 import BindingConcern, PlanChapter
 from novel import paths, prov
 from novel.cli import main as cli
 from novel.orchestrator import approvals
-from novel.stages.stage4 import checks, plan
+from novel.stages.stage4 import plan
 from novel.views import inbox as inbox_view
 from tests.test_design_review import _mixed_repair_subjects
 from tests.test_stage4_agent_boundary import (
@@ -35,6 +34,37 @@ from tests.test_stage4_agent_boundary import (
 
 
 SID = '123'
+
+
+def _structure_fixtures(response=None):
+    """两章当前编译链的裁决材料；不读取历史原子化样本。"""
+    from contracts.schema.plot import PlotBlueprint
+    from contracts.schema.plot_materials import PlotChapterReviewMaterials
+    from novel.stages.stage4.plot_binding import (
+        build_evidence_catalog, construct_feasible_binding_witness,
+        merge_evidence_bindings, source_context_catalog,
+    )
+    from novel.stages.stage4.measure import adopt_plan_response
+    from novel.stages.stage4.beats import beat_index
+    from tests.test_plot_binding import candidate_book
+    from tests.test_plot_blueprint import SOURCE
+    blueprints, candidate = candidate_book(response)
+    catalog = build_evidence_catalog(blueprints)
+    payload = merge_evidence_bindings(candidate,
+        construct_feasible_binding_witness(candidate, catalog), catalog)
+    source = [{'chapter_ordinal': n, 'text': SOURCE} for n in (1, 2)]
+    adopt_plan_response(payload, blueprints, beat_index(blueprints, source))
+    chapters = [PlanChapter.model_validate(row) for row in payload['output_chapters']]
+    bps = {row['chapter_ordinal']: row for row in blueprints['blueprints']}
+    materials = {}
+    for ordinal, raw in bps.items():
+        bp = PlotBlueprint.model_validate(raw)
+        materials[ordinal] = PlotChapterReviewMaterials(
+            blueprint=bp, support_subjects=[], global_subjects=[], knowledge_events=[],
+            source_context_catalog=source_context_catalog(bp), evidence_anchors=[],
+            source_materials=[{'chapter_ordinal': ordinal,
+                'ranges': [{'start': 0, 'end': len(SOURCE), 'text': SOURCE}]}])
+    return bps, chapters, materials
 
 
 def _coverage_item(
@@ -220,15 +250,15 @@ def test_real_design_and_structure_workpacks_are_read_only_and_zero_spawn(
     assert design.reading is not None and structure.reading is not None
     for row in design.groups[-1].items:
         assert row.reading is not None
-        assert row.reading.kind == 'stage4_design_chapter_reading_v1'
-        assert row.reading.scenes and row.reading.facts
+        assert row.reading.kind == 'stage4_design_chapter_reading_v2'
+        assert row.reading.chapter.scenes and row.reading.truth.beats
     for row in structure.groups[-1].items:
         assert row.reading is not None
-        assert row.reading.kind == 'stage4_structure_chapter_reading_v1'
-        assert row.reading.scenes[0].land, '逐场 land 事实必须给出 id'
-        assert row.reading.facts, '本章 facts 表必须把引用到的 id 解成 claim'
-        assert {fact.ref for fact in row.reading.facts} >= set(
-            row.reading.scenes[0].land)
+        assert row.reading.kind == 'stage4_structure_chapter_reading_v2'
+        assert row.reading.chapter.beat_placements, '呈现映射必须完整下发'
+        assert row.reading.materials.blueprint.beats, '正文只在本章蓝图出现一次'
+        assert {beat.beat_id for beat in row.reading.materials.blueprint.beats} == {
+            placement.beat_ref for placement in row.reading.chapter.beat_placements}
         assert 'alignment' in row.reading.structure_metrics
     assert all(
         item.refs == [] or len(item.detail) <= 300
@@ -295,7 +325,7 @@ def test_workpack_builders_fail_closed_when_subject_changes_mid_read(
     snapshots = iter((before, after))
     monkeypatch.setattr(
         approvals, '_structure_workpack_snapshot',
-        lambda _novel_dir: next(snapshots))
+        lambda _novel_dir, **_kwargs: next(snapshots))
     monkeypatch.setattr(
         plan, 'run_check_only', lambda _ctx: SimpleNamespace(rules=[]))
     with pytest.raises(approvals.ArtifactUnreadable, match='复检期间变化'):
@@ -340,16 +370,18 @@ def test_design_builder_marks_only_exact_history_and_sorts_changed_first(
     assert focus['reading'] == 'design_chapter_coverage:ch1'
     reading = coverage[0].reading
     assert reading is not None
-    assert reading.kind == 'stage4_design_chapter_reading_v1'
-    assert reading.facts[0].claim == '她发现门已经打开。'
-    assert reading.scenes[0].scene_ref == 'c01s01'
-    assert reading.scenes[0].land[0] == reading.facts[0].fact_alias
-    assert reading.scenes[0].turn == reading.facts[0].fact_alias
-    assert reading.goals['chapter'].refs[0] == reading.facts[0].fact_alias
+    assert reading.kind == 'stage4_design_chapter_reading_v2'
+    beat = reading.truth.beats[0]
+    assert beat.content == '她发现门已经打开。'
+    assert reading.chapter.scenes[0].candidate_scene_id == 'c01s01'
+    assert reading.chapter.beat_placements[0].beat_alias == beat.alias
+    assert reading.chapter.beat_placements[0].deliveries[0].scene_ref == 's01'
+    assert reading.chapter.scenes[0].turn_beat_alias == beat.alias
+    assert reading.chapter.chapter_goal.subject_aliases[0] == beat.alias
     assert workpack.v == 2 and workpack.reading is not None
     assert workpack.reading.reconstruction_strategy \
         == subjects.strategy.reconstruction_strategy
-    assert 'refs' in workpack.reading.legend
+    assert {'beats', 'delivery', 'endpoints'} <= workpack.reading.legend.keys()
     rendered = json.dumps(workpack.model_dump(mode='json'), ensure_ascii=False)
     assert not re.search(
         r'\bf\d{2,}_\d{3,}\b|\bb\d{2}_\d{2}\b|\bh\d{2,}_\d{3,}\b|char_\d',
@@ -366,12 +398,12 @@ def test_structure_groups_focus_unknown_disclosures_and_exact_history(
 
     report = SimpleNamespace(rules=[
         SimpleNamespace(
-            rule='state_closure', sev='hard', status='unver', findings=[],
-            why='非线性故事时点无真值', item='状态闭合'),
+            rule='presentation_semantics', sev='info', status='unver', findings=[],
+            why='联合呈现无法机械证明保真', item='呈现语义'),
         SimpleNamespace(
             rule='semantic_closure_reading', sev='metric', status='ok',
             findings=[finding(json.dumps({
-                'state_unknown_findings': ['ch1.s02:later 支路未唯一 return'],
+                'semantic_review_required': ['ch1.s02:状态结果与人物归因需语义复核'],
             }, ensure_ascii=False))], why=None, item='语义闭合读数'),
         SimpleNamespace(
             rule='causal_disclosure', sev='info', status='hit',
@@ -383,45 +415,7 @@ def test_structure_groups_focus_unknown_disclosures_and_exact_history(
                 '[' + ','.join(['{"anchors":"整书逐章读数"}'] * 24) + ']')],
             why=None, item='锚点迁移'),
     ])
-    from contracts.invariants import (
-        DELIVERY_MODES, FACT_ATOM_KINDS, GOAL_INTENTS, STRUCTURAL_ROLES,
-        TEMPORAL_LINKS, TIME_LAYERS,
-    )
-
-    def blueprint(ordinal: int) -> dict:
-        return {
-            'chapter_ordinal': ordinal, 'chapter_function': '建立冲突',
-            'fact_atoms': [{
-                'fact_id': 'f01_001', 'claim': '她发现门已经打开。',
-                'kind': FACT_ATOM_KINDS[0], 'obligation': 'land',
-                'source_beat_ref': 'b01_01', 'source': None,
-                'participant_char_ids': ['char_001']}],
-            'beats': [{
-                'beat_id': 'b01_01', 'span': None, 'time_layer': TIME_LAYERS[0],
-                'place': '门口', 'present_char_ids': ['char_001'], 'hinges': []}],
-            'causal_edges': [], 'narrative_relations': [],
-            'entry_state_refs': [], 'ending_state_refs': [], 'narration': [],
-        }
-
-    def chapter(ordinal: int) -> PlanChapter:
-        goal = {'intent': GOAL_INTENTS[0],
-                'fact_refs': [{'kind': 'fact_atom', 'ref': 'f01_001'}]}
-        return PlanChapter.model_validate({
-            'output_ordinal': ordinal, 'from_source_ordinals': [ordinal],
-            'chapter_goal': goal, 'open_hook_goal': goal, 'end_hook_goal': goal,
-            'structure_decision': {
-                'mode': 'retain', 'reason': '保持直接推进',
-                'declared_change_kinds': []},
-            'chapter_rewrite_brief': '按事实义务直接推进',
-            'scenes': [{
-                'slot': 's01', 'budget_chars': 800, 'purpose': '落下事实',
-                'role': STRUCTURAL_ROLES[0], 'delivery': DELIVERY_MODES[0],
-                'transition': TEMPORAL_LINKS[0],
-                'land_fact_refs': ['f01_001'], 'context_fact_refs': [],
-                'material_refs': [], 'turn_fact_ref': 'f01_001',
-                'entry_state_refs': [], 'exit_state_refs': [],
-                'stage_refs': ['b01_01']}],
-        })
+    bps, chapters, materials = _structure_fixtures()
 
     signature = WorkpackItem(
         code='stage_signature_conflict:abc', rule='stage_signature_conflict',
@@ -457,15 +451,15 @@ def test_structure_groups_focus_unknown_disclosures_and_exact_history(
         record, Path('.'),
         subject_sha256='a' * 64,
         chapter_subject_sha256={1: '1' * 64, 2: 'f' * 64},
-        plan=SimpleNamespace(output_chapters=[chapter(1), chapter(2)]),
+        plan=SimpleNamespace(output_chapters=chapters),
         concerns=[BindingConcern(
             constraint_code='stage_conflict', chapter_ordinal=1,
             scenes=['c01s01'], reason='绑定仍有语义担忧',
-            closed_refs=['f01_001', 'b01_01', 'h99_999'])],
+            closed_refs=['b01_01', 'e01_01', 'unknown_ref'])],
         report=report,
-        blueprint_by_ordinal={1: blueprint(1), 2: blueprint(2)})
+        blueprint_by_ordinal=bps, chapter_materials=materials)
     by_group = {group.group: group for group in groups}
-    assert 'state_unknown_findings' in by_group['semantic_attention'].items[0].detail
+    assert 'semantic_review_required' in by_group['semantic_attention'].items[0].detail
     assert any(item.code.startswith('stage_signature_conflict')
                for item in by_group['disclosure'].items)
     assert any(item.code.startswith('binding_concern')
@@ -493,21 +487,20 @@ def test_structure_groups_focus_unknown_disclosures_and_exact_history(
     first = next(row for row in coverage if row.chapter_ordinal == 1)
     reading = first.reading
     assert reading is not None
-    assert reading.kind == 'stage4_structure_chapter_reading_v1'
-    assert reading.chapter_function == '建立冲突'
-    assert reading.scenes[0].scene_ref == 's01'
-    assert reading.scenes[0].land == ['f01_001']
-    assert reading.scenes[0].turn == 'f01_001'
-    assert reading.scenes[0].stages[0].place == '门口'
-    assert [fact.ref for fact in reading.facts] == ['f01_001']
-    assert reading.facts[0].claim == '她发现门已经打开。'
-    assert reading.facts[0].obligation == 'land'
-    assert reading.goals['chapter'].refs == ['f01_001']
+    assert reading.kind == 'stage4_structure_chapter_reading_v2'
+    assert reading.materials.blueprint.chapter_function == '回顾施救动机并决定离开'
+    assert reading.chapter.scenes[0].slot == 's01'
+    assert {row.beat_ref for row in reading.chapter.beat_placements} == {'b01_01', 'b01_02'}
+    assert reading.chapter.scenes[0].turn_beat_ref == chapters[0].scenes[0].turn_beat_ref
+    assert reading.materials.blueprint.beats[0].source_contexts[0].time_layer == 'recall'
+    assert {beat.beat_id for beat in reading.materials.blueprint.beats} == {'b01_01', 'b01_02'}
+    assert reading.materials.blueprint.beats[0].content == '娘子回忆自己当初因对方富有且好看而施救。'
+    assert reading.chapter.chapter_goal.subject_refs[0].ref in {'b01_01', 'b01_02'}
     assert 'adjacency' not in reading.structure_metrics
-    assert reading.structure_metrics['alignment']['mode'] == 'retain'
+    assert reading.structure_metrics['alignment']['declared']['mode'] == 'retain'
     assert [ref.kind for ref in reading.binding_concerns[0].closed_refs] \
-        == ['fact', 'beat', 'unknown']
-    assert reading.binding_concerns[0].closed_refs[0].text == '她发现门已经打开。'
+        == ['beat', 'evidence', 'unknown']
+    assert reading.binding_concerns[0].closed_refs[0].text is None, '问题引用不再复制节点正文'
     assert reading.signature_conflict_codes == ['stage_signature_conflict:abc']
     second = next(row for row in coverage if row.chapter_ordinal == 2)
     assert second.reading is not None and second.reading.binding_concerns == []
@@ -515,12 +508,9 @@ def test_structure_groups_focus_unknown_disclosures_and_exact_history(
 
 def test_reading_only_lives_on_coverage_rows_and_matches_kind() -> None:
     """reading 是 coverage 行的裁决材料；放错行、放错面都关闭式拒绝。"""
-    scene = WorkpackSceneReading(
-        scene_ref='s01', purpose='落下事实', role='setup',
-        delivery='scene', transition='start')
+    _bps, chapters, materials = _structure_fixtures()
     structure_reading = StructureChapterReading(
-        chapter_function='建立冲突', chapter_rewrite_brief='直接推进',
-        structure_decision={'mode': 'retain'}, goals={}, scenes=[scene],
+        materials=materials[1], chapter=chapters[0],
         structure_metrics={'state': 'unver'})
     with pytest.raises(ValidationError):
         WorkpackItem(
@@ -543,41 +533,40 @@ def test_reading_only_lives_on_coverage_rows_and_matches_kind() -> None:
 
 
 def test_stage_signature_conflict_discloses_every_candidate_without_threshold() -> None:
-    beats = [{
-        'beat_id': f'b01_{index:02d}',
-        'time_layer': 'now' if index % 2 else 'recall',
-        'place': f'地点{index}',
-        'present_char_ids': [f'c{index}'],
+    from contracts.schema.plot import PlotBlueprint
+    from novel.stages.stage4.plot_binding import source_context_catalog
+    from novel.stages.stage4.plot_measure import constraint_and_stage_readings
+    from tests.plot_fixtures import links
+    from tests.test_plot_blueprint import chapter_response
+    response = chapter_response()
+    response['beats'][0]['source_contexts'] = [{
+        'time_layer': 'present' if index % 2 else 'recall',
+        'place': f'地点{index}', 'present_char_ids': ['char_001', 'char_002'],
+        'evidence': [{'start_para': 1, 'end_para': 1}],
     } for index in range(1, 11)]
-    atoms = [{
-        'fact_id': f'f_{index:02d}',
-        'source_beat_ref': f'b01_{index:02d}',
-    } for index in range(1, 11)]
-    rows = checks.stage_signature_conflict_findings(
-        [{'output_ordinal': 1, 'scenes': [{
-            'slot': 's01',
-            'land_fact_refs': [f'f_{index:02d}' for index in range(1, 11)],
-        }]}],
-        {1: {'beats': beats, 'fact_atoms': atoms}},
-    )
-    assert len(rows) == 1
-    _ordinal, detail, evidence = rows[0]
-    assert 'b01_10' in detail and 'c10' in detail
-    assert 'f_10' in detail
-    assert all(f'f_{index:02d}' in evidence for index in range(1, 11))
-    assert all(f'b01_{index:02d}' in evidence for index in range(1, 11))
+    bps, chapters, _materials = _structure_fixtures(response)
+    bp = PlotBlueprint.model_validate(bps[1])
+    catalog = source_context_catalog(bp)
+    refs = sorted(ref for ref, value in catalog.items() if value['beat_ref'] == 'b01_01')
+    chapter = chapters[0].model_dump(mode='json')
+    placement = next(p for p in chapter['beat_placements'] if p['beat_ref'] == 'b01_01')
+    placement['deliveries'][0]['source_context_refs'] = refs
+    reading = constraint_and_stage_readings(bps[1], chapter, knowledge_links=links())
+    selected = next(row for row in reading['stage'] if row['slot'] == placement['deliveries'][0]['scene_ref'])
+    assert selected['context_refs'] == refs and len(refs) == 10
+    assert selected['signature_count'] == 10 and selected['multiple_signatures']
+    assert {catalog[ref]['place'] for ref in selected['context_refs']} == {
+        f'地点{index}' for index in range(1, 11)}
+    assert not selected['unknown_context']
     rule = REGISTRY.get('stage_signature_conflict')
     assert rule.sev == 'info' and rule.requirement == 'R-5.24'
 
 
 def test_signature_workpack_projects_the_production_finding_byte_for_byte() -> None:
-    evidence = [
-        's01', 'f_01', 'f_10', 'b01_01', 'b01_10',
-        'f_01=>b01_01', 'f_10=>b01_10',
-    ]
+    evidence = ['s01', 'scx_01', 'scx_10']
     detail = json.dumps({
-        'fact_to_source_beat': {'f_01': 'b01_01', 'f_10': 'b01_10'},
-        'signatures': {'b01_01': {'place': '甲'}, 'b01_10': {'place': '乙'}},
+        'slot': 's01', 'context_refs': ['scx_01', 'scx_10'],
+        'signature_count': 2, 'multiple_signatures': True, 'unknown_context': False,
     }, ensure_ascii=False)
     line = SimpleNamespace(
         rule='stage_signature_conflict', sev='info', status='hit',
@@ -759,13 +748,14 @@ def test_two_workpack_gets_and_cli_parser_expose_the_read_only_surface(
 
     design = _sample_workpack(kind='design')
     structure = _sample_workpack(kind='structure')
+    (tmp_path / f'工作包_{SID}').mkdir()
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(
         route.approvals, 'design_workpack',
-        lambda _base, sid: calls.append(('design', sid)) or design)
+        lambda _base, sid, **_kwargs: calls.append(('design', sid)) or design)
     monkeypatch.setattr(
         route.approvals, 'structure_workpack',
-        lambda _base, sid: calls.append(('structure', sid)) or structure)
+        lambda _base, sid, **_kwargs: calls.append(('structure', sid)) or structure)
     before = _tree(tmp_path)
     with TestClient(create_app(tmp_path)) as client:
         headers = {UI_HEADER: '1'}
@@ -773,7 +763,7 @@ def test_two_workpack_gets_and_cli_parser_expose_the_read_only_surface(
             f'/api/novels/{SID}/approvals/design/workpack', headers=headers)
         got_structure = client.get(
             f'/api/novels/{SID}/approvals/structure/workpack', headers=headers)
-    assert got_design.status_code == got_structure.status_code == 200
+    assert got_design.status_code == got_structure.status_code == 200, (got_design.text, got_structure.text)
     assert got_design.json()['kind'] == 'design'
     assert got_structure.json()['kind'] == 'structure'
     assert calls == [('design', SID), ('structure', SID)]

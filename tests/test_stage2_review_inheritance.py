@@ -7,7 +7,20 @@ from contracts.schema.api import Stage2NodeReviewDecision
 from contracts.schema.stage2_review import Stage2ReviewObligation, Stage2ReviewSubmission
 from novel.errors import ArtifactUnreadable, HumanEditProtected
 from novel.stages.stage2 import review_obligations as review
-from tests.test_stage2_knowledge_links import produced  # noqa: F401
+from tests.test_plot_producer import plot_contract, prepare_book, generate_plot
+
+
+@pytest.fixture
+def produced(tmp_path):
+    return generate_plot(prepare_book(tmp_path))
+
+
+def _accept_current(ctx):
+    from tests.stage2_fixtures import accept_and_materialize_links
+    from novel.orchestrator import approvals
+    from novel.views.stage2 import blueprint_review_workpack
+    accept_and_materialize_links(ctx)
+    return approvals.get(ctx.novel_dir.parent, ctx.sid, include_spawns=False), blueprint_review_workpack(ctx.novel_dir.parent, ctx.sid, scope='cross_chapter')
 
 
 def _obligation(key, content, *, refs=()):
@@ -113,7 +126,6 @@ def test_current_head_cannot_be_detached_from_immutable_history():
 
 def test_source_damage_is_explicit_unknown_and_free_closure_is_unavailable(produced, monkeypatch):
     from novel.orchestrator import approvals
-    from tests.test_stage2_knowledge_links import _accept_current
 
     ctx, _transport = produced
     base, sid = ctx.novel_dir.parent, ctx.sid
@@ -130,102 +142,61 @@ def test_source_damage_is_explicit_unknown_and_free_closure_is_unavailable(produ
     assert not approvals.stage2_review_closure_available(base, sid, node='stage2.global')
 
 
-def test_blueprint_http_acceptance_covers_real_catalog_and_projects_no_repeated_material(produced):
+def test_blueprint_http_acceptance_covers_real_scope_and_survives_restart(produced):
     from fastapi.testclient import TestClient
-    from contracts.schema.api import BlueprintReviewWorkpack, Stage2NodeReviewRequest
+    from contracts.schema.api import BlueprintReviewWorkpack
     from novel.api.app import UI_HEADER, create_app
-    from novel.orchestrator import approvals, reviewer_tasks, queue
-    from tests.test_stage2_knowledge_links import _submission
-
+    from novel.orchestrator import approvals
+    from tests.test_plot_review_runtime import request
     ctx, transport = produced
     base, sid = ctx.novel_dir.parent, ctx.sid
-    endpoint = f'/api/novels/{sid}/stage2/blueprint-review-workpack'
+    endpoint = f'/api/novels/{sid}/stage2/blueprint-review-workpack?scope=chapter:1'
     with TestClient(create_app(str(base))) as client:
         client.headers[UI_HEADER] = '1'
-        response = client.get(endpoint)
-        assert response.status_code == 200, response.text
-        first = BlueprintReviewWorkpack.model_validate(response.json())
-        assert first.review_coverage.pending_obligation_ids
-        first_identity = reviewer_tasks._stage2_progress_identity(
-            {'blueprint': first.model_dump(mode='json')}, queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW)
-        assert first_identity['blocker_count'] == len(first.review_coverage.pending_obligation_ids)
-        assert first_identity['source_sha256'] == first.subject_sha256
-        assert first_identity['workpack_sha256'] == first.binding_sha256
-        assert first_identity['main_text_sha256'] == first.binding.main_text_artifact_sha256
-        links = _submission(first.knowledge_links.scope)
-        body = Stage2NodeReviewRequest(
-            node='stage2.blueprint', review_token=first.review_token, decision='accept',
-            actor=links.actor, reason=links.reason, knowledge_links=links,
-            review=Stage2ReviewSubmission(scope_sha256=first.review_coverage.scope.scope_sha256,
-                                          default_decision='accept', exceptions=[]))
-        accepted = client.post(f'/api/novels/{sid}/approvals/stage2-review', json=body.model_dump(mode='json'))
+        result = client.get(endpoint)
+        assert result.status_code == 200, result.text
+        first = BlueprintReviewWorkpack.model_validate(result.json())
+        assert first.scope == 'chapter:1' and len(first.material['blueprints']) == 1
+        accepted = client.post(f'/api/novels/{sid}/approvals/stage2-review', json=request(first).model_dump(mode='json'))
         assert accepted.status_code == 200, accepted.text
-        record = accepted.json()['stage2_reviews']['stage2.blueprint']['current_decision']
-        assert record['obligation_receipt']['units']
     with TestClient(create_app(str(base))) as client:
-        response = client.get(endpoint)
-        assert response.status_code == 200, response.text
-        current = BlueprintReviewWorkpack.model_validate(response.json())
-        assert current.review_token == first.review_token
-        assert not current.review_coverage.pending_obligation_ids
-        current_identity = reviewer_tasks._stage2_progress_identity(
-            {'blueprint': current.model_dump(mode='json'), 'global': {'items': '不能消费的重复材料'}},
-            queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW)
-        assert current_identity['blocker_count'] == 0
-        assert current_identity['progress_sha256'] != first_identity['progress_sha256']
-        visible = reviewer_tasks._review_materials(
-            {'blueprint': current.model_dump(mode='json')}, queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW)['blueprint']
-        assert visible['chapters'] == []
-        assert visible['global_review']['items'] == []
-        assert visible['knowledge_links']['pending'] == []
-        assert visible['review_coverage']['inherited_count'] == len(first.review_coverage.scope.obligations)
-        before = approvals.stage2_review_history(base, sid)
-        approvals.close_stage2_inherited(base, sid, node='stage2.blueprint')
-        assert approvals.stage2_review_history(base, sid) == before
+        result = client.get(endpoint)
+        assert result.status_code == 200, result.text
+        current = BlueprintReviewWorkpack.model_validate(result.json())
+        assert current.subject_sha256 == first.subject_sha256
+        assert {row.scope: row.state for row in current.progress.scopes}['chapter:1'] == 'accepted'
+        assert len(current.material['sources']) == 1
+        assert current.material['chapter_acceptances'] == []
+    record = approvals.stage2_review_history(base, sid)[-1]
+    assert record.plot_record.scope == 'chapter:1' and record.obligation_receipt is None
+    assert len(transport.calls) == 3
 
 
-def test_typed_fact_edit_only_reopens_its_chapter_and_keeps_original_reviewers(produced):
-    from contracts.schema.api import Stage2NodeReviewRequest
-    from contracts.schema.stage2 import BlueprintRelationEdit
+def test_typed_plot_edit_only_reopens_its_chapter_and_keeps_original_reviewers(produced):
     from novel.orchestrator import approvals
-    from novel.stages.stage2 import relation_edit
-    from novel.store import ArtifactStore
+    from novel.stages.stage2 import plot_edit
     from novel.views.stage2 import blueprint_review_workpack
-    from tests.test_stage2_global_agent import _free_ctx
-    from tests.test_stage2_knowledge_links import _accept_current, _submission
-
+    from tests.test_stage2_generation import _ctx
+    from tests.test_plot_edit import request_for, save_request
+    from tests.test_plot_review_runtime import request
     ctx, transport = produced
     base, sid = ctx.novel_dir.parent, ctx.sid
-    _accepted, first = _accept_current(ctx)
-    calls = len(transport.calls)
-    free = _free_ctx(ctx)
-    raw = relation_edit.edit_template(free)
-    raw.pop('_schema_version')
-    raw.update(actor='test:editor', reason='只订正第一章事实措辞')
-    raw['chapters'] = raw['chapters'][:1]
-    fact = next(row for row in first.chapters if row.chapter_ordinal == 1).beats[0].facts[0]
-    raw['chapters'][0]['fact_patches'] = [{'fact_id': fact.fact_id, 'claim': fact.claim + '。'}]
-    ArtifactStore(free).write_sparse_input(relation_edit.REQUEST_REL, BlueprintRelationEdit.model_validate(raw))
-    _changed, report = relation_edit.apply_edit(free)
-    assert report.passed
-    current = blueprint_review_workpack(base, sid)
-    coverage = current.review_coverage
-    pending = set(coverage.pending_obligation_ids)
-    assert {ordinal for row in coverage.scope.obligations if row.obligation_id in pending
-            for ordinal in row.chapter_ordinals} == {1}
-    assert {ordinal for row in coverage.inherited for ordinal in row.obligation.chapter_ordinals} >= {2, 3}
-    links = _submission(current.knowledge_links.scope)
-    request = Stage2NodeReviewRequest(
-        node='stage2.blueprint', review_token=current.review_token, decision='accept',
-        actor=links.actor, reason=links.reason, knowledge_links=links,
-        review=Stage2ReviewSubmission(scope_sha256=coverage.scope.scope_sha256,
-                                      default_decision='accept', exceptions=[]))
-    result = approvals.approve_stage2_review(base, sid, request)
-    receipt = result.stage2_reviews['stage2.blueprint'].current_decision.obligation_receipt
-    assert all(row.source_decision_sha256 for row in receipt.units if 1 not in row.obligation.chapter_ordinals)
-    assert len(transport.calls) == calls
+    _accept_current(ctx)
+    prior = {r.scope: r for r in approvals.stage2_review_history(base, sid) if r.node == 'stage2.blueprint'}
+    first = blueprint_review_workpack(base, sid, scope='chapter:1')
+    free = _ctx(ctx.novel_dir, 'stage2.blueprint', paid=False)
+    raw = request_for(free)
+    raw['chapters'][0]['chapter']['beats'][0]['content'] += '（据昨夜来信）'
+    assert plot_edit.apply_edit(free, save_request(free, raw))[1].passed
+    current = blueprint_review_workpack(base, sid, scope='chapter:1')
+    states = {row.scope: row.state for row in current.progress.scopes}
+    assert states == {'chapter:1': 'expired', 'chapter:2': 'accepted', 'chapter:3': 'accepted', 'cross_chapter': 'expired'}
+    approvals.approve_stage2_review(base, sid, request(current))
+    after = {r.scope: r for r in approvals.stage2_review_history(base, sid) if r.node == 'stage2.blueprint'}
+    assert after['chapter:2'] == prior['chapter:2'] and after['chapter:3'] == prior['chapter:3']
+    assert len(transport.calls) == 3
     with pytest.raises(HumanEditProtected):
-        approvals.approve_stage2_review(base, sid, request.model_copy(update={'review_token': first.review_token}))
+        approvals.approve_stage2_review(base, sid, request(first))
 
 
 def test_audit_only_change_uses_real_cli_free_closure_and_reuses_knowledge_decisions(produced, monkeypatch):
@@ -236,7 +207,6 @@ def test_audit_only_change_uses_real_cli_free_closure_and_reuses_knowledge_decis
     from novel.store import ArtifactStore
     from novel.views.stage2 import blueprint_review_workpack
     from tests.test_stage2_global_agent import _free_ctx
-    from tests.test_stage2_knowledge_links import _accept_current
 
     ctx, _transport = produced
     base, sid = ctx.novel_dir.parent, ctx.sid
@@ -257,7 +227,7 @@ def test_audit_only_change_uses_real_cli_free_closure_and_reuses_knowledge_decis
     free = _free_ctx(ctx)
     assert _run_stage2(free, ['--close-review']) == 0
     assert ArtifactStore(free).exists(STAGE2_KNOWLEDGE_LINKS)
-    assert not blueprint_review_workpack(base, sid).review_coverage.pending_obligation_ids
+    assert blueprint_review_workpack(base, sid, scope='cross_chapter').progress.accepted
     assert ctx.ledger.path.read_bytes() == before
     history = approvals.stage2_review_history(base, sid)
     assert history[-1].actor == 'system:review-inheritance'

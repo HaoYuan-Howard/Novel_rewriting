@@ -222,9 +222,10 @@ def _plan(ctx: RunContext, *, marker: str = '计划一',
     """一份最小合法 Stage4 计划；``marker`` 是各事务测试的内容哨兵。"""
     goal = {
         'intent': 'advance',
-        'fact_refs': [{
+        'subject_refs': [{
             'kind': 'chapter_boundary', 'ref': 'chapter:1',
         }],
+        'anchor_beat_ref': 'b01_01', 'anchor_scene_ref': 's01',
     }
     store = ArtifactStore(ctx)
     candidate_sha = store.full_sha256_or_none(STAGE4_BLIND_CANDIDATE) if compiled else None
@@ -254,13 +255,14 @@ def _plan(ctx: RunContext, *, marker: str = '计划一',
             'scenes': [{
                 'slot': 's01',
                 'budget_chars': 20,
-                'purpose': '承载测试事实',
+                'purpose': '承载测试剧情',
                 'role': 'setup', 'delivery': 'scene', 'transition': 'start',
-                'land_fact_refs': ['f01_001'], 'context_fact_refs': [],
-                'material_refs': [], 'turn_fact_ref': 'f01_001',
-                'entry_state_refs': [], 'exit_state_refs': [],
-                'stage_refs': ['b01_01'],
+                'context_beat_refs': [], 'turn_beat_ref': 'b01_01',
             }],
+            'beat_placements': [{'beat_ref': 'b01_01', 'deliveries': [{
+                'scene_ref': 's01', 'presentation_instruction': None,
+                'evidence_refs': ['e01_01'], 'source_context_refs': []}]}],
+            'anchor_bindings': [],
         }],
         _provenance=provenance,
     )
@@ -280,7 +282,8 @@ def _seed_phase_bytes(store: ArtifactStore) -> None:
             'output_ordinal': 1,
             'scenes': [{
                 'candidate_scene_id': 'c01s01',
-                'material_refs': [], 'stage_refs': ['b01_01'],
+                'deliveries': [{'beat_ref': 'b01_01',
+                    'evidence_refs': ['e01_01'], 'source_context_refs': []}],
             }],
         }],
         _provenance=store.ctx.free_provenance(
@@ -462,40 +465,27 @@ def test_stage4_blueprint_projection_tracks_exact_material_and_ignores_provenanc
     plan_project = projection_for('stage4.plan', 'stage2/chapter_blueprints.json')
     context_project = projection_for('stage4.context', 'stage2/chapter_blueprints.json')
     assert plan_project is not None and context_project is not None
-    base = {
-        'blueprints': [{
-            'chapter_ordinal': 1, 'chapter_function': '建立冲突',
-            'narration': [{
-                'grammatical_person': 'third', 'narrator_char_id': None,
-                'focalizer_char_id': 'char_001', 'pronoun_surfaces': [],
-            }],
-            'beats': [{
-                'beat_id': 'b01_01', 'time_layer': 'present',
-                'place': '庭院', 'present_char_ids': ['char_001'],
-                'span': {
-                    'text': '原文区间。', 'start': 0, 'end': 5,
-                },
-                'hinges': [{
-                    'kind': '要害台词',
-                    'source': {
-                        'text': '原话。', 'start': 0, 'end': 3,
-                    },
-                }],
-            }],
-        }],
-        '_provenance': {'code': 'old'},
-    }
+    from tests.plot_fixtures import blueprint
+    base = {**blueprint(), '_provenance': {'code': 'old'}}
     changed_provenance = {**base, '_provenance': {'code': 'new'}}
     assert plan_project(base) == plan_project(changed_provenance)
     assert context_project(base) == context_project(changed_provenance)
-    changed = copy.deepcopy(base)
-    changed['blueprints'][0]['beats'][0]['hinges'][0]['source']['text'] = '改过。'
-    assert plan_project(base) != plan_project(changed)
-    assert context_project(base) != context_project(changed)
+    for field in ('content', 'evidence', 'source_context'):
+        changed = copy.deepcopy(base)
+        chapter = changed['blueprints'][0]
+        if field == 'content':
+            chapter['beats'][0]['content'] = '甲撤销了入住邀请。'
+        elif field == 'evidence':
+            chapter['evidence_anchors'][0]['start'] += 1
+        else:
+            chapter['beats'][0]['source_contexts'][0]['place'] = '庭院'
+        assert plan_project(base) != plan_project(changed)
+        assert context_project(base) != context_project(changed)
 
     changed_narration = copy.deepcopy(base)
     changed_narration['blueprints'][0]['narration'][0]['grammatical_person'] = 'first'
-    assert plan_project(base) == plan_project(changed_narration)
+    # 章级 B 的完整材料也消费叙述身份，不能沿用旧规划投影的忽略规则。
+    assert plan_project(base) != plan_project(changed_narration)
     assert context_project(base) != context_project(changed_narration)
 
 
@@ -2509,14 +2499,14 @@ def test_promotion_keeps_the_original_phase_bindings_and_archives_the_invalid():
 def test_promotion_discards_a_registered_legacy_formal_without_polluting_rounds():
     """shape-break 旧正式稿不是 current 业务轮次，提升时原位重建而不归档。"""
     base = _book()
-    _ctx_, inv = _write_invalid(base, [], marker='当前 v4 问题稿')
+    _ctx_, inv = _write_invalid(base, [], marker='当前 v5 问题稿')
     formal = inv.with_name('plan_chapters.json')
     formal.write_bytes(b'{"_schema_version":1,"legacy":"retired plan"}\n')
 
     out = ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
         PLAN_REL, PlanChapters, **REVALIDATION)
 
-    assert json.loads(out.read_text(encoding='utf-8'))['_schema_version'] == 4
+    assert json.loads(out.read_text(encoding='utf-8'))['_schema_version'] == 5
     assert not inv.exists()
     archived = sorted(p.name for p in (formal.parent / paths.ROUNDS_DIRNAME).iterdir())
     assert archived == ['plan_chapters.INVALID.r1.json']

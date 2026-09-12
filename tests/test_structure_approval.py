@@ -132,7 +132,7 @@ def test_request_is_strict_and_requires_sorted_unique_chapters_and_real_reasons(
 
 def test_structure_review_contract_is_in_whole_book_and_chapter_subjects(
         monkeypatch: pytest.MonkeyPatch):
-    assert STRUCTURE_REVIEW_CONTRACT == 'stage4-structure-review-v3'
+    assert STRUCTURE_REVIEW_CONTRACT == 'stage4-structure-review-v4'
     plan = {'output_chapters': []}
     expected_book = approvals._decision_sha256({
         'kind': 'stage4_structure_review_subject',
@@ -259,14 +259,14 @@ def test_typed_writing_approval_persists_actor_reason_subject_and_history(
                 'review_token': f's5wr1_{SUBJECT_A}'}))
 
 
-def test_all_accept_opens_s4_persists_v6_history_and_is_idempotent(isolated):
+def test_all_accept_opens_s4_persists_current_history_and_is_idempotent(isolated):
     base, _book, state = isolated
     request = _request('accept', 'accept')
     first = approvals.approve_structure(base, SID, request)
-    assert first.v == 6 and first.gate['s4']
+    assert first.v == 7 and first.gate['s4']
     assert first.structure.state == 'accepted'
     assert first.structure.current_decision is not None
-    assert state['record'].v == 7
+    assert state['record'].v == 8
     assert len(state['record'].structure_history) == 1
     assert state['record'].gate_proofs['s4'] == state['record'].structure_decision.proof
     assert state['record'].structure_decision.chapter_subject_sha256 == \
@@ -564,7 +564,7 @@ def test_structure_route_accepts_the_typed_body(monkeypatch, tmp_path):
             json=_request('accept', 'accept').model_dump(mode='json'),
         )
     assert got.status_code == 200, got.text
-    assert got.json()['v'] == 6
+    assert got.json()['v'] == 7
     assert captured['sid'] == SID
     assert isinstance(captured['request'], StructureApprovalRequest)
 
@@ -633,29 +633,28 @@ def test_writing_route_dispatches_a_typed_body_without_starting_a_job(monkeypatc
     assert captured['request'] == request
 
 
-@pytest.mark.parametrize('field', ['claim', 'source'])
+@pytest.mark.parametrize('field', ['content', 'evidence'])
 def test_blueprint_evidence_change_expires_only_affected_chapter(field):
     """Plan 不变也不能沿用读过不同事实/证据的票；未改章仍能精确采用。"""
     from copy import deepcopy
     from contracts.schema.stage4 import PlanChapters
-    from tests.hard_cases import _clean_plan4
+    from tests.test_plot_blueprint import SOURCE, blueprint
+    from novel.stages.stage4.measure import identity_plan
 
-    raw = _clean_plan4()
+    blueprints = {'blueprints': [blueprint(n).model_dump(mode='json') for n in (1, 2)]}
+    raw = identity_plan(blueprints, [{'chapter_ordinal': n, 'text': SOURCE} for n in (1, 2)])
     raw['_provenance'] = {
         'code': 'test', 'root_clean_sha1': 'c' * 40, 'inputs': {},
         'origin': 'compiled', 'blind_candidate_sha256': 'a' * 64,
         'evidence_binding_sha256': 'b' * 64,
     }
     plan = PlanChapters.model_validate(raw)
-    blueprints = {'blueprints': [
-        {'chapter_ordinal': row.output_ordinal,
-         'fact_atoms': [{'claim': '承诺归还物品', 'source': {'text': '原证据', 'start': 0, 'end': 3}}]}
-        for row in plan.output_chapters
-    ]}
     before = approvals._structure_chapter_subject_sha256(plan, [], blueprints=blueprints)
     after = deepcopy(blueprints)
-    after['blueprints'][0]['fact_atoms'][0][field] = (
-        '否认归还物品' if field == 'claim' else {'text': '新证据', 'start': 0, 'end': 3})
+    if field == 'content':
+        after['blueprints'][0]['beats'][0]['content'] = '否认归还物品'
+    else:
+        after['blueprints'][0]['evidence_anchors'][0]['start'] += 1
     changed = approvals._structure_chapter_subject_sha256(plan, [], blueprints=after)
     first = plan.output_chapters[0].output_ordinal
     assert changed[first] != before[first]

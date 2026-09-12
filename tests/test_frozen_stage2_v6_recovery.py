@@ -14,10 +14,11 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS, STAGE4_BLIND_CANDIDATE
+from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE4_BLIND_CANDIDATE
 from contracts.schema import ArtifactVersionError
 from contracts.schema.orchestration import ArtifactState
 from contracts.schema.stage2 import ChapterBlueprints
+from contracts.schema.stage1 import MainText
 from novel.api.app import create_app
 from novel.errors import ArtifactUnreadable, NovelError
 from novel.orchestrator import approvals, delivery, queue, state
@@ -26,14 +27,14 @@ from novel.store import ArtifactStore
 from tests.test_stage4_v3_integration import CODE, _ctx, designed  # noqa: F401
 
 
-@pytest.fixture(params=[6, 7, 9], ids=['retired-v6', 'retired-v7', 'future-v9'])
+@pytest.fixture(params=[6, 7, 8, 10], ids=['retired-v6', 'retired-v7', 'retired-v8', 'future-v10'])
 def incompatible(designed, request):
     book, _blueprints, design = designed
     ctx, _client, transport, _candidate, _truth, _mapping = design
     store = ArtifactStore(ctx)
     path = book / STAGE2_CHAPTER_BLUEPRINTS
     raw = json.loads(path.read_text(encoding='utf-8'))
-    assert raw['_schema_version'] == 8
+    assert raw['_schema_version'] == 9
     raw['_schema_version'] = request.param
     path.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8', newline='')
     before = {str(p.relative_to(book)): p.read_bytes()
@@ -82,11 +83,11 @@ def test_old_version_keeps_reading_source_but_cannot_publish_review(incompatible
         reading = client.get(f'/api/novels/{box.sid}/reading/1')
         assert reading.status_code == 200, reading.text
         payload = reading.json()
-        assert payload['blueprint'] is False
+        assert payload['blueprint'] is None
         assert payload['blueprint_state']['condition'] == 'unreadable'
-        assert payload['beats'] == [] and payload['_provenance'] is None
-        assert payload['loose'] == payload['text_chars'] > 0
-        assert ''.join(row['text'] for row in payload['segments'])
+        assert payload['_provenance'] is None
+        assert payload['text_chars'] == len(payload['text']) > 0
+        assert payload['text'] == box.store.read_own(MainText, STAGE1_MAIN_TEXT).root[0].text
         response = client.get(f'/api/novels/{box.sid}/approvals/design/workpack')
         assert response.status_code >= 400, response.text
     _unchanged(box)

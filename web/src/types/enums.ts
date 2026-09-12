@@ -51,12 +51,8 @@ export interface EnumsResponse {
   plot_dimension_states?: string[]
   stage2_node_review_decisions?: string[]
   stage2_node_review_owners?: string[]
-  hinge_kinds: string[]
-  fact_atom_kinds: string[]
-  fact_atom_obligations: string[]
   nonbody_kinds: string[]
   time_layers: string[]
-  hinge_groups: Record<string, string>
   style_words: string[]
   invent: { allow: string[]; forbid: string[]; principle: string }
   job_kinds: Record<string, EnumJobKind>
@@ -72,8 +68,6 @@ export interface EnumsResponse {
   design_reviewer_kinds: string[]
   design_repair_codes: string[]
   design_constraint_operation_kinds: string[]
-  narrative_relation_kinds: string[]
-  narrative_relation_enforcements: string[]
   /** code -> [minScenes, minOpaqueAliases]；用于表单完整性检查，最终合法性仍由后端判定。 */
   design_repair_constraint_arity: Record<string, [number, number]>
   design_review_states: string[]

@@ -775,8 +775,26 @@ def plot_global_projection(data: object, chapter_ordinal: int) -> list[dict[str,
 
 
 def select_scope_input(selection: 'ScopeSelection', raw: object) -> object:
+    if selection.projection == 'plot_characters':
+        from novel.stages.stage2.plot_review_dependencies import character_subjects
+        return character_subjects(raw, selection.selected_ids)
     """只输出本范围实际消费的字段；非法、缺失、重复成员都拒绝编译。"""
     import copy
+    if selection.projection == 'plot_subjects':
+        requested = set(selection.selected_ids or ())
+        result = []
+        for chapter in raw['blueprints']:
+            anchors = {row['evidence_id']: row for row in chapter['evidence_anchors']}
+            for kind, field, rows in (('beat', 'beat_id', chapter['beats']),
+                                       ('state', 'state_id', chapter['states'])):
+                for row in rows:
+                    if f'{kind}:{row[field]}' in requested:
+                        result.append({'chapter_ordinal': chapter['chapter_ordinal'],
+                            'subject_ref': {'kind': kind, 'ref': row[field]}, 'value': copy.deepcopy(row),
+                            'evidence': [copy.deepcopy(anchors[ref]) for ref in row['evidence_refs']]})
+        if {f"{row['subject_ref']['kind']}:{row['subject_ref']['ref']}" for row in result} != requested:
+            raise ValueError('必要剧情知识主体缺失')
+        return sorted(result, key=lambda row: (row['subject_ref']['kind'], row['subject_ref']['ref']))
     if selection.projection == 'plot_global_review':
         from novel.stages.stage2.plot_review_dependencies import global_subjects
         return global_subjects(raw, selection.selected_ids)

@@ -42,9 +42,9 @@ from tests.test_stage2_secret_edit import _sandbox, _seed
 
 @pytest.fixture(autouse=True)
 def _pin_retained_ir31_for_downstream_fixture(monkeypatch):
-    """本文件验证下游 gate；底座显式使用仍受支持的 v3.1 合成 wire。"""
+    """本文件验证下游 gate；底座显式使用当前完整剧情合成 wire。"""
     monkeypatch.setenv(
-        'NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
+        'NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'plot-blueprint-v1')
 
 
 def _current_items(book):

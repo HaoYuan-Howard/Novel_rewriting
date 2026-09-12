@@ -10,6 +10,10 @@ Global 与 Blueprint 的独立审阅、实际问题和 `--close-review` 免费�
 不生成全量事实原子、逐项通过回执或独立对白正文副本。章节、证据和人物闭集由编译器核验，
 完整剧情与重要边界由逐章五维审阅及跨章复核判断。数量与证据范围不能证明语义完整。
 
+已有正式蓝图不能被首次抽取静默覆盖。人物或 Global 变化后，显式章修订或 typed 编辑可以读取
+有完整来源的历史自身基线，仍须核对当前源文摘要与证据，并使用当前人物、Global 和编译契约
+重新验证。源文变化、来源未知或损坏不能借旧基线免费追认；同 ID 也不自动继承已过期的接受。
+
 Stage 2 的现役 JSON 与 typed 输入如下；人物登记详情见 `docs/schema/characters.md`。三份内部
 恢复 artifact 只在 `--apply-edit` / Global `--revalidate` 动作尚未闭合或已有分类
 terminal 等待人工后继时存活，不计作阶段输出：
@@ -54,6 +58,10 @@ trigger_beat_ref）；关联不另存同义剧情正文，也不覆盖每个普�
 与已接受分开。人物知情不自动授权读者，source 段号顺序不替代触发点。
 
 Blueprint 的 chapter:N 和 cross_chapter 工作包包含当前知识关联 scope、实际问题及必要材料。
+人物目录按本章及已提供的关系、状态、知识和上下文引用闭包编译，给出可理解的姓名、称呼、
+静态身份与原文证据；`plot_characters` 同源依赖投影保护实际正文与证据变化，不能只绑定 char_id。
+人物或共享知识变更后，范围快照仅免费重验当前源文与机械引用；它不重签语义接受，不修改蓝图。
+真实消费内容变化的章节及跨章接受过期，无依赖章节保留原决定。
 Stage2NodeReviewRequest.knowledge_links 只提交当前范围新增决定，其他有效决定引用继承。
 全部章审当前有效、跨章明确接受、关联齐全后，由 stage2.blueprint --close-review 免费物化
 带来源证明的正式关联及放行。服务先保存 _service 决定，CLI producer 修改 artifact；中断优先

@@ -63,8 +63,6 @@ from contracts.invariants import (
     APPROVAL_GATES,
     APPROVAL_SEEN,
     BLUEPRINT_REVIEW_CONTRACT,
-    BLUEPRINT_REVIEW_CHANGE_KINDS,
-    BLUEPRINT_REVIEW_DELTA_MODES,
     BLUEPRINT_REVIEW_SUBJECT_KINDS,
     CHAPTER_LABEL_ANOMALY,
     DELIVERY_MODES,
@@ -76,7 +74,6 @@ from contracts.invariants import (
     APPROVAL_WORKPACK_GROUP_EFFECTS,
     APPROVAL_WORKPACK_GROUPS,
     APPROVAL_WORKPACK_KINDS,
-    BLUEPRINT_RELATION_REVIEW_CONTRACT,
     FINAL_APPROVAL_WORKPACK_KINDS,
     DESIGN_PREFLIGHT_STATUSES,
     DESIGN_REPAIR_CODES_RETIRED,
@@ -1966,63 +1963,6 @@ class StructureApprovalView(FrozenModel):
         return self
 
 
-class WorkpackFactReading(FrozenModel):
-    """本章 facts 表的一行：claim 只在这里出现一次，其余处只引用 ref。"""
-
-    ref: str = Field(min_length=1)
-    claim: str = Field(min_length=1)
-    kind: str | None = None
-    obligation: str | None = None
-
-
-class WorkpackStageReading(FrozenModel):
-    """蓝图 beat 的舞台三样；找不到该 beat 时 found=false，不猜。"""
-
-    ref: str = Field(min_length=1)
-    found: bool = True
-    time_layer: str | None = None
-    place: str | None = None
-    present: list[str] = Field(default_factory=list)
-
-
-class WorkpackMaterialReading(FrozenModel):
-    """本场引用 hinge 材料的一组计数与首句摘录；不是逐字全文。"""
-
-    group: str = Field(min_length=1)
-    count: int = Field(ge=1)
-    chars: int = Field(ge=0)
-    excerpt: str = Field(min_length=1)
-
-
-class WorkpackGoalReading(FrozenModel):
-    """goal 的 intent 与它引用的事实 id/alias；claim 查本章 facts 表。"""
-
-    intent: str = Field(min_length=1)
-    refs: list[str] = Field(default_factory=list)
-
-
-class WorkpackSceneReading(FrozenModel):
-    """一场的裁决材料；A 面 scene_ref 是 candidate_scene_id，B 面是计划 slot。"""
-
-    scene_ref: str = Field(min_length=1)
-    weight: str | None = None
-    budget_chars: int | None = Field(default=None, gt=0)
-    purpose: str = Field(min_length=1)
-    role: str = Field(min_length=1)
-    delivery: str = Field(min_length=1)
-    transition: str = Field(min_length=1)
-    #: 以下五格只引用 id/alias：entry/exit 是编译期累加的有效状态，同一 claim 会在
-    #: 相邻场重复十几次，内联 claim 实测让 B 面工作包翻倍。
-    land: list[str] = Field(default_factory=list)
-    context: list[str] = Field(default_factory=list)
-    turn: str | None = None
-    entry_state: list[str] = Field(default_factory=list)
-    exit_state: list[str] = Field(default_factory=list)
-    stages: list[WorkpackStageReading] = Field(default_factory=list)
-    materials: list[WorkpackMaterialReading] = Field(default_factory=list)
-    missing_material_refs: list[str] = Field(default_factory=list)
-
-
 class WorkpackClosedRefReading(FrozenModel):
     ref: str = Field(min_length=1)
     kind: Literal[WORKPACK_CLOSED_REF_KINDS]
@@ -2037,11 +1977,6 @@ class WorkpackConcernReading(FrozenModel):
     scenes: list[str] = Field(default_factory=list)
     reason: str = Field(min_length=1)
     closed_refs: list[WorkpackClosedRefReading] = Field(default_factory=list)
-
-
-class WorkpackCausalEdgeReading(FrozenModel):
-    before_alias: str = Field(min_length=1)
-    after_alias: str = Field(min_length=1)
 
 
 from contracts.schema.plot_materials import PlotChapterReviewMaterials
@@ -2988,6 +2923,8 @@ class Stage2NodeReviewRequest(StrictModel):
 
 
 class Stage2NodeReviewDecision(Stage2NodeReviewRequest):
+    # 代码物化同轮稀疏事件与新主体摘要；原 request 仍保留，供精确重放和审计。
+    knowledge_application: KnowledgeLinkSubmission | None = None
     refinement_request: BlueprintRefinementRequest | None = None
     refinement_proof_sha256: Sha256 | None = None
     plot_record: PlotReviewRecord | None = None
@@ -3729,31 +3666,6 @@ class BlueprintReviewBinding(FrozenModel):
         return self
 
 
-class BlueprintReviewGlobalChange(FrozenModel):
-    """相对已接受交叉材料的事实/字段差异；章节范围只来自可证明引用。"""
-
-    item_id: str
-    subject_path: str
-    change: Literal[BLUEPRINT_REVIEW_CHANGE_KINDS]
-    changed_fields: list[str]
-    previous_subject_sha256: str | None = None
-    current_subject_sha256: str | None = None
-    affected_chapter_ordinals: list[int]
-    affected_references: list[str]
-    scope_reason: str
-
-
-class BlueprintReviewDelta(FrozenModel):
-    mode: Literal[BLUEPRINT_REVIEW_DELTA_MODES]
-    baseline_review_subject_sha256: str | None = None
-    current_review_subject_sha256: str
-    changed_global_items: list[BlueprintReviewGlobalChange]
-    changed_blueprint_chapters: list[int]
-    affected_chapter_ordinals: list[int]
-    reusable_accepted_chapter_ordinals: list[int]
-    reason: str
-
-
 class BlueprintReviewWorkpack(FrozenModel):
     """V9 范围材料：原文与完整节点各一份，问题与接受引用不展开历史。"""
 
@@ -4224,39 +4136,6 @@ class DraftEditPreview(FrozenModel):
     introduced_hard_findings: list[Finding]
     resolved_hard_findings: list[Finding]
     required_confirmation: Literal[STAGE5_EDIT_CONFIRMATIONS]
-
-
-class BlueprintRelationEditPreview(FrozenModel):
-    """Stage2 v7 完整章关系替换的只读候选结果。
-
-    ``review_token`` 仍是请求绑定的当前审阅主体；
-    ``result_subject_sha256`` 则是同一编译器生成的候选主体。
-    预览只回答“这份 typed request 现在会变成什么”，
-    不归档、不写 INVALID、不记成本或人工审计行。
-    """
-
-    review_token: str = Field(pattern=r'^brt1_[0-9a-f]{64}$')
-    review_contract_version: Literal[BLUEPRINT_RELATION_REVIEW_CONTRACT] = (
-        BLUEPRINT_RELATION_REVIEW_CONTRACT)
-    result_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    changed_chapters: list[int] = Field(min_length=1)
-    relations_total: int = Field(ge=0)
-    relations_hard: int = Field(ge=0)
-    relations_review: int = Field(ge=0)
-    hard_hits: list[str]
-    would_apply: bool
-
-    @model_validator(mode='after')
-    def _preview_is_closed(self) -> 'BlueprintRelationEditPreview':
-        if self.changed_chapters != sorted(set(self.changed_chapters)):
-            raise ValueError('changed_chapters 必须升序且不重复')
-        if any(value < 1 for value in self.changed_chapters):
-            raise ValueError('changed_chapters 章号必须 >=1')
-        if self.relations_hard + self.relations_review != self.relations_total:
-            raise ValueError('关系 hard/review 计数之和必须等于 total')
-        if self.would_apply != (not self.hard_hits):
-            raise ValueError('would_apply 必须与 hard_hits 是否为空严格对应')
-        return self
 
 
 class TrimResolutionRequest(StrictModel):

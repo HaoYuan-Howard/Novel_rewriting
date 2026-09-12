@@ -1,256 +1,138 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Stage4 结构读数的数学口径；不经报告字符串做第二份计算。"""
+"""完整剧情的结构读数：分母、源披露序、共享证据和不可机械证明的边界。"""
 from __future__ import annotations
 
 import copy
-
 import pytest
-
 from novel.stages.stage4.measure import structure_metrics_of
 
 
-def _atom(fact_id: str, beat: str, start: int, *, obligation: str = 'land') -> dict:
-    text = f'证据{fact_id}'
-    return {
-        'fact_id': fact_id, 'claim': f'事实{fact_id}', 'kind': 'event',
-        'obligation': obligation, 'source_beat_ref': beat,
-        'source': {
-            'text': text, 'start': start, 'end': start + len(text),
-            'normalized': text, 'recovery': 'exact',
-        },
-        'participant_char_ids': [],
-    }
+def _blueprint():
+    return {'chapter_ordinal': 1,
+            'beats': [{'beat_id': f'b01_{n:02}', 'content': f'完整剧情{n}',
+                       'evidence_refs': [f'e01_{n:02}']} for n in range(1, 7)],
+            'evidence_anchors': [{'evidence_id': f'e01_{n:02}',
+                                  'start': (n - 1) * 20, 'end': (n - 1) * 20 + 10}
+                                 for n in range(1, 7)],
+            'constraints': []}
 
 
-def _blueprint() -> dict:
-    return {
-        'chapter_ordinal': 1,
-        'fact_atoms': [
-            _atom('f01_001', 'b01_01', 0),
-            _atom('f01_002', 'b01_01', 20),
-            _atom('f01_003', 'b01_02', 40),
-            _atom('f01_004', 'b01_03', 60),
-            _atom('f01_005', 'b01_03', 80),
-            _atom('f01_006', 'b01_04', 100),
-        ],
-        'causal_edges': [{'before': 'f01_001', 'after': 'f01_002'}],
-    }
-
-
-def _goal(ref: str) -> dict:
-    return {
-        'intent': 'open',
-        'fact_refs': [{'kind': 'fact_atom', 'ref': ref, 'chapter': 1}],
-    }
-
-
-def _chapter(groups: list[list[str]] | None = None, *,
-             opening: str = 'f01_001', ending: str = 'f01_006') -> dict:
-    groups = groups or [
-        ['f01_001', 'f01_002'], ['f01_003'],
-        ['f01_004', 'f01_005'], ['f01_006'],
-    ]
-    return {
-        'output_ordinal': 1,
-        'open_hook_goal': _goal(opening),
-        'end_hook_goal': _goal(ending),
-        'scenes': [
-            {'slot': f's{index:02d}', 'land_fact_refs': refs}
-            for index, refs in enumerate(groups, 1)
-        ],
-    }
+def _chapter(groups=None):
+    groups = groups or [[f'b01_{n:02}'] for n in range(1, 7)]
+    placements = {}
+    for n, group in enumerate(groups, 1):
+        for ref in group:
+            placements.setdefault(ref, []).append({'scene_ref': f's{n:02}'})
+    return {'output_ordinal': 1,
+            'scenes': [{'slot': f's{n:02}'} for n in range(1, len(groups) + 1)],
+            'beat_placements': [{'beat_ref': ref, 'deliveries': values}
+                                for ref, values in placements.items()]}
 
 
 def test_identity_partition_and_order_are_reported_with_real_denominators():
     got = structure_metrics_of(_blueprint(), _chapter())
-
-    assert got['state'] == 'ok' and got['mapping'] == {
-        'state': 'ok', 'land_facts': 6, 'mapped_facts': 6, 'plan_scenes': 4,
-    }
-    assert got['partition'] == {
-        'state': 'ok',
-        'all_fact_pairs': 15,
-        'source_together_pairs': 2,
-        'source_apart_pairs': 13,
-        'preserved_together_pairs': 2,
-        'split_pairs': 0,
-        'merged_pairs': 0,
-        'preserved_apart_pairs': 13,
-        'changed_pairs': 0,
-        'distance': 0.0,
-        'split_rate': 0.0,
-        'merge_rate': 0.0,
-    }
-    assert got['order']['concordant_pairs'] == 13
-    assert got['order']['inverted_pairs'] == 0
-    assert got['order']['same_scene_ties'] == 2
+    assert got['mapping'] == {'state': 'ok', 'beats': 6, 'mapped_beats': 6,
+                              'deliveries': 6, 'distributed_beats': 0, 'plan_scenes': 6}
     assert got['order']['source_comparable_pairs'] == 15
-    assert got['adjacency']['source_adjacency_edges'] == 5
-    assert got['adjacency']['same_scene'] == 2
-    assert got['adjacency']['forward_adjacent'] == 3
-    assert got['adjacency']['directional_retention_rate'] == 1.0
-    assert got['boundary']['changed'] is False
-    assert got['boundary']['source_groups'] == got['boundary']['plan_groups'] == 4
-    assert got['noncontiguous']['noncontiguous_scenes'] == 0
-    assert got['noncontiguous']['testable_scenes'] == 2
-    assert got['anchors']['opening']['declared_goal']['offset'] == 0
-    assert got['anchors']['opening']['scene_payload']['excludes_source_edge'] is False
-    assert got['anchors']['ending']['declared_goal']['offset'] == 0
-    assert got['eligibility']['reorderable'] is True
-    assert got['eligibility']['causally_incomparable_pairs'] == 13
+    assert got['order']['inverted_pairs'] == got['order']['interleaved_pairs'] == 0
+    assert got['order']['cross_scene_inversion_rate'] == 0
+    assert not got['anchors']['opening']['scene_payload']['excludes_source_edge']
+    assert not got['anchors']['ending']['scene_payload']['excludes_source_edge']
+    # 节点不是原文场景；分区与自由度不再制造数值真相。
+    for section in ('partition', 'boundary', 'noncontiguous', 'eligibility'):
+        assert got[section]['state'] == 'unver'
 
 
 def test_same_scene_count_can_hide_changed_boundaries_and_reversed_order():
-    chapter = _chapter(
-        [['f01_003', 'f01_001'], ['f01_002'],
-         ['f01_005', 'f01_006'], ['f01_004']],
-        opening='f01_003', ending='f01_004',
-    )
-    got = structure_metrics_of(_blueprint(), chapter)
-
-    # 源分区和新分区都是四组；只比较个数会假阴。
-    assert got['boundary']['source_groups'] == got['boundary']['plan_groups'] == 4
-    assert got['boundary']['group_count_changed'] is False
-    assert got['boundary']['changed'] is True
-    assert got['partition']['split_pairs'] == 2
-    assert got['partition']['merged_pairs'] == 2
-    assert got['partition']['changed_pairs'] == 4
-    assert got['order']['inverted_pairs'] > 0
-    assert (got['adjacency']['reversed_adjacent']
-            + got['adjacency']['reversed_separated']) > 0
-    assert got['adjacency']['directional_retention_rate'] < 1.0
-
-    assert got['noncontiguous']['noncontiguous_scenes'] == 1
-    assert got['noncontiguous']['witnesses'] == [
-        {'scene': 's01', 'source_runs': [[0, 0], [2, 2]]},
-    ]
-    # goal 已声明后移，不等于首场排除了源章首事实；两根轴必须分开。
-    assert got['anchors']['opening']['declared_goal']['offset'] == 2
-    assert got['anchors']['opening']['declared_goal']['migrated'] is True
-    assert got['anchors']['opening']['scene_payload']['excludes_source_edge'] is False
-    assert got['anchors']['ending']['declared_goal']['offset'] == 2
-    assert got['anchors']['ending']['scene_payload']['excludes_source_edge'] is True
+    baseline = structure_metrics_of(_blueprint(), _chapter())
+    reordered = structure_metrics_of(_blueprint(), _chapter(
+        [[f'b01_{n:02}'] for n in [3, 1, 2, 6, 5, 4]]))
+    assert reordered['mapping']['plan_scenes'] == baseline['mapping']['plan_scenes']
+    assert reordered['order']['inverted_pairs'] == 5
+    assert reordered['anchors']['opening']['scene_payload']['excludes_source_edge']
+    assert reordered['anchors']['ending']['scene_payload']['excludes_source_edge']
 
 
-def test_a_contiguous_three_fact_block_is_not_noncontiguous_regrouping():
-    got = structure_metrics_of(
-        _blueprint(),
-        _chapter([
-            ['f01_001', 'f01_002', 'f01_003'], ['f01_004'],
-            ['f01_005'], ['f01_006'],
-        ]),
-    )
-
-    # f01_001 与 f01_003 在扁平数组里“不相邻”，但中间事实也在同场；
-    # 它是一段连续源区间，不得像旧 pair 口径那样报成真正的跨区组场。
-    assert got['noncontiguous']['testable_scenes'] == 1
-    assert got['noncontiguous']['noncontiguous_scenes'] == 0
-    assert got['noncontiguous']['extra_source_runs'] == 0
+def test_a_contiguous_three_beat_block_does_not_invent_source_scene_grouping():
+    got = structure_metrics_of(_blueprint(), _chapter([
+        ['b01_01', 'b01_02', 'b01_03'], ['b01_04'], ['b01_05'], ['b01_06']]))
+    assert got['mapping']['plan_scenes'] == 4
+    assert got['order']['inverted_pairs'] == 0
+    assert got['noncontiguous']['state'] == 'unver'
+    assert got['boundary']['state'] == 'unver'
 
 
 @pytest.mark.parametrize('mutate', ['missing', 'duplicate', 'unknown', 'empty_scene'])
-def test_an_incomplete_mapping_makes_every_structure_section_unver(mutate: str):
+def test_an_incomplete_mapping_makes_every_structure_section_unver(mutate):
     chapter = _chapter()
     if mutate == 'missing':
-        chapter['scenes'][-1]['land_fact_refs'] = []
+        chapter['beat_placements'].pop()
     elif mutate == 'duplicate':
-        chapter['scenes'][1]['land_fact_refs'].append('f01_001')
+        chapter['beat_placements'].append(copy.deepcopy(chapter['beat_placements'][0]))
     elif mutate == 'unknown':
-        chapter['scenes'][1]['land_fact_refs'].append('f01_999')
+        chapter['beat_placements'][0]['deliveries'][0]['scene_ref'] = 's99'
     else:
-        chapter['scenes'].append({'slot': 's05', 'land_fact_refs': []})
-
+        chapter['scenes'].append({'slot': 's07'})
     got = structure_metrics_of(_blueprint(), chapter)
-
     assert got['state'] == 'unver'
-    assert got['mapping']['state'] == 'unver'
-    for section in (
-        'partition', 'order', 'adjacency', 'boundary',
-        'noncontiguous', 'anchors', 'eligibility',
-    ):
-        assert got[section]['state'] == 'unver', (mutate, section, got[section])
+    for section in ('mapping', 'partition', 'order', 'boundary',
+                    'noncontiguous', 'anchors', 'eligibility'):
+        assert got[section]['state'] == 'unver'
 
 
-def test_source_spans_not_fact_array_or_ids_define_order():
+def test_source_spans_not_beat_array_or_ids_define_order():
     blueprint = _blueprint()
     baseline = structure_metrics_of(blueprint, _chapter())
-    blueprint['fact_atoms'].reverse()
-    reordered = structure_metrics_of(blueprint, _chapter())
-
-    for section in (
-        'partition', 'order', 'adjacency', 'boundary',
-        'noncontiguous', 'anchors', 'eligibility',
-    ):
-        assert reordered[section] == baseline[section], section
+    blueprint['beats'].reverse()
+    blueprint['evidence_anchors'].reverse()
+    assert structure_metrics_of(blueprint, _chapter()) == baseline
 
 
-def test_overlapping_evidence_is_one_locus_and_not_an_invented_order():
+def test_overlapping_evidence_is_not_an_invented_order():
     blueprint = _blueprint()
-    first = blueprint['fact_atoms'][0]['source']
-    first.update({'start': 0, 'end': 30, 'text': '长证据', 'normalized': '长证据'})
-    nested = blueprint['fact_atoms'][1]['source']
-    nested.update({'start': 10, 'end': 20, 'text': '内证据', 'normalized': '内证据'})
-
+    blueprint['evidence_anchors'][0].update(start=0, end=30)
+    blueprint['evidence_anchors'][1].update(start=10, end=20)
     got = structure_metrics_of(blueprint, _chapter())
-
-    assert got['order']['source_incomparable_pairs'] == 1
     assert got['order']['source_comparable_pairs'] == 14
-    assert got['adjacency']['source_loci'] == 5
-    assert got['adjacency']['source_adjacency_edges'] == 4
+    assert got['order']['inverted_pairs'] == 0
 
 
-def test_reorderable_denominator_uses_the_transitive_causal_closure():
-    blueprint = {
-        'chapter_ordinal': 1,
-        'fact_atoms': [
-            _atom('f01_001', 'b01_01', 0),
-            _atom('f01_002', 'b01_02', 20, obligation='context'),
-            _atom('f01_003', 'b01_03', 40),
-        ],
-        'causal_edges': [
-            {'before': 'f01_001', 'after': 'f01_002'},
-            {'before': 'f01_002', 'after': 'f01_003'},
-        ],
-    }
-    chapter = _chapter(
-        [['f01_001'], ['f01_003']], opening='f01_001', ending='f01_003')
-
-    got = structure_metrics_of(blueprint, chapter)
-
-    assert got['eligibility']['cross_group_comparable_pairs'] == 1
-    assert got['eligibility']['causally_constrained_pairs'] == 1
-    assert got['eligibility']['causally_incomparable_pairs'] == 0
-    assert got['eligibility']['reorderable'] is False
-    assert got['eligibility']['noncontiguous_eligible'] is False
-
-
-def test_missing_source_span_does_not_erase_the_still_measurable_partition():
+def test_causal_closure_is_not_a_complete_denominator_for_narrative_freedom():
     blueprint = _blueprint()
-    blueprint['fact_atoms'][0]['source'] = None
-
+    blueprint['constraints'] = [
+        {'kind': 'cause', 'before_beat_ref': f'b01_{n:02}',
+         'after_beat_ref': f'b01_{n + 1:02}'} for n in range(1, 6)]
     got = structure_metrics_of(blueprint, _chapter())
+    assert got['eligibility']['state'] == 'unver'
+    assert '全集' in got['eligibility']['reason']
+    assert got['order']['source_comparable_pairs'] == 15
 
-    assert got['state'] == 'ok' and got['mapping']['state'] == 'ok'
-    assert got['partition']['state'] == 'ok'
-    assert got['boundary']['state'] == 'ok'
-    for section in ('order', 'adjacency', 'noncontiguous', 'anchors', 'eligibility'):
+
+def test_missing_source_span_does_not_erase_the_still_measurable_mapping():
+    blueprint = _blueprint()
+    blueprint['evidence_anchors'][0]['start'] = None
+    got = structure_metrics_of(blueprint, _chapter())
+    assert got['state'] == got['mapping']['state'] == 'ok'
+    assert got['mapping']['mapped_beats'] == 6
+    for section in ('order', 'partition', 'boundary', 'noncontiguous', 'anchors', 'eligibility'):
         assert got[section]['state'] == 'unver'
 
 
-def test_zero_pair_denominators_are_unver_not_green():
-    blueprint = {
-        'chapter_ordinal': 1,
-        'fact_atoms': [_atom('f01_001', 'b01_01', 0)],
-        'causal_edges': [],
-    }
-    chapter = _chapter([['f01_001']], opening='f01_001', ending='f01_001')
-
-    got = structure_metrics_of(blueprint, chapter)
-
+def test_zero_pair_denominators_are_uncomputed_not_zero_rates():
+    blueprint = _blueprint()
+    blueprint['beats'] = blueprint['beats'][:1]
+    blueprint['evidence_anchors'] = blueprint['evidence_anchors'][:1]
+    got = structure_metrics_of(blueprint, _chapter([['b01_01']]))
     assert got['mapping']['state'] == 'ok'
-    for section in ('partition', 'order', 'adjacency', 'boundary', 'noncontiguous'):
-        assert got[section]['state'] == 'unver'
-    assert got['anchors']['state'] == 'unver'
-    assert got['eligibility']['state'] == 'ok'
-    assert got['eligibility']['reorderable'] is False
+    assert got['order']['source_comparable_pairs'] == 0
+    assert got['order']['cross_scene_inversion_rate'] is None
+    assert got['eligibility']['state'] == 'unver'
+
+
+def test_multiple_deliveries_report_interleaving_without_new_source_atoms():
+    chapter = _chapter([['b01_01'], ['b01_02'], ['b01_01', 'b01_03'],
+                        ['b01_04'], ['b01_05'], ['b01_06']])
+    got = structure_metrics_of(_blueprint(), chapter)
+    assert got['mapping']['beats'] == 6 and got['mapping']['deliveries'] == 7
+    assert got['mapping']['distributed_beats'] == 1
+    assert got['order']['interleaved_pairs'] == 2
+    assert got['partition']['state'] == 'unver'

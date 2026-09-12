@@ -11,6 +11,7 @@ Pydantic 载体以 `contracts/schema/stage5.py` 为准。
 不能证明同一请求中前场没有见过后场内容。自由文本遗漏、重复、错误归因和隐含提前揭示
 由既有语义审阅及成稿检查承担；普通分场不增 Stage2 调用。正文 artifact 不机械升版，
 请求、验证和恢复身份必须绑定当前 Context、计划、知识许可及实际消费投影。
+上章收束复用本章已经下发的节点目录，仅补充目录尚未包含的完整正文；同一 ID 出现不同正文时拒绝编译。
 
 ```text
 stage5/chNN.json                 canonical 正式章
@@ -273,11 +274,11 @@ currentness 出口。状态取值：
 workpack/token，不能为“保险”再买一席或重跑 Review。旧 Review v1 仍含
 `mode/mode_dir`；当前 v3 另删除来源状态、计数及章节展示副本，由 producer 免费重建，不做迁移。
 
-## 四、审批与人工服务账：HTTP v6，盘上 v7
+## 四、审批与人工服务账：HTTP v7，盘上 v8
 
 ### 4.1 审批版本与职责
 
-`ApprovalDoc.v=6` 是 HTTP 公共视图版本，字段为 `sid`、完整 `gate`、完整 `seen`、
+`ApprovalDoc.v=7` 是 HTTP 公共视图版本，字段为 `sid`、完整 `gate`、完整 `seen`、
 `writing`、typed `design_review`、typed `structure`、typed `writing_approval`、typed `closure` 与
 `spawns`；它不再暴露 `deep`。前三份 typed 决定分别服务 Stage4A、最终结构和写作授权，不能
 互相推出；`closure` 服务 Stage5 成稿后的整书人工闭合。`gate.s4=true` 只可能来自当前结构主体的

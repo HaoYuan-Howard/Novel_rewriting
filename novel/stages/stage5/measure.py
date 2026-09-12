@@ -327,9 +327,10 @@ def chapter_source(entry: dict[str, Any], source_text: dict[int, str]) -> str:
 
 
 def mandated_verbatim(entry: dict[str, Any]) -> str:
-    """本章**被契约要求逐字复现**的全部句子拼起来——重合度要扣掉的那部分。"""
-    return ''.join(v for scene in (entry.get('scenes') or [])
-                   for v in (scene.get('verbatim') or []))
+    """按已登记场景端点取得字面义务，与写作保真判据共用约束投影。"""
+    from novel.stages.stage5.plot_checks import fidelity_scenes
+    return ''.join(dict.fromkeys(value for scene in fidelity_scenes(entry)
+                                  for value in scene['verbatim']))
 
 
 def overlap_ratio(text: str, entry: dict[str, Any],

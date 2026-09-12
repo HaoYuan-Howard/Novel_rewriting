@@ -16,7 +16,8 @@ from contracts.schema.common import Sha256
 class ScopeSelection(FrozenModel):
     input_rel: str = Field(min_length=1)
     projection: Literal['plot_chapter', 'source_chapter', 'collection_members',
-                        'plot_global', 'plot_inherited_states', 'source_ranges', 'plot_global_review']
+                        'plot_global', 'plot_inherited_states', 'source_ranges', 'plot_global_review',
+                        'plot_subjects', 'plot_characters']
     # collection_members 用明确路径和主键；其他两种按阅读序取唯一章。
     chapter_ordinal: int | None = Field(default=None, ge=1, strict=True)
     path: tuple[str, ...] = ()
@@ -31,7 +32,12 @@ class ScopeSelection(FrozenModel):
                     or not self.selected_ids or len(set(self.selected_ids)) != len(self.selected_ids)
                     or any(not re.fullmatch(r'p:[1-9]\d*:[1-9]\d*', ref) for ref in self.selected_ids)):
                 raise ValueError('原文证据投影需要唯一章号及不重复的明确段范围')
-        elif self.projection == 'plot_global_review':
+        elif self.projection == 'plot_characters':
+            if (self.chapter_ordinal is None or self.path or self.key_field is not None
+                    or self.selected_ids is None or len(set(self.selected_ids)) != len(self.selected_ids)
+                    or any(not ref.startswith('char_') for ref in self.selected_ids)):
+                raise ValueError('人物审阅投影需要明确且不重复的人物闭集')
+        elif self.projection in ('plot_global_review', 'plot_subjects'):
             if (self.chapter_ordinal is None or self.path or self.key_field is not None
                     or self.selected_ids is None or len(set(self.selected_ids)) != len(self.selected_ids)
                     or any(':' not in ref for ref in self.selected_ids)):

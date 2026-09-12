@@ -128,7 +128,7 @@ _hard('verbatim_missing', '剧情必需的字面例外原样出现了', 'R-7.3',
            '`beat_index` → `verbatim_pieces` 的形态断过一版，下发面上一条材料都没有，'
            '于是本条的循环一次都不进、报绿，而闭卷写手手里一个原文字节都没有。'
            '⇒ 现在分母（下发了多少条材料）无条件打在 `scanned` 那一行上，'
-           '**分母为零落 `unver` 不落 `pass`**；根因那一条是 stage4 的 `ctx_hinge_delivered`。')
+           '**分母为零落 `unver` 不落 `pass`**；上下文来源一致性由 stage4 的 `ctx_plot_exact` 检查。')
 
 _info('verbatim_typo', '剧情字面例外的近似匹配诊断', 'R-7.3', quote=True,
       note='等长窗口最小汉明距 ≤2 时保留改字诊断；它不能证明密码或识别序列等价。'
@@ -423,7 +423,7 @@ _metric('dash_report', '〔度量〕破折号密度', 'R-7.21b',
 _info('fact_atom_unattested', '事实原子的表面探针在源章原文里找得到', 'R-7.22b',
       owner='stage2',
       note='⚠⚠ **这是上游的账，`owner` 因此记 stage2 而不是本层。**'
-           '探针来自 Stage2 `fact_atoms[].claim`；若在同章源文都找不到，Stage5 改稿无能为力。'
+           '探针来自完整剧情节点与已登记约束；源文未支持的内容交上游核查，不能让 Stage5 改稿制造依据。'
            '⚠ 不给 `repair`/`directive`：本层重写改变不了上游抽出来的原子，'
            '**没有一条本层可执行的动作**（`owner != stage` ⇒ `actionable=False`）')
 

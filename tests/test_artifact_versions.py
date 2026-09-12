@@ -142,8 +142,8 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '旧 v1 回执保留历史字节；由 stage2.global --apply-edit 按当前 v5 输入与来源重新生成 v2，不迁移旧回执',
     ),
     'stage2/chapter_blueprints.json': (
-        8,
-        '四次破坏。2026-08-19 bounded-fidelity-v2 → v3：beat 的区间改由段号'
+        9,
+        '历次破坏。2026-08-19 bounded-fidelity-v2 → v3：beat 的区间改由段号'
         '算出，SourceSpan.recovery 去掉 lcs，BlueprintProvenance.verbatim_recovered '
         '删除。2026-08-23：BlueprintContext.architecture 从七值收窄为 '
         'extraction-ir-v1.1 / v2 / v3.1 三值，退役 bounded-fidelity-v3、v1、v2.1、v3。'
@@ -152,56 +152,84 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '`entry_state_refs` 与 `ending_state_refs`；hinge 新增稳定 id。2026-08-26 v6 删除'
         'summary、present_names、叙述显示名、hinge 重复父键与无消费者 provenance 账。'
         '2026-09-01 v7 新增 typed narrative_relations（故事时序、回应、必须同场、观察），'
-        '并把 hard/review 分级写入正式关系契约；v8 新增材料 source_fact_refs、对白语义与有剧情依据的字面例外',
-        'stage2.blueprint 整跑（付费）；.INVALID 与 _rounds/ 一律作废，'
-        '不手补字段冒充当前产地。仓内没有迁移机制，任何 v3 信封'
-        '都必须由 producer 重建为当前 v8；旧根整根归档，不把旧材料字面要求迁移成语义决定',
+        '并把 hard/review 分级写入正式关系契约；v8 新增材料 source_fact_refs、对白语义与有剧情依据的字面例外；'
+        '2026-09-12 v9 切换 plot-blueprint-v1：删除全量 fact_atoms/hinges 及事实关系网，'
+        '完整剧情只保存在 beat.content；新增统一 EvidenceAnchor、稀疏状态、约束和显式状态端点',
+        '旧根仅配对冻结旧代码恢复，不迁移旧事实、不沿用旧审批。新空根由 stage2.blueprint '
+        '在既有付费及外发授权下按章重建 v9，再完成章级及跨章审阅。旧版本的 INVALID、'
+        '回答和检查点不能冒充 v9 来源；当前 v9 已购结果依其正式身份免费恢复',
+    ),
+    'stage2/knowledge_links.json': (
+        2,
+        '2026-09-12 随 Blueprint v9 将事实关联改为现有 Beat/State/Global 主体引用；'
+        '必要知识事件显式登记、修订或撤销，以稳定事件身份和历史 CAS 管理传播及读者披露，'
+        '不从每个状态自动推导读者立即知晓',
+        '旧 v1 字节仅随旧根和旧代码恢复；新根在当前 Blueprint 章节审阅中登记必要事件并裁决，'
+        '由 stage2.blueprint 的关闭审阅入口免费物化 v2。旧关联与接受不自动迁入新事件时间线',
     ),
     'stage4/plan_chapters.json': (
-        4,
+        5,
         '三次破坏。2026-08-25 v2 删除 `PlanBeat`/`segments`/`from_beats`，改为原子事实 '
         '`semantic_contract` + `scenes`。2026-08-25 v3 把源序可见的一次规划拆成 '
         '`stage4.design` 盲设计与 `stage4.plan` 证据绑定，逐章新增 retain/reconstruct '
         '决定与声明/代码复算变化；2026-08-26 v4 删除展示/过程/派生字段：goal rationale、'
         '权重、reconstruction_strategy、semantic_contract、FactRef.chapter、PlanParams、'
-        'provenance params 与持久化 computed_change_kinds',
-        '依次付费重跑 `stage4.design` 与 `stage4.plan`；旧 v2/v3 不迁移、不补字段。'
-        '`stage4.context` 随后免费重建；Stage5 canonical 因消费计划改变而全书重写',
+        'provenance params 与持久化 computed_change_kinds；2026-09-12 v5 以 BeatPlacement '
+        '作为节点到场景唯一映射，分场 delivery 保留父节点身份，并显式绑定知识、状态和约束端点',
+        '旧 v1～v4 仅在配对旧根/旧代码恢复；新空根在 Blueprint/KL 闭合后由 stage4.design '
+        '和章级 stage4.plan 重建，保留两次正式审阅。Context 免费重编译，Stage5 按实际消费变化失效；'
+        '普通分场不触发 Stage2 重抽或重开已有效接受的章审',
     ),
     'stage4/plan_edit.json': (
-        4,
+        5,
         '三次破坏：v2 改为语义契约 + scenes；v3 与正式计划同步新增章级结构决定及代码复算变化；'
-        'v4 与正式计划同步删除展示/过程/派生字段',
-        '旧人工编辑集不能凭空推造当前结构；需要时由人按当前 PlanEdit v4 重写',
+        'v4 与正式计划同步删除展示/过程/派生字段；2026-09-12 v5 与正式计划同步采用 '
+        'BeatPlacement、presentation deliveries 和明确端点，删除逐事实编辑面',
+        '旧编辑集随旧根/旧代码恢复，不升级版本号复用；新根需要编辑时按当前 PlanEdit v5 '
+        '重新填写，重新核验真实依赖与受影响的 Stage4 接受',
     ),
     'stage4/blind_candidate.json': (
-        3,
+        4,
         'v2 删除三个 goal 的 rationale；v3 删除退役整书拒稿采用来源，'
-        '策略/单章架构改为必填，旧候选快照不得冒充当前 unit lineage',
-        '整根归档旧输出后，由新根内 stage4.design 策略和单章 producer 付费重建；'
-        '旧 v1/v2 不迁移、不补字段。当前 schema 的已保存回答和 prepared 仍可免费恢复',
+        '策略/单章架构改为必填，旧候选快照不得冒充当前 unit lineage；2026-09-12 v4 '
+        '规划完整剧情及呈现分配，使用人物语义目录与 opaque alias，退役事实 alias 和逐事实落场',
+        '旧 v1～v3 仅配对旧根/旧代码恢复；新根由 stage4.design 策略及章级 producer '
+        '在原授权内重建 v4，并重新完成设计审阅。当前 schema 的已保存回答和 prepared 按正式身份免费恢复',
+    ),
+    'stage4/blind_chapter_edit.json': (
+        2,
+        '2026-09-12 单章盲设计编辑随 BlindCandidate v4 切换为本章 opaque alias、'
+        '完整节点 placement、分场指令和必要端点；旧逐事实编辑无法表达这一映射',
+        '旧 v1 编辑留在配对旧根/旧代码中，不自动转成新的呈现指令；新根基于当前章级设计工作包 '
+        '重新填写 v2，编译与设计审阅仍核验当前主体、局部 alias 及依赖身份',
     ),
     'stage4/evidence_binding.json': (
-        4,
+        5,
         '2026-08-26 v2 删除 participant_refs；2026-08-28 v3 把模型 infeasible '
         '降为待核证主张，新增非阻断 binding_concerns、代码铸造的 '
         'infeasibility_proof 与 human/llm 判别来源账；2026-09-08 v4 为按章 legacy B '
         '新增 work_unit_response 来源，绑定原内容轮、请求和回答 SHA；'
-        '删除整书及缺省架构兼容，章模型必须有明确来源，正式绑定必须完整覆盖章集',
+        '删除整书及缺省架构兼容，章模型必须有明确来源，正式绑定必须完整覆盖章集；'
+        '2026-09-12 v5 按已接受章级设计绑定 delivery 的 EvidenceAnchor 和有据舞台，'
+        '不修改 A 的呈现分配、顺序、目标及端点，也不把证据重叠当作剧情重复',
         '旧 base 使用冻结旧代码保留证据；当前 producer 只在新 clean base 从原始材料及 '
         '当前 A 接受后由 stage4.plan 重建，机械章零模型；可显式 --apply-binding 提交当前 '
-        'EvidenceBindingResponse。旧 v1/v2/v3 不原地迁移、不伪造工作单元来源、不手补版本号',
+        'EvidenceBindingResponse。旧 v1～v4 不原地迁移、不伪造工作单元来源、不手补版本号；'
+        '旧根只配对其冻结旧代码恢复，绑定后保留独立结构审阅',
     ),
     'stage4/writer_context.json': (
-        7,
+        8,
         '2026-08-25 删除写手面的 `CtxBeat.events[]`，新增 chapter_rewrite_brief、'
         '四类 delta 在内的人话 semantic_contract 与可直接执行的 CtxScene；v3 随 Stage2 '
         'ArcTrack 删除 dimension/change_type；2026-08-26 v4 删除 world_facts、逐场源字数/参与者、'
         '秘密与规则内部 id、must_not_reveal，并把 characters 改为带 char_id 的数组；v5 删除无消费必要的 facts.arc；'
         'v6 以独立 KnowledgeLinks 生成场景 knowledge 与披露许可；章首秘密仅已知、未开放设定显式为 null；'
-        'v7 删除同号源章、总预算、源字数副本，运行时从章序、场景预算与 Stage1 唯一派生',
-        '`stage4.context` 从当前人物、GlobalKnowledge v6、Blueprint、知识关联及 Plan 免费重建；'
-        '新增关联须先由 Blueprint Commander 显式裁决并免费物化，不手补旧 Context；下游按消费投影判 stale',
+        'v7 删除同号源章、总预算、源字数副本，运行时从章序、场景预算与 Stage1 唯一派生；'
+        '2026-09-12 v8 改为唯一章级剧情目录、场景 delivery、稀疏状态和逐场知识表达许可，'
+        '不重复展开父节点正文，不宣称章级写作请求物理隔离后场材料',
+        '旧 Context 只在配对旧根/旧代码恢复；新根由 stage4.context 从当前人物、Global v6、'
+        'Blueprint v9、KnowledgeLinks v2 及已接受 Plan v5 免费重建 v8。新增事件先经 Blueprint '
+        'Commander 裁决及物化；不手补旧 Context，下游请求、检查和恢复按实际消费身份判 stale',
     ),
     'stage5/ch{nn}.json': (
         3,

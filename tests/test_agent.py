@@ -3586,7 +3586,9 @@ def _design_review_task(current, request_path, *, review_token=_REPLAY_TOKEN):
             agent.stage4_reviewer_wire.REFERENCE_CLOSURE: {
                 '1': {
                     'scene_refs': ['c0001_s001'],
-                    'fact_aliases': ['a_0000000000000001'],
+                    'beat_aliases': ['a_0000000000000001'],
+                    'constraint_aliases': [], 'endpoint_aliases': [],
+                    'state_aliases': [], 'global_aliases': [],
                     'participant_aliases': [],
                 },
             },
@@ -4637,9 +4639,7 @@ def test_blueprint_paid_answer_survives_code_rollover_at_every_recovery_window(
     real_prepare = agent.reviewer_revalidation.prepare
     monkeypatch.setattr(agent.reviewer_revalidation, 'prepare',
         lambda *a, **k: None if legacy_first and phase['value'] == 0 else real_prepare(*a, **k))
-    real_schema = agent.stage2_reviewer_wire.output_schema_for
-    monkeypatch.setattr(agent.stage2_reviewer_wire, 'output_schema_for',
-        lambda task: None if legacy_first and phase['value'] == 0 else real_schema(task))
+    # 这里只模拟旧业务 hash 混入验证 seal，不把无 schema 的旧 wire 偷渡为当前协议。
 
     def default_spawn(_run_id, *, on_registered=None):
         def spawn(invocation, env, log):
@@ -4652,8 +4652,7 @@ def test_blueprint_paid_answer_survives_code_rollover_at_every_recovery_window(
                 response['action']['payload']['knowledge_links']['reason'] = '与整轮审阅不一致的理由'
             if len(invocations) == 2:
                 assert '与整轮审阅不一致的理由' in invocation.stdin_text and 'typed' in invocation.stdin_text
-            if (not legacy_first or phase['value'] > 0) and (
-                    window != 'typed_rejection' or len(invocations) > 1):
+            if window != 'typed_rejection' or len(invocations) > 1:
                 response = _wire_response(response)
             on_registered()
             return CommanderProcessResult(exit_code=0, wire_evidence=True,
@@ -4665,7 +4664,7 @@ def test_blueprint_paid_answer_survives_code_rollover_at_every_recovery_window(
         return spawn
 
     monkeypatch.setattr(agent, '_default_spawn', default_spawn)
-    real_materialize = agent._materialize_reviewer_document
+    real_materialize = agent._materialize_reviewer_response
     real_save = agent.WorkUnitBudget.save_recovery
     real_promote = agent._promote_reviewer_candidate
     real_discard = agent.uploads.discard_edit_plan
@@ -4691,7 +4690,7 @@ def test_blueprint_paid_answer_survives_code_rollover_at_every_recovery_window(
             raise OSError('synthetic crash between successor save and old record retirement')
         return real_discard(*args, **kwargs)
 
-    monkeypatch.setattr(agent, '_materialize_reviewer_document', materialize)
+    monkeypatch.setattr(agent, '_materialize_reviewer_response', materialize)
     monkeypatch.setattr(agent.WorkUnitBudget, 'save_recovery', save)
     monkeypatch.setattr(agent, '_promote_reviewer_candidate', promote)
     monkeypatch.setattr(agent.uploads, 'discard_edit_plan', discard)
@@ -8257,6 +8256,8 @@ def _stage2_feedback(unit, index):
 def _stage2_commander_unit(base, waiting_on=queue.WAITING_ON_STAGE2_REVIEW):
     from novel.work_units import WorkUnitBudget
     node, scope = agent.commander_work_unit(waiting_on)
+    if node == 'stage2.blueprint':
+        scope = 'chapter:1'
     return WorkUnitBudget(base, '42', node, 'commander', scope)
 
 
@@ -8286,7 +8287,8 @@ def _stage2_work_unit_harness(base, monkeypatch, *, mode='invalid', both=False):
             business_sha256=('e' if progress['node'] == 'stage2.global' else 'f') * 64,
             request_path=Path(request_path), prompt='完整且不可变的 Stage2 审阅工作包',
             submission_options=(), workpack_sha256='a' * 64, source_sha256='b' * 64,
-            main_text_sha256='c' * 64, progress_sha256='d' * 64, blocker_count=1)
+            main_text_sha256='c' * 64, progress_sha256='d' * 64, blocker_count=1,
+            work_unit_scope='chapter:1' if progress['node'] == 'stage2.blueprint' else None)
         box['task'] = task
         return task
     monkeypatch.setattr(agent.reviewer_tasks, 'build_task', build_task)
@@ -8305,7 +8307,7 @@ def _stage2_work_unit_harness(base, monkeypatch, *, mode='invalid', both=False):
                    if progress['node'] == 'stage2.global' else {
                        'actor': 'agent:test', 'reason': f'轮次:{ordinal}',
                        'review_token': 'brt1_' + 'a' * 64,
-                       'chapters': [{'chapter_ordinal': 1, 'narrative_relations': []}]})
+                       'chapters': [{'chapter_ordinal': 1, 'constraints': []}]})
         return agent.reviewer_tasks.ReviewerNodeAction(
             kind='node', node=progress['node'], flags=('--apply-edit', '@reviewer-input'),
             input_payload=encode_artifact(
@@ -8447,8 +8449,8 @@ def test_stage2_two_commanders_use_independent_continuous_four_call_budgets(
     assert [row.resume_provider_session_id for row in calls] == [
         None, 'provider-global', 'provider-global', 'provider-global',
         None, 'provider-blueprint', 'provider-blueprint', 'provider-blueprint']
-    assert [budget_type(base, '42', node, 'commander', agent.commander_work_unit(queue.WAITING_ON_STAGE2_REVIEW if node == 'stage2.global' else queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW)[1]).used
-            for node in ('stage2.global', 'stage2.blueprint')] == [4, 4]
+    assert [_stage2_commander_unit(base, waiting_on).used for waiting_on in (
+        queue.WAITING_ON_STAGE2_REVIEW, queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW)] == [4, 4]
 
 
 def test_stage2_saved_model_answer_survives_submission_crash_without_rebuy(

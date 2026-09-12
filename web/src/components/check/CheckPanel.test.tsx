@@ -21,11 +21,11 @@ describe('CheckPanel', () => {
       },
       rules: [
         {
-          rule: 'hinge_in_hole',
+          rule: 'draft_too_short',
           sev: 'hard',
           status: 'hit',
-          item: '要害落洞',
-          requirement: '要害必须落在正文',
+          item: '成稿不是空的或残的',
+          requirement: 'R-7.15',
           check_kind: 'mechanical',
           remediation: 'llm',
           fix: {
@@ -37,7 +37,7 @@ describe('CheckPanel', () => {
           },
           findings: [
             {
-              rule: 'hinge_in_hole',
+              rule: 'draft_too_short',
               sev: 'hard',
               item: 'ch11',
               output_ordinal: 11,

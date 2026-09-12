@@ -1,162 +1,139 @@
-"""跨候选内容摘要必须把交叉复核限制到可证明范围，未知范围保持全量。"""
+"""当前范围消费的实际材料/身份反例，替代退役 fact/hinge 快照摘要。
+
+不把字符数、证据范围或这些确定性断言当作 Commander 语义接受。
+"""
 from __future__ import annotations
 
-import copy
+from dataclasses import replace
+import json
 
-from novel.stages.stage2.review_delta import (
-    ChapterScope, CrossReviewScope, GlobalItemScope, compare, snapshot,
-)
-
-
-def _item(path='entities.characters.char_001.role', *, summary=False, wide=False):
-    return GlobalItemScope(
-        item_id='role:' + path + ':' + 'a' * 12,
-        subject_path=path, subject_sha256='a' * 64,
-        field_sha256={'role': 'a' * 64}, char_ids=['char_001'],
-        evidence_chapters=[1], whole_book=wide, collection_summary=summary)
-
-
-def _scope(items=None):
-    return CrossReviewScope(
-        review_subject_sha256='a' * 64, main_text_sha256='f' * 64,
-        global_items=items or {'role:entities.characters.char_001.role': _item()},
-        chapters={
-            1: ChapterScope(subject_sha256='1' * 64, char_references={
-                'char_001': ['chapter:1/fact:f01_001']}),
-            2: ChapterScope(subject_sha256='2' * 64, char_references={
-                'char_002': ['chapter:2/fact:f02_001']}),
-            3: ChapterScope(subject_sha256='3' * 64, char_references={
-                'char_003': ['chapter:3/beat:b03_01']}),
-        })
+from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING
+from contracts.schema.stage1 import MainText
+from contracts.schema.stage2 import ChapterBlueprints
+from novel.consumption import invalidated_scopes
+from novel.stages.stage2 import plot_review
+from novel.stages.stage2.plot_compile import source_digest
+from novel.views.plot_review import PlotReviewSnapshot
+from tests.stage2_fixtures import formal_subjects, plot_blueprints
+from tests.test_stage2 import global_grounding, main_text
 
 
-def _changed(before):
-    after = before.model_copy(deep=True, update={'review_subject_sha256': 'b' * 64})
-    key = next(iter(after.global_items))
-    after.global_items[key] = after.global_items[key].model_copy(update={
-        'item_id': 'role:new:' + 'b' * 12, 'subject_sha256': 'b' * 64,
-        'field_sha256': {'role': 'b' * 64}})
-    return after
+def snapshot():
+    registry, knowledge = formal_subjects(global_grounding())
+    # 本组明确让母女关系从第二章进入材料，第一章才能作为真实无依赖的对照。
+    knowledge.entities.relations[0].valid_from_chapter = 2
+    knowledge.entities.relations[0].visibility.from_chapter = 2
+    raw = plot_blueprints()
+    raw['_provenance'].update(code='fixture', root_clean_sha1='0' * 40,
+        inputs={}, prompts={'FIXTURE_ONLY': '0' * 10}, model='fixture')
+    return PlotReviewSnapshot(None, MainText.model_validate(main_text()),
+        ChapterBlueprints.model_validate(raw), knowledge, STAGE2_CHAPTER_BLUEPRINTS,
+        {STAGE1_MAIN_TEXT: 'a' * 64, STAGE2_CHAPTER_BLUEPRINTS: 'b' * 64,
+         STAGE2_GLOBAL_GROUNDING: 'c' * 64, STAGE2_CHARACTERS: 'd' * 64}, (), registry)
 
 
-def test_non_name_field_change_reuses_other_chapters_and_pairs_changed_identity():
-    before = _scope()
-    delta = compare(before, _changed(before))
-    assert delta.mode == 'targeted'
-    assert delta.affected_chapter_ordinals == [1]
-    assert delta.reusable_accepted_chapter_ordinals == [2, 3]
-    assert len(delta.changed_global_items) == 1
-    row = delta.changed_global_items[0]
-    assert row.change == 'changed' and row.changed_fields == ['role']
-    assert row.affected_references == ['chapter:1/fact:f01_001']
+def identities(current):
+    return {n: current.identity(f'chapter:{n}')[0] for n in current.ordinals}
 
 
-def test_relation_endpoint_change_includes_old_and_current_references():
-    before = _scope({'relation:entities.relations.rel_001': _item('entities.relations.rel_001')})
-    after = _changed(before)
-    key = next(iter(after.global_items))
-    after.global_items[key] = after.global_items[key].model_copy(update={
-        'char_ids': ['char_002'], 'evidence_chapters': [2],
-        'field_sha256': {'object_id': 'b' * 64}})
-    delta = compare(before, after)
-    assert delta.affected_chapter_ordinals == [1, 2]
-    assert delta.reusable_accepted_chapter_ordinals == [3]
-    assert delta.changed_global_items[0].affected_references == [
-        'chapter:1/fact:f01_001', 'chapter:2/fact:f02_001']
+def changed_scopes(before, after):
+    old, new = identities(before), identities(after)
+    return {n for n in old if old[n] != new[n]}
 
 
-def test_collection_change_inherits_only_related_detailed_facts():
-    before = _scope()
-    before.global_items['characters'] = _item('entities.characters', summary=True, wide=True)
-    after = _changed(before)
-    after.global_items['characters'] = after.global_items['characters'].model_copy(update={
-        'subject_sha256': 'c' * 64, 'field_sha256': {'members': 'c' * 64},
-        'char_ids': ['char_001', 'char_002']})
-    delta = compare(before, after)
-    assert delta.mode == 'targeted' and delta.affected_chapter_ordinals == [1]
-    aggregate = next(row for row in delta.changed_global_items if row.subject_path == 'entities.characters')
-    assert aggregate.affected_references == ['chapter:1/fact:f01_001']
+def pack(current, ordinal):
+    scope = f'chapter:{ordinal}'
+    return plot_review.build_workpack(scope, current.inputs,
+        additional_selections=current.additional_selections(scope),
+        extra_identity=current.knowledge_scope(scope).scope_sha256)
 
 
-def test_unrelated_collection_or_changed_main_text_cannot_borrow_local_scope():
-    before = _scope()
-    before.global_items['secrets'] = _item('canon.secrets', summary=True, wide=True)
-    after = _changed(before)
-    after.global_items['secrets'] = after.global_items['secrets'].model_copy(update={'subject_sha256': 'c' * 64})
-    assert compare(before, after).mode == 'full'
-    before.global_items['secrets'] = _item('entities.characters', summary=True, wide=True)
-    after = _changed(before)
-    after.global_items['secrets'] = after.global_items['secrets'].model_copy(update={'subject_sha256': 'c' * 64})
-    after.main_text_sha256 = 'e' * 64
-    assert compare(before, after).mode == 'full'
+def test_non_name_character_change_reopens_only_real_consumers_and_supplies_identity_text():
+    before, after = snapshot(), snapshot()
+    after.characters.characters['char_002'].role += '，掌管家中内院日常'
+    assert changed_scopes(before, after) == {2, 3}
+    current = pack(after, 2)
+    person = next(row for rows in current.material['dependencies'] if isinstance(rows, list)
+                  for row in rows if row.get('kind') == 'character' and row['ref'] == 'char_002')
+    assert person['value']['canonical'] == '沈母'
+    assert person['value']['role'].endswith('掌管家中内院日常')
+    assert person['value']['address'][0]['surface'] == '母亲'
+    assert person['evidence'] and 'source' not in person['value']['role_evidence']
 
 
-def test_world_rule_scope_is_full_and_removed_fact_keeps_old_references():
-    before = _scope({'rule': _item('canon.world_rules.rule_001', wide=True)})
-    delta = compare(before, _changed(before))
-    assert delta.mode == 'full' and delta.affected_chapter_ordinals == [1, 2, 3]
-    before = _scope()
-    after = before.model_copy(deep=True)
-    after.global_items.clear()
-    delta = compare(before, after)
-    assert delta.mode == 'targeted' and delta.affected_chapter_ordinals == [1]
-    assert delta.changed_global_items[0].change == 'removed'
+def test_relation_endpoint_changes_rebind_current_people_and_cannot_reuse_old_digest():
+    before, after = snapshot(), snapshot()
+    relation = after.knowledge.entities.relations[0]
+    relation.subject_id, relation.object_id = relation.object_id, relation.subject_id
+    assert changed_scopes(before, after) == {2, 3}
+    for current in (before, after):
+        people = next(row for row in current.additional_selections('chapter:2')
+                      if row.projection == 'plot_characters')
+        assert people.selected_ids == ('char_001', 'char_002')
 
 
-def test_changed_blueprint_chapter_and_no_change_have_distinct_scopes():
-    before = _scope()
-    assert compare(None, before).mode == 'initial'
-    assert compare(before, before).mode == 'unchanged'
-    after = before.model_copy(deep=True)
-    after.chapters[2] = after.chapters[2].model_copy(update={'subject_sha256': 'b' * 64})
-    delta = compare(before, after)
-    assert delta.changed_global_items == [] and delta.changed_blueprint_chapters == [2]
-    assert delta.affected_chapter_ordinals == [2]
+def test_collection_addition_and_removal_are_seen_without_expiring_unrelated_chapter():
+    before, added, removed = snapshot(), snapshot(), snapshot()
+    added.knowledge.entities.relations.append(added.knowledge.entities.relations[0].model_copy(
+        update={'relation_id': 'rel_02', 'predicate': '共同生活'}))
+    removed.knowledge.entities.relations.clear()
+    assert changed_scopes(before, added) == {2, 3}
+    assert changed_scopes(before, removed) == {2, 3}
 
 
-def test_snapshot_pairs_real_item_hash_changes_by_stable_fact_slot(monkeypatch):
-    from novel.views import stage2 as view
-    from tests.test_stage2_blueprint_workpack import _Store, _book_subjects, _install, _report
-    main, blueprints, _ = _book_subjects()
-    blueprints.blueprints[1].beats[0].present_char_ids = ['char_002']
-    store = _Store(main, blueprints)
-    _install(monkeypatch, store, _report())
-    pack = view.blueprint_review_workpack('.', store.ctx.sid)
-    item = {'kind': 'role', 'item_id': 'role:entities.characters.char_001.role:aaaaaaaaaaaa',
-            'subject_path': 'entities.characters.char_001.role', 'subject_sha256': 'a' * 64,
-            'subject': '城门守卫', 'current_state': 'PASS', 'formal_evidence': []}
-    before = snapshot(pack.model_copy(update={'global_review': {'items': [item]}}))
-    changed = copy.deepcopy(item)
-    changed.update(item_id='role:entities.characters.char_001.role:bbbbbbbbbbbb',
-                   subject_sha256='b' * 64, subject='城门巡查')
-    after = snapshot(pack.model_copy(update={'global_review': {'items': [changed]}}))
-    delta = compare(before, after)
-    assert len(delta.changed_global_items) == 1
-    assert delta.changed_global_items[0].change == 'changed'
-    assert delta.changed_global_items[0].changed_fields == ['value']
-    assert delta.affected_chapter_ordinals == [1]
+def test_unconsumed_foreign_source_edit_is_local_but_consumed_evidence_edit_is_not():
+    before, after = snapshot(), snapshot()
+    after.main.root[1].text += '\n\n院门外起了一阵微风。'
+    after.blueprints.blueprints[1].source_sha256 = source_digest(after.main.root[1].text)
+    assert changed_scopes(before, after) == {2}
+    source = after.characters.characters['char_002'].role_evidence.source
+    source.text, source.start = source.text[1:], source.start + 1
+    after = replace(after)
+    assert changed_scopes(before, after) == {2, 3}
 
 
-def test_changed_identity_reopens_a_chapter_with_only_dialogue_reference(monkeypatch):
-    from contracts.schema.stage2 import DialogueSemantics
-    from novel.views import stage2 as view
-    from tests.test_stage2_blueprint_workpack import _Store, _book_subjects, _install, _report
-    main, blueprints, _ = _book_subjects()
-    store = _Store(main, blueprints)
-    _install(monkeypatch, store, _report())
-    pack = view.blueprint_review_workpack('.', store.ctx.sid)
-    chapter = next(row for row in pack.chapters if row.chapter_ordinal == 2)
-    hinge = chapter.beats[0].hinges[0]
-    chapter.beats[0].hinges[0] = hinge.model_copy(update={
-        'kind': '要害台词', 'dialogue': DialogueSemantics(
-            speaker={'kind': 'character', 'char_id': 'char_003'},
-            addressees=None, meaning='陌生人请乙关门', speech_act='请求')})
-    item = {'kind': 'role', 'item_id': 'role:char_003:old',
-            'subject_path': 'entities.characters.char_003.role', 'subject_sha256': 'a' * 64,
-            'subject': '路人', 'current_state': 'PASS', 'formal_evidence': []}
-    before = snapshot(pack.model_copy(update={'global_review': {'items': [item]}}))
-    changed = {**item, 'item_id': 'role:char_003:new', 'subject_sha256': 'b' * 64, 'subject': '守卫'}
-    after = snapshot(pack.model_copy(update={'global_review': {'items': [changed]}}))
-    delta = compare(before, after)
-    assert delta.affected_chapter_ordinals == [2]
-    assert delta.changed_global_items[0].affected_references == [f'chapter:2/hinge:{hinge.hinge_id}']
+def test_world_rule_change_or_removal_reopens_each_actual_scope():
+    before, changed, removed = snapshot(), snapshot(), snapshot()
+    changed.knowledge.canon.world_rules[0].versions[0].desc += '，需在日落前归家'
+    removed.knowledge.canon.world_rules.clear()
+    assert changed_scopes(before, changed) == {1, 2, 3}
+    assert changed_scopes(before, removed) == {1, 2, 3}
+
+
+def test_blueprint_content_identity_is_chapter_local_and_propagates_to_its_consumers():
+    before, after = snapshot(), snapshot()
+    after.blueprints.blueprints[1].beats[0].content += '，她因此急忙赶回院里。'
+    assert changed_scopes(before, after) == {2}
+    assert identities(before) == identities(snapshot())
+    manifests = [before.identity(f'chapter:{n}')[1] for n in before.ordinals]
+    assert invalidated_scopes(manifests, after.inputs, contracts={
+        row.scope: row.contract for row in manifests}) == frozenset({'chapter:2'})
+
+
+def test_same_character_id_with_new_evidence_changes_manifest_and_workpack_together():
+    before, after = snapshot(), snapshot()
+    person = after.characters.characters['char_002']
+    person.role_evidence.source.end -= 1
+    person.role_evidence.source.text = person.role_evidence.source.text[:-1]
+    old, new = pack(before, 2), pack(after, 2)
+    assert old.subject_sha256 != new.subject_sha256 and old.manifest != new.manifest
+    assert old.material != new.material
+    assert 'fact_atoms' not in json.dumps(new.material)
+
+
+def test_character_only_referenced_by_dialogue_participant_still_invalidates_its_chapter():
+    before, after = snapshot(), snapshot()
+    for current in (before, after):
+        current.knowledge.entities.relations.clear()
+        for chapter in current.blueprints.blueprints:
+            for beat in chapter.beats:
+                beat.participant_char_ids = ['char_001']
+                for context in beat.source_contexts:
+                    context.present_char_ids = ['char_001']
+        # 对白属于完整节点；没有独立 dialogue/hinge 也必须绑定参与人物。
+        current.blueprints.blueprints[1].beats[0].participant_char_ids.append('char_002')
+    after.characters.characters['char_002'].role += '，仍在门口等待'
+    assert changed_scopes(before, after) == {2}
+    people = next(row for row in after.additional_selections('chapter:2')
+                  if row.projection == 'plot_characters')
+    assert 'char_002' in people.selected_ids

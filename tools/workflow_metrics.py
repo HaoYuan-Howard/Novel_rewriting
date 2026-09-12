@@ -1469,7 +1469,7 @@ def structure_readings(novel_dir: Path) -> dict[str, Any]:
             'state': metrics.get('state'),
             'section_states': {
                 section: (metrics.get(section) or {}).get('state')
-                for section in ('mapping', 'partition', 'order', 'adjacency',
+                for section in ('mapping', 'partition', 'order',
                                 'boundary', 'noncontiguous', 'anchors', 'eligibility')
             },
         })

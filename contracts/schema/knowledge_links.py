@@ -53,8 +53,70 @@ KnowledgeLinkResolution = Annotated[
 
 KnowledgeLinkKind = Literal[
     'secret_reveal', 'secret_setup', 'knowledge_event', 'world_rule', 'world_rule_reveal',
-    'relation', 'relation_visibility', 'character_state', 'setting', 'state_reveal',
+    'relation', 'relation_visibility', 'character_state', 'setting',
+    'reader_reveal', 'character_knowledge',
 ]
+
+
+class PlotKnowledgeEvidence(FrozenModel):
+    chapter_ordinal: int = Field(ge=1)
+    evidence_ref: str = Field(min_length=1)
+
+
+class PlotKnowledgeEvent(FrozenModel):
+    """仅声明必要的传播许可，命题正文继续属于引用的 Beat/State。"""
+    kind: Literal['reader_reveal', 'character_knowledge']
+    subject_ref: PlotSubjectRef
+    audience: KnowledgeSubject | None
+    chapter_ordinal: int = Field(ge=1)
+    evidence_refs: list[PlotKnowledgeEvidence] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _subject_and_audience(self) -> Self:
+        if self.subject_ref.kind not in ('beat', 'state'):
+            raise ValueError('稀疏剧情知识事件只引用既有 Beat/State；Global 使用既有知识通路')
+        if (self.kind == 'character_knowledge') != (self.audience is not None):
+            raise ValueError('人物传播必须有受众；读者披露的 audience 为 null')
+        keys = [(row.chapter_ordinal, row.evidence_ref) for row in self.evidence_refs]
+        if len(keys) != len(set(keys)):
+            raise ValueError('知识事件证据不得重复')
+        return self
+
+
+EventId = Annotated[str, Field(pattern=r'^ke_[a-zA-Z0-9_-]{1,80}$')]
+
+
+class PutPlotKnowledgeEvent(FrozenModel):
+    operation: Literal['put']
+    event_id: EventId
+    expected_event_sha256: Sha256 | None
+    event: PlotKnowledgeEvent
+    resolution: Annotated[KnowledgeAtBeats | KnowledgeLinkUnresolved, Field(discriminator='kind')]
+
+
+class RetirePlotKnowledgeEvent(FrozenModel):
+    operation: Literal['retire']
+    event_id: EventId
+    expected_event_sha256: Sha256
+    reason: str = Field(min_length=1)
+
+
+PlotKnowledgeEventOperation = Annotated[
+    PutPlotKnowledgeEvent | RetirePlotKnowledgeEvent, Field(discriminator='operation')]
+
+
+class RegisteredPlotKnowledgeEvent(FrozenModel):
+    event_id: EventId
+    event_sha256: Sha256
+    event: PlotKnowledgeEvent
+    retired: bool
+    reason: str | None
+
+    @model_validator(mode='after')
+    def _retirement(self) -> Self:
+        if self.retired != bool(self.reason and self.reason.strip()):
+            raise ValueError('退役事件必须保留明确理由；活动事件不保存退役理由')
+        return self
 
 
 class KnowledgeLinkObligation(FrozenModel):
@@ -80,6 +142,7 @@ class KnowledgeLinkSubmission(StrictModel):
     actor: str = Field(min_length=1, max_length=256)
     reason: str = Field(min_length=1, max_length=4096)
     decisions: list[KnowledgeLinkDecision]
+    event_operations: list[PlotKnowledgeEventOperation] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _closed_submission(self) -> Self:
@@ -88,6 +151,9 @@ class KnowledgeLinkSubmission(StrictModel):
         ids = [row.obligation_id for row in self.decisions]
         if len(ids) != len(set(ids)):
             raise ValueError('关联决定的事件不能重复')
+        event_ids = [row.event_id for row in self.event_operations]
+        if len(event_ids) != len(set(event_ids)):
+            raise ValueError('同轮不能重复修改或撤销同一知识事件')
         return self
 
 
@@ -100,6 +166,26 @@ class KnowledgeLinkScope(FrozenModel):
     knowledge_sha256: Sha256
     blueprint_sha256: Sha256
     obligations: list[KnowledgeLinkObligation]
+    registered_events: list[RegisteredPlotKnowledgeEvent] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _event_catalog(self) -> Self:
+        ids = [row.event_id for row in self.registered_events]
+        if len(ids) != len(set(ids)):
+            raise ValueError('知识登记身份不能重复')
+        custom = {row.knowledge_ref: row for row in self.obligations
+                  if row.kind in ('reader_reveal', 'character_knowledge')}
+        expected = {row.event_id: row.event for row in self.registered_events
+                    if not row.retired and (self.chapter_ordinal is None
+                        or row.event.chapter_ordinal == self.chapter_ordinal)}
+        if custom.keys() != expected.keys():
+            raise ValueError('必要知识义务必须与本范围活动事件登记闭合')
+        for ref, event in expected.items():
+            row = custom[ref]
+            if (row.kind, row.subject_ref, row.audience, row.chapter_ordinal) != (
+                    event.kind, event.subject_ref, event.audience, event.chapter_ordinal):
+                raise ValueError('知识义务不能改写事件主体、性质、受众或目标章')
+        return self
 
 
 class KnowledgeLinkRecord(KnowledgeLinkDecision):
@@ -149,8 +235,11 @@ class KnowledgeLinks(StrictModel):
                        else subject.candidate_subject_refs)
             if not ref_keys(record.resolution.subject_refs) <= ref_keys(allowed):
                 raise ValueError('关联不能引用当前事件未开放的主体或时点')
+            if record.resolution.kind == 'at_beats' and not record.resolution.trigger_beat_ref.startswith(
+                    f'b{subject.chapter_ordinal:02d}_'):
+                raise ValueError('知识触发节点必须属于登记章')
+            if (subject.kind in ('reader_reveal', 'character_knowledge')
+                    and (subject.subject_ref.kind, subject.subject_ref.ref)
+                    not in ref_keys(record.resolution.subject_refs)):
+                raise ValueError('必要剧情许可必须引用其完整主体')
         return self
-
-
-# 正在转换的旧 Python 调用点使用同一 V2 类型；旧 JSON kind/字段仍严格拒收。
-KnowledgeAtFacts = KnowledgeAtBeats

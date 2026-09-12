@@ -20,7 +20,7 @@ from tests.test_stage4_reviewer_wire import _alias, _load, _repair, _response, _
 def _goal(code: str = 'scene_goal_exclude') -> dict:
     return {
         'code': code, 'scene_refs': ['c0002_s001'],
-        'opaque_aliases': [_alias(2)], 'effect': None,
+        'opaque_aliases': [_alias(2)],
     }
 
 
@@ -57,9 +57,9 @@ def _active_task():
     task = _task()
     option = task.submission_options[0]
     old = [
-        {'code': 'entry_anchor', 'scene_refs': [], 'opaque_aliases': [_alias(102)], 'effect': None},
-        {'code': 'fact_grouping', 'scene_refs': [],
-         'opaque_aliases': [_alias(102), _alias(2)], 'effect': None},
+        {'code': 'entry_anchor', 'scene_refs': [], 'opaque_aliases': [_alias(102)]},
+        {'code': 'presentation_grouping', 'scene_refs': [],
+         'opaque_aliases': [_alias(102), _alias(2)]},
         _goal('scene_goal'),
     ]
     items = sorted([{
@@ -79,7 +79,7 @@ def _active_response(task):
     operations = {}
     for item in scope['items']:
         code = item['constraint']['code']
-        kind = {'entry_anchor': 'keep', 'fact_grouping': 'withdraw', 'scene_goal': 'supersede'}[code]
+        kind = {'entry_anchor': 'keep', 'presentation_grouping': 'withdraw', 'scene_goal': 'supersede'}[code]
         operations[item['constraint_sha256']] = {
             'kind': kind, 'reason': '按当前章事实与历史要求逐项复核后作出明确处置。',
             'replacements': [_goal()] if kind == 'supersede' else [],
@@ -194,7 +194,7 @@ def test_replacement_collection_normalization_preserves_reference_order():
     operations = response['selection']['payload']['chapters']['2']['constraint_operations']
     supersede = next(value for value in operations.values() if value['kind'] == 'supersede')
     order = {'code': 'disclosure_order', 'scene_refs': [],
-             'opaque_aliases': [_alias(102), _alias(2)], 'effect': None}
+             'opaque_aliases': [_alias(102), _alias(2)]}
     supersede['replacements'] = [_goal(), order]
     row = wire.assemble(task, response)['action']['payload']['chapters'][0]
     actual = next(item for item in row['constraint_operations']['items'] if item['kind'] == 'supersede')
@@ -226,10 +226,12 @@ def test_nineteen_chapter_active_operations_fit_provider_schema_and_keep_every_d
     catalog = {}
     for ordinal in range(1, 20):
         scenes = [f'c{ordinal:04d}_s{index:03d}' for index in range(1, 7 if ordinal <= 2 else 6)]
-        facts = [_alias(ordinal * 1000 + index) for index in range(34 if ordinal <= 13 else 33)]
+        beats = [_alias(ordinal * 1000 + index) for index in range(34 if ordinal <= 13 else 33)]
         participants = [_alias(100000 + ordinal * 10 + index) for index in range(4 if ordinal <= 14 else 3)]
-        closure[str(ordinal)] = {'scene_refs': scenes, 'fact_aliases': facts, 'participant_aliases': participants}
-        old = {'code': 'scene_goal', 'scene_refs': scenes[:1], 'opaque_aliases': facts[:1], 'effect': None}
+        closure[str(ordinal)] = {
+            'scene_refs': scenes, 'beat_aliases': beats, 'participant_aliases': participants,
+            'constraint_aliases': [], 'endpoint_aliases': [], 'state_aliases': [], 'global_aliases': []}
+        old = {'code': 'scene_goal', 'scene_refs': scenes[:1], 'opaque_aliases': beats[:1]}
         catalog[str(ordinal)] = {
             'expected_constraint_set_sha256': _sha([ordinal, old]),
             'items': [{'constraint_sha256': _sha(old), 'constraint': old, 'source_decision_sha256s': ['d' * 64]}],
@@ -245,6 +247,9 @@ def test_nineteen_chapter_active_operations_fit_provider_schema_and_keep_every_d
         if isinstance(value, list):
             return sum(enum_count(child) for child in value)
         return 0
+    assert sum(len(row['beat_aliases']) for row in closure.values()) == 640
+    assert sum(len(row['participant_aliases']) for row in closure.values()) == 71
+    assert sum(len(row['scene_refs']) for row in closure.values()) == 97
     assert enum_count(schema) <= 1000
     rendered = json.dumps(schema)
     for scope in closure.values():

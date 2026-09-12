@@ -18,22 +18,9 @@ context.py —— `writer_context.json` 的**确定性组装**。
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from novel.core.naming import (
-    display_names_at, name_collisions, person_naming_surfaces,
-    project_character_names, rule_names_a_person, surface_first_chapter,
-)
-from novel.core.evidence import without_global_evidence
-from novel.errors import RefusedByStructure
-from novel.stages.stage4.beats import beat_index, material_tasks
-from novel.stages.stage4.measure import semantic_contract_of
-
-#: `char_id` 的保留形。**按形状分流**：`char_\d+` 解析不出名字就不写，
-#: 其余（`narration` / `public` / 「在场士兵」这类无名群体）是自由文本，原样留。
-_CHAR_ID = re.compile(r'char_\d+')
 
 @dataclass
 class Assembly:
@@ -52,12 +39,8 @@ class Assembly:
     chapter_collisions: list[tuple[Any, str, list[str]]] = field(default_factory=list)
     #: 本章还叫不出名字、被剔出在场者的（`[(输出章, char_id)]`）
     withheld: list[tuple[Any, str]] = field(default_factory=list)
-    #: 未知 kind 被丢弃的 hinge（`[(输出章, kind, 片段)]`）
-    dropped_hinges: list[tuple[Any, Any, str]] = field(default_factory=list)
     #: 规则暂不下发（`{(输出章, rule_id, 命中的叫法)}`）
     held_rules: set[tuple[Any, Any, tuple[str, ...]]] = field(default_factory=set)
-    #: 当前章首尚未开放的设定，None 不伪装为空字符串。
-    withheld_setting: list[tuple[int, str]] = field(default_factory=list)
 
 
 # ── 一、名字：投影算法唯一落点在 `novel.core.naming` ─────────────────────
@@ -118,160 +101,6 @@ def _name_narration(seg: dict[str, Any], disp: dict[str, str], idx: int, total: 
     if seg.get('pronoun_surfaces'):
         out['pronoun_surfaces'] = seg['pronoun_surfaces']
     return out
-
-
-def _resolve_scenes(
-    out_ch: dict[str, Any], bidx: dict[str, dict[str, Any]],
-    atoms: dict[str, dict[str, Any]], disp: dict[str, str],
-) -> tuple[list[dict[str, Any]], list[tuple[Any, str]], list[str]]:
-    """把 typed 场景引用编译成人话；writer context 不保留任何内部 id。"""
-    materials = {str(hinge.get('hinge_id')): hinge for beat in bidx.values()
-                 for hinge in (beat.get('hinges') or [])}
-    scenes: list[dict[str, Any]] = []
-    dropped: list[tuple[Any, str]] = []
-    withheld: list[str] = []
-
-    def claims(refs: list[Any]) -> list[str]:
-        return [str(atoms[str(ref)].get('claim')) for ref in refs if str(ref) in atoms]
-
-    for scene in (out_ch.get('scenes') or []):
-        stages = [bidx[str(ref)] for ref in (scene.get('stage_refs') or [])
-                  if str(ref) in bidx]
-        for row in stages:
-            withheld += [cid for cid in row.get('present_char_ids') or [] if cid not in disp]
-        stage_rows = [{
-            'time_layer': row.get('time_layer'), 'place': row.get('place'),
-            'present': [disp[cid] for cid in (row.get('present_char_ids') or []) if cid in disp],
-        } for row in stages]
-        land_refs = list(scene.get('land_fact_refs') or [])
-        context_refs = list(scene.get('context_fact_refs') or [])
-        w: dict[str, Any] = {
-            'slot': scene.get('slot'), 'purpose': scene.get('purpose'),
-            'role': scene.get('role'), 'delivery': scene.get('delivery'),
-            'transition': scene.get('transition'), 'budget_chars': scene.get('budget_chars'),
-            'required_facts': claims(land_refs), 'context_facts': claims(context_refs),
-            'turn_fact': str(atoms[str(scene.get('turn_fact_ref'))].get('claim')),
-            'entry_state': claims(list(scene.get('entry_state_refs') or [])),
-            'exit_state': claims(list(scene.get('exit_state_refs') or [])),
-            'stages': stage_rows,
-        }
-        selected = [materials[str(ref)] for ref in (scene.get('material_refs') or [])
-                    if str(ref) in materials]
-        groups, unknown, hidden_names = material_tasks(selected, atoms, disp)
-        withheld.extend(hidden_names)
-        for group, pieces in groups.items():
-            if pieces:
-                w[group] = pieces
-        dropped.extend(unknown)
-        scenes.append(w)
-    return scenes, dropped, withheld
-
-
-def _plot_free_rules(canon: dict[str, Any], o: int, naming: dict[str, str], avail: dict[str, int]
-                     ) -> tuple[list[dict[str, Any]], list[tuple[Any, tuple[str, ...]]]]:
-    """`world_rules` 取【本章生效】的那一版，并把点到人名的那些**按叫法时点扣住**。
-
-    闸门用的是【叫法的时点】，不是【角色的时点】。
-    `avail` = `surface_first_chapter(registry)`。规则的放行章 = 它点到的所有叫法里**最晚**的那一个。
-    规则正文只读 `versions[].desc`，不接受任何平级文本兜底。
-
-    返回 `(保留的规则, held)`。
-    """
-    out: list[dict[str, Any]] = []
-    held: list[tuple[Any, tuple[str, ...]]] = []
-    for r in (canon.get('world_rules') or []):
-        vers = sorted([v for v in (r.get('versions') or [])
-                       if (v.get('effective_from_chapter') or 1) <= o],
-                      key=lambda v: v.get('effective_from_chapter') or 1)
-        if not vers:
-            continue          # 本章尚未生效；「一条 version 都没有」由落盘前的显式终态拦住
-        r2 = {k: v for k, v in r.items() if k != 'versions'}
-        r2['description'] = vers[-1].get('desc')
-        hit = rule_names_a_person(r2.get('description'), naming)
-        if hit:
-            gate = max(avail.get(n, 1) for n in hit)
-            if gate > o:
-                held.append((r2.get('rule_id'), tuple(sorted(hit)[:3])))
-                continue
-        out.append(r2)
-    return out, held
-
-
-
-
-
-
-def _project_identity_facts(global_g: dict[str, Any], ordinal: int, disp: dict[str, str]
-                            ) -> tuple[dict[str, Any], list[tuple[Any, tuple[str, ...]]]]:
-    """身份与叫法时点的机械投影；知识内容只由独立关联及当前场景编译。
-
-    叫法的 who/by 同样走本章表，避免用后续才出现的本名作为表格标签。
-    不再把秘密答案连同 reader_knows_by_now=false 送给埋点章写手。
-    """
-    chars = global_g['entities']['characters']
-    address = []
-    for cid, character in chars.items():
-        if cid not in disp:
-            continue
-        for item in character['address']:
-            if item['from_chapter'] <= ordinal:
-                by = item['by']
-                by_name = disp.get(by) if _CHAR_ID.fullmatch(str(by or '')) else by
-                address.append({'who': disp[cid], 'surface': item['surface'],
-                                'by': by_name, 'context': item['context']})
-    rules, held = _plot_free_rules(global_g['canon'], ordinal, person_naming_surfaces(chars),
-                                   surface_first_chapter(chars))
-    return {'address': address, 'world_rules': rules}, held
-
-
-def _resolve_goal(goal: dict[str, Any], *, ordinal: int,
-                  atoms: dict[str, dict[str, Any]], disp: dict[str, str],
-                  disclosure_targets: dict[tuple[str, str], str]) -> dict[str, Any]:
-    """稳定引用编译为写手目标；知识目标只使用已过场景披露许可的投影。
-
-    不能以目标解析为名回读未开放的全局知识正文，或把内部关联 ID 下发写手。
-    无法解析的目标是显式结构终态，交 Plan 订正后免费重建上下文。
-    """
-    intent = goal.get('intent')
-
-    resolved: list[str] = []
-    failures: list[str] = []
-    for ref in goal.get('fact_refs') or []:
-        kind, key = ref.get('kind'), ref.get('ref')
-        value: str | None = disclosure_targets.get((str(kind), str(key)))
-        if value is not None:
-            pass
-        elif kind == 'fact_atom':
-            value = (atoms.get(str(key)) or {}).get('claim')
-            if value:
-                value = f'本章事实：{value}'
-        elif kind == 'character':
-            if disp.get(key):
-                value = f'人物：{disp[key]}'
-        elif kind == 'secret' and intent == 'withhold':
-            value = '保留本章尚未公开的一项既定秘密，不点破其内容'
-        elif kind == 'chapter_boundary':
-            suffix = str(key).rsplit(':', 1)[-1]
-            where = {'start': '开篇', 'end': '结尾'}.get(suffix, '整体范围')
-            value = f'第 {ordinal} 章{where}'
-
-        if not value:
-            failures.append(f'{kind}:{key}')
-            continue
-        # Machine identities must not survive inside a supposedly resolved
-        # label.  Human setting keys are intentionally excluded from this test.
-        if kind not in {'setting'} and key and str(key) in value:
-            failures.append(f'{kind}:{key}（解析结果仍含内部 id）')
-            continue
-        if value not in resolved:
-            resolved.append(value)
-
-    if failures or not resolved:
-        raise RefusedByStructure(
-            f'输出章 {ordinal} 的 writer goal 有无法在本章安全解析的事实引用：'
-            f'{failures or ["empty"]}。内部 id 与未过揭示闸门的全局事实不得下发；'
-            f'请修订 plan 的 fact_refs 后 0 成本重建 writer_context。')
-    return {'intent': intent, 'facts': resolved}
 
 
 # ── 三、组装 ──────────────────────────────────────────────────────────────

@@ -7,8 +7,9 @@
  *     其余从 Tailwind @theme 令牌取。两份颜色表一定会漂移。
  *  3. src/mocks/*.json 只许 src/api/mock.ts 读 —— 组件里出现内联假数据就算不合格
  *  4. src/mocks/ 必须和统一契约登记的 20 份字节数 + SHA-256 一致（冻结证据基线）
- *  5. src/fixtures/ 只许 src/api/mock.ts 读 —— backend_v1 是 mock 的现役数据源，
+ *  5. src/fixtures/ 只许 src/api/mock.ts 读 —— plot_v1 是完整剧情链的现役数据源，
  *     不是屏幕的（屏幕连 fixture 长什么样都不该知道）
+ *  6. 现役 TypeScript 不保留原子事实、hinge 或逐事实落点契约。
  */
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
@@ -79,7 +80,10 @@ for (const f of files) {
       problems.push([at, 'src/mocks/ 只许 src/api/mock.ts 读'])
     }
     if (rel !== 'src/api/mock.ts' && /['"][^'"]*fixtures\//.test(code) && !isComment) {
-      problems.push([at, 'src/fixtures/ 只许 src/api/mock.ts 读（backend_v1 是 mock 的数据源）'])
+      problems.push([at, 'src/fixtures/ 只许 src/api/mock.ts 读（fixture 不是屏幕数据层）'])
+    }
+    if (!isComment && /\b(?:fact_atoms?|land_fact_refs|must_land_fact_refs|hinges|hinge_kinds|hinge_groups|fact_atom_kinds|fact_atom_obligations)\b/.test(code)) {
+      problems.push([at, '现役前端不能消费已退役的原子事实、hinge 或逐事实落点契约'])
     }
     if (isScreenOrComponent && !isVocab && !isComment) {
       // 颜色字面量：#rgb / #rrggbb / oklch(...) / rgb(...)

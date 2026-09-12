@@ -12,6 +12,14 @@ from novel.stages.stage4.plot_design import (
 )
 
 
+class BindingReferenceRefused(BlindPlanError):
+    """保留已知章的绑定失败归属，供现有 B 修复和问题定位使用。"""
+
+    def __init__(self, chapter_ordinal: int, message: str) -> None:
+        super().__init__(message)
+        self.chapter_ordinal = chapter_ordinal
+
+
 def source_context_catalog(blueprint: PlotBlueprint) -> dict[str, dict]:
     result = {}
     for beat in blueprint.beats:
@@ -257,6 +265,7 @@ def _binding_closure(candidate: dict, response: dict, catalog: dict[int, dict]) 
     typed = EvidenceBindingResponse.model_validate(response)
     if typed.status != 'bound' or typed.candidate_sha256 != candidate_subject_sha256(candidate):
         raise BlindPlanError('B 必须完整绑定当前已接受候选')
+    _validate_binding_concerns(candidate, response, catalog)
     by_chapter = {c.output_ordinal: c for c in typed.chapters}
     if (len(by_chapter) != len(typed.chapters)
             or set(by_chapter) != {c['output_ordinal'] for c in candidate['output_chapters']}):
@@ -264,37 +273,41 @@ def _binding_closure(candidate: dict, response: dict, catalog: dict[int, dict]) 
     result = {}
     for chapter in candidate['output_chapters']:
         number = chapter['output_ordinal']
-        if number not in catalog:
-            raise BlindPlanError('B 缺少目标章证据')
-        entry = catalog[number]
-        parents = {r['beat_id']: r for r in entry['blueprint']['beats']}
-        scene_by_slot = {s['scene_ref']: s['candidate_scene_id'] for s in chapter['scenes']}
-        expected = {(scene_by_slot[d['scene_ref']], _beat_ref(candidate, p['beat_alias'], number))
-                    for p in chapter['beat_placements'] for d in p['deliveries']}
-        bound = {}
-        for scene in by_chapter[number].scenes:
-            if scene.candidate_scene_id not in scene_by_slot.values():
-                raise BlindPlanError('B 场景属于其他章或旧候选')
-            for delivery in scene.deliveries:
-                key = (scene.candidate_scene_id, delivery.beat_ref)
-                if key not in expected or key in bound:
-                    raise BlindPlanError('B 不能新增、删除、移动或重复呈现')
-                parent = parents[delivery.beat_ref]
-                if not set(delivery.evidence_refs) <= set(parent['evidence_refs']):
-                    raise BlindPlanError('B 证据不属于父节点')
-                contexts = entry['source_contexts']
-                for ref in delivery.source_context_refs:
-                    if ref not in contexts or contexts[ref]['beat_ref'] != delivery.beat_ref:
-                        raise BlindPlanError('B 舞台不属于父节点有据上下文')
-                # 没有 source_contexts 是未知舞台；存在舞台时不得用空集合丢弃。
-                required_contexts = {k for k, v in contexts.items()
-                                     if v['beat_ref'] == delivery.beat_ref}
-                if required_contexts and not delivery.source_context_refs:
-                    raise BlindPlanError('B 不能丢掉已有舞台上下文')
-                bound[key] = delivery.model_dump(mode='json')
-        if set(bound) != expected:
-            raise BlindPlanError('B 必须绑定 A 的全部呈现')
-        result[number] = bound
+        try:
+            if number not in catalog:
+                raise BlindPlanError('B 缺少目标章证据')
+            entry = catalog[number]
+            parents = {r['beat_id']: r for r in entry['blueprint']['beats']}
+            scene_by_slot = {s['scene_ref']: s['candidate_scene_id'] for s in chapter['scenes']}
+            expected = {(scene_by_slot[d['scene_ref']], _beat_ref(candidate, p['beat_alias'], number))
+                        for p in chapter['beat_placements'] for d in p['deliveries']}
+            bound = {}
+            for scene in by_chapter[number].scenes:
+                if scene.candidate_scene_id not in scene_by_slot.values():
+                    raise BlindPlanError('B 场景属于其他章或旧候选')
+                for delivery in scene.deliveries:
+                    key = (scene.candidate_scene_id, delivery.beat_ref)
+                    if key not in expected or key in bound:
+                        raise BlindPlanError('B 不能新增、删除、移动或重复呈现')
+                    parent = parents[delivery.beat_ref]
+                    if not set(delivery.evidence_refs) <= set(parent['evidence_refs']):
+                        raise BlindPlanError('B 证据不属于父节点')
+                    contexts = entry['source_contexts']
+                    for ref in delivery.source_context_refs:
+                        if ref not in contexts or contexts[ref]['beat_ref'] != delivery.beat_ref:
+                            raise BlindPlanError('B 舞台不属于父节点有据上下文')
+                    # 没有 source_contexts 是未知舞台；存在舞台时不得用空集合丢弃。
+                    required_contexts = {k for k, v in contexts.items()
+                                         if v['beat_ref'] == delivery.beat_ref}
+                    if required_contexts and not delivery.source_context_refs:
+                        raise BlindPlanError('B 不能丢掉已有舞台上下文')
+                    bound[key] = delivery.model_dump(mode='json')
+            if set(bound) != expected:
+                raise BlindPlanError('B 必须绑定 A 的全部呈现')
+            result[number] = bound
+        except (BlindPlanError, ValueError, KeyError) as exc:
+            raise BindingReferenceRefused(number, str(exc)) from exc
+
     return result
 
 
@@ -355,10 +368,8 @@ def prove_binding_infeasible(candidate: dict, catalog: dict[int, dict]) -> list[
     return failures
 
 
-def validate_infeasible_binding(candidate: dict, response: dict, catalog: dict[int, dict]) -> list[dict]:
-    if response.get('candidate_sha256') != candidate_subject_sha256(candidate):
-        raise BlindPlanError('不可行声称未绑定当前候选')
-    # 负结论也必须定位本次下发材料；不能让不存在的引用搭乘合法目录缺失证明。
+def _validate_binding_concerns(candidate: dict, response: dict, catalog: dict[int, dict]) -> None:
+    """正负绑定结论都只能引用实际下发材料，语义疑点不获得额外引用权限。"""
     by_chapter = {}
     for chapter in candidate['output_chapters']:
         number = chapter['output_ordinal']
@@ -373,6 +384,11 @@ def validate_infeasible_binding(candidate: dict, response: dict, catalog: dict[i
         allowed.update(candidate['subject_aliases'][a]['ref'] for a in aliases)
         entry = catalog.get(number)
         if entry is not None:
+            # 正式章级 B 由同一工作包编译器登记精确集合，包括必要跨章知识证据。
+            # 纯编译入口没有外部工作包时，仅允许当前候选和本章证据目录。
+            if 'issued_refs' in entry:
+                by_chapter[number] = set(entry['issued_refs'])
+                continue
             allowed.update(entry['evidence_refs'])
             allowed.update(entry['source_context_refs'])
             bp = entry['blueprint']
@@ -383,14 +399,20 @@ def validate_infeasible_binding(candidate: dict, response: dict, catalog: dict[i
     for concern in response.get('binding_concerns') or []:
         number = concern.get('chapter_ordinal')
         if number is not None and number not in by_chapter:
-            raise BlindPlanError('不可行声称引用未下发章节')
+            raise BlindPlanError('绑定疑点引用未下发章节')
         allowed = by_chapter[number] if number is not None else set().union(*by_chapter.values())
         if not set(concern['closed_refs']) <= allowed:
-            raise BlindPlanError('不可行声称含未下发引用')
+            raise BlindPlanError('绑定疑点含未下发引用')
         scenes = {s['candidate_scene_id'] for c in candidate['output_chapters']
                   if number is None or c['output_ordinal'] == number for s in c['scenes']}
         if not set(concern['scenes']) <= scenes:
-            raise BlindPlanError('不可行声称含未下发场景')
+            raise BlindPlanError('绑定疑点含未下发场景')
+
+
+def validate_infeasible_binding(candidate: dict, response: dict, catalog: dict[int, dict]) -> list[dict]:
+    if response.get('candidate_sha256') != candidate_subject_sha256(candidate):
+        raise BlindPlanError('不可行声称未绑定当前候选')
+    _validate_binding_concerns(candidate, response, catalog)
     proof = prove_binding_infeasible(candidate, catalog)
     if not proof:
         raise BlindPlanError('语义担忧不是机械不可行证明，交既有审阅裁决')

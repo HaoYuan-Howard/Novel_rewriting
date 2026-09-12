@@ -12,10 +12,11 @@ import pytest
 
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
-    ChapterBlueprints, ChapterBlueprintsResponseV31, GlobalGrounding,
+    ChapterBlueprints, GlobalGrounding,
 )
+from contracts.schema.plot import PlotBlueprintResponse
 from novel import paths, prov
-from novel.errors import GateBlocked, ProvenanceRefused
+from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
 from novel.llm import stage2_runs
 from novel.llm.transport import ChatRequest, ChatResponse
 from novel.stages.stage2 import extract
@@ -36,7 +37,7 @@ def _workflow_epoch(tmp_path):
 @pytest.fixture(autouse=True)
 def _stable_contract_and_code(monkeypatch):
     monkeypatch.setenv(
-        'NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
+        'NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'plot-blueprint-v1')
     monkeypatch.setattr(prov, 'code_version', lambda: 'test-stage2-blueprint-agent')
 
 
@@ -69,7 +70,7 @@ def test_chapter_request_surface_supports_one_private_client_per_chapter():
         def ask_json(self, _system, _user, **kwargs):
             assert kwargs['progress'].chapter == self.ordinal
             self.calls += 1
-            return ChapterBlueprintsResponseV31.model_validate({
+            return PlotBlueprintResponse.model_validate({
                 'blueprints': [by_ordinal[self.ordinal]],
             })
 
@@ -92,7 +93,7 @@ def test_chapter_request_surface_supports_one_private_client_per_chapter():
             'node': 'stage2.blueprint',
             'observe': staticmethod(lambda *_a, **_kw: None),
         })(),
-        Pool(), requests, model_cls=ChapterBlueprintsResponseV31,
+        Pool(), requests, model_cls=PlotBlueprintResponse,
         checkpoints=False,
     )
 
@@ -109,13 +110,13 @@ def test_blueprint_hard_candidate_stays_in_memory_until_terminal(tmp_path):
     book.mkdir()
     _land_global(book)
     by_ordinal = _response_blueprints()
-    broken = min(by_ordinal)
-    for beat in by_ordinal[broken]['beats']:
-        beat['hinges'] = []
+    broken = max(by_ordinal)
 
     ctx = _ctx(book, 'stage2.blueprint')
     client, transport = _blueprint_client(ctx, by_ordinal)
     batch = extract.request_blueprints(ctx, client)
+    # 模拟聚合环节丢章；真实判据应拒绝，合法已购检查点仍可免费恢复。
+    batch['raw_blueprints'] = batch['raw_blueprints'][:2]
     first = extract.evaluate_blueprint_candidate(ctx, client, batch)
     second = extract.evaluate_blueprint_candidate(ctx, client, batch)
 
@@ -202,15 +203,14 @@ def test_blueprint_full_rebuild_can_replace_stale_formal(tmp_path):
     _accept_fixture_global(global_ctx)
 
     rerun_ctx = _ctx(book, 'stage2.blueprint')
-    rerun_client, rerun_transport = _blueprint_client(
-        rerun_ctx, _response_blueprints())
-    batch = extract.request_blueprints(rerun_ctx, rerun_client)
-    evaluation = extract.evaluate_blueprint_candidate(
-        rerun_ctx, rerun_client, batch)
-
-    report = extract.finalize_blueprint_candidate(
-        rerun_ctx, rerun_client, batch, evaluation)
-
+    from tests.test_plot_repair import revision_answer
+    rerun_client, rerun_transport = _client(rerun_ctx, revision_answer)
+    with pytest.raises(TerminalState, match='已有完整剧情蓝图'):
+        extract.run_blueprint(rerun_ctx, rerun_client)
+    assert rerun_transport.calls == []
+    from novel.llm.cache import CachePolicy
+    rerun_ctx.cache = CachePolicy.refresh()
+    report = extract.run_blueprint(rerun_ctx, rerun_client, chapters=(1, 2, 3))
     assert report.passed
     assert len(rerun_transport.calls) == len(main_text())
     assert ArtifactStore(rerun_ctx).freshness(

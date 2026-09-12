@@ -14,7 +14,7 @@ from pydantic import Field, ValidationError, create_model
 from contracts.schema.api import Stage2NodeReviewRequest
 from contracts.schema.base import StrictModel
 from contracts.schema.common import Sha256
-from contracts.schema.knowledge_links import KnowledgeLinkDecision
+from contracts.schema.knowledge_links import KnowledgeLinkDecision, PlotKnowledgeEventOperation
 from contracts.schema.plot_review import ReviewScope, PlotReviewResponse
 from novel.agents.session_client import agent_json_schema
 from novel.orchestrator import queue
@@ -24,7 +24,8 @@ WIRE_SCHEMA = 'novel-stage2-blueprint-reviewer-v2'
 
 def response_model() -> type[StrictModel]:
     links = create_model('BlueprintKnowledgeDecisionsV2', __base__=StrictModel,
-        scope_sha256=(Sha256, ...), decisions=(list[KnowledgeLinkDecision], ...))
+        scope_sha256=(Sha256, ...), decisions=(list[KnowledgeLinkDecision], ...),
+        event_operations=(list[PlotKnowledgeEventOperation], ...))
     non_rework = create_model('BlueprintNonReworkRulingV2', __base__=StrictModel,
         decision=(Literal['accept', 'uncertain', 'stop'], ...))
     book_rework = create_model('BlueprintBookReworkRulingV2', __base__=StrictModel,
@@ -58,7 +59,12 @@ def prompt_addendum() -> str:
 payload.ruling 替代外层 decision/owner/chapter_ordinals：
 接受、不确定、停止分别只交对应 decision；返修必须有 owner，Blueprint 返修还须列章。
 plot_review 是完整五维裁决，reason 只在这里填写一次。
-knowledge_links 只交 scope_sha256 和 decisions。代码将 plot_review.reason 注入本轮
+knowledge_links 交 scope_sha256、decisions 和稀疏 event_operations。
+只为确有独立许可需要的 Beat/State 登记 put：给稳定 ke_ 标识、当前事件摘要（新建 null）、
+已有主体引用、读者或人物受众、目标章、有据段范围与 at_beats/unresolved 关联。
+reader_reveal 的 audience=null；character_knowledge 明确受众。来源证据章可以不同于目标章。
+修改用 expected_event_sha256；撤销用 retire、当前摘要和明确理由。不得复制剧情正文，
+不得为每个 State 或普通叙述机械登记事件，未决事件不能作为通过。代码将 plot_review.reason 注入本轮
 reason 与 knowledge_links.reason，将 actor 注入关联；不会自动补任何语义结论。
 原子事实补丁、逐节点或逐 delivery 正向通过回执都不属于本契约。'''
 

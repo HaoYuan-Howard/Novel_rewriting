@@ -201,12 +201,6 @@ _WITHHELD: dict[str, str] = {
                               '**无条件报出**。enums 再发一份「当前是哪一版」，'
                               '前端就能拿它自己判「这份产物过期没有」——'
                               '而那正是判据在做的事（`R-11.4` 的第二个判官）',
-    'SPAN_FAILURE_CAUSES': '⚠ **容器，但仍然不发。** 落盘前回取的失败根因取值面。'
-                           '它是**产地与判据之间**的词表，前端读到的是'
-                           '`verbatim_failed` 那条判据已经分好类的读数',
-    'HINGE_FAILURE_ROUTE': '⚠ **容器，但仍然不发。** 「产地说哪句话 → 落到哪条判据」'
-                           '的分流表。发过去等于把四分流的**全部**判定逻辑交给前端，'
-                           '它可以自己重算一遍 hinge 该算哪种病（`R-11.4` 的第二个判官）',
     'SPEECH_TAG_MAX': '判据阈值（说话标签最大长度）',
     # ── stage4 / stage5 ──
     'VERBATIM_BUDGET_FACTOR': '判据阈值（一拍预算至少是逐字原话的几倍）。'
@@ -240,9 +234,6 @@ _WITHHELD: dict[str, str] = {
     'LEGACY_V4_DESIGN_REVIEW_CONTRACT': '仅供后端识别旧审阅，当前界面消费后端有效性判定，不自行比版本',
     'FROZEN_V6_DESIGN_REVIEW_CONTRACT': (
         '仅供后端无损解码不可变历史决定；现役不开放旧 Blueprint 兼容消费或恢复'),
-    'BLUEPRINT_RELATION_REVIEW_CONTRACT': (
-        'Stage2 typed relation edit 的内部审阅身份；请求 schema 已固定该值，'
-        '前端不选择版本也不自行判断迁移'),
     'BLUEPRINT_REVIEW_CONTRACT': (
         'Stage2 Blueprint workpack 已随包携带此显式版本；UI 只回传 opaque token'),
     'STAGE6_REVIEW_CONTRACT': (

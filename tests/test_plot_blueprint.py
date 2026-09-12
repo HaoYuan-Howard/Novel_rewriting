@@ -13,7 +13,7 @@ from novel.stages.stage2.plot_compile import (
     compile_chapter, validate_book, validate_evidence,
 )
 from novel.stages.stage4.plot_placements import (
-    compile_placements, planner_truth_view, writer_plot_view,
+    compile_placements,
 )
 
 CHARS = frozenset({'char_001', 'char_002'})
@@ -86,14 +86,56 @@ def arrangement(ordinal: int = 1, *, distributed: bool = False) -> PlotChapterAr
     })
 
 
+def formal_writer_view(chapter, arrangement, *, knowledge=()):
+    """让端点反例穿过正式 Plan/KnowledgeLinks/WriterContext，而非平行原型。"""
+    from novel.stages.stage4.measure import identity_plan
+    from novel.stages.stage4.plot_context import build_writer_context
+    from tests.plot_fixtures import links
+    bps = {'blueprints': [blueprint(n).model_dump(mode='json')
+                          for n in range(1, chapter.chapter_ordinal + 1)]}
+    bps['blueprints'][-1] = chapter.model_dump(mode='json')
+    main = [{'chapter_ordinal': n, 'text': SOURCE} for n in range(1, chapter.chapter_ordinal + 1)]
+    plan = identity_plan(bps, main)
+    current = plan['output_chapters'][-1]
+    contexts = {p['beat_ref']: p['deliveries'][0]['source_context_refs'] for p in current['beat_placements']}
+    current['beat_placements'] = [p.model_dump(mode='json') for p in arrangement.beat_placements]
+    for p in current['beat_placements']:
+        for delivery in p['deliveries']:
+            delivery['source_context_refs'] = contexts[p['beat_ref']]
+    current['anchor_bindings'] = [r.model_dump(mode='json') for r in arrangement.anchor_bindings]
+    ground = {'entities': {'characters': {
+        cid: {'canonical': name, 'role': role, 'name_distinctiveness': 'high', 'address': [
+            {'surface': name, 'by': 'narration', 'context': 'reference', 'from_chapter': 1}]}
+        for cid, name, role in [('char_001', '我', '施救者'), ('char_002', '他', '被救者')]
+    }, 'relations': [], 'character_states': {}}, 'canon': {'secrets': [], 'world_rules': [], 'setting': {}}}
+    knowledge_links = links()
+    for i, trigger in enumerate(knowledge):
+        event_id = f'ke_test_{i}'
+        subject = {'kind': 'beat', 'ref': trigger.trigger_beat_ref}
+        event = {'kind': 'reader_reveal', 'subject_ref': subject, 'audience': None,
+            'chapter_ordinal': chapter.chapter_ordinal, 'evidence_refs': [
+                {'chapter_ordinal': chapter.chapter_ordinal, 'evidence_ref': chapter.evidence_anchors[-1].evidence_id}]}
+        knowledge_links['scope']['registered_events'].append({
+            'event_id': event_id, 'event_sha256': 'a' * 64, 'event': event, 'retired': False, 'reason': None})
+        knowledge_links['scope']['obligations'].append({
+            'obligation_id': trigger.knowledge_ref, 'kind': 'reader_reveal', 'knowledge_ref': event_id,
+            'subject_ref': subject, 'audience': None, 'chapter_ordinal': chapter.chapter_ordinal,
+            'subject_sha256': 'b' * 64, 'candidate_subject_refs': [subject], 'entry_subject_refs': []})
+        knowledge_links['links'].append({
+            'obligation_id': trigger.knowledge_ref, 'expected_subject_sha256': 'b' * 64,
+            'resolution': {'kind': 'at_beats', 'trigger_beat_ref': trigger.trigger_beat_ref, 'subject_refs': [subject]},
+            'actor': 'test', 'reason': '显式许可反例', 'source_decision_sha256': 'c' * 64})
+    return build_writer_context(plan, ground, bps, main, knowledge_links=knowledge_links).ctx['chapters'][-1]
+
+
 def test_two_chapter_compile_and_single_copy_writer_projection():
     chapters = [blueprint(1), blueprint(2)]
     validate_book(chapters, {1: SOURCE, 2: SOURCE})
     for chapter in chapters:
-        view = writer_plot_view(chapter, arrangement(chapter.chapter_ordinal))
+        view = formal_writer_view(chapter, arrangement(chapter.chapter_ordinal))
         wire = json.dumps(view, ensure_ascii=False)
-        assert wire.count(CONTENT) == 1
-        assert len(view['plot_catalog']) == 2
+        assert wire.count(view['beats'][0]['content']) == 1
+        assert len(view['beats']) == 2
         assert 'fact_atoms' not in wire and 'required_facts' not in wire
         assert len(chapter.evidence_anchors) == 2
         assert 'text' not in chapter.evidence_anchors[0].model_dump()
@@ -109,9 +151,9 @@ def test_distributed_presentation_keeps_parent_and_allows_shared_paragraph():
     assert compiled.scene_beats['s01'] == ('b01_01', 'b01_02')
     assert compiled.completed_at['b01_02'] == 's02'
     assert compiled.shared_evidence == (('b01_02', 's01/s02', ('e01_02',)),)
-    view = writer_plot_view(chapter, plan)
-    assert sum(row['plot_ref'] == '剧情2'
-               for scene in view['scenes'] for row in scene['plot_deliveries']) == 2
+    view = formal_writer_view(chapter, plan)
+    assert sum(row['beat_ref'] == 'b01_02'
+               for scene in view['scenes'] for row in scene['deliveries']) == 2
 
 
 def test_distributed_knowledge_must_bind_explicitly_and_not_open_at_first_reference():
@@ -121,9 +163,9 @@ def test_distributed_knowledge_must_bind_explicitly_and_not_open_at_first_refere
         compile_placements(chapter, plan, knowledge=[trigger])
     plan.anchor_bindings.append(PlotAnchorBinding(
         kind='knowledge', ref='decision:leave', endpoint='trigger', scene_ref='s02'))
-    view = writer_plot_view(chapter, plan, knowledge=[trigger])
-    assert view['knowledge_permissions'] == [
-        {'knowledge_ref': 'decision:leave', 'allowed_slots': ['s02']}]
+    view = formal_writer_view(chapter, plan, knowledge=[trigger])
+    assert view['knowledge_events'][0]['event_ref'] == 'decision:leave'
+    assert view['knowledge_events'][0]['allowed_slots'] == ['s02']
 
 
 def test_partial_node_is_not_complete_background():
@@ -197,12 +239,16 @@ def test_goals_require_correct_explicit_delivery():
 
 
 def test_planner_view_does_not_include_source_order_or_coordinates():
-    view, mapping = planner_truth_view(blueprint(), alias_key='测试冻结规划身份')
+    from novel.stages.stage4.plot_design import build_blind_projection
+    from tests.test_plot_design import planner_characters
+    truth, mapping = build_blind_projection({'blueprints': [blueprint().model_dump()]},
+        root_clean_sha1='1' * 40, global_g=planner_characters())
+    view = truth['chapters'][0]
     wire = json.dumps(view, ensure_ascii=False)
     assert 'source_contexts' not in wire
     assert 'evidence' not in wire
     assert 'b01_01' not in wire and 'char_001' not in wire
-    assert mapping['b01_01'].startswith('p_')
+    assert next(k for k, v in mapping['subject_aliases'].items() if v['ref'] == 'b01_01').startswith('a_')
     assert [b['alias'] for b in view['beats']] == sorted(b['alias'] for b in view['beats'])
 
 
@@ -247,9 +293,13 @@ def test_inherited_state_can_end_without_rewriting_previous_chapter():
     plan.anchor_bindings.append(PlotAnchorBinding(
         kind='state', ref='st01_01', endpoint='ended', scene_ref='s02'))
     assert compile_placements(second, plan).bindings[0].scene_ref == 's02'
-    view, mapping = planner_truth_view(second, alias_key='冻结第二章规划身份')
+    from novel.stages.stage4.plot_design import build_blind_projection
+    from tests.test_plot_design import planner_characters
+    truth, mapping = build_blind_projection({'blueprints': [first.model_dump(), second.model_dump()]},
+        root_clean_sha1='2' * 40, global_g=planner_characters())
+    view = truth['chapters'][1]
     assert 'st01_01' not in json.dumps(view)
-    assert mapping['st01_01'].startswith('p_')
+    assert next(k for k, v in mapping['subject_aliases'].items() if v['ref'] == 'st01_01').startswith('a_')
 
 
 def test_plot_response_projection_keeps_semantics_and_shared_paragraph_evidence():

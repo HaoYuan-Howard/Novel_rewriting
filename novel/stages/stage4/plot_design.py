@@ -105,6 +105,7 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
         (r['kind'], r['ref']): r['value']
         for r in plot_global_projection(global_g, len(chapters))
     }
+    character_rows = {} if global_g is None else global_g['entities']['characters']
     links_by_chapter: dict[int, list[tuple[dict, dict]]] = {}
     if knowledge_links is not None:
         from contracts.schema.knowledge_links import KnowledgeLinks
@@ -160,21 +161,32 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
         knowledge = []
         triggers = []
         background_beats = {}
-        for obligation, resolution in links_by_chapter.get(number, []):
+        chapter_events = list(links_by_chapter.get(number, []))
+        own_subjects = {('beat', row.beat_id) for row in chapter.beats}
+        own_subjects.update(('state', row.state_id) for row in chapter.states)
+        own_subjects.update(('state', ref) for ref in chapter.entry_state_refs)
+        chapter_events.extend((obligation, resolution) for target, rows in links_by_chapter.items()
+            if target != number for obligation, resolution in rows
+            if obligation['kind'] in ('reader_reveal', 'character_knowledge')
+            and (obligation['subject_ref']['kind'], obligation['subject_ref']['ref']) in own_subjects)
+        for obligation, resolution in chapter_events:
             sid = obligation['subject_ref']
             token = use(sid['kind'], sid['ref'])
             audience = obligation['audience']
             if audience and audience.get('char_id'):
                 audience = {**audience, 'char_id': use('character', audience['char_id'])}
+            current_event = obligation['chapter_ordinal'] == number
+            timing = (resolution['kind'] if current_event else 'at_entry'
+                      if obligation['chapter_ordinal'] < number else 'future_chapter')
             item = {'subject_alias': token, 'kind': obligation['kind'],
-                    'audience': audience, 'timing': resolution['kind']}
+                    'audience': audience, 'timing': timing}
             event_key = ('knowledge', obligation['obligation_id'], 'trigger')
             event_alias = alias('endpoint', '\0'.join(event_key))
             endpoints[event_alias] = PlotEndpoint(
                 kind='knowledge', ref=obligation['obligation_id'], endpoint='trigger'
             ).model_dump(mode='json')
             item['event_alias'] = event_alias
-            if resolution['kind'] == 'at_beats':
+            if current_event and resolution['kind'] == 'at_beats':
                 trigger = resolution['trigger_beat_ref']
                 triggers.append(PlotKnowledgeTrigger(
                     knowledge_ref=obligation['obligation_id'], trigger_beat_ref=trigger))
@@ -184,14 +196,16 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
                 prior = beat_index.get(sid['ref'])
                 if prior is None:
                     raise BlindPlanError('知识主体节点缺失')
-                background_beats[token] = {'alias': token, 'content': prior.content}
+                background_beats[token] = {'alias': token, 'content': prior.content,
+                    'participant_aliases': sorted(use('character', ref) for ref in prior.participant_char_ids)}
             if sid['kind'] == 'state' and sid['ref'] not in {
                 s.state_id for s in chapter.states
             } | set(chapter.entry_state_refs):
                 state = state_index.get(sid['ref'])
                 if state is None:
                     raise BlindPlanError('知识主体状态缺失')
-                inherited.append(project_state(state, inherited=True))
+                if not any(row['alias'] == token for row in inherited):
+                    inherited.append(project_state(state, inherited=True))
             knowledge.append(item)
         endpoint_rows = []
         for key, beat in required_endpoints(chapter, triggers, ()).items():
@@ -206,6 +220,30 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
                 endpoint_rows[-1]['subject_alias'] = next(
                     item['subject_alias'] for item in knowledge if item['event_alias'] == eid)
         global_material = []
+        # 关系两端即使没有直接参与本章动作，也必须能把正文中的人物与 opaque 引用对应。
+        for token in tuple(used):
+            ref = subjects[token]
+            payload = global_rows.get((ref['kind'], ref['ref']))
+            if ref['kind'] == 'relation' and payload is not None:
+                use('character', payload['subject_id'])
+                use('character', payload['object_id'])
+            elif ref['kind'] == 'character_state':
+                use('character', ref['ref'])
+        character_material = []
+        for token in sorted(used):
+            ref = subjects[token]
+            if ref['kind'] != 'character':
+                continue
+            character = character_rows.get(ref['ref'])
+            if character is None:
+                raise BlindPlanError('规划人物缺少 Global 称呼与角色语义；不能只下发无从辨认的 alias')
+            surfaces = sorted({row['surface'] for row in character['address']
+                               if row['from_chapter'] <= number})
+            # PlannerTruth 可辨认关系端点及尚未出场人物；称呼公开仍由 WriterVisible 控制。
+            if not surfaces:
+                surfaces = [character['canonical']]
+            character_material.append({'alias': token, 'canonical': character['canonical'],
+                                       'surfaces': surfaces, 'role': character['role']})
         for token in sorted(used):
             ref = subjects[token]
             if ref['kind'] in {'beat', 'state', 'constraint', 'character', 'chapter_boundary'}:
@@ -213,10 +251,16 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
             payload = global_rows.get((ref['kind'], ref['ref']))
             if payload is None:
                 raise BlindPlanError(f'规划引用的 Global 主体缺少有据正文：{ref}')
+            value = copy.deepcopy(payload)
+            if ref['kind'] == 'relation':
+                # character_state 与 character 共用 char_id，不能用扁平 ref 表
+                # 覆盖人物 alias。关系自己的身份与施受者按各自类别解析。
+                value['relation_id'] = token
+                for field in ('subject_id', 'object_id'):
+                    value[field] = aliases['character', payload[field]]
             global_material.append({'alias': token, 'kind': ref['kind'],
-                                    'value': copy.deepcopy(payload)})
+                                    'value': value})
         # Global 属性含人物引用时同样替换为 opaque；不夹带来源证据或源章编号。
-        formal_to_alias = {ref['ref']: token for token, ref in subjects.items()}
         def clean_global(value):
             if isinstance(value, list):
                 return [clean_global(v) for v in value]
@@ -226,6 +270,7 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
                     if not k.endswith(('_evidence', '_chapter'))
                     and k not in {'valid_from', 'first_reveal_chapter', 'visibility'}}
         row = {'chapter_ordinal': number, 'chapter_function': chapter.chapter_function,
+               'characters': character_material,
                'beats': sorted(beats, key=lambda r: r['alias']),
                'states': sorted(states, key=lambda r: r['alias']),
                'inherited_states': sorted(inherited, key=lambda r: r['alias']),
@@ -235,9 +280,28 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
                'endpoints': sorted(endpoint_rows, key=lambda r: r['endpoint_alias']),
                'entry_state_aliases': sorted(use('state', r) for r in chapter.entry_state_refs),
                'carry_out_aliases': sorted(use('state', r) for r in chapter.carry_out_refs),
-               'global_subjects': _translate(clean_global(global_material), formal_to_alias)}
+               'global_subjects': clean_global(global_material)}
         projected.append(PlannerChapter.model_validate(row).model_dump(mode='json'))
     truth = {'blind_contract': BLIND_CONTRACT, 'chapters': projected}
+    # 正式引用在结构字段中均已换成 opaque。正文中的同书 ID 是源序旁路，
+    # 只能拒绝并要求上游改为自然语言，不替模型裁剪或重写剧情。
+    formal_ids = {ref['ref'] for ref in subjects.values()}
+    formal_ids.update(character_rows)
+    formal_ids.update(ref for (_kind, ref) in global_rows)
+    formal_ids.update(a.evidence_id for chapter in chapters for a in chapter.evidence_anchors)
+    pattern = re.compile(r'(?<![A-Za-z0-9_])(?:' + '|'.join(
+        re.escape(ref) for ref in sorted(formal_ids) if re.search(r'[A-Za-z]+\d|_', ref))
+        + r')(?![A-Za-z0-9_])')
+    def refuse_formal_text(value):
+        if isinstance(value, dict):
+            for item in value.values():
+                refuse_formal_text(item)
+        elif isinstance(value, list):
+            for item in value:
+                refuse_formal_text(item)
+        elif isinstance(value, str) and pattern.search(value):
+            raise BlindPlanError('自由文本含本书正式 ID，不能旁路泄露源序')
+    refuse_formal_text(truth)
     mapping = {'alias_algorithm': BLIND_ALIAS_ALGORITHM, 'truth_sha256': _sha256(truth),
                'subject_aliases': dict(sorted(subjects.items())),
                'endpoint_aliases': dict(sorted(endpoints.items())),
@@ -307,7 +371,7 @@ def build_blind_chapter_projection(truth: object, formal_mapping: object, *,
         raise BlindPlanError('局部 alias 碰撞')
     projected = _translate(row, table)
     # 重新按局部 opaque 身份排序，不能让任何辅助数组泄漏源序。
-    for field in ('beats', 'states', 'inherited_states', 'background_beats',
+    for field in ('characters', 'beats', 'states', 'inherited_states', 'background_beats',
                   'constraints', 'global_subjects'):
         projected[field].sort(key=lambda r: r['alias'])
     projected['endpoints'].sort(key=lambda r: r['endpoint_alias'])
@@ -402,6 +466,7 @@ def validate_chapter(chapter: dict, source: dict) -> dict:
     allowed = beats | {r['alias'] for field in ('states', 'inherited_states',
         'background_beats', 'constraints', 'global_subjects') for r in source[field]}
     allowed |= {p for beat in source['beats'] for p in beat['participant_aliases']}
+    allowed |= {row['alias'] for row in source.get('characters', [])}
     for label in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
         goal = row[label]
         if not set(goal['subject_aliases']) <= allowed:
@@ -431,6 +496,16 @@ def compile_blind_chapter_design(response: object, local_mapping: object,
     try:
         table = _local_map(local_mapping, formal_mapping)
         raw = BlindChapterDesignResponse.model_validate(response).model_dump(mode='json')
+        def require_local(value, field=''):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    require_local(item, key)
+            elif isinstance(value, list):
+                for item in value:
+                    require_local(item, field)
+            elif isinstance(value, str) and field.endswith(('_alias', '_aliases')) and value not in table:
+                raise BlindPlanError('局部响应包含未登记 alias；只能引用本章下发的局部身份')
+        require_local(raw)
         translated = _translate(raw, table)
         translated.update(output_ordinal=local_mapping['chapter_ordinal'], weight=chapter_weight)
         return _compile_chapter(translated, truth_chapter)

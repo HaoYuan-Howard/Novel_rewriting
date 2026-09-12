@@ -1,22 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-test_stage2.py —— Stage 2 当前判据。
+"""Stage2 当前判据与每条 HARD 的反例。
 
-⚠⚠ **本文件的主体是「盘上 0 命中的 HARD 各配一份会让它红的样本」**（2026-08-12 用户裁决）。
-39 条 HARD 里盘上只有 **3 条**有真反例（`address_bare_pronoun` 1 本 ·
-`role_leaks_fate` 2 本 · `hinge_in_hole` 1 本）——**其余 36 条盘上 0 命中，那不是「干净」，
-是那种失效模式在这三本上一次都没发生过**。一条从没见过反例的判据与一条不存在的判据，
-在报告上长得一模一样。
-
-⚠ **反例配得出来的前提是判据吃 `dict` 不吃模型**（`novel/stages/stage2/checks.py` 文件头）：
-一旦跑在已过 Pydantic 的对象上，`role_missing` / `fact_atom_empty`
-那一类在**结构上就构造不出反例**——`min_length=1` 会先把样本拒掉。
-本文件因此全程操作 dict，一次都不 `model_validate`。
-
-【干净底座是本文件的另一半】`test_the_clean_base_has_no_hard_hits` 钉住：
-**底座上 39 条 HARD 一条都不命中**。没有它，下面 36 条「改一处就红」什么也证明不了
-——一个本来就红的底座上，改什么都红。
+干净 V9 基线先通过，再分别构造 Global、完整剧情、证据、人物许可和状态失效。
+旧事实/hinge 的定位、归属与缺料风险迁至 test_stage2_plot_compiler、
+plot_constraints、material_dialogue_flow；语义覆盖不由数量阈值或证据比例证明。
 """
 from __future__ import annotations
 
@@ -25,38 +13,10 @@ from typing import Any, Callable
 
 import pytest
 
-from contracts.invariants import BLUEPRINT_ARCHITECTURE, HINGE_FAILURE_ROUTE
 from contracts.rules import REGISTRY
-from novel.core.spans import content_only
 from novel.stages.stage2 import checks
 
 
-def _cause(rule: str) -> str:
-    """反查「产地说哪句话会落到这条判据」——**从分流表现算，不在用例里手抄根因**。
-
-    手抄的那一份哪天与 `HINGE_FAILURE_ROUTE` 分家，这条用例会静默改成在测**别的病**
-    （catch-all 的 `hinge_drift`），而它看起来和「查过没事」一模一样
-    （`docs/LESSONS.md` 第 21 条）。
-    """
-    causes = [c for c, r in HINGE_FAILURE_ROUTE.items() if r == rule]
-    assert causes, f'{rule} 不在 `HINGE_FAILURE_ROUTE` 里 —— 它收不到任何根因'
-    return causes[0]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 一、干净底座
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# ⚠ 三章是**下限不是随意**：`beats_coarse` 拿**本书自己的中位数**当基准，
-#   两章时中位数就是那两个数的均值，`r > 3 × median` 在代数上无解
-#   （2r > 3r' + 3r ⇒ −r > 3r'）。⇒ 想给它配反例，底座至少三章。
-# ⚠ 十拍也是下限：`time_layer_no_present` 的前件是 `n >= 10`
-#   （章数太少时全是回忆是可能的，那条不该报）。
-
-# ⚠⚠ **每句一段、段间一个空行**——照本仓语料的真实排版（实测均段约 21 内容字）。
-#   这不是美观：`bounded-fidelity-v3` 起 beat 的区间是**段号**算出来的，
-#   写成一整段的章只有 1 段 ⇒ 同一章的第 2 拍起就必然「起段没越过上一拍的止段」，
-#   整份底座在响应形状那一侧构造不出来。⚠ 下面每条 beat 的首尾锚点都**落在句边界上**，
-#   所以它们同时也是段边界——改这三段正文时要一并核对那件事还成立。
 CH1 = '\n\n'.join([
     '春风吹过老宅的院墙。',
     '李宝珠站在廊下看着落花。',
@@ -99,35 +59,6 @@ def _evidence(chapter: int, a: str, b: str | None = None) -> dict[str, Any]:
     """正式 GlobalGrounding 的证据形：章号 + 可逐字复验的 SourceSpan。"""
     text = (CH1, CH2, CH3)[chapter - 1]
     return {'chapter_ordinal': chapter, 'source': _source(text, a, b)}
-
-
-def _beat(bid: str, a: str, b: str, *, event: str, place: str,
-          ids: list[str], hinges: list[dict] | None = None,
-          layer: str = 'present') -> dict[str, Any]:
-    chapter = {'01': CH1, '02': CH2, '03': CH3}[bid[1:3]]
-    fact_id = f'f{bid[1:3]}_{int(bid[-2:]):03d}'
-    current_hinges = [
-        {'hinge_id': f'h{bid[1:3]}_{int(bid[-2:]) * 10 + index:03d}',
-         'kind': hinge['kind'],
-         'source_fact_refs': [fact_id],
-         'source': _source(chapter, hinge['starts_with'], hinge['ends_with'])}
-        for index, hinge in enumerate((hinges or []), 1)
-    ]
-    atom_source = _source(chapter, a, b)
-    return {'beat_id': bid, 'span': atom_source,
-            'time_layer': layer, 'place': place,
-            'present_char_ids': list(ids),
-            'hinges': current_hinges,
-            '_fact_atom': {
-                'fact_id': fact_id, 'claim': event, 'kind': 'event',
-                'obligation': 'land', 'source_beat_ref': bid, 'source': atom_source,
-                'participant_char_ids': list(ids),
-            }}
-
-
-def _narration(cid: str | None = 'char_001') -> list[dict]:
-    return [{'grammatical_person': 'third', 'narrator_char_id': None,
-             'focalizer_char_id': cid, 'pronoun_surfaces': []}]
 
 
 def main_text() -> list[dict[str, Any]]:
@@ -207,91 +138,9 @@ def global_grounding() -> dict[str, Any]:
 
 
 def blueprints() -> dict[str, Any]:
-    doc = {
-        'blueprints': [
-            {'chapter_ordinal': 1,
-             'chapter_function': '李宝珠在廊下看落花，想起昨夜那封说父亲回城的信',
-             'narration': _narration(),
-             'beats': [
-                 _beat('b01_01', '春风吹过老宅', '看着落花。',
-                       event='李宝珠站在廊下看落花', place='老宅廊下',
-                       ids=['char_001'],
-                       hinges=[{'kind': '物件', 'starts_with': '院墙',
-                                'ends_with': '院墙', 'text': '院墙'}]),
-                 _beat('b01_02', '她想起了昨夜', '梆子声。',
-                       event='她读过信后把信收进袖中', place='老宅廊下',
-                       ids=['char_001'],
-                       hinges=[{'kind': '因果前提', 'starts_with': '信上说',
-                                'ends_with': '已经回城。', 'text': '信上说父亲已经回城。'}]),
-             ]},
-            {'chapter_ordinal': 2,
-             'chapter_function': '李宝珠一早出门买包子，回来撞见母亲在门口等她',
-             'narration': _narration(),
-             'beats': [
-                 _beat('b02_01', '第二日清晨', '往外走。',
-                       event='天亮后李宝珠推门出去', place='老宅院门',
-                       ids=['char_001']),
-                 # ⚠ 这两条 hinge 都挂在 b02_02 上而不是分给两拍：`hinge_drift` 判的是
-                 #   「text 落在**本拍**的 span 原文内」，而「她买了两个…包子」在原文里
-                 #   位于 b02_02 的区间里。挂错拍就是 `hinge_drift` 要抓的东西之一
-                 #   ——底座在这里被它抓过一次（写这份底座时真红了）。
-                 _beat('b02_02', '街上已经有', '那封信的事。',
-                       event='她回来时母亲已经在门口等着', place='老宅院门',
-                       ids=['char_001', 'char_002'],
-                       hinges=[{'kind': '硬数字', 'starts_with': '她买了两个',
-                                'ends_with': '包子。', 'text': '她买了两个热腾腾的包子。'},
-                               {'kind': '因果前提', 'starts_with': '其实母亲',
-                                'ends_with': '那封信的事。',
-                                'text': '其实母亲早就知道那封信的事。'}]),
-             ]},
-            {'chapter_ordinal': 3,
-             'chapter_function': '李宝珠翻账册，管家来回米价，母亲给她添了一盏茶',
-             'narration': _narration(),
-             'beats': [
-                 _beat('b03_01', '午后的日头', '一页页翻。',
-                       event='午后李宝珠摊开账册翻看', place='老宅书房',
-                       ids=['char_001']),
-                 _beat('b03_02', '管家在门外', '米价又涨了。',
-                       event='管家隔着门回话说米价涨了', place='老宅书房',
-                       ids=['char_001'],
-                       hinges=[{'kind': '因果前提', 'starts_with': '米价',
-                                'ends_with': '又涨了。', 'text': '米价又涨了。'}]),
-                 _beat('b03_03', '她皱着眉', '问问别家。',
-                       event='她让管家去别家问价', place='老宅书房',
-                       ids=['char_001']),
-                 _beat('b03_04', '窗外的槐树', '一地碎叶。',
-                       event='窗外槐树落了一地叶子', place='老宅书房',
-                       ids=[]),
-                 _beat('b03_05', '她忽然想起', '够不着桌子。',
-                       event='她想起父亲从前也这样翻账', place='老宅书房',
-                       ids=['char_001'], layer='recall'),
-                 _beat('b03_06', '母亲进来给她', '没有喝。',
-                       event='母亲进来添茶，她端起来没喝', place='老宅书房',
-                       ids=['char_001', 'char_002']),
-             ]},
-        ],
-        '_provenance': {
-            'scope_violations': [],
-            'context': {
-                # ⚠ 取契约那一份，别手抄字面：升架构时手抄的这一份不会跟着改，
-                #   而 `context_scope` 是 metric ⇒ 它会**静默**地一直报「不符合约定」。
-                'architecture': BLUEPRINT_ARCHITECTURE,
-                'stable_prefix': '0123456789',
-                'past_neighbor_chars_max': 4000,
-                'continuity_chars_max': 1600,
-                'past_names_chars_max': 600,
-            },
-            'verbatim_failures': [],
-            'fact_atom_failures': [],
-        },
-    }
-    for chapter in doc['blueprints']:
-        chapter['fact_atoms'] = [beat.pop('_fact_atom') for beat in chapter['beats']]
-        chapter['causal_edges'] = []
-        chapter['narrative_relations'] = []
-        chapter['entry_state_refs'] = []
-        chapter['ending_state_refs'] = []
-    return doc
+    """共享三章当前正式形状；原文与 Global 夹具不变，不生成旧事实适配层。"""
+    from tests.stage2_fixtures import plot_blueprints
+    return plot_blueprints()
 
 
 def _hard_hits(gg: dict | None, bp: dict | None, mt: list | None) -> set[str]:
@@ -310,7 +159,7 @@ def _hard_hits(gg: dict | None, bp: dict | None, mt: list | None) -> set[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_the_clean_base_has_no_hard_hits():
-    """⭐ **下面 36 条全部建立在这一条上。**
+    """⭐ **全部故障样本建立在这一条上。**
 
     一个本来就红的底座上，「改一处就红」什么也证明不了。
     """
@@ -342,37 +191,22 @@ def test_unresolved_opening_scope_is_not_a_pass():
 
 
 def test_real_stage2_report_separates_instance_detail_from_stable_rule_notes():
-    """FC-14：真实 checks 产的 detail 只记本次数据，规则 caveat 只在 note。"""
     from novel.prov import FreshnessReport
     from novel.report import build, render
-
     bp = blueprints()
-    # ⚠ 这里曾经注入 `verbatim_recovered`（配 `anchor_not_verbatim`）。那条判据随
-    #   `bounded-fidelity-v3` 裁撤 ⇒ 换成同一族里仍然活着的 `verbatim_failed`，
-    #   它同样是「detail 记本次数据、note 记规则 caveat」的形状。
-    bp['_provenance']['verbatim_failures'] = [
-        ['b01_01', 'span', '段号区间倒序'],
-    ]
-    outcomes = checks.check(
-        global_g=global_grounding(), blueprints=bp, main_text=main_text())
-    report = build(
-        sid='7615069877019300633', node='stage2.blueprint',
-        freshness=FreshnessReport('unknown', 'no_inputs'), outcomes=outcomes,
-    )
+    bp['blueprints'][0]['evidence_anchors'][0]['start'] += 1
+    report = build(sid='7615069877019300633', node='stage2.blueprint',
+        freshness=FreshnessReport('unknown', 'no_inputs'), outcomes=checks.check(
+            global_g=global_grounding(), blueprints=bp, main_text=main_text()))
     lines = {line.rule: line for line in report.rules}
-
-    anchor = lines['verbatim_failed']
-    assert anchor.findings and '锚不到' in anchor.findings[0].detail
-    assert '段号区间倒序' in anchor.findings[0].detail, 'detail 要记本次数据'
-    assert '原型没有这条' not in anchor.findings[0].detail
-    assert anchor.note and '原型没有这条' in anchor.note
-
-    moves = lines['place_moves']
-    assert moves.findings and 'place 字面变化' in moves.findings[0].detail
-    assert '系统性高估' not in moves.findings[0].detail
-    assert moves.note and '系统性高估' in moves.note
+    anchor, shape = lines['plot_evidence'], lines['plot_shape']
+    assert anchor.findings and '坐标与当前段落索引不一致' in anchor.findings[0].detail
+    assert '不以覆盖率证明' not in anchor.findings[0].detail
+    assert '不以覆盖率证明' in anchor.note
+    assert shape.findings and 'beats' in shape.findings[0].detail
+    assert '不设节点配额' in shape.note
     rendered = render(report)
-    assert f'说明：{anchor.note}' in rendered and f'说明：{moves.note}' in rendered
+    assert f'说明：{anchor.note}' in rendered and f'说明：{shape.note}' in rendered
     assert '**' not in anchor.model_dump_json() and '`' not in anchor.model_dump_json()
 
 
@@ -428,19 +262,19 @@ def test_role_fate_wordlist_remains_hard_because_role_reaches_writer():
     assert review_effect_of('role') == 'blocking', '机械闸与 Stage4 前人审应共同保护 role'
 
 
-def test_beats_coarse_reports_the_long_tail_without_rejecting_the_candidate():
+def test_few_complete_beats_do_not_create_a_quota_or_semantic_pass():
     bp = blueprints()
-    # 留带 hinge 的那一拍，避免把「粗切长尾」与「整章无材料」混成一个反例。
-    _ch(bp, 3)['beats'] = _ch(bp, 3)['beats'][1:2]
-    outcome = next(outcome for outcome in checks.check(
-        global_g=global_grounding(), blueprints=bp, main_text=main_text())
-        if outcome.rule == 'beats_coarse')
-
-    assert outcome.findings, '越过 3× 长尾线仍必须出声'
-    assert REGISTRY.get('beats_coarse').sev == 'info'
-    assert REGISTRY.get('beats_coarse').fix is None, '统计长尾不得指挥付费重生成'
-    assert 'beats_coarse' not in _hard_hits(global_grounding(), bp, main_text())
-    assert REGISTRY.get('beats_collapsed').sev == 'hard'
+    chapter = _ch(bp, 3)
+    complete = '；'.join(row['content'] for row in chapter['beats'])
+    evidence = sorted({ref for row in chapter['beats'] for ref in row['evidence_refs']})
+    chapter['beats'] = [{**chapter['beats'][0], 'content': complete, 'evidence_refs': evidence}]
+    outcomes = {o.rule: o for o in checks.check(
+        global_g=global_grounding(), blueprints=bp, main_text=main_text())}
+    assert outcomes['plot_shape'].findings
+    assert REGISTRY.get('plot_shape').sev == 'metric'
+    assert REGISTRY.get('plot_shape').fix is None
+    assert outcomes['plot_semantics'].unver_why
+    assert not _hard_hits(global_grounding(), bp, main_text())
 
 
 def test_the_clean_base_leaves_no_rule_unimplemented():
@@ -454,47 +288,40 @@ def test_the_clean_base_leaves_no_rule_unimplemented():
                         main_text=main_text())
     want = {r.rule for r in REGISTRY.all() if r.stage == 'stage2'}
     assert {o.rule for o in outs} == want
-    assert len(outs) == len(want) == 69
+    assert len(outs) == len(want)
 
 
 @pytest.mark.parametrize('missing_main_text', [None, []])
 @pytest.mark.parametrize('recovery_record', ['missing', 'known_clear', 'known_failure'])
 def test_missing_main_text_preserves_unver_and_original_recovery_evidence(
         missing_main_text, recovery_record):
-    """全表与真实报告都闭合；缺原文不能伪造覆盖通过，也不抹去原生产失败账。"""
+    from contracts.schema.stage2 import BlueprintScopeViolation
     from novel.prov import FreshnessReport
     from novel.report import build
-
     bp = blueprints()
     if recovery_record == 'missing':
-        bp['_provenance'].pop('verbatim_failures')
-        bp['_provenance'].pop('fact_atom_failures')
+        bp['_provenance'].pop('scope_violations')
     elif recovery_record == 'known_failure':
-        bp['_provenance']['verbatim_failures'] = [['b01_01', 'span', '段号区间倒序']]
-        bp['_provenance']['fact_atom_failures'] = [['f01_001', 'evidence_phrase', '证据未定位']]
-    outcomes = checks.check(global_g=global_grounding(), blueprints=bp,
-                            main_text=missing_main_text)
+        bp['_provenance']['scope_violations'] = [BlueprintScopeViolation(
+            batch=1, requested=[1], produced=[1, 5], discarded_chapters=[5],
+            duplicate_target=0).model_dump_json()]
+    outcomes = checks.check(global_g=global_grounding(), blueprints=bp, main_text=missing_main_text)
     registered = {row.rule for row in REGISTRY.all() if row.stage == 'stage2'}
-    assert {row.rule for row in outcomes} == registered
-    assert len(outcomes) == len(registered), '缺料分支也必须每条规则恰好一次'
+    assert {row.rule for row in outcomes} == registered and len(outcomes) == len(registered)
     report = build(sid='123', node='stage2.blueprint',
-                   freshness=FreshnessReport('unknown', 'no_inputs'), outcomes=outcomes)
+        freshness=FreshnessReport('unknown', 'no_inputs'), outcomes=outcomes)
     lines = {line.rule: line for line in report.rules}
     assert all(line.status != 'skipped' for line in lines.values())
-    for rule in ('span_unlocatable', 'edge_hole', 'beats_collapsed', 'beats_coarse',
-                 'span_coverage', 'span_coverage_per_chapter', 'uncovered_holes'):
-        assert lines[rule].status == 'unver'
-        assert 'stage1/main_text.json' in next(row.unver_why for row in outcomes if row.rule == rule)
-        assert not lines[rule].findings
-    # 这些是蓝图自身可查的 id 形状，以及已正面留账的历史状态，不冒充原文复核。
-    assert lines['beat_id_unique'].status == lines['beat_id_format'].status == 'ok'
-    expected = {'missing': 'unver', 'known_clear': 'ok', 'known_failure': 'hit'}
-    verbatim = lines['verbatim_failed']
-    assert verbatim.status == expected[recovery_record]
+    for rule in ('plot_evidence', 'pronoun_surface_unattested', 'present_ids_dangling'):
+        assert lines[rule].status == 'unver' and not lines[rule].findings
+    assert lines['plot_contract'].status == 'ok'
+    assert lines['plot_semantics'].status == 'unver'
+    expected = {'missing': 'hit', 'known_clear': 'ok', 'known_failure': 'hit'}
+    assert lines['scope_violation'].status == expected[recovery_record]
     if recovery_record == 'known_failure':
-        assert len(verbatim.findings) == 1 and verbatim.findings[0].output_ordinal == 1
-        assert any('段号区间倒序' in item for item in verbatim.findings[0].evidence)
-        assert any('证据未定位' in item for item in verbatim.findings[0].evidence)
+        finding = lines['scope_violation'].findings[0]
+        assert finding.output_ordinal == 1
+        assert 'discarded_chapters' in finding.detail and '5' in finding.detail
 
 
 def test_global_field_failures_route_to_resample_except_typed_human_repairs():
@@ -537,7 +364,7 @@ def test_the_two_unver_rules_always_speak():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 三、36 条盘上 0 命中的 HARD —— 各配一份会让它红的样本
+# 三、现役 HARD —— 每条保留会触发它的反例
 # ─────────────────────────────────────────────────────────────────────────────
 
 Mutator = Callable[[dict, dict, list], Any]
@@ -566,7 +393,7 @@ def _ch(bp: dict, o: int) -> dict:
     return next(x for x in bp['blueprints'] if x['chapter_ordinal'] == o)
 
 
-#: `(判据 id, 改哪一处, 为什么这一处会让它红)`。**一行一条**，36 条。
+#: `(判据 id, 改哪一处, 为什么这一处会让它红)`；一个规则可有多种独立失败面。
 CASES: list[tuple[str, Mutator, str]] = [
     # ── 一、产物完整性与章对齐 ──────────────────────────────────────────
     ('upstream_missing', lambda g, b, m: (None, b, m),
@@ -648,83 +475,34 @@ CASES: list[tuple[str, Mutator, str]] = [
     ('opening_scope_valid',
      _m(lambda g, b, m: g['source_blurb']['opening'].__setitem__('through_chapter', 99)),
      '开篇终点必须存在且边界证据属于该章'),
-    # ── 五、拍与区间 ────────────────────────────────────────────────────
-    ('beat_id_unique',
-     _m(lambda g, b, m: _ch(b, 2)['beats'][0].__setitem__('beat_id', 'b01_01')),
-     'beat_id 是下游 join 的唯一键，重号则每一次 join 都可能取错拍'),
-    ('beat_id_format',
-     _m(lambda g, b, m: _ch(b, 1)['beats'][1].__setitem__('beat_id', 'b01_05')),
-     '章内序不连续'),
-    ('span_unlocatable',
-     _m(lambda g, b, m: _ch(b, 1)['beats'][1]['span']
-        .__setitem__('text', '这句话原文里根本没有')),
-     '定位不到 ⇒ 这一拍没有量纲：字数、覆盖率、hinge 归属全部落空'),
-    ('verbatim_failed',
-     _m(lambda g, b, m: b['_provenance'].__setitem__(
-         'verbatim_failures', [['b01_01', 'span', '段号越界']])),
-     '`_provenance.verbatim_failures` 非空即失败态。'
-     '⚠ 它替掉了「靠 hinges[].text 的**缺席**去反推失败态」——失败态从此有正面的落点'),
-    ('edge_hole',
-     _m(lambda g, b, m: _ch(b, 3)['beats'].pop()),
-     '章尾 32 字落在最后一拍之后。⚠ 章的**起因与结果**最常丢在这里，'
-     '而被并掉的事在之后的每个环节里都不再存在'),
-    ('beats_collapsed',
-     _m(lambda g, b, m: (m[0].__setitem__('text', CH1 + '天黑之后院子里静得出奇。' * 24),
-                         _ch(b, 1).__setitem__('beats', _ch(b, 1)['beats'][:1]))),
-     '≥300 字的章只切了 1 拍。⚠ 锚用的是**契约自己的反例**，不跨书比'),
-    # ── 六、保真材料 ────────────────────────────────────────────────────
-    ('hinge_cross_chapter',
-     _m(lambda g, b, m: _ch(b, 1)['beats'][0]['hinges'].append(
-         {'kind': '要害台词', 'source': _source(CH2, '街上已经有', '在吆喝。')})),
-     '引的是别的章的原文，逐字无误但归错了章。'
-     '⚠ 它几乎一定同时意味着该拍的 event 也越界了——而 event 会照原样发给写手'),
-    # ⚠⚠ 两处必须同时改：hinge 的 `source` 置空只说明「它失败了」，
-    #    **是哪一种失败由 `_provenance.verbatim_failures` 的根因决定**，
-    #    而根因 → 判据的对应表是 `contracts/invariants.py::HINGE_FAILURE_ROUTE`。
-    #    只改一处会落进 catch-all 的 `hinge_drift`。
-    ('hinge_anchor_void',
-     _m(lambda g, b, m: (
-         _ch(b, 1)['beats'][0]['hinges'].append({'kind': '物件', 'source': None}),
-         b['_provenance']['verbatim_failures'].append(
-             ['b01_01', 'hinge', _cause('hinge_anchor_void')]))),
-     '短语在本章原文里根本找不到（是转述或编的）——四分流里唯一一条根因在模型身上的'),
-    ('hinge_ambiguous',
-     _m(lambda g, b, m: (
-         _ch(b, 1)['beats'][0]['hinges'].append({'kind': '要害台词', 'source': None}),
-         b['_provenance']['verbatim_failures'].append(
-             ['b01_01', 'hinge', _cause('hinge_ambiguous')]))),
-     '短语在所属拍区间内多处命中（`extraction-ir-v1` 去段号后的预期新失败面：'
-     '交接实测 189 条里 2 条双命中）——压在哪几个字上定不下来，修法是候选选择不是重抄'),
-    ('hinge_drift',
-     _m(lambda g, b, m: _ch(b, 1)['beats'][0]['hinges'].append({
-         'kind': '要害台词',
-         'source': {**_source(CH1, '院墙'), 'text': '这段文字全书哪一章都没有出现过'},
-     })),
-     'text 不在本 beat 的 span 原文内，而全书哪一章也找不到 ⇒ 位置对、字节错'),
-    ('chapter_no_hinge',
-     _m(lambda g, b, m: [be.__setitem__('hinges', []) for be in _ch(b, 2)['beats']]),
-     '整章一条保真材料都没有 ⇒ 这一章的原文材料一条都没往下游走。⚠ 单拍为空是正常的'),
-    # ── 七、在场与叙述 ──────────────────────────────────────────────────
-    ('time_layer_no_present',
-     _m(lambda g, b, m: [be.__setitem__('time_layer', 'recall')
-                         for x in b['blueprints'] for be in x['beats']]),
-     '全书 10 拍一条 present 都没有。⚠⚠ **枚举合法 ≠ 分布合理**——'
-     '取值面那一半已被载体收走，而「每一条都合法、合起来不可能」载体表达不了'),
-    ('present_ids_dangling',
-     _m(lambda g, b, m: _ch(b, 1)['beats'][0].__setitem__('present_char_ids', ['char_999'])),
-     '⚠⚠ 这是**解析器的后置条件**：present_char_ids 是代码解析出来的，'
-     '违反它 ＝ 代码坏了，不是数据坏了'),
-    ('scope_violation',
-     _m(lambda g, b, m: b['_provenance'].__setitem__(
+    # ── 完整剧情、共享证据、状态与人物许可 ──
+    ('plot_contract', _m(lambda g, b, m: _ch(b, 1)['beats'][0].__setitem__('content', '')),
+     '完整剧情正文不能缺失；在 Stage2 拒绝，不能付费规划后才发现'),
+    ('plot_contract', _m(lambda g, b, m: _ch(b, 2)['beats'][0].__setitem__('beat_id', 'b01_01')),
+     '正式节点身份不能越章，不能因稳定 ID 取错主体'),
+    ('plot_contract', _m(lambda g, b, m: _ch(b, 1)['beats'][1].__setitem__('beat_id', 'b01_01')),
+     '同章节点 ID 重复必须拒绝'),
+    ('plot_contract', _m(lambda g, b, m: _ch(b, 1)['beats'][0].__setitem__('evidence_refs', [])),
+     '完整节点仍须有证据，不允许用无依据正文填满蓝图'),
+    ('plot_contract', _m(lambda g, b, m: _ch(b, 1)['beats'][0].__setitem__('evidence_refs', ['e02_01'])),
+     '证据属于别章，不能用另一章片段伪造本章根据'),
+    ('plot_evidence', _m(lambda g, b, m: _ch(b, 1)['evidence_anchors'][0].__setitem__('start', 27)),
+     '正式坐标不匹配程序段号，不能由原文范围覆盖冒充定位正确'),
+    ('plot_evidence', _m(lambda g, b, m: m[0].__setitem__('text', CH1 + '新的原文句子。')),
+     '相同节点不得静默复用到另一份源文'),
+    ('plot_state_continuity', _m(lambda g, b, m: _ch(b, 2).__setitem__('entry_state_refs', ['st01_99'])),
+     '章首状态必须由前章当前 carry_out 提供'),
+    ('plot_global_refs', _m(lambda g, b, m: _ch(b, 1)['states'].append({
+         'state_id': 'st01_01', 'content': None, 'global_ref': {'kind': 'secret', 'ref': 'secret_99'},
+         'modality': 'world', 'holder_char_id': None, 'established_at': {'kind': 'at_beat', 'beat_ref': 'b01_01'},
+         'ended_at': None, 'supersedes_state_refs': [], 'evidence_refs': ['e01_01']})),
+     '共享状态不得引用当前未提供的秘密主体'),
+    ('present_ids_dangling', _m(lambda g, b, m: _ch(b, 1)['beats'][0].__setitem__(
+         'participant_char_ids', ['char_999'])),
+     '不能引用当前人物闭集之外的人物，参与与在场必须分别建模'),
+    ('scope_violation', _m(lambda g, b, m: b['_provenance'].__setitem__(
          'scope_violations', ['批 1 被要求产 ch1，实际产了 ch1 与 ch5'])),
-     '非空即失败；产地必须无条件写这个键，没越界时写空列表'),
-    ('fact_atom_empty',
-     _m(lambda g, b, m: _ch(b, 1)['fact_atoms'][0].__setitem__('claim', '')),
-     '⚠ **判在本层不判 stage4**：留在下游意味着要先付掉一次规划调用才发现这一层产坏了'),
-    ('material_contract',
-     _m(lambda g, b, m: _ch(b, 1)['beats'][0]['hinges'][0].__setitem__(
-         'source_fact_refs', ['f02_001'])),
-     '材料指向外章事实，必须在 Blueprint 闸发现，不能由 B 以源拍猜归属'),
+     '越章响应是显式失败；键缺失不能当作合法空列表'),
 ]
 
 
@@ -733,7 +511,7 @@ def test_a_sample_that_makes_this_hard_rule_red(rule, mutate, why):
     """⭐ **盘上 0 命中的 HARD 各一份会让它红的样本**（用户裁决 2026-08-12）。
 
     每一条只改底座的一处，然后断言**恰好那一条**红了。
-    ⚠ 不断言「只有它红」：有几处改动会连带触发别的判据（改坏章序会连带 `beat_id_format`），
+    ⚠ 不断言「只有它红」：有几处改动会连带触发别的判据（改坏章序可能连带状态连续性），
     而**那本来就是对的**——一份坏产物本来就该多报几条。
     要防的是反过来那件事：改了这一处而它**没红**。
     """
@@ -747,16 +525,14 @@ def test_a_sample_that_makes_this_hard_rule_red(rule, mutate, why):
 def test_every_hard_rule_without_a_disk_counterexample_has_a_synthetic_one():
     """⭐⭐ **守卫的守卫：这张清单不许悄悄变短。**
 
-    39 条 HARD 里盘上只有 3 条有真反例；本文件要为**其余每一条**配一份。
+    本文件为未由现役 corpus 样例覆盖的每条 HARD 配一份失败输入。
     加一条 HARD 而不配样本，这条测试当场点名——
     否则那条新判据就又回到「从没见过反例」那一档，而它与一条不存在的判据长得一样。
     """
-    #: 盘上**有真反例**的 3 条（`docs/schema/stage2.md` §5.5）。它们不需要合成样本
-    #: ——真数据比合成样本强，而 `tests/test_corpus_fixtures.py` 一族在跑那三本。
-    on_disk = {'address_bare_pronoun', 'role_leaks_fate', 'hinge_in_hole'}
+    #: 两条 Global 规则保留已有 corpus 反例，正文语料验收与默认回归独立。
+    on_disk = {'address_bare_pronoun', 'role_leaks_fate'}
     hard = {r.rule for r in REGISTRY.all() if r.stage == 'stage2' and r.sev == 'hard'}
     covered = {c[0] for c in CASES}
-    assert len(hard) == 40, f'HARD 条数变了（{len(hard)}）——本条与 §5.1 的账要一起改'
     assert covered <= hard, f'CASES 里有不是 HARD 的：{sorted(covered - hard)}'
     assert not (missing := sorted(hard - on_disk - covered)), (
         f'这几条 HARD 既没有盘上反例、也没有合成样本：{missing}\n'

@@ -427,7 +427,7 @@ def _judge(store: ArtifactStore, plan_raw: dict[str, Any], up: _Upstreams, *,
 
     ``with_ctx_link=False`` 是 writer context **尚未按候选计划重建**的前置闸门；
     这一趟不能读取盘上的旧 context。否则 Stage2 或计划更新后，旧 context 的
-    ``ctx_facts_exact`` / ``ctx_hinge_delivered`` 会被错配到新候选上，
+    ``ctx_plot_exact`` 会被错配到新候选上，
     ``--revalidate`` 也会在提升并重建之前被永久挡住。前置闸门让五条 ctx 判据
     如实走 ``unver``，候选落稳并重建 context 后再以 ``with_ctx_link=True`` 跑后置条件。
     """
@@ -820,16 +820,22 @@ def _candidate_business(candidate: BlindCandidate) -> dict[str, Any]:
 
 def _build_binding_user(
     ctx: RunContext, up: _Upstreams, candidate: dict[str, Any], subject: str,
+    *, catalog: dict[int, dict] | None = None,
 ) -> str:
     """聚合身份只列章请求摘要；实际模型调用使用独立完整章包，不再构造整书正文包。"""
     baseline = build_mechanical_baseline(candidate, up.blueprints)
+    chapters = []
+    for chapter in baseline.chapters:
+        issue = _chapter_binding_issue(ctx, up, candidate, chapter, chapter.chapter_ordinal)
+        if catalog is not None:
+            catalog[chapter.chapter_ordinal]['issued_refs'] = issue.issued_refs
+        chapters.append({'chapter_ordinal': chapter.chapter_ordinal,
+                         'mechanical': chapter.mechanical,
+                         'workpack_sha256': _chapter_input_sha(issue)})
     return json.dumps({
         'binding_input_contract': STAGE4_BINDING_INPUT_CONTRACT,
         'candidate_sha256': subject,
-        'chapters': [{'chapter_ordinal': c.chapter_ordinal, 'mechanical': c.mechanical,
-                      'workpack_sha256': _chapter_input_sha(_chapter_binding_issue(
-                          ctx, up, candidate, c, c.chapter_ordinal))}
-                     for c in baseline.chapters],
+        'chapters': chapters,
     }, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
@@ -855,7 +861,7 @@ def _binding_request(
     _assert_budget_basis(up)
     catalog = build_evidence_catalog(up.blueprints)
     system = prompts.chapter_binding_system()
-    user = _build_binding_user(ctx, up, candidate_raw, subject)
+    user = _build_binding_user(ctx, up, candidate_raw, subject, catalog=catalog)
     return (
         system, user, store, up, candidate, candidate_raw, candidate_file_sha,
         subject, catalog,
@@ -985,7 +991,11 @@ def preflight_binding_candidate(
     up = _Upstreams(ctx, store, need_grounding=True)
     catalog = build_evidence_catalog(up.blueprints)
     proof = prove_binding_infeasible(candidate_raw, catalog)
-    failures = ()
+    failures = tuple(typed_failures.make(
+        candidate_sha256=subject, code=row['constraint_code'],
+        rule=row['constraint_code'], surfacing='stage4.design',
+        chapter_ordinal=row['chapter_ordinal'], scene_refs=row['scenes'],
+        refs=row['closed_refs']) for row in proof)
     if not proof:
         try:
             constructive = construct_feasible_binding_witness(candidate_raw, catalog)
@@ -1351,6 +1361,7 @@ class _BindingValidator:
                     candidate_sha256=witness_sha,
                     code='binding_compile_refused',
                     rule='binding_compile_refused', surfacing='stage4.plan',
+                    chapter_ordinal=getattr(exc, 'chapter_ordinal', None),
                     refs=[str(exc)[:200]]),)
                 return str(exc)
             return None
@@ -1364,6 +1375,7 @@ class _BindingValidator:
             self.typed_failures = (typed_failures.make(
                 candidate_sha256=witness_sha, code='binding_compile_refused',
                 rule='binding_compile_refused', surfacing='stage4.plan',
+                chapter_ordinal=getattr(exc, 'chapter_ordinal', None),
                 refs=[str(exc)[:200]]),)
             return str(exc)
         self.compiled = data

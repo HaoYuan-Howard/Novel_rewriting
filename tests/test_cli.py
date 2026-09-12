@@ -970,7 +970,7 @@ def test_stage4_typed_infeasible_is_landed_red_without_a_fake_report(
             closed_refs=['c02s01'])],
         infeasibility_proof=[BindingInfeasibilityWitness(
             chapter_ordinal=2, scenes=['c02s01'],
-            constraint_code='empty_stage_allowlist',
+            constraint_code='missing_chapter_catalog',
             closed_refs=['c02s01'], proof_basis='b' * 64)])
     monkeypatch.setattr(approvals, 'authorize_plan', lambda *_args: None)
     monkeypatch.setattr(M, '_llm_client', lambda _ctx: 'binding-client')
@@ -983,7 +983,7 @@ def test_stage4_typed_infeasible_is_landed_red_without_a_fake_report(
 
     assert rc == X.CHECK_FAILED and X.landed(rc)
     out = capsys.readouterr().out
-    assert 'typed infeasible' in out and 'empty_stage_allowlist' in out
+    assert 'typed infeasible' in out and 'missing_chapter_catalog' in out
     assert 'Stage4A 返修审阅' in out
 
 
@@ -1691,7 +1691,7 @@ def test_profiled_stage4_infeasible_is_landed_exit_one(
             closed_refs=['c02s01'])],
         infeasibility_proof=[BindingInfeasibilityWitness(
             chapter_ordinal=2, scenes=['c02s01'],
-            constraint_code='empty_stage_allowlist',
+            constraint_code='missing_chapter_catalog',
             closed_refs=['c02s01'], proof_basis='b' * 64)])
 
     class Agent:
@@ -1716,7 +1716,7 @@ def test_profiled_stage4_infeasible_is_landed_exit_one(
 
     assert rc == X.CHECK_FAILED and X.landed(rc)
     out = capsys.readouterr().out
-    assert 'typed infeasible' in out and 'empty_stage_allowlist' in out
+    assert 'typed infeasible' in out and 'missing_chapter_catalog' in out
     assert '当前 design review 决定' in out
 
 

@@ -3,9 +3,9 @@
     "v": 2,
     "sid": "123",
     "kind": "design",
-    "candidate_sha256": "88634d61bb65cbfc7e4b568d5064c2501278072ecf8f4e21e3787a34827dcd2b",
-    "subject_sha256": "587db12e23ff7fe7deb20b5d126baa9c1fae798ad8da1251d66c9351370018bb",
-    "review_token": "s4dr1_587db12e23ff7fe7deb20b5d126baa9c1fae798ad8da1251d66c9351370018bb",
+    "candidate_sha256": "11ee28d6418574aaeaac2b3fd39cde2c8207bceed565b3902a528362f2a67d87",
+    "subject_sha256": "c843704ba0b0ea056c5a55852694ada3b1026fe2463506b02d412a39638cf5ff",
+    "review_token": "s4dr1_c843704ba0b0ea056c5a55852694ada3b1026fe2463506b02d412a39638cf5ff",
     "chapter_ordinals": [
       1,
       2,
@@ -40,11 +40,10 @@
               "a_79452a5f1b9d1f53",
               "a_8148c84a296e27f6",
               "a_a57416b2587365b5",
-              "a_cae450bf94cba784",
               "a_e86937ff3893841c"
             ],
             "repair_owner": null,
-            "detail": "{\"beat_count\":2,\"carry_out_aliases\":[\"a_8c8b290cbe696e2f\"],\"constraint_count\":0,\"endpoint_count\":9,\"entry_state_aliases\":[],\"reading\":\"design_chapter_coverage:ch1\",\"scene_count\":2}",
+            "detail": "{\"beat_count\":2,\"carry_out_aliases\":[\"a_8c8b290cbe696e2f\"],\"constraint_count\":0,\"endpoint_count\":8,\"entry_state_aliases\":[],\"reading\":\"design_chapter_coverage:ch1\",\"scene_count\":2}",
             "effect": "attention",
             "allowed_actions": [],
             "changed": false,
@@ -266,6 +265,24 @@
               "truth": {
                 "chapter_ordinal": 1,
                 "chapter_function": "推进家宅生活及家人之间的信息变化",
+                "characters": [
+                  {
+                    "alias": "a_acdaf45967cf3326",
+                    "canonical": "李宝珠",
+                    "surfaces": [
+                      "李宝珠"
+                    ],
+                    "role": "沈家的独女，替父亲掌管家中账目"
+                  },
+                  {
+                    "alias": "a_b460d5952dfd8297",
+                    "canonical": "沈母",
+                    "surfaces": [
+                      "沈母"
+                    ],
+                    "role": "李宝珠的娘，管着老宅内院的日常"
+                  }
+                ],
                 "beats": [
                   {
                     "alias": "a_2eabcd9da55a5e83",
@@ -297,14 +314,6 @@
                 "background_beats": [],
                 "constraints": [],
                 "knowledge": [
-                  {
-                    "event_alias": "a_cae450bf94cba784",
-                    "subject_alias": "a_8c8b290cbe696e2f",
-                    "kind": "state_reveal",
-                    "audience": null,
-                    "timing": "at_beats",
-                    "trigger_beat_alias": "a_2eabcd9da55a5e83"
-                  },
                   {
                     "event_alias": "a_1ff274d90cf5fad4",
                     "subject_alias": "a_1474de2ca9d69bd1",
@@ -414,13 +423,6 @@
                     "kind": "state",
                     "endpoint": "established",
                     "trigger_beat_alias": "a_937493d143e4ed6c",
-                    "subject_alias": "a_8c8b290cbe696e2f"
-                  },
-                  {
-                    "endpoint_alias": "a_cae450bf94cba784",
-                    "kind": "knowledge",
-                    "endpoint": "trigger",
-                    "trigger_beat_alias": "a_2eabcd9da55a5e83",
                     "subject_alias": "a_8c8b290cbe696e2f"
                   },
                   {
@@ -583,10 +585,6 @@
                     "scene_ref": "s02"
                   },
                   {
-                    "endpoint_alias": "a_cae450bf94cba784",
-                    "scene_ref": "s01"
-                  },
-                  {
                     "endpoint_alias": "a_e86937ff3893841c",
                     "scene_ref": "s01"
                   }
@@ -624,6 +622,24 @@
               "truth": {
                 "chapter_ordinal": 2,
                 "chapter_function": "推进家宅生活及家人之间的信息变化",
+                "characters": [
+                  {
+                    "alias": "a_acdaf45967cf3326",
+                    "canonical": "李宝珠",
+                    "surfaces": [
+                      "李宝珠"
+                    ],
+                    "role": "沈家的独女，替父亲掌管家中账目"
+                  },
+                  {
+                    "alias": "a_b460d5952dfd8297",
+                    "canonical": "沈母",
+                    "surfaces": [
+                      "母亲"
+                    ],
+                    "role": "李宝珠的娘，管着老宅内院的日常"
+                  }
+                ],
                 "beats": [
                   {
                     "alias": "a_39cc5aec21b228a0",
@@ -839,6 +855,24 @@
               "truth": {
                 "chapter_ordinal": 3,
                 "chapter_function": "推进家宅生活及家人之间的信息变化",
+                "characters": [
+                  {
+                    "alias": "a_acdaf45967cf3326",
+                    "canonical": "李宝珠",
+                    "surfaces": [
+                      "李宝珠"
+                    ],
+                    "role": "沈家的独女，替父亲掌管家中账目"
+                  },
+                  {
+                    "alias": "a_b460d5952dfd8297",
+                    "canonical": "沈母",
+                    "surfaces": [
+                      "母亲"
+                    ],
+                    "role": "李宝珠的娘，管着老宅内院的日常"
+                  }
+                ],
                 "beats": [
                   {
                     "alias": "a_3dbe40463ad1fa14",
@@ -1005,12 +1039,12 @@
     "reviewer_kind": "human",
     "review_run_id": "plot-design-review",
     "general_reason": "合成设计语义审阅",
-    "candidate_sha256": "88634d61bb65cbfc7e4b568d5064c2501278072ecf8f4e21e3787a34827dcd2b",
-    "aggregate_subject_sha256": "587db12e23ff7fe7deb20b5d126baa9c1fae798ad8da1251d66c9351370018bb",
+    "candidate_sha256": "11ee28d6418574aaeaac2b3fd39cde2c8207bceed565b3902a528362f2a67d87",
+    "aggregate_subject_sha256": "c843704ba0b0ea056c5a55852694ada3b1026fe2463506b02d412a39638cf5ff",
     "binding_infeasibility": null,
     "preflight": {
       "status": "pass",
-      "candidate_sha256": "700e386504620c710323cf42c898f62e6eb251b235e9e9d3664eaf6f5d33b3c7",
+      "candidate_sha256": "2872222543e958f10ad27d760d9392e4800f75b023e4cb13e14add36fbf24920",
       "blueprint_sha256": "035779bed33909cc3db8b9992cbea0ecf477b8390e2212fe4033cc62a3d6c0d7",
       "review_contract": "stage4-design-review-v6",
       "code_version": "test-plot-producer",
@@ -1054,7 +1088,7 @@
         "basis": {
           "review_contract": "stage4-design-review-v6",
           "root_clean_sha1": "2b316027b79c3e7cc16d9678efd250852a308445",
-          "truth_sha256": "35d64e665f81e6707c6d7e08c7ff6d5deb672df41fa0dc5f438d6b3ec8a9a9ee",
+          "truth_sha256": "00ccaa1328b431cd482c7580fd667d8121150f577e30ec2ea7454eb5d9b78e04",
           "alias_algorithm": "hmac-sha256-v1"
         },
         "reconstruction_strategy": "按各章完整剧情推进",
@@ -1075,7 +1109,7 @@
       },
       "subject_sha256": "74da2be149c0393cb6f4f8cccf74ee5ab3a03195d6d46edd4f5a8f48b5ba965c",
       "placeholder": true,
-      "template_token": "154998b3b01d907a6ad8ca53e0184c4677a029a594775873b4d0366c259cdd39",
+      "template_token": "d928a2ff5c5aff4be75db08ea65b7f4f3a8100336987ca335f97bc59cf56629a",
       "decision": "request_replan",
       "reason": "关闭式模板：尚未确认当前整书策略，保持 request_replan",
       "replan_constraints": [
@@ -1097,6 +1131,24 @@
           "blind_truth": {
             "chapter_ordinal": 1,
             "chapter_function": "推进家宅生活及家人之间的信息变化",
+            "characters": [
+              {
+                "alias": "a_acdaf45967cf3326",
+                "canonical": "李宝珠",
+                "surfaces": [
+                  "李宝珠"
+                ],
+                "role": "沈家的独女，替父亲掌管家中账目"
+              },
+              {
+                "alias": "a_b460d5952dfd8297",
+                "canonical": "沈母",
+                "surfaces": [
+                  "沈母"
+                ],
+                "role": "李宝珠的娘，管着老宅内院的日常"
+              }
+            ],
             "beats": [
               {
                 "alias": "a_2eabcd9da55a5e83",
@@ -1128,14 +1180,6 @@
             "background_beats": [],
             "constraints": [],
             "knowledge": [
-              {
-                "event_alias": "a_cae450bf94cba784",
-                "subject_alias": "a_8c8b290cbe696e2f",
-                "kind": "state_reveal",
-                "audience": null,
-                "timing": "at_beats",
-                "trigger_beat_alias": "a_2eabcd9da55a5e83"
-              },
               {
                 "event_alias": "a_1ff274d90cf5fad4",
                 "subject_alias": "a_1474de2ca9d69bd1",
@@ -1245,13 +1289,6 @@
                 "kind": "state",
                 "endpoint": "established",
                 "trigger_beat_alias": "a_937493d143e4ed6c",
-                "subject_alias": "a_8c8b290cbe696e2f"
-              },
-              {
-                "endpoint_alias": "a_cae450bf94cba784",
-                "kind": "knowledge",
-                "endpoint": "trigger",
-                "trigger_beat_alias": "a_2eabcd9da55a5e83",
                 "subject_alias": "a_8c8b290cbe696e2f"
               },
               {
@@ -1414,10 +1451,6 @@
                 "scene_ref": "s02"
               },
               {
-                "endpoint_alias": "a_cae450bf94cba784",
-                "scene_ref": "s01"
-              },
-              {
                 "endpoint_alias": "a_e86937ff3893841c",
                 "scene_ref": "s01"
               }
@@ -1469,9 +1502,9 @@
             }
           }
         },
-        "subject_sha256": "fea9ff225c1d0b1ae5a65bbd3d87e0cc1a0341d81fdc416a5581090b7d3e55a6",
+        "subject_sha256": "5df3890140ea7c52e86f7796df37ee2bc22b930e9640bd846b9d3664463fee7d",
         "placeholder": true,
-        "template_token": "0de40fae6ba3ac1cfe340971ed5af566a95fe3fb5eeb2e891edb94aa8e67be9c",
+        "template_token": "47419ea0488f2f0a6d235a4975e21a93d4ac4e6e52b54cc0c1ff06446bc561fc",
         "decision": "request_repair",
         "reason": "关闭式模板：尚未确认当前章设计，保持 request_repair",
         "constraints": [
@@ -1496,6 +1529,24 @@
           "blind_truth": {
             "chapter_ordinal": 2,
             "chapter_function": "推进家宅生活及家人之间的信息变化",
+            "characters": [
+              {
+                "alias": "a_acdaf45967cf3326",
+                "canonical": "李宝珠",
+                "surfaces": [
+                  "李宝珠"
+                ],
+                "role": "沈家的独女，替父亲掌管家中账目"
+              },
+              {
+                "alias": "a_b460d5952dfd8297",
+                "canonical": "沈母",
+                "surfaces": [
+                  "母亲"
+                ],
+                "role": "李宝珠的娘，管着老宅内院的日常"
+              }
+            ],
             "beats": [
               {
                 "alias": "a_39cc5aec21b228a0",
@@ -1733,9 +1784,9 @@
             }
           }
         },
-        "subject_sha256": "1354881ade9a3a5d17ec159dd5496a379abebabd70c06744160bc04ecc9a3eb0",
+        "subject_sha256": "dec1532d9631d002497cab2619b1125b8f204da2ad2aaee5f2341c22facae502",
         "placeholder": true,
-        "template_token": "6534ab6433176ea901e47cb75a9b180f24ad95a721b3f966672f4d2f525c3789",
+        "template_token": "4dc741be6f266df90026db1bcf8cfec74445db980e4497577138fe24afad7ebe",
         "decision": "request_repair",
         "reason": "关闭式模板：尚未确认当前章设计，保持 request_repair",
         "constraints": [
@@ -1760,6 +1811,24 @@
           "blind_truth": {
             "chapter_ordinal": 3,
             "chapter_function": "推进家宅生活及家人之间的信息变化",
+            "characters": [
+              {
+                "alias": "a_acdaf45967cf3326",
+                "canonical": "李宝珠",
+                "surfaces": [
+                  "李宝珠"
+                ],
+                "role": "沈家的独女，替父亲掌管家中账目"
+              },
+              {
+                "alias": "a_b460d5952dfd8297",
+                "canonical": "沈母",
+                "surfaces": [
+                  "母亲"
+                ],
+                "role": "李宝珠的娘，管着老宅内院的日常"
+              }
+            ],
             "beats": [
               {
                 "alias": "a_3dbe40463ad1fa14",
@@ -1932,9 +2001,9 @@
             }
           }
         },
-        "subject_sha256": "8992b236b8b756236f4f4e5eab7b3129526d85c3a1ce7c70ef66bdbe2081b7b7",
+        "subject_sha256": "c0589f301e7d12201ecc13ef112cfc7564a9bdd75f1f77d0888753973800d434",
         "placeholder": true,
-        "template_token": "5bf4e55b7d6135ec72ca91fce006834d0511d116e9c46514f6bc79b06127ca73",
+        "template_token": "bdc7993b8f6b6ee12de7c0242c232b44bd7c26f3050e32e7400d3b972d09a17c",
         "decision": "request_repair",
         "reason": "关闭式模板：尚未确认当前章设计，保持 request_repair",
         "constraints": [
@@ -1965,15 +2034,15 @@
         "items": []
       }
     },
-    "review_token": "s4dr1_587db12e23ff7fe7deb20b5d126baa9c1fae798ad8da1251d66c9351370018bb"
+    "review_token": "s4dr1_c843704ba0b0ea056c5a55852694ada3b1026fe2463506b02d412a39638cf5ff"
   },
   "structure_workpack": {
     "v": 2,
     "sid": "123",
     "kind": "structure",
     "candidate_sha256": null,
-    "subject_sha256": "aa9d3d30e180af6a5667ba0c5191935c4a10db3b01cbf6bccb0891eb0387bbd4",
-    "review_token": "s4sr1_aa9d3d30e180af6a5667ba0c5191935c4a10db3b01cbf6bccb0891eb0387bbd4",
+    "subject_sha256": "fff925acdb30c39edd9969ae69ab51acdc9db36658709eb62715f4ea33e77ea0",
+    "review_token": "s4sr1_fff925acdb30c39edd9969ae69ab51acdc9db36658709eb62715f4ea33e77ea0",
     "chapter_ordinals": [
       1,
       2,
@@ -2017,7 +2086,7 @@
             "scene_refs": [],
             "refs": [],
             "repair_owner": "stage4",
-            "detail": "引用和证据闭合不能证明联合呈现完整、归因正确、因果保真或没有隐含提前揭示；由既有设计、结构及成稿审阅判断",
+            "detail": "{\"semantic_closure_reading\":\"[{\\\"chapter_ordinal\\\":1,\\\"beats\\\":2,\\\"states\\\":1,\\\"constraints\\\":0,\\\"semantic_verdict\\\":\\\"unver\\\"},{\\\"chapter_ordinal\\\":2,\\\"beats\\\":2,\\\"states\\\":0,\\\"constraints\\\":0,\\\"semantic_verdict\\\":\\\"unver\\\"},{\\\"chapter_ordinal\\\":3,\\\"beats\\\":3,\\\"states\\\":0,\\\"constraints\\\":0,\\\"semantic_verdict\\\":\\\"unver\\\"}]\",\"why\":\"引用和证据闭合不能证明联合呈现完整、归因正确、因果保真或没有隐含提前揭示；由既有设计、结构及成稿审阅判断\"}",
             "effect": "attention",
             "allowed_actions": [],
             "changed": false,
@@ -2902,29 +2971,6 @@
                   },
                   {
                     "event": {
-                      "obligation_id": "state_reveal:st01_01:1",
-                      "kind": "state_reveal",
-                      "knowledge_ref": "st01_01",
-                      "subject_ref": {
-                        "kind": "state",
-                        "ref": "st01_01"
-                      },
-                      "audience": null,
-                      "chapter_ordinal": 1
-                    },
-                    "resolution": {
-                      "subject_refs": [
-                        {
-                          "kind": "beat",
-                          "ref": "b01_01"
-                        }
-                      ],
-                      "kind": "at_beats",
-                      "trigger_beat_ref": "b01_01"
-                    }
-                  },
-                  {
-                    "event": {
                       "obligation_id": "world_rule:wr_01/1:1",
                       "kind": "world_rule",
                       "knowledge_ref": "wr_01/1",
@@ -3222,12 +3268,6 @@
                     "ref": "st01_01",
                     "endpoint": "established",
                     "scene_ref": "s02"
-                  },
-                  {
-                    "kind": "knowledge",
-                    "ref": "state_reveal:st01_01:1",
-                    "endpoint": "trigger",
-                    "scene_ref": "s01"
                   },
                   {
                     "kind": "knowledge",
@@ -4330,7 +4370,7 @@
       "rel": "stage2/chapter_blueprints.json",
       "exists": true,
       "bytes": 7365,
-      "mtime": 1789164465,
+      "mtime": 1789181260,
       "freshness": "fresh",
       "display_freshness": "fresh",
       "reason": "match",
@@ -4392,7 +4432,7 @@
     "sid": "123",
     "title": "完整剧情测试",
     "identity_plan": false,
-    "structure_subject_sha256": "aa9d3d30e180af6a5667ba0c5191935c4a10db3b01cbf6bccb0891eb0387bbd4",
+    "structure_subject_sha256": "fff925acdb30c39edd9969ae69ab51acdc9db36658709eb62715f4ea33e77ea0",
     "structure_subject_unavailable_reason": null,
     "blueprint": {
       "chapter_ordinal": 1,
@@ -4709,12 +4749,6 @@
         },
         {
           "kind": "knowledge",
-          "ref": "state_reveal:st01_01:1",
-          "endpoint": "trigger",
-          "scene_ref": "s01"
-        },
-        {
-          "kind": "knowledge",
           "ref": "knowledge_event:secret_01/char_001:1",
           "endpoint": "trigger",
           "scene_ref": "s01"
@@ -4803,6 +4837,7 @@
           ]
         }
       ],
+      "background_beats": [],
       "states": [
         {
           "state_ref": "st01_01",
@@ -4955,21 +4990,6 @@
           ]
         },
         {
-          "event_ref": "state_reveal:st01_01:1",
-          "kind": "state_reveal",
-          "subject_ref": {
-            "kind": "state",
-            "ref": "st01_01"
-          },
-          "audience": null,
-          "timing": "at_slot",
-          "slot": "s01",
-          "allowed_slots": [
-            "s01",
-            "s02"
-          ]
-        },
-        {
           "event_ref": "world_rule:wr_01/1:1",
           "kind": "world_rule",
           "subject_ref": {
@@ -5037,7 +5057,6 @@
             "relation_visibility:rel_01:1",
             "secret_setup:secret_01:1",
             "setting:时代背景:1",
-            "state_reveal:st01_01:1",
             "world_rule:wr_01/1:1",
             "world_rule_reveal:wr_01/1:1"
           ],
@@ -5079,7 +5098,6 @@
             "relation_visibility:rel_01:1",
             "secret_setup:secret_01:1",
             "setting:时代背景:1",
-            "state_reveal:st01_01:1",
             "world_rule:wr_01/1:1",
             "world_rule_reveal:wr_01/1:1"
           ],
@@ -5123,8 +5141,8 @@
     "plan_state": {
       "rel": "stage4/plan_chapters.json",
       "exists": true,
-      "bytes": 11042,
-      "mtime": 1789164480,
+      "bytes": 10885,
+      "mtime": 1789181276,
       "freshness": "fresh",
       "display_freshness": "fresh",
       "reason": "match",
@@ -5138,8 +5156,8 @@
     "ctx_state": {
       "rel": "stage4/writer_context.json",
       "exists": true,
-      "bytes": 21824,
-      "mtime": 1789164488,
+      "bytes": 21474,
+      "mtime": 1789181284,
       "freshness": "fresh",
       "display_freshness": "fresh",
       "reason": "match",
@@ -5155,8 +5173,8 @@
       "root_clean_sha1": "2b316027b79c3e7cc16d9678efd250852a308445",
       "inputs": {
         "stage4/blind_candidate.json": {
-          "file": "d8a05a0cf5",
-          "consumed": "4eccdcdedd"
+          "file": "c0669c0373",
+          "consumed": "ae2e9d43e7"
         },
         "stage1/main_text.json": {
           "file": "7527d7a23e",
@@ -5179,12 +5197,12 @@
           "consumed": "f52dc55593"
         },
         "stage2/knowledge_links.json": {
-          "file": "f8208b05f6",
-          "consumed": "80ba5a9bd6"
+          "file": "5a8d4b81a8",
+          "consumed": "73cf117c62"
         },
         "stage4/evidence_binding.json": {
-          "file": "7639b557ff",
-          "consumed": "809cba48a4"
+          "file": "e726929d78",
+          "consumed": "26836eb20c"
         }
       },
       "usage": null,
@@ -5196,8 +5214,8 @@
       "invalid_baseline_sha256": null,
       "revalidation_audit": null,
       "prompts": null,
-      "blind_candidate_sha256": "88634d61bb65cbfc7e4b568d5064c2501278072ecf8f4e21e3787a34827dcd2b",
-      "evidence_binding_sha256": "0ef096c2af1334411b04b551b250972c3803d8a2de751ccaf26e2dde80c54e67"
+      "blind_candidate_sha256": "11ee28d6418574aaeaac2b3fd39cde2c8207bceed565b3902a528362f2a67d87",
+      "evidence_binding_sha256": "e9ab133ecea98b72c80914b7e65a3b12330c11682b05b9da0befb730777e53d3"
     },
     "_ctx_provenance": {
       "code": "test-plot-producer",
@@ -5224,12 +5242,12 @@
           "consumed": "f52dc55593"
         },
         "stage2/knowledge_links.json": {
-          "file": "f8208b05f6",
-          "consumed": "80ba5a9bd6"
+          "file": "5a8d4b81a8",
+          "consumed": "73cf117c62"
         },
         "stage4/plan_chapters.json": {
-          "file": "1896bbb3a7",
-          "consumed": "4ca165c7e4"
+          "file": "02420ac116",
+          "consumed": "09e1bfd0be"
         }
       },
       "usage": null,
@@ -5296,14 +5314,14 @@
     "materials": {
       "blocks": [
         "《完整剧情测试》",
-        "── 本章任务 ──\n本章功能：推进家宅生活及家人之间的信息变化\n场景重写总纲：呈现施救与离开的完整因果\n完整剧情目录（每个节点全文只在此出现一次）：\n[{\"beat_ref\":\"b01_01\",\"content\":\"昨夜来信告知李宝珠父亲已经回城。\",\"participant_char_ids\":[\"char_001\"]},{\"beat_ref\":\"b01_02\",\"content\":\"春日老宅中，李宝珠站在廊下看落花，回想来信，折信收袖，听见远处梆声。\",\"participant_char_ids\":[\"char_001\"]}]\n持续状态目录（modality 是命题性质，不是读者或人物知情许可）：\n[{\"state_ref\":\"st01_01\",\"content\":\"李宝珠将来信收在袖中。\",\"global_ref\":null,\"modality\":\"world\",\"holder_char_id\":null}]\n必要执行约束：[]\n章首状态引用：[]\n章末携带状态引用：[\"st01_01\"]\n章节、开篇、结尾目标：{\"chapter_goal\":{\"intent\":\"establish\",\"subject_refs\":[{\"kind\":\"beat\",\"ref\":\"b01_01\"}],\"anchor_beat_ref\":\"b01_01\",\"anchor_scene_ref\":\"s01\"},\"open_hook_goal\":{\"intent\":\"establish\",\"subject_refs\":[{\"kind\":\"beat\",\"ref\":\"b01_01\"}],\"anchor_beat_ref\":\"b01_01\",\"anchor_scene_ref\":\"s01\"},\"end_hook_goal\":{\"intent\":\"establish\",\"subject_refs\":[{\"kind\":\"beat\",\"ref\":\"b01_02\"}],\"anchor_beat_ref\":\"b01_02\",\"anchor_scene_ref\":\"s02\"}}\n知识事件与逐场表达许可：[{\"event_ref\":\"knowledge_event:secret_01/char_001:1\",\"kind\":\"knowledge_event\",\"subject_ref\":{\"kind\":\"secret\",\"ref\":\"secret_01\"},\"audience\":{\"kind\":\"character\",\"char_id\":\"char_001\"},\"timing\":\"at_slot\",\"slot\":\"s01\",\"allowed_slots\":[\"s01\",\"s02\"]},{\"event_ref\":\"relation:rel_01:1\",\"kind\":\"relation\",\"subject_ref\":{\"kind\":\"relation\",\"ref\":\"rel_01\"},\"audience\":null,\"timing\":\"at_slot\",\"slot\":\"s01\",\"allowed_slots\":[\"s01\",\"s02\"]},{\"event_ref\":\"relation_visibility:rel_01:1\",\"kind\":\"relation_visibility\",\"subject_ref\":{\"kind\":\"relation\",\"ref\":\"rel_01\"},\"audience\":null,\"timing\":\"at_slot\",\"slot\":\"s01\",\"allowed_slots\":[\"s01\",\"s02\"]},{\"event_ref\":\"secret_setup:secret_01:1\",\"kind\":\"secret_setup\",\"subject_ref\":{\"kind\":\"secret\",\"ref\":\"secret_01\"},\"audience\":null,\"timing\":\"at_slot\",\"slot\":\"s01\",\"allowed_slots\":[\"s01\",\"s02\"]},{\"event_ref\":\"setting:时代背景:1\",\"kind\":\"setting\",\"subject_ref\":{\"kind\":\"setting\",\"ref\":\"时代背景\"},\"audience\":null,\"timing\":\"at_slot\",\"slot\":\"s01\",\"allowed_slots\":[\"s01\",\"s02\"]},{\"event_ref\":\"state_reveal:st01_01:1\",\"kind\":\"state_reveal\",\"subject_ref\":{\"kind\":\"state\",\"ref\":\"st01_01\"},\"audience\":null,\"timing\":\"at_slot\",\"slot\":\"s01\",\"allowed_slots\":[\"s01\",\"s02\"]},{\"event_ref\":\"world_rule:wr_01/1:1\",\"kind\":\"world_rule\",\"subject_ref\":{\"kind\":\"world_rule\",\"ref\":\"wr_01\"},\"audience\":null,\"timing\":\"at_slot\",\"slot\":\"s01\",\"allowed_slots\":[\"s01\",\"s02\"]},{\"event_ref\":\"world_rule_reveal:wr_01/1:1\",\"kind\":\"world_rule_reveal\",\"subject_ref\":{\"kind\":\"world_rule\",\"ref\":\"wr_01\"},\"audience\":null,\"timing\":\"at_slot\",\"slot\":\"s01\",\"allowed_slots\":[\"s01\",\"s02\"]}]\n未开放主体（只有引用，没有答案）：[{\"kind\":\"secret\",\"ref\":\"secret_01\"}]\n所有编号只供引用任务，不写进小说正文。完整节点由它的全部呈现共同完成。\n同次请求可见后场材料，但前场不得提前表达；首次出现不等于整个节点已经披露。\n保留动机、施受关系、反应含义和结果；区分客观成立、人物相信、人物声称与未知。",
+        "── 本章任务 ──\n本章功能：推进家宅生活及家人之间的信息变化\n场景重写总纲：呈现施救与离开的完整因果\n完整剧情目录（每个节点全文只在此出现一次）：\n[{\"beat_ref\":\"b01_01\",\"content\":\"昨夜来信告知李宝珠父亲已经回城。\",\"participant_char_ids\":[\"char_001\"]},{\"beat_ref\":\"b01_02\",\"content\":\"春日老宅中，李宝珠站在廊下看落花，回想来信，折信收袖，听见远处梆声。\",\"participant_char_ids\":[\"char_001\"]}]\n必要背景剧情（只供知识传播和承接，不重新主落）：[]\n持续状态目录（modality 是命题性质，不是读者或人物知情许可）：\n[{\"state_ref\":\"st01_01\",\"content\":\"李宝珠将来信收在袖中。\",\"global_ref\":null,\"modality\":\"world\",\"holder_char_id\":null}]\n必要执行约束：[]\n章首状态引用：[]\n章末携带状态引用：[\"st01_01\"]\n章节、开篇、结尾目标：{\"chapter_goal\":{\"intent\":\"establish\",\"subject_refs\":[{\"kind\":\"beat\",\"ref\":\"b01_01\"}],\"anchor_beat_ref\":\"b01_01\",\"anchor_scene_ref\":\"s01\"},\"open_hook_goal\":{\"intent\":\"establish\",\"subject_refs\":[{\"kind\":\"beat\",\"ref\":\"b01_01\"}],\"anchor_beat_ref\":\"b01_01\",\"anchor_scene_ref\":\"s01\"},\"end_hook_goal\":{\"intent\":\"establish\",\"subject_refs\":[{\"kind\":\"beat\",\"ref\":\"b01_02\"}],\"anchor_beat_ref\":\"b01_02\",\"anchor_scene_ref\":\"s02\"}}\n知识事件与逐场表达许可：[{\"event_ref\":\"knowledge_event:secret_01/char_001:1\",\"kind\":\"knowledge_event\",\"subject_ref\":{\"kind\":\"secret\",\"ref\":\"secret_01\"},\"audience\":{\"kind\":\"character\",\"char_id\":\"char_001\"},\"timing\":\"at_slot\",\"slot\":\"s01\",\"allowed_slots\":[\"s01\",\"s02\"]},{\"event_ref\":\"relation:rel_01:1\",\"kind\":\"relation\",\"subject_ref\":{\"kind\":\"relation\",\"ref\":\"rel_01\"},\"audience\":null,\"timing\":\"at_slot\",\"slot\":\"s01\",\"allowed_slots\":[\"s01\",\"s02\"]},{\"event_ref\":\"relation_visibility:rel_01:1\",\"kind\":\"relation_visibility\",\"subject_ref\":{\"kind\":\"relation\",\"ref\":\"rel_01\"},\"audience\":null,\"timing\":\"at_slot\",\"slot\":\"s01\",\"allowed_slots\":[\"s01\",\"s02\"]},{\"event_ref\":\"secret_setup:secret_01:1\",\"kind\":\"secret_setup\",\"subject_ref\":{\"kind\":\"secret\",\"ref\":\"secret_01\"},\"audience\":null,\"timing\":\"at_slot\",\"slot\":\"s01\",\"allowed_slots\":[\"s01\",\"s02\"]},{\"event_ref\":\"setting:时代背景:1\",\"kind\":\"setting\",\"subject_ref\":{\"kind\":\"setting\",\"ref\":\"时代背景\"},\"audience\":null,\"timing\":\"at_slot\",\"slot\":\"s01\",\"allowed_slots\":[\"s01\",\"s02\"]},{\"event_ref\":\"world_rule:wr_01/1:1\",\"kind\":\"world_rule\",\"subject_ref\":{\"kind\":\"world_rule\",\"ref\":\"wr_01\"},\"audience\":null,\"timing\":\"at_slot\",\"slot\":\"s01\",\"allowed_slots\":[\"s01\",\"s02\"]},{\"event_ref\":\"world_rule_reveal:wr_01/1:1\",\"kind\":\"world_rule_reveal\",\"subject_ref\":{\"kind\":\"world_rule\",\"ref\":\"wr_01\"},\"audience\":null,\"timing\":\"at_slot\",\"slot\":\"s01\",\"allowed_slots\":[\"s01\",\"s02\"]}]\n未开放主体（只有引用，没有答案）：[{\"kind\":\"secret\",\"ref\":\"secret_01\"}]\n所有编号只供引用任务，不写进小说正文。完整节点由它的全部呈现共同完成。\n同次请求可见后场材料，但前场不得提前表达；首次出现不等于整个节点已经披露。\n保留动机、施受关系、反应含义和结果；区分客观成立、人物相信、人物声称与未知。",
         "── 篇幅（硬指标，写之前先据此规划）──\n这本书的章节体例是【短章】、排版是【极短段（多为一句一段）】，章与章的密度和这种排版本身就是它的风格。\n本章目标 **61~91 字**（约 4~7 个自然段；原章对应部分 76 字），这是硬性要求。本章按计划写 **恰好 6 个自然段**，每场任务书里的『约 N 段』加起来必须正好等于它；只许靠合并或拆分段落调整，不许改写句子内容。\n· **本章共 2 场，算下来平均每场 30~45 字**。逐场的`【约 N 字】`才是准数——高于均值的场是重头、低于的快速推进，但**加起来必须落在上面的区间里**。\n· 段落保持这本书的排版：极短段（多为一句一段）——不要把三四句话并成一大段，那不是这本书的样子。\n· 句段手感（逐本实测，软指标）：这本书平均一句约 11.6 字、平均一段约 11.6 字；写法密度基线：明喻（像/仿佛/如同这类）（simile_per_1k）约 0.00/千字、解释情绪的「心里/心中/心底」（xinli_per_1k）约 0.00/千字、破折号（dash_per_1k）约 0.00/千字、连续短段成串（short_run_per_1k）约 8.55/千字。写完回看：你的句段或任一写法密度若明显高于基线，就是写成了另一本书。",
-        "── Stage4 新场景设计（**slot 顺序就是落笔顺序**）──\n⚠ 下面锁定的是新场景及其语义约束，不是源事件清单。场内可以重新调度舞台表面；不得新增会改变人物、关系、知识或世界状态的剧情事实。\n按 slot 顺序完成下面全部场景；delivery 只安排呈现，不增加子事实。\n每场按 presentation_instruction 使用父节点，不能把完整父节点在多场重复讲一遍。\ncontext_beat_refs 只用于承接已经完整呈现的背景。\nstages 的 null 表示未知，present=[] 表示有据的无人在场；不推断被提及的人在场。\n[{\"slot\":\"s01\",\"purpose\":\"呈现完整剧情\",\"role\":\"cold_open\",\"delivery\":\"scene\",\"transition\":\"start\",\"budget_chars\":50,\"deliveries\":[{\"beat_ref\":\"b01_01\",\"presentation_instruction\":null,\"stages\":[]},{\"beat_ref\":\"b01_02\",\"presentation_instruction\":\"在廊下看落花，回想昨夜来信。\",\"stages\":[{\"time_layer\":\"present\",\"place\":\"老宅廊下\",\"present\":[\"李宝珠\"]}]}],\"context_beat_refs\":[],\"turn_beat_ref\":\"b01_01\",\"state_events\":[],\"knowledge_event_refs\":[\"knowledge_event:secret_01/char_001:1\",\"relation:rel_01:1\",\"relation_visibility:rel_01:1\",\"secret_setup:secret_01:1\",\"setting:时代背景:1\",\"state_reveal:st01_01:1\",\"world_rule:wr_01/1:1\",\"world_rule_reveal:wr_01/1:1\"],\"constraint_refs\":[],\"paragraph_target\":4},{\"slot\":\"s02\",\"purpose\":\"呈现完整剧情\",\"role\":\"cold_open\",\"delivery\":\"scene\",\"transition\":\"continue\",\"budget_chars\":26,\"deliveries\":[{\"beat_ref\":\"b01_02\",\"presentation_instruction\":\"承接廊下所思，将信折起收袖，听见远处梆声。\",\"stages\":[{\"time_layer\":\"present\",\"place\":\"老宅廊下\",\"present\":[\"李宝珠\"]}]}],\"context_beat_refs\":[],\"turn_beat_ref\":\"b01_02\",\"state_events\":[{\"state_ref\":\"st01_01\",\"endpoint\":\"established\"}],\"knowledge_event_refs\":[\"knowledge_event:secret_01/char_001:1\",\"relation:rel_01:1\",\"relation_visibility:rel_01:1\",\"secret_setup:secret_01:1\",\"setting:时代背景:1\",\"state_reveal:st01_01:1\",\"world_rule:wr_01/1:1\",\"world_rule_reveal:wr_01/1:1\"],\"constraint_refs\":[],\"paragraph_target\":2}]\n叙述视角：[{\"segment\":\"全章\",\"grammatical_person\":\"third\",\"narrator\":null,\"focalizer\":\"李宝珠\",\"pronoun_surfaces\":null}]",
+        "── Stage4 新场景设计（**slot 顺序就是落笔顺序**）──\n⚠ 下面锁定的是新场景及其语义约束，不是源事件清单。场内可以重新调度舞台表面；不得新增会改变人物、关系、知识或世界状态的剧情事实。\n按 slot 顺序完成下面全部场景；delivery 只安排呈现，不增加子事实。\n每场按 presentation_instruction 使用父节点，不能把完整父节点在多场重复讲一遍。\ncontext_beat_refs 只用于承接已经完整呈现的背景。\nstages 的 null 表示未知，present=[] 表示有据的无人在场；不推断被提及的人在场。\n[{\"slot\":\"s01\",\"purpose\":\"呈现完整剧情\",\"role\":\"cold_open\",\"delivery\":\"scene\",\"transition\":\"start\",\"budget_chars\":50,\"deliveries\":[{\"beat_ref\":\"b01_01\",\"presentation_instruction\":null,\"stages\":[]},{\"beat_ref\":\"b01_02\",\"presentation_instruction\":\"在廊下看落花，回想昨夜来信。\",\"stages\":[{\"time_layer\":\"present\",\"place\":\"老宅廊下\",\"present\":[\"李宝珠\"]}]}],\"context_beat_refs\":[],\"turn_beat_ref\":\"b01_01\",\"state_events\":[],\"knowledge_event_refs\":[\"knowledge_event:secret_01/char_001:1\",\"relation:rel_01:1\",\"relation_visibility:rel_01:1\",\"secret_setup:secret_01:1\",\"setting:时代背景:1\",\"world_rule:wr_01/1:1\",\"world_rule_reveal:wr_01/1:1\"],\"constraint_refs\":[],\"paragraph_target\":4},{\"slot\":\"s02\",\"purpose\":\"呈现完整剧情\",\"role\":\"cold_open\",\"delivery\":\"scene\",\"transition\":\"continue\",\"budget_chars\":26,\"deliveries\":[{\"beat_ref\":\"b01_02\",\"presentation_instruction\":\"承接廊下所思，将信折起收袖，听见远处梆声。\",\"stages\":[{\"time_layer\":\"present\",\"place\":\"老宅廊下\",\"present\":[\"李宝珠\"]}]}],\"context_beat_refs\":[],\"turn_beat_ref\":\"b01_02\",\"state_events\":[{\"state_ref\":\"st01_01\",\"endpoint\":\"established\"}],\"knowledge_event_refs\":[\"knowledge_event:secret_01/char_001:1\",\"relation:rel_01:1\",\"relation_visibility:rel_01:1\",\"secret_setup:secret_01:1\",\"setting:时代背景:1\",\"world_rule:wr_01/1:1\",\"world_rule_reveal:wr_01/1:1\"],\"constraint_refs\":[],\"paragraph_target\":2}]\n叙述视角：[{\"segment\":\"全章\",\"grammatical_person\":\"third\",\"narrator\":null,\"focalizer\":\"李宝珠\",\"pronoun_surfaces\":null}]",
         "── 人物（用这些名字，不要改名、不要另造称呼）──\n[{\"char_id\":\"char_001\",\"display_name\":\"李宝珠\",\"role\":\"沈家的独女，替父亲掌管家中账目\"}]",
         "── 本章允许下发的共享主体与叫法 ──\nallowed_slots 允许陈述主体真相；state_permissions 仅允许按所指状态的信念、声称或未知表达，不能升级为真相。\n世界成立不代表读者或所有人物已经知道；不同版本仍分别服从各自 allowed_slots。\n{\"global_subjects\":[{\"subject_ref\":{\"kind\":\"relation\",\"ref\":\"rel_01\"},\"value\":{\"subject_id\":\"char_001\",\"predicate\":\"母女\",\"object_id\":\"char_002\",\"valid_from_chapter\":1,\"valid_through_chapter\":null},\"allowed_slots\":[\"s01\",\"s02\"],\"state_permissions\":[]},{\"subject_ref\":{\"kind\":\"setting\",\"ref\":\"时代背景\"},\"value\":\"架空古代江南的一座小城\",\"allowed_slots\":[\"s01\",\"s02\"],\"state_permissions\":[]},{\"subject_ref\":{\"kind\":\"world_rule\",\"ref\":\"wr_01\"},\"value\":{\"kind\":\"social_norm\",\"versions\":[{\"knowledge_ref\":\"wr_01/1\",\"desc\":\"城中入夜有宵禁，更夫敲过梆子之后不许出门走动\",\"allowed_slots\":[\"s01\",\"s02\"]}]},\"allowed_slots\":[\"s01\",\"s02\"],\"state_permissions\":[]}],\"address\":[{\"who\":\"李宝珠\",\"surface\":\"李宝珠\",\"by\":\"narration\",\"context\":\"reference\"}]}",
         "【正文机械形态基线（写出来要落在这些档上）】\n{\"句子形态\":\"极短句\",\"段落形态\":\"极短段（多为一句一段）\",\"对白形态\":\"无引号对白体（全书不用引号，对白比无法按引号统计）\",\"章篇幅\":\"短章\",\"章间形态差异\":\"各章句长形态接近\"}"
       ],
-      "chars": 5977,
+      "chars": 5768,
       "writer_target": [
         61,
         91
@@ -5353,8 +5371,8 @@
               "consumed": "f52dc55593"
             },
             "stage4/writer_context.json": {
-              "file": "8d94da9b36",
-              "consumed": "e65a51f07a"
+              "file": "f97742395d",
+              "consumed": "056f41b4a5"
             }
           },
           "usage": {
@@ -5378,7 +5396,7 @@
           "adopted_models": [
             "test-model"
           ],
-          "request_fingerprint": "9c7c1b5aa99c6f44d5a6090e00d69928ebdd0bc58ea4efb12413f5b847bfaa98",
+          "request_fingerprint": "e6135d4336174636a3abe1d65d0faf657e24f2c0862b590361bff35ffd1ff045",
           "prepared_checkpoint_adoption": null,
           "reviewer_rewrite_request_sha256": null
         }
@@ -5389,8 +5407,8 @@
     "ctx_state": {
       "rel": "stage4/writer_context.json",
       "exists": true,
-      "bytes": 21824,
-      "mtime": 1789164488,
+      "bytes": 21474,
+      "mtime": 1789181284,
       "freshness": "fresh",
       "display_freshness": "fresh",
       "reason": "match",
@@ -5471,7 +5489,7 @@
       "rel": "stage2/chapter_blueprints.json",
       "exists": true,
       "bytes": 7365,
-      "mtime": 1789164465,
+      "mtime": 1789181260,
       "freshness": "fresh",
       "display_freshness": "fresh",
       "reason": "match",
@@ -5616,7 +5634,7 @@
       "rel": "stage2/chapter_blueprints.json",
       "exists": true,
       "bytes": 7365,
-      "mtime": 1789164465,
+      "mtime": 1789181260,
       "freshness": "fresh",
       "display_freshness": "fresh",
       "reason": "match",
@@ -5678,7 +5696,7 @@
     "sid": "123",
     "title": "完整剧情测试",
     "identity_plan": false,
-    "structure_subject_sha256": "aa9d3d30e180af6a5667ba0c5191935c4a10db3b01cbf6bccb0891eb0387bbd4",
+    "structure_subject_sha256": "fff925acdb30c39edd9969ae69ab51acdc9db36658709eb62715f4ea33e77ea0",
     "structure_subject_unavailable_reason": null,
     "blueprint": {
       "chapter_ordinal": 2,
@@ -5993,6 +6011,7 @@
           ]
         }
       ],
+      "background_beats": [],
       "states": [],
       "constraints": [],
       "global_subjects": [
@@ -6201,8 +6220,8 @@
     "plan_state": {
       "rel": "stage4/plan_chapters.json",
       "exists": true,
-      "bytes": 11042,
-      "mtime": 1789164480,
+      "bytes": 10885,
+      "mtime": 1789181276,
       "freshness": "fresh",
       "display_freshness": "fresh",
       "reason": "match",
@@ -6216,8 +6235,8 @@
     "ctx_state": {
       "rel": "stage4/writer_context.json",
       "exists": true,
-      "bytes": 21824,
-      "mtime": 1789164488,
+      "bytes": 21474,
+      "mtime": 1789181284,
       "freshness": "fresh",
       "display_freshness": "fresh",
       "reason": "match",
@@ -6233,8 +6252,8 @@
       "root_clean_sha1": "2b316027b79c3e7cc16d9678efd250852a308445",
       "inputs": {
         "stage4/blind_candidate.json": {
-          "file": "d8a05a0cf5",
-          "consumed": "4eccdcdedd"
+          "file": "c0669c0373",
+          "consumed": "ae2e9d43e7"
         },
         "stage1/main_text.json": {
           "file": "7527d7a23e",
@@ -6257,12 +6276,12 @@
           "consumed": "f52dc55593"
         },
         "stage2/knowledge_links.json": {
-          "file": "f8208b05f6",
-          "consumed": "80ba5a9bd6"
+          "file": "5a8d4b81a8",
+          "consumed": "73cf117c62"
         },
         "stage4/evidence_binding.json": {
-          "file": "7639b557ff",
-          "consumed": "809cba48a4"
+          "file": "e726929d78",
+          "consumed": "26836eb20c"
         }
       },
       "usage": null,
@@ -6274,8 +6293,8 @@
       "invalid_baseline_sha256": null,
       "revalidation_audit": null,
       "prompts": null,
-      "blind_candidate_sha256": "88634d61bb65cbfc7e4b568d5064c2501278072ecf8f4e21e3787a34827dcd2b",
-      "evidence_binding_sha256": "0ef096c2af1334411b04b551b250972c3803d8a2de751ccaf26e2dde80c54e67"
+      "blind_candidate_sha256": "11ee28d6418574aaeaac2b3fd39cde2c8207bceed565b3902a528362f2a67d87",
+      "evidence_binding_sha256": "e9ab133ecea98b72c80914b7e65a3b12330c11682b05b9da0befb730777e53d3"
     },
     "_ctx_provenance": {
       "code": "test-plot-producer",
@@ -6302,12 +6321,12 @@
           "consumed": "f52dc55593"
         },
         "stage2/knowledge_links.json": {
-          "file": "f8208b05f6",
-          "consumed": "80ba5a9bd6"
+          "file": "5a8d4b81a8",
+          "consumed": "73cf117c62"
         },
         "stage4/plan_chapters.json": {
-          "file": "1896bbb3a7",
-          "consumed": "4ca165c7e4"
+          "file": "02420ac116",
+          "consumed": "09e1bfd0be"
         }
       },
       "usage": null,
@@ -6325,7 +6344,7 @@
     "sid": "123",
     "title": "完整剧情测试",
     "identity_plan": false,
-    "structure_subject_sha256": "aa9d3d30e180af6a5667ba0c5191935c4a10db3b01cbf6bccb0891eb0387bbd4",
+    "structure_subject_sha256": "fff925acdb30c39edd9969ae69ab51acdc9db36658709eb62715f4ea33e77ea0",
     "structure_subject_unavailable_reason": null,
     "blueprint": {
       "chapter_ordinal": 3,
@@ -6661,6 +6680,7 @@
           ]
         }
       ],
+      "background_beats": [],
       "states": [],
       "constraints": [],
       "global_subjects": [],
@@ -6761,8 +6781,8 @@
     "plan_state": {
       "rel": "stage4/plan_chapters.json",
       "exists": true,
-      "bytes": 11042,
-      "mtime": 1789164480,
+      "bytes": 10885,
+      "mtime": 1789181276,
       "freshness": "fresh",
       "display_freshness": "fresh",
       "reason": "match",
@@ -6776,8 +6796,8 @@
     "ctx_state": {
       "rel": "stage4/writer_context.json",
       "exists": true,
-      "bytes": 21824,
-      "mtime": 1789164488,
+      "bytes": 21474,
+      "mtime": 1789181284,
       "freshness": "fresh",
       "display_freshness": "fresh",
       "reason": "match",
@@ -6793,8 +6813,8 @@
       "root_clean_sha1": "2b316027b79c3e7cc16d9678efd250852a308445",
       "inputs": {
         "stage4/blind_candidate.json": {
-          "file": "d8a05a0cf5",
-          "consumed": "4eccdcdedd"
+          "file": "c0669c0373",
+          "consumed": "ae2e9d43e7"
         },
         "stage1/main_text.json": {
           "file": "7527d7a23e",
@@ -6817,12 +6837,12 @@
           "consumed": "f52dc55593"
         },
         "stage2/knowledge_links.json": {
-          "file": "f8208b05f6",
-          "consumed": "80ba5a9bd6"
+          "file": "5a8d4b81a8",
+          "consumed": "73cf117c62"
         },
         "stage4/evidence_binding.json": {
-          "file": "7639b557ff",
-          "consumed": "809cba48a4"
+          "file": "e726929d78",
+          "consumed": "26836eb20c"
         }
       },
       "usage": null,
@@ -6834,8 +6854,8 @@
       "invalid_baseline_sha256": null,
       "revalidation_audit": null,
       "prompts": null,
-      "blind_candidate_sha256": "88634d61bb65cbfc7e4b568d5064c2501278072ecf8f4e21e3787a34827dcd2b",
-      "evidence_binding_sha256": "0ef096c2af1334411b04b551b250972c3803d8a2de751ccaf26e2dde80c54e67"
+      "blind_candidate_sha256": "11ee28d6418574aaeaac2b3fd39cde2c8207bceed565b3902a528362f2a67d87",
+      "evidence_binding_sha256": "e9ab133ecea98b72c80914b7e65a3b12330c11682b05b9da0befb730777e53d3"
     },
     "_ctx_provenance": {
       "code": "test-plot-producer",
@@ -6862,12 +6882,12 @@
           "consumed": "f52dc55593"
         },
         "stage2/knowledge_links.json": {
-          "file": "f8208b05f6",
-          "consumed": "80ba5a9bd6"
+          "file": "5a8d4b81a8",
+          "consumed": "73cf117c62"
         },
         "stage4/plan_chapters.json": {
-          "file": "1896bbb3a7",
-          "consumed": "4ca165c7e4"
+          "file": "02420ac116",
+          "consumed": "09e1bfd0be"
         }
       },
       "usage": null,
@@ -6894,7 +6914,7 @@
             "rel": "stage0/revisions.json",
             "exists": true,
             "bytes": 1952,
-            "mtime": 1789164463,
+            "mtime": 1789181258,
             "freshness": "fresh",
             "display_freshness": "fresh",
             "reason": "match",
@@ -6909,7 +6929,7 @@
             "rel": "stage0/clean_text.txt",
             "exists": true,
             "bytes": 866,
-            "mtime": 1789164463,
+            "mtime": 1789181258,
             "freshness": "fresh",
             "display_freshness": "fresh",
             "reason": "match",
@@ -6938,7 +6958,7 @@
             "rel": "stage1/main_text.json",
             "exists": true,
             "bytes": 1078,
-            "mtime": 1789164463,
+            "mtime": 1789181258,
             "freshness": "fresh",
             "display_freshness": "fresh",
             "reason": "match",
@@ -6953,7 +6973,7 @@
             "rel": "stage1/hook_copy.json",
             "exists": true,
             "bytes": 90,
-            "mtime": 1789164463,
+            "mtime": 1789181258,
             "freshness": "fresh",
             "display_freshness": "fresh",
             "reason": "match",
@@ -6982,7 +7002,7 @@
             "rel": "stage2/characters.json",
             "exists": true,
             "bytes": 1701,
-            "mtime": 1789164463,
+            "mtime": 1789181258,
             "freshness": "fresh",
             "display_freshness": "fresh",
             "reason": "match",
@@ -6997,7 +7017,7 @@
             "rel": "stage2/blueprint_character_projection.json",
             "exists": true,
             "bytes": 742,
-            "mtime": 1789164463,
+            "mtime": 1789181258,
             "freshness": "fresh",
             "display_freshness": "fresh",
             "reason": "match",
@@ -7012,7 +7032,7 @@
             "rel": "stage2/global_grounding.json",
             "exists": true,
             "bytes": 4708,
-            "mtime": 1789164464,
+            "mtime": 1789181259,
             "freshness": "fresh",
             "display_freshness": "fresh",
             "reason": "match",
@@ -7027,7 +7047,7 @@
             "rel": "stage2/global_review.json",
             "exists": true,
             "bytes": 13788,
-            "mtime": 1789164464,
+            "mtime": 1789181259,
             "freshness": "fresh",
             "display_freshness": "fresh",
             "reason": "match",
@@ -7042,7 +7062,7 @@
             "rel": "stage2/chapter_blueprints.json",
             "exists": true,
             "bytes": 7365,
-            "mtime": 1789164465,
+            "mtime": 1789181260,
             "freshness": "fresh",
             "display_freshness": "fresh",
             "reason": "match",
@@ -7056,8 +7076,8 @@
           {
             "rel": "stage2/knowledge_links.json",
             "exists": true,
-            "bytes": 17062,
-            "mtime": 1789164467,
+            "bytes": 15833,
+            "mtime": 1789181262,
             "freshness": "fresh",
             "display_freshness": "fresh",
             "reason": "match",
@@ -7085,8 +7105,8 @@
           {
             "rel": "stage4/blind_candidate.json",
             "exists": true,
-            "bytes": 13248,
-            "mtime": 1789164472,
+            "bytes": 13019,
+            "mtime": 1789181267,
             "freshness": "fresh",
             "display_freshness": "fresh",
             "reason": "match",
@@ -7101,7 +7121,7 @@
             "rel": "stage4/evidence_binding.json",
             "exists": true,
             "bytes": 4845,
-            "mtime": 1789164480,
+            "mtime": 1789181276,
             "freshness": "fresh",
             "display_freshness": "fresh",
             "reason": "match",
@@ -7115,8 +7135,8 @@
           {
             "rel": "stage4/plan_chapters.json",
             "exists": true,
-            "bytes": 11042,
-            "mtime": 1789164480,
+            "bytes": 10885,
+            "mtime": 1789181276,
             "freshness": "fresh",
             "display_freshness": "fresh",
             "reason": "match",
@@ -7130,8 +7150,8 @@
           {
             "rel": "stage4/writer_context.json",
             "exists": true,
-            "bytes": 21824,
-            "mtime": 1789164488,
+            "bytes": 21474,
+            "mtime": 1789181284,
             "freshness": "fresh",
             "display_freshness": "fresh",
             "reason": "match",
@@ -7285,7 +7305,7 @@
       "text": "待继续",
       "detail": "下一步：stage5 · stage5 全书闭卷写作",
       "artifact_count": 14,
-      "latest_mtime": 1789164488
+      "latest_mtime": 1789181284
     }
   },
   "http:approvals": {
@@ -7597,7 +7617,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7621,7 +7641,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7645,7 +7665,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7666,7 +7686,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7686,7 +7706,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7702,7 +7722,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7724,7 +7744,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7744,7 +7764,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7764,7 +7784,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7788,7 +7808,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7804,7 +7824,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7826,7 +7846,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7846,7 +7866,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7866,7 +7886,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7885,7 +7905,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7906,7 +7926,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7925,7 +7945,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7941,7 +7961,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             },
             {
               "obligation": {
@@ -7962,7 +7982,7 @@
               "decision": "accept",
               "actor": "fixture-global-commander",
               "reason": "合成 fixture 已逐项核对当前 Global 与正文",
-              "source_decision_sha256": "e8643d6a1ebd6c0cd27f2a40df6216b2a0fbe8932c80662806b4eef95821b228"
+              "source_decision_sha256": "f3681caf3be0959d67c64f946ecc6e1a0902bd0e4336eda121a2d364d39f214b"
             }
           ],
           "pending_obligation_ids": [],
@@ -7982,6 +8002,7 @@
           "review": null,
           "scope": null,
           "plot_review": null,
+          "knowledge_application": null,
           "refinement_request": null,
           "refinement_proof_sha256": null,
           "plot_record": null,
@@ -8646,7 +8667,7 @@
           },
           "review_subject_sha256": "e8fe2ceeb58e4c9afb7f51fddb29e7ff03cb155e223fd20069bfe5944cc2425f",
           "review_contract_version": "stage2-global-acceptance-v1",
-          "decided_at": "2026-09-11T22:07:44+00:00",
+          "decided_at": "2026-09-12T02:47:39+00:00",
           "review_scope_sha256": null
         },
         "history": [
@@ -8662,6 +8683,7 @@
             "review": null,
             "scope": null,
             "plot_review": null,
+            "knowledge_application": null,
             "refinement_request": null,
             "refinement_proof_sha256": null,
             "plot_record": null,
@@ -9326,7 +9348,7 @@
             },
             "review_subject_sha256": "e8fe2ceeb58e4c9afb7f51fddb29e7ff03cb155e223fd20069bfe5944cc2425f",
             "review_contract_version": "stage2-global-acceptance-v1",
-            "decided_at": "2026-09-11T22:07:44+00:00",
+            "decided_at": "2026-09-12T02:47:39+00:00",
             "review_scope_sha256": null
           }
         ]
@@ -9341,29 +9363,29 @@
             {
               "scope": "chapter:1",
               "state": "accepted",
-              "subject_sha256": "1fdf68b718d3ed0d595d82ddbae6390018c8734852c7ede2924a961a7e839755",
-              "decision_sha256": "45b5dc1b03ae79a4478c7ff266b702a9716b876bf9e0146e2ddd8f189a698cad",
+              "subject_sha256": "19339df5f868498d0404c6526f53a7cd20235c19cd0efc2de0acbc68d2381825",
+              "decision_sha256": "0303845391346137af598bc5549e46a3d0b7012a300ba994a1d54c5dea97f3d5",
               "open_issue_ids": []
             },
             {
               "scope": "chapter:2",
               "state": "accepted",
-              "subject_sha256": "e2f3fc770f9bd26e2d8687d097e5607aef82949b33286d9893b9593e83ace6d0",
-              "decision_sha256": "9870a171866239d9ffefa0f0400de201a9fc00e6bc940c66b0f14d04c1fa88c5",
+              "subject_sha256": "82d10a0a9722b26a7e0f79e007399b0800939728d7e6c629ca4248324e574e36",
+              "decision_sha256": "80d246d18d06cf1dafe9373fba2debef7f1219187a00bd1cc805a9c69572f8c5",
               "open_issue_ids": []
             },
             {
               "scope": "chapter:3",
               "state": "accepted",
-              "subject_sha256": "88cb07f52e6a974232709fb1bed714e8b12c67847be4de4ba3315c91a3b97c46",
-              "decision_sha256": "3ae321e08a178a4563dfb2544ac3957c353b83ab3fd3ec67193569aedec804e6",
+              "subject_sha256": "da0594f6573f5ce69a024095e82e3d01df2108bc3d8640e874ef82bf9ab3e14e",
+              "decision_sha256": "ac706b124238aaf74260392621188ddddaf88f47bc30327dbcb5cd5c5b3b4c68",
               "open_issue_ids": []
             },
             {
               "scope": "cross_chapter",
               "state": "accepted",
-              "subject_sha256": "eac64eae40c5e129b65b439b5f2bf13020a3f563b56bd1897f4066f71af1d462",
-              "decision_sha256": "a1f403c53c5f470ca8ab0bdae6ade358094dd568f083b3280c0d59e355784a79",
+              "subject_sha256": "277097e0fde064e0007aea410638eaac0ff7988483813dff266e453c44e060f2",
+              "decision_sha256": "91b1c885907c9fc03923632620a3c9e3f1eae7b8f1969f5579854f5cbf8d0b1c",
               "open_issue_ids": []
             }
           ],
@@ -9375,17 +9397,18 @@
         "state": "accepted",
         "current_decision": {
           "node": "stage2.blueprint",
-          "review_token": "bpr5_14152610e8c674497cec0e9965add57bdf0aa752dd878f81488241ef8107e266",
+          "review_token": "bpr5_465556f26fa345aa74a9c9f568abd46b33a27d21c83345e1b5a82b0e8bc45333",
           "decision": "accept",
           "actor": "test:范围审阅者",
           "reason": "合成语义审阅接受",
           "chapter_ordinals": [],
           "owner": null,
           "knowledge_links": {
-            "scope_sha256": "ad21dcc6aa392571971416c1c2dbf460d8b906c00963ce3e6dfae031d89a3f9b",
+            "scope_sha256": "80a752cd01acc0704fabe99dc9706f1e59bba615f18b316d0a36c96604c100c0",
             "actor": "test:范围审阅者",
             "reason": "合成语义审阅接受",
-            "decisions": []
+            "decisions": [],
+            "event_operations": []
           },
           "review": null,
           "scope": "cross_chapter",
@@ -9422,14 +9445,21 @@
             "new_issues": [],
             "dispositions": []
           },
+          "knowledge_application": {
+            "scope_sha256": "80a752cd01acc0704fabe99dc9706f1e59bba615f18b316d0a36c96604c100c0",
+            "actor": "test:范围审阅者",
+            "reason": "合成语义审阅接受",
+            "decisions": [],
+            "event_operations": []
+          },
           "refinement_request": null,
           "refinement_proof_sha256": null,
           "plot_record": {
             "scope": "cross_chapter",
             "actor": "test:范围审阅者",
-            "subject_sha256": "eac64eae40c5e129b65b439b5f2bf13020a3f563b56bd1897f4066f71af1d462",
-            "request_sha256": "fb230c816c764d0272cb04bdd166b8ff5d386ab06bd6cb7bc9b056e60df84dd5",
-            "decision_sha256": "a1f403c53c5f470ca8ab0bdae6ade358094dd568f083b3280c0d59e355784a79",
+            "subject_sha256": "277097e0fde064e0007aea410638eaac0ff7988483813dff266e453c44e060f2",
+            "request_sha256": "677f347bd1e129cc58f5ea2c039ea159a5b8c5470556268343f47aa1d0578de9",
+            "decision_sha256": "91b1c885907c9fc03923632620a3c9e3f1eae7b8f1969f5579854f5cbf8d0b1c",
             "dependency_manifest": {
               "contract": "stage2-plot-scope-review-v1",
               "scope": "cross_chapter",
@@ -9516,6 +9546,20 @@
                     ]
                   },
                   "consumed_sha256": "e936f7c2f5f3ba63652af15d4bba0f225556c1a5f8b8bf54a77c28965f94b8a6"
+                },
+                {
+                  "selection": {
+                    "input_rel": "stage2/characters.json",
+                    "projection": "plot_characters",
+                    "chapter_ordinal": 1,
+                    "path": [],
+                    "key_field": null,
+                    "selected_ids": [
+                      "char_001",
+                      "char_002"
+                    ]
+                  },
+                  "consumed_sha256": "16720ac4fb405d848a81cc259878163d89bfbe9eaeced103fc0578994b855c6a"
                 }
               ],
               "depends_on_scopes": [
@@ -9560,28 +9604,28 @@
             "issues": []
           },
           "obligation_receipt": null,
-          "review_subject_sha256": "eac64eae40c5e129b65b439b5f2bf13020a3f563b56bd1897f4066f71af1d462",
+          "review_subject_sha256": "277097e0fde064e0007aea410638eaac0ff7988483813dff266e453c44e060f2",
           "review_contract_version": "stage2-plot-scope-review-v1",
-          "decided_at": "2026-09-11T22:07:46+00:00",
+          "decided_at": "2026-09-12T02:47:41+00:00",
           "review_scope_sha256": null
         },
         "history": [
           {
             "node": "stage2.blueprint",
-            "review_token": "bpr5_bd9fc27d9a3075b1435eff879db08d321ddedfb2696c73b8134bf29d6ce2f219",
+            "review_token": "bpr5_e2193124c95445589a888b66cd697abca795f96bfcc9c9e108798cc581fc60ee",
             "decision": "accept",
             "actor": "test:范围审阅者",
             "reason": "合成语义审阅接受",
             "chapter_ordinals": [],
             "owner": null,
             "knowledge_links": {
-              "scope_sha256": "01c648330961e732539252a39c7ad4ca2d50cb3c303fef0c8009e697eba07cfa",
+              "scope_sha256": "e9775f365e051d54b24130f6508a9ee8170816599369ddc6570717adb6883742",
               "actor": "test:范围审阅者",
               "reason": "合成语义审阅接受",
               "decisions": [
                 {
                   "obligation_id": "knowledge_event:secret_01/char_001:1",
-                  "expected_subject_sha256": "9b55e113f2afe6868fd3041ef2476bcf78c302bee01347d79d811b58bea765d7",
+                  "expected_subject_sha256": "37777296f7be6b2ab0c1d5e48585425a39fca47bd23bca373a480b7fd7b04e13",
                   "resolution": {
                     "subject_refs": [
                       {
@@ -9595,7 +9639,7 @@
                 },
                 {
                   "obligation_id": "relation:rel_01:1",
-                  "expected_subject_sha256": "72d49ea1df5917aeec6c00fb7d91ae6e18876d0fb8d09ca95f426cde517fce0d",
+                  "expected_subject_sha256": "c8dcb0e0f071aa005abdda0d30ed0c6bbb7dff69388cc62d94d34afbd5c92b17",
                   "resolution": {
                     "subject_refs": [
                       {
@@ -9609,7 +9653,7 @@
                 },
                 {
                   "obligation_id": "relation_visibility:rel_01:1",
-                  "expected_subject_sha256": "71e631a6433a1930291d1e15172602b944180a1f4f08a2b971e02e537b0bbbc7",
+                  "expected_subject_sha256": "cfb6cb064397fe56f983ad77754cd26acb9d336b9e27b804c40abc4d30587cc8",
                   "resolution": {
                     "subject_refs": [
                       {
@@ -9623,7 +9667,7 @@
                 },
                 {
                   "obligation_id": "secret_setup:secret_01:1",
-                  "expected_subject_sha256": "1e29d9ae16f944035fd6329f5e8fd6dd46d15205a4f208b65d17631eba2972a2",
+                  "expected_subject_sha256": "f09f6cfaadeee3e6199ba4e7cfd4de14a928c5f9ea1948e38018f8661db04e1b",
                   "resolution": {
                     "subject_refs": [
                       {
@@ -9637,21 +9681,7 @@
                 },
                 {
                   "obligation_id": "setting:时代背景:1",
-                  "expected_subject_sha256": "355967417364a695700711b2d0be31aad4229afa9913eb9de76ba11612b6da6a",
-                  "resolution": {
-                    "subject_refs": [
-                      {
-                        "kind": "beat",
-                        "ref": "b01_01"
-                      }
-                    ],
-                    "kind": "at_beats",
-                    "trigger_beat_ref": "b01_01"
-                  }
-                },
-                {
-                  "obligation_id": "state_reveal:st01_01:1",
-                  "expected_subject_sha256": "8db881eba79443895f6ccdbd42c7f7ca5502259013e0065aefa67f749c4e4a60",
+                  "expected_subject_sha256": "faee72570d5b852fec52fbbd089ce95cbfb944eea5cbe825a434d99385fd4a39",
                   "resolution": {
                     "subject_refs": [
                       {
@@ -9665,7 +9695,7 @@
                 },
                 {
                   "obligation_id": "world_rule:wr_01/1:1",
-                  "expected_subject_sha256": "2b5a9ce1dacb4d6fe719b4792629602f794dd03140a08076fd2ef18a0c990308",
+                  "expected_subject_sha256": "52f7656d9b5d62e24f5c01ba7d5382b55603c81139fca6713bd103432a303685",
                   "resolution": {
                     "subject_refs": [
                       {
@@ -9679,7 +9709,7 @@
                 },
                 {
                   "obligation_id": "world_rule_reveal:wr_01/1:1",
-                  "expected_subject_sha256": "57d229e54ad74c8be52e73ed7a7fa0523736f260e460f31cfde9702db74b9fc8",
+                  "expected_subject_sha256": "bf90250e07126500123f848d5574b89b67d6fd46f740f54cb9f255bd68dd081e",
                   "resolution": {
                     "subject_refs": [
                       {
@@ -9691,7 +9721,8 @@
                     "trigger_beat_ref": "b01_01"
                   }
                 }
-              ]
+              ],
+              "event_operations": []
             },
             "review": null,
             "scope": "chapter:1",
@@ -9728,14 +9759,120 @@
               "new_issues": [],
               "dispositions": []
             },
+            "knowledge_application": {
+              "scope_sha256": "e9775f365e051d54b24130f6508a9ee8170816599369ddc6570717adb6883742",
+              "actor": "test:范围审阅者",
+              "reason": "合成语义审阅接受",
+              "decisions": [
+                {
+                  "obligation_id": "knowledge_event:secret_01/char_001:1",
+                  "expected_subject_sha256": "37777296f7be6b2ab0c1d5e48585425a39fca47bd23bca373a480b7fd7b04e13",
+                  "resolution": {
+                    "subject_refs": [
+                      {
+                        "kind": "beat",
+                        "ref": "b01_01"
+                      }
+                    ],
+                    "kind": "at_beats",
+                    "trigger_beat_ref": "b01_01"
+                  }
+                },
+                {
+                  "obligation_id": "relation:rel_01:1",
+                  "expected_subject_sha256": "c8dcb0e0f071aa005abdda0d30ed0c6bbb7dff69388cc62d94d34afbd5c92b17",
+                  "resolution": {
+                    "subject_refs": [
+                      {
+                        "kind": "beat",
+                        "ref": "b01_01"
+                      }
+                    ],
+                    "kind": "at_beats",
+                    "trigger_beat_ref": "b01_01"
+                  }
+                },
+                {
+                  "obligation_id": "relation_visibility:rel_01:1",
+                  "expected_subject_sha256": "cfb6cb064397fe56f983ad77754cd26acb9d336b9e27b804c40abc4d30587cc8",
+                  "resolution": {
+                    "subject_refs": [
+                      {
+                        "kind": "beat",
+                        "ref": "b01_01"
+                      }
+                    ],
+                    "kind": "at_beats",
+                    "trigger_beat_ref": "b01_01"
+                  }
+                },
+                {
+                  "obligation_id": "secret_setup:secret_01:1",
+                  "expected_subject_sha256": "f09f6cfaadeee3e6199ba4e7cfd4de14a928c5f9ea1948e38018f8661db04e1b",
+                  "resolution": {
+                    "subject_refs": [
+                      {
+                        "kind": "beat",
+                        "ref": "b01_01"
+                      }
+                    ],
+                    "kind": "at_beats",
+                    "trigger_beat_ref": "b01_01"
+                  }
+                },
+                {
+                  "obligation_id": "setting:时代背景:1",
+                  "expected_subject_sha256": "faee72570d5b852fec52fbbd089ce95cbfb944eea5cbe825a434d99385fd4a39",
+                  "resolution": {
+                    "subject_refs": [
+                      {
+                        "kind": "beat",
+                        "ref": "b01_01"
+                      }
+                    ],
+                    "kind": "at_beats",
+                    "trigger_beat_ref": "b01_01"
+                  }
+                },
+                {
+                  "obligation_id": "world_rule:wr_01/1:1",
+                  "expected_subject_sha256": "52f7656d9b5d62e24f5c01ba7d5382b55603c81139fca6713bd103432a303685",
+                  "resolution": {
+                    "subject_refs": [
+                      {
+                        "kind": "beat",
+                        "ref": "b01_01"
+                      }
+                    ],
+                    "kind": "at_beats",
+                    "trigger_beat_ref": "b01_01"
+                  }
+                },
+                {
+                  "obligation_id": "world_rule_reveal:wr_01/1:1",
+                  "expected_subject_sha256": "bf90250e07126500123f848d5574b89b67d6fd46f740f54cb9f255bd68dd081e",
+                  "resolution": {
+                    "subject_refs": [
+                      {
+                        "kind": "beat",
+                        "ref": "b01_01"
+                      }
+                    ],
+                    "kind": "at_beats",
+                    "trigger_beat_ref": "b01_01"
+                  }
+                }
+              ],
+              "event_operations": []
+            },
             "refinement_request": null,
             "refinement_proof_sha256": null,
             "plot_record": {
               "scope": "chapter:1",
               "actor": "test:范围审阅者",
-              "subject_sha256": "1fdf68b718d3ed0d595d82ddbae6390018c8734852c7ede2924a961a7e839755",
-              "request_sha256": "d3cdca150200c2c7a7d9b8e1ecad644f814192688c51a1e505f528f091f80ae6",
-              "decision_sha256": "45b5dc1b03ae79a4478c7ff266b702a9716b876bf9e0146e2ddd8f189a698cad",
+              "subject_sha256": "19339df5f868498d0404c6526f53a7cd20235c19cd0efc2de0acbc68d2381825",
+              "request_sha256": "733dbf57547f5d0c707e8be92b1be4a9da572abb36cfdee3789bb60b517ddbd8",
+              "decision_sha256": "0303845391346137af598bc5549e46a3d0b7012a300ba994a1d54c5dea97f3d5",
               "dependency_manifest": {
                 "contract": "stage2-plot-scope-review-v1",
                 "scope": "chapter:1",
@@ -9802,6 +9939,20 @@
                   },
                   {
                     "selection": {
+                      "input_rel": "stage2/characters.json",
+                      "projection": "plot_characters",
+                      "chapter_ordinal": 1,
+                      "path": [],
+                      "key_field": null,
+                      "selected_ids": [
+                        "char_001",
+                        "char_002"
+                      ]
+                    },
+                    "consumed_sha256": "16720ac4fb405d848a81cc259878163d89bfbe9eaeced103fc0578994b855c6a"
+                  },
+                  {
+                    "selection": {
                       "input_rel": "stage1/main_text.json",
                       "projection": "source_chapter",
                       "chapter_ordinal": 2,
@@ -9810,6 +9961,19 @@
                       "selected_ids": null
                     },
                     "consumed_sha256": "0e42a3c9970d10962e93886cad9c2d05e3aeddedc45340bb13aa0e9106f3c174"
+                  },
+                  {
+                    "selection": {
+                      "input_rel": "stage1/main_text.json",
+                      "projection": "source_ranges",
+                      "chapter_ordinal": 3,
+                      "path": [],
+                      "key_field": null,
+                      "selected_ids": [
+                        "p:2:2"
+                      ]
+                    },
+                    "consumed_sha256": "d89f7af37018ae4e6e9baa1381baae405f6bd6122f836db522e2f69cf90f28ee"
                   }
                 ],
                 "depends_on_scopes": []
@@ -9850,27 +10014,27 @@
               "issues": []
             },
             "obligation_receipt": null,
-            "review_subject_sha256": "1fdf68b718d3ed0d595d82ddbae6390018c8734852c7ede2924a961a7e839755",
+            "review_subject_sha256": "19339df5f868498d0404c6526f53a7cd20235c19cd0efc2de0acbc68d2381825",
             "review_contract_version": "stage2-plot-scope-review-v1",
-            "decided_at": "2026-09-11T22:07:45+00:00",
+            "decided_at": "2026-09-12T02:47:40+00:00",
             "review_scope_sha256": null
           },
           {
             "node": "stage2.blueprint",
-            "review_token": "bpr5_e1b59b81fc1ef92ce8bc6e31a6ac4d8cc2cf69aefa6d8ff7c86d7d9db43dbcf8",
+            "review_token": "bpr5_5a83ff6fdfba1412b2e0dc286d264dd0662eb368c20501020ebc4630e76cb114",
             "decision": "accept",
             "actor": "test:范围审阅者",
             "reason": "合成语义审阅接受",
             "chapter_ordinals": [],
             "owner": null,
             "knowledge_links": {
-              "scope_sha256": "138f827967569e1a20443ef89e6ebf30e54e72cef53823b2535e9a20f2bb614b",
+              "scope_sha256": "f3bb090ffcd22e96229296f23f2ccf8b197e18505628268bc1e3c81b0e310558",
               "actor": "test:范围审阅者",
               "reason": "合成语义审阅接受",
               "decisions": [
                 {
                   "obligation_id": "knowledge_event:secret_01/group_0ec1715e1decc56def05fa17:2",
-                  "expected_subject_sha256": "82ee43d60c1197e1c05d829d50ff4e06cbd2bddbf9586f493b0ba1f00de62995",
+                  "expected_subject_sha256": "f102fc23f39986a2139edca526288fe9b40b6c975f777fb6734ec1d515de6f05",
                   "resolution": {
                     "subject_refs": [
                       {
@@ -9884,7 +10048,7 @@
                 },
                 {
                   "obligation_id": "secret_reveal:secret_01:2",
-                  "expected_subject_sha256": "944a6ab49c1d35e432391b8d4cdadd255093419b92e3a659c6b22e179ba88772",
+                  "expected_subject_sha256": "ac67bb2edc5206c04539bdefc8b4232d385f18521dfb0a0d9c5c3385b7df274d",
                   "resolution": {
                     "subject_refs": [
                       {
@@ -9898,7 +10062,7 @@
                 },
                 {
                   "obligation_id": "setting:世界观:2",
-                  "expected_subject_sha256": "0f7332493333802eaf7d96572cff0e1edf0fc8eff22024aa56611562de1f46fc",
+                  "expected_subject_sha256": "61bbaec910784ba5a408f05b746ba9b1c9db2b1d86a1c37dcbe74d24892d01f2",
                   "resolution": {
                     "subject_refs": [
                       {
@@ -9910,7 +10074,8 @@
                     "trigger_beat_ref": "b02_01"
                   }
                 }
-              ]
+              ],
+              "event_operations": []
             },
             "review": null,
             "scope": "chapter:2",
@@ -9947,14 +10112,64 @@
               "new_issues": [],
               "dispositions": []
             },
+            "knowledge_application": {
+              "scope_sha256": "f3bb090ffcd22e96229296f23f2ccf8b197e18505628268bc1e3c81b0e310558",
+              "actor": "test:范围审阅者",
+              "reason": "合成语义审阅接受",
+              "decisions": [
+                {
+                  "obligation_id": "knowledge_event:secret_01/group_0ec1715e1decc56def05fa17:2",
+                  "expected_subject_sha256": "f102fc23f39986a2139edca526288fe9b40b6c975f777fb6734ec1d515de6f05",
+                  "resolution": {
+                    "subject_refs": [
+                      {
+                        "kind": "beat",
+                        "ref": "b02_01"
+                      }
+                    ],
+                    "kind": "at_beats",
+                    "trigger_beat_ref": "b02_01"
+                  }
+                },
+                {
+                  "obligation_id": "secret_reveal:secret_01:2",
+                  "expected_subject_sha256": "ac67bb2edc5206c04539bdefc8b4232d385f18521dfb0a0d9c5c3385b7df274d",
+                  "resolution": {
+                    "subject_refs": [
+                      {
+                        "kind": "beat",
+                        "ref": "b02_01"
+                      }
+                    ],
+                    "kind": "at_beats",
+                    "trigger_beat_ref": "b02_01"
+                  }
+                },
+                {
+                  "obligation_id": "setting:世界观:2",
+                  "expected_subject_sha256": "61bbaec910784ba5a408f05b746ba9b1c9db2b1d86a1c37dcbe74d24892d01f2",
+                  "resolution": {
+                    "subject_refs": [
+                      {
+                        "kind": "beat",
+                        "ref": "b02_01"
+                      }
+                    ],
+                    "kind": "at_beats",
+                    "trigger_beat_ref": "b02_01"
+                  }
+                }
+              ],
+              "event_operations": []
+            },
             "refinement_request": null,
             "refinement_proof_sha256": null,
             "plot_record": {
               "scope": "chapter:2",
               "actor": "test:范围审阅者",
-              "subject_sha256": "e2f3fc770f9bd26e2d8687d097e5607aef82949b33286d9893b9593e83ace6d0",
-              "request_sha256": "1a9311f0b32c1ff97e8613d14e1ec3af4a25c60d83216f37b327f9d8a2c21e03",
-              "decision_sha256": "9870a171866239d9ffefa0f0400de201a9fc00e6bc940c66b0f14d04c1fa88c5",
+              "subject_sha256": "82d10a0a9722b26a7e0f79e007399b0800939728d7e6c629ca4248324e574e36",
+              "request_sha256": "40895cb1ec2601a3903687499ca1f1d2d99dd4510c79ec5cb4a7944764ab20f0",
+              "decision_sha256": "80d246d18d06cf1dafe9373fba2debef7f1219187a00bd1cc805a9c69572f8c5",
               "dependency_manifest": {
                 "contract": "stage2-plot-scope-review-v1",
                 "scope": "chapter:2",
@@ -10011,14 +10226,46 @@
                   },
                   {
                     "selection": {
+                      "input_rel": "stage2/characters.json",
+                      "projection": "plot_characters",
+                      "chapter_ordinal": 2,
+                      "path": [],
+                      "key_field": null,
+                      "selected_ids": [
+                        "char_001",
+                        "char_002"
+                      ]
+                    },
+                    "consumed_sha256": "16720ac4fb405d848a81cc259878163d89bfbe9eaeced103fc0578994b855c6a"
+                  },
+                  {
+                    "selection": {
                       "input_rel": "stage1/main_text.json",
-                      "projection": "source_chapter",
+                      "projection": "source_ranges",
                       "chapter_ordinal": 1,
                       "path": [],
                       "key_field": null,
-                      "selected_ids": null
+                      "selected_ids": [
+                        "p:1:1",
+                        "p:3:3",
+                        "p:4:4",
+                        "p:6:6"
+                      ]
                     },
-                    "consumed_sha256": "ac8c4362bb3ce668e92e8c2261c0d36c7ac9e2e02efa237d9c24e13e62e0a3e5"
+                    "consumed_sha256": "e7447dc6dcce92497e2cc2526db9083537e0016e123a777a26912565518653c9"
+                  },
+                  {
+                    "selection": {
+                      "input_rel": "stage1/main_text.json",
+                      "projection": "source_ranges",
+                      "chapter_ordinal": 3,
+                      "path": [],
+                      "key_field": null,
+                      "selected_ids": [
+                        "p:2:2"
+                      ]
+                    },
+                    "consumed_sha256": "d89f7af37018ae4e6e9baa1381baae405f6bd6122f836db522e2f69cf90f28ee"
                   }
                 ],
                 "depends_on_scopes": []
@@ -10059,24 +10306,25 @@
               "issues": []
             },
             "obligation_receipt": null,
-            "review_subject_sha256": "e2f3fc770f9bd26e2d8687d097e5607aef82949b33286d9893b9593e83ace6d0",
+            "review_subject_sha256": "82d10a0a9722b26a7e0f79e007399b0800939728d7e6c629ca4248324e574e36",
             "review_contract_version": "stage2-plot-scope-review-v1",
-            "decided_at": "2026-09-11T22:07:46+00:00",
+            "decided_at": "2026-09-12T02:47:41+00:00",
             "review_scope_sha256": null
           },
           {
             "node": "stage2.blueprint",
-            "review_token": "bpr5_6f666c1e8849947342d0441cf8a22d9b9da469ccaeb3cb4c229b1a8fc24e3e84",
+            "review_token": "bpr5_3e655bd2b7ea329978b38428cf6fa560ea7d60ad37893da307ceca88f8e72cdc",
             "decision": "accept",
             "actor": "test:范围审阅者",
             "reason": "合成语义审阅接受",
             "chapter_ordinals": [],
             "owner": null,
             "knowledge_links": {
-              "scope_sha256": "7c6feaf6edd68d0ec68cfaf755b2093185fbfbb70081035cc416f7284eb929b0",
+              "scope_sha256": "91eb2132fc4d074dd9a48cba6233507d1001246e3fbc3cee3480197377032136",
               "actor": "test:范围审阅者",
               "reason": "合成语义审阅接受",
-              "decisions": []
+              "decisions": [],
+              "event_operations": []
             },
             "review": null,
             "scope": "chapter:3",
@@ -10113,14 +10361,21 @@
               "new_issues": [],
               "dispositions": []
             },
+            "knowledge_application": {
+              "scope_sha256": "91eb2132fc4d074dd9a48cba6233507d1001246e3fbc3cee3480197377032136",
+              "actor": "test:范围审阅者",
+              "reason": "合成语义审阅接受",
+              "decisions": [],
+              "event_operations": []
+            },
             "refinement_request": null,
             "refinement_proof_sha256": null,
             "plot_record": {
               "scope": "chapter:3",
               "actor": "test:范围审阅者",
-              "subject_sha256": "88cb07f52e6a974232709fb1bed714e8b12c67847be4de4ba3315c91a3b97c46",
-              "request_sha256": "18658c4f9cfd93cc21adaffa7628c932f4456c2fd12c01e519ed05baefc44f4d",
-              "decision_sha256": "3ae321e08a178a4563dfb2544ac3957c353b83ab3fd3ec67193569aedec804e6",
+              "subject_sha256": "da0594f6573f5ce69a024095e82e3d01df2108bc3d8640e874ef82bf9ab3e14e",
+              "request_sha256": "068ff4e9699553cdfb1759c30336301063a1f91e38eabec5fcb254f90cd61469",
+              "decision_sha256": "ac706b124238aaf74260392621188ddddaf88f47bc30327dbcb5cd5c5b3b4c68",
               "dependency_manifest": {
                 "contract": "stage2-plot-scope-review-v1",
                 "scope": "chapter:3",
@@ -10177,25 +10432,48 @@
                   },
                   {
                     "selection": {
-                      "input_rel": "stage1/main_text.json",
-                      "projection": "source_chapter",
-                      "chapter_ordinal": 1,
+                      "input_rel": "stage2/characters.json",
+                      "projection": "plot_characters",
+                      "chapter_ordinal": 3,
                       "path": [],
                       "key_field": null,
-                      "selected_ids": null
+                      "selected_ids": [
+                        "char_001",
+                        "char_002"
+                      ]
                     },
-                    "consumed_sha256": "ac8c4362bb3ce668e92e8c2261c0d36c7ac9e2e02efa237d9c24e13e62e0a3e5"
+                    "consumed_sha256": "16720ac4fb405d848a81cc259878163d89bfbe9eaeced103fc0578994b855c6a"
                   },
                   {
                     "selection": {
                       "input_rel": "stage1/main_text.json",
-                      "projection": "source_chapter",
+                      "projection": "source_ranges",
+                      "chapter_ordinal": 1,
+                      "path": [],
+                      "key_field": null,
+                      "selected_ids": [
+                        "p:1:1",
+                        "p:3:3",
+                        "p:4:4",
+                        "p:6:6"
+                      ]
+                    },
+                    "consumed_sha256": "e7447dc6dcce92497e2cc2526db9083537e0016e123a777a26912565518653c9"
+                  },
+                  {
+                    "selection": {
+                      "input_rel": "stage1/main_text.json",
+                      "projection": "source_ranges",
                       "chapter_ordinal": 2,
                       "path": [],
                       "key_field": null,
-                      "selected_ids": null
+                      "selected_ids": [
+                        "p:3:3",
+                        "p:5:5",
+                        "p:6:6"
+                      ]
                     },
-                    "consumed_sha256": "0e42a3c9970d10962e93886cad9c2d05e3aeddedc45340bb13aa0e9106f3c174"
+                    "consumed_sha256": "aa8bb58fce163e4bc80c25caea7f0ea64fc5647c75854853ed16937de4c50b05"
                   }
                 ],
                 "depends_on_scopes": []
@@ -10236,24 +10514,25 @@
               "issues": []
             },
             "obligation_receipt": null,
-            "review_subject_sha256": "88cb07f52e6a974232709fb1bed714e8b12c67847be4de4ba3315c91a3b97c46",
+            "review_subject_sha256": "da0594f6573f5ce69a024095e82e3d01df2108bc3d8640e874ef82bf9ab3e14e",
             "review_contract_version": "stage2-plot-scope-review-v1",
-            "decided_at": "2026-09-11T22:07:46+00:00",
+            "decided_at": "2026-09-12T02:47:41+00:00",
             "review_scope_sha256": null
           },
           {
             "node": "stage2.blueprint",
-            "review_token": "bpr5_14152610e8c674497cec0e9965add57bdf0aa752dd878f81488241ef8107e266",
+            "review_token": "bpr5_465556f26fa345aa74a9c9f568abd46b33a27d21c83345e1b5a82b0e8bc45333",
             "decision": "accept",
             "actor": "test:范围审阅者",
             "reason": "合成语义审阅接受",
             "chapter_ordinals": [],
             "owner": null,
             "knowledge_links": {
-              "scope_sha256": "ad21dcc6aa392571971416c1c2dbf460d8b906c00963ce3e6dfae031d89a3f9b",
+              "scope_sha256": "80a752cd01acc0704fabe99dc9706f1e59bba615f18b316d0a36c96604c100c0",
               "actor": "test:范围审阅者",
               "reason": "合成语义审阅接受",
-              "decisions": []
+              "decisions": [],
+              "event_operations": []
             },
             "review": null,
             "scope": "cross_chapter",
@@ -10290,14 +10569,21 @@
               "new_issues": [],
               "dispositions": []
             },
+            "knowledge_application": {
+              "scope_sha256": "80a752cd01acc0704fabe99dc9706f1e59bba615f18b316d0a36c96604c100c0",
+              "actor": "test:范围审阅者",
+              "reason": "合成语义审阅接受",
+              "decisions": [],
+              "event_operations": []
+            },
             "refinement_request": null,
             "refinement_proof_sha256": null,
             "plot_record": {
               "scope": "cross_chapter",
               "actor": "test:范围审阅者",
-              "subject_sha256": "eac64eae40c5e129b65b439b5f2bf13020a3f563b56bd1897f4066f71af1d462",
-              "request_sha256": "fb230c816c764d0272cb04bdd166b8ff5d386ab06bd6cb7bc9b056e60df84dd5",
-              "decision_sha256": "a1f403c53c5f470ca8ab0bdae6ade358094dd568f083b3280c0d59e355784a79",
+              "subject_sha256": "277097e0fde064e0007aea410638eaac0ff7988483813dff266e453c44e060f2",
+              "request_sha256": "677f347bd1e129cc58f5ea2c039ea159a5b8c5470556268343f47aa1d0578de9",
+              "decision_sha256": "91b1c885907c9fc03923632620a3c9e3f1eae7b8f1969f5579854f5cbf8d0b1c",
               "dependency_manifest": {
                 "contract": "stage2-plot-scope-review-v1",
                 "scope": "cross_chapter",
@@ -10384,6 +10670,20 @@
                       ]
                     },
                     "consumed_sha256": "e936f7c2f5f3ba63652af15d4bba0f225556c1a5f8b8bf54a77c28965f94b8a6"
+                  },
+                  {
+                    "selection": {
+                      "input_rel": "stage2/characters.json",
+                      "projection": "plot_characters",
+                      "chapter_ordinal": 1,
+                      "path": [],
+                      "key_field": null,
+                      "selected_ids": [
+                        "char_001",
+                        "char_002"
+                      ]
+                    },
+                    "consumed_sha256": "16720ac4fb405d848a81cc259878163d89bfbe9eaeced103fc0578994b855c6a"
                   }
                 ],
                 "depends_on_scopes": [
@@ -10428,9 +10728,9 @@
               "issues": []
             },
             "obligation_receipt": null,
-            "review_subject_sha256": "eac64eae40c5e129b65b439b5f2bf13020a3f563b56bd1897f4066f71af1d462",
+            "review_subject_sha256": "277097e0fde064e0007aea410638eaac0ff7988483813dff266e453c44e060f2",
             "review_contract_version": "stage2-plot-scope-review-v1",
-            "decided_at": "2026-09-11T22:07:46+00:00",
+            "decided_at": "2026-09-12T02:47:41+00:00",
             "review_scope_sha256": null
           }
         ]
@@ -10439,12 +10739,12 @@
     "writing": true,
     "design_review": {
       "state": "accepted",
-      "candidate_sha256": "88634d61bb65cbfc7e4b568d5064c2501278072ecf8f4e21e3787a34827dcd2b",
-      "aggregate_subject_sha256": "587db12e23ff7fe7deb20b5d126baa9c1fae798ad8da1251d66c9351370018bb",
+      "candidate_sha256": "11ee28d6418574aaeaac2b3fd39cde2c8207bceed565b3902a528362f2a67d87",
+      "aggregate_subject_sha256": "c843704ba0b0ea056c5a55852694ada3b1026fe2463506b02d412a39638cf5ff",
       "binding_infeasibility": null,
       "preflight": {
         "status": "pass",
-        "candidate_sha256": "700e386504620c710323cf42c898f62e6eb251b235e9e9d3664eaf6f5d33b3c7",
+        "candidate_sha256": "2872222543e958f10ad27d760d9392e4800f75b023e4cb13e14add36fbf24920",
         "blueprint_sha256": "035779bed33909cc3db8b9992cbea0ecf477b8390e2212fe4033cc62a3d6c0d7",
         "review_contract": "stage4-design-review-v6",
         "code_version": "test-plot-producer",
@@ -10487,14 +10787,14 @@
       "current_decision": {
         "actor": "agent:novel-pipeline-operator",
         "reviewer_kind": "delegated_operator",
-        "review_run_id": "supervisor-a8b5fd67a4437a909de7",
+        "review_run_id": "supervisor-dd1cbcf5306f0d4d237b",
         "general_reason": "已完成全书逐章与跨章审阅。",
-        "candidate_sha256": "88634d61bb65cbfc7e4b568d5064c2501278072ecf8f4e21e3787a34827dcd2b",
-        "aggregate_subject_sha256": "587db12e23ff7fe7deb20b5d126baa9c1fae798ad8da1251d66c9351370018bb",
+        "candidate_sha256": "11ee28d6418574aaeaac2b3fd39cde2c8207bceed565b3902a528362f2a67d87",
+        "aggregate_subject_sha256": "c843704ba0b0ea056c5a55852694ada3b1026fe2463506b02d412a39638cf5ff",
         "binding_infeasibility": null,
         "preflight": {
           "status": "pass",
-          "candidate_sha256": "700e386504620c710323cf42c898f62e6eb251b235e9e9d3664eaf6f5d33b3c7",
+          "candidate_sha256": "2872222543e958f10ad27d760d9392e4800f75b023e4cb13e14add36fbf24920",
           "blueprint_sha256": "035779bed33909cc3db8b9992cbea0ecf477b8390e2212fe4033cc62a3d6c0d7",
           "review_contract": "stage4-design-review-v6",
           "code_version": "test-plot-producer",
@@ -10538,7 +10838,7 @@
             "basis": {
               "review_contract": "stage4-design-review-v6",
               "root_clean_sha1": "2b316027b79c3e7cc16d9678efd250852a308445",
-              "truth_sha256": "35d64e665f81e6707c6d7e08c7ff6d5deb672df41fa0dc5f438d6b3ec8a9a9ee",
+              "truth_sha256": "00ccaa1328b431cd482c7580fd667d8121150f577e30ec2ea7454eb5d9b78e04",
               "alias_algorithm": "hmac-sha256-v1"
             },
             "reconstruction_strategy": "按各章完整剧情推进",
@@ -10575,6 +10875,24 @@
               "blind_truth": {
                 "chapter_ordinal": 1,
                 "chapter_function": "推进家宅生活及家人之间的信息变化",
+                "characters": [
+                  {
+                    "alias": "a_acdaf45967cf3326",
+                    "canonical": "李宝珠",
+                    "surfaces": [
+                      "李宝珠"
+                    ],
+                    "role": "沈家的独女，替父亲掌管家中账目"
+                  },
+                  {
+                    "alias": "a_b460d5952dfd8297",
+                    "canonical": "沈母",
+                    "surfaces": [
+                      "沈母"
+                    ],
+                    "role": "李宝珠的娘，管着老宅内院的日常"
+                  }
+                ],
                 "beats": [
                   {
                     "alias": "a_2eabcd9da55a5e83",
@@ -10606,14 +10924,6 @@
                 "background_beats": [],
                 "constraints": [],
                 "knowledge": [
-                  {
-                    "event_alias": "a_cae450bf94cba784",
-                    "subject_alias": "a_8c8b290cbe696e2f",
-                    "kind": "state_reveal",
-                    "audience": null,
-                    "timing": "at_beats",
-                    "trigger_beat_alias": "a_2eabcd9da55a5e83"
-                  },
                   {
                     "event_alias": "a_1ff274d90cf5fad4",
                     "subject_alias": "a_1474de2ca9d69bd1",
@@ -10723,13 +11033,6 @@
                     "kind": "state",
                     "endpoint": "established",
                     "trigger_beat_alias": "a_937493d143e4ed6c",
-                    "subject_alias": "a_8c8b290cbe696e2f"
-                  },
-                  {
-                    "endpoint_alias": "a_cae450bf94cba784",
-                    "kind": "knowledge",
-                    "endpoint": "trigger",
-                    "trigger_beat_alias": "a_2eabcd9da55a5e83",
                     "subject_alias": "a_8c8b290cbe696e2f"
                   },
                   {
@@ -10892,10 +11195,6 @@
                     "scene_ref": "s02"
                   },
                   {
-                    "endpoint_alias": "a_cae450bf94cba784",
-                    "scene_ref": "s01"
-                  },
-                  {
                     "endpoint_alias": "a_e86937ff3893841c",
                     "scene_ref": "s01"
                   }
@@ -10947,7 +11246,7 @@
                 }
               }
             },
-            "subject_sha256": "fea9ff225c1d0b1ae5a65bbd3d87e0cc1a0341d81fdc416a5581090b7d3e55a6",
+            "subject_sha256": "5df3890140ea7c52e86f7796df37ee2bc22b930e9640bd846b9d3664463fee7d",
             "placeholder": false,
             "template_token": null,
             "decision": "accept",
@@ -10964,6 +11263,24 @@
               "blind_truth": {
                 "chapter_ordinal": 2,
                 "chapter_function": "推进家宅生活及家人之间的信息变化",
+                "characters": [
+                  {
+                    "alias": "a_acdaf45967cf3326",
+                    "canonical": "李宝珠",
+                    "surfaces": [
+                      "李宝珠"
+                    ],
+                    "role": "沈家的独女，替父亲掌管家中账目"
+                  },
+                  {
+                    "alias": "a_b460d5952dfd8297",
+                    "canonical": "沈母",
+                    "surfaces": [
+                      "母亲"
+                    ],
+                    "role": "李宝珠的娘，管着老宅内院的日常"
+                  }
+                ],
                 "beats": [
                   {
                     "alias": "a_39cc5aec21b228a0",
@@ -11201,7 +11518,7 @@
                 }
               }
             },
-            "subject_sha256": "1354881ade9a3a5d17ec159dd5496a379abebabd70c06744160bc04ecc9a3eb0",
+            "subject_sha256": "dec1532d9631d002497cab2619b1125b8f204da2ad2aaee5f2341c22facae502",
             "placeholder": false,
             "template_token": null,
             "decision": "accept",
@@ -11218,6 +11535,24 @@
               "blind_truth": {
                 "chapter_ordinal": 3,
                 "chapter_function": "推进家宅生活及家人之间的信息变化",
+                "characters": [
+                  {
+                    "alias": "a_acdaf45967cf3326",
+                    "canonical": "李宝珠",
+                    "surfaces": [
+                      "李宝珠"
+                    ],
+                    "role": "沈家的独女，替父亲掌管家中账目"
+                  },
+                  {
+                    "alias": "a_b460d5952dfd8297",
+                    "canonical": "沈母",
+                    "surfaces": [
+                      "母亲"
+                    ],
+                    "role": "李宝珠的娘，管着老宅内院的日常"
+                  }
+                ],
                 "beats": [
                   {
                     "alias": "a_3dbe40463ad1fa14",
@@ -11390,7 +11725,7 @@
                 }
               }
             },
-            "subject_sha256": "8992b236b8b756236f4f4e5eab7b3129526d85c3a1ce7c70ef66bdbe2081b7b7",
+            "subject_sha256": "c0589f301e7d12201ecc13ef112cfc7564a9bdd75f1f77d0888753973800d434",
             "placeholder": false,
             "template_token": null,
             "decision": "accept",
@@ -11399,36 +11734,36 @@
             "source_decision_sha256": null
           }
         ],
-        "decision_sha256": "18389e43cae78d985253b9aee01ef3a0923d52053e4ae8941b78a90c2a28b510",
-        "decided_at": "2026-09-11T22:07:57+00:00"
+        "decision_sha256": "f4521a0b54e7d149560f7c1c0138c0aa25cfbb2bc2257549bc6634e30eae66b1",
+        "decided_at": "2026-09-12T02:47:53+00:00"
       },
       "history": [
         {
           "actor": "agent:novel-pipeline-operator",
           "reviewer_kind": "delegated_operator",
-          "review_run_id": "supervisor-a8b5fd67a4437a909de7",
+          "review_run_id": "supervisor-dd1cbcf5306f0d4d237b",
           "general_reason": "已完成全书逐章与跨章审阅。",
-          "review_token": "s4dr1_587db12e23ff7fe7deb20b5d126baa9c1fae798ad8da1251d66c9351370018bb",
+          "review_token": "s4dr1_c843704ba0b0ea056c5a55852694ada3b1026fe2463506b02d412a39638cf5ff",
           "strategy_decision": "accept",
           "chapter_decisions": {
             "1": "accept",
             "2": "accept",
             "3": "accept"
           },
-          "decision_sha256": "18389e43cae78d985253b9aee01ef3a0923d52053e4ae8941b78a90c2a28b510",
-          "decided_at": "2026-09-11T22:07:57+00:00"
+          "decision_sha256": "f4521a0b54e7d149560f7c1c0138c0aa25cfbb2bc2257549bc6634e30eae66b1",
+          "decided_at": "2026-09-12T02:47:53+00:00"
         }
       ]
     },
     "structure": {
       "state": "accepted",
-      "current_subject_sha256": "aa9d3d30e180af6a5667ba0c5191935c4a10db3b01cbf6bccb0891eb0387bbd4",
-      "review_token": "s4sr1_aa9d3d30e180af6a5667ba0c5191935c4a10db3b01cbf6bccb0891eb0387bbd4",
+      "current_subject_sha256": "fff925acdb30c39edd9969ae69ab51acdc9db36658709eb62715f4ea33e77ea0",
+      "review_token": "s4sr1_fff925acdb30c39edd9969ae69ab51acdc9db36658709eb62715f4ea33e77ea0",
       "binding_concerns": [],
       "current_decision": {
         "actor": "agent:novel-pipeline-operator",
         "reason": "全部计划已完成覆盖与结构复核。",
-        "review_token": "s4sr1_aa9d3d30e180af6a5667ba0c5191935c4a10db3b01cbf6bccb0891eb0387bbd4",
+        "review_token": "s4sr1_fff925acdb30c39edd9969ae69ab51acdc9db36658709eb62715f4ea33e77ea0",
         "chapters": [
           {
             "output_ordinal": 1,
@@ -11446,13 +11781,13 @@
             "reason": "第 3 章已按事实复核。"
           }
         ],
-        "decided_at": "2026-09-11T22:08:06+00:00"
+        "decided_at": "2026-09-12T02:48:03+00:00"
       },
       "history": [
         {
           "actor": "agent:novel-pipeline-operator",
           "reason": "全部计划已完成覆盖与结构复核。",
-          "review_token": "s4sr1_aa9d3d30e180af6a5667ba0c5191935c4a10db3b01cbf6bccb0891eb0387bbd4",
+          "review_token": "s4sr1_fff925acdb30c39edd9969ae69ab51acdc9db36658709eb62715f4ea33e77ea0",
           "chapters": [
             {
               "output_ordinal": 1,
@@ -11470,26 +11805,26 @@
               "reason": "第 3 章已按事实复核。"
             }
           ],
-          "decided_at": "2026-09-11T22:08:06+00:00"
+          "decided_at": "2026-09-12T02:48:03+00:00"
         }
       ]
     },
     "writing_approval": {
       "available": true,
-      "current_subject_sha256": "355c505519c4055c8b2e8eb8d6cdc9a870553155462a2a36ecfbcee9b6dc10a7",
-      "review_token": "s5wr1_355c505519c4055c8b2e8eb8d6cdc9a870553155462a2a36ecfbcee9b6dc10a7",
+      "current_subject_sha256": "6f2dd7fae631904fe42e5f567a333091aa25c6988267cf26d734bc451a731aa7",
+      "review_token": "s5wr1_6f2dd7fae631904fe42e5f567a333091aa25c6988267cf26d734bc451a731aa7",
       "current_decision": {
         "actor": "test:写作授权者",
         "reason": "授权当前合成全书逐章写作",
-        "review_token": "s5wr1_355c505519c4055c8b2e8eb8d6cdc9a870553155462a2a36ecfbcee9b6dc10a7",
-        "decided_at": "2026-09-11T22:08:10+00:00"
+        "review_token": "s5wr1_6f2dd7fae631904fe42e5f567a333091aa25c6988267cf26d734bc451a731aa7",
+        "decided_at": "2026-09-12T02:48:06+00:00"
       },
       "history": [
         {
           "actor": "test:写作授权者",
           "reason": "授权当前合成全书逐章写作",
-          "review_token": "s5wr1_355c505519c4055c8b2e8eb8d6cdc9a870553155462a2a36ecfbcee9b6dc10a7",
-          "decided_at": "2026-09-11T22:08:10+00:00"
+          "review_token": "s5wr1_6f2dd7fae631904fe42e5f567a333091aa25c6988267cf26d734bc451a731aa7",
+          "decided_at": "2026-09-12T02:48:06+00:00"
         }
       ]
     },
@@ -11498,7 +11833,7 @@
       "workpack": {
         "review_seq": 1,
         "review_rel": "stage5/review_1.json",
-        "review_sha256": "476ff67cf92aa40afddca95dd9683b866798ca4dee42d4e72045aada126b0ffd",
+        "review_sha256": "765ecbb49ed6a3518b7d48eb921223f52f06301953e12e637f3e5c5357a30435",
         "planned_chapters": [
           1,
           2,
@@ -11511,7 +11846,7 @@
         "chapter_subjects": [
           {
             "output_ordinal": 1,
-            "chapter_sha256": "44e5b6b1a69fa82087d4701a6b0bdcc961260d6d39c5a7284c8076830473324f"
+            "chapter_sha256": "ffe8b695b92b8c3273b3e6bf88a0d650f1bbc55bdd2f0455383eb96cbb9aa910"
           }
         ],
         "invalid_chapters": [],
@@ -11557,8 +11892,8 @@
         "resolved": {
           "wontfix": 0
         },
-        "workpack_sha256": "92dc8af86f3034816fb1b6682fc7bb39df80885d251cd406ac6eae4378cdce52",
-        "review_token": "s5cr1_92dc8af86f3034816fb1b6682fc7bb39df80885d251cd406ac6eae4378cdce52"
+        "workpack_sha256": "34bf0a8c225d9e50fec2a44558276afb97d726bcfd3c5395f07bea4a852b1791",
+        "review_token": "s5cr1_34bf0a8c225d9e50fec2a44558276afb97d726bcfd3c5395f07bea4a852b1791"
       },
       "next_step": "先修复缺章、.INVALID 或 HARD 等正文阻断；正文主体改变后零成本重跑 stage5.review，再生成 closure（并存 trim 留待新章/新 Review 后重算）",
       "current_decision": null,
@@ -12911,27 +13246,6 @@
         "recorded": true,
         "count": 0,
         "detail": []
-      },
-      {
-        "key": "verbatim_failures",
-        "item": "哪几处**锚不到**？（非空即失败态，按根因分）",
-        "recorded": false,
-        "count": 0,
-        "detail": []
-      },
-      {
-        "key": "fact_atom_failures",
-        "item": "哪几个事实原子的证据短语无法在所属证据拍内唯一回取？（与 hinge 失败共同进入 `verbatim_failed`）",
-        "recorded": false,
-        "count": 0,
-        "detail": []
-      },
-      {
-        "key": "hinge_ambiguous_pending",
-        "item": "哪几条 hinge 的短语在拍区间内多处命中、等着候选选择修复？（`extraction-ir-v1` 专属；失败态 hinge 不带短语，这笔账是字段级修复唯一不依赖 LLM cache 的输入）",
-        "recorded": false,
-        "count": 0,
-        "detail": []
       }
     ],
     "badge": "amber",
@@ -12992,10 +13306,10 @@
           "key": "stage4/writer_context.json",
           "state": "fresh",
           "reason": "match",
-          "recorded_file": "8d94da9b36",
-          "now_file": "8d94da9b36",
-          "recorded_consumed": "b0d3a926fe",
-          "now_consumed": "b0d3a926fe"
+          "recorded_file": "f97742395d",
+          "now_file": "f97742395d",
+          "recorded_consumed": "69d80bbe02",
+          "now_consumed": "69d80bbe02"
         }
       ],
       "invalid": false,
@@ -13375,7 +13689,7 @@
         "why": null,
         "scanned": "0/1 章（恒等基线 0/1）",
         "baseline": null,
-        "note": "⚠⚠ 这是上游的账，owner 因此记 stage2 而不是本层。探针来自 Stage2 fact_atoms[].claim；若在同章源文都找不到，Stage5 改稿无能为力。⚠ 不给 repair/directive：本层重写改变不了上游抽出来的原子，没有一条本层可执行的动作（owner != stage ⇒ actionable=False）"
+        "note": "⚠⚠ 这是上游的账，owner 因此记 stage2 而不是本层。探针来自完整剧情节点与已登记约束；源文未支持的内容交上游核查，不能让 Stage5 改稿制造依据。⚠ 不给 repair/directive：本层重写改变不了上游抽出来的原子，没有一条本层可执行的动作（owner != stage ⇒ actionable=False）"
       },
       {
         "rule": "fact_landing",
@@ -14019,7 +14333,7 @@
         "why": "本书未登记句【原样写入】的稀疏约束，本探针没有分母。完整剧情仍由 beats 提供；合法空约束不表示剧情缺失，也不证明语义完整。",
         "scanned": "0 句【原样写入】的材料（0/1 章（恒等基线 0/1））",
         "baseline": null,
-        "note": "目标是上游逐字钉死的句子，只能原样放回去或不放。旧语料 0/31，177 条逐字要求全部落地（那批语料已删）。⚠⚠ 别把这句读成「这条一向可信」——它有过一段假绿。beat_index → verbatim_pieces 的形态断过一版，下发面上一条材料都没有，于是本条的循环一次都不进、报绿，而闭卷写手手里一个原文字节都没有。⇒ 现在分母（下发了多少条材料）无条件打在 scanned 那一行上，分母为零落 unver 不落 pass；根因那一条是 stage4 的 ctx_hinge_delivered。"
+        "note": "目标是上游逐字钉死的句子，只能原样放回去或不放。旧语料 0/31，177 条逐字要求全部落地（那批语料已删）。⚠⚠ 别把这句读成「这条一向可信」——它有过一段假绿。beat_index → verbatim_pieces 的形态断过一版，下发面上一条材料都没有，于是本条的循环一次都不进、报绿，而闭卷写手手里一个原文字节都没有。⇒ 现在分母（下发了多少条材料）无条件打在 scanned 那一行上，分母为零落 unver 不落 pass；上下文来源一致性由 stage4 的 ctx_plot_exact 检查。"
       },
       {
         "rule": "verbatim_split",
@@ -14382,103 +14696,7 @@
     "events_tail": [],
     "work_units": [
       {
-        "unit_id": "2f17b28f3bc02e7a58c89e2fc8194bee49f1e678965ec8d082ada36ccd6ca37e",
-        "node": "stage4.design",
-        "role": "executor",
-        "scope": "chapter:2",
-        "content_used": 1,
-        "content_limit": 4,
-        "content_base_limit": 4,
-        "content_granted": 0,
-        "grant_count": 0,
-        "content_remaining": 3,
-        "state": "adopted",
-        "latest_request_sha256": "3e3350a3fc338c89ed53e6f100353cd2cb83b866d905882a7d68b3a383e25cd9",
-        "latest_response_sha256": "2d423a05db5e7d707fa3878eb5d86501008524dd8b61ecafe51c8d3a46c2946b",
-        "recovery_action": null,
-        "registered": true,
-        "processing": {
-          "run_id": "5abf29e9-401e-4d68-b155-517a963f26ef",
-          "input_sha256": "3e3350a3fc338c89ed53e6f100353cd2cb83b866d905882a7d68b3a383e25cd9",
-          "total": 1,
-          "pending": 0,
-          "generated": 1,
-          "mechanical": 0,
-          "history_adopted": 0,
-          "cached": 0,
-          "failed": 0,
-          "unknown": 0,
-          "reason": null
-        },
-        "review": null,
-        "review_unavailable_reason": null
-      },
-      {
-        "unit_id": "31ac06e9dc2aa69c0623674430682ae91682d39fcd540eadc4157a2ee7717950",
-        "node": "stage2.blueprint",
-        "role": "executor",
-        "scope": "chapter:1",
-        "content_used": 1,
-        "content_limit": 4,
-        "content_base_limit": 4,
-        "content_granted": 0,
-        "grant_count": 0,
-        "content_remaining": 3,
-        "state": "adopted",
-        "latest_request_sha256": "aaba4bde5a91529bb3dfbe9e71e02be83f8dce070cc08a62f32dc376923fbc66",
-        "latest_response_sha256": "d4eb52b79f4a05fdedc5fb9e2ecf08294e62bbbfbf9b5deaaf112a7bf256af2f",
-        "recovery_action": null,
-        "registered": true,
-        "processing": {
-          "run_id": "479419bc-daef-4777-a7ed-f0565bc42cb2",
-          "input_sha256": "aaba4bde5a91529bb3dfbe9e71e02be83f8dce070cc08a62f32dc376923fbc66",
-          "total": 1,
-          "pending": 0,
-          "generated": 1,
-          "mechanical": 0,
-          "history_adopted": 0,
-          "cached": 0,
-          "failed": 0,
-          "unknown": 0,
-          "reason": null
-        },
-        "review": null,
-        "review_unavailable_reason": null
-      },
-      {
-        "unit_id": "3f0ed4a8fa59cb4d21641ae2f71f0549ff3b342835fa527e20457aa5a87a638f",
-        "node": "stage4.design",
-        "role": "executor",
-        "scope": "chapter:3",
-        "content_used": 1,
-        "content_limit": 4,
-        "content_base_limit": 4,
-        "content_granted": 0,
-        "grant_count": 0,
-        "content_remaining": 3,
-        "state": "adopted",
-        "latest_request_sha256": "14eaa522e349fac46005aa7a63ee2bed32fa555c8f39f604fa8bd6c96a8f76f0",
-        "latest_response_sha256": "0bb55771e3c1b0711375b87606b2019c9fcbdf9b4bf41a62f3eabdce9615149d",
-        "recovery_action": null,
-        "registered": true,
-        "processing": {
-          "run_id": "5abf29e9-401e-4d68-b155-517a963f26ef",
-          "input_sha256": "14eaa522e349fac46005aa7a63ee2bed32fa555c8f39f604fa8bd6c96a8f76f0",
-          "total": 1,
-          "pending": 0,
-          "generated": 1,
-          "mechanical": 0,
-          "history_adopted": 0,
-          "cached": 0,
-          "failed": 0,
-          "unknown": 0,
-          "reason": null
-        },
-        "review": null,
-        "review_unavailable_reason": null
-      },
-      {
-        "unit_id": "4d2ca348b5b023703fe8ad867855e8c1df613b3e8c726dc5a8e7cb0b1cd3fa17",
+        "unit_id": "02d31190187fbc92aff2512f15723b44459fb3c885e7e4e799fbbe9ec05748e1",
         "node": "stage5.write",
         "role": "executor",
         "scope": "chapter:1",
@@ -14489,13 +14707,13 @@
         "grant_count": 0,
         "content_remaining": 3,
         "state": "adopted",
-        "latest_request_sha256": "9c7c1b5aa99c6f44d5a6090e00d69928ebdd0bc58ea4efb12413f5b847bfaa98",
-        "latest_response_sha256": "779bfdfcb4023cec79d993b8db00bf76209ff16dd5129a1089dfdceec96c618b",
+        "latest_request_sha256": "e6135d4336174636a3abe1d65d0faf657e24f2c0862b590361bff35ffd1ff045",
+        "latest_response_sha256": "a76a76d3f750bf2e20f58fa98203b1ddd350c0ee806deeb2804f1484d58c4711",
         "recovery_action": null,
         "registered": true,
         "processing": {
-          "run_id": "84ec4561-ed10-4e09-8a64-c1490178c9a5",
-          "input_sha256": "9c7c1b5aa99c6f44d5a6090e00d69928ebdd0bc58ea4efb12413f5b847bfaa98",
+          "run_id": "f31a7cce-3d30-406d-9c8b-bfb0a22e6c92",
+          "input_sha256": "e6135d4336174636a3abe1d65d0faf657e24f2c0862b590361bff35ffd1ff045",
           "total": 1,
           "pending": 0,
           "generated": 1,
@@ -14510,167 +14728,7 @@
         "review_unavailable_reason": null
       },
       {
-        "unit_id": "6b89528ab393a1e89888c0f2a4b9f235367770af2532d376e07e05a46a6a0041",
-        "node": "stage4.design",
-        "role": "executor",
-        "scope": "chapter:1",
-        "content_used": 1,
-        "content_limit": 4,
-        "content_base_limit": 4,
-        "content_granted": 0,
-        "grant_count": 0,
-        "content_remaining": 3,
-        "state": "adopted",
-        "latest_request_sha256": "421ae253074ef24d4106761519ea0702ab8e98c724ae00f05f4913b7ad92ac5e",
-        "latest_response_sha256": "3f56a745641cd322122933d809246bb7c7aab54e6028a15dc736761431255155",
-        "recovery_action": null,
-        "registered": true,
-        "processing": {
-          "run_id": "5abf29e9-401e-4d68-b155-517a963f26ef",
-          "input_sha256": "421ae253074ef24d4106761519ea0702ab8e98c724ae00f05f4913b7ad92ac5e",
-          "total": 1,
-          "pending": 0,
-          "generated": 1,
-          "mechanical": 0,
-          "history_adopted": 0,
-          "cached": 0,
-          "failed": 0,
-          "unknown": 0,
-          "reason": null
-        },
-        "review": null,
-        "review_unavailable_reason": null
-      },
-      {
-        "unit_id": "84315f3f5a6ca683e61c666763b224d5ea2bd597754a63a5c6e4b5e5f77995b4",
-        "node": "stage2.characters",
-        "role": "executor",
-        "scope": "book",
-        "content_used": 1,
-        "content_limit": 4,
-        "content_base_limit": 4,
-        "content_granted": 0,
-        "grant_count": 0,
-        "content_remaining": 3,
-        "state": "adopted",
-        "latest_request_sha256": "ea97853cfe0988ffd47cc6cef21aa9a692f8063047f95807e55c7f7cbcbfa131",
-        "latest_response_sha256": "7c30a7f0b48b2ee3ba88ff28a849254dad93c789a4be6ec558d97eb810cb45f3",
-        "recovery_action": null,
-        "registered": true,
-        "processing": {
-          "run_id": "bad1c5b7-cefc-4207-a556-21e083cf3141",
-          "input_sha256": "ea97853cfe0988ffd47cc6cef21aa9a692f8063047f95807e55c7f7cbcbfa131",
-          "total": 1,
-          "pending": 0,
-          "generated": 1,
-          "mechanical": 0,
-          "history_adopted": 0,
-          "cached": 0,
-          "failed": 0,
-          "unknown": 0,
-          "reason": null
-        },
-        "review": null,
-        "review_unavailable_reason": null
-      },
-      {
-        "unit_id": "8838ae6e7984c65a1cf2d10457c723cc20c053bd59662b9eae66a40a14f4100c",
-        "node": "stage4.plan",
-        "role": "executor",
-        "scope": "chapter:1",
-        "content_used": 1,
-        "content_limit": 4,
-        "content_base_limit": 4,
-        "content_granted": 0,
-        "grant_count": 0,
-        "content_remaining": 3,
-        "state": "adopted",
-        "latest_request_sha256": "ce4650a5e78a1e28cd68086fff0d34d4f08b7203f75757e2e066890f0ba538c3",
-        "latest_response_sha256": "c7f7d8d778181f61c295470e7191055643e4509fc7fc37fd5cf356099ef52f6e",
-        "recovery_action": null,
-        "registered": true,
-        "processing": {
-          "run_id": "d9a35732-b0be-400c-848d-55523240a5b0",
-          "input_sha256": "ce4650a5e78a1e28cd68086fff0d34d4f08b7203f75757e2e066890f0ba538c3",
-          "total": 1,
-          "pending": 0,
-          "generated": 1,
-          "mechanical": 0,
-          "history_adopted": 0,
-          "cached": 0,
-          "failed": 0,
-          "unknown": 0,
-          "reason": null
-        },
-        "review": null,
-        "review_unavailable_reason": null
-      },
-      {
-        "unit_id": "8fe51634759f5c3bd62fb23b01f9f1bd967f46db1d6cf8b7743d1d28d225e50a",
-        "node": "stage4.design",
-        "role": "executor",
-        "scope": "strategy",
-        "content_used": 1,
-        "content_limit": 4,
-        "content_base_limit": 4,
-        "content_granted": 0,
-        "grant_count": 0,
-        "content_remaining": 3,
-        "state": "adopted",
-        "latest_request_sha256": "dee59347f8b6482cc3255df0ffa25c24c8fff4483e623339c3bbf4f8ee8ba782",
-        "latest_response_sha256": "49d77d7c25a251da782b2549643015922073396945e970ed5208ea71905ebff3",
-        "recovery_action": null,
-        "registered": true,
-        "processing": {
-          "run_id": "5abf29e9-401e-4d68-b155-517a963f26ef",
-          "input_sha256": "dee59347f8b6482cc3255df0ffa25c24c8fff4483e623339c3bbf4f8ee8ba782",
-          "total": 1,
-          "pending": 0,
-          "generated": 1,
-          "mechanical": 0,
-          "history_adopted": 0,
-          "cached": 0,
-          "failed": 0,
-          "unknown": 0,
-          "reason": null
-        },
-        "review": null,
-        "review_unavailable_reason": null
-      },
-      {
-        "unit_id": "af29175af0e3a9948bf81ff98d92a35d8d7773c7006121f5495e6243d060199c",
-        "node": "stage2.global",
-        "role": "executor",
-        "scope": "book",
-        "content_used": 1,
-        "content_limit": 4,
-        "content_base_limit": 4,
-        "content_granted": 0,
-        "grant_count": 0,
-        "content_remaining": 3,
-        "state": "adopted",
-        "latest_request_sha256": "d270c31b15b1acf43aba8add72e7f1639c1ade95ec8b9498caaa7b64a08a1ac5",
-        "latest_response_sha256": "7e203f82e7b8038af1e033fcf2b499c99a2a6652a125b8d5559d5402cf1195f8",
-        "recovery_action": null,
-        "registered": true,
-        "processing": {
-          "run_id": "c0d1d4a3-556c-4f3a-858c-fba2e22ee352",
-          "input_sha256": "d270c31b15b1acf43aba8add72e7f1639c1ade95ec8b9498caaa7b64a08a1ac5",
-          "total": 1,
-          "pending": 0,
-          "generated": 1,
-          "mechanical": 0,
-          "history_adopted": 0,
-          "cached": 0,
-          "failed": 0,
-          "unknown": 0,
-          "reason": null
-        },
-        "review": null,
-        "review_unavailable_reason": null
-      },
-      {
-        "unit_id": "b6fef6c7cdea366548bea3f4b82db161a73d50326e9e9c69949257afbe71e06c",
+        "unit_id": "06eff3515393b7978184c99a112fd803df66278c11ff66f024f161e28b80a27e",
         "node": "stage4.plan",
         "role": "executor",
         "scope": "chapter:2",
@@ -14686,8 +14744,8 @@
         "recovery_action": null,
         "registered": true,
         "processing": {
-          "run_id": "d9a35732-b0be-400c-848d-55523240a5b0",
-          "input_sha256": "e270e7d4534b3bc65e699f5223db2ffa81ce2e3d47f94cd31087a30ae04826e5",
+          "run_id": "4cd369e2-4285-49ed-8d80-a09eb5ce050a",
+          "input_sha256": "5235128aab55d026efc30893b7df8c6aa836b5b68d36cad45388a1259ce4376a",
           "total": 1,
           "pending": 0,
           "generated": 0,
@@ -14702,7 +14760,71 @@
         "review_unavailable_reason": null
       },
       {
-        "unit_id": "dd7e14789671306dc690a1b0c3eda07db08799a3c5fd0dd9d59f41baa820c4b7",
+        "unit_id": "23b5026941505e877451c255e36d4bd702d875e927530068d7abe6f33cbf07a2",
+        "node": "stage4.design",
+        "role": "executor",
+        "scope": "chapter:2",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "grant_count": 0,
+        "content_remaining": 3,
+        "state": "adopted",
+        "latest_request_sha256": "25a86654f6188ae749fdae71fd004c0491682282c0dfa587300312015fd3e6ae",
+        "latest_response_sha256": "bd53b9e209be34fd5f84ba7cab545acdf6749f275a3bf1968ff974ab3437d984",
+        "recovery_action": null,
+        "registered": true,
+        "processing": {
+          "run_id": "4e2280ad-d8ac-43f5-a3e9-ecf6c361dd71",
+          "input_sha256": "25a86654f6188ae749fdae71fd004c0491682282c0dfa587300312015fd3e6ae",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "history_adopted": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "30352dc98eee10ae2090d27c9caa2d4110cde4c01b2f7df995788419b08ef3e6",
+        "node": "stage4.design",
+        "role": "executor",
+        "scope": "chapter:3",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "grant_count": 0,
+        "content_remaining": 3,
+        "state": "adopted",
+        "latest_request_sha256": "e26e5eda9c0f5e0f40952391bec909a78d19eba3378906d40145c37c9be06f43",
+        "latest_response_sha256": "dd20a59974b8bdaf171e6f851d5c725ee7f9aa9b97e5a79d3695a88cb9c3c34f",
+        "recovery_action": null,
+        "registered": true,
+        "processing": {
+          "run_id": "4e2280ad-d8ac-43f5-a3e9-ecf6c361dd71",
+          "input_sha256": "e26e5eda9c0f5e0f40952391bec909a78d19eba3378906d40145c37c9be06f43",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "history_adopted": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "4f683ccd41cf0e63a555da2a612a11975858572d72a834cf7f3d8ac9cf6b1aec",
         "node": "stage2.blueprint",
         "role": "executor",
         "scope": "chapter:3",
@@ -14714,11 +14836,11 @@
         "content_remaining": 3,
         "state": "adopted",
         "latest_request_sha256": "078c864a47db8aa1edff4f087b52de051d327cbbe12261d0f34721361e85187c",
-        "latest_response_sha256": "e4ce3d105e6b4629a26b01ac75fb2b9b2f147d1533867db96c9c139a7788ed74",
+        "latest_response_sha256": "4c470663ffa7f0a6af37251305106d42fd260ea308c8b625b85864b3c2a3cc92",
         "recovery_action": null,
         "registered": true,
         "processing": {
-          "run_id": "479419bc-daef-4777-a7ed-f0565bc42cb2",
+          "run_id": "6bf16d8d-9651-4530-8346-b12b2d5734f1",
           "input_sha256": "078c864a47db8aa1edff4f087b52de051d327cbbe12261d0f34721361e85187c",
           "total": 1,
           "pending": 0,
@@ -14734,7 +14856,103 @@
         "review_unavailable_reason": null
       },
       {
-        "unit_id": "f09c21cda14ce0bc61b9a97136a5009a371a9748c59011fb2708517a4573fcc5",
+        "unit_id": "709d2bb16edb76002a52df77cb9802f76dd5814c1bee7c3d0cb76cb32cac0977",
+        "node": "stage4.design",
+        "role": "executor",
+        "scope": "chapter:1",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "grant_count": 0,
+        "content_remaining": 3,
+        "state": "adopted",
+        "latest_request_sha256": "46340fac5dfe803f565a76757f4d82a0f9718178f67f0f46c23e99ff23f5416c",
+        "latest_response_sha256": "15fd5a24345682bb89dc7359460022bfcaf86dc8ca0635df86cbd1235d26a449",
+        "recovery_action": null,
+        "registered": true,
+        "processing": {
+          "run_id": "4e2280ad-d8ac-43f5-a3e9-ecf6c361dd71",
+          "input_sha256": "46340fac5dfe803f565a76757f4d82a0f9718178f67f0f46c23e99ff23f5416c",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "history_adopted": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "86a8cb838e485c794e1746c9b612705b38a5dd9356cbef0de5c0e7003fb20bf5",
+        "node": "stage4.plan",
+        "role": "executor",
+        "scope": "chapter:1",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "grant_count": 0,
+        "content_remaining": 3,
+        "state": "adopted",
+        "latest_request_sha256": "02edd2ec1eab184d9838076052991b61b2676766eb44a829cd2ce049cbc8805f",
+        "latest_response_sha256": "d824c1168dfbf7031708be3404bb316da2b3724c0a76e095f71d9d599a4583e4",
+        "recovery_action": null,
+        "registered": true,
+        "processing": {
+          "run_id": "4cd369e2-4285-49ed-8d80-a09eb5ce050a",
+          "input_sha256": "02edd2ec1eab184d9838076052991b61b2676766eb44a829cd2ce049cbc8805f",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "history_adopted": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "882b0f38613ec67eab481b2bfd633ba04359c9372cb0c554f9dcf9ad0a455365",
+        "node": "stage4.design",
+        "role": "executor",
+        "scope": "strategy",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "grant_count": 0,
+        "content_remaining": 3,
+        "state": "adopted",
+        "latest_request_sha256": "06ca0a190f5c0e0fd156bdee8079c3b2960cb28115d960bb205e3cbcae48939a",
+        "latest_response_sha256": "86671d425e8d7774584dfa06048e3db6e9409ff0ed3fe3771f410df074d555ad",
+        "recovery_action": null,
+        "registered": true,
+        "processing": {
+          "run_id": "4e2280ad-d8ac-43f5-a3e9-ecf6c361dd71",
+          "input_sha256": "06ca0a190f5c0e0fd156bdee8079c3b2960cb28115d960bb205e3cbcae48939a",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "history_adopted": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "8af8e5f79779714c09c7454cef56a0bd7f0e2de3e88e5f27fc87cf231dbfef32",
         "node": "stage2.blueprint",
         "role": "executor",
         "scope": "chapter:2",
@@ -14746,11 +14964,11 @@
         "content_remaining": 3,
         "state": "adopted",
         "latest_request_sha256": "458ed97e96f27510345254516107923453e88ff088ddfdf218779f9d119cbbd8",
-        "latest_response_sha256": "0c8d4138cd1ebec3b0021ce6d9f7de93aef0edef2b78ffb5f6aabfb0ec0aa49c",
+        "latest_response_sha256": "b3013ebf18c589c6b86012e57c5fa471c39341fc7a23e6bd888c0a23902341da",
         "recovery_action": null,
         "registered": true,
         "processing": {
-          "run_id": "479419bc-daef-4777-a7ed-f0565bc42cb2",
+          "run_id": "6bf16d8d-9651-4530-8346-b12b2d5734f1",
           "input_sha256": "458ed97e96f27510345254516107923453e88ff088ddfdf218779f9d119cbbd8",
           "total": 1,
           "pending": 0,
@@ -14766,7 +14984,71 @@
         "review_unavailable_reason": null
       },
       {
-        "unit_id": "f26014220c87f5f9a36ff03c593d062e3f7c04a5e570bc45802deb296b4cd97b",
+        "unit_id": "93fc01fd149db0c9132457664680e7702ccede366b0e786eeeee89c1163dd99c",
+        "node": "stage2.global",
+        "role": "executor",
+        "scope": "book",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "grant_count": 0,
+        "content_remaining": 3,
+        "state": "adopted",
+        "latest_request_sha256": "d270c31b15b1acf43aba8add72e7f1639c1ade95ec8b9498caaa7b64a08a1ac5",
+        "latest_response_sha256": "8b98d64b03b51021de1f25a0301f17d8802dab1c3ae9c31cf2e0018ea8f12370",
+        "recovery_action": null,
+        "registered": true,
+        "processing": {
+          "run_id": "35305eaf-ab79-4207-a114-0c37467710e1",
+          "input_sha256": "d270c31b15b1acf43aba8add72e7f1639c1ade95ec8b9498caaa7b64a08a1ac5",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "history_adopted": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "c1f05012e410ebb8985f5c272cfa580e54ba461d136454135c093f19e6fffb29",
+        "node": "stage2.characters",
+        "role": "executor",
+        "scope": "book",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "grant_count": 0,
+        "content_remaining": 3,
+        "state": "adopted",
+        "latest_request_sha256": "ea97853cfe0988ffd47cc6cef21aa9a692f8063047f95807e55c7f7cbcbfa131",
+        "latest_response_sha256": "fd4c899c7737aca9819c9b8cdbfaa5665dbcdb6cb151c10e556da2f17fe1ce27",
+        "recovery_action": null,
+        "registered": true,
+        "processing": {
+          "run_id": "f69526d8-b53e-41d3-86aa-5d48c6112e41",
+          "input_sha256": "ea97853cfe0988ffd47cc6cef21aa9a692f8063047f95807e55c7f7cbcbfa131",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "history_adopted": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "e72051fea68b93f1d2c9c80a384077b580822823654c04604b0c453cce69dd09",
         "node": "stage4.plan",
         "role": "executor",
         "scope": "chapter:3",
@@ -14782,8 +15064,8 @@
         "recovery_action": null,
         "registered": true,
         "processing": {
-          "run_id": "d9a35732-b0be-400c-848d-55523240a5b0",
-          "input_sha256": "e270e7d4534b3bc65e699f5223db2ffa81ce2e3d47f94cd31087a30ae04826e5",
+          "run_id": "4cd369e2-4285-49ed-8d80-a09eb5ce050a",
+          "input_sha256": "5235128aab55d026efc30893b7df8c6aa836b5b68d36cad45388a1259ce4376a",
           "total": 1,
           "pending": 0,
           "generated": 0,
@@ -14798,7 +15080,39 @@
         "review_unavailable_reason": null
       },
       {
-        "unit_id": "3e831ede816a158839d3f88477d10763b9dc9d29ae6349ef26ef23dba51a45d2",
+        "unit_id": "eb98734421b282448f27e0b33551cdb70d1e0b0b8b0a985d39e99b944b12e5eb",
+        "node": "stage2.blueprint",
+        "role": "executor",
+        "scope": "chapter:1",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "grant_count": 0,
+        "content_remaining": 3,
+        "state": "adopted",
+        "latest_request_sha256": "aaba4bde5a91529bb3dfbe9e71e02be83f8dce070cc08a62f32dc376923fbc66",
+        "latest_response_sha256": "d0d65f1df10563d482c8d862863ac7fbd9d5e275b53c05fc725e346296bef590",
+        "recovery_action": null,
+        "registered": true,
+        "processing": {
+          "run_id": "6bf16d8d-9651-4530-8346-b12b2d5734f1",
+          "input_sha256": "aaba4bde5a91529bb3dfbe9e71e02be83f8dce070cc08a62f32dc376923fbc66",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "history_adopted": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "73ae286ea769d3ac59c968e91d3bf9c48618ea0a83000e81ebfcabad9b4e78c8",
         "node": "stage2.global",
         "role": "commander",
         "scope": "book",
@@ -14824,7 +15138,7 @@
         "review_unavailable_reason": null
       },
       {
-        "unit_id": "63e4f1996067c2d525f87388df731a48dd08e1fb6cb2e21ee18a02e1b9c7a4dc",
+        "unit_id": "785dc0817d2594329031fb7e6e99b995f16e181f6294d7986a7b09ed8b0e7af2",
         "node": "stage4.design",
         "role": "commander",
         "scope": "design",
@@ -14842,7 +15156,7 @@
         "processing": null,
         "review": {
           "plot_progress": null,
-          "subject_sha256": "1e850a31930379c68acb4d615631e3d8de4ab427d08f475dd6230e323c7fe474",
+          "subject_sha256": "bbd6b2298f70ff72c47e007b80a5f51cf6ed603b8a64941fcb38f9e3af0c1d96",
           "total": 4,
           "pending": 0,
           "decision_inherited": 4
@@ -14850,7 +15164,7 @@
         "review_unavailable_reason": null
       },
       {
-        "unit_id": "9a9fc91918adb097feee912c1cfa783aaa1a8bebefc2dd29c732fdc17519fb46",
+        "unit_id": "97a97224a8972ebdaebd5605a3ff0d0d17162f9d9d93e42b4bba0069510bafc9",
         "node": "stage4.plan",
         "role": "commander",
         "scope": "structure",
@@ -14868,7 +15182,7 @@
         "processing": null,
         "review": {
           "plot_progress": null,
-          "subject_sha256": "69832b6e2eeb5b391529377b48ab9d41810a07d8468c101165b84a85df23decb",
+          "subject_sha256": "7e61fbf89df51048fddd797ff7e07b7cb5f0ba79b18eb71b5f122fe54368cdf6",
           "total": 3,
           "pending": 0,
           "decision_inherited": 3
@@ -14876,7 +15190,7 @@
         "review_unavailable_reason": null
       },
       {
-        "unit_id": "c0b900ea504b9c3c2701bf5aac915fa69e60d73df0a6b67e8030a615bcb1f1e4",
+        "unit_id": "74c64a622bac3eea9237a1e2f4468ca9bb6b3d46be1f9312acf44d4ce2f108cc",
         "node": "stage2.blueprint",
         "role": "commander",
         "scope": "chapter:1",
@@ -14902,36 +15216,36 @@
               {
                 "scope": "chapter:1",
                 "state": "accepted",
-                "subject_sha256": "1fdf68b718d3ed0d595d82ddbae6390018c8734852c7ede2924a961a7e839755",
-                "decision_sha256": "45b5dc1b03ae79a4478c7ff266b702a9716b876bf9e0146e2ddd8f189a698cad",
+                "subject_sha256": "19339df5f868498d0404c6526f53a7cd20235c19cd0efc2de0acbc68d2381825",
+                "decision_sha256": "0303845391346137af598bc5549e46a3d0b7012a300ba994a1d54c5dea97f3d5",
                 "open_issue_ids": []
               },
               {
                 "scope": "chapter:2",
                 "state": "accepted",
-                "subject_sha256": "e2f3fc770f9bd26e2d8687d097e5607aef82949b33286d9893b9593e83ace6d0",
-                "decision_sha256": "9870a171866239d9ffefa0f0400de201a9fc00e6bc940c66b0f14d04c1fa88c5",
+                "subject_sha256": "82d10a0a9722b26a7e0f79e007399b0800939728d7e6c629ca4248324e574e36",
+                "decision_sha256": "80d246d18d06cf1dafe9373fba2debef7f1219187a00bd1cc805a9c69572f8c5",
                 "open_issue_ids": []
               },
               {
                 "scope": "chapter:3",
                 "state": "accepted",
-                "subject_sha256": "88cb07f52e6a974232709fb1bed714e8b12c67847be4de4ba3315c91a3b97c46",
-                "decision_sha256": "3ae321e08a178a4563dfb2544ac3957c353b83ab3fd3ec67193569aedec804e6",
+                "subject_sha256": "da0594f6573f5ce69a024095e82e3d01df2108bc3d8640e874ef82bf9ab3e14e",
+                "decision_sha256": "ac706b124238aaf74260392621188ddddaf88f47bc30327dbcb5cd5c5b3b4c68",
                 "open_issue_ids": []
               },
               {
                 "scope": "cross_chapter",
                 "state": "accepted",
-                "subject_sha256": "eac64eae40c5e129b65b439b5f2bf13020a3f563b56bd1897f4066f71af1d462",
-                "decision_sha256": "a1f403c53c5f470ca8ab0bdae6ade358094dd568f083b3280c0d59e355784a79",
+                "subject_sha256": "277097e0fde064e0007aea410638eaac0ff7988483813dff266e453c44e060f2",
+                "decision_sha256": "91b1c885907c9fc03923632620a3c9e3f1eae7b8f1969f5579854f5cbf8d0b1c",
                 "open_issue_ids": []
               }
             ],
             "unresolved_issues": 0,
             "accepted": true
           },
-          "subject_sha256": "1fdf68b718d3ed0d595d82ddbae6390018c8734852c7ede2924a961a7e839755",
+          "subject_sha256": "19339df5f868498d0404c6526f53a7cd20235c19cd0efc2de0acbc68d2381825",
           "total": 1,
           "pending": 0,
           "decision_inherited": 1
@@ -14939,7 +15253,7 @@
         "review_unavailable_reason": null
       },
       {
-        "unit_id": "a50336c686a4fb5e685304a92ec9a2543ec4d1a6a7845666ba6233c6be8bc29d",
+        "unit_id": "02d29daf00aa857eb28e52295904a7c7a660e67b495049d7630120a35b9dada8",
         "node": "stage2.blueprint",
         "role": "commander",
         "scope": "chapter:2",
@@ -14957,7 +15271,7 @@
         "processing": null,
         "review": {
           "plot_progress": null,
-          "subject_sha256": "e2f3fc770f9bd26e2d8687d097e5607aef82949b33286d9893b9593e83ace6d0",
+          "subject_sha256": "82d10a0a9722b26a7e0f79e007399b0800939728d7e6c629ca4248324e574e36",
           "total": 1,
           "pending": 0,
           "decision_inherited": 1
@@ -14965,7 +15279,7 @@
         "review_unavailable_reason": null
       },
       {
-        "unit_id": "6c8ed17dd994b2130959af65d2d44aee9d4e7d93593d855e96d4eac30541a6fd",
+        "unit_id": "7384199b86097629991674fc7184b90fd72574ac717ba4fb1071829c4a726566",
         "node": "stage2.blueprint",
         "role": "commander",
         "scope": "chapter:3",
@@ -14983,7 +15297,7 @@
         "processing": null,
         "review": {
           "plot_progress": null,
-          "subject_sha256": "88cb07f52e6a974232709fb1bed714e8b12c67847be4de4ba3315c91a3b97c46",
+          "subject_sha256": "da0594f6573f5ce69a024095e82e3d01df2108bc3d8640e874ef82bf9ab3e14e",
           "total": 1,
           "pending": 0,
           "decision_inherited": 1
@@ -14991,7 +15305,7 @@
         "review_unavailable_reason": null
       },
       {
-        "unit_id": "a58b675ffa5b43be85573310f7c672705a2483e3ee88ea1e9a7a8c323e279ede",
+        "unit_id": "26d6990ad1b1abc047c705a0355d898bededc12d7faff189838352c9614e2ea4",
         "node": "stage2.blueprint",
         "role": "commander",
         "scope": "cross_chapter",
@@ -15009,7 +15323,7 @@
         "processing": null,
         "review": {
           "plot_progress": null,
-          "subject_sha256": "eac64eae40c5e129b65b439b5f2bf13020a3f563b56bd1897f4066f71af1d462",
+          "subject_sha256": "277097e0fde064e0007aea410638eaac0ff7988483813dff266e453c44e060f2",
           "total": 1,
           "pending": 0,
           "decision_inherited": 1
@@ -15034,29 +15348,29 @@
           {
             "scope": "chapter:1",
             "state": "accepted",
-            "subject_sha256": "1fdf68b718d3ed0d595d82ddbae6390018c8734852c7ede2924a961a7e839755",
-            "decision_sha256": "45b5dc1b03ae79a4478c7ff266b702a9716b876bf9e0146e2ddd8f189a698cad",
+            "subject_sha256": "19339df5f868498d0404c6526f53a7cd20235c19cd0efc2de0acbc68d2381825",
+            "decision_sha256": "0303845391346137af598bc5549e46a3d0b7012a300ba994a1d54c5dea97f3d5",
             "open_issue_ids": []
           },
           {
             "scope": "chapter:2",
             "state": "accepted",
-            "subject_sha256": "e2f3fc770f9bd26e2d8687d097e5607aef82949b33286d9893b9593e83ace6d0",
-            "decision_sha256": "9870a171866239d9ffefa0f0400de201a9fc00e6bc940c66b0f14d04c1fa88c5",
+            "subject_sha256": "82d10a0a9722b26a7e0f79e007399b0800939728d7e6c629ca4248324e574e36",
+            "decision_sha256": "80d246d18d06cf1dafe9373fba2debef7f1219187a00bd1cc805a9c69572f8c5",
             "open_issue_ids": []
           },
           {
             "scope": "chapter:3",
             "state": "accepted",
-            "subject_sha256": "88cb07f52e6a974232709fb1bed714e8b12c67847be4de4ba3315c91a3b97c46",
-            "decision_sha256": "3ae321e08a178a4563dfb2544ac3957c353b83ab3fd3ec67193569aedec804e6",
+            "subject_sha256": "da0594f6573f5ce69a024095e82e3d01df2108bc3d8640e874ef82bf9ab3e14e",
+            "decision_sha256": "ac706b124238aaf74260392621188ddddaf88f47bc30327dbcb5cd5c5b3b4c68",
             "open_issue_ids": []
           },
           {
             "scope": "cross_chapter",
             "state": "accepted",
-            "subject_sha256": "eac64eae40c5e129b65b439b5f2bf13020a3f563b56bd1897f4066f71af1d462",
-            "decision_sha256": "a1f403c53c5f470ca8ab0bdae6ade358094dd568f083b3280c0d59e355784a79",
+            "subject_sha256": "277097e0fde064e0007aea410638eaac0ff7988483813dff266e453c44e060f2",
+            "decision_sha256": "91b1c885907c9fc03923632620a3c9e3f1eae7b8f1969f5579854f5cbf8d0b1c",
             "open_issue_ids": []
           }
         ],
@@ -15066,21 +15380,21 @@
       "chapters": [
         {
           "chapter_ordinal": 1,
-          "run_id": "479419bc-daef-4777-a7ed-f0565bc42cb2",
+          "run_id": "6bf16d8d-9651-4530-8346-b12b2d5734f1",
           "checkpoint_state": "current",
           "processing_state": "generated",
           "reason": null
         },
         {
           "chapter_ordinal": 2,
-          "run_id": "479419bc-daef-4777-a7ed-f0565bc42cb2",
+          "run_id": "6bf16d8d-9651-4530-8346-b12b2d5734f1",
           "checkpoint_state": "current",
           "processing_state": "generated",
           "reason": null
         },
         {
           "chapter_ordinal": 3,
-          "run_id": "479419bc-daef-4777-a7ed-f0565bc42cb2",
+          "run_id": "6bf16d8d-9651-4530-8346-b12b2d5734f1",
           "checkpoint_state": "current",
           "processing_state": "generated",
           "reason": null

@@ -18,6 +18,7 @@ def chapter_directive(entry: dict[str, Any], book) -> str:
         f"场景重写总纲：{entry['chapter_rewrite_brief']}",
         '完整剧情目录（每个节点全文只在此出现一次）：',
         compact(entry['beats']),
+        '必要背景剧情（只供知识传播和承接，不重新主落）：' + compact(entry.get('background_beats', [])),
         '持续状态目录（modality 是命题性质，不是读者或人物知情许可）：',
         compact(entry['states']),
         '必要执行约束：' + compact(entry['constraints']),
@@ -59,8 +60,17 @@ def prev_context(entry: dict[str, Any], book) -> str | None:
     if previous is None:
         return None
     end_refs = {row['beat_ref'] for row in previous['scenes'][-1]['deliveries']}
+    ending = [r for r in previous['beats'] if r['beat_ref'] in end_refs]
+    current = {row['beat_ref']: row for row in (
+        *entry.get('beats', []), *entry.get('background_beats', []))}
+    # 上章末节点可能已作为本章必要背景下发；收束只补目录未收录的正文。
+    # 同一身份有两份不同正文是输入冲突，不能通过择一隐藏。
+    for row in ending:
+        if row['beat_ref'] in current and current[row['beat_ref']] != row:
+            raise ValueError('上章收束与本章目录含同 ID 不同剧情正文')
     payload = {
-        'completed_ending_beats': [r for r in previous['beats'] if r['beat_ref'] in end_refs],
+        'completed_ending_beat_refs': [r['beat_ref'] for r in ending],
+        'completed_ending_beats': [r for r in ending if r['beat_ref'] not in current],
         'carry_out_refs': previous['semantic_contract']['carry_out_refs'],
     }
     return '── 上章收束（仅作衔接，不复述）──\n' + compact(payload)

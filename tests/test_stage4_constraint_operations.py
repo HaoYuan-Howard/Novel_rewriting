@@ -24,7 +24,7 @@ from tests.test_design_review import (
 
 
 OLD = {'code': 'scene_goal', 'scene_refs': ['c01s01'],
-       'opaque_aliases': [FACT], 'effect': None}
+       'opaque_aliases': [FACT]}
 NEW = {**OLD, 'code': 'scene_goal_exclude'}
 AUDIT_REASON = '这段撤换理由只供人审审计，不得成为执行指令'
 
@@ -82,7 +82,7 @@ def test_legacy_payload_history_and_scope_serialization_are_unchanged(isolated):
     full = A._design_decision_payload(decision)
     assert 'constraint_operations' not in full['chapters'][0]
     assert full['chapters'][0]['source_decision_sha256'] is None
-    assert full['chapters'][0]['constraints'][0]['effect'] is None
+    assert 'effect' not in full['chapters'][0]['constraints'][0]
     saved = state['record'].model_dump_json()
     assert A._ApprovalRecordV8.model_validate_json(saved).model_dump_json() == saved
     scope = _resolve(base, doc).chapters[0]
@@ -112,7 +112,7 @@ def test_expired_candidate_keeps_authoritative_catalog_and_original_sources(isol
 def test_explicit_operations_produce_only_effective_executor_scope(isolated, kind):
     base, state, _old_request, original = _seed(isolated)
     constraints = ([{'code': 'entry_anchor', 'scene_refs': [],
-                     'opaque_aliases': [FACT], 'effect': None}]
+                     'opaque_aliases': [FACT]}]
                    if kind == 'withdraw' else [])
     request = _request(base, constraints=constraints,
                        operations=_ops(base, kind, [NEW] if kind == 'supersede' else None))
@@ -174,7 +174,7 @@ def test_invalid_operations_fail_atomically_without_erasing_history(isolated, ca
 
 
 def test_all_active_targets_required_and_sources_are_part_of_expected_set(isolated):
-    second = {'code': 'entry_anchor', 'scene_refs': [], 'opaque_aliases': [FACT], 'effect': None}
+    second = {'code': 'entry_anchor', 'scene_refs': [], 'opaque_aliases': [FACT]}
     rows = sorted([OLD, second], key=lambda row: json.dumps(row, sort_keys=True, separators=(',', ':')))
     base, state, _old_request, _original = _seed(isolated, rows)
     operations = _ops(base)

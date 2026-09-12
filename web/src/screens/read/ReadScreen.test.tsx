@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -123,6 +123,28 @@ describe('Blueprint 章级与跨章阅读', () => {
     fireEvent.click(screen.getByText(/持续状态（/))
     expect(screen.getByText(/"focalizer_char_id": "char_001"/)).toBeVisible()
     expect(screen.getByText('没有登记新的持续状态。')).toBeVisible()
+  })
+  it('持续状态按工作包展示成立、结束、替代和证据，不靠正文猜生命周期', async () => {
+    const { getPack } = await stubApi()
+    const pack = workpack()
+    pack.material.blueprints[0].states = [{
+      state_id: 'st01_01', content: '李宝珠相信父亲已经回城。', global_ref: null,
+      modality: 'belief', holder_char_id: 'char_001',
+      established_at: { kind: 'at_entry', beat_ref: null },
+      ended_at: { kind: 'at_beat', beat_ref: 'b01_02' },
+      supersedes_state_refs: [], evidence_refs: ['e01_01'],
+    }]
+    pack.material.blueprints[0].entry_state_refs = ['st01_01']
+    getPack.mockResolvedValue(pack)
+    renderRead()
+    await screen.findByText('章节审阅决定')
+    fireEvent.click(screen.getByText(/持续状态（/))
+    const article = screen.getByRole('article', { name: '持续状态 st01_01' })
+    const state = within(article)
+    expect(article).toHaveTextContent('成立：章首')
+    expect(article).toHaveTextContent('结束：节点 b01_02')
+    expect(state.getByText('取代状态：无登记项')).toBeVisible()
+    expect(state.getByText('原文证据：第 3–4 段')).toBeVisible()
   })
 })
 

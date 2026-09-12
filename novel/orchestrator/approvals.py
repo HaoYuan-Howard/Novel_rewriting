@@ -108,7 +108,6 @@ from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
 from contracts.schema.base import StrictModel
 from novel import paths, prov
-from novel.stages.stage2.review_delta import CrossReviewScope
 from contracts.schema.stage2_review import Stage2ReviewCoverage
 from novel.errors import (
     ApprovalFrozen, ApprovalRequired, ArtifactUnreadable, GateBlocked, HumanEditProtected,
@@ -324,7 +323,6 @@ class _ApprovalRecordV8(StrictModel):
     stage2_reviews: dict[str, Stage2NodeReviewDecision] = Field(default_factory=dict)
     stage2_rework_completed: list[str] = Field(default_factory=list)
     stage2_patch_receipts: dict[str, _Stage2PatchReceipt] = Field(default_factory=dict)
-    stage2_blueprint_scope: CrossReviewScope | None = None
 
     @model_validator(mode='after')
     def _record_is_complete_and_proved(self) -> _ApprovalRecordV8:
@@ -889,9 +887,6 @@ def _stage2_review_view(
                    and contract == decision.review_contract_version
                    and decision.obligation_receipt is not None
                    and decision.obligation_receipt.scope == coverage.scope)
-        if node == 'stage2.blueprint':
-            current = current and _stage2_review_view(
-                novel_dir, record, 'stage2.global').state == 'accepted'
     except (ArtifactUnreadable, OSError, ValueError) as exc:
         return Stage2NodeReviewView(state='unknown', history=history, unavailable_reason=str(exc))
     except NovelError:
@@ -933,7 +928,6 @@ def _plot_review_view(novel_dir: Path, record: _ApprovalRecordV8) -> Stage2NodeR
 
 def _approve_plot_review(base, sid: str, request: Stage2NodeReviewRequest) -> ApprovalDoc:
     """章级决定先耐久保存；全部章审和跨章明确接受才具备免费汇合资格。"""
-    from contracts.schema.knowledge_links import KnowledgeLinkHistory
     from novel.stages.stage2 import global_review, knowledge_links
     from novel.stages.stage2.plot_review import CONTRACT
 
@@ -955,21 +949,21 @@ def _approve_plot_review(base, sid: str, request: Stage2NodeReviewRequest) -> Ap
         if request.decision == 'accept':
             global_review.require_global_accepted(snapshot.store.ctx)
             global_review.require_approved(snapshot.store.ctx, require_acceptance=False)
+        application, resulting = None, snapshot
         if request.knowledge_links is not None:
-            scope = snapshot.knowledge_scope(request.scope)
-            knowledge_links.validate_submission(scope, request.knowledge_links)
+            application, resulting = snapshot.propose_knowledge(
+                pack, request.knowledge_links, accepted=request.decision == 'accept')
+            scope = resulting.knowledge_scope(request.scope)
             if request.decision == 'accept':
-                knowledge_links.require_complete(scope, [
-                    *snapshot.knowledge_history, KnowledgeLinkHistory(
-                        decision_sha256=_decision_sha256(expected),
-                        accepted=True, submission=request.knowledge_links)])
-        plot_record = snapshot.apply(pack, request.plot_review, request.actor)
+                knowledge_links.require_complete(scope, resulting.knowledge_history)
+        plot_record = snapshot.apply(pack, request.plot_review, request.actor, resulting=resulting)
         snapshot.verify()
         if snapshot.store.ctx.code != _projection_code():
             raise HumanEditProtected('提交期间代码身份变化，须免费复验')
         decision = Stage2NodeReviewDecision(
             **request.model_dump(), plot_record=plot_record,
-            review_subject_sha256=pack.subject_sha256,
+            knowledge_application=application,
+            review_subject_sha256=plot_record.subject_sha256,
             review_contract_version=CONTRACT, decided_at=_now())
         return _write(base, raw.model_copy(update={
             'stage2_reviews': {**raw.stage2_reviews, request.node: decision},
@@ -996,15 +990,10 @@ def stage2_review_coverage(
     base: str | os.PathLike[str], sid: str, node: str,
 ) -> Stage2ReviewCoverage:
     from novel.stages.stage2 import global_review
-    from novel.views.stage2 import blueprint_review_workpack
 
     if node == 'stage2.global':
         ctx = state.readonly_ctx(paths.resolve_novel_dir(base, sid), node, _projection_code())
         return Stage2ReviewCoverage.model_validate(global_review.review_workpack(ctx)['review_coverage'])
-    if node == 'stage2.blueprint':
-        coverage = blueprint_review_workpack(base, sid, code=_projection_code()).review_coverage
-        if coverage is not None:
-            return coverage
     raise ArtifactUnreadable(f'{node} 缺当前完整审阅义务覆盖面')
 
 
@@ -1017,11 +1006,6 @@ def stage2_review_closure_available(base: str | os.PathLike[str], sid: str, *, n
         coverage = stage2_review_coverage(base, sid, node)
         if coverage.pending_obligation_ids or not coverage.inherited:
             return False
-        if node == 'stage2.blueprint':
-            from novel.stages.stage2 import knowledge_links
-            ctx = state.readonly_ctx(paths.resolve_novel_dir(base, sid), node, _projection_code())
-            knowledge_links.require_complete(knowledge_links.read_scope(ArtifactStore(ctx)),
-                                             knowledge_link_history(base, sid))
         return True
     except (NovelError, OSError, ValueError):
         return False
@@ -1036,7 +1020,6 @@ def close_stage2_inherited(base: str | os.PathLike[str], sid: str, *, node: str)
 def _close_stage2_inherited(base: str | os.PathLike[str], sid: str, *, node: str) -> ApprovalDoc:
     """只重放逐项原决定；锁内再验真实主体、来源链和完整覆盖。"""
     from contracts.schema.stage2_review import Stage2ReviewSubmission
-    from contracts.schema.knowledge_links import KnowledgeLinkSubmission
     novel_dir = paths.resolve_novel_dir(base, sid)
     raw = _read_raw(base, sid)
     if _stage2_review_view(novel_dir, raw, node).state == 'accepted':
@@ -1048,17 +1031,9 @@ def _close_stage2_inherited(base: str | os.PathLike[str], sid: str, *, node: str
         raise ApprovalRequired('Stage2 仍有待审义务，免费收口不能产生新决定')
     actor = 'system:review-inheritance'
     reason = '逐项重放原审阅决定并核验完整覆盖；未运行模型、未产生新语义结论'
-    links = None
-    if node == 'stage2.blueprint':
-        from novel.stages.stage2 import knowledge_links
-        ctx = state.readonly_ctx(novel_dir, node, _projection_code())
-        scope = knowledge_links.read_scope(ArtifactStore(ctx))
-        knowledge_links.require_complete(scope, _knowledge_link_history(raw))
-        links = KnowledgeLinkSubmission(scope_sha256=scope.scope_sha256,
-                                        actor=actor, reason=reason, decisions=[])
     return approve_stage2_review(base, sid, Stage2NodeReviewRequest(
         node=node, review_token=_stage2_review_identity(novel_dir, node)[0],
-        decision='accept', actor=actor, reason=reason, knowledge_links=links,
+        decision='accept', actor=actor, reason=reason,
         review=Stage2ReviewSubmission(scope_sha256=coverage.scope.scope_sha256,
                                       default_decision='accept', exceptions=[])))
 
@@ -1068,7 +1043,7 @@ def _knowledge_link_history(record: _ApprovalRecordV8) -> list[KnowledgeLinkHist
 
     return [KnowledgeLinkHistory(
         decision_sha256=_decision_sha256(row.model_dump(mode='json')),
-        accepted=row.decision == 'accept', submission=row.knowledge_links)
+        accepted=row.decision == 'accept', submission=row.knowledge_application or row.knowledge_links)
         for row in record.stage2_review_history
         if row.node == 'stage2.blueprint' and row.knowledge_links is not None
         and row.review_contract_version == BLUEPRINT_REVIEW_CONTRACT]
@@ -1111,22 +1086,7 @@ def approve_stage2_review(
             if not set(request.chapter_ordinals) <= known:
                 raise HumanEditProtected('Stage2 返工范围包含当前正文不存在的章')
         if request.decision == 'accept':
-            if request.node == 'stage2.global':
-                global_review.require_global_valid(ctx)
-            else:
-                global_review.require_global_accepted(ctx)
-                global_review.require_approved(ctx, require_acceptance=False)
-        if request.knowledge_links is not None:
-            from contracts.schema.knowledge_links import KnowledgeLinkHistory
-            from novel.stages.stage2 import knowledge_links
-            scope = knowledge_links.read_scope(ArtifactStore(ctx))
-            knowledge_links.validate_submission(scope, request.knowledge_links)
-            if request.decision == 'accept':
-                # 仅校验新决定与有效历史的完整覆盖；服务到此仍只写 _service。
-                knowledge_links.require_complete(scope, [
-                    *_knowledge_link_history(raw), KnowledgeLinkHistory(
-                        decision_sha256=_decision_sha256(request.model_dump(mode='json')),
-                        accepted=True, submission=request.knowledge_links)])
+            global_review.require_global_valid(ctx)
         before = _stage2_review_identity(novel_dir, request.node)
         if request.review_token != before[0]:
             raise HumanEditProtected('Stage2 审阅包已经变化；旧 token 不落盘')
@@ -1145,26 +1105,13 @@ def approve_stage2_review(
                 if key in type(request).model_fields}:
             result = _view(base, _effective_record(novel_dir, raw))
         else:
-            cross_scope = raw.stage2_blueprint_scope
-            if request.node == 'stage2.blueprint' and request.decision == 'accept':
-                from novel.views.stage2 import blueprint_review_workpack
-                from novel.stages.stage2.review_delta import snapshot
-                current_pack = blueprint_review_workpack(base, sid, code=ctx.code)
-                if current_pack.review_token != request.review_token:
-                    raise HumanEditProtected('交叉范围快照已变化；拒绝保存混合接受')
-                cross_scope = snapshot(current_pack)
             decision = Stage2NodeReviewDecision(
                 **request.model_dump(), review_subject_sha256=before[1],
                 obligation_receipt=receipt,
-                review_contract_version=before[2], decided_at=_now(),
-                review_scope_sha256=(
-                    _decision_sha256(cross_scope.model_dump(mode='json'))
-                    if request.node == 'stage2.blueprint' and request.decision == 'accept'
-                    and cross_scope is not None else None))
+                review_contract_version=before[2], decided_at=_now())
             result = _write(base, raw.model_copy(update={
                 'stage2_reviews': {**raw.stage2_reviews, request.node: decision},
                 'stage2_review_history': [*raw.stage2_review_history, decision],
-                'stage2_blueprint_scope': cross_scope,
             }))
     # 接受先独立耐久；各审批服务重新核验当前身份并各取自己的 OS 文件锁。
     # Windows 文件锁不可重入，不能持本锁递归调用 approve_gate/mark_seen。
@@ -1175,6 +1122,7 @@ def approve_stage2_review(
 
 def pending_stage2_rework(
     base: str | os.PathLike[str], sid: str, node: str,
+    *, review_token: str | None = None,
 ) -> Stage2NodeReviewDecision | None:
     if paths.find_novel_dir(base, sid) is None:
         return None
@@ -1185,7 +1133,19 @@ def pending_stage2_rework(
     for decision in reversed(raw.stage2_review_history):
         if (decision.decision != 'rework' or decision.owner != node
                 or decision.review_token in raw.stage2_rework_completed
-                or raw.stage2_reviews.get(decision.node) != decision):
+                or review_token is not None and decision.review_token != review_token):
+            continue
+        if decision.node == 'stage2.blueprint':
+            snapshot = _plot_snapshot(novel_dir, raw)
+            if snapshot.records.get(decision.scope) != decision:
+                continue
+            progress = snapshot.progress()
+            selected = next((row for row in progress.scopes if row.scope == decision.scope), None)
+            if (selected is not None and selected.state == 'rework'
+                    and _stage2_review_view(novel_dir, raw, 'stage2.global').state == 'accepted'):
+                return decision
+            continue
+        if raw.stage2_reviews.get(decision.node) != decision:
             continue
         view = _stage2_review_view(novel_dir, raw, decision.node)
         if view.state == 'rework' and view.current_decision == decision:
@@ -1197,7 +1157,7 @@ def stage2_rework_request(
     base: str | os.PathLike[str], sid: str, node: str, review_token: str,
 ) -> Stage2NodeReviewDecision:
     """执行者只能消费状态机已登记的当前返工，不能从自由理由推导动作。"""
-    request = pending_stage2_rework(base, sid, node)
+    request = pending_stage2_rework(base, sid, node, review_token=review_token)
     if request is None or request.review_token != review_token:
         raise HumanEditProtected('Stage2 返工请求缺失、已消费或主体过期')
     return request
@@ -1223,19 +1183,6 @@ def stage2_patch_receipt(
     base: str | os.PathLike[str], sid: str, request_sha256: str,
 ) -> _Stage2PatchReceipt | None:
     return _read_raw(base, sid).stage2_patch_receipts.get(request_sha256)
-
-
-def stage2_cross_review_scope(base: str | os.PathLike[str], sid: str) -> CrossReviewScope | None:
-    raw = _read_raw(base, sid)
-    scope = raw.stage2_blueprint_scope
-    if scope is None:
-        return None
-    digest = _decision_sha256(scope.model_dump(mode='json'))
-    if not any(row.node == 'stage2.blueprint' and row.decision == 'accept'
-               and row.review_subject_sha256 == scope.review_subject_sha256
-               and row.review_scope_sha256 == digest for row in raw.stage2_review_history):
-        raise HumanEditProtected('Blueprint 已接受范围缺精确 typed 决定证明')
-    return scope
 
 
 def stage2_review_payload_landed(
@@ -3993,7 +3940,7 @@ def _structure_workpack_groups(
             )
             continue
         if line.status in ('unver', 'skipped'):
-            if line.rule == 'state_closure':
+            if line.rule == 'presentation_semantics':
                 detail = _compact({
                     'why': line.why,
                     # 直接保留生产 metric finding，不在 façade 另解码、重组第二份判据。

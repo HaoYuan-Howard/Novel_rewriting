@@ -36,7 +36,7 @@ from tests.test_stage2_generation import _client, _respond_blueprints, _response
 from tests.test_stage2_global_agent import _profile, _Driver
 from tests.test_stage2_grounding import _knowledge_response
 from tests.test_stage2_knowledge_flow import _run as _generate_knowledge
-from tests.test_stage2_knowledge_links import _submission
+from tests.test_plot_review_runtime import request as _plot_accept_request, response as _plot_response
 
 
 pytestmark = pytest.mark.real_code_version
@@ -99,7 +99,7 @@ def _accept_global(client):
 @pytest.fixture
 def uploaded(tmp_path, monkeypatch):
     monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
-    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
+    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'plot-blueprint-v1')
     text = '李宝珠收到父亲已经回城的来信。\n\n' + ''.join(
         f'{row["chapter_ordinal"]}\n\n{row["text"]}\n\n' for row in main_text())
     with TestClient(create_app(str(tmp_path))) as client:
@@ -156,16 +156,19 @@ def test_uploaded_character_edit_and_durable_decisions_close_through_real_cli(
         extract.run_blueprint(bp_ctx, executor)
         assert len(transport.calls) == 3
         blueprint_bytes = store.path(STAGE2_CHAPTER_BLUEPRINTS).read_bytes()
-        pack = BlueprintReviewWorkpack.model_validate(_get(client, '/stage2/blueprint-review-workpack'))
-        link_decisions = _submission(pack.knowledge_links.scope)
-        response = client.post(PREFIX + '/approvals/stage2-review', json={
-            'node': 'stage2.blueprint', 'review_token': pack.review_token, 'decision': 'accept',
-            'actor': link_decisions.actor, 'reason': link_decisions.reason,
-            'knowledge_links': link_decisions.model_dump(mode='json'),
-            'review': {'scope_sha256': pack.review_coverage.scope.scope_sha256,
-                       'default_decision': 'accept', 'exceptions': []}})
-        assert response.status_code == 200, response.text
-        assert not response.json()['gate']['s2']
+        for scope in ('chapter:1', 'chapter:2', 'chapter:3', 'cross_chapter'):
+            pack = BlueprintReviewWorkpack.model_validate(_get(
+                client, f'/stage2/blueprint-review-workpack?scope={scope}'))
+            assert pack.scope == scope
+            response = client.post(PREFIX + '/approvals/stage2-review',
+                                   json=_plot_accept_request(pack).model_dump(mode='json'))
+            assert response.status_code == 200, response.text
+            assert not response.json()['gate']['s2']
+            progress = response.json()['stage2_reviews']['stage2.blueprint']['plot_progress']
+            if scope != 'cross_chapter':
+                assert progress['accepted_chapters'] == int(scope.split(':')[1])
+                assert not progress['accepted']
+        assert progress['accepted']
         assert not store.exists(STAGE2_KNOWLEDGE_LINKS)
     paid_ledger = ledger_path(base).read_bytes()
     history = approvals.stage2_review_history(base, SID)
@@ -226,11 +229,20 @@ def test_uploaded_rework_routes_to_real_owner_and_persists_completion(uploaded, 
     before_ledger = read_jsonl_rows(ledger_path(base))
     with TestClient(create_app(str(base))) as client:
         client.headers[UI_HEADER] = '1'
-        pack = BlueprintReviewWorkpack.model_validate(_get(client, '/stage2/blueprint-review-workpack'))
+        pack = BlueprintReviewWorkpack.model_validate(_get(
+            client, '/stage2/blueprint-review-workpack?scope=chapter:2'))
+        verdict = _plot_response().model_dump(mode='json')
+        verdict.update(decision='revise', reason='合成派修问题，只让真实 owner 重核自己的主体')
+        verdict['coverage']['attribution'] = {'state': 'issue', 'issue_refs': ['new:1']}
+        verdict['new_issues'] = [{
+            'issue_key': 'new:1', 'dimension': 'attribution', 'problem': '复核本章施受关系',
+            'subjects': [{'kind': 'beat', 'ref': 'b02_01'}],
+            'evidence_refs': [{'chapter_ordinal': 2, 'evidence_ref': 'e02_01'}]}]
         response = client.post(PREFIX + '/approvals/stage2-review', json={
-            'node': 'stage2.blueprint', 'review_token': pack.review_token, 'decision': 'rework',
+            'node': 'stage2.blueprint', 'scope': pack.scope,
+            'review_token': pack.review_token, 'decision': 'rework',
             'owner': owner, 'chapter_ordinals': [2] if owner == 'stage2.blueprint' else [],
-            'actor': 'test:blueprint-commander', 'reason': '合成派修问题，只让真实 owner 重核自己的主体'})
+            'actor': 'test:blueprint-commander', 'reason': verdict['reason'], 'plot_review': verdict})
         assert response.status_code == 200, response.text
         route = OperatorNext.model_validate(_get(client, '/operator-next'))
         assert route.state == 'ready' and route.action.node == owner, route.model_dump(mode='json')
@@ -243,12 +255,21 @@ def test_uploaded_rework_routes_to_real_owner_and_persists_completion(uploaded, 
         rework_ctx = _ctx(base, owner, paid=True)
         calls = []
         def respond(request, _index):
+            from tests.test_stage2_generation import _ok
             calls.append(request.user)
-            return _respond_blueprints(request, _response_blueprints())
+            metadata = json.loads(request.user.split('\n', 1)[0])
+            row = copy.deepcopy(metadata['repair_baseline'])
+            row['identities'] = metadata['baseline_identities']
+            return _ok({'blueprints': [row]})
         executor, transport = _client(rework_ctx, respond)
         result = extract.run_blueprint(rework_ctx, executor, review_token=pack.review_token)
         assert result.passed and len(transport.calls) == len(calls) == 1
-        assert '阅读序第2章' in calls[0]
+        requested = json.loads(calls[0].split('\n', 1)[0])
+        assert requested['chapter_ordinal'] == requested['repair_baseline']['chapter_ordinal'] == 2
+        assert requested['baseline_identities']
+        assert {ref for row in requested['baseline_identities'] if row['collection'] == 'beats'
+                for ref in row['old_refs']} == {
+                    beat.beat_id for beat in before_blueprints.blueprints[1].beats}
         after = store.read_own(ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)[0]
         assert [row for row in after.blueprints if row.chapter_ordinal != 2] == [
             row for row in before_blueprints.blueprints if row.chapter_ordinal != 2]

@@ -12,9 +12,7 @@ from contracts.invariants import (
 )
 from novel.llm.prompts import with_json_shape
 
-BLIND_DESIGN_MAX_TOKENS = 96_000
-# 新架构把宏观策略与逐章设计拆成独立 provider request；这两枚是请求身份里的
-# 输出预算边界。旧 ``BLIND_DESIGN_MAX_TOKENS`` 只供整书拒稿的零 wire 重放身份。
+# 宏观策略与逐章设计使用独立请求及输出预算。
 BLIND_BOOK_STRATEGY_MAX_TOKENS = 16_000
 BLIND_CHAPTER_DESIGN_MAX_TOKENS = 24_000
 EVIDENCE_BIND_MAX_TOKENS = 48_000
@@ -22,12 +20,12 @@ EVIDENCE_BIND_MAX_TOKENS = 48_000
 
 BLIND_BOOK_STRATEGY_SYS = """\
 你是 Stage4A 的整书宏观策略器。你只能看到按阅读序排列的 chapter_function 与确定性计数，
-看不到事实 claim、事实或人物 alias、原文、源舞台、source beat 或逐字材料。
+看不到节点正文、节点或人物 alias、原文、源舞台、source beat 或逐字材料。
 
 请给出一条全书 reconstruction_strategy，并为输入中的每章选择相对篇幅权重。章号集合必须与
 输入完全一致且不得重复。权重只能使用响应契约中的 CH_ 前缀枚举；它表达章间相对轻重，
 不等于最终字数，预算整数由代码统一计算。不要设计逐章场景，不回显章摘要，不添加事实、人物
-或证据。只谈宏观事实组织，不指定文风，不写纯写法词：$STYLE_WORDS。只输出 JSON。""" \
+或证据。只谈宏观剧情组织，不指定文风，不写纯写法词：$STYLE_WORDS。只输出 JSON。""" \
     .replace('$STYLE_WORDS', '、'.join(f'「{word}」' for word in STYLE_WORDS))
 
 BLIND_BOOK_STRATEGY_HINT: dict[str, Any] = {
@@ -78,37 +76,6 @@ BLIND_CHAPTER_DESIGN_HINT = BlindChapterDesignResponse.model_json_schema()
 BLIND_DESIGN_SYS = BLIND_CHAPTER_DESIGN_SYS + '\n整书响应按阅读序覆盖所有章，逐章遵守相同契约。'
 BLIND_DESIGN_HINT = BlindPlanResponse.model_json_schema()
 
-EVIDENCE_BIND_SYS = """\
-你是 Stage4B 证据绑定器。盲设计候选已经冻结；你现在看到原文证据、源舞台与必须材料，
-只能为每个 candidate_scene_id 绑定 stage_refs、material_refs。人物到场由所绑舞台的 present 唯一确定。
-不得改变候选的章序、
-场景顺序、事实分组、goal、retain/reconstruct、变化声明、purpose、role、delivery、transition 或 weight。
-
-candidate_sha256 必须逐字回显。若全部候选场都能在本章证据内执行，返回 status=bound，并且每个候选场
-恰好绑定一次、每条必须材料恰好落一次、stage 引用来自本章关闭式目录。更早场或
-更早章已经落地的事实可作后续场的 context，这不是 future leak。
-
-若你对因果、舞台、材料或未来泄漏有语义担忧，把它写入 binding_concerns。每条 concern 只能
-引用请求中下发的章号、candidate_scene_id、opaque alias、stage_ref 或 material_ref。
-binding_concerns 是非阻断证据：只要能交付关闭式完整绑定，仍必须返回 status=bound。只有你认为连完整
-绑定都无法给出时才可声称 status=infeasible；该声称不会自行成为正式终态，必须由编译器在同一
-关闭约束集上独立证明。不得返回一份悄悄重规划或只绑定一半的候选。只输出 JSON。"""
-
-EVIDENCE_BIND_HINT: dict[str, Any] = {
-    'status': 'bound|infeasible',
-    'candidate_sha256': '64位小写sha256',
-    'chapters': [{
-        'output_ordinal': 1,
-        'scenes': [{
-            'candidate_scene_id': 'c01s01',
-            'material_refs': ['h01_001'],
-            'stage_refs': ['b01_01'],
-        }],
-    }],
-    'binding_concerns': [],
-}
-
-
 BLIND_CHAPTER_REPAIR_SYS = BLIND_CHAPTER_DESIGN_SYS + """
 
 这是一次定向单章返修。整书策略、章权重和非目标章已冻结，不得修改或重述。
@@ -130,10 +97,6 @@ def blind_chapter_design_system() -> str:
 
 def blind_chapter_repair_system() -> str:
     return with_json_shape(BLIND_CHAPTER_REPAIR_SYS, BLIND_CHAPTER_DESIGN_HINT)
-
-
-def evidence_bind_system() -> str:
-    return with_json_shape(EVIDENCE_BIND_SYS, EVIDENCE_BIND_HINT)
 
 
 CHAPTER_BINDING_SYS = """\
@@ -171,49 +134,8 @@ def chapter_binding_system() -> str:
     return with_json_shape(CHAPTER_BINDING_SYS, CHAPTER_BINDING_HINT)
 
 
-BLOCK_INDEX = '── 章节索引（阅读序）──'
-BLOCK_FACT_REFS = '── 可引用事实目录（goal.fact_refs 只能从这里选择）──'
-BLOCK_SKELETON = '── Stage2 原子事实契约与舞台目录（只作场景重组输入）──'
-BLOCK_SIZES = '── 章级源字数与原子数（预算整数由代码计算）──'
-BLOCK_BODY = '── 全书原文正文（不可变原文，按阅读序章号分块）──'
-BLOCK_BLIND_TRUTH = '── 去序真相图（opaque alias 无顺序含义）──'
 BLOCK_BLIND_BOOK_STRATEGY = '── 章级功能与确定性计数（整书宏观策略输入）──'
 BLOCK_BLIND_CHAPTER_TRUTH = '── 单章去序真相图（local alias 仅在本请求有效）──'
 BLOCK_ACCEPTED_BOOK_STRATEGY = '── 已接受的整书策略与本章权重（不得修改）──'
 BLOCK_PREVIOUS_CHAPTER_RESPONSE = '── 上一份已审本章响应（只修目标约束）──'
 BLOCK_REPAIR_CONSTRAINTS = '── 代码渲染的闭合返修约束（无自由文本理由）──'
-BLOCK_CANDIDATE = '── 已冻结的 Stage4A 盲设计候选（不得修改）──'
-BLOCK_CANDIDATE_HASH = '── 候选完整 SHA-256（必须回显）──'
-BLOCK_EVIDENCE = '── Stage2 证据层与关闭式引用目录（只用于绑定）──'
-
-
-def project_blueprints_for_planner(
-    blueprints: dict[str, Any], _groups: Any = None,
-) -> dict[str, Any]:
-    """下发章级原子真相、因果/状态与舞台；不构造源序 events 清单。"""
-    rows: list[dict[str, Any]] = []
-    for bp in (blueprints.get('blueprints') or []):
-        rows.append({
-            'chapter_ordinal': bp.get('chapter_ordinal'),
-            'chapter_function': bp.get('chapter_function'),
-            'fact_atoms': [{
-                'fact_id': atom.get('fact_id'), 'claim': atom.get('claim'),
-                'kind': atom.get('kind'), 'obligation': atom.get('obligation'),
-                'source_beat_ref': atom.get('source_beat_ref'),
-                'participant_char_ids': atom.get('participant_char_ids') or [],
-            } for atom in (bp.get('fact_atoms') or [])],
-            'causal_edges': bp.get('causal_edges') or [],
-            'entry_state_refs': bp.get('entry_state_refs') or [],
-            'ending_state_refs': bp.get('ending_state_refs') or [],
-            'materials': [{
-                'material_id': hinge.get('hinge_id'), 'kind': hinge.get('kind'),
-                'source_beat_ref': beat.get('beat_id'),
-            } for beat in (bp.get('beats') or [])
-                for hinge in (beat.get('hinges') or [])],
-            'stages': [{
-                'stage_ref': beat.get('beat_id'), 'time_layer': beat.get('time_layer'),
-                'place': beat.get('place'),
-                'present_char_ids': beat.get('present_char_ids') or [],
-            } for beat in (bp.get('beats') or [])],
-        })
-    return {'blueprints': rows}

@@ -19,12 +19,20 @@ def _compile_materials(ordinal: int, blueprints: dict, grounding: dict,
     texts = {r['chapter_ordinal']: r['text'] for r in main_text}
     links = KnowledgeLinks.model_validate(knowledge_links)
     decisions = {r.obligation_id: r for r in links.links}
-    events = [r for r in links.scope.obligations if r.chapter_ordinal == ordinal]
     needed = {(r['kind'], r['ref']) for r in subject_refs}
+    local_subjects = needed | {('beat', r.beat_id) for r in bp.beats}
+    local_subjects.update(('state', r.state_id) for r in bp.states)
+    local_subjects.update(('state', ref) for ref in bp.entry_state_refs)
+    events = [r for r in links.scope.obligations if r.chapter_ordinal == ordinal or (
+        r.kind in ('reader_reveal', 'character_knowledge')
+        and (r.subject_ref.kind, r.subject_ref.ref) in local_subjects)]
     needed.update((r.subject_ref.kind, r.subject_ref.ref) for r in events)
     support = {('state', ref) for ref in bp.entry_state_refs}
     for event in events:
-        support.update((r.kind, r.ref) for r in decisions[event.obligation_id].resolution.subject_refs)
+        if event.chapter_ordinal == ordinal:
+            support.update((r.kind, r.ref) for r in decisions[event.obligation_id].resolution.subject_refs)
+        if event.audience and event.audience.kind == 'character':
+            needed.add(('character', event.audience.char_id))
     needed |= support
     known = {}
     for chapter in bps.values():
@@ -135,6 +143,21 @@ def _compile_materials(ordinal: int, blueprints: dict, grounding: dict,
         return {key: project(row) for key, row in value.items()}
 
     # 本章锚点已在 blueprint.evidence_anchors；本章原文完整提供，不再复制一张同义表。
+    registered = {r.event_id: r.event for r in links.scope.registered_events if not r.retired}
+    for event in events:
+        declaration = registered.get(event.knowledge_ref)
+        if declaration is None:
+            continue
+        for proof in declaration.evidence_refs:
+            chapter = bps[proof.chapter_ordinal]
+            existing = next((r for r in chapter.evidence_anchors if r.evidence_id == proof.evidence_ref), None)
+            if existing:
+                anchor(proof.chapter_ordinal, existing.start, existing.end, existing.evidence_id)
+            else:
+                from novel.stages.stage2.paragraphs import span_of
+                _, start_para, end_para = proof.evidence_ref.split(':')
+                start, end = span_of(texts[proof.chapter_ordinal], int(start_para), int(end_para))
+                anchor(proof.chapter_ordinal, start, end)
     subjects = []
     for key in sorted(support):
         if key not in known:

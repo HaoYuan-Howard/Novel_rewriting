@@ -20,7 +20,7 @@ import { useApprovals } from '@/hooks/useApprovals'
  */
 
 const doc: ApprovalDoc = {
-  v: 6,
+  v: 7,
   sid: 'book-1',
   gate: { s0: true, s1: true, s2: true, s4: false, s5: false, s6: false, s7: false },
   seen: { read: true, global: true },
@@ -49,12 +49,8 @@ const doc: ApprovalDoc = {
 }
 
 const enums = {
-  hinge_kinds: [],
-  fact_atom_kinds: [],
-  fact_atom_obligations: [],
   nonbody_kinds: [],
   time_layers: [],
-  hinge_groups: {},
   style_words: [],
   invent: { allow: [], forbid: [], principle: '' },
   job_kinds: {},

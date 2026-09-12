@@ -107,7 +107,7 @@ describe('GlobalScreen disclosure', () => {
       extra: null,
     }
     const approvals: ApprovalDoc = {
-      v: 6,
+      v: 7,
       sid: 'book-1',
       gate: { s0: true, s1: true, s2: false, s4: false, s5: false, s6: false, s7: false },
       seen: { read: false, global: true },
@@ -135,12 +135,8 @@ describe('GlobalScreen disclosure', () => {
       new ApiError('nosample', '/global-review', { scope: 'book' }),
     )
     vi.spyOn(api, 'getEnums').mockResolvedValue({
-      hinge_kinds: [],
-      fact_atom_kinds: [],
-      fact_atom_obligations: [],
       nonbody_kinds: [],
       time_layers: [],
-      hinge_groups: {},
       style_words: [],
       invent: { allow: [], forbid: [], principle: '' },
       job_kinds: { 'stage2.blueprint': { label: blueprint.label, paid: true } },
@@ -153,8 +149,6 @@ describe('GlobalScreen disclosure', () => {
       design_reviewer_kinds: [],
       design_repair_codes: [],
       design_constraint_operation_kinds: [],
-      narrative_relation_kinds: [],
-      narrative_relation_enforcements: [],
       design_repair_constraint_arity: {},
       design_review_states: [],
       design_preflight_statuses: [],
@@ -189,12 +183,8 @@ describe('GlobalScreen disclosure', () => {
 
   it('is present while stage2 is loading', async () => {
     vi.spyOn(api, 'getEnums').mockResolvedValue({
-      hinge_kinds: [],
-      fact_atom_kinds: [],
-      fact_atom_obligations: [],
       nonbody_kinds: [],
       time_layers: [],
-      hinge_groups: {},
       style_words: [],
       invent: { allow: [], forbid: [], principle: '' },
       job_kinds: {},
@@ -207,8 +197,6 @@ describe('GlobalScreen disclosure', () => {
       design_reviewer_kinds: [],
       design_repair_codes: [],
       design_constraint_operation_kinds: [],
-      narrative_relation_kinds: [],
-      narrative_relation_enforcements: [],
       design_repair_constraint_arity: {},
       design_review_states: [],
       design_preflight_statuses: [],
@@ -239,12 +227,8 @@ describe('GlobalScreen disclosure', () => {
     ['error', new Error('boom')],
   ])('remains present in the %s state', async (_label, error) => {
     vi.spyOn(api, 'getEnums').mockResolvedValue({
-      hinge_kinds: [],
-      fact_atom_kinds: [],
-      fact_atom_obligations: [],
       nonbody_kinds: [],
       time_layers: [],
-      hinge_groups: {},
       style_words: [],
       invent: { allow: [], forbid: [], principle: '' },
       job_kinds: {},
@@ -257,8 +241,6 @@ describe('GlobalScreen disclosure', () => {
       design_reviewer_kinds: [],
       design_repair_codes: [],
       design_constraint_operation_kinds: [],
-      narrative_relation_kinds: [],
-      narrative_relation_enforcements: [],
       design_repair_constraint_arity: {},
       design_review_states: [],
       design_preflight_statuses: [],
@@ -285,12 +267,8 @@ describe('GlobalScreen disclosure', () => {
 
   it('shows formal evidence failures, explicit relation visibility, and timed group knowledge', async () => {
     vi.spyOn(api, 'getEnums').mockResolvedValue({
-      hinge_kinds: [],
-      fact_atom_kinds: [],
-      fact_atom_obligations: [],
       nonbody_kinds: [],
       time_layers: [],
-      hinge_groups: {},
       style_words: [],
       invent: { allow: [], forbid: [], principle: '' },
       job_kinds: {},
@@ -303,8 +281,6 @@ describe('GlobalScreen disclosure', () => {
       design_reviewer_kinds: [],
       design_repair_codes: [],
       design_constraint_operation_kinds: [],
-      narrative_relation_kinds: [],
-      narrative_relation_enforcements: [],
       design_repair_constraint_arity: {},
       design_review_states: [],
       design_preflight_statuses: [],
@@ -366,7 +342,7 @@ function safeReview(token: string | null): GlobalReviewResponse {
 
 function unseenApprovals(): ApprovalDoc {
   return {
-    v: 6,
+    v: 7,
     sid: 'book-1',
     gate: { s0: true, s1: true, s2: false, s4: false, s5: false, s6: false, s7: false },
     seen: { read: false, global: false },

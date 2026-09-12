@@ -69,6 +69,8 @@ export function ReadScreen() {
 }
 
 function PlotChapter({ chapter }: { chapter: PlotBlueprint }) {
+  const moment = (value: PlotBlueprint['states'][number]['established_at']) =>
+    value.kind === 'at_entry' ? '章首' : '节点 ' + value.beat_ref
   const evidence = (refs: string[]) => refs.map((ref) => {
     const row = chapter.evidence_anchors.find((e) => e.evidence_id === ref)
     return row ? '第 ' + row.start_para + (row.end_para === row.start_para ? '' : '–' + row.end_para) + ' 段' : '证据引用不可用'
@@ -85,9 +87,14 @@ function PlotChapter({ chapter }: { chapter: PlotBlueprint }) {
       </p>)}
     </article>)}
     <details><summary>持续状态（{chapter.states.length}）与约束（{chapter.constraints.length}）</summary>
-      {chapter.states.length ? chapter.states.map((state) => <p key={state.state_id} className="prose-cn">
-        {state.modality} · {state.content ?? state.global_ref?.ref} · {state.holder_char_id ?? '无持有者'}
-      </p>) : <p>没有登记新的持续状态。</p>}
+      {chapter.states.length ? chapter.states.map((state) => <article key={state.state_id}
+        className="my-8 rounded-block border border-line-2 p-12" aria-label={'持续状态 ' + state.state_id}>
+        <p className="prose-cn">{state.modality} · {state.content ?? state.global_ref?.ref} · {state.holder_char_id ?? '无持有者'}</p>
+        <p className="text-tag text-ink-3">{state.state_id} · 成立：{moment(state.established_at)} ·
+          结束：{state.ended_at === null ? '未登记结束' : moment(state.ended_at)}</p>
+        <p className="text-tag text-ink-3">取代状态：{state.supersedes_state_refs.join('、') || '无登记项'}</p>
+        <p className="text-tag text-ink-4">原文证据：{evidence(state.evidence_refs)}</p>
+      </article>) : <p>没有登记新的持续状态。</p>}
       <pre className="overflow-auto whitespace-pre-wrap text-sm2">{JSON.stringify({
         constraints: chapter.constraints, entry_state_refs: chapter.entry_state_refs,
         carry_out_refs: chapter.carry_out_refs, inherited_state_endings: chapter.inherited_state_endings,

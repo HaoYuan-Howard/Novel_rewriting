@@ -1,116 +1,38 @@
-# backend_v1 —— 新后端真实响应的 fixture（FE-06）
+# 历史界面样例与当前辅助数据
 
-抓取方式：`tests/sandbox.py` 把原型语料按当前契约迁移到临时目录，
-起 `create_app` 后逐端点 GET（脚本：会话 scratchpad `capture_fixtures.py`）。
+本目录的原始响应来自 2026-08-17 的第 3 章样例；后续结构示例只供离线界面开发，
+不代表 `plot-blueprint-v1` 的抽取、审阅或真实模型验收。
 
-- 书：`我把夫君捧成头牌后，全家悔疯了_7615069877019300633`（与 `src/mocks/` 的样本书同一本，sid=7615069877019300633）
-- 抓取日期：2026-08-17
-- 章级样本仍取第 3 章（与统一契约 §八的冻结基线对齐）
+当前完整剧情链的阅读、章审、跨章、分场、结构审阅、写作上下文和进度样例统一位于
+`../plot_v1/`，由正式合成测试链及真实 HTTP 投影生成。两套书的主体、审批和正文不能拼接。
 
-⚠ `src/mocks/` 那 20 份是**冻结的证据基线**（与 design_handoff 逐字节一致，
-check-seams 钉着），本目录才是 mock 现役消费的数据源；两边不许互相覆盖。
+## 运行入口
 
-## ⚠ Stage4/Stage5 场景契约示例（2026-08-25）
+所有模拟数据只经 `web/src/api/mock.ts` 接入。历史小说的完整剧情阅读、Blueprint 审阅、
+Stage4 分场及 Stage2 检查明确返回能力不可用；不使用旧事实检查或旧审批模拟新链通过。
+未消费的旧 `stage4_ch3.json` 和 Stage3 `style.json` 已退役，恢复来源为 Git 历史。
 
-Stage2 原子事实契约与 Stage4 场景编译器替换后，旧 Stage4/Stage5 产物没有迁移路径。
-`stage4_ch3.json` 改为结构有效的现役小示例；Context v7 示例声明本章没有知识增量或受限披露，
-不据此构造知识关联接受或冒充真实 Commander 决定。`check_stage4.json` 由当前判据注册表生成，
-明确呈现「没有可重判的现役 Stage4 产物」的 `skipped` 状态。Stage5 两份夹具已收成现役 HTTP
-瘦响应下的 `legacy_incompatible` 终态：不携带旧 Draft/Review 重复正文与展示字段，也不把旧双臂
-产物冒充 current；它们不代表新链已做付费实证。事实落点示例仍只由机械 check fixture 承担。
-`check_stage5.json` 同步为当前 52 条判据；旧抓包没产生过的现役判据明确记作 `skipped`，
-不保留已下线的双臂、语义节点或重复材料占位。其判据集合由后端测试直接与注册表对账。
-原 `check_stage2.json` 抓包早于 v5，其中原子事实必填行因此明确标作 `unver`，不拿旧事件拍
-冒充 current-schema 的 fact atom 验收。
+以下辅助样例仍用于现役界面的独立行为测试：
 
-## ⚠⚠ `global.json` 是结构有效的 v5 示例，不是新抓包（2026-09-09）
+- `global.json`：有据主体的结构示例，覆盖 public/via_secret 关系、character/group 知识主体，
+  以及原文回取成功和 `source=null` 两态。它不证明新蓝图已接受。
+- `stage5_ch3.json`、`review_ch3.json`：当前 HTTP 协议的 `legacy_incompatible` 拒绝态，
+  不携带旧双臂正文，不冒充已执行的新链。
+- `stage1.json`、`stage6.json`、`stage7.json`、`stage7_ch3.json`、`inbox.json` 与检查报告：
+  已注明来源的历史屏幕输入，仅供交互测试；缺少的新判据不能补签成通过。
+- `enums.json`：由 `tools/regen_web_enums_fixture.py` 调用当前 `novel/api/enums.py::payload()`
+  生成；`tests/test_api_enums.py` 核对完整对象。
+- `agent_capabilities.json`：离线驱动能力示例，不证明真实账户或模型可用。
 
-原抓包书已不在盘上，无法付费重建 `GlobalGrounding` v3。本文件因此收成一份小而完整的
-现役 API 示例，专门覆盖 relation `public/via_secret` 两支、knowledge event 的
-`character/group` 两支，以及证据的「已唯一回取 / `source=null` 定位失败」两态。
+## 保留证据，退出运行消费
 
-成功的 `SourceSpan` 均取自同目录 `reading_ch3.json` 的真实第 3 章 `segments[].text`，
-offset 按拼接后的章正文核过；第 8 章 fate 与第 3 章无法唯一定位的时代背景故意保留
-`source=null`，用来守 UI 不把失败态显示成“没有证据”。这份示例不代表字段分布、模型遵守率
-或语料真值；下次有现役真产物时应由真实端点响应整份覆盖。
+`reading_ch3.json` 只保存 Global 证据所需的历史原文快照；`check_stage2.json` 只用于验证旧
+结构不能作为当前蓝图接受依据。两份文件均排除在 eager bundle 外，不是现役页面响应。
+`tests/test_schema_api.py` 保留七类 Global 证据的原文位置反例和旧阅读响应拒绝测试。
 
-此次随 GlobalGrounding v5 删除文学 arc；源文案事实为空，开篇范围明确为 unresolved，
-不从历史样例臆造证据或默认第 1 章。Stage4 示例同步删除 facts.arc；开篇范围判据保持 skipped。
-这些修改只服务界面开发，不代表新 schema 的语料或付费验收。
+`web/src/mocks/` 的 20 份文件是更早的冻结字节证据，由 `web/scripts/mock-baseline.json`
+和 seams 复验，不能覆盖。仅目录/概览/Stage0 输入仍由历史样例解码入口读取，其余冻结正文、
+旧事实与审阅材料均不进入运行包。
 
-## 阅读页旧 Blueprint 边界（2026-09-09）
-
-reading_ch3.json 保留原抓包的章正文，按现役阅读端点的不可读 Blueprint 分支
-呈现：exists=true/readable=false/condition=unreadable，正文为一段未覆盖文本。
-旧拍与材料没有当前事实归属，不能补造 ID 冒充新抽取；本文件不再下发旧 Blueprint
-或旧 provenance。这是结构示例的明确调整，不是新语料抓包或已运行证明。
-check_stage5.json 新增对白语义行明确为 skipped，历史判据结论仍保留原记录。
-
-## ⚠ `enums.json` 不是抓包，是**生成**的（2026-08-22 改）
-
-它是 `novel/api/enums.py::payload()` 的纯函数输出，不需要书、不需要起服务。
-重生成只有一条路：
-
-```
-python tools/regen_web_enums_fixture.py          # 写盘（--check 只报差异）
-```
-
-对账守卫：`tests/test_api_enums.py::test_the_web_enums_fixture_is_the_same_payload`
-（比解析后的对象，不比字节——本目录不在 `.gitattributes` 的 `-text` 名单里）。
-
-### 2026-08-22 的一次逐键收口
-
-守卫落地之前，这份夹具相对 `payload()` 已静默分家两个月：
-**新增 18 键 · 消失 5 键 · 内容变化 14 键**。病不在「json 旧了」，在**没有守卫**
-——所以先补对账、再重生成，不是反过来。
-
-「消失的 5 键」逐个判定过（不许拿新 dump 直接覆盖：那会把「前端还在读某个已删键」
-这类真问题一起冲掉）：
-
-| 夹具里的键 | 对应常量 | 何时删的 | 前端代码读者 | 判定 |
-|---|---|---|---|---|
-| `nonbody_kinds_added` | `NONBODY_KINDS_ADDED` | `08240cf` | 0 | 常量真删 ⇒ 夹具跟着删 |
-| `op_band` | `OP_BAND` | `08240cf` | 0 | 同上 |
-| `ops` | `OPS` | `08240cf` | 0 | 同上 |
-| `partial_mask_note` | `PARTIAL_MASK_NOTE` | `2a695ac` | 0 | 同上 |
-| `superseded_free_entries` | `SUPERSEDED_FREE_ENTRIES` | `08240cf` | 0 | 同上 |
-
-「前端代码读者」只数 `.ts` / `.tsx`。这 5 个键在 `web/src/mocks/enums.json` 与
-`web/src/mocks/stage2_global.json` 里仍然出现——**那是冻结证据基线，不是消费方**，
-它记的就是当年那个后端长什么样，一个字都不该动。
-
-顺带查出并修掉一处真问题：`NONBODY_KINDS_ADDED` 的常量早在 `08240cf` 就删了，而
-`contracts/invariants.py` 里描述它的 10 行说明**独自活到了今天**，一直写着
-「加词时同时往这里追加一个词」，指着一个不存在的东西。
-
-| fixture | 端点 |
-|---|---|
-| `check_stage2.json` | `/api/novels/7615069877019300633/check/stage2` |
-| `check_stage4.json` | `/api/novels/7615069877019300633/check/stage4` |
-| `check_stage5.json` | `/api/novels/7615069877019300633/check/stage5` |
-| `check_stage6.json` | `/api/novels/7615069877019300633/check/stage6` |
-| `check_stage7.json` | `/api/novels/7615069877019300633/check/stage7` |
-| `enums.json` | `/api/enums`（⚠ **不抓包，由 `tools/regen_web_enums_fixture.py` 生成**，见上） |
-| `global.json` | `/api/novels/7615069877019300633/stage2/global` |
-| `inbox.json` | `/api/novels/7615069877019300633/inbox` |
-| `reading_ch3.json` | `/api/novels/7615069877019300633/reading/3` |
-| `review_ch3.json` | `/api/novels/7615069877019300633/review/3` |
-| `stage1.json` | `/api/novels/7615069877019300633/stage1` |
-| `stage4_ch3.json` | `/api/novels/7615069877019300633/stage4/3` |
-| `stage5_ch3.json` | `/api/novels/7615069877019300633/stage5/3` |
-| `stage6.json` | `/api/novels/7615069877019300633/stage6` |
-| `stage7.json` | `/api/novels/7615069877019300633/stage7` |
-| `stage7_ch3.json` | `/api/novels/7615069877019300633/stage7/3` |
-
-`style.json` 不是现役端点抓包：它是 `docs/REQUIREMENTS.md` TODO-28 明确保留的
-legacy adapter 例外，等 fixture 最终收口时一并删除。Stage3 check 没有这个例外，
-因此 `check_stage3.json` 随整层退役删除。其余 fixture 中出现的旧 Stage3 provenance
-只用于验证历史解码，不表示当前仍可运行或复检 Stage3。
-
-## Hook 连续修订升级后的历史抓包边界
-
-`stage6.json` 保留原 HTTP 抓包及其历史 `_provenance.params.candidate_retry_limit=1`；
-这份原始审计字段描述旧 Hook v2 的生产设置，不代表现役 Hook v3 的书级四次内容预算。
-前端不以该历史字段计算预算，运行页只消费后端工作单元账；本次不手改抓包来源冒充新 producer。
-当前协议为 legacy 局部修订上限 4、Agent 完整替换为 0，正式版本和存量重建入口见
-`docs/schema/stage6.md`。真实 Stage6 运行和恢复由新 clean base producer 验证。
+历史 Stage6 provenance 记录生产时的配置，前端不拿它计算当前预算；费用、用量与恢复结果
+始终消费当前服务账。新链使用干净数据根，不从这些样例迁移事实或继承审批。

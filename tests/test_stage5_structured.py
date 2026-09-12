@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.schema.evaluation import TrimAudit
-from contracts.schema.stage4 import CtxChapter, FactRef, PlanGoal, WriterContext
+from contracts.schema.stage4 import CtxChapter, WriterContext
 import contracts.schema as schema_exports
 import contracts.schema.stage5 as stage5_schema
 from contracts.schema.stage5 import ChapterResponse, ChapterSegment
@@ -24,6 +24,7 @@ from novel.stages.stage5 import prompts, write
 from novel.stages.stage5 import checks
 from novel.stages.stage4 import context as stage4_context
 from tests.factories import stage5_book
+from tests.test_stage2_grounding import character_preparation, pair  # noqa: F401
 
 
 def _entry() -> tuple[dict, object]:
@@ -61,71 +62,51 @@ def test_writer_response_slots_are_complete_unique_and_canonicalised():
 def test_writing_gate_requires_fidelity_material_in_its_declared_segment():
     entry, book = _entry()
     required = '这句必须留在第一幕，一个字也不能挪。'
-    first = {**entry['scenes'][0], 'verbatim': [required]}
-    second = {**entry['scenes'][0], 'slot': 's02', 'verbatim': []}
-    entry = {**entry, 'scenes': [first, second]}
-    source = dict(book.source_text)
-    source_ordinal = int(entry['output_ordinal'])
-    source[source_ordinal] += '\n' + required
-    book = type(book)(title=book.title, ctx=book.ctx, measurable=book.measurable,
-                      source_text=source, secrets=book.secrets)
+    first = {**entry['scenes'][0], 'constraint_refs': ['c01_01']}
+    second = {**entry['scenes'][0], 'slot': 's02', 'constraint_refs': []}
+    entry = {**entry, 'scenes': [first, second], 'constraints': [{
+        'constraint_ref': 'c01_01', 'kind': 'literal',
+        'target_beat_ref': 'b01_01', 'value': required}]}
+    book = deepcopy(book)
+    book.source_text[int(entry['output_ordinal'])] += '\n' + required
     returned = [
         {'slot': 's01', 'text': '第一幕只有别的内容。' * 4},
         {'slot': 's02', 'text': '第二幕误放了：' + required + '其余故事仍在继续。' * 4},
     ]
-    # 整章确实含 required；只有真正穿过 ``write._judge -> chapter_findings``
-    # 的 producer-slot 判据才会拦住这份稿，不能拿 helper 直调冒充生产链覆盖。
-    text = '\n\n'.join(segment['text'] for segment in returned)
     hits, errs, _warns = write._judge(
-        text, entry, book, mat='', account=write.M.NormalizeAccount(),
-        segments=returned)
-    assert any(hit.rule == 'verbatim_missing' and hit.evidence[0] == 's01'
-               for hit in hits)
+        '\n\n'.join(segment['text'] for segment in returned), entry, book,
+        mat='', account=write.M.NormalizeAccount(), segments=returned)
+    assert any(hit.rule == 'verbatim_missing' and hit.evidence[0] == 's01' for hit in hits)
     assert any('[verbatim_missing]' in err for err in errs)
     assert hits and {hit.output_ordinal for hit in hits} == {entry['output_ordinal']}
 
 
-def test_segment_facts_are_checked_in_their_declared_scene_without_source_order():
+def test_segment_semantics_cannot_be_accepted_by_surface_order():
+    from novel.stages.stage5.plot_checks import delivery_surface_findings
     entry, book = _entry()
-    entry = {
-        **entry,
-        'characters': [
-            *entry['characters'],
-            {'char_id': 'char_002', 'display_name': '周衡', 'role': '账房'},
-        ],
-        'scenes': [{
-            **entry['scenes'][0],
-            'required_facts': ['沈青查看账册。', '周衡关门。'],
-            'turn_fact': '周衡关门。',
-        }],
-    }
-    reordered_hits = checks.segment_fact_findings(
-        [{'slot': 's01', 'text': '周衡随后关门。沈青才查看账册。'}],
-        entry, book)
-    assert not any(hit.rule == 'fact_landing' for hit in reordered_hits)
-
-    unver_entry = {
-        **entry,
-        'scenes': [{**entry['scenes'][0],
-                    'required_facts': ['风声变紧，局势更危险。'],
-                    'turn_fact': '风声变紧，局势更危险。'}],
-    }
-    unver_hits = checks.segment_fact_findings(
-        [{'slot': 's01', 'text': '风更紧了。'}], unver_entry, book)
-    assert any(hit.rule == 'fact_landing_unver' for hit in unver_hits)
+    reordered = delivery_surface_findings(
+        [{'slot': 's01', 'text': '周衡随后关门。沈青才查看账册。'}], entry, book)
+    assert all(hit.rule == 'fact_landing_unver' for hit in reordered)
+    assert reordered[0].evidence == ['b01_01']
+    unclear = deepcopy(entry)
+    unclear['beats'][0]['content'] = '风声变紧，局势更危险。'
+    unver = delivery_surface_findings(
+        [{'slot': 's01', 'text': '风更紧了。'}], unclear, book)
+    assert all(hit.rule == 'fact_landing_unver' for hit in unver)
 
 
 def test_prompt_private_values_are_derived_from_schema_metadata_recursively():
-    goal = PlanGoal(
-        intent='advance',
-        fact_refs=[FactRef(kind='fact_atom', ref='f01_01')],
-    )
-    assert [(token.path, token.value) for token in private_tokens(goal)] == [
-        ('fact_refs[0].ref', 'f01_01'),
-    ]
-    with pytest.raises(PromptPrivateLeak, match='fact_refs'):
-        assert_prompt_private_absent(
-            goal, system='系统', user='意外包含：f01_01')
+    from pydantic import Field
+    from contracts.schema.base import StrictModel
+    class Evidence(StrictModel):
+        source: str = Field(json_schema_extra={'prompt_private': True})
+    class Material(StrictModel):
+        evidence: list[Evidence]
+    payload = Material(evidence=[Evidence(source='本句是只能回源的证据')])
+    assert [(token.path, token.value) for token in private_tokens(payload)] == [
+        ('evidence[0].source', '本句是只能回源的证据')]
+    with pytest.raises(PromptPrivateLeak, match='evidence'):
+        assert_prompt_private_absent(payload, system='系统', user='本句是只能回源的证据')
 
 
 def test_context_schema_rejects_retired_must_not_reveal():
@@ -138,115 +119,76 @@ def test_context_schema_rejects_retired_must_not_reveal():
 @pytest.mark.parametrize('retired,mutate', [
     ('world_facts', lambda p: p.__setitem__('world_facts', {})),
     ('characters map', lambda p: p['chapters'][0].__setitem__('characters', {})),
-    ('secret_id', lambda p: p['chapters'][0]['facts']['secrets'][0].__setitem__(
-        'secret_id', 'secret_01')),
-    ('rule_id', lambda p: p['chapters'][0]['facts']['world_rules'][0].__setitem__(
-        'rule_id', 'wr_01')),
+    ('facts', lambda p: p['chapters'][0].__setitem__('facts', {'secrets': []})),
+    ('visible_content', lambda p: p['chapters'][0]['beats'][0].__setitem__('visible_content', '第二份正文')),
 ])
-def test_writer_context_v4_rejects_retired_duplicate_fields(retired, mutate):
+def test_writer_context_rejects_retired_duplicate_fields(retired, mutate):
     entry, _book = _entry()
-    payload = {
-        'chapters': [deepcopy(entry)],
-        '_provenance': {
-            'code': 'test', 'root_clean_sha1': '1' * 40, 'inputs': {},
-        },
-    }
-    if retired == 'secret_id' and not payload['chapters'][0]['facts']['secrets']:
-        payload['chapters'][0]['facts']['secrets'] = [{
-            'fact': '秘密事实', 'known_by': [], 'reader_knows_by_now': True,
-        }]
-    if retired == 'rule_id' and not payload['chapters'][0]['facts']['world_rules']:
-        payload['chapters'][0]['facts']['world_rules'] = [{
-            'kind': 'legal_rule', 'description': '规则正文',
-        }]
+    payload = {'chapters': [deepcopy(entry)], '_provenance': {
+        'code': 'test', 'root_clean_sha1': '1' * 40, 'inputs': {}}}
     mutate(payload)
     with pytest.raises(ValidationError):
         WriterContext.model_validate(payload)
 
 
-def test_final_writer_messages_project_character_id_and_human_facts():
+def test_final_writer_messages_keep_reference_keys_and_permitted_shared_semantics():
     entry, book = _entry()
     entry = deepcopy(entry)
-    char_id = 'char_never_send_987'
-    entry['characters'] = [{
-        'char_id': char_id, 'display_name': '周衡', 'role': '账房',
-    }]
-    entry['facts']['world_rules'] = [{
-        'kind': 'legal_rule',
-        'description': '旧城账册必须由掌柜与账房共同封存。',
-    }]
-    entry['facts']['secrets'] = [{
-        'fact': '周衡已经调换账册末页。',
-        'known_by': ['周衡'],
-        'reader_knows_by_now': True,
+    entry['global_subjects'] += [{
+        'subject_ref': {'kind': 'world_rule', 'ref': 'wr_01'},
+        'value': {'kind': 'legal_rule', 'versions': [{
+            'desc': '旧城账册必须由掌柜与账房共同封存。', 'allowed_slots': ['s01']}]},
+        'allowed_slots': ['s01'], 'state_permissions': [],
+    }, {
+        'subject_ref': {'kind': 'secret', 'ref': 'secret_01'},
+        'value': {'fact': '周衡已经调换账册末页。'},
+        'allowed_slots': ['s01'], 'state_permissions': [],
     }]
     typed = CtxChapter.model_validate(entry)
-
-    private = {(token.path, token.value) for token in private_tokens(typed)}
-    assert ('characters[0].char_id', char_id) in private
-
-    material = prompts.build_material(entry, book)
-    system, user = prompts.write_system(), prompts.build_user(material)
-    rendered = system + user
-    assert char_id not in rendered
-    for human_fact in ('周衡', '账房', '共同封存', '调换账册末页'):
-        assert human_fact in user
+    system, user = prompts.write_system(), prompts.build_user(prompts.build_material(entry, book))
+    for content in ('沈青', '周衡', '共同封存', '调换账册末页', 'allowed_slots'):
+        assert content in user
+    # V8 的编号连接父节点、人物与许可；不再把正常引用假标为 prompt 私密字段。
+    assert 'char_001' in user and 'b01_01' in user
+    assert '不写进小说正文' in user
     assert_prompt_private_absent(typed, system=system, user=user)
 
 
-def test_writer_goal_uses_resolved_facts_and_never_internal_plan_ids():
+def test_writer_goal_references_unique_parent_content_without_duplicate_prose():
     entry, book = _entry()
-    material = prompts.build_material(entry, book)
-    user = prompts.build_user(material)
-    assert user.count('沈青发现账册末页的墨迹被人换过。') == 1
-    assert '本章事实：〔文' in user
-    assert 'f01_01' not in user
-    assert 'chapter:1:start' not in user
-    assert 'fact_refs' not in user
+    user = prompts.build_user(prompts.build_material(entry, book))
+    assert user.count(entry['beats'][0]['content']) == 1
+    assert '"subject_refs"' in user and '"beat_ref":"b01_01"' in user
+    assert 'fact_refs' not in user and 'required_facts' not in user
 
 
-def test_context_resolves_goal_ids_after_chapter_gates():
-    goal = {
-        'intent': 'advance',
-        'fact_refs': [
-            {'kind': 'fact_atom', 'ref': 'f01_01'},
-            {'kind': 'character', 'ref': 'char_001'},
-        ],
-    }
-    resolved = stage4_context._resolve_goal(
-        goal, ordinal=1,
-        atoms={'f01_01': {'claim': '沈青发现账册墨迹被换过。'}},
-        disp={'char_001': '沈青'},
-        disclosure_targets={},
-    )
-    assert resolved == {
-        'intent': 'advance',
-        'facts': ['本章事实：沈青发现账册墨迹被换过。', '人物：沈青'],
-    }
-    assert not any(token in json.dumps(resolved, ensure_ascii=False)
-                   for token in ('f01_01', 'char_001', 'fact_refs'))
+def test_context_keeps_goal_references_in_the_complete_chapter_catalog():
+    from tests import plot_fixtures as fixture
+    ctx = fixture.context()['chapters'][0]
+    goal = ctx['chapter_goal']
+    subjects = {row['beat_ref'] for row in ctx['beats']}
+    assert all(row['ref'] in subjects for row in goal['subject_refs'])
+    assert goal['anchor_scene_ref'] == ctx['scenes'][-1]['slot']
+    assert 'facts' not in goal
 
 
 def test_context_refuses_goal_that_would_bypass_a_chapter_gate():
-    with pytest.raises(RefusedByStructure, match='无法在本章安全解析'):
-        stage4_context._resolve_goal(
-            {'intent': 'advance', 'fact_refs': [
-                {'kind': 'world_rule', 'ref': 'wr_09'}]},
-            ordinal=1, atoms={}, disp={},
-            disclosure_targets={},
-        )
+    from tests import plot_fixtures as fixture
+    plan = fixture.plan()
+    plan['output_chapters'][0]['chapter_goal']['subject_refs'] = [
+        {'kind': 'world_rule', 'ref': 'wr_09'}]
+    with pytest.raises(RefusedByStructure, match='关闭主体'):
+        fixture.context(plan)
 
 
-def test_hidden_secret_withhold_goal_does_not_disclose_identity_or_fact():
-    resolved = stage4_context._resolve_goal(
-        {'intent': 'withhold', 'fact_refs': [
-            {'kind': 'secret', 'ref': 'secret_09'}]},
-        ordinal=1, atoms={}, disp={},
-        disclosure_targets={},
-    )
-    wire = json.dumps(resolved, ensure_ascii=False)
-    assert 'secret_09' not in wire
-    assert '尚未公开' in wire
+def test_hidden_secret_withhold_goal_does_not_disclose_answer(pair):
+    from tests.test_stage4_disclosure import _inputs, _build
+    inputs = _inputs(pair, subjects=[('secret', 'secret_01')])
+    first = _build(inputs)[0]
+    answer = inputs[1]['canon']['secrets'][0]['fact']
+    assert answer not in json.dumps(first, ensure_ascii=False)
+    assert {'kind': 'secret', 'ref': 'secret_01'} in first['restricted_subject_refs']
+    assert first['chapter_goal']['intent'] == 'withhold'
 
 
 def test_writer_system_requires_json_segments_and_user_names_each_slot():
@@ -254,8 +196,7 @@ def test_writer_system_requires_json_segments_and_user_names_each_slot():
     system = prompts.write_system()
     user = prompts.build_user(prompts.build_material(entry, book))
     assert 'Return ONLY valid JSON' in system
-    assert '"segments"' in system
-    assert 'slot=s01' in user
+    assert '"segments"' in system and '"slot":"s01"' in user
     json.dumps(prompts.CHAPTER_RESPONSE_HINT, ensure_ascii=False)
 
 

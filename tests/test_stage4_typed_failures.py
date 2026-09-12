@@ -22,12 +22,13 @@ from typing import Any
 
 import pytest
 
-from contracts.artifacts import STAGE4_PLAN_CHAPTERS
+from contracts.artifacts import STAGE4_PLAN_CHAPTERS, STAGE2_KNOWLEDGE_LINKS
 from contracts.invariants import (
     FAILURE_REPAIR_OWNERS, FAILURE_STOP_OWNERS, STAGE4_FAILURE_OWNERS,
     stage4_failure_owner, stage4_failure_retryable,
 )
-from contracts.schema.stage4 import PlanChapters
+from contracts.schema.stage4 import EvidenceBindingResponse, PlanChapters
+from contracts.schema.knowledge_links import KnowledgeLinks
 from contracts.schema.report import finding
 from novel import prov
 from novel.errors import GateBlocked, TerminalState
@@ -35,6 +36,7 @@ from novel.node_agents import Stage4PlanSessionPool
 from novel.llm.typed_failures import TypedFailure, WitnessCollector, make
 from novel.report.findings import ran
 from novel.stages.stage4 import checks, plan
+from novel.stages.stage2.global_review import generation_grounding
 from novel.stages.stage4.beats import beat_index
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
@@ -55,13 +57,13 @@ def _stable_code_version(monkeypatch) -> None:
 def test_typed_failure_rejects_unknown_owner_and_missing_candidate() -> None:
     with pytest.raises(ValueError, match='owner 越界'):
         TypedFailure(
-            candidate_sha256='a' * 64, code='fact_ref.stage', rule='fact_ref',
+            candidate_sha256='a' * 64, code='placement_ref', rule='placement_ref',
             chapter_ordinal=1, scene_refs=(), refs=(),
             repair_owner='somebody_else', retryable=True,
             failure_fingerprint='f' * 64)
     with pytest.raises(ValueError, match='candidate_sha256'):
         TypedFailure(
-            candidate_sha256='', code='fact_ref.stage', rule='fact_ref',
+            candidate_sha256='', code='placement_ref', rule='placement_ref',
             chapter_ordinal=1, scene_refs=(), refs=(),
             repair_owner='stage4.plan', retryable=True,
             failure_fingerprint='f' * 64)
@@ -69,24 +71,24 @@ def test_typed_failure_rejects_unknown_owner_and_missing_candidate() -> None:
 
 def test_fingerprint_is_semantic_identity_not_candidate_identity() -> None:
     """同一违约换一份候选重演时指纹必须相等，否则两轮早停永远判不出来。"""
-    first = make(candidate_sha256='a' * 64, code='material_coverage',
-                 rule='material_coverage', chapter_ordinal=3,
-                 refs=['h1'], surfacing='stage4.plan')
-    second = make(candidate_sha256='b' * 64, code='material_coverage',
-                  rule='material_coverage', chapter_ordinal=3,
-                  refs=['h1'], surfacing='stage4.plan')
+    first = make(candidate_sha256='a' * 64, code='binding_compile_refused',
+                 rule='placement_ref', chapter_ordinal=3,
+                 refs=['e01_999'], surfacing='stage4.plan')
+    second = make(candidate_sha256='b' * 64, code='binding_compile_refused',
+                  rule='placement_ref', chapter_ordinal=3,
+                  refs=['e01_999'], surfacing='stage4.plan')
     assert first.failure_fingerprint == second.failure_fingerprint
     assert first.candidate_sha256 != second.candidate_sha256
-    other = make(candidate_sha256='a' * 64, code='material_coverage',
-                 rule='material_coverage', chapter_ordinal=4,
-                 refs=['h1'], surfacing='stage4.plan')
+    other = make(candidate_sha256='a' * 64, code='binding_compile_refused',
+                 rule='placement_ref', chapter_ordinal=4,
+                 refs=['e01_999'], surfacing='stage4.plan')
     assert other.failure_fingerprint != first.failure_fingerprint
 
 
 def test_audit_row_carries_no_prose() -> None:
-    failure = make(candidate_sha256='a' * 64, code='fact_ref.stage',
-                   rule='fact_ref', chapter_ordinal=2, scene_refs=['s01'],
-                   refs=['b7'], surfacing='stage4.plan')
+    failure = make(candidate_sha256='a' * 64, code='placement_ref',
+                   rule='placement_ref', chapter_ordinal=2, scene_refs=['s01'],
+                   refs=['b02_07'], surfacing='stage4.plan')
     row = failure.audit_row()
     assert set(row) == {'loc', 'type', 'count', 'code', 'chapter_ordinal',
                         'fingerprint'}
@@ -116,7 +118,7 @@ def test_unknown_code_fails_closed_to_code_owner() -> None:
 
 def _clean_plan_bundle(
         tmp_path: Path,
-) -> tuple[Path, dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[Path, dict, dict, list[dict], dict, dict]:
     """跑通真实 design→plan 链，返回 (书目录, 编译计划 raw, stage2 raw, 正文)。"""
     book = _book(tmp_path)
     blueprints = _seed_current_stage2(book)
@@ -131,58 +133,65 @@ def _clean_plan_bundle(
     store = ArtifactStore(clean_ctx)
     plan_raw = store.read(PlanChapters, STAGE4_PLAN_CHAPTERS).model_dump(
         by_alias=True)
-    return book, plan_raw, blueprints_raw, main_text()
+    ground = generation_grounding(store).model_dump(mode='json', by_alias=True)
+    knowledge = store.read(KnowledgeLinks, STAGE2_KNOWLEDGE_LINKS).model_dump(mode='json', by_alias=True)
+    return book, plan_raw, blueprints_raw, main_text(), ground, knowledge
 
 
 def test_clean_plan_has_no_typed_failure(tmp_path: Path) -> None:
     """干净计划零 typed 发射；判据扫描本身必须发生（不是空转的绿）。"""
-    _book_dir, plan_raw, blueprints_raw, main_rows = _clean_plan_bundle(tmp_path)
+    book, plan_raw, blueprints_raw, main_rows, ground, knowledge = _clean_plan_bundle(tmp_path)
     witness = WitnessCollector()
     outcomes = checks.check(
         plan_raw, blueprints=blueprints_raw, main_text=main_rows,
-        bidx=beat_index(blueprints_raw, main_rows), witness=witness)
+        bidx=beat_index(blueprints_raw, main_rows), global_g=ground,
+        knowledge_links=knowledge, witness=witness)
     assert outcomes, '判据表常驻读数必须存在，扫描不是空转'
     assert len(witness) == 0
+    readings = [f for outcome in outcomes if outcome.rule == 'verbatim_share' for f in outcome.findings]
+    assert {f.output_ordinal for f in readings} == {r['chapter_ordinal'] for r in main_rows}
     assert witness.finalize(
         candidate_sha256='a' * 64, surfacing='stage4.plan') == ()
 
 
 def test_chapter_scoped_findings_carry_output_ordinal(tmp_path: Path) -> None:
-    _book_dir, plan_raw, blueprints_raw, main_rows = _clean_plan_bundle(tmp_path)
+    book, plan_raw, blueprints_raw, main_rows, ground, knowledge = _clean_plan_bundle(tmp_path)
     chapter = plan_raw['output_chapters'][0]
     assert chapter['scenes'], '夹具必须有场景'
     scene = chapter['scenes'][0]
     ordinal = chapter['output_ordinal']
-    # A 域破坏：land 事实没有恰好落一次；B 域破坏：材料没有恰好落一次。
-    scene['land_fact_refs'] = []
-    scene['material_refs'] = []
+    # A 的呈现目录遗漏节点；校验保留本章归属，不从错误散文反推。
+    assert len(chapter['beat_placements']) >= 2
+    chapter['beat_placements'].pop()
     witness = WitnessCollector()
     outcomes = checks.check(
         plan_raw, blueprints=blueprints_raw, main_text=main_rows,
-        bidx=beat_index(blueprints_raw, main_rows), witness=witness)
-    assert len(witness) >= 2
-    codes = {row['code'] for row in witness.rows()}
-    assert {'fact_coverage', 'material_coverage'} <= codes
-    assert all(row['chapter_ordinal'] == ordinal for row in witness.rows())
-    finalized = witness.finalize(
-        candidate_sha256='a' * 64, surfacing='stage4.plan')
-    owners = {f.code: f.repair_owner for f in finalized}
-    assert owners['fact_coverage'] == 'stage4.design'
-    assert owners['material_coverage'] == 'stage4.plan'
-    retryable = {f.code: f.retryable for f in finalized}
-    assert retryable['material_coverage'] is True   # B 自己能改
-    assert retryable['fact_coverage'] is False      # B 必须停，不是重试
-    # finding 按章拆分且已知章号必填；书级读数保持 None。
-    by_rule: dict[str, list[Any]] = {}
-    for outcome in outcomes:
-        for finding_row in outcome.findings:
-            by_rule.setdefault(outcome.rule, []).append(finding_row)
-    coverage = by_rule['fact_coverage']
-    assert coverage
-    assert all(f.output_ordinal == ordinal for f in coverage)
-    # 常驻 metric 是书级读数：恒有一条 finding 且不带章号。
-    assert by_rule['verbatim_share']
-    assert all(f.output_ordinal is None for f in by_rule['verbatim_share'])
+        bidx=beat_index(blueprints_raw, main_rows), global_g=ground,
+        knowledge_links=knowledge, witness=witness)
+    a_failures = witness.finalize(candidate_sha256='a' * 64, surfacing='stage4.plan')
+    placement = next(row for row in a_failures if row.code == 'placement_ref')
+    assert placement.chapter_ordinal == ordinal
+    assert placement.repair_owner == 'stage4.design' and not placement.retryable
+    assert all(row.chapter_ordinal == ordinal for row in a_failures)
+    findings = [f for outcome in outcomes if outcome.rule == 'placement_ref' for f in outcome.findings]
+    assert findings and all(f.output_ordinal == ordinal for f in findings)
+
+    # B 的闭合编译器拒绝不存在的证据；同样保留章号，不能把 B 问题路由回 A。
+    prepared = plan.prepare_plan_candidate(_ctx(book, 'stage4.plan'))
+    response = _bound_b_response(prepared.candidate, blueprints_raw)
+    response['chapters'][0]['scenes'][0]['deliveries'][0]['evidence_refs'] = ['e01_999']
+    why = prepared.validator(EvidenceBindingResponse.model_validate(response), None)
+    assert why is not None and '证据不属于父节点' in why
+    b_failures = prepared.validator.typed_failures
+    assert len(b_failures) == 1
+    failure = b_failures[0]
+    assert failure.code == 'binding_compile_refused' and failure.chapter_ordinal == ordinal
+    assert failure.repair_owner == 'stage4.plan' and failure.retryable
+    assert {row.repair_owner for row in (*a_failures, *b_failures)} == {'stage4.design', 'stage4.plan'}
+
+    # 映射已坏时不能继续伪造字面/舞台读数；缺失读数必须显式为 unver。
+    reading = next(outcome for outcome in outcomes if outcome.rule == 'verbatim_share')
+    assert reading.unver_why and not reading.findings
 
 
 # ── 4. run_plan 关闭式路由 ──────────────────────────────────────────────────
@@ -208,26 +217,31 @@ def test_a_owned_failure_stops_first_round_without_more_wire(
     plan_ctx = _ctx(book, 'stage4.plan')
 
     real_check = checks.check
+    real_evaluate = plan.evaluate_plan_candidate
     scans = {'n': 0}
+    post_model = False
+
+    def evaluate(*args, **kwargs):
+        nonlocal post_model
+        post_model = True
+        return real_evaluate(*args, **kwargs)
 
     def injecting(plan_dict: dict[str, Any], *, witness=None, **kwargs):
         outcomes = real_check(plan_dict, witness=witness, **kwargs)
         scans['n'] += 1
-        # 批次 2 分层：第 1 次判据扫描是 prepare 的零调用预检（构造性绑定，
-        # 注入干净以放行 wire）；第 2 次起是 evaluate 对**模型绑定**的联合
-        # HARD——A-owned 失败在这里首次现形，模拟「预检通过后模型绑定仍暴露
-        # A 域失败」。判据是输入的确定性函数，任何一次重算（含落盘后的 typed
-        # readback）都必须重现同一条失败；witness 行与 Outcome 成对出现。
-        if scans['n'] >= 2:
-            outcomes.append(ran('causal_closure', [finding(
-                'causal_closure', detail='注入的因果边漂移',
-                evidence=['synthetic-edge'], output_ordinal=1)],
+        # 预检可免费扫描多次；只有实际候选进入 evaluate 后才暴露该 A 缺陷。
+        # 后续 typed readback 必须重现，不能按扫描次数误伤发送前预检。
+        if post_model:
+            outcomes.append(ran('placement_ref', [finding(
+                'placement_ref', detail='注入的呈现端点漂移',
+                evidence=['synthetic-endpoint'], output_ordinal=1)],
                 scanned='测试注入'))
             if witness is not None:
-                witness.add(code='causal_closure', rule='causal_closure',
-                            chapter_ordinal=1, refs=['synthetic-edge'])
+                witness.add(code='placement_ref', rule='placement_ref',
+                            chapter_ordinal=1, refs=['synthetic-endpoint'])
         return outcomes
 
+    monkeypatch.setattr(plan, 'evaluate_plan_candidate', evaluate)
     monkeypatch.setattr(plan.checks, 'check', injecting)
     client, driver = _plan_pool(
         plan_ctx, monkeypatch, session_id='provider-a-stop')
@@ -237,7 +251,7 @@ def test_a_owned_failure_stops_first_round_without_more_wire(
                   error_kind='checkpoint_business_rejected')
     client.close()
 
-    # 预检放行 wire（第 1 次扫描干净），evaluate 首轮即停：不排队反馈，
+    # 预检放行 wire，evaluate 首轮即停：不排队反馈，
     # 只有一次 wire。
     assert scans['n'] >= 2
     assert driver.calls == 1
@@ -266,17 +280,17 @@ def test_same_fingerprint_twice_terminates_early(tmp_path: Path, monkeypatch) ->
         post_model = True
         return real_evaluate(*args, **kwargs)
 
-    def recurring_material_failure(data, up, *, witness=None):
+    def recurring_binding_failure(data, up, *, witness=None):
         hits, feedback = real_verdict(data, up, witness=witness)
         if not post_model:
             return hits, feedback
         if witness is not None:
-            witness.add(code='material_coverage', rule='material_coverage',
-                        chapter_ordinal=1, refs=['synthetic-material'])
-        return (*hits, 'material_coverage'), (*feedback, {'rule': 'material_coverage'})
+            witness.add(code='binding_compile_refused', rule='placement_ref',
+                        chapter_ordinal=1, refs=['synthetic-binding'])
+        return (*hits, 'placement_ref'), (*feedback, {'rule': 'placement_ref'})
 
     monkeypatch.setattr(plan, 'evaluate_plan_candidate', evaluate)
-    monkeypatch.setattr(plan, '_candidate_bundle_verdict', recurring_material_failure)
+    monkeypatch.setattr(plan, '_candidate_bundle_verdict', recurring_binding_failure)
     client, driver = _plan_pool(
         plan_ctx, monkeypatch, session_id='provider-repeat-stop')
     with pytest.raises(TerminalState, match='replacement'):

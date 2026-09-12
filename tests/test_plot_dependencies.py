@@ -19,12 +19,13 @@ from tests.test_stage2_knowledge_links import _scope, _history
 
 
 def _review_pack(pair, bp, source, global_g=None):
-    from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING
+    from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING, STAGE2_CHARACTERS
     from contracts.schema.plot import PlotBlueprint
     from novel.stages.stage2.plot_review import build_workpack
     from novel.stages.stage2.plot_review_dependencies import selections
     registry, knowledge = pair
     data = {STAGE1_MAIN_TEXT: source, STAGE2_CHAPTER_BLUEPRINTS: bp,
+            STAGE2_CHARACTERS: registry.model_dump(mode='json', by_alias=True),
             STAGE2_GLOBAL_GROUNDING: global_g or grounding.compose(registry, knowledge).model_dump(
                 mode='json', by_alias=True)}
     scope = _scope(knowledge, bp, source=source)

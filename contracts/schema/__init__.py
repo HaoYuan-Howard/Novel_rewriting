@@ -150,13 +150,12 @@ from contracts.schema.stage0 import (
 )
 from contracts.schema.stage1 import HookCopy, MainText, MainTextSection
 from contracts.schema.stage2 import (
-    Address, AddressContextPatch, Beat, Blueprint, Canon,
+    Address, AddressContextPatch, Canon,
     BlueprintCharacterProjection, BlueprintCharacterProjectionChapter,
-    BlueprintRelationEdit,
     ChapterBlueprints, Character,
     CharacterAddressReplacement, CharacterRef, CharacterResponse,
     Entities, EvidenceLocator,
-    CausalEdge, FactAtom, FactEvidence, GlobalEdit,
+    FactEvidence, GlobalEdit,
     CharacterCollectionItem, GlobalCollectionAdd, GlobalCollectionDelete,
     GlobalCollectionEdit, GlobalCollectionSplit,
     GlobalEditCommit, GlobalEditCommitBaseline, GlobalEditCommitTarget,
@@ -164,14 +163,14 @@ from contracts.schema.stage2 import (
     GlobalEditFailure, GlobalEditQuarantineGroup, GlobalEditReviewAttestation,
     GlobalEditReviewTarget,
     GlobalGrounding, GlobalCharacterPatch,
-    GroupRef, Hinge, KnowledgeEvent, KnowledgeEventResponse,
-    Narration, Relation, RelationPatch, RelationVisibility,
+    GroupRef, KnowledgeEvent, KnowledgeEventResponse,
+    Relation, RelationPatch, RelationVisibility,
     Secret, SecretPatch, Setting, SettingPatch, SourceSpan, WorldRule,
     WorldRulePatch, WorldRuleVersion,
 )
 from contracts.schema.stage4 import (
-    BlindCandidate, BlindChapterEditRequest, CtxChapter, CtxFacts, CtxGoal, CtxScene,
-    EvidenceBinding, FactRef, PlanChapter, PlanChapters, PlanEdit, PlanGoal,
+    BlindCandidate, BlindChapterEditRequest, CtxChapter, CtxGoal, CtxScene,
+    EvidenceBinding, PlanChapter, PlanChapters, PlanEdit, PlanGoal,
     PlanScene, WriterContext,
 )
 from contracts.schema.stage5 import (
@@ -527,13 +526,12 @@ __all__ = [
     'SecretPatch', 'WorldRulePatch', 'RelationPatch', 'SettingPatch',
     'GlobalCharacterPatch',
     'AddressContextPatch', 'CharacterAddressReplacement', 'CharacterResponse',
-    'ChapterBlueprints', 'Blueprint', 'Beat', 'FactAtom', 'CausalEdge',
-    'BlueprintRelationEdit',
-    'SourceSpan', 'Hinge', 'Narration',
+    'ChapterBlueprints',
+    'SourceSpan',
     'BlindCandidate', 'BlindChapterEditRequest', 'EvidenceBinding',
-    'PlanChapters', 'PlanChapter', 'PlanScene', 'FactRef', 'PlanGoal', 'PlanEdit',
+    'PlanChapters', 'PlanChapter', 'PlanScene', 'PlanGoal', 'PlanEdit',
     'WriterContext',
-    'CtxChapter', 'CtxScene', 'CtxFacts', 'CtxGoal',
+    'CtxChapter', 'CtxScene', 'CtxGoal',
     'Chapter', 'ChapterSegment', 'ChapterResponse',
     'PreparedRecoveryAction', 'PreparedRecoveryChapter',
     'PreparedRecoveryJournal', 'PreparedRecoveryManifest',

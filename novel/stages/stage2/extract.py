@@ -451,20 +451,13 @@ def _require_blueprint_character_projection(
 #: 两份产物的记账键 → 报告的记账节。⚠ **只放产物里真有的键**：
 #: 键不在 ⇒ 报告打「未记录」，那与「记了 0 次」不是一回事（`Q-2` 的三态）。
 _GLOBAL_KEYS = ('setup_chapters_pruned', 'evidence_locator_failures')
-_BLUEPRINT_KEYS = ('verbatim_failures', 'fact_atom_failures',
-                   'hinge_ambiguous_pending')
 
 
 def _accounting_of(both: _Both) -> dict[str, Any]:
-    """⚠ **本层的记账横跨两份产物**，而报告只有一节 —— 这是全链唯一一处。
-    理由与「判据表只有一张」同源：两个节点是**同一层**，把账拆成两节，
-    「这一层落盘前改写了多少」就要读两屏才拼得出来。
-    """
-    got: dict[str, Any] = {}
-    for src, keys in (((both.global_g or {}).get('_provenance') or {}, _GLOBAL_KEYS),
-                      ((both.blueprints or {}).get('_provenance') or {}, _BLUEPRINT_KEYS)):
-        got.update({k: src[k] for k in keys if k in src})
-    return got
+    """Global 的编译失败账；Blueprint 使用关闭式响应验证与 durable 恢复账。"""
+    source = (both.global_g or {}).get('_provenance') or {}
+    return {key: source[key] for key in _GLOBAL_KEYS if key in source}
+
 
 
 def _report(ctx: RunContext, store: ArtifactStore, both: _Both,

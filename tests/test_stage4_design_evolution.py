@@ -1,82 +1,118 @@
 # -*- coding: utf-8 -*-
-"""Stage4A repair/replan/human edit 的纯语义回归。
+"""Stage4 演进反例：策略身份、现役约束操作、Plot 端点与完整章编辑。
 
-这些用例不造审批账、run journal 或 CLI；它们只钉住后续各入口必须共用的数学身份、
-累计关系判官与完整章替换边界。
+累计约束只经正式审批目录处理；原文关系只在 Blueprint 登记。披露读数不代替语义
+裁决，本模块不恢复旧的关系数据库，也不把这些纯函数测试当作付费质量验收。
 """
 from __future__ import annotations
 
 import copy
+from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
-from contracts.invariants import BLIND_ALIAS_ALGORITHM
-from novel.stages.stage4 import design_evolution
-from novel.stages.stage4.blind import BlindPlanError, compile_blind_chapter_edit
+from contracts.invariants import BLIND_ALIAS_ALGORITHM, DESIGN_REVIEW_CONTRACT
+from contracts.schema.api import DesignActiveConstraint, DesignConstraintOperations, DesignRepairConstraint
+from contracts.schema.plot import PlotBlueprint, PlotChapterArrangement
+from contracts.schema.stage4 import PlanChapter
+from novel.errors import HumanEditProtected
+from novel.orchestrator import approvals
 from novel.stages.stage4.design_evolution import (
-    DesignEvolutionError,
-    accumulate_relation_constraints,
-    canonical_relation_constraint,
-    chapter_strategy_sha256,
-    evaluate_relation_constraints,
-    merge_relation_constraints,
-    non_target_chapter_drift,
-    relation_constraint_fingerprint,
-    relation_constraint_set_sha256,
-    replace_candidate_chapters,
-    replan_affected_chapters,
-    strategy_epoch_sha256,
+    DesignEvolutionError, chapter_strategy_sha256, non_target_chapter_drift,
+    replace_candidate_chapters, replan_affected_chapters, strategy_epoch_sha256,
 )
+from novel.stages.stage4.plot_design import (
+    BlindPlanError, assemble_blind_candidate, build_blind_projection,
+    compile_blind_chapter_edit,
+)
+from novel.stages.stage4.plot_placements import compile_placements, required_endpoints
+from novel.stages.stage4.plot_measure import constraint_and_stage_readings
+from tests.plot_fixtures import blueprint as fixture_blueprint, links
+from tests.test_plot_blueprint import blueprint as two_beat_blueprint
+from tests.test_plot_design import design_response, inputs, planner_characters
 
 
-A = 'a_' + '1' * 16
-B = 'a_' + '2' * 16
-C = 'a_' + '3' * 16
-OBSERVER = 'a_' + '4' * 16
+A, B, C = 'b01_01', 'b01_02', 'b01_03'
+X, Y = 'a_' + '1' * 16, 'a_' + '2' * 16
 
 
-def _basis() -> dict[str, str]:
-    return {
-        'review_contract': 'stage4-design-review-v3',
-        'root_clean_sha1': 'a' * 40,
-        'truth_sha256': 'b' * 64,
-        'alias_algorithm': BLIND_ALIAS_ALGORITHM,
-    }
+def _basis():
+    return {'review_contract': DESIGN_REVIEW_CONTRACT, 'root_clean_sha1': 'a' * 40,
+            'truth_sha256': 'b' * 64, 'alias_algorithm': BLIND_ALIAS_ALGORITHM}
 
 
-def _strategy(
-    text: str = '按因果闭合重新组织全书。',
-    *, first: str = 'CH_EVEN', second: str = 'CH_EVEN',
-) -> dict[str, object]:
-    return {
-        'reconstruction_strategy': text,
-        'chapter_weights': [
-            {'chapter_ordinal': 1, 'weight': first},
-            {'chapter_ordinal': 2, 'weight': second},
-        ],
-    }
+def _strategy(text='按因果闭合重新组织全书。', *, first='CH_EVEN', second='CH_EVEN'):
+    return {'reconstruction_strategy': text, 'chapter_weights': [
+        {'chapter_ordinal': 1, 'weight': first}, {'chapter_ordinal': 2, 'weight': second}]}
 
 
-def _relation(kind: str, *aliases: str) -> dict[str, str]:
-    fields = {
-        'story_before': ('before_alias', 'after_alias'),
-        'response_to': ('stimulus_alias', 'response_alias'),
-        'same_scene': ('left_alias', 'right_alias'),
-        'observes': ('observer_alias', 'observed_alias', 'observation_alias'),
-    }[kind]
-    return {'kind': kind, **dict(zip(fields, aliases, strict=True))}
+def _blueprint(relations=()):
+    raw = fixture_blueprint()['blueprints'][0]
+    raw.update(states=[], carry_out_refs=[], constraints=[
+        {'constraint_id': f'c01_{index:02d}', 'kind': kind,
+         'before_beat_ref': before, 'after_beat_ref': after,
+         'observer_char_id': 'char_002' if kind == 'observes' else None,
+         'evidence_refs': ['e01_01', 'e01_02', 'e01_03']}
+        for index, (kind, before, after) in enumerate(relations, 1)])
+    return PlotBlueprint.model_validate(raw)
 
 
-def _scene(
-    *land: str,
-    context: tuple[str, ...] = (),
-    transition: str = 'X_CONTINUE',
-) -> dict[str, object]:
-    return {
-        'land_fact_aliases': list(land),
-        'context_fact_aliases': list(context),
-        'transition': transition,
-    }
+def _arrangement(*scene_beats, bindings=(), earlier=None):
+    slots = [f's{index:02d}' for index in range(1, len(scene_beats) + 1)]
+    placements = []
+    for beat, evidence in ((A, 'e01_01'), (B, 'e01_02'), (C, 'e01_03')):
+        targets = [slot for slot, beats in zip(slots, scene_beats) if beat in beats]
+        placements.append({'beat_ref': beat, 'deliveries': [
+            {'scene_ref': slot, 'presentation_instruction': None if len(targets) == 1 else '承担本场呈现任务，联合完成父节点。',
+             'evidence_refs': [evidence]} for slot in targets]})
+    return PlotChapterArrangement.model_validate({
+        'chapter_ordinal': 1,
+        'scenes': [{'slot': slot, 'purpose': '完整呈现', 'role': 'setup', 'delivery': 'scene',
+                    'transition': 'start' if i == 0 else 'earlier' if slot == earlier else 'continue',
+                    'context_beat_refs': []} for i, slot in enumerate(slots)],
+        'beat_placements': placements, 'anchor_bindings': list(bindings)})
+
+
+def _binding(ref, endpoint, slot):
+    return {'kind': 'constraint', 'ref': ref, 'endpoint': endpoint, 'scene_ref': slot}
+
+
+def _plan(arrangement):
+    raw = arrangement.model_dump(mode='json')
+    def first_at(slot):
+        return next(p['beat_ref'] for p in raw['beat_placements']
+                    if any(d['scene_ref'] == slot for d in p['deliveries']))
+    def goal(slot):
+        beat = first_at(slot)
+        return {'intent': 'establish', 'subject_refs': [{'kind': 'beat', 'ref': beat}],
+                'anchor_beat_ref': beat, 'anchor_scene_ref': slot}
+    return PlanChapter.model_validate({
+        'output_ordinal': 1, 'from_source_ordinals': [1],
+        'chapter_goal': goal(raw['scenes'][0]['slot']), 'open_hook_goal': goal(raw['scenes'][0]['slot']),
+        'end_hook_goal': goal(raw['scenes'][-1]['slot']),
+        'structure_decision': {'mode': 'retain', 'reason': '检查给定呈现安排', 'declared_change_kinds': []},
+        'chapter_rewrite_brief': '完整呈现剧情',
+        'scenes': [{**s, 'budget_chars': 100, 'turn_beat_ref': first_at(s['slot'])} for s in raw['scenes']],
+        'beat_placements': raw['beat_placements'], 'anchor_bindings': raw['anchor_bindings'],
+    }).model_dump(mode='json')
+
+
+def _design_book(count=3):
+    blueprints = [two_beat_blueprint(n).model_dump(mode='json') for n in range(1, count + 1)]
+    truth, mapping = build_blind_projection(blueprints, root_clean_sha1='a' * 40,
+                                            global_g=planner_characters())
+    responses, chapters = [], []
+    for chapter in truth['chapters']:
+        response = {**design_response({'chapter': chapter}),
+                    'output_ordinal': chapter['chapter_ordinal'], 'weight': 'CH_EVEN'}
+        responses.append(response)
+        chapters.append(compile_blind_chapter_edit(response, mapping,
+            truth_chapter=chapter, expected_weight='CH_EVEN'))
+    candidate = assemble_blind_candidate({'reconstruction_strategy': '冻结策略',
+        'chapter_weights': [{'chapter_ordinal': n, 'weight': 'CH_EVEN'} for n in range(1, count + 1)]},
+        chapters, mapping, truth=truth)
+    return candidate, truth, mapping, responses
 
 
 def test_strategy_epoch_excludes_other_chapter_weights_but_chapter_digest_does_not():
@@ -124,302 +160,206 @@ def test_replan_only_marks_own_weight_changes_unless_global_strategy_changes():
         replan_affected_chapters(old, missing_chapter)
 
 
-def test_relation_merge_is_canonical_monotonic_and_content_addressed():
-    canonical_same_scene = _relation('same_scene', A, B)
-    before = _relation('story_before', A, C)
-    committed = [canonical_same_scene]
-    incoming = [canonical_same_scene, before, copy.deepcopy(before)]
-
-    merged = merge_relation_constraints(committed, incoming)
-
-    assert len(merged) == 2
-    assert canonical_relation_constraint(canonical_same_scene) == {
-        'kind': 'same_scene', 'enforcement': 'hard',
-        'left_alias': A, 'right_alias': B,
-    }
-    review_same_scene = {**canonical_same_scene, 'enforcement': 'review'}
-    assert relation_constraint_fingerprint(review_same_scene) == \
-        relation_constraint_fingerprint(canonical_same_scene)
-    assert relation_constraint_set_sha256([*committed, *incoming]) == \
-        relation_constraint_set_sha256(list(reversed([*incoming, *committed])))
-    # 调用者的输入没有被规范化过程原地改写。
-    assert 'enforcement' not in canonical_same_scene
-
-    # blind truth schema 已把无向对规范成升序；repair 路不替坏输入偷换身份。
-    with pytest.raises(DesignEvolutionError, match='same_scene alias 必须升序'):
-        canonical_relation_constraint(_relation('same_scene', B, A))
+def test_constraint_merge_is_canonical_and_content_addressed_without_copying_relation():
+    one = DesignRepairConstraint(code='semantic_constraint', opaque_aliases=[X])
+    two = DesignRepairConstraint(code='semantic_constraint', opaque_aliases=[Y])
+    source = [one, two, one]
+    canonical = approvals._canonical_design_constraints(source)
+    assert canonical == approvals._canonical_design_constraints(list(reversed(source)))
+    assert len(canonical) == 2 and source == [one, two, one]
+    digest = lambda c: approvals._design_constraint_sha256('1' * 64, 1, c)
+    assert len({digest(c) for c in canonical}) == 2
+    assert all(set(c.model_dump()) == {'code', 'scene_refs', 'opaque_aliases'} for c in canonical)
+    with pytest.raises(ValidationError, match='extra_forbidden'):
+        DesignRepairConstraint.model_validate({**one.model_dump(), 'enforcement': 'hard'})
 
 
-def test_relation_constraints_accumulate_only_within_epoch_and_blind_truth():
+@pytest.mark.parametrize('operation', ['keep', 'withdraw', 'supersede'])
+def test_constraint_operations_bind_epoch_chapter_and_exact_active_set(operation):
     epoch = '1' * 64
-    next_epoch = '2' * 64
-    before = _relation('story_before', A, B)
-    same_scene = _relation('same_scene', B, C)
-    truth = [
-        {**before, 'enforcement': 'review'},
-        {**same_scene, 'enforcement': 'review'},
-    ]
+    old = DesignRepairConstraint(code='semantic_constraint', opaque_aliases=[X])
+    new = DesignRepairConstraint(code='semantic_constraint', opaque_aliases=[Y])
+    sha = approvals._design_constraint_sha256(epoch, 1, old)
+    active = {sha: DesignActiveConstraint(constraint_sha256=sha, constraint=old,
+                                         source_decision_sha256s=['a' * 64])}
+    catalog = approvals._constraint_catalog_from_active(epoch, 1, active)
+    ops = DesignConstraintOperations(expected_constraint_set_sha256=catalog.expected_constraint_set_sha256,
+        items=[{'kind': operation, 'constraint_sha256': sha, 'reason': '显式处置真实历史约束',
+                'replacements': [new] if operation == 'supersede' else []}])
+    retained, replacement = approvals._apply_design_constraint_operations(active, ops, epoch=epoch, ordinal=1)
+    assert retained == (active if operation == 'keep' else {})
+    assert replacement == ([new] if operation == 'supersede' else [])
+    assert active[sha].source_decision_sha256s == ['a' * 64]
+    assert approvals._design_constraint_sha256('2' * 64, 1, old) != sha
+    assert approvals._design_constraint_sha256(epoch, 2, old) != sha
+    for wrong_epoch, wrong_chapter in [('2' * 64, 1), (epoch, 2)]:
+        with pytest.raises(HumanEditProtected, match='集合已漂移'):
+            approvals._apply_design_constraint_operations(active, ops,
+                epoch=wrong_epoch, ordinal=wrong_chapter)
+    with pytest.raises(HumanEditProtected, match='精确覆盖'):
+        approvals._apply_design_constraint_operations(active, ops.model_copy(update={'items': []}),
+                                                       epoch=epoch, ordinal=1)
 
-    accumulated = accumulate_relation_constraints(
-        parent_epoch_sha256=epoch,
-        current_epoch_sha256=epoch,
-        inherited=[before],
-        requested=[same_scene, before],
-        truth_relations=truth,
-    )
-    assert {
-        relation_constraint_fingerprint(row) for row in accumulated
-    } == {
-        relation_constraint_fingerprint(before),
-        relation_constraint_fingerprint(same_scene),
-    }
 
-    # 宏观策略换 epoch 后旧承诺不得继续绑定新策略。
-    reset = accumulate_relation_constraints(
-        parent_epoch_sha256=epoch,
-        current_epoch_sha256=next_epoch,
-        inherited=[before],
-        requested=[same_scene],
-        truth_relations=truth,
-    )
-    assert reset == (canonical_relation_constraint(same_scene),)
-
-    invented = _relation('story_before', A, C)
-    with pytest.raises(DesignEvolutionError, match='blind truth'):
-        accumulate_relation_constraints(
-            parent_epoch_sha256=epoch,
-            current_epoch_sha256=epoch,
-            inherited=[], requested=[invented], truth_relations=truth)
-
-    hard_truth = _relation('response_to', A, C)
-    with pytest.raises(DesignEvolutionError, match='review relation'):
-        accumulate_relation_constraints(
-            parent_epoch_sha256=epoch,
-            current_epoch_sha256=epoch,
-            inherited=[], requested=[hard_truth],
-            truth_relations=[*truth, {**hard_truth, 'enforcement': 'hard'}])
+def test_semantic_repair_can_only_reference_registered_constraint_or_endpoint():
+    from contracts.schema.stage4 import BlindCandidateChapter
+    from novel.stages.stage4.plot_design import compile_blind_chapter_design
+    from contracts.schema.plot_planning import PlannerChapter
+    from tests.test_plot_blueprint import chapter_response
+    response = chapter_response()
+    response['constraints'] = [{'constraint_key': 'c1', 'kind': 'response_to',
+        'before_beat_ref': 'b1', 'after_beat_ref': 'b2', 'observer_char_id': None,
+        'evidence': [{'start_para': 1, 'end_para': 2}]}]
+    _bp, truth, mapping, public, private = inputs(response)
+    raw = compile_blind_chapter_design(design_response(public), private, mapping,
+        truth_chapter=truth['chapters'][0], chapter_weight='CH_EVEN')
+    chapter = BlindCandidateChapter.model_validate(raw)
+    planner = PlannerChapter.model_validate(truth['chapters'][0])
+    def request(alias):
+        constraint = DesignRepairConstraint(code='semantic_constraint', opaque_aliases=[alias])
+        return SimpleNamespace(chapters=[SimpleNamespace(output_ordinal=1, constraints=[constraint],
+            subject=SimpleNamespace(chapter=chapter, blind_truth=planner))])
+    approvals._require_design_constraint_refs(request(planner.constraints[0].alias))
+    for alias in (planner.beats[0].alias, 'a_' + 'f' * 16):
+        with pytest.raises(HumanEditProtected, match='已登记约束|越界'):
+            approvals._require_design_constraint_refs(request(alias))
+    assert planner.constraints[0].kind == 'response_to'
 
 
 @pytest.mark.parametrize('relations', [
-    [
-        _relation('story_before', A, B),
-        _relation('story_before', B, C),
-        _relation('story_before', C, A),
-    ],
-    [
-        _relation('response_to', A, B),  # A <= B
-        _relation('story_before', B, A),  # B < A
-    ],
-    [
-        _relation('observes', OBSERVER, A, B),  # A <= B
-        _relation('story_before', B, A),
-    ],
+    [('story_before', A, B), ('story_before', B, C), ('story_before', C, A)],
+    [('response_to', A, B), ('story_before', B, A)],
+    [('observes', A, B), ('story_before', B, A)],
+    [('cause', A, B), ('response_to', B, C), ('observes', C, A)],
 ])
-def test_relation_conflicts_close_before_wire(relations):
-    with pytest.raises(DesignEvolutionError, match='严格顺序环'):
-        merge_relation_constraints((), relations)
+def test_registered_strict_order_cycles_are_rejected_before_planning(relations):
+    with pytest.raises(ValidationError, match='严格顺序环'):
+        _blueprint(relations)
 
 
-def test_same_scene_does_not_invent_first_visibility_equality_conflict():
-    # 生产判官只要求场景集合有交集：A 可以先出现，之后与 B 同场。
-    relations = merge_relation_constraints((), [
-        _relation('story_before', A, B),
-        _relation('same_scene', A, B),
-    ])
-    chapter = {'scenes': [
-        _scene(A),
-        _scene(B, context=(A,)),
-    ]}
-
-    evaluation = evaluate_relation_constraints(relations, chapter)
-
-    assert evaluation.unclosed == ()
-    assert evaluation.locally_closed
-    assert evaluation.fully_verified
+@pytest.mark.parametrize('relations', [
+    [('response_to', A, B), ('response_to', B, A)],
+    [('response_to', A, B), ('observes', B, A)],
+    [('same_scene', A, B), ('story_before', A, B)],
+])
+def test_non_strict_cycles_and_same_scene_do_not_invent_strict_time(relations):
+    assert len(_blueprint(relations).constraints) == len(relations)
 
 
-def test_story_before_uses_story_time_instead_of_disclosure_array_order():
-    relation = _relation('story_before', A, B)
-    fingerprint = relation_constraint_fingerprint(relation)
-
-    # 先披露 B，再以 X_EARLIER 回到 A：披露倒序，但故事世界 A < B。
-    valid_flashback = evaluate_relation_constraints(
-        [relation], {'scenes': [
-            _scene(B, transition='X_START'),
-            _scene(A, transition='X_EARLIER'),
-        ]})
-    assert valid_flashback.unclosed == ()
-    assert valid_flashback.needs_story_time_review == ()
-    assert valid_flashback.fully_verified
-
-    # 数组看似 A、B，B 却显式打开 earlier：故事世界实际 B < A。
-    reversed_story_time = evaluate_relation_constraints(
-        [relation], {'scenes': [
-            _scene(A, transition='X_START'),
-            _scene(B, transition='X_EARLIER'),
-        ]})
-    assert reversed_story_time.unclosed[0].findings == (
-        f'story_before:{A}!<{B}:故事时序反向',)
-
-    # 同场没有事实内序字段；不能把“机器够不着”洗成 fully verified。
-    same_scene = evaluate_relation_constraints(
-        [relation], {'scenes': [_scene(A, B, transition='X_START')]})
-    assert same_scene.unclosed == ()
-    assert same_scene.needs_story_time_review == (fingerprint,)
-    assert not same_scene.fully_verified
+def test_same_scene_binds_actual_deliveries_without_first_visibility_equality():
+    bp = _blueprint([('story_before', A, B), ('same_scene', A, B)])
+    arrangement = _arrangement((A,), (A, B), (C,), bindings=[
+        _binding('c01_01', 'before', 's01'), _binding('c01_02', 'before', 's02')])
+    compiled = compile_placements(bp, arrangement)
+    endpoints = {r.key(): r.scene_ref for r in compiled.bindings}
+    assert endpoints['constraint', 'c01_02', 'before'] == endpoints['constraint', 'c01_02', 'after'] == 's02'
+    assert endpoints['constraint', 'c01_01', 'before'] == 's01'
+    assert compiled.completed_at[A] == 's02'
+    missing = arrangement.model_copy(update={'anchor_bindings': []})
+    with pytest.raises(ValueError, match='必须明确绑定'):
+        compile_placements(bp, missing)
 
 
-def test_evaluator_returns_each_accumulated_unclosed_relation_with_stable_identity():
-    satisfied = _relation('story_before', A, B)
-    unclosed = _relation('same_scene', A, C)
-    chapter = {'scenes': [_scene(A), _scene(B), _scene(C)]}
-
-    evaluation = evaluate_relation_constraints([unclosed, satisfied], chapter)
-
-    assert len(evaluation.unclosed) == 1
-    finding = evaluation.unclosed[0]
-    assert finding.kind == 'same_scene'
-    assert finding.constraint_sha256 == relation_constraint_fingerprint(unclosed)
-    assert finding.findings == (f'same_scene:{A}!={C}',)
-    assert evaluation.needs_binding_preflight == ()
-
-
-def test_observes_is_locally_checked_but_never_claimed_fully_verified_in_a():
-    observes = _relation('observes', OBSERVER, A, B)
-    fingerprint = relation_constraint_fingerprint(observes)
-
-    ordered = evaluate_relation_constraints(
-        [observes], {'scenes': [_scene(A), _scene(B)]})
-    assert ordered.unclosed == ()
-    assert ordered.needs_binding_preflight == (fingerprint,)
-    assert ordered.locally_closed
-    assert not ordered.fully_verified
-
-    reversed_order = evaluate_relation_constraints(
-        [observes], {'scenes': [_scene(B), _scene(A)]})
-    assert reversed_order.unclosed[0].findings == (f'observes:{B}<{A}',)
-    assert reversed_order.needs_binding_preflight == (fingerprint,)
+@pytest.mark.parametrize(('scenes', 'earlier', 'order'), [
+    ([(B,), (A,), (C,)], 's02', 'reverse'),
+    ([(A,), (B,), (C,)], 's02', 'forward'),
+    ([(A, B), (C,)], None, 'same_scene'),
+])
+def test_story_time_is_not_certified_from_disclosure_or_earlier_transition(scenes, earlier, order):
+    bp = _blueprint([('story_before', A, B)])
+    arrangement = _arrangement(*scenes, earlier=earlier)
+    compiled = compile_placements(bp, arrangement)
+    reading = constraint_and_stage_readings(bp.model_dump(mode='json'), _plan(arrangement), knowledge_links=links())
+    assert reading['causal'][0]['disclosure_order'] == order
+    assert not hasattr(compiled, 'fully_verified')
+    assert 'story_time_verified' not in reading and 'semantic_pass' not in reading
+    assert bp.constraints[0].before_beat_ref == A, '呈现顺序和倒叙标记不得改写故事关系'
 
 
-def test_relation_evaluator_delegates_to_production_judge(monkeypatch):
-    calls: list[tuple[list[dict[str, object]], str]] = []
-
-    def fake_findings(relations, _positions, *, suffix=''):
-        calls.append((copy.deepcopy(relations), suffix))
-        return []
-
-    monkeypatch.setattr(
-        design_evolution.checks,
-        'narrative_relation_scene_findings',
-        fake_findings,
-    )
-    evaluation = evaluate_relation_constraints(
-        [_relation('response_to', A, B), _relation('same_scene', A, C)],
-        {'scenes': [_scene(A, B, C)]},
-    )
-
-    assert evaluation.fully_verified
-    assert len(calls) == 2
-    assert all(suffix == '_alias' for _relations, suffix in calls)
-    assert all(
-        relation['enforcement'] == 'hard'
-        for relations, _suffix in calls
-        for relation in relations
-    )
+def test_unclosed_constraint_keeps_registered_identity_and_other_endpoints():
+    bp = _blueprint([('story_before', A, B), ('same_scene', A, C)])
+    before = bp.model_dump_json()
+    endpoints = required_endpoints(bp, (), ())
+    assert endpoints['constraint', 'c01_02', 'before'] == A
+    assert endpoints['constraint', 'c01_02', 'after'] == C
+    with pytest.raises(ValueError, match='必须同场约束没有闭合'):
+        compile_placements(bp, _arrangement((A,), (B,), (C,)))
+    assert bp.model_dump_json() == before
+    valid = compile_placements(bp, _arrangement((A, C), (B,)))
+    assert {r.ref for r in valid.bindings} == {'c01_01', 'c01_02'}
 
 
-def _candidate() -> dict[str, object]:
-    return {
-        'reconstruction_strategy': '冻结策略',
-        'output_chapters': [
-            {'output_ordinal': 1, 'marker': 'old-1', 'scenes': [_scene(A)]},
-            {'output_ordinal': 2, 'marker': 'old-2', 'scenes': [_scene(B)]},
-            {'output_ordinal': 3, 'marker': 'old-3', 'scenes': [_scene(C)]},
-        ],
-        '_provenance': {'marker': 'old-provenance'},
-    }
+@pytest.mark.parametrize('reverse', [False, True])
+def test_observer_and_knowledge_truth_are_not_certified_by_position(reverse):
+    bp = _blueprint([('observes', A, B)])
+    arrangement = _arrangement(*([(B,), (A,), (C,)] if reverse else [(A,), (B,), (C,)]))
+    reading = constraint_and_stage_readings(bp.model_dump(mode='json'), _plan(arrangement), knowledge_links=links())
+    assert reading['causal'][0]['kind'] == 'observes'
+    assert reading['causal'][0]['disclosure_order'] == ('reverse' if reverse else 'forward')
+    assert bp.constraints[0].observer_char_id == 'char_002'
+    assert not any('verified' in key for key in reading)
+    assert 'character_knowledge' not in reading, '排序不铸造人物知晓许可'
+
+
+def test_current_readings_delegate_to_the_single_placement_compiler(monkeypatch):
+    from novel.stages.stage4 import plot_placements
+    calls = []
+    real = plot_placements.compile_placements
+    def capture(blueprint, arrangement, **kwargs):
+        calls.append([c.constraint_id for c in blueprint.constraints])
+        return real(blueprint, arrangement, **kwargs)
+    monkeypatch.setattr(plot_placements, 'compile_placements', capture)
+    bp = _blueprint([('response_to', A, B), ('same_scene', A, C)])
+    result = constraint_and_stage_readings(bp.model_dump(mode='json'),
+        _plan(_arrangement((A, C), (B,))), knowledge_links=links())
+    assert calls == [['c01_01', 'c01_02']]
+    assert result['causal'][0]['constraint_ref'] == 'c01_01'
 
 
 def test_full_chapter_replace_is_exact_and_non_targets_are_byte_stable():
-    previous = _candidate()
-    replacement = {
-        'output_ordinal': 2, 'marker': 'human-2', 'scenes': [_scene(B, C)]}
-
-    current = replace_candidate_chapters(
-        previous, [replacement], target_chapters=[2])
-
+    previous, _truth, _mapping, _responses = _design_book()
+    previous['_provenance'] = {'marker': '原来源账不由纯替换函数重签'}
+    replacement = copy.deepcopy(previous['output_chapters'][1])
+    replacement['chapter_rewrite_brief'] = '人审修订第二章的呈现组织'
+    current = replace_candidate_chapters(previous, [replacement], target_chapters=[2])
     assert current['output_chapters'][1] == replacement
     assert current['output_chapters'][0] == previous['output_chapters'][0]
     assert current['output_chapters'][2] == previous['output_chapters'][2]
     assert current['_provenance'] == previous['_provenance']
     assert non_target_chapter_drift(previous, current, [2]) == ()
-    assert previous['output_chapters'][1]['marker'] == 'old-2'
-
+    assert previous['output_chapters'][1]['chapter_rewrite_brief'] != replacement['chapter_rewrite_brief']
     drifted = copy.deepcopy(current)
-    drifted['output_chapters'][0]['marker'] = 'drifted'
+    drifted['output_chapters'][0]['chapter_rewrite_brief'] = '无关章节也被错误改动'
     assert non_target_chapter_drift(previous, drifted, [2]) == (1,)
     with pytest.raises(DesignEvolutionError, match='精确覆盖'):
         replace_candidate_chapters(previous, [replacement], target_chapters=[1, 2])
 
 
-def _complete_human_chapter() -> dict[str, object]:
-    return {
-        'output_ordinal': 1,
-        'structure_decision': {
-            'mode': 'retain', 'reason': '本章按因果线推进。',
-            'declared_change_kinds': [],
-        },
-        'chapter_goal': {'intent': 'G_ADVANCE', 'fact_aliases': [B]},
-        'open_hook_goal': {'intent': 'G_OPEN', 'fact_aliases': [A]},
-        'end_hook_goal': {'intent': 'G_CLOSE', 'fact_aliases': [B]},
-        'weight': 'CH_EVEN',
-        'chapter_rewrite_brief': '先落入口事实，再完成章末状态。',
-        'scenes': [
-            {
-                'weight': 'W_STRONG', 'purpose': '落下入口事实',
-                'role': 'R_COLD_OPEN', 'delivery': 'D_SCENE',
-                'transition': 'X_START',
-                'land_fact_aliases': [A], 'context_fact_aliases': [],
-                'turn_fact_alias': A,
-                'entry_state_aliases': [], 'exit_state_aliases': [A],
-            },
-            {
-                'weight': 'W_STRONG', 'purpose': '完成章末事实',
-                'role': 'R_PAYOFF', 'delivery': 'D_SCENE',
-                'transition': 'X_CONTINUE',
-                'land_fact_aliases': [B], 'context_fact_aliases': [A],
-                'turn_fact_alias': B,
-                'entry_state_aliases': [], 'exit_state_aliases': [B],
-            },
-        ],
-    }
-
-
-def test_human_full_chapter_uses_the_canonical_compiler_and_cannot_change_weight():
-    mapping = {
-        'alias_algorithm': BLIND_ALIAS_ALGORITHM,
-        'truth_sha256': 'c' * 64,
-        'fact_aliases': {A: 'f01_001', B: 'f01_002'},
-        'participant_aliases': {},
-    }
-    truth_chapter = {
-        'chapter_ordinal': 1,
-        'entry_state_aliases': [],
-    }
-    response = _complete_human_chapter()
-
-    compiled = compile_blind_chapter_edit(
-        response, mapping, truth_chapter=truth_chapter,
-        expected_weight='CH_EVEN')
-
-    assert [scene['candidate_scene_id'] for scene in compiled['scenes']] == [
-        'c01s01', 'c01s02']
-    assert compiled['scenes'][1]['entry_state_aliases'] == [A]
+def test_human_full_chapter_uses_canonical_compiler_without_changing_weight():
+    candidate, truth, mapping, responses = _design_book(2)
+    response = responses[0]
+    compiled = compile_blind_chapter_edit(response, mapping,
+        truth_chapter=truth['chapters'][0], expected_weight='CH_EVEN')
+    assert compiled == candidate['output_chapters'][0]
+    assert [s['candidate_scene_id'] for s in compiled['scenes']] == ['c01s01', 'c01s02']
     assert 'candidate_scene_id' not in response['scenes'][0]
+    changed = copy.deepcopy(response)
+    changed['weight'] = 'CH_MAJOR'
+    with pytest.raises(BlindPlanError, match='不能顺带改变策略权重'):
+        compile_blind_chapter_edit(changed, mapping,
+            truth_chapter=truth['chapters'][0], expected_weight='CH_EVEN')
 
-    changed_weight = copy.deepcopy(response)
-    changed_weight['weight'] = 'CH_MAJOR'
-    with pytest.raises(BlindPlanError, match='weight 与当前策略不一致'):
-        compile_blind_chapter_edit(
-            changed_weight, mapping, truth_chapter=truth_chapter,
-            expected_weight='CH_EVEN')
+
+@pytest.mark.parametrize('defect', ['missing_placement', 'unknown_subject', 'forged_scene_id'])
+def test_human_full_chapter_cannot_bypass_closed_placement_identity(defect):
+    _candidate, truth, mapping, responses = _design_book(2)
+    response = copy.deepcopy(responses[0])
+    if defect == 'missing_placement':
+        response['beat_placements'].pop()
+    elif defect == 'unknown_subject':
+        response['beat_placements'][0]['beat_alias'] = 'a_' + 'f' * 16
+    else:
+        response['scenes'][0]['candidate_scene_id'] = 'forged'
+    with pytest.raises((BlindPlanError, ValidationError)):
+        compile_blind_chapter_edit(response, mapping,
+            truth_chapter=truth['chapters'][0], expected_weight='CH_EVEN')

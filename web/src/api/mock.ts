@@ -7,7 +7,7 @@
  * 和接了真后端之后**完全一样**。
  *
  * 三件事故意做在这里而不是渲染层：
- *   1. 「样本只抓了一本书、第 3 章」这个知识 —— 它是数据的事实，不是界面的事实
+ *   1. 历史样例与当前完整剧情测试书的范围 —— 由假后端分别接入，不拼接身份
  *   2. 命令行的拼装 —— U-09 要求确认框里那条命令由服务端下发
  *   3. 花不花钱、会不会写盘 —— 前端一行判定都不许有
  */
@@ -82,15 +82,13 @@ export const SAMPLE_SID = '7615069877019300633'
 /** 逐章响应只抓了第 3 章 */
 export const SAMPLE_ORDINAL = 3
 
-/* ------------------------------------------ 冻结原样（盘上 20 份，运行时排除 2 份） */
+/* ------------------------------------------ 冻结原样（只加载仍消费的三份历史输入） */
 
 const RAW = import.meta.glob(
   [
-    '../mocks/*.json',
-    // 两份旧 Stage5 抓包继续留作冻结证据，但现役 mock 已改读 backend_v1；
-    // 不把其中的重复正文与退役字段继续打进 eager bundle。
-    '!../mocks/stage5_ch3.json',
-    '!../mocks/review_ch3.json',
+    '../mocks/novels.json',
+    '../mocks/novel_overview.json',
+    '../mocks/stage0_extras.json',
   ],
   { eager: true, import: 'default' },
 ) as Record<string, unknown>
@@ -262,7 +260,12 @@ function mockNovels(): NovelsResponse {
  * `src/mocks/` 那 20 份是**冻结的证据基线**，从此不再被新形状的端点消费；
  * mock 现役读的是这一批 —— 与真后端同一形状，屏幕在两种模式下走同一条代码路径。
  */
-const RAW_V1 = import.meta.glob('../fixtures/backend_v1/*.json', {
+const RAW_V1 = import.meta.glob([
+  '../fixtures/backend_v1/*.json',
+  // 这些历史材料只作 Global 证据与拒绝旧结构的反例，不再作为页面响应打包。
+  '!../fixtures/backend_v1/reading_ch3.json',
+  '!../fixtures/backend_v1/check_stage2.json',
+], {
   eager: true,
   import: 'default',
 }) as Record<string, unknown>
@@ -618,7 +621,7 @@ function mockDesignHistoryEntry(decision: DesignReviewDecision) {
 
 function freshDoc(sid: string): ApprovalDoc {
   return {
-    v: 6,
+    v: 7,
     sid,
     gate: { s0: false, s1: false, s2: false, s4: false, s5: false, s6: false, s7: false },
     seen: { read: false, global: false },
@@ -669,7 +672,7 @@ function seededDoc(sid: string): ApprovalDoc {
   const decision = seededStructureDecision()
   const designDecision = seededDesignReviewDecision()
   return {
-    v: 6,
+    v: 7,
     sid,
     gate: { s0: true, s1: true, s2: true, s4: true, s5: true, s6: false, s7: false },
     seen: { read: true, global: true },
@@ -695,7 +698,7 @@ function seededDoc(sid: string): ApprovalDoc {
         constraint_code: 'material_conflict',
         chapter_ordinal: SAMPLE_ORDINAL,
         scenes: ['c03s01'],
-        reason: '两场共用同一事实材料，绑定可行但需要人工确认重复披露风险。',
+        reason: '两场共用同一段证据，需审阅联合呈现是否遗漏或重复；证据重叠不直接判重复。',
         closed_refs: ['a_' + '1'.repeat(16)],
       }],
     },
@@ -719,11 +722,11 @@ function seededDoc(sid: string): ApprovalDoc {
 
 function loadDoc(sid: string): ApprovalDoc {
   const got = lsRead<unknown>('approvals.' + sid)
-  // spawns 是服务端的事；只接受当前公开 v6，旧本地记录按当前种子重建。
-  if (got && typeof got === 'object' && (got as { v?: unknown }).v === 6) {
+  // spawns 是服务端的事；只接受当前公开 v7，旧本地记录不沿用审批。
+  if (got && typeof got === 'object' && (got as { v?: unknown }).v === 7) {
     return withMockSpawns(got as ApprovalDoc)
   }
-  const seed = sid === SAMPLE_SID ? seededDoc(sid) : freshDoc(sid)
+  const seed = !got && sid === SAMPLE_SID ? seededDoc(sid) : freshDoc(sid)
   const projected = withMockSpawns(seed)
   lsWrite('approvals.' + sid, projected)
   return projected
@@ -862,7 +865,7 @@ function saveGlobalReview(sid: string, review: GlobalReviewResponse): GlobalRevi
 
 /* ------------------------------------------------------------ 命令行拼装 */
 
-/** 取值面直接透传新后端抓包（82 条真实动作，真实节点 id）——mock 不再打补丁。 */
+/** 枚举取值直接透传当前后端生成的样例；仅补历史显示辅助字段。 */
 function enums(): EnumsResponse {
   const frozen = fx<EnumsResponse>('enums.json')
   if (frozen.spoiler_disclosure) return frozen
@@ -893,7 +896,7 @@ function paidOf(req: JobRequest): boolean {
 }
 
 function argvOf(req: JobRequest): string {
-  const parts = ['python', '-m', 'novel_refactor.cli', req.kind, '--sid', req.sid]
+  const parts = ['python', '-m', 'novel.cli', req.kind, '--sid', req.sid]
   if (req.extra) parts.push(...req.extra)
   if (req.args) parts.push(...req.args)
   if (req.kind === 'stage5.write' && req.ordinal) {
@@ -937,7 +940,7 @@ function previewStepsOf(req: JobRequest): JobPreview['steps'] {
     egress_authorized: null,
   }
   const checkArgv = (kind: string) =>
-    ['python', '-m', 'novel_refactor.cli', kind, '--sid', req.sid, '--check-only'].join(' ')
+    ['python', '-m', 'novel.cli', kind, '--sid', req.sid, '--check-only'].join(' ')
   if (req.kind === 'stage5.write') {
     return [
       first,
@@ -1736,6 +1739,10 @@ export const mockApi: Api = {
     if (sid !== SAMPLE_SID) return noBook(path)
     // stage0/1 在样本书上没跑过（真后端答 404）—— null = 「还没跑」，不是「通过」。
     if (kind === 'stage0' || kind === 'stage1') return later(null)
+    if (kind === 'stage2') return fail(new ApiError('server', path, {
+      status: 501, message: '此历史样本没有当前完整剧情蓝图，不能用旧事实检查作为本轮结论。',
+      backendKind: 'MockCapabilityUnavailable',
+    }))
     return later(mockCheck(kind))
   },
 

@@ -114,15 +114,14 @@ def test_a_range_that_starts_mid_paragraph_still_projects_back_by_intersection()
 def test_bad_paragraph_numbers_are_refused_with_a_cause_not_an_estimate(args, probe):
     """定位不到就抛，**绝不退回估算**——估算方向会整个反过来。
 
-    消息即失败根因：`normalize` 把它原样记进 `_provenance.verbatim_failures`，
-    所以措辞里必须说得出是哪一种毛病。
+    消息明确说明失败根因，供当前编译/审阅恢复反馈，不用估算坐标掩盖越界。
     """
     with pytest.raises(ParagraphIndexError, match=probe):
         span_of(CHAPTER, *args)
 
 
-def test_paragraph_slice_is_the_search_face_for_hinges():
-    """hinge 的段内定位：搜索面从整章缩到这一段。"""
+def test_paragraph_slice_locates_one_exact_evidence_paragraph():
+    """证据段定位只返回该段的准确字符边界。"""
     assert paragraph_slice(CHAPTER, 2) == (8, 17)
     assert CHAPTER[slice(*paragraph_slice(CHAPTER, 2))] == '乙抬头看了他一眼。'
     with pytest.raises(ParagraphIndexError, match='越界'):
