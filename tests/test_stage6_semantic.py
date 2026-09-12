@@ -332,7 +332,7 @@ def test_stage6_workpack_uses_full_sha256_and_keeps_each_ab_judgement(
 ):
     """工作包外部锁必须是 64 位 SHA-256，且不能把 A/B 压成聚合一句。"""
     from novel.stages.stage6 import hook as hook_node
-    from tests.test_stage6_style_ab_review import _hook
+    from tests.factories import stage6_hook as _hook
 
     art = _hook([TEXT_A, TEXT_B, TEXT_C])
     semantic_artifact = _semantic_artifact(_all_clean_reviews())

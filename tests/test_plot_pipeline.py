@@ -45,10 +45,9 @@ REWRITTEN_BEATS = {
 }
 
 
-def test_plot_pipeline_reaches_final_delivery_and_restarts(tmp_path, monkeypatch):
-    book = produce_through_first_chapter(
-        tmp_path, monkeypatch, distributed=True, grounding=grounded_global())
-    from novel.stages.stage5 import write, review
+def stage5_writer(book):
+    """仅替换模型传输，供正常生成与提交故障使用同一真实写作入口。"""
+    from novel.stages.stage5 import review
     ctx = _ctx(book, 'stage5.write')
     writer_book = review.load_book(ctx, ArtifactStore(ctx))
     requested = []
@@ -62,6 +61,12 @@ def test_plot_pipeline_reaches_final_delivery_and_restarts(tmp_path, monkeypatch
                 REWRITTEN_BEATS[d['beat_ref']] for d in scene['deliveries'])}
             for scene in entry['scenes']]})
     client, wire = _client(ctx, write_next)
+    return ctx, client, wire, requested
+
+
+def complete_stage5(book):
+    from novel.stages.stage5 import write, review
+    ctx, client, wire, requested = stage5_writer(book)
     written = write.run_write(ctx, client, chapters='2,3')
     assert written.passed, written.model_dump_json()
     assert sorted(requested) == [2, 3] and len(wire.calls) == 2
@@ -72,6 +77,8 @@ def test_plot_pipeline_reaches_final_delivery_and_restarts(tmp_path, monkeypatch
     closure = _ruling_request(ArtifactStore(_ctx(book, 'stage5.review', paid=False)))
     assert approvals.approve_stage5_closure(book.parent, ctx.sid, closure).gate['s5']
 
+
+def complete_stage6(book):
     from novel.stages.stage6 import hook, semantic
     hook_ctx = _ctx(book, 'stage6.hook')
     texts = ['来信说，父亲已经回了城。\n\n廊下的李宝珠看过残花，把那封信折进衣袖。',
@@ -97,6 +104,8 @@ def test_plot_pipeline_reaches_final_delivery_and_restarts(tmp_path, monkeypatch
     hook.run_approve(approve_ctx, pick=1, actor='test:文案审阅者',
                      reason='合成候选与原文、全书成稿已对照', review_token=pack.review_token)
 
+
+def complete_stage7(book):
     from novel.stages.stage7 import rename, assemble
     rename_ctx = _ctx(book, 'stage7.rename')
     def rename_characters(req, _index):
@@ -120,6 +129,22 @@ def test_plot_pipeline_reaches_final_delivery_and_restarts(tmp_path, monkeypatch
     from pathlib import Path
     result = Path(path).read_text(encoding='utf-8')
     assert '顾清棠' in result and '李宝珠' not in result and '母亲' in result
+    return book
+
+
+def build_plot_pipeline(tmp_path, monkeypatch):
+    """用正式 producer 建立小型整链盘面，供消费与失效测试准备上游。"""
+    book = produce_through_first_chapter(
+        tmp_path, monkeypatch, distributed=True, grounding=grounded_global())
+    complete_stage5(book)
+    complete_stage6(book)
+    return complete_stage7(book)
+
+
+def test_plot_pipeline_reaches_final_delivery_and_restarts(tmp_path, monkeypatch):
+    from novel.stages.stage7 import assemble
+    book = build_plot_pipeline(tmp_path, monkeypatch)
     # 重新创建读取上下文，最终正式账与文本仍一致；没有重用内存审批状态。
     verified = assemble.read_current_book(_ctx(book, 'stage7.assemble', paid=False))
-    assert verified == result
+    from novel import paths
+    assert verified == (book / paths.book_txt_rel(book)).read_text(encoding='utf-8')

@@ -1,5 +1,81 @@
 # 测试分层
 
+四层职责与触发条件统一见 `AGENTS.md::测试选择与批次验收`。分层按测试回答的问题划分，
+不要求移动现有文件或复制用例。`tests/suite_catalog.json` 显式登记模块层级、stage 归属和混合文件的
+逐用例覆盖；`tests/selection.py` 将其接到 pytest。golden set 使用独立 `python -m tests.golden` 入口。
+
+- 单元 / contract：用最小确定性输入验证函数、判据、schema 和接口约定；优先选择精确 node。
+- stage：用小型合成输入或冻结的不可变上游 fixture，经该阶段真实入口验证职责、正式产物、
+  判定、下游消费及拒绝 / 恢复。模型 transport 可替换为确定性回答，被测阶段的编排、校验与落盘
+  必须真实执行；现役阶段为 stage0、stage1、stage2、stage4～stage7。仅文件名含 stage 不代表职责已覆盖。
+- 回归：重跑受改动影响的既有单元、contract、stage 与跨模块场景，特别是历史故障反例。
+  定向回归和完整非 corpus 回归分别报告，不另复制一套“回归用例”。
+- golden set：在项目最终验收时，以根指南指定的 Workbench 源书生成最终小说，验证结果质量；
+  工程检查与人工质量评价都要有证据。普通测试与 stage 测试不依赖 Workbench 或付费模型。
+
+## 保留、合并与删除
+
+测试按当前职责保留，不因文件老、名字含 legacy 或运行慢就保留或删除。清理时逐例核实：
+
+| 情况 | 处理规则 |
+|---|---|
+| 现役行为、契约或消费者仍依赖 | 归入单元 / contract 或 stage；历史 bug 反例继续供回归复用 |
+| 已退役流程的成功操作，现役契约与消费者都不再需要 | 删除；若仍承诺历史复现能力，先明确该能力是否退出维护 |
+| 当前入口拒绝旧格式、旧授权或错误恢复 | 保留，它验证当前边界；不能和退役成功路径一并删除 |
+| 两例输入、前置、故障点、判据和消费者均等价 | 合并或删除重复例；不同参数、层级、入口或提交窗口不算等价 |
+| 没有 Python import 引用 | 继续查 CLI、API、动态注册、schema、运维和恢复入口；不能仅凭静态扫描删除 |
+| fake 直接给出阶段成功，但仍能验证一侧约定 | 归单元 / contract；实际阶段职责由真实入口用例覆盖；完全没有有效断言的脚手架删除 |
+
+删除同批清理仅为该用例服务的 fixture、数据、串行登记、目录表和文档引用，保留仍有消费者的 helper。
+记录删除对象、原职责、现役依据及等价替代；前后用例数分开报告，不把清理后的较小分母写成旧集合全绿。
+涉及支持范围或公开契约的变化先说明具体取舍；局部可证的冗余可直接清理。
+
+Stage3 文风迁移、Stage6 旧定性包 A/B 与 Stage2 旧五轮实验退出当前测试维护范围。
+历史由 Git 和既存实验记录保存，不新增测试归档目录；旧解释器不能接受当前报告的守卫仍保留。
+从旧实验中抽出的现役 Hook/Retry 夹具归 `tests/factories.py`，不再让当前测试依赖退役实验模块。
+
+后续新增测试须说明它保护的现役约定、失败机制或结果要求。bug 优先缩成最小可失败样例，
+先让旧行为失败，再确认修复通过；若风险只在进程、并发、恢复或整链组合时出现，保留对应集成证据。
+冻结 fixture 只替代未改动的上游准备，不能替代被测 producer、判据或真实消费者；schema 变化时同步重建。
+高成本用例先根据 setup/call/teardown 实测定位成本，再复用准备、收窄输入或调整触发范围；
+不能仅因慢或偶发失败删除。耗时和最近执行结果从报告产生，不手工登记“独有覆盖=true”或无依据的风险分数。
+不硬限每层的用例数，也不为达到分钟目标缩小验收分母；日常反馈时间与完整回归时间分别衡量。
+
+## 工程测试执行
+
+单元 / contract 使用 `unit_contract`，阶段职责使用 `stage`；`regression` 复用二者，并包含独立的
+跨阶段整书场景。`corpus` 保留原有数据依赖含义，普通选择默认排除；这些 marker 不代表模型质量。
+新增测试模块必须登记目录表，未登记会拒绝收集；混合模块用 `cases` 指定例外层级。
+模块涉及多个 stage 而单例范围更窄时，用 `pytest.mark.stage_scope('stage6')` 等显式收窄，
+参数化用例也可在 `pytest.param` 上登记；声明不得超出模块的 stage 集合。
+
+```powershell
+# 小改：已知精确用例，或根据修改文件选择单元 / contract 消费链
+conda run -n novel_refactor python -m pytest -n 0 --test-layer unit_contract tests/test_stage7_subs.py
+conda run -n novel_refactor python -m pytest -n 0 --test-layer unit_contract --changed novel/stages/stage7/rename.py
+
+# Stage4 重构：本层及传递下游的单元/contract，然后阶段职责测试
+conda run -n novel_refactor python -m pytest -n 0 --test-layer unit_contract --test-stage stage4 --affected
+conda run -n novel_refactor python -m pytest -n 0 --test-layer stage --test-stage stage4 --affected
+
+# 先查看实际选择，保留精确 nodeid；不加 --affected 时只选指定 stage 的职责
+conda run -n novel_refactor python -m pytest -n 0 --test-layer stage --test-stage stage6 --collect-only --selection-report .test_cache/stage6-selection.json
+
+# 定向回归复用原用例，不另建回归副本
+conda run -n novel_refactor python -m pytest -n 0 --test-layer regression --changed novel/stages/stage7/rename.py
+```
+
+`--test-stage` 和 `--changed` 可分别重复；二者不能组合，避免用交集漏掉真实消费者。
+`--changed` 接受仓内相对或绝对文件路径，检查函数内、相对与测试 helper 导入的传递消费者，
+并补上阶段依赖。非 Python、共享测试配置、删除文件或无法定位消费者的修改，保守扩大到完整工程集合
+并在报告解释原因。它是保守选择器，不能证明动态加载、外部配置等影响不存在；最终仍按根指南决定验证范围。
+修改 `contracts/` 时还纳入契约 §9.5 五文件，覆盖通过 AST/注册表而非直接 import 检查契约的消费者。
+`--require-corpus` 不允许与新增范围过滤组合。
+
+`--selection-report` 输出最后收集的精确 nodeid、层级、stage、corpus 标记、命令、代码起止身份、退出码、执行结果和各阶段耗时；
+支持单进程及 xdist。`--collect-only` 只记录选择，不记为测试通过；零用例继续使用 pytest 非零退出码。
+本机深 worktree 的上述命令追加 `--basetemp=E:/_tr`，不要把启动预检失败当测试结果。
+
 默认测试必须可复现，不读取本地小说产物。开发依赖包含 pytest-xdist；默认命令以 4 个 worker
 并行非 corpus 回归：
 
@@ -22,7 +98,8 @@ conda run -n novel_refactor python -m pytest -n 0 --lf --lfnf=none -x
 “非 corpus 回归通过”。
 
 测试选择和批次门槛统一见 `AGENTS.md::测试选择与批次验收`：局部修复先定向，允许多个检查点提交，
-完整回归在整批集成、候选冻结或 main／发布前统一执行；不因每个 bug 或每次验收续跑重复全仓。
+单个 stage 重构只验证该 stage 及实际受影响的消费链。完整回归在项目最终工程验收、首次全链工程验收、
+候选冻结、main／发布或影响无法定向闭合等门槛统一执行；不因局部修复或 stage 重构交付重复全仓。
 同一契约批次形状稳定后先跑契约 §9.5 五文件，再补实际消费链。完整回归后生产代码又有变化，
 旧结果只作基线，新增定向结果单列；说明文档、注释或测试记录变化只补相关校验。
 测速和 profiler 仅用于已定位的热点，命令见
@@ -30,7 +107,7 @@ conda run -n novel_refactor python -m pytest -n 0 --lf --lfnf=none -x
 
 重复上游准备可由原 producer 生成模块级基线，再用 `tests/frozen_tree.py::FrozenTree` 保存不可变
 字节，每例还原到自己的空 `tmp_path`。不共享可变 Store、模型对象、账或硬链接；不重用被测步骤的
-结论。当前仅 Stage4 B 的两个测试模块复用 A/旧 B 前置盘面，故障注入、真实生产、HTTP/审批、
+结论。Stage4 B 测试复用 A/旧 B 前置盘面，Stage5～Stage7 职责测试复用逐层冻结的合成上游；故障注入、真实生产、HTTP/审批、
 并发与最终字节断言仍逐例运行。并发生命周期的 serial 登记和真实代码身份校验保持原约束。
 
 `tests/test_delivery_modes.py` 将当前工程文件复制并提交到独立临时 Git 根，从空输出执行
@@ -39,7 +116,75 @@ conda run -n novel_refactor python -m pytest -n 0 --lf --lfnf=none -x
 动作或模型调用都失败。这验证两种模式共用交付证明及无需 Markdown 报告，不证明模型质量或真实费用。
 回答/决定/prepared 的中断恢复仍由所属恢复测试保留反例，不用成功场景替代。
 
+阶段职责的证据定位如下；这里只索引现有用例，不复制断言。目录表同时区分同一文件内的纯契约与实际阶段用例。
+
+| Stage | 生成、拒绝与恢复的主要证据 | 真实消费者 |
+|---|---|---|
+| stage0 | `tests/test_stage01.py` 的摄入、源漂移拒绝和人工修订保留 | `tests/test_api_stage01.py` 的批准与正式分章 |
+| stage1 | `tests/test_stage01.py` 的分章、空章拒绝、章号与重新分章 | `tests/test_api_stage01.py` 的连续正文与诊断读面 |
+| stage2 | `tests/test_stage2_characters.py`、`tests/test_stage2_knowledge_flow.py`、`tests/test_stage2_generation.py`、`tests/test_plot_producer.py` 的独立生成与恢复；`tests/test_plot_edit.py` / `tests/test_plot_repair.py` 的编辑与返修 | `tests/test_stage2_node_lifecycle.py`、`tests/test_stage2_uploaded_flow.py` 的 typed 接受和下游释放，`tests/test_plot_edit_http.py` 的 CLI 与服务重启 |
+| stage4 | `tests/test_stage4_v3_integration.py` 的 A/B/Context、错误证据拒绝与免费 binding 修订 | 同模块的正式读取、HTTP 与重启 |
+| stage5 | `tests/test_stage_responsibilities.py` 的正式逐章生成、提交尾窗的第三方字节拒绝与免费恢复 | 正式 Chapter 读回与 Review；替换判据的 `tests/test_stage5_generation.py` 保留在单元 / contract 层 |
+| stage6 | `tests/test_stage_responsibilities.py` 的 Hook、双判官、定稿及证据缺失 / 恢复 | 真实 Stage6 页面读面；此前仅 corpus 覆盖的成功路径已加入默认测试 |
+| stage7 | `tests/test_stage_responsibilities.py` 的改名、定稿、组装、上游篡改拒绝和原字节恢复 | 正式下载读取与 golden set 收集器 |
+
+`tests/test_test_selection.py` 检查目录表覆盖、混合分类、传递消费与实际 pytest 入口；
+`tests/test_stage_responsibilities.py` 的上游由正式 producer 建立，再以 `FrozenTree` 逐例还原，
+被测 stage 重新执行并读取真实结果。选择较早的 stage 时，准备不会为了后续阶段测试继续生成整书。
+
+## Golden set 与 corpus
+
+golden set 的源目录见 `AGENTS.md::测试选择与批次验收`，按所用工具的既有约定显式设置
+`NOVEL_DATA` / `NOVEL_CORPUS`；`NOVEL_OUTPUT` 指向独立生成目录。源目录缺失或不可读时报告“没查”，
+不得临时换书、拿旧输出冒充本轮结果或把跳过当通过。
+
+验收前冻结代表性书目、源版本、质量判据及对照基线，记录候选代码和模型配置；已有冻结书目不得
+为通过验收临时删减。经真实工作流生成 `stage7/<书名>_rewriting.txt` 后，逐书对照源书与已验收基线，
+检查情节骨架、事实与因果、披露顺序、人物与改名一致性，以及行文流畅、风格和整体阅读体验。
+首次验收尚无合格成书基线时，明确记录基线缺失，依据源书与预定质量判据验收后再冻结基线。
+不要求自由生成的小说与旧稿逐字相等，也不把一次模型评分当作质量通过；人工验收须记录具体章节证据、
+问题及结论，未评项保持未验证。付费、正文外发与追加额度沿用根指南的授权边界。
+
+工具执行顺序如下。验收文件放在源根与生成根之外；工具拒绝覆盖已有冻结文件，修订时使用明确的新文件名。
+`profiles.json` 使用现役 `PipelineAgentProfiles` 形状，由本轮授权的 Commander / Executor 配置提供，
+不含密钥；示例的路径需要替换为实际独立目录。
+
+```powershell
+$env:NOVEL_DATA = 'E:\practice_group\Novel_rewriting\Test_data\Workbench'
+$env:NOVEL_OUTPUT = 'E:\golden-output'
+conda run -n novel_refactor python -m tests.golden inventory
+conda run -n novel_refactor python -m tests.golden freeze --profiles E:/golden-review/profiles.json --manifest E:/golden-review/manifest.json
+
+# 仅在付费和正文外发分别获得授权后执行；要求代码已提交且与 freeze 时一致
+conda run -n novel_refactor python -m tests.golden run --manifest E:/golden-review/manifest.json --yes --egress-authorized
+
+# 以下收集与质量复核不调用模型
+conda run -n novel_refactor python -m tests.golden collect --manifest E:/golden-review/manifest.json --snapshot E:/golden-review/snapshot.json --review-template E:/golden-review/review.json
+conda run -n novel_refactor python -m tests.golden evaluate --manifest E:/golden-review/manifest.json --snapshot E:/golden-review/snapshot.json --review E:/golden-review/review.json --report E:/golden-review/result.json
+```
+
+`inventory` / `freeze` 覆盖源根内全部 txt，记录原始 SHA-256 与生产解码器的归一化身份；不临时挑书缩分母。
+本机同时存在 `NOVEL_CORPUS` 时须与 `NOVEL_DATA` 指向同一源根。`freeze` 可带
+`--baseline <上次通过的 result.json>`；基线须匹配源版本，复核时还检查旧成书字节。
+源目录只是样本来源，不自动证明样本具有足够代表性；扩充书目须显式建立新的冻结批次。
+
+`run` 只接受空输出根：经正式 Stage0 CLI 摄入后交给 RunSupervisor，不自建阶段循环或自动填写审批。
+运行阻塞时保留原账；遇暂停或 Ctrl+C，向本次 owner 请求停止并等待 drain。已产生输出的运行不能重用
+`run` 再起一轮；按产品的人工 / 恢复入口处理，保持冻结代码与配置，再免费 `collect`。
+收集检查原文身份、七层完成度、正式交付、稳定盘面，以及已结束运行的代码和 profiles；未观察到运行身份不会补绿。
+
+先完成 `collect`，再由人工填写 `review.json` 的 reviewer、带时区的 reviewed_at，以及逐书六个维度的
+state、chapter_ordinals 和 evidence。证据写定位与判断说明，不复制小说正文；每个通过/失败都需要具体章号。
+有基线时还须填写 baseline_comparison 与 baseline_evidence。首次无基线明确保留 first_acceptance。
+`evaluate` 重新读取实际盘面；缺维度、漏书、未知章号、旧候选或审批变化均拒绝。未评保持 `unver`，
+工程通过与质量通过分别报告；只有两者通过才能返回最终 pass。退出码 0 为该命令完成，1 为验收未通过或运行阻塞，
+2 为配置/身份拒绝；`run` 返回 generated 与 `collect` 返回工程 pass 都不表示小说质量已通过。
+
+`tests/test_golden_set.py` 验证工具自己的授权、完整分母、陈旧证据和质量状态；它属于单元 / contract，
+不能代替 Workbench 的真实生成与人工阅读。原 current-schema corpus 书目、manifest 与付费证据判据继续独立保留。
+
 标记为 `corpus` 的测试是针对冻结生成产物或源语料的集成检查，默认 marker 表达式会跳过它们。
+`corpus` 是现有数据依赖标记，与四层职责并非一一对应；它提供工程证据，不能替代上述成书质量评价。
 最终硬验收必须同时提供隔离的当前 schema 输出盘和与它精确对应、已提交的无正文 manifest，
 并使用 `--require-corpus`：
 
@@ -52,6 +197,8 @@ conda run -n novel_refactor python -m pytest -n 0 --require-corpus
 只跑 `-m corpus` 不是最终验收：它不验证冻结 manifest/ledger/精确 skip allowlist。当前
 manifest 尚未生成时，只能报告"非 corpus 回归"，不能声称全量已绿。manifest 的字段契约、
 冻结书目与硬验收判据见 `docs/schema/corpus.md`。
+
+## Fixture 与运行隔离
 
 纯判据与 prompt 测试应使用 `tests/factories.py` 中的确定性构造器，不得随机选择一本本地
 小说。测试若直接写注册 JSON 产物，须先用 `contracts.schema.encode_artifact()` 包装逻辑

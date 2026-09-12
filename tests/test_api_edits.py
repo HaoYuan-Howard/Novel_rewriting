@@ -736,7 +736,7 @@ def final_gate_book(tmp_path, monkeypatch):
     from novel.stages.stage6 import hook
     from novel.store import ArtifactStore
     from tests.test_stage6_semantic import TEXT_A, TEXT_B, TEXT_C
-    from tests.test_stage6_style_ab_review import _hook
+    from tests.factories import stage6_hook as _hook
     from tests.test_store import _stage0_on_disk
     from novel.stages.stage1.partition import partition_text
 

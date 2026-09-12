@@ -60,6 +60,10 @@ pythonpath = ["."]
 addopts = '-q -n 4 --dist loadgroup -m "not corpus" --basetemp=.tr'
 cache_dir = ".test_cache"
 markers = [
+    "unit_contract: 使用确定性样例验证函数、模块、判据及接口约定",
+    "stage: 经真实阶段 producer、校验、落盘及消费者验证阶段职责",
+    "stage_scope(name): 显式登记的 stage 职责范围；共享用例可属于多个 stage",
+    "regression: 复用现有工程用例的回归集合，不包含 golden set 质量评价",
     "corpus: optional integration checks against NOVEL_OUTPUT or local source corpora",
     "real_code_version: exercise the live Git-derived provenance identity instead of the deterministic test identity",
     "serial: run process/concurrency lifecycle tests in one xdist group",

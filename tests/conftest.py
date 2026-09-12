@@ -19,6 +19,8 @@ import pytest
 from contracts.schema import CorpusManifest
 from tests.corpus_manifest import verify as verify_corpus_manifest
 
+pytest_plugins = ['tests.selection']
+
 
 _ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_MANIFEST = _ROOT / 'docs' / 'corpus' / 'current_schema_manifest.json'
@@ -32,6 +34,9 @@ _WINDOWS_MAX_PATH = 260
 # `tests/test_layering.py::test_concurrency_and_process_lifecycle_modules_are_registered_serial`
 # 反向扫描调用面，新增模块漏登记会直接失败。
 _SERIAL_TEST_MODULES = frozenset({
+    'tests/test_test_selection.py',
+    'tests/test_golden_set.py',
+    'tests/test_stage_responsibilities.py',
     'tests/test_plot_edit_http.py',
     'tests/test_plot_design.py',
     'tests/test_plot_pipeline.py',

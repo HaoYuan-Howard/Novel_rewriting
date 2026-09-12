@@ -20,7 +20,7 @@ from contracts.schema.stage7 import (
 from novel.stages.stage6 import hook, semantic
 from novel.stages.stage7 import rename
 from tests.test_stage6_semantic import TEXT_A, TEXT_B, TEXT_C
-from tests.test_stage6_style_ab_review import _hook
+from tests.factories import stage6_hook as _hook
 
 
 def _compact_check() -> CompactApprovalCheck:

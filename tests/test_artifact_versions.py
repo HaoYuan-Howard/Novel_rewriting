@@ -574,7 +574,7 @@ def test_unreadable_current_artifacts_do_not_take_down_read_only_aggregation(tmp
 
 
 def _hook_with_ordered_retries(attempts: list[int]):
-    from tests.test_stage6_style_ab_review import _hook, _retry
+    from tests.factories import stage6_hook as _hook, stage6_hook_retry as _retry
     artifact = _hook(['甲推门进入庭院。', '乙收到一封密信。', '丙发现灯下的人影。'])
     payload = artifact.model_dump(by_alias=True, mode='json')
     rows = []

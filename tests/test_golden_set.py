@@ -1,0 +1,244 @@
+"""golden set 工具的合成反例；不读取 Workbench、不发真实模型请求。"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from pydantic import ValidationError
+
+from contracts.invariants import STAGES
+from tests import golden as G
+from tests.test_agent import _PROFILES
+
+
+@pytest.fixture
+def manifest(tmp_path, monkeypatch):
+    source = tmp_path / 'source'
+    source.mkdir()
+    (source / 'FQ_合成书_123.txt').write_text('1\n她来到桥边。\n2\n他已经离开。\n', encoding='utf-8')
+    (source / '说明.md').write_text('不作为源书', encoding='utf-8')
+    monkeypatch.setenv('NOVEL_DATA', str(source))
+    monkeypatch.delenv('NOVEL_CORPUS', raising=False)
+    monkeypatch.setenv('NOVEL_OUTPUT', str(tmp_path / 'out'))
+    return G.freeze(source, tmp_path / 'out', _PROFILES)
+
+
+@pytest.fixture
+def snapshot(manifest, monkeypatch):
+    def produced(_manifest, source):
+        return dict(source_sha256=source.sha256, output_sha256='a' * 64,
+                    chapter_ordinals=[1, 2], stages={stage: True for stage in STAGES},
+                    delivery_state='ready', source_current=True, profiles_current=True, error=None)
+    monkeypatch.setattr(G, 'capture_book', produced)
+    return G.collect(manifest)
+
+
+def _review(manifest, snapshot, state='pass'):
+    data = G.review_template(manifest, snapshot).model_dump(mode='json')
+    data.update(reviewer='测试审阅者', reviewed_at=datetime.now(timezone.utc).isoformat())
+    for row in data['books'].values():
+        for finding in row['findings'].values():
+            finding.update(state=state, chapter_ordinals=[1, 2], evidence='合成材料逐章核对记录')
+    return G.Review.model_validate(data)
+
+
+def test_freeze_reads_all_txt_and_binds_bytes_profiles_and_output(manifest):
+    assert len(manifest.books) == 1 and manifest.books[0].sid == '123'
+    assert manifest.books[0].sha256 != manifest.books[0].normalized_sha1
+    assert manifest.profiles == _PROFILES and manifest.criteria == G.CRITERIA
+    assert not Path(manifest.output_root).exists()
+
+
+@pytest.mark.parametrize('damage', ['changed', 'missing', 'extra'])
+def test_changed_removed_or_added_book_refuses_old_frozen_denominator(manifest, damage):
+    root = Path(manifest.source_root)
+    path = root / manifest.books[0].relative_path
+    if damage == 'missing':
+        path.unlink()
+    elif damage == 'changed':
+        path.write_text('另一份正文', encoding='utf-8')
+    else:
+        (root / '新书_456.txt').write_text('新的一本', encoding='utf-8')
+    with pytest.raises(ValueError):
+        G.validate_sources(manifest)
+
+
+def test_source_output_overlap_and_reusing_nonempty_output_are_refused(manifest):
+    root = Path(manifest.source_root)
+    with pytest.raises(ValueError, match='独立目录'):
+        G.freeze(root, root / 'out', _PROFILES)
+    output = Path(manifest.output_root)
+    output.mkdir()
+    (output / 'old.txt').write_text('旧结果', encoding='utf-8')
+    with pytest.raises(ValueError, match='空输出根'):
+        G.freeze(root, output, _PROFILES)
+
+
+def test_missing_explicit_dataset_is_not_a_zero_book_pass(monkeypatch):
+    monkeypatch.delenv('NOVEL_DATA', raising=False)
+    monkeypatch.delenv('NOVEL_CORPUS', raising=False)
+    with pytest.raises(ValueError, match='没查'):
+        G.source_root()
+
+
+@pytest.mark.parametrize(('yes', 'egress'), [(False, False), (True, False), (False, True)])
+def test_run_requires_separate_payment_and_body_egress_before_any_launch(manifest, monkeypatch, yes, egress):
+    monkeypatch.setattr(G.subprocess, 'run', lambda *_a, **_k: pytest.fail('未授权却启动 CLI'))
+    with pytest.raises(ValueError, match='分别提供'):
+        G.execute(manifest, yes=yes, egress_authorized=egress)
+    assert not Path(manifest.output_root).exists()
+
+
+def test_dirty_or_changed_code_refuses_paid_execution(manifest):
+    with pytest.raises(ValueError, match='干净已提交代码'):
+        G.execute(manifest, yes=True, egress_authorized=True)
+
+
+def test_engineering_pass_and_an_unfilled_review_never_claim_quality_pass(manifest, snapshot):
+    review = G.review_template(manifest, snapshot)
+    result = G.evaluate(manifest, snapshot, review)
+    assert result['engineering_state'] == 'pass'
+    assert result['state'] == result['quality_state'] == 'unver'
+
+
+def test_complete_bound_manual_evidence_can_pass_and_retains_every_book(manifest, snapshot):
+    result = G.evaluate(manifest, snapshot, _review(manifest, snapshot))
+    assert result['state'] == 'pass'
+    assert set(result['snapshot']['books']) == {'123'}
+    assert result['baseline_state'] == 'first_acceptance'
+
+
+def test_a_quality_failure_remains_failed_when_all_engineering_checks_pass(manifest, snapshot):
+    review = _review(manifest, snapshot)
+    review.books['123'].findings['facts'].state = 'fail'
+    result = G.evaluate(manifest, snapshot, review)
+    assert result['state'] == 'fail' and result['engineering_state'] == 'pass'
+
+
+def test_unknown_delivery_or_missing_stage_cannot_be_blessed_by_quality_review(manifest, monkeypatch):
+    monkeypatch.setattr(G, 'capture_book', lambda _m, source: dict(
+        source_sha256=source.sha256, output_sha256='b' * 64, chapter_ordinals=[1, 2],
+        stages={'stage7': True}, delivery_state='unknown', source_current=True, profiles_current=True, error=None))
+    snap = G.collect(manifest)
+    result = G.evaluate(manifest, snap, _review(manifest, snap))
+    assert result['state'] == result['engineering_state'] == 'fail'
+
+
+@pytest.mark.parametrize('damage', ['missing_book', 'missing_dimension', 'empty_evidence', 'unknown_chapter', 'old_hash', 'no_reviewer'])
+def test_incomplete_or_stale_quality_evidence_is_refused(manifest, snapshot, damage):
+    raw = _review(manifest, snapshot).model_dump(mode='json')
+    if damage == 'missing_book':
+        raw['books'].clear()
+    elif damage == 'missing_dimension':
+        raw['books']['123']['findings'].pop('facts')
+    elif damage == 'empty_evidence':
+        raw['books']['123']['findings']['facts']['evidence'] = ' '
+    elif damage == 'unknown_chapter':
+        raw['books']['123']['findings']['facts']['chapter_ordinals'] = [999]
+    elif damage == 'old_hash':
+        raw['books']['123']['output_sha256'] = 'c' * 64
+    else:
+        raw['reviewer'] = ' '
+    with pytest.raises((ValueError, ValidationError)):
+        G.evaluate(manifest, snapshot, G.Review.model_validate(raw))
+
+
+def test_free_revalidation_rejects_a_candidate_changed_after_review(manifest, snapshot, monkeypatch):
+    review = _review(manifest, snapshot)
+    monkeypatch.setattr(G, 'capture_book', lambda *_: {**snapshot['books']['123'], 'output_sha256': 'd' * 64})
+    with pytest.raises(ValueError, match='已变化'):
+        G.evaluate(manifest, snapshot, review)
+
+
+def test_real_cli_functions_freeze_collect_template_and_evaluate_without_model(manifest, snapshot, tmp_path, capsys):
+    manifest_path = tmp_path / 'manifest.json'
+    G._write(str(manifest_path), manifest, manifest)
+    snapshot_path, review_path, report_path = [tmp_path / f'{name}.json' for name in ('snapshot','review','result')]
+    assert G.main(['collect', '--manifest', str(manifest_path), '--snapshot', str(snapshot_path),
+                   '--review-template', str(review_path)]) == 0
+    assert G.main(['evaluate', '--manifest', str(manifest_path), '--snapshot', str(snapshot_path),
+                   '--review', str(review_path), '--report', str(report_path)]) == 1
+    assert json.loads(report_path.read_text(encoding='utf-8'))['quality_state'] == 'unver'
+    assert 'unver' in capsys.readouterr().out
+
+
+def test_execution_uses_production_ingestion_and_supervisor_instead_of_own_stage_loop(manifest, monkeypatch):
+    from novel.orchestrator import agent
+    manifest.code_version = 'f' * 40
+    monkeypatch.setattr(G.prov, 'code_version', lambda: 'f' * 40)
+    calls = []
+    monkeypatch.setattr(G.subprocess, 'run', lambda argv, **kwargs: (
+        calls.append(('cli', argv)), SimpleNamespace(returncode=0))[1])
+    def start(base, sid, **kwargs):
+        calls.append(('supervisor', sid, kwargs))
+        return SimpleNamespace(run_id='golden-test')
+    monkeypatch.setattr(agent, 'start', start)
+    monkeypatch.setattr(agent, 'wait', lambda *_: True)
+    monkeypatch.setattr(agent, 'records', lambda *_: [SimpleNamespace(
+        run_id='golden-test', state='ok', outcome=SimpleNamespace(state='ready'))])
+    result = G.execute(manifest, yes=True, egress_authorized=True)
+    assert result['state'] == 'generated' and result['quality_state'] == 'unver'
+    assert calls[0][1][3:6] == ['novel.cli', 'run', 'stage0.remove']
+    assert len(calls) == 2 and calls[1][2]['profiles'] == manifest.profiles
+
+
+def test_report_write_cannot_overwrite_sources_outputs_or_existing_evidence(manifest, tmp_path):
+    with pytest.raises(ValueError):
+        G._write(str(Path(manifest.source_root) / 'report.json'), {}, manifest)
+    target = tmp_path / 'report.json'
+    G._write(str(target), {}, manifest)
+    with pytest.raises(ValueError, match='已存在'):
+        G._write(str(target), {'state': 'pass'}, manifest)
+
+
+def test_snapshot_is_bound_to_profile_identity_as_well_as_final_text(manifest, snapshot, monkeypatch):
+    monkeypatch.setattr(G, 'capture_book', lambda *_: {**snapshot['books']['123'], 'profiles_current': False})
+    assert G.collect(manifest)['engineering_state'] == 'fail'
+
+
+def test_baseline_bytes_and_manual_comparison_are_required(manifest, snapshot, tmp_path, monkeypatch):
+    from novel import paths
+    old_root = tmp_path / 'baseline'
+    old_book = old_root / '合成书_123'
+    target = old_book / paths.book_txt_rel(old_book)
+    target.parent.mkdir(parents=True)
+    target.write_text('基线成书', encoding='utf-8')
+    old_snapshot = {**snapshot, 'output_root': str(old_root), 'books': {
+        '123': {**snapshot['books']['123'], 'output_sha256': G._sha('基线成书'.encode())}}}
+    old_review = _review(manifest, old_snapshot)
+    prior = dict(schema_version=1, state='pass', snapshot=old_snapshot,
+                 review=old_review.model_dump(mode='json'))
+    candidate = manifest.model_copy(update={'baseline': prior})
+    G.validate_baseline(candidate)
+    current = G.collect(candidate)
+    template = G.review_template(candidate, current)
+    assert template.books['123'].baseline_comparison == 'unver'
+    rated = _review(candidate, current)
+    assert G.evaluate(candidate, current, rated)['quality_state'] == 'unver'
+    rated.books['123'].baseline_comparison = 'not_worse'
+    rated.books['123'].baseline_evidence = '逐章对照基线，无新增事实或行文问题'
+    assert G.evaluate(candidate, current, rated)['state'] == 'pass'
+    rated.books['123'].baseline_comparison = 'regressed'
+    assert G.evaluate(candidate, current, rated)['quality_state'] == 'fail'
+    target.write_text('已改动的基线', encoding='utf-8')
+    with pytest.raises(ValueError, match='基线成书字节'):
+        G.evaluate(candidate, current, rated)
+
+
+def test_supervisor_pause_stops_owned_run_and_preserves_recovery_identity(manifest, monkeypatch):
+    from novel.orchestrator import agent
+    manifest.code_version = 'f' * 40
+    monkeypatch.setattr(G.prov, 'code_version', lambda: 'f' * 40)
+    monkeypatch.setattr(G.subprocess, 'run', lambda *_a, **_kw: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(agent, 'start', lambda *_a, **_kw: SimpleNamespace(run_id='paused-run'))
+    waits = iter([False, True])
+    monkeypatch.setattr(agent, 'wait', lambda *_: next(waits))
+    monkeypatch.setattr(agent, 'records', lambda *_: [SimpleNamespace(run_id='paused-run', state='paused')])
+    stopped = []
+    monkeypatch.setattr(agent, 'request_stop', lambda base, run_id: stopped.append(run_id))
+    result = G.execute(manifest, yes=True, egress_authorized=True)
+    assert result['state'] == 'blocked' and result['runs'] == [{'sid': '123', 'run_id': 'paused-run'}]
+    assert stopped == ['paused-run']

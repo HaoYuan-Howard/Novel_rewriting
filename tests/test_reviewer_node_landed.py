@@ -20,7 +20,7 @@ from novel.stages.stage6 import hook
 from novel.stages.stage7 import rename
 from novel.store import ArtifactStore
 from tests.test_stage6_semantic import TEXT_A, TEXT_B, TEXT_C
-from tests.test_stage6_style_ab_review import _hook
+from tests.factories import stage6_hook as _hook
 
 
 SID = '986'
