@@ -42,6 +42,18 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     # failure sidecar 分责；generic INVALID 提升即使没有 action-owned GlobalEdit
     # identity / formal baseline 也由同一记录按 baseline/target 两态补尾。
     'stage2.global_edit_commit': 'stage2/global_edit_commit.json',
+    # Stage2CoreReview prepared scope（Global 工作包 v7）：调用前由代码冻结的
+    # 不可变审阅包；`--review-issues` 事务复验它与当前字节身份后才落两套账。
+    # ⚠ 审阅运输 WAL：不进入 surface seal（见 inspection._EXTERNAL_REQUEST_ARTIFACTS），
+    #   prepare 是 seat 构造的一步，不能自变更执行坐标；身份新鲜度由事务
+    #   逐字节复验业务产物承担。
+    'stage2.core_review_prepared': 'stage2/core_review_prepared.json',
+    # issues 协议的公开提交请求（review_token、actor、issues）；外部/服务可写，
+    # CLI 只在事务内读取并复验。
+    'stage2.issue_review_decisions': 'stage2/issue_review_decisions.json',
+    # 审阅事务账：decision_basis=scope_review 的派生决定来源、覆盖 item/hash、
+    # 原始语义回答与恢复链来源；追加写，只增不改。
+    'stage2.issue_review_transactions': 'stage2/issue_review_transactions.json',
     'stage2.blueprint_character_projection': 'stage2/blueprint_character_projection.json',
     'stage2.chapter_blueprints': 'stage2/chapter_blueprints.json',
     'stage2.knowledge_links': 'stage2/knowledge_links.json',
@@ -138,6 +150,10 @@ STAGE2_GLOBAL_EDIT_FAILURE = artifact_rel('stage2.global_edit_failure')
 STAGE2_GLOBAL_EDIT_INPUT_COMMIT = artifact_rel(
     'stage2.global_edit_input_commit')
 STAGE2_GLOBAL_EDIT_COMMIT = artifact_rel('stage2.global_edit_commit')
+STAGE2_CORE_REVIEW_PREPARED = artifact_rel('stage2.core_review_prepared')
+STAGE2_ISSUE_REVIEW_DECISIONS = artifact_rel('stage2.issue_review_decisions')
+STAGE2_ISSUE_REVIEW_TRANSACTIONS = artifact_rel(
+    'stage2.issue_review_transactions')
 STAGE2_BLUEPRINT_CHARACTER_PROJECTION = artifact_rel(
     'stage2.blueprint_character_projection')
 STAGE2_CHAPTER_BLUEPRINTS = artifact_rel('stage2.chapter_blueprints')

@@ -113,6 +113,7 @@ _PRIMARY_OPERATIONS = {
         '--renormalize', '--resample', '--revalidate', '--close-review',
         '--apply-edit', '--review-decisions', '--emit-edit-template',
         '--emit-review-template', '--emit-review-workpack',
+        '--prepare-issue-review', '--emit-issue-review-template', '--review-issues',
     }),
     'stage2.blueprint': frozenset({
         '--dry-run', '--check-only', '--renormalize', '--patch',

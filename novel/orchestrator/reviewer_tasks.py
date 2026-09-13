@@ -24,7 +24,8 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, TypeAdapter, ValidationError, create_model
 
 from contracts.artifacts import (
-    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS, STAGE2_BLUEPRINT_EDIT, artifact_rel,
+    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW_DECISIONS, STAGE2_BLUEPRINT_EDIT,
+    STAGE2_ISSUE_REVIEW_DECISIONS, artifact_rel,
 )
 from contracts.invariants import (
     STAGE2_CHARACTER_REVIEW_KINDS,
@@ -66,6 +67,10 @@ from contracts.schema.api import (
 from contracts.schema.evaluation import GlobalReviewDecisionSet, TrimAudit, TrimResolution
 from contracts.schema.orchestration import ReviewerActionRecord
 from contracts.schema.plot_edit import PlotEdit
+from contracts.schema.stage2_issue_review import (
+    ISSUE_TYPES as ISSUE_REVIEW_ISSUE_TYPES,
+    REPAIR_HINTS as ISSUE_REVIEW_REPAIR_HINTS,
+)
 from contracts.schema.stage2 import (
     GlobalCollectionAdd,
     GlobalCollectionDelete,
@@ -548,93 +553,66 @@ def _workpack(
             correction = raw_correction
             global_pack = correction.get('global_review_workpack')
         else:
+            # 新自动调用统一走 issues 协议：调用前由代码冻结 PreparedScope
+            # （Global 工作包 v7），模型回答只有 issues；旧 v6 只读工作包保留给
+            # 人工/API 阅读，不再进入 Commander 材料。
             global_pack = _json_command([
                 *cli, 'run', 'stage2.global', sid, '--base', base,
-                '--emit-review-workpack', '--review-scope', 'blocking'])
-        if not isinstance(global_pack, dict) or not isinstance(
-                global_pack.get('items'), list):
-            raise ReviewerTaskError('Stage2 global workpack 缺 items')
-        states = {
-            str(row.get('current_state'))
-            for row in global_pack['items'] if isinstance(row, dict)
-        }
+                '--prepare-issue-review'])
+            if not isinstance(global_pack, dict):
+                raise ReviewerTaskError('Stage2 prepared 审阅包不是 object')
+            if global_pack.get('kind') != 'stage2-global-review-workpack-v7':
+                raise ReviewerTaskError(
+                    'Stage2 prepared 审阅包 kind 漂移：'
+                    f"{global_pack.get('kind')!r}")
+            if not isinstance(global_pack.get('materials'), dict):
+                raise ReviewerTaskError('Stage2 prepared 审阅包缺渲染材料')
+            return {'global': global_pack}
+        # ── 订正席（WAITING_ON_STAGE2_EDIT_CORRECTION）沿用 reviewed-edit 旧协议；
+        #    新自动审阅已在上面的分支返回 issues 协议工作包。──
+        failure_kind = correction.get('failure_kind')
+        recovery_fact_kind = correction.get('recovery_fact_kind')
+        hard_hits = correction.get('hard_hits')
+        invalid_sha256 = correction.get('invalid_sha256')
+        failure_sha256 = correction.get('failure_sha256')
+        global_binding = global_pack.get('binding')
+
+        def sha256(value: object) -> bool:
+            return (
+                isinstance(value, str) and len(value) == 64
+                and all(char in '0123456789abcdef' for char in value))
+        if (correction.get('kind')
+                != 'stage2-global-edit-correction-workpack-v2'
+                or not isinstance(correction.get('failed_edit'), dict)
+                or failure_kind not in {
+                    'canonical_pending', 'hard_gate',
+                    'candidate_validation', 'post_edit_review'}
+                or recovery_fact_kind != 'registered_sidecar'
+                or not isinstance(hard_hits, list)
+                or not sha256(correction.get('failed_edit_sha256'))
+                or not sha256(correction.get('formal_sha256'))
+                or not sha256(
+                    correction.get('failure_business_sha256'))
+                or not sha256(
+                    correction.get('global_review_workpack_sha256'))
+                or correction.get('global_review_workpack_sha256')
+                    != global_pack.get('workpack_sha256')
+                or not isinstance(global_binding, Mapping)
+                or correction.get('expected_source_sha256')
+                    != (global_binding.get('expected_source_sha256')
+                        if isinstance(global_binding, Mapping) else None)
+                or not sha256(failure_sha256)
+                or (failure_kind == 'hard_gate'
+                    and (not hard_hits or not sha256(invalid_sha256)))
+                or (failure_kind != 'hard_gate'
+                    and (hard_hits or invalid_sha256 is not None))):
+            raise ReviewerTaskError('Stage2 reviewed edit correction workpack 形状漂移')
         pack: dict[str, Any] = {'global': global_pack}
-        if correction is None and isinstance(global_pack.get('core_edit_binding'), dict):
-            pack['_core_wire_binding'] = _core_wire_binding(
-                base, sid, global_pack, code=None if current is None else current.code_version)
-        if correction is not None:
-            failure_kind = correction.get('failure_kind')
-            recovery_fact_kind = correction.get('recovery_fact_kind')
-            hard_hits = correction.get('hard_hits')
-            invalid_sha256 = correction.get('invalid_sha256')
-            failure_sha256 = correction.get('failure_sha256')
-            global_binding = global_pack.get('binding')
-
-            def sha256(value: object) -> bool:
-                return (
-                    isinstance(value, str) and len(value) == 64
-                    and all(char in '0123456789abcdef' for char in value))
-            if (correction.get('kind')
-                    != 'stage2-global-edit-correction-workpack-v2'
-                    or not isinstance(correction.get('failed_edit'), dict)
-                    or failure_kind not in {
-                        'canonical_pending', 'hard_gate',
-                        'candidate_validation', 'post_edit_review'}
-                    or recovery_fact_kind != 'registered_sidecar'
-                    or not isinstance(hard_hits, list)
-                    or not sha256(correction.get('failed_edit_sha256'))
-                    or not sha256(correction.get('formal_sha256'))
-                    or not sha256(
-                        correction.get('failure_business_sha256'))
-                    or not sha256(
-                        correction.get('global_review_workpack_sha256'))
-                    or correction.get('global_review_workpack_sha256')
-                        != global_pack.get('workpack_sha256')
-                    or not isinstance(global_binding, Mapping)
-                    or correction.get('expected_source_sha256')
-                        != (global_binding.get('expected_source_sha256')
-                            if isinstance(global_binding, Mapping) else None)
-                    or not sha256(failure_sha256)
-                    or (failure_kind == 'hard_gate'
-                        and (not hard_hits or not sha256(invalid_sha256)))
-                    or (failure_kind != 'hard_gate'
-                        and (hard_hits or invalid_sha256 is not None))):
-                raise ReviewerTaskError('Stage2 reviewed edit correction workpack 形状漂移')
-            pack['_global_edit_template'] = correction['failed_edit']
-            pack['edit_correction'] = {
-                key: value for key, value in correction.items()
-                if key not in {'failed_edit', 'global_review_workpack'}
-            }
-            return pack
-
-
-        static_repair = any(
-            row.get('kind') in STAGE2_CHARACTER_REVIEW_KINDS
-            and row.get('current_state') in {'FAIL', 'UNVER'}
-            for row in global_pack['items'])
-        has_pending = 'pending' in states
-        has_failed = 'FAIL' in states
-        has_undecided_unver = any(
-            isinstance(row, dict)
-            and row.get('current_state') == 'UNVER'
-            and not _stage2_row_is_quarantined(row)
-            for row in global_pack['items'])
-        if has_pending:
-            pack['global_template'] = _json_command([
-                *cli, 'run', 'stage2.global', sid, '--base', base,
-                '--emit-review-template', '--review-scope', 'blocking'])
-        elif has_failed and not static_repair:
-            pack['global_edit_template'] = _json_command([
-                *cli, 'run', 'stage2.global', sid, '--base', base,
-                '--emit-edit-template'])
-        elif has_undecided_unver and not static_repair:
-            # UNVER 只证明当前决定不足以放行，不证明 Global 主体必错。旧路由把
-            # “材料不足”强制送进 GlobalEdit，未改变的主体随后必然被 HARD 闸拒绝。
-            # 增量轮同时给“按完整正文重新裁决”与“确有内容错则修订”两条
-            # typed 路；Commander 必须二选一，内容调用计入当前工作单元的累计预算。
-            pack['global_edit_template'] = _json_command([
-                *cli, 'run', 'stage2.global', sid, '--base', base,
-                '--emit-edit-template'])
+        pack['_global_edit_template'] = correction['failed_edit']
+        pack['edit_correction'] = {
+            key: value for key, value in correction.items()
+            if key not in {'failed_edit', 'global_review_workpack'}
+        }
         return pack
     if waiting_on in _STAGE4_DESIGN_DECISION_BLOCKERS or waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW:
         if current is None:
@@ -1555,6 +1533,17 @@ def _compact_stage2_materials(pack: dict[str, Any]) -> dict[str, Any]:
 def _review_materials(
     pack: dict[str, Any], waiting_on: str,
 ) -> dict[str, Any]:
+    if waiting_on == queue.WAITING_ON_STAGE2_REVIEW and isinstance(
+            pack.get('global'), dict) and (
+            pack['global'].get('kind') == 'stage2-global-review-workpack-v7'):
+        # PreparedScope 已是紧凑渲染面：义务卡、证据闭集、原文一次、历史问题后置。
+        # 提交模板、逐项答题卡与历史 PASS 理由不再进入模型材料。
+        prepared = pack['global']
+        materials = dict(prepared.get('materials') or {})
+        materials['identities'] = {
+            key: value for key, value in (prepared.get('identities') or {}).items()
+            if key.endswith('_sha256')}
+        return {'core_review': materials}
     if waiting_on == queue.WAITING_ON_STAGE6_PREPARE:
         from novel.stages.stage2.paragraphs import render_numbered
 
@@ -2140,10 +2129,77 @@ def _refinement_options(current, waiting_on, pack, bind):
         })]
 
 
+def _issue_review_submission_options(
+    pack: dict[str, Any], current: OperatorNext, waiting_on: str,
+) -> list[dict[str, Any]]:
+    """issues 协议的唯一语义动作 + 关闭式安全出口。
+
+    模型不选动作、不填逐项答题卡：一个 ``--review-issues`` typed 请求完成
+    范围派生审阅与问题登记；stop/uncertain 是仅有的安全出口。
+    """
+    prepared = pack['global']
+    allowed_refs_item: list[str] = []
+    allowed_refs_scope: list[str] = []
+    for row in prepared.get('targets') or []:
+        if not isinstance(row, dict):
+            raise ReviewerTaskError('prepared 目标闭集行形状漂移')
+        if row.get('target_kind') == 'item':
+            allowed_refs_item.append(str(row['obligation_id']))
+        else:
+            allowed_refs_scope.append(str(row['obligation_id']))
+    evidence_refs = [str(row['ref'])
+                     for row in prepared.get('evidence') or []]
+    scope_materials = (prepared.get('materials') or {}).get('scope') or {}
+    coverage_scope_id = scope_materials.get('coverage_scope_id')
+    if coverage_scope_id is None:
+        raise ReviewerTaskError('prepared 审阅包缺 coverage_scope_id')
+    binding = prepared.get('binding') or {}
+    request = _request_wrapper(current, waiting_on, {
+        'kind': 'node', 'node': 'stage2.global',
+        'flags': ['--review-issues', '@reviewer-input'],
+        'input_payload': {
+            'review_token': str(prepared['review_token']),
+            'actor': _ACTOR,
+            'issues': [],
+        },
+    })
+    issue_option = _option(
+        'node:stage2.global.review-issues', request,
+        editable_fields=['action.input_payload.issues'],
+        binding_fields=['schema', 'surface_seal', 'waiting_on', 'action.node',
+                        'action.flags', 'action.input_payload.review_token/actor'],
+        allowed_values={
+            'coverage_scope_id': coverage_scope_id,
+            'issue.target.refs.item': allowed_refs_item,
+            'issue.target.refs.scope': allowed_refs_scope,
+            'issue.evidence_refs': evidence_refs,
+            'issue.state': ['FAIL', 'UNVER'],
+            'issue.issue_type': list(ISSUE_REVIEW_ISSUE_TYPES),
+            'issue.repair_hint': list(ISSUE_REVIEW_REPAIR_HINTS),
+            'candidate_patch.binding': {
+                'character_ids': list(binding.get('character_ids') or []),
+                'relation_ids': list(binding.get('relation_ids') or []),
+                'rule_ids': list(binding.get('rule_ids') or []),
+                'secret_ids': list(binding.get('secret_ids') or []),
+                'collections': binding.get('collections') or {},
+            },
+            'purpose': (
+                '一次回答完成范围审阅：主动找错、核对历史问题、最后仅为明确小错附'
+                ' candidate_patch；issues=[] 是对当前 prepared 范围的派生通过。'
+                '不得伪造目标或证据；stop/uncertain 只用于安全出口。'),
+        },
+    )
+    return _terminal_review_options([issue_option], current, waiting_on)
+
+
 def _submission_options(pack: dict[str, Any], current: OperatorNext,
                         waiting_on: str) -> list[dict[str, Any]]:
     if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
         return _blueprint_submission_options(pack, current, waiting_on)
+    if waiting_on == queue.WAITING_ON_STAGE2_REVIEW and isinstance(
+            pack.get('global'), dict) and (
+            pack['global'].get('kind') == 'stage2-global-review-workpack-v7'):
+        return _issue_review_submission_options(pack, current, waiting_on)
     if waiting_on == queue.WAITING_ON_STAGE6_PREPARE:
         # uncertain 必须落独立 PrepareDecision/Review；不再增加只结束席位、
         # 却没有准备审阅决定的通用 uncertain option。stop 已由本 owner 提供。
@@ -2932,6 +2988,24 @@ def _stage2_business_sha256(
         return _canonical_json_sha256(reviewer_revalidation.business_identity(
             pack, waiting_on, reviewer_contract.for_blocker(waiting_on)))
     global_pack = pack.get('global')
+    if (waiting_on == queue.WAITING_ON_STAGE2_REVIEW
+            and isinstance(global_pack, Mapping)
+            and global_pack.get('kind') == 'stage2-global-review-workpack-v7'):
+        identities = global_pack.get('identities')
+        if not isinstance(identities, Mapping):
+            raise ReviewerTaskError('prepared 审阅包缺来源身份')
+        business: dict[str, Any] = {
+            'waiting_on': waiting_on,
+            'protocol': global_pack.get('protocol'),
+            'coverage_scope_id': global_pack.get('coverage_scope_id'),
+            'prepared_sha256': global_pack.get('prepared_sha256'),
+            'expected_source_sha256': identities.get('source_sha256'),
+            'main_text_subject_sha256': identities.get('main_text_subject_sha256'),
+        }
+        if not all(isinstance(value, str) and value
+                   for value in business.values()):
+            raise ReviewerTaskError('prepared 审阅包业务身份不完整')
+        return _canonical_json_sha256(business)
     binding = global_pack.get('binding') if isinstance(global_pack, Mapping) else None
     if not isinstance(binding, Mapping):
         raise ReviewerTaskError('Stage2 global workpack 缺业务 binding')
@@ -2996,6 +3070,34 @@ def _stage2_progress_identity(
     if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
         return _blueprint_progress_identity(pack)
     global_pack = pack.get('global')
+    if (waiting_on == queue.WAITING_ON_STAGE2_REVIEW
+            and isinstance(global_pack, Mapping)
+            and global_pack.get('kind') == 'stage2-global-review-workpack-v7'):
+        identities = global_pack.get('identities')
+        materials = global_pack.get('materials')
+        if (not isinstance(identities, Mapping)
+                or not isinstance(materials, Mapping)
+                or not isinstance(materials.get('scope'), Mapping)):
+            raise ReviewerTaskError('prepared 审阅包进展身份缺 scope 材料')
+        pending_ids = materials['scope'].get('pending_obligation_ids')
+        obligations = global_pack.get('obligations')
+        if not isinstance(pending_ids, list) or not isinstance(obligations, list):
+            raise ReviewerTaskError('prepared 审阅包进展身份形状漂移')
+        hashes = {row.get('obligation_id'): row.get('subject_sha256')
+                  for row in obligations if isinstance(row, Mapping)}
+        unresolved = [{'obligation_id': key, 'subject_sha256': hashes.get(key)}
+                      for key in pending_ids]
+        return {
+            'source_sha256': identities.get('source_sha256'),
+            'main_text_sha256': identities.get('main_text_subject_sha256'),
+            'workpack_sha256': global_pack.get('prepared_sha256'),
+            'progress_sha256': _canonical_json_sha256({
+                'waiting_on': waiting_on,
+                'unresolved': unresolved,
+                'coverage_scope_id': global_pack.get('coverage_scope_id'),
+            }),
+            'blocker_count': len(unresolved),
+        }
     binding = global_pack.get('binding') if isinstance(global_pack, Mapping) else None
     rows = global_pack.get('items') if isinstance(global_pack, Mapping) else None
     if not isinstance(binding, Mapping) or not isinstance(rows, list):
@@ -3316,7 +3418,31 @@ def build_task(
             '决定落盘后 Supervisor 会另取精确恢复许可，本轮 Commander 不启动 Executor。\n')
     else:
         stage4_resolution_instruction = ''
-    stage2_instruction = (f"""一次只提交一个动作。Stage2 Global 与 Blueprint 各有独立 Commander 工作单元，
+    prepared_review = (
+        waiting_on == queue.WAITING_ON_STAGE2_REVIEW
+        and isinstance(pack.get('global'), Mapping)
+        and pack['global'].get('kind') == 'stage2-global-review-workpack-v7')
+    if prepared_review:
+        stage2_instruction = f"""本轮是 Stage2 联合审阅（Characters＋Global，协议 {pack['global'].get('protocol')}）。
+工作单元额度与预算纪律同前：基础四次加已生效的不可变人工追加，包含首次、格式修复与语义重试；
+模型不能自行加额，改候选、换会话和重启不重发预算。Global 接受后才生成 Blueprint。
+你只回答本轮发现的问题（issues）：不要逐项 PASS，不要输出 reason 卡、actor、token、hash 或动作菜单；
+未报告问题的义务由代码按 prepared 范围派生通过，这份派生通过由你的完整阅读支撑。
+先依据通用判据、原文与当前产物主动找错，再核对材料后部的历史问题（含已删除问题）；
+是否容易修复不得影响问题是否报告。完成问题集合后，仅为明确的小错附 candidate_patch。
+判据：完整登记重要人物与称谓，只收需要跨章维持的事实、因果和披露约束；减少重复与冗余证据。
+事实成立时间与读者披露时间独立；称谓字面可见与同人关系揭示独立；跨人物共享称谓不自动判为
+身份冲突；机械合法不等于语义正确。缺失人物引用人物完整性义务，缺失称谓引用对应人物的
+称谓覆盖义务，资格问题优先引用已有规则或秘密主体、无法落到单一主体时引用集合义务。
+issue_type/repair_hint 只是分类与建议；owner、派修与失效由代码计算，你没有决定或扩大
+scope 的权限。证据不足保持 UNVER，不得猜 FAIL；不得为空 issues 而省略真实问题，
+也不得用 stop 表达“有问题但懒得写”。
+候选 patch 只接受明确字段/时点/证据订正与明确的误抽删除；人物新建、删除、合并、
+称谓改归属等复杂修复如实报告并给 repair_hint，不要给 patch。
+materials.core_review 已含紧凑义务卡、证据闭集、原文与历史问题；正文只提供一次。
+"""
+    else:
+        stage2_instruction = (f"""一次只提交一个动作。Stage2 Global 与 Blueprint 各有独立 Commander 工作单元，
 各自以基础四次加已生效的不可变人工追加为有效额度，包含首次、格式纠错及后续审阅；
 模型不能自行加额，改候选、换会话和重启不重发预算。
 Global 首轮及其订正必须接受当前 Global 后，才允许 Blueprint 生产与独立交叉审阅。
@@ -3482,6 +3608,13 @@ def action_business_sha256(action: ReviewerAction) -> str:
     else:
         input_payload = action.input_payload
         if (action.node == 'stage2.global'
+                and '--review-issues' in action.flags
+                and input_payload is not None):
+            # issues 提交的 review_token/actor 是业务身份的一部分；
+            # 目标/证据闭集已由 loader 校验，逻辑载荷整体进入业务 hash。
+            input_payload = decode_artifact(
+                STAGE2_ISSUE_REVIEW_DECISIONS, input_payload).payload
+        elif (action.node == 'stage2.global'
                 and '--review-decisions' in action.flags
                 and input_payload is not None):
             decoded = decode_artifact(
@@ -4101,6 +4234,54 @@ def _validate_global_edit_binding(
                 f'post_edit_review.decisions 越出模板 review_scope：{outside}')
 
 
+def _validate_issue_review_binding(
+    submission: Any,
+    submission_options: Sequence[dict[str, Any]] | None,
+) -> None:
+    """issues 协议的关闭式 binding：token/actor 逐字绑定，目标与证据只认闭集。
+
+    模型没有决定或扩大 scope 的权限：目标 ref 与证据 ref 都是 prepared 包
+    冻结的闭集；越出即拒，不做集合匹配或静默裁剪。
+    """
+    from contracts.schema.stage2_issue_review import Stage2IssueReviewSubmission
+
+    if not isinstance(submission, Stage2IssueReviewSubmission):
+        raise ReviewerTaskError('Stage2 issues 提交必须是 typed submission')
+    if submission_options is None:
+        raise ReviewerTaskError('Stage2 issues action 缺 immutable submission binding')
+    matches: list[dict[str, Any]] = []
+    for option in submission_options:
+        exact = option.get('exact_request') if isinstance(option, dict) else None
+        action = exact.get('action') if isinstance(exact, dict) else None
+        if (isinstance(action, dict) and action.get('kind') == 'node'
+                and action.get('node') == 'stage2.global'
+                and action.get('flags') == ['--review-issues', '@reviewer-input']):
+            matches.append(option)
+    if len(matches) != 1:
+        raise ReviewerTaskError(
+            '当前 immutable workpack 未唯一提供 Stage2 issues 审阅动作')
+    expected = matches[0]['exact_request']['action']['input_payload']
+    if not isinstance(expected, dict):
+        raise ReviewerTaskError('Stage2 issues immutable option 缺 typed payload')
+    if submission.review_token != expected.get('review_token'):
+        raise ReviewerTaskError('review_token 是 immutable binding，不得修改')
+    if submission.actor != expected.get('actor'):
+        raise ReviewerTaskError('actor 由可信代码注入，不得修改')
+    allowed = matches[0].get('allowed_values') or {}
+    item_refs = set(allowed.get('issue.target.refs.item') or ())
+    scope_refs = set(allowed.get('issue.target.refs.scope') or ())
+    evidence_refs = set(allowed.get('issue.evidence_refs') or ())
+    for issue in submission.issues:
+        closed = item_refs if issue.target.kind == 'existing_item' else scope_refs
+        if issue.target.ref not in closed:
+            raise ReviewerTaskError(
+                f'issue 目标越出 prepared 范围闭集：{issue.target.ref}')
+        for ref in issue.evidence_refs:
+            if ref not in evidence_refs:
+                raise ReviewerTaskError(
+                    f'issue 证据引用越出 prepared 证据闭集：{ref}')
+
+
 def _validate_global_review_binding(
     submitted: dict[str, Any], expected: dict[str, Any],
 ) -> None:
@@ -4346,19 +4527,35 @@ def load_action(
             raise ReviewerTaskError('node action.input_payload 必须是 object')
         if node == 'stage2.global':
             operations = [
-                flag for flag in ('--review-decisions', '--apply-edit')
+                flag for flag in ('--review-decisions', '--apply-edit',
+                                  '--review-issues')
                 if flag in flags
             ]
             if len(operations) != 1 or input_payload is None:
                 raise ReviewerTaskError(
-                    'stage2.global reviewer action 必须恰好携带 review-decisions '
-                    '或 apply-edit typed payload')
+                    'stage2.global reviewer action 必须恰好携带 review-decisions、'
+                    'apply-edit 或 review-issues typed payload')
             operation = operations[0]
             marker = flags.index(operation) + 1
             if marker >= len(flags) or flags[marker] != '@reviewer-input':
                 raise ReviewerTaskError(
                     f'{operation} 的值必须是 @reviewer-input 占位符')
-            if operation == '--review-decisions':
+            if operation == '--review-issues':
+                from contracts.schema.stage2_issue_review import (
+                    Stage2IssueReviewSubmission,
+                )
+                try:
+                    submission = Stage2IssueReviewSubmission.model_validate(
+                        input_payload)
+                except ValidationError as exc:
+                    raise ReviewerTaskError(_typed_validation_reason(
+                        'stage2.global review-issues 不符合 issues 协议契约',
+                        exc)) from exc
+                _validate_issue_review_binding(submission, submission_options)
+                logical_payload = submission.model_dump(
+                    mode='json', by_alias=True)
+                artifact = STAGE2_ISSUE_REVIEW_DECISIONS
+            elif operation == '--review-decisions':
                 try:
                     logical_payload = GlobalReviewDecisionSet.model_validate(
                         input_payload).model_dump(mode='json')

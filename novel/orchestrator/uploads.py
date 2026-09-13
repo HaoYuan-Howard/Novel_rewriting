@@ -31,6 +31,7 @@ from contracts.artifacts import (
     STAGE2_BLUEPRINT_EDIT,
     STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_REVIEW_DECISIONS,
+    STAGE2_ISSUE_REVIEW_DECISIONS,
 )
 from contracts.schema.api import (
     BatchTrimResolutionRequest, Stage5ReviewerRewriteRequest,
@@ -217,6 +218,35 @@ def save_draft_edit(
         os.replace(tmp, target)
     except OSError as exc:
         raise ArtifactUnreadable(f'保存人工改稿失败：{exc!r}') from exc
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return target.resolve()
+
+
+def save_stage2_issue_submission(
+    base: str | os.PathLike[str],
+    sid: str,
+    submission: 'Stage2IssueReviewSubmission',
+) -> Path:
+    """issues 协议回答的一次性保存；CLI 事务只消费这一份公开请求。"""
+    from contracts.schema.stage2_issue_review import Stage2IssueReviewSubmission
+    paths.check_sid(sid)
+    root = service_dir(base) / EDITS_DIRNAME / sid
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f'issue-review-{uuid.uuid4().hex}.json'
+    tmp = target.with_suffix('.tmp')
+    try:
+        data = encode_artifact(
+            STAGE2_ISSUE_REVIEW_DECISIONS,
+            submission.model_dump(mode='json', by_alias=True))
+        tmp.write_bytes((json.dumps(
+            data, ensure_ascii=False, indent=2, sort_keys=True) + '\n').encode('utf-8'))
+        os.replace(tmp, target)
+    except OSError as exc:
+        raise ArtifactUnreadable(f'保存 stage2 issues 审阅提交失败：{exc!r}') from exc
     finally:
         try:
             tmp.unlink(missing_ok=True)

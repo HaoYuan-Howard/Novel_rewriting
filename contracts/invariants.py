@@ -1692,6 +1692,12 @@ FREE_ENTRIES: Final = {
     '--apply-edit': '把人工改过的内容落成新的一轮',
     '--preview-edit': '只读预检 Stage5 人工稿，不调用模型、不写盘',
     '--review-decisions': '应用带 actor、理由和 subject hash 乐观锁的独立 typed 复核决策',
+    '--review-issues': ('应用 Stage2 issues 协议回答：复验 prepared 包与当前字节身份，'
+                        '同一可恢复事务落问题账与范围派生审阅账，安全时免费补节点接受'),
+    '--prepare-issue-review': ('由代码冻结并落盘不可变 PreparedScope（Global 工作包 v7）；'
+                               '纯确定性渲染，不调用模型'),
+    '--emit-issue-review-template': ('向 stdout 输出 issues 协议的公开请求骨架；'
+                                     'review_token 来自当前 prepared 包，不写盘'),
     '--recover-edit': '免费补齐本 owner 已耐久的原编辑或复核决定，不重新审阅、不调用模型',
     '--close-review': '核验当前节点所需的 typed 接受覆盖，零模型补齐审批与闸门',
     # ⚠⚠ **它是 2026-08-15 补的，而漏它的后果正是本表开头那条**：
@@ -1950,6 +1956,7 @@ WRITE_EFFECTS: Final = {
     '--validate-edit': '',
     '--emit-review-template': '',
     '--emit-review-workpack': '',
+    '--emit-issue-review-template': '',
     '--emit-prepared-recovery-workpack': '',
     '--preview-edit': '',
     '--recover-repair-aggregate': (
@@ -1966,6 +1973,11 @@ WRITE_EFFECTS: Final = {
     '--apply-edit': '把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）',
     '--renormalize': '按当前契约重算代码派生字段与原文定位并写回',
     '--refresh-review': '只刷新 stage2/global_review.json；保留有效决定，变化主体保持待审',
+    '--review-issues': ('同一可恢复事务写 stage2/_review/issue_review_transactions.json、'
+                        '更新 stage2/global_review.json 并补 _service 审批接受'),
+    '--prepare-issue-review': (
+        '写入 stage2/_review/core_review_prepared.json（PreparedScope 冻结与渲染）；'
+        '新包覆盖写，不归档不进 _rounds/'),
     '--apply-core-edits': '分 owner 提交已通过整体预检的 Characters/Global 决定，并补齐中断窗口',
     '--recover-analyze': '由原 Analyze checkpoint 免费物化 Global，保留原始来源与独立新恢复账',
     '--recover-analyze-run': '复验原联合 checkpoint 并按冻结目标补尾；不调用模型或重开已完成事务',
@@ -2234,6 +2246,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--emit-edit-template',
                                          '--emit-edit-correction-workpack',
                                          '--emit-review-template', '--emit-review-workpack',
+                                         '--prepare-issue-review', '--emit-issue-review-template',
+                                         '--review-issues',
                                          '--review-scope',
                                          '--actor', '--reason', '--response-repair'),
                                  produces=(artifact_paths.STAGE2_GLOBAL_GROUNDING,

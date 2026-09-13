@@ -62,6 +62,11 @@ _EXTERNAL_REQUEST_ARTIFACTS = frozenset({
     ARTIFACT_PATHS['stage4.plan_edit'],
     ARTIFACT_PATHS['stage6.hook_edit'],
     ARTIFACT_PATHS['stage7.name_map_edit'],
+    # Stage2CoreReview 的 prepared 包与审阅事务账是审阅运输 WAL：内容自哈希，
+    # 身份新鲜度由事务逐字节复验业务产物承担；prepare 是 seat 构造的一步，
+    # 不能让写包本身改变执行坐标。
+    ARTIFACT_PATHS['stage2.core_review_prepared'],
+    ARTIFACT_PATHS['stage2.issue_review_transactions'],
 })
 
 

@@ -993,6 +993,28 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         return X.OK
 
     if ctx.node == 'stage2.global':
+        if '--prepare-issue-review' in tokens:
+            import json as _json
+            from novel.stages.stage2 import core_review
+            payload = core_review.prepare(ctx)
+            print(_json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            return X.OK
+        if '--emit-issue-review-template' in tokens:
+            import json as _json
+            from novel.stages.stage2 import core_review
+            print(_json.dumps(core_review.submission_template(ctx),
+                              ensure_ascii=False, indent=2, sort_keys=True))
+            return X.OK
+        if '--review-issues' in tokens:
+            from novel.stages.stage2 import core_review
+            summary = core_review.apply_review_issues(
+                ctx, _valued(flags, '--review-issues') or '')
+            state = '✓ 已接受并打开 s2 审阅接受' if summary['node_accepted'] else (
+                '⚠ 已登记问题并保持闸门关闭')
+            print(f'  {state}：派生通过 {summary["derived_pass_count"]} 项，'
+                  f'未闭合问题 {summary["issue_count"]} 个；'
+                  f'transaction={summary["transaction_sha256"][:16]}')
+            return X.OK if summary['node_accepted'] else X.CHECK_FAILED
         if '--apply-core-edits' in tokens:
             from novel.stages.stage2 import core_edits
             core_edits.apply(ctx, _valued(flags, '--apply-core-edits') or '')

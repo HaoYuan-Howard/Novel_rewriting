@@ -39,10 +39,9 @@ def test_global_commander_built_prompt_matches_current_core_boundaries(tmp_path,
     ctx = seed(tmp_path)
 
     def read_command(argv, **_kwargs):
-        if '--emit-review-workpack' in argv:
-            return global_review.review_workpack(ctx)
-        if '--emit-review-template' in argv:
-            return json.loads(global_review.review_template_json(ctx))
+        if '--prepare-issue-review' in argv:
+            from novel.stages.stage2 import core_review
+            return core_review.prepare(ctx)
         pytest.fail(f'Global 首轮不应读取其他阶段材料：{argv}')
 
     monkeypatch.setattr(reviewer_tasks, '_json_command', read_command)
@@ -54,26 +53,36 @@ def test_global_commander_built_prompt_matches_current_core_boundaries(tmp_path,
     target = paths.scratch_session_dir(tmp_path, ctx.sid, 'core-prompt') / 'request.json'
     task = reviewer_tasks.build_task(tmp_path, ctx.sid, current, target, epoch_id='core-prompt')
     assert task is not None and not target.exists()
-    assert 'secret/secret_setup/reveal 项可以按完整 secret 组提交' in task.prompt
-    assert '人物、setting、关系、规则及集合完整性均为 must_fix，不得隔离' in task.prompt
-    assert '同响应 core_edits.global 的关系端点可引用本次 add 的 cN' in task.prompt
-    assert '独立 GlobalEdit 没有这份新增映射，不得使用 cN' in task.prompt
+    assert '只回答本轮发现的问题（issues）' in task.prompt
+    assert '派生通过' in task.prompt
+    assert 'repair_hint' in task.prompt
+    assert 'secret/secret_setup/reveal 项可在保持 UNVER 时按完整秘密组提交显式隔离决定' in task.prompt
     for obsolete in ('secret/relation/world_rule 才能', '钩子独立证据',
-                     'knowledge_links.pending', 'trigger_fact_ref', 'Blueprint producer --close-review'):
+                     'knowledge_links.pending', 'trigger_fact_ref', 'Blueprint producer --close-review',
+                     'post_edit_review 对新项用 default/quarantine'):
         assert obsolete not in task.prompt
     for required in ('role 只能描述首次公开身份', '关键匿名个体', '每实体每个 surface 只登记一次',
                      '事实生效、失效、读者揭示和证据章独立', '同场产生并当场揭晓的局部惊喜不得晋升'):
         assert required in task.prompt
     envelope = json.loads(task.prompt.split('<immutable-workpack>\n', 1)[1].split(
         '\n</immutable-workpack>', 1)[0])
-    material = envelope['materials']['global']
-    assert material['main_text_chapters'] == main_text()
-    assert any(row['kind'] == 'alias_identity'
-               for card in material['subject_cards'] for row in card['items'])
-    control = next(option for option in task.submission_options
-                   if option['id'] == 'approval:stage2_global_review')
-    assert 'core_edits.schema' in control['allowed_values']
-    assert '由代码冻结正式ID并统一重写' in control['allowed_values']['core_edits.purpose']
+    material = envelope['materials']['core_review']
+    assert material['source']['mode'] == 'whole_book'
+    assert material['source']['chapters'] == [
+        {'chapter_ordinal': row['chapter_ordinal'], 'text': row['text']}
+        for row in main_text()]
+    assert any(card['kind'] == 'alias_identity' for card in material['targets'])
+    issue_option = next(option for option in task.submission_options
+                        if option['id'] == 'node:stage2.global.review-issues')
+    allowed = issue_option['allowed_values']
+    assert allowed['coverage_scope_id']
+    assert allowed['issue.target.refs.item']
+    assert allowed['issue.target.refs.scope']
+    assert allowed['issue.state'] == ['FAIL', 'UNVER']
+    assert set(issue_option['exact_request']['action']['flags']) == {
+        '--review-issues', '@reviewer-input'}
+    assert not any(option['id'] == 'approval:stage2_global_review'
+                   for option in task.submission_options)
 
 
 def snapshot(ctx):
@@ -588,10 +597,9 @@ def test_alias_add_and_global_deletions_preserve_mixed_review_coverage_in_final_
     assert len(coverage.scope.obligations) == len(coverage.inherited) + len(coverage.pending_obligation_ids)
 
     def read_command(argv, **_kwargs):
-        if '--emit-review-workpack' in argv:
-            return global_review.review_workpack(ctx)
-        if '--emit-review-template' in argv:
-            return json.loads(global_review.review_template_json(ctx))
+        if '--prepare-issue-review' in argv:
+            from novel.stages.stage2 import core_review
+            return core_review.prepare(ctx)
         pytest.fail(f'本轮不应读取其他阶段：{argv}')
 
     monkeypatch.setattr(reviewer_tasks, '_json_command', read_command)
@@ -602,9 +610,12 @@ def test_alias_add_and_global_deletions_preserve_mixed_review_coverage_in_final_
     task = reviewer_tasks.build_task(tmp_path, ctx.sid, frontier, target, epoch_id='mixed-core-review')
     envelope = json.loads(task.prompt.split('<immutable-workpack>\n', 1)[1].split(
         '\n</immutable-workpack>', 1)[0])
-    material = envelope['materials']['global']
-    assert {row['obligation_id'] for row in material['removed_problem_materials']} == deleted
-    assert material['main_text_chapters'] == source
+    material = envelope['materials']['core_review']
+    assert {row['obligation_id'] for row in material['historical_issues']} == deleted
+    assert material['source']['mode'] == 'whole_book'
+    assert material['source']['chapters'] == [
+        {'chapter_ordinal': row['chapter_ordinal'], 'text': row['text']}
+        for row in source]
     assert not target.exists() and ctx.ledger.path.read_bytes() == ledger
 
 

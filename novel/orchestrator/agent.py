@@ -102,6 +102,7 @@ from novel.orchestrator import (
     review_seats, reviewer_action_evidence, reviewer_seat_ledger,
     reviewer_protocol_recovery, reviewer_schema_recovery, reviewer_revalidation,
     reviewer_tasks, service_lifecycle,
+    stage2_issue_recovery, stage2_issue_wire,
     stage2_reviewer_wire, stage4_reviewer_wire, stage6_prepare_wire, state, uploads,
 )
 from novel.orchestrator.agent_supervisor import (
@@ -1013,7 +1014,13 @@ def _stage2_reviewer_input(
     if payload is None:  # pragma: no cover —— 调用方只在有 payload 时进入
         raise RuntimeError('Stage2 reviewer input 缺 typed payload')
     tokens = set(action.flags)
-    if '--review-decisions' in tokens and '--apply-edit' not in tokens:
+    if '--review-issues' in tokens:
+        from contracts.artifacts import STAGE2_ISSUE_REVIEW_DECISIONS
+        from contracts.schema.stage2_issue_review import Stage2IssueReviewSubmission
+        decoded = decode_artifact(STAGE2_ISSUE_REVIEW_DECISIONS, payload)
+        submission = Stage2IssueReviewSubmission.model_validate(decoded.payload)
+        path = uploads.save_stage2_issue_submission(base, sid, submission)
+    elif '--review-decisions' in tokens and '--apply-edit' not in tokens:
         decoded = decode_artifact(STAGE2_GLOBAL_REVIEW_DECISIONS, payload)
         decisions = GlobalReviewDecisionSet.model_validate(decoded.payload)
         path = uploads.save_global_review_decisions(base, sid, decisions)
@@ -2682,12 +2689,14 @@ def _materialize_reviewer_response(
         raise _ReviewerResponseTypedInvalid(str(exc)) from exc
     wire = (stage6_prepare_wire if stage6_prepare_wire.uses_compact_wire(task)
             else stage4_reviewer_wire if stage4_reviewer_wire.uses_compact_wire(task)
+            else stage2_issue_wire if stage2_issue_wire.matches(task)
             else stage2_reviewer_wire)
     if wire.uses_compact_wire(task):
         try:
             document = wire.assemble(task, document)
         except (stage6_prepare_wire.PrepareReviewerWireError,
                 stage2_reviewer_wire.Stage2ReviewerWireError,
+                stage2_issue_wire.Stage2IssueWireError,
                 stage4_reviewer_wire.Stage4ReviewerWireError) as exc:
             # compact wire 只是运输层；所有拒绝仍进入现役 ReviewerTaskError
             # 的有界纠错/持久拒因路径，不能越级变成 Supervisor runtime crash。
@@ -4760,15 +4769,27 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 or feedback.get('waiting_on') != waiting_on):
             feedback = None
         prompt = task.prompt
-        if feedback is not None:
-            prompt = reviewer_tasks.correction_prompt(
-                task, str(feedback['reason']),
-                request_sha256=str(feedback['response_sha256']), attempt=budget.used)
+        issue_wire_active = stage2_issue_wire.matches(task)
         wire = (stage6_prepare_wire if stage6_prepare_wire.uses_compact_wire(task)
                 else stage4_reviewer_wire if stage4_reviewer_wire.uses_compact_wire(task)
+                else stage2_issue_wire if issue_wire_active
                 else stage2_reviewer_wire)
-        reviewer_prompt = wire.prompt_for(task, prompt)
         output_schema = wire.output_schema_for(task)
+        if feedback is not None:
+            if issue_wire_active and feedback.get('recovery_kind') == 'format_repair':
+                # 格式模型修复：只发原回答、issue schema 与解析错误；
+                # 不附原文、业务产物或额外历史材料。
+                prompt = stage2_issue_recovery.format_repair_prompt(
+                    str(feedback.get('original_response') or ''),
+                    output_schema=output_schema, error=str(feedback['reason']))
+            elif issue_wire_active:
+                # 语义重试复用同一 prepared 包与完整审阅 prompt，不附旧推理。
+                prompt = task.prompt
+            else:
+                prompt = reviewer_tasks.correction_prompt(
+                    task, str(feedback['reason']),
+                    request_sha256=str(feedback['response_sha256']), attempt=budget.used)
+        reviewer_prompt = wire.prompt_for(task, prompt)
         output_schema_digest = _prepare_output_schema(output_schema)[2]
         schema_recovery_proof = None
         failure_recovery_validated = False
@@ -4893,11 +4914,15 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     uploads.discard_edit_plan(base, path)
                 pending = None
 
-        def rejected(reservation: ContentReservation, digest: str, reason: str) -> CommanderTurnResult:
+        def rejected(reservation: ContentReservation, digest: str, reason: str, *,
+                     recovery_kind: str | None = None,
+                     original_response: str | None = None) -> CommanderTurnResult:
             repeated = feedback is not None and feedback.get('response_sha256') == digest
             budget.save_feedback(reservation.turn_id, dict(
                 business_sha256=task.business_sha256, waiting_on=waiting_on,
-                reason=reason, response_sha256=digest))
+                reason=reason, response_sha256=digest,
+                **({'recovery_kind': recovery_kind} if recovery_kind else {}),
+                **({'original_response': original_response} if original_response else {})))
             if repeated:
                 return stopped('Commander 收到反馈后重复提交同一回答，已停止无进展循环：' + reason)
             if budget.remaining == 0:
@@ -4906,6 +4931,71 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 exit_code=2, provider_session_id=None, continue_ready=True,
                 continue_reviewer=True, outcome=AgentDeliveryOutcome(
                     state='stopped', checked_at=int(time.time()), reason=reason))
+
+        def issue_recovery_rejection(
+                reservation: ContentReservation, response: str, error: str,
+        ) -> CommanderTurnResult:
+            """issues 协议的有界恢复分类；槽位耗尽进入明确失败终态。"""
+            counters = stage2_issue_recovery.counters(budget)
+            kind: str | None = None
+            detail = ''
+            try:
+                document, _steps = stage2_issue_recovery.parse_issue_answer(response)
+            except stage2_issue_recovery.AnswerParseError as exc:
+                detail = f'回答不是合法 issues JSON：{exc.code}'
+                if counters['format_repair']['remaining'] > 0:
+                    kind = 'format_repair'
+                elif counters['semantic_retry']['remaining'] > 0:
+                    kind = 'semantic_retry'
+                    detail += '；格式修复槽位已用，转语义重试'
+            else:
+                truncated = stage2_issue_recovery.looks_truncated(response, document)
+                if truncated or ('issues' not in document and 'answer' not in document):
+                    detail = '回答疑似截断或缺失 issues'
+                    if counters['semantic_retry']['remaining'] > 0:
+                        kind = 'semantic_retry'
+                elif counters['format_repair']['remaining'] > 0:
+                    kind = 'format_repair'
+                    detail = f'回答不符合 issue schema：{error}'
+                elif counters['semantic_retry']['remaining'] > 0:
+                    kind = 'semantic_retry'
+                    detail = f'回答不符合 issue schema 且格式修复槽位已用：{error}'
+                else:
+                    detail = f'回答不符合 issue schema：{error}'
+            if kind is None:
+                return stopped(
+                    'issues 协议恢复槽位已耗尽，进入明确失败终态（接受闸保持关闭）：'
+                    + detail)
+            return rejected(
+                reservation, _reviewer_response_sha256(response),
+                f'{kind}：{detail}', recovery_kind=kind,
+                original_response=response)
+
+        def issue_preservation_verdict(
+                response: str,
+        ) -> tuple[str, str] | None:
+            """格式修复回答的独立内容保全检查；不可证明时转语义重试。"""
+            if (feedback is None
+                    or feedback.get('recovery_kind') != 'format_repair'
+                    or not feedback.get('original_response')):
+                return None
+            counters = stage2_issue_recovery.counters(budget)
+            try:
+                original, _a = stage2_issue_recovery.parse_issue_answer(
+                    str(feedback['original_response']))
+                repaired, _b = stage2_issue_recovery.parse_issue_answer(response)
+            except stage2_issue_recovery.AnswerParseError:
+                preserved = False
+            else:
+                preserved = stage2_issue_recovery.content_preserved(
+                    original, repaired)
+            if preserved:
+                return None
+            if counters['semantic_retry']['remaining'] <= 0:
+                return ('terminal',
+                        '格式修复无法证明内容保全，语义重试槽位已用；'
+                        '停止消费该回答并进入明确失败终态')
+            return ('semantic_retry', '格式修复内容保全不可证明；转入同 scope 语义重试')
 
         if pending is not None:
             reservation, saved = pending
@@ -5007,11 +5097,34 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         action, digest, record_path = _materialize_reviewer_document(
                             task, current, document, response_digest=digest, persist_validated=persist)
                 else:
+                    issue_response = response
+                    if issue_wire_active:
+                        # 确定性恢复：BOM/围栏/尾逗号/登记包装只剥运输内容。
+                        try:
+                            cleaned, _steps = stage2_issue_recovery.parse_issue_answer(
+                                response)
+                            issue_response = json.dumps(
+                                cleaned, ensure_ascii=False, sort_keys=True,
+                                separators=(',', ':'))
+                        except stage2_issue_recovery.AnswerParseError:
+                            issue_response = response
+                        preservation = issue_preservation_verdict(issue_response)
+                        if preservation is not None:
+                            kind, reason = preservation
+                            if kind == 'terminal':
+                                return stopped(
+                                    'issues 协议格式修复被拒：' + reason)
+                            return rejected(
+                                reservation, _reviewer_response_sha256(response),
+                                reason, recovery_kind=kind,
+                                original_response=response)
                     action, digest, record_path = _materialize_reviewer_response(
-                        task, current, response, persist_validated=persist,
+                        task, current, issue_response, persist_validated=persist,
                         preserve_validated=lambda candidate, digest:
                         _preserve_validated_reviewer_residue(base, sid, candidate, digest))
             except _ReviewerResponseTypedInvalid as exc:
+                if issue_wire_active:
+                    return issue_recovery_rejection(reservation, response, str(exc))
                 return rejected(reservation, _reviewer_response_sha256(response), str(exc))
             if isinstance(action, reviewer_tasks.ReviewerStopAction):
                 budget.mark_adopted(reservation.turn_id)

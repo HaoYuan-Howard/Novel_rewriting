@@ -594,6 +594,25 @@ class WorkUnitBudget:
             raise WorkUnitRefused('工作单元请求身份不一致')
         return blob.payload
 
+    def recovery_kinds_used(self) -> dict[str, int]:
+        """按请求工作包的 ``recovery_kind`` 统计已用恢复槽位。
+
+        这是 issues 协议 job 级持久计数器的唯一来源：跨重启、换 session、
+        换 epoch 与范围修订保持累计，不能在任何一层重新获得恢复次数。
+        """
+        counts: dict[str, int] = {}
+        for turn in self._read().turns:
+            if turn.request_payload_sha256 is None:
+                continue
+            try:
+                payload = self.request_payload(turn.turn_id)
+            except WorkUnitRefused:
+                continue
+            kind = payload.get('recovery_kind')
+            if isinstance(kind, str) and kind:
+                counts[kind] = counts.get(kind, 0) + 1
+        return counts
+
     def mark_adopted(self, turn_id: str) -> None:
         with path_transaction_lock(self.path):
             ledger = self._read()
