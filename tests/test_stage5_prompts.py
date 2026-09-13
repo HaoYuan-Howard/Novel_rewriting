@@ -214,7 +214,7 @@ def _scene(slot: str, delivery: str, refs: list[str], *, budget: int = 200,
         'deliveries': [{'beat_ref': ref, 'presentation_instruction': None, 'stages': []}
                        for ref in refs],
         'context_beat_refs': [], 'turn_beat_ref': refs[-1],
-        'state_events': [], 'knowledge_event_refs': [], 'constraint_refs': [],
+        'state_events': [], 'constraint_refs': [],
     }
     scene.update(kw)
     return scene

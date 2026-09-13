@@ -18,10 +18,10 @@ from contracts.schema.stage2 import ChapterBlueprints
 from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS
 from novel import paths, prov
 from novel.errors import ArtifactUnreadable, TerminalState
+from novel import admission
 from novel.orchestrator.state import readonly_ctx
 from novel.orchestrator.inspection import read_surface_seal
 from novel.prov import CODE_UNKNOWN
-from novel.stages.stage2 import global_review
 from novel.stages.stage7 import assemble
 from novel.store import ArtifactStore
 from novel.views.inbox import inbox_view
@@ -73,18 +73,16 @@ def _read_delivery(base: str | Path, sid: str, current_code: str
     novel_dir = paths.resolve_novel_dir(base, sid)
     blueprint_store = ArtifactStore(readonly_ctx(
         novel_dir, 'stage2.blueprint', current_code))
-    quarantined_groups: tuple[str, ...] = ()
     blueprint_store.read_own(
         ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS,
         require_current=True)
-    s2ctx = readonly_ctx(novel_dir, 'stage2.global', current_code)
-    safety, counts = global_review.generation_status(s2ctx)
-    quarantined_groups = safety.quarantined_groups
-    if not safety.safe:
+    # Stage2 语义审阅已退役：交付只要求统一机械准入通过；语义结论不再宣称
+    # “blocking 面全 PASS”，而是如实披露 Stage2 语义未审。
+    gate = admission.stage4_ready(base, sid)
+    if not gate.ok:
         return None, _outcome(
             'stopped',
-            f'Stage2 复核闸未打开：current={safety.current}，'
-            f'blocking_items={list(safety.blocking_item_ids)}，counts={counts}')
+            f'Stage2 机械准入未通过：{"; ".join(gate.blocking)}')
 
     book_ctx = readonly_ctx(novel_dir, 'stage7.assemble', current_code)
     text = assemble.read_current_book(book_ctx)
@@ -96,16 +94,18 @@ def _read_delivery(base: str | Path, sid: str, current_code: str
                           for item in blocking[:5])
         return None, _outcome(
             'stopped', f'仍有 {len(blocking)} 条交付阻塞待办：{sample}')
-    if quarantined_groups:
+    if gate.semantic_unreviewed:
         return text, _outcome(
             'ready_with_disclosures',
-            '成书与强闸均通过；Stage2 仍有 UNVER，但写作消费面已确定性隔离 '
-            f'{list(quarantined_groups)}，前端 inbox 保留逐项披露')
+            f'成书与机械准入均通过；{admission.SEMANTIC_UNREVIEWED_NOTE}'
+            + (f'（{"; ".join(gate.disclosures)}）' if gate.disclosures else ''))
     if inbox.items:
         return text, _outcome(
             'ready_with_disclosures',
-            f'成书与强闸均通过；仍保留 {len(inbox.items)} 条非阻塞人工披露')
-    return text, _outcome('ready', 'Stage2 blocking 面全 PASS、成书当前可下载、无待办余额')
+            f'成书与机械准入均通过；仍保留 {len(inbox.items)} 条非阻塞人工披露')
+    return text, _outcome(
+        'ready',
+        '成书当前可下载、无待办余额；Stage2 语义未审限制在交付说明中披露')
 
 
 def read_deliverable_book(base: str | Path, sid: str) -> str:

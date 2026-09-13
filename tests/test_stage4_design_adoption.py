@@ -128,27 +128,22 @@ def test_mixed_design_buys_only_missing_chapters_and_accounts_current_calls(tmp_
 
 
 def test_all_history_is_offered_by_http_without_mutating_sources_then_cli_lands(tmp_path, monkeypatch):
-    from contracts.schema.api import BlueprintSeenRequest, Stage2GlobalSeenRequest, OperatorNext
+    from contracts.schema.api import OperatorNext
     from novel.cli.main import main
     from novel.orchestrator import approvals, execution_permit
-    from novel.views.stage2 import blueprint_review_workpack
-    from tests.test_stage2_review_decisions import _accept_global_node, _accept_blueprint_node
     from tests.test_stage4_binding_input_recovery_integration import _configure_boundary, SID
     from fastapi.testclient import TestClient
     from novel.api.app import create_app
 
     _configure_boundary(monkeypatch)
+    # 合成书只有 Stage2 盘面；准入由种子保证，不读 stage0/1。
+    from novel import admission as mechanical_admission
+    monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
+                        lambda *_args: mechanical_admission.AdmissionCheck('stage2.blueprint', ok=True))
+    monkeypatch.setattr(mechanical_admission, 'stage4_ready',
+                        lambda *_args: mechanical_admission.AdmissionCheck('stage4', ok=True))
     book = _book(tmp_path)
     raw = _seed_current_stage2(book).model_dump(by_alias=True, mode='json')
-    _accept_global_node(book)
-    _accept_blueprint_node(book, monkeypatch)
-    pack = blueprint_review_workpack(tmp_path, SID)
-    approvals.mark_seen(tmp_path, SID, 'read', blueprint_subject=BlueprintSeenRequest(
-        review_token=pack.review_token))
-    _, token = approvals._global_seen_proof(book)
-    approvals.mark_seen(tmp_path, SID, 'global', global_subject=Stage2GlobalSeenRequest(
-        actor='fixture', review_token=token))
-    assert approvals.approve_gate(tmp_path, SID, 's2').gate['s2']
     source = _leave_units(book, raw, (1, 2, 3))
     before = {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
     client = TestClient(create_app(tmp_path))

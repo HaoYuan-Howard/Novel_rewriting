@@ -29,7 +29,7 @@ export function CharactersPanel({ sid }: { sid: string }) {
         onClick={() => setOpen(!open)}>独立人物登记与免费订正</button>
       {open ? (
         <div className="flex flex-col gap-12">
-          <p className="m-0 text-body text-ink-4">登记实体身份、唯一称谓及读者获知其归属的章。称谓本身可以更早出现；登记名不代表写作许可。提交订正后仍需统一复核。</p>
+          <p className="m-0 text-body text-ink-4">登记实体身份、唯一称谓及读者获知其归属的章。称谓本身可以更早出现；登记名不代表写作许可。提交订正后由统一机械准入与 freshness 判定下游，语义未审随交付披露。</p>
           {q.isLoading ? <p role="status">正在读取人物登记…</p> : null}
           {q.error ? <p role="alert">{q.error.message}</p> : null}
           {q.data ? (

@@ -11,13 +11,9 @@ import json
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHARACTERS,
-    STAGE2_KNOWLEDGE_LINKS,
 )
 from contracts.schema.characters import CharacterRegistry, CharactersProvenance, CharactersResponse
 from contracts.schema.knowledge import KnowledgeResponse
-from contracts.schema.knowledge_links import (
-    KnowledgeLinks, KnowledgeLinksProvenance,
-)
 from contracts.schema.stage1 import MainText
 from novel import prov
 from novel.core.evidence import iter_global_evidence_slots
@@ -26,7 +22,7 @@ from novel.llm.client import LlmClient
 from novel.llm.ledger import CostLedger
 from novel.llm.transport import ChatResponse, FakeTransport
 from novel.run import RunContext
-from novel.stages.stage2 import characters, knowledge_links
+from novel.stages.stage2 import characters
 from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
 from novel.store import ArtifactStore
 from tests.test_stage2 import global_grounding, main_text
@@ -154,56 +150,6 @@ def seed_character_registry(ctx: RunContext):
     store.write(STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
                 materialize_blueprint_character_projection(rows, source))
     return artifact
-
-
-def approved_core_review(store: ArtifactStore):
-    """从当前独立两份 Core 显式构造合成审阅前置，不遗漏人物审阅面。"""
-    from contracts.artifacts import STAGE2_GLOBAL_GROUNDING
-    from contracts.schema.knowledge import KnowledgeGrounding
-    from novel.quality.global_review import build_review
-
-    global_payload = store.read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0].model_dump(
-        mode='json', by_alias=True)
-    registry = store.read_own(CharacterRegistry, STAGE2_CHARACTERS)[0].model_dump(mode='json', by_alias=True)
-    review = build_review(global_payload, characters=registry)
-    return review.model_copy(update={'items': [item.model_copy(update={
-        'state': 'PASS', 'actor': 'test-reviewer', 'decided_at': '2026-09-02T00:00:00+00:00',
-        'reason': '合成 fixture 明确核对当前人物与长期知识；非真书语义验收',
-    }) for item in review.items]})
-
-
-def accept_and_materialize_links(ctx: RunContext):
-    """Stage4 专用的合成已审边界；真实逐章、跨章决定与 KL V3 来源落盘。
-
-    不补造 Stage0/1 接受。完整产品汇合由贯通测试直接运行 run_close_review。
-    """
-    from contracts.schema.api import Stage2NodeReviewRequest
-    from novel.orchestrator import approvals
-    from novel.stages.stage2 import global_review
-    from novel.views.stage2 import blueprint_review_workpack
-    from tests.test_plot_review_runtime import request
-    from contracts.schema.stage2 import ChapterBlueprints
-    from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS
-
-    approvals.approve_stage2_review(ctx.novel_dir.parent, ctx.sid, Stage2NodeReviewRequest(
-        node='stage2.global', review_token=global_review.review_token(ctx),
-        decision='accept', actor='fixture-global-commander', reason='合成下游前置材料'))
-    blueprints = ArtifactStore(ctx).read_own(ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)[0]
-    scopes = [f'chapter:{row.chapter_ordinal}' for row in blueprints.blueprints] + ['cross_chapter']
-    for scope in scopes:
-        pack = blueprint_review_workpack(ctx.novel_dir.parent, ctx.sid, scope=scope)
-        approvals.approve_stage2_review(ctx.novel_dir.parent, ctx.sid, request(pack))
-    child = RunContext(
-        novel_dir=ctx.novel_dir, node='stage2.blueprint', paid=False, code=ctx.code,
-        cache=CachePolicy.default(), ledger=CostLedger(path=ctx.ledger.path))
-    store = ArtifactStore(child)
-    actual_scope = knowledge_links.read_scope(store, consuming=True)
-    history, sha = approvals.current_knowledge_link_decisions(ctx.novel_dir.parent, ctx.sid)
-    artifact = KnowledgeLinks(
-        scope=actual_scope, links=knowledge_links.require_complete(actual_scope, history),
-        _provenance=child.free_provenance(KnowledgeLinksProvenance, decision_sha256=sha))
-    store.write(STAGE2_KNOWLEDGE_LINKS, artifact)
-    return knowledge_links.require_current(child)
 
 
 def plot_blueprints() -> dict:

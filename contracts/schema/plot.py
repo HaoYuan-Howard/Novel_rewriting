@@ -400,9 +400,9 @@ class BeatPlacement(StrictModel):
 
 
 class PlotEndpoint(StrictModel):
-    kind: Literal['state', 'constraint', 'knowledge', 'goal']
+    kind: Literal['state', 'constraint', 'goal']
     ref: NonEmpty
-    endpoint: Literal['established', 'ended', 'before', 'after', 'target', 'trigger',
+    endpoint: Literal['established', 'ended', 'before', 'after', 'target',
                       'open', 'close', 'turn', 'chapter']
 
     @model_validator(mode='after')
@@ -410,7 +410,6 @@ class PlotEndpoint(StrictModel):
         allowed = {
             'state': {'established', 'ended'},
             'constraint': {'before', 'after', 'target'},
-            'knowledge': {'trigger'},
             'goal': {'open', 'close', 'turn', 'chapter'},
         }
         if self.endpoint not in allowed[self.kind]:
@@ -423,12 +422,6 @@ class PlotEndpoint(StrictModel):
 
 class PlotAnchorBinding(PlotEndpoint):
     scene_ref: SceneId
-
-
-class PlotKnowledgeTrigger(StrictModel):
-    # 引用既有知识决定，不新增知识主体或传播语义。
-    knowledge_ref: NonEmpty
-    trigger_beat_ref: BeatId
 
 
 class PlotGoalAnchor(StrictModel):

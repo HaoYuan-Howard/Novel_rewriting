@@ -3,7 +3,7 @@
 """章级 B 输入契约恢复：历史盘面 → HTTP/operator → 真实 producer → 新审阅主体。
 
 语料仅来自既有合成夹具；模型边界全部使用 FakeTransport/AgentDriver。
-人物/知识/蓝图/关联使用当前共享 seed，历史文件由当前 typed Store 编码，
+人物/Global/蓝图使用当前共享 seed，历史文件由当前 typed Store 编码，
 只有夹具构造窗口临时采用旧年代的 B 输入契约判定；
 窗口关闭后，freshness、审批、工作包、队列和新产物全部运行现役实现。
 """
@@ -21,15 +21,17 @@ from typing import Any
 import pytest
 
 from contracts.artifacts import (
-    STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS,
+    STAGE1_MAIN_TEXT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+    STAGE2_CHARACTERS, STAGE2_CHAPTER_BLUEPRINTS, STAGE4_BLIND_CANDIDATE,
+    STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS,
 )
 from contracts.invariants import (
     STAGE4_BINDING_INPUT_CONTRACT, STAGE4_BINDING_INPUT_RECEIPT_KEY,
 )
-from contracts.schema.api import (
-    BlueprintSeenRequest, OperatorNext, Stage2GlobalSeenRequest,
-    StructureApprovalRequest,
-)
+from contracts.schema.api import OperatorNext, StructureApprovalRequest
+from contracts.schema.characters import CharacterRegistry, CharactersProvenance
+from contracts.schema.stage1 import MainText
+from contracts.schema.stage2 import BlueprintCharacterProjection, ChapterBlueprints
 from contracts.schema.stage4 import (
     EvidenceBinding, EvidenceBindingCompiledProvenance,
     EvidenceBindingHumanProvenance, PlanChapters,
@@ -40,9 +42,9 @@ from novel.orchestrator import approvals, operator, queue, state
 from novel.stages.stage4 import binding_input_contract, plan
 from novel.stages.stage4.measure import structure_review_subject_sha256
 from novel.store import ArtifactStore
-from novel.views.stage2 import blueprint_review_workpack
 from novel.views.stage4 import stage4_view
 from tests.test_design_review import _accept_all
+from tests.test_stage2 import main_text
 from tests.frozen_tree import FrozenTree
 from tests.test_stage4_agent_boundary import _ctx as _agent_ctx
 from tests.test_stage4_plan_chapters import (
@@ -50,10 +52,81 @@ from tests.test_stage4_plan_chapters import (
 )
 from tests.test_stage4_v3_integration import (
     CODE, _book, _bound_b_response, _client, _ctx, _design,
-    _seed_current_stage2,
 )
 
 SID = '742'
+
+
+def _seed_stage2(book: Path):
+    """写 Stage0/1/2 current 产物；语义审阅退役后由统一机械准入复验。
+
+    来源边与 root 都走正式 producer 铸造口：stage0 真实摄入链批准后经
+    ``run_partition`` 落 main/hook（新鲜度可判），人物、Global、Blueprint
+    各自经真实 producer 落盘，供准入与 Stage4 消费。
+    """
+    from contracts.schema.characters import CharactersResponse
+    from novel.stages.stage0 import removal
+    from novel.stages.stage1 import partition
+    from novel.stages.stage2 import characters as stage2_characters
+    from novel.stages.stage2 import extract
+    from novel.stages.stage2.character_refs import materialize_blueprint_character_projection
+    from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
+    from tests.stage2_fixtures import character_response, knowledge_response
+
+    text = '李宝珠收到父亲已经回城的来信。\n\n' + ''.join(
+        f'{row["chapter_ordinal"]}\n\n{row["text"]}\n\n' for row in main_text())
+    source = book.parent / f'FQ_盲规划生产链_{SID}.txt'
+    source.write_text(text, encoding='utf-8', newline='')
+    novel_dir, _result, _report = removal.run_source(
+        source, book.parent, expected_sid=SID)
+    assert novel_dir == book
+    removal.run_approve(
+        removal._context(book, 'stage0.approve'),
+        actor='fixture-reviewer', reason='确认合成源文与三章正文完整保留')
+    assert partition.run_partition(_ctx(book, 'stage1.partition', paid=False))[0].main_text
+
+    chars_ctx = _ctx(book, 'stage2.characters')
+    store = ArtifactStore(chars_ctx)
+    rows = store.read(MainText, STAGE1_MAIN_TEXT).model_dump(mode='json')
+    compiled = stage2_characters.compile_response(
+        CharactersResponse.model_validate(character_response(source=rows)),
+        GlobalEvidenceCandidateTable.build(rows))
+    artifact = CharacterRegistry(
+        characters=compiled.characters,
+        evidence_anchors=compiled.evidence_anchors,
+        _provenance=chars_ctx.llm_provenance(
+            CharactersProvenance, model='fixture-characters',
+            adopted_models=('fixture-characters',),
+            prompts={'SYSTEM': '测试预置人物输入；未执行模型'}))
+    store.write(STAGE2_CHARACTERS, artifact)
+    store.write(STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+                materialize_blueprint_character_projection(
+                    compiled.characters, rows))
+
+    global_ctx = _ctx(book, 'stage2.global')
+    global_client, _ = _client(global_ctx, knowledge_response())
+    extract.run_global(global_ctx, global_client)
+
+    blueprint_ctx = _ctx(book, 'stage2.blueprint')
+    blueprint_store = ArtifactStore(blueprint_ctx)
+    blueprint_store.read(MainText, STAGE1_MAIN_TEXT)
+    blueprint_store.read(
+        BlueprintCharacterProjection,
+        STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+    )
+    from tests.test_plot_producer import responses
+    by_chapter = responses()
+    for response in by_chapter.values():
+        for beat in response['beats']:
+            beat['source_contexts'] = [{
+                'time_layer': 'present', 'place': None, 'present': None,
+                'evidence': beat['evidence'],
+            }]
+    client, _ = _client(blueprint_ctx, lambda req: {
+        'blueprints': [by_chapter[json.loads(req.user.splitlines()[0])['chapter_ordinal']]]})
+    assert extract.run_blueprint(blueprint_ctx, client).passed
+    return blueprint_store.read_own(
+        ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)[0]
 
 
 @contextmanager
@@ -97,8 +170,7 @@ def _write_historical_pair(case: _Book, raw: dict[str, Any], monkeypatch) -> Non
 def _configure_boundary(monkeypatch) -> None:
     monkeypatch.setattr(prov, 'code_version', lambda: CODE)
     # 本模块从已完成 Stage2 的边界开始；不重复合成 Stage0/1 审批任务。
-    # s2 已读与 proof、A 全章决定和 Stage4 的全部准入仍由真实审批口生成。
-    monkeypatch.setitem(approvals._GATE_REQUIREMENTS, 's2', ())
+    # Stage2 语义审阅已退役，A 全章决定与 Stage4 准入由机械准入与真实审批口生成。
     real_nodes = queue.nodes_up_to
     monkeypatch.setattr(
         queue, 'nodes_up_to',
@@ -108,20 +180,11 @@ def _configure_boundary(monkeypatch) -> None:
 def _build_legacy_book(tmp_path, monkeypatch) -> _Book:
     _configure_boundary(monkeypatch)
     book = _book(tmp_path)
-    blueprints = _seed_current_stage2(book)
-    from tests.test_stage2_review_decisions import _accept_global_node, _accept_blueprint_node
-    _accept_global_node(book)
-    _accept_blueprint_node(book, monkeypatch)
+    blueprints = _seed_stage2(book)
     _a_ctx, _a_client, a_transport, candidate, _truth, _mapping = _design(book, blueprints)
-    read_pack = blueprint_review_workpack(tmp_path, SID)
-    approvals.mark_seen(
-        tmp_path, SID, 'read', blueprint_subject=BlueprintSeenRequest(
-            review_token=read_pack.review_token))
-    _proof, global_token = approvals._global_seen_proof(book)
-    approvals.mark_seen(
-        tmp_path, SID, 'global', global_subject=Stage2GlobalSeenRequest(
-            actor='fixture-reviewer', review_token=global_token))
-    assert approvals.approve_gate(tmp_path, SID, 's2').gate['s2']
+    # Stage2 语义审阅退役：s0/s1 检查单经真实审批口盖章，Stage4 由机械准入放行。
+    approvals.approve_gate(tmp_path, SID, 's0')
+    approvals.approve_gate(tmp_path, SID, 's1')
     template = approvals.design_template(
         tmp_path, SID, actor='fixture-reviewer', reviewer_kind='human',
         review_run_id='fixture-design-accepted', reason='合成夹具逐章设计已核对')

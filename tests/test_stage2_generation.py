@@ -38,7 +38,6 @@ from novel.llm.ledger import AUDIT_REL, CostLedger
 from novel.llm import response_repair, stage2_runs
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.core.evidence import iter_global_evidence_slots
-from novel.quality.global_review import build_review
 from novel.run import RunContext
 from novel.run_identity import new_run_id
 from novel.stages.stage2 import extract
@@ -584,10 +583,8 @@ def _edit_static_character(book: Path, char_id: str, **changes):
 
 
 def _accept_fixture_global(ctx: RunContext) -> None:
-    """生产纵切显式模拟 Global Commander，供后续 Blueprint 消费。"""
-    from tests.test_stage2_review_decisions import _approve_all_review, _accept_global_node
-    _approve_all_review(ctx.novel_dir)
-    _accept_global_node(ctx.novel_dir)
+    """Stage2 语义审阅退役后无需显式接受；保留调用点作机械准入的前置占位。"""
+    return None
 
 
 def _client(ctx: RunContext, responder) -> tuple[LlmClient, FakeTransport]:
@@ -1650,60 +1647,6 @@ def test_stage2_global_over_limit_stops_before_transport_cache_ledger_or_artifac
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
-
-def test_stage4_plan_over_limit_with_candidate_stops_before_b_transport_or_outputs(tmp_path, monkeypatch):
-    from novel.stages.stage4 import plan as stage4_plan
-    from novel.stages.stage2 import knowledge_links
-    from novel.orchestrator import approvals
-    from tests.test_plot_review_runtime import prepare_complete_book
-    from tests.test_plot_producer import generate_plot
-    from tests.stage2_fixtures import accept_and_materialize_links
-    from tests.test_stage4_plan_chapters import _inject_stage_ambiguities
-    from tests.test_stage4_v3_integration import _split_a_responder
-    from tests.test_design_review import _accept_all
-
-    book = prepare_complete_book(tmp_path)
-    rows = _response_blueprints()
-    for index, beat in enumerate(rows[1]['beats']):
-        beat['source_contexts'] = [{
-            'time_layer': 'recall' if index == 0 else 'present',
-            'place': None if index == 0 else '老宅廊下',
-            'present': [{'char_id': 'char_001'}], 'evidence': copy.deepcopy(beat['evidence']),
-        }]
-    blueprint_ctx, _ = generate_plot(book, rows)
-    accept_and_materialize_links(blueprint_ctx)
-    knowledge_links.run_close_review(_ctx(book, 'stage2.blueprint', paid=False))
-    design_ctx = _ctx(book, 'stage4.design')
-    bp = ArtifactStore(design_ctx).read(ChapterBlueprints, stage4_plan.BLUEPRINTS)
-    answer = _split_a_responder(bp.model_dump(by_alias=True, mode='json'))
-    design_client, design_wire = _client(design_ctx, lambda req, _index: _ok(answer(req)))
-    stage4_plan.run_design(design_ctx, design_client)
-    assert len(design_wire.calls) == 1 + len(bp.blueprints)
-    template = approvals.design_template(book.parent, design_ctx.sid, actor='test:reviewer',
-        reviewer_kind='human', review_run_id='budget-case-design', reason='合成设计已经逐章核对')
-    approvals.approve_design(book.parent, design_ctx.sid, _accept_all(template))
-    approvals.authorize_plan(book.parent, design_ctx.sid)
-    before = (book / stage4_plan.CANDIDATE_REL).read_bytes()
-    monkeypatch.setattr(stage4_plan, 'build_mechanical_baseline',
-        _inject_stage_ambiguities(stage4_plan.build_mechanical_baseline, (1,)))
-    ctx = _ctx(book, 'stage4.plan')
-    wire = FakeTransport.always(ChatResponse(content='{}'))
-    counted = []
-    def count_input(request):
-        counted.append(request)
-        assert request.max_tokens == 16_000
-        return 984_001
-    client = LlmClient(ctx, wire, cache=ResponseCache(tmp_path / 'cache'),
-        model='deepseek-v4-pro', max_retries=0,
-        budget_checker=partial(enforce_request_budget, counter=count_input))
-    with pytest.raises(ContextBudgetRefused, match='stage4.plan'):
-        stage4_plan.run_plan(ctx, client)
-    store = ArtifactStore(ctx)
-    assert (book / stage4_plan.CANDIDATE_REL).read_bytes() == before
-    assert all(not store.exists(rel) for rel in (
-        stage4_plan.BINDING_REL, stage4_plan.REL, stage4_plan._INVALID, stage4_plan.CTX_REL))
-    assert wire.calls == [] and len(counted) == 1
-    assert ctx.ledger.usage() is None
 
 
 def test_global_resample_requires_a_rejected_candidate_before_spending():

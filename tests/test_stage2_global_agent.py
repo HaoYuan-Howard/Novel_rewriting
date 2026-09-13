@@ -12,9 +12,6 @@ from pathlib import Path
 import pytest
 
 from contracts.schema import encode_artifact
-from contracts.schema.evaluation import (
-    GlobalReview, GlobalReviewDecision, GlobalReviewDecisionSet,
-)
 from contracts.schema.orchestration import AgentProfile
 from contracts.schema.knowledge import KnowledgeAgentTurnResponse as GlobalCandidateAgentTurnResponse
 from contracts.schema.stage1 import MainText
@@ -31,7 +28,7 @@ from novel.llm.client import LlmFailed
 from novel.llm.ledger import AUDIT_REL, CostLedger, ledger_path
 from novel.node_agents import Stage2GlobalAgent
 from novel.run import RunContext
-from novel.stages.stage2 import extract, global_review
+from novel.stages.stage2 import extract
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
 from tests.test_stage2_generation import _client, _ok, _response_global
@@ -228,7 +225,6 @@ class _Driver(AgentDriver):
         # 正式稿或 review，也没有一轮伪历史。
         assert not (self.book / extract.GLOBAL_REL).exists()
         assert not (self.book / extract._GLOBAL_INVALID).exists()
-        assert not (self.book / extract.GLOBAL_REVIEW_REL).exists()
         assert not list((self.book / 'stage2/_rounds').glob(
             'global_grounding*.json'))
         self.calls.append(('resume', request))
@@ -246,37 +242,6 @@ class _NoWireClient:
     calls = 0
 
 
-def test_commander_rework_reaches_executor_and_consumes_existing_book_budget(tmp_path):
-    from contracts.schema.api import Stage2NodeReviewRequest
-    from novel import work_units
-    from novel.node_agents import build_node_agent
-    from novel.orchestrator import approvals
-
-    initial = _ctx(tmp_path)
-    Stage2GlobalAgent(
-        initial, driver=_Driver([_full(_response_global())], initial.novel_dir)).run()
-    token = approvals._stage2_review_identity(initial.novel_dir, initial.node)[0]
-    approvals.approve_stage2_review(tmp_path, initial.sid, Stage2NodeReviewRequest(
-        node=initial.node, review_token=token, decision='rework', owner=initial.node,
-        actor='test-commander', reason='核对人物身份与当前章证据，并保留其他事实'))
-    revised = _new_run_ctx(initial)
-    driver = _Driver([_full(_response_global())], initial.novel_dir,
-                     session_id='global-commander-rework')
-    result = build_node_agent(revised, driver=driver, review_token=token).run()
-    assert result.passed
-    assert len(driver.calls) == 1
-    assert '核对人物身份与当前章证据，并保留其他事实' in driver.calls[0][1].prompt
-    assert work_units.budget_for(revised, scope='book').used == 2
-    assert approvals.pending_stage2_rework(tmp_path, initial.sid, initial.node) is None
-
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def ask_json(self, *_args, **_kwargs):
-        self.calls += 1
-        raise AssertionError('foreign/same-run prepared 必须在 ask_json 前关闭')
-
-
 def _rows(path: Path) -> list[dict[str, object]]:
     if not path.exists():
         return []
@@ -287,7 +252,6 @@ def _global_business_snapshot(ctx: RunContext) -> dict[str, object]:
     """只看 journal 所保护的业务面与付费账；不把内部锁文件当业务产物。"""
     rels = (
         extract.GLOBAL_REL,
-        extract.GLOBAL_REVIEW_REL,
         extract.BLUEPRINT_CHARACTER_REL,
         extract._GLOBAL_INVALID,
     )
@@ -337,11 +301,10 @@ def test_hard_candidate_resumes_same_session_then_lands_once(tmp_path):
 
     store = ArtifactStore(ctx)
     landed = grounding_io.read(store)
-    review = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
     assert landed == result.artifact
     assert landed.provenance.usage is not None
     assert landed.provenance.usage.calls_made == 2
-    assert review.items and not store.exists(extract._GLOBAL_INVALID)
+    assert not store.exists(extract._GLOBAL_INVALID)
 
     record, = agent_session_audit.fold(agent_session_audit.read_events(tmp_path))
     assert len(record.turns) == 2
@@ -373,7 +336,6 @@ def test_turn_limit_lands_only_the_last_typed_invalid(tmp_path):
     assert len(driver.calls) == 2
     assert store.exists(extract._GLOBAL_INVALID)
     assert not store.exists(extract.GLOBAL_REL)
-    assert not store.exists(extract.GLOBAL_REVIEW_REL)
     assert not list((ctx.novel_dir / 'stage2/_rounds').glob(
         'global_grounding.INVALID.r*.json'))
     record, = agent_session_audit.fold(agent_session_audit.read_events(tmp_path))
@@ -409,7 +371,6 @@ def test_all_schema_bad_has_no_artifact_and_is_not_called_delivered(tmp_path):
     store = ArtifactStore(ctx)
     assert not store.exists(extract.GLOBAL_REL)
     assert not store.exists(extract._GLOBAL_INVALID)
-    assert not store.exists(extract.GLOBAL_REVIEW_REL)
     record, = agent_session_audit.fold(agent_session_audit.read_events(tmp_path))
     assert record.process_state == 'ok'
     assert record.delivery_state == 'failed'
@@ -553,34 +514,12 @@ def test_prepared_global_bundle_blocks_every_side_writer_then_owner_recovers(
             encode_artifact(extract.GLOBAL_EDIT, edit_payload),
             ensure_ascii=False, indent=2),
         encoding='utf-8', newline='\n')
-    # 审阅是知识提交完成后的独立后继；本 killpoint 尚未写审阅，不能
-    # 为准备一份无写盘效力的人产输入，假定它已先于采用账落盘。
-    from novel.quality.global_review import build_review
-    landed = input_store.read_own(GlobalGrounding, extract.GLOBAL_REL)[0]
-    current_review = build_review(
-        landed.model_dump(mode='json', by_alias=True),
-        characters=extract._read_characters(input_store))
-    item = current_review.items[0]
-    input_store.write(
-        global_review.DEFAULT_DECISIONS,
-        GlobalReviewDecisionSet(
-            actor='prepared-guard-reviewer',
-            decisions=[GlobalReviewDecision(
-                item_id=item.item_id,
-                expected_subject_sha256=item.subject_sha256,
-                state='PASS',
-                reason='仅用于验证 prepared 前不得写回',
-                evidence=[],
-            )],
-        ),
-    )
     before = _global_business_snapshot(owner)
     no_wire = _NoWireClient()
 
     actions = (
         ('renormalize', lambda: extract.run_renormalize(_free_ctx(owner))),
         ('apply-edit', lambda: extract.run_apply_edit(_free_ctx(owner))),
-        ('review refresh', lambda: extract.run_refresh_review(_free_ctx(owner))),
         ('legacy generate', lambda: extract.run_global(
             _direct_ctx(owner), no_wire)),
     )
@@ -750,7 +689,6 @@ def test_legacy_same_run_cannot_bypass_accepted_agent_checkpoint(
     store = ArtifactStore(owner)
     assert not store.exists(extract.GLOBAL_REL)
     assert not store.exists(extract._GLOBAL_INVALID)
-    assert not store.exists(extract.GLOBAL_REVIEW_REL)
     assert not list(owner.novel_dir.joinpath('stage2/_rounds').glob(
         'global_grounding*.json'))
 
@@ -775,7 +713,6 @@ def test_legacy_global_cannot_bypass_prepared_journal_but_foreign_committed_allo
     assert stage2_global_runs.prepared(owner) is not None
     guarded_paths = (
         extract.GLOBAL_REL,
-        extract.GLOBAL_REVIEW_REL,
         extract.BLUEPRINT_CHARACTER_REL,
     )
     before = {

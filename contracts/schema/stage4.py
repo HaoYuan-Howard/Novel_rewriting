@@ -903,7 +903,7 @@ class CtxSemanticContract(SemanticContract):
 
 from contracts.schema.plot_context import (
     WriterBeat, WriterState, WriterConstraint, WriterGlobalSubject,
-    WriterKnowledgeEvent, WriterScene,
+    WriterScene,
 )
 
 
@@ -947,7 +947,6 @@ class CtxChapter(StrictModel):
     constraints: list[WriterConstraint]
     global_subjects: list[WriterGlobalSubject]
     restricted_subject_refs: list[WriterSubjectRef]
-    knowledge_events: list[WriterKnowledgeEvent]
     scenes: list[CtxScene] = Field(min_length=1)
     characters: list[ChapterCharacter]
     narration: list[CtxNarration] = Field(min_length=1)
@@ -964,9 +963,6 @@ class CtxChapter(StrictModel):
         used.update(ref for scene in self.scenes for delivery in scene.deliveries
                     for stage in delivery.stages for ref in stage.present or [])
         used.update(ref for row in self.narration for ref in (row.narrator, row.focalizer) if ref)
-        used.update(row.audience.actor_ref for row in self.knowledge_events
-                    if row.audience and row.audience.kind == 'character')
-        used.update(ref for row in self.knowledge_events for ref in row.identity_actors)
         used.update(ref.ref for goal in (self.chapter_goal, self.open_hook_goal, self.end_hook_goal)
                     for ref in goal.subject_refs if ref.kind == 'character')
         for row in self.global_subjects:
@@ -1004,7 +1000,6 @@ class CtxChapter(StrictModel):
         refs = [beat.beat_ref for beat in self.beats]
         states = {row.state_ref: row for row in self.states}
         constraints = {row.constraint_ref: row for row in self.constraints}
-        events = {row.event_ref: row for row in self.knowledge_events}
         globals_ = {(row.subject_ref.kind, row.subject_ref.ref): row for row in self.global_subjects}
         restricted = {(row.kind, row.ref) for row in self.restricted_subject_refs}
         restricted_states = {ref for kind, ref in restricted if kind == 'state'}
@@ -1014,7 +1009,7 @@ class CtxChapter(StrictModel):
             raise ValueError('必要背景节点只保存一次，不能重复当前章剧情正文')
         for size, values in (
             (len(slots), slots), (len(refs), refs), (len(self.states), states),
-            (len(self.constraints), constraints), (len(self.knowledge_events), events),
+            (len(self.constraints), constraints),
             (len(self.global_subjects), globals_), (len(self.restricted_subject_refs), restricted),
         ):
             if len(set(values)) != size:
@@ -1049,17 +1044,9 @@ class CtxChapter(StrictModel):
                 raise ValueError('场景引用不属于章级剧情目录')
             if any(completed[ref] >= index for ref in scene.context_beat_refs):
                 raise ValueError('节点未完成全部呈现，不能作为完整背景')
-            expected_events = [ref for ref, row in events.items() if scene.slot in row.allowed_slots]
-            if scene.knowledge_event_refs != expected_events:
-                raise ValueError('逐场知识引用必须精确等于下发事件的许可')
             if (not set(scene.constraint_refs) <= constraints.keys()
                     or any(row.state_ref not in state_refs for row in scene.state_events)):
                 raise ValueError('场景状态或约束引用不在目录')
-        for row in events.values():
-            expected = slots if row.timing == 'at_entry' else (
-                slots[slots.index(row.slot):] if row.slot in slots else [])
-            if row.allowed_slots != expected or (row.timing == 'at_entry') != (row.slot is None):
-                raise ValueError('知识事件位置与许可不一致')
         for row in self.global_subjects:
             if row.allowed_slots != [slot for slot in slots if slot in row.allowed_slots]:
                 raise ValueError('共享主体许可须是场景的唯一有序子集')
@@ -1070,17 +1057,13 @@ class CtxChapter(StrictModel):
                         or permission.allowed_slots != [slot for slot in slots
                                                         if slot in permission.allowed_slots]):
                     raise ValueError('命题表达许可必须指向同一主体及认识性质的状态')
-                reveals = [e for e in events.values() if e.kind == 'reader_reveal'
-                           and e.subject_ref.ref == state.state_ref]
-                if len(reveals) != 1 or permission.allowed_slots != reveals[0].allowed_slots:
-                    raise ValueError('命题表达许可必须由已登记的状态披露事件编译')
         return self
 
 
 class CtxProvenance(FreeProvenance):
     """`writer_context._provenance` —— **没有 `prompts`、没有 `model`**（确定性组装）。
 
-    `inputs` 绑定正文、独立人物/长期知识、Blueprint/KnowledgeLinks 与
+    `inputs` 绑定正文、独立人物/长期知识、Blueprint 与
     **`stage4/plan_chapters.json`** 的实际消费投影。
 
     ⚠ 最后那条边是全仓唯一的一处「显式追踪」，它存在的理由就是 `context_link`（HARD）

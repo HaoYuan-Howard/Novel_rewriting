@@ -82,6 +82,19 @@ _DECLARED_ABSENT: dict[str, str] = {
         '里引用它的那段说的**正是它不存在**（「根 `.env`、`outputs/`、`Test_data/`…'
         '不存在」那一段）⇒ 要求它在盘上等于要求文档自我否定，任何新 clone / worktree '
         '都会红，而红的是宿主环境不是文档'),
+    'tools/workflow_metrics.py': (
+        '已随 Stage2 语义审阅退役（2026-09，工作流 v7）：读数主体是已退役的 '
+        'Stage2 Commander 盘面。docs 里引用它的段落说的正是这次退役；'
+        '历史实现按 Git 历史读取'),
+    'tools/workflow_pairs.py': (
+        '只消费已删除的 workflow_metrics 冻结报告，随同退役（见 docs/DECISIONS.md）'),
+    'tools/stage2_acceptance.py': (
+        '旧五轮实验解释器已退出维护并删除；docs 引用它的段落只解释历史边界'),
+    'novel/stages/stage2/core_edits.py': (
+        '统一双 owner typed 编辑批次已随 Stage2 语义审阅退役；'
+        '独立 CharactersEdit/GlobalEdit 是唯一 typed 编辑入口'),
+    'docs/schema/stage2_review.md': (
+        '随 Stage2 语义审阅退役删除；docs 引用它的段落说明该退役'),
 }
 
 _ID = re.compile(r'`(R-\d+\.\d+[a-z]?|Q-\d+|B-\d+)`')

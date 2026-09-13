@@ -151,9 +151,17 @@ def _require_mapping_current(
 
 
 def require_stage2_delivery_approved(ctx: RunContext) -> None:
-    """组装与下载共用当前 Stage2 总闸；旧根只配旧代码回滚。"""
-    from novel.stages.stage2 import global_review
-    global_review.require_approved(ctx)
+    """组装与下载共用当前 Stage2 统一机械准入；旧根只配旧代码回滚。
+
+    Stage2 语义审阅退役后，这里不再宣称联合语义 PASS，只要求全部必要产物
+    机械可用（可读、当前、无未恢复 INVALID、机械检查通过）。
+    """
+    from novel import admission
+    gate = admission.stage4_ready(ctx.novel_dir.parent, ctx.sid)
+    if not gate.ok:
+        from novel.errors import ApprovalRequired
+        raise ApprovalRequired(
+            'Stage2 机械准入未通过：' + '；'.join(gate.blocking))
 
 
 def read_current_book(

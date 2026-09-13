@@ -153,22 +153,3 @@ def test_http_edit_template_and_preview_use_the_same_compiler(tmp_path):
         assert reply.json()['changed_chapters'] == [1]
 
 
-def test_edit_reopens_only_changed_chapter_without_releasing_cross_review(tmp_path):
-    from novel.orchestrator import approvals
-    from novel.views.plot_review import PlotReviewSnapshot
-    from novel.views.stage2 import blueprint_review_workpack
-    from tests.test_plot_review_runtime import request as accept_request
-    book = prepare_book(tmp_path)
-    ctx, _ = generate_plot(book)
-    for scope in ('chapter:1', 'chapter:2', 'chapter:3', 'cross_chapter'):
-        pack = blueprint_review_workpack(book.parent, ctx.sid, scope=scope)
-        approvals.approve_stage2_review(book.parent, ctx.sid, accept_request(pack))
-    editing = _ctx(book, 'stage2.blueprint', paid=False)
-    request = request_for(editing)
-    request['chapters'][0]['chapter']['beats'][0]['content'] = '昨夜来信告诉李宝珠，她的父亲已经回城。'
-    plot_edit.apply_edit(editing, save_request(editing, request))
-    snapshot = PlotReviewSnapshot.read(ArtifactStore(editing),
-        approvals.stage2_review_history(book.parent, ctx.sid))
-    states = {row.scope: row.state for row in snapshot.progress().scopes}
-    assert states == {'chapter:1': 'expired', 'chapter:2': 'accepted',
-                      'chapter:3': 'accepted', 'cross_chapter': 'expired'}

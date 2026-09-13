@@ -50,7 +50,6 @@ from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.orchestrator.uploads import save_upload
 from novel.orchestrator import state as orchestrator_state
-from novel.quality.global_review import build_review
 from novel.run import RunContext
 from novel.snapshot_clone import readonly_snapshot_clone
 from novel.store import (
@@ -490,30 +489,64 @@ def test_stage4_blueprint_projection_tracks_exact_material_and_ignores_provenanc
 
 
 def _stage4_grounding_payload() -> dict:
-    def evidence(chapter: int, text: str, start: int) -> dict:
-        return {
-            'chapter_ordinal': chapter,
-            'source': {
-                'text': text,
-                'start': start,
-                'end': start + len(text),
-            },
-        }
+    """v7 KnowledgeGrounding 合成样例；人物 v2 载体在 `entities` 格内，
 
+    `entities`/`source_blurb` 不是 KnowledgeGrounding 字段，进入严格载体前
+    由 `_write_knowledge_subject` 剥掉；人物登记独立走 `_character_subject`。
+    """
     return {
+        'setting': {
+            'era': '架空', 'social_context': '普通城镇',
+            'era_evidence_refs': ['ev_aaaaaaaaaaaaaaaaaaaaaaaa'],
+            'social_context_evidence_refs': ['ev_bbbbbbbbbbbbbbbbbbbbbbbb'],
+        },
+        'world_rules': [{
+            'rule_id': 'wr_01', 'kind': 'legal_rule',
+            'versions': [{
+                'version_id': 'v01', 'desc': '夜间实行宵禁',
+                'effective_from': 1, 'effective_until': None,
+                'revealed_from': 1, 'evidence_refs': ['ev_cccccccccccccccccccccccc'],
+            }],
+        }],
+        'relations': [{
+            'relation_id': 'rel_01', 'subject_id': 'char_001',
+            'object_id': 'char_001', 'predicate': '独自经营',
+            'effective_from': 1, 'effective_until': None,
+            'revealed_from': 1, 'evidence_refs': ['ev_dddddddddddddddddddddddd'],
+        }],
+        'arc_secrets': [{
+            'secret_id': 'secret_01', 'fact': '真相', 'fact_ref': None,
+            'setup_chapters': [1], 'revealed_from': 2,
+            'evidence_refs': ['ev_eeeeeeeeeeeeeeeeeeeeeeee'],
+        }],
+        'evidence_anchors': {
+            'ev_aaaaaaaaaaaaaaaaaaaaaaaa': {'chapter_ordinal': 1, 'start': 37, 'end': 44,
+                        'text_sha256': '0' * 64},
+            'ev_bbbbbbbbbbbbbbbbbbbbbbbb': {'chapter_ordinal': 1, 'start': 49, 'end': 57,
+                        'text_sha256': '1' * 64},
+            'ev_cccccccccccccccccccccccc': {'chapter_ordinal': 1, 'start': 87, 'end': 96,
+                        'text_sha256': '2' * 64},
+            'ev_dddddddddddddddddddddddd': {'chapter_ordinal': 1, 'start': 24, 'end': 37,
+                        'text_sha256': '3' * 64},
+            'ev_eeeeeeeeeeeeeeeeeeeeeeee': {'chapter_ordinal': 1, 'start': 62, 'end': 75,
+                        'text_sha256': '4' * 64},
+        },
+        'characters_reference_sha256': 'a' * 64,
         'entities': {
             'characters': {
                 'char_001': {
                     'canonical': '甲',
+                    'aliases': [
+                        {'surface': '甲', 'identity_revealed_from': 1,
+                         'evidence_refs': ['ev_ffffffffffffffffffffffff']},
+                        {'surface': '掌柜', 'identity_revealed_from': 1,
+                         'evidence_refs': ['ev_ffffffffffffffffffffffff']},
+                    ],
+                    'first_chapter': 1,
+                    'first_appearance_evidence_refs': ['ev_ffffffffffffffffffffffff'],
                     'role': '角色',
-                    'role_evidence': evidence(1, '甲在柜台后核对账册。', 0),
-                    'fate': '后来继续经营这间铺子',
-                    'fate_evidence': evidence(2, '此后甲仍每日照常开门。', 12),
+                    'role_evidence_refs': ['ev_000000000000000000000001'],
                     'name_distinctiveness': 'high',
-                    'address': [{
-                        'surface': '掌柜', 'from_chapter': 1,
-                        'by': 'public', 'context': 'address',
-                    }],
                 },
             },
             'relations': [{
@@ -521,46 +554,14 @@ def _stage4_grounding_payload() -> dict:
                 'subject_id': 'char_001',
                 'object_id': 'char_001',
                 'predicate': '独自经营',
-                'predicate_evidence': evidence(1, '柜台内外只有甲一人忙碌。', 24),
-                'visibility': {'kind': 'public', 'from_chapter': 1},
-                'valid_from_chapter': 1,
-                'valid_through_chapter': None,
             }],
         },
-        'canon': {
-            'setting': {
-                '时代背景': '架空',
-                'era_evidence': evidence(1, '城门仍按旧历时辰开闭。', 37),
-                '世界观': '普通城镇',
-                'worldview_evidence': evidence(1, '街坊都按城中规矩做买卖。', 49),
-            },
-            'secrets': [{
-                'secret_id': 'secret_01', 'fact': '真相',
-                'fact_evidence': evidence(1, '甲早已知道那件旧事的真相。', 62),
-                'knowledge_events': [{
-                    'subject': {'kind': 'character', 'char_id': 'char_001'},
-                    'known_from_chapter': 1,
-                    'evidence': evidence(1, '甲把旧信重新收进柜底。', 75),
-                }],
-                'setup': {'kind': 'foreshadowed', 'chapters': [1]},
-                'first_reveal_chapter': 2,
-            }],
-            'world_rules': [{
-                'rule_id': 'wr_01', 'kind': 'legal_rule',
-                'versions': [{
-                    'effective_from_chapter': 1, 'desc': '夜间实行宵禁',
-                    'desc_evidence': evidence(1, '更夫敲梆后街门一律落锁。', 87),
-                }],
-            }],
-        },
-        'source_blurb': {'facts': [], 'opening': {'kind': 'proposed', 'through_chapter': 2, 'rationale': '开篇经营与展开旧信', 'boundary_evidence': evidence(2, '甲当众展开旧信并认下责任。', 100)}},
         '_provenance': {
             'code': 'source-v1',
             'root_clean_sha1': '0' * 40,
             'inputs': {},
             'prompts': {'GLOBAL_SYS': '0' * 10},
             'model': 'fixture-model',
-            'setup_chapters_pruned': [],
             'evidence_locator_failures': [],
         },
     }
@@ -572,6 +573,12 @@ def _character_subject(view: dict) -> dict:
     return {'characters': {
         cid: {key: value for key, value in row.items() if key not in {'fate', 'fate_evidence'}}
         for cid, row in view['entities']['characters'].items()},
+        'evidence_anchors': {
+            'ev_ffffffffffffffffffffffff': {'chapter_ordinal': 1, 'start': 0, 'end': 12,
+                        'text_sha256': '5' * 64},
+            'ev_000000000000000000000001': {'chapter_ordinal': 1, 'start': 12, 'end': 24,
+                        'text_sha256': '6' * 64},
+        },
         '_provenance': {key: value for key, value in view['_provenance'].items()
                         if key in CharactersProvenance.model_fields}}
 
@@ -581,12 +588,15 @@ def _write_character_subject(book: Path, view: dict) -> None:
 
 
 def _write_knowledge_subject(book: Path, view: dict) -> None:
-    from contracts.schema.characters import CharacterRegistry
     from contracts.schema.stage2 import GlobalGrounding
-    from novel.stages.stage2.grounding import decompose
-    registry = CharacterRegistry.model_validate(_character_subject(view))
-    knowledge = decompose(GlobalGrounding.model_validate(view), registry)
-    _write_payload(book, STAGE2_GLOBAL_GROUNDING, knowledge.model_dump(mode='json', by_alias=True))
+    v7_keys = {
+        'setting', 'world_rules', 'relations', 'arc_secrets',
+        'evidence_anchors', 'characters_reference_sha256', '_provenance',
+    }
+    knowledge = GlobalGrounding.model_validate(
+        {key: value for key, value in view.items() if key in v7_keys})
+    _write_payload(book, STAGE2_GLOBAL_GROUNDING,
+                   knowledge.model_dump(mode='json', by_alias=True))
 
 
 def _write_grounding_projection_subject(
@@ -662,7 +672,7 @@ def _write_grounding_projection_subject(
     ('stage4.context', 'stage4/writer_context.json'),
 ))
 @pytest.mark.parametrize('edited_field', (
-    'relation_visibility', 'knowledge_subject', 'knowledge_known_from',
+    'relation_revealed_from', 'secret_fact', 'setting_era',
     'world_rule_kind',
 ))
 def test_stage4_grounding_edits_invalidate_real_store_freshness(
@@ -674,17 +684,14 @@ def test_stage4_grounding_edits_invalidate_real_store_freshness(
         base, grounding, node=node, rel=rel)
     assert store.freshness(rel).state == 'fresh'
 
-    if edited_field == 'relation_visibility':
-        grounding['entities']['relations'][0]['visibility'] = {
-            'kind': 'via_secret', 'secret_id': 'secret_01'}
-    elif edited_field == 'knowledge_subject':
-        grounding['canon']['secrets'][0]['knowledge_events'][0]['subject'] = {
-            'kind': 'group', 'label': '在场众人'}
-    elif edited_field == 'knowledge_known_from':
-        grounding['canon']['secrets'][0]['knowledge_events'][0][
-            'known_from_chapter'] = 2
+    if edited_field == 'relation_revealed_from':
+        grounding['relations'][0]['revealed_from'] = 2
+    elif edited_field == 'secret_fact':
+        grounding['arc_secrets'][0]['fact'] = '母亲早已知道信的来历。'
+    elif edited_field == 'setting_era':
+        grounding['setting']['era'] = '架空的王朝'
     else:
-        grounding['canon']['world_rules'][0]['kind'] = 'institution'
+        grounding['world_rules'][0]['kind'] = 'institution'
     _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
 
     report = store.freshness(rel)
@@ -809,10 +816,10 @@ def test_stage5_review_name_projection_ignores_non_name_character_metadata():
 
 
 @pytest.mark.parametrize('edited', (
-    'secret_fact', 'setup', 'first_reveal', 'knowledge_events', 'role', 'fate',
-    'relations', 'setting', 'opening', 'world_rules',
-    'name_distinctiveness', 'address_context', 'address_by', 'evidence',
-    'address_from_chapter',
+    'secret_fact', 'setup', 'first_reveal', 'secret_fact_ref', 'role',
+    'provenance_model', 'relations', 'setting', 'chars_reference_sha',
+    'world_rules', 'name_distinctiveness', 'role_evidence',
+    'first_appearance', 'evidence',
 ))
 def test_blueprint_grounding_projection_only_tracks_attested_names(edited: str):
     """改 global 的非称名字段或无效时点，不许让 blueprint 判 stale。
@@ -834,49 +841,43 @@ def test_blueprint_grounding_projection_only_tracks_attested_names(edited: str):
     assert store.freshness(STAGE2_CHAPTER_BLUEPRINTS).state == 'fresh'
 
     char = grounding['entities']['characters']['char_001']
-    secret = grounding['canon']['secrets'][0]
+    secret = grounding['arc_secrets'][0]
     if edited == 'secret_fact':
         secret['fact'] = '另一个真相'
     elif edited == 'setup':
-        secret['setup'] = {'kind': 'cold'}
+        secret['setup_chapters'] = []
     elif edited == 'first_reveal':
-        secret['first_reveal_chapter'] = 9
-    elif edited == 'knowledge_events':
-        secret['knowledge_events'][0]['subject'] = {
-            'kind': 'group', 'label': '在场众人'}
+        secret['revealed_from'] = 9
+    elif edited == 'secret_fact_ref':
+        # fact 与 fact_ref 二选一；引用秘密与权威事实的 revealed_from 必须一致。
+        secret['fact'] = None
+        secret['fact_ref'] = {'kind': 'relation', 'relation_id': 'rel_01'}
+        secret['evidence_refs'] = []
+        secret['revealed_from'] = 1
     elif edited == 'role':
         char['role'] = '换一个身份描述'
-    elif edited == 'fate':
-        char['fate'] = '后来死了'
+    elif edited == 'provenance_model':
+        # 来源账不是投影的输入；模型字段变化不影响称名投影字节。
+        grounding['_provenance']['model'] = 'fixture-model-2'
     elif edited == 'relations':
-        grounding['entities']['relations'][0]['predicate'] = '自指'
+        grounding['relations'][0]['predicate'] = '自指'
     elif edited == 'setting':
-        grounding['canon']['setting']['世界观'] = '换一个世界'
-    elif edited == 'opening':
-        grounding['source_blurb']['opening']['rationale'] = '重新核验开篇的依据'
+        grounding['setting']['social_context'] = '换一个世界'
+    elif edited == 'chars_reference_sha':
+        grounding['characters_reference_sha256'] = 'c' * 64
     elif edited == 'world_rules':
-        grounding['canon']['world_rules'][0]['kind'] = 'institution'
+        grounding['world_rules'][0]['kind'] = 'institution'
     elif edited == 'name_distinctiveness':
         char['name_distinctiveness'] = 'common'
-    elif edited == 'address_context':
-        char['address'][0]['context'] = 'reference'
-    elif edited == 'address_by':
-        char['address'][0]['by'] = 'narration'
+    elif edited == 'role_evidence':
+        char['role_evidence_refs'] = ['ev_' + '0' * 23 + '1']
+    elif edited == 'first_appearance':
+        char['first_appearance_evidence_refs'] = ['ev_' + '0' * 23 + '1']
     elif edited == 'evidence':
-        marker = '另一处证据。'
-        secret['fact_evidence'] = {
-            'chapter_ordinal': 2,
-            'source': {
-                'text': marker,
-                'start': 80,
-                'end': 80 + len(marker),
-            },
-        }
-    else:
-        # 本 fixture 的「掌柜」只挂 char_001；运行时只按正文首现控制它，
-        # 所以这个 from_chapter 不影响任何逐章候选字节。
-        char['address'][0]['from_chapter'] = 9
-    if edited in {'role', 'name_distinctiveness', 'address_context', 'address_by', 'address_from_chapter'}:
+        # 证据锚点与引用清单不进入称名投影，替换后投影字节不变。
+        secret['evidence_refs'] = ['ev_' + 'a' * 24]
+    if edited in {'role', 'name_distinctiveness', 'role_evidence',
+                  'first_appearance', 'provenance_model'}:
         _write_character_subject(base / '书名_123', grounding)
     else:
         _write_knowledge_subject(base / '书名_123', grounding)
@@ -997,8 +998,9 @@ def test_blueprint_grounding_projection_tracks_every_attested_name(edited: str):
     grounding = _stage4_grounding_payload()
     if edited == 'drop_character':
         other = copy.deepcopy(grounding['entities']['characters']['char_001'])
-        other.update(canonical='乙', address=[{'surface': '乙', 'from_chapter': 1,
-                                             'by': 'narration', 'context': 'reference'}])
+        other.update(canonical='乙')
+        other['aliases'] = [{'surface': '乙', 'identity_revealed_from': 1,
+                             'evidence_refs': ['ev_' + 'f' * 24]}]
         grounding['entities']['characters']['char_002'] = other
     store = _write_grounding_projection_subject(
         base, grounding, node='stage2.blueprint',
@@ -1008,35 +1010,26 @@ def test_blueprint_grounding_projection_tracks_every_attested_name(edited: str):
     chars = grounding['entities']['characters']
     if edited == 'canonical':
         chars['char_001']['canonical'] = '乙'
+        chars['char_001']['aliases'][0]['surface'] = '乙'
     elif edited == 'surface':
-        chars['char_001']['address'][0]['surface'] = '东家'
+        chars['char_001']['aliases'][1]['surface'] = '东家'
     elif edited == 'extra_address':
-        chars['char_001']['address'].append({
-            'surface': '老掌柜', 'from_chapter': 2,
-            'by': 'public', 'context': 'address',
+        chars['char_001']['aliases'].append({
+            'surface': '老掌柜', 'identity_revealed_from': 2,
+            'evidence_refs': ['ev_' + 'f' * 24],
         })
     elif edited == 'drop_character':
         chars.pop('char_001')
     else:
-        role_source = '甲乙掌柜东家老掌柜二爷都在。'
         chars['char_002'] = {
             'canonical': '乙',
+            'aliases': [{'surface': '乙', 'identity_revealed_from': 1,
+                         'evidence_refs': ['ev_' + 'f' * 24]}],
+            'first_chapter': 1,
+            'first_appearance_evidence_refs': ['ev_' + 'f' * 24],
             'role': '与甲同时在场的角色',
-            'role_evidence': {
-                'chapter_ordinal': 1,
-                'source': {
-                    'text': role_source,
-                    'start': 0,
-                    'end': len(role_source),
-                },
-            },
-            'fate': None,
-            'fate_evidence': None,
+            'role_evidence_refs': ['ev_' + '0' * 23 + '1'],
             'name_distinctiveness': 'high',
-            'address': [{
-                'surface': '二爷', 'from_chapter': 1,
-                'by': 'public', 'context': 'address',
-            }],
         }
     _write_character_subject(base / '书名_123', grounding)
 
@@ -1212,8 +1205,7 @@ def test_projection_registry_resolves_dynamic_and_invalid_artifact_paths():
         'stage1/main_text.json',
         'stage2/chapter_blueprints.json',
         'stage2/global_grounding.json',
-        'stage2/global_review.json',
-        'stage2/characters.json', 'stage2/knowledge_links.json',
+        'stage2/characters.json',
         'stage4/plan_chapters.json',
     }
     assert projection_for('stage3.style', UPSTREAM) is None
@@ -1222,38 +1214,11 @@ def test_projection_registry_resolves_dynamic_and_invalid_artifact_paths():
 
 
 def test_stage2_review_projection_tracks_generation_semantics_not_reason_wording():
-    projection = projection_for('stage4.context', STAGE2_GLOBAL_REVIEW)
-    assert projection is not None
-    before = {
-        'source_sha256': 'a' * 64,
-        'items': [
-            {
-                'item_id': 'blocking-secret', 'kind': 'secret',
-                'subject_sha256': 'b' * 64, 'state': 'UNVER',
-                'reason': '证据不足', 'evidence': [],
-                'generation_disposition': None,
-            },
-            {
-                'item_id': 'disclosure-fate', 'kind': 'fate',
-                'subject_sha256': 'c' * 64, 'state': 'pending',
-                'reason': None, 'evidence': [],
-                'generation_disposition': None,
-            },
-        ],
-    }
-    wording = copy.deepcopy(before)
-    wording['items'][0]['reason'] = '仍然证据不足，但补充了审阅说明'
-    assert projection(before) == projection(wording)
-
-    quarantined = copy.deepcopy(wording)
-    quarantined['items'][0]['generation_disposition'] = {
-        'action': 'quarantine_group', 'reason': '隔离完整组'}
-    assert projection(before) != projection(quarantined)
-
-    disclosure_changed = copy.deepcopy(before)
-    disclosure_changed['items'][1]['state'] = 'FAIL'
-    assert projection(before) == projection(disclosure_changed), \
-        'disclosure 从不进入写作视图，不能制造下游 stale'
+    # Stage2 语义审阅退役：global_review 不再是 stage4.context 的消费投影，
+    # 旧产物也不得借投影通道回到消费面。
+    assert projection_for('stage4.context', STAGE2_GLOBAL_REVIEW) is None, (
+        'global_review 已随语义审阅退役，不能再回到 stage4.context 消费面')
+    assert projection_for('stage4.context', 'stage2/knowledge_links.json') is None
 
 
 def test_stage5_review_tracks_context_code_without_overinvalidating_writing():
@@ -1616,82 +1581,14 @@ def test_retiring_invalid_failure_rolls_the_formal_write_back(monkeypatch):
 
 
 def test_deterministic_self_fresh_policy_only_guards_artifacts_that_can_self_prove_now():
-    assert STAGE2_GLOBAL_REVIEW in SELF_FRESH_DETERMINISTIC
+    assert STAGE2_BLUEPRINT_CHARACTER_PROJECTION in SELF_FRESH_DETERMINISTIC, (
+        '称名投影是现役唯一的写后自证产物')
     assert STAGE1_MAIN_TEXT not in SELF_FRESH_DETERMINISTIC
     assert STAGE1_HOOK_COPY not in SELF_FRESH_DETERMINISTIC
     assert STAGE0_REVISIONS not in SELF_FRESH_DETERMINISTIC, \
         'revision 链只按根 source 身份判 freshness，不用写后自证策略'
-
-
-def test_global_review_pending_decisions_are_fresh_when_required_surface_is_exact():
-    base = _book()
-    book = base / '书名_123'
-    grounding = _stage4_grounding_payload()
-    _write_character_subject(book, grounding)
-    _write_knowledge_subject(book, grounding)
-    review = build_review(grounding)
-    assert review.items and all(item.state == 'pending' for item in review.items)
-
-    store = ArtifactStore(_ctx(base, node='stage2.global', paid=False))
-    store.write(STAGE2_GLOBAL_REVIEW, review)
-
-    report = store.freshness(STAGE2_GLOBAL_REVIEW)
-    assert (report.state, report.reason) == ('fresh', 'match')
-    assert report.edges[0].recorded_consumed == report.edges[0].now_consumed
-
-
-def test_global_review_surface_drift_is_stale_even_when_source_hash_is_copied():
-    base = _book()
-    book = base / '书名_123'
-    grounding = _stage4_grounding_payload()
-    _write_character_subject(book, grounding)
-    _write_knowledge_subject(book, grounding)
-    incomplete = build_review(grounding)
-    incomplete = incomplete.model_copy(update={'items': incomplete.items[:-1]})
-    _write_payload(book, STAGE2_GLOBAL_REVIEW, incomplete.model_dump())
-
-    store = ArtifactStore(_ctx(base, node='stage2.global', paid=False))
-    report = store.freshness(STAGE2_GLOBAL_REVIEW)
-    assert (report.state, report.reason) == ('stale', 'consumed_changed')
-    assert report.edges[0].recorded_file == report.edges[0].now_file
-    assert report.edges[0].recorded_consumed != report.edges[0].now_consumed
-
-
-def test_global_review_source_drift_refuses_write_and_restores_previous_bytes():
-    base = _book()
-    book = base / '书名_123'
-    grounding = _stage4_grounding_payload()
-    _write_character_subject(book, grounding)
-    _write_knowledge_subject(book, grounding)
-    review = build_review(grounding)
-    store = ArtifactStore(_ctx(base, node='stage2.global', paid=False))
-    official = store.write(STAGE2_GLOBAL_REVIEW, review)
-    before = official.read_bytes()
-
-    changed = copy.deepcopy(grounding)
-    changed['canon']['world_rules'][0]['versions'][0]['desc'] = '改为白日实行宵禁'
-    _write_knowledge_subject(book, changed)
-    assert store.freshness(STAGE2_GLOBAL_REVIEW).reason == 'file_changed'
-
-    with pytest.raises(ProvenanceRefused, match='freshness 后置条件'):
-        store.write(STAGE2_GLOBAL_REVIEW, review)
-    assert official.read_bytes() == before
-
-
-def test_global_review_missing_grounding_is_unknown():
-    base = _book()
-    book = base / '书名_123'
-    grounding = {
-        'entities': {'characters': {}},
-        'canon': {'world_rules': [], 'secrets': []},
-    }
-    _write_payload(book, STAGE2_GLOBAL_REVIEW, build_review(grounding).model_dump())
-
-    report = ArtifactStore(
-        _ctx(base, node='stage2.global', paid=False),
-    ).freshness(STAGE2_GLOBAL_REVIEW)
-    assert (report.state, report.reason) == ('unknown', 'ghost')
-    assert report.edges[0].key == STAGE2_GLOBAL_GROUNDING
+    assert STAGE2_GLOBAL_REVIEW not in SELF_FRESH_DETERMINISTIC, \
+        'global_review 已随语义审阅退役，不再有自证 freshness'
 
 
 def test_json_pointer_diff_uses_rfc6901_escaping_and_stable_order():
@@ -2487,7 +2384,7 @@ def test_promotion_discards_a_registered_legacy_formal_without_polluting_rounds(
     out = ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
         PLAN_REL, PlanChapters, **REVALIDATION)
 
-    assert json.loads(out.read_text(encoding='utf-8'))['_schema_version'] == 5
+    assert json.loads(out.read_text(encoding='utf-8'))['_schema_version'] == 7
     assert not inv.exists()
     archived = sorted(p.name for p in (formal.parent / paths.ROUNDS_DIRNAME).iterdir())
     assert archived == ['plan_chapters.INVALID.r1.json']
@@ -3133,49 +3030,51 @@ def only_the_unknown_half_of_the_freshness_postcondition_is_waived(monkeypatch):
 
 
 def test_the_waiver_lets_unknown_through_and_still_refuses_stale(
-        only_the_unknown_half_of_the_freshness_postcondition_is_waived):
+        only_the_unknown_half_of_the_freshness_postcondition_is_waived,
+        tmp_path):
     """⭐ **豁免的两侧各钉一次 —— 这条是上面那个 fixture 的守卫本体。**
 
-    ⚠⚠ 旁边那几条（`test_global_review_source_drift_refuses_write_and_restores_previous_bytes`
-    等）守的是**没有豁免时**整条后置条件；它们不吃这个 fixture，所以
-    **把 `narrowed` 改宽成 `lambda *_: None` 它们一条都不会红**，而那样 127 条往返会在
-    写盘口后置条件全线放行的情况下照样全绿。⇒ 这条专门吃着 fixture 判两侧：
+    语义审阅退役后，称名投影是现役唯一的 `SELF_FRESH_DETERMINISTIC` 成员；
+    用它造两侧：
 
-    ① `unknown`（`ghost`：grounding 不在盘上）⇒ **放行**，这是豁免的全部作用面；
-    ② `stale`（`file_changed`：grounding 变了）⇒ **照旧拒，且正式路径逐字节回滚**。
-
-    走 `stage2/global_review.json` 是因为它在 `SELF_FRESH_DETERMINISTIC` 里
-    （无 `_provenance` 字段也照查），三态由 `_global_review_freshness` 现算
-    ——不用手搓 provenance 就能把两侧都造出来。
+    ① `unknown`（投影的上游人物/正文不在盘上，下游写入时边判不出来）⇒ **放行**，
+       这是豁免的全部作用面；
+    ② `stale`（上游变了）⇒ **照旧拒，且正式路径逐字节回滚**。
     """
-    grounding = {'entities': {'characters': {}},
-                 'canon': {'world_rules': [], 'secrets': []}}
-
-    # ① unknown/ghost：grounding 不在盘上 ⇒ 算不出来 ⇒ 豁免放行
-    ghost_base = _book()
-    ghost_store = ArtifactStore(_ctx(ghost_base, node='stage2.global', paid=False))
-    landed = ghost_store.write(STAGE2_GLOBAL_REVIEW, build_review(grounding))
-    assert landed.is_file(), '豁免没生效——本条测试自己的前提就不成立了'
-    assert ghost_store.freshness(STAGE2_GLOBAL_REVIEW).state == 'unknown'
-
-    # ② stale/file_changed：写完之后动上游 ⇒ 必须照旧拒，且回滚
-    base = _book()
     grounding = _stage4_grounding_payload()
-    _write_character_subject(base / '书名_123', grounding)
-    _write_knowledge_subject(base / '书名_123', grounding)
-    store = ArtifactStore(_ctx(base, node='stage2.global', paid=False))
-    review = build_review(grounding)
-    official = store.write(STAGE2_GLOBAL_REVIEW, review)
-    before = official.read_bytes()
+    rel = 'stage4/plan_chapters.json'
 
-    changed = copy.deepcopy(grounding)
-    changed['canon']['world_rules'][0]['versions'][0]['desc'] = '改为白日实行宵禁'
-    _write_knowledge_subject(base / '书名_123', changed)
-    assert store.freshness(STAGE2_GLOBAL_REVIEW).state == 'stale'
+    def seeded(base):
+        store = _write_grounding_projection_subject(
+            base, grounding, node='stage2.blueprint', rel=rel)
+        book = base / '书名_123'
+        return store, book, (book / rel).read_bytes()
+
+    # ① unknown：投影的上游（人物、正文）被移走 ⇒ 下游边判不出来 ⇒ 豁免放行
+    base = _book()
+    store, book, plan_bytes = seeded(base)
+    (book / 'stage2' / 'characters.json').unlink()
+    (book / 'stage1' / 'main_text.json').unlink()
+    assert store.freshness(STAGE2_BLUEPRINT_CHARACTER_PROJECTION).state == 'unknown'
+    store.write(rel, json.loads(plan_bytes))
+    assert (book / rel).read_bytes() == plan_bytes, '豁免写完必须保持原字节'
+
+    # ② stale：写完之后动上游（正文）⇒ 投影 stale ⇒ 照旧拒，且回滚
+    base2 = _book()
+    store2, book2, plan_bytes2 = seeded(base2)
+    official = book2 / rel
+    main_text = json.loads((book2 / 'stage1' / 'main_text.json').read_text(
+        encoding='utf-8'))
+    main_text = [
+        {**row, 'text': row['text'] + ' 丙也来了。'} if row['chapter_ordinal'] == 1
+        else row for row in main_text]
+    _write_payload(book2, STAGE1_MAIN_TEXT, main_text)
+    assert store2.freshness(
+        STAGE2_BLUEPRINT_CHARACTER_PROJECTION).state == 'stale'
 
     with pytest.raises(ProvenanceRefused, match='freshness 后置条件'):
-        store.write(STAGE2_GLOBAL_REVIEW, review)
-    assert official.read_bytes() == before, \
+        store2.write(rel, json.loads(plan_bytes2))
+    assert official.read_bytes() == plan_bytes2, \
         '豁免把回滚也一起吞了——`stale` 那一支必须原样走完生产的事务'
 
 

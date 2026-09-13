@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from contracts.invariants import NODES, commander_work_unit, commander_scope_allowed
 from contracts.schema.workflow import (
-    WorkflowManifestV6, WorkUnitAttempt, WorkUnitBlobV1,
+    WorkflowManifestV6, WorkflowManifestV7, WorkUnitAttempt, WorkUnitBlobV1,
     WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV2, WorkUnitRegistryV1,
     WorkUnitProcessing,
 )
@@ -204,17 +204,17 @@ def _read(base: str | os.PathLike[str], path: Path, model: type[BaseModel]) -> A
         raise WorkUnitRefused(f'工作单元账缺失或不符合当前契约：{target.name}') from exc
 
 
-def workflow_manifest(base: str | os.PathLike[str]) -> WorkflowManifestV6 | None:
+def workflow_manifest(base: str | os.PathLike[str]) -> WorkflowManifestV7 | None:
     path = _safe(base, paths.workflow_manifest_path(base))
     if not path.exists():
         if paths.workflow_transition_pending_path(base).exists():
             raise WorkUnitRefused('已有迁移 prepared 但 manifest 缺失；禁止初始化新任务')
         return None
-    manifest = _read(base, path, WorkflowManifestV6)
+    manifest = _read(base, path, WorkflowManifestV7)
     from novel.orchestrator.workflow_transition import require_transition_completed
     with _open_snapshot(path) as stream:
         raw = stream.read()
-    if WorkflowManifestV6.model_validate_json(raw) != manifest:
+    if WorkflowManifestV7.model_validate_json(raw) != manifest:
         raise WorkUnitRefused('读取工作流 manifest 时身份变化')
     require_transition_completed(Path(base), manifest, raw)
     return manifest
@@ -242,12 +242,16 @@ def _require_clean_base(base: str | os.PathLike[str]) -> None:
 
 
 def check_workflow_write(base: str | os.PathLike[str]) -> None:
-    """纯读预检；在 admission 等服务写副作用之前拒绝冻结旧 base。"""
+    """纯读预检；在 admission 等服务写副作用之前拒绝冻结旧 base。
+
+    本仓没有通用迁移机制：v7 起删除 Stage2 语义审阅与 KnowledgeLinks，
+    旧 v4~v6 manifest 不迁移，旧输出与成本账原样保留，由冻结旧代码读取。
+    """
     if workflow_manifest(base) is None:
         _require_clean_base(base)
 
 
-def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV6:
+def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV7:
     """仅空 base 可初始化；旧书不能靠删账或换代码获得新额度。"""
     target = _safe(base, paths.workflow_manifest_path(base))
     # 拒绝存量 base 必须零写；锁本身会创建父目录，因此先作只读预检。
@@ -258,13 +262,13 @@ def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV6:
         if existing is not None:
             return existing
         _require_clean_base(base)
-        manifest = WorkflowManifestV6(task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
+        manifest = WorkflowManifestV7(task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
                                       created_at=int(time.time()))
         _write(base, target, manifest)
         return manifest
 
 
-def require_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV6:
+def require_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV7:
     manifest = workflow_manifest(base)
     if manifest is None:
         return initialize_workflow(base)
@@ -1158,20 +1162,6 @@ def unit_view(ledger: WorkUnitLedgerV2) -> dict[str, Any]:
                 state=state, latest_request_sha256=latest.request_sha256 if latest else None,
                 latest_response_sha256=latest.response_sha256 if latest else None,
                 recovery_action=recovery, processing=processing_view(ledger))
-
-
-def require_commander_scope_closed(base: str | os.PathLike[str], sid: str, node: str, scope: str) -> None:
-    """进入新 Blueprint 批次前，不能用新范围绕过旧范围的未知执行或未采用回答。"""
-    if node != 'stage2.blueprint':
-        return
-    rows = list_unit_views(base, sid)
-    if rows is None:
-        raise WorkUnitRefused('缺现役工作流身份，不能进入新的 Blueprint 审阅批次')
-    pending = [row for row in rows if row['node'] == node and row['role'] == 'commander'
-               and row['scope'] != scope and row['state'] in {'reserved', 'unknown', 'delivered'}]
-    if pending:
-        detail = '；'.join(f"{row['scope']}：{row['recovery_action']}" for row in pending)
-        raise WorkUnitRefused('旧 Blueprint 范围尚未收口，须先按原记录免费恢复，不能购买新批次：' + detail)
 
 
 def processing_view(ledger: WorkUnitLedgerV2) -> dict[str, Any] | None:

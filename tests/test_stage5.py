@@ -661,8 +661,7 @@ def test_secret_leak_goes_red_and_the_evidence_is_the_drafts_own_bytes(book, ent
     b = M.Book(title=book.title, ctx=book.ctx, measurable=book.measurable,
                source_text=book.source_text,
                secrets=[{'secret_id': 'secret_x', 'fact': fact,
-                         'knowledge_events': [], 'setup': {'kind': 'cold'},
-                         'first_reveal_chapter': 9}])
+                         'revealed_from': 9}])
     body = _clean_body(book, entry) + fact + '。'
     fs = checks.chapter_findings(body, entry, b, given='')
     leak = [f for f in fs if f.rule == 'secret_leak']
@@ -679,8 +678,7 @@ def test_secret_literal_leak_uses_the_authoritative_reveal_timeline(book, entry)
         source_text={**book.source_text, 9: book.source_text[1]},
         secrets=[{
             'secret_id': 'secret_x', 'fact': fact,
-            'knowledge_events': [], 'setup': {'kind': 'cold'},
-            'first_reveal_chapter': 9,
+            'revealed_from': 9,
         }],
     )
     before = dict(entry, output_ordinal=1)
@@ -693,8 +691,7 @@ def test_secret_literal_leak_uses_the_authoritative_reveal_timeline(book, entry)
 def test_secret_timeline_uses_the_same_number_ruler(book):
     """揭示章原样写出带数字的 fact 时，不得误报「连揭示章都没命中」。"""
     fact = '她其实一直都知道他是三皇子'
-    secret = {'secret_id': 'secret_x', 'fact': fact, 'knowledge_events': [],
-              'setup': {'kind': 'cold'}, 'first_reveal_chapter': 9}
+    secret = {'secret_id': 'secret_x', 'fact': fact, 'revealed_from': 9}
     synthetic = M.Book(title=book.title, ctx=book.ctx, measurable=book.measurable,
                        source_text=book.source_text, secrets=[secret])
     fs = checks.book_findings(synthetic, rows=[], bodies={9: fact},
@@ -745,9 +742,8 @@ def test_every_registered_rule_has_exactly_one_producer():
     assert len(mine) == len(set(mine)), '同一条判据被列了两次'
     assert set(mine) == reg, (f'注册了没实现：{sorted(reg - set(mine))}；'
                               f'实现了没注册：{sorted(set(mine) - reg)}')
-    # secret_unknown 随重复 must_not_reveal 清单退役；paragraph_slot_report
-    # 与 dialogue_semantics_unver、knowledge_position_unver 加入后现役共 53 条。
-    assert len(reg) == 53
+    # knowledge_position_unver 随 KnowledgeLinks 消费退役；现役共 52 条。
+    assert len(reg) == 52
 
 
 def test_every_unver_rule_must_say_why_it_cannot_check():
@@ -757,8 +753,8 @@ def test_every_unver_rule_must_say_why_it_cannot_check():
     **`unver` 是判据的边界，而边界要说得出在哪。**
     """
     unver = {r.rule for r in REGISTRY.of_stage('stage5') if r.sev == 'unver'}
-    assert unver == set(checks._UNVER) and len(unver) == 7
-    assert 'knowledge_position_unver' in unver
+    assert unver == set(checks._UNVER) and len(unver) == 6
+    assert 'knowledge_position_unver' not in unver
 
 
 def test_the_badge_can_never_be_pass_on_this_layer():
@@ -867,94 +863,13 @@ def test_the_secret_ids_never_reach_the_writer(book, entry):
     assert all(str(secret['secret_id']) not in given for secret in book.secrets)
 
 
-def test_paid_writer_prompt_excludes_global_source_spans(monkeypatch, tmp_path):
-    """Stage5 付费入口必须经共用 ``load_book`` 剥掉正式取证字节。"""
-    import copy
-    from types import SimpleNamespace
+def test_paid_writer_prompt_excludes_global_source_spans():
+    """【已退役并改口】旧断言盯的是 entities/canon 时代的 SourceSpan 取证字节。
 
-    from novel.core.evidence import iter_global_evidence_slots
-    from novel.stages.stage2 import global_review as stage2_global_review
-    from novel.stages.stage5 import review, write
-    from tests.test_stage2 import global_grounding
-
-    seed = factories.stage5_book()
-    grounding = global_grounding()
-    markers: list[str] = []
-    coordinates: list[int] = []
-    for index, (_claim_path, owner, field) in enumerate(
-        iter_global_evidence_slots(grounding), 1,
-    ):
-        marker = f'STAGE5_EVIDENCE_ONLY_{index}'
-        start = 934_567_800 + index * 100
-        owner[field] = {
-            'chapter_ordinal': 1,
-            'source': {
-                'text': marker,
-                'start': start,
-                'end': start + len(marker),
-            },
-        }
-        markers.append(marker)
-        coordinates.extend((start, start + len(marker)))
-
-    class Dumped:
-        def __init__(self, value):
-            self.value = value
-
-        def model_dump(self, **_kwargs):
-            return copy.deepcopy(self.value)
-
-    attested = ' '.join(
-        str(row.get('canonical') or '')
-        for row in ((grounding.get('entities') or {}).get('characters') or {}).values())
-    source_text = {
-        ordinal: text + ('\n' + attested if ordinal == 1 else '')
-        for ordinal, text in seed.source_text.items()
-    }
-    writer_context = copy.deepcopy(seed.ctx)
-    from contracts.artifacts import STAGE2_CHARACTERS
-    from tests.stage2_fixtures import formal_subjects
-    registry, knowledge = formal_subjects(grounding)
-    stored = {
-        review.MAIN_TEXT: SimpleNamespace(root=[
-            SimpleNamespace(
-                chapter_ordinal=ordinal,
-                text=text,
-            )
-            for ordinal, text in source_text.items()
-        ]),
-        review.GLOBAL_GROUNDING: knowledge,
-        STAGE2_CHARACTERS: registry,
-        stage2_global_review.REL: factories.approved_global_review(grounding),
-        review.WRITER_CONTEXT: Dumped(writer_context),
-    }
-
-    class Store:
-        @staticmethod
-        def full_sha256_or_none(rel):
-            return 'a' * 64 if rel in stored else None
-
-        @staticmethod
-        def path(rel):
-            return tmp_path / rel
-
-        @staticmethod
-        def exists(rel):
-            return rel in stored
-
-        @staticmethod
-        def read(_model, rel):
-            return stored[rel]
-
-    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: Store())
-    _system, user, material = write.build_prompt(
-        SimpleNamespace(title=seed.title), '1')
-
-    paid_material = user + '\n' + material.given
-    assert markers and all(marker not in paid_material for marker in markers)
-    assert all(str(coordinate) not in paid_material for coordinate in coordinates), \
-        'SourceSpan 的 start/end 坐标进了 Stage5 付费 prompt'
-
+    v7 起证据锚点只剩 ``{chapter_ordinal,start,end,text_sha256}``，Global/人物
+    不再携带任何原文片段字节；付费材料只经 ``load_book`` 的确定性投影组装，
+    「取证字节不进付费 prompt」由该组装面与 stage4/stage5 的 writer 消费测试承接。
+    """
 
 def test_current_trim_audit_absorbs_the_duplicate_length_over_action():
     """同一份当前稿已有 hash-bound trim audit 时，判据侧不再产第二条 length_over。"""

@@ -36,7 +36,6 @@ class PlotChapterReviewMaterials(FrozenModel):
     support_subjects: list[ReviewSupportSubject]
     actor_bindings: list[ActorBinding]
     global_subjects: list[ReviewSupportSubject]
-    knowledge_events: list[dict[str, JsonValue]]
     source_context_catalog: dict[str, JsonValue]
     evidence_anchors: list[ReviewEvidenceAnchor]
     source_materials: list[ReviewSourceChapter]

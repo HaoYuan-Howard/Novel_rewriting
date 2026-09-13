@@ -2,11 +2,12 @@
  * 闸门 —— 流程的核心，不是装饰。
  *
  *   stage0 剔番外 ─► stage1 切分 ─► stage2 global ─► blueprint
- *                                      └─ 人工复核 ─┘ ─► stage4 计划
+ *                     └─ 统一机械准入衔接，语义未审以报告 unver 披露 ─┘ ─► stage4 计划
  *                   ─► Stage5 写作授权 ─► stage5 ─► stage6 ─► stage7
  *
  * GateBar 只展示仍使用通用确认的页面；Stage6/7 已由专用 typed 审批面负责。
  * 审批、后续作业与最终交付分别读取后端证明，不能从 gate 推导成书或自动发起状态。
+ * Stage2 语义审阅已退役：read 屏不再挂 gate，global 屏的下一动作只消费 s1 spawns。
  */
 import type { ApprovalDoc, GateKey } from '@/types/approvals'
 import type { ScreenName } from './vocabulary'
@@ -33,8 +34,7 @@ export interface GateView {
 /** 屏 → 它守着哪一道闸门 */
 export const SCREEN_GATE: Partial<Record<ScreenName, GateKey>> = {
   stage1: 's1',
-  read: 's2',
-  global: 's2',
+  global: 's1',
   stage4: 's4',
   stage5: 's5',
 }
@@ -52,7 +52,7 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
         done,
         blocked: !g.s0,
         title: done ? '切分已确认' : g.s0 ? '这一刀切对了吗？' : '番外还没剔，切了也要重切',
-        note: '确认后先生成全局设定；当前 Global 接受后，服务端才会下发逐章骨架生成。',
+        note: '确认后先生成全局设定；机械准入通过后，服务端才会下发逐章骨架生成动作。',
         chips: [{ ok: g.s0, label: 'stage0 剔番外' }],
         btn: done ? '已确认' : g.s0 ? '确认切分' : '先过 stage0 剔除番外',
         blockedReason: 'stage0 还没确认删除范围。番外没剔就切分，切完还要重切。',
@@ -60,26 +60,6 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
           ? 'stage2 已发起；若服务端仍下发 continuation，可继续生成下一份正式产物。'
           : null,
       }
-
-    case 's2': {
-      const globalAccepted = doc.stage2_reviews?.['stage2.global']?.state === 'accepted'
-      const blueprintAccepted = doc.stage2_reviews?.['stage2.blueprint']?.state === 'accepted'
-      const both = globalAccepted && blueprintAccepted
-      return {
-        key,
-        done,
-        blocked: !both,
-        title: done ? 'stage2 已确认' : 'stage2 两个节点都须接受',
-        note: '先接受当前全局设定，再生成并独立审阅整本骨架。两份当前节点接受齐全后，才可继续 stage4；已读记录不能替代接受。',
-        chips: [
-          { ok: globalAccepted, label: 'Global 接受' },
-          { ok: blueprintAccepted, label: 'Blueprint 接受' },
-        ],
-        btn: done ? '已确认' : both ? '确认 stage2，启动 stage4' : '两个节点都接受后才能继续',
-        blockedReason: '服务端尚未确认两份当前节点接受；请在全局设定与骨架页分别提交审阅决定。',
-        doneNote: done ? '两份节点接受已保存；下一动作由后端运行入口决定。' : null,
-      }
-    }
 
     case 's4':
       return {
@@ -133,7 +113,6 @@ export const RAIL_LOCK: Partial<Record<ScreenName, { need: GateKey; why: string 
 export const GATE_LABEL: Record<GateKey, string> = {
   s0: 'stage0 剔除番外',
   s1: 'stage1 切分确认',
-  s2: 'stage2 两屏审阅',
   s4: 'stage4 计划确认',
   s5: 'stage5 成稿确认',
   s6: 'stage6 文案确认',
@@ -149,8 +128,6 @@ export function gateNeedText(key: GateKey): string {
 export const RAIL_GATE: Partial<Record<ScreenName, GateKey>> = {
   stage0: 's0',
   stage1: 's1',
-  read: 's2',
-  global: 's2',
   stage4: 's4',
   stage5: 's5',
   stage6: 's6',

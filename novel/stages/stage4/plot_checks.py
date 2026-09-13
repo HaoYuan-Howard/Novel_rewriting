@@ -1,4 +1,4 @@
-"""完整剧情计划的联合确定性判定。语义联合呈现始终保留 unver，交既有审阅。"""
+"""完整剧情计划的联合确定性判定。语义呈现保留 unver 披露（Stage2 语义未审）。"""
 from __future__ import annotations
 
 import json
@@ -14,7 +14,7 @@ from novel.stages.stage4.plot_measure import structure_metrics_of
 
 
 def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
-          main_text: list[dict[str, Any]], global_g=None, knowledge_links=None, characters=None,
+          main_text: list[dict[str, Any]], global_g=None, characters=None,
           ctx=None, expected_ctx=None, ctx_link=None, ctx_source=None,
           phase_links=None, bidx=None, witness: WitnessCollector | None = None) -> list[Outcome]:
     from novel.stages.stage4.checks import style_word_findings
@@ -41,12 +41,12 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
          else [(None, '阅读序必须连续')], scanned=f'{len(chapters)} 章')
     emit('empty_chapter', [(row.get('output_ordinal'), '本章没有场景')
          for row in chapters if not row.get('scenes')], scanned=f'{len(chapters)} 章')
-    if knowledge_links is None or global_g is None:
-        outcomes.append(unverifiable('placement_ref', '缺少正式 Global/KnowledgeLinks，不能证明端点闭合'))
+    if global_g is None:
+        outcomes.append(unverifiable('placement_ref', '缺少正式 Global，不能证明端点闭合'))
     else:
         bad = []
         try:
-            validate_plan(plan, blueprints, global_g, knowledge_links, characters=characters, main_text=main_text)
+            validate_plan(plan, blueprints, global_g, characters=characters, main_text=main_text)
         except (RefusedByStructure, ValueError, KeyError, StopIteration) as exc:
             bad.append((getattr(exc, 'chapter_ordinal', None), str(exc)))
         emit('placement_ref', bad, scanned='全部节点、目标、证据、舞台和必要语义端点')
@@ -127,20 +127,17 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any],
                     names_bad.append((ordinal, f"无本章以前的叫法证据：{character['actor_ref']}"))
         emit('ctx_name_attested', names_bad, scanned='逐章原文有据叫法')
         permissions = lambda rows: [
-            (r['output_ordinal'], r['knowledge_events'], r['restricted_subject_refs'],
-             [(s['slot'], s['knowledge_event_refs'], s['state_events'], s['context_beat_refs'])
+            (r['output_ordinal'], r['restricted_subject_refs'],
+             [(s['slot'], s['state_events'], s['context_beat_refs'])
               for s in r['scenes']]) for r in rows]
         emit('ctx_permission_exact', [] if not invalid and permissions(current) == permissions(expected)
-             else [(None, '知识、状态或背景许可与同源编译结果不同')], scanned='显式逐场许可')
+             else [(None, '状态或背景许可与同源编译结果不同')], scanned='显式逐场许可')
     outcomes.append(unverifiable('presentation_semantics',
         '引用和证据闭合不能证明联合呈现完整、归因正确、因果保真或没有隐含提前揭示；'
         '由既有设计、结构及成稿审阅判断', scanned=f'{len(chapters)} 章'))
     from novel.stages.stage4.plot_measure import constraint_and_stage_readings
     try:
-        if knowledge_links is None:
-            raise ValueError('缺少已审 KnowledgeLinks')
-        readings = [constraint_and_stage_readings(bps[c['output_ordinal']], c,
-                    knowledge_links=knowledge_links) for c in chapters]
+        readings = [constraint_and_stage_readings(bps[c['output_ordinal']], c) for c in chapters]
     except (ValueError, KeyError) as exc:
         for rule in ('causal_disclosure', 'stage_signature_conflict', 'verbatim_starved', 'verbatim_share'):
             outcomes.append(unverifiable(rule, f'当前材料无法计算该读数：{exc}'))

@@ -1,7 +1,7 @@
 """呈现身份的私有解析器；公开目录不携可反查共同实体的分组或映射。
 
 不同呈现默认保持独立 token。两个绑定各有本章开始前已公开归属同一实体的
-登记称谓时，才归一为同一公共呈现；本章的新映射仍由 KnowledgeLinks 端点许可。
+登记称谓（``identity_revealed_from`` 章级揭示字段）时，才归一为同一公共呈现。
 """
 from __future__ import annotations
 
@@ -116,21 +116,6 @@ class ActorCatalog:
             'public_entity', actor.char_id)
         return 'actor_' + hmac.new(self.seed, json.dumps(identity).encode(), hashlib.sha256).hexdigest()[:24]
 
-    def identity_event(self, values, *, chapter_ordinal: int, kind: str) -> None:
-        """既有披露端点与登记标量交叉检查，不另建别名知识事件。"""
-        if not values:
-            return
-        actors = [self.resolve(row) for row in values]
-        if (len({row.char_id for row in actors}) != 1 or any(not row.presentation_ref for row in actors)
-                or len({row.presentation_ref for row in actors}) < 2):
-            raise RefusedByStructure('身份披露必须连接同一实体的多个明确表面身份')
-        character = self.characters[actors[0].char_id]
-        times = {row['surface']: row['identity_revealed_from'] for row in character['aliases']}
-        boundary = max(times[surface] for actor in actors
-                       for surface in self.bindings[actor.presentation_ref]['surfaces'])
-        if boundary > chapter_ordinal or (kind == 'secret_reveal' and boundary != chapter_ordinal):
-            raise RefusedByStructure('身份披露端点与登记称谓的 identity_revealed_from 不一致')
-
     def describe(self, value, *, allowed_slots: list[str], public_states: dict[str, list[str]]) -> dict:
         actor = self.resolve(value)
         character = self.characters[actor.char_id]
@@ -173,8 +158,3 @@ class ActorCatalog:
                    self.token(ref.relation_actors.object, public_catalog=public_catalog)]
         token = hmac.new(self.seed, json.dumps(key).encode(), hashlib.sha256).hexdigest()[:24]
         return {'kind': ref.kind, 'ref': 'subject_' + token}
-
-    def event(self, obligation_id: str, public_subject: dict) -> str:
-        """事件也按实际公开主体单独铸 token，不泄露共用底稿/义务的分组。"""
-        payload = json.dumps(['knowledge_event', obligation_id, public_subject], sort_keys=True)
-        return 'event_' + hmac.new(self.seed, payload.encode(), hashlib.sha256).hexdigest()[:24]

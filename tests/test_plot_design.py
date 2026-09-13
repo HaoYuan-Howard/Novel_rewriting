@@ -279,16 +279,40 @@ def test_blind_keeps_two_faces_in_same_beat_and_never_inherits_hidden_role():
     assert 'char_001' not in wire and 'ap01_' not in wire
 
 
+def prepare_complete_book(tmp_path, *, grounding=None):
+    """贯通 fixture 从真实摄入/批准/分章产生来源链，不跳过 Stage0/1 闸门。"""
+    from novel.stages.stage0.removal import run_source, run_approve, _context
+    from novel.stages.stage1.partition import run_partition
+    from tests.test_stage2 import main_text
+    from tests.test_stage2_generation import _ctx, _client, _ok, _accept_fixture_global
+    from tests.stage2_fixtures import generate_characters, knowledge_response
+    from novel.stages.stage2 import extract
+
+    source = tmp_path / 'FQ_完整剧情测试_123.txt'
+    body = '李宝珠收到父亲已经回城的来信。\n\n' + '\n\n'.join(
+        f"{row['chapter_ordinal']}\n\n{row['text']}" for row in main_text())
+    source.write_text(body, encoding='utf-8', newline='\n')
+    book, _, _ = run_source(source, tmp_path / 'output')
+    _, report = run_approve(_context(book, 'stage0.approve'),
+                            actor='test:源文审阅者', reason='已核对合成全书来源与保留范围')
+    assert report.passed
+    _, report = run_partition(_context(book, 'stage1.partition'))
+    assert report.passed
+    generate_characters(_ctx(book, 'stage2.characters'), view=grounding)
+    ctx = _ctx(book, 'stage2.global')
+    client, _ = _client(ctx, lambda _req, _index: _ok(knowledge_response(view=grounding)))
+    extract.run_global(ctx, client)
+    _accept_fixture_global(ctx)
+    return book
+
+
 def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, grounding=None,
                                   stop_at_review=None, capture=None, blueprint_mutator=None,
                                   real_code_identity=False):
     from contracts.schema.stage4 import BlindCandidate
     from novel.stages.stage4 import plan, prompts
     from novel.orchestrator import approvals
-    from novel.stages.stage2 import knowledge_links
-    from novel.views.stage2 import blueprint_review_workpack
     from novel.store import ArtifactStore
-    from tests.test_plot_review_runtime import prepare_complete_book, request
     from tests.test_plot_producer import generate_plot, responses
     from tests.test_stage2_generation import _ctx, _client, _ok
     from novel import prov
@@ -315,10 +339,9 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
     if blueprint_mutator is not None:
         blueprint_mutator(extracted)
     ctx, _ = generate_plot(book, extracted)
-    for scope in ('chapter:1', 'chapter:2', 'chapter:3', 'cross_chapter'):
-        pack = blueprint_review_workpack(book.parent, ctx.sid, scope=scope)
-        approvals.approve_stage2_review(book.parent, ctx.sid, request(pack))
-    knowledge_links.run_close_review(_ctx(book, 'stage2.blueprint', paid=False))
+    # 审阅退役后 s0/s1 是仅存的免费前置闸；Stage4 结构审阅要求它们已按盘面落章。
+    approvals.approve_gate(book.parent, ctx.sid, 's0')
+    approvals.approve_gate(book.parent, ctx.sid, 's1')
     from novel.views.stage2 import reading_view
     from novel.views.stage4 import stage4_view
     source_view = reading_view(book.parent, ctx.sid, 1)
@@ -327,12 +350,6 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
     baseline_view = stage4_view(book.parent, ctx.sid, 1)
     assert baseline_view.identity_plan and baseline_view.plan_chapter.beat_placements
     blueprint_bytes = (book / 'stage2/chapter_blueprints.json').read_bytes()
-    blueprint_review = approvals.get(book.parent, ctx.sid).stage2_reviews['stage2.blueprint']
-    from novel.orchestrator.operator import _review_state_projection
-    scope_rows = [r for r in _review_state_projection(approvals.get(book.parent, ctx.sid))
-                  if r['node'] == 'stage2.blueprint']
-    assert {r['scope'] for r in scope_rows} == {'chapter:1', 'chapter:2', 'chapter:3', 'cross_chapter'}
-    assert all(r['state'] == 'accepted' for r in scope_rows)
     design_ctx = _ctx(book, 'stage4.design')
 
     def respond(req, _index):
@@ -417,7 +434,7 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
     compiled = merge_evidence_bindings(body, construct_feasible_binding_witness(body, catalog), catalog)
     adopt_plan_response(compiled, up.blueprints, up.bidx)
     context = build_writer_context(compiled, up.global_g, up.blueprints, up.main_text,
-                                   knowledge_links=up.knowledge_links, characters=up.characters).ctx
+                                   characters=up.characters).ctx
     assert len(context['chapters']) == 3
     rendered = json.dumps(context, ensure_ascii=False)
     assert all(key not in rendered for key in ('fact_atoms', 'required_facts', 'source_context_refs'))
@@ -441,7 +458,6 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
     assert report.passed
     assert len(binding_transport.calls) == int(distributed)
     assert (book / 'stage2/chapter_blueprints.json').read_bytes() == blueprint_bytes
-    assert approvals.get(book.parent, ctx.sid).stage2_reviews['stage2.blueprint'] == blueprint_review
     from contracts.schema.stage4 import PlanChapters
     formal, _ = ArtifactStore(binding_ctx).read_own(PlanChapters, plan.REL, require_current=True)
     assert len(formal.output_chapters) == 3
@@ -513,8 +529,8 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
                 capture['http:' + suffix] = reply.json()
         if capture is not None:
             for suffix in ('', 'approvals', 'stage1', 'stage2/global', 'stage2/characters', 'check/stage2', 'check/stage5',
-                           'run/metrics', 'stage2/blueprint-review-workpack?scope=chapter%3A1',
-                           'stage2/blueprint-review-workpack?scope=cross_chapter'):
+                           'run/metrics', 'stage2/blueprint-reading-workpack?scope=chapter%3A1',
+                           'stage2/blueprint-reading-workpack?scope=cross_chapter'):
                 reply = http.get(f'/api/novels/{ctx.sid}' + ('/' + suffix if suffix else ''))
                 assert reply.status_code == 200, reply.text
                 capture['http:' + (suffix or 'overview')] = reply.json()

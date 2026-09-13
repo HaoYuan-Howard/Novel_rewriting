@@ -16,7 +16,6 @@ import pytest
 from contracts.schema.stage4 import BindingConcern
 from contracts.schema.plot import PlotSubjectRef
 from novel.errors import ProvenanceRefused, RefusedByStructure
-from novel.stages.stage2 import knowledge_links
 from novel.stages.stage2.plot_compile import source_digest
 from novel.stages.stage4 import plan
 from novel.stages.stage4.plot_binding import apply_chapter_resolutions, build_mechanical_baseline
@@ -24,7 +23,6 @@ from novel.stages.stage4.plot_design import build_blind_projection, compile_blin
 from tests.stage2_fixtures import plot_blueprints
 from tests.test_stage2 import main_text
 from tests.test_stage2_grounding import character_preparation, pair  # noqa: F401
-from tests.test_stage2_knowledge_links import _scope, _history
 from tests.test_stage4_v3_integration import _retain_a_response
 
 
@@ -41,16 +39,11 @@ def _inputs(pair):
     ]
     global_g = knowledge.model_dump(mode='json', by_alias=True)
     characters = registry.model_dump(mode='json', by_alias=True)
-    scope = _scope(knowledge, bp)
-    links = {'scope': scope.model_dump(mode='json'), 'links': [
-        row.model_dump(mode='json') for row in knowledge_links.require_complete(scope, _history(scope))],
-        '_provenance': {'code': 'test', 'root_clean_sha1': 'a' * 40,
-                        'inputs': {}, 'decision_sha256': 'd' * 64}}
     truth, mapping = build_blind_projection(bp, root_clean_sha1='a' * 40,
-                                           global_g=global_g, knowledge_links=links, characters=characters,
+                                           global_g=global_g, characters=characters,
                                            main_text=main_text())
     candidate = compile_blind_candidate(_retain_a_response(bp, mapping), mapping, truth=truth)
-    up = SimpleNamespace(blueprints=bp, global_g=global_g, knowledge_links=links,
+    up = SimpleNamespace(blueprints=bp, global_g=global_g,
                          characters=characters, main_text=main_text())
     baseline = build_mechanical_baseline(candidate, bp).chapter(2)
     assert len(baseline.ambiguities) == 1 and len(baseline.ambiguities[0].candidates) == 2
@@ -137,9 +130,9 @@ def test_binding_prompt_refuses_unjoinable_frozen_evidence(pair, corruption):
     elif corruption == 'foreign_goal':
         chapter['chapter_goal']['subject_aliases'] = [other]
     else:
-        other_endpoint = next(token for token, row in candidate['endpoint_aliases'].items()
-                              if token not in {r['endpoint_alias'] for r in chapter['anchor_bindings']})
-        chapter['anchor_bindings'].append({'endpoint_alias': other_endpoint, 'scene_ref': 's01'})
+        # 端点票只在确需显式绑定时下发；伪造的未登记端点一律不可连接。
+        chapter['anchor_bindings'].append(
+            {'endpoint_alias': 'a_' + 'f' * 16, 'scene_ref': 's01'})
     with pytest.raises((ProvenanceRefused, RefusedByStructure)):
         plan._chapter_binding_issue(ctx, up, candidate, baseline, 2)
 
@@ -212,11 +205,15 @@ def test_binding_request_changes_only_for_actual_materials_and_boundary(pair, ch
     elif changed == 'own_candidate':
         candidate['output_chapters'][1]['scenes'][0]['purpose'] = '发问'
     elif changed == 'consumed_foreign_evidence':
-        evidence_ref = up.global_g['arc_secrets'][0]['evidence_refs'][0]
-        proof = up.global_g['evidence_anchors'][evidence_ref]
+        # 知识链接退役后，本章实际消费的外部 owner 证据是人物登记；
+        # 改它必须改变章输入身份（对照 foreign_* 的未消费证据）。
+        evidence_ref = up.characters['characters']['char_002']['aliases'][0]['evidence_refs'][0]
+        proof = up.characters['evidence_anchors'][evidence_ref]
         proof['end'] -= 1
-        source = next(row['text'] for row in up.main_text if row['chapter_ordinal'] == proof['chapter_ordinal'])
-        proof['text_sha256'] = hashlib.sha256(source[proof['start']:proof['end']].encode('utf-8')).hexdigest()
+        source = next(row['text'] for row in up.main_text
+                      if row['chapter_ordinal'] == proof['chapter_ordinal'])
+        proof['text_sha256'] = hashlib.sha256(
+            source[proof['start']:proof['end']].encode('utf-8')).hexdigest()
     else:
         ambiguity = baseline.ambiguities[0]
         baseline = replace(baseline, ambiguities=(replace(

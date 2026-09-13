@@ -1027,7 +1027,7 @@
    "rule": "role_fate_unverifiable",
    "sev": "unver",
    "status": "unver",
-   "item": "改写式结局泄漏有确定性防线",
+   "item": "改写式结局泄漏没有确定性防线，须人读",
    "requirement": "R-2.6",
    "check_kind": "mechanical",
    "remediation": "human",

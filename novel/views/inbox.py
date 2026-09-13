@@ -38,7 +38,7 @@ inbox.py —— 「待人工」八类清单的**生产者**（BE-04 第一条；
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_REVIEW,
+    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
     STAGE6_HOOK, STAGE7_NAME_MAP,
 )
 
@@ -46,16 +46,14 @@ import os
 import re
 
 from contracts.invariants import (
-    INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER, review_effect_of,)
+    INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER,)
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
     ApprovalDoc, InboxDecision, InboxItem, InboxView,
     Stage6ApprovalWorkpack, Stage7ApprovalWorkpack,
 )
-from contracts.schema.evaluation import GlobalReview
 from contracts.schema.report import CheckReport
 from novel import paths, wontfix
-from novel.quality.global_review import review_item_kind
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, TerminalState, UpstreamMissing,
 )
@@ -218,7 +216,6 @@ def inbox_from_snapshot(
         if report is not None:
             items += _report_items_for_inbox(report, stage)
 
-    items += _verification_items(novel_dir, code)
     from novel.stages.stage6 import prepare as prepare_stage6
     prepare_state = prepare_stage6.view_state(ArtifactStore(readonly_ctx(
         novel_dir, 'stage6.prepare', code)))
@@ -288,24 +285,13 @@ def _stage2_projection_recovery_items(ov) -> list[InboxItem]:
 def _classify(item: InboxItem) -> InboxItem:
     """把正交两轴物化；不因“看起来像人工项”猜一份不存在的裁决。
 
-    ⚠ **这是 `delivery_effect` 的唯一物化口**，所以 stage2 复核项的分级也必须落在
-    这里，而不是在 `_verification_items` 里先填一次再被这里覆盖掉——那种形状
-    「填了但不生效」不会报错，只会静默恢复成旧口径。
-    分类本身仍只从 `review_effect_of` 取，本模块不复制第二张表；`item_id` 的文法
-    也只由 `review_item_kind` 反向读，不在这里现拆一次 `split(':')`。
+    ⚠ **这是 `delivery_effect` 的唯一物化口**。Stage2 语义审阅退役后不再有
+    审阅义务待办：Stage2 机械阻断保持 blocking，语义未审只经报告 ``unver``
+    与交付披露表达，不在 inbox 里分级。
     """
     disclosure = (
         item.kind == 'human_only'
         or (item.kind == 'verification' and item.stage == 'stage6' and item.rule != 'stage6.prepare')
-        or (item.kind == 'verification' and item.stage == 'stage2'
-            and (
-                review_effect_of(review_item_kind(item.rule)) == 'disclosure'
-                or (
-                    item.decision is not None
-                    and item.decision.generation_disposition
-                    == 'quarantine_group'
-                )
-            ))
     )
     return item.model_copy(update={
         'delivery_effect': 'disclosure' if disclosure else 'blocking',
@@ -526,61 +512,6 @@ def _report_items(
                 out.append(InboxItem(
                     kind='human_only', stage=stage, chapter=chapter, rule=line.rule,
                     what=finding.detail, how=how))
-    return out
-
-
-def _verification_items(novel_dir, code: str) -> list[InboxItem]:
-    """TODO-24 可人工消解的全书评测项；通用 `unver` 不借机入列。
-
-    ⚠ **分级只改 `delivery_effect`，不改「在不在清单里」。** `disclosure` 的三类
-    （名字区分度 / 称谓场合 / 结局）不再挡 Stage4，正因为如此它们**必须**继续
-    逐条出现在这里与终审包——「不阻断」一旦顺手变成「不列出」，这次分级就成了
-    一次静默删审计。分类只从 `review_effect_of` 取，本模块不复制第二张表。
-    """
-    store = ArtifactStore(readonly_ctx(novel_dir, 'stage2.global', code))
-    if not store.exists(STAGE2_GLOBAL_REVIEW):
-        return []
-    try:
-        review, _raw = store.read_own(GlobalReview, STAGE2_GLOBAL_REVIEW)
-    except ArtifactUnreadable:
-        return []
-    out: list[InboxItem] = []
-    for row in review.items:
-        if row.state not in ('pending', 'FAIL', 'UNVER'):
-            continue
-        state = {
-            'pending': '待复核',
-            'FAIL': '复核未通过（FAIL）',
-            'UNVER': '证据不足（UNVER）',
-        }[row.state]
-        reason = f'；上次理由：{row.reason}' if row.reason else ''
-        disposition = row.generation_disposition
-        if disposition is not None:
-            scope = '（仍为 UNVER；所属事实组已从写作视图确定性隔离，保留终审披露）'
-        else:
-            scope = ('' if review_effect_of(row.kind) == 'blocking'
-                     else '（只披露，不挡 Stage4）')
-        out.append(InboxItem(
-            kind='verification', stage='stage2', chapter=None,
-            rule=row.item_id,
-            what=f'{row.subject_path}：{state}{scope}{reason}',
-            how=('在全局设定屏逐项或批量补 actor、理由与证据，按 subject_sha256 '
-                 '提交 PASS/FAIL/UNVER；也可跑 '
-                 '`stage2.global --review-decisions <书内json>`'
-                 '（模板默认只出 blocking 面，要整份加 `--review-scope all`）；'
-                 'FAIL 用 typed GlobalEdit 修复；可隔离 UNVER 的 quarantine_group '
-                 '不会改名为 PASS，仍在本清单和终审包披露；'
-                 'subject hash 已变的旧决策会被拒绝'),
-            attention=('pending' if row.state == 'pending' else 'reviewed_retained'),
-            decision=(None if row.state == 'pending' else InboxDecision(
-                actor=row.actor or '', reason=row.reason or '',
-                subject_sha256=row.subject_sha256, state=row.state,
-                decided_at=row.decided_at or '',
-                generation_disposition=(
-                    None if disposition is None else disposition.action),
-                generation_disposition_reason=(
-                    None if disposition is None else disposition.reason),
-            ))))
     return out
 
 

@@ -1,7 +1,6 @@
 """证据自洽的三节点小章，供正式编译、判据及拒绝路径使用；不宣称模型验收。"""
 from __future__ import annotations
 
-from contracts.schema.knowledge_links import KnowledgeLinks
 from contracts.schema.plot import PlotChapterResponse
 from novel.stages.stage2.plot_compile import compile_chapter
 
@@ -54,17 +53,6 @@ def blueprint():
         allowed_char_ids=frozenset(CHARACTERS)).model_dump(mode='json')]}
 
 
-def links():
-    # 本样本无需要传播管理的独立知识项；正式 typed 合法空集与缺失不同。
-    return KnowledgeLinks.model_validate({
-        'scope': {'contract': 'stage2-knowledge-links-v3', 'scope_sha256': '1' * 64,
-                  'main_text_sha256': '2' * 64, 'knowledge_sha256': '3' * 64,
-                  'blueprint_sha256': '4' * 64, 'obligations': []},
-        'links': [], '_provenance': {'code': 'fixture', 'root_clean_sha1': '0' * 40,
-                                    'inputs': {}, 'decision_sha256': '5' * 64},
-    }).model_dump(mode='json', by_alias=True)
-
-
 def plan():
     from novel.stages.stage4.measure import identity_plan
     return identity_plan(blueprint(), MAIN)
@@ -73,4 +61,4 @@ def plan():
 def context(candidate=None):
     from novel.stages.stage4.plot_context import build_writer_context
     return build_writer_context(plan() if candidate is None else candidate, GLOBAL,
-                                blueprint(), MAIN, knowledge_links=links(), characters=REGISTRY).ctx
+                                blueprint(), MAIN, characters=REGISTRY).ctx

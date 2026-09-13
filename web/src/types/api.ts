@@ -1,5 +1,6 @@
 import type { RunMetrics } from './runMetrics'
-import type { PlotEdit, PlotEditPreview, BlueprintRefinementRequest, BlueprintRefinementCatalog } from '@/types/plot.generated'
+import type { PlotEdit, PlotEditPreview } from '@/types/plot.generated'
+import type { GlobalEdit, GlobalEditPreview } from './globalEdit'
 /**
  * 唯一的数据缝。
  *
@@ -16,10 +17,8 @@ import type {
   DesignReviewTemplate,
   DesignReviewTemplateQuery,
   GateKey,
-  SeenKey,
   StructureApprovalRequest,
   Stage5ClosureRequest,
-  Stage2NodeReviewRequest,
   Stage5ClosureTemplate,
   Stage6ApprovalWorkpack,
   Stage7ApprovalWorkpack,
@@ -61,15 +60,11 @@ import type {
 import type {
   CheckKind,
   CheckReport,
-  BlueprintReviewWorkpack,
-  BlueprintSeenRequest,
-  Stage2GlobalSeenRequest,
+  BlueprintReadingWorkpack,
   DraftEditPreview,
   DraftEditPreviewRequest,
   DraftEditRequest,
   InboxResponse,
-  GlobalReviewDecisionSet,
-  GlobalReviewResponse,
   ReadingResponse,
   ReviewResponse,
   Stage0EditRequest,
@@ -115,19 +110,20 @@ export interface Api {
   partitionStage1(sid: string): Promise<Job>
   getStage1(sid: string): Promise<Stage1View>
   getReading(sid: string, ordinal: number): Promise<ReadingResponse>
-  getBlueprintReviewWorkpack(sid: string, scope?: string): Promise<BlueprintReviewWorkpack>
+  /** Stage2 语义审阅退役后的原文↔蓝图只读阅读工作包；不携带审阅或接受语义。 */
+  getBlueprintReadingWorkpack(sid: string, scope?: string): Promise<BlueprintReadingWorkpack>
   getBlueprintEditTemplate(sid: string, ordinal: number): Promise<PlotEdit>
   previewBlueprintEdit(sid: string, request: PlotEdit): Promise<PlotEditPreview>
   applyBlueprintEdit(sid: string, request: PlotEdit): Promise<Job>
-  getBlueprintRefinementCatalog(sid: string, origin: 'design' | 'structure'): Promise<BlueprintRefinementCatalog>
-  submitBlueprintRefinement(sid: string, request: BlueprintRefinementRequest): Promise<ApprovalDoc>
   getGlobal(sid: string, revealSpoilers?: boolean): Promise<Stage2Global>
+  /** Stage2 全局事实 typed 编辑；独立预检 + 应用，语义未审随交付披露。 */
+  getGlobalEditTemplate(sid: string): Promise<GlobalEdit>
+  previewGlobalEdit(sid: string, request: GlobalEdit): Promise<GlobalEditPreview>
+  applyGlobalEdit(sid: string, request: GlobalEdit): Promise<Job>
   getCharacters(sid: string): Promise<CharacterRegistryView>
   editCharacters(sid: string, request: CharactersEditRequest): Promise<Job>
   getAnalyzeDraft(sid: string, owner: AnalyzeDraftOwner): Promise<AnalyzeDraftView>
   editAnalyzeDraft(sid: string, request: AnalyzeDraftEditRequest): Promise<Job>
-  getGlobalReview(sid: string): Promise<GlobalReviewResponse>
-  decideGlobalReview(sid: string, request: GlobalReviewDecisionSet): Promise<Job>
   getStage4(sid: string, ordinal: number): Promise<Stage4Response>
   getStage5(sid: string, ordinal: number): Promise<Stage5Response>
   getReview(sid: string, ordinal: number): Promise<ReviewResponse>
@@ -192,7 +188,6 @@ export interface Api {
 
   /* 人工验收记录 */
   getApprovals(sid: string): Promise<ApprovalDoc>
-  approveStage2Review(sid: string, request: Stage2NodeReviewRequest): Promise<ApprovalDoc>
   /** Stage4 A 当前候选的异常优先只读工作包；不预填任何审批决定。 */
   getDesignApprovalWorkpack(sid: string): Promise<ApprovalWorkpack>
   /** Stage4 B 当前结构主体的异常优先只读工作包；不预填任何审批决定。 */
@@ -216,12 +211,6 @@ export interface Api {
   /** Stage4 的专用全书 typed 裁决；只写审批记录，不启动重规划作业。 */
   approveStructure(sid: string, request: StructureApprovalRequest): Promise<ApprovalDoc>
   backfillApprovals(sid: string): Promise<ApprovalBackfillResult>
-  /** 两个 Stage2 视图都只接受服务端下发的 hash-bound 阅读身份；没有无主体分支。 */
-  markSeen(
-    sid: string,
-    key: SeenKey,
-    request: BlueprintSeenRequest | Stage2GlobalSeenRequest,
-  ): Promise<ApprovalDoc>
   startWriting(sid: string, request: WritingApprovalRequest): Promise<ApprovalDoc>
   resetBook(sid: string): Promise<ApprovalDoc>
 

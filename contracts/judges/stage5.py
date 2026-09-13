@@ -366,9 +366,6 @@ _info('fact_landing', '完整剧情的词面线索（不证明联合语义完整
 _unver('fact_landing_unver', '父节点的联合呈现完整性须语义审阅', 'R-7.22',
        note='fact claim 提不出专名或数字时，确定性层不能证明它是否落地；显式记 UNVER，'
             '不能把“没有探针”洗成“检查通过”。')
-_unver('knowledge_position_unver', '逐场许可前的表达须区分事实、归因、声称和信念', 'R-7.18',
-       note='代码只提供词面线索；不按子串相似度把人物声称升级为客观揭示。')
-
 _info('cross_chapter_number', '自造的数字在跨章之间不打架', 'R-7.23',
       repair='UNIQUE', quote=True,
       directive='同一件事在不同章里被写成了不同的数字。'

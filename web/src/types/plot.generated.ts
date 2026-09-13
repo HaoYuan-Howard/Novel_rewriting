@@ -191,22 +191,21 @@ export type BlueprintProvenance = {
   "plot_revisions": (PlotRevisionRecord)[]
 }
 
-export type BlueprintRefinementCatalog = {
-  "origin": "design" | "structure"
-  "review_token": string
-  "subjects_by_chapter": {
-    [key: string]: (string)[]
+export type BlueprintReadingWorkpack = {
+  "sid": string
+  "title": string
+  "read_only": true
+  "scope": string
+  "review_identity_sha256": string
+  "subject_sha256": string
+  "binding_sha256": string
+  "binding": BlueprintReviewBinding
+  "material": {
+    [key: string]: unknown
   }
-}
-
-export type BlueprintRefinementRequest = {
-  "origin": "design" | "structure"
-  "review_token": string
-  "actor": string
-  "chapter_ordinal": number
-  "dimension": "completeness" | "attribution" | "causal_continuity" | "epistemic_reveal" | "carry_state"
-  "subject_refs": (string)[]
-  "reason": string
+  "progress": BlueprintRunProgress
+  "check": CompactApprovalCheck
+  "accounting": (AccountingLine)[]
 }
 
 export type BlueprintReviewBinding = {
@@ -218,36 +217,12 @@ export type BlueprintReviewBinding = {
   "chapter_ordinals": (number)[]
 }
 
-export type BlueprintReviewWorkpack = {
-  "sid": string
-  "title": string
-  "read_only": true
-  "auto_decisions": false
-  "review_contract_version": "stage2-plot-scope-review-v1"
-  "scope": string
-  "review_identity_sha256": string
-  "validation_seal_sha256": string
-  "review_token": string
-  "subject_sha256": string
-  "binding_sha256": string
-  "binding": BlueprintReviewBinding
-  "dependency_manifest": DependencyManifest
-  "knowledge_links": KnowledgeLinkReview
-  "material": {
-    [key: string]: unknown
-  }
-  "progress": PlotReviewProgress
-  "check": CompactApprovalCheck
-  "accounting": (AccountingLine)[]
-}
-
 export type BlueprintRunProgress = {
   "total_chapters": number | null
   "generated_chapters": number | null
   "checkpoint_chapters": number | null
   "submitted_chapters": number | null
   "artifact_state": "missing" | "formal" | "invalid" | "unreadable"
-  "review": PlotReviewProgress | null
   "chapters": (BlueprintChapterProgress)[]
   "unavailable_reason": string | null
 }
@@ -262,14 +237,6 @@ export type ChapterCharacter = {
   "role": string | null
   "role_allowed_slots": (string)[]
   "allowed_slots": (string)[]
-}
-
-export type ChapterReviewCoverage = {
-  "completeness": DimensionVerdict
-  "attribution": DimensionVerdict
-  "causal_continuity": DimensionVerdict
-  "epistemic_reveal": DimensionVerdict
-  "carry_state": DimensionVerdict
 }
 
 export type CompactApprovalCheck = {
@@ -293,7 +260,6 @@ export type CtxChapterView = {
   "constraints": (WriterConstraint)[]
   "global_subjects": (WriterGlobalSubject)[]
   "restricted_subject_refs": (WriterSubjectRef)[]
-  "knowledge_events": (WriterKnowledgeEvent)[]
   "scenes": (CtxScene)[]
   "characters": (ChapterCharacter)[]
   "narration": (CtxNarration)[]
@@ -350,7 +316,6 @@ export type CtxScene = {
   "context_beat_refs": (string)[]
   "turn_beat_ref": string
   "state_events": (WriterStateEvent)[]
-  "knowledge_event_refs": (string)[]
   "constraint_refs": (string)[]
 }
 
@@ -361,13 +326,6 @@ export type CtxSemanticContract = {
   "constraint_refs": (string)[]
   "entry_state_refs": (string)[]
   "carry_out_refs": (string)[]
-}
-
-export type DependencyManifest = {
-  "contract": string
-  "scope": string
-  "inputs": (ScopeDependency)[]
-  "depends_on_scopes": (string)[]
 }
 
 export type DesignActiveConstraint = {
@@ -391,7 +349,6 @@ export type DesignBlindChapterTruth = {
   "inherited_states": (PlannerState)[]
   "background_beats": (PlannerBackgroundBeat)[]
   "constraints": (PlannerRelation | PlannerValueConstraint)[]
-  "knowledge": (PlannerKnowledge)[]
   "endpoints": (PlannerEndpoint)[]
   "entry_state_aliases": (string)[]
   "carry_out_aliases": (string)[]
@@ -548,12 +505,6 @@ export type DesignStrategySubject = {
   "chapter_weights": (BlindChapterWeightResponse)[]
 }
 
-export type DimensionVerdict = {
-  "state": "pass" | "issue" | "unver" | "not_applicable"
-  "issue_refs": (string)[]
-  "reason": string | null
-}
-
 export type EdgeLine = {
   "key": string
   "state": "fresh" | "stale" | "unknown"
@@ -614,11 +565,6 @@ export type GlobalSubjectRefResponse = {
   "relation_actors": RelationActorsResponse | null
 }
 
-export type GroupRef = {
-  "kind": "group"
-  "label": string
-}
-
 export type InheritedStateEnding = {
   "state_ref": string
   "at_beat_ref": string
@@ -637,90 +583,6 @@ export type InputEdge = {
 }
 
 export type JsonValue = unknown
-
-export type KnowledgeAtBeats = {
-  "subject_refs": (PlotSubjectRef)[]
-  "identity_actors": (ActorRef)[]
-  "kind": "at_beats"
-  "trigger_beat_ref": string
-}
-
-export type KnowledgeAtEntry = {
-  "subject_refs": (PlotSubjectRef)[]
-  "identity_actors": (ActorRef)[]
-  "kind": "at_entry"
-}
-
-export type KnowledgeCharacterAudience = {
-  "kind": "character"
-  "actor": ActorRef
-}
-
-export type KnowledgeLinkDecision = {
-  "obligation_id": string
-  "expected_subject_sha256": string
-  "resolution": KnowledgeAtBeats | KnowledgeAtEntry | KnowledgeLinkUnresolved
-}
-
-export type KnowledgeLinkObligation = {
-  "obligation_id": string
-  "kind": "secret_reveal" | "secret_setup" | "world_rule" | "world_rule_reveal" | "relation" | "relation_visibility" | "setting" | "reader_reveal" | "character_knowledge"
-  "knowledge_ref": string
-  "subject_ref": PlotSubjectRef
-  "audience": KnowledgeCharacterAudience | GroupRef | null
-  "chapter_ordinal": number
-  "subject_sha256": string
-  "candidate_subject_refs": (PlotSubjectRef)[]
-  "entry_subject_refs": (PlotSubjectRef)[]
-  "candidate_actors": (ActorRef)[]
-}
-
-export type KnowledgeLinkRecord = {
-  "obligation_id": string
-  "expected_subject_sha256": string
-  "resolution": KnowledgeAtBeats | KnowledgeAtEntry | KnowledgeLinkUnresolved
-  "actor": string
-  "reason": string
-  "source_decision_sha256": string
-}
-
-export type KnowledgeLinkReview = {
-  "scope": KnowledgeLinkScope
-  "inherited": (KnowledgeLinkRecord)[]
-  "pending_obligation_ids": (string)[]
-}
-
-export type KnowledgeLinkScope = {
-  "contract": "stage2-knowledge-links-v3"
-  "chapter_ordinal": number | null
-  "scope_sha256": string
-  "main_text_sha256": string
-  "knowledge_sha256": string
-  "blueprint_sha256": string
-  "obligations": (KnowledgeLinkObligation)[]
-  "registered_events": (RegisteredPlotKnowledgeEvent)[]
-}
-
-export type KnowledgeLinkSubmission = {
-  "scope_sha256": string
-  "actor": string
-  "reason": string
-  "decisions": (KnowledgeLinkDecision)[]
-  "event_operations": (PutPlotKnowledgeEvent | RetirePlotKnowledgeEvent)[]
-}
-
-export type KnowledgeLinkUnresolved = {
-  "kind": "unresolved"
-  "reason": string
-}
-
-export type NewPlotIssue = {
-  "issue_key": string
-  "dimension": "completeness" | "attribution" | "causal_continuity" | "epistemic_reveal" | "carry_state"
-  "problem": string
-  "subjects": (PlotSubjectRef)[]
-  "evidence_refs": (ReviewEvidenceRef)[]
-}
 
 export type ParagraphRange = {
   "start_para": number
@@ -807,12 +669,6 @@ export type PlanSceneLine = {
   "beat_refs": (string)[]
 }
 
-export type PlannerAudience = {
-  "kind": "character" | "group"
-  "actor_alias": string | null
-  "label": string | null
-}
-
 export type PlannerBackgroundBeat = {
   "alias": string
   "content": string
@@ -833,8 +689,8 @@ export type PlannerCharacter = {
 
 export type PlannerEndpoint = {
   "endpoint_alias": string
-  "kind": "state" | "constraint" | "knowledge"
-  "endpoint": "established" | "ended" | "before" | "after" | "target" | "trigger"
+  "kind": "state" | "constraint"
+  "endpoint": "established" | "ended" | "before" | "after" | "target"
   "trigger_beat_alias": string
   "subject_aliases": (string)[]
 }
@@ -843,16 +699,6 @@ export type PlannerGlobalSubject = {
   "alias": string
   "kind": "relation" | "world_rule" | "secret" | "setting"
   "value": JsonValue
-}
-
-export type PlannerKnowledge = {
-  "event_alias": string
-  "subject_aliases": (string)[]
-  "kind": "secret_reveal" | "secret_setup" | "world_rule" | "world_rule_reveal" | "relation" | "relation_visibility" | "setting" | "reader_reveal" | "character_knowledge"
-  "audience": PlannerAudience | null
-  "timing": "at_entry" | "at_beats" | "future_chapter"
-  "trigger_beat_alias": string | null
-  "identity_aliases": (string)[]
 }
 
 export type PlannerRelation = {
@@ -881,9 +727,9 @@ export type PlannerValueConstraint = {
 }
 
 export type PlotAnchorBinding = {
-  "kind": "state" | "constraint" | "knowledge" | "goal"
+  "kind": "state" | "constraint" | "goal"
   "ref": string
-  "endpoint": "established" | "ended" | "before" | "after" | "target" | "trigger" | "open" | "close" | "turn" | "chapter"
+  "endpoint": "established" | "ended" | "before" | "after" | "target" | "open" | "close" | "turn" | "chapter"
   "scene_ref": string
 }
 
@@ -944,9 +790,6 @@ export type PlotChapterReviewMaterials = {
   "support_subjects": (ReviewSupportSubject)[]
   "actor_bindings": (ActorBinding)[]
   "global_subjects": (ReviewSupportSubject)[]
-  "knowledge_events": ({
-    [key: string]: JsonValue
-  })[]
   "source_context_catalog": {
     [key: string]: JsonValue
   }
@@ -984,25 +827,6 @@ export type PlotIdentityOperation = {
   "kind": "preserve" | "replace" | "add"
   "old_refs": (string)[]
   "new_keys": (string)[]
-}
-
-export type PlotIssueDisposition = {
-  "issue_id": string
-  "state": "open" | "resolved" | "withdrawn"
-  "reason": string
-}
-
-export type PlotKnowledgeEvent = {
-  "kind": "reader_reveal" | "character_knowledge"
-  "subject_ref": PlotSubjectRef
-  "audience": KnowledgeCharacterAudience | GroupRef | null
-  "chapter_ordinal": number
-  "evidence_refs": (PlotKnowledgeEvidence)[]
-}
-
-export type PlotKnowledgeEvidence = {
-  "chapter_ordinal": number
-  "evidence_ref": string
 }
 
 export type PlotNarration = {
@@ -1048,24 +872,6 @@ export type PlotRelationConstraintResponse = {
   "evidence": (ParagraphRange)[]
 }
 
-export type PlotReviewProgress = {
-  "total_chapters": number
-  "generated_chapters": number
-  "accepted_chapters": number
-  "next_scope": string | null
-  "scopes": (PlotScopeStatus)[]
-  "unresolved_issues": number
-  "accepted": boolean
-}
-
-export type PlotReviewResponse = {
-  "decision": "accept" | "revise" | "unver"
-  "reason": string
-  "coverage": ChapterReviewCoverage
-  "new_issues": (NewPlotIssue)[]
-  "dispositions": (PlotIssueDisposition)[]
-}
-
 export type PlotRevisionRecord = {
   "request_sha256": string
   "before_subject_sha256": string
@@ -1074,14 +880,6 @@ export type PlotRevisionRecord = {
   "reason": string
   "changes": (PlotIdentityChange)[]
   "tombstones": (PlotNodeTombstone)[]
-}
-
-export type PlotScopeStatus = {
-  "scope": string
-  "state": "missing" | "accepted" | "expired" | "rework" | "uncertain" | "stopped"
-  "subject_sha256": string | null
-  "decision_sha256": string | null
-  "open_issue_ids": (string)[]
 }
 
 export type PlotState = {
@@ -1148,14 +946,6 @@ export type ProvenanceSection = {
   "origin": string | null
 }
 
-export type PutPlotKnowledgeEvent = {
-  "operation": "put"
-  "event_id": string
-  "expected_event_sha256": string | null
-  "event": PlotKnowledgeEvent
-  "resolution": KnowledgeAtBeats | KnowledgeLinkUnresolved
-}
-
 export type ReadingView = {
   "sid": string
   "title": string
@@ -1165,14 +955,6 @@ export type ReadingView = {
   "blueprint": PlotBlueprint | null
   "blueprint_state": ArtifactState
   "_provenance": BlueprintProvenance | null
-}
-
-export type RegisteredPlotKnowledgeEvent = {
-  "event_id": string
-  "event_sha256": string
-  "event": PlotKnowledgeEvent
-  "retired": boolean
-  "reason": string | null
 }
 
 export type RelationActors = {
@@ -1199,13 +981,6 @@ export type RelationUseResponse = {
   "relation_actors": RelationActorsResponse | null
 }
 
-export type RetirePlotKnowledgeEvent = {
-  "operation": "retire"
-  "event_id": string
-  "expected_event_sha256": string
-  "reason": string
-}
-
 export type RevalidationAudit = {
   "actor": string
   "reason": string
@@ -1225,11 +1000,6 @@ export type ReviewEvidenceAnchor = {
   "chapter_ordinal": number
   "start": number
   "end": number
-}
-
-export type ReviewEvidenceRef = {
-  "chapter_ordinal": number
-  "evidence_ref": string
 }
 
 export type ReviewSourceChapter = {
@@ -1262,20 +1032,6 @@ export type RuleLine = {
   "scanned": string | null
   "baseline": string | null
   "note": string | null
-}
-
-export type ScopeDependency = {
-  "selection": ScopeSelection
-  "consumed_sha256": string
-}
-
-export type ScopeSelection = {
-  "input_rel": string
-  "projection": "plot_chapter" | "source_chapter" | "collection_members" | "plot_global" | "plot_inherited_states" | "source_ranges" | "plot_global_review" | "plot_subjects" | "plot_characters"
-  "chapter_ordinal": number | null
-  "path": (string)[]
-  "key_field": string | null
-  "selected_ids": (string)[] | null
 }
 
 export type SemanticContract = {
@@ -1385,7 +1141,7 @@ export type WontFixNote = {
 
 export type WorkpackClosedRefReading = {
   "ref": string
-  "kind": "beat" | "state" | "constraint" | "evidence" | "knowledge" | "character" | "global" | "unknown"
+  "kind": "beat" | "state" | "constraint" | "evidence" | "character" | "global" | "unknown"
   "text": string | null
 }
 
@@ -1435,12 +1191,6 @@ export type WorkpackReading = {
   "global_binding_concerns": (WorkpackConcernReading)[]
 }
 
-export type WriterAudience = {
-  "kind": "character" | "group"
-  "actor_ref": string | null
-  "label": string | null
-}
-
 export type WriterBeat = {
   "beat_ref": string
   "content": string
@@ -1468,17 +1218,6 @@ export type WriterGlobalSubject = {
   "value": JsonValue
   "allowed_slots": (string)[]
   "state_permissions": (WriterStatePermission)[]
-}
-
-export type WriterKnowledgeEvent = {
-  "event_ref": string
-  "kind": "secret_reveal" | "secret_setup" | "world_rule" | "world_rule_reveal" | "relation" | "relation_visibility" | "setting" | "reader_reveal" | "character_knowledge"
-  "subject_ref": WriterSubjectRef
-  "audience": WriterAudience | null
-  "identity_actors": (string)[]
-  "timing": "at_entry" | "at_slot"
-  "slot": string | null
-  "allowed_slots": (string)[]
 }
 
 export type WriterStage = {

@@ -501,10 +501,14 @@ def run(ctx: RunContext, client: SessionAgentClient) -> AnalyzeReceipt:
 
 
 def refresh_review(ctx: RunContext) -> None:
-    """首次提交闭合后的免费后继；审阅失败可独立补尾，不重开联合事务。"""
-    from novel.stages.stage2.extract import run_refresh_review
-    run_refresh_review(replace(ctx, node='stage2.global', paid=False,
-                               _edges={}, _judged={}))
+    """Stage2 语义审阅退役后的兼容空操作。
+
+    联合首抽提交后不再有 GlobalReview 刷新面：审阅文件不再生产，也不被
+    任何闸消费（机械准入见 ``novel/admission.py``，语义未审由报告 ``unver``
+    行与交付披露表达）。保留函数是因为 ``analyze_recovery`` 的免费恢复
+    尾窗仍调用它；旧盘上的历史审阅文件保持原样，不再续写。
+    """
+    return None
 
 
 def store_path(ctx: RunContext, rel: str) -> Path:

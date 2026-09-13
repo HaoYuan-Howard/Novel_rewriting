@@ -25,7 +25,7 @@ from contracts.invariants import SOURCE_OVERLAP_MAX
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
-from novel.stages.stage5.plot_checks import fidelity_scenes, knowledge_position_findings
+from novel.stages.stage5.plot_checks import fidelity_scenes
 from novel.core.bands import PARA_BANDS, SENT_BANDS, band, cut_distance
 from novel.core.facts import (
     locate_secret, num_unit_keys, num_values, number_tokens,
@@ -326,7 +326,6 @@ def segment_fidelity_findings(
                 unresolved_rounds=hit.unresolved_rounds,
                 wontfix=hit.wontfix,
             ))
-    out.extend(knowledge_position_findings(segments, entry, book))
     return with_output_ordinal(out, entry.get('output_ordinal'))
 
 
@@ -1220,7 +1219,6 @@ _FROM_CHAPTER: tuple[str, ...] = (
     'narration_person_report', 'narration_person_drift',
     'end_hook_surface_report', 'end_hook_unver',
     'fact_landing', 'fact_landing_unver',
-    'knowledge_position_unver',
 )
 
 #: **只有全书验收相**产得出来的：单章视角看不到，或者要跨章比。
@@ -1235,8 +1233,7 @@ _FROM_REVIEW: tuple[str, ...] = (
 #: 一条 `sev='unver'` 却没说出「这次为什么够不着」的判据）。
 _UNVER: frozenset[str] = frozenset({
     'must_hold_unver', 'fact_landing_unver', 'draft_missing',
-    'dialogue_semantics_unver', 'no_secrets_in_book', 'end_hook_unver',
-    'knowledge_position_unver'})
+    'dialogue_semantics_unver', 'no_secrets_in_book', 'end_hook_unver'})
 
 
 def _why_of(rule: str, fs: list[Finding], *, empty: str) -> str:

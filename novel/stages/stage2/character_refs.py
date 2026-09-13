@@ -30,7 +30,7 @@ def null_binding_conflict(names: Sequence[Mapping[str, Any]], surfaces: Sequence
 
     names 必须来自截至使用章已出现的登记称谓候选。若存在绑定外称谓，且候选中的身份
     映射本章或未来才揭示，null 仍有两种解释；新旧绑定两个方向使用同一判据。这里只拒绝歧义，
-    不猜测对应关系、铸造历史绑定或代替同章 KnowledgeLinks 披露端点。
+    不猜测对应关系、铸造历史绑定或代拟同章披露安排。
     """
     selected = set(surfaces)
     return (any(row['identity_revealed_from'] >= chapter_ordinal for row in names)

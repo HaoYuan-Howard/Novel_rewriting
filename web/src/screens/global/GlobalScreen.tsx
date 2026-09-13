@@ -11,85 +11,17 @@ import { useSampleCoverage } from '@/hooks/useSample'
 import { useSid } from '@/hooks/useRouteParams'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { GateBar } from '@/components/gate/GateBar'
-import { Stage2NodeReviewPanel } from '@/components/gate/Stage2NodeReviewPanel'
 import { QueryStates } from '@/components/state/QueryStates'
 import { EmptyIsSuspicious } from '@/components/state/States'
 import { LinkButton } from '@/components/ui/ActionButton'
 import { Mono } from '@/components/ui/Mono'
 import { Panel } from '@/components/ui/Panel'
 import { cx } from '@/lib/cx'
-import type { GlobalReviewResponse, GlobalTimeWindow } from '@/types/stages'
-import { GlobalReviewPanel } from './GlobalReviewPanel'
+import type { GlobalTimeWindow } from '@/types/stages'
 import { CharactersPanel } from './CharactersPanel'
+import { GlobalEditPanel } from './GlobalEditPanel'
 import { AnalyzeDraftPanel } from './AnalyzeDraftPanel'
 import { CoreEvidence, SharedAnalysisSource } from './CoreEvidence'
-import type { ApprovalDoc } from '@/types/approvals'
-import type { UseMutationResult } from '@tanstack/react-query'
-import type { Stage2GlobalSeenRequest } from '@/types/stages'
-
-/**
- * seen.global 的显式确认：页面不再“打开即已读”。只有服务端说 review current、
- * 阻断面 generation-safe 且给了 review_token，才允许填确认人后提交；
- * 服务端会重算 token，主体变过就拒绝，不在这里自判。
- */
-function GlobalSeenConfirm({
-  review,
-  seen,
-  mutation,
-}: {
-  review: GlobalReviewResponse | null
-  seen: boolean
-  mutation: UseMutationResult<ApprovalDoc, Error, Stage2GlobalSeenRequest>
-}) {
-  const [actor, setActor] = useState('')
-  const token = review?.review_token ?? null
-  const ready = !!review && review.current && review.generation_safe && token !== null
-  return (
-    <div role="group" aria-label="全局复核通读确认">
-    <Panel className="flex flex-wrap items-center justify-between gap-14 px-18 py-14">
-      <div className="flex max-w-[760px] flex-col gap-4">
-        <span className="text-body-lg font-semibold text-ink-2">
-          {seen ? '已记录：当前全局复核已通读确认' : '通读当前全局复核后再确认'}
-        </span>
-        <span className="text-body text-ink-4">
-          确认绑定当前 review 的完整字节；复核任一项改判后需要重新通读确认。
-          {ready || seen ? '' : ' 阻断面尚未全部 PASS/隔离，或主体已变化，暂不能确认。'}
-        </span>
-        {mutation.isError ? (
-          <span className="text-body text-warn-ink" role="alert">
-            {mutation.error.message}
-          </span>
-        ) : null}
-      </div>
-      {seen ? null : (
-        <div className="flex items-center gap-8">
-          <input
-            aria-label="确认人"
-            value={actor}
-            onChange={(event) => setActor(event.target.value)}
-            placeholder="确认人"
-            className="rounded-btn border border-line-btn bg-card px-10 py-6 text-body"
-          />
-          <button
-            type="button"
-            disabled={!ready || !actor.trim() || mutation.isPending}
-            onClick={() => {
-              if (token === null) return
-              mutation.mutate({ review_token: token, actor: actor.trim() })
-            }}
-            className={cx(
-              'rounded-btn border px-12 py-6 text-body',
-              ready && actor.trim() ? 'cursor-pointer border-ink bg-ink text-card' : 'border-line-btn bg-card text-ink-4',
-            )}
-          >
-            确认已通读当前全局复核
-          </button>
-        </div>
-      )}
-    </Panel>
-    </div>
-  )
-}
 
 type Tab = 'setting' | 'rels' | 'rules' | 'secrets'
 
@@ -100,11 +32,14 @@ function TimeWindow({ value }: { value: GlobalTimeWindow }) {
   </span>
 }
 
-/** 人物登记独立读取；Global 只展示四类长期约束与服务端证据。 */
+/**
+ * Stage2 语义审阅已退役：本屏只做查看与免费订正，下一动作只消费后端 s1 spawns
+ * （机械准入通过后由服务端下发逐章骨架生成）；页面单独披露语义未审限制。
+ */
 export function GlobalScreen() {
   const sid = useSid()
   const nav = useNavigate()
-  const { doc, markGlobalSeen } = useApprovals()
+  const { doc } = useApprovals()
   const { defaultOrdinal } = useSampleCoverage()
   const [spoilers, setSpoilers] = useState(false)
   const [tab, setTab] = useState<Tab>('setting')
@@ -122,14 +57,8 @@ export function GlobalScreen() {
     (action) => action.kind === 'stage2.blueprint',
   )
 
-  const reviewQuery = useQuery({
-    queryKey: qk.globalReview(sid),
-    queryFn: () => api.getGlobalReview(sid),
-    retry: false,
-  })
-
   return (
-    <ScreenFrame screen="global" onJumpChapter={(n) => nav('/n/' + sid + '/read/' + n)}>
+    <ScreenFrame screen="global" showGate={!blueprintAction} onJumpChapter={(n) => nav('/n/' + sid + '/read/' + n)}>
       <section className="flex flex-col gap-16 px-30 py-24">
         <header className="flex items-start justify-between gap-24">
           <div className="flex flex-col gap-5">
@@ -169,31 +98,25 @@ export function GlobalScreen() {
             </div>
           </div>
         </header>
+        <p className="text-body text-ink-3" role="note">
+          Stage2 语义未审：机械检查不证明人物完整、主张获原文支持或剧情抽取正确。
+        </p>
         <CharactersPanel key={sid} sid={sid} />
+        <GlobalEditPanel key={'edit:' + sid} sid={sid} />
         <AnalyzeDraftPanel key={'analyze:' + sid} sid={sid} />
         {blueprintAction ? (
-          <div role="group" aria-label="接受全局后生成逐章骨架">
+          <div role="group" aria-label="机械准入通过后生成逐章骨架">
             <Panel className="flex flex-wrap items-center justify-between gap-14 px-18 py-14">
               <div className="flex max-w-[760px] flex-col gap-4">
-                <span className="text-body-lg font-semibold text-ink-2">全局接受后生成逐章骨架</span>
+                <span className="text-body-lg font-semibold text-ink-2">机械准入通过后生成逐章骨架</span>
                 <span className="text-body text-ink-4">
-                  {blueprintAction.label}。Global 的当前事实和节点审阅均接受后，才能逐章并发生成骨架；
-                  骨架完成后还需独立交叉审阅，两个节点接受后才进入 Stage4。
+                  {blueprintAction.label}。人物、全局、原文与称名投影的机械可用性由统一准入判定；
+                  语义未审以校验报告 unver 披露，下一动作只消费服务端下发内容。
                 </span>
               </div>
               <GateBar screen="stage1" actionOnly />
             </Panel>
           </div>
-        ) : null}
-        <GlobalReviewPanel sid={sid} />
-        <Stage2NodeReviewPanel sid={sid} node="stage2.global" token={reviewQuery.data?.review_token ?? null}
-          coverage={reviewQuery.data?.review_coverage} />
-        {doc ? (
-          <GlobalSeenConfirm
-            review={reviewQuery.data ?? null}
-            seen={doc.seen.global}
-            mutation={markGlobalSeen}
-          />
         ) : null}
         <QueryStates q={q} loadingLabel="读全局设定" missing={{ title: '全局设定 · stage2' }}>
         {(d) => {
@@ -263,7 +186,7 @@ export function GlobalScreen() {
                         : `世界规则 ${secret.fact_ref.rule_id} / ${secret.fact_ref.version_id}`}；事实与证据见对应主体。</span>}
                     <span className="text-tag text-ink-4">读者第 {secret.revealed_from} 章首次揭示</span>
                     <span className="text-mini text-ink-4">{secret.setup_chapters.length
-                      ? `埋点：第 ${secret.setup_chapters.join('、')} 章；同章情节先后由审阅核实`
+                      ? `埋点：第 ${secret.setup_chapters.join('、')} 章；同章情节先后见校验报告`
                       : '冷揭示（未登记埋点）'}</span>
                   </>}
                 </Panel>)}

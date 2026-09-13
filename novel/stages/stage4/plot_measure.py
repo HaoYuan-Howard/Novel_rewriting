@@ -6,14 +6,13 @@ import json
 from typing import Any
 
 
-def constraint_and_stage_readings(blueprint: dict, chapter: dict, *, knowledge_links: dict):
+def constraint_and_stage_readings(blueprint: dict, chapter: dict):
     """按已登记约束和 B 选择计算读数，不从源坐标发明场景或语义覆盖。"""
     from contracts.schema.plot import PlotBlueprint
     from novel.stages.stage4.plot_binding import source_context_catalog
-    from novel.stages.stage4.plot_placements import compile_plan_placements, knowledge_triggers_for_chapter
+    from novel.stages.stage4.plot_placements import compile_plan_placements
     typed = PlotBlueprint.model_validate(blueprint)
-    compiled = compile_plan_placements(typed, chapter, knowledge=
-                                      knowledge_triggers_for_chapter(knowledge_links, typed.chapter_ordinal))
+    compiled = compile_plan_placements(typed, chapter)
     endpoints = {row.key(): row.scene_ref for row in compiled.bindings}
     contexts = source_context_catalog(typed)
     slots = [row['slot'] for row in chapter['scenes']]

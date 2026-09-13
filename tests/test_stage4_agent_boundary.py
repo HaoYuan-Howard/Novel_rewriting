@@ -1150,7 +1150,7 @@ def test_retired_adopter_cannot_touch_current_prepared_design_aggregate(
     formal_before = (book / STAGE4_BLIND_CANDIDATE).read_bytes()
 
     legacy_ctx = _legacy_ctx(book, 'stage4.design', paid=False)
-    from novel.stages.stage2.global_review import generation_grounding
+    from novel.stages.stage2 import grounding as stage2_grounding
     from contracts.schema.characters import CharacterRegistry
     from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE2_CHARACTERS
     from contracts.schema.stage1 import MainText
@@ -1158,7 +1158,7 @@ def test_retired_adopter_cannot_touch_current_prepared_design_aggregate(
     _truth, mapping = build_blind_projection(
         blueprints.model_dump(by_alias=True, mode='json'),
         root_clean_sha1=legacy_ctx.root_clean_sha1,
-        global_g=generation_grounding(legacy_store).model_dump(
+        global_g=stage2_grounding.read(legacy_store).model_dump(
             by_alias=True, mode='json'),
         characters=legacy_store.read(CharacterRegistry, STAGE2_CHARACTERS).model_dump(mode='json', by_alias=True),
         main_text=legacy_store.read(MainText, STAGE1_MAIN_TEXT).model_dump(mode='json'),

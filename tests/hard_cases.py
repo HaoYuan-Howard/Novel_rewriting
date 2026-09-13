@@ -126,7 +126,7 @@ def _norm7(value: str) -> str:
 # ═══ Stage4：完整剧情与呈现契约 ═══════════════════════════════════════════════
 from tests.plot_fixtures import (
     TEXT as _TEXT4, MAIN as _MAIN4, GLOBAL as _GLOBAL4, REGISTRY as _CHARACTERS4,
-    blueprint as _blueprints4, links as _links4, plan as _clean_plan4, context as _ctx4,
+    blueprint as _blueprints4, plan as _clean_plan4, context as _ctx4,
 )
 _BPS4 = _blueprints4()
 
@@ -161,7 +161,7 @@ def _find4(plan: dict, *, ctx: dict | None = None,
     expected = _ctx4(_clean_plan4())
     outcomes = checks.check(
         plan, blueprints=_BPS4 if blueprints is None else blueprints, main_text=_MAIN4,
-        global_g=_GLOBAL4, characters=_CHARACTERS4, knowledge_links=_links4(),
+        global_g=_GLOBAL4, characters=_CHARACTERS4,
         ctx=expected if ctx is None else ctx, expected_ctx=expected, ctx_link=ctx_link,
         phase_links=_phase_links4() if phase_links is None else phase_links)
     return [finding_ for outcome in outcomes for finding_ in outcome.findings]

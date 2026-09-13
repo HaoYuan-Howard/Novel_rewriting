@@ -1,5 +1,4 @@
 import type { Finding, RuleLine } from './common'
-import type { KnowledgeLinkSubmission } from './knowledgeLinks'
 
 /**
  * 人工验收记录。
@@ -10,17 +9,14 @@ import type { KnowledgeLinkSubmission } from './knowledgeLinks'
  * api.approveStructure()，
  * 屏与组件从不直接碰传输层。
  *
- * 这些字段合成一份文档而不是各存一张 map：若 gate.s2 为真而 seen 丢了，
- * 闸门会画出「✓ 已确认」旁边挂两个灰 chip 的自相矛盾状态。
- * 一份文档、一次写、一个生命周期。
+ * 这些字段合成一份文档而不是各存一张 map：一份文档、一次写、一个生命周期。
+ * Stage2 语义审阅退役后（v9），stage2 的推进只认统一机械准入与后端 spawns；
+ * 页面分别展示机械可用性与「Stage2 语义未审」，不再保存已读/逐节点接受记录。
  */
 
-export type GateKey = 's0' | 's1' | 's2' | 's4' | 's5' | 's6' | 's7'
+export type GateKey = 's0' | 's1' | 's4' | 's5' | 's6' | 's7'
 
-export const GATE_KEYS: GateKey[] = ['s0', 's1', 's2', 's4', 's5', 's6', 's7']
-
-/** stage2 有两屏，两屏都要看过才能确认 */
-export type SeenKey = 'read' | 'global'
+export const GATE_KEYS: GateKey[] = ['s0', 's1', 's4', 's5', 's6', 's7']
 
 /** 一条会被发起的动作。paid 不在这里 —— 它要去 /api/enums 里查，那才是权威。 */
 export interface ActionRef {
@@ -641,46 +637,10 @@ export interface Stage5ClosureView {
   history: Stage5ClosureDecision[]
 }
 
-import type { Stage2ReviewCoverage, Stage2ReviewSubmission, Stage2ReviewUnit } from './stage2Review'
-
-export interface Stage2NodeReviewRequest {
-  scope?: string | null
-  plot_review?: import('./plot.generated').PlotReviewResponse | null
-  node: string
-  review_token: string
-  decision: string
-  actor: string
-  reason: string
-  chapter_ordinals: number[]
-  owner: string | null
-  knowledge_links: KnowledgeLinkSubmission | null
-  review?: Stage2ReviewSubmission | null
-  core_edits?: import('./globalEdit').Stage2CoreEditBatch | null
-}
-
-export interface Stage2NodeReviewView {
-  plot_progress?: import('./plot.generated').PlotReviewProgress | null
-  coverage?: Stage2ReviewCoverage | null
-  unavailable_reason?: string | null
-  state: string
-  current_decision: (Stage2NodeReviewRequest & {
-    core_edit_prepared_sha256?: string | null
-    obligation_receipt?: { scope: Stage2ReviewCoverage['scope']; units: Stage2ReviewUnit[] } | null
-    material_source?: { characters_sha256: string; global_sha256: string; review_sha256: string; main_text_sha256: string } | null
-    review_subject_sha256: string
-    review_scope_sha256?: string | null
-    review_contract_version: string
-    decided_at: string
-  }) | null
-  history: Stage2NodeReviewView['current_decision'][]
-}
-
 export interface ApprovalDoc {
-  v: 8
+  v: 9
   sid: string
   gate: Record<GateKey, boolean>
-  seen: Record<SeenKey, boolean>
-  stage2_reviews?: Record<string, Stage2NodeReviewView>
   prepare: import('./prepare').PrepareState
   /** 是否已经批准全书闭卷开写。 */
   writing: boolean

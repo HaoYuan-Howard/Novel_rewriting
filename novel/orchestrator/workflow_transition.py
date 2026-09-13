@@ -21,9 +21,13 @@ from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
 
-from contracts.artifacts import ARTIFACT_PATHS, STAGE1_MAIN_TEXT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHARACTERS
+from contracts.artifacts import (
+    ARTIFACT_PATHS, RETIRED_ARTIFACT_PATHS, STAGE1_MAIN_TEXT,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHARACTERS,
+)
 from contracts.schema.workflow import (
-    WorkflowManifestV4, WorkflowManifestV5, WorkflowManifestV6, WorkflowTransitionCompletedV1,
+    WorkflowManifestV4, WorkflowManifestV5, WorkflowManifestV6, WorkflowManifestV7,
+    WorkflowTransitionCompletedV1,
     WorkflowTransitionPendingV1, WorkflowTransitionPreparedV1, WorkflowTransitionProofV1,
     WorkflowTransitionPreparedV2, WorkflowTransitionProofV2,
     WorkflowTransitionProjectionV1, WorkflowTransitionRefV1,
@@ -37,7 +41,10 @@ class WorkflowTransitionRefused(TerminalState):
     """来源、离线证明或 CAS 不成立；保留原文件并等待同一事务恢复。"""
 
 
-_MANIFEST_MODELS = {4: WorkflowManifestV4, 5: WorkflowManifestV5, 6: WorkflowManifestV6}
+# ⚠ v7 起删除 Stage2 语义审阅与 KnowledgeLinks，且**不登记 v6→v7 迁移**：
+# 旧 v4~v6 输出与成本账原样保留，由冻结旧代码读取；v7 只允许 clean base 初始化。
+_MANIFEST_MODELS = {4: WorkflowManifestV4, 5: WorkflowManifestV5, 6: WorkflowManifestV6,
+                    7: WorkflowManifestV7}
 _TRANSITION_PAIRS = {4: (WorkflowManifestV5, WorkflowTransitionPreparedV1, WorkflowTransitionProofV1),
                      5: (WorkflowManifestV6, WorkflowTransitionPreparedV2, WorkflowTransitionProofV2)}
 
@@ -341,7 +348,10 @@ def projection_commit_material(store, transition_id: str, prepared_sha256: str):
 
 def _assert_downstream_empty(base: Path, files: dict[str, str], *, source_version: int = 4) -> None:
     """文件、历史及运行身份一起扫描；没有 formal 不证明尚未购买下游回答。"""
-    allowed = {Path(ARTIFACT_PATHS[key]).stem for key in _CORE_KEYS}
+    # ⚠ v4 根允许合法持有随后退役的 Core 材料（global_review 等）；
+    # 它们的落点在 RETIRED_ARTIFACT_PATHS，不能因退役而从白名单消失。
+    allowed = {Path(ARTIFACT_PATHS.get(key) or RETIRED_ARTIFACT_PATHS[key]).stem
+               for key in _CORE_KEYS}
     forbidden = {'stage3', 'stage4', 'stage5', 'stage6', 'stage7', '_stage4_runs',
                  '_stage5_runs', '_stage6_runs', '_stage7_runs', 'blueprint', 'blueprints',
                  'knowledge_links'}
@@ -622,7 +632,7 @@ def _require_closed_predecessor(base: Path, pointer_raw: bytes, source_raw: byte
         raise WorkflowTransitionRefused('已有迁移 prepared；请使用原 transition-id 免费恢复')
 
 
-def require_transition_completed(base: Path, manifest: WorkflowManifestV5 | WorkflowManifestV6, raw: bytes) -> None:
+def require_transition_completed(base: Path, manifest: WorkflowManifestV5 | WorkflowManifestV6 | WorkflowManifestV7, raw: bytes) -> None:
     """普通现役入口只消费闭合回执；不恢复、不创建任何迁移文件。"""
     pending_path = paths.workflow_transition_pending_path(base)
     pending = _read(pending_path, WorkflowTransitionPendingV1) if pending_path.exists() else None

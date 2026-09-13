@@ -57,13 +57,12 @@ describe('request-shaped cache and diagnostics', () => {
     await expect(mockApi.getCheck(SAMPLE_SID, 'stage2')).rejects.toMatchObject({ status: 501 })
   })
 
-  it.each([6, 7])('旧 v%s 本地审批不能升级为新契约接受或写作授权', async (version) => {
+  it.each([6, 7, 8])('旧 v%s 本地审批不能升级为新契约接受或写作授权', async (version) => {
     const key = 'nrc.v1.approvals.' + SAMPLE_SID
-    localStorage.setItem(key, JSON.stringify({ v: version, gate: { s2: true, s4: true }, writing: true }))
+    localStorage.setItem(key, JSON.stringify({ v: version, gate: { s4: true }, writing: true }))
     const current = await mockApi.getApprovals(SAMPLE_SID)
-    expect(current.v).toBe(8)
+    expect(current.v).toBe(9)
     expect(current.prepare.state).toBe('unknown')
-    expect(current.gate.s2).toBe(false)
     expect(current.gate.s4).toBe(false)
     expect(current.writing).toBe(false)
     localStorage.removeItem(key)
@@ -79,13 +78,12 @@ describe('request-shaped cache and diagnostics', () => {
     }
     const response = {
       ...await mockApi.getApprovals(SAMPLE_SID),
-      v: 8,
+      v: 9,
       sid: 'book /1',
       gate: {
-        s0: true, s1: true, s2: true,
+        s0: true, s1: true,
         s4: false, s5: false, s6: false, s7: false,
       },
-      seen: { read: true, global: true },
       writing: false,
       design_review: {
         state: 'missing', candidate_sha256: 'c'.repeat(64),
@@ -144,13 +142,12 @@ describe('request-shaped cache and diagnostics', () => {
     }
     const response = {
       ...await mockApi.getApprovals(SAMPLE_SID),
-      v: 8,
+      v: 9,
       sid: 'book /1',
       gate: {
-        s0: true, s1: true, s2: true,
+        s0: true, s1: true,
         s4: false, s5: false, s6: false, s7: false,
       },
-      seen: { read: true, global: true },
       writing: false,
       design_review: {
         state: 'strategy_replan_requested',

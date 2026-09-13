@@ -1,33 +1,32 @@
-"""WriterVisibleView V9：内部实体与公开表面身份分离的唯一编译器。
+"""WriterVisibleView：内部实体与公开表面身份分离的唯一编译器。
 
 整章请求仍看得到后场材料，表达受显式场景许可约束；代码不重写自由文本中的
-身份真相，语义保真由 Commander 审核。没有明确呈现或知识端点时拒绝并保留 owner 修复入口。
+身份真相。Stage2 语义审阅与 KnowledgeLinks 退役后，共享主体的可见性只按
+Global 的章级揭示字段（``revealed_from``）与蓝图自身端点判断；同章内的
+表达安排由 Stage4 现有计划表达，不再声称机械证明披露与知情正确。
 """
 from __future__ import annotations
 
 import hashlib
 import json
 from typing import Any
-from contracts.schema.knowledge_links import KnowledgeLinks
 from contracts.schema.plot import PlotBlueprint, PlotSubjectRef
 from contracts.schema.stage4 import CtxChapter
 from novel.core.text import norm
 from novel.errors import RefusedByStructure
-from novel.stages.stage4.actors import ActorCatalog, actual_subject_uses
+from novel.stages.stage4.actors import ActorCatalog
 from novel.stages.stage4.plot_binding import source_context_catalog
-from novel.stages.stage4.plot_placements import compile_plan_placements, knowledge_triggers_for_chapter
+from novel.stages.stage4.plot_placements import compile_plan_placements
 from novel.stages.stage4.plot_refs import global_subjects, validate_plan
 
 
 def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
                          blueprints: dict[str, Any], main_text: list[dict[str, Any]], *,
-                         knowledge_links: dict[str, Any], characters: dict[str, Any]):
+                         characters: dict[str, Any]):
     from novel.stages.stage4.context import Assembly
     from novel.stages.stage4.measure import semantic_contract_of
 
-    validate_plan(plan, blueprints, global_g, knowledge_links, characters=characters, main_text=main_text)
-    links = KnowledgeLinks.model_validate(knowledge_links)
-    records = {row.obligation_id: row for row in links.links}
+    validate_plan(plan, blueprints, global_g, characters=characters, main_text=main_text)
     bps = {row['chapter_ordinal']: PlotBlueprint.model_validate(row) for row in blueprints['blueprints']}
     states = {state.state_id: state for bp in bps.values() for state in bp.states}
     all_beats = {beat.beat_id: beat for bp in bps.values() for beat in bp.beats}
@@ -56,20 +55,14 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
         ordinal = chapter['output_ordinal']
         bp = bps[ordinal]
         actors = catalog_at(ordinal)
-        compiled = compile_plan_placements(bp, chapter, knowledge=knowledge_triggers_for_chapter(knowledge_links, ordinal))
+        compiled = compile_plan_placements(bp, chapter)
         slots = [scene['slot'] for scene in chapter['scenes']]
         positions = {slot: i for i, slot in enumerate(slots)}
         endpoints = {row.key(): row.scene_ref for row in compiled.bindings}
         contexts = source_context_catalog(bp)
-        obligations = [row for row in links.scope.obligations if row.chapter_ordinal == ordinal]
         state_ids = set(bp.entry_state_refs) | {s.state_id for s in bp.states}
-        state_ids.update(row.subject_ref.ref for row in obligations if row.subject_ref.kind == 'state')
-        hidden = {ref for ref in state_ids if any(row.kind == 'reader_reveal'
-            and row.subject_ref.kind == 'state' and row.subject_ref.ref == ref and row.chapter_ordinal > ordinal
-            for row in links.scope.obligations)}
-        visible_states = [states[ref] for ref in sorted(state_ids - hidden)]
-        background = {row.subject_ref.ref for row in obligations if row.subject_ref.kind == 'beat'
-                      and row.subject_ref.ref not in {b.beat_id for b in bp.beats}}
+        visible_states = [states[ref] for ref in sorted(state_ids)]
+        background = set()
         needed = {}
         subject_catalogs = {}
 
@@ -107,33 +100,6 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
         for name in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
             for ref in chapter[name]['subject_refs']:
                 need(ref)
-        for row in obligations:
-            if row.subject_ref.kind != 'relation':
-                need(row.subject_ref.model_dump())
-
-        def event_slots(row):
-            if row.chapter_ordinal > ordinal:
-                return []
-            record = records.get(row.obligation_id)
-            if record is None or record.resolution.kind == 'unresolved':
-                raise RefusedByStructure('未解决知识事件不能编译写作权限')
-            if row.chapter_ordinal < ordinal or record.resolution.kind == 'at_entry':
-                return list(slots)
-            slot = endpoints.get(('knowledge', row.obligation_id, 'trigger'))
-            if slot is None:
-                raise RefusedByStructure('知识事件缺少明确场景端点')
-            return slots[positions[slot]:]
-
-        def permission_row(kind, ref, *, revealed_from=None):
-            rows = [row for row in links.scope.obligations if row.kind == kind and row.knowledge_ref == ref]
-            if len(rows) != 1:
-                raise RefusedByStructure(f'知识事件未唯一登记：{kind}:{ref}')
-            if revealed_from is not None and rows[0].chapter_ordinal != revealed_from:
-                raise RefusedByStructure('知识披露端点与 Global revealed_from 不一致')
-            return rows[0]
-
-        def permission(kind, ref, *, revealed_from=None):
-            return event_slots(permission_row(kind, ref, revealed_from=revealed_from))
 
         def endpoint_tokens(ref, source_catalog):
             if ref.relation_actors is None:
@@ -141,75 +107,17 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
             return tuple(source_catalog.token(a, public_catalog=actors)
                          for a in (ref.relation_actors.subject, ref.relation_actors.object))
 
-        relation_bases = {}
-        def relation_basis(row, relation_ref):
-            """从已接受的支持材料取公开关系 use，不把内部默认端点当作呈现决定。"""
-            cache_key = (row.obligation_id, relation_ref)
-            if cache_key in relation_bases:
-                return relation_bases[cache_key]
-            resolution = records[row.obligation_id].resolution
-            direct, candidates, supported_actors = set(), set(), set()
-            source_chapters = set()
-            for support in resolution.subject_refs:
-                if support.kind == 'state':
-                    state = states[support.ref]
-                    source_chapters.add(state_origins[support.ref])
-                    if state.global_ref and state.global_ref.raw_subject_key() == ('relation', relation_ref):
-                        direct.add(endpoint_tokens(state.global_ref, catalog_at(state_origins[support.ref])))
-                elif support.kind == 'beat':
-                    number = beat_origins[support.ref]
-                    source_chapters.add(number)
-                    source_catalog = catalog_at(number)
-                    supported_actors.update(source_catalog.token(a, public_catalog=actors)
-                        for a in all_beats[support.ref].participants)
-            if direct:
-                # 多个显式 State 可以各自证明一种公开呈现；不是从候选中择一。
-                relation_bases[cache_key] = direct
-                return direct
-            for number in source_chapters:
-                source_bp, source_catalog = bps[number], catalog_at(number)
-                uses = [*source_bp.relation_uses,
-                        *(s.global_ref for s in source_bp.states if s.global_ref)]
-                candidates.update(endpoint_tokens(ref, source_catalog) for ref in uses
-                    if ref.raw_subject_key() == ('relation', relation_ref))
-            supported = {pair for pair in candidates if set(pair) <= supported_actors}
-            if len(supported) == 1:
-                candidates = supported
-            if len(candidates) != 1:
-                raise RefusedByStructure('关系披露支持材料缺少唯一明确的公开端点；须由 Blueprint/KnowledgeLinks owner 免费订正')
-            relation_bases[cache_key] = candidates
-            return candidates
-
-        # 只使用本次已有、已接受的身份披露端点；不保存新的身份图或补猜映射。
-        identity_permissions = []
-        for identity_row in links.scope.obligations:
-            if identity_row.chapter_ordinal > ordinal:
-                continue
-            record = records.get(identity_row.obligation_id)
-            if record is None or record.resolution.kind == 'unresolved' or not record.resolution.identity_actors:
-                continue
-            source_catalog = catalog_at(identity_row.chapter_ordinal)
-            source_catalog.identity_event(record.resolution.identity_actors,
-                chapter_ordinal=identity_row.chapter_ordinal, kind=identity_row.kind)
-            identity_permissions.append((set(event_slots(identity_row)), {
-                source_catalog.token(a, public_catalog=actors) for a in record.resolution.identity_actors}))
-
-        def relation_slots(ref, allowed, disclosure):
-            if not allowed:
-                return []
-            target = endpoint_tokens(ref, ref_catalog(ref))
-            bases = relation_basis(disclosure, ref.ref)
-            def connected(left, right, slot):
-                reached = {left}
-                while right not in reached:
-                    enlarged = reached | {token for permitted, members in identity_permissions
-                        if slot in permitted and members & reached for token in members}
-                    if enlarged == reached:
-                        return False
-                    reached = enlarged
-                return True
-            return [slot for slot in allowed if any(
-                all(connected(before, after, slot) for before, after in zip(basis, target)) for basis in bases)]
+        def relation_bases(ref):
+            """公开关系端点取本章显式 relation use 的两端表面身份。"""
+            bases = set()
+            source_bp = bp
+            uses = [*source_bp.relation_uses,
+                    *(s.global_ref for s in source_bp.states if s.global_ref)]
+            bases.update(endpoint_tokens(use, actors) for use in uses
+                if use.raw_subject_key() == ('relation', ref.ref))
+            if not bases:
+                raise RefusedByStructure('本章缺少显式关系呈现，不能推导公开端点')
+            return bases
 
         actor_uses = {}
         def actor(value, allowed, source_catalog=None):
@@ -238,7 +146,7 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
                 raise RefusedByStructure('关系消费缺少明确两端表面身份')
             ends = ref.relation_actors
             if ends.subject.char_id != value['subject_id'] or ends.object.char_id != value['object_id']:
-                raise RefusedByStructure('关系呈现端点与知识底稿不一致')
+                raise RefusedByStructure('关系呈现端点与底稿不一致')
             selected = ref_catalog(ref)
             return {'subject': actor(ends.subject, allowed, selected), 'predicate': value['predicate'],
                     'object': actor(ends.object, allowed, selected), 'effective_from': value['effective_from'],
@@ -266,24 +174,9 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
             return {'fact': {k: version[k] for k in
                             ('desc', 'effective_from', 'effective_until', 'revealed_from')}}
 
-        def secret_relation_slots(value, allowed):
-            ref = secret_relation(value)
-            relation = globals_['relation', ref.ref]
-            disclosure = permission_row('relation_visibility', ref.ref, revealed_from=relation['revealed_from'])
-            visible = event_slots(disclosure)
-            # fact_ref 只去除同义重复；秘密自己的支持不能替换关系已审的公开端点。
-            return relation_slots(ref, [s for s in allowed if s in visible], disclosure)
-
-
         state_slots = {}
         for state in visible_states:
-            reveals = [r for r in links.scope.obligations if r.kind == 'reader_reveal'
-                       and r.subject_ref.kind == 'state' and r.subject_ref.ref == state.state_id]
-            if len(reveals) > 1:
-                raise RefusedByStructure('同一状态不能有两套读者披露时间线')
-            if reveals:
-                state_slots[state.state_id] = event_slots(reveals[0])
-            elif state.state_id in bp.entry_state_refs or state.established_at.kind == 'at_entry':
+            if state.state_id in bp.entry_state_refs or state.established_at.kind == 'at_entry':
                 state_slots[state.state_id] = list(slots)
             else:
                 slot = endpoints.get(('state', state.state_id, 'established'))
@@ -312,32 +205,28 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
             role_state_slots[state.state_id] = permitted
 
         global_rows = []
-        restricted = [{'kind': 'state', 'ref': ref} for ref in sorted(hidden)]
+        restricted = []
         for ref in sorted(needed.values(), key=lambda r: r.key()):
             if ref.kind in ('beat', 'state', 'constraint', 'chapter_boundary', 'character'):
                 continue
             value = globals_.get(ref.raw_subject_key())
             if value is None:
                 raise RefusedByStructure(f'共享主体不存在：{ref.kind}:{ref.ref}')
-            visible, factual = None, []
+            # 章级揭示字段继续作为未审参考：本章已在 revealed_from 之后才下发正文。
+            revealed = value.get('revealed_from')
+            factual = list(slots) if revealed is None or revealed <= ordinal else []
+            visible = None
             if ref.kind == 'secret':
-                factual = permission('secret_reveal', ref.ref, revealed_from=value['revealed_from'])
-                if factual and value['fact_ref'] and value['fact_ref']['kind'] == 'relation':
-                    factual = secret_relation_slots(value, factual)
                 if factual:
                     visible = secret_value(value, factual)
             elif ref.kind == 'relation':
-                factual = permission('relation_visibility', ref.ref, revealed_from=value['revealed_from'])
-                factual = relation_slots(ref, factual, permission_row('relation_visibility', ref.ref))
                 if factual:
                     visible = relation_value(ref, value, factual)
             elif ref.kind == 'world_rule':
-                factual = permission('world_rule_reveal', ref.ref, revealed_from=value['revealed_from'])
                 if factual:
                     visible = {k: value[k] for k in
                                ('kind', 'desc', 'effective_from', 'effective_until', 'revealed_from')}
             elif ref.kind == 'setting':
-                factual = permission('setting', ref.ref)
                 visible = {'content': value} if factual else None
             state_permissions = []
             for state in visible_states:
@@ -349,10 +238,6 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
                     if not factual or not set(permitted) <= set(factual):
                         raise RefusedByStructure('客观状态不能越过引用命题的读者披露许可')
                 elif permitted:
-                    reveals = [r for r in links.scope.obligations if r.kind == 'reader_reveal'
-                               and r.subject_ref.kind == 'state' and r.subject_ref.ref == state.state_id]
-                    if not reveals:
-                        raise RefusedByStructure('未开放命题的信念/声称必须登记必要读者披露')
                     state_permissions.append({'state_ref': state.state_id, 'modality': state.modality,
                                               'allowed_slots': permitted})
             all_allowed = [s for s in slots if s in factual or any(s in p['allowed_slots'] for p in state_permissions)]
@@ -387,54 +272,6 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
         restricted = list({(r['kind'], r['ref']): r for r in restricted
                            if (r['kind'], r['ref']) not in public_globals}.values())
 
-        events = []
-        for row in links.scope.obligations:
-            actual_refs = actual_subject_uses(row.subject_ref, needed.values())
-            actual_refs = [ref for ref in actual_refs if ref.key() in needed]
-            if not actual_refs:
-                continue
-            allowed = event_slots(row)
-            if not allowed:
-                continue
-            resolution = records[row.obligation_id].resolution
-            event_catalog = catalog_at(row.chapter_ordinal)
-            event_catalog.identity_event(resolution.identity_actors, chapter_ordinal=row.chapter_ordinal, kind=row.kind)
-            # 一个底稿关系可能有多个合法呈现；只扩展实际使用，不发内部端点目录。
-            for ref in actual_refs:
-                per_use = allowed
-                if ref.kind == 'relation':
-                    value = globals_[ref.raw_subject_key()]
-                    disclosed = permission('relation_visibility', ref.ref, revealed_from=value['revealed_from'])
-                    per_use = relation_slots(ref, [s for s in allowed if s in disclosed],
-                                             permission_row('relation_visibility', ref.ref))
-                elif ref.kind == 'secret' and row.kind == 'secret_reveal':
-                    value = globals_[ref.raw_subject_key()]
-                    if value['fact_ref'] and value['fact_ref']['kind'] == 'relation':
-                        per_use = secret_relation_slots(value, allowed)
-                if not per_use:
-                    continue
-                audience = None
-                if row.audience:
-                    audience = ({'kind': 'character', 'actor_ref': actor(row.audience.actor, per_use, event_catalog)}
-                                if row.audience.kind == 'character' else row.audience.model_dump(mode='json'))
-                identity = list(dict.fromkeys(actor(a, per_use, event_catalog) for a in resolution.identity_actors))
-                if len(identity) < 2:
-                    identity = []  # 已在前章公开为同一呈现，不输出“自己等于自己”。
-                at_entry = (row.chapter_ordinal < ordinal or resolution.kind == 'at_entry') and per_use[0] == slots[0]
-                public_subject_ref = public_ref(ref)
-                event_ref = actors.event(row.obligation_id, public_subject_ref)
-                events.append({'event_ref': event_ref, 'kind': row.kind,
-                    'subject_ref': public_subject_ref, 'audience': audience,
-                    'identity_actors': identity, 'timing': 'at_entry' if at_entry else 'at_slot',
-                    'slot': None if at_entry else per_use[0], 'allowed_slots': per_use})
-
-        public_events = {}
-        for event in events:
-            prior = public_events.setdefault(event['event_ref'], event)
-            if prior is not event and prior != event:
-                raise RefusedByStructure('同一公开知识事件有不同许可；须由 KnowledgeLinks owner 订正')
-        events = list(public_events.values())
-
         goals = {}
         restricted_keys = {(r['kind'], r['ref']) for r in restricted}
         for name in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
@@ -444,11 +281,6 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
                     else public_subject(ref, [goal['anchor_scene_ref']]) for ref in normalized]
             if any((r['kind'], r['ref']) in restricted_keys for r in refs) and goal['intent'] != 'withhold':
                 raise RefusedByStructure('目标引用未开放命题，只能保留未知')
-            for event in events:
-                if (event['subject_ref'] in refs and event['kind'] in
-                    ('secret_reveal', 'relation_visibility', 'world_rule_reveal', 'reader_reveal')
-                    and goal['intent'] != 'withhold' and goal['anchor_scene_ref'] not in event['allowed_slots']):
-                    raise RefusedByStructure('目标端点早于必要披露许可')
             goals[name] = {**goal, 'subject_refs': refs}
 
         def beat_slots(ref):
@@ -457,9 +289,6 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
 
         beats = [{'beat_ref': b.beat_id, 'content': b.content,
                   'participants': list(dict.fromkeys(actor(a, beat_slots(b.beat_id)) for a in b.participants))} for b in bp.beats]
-        background_rows = [{'beat_ref': ref, 'content': all_beats[ref].content,
-            'participants': list(dict.fromkeys(actor(a, slots, catalog_at(beat_origins[ref]))
-                             for a in all_beats[ref].participants))} for ref in sorted(background)]
         state_rows = [{'state_ref': s.state_id, 'content': s.content,
             'global_ref': public_subject(normalize(s.global_ref, catalog_at(state_origins[s.state_id])),
                 state_slots[s.state_id]) if s.global_ref else None,
@@ -489,7 +318,6 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
             scenes.append({**scene, 'deliveries': deliveries,
                 'state_events': [{'state_ref': r.ref, 'endpoint': r.endpoint} for r in compiled.bindings
                                  if r.kind == 'state' and r.scene_ref == slot],
-                'knowledge_event_refs': [e['event_ref'] for e in events if slot in e['allowed_slots']],
                 'constraint_refs': sorted({r.ref for r in compiled.bindings if r.kind == 'constraint' and r.scene_ref == slot})})
         narration = []
         for i, segment in enumerate(bp.narration):
@@ -532,8 +360,8 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
                 'role_allowed_slots': [s for s in slots if any(s in d['role_allowed_slots'] for d in descriptions)]})
         row = {'output_ordinal': ordinal, **goals, 'chapter_rewrite_brief': chapter['chapter_rewrite_brief'],
             'semantic_contract': semantic_contract_of(bp.model_dump(mode='json')),
-            'beats': beats, 'background_beats': background_rows, 'states': state_rows, 'constraints': constraints,
-            'global_subjects': global_rows, 'restricted_subject_refs': restricted, 'knowledge_events': events,
+            'beats': beats, 'background_beats': [], 'states': state_rows, 'constraints': constraints,
+            'global_subjects': global_rows, 'restricted_subject_refs': restricted,
             'scenes': scenes, 'characters': roster, 'narration': narration}
         # 结构字段通过严格载体验证；自由文本夹带正式实体 ID 同样不能越过边界。
         payload = json.dumps(row, ensure_ascii=False)

@@ -12,7 +12,7 @@ from novel import agent_session_audit
 from novel.orchestrator import agent
 from novel import work_units
 from tests.test_agent import (
-    _PROFILES, _stage2_work_unit_harness, _install_stage5_live_batch_harness,
+    _PROFILES, _reviewer_work_unit_harness, _install_stage5_live_batch_harness,
     base, corpus, no_real_commander_cli, stable_code_version,
 )
 
@@ -20,7 +20,7 @@ from tests.test_agent import (
 @pytest.mark.parametrize('window', ['raw_after', 'cost_before', 'cost_after', 'attempt_before', 'turn_before', 'turn_after'])
 @pytest.mark.parametrize('reported_model', [None, 'glm-5.3-flash[1m]', 'glm-5.3-flash'])
 def test_saved_commander_receipt_reconciles_without_wire(base, corpus, monkeypatch, window, reported_model):
-    progress, calls, budget_type = _stage2_work_unit_harness(base, monkeypatch, mode='accept')
+    progress, calls, budget_type = _reviewer_work_unit_harness(base, monkeypatch, mode='accept')
     profiles = _PROFILES
     if reported_model is not None:
         glm = AgentProfile(driver='claude-code-glm', model='glm-5.3-flash[1M]',
@@ -86,8 +86,8 @@ def test_saved_commander_receipt_reconciles_without_wire(base, corpus, monkeypat
     fault['active'] = False
     second = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=profiles, spawn=None)
     assert agent.wait(second.run_id, 15)
-    assert len(calls) == 1 and progress['applied'] == ['stage2.global']
-    unit = budget_type(base, '42', 'stage2.global', 'commander', 'book')
+    assert len(calls) == 1 and progress['applied'] == ['stage5.review']
+    unit = budget_type(base, '42', 'stage5.review', 'commander', 'closure')
     assert unit.used == 1 and unit.latest_turn().state == 'adopted'
     rows = [json.loads(line) for line in (Path(base) / '_service' / 'ledger.jsonl').read_text('utf-8').splitlines()]
     commander_rows = [row for row in rows if row.get('role') == 'commander']
@@ -102,7 +102,7 @@ def test_saved_commander_receipt_reconciles_without_wire(base, corpus, monkeypat
 
 
 def test_tampered_commander_cost_cannot_authorize_saved_decision(base, corpus, monkeypatch):
-    progress, calls, budget_type = _stage2_work_unit_harness(base, monkeypatch, mode='crash')
+    progress, calls, budget_type = _reviewer_work_unit_harness(base, monkeypatch, mode='crash')
     first = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
     assert agent.wait(first.run_id, 15)
     cost_path = Path(base) / '_service' / 'ledger.jsonl'
@@ -111,10 +111,10 @@ def test_tampered_commander_cost_cannot_authorize_saved_decision(base, corpus, m
     cost_path.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
     second = agent.start(base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES, spawn=None)
     assert agent.wait(second.run_id, 15)
-    assert len(calls) == 1 and progress['applied'] == ['stage2.global']
+    assert len(calls) == 1 and progress['applied'] == ['stage5.review']
     [done] = [row for row in agent.records(base) if row.run_id == second.run_id]
     assert done.exit_code == 70
-    unit = budget_type(base, '42', 'stage2.global', 'commander', 'book')
+    unit = budget_type(base, '42', 'stage5.review', 'commander', 'closure')
     assert unit.used == 1 and unit.latest_pending_response() is not None
 
 

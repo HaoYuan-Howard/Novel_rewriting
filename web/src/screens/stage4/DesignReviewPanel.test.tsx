@@ -101,10 +101,9 @@ function repairCapability({
 
 function approval(state = 'missing'): ApprovalDoc {
   return {
-    v: 8, prepare: missingPrepareState(),
+    v: 9, prepare: missingPrepareState(),
     sid: 'book-1',
-    gate: { s0: true, s1: true, s2: true, s4: false, s5: false, s6: false, s7: false },
-    seen: { read: true, global: true },
+    gate: { s0: true, s1: true, s4: false, s5: false, s6: false, s7: false },
     writing: false,
     design_review: {
       state,
@@ -211,9 +210,6 @@ describe('Stage4A 正式设计审阅', () => {
       truth.states.push({ alias: 'a_' + '3'.repeat(16), content: '来客还相信信中所言。',
         modality: 'belief', holder_alias: actors[0].alias, global_subject_alias: null,
         established_at_entry: true, supersedes_state_aliases: [] })
-      truth.knowledge.push({ event_alias: 'a_' + '4'.repeat(16), subject_aliases: [FIRST_BEAT],
-        kind: 'character_knowledge', audience: { kind: 'character', actor_alias: actors[1].alias, label: null },
-        timing: 'future_chapter', trigger_beat_alias: null, identity_aliases: [] })
       return current
     })
     approve.mockImplementation(approveOverHttp)
@@ -584,7 +580,7 @@ describe('Stage4A 正式设计审阅', () => {
       return {
         ...doc,
         spawns: {
-          s2: [{ kind: 'stage4.plan', label: 'Stage4B 证据绑定与计划编译', extra: null }],
+          s4: [{ kind: 'stage4.plan', label: 'Stage4B 证据绑定与计划编译', extra: null }],
         },
         design_review: {
           state: 'accepted',

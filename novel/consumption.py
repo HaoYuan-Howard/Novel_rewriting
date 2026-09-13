@@ -24,9 +24,9 @@ if TYPE_CHECKING:
 
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_KNOWLEDGE_LINKS,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
     STAGE2_CHARACTERS,
-    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
+    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING,
     STAGE4_BLIND_CANDIDATE,
     STAGE4_BLIND_CHAPTER_EDIT, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT,
@@ -34,7 +34,7 @@ from contracts.artifacts import (
     STAGE6_HOOK, STAGE6_HOOK_EDIT, STAGE6_PREPARE,
     STAGE7_NAME_MAP_EDIT,
 )
-from contracts.invariants import NODES, STYLE_MEASUREMENT_CONTRACT, review_effect_of
+from contracts.invariants import NODES, STYLE_MEASUREMENT_CONTRACT
 from novel.core.evidence import without_global_evidence
 
 Projection = Callable[[object], object]
@@ -45,34 +45,6 @@ def artifact_payload(data: object) -> object:
     if isinstance(data, dict):
         return {key: value for key, value in data.items() if key != '_provenance'}
     return data
-
-
-def stage2_generation_review(data: object) -> object:
-    """下游只消费会改变写作视图的 blocking 决定与隔离动作。
-
-    actor、判词措辞或展示 evidence 改字不会改变模型能看到的事实；state、主体身份
-    与 disposition 改变则必须让既有下游 stale。主体身份采用 kind + subject_path，
-    不采用内含证据摘要的 item_id；完整审阅身份仍由 require_current 校验。
-    """
-    if not isinstance(data, dict):
-        return None
-    rows = []
-    for item in data.get('items') or []:
-        if not isinstance(item, dict):
-            continue
-        kind = item.get('kind')
-        if not isinstance(kind, str) or review_effect_of(kind) != 'blocking':
-            continue
-        rows.append({
-            'kind': kind,
-            'subject_path': item.get('subject_path'),
-            'state': item.get('state'),
-            'generation_disposition': item.get('generation_disposition'),
-        })
-    # 审阅主体摘要含证据身份，不能变成付费材料的全对象依赖。业务内容由独立
-    # Characters/Global/WriterContext 消费边绑定；此边只负责许可状态与隔离动作。
-    return {'blocking_items': sorted(rows, key=lambda row: (
-        row['kind'], str(row['subject_path'])))}
 
 
 def stage2_main_text(data: object) -> object:
@@ -484,18 +456,14 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE1_MAIN_TEXT: stage4_design_main_text,
         STAGE2_CHAPTER_BLUEPRINTS: stage4_design_blueprints,
         STAGE2_CHARACTERS: stage4_characters,
-        STAGE2_KNOWLEDGE_LINKS: artifact_payload,
         STAGE2_GLOBAL_GROUNDING: stage4_grounding,
-        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_BLIND_CHAPTER_EDIT: artifact_payload,
     },
     'stage4.plan': {
-        STAGE2_KNOWLEDGE_LINKS: artifact_payload,
         STAGE2_CHARACTERS: stage4_plan_characters,
         STAGE1_MAIN_TEXT: stage4_main_text,
         STAGE2_CHAPTER_BLUEPRINTS: stage4_plan_blueprints,
         STAGE2_GLOBAL_GROUNDING: stage4_grounding,
-        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_BLIND_CANDIDATE: artifact_payload,
         # B 的正式 binding 是最终 v3 计划的直接编译输入；不登记这一边，producer
         # 虽然会如实把它写进 provenance，刚写完的 freshness 却只能报
@@ -504,26 +472,22 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE4_PLAN_EDIT: artifact_payload,
     },
     'stage4.context': {
-        STAGE2_KNOWLEDGE_LINKS: artifact_payload,
         STAGE2_CHARACTERS: stage4_characters,
         STAGE1_MAIN_TEXT: stage4_main_text,
         STAGE2_CHAPTER_BLUEPRINTS: stage4_context_blueprints,
         STAGE2_GLOBAL_GROUNDING: stage4_grounding,
-        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_PLAN_CHAPTERS: artifact_payload,
     },
     'stage5.write': {
         STAGE2_CHARACTERS: stage5_characters,
         STAGE1_MAIN_TEXT: stage5_main_text,
         STAGE2_GLOBAL_GROUNDING: stage5_grounding,
-        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_WRITER_CONTEXT: stage5_context,
     },
     'stage5.review': {
         STAGE2_CHARACTERS: stage5_characters,
         STAGE1_MAIN_TEXT: stage5_main_text,
         STAGE2_GLOBAL_GROUNDING: stage5_review_grounding,
-        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_WRITER_CONTEXT: stage5_review_context,
         # retain_pretrim 的人工裁决绑定完整 audit bytes；任一审计事实变化都应过期。
         STAGE5_TRIM_AUDIT: artifact_payload,
@@ -537,7 +501,6 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE2_CHARACTERS: stage6_characters,
         STAGE1_HOOK_COPY: stage6_hook_copy,
         STAGE2_GLOBAL_GROUNDING: stage6_grounding,
-        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_WRITER_CONTEXT: stage6_context,
         STAGE6_HOOK_EDIT: artifact_payload,
     },
@@ -546,7 +509,6 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE2_CHARACTERS: stage6_characters,
         STAGE1_HOOK_COPY: stage6_hook_copy,
         STAGE2_GLOBAL_GROUNDING: stage6_grounding,
-        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_WRITER_CONTEXT: stage6_context,
         STAGE6_HOOK: stage6_semantic_hook,
     },
@@ -554,7 +516,6 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE2_CHARACTERS: stage7_characters,
         STAGE1_MAIN_TEXT: stage7_main_text,
         STAGE2_GLOBAL_GROUNDING: stage7_grounding,
-        STAGE2_GLOBAL_REVIEW: stage2_generation_review,
         STAGE4_PLAN_CHAPTERS: stage7_plan,
         STAGE4_WRITER_CONTEXT: stage7_context,
         STAGE6_HOOK: stage7_hook,
@@ -701,11 +662,11 @@ def plot_global_projection(data: object, chapter_ordinal: int) -> list[dict[str,
 
 
 def select_scope_input(selection: 'ScopeSelection', raw: object) -> object:
-    if selection.projection == 'plot_characters':
-        from novel.stages.stage2.plot_review_dependencies import character_subjects
-        return character_subjects(raw, selection.selected_ids)
     """只输出本范围实际消费的字段；非法、缺失、重复成员都拒绝编译。"""
     import copy
+    if selection.projection in ('plot_characters', 'plot_global_review'):
+        # 这两个投影只由已退役的 Stage2 范围审阅派生；历史清单重放时按不可判拒绝。
+        raise ValueError('Stage2 语义审阅已退役：该范围投影不再可编译')
     if selection.projection == 'plot_subjects':
         requested = set(selection.selected_ids or ())
         result = []
@@ -721,9 +682,6 @@ def select_scope_input(selection: 'ScopeSelection', raw: object) -> object:
         if {f"{row['subject_ref']['kind']}:{row['subject_ref']['ref']}" for row in result} != requested:
             raise ValueError('必要剧情知识主体缺失')
         return sorted(result, key=lambda row: (row['subject_ref']['kind'], row['subject_ref']['ref']))
-    if selection.projection == 'plot_global_review':
-        from novel.stages.stage2.plot_review_dependencies import global_subjects
-        return global_subjects(raw, selection.selected_ids)
     if selection.projection == 'source_ranges':
         from novel.stages.stage2.paragraphs import span_of
         rows = [row for row in raw if row['chapter_ordinal'] == selection.chapter_ordinal]

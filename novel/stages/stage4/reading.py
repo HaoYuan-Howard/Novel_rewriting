@@ -31,7 +31,6 @@ def workpack_legend(kind: str) -> dict[str, str]:
     return {**common,
         'materials': '本章蓝图和实际依赖齐全；原文只在 source_materials，其他证据通过锚点定位。',
         'chapter': 'B 已绑定的完整正式章节计划。不得把证据绑定成功当成设计已保真。',
-        'knowledge': 'World truth、人物 belief/claim 与读者知情分别判断，KnowledgeLinks 独占必要时点。',
     }
 
 
@@ -56,8 +55,6 @@ def concern_reading(concern: BindingConcern, *,
                 put(row.subject_ref.ref, kind if kind in ('beat', 'state', 'character') else 'global')
             for row in material.evidence_anchors:
                 put(row.evidence_ref, 'evidence')
-            for row in material.knowledge_events:
-                put(row['event']['obligation_id'], 'knowledge')
     return WorkpackConcernReading(
         constraint_code=concern.constraint_code, chapter_ordinal=concern.chapter_ordinal,
         scenes=list(concern.scenes), reason=concern.reason,

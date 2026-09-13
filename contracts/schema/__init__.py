@@ -102,7 +102,6 @@ from contracts.artifacts import (
 )
 from contracts.artifacts import STAGE2_ANALYZE_RECOVERY
 from contracts.schema.knowledge import KnowledgeGrounding
-from contracts.schema.knowledge_links import KnowledgeLinks
 from contracts.schema.plot_edit import PlotEdit
 from contracts.schema.common import (
     Finding,
@@ -128,8 +127,7 @@ from contracts.schema.corpus import (
 )
 from contracts.schema.evaluation import (
     EvaluatorFingerprint, EvidenceRef,
-    GlobalReview, GlobalReviewBlockingScopeDecision, GlobalReviewDecision,
-    GlobalReviewDecisionSet, GlobalReviewItem, JudgeDecision, SemanticDecision,
+    JudgeDecision, SemanticDecision,
     TrimAudit, TrimResolution,
 )
 from contracts.schema.report import (
@@ -175,16 +173,6 @@ from contracts.schema.stage2 import (
     Relation, RelationPatch, RelationVisibility,
     Secret, SecretPatch, Setting, SettingPatch, SourceSpan, WorldRule,
     WorldRulePatch, WorldRuleVersion,
-)
-from contracts.schema.stage2_issue_review import (
-    ISSUE_REVIEW_ACCEPTANCE_CONTRACT, ISSUE_REVIEW_PROTOCOL,
-    PREPARED_PACKAGE_KIND,
-    Stage2CandidateCharactersPatch, Stage2CandidateGlobalPatch,
-    Stage2Issue, Stage2IssueCandidatePatch, Stage2IssueCoverageEntry,
-    Stage2IssueReviewSubmission, Stage2IssueReviewTransaction,
-    Stage2IssueReviewTransactionLedger, Stage2IssueTarget,
-    Stage2PreparedCoreReviewPackage, Stage2PreparedEvidence,
-    Stage2PreparedIdentities, Stage2PreparedTargetIndex,
 )
 from contracts.schema.stage4 import (
     BlindCandidate, BlindChapterEditRequest, CtxChapter, CtxGoal, CtxScene,
@@ -301,10 +289,6 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE2_CHARACTERS: ArtifactSpec(CharacterRegistry, 2),
     STAGE2_CHARACTERS_EDIT: ArtifactSpec(CharactersEdit, 2),
     STAGE2_GLOBAL_GROUNDING: ArtifactSpec(KnowledgeGrounding, 7),
-    # v3 统一人物身份与四类长期事实义务；未知主体先 typed 修订，不直接 PASS。
-    STAGE2_GLOBAL_REVIEW: ArtifactSpec(GlobalReview, 3),
-    # v3 配合 Core 新义务与独立人物输入；旧决定免费重发当前模板后重新审阅。
-    STAGE2_GLOBAL_REVIEW_DECISIONS: ArtifactSpec(GlobalReviewDecisionSet, 3),
     # ⚠ 人产的 Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它）——
     #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
     #   被 `store.read` 当上游边记账 ⇒ 形状同样是契约。
@@ -333,25 +317,27 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # `stage2.blueprint` 整跑（付费）重建，不迁移或手补。称名投影
     # 只改通用 `inputs` 的运行时键，没改 BlueprintProvenance 载体形状，不升版。
     STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 10),
-    # 独立 typed 关联；Blueprint Commander 决定先耐久，producer --close-review 免费物化。
-    STAGE2_KNOWLEDGE_LINKS: ArtifactSpec(KnowledgeLinks, 3),
     # v1：外部 hash-bound typed request；只被 CLI/API 读取，不是 producer 产物。
     STAGE2_BLUEPRINT_EDIT: ArtifactSpec(PlotEdit, 2),
     # v2 删除 goal rationale；A 仍保留重构策略与预算权重，供 B/编译器消费。
     # v3 退役整书拒稿采用及无架构来源；由新根内当前策略/单章 producer 重建。
-    STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate, 5),
+    # v6 随 KnowledgeLinks 退役删除 PlannerKnowledge 与 knowledge 端点；
+    # 存量由 stage4.design 重跑（付费）重建，不迁移。
+    STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate, 6),
     # v1：外部 hash-bound 完整章替换请求；只被 Stage4A CLI/API 读取，
     # 不是 Executor 产物，也不进入正式产物展示面。
     STAGE4_BLIND_CHAPTER_EDIT: ArtifactSpec(BlindChapterEditRequest, 3),
     # v2 删除可由绑定舞台 present 唯一推出的 participant_refs。
-    STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding, 5),
+    # v6 随 KnowledgeLinks 退役删除章级证据闭包中的 knowledge_events。
+    STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding, 6),
     # v4 删除 A 相过程字段、Stage2 重复契约、派生结构向量与编译参数快照。
-    STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters, 6),
-    STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit, 6),
+    STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters, 7),
+    STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit, 7),
     # v5 删除文学 arc；由免费 context 节点从当前上游重建。
     # v6：场景知识与披露许可由独立知识关联导出；0 成本 stage4.context 重建。
     # v7 删除同号源章、总预算与源字数副本；仍由免费 context 节点重建。
-    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, 9),
+    # v10 随 KnowledgeLinks 退役删除 WriterKnowledgeEvent 与逐场 knowledge_event_refs。
+    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, 10),
     # ⚠ 2026-08-24 单臂折平：删除 `mode`，路径改为
     #   `stage5/chNN.json`。存量双臂稿是只读历史证据，不做迁移；
     #   current 产物由 `stage5.write` 重建。
@@ -509,9 +495,7 @@ __all__ = [
     'Finding', 'WontFixNote', 'WontFix', 'WontFixEntry', 'Severity', 'Owner',
     'CorpusArtifactEntry', 'CorpusBookEntry', 'CorpusLedgerSummary',
     'CorpusManifest', 'CorpusSkipExpectation', 'LedgerTokenSummary',
-    'EvidenceRef', 'EvaluatorFingerprint', 'JudgeDecision', 'SemanticDecision', 'GlobalReviewItem', 'GlobalReview',
-    'GlobalReviewBlockingScopeDecision', 'GlobalReviewDecision',
-    'GlobalReviewDecisionSet',
+    'EvidenceRef', 'EvaluatorFingerprint', 'JudgeDecision', 'SemanticDecision',
     'TrimAudit', 'TrimResolution',
     # 校验报告（`_report.md`）——**不是产物**，所以不在 `ARTIFACTS` 里
     'CheckReport', 'RuleLine', 'ProvenanceSection', 'EdgeLine',

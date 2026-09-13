@@ -62,7 +62,7 @@ Narration 保存 `narrator/focalizer` ActorRef、`beat_refs` 与原文证据。
 
 Writer 使用独立 opaque actor_ref，不下发 char_id、反向映射或按共同真实身份分组。
 跨章携入只带实际 State 及其绑定、原证据和必要公开 State 支持，不复制整个人物表。
-同章两个表面身份保持独立引用，已有 KnowledgeLinks 的明确 identity_actors 端点才开放同人命题；
+同章两个表面身份保持独立引用，同人命题按绑定候选与章级揭示字段判定；
 以前章节的 Writer 输出不能作为新的身份许可直接复制，须按当前公开边界重新投影。
 
 ## 响应与编译
@@ -72,25 +72,18 @@ start_para/end_para。编译器分配正式 ID、共享证据表及坐标并核�
 历史修订使用单调 ID 游标，退役 ID 不复用。免费重验复用同一证据检查。
 来源、段号、必要字面或引用错误明确拒绝，不能补写语义修复输入。
 
-章节审阅与知识关联的依赖清单绑定实际下发的材料及集合，不只保存主体 ID。
+章节依赖清单绑定实际下发的材料及集合，不只保存主体 ID。
 只为核验 Global 证据而引用另一章时，依赖该证据所用段落；无关段落变化不重开本章。
 确实消费另一章完整候选或持续状态时，仍绑定相应候选/状态内容和证据，不能缩成 ID。
-工作包与依赖摘要由同一投影生成，问题可以引用该包中实际可见的外章证据。
+依赖摘要由同一投影生成，问题可以引用其中实际可见的外章证据。
 
-## 稀疏知识登记
+## 语义审阅退役与依赖登记
 
-KnowledgeLinks V3 保留 Global 的必要知识候选；State 的存在不自动生成读者披露。
-章级 Commander 在同轮 knowledge_links.event_operations 显式 put 或 retire 必要事件，
-不增加固定模型工位。put 引用已有 Beat/State，kind 为 reader_reveal 或
-character_knowledge；后者带受众。证据给 chapter_ordinal/evidence_ref，代码核对本轮
-实际原文并规范为段范围；证据章、命题来源章与事件目标章可以不同。
-
-put 同时给 at_beats 关联或 unresolved 原因。触发节点属于目标章，支持引用包含完整命题；
-缺必要知识边界仍由五维语义审阅登记问题，不能声称机械枚举了全部知识。
-完整 Beat 的读者呈现不能借知识登记跨章移动；跨章人物得知既有剧情可以独立登记。
-retire 必须给理由。稳定 event_id 与 expected_event_sha256 防止覆写错误版本，
-原始请求和代码物化的 knowledge_application 同时留在审批审计中，退役身份不复用。
-注册、修改与撤销按实际消费集合和内容使相关范围过期，不清除既有问题。
+原 KnowledgeLinks V3 与章级 Commander 的知识事件登记已随 Stage2 语义审阅整体退役
+（2026-09）：`knowledge_links.event_operations`、reader_reveal/character_knowledge 事件、
+identity_actors 许可端点及五维章审不复存在。共享主体的可见性只按 Global 章级揭示字段与
+蓝图自身端点判断，同章安排由 Stage4 现有计划表达；依赖登记继续绑定实际下发的材料，
+机械检查不宣称枚举了全部知识边界（`plot_semantics` unver 行披露）。
 
 State 的未来读者披露会进入当前 PlannerTruth 与结构审阅材料，尚未开放的 State 正文
 不进入此前章节 WriterVisible；当前章已开放的命题仍保持 belief/claim 等性质。
@@ -123,8 +116,8 @@ Writer 的章级剧情目录只保存父正文一次，各场引用该目录并�
 结构计划的已编译引用若仍不闭合，由 PlotReferenceRefused 保留章归属：候选校验
 转成 placement_ref 或 typed repair；正式消费中外溢到 HTTP 时显式归为 500 的结构错误，
 不通过默认异常映射掩盖编译器缺口。缺上游或审阅未闭合仍分别使用已有 404/409。
-结构页面从同一批计划、绑定、蓝图及必要 Global/KnowledgeLinks/原文材料编译审阅身份，
-不把只有计划正文的摘要冒充正式工作包；页面 subject 不是审阅许可，提交仍核 freshness。
+结构页面从同一批计划、绑定、蓝图及必要 Global/原文材料编译身份，
+不把只有计划正文的摘要冒充正式工作包；页面 subject 不是授权，提交仍核 freshness。
 只读请求结束时复核盘面，期间变更拒绝返回拼接状态。
 
 生成进度只读取 stage2_run_state 的运行记录/检查点载体，与 producer 共用摘要协议，
@@ -136,7 +129,7 @@ PlotEdit v2 的 `bpe2_` token 绑定当前实际输入。actor_bindings 与 Beat
 
 `relation_uses` 稀疏登记本章实际消费的 Global 关系及两个 ActorRef 端点，不为建立关系呈现而造 State。
 同一关系使用不同表面身份时保留全部 use；正式方向必须匹配 Global，默认呈现只在唯一无歧义时解析。
-未实际使用的关系仍可保留 KnowledgeLinks 时间端点，不能凭内部端点推定 Writer 人物或事实许可。
+未实际使用的关系不产生 Writer 呈现或事实许可；缺省呈现按候选判据解析，不能凭内部端点推定。
 关系引用型秘密展开时须存在唯一实际关系 use，缺失或多解由 Blueprint owner 免费补齐。
 
 当前 Blueprint 的人物删除、绑定缺失或歧义通过只读诊断保留原稿与问题，审阅 API 返回 409 并指出

@@ -159,6 +159,7 @@ def test_operator_redo_strategies_are_closed_and_explicit_per_node():
         'stage5.write': 'stale_chapters',
         'stage5.review': 'review',
         'stage6.hook': 'canonical',
+        'stage6.prepare': 'canonical',
         'stage7.rename': 'canonical',
         'stage7.assemble': 'canonical',
     }
@@ -210,27 +211,6 @@ def test_free_nodes_are_the_ones_without_llm():
         'stage1.partition', 'stage4.context', 'stage5.review',
         'stage6.approve', 'stage7.assemble', 'stage7.approve',
     }
-
-
-def test_stage2_review_policy_separates_producers_recovery_and_consumers():
-    """global/blueprint 可先生成；真正消费面才由当前逐项人审封口。"""
-    assert not inv.stage2_review_required('stage2.global', paid=True)
-    assert not inv.stage2_review_required('stage2.blueprint', paid=True)
-
-    for node in (
-        'stage4.design', 'stage4.plan', 'stage5.write',
-        'stage6.hook', 'stage6.semantic', 'stage7.rename',
-    ):
-        assert inv.stage2_review_required(node, paid=True), node
-
-    # 两个免费派生/交付动作不能借 paid=False 绕门。
-    assert inv.stage2_review_required('stage4.context', paid=False)
-    assert inv.stage2_review_required('stage7.assemble', paid=False)
-
-    # 修复、复检、人工写回的 0 成本跑法必须在闸关闭时仍可达。
-    for node in ('stage2.global', 'stage2.blueprint', 'stage4.plan',
-                 'stage5.write', 'stage6.hook', 'stage7.rename'):
-        assert not inv.stage2_review_required(node, paid=False), node
 
 
 def _known_flags() -> set[str]:
@@ -407,7 +387,7 @@ def test_the_approval_union_covers_its_value_domain_exactly():
 def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
     from contracts.invariants import NODES, REVIEW_ACTIONS, commander_review_actions
 
-    assert len(NODES) == 18
+    assert len(NODES) == 20
     assert all(spec.lifecycle is not None for spec in NODES.values())
     for node, spec in NODES.items():
         life = spec.lifecycle
@@ -420,6 +400,11 @@ def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
             assert {'uncertain', 'stop'} <= set(life.review_actions)
         assert life.executor_content_limit == (4 if spec.paid else 0)
         assert life.commander_content_limit == (4 if life.review_mode == 'commander' else 0)
+    # Stage2 语义审阅退役：两个生产节点不再登记 commander 席位或审阅动作。
+    assert not NODES['stage2.global'].lifecycle.commander_bindings
+    assert not NODES['stage2.blueprint'].lifecycle.commander_bindings
+    assert NODES['stage2.global'].lifecycle.review_mode == 'none'
+    assert NODES['stage2.blueprint'].lifecycle.review_mode == 'none' 
     assert NODES['stage4.context'].lifecycle.review_mode == 'none'
     assert NODES['stage1.partition'].lifecycle.review_mode == 'none'
     assert NODES['stage7.assemble'].lifecycle.review_mode == 'none'

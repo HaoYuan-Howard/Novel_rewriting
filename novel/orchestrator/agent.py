@@ -37,26 +37,17 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator, NamedTuple
 
-from contracts.artifacts import (
-    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT,
-    STAGE2_GLOBAL_EDIT_FAILURE, STAGE2_GLOBAL_REVIEW_DECISIONS,
-    STAGE2_BLUEPRINT_EDIT,
-    STAGE5_REVIEWER_REWRITE_REQUEST,
-)
+from contracts.artifacts import STAGE5_REVIEWER_REWRITE_REQUEST
 from contracts.invariants import (
     AGENT_EXECUTOR_NODES, COMMANDER_MAX_ATTEMPTS_PER_SEAT,
-    COMMANDER_RETRY_BACKOFF_SECONDS,
-    STAGE2_BLUEPRINT_MAX_CONCURRENCY, NODES,
+    COMMANDER_RETRY_BACKOFF_SECONDS, NODES,
     commander_work_unit,
 )
 from contracts.schema import decode_artifact
 from contracts.schema.api import (
     BatchTrimResolutionRequest, ExecutionPermit, OperatorNext, OperatorNode,
-    Stage2FinalReviewRequest, Stage5ReviewerRewriteRequest,
+    Stage5ReviewerRewriteRequest,
 )
-from contracts.schema.evaluation import GlobalReviewDecisionSet
-from contracts.schema.plot_edit import PlotEdit
-from contracts.schema.stage2 import GlobalEdit, GlobalEditCommit, GlobalEditFailure
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected,
     AgentRunEvent, AgentRunExitOrigin,
@@ -99,11 +90,10 @@ from novel.model_slots import (
 )
 from novel.orchestrator import (
     admission, commander_completion, execution_permit, jobs, operator, queue,
-    review_seats, reviewer_action_evidence, reviewer_seat_ledger,
+    reviewer_action_evidence, reviewer_seat_ledger,
     reviewer_protocol_recovery, reviewer_schema_recovery, reviewer_revalidation,
     reviewer_tasks, service_lifecycle,
-    stage2_issue_recovery, stage2_issue_wire,
-    stage2_reviewer_wire, stage4_reviewer_wire, stage6_prepare_wire, state, uploads,
+    stage4_reviewer_wire, stage6_prepare_wire, state, uploads,
 )
 from novel.orchestrator.agent_supervisor import (
     CommanderTurnResult, LaunchTicket, PrelaunchIdentityDrift, RunSupervisor,
@@ -1000,54 +990,6 @@ def _write_identity_bound_scratch(
 
 
 @contextmanager
-def _stage2_reviewer_input(
-        base: str, sid: str, action: reviewer_tasks.ReviewerNodeAction,
-) -> Iterator[Path]:
-    """把 Commander 的一次性 Stage2 typed 输入放进 producer 认可的服务根。
-
-    scratch 只承载本 epoch 的 prompt、request 与 execution token；
-    ``stage2.global --review-decisions`` 的生产路径契约则只接受当前书或
-    ``_service/edits/<sid>``。这里复用 HTTP 同一个 typed 保存口，避免 permit
-    放行后又在 producer 处因路径口径不同而失败。
-    """
-    payload = action.input_payload
-    if payload is None:  # pragma: no cover —— 调用方只在有 payload 时进入
-        raise RuntimeError('Stage2 reviewer input 缺 typed payload')
-    tokens = set(action.flags)
-    if '--review-issues' in tokens:
-        from contracts.artifacts import STAGE2_ISSUE_REVIEW_DECISIONS
-        from contracts.schema.stage2_issue_review import Stage2IssueReviewSubmission
-        decoded = decode_artifact(STAGE2_ISSUE_REVIEW_DECISIONS, payload)
-        submission = Stage2IssueReviewSubmission.model_validate(decoded.payload)
-        path = uploads.save_stage2_issue_submission(base, sid, submission)
-    elif '--review-decisions' in tokens and '--apply-edit' not in tokens:
-        decoded = decode_artifact(STAGE2_GLOBAL_REVIEW_DECISIONS, payload)
-        decisions = GlobalReviewDecisionSet.model_validate(decoded.payload)
-        path = uploads.save_global_review_decisions(base, sid, decisions)
-    elif '--apply-edit' in tokens and '--review-decisions' not in tokens:
-        if action.node == 'stage2.blueprint':
-            decoded = decode_artifact(STAGE2_BLUEPRINT_EDIT, payload)
-            edit = PlotEdit.model_validate(decoded.payload)
-            path = uploads.save_blueprint_edit(base, sid, edit)
-        else:
-            decoded = decode_artifact(STAGE2_GLOBAL_EDIT, payload)
-            edit = GlobalEdit.model_validate(decoded.payload)
-            path = uploads.save_global_edit(base, sid, edit)
-    else:
-        raise RuntimeError(
-            'Stage2 reviewer input 必须恰好属于 review-decisions 或 apply-edit')
-    try:
-        yield path
-    finally:
-        try:
-            uploads.discard_edit_plan(base, path)
-        except NovelError as exc:
-            warnings.warn(
-                f'reviewer 节点已结束，但一次性 Stage2 typed 输入清理失败：{exc}',
-                RuntimeWarning, stacklevel=2)
-
-
-@contextmanager
 def _prepare_reviewer_input(base: str, sid: str, action) -> Iterator[Path]:
     """保留内容寻址的原决定；CLI 完成与中断都可从同一 durable 输入恢复。"""
     from contracts.artifacts import STAGE6_PREPARE_REVIEW_DECISIONS
@@ -1149,9 +1091,7 @@ def _reviewer_node_flags(
     if action.input_payload is None:
         yield flags
         return
-    if action.node == 'stage2.global':
-        input_context = _stage2_reviewer_input(base, sid, action)
-    elif action.node == 'stage6.prepare':
+    if action.node == 'stage6.prepare':
         input_context = _prepare_reviewer_input(base, sid, action)
     elif (
         action.node == 'stage5.review'
@@ -1262,10 +1202,6 @@ def _reviewer_activity(task: reviewer_tasks.ReviewerTask) -> str:
         str(option.get('id')) for option in task.submission_options
         if isinstance(option, dict)
     }
-    if task.waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-        node, _scope = commander_work_unit(task.waiting_on)
-        suffix = 'review-or-edit' if any('apply-edit' in value for value in option_ids) else 'review'
-        return f'{node}.{suffix}'
     return f'reviewer:{task.waiting_on}'
 
 
@@ -1306,8 +1242,6 @@ def _record_reviewer_action(
             'stage5_review_sha256': task.stage5_review_sha256,
             'stage5_reviewer_contract_sha256': task.stage5_reviewer_contract_sha256,
         }
-    elif task.waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-        raise WorkUnitRefused('Stage2 决定必须绑定现役工作单元；旧独立席位账已退役')
     if isinstance(action, reviewer_tasks.ReviewerApprovalAction):
         if work_unit_id is None and task.waiting_on in reviewer_schema_recovery.WAITING_ON:
             ledger = reviewer_seat_ledger.read(
@@ -1651,43 +1585,6 @@ def _stage5_pending_supersedes_record(
             f'{type(exc).__name__}: {exc}') from exc
 
 
-class _Stage2ReviewerPreflightRejected(TerminalState):
-    """producer 已确定性拒绝 durable Stage2 action；不是运行时 unknown。"""
-
-    def __init__(self, safe_summary: str) -> None:
-        super().__init__(safe_summary)
-        self.safe_summary = safe_summary
-
-
-def _preflight_stage2_reviewer_action(
-        base: str, sid: str, *, epoch: ExecutionEpoch,
-        action: reviewer_tasks.ReviewerNodeAction) -> None:
-    """用 canonical producer 的纯内存 builder 预检一份 durable apply-edit。"""
-    if (
-        action.node != 'stage2.global'
-        or action.input_payload is None
-        or tuple(action.flags[:1]) != ('--apply-edit',)
-    ):
-        return
-    decoded = decode_artifact(STAGE2_GLOBAL_EDIT, action.input_payload)
-    edit = GlobalEdit.model_validate(decoded.payload)
-    # 局部 import 避开 orchestrator 启动时把整个 Stage2 producer 图提前载入；
-    # readonly ctx 是额外物理约束，真正判据仍由 producer 唯一实现。
-    from novel.stages.stage2 import extract as stage2_extract
-
-    novel_dir = paths.resolve_novel_dir(base, sid)
-    try:
-        stage2_extract.preflight_global_edit(
-            state.readonly_ctx(
-                novel_dir, 'stage2.global', epoch.code_version),
-            edit,
-        )
-    except stage2_extract.GlobalEditCandidateRejected as exc:
-        # producer 的完整 diagnostics 可能含模型提供的 ID/正文；席位账与
-        # correction prompt 只允许传播它给出的稳定脱敏摘要。
-        raise _Stage2ReviewerPreflightRejected(exc.safe_summary) from exc
-
-
 def _reconcile_landed_stage5_reviewer_rewrite_action(
         base: str, sid: str, *, code: str,
         current_parent_run_id: str | None = None) -> None:
@@ -1759,64 +1656,6 @@ def _reconcile_completed_work_unit_actions(
             uploads.discard_edit_plan(base, path)
 
 
-def _reconcile_landed_stage2_work_unit_actions(
-        base: str, sid: str, *, code: str,
-        current_parent_run_id: str | None = None) -> None:
-    """免费 producer 补提交后先收原内容账，再让 planner 越过原审阅 blocker。
-
-    prepared 仅授权重放，不证明提交。原回答、typed 动作、成本/会话证明与
-    当前 committed 产物与合法提交后继闭合后才能 adopt；只写服务账，不补造审批。
-    逐项否定/UNVER 决定没有接受后继，不能因节点仍阻断而无限重放已落决定。
-    """
-    from novel.orchestrator import approvals
-    from novel.stages.stage2 import extract, global_review, plot_edit
-
-    for path, record in uploads.load_reviewer_actions(base, sid):
-        if (record.work_unit_id is None or record.work_unit_turn_id is None
-                or record.waiting_on not in queue.STAGE2_REVIEWER_WAITING_ON):
-            continue
-        node, scope = commander_work_unit(record.waiting_on)
-        budget = commander_budget_for_record(base, sid, record)
-        if budget.unit_id != record.work_unit_id:
-            raise WorkUnitRefused('Stage2 退休记录与登记工作单元不一致')
-        if budget.turn(record.work_unit_turn_id).state == 'failed':
-            # 拒因先写、record 后删的尾窗由当前 Reviewer 拒绝恢复处理，不当作落盘。
-            continue
-        owner = (nullcontext() if record.run_id == current_parent_run_id
-                 else admission.require_owner_stopped(base, record.run_id))
-        with owner:
-            budget = validate_reviewer_record(base, sid, record)
-            if budget.turn(record.work_unit_turn_id).state == 'adopted':
-                uploads.discard_edit_plan(base, path)
-                continue
-            submitted = False
-            if record.surface in ('stage2_global_review', 'stage2_blueprint_review'):
-                if record.payload is not None:
-                    submitted = approvals.stage2_review_payload_landed(base, sid, record.payload)
-            elif record.node in ('stage2.global', 'stage2.blueprint') and record.input_payload is not None:
-                if record.node == 'stage2.global' and '--apply-edit' in record.flags:
-                    store = ArtifactStore(state.readonly_ctx(
-                        paths.resolve_novel_dir(base, sid), record.node, code))
-                    if store.exists(STAGE2_GLOBAL_EDIT_COMMIT):
-                        journal = store.read_own(GlobalEditCommit, STAGE2_GLOBAL_EDIT_COMMIT)[0]
-                        submitted = (journal.state == 'committed'
-                                     and extract.submitted_global_patch_is_current(base, sid, record.input_payload))
-                elif record.node == 'stage2.global' and '--review-decisions' in record.flags:
-                    submitted = global_review.submitted_decisions_is_current(
-                        base, sid, record.input_payload, require_action_complete=True)
-                elif record.node == 'stage2.blueprint' and '--apply-edit' in record.flags:
-                    submitted = plot_edit.submitted_edit_is_current(base, sid, record.input_payload)
-                if submitted and record.node != 'stage2.blueprint' and '--review-decisions' not in record.flags:
-                    try:
-                        approvals.require_stage2_node_accepted(base, sid, record.node)
-                    except ApprovalRequired:
-                        submitted = False
-            if submitted:
-                # 先标原回答已消费，再退休活动记录；删除中断可按 adopted 原证明补尾。
-                budget.mark_adopted(record.work_unit_turn_id)
-                uploads.discard_edit_plan(base, path)
-
-
 def _protocol_recovery_sources(
         base: str, sid: str, *, ledger: ReviewerSeatLedger,
         current_parent_run_id: str | None, validation_code: str,
@@ -1884,8 +1723,6 @@ def _recover_protocol_reviewer_action(
         current: OperatorNext, task: reviewer_tasks.ReviewerTask,
         current_parent_run_id: str | None,
         ) -> _ReplayableReviewerAction | None:
-    if task.waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-        return None
     token = reviewer_tasks.approval_review_token(task.submission_options)
     if token is None:
         return None
@@ -2006,8 +1843,6 @@ def _find_replayable_reviewer_action(
     business identity 至少一项相同的记录。Stage0 没有 review_token，
     其 revision/完整保留文本/removed identity/contract 已全部进入
     ``business_sha256``，因此代码 epoch 改变后仍能零成本重放。
-    Stage2 必须同时命中稳定 business 与 workpack；surface seal 可因纯代码
-    epoch 变化，但 full action 仍须重走今天的 loader 与当前 permit。
     Stage5 batch 若在章间被 kill，则只在原 Review/完整有序 trim
     双 SHA/contract business 仍成立且盘面恰为 exact 已落前缀 + current
     unresolved 后缀时重交原 manifest；
@@ -2016,8 +1851,6 @@ def _find_replayable_reviewer_action(
     等确定性判据以今天的代码为准。
     """
     waiting_on = task.waiting_on
-    if waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-        raise WorkUnitRefused('Stage2 旧席位决定重放已退役；只接受现役工作单元恢复')
     current_token = reviewer_tasks.approval_review_token(
         task.submission_options)
     current_stage5_trim = (
@@ -2207,36 +2040,6 @@ def _find_replayable_reviewer_action(
         base, sid, epoch.epoch_id)
     try:
         document = reviewer_tasks.replay_request_document(record, current)
-        if record.node == 'stage2.global' and record.input_payload is not None:
-            # durable record 保存的是能直接交给 canonical CLI 的 full
-            # action，因此 input_payload 已带 artifact envelope；Reviewer loader
-            # 的输入面则是去掉可信版本信封的业务 payload，并由
-            # loader 自己重建 envelope。重放必须先做这一次逆投影，
-            # 不能把已编码 artifact 直接冒充 provider request。
-            flags = set(record.flags or ())
-            try:
-                if ('--apply-edit' in flags
-                        and '--review-decisions' not in flags):
-                    decoded = decode_artifact(
-                        STAGE2_GLOBAL_EDIT, record.input_payload)
-                elif ('--review-decisions' in flags
-                      and '--apply-edit' not in flags):
-                    decoded = decode_artifact(
-                        STAGE2_GLOBAL_REVIEW_DECISIONS, record.input_payload)
-                else:
-                    raise reviewer_tasks.ReviewerTaskError(
-                        'Stage2 durable action 操作形状不唯一')
-            except reviewer_tasks.ReviewerTaskError:
-                raise
-            except Exception as exc:  # noqa: BLE001 —— 坏记录关闭式汰汰
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage2 durable action 的 typed payload 无法重建：'
-                    f'{type(exc).__name__}') from exc
-            action_document = document.get('action')
-            if not isinstance(action_document, dict):  # pragma: no cover
-                raise reviewer_tasks.ReviewerTaskError(
-                    'Stage2 durable action 重放 wrapper 缺 action')
-            action_document['input_payload'] = decoded.payload
         payload = (json.dumps(
             document, ensure_ascii=False, sort_keys=True) + '\n').encode('utf-8')
         replay_path = _write_identity_bound_scratch(
@@ -2688,15 +2491,11 @@ def _materialize_reviewer_response(
     except reviewer_tasks.ReviewerTaskError as exc:
         raise _ReviewerResponseTypedInvalid(str(exc)) from exc
     wire = (stage6_prepare_wire if stage6_prepare_wire.uses_compact_wire(task)
-            else stage4_reviewer_wire if stage4_reviewer_wire.uses_compact_wire(task)
-            else stage2_issue_wire if stage2_issue_wire.matches(task)
-            else stage2_reviewer_wire)
+            else stage4_reviewer_wire)
     if wire.uses_compact_wire(task):
         try:
             document = wire.assemble(task, document)
         except (stage6_prepare_wire.PrepareReviewerWireError,
-                stage2_reviewer_wire.Stage2ReviewerWireError,
-                stage2_issue_wire.Stage2IssueWireError,
                 stage4_reviewer_wire.Stage4ReviewerWireError) as exc:
             # compact wire 只是运输层；所有拒绝仍进入现役 ReviewerTaskError
             # 的有界纠错/持久拒因路径，不能越级变成 Supervisor runtime crash。
@@ -3213,13 +3012,6 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
     pending_reviewer_binding: tuple[str, str] | None = None
     pending_reviewer_business_sha256: str | None = None
     pending_reviewer_source_task: reviewer_tasks.ReviewerTask | None = None
-    # Stage2 compact wire 的 provider 原回答 identity；canonical scratch 保存的是
-    # trusted assembler 展开的完整请求，两者不能混作纠错/no-progress 指纹。
-    pending_reviewer_response_sha256: str | None = None
-    # Stage2 typed-valid 动作会在下一次 deterministic callback 才执行；必须把
-    # 产出它的 logical session 一起跨过这条边界，canonical exit 2 才能精确
-    # 回写原席位。这里不是 provider session，也绝不用于 resume。
-    pending_reviewer_stage2_session_run_id: str | None = None
     # 已通过 loader 的 approval 决定在盘上的记录；重放来的动作被拒时不得走纠错。
     pending_reviewer_record_path: Path | None = None
     pending_reviewer_replayed = False
@@ -3325,8 +3117,6 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         nonlocal session_started, session_ended
         nonlocal pending_reviewer_action, pending_reviewer_binding
         nonlocal pending_reviewer_business_sha256, pending_reviewer_source_task
-        nonlocal pending_reviewer_stage2_session_run_id
-        nonlocal pending_reviewer_response_sha256
         nonlocal pending_reviewer_record_path, pending_reviewer_replayed
         nonlocal pending_reviewer_protocol_recovery
         nonlocal reviewer_correction_task, reviewer_correction_binding
@@ -3378,8 +3168,6 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             pending_reviewer_binding = None
             pending_reviewer_business_sha256 = None
             pending_reviewer_source_task = None
-            pending_reviewer_stage2_session_run_id = None
-            pending_reviewer_response_sha256 = None
             pending_reviewer_record_path = None
             pending_reviewer_replayed = False
             pending_reviewer_protocol_recovery = False
@@ -4605,8 +4393,6 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         # 工作单元保存原回答，planner 重启不会重新发放预算。
         _reconcile_completed_work_unit_actions(
             base, sid, code=epoch.code_version, current_parent_run_id=run_id)
-        _reconcile_landed_stage2_work_unit_actions(
-            base, sid, code=epoch.code_version, current_parent_run_id=run_id)
         _reconcile_landed_stage5_reviewer_rewrite_action(
             base, sid, code=epoch.code_version,
             current_parent_run_id=run_id)
@@ -4633,7 +4419,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
             epoch: ExecutionEpoch, current: OperatorNext,
             provider_session_id: str | None,
             launch_ticket: LaunchTicket) -> SupervisorActionResult:
-        """所有生产只执行状态机当前许可；Stage2 不再并行发起预审。"""
+        """所有生产只执行状态机当前许可；Supervisor 不并行发起预审。"""
         if current.execution_token is None:
             raise RuntimeError('ready next 缺 execution token')
         permit = current.execution_token
@@ -4672,23 +4458,6 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
         recovered = _run_token(
             epoch, permit, launch_ticket,
             stem=f'recovery-{permit.node}')
-        if (
-            action.waiting_on == queue.WAITING_ON_STAGE2_EDIT_COMMIT
-            and recovered.exit_code == 2
-        ):
-            # reviewed-edit WAL 补尾可以以 terminal sidecar 明确结束：
-            # 这不是再停一次等人点“继续”，而是同一 canonical
-            # action 已经得到拒因。planner 前 reconcile 会先把它绑回
-            # 原 Stage2 席位并退休 action record；只有现役状态已精确
-            # 转到 correction 才继续循环。仍是 commit blocker 或任何其他
-            # 状态时保持 exit2 停点，避免确定性死循环。
-            live = _read_operator_next(epoch)
-            live_waiting_on = (
-                live.action.waiting_on
-                if live.state == 'blocked' and live.action is not None
-                else None)
-            if live_waiting_on == queue.WAITING_ON_STAGE2_EDIT_CORRECTION:
-                return replace(recovered, continue_ready=True)
         return recovered
 
     def _run_approval_action(
@@ -4769,26 +4538,13 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 or feedback.get('waiting_on') != waiting_on):
             feedback = None
         prompt = task.prompt
-        issue_wire_active = stage2_issue_wire.matches(task)
         wire = (stage6_prepare_wire if stage6_prepare_wire.uses_compact_wire(task)
-                else stage4_reviewer_wire if stage4_reviewer_wire.uses_compact_wire(task)
-                else stage2_issue_wire if issue_wire_active
-                else stage2_reviewer_wire)
+                else stage4_reviewer_wire)
         output_schema = wire.output_schema_for(task)
         if feedback is not None:
-            if issue_wire_active and feedback.get('recovery_kind') == 'format_repair':
-                # 格式模型修复：只发原回答、issue schema 与解析错误；
-                # 不附原文、业务产物或额外历史材料。
-                prompt = stage2_issue_recovery.format_repair_prompt(
-                    str(feedback.get('original_response') or ''),
-                    output_schema=output_schema, error=str(feedback['reason']))
-            elif issue_wire_active:
-                # 语义重试复用同一 prepared 包与完整审阅 prompt，不附旧推理。
-                prompt = task.prompt
-            else:
-                prompt = reviewer_tasks.correction_prompt(
-                    task, str(feedback['reason']),
-                    request_sha256=str(feedback['response_sha256']), attempt=budget.used)
+            prompt = reviewer_tasks.correction_prompt(
+                task, str(feedback['reason']),
+                request_sha256=str(feedback['response_sha256']), attempt=budget.used)
         reviewer_prompt = wire.prompt_for(task, prompt)
         output_schema_digest = _prepare_output_schema(output_schema)[2]
         schema_recovery_proof = None
@@ -4877,22 +4633,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     raise WorkUnitRefused('同一回答出现多个活动 typed 决定记录')
                 pending_record = (path, record)
                 pending_records.append((path, record))
-        submitted_patch_recovery = False
         partial_batch_recovery = False
         if pending is not None and pending[1].get('business_sha256') != task.business_sha256:
             if pending_record is not None:
                 _path, record = pending_record
-                if record.node == 'stage2.blueprint' and record.input_payload is not None:
-                    from novel.stages.stage2.plot_edit import submitted_edit_is_current
-                    submitted_patch_recovery = submitted_edit_is_current(
-                        base, sid, record.input_payload, require_action_complete=False)
-                elif record.node == 'stage2.global' and record.input_payload is not None:
-                    if '--review-decisions' in record.flags:
-                        from novel.stages.stage2.global_review import submitted_decisions_is_current
-                        submitted_patch_recovery = submitted_decisions_is_current(base, sid, record.input_payload)
-                    else:
-                        from novel.stages.stage2.extract import submitted_global_patch_is_current
-                        submitted_patch_recovery = submitted_global_patch_is_current(base, sid, record.input_payload)
                 if record.node == 'stage5.review' and record.flags == ('--retain-pretrim-batch', '@reviewer-input'):
                     partial = reviewer_tasks.stage5_trim_partial_replay_options(
                         base, sid, record, current, task.submission_options,
@@ -4906,7 +4650,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         partial_batch_recovery = True
                         task = replace(task, business_sha256=record.business_sha256,
                                        submission_options=partial.submission_options)
-            if (not submitted_patch_recovery and revalidation is None
+            if (revalidation is None
                     and pending[1].get('business_sha256') != task.business_sha256):
                 # 当前候选确已被其他正式动作替代；旧回答失效仍保留已用额度。
                 budget.mark_rejected(pending[0].turn_id, reason_code='subject_superseded')
@@ -4931,71 +4675,6 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 exit_code=2, provider_session_id=None, continue_ready=True,
                 continue_reviewer=True, outcome=AgentDeliveryOutcome(
                     state='stopped', checked_at=int(time.time()), reason=reason))
-
-        def issue_recovery_rejection(
-                reservation: ContentReservation, response: str, error: str,
-        ) -> CommanderTurnResult:
-            """issues 协议的有界恢复分类；槽位耗尽进入明确失败终态。"""
-            counters = stage2_issue_recovery.counters(budget)
-            kind: str | None = None
-            detail = ''
-            try:
-                document, _steps = stage2_issue_recovery.parse_issue_answer(response)
-            except stage2_issue_recovery.AnswerParseError as exc:
-                detail = f'回答不是合法 issues JSON：{exc.code}'
-                if counters['format_repair']['remaining'] > 0:
-                    kind = 'format_repair'
-                elif counters['semantic_retry']['remaining'] > 0:
-                    kind = 'semantic_retry'
-                    detail += '；格式修复槽位已用，转语义重试'
-            else:
-                truncated = stage2_issue_recovery.looks_truncated(response, document)
-                if truncated or ('issues' not in document and 'answer' not in document):
-                    detail = '回答疑似截断或缺失 issues'
-                    if counters['semantic_retry']['remaining'] > 0:
-                        kind = 'semantic_retry'
-                elif counters['format_repair']['remaining'] > 0:
-                    kind = 'format_repair'
-                    detail = f'回答不符合 issue schema：{error}'
-                elif counters['semantic_retry']['remaining'] > 0:
-                    kind = 'semantic_retry'
-                    detail = f'回答不符合 issue schema 且格式修复槽位已用：{error}'
-                else:
-                    detail = f'回答不符合 issue schema：{error}'
-            if kind is None:
-                return stopped(
-                    'issues 协议恢复槽位已耗尽，进入明确失败终态（接受闸保持关闭）：'
-                    + detail)
-            return rejected(
-                reservation, _reviewer_response_sha256(response),
-                f'{kind}：{detail}', recovery_kind=kind,
-                original_response=response)
-
-        def issue_preservation_verdict(
-                response: str,
-        ) -> tuple[str, str] | None:
-            """格式修复回答的独立内容保全检查；不可证明时转语义重试。"""
-            if (feedback is None
-                    or feedback.get('recovery_kind') != 'format_repair'
-                    or not feedback.get('original_response')):
-                return None
-            counters = stage2_issue_recovery.counters(budget)
-            try:
-                original, _a = stage2_issue_recovery.parse_issue_answer(
-                    str(feedback['original_response']))
-                repaired, _b = stage2_issue_recovery.parse_issue_answer(response)
-            except stage2_issue_recovery.AnswerParseError:
-                preserved = False
-            else:
-                preserved = stage2_issue_recovery.content_preserved(
-                    original, repaired)
-            if preserved:
-                return None
-            if counters['semantic_retry']['remaining'] <= 0:
-                return ('terminal',
-                        '格式修复无法证明内容保全，语义重试槽位已用；'
-                        '停止消费该回答并进入明确失败终态')
-            return ('semantic_retry', '格式修复内容保全不可证明；转入同 scope 语义重试')
 
         if pending is not None:
             reservation, saved = pending
@@ -5056,14 +4735,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                     turn_row = budget.turn(reservation.turn_id)
                     if turn_row.recovery_sha256 is not None:
                         raise
-                if submitted_patch_recovery:
-                    assert pending_record is not None
-                    record_path, record = pending_record
-                    action = reviewer_tasks.ReviewerNodeAction(
-                        kind='node', node=record.node, flags=tuple(record.flags),
-                        input_payload=record.input_payload)
-                    digest = record.provider_response_sha256
-                elif revalidation is not None:
+                if revalidation is not None:
                     document, digest = _reviewer_response_document(response)
                     try:
                         document = revalidation.rebind(document)
@@ -5097,34 +4769,11 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                         action, digest, record_path = _materialize_reviewer_document(
                             task, current, document, response_digest=digest, persist_validated=persist)
                 else:
-                    issue_response = response
-                    if issue_wire_active:
-                        # 确定性恢复：BOM/围栏/尾逗号/登记包装只剥运输内容。
-                        try:
-                            cleaned, _steps = stage2_issue_recovery.parse_issue_answer(
-                                response)
-                            issue_response = json.dumps(
-                                cleaned, ensure_ascii=False, sort_keys=True,
-                                separators=(',', ':'))
-                        except stage2_issue_recovery.AnswerParseError:
-                            issue_response = response
-                        preservation = issue_preservation_verdict(issue_response)
-                        if preservation is not None:
-                            kind, reason = preservation
-                            if kind == 'terminal':
-                                return stopped(
-                                    'issues 协议格式修复被拒：' + reason)
-                            return rejected(
-                                reservation, _reviewer_response_sha256(response),
-                                reason, recovery_kind=kind,
-                                original_response=response)
                     action, digest, record_path = _materialize_reviewer_response(
-                        task, current, issue_response, persist_validated=persist,
+                        task, current, response, persist_validated=persist,
                         preserve_validated=lambda candidate, digest:
                         _preserve_validated_reviewer_residue(base, sid, candidate, digest))
             except _ReviewerResponseTypedInvalid as exc:
-                if issue_wire_active:
-                    return issue_recovery_rejection(reservation, response, str(exc))
                 return rejected(reservation, _reviewer_response_sha256(response), str(exc))
             if isinstance(action, reviewer_tasks.ReviewerStopAction):
                 budget.mark_adopted(reservation.turn_id)
@@ -5132,13 +4781,10 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 return stopped(f'Commander {conclusion} {waiting_on}：' + action.reason)
             try:
                 if isinstance(action, reviewer_tasks.ReviewerNodeAction):
-                    _preflight_stage2_reviewer_action(base, sid, epoch=epoch, action=action)
                     result = _run_node_review_action(
                         epoch, action, launch_ticket, reviewer_action_record_path=record_path)
                 else:
                     result = _run_approval_action(epoch, action, launch_ticket)
-            except _Stage2ReviewerPreflightRejected as exc:
-                return rejected(reservation, digest, exc.safe_summary)
             except Exception:
                 live = _read_operator_next(epoch)
                 if live.surface_seal != current.surface_seal:
@@ -5167,7 +4813,7 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                                    + str(action.payload.get('reason', '')))
             elif result.exit_code == 2:
                 live = _read_operator_next(epoch)
-                if partial_batch_recovery or submitted_patch_recovery:
+                if partial_batch_recovery:
                     detail = '：' + result.failure_detail if result.failure_detail else ''
                     return stopped('已保存决定的免费补提交尚未闭合，保留原回答' + detail)
                 if live.surface_seal == current.surface_seal:
@@ -5182,24 +4828,8 @@ def _start_planned(plan: AgentRunPlan, *, spawn: Spawn | None = None,
                 provider_session_id=None, continue_ready=result.continue_ready,
                 outcome=result.outcome)
 
-        from novel.work_units import require_commander_scope_closed
-        require_commander_scope_closed(base, sid, node, scope)
         if budget.remaining == 0:
             return stopped('Commander 当前工作单元有效内容额度已用尽；可免费复验或人工编辑，追加额度须由操作者另行授权')
-        if feedback is not None and waiting_on in queue.STAGE2_REVIEWER_WAITING_ON:
-            # 纠错上下文只服务下一次内容调用。原回答已保存时先走上面的免费
-            # 补提交，不因更早的拒稿材料损坏或 blocker 变化而夺走恢复能力。
-            rejected_responses = budget.rejected_responses(
-                business_sha256=task.business_sha256, waiting_on=waiting_on)
-            if not rejected_responses or any(
-                    _reviewer_response_sha256(row['final_response']) != row['response_sha256']
-                    for row in rejected_responses):
-                return stopped('纠错上下文缺原回答或与持久拒因摘要不一致', unknown=True)
-            prompt = reviewer_tasks.correction_prompt(
-                task, str(feedback['reason']),
-                request_sha256=str(feedback['response_sha256']), attempt=budget.used,
-                rejected_responses=rejected_responses)
-            reviewer_prompt = wire.prompt_for(task, prompt)
         seat = open_reviewer_seats.get(binding)
         if seat is not None and seat.output_schema_sha256 != output_schema_digest:
             _close_reviewer_seat(binding, error_kind='reviewer_schema_changed')

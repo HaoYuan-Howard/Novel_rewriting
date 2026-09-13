@@ -299,8 +299,6 @@ def test_design_native_wire_reaches_canonical_approval_and_repair_authorization(
             (queue.st.RESUME_SKIP, '当前 A 候选') if node == 'stage4.design'
             else (queue.st.RESUME_RUN, 'B 等待重建')))
         monkeypatch.setattr(queue.st, 'stage2_global_projection_blocked', lambda _ov: False)
-        monkeypatch.setattr(queue.st, 'stage2_reviewed_edit_correction_needed', lambda *_a: False)
-        monkeypatch.setattr(queue.approvals, 'require_stage2_review', lambda *_a: None)
         todo, blocked = queue.plan_book_from_overview(
             base, SID, SimpleNamespace(stages=[]), until_stage='stage4',
             follow_check=False, approval_doc=doc)
@@ -565,8 +563,6 @@ def test_work_unit_supervisor_preserves_response_after_approval_and_retires_land
         (queue.st.RESUME_SKIP, '当前 A 候选') if node == 'stage4.design'
         else (queue.st.RESUME_RUN, 'B 等待重建')))
     monkeypatch.setattr(queue.st, 'stage2_global_projection_blocked', lambda _ov: False)
-    monkeypatch.setattr(queue.st, 'stage2_reviewed_edit_correction_needed', lambda *_a: False)
-    monkeypatch.setattr(queue.approvals, 'require_stage2_review', lambda *_a: None)
     planned_repairs = []
 
     def next_action(_base, _sid, *, code):

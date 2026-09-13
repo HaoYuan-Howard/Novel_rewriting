@@ -99,7 +99,6 @@ _REQUIRED_UPSTREAMS = (
     'stage0/clean_text.txt',
     'stage1/hook_copy.json',
     'stage2/global_grounding.json',
-    'stage2/global_review.json',
     'stage3/style_grounding.json',
     'stage4/writer_context.json',
 )

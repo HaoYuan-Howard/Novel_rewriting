@@ -61,8 +61,11 @@ def finish_commit(ctx, *, chapters=(), review_token=None):
     targets = tuple(stored.get('chapters') or ())
     if (chapters and tuple(chapters) != targets) or review_token != stored.get('review_token'):
         raise ProvenanceRefused('定向修订提交恢复的目标或裁决请求不一致')
-    from novel.stages.stage2.global_review import require_global_accepted
-    require_global_accepted(ctx)
+    from novel import admission
+    gate = admission.blueprint_generation_ready(ctx.novel_dir.parent, ctx.sid)
+    if not gate.ok:
+        from novel.errors import ApprovalRequired
+        raise ApprovalRequired('统一机械准入未通过：' + '；'.join(gate.blocking))
     store = ArtifactStore(ctx)
     candidate, frozen = stage2_runs.restore_commit_payloads(ctx, journal)
     artifact = ChapterBlueprints.model_validate(candidate)
@@ -101,13 +104,10 @@ def finish_commit(ctx, *, chapters=(), review_token=None):
     extract._require_blueprint_code_current(ctx, moment='定向修订恢复落哨兵前')
     ctx.require_observed_roots_current()
     stage2_runs.mark_committed(ctx)
-    if review_token is not None:
-        from novel.orchestrator.approvals import mark_stage2_rework_landed
-        mark_stage2_rework_landed(ctx.novel_dir.parent, ctx.sid, ctx.node, review_token)
     return report
 
 
-def request_inputs(ctx, *, chapters, store, main_text, character_projection, rework=None):
+def request_inputs(ctx, *, chapters, store, main_text, character_projection):
     """预览与执行共用同一只读构造器；调用前不会生成新章或接受任何语义。"""
     from novel.stages.stage2 import extract
     _, previous = plot_edit._current(store)
@@ -123,7 +123,7 @@ def request_inputs(ctx, *, chapters, store, main_text, character_projection, rew
     globals_ = {ordinal: plot_global_projection(knowledge, ordinal) for ordinal in sources}
     inputs = read_input_digests(store)
     system = response_system()
-    issues = ([rework.plot_review.model_dump(mode='json')] if rework is not None else [])
+    issues: list = []
     requests = []
     for ordinal in chapters:
         baseline = baselines[ordinal]
@@ -141,20 +141,16 @@ def request_inputs(ctx, *, chapters, store, main_text, character_projection, rew
 
 
 def build_prompt(ctx, *, chapters=(), review_token=None):
+    if review_token is not None:
+        raise TerminalState(
+            'Stage2 语义审阅已退役：旧审阅返工票不再可用；'
+            '请按 --chapters 指定目标章重新发起定向修订')
     from novel.stages.stage2 import extract
     store = ArtifactStore(ctx)
-    rework = None
-    if review_token is not None:
-        from novel.orchestrator.approvals import stage2_rework_request
-        rework = stage2_rework_request(ctx.novel_dir.parent, ctx.sid, ctx.node, review_token)
-        requested = tuple(sorted(rework.chapter_ordinals))
-        if chapters and chapters != requested:
-            raise ProvenanceRefused('预览范围与已登记返工不同')
-        chapters = requested
     main = extract._read_main_text(store)
     _, projection = extract._require_blueprint_character_projection(store)
     data = request_inputs(ctx, chapters=chapters, store=store, main_text=main,
-                          character_projection=projection, rework=rework)
+                          character_projection=projection)
     first, system, user = data['requests'][0]
     earlier = [chapter for chapter in data['previous'].blueprints if chapter.chapter_ordinal < first]
     carried = earlier[-1].carry_out_refs if earlier else []
@@ -163,16 +159,14 @@ def build_prompt(ctx, *, chapters=(), review_token=None):
 
 def run(ctx, client, *, chapters, store, main_text, character_projection, review_token=None):
     from novel.stages.stage2 import extract
-    rework = None
     if review_token is not None:
-        from novel.orchestrator.approvals import stage2_rework_request
-        rework = stage2_rework_request(ctx.novel_dir.parent, ctx.sid, ctx.node, review_token)
-        if tuple(sorted(rework.chapter_ordinals)) != chapters:
-            raise ProvenanceRefused('定向修订目标与已登记裁决不同')
-    elif ctx.cache.name != 'refresh-write':
+        raise TerminalState(
+            'Stage2 语义审阅已退役：旧审阅返工票不再可用；'
+            '请按 --chapters 指定目标章重新发起定向修订')
+    if ctx.cache.name != 'refresh-write':
         raise TerminalState('主动定向修订须使用 refresh-write；恢复仍复用本轮封存响应')
     data = request_inputs(ctx, chapters=chapters, store=store, main_text=main_text,
-                          character_projection=character_projection, rework=rework)
+                          character_projection=character_projection)
     previous, template = data['previous'], data['template']
     if previous.provenance.model != client.model:
         raise TerminalState('定向修订须沿用原主模型配置，不能混写来源账')
@@ -181,12 +175,11 @@ def run(ctx, client, *, chapters, store, main_text, character_projection, review
     stage2_runs.ensure_run(ctx, architecture='plot-blueprint-v1', topology='single',
         requests=requests, request_policy=client.json_request_policy(
             [('repair', PlotRevisionResponse, extract.BLUEPRINT_MAX_TOKENS, False)],
-            recovery_policy='stage2-blueprint-v1'), refresh=rework is None,
-        operation='commander-rework' if rework is not None else 'chapters-refresh',
+            recovery_policy='stage2-blueprint-v1'), refresh=True,
+        operation='chapters-refresh',
         subject_fingerprint=consumed_digest(dict(baseline=previous.model_dump(mode='json', by_alias=True),
             inputs=inputs, chapters=chapters, review_token=review_token)),
-        resume_flags=(('--review-token', review_token) if rework is not None else
-                      ('--chapters', ','.join(map(str, chapters)))), input_projections=inputs)
+        resume_flags=(('--chapters', ','.join(map(str, chapters)))), input_projections=inputs)
     # 有后续检查点而中间缺失时，先拒绝；不能先购买缺章才发现旧依赖不再成立。
     gap = False
     for ordinal in chapters:
@@ -239,7 +232,7 @@ def run(ctx, client, *, chapters, store, main_text, character_projection, review
             chapter = compile_row(response)
         compiled.append(chapter)
         carried = frozenset(chapter.carry_out_refs)
-    reason = rework.reason if rework is not None else '操作者请求按原文定向修订'
+    reason = '操作者请求按原文定向修订'
     request = PlotEdit(actor='stage2.blueprint Executor', reason=reason,
                        review_token=template.review_token, chapters=edits)
     prepared = plot_edit.prepare_edit(ctx, request, allow_unchanged=True)

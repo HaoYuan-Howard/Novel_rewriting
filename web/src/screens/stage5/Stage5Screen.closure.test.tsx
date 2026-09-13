@@ -124,10 +124,9 @@ async function seedScreen({
     decided_at: '2026-08-25T00:00:00+00:00',
   }
   const approvals: ApprovalDoc = {
-    v: 8, prepare: missingPrepareState(),
+    v: 9, prepare: missingPrepareState(),
     sid: SAMPLE_SID,
-    gate: { s0: true, s1: true, s2: true, s4: true, s5: false, s6: false, s7: false },
-    seen: { read: true, global: true },
+    gate: { s0: true, s1: true, s4: true, s5: false, s6: false, s7: false },
     writing: true,
     design_review: {
       state: 'accepted', candidate_sha256: 'c'.repeat(64),

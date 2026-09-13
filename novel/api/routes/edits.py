@@ -20,16 +20,14 @@ from fastapi import APIRouter, Depends, Query
 
 from contracts.schema.api import (
     AnalyzeDraftEditRequest, BatchTrimResolutionRequest,
-    CharactersEditRequest,
+    CharactersEditRequest, GlobalEdit, GlobalEditPreview,
     DraftEditPreview, DraftEditPreviewRequest, DraftEditRequest,
     HookApproveRequest, NameMapApproveRequest,
     ResidualAdoptionRequest, TrimResolutionRequest,
 )
-from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema.orchestration import JobRecord
 from contracts.schema.plot_edit import PlotEdit, PlotEditPreview
 from contracts.schema.stage5 import ChapterResponse
-from novel.api.approval_stamp import stamp_approval_after_landed as _stamp
 from novel.api.deps import checked_sid, get_base
 from novel.cli import exit_codes as X
 from novel.errors import (
@@ -204,32 +202,57 @@ def edit_analyze_draft(request: AnalyzeDraftEditRequest, sid: str = Depends(chec
         uploads.discard_edit_plan(base, path)
 
 
-@router.post('/{sid}/stage2/global-review', response_model=JobRecord)
-def decide_global_review(
-    request: GlobalReviewDecisionSet,
+@router.get('/{sid}/stage2/global/edit/template', response_model=GlobalEdit)
+def global_edit_template(sid: str = Depends(checked_sid), base: str = Depends(get_base)) -> GlobalEdit:
+    from novel.orchestrator.state import readonly_ctx
+    from novel import paths, prov
+    from novel.stages.stage2 import extract
+    ctx = readonly_ctx(paths.resolve_novel_dir(base, sid), 'stage2.global', prov.code_version())
+    return extract.global_edit_template(ctx)
+
+
+@router.post(
+    '/{sid}/stage2/global/edit/preview',
+    response_model=GlobalEditPreview,
+)
+def preview_global_edit(
+    request: GlobalEdit,
+    sid: str = Depends(checked_sid),
+    base: str = Depends(get_base),
+) -> GlobalEditPreview:
+    """Stage2 全局事实编辑的独立只读预检；预览不是预授权。"""
+    from novel.orchestrator.state import readonly_ctx
+    from novel import paths, prov
+    from novel.stages.stage2 import extract
+    from novel.stages.stage2.extract import GlobalEditCandidateRejected
+    ctx = readonly_ctx(paths.resolve_novel_dir(base, sid), 'stage2.global', prov.code_version())
+    try:
+        return GlobalEditPreview.model_validate(extract.preview_edit(ctx, request))
+    except (ValueError, GlobalEditCandidateRejected) as exc:
+        raise SourceConflict(str(exc)) from exc
+
+
+@router.post(
+    '/{sid}/stage2/global/edit',
+    response_model=JobRecord,
+)
+def apply_global_edit(
+    request: GlobalEdit,
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
 ) -> JobRecord:
-    """Apply self-reported human decisions through the CLI artifact boundary."""
-    path = uploads.save_global_review_decisions(base, sid, request)
+    """Stage2 全局事实编辑走 canonical CLI；服务不直接修改知识产物。"""
+    path = uploads.save_global_edit(base, sid, request)
     try:
-        record = jobs.run(
+        return jobs.run(
             base, 'stage2.global', sid,
-            ['--review-decisions', str(path)], follow_check=False)
-        # CHECK_FAILED means the batch landed but the current blocking surface
-        # has not closed.  Unlike ordinary human approvals, that state must not
-        # open s2; disclosure rows may remain non-PASS and stay in the audit view.
-        # Even on OK, blueprint may still be running/missing; `_stamp` is
-        # intentionally best-effort so the already-landed decisions remain valid.
-        if record.exit_code == X.OK:
-            _stamp(base, sid, 's2')
-        return record
+            ['--apply-edit', str(path)], follow_check=False)
     finally:
         try:
             uploads.discard_edit_plan(base, path)
         except NovelError as exc:
             warnings.warn(
-                f'复核作业已结束，但一次性决策文件清理失败：{exc}',
+                f'全局编辑作业已结束，但一次性请求清理失败：{exc}',
                 RuntimeWarning, stacklevel=2)
 
 

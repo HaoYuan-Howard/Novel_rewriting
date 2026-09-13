@@ -36,9 +36,10 @@ session 和 owner 停止证明，再比对原包和当前包；只有登记的�
 证明保持不可变，后继 action 逐字段保留决定、理由和编辑值；新记录先耐久并验证后才
 退休旧记录，两个记录之间中断可继续补尾。真实材料、finding、义务、裁决说明或输出 schema
 变化不属于这条恢复路径；格式或内容拒绝仍保存准确反馈，不把免费重验等同于验收通过。
-Blueprint 曾未向 CLI 下发完整动作 schema；`novel/orchestrator/stage2_blueprint_wire.py`
-登记已发布完整动作的免费重验入口。仅接受原 observation 协议摘要和未下发 schema 的
-冻结请求，或已登记完整 schema 的固定字节摘要，不能借此兼容其他 schema。
+Blueprint 曾未向 CLI 下发完整动作 schema；当时的 blueprint wire 模块（已随
+Stage2 语义审阅退役删除）登记过已发布完整动作的免费重验入口。仅接受原 observation
+协议摘要和未下发 schema 的冻结请求，或已登记完整 schema 的固定字节摘要，
+不能借此兼容其他 schema。
 新的 provider 会话得到完整关联分支及稀疏补丁形状；
 旧回答仍用原 JSON 免费校验，既不重写业务值，也不把格式失败归因于版本变化。
 

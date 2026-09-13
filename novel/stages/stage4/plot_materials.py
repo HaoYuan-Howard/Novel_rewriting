@@ -5,22 +5,19 @@ import copy
 import hashlib
 from typing import Any
 from contracts.schema.plot import PlotBlueprint
-from contracts.schema.knowledge_links import KnowledgeLinks
 from contracts.schema.plot_materials import PlotChapterReviewMaterials
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.plot_binding import source_context_catalog
 
 
 def _compile_materials(ordinal: int, blueprints: dict, grounding: dict,
-                       knowledge_links: dict, main_text: list[dict],
+                       main_text: list[dict],
                        subject_refs: list[dict], *, characters: dict, materialize: bool) -> dict:
     from contracts.schema.plot import PlotSubjectRef
-    from novel.stages.stage4.actors import ActorCatalog, actual_subject_uses
+    from novel.stages.stage4.actors import ActorCatalog
     bps = {r['chapter_ordinal']: PlotBlueprint.model_validate(r) for r in blueprints['blueprints']}
     bp = bps[ordinal]
     texts = {r['chapter_ordinal']: r['text'] for r in main_text}
-    links = KnowledgeLinks.model_validate(knowledge_links)
-    decisions = {r.obligation_id: r for r in links.links}
     catalogs = {number: ActorCatalog(characters, blueprints, chapter_ordinal=number,
                 source_text='\n'.join(texts[n] for n in sorted(texts) if n <= number),
                 seed='private-review-materials') for number in bps}
@@ -63,29 +60,9 @@ def _compile_materials(ordinal: int, blueprints: dict, grounding: dict,
         add('state', state.state_id)
     for ref in bp.entry_state_refs:
         add('state', ref)
-    local_subjects = {row.raw_subject_key() for row in needed.values()}
-    events = [r for r in links.scope.obligations if r.chapter_ordinal == ordinal or (
-        r.kind in ('reader_reveal', 'character_knowledge')
-        and r.subject_ref.raw_subject_key() in local_subjects)]
     all_states = {row.state_id: row for chapter in bps.values() for row in chapter.states}
     state_chapters = {row.state_id: chapter.chapter_ordinal
                       for chapter in bps.values() for row in chapter.states}
-    available = [add(ref) for ref in [*subject_refs, *bp.relation_uses]]
-    available.extend(add(row.global_ref, at_chapter=state_chapters[row.state_id])
-        for row in [*bp.states, *(all_states[ref] for ref in bp.entry_state_refs)] if row.global_ref)
-    for event in events:
-        for ref in actual_subject_uses(event.subject_ref, available):
-            add(ref, at_chapter=use_chapters.get(ref.key(), event.chapter_ordinal))
-        resolution = decisions[event.obligation_id].resolution
-        if resolution.kind == 'unresolved':
-            raise RefusedByStructure('必要知识关联尚未闭合，不能省略后继续审阅')
-        if event.chapter_ordinal == ordinal:
-            for ref in resolution.subject_refs:
-                add(ref)
-        for presented in resolution.identity_actors:
-            actor(presented, event.chapter_ordinal)
-        if event.audience and event.audience.kind == 'character':
-            actor(event.audience.actor, event.chapter_ordinal)
     for segment in bp.narration:
         for ref in (segment.narrator, segment.focalizer):
             if ref:
@@ -200,20 +177,6 @@ def _compile_materials(ordinal: int, blueprints: dict, grounding: dict,
                 result[key] = project(item, owner)
         return result
 
-    registered = {r.event_id: r.event for r in links.scope.registered_events if not r.retired}
-    for event in events:
-        declaration = registered.get(event.knowledge_ref)
-        if declaration is None:
-            continue
-        for proof in declaration.evidence_refs:
-            chapter = bps[proof.chapter_ordinal]
-            if any(r.evidence_id == proof.evidence_ref for r in chapter.evidence_anchors):
-                blueprint_proof(chapter, [proof.evidence_ref])
-            else:
-                from novel.stages.stage2.paragraphs import span_of
-                _, start_para, end_para = proof.evidence_ref.split(':')
-                start, end = span_of(texts[proof.chapter_ordinal], int(start_para), int(end_para))
-                anchor(proof.chapter_ordinal, start, end, proof.evidence_ref)
     for binding in bindings.values():
         owner = next((chapter for chapter in bps.values()
                       if any(a.presentation_id == binding['presentation_id'] for a in chapter.actor_bindings)), None)
@@ -249,27 +212,24 @@ def _compile_materials(ordinal: int, blueprints: dict, grounding: dict,
     return {'contract': 'plot-chapter-evidence-v2', 'blueprint': bp.model_dump(mode='json'),
         'support_subjects': support, 'actor_bindings': [bindings[k] for k in sorted(bindings)],
         'global_subjects': globals_, 'source_context_catalog': source_context_catalog(bp),
-        'knowledge_events': [{'event': r.model_dump(mode='json', exclude={
-                'candidate_subject_refs', 'entry_subject_refs', 'candidate_actors', 'subject_sha256'}),
-            'resolution': decisions[r.obligation_id].resolution.model_dump(mode='json')} for r in events],
         'evidence_anchors': [evidence[k] for k in sorted(evidence)], 'source_materials': sources}
 
 
 def chapter_materials(ordinal: int, blueprints: dict, grounding: dict,
-                      knowledge_links: dict, main_text: list[dict],
+                      main_text: list[dict],
                       subject_refs: list[dict], *, characters: dict) -> PlotChapterReviewMaterials:
     return PlotChapterReviewMaterials.model_validate(_compile_materials(
-        ordinal, blueprints, grounding, knowledge_links, main_text, subject_refs,
+        ordinal, blueprints, grounding, main_text, subject_refs,
         characters=characters, materialize=True))
 
 
 def chapter_materials_identity(ordinal: int, blueprints: dict, grounding: dict,
-                               knowledge_links: dict, main_text: list[dict],
+                               main_text: list[dict],
                                subject_refs: list[dict], *, characters: dict) -> str:
     """轻量依赖摘要复用同一闭包，仅散列实际下发的证据字节。"""
     from novel.consumption import consumed_digest
     return consumed_digest(_compile_materials(
-        ordinal, blueprints, grounding, knowledge_links, main_text, subject_refs,
+        ordinal, blueprints, grounding, main_text, subject_refs,
         characters=characters, materialize=False))
 
 

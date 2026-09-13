@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage2 共享人物、必要知识与完整剧情蓝图的判据注册表。
+"""Stage2 人物与完整剧情蓝图的判据注册表。
 
 生成、免费复检和修订共用这些规则；章级剧情检查由 plot_checks 实现。
-机械检查只证明形状、引用与证据闭合，归因、因果和揭示语义由独立范围审阅裁决。
+Stage2 语义审阅已退役：机械检查只证明形状、引用与证据闭合；归因、因果和
+揭示语义保持 ``unver`` 披露（“Stage2 语义未审”），不产生审批待办。
 修复路由由注册表绑定当前节点及参数；实际条目和严重度以注册结果为准。
 """
 from __future__ import annotations
@@ -141,9 +142,9 @@ _unver('role_fate_unverifiable', '改写式结局泄漏有确定性防线', 'R-2
             '**在最需要说的两本上反而不说**。'
             '⇒ 本条与 `role_leaks_fate` 报绿灯还是红灯无关，**每本每次都产**：'
             '词表只挡转抄式（实测头牌命中 0/17 而人读真违规 6/17），'
-            '改写式泄漏仍须人读；人物 producer 返工也不能代替 Global Commander 的语义裁决，'
-            '人工核对后的 typed `role` 可用 `stage2.characters --apply-edit` 0 LLM 写回。'
-            '⚠ 它是本层徽章到不了 `pass` 的主因，**而那是对的**')
+            '改写式泄漏仍须人读；人工核对后的 typed `role` 可用 '
+            '`stage2.characters --apply-edit` 0 LLM 写回。'
+            '⚠ 它是本层徽章到不了 `pass` 的主因，**而那是对的**（Stage2 语义未审披露）')
 
 
 # ═══ 四、世界规则 · 秘密 · 关系（5 HARD · 3 INFO · 1 度量 · 1 查不了）═════
@@ -156,7 +157,7 @@ _hard('canon_chapter_refs_dangling', 'Global 全部成立、揭示、铺垫及�
 
 
 
-_unver('secrets_absent', '长线秘密覆盖完整性已经语义核验', 'R-2.9b', note='数量包括合法空集都不证明全书覆盖；由 Global Commander 完整性义务裁决。')
+_unver('secrets_absent', '长线秘密覆盖完整性的语义核验', 'R-2.9b', note='Stage2 语义未审：数量包括合法空集都不证明全书覆盖；本条不产生审批待办。')
 
 _hard('relation_dangling', '长期关系两端属于独立人物登记', 'R-2.8', fix=FIX_RESAMPLE)
 
@@ -184,11 +185,11 @@ _info('pronoun_surface_unattested', '叙述者自称字面有本章原文依据'
 _metric('plot_shape', '完整节点、状态、约束与共享证据数量', 'R-3.13',
         note='只报告实际规模，不设节点配额，不把辅助结构变回事实数据库。')
 _metric('context_scope', '实际逐章抽取契约与正文边界', 'R-3.16b')
-_unver('plot_semantics', '完整剧情、归因、因果与揭示经语义审阅', 'R-3.13',
-       note='普通 schema/坐标检查不能证明语义完整；由章审和跨章复核明确裁决。')
+_unver('plot_semantics', '完整剧情、归因、因果与揭示的语义核验', 'R-3.13',
+       note='Stage2 语义未审：普通 schema/坐标检查不能证明语义完整；本条不产生审批待办。')
 
 # Global v7 的机械闭合；语义提升门槛与同章情节单元交给同一全书审阅。
 _hard('global_core_contract', '四类知识形状、证据基数与精确事实引用闭合', 'R-2.20',
       fix=FIX_RENORMALIZE_G, note='fact XOR fact_ref；关系/规则精确版本为单一权威，引用秘密复用其证据与揭示章。')
 _hard('global_temporal_contract', '同一规则的成立版本有序且含末章区间不重叠', 'R-2.19',
-      fix=FIX_RENORMALIZE_G, note='世界内成立窗口与读者首次揭示独立；机械检查不推测披露章，不拒绝同章独立情节单元的铺垫与揭示。')
+      fix=FIX_RENORMALIZE_G, note='世界内成立窗口与读者首次揭示独立；机械检查不推测披露章。')

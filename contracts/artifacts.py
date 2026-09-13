@@ -28,8 +28,6 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage2.characters': 'stage2/characters.json',
     'stage2.characters_edit': 'stage2/characters_edit.json',
     'stage2.global_grounding': 'stage2/global_grounding.json',
-    'stage2.global_review': 'stage2/global_review.json',
-    'stage2.global_review_decisions': 'stage2/global_review_decisions.json',
     'stage2.global_edit': 'stage2/global_edit.json',
     # reviewed edit 已经落为 canonical input、但 formal Global/review 尚未提交时的
     # 瞬态恢复事实。它不是节点完成产物，也不是被 HARD 拦下的候选；因此不进入
@@ -44,7 +42,6 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage2.global_edit_commit': 'stage2/global_edit_commit.json',
     'stage2.blueprint_character_projection': 'stage2/blueprint_character_projection.json',
     'stage2.chapter_blueprints': 'stage2/chapter_blueprints.json',
-    'stage2.knowledge_links': 'stage2/knowledge_links.json',
     'stage2.blueprint_edit': 'stage2/blueprint_edit.json',
     'stage4.blind_candidate': 'stage4/blind_candidate.json',
     'stage4.blind_chapter_edit': 'stage4/blind_chapter_edit.json',
@@ -81,6 +78,9 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
 # 只供识别并拒绝退役产物；不进入当前 artifact registry，不提供解码或迁移。
 RETIRED_ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage2.blueprint_relation_edit': 'stage2/blueprint_relation_edit.json',
+    'stage2.knowledge_links': 'stage2/knowledge_links.json',
+    'stage2.global_review': 'stage2/global_review.json',
+    'stage2.global_review_decisions': 'stage2/global_review_decisions.json',
     'stage3.style_grounding': 'stage3/style_grounding.json',
 }
 
@@ -131,8 +131,9 @@ STAGE2_ANALYZE_GLOBAL_DRAFT_REPAIR = artifact_rel('stage2.analyze_global_draft_r
 STAGE2_CHARACTERS = artifact_rel('stage2.characters')
 STAGE2_CHARACTERS_EDIT = artifact_rel('stage2.characters_edit')
 STAGE2_GLOBAL_GROUNDING = artifact_rel('stage2.global_grounding')
-STAGE2_GLOBAL_REVIEW = artifact_rel('stage2.global_review')
-STAGE2_GLOBAL_REVIEW_DECISIONS = artifact_rel('stage2.global_review_decisions')
+# 仅供旧路径的明确拒绝与历史识别，不在现役 schema 注册表中。
+STAGE2_GLOBAL_REVIEW = RETIRED_ARTIFACT_PATHS['stage2.global_review']
+STAGE2_GLOBAL_REVIEW_DECISIONS = RETIRED_ARTIFACT_PATHS['stage2.global_review_decisions']
 STAGE2_GLOBAL_EDIT = artifact_rel('stage2.global_edit')
 STAGE2_GLOBAL_EDIT_FAILURE = artifact_rel('stage2.global_edit_failure')
 STAGE2_GLOBAL_EDIT_INPUT_COMMIT = artifact_rel(
@@ -141,7 +142,7 @@ STAGE2_GLOBAL_EDIT_COMMIT = artifact_rel('stage2.global_edit_commit')
 STAGE2_BLUEPRINT_CHARACTER_PROJECTION = artifact_rel(
     'stage2.blueprint_character_projection')
 STAGE2_CHAPTER_BLUEPRINTS = artifact_rel('stage2.chapter_blueprints')
-STAGE2_KNOWLEDGE_LINKS = artifact_rel('stage2.knowledge_links')
+STAGE2_KNOWLEDGE_LINKS = RETIRED_ARTIFACT_PATHS['stage2.knowledge_links']
 STAGE2_BLUEPRINT_EDIT = artifact_rel('stage2.blueprint_edit')
 # 仅供旧路径的明确拒绝与历史识别，不在现役 schema 注册表中。
 STAGE2_BLUEPRINT_RELATION_EDIT = RETIRED_ARTIFACT_PATHS['stage2.blueprint_relation_edit']

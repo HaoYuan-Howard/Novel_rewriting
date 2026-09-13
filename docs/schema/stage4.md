@@ -49,7 +49,7 @@ context 引用与 turn；完整节点正文仍在 Blueprint。代码注入章号
 
 每节点有一份 placement，deliveries[] 每项给 scene_ref、presentation_instruction；
 单次整体呈现可显式 null，多次呈现必须逐场说明承担的任务。同一节点同一场只许一次。
-delivery 用节点与场景组合定位，不创建可供 State/KnowledgeLinks 引用的子主体或子 claim。
+delivery 用节点与场景组合定位，不创建可供 State 引用的子主体或子 claim。
 单场端点可派生，多场的知识触发、状态成立/结束、跨节点约束、开篇/结尾/turn 必须明确落场。
 父节点全部主要呈现完成前，不得用 context_beat_refs 复用整段正文。
 
@@ -191,13 +191,17 @@ compiled Plan 精确绑定当前 A/B 版本化文件完整 SHA 和实际消费�
 人工替换记 human。业务消费投影变化与仅文件/证明变化分开，二者都不能绕开精确 A/B 链；
 未知来源不作 fresh。历史采用费用保留原 ledger 及来源关联，不重复计入新调用。
 
-## 五、writer_context.json v9
+## 五、writer_context.json v10
 
-PlannerTruthView 用于去源序设计；WriterVisibleView 由当前章计划及 KnowledgeLinks 编译。
+PlannerTruthView 用于去源序设计；WriterVisibleView 由当前章计划确定性编译。共享主体的
+可见性只按 Global 的章级揭示字段（`revealed_from` 等）与蓝图自身端点判断；原 KnowledgeLinks
+知识事件与逐场 `knowledge_event_refs` 已随 Stage2 语义审阅退役（v10 删除 `WriterKnowledgeEvent`），
+同章安排由 Stage4 现有计划表达，不再宣称机械证明披露与知情正确。
 章级 beats 目录保存一次父节点正文，各 scenes[].deliveries 只引用节点和呈现指令/舞台，
-并带必要 state_events、knowledge_event_refs、constraint_refs 与 context_beat_refs。
+并带必要 state_events（`state_ref` + `established/ended` 端点）、constraint_refs 与
+context_beat_refs。
 
-知识事件及已登记状态按显式端点编译逐场许可。尚未完成的分场节点不能当完整背景下发。
+已登记状态按显式端点编译逐场许可。尚未完成的分场节点不能当完整背景下发。
 State modality 只说明命题性质，人物信念/声称不能升级为世界真相。Shared Global 正文只在有
 当前事实许可或明确 belief/claim/unresolved 状态许可时进入材料。
 
@@ -218,7 +222,7 @@ ActorBinding，不因称呼不同创造两个身份。BlindReferenceMaps 的 par
 
 WriterContext 只下发独立的 opaque `actor_ref` 与公开称谓，所有人物位置使用同一目录；
 不下发 char_id、presentation_ref、反向映射或共同实体分组。不同呈现默认使用不同 token，
-关系命题及知识事件的公开标识也绑定完整呈现，不能通过共同 rel_ID 或义务 ID 泄底。显式表面身份只可引用有据
+关系命题的公开标识也绑定完整呈现，不能通过共同 rel_ID 泄底。显式表面身份只可引用有据
 公开 State 的角色描述；role 只在 role_allowed_slots 许可场景表达，不继承真实身份的 role。
 角色描述还受该 State 的成立、解除和替代端点约束：解除场包含在有效窗口内，之后不再作为
 当前角色描述。State 本身仍按披露许可保留为历史命题，不能因 role 失效删除历史事实。
@@ -230,10 +234,9 @@ WriterContext 只下发独立的 opaque `actor_ref` 与公开称谓，所有人�
 称谓沿当前人物使用范围；本章首次出现的称谓从支持它的实际 Beat 呈现场开始，不能借同一
 actor_ref 的早场使用提前开放。角色描述仍服从各自公开 State，不同角色描述不能择首项。
 
-KnowledgeLinks 的 identity_actors 编译为现有表面身份 token 列表；只有对应事件开放后才允许
-陈述同人关系。标量 identity_revealed_from 不替代同章场景端点；称谓字面可出现不代表身份
-映射已知。跨章背景和上章收束沿原公开 token 携带必要名册，不附内部映射。
-继承 State、背景 Beat 和历史知识受众按引用所属章解析缺省呈现，再冻结其公开身份；
+称谓字面可出现不代表身份映射已知；同人关系命题按绑定候选与章级揭示字段判定，无独立
+许可端点。跨章背景和上章收束沿原公开 token 携带必要名册，不附内部映射。
+继承 State、背景 Beat 和历史受众按引用所属章解析缺省呈现，再冻结其公开身份；
 后章增加另一种表面身份不会令原来唯一的旧引用歧义，也不会把旧身份吸收到新呈现。
 当前章的缺省引用则使用截至该章原文已出现的登记称谓候选：即便只有一个显式绑定，
 若候选中仍有未包含的称谓，且称谓间身份映射本章或未来才揭示，缺省引用仍须拒绝；
@@ -245,18 +248,17 @@ Blueprint、盲规划、绑定与 Writer 共用该判据；真正唯一的此前
 携入材料保留原引用并带出实际绑定及证据，后续消费者仍按原章冻结解析。
 
 关系/规则的 effective_from、effective_until（包含该章）只描述世界成立窗口；revealed_from
-及 KnowledgeLinks 端点控制读者许可，不要求两种时间先后。已经结束的事实可以作为历史披露，
+控制读者揭示参考，不要求两种时间先后。已经结束的事实可以作为历史披露，
 提前透露未来事实也合法。规则引用精确到 rule_id/version_id；secret.fact_ref 展开关系时必须有
-唯一明确的实际关系呈现，缺失或多义不猜端点。完整自由文本仍由语义审阅核查。
+唯一明确的实际关系呈现，缺失或多义不猜端点。完整自由文本不做机械证明，属语义未审披露。
 
-关系披露同时绑定已接受 KnowledgeLinks 决定支持的公开端点：优先取明确支持 State 的
+关系披露按蓝图关系 use 的两端呈现绑定公开端点：优先取明确支持 State 的
 global_ref；仅有 Beat 支持时，必须在其来源章实际关系 use 中唯一定位。默认内部实体端点
-不能充当披露证明。当前 use 与已公开端点不同，只能通过现有 identity_actors 端点连接，
-两端映射许可与关系披露许可取交集；secret.fact_ref、知识事件与目标使用同一守卫。
-没有映射则不下发该呈现的关系真相；支持缺失或多义交 Blueprint/KnowledgeLinks 免费订正。
+不能充当披露证明。当前 use 与已公开端点不同时，两端须各自满足唯一绑定判据才可同一下发。
+没有映射则不下发该呈现的关系真相；支持缺失或多义交 Blueprint/Plan owner 免费订正。
 
 `Blueprint.relation_uses` 只声明本章实际关系使用的两端呈现，不重复关系正文或强造 State。
-知识义务中的默认实体端点不是呈现许可：仅记录事实成立、没有本章实际 use 的事件可保留内部
+仅记录事实成立、没有本章实际 use 的事件可保留内部
 时间锚；同一关系存在多个明确 use 时全部分别编译，不能择首项或按实体 ID 合并。
 
 Stage5 最终请求只消费此公开任务书。全量秘密、人物检测基线和原文保留为私有验证输入，

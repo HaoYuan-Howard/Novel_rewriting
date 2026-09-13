@@ -13,7 +13,7 @@ from contracts.schema.stage1 import HookCopy
 from contracts.schema.stage2 import GlobalEdit
 from novel.core.evidence import without_global_evidence
 from novel.node_agents import Stage2GlobalAgent
-from novel.stages.stage2 import extract, global_review, grounding
+from novel.stages.stage2 import extract, grounding
 from novel.stages.stage2.source_blurb import (
     hook_evidence_problems, manual_hook_evidence, normalize_hook_evidence,
 )
@@ -53,15 +53,6 @@ def test_hook_only_fact_reaches_real_producer_review_api_and_hook_material(tmp_p
     assert fact.kind == 'hook_supported'
     assert fact.hook_evidence.source.text == HOOK
     assert fact.hook_evidence.source.start == 0 and fact.hook_evidence.source.end == len(HOOK)
-    pack = global_review.review_workpack(_free_ctx(ctx), scope='all')
-    [row] = [row for row in pack['items'] if row['kind'] == 'source_blurb_fact']
-    assert row['current_state'] == 'pending'
-    assert row['evidence_mode'] == 'formal_evidence'
-    assert row['reading_scope'] == 'whole_book' and pack['main_text_chapters']
-    assert row['formal_evidence'][0]['evidence_ref']['artifact'] == STAGE1_HOOK_COPY
-    assert row['formal_evidence'][0]['chapter_ordinal'] is None
-    assert row['exact_literal_hits'] == []
-    assert '正文未重复' in pack['legend']['source_blurb'] or '正文不再重复' in pack['legend']['source_blurb']
     projected = without_global_evidence(grounding.read_own(store)[0].model_dump(by_alias=True))
     assert projected['source_blurb']['facts'][0] == {
         'kind': 'hook_supported', 'claim_id': 'hook_001', 'claim': '新婚夜收到远方来信'}

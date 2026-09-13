@@ -28,7 +28,7 @@ from novel.stages.stage4.plot_design import (
 )
 from novel.stages.stage4.plot_placements import compile_placements, required_endpoints
 from novel.stages.stage4.plot_measure import constraint_and_stage_readings
-from tests.plot_fixtures import blueprint as fixture_blueprint, links
+from tests.plot_fixtures import blueprint as fixture_blueprint
 from tests.test_plot_blueprint import blueprint as two_beat_blueprint
 from tests.test_plot_design import design_response, inputs, planner_characters, planner_main
 
@@ -270,7 +270,7 @@ def test_story_time_is_not_certified_from_disclosure_or_earlier_transition(scene
     bp = _blueprint([('story_before', A, B)])
     arrangement = _arrangement(*scenes, earlier=earlier)
     compiled = compile_placements(bp, arrangement)
-    reading = constraint_and_stage_readings(bp.model_dump(mode='json'), _plan(arrangement), knowledge_links=links())
+    reading = constraint_and_stage_readings(bp.model_dump(mode='json'), _plan(arrangement))
     assert reading['causal'][0]['disclosure_order'] == order
     assert not hasattr(compiled, 'fully_verified')
     assert 'story_time_verified' not in reading and 'semantic_pass' not in reading
@@ -280,7 +280,7 @@ def test_story_time_is_not_certified_from_disclosure_or_earlier_transition(scene
 def test_unclosed_constraint_keeps_registered_identity_and_other_endpoints():
     bp = _blueprint([('story_before', A, B), ('same_scene', A, C)])
     before = bp.model_dump_json()
-    endpoints = required_endpoints(bp, (), ())
+    endpoints = required_endpoints(bp)
     assert endpoints['constraint', 'c01_02', 'before'] == A
     assert endpoints['constraint', 'c01_02', 'after'] == C
     with pytest.raises(ValueError, match='必须同场约束没有闭合'):
@@ -294,7 +294,7 @@ def test_unclosed_constraint_keeps_registered_identity_and_other_endpoints():
 def test_observer_and_knowledge_truth_are_not_certified_by_position(reverse):
     bp = _blueprint([('observes', A, B)])
     arrangement = _arrangement(*([(B,), (A,), (C,)] if reverse else [(A,), (B,), (C,)]))
-    reading = constraint_and_stage_readings(bp.model_dump(mode='json'), _plan(arrangement), knowledge_links=links())
+    reading = constraint_and_stage_readings(bp.model_dump(mode='json'), _plan(arrangement))
     assert reading['causal'][0]['kind'] == 'observes'
     assert reading['causal'][0]['disclosure_order'] == ('reverse' if reverse else 'forward')
     assert bp.constraints[0].observer.char_id == 'char_002'
@@ -312,7 +312,7 @@ def test_current_readings_delegate_to_the_single_placement_compiler(monkeypatch)
     monkeypatch.setattr(plot_placements, 'compile_placements', capture)
     bp = _blueprint([('response_to', A, B), ('same_scene', A, C)])
     result = constraint_and_stage_readings(bp.model_dump(mode='json'),
-        _plan(_arrangement((A, C), (B,))), knowledge_links=links())
+        _plan(_arrangement((A, C), (B,))))
     assert calls == [['c01_01', 'c01_02']]
     assert result['causal'][0]['constraint_ref'] == 'c01_01'
 

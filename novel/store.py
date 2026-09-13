@@ -46,7 +46,7 @@ from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_ANALYZE_RECEIPT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_CHARACTERS,
-    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
+    STAGE2_GLOBAL_GROUNDING,
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
     STAGE7_NAME_MAP,
@@ -100,7 +100,6 @@ _REVALIDATION_DERIVED_PROVENANCE_FIELDS = {
 #   写盘口再拒一次就把它变成写不进去。判别力落在判据那一侧，不在这道后置条件。
 SELF_FRESH_DETERMINISTIC = frozenset({
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
-    STAGE2_GLOBAL_REVIEW,
 })
 
 
@@ -1790,8 +1789,6 @@ class ArtifactStore:
             return self._stage1_freshness(rel)
         if rel == STAGE2_BLUEPRINT_CHARACTER_PROJECTION:
             return self._blueprint_character_projection_freshness()
-        if rel == STAGE2_GLOBAL_REVIEW:
-            return self._global_review_freshness()
         # ⚠ 成书的 rel 带书名 ⇒ **不能与 `STAGE7_BOOK` 直接比**（那是模板）。
         #   拿模板比出来的恒是 False，而后果是 `_deterministic_freshness` 返回 None
         #   ⇒ 成书的 freshness 变成「没有来源账」，那道对账**静默失效**。
@@ -2045,73 +2042,6 @@ class ArtifactStore:
             now_file=actual_clean_sha1,
             recorded_consumed=prov.projection_fingerprint(actual),
             now_consumed=prov.projection_fingerprint(expected),
-        )
-        return FreshnessReport(state, reason, (edge,))
-
-    def _global_review_freshness(self) -> FreshnessReport:
-        """Exact Stage2 review surface freshness, independent of approval state."""
-        source = self._freshness_payload(STAGE2_GLOBAL_GROUNDING)
-        if source is None:
-            edge = prov.EdgeVerdict(
-                key=STAGE2_GLOBAL_GROUNDING, state='unknown', reason='ghost',
-                recorded_file=None, now_file=None,
-                recorded_consumed=None, now_consumed=None,
-            )
-            return FreshnessReport('unknown', 'ghost', (edge,))
-        review_payload = self._freshness_payload(STAGE2_GLOBAL_REVIEW)
-        if review_payload is None:
-            return FreshnessReport('unknown', 'no_provenance')
-
-        from contracts.schema.evaluation import GlobalReview
-        from contracts.schema.characters import CharacterRegistry
-        from novel.quality.global_review import build_review, review_status
-        try:
-            review = GlobalReview.model_validate(review_payload)
-        except ValidationError as exc:
-            raise ArtifactUnreadable(
-                f'{STAGE2_GLOBAL_REVIEW} 不合 GlobalReview 契约，判不了新鲜度：{exc}') from exc
-
-        from novel.stages.stage2 import grounding as grounding_io
-        try:
-            source = grounding_io.read_own(self)[1]
-        except (ProvenanceRefused, UpstreamMissing, UpstreamStale):
-            # 人物已订正而知识尚待 producer 重绑时，不存在可审阅的当前组合视图。
-            # 只读 state/API 保留 unknown，不能崩溃或临时拼接后追认旧决定。
-            present = self.exists(STAGE2_CHARACTERS)
-            reason = 'consumed_unresolved' if present else 'ghost'
-            edge = prov.EdgeVerdict(
-                key=STAGE2_CHARACTERS, state='unknown', reason=reason,
-                recorded_file=None, now_file=self._file_fp_of_key(STAGE2_CHARACTERS),
-                recorded_consumed=None, now_consumed=None)
-            return FreshnessReport('unknown', reason, (edge,))
-        character_source = self.read_own(CharacterRegistry, STAGE2_CHARACTERS)[1]
-        expected_subject, exact_current, _approved = review_status(source, review, characters=character_source)
-        # Approval completeness is a gate/UI fact, not freshness.  Pending/FAIL/
-        # UNVER decisions remain fresh as long as they describe the exact surface.
-        expected = build_review(source, characters=character_source)
-
-        def identity_rows(value: Any) -> list[tuple[str, str, str, str]]:
-            return [
-                (item.item_id, item.kind, item.subject_path, item.subject_sha256)
-                for item in value.items
-            ]
-
-        recorded_surface = prov.projection_fingerprint(identity_rows(review))
-        current_surface = prov.projection_fingerprint(identity_rows(expected))
-        reason = (
-            'match' if exact_current else
-            'file_changed' if review.source_sha256 != expected_subject else
-            'consumed_changed'
-        )
-        state = 'fresh' if exact_current else 'stale'
-        edge = prov.EdgeVerdict(
-            key=STAGE2_GLOBAL_GROUNDING,
-            state=state,
-            reason=reason,
-            recorded_file=review.source_sha256,
-            now_file=expected_subject,
-            recorded_consumed=recorded_surface,
-            now_consumed=current_surface,
         )
         return FreshnessReport(state, reason, (edge,))
 

@@ -4,7 +4,7 @@ import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { useOrdinal, useSid } from '@/hooks/useRouteParams'
 
-/** 原文、节点和提交身份来自同一范围快照；reading 只作未审阅时的只读显示。 */
+/** 原文、节点与进度来自同一范围快照；reading 只作阅读包缺席时的只读显示。 */
 export function useReadScreen() {
   const sid = useSid()
   const ordinal = useOrdinal()
@@ -19,8 +19,8 @@ export function useReadScreen() {
     enabled: !!sid, retry: false,
   })
   const workpack = useQuery({
-    queryKey: qk.blueprintReviewWorkpack(sid, scope),
-    queryFn: () => api.getBlueprintReviewWorkpack(sid, scope),
+    queryKey: qk.blueprintReadingWorkpack(sid, scope),
+    queryFn: () => api.getBlueprintReadingWorkpack(sid, scope),
     enabled: !!sid && !!query.data?.blueprint, retry: false,
   })
   const pack = workpack.isSuccess ? workpack.data : null

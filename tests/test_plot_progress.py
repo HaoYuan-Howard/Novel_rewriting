@@ -1,4 +1,4 @@
-"""实际 producer 中断后，运行页仍能免费读到检查点，且不物化审阅工作包。"""
+"""实际 producer 中断后，运行页仍能免费读到检查点，且不产生审阅工作包或审批待办。"""
 from __future__ import annotations
 
 import json
@@ -12,8 +12,7 @@ from novel.llm import stage2_runs
 from novel.stages.stage2 import extract
 from novel.stages.stage2.plot_inputs import read_input_digests
 from novel.store import ArtifactStore
-from novel.views.plot_review import PlotReviewSnapshot
-from tests.test_plot_producer import prepare_book, responses, plot_contract
+from tests.test_plot_producer import prepare_book, responses, plot_contract  # noqa: F401
 from tests.test_stage2_generation import _ctx, _client, _ok
 
 
@@ -39,8 +38,7 @@ def test_progress_survives_before_formal_commit_and_rejects_damaged_checkpoint(t
     assert [(row['chapter_index'], row['chapter_total']) for row in started] == [
         (1, 3), (2, 3), (3, 3)]
     assert not ArtifactStore(ctx).exists(extract.BLUEPRINT_REL)
-    monkeypatch.setattr(PlotReviewSnapshot, 'workpack',
-                        lambda *_a, **_kw: pytest.fail('进度不得构建 Commander 工作包'))
+    # 进度读面只回答检查点进度；不构建任何 Commander 工作包，也不产生审批待办。
     # 两个应用实例模拟刷新/服务重启；都从持久记录重建相同的进度。
     snapshots = []
     for _ in range(2):

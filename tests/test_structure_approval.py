@@ -13,7 +13,7 @@ from contracts.artifacts import (
     STAGE2_CHAPTER_BLUEPRINTS, STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS,
 )
 from contracts.invariants import (
-    APPROVAL_GATES, APPROVAL_SEEN, STRUCTURE_REVIEW_CONTRACT,
+    APPROVAL_GATES, STRUCTURE_REVIEW_CONTRACT,
 )
 from contracts.schema.api import (
     ApprovalDoc, StructureApprovalRequest, StructureApprovalView,
@@ -176,9 +176,7 @@ def test_old_v5_record_cannot_use_current_approval_decoder():
         mode='json', exclude={
             'writing_history', 'writing_decision',
             'design_history', 'design_decision',
-            'closure_history', 'closure_decision', 'seen_subjects',
-            'stage2_review_history', 'stage2_reviews',
-            'stage2_rework_completed', 'stage2_patch_receipts', 'stage2_blueprint_scope',
+            'closure_history', 'closure_decision',
         })
     old_payload['v'] = 5
 
@@ -265,10 +263,10 @@ def test_all_accept_opens_s4_persists_current_history_and_is_idempotent(isolated
     base, _book, state = isolated
     request = _request('accept', 'accept')
     first = approvals.approve_structure(base, SID, request)
-    assert first.v == 8 and first.gate['s4']
+    assert first.v == 9 and first.gate['s4']
     assert first.structure.state == 'accepted'
     assert first.structure.current_decision is not None
-    assert state['record'].v == 8
+    assert state['record'].v == 9
     assert len(state['record'].structure_history) == 1
     assert state['record'].gate_proofs['s4'] == state['record'].structure_decision.proof
     assert state['record'].structure_decision.chapter_subject_sha256 == \
@@ -390,16 +388,12 @@ def test_fresh_infeasible_binding_requires_typed_resolution_and_hides_reused_b(
         approvals, 'current_infeasible_binding',
         lambda _store: SimpleNamespace(status='infeasible'),
     )
-    monkeypatch.setattr(approvals, '_spawns', lambda _base, _sid: {
-        's2': [approvals.ApprovalAction(
-            kind='stage4.plan', label='Stage4B 证据绑定与计划编译')],
-    })
+    monkeypatch.setattr(approvals, '_spawns', lambda _base, _sid: {})
 
     doc = approvals._view(base, approvals._fresh_record(SID))
 
     assert doc.structure.state == 'unavailable'
     assert doc.structure.current_subject_sha256 is None
-    assert doc.spawns['s2'] == []
     assert doc.spawns['s4'] == [], 'B 负结论不能替人伪造 A repair/replan 决定'
 
 
@@ -549,7 +543,6 @@ def test_structure_route_accepts_the_typed_body(monkeypatch, tmp_path):
         prepare=missing_prepare_state(),
         sid=SID,
         gate={key: False for key in APPROVAL_GATES},
-        seen={key: False for key in APPROVAL_SEEN},
         structure=StructureApprovalView(
             state='missing', current_subject_sha256=SUBJECT_A,
             review_token=f's4sr1_{SUBJECT_A}'),
@@ -568,7 +561,7 @@ def test_structure_route_accepts_the_typed_body(monkeypatch, tmp_path):
             json=_request('accept', 'accept').model_dump(mode='json'),
         )
     assert got.status_code == 200, got.text
-    assert got.json()['v'] == 8
+    assert got.json()['v'] == 9
     assert captured['sid'] == SID
     assert isinstance(captured['request'], StructureApprovalRequest)
 
@@ -578,7 +571,6 @@ def _empty_approval_response() -> ApprovalDoc:
         prepare=missing_prepare_state(),
         sid=SID,
         gate={key: False for key in APPROVAL_GATES},
-        seen={key: False for key in APPROVAL_SEEN},
         structure=StructureApprovalView(
             state='missing', current_subject_sha256=SUBJECT_A,
             review_token=f's4sr1_{SUBJECT_A}'),

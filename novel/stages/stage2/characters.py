@@ -145,7 +145,7 @@ def build_user(title: str, table: GlobalEvidenceCandidateTable) -> str:
     return f'书名：{title}\n\n{table.render()}'
 
 
-def prepare(ctx: RunContext, *, review_token: str | None = None) -> PreparedCharacters:
+def prepare(ctx: RunContext) -> PreparedCharacters:
     if ctx.node != NODE:
         raise ValueError('人物 producer 只接受 stage2.characters')
     store = ArtifactStore(ctx)
@@ -159,11 +159,6 @@ def prepare(ctx: RunContext, *, review_token: str | None = None) -> PreparedChar
     user = build_user(ctx.title, table)
     identity_map: dict[str, str] = {}
     reserved_ids: tuple[str, ...] = ()
-    request = None
-    if review_token is not None:
-        from novel.orchestrator.approvals import stage2_rework_request
-        request = stage2_rework_request(
-            ctx.novel_dir.parent, ctx.sid, NODE, review_token)
     baseline = None
     with ctx.validation_reads():
         if ctx.executor_profile is not None and (run_spec().run_path(ctx) / agent_runs.RUN_FILE).exists():
@@ -174,8 +169,6 @@ def prepare(ctx: RunContext, *, review_token: str | None = None) -> PreparedChar
         elif store.exists(INVALID) or store.exists(REL):
             baseline = store.read_own(CharacterRegistry, INVALID if store.exists(INVALID) else REL,
                                       require_current=True)[0]
-    if review_token is not None and baseline is None:
-        raise ProvenanceRefused('人物返工缺冻结的原始登记')
     if baseline is not None:
         baseline_characters = baseline.model_dump(mode='json')['characters']
         identity_map = {f'c{index}': cid for index, cid in enumerate(sorted(baseline_characters), 1)}
@@ -183,8 +176,9 @@ def prepare(ctx: RunContext, *, review_token: str | None = None) -> PreparedChar
         reserved_ids = tuple(sorted(set(baseline_characters) | set(baseline.provenance.retired_character_ids) |
                                     set(receipt.deleted_character_ids if receipt else [])))
         user += '\n\n' + json.dumps({
-            'kind': 'character_revision_baseline', 'review_token': review_token,
-            'reason': request.reason if request is not None else '独立修订保留原有人物身份',
+            'kind': 'character_revision_baseline',
+            # 审阅线退役后已无发起请求可引；基线附带的理由固定为独立修订语义。
+            'reason': '独立修订保留原有人物身份',
             'characters': [dict(baseline_characters[cid], character_ref=ref)
                            for ref, cid in identity_map.items()],
             'evidence_anchors': baseline.model_dump(mode='json')['evidence_anchors'],
@@ -194,7 +188,6 @@ def prepare(ctx: RunContext, *, review_token: str | None = None) -> PreparedChar
         identity_map=identity_map, reserved_ids=reserved_ids,
         input_sha256=agent_runs.canonical_sha256({
             'node': NODE, 'main_text_sha256': before, 'table_sha256': table.sha256(),
-            'review_token': review_token,
             'identity_map': identity_map,
             'reserved_ids': reserved_ids,
         }))
@@ -366,9 +359,8 @@ def _commit(ctx: RunContext, prepared: PreparedCharacters,
         return landed
 
 
-def run(ctx: RunContext, client: SessionAgentClient, *,
-        review_token: str | None = None) -> CharacterRegistry:
-    prepared = prepare(ctx, review_token=review_token)
+def run(ctx: RunContext, client: SessionAgentClient) -> CharacterRegistry:
+    prepared = prepare(ctx)
     spec = run_spec()
     with ownership(ctx, allow_current=True):
         agent_runs.ensure_run(ctx, spec, **prepared.request())
@@ -464,28 +456,6 @@ def edit_template(ctx: RunContext) -> dict[str, Any]:
     rows = [{'kind': 'replace', 'char_id': cid, 'character': row}
             for cid, row in artifact.model_dump(mode='json')['characters'].items()]
     return {'source_sha256': sha, 'operations': rows}
-
-
-def _refresh_review(store: ArtifactStore, registry: CharacterRegistry) -> None:
-    """人物编辑只重建审阅义务；知识正文和已有未受影响裁决仍各自归原 owner。"""
-    from contracts.artifacts import STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW
-    from contracts.schema.evaluation import GlobalReview
-    from contracts.schema.knowledge import KnowledgeGrounding
-    from novel.quality.global_review import build_review
-    from novel.stages.stage2.grounding import knowledge_reference_sha256
-    if not store.exists(STAGE2_GLOBAL_GROUNDING):
-        return
-    knowledge = store.read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0]
-    if knowledge.characters_reference_sha256 != knowledge_reference_sha256(registry):
-        # 先让 Global owner 绑定新的真实人物投影；旧 review 自然过期，不能在
-        # 两侧来源尚不闭合时制造一份看似新的联合审阅。证据-only 编辑仍可直接刷新。
-        return
-    previous = (store.read_own(GlobalReview, STAGE2_GLOBAL_REVIEW)[0]
-                if store.exists(STAGE2_GLOBAL_REVIEW) else None)
-    current = build_review(knowledge.model_dump(mode='json', by_alias=True), previous,
-                           characters=registry.model_dump(mode='json', by_alias=True))
-    if current != previous:
-        store.write_round(STAGE2_GLOBAL_REVIEW, current)
 
 
 def _edit_candidate(ctx: RunContext, prepared: PreparedCharacters, previous: CharacterRegistry,
@@ -591,7 +561,6 @@ def apply_edit(ctx: RunContext, edit: CharactersEdit, *,
                                              list(prepared.main_text))):
                 raise ProvenanceRefused('人物编辑回执已落盘但当前 HARD 不通过')
             _publish_projection(store, prepared, previous)
-            _refresh_review(store, previous)
             return previous
         candidate_receipt = candidate.provenance.characters_edit if candidate is not None else None
         if candidate is not None and candidate_receipt is None:
@@ -612,7 +581,6 @@ def apply_edit(ctx: RunContext, edit: CharactersEdit, *,
             store.write_round(REL, artifact)
             _publish_projection(store, prepared, artifact)
         assert_current(ctx, prepared)
-        _refresh_review(store, artifact)
         return store.read_own(CharacterRegistry, REL, require_current=True)[0]
 
 
@@ -637,7 +605,6 @@ def revalidate(ctx: RunContext, *, actor: str, reason: str) -> tuple[bool, Check
                 elif artifact.characters != previous.characters:
                     raise ProvenanceRefused('正式人物仍需归一修订，使用 typed 编辑后再重建称名投影')
                 _publish_projection(store, prepared, artifact)
-            _refresh_review(store, artifact)
         judged = REL if passed else source
         report = build(sid=ctx.sid, node=NODE, freshness=store.freshness(judged),
                        outcomes=outcomes, invalid=not passed)
@@ -653,21 +620,14 @@ def run_resample(ctx: RunContext, client: LlmClient) -> CharacterRegistry:
     return run_legacy(ctx, client)
 
 
-def run_legacy(ctx: RunContext, client: LlmClient, *,
-               review_token: str | None = None) -> CharacterRegistry:
+def run_legacy(ctx: RunContext, client: LlmClient) -> CharacterRegistry:
     """显式 legacy backend 使用原 transport/cache/额度契约，不能接管 agent 回答。"""
     if ctx.executor_profile is not None:
         raise ProvenanceRefused('人物 legacy 入口不能接管 agent profile')
-    if review_token is not None:
-        # issues 协议的定向返工：只执行登记问题的局部修复，不下发全文重采。
-        from novel.stages.stage2 import issue_repair
-        if issue_repair.pending_jobs_for_owner(ctx, NODE):
-            issue_repair.run_repair(ctx, client, owner=NODE, review_token=review_token)
-            return ArtifactStore(ctx).read_own(CharacterRegistry, REL, require_current=True)[0]
     with ownership(ctx):
         if paths.stage2_characters_run_path(ctx.novel_dir, ctx.run_id).exists():
             raise ProvenanceRefused('当前人物 run 已有 agent 状态，必须用原 profile 恢复')
-    prepared = prepare(ctx, review_token=review_token)
+    prepared = prepare(ctx)
     response = client.ask_json(
         SYSTEM, prepared.user, model_cls=CharactersResponse, purpose=NODE,
         max_tokens=MAX_TOKENS, validator=_validator(prepared))
@@ -692,7 +652,4 @@ def run_legacy(ctx: RunContext, client: LlmClient, *,
             artifact_fingerprint=prov.projection_fingerprint(
                 landed.model_dump(mode='json', by_alias=True)), chapter=None)
         assert_current(ctx, prepared)
-    if review_token is not None:
-        from novel.orchestrator.approvals import mark_stage2_rework_landed
-        mark_stage2_rework_landed(ctx.novel_dir.parent, ctx.sid, NODE, review_token)
     return landed

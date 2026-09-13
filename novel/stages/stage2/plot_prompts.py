@@ -51,7 +51,7 @@ BLUEPRINT_REVIEW_SYSTEM = """你是章节蓝图审阅者。本轮只依据裁决
 carry_state 五个维度。pass、issue、unver、not_applicable 含义不同；
 无法判断或不适用都说明原因。发现问题时输出实际问题及主体/原文证据，
 不生成逐节点、逐约束或逐 delivery 的通过清单。
-只读 beats.content 应能理解关键剧情；State/Constraint/KnowledgeLinks 不能补藏遗漏剧情。
+只读 beats.content 应能理解关键剧情；State/Constraint 不能补藏遗漏剧情。
 重点区分客观发生、人物相信、自称与读者何时得知。范围覆盖不能代替语义覆盖。
 每个既有未解决问题必须明确解决、撤销或保留；节点删除改名不能消除问题。
 accept 必须有所有适用维度的明确通过且无未解决问题。空问题数组不意味着接受。

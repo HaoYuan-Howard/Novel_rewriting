@@ -15,7 +15,7 @@ from tests.factories import missing_prepare_state
 from pydantic import ValidationError
 
 from contracts.invariants import (
-    APPROVAL_GATES, APPROVAL_SEEN, APPROVAL_WORKPACK_GROUPS,
+    APPROVAL_GATES, APPROVAL_WORKPACK_GROUPS,
 )
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
@@ -50,7 +50,7 @@ def _structure_fixtures(response=None):
     from tests.test_plot_binding import candidate_book
     from tests.test_plot_blueprint import SOURCE
     from tests.test_plot_design import planner_characters
-    from tests.plot_fixtures import GLOBAL, links
+    from tests.plot_fixtures import GLOBAL
     blueprints, candidate = candidate_book(response)
     catalog = build_evidence_catalog(blueprints)
     payload = merge_evidence_bindings(candidate,
@@ -61,8 +61,9 @@ def _structure_fixtures(response=None):
     bps = {row['chapter_ordinal']: row for row in blueprints['blueprints']}
     materials = {}
     for chapter in chapters:
+        # knowledge links 已随 Stage2 语义审阅退役；裁决材料不再携带 links。
         materials[chapter.output_ordinal] = chapter_materials(chapter.output_ordinal,
-            blueprints, GLOBAL, links(), source,
+            blueprints, GLOBAL, source,
             [ref.model_dump(mode='json') for goal in
                 (chapter.chapter_goal, chapter.open_hook_goal, chapter.end_hook_goal)
                 for ref in goal.subject_refs], characters=planner_characters())
@@ -538,7 +539,6 @@ def test_stage_signature_conflict_discloses_every_candidate_without_threshold() 
     from contracts.schema.plot import PlotBlueprint
     from novel.stages.stage4.plot_binding import source_context_catalog
     from novel.stages.stage4.plot_measure import constraint_and_stage_readings
-    from tests.plot_fixtures import links
     from tests.test_plot_blueprint import chapter_response
     response = chapter_response()
     response['beats'][0]['source_contexts'] = [{
@@ -553,7 +553,7 @@ def test_stage_signature_conflict_discloses_every_candidate_without_threshold() 
     chapter = chapters[0].model_dump(mode='json')
     placement = next(p for p in chapter['beat_placements'] if p['beat_ref'] == 'b01_01')
     placement['deliveries'][0]['source_context_refs'] = refs
-    reading = constraint_and_stage_readings(bps[1], chapter, knowledge_links=links())
+    reading = constraint_and_stage_readings(bps[1], chapter)
     selected = next(row for row in reading['stage'] if row['slot'] == placement['deliveries'][0]['scene_ref'])
     assert selected['context_refs'] == refs and len(refs) == 10
     assert selected['signature_count'] == 10 and selected['multiple_signatures']
@@ -618,7 +618,6 @@ def _approval_doc(
         prepare=missing_prepare_state(),
         sid=SID,
         gate={key: False for key in APPROVAL_GATES},
-        seen={key: False for key in APPROVAL_SEEN},
         design_review=DesignReviewView(
             state='missing',
             candidate_sha256=subjects.candidate_sha256,

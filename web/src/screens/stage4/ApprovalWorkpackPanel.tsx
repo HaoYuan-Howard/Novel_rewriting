@@ -37,7 +37,7 @@ function ReadingBlock({ reading }: { reading: WorkpackChapterReading }) {
       {reading.truth.beats.map((beat) => <p key={beat.alias} className="prose-cn">{beat.content}</p>)}
       <pre className="overflow-auto whitespace-pre-wrap text-sm2">{JSON.stringify({
         states: reading.truth.states, inherited_states: reading.truth.inherited_states,
-        constraints: reading.truth.constraints, knowledge: reading.truth.knowledge,
+        constraints: reading.truth.constraints,
         endpoints: reading.truth.endpoints, global_subjects: reading.truth.global_subjects,
         background_beats: reading.truth.background_beats,
       }, null, 2)}</pre>

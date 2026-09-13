@@ -8,9 +8,7 @@ from contracts.schema.stage4 import PlanChapter
 from novel.core.evidence import without_global_evidence
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.plot_binding import source_context_catalog
-from novel.stages.stage4.plot_placements import (
-    compile_plan_placements, knowledge_triggers_for_chapter,
-)
+from novel.stages.stage4.plot_placements import compile_plan_placements
 
 
 class PlotReferenceRefused(RefusedByStructure):
@@ -37,7 +35,7 @@ def global_subjects(grounding: dict[str, Any], *, characters: dict) -> dict[tupl
 
 
 def validate_plan(plan: dict[str, Any], blueprints: dict[str, Any],
-                  grounding: dict[str, Any], knowledge_links: dict[str, Any], *,
+                  grounding: dict[str, Any], *,
                   characters: dict, main_text: list[dict[str, Any]]) -> None:
     """同一检查用于 B、人工编辑、恢复和 Context；引用齐全不表示语义已审。"""
     bps = {row['chapter_ordinal']: PlotBlueprint.model_validate(row)
@@ -56,8 +54,6 @@ def validate_plan(plan: dict[str, Any], blueprints: dict[str, Any],
     if [row.output_ordinal for row in chapters] != sorted(bps):
         raise RefusedByStructure('计划须完整覆盖源书，同号同序，不拆合章节')
     globals_ = global_subjects(grounding, characters=characters)
-    from contracts.schema.knowledge_links import KnowledgeLinks
-    knowledge = KnowledgeLinks.model_validate(knowledge_links)
     all_states = {row.state_id for bp in bps.values() for row in bp.states}
     for chapter in chapters:
         ordinal = chapter.output_ordinal
@@ -68,8 +64,6 @@ def validate_plan(plan: dict[str, Any], blueprints: dict[str, Any],
                           if ref in bp.entry_state_refs or any(s.state_id == ref for s in bp.states)}
                        | {('constraint', row.constraint_id) for row in bp.constraints}
                        | {('chapter_boundary', f'chapter:{ordinal}')})
-            allowed.update((event.subject_ref.kind, event.subject_ref.ref)
-                           for event in knowledge.scope.obligations if event.chapter_ordinal == ordinal)
             for goal in (chapter.chapter_goal, chapter.open_hook_goal, chapter.end_hook_goal):
                 if any((row.kind, row.ref) not in allowed for row in goal.subject_refs):
                     raise RefusedByStructure(f'第 {ordinal} 章目标引用不在当前关闭主体目录')
@@ -104,8 +98,7 @@ def validate_plan(plan: dict[str, Any], blueprints: dict[str, Any],
                             or parent_contexts and not refs):
                         raise RefusedByStructure('呈现舞台引用必须来自父节点，不能丢弃已知舞台')
             try:
-                compile_plan_placements(bp, chapter.model_dump(mode='json'), knowledge=
-                                        knowledge_triggers_for_chapter(knowledge_links, ordinal))
+                compile_plan_placements(bp, chapter.model_dump(mode='json'))
             except ValueError as exc:
                 raise RefusedByStructure(str(exc)) from exc
         except (RefusedByStructure, ValueError, KeyError) as exc:

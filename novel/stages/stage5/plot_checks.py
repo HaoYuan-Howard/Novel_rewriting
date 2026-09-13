@@ -30,33 +30,3 @@ def delivery_surface_findings(segments: list[dict[str, str]], entry: dict[str, A
         detail='完整节点由多场联合呈现；不能要求每场都复述父节点，也不能以词面命中证明联合完整。',
         evidence=refs, output_ordinal=entry['output_ordinal'])]
 
-
-def knowledge_position_findings(segments: list[dict[str, str]], entry: dict[str, Any], book):
-    """只给同章许可前的转抄式命中线索，人物声称/信念与世界真相仍需语义区分。"""
-    secrets = {row['subject_ref']['ref']: row['value'] for row in entry['global_subjects']
-               if row['subject_ref']['kind'] == 'secret'}
-    out = []
-    for event in entry['knowledge_events']:
-        subject = event['subject_ref']
-        if event['kind'] != 'secret_reveal' or subject['kind'] != 'secret':
-            continue
-        secret = secrets.get(subject['ref'])
-        if secret is None:
-            continue
-        for segment in segments:
-            if segment['slot'] in event['allowed_slots']:
-                continue
-            body = segment['text']
-            spans = [locate_secret(needle, body) for needle in secret_keywords(secret['fact'] if isinstance(secret['fact'], str) else
-                      ' '.join(str(v) for v in secret['fact'].values() if isinstance(v, str)))]
-            hits = [body[a:b] for span in spans if span is not None for a, b in [span]]
-            if hits:
-                out.append(finding('knowledge_position_unver',
-                    detail='许可前出现与受限内容相似的表达；须结合归因/声称/信念判断，不能机械判为揭底。',
-                    evidence=[segment['slot'], *dict.fromkeys(hits)],
-                    output_ordinal=entry['output_ordinal']))
-    if not out:
-        out.append(finding('knowledge_position_unver',
-            detail='未发现许可前的转抄式命中不能证明无改写式提前揭示；按逐场许可核对完整成稿。',
-            evidence=[row['slot'] for row in segments], output_ordinal=entry['output_ordinal']))
-    return out

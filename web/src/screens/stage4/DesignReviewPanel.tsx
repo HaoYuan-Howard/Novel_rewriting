@@ -128,9 +128,9 @@ export function DesignReviewPanel() {
     setReason('')
     setRunId(reviewRunId())
   }
-  // accepted 后真正的 B continuation 仍由服务端挂在 s2；返修/replan 则挂 s4。
-  // 这里只切换服务端已经给出的动作面，不按盘面或决定内容自行推导下一步。
-  const followups = view.state === 'accepted' ? (doc.spawns.s2 ?? []) : (doc.spawns.s4 ?? [])
+  // Stage4 的下一动作（B continuation、返修/replan）全部由服务端挂在 s4，
+  // 这里只渲染服务端已经给出的动作面，不按盘面或决定内容自行推导下一步。
+  const followups = doc.spawns.s4 ?? []
   const actions = followups.map((ref) => ({
     ref,
     action: lookupAction(enums.data, ref),
@@ -1198,10 +1198,10 @@ function BlindTruthEvidence({ truth }: { truth: DesignChapterReview['subject']['
     {truth.beats.map((beat) => <div key={beat.alias} className="border-b border-line-row pb-8">
       <Mono className="text-micro">{beat.alias}</Mono><p className="prose-cn">{beat.content}</p>
     </div>)}
-    <details><summary>持续状态、约束与知识端点</summary>
+    <details><summary>持续状态、约束与端点</summary>
       <pre className="overflow-auto whitespace-pre-wrap text-sm2">{JSON.stringify({
         states: truth.states, inherited_states: truth.inherited_states,
-        constraints: truth.constraints, knowledge: truth.knowledge, endpoints: truth.endpoints,
+        constraints: truth.constraints, endpoints: truth.endpoints,
         entry_state_aliases: truth.entry_state_aliases, carry_out_aliases: truth.carry_out_aliases,
         global_subjects: truth.global_subjects, background_beats: truth.background_beats,
       }, null, 2)}</pre>

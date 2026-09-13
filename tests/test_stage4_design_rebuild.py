@@ -21,9 +21,7 @@ def _change_claim(book, ordinal, suffix='；这次先望向院门再行动'):
     raw = blueprint.model_dump(mode='json', by_alias=True)
     raw['blueprints'][ordinal - 1]['beats'][0]['content'] += suffix
     store.write(STAGE2_CHAPTER_BLUEPRINTS, ChapterBlueprints.model_validate(raw))
-    # 上游真实修订必须先重新章审/跨章及知识汇合；不让 A 绕过失效的 Blueprint。
-    from tests.stage2_fixtures import accept_and_materialize_links
-    accept_and_materialize_links(_ctx(book, 'stage2.blueprint', paid=False))
+    # 上游真实修订使旧 Blueprint 失效；A 只能沿机械准入重新核对后重建。
     return raw
 
 
@@ -53,6 +51,13 @@ def _rebuild(book, raw, expected):
         ctx, parent_run_id=ctx.run_id,
         parent_candidate_sha256=agent_runs.canonical_sha256(result.model_dump(mode='json', by_alias=True)))
     return ctx, result, sources
+
+
+def _admit_synthetic_stage2(monkeypatch):
+    """合成书只有 Stage2 盘面；种子即准入事实，stage4_ready 不读 stage0/1。"""
+    from novel import admission as mechanical_admission
+    monkeypatch.setattr(mechanical_admission, 'stage4_ready',
+                        lambda *_args: mechanical_admission.AdmissionCheck('stage4', ok=True))
 
 
 @pytest.mark.parametrize('adopted_strategy', [False, True])
@@ -127,25 +132,17 @@ def test_changed_chapter_rebuild_keeps_legal_parent_and_survives_next_rebuild(tm
         None: initial.run_id, 1: initial.run_id, 2: first.run_id, 3: second.run_id}
 
 
-def test_upstream_rebuild_carries_active_constraints_and_keeps_review_obligation(tmp_path, monkeypatch):
+def test_upstream_rebuild_carries_active_constraints(tmp_path, monkeypatch):
     import json
-    from contracts.schema.api import BlueprintSeenRequest, Stage2GlobalSeenRequest, DesignRepairConstraint
+    from contracts.schema.api import DesignRepairConstraint
     from novel.orchestrator import approvals
-    from novel.views.stage2 import blueprint_review_workpack
     from tests.test_design_review import _accept_all
-    from tests.test_stage2_review_decisions import _accept_global_node, _accept_blueprint_node
     from tests.test_stage4_binding_input_recovery_integration import _configure_boundary
     _configure_boundary(monkeypatch)
+    _admit_synthetic_stage2(monkeypatch)
     book = _book(tmp_path)
     raw = _seed_current_stage2(book).model_dump(mode='json', by_alias=True)
     original, parent = _land_design(book, raw)
-    _accept_global_node(book)
-    _accept_blueprint_node(book, monkeypatch)
-    pack = blueprint_review_workpack(tmp_path, original.sid)
-    approvals.mark_seen(tmp_path, original.sid, 'read', blueprint_subject=BlueprintSeenRequest(review_token=pack.review_token))
-    _, token = approvals._global_seen_proof(book)
-    approvals.mark_seen(tmp_path, original.sid, 'global', global_subject=Stage2GlobalSeenRequest(actor='测试', review_token=token))
-    approvals.approve_gate(tmp_path, original.sid, 's2')
     template = approvals.design_template(tmp_path, original.sid, actor='审阅者', reviewer_kind='human',
         review_run_id='before-rebuild', reason='核对具体章内目标')
     request = _accept_all(template)
@@ -216,39 +213,29 @@ def _nineteen_book(tmp_path, monkeypatch):
         chapter = copy.deepcopy(responses_by_chapter[source])
         chapter['chapter_ordinal'] = ordinal
         chapters[ordinal] = chapter
+    import tests.stage2_fixtures as stage2_fixtures
     with monkeypatch.context() as patch:
-        patch.setattr(fixtures, 'main_text', lambda: copy.deepcopy(texts))
+        patched = lambda: copy.deepcopy(texts)
+        patch.setattr(fixtures, 'main_text', patched)
+        patch.setattr(stage2_fixtures, 'main_text', patched)
         book = fixtures._book(tmp_path)
         blueprint = fixtures._seed_current_stage2(book, chapter_responses=chapters)
     return book, blueprint.model_dump(mode='json', by_alias=True)
 
 
-def test_nineteen_chapters_change_seventeen_only_reopens_its_model_and_review(tmp_path, monkeypatch):
+def test_nineteen_chapters_change_seventeen_only_reopens_its_model(tmp_path, monkeypatch):
     from novel.orchestrator import approvals
     from tests.test_design_review import _accept_all
     from tests.test_stage4_binding_input_recovery_integration import _configure_boundary
-    from tests.test_stage2_review_decisions import _accept_global_node, _accept_blueprint_node
-    from contracts.schema.api import BlueprintSeenRequest, Stage2GlobalSeenRequest
-    from novel.views.stage2 import blueprint_review_workpack
     _configure_boundary(monkeypatch)
+    _admit_synthetic_stage2(monkeypatch)
     book, raw = _nineteen_book(tmp_path, monkeypatch)
     initial, parent = _land_design(book, raw)
 
-    def accept_stage2():
-        _accept_global_node(book)
-        _accept_blueprint_node(book, monkeypatch)
-        pack = blueprint_review_workpack(tmp_path, initial.sid)
-        approvals.mark_seen(tmp_path, initial.sid, 'read', blueprint_subject=BlueprintSeenRequest(review_token=pack.review_token))
-        _, token = approvals._global_seen_proof(book)
-        approvals.mark_seen(tmp_path, initial.sid, 'global', global_subject=Stage2GlobalSeenRequest(actor='测试', review_token=token))
-        assert approvals.approve_gate(tmp_path, initial.sid, 's2').gate['s2']
-
-    accept_stage2()
     template = approvals.design_template(tmp_path, initial.sid, actor='合成审阅',
         reviewer_kind='human', review_run_id='initial-review', reason='核对各章测试事实')
     approvals.approve_design(tmp_path, initial.sid, _accept_all(template))
     changed = _change_claim(book, 17)
-    accept_stage2()
     target, result, sources = _rebuild(book, changed, [17])
     assert all(result.output_chapters[n - 1] == parent.output_chapters[n - 1]
                for n in range(1, 20) if n != 17)

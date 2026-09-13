@@ -16,7 +16,6 @@ vi.mock('@/hooks/useSample', () => ({
 }))
 vi.mock('./DesignReviewPanel', () => ({ DesignReviewPanel: () => null }))
 vi.mock('./StructureApprovalPanel', () => ({ StructureApprovalPanel: () => null }))
-vi.mock('./BlueprintRefinementPanel', () => ({ BlueprintRefinementPanel: () => null }))
 
 afterEach(() => vi.restoreAllMocks())
 

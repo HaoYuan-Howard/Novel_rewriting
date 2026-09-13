@@ -38,18 +38,16 @@ describe('Stage1Screen 信息与操作布局', () => {
       anomaly_count: 0,
     })
     vi.spyOn(api, 'getApprovals').mockResolvedValue({
-      v: 8, prepare: missingPrepareState(),
+      v: 9, prepare: missingPrepareState(),
       sid: 'book-1',
       gate: {
         s0: true,
         s1: false,
-        s2: false,
         s4: false,
         s5: false,
         s6: false,
         s7: false,
       },
-      seen: { read: false, global: false },
       writing: false,
       design_review: {
         state: 'unavailable', candidate_sha256: null, aggregate_subject_sha256: null,
@@ -115,10 +113,9 @@ describe('Stage1Screen 信息与操作布局', () => {
       anomaly_count: 3,
     })
     vi.spyOn(api, 'getApprovals').mockResolvedValue({
-      v: 8, prepare: missingPrepareState(),
+      v: 9, prepare: missingPrepareState(),
       sid: 'book-1',
-      gate: { s0: true, s1: false, s2: false, s4: false, s5: false, s6: false, s7: false },
-      seen: { read: false, global: false },
+      gate: { s0: true, s1: false, s4: false, s5: false, s6: false, s7: false },
       writing: false,
       design_review: {
         state: 'unavailable', candidate_sha256: null, aggregate_subject_sha256: null,
@@ -149,10 +146,9 @@ describe('Stage1Screen 信息与操作布局', () => {
   it('正文接口失败时仍保留校验与确认恢复面', async () => {
     vi.spyOn(api, 'getStage1').mockRejectedValue(new Error('正文接口读取失败'))
     vi.spyOn(api, 'getApprovals').mockResolvedValue({
-      v: 8, prepare: missingPrepareState(),
+      v: 9, prepare: missingPrepareState(),
       sid: 'book-1',
-      gate: { s0: true, s1: false, s2: false, s4: false, s5: false, s6: false, s7: false },
-      seen: { read: false, global: false },
+      gate: { s0: true, s1: false, s4: false, s5: false, s6: false, s7: false },
       writing: false,
       design_review: {
         state: 'unavailable', candidate_sha256: null, aggregate_subject_sha256: null,

@@ -9,6 +9,7 @@ import json
 import sys
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -24,8 +25,15 @@ from tests.test_design_review import (
     FACT, SID, _accept_all, _mixed_repair_subjects, _subjects, _template,
     isolated as design_isolated,
 )
-from tests.test_reviewer_tasks import _current
 from tests.test_stage4_reviewer_integration import PROFILE, _materialize, _structure_pack
+
+
+def _current(waiting_on: str) -> SimpleNamespace:
+    """与 tests/test_reviewer_tasks.py 的同名夹具同形；本文件内联定义，
+    避免依赖该 Stage2 审阅测试文件在退役批次中的归属。"""
+    return SimpleNamespace(
+        state='blocked', surface_seal='a' * 64, code_version='code-v1',
+        action=SimpleNamespace(waiting_on=waiting_on, action_sha256='b' * 64))
 
 
 DESIGN_BLOCKERS = (

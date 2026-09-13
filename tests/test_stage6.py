@@ -654,7 +654,8 @@ def test_paid_hook_prompt_excludes_global_source_spans(monkeypatch):
     import json
     from types import SimpleNamespace
 
-    from novel.stages.stage2 import global_review as stage2_global_review
+    from novel.stages.stage2 import grounding as stage2_grounding
+    from contracts.schema.knowledge import KnowledgeGrounding
     from novel.stages.stage5 import review as stage5_review
     from tests.plot_fixtures import REGISTRY, GLOBAL
     from novel.consumption import prepare_projection
@@ -688,8 +689,8 @@ def test_paid_hook_prompt_excludes_global_source_spans(monkeypatch):
         hook.WRITER_CONTEXT: Dumped(seed.ctx),
         hook.HOOK_COPY: SimpleNamespace(text='原作开篇文案。'),
     }
-    monkeypatch.setattr(stage2_global_review, 'generation_grounding',
-                        lambda store: store.read(None, hook.GLOBAL_GROUNDING))
+    monkeypatch.setattr(stage2_grounding, 'read',
+                        lambda store: store.read(KnowledgeGrounding, hook.GLOBAL_GROUNDING))
     monkeypatch.setattr(hook.prepare, 'require_accepted', lambda _store: Dumped(preparation))
 
     class Store:

@@ -17,10 +17,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 from contracts.artifacts import STAGE2_GLOBAL_EDIT
-from contracts.invariants import (
-    INBOX_KIND, NODES, STAGES, STAGE2_LEGACY_REVALIDATE_ACTOR,
-    STAGE2_LEGACY_REVALIDATE_REASON,
-)
+from contracts.invariants import INBOX_KIND, NODES, STAGES
 from contracts.schema.api import (
     ApprovalDoc, ExecutionPermit, InboxItem, InboxView, OperatorAction, OperatorNext,
     OperatorNextDecision,
@@ -110,26 +107,13 @@ def _stage2_commit_recovery_surface(
                      if kind == 'repairable' else '保留原响应、费用与 owner，先解决已明确的终态或来源缺口'))],
                 counts=counts, total=1, wontfix=0)
         return lane, InboxView(items=[], counts=counts, total=0, wontfix=0)
-    recovery_flags = state.stage2_reviewed_edit_commit_recovery_flags(
+    recovery_flags = state.stage2_edit_commit_recovery_flags(
         snapshot.base, snapshot.sid, code=snapshot.code)
     action_kind = (
         'revalidate' if recovery_flags and recovery_flags[0] == '--revalidate'
         else 'apply_edit' if recovery_flags else None
     )
-    if action_kind is None and state.stage2_reviewed_edit_revalidation_needed(
-            snapshot.base, snapshot.sid, code=snapshot.code):
-        action_kind = 'revalidate'
-        recovery_flags = (
-            '--revalidate',
-            '--actor', STAGE2_LEGACY_REVALIDATE_ACTOR,
-            '--reason', STAGE2_LEGACY_REVALIDATE_REASON,
-        )
-    ordinary_terminal = (
-        action_kind is None
-        and state.stage2_global_edit_terminal_failure_needed(
-            snapshot.base, snapshot.sid, code=snapshot.code)
-    )
-    if action_kind is None and not ordinary_terminal:
+    if action_kind is None:
         return None
     if action_kind == 'apply_edit':
         assert recovery_flags is not None
@@ -145,27 +129,18 @@ def _stage2_commit_recovery_surface(
         how = (
             'Supervisor 将以 stage2.global --apply-edit '
             'stage2/global_edit.json 交给 Executor 确定性补尾；不会调用模型')
-    elif action_kind == 'revalidate':
+    else:
         assert recovery_flags is not None
         flags = list(recovery_flags)
         waiting_on = queue.WAITING_ON_STAGE2_EDIT_REVALIDATE
         why = (
-            'Stage2 Global revalidate 已留下可恢复的 exact 审计身份，或 reviewed '
-            'INVALID 已按真实尺子无 HARD；只允许 Executor 0-wire 提升/补尾')
+            'Stage2 Global revalidate 已留下可恢复的 exact 审计身份；'
+            '只允许 Executor 0-wire 逐字重放提升/补尾')
         rule = 'global_edit_revalidation_commit'
         what = (
-            'reviewed GlobalEdit 的 live INVALID 可确定性提升，或提升 bundle '
-            '已有 prepared journal 尚未收敛')
-        how = 'Supervisor 将逐字复用本次 actor/reason 重放 stage2.global --revalidate'
-    else:
-        flags = []
-        waiting_on = queue.WAITING_ON_STAGE2_EDIT_TERMINAL
-        why = (
-            'Stage2 GlobalEdit 已留下需人工后继的 exact terminal failure；'
-            '等待新的 typed edit 或人工修改 INVALID 后 revalidate')
-        rule = 'global_edit_terminal_failure'
-        what = 'GlobalEdit 已确定失败或 INVALID 已被人修改；重放旧 edit 不会产生新结论'
-        how = '提交新的 typed edit，或人工修改 live INVALID 后显式 revalidate'
+            'prepared journal 已冻结 exact actor/reason，尚未收敛的 '
+            'revalidate 提交由 Executor 免费补尾')
+        how = 'Supervisor 将逐字复用 journal 冻结的 actor/reason 重放 stage2.global --revalidate'
     item = QueueItem(
         sid=snapshot.sid,
         node='stage2.global',
@@ -394,15 +369,6 @@ def _review_state_projection(approval_doc: ApprovalDoc | None) -> list[dict[str,
     for node, spec in NODES.items():
         life = spec.lifecycle
         if life is None or not life.approval_projection:
-            continue
-        if node == 'stage2.blueprint':
-            review = approval_doc.stage2_reviews.get(node)
-            progress = None if review is None else review.plot_progress
-            if progress is not None:
-                rows.extend({'node': node, 'scope': row.scope, 'state': row.state}
-                            for row in progress.scopes)
-            else:
-                rows.append({'node': node, 'scope': 'cross_chapter', 'state': 'unknown'})
             continue
         value = source
         for key in life.approval_projection:

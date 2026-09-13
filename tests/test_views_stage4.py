@@ -153,7 +153,7 @@ def test_goal_index_keeps_character_and_relation_presentations_distinct():
         'relation:rel_01（ap01_02 → char_002（未指定呈现））')
 
 
-@pytest.mark.parametrize('change', ['steady', 'character', 'missing_knowledge', 'surface_drift'])
+@pytest.mark.parametrize('change', ['steady', 'character', 'surface_drift'])
 def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch, change):
     """页面与正式审阅共享完整依赖，同一 plan 不重读，材料漂移不拼接。"""
     import copy
@@ -163,21 +163,20 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch, chan
     from contracts.schema.stage1 import MainText
     from contracts.schema.stage2 import ChapterBlueprints
     from contracts.schema.stage4 import EvidenceBinding, PlanChapters
-    from contracts.schema.knowledge_links import KnowledgeLinks
+    from contracts.artifacts import STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING
+    from contracts.schema.knowledge import KnowledgeGrounding
     from novel.orchestrator import approvals, inspection
-    from novel.stages.stage2 import global_review, knowledge_links
     from novel.stages.stage4.plot_materials import chapter_materials_identity
     from novel.errors import SourceConflict
-    from tests import plot_fixtures
     from tests.stage2_fixtures import plot_blueprints, formal_subjects
     from tests.test_stage2 import global_grounding, main_text
     from novel.stages.stage4.measure import identity_plan
 
     registry, knowledge = formal_subjects(global_grounding())
     character_payload = registry.model_dump(mode='json', by_alias=True)
+    grounding_payload = knowledge.model_dump(mode='json', by_alias=True)
     fixture = SimpleNamespace(blueprint=plot_blueprints, MAIN=main_text(),
-                              GLOBAL=knowledge.model_dump(mode='json', by_alias=True),
-                              links=plot_fixtures.links)
+                              GLOBAL=grounding_payload)
     raw = identity_plan(fixture.blueprint(), fixture.MAIN)
     raw['_provenance'] = {
         'code': 'test', 'root_clean_sha1': 'c' * 40, 'inputs': {}, 'origin': 'compiled',
@@ -191,6 +190,8 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch, chan
                     'global_projection_contract': 'plot-global-scope-v2'},
     }}
     blueprint = ChapterBlueprints.model_validate(blueprint_raw)
+    grounding = KnowledgeGrounding.model_validate(grounding_payload)
+    main_text_view = MainText.model_validate(fixture.MAIN)
     binding = EvidenceBinding.model_validate({
         'status': 'bound', 'candidate_sha256': 'a' * 64,
         'chapters': [{'output_ordinal': chapter['output_ordinal'], 'scenes': [{
@@ -203,9 +204,8 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch, chan
         '_provenance': {'origin': 'human', 'candidate_sha256': 'a' * 64,
                         'code': 'fixture', 'root_clean_sha1': 'c' * 40, 'inputs': {}},
     })
-    global_g = copy.deepcopy(fixture.GLOBAL)
-    links = KnowledgeLinks.model_validate(fixture.links())
-    reads, knowledge_reads = {}, []
+    global_g = copy.deepcopy(grounding_payload)
+    reads = {}
 
     class FakeStore:
         def __init__(self, ctx):
@@ -214,21 +214,32 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch, chan
         def exists(self, _rel):
             return False  # 本例没有 INVALID；当前正式快照在下列读取口提供。
 
-        def read(self, model, rel):
-            from contracts.artifacts import STAGE2_CHARACTERS
-            assert rel == STAGE2_CHARACTERS
-            reads[rel] = reads.get(rel, 0) + 1
-            return model.model_validate(copy.deepcopy(character_payload))
+        def full_sha256_or_none(self, _rel):
+            return 'a' * 64
 
-        def read_own(self, _model, rel):
+        def read_own_with_sha256(self, model, rel, **_kwargs):
+            return self.read_own(model, rel)
+
+        def read(self, model, rel):
             reads[rel] = reads.get(rel, 0) + 1
-            value = {view_module.PLAN_REL: snapshot,
-                     view_module.STAGE4_EVIDENCE_BINDING: binding,
-                     view_module.BLUEPRINTS: blueprint,
-                     view_module.MAIN_TEXT: MainText.model_validate(fixture.MAIN)}.get(rel)
+            if rel == STAGE2_CHARACTERS:
+                return model.model_validate(copy.deepcopy(character_payload))
+            value = {STAGE2_GLOBAL_GROUNDING: grounding,
+                     view_module.MAIN_TEXT: main_text_view}.get(rel)
             if value is None:
                 raise UpstreamMissing(rel)
-            return value, value.model_dump(by_alias=True, mode='json')
+            return model.model_validate(copy.deepcopy(
+                value.model_dump(mode='json', by_alias=True)))
+
+        def read_own(self, model, rel):
+            value = {view_module.PLAN_REL: snapshot,
+                     view_module.STAGE4_EVIDENCE_BINDING: binding,
+                     view_module.BLUEPRINTS: blueprint}.get(rel)
+            if value is not None:
+                reads[rel] = reads.get(rel, 0) + 1
+                return value, value.model_dump(by_alias=True, mode='json')
+            payload = self.read(model, rel)
+            return payload, payload.model_dump(by_alias=True, mode='json')
 
     def state(_store, rel):
         exists = rel == view_module.PLAN_REL
@@ -238,19 +249,10 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch, chan
             reason='match' if exists else 'no_provenance', invalid_freshness=None,
             invalid_reason=None, condition='ready' if exists else 'missing')
 
-    def current_knowledge(ctx):
-        knowledge_reads.append(ctx)
-        if change == 'missing_knowledge':
-            raise UpstreamMissing('知识关联缺失')
-        return links
-
     monkeypatch.setattr(view_module.paths, 'resolve_novel_dir', lambda _base, _sid: Path('测试_123'))
     monkeypatch.setattr(view_module, 'readonly_ctx', lambda *_args: object())
     monkeypatch.setattr(view_module, 'ArtifactStore', FakeStore)
     monkeypatch.setattr(view_module, 'artifact_state', state)
-    monkeypatch.setattr(global_review, 'generation_grounding', lambda _store:
-                        SimpleNamespace(model_dump=lambda **_kw: copy.deepcopy(global_g)))
-    monkeypatch.setattr(knowledge_links, 'require_current', current_knowledge)
     seals = iter(('before', 'after')) if change == 'surface_drift' else None
     monkeypatch.setattr(inspection, 'read_surface_seal',
                         lambda *_a, **_kw: next(seals) if seals else 'stable')
@@ -263,14 +265,9 @@ def test_formal_review_surface_hashes_the_single_plan_snapshot(monkeypatch, chan
     got = stage4_view('unused', '123', 1)
     assert all(reads[rel] == 1 for rel in (
         view_module.PLAN_REL, view_module.STAGE4_EVIDENCE_BINDING, view_module.BLUEPRINTS))
-    assert len(knowledge_reads) == 1
-    if change == 'missing_knowledge':
-        assert got.structure_subject_sha256 is None
-        assert '知识关联缺失' in got.structure_subject_unavailable_reason
-        return
     chapter = snapshot.output_chapters[0]
     materials = {row.output_ordinal: chapter_materials_identity(
-        row.output_ordinal, blueprint_raw, global_g, fixture.links(), fixture.MAIN,
+        row.output_ordinal, blueprint_raw, global_g, fixture.MAIN,
         [ref.model_dump(mode='json') for goal in
          (row.chapter_goal, row.open_hook_goal, row.end_hook_goal) for ref in goal.subject_refs],
         characters=character_payload)

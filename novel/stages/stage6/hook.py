@@ -106,9 +106,9 @@ class _Upstreams:
         for rel in (STAGE2_CHARACTERS, GLOBAL_GROUNDING, WRITER_CONTEXT):
             if not store.exists(rel):
                 raise UpstreamMissing(f'{rel} 不在盘上——先跑 {rel.split("/")[0]}')
-        from novel.stages.stage2 import global_review as stage2_global_review
         preparation = prepare.require_accepted(store)
-        gg = stage2_global_review.generation_grounding(store)
+        from novel.stages.stage2 import grounding as stage2_grounding
+        gg = stage2_grounding.read(store)
         registry = store.read(CharacterRegistry, STAGE2_CHARACTERS)
         wc = store.read(WriterContext, WRITER_CONTEXT)
         # ⚠ 原作文案段**允许缺**吗？`R-1.12` 已把无文案段的书挡在 stage1 ⇒ 走不到。

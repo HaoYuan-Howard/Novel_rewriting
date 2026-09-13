@@ -39,19 +39,16 @@ from contracts.schema.api import (
     DesignStrategyRuling,
     StructureApprovalRequest,
     StructureChapterDecision,
-    BlueprintRefinementRequest,
 )
 from contracts.schema.base import StrictModel
 from contracts.schema.common import Sha256
 from novel.agents.session_client import agent_json_schema
 from novel.orchestrator import queue
-from contracts.schema.plot_review import Dimension
 
 
 WIRE_SCHEMA = 'novel-stage4-reviewer-rulings-v3'
 REFERENCE_CLOSURE = 'chapters[].constraints[].reference_closure'
 CONSTRAINT_OPERATION_CATALOG = 'chapters[].constraint_operations.active'
-_RefinementDimension = TypeAliasType('BlueprintRefinementDimension', Dimension)
 _DESIGN_BLOCKERS = frozenset({
     queue.WAITING_ON_STAGE4_DESIGN_REVIEW,
     queue.WAITING_ON_STAGE4_BINDING_RESOLUTION,
@@ -103,13 +100,6 @@ def reference_handles(task: _ReviewerTaskLike) -> dict[str, dict[str, str]]:
                             or value in mapping.values() and mapping.get(handle) != value):
                         raise Stage4ReviewerWireError('不同引用域不能覆盖同一局部句柄或原始身份')
                     mapping[handle] = value
-    for option in options:
-        for ordinal, refs in option.get('allowed_values', {}).get('subjects_by_chapter', {}).items():
-            mapping = result.setdefault(str(ordinal), {})
-            if not isinstance(refs, list) or len(refs) != len(set(refs)):
-                raise Stage4ReviewerWireError('转交引用表的原始身份缺失或重复')
-            for value in sorted(set(refs) - set(mapping.values())):
-                mapping['chapter' if value == 'chapter' else f'u{len(mapping) + 1}'] = value
     return result
 
 
@@ -120,10 +110,6 @@ def _native_option(option: Mapping[str, Any], mappings: Mapping[str, Mapping[str
         reverse = {value: key for key, value in mappings[str(ordinal)].items()}
         for field, values in fields.items():
             fields[field] = [reverse[value] for value in values]
-    for field in ('subjects_by_chapter', 'beat_aliases_by_chapter'):
-        for ordinal, values in allowed.get(field, {}).items():
-            reverse = {value: key for key, value in mappings[str(ordinal)].items()}
-            allowed[field][ordinal] = [reverse[value] for value in values]
     return result
 
 
@@ -157,16 +143,11 @@ def _options(task: _ReviewerTaskLike) -> list[Mapping[str, Any]]:
                 raise Stage4ReviewerWireError('当前 Stage4 blocker 未登记此停止动作或动作重复')
             terminal_kinds.add(kind)
         elif (action.get('kind') != 'approval'
-                or action.get('surface') not in {expected_surface, 'blueprint_refinement'}):
+                or action.get('surface') != expected_surface):
             raise Stage4ReviewerWireError('Stage4 option 超出当前审批面')
-        elif action.get('surface') == 'blueprint_refinement' and (
-                option_id != 'approval:blueprint_refinement'
-                or action.get('payload', {}).get('origin') != expected_surface):
-            raise Stage4ReviewerWireError('疑点转交不能冒充另一审阅面的原文可见性')
     if ('approval:' + expected_surface not in seen
             or terminal_kinds != allowed_terminals
-            or len(seen) != 1 + len(allowed_terminals)
-               + int('approval:blueprint_refinement' in seen)):
+            or len(seen) != 1 + len(allowed_terminals)):
         raise Stage4ReviewerWireError('Stage4 option 必须完整保留当前合法选择')
     return options
 
@@ -323,26 +304,6 @@ def _payload_model(option: Mapping[str, Any], digest: str) -> type[StrictModel]:
             f'Stage4ReviewerStop_{digest}', __base__=StrictModel,
             reason=(str, Field(..., min_length=1)),
         )
-    if action['surface'] == 'blueprint_refinement':
-        catalog = option.get('allowed_values', {}).get('subjects_by_chapter')
-        if not isinstance(catalog, Mapping) or not catalog:
-            raise Stage4ReviewerWireError('疑点转交缺少当前章主体闭集')
-        branches = []
-        for ordinal, refs in catalog.items():
-            if not str(ordinal).isdigit() or int(ordinal) < 1:
-                raise Stage4ReviewerWireError('疑点转交章号非法')
-            beat_refs = option.get('allowed_values', {}).get('beat_aliases_by_chapter', {}).get(ordinal, [])
-            if not set(beat_refs) <= set(refs):
-                raise Stage4ReviewerWireError('共享节点枚举超出转交目录')
-            domains = [_reference_enum(tuple(sorted(values))) for values in (
-                beat_refs, sorted(set(refs) - set(beat_refs))) if values]
-            branches.append(create_model(
-                f'BlueprintRefinementChapter_{ordinal}_{digest}', __base__=StrictModel,
-                chapter_ordinal=(Literal[int(ordinal)], ...),
-                dimension=_field(BlueprintRefinementRequest, 'dimension', _RefinementDimension),
-                subject_refs=_field(BlueprintRefinementRequest, 'subject_refs', list[reduce(or_, domains)]),
-                reason=_field(BlueprintRefinementRequest, 'reason')))
-        return reduce(or_, branches)
     rows = _chapter_templates(exact)
     design = action['surface'] == 'design'
     chapter_source = DesignChapterRuling if design else StructureChapterDecision
@@ -509,7 +470,7 @@ def prompt_for(task: object, base_prompt: str) -> str:
 selection 必须完整选择一个合法 option，不得把 id 写到 JSON 末尾或复制完整 action。
 当前选项与绑定摘要：{json.dumps(choices, ensure_ascii=False, separators=(',', ':'))}
 本轮每章局部引用表（局部句柄→原工作包身份）：{json.dumps(reference_handles(task), ensure_ascii=False, separators=(',', ':'))}
-scene_refs、opaque_aliases、转交的 subject_refs 只填写当前章局部句柄；不要填写原始长 ID。
+scene_refs、opaque_aliases 只填写当前章局部句柄；不要填写原始长 ID。
 该表只缩短运输身份，全部原文、主体、修订码与约束语义仍按工作包审阅。相同句柄在不同章
 有各自含义，不得把另一章的引用混入当前章。expected_options_sha256 必须照抄本轮值。
 
@@ -518,8 +479,6 @@ decision/reason/replan_constraints，chapters 是按 output_ordinal 的十进制
 固定键组成的 object，每章交 decision/reason/constraints；原生 schema 开放了
 constraint_operations 的章还必须逐项填写该 object。structure payload 只交
 reason 和同样固定键的 chapters，每章交 decision/reason。stop payload 只交 reason。
-blueprint_refinement 只交 chapter_ordinal/dimension/subject_refs/reason，具体说明疑似
-上游错漏。它仅转交原文核查，不授权改剧情或购买抽取；普通分场仍使用当前设计修订。
 原生 schema 只开放待审章节键；带 source_decision_sha256 的历史接受由组装器完整继承，
 不要回抄或改写其章节及策略。开放的全部键和字段必须出现；待审章为空交 chapters: {{}}。
 空约束交 []。semantic_constraint 只引用已登记约束或端点，不新增关系正文。不要回抄
@@ -591,10 +550,6 @@ def assemble(task: _ReviewerTaskLike, response_document: Mapping[str, Any] | str
     def restore_constraints(ordinal, values):
         return [dict(row, scene_refs=restore(ordinal, row['scene_refs']),
                      opaque_aliases=restore(ordinal, row['opaque_aliases'])) for row in values]
-    if action['surface'] == 'blueprint_refinement':
-        supplied['subject_refs'] = restore(supplied['chapter_ordinal'], supplied['subject_refs'])
-        payload.update(supplied)
-        return assembled
     chapter_map = supplied.pop('chapters')
     for field, value in supplied.items():
         payload[field] = value

@@ -26,7 +26,6 @@ def chapter_directive(entry: dict[str, Any], book) -> str:
         '章末携带状态引用：' + compact(entry['semantic_contract']['carry_out_refs']),
         '章节、开篇、结尾目标：' + compact({
             key: entry[key] for key in ('chapter_goal', 'open_hook_goal', 'end_hook_goal')}),
-        '知识事件与逐场表达许可：' + compact(entry['knowledge_events']),
         '未开放主体（只有引用，没有答案）：' + compact(entry['restricted_subject_refs']),
         '所有编号只供引用任务，不写进小说正文。完整节点由它的全部呈现共同完成。',
         '同次请求可见后场材料，但前场不得提前表达；首次出现不等于整个节点已经披露。',

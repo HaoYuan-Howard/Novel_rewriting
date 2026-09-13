@@ -122,7 +122,7 @@ conda run -n novel_refactor python -m pytest -n 0 --lf --lfnf=none -x
 |---|---|---|
 | stage0 | `tests/test_stage01.py` 的摄入、源漂移拒绝和人工修订保留 | `tests/test_api_stage01.py` 的批准与正式分章 |
 | stage1 | `tests/test_stage01.py` 的分章、空章拒绝、章号与重新分章 | `tests/test_api_stage01.py` 的连续正文与诊断读面 |
-| stage2 | `tests/test_stage2_characters.py`、`tests/test_stage2_knowledge_flow.py`、`tests/test_stage2_generation.py`、`tests/test_plot_producer.py` 的独立生成与恢复；`tests/test_plot_edit.py` / `tests/test_plot_repair.py` 的编辑与返修 | `tests/test_stage2_node_lifecycle.py`、`tests/test_stage2_uploaded_flow.py` 的 typed 接受和下游释放，`tests/test_plot_edit_http.py` 的 CLI 与服务重启 |
+| stage2 | `tests/test_stage2_characters.py`、`tests/test_stage2_knowledge_flow.py`、`tests/test_stage2_generation.py`、`tests/test_plot_producer.py` 的独立生成与恢复；`tests/test_plot_edit.py` / `tests/test_plot_repair.py` 的编辑与返修；`tests/test_blueprint_repair_queue.py` 的统一机械准入阻断与免费恢复 | `tests/test_stage2_node_lifecycle.py`、`tests/test_stage2_uploaded_flow.py` 的正式提交与下游释放，`tests/test_plot_edit_http.py` 的 CLI 与服务重启；Stage2 语义审阅已退役，语义未审以报告 unver 行与交付披露承接 |
 | stage4 | `tests/test_stage4_v3_integration.py` 的 A/B/Context、错误证据拒绝与免费 binding 修订 | 同模块的正式读取、HTTP 与重启 |
 | stage5 | `tests/test_stage_responsibilities.py` 的正式逐章生成、提交尾窗的第三方字节拒绝与免费恢复 | 正式 Chapter 读回与 Review；替换判据的 `tests/test_stage5_generation.py` 保留在单元 / contract 层 |
 | stage6 | `tests/test_stage_responsibilities.py` 的 Hook、双判官、定稿及证据缺失 / 恢复 | 真实 Stage6 页面读面；此前仅 corpus 覆盖的成功路径已加入默认测试 |

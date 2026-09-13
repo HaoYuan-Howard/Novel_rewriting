@@ -1,42 +1,36 @@
 # -*- coding: utf-8 -*-
-"""上传至 Stage2 汇合的真实消费链；只替换模型传输，不替换审批或调度。
+"""上传至 Stage2 汇合的真实消费链；只替换模型传输，不替换调度或准入。
 
-正文和决定均为显式合成夹具，验证来源、费用与恢复，不作为语义质量验收。
+正文均为显式合成夹具，验证来源、费用与恢复，不作为语义质量验收。
+Stage2 语义审阅退役后：上传链不再有 global-review 接受、rework 派修、
+knowledge links 关闭尾与 ``--close-review``；蓝图册放行改由统一机械准入
+（``novel/admission.py``）在付费动作前判定，语义未审随报告披露。
 """
 from __future__ import annotations
 
 import copy
-import json
 
 import pytest
 from fastapi.testclient import TestClient
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
-    STAGE2_KNOWLEDGE_LINKS, STAGE2_CHARACTERS,
 )
-from contracts.schema.api import BlueprintReviewWorkpack, OperatorNext
+from contracts.schema.api import OperatorNext
 from contracts.schema.knowledge import KnowledgeGrounding
-from contracts.schema.stage2 import ChapterBlueprints
 from contracts.schema.stage1 import MainText
 from novel import paths, prov
 from novel.api.app import UI_HEADER, create_app
-from novel.errors import ProvenanceRefused
 from novel.llm.cache import CachePolicy
-from novel.llm import agent_runs, stage2_global_runs, stage2_runs
 from novel.llm.ledger import CostLedger, ledger_path, read_jsonl_rows
-from novel.node_agents import build_node_agent
-from novel.orchestrator import approvals, execution_permit, jobs
+from novel.orchestrator import execution_permit, jobs
 from novel.run import RunContext
-from novel.stages.stage2 import characters, extract, knowledge_links
+from novel.stages.stage2 import extract
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
-from tests.test_stage2_characters import _generate, _wire as _character_wire
+from tests.test_stage2_characters import _generate
 from tests.test_stage2_generation import _client, _respond_blueprints, _response_blueprints
-from tests.test_stage2_global_agent import _profile, _Driver
-from tests.test_stage2_grounding import _knowledge_response
-from tests.test_stage2_knowledge_flow import _run as _generate_knowledge
-from tests.test_plot_review_runtime import request as _plot_accept_request, response as _plot_response
+from tests.test_stage2_global_agent import _profile
 
 
 pytestmark = pytest.mark.real_code_version
@@ -84,18 +78,6 @@ def _run_free_next(client, *, node, flags):
     _landed(client, record)
 
 
-def _accept_global(client):
-    current = _get(client, '/stage2/global-review')
-    pending = [row for row in current['items'] if row['state'] != 'PASS']
-    assert pending
-    _landed(client, client.post(PREFIX + '/stage2/global-review', json={
-        'actor': 'test:global-commander', 'decisions': [{
-            'item_id': row['item_id'], 'expected_subject_sha256': row['subject_sha256'],
-            'state': 'PASS', 'reason': '显式合成决定，仅验证完整消费链', 'evidence': [],
-        } for row in pending]}))
-    assert _get(client, '/approvals')['stage2_reviews']['stage2.global']['state'] == 'accepted'
-
-
 @pytest.fixture
 def uploaded(tmp_path, monkeypatch):
     monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
@@ -120,16 +102,15 @@ def uploaded(tmp_path, monkeypatch):
         source = ArtifactStore(ctx).read(MainText, STAGE1_MAIN_TEXT)
         assert [row.text.strip() for row in source.root] == [row['text'] for row in main_text()]
         _generate(ctx)
+        from tests.test_stage2_knowledge_flow import _run as _generate_knowledge
         result, _driver = _generate_knowledge(
             _ctx(tmp_path, 'stage2.global', paid=True, agent=True))
         assert result.passed
-        _accept_global(client)
     return tmp_path
 
 
-@pytest.mark.parametrize('window', ['before_links', 'after_links', 'code_after_links'])
-def test_uploaded_character_edit_and_durable_decisions_close_through_real_cli(
-        uploaded, monkeypatch, window):
+def test_uploaded_character_edit_renormalize_and_blueprint_release_through_real_cli(
+        uploaded):
     base = uploaded
     store = ArtifactStore(_ctx(base, 'stage2.global'))
     original = store.read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0]
@@ -141,171 +122,39 @@ def test_uploaded_character_edit_and_durable_decisions_close_through_real_cli(
         edit['operations'] = edit['operations'][:1]
         edit['operations'][0]['character']['role'] += '，负责家中账目'
         _landed(client, client.post(PREFIX + '/stage2/characters/edit', json={
-            'actor': 'test:character-editor', 'reason': '显式订正静态身份，后续必须重新审阅',
+            'actor': 'test:character-editor', 'reason': '显式订正静态身份，全局底座免费重绑',
             'edit': edit}))
         assert store.freshness(STAGE2_GLOBAL_GROUNDING).state == 'stale'
         _run_free_next(client, node='stage2.global', flags=['--renormalize'])
         rebound = store.read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0]
-        assert rebound.entities == original.entities and rebound.canon == original.canon
+        # 免费重绑只换来源账，不动业务事实，也不购买任何模型调用。
+        for field in ('setting', 'relations', 'world_rules', 'arc_secrets'):
+            assert getattr(rebound, field) == getattr(original, field), field
         assert rebound.provenance.usage == original.provenance.usage
         assert ledger_path(base).read_bytes() == ledger
-        _accept_global(client)
+
+        # 统一机械准入放行：operator 指向付费蓝图册动作。
+        route = OperatorNext.model_validate(_get(client, '/operator-next'))
+        assert route.state == 'ready', route.model_dump(mode='json')
+        assert route.action.node == 'stage2.blueprint'
+        assert route.action.paid is True
+
         bp_ctx = _ctx(base, 'stage2.blueprint', paid=True)
         executor, transport = _client(bp_ctx, lambda request, _index: _respond_blueprints(
             request, _response_blueprints()))
-        extract.run_blueprint(bp_ctx, executor)
+        report = extract.run_blueprint(bp_ctx, executor)
+        assert report.passed
         assert len(transport.calls) == 3
         blueprint_bytes = store.path(STAGE2_CHAPTER_BLUEPRINTS).read_bytes()
-        for scope in ('chapter:1', 'chapter:2', 'chapter:3', 'cross_chapter'):
-            pack = BlueprintReviewWorkpack.model_validate(_get(
-                client, f'/stage2/blueprint-review-workpack?scope={scope}'))
-            assert pack.scope == scope
-            response = client.post(PREFIX + '/approvals/stage2-review',
-                                   json=_plot_accept_request(pack).model_dump(mode='json'))
-            assert response.status_code == 200, response.text
-            assert not response.json()['gate']['s2']
-            progress = response.json()['stage2_reviews']['stage2.blueprint']['plot_progress']
-            if scope != 'cross_chapter':
-                assert progress['accepted_chapters'] == int(scope.split(':')[1])
-                assert not progress['accepted']
-        assert progress['accepted']
-        assert not store.exists(STAGE2_KNOWLEDGE_LINKS)
+
     paid_ledger = ledger_path(base).read_bytes()
-    history = approvals.stage2_review_history(base, SID)
-    with monkeypatch.context() as crash:
-        if window in {'before_links', 'code_after_links'}:
-            original_write = ArtifactStore.write
-            def interrupt_write(self, rel, artifact):
-                if rel == STAGE2_KNOWLEDGE_LINKS and window == 'before_links':
-                    raise OSError('模拟关联正式文件落盘前中断')
-                result = original_write(self, rel, artifact)
-                if rel == STAGE2_KNOWLEDGE_LINKS:
-                    crash.setattr(prov, 'code_version', lambda: '模拟关联落盘后代码改变')
-                return result
-            crash.setattr(ArtifactStore, 'write', interrupt_write)
-        else:
-            def interrupt_approval(*_args):
-                raise OSError('模拟关联落盘后审批补尾中断')
-            crash.setattr(approvals, 'close_stage2_accepted', interrupt_approval)
-        error = ProvenanceRefused if window == 'code_after_links' else OSError
-        message = '代码改变' if window == 'code_after_links' else '模拟关联'
-        with pytest.raises(error, match=message):
-            knowledge_links.run_close_review(_ctx(base, 'stage2.blueprint'))
-        assert not approvals._read_raw(base, SID).gate['s2']
-    links_before = (store.path(STAGE2_KNOWLEDGE_LINKS).read_bytes()
-                    if store.exists(STAGE2_KNOWLEDGE_LINKS) else None)
-    assert (links_before is None) == (window == 'before_links')
     with TestClient(create_app(str(base))) as restarted:
         restarted.headers[UI_HEADER] = '1'
-        _run_free_next(restarted, node='stage2.blueprint', flags=['--close-review'])
-    with TestClient(create_app(str(base))) as reopened:
-        current = _get(reopened, '/approvals')
-        assert all(current['gate'][key] for key in ('s0', 's1', 's2'))
-        assert all(current['stage2_reviews'][node]['state'] == 'accepted'
-                   for node in ('stage2.global', 'stage2.blueprint'))
-        route = OperatorNext.model_validate(_get(reopened, '/operator-next'))
+        route = OperatorNext.model_validate(_get(restarted, '/operator-next'))
         assert route.state == 'ready' and route.action.node == 'stage4.design'
         assert route.action.paid is True
-        assert knowledge_links.require_current(_ctx(base, 'stage2.blueprint')).links
-    assert approvals.stage2_review_history(base, SID) == history
-    assert store.path(STAGE2_CHAPTER_BLUEPRINTS).read_bytes() == blueprint_bytes
-    assert ledger_path(base).read_bytes() == paid_ledger
-    if links_before is not None:
-        assert store.path(STAGE2_KNOWLEDGE_LINKS).read_bytes() == links_before
-
-
-@pytest.mark.parametrize('owner', ['stage2.characters', 'stage2.global', 'stage2.blueprint'])
-def test_uploaded_rework_routes_to_real_owner_and_persists_completion(uploaded, owner):
-    base = uploaded
-    ctx = _ctx(base, 'stage2.blueprint', paid=True)
-    executor, initial_calls = _client(ctx, lambda request, _: _respond_blueprints(
-        request, _response_blueprints()))
-    extract.run_blueprint(ctx, executor)
-    assert len(initial_calls.calls) == 3
-    store = ArtifactStore(ctx)
-    before = {rel: store.path(rel).read_bytes() for rel in (
-        STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING, STAGE2_CHAPTER_BLUEPRINTS)}
-    before_blueprints = store.read_own(ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)[0]
-    before_ledger = read_jsonl_rows(ledger_path(base))
-    with TestClient(create_app(str(base))) as client:
-        client.headers[UI_HEADER] = '1'
-        pack = BlueprintReviewWorkpack.model_validate(_get(
-            client, '/stage2/blueprint-review-workpack?scope=chapter:2'))
-        verdict = _plot_response().model_dump(mode='json')
-        verdict.update(decision='revise', reason='合成派修问题，只让真实 owner 重核自己的主体')
-        verdict['coverage']['attribution'] = {'state': 'issue', 'issue_refs': ['new:1']}
-        verdict['new_issues'] = [{
-            'issue_key': 'new:1', 'dimension': 'attribution', 'problem': '复核本章施受关系',
-            'subjects': [{'kind': 'beat', 'ref': 'b02_01'}],
-            'evidence_refs': [{'chapter_ordinal': 2, 'evidence_ref': 'e02_01'}]}]
-        response = client.post(PREFIX + '/approvals/stage2-review', json={
-            'node': 'stage2.blueprint', 'scope': pack.scope,
-            'review_token': pack.review_token, 'decision': 'rework',
-            'owner': owner, 'chapter_ordinals': [2] if owner == 'stage2.blueprint' else [],
-            'actor': 'test:blueprint-commander', 'reason': verdict['reason'], 'plot_review': verdict})
-        assert response.status_code == 200, response.text
-        route = OperatorNext.model_validate(_get(client, '/operator-next'))
-        assert route.state == 'ready' and route.action.node == owner, route.model_dump(mode='json')
-        assert route.action.flags == ['--review-token', pack.review_token]
-        preview = client.post('/api/jobs/preview', json={
+        preview = restarted.post('/api/jobs/preview', json={
             'sid': SID, 'node': route.action.node, 'flags': route.action.flags})
         assert preview.status_code == 200 and preview.json()['paid'] is True, preview.text
-        assert approvals.pending_stage2_rework(base, SID, owner) is not None
-    if owner == 'stage2.blueprint':
-        rework_ctx = _ctx(base, owner, paid=True)
-        calls = []
-        def respond(request, _index):
-            from tests.test_stage2_generation import _ok
-            calls.append(request.user)
-            metadata = json.loads(request.user.split('\n', 1)[0])
-            row = copy.deepcopy(metadata['repair_baseline'])
-            row['identities'] = metadata['baseline_identities']
-            return _ok({'blueprints': [row]})
-        executor, transport = _client(rework_ctx, respond)
-        result = extract.run_blueprint(rework_ctx, executor, review_token=pack.review_token)
-        assert result.passed and len(transport.calls) == len(calls) == 1
-        requested = json.loads(calls[0].split('\n', 1)[0])
-        assert requested['chapter_ordinal'] == requested['repair_baseline']['chapter_ordinal'] == 2
-        assert requested['baseline_identities']
-        assert {ref for row in requested['baseline_identities'] if row['collection'] == 'beats'
-                for ref in row['old_refs']} == {
-                    beat.beat_id for beat in before_blueprints.blueprints[1].beats}
-        after = store.read_own(ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)[0]
-        assert [row for row in after.blueprints if row.chapter_ordinal != 2] == [
-            row for row in before_blueprints.blueprints if row.chapter_ordinal != 2]
-    else:
-        rework_ctx = _ctx(base, owner, paid=True, agent=True)
-        wire = (_character_wire() if owner == 'stage2.characters' else json.dumps({
-            'payload': {'kind': 'full_candidate',
-                        'candidate': _knowledge_response().model_dump(mode='json')}}, ensure_ascii=False))
-        driver = _Driver([wire], rework_ctx.novel_dir, session_id=f'rework-{owner}')
-        result = build_node_agent(
-            rework_ctx, driver=driver, review_token=pack.review_token).run()
-        assert result.passed and len(driver.calls) == 1
-    # 同值、同输入与同用量可以生成相同的产物字节；独立 run 的提交、
-    # 新调用与 producer 完成账共同证明重核，不能强造内容变化来证明执行。
-    # 测试不调用 mark_stage2_rework_landed，也不以手补审批替代最终消费。
-    owned = {'stage2.characters': STAGE2_CHARACTERS, 'stage2.global': STAGE2_GLOBAL_GROUNDING,
-             'stage2.blueprint': STAGE2_CHAPTER_BLUEPRINTS}[owner]
-    committed = (agent_runs.commit_state(rework_ctx, characters.commit_spec())
-                 if owner == 'stage2.characters' else
-                 stage2_global_runs.committed(rework_ctx) if owner == 'stage2.global' else
-                 stage2_runs.committed(rework_ctx))
-    assert committed is not None and committed['state'] == 'committed'
-    after_ledger = read_jsonl_rows(ledger_path(base))
-    assert after_ledger[:len(before_ledger)] == before_ledger
-    new_calls = after_ledger[len(before_ledger):]
-    assert len(new_calls) == 1 and new_calls[0]['node'] == owner
-    assert store.freshness(owned).state == 'fresh'
-    for rel, raw in before.items():
-        if rel != owned:
-            assert store.path(rel).read_bytes() == raw
-    assert approvals.pending_stage2_rework(base, SID, owner) is None
-    assert pack.review_token in approvals._read_raw(base, SID).stage2_rework_completed
-    with TestClient(create_app(str(base))) as restarted:
-        status = _get(restarted, '/approvals')
-        assert status['stage2_reviews']['stage2.blueprint']['state'] != 'accepted'
-        if owner == 'stage2.blueprint':
-            assert status['stage2_reviews']['stage2.global']['state'] == 'accepted'
-        next_action = OperatorNext.model_validate(_get(restarted, '/operator-next'))
-        assert next_action.action is None or '--review-token' not in next_action.action.flags
+    assert ledger_path(base).read_bytes() == paid_ledger
+    assert store.path(STAGE2_CHAPTER_BLUEPRINTS).read_bytes() == blueprint_bytes

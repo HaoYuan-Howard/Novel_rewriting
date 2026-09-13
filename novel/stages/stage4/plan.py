@@ -166,14 +166,9 @@ class _Upstreams:
         from contracts.schema.characters import CharacterRegistry
         self.characters = store.read(CharacterRegistry, STAGE2_CHARACTERS).model_dump(by_alias=True, mode='json')
         self.global_g: dict[str, Any] | None = None
-        self.knowledge_links: dict[str, Any] | None = None
         if need_grounding:
-            from novel.stages.stage2 import global_review as stage2_global_review
-            self.global_g = stage2_global_review.generation_grounding(
-                store).model_dump(by_alias=True)
-            from novel.stages.stage2.knowledge_links import require_current
-            self.knowledge_links = require_current(ctx, consuming=True).model_dump(
-                by_alias=True, mode='json')
+            from novel.stages.stage2 import grounding as stage2_grounding
+            self.global_g = stage2_grounding.read(store).model_dump(by_alias=True)
         self.bidx = beat_index(self.blueprints, self.main_text)
 
 
@@ -186,13 +181,10 @@ class _DesignUpstream:
         self.blueprints = store.read(
             ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True)
         self.main_text = store.read(MainText, MAIN_TEXT).model_dump(mode='json')
-        from novel.stages.stage2 import global_review
-        from novel.stages.stage2.knowledge_links import require_current
-        self.global_g = global_review.generation_grounding(store).model_dump(by_alias=True)
+        from novel.stages.stage2 import grounding
+        self.global_g = grounding.read(store).model_dump(by_alias=True)
         from contracts.schema.characters import CharacterRegistry
         self.characters = store.read(CharacterRegistry, STAGE2_CHARACTERS).model_dump(by_alias=True, mode='json')
-        self.knowledge_links = require_current(ctx, consuming=True).model_dump(
-            by_alias=True, mode='json')
 
 
 @dataclass(frozen=True)
@@ -447,7 +439,7 @@ def _judge(store: ArtifactStore, plan_raw: dict[str, Any], up: _Upstreams, *,
             assert up.global_g is not None
             expected_unvalidated = build_writer_context(
                 plan_raw, up.global_g, up.blueprints, up.main_text,
-             knowledge_links=up.knowledge_links, characters=up.characters).ctx
+                characters=up.characters).ctx
             # 盘上载体已经经过 Pydantic 的默认值归一；期望树也必须走同一
             # 个生产 schema，否则可选字段的 absent/None 差异会让守卫假红。
             expected_ctx = WriterContext.model_validate({
@@ -456,7 +448,7 @@ def _judge(store: ArtifactStore, plan_raw: dict[str, Any], up: _Upstreams, *,
             }).model_dump(by_alias=True, mode='json')
     return checks.check(
         plan_raw, blueprints=up.blueprints, main_text=up.main_text, global_g=up.global_g,
-        knowledge_links=up.knowledge_links, characters=up.characters,
+        characters=up.characters,
         ctx=ctx_raw, expected_ctx=expected_ctx,
         ctx_link=_ctx_link(store, plan_raw) if with_ctx_link else None,
         ctx_source=(_ctx_source_line(store) if with_ctx_link
@@ -537,7 +529,7 @@ def _design_request(
     from novel.source_identity import artifact_body_root
     truth, mapping = build_blind_projection(
         up.blueprints, root_clean_sha1=artifact_body_root(store, STAGE2_CHAPTER_BLUEPRINTS),
-        knowledge_links=up.knowledge_links, global_g=up.global_g, characters=up.characters, main_text=up.main_text)
+        global_g=up.global_g, characters=up.characters, main_text=up.main_text)
     projection = build_blind_strategy_projection(truth)
     system = prompts.blind_book_strategy_system()
     user = _design_strategy_user(projection)
@@ -889,14 +881,14 @@ def _candidate_bundle_verdict(
     from contracts.rules import REGISTRY
 
     assert up.global_g is not None
-    asm = build_writer_context(data, up.global_g, up.blueprints, up.main_text, knowledge_links=up.knowledge_links, characters=up.characters)
+    asm = build_writer_context(data, up.global_g, up.blueprints, up.main_text, characters=up.characters)
     candidate_ctx = asm.ctx
     outcomes = checks.check(
         data,
         blueprints=up.blueprints,
         main_text=up.main_text,
         global_g=up.global_g,
-        knowledge_links=up.knowledge_links, characters=up.characters,
+        characters=up.characters,
         ctx=candidate_ctx,
         expected_ctx=candidate_ctx,
         ctx_link=('ok', '候选内存中的 plan/context 同源'),
@@ -1173,7 +1165,7 @@ def _chapter_binding_issue(
     try:
         blueprint = PlotBlueprint.model_validate(next(r for r in up.blueprints['blueprints']
                                                        if r['chapter_ordinal'] == chapter_ordinal))
-        chapter = validate_request_references(candidate_raw, blueprint, up.knowledge_links, chapter_ordinal,
+        chapter = validate_request_references(candidate_raw, blueprint, chapter_ordinal,
                                               characters=up.characters, blueprints=up.blueprints, main_text=up.main_text)
     except (ValueError, KeyError, TypeError, StopIteration) as exc:
         raise ProvenanceRefused(f'章级 B 输入引用无法闭合：{exc}') from exc
@@ -1189,7 +1181,7 @@ def _chapter_binding_issue(
                            if token in used}
                      for key in ('subject_aliases', 'endpoint_aliases', 'participant_aliases')}
     materials = chapter_materials(chapter_ordinal, up.blueprints, up.global_g,
-        up.knowledge_links, up.main_text, list(local_mapping['subject_aliases'].values()), characters=up.characters)
+        up.main_text, list(local_mapping['subject_aliases'].values()), characters=up.characters)
     bp = materials.blueprint
     # 场景直接引用之外，还要解释节点人物和实际依赖主体；别名与材料共用同一闭包。
     # 只选择已登记 alias，不把其他章或未消费的 Global 主体整表下发。
@@ -1212,7 +1204,6 @@ def _chapter_binding_issue(
     issued.update(s.state_id for s in bp.states)
     issued.update(c.constraint_id for c in bp.constraints)
     issued.update(r.subject_ref.ref for r in [*materials.global_subjects, *materials.support_subjects])
-    issued.update(o['event']['obligation_id'] for o in materials.knowledge_events)
     inverse = {}
     for token, value in local_mapping['subject_aliases'].items():
         inverse.setdefault(value['ref'], []).append(token)
@@ -1377,7 +1368,7 @@ class _BindingValidator:
                 self.candidate, raw, self.catalog)
             adopt_plan_response(data, self.up.blueprints, self.up.bidx)
             assert self.up.global_g is not None
-            validate_plot_plan(data, self.up.blueprints, self.up.global_g, self.up.knowledge_links,
+            validate_plot_plan(data, self.up.blueprints, self.up.global_g,
                                characters=self.up.characters, main_text=self.up.main_text)
         except (BlindPlanError, RefusedByStructure) as exc:
             self.typed_failures = (typed_failures.make(
@@ -1462,7 +1453,7 @@ def run_context(ctx: RunContext) -> CheckReport:
     plan = store.read(PlanChapters, REL)
     plan_raw = plan.model_dump(by_alias=True)
     assert up.global_g is not None
-    asm = build_writer_context(plan_raw, up.global_g, up.blueprints, up.main_text, knowledge_links=up.knowledge_links, characters=up.characters)
+    asm = build_writer_context(plan_raw, up.global_g, up.blueprints, up.main_text, characters=up.characters)
     # ⚠ **必须显式给 `CtxProvenance`**：默认的 `FreeProvenance` 过不了 `WriterContext` 的载体。
     #   这一层的来源账**没有 `prompts` 也没有 `model`**（确定性组装，无 LLM 参与）。
     art = WriterContext.model_validate(
@@ -1533,7 +1524,7 @@ def _gate_and_write(ctx: RunContext, store: ArtifactStore, data: dict[str, Any],
     """
     data.pop('_provenance', None)
     assert up.global_g is not None
-    validate_plot_plan(data, up.blueprints, up.global_g, up.knowledge_links,
+    validate_plot_plan(data, up.blueprints, up.global_g,
                        characters=up.characters, main_text=up.main_text)
     art = PlanChapters.model_validate({**data, '_provenance': provenance})
     outcomes = _judge(store, {**data, '_provenance': provenance.model_dump(by_alias=True)},
@@ -4224,7 +4215,6 @@ def _assert_plan_current(
         'blueprints': up.blueprints,
         'global_grounding': up.global_g,
         'characters': up.characters,
-        'knowledge_links': up.knowledge_links,
     })
     if (system != prepared.system or user != prepared.user
             or candidate_raw != prepared.candidate_raw
@@ -4297,7 +4287,6 @@ def prepare_plan_candidate(
         'blueprints': up.blueprints,
         'global_grounding': up.global_g,
         'characters': up.characters,
-        'knowledge_links': up.knowledge_links,
     })
     prepared = PlanCandidateContext(
         system=system,
@@ -4643,7 +4632,7 @@ def _expected_context_artifact(ctx: RunContext) -> WriterContext:
     plan_raw = plan.model_dump(by_alias=True)
     assert up.global_g is not None
     asm = build_writer_context(
-        plan_raw, up.global_g, up.blueprints, up.main_text, knowledge_links=up.knowledge_links, characters=up.characters)
+        plan_raw, up.global_g, up.blueprints, up.main_text, characters=up.characters)
     return WriterContext.model_validate({
         **asm.ctx,
         '_provenance': cctx.free_provenance(CtxProvenance),
@@ -6918,12 +6907,12 @@ def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:
     up = _Upstreams(ctx, store)
     assert up.global_g is not None
     base = identity_plan(up.blueprints, up.main_text, up.bidx)
-    asm = build_writer_context(base, up.global_g, up.blueprints, up.main_text, knowledge_links=up.knowledge_links, characters=up.characters)
+    asm = build_writer_context(base, up.global_g, up.blueprints, up.main_text, characters=up.characters)
     WriterContext.model_validate(
         {**asm.ctx, '_provenance': ctx.free_provenance(CtxProvenance)})
     outcomes = checks.check(
         base, blueprints=up.blueprints, main_text=up.main_text, global_g=up.global_g,
-        knowledge_links=up.knowledge_links, characters=up.characters,
+        characters=up.characters,
         ctx=asm.ctx, expected_ctx=asm.ctx, ctx_link=None,
         ctx_source='本次内存现算的恒等基线，不比来源', bidx=up.bidx)
     return (sum(len(c['scenes']) for c in base['output_chapters']),

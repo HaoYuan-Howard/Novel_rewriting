@@ -33,7 +33,6 @@ import {
   type DesignReviewTemplate,
   type DesignReviewTemplateQuery,
   type GateKey,
-  type SeenKey,
   type Stage5ClosureDecision,
   type Stage5FindingGroup,
   type Stage5ClosureRequest,
@@ -52,13 +51,9 @@ import type { RunProgress } from '@/types/run'
 import type {
   CheckKind,
   CheckReport,
-  BlueprintSeenRequest,
-  Stage2GlobalSeenRequest,
   DraftEditPreview,
   DraftEditPreviewRequest,
   DraftEditRequest,
-  GlobalReviewDecisionSet,
-  GlobalReviewResponse,
   InboxResponse,
   ReviewResponse,
   Stage0EditRequest,
@@ -650,12 +645,11 @@ function mockDesignHistoryEntry(decision: DesignReviewDecision) {
 
 function freshDoc(sid: string): ApprovalDoc {
   return {
-    v: 8,
+    v: 9,
     sid,
     prepare: { state: 'unknown', reason: '此历史样例未记录独立 Prepare，不能继承为已接受。',
       subject_sha256: null, review_token: null, prepare: null, review: null, pending_commit: false },
-    gate: { s0: false, s1: false, s2: false, s4: false, s5: false, s6: false, s7: false },
-    seen: { read: false, global: false },
+    gate: { s0: false, s1: false, s4: false, s5: false, s6: false, s7: false },
     writing: false,
     design_review: {
       state: enumAt(enums().design_review_states, 0, 'A 审阅状态'),
@@ -703,11 +697,10 @@ function seededDoc(sid: string): ApprovalDoc {
   const decision = seededStructureDecision()
   const designDecision = seededDesignReviewDecision()
   return {
-    v: 8,
+    v: 9,
     sid,
     prepare: freshDoc(sid).prepare,
-    gate: { s0: true, s1: true, s2: true, s4: true, s5: true, s6: false, s7: false },
-    seen: { read: true, global: true },
+    gate: { s0: true, s1: true, s4: true, s5: true, s6: false, s7: false },
     writing: true,
     design_review: {
       state: enumAt(enums().design_review_states, 4, 'A 审阅状态'),
@@ -754,9 +747,14 @@ function seededDoc(sid: string): ApprovalDoc {
 
 function loadDoc(sid: string): ApprovalDoc {
   const got = lsRead<unknown>('approvals.' + sid)
-  // spawns 是服务端的事；只接受当前公开 v8，旧本地记录不沿用审批。
-  if (got && typeof got === 'object' && (got as { v?: unknown }).v === 8) {
+  // spawns 是服务端的事；只接受当前公开 v9，旧本地记录（含已退役 seen/s2）不沿用审批。
+  if (got && typeof got === 'object' && (got as { v?: unknown }).v === 9) {
     return withMockSpawns(got as ApprovalDoc)
+  }
+  if (!got && sid === SAMPLE_SID) {
+    // 样本书的 stage2 两份产物已在盘上（历史录制），对应「已发起」的 s1 续跑状态。
+    lsWrite('stage2.global.issued.' + sid, true)
+    lsWrite('stage2.blueprint.issued.' + sid, true)
   }
   const seed = !got && sid === SAMPLE_SID ? seededDoc(sid) : freshDoc(sid)
   const projected = withMockSpawns(seed)
@@ -772,19 +770,7 @@ function saveDoc(doc: ApprovalDoc): ApprovalDoc {
 
 /* ------------------------------------------------------ Stage2 全局复核 */
 
-
-function freshGlobalReview(): GlobalReviewResponse {
-  return stage2CoreFixture().review
-}
-
-function loadGlobalReview(sid: string): GlobalReviewResponse {
-  return lsRead<GlobalReviewResponse>('global-review-core-v7.' + sid) ?? freshGlobalReview()
-}
-
-function saveGlobalReview(sid: string, review: GlobalReviewResponse): GlobalReviewResponse {
-  lsWrite('global-review-core-v7.' + sid, review)
-  return review
-}
+/* Stage2 语义审阅已退役：mock 不再保存全局复核项、已读记录或逐节点接受。 */
 
 /* ------------------------------------------------------------ 命令行拼装 */
 
@@ -1035,22 +1021,16 @@ function publicJobs(sid: string): JobsResponse {
 
 /** 确认之后自动发起的下游。谁发起什么由服务端决定，不由界面决定。 */
 function withMockSpawns(doc: ApprovalDoc): ApprovalDoc {
-  const s1: ActionRef[] = !doc.seen.global
-    ? [{
-        kind: 'stage2.global',
-        label: '生成 stage2 全局底座；完成后逐项人工复核',
-        extra: null,
-      }]
-    : !doc.seen.read
-      ? [{
-          kind: 'stage2.blueprint',
-          label: '生成 stage2 逐章骨架；可与全局人工复核并行',
-          extra: null,
-        }]
-      : []
+  // mock 用「已发起」标记近似后端 resume 谓词：s1 分相下发 stage2.global →
+  // stage2.blueprint（骨架由统一机械准入衔接）；两份都发起后不再有下一相。
+  const s1: ActionRef[] = !doc.gate.s1 ? []
+    : !lsRead<boolean>('stage2.global.issued.' + doc.sid)
+      ? [{ kind: 'stage2.global', label: '生成 stage2 全局底座', extra: null }]
+      : !lsRead<boolean>('stage2.blueprint.issued.' + doc.sid)
+        ? [{ kind: 'stage2.blueprint', label: '机械准入通过后生成 stage2 逐章骨架', extra: null }]
+        : []
   const spawns: Partial<Record<GateKey, ActionRef[]>> = {
     s1,
-    s2: [{ kind: 'stage4.plan', label: 'stage4 重构计划', extra: null }],
     // 历史样本未经过现役独立 Prepare，不能提供本轮 Hook/改名/交付动作。
     s5: [], s6: [], s7: [],
   }
@@ -1319,26 +1299,11 @@ function mockInbox(): InboxResponse {
   }
 }
 
-/** 历史 seen.global token，仅作旧来源不能授予当前接受的拒绝反例。 */
-export const MOCK_GLOBAL_SEEN_TOKEN = 's2gr1_' + '5'.repeat(64)
-
-function isCurrentGlobalSeenRequest(
-  sid: string,
-  request: BlueprintSeenRequest | Stage2GlobalSeenRequest | undefined,
-): request is Stage2GlobalSeenRequest {
-  if (sid !== stage2CoreFixture().global.sid || !request || !('actor' in request)) return false
-  const keys = Object.keys(request).sort()
-  if (keys.join(',') !== 'actor,review_token') return false
-  if (!request.actor.trim()) return false
-  return request.review_token === loadGlobalReview(sid).review_token
-}
+/** 历史 seen token 常量已随 Stage2 语义审阅退役删除；mock 不再提供已读/接受面。 */
 
 /* ------------------------------------------------------------------ Api */
 
 export const mockApi: Api = {
-  approveStage2Review: async () => {
-    throw new Error('离线样本未提供 Stage2 节点接受，请连接真实服务')
-  },
   getNovels: async () => {
     const legacy = mockNovels()
     const data = plotFlowSample as Record<string, unknown>
@@ -1443,23 +1408,27 @@ export const mockApi: Api = {
       backendKind: 'MockCapabilityUnavailable',
     })),
 
-  getBlueprintReviewWorkpack: (sid, scope = 'cross_chapter') => sid === PLOT_SAMPLE_SID
-    ? plotRead(sid, 'stage2/blueprint-review-workpack?scope=' + encodeURIComponent(scope), true)
-    : fail(new ApiError('server', `/novels/${sid}/stage2/blueprint-review-workpack`, {
-    status: 501, message: '知识关联需要当前源文、知识与 Blueprint 的完整工作包，请连接真实后端',
+  getBlueprintReadingWorkpack: (sid, scope = 'cross_chapter') => sid === PLOT_SAMPLE_SID
+    ? plotRead(sid, 'stage2/blueprint-reading-workpack?scope=' + encodeURIComponent(scope), true)
+    : fail(new ApiError('server', `/novels/${sid}/stage2/blueprint-reading-workpack`, {
+    status: 501,
+    message: '阅读工作包需要当前源文与 Blueprint 的完整只读材料，请连接真实后端',
     backendKind: 'MockCapabilityUnavailable',
   })),
   getBlueprintEditTemplate: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/blueprint/edit/template`, {
     status: 501, message: '旧示例没有当前完整剧情身份，编辑请连接真实后端', backendKind: 'MockCapabilityUnavailable',
   })),
-  getBlueprintRefinementCatalog: (sid) => fail(new ApiError('server', `/novels/${sid}/approvals/blueprint-refinement/catalog`, {
-    status: 501, message: '疑点核查需要当前设计与蓝图身份，请连接真实后端', backendKind: 'MockCapabilityUnavailable',
-  })),
-  submitBlueprintRefinement: (sid) => fail(new ApiError('server', `/novels/${sid}/approvals/blueprint-refinement`, {
-    status: 501, message: '示例不写入疑点核查记录，请连接真实后端', backendKind: 'MockCapabilityUnavailable',
-  })),
   previewBlueprintEdit: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/blueprint/edit/preview`, {
     status: 501, message: '示例不执行剧情编辑预检，请连接真实后端', backendKind: 'MockCapabilityUnavailable',
+  })),
+  getGlobalEditTemplate: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/global/edit/template`, {
+    status: 501, message: '示例没有当前全局事实底座，编辑请连接真实后端', backendKind: 'MockCapabilityUnavailable',
+  })),
+  previewGlobalEdit: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/global/edit/preview`, {
+    status: 501, message: '示例不执行全局编辑预检，请连接真实后端', backendKind: 'MockCapabilityUnavailable',
+  })),
+  applyGlobalEdit: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/global/edit`, {
+    status: 501, message: '示例不写入全局订正，请连接真实后端', backendKind: 'MockCapabilityUnavailable',
   })),
   applyBlueprintEdit: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/blueprint/edit`, {
     status: 501, message: '示例不写入剧情蓝图，请连接真实后端', backendKind: 'MockCapabilityUnavailable',
@@ -1489,109 +1458,6 @@ export const mockApi: Api = {
   editCharacters: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/characters/edit`, {
     status: 501, message: '人物订正请使用真实后端写回', backendKind: 'MockCapabilityUnavailable',
   })),
-
-  getGlobalReview: (sid) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'stage2/global-review', true)
-    : sid === stage2CoreFixture().global.sid
-    ? later(loadGlobalReview(sid))
-    : fail(new ApiError('nosample', `/novels/${sid}/stage2/global-review`, { scope: 'book' })),
-
-  decideGlobalReview: (sid, request: GlobalReviewDecisionSet) => {
-    const path = `/novels/${sid}/stage2/global-review`
-    if (sid !== stage2CoreFixture().global.sid) return noBook(path)
-    // Commander 的 compact scope 绑定 CLI workpack SHA；浏览器 mock 没有那份
-    // 只读材料，不能忽略 scope 后假装提交成功。真实后端/API 原样支持该形状。
-    if (request.blocking_scope) {
-      return fail(new ApiError('server', path, {
-        status: 501,
-        message: 'mock 不模拟 hash-bound blocking workpack；请使用真实后端',
-        backendKind: 'MockCapabilityUnavailable',
-      }))
-    }
-    if (!request.actor.trim() || request.decisions.length === 0
-      || request.decisions.some((row) => !row.reason.trim())) {
-      return fail(new ApiError('server', path, {
-        status: 422,
-        message: 'actor/reason 不得只有空白，且逐项提交不能为空',
-        backendKind: 'RequestValidationError',
-      }))
-    }
-    const review = loadGlobalReview(sid)
-    if (!review.current) {
-      return fail(new ApiError('server', path, {
-        status: 409,
-        message: 'stage2 global review is stale or omits required subjects',
-        backendKind: 'HumanEditProtected',
-      }))
-    }
-    const decisionIds = request.decisions.map((row) => row.item_id)
-    if (new Set(decisionIds).size !== decisionIds.length) {
-      return fail(new ApiError('server', path, {
-        status: 422,
-        message: 'each global-review item may be decided at most once per request',
-        backendKind: 'RequestValidationError',
-      }))
-    }
-    const byId = new Map(review.items.map((item) => [item.item_id, item]))
-    for (const row of request.decisions) {
-      const item = byId.get(row.item_id)
-      if (!item || item.subject_sha256 !== row.expected_subject_sha256) {
-        return fail(new ApiError('server', path, {
-          status: 409,
-          message: 'global-review subject changed; stale decision rejected',
-          backendKind: 'HumanEditProtected',
-        }))
-      }
-      if (item.resolution_required && row.state === 'PASS') {
-        return fail(new ApiError('server', path, {
-          status: 409,
-          message: '该主体仍待 typed 修订，不能直接 PASS',
-          backendKind: 'HumanEditProtected',
-        }))
-      }
-    }
-    const timestamp = new Date().toISOString()
-    const decisions = new Map(request.decisions.map((row) => [row.item_id, row]))
-    const items = review.items.map((item) => {
-      const row = decisions.get(item.item_id)
-      return row
-        ? {
-            ...item,
-            state: row.state,
-            actor: request.actor.trim(),
-            decided_at: timestamp,
-            reason: row.reason.trim(),
-            evidence: row.evidence,
-          }
-        : item
-    })
-    const blocking = items.filter((item) => item.effect === 'blocking')
-    const approved = review.current && blocking.length > 0
-      && blocking.every((item) => item.state === 'PASS')
-    saveGlobalReview(sid, {
-      ...review,
-      items,
-      approved,
-      generation_safe: approved,
-      quarantined_groups: [],
-    })
-    const job = finish({
-      kind: 'stage2.global',
-      label: 'stage2 全局复核决策',
-      extra: ['--review-decisions'],
-      sid,
-      ordinal: null,
-    })
-    if (!approved) {
-      const stored = JOBS.find((row) => row.id === job.id)
-      if (stored) {
-        stored.state = 'landed_red'
-        stored.log = [...stored.log, '[mock] 仍有非 PASS 项，s2 gate 保持关闭']
-        persistJobs()
-        return later(stripLog(stored))
-      }
-    }
-    return later(job)
-  },
 
   getStage4: (sid, o) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'stage4/' + o, false, 'chapter') :
     fail(new ApiError('server', `/novels/${sid}/stage4/${o}`, {
@@ -1689,8 +1555,16 @@ export const mockApi: Api = {
   previewJob: (req) => req.sid === PLOT_SAMPLE_SID || /^stage[67]\./.test(req.kind)
     ? readonlyPlot('/jobs/preview') : later(mockJobPreview(req)),
 
-  startJob: (req) => req.sid === PLOT_SAMPLE_SID || /^stage[67]\./.test(req.kind)
-    ? readonlyPlot('/jobs') : later(spawn(req)),
+  startJob: (req) => {
+    if (req.sid === PLOT_SAMPLE_SID || /^stage[67]\./.test(req.kind)) {
+      return readonlyPlot('/jobs')
+    }
+    // stage2 两份付费生成各自发起；发起即记录，供 s1 spawns 的下一相判断。
+    if (req.kind === 'stage2.global' || req.kind === 'stage2.blueprint') {
+      lsWrite(req.kind + '.issued.' + req.sid, true)
+    }
+    return later(spawn(req))
+  },
 
   /* agent 代跑：静态样例 —— 列表恒空（mock 不养 agent 进程），start 回一条 running 记录 */
   getAgentCapabilities: () => later(fx<AgentCapabilitiesResponse>('agent_capabilities.json')),
@@ -2034,10 +1908,9 @@ export const mockApi: Api = {
 
   backfillApprovals: (sid) => {
     const doc = loadDoc(sid)
-    // 历史书缺当前Core证据，不能借独立合成书的审阅状态补批。
-    const stage2Seen = sid === stage2CoreFixture().global.sid
-      && doc.seen.read && doc.seen.global && loadGlobalReview(sid).generation_safe
-    const backfillable = GATE_KEYS.slice(0, stage2Seen ? 3 : 2)
+    // 历史书缺当前 stage2 产物与 Core 证据，不能借独立合成书的材料补批；
+    // stage4 入口已改由统一机械准入衔接，补录只覆盖 s0/s1 两个人工闸。
+    const backfillable = GATE_KEYS.slice(0, 2)
     const backfilled = backfillable.filter((key) => !doc.gate[key])
     const approvals = saveDoc({
       ...doc,
@@ -2048,27 +1921,6 @@ export const mockApi: Api = {
       writing: doc.gate.s4 ? doc.writing : false,
     })
     return later({ approvals, backfilled })
-  },
-
-  markSeen: (sid, key: SeenKey, request: BlueprintSeenRequest | Stage2GlobalSeenRequest) => {
-    const path = '/novels/' + sid + '/approvals/seen/' + key
-    if (key === 'read') {
-      return fail(new ApiError('server', path, {
-        status: 501,
-        message: '当前 Blueprint 工作包与知识关联请连接真实后端；离线样本不能授予已读',
-        backendKind: 'MockCapabilityUnavailable',
-      }))
-    }
-    if (key === 'global' && !isCurrentGlobalSeenRequest(sid, request)) {
-      return fail(new ApiError('server', path, {
-        status: 409,
-        message: 'seen.global 必须携带当前 review 的 review_token 与非空确认人；主体变化后请重新通读',
-        backendKind: 'ApprovalRequired',
-      }))
-    }
-    const doc = loadDoc(sid)
-    if (doc.seen[key]) return later(doc)
-    return later(saveDoc({ ...doc, seen: { ...doc.seen, [key]: true } }))
   },
 
   startWriting: (sid, request: WritingApprovalRequest) => {
@@ -2218,13 +2070,9 @@ export function plotFlowFixture() {
 /** 正式合成链录制的界面测试材料；不与历史小说或审批自动拼接。 */
 export function plotReviewFixture() {
   return structuredClone(plotReviewSample) as unknown as {
-    chapter: import('@/types/stages').BlueprintReviewWorkpack
-    cross: import('@/types/stages').BlueprintReviewWorkpack
-    reading: import('@/types/stages').ReadingResponse
     prepare: import('@/types/prepare').PrepareWorkpack
     hook: Stage6ApprovalWorkpack
     rename: Stage7ApprovalWorkpack
-    enum_values: { plot_review_dimensions: string[]; plot_dimension_states: string[] }
   }
 }
 
@@ -2235,6 +2083,5 @@ export function stage2CoreFixture() {
     metadata: { synthetic: true; source: string; schemas: Record<string, number>; scope: string }
     global: Stage2Global
     characters: import('@/types/characters').CharacterRegistryView
-    review: GlobalReviewResponse
   }
 }

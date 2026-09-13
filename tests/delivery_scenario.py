@@ -14,7 +14,6 @@ sys.path.insert(0, str(ROOT))
 
 import pytest
 from fastapi.testclient import TestClient
-from contracts.schema.api import BlueprintReviewWorkpack
 from contracts.schema.stage2 import ChapterBlueprints
 from contracts.schema.stage4 import PlanChapters
 from novel.api.app import create_app, UI_HEADER
@@ -28,7 +27,6 @@ from novel.stages.stage7 import rename
 from novel.orchestrator import jobs
 from tests.test_stage2_uploaded_flow import uploaded, _ctx, SID, PREFIX, _get
 from tests.test_stage2_generation import _client as blueprint_client, _respond_blueprints, _response_blueprints
-from tests.test_plot_review_runtime import request as plot_review_request
 from tests.test_plot_pipeline import REWRITTEN_BEATS
 from tests.test_stage4_v3_integration import _client, _split_a_responder
 
@@ -113,28 +111,7 @@ def build(base):
                 client, wire = blueprint_client(ctx, lambda request, _n: _respond_blueprints(request, _response_blueprints()))
                 assert extract.run_blueprint(ctx, client).passed
                 assert len(wire.calls) == 3
-            # 生成、章审、跨章复核与免费知识汇合分别恢复；已有完整文件不等于接受。
-            if not _get(http, '/approvals')['gate']['s2']:
-                for scope in ('chapter:1', 'chapter:2', 'chapter:3', 'cross_chapter'):
-                    progress = _get(http, '/approvals')['stage2_reviews']['stage2.blueprint']['plot_progress']
-                    assert progress is not None
-                    current = next(row for row in progress['scopes'] if row['scope'] == scope)
-                    if current['state'] == 'accepted':
-                        continue
-                    response = http.get(PREFIX + '/stage2/blueprint-review-workpack', params={'scope': scope})
-                    assert response.status_code == 200, response.text
-                    pack = BlueprintReviewWorkpack.model_validate(response.json())
-                    assert pack.scope == scope
-                    if scope == 'cross_chapter':
-                        assert pack.progress.accepted_chapters == 3
-                        assert not _get(http, '/approvals')['gate']['s2']
-                    accepted = post(http, '/approvals/stage2-review',
-                                    plot_review_request(pack).model_dump(mode='json'))
-                    if scope.startswith('chapter:'):
-                        assert not accepted['gate']['s2'], '全部章审尚不能代替独立跨章接受'
-                    print('BLUEPRINT_SCOPE_OK', scope, flush=True)
-                _run_free_next(http, node='stage2.blueprint', flags=['--close-review'])
-                assert _get(http, '/approvals')['gate']['s2']
+            # Stage2 语义审阅已退役：蓝图生成后直接经统一机械准入进入 Stage4。
             bp = ArtifactStore(_ctx(base, 'stage4.design')).read_own(ChapterBlueprints, 'stage2/chapter_blueprints.json')[0]
             bp_json = bp.model_dump(by_alias=True, mode='json')
             if not (book / plan.CANDIDATE_REL).is_file():

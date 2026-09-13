@@ -69,43 +69,6 @@ def edits_of(book: str) -> tuple[str, ...]:
     return tuple(rel for rel in HUMAN_EDITS if current(book, rel) is not None)
 
 
-def decide_global_review(box: 'Sandbox', *, actor: str = 'reviewer',
-                         reason: str = '测试前置：逐条已核实') -> None:
-    """把这本书的 stage2 审阅面**逐条判 PASS** —— `s2` 审批闸的前置事实。
-
-    ⚠⚠ 现役语料三本的审阅项**全是 `pending`**（从没有人做过决策），而 `s2` 要求
-    `global_review_status(...)` 的 `approved` 为真（当前 **且** blocking 面逐条 PASS，见
-    `novel/orchestrator/approvals.py::_require_typed_gate_decision`）。
-    ⚠ 本函数逐条判 PASS **包含 disclosure 那三类**——那是充分条件，不是闸的口径；
-    闸只看 blocking（`contracts/invariants.py::review_effect_of`）
-    ⇒ 不摆这条前置事实，`s2` 永远填不出，再由 `_GATE_REQUIREMENTS` 级联堵死
-    `s4`→`s5`→`s6`→`s7`，表现成一批与「审阅决策」毫无字面关系的红。
-    人工决策是本层被测行为的**输入**不是它的结论，摆它是前置事实不是绕守卫
-    （同 `tests/test_api_edits.py::_stamp_chain` 的自述）。
-
-    ⚠⚠ **审阅面从 `build_review(grounding)` 现算，只改 `state`/`actor`/`reason` 三格**，
-    身份四元组一个字不动：那三格恰恰是新鲜度**不看**的（理由写在
-    `novel/store.py::_global_review_freshness`），而手搓一份 item 会让它按构造
-    永远算不出 `fresh`，`stage2/global_review.json` 又在 `SELF_FRESH_DETERMINISTIC` 里
-    ⇒ 写盘口当场 `ProvenanceRefused`。这个坑本仓踩过一次，见 `tests/test_views_inbox.py`。
-    """
-    from contracts.artifacts import STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW
-    from novel import prov
-    from novel.orchestrator.state import readonly_ctx
-    from novel.quality.global_review import build_review
-    from novel.store import ArtifactStore
-
-    expected = build_review(box.read(STAGE2_GLOBAL_GROUNDING))
-    decided = expected.model_copy(update={'items': [
-        item.model_copy(update={
-            'state': 'PASS', 'actor': actor, 'reason': reason,
-            'decided_at': '2026-08-18T00:00:00+00:00'})
-        for item in expected.items
-    ]})
-    store = ArtifactStore(readonly_ctx(box.dir, 'stage2.global', prov.code_version()))
-    store.write(STAGE2_GLOBAL_REVIEW, decided)
-
-
 def source_resolves_in_a_sandbox(book: str) -> bool:
     """这本书的 `stage0` 新鲜度在**沙箱里**答得出吗（记录的源路径自己还在盘上）。
 

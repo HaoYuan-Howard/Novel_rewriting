@@ -22,9 +22,9 @@ from __future__ import annotations
 
 from contracts.artifacts import (
     ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE1_MAIN_TEXT,
-    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_KNOWLEDGE_LINKS,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
     STAGE2_CHARACTERS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT, STAGE2_GLOBAL_EDIT_FAILURE,
-    STAGE2_GLOBAL_EDIT_INPUT_COMMIT, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
+    STAGE2_GLOBAL_EDIT_INPUT_COMMIT, STAGE2_GLOBAL_GROUNDING, STAGE2_KNOWLEDGE_LINKS,
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
     STAGE5_CHAPTER, artifact_rel,
@@ -35,7 +35,6 @@ from pathlib import Path
 
 from contracts.invariants import (
     LEGACY_STAGE5_MODES, NODES, OPERATOR_REDO_STRATEGIES, RESUME_VERDICTS, STAGES,
-    STAGE2_NODE_REVIEW_OWNERS,
 )
 from contracts.schema import ARTIFACTS, artifact_key, artifact_spec
 from contracts.schema.orchestration import (
@@ -628,134 +627,6 @@ def stage2_invalid_projection_ready(ov: NovelOverview) -> bool:
     )
 
 
-def stage2_global_review_refresh_needed(ov: NovelOverview) -> bool:
-    """已购买知识仍 current 时，缺失/过期审阅是免费后继；损坏保持 unknown。"""
-    stage = next((s for s in ov.stages if s.stage == 'stage2'), None)
-    if stage is None:
-        return False
-    rows = {row.rel: row for row in stage.artifacts}
-    for rel in (STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING):
-        source = rows.get(rel)
-        if source is None or not (source.exists and source.readable
-                                  and not source.invalid and source.freshness == 'fresh'):
-            return False
-    review = rows.get(STAGE2_GLOBAL_REVIEW)
-    return bool(review is not None and not review.invalid
-                and (not review.exists or (review.readable and review.freshness == 'stale')))
-
-
-def stage2_knowledge_rebind_needed(
-    base: str | os.PathLike[str], sid: str, ov: NovelOverview,
-) -> bool:
-    """只由知识 producer 证明人物投影之外的边未变；不从 stale 一词猜修复权限。"""
-    stage = next((row for row in ov.stages if row.stage == 'stage2'), None)
-    if stage is None:
-        return False
-    knowledge = next((row for row in stage.artifacts if row.rel == STAGE2_GLOBAL_GROUNDING), None)
-    if knowledge is None or not (knowledge.exists and knowledge.readable
-                                  and not knowledge.invalid and knowledge.freshness == 'stale'):
-        return False
-    book = paths.find_novel_dir(base, sid)
-    if book is None:
-        return False
-    from novel.stages.stage2.character_rebind import prepare_if_changed
-    try:
-        ctx = readonly_ctx(book, 'stage2.global', prov.code_version())
-        return prepare_if_changed(ArtifactStore(ctx), STAGE2_GLOBAL_GROUNDING) is not None
-    except (TerminalState, ProvenanceRefused):
-        # 原 unknown/stale 状态仍由 overview 保留；这里仅否定免费重绑动作的资格。
-        return False
-
-
-def stage2_reviewed_edit_correction_needed(
-    base: str | os.PathLike[str], sid: str, ov: NovelOverview,
-) -> bool:
-    """是否有一份尚未完成预算内增量纠正的 reviewed GlobalEdit。
-
-    现役 producer 在 reviewed edit canonical 化后立即写
-    ``global_edit_failure.json``：它既覆盖 HARD，也覆盖没有 INVALID 的候选载体/
-    post-edit review 失败与 canonical→终态崩溃窗。三种确定失败进入纠正任务；
-    ``canonical_pending`` 仍归 Supervisor 重放同一 durable action，绝不消耗新的
-    Commander 席位。sidecar 内容损坏则只读 planner 显式失败，不能静默退回普通
-    review 而把已发生的业务 delta 丢掉。
-
-    reviewed INVALID 缺少 typed 失败回执时保持结果未知，不从旧 provenance
-    反推一次已购买的 Commander 纠正授权。
-
-    完成度仍不读 ``_service``，也不从作业日志猜状态；全部证据都在书内 typed
-    产物、INVALID provenance/freshness 与不可变 revalidation baseline 中。
-    """
-    novel_dir = paths.find_novel_dir(base, sid)
-    if novel_dir is None:
-        # ``plan_book_from_overview`` 也供冻结/合成 overview 的只读消费者使用；
-        # 书目录不存在时，盘上不可能同时存在 reviewed-edit 恢复事实。
-        return False
-    from novel.orchestrator.approvals import projection_code
-    store = ArtifactStore(readonly_ctx(
-        novel_dir, 'stage2.global', projection_code()))
-    if store.exists(STAGE2_GLOBAL_EDIT_FAILURE):
-        # ``canonical_pending`` 只证明 producer 已接管 durable action，尚没有
-        # Commander 可纠正的确定失败；Supervisor 应重放同一 action，不能耗一席
-        # correction。其余三类才进入 correction workpack。坏 sidecar 让只读
-        # planner 显式失败，而不是把已发生的 edit 当作不存在。
-        failure = store.read_own(
-            GlobalEditFailure, STAGE2_GLOBAL_EDIT_FAILURE)[0]
-        if failure.failure_kind in {
-                'ordinary_hard_gate', 'ordinary_candidate_validation'}:
-            return False
-        if failure.failure_kind == 'canonical_pending':
-            return False
-        if (failure.failure_kind == 'hard_gate'
-                and stage2_global_edit_terminal_failure_needed(
-                    base, sid, code=store.ctx.code)):
-            # 人已经直接修改 live INVALID；下一步只能显式 revalidate 或提交新
-            # typed edit，不能让 Commander 基于旧 formal sparse delta 覆盖人工稿。
-            return False
-        if (failure.failure_kind == 'hard_gate'
-                and stage2_reviewed_edit_revalidation_needed(
-                    base, sid, code=store.ctx.code)):
-            return False
-        if not store.exists(STAGE2_GLOBAL_EDIT):
-            raise ArtifactUnreadable(
-                'classified reviewed-edit failure 已失去 canonical edit')
-        current_edit, current_edit_sha256 = store.read_own_with_sha256(
-            GlobalEdit, STAGE2_GLOBAL_EDIT)
-        if current_edit_sha256 == failure.failed_edit_sha256:
-            if current_edit.post_edit_review is None:
-                raise ArtifactUnreadable(
-                    'classified reviewed-edit failure 的 exact edit 缺 attestation')
-            return True
-        if current_edit.post_edit_review is None:
-            # 显式新人工 edit 已 canonical；若硬杀发生在 sidecar 归档前，旧
-            # failure 只是可审计历史，不得抢回 Commander planner。
-            return False
-        raise ArtifactUnreadable(
-            'classified reviewed-edit failure 与当前 reviewed edit SHA 不匹配')
-
-    if (store.exists(STAGE2_GLOBAL_EDIT)
-            and store.exists(paths.invalid_of(STAGE2_GLOBAL_GROUNDING))):
-        edit = store.read_own(GlobalEdit, STAGE2_GLOBAL_EDIT)[0]
-        if edit.post_edit_review is not None:
-            raise ArtifactUnreadable(
-                'reviewed Global INVALID 缺 typed 失败回执，结果未知；'
-                '旧 INVALID 推断恢复已退役，须由当前 producer 明确修复')
-    return False
-
-
-def stage2_reviewed_edit_revalidation_needed(
-    base: str | os.PathLike[str], sid: str, *, code: str | None = None,
-) -> bool:
-    """reviewed INVALID 是否按真实 revalidate 尺子已无 HARD、可 0-wire 提升。"""
-    novel_dir = paths.find_novel_dir(base, sid)
-    if novel_dir is None:
-        return False
-    from novel.orchestrator.approvals import projection_code
-    ctx = readonly_ctx(
-        novel_dir, 'stage2.global', code or projection_code())
-    from novel.stages.stage2 import extract as stage2_extract
-    return stage2_extract.reviewed_invalid_auto_revalidation_needed(ctx)
-
-
 def stage2_global_edit_terminal_failure_needed(
     base: str | os.PathLike[str], sid: str, *, code: str | None = None,
 ) -> bool:
@@ -791,14 +662,14 @@ def stage2_global_edit_terminal_failure_needed(
     return audit.edited_by_human
 
 
-def stage2_reviewed_edit_commit_recovery_flags(
+def stage2_edit_commit_recovery_flags(
     base: str | os.PathLike[str], sid: str, *, code: str | None = None,
 ) -> tuple[str, ...] | None:
     """返回 durable Stage2 Global 动作唯一允许的 exact 0-wire argv。
 
     revalidate journal 冻结的是发起本次提升的真实 ``actor/reason``；人工动作
-    硬杀后的恢复必须逐字复用它们，不能被 planner 改写成 system 身份。只有尚未
-    prepare journal 的 legacy 自动提升才由调用方使用固定 system 凭据。
+    硬杀后的恢复必须逐字复用它们，不能被 planner 改写成 system 身份。
+    Stage2 语义审阅退役后不再有 reviewed edit 的 canonical_pending 分支。
     """
     novel_dir = paths.find_novel_dir(base, sid)
     if novel_dir is None:
@@ -812,18 +683,6 @@ def stage2_reviewed_edit_commit_recovery_flags(
         store.read_own(
             GlobalEditInputCommit, STAGE2_GLOBAL_EDIT_INPUT_COMMIT)
         return ('--apply-edit', STAGE2_GLOBAL_EDIT)
-    if store.exists(STAGE2_GLOBAL_EDIT_FAILURE):
-        failure = store.read_own(
-            GlobalEditFailure, STAGE2_GLOBAL_EDIT_FAILURE)[0]
-        if failure.failure_kind == 'canonical_pending':
-            # input WAL 退休到 formal/terminal handoff 之间，pending sidecar 就是
-            # 同一 durable action 的 0-wire 恢复事实。不能只看 kind：逐字复验
-            # canonical edit、修前 formal、attestation source 与完整 workpack，
-            # 任一漂移都关闭式抛错，绝不新发 Commander 席位。
-            from novel.stages.stage2 import extract as stage2_extract
-            stage2_extract._validated_failure_inputs(  # noqa: SLF001
-                ctx, store, failure)
-            return ('--apply-edit', STAGE2_GLOBAL_EDIT)
     if not store.exists(STAGE2_GLOBAL_EDIT_COMMIT):
         return None
     # 坏 journal 让 planner 关闭式失败；不能把 partial bundle 当普通 stale/
@@ -841,22 +700,22 @@ def stage2_reviewed_edit_commit_recovery_flags(
     return ('--revalidate', '--actor', audit.actor, '--reason', audit.reason)
 
 
-def stage2_reviewed_edit_commit_recovery_action(
+def stage2_edit_commit_recovery_action(
     base: str | os.PathLike[str], sid: str, *, code: str | None = None,
 ) -> str | None:
     """返回 durable 动作的 verb；exact argv 由 recovery_flags 单源给出。"""
-    flags = stage2_reviewed_edit_commit_recovery_flags(
+    flags = stage2_edit_commit_recovery_flags(
         base, sid, code=code)
     if flags is None:
         return None
     return 'revalidate' if flags[0] == '--revalidate' else 'apply_edit'
 
 
-def stage2_reviewed_edit_commit_recovery_needed(
+def stage2_edit_commit_recovery_needed(
     base: str | os.PathLike[str], sid: str, *, code: str | None = None,
 ) -> bool:
     """是否存在只能由 0-wire deterministic action 补尾的动作事实。"""
-    return stage2_reviewed_edit_commit_recovery_action(
+    return stage2_edit_commit_recovery_action(
         base, sid, code=code) is not None
 
 
@@ -892,6 +751,29 @@ def stage2_projection_source_unproven(ov: NovelOverview) -> str | None:
             '正式人物登记存在但来源 freshness '
             f'为 unknown/{grounding.reason}')
     return None
+
+
+def stage2_knowledge_rebind_needed(
+    base: str | os.PathLike[str], sid: str, ov: NovelOverview,
+) -> bool:
+    """只由知识 producer 证明人物投影之外的边未变；不从 stale 一词猜修复权限。"""
+    stage = next((row for row in ov.stages if row.stage == 'stage2'), None)
+    if stage is None:
+        return False
+    knowledge = next((row for row in stage.artifacts if row.rel == STAGE2_GLOBAL_GROUNDING), None)
+    if knowledge is None or not (knowledge.exists and knowledge.readable
+                                  and not knowledge.invalid and knowledge.freshness == 'stale'):
+        return False
+    book = paths.find_novel_dir(base, sid)
+    if book is None:
+        return False
+    from novel.stages.stage2.character_rebind import prepare_if_changed
+    try:
+        ctx = readonly_ctx(book, 'stage2.global', prov.code_version())
+        return prepare_if_changed(ArtifactStore(ctx), STAGE2_GLOBAL_GROUNDING) is not None
+    except (TerminalState, ProvenanceRefused):
+        # 原 unknown/stale 状态仍由 overview 保留；这里仅否定免费重绑动作的资格。
+        return False
 
 
 def stage2_blueprint_extraction_current(ov: NovelOverview) -> bool:
@@ -940,17 +822,12 @@ def resume_verdict(
     """
     # 明确工作单元动作不同于“补缺产物”：产物已存在也不能吞掉待消费的
     # typed 返工或接受补提交。队列负责凭据当前性，producer 在执行时再核验。
-    if node == 'stage2.blueprint' and flags == ('--close-review',):
-        return RESUME_RUN, '零模型核验已有两份节点接受并补齐审批链'
     if node == 'stage2.analyze':
         return RESUME_RUN, '联合首抽由 producer 在请求前复验无历史来源，分别保存人物与知识'
-    if node == 'stage2.global' and flags and flags[0] in {'--apply-core-edits', '--recover-analyze'}:
-        return RESUME_RUN, '按已购来源或已保存的 typed 决定执行免费恢复'
+    if node == 'stage2.global' and flags and flags[0] == '--recover-analyze':
+        return RESUME_RUN, '按已购来源执行免费恢复'
     if node in {'stage4.design', 'stage4.plan'} and flags == ('--close-review',):
         return RESUME_RUN, '零模型复验全部审阅义务的历史覆盖并绑定当前审批证据'
-    if (node in STAGE2_NODE_REVIEW_OWNERS and len(flags) == 2
-            and flags[0] == '--review-token' and bool(flags[1])):
-        return RESUME_RUN, '消费状态机已登记的当前 typed 返工请求'
     spec = NODES.get(node)
     if spec is None:
         return RESUME_RUN, f'未知节点 {node!r}'
@@ -975,8 +852,6 @@ def resume_verdict(
             f'{STAGE2_BLUEPRINT_CHARACTER_PROJECTION} 缺失、损坏或未绑定当前称名底座；'
             '当前人物登记已足够确定性重建它，运行 '
             '`stage2.characters --revalidate --actor <id> --reason <why>`（0 LLM）')
-    if node == 'stage2.global' and stage2_global_review_refresh_needed(ov):
-        return RESUME_RUN, '当前知识可用，运行 --refresh-review 免费刷新人物与知识审阅'
     if node == 'stage2.characters':
         unproven = stage2_projection_source_unproven(ov)
         if unproven is not None:
@@ -1084,8 +959,10 @@ def resume_verdict(
     if node == 'stage2.blueprint' and stage2_blueprint_extraction_current(ov):
         links = next((row for row in st.artifacts if row.rel == STAGE2_KNOWLEDGE_LINKS), None)
         if links is not None and links.exists and (not links.readable or links.freshness == 'unknown'):
-            return RESUME_UNKNOWN, '知识关联来源损坏或未知；保留正式 Blueprint，先检查关联来源'
-        return RESUME_SKIP, '正式 Blueprint 抽取已完成；知识关联与审批由 Commander 决定及 --close-review 免费收口'
+            return RESUME_UNKNOWN, (
+                '旧盘遗留的知识关联文件损坏或不可判；保留正式 Blueprint，'
+                '先人工核对该退役文件（v7 不再生成与消费）')
+        return RESUME_SKIP, '正式 Blueprint 抽取已完成；下游由统一机械准入判定'
 
     mine = artifacts_for_node(ov, node)
     stale = [a for a in mine if a.freshness == 'stale']

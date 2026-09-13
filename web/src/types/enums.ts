@@ -47,10 +47,6 @@ export interface EnumJobKind {
 }
 
 export interface EnumsResponse {
-  plot_review_dimensions?: string[]
-  plot_dimension_states?: string[]
-  stage2_node_review_decisions?: string[]
-  stage2_node_review_owners?: string[]
   nonbody_kinds: string[]
   time_layers: string[]
   style_words: string[]

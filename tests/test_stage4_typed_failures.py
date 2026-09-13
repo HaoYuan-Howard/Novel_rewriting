@@ -22,13 +22,12 @@ from typing import Any
 
 import pytest
 
-from contracts.artifacts import STAGE4_PLAN_CHAPTERS, STAGE2_KNOWLEDGE_LINKS
+from contracts.artifacts import STAGE4_PLAN_CHAPTERS
 from contracts.invariants import (
     FAILURE_REPAIR_OWNERS, FAILURE_STOP_OWNERS, STAGE4_FAILURE_OWNERS,
     stage4_failure_owner, stage4_failure_retryable,
 )
 from contracts.schema.stage4 import EvidenceBindingResponse, PlanChapters
-from contracts.schema.knowledge_links import KnowledgeLinks
 from contracts.schema.report import finding
 from novel import prov
 from novel.errors import GateBlocked, TerminalState
@@ -36,7 +35,7 @@ from novel.node_agents import Stage4PlanSessionPool
 from novel.llm.typed_failures import TypedFailure, WitnessCollector, make
 from novel.report.findings import ran
 from novel.stages.stage4 import checks, plan
-from novel.stages.stage2.global_review import generation_grounding
+from novel.stages.stage2 import grounding as stage2_grounding
 from novel.stages.stage4.beats import beat_index
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
@@ -133,19 +132,18 @@ def _clean_plan_bundle(
     store = ArtifactStore(clean_ctx)
     plan_raw = store.read(PlanChapters, STAGE4_PLAN_CHAPTERS).model_dump(
         by_alias=True)
-    ground = generation_grounding(store).model_dump(mode='json', by_alias=True)
-    knowledge = store.read(KnowledgeLinks, STAGE2_KNOWLEDGE_LINKS).model_dump(mode='json', by_alias=True)
-    return book, plan_raw, blueprints_raw, main_text(), ground, knowledge
+    ground = stage2_grounding.read(store).model_dump(mode='json', by_alias=True)
+    return book, plan_raw, blueprints_raw, main_text(), ground
 
 
 def test_clean_plan_has_no_typed_failure(tmp_path: Path) -> None:
     """干净计划零 typed 发射；判据扫描本身必须发生（不是空转的绿）。"""
-    book, plan_raw, blueprints_raw, main_rows, ground, knowledge = _clean_plan_bundle(tmp_path)
+    book, plan_raw, blueprints_raw, main_rows, ground = _clean_plan_bundle(tmp_path)
     witness = WitnessCollector()
     outcomes = checks.check(
         plan_raw, blueprints=blueprints_raw, main_text=main_rows,
         bidx=beat_index(blueprints_raw, main_rows), global_g=ground,
-        knowledge_links=knowledge, witness=witness)
+        witness=witness)
     assert outcomes, '判据表常驻读数必须存在，扫描不是空转'
     assert len(witness) == 0
     readings = [f for outcome in outcomes if outcome.rule == 'verbatim_share' for f in outcome.findings]
@@ -155,7 +153,7 @@ def test_clean_plan_has_no_typed_failure(tmp_path: Path) -> None:
 
 
 def test_chapter_scoped_findings_carry_output_ordinal(tmp_path: Path) -> None:
-    book, plan_raw, blueprints_raw, main_rows, ground, knowledge = _clean_plan_bundle(tmp_path)
+    book, plan_raw, blueprints_raw, main_rows, ground = _clean_plan_bundle(tmp_path)
     chapter = plan_raw['output_chapters'][0]
     assert chapter['scenes'], '夹具必须有场景'
     scene = chapter['scenes'][0]
@@ -167,7 +165,7 @@ def test_chapter_scoped_findings_carry_output_ordinal(tmp_path: Path) -> None:
     outcomes = checks.check(
         plan_raw, blueprints=blueprints_raw, main_text=main_rows,
         bidx=beat_index(blueprints_raw, main_rows), global_g=ground,
-        knowledge_links=knowledge, witness=witness)
+        witness=witness)
     a_failures = witness.finalize(candidate_sha256='a' * 64, surfacing='stage4.plan')
     placement = next(row for row in a_failures if row.code == 'placement_ref')
     assert placement.chapter_ordinal == ordinal

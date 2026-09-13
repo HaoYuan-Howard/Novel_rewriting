@@ -61,12 +61,8 @@ def _t(*tokens: str) -> frozenset[str]:
 
 _INBOX = queue.WAITING_ON_INBOX
 _RESUME = queue.WAITING_ON_RESUME_DECISION
-_STAGE2_REVIEW = queue.WAITING_ON_STAGE2_REVIEW
-_STAGE2_EDIT_CORRECTION = queue.WAITING_ON_STAGE2_EDIT_CORRECTION
 _STAGE2_EDIT_COMMIT = queue.WAITING_ON_STAGE2_EDIT_COMMIT
 _STAGE2_EDIT_REVALIDATE = queue.WAITING_ON_STAGE2_EDIT_REVALIDATE
-_STAGE2_EDIT_TERMINAL = queue.WAITING_ON_STAGE2_EDIT_TERMINAL
-_STAGE2_BLUEPRINT_REVIEW = queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW
 _STAGE4_DESIGN = queue.WAITING_ON_STAGE4_DESIGN_REVIEW
 _STAGE4_BINDING = queue.WAITING_ON_STAGE4_BINDING_RESOLUTION
 _STAGE4_STRUCTURE_REPLAN = queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN
@@ -82,11 +78,8 @@ _STAGE6_APPROVE = 'stage6.approve'
 _STAGE7_APPROVE = 'stage7.approve'
 
 _W0 = frozenset({_INBOX, _RESUME, _STAGE0_APPROVE})
-# 两个节点审阅都可读取交叉材料；写权仍按知识生产节点登记。
-_W2 = frozenset({
-    _INBOX, _RESUME, _STAGE2_REVIEW, _STAGE2_EDIT_CORRECTION,
-    _STAGE2_BLUEPRINT_REVIEW,
-})
+# stage2 恢复入口只认统一机械准入 blockers；节点写权仍按知识生产节点登记。
+_W2 = frozenset({_INBOX, _RESUME})
 _W4 = frozenset({
     _INBOX, _RESUME, _STAGE4_DESIGN, _STAGE4_BINDING,
     _STAGE4_STRUCTURE_REPLAN, _STAGE4_DESIGN_ACTION, _STAGE4_STRUCTURE,
@@ -117,38 +110,20 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     ),
 
     RecoveryRunPolicy('stage2.global', _t('--renormalize'), _W2),
-    RecoveryRunPolicy('stage2.global', _t('--apply-core-edits'), _W2),
     RecoveryRunPolicy('stage2.global', _t('--recover-analyze'), _W2),
     RecoveryRunPolicy('stage2.analyze', _t('--recover-analyze-run'), _W2),
     RecoveryRunPolicy(
         'stage2.global', _t('--revalidate', '--actor', '--reason'),
-        _W2 | frozenset({
-            _STAGE2_EDIT_REVALIDATE, _STAGE2_EDIT_TERMINAL})),
+        _W2 | frozenset({_STAGE2_EDIT_REVALIDATE})),
+    # reviewed-edit 只保留 WAL 补尾这一条恢复路；审阅轮的 apply-edit/
+    # review-decisions 等语义动作已随 Stage2 审阅退役。
     RecoveryRunPolicy(
         'stage2.global', _t('--apply-edit'),
-        (_W2 - {_STAGE2_BLUEPRINT_REVIEW}) | frozenset({
-            _STAGE2_EDIT_COMMIT, _STAGE2_EDIT_TERMINAL})),
-    RecoveryRunPolicy('stage2.global', _t('--review-decisions'), _W2 - {_STAGE2_BLUEPRINT_REVIEW}),
-    RecoveryRunPolicy('stage2.global', _t('--emit-edit-template'), _W2),
-    RecoveryRunPolicy(
-        'stage2.global', _t('--emit-edit-correction-workpack'), _W2),
-    RecoveryRunPolicy('stage2.global', _t('--emit-review-template'), _W2),
-    RecoveryRunPolicy(
-        'stage2.global', _t('--emit-review-template', '--review-scope'), _W2),
-    RecoveryRunPolicy('stage2.global', _t('--emit-review-workpack'), _W2),
-    RecoveryRunPolicy(
-        'stage2.global', _t('--emit-review-workpack', '--review-scope'), _W2),
+        frozenset({_STAGE2_EDIT_COMMIT})),
     RecoveryRunPolicy('stage2.blueprint', _t('--check-only'), _W2),
-    RecoveryRunPolicy('stage2.blueprint', _t('--close-review'), _W2),
     RecoveryRunPolicy('stage2.blueprint', _t('--renormalize'), _W2),
     RecoveryRunPolicy(
         'stage2.blueprint', _t('--revalidate', '--actor', '--reason'), _W2),
-    # ``seen.read`` 绑定整本 Blueprint 工作包，而 Stage4A 的 typed 审阅又以
-    # ``gate.s2`` 为硬前置。新盘若在 Stage2 评测收口后才补审批账，当前 blocker
-    # 已前移到 Stage4；只给 _W2 会让工作包生产者与审批前置形成死锁。该入口纯读，
-    # 因而在全部 Stage4 恢复态继续开放，不放宽任何写盘或付费动作。
-    RecoveryRunPolicy(
-        'stage2.blueprint', _t('--emit-review-workpack'), _W2 | _W4),
     RecoveryRunPolicy(
         'stage2.blueprint', _t('--emit-edit-template'), _W2 | _W4),
     RecoveryRunPolicy(
@@ -319,7 +294,6 @@ EXTERNAL_INPUT_POLICIES: Final[
     ('stage0.edit', '--apply-edit-plan'): 'repo',
     ('stage0.edit', '--apply-candidate-plan'): 'repo',
     ('stage2.global', '--apply-edit'): 'book_or_service_edit',
-    ('stage2.global', '--review-decisions'): 'book_or_service_edit',
     ('stage2.blueprint', '--validate-edit'): 'book_or_service_edit',
     ('stage2.blueprint', '--apply-edit'): 'book_or_service_edit',
     # Stage4A producer 用 ``paths.edit_rel`` + ArtifactStore 读 typed request，

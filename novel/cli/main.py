@@ -50,10 +50,9 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from contracts.invariants import (
-    APPROVAL_SEEN, DESIGN_REVIEWER_KINDS, FREE_ENTRIES, NODES,
+    DESIGN_REVIEWER_KINDS, FREE_ENTRIES, NODES,
     PAID_FLAGS, PROGRESS_PHASES,
     STAGES, STAGE5_CLOSED_EXEMPT_FLAGS, VALUED_FLAGS,
-    stage2_review_required,
 )
 from contracts.schema.orchestration import (
     AgentExecutorBackend, AgentProfile, ExecutorBackend, LegacyExecutorBackend,
@@ -258,32 +257,12 @@ def _parser() -> argparse.ArgumentParser:
     approval_backfill.add_argument('sid')
     approval_backfill.add_argument('--base', required=True)
 
-    approval_seen = approval_sub.add_parser(
-        'seen', help='确认已人工阅读当前 Stage2 read/global 视图')
-    approval_seen.add_argument('view', choices=APPROVAL_SEEN)
-    approval_seen.add_argument('sid')
-    approval_seen.add_argument('--base', required=True)
-    approval_seen.add_argument(
-        '--input',
-        help='必填：seen.read 给 BlueprintSeenRequest JSON，seen.global 给 '
-             'Stage2GlobalSeenRequest JSON（review_token + actor）；传 - 时从 stdin 读取')
-
     approval_gate = approval_sub.add_parser(
         'gate', help='批准当前 s0/s1/s2；s4 只接受 typed structure apply，'
                      's5 只接受 typed stage5 apply')
-    approval_gate.add_argument('gate', choices=('s0', 's1', 's2'))
+    approval_gate.add_argument('gate', choices=('s0', 's1'))
     approval_gate.add_argument('sid')
     approval_gate.add_argument('--base', required=True)
-
-    approval_close_stage2 = approval_sub.add_parser(
-        'close-stage2',
-        help='核验已存在的 Global/Blueprint 接受及两枚当前 token，零模型恢复 '
-             's0/s1/seen.read/seen.global/s2')
-    approval_close_stage2.add_argument('sid')
-    approval_close_stage2.add_argument('--base', required=True)
-    approval_close_stage2.add_argument(
-        '--input', required=True,
-        help='Stage2FinalReviewRequest JSON；传 - 时从 stdin 读取')
 
     approval_workpack = approval_sub.add_parser(
         'workpack', help='只读输出当前 Stage4/6/7 审批工作包')
@@ -310,8 +289,7 @@ def _parser() -> argparse.ArgumentParser:
     approval_apply = approval_sub.add_parser(
         'apply', help='提交 typed 审批 JSON；只写审批账，不启动作业')
     approval_apply.add_argument(
-        'surface', choices=('design', 'structure', 'writing', 'stage5',
-                            'stage2_global_review', 'stage2_blueprint_review', 'blueprint_refinement'))
+        'surface', choices=('design', 'structure', 'writing', 'stage5'))
     approval_apply.add_argument('sid')
     approval_apply.add_argument('--base', required=True)
     approval_apply.add_argument(
@@ -471,10 +449,6 @@ def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
         from novel.node_agents import build_node_agent
 
         kwargs: dict[str, object] = {}
-        if node in {'stage2.characters', 'stage2.global', 'stage2.blueprint'}:
-            review_token = _valued(flags, '--review-token')
-            if review_token is not None:
-                kwargs['review_token'] = review_token
         if node == 'stage4.plan' and (
             not N.flag_tokens(flags)
             or '--apply-binding' in N.flag_tokens(flags)
@@ -932,18 +906,6 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         print('  ✓ 已免费物化该 owner 的联合草稿；仍需统一审阅')
         return X.OK
 
-    if ctx.node == 'stage2.blueprint' and '--close-review' in tokens:
-        from novel.stages.stage2.knowledge_links import run_close_review
-        run_close_review(ctx)
-        print('  ✓ 已按保存的 Commander 决定物化知识关联并补齐 Stage2 审批链（0 模型）')
-        return X.OK
-
-    if ctx.node == 'stage2.global' and '--close-review' in tokens:
-        from novel.orchestrator.approvals import close_stage2_inherited
-        close_stage2_inherited(ctx.novel_dir.parent, ctx.sid, node=ctx.node)
-        print('  ✓ 已核验并继承全部 Global 审阅义务（0 模型）')
-        return X.OK
-
     if ctx.node == 'stage2.analyze':
         from novel.stages.stage2 import analyze
         if '--recover-analyze-run' in tokens:
@@ -978,7 +940,7 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
             edit = store.read_external(CharactersEdit, STAGE2_CHARACTERS_EDIT, source)
             characters.apply_edit(ctx, edit, actor=_valued(flags, '--actor') or '',
                                   reason=_valued(flags, '--reason') or '')
-            print('  ✓ 人物登记已按 typed 编辑落盘；仍需 Global Commander 复核')
+            print('  ✓ 人物登记已按 typed 编辑落盘（0 模型）')
             return X.OK
         if '--revalidate' in tokens:
             passed, report = characters.revalidate(
@@ -988,63 +950,18 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         if '--resample' in tokens:
             characters.run_resample(ctx, _llm_client(ctx))
         else:
-            characters.run_legacy(ctx, _llm_client(ctx), review_token=_valued(flags, '--review-token'))
-        print('  ✓ 静态人物登记已落盘；仍需 Global Commander 复核')
+            characters.run_legacy(ctx, _llm_client(ctx))
+        print('  ✓ 静态人物登记已落盘；语义未审以报告 unver 披露')
         return X.OK
 
     if ctx.node == 'stage2.global':
-        if '--prepare-issue-review' in tokens:
-            import json as _json
-            from novel.stages.stage2 import core_review
-            payload = core_review.prepare(ctx)
-            print(_json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-            return X.OK
-        if '--emit-issue-review-template' in tokens:
-            import json as _json
-            from novel.stages.stage2 import core_review
-            print(_json.dumps(core_review.submission_template(ctx),
-                              ensure_ascii=False, indent=2, sort_keys=True))
-            return X.OK
-        if '--review-issues' in tokens:
-            from novel.stages.stage2 import core_review
-            summary = core_review.apply_review_issues(
-                ctx, _valued(flags, '--review-issues') or '')
-            state = '✓ 已接受并打开 s2 审阅接受' if summary['node_accepted'] else (
-                '⚠ 已登记问题并保持闸门关闭')
-            print(f'  {state}：派生通过 {summary["derived_pass_count"]} 项，'
-                  f'未闭合问题 {summary["issue_count"]} 个；'
-                  f'transaction={summary["transaction_sha256"][:16]}')
-            return X.OK if summary['node_accepted'] else X.CHECK_FAILED
-        if '--apply-core-edits' in tokens:
-            from novel.stages.stage2 import core_edits
-            core_edits.apply(ctx, _valued(flags, '--apply-core-edits') or '')
-            print('  ✓ 已分别提交当前人物与知识 typed 编辑（0 模型）；新增语义义务继续待审')
-            return X.OK
         if '--recover-analyze' in tokens:
             from novel.stages.stage2 import analyze_recovery
             analyze_recovery.recover(ctx)
-            print('  ✓ 已从原共享首抽回答免费物化 Global；等待统一审阅')
-            return X.OK
-        if '--refresh-review' in tokens:
-            review = extract.run_refresh_review(ctx)
-            print(f'已免费刷新知识与人物审阅，共 {len(review.items)} 项；变更主体继续待审。')
-            return X.OK
-        if '--emit-edit-correction-workpack' in tokens:
-            print(extract.global_edit_correction_workpack_json(ctx))
+            print('  ✓ 已从原共享首抽回答免费物化 Global')
             return X.OK
         if '--emit-edit-template' in tokens:
             print(extract.global_edit_template_json(ctx))
-            return X.OK
-        if '--emit-review-template' in tokens or '--emit-review-workpack' in tokens:
-            from novel.stages.stage2 import global_review
-            # 默认只出 blocking 面。裁剪的是**阅读范围**，不是评测面：没进输出的
-            # 披露项在盘上仍是 pending，仍逐条进 inbox 与终审包。
-            scope = (_valued(flags, '--review-scope')
-                     or global_review.DEFAULT_REVIEW_SCOPE)
-            if '--emit-review-template' in tokens:
-                print(global_review.review_template_json(ctx, scope=scope))
-            else:
-                print(global_review.review_workpack_json(ctx, scope=scope))
             return X.OK
         if '--revalidate' in tokens:
             promoted, report = extract.run_revalidate(
@@ -1059,60 +976,21 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         if '--apply-edit' in tokens:
             artifact, report = extract.run_apply_edit(
                 ctx, _valued(flags, '--apply-edit') or '')
-            if report.passed:
-                from contracts.artifacts import STAGE2_GLOBAL_EDIT
-                from contracts.schema.stage2 import GlobalEdit
-                from contracts.schema.api import Stage2NodeReviewRequest
-                from novel.orchestrator.approvals import approve_stage2_review
-                from novel.stages.stage2.global_review import review_token
-                edit = ArtifactStore(ctx).read_own(GlobalEdit, STAGE2_GLOBAL_EDIT)[0]
-                if edit.post_edit_review is not None:
-                    from novel.errors import ArtifactSubmittedReviewPending, NovelError
-                    try:
-                        approve_stage2_review(ctx.novel_dir.parent, ctx.sid, Stage2NodeReviewRequest(
-                            node='stage2.global', review_token=review_token(ctx), decision='accept',
-                            actor=edit.post_edit_review.actor, reason=edit.post_edit_review.reason))
-                    except (NovelError, OSError, ValueError) as exc:
-                        raise ArtifactSubmittedReviewPending(str(exc), hint=(
-                            'Global typed 补丁已落盘；重放同一 --apply-edit 文件零模型补接受。')) from exc
             print(render(report))
             print(f'  ✓ Stage2 typed 人工订正已落为新一轮'
                   f'（{len(artifact.arc_secrets)} 条跨章秘密 / '
                   f'{len(artifact.world_rules)} 条世界规则）；'
                   f'证据与时间窗口已复验，后续按真实业务依赖判定新鲜度')
             return X.OK if report.passed else X.CHECK_FAILED
-        if '--review-decisions' in tokens:
-            from novel.stages.stage2 import global_review
-            review = global_review.apply_file(
-                ctx, _valued(flags, '--review-decisions') or '')
-            generation_safe = global_review.is_generation_safe(ctx, review)
-            all_pass = global_review.is_approved(ctx, review)
-            print(f'  {"✓" if generation_safe else "⚠"} stage2 全局复核：'
-                  f'{sum(item.state == "PASS" for item in review.items)}/'
-                  f'{len(review.items)} 项 PASS；'
-                  + ('全部 blocking 项为 PASS；仍需 current blueprint 与联合 HARD '
-                     '通过才打开 s2 gate' if all_pass else
-                     'blocking UNVER 已逐项隔离并保留披露；写作只消费净化视图，'
-                     '仍需 current blueprint 与联合 HARD 通过' if generation_safe else
-                     '仍有 pending/FAIL 或不可安全隔离的 UNVER，s2 gate 保持关闭'))
-            return X.OK if generation_safe else X.CHECK_FAILED
         if '--resample' in tokens:
             extract.run_resample(ctx, _llm_client(ctx))
             print('  ✓ stage2 全书事实底座已绕过问题缓存重新采样并落盘')
             return X.OK
-        extract.run_global(ctx, _llm_client(ctx), review_token=_valued(flags, '--review-token'))
-        print('  ✓ stage2 全书事实底座已落盘')
+        extract.run_global(ctx, _llm_client(ctx))
+        print('  ✓ stage2 全书事实底座已落盘；语义未审以报告 unver 披露')
         return X.OK
 
     # ── `stage2.blueprint` ────────────────────────────────────────────────
-    if '--emit-review-workpack' in tokens:
-        from novel.views.stage2 import blueprint_review_workpack
-
-        workpack = blueprint_review_workpack(ctx.novel_dir.parent, ctx.sid,
-                                             scope=_valued(flags, '--review-scope'))
-        print(workpack.model_dump_json(by_alias=True, indent=2))
-        return X.OK
-
     if '--emit-edit-template' in tokens:
         from novel.stages.stage2.plot_edit import edit_template_json
 
@@ -1138,7 +1016,7 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         artifact, report = apply_edit(
             ctx, _valued(flags, '--apply-edit') or '')
         print(render(report))
-        print('  ✓ 完整剧情与身份映射已更新；受影响范围需重新审阅（0 模型）')
+        print('  ✓ 完整剧情已按 typed 编辑更新（0 模型）')
         return X.OK if report.passed else X.CHECK_FAILED
 
     if '--revalidate' in tokens:
@@ -1158,8 +1036,7 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     chapters = _chapters_of(_valued(flags, '--chapters'))
 
     if '--dry-run' in tokens:
-        system, user = extract.build_prompt(ctx, chapters=chapters,
-                                            review_token=_valued(flags, '--review-token'))
+        system, user = extract.build_prompt(ctx, chapters=chapters)
         print(f'── system（{len(system)} 字）──\n{system}')
         print(f'\n── user（{len(user)} 字）──\n{user}')
         return X.OK
@@ -1169,9 +1046,8 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     if chapters:
         from novel.llm.cache import CachePolicy
         ctx.cache = CachePolicy.refresh()
-    report = extract.run_blueprint(ctx, _llm_client(ctx), chapters=chapters,
-                                  review_token=_valued(flags, '--review-token'))
-    print('  ✓ stage2 逐章蓝图已落盘')
+    report = extract.run_blueprint(ctx, _llm_client(ctx), chapters=chapters)
+    print('  ✓ stage2 逐章蓝图已落盘；语义未审以报告 unver 披露')
     print(render(report))
     return X.OK if report.passed else X.CHECK_FAILED
 
@@ -2068,24 +1944,18 @@ def _cmd_run(a: argparse.Namespace) -> int:
     parent_id = getattr(ctx, 'parent_run_id', run_id)
     if parent_id != run_id:
         print(f'  parent_run_id : {parent_id}', file=sys.stderr)
-    # Stage2 人工评测是**运行边界**，不是某个编排器的礼貌约定。任何调用方
-    # （手敲 CLI、前端 jobs、headless agent）最终都要经过这里；0 成本复检/人工修复
-    # 仍可在闸关闭时运行，否则人连开闸的恢复路都进不去。
-    if paid and a.node == 'stage2.blueprint':
-        # Blueprint 尚未生成时不可能满足整体 Stage2 交叉接受；这里独立核验
-        # Global 前置接受，producer 仍复验同一事实以覆盖直接调用。
-        from novel.stages.stage2 import global_review
-        global_review.require_global_accepted(ctx)
-    elif stage2_review_required(a.node, paid=paid):
-        if a.node == 'stage7.assemble':
-            # 与产地和下载共用当前 Stage2 判据，CLI 不另造兼容证明。
-            from novel.stages.stage7.assemble import (
-                require_stage2_delivery_approved,
-            )
-            require_stage2_delivery_approved(ctx)
-        else:
-            from novel.stages.stage2 import global_review
-            global_review.require_approved(ctx)
+    # Stage2 机械准入是**运行边界**：Blueprint 生成前要求人物/Global/原文/
+    # 称名投影机械可用；Stage4 起另要求完整 Blueprint。语义结论不在这里判定，
+    # 以报告 unver 与统一准入的披露表达（`novel/admission.py`）。
+    if paid and a.node in {'stage2.blueprint', 'stage4.design', 'stage4.plan',
+                           'stage4.context', 'stage7.assemble'}:
+        from novel import admission
+        target = 'stage2.blueprint' if a.node == 'stage2.blueprint' else 'stage4'
+        gate = (admission.blueprint_generation_ready(a.base, a.sid) if target == 'stage2.blueprint'
+                else admission.stage4_ready(a.base, a.sid))
+        if not gate.ok:
+            raise UpstreamMissing(
+                f'{a.node} 的统一机械准入未通过：' + '；'.join(gate.blocking))
     # API 的 prepare 只做早反馈；手敲 CLI 也必须经过同一座权威门，且要在
     # `_dispatch` 构造任何 LLM 请求之前同时证明：当前结构逐章已接受、writing
     # 已独立授权、选章没有越过当前计划。0 成本恢复 flag 的 ``paid=False`` 不进来。
@@ -2594,9 +2464,8 @@ def _cmd_approval(a: argparse.Namespace) -> int:
 def _cmd_approval_admitted(a: argparse.Namespace) -> int:
     """可审计审批 CLI：template/show 只读，apply 只落审批账且绝不拉作业。"""
     from contracts.schema.api import (
-        BlueprintSeenRequest, DesignReviewRequest, Stage2FinalReviewRequest,
-        Stage2NodeReviewRequest,
-        Stage2GlobalSeenRequest, Stage5ClosureRequest, StructureApprovalRequest,
+        DesignReviewRequest,
+        Stage5ClosureRequest, StructureApprovalRequest,
         WritingApprovalRequest,
     )
     from novel.orchestrator import approvals
@@ -2605,42 +2474,11 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
         result = approvals.get(a.base, a.sid)
     elif a.approval_action == 'backfill':
         result = approvals.backfill_from_disk(a.base, a.sid)
-    elif a.approval_action == 'seen':
-        if not a.input:
-            raise TerminalState(
-                f'approval seen {a.view} 必须给 --input：read 用 BlueprintSeenRequest，'
-                'global 用 Stage2GlobalSeenRequest；先读完当前工作包/review')
-        if a.view == 'read':
-            try:
-                subject = BlueprintSeenRequest.model_validate_json(
-                    _approval_input(a.input))
-            except ValidationError as exc:
-                raise TerminalState(
-                    f'Blueprint seen JSON 不符合 typed 契约：{exc}') from exc
-            result = approvals.mark_seen(
-                a.base, a.sid, a.view, blueprint_subject=subject)
-        else:
-            try:
-                global_subject = Stage2GlobalSeenRequest.model_validate_json(
-                    _approval_input(a.input))
-            except ValidationError as exc:
-                raise TerminalState(
-                    f'Global seen JSON 不符合 typed 契约：{exc}') from exc
-            result = approvals.mark_seen(
-                a.base, a.sid, a.view, global_subject=global_subject)
     elif a.approval_action == 'gate':
         if a.gate == 's4':  # argparse 已关闭；保留服务调用前的纵深防线。
             raise ApprovalRequired(
                 's4 只接受带 subject/逐章决定的 typed structure apply')
         result = approvals.approve_gate(a.base, a.sid, a.gate)
-    elif a.approval_action == 'close-stage2':
-        try:
-            final_request = Stage2FinalReviewRequest.model_validate_json(
-                _approval_input(a.input))
-        except ValidationError as exc:
-            raise TerminalState(
-                f'Stage2 收口 JSON 不符合 Stage2FinalReviewRequest 契约：{exc}') from exc
-        result = approvals.close_stage2_review(a.base, a.sid, final_request)
     elif a.approval_action == 'workpack':
         if a.surface == 'design':
             result = approvals.design_workpack(a.base, a.sid)
@@ -2677,30 +2515,17 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
                 f'{a.surface} 审批模板身份不符合 typed 契约：{exc}') from exc
     else:
         raw = _approval_input(a.input)
-        from contracts.schema.api import BlueprintRefinementRequest
         model = {
-            'blueprint_refinement': BlueprintRefinementRequest,
             'design': DesignReviewRequest,
             'structure': StructureApprovalRequest,
             'writing': WritingApprovalRequest,
             'stage5': Stage5ClosureRequest,
-            'stage2_global_review': Stage2NodeReviewRequest,
-            'stage2_blueprint_review': Stage2NodeReviewRequest,
         }[a.surface]
         try:
             request = model.model_validate_json(raw)
         except ValidationError as exc:
             raise TerminalState(f'{a.surface} 审批 JSON 不符合 typed 契约：{exc}') from exc
-        if a.surface in {'stage2_global_review', 'stage2_blueprint_review'}:
-            expected_node = ('stage2.global' if a.surface == 'stage2_global_review'
-                             else 'stage2.blueprint')
-            if request.node != expected_node:
-                raise TerminalState('Stage2 approval surface 与节点不匹配')
-            result = approvals.approve_stage2_review(a.base, a.sid, request)
-        elif a.surface == 'blueprint_refinement':
-            from novel.orchestrator import blueprint_refinement
-            result = blueprint_refinement.submit(a.base, a.sid, request)
-        elif a.surface == 'design':
+        if a.surface == 'design':
             result = approvals.approve_design(a.base, a.sid, request)
         elif a.surface == 'structure':
             result = approvals.approve_structure(a.base, a.sid, request)

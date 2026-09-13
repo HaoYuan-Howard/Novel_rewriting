@@ -1,6 +1,6 @@
 """完整剧情到场景的确定性编译；不拆写或裁剪剧情正文。
 
-唯一 placement 决定场景成员；显式语义端点决定知识、状态和约束位置。
+唯一 placement 决定场景成员；显式语义端点决定状态、约束与目标位置。
 缺失分场端点拒绝，不能用父节点的首次或末次出现猜。证据重叠只供审阅，
 不代表重复剧情；本模块不产生语义 PASS。
 """
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from contracts.schema.plot import (
     PlotAnchorBinding, PlotBlueprint, PlotChapterArrangement, PlotGoalAnchor,
-    PlotKnowledgeTrigger, PlotRelationConstraint,
+    PlotRelationConstraint,
 )
 
 EndpointKey = tuple[str, str, str]
@@ -27,8 +27,7 @@ class PlacementCompilation:
 
 
 def required_endpoints(
-    blueprint: PlotBlueprint, knowledge: Sequence[PlotKnowledgeTrigger],
-    goals: Sequence[PlotGoalAnchor],
+    blueprint: PlotBlueprint, goals: Sequence[PlotGoalAnchor] = (),
 ) -> dict[EndpointKey, str]:
     result: dict[EndpointKey, str] = {}
 
@@ -52,8 +51,6 @@ def required_endpoints(
             put(('constraint', constraint.constraint_id, 'after'), constraint.after_beat_ref)
         else:
             put(('constraint', constraint.constraint_id, 'target'), constraint.target_beat_ref)
-    for row in knowledge:
-        put(('knowledge', row.knowledge_ref, 'trigger'), row.trigger_beat_ref)
     for row in goals:
         put(('goal', row.goal_ref, row.kind), row.beat_ref)
     known = {beat.beat_id for beat in blueprint.beats}
@@ -64,7 +61,6 @@ def required_endpoints(
 
 def compile_placements(
     blueprint: PlotBlueprint, arrangement: PlotChapterArrangement, *,
-    knowledge: Sequence[PlotKnowledgeTrigger] = (),
     goals: Sequence[PlotGoalAnchor] = (),
 ) -> PlacementCompilation:
     if blueprint.chapter_ordinal != arrangement.chapter_ordinal:
@@ -103,10 +99,10 @@ def compile_placements(
             if indices[completion[ref]] >= indices[scene.slot]:
                 raise ValueError('全部主要呈现完成之前不能把完整节点作为已知背景')
 
-    requirements = required_endpoints(blueprint, knowledge, goals)
+    requirements = required_endpoints(blueprint, goals)
     explicit = {row.key(): row for row in arrangement.anchor_bindings}
     if explicit.keys() - requirements.keys():
-        raise ValueError('端点映射不能创造知识、状态或约束主体')
+        raise ValueError('端点映射不能创造状态、约束或目标主体')
     resolved: dict[EndpointKey, PlotAnchorBinding] = {}
     for key, beat in requirements.items():
         destinations = {row.scene_ref for row in placements[beat].deliveries}
@@ -148,8 +144,7 @@ def compile_placements(
     )
 
 
-def compile_plan_placements(blueprint: PlotBlueprint, chapter: dict, *,
-                            knowledge: Sequence[PlotKnowledgeTrigger] = ()) -> PlacementCompilation:
+def compile_plan_placements(blueprint: PlotBlueprint, chapter: dict) -> PlacementCompilation:
     """正式 Plan 的目标/turn 自带端点，编译视图合入同一端点校验，不复制可编辑映射。"""
     goals = []
     bindings = list(chapter['anchor_bindings'])
@@ -170,20 +165,4 @@ def compile_plan_placements(blueprint: PlotBlueprint, chapter: dict, *,
                    for scene in chapter['scenes']],
         'beat_placements': chapter['beat_placements'], 'anchor_bindings': bindings,
     })
-    return compile_placements(blueprint, arrangement, knowledge=knowledge, goals=goals)
-
-
-def knowledge_triggers_for_chapter(knowledge_links: dict, ordinal: int) -> tuple[PlotKnowledgeTrigger, ...]:
-    """只取已闭合知识事件的真实触发节点，不从父节点首次出现推导许可。"""
-    from contracts.schema.knowledge_links import KnowledgeLinks
-    artifact = KnowledgeLinks.model_validate(knowledge_links)
-    records = {r.obligation_id: r for r in artifact.links}
-    result = []
-    for obligation in artifact.scope.obligations:
-        if obligation.chapter_ordinal != ordinal:
-            continue
-        resolution = records[obligation.obligation_id].resolution
-        if resolution.kind == 'at_beats':
-            result.append(PlotKnowledgeTrigger(
-                knowledge_ref=obligation.obligation_id, trigger_beat_ref=resolution.trigger_beat_ref))
-    return tuple(result)
+    return compile_placements(blueprint, arrangement, goals=goals)

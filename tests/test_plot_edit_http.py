@@ -42,7 +42,9 @@ def test_blueprint_edit_reaches_cli_and_survives_service_restart(tmp_path):
         assert response.json()['blueprint']['beats'][0]['content'] == request['chapters'][0]['chapter']['beats'][0]['content']
         progress = restarted.get('/api/novels/123/run')
         assert progress.status_code == 200, progress.text
-        assert progress.json()['blueprint_progress']['review']['accepted_chapters'] == 0
+        progress_shape = progress.json()['blueprint_progress']
+        assert progress_shape['artifact_state'] == 'formal'
+        assert 'review' not in progress_shape
     landed = ArtifactStore(_ctx(book, 'stage2.blueprint', paid=False)).read_own(
         ChapterBlueprints, extract.BLUEPRINT_REL, require_current=True)[0]
     assert len(landed.provenance.plot_revisions) == 1
@@ -76,23 +78,22 @@ def test_unusable_actor_binding_is_409_and_free_cli_edit_retains_original_subjec
     store.write_invalid(extract.BLUEPRINT_REL, candidate, gates_skipped=[])
     formal_before = store.full_sha256_or_none(extract.BLUEPRINT_REL)
     invalid_before = store.full_sha256_or_none(extract._INVALID)
-    history_before = approvals.stage2_review_history(book.parent, '123')
     diagnostic = read_repair_diagnostics(book.parent, '123', code=producer.code)
     assert diagnostic['diagnostics']
     assert all(row['owner'] == 'stage2.blueprint' for row in diagnostic['diagnostics'])
 
     with TestClient(create_app(str(book.parent))) as http:
         http.headers.update({UI_HEADER: '1'})
-        workpack = http.get('/api/novels/123/stage2/blueprint-review-workpack?scope=chapter:1')
-        assert workpack.status_code == 409, workpack.text
-        assert '免费' in workpack.text
+        # 审阅端点已退役；阅读端点仍可对照 INVALID 主体，但不把它冒充成 formal。
+        reading = http.get('/api/novels/123/stage2/blueprint-reading-workpack?scope=chapter%3A1')
+        assert reading.status_code == 200, reading.text
+        assert reading.json()['binding']['subject_kind'] == 'invalid'
         response = http.get('/api/novels/123/stage2/blueprint/edit/template?chapter_ordinal=1')
         assert response.status_code == 200, response.text
         request = response.json()
         assert request['chapters'][0]['chapter']['beats'][0]['content'] == chapter.beats[0].content
         assert store.full_sha256_or_none(extract.BLUEPRINT_REL) == formal_before
         assert store.full_sha256_or_none(extract._INVALID) == invalid_before
-        assert approvals.stage2_review_history(book.parent, '123') == history_before
         request.update(actor='test:HTTP 免费订正者', reason='恢复当前原文支持的明确人物引用')
         edited = request['chapters'][0]
         edited['chapter']['actor_bindings'] = []

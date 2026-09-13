@@ -19,7 +19,6 @@ export interface PlanSceneView {
   context: string[]
   turn: string
   stateEvents: CtxScene['state_events'] | null
-  knowledge: string[] | null
   constraints: string[] | null
   endpoints: string[]
 }
@@ -67,7 +66,7 @@ export function useStage4Screen() {
           stages: writing?.deliveries.find((p) => p.beat_ref === placement.beat_ref)?.stages ?? null,
         }))),
       context: scene.context_beat_refs.map(beatLabel), turn: beatLabel(scene.turn_beat_ref),
-      stateEvents: writing?.state_events ?? null, knowledge: writing?.knowledge_event_refs ?? null,
+      stateEvents: writing?.state_events ?? null,
       constraints: writing?.constraint_refs ?? null,
       endpoints: (plan?.anchor_bindings ?? []).filter((a) => a.scene_ref === scene.slot).map((a) => JSON.stringify(a)),
     }
@@ -77,7 +76,6 @@ export function useStage4Screen() {
     { title: '人物名册', count: ctx.characters.length + ' 个公开呈现', lines: ctx.characters.map(characterMaterial), more: '称谓与身份描述分别按所列场景使用；人物标识仅用于对照本章材料。' },
     { title: '持续状态', count: ctx.states.length + ' 项', lines: ctx.states.map((s) => s.modality + ' · ' + (s.content ?? s.global_ref?.ref)), more: '性质不等于传播权限。' },
     { title: '稀疏约束', count: ctx.constraints.length + ' 项', lines: ctx.constraints.map((c) => JSON.stringify(c)), more: '' },
-    { title: '知识许可', count: ctx.knowledge_events.length + ' 项', lines: ctx.knowledge_events.map((e) => JSON.stringify(e)), more: '整章一次生成，同一次请求会看到本章后场材料；提前揭示仍需成稿审阅。' },
     { title: '共享主体与表达许可', count: ctx.global_subjects.length + ' 项', lines: ctx.global_subjects.map((g) => JSON.stringify(g)), more: '' },
   ] : d ? [
     { title: '蓝图剧情目录', count: d.blueprint.beats.length + ' 个完整节点', lines: d.blueprint.beats.map((b) => beatLabel(b.beat_id) + '：' + b.content), more: '当前没有可用写作上下文；这里只显示蓝图。' },

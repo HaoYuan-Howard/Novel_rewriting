@@ -268,71 +268,15 @@ def test_stage2_review_workpack_is_read_only_and_never_auto_decides(current_core
     assert _file_bytes(ctx.novel_dir.parent) == before
 
 
-def test_r_2_16_requires_global_acceptance_before_blueprint_and_cross_acceptance_before_stage4(
-        tmp_path, monkeypatch, capsys):
-    """Global 未接受不得生产 Blueprint；交叉未接受不得生产 Stage4。"""
-    import importlib
-    from novel.stages.stage2 import global_review
-
-    cli_main = importlib.import_module('novel.cli.main')
-    calls: list[str] = []
-    checked: list[str] = []
-    monkeypatch.setattr(
-        cli_main, 'RunContext', SimpleNamespace(open=lambda _base, _sid, node, **_kw:
-                                                _dispatch_context(
-                                                    _base, node=node, run_id='test-run')))
-    monkeypatch.setattr(
-        cli_main, '_dispatch',
-        lambda node, _ctx, _flags: calls.append(node) or X.OK)
-
-    accepted = {'global': False}
-
-    def global_pending(ctx):
-        checked.append(ctx.node)
-        if not accepted['global']:
-            raise ApprovalRequired('stage2 global review pending')
-
-    def cross_pending(ctx):
-        checked.append(ctx.node)
-        raise ApprovalRequired('stage2 blueprint review pending')
-
-    monkeypatch.setattr(global_review, 'require_global_accepted', global_pending)
-    monkeypatch.setattr(global_review, 'require_approved', cross_pending)
-
-    rc = _run('run', 'stage2.blueprint', 'book-1', '--yes',
-              '--base', str(tmp_path))
-    assert rc == X.TERMINAL_STATE
-    assert calls == [] and checked == ['stage2.blueprint']
-    accepted['global'] = True
-    rc = _run('run', 'stage2.blueprint', 'book-1', '--yes',
-              '--base', str(tmp_path))
-    assert rc == X.OK
-    assert calls == ['stage2.blueprint']
-
-    rc = _run('run', 'stage4.design', 'book-1', '--yes',
-              '--base', str(tmp_path))
-    assert rc == X.TERMINAL_STATE
-    assert calls == ['stage2.blueprint']
-    assert checked == ['stage2.blueprint', 'stage2.blueprint', 'stage4.design']
-    assert 'review pending' in capsys.readouterr().err
-
-
-
-def test_blueprint_cli_uses_real_global_acceptance_before_constructing_client(tmp_path, monkeypatch):
-    """真实 CLI→审批证明→producer；仅模型传输用确定性合成回答。"""
+def test_blueprint_cli_blocks_on_failed_admission_before_constructing_client(tmp_path, monkeypatch):
+    """真实 CLI→统一机械准入→producer；准入未过不构造 client，通过后产物落盘。"""
     from novel.cli import main as cli
     from novel.stages.stage2 import extract
-    from novel.work_units import initialize_workflow
+    from tests.test_blueprint_repair_queue import prepare_complete_book
     from tests.test_stage2_generation import _client, _respond_blueprints, _response_blueprints
-    from tests.test_stage2_review_decisions import _accept_global_node, _approve_all_review
-    from tests.test_stage2_secret_edit import _seed
 
-    initialize_workflow(tmp_path)
     monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'plot-blueprint-v1')
-    book = tmp_path / '合成书_123'
-    book.mkdir()
-    _seed(book)
-    _approve_all_review(book)
+    book = prepare_complete_book(tmp_path)
     clients = []
 
     def client(ctx):
@@ -342,14 +286,14 @@ def test_blueprint_cli_uses_real_global_acceptance_before_constructing_client(tm
 
     monkeypatch.setattr(cli, '_llm_client', client)
     argv = ['run', 'stage2.blueprint', '123', '--base', str(tmp_path), '--yes']
+    # 全链种子已含人物登记；移走称名投影让统一机械准入未过：付费 client
+    # 不许构造，也不产生任何节点命令。准入通过后的真实 producer 运行由
+    # tests/test_blueprint_repair_queue.py 的全链贯通覆盖。
+    projection = book / 'stage2/blueprint_character_projection.json'
+    projection.unlink()
     assert _run(*argv) == X.TERMINAL_STATE
     assert clients == []
     assert not (book / extract.BLUEPRINT_REL).exists()
-
-    _accept_global_node(book)
-    assert X.landed(_run(*argv))
-    assert len(clients) == 1
-    assert (book / extract.BLUEPRINT_REL).is_file()
 
 
 @pytest.mark.parametrize('reached,status,want_rc', [

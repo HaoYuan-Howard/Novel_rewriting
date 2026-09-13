@@ -11,10 +11,10 @@ import { useRunProgress } from '@/hooks/useRunProgress'
 import { Mono } from '@/components/ui/Mono'
 import { ErrorHint } from '@/components/state/States'
 
+// stage4 入口由统一机械准入衔接，不再对应人工审批闸；其余各层保持「有产物就要有对应审批」。
 const REQUIRED_GATE_BY_STAGE = {
   stage1: 's0',
   stage2: 's1',
-  stage4: 's2',
   stage5: 's4',
   stage6: 's5',
 } as const

@@ -26,7 +26,7 @@ fastapi = pytest.importorskip(
 from fastapi.testclient import TestClient          # noqa: E402
 
 from contracts.invariants import APPROVAL_GATES   # noqa: E402
-from contracts.schema.api import BlueprintSeenRequest, DraftEditPreview # noqa: E402
+from contracts.schema.api import DraftEditPreview # noqa: E402
 from novel.api.app import UI_HEADER, create_app    # noqa: E402
 from novel.run import RunContext                    # noqa: E402
 from novel.stages.stage7 import assemble, rename    # noqa: E402
@@ -35,7 +35,6 @@ from tests import corpus, sandbox                  # noqa: E402
 INPUTS = ('stage0/revisions.json',
           'stage1/main_text.json', 'stage1/hook_copy.json',
           'stage2/global_grounding.json', 'stage2/chapter_blueprints.json',
-          'stage2/global_review.json',
           'stage4/plan_chapters.json', 'stage4/writer_context.json',
           'stage6/hook.json', 'stage7/name_map.json')
 
@@ -121,9 +120,6 @@ def box(request):
         target = s.dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
-    # ⚠ 现役语料的 stage2 审阅项全是 `pending` ⇒ `s2` 的 typed 决策闸永远过不去，
-    #   `_stamp_chain` 因此一格都预置不出来。人工决策是本组的**输入**不是结论。
-    sandbox.decide_global_review(s)
     yield s
     s.close()
 
@@ -182,21 +178,12 @@ def _stamp_chain(box, upto: str) -> None:
     是在摆前置事实，不是绕守卫；`approve_gate` 的链式约束由 approvals 自己的测试守。
     """
     from novel.orchestrator import approvals
-    from novel.views.stage2 import blueprint_review_workpack
 
     assert upto in APPROVAL_GATES, f'不是现役审批闸：{upto}'
     upto_index = APPROVAL_GATES.index(upto)
     required_gates = APPROVAL_GATES[:upto_index + 1]
-    # backfill 只补可由产物确定的 gate，绝不再替 Commander 伪造阅读事实。
-    # 测试前置也必须走与产品相同的 hash-bound seen 入口。
-    approvals.mark_seen(box.root, box.sid, 'global')
-    pack = blueprint_review_workpack(box.root, box.sid)
-    approvals.mark_seen(
-        box.root,
-        box.sid,
-        'read',
-        blueprint_subject=BlueprintSeenRequest(review_token=pack.review_token),
-    )
+    # Stage2 已读/接受入口已随语义审阅退役；backfill 只补可由产物确定的 gate，
+    # 绝不再替 Commander 伪造阅读事实。
     # Explicit backfill creates the same typed/root/freshness proofs as the real
     # product path.  Then trim only the checklist gates beyond the precondition
     # this test needs; never invent legacy v1 booleans against today's files.
@@ -215,7 +202,6 @@ def _stamp_chain(box, upto: str) -> None:
 
 def test_stamp_chain_follows_current_gate_order_without_touching_stage3(monkeypatch):
     from novel.orchestrator import approvals
-    from novel.views import stage2 as stage2_view
 
     current_gates = {gate: True for gate in APPROVAL_GATES}
     record = approvals._fresh_record('book-1').model_copy(update={
@@ -223,15 +209,6 @@ def test_stamp_chain_follows_current_gate_order_without_touching_stage3(monkeypa
         'gate_proofs': {gate: f'proof-{gate}' for gate in APPROVAL_GATES},
     })
     written = []
-    seen = []
-    pack = SimpleNamespace(
-        review_token='bpr5_' + 'b' * 64,
-    )
-    monkeypatch.setattr(
-        approvals, 'mark_seen',
-        lambda _root, _sid, key, **kwargs: seen.append((key, kwargs)))
-    monkeypatch.setattr(
-        stage2_view, 'blueprint_review_workpack', lambda *_args: pack)
     monkeypatch.setattr(
         approvals, 'backfill_from_disk',
         lambda _root, _sid: SimpleNamespace(
@@ -242,16 +219,13 @@ def test_stamp_chain_follows_current_gate_order_without_touching_stage3(monkeypa
     _stamp_chain(SimpleNamespace(root=Path('unused'), sid='book-1'), 's5')
 
     assert len(written) == 1
-    assert [key for key, _kwargs in seen] == ['global', 'read']
-    assert isinstance(seen[1][1]['blueprint_subject'], BlueprintSeenRequest)
     assert written[0].gate == {
-        's0': True, 's1': True, 's2': True, 's4': True,
+        's0': True, 's1': True, 's4': True,
         's5': True, 's6': False, 's7': False,
     }
     assert 's3' not in written[0].gate
     assert written[0].gate_proofs['s6'] is None
     assert written[0].gate_proofs['s7'] is None
-
 
 def test_stamp_writes_normally_through_the_short_admission_scope(tmp_path, monkeypatch):
     from novel.api import approval_stamp
@@ -262,7 +236,6 @@ def test_stamp_writes_normally_through_the_short_admission_scope(tmp_path, monke
     monkeypatch.setattr(approval_stamp.approvals, 'approve_gate',
                         lambda base, sid, gate: stamped.append((base, sid, gate)))
     assert ingest.stamp_approval_after_landed is approval_stamp.stamp_approval_after_landed
-    assert edits._stamp is approval_stamp.stamp_approval_after_landed
     approval_stamp.stamp_approval_after_landed(str(tmp_path), '422', 's0')
     assert stamped == [(str(tmp_path), '422', 's0')]
     assert jobs.REGISTRY.conflicting_holder('422') is None
@@ -308,7 +281,7 @@ def test_landed_job_record_survives_a_stamp_writer_conflict(
                     'pick': 1,
                     'actor': 'api-stamp-race-test',
                     'reason': '确认已落 JobRecord 不被盖章竞态伪装成失败',
-                    'review_token': 's6r3_' + 'b' * 64,
+                    'review_token': 's6r4_' + 'b' * 64,
                 },
             )
     finally:
@@ -326,22 +299,6 @@ def test_landed_job_record_survives_a_stamp_writer_conflict(
 
 
 # ───────────────────────── 一、章节改稿 ─────────────────────────
-
-
-def test_blueprint_seen_http_body_requires_the_opaque_workpack_token(
-        validation_client):
-    response = validation_client.post(
-        '/api/novels/422/approvals/seen/read',
-        json={
-            'expected_subject_sha256': 'a' * 64,
-            'expected_main_text_artifact_sha256': 'b' * 64,
-            'expected_code_version': 'test-code',
-            'expected_rules_fingerprint': 'test-rules',
-        },
-    )
-
-    assert response.status_code == 422
-    assert 'review_token' in response.text
 
 
 def test_draft_preview_route_returns_the_shared_typed_projection(
@@ -633,7 +590,7 @@ def test_a_zero_pick_is_422_from_the_carrier(validation_client):
         'pick': 0,
         'actor': 'api-test-editor',
         'reason': 'exercise the carrier lower bound',
-        'review_token': 's6r3_' + '0' * 64,
+        'review_token': 's6r4_' + '0' * 64,
     }
     assert validation_client.post(
         '/api/novels/422/stage6/approve', json=body).status_code == 422
@@ -719,6 +676,47 @@ def test_residual_adoption_api_only_accepts_explicit_high(validation_client):
 
 # ─────────────── 默认套件：CLI typed 定稿 → 只读公开审批投影 ───────────────
 
+def _stage0_on_disk(book: Path, source: Path, source_bytes: bytes, clean_bytes: bytes) -> None:
+    """stage0 权威 revision 链 + 唯一 clean 投影（test_store 的最小本文件副本）。
+
+    原 tests.test_store 模块级还挂着已退役的 global_review 依赖，不能跨文件
+    复用；这里只复刻本夹具需要的 stage0 前置写入。
+    """
+    from contracts.schema.stage0 import Stage0RevisionContent
+    from novel import prov
+    from novel.stages.stage0.revisions import make_revision
+
+    (book / 'stage0').mkdir(parents=True, exist_ok=True)
+    (book / 'stage0' / 'clean_text.txt').write_bytes(clean_bytes)
+    source_identity = {
+        'source_ref': {'kind': 'external_file',
+                       'absolute_path': str(source.resolve())},
+        'normalized_source_sha1': prov.content_sha1(source_bytes),
+        'total_code_points': len(source_bytes.decode('utf-8')),
+    }
+    content = Stage0RevisionContent(clean_text=clean_bytes.decode('utf-8'), removed=[])
+    revision = make_revision(
+        parent_revision_id=None, origin='machine', actor=None, reason=None,
+        code='test-api-edits', content=content,
+    )
+    payload = {
+        'source': source_identity,
+        'revisions': [revision.model_dump(mode='json')],
+        'current': {'revision_id': revision.revision_id,
+                    'approval': {'status': 'pending'}},
+        'candidate_revision_id': None,
+        'dismissed': [],
+    }
+    rel = 'stage0/revisions.json'
+    target = book / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    from contracts.schema import encode_artifact
+    target.write_text(
+        json.dumps(encode_artifact(rel, payload), ensure_ascii=False),
+        encoding='utf-8', newline='',
+    )
+
+
 @pytest.fixture
 def final_gate_book(tmp_path, monkeypatch):
     """真实 Store、CLI 定稿、workpack/proof 与 HTTP；隔离 Stage0～5 前置业务。
@@ -737,7 +735,6 @@ def final_gate_book(tmp_path, monkeypatch):
     from novel.store import ArtifactStore
     from tests.test_stage6_semantic import TEXT_A, TEXT_B, TEXT_C
     from tests.factories import stage6_hook as _hook
-    from tests.test_store import _stage0_on_disk
     from novel.stages.stage1.partition import partition_text
 
     from novel.work_units import initialize_workflow
@@ -779,6 +776,44 @@ def final_gate_book(tmp_path, monkeypatch):
         return current.model_copy(update={'provenance': provenance}), [], None
     monkeypatch.setattr(rename, '_build', rebuild_name)
 
+    # Stage6 prepare 是 Hook 定稿的新前置：经真实 producer + 免费独立接受建立。
+    import json as _json
+
+    from novel.node_agents import Stage6PrepareAgent
+    from tests.test_stage2_global_agent import _Driver as _PrepareDriver
+    from tests.test_stage2_global_agent import _profile as _prepare_profile
+
+    prepare_ctx = RunContext.open(
+        tmp_path, sid, 'stage6.prepare', paid=True, write_ledger=False)
+    prepare_ctx.executor_profile = _prepare_profile()
+    prepare_response = {'source_blurb': {
+        'facts': [{'kind': 'supported', 'claim_id': 'hook_001',
+                   'claim': '沈月来到门前。',
+                   'evidence': {'chapter_ordinal': 1, 'start_para': 1, 'end_para': 1}}],
+        'opening': {'kind': 'proposed', 'through_chapter': 1,
+                    'rationale': '首章门前一场完整承接原钩子',
+                    'boundary_evidence': {'chapter_ordinal': 1, 'start_para': 1,
+                                          'end_para': 1}},
+    }}
+    prepare_driver = _PrepareDriver(
+        [_json.dumps(prepare_response, ensure_ascii=False)], book,
+        session_id=f'final-gate-prepare-{prepare_ctx.run_id}')
+    prepare_result = Stage6PrepareAgent(prepare_ctx, driver=prepare_driver).run()
+    assert prepare_result.passed and prepare_result.turns == 1
+    from novel.stages.stage6 import prepare as prepare_node
+    prepare_store = ArtifactStore(RunContext.open(
+        tmp_path, sid, 'stage6.prepare', paid=False, write_ledger=False))
+    prepare_pack = prepare_node.approval_workpack(prepare_store)
+    from contracts.schema.stage6_prepare import PrepareDecision
+    prepare_node.submit_review(prepare_store.ctx, PrepareDecision(
+        review_token=prepare_pack.state.review_token,
+        source_sha256=prepare_pack.state.subject_sha256,
+        decision='accept', actor='final-gate-fixture',
+        reason='已核对原文与连续开篇范围', edit=None))
+    assert prepare_node.run_check_only(RunContext.open(
+        tmp_path, sid, 'stage6.prepare', paid=False,
+        write_ledger=False)).passed
+
     ctx = RunContext.open(tmp_path, sid, 'stage6.hook', paid=True, write_ledger=False)
     store = ArtifactStore(ctx)
     store.read(HookCopy, 'stage1/hook_copy.json')
@@ -816,10 +851,8 @@ def final_gate_book(tmp_path, monkeypatch):
     real_gate_proof = approvals._proof_for_gate
     monkeypatch.setattr(approvals, '_proof_for_gate', lambda root, gate, record: (
         real_gate_proof(root, gate, record) if gate in {'s6', 's7'} else proof))
-    monkeypatch.setattr(approvals, '_proof_for_seen', lambda *_args: proof)
     monkeypatch.setattr(approvals, '_proof_for_writing', lambda *_args: proof)
     monkeypatch.setattr(approvals, '_spawns', lambda *_args: {})
-    monkeypatch.setattr(cli, 'stage2_review_required', lambda *_args, **_kw: False)
     monkeypatch.setattr(closure, 'require_stage5_closed', lambda *_args: None)
     structure = approvals._StoredStructureDecision(
         actor='fixture-prerequisite', reason='前置结构决定由本测试输入给定',
@@ -854,8 +887,6 @@ def final_gate_book(tmp_path, monkeypatch):
         'closure_history': [closure_decision], 'closure_decision': closure_decision,
         'gate': {gate: gate not in {'s6', 's7'} for gate in APPROVAL_GATES},
         'gate_proofs': {gate: None if gate in {'s6', 's7'} else proof for gate in APPROVAL_GATES},
-        'seen': {key: True for key in raw.seen},
-        'seen_proofs': {key: proof for key in raw.seen},
         'writing': True, 'writing_proof': proof,
     })
     approvals._write(tmp_path, raw)

@@ -1,14 +1,16 @@
 # Stage 2 当前契约
 
-Global 与 Blueprint 的独立审阅、实际问题和 `--close-review` 免费收口契约见
-`docs/schema/stage2_review.md`。Global 接受仍先于 Blueprint，独立知识关联不回写抽取主体。
+Stage2 语义审阅（Global 逐项审阅、Blueprint 章审与跨章复核、问题义务、审批继承、阅读凭证
+与 `--close-review` 免费收口）已于 2026-09 整体退役，原 `docs/schema/stage2_review.md` 删除。
+下游前置由统一机械准入承接（`novel/admission.py`）：必要产物可读、当前、无未恢复 INVALID
+且机械检查全部通过；语义结论只以报告 `unver` 行披露，最终随交付披露该限制。
 
 ## Blueprint v10 剧情契约
 
 完整节点、稀疏状态/约束、共享证据和分场职责见 [plot_blueprint.md](./plot_blueprint.md)。
 普通对白的语义、施受关系和话语作用属于 beat.content；必要字面、数值和物件才成为约束。
-不生成全量事实原子、逐项通过回执或独立对白正文副本。章节、证据和人物闭集由编译器核验，
-完整剧情与重要边界由逐章五维审阅及跨章复核判断。数量与证据范围不能证明语义完整。
+不生成全量事实原子、逐项通过回执或独立对白正文副本。章节、证据和人物闭集由编译器核验；
+机械检查不证明人物完整、主张获原文支持或剧情抽取正确（`plot_semantics` 等 unver 行披露）。
 
 已有正式蓝图不能被首次抽取静默覆盖。人物或 Global 变化后，显式章修订或 typed 编辑可以读取
 有完整来源的历史自身基线，仍须核对当前源文摘要与证据，并使用当前人物、Global 和编译契约
@@ -29,9 +31,6 @@ terminal 等待人工后继时存活，不计作阶段输出：
 | `stage2/global_grounding.json` | `KnowledgeGrounding` v7 | `stage2.global` | 四类长期约束、共享证据表与必要人物投影 SHA；人物独立存储 |
 | `stage2/blueprint_character_projection.json` | `BlueprintCharacterProjection` v2 | `stage2.characters` | 人物注册与 MainText 确定性物化的逐章称名闭集；Global 无写权限 |
 | `stage2/chapter_blueprints.json` | `ChapterBlueprints` v10 | `stage2.blueprint` | 完整剧情、持续状态、稀疏约束、人物呈现绑定、共享证据表和有据源语境 |
-| `stage2/knowledge_links.json` | `KnowledgeLinks` v3 | `stage2.blueprint --close-review` | Commander 已保存的知识与既有 Beat/State/Global 关联、明确人物受众和身份披露端点；独立免费物化，不进入 Blueprint 抽取响应 |
-| `stage2/global_review.json` | `GlobalReview` v3 | `stage2.global` | 由当前全局底座确定性枚举的逐项人工复核；详见 `docs/schema/evaluation.md` |
-| `stage2/global_review_decisions.json` | `GlobalReviewDecisionSet` v3 | 人工输入 | actor、逐项 subject hash 决定，或绑定完整 blocking scope/正文章全集的默认决定 + 逐项例外；UNVER 可显式请求完整组隔离，也可经同形 API 提交 |
 | `stage2/global_edit.json` | `GlobalEdit` v6 | 人工输入 | Stage2 typed 订正决策集（`stage2.global --emit-edit-template` 生成当前骨架，`--apply-edit` 消费） |
 | `stage2/blueprint_edit.json` | `PlotEdit` v2 | 人工输入 | 当前 token 绑定的完整指定章及 beats/states/constraints/actor_bindings 的 preserve/replace/add 身份操作，preview/apply 共用编译器 |
 | `stage2/global_edit_input_commit.json` | `GlobalEditInputCommit` v2 | `stage2.global` 内部 WAL | 在改 canonical edit/failure 前冻结 sparse target、运输身份及 edit/failure/formal-journal baseline |
@@ -41,50 +40,37 @@ terminal 等待人工后继时存活，不计作阶段输出：
 正式产物与人工输入都使用当前 Pydantic StrictModel，未知字段拒收。新根初始化当前 manifest；
 旧根配对旧代码保留，符合 `docs/schema/work_units.md` 的已登记版本对只能显式离线过渡，
 不自动迁移旧事实、补字段或继承旧审批。GlobalEdit v1～v5 不能提交当前 v6 写口。
+`stage2/knowledge_links.json`、`stage2/global_review.json`、`stage2/global_review_decisions.json`
+已随语义审阅退役进入 `contracts/artifacts.py::RETIRED_ARTIFACT_PATHS`；旧盘字节只配对冻结旧代码
+读取，不迁移、不继承审批。
 
 ## 人物订正后的免费知识重绑
 
-静态人物的实际知识投影发生变化时，消费者拒绝拼接两代材料，状态页保持知识 stale、审阅
-unknown。`novel/stages/stage2/character_rebind.py::prepare_if_changed` 是队列与 producer 共用
+静态人物的实际知识投影发生变化时，消费者拒绝拼接两代材料，状态页保持知识 stale。
+`novel/stages/stage2/character_rebind.py::prepare_if_changed` 是队列与 producer 共用
 的证明：只有人物边明确变更、其余实际输入边仍 fresh、原来源完整且人物外键闭合时，才提供
 `stage2.global --renormalize`。源文或来源不明不能顺带追认。执行前后复验完整输入及
 正式/INVALID 身份，归档旧知识、保留原 model/prompts/usage，以 partial_rewrite 标明新输入依据；
-不新增模型调用，不授予语义接受。变化的审阅主体重新 pending，未变项保留已有有效决定。
+不新增模型调用，不授予语义接受；下游按实际业务依赖与统一机械准入重新判定。
 人物自身的 HARD 在知识请求前拒绝，修复 owner 始终是 `stage2.characters`。
 
-## 独立知识关联与免费收口
+## 统一机械准入（语义审阅退役后的下游前置）
 
-KnowledgeLinks v3 引用已有 Beat/State/Global 主体，支持 at_entry 或 at_beats（明确
-trigger_beat_ref）；关联不另存同义剧情正文，也不覆盖每个普通隐含信息。State modality
-说明命题性质，KnowledgeLinks 独占人物知晓、传播和读者披露许可。
-
-必要关联的义务、有效继承、证据与候选集合由 novel/stages/stage2/knowledge_links.py
-同源构造。ID 相同而实际内容、证据或成员变化必须使相关决定失效；未关联、unresolved、合法空值
-与已接受分开。人物知情不自动授权读者，source 段号顺序不替代触发点。
-
-人物受众使用 `ActorRef {char_id,presentation_ref?}`；`candidate_actors` 是目标章与必要携入
-材料实际提供的呈现闭集。身份揭示沿既有秘密或必要读者披露的 `identity_actors` 连接同一实体
-的多个明确表面身份，与 `identity_revealed_from` 交叉核验，不新增称谓知情矩阵。
-关系的成立/披露义务可以只保留时间锚；实际陈述关系须从 `relation_uses` 或 State/Plan 的
-完整引用取得两端呈现，不能把知识义务的默认实体端点当成呈现许可。详见
-[knowledge_links.md](./knowledge_links.md)。
-
-Blueprint 的 chapter:N 和 cross_chapter 工作包包含当前知识关联 scope、实际问题及必要材料。
-人物目录按本章及已提供的关系、状态、知识和上下文引用闭包编译，给出可理解的姓名、称呼、
-静态身份与原文证据；`plot_characters` 同源依赖投影保护实际正文与证据变化，不能只绑定 char_id。
-人物或共享知识变更后，范围快照仅免费重验当前源文与机械引用；它不重签语义接受，不修改蓝图。
-真实消费内容变化的章节及跨章接受过期，无依赖章节保留原决定。
-Stage2NodeReviewRequest.knowledge_links 只提交当前范围新增决定，其他有效决定引用继承。
-全部章审当前有效、跨章明确接受、关联齐全后，由 stage2.blueprint --close-review 免费物化
-带来源证明的正式关联及放行。服务先保存 _service 决定，CLI producer 修改 artifact；中断优先
-按原决定补尾，不重抽蓝图、不重购审阅。
+Stage2 下游不再有审阅停点：Blueprint 生成前由 `novel/admission.py::blueprint_generation_ready`
+检查人物登记、Global、原文与称名投影各自可读、当前、无未恢复 INVALID，且人物/Global
+机械检查全部通过；Stage4 起由 `stage4_ready` 再要求完整 Blueprint 与联合机械检查。
+机械检查缺失、未运行或不可判仍阻断（`skipped` 与机械类 `unver` 视为不可判）；
+登记过的语义类 `unver`（`SEMANTIC_UNREVIEWED_RULES`：`role_fate_unverifiable`、
+`secrets_absent`、`plot_semantics`）降为「Stage2 语义未审」披露，不阻断、不产生审批待办。
+CLI、调度、最低读取边界和交付检查共用同一结论；本章级揭示字段（如秘密 `revealed_from`）
+继续作为未审参考，同章安排由 Stage4 现有计划表达。
 
 ## 一、`global_grounding.json` v7
 
 Global 只收删除后会损害跨章节事实、因果或披露一致性的长期约束。局部行动、临时状态、
-单场称呼的施受和语境不进入 Core；其完整语义归 Blueprint 的 Beat/State，人物知情归既有
-KnowledgeLinks。Blueprint、KnowledgeLinks 与 Stage4–5 消费已按本批新版契约接线；工程回归与
-真书质量验收分别记录。Stage6 Prepare 的独立生产、审阅及页面迁移仍由 Gate C 完成。
+单场称呼的施受和语境不进入 Core；其完整语义归 Blueprint 的 Beat/State。Blueprint 与
+Stage4–5 消费已按本批新版契约接线；工程回归与真书质量验收分别记录。
+Stage6 Prepare 的独立生产、审阅及页面迁移仍由 Gate C 完成。
 
 | 顶层字段 | 类型 | 内容 |
 |---|---|---|
@@ -126,8 +112,8 @@ knowledge_events/source_blurb 字段无兼容别名，当前载体严格拒绝�
   目标必须存在，秘密 revealed_from 与目标相同。事实正文与证据只在目标保存，不复制第二份。
 
 setup_chapters 不重复且不得晚于 revealed_from。[] 明确表示未登记铺垫；同章内独立情节
-单元可以先铺垫后揭示，Stage2 缺权威分场信息，机械检查不得硬拒绝，Commander 核实语义先后。
-归一过程不裁剪或改写模型提交的铺垫章。合法空秘密集合仍须接受全书完整性审阅。
+单元可以先铺垫后揭示，Stage2 缺权威分场信息，机械检查不得硬拒绝，语义先后属「Stage2
+语义未审」披露。归一过程不裁剪或改写模型提交的铺垫章。
 
 ### 1.3 共享证据与局部句柄
 
@@ -152,7 +138,7 @@ owner 免费编辑与重验，不能以重新购买掩盖恢复缺口。
 不可变 AnalyzeReceipt 以各自摘要绑定这些来源、唯一账务 attempt 与两侧首次物化目标；双方
 _provenance.shared_analysis_source 引用回执，usage=null，账只认同一次调用。真实生成时看过
 完整共同材料，不声称首抽只读窄人物投影；未来 Global freshness 仅绑定实际业务所需人物
-投影，证据等非业务变更重新打开人物审阅，不把历史生成前缀强加为未来全对象 stale 边。
+投影，证据等非业务变更重新打开人物业务依赖，不把历史生成前缀强加为未来全对象 stale 边。
 
 已有任一半、旧 epoch 或 pending prepared 不重新走联合首抽；人物/Global 独立修订仍分别
 归 stage2.characters / stage2.global。人物 HARD 时 Global 已购草稿保持 awaiting_characters，
@@ -176,22 +162,23 @@ typed 编辑修正，原映射和联合来源不改写。字段及独立 WAL 见
 `stage2-knowledge-v3`。checkpoint 冻结原始输入、候选表、局部 ID 映射、模型/session/回答与
 ledger；恢复回读初始正式或 INVALID 的精确历史字节，不把本次已落新稿当原始请求基线。
 
-### 1.5 知识提交和审阅后继
+### 1.5 知识提交与后继判定
 
 独立模型回答先 checkpoint，再持 owner 锁执行知识/INVALID 的
 `prepared → write → exact readback → adoption → committed`。任何 side writer 不得覆盖
-foreign prepared，无法互验证据、输入、回答与账时保持 unknown。GlobalReview 是确定性后继，
-按当前独立人物和 Global 重建，只继承主体身份仍有效的逐项决定，变化项 pending。审阅补尾
-失败不得报告 delivered；原 run 或 --refresh-review 可免费补齐，不重复购买。
+foreign prepared，无法互验证据、输入、回答与账时保持 unknown。提交后继只做机械复验：
+下游由统一机械准入按实际业务依赖判定，无审阅后继（原 GlobalReview 确定性后继与
+`--refresh-review` 已随语义审阅退役）。
 
-称名投影只由人物 owner 写入。联合首抽、人物编辑及统一审阅的双 owner 批次各自保留明确
+称名投影只由人物 owner 写入。联合首抽、人物编辑及双 owner 批次各自保留明确
 prepared 载体和写入集合；两个 artifact 的版本、长期依赖与修复权限保持独立。
 
 ## 一之二、`blueprint_character_projection.json`
 
 这是人物 producer 与 `stage2.blueprint` 之间的注册、版本化边界。由
 `novel/stages/stage2/characters.py::_projection` 从当前 MainText 和人物产物确定性重算；
-Global 不写入该投影。Blueprint 仍须等待 Global 接受，投影存在不构成越过审阅闸的许可。
+Global 不写入该投影。投影存在与 Global 正式可用共同构成 Blueprint 生成的机械准入
+（`novel/admission.py::blueprint_generation_ready`），不构成越过准入的许可。
 
 顶层只含 `chapters[]`；每章四格全部必填：
 
@@ -199,8 +186,8 @@ Global 不写入该投影。Blueprint 仍须等待 Global 接受，投影存在�
 |---|---|---|
 | `chapter_ordinal` | `int` | 当前 MainText 的阅读序章号 |
 | `past_attested_surfaces` | `str[]` | 在当章之前已被原文证明出现的名册称名 |
-| `visible_character_refs` | `{char_id: str[]}` | 登记称谓在截至本章原文字面出现的内部实体候选；同名或共享称谓的多实体全部保留，归属交语义审阅 |
-| `character_bindings` | `{char_id: {surface, identity_revealed_from}[]}` | 与 visible_character_refs 的人物键、称谓及顺序逐项相同的身份映射候选；供实际 ActorRef 编译与审阅使用 |
+| `visible_character_refs` | `{char_id: str[]}` | 登记称谓在截至本章原文字面出现的内部实体候选；同名或共享称谓的多实体全部保留，归属属语义未审范围 |
+| `character_bindings` | `{char_id: {surface, identity_revealed_from}[]}` | 与 visible_character_refs 的人物键、称谓及顺序逐项相同的身份映射候选；供实际 ActorRef 编译使用 |
 
 它没有通用 `_provenance`：freshness 先强类型校验当前人物产物与 MainText，再逐值
 对账。它只消费 Characters v2 的 aliases 与 MainText，角色、关系、秘密、设定、证据
@@ -209,7 +196,7 @@ Global 不写入该投影。Blueprint 仍须等待 Global 接受，投影存在�
 投影按字面出现生成分析侧闭集，不能证明共同称谓的每次归属，也不是 Writer 可直接消费的
 公开身份映射；隐藏同人关系及同 Beat 多表面身份由 Blueprint 的 ActorBinding 和 WriterContext v9
 呈现边界承接。登记 surface、identity_revealed_from 或 MainText 改变且最终投影字节不同，
-才使该确定性输入边 stale；审阅另按实际支持材料建立依赖。
+才使该确定性输入边 stale；下游按实际业务依赖与统一机械准入建立失效边界。
 
 ## 二、`chapter_blueprints.json`
 
@@ -308,66 +295,42 @@ patch，新增主体可在同轮 patch。最终 exact fact_ref、人物端点、
 引用该人物，预览不生成伪造的正式来源边。
 
 联合首抽的人物已通过、Global 仅有当前可解析 INVALID 时，同样可用 `--emit-edit-template`
-导出问题稿的完整可编辑主体。此读取不补造 GlobalReview；模板原样提交仍被 no-op 拒绝。
-订正后 `--apply-edit` 保留 Characters、联合来源与唯一账务 attempt，经同一 HARD 通过后将
-Global 和首次 pending 审阅一起提交。任意写点中断按原 WAL 免费补尾，不能重买联合首抽。
-只有携带已有 current review 证明的 `post_edit_review` 才可提交编辑后的语义决定。
-其中 `quarantine_groups[].group_key` 只接受 `secret:<id>`，用于完整秘密组的显式 UNVER
-处置；关系、规则、人物、setting 和集合完整性不得隔离。隔离仅删除下游内存视图中的秘密，
-不删除其引用的独立已接受关系或规则，不改写正式 Core 或原审计决定。
+导出问题稿的完整可编辑主体。模板原样提交仍被 no-op 拒绝。
+订正后 `--apply-edit` 保留 Characters、联合来源与唯一账务 attempt，经同一 HARD 通过后
+提交新 Global；落盘后按统一机械准入与 freshness 判定下游。任意写点中断按原 WAL 免费补尾，
+不能重买联合首抽。`post_edit_review` 格随审阅退役：新提交一律拒绝
+（`extract._refuse_reviewed_edit`），旧盘 reviewed WAL 只配对冻结旧代码按原类别补尾。
 
 GlobalProvenance 的 `retired_global_ids` 独立记录已删除主体，采用 `relation:rel_01`、
 `rule:wr_01`、`secret:secret_01`、`version:wr_01:v01` 等正式身份键；初始为空。
 typed 编辑与完整 owner 修订均继承已退休集合，并追加本轮删除的身份。新增主体由代码
-避开当前及已退休 ID；规则版本在所属正式规则内分配。该集合不下发模型、不生成审阅义务，
-也不因新一次模型来源或人审回执替换而丢失。重复局部句柄是 wire 形状错误，须保留原回答
+避开当前及已退休 ID；规则版本在所属正式规则内分配。该集合不下发模型，
+也不因新一次模型来源替换而丢失。重复局部句柄是 wire 形状错误，须保留原回答
 走响应修复，不能在证据编译前猜测多对一映射。
 
-### Headless Reviewer 与真实 producer
+### Stage2 审阅 wire 与席位的退役
 
-完整 canonical action 沿用 `novel-reviewer-action-v1`。唯一 scope 决定使用
-`novel-stage2-scope-review-delta-v1`，唯一 GlobalEdit 使用 `novel-stage2-reviewer-delta-v3`；
-多选项或非单一 scope 使用 `novel-stage2-core-review-choice-v1` 绑定完整 options 与所选请求。
-Supervisor 仅从 immutable exact request 注入 actor、身份、SHA、覆盖章集合与固定 wrapper；
-provider 只提交开放的值。patch 行必须是模板的无重复有序子序列，collection 仅开放当前
-模板允许的固定键。空数组/null 表示本次不提交，不能自动生成 no-op 业务编辑。异常字段、
-重复 object key、越权主体、错误 expected digest 均拒绝，不以 last-wins 解释。
-
-统一审阅可在同一请求携带两 owner 的 Core 编辑，但先纯预检并冻结两侧原 SHA 与 typed
-业务候选，再分别由人物与 Global owner 提交。人物先落盘；Global 验证实际人物业务与冻结
-候选相同后生成真实 provenance。跨 owner 仅局部批次 WAL 协调，不合并两份正式 artifact。
-新产生的 pending 义务不因该次编辑自动 PASS，下一次 Commander 只审新的待决范围。
-
-修复 owner 与审阅席位分开：Global Commander 可派修人物或知识，Blueprint Commander 可
-派修人物、知识或本章 Blueprint。只有两位 Commander。静态问题只开放正确 owner 的动作，
-不能把未执行的静态修改夹进 GlobalEdit。source/workpack/正文章全集及 surviving 旧 FAIL/UNVER
-都要复验；原问题未变时必须显式决定，默认 PASS 不能覆盖例外或替省略项作证。
-
-只有当前 task 与 exact request 都属于 reviewed-edit correction，才允许把原 durable failed
-sparse edit 作基线。修改按稳定主体替换；撤销只能用模板铸造的 opaque drop_targets 闭集，
-update/drop 同主体拒绝。普通新编辑的空值不继承历史失败输入。producer 聚合预检全部集合的
-诊断后才应用操作；持久拒因只保留可信类别、计数与诊断 SHA，不回显模型正文或任意 loc。
+原 Stage2 Commander 的审阅 wire（`novel-stage2-scope-review-delta-v1`、
+`novel-stage2-reviewer-delta-v3`、`novel-stage2-core-review-choice-v1`）、两席 Commander
+派修与问题义务已整体退役。旧席位账与 reviewed-edit 修正在 `novel/orchestrator/stage2_review_ledger.py`
+保留只读审计解码，不参与新工作单元；带 `post_edit_review` 的 GlobalEdit 新提交被关闭式拒绝。
+共享 Commander/reviewer 框架继续服务 Stage4/5/6/7 的保留审阅。
 
 ### 原子提交、恢复与当前版本
 
 人工输入先落 `GlobalEditInputCommit`：冻结运输身份、sparse canonical target 与
-edit/failure/formal-journal 基线，再写 canonical edit。reviewed 失败分为 canonical_pending、
-hard_gate、candidate_validation、post_edit_review；普通编辑保留独立 terminal 类别，不伪造
-Commander 身份。已支付回答先耐久保存，再做组装、预检和提交；中断重放同一回答，不开新席位。
+edit/failure/formal-journal 基线，再写 canonical edit。普通编辑的失败保留独立 terminal
+类别（`ordinary_hard_gate / ordinary_candidate_validation`）。已支付回答先耐久保存，再做
+组装、预检和提交；中断重放同一回答。
 
-纠正工作包必须具有当前 typed 失败回执；缺回执时保持未知，不从旧 INVALID 反推
-Commander 动作，不压缩旧 full-template 输入后接入新工作单元。当前 canonical_pending
-或 prepared 仍由原输入 WAL 与提交 journal 免费补尾。
-
-`GlobalEditCommit` v3 在正式写盘前冻结知识、审阅、INVALID/failure 的 baseline/target 与渲染
+`GlobalEditCommit` v3 在正式写盘前冻结知识、INVALID/failure 的 baseline/target 与渲染
 SHA。target 的知识载体与当前人物业务依赖必须互验；写口只渲染知识，
 不写人物或称名投影。每个 live 路径必须仍为 baseline 或 exact target，第三方状态拒绝覆盖。
 全部 readback 闭合后才 committed；重放不得制造第二份采用账或重复历史。
 
 `--revalidate` 的 journal 还绑定原 actor/reason 和 revalidation audit。没有属于该动作的
 canonical edit 或既有正式知识时，用 null 精确表达缺失。prepared、canonical_pending 优先
-于 partial 正式盘面；审计与授权不会由 system 替换。`--refresh-review` 只处理当前知识的
-审阅派生，不接管尚未完成的人工 journal、INVALID 或失败动作。
+于 partial 正式盘面；审计与授权不会由 system 替换。
 
 GlobalEdit v1～v5 不迁移；人工免费获取 v6 模板后重新核对。旧 GlobalEditCommit 不可按 v3
 重放；整根切换前须用匹配旧代码排空，无法排空则与旧根一同归档，不能手补新 marker。
@@ -377,27 +340,23 @@ GlobalEdit v1～v5 不迁移；人工免费获取 v6 模板后重新核对。旧
 
 - `stage2.global`：主路径只接受本次段落候选 ID，由代码铸成正式共享证据锚点；locator 不再是
   模型选择面，只保留给下述 0-LLM 人工恢复；
-  `--refresh-review` 从 current 人物/知识免费刷新审阅，变化主体待审；
   `--resample` 仅在已有 `global_grounding.INVALID.json` 时绕过同参数缓存，付费重采整份响应；
   `--renormalize` 仅对**已符合当前 schema**的产物重算代码派生字段；
-  `--emit-edit-template` stdout-only 从当前 INVALID 的可编辑主体，或正式审阅的 FAIL/未处置 UNVER
-  生成默认 no-op 的 v6 骨架；无 review 的问题稿不因此获得接受；
-  `--apply-edit <路径>` 吃 `global_edit.json` 落 Stage2 typed facts 的 0 成本人工订正（见 §三之二）；
-  `--emit-review-template` stdout-only 从当前 `global_review.json` 投影逐项 hash/evidence，
-  默认全部 `UNVER`，原样应用也不会打开事实闸。称名投影独归人物 producer，
-  Global 写口不补建或采用它。
+  `--emit-edit-template` stdout-only 从当前 INVALID 的可编辑主体生成默认 no-op 的 v6 骨架；
+  `--apply-edit <路径>` 吃 `global_edit.json` 落 Stage2 typed facts 的 0 成本人工订正
+  （独立预检 `POST /{sid}/stage2/global/edit/preview` 与 apply 共用同一候选判据；
+  见 §三之二）。称名投影独归人物 producer，Global 写口不补建或采用它。
 - stage2.blueprint：默认 plot-blueprint-v1，一章一次逻辑请求，原文一次、必要 Global 和人物
   投影及前章稀疏携带状态。初次按实际携带依赖顺序执行，独立 session、并发上限、验证后
   checkpoint 与全章原子提交保留。状态依赖尚未闭合不预先并行购买后章。
   推理通道采纳的响应在 checkpoint 写入及恢复时均核验原始 answer_lost 字节、成本账和
   唯一审计指针；重算 checkpoint 摘要不能替代供应商留证。正式提交后新出现的问题稿，
   不能由旧批次 prepared 尾窗自动清除；冲突保留原字节供当前 owner 处理。
-  --chapters 主动定向生成使用 refresh-write 和新 run；Commander 返工使用 current
-  --review-token，只处理裁决章。--emit-edit-template / --apply-edit 使用当前 PlotEdit，
+  --chapters 主动定向生成使用 refresh-write 和新 run；旧审阅返工票已退役，携带
+  `--review-token` 会被显式拒绝。--emit-edit-template / --apply-edit 使用当前 PlotEdit，
   preview 与 apply 同源编译，普通修订 preserve、语义拆合 replace、新增 add。
   --renormalize / --revalidate 只做当前来源可证的免费复检与派生恢复，不推测证据或更改语义。
-  --emit-review-workpack 按当前 chapter:N 或 cross_chapter 返回原文、蓝图、必要依赖和实际问题，
-  不制造决定。--close-review 汇合当前章审、知识关联及独立跨章接受。
+  只读阅读改用 `GET /{sid}/stage2/blueprint-reading-workpack`（原审阅工作包路径已随语义审阅退役）。
 
 - 正式写入前先跑严格载体校验与联合 HARD 闸门；失败响应进入 `.INVALID`，不会覆盖正式产物。
 - producer/正式 artifact registry 不自动迁移旧 schema，不用字段别名或双形状读取追认旧审批。
@@ -431,8 +390,9 @@ Core 的 `global_core_contract`、`global_temporal_contract`、
 | 蓝图提示与读数 | `pronoun_surface_unattested`、`plot_shape`、`context_scope`、`plot_semantics` |
 
 机器修复只派给拥有对应字段的 producer。证据问题先免费编辑/复验；正文锚点不得漂移后
-静默追认。全书提升边界、事实正确性、称谓归属和揭示语义均由统一审阅裁决。
-节点数量、字数密度及证据覆盖均不作为语义自动通过或付费返工的证明。
+静默追认。全书提升边界、事实正确性、称谓归属和揭示语义属「Stage2 语义未审」披露：
+机械检查不证明它们，最终随交付披露该限制。节点数量、字数密度及证据覆盖均不作为语义
+自动通过的证明。
 
 判据的权威定义在 `contracts/judges/stage2.py`，注册期会验证规则 id 唯一、严重度、需求落点、
 节点与 flag 的存在性。报告形状见 [`_report.md`](./_report.md)。

@@ -347,28 +347,6 @@ export function chNo(n: number): string {
   return 'ch' + String(n).padStart(2, '0')
 }
 
-/**
- * Display labels for the Stage2 review card groups.
- *
- * The key here is the PREFIX of `GlobalReviewItem.group_key`, which the server
- * derives. This map is presentation vocabulary only — it never decides whether
- * an item blocks Stage4; that verdict arrives on the row as `effect`.
- */
-export const REVIEW_GROUP_LABEL: Record<string, string> = {
-  character: '人物',
-  relation: '关系',
-  secret: '跨章秘密',
-  world_rule: '规则',
-  setting: '设定',
-  set: '集合完整性',
-}
-
-/** Stable card order; unknown prefixes sort last without being hidden. */
-export const REVIEW_GROUP_ORDER: readonly string[] = [
-  'set', 'character', 'relation', 'secret', 'world_rule', 'setting',
-]
-
-
 export const DELIVERY_LABEL = {
   ready: '可交付',
   ready_with_disclosures: '可交付·有披露',

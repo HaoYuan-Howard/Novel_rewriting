@@ -10,13 +10,11 @@ import json
 from pathlib import Path
 
 from contracts.schema.api import (
-    BlueprintReviewWorkpack, CtxChapterView, PlanChapterLine, ReadingView, Stage4View,
+    BlueprintReadingWorkpack, CtxChapterView, PlanChapterLine, ReadingView, Stage4View,
     ApprovalWorkpack, DesignReviewTemplate, DesignReviewView,
-    BlueprintRefinementRequest, BlueprintRefinementCatalog,
 )
-from contracts.schema.plot_review import PlotReviewResponse, BlueprintRunProgress
+from contracts.schema.plot_review import BlueprintRunProgress
 from contracts.schema.plot_edit import PlotEdit, PlotEditPreview
-from contracts.schema.knowledge_links import KnowledgeLinkSubmission, KnowledgeLinkDecision
 
 
 def ts(node: dict) -> str:
@@ -59,10 +57,8 @@ def ts(node: dict) -> str:
 
 def render() -> str:
     definitions = {}
-    for model in (ReadingView, BlueprintReviewWorkpack, PlotReviewResponse, BlueprintRunProgress,
+    for model in (ReadingView, BlueprintReadingWorkpack, BlueprintRunProgress,
                   PlotEdit, PlotEditPreview,
-                  BlueprintRefinementRequest, BlueprintRefinementCatalog,
-                  KnowledgeLinkSubmission, KnowledgeLinkDecision,
                   PlanChapterLine, CtxChapterView, Stage4View,
                   ApprovalWorkpack, DesignReviewTemplate, DesignReviewView):
         schema = model.model_json_schema(mode='serialization', by_alias=True)

@@ -55,46 +55,10 @@ class PlannerValueConstraint(FrozenModel):
     value: str = Field(min_length=1)
 
 
-class PlannerAudience(FrozenModel):
-    kind: Literal['character', 'group']
-    actor_alias: OpaqueAlias | None = None
-    label: str | None = None
-
-    @model_validator(mode='after')
-    def _tag(self):
-        if self.kind == 'character':
-            if self.actor_alias is None or self.label is not None:
-                raise ValueError('人物受众只携带呈现 alias')
-        elif self.label is None or self.actor_alias is not None:
-            raise ValueError('群体受众只携带明确群体名称')
-        return self
-
-
-class PlannerKnowledge(FrozenModel):
-    event_alias: OpaqueAlias
-    # 空集只表示未消费关系的内部时间锚；不下发默认人物或未登记呈现。
-    subject_aliases: list[OpaqueAlias]
-    kind: Literal['secret_reveal', 'secret_setup', 'world_rule',
-                  'world_rule_reveal', 'relation', 'relation_visibility',
-                  'setting', 'reader_reveal', 'character_knowledge']
-    audience: PlannerAudience | None
-    timing: Literal['at_entry', 'at_beats', 'future_chapter']
-    trigger_beat_alias: OpaqueAlias | None = None
-    identity_aliases: list[OpaqueAlias] = Field(default_factory=list)
-
-    @model_validator(mode='after')
-    def _trigger(self):
-        if not self.subject_aliases and self.kind not in ('relation', 'relation_visibility'):
-            raise ValueError('只有未消费的关系时间锚可以没有呈现主体')
-        if (self.timing == 'at_beats') != (self.trigger_beat_alias is not None):
-            raise ValueError('知识触发节点与时点类型不匹配')
-        return self
-
-
 class PlannerEndpoint(FrozenModel):
     endpoint_alias: OpaqueAlias
-    kind: Literal['state', 'constraint', 'knowledge']
-    endpoint: Literal['established', 'ended', 'before', 'after', 'target', 'trigger']
+    kind: Literal['state', 'constraint']
+    endpoint: Literal['established', 'ended', 'before', 'after', 'target']
     trigger_beat_alias: OpaqueAlias
     subject_aliases: list[OpaqueAlias]
 
@@ -114,7 +78,6 @@ class PlannerChapter(FrozenModel):
     inherited_states: list[PlannerState]
     background_beats: list[PlannerBackgroundBeat]
     constraints: list[Annotated[PlannerRelation | PlannerValueConstraint, Field(discriminator='kind')]]
-    knowledge: list[PlannerKnowledge]
     endpoints: list[PlannerEndpoint]
     entry_state_aliases: list[OpaqueAlias]
     carry_out_aliases: list[OpaqueAlias]
@@ -135,9 +98,6 @@ class PlannerChapter(FrozenModel):
                                      if state.holder_alias is not None)
         referenced_characters.update(row.observer_alias for row in self.constraints
                                      if isinstance(row, PlannerRelation) and row.observer_alias is not None)
-        referenced_characters.update(row.audience.actor_alias for row in self.knowledge
-                                     if row.audience is not None and row.audience.actor_alias is not None)
-        referenced_characters.update(ref for row in self.knowledge for ref in row.identity_aliases)
         if not referenced_characters <= set(characters):
             raise ValueError('规划引用的人物必须带可辨认的称呼与角色语义')
         beats = {b.alias for b in self.beats}

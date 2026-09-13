@@ -275,13 +275,8 @@ def _round_shares(raw: list[float], total: int) -> list[int]:
 def _validate_scene_refs(chapter: dict[str, Any], blueprint: dict[str, Any]) -> None:
     from contracts.schema.plot import PlotBlueprint
     from novel.stages.stage4.plot_placements import compile_plan_placements
-    from contracts.schema.plot import PlotKnowledgeTrigger
-    # 已审知识的触发身份由 A+B 冻结；完整 KnowledgeLinks 一致性在联合正式检查再核验。
-    # 预算只核验其余呈现，不把缺失知识语义伪装成已通过。
-    checked = {**chapter, 'anchor_bindings': [
-        r for r in chapter['anchor_bindings'] if r['kind'] != 'knowledge']}
     try:
-        compile_plan_placements(PlotBlueprint.model_validate(blueprint), checked)
+        compile_plan_placements(PlotBlueprint.model_validate(blueprint), chapter)
     except ValueError as exc:
         raise RefusedByStructure(str(exc)) from exc
 

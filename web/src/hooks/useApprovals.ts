@@ -5,11 +5,9 @@ import type {
   ApprovalDoc,
   GateKey,
   Stage5ClosureRequest,
-  Stage2NodeReviewRequest,
   StructureApprovalRequest,
   WritingApprovalRequest,
 } from '@/types/approvals'
-import type { BlueprintSeenRequest, Stage2GlobalSeenRequest } from '@/types/stages'
 import { useSid } from './useRouteParams'
 import { invalidateBookReadModels } from './bookReadModels'
 
@@ -48,10 +46,6 @@ export function useApprovals(sidOverride?: string) {
     mutationFn: (key: GateKey) => api.approveGate(sid, key),
     onSuccess: put,
   })
-  const approveStage2Review = useMutation({
-    mutationFn: (request: Stage2NodeReviewRequest) => api.approveStage2Review(sid, request),
-    onSuccess: cache,
-  })
   const backfill = useMutation({
     mutationFn: () => api.backfillApprovals(sid),
     onSuccess: (result) => put(result.approvals),
@@ -70,14 +64,6 @@ export function useApprovals(sidOverride?: string) {
       return cache(doc)
     },
   })
-  const markGlobalSeen = useMutation({
-    mutationFn: (request: Stage2GlobalSeenRequest) => api.markSeen(sid, 'global', request),
-    onSuccess: put,
-  })
-  const markBlueprintSeen = useMutation({
-    mutationFn: (request: BlueprintSeenRequest) => api.markSeen(sid, 'read', request),
-    onSuccess: put,
-  })
   const startWriting = useMutation({
     mutationFn: (request: WritingApprovalRequest) => api.startWriting(sid, request),
     onSuccess: put,
@@ -91,12 +77,9 @@ export function useApprovals(sidOverride?: string) {
     error: q.error,
     refetch: q.refetch,
     approve,
-    approveStage2Review,
     approveStructure,
     approveStage5Closure,
     backfill,
-    markGlobalSeen,
-    markBlueprintSeen,
     startWriting,
   }
 }

@@ -4,76 +4,19 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from contracts.schema.api import (
-    ApprovalBackfillResult, ApprovalDoc, ApprovalWorkpack, BlueprintSeenRequest, Stage2GlobalSeenRequest,
-    DesignReviewerKind,
-    DesignReviewRequest, DesignReviewTemplate, GateKey, SeenKey,
+    ApprovalBackfillResult, ApprovalDoc, ApprovalWorkpack, DesignReviewerKind,
+    DesignReviewRequest, DesignReviewTemplate, GateKey,
     Stage5ClosureRequest, Stage5ClosureTemplate,
     Stage6ApprovalWorkpack, Stage7ApprovalWorkpack,
     StructureApprovalRequest, WritingApprovalRequest,
-    Stage2NodeReviewRequest,
-    BlueprintRefinementRequest, BlueprintRefinementCatalog,
 )
-from contracts.schema.stage2_issue_review import Stage2IssueReviewSubmission
 from novel.api.deps import checked_sid, get_base
-from novel.errors import ApprovalRequired
 from novel.orchestrator import approvals, inspection
 from novel.orchestrator.write_admission import operation_scope
 from novel.views.stage6 import stage6_approval_workpack
 from novel.views.stage7 import stage7_approval_workpack
 
 router = APIRouter(prefix='/novels/{sid}/approvals')
-
-
-@router.get('/blueprint-refinement/catalog', response_model=BlueprintRefinementCatalog)
-def get_blueprint_refinement_catalog(
-    origin: str = Query(pattern=r'^(design|structure)$'),
-    sid: str = Depends(checked_sid), base: str = Depends(get_base),
-) -> BlueprintRefinementCatalog:
-    from novel.orchestrator import blueprint_refinement
-    return blueprint_refinement.catalog(base, sid, origin=origin)
-
-
-@router.post('/blueprint-refinement', response_model=ApprovalDoc)
-def submit_blueprint_refinement(
-    request: BlueprintRefinementRequest,
-    sid: str = Depends(checked_sid), base: str = Depends(get_base),
-) -> ApprovalDoc:
-    from novel.orchestrator import blueprint_refinement
-    with operation_scope(base, sid, operation='approval-blueprint-refinement', details={
-            'origin': request.origin, 'review_token': request.review_token,
-            'chapter_ordinal': request.chapter_ordinal, 'actor': request.actor}):
-        return blueprint_refinement.submit(base, sid, request)
-
-
-@router.post('/stage2-review', response_model=ApprovalDoc)
-def submit_stage2_review(
-    request: Stage2NodeReviewRequest,
-    sid: str = Depends(checked_sid), base: str = Depends(get_base),
-) -> ApprovalDoc:
-    """提交绑定当前工作包的 Global 或 Blueprint 独立裁决。"""
-    with operation_scope(base, sid, operation='approval-stage2-review', details={
-            'node': request.node, 'review_token': request.review_token,
-            'decision': request.decision, 'actor': request.actor}):
-        return approvals.approve_stage2_review(base, sid, request)
-
-
-@router.post('/stage2-review-issues', response_model=ApprovalDoc)
-def submit_stage2_issue_review(
-    request: Stage2IssueReviewSubmission,
-    sid: str = Depends(checked_sid), base: str = Depends(get_base),
-) -> ApprovalDoc:
-    """issues 协议提交：服务只暂存请求，CLI 子进程完成两套账事务。
-
-    exit 0 表示范围审阅派生通过且已接受；exit 1 表示问题与派生决定已落账、
-    闸门保持关闭。两者都是已消费的合法回答，均返回提交后的审批视图。
-    """
-    from novel.orchestrator import stage2_issue_submission, uploads
-    path = uploads.save_stage2_issue_submission(base, sid, request)
-    with operation_scope(base, sid, operation='approval-stage2-review-issues', details={
-            'review_token': request.review_token, 'actor': request.actor,
-            'issue_count': len(request.issues)}):
-        stage2_issue_submission.apply_issue_submission(base, sid, path)
-    return approvals.get(base, sid)
 
 
 @router.get('', response_model=ApprovalDoc)
@@ -242,40 +185,6 @@ def backfill_approvals(
 ) -> ApprovalBackfillResult:
     with operation_scope(base, sid, operation='approval-backfill'):
         return approvals.backfill_from_disk(base, sid)
-
-
-@router.post('/seen/{key}', response_model=ApprovalDoc)
-def mark_seen(
-    key: SeenKey,
-    request: BlueprintSeenRequest | Stage2GlobalSeenRequest | None = None,
-    sid: str = Depends(checked_sid),
-    base: str = Depends(get_base),
-) -> ApprovalDoc:
-    """两个 Stage2 视图都只接受 hash-bound 阅读身份；没有“打开即已读”。"""
-    blueprint_subject: BlueprintSeenRequest | None = None
-    global_subject: Stage2GlobalSeenRequest | None = None
-    if key == 'read':
-        if not isinstance(request, BlueprintSeenRequest):
-            raise ApprovalRequired(
-                'seen.read 必须携带实际读过的 Blueprint 工作包身份；请刷新阅读页后重试')
-        blueprint_subject = request
-        details: dict[str, object] = {
-            'key': key, 'review_token': request.review_token}
-    else:
-        if not isinstance(request, Stage2GlobalSeenRequest):
-            raise ApprovalRequired(
-                'seen.global 必须携带实际读过的 Global 审阅面身份（review_token + actor）；'
-                '请读完当前 review 后再确认')
-        global_subject = request
-        details = {
-            'key': key, 'review_token': request.review_token,
-            'actor': request.actor,
-        }
-    with operation_scope(
-            base, sid, operation='approval-seen', details=details):
-        return approvals.mark_seen(
-            base, sid, key, blueprint_subject=blueprint_subject,
-            global_subject=global_subject)
 
 
 @router.post('/writing', response_model=ApprovalDoc)

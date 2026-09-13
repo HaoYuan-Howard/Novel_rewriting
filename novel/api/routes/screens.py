@@ -21,20 +21,17 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import PlainTextResponse
 
 from contracts.schema.api import (
-    AnalyzeDraftView, BlueprintReviewWorkpack, CharacterRegistryView, GlobalReviewView, GlobalView, InboxView,
+    AnalyzeDraftView, BlueprintReadingWorkpack, CharacterRegistryView, GlobalView, InboxView,
     ReadingView, ReviewView,
     Stage4View, Stage5View, Stage6View, Stage7View,
 )
 from contracts.schema.plot_review import ReviewScope
 from contracts.schema.analyze_draft import DraftOwner
 from novel.api.deps import checked_sid, get_base
-from novel import paths, prov
-from novel.orchestrator import state
-from novel.stages.stage7 import assemble
+from novel import paths
 from novel.views.inbox import inbox_view
-from novel.views.global_review import global_review_view
 from novel.views.stage2 import (
-    analyze_draft_view, blueprint_review_workpack, character_registry_view, global_view, reading_view,
+    analyze_draft_view, blueprint_reading_workpack, character_registry_view, global_view, reading_view,
 )
 from novel.views.stage4 import stage4_view
 from novel.views.stage5 import review_view, stage5_view
@@ -98,23 +95,20 @@ def get_stage2_global(sid: str = Depends(checked_sid),
 
 
 @router.get(
-    '/{sid}/stage2/blueprint-review-workpack',
-    response_model=BlueprintReviewWorkpack,
+    '/{sid}/stage2/blueprint-reading-workpack',
+    response_model=BlueprintReadingWorkpack,
     response_model_by_alias=True,
 )
-def get_stage2_blueprint_review_workpack(
+def get_stage2_blueprint_reading_workpack(
     sid: str = Depends(checked_sid), base: str = Depends(get_base),
     scope: ReviewScope | None = None,
-) -> BlueprintReviewWorkpack:
-    """自动取阅读序首个待审范围；人工可以选择章，跨章仍受全部章审闸门约束。"""
-    return blueprint_review_workpack(base, sid, scope=scope)
+) -> BlueprintReadingWorkpack:
+    """只读阅读工作包：原文与完整剧情节点各一份；默认跨章全文。
 
-
-@router.get('/{sid}/stage2/global-review', response_model=GlobalReviewView)
-def get_stage2_global_review(
-    sid: str = Depends(checked_sid), base: str = Depends(get_base),
-) -> GlobalReviewView:
-    return global_review_view(base, sid)
+    ⚠ 旧路径 `.../blueprint-review-workpack` 已随 Stage2 语义审阅退役删除
+    （2026-09）：审阅语义整体不存在，只读阅读改用本路径，前端同批更新。
+    """
+    return blueprint_reading_workpack(base, sid, scope=scope)
 
 
 @router.get('/{sid}/stage6', response_model=Stage6View, response_model_by_alias=True)

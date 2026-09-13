@@ -22,8 +22,6 @@ from contracts.artifacts import (
     STAGE2_CHAPTER_BLUEPRINTS,
     STAGE2_CHARACTERS,
     STAGE2_GLOBAL_GROUNDING,
-    STAGE2_GLOBAL_REVIEW,
-    STAGE2_KNOWLEDGE_LINKS,
 )
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import BlueprintCharacterProjection, ChapterBlueprints
@@ -79,7 +77,7 @@ def _seed_current_stage2(book: Path, *, chapter_responses: dict | None = None) -
     """写 current Stage2 产物；来源边与 root 都走正式 ``RunContext`` 铸造口。"""
     from novel.stages.stage2 import extract
     from tests.stage2_fixtures import (
-        seed_character_registry, knowledge_response, accept_and_materialize_links,
+        seed_character_registry, knowledge_response,
     )
     from tests.test_stage2_generation import _accept_fixture_global
 
@@ -111,7 +109,6 @@ def _seed_current_stage2(book: Path, *, chapter_responses: dict | None = None) -
         'blueprints': [by_chapter[json.loads(req.user.splitlines()[0])['chapter_ordinal']]]})
     assert extract.run_blueprint(blueprint_ctx, client).passed
     artifact = blueprint_store.read_own(ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)[0]
-    accept_and_materialize_links(blueprint_ctx)
     return artifact
 
 
@@ -298,14 +295,15 @@ def test_run_design_is_blind_and_lands_a_reproducible_current_candidate(designed
 
     landed = ArtifactStore(ctx).read_own(BlindCandidate, plan.CANDIDATE_REL)[0]
     assert landed == candidate
-    assert json.loads((book / plan.CANDIDATE_REL).read_bytes())['_schema_version'] == 5
+    assert json.loads((book / plan.CANDIDATE_REL).read_bytes())['_schema_version'] == 6
     assert candidate.alias_algorithm == mapping['alias_algorithm']
     assert candidate.truth_sha256 == mapping['truth_sha256']
     assert {alias: row.model_dump(mode='json') for alias, row in candidate.subject_aliases.items()} == mapping['subject_aliases']
     assert {alias: row.model_dump(mode='json') for alias, row in candidate.participant_aliases.items()} == mapping['participant_aliases']
+    # v6 起 A 盲真相含结构证据，实际输入面加入 MainText。
     assert set(candidate.provenance.inputs) == {
-        STAGE2_CHAPTER_BLUEPRINTS, STAGE2_KNOWLEDGE_LINKS, STAGE2_GLOBAL_GROUNDING,
-        STAGE2_GLOBAL_REVIEW, STAGE2_CHARACTERS}
+        STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING, STAGE2_CHARACTERS,
+        STAGE1_MAIN_TEXT}
     assert candidate.provenance.model == MODEL
     assert candidate.provenance.adopted_models == [MODEL]
     assert candidate.provenance.architecture == 'book_strategy_chapters_v1'
@@ -353,7 +351,7 @@ def test_run_plan_binds_evidence_then_compiles_plan_without_context(designed):
     assert binding.status == 'bound'
     assert not store.exists(plan.CTX_REL), \
         'stage4.plan 不得代写 stage4.context 的产物'
-    assert json.loads((book / plan.REL).read_text(encoding='utf-8'))['_schema_version'] == 6
+    assert json.loads((book / plan.REL).read_text(encoding='utf-8'))['_schema_version'] == 7
 
     binding_inputs = {
         plan.CANDIDATE_REL,
@@ -361,8 +359,6 @@ def test_run_plan_binds_evidence_then_compiles_plan_without_context(designed):
         STAGE2_CHAPTER_BLUEPRINTS,
         STAGE2_CHARACTERS,
         STAGE2_GLOBAL_GROUNDING,
-        STAGE2_GLOBAL_REVIEW,
-        STAGE2_KNOWLEDGE_LINKS,
     }
     assert set(binding.provenance.inputs) == binding_inputs
     assert len(binding.provenance.inputs) == len(binding_inputs), '重复读 A 不得双计来源边'
@@ -401,7 +397,7 @@ def test_minimal_context_producer_http_and_restart_share_derived_readings(
     assert plan.run_context(_ctx(book, 'stage4.context', paid=False)).passed
     context_bytes = (book / plan.CTX_REL).read_bytes()
     disk = json.loads(context_bytes)
-    assert disk['_schema_version'] == 9
+    assert disk['_schema_version'] == 10
     entry = disk['chapters'][0]
     assert not {'from_source_ordinals', 'budget_chars', 'source_chars'} & entry.keys()
     basis = chapter_basis(entry, {
@@ -575,7 +571,7 @@ def _legacy_v2_binding_bytes(current_v3: bytes) -> bytes:
     本次测试的 A 主体保持真实一致。
     """
     raw = json.loads(current_v3)
-    assert raw['_schema_version'] == 5
+    assert raw['_schema_version'] == 6
     raw['_schema_version'] = 2
     raw.pop('binding_concerns', None)
     raw.pop('infeasibility_proof', None)
@@ -617,7 +613,7 @@ def test_apply_binding_mints_human_v3_and_builds_first_plan_without_context(desi
     assert compiled.provenance.origin == 'compiled'
     assert not store.exists(plan.CTX_REL)
     raw = json.loads((book / plan.BINDING_REL).read_text(encoding='utf-8'))
-    assert raw['_schema_version'] == 5
+    assert raw['_schema_version'] == 6
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -662,7 +658,7 @@ def test_first_v3_binding_replaces_real_v2_live_bytes_without_round_history(
     store = ArtifactStore(ctx)
     landed = store.read_own(EvidenceBinding, plan.BINDING_REL)[0]
     assert landed.provenance.origin == expected_origin
-    assert json.loads(formal.read_bytes())['_schema_version'] == 5
+    assert json.loads(formal.read_bytes())['_schema_version'] == 6
     assert not invalid.exists(), '退役 INVALID 应由 shape-break replace 原位丢弃'
     rounds = formal.parent / paths.ROUNDS_DIRNAME
     binding_rounds = [] if not rounds.exists() else [

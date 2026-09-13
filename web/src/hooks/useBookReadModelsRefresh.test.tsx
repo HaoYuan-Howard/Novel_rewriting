@@ -68,7 +68,7 @@ async function source(sid = SID) {
     stage_done: { ...oldNovel.stage_done, stage4: true },
     stage_reviewable: { ...oldNovel.stage_reviewable, stage5: true },
   }
-  const oldApprovals = { ...approvals, gate: { ...approvals.gate, s2: true, s4: false } }
+  const oldApprovals = { ...approvals, gate: { ...approvals.gate, s1: false, s4: false } }
   const freshApprovals = { ...oldApprovals, gate: { ...oldApprovals.gate, s4: true } }
   const initial = await mockApi.getRunProgress(sid)
   let progress: RunProgress = {

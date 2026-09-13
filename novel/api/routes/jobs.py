@@ -16,7 +16,6 @@ from collections.abc import Callable
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
-from contracts.invariants import stage2_review_required
 from contracts.schema.api import JobList, LogChunk, LogStreamEvent, PreviewRequest
 from contracts.schema.orchestration import JobRecord, JobStart
 from novel.api.deps import checked_sid, get_base
@@ -98,14 +97,8 @@ def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
         egress_authorized=req.egress_authorized)
     prepares: list[Callable[[], None]] = []
     # API 只做占住同书锁后的早反馈；CLI 仍是所有调用方共用的最终执行门。
-    # global 与 blueprint 两个 producer 明确豁免，Stage4 起的付费消费、免费
-    # context 和 assemble 则必须绑定当前全局逐项复核。preview 不走这里，始终可用。
-    if stage2_review_required(req.node, paid=planned.paid):
-        if sid is None:
-            raise UnsupportedRunMode(
-                f'{req.node} requires a novel sid for Stage2 review verification')
-        prepares.append(
-            lambda: approvals.require_stage2_review(base, sid, req.node))
+    # stage2.blueprint / stage4 / stage7.assemble 等付费与正文外的准入由
+    # CLI validate_run 统一执行，preview 不走这里，始终可用。
     tokens = nodes.flag_tokens(req.flags)
     # A 的付费返修/重规划必须消费当前 hash-bound typed 决定；默认首次设计没有
     # 这张票。占住书锁后先解析一次可执行 scope，CLI 仍在 subprocess 内终验。

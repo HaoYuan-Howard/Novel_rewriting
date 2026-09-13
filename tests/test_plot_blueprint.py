@@ -7,7 +7,7 @@ import pytest
 
 from contracts.schema.plot import (
     PlotAnchorBinding, PlotBlueprint, PlotChapterArrangement, PlotChapterResponse,
-    PlotGoalAnchor, PlotKnowledgeTrigger,
+    PlotGoalAnchor,
 )
 from novel.stages.stage2.plot_compile import (
     compile_chapter, validate_book, validate_evidence,
@@ -87,55 +87,40 @@ def arrangement(ordinal: int = 1, *, distributed: bool = False) -> PlotChapterAr
     })
 
 
-def formal_writer_view(chapter, arrangement, *, knowledge=()):
-    """让端点反例穿过正式 Plan/KnowledgeLinks/WriterContext，而非平行原型。"""
+def formal_writer_view(chapter, arrangement, chapters=None):
+    """让端点反例穿过正式 Plan/WriterContext，而非平行原型；知识材料已退役。"""
     from novel.stages.stage4.measure import identity_plan
     from novel.stages.stage4.plot_context import build_writer_context
-    from tests.plot_fixtures import links
-    bps = {'blueprints': [blueprint(n).model_dump(mode='json')
-                          for n in range(1, chapter.chapter_ordinal + 1)]}
-    bps['blueprints'][-1] = chapter.model_dump(mode='json')
-    main = [{'chapter_ordinal': n, 'text': SOURCE} for n in range(1, chapter.chapter_ordinal + 1)]
+    typed = list(chapters) if chapters is not None else [
+        blueprint(n) for n in range(1, chapter.chapter_ordinal)]
+    typed.append(chapter)
+    bps = {'blueprints': [row.model_dump(mode='json') for row in typed]}
+    main = [{'chapter_ordinal': n, 'text': SOURCE} for n in range(1, len(typed) + 1)]
     plan = identity_plan(bps, main)
     current = plan['output_chapters'][-1]
-    contexts = {p['beat_ref']: p['deliveries'][0]['source_context_refs'] for p in current['beat_placements']}
+    contexts = {p['beat_ref']: p['deliveries'][0]['source_context_refs']
+                for p in current['beat_placements']}
     current['beat_placements'] = [p.model_dump(mode='json') for p in arrangement.beat_placements]
     for p in current['beat_placements']:
         for delivery in p['deliveries']:
             delivery['source_context_refs'] = contexts[p['beat_ref']]
     current['anchor_bindings'] = [r.model_dump(mode='json') for r in arrangement.anchor_bindings]
     from tests.plot_fixtures import GLOBAL
-    ground = GLOBAL
     characters = {'characters': {
         cid: {'canonical': name, 'role': role, 'name_distinctiveness': 'high', 'first_chapter': 1,
               'aliases': [{'surface': name, 'identity_revealed_from': 1, 'evidence_refs': []}]}
         for cid, name, role in [('char_001', '我', '施救者'), ('char_002', '他', '被救者')]
     }, 'evidence_anchors': {}}
-    knowledge_links = links()
-    for i, trigger in enumerate(knowledge):
-        event_id = f'ke_test_{i}'
-        subject = {'kind': 'beat', 'ref': trigger.trigger_beat_ref}
-        event = {'kind': 'reader_reveal', 'subject_ref': subject, 'audience': None,
-            'chapter_ordinal': chapter.chapter_ordinal, 'evidence_refs': [
-                {'chapter_ordinal': chapter.chapter_ordinal, 'evidence_ref': chapter.evidence_anchors[-1].evidence_id}]}
-        knowledge_links['scope']['registered_events'].append({
-            'event_id': event_id, 'event_sha256': 'a' * 64, 'event': event, 'retired': False, 'reason': None})
-        knowledge_links['scope']['obligations'].append({
-            'obligation_id': trigger.knowledge_ref, 'kind': 'reader_reveal', 'knowledge_ref': event_id,
-            'subject_ref': subject, 'audience': None, 'chapter_ordinal': chapter.chapter_ordinal,
-            'subject_sha256': 'b' * 64, 'candidate_subject_refs': [subject], 'entry_subject_refs': []})
-        knowledge_links['links'].append({
-            'obligation_id': trigger.knowledge_ref, 'expected_subject_sha256': 'b' * 64,
-            'resolution': {'kind': 'at_beats', 'trigger_beat_ref': trigger.trigger_beat_ref, 'subject_refs': [subject]},
-            'actor': 'test', 'reason': '显式许可反例', 'source_decision_sha256': 'c' * 64})
-    return build_writer_context(plan, ground, bps, main, knowledge_links=knowledge_links, characters=characters).ctx['chapters'][-1]
+    return build_writer_context(plan, GLOBAL, bps, main,
+                                characters=characters).ctx['chapters'][-1]
 
 
 def test_two_chapter_compile_and_single_copy_writer_projection():
     chapters = [blueprint(1), blueprint(2)]
     validate_book(chapters, {1: SOURCE, 2: SOURCE})
     for chapter in chapters:
-        view = formal_writer_view(chapter, arrangement(chapter.chapter_ordinal))
+        view = formal_writer_view(chapter, arrangement(chapter.chapter_ordinal),
+                                  chapters=chapters[:chapters.index(chapter)])
         wire = json.dumps(view, ensure_ascii=False)
         assert wire.count(view['beats'][0]['content']) == 1
         assert len(view['beats']) == 2
@@ -163,31 +148,10 @@ def test_distributed_presentation_keeps_parent_and_allows_shared_paragraph():
                for scene in view['scenes'] for row in scene['deliveries']) == 2
 
 
-def test_distributed_knowledge_must_bind_explicitly_and_not_open_at_first_reference():
-    chapter, plan = blueprint(), arrangement(distributed=True)
-    trigger = PlotKnowledgeTrigger(knowledge_ref='decision:leave', trigger_beat_ref='b01_02')
-    with pytest.raises(ValueError, match='明确绑定'):
-        compile_placements(chapter, plan, knowledge=[trigger])
-    plan.anchor_bindings.append(PlotAnchorBinding(
-        kind='knowledge', ref='decision:leave', endpoint='trigger', scene_ref='s02'))
-    view = formal_writer_view(chapter, plan, knowledge=[trigger])
-    assert view['knowledge_events'][0]['event_ref'].startswith('event_')
-    assert 'decision:leave' not in json.dumps(view['knowledge_events'])
-    assert view['knowledge_events'][0]['allowed_slots'] == ['s02']
-
-
 def test_partial_node_is_not_complete_background():
     plan = arrangement(distributed=True)
     plan.scenes[1].context_beat_refs.append('b01_02')
     with pytest.raises(ValueError, match='全部主要呈现'):
-        compile_placements(blueprint(), plan)
-
-
-def test_invented_knowledge_endpoint_is_refused():
-    plan = arrangement()
-    plan.anchor_bindings.append(PlotAnchorBinding(
-        kind='knowledge', ref='invented', endpoint='trigger', scene_ref='s01'))
-    with pytest.raises(ValueError, match='创造知识'):
         compile_placements(blueprint(), plan)
 
 

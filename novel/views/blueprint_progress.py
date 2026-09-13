@@ -1,10 +1,12 @@
-"""生成检查点与正式范围审批的轻投影；不构建 prompt、证据包或 Commander 工作包。"""
+"""Blueprint 生成检查点的轻投影；不构建 prompt、证据包或任何审阅/接受语义。
+
+Stage2 语义审阅已退役：这里只回答「每章生成检查点跑到哪了」，
+语义未审由报告 ``unver`` 行与统一准入（``novel.admission``）分别披露。
+"""
 from __future__ import annotations
 
 from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS
-from contracts.schema.plot_review import (
-    BlueprintChapterProgress, BlueprintRunProgress, PlotReviewProgress,
-)
+from contracts.schema.plot_review import BlueprintChapterProgress, BlueprintRunProgress
 from contracts.schema.stage1 import MainText
 from novel import paths
 from novel.errors import TerminalState
@@ -25,9 +27,6 @@ def get(base: str, sid: str, units: list[dict] | None) -> BlueprintRunProgress:
         ordinals = [row.chapter_ordinal for row in main.root]
         artifact_state = ('invalid' if store.exists(paths.invalid_of(STAGE2_CHAPTER_BLUEPRINTS))
                           else 'formal' if store.exists(STAGE2_CHAPTER_BLUEPRINTS) else 'missing')
-        progress = next((row['review']['plot_progress'] for row in units or []
-                         if row.get('review') and row['review'].get('plot_progress')), None)
-        review = PlotReviewProgress.model_validate(progress) if progress else None
         input_reason = None
         try:
             inputs = read_input_digests(store)
@@ -57,17 +56,11 @@ def get(base: str, sid: str, units: list[dict] | None) -> BlueprintRunProgress:
         generation_known = units is not None and all(row.checkpoint_state != 'unver' for row in chapters)
         generated = sum(row.checkpoint_state == 'current' or (
             row.checkpoint_state == 'missing' and row.processing_state == 'generated') for row in chapters)
-        reason = input_reason
-        if artifact_state != 'missing' and review is None:
-            reason = next((row.get('review_unavailable_reason') for row in units or []
-                           if row['node'] == 'stage2.blueprint' and row.get('review_unavailable_reason')),
-                          reason or '当前蓝图或审批身份无法核验')
-            artifact_state = 'unreadable'
         return BlueprintRunProgress(
-            total_chapters=len(ordinals), artifact_state=artifact_state, review=review,
-            generated_chapters=(review.generated_chapters if review else generated if generation_known else None),
+            total_chapters=len(ordinals), artifact_state=artifact_state,
+            generated_chapters=generated if generation_known else None,
             checkpoint_chapters=checkpoint_count if generation_known else None,
-            submitted_chapters=review.generated_chapters if review else 0 if artifact_state == 'missing' else None,
-            chapters=chapters, unavailable_reason=reason)
+            submitted_chapters=0 if artifact_state == 'missing' else None,
+            chapters=chapters, unavailable_reason=input_reason)
     except (TerminalState, OSError, ValueError) as exc:
         return missing.model_copy(update={'unavailable_reason': str(exc)})

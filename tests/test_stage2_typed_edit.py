@@ -1,15 +1,16 @@
-"""当前 Global typed 编辑：集合 CAS、稀疏传输、原子预检与审阅恢复。
+"""当前 Global typed 编辑：集合 CAS、稀疏传输、原子预检与机械反例。
 
-旧 Global fate / knowledge_events / 逐次 address 槽已分别移交 Gate B 的
-PlotState / KnowledgeLinks / presentation；本文件保留旧输入明确拒收，不能据此声称
-新 owner 正向通过。Hook source_blurb 转归 Gate C Stage6 Prepare。
+旧 Global fate / knowledge_events / 逐次 address 槽已分别移交相应 owner；
+本文件保留旧输入明确拒收，不能据此声称新 owner 正向通过。
+Stage2 语义审阅退役后：编辑提交不再有审阅线（reviewer wire、correction wire、
+``post_edit_review``），审阅线用例按退役处置；``--apply-edit`` 后无审阅刷新，
+机械结论由同一判据重判与下游 freshness 表达（见 ``tests/test_stage2_secret_edit.py``）。
 """
 from __future__ import annotations
 
-from novel.stages.stage2 import grounding as grounding_io
+from contracts.schema.knowledge import GlobalRelation, GlobalArcSecret
 
 import copy
-import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,26 +18,18 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from contracts.invariants import review_effect_of
 from contracts.schema import ArtifactVersionError, decode_artifact, encode_artifact
-from contracts.schema.evaluation import GlobalReview
 from contracts.schema.core_evidence import EvidenceId
-from contracts.schema.knowledge import GlobalRelation, GlobalArcSecret
-
-Relation = GlobalRelation[EvidenceId]
 from contracts.schema.stage2 import (
     GlobalEdit, GlobalGrounding,
 )
-from novel.errors import GateBlocked, TerminalState
-from novel.orchestrator import queue, reviewer_tasks
-from novel.orchestrator import stage2_reviewer_wire as reviewer_wire
-from novel.quality.global_review import subject_sha256
+
+Relation = GlobalRelation[EvidenceId]
+from novel.errors import TerminalState
 from novel.stages.stage2 import extract
 from novel.stages.stage2.extract import (
-    _apply_secret_patches, _review_after_global_edit,
+    _apply_secret_patches, _canonical_sha256 as subject_sha256,
 )
-from novel.store import ArtifactStore
-from tests.stage2_fixtures import approved_core_review
 from tests.test_stage2_generation import _ctx
 from tests.test_stage2_secret_edit import _seed, _write_edit
 
@@ -83,24 +76,6 @@ def _grounding() -> dict:
 
 def _registered(*ids: str) -> dict:
     return {'characters': {identity: {} for identity in (ids or ('char_001',))}}
-
-
-def _review_registry() -> dict:
-    refs = [_formal_evidence()]
-    return {'characters': {'char_001': {
-        'canonical': '沈青', 'name_distinctiveness': 'high', 'first_chapter': 1,
-        'aliases': [{'surface': '沈青', 'identity_revealed_from': 1, 'evidence_refs': refs}],
-        'first_appearance_evidence_refs': refs, 'role': '沈家账房', 'role_evidence_refs': refs,
-    }}, 'evidence_anchors': _grounding()['evidence_anchors']}
-
-
-def _approved_review(data: dict) -> GlobalReview:
-    from novel.quality.global_review import build_review
-    review = build_review(data, characters=_review_registry())
-    return review.model_copy(update={'items': [row.model_copy(update={
-        'state': 'PASS', 'actor': 'test:reviewer', 'decided_at': '2026-09-02T00:00:00+00:00',
-        'reason': '显式合成审阅前置',
-    }) for row in review.items]})
 
 
 def test_relation_carrier_names_the_inclusive_end_and_rejects_the_old_key():
@@ -447,396 +422,19 @@ def test_collection_delta_split_is_ordered_and_stale_hash_does_not_mutate():
     assert changed == ['arc_secrets.split']
 
 
-
-def _seed_multi_collection_book(book: Path):
-    """经正式 producer 铸出多行底座，避免手写一份伪 provenance Global。"""
-    _seed(book)
-    ctx = _ctx(book, 'stage2.global', paid=False)
-    store = ArtifactStore(ctx)
-    current = grounding_io.read(store)
-    payload = current.model_dump(mode='json', by_alias=True)
-    _write_edit(book, {
-        'collection_edits': [{
-            'collection': 'relations',
-            'expected_collection_sha256': subject_sha256(
-                payload['relations']),
-            'operations': [{
-                'op': 'add',
-                'item': {
-                    'relation_id': 'rel_02',
-                    'subject_id': 'char_001',
-                    'object_id': 'char_002',
-                    'predicate': '向母亲询问信件',
-                    'evidence_refs': [_locator(
-                        2, '其实母亲早就知道那封信的事。')],
-                    'revealed_from': 2,
-                    'effective_from': 2,
-                    'effective_until': None,
-                },
-            }, {
-                'op': 'add',
-                'item': {
-                    'relation_id': 'rel_03',
-                    'subject_id': 'char_001',
-                    'object_id': 'char_002',
-                    'predicate': '请母亲一起核对账册',
-                    'evidence_refs': [_locator(
-                        3, '母亲进来给她添了一盏茶。')],
-                    'revealed_from': 3,
-                    'effective_from': 3,
-                    'effective_until': None,
-                },
-            }],
-        }, {
-            'collection': 'arc_secrets',
-            'expected_collection_sha256': subject_sha256(
-                payload['arc_secrets']),
-            'operations': [{
-                'op': 'add',
-                'item': {
-                    'secret_id': 'secret_02',
-                    'fact': '母亲早就知道父亲回城',
-                    'fact_ref': None, 'evidence_refs': [_locator(
-                        2, '其实母亲早就知道那封信的事。')],
-
-                    'setup_chapters': [],
-                    'revealed_from': 2,
-                },
-            }],
-        }, {
-            'collection': 'world_rules',
-            'expected_collection_sha256': subject_sha256(
-                payload['world_rules']),
-            'operations': [{
-                'op': 'add',
-                'item': {
-                    'rule_id': 'wr_02',
-                    'kind': 'institution',
-                    'versions': [{
-                        'version_id': 'v01', 'effective_until': None, 'revealed_from': 3, 'effective_from': 3,
-                        'desc': '管家负责向主家回报米价变动',
-                        'evidence_refs': [_locator(
-                            3, '管家在门外回话说米价又涨了。')],
-                    }],
-                },
-            }],
-        }],
-    })
-    # GlobalEdit 是本轮新输入；RunContext 必须在它落盘后重铸，和真实 CLI 进程一致。
-    seeded, report = extract.run_apply_edit(
-        _ctx(book, 'stage2.global', paid=False))
-    assert report.passed
-    ctx = _ctx(book, 'stage2.global', paid=False)
-    store = ArtifactStore(ctx)
-    store.write(extract.GLOBAL_REVIEW_REL, approved_core_review(store))
-    return store, seeded
-
-
-def _sparse_reviewer_task(current: dict) -> SimpleNamespace:
-    """大模板模拟真实 emit-edit-template；全部证据仍取自正式 Global。"""
-    relations = [{
-        'relation_id': row['relation_id'],
-        'predicate': row['predicate'],
-        'evidence_refs': list(row['evidence_refs']),
-    } for row in current['relations']]
-    secrets = [{
-        'secret_id': row['secret_id'],
-        'fact': row['fact'],
-        'fact_ref': row['fact_ref'], 'evidence_refs': list(row['evidence_refs']),
-    } for row in current['arc_secrets']]
-    world_rules = [{
-        'rule_id': row['rule_id'],
-        'versions': [{
-            'version_id': version['version_id'], 'effective_until': version['effective_until'],
-            'revealed_from': version['revealed_from'], 'effective_from': version['effective_from'],
-            'desc': version['desc'],
-            'evidence_refs': list(version['evidence_refs']),
-        } for version in row['versions']],
-    } for row in current['world_rules']]
-    edit = {
-        'relations': relations,
-        'arc_secrets': secrets,
-        'world_rules': world_rules,
-        'collection_edits': [{
-            'collection': 'world_rules',
-            'expected_collection_sha256': subject_sha256(
-                current['world_rules']),
-            'operations': [],
-        }],
-    }
-    GlobalEdit.model_validate(edit)
-    exact = {
-        'schema': 'novel-reviewer-action-v1',
-        'surface_seal': 'a' * 64,
-        'waiting_on': queue.WAITING_ON_STAGE2_REVIEW,
-        'action': {
-            'kind': 'node',
-            'node': 'stage2.global',
-            'flags': ['--apply-edit', '@reviewer-input'],
-            'input_payload': edit,
-        },
-    }
-    return SimpleNamespace(
-        waiting_on=queue.WAITING_ON_STAGE2_REVIEW,
-        submission_options=({
-            'id': 'node:stage2.global.apply-edit',
-            'exact_request': exact,
-            'editable_fields': [],
-            'binding_fields': [],
-            'allowed_values': {
-                'collection_operation_contract.'
-                'existing_subject_ids_by_collection': {
-                    'world_rules': sorted(
-                        row['rule_id']
-                        for row in current['world_rules']),
-                },
-            },
-        },),
-    )
-
-
-def _compact_sparse_response(
-    task: SimpleNamespace, *, bad_new_locator: bool = False,
-) -> dict:
-    binding = reviewer_wire.wire_binding(task)
-    new_locator = (
-        '这段不存在于任何正文章节，不能回取为 SourceSpan'
-        if bad_new_locator else '管家在门外回话说米价又涨了。'
-    )
+def _book_file_snapshot(book: Path) -> dict[str, bytes]:
     return {
-        'schema': reviewer_wire.WIRE_SCHEMA,
-        'option_id': binding.option_id,
-        'expected_exact_request_sha256': binding.expected_exact_request_sha256,
-        'payload': {'edit': {
-            'relations': [{
-                'relation_id': 'rel_03',
-                'predicate': '母女共同核对账册',
-                'evidence_refs': [_locator(
-                    3, '母亲进来给她添了一盏茶。')],
-            }],
-            'arc_secrets': [],
-            'world_rules': [],
-            'collection_edits': {'world_rules': [{
-                    'op': 'add',
-                    'item': {
-                        'rule_id': 'wr_03',
-                        'kind': 'institution',
-                        'versions': [{
-                            'version_id': 'v01', 'effective_until': None, 'revealed_from': 3, 'effective_from': 3,
-                            'desc': '管家需向主家回报米价变动',
-                            'evidence_refs': [_locator(3, new_locator)],
-                        }],
-                    },
-                }]},
-        }},
+        path.relative_to(book).as_posix(): path.read_bytes()
+        for path in book.rglob('*') if path.is_file()
     }
 
 
-def _through_reviewer_loader(
-    tmp_path: Path, task: SimpleNamespace, response: dict,
-) -> GlobalEdit:
-    """compact assembler 后仍过现役 immutable loader，最后才交 CLI producer。"""
-    assembled = reviewer_wire.assemble(task, response)
-    request_path = tmp_path / 'reviewer-request.json'
-    request_path.write_text(
-        json.dumps(assembled, ensure_ascii=False), encoding='utf-8')
-    current = SimpleNamespace(
-        state='blocked', surface_seal='a' * 64,
-        action=SimpleNamespace(
-            waiting_on=task.submission_options[0]['exact_request']['waiting_on']),
-    )
-    loaded = reviewer_tasks.load_action(
-        request_path, current,
-        submission_options=task.submission_options)
-    assert isinstance(loaded, reviewer_tasks.ReviewerNodeAction)
-    assert loaded.input_payload is not None
-    decoded = decode_artifact(extract.GLOBAL_EDIT, loaded.input_payload)
-    return GlobalEdit.model_validate(decoded.payload)
-
-
-def test_sparse_reviewer_edit_reaches_canonical_producer_without_noop_rows(
-    tmp_path, monkeypatch,
-):
-    """模板有多行不等于提交多行；changed/provenance/review 都只看真实 delta。"""
-    book = tmp_path / '稀疏订正成功_901'
-    book.mkdir()
-    store, before = _seed_multi_collection_book(book)
-    before_raw = before.model_dump(mode='json', by_alias=True)
-    task = _sparse_reviewer_task(before_raw)
-
-    edit = _through_reviewer_loader(
-        tmp_path, task, _compact_sparse_response(task))
-    assert [row.relation_id for row in edit.relations] == ['rel_03']
-    assert edit.arc_secrets == [] and edit.world_rules == []
-    assert [row.collection for row in edit.collection_edits] == ['world_rules']
-    _write_edit(book, edit.model_dump(
-        mode='json', by_alias=True, exclude_unset=True))
-
-    review_before = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
-    stable_prefixes = (
-        'global.relations.rel_01', 'global.relations.rel_02',
-        'global.arc_secrets.secret_01', 'global.arc_secrets.secret_02',
-        'global.world_rules.wr_01', 'global.world_rules.wr_02',
-    )
-
-    def stable_decisions(review: GlobalReview) -> dict[str, tuple]:
-        return {
-            item.subject_path: (
-                item.item_id, item.subject_sha256, item.state,
-                item.actor, item.reason,
-            )
-            for item in review.items
-            if item.subject_path.startswith(stable_prefixes)
-        }
-
-    expected_stable_decisions = stable_decisions(review_before)
-    expected_relations = {
-        row['relation_id']: copy.deepcopy(row)
-        for row in before_raw['relations']
-        if row['relation_id'] in {'rel_01', 'rel_02'}
-    }
-    expected_secrets = copy.deepcopy(before_raw['arc_secrets'])
-    expected_rules = copy.deepcopy(before_raw['world_rules'])
-
-    applied_changes: list[list[str]] = []
-    real_apply = extract._apply_secret_patches
-
-    def capture_changes(data, submitted, ordinals, **kwargs):
-        changed = real_apply(data, submitted, ordinals, **kwargs)
-        applied_changes.append(changed)
-        return changed
-
-    monkeypatch.setattr(extract, '_apply_secret_patches', capture_changes)
-    artifact, report = extract.run_apply_edit(
-        _ctx(book, 'stage2.global', paid=False))
-
-    assert report.passed
-    assert len(applied_changes) == 1
-    assert set(applied_changes[0]) == {
-        'world_rules.add',
-        'relations.rel_03.predicate',
-        'relations.rel_03.evidence_refs',
-    }
-    landed = artifact.model_dump(mode='json', by_alias=True)
-    assert {
-        row['relation_id']: row for row in landed['relations']
-        if row['relation_id'] in expected_relations
-    } == expected_relations
-    assert landed['arc_secrets'] == expected_secrets
-    assert landed['world_rules'][:2] == expected_rules
-    assert [row['rule_id'] for row in landed['world_rules']] == [
-        'wr_01', 'wr_02', 'wr_03']
-    assert artifact.provenance.evidence_locator_failures == []
-    assert artifact.provenance.partial_rewrite == '--apply-edit'
-
-    canonical_edit = store.read(GlobalEdit, extract.GLOBAL_EDIT)
-    assert [row.relation_id for row in canonical_edit.relations] == ['rel_03']
-    assert canonical_edit.arc_secrets == [] and canonical_edit.world_rules == []
-    assert [row.collection for row in canonical_edit.collection_edits] == [
-        'world_rules']
-    review_after = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
-    assert stable_decisions(review_after) == expected_stable_decisions
-
-
-def test_sparse_bad_added_locator_is_rejected_without_rewriting_baseline(tmp_path):
-    """未定位的人工 ref 是编辑输入错误；稀疏已购回答不准改写正式底座。"""
-    book = tmp_path / '稀疏订正坏证据_902'
-    book.mkdir()
-    store, before = _seed_multi_collection_book(book)
-    before_raw = before.model_dump(mode='json', by_alias=True)
-    task = _sparse_reviewer_task(before_raw)
-    edit = _through_reviewer_loader(
-        tmp_path, task, _compact_sparse_response(task, bad_new_locator=True))
-    _write_edit(book, edit.model_dump(mode='json', by_alias=True, exclude_unset=True))
-    snapshot = _book_file_snapshot(book)
-    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
-        extract.run_apply_edit(_ctx(book, 'stage2.global', paid=False))
-    assert 'candidate_normalization:1' in caught.value.safe_summary
-    assert 'wr_03' not in caught.value.safe_summary
-    assert _book_file_snapshot(book) == snapshot
-    assert not (book / extract._GLOBAL_INVALID).exists()
-    assert grounding_io.read_own(store, extract.GLOBAL_REL)[0] == before
-
-
-def test_correction_wire_keeps_unmentioned_failed_patch_through_real_producer(
-    tmp_path,
-):
-    """纠错回答只修 B 时，failed sparse edit 中已经正确的 A 仍必须真实落地。"""
-    book = tmp_path / '纠错合并保留前序修订_903'
-    book.mkdir()
-    store, before = _seed_multi_collection_book(book)
-    before_raw = before.model_dump(mode='json', by_alias=True)
-    failed_edit = {
-        'relations': [{
-            'relation_id': 'rel_02',
-            'predicate': 'A：共同查验来信',
-            'evidence_refs': [_locator(
-                2, '其实母亲早就知道那封信的事。')],
-        }, {
-            'relation_id': 'rel_03',
-            'predicate': 'B：上一轮仍错误',
-            'evidence_refs': [_locator(
-                3, '这段不存在，上一轮会被 deterministic HARD 拒绝')],
-        }],
-    }
-    GlobalEdit.model_validate(failed_edit)
-    exact = {
-        'schema': 'novel-reviewer-action-v1',
-        'surface_seal': 'a' * 64,
-        'waiting_on': queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
-        'action': {
-            'kind': 'node',
-            'node': 'stage2.global',
-            'flags': ['--apply-edit', '@reviewer-input'],
-            'input_payload': failed_edit,
-        },
-    }
-    task = SimpleNamespace(
-        waiting_on=queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
-        submission_options=({
-            'id': 'node:stage2.global.apply-edit',
-            'exact_request': exact,
-            'editable_fields': [],
-            'binding_fields': [],
-            'allowed_values': {},
-        },),
-    )
-    binding = reviewer_wire.wire_binding(task)
-    response = {
-        'schema': reviewer_wire.WIRE_SCHEMA,
-        'option_id': binding.option_id,
-        'expected_exact_request_sha256': binding.expected_exact_request_sha256,
-        'payload': {
-            'edit': {'relations': [{
-                'relation_id': 'rel_03',
-                'predicate': 'B：母女共同核对账册',
-                'evidence_refs': [_locator(
-                    3, '母亲进来给她添了一盏茶。')],
-            }]},
-            'drop_targets': [],
-        },
-    }
-
-    edit = _through_reviewer_loader(tmp_path, task, response)
-    assert [row.relation_id for row in edit.relations] == ['rel_02', 'rel_03']
-    assert edit.relations[0].predicate == 'A：共同查验来信'
-    _write_edit(book, edit.model_dump(
-        mode='json', by_alias=True, exclude_unset=True))
-
-    artifact, report = extract.run_apply_edit(
-        _ctx(book, 'stage2.global', paid=False))
-
-    assert report.passed
-    landed = {
-        row.relation_id: row for row in artifact.relations
-    }
-    assert landed['rel_02'].predicate == 'A：共同查验来信'
-    assert landed['rel_03'].predicate == 'B：母女共同核对账册'
-    assert grounding_io.read(store).model_dump(
-        mode='json', by_alias=True)['relations'][1][
-            'predicate'] == 'A：共同查验来信'
-    assert before_raw['relations'][1]['predicate'] != (
-        'A：共同查验来信')
+def _grounding_raw(book: Path) -> dict:
+    """经正式 producer 落盘的当前 Global 业务视图（by_alias）。"""
+    from novel.stages.stage2 import grounding as grounding_io
+    from novel.store import ArtifactStore
+    return grounding_io.read(ArtifactStore(
+        _ctx(book, 'stage2.global', paid=False))).model_dump(mode='json', by_alias=True)
 
 
 def test_collection_delete_refuses_a_dangling_fact_ref_and_keeps_input_unchanged(tmp_path):
@@ -851,10 +449,11 @@ def test_collection_delete_refuses_a_dangling_fact_ref_and_keeps_input_unchanged
     }]})
     extract.run_apply_edit(_ctx(book, 'stage2.global', paid=False))
     ctx = _ctx(book, 'stage2.global', paid=False)
-    current = grounding_io.read(ArtifactStore(ctx))
+    current = [row.model_dump(mode='json')
+               for row in grounding_io_read(ctx).relations]
     edit = GlobalEdit.model_validate({'collection_edits': [{
         'collection': 'relations',
-        'expected_collection_sha256': subject_sha256([row.model_dump(mode='json') for row in current.relations]),
+        'expected_collection_sha256': subject_sha256(current),
         'operations': [{'op': 'delete', 'subject_id': 'rel_01'}],
     }]})
     snapshot = _book_file_snapshot(book)
@@ -864,13 +463,19 @@ def test_collection_delete_refuses_a_dangling_fact_ref_and_keeps_input_unchanged
     assert _book_file_snapshot(book) == snapshot
 
 
+def grounding_io_read(ctx):
+    from novel.stages.stage2 import grounding as grounding_io
+    from novel.store import ArtifactStore
+    return grounding_io.read(ArtifactStore(ctx))
+
+
 def test_global_edit_preflight_rejects_dangling_endpoint_without_writing(tmp_path):
     book = tmp_path / '候选预检不写盘_904'
     book.mkdir()
     _seed(book)
     ctx = _ctx(book, 'stage2.global', paid=False)
-    current = grounding_io.read(ArtifactStore(ctx)).model_dump(
-            mode='json', by_alias=True)
+    current = [row.model_dump(mode='json')
+               for row in grounding_io_read(ctx).relations]
     before = {
         path.relative_to(book).as_posix(): path.read_bytes()
         for path in book.rglob('*') if path.is_file()
@@ -878,8 +483,7 @@ def test_global_edit_preflight_rejects_dangling_endpoint_without_writing(tmp_pat
     edit = GlobalEdit.model_validate({
         'collection_edits': [{
             'collection': 'relations',
-            'expected_collection_sha256': subject_sha256(
-                current['relations']),
+            'expected_collection_sha256': subject_sha256(current),
             'operations': [{'op': 'add', 'item': {
                 'relation_id': 'rel_99', 'subject_id': 'char_001',
                 'object_id': 'char_999', 'predicate': '共同核账',
@@ -911,51 +515,40 @@ def test_global_edit_preflight_rejects_dangling_endpoint_without_writing(tmp_pat
         assert not (book / rel).exists()
 
 
-def test_joint_typed_preflight_uses_new_character_preview_for_relation(tmp_path):
-    """同一 Commander 决定新增人物与关系，预检引用预览登记，免费提交后重新待审。"""
-    from contracts.artifacts import STAGE2_CHARACTERS
-    from contracts.schema.api import Stage2NodeReviewRequest
-    from contracts.schema.characters import CharacterRegistry
-    from novel.stages.stage2 import core_edits
-    from tests.test_stage2_core_edits import approve, request_for, seed
-    from tests.test_stage2_global_agent import _free_ctx
-
-    ctx = seed(tmp_path)
-    store = ArtifactStore(ctx)
-    request = request_for(ctx).model_dump(mode='json', by_alias=True)
-    value = request['core_edits']['characters']['operations'][0]['character']
-    evidence = _locator(3, '管家在门外回话说米价又涨了。')
-    value.update(canonical='管家', first_chapter=3, role='在门外回报米价的管家',
-                 role_evidence_refs=[evidence], first_appearance_evidence_refs=[evidence],
-                 aliases=[{'surface': '管家', 'identity_revealed_from': 3, 'evidence_refs': [evidence]}])
-    request['core_edits']['characters']['operations'] = [
-        {'kind': 'add', 'character_ref': 'c1', 'character': value}]
-    current = grounding_io.read_own(store, extract.GLOBAL_REL)[0]
-    global_delta = {'collection_edits': [{
-        'collection': 'relations',
-        'expected_collection_sha256': subject_sha256([row.model_dump(mode='json') for row in current.relations]),
-        'operations': [{'op': 'add', 'item': {
-            'relation_id': 'rel_02', 'subject_id': 'char_003', 'object_id': 'char_001',
-            'predicate': '向其回报米价', 'effective_from': 3, 'effective_until': None,
-            'revealed_from': 3, 'evidence_refs': [evidence],
-        }}],
-    }]}
-    original = _book_file_snapshot(ctx.novel_dir)
-    with pytest.raises(extract.GlobalEditCandidateRejected, match='dangling_relation_endpoint:1'):
-        extract.preflight_global_edit(ctx, GlobalEdit.model_validate(global_delta))
-    assert _book_file_snapshot(ctx.novel_dir) == original
-    global_delta['collection_edits'][0]['operations'][0]['item']['subject_id'] = 'c1'
-    request['core_edits']['global'] = global_delta
-    ledger = ctx.ledger.path.read_bytes()
-    identity = approve(ctx, Stage2NodeReviewRequest.model_validate(request))
-    # 模拟独立 CLI 提交进程；只读预检和测试观察不能被伪记成生成输入。
-    core_edits.apply(_free_ctx(ctx), identity)
-    registry = store.read_own(CharacterRegistry, STAGE2_CHARACTERS)[0]
-    assert registry.characters['char_003'].canonical == '管家'
-    assert grounding_io.read(store).relations[-1].subject_id == 'char_003'
-    assert ctx.ledger.path.read_bytes() == ledger
-    review = store.read_own(GlobalReview, extract.GLOBAL_REVIEW_REL)[0]
-    assert next(row for row in review.items if row.subject_path == 'global.relations.rel_02').state == 'pending'
+def test_sparse_edit_bad_added_locator_is_rejected_without_rewriting_baseline(tmp_path):
+    """未定位的人工 ref 是编辑输入错误；稀疏提交不准改写正式底座。"""
+    book = tmp_path / '稀疏订正坏证据_902'
+    book.mkdir()
+    _seed(book)
+    before = _grounding_raw(book)
+    _write_edit(book, {
+        'collection_edits': [{
+            'collection': 'world_rules',
+            'expected_collection_sha256': subject_sha256(before['world_rules']),
+            'operations': [{
+                'op': 'add',
+                'item': {
+                    'rule_id': 'wr_03',
+                    'kind': 'institution',
+                    'versions': [{
+                        'version_id': 'v01', 'effective_until': None,
+                        'revealed_from': 3, 'effective_from': 3,
+                        'desc': '管家需向主家回报米价变动',
+                        'evidence_refs': [_locator(
+                            3, '这段不存在于任何正文章节，不能回取为 SourceSpan')],
+                    }],
+                },
+            }],
+        }],
+    })
+    snapshot = _book_file_snapshot(book)
+    with pytest.raises(extract.GlobalEditCandidateRejected) as caught:
+        extract.run_apply_edit(_ctx(book, 'stage2.global', paid=False))
+    assert 'candidate_normalization:1' in caught.value.safe_summary
+    assert 'wr_03' not in caught.value.safe_summary
+    assert _book_file_snapshot(book) == snapshot
+    assert not (book / extract._GLOBAL_INVALID).exists()
+    assert _grounding_raw(book) == before
 
 
 def test_preflight_aggregates_unknown_collection_deletes_into_safe_correction_reason(
@@ -965,8 +558,7 @@ def test_preflight_aggregates_unknown_collection_deletes_into_safe_correction_re
     book.mkdir()
     _seed(book)
     ctx = _ctx(book, 'stage2.global', paid=False)
-    current = grounding_io.read(ArtifactStore(ctx)).model_dump(
-            mode='json', by_alias=True)
+    current = _grounding_raw(book)
     sentinel_prefix = 'MODEL_SENTINEL_DELETE_'
     edit = GlobalEdit.model_validate({
         'collection_edits': [{
@@ -1000,14 +592,15 @@ def test_preflight_aggregates_unknown_collection_deletes_into_safe_correction_re
 
     # producer safe_summary 是下一 fresh correction session 唯一收到的失败事实；
     # roundtrip 必须保留机器可操作三元组，同时仍不泄露任一模型 ID。
+    from novel.orchestrator import reviewer_tasks
     task = SimpleNamespace(
-        waiting_on=queue.WAITING_ON_STAGE2_EDIT_CORRECTION,
+        waiting_on='human:stage2-review-correction',
         prompt='冻结的 Stage2 correction workpack',
     )
     prompt = reviewer_tasks.correction_prompt(
         task, summary, request_sha256='a' * 64, attempt=1)
     assert summary in prompt
-    assert 'collection/category/count' in prompt
+    assert 'collection_breakdown=collection=relations' in prompt
     assert sentinel_prefix not in prompt
 
 
@@ -1048,13 +641,6 @@ def test_candidate_preflight_reports_every_bad_collection_before_applying_any() 
     assert data == before
 
 
-def _book_file_snapshot(book: Path) -> dict[str, bytes]:
-    return {
-        path.relative_to(book).as_posix(): path.read_bytes()
-        for path in book.rglob('*') if path.is_file()
-    }
-
-
 def test_candidate_shape_rejection_hashes_dynamic_validation_location(
         tmp_path, monkeypatch):
     """Pydantic 动态 loc/extra key 只进完整诊断 SHA，不进入外部拒因。"""
@@ -1062,10 +648,11 @@ def test_candidate_shape_rejection_hashes_dynamic_validation_location(
     book.mkdir()
     _seed(book)
     ctx = _ctx(book, 'stage2.global', paid=False)
-    store = ArtifactStore(ctx)
-    previous = grounding_io.read(store)
+    from novel.stages.stage2 import grounding as grounding_io
+    from novel.store import ArtifactStore
+    previous = grounding_io.read(ArtifactStore(ctx))
     raw = previous.model_dump(mode='json', by_alias=True)
-    main_text = extract._read_main_text(store)
+    main_text = extract._read_main_text(ArtifactStore(ctx))
     assert main_text is not None
     edit = GlobalEdit.model_validate({'arc_secrets': [{'secret_id': 'secret_01', 'revealed_from': 3}]})
 
@@ -1100,10 +687,11 @@ def test_candidate_normalization_terminal_is_business_but_io_is_unknown(
     book.mkdir()
     _seed(book)
     ctx = _ctx(book, 'stage2.global', paid=False)
-    store = ArtifactStore(ctx)
-    previous = grounding_io.read(store)
+    from novel.stages.stage2 import grounding as grounding_io
+    from novel.store import ArtifactStore
+    previous = grounding_io.read(ArtifactStore(ctx))
     raw = previous.model_dump(mode='json', by_alias=True)
-    main_text = extract._read_main_text(store)
+    main_text = extract._read_main_text(ArtifactStore(ctx))
     assert main_text is not None
     edit = GlobalEdit.model_validate({'arc_secrets': [{'secret_id': 'secret_01', 'revealed_from': 3}]})
 
@@ -1123,170 +711,6 @@ def test_candidate_normalization_terminal_is_business_but_io_is_unknown(
             OSError('synthetic storage failure')))
     with pytest.raises(OSError, match='storage failure'):
         extract._build_global_edit_candidate(previous, raw, edit, main_text)
-
-
-def test_reviewed_edit_passes_only_the_blocking_subjects_that_it_reopened():
-    before = _grounding()
-    previous = _approved_review(before)
-    target = next(item for item in previous.items
-                  if item.kind == 'world_rule_version')
-    previous = previous.model_copy(update={'items': [
-        item.model_copy(update={
-            'state': 'FAIL', 'actor': 'reviewer',
-            'decided_at': '2026-09-02T00:00:00+00:00',
-            'reason': '规则主体写错',
-        }) if item.item_id == target.item_id else item
-        for item in previous.items
-    ]})
-    after = copy.deepcopy(before)
-    after['world_rules'][0]['versions'][0]['desc'] = '修正后的完整规则'
-    edit = GlobalEdit.model_validate({
-        'world_rules': [{
-            'rule_id': 'wr_01',
-            'versions': [{
-                'version_id': 'v01', 'effective_until': None, 'revealed_from': 1, 'effective_from': 1,
-                'desc': '修正后的完整规则',
-                'evidence_refs': [_locator()],
-            }],
-        }],
-        'post_edit_review': {
-            'actor': 'agent:novel-pipeline-operator',
-            'expected_source_sha256': previous.source_sha256,
-            'reviewed_chapter_ordinals': [1, 2],
-            'default_state': 'PASS',
-            'reason': '已复核精确返工后的完整 blocking 主体',
-            'quarantine_groups': [],
-        },
-    })
-    artifact = SimpleNamespace(model_dump=lambda **_kwargs: copy.deepcopy(after))
-
-    reviewed = _review_after_global_edit(
-        artifact, previous, edit, [1, 2], characters=_review_registry())
-
-    assert reviewed is not None
-    assert all(item.state == 'PASS' for item in reviewed.items
-               if review_effect_of(item.kind) == 'blocking')
-
-
-def test_reviewed_edit_refuses_to_wash_an_unchanged_fail_green():
-    before = _grounding()
-    previous = _approved_review(before)
-    target = next(item for item in previous.items
-                  if item.kind == 'world_rule_version')
-    previous = previous.model_copy(update={'items': [
-        item.model_copy(update={
-            'state': 'FAIL', 'actor': 'reviewer',
-            'decided_at': '2026-09-02T00:00:00+00:00',
-            'reason': '规则主体写错',
-        }) if item.item_id == target.item_id else item
-        for item in previous.items
-    ]})
-    edit = GlobalEdit.model_validate({
-        'arc_secrets': [{'secret_id': 'secret_01', 'revealed_from': 1}],
-        'post_edit_review': {
-            'actor': 'agent:novel-pipeline-operator',
-            'expected_source_sha256': previous.source_sha256,
-            'reviewed_chapter_ordinals': [1, 2],
-            'default_state': 'PASS',
-            'reason': '只改了无关人物字段，不能覆盖旧 FAIL',
-            'quarantine_groups': [],
-        },
-    })
-    artifact = SimpleNamespace(model_dump=lambda **_kwargs: copy.deepcopy(before))
-
-    with pytest.raises(TerminalState, match='没有消解全部 blocking 项'):
-        _review_after_global_edit(artifact, previous, edit, [1, 2], characters=_review_registry())
-
-
-def test_reviewed_edit_refuses_to_wash_an_unchanged_pending_item_green():
-    before = _grounding()
-    previous = _approved_review(before)
-    target = next(item for item in previous.items
-                  if item.kind == 'world_rule_version')
-    previous = previous.model_copy(update={'items': [
-        item.model_copy(update={
-            'state': 'pending', 'actor': None, 'decided_at': None,
-            'reason': None,
-        }) if item.item_id == target.item_id else item
-        for item in previous.items
-    ]})
-    after = copy.deepcopy(before)
-    after['arc_secrets'][0]['revealed_from'] = 1
-    edit = GlobalEdit.model_validate({
-        'arc_secrets': [{'secret_id': 'secret_01', 'revealed_from': 1}],
-        'post_edit_review': {
-            'actor': 'agent:novel-pipeline-operator',
-            'expected_source_sha256': previous.source_sha256,
-            'reviewed_chapter_ordinals': [1, 2],
-            'default_state': 'PASS',
-            'reason': '不能用无关编辑替尚未审阅的旧主体背书',
-            'quarantine_groups': [],
-        },
-    })
-    artifact = SimpleNamespace(model_dump=lambda **_kwargs: copy.deepcopy(after))
-
-    with pytest.raises(TerminalState, match='没有消解全部 blocking 项'):
-        _review_after_global_edit(artifact, previous, edit, [1, 2], characters=_review_registry())
-
-
-def test_reviewed_edit_can_atomically_fix_a_changed_item_and_redecide_a_survivor():
-    before = _grounding()
-    previous = _approved_review(before)
-    role = next(item for item in previous.items if item.kind == 'role')
-    rule = next(item for item in previous.items if item.kind == 'world_rule_version')
-    failed_ids = {role.item_id, rule.item_id}
-    previous = previous.model_copy(update={'items': [
-        item.model_copy(update={
-            'state': 'FAIL', 'actor': 'reviewer',
-            'decided_at': '2026-09-02T00:00:00+00:00',
-            'reason': '需要复核',
-        }) if item.item_id in failed_ids else item
-        for item in previous.items
-    ]})
-    review_scope = [{
-        'item_id': item.item_id,
-        'expected_subject_sha256': item.subject_sha256,
-    } for item in previous.items
-        if review_effect_of(item.kind) == 'blocking'
-        and item.state != 'PASS']
-    after = copy.deepcopy(before)
-    after['world_rules'][0]['versions'][0]['desc'] = '修正后的完整规则'
-    workpack_sha256 = 'f' * 64
-    edit = GlobalEdit.model_validate({
-        'world_rules': [{
-            'rule_id': 'wr_01',
-            'versions': [{
-                'version_id': 'v01', 'effective_until': None, 'revealed_from': 1, 'effective_from': 1,
-                'desc': '修正后的完整规则',
-                'evidence_refs': [_locator()],
-            }],
-        }],
-        'post_edit_review': {
-            'actor': 'agent:novel-pipeline-operator',
-            'expected_source_sha256': previous.source_sha256,
-            'expected_workpack_sha256': workpack_sha256,
-            'review_scope': review_scope,
-            'reviewed_chapter_ordinals': [1, 2],
-            'default_state': 'PASS',
-            'reason': '已复核本次修订新打开的主体',
-            'quarantine_groups': [],
-            'decisions': [{
-                'item_id': role.item_id,
-                'expected_subject_sha256': role.subject_sha256,
-                'state': 'PASS', 'reason': '与原文重新核对后确认原值正确',
-                'evidence': [],
-            }],
-        },
-    })
-    artifact = SimpleNamespace(model_dump=lambda **_kwargs: copy.deepcopy(after))
-
-    reviewed = _review_after_global_edit(
-        artifact, previous, edit, [1, 2],
-        expected_workpack_sha256=workpack_sha256, characters=_review_registry())
-
-    assert reviewed is not None
-    assert all(item.state == 'PASS' for item in reviewed.items
-               if review_effect_of(item.kind) == 'blocking')
 
 
 @pytest.mark.parametrize('key,subject', [

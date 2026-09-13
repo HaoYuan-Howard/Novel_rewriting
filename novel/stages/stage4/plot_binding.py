@@ -175,12 +175,11 @@ def build_mechanical_baseline(candidate: dict, blueprints: dict) -> MechanicalBa
 
 
 def validate_request_references(candidate: dict, blueprint: PlotBlueprint,
-                                knowledge_links: dict, ordinal: int, *,
+                                ordinal: int, *,
                                 characters: dict, blueprints: dict, main_text: list[dict]) -> dict:
     """B 调用前用当前主体复核冻结引用；复用 A 的分场/端点守卫，不重建全书真相正文。"""
-    from contracts.schema.knowledge_links import KnowledgeLinks
     from novel.stages.stage4.plot_design import _formal_maps, validate_chapter
-    from novel.stages.stage4.plot_placements import required_endpoints, knowledge_triggers_for_chapter
+    from novel.stages.stage4.plot_placements import required_endpoints
 
     mapping = _formal_maps({key: candidate[key] for key in (
         'alias_algorithm', 'truth_sha256', 'subject_aliases', 'endpoint_aliases', 'participant_aliases')})
@@ -208,29 +207,16 @@ def validate_request_references(candidate: dict, blueprint: PlotBlueprint,
     chapters = [row for row in candidate['output_chapters'] if row['output_ordinal'] == ordinal]
     if len(chapters) != 1:
         raise BlindPlanError('B 冻结候选必须唯一包含目标章')
-    links = KnowledgeLinks.model_validate(knowledge_links)
-    records = {row.obligation_id: row for row in links.links}
-    events = {row.obligation_id: row for row in links.scope.obligations if row.chapter_ordinal == ordinal}
-    own_beats = {row.beat_id for row in blueprint.beats}
-    background = {ref.ref for event in events.values()
-                  for ref in records[event.obligation_id].resolution.subject_refs
-                  if ref.kind == 'beat' and ref.ref not in own_beats}
-    required = required_endpoints(blueprint, knowledge_triggers_for_chapter(knowledge_links, ordinal), ())
+    required = required_endpoints(blueprint)
     endpoint_map = {(row['kind'], row['ref'], row['endpoint']): token
                     for token, row in mapping['endpoint_aliases'].items()}
     endpoints = []
     for key, beat in required.items():
         if key not in endpoint_map:
             raise BlindPlanError('冻结设计缺少本章必要端点映射')
-        subject = events[key[1]].subject_ref if key[0] == 'knowledge' else None
-        if subject is not None and subject.kind == 'relation':
-            from novel.stages.stage4.actors import actual_subject_uses
-            available = [PlotSubjectRef.model_validate(row) for row in mapping['subject_aliases'].values()]
-            subject_aliases = [alias(row) for row in actual_subject_uses(subject, available)]
-        else:
-            subject_aliases = [alias(subject) if subject is not None else alias(key[0], key[1])]
         endpoints.append({'endpoint_alias': endpoint_map[key],
-                          'trigger_beat_alias': alias('beat', beat), 'subject_aliases': subject_aliases})
+                          'trigger_beat_alias': alias('beat', beat),
+                          'subject_aliases': [alias(key[0], key[1])]})
     source = {
         'chapter_ordinal': ordinal,
         'beats': [{'alias': alias('beat', row.beat_id),
@@ -239,7 +225,7 @@ def validate_request_references(candidate: dict, blueprint: PlotBlueprint,
                   for row in blueprint.beats],
         'states': [{'alias': alias('state', row.state_id)} for row in blueprint.states],
         'inherited_states': [{'alias': alias('state', ref)} for ref in blueprint.entry_state_refs],
-        'background_beats': [{'alias': alias('beat', ref)} for ref in sorted(background)],
+        'background_beats': [],
         'constraints': [{'alias': alias('constraint', row.constraint_id), 'kind': row.kind}
                         for row in blueprint.constraints],
         'global_subjects': [{'alias': token} for token, row in mapping['subject_aliases'].items()

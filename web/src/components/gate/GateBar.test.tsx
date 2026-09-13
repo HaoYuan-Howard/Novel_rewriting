@@ -21,10 +21,9 @@ import { useApprovals } from '@/hooks/useApprovals'
  */
 
 const doc: ApprovalDoc = {
-  v: 8, prepare: missingPrepareState(),
+  v: 9, prepare: missingPrepareState(),
   sid: 'book-1',
-  gate: { s0: true, s1: true, s2: true, s4: false, s5: false, s6: false, s7: false },
-  seen: { read: true, global: true },
+  gate: { s0: true, s1: true, s4: false, s5: false, s6: false, s7: false },
   writing: false,
   design_review: {
     state: 'unavailable', candidate_sha256: null, aggregate_subject_sha256: null,
@@ -96,10 +95,10 @@ describe('GateBar 的动作分类', () => {
     expect(container.textContent).toBe('审批已读回')
   })
 
-  it('Stage2 即使两屏都已读，缺当前节点接受仍禁止推进', async () => {
+  it('global 屏挂在 s1：stage0 未确认时禁用，不发起 stage2 动作', async () => {
     const approve = vi.spyOn(api, 'approveGate')
-    mount('global', { ...doc, gate: { ...doc.gate, s2: false } })
-    expect(await screen.findByRole('button', { name: /两个节点都接受后才能继续/ })).toBeDisabled()
+    mount('global', { ...doc, gate: { ...doc.gate, s0: false, s1: false } })
+    expect(await screen.findByRole('button', { name: /先过 stage0 剔除番外/ })).toBeDisabled()
     expect(approve).not.toHaveBeenCalled()
   })
   it('没有 spawn 的闸门不画成「未标注」——它只写 _service 的审批记录', async () => {
@@ -121,22 +120,17 @@ describe('GateBar 的动作分类', () => {
     expect(approve).not.toHaveBeenCalled()
   })
 
-  it('s2 已确认后只续跑服务端下发的下一相，不重复 approveGate', async () => {
-    const next = { kind: 'stage4.plan', label: 'Stage4B 证据绑定与计划编译', extra: null }
+  it('s1 已确认后只续跑服务端下发的下一相，不重复 approveGate', async () => {
+    const next = { kind: 'stage2.blueprint', label: '机械准入通过后生成 stage2 逐章骨架', extra: null }
     const done: ApprovalDoc = {
       ...doc,
-      gate: { ...doc.gate, s2: true },
-      stage2_reviews: {
-        'stage2.global': { state: 'accepted', current_decision: null, history: [] },
-        'stage2.blueprint': { state: 'accepted', current_decision: null, history: [] },
-      },
-      spawns: { s2: [next] },
+      spawns: { s1: [next] },
     }
     const liveEnums = {
       ...enums,
-      job_kinds: { 'stage4.plan': { paid: true } },
+      job_kinds: { 'stage2.blueprint': { paid: true } },
       actions: [{
-        kind: 'stage4.plan', label: next.label, extra: null,
+        kind: 'stage2.blueprint', label: next.label, extra: null,
         paid: true, free_flag: null, writes_disk: true,
       }],
     } as unknown as EnumsResponse
@@ -145,27 +139,27 @@ describe('GateBar 的动作分类', () => {
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
     const approve = vi.spyOn(api, 'approveGate')
     vi.spyOn(api, 'previewJob').mockResolvedValue({
-      argv: 'python -m novel.cli run book-1 stage4.plan --yes',
+      argv: 'python -m novel.cli run book-1 stage2.blueprint --yes',
       paid: true,
       label: next.label,
       kind: next.kind,
       steps: [{
         label: next.label,
         paid: true,
-        writes: 'stage4/evidence_binding.json · stage4/plan_chapters.json',
-        argv: 'python -m novel.cli run book-1 stage4.plan --yes',
+        writes: 'stage2/chapter_blueprints.json',
+        argv: 'python -m novel.cli run book-1 stage2.blueprint --yes',
       }],
     })
     const start = vi.spyOn(api, 'startJob').mockResolvedValue({
-      id: 'stage4b-job', kind: next.kind, label: next.label,
-      argv: 'python -m novel.cli run book-1 stage4.plan --yes',
+      id: 'stage2b-job', kind: next.kind, label: next.label,
+      argv: 'python -m novel.cli run book-1 stage2.blueprint --yes',
       state: 'running', paid: true, started: 1, finished: null,
       sid: 'book-1', ordinal: null,
     })
 
     renderRoute(<><GateBar screen="global" /><ConfirmDialog /></>)
     fireEvent.click(await screen.findByRole('button', { name: '继续下一步' }))
-    expect(await screen.findByText(/stage4\.plan --yes/)).toBeVisible()
+    expect(await screen.findByText(/stage2\.blueprint --yes/)).toBeVisible()
     expect(approve).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: '确认发起（花钱）' }))
     await waitFor(() => expect(start).toHaveBeenCalledWith({

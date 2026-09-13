@@ -9,22 +9,139 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.artifacts import STAGE4_WRITER_CONTEXT
-from contracts.schema.api import Stage2NodeReviewRequest
 from novel.errors import HumanEditProtected
 from novel.orchestrator import approvals
 from tests.test_approval_freshness import (
     SID, _approve_writing, current_book as writing_current_book,
 )
 from tests.test_design_review import isolated as design_isolated
-from tests.test_stage2_node_lifecycle import (
-    _accept_global, _produce_blueprints, book as stage2_book,
-)
-from tests.test_stage2_review_decisions import _accept_blueprint_node
 from tests.test_stage4_approval_landed import landed_source as stage4_source
 from tests.test_stage5_closure import (
-    _open_s4, _ruling_request, rig as closure_rig,
+    _accepted_structure_view, _review as _closure_review, _ruling_request,
 )
 from tests.test_structure_approval import isolated as structure_isolated
+
+
+_GATES = approvals.APPROVAL_GATES
+
+
+@pytest.fixture
+def closure_rig(tmp_path, monkeypatch):
+    """真 store + 真 Review/章文件的闭合夹具（本文件内的最小定义）。
+
+    与 tests/test_stage5_closure.rig 同法，但不带已随审批继承退役的
+    ``seen`` 合成 proof（``_proof_for_seen`` 已从生产面删除）。
+    """
+    import json as _json
+
+    from novel import prov
+    from novel.llm.cache import CachePolicy
+    from novel.llm.ledger import CostLedger
+    from novel.run import RunContext
+    from novel.stages.stage5 import review as review_mod
+    from novel.store import ArtifactStore
+
+    from novel.work_units import initialize_workflow
+    initialize_workflow(tmp_path)
+    book_dir = tmp_path / '闭合回执_001'
+    (book_dir / 'stage5').mkdir(parents=True)
+    (book_dir / 'stage0').mkdir(parents=True)
+    (book_dir / 'stage0' / 'clean_text.txt').write_text(
+        '固定测试根。' + chr(10), encoding='utf-8', newline='')
+    root_sha1 = prov.content_sha1(
+        (book_dir / 'stage0' / 'clean_text.txt').read_bytes())
+    ctx = RunContext(
+        novel_dir=book_dir, node='stage5.review', paid=False,
+        code='test-closure',
+        cache=CachePolicy.default(), ledger=CostLedger(),
+        observer=lambda _event: None,
+    )
+    store = ArtifactStore(ctx)
+    from contracts.schema import encode_artifact
+    rev = _closure_review(root_sha1)
+    payload = rev.model_dump(by_alias=True, mode='json')
+    payload['_provenance'] = rev.provenance.to_disk()
+    review_rel = review_mod.REVIEW_TPL.format(n=1)
+    raw = _json.dumps(
+        encode_artifact(review_rel, payload), ensure_ascii=False, indent=2)
+    store.path(review_rel).write_bytes((raw + chr(10)).encode('utf-8'))
+    for ordinal in (1, 2):
+        (store.path(f'stage5/ch{ordinal:02d}.json')).write_text(
+            _json.dumps({'chapter': ordinal}), encoding='utf-8')
+    fresh_status = review_mod.ReviewStatus(
+        'fresh', (), review_rel=review_rel, seq=1, review=rev)
+    monkeypatch.setattr(
+        review_mod, 'review_status',
+        lambda _ctx, _store=None: fresh_status)
+    monkeypatch.setattr(
+        review_mod, 'require_fresh_review',
+        lambda _ctx, _store=None: fresh_status)
+    monkeypatch.setattr(
+        review_mod, 'require_accepted_review',
+        lambda _ctx, _store: fresh_status)
+    monkeypatch.setattr(
+        approvals, '_stage5_subject_rels',
+        lambda _base, _sid, _record: [
+            'stage5/ch01.json', 'stage5/ch02.json',
+            review_mod.REVIEW_TPL.format(n=1)])
+
+    def fake_make_proof(novel_dir, rels, decision):
+        return approvals._ApprovalProof(
+            root_clean_sha1=approvals._root_clean_sha1(novel_dir),
+            artifacts={rel: 'a' * 64 for rel in rels},
+            decision_sha256=approvals._decision_sha256(decision))
+
+    monkeypatch.setattr(approvals, '_make_proof', fake_make_proof)
+    monkeypatch.setattr(
+        approvals, '_structure_view',
+        lambda novel_dir, record: _accepted_structure_view(record))
+
+    synthetic_proofs = {
+        gate: approvals._ApprovalProof(
+            root_clean_sha1='0' * 40,
+            artifacts={f'{gate}.json': 'a' * 64},
+            decision_sha256='b' * 64)
+        for gate in ('s0', 's1', 's4')}
+
+    real_proof_for_gate = approvals._proof_for_gate
+
+    def fake_proof_for_gate(novel_dir, gate, record):
+        if gate in synthetic_proofs:
+            return synthetic_proofs[gate]
+        return real_proof_for_gate(novel_dir, gate, record)
+
+    monkeypatch.setattr(approvals, '_proof_for_gate', fake_proof_for_gate)
+    return ctx, store
+
+
+def _open_s4(base, sid) -> None:
+    """把 s0→s4 链打开；proof 走确定性合成面（seen 已随审批继承退役）。"""
+    def _proof(tag):
+        return approvals._ApprovalProof(
+            root_clean_sha1='0' * 40,
+            artifacts={f'{tag}.json': 'a' * 64},
+            decision_sha256='b' * 64)
+
+    gates = {key: key in ('s0', 's1', 's4') for key in _GATES}
+    gate_proofs = {
+        key: _proof(key) if gates[key] else None for key in _GATES}
+    structure = approvals._StoredStructureDecision(
+        actor='reviewer', reason='当前结构逐章核对通过',
+        subject_sha256='2' * 64,
+        chapters=[{
+            'output_ordinal': ordinal, 'decision': 'accept',
+            'reason': '本章结构可接受',
+        } for ordinal in (1, 2)],
+        decided_at='2026-08-29T00:00:00+00:00',
+        proof=gate_proofs['s4'])
+    record = approvals._read_current(base, sid).model_copy(update={
+        'gate': gates, 'gate_proofs': gate_proofs,
+        'structure_history': [structure],
+        'structure_decision': structure,
+    })
+    path = approvals._path(base, sid)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(record.model_dump_json(), encoding='utf-8')
 
 
 def _lookup(source, payload=None):
@@ -192,24 +309,3 @@ def test_stage4_registered_surfaces_reuse_exact_history_proof(stage4_source):
     source.append_history()
     assert approvals.reviewer_approval_payload_landed(
         source.base, SID, surface=source.surface, payload=source.payload)
-
-
-@pytest.mark.parametrize('node', ['stage2.global', 'stage2.blueprint'])
-def test_stage2_registered_surfaces_keep_original_receipt_after_subject_drift(stage2_book, monkeypatch, node):
-    book = stage2_book
-    if node == 'stage2.global':
-        _accept_global(book)
-    else:
-        _produce_blueprints(book)
-        _accept_blueprint_node(book, monkeypatch)
-    row = approvals._read_raw(book.parent, '123').stage2_reviews[node]
-    payload = {key: value for key, value in row.model_dump(mode='json').items()
-               if key in Stage2NodeReviewRequest.model_fields}
-    surface = 'stage2_global_review' if node == 'stage2.global' else 'stage2_blueprint_review'
-    before = approvals._path(book.parent, '123').read_bytes()
-    (book / 'stage1/main_text.json').write_text('当前主体已变化', encoding='utf-8')
-    assert approvals.reviewer_approval_payload_landed(book.parent, '123', surface=surface, payload=payload)
-    assert approvals._path(book.parent, '123').read_bytes() == before
-    other = 'stage2_blueprint_review' if node == 'stage2.global' else 'stage2_global_review'
-    with pytest.raises(HumanEditProtected, match='节点与审批面'):
-        approvals.reviewer_approval_payload_landed(book.parent, '123', surface=other, payload=payload)

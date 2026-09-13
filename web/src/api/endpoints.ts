@@ -1,6 +1,7 @@
 import type { RunMetrics } from '@/types/runMetrics'
 import type { PrepareView, PrepareWorkpack, PrepareEditPreview } from '@/types/prepare'
-import type { PlotEdit, PlotEditPreview, BlueprintRefinementCatalog } from '@/types/plot.generated'
+import type { PlotEdit, PlotEditPreview } from '@/types/plot.generated'
+import type { GlobalEdit, GlobalEditPreview } from '@/types/globalEdit'
 /**
  * 唯一的数据缝。屏与组件只认这个文件导出的 `api`。
  *
@@ -29,10 +30,8 @@ import type {
   DesignReviewTemplate,
   DesignReviewTemplateQuery,
   GateKey,
-  SeenKey,
   StructureApprovalRequest,
   Stage5ClosureRequest,
-  Stage2NodeReviewRequest,
   Stage5ClosureTemplate,
   Stage6ApprovalWorkpack,
   Stage7ApprovalWorkpack,
@@ -65,12 +64,10 @@ import type {
 } from '@/types/maintenance'
 import type {
   CheckReport,
-  BlueprintReviewWorkpack,
+  BlueprintReadingWorkpack,
   DraftEditPreview,
   DraftEditPreviewRequest,
   DraftEditRequest,
-  GlobalReviewDecisionSet,
-  GlobalReviewResponse,
   InboxResponse,
   ReadingResponse,
   ReviewResponse,
@@ -408,31 +405,29 @@ export const realApi: Api = {
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage1/partition')),
   getStage1: (sid) => get<Stage1View>(n(sid) + '/stage1'),
   getReading: (sid, o) => get<ReadingResponse>(n(sid) + '/reading/' + o),
-  getBlueprintReviewWorkpack: (sid, scope) =>
-    get<BlueprintReviewWorkpack>(n(sid) + '/stage2/blueprint-review-workpack'
+  getBlueprintReadingWorkpack: (sid, scope) =>
+    get<BlueprintReadingWorkpack>(n(sid) + '/stage2/blueprint-reading-workpack'
       + (scope ? '?scope=' + encodeURIComponent(scope) : '')),
   getBlueprintEditTemplate: (sid, ordinal) =>
     get<PlotEdit>(n(sid) + '/stage2/blueprint/edit/template?chapter_ordinal=' + ordinal),
-  getBlueprintRefinementCatalog: (sid, origin) =>
-    get<BlueprintRefinementCatalog>(n(sid) + '/approvals/blueprint-refinement/catalog?origin=' + origin),
-  submitBlueprintRefinement: (sid, request) =>
-    post<ApprovalDoc>(n(sid) + '/approvals/blueprint-refinement', request),
   previewBlueprintEdit: (sid, request) =>
     post<PlotEditPreview>(n(sid) + '/stage2/blueprint/edit/preview', request),
   applyBlueprintEdit: async (sid, request) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage2/blueprint/edit', request)),
   getGlobal: async (sid, revealSpoilers = false) =>
     projectGlobalSpoilers(await get<Stage2Global>(n(sid) + '/stage2/global'), revealSpoilers),
+  getGlobalEditTemplate: (sid) =>
+    get<GlobalEdit>(n(sid) + '/stage2/global/edit/template'),
+  previewGlobalEdit: (sid, request) =>
+    post<GlobalEditPreview>(n(sid) + '/stage2/global/edit/preview', request),
+  applyGlobalEdit: async (sid, request) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage2/global/edit', request)),
   getCharacters: (sid) => get<CharacterRegistryView>(n(sid) + '/stage2/characters'),
   getAnalyzeDraft: (sid, owner) => get<AnalyzeDraftView>(n(sid) + '/stage2/analyze-draft?owner=' + encodeURIComponent(owner)),
   editAnalyzeDraft: async (sid, request) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage2/analyze-draft', request)),
   editCharacters: async (sid, request) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage2/characters/edit', request)),
-  getGlobalReview: (sid) =>
-    get<GlobalReviewResponse>(n(sid) + '/stage2/global-review'),
-  decideGlobalReview: async (sid, request: GlobalReviewDecisionSet) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage2/global-review', request)),
   getStage4: (sid, o) => get<Stage4Response>(n(sid) + '/stage4/' + o),
   getStage5: (sid, o) => get<Stage5Response>(n(sid) + '/stage5/' + o),
   getReview: (sid, o) => get<ReviewResponse>(n(sid) + '/review/' + o),
@@ -551,8 +546,6 @@ export const realApi: Api = {
   getAgentQueue: () => get<AgentQueueView>('/agent/runs/queue'),
 
   getApprovals: (sid) => get<ApprovalDoc>(n(sid) + '/approvals'),
-  approveStage2Review: (sid, request: Stage2NodeReviewRequest) =>
-    post<ApprovalDoc>(n(sid) + '/approvals/stage2-review', request),
   getDesignApprovalWorkpack: (sid) =>
     get<ApprovalWorkpack>(n(sid) + '/approvals/design/workpack'),
   getStructureApprovalWorkpack: (sid) =>
@@ -583,8 +576,6 @@ export const realApi: Api = {
     post<ApprovalDoc>(n(sid) + '/approvals/structure', request),
   backfillApprovals: (sid) =>
     post<ApprovalBackfillResult>(n(sid) + '/approvals/backfill'),
-  markSeen: (sid, key: SeenKey, request) =>
-    post<ApprovalDoc>(n(sid) + '/approvals/seen/' + key, request),
   startWriting: (sid, request: WritingApprovalRequest) =>
     post<ApprovalDoc>(n(sid) + '/approvals/writing', request),
   resetBook: (sid) => post<ApprovalDoc>(n(sid) + '/approvals/reset'),

@@ -19,7 +19,7 @@ from contracts.artifacts import (
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
     STAGE2_GLOBAL_GROUNDING, STAGE2_CHARACTERS, artifact_rel,
 )
-from contracts.invariants import NODES, STAGES, STAGE2_NODE_REVIEW_OWNERS
+from contracts.invariants import NODES, STAGES
 from contracts.schema import ARTIFACTS
 from contracts.schema.orchestration import (
     ArtifactState, NovelOverview, OverviewSummary, StageState,
@@ -52,7 +52,9 @@ def test_required_artifacts_come_from_the_nodes_that_produce_them(tmp_path):
     novel_dir = tmp_path / 'FQ_测试书_42'
     book_scoped = {ARTIFACT_PATHS[key] for key in BOOK_SCOPED_PATHS}
     for stage in STAGES:
+        # 与被测函数同一条 stage_required 过滤；analyze 回执只在采用联合首抽时产生。
         produces = [rel for spec in NODES.values() if spec.stage == stage
+                    and spec.stage_required
                     for rel in spec.produces]
         want = {rel for rel in produces if '{' not in rel}
         want |= {paths.book_txt_rel(novel_dir)
@@ -621,18 +623,6 @@ def test_missing_blueprint_without_invalid_remains_a_normal_paid_run():
     verdict, why = S.resume_verdict(ov, 'stage2.blueprint')
     assert verdict == S.RESUME_RUN
     assert '产物不在盘上' in why
-
-
-@pytest.mark.parametrize('owner', STAGE2_NODE_REVIEW_OWNERS)
-def test_current_typed_rework_is_not_swallowed_by_existing_artifact(owner):
-    stage = StageState(stage='stage2', done=True, reviewable=True, artifacts=[
-        _stage2_artifact(rel) for rel in (STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING,
-                                         STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
-                                         STAGE2_CHAPTER_BLUEPRINTS)])
-    overview = _overview(stage)
-    if owner == 'stage2.characters':
-        assert S.resume_verdict(overview, owner)[0] == S.RESUME_SKIP
-    assert S.resume_verdict(overview, owner, flags=('--review-token', 'typed-current'))[0] == S.RESUME_RUN
 
 
 @pytest.mark.parametrize(

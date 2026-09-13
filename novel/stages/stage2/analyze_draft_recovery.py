@@ -274,12 +274,8 @@ def repair(ctx: RunContext, request: AnalyzeOwnerDraftEdit, *, actor: str, reaso
                 raise ProvenanceRefused('草稿 owner 物化写后精确字节不闭合')
             if projection_sha is not None and store.full_sha256_or_none(STAGE2_BLUEPRINT_CHARACTER_PROJECTION) != projection_sha:
                 raise ProvenanceRefused('草稿人物投影写后精确字节不闭合')
-            if not hits:
-                if ctx.node == 'stage2.characters':
-                    characters._refresh_review(store, candidate)
-                else:
-                    from novel.stages.stage2.extract import _refresh_global_review
-                    _refresh_global_review(store, candidate)
+            # Stage2 语义审阅退役：owner 草稿物化后不再刷新任何审阅文件；
+            # 语义结论由报告 unver 行与交付披露表达。
             _assert_sources(ctx, store, journal)
             store.write(journal_rel, journal.model_copy(update={'state': 'committed'}))
             if hits:

@@ -123,9 +123,6 @@ def schema_run(request, monkeypatch):
     monkeypatch.setattr(queue.st, 'resume_verdict', lambda _ov, node: (
         (queue.st.RESUME_SKIP, '当前 A 候选') if node == 'stage4.design'
         else (queue.st.RESUME_RUN, 'B 等待重建')))
-    monkeypatch.setattr(queue.st, 'stage2_global_projection_blocked', lambda _ov: False)
-    monkeypatch.setattr(queue.st, 'stage2_reviewed_edit_correction_needed', lambda *_a: False)
-    monkeypatch.setattr(queue.approvals, 'require_stage2_review', lambda *_a: None)
 
     def next_action(_base, _sid, *, code):
         if live['finished']:

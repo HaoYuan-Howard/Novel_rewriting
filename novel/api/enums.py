@@ -69,7 +69,6 @@ _CONSUMED: dict[str, str] = {
 #: 那样新加一个标量会被**静默**挡住，而静默正是本模块要防的方向。
 _WITHHELD: dict[str, str] = {
     'SOURCE_BLURB_EVIDENCE_POLICY': '源文案审阅的后端身份规则；前端只展示证据来源和 typed 结论，不选择或重算策略',
-    'STAGE2_CHARACTER_REVIEW_KINDS': '静态字段的派修归属只由后端裁决；前端显示返回的 owner 和可执行动作',
     'WORKFLOW_ROLE_CONTRACT': '工作流执行身份；界面只显示后端工作单元读模型',
     'WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS': '预算已由持久工作单元账折叠，前端不自行重算',
     'WORK_UNIT_MAX_DELIVERY_ATTEMPTS': '网络尝试上限只由工作单元底座执行，前端显示后端预算投影',
@@ -78,17 +77,14 @@ _WITHHELD: dict[str, str] = {
     'LEGACY_STAGE2_COMMANDER_MAX_SEATS': '冻结旧席账的历史预算，不参与新工作单元',
     'LEGACY_STAGE2_COMMANDER_MAX_EDIT_SEAT': '冻结旧席账的历史编辑上限',
     'LEGACY_COMMANDER_REVIEWER_MAX_CORRECTIONS': '冻结旧席账的历史纠错上限',
+    'STAGE2_LEGACY_REVALIDATE_ACTOR': (
+        '旧盘 reviewed-edit 存量 INVALID 机械复验的固定审计身份；'
+        '是后端执行许可的逐字比对值，不是前端取值面'),
+    'STAGE2_LEGACY_REVALIDATE_REASON': (
+        '同上的固定复验理由；只写进审计与执行许可，不是前端取值面'),
     'STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES': (
         '只随 Commander immutable submission option 与 Stage5 writer 固定 prompt 下发；'
         '当前浏览器没有该 delegated rewrite 表单，单独发布会制造未接线的第二消费面'),
-    'STAGE2_LEGACY_REVALIDATE_ACTOR': (
-        'legacy reviewed INVALID 自动提升的后端审计凭据；只由状态机生成并由'
-        '确定性 Executor 原样重放，前端不得选择或改写 actor'),
-    'STAGE2_LEGACY_REVALIDATE_REASON': (
-        '同上：它是固定 provenance reason，不是 UI 文案或可选恢复策略'),
-    'STAGE2_COMMANDER_SEAT_PURPOSES': (
-        'Stage2 Commander 席位语义只由 RunSupervisor 与持久席位账消费；页面只呈现'
-        '后端已判定的 blocker/状态，另发枚举会让前端自算“还剩几席”'),
     'COMMANDER_ATTEMPT_KINDS': (
         '同席内 launch/resume 只写进席位账与 session 审计；不是 HTTP/UI 取值面'),
     'COMMANDER_FIRST_EVENT_TIMEOUT_SECONDS': '调用层超时是驱动配置，不是前端读数',
@@ -154,16 +150,20 @@ _WITHHELD: dict[str, str] = {
         '发射点 → owner 的闭合表。它是判据域归类，不是前端选项；'
         '发过去等于把路由判定复制到浏览器'),
     'GLOBAL_REVIEW_DISCLOSURE_KINDS': (
-        '它是**分类表**，不是取值面。发过去等于请前端自己判「这一项挡不挡 Stage4」，'
-        '而那条判定已经随行下发在 `GlobalReviewRow.effect` 上了（`R-11.4`）。'
-        '两处并存的下场是：某天新增一类高影响事实，界面仍按旧表画成「只披露」，'
-        '而没有任何东西会出声'),
+        '它是**分类表**，不是取值面。Stage2 语义审阅退役后只剩旧盘 reviewed-edit '
+        '恢复路径在消费；现役 API 不再有 GlobalReviewRow，发出去只会诱导前端自判'),
+    'GLOBAL_REVIEW_KINDS': (
+        '退役 Global 审阅的 kind 关闭式取值域；只由旧盘 reviewed-edit 恢复路径与'
+        '冻结历史账解码消费，不是现役前端选项'),
+    'GLOBAL_REVIEW_EFFECTS': (
+        '退役审阅对交付效果的分类词；现役只按交付披露输出，不再有审阅效果面'),
+    'GLOBAL_REVIEW_GENERATION_DISPOSITIONS': (
+        '退役审阅的生成处置取值域；只由旧盘 reviewed-edit 恢复路径消费，不是前端选项'),
     'GLOBAL_REVIEW_GENERATION_IMPACTS': (
-        '生成影响是后端复核路由的关闭式取值域，不是前端选项；每条工作包/视图行已经'
-        '携服务端派生的 `generation_impact`，另发枚举会诱导浏览器自行重判'),
+        '生成影响是退役审阅复核路由的关闭式取值域，只余旧盘恢复路径消费，不是前端选项'),
     'GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND': (
-        '它是 kind → 生成处置的权威分类表；只由后端生成工作包、隔离视图与闸门消费。'
-        '随 `/api/enums` 发布会复制判官，并与逐行 `generation_impact` 形成可漂移双落点'),
+        '它是 kind → 生成处置的历史分类表；Stage2 语义审阅退役后只由旧盘 reviewed-edit '
+        '恢复路径消费，不再进入现役工作包或闸门'),
     'LEGACY_STAGE5_MODES': '只用来识别并拒绝旧 deep/shallow 盘面，不是现役选项',
     # ── 分章（stage0 / stage1）的判据阈值与剥壳正则 ──
     'NONBODY_LEAD_STRIP': '正则。发过去等于请前端自己剥壳，而剥出来的 core 是所有长度阈值的输入',
@@ -234,8 +234,6 @@ _WITHHELD: dict[str, str] = {
     'LEGACY_V4_DESIGN_REVIEW_CONTRACT': '仅供后端识别旧审阅，当前界面消费后端有效性判定，不自行比版本',
     'FROZEN_V6_DESIGN_REVIEW_CONTRACT': (
         '仅供后端无损解码不可变历史决定；现役不开放旧 Blueprint 兼容消费或恢复'),
-    'BLUEPRINT_REVIEW_CONTRACT': (
-        'Stage2 Blueprint workpack 已随包携带此显式版本；UI 只回传 opaque token'),
     'STAGE6_REVIEW_CONTRACT': (
         'Stage6 workpack 已随包携带；UI 只回传 opaque token，不自行重算身份'),
     'STAGE7_REVIEW_CONTRACT': (

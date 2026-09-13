@@ -61,7 +61,7 @@ export function GateBar({
       ? resolved.some((a) => a?.writes_disk)
       : undefined
 
-  // 分相 continuation 都由服务端下发：s1 是 global → blueprint，s2 是 Stage4A → B。
+  // 分相 continuation 都由服务端下发：s1 是 global → blueprint（骨架由统一机械准入衔接）。
   // 前一相落盘后 gate 已 done，但仍可能有唯一的下一相。此时按钮是“继续下一步”，
   // 不能因 gate.done 被锁死，也不能再次调用 approveGate 冒充第二次人工批准。
   const continueNext = view.done && spawns.length === 1

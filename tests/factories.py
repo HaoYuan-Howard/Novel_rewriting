@@ -9,10 +9,8 @@ from contracts.invariants import HOOK_RECIPE, HOOK_SLOTS
 from contracts.schema.report import finding
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage6_prepare import PrepareState
-from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from novel.core.measure import body_style_metrics, measure_body
-from novel.quality.global_review import build_review
 from novel.stages.stage5.measure import Book
 
 
@@ -21,24 +19,6 @@ def missing_prepare_state() -> PrepareState:
     return PrepareState(state='missing', reason='测试样例尚未运行文案准备',
         subject_sha256=None, review_token=None, prepare=None, review=None,
         pending_commit=False)
-
-
-def approved_global_review(grounding: Any) -> GlobalReview:
-    """用生产 review builder 铸造测试下游所需的 current 全 PASS 前置事实。"""
-    payload = (
-        grounding.model_dump(by_alias=True, mode='json')
-        if hasattr(grounding, 'model_dump') else grounding
-    )
-    expected = build_review(payload)
-    return expected.model_copy(update={'items': [
-        item.model_copy(update={
-            'state': 'PASS',
-            'actor': 'test-reviewer',
-            'decided_at': '2026-09-02T00:00:00+00:00',
-            'reason': '测试下游的显式 current Stage2 前置事实',
-        })
-        for item in expected.items
-    ]})
 
 
 def stage5_book() -> Book:
@@ -80,7 +60,7 @@ def stage5_book() -> Book:
         }],
         'states': [{'state_ref': 'st01_01', 'content': '沈青与周衡暂不对外声张账册异常。',
                     'global_ref': None, 'modality': 'world', 'holder': None}],
-        'constraints': [], 'restricted_subject_refs': [], 'knowledge_events': [],
+        'constraints': [], 'restricted_subject_refs': [],
         'global_subjects': [
             {'subject_ref': {'kind': 'setting', 'ref': 'subject_' + '1' * 24}, 'value': {'content': '架空旧城'},
              'allowed_slots': ['s01'], 'state_permissions': []},
@@ -97,7 +77,7 @@ def stage5_book() -> Book:
                                         'present': ['actor_' + '1' * 24, 'actor_' + '2' * 24]}]}],
             'context_beat_refs': [], 'turn_beat_ref': 'b01_01',
             'state_events': [{'state_ref': 'st01_01', 'endpoint': 'established'}],
-            'knowledge_event_refs': [], 'constraint_refs': [],
+            'constraint_refs': [],
         }],
         'characters': [{'actor_ref': 'actor_' + '1' * 24, 'display_name': character['display_name'],
                         'surfaces': ['沈青'], 'role': character['role'],

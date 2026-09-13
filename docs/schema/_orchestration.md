@@ -522,16 +522,12 @@ Supervisor 在仍有预算且可修复时把完整紧凑包与确定性拒因交
 与 admission 均关闭式生效，surface 自变不能重开预算或制造循环。已经 `pipeline_complete` 而
 delivery 终验未闭合时只运行`novel/orchestrator/delivery.py` 的确定性终验，不追加无关模型 turn；next 自身不可读则降 unknown。
 
-当前性能取证不从日志文案猜：`tools/workflow_metrics.py --run-id` 输出
-`novel-workflow-metrics-v3`，以同一 `performance` 聚合器分别给出 Stage2/4/5 E/C、
-内容轮与网络尝试、缓存、历史采用和区间并集。Stage2 辅助段计入人物 producer，展示现役
-两位 Commander 与三份正式载体，不再使用预审重叠或旧两节点墙钟。
-`performance.work_unit_ledger_versions` 显示观察到的运行账版本。统计工具只读解析冻结基线 v1，
-现役 v2 仍按当前 schema 校验；混合版本或损坏账的内容阶段保持未知，不计算对应节约。
-该统计面不迁移旧账，不提供生产恢复、额度或写入权限。
-真实验收只由 `tools/workflow_pairs.py` 按 `docs/OPERATIONS.md` 的性能配对执行协议 的三书九组
-清单、冻结配置与具名质量收据收口；失败、未完成和未知保留在分母。旧五轮工具只消费既存
-v2 历史报告，不能接收当前报告或恢复其已退出活动目标的质量/速度结论。
+当前性能取证工具（`tools/workflow_metrics.py` 与 `tools/workflow_pairs.py`）已随 Stage2 语义
+审阅退役（2026-09，工作流 v7）：其读数主体是 Stage2 Commander 工作单元与审阅盘面，v7 不再
+存在该盘面。在 v7 上重建只读读数工具前，性能配对验收停在 `docs/REQUIREMENTS.md::TODO-49`
+的未验事项；`ledger`/`llm_audit.jsonl` 的 `run_id` 与 `parent_run_id` 归属纪律继续有效——
+精确 run 的成本只按显式身份筛，同 sid 旧 run、缺身份旧行与别的 run 全部排除，
+不能按时间窗口或当前 artifact 倒推归属。
 
 ---
 
@@ -1014,12 +1010,11 @@ legacy / ungrouped；成本汇总不得用时间窗口把它猜进某个新 run�
 
 ledger 与 `llm_audit.jsonl` 的 `run_id` 是 checkpoint/adoption 共用的 producer 身份；v2 AgentRun
 内它等于当前 epoch 的 `session_run_id`。当外层 AgentRun 与 producer 不同时，新行另带显式
-`parent_run_id`，直接 job 则省略这格并退回自身 `run_id`。`tools/workflow_metrics.py --run-id <RUN_ID>`
-按这条显式 parent 投影筛 ledger/audit，并按逐字相等的 `run_id` 筛 `agent_progress.jsonl`；同 sid 的
+`parent_run_id`，直接 job 则省略这格并退回自身 `run_id`。按 run 取证的任何工具都必须
+沿这条显式 parent 投影筛 ledger/audit，并按逐字相等的 `run_id` 筛 `agent_progress.jsonl`；同 sid 的
 旧 run、缺身份的旧行与别的 run 全部排除，不能按时间窗口或当前 artifact 倒推归属。产物、人审与
-结构面仍是当前盘面快照，可在同一报告中展示，但它们不携 `run_id`，不得反向加入目标 run 的代码
-身份；报告顶层必须回显所选 `run_id`。不带 `--run-id` 才是跨历史汇总，两种口径不得混称一次
-AgentRun 的稳定性读数。
+结构面仍是当前盘面快照，不携 `run_id`，不得反向加入目标 run 的代码
+身份。不带 run 过滤的跨历史汇总与单次 run 口径不得混称。
 
 `human_actions.jsonl` 当前只写 `HumanEditAction` wire v1 的 `prepared → committed`
 两相行：`request_id` 绑 preview 意图，`action_id` 再绑预期结果 SHA；其余字段是

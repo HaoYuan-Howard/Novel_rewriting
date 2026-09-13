@@ -10,10 +10,9 @@ import { Rail } from './Rail'
 import type { ApprovalDoc } from '@/types/approvals'
 
 const pending: ApprovalDoc = {
-  v: 8, prepare: missingPrepareState(),
+  v: 9, prepare: missingPrepareState(),
   sid: 'book-1',
-  gate: { s0: false, s1: false, s2: false, s4: false, s5: false, s6: false, s7: false },
-  seen: { read: false, global: false },
+  gate: { s0: false, s1: false, s4: false, s5: false, s6: false, s7: false },
   writing: false,
   design_review: {
     state: 'unavailable', candidate_sha256: null, aggregate_subject_sha256: null,
@@ -50,8 +49,7 @@ function bookWithStages(
 
 const current: ApprovalDoc = {
   ...pending,
-  gate: { s0: true, s1: true, s2: true, s4: true, s5: true, s6: true, s7: true },
-  seen: { read: true, global: true },
+  gate: { s0: true, s1: true, s4: true, s5: true, s6: true, s7: true },
   writing: true,
 }
 

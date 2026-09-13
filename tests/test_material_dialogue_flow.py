@@ -57,7 +57,7 @@ def _entry():
         'delivery': 'scene', 'transition': 'start' if index == 1 else 'continue',
         'budget_chars': 100, 'deliveries': [{'beat_ref': f'b01_{index:02d}',
             'presentation_instruction': None, 'stages': []}], 'context_beat_refs': [],
-        'turn_beat_ref': f'b01_{index:02d}', 'state_events': [], 'knowledge_event_refs': [],
+        'turn_beat_ref': f'b01_{index:02d}', 'state_events': [],
         'constraint_refs': [f'c01_{index:02d}'],
     } for index in (1, 2)]
     for name in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):

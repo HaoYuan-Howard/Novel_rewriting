@@ -477,9 +477,8 @@ artifact、不再由节点生成，也不参与完成度、Review freshness、�
 
 ## 六、判据注册表
 
-当前注册表共 **53 条**：**7 hard、26 info、13 metric、7 unver**。
+当前注册表共 **52 条**：**7 hard、26 info、13 metric、6 unver**。
 
-`knowledge_position_unver` 提供已登记逐场知识许可的成稿位置线索；未命中不能证明没有改写式泄漏。
 repair 分桶为 **12 UNIQUE、12 FREE、28 NONE**；repair 不是 severity，只有 UNIQUE 才能在
 `unresolved_rounds < 2` 时进入付费 `--revise`，FREE / NONE 不得被包装成自动修复。
 
@@ -562,7 +561,7 @@ repair 分桶为 **12 UNIQUE、12 FREE、28 NONE**；repair 不是 severity，�
 旧双臂盘面曾有 31 章（deep 11 / shallow 20），并留下逐章带极值 0.814 / 1.206、全书比值
 0.949 / 1.022 / 0.980、旧规则命中与对白差异等读数。这些数字只用于解释阈值来历和识别
 判据退化，是 **v1 旧布局历史基线**；它们不是 canonical v2 current-schema corpus，不能用于
-宣称现役 Stage5 通过率、当前 HARD“0 命中”或当前 53 条判据的质量结论。
+宣称现役 Stage5 通过率、当前 HARD“0 命中”或当前 52 条判据的质量结论。
 
 当前判据、完整剧情材料与写作入口以本批实际测试为准；整批非 corpus 与真实语料验收仍待完成。
 现役写作材料按场景事实、明确对白任务和披露许可组织，

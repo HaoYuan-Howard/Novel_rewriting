@@ -18,7 +18,7 @@ from contracts.schema.stage4 import (
 )
 from contracts.artifacts import (
     STAGE2_CHARACTERS, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
-    STAGE2_KNOWLEDGE_LINKS, STAGE4_EVIDENCE_BINDING, STAGE4_WRITER_CONTEXT,
+    STAGE4_EVIDENCE_BINDING, STAGE4_WRITER_CONTEXT,
 )
 from novel.orchestrator import approvals
 from novel.orchestrator import queue as Q
@@ -178,20 +178,9 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     )
     blueprint_store.write(STAGE2_CHAPTER_BLUEPRINTS, blueprint_artifact)
 
-    # 本组只测审批来源身份；旁路的是既有 Core/KL 语义审阅前置，仍读取真实当前 typed 文件。
-    from novel.stages.stage2 import global_review, grounding as grounding_io, knowledge_links
-    from tests.plot_fixtures import links
-    from contracts.schema.knowledge_links import KnowledgeLinks, KnowledgeLinksProvenance
-    link_ctx = RunContext.open(tmp_path, SID, 'stage2.blueprint', paid=False, write_ledger=False)
-    link_store = ArtifactStore(link_ctx)
-    link_store.read(MainText, MAIN_REL)
-    link_store.read(ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)
-    association = KnowledgeLinks.model_validate({**links(), '_provenance': link_ctx.free_provenance(
-        KnowledgeLinksProvenance, decision_sha256='5' * 64)})
-    link_store.write(STAGE2_KNOWLEDGE_LINKS, association)
-    monkeypatch.setattr(global_review, 'generation_grounding', grounding_io.read)
-    monkeypatch.setattr(knowledge_links, 'require_current',
-        lambda _ctx: ArtifactStore(_ctx).read(KnowledgeLinks, STAGE2_KNOWLEDGE_LINKS))
+    # Stage2 语义审阅（Core/KL）已退役；写作证明只绑定机械产物，语义结论
+    # 以 ``unver`` 披露常驻，不再有可旁路的语义审阅前置。
+    association = None
 
     plan_ctx = RunContext.open(
         tmp_path, SID, 'stage4.plan', paid=True, write_ledger=False)
@@ -212,11 +201,11 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     for model, rel in ((MainText, MAIN_REL), (CharacterRegistry, STAGE2_CHARACTERS),
                        (KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING),
                        (ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS),
-                       (KnowledgeLinks, STAGE2_KNOWLEDGE_LINKS), (PlanChapters, PLAN_REL)):
+                       (PlanChapters, PLAN_REL)):
         context_store.read(model, rel)
     payload = build_writer_context(plan_artifact.model_dump(mode='json'),
         grounding.model_dump(mode='json'), blueprint_artifact.model_dump(mode='json'),
-        main.model_dump(mode='json'), knowledge_links=association.model_dump(mode='json'),
+        main.model_dump(mode='json'),
         characters=registry.model_dump(mode='json')).ctx
     context_store.write(STAGE4_WRITER_CONTEXT, WriterContext.model_validate({**payload,
         '_provenance': context_ctx.free_provenance(CtxProvenance)}))
@@ -276,8 +265,8 @@ def test_current_writing_proof_binds_stage1_plan_and_context_without_s3(
 
     raw = json.loads(approvals._path(base, SID).read_text(encoding='utf-8'))
     public = approvals.get(base, SID)
-    assert raw['v'] == 8 and public.v == 8
-    assert set(raw['gate']) == {'s0', 's1', 's2', 's4', 's5', 's6', 's7'}
+    assert raw['v'] == 9 and public.v == 9
+    assert set(raw['gate']) == {'s0', 's1', 's4', 's5', 's6', 's7'}
     assert set(raw['writing_proof']['artifacts']) == {
         MAIN_REL, PLAN_REL, STAGE4_WRITER_CONTEXT}
     assert raw['writing_proof']['decision_sha256']
@@ -308,10 +297,7 @@ def test_retired_v6_with_current_typed_histories_is_not_migrated(
     assert before.structure_decision is not None
     assert before.writing_decision is not None
     payload = before.model_dump(
-        mode='json',
-        exclude={'closure_history', 'closure_decision', 'seen_subjects',
-                 'stage2_review_history', 'stage2_reviews',
-                 'stage2_rework_completed', 'stage2_patch_receipts', 'stage2_blueprint_scope'})
+        mode='json', exclude={'closure_history', 'closure_decision'})
     payload['v'] = 6
     path = approvals._path(base, SID)
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
@@ -485,14 +471,18 @@ def test_v1_or_corrupt_service_record_never_authorizes_queue(
     _queue_stage5(monkeypatch)
     original = path.read_bytes()
     todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
-    assert todo == [] and blocked[0].waiting_on == Q.WAITING_ON_INBOX
-    assert blocked[0].steps == [] and '审批记录损坏' in blocked[0].why
+    # 损坏的 v1 记录不再被读成有效审批；队列不授权 stage5 写作，
+    # 而是停在现役的写作审批阻塞面（原「审批记录损坏」专用标签已随
+    # 旧读路退役，拒绝职责由 approvals 读面自身承担）。
+    assert todo == []
+    assert blocked[0].waiting_on == Q.WAITING_ON_WRITING_APPROVAL
+    assert blocked[0].steps == []
     assert path.read_bytes() == original
 
     path.write_text('{broken', encoding='utf-8')
     assert not approvals.has_record(base, SID)
     todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
-    assert todo == [] and blocked[0].waiting_on == Q.WAITING_ON_INBOX
+    assert todo == [] and blocked[0].waiting_on == Q.WAITING_ON_WRITING_APPROVAL
     assert blocked[0].steps == [] and path.read_text(encoding='utf-8') == '{broken'
 
 

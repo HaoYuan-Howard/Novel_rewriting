@@ -11,7 +11,6 @@ import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { cx } from '@/lib/cx'
 import { DesignReviewPanel } from './DesignReviewPanel'
 import { StructureApprovalPanel } from './StructureApprovalPanel'
-import { BlueprintRefinementPanel } from './BlueprintRefinementPanel'
 import { useStage4Screen, type PlanSceneView } from './useStage4Screen'
 
 /**
@@ -197,7 +196,6 @@ export function Stage4Screen() {
         </QueryStates>
       </ScreenFrame>
       <DesignReviewPanel />
-      <BlueprintRefinementPanel key={vm.sid + ':' + vm.ordinal} sid={vm.sid} ordinal={vm.ordinal} />
       {vm.query.data ? (
         <StructureApprovalPanel
           rows={vm.structureRows}
@@ -233,7 +231,6 @@ function PlanSceneRow({ scene, selected, onClick }: {
     {selected ? <div className="flex flex-col gap-6 text-sm2">
       <p>明确端点：{scene.endpoints.length ? scene.endpoints.join('；') : '本场没有登记端点'}</p>
       <p>状态变化：{scene.stateEvents === null ? '上下文未生成' : JSON.stringify(scene.stateEvents)}</p>
-      <p>知识许可：{scene.knowledge === null ? '上下文未生成' : scene.knowledge.join('、') || '无登记项'}</p>
       <p>执行约束：{scene.constraints === null ? '上下文未生成' : scene.constraints.join('、') || '无登记项'}</p>
     </div> : null}
   </div>

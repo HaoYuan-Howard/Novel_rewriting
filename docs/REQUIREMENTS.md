@@ -15,21 +15,25 @@
 ### TODO-51 · Stage2 联合分析、独立产物与分阶段验收
 
 按用户 2026-09-12 最终计划实施；本条的新授权覆盖 TODO-49 中暂缓本书重构后验收的旧停点。
-正式契约分别在 `docs/schema/characters.md`、`docs/schema/stage2.md`、
-`docs/schema/stage2_review.md`；人物登记与 Global 保持各自证据、版本、编辑、失效及恢复。
+正式契约分别在 `docs/schema/characters.md`、`docs/schema/stage2.md`；人物登记与 Global 保持
+各自证据、版本、编辑、失效及恢复。原 `docs/schema/stage2_review.md` 已随 Stage2 语义审阅
+退役删除（2026-09），Stage2 下游前置统一由机械准入承接。
 
 **2026-09-13 验收范围更新**：用户将本轮真书验收收在 `stage2.blueprint`；完成原文核对、
-免费订正、章级及跨章审阅后停止，不再推进 Stage4～7 真书或付费调用。Gate A～C 的代码仍须
-完整闭合，Stage4～7 以工程消费者、恢复、API/UI 与回归验证；不据此声称真书成稿或交付质量通过。
+免费订正与统一机械准入核验后停止，不再推进 Stage4～7 真书或付费调用。Stage2 语义审阅
+（Global 逐项审阅、章审与跨章复核）已同批退役，语义未审以报告 unver 行与交付披露承接。
+Gate A～C 的代码仍须完整闭合，Stage4～7 以工程消费者、恢复、API/UI 与回归验证；
+不据此声称真书成稿或交付质量通过。
 
 - [x] Gate A：一次 Analyze Executor、两个独立编译器、Characters v2 / Global v7、统一
       Global Commander；闭合 CLI/API、待审、共享首抽统计、typed 编辑及已购回答/半边失败恢复。
       已在 `f5a95aa` 完成指定小说原文核验及免费 typed 恢复，接受署名 `codex`。
       C1 误接受、C2～C4 格式拒绝原样保留；不声明模型正常路径自动通过。
       冻结证据为 `E:\NovelAcceptance_Stage2CoreV2\reports\gate-a-f5a95aa.json`。
-- [ ] Gate B：Blueprint / KnowledgeLinks / Stage4–5 接动态状态、稀疏知情和
-      ActorRef/ActorBinding；按 BP v10 / KnowledgeLinks v3 / WriterContext v9，直接检查
-      工程 Writer 请求中的未来身份、关系、别名映射及同章揭示；真书只闭合 Blueprint 原文审阅。
+- [ ] Gate B：Blueprint / Stage4–5 接动态状态和 ActorRef/ActorBinding；按 BP v10 /
+      BlindCandidate v6 / EvidenceBinding v6 / WriterContext v10，直接检查工程 Writer
+      请求中的未来身份、关系与别名映射；KnowledgeLinks 与同章揭示载体已随语义审阅退役，
+      不再检查；真书只闭合 Blueprint 机械准入与原文核对，语义未审随交付披露。
 - [ ] Gate C：Stage6 Prepare 独立 E/C 与免费编辑恢复，Stage7 改名、API/UI、下载及重启读回。
       验证 Prepare 五载体 v1、Hook v4、HookSemanticReview v3、NameMap v3，以及显式
       V5→V6 离线过渡保留 Stage4–5 产物、审批、profiles 和累计用量。
@@ -67,16 +71,19 @@ Executor / Commander 固定 `claude-code-glm / glm-5.3-flash[1M] / high`，已�
       记录请求体、用量、耗时、调用/返修与 ledger 成本；工程合成测试不代替真实模型验收。
 
 
-已接入 Analyze 联合首抽、独立人物/知识修订与 Blueprint producer、两类 Stage2 Commander、Stage4 实际依赖与历史采用、义务继承、
-知识关联及披露边界、Stage5 紧凑整章任务书、不可变人工追加额度、原 profiles 续跑和指标 v3。
+已接入 Analyze 联合首抽、独立人物/知识修订与 Blueprint producer、统一机械准入、Stage4 实际依赖与历史采用、
+Stage5 紧凑整章任务书、不可变人工追加额度与原 profiles 续跑。
+原 Stage2 两类 Commander、义务继承与知识关联及披露边界已随语义审阅退役（2026-09）；
+旧 `tools/workflow_metrics.py`、`tools/workflow_pairs.py` 与 `tools/stage2_acceptance.py`
+读数/配对工具同批退役，其读数主体是已退役的 Stage2 Commander 盘面（见 `docs/OPERATIONS.md`）。
 旧版兼容通道已按授权退役。这些工程能力仍须完成以下验收，不能视为性能目标已经通过：
 
-- [ ] 完成《夫君的报恩》单书真实消费者链：Blueprint Commander → Stage2 免费收口 → Stage4～7 → 下载 → 服务重启读取。
+- [ ] 完成《夫君的报恩》单书真实消费者链：Stage2 统一机械准入 → Stage4～7 → 下载 → 服务重启读取。
 - [ ] 真书核 Stage4 局部/多来源/全采用、无待审免费提交及回答/决定/prepared/正式写回中断恢复；19 章只改第 17 章时无关章零新增请求/审阅，第 18 章实际边界变化正确失效。
-- [ ] Plan 不变但 Blueprint 证据改变、候选从唯一变多义时，旧决定/绑定失效；修改或删除问题仍完整复审，来源损坏保持 unknown。
-- [ ] 真书核人物/知识三 owner 派修、规则变化不重抽无关 Blueprint、场景重排披露边界、对白语义与必要字面例外。
-- [ ] 冻结三书样例、两臂干净代码/源 hash/配置/输出及人工质量收据，按 OPERATIONS 完成九组配对；首轮、返工、恢复分开。
-- [ ] 逐节点完成 4 对 6/8 并发实验，验证每书/供应商总限制、失败、重试与 token 不退化。
+- [ ] Plan 不变但 Blueprint 证据改变、候选从唯一变多义时，旧决定/绑定失效；上游修订后按统一机械准入与 freshness 正确失效。
+- [ ] 真书核人物/知识/蓝图各 owner 的编辑与复验、规则变化不重抽无关 Blueprint、场景重排披露边界、对白语义与必要字面例外。
+- [ ] 冻结三书样例、两臂干净代码/源 hash/配置/输出及人工质量收据，完成九组配对；首轮、返工、恢复分开。旧读数/配对工具已随 Stage2 语义审阅退役，先在 v7 节点面重建只读读数工具再执行。
+- [ ] 逐节点完成 4 对 6/8 并发实验，验证每书/供应商总限制、失败、重试与 token 不退化；依赖上项重建的读数工具。
 - [ ] 完成追加额度、原配置续跑及重启累计账的真实链路；无进展或 unknown 不因追加而解除。
 - [ ] 与 TODO-21/28/31 同批闭合 current-schema corpus、真实 API fixture 和产物形状验收。
 - [ ] 最终冻结批次完成根 AGENTS 规定的回归及前端门槛；备份 main 后按已授权方案用验收通过的 worktree 替换。
@@ -163,13 +170,14 @@ B 只绑定证据，不静默改变 A 的场景顺序、事实分组、首尾锚
 
 ### TODO-31 · 下一次新 base 同批收紧 Stage4→5 盘上契约
 
-**当前状态**：最小主体的前一批基线已通过默认非 corpus 回归；本轮 WriterContext v9 重构仍须按最终改动集合重新验收，
-旧结果不作为本轮通过证明。WriterContext v9 保留章级唯一剧情目录、opaque 人物呈现与逐场许可，不重复保存同号来源、
+**当前状态**：最小主体的前一批基线已通过默认非 corpus 回归；本轮 WriterContext v10 重构仍须按最终改动集合重新验收，
+旧结果不作为本轮通过证明。WriterContext v10 保留章级唯一剧情目录、opaque 人物呈现与逐场状态许可，不重复保存同号来源、
 源字数和预算副本；API 从当前场景与 Stage1 现场派生。
 逐章人物名单被写手、Stage6/7 实际读取，因此保留。Chapter v3、Review v3、Rejected v2、
 TrimAudit/TrimResolution v3 均只保存承重主体、必要历史基线或精确绑定证据。
 这些 shape break 与 TODO-49 / TODO-51 同批验收；不原地迁移或补签旧业务产物。新根使用当前
-manifest，满足已登记来源与下游空证明的旧根仅可走显式离线 manifest 过渡。
+WorkflowManifestV7；V6 及更早旧根不再迁移，只配对冻结旧代码读取，已登记的 V4→V5、V5→V6
+离线过渡按冻结来源代码显式执行。
 
 **验收**：相关 shape break 均登记 current version 与 `_SHAPE_BREAKS`；不迁移、不手补旧产物；
 Stage5 写作、recheck/revalidate、Review、trim、s5 审批及 Stage6/7 只读最小主体；删字段前后 prompt、

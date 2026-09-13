@@ -53,7 +53,7 @@ from contracts.invariants import (
     LEGACY_STAGE2_COMMANDER_SEAT_PURPOSES as STAGE2_COMMANDER_SEAT_PURPOSES,
 )
 from contracts.schema.base import FrozenModel, StrictModel
-from contracts.schema.plot_review import PlotReviewProgress, BlueprintRunProgress
+from contracts.schema.plot_review import BlueprintRunProgress
 from contracts.schema.common import Sha256
 
 #: 枚举一律从 `contracts.invariants` 取，不在本文件重抄（同 `common.py` / `report.py`）。
@@ -767,7 +767,6 @@ class WorkUnitProcessingView(StrictModel):
 
 
 class WorkUnitReviewProgress(StrictModel):
-    plot_progress: PlotReviewProgress | None = None
     subject_sha256: Sha256
     total: int = Field(ge=0)
     pending: int = Field(ge=0)

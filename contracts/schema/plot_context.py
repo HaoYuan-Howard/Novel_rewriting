@@ -1,10 +1,9 @@
-"""章级 WriterVisibleView：剧情只存一份，场景和知识许可均通过引用使用。"""
+"""章级 WriterVisibleView：剧情只存一份，场景与状态许可均通过引用使用。"""
 from __future__ import annotations
 
 from typing import Annotated, Literal, Self
 from pydantic import Field, JsonValue, model_validator
 from contracts.schema.base import StrictModel
-from contracts.schema.knowledge_links import KnowledgeLinkKind
 from contracts.invariants import STRUCTURAL_ROLES, DELIVERY_MODES, TEMPORAL_LINKS, TIME_LAYERS
 
 ActorToken = Annotated[str, Field(pattern=r'^actor_[0-9a-f]{24}$')]
@@ -150,18 +149,6 @@ class WriterStateEvent(StrictModel):
     endpoint: Literal['established', 'ended']
 
 
-class WriterKnowledgeEvent(StrictModel):
-    event_ref: str = Field(pattern=r'^event_[0-9a-f]{24}$')
-    kind: KnowledgeLinkKind
-    subject_ref: WriterSubjectRef
-    audience: WriterAudience | None
-    # 仅在既有披露端点允许断言这些表面身份是同一人；不会合并目录身份。
-    identity_actors: list[ActorToken] = Field(default_factory=list)
-    timing: Literal['at_entry', 'at_slot']
-    slot: str | None
-    allowed_slots: list[str] = Field(min_length=1)
-
-
 class WriterScene(StrictModel):
     slot: str = Field(pattern=r'^s\d{2,4}$')
     purpose: str = Field(min_length=1)
@@ -173,7 +160,6 @@ class WriterScene(StrictModel):
     context_beat_refs: list[str]
     turn_beat_ref: str
     state_events: list[WriterStateEvent]
-    knowledge_event_refs: list[str]
     constraint_refs: list[str]
 
     @model_validator(mode='after')

@@ -7,12 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from contracts.schema.api import BlueprintSeenRequest, StructureApprovalRequest
+from contracts.schema.api import StructureApprovalRequest
 from contracts.schema.stage7 import ApprovedNameMap
 from novel.errors import ApprovalRequired, GateBlocked, HumanEditProtected, UpstreamMissing
 from novel.orchestrator import approvals, jobs, state
 from novel.stages.stage7 import rename
-from novel.views.stage2 import blueprint_review_workpack
 from tests import corpus, sandbox
 
 _HAS_APPROVAL_CORPUS = (
@@ -76,13 +75,9 @@ def _approvable_book(rel: str) -> str:
 
 
 def _box() -> sandbox.Sandbox:
-    # ⚠ `sandbox.edits_of(...)`：人工决策集是**必要的可选项**——见 `tests/sandbox.py::HUMAN_EDITS`。
-    #   缺 `stage2/global_edit.json` ⇒ grounding 判 `unknown/ghost` ⇒ `_proof_for_seen('global')`
-    #   抛 `ApprovalRequired` ⇒ `s2` 填不出，再级联堵死 `s4`→`s7`。
     book = _approvable_book('stage4/plan_chapters.json')
     box = sandbox.Sandbox(book, rels=BASE_RELS + sandbox.edits_of(book))
     _copy_text(box, 'stage0/clean_text.txt')
-    sandbox.decide_global_review(box)
     return box
 
 
@@ -95,7 +90,6 @@ def _full_box() -> sandbox.Sandbox:
     }))
     box = sandbox.Sandbox(book, rels=rels)
     _copy_text(box, 'stage0/clean_text.txt')
-    sandbox.decide_global_review(box)
     return box
 
 
@@ -113,17 +107,10 @@ def _touch(box: sandbox.Sandbox, rel: str) -> None:
 
 
 def _approve_for_writing(box: sandbox.Sandbox) -> None:
+    # Stage2 已读/接受与 s2 gate 已随语义审阅退役；写作前提只剩
+    # s0/s1 通用闸与逐章 typed 结构裁决。
     approvals.approve_gate(box.root, box.sid, 's0')
     approvals.approve_gate(box.root, box.sid, 's1')
-    approvals.mark_seen(box.root, box.sid, 'global')
-    pack = blueprint_review_workpack(box.root, box.sid)
-    approvals.mark_seen(
-        box.root,
-        box.sid,
-        'read',
-        blueprint_subject=BlueprintSeenRequest(review_token=pack.review_token),
-    )
-    approvals.approve_gate(box.root, box.sid, 's2')
     subject, chapters = approvals._current_structure_subject_and_chapters(box.dir)
     approvals.approve_structure(
         box.root,
@@ -257,7 +244,7 @@ def test_get_exposes_public_v7_without_retired_depth_and_is_read_only():
     box = _box()
     try:
         doc = approvals.get(box.root, box.sid)
-        assert doc.v == 8
+        assert doc.v == 9
         assert 'deep' not in doc.model_dump() and 'deep_proof' not in doc.model_dump()
         assert doc.writing is False
         assert not (box.root / '_service').exists(), 'GET must not persist service state'
@@ -271,7 +258,7 @@ def test_get_exposes_public_v7_without_retired_depth_and_is_read_only():
         #   即断言一条产品**明说不该出现**的建议（`docs/LESSONS.md` 第 21 条第二形状）。
         #   ⇒ 改成守「提议出来的每一条，生产的 resume 判定都同意它真的要跑」，
         #   并守取值面齐全——**调用生产那一个落点，不重拼一份**。
-        assert set(doc.spawns) == {'s1', 's2', 's5', 's6', 's7'}
+        assert set(doc.spawns) == {'s1', 's4', 's5', 's6', 's7'}
         overview = state.overview(box.root, box.sid)
         for gate, actions in doc.spawns.items():
             for action in actions:
@@ -283,7 +270,7 @@ def test_get_exposes_public_v7_without_retired_depth_and_is_read_only():
 
 
 @_corpus_test
-def test_writing_approval_is_independent_and_persists_as_internal_v8():
+def test_writing_approval_is_independent_and_persists_as_internal_v9():
     box = _box()
     try:
         _approve_for_writing(box)
@@ -291,7 +278,7 @@ def test_writing_approval_is_independent_and_persists_as_internal_v8():
         doc = approvals.begin_writing(box.root, box.sid)
         assert doc.writing and approvals.writing_is_current(box.root, box.sid)
         raw = approvals._path(box.root, box.sid).read_text(encoding='utf-8')
-        assert '"v": 8' in raw and '"deep"' not in raw and 'deep_proof' not in raw
+        assert '"v": 9' in raw and '"deep"' not in raw and 'deep_proof' not in raw
     finally:
         box.close()
 
@@ -398,14 +385,6 @@ def test_retired_draft_in_old_s5_proof_revokes_s5_and_downstream(
     })
     stored_gate_proofs = dict(current_gate_proofs)
     stored_gate_proofs['s5'] = old_s5_proof
-    seen_proofs = {
-        key: approvals._ApprovalProof(
-            root_clean_sha1='0' * 40,
-            artifacts={f'{key}.json': 'd' * 64},
-            decision_sha256='e' * 64,
-        )
-        for key in approvals.APPROVAL_SEEN
-    }
     writing_proof = approvals._ApprovalProof(
         root_clean_sha1='0' * 40,
         artifacts={'stage4/plan_chapters.json': 'f' * 64},
@@ -433,10 +412,8 @@ def test_retired_draft_in_old_s5_proof_revokes_s5_and_downstream(
     record = approvals._ApprovalRecordV8(
         sid='123',
         gate={gate: True for gate in approvals._GATE_ORDER},
-        seen={key: True for key in seen_proofs},
         writing=True,
         gate_proofs=stored_gate_proofs,
-        seen_proofs=seen_proofs,
         writing_proof=writing_proof,
         structure_history=[structure],
         structure_decision=structure,
@@ -444,9 +421,6 @@ def test_retired_draft_in_old_s5_proof_revokes_s5_and_downstream(
         closure_decision=closure,
     )
 
-    monkeypatch.setattr(
-        approvals, '_proof_for_seen',
-        lambda _novel_dir, key: seen_proofs[key])
     monkeypatch.setattr(
         approvals, '_proof_for_writing',
         lambda _novel_dir: writing_proof)
@@ -458,7 +432,7 @@ def test_retired_draft_in_old_s5_proof_revokes_s5_and_downstream(
 
     assert 'stage5/draft.md' in record.gate_proofs['s5'].artifacts
     assert 'stage5/draft.md' not in current_gate_proofs['s5'].artifacts
-    assert all(effective.gate[gate] for gate in ('s0', 's1', 's2', 's4'))
+    assert all(effective.gate[gate] for gate in ('s0', 's1', 's4'))
     assert all(not effective.gate[gate] for gate in ('s5', 's6', 's7'))
     assert all(effective.gate_proofs[gate] is None for gate in ('s5', 's6', 's7'))
 

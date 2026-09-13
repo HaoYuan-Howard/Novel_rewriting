@@ -3,19 +3,19 @@
 本目录的原始响应来自 2026-08-17 的第 3 章样例；后续结构示例只供离线界面开发，
 不代表 `plot-blueprint-v1` 的抽取、审阅或真实模型验收。
 
-当前完整剧情链的阅读、章审、跨章、分场、结构审阅、写作上下文和进度样例统一位于
+当前完整剧情链的阅读、阅读工作包、分场、结构审阅、写作上下文和进度样例统一位于
 `../plot_v1/`，由正式合成测试链及真实 HTTP 投影生成。两套书的主体、审批和正文不能拼接。
 
 ## 运行入口
 
-所有模拟数据只经 `web/src/api/mock.ts` 接入。历史小说的完整剧情阅读、Blueprint 审阅、
-Stage4 分场及 Stage2 检查明确返回能力不可用；不使用旧事实检查或旧审批模拟新链通过。
+所有模拟数据只经 `web/src/api/mock.ts` 接入。历史小说的完整剧情阅读、Stage4 分场及
+Stage2 检查明确返回能力不可用；不使用旧事实检查或旧审批模拟新链通过。
 未消费的旧 `stage4_ch3.json` 和 Stage3 `style.json` 已退役，恢复来源为 Git 历史。
 
 以下辅助样例仍用于现役界面的独立行为测试：
 
 - `global.json`：有据主体的结构示例，覆盖 public/via_secret 关系、character/group 知识主体，
-  以及原文回取成功和 `source=null` 两态。它不证明新蓝图已接受。
+  以及原文回取成功和 `source=null` 两态。机械检查不证明语义已审。
 - `stage5_ch3.json`、`review_ch3.json`：当前 HTTP 协议的 `legacy_incompatible` 拒绝态，
   不携带旧双臂正文，不冒充已执行的新链。
 - `stage1.json`、`stage6.json`、`stage7.json`、`stage7_ch3.json`、`inbox.json` 与检查报告：

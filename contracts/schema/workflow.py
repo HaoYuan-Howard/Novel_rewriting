@@ -84,6 +84,43 @@ class WorkflowManifestV6(FrozenModel):
     transition_ref: WorkflowTransitionRefV1 | None = None
 
 
+class PipelineArtifactVersionsV7(FrozenModel):
+    """Gate D 当前快照：Stage2 语义审阅与 KnowledgeLinks 退役后的产物面。
+
+    ``knowledge_links`` 不再是成员；Stage4 A/B/Context 与绑定闭包随知识消费
+    退役各升一版。人物、Global 与 Blueprint 形状未变，不额外升版。
+    旧 manifest 的 knowledge_links 记录只随 V4/V5/V6 类解码，不迁移。
+    """
+
+    characters: Literal[2] = 2
+    global_grounding: Literal[7] = 7
+    analyze_receipt: Literal[1] = 1
+    chapter_blueprints: Literal[10] = 10
+    blind_candidate: Literal[6] = 6
+    blind_chapter_edit: Literal[3] = 3
+    evidence_binding: Literal[6] = 6
+    plan_chapters: Literal[7] = 7
+    plan_edit: Literal[7] = 7
+    writer_context: Literal[10] = 10
+    stage6_prepare: Literal[1] = 1
+    stage6_prepare_edit: Literal[1] = 1
+    stage6_prepare_review: Literal[1] = 1
+    stage6_prepare_decision: Literal[1] = 1
+    hook: Literal[4] = 4
+    hook_semantic_review: Literal[3] = 3
+    name_map: Literal[3] = 3
+
+
+class WorkflowManifestV7(FrozenModel):
+    schema_version: Literal[7] = 7
+    contract_version: Literal['stage2-mechanical-admission-v1'] = 'stage2-mechanical-admission-v1'
+    pipeline_contract_epoch: Literal['stage2-mechanical-admission-v1'] = 'stage2-mechanical-admission-v1'
+    artifact_versions: PipelineArtifactVersionsV7 = Field(default_factory=PipelineArtifactVersionsV7)
+    task_id: Sha256
+    created_at: int
+    transition_ref: WorkflowTransitionRefV1 | None = None
+
+
 class WorkflowTransitionBookProofV1(FrozenModel):
     characters_sha256: Sha256
     global_sha256: Sha256

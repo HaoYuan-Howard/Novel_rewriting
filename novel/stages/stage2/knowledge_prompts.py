@@ -9,7 +9,7 @@ SYSTEM = """通读全书正文，提取原文明示、有证据且需要跨章�
 setting 保存时代与结构性社会背景；world_rules 保存反复生效的世界机制及规则更替；
 relations 保存需要跨章追踪的人物关系；arc_secrets 保存揭示后改变读者对前文理解的长线真相。
 不以篇幅或固定条数截断，完整覆盖满足门槛的事实；单场对话、普通行动、临时状态、局部信息
-传递和人物各自知情都留给完整剧情 Blueprint 的 Beat/State/KnowledgeLinks，不能塞进 Global。
+传递和人物各自知情都留给完整剧情 Blueprint 的 Beat/State，不能塞进 Global。
 
 人物登记独立管理。只引用本轮提供的人物句柄；不可增改人物身份、角色介绍或称谓表。
 独立 Global 请求的人物表只含识别所需的 canonical/surfaces/role；联合 Analyze 必须先按

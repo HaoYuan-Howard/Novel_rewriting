@@ -8,7 +8,7 @@ test_schema_api.py —— HTTP 响应模型的载体层守卫（`docs/schema/_ap
   ② **契约层不许手抄取值面**（`Literal['a','b']`）：取值面的唯一落点是 `invariants`。
   ③ **契约层不许背上 web 栈**：离线产 TS 类型的脚本一行 HTTP 都不发。
 
-⚠ 本文件**不需要 fastapi**。ApprovalDoc v8 还须关闭式拒绝退役的 s3 gate。
+⚠ 本文件**不需要 fastapi**。ApprovalDoc v9 还须关闭式拒绝退役的 s2 gate 与已读账面。
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from contracts.invariants import (
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
     AgentCapabilitiesResponse, AgentDriverCapability, AgentModelCapability,
-    AgentRunRequest, AgentRunList, ApprovalDoc, ApprovalWorkpack, BlueprintReviewWorkpack, DesignReviewTemplate,
+    AgentRunRequest, AgentRunList, ApprovalDoc, ApprovalWorkpack, BlueprintReadingWorkpack, DesignReviewTemplate,
     CharacterRegistryView, DraftAlignView, DraftView, ErrorBody, GlobalView, NovelOverview,
     JobList, LogChunk, LogStreamEvent, NovelList, PreviewRequest, ReadingView,
     LegacyModelCapability, LegacyProviderCapability, LegacyThinkingCapability,
@@ -116,7 +116,7 @@ def test_global_evidence_fixture_matches_its_archived_source_snapshot():
 
 def test_plot_flow_fixtures_are_closed_current_http_and_review_views():
     from novel.api.enums import payload as enum_payload
-    from contracts.schema.api import (GlobalReviewView, InboxView,
+    from contracts.schema.api import (InboxView,
         Stage6PrepareView, Stage6PrepareWorkpack, Stage6ApprovalWorkpack,
         Stage7ApprovalWorkpack)
 
@@ -136,8 +136,9 @@ def test_plot_flow_fixtures_are_closed_current_http_and_review_views():
         'http:stage2/characters': CharacterRegistryView,
         'http:run': RunProgressView,
         'http:run/metrics': RunMetricsView,
-        'http:stage2/blueprint-review-workpack?scope=chapter%3A1': BlueprintReviewWorkpack,
-        'http:stage2/blueprint-review-workpack?scope=cross_chapter': BlueprintReviewWorkpack,
+        # 审阅退役后只余只读阅读工作包：查看与证据回源共用，不带接受语义。
+        'http:stage2/blueprint-reading-workpack?scope=chapter%3A1': BlueprintReadingWorkpack,
+        'http:stage2/blueprint-reading-workpack?scope=cross_chapter': BlueprintReadingWorkpack,
         'api:jobs': JobList,
         'api:agent/runs': AgentRunList,
         'http:check/stage2': CheckReport,
@@ -148,7 +149,6 @@ def test_plot_flow_fixtures_are_closed_current_http_and_review_views():
                    if name.startswith('http:')})
     models.update({
         'final:http:inbox': InboxView,
-        'final:http:stage2/global-review': GlobalReviewView,
         'final:http:stage6/prepare': Stage6PrepareView,
         'final:http:stage6/prepare/workpack': Stage6PrepareWorkpack,
         'final:http:stage6': Stage6View,
@@ -235,9 +235,9 @@ def test_plot_flow_keeps_its_synthetic_source_semantics_through_context():
     subject = next(row for row in context['global_subjects']
                    if row['subject_ref']['kind'] == 'secret')
     assert subject['value']['fact'] == secret['fact']
-    reveal = next(row for row in context['knowledge_events'] if row['kind'] == 'secret_reveal')
-    assert reveal['subject_ref'] == subject['subject_ref']
-    assert reveal['allowed_slots'] == subject['allowed_slots']
+    # KnowledgeLinks 揭示事件随语义审阅退役：同章揭示安排由现有计划表达，
+    # WriterContext 不再有逐场知识许可表，也就没有 secret_reveal 事件可断言。
+    assert not any(row.get('kind') == 'secret_reveal' for row in context.get('knowledge_events', []))
     assert not any(row['subject_ref']['kind'] == 'secret'
                    for row in captured['http:stage4/1']['ctx_chapter']['global_subjects'])
     for ordinal in sources:
@@ -550,12 +550,12 @@ def test_the_contract_layer_never_imports_the_web_stack():
     assert 'pydantic' in mods, 'pydantic 都没 import 到——AST 多半解析错了'
 
 
-def test_approval_doc_v8_has_exactly_the_current_seven_gates():
+def test_approval_doc_v9_has_the_current_six_gates_and_no_seen_ledger():
+    """Stage2 语义审阅退役后：gate 不再有 s2，整本已读/接受账面（``seen``）退场。"""
     payload = {
-        'v': 8,
+        'v': 9,
         'sid': '123',
         'gate': {gate: False for gate in APPROVAL_GATES},
-        'seen': {'read': False, 'global': False},
         'writing': False,
         'prepare': {'state': 'missing', 'reason': '尚未生成文案准备',
             'subject_sha256': None, 'review_token': None, 'prepare': None,
@@ -567,14 +567,19 @@ def test_approval_doc_v8_has_exactly_the_current_seven_gates():
         'spawns': {},
     }
     doc = ApprovalDoc.model_validate(payload)
-    assert set(doc.gate) == {'s0', 's1', 's2', 's4', 's5', 's6', 's7'}
+    assert set(doc.gate) == set(APPROVAL_GATES) == \
+        {'s0', 's1', 's4', 's5', 's6', 's7'}
+    assert 'seen' not in ApprovalDoc.model_fields
     with pytest.raises(ValidationError):
-        ApprovalDoc.model_validate({**payload, 'v': 7})
+        ApprovalDoc.model_validate({**payload, 'v': 8})
     with pytest.raises(ValidationError):
         ApprovalDoc.model_validate({
             **payload,
-            'gate': {**payload['gate'], 's3': False},
+            'gate': {**payload['gate'], 's2': False},
         })
+    # 旧 v8 的已读凭证不再有落点：extra 关闭式拒绝，不能被静默丢掉。
+    with pytest.raises(ValidationError):
+        ApprovalDoc.model_validate({**payload, 'seen': {'read': False}})
 
 
 def test_log_chunk_counts_bytes_not_characters():

@@ -22,16 +22,14 @@ import os
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_CHARACTERS, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
 )
-from contracts.invariants import BLUEPRINT_REVIEW_CONTRACT
 from contracts.schema.api import (
-    AnalyzeDraftView, CharacterRegistryView,
-    GlobalRelationLine, GlobalSecretLine, GlobalView, NameRef,
-    BlueprintReviewBinding, BlueprintReviewWorkpack, CompactApprovalCheck, ReadingView,
+    AnalyzeDraftView, BlueprintReadingWorkpack, BlueprintReviewBinding, CharacterRegistryView,
+    CompactApprovalCheck, GlobalRelationLine, GlobalSecretLine, GlobalView, NameRef, ReadingView,
 )
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
 from novel import paths, prov
-from novel.errors import ArtifactUnreadable, UpstreamMissing
+from novel.errors import ArtifactUnreadable, HumanEditProtected, TerminalState, UpstreamMissing
 from novel.orchestrator.state import artifact_state, readonly_ctx
 from novel.store import ArtifactStore
 
@@ -205,14 +203,68 @@ def _compact_check(report) -> CompactApprovalCheck:
 
 
 
-def blueprint_review_workpack(
+def blueprint_reading_workpack(
     base: str | os.PathLike[str], sid: str, *, code: str | None = None,
     scope: str | None = None,
-) -> BlueprintReviewWorkpack:
-    """按章构包；自动模式取阅读序首个待审范围，人工可以指定当前章。"""
-    from novel.views.plot_review import PlotReviewSnapshot
-    from novel.orchestrator.approvals import stage2_review_history
+) -> BlueprintReadingWorkpack:
+    """按范围构建只读阅读工作包：原文与完整剧情节点各一份。
+
+    Stage2 语义审阅已退役：本包**不携带 review_token、validation seal、
+    知识关联或任何接受语义**，只服务原文↔蓝图对照阅读与证据回源；
+    机械可用性由同一份 ``--check-only`` 报告披露，语义未审随报告 ``unver``
+    行常驻。``review_identity_sha256`` / ``subject_sha256`` / ``binding_sha256``
+    是阅读身份摘要：绑定输入变化时旧包身份失效，前端据此刷新，不产生审批待办。
+    """
+    from pydantic import TypeAdapter
+
+    from contracts.schema.plot_review import ReviewScope
+    from novel.consumption import consumed_digest
+    from novel.views import blueprint_progress
+
+    scope = TypeAdapter(ReviewScope).validate_python(scope or 'cross_chapter')
     ctx = readonly_ctx(paths.resolve_novel_dir(base, sid), BP_NODE,
                        prov.code_version() if code is None else code)
-    return PlotReviewSnapshot.read(
-        ArtifactStore(ctx), stage2_review_history(base, sid)).workpack(scope)
+    store = ArtifactStore(ctx)
+    rel = paths.invalid_of(BP_REL)
+    rel = rel if store.exists(rel) else BP_REL
+    main, main_sha = store.read_own_with_sha256(MainText, MAIN_TEXT, require_current=True)
+    blueprints, blueprint_sha = store.read_own_with_sha256(
+        ChapterBlueprints, rel, require_current=True)
+    ordinals = [row.chapter_ordinal for row in main.root]
+    selected = list(ordinals) if scope == 'cross_chapter' else [int(scope.split(':')[1])]
+    if selected[0] not in ordinals:
+        raise UpstreamMissing(f'第 {selected[0]} 章不在当前原文章集')
+    texts = {row.chapter_ordinal: row.text for row in main.root}
+    nodes = {row.chapter_ordinal: row for row in blueprints.blueprints}
+    material = {
+        'scope': scope,
+        'sources': [{'chapter_ordinal': ordinal, 'text': texts[ordinal]}
+                    for ordinal in selected],
+        'blueprints': [nodes[ordinal].model_dump(mode='json', by_alias=True)
+                       for ordinal in selected if ordinal in nodes],
+    }
+    from novel.stages.stage2 import extract
+    report = extract.run_check_only(ctx)
+    if report.provenance.invalid != (rel != BP_REL):
+        raise HumanEditProtected('阅读校验报告与实际主体不一致')
+    report_sha = consumed_digest(report.model_dump(mode='json', by_alias=True))
+    binding = BlueprintReviewBinding(
+        blueprint_rel=rel,
+        subject_kind='formal' if rel == BP_REL else 'invalid',
+        main_text_artifact_sha256=main_sha,
+        blueprint_artifact_sha256=blueprint_sha,
+        check_report_sha256=report_sha,
+        chapter_ordinals=ordinals)
+    binding_sha = consumed_digest(binding.model_dump(mode='json', by_alias=True))
+    identity = consumed_digest({'binding': binding_sha, 'scope': scope})
+    from novel.work_units import list_unit_views
+    try:
+        units = list_unit_views(base, sid)
+    except (TerminalState, OSError, ValueError):
+        units = None
+    return BlueprintReadingWorkpack(
+        sid=sid, title=paths.title_of(ctx.novel_dir), scope=scope,
+        review_identity_sha256=identity, subject_sha256=identity,
+        binding_sha256=binding_sha, binding=binding, material=material,
+        progress=blueprint_progress.get(base, sid, units),
+        check=_compact_check(report), accounting=list(report.accounting))

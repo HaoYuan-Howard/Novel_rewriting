@@ -26,12 +26,12 @@ def capture_final(book: Path, captured: dict) -> None:
     sid = paths.derive_source_meta(book.name)[0]
     with TestClient(create_app(str(book.parent))) as http:
         suffixes = ['', 'approvals', 'run', 'run/metrics', 'inbox', 'stage1',
-                    'stage2/global', 'stage2/characters', 'stage2/global-review',
+                    'stage2/global', 'stage2/characters',
                     'stage6/prepare', 'stage6/prepare/workpack', 'stage6', 'stage7',
                     'approvals/stage6/workpack', 'approvals/stage7/workpack',
                     'approvals/design/workpack', 'approvals/structure/workpack',
-                    'stage2/blueprint-review-workpack?scope=chapter%3A1',
-                    'stage2/blueprint-review-workpack?scope=cross_chapter',
+                    'stage2/blueprint-reading-workpack?scope=chapter%3A1',
+                    'stage2/blueprint-reading-workpack?scope=cross_chapter',
                     'check/stage2', 'check/stage4', 'check/stage5', 'check/stage6', 'check/stage7']
         for ordinal in (1, 2, 3):
             suffixes.extend(f'{surface}/{ordinal}' for surface in
@@ -82,20 +82,15 @@ def main() -> None:
     output.write_text(json.dumps(captured, ensure_ascii=False, indent=2) + '\n',
                       encoding='utf-8', newline='')
     review = {
-        'chapter': captured['http:stage2/blueprint-review-workpack?scope=chapter%3A1'],
-        'cross': captured['http:stage2/blueprint-review-workpack?scope=cross_chapter'],
-        'reading': captured['http:reading/1'],
         'prepare': captured['final:http:stage6/prepare/workpack'],
         'hook': captured['final:http:approvals/stage6/workpack'],
         'rename': captured['final:http:approvals/stage7/workpack'],
-        'enum_values': {key: captured['api:enums'][key]
-                        for key in ('plot_review_dimensions', 'plot_dimension_states')},
     }
     review_output = output.with_name('review.json')
     review_output.write_text(json.dumps(review, ensure_ascii=False, indent=2) + '\n',
                             encoding='utf-8', newline='')
     print(f'已从免费贯通链导出 {len(captured)} 份真实响应：{output}')
-    print(f'已从同次 HTTP 响应导出人物呈现与范围审阅：{review_output}')
+    print(f'已从同次 HTTP 响应导出 Stage6/7 终态工作包：{review_output}')
 
 
 if __name__ == '__main__':

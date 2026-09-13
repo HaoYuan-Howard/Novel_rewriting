@@ -1,7 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { errorBody } from '@/api/errors'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
-import { PlotReviewPanel } from '@/components/gate/PlotReviewPanel'
 import { ComparePanes, PaneScroll } from '@/components/compare/ComparePanes'
 import { QueryStates } from '@/components/state/QueryStates'
 import { ErrorHint } from '@/components/state/States'
@@ -11,7 +10,10 @@ import { useReadScreen } from './useReadScreen'
 import { BlueprintEditPanel } from './BlueprintEditPanel'
 import type { ActorRef, PlotBlueprint } from '@/types/plot.generated'
 
-/** 完整剧情与原文并排；证据范围不冒充语义覆盖结论。 */
+/**
+ * 完整剧情与原文并排的只读对照；Stage2 语义审阅已退役，
+ * 机械可用性看校验报告，编辑入口由 BlueprintEditPanel 单独提供。
+ */
 export function ReadScreen() {
   const vm = useReadScreen()
   const nav = useNavigate()
@@ -22,36 +24,28 @@ export function ReadScreen() {
         <header className="flex flex-wrap items-center justify-between gap-12">
           <div>
             <h1 className="text-h1 font-semibold">原文 ↔ 剧情蓝图 · 第 {vm.ordinal} 章</h1>
-            <p className="text-body text-ink-3">核对完整剧情、归因、持续状态与揭示时序。</p>
+            <p className="text-body text-ink-3">对照阅读完整剧情、归因、持续状态与揭示时序。</p>
           </div>
           <ChapterStrip items={vm.chapters.map((n) => ({
             n, active: n === vm.ordinal, dim: false, go: () => nav('/n/' + vm.sid + '/read/' + n),
           }))} />
         </header>
-        <label className="text-body">审阅范围 <select aria-label="蓝图审阅范围"
+        <label className="text-body">阅读范围 <select aria-label="蓝图阅读范围"
           value={vm.cross ? 'cross_chapter' : 'chapter'}
           onChange={(e) => vm.setCross(e.target.value === 'cross_chapter')}>
-          <option value="chapter">当前章节</option><option value="cross_chapter">跨章复核</option>
+          <option value="chapter">当前章节</option><option value="cross_chapter">跨章通读</option>
         </select></label>
-        {vm.workpack.isFetching ? <p role="status">正在读取当前范围的审阅材料…</p> : null}
+        {vm.workpack.isFetching ? <p role="status">正在读取当前范围的阅读材料…</p> : null}
         {vm.workpack.isError ? <div role="alert">
-          审阅材料暂不可用：{errorBody(vm.workpack.error)}<ErrorHint error={vm.workpack.error} />
+          阅读材料暂不可用：{errorBody(vm.workpack.error)}<ErrorHint error={vm.workpack.error} />
           <button type="button" onClick={() => void vm.workpack.refetch()}>重新读取</button>
         </div> : null}
-        {vm.pack ? <>
-          <p className="text-body">
-            已生成 {vm.pack.progress.generated_chapters} / {vm.pack.progress.total_chapters} 章 ·
-            有效接受 {vm.pack.progress.accepted_chapters} 章 ·
-            实际未解决问题 {vm.pack.progress.unresolved_issues} 项 ·
-            跨章状态 {vm.pack.progress.scopes.find((s) => s.scope === 'cross_chapter')?.state ?? '未知'}
-          </p>
-          <details className="rounded-block border border-line-2 p-12">
-            <summary>本轮问题与必要依赖</summary>
-            {vm.pack.material.issues.length ? vm.pack.material.issues.map((issue) =>
-              <p key={issue.issue_id}>{issue.state} · {issue.problem}</p>) : <p>本轮没有已登记问题；尚不代表审阅通过。</p>}
-            <pre className="overflow-auto whitespace-pre-wrap text-sm2">{JSON.stringify(vm.pack.material.dependencies, null, 2)}</pre>
-          </details>
-        </> : <p>当前仅供阅读；取得对应范围工作包后才能提交审阅。</p>}
+        {vm.pack ? <p className="text-body">
+          已生成 {vm.pack.progress.generated_chapters ?? '未知'} / {vm.pack.progress.total_chapters ?? '未知'} 章 ·
+          机械已提交 {vm.pack.progress.submitted_chapters ?? '未知'} 章 ·
+          产物状态 {vm.pack.progress.artifact_state}
+          {vm.pack.progress.unavailable_reason ? ` · ${vm.pack.progress.unavailable_reason}` : ''}
+        </p> : <p>当前范围的阅读材料未取回；这里只显示该章原文只读视图。</p>}
         {vm.rows.map((row) => <ComparePanes key={row.chapter_ordinal}
           left={<Panel><PaneHeader title={'原文 · 第 ' + row.chapter_ordinal + ' 章'} meta="完整原文" />
             <div className="prose-cn whitespace-pre-wrap px-20 py-16">{row.text}</div></Panel>}
@@ -61,7 +55,6 @@ export function ReadScreen() {
                 蓝图尚不可读。{vm.query.data?.blueprint_state.reason}
               </p>}
             </PaneScroll></Panel>} />)}
-        {vm.pack ? <PlotReviewPanel key={vm.pack.review_token} sid={vm.sid} pack={vm.pack} /> : null}
         <BlueprintEditPanel key={vm.sid + ':' + vm.ordinal} sid={vm.sid} ordinal={vm.ordinal} />
       </section>}
     </QueryStates>
@@ -106,12 +99,12 @@ function PlotChapter({ chapter }: { chapter: PlotBlueprint }) {
         actor_bindings: chapter.actor_bindings,
       }, null, 2)}</pre>
     </details>
-    <details><summary>审阅定位引用</summary>
+    <details><summary>证据定位引用</summary>
       <pre className="overflow-auto whitespace-pre-wrap text-sm2">{JSON.stringify({
         beats: chapter.beats.map((b) => ({ beat_ref: b.beat_id, evidence_refs: b.evidence_refs })),
         states: chapter.states.map((s) => ({ state_ref: s.state_id, evidence_refs: s.evidence_refs })),
       }, null, 2)}</pre>
     </details>
-    <p className="text-tag text-ink-4">证据共享与范围重叠不判定剧情重复；完整性仍需对照原文审阅。</p>
+    <p className="text-tag text-ink-4">证据共享与范围重叠不判定剧情重复；此处为对照阅读，不是语义审阅结论。</p>
   </div>
 }

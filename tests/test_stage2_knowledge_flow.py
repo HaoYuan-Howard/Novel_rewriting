@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""人物 → 必要知识 → 审阅/下游视图的真实 producer 消费链；不发付费请求。"""
+"""人物 → Global 事实 → 下游视图的真实 producer 消费链；不发付费请求。"""
 from __future__ import annotations
 
 import json
@@ -105,7 +105,7 @@ def test_saved_knowledge_cannot_overwrite_character_identity(tmp_path):
     assert grounding.read_registry(store, own=True) == registry
 
 
-@pytest.mark.parametrize('window', ['answer', 'checkpoint', 'formal', 'review'])
+@pytest.mark.parametrize('window', ['answer', 'checkpoint', 'formal'])
 def test_knowledge_recovery_reuses_saved_result_at_every_commit_window(tmp_path, monkeypatch, window):
     from novel.llm import stage2_global_runs
     ctx, _ = _prepared(tmp_path)
@@ -113,7 +113,6 @@ def test_knowledge_recovery_reuses_saved_result_at_every_commit_window(tmp_path,
         'answer': (extract, 'write_global_agent_checkpoint'),
         'checkpoint': (extract, '_finalize_agent_global_formal'),
         'formal': (stage2_global_runs, 'mark_committed'),
-        'review': (extract, '_refresh_current_global_review'),
     }[window]
     original = getattr(owner, name)
     def stop(*args, **kwargs):
@@ -156,40 +155,7 @@ def _edit_unused_character_evidence(free):
     return updated
 
 
-def test_unused_character_evidence_change_keeps_knowledge_current(tmp_path, monkeypatch):
-    ctx, _ = _prepared(tmp_path)
-    _run(ctx)
-    before_store = ArtifactStore(ctx)
-    knowledge_sha = before_store.full_sha256_or_none(STAGE2_GLOBAL_GROUNDING)
-    free = _free_ctx(ctx)
-    free.node = characters.NODE
-    # 人物正式证据已落、审阅后继硬杀：知识仍fresh，但审阅必须明确待刷新。
-    # 正常人物写口已经会自动刷新义务，不能把这项能力误测为永久过期。
-    original_refresh = characters._refresh_review
-    def interrupted(*args, **kwargs):
-        raise RuntimeError('模拟人物证据落盘后的审阅尾窗')
-    monkeypatch.setattr(characters, '_refresh_review', interrupted)
-    with pytest.raises(RuntimeError, match='审阅尾窗'):
-        _edit_unused_character_evidence(free)
-    monkeypatch.setattr(characters, '_refresh_review', original_refresh)
-    updated = grounding.read_registry(ArtifactStore(free), own=True)
-    assert before_store.full_sha256_or_none(STAGE2_GLOBAL_GROUNDING) == knowledge_sha
-    assert before_store.freshness(STAGE2_GLOBAL_GROUNDING).state == 'fresh'
-    from contracts.artifacts import STAGE2_GLOBAL_REVIEW
-    from novel.quality.global_review import require_current
-    from novel.orchestrator import state
-    ov = state.overview(ctx.novel_dir.parent, ctx.sid)
-    assert state.stage2_global_review_refresh_needed(ov)
-    free.node = 'stage2.global'
-    review = extract.run_refresh_review(free)
-    require_current(grounding.read_own(before_store)[1], review,
-        characters=updated.model_dump(mode='json', by_alias=True))
-    assert before_store.full_sha256_or_none(STAGE2_GLOBAL_GROUNDING) == knowledge_sha
-    assert before_store.freshness(STAGE2_GLOBAL_REVIEW).state == 'fresh'
-    assert not state.stage2_global_review_refresh_needed(state.overview(ctx.novel_dir.parent, ctx.sid))
-
-
-@pytest.mark.parametrize('window', ['answer', 'checkpoint', 'formal', 'review'])
+@pytest.mark.parametrize('window', ['answer', 'checkpoint', 'formal'])
 def test_unused_character_change_during_recovery_requires_no_second_purchase(tmp_path, monkeypatch, window):
     from novel.llm import stage2_global_runs
     ctx, _ = _prepared(tmp_path)
@@ -197,7 +163,6 @@ def test_unused_character_change_during_recovery_requires_no_second_purchase(tmp
         'answer': (extract, 'write_global_agent_checkpoint'),
         'checkpoint': (extract, '_finalize_agent_global_formal'),
         'formal': (stage2_global_runs, 'mark_committed'),
-        'review': (extract, '_refresh_current_global_review'),
     }[window]
     original = getattr(owner, name)
     def stop(*args, **kwargs):
@@ -237,26 +202,6 @@ def test_free_knowledge_edit_changes_no_static_or_blueprint_projection(tmp_path)
     assert 'characters' not in store.read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0].model_dump(mode='json')
 
 
-@pytest.mark.parametrize('node', [
-    'stage4.plan', 'stage4.context', 'stage5.write', 'stage5.review',
-    'stage6.hook', 'stage6.semantic', 'stage7.rename',
-])
-def test_real_generation_consumer_records_both_registered_input_edges(tmp_path, node):
-    from contracts.artifacts import STAGE2_GLOBAL_REVIEW
-    from novel.stages.stage2.global_review import generation_grounding
-    from tests.factories import approved_global_review
-    ctx, registry = _prepared(tmp_path)
-    result, _ = _run(ctx)
-    ArtifactStore(ctx).write_round(STAGE2_GLOBAL_REVIEW, approved_global_review(result.artifact))
-    consumer = _free_ctx(ctx)
-    consumer.node = node
-    view = generation_grounding(ArtifactStore(consumer))
-    assert view.entities.characters.keys() == registry.characters.keys()
-    assert {STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW} <= consumer.edges.keys()
-    assert all(consumer.edges[rel].consumed is not None for rel in (
-        STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW))
-
-
 def test_static_mutations_are_rejected_by_knowledge_edit_schema():
     from pydantic import ValidationError
     for edit in (
@@ -267,38 +212,6 @@ def test_static_mutations_are_rejected_by_knowledge_edit_schema():
     ):
         with pytest.raises(ValidationError):
             GlobalEdit.model_validate(edit)
-
-
-def test_three_repair_owners_keep_exactly_two_commander_seats():
-    from contracts.schema.api import Stage2NodeReviewRequest
-    from contracts.invariants import PLOT_REVIEW_DIMENSIONS
-    from pydantic import ValidationError
-    for reviewer, owners in (
-        ('stage2.global', ('stage2.characters', 'stage2.global')),
-        ('stage2.blueprint', ('stage2.characters', 'stage2.global', 'stage2.blueprint')),
-    ):
-        for owner in owners:
-            reason = '原文有据的定向返工'
-            scoped = {} if reviewer == 'stage2.global' else {
-                'scope': 'chapter:1', 'plot_review': {
-                    'decision': 'revise', 'reason': reason,
-                    'coverage': {name: {'state': 'issue', 'issue_refs': ['new:1']}
-                                 if name == 'attribution' else {'state': 'pass', 'issue_refs': []}
-                                 for name in PLOT_REVIEW_DIMENSIONS},
-                    'new_issues': [{'issue_key': 'new:1', 'dimension': 'attribution',
-                        'problem': reason, 'subjects': [{'kind': 'beat', 'ref': 'b01_01'}],
-                        'evidence_refs': [{'chapter_ordinal': 1, 'evidence_ref': 'e01_01'}]}],
-                    'dispositions': []}}
-            request = Stage2NodeReviewRequest(node=reviewer, review_token='current-token',
-                decision='rework', actor='test:reviewer', reason=reason,
-                owner=owner, chapter_ordinals=[1] if owner == 'stage2.blueprint' else [], **scoped)
-            assert request.node == reviewer and request.owner == owner
-            if reviewer == 'stage2.blueprint':
-                assert request.scope == 'chapter:1'
-                assert set(type(request.plot_review.coverage).model_fields) == set(PLOT_REVIEW_DIMENSIONS)
-    with pytest.raises(ValidationError):
-        Stage2NodeReviewRequest(node='stage2.characters', review_token='current-token',
-                                decision='accept', actor='test:reviewer', reason='不能新增第三席')
 
 
 @pytest.mark.parametrize('window', ['none', 'checkpoint', 'outcome'])

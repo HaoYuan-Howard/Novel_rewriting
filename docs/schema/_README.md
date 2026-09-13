@@ -8,8 +8,7 @@
 | [stage0](stage0.md) | 剔除决定、原文身份与 clean 的确定性物化 |
 | [stage1](stage1.md) | 原文分章、开篇文案及即时章号诊断 |
 | [characters](characters.md) | 人物主体、提及证据与称名投影 |
-| [stage2](stage2.md) | Global grounding、Blueprint 原子事实与生成依赖 |
-| [stage2_review](stage2_review.md) | typed 事实复核、写作隔离和证据闭集 |
+| [stage2](stage2.md) | Global grounding、Blueprint 原子事实、统一机械准入与生成依赖 |
 | [stage4](stage4.md) | A 盲设计、B 证据绑定、计划与写作上下文 |
 | [stage5](stage5.md) | canonical 正文、Review、人工改稿、trim 与授权改写恢复 |
 | [stage6](stage6.md) | 文案候选、语义证据及 typed 定稿 |

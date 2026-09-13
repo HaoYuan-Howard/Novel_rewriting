@@ -950,13 +950,6 @@ def stage2_global_run_path(
             / check_run_id(run_id) / 'global')
 
 
-def stage2_knowledge_links_commit_lock_path(
-        novel_dir: str | os.PathLike[str],
-) -> Path:
-    """知识关联免费物化的跨进程锁；不与 Blueprint 的付费工作单元争用身份。"""
-    return _service_stage_runs_dir(novel_dir, 'stage2') / 'knowledge-links-commit.lock'
-
-
 def legacy_stage2_global_run_path(
         novel_dir: str | os.PathLike[str], run_id: str,
 ) -> Path:

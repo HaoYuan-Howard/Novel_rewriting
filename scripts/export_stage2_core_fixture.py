@@ -10,9 +10,7 @@ import os
 from pathlib import Path
 import tempfile
 
-from novel.api.enums import payload as enums_payload
 from novel.node_agents import Stage2AnalyzeAgent
-from novel.views.global_review import global_review_view
 from novel.views.stage2 import character_registry_view, global_view
 from tests.stage2_fixtures import knowledge_response
 from tests.test_stage2_analyze import _ctx, _driver, _response
@@ -34,20 +32,17 @@ def main() -> None:
         captured = {
             'metadata': {
                 'synthetic': True,
-                'source': 'Stage2AnalyzeAgent + GlobalView/CharacterRegistryView/GlobalReviewView',
-                'schemas': {'characters': 2, 'global': 7, 'global_review': 3},
+                'source': 'Stage2AnalyzeAgent + GlobalView/CharacterRegistryView',
+                'schemas': {'characters': 2, 'global': 7},
                 'scope': '免费合成数据与真实 producer/Store/read model；不代表真实模型质量或成本',
             },
             'global': global_view(directory, ctx.sid).model_dump(mode='json', by_alias=True),
             'characters': character_registry_view(directory, ctx.sid).model_dump(mode='json', by_alias=True),
-            'review': global_review_view(directory, ctx.sid).model_dump(mode='json', by_alias=True),
         }
     output = root / 'web/src/fixtures/plot_v1/core.json'
     output.write_text(json.dumps(captured, ensure_ascii=False, indent=2) + '\n',
                       encoding='utf-8', newline='')
-    enum_output = root / 'web/src/fixtures/backend_v1/enums.json'
-    enum_output.write_text(json.dumps(enums_payload(), ensure_ascii=False, indent=1) + '\n', encoding='utf-8')
-    print(f'已导出独立 Stage2 Core 只读样例及当前枚举：{output}')
+    print(f'已导出独立 Stage2 Core 只读样例：{output}')
 
 
 if __name__ == '__main__':

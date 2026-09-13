@@ -108,17 +108,15 @@ _PRIMARY_OPERATIONS = {
         '--emit-analyze-draft-template', '--repair-analyze-draft', '--recover-analyze-draft',
     }),
     'stage2.global': frozenset({
-        '--apply-core-edits', '--recover-analyze',
+        '--recover-analyze',
         '--emit-analyze-draft-template', '--repair-analyze-draft', '--recover-analyze-draft',
-        '--renormalize', '--resample', '--revalidate', '--close-review',
-        '--apply-edit', '--review-decisions', '--emit-edit-template',
-        '--emit-review-template', '--emit-review-workpack',
-        '--prepare-issue-review', '--emit-issue-review-template', '--review-issues',
+        '--renormalize', '--resample', '--revalidate',
+        '--apply-edit', '--emit-edit-template',
     }),
     'stage2.blueprint': frozenset({
-        '--dry-run', '--check-only', '--renormalize', '--patch',
-        '--revalidate', '--emit-review-workpack', '--emit-edit-template',
-        '--validate-edit', '--apply-edit', '--close-review',
+        '--dry-run', '--check-only', '--renormalize',
+        '--revalidate', '--emit-edit-template',
+        '--validate-edit', '--apply-edit',
     }),
     'stage4.design': frozenset({
         '--dry-run', '--replan', '--close-review', '--reaggregate', '--recover-prepared', '--recover-responses',

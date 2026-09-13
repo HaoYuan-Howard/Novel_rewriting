@@ -214,9 +214,8 @@ def recover(ctx: RunContext) -> KnowledgeGrounding:
                 store.write_round(GLOBAL, candidate)
         if store.full_sha256_or_none(journal.target_rel) != journal.target_sha256:
             raise ProvenanceRefused('Global 恢复写后精确字节不闭合')
-        if not hits:
-            from novel.stages.stage2.extract import _refresh_global_review
-            _refresh_global_review(store, candidate)
+        # Stage2 语义审阅退役：正式 Global 物化后不再刷新任何审阅文件；
+        # 语义结论由报告 unver 行与交付披露表达。
         _assert_sources(ctx, store, prepared.source_sha256, receipt_sha, characters_sha)
         ctx.ledger.note_aggregate_adoption(sid=ctx.sid, node=ctx.node, artifact=journal.target_rel,
             artifact_fingerprint=prov.projection_fingerprint(candidate.model_dump(mode='json', by_alias=True)),

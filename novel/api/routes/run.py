@@ -73,11 +73,6 @@ def get_run_progress(sid: str = Depends(checked_sid),
     identity = commander_work_unit(resume_frontier.waiting_on or '')
     current_node = identity[0] if identity else resume_frontier.node
     current_scope = identity[1] if identity else None
-    if current_node == 'stage2.blueprint' and units is not None:
-        progress = next((row['review']['plot_progress'] for row in units
-                         if row['node'] == current_node and row.get('review', {}).get('plot_progress')), None)
-        if progress is not None:
-            current_scope = progress['next_scope'] or 'cross_chapter'
     recovery = None if units is None or resume_frontier.state == 'unknown' else [
         f"{row['scope']}: {row['recovery_action']}" for row in units
         if row['node'] == current_node and row['role'] == resume_frontier.next_handler

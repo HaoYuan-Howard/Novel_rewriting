@@ -38,7 +38,7 @@ Global Commander 统一审阅两侧，人物不新增 Commander。Gate A 的实�
 `identity_revealed_from` 表示读者得知这个称谓属于该实体的时点，**不表示称谓首次能出现的章**。
 “新邻居”在第 10 章可以出现，第 11 章才揭示是某已登记人物；不能以此字段禁用第 10 章称谓，
 也不能把内部 char_id 或未公开 canonical 的映射发给 Writer。章内称谓出现与表面身份的
-选择由原文和 Blueprint 支持；跨章同人关系的揭示归 Global `arc_secrets` 与既有 KnowledgeLinks。
+选择由原文和 Blueprint 支持；跨章同人关系的揭示归 Global `arc_secrets` 与蓝图章级揭示字段。
 registry 不保存 mention、by/context、局部动态状态或第二份披露图。
 
 ## 证据与编译
@@ -124,12 +124,11 @@ CharactersProvenance 的 `retired_character_ids` 独立于 `characters_edit` 保
 不会把旧的人工作用重新记成自己的人审。首次联合或独立生成明确保存空集合，局部草稿删除
 也保留初始冻结 ID 的退休事实；禁止以列表重排、删除再新增复用旧身份。
 
-## Gate A 读数
+## 历史首抽的只读核对边界
 
-`tools/workflow_metrics.py::stage2_core_metrics` 只读取上述来源、独立产物和唯一 ledger。
-历史首抽使用原 run 与永久 Executor request 中已验证的 system/schema；当前提示文本改变
-不抹除原调用来源。MainText、候选表、user 与原 schema 仍须精确匹配；仅用于只读计量，
-不放宽生产恢复或新采用的当前请求身份，无法解码的旧 schema 保持 unver。
+原 workflow_metrics 读数器（tools/ 下，已删除）随 Stage2 语义审阅一同退役；
+历史首抽的证据仍以原 run 与永久 Executor request 中已验证的 system/schema 为准，
+当前提示文本改变不抹除原调用来源，无法解码的旧 schema 保持 unver。
 首轮/接受后 core 采用无空白 JSON **字符数**与 MainText 字符数比较；证据、审计另外计量。
 候选去留按原 checkpoint 的稳定主体 ID 统计，无法证明的拆分/合并不推测。C 干预先验证
 永久 Commander WorkUnit 的原请求、回答、typed 动作、会话与唯一成本来源，再关联实际提交：

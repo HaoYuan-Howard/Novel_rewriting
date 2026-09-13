@@ -29,15 +29,10 @@ from __future__ import annotations
 from contracts.schema.workflow import BudgetGrant
 from contracts.invariants import STAGE6_PREPARE_DECISIONS
 from contracts.schema.analyze_draft import AnalyzeOwnerDraftEdit, DraftOwner, DraftSourceState
-from contracts.schema.knowledge_links import KnowledgeLinkReview, KnowledgeLinkSubmission
 from contracts.schema.dependencies import DependencyManifest
 from contracts.schema.plot import PlotBlueprint
-from contracts.schema.plot_refinement import BlueprintRefinementRequest, BlueprintRefinementCatalog
 from contracts.schema.plot_review import (
-    ReviewScope, PlotReviewResponse, PlotReviewRecord, PlotReviewProgress,
-)
-from contracts.schema.stage2_review import (
-    Stage2CoreEditBatch, Stage2ReviewCoverage, Stage2ReviewMaterialSource, Stage2ReviewReceipt, Stage2ReviewSubmission,
+    ReviewScope, BlueprintRunProgress,
 )
 from contracts.schema.orchestration import AgentDeliveryOutcome, RunContinuationSource, WorkUnitView, PipelineConcurrency
 
@@ -63,8 +58,6 @@ from contracts.invariants import (
     ANCHOR_COVERAGE_STATE,
     ANCHOR_COVERAGE_WARN,
     APPROVAL_GATES,
-    APPROVAL_SEEN,
-    BLUEPRINT_REVIEW_CONTRACT,
     BLUEPRINT_REVIEW_SUBJECT_KINDS,
     CHAPTER_LABEL_ANOMALY,
     DELIVERY_MODES,
@@ -89,14 +82,8 @@ from contracts.invariants import (
     DESIGN_REVIEW_STATES,
     DESIGN_STRATEGY_REPLAN_CONSTRAINTS,
     DESIGN_STRATEGY_DECISIONS,
-    GLOBAL_REVIEW_EFFECTS,
-    GLOBAL_REVIEW_GENERATION_DISPOSITIONS,
     HOOK_APPROACHES,
     STAGE6_JUDGE_ROLES,
-    STAGE2_NODE_REVIEW_DECISIONS,
-    STAGE2_NODE_REVIEW_OWNERS,
-    STAGE2_NODE_REVIEWERS,
-    STAGE2_NODE_REVIEW_STATES,
     STAGE6_REVIEW_CONTRACT,
     STAGE7_REVIEW_CONTRACT,
     STAGE6_APPROVAL_CHECK_BASIS,
@@ -141,7 +128,7 @@ from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import Finding, HashBoundHumanApproval, Sha256
 from contracts.schema.stage6_prepare import PrepareDraft, PrepareState, PrepareWorkpack
 from contracts.schema.characters import CharacterRegistry, CharactersEdit
-from contracts.schema.evaluation import GlobalReviewItem, SemanticDecision
+from contracts.schema.evaluation import SemanticDecision
 from contracts.schema.orchestration import (
     AgentExecutorBackend, AgentProfile, AgentRunRecord, ArtifactCondition,
     ArtifactState, ExecutorBackend, Freshness, FreshnessReason, JobRecord,
@@ -149,7 +136,7 @@ from contracts.schema.orchestration import (
 )
 from contracts.schema.stage0 import Stage0RevisionOrigin, Stage0Warning
 from contracts.schema.stage2 import (
-    BlueprintProvenance, SourceBlurbGrounding, FactEvidence, HookFactEvidence,
+    BlueprintProvenance, GlobalEdit, SourceBlurbGrounding, FactEvidence, HookFactEvidence,
 )
 from contracts.schema.core_evidence import CoreEvidenceAnchor, EvidenceId
 from contracts.schema.knowledge import (
@@ -187,7 +174,6 @@ ChapterLabelAnomaly = Literal[CHAPTER_LABEL_ANOMALY]
 NonbodyKind = Literal[NONBODY_KINDS]
 RemovedOrigin = Literal[REMOVED_ORIGIN]
 GateKey = Literal[APPROVAL_GATES]
-SeenKey = Literal[APPROVAL_SEEN]
 InboxKind = Literal[INBOX_KIND]
 InboxAttention = Literal[INBOX_ATTENTION]
 InboxDeliveryEffect = Literal[INBOX_DELIVERY_EFFECT]
@@ -2943,6 +2929,18 @@ class CharactersEditRequest(StrictModel):
         return self
 
 
+class GlobalEditPreview(StrictModel):
+    """Global typed 编辑的独立只读预检结果；不是预授权。
+
+    ``result_subject_sha256`` 是编辑后业务候选的 canonical 摘要，与 apply
+    现场重判使用同一判据；``changed`` 为实际改动的业务路径；
+    ``hard_hits`` 非空表示当前候选会被落盘闸门拦下并写入问题稿。
+    """
+    result_subject_sha256: Sha256
+    changed: list[str]
+    hard_hits: list[str]
+
+
 class CharacterRegistryView(StrictModel):
     sid: str
     source_sha256: Sha256
@@ -2961,123 +2959,12 @@ class CharacterRegistryView(StrictModel):
         return self
 
 
-class Stage2NodeReviewRequest(StrictModel):
-    """Stage2 每个生产节点独立提交的语义裁决；已读不授予接受。"""
-
-    node: Literal[STAGE2_NODE_REVIEWERS]
-    review_token: str = Field(min_length=1)
-    decision: Literal[STAGE2_NODE_REVIEW_DECISIONS]
-    actor: str = Field(min_length=1, max_length=256)
-    reason: str = Field(min_length=1, max_length=4096)
-    chapter_ordinals: list[int] = Field(default_factory=list)
-    owner: Literal[STAGE2_NODE_REVIEW_OWNERS] | None = None
-    knowledge_links: KnowledgeLinkSubmission | None = None
-    review: Stage2ReviewSubmission | None = None
-    scope: ReviewScope | None = None
-    plot_review: PlotReviewResponse | None = None
-    core_edits: Stage2CoreEditBatch | None = None
-
-    @model_validator(mode='after')
-    def _closed_action(self) -> 'Stage2NodeReviewRequest':
-        if not self.actor.strip() or not self.reason.strip():
-            raise ValueError('Stage2 裁决必须有明确 actor/reason')
-        if self.node == 'stage2.blueprint':
-            if self.scope is None or self.plot_review is None or self.review is not None:
-                raise ValueError('Blueprint 必须提交范围与五维审阅，不接受逐项回执')
-            expected = {'accept': 'accept', 'rework': 'revise',
-                        'uncertain': 'unver', 'stop': 'unver'}[self.decision]
-            if self.plot_review.decision != expected or self.plot_review.reason != self.reason:
-                raise ValueError('范围决定与动作、理由冲突')
-        elif self.scope is not None or self.plot_review is not None:
-            raise ValueError('Global 不消费 Blueprint 范围审阅')
-        if self.knowledge_links is not None:
-            if self.node != 'stage2.blueprint':
-                raise ValueError('只有 Blueprint Commander 能提交知识关联决定')
-            if self.knowledge_links.actor != self.actor or self.knowledge_links.reason != self.reason:
-                raise ValueError('关联与本次审阅的 actor/reason 必须一致')
-        if self.node == 'stage2.blueprint' and self.decision == 'accept' and self.knowledge_links is None:
-            raise ValueError('Blueprint 接受必须携带当前知识关联范围；全部继承时 decisions 为空')
-        if self.chapter_ordinals != sorted(set(self.chapter_ordinals)) or any(
-                ordinal < 1 for ordinal in self.chapter_ordinals):
-            raise ValueError('Stage2 返工章号必须升序、唯一且为正数')
-        if self.core_edits is not None:
-            if (self.node != 'stage2.global' or self.decision != 'rework'
-                    or self.owner is not None or self.chapter_ordinals or self.review is None):
-                raise ValueError('免费 Core 批次必须由 Global Commander 以完整义务 rework 提交，不混单 owner 付费派修')
-        if self.decision == 'rework':
-            if self.owner is None and self.core_edits is None:
-                raise ValueError('返工必须指向知识生产节点或明确免费 Core 批次')
-            if self.owner == 'stage2.blueprint' and not self.chapter_ordinals:
-                raise ValueError('Blueprint 定向返工必须列出章节')
-            if self.owner != 'stage2.blueprint' and self.chapter_ordinals:
-                raise ValueError('人物与知识按书派修，不携带 Blueprint 章范围')
-            if self.node == 'stage2.global' and self.owner == 'stage2.blueprint':
-                raise ValueError('Global Commander 不拥有尚未生产的 Blueprint 返工权')
-        elif self.owner is not None or self.chapter_ordinals:
-            raise ValueError('只有返工决定能携带 owner/章范围')
-        return self
-
-
-class Stage2NodeReviewDecision(Stage2NodeReviewRequest):
-    # 代码物化同轮稀疏事件与新主体摘要；原 request 仍保留，供精确重放和审计。
-    knowledge_application: KnowledgeLinkSubmission | None = None
-    refinement_request: BlueprintRefinementRequest | None = None
-    refinement_proof_sha256: Sha256 | None = None
-    plot_record: PlotReviewRecord | None = None
-    obligation_receipt: Stage2ReviewReceipt | None = None
-    material_source: Stage2ReviewMaterialSource | None = None
-    core_edit_prepared_sha256: Sha256 | None = None
-    review_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    review_contract_version: str = Field(min_length=1)
-    decided_at: str = Field(min_length=1)
-    review_scope_sha256: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
-
-    @model_validator(mode='after')
-    def _plot_record(self) -> 'Stage2NodeReviewDecision':
-        if (self.core_edits is None) != (self.core_edit_prepared_sha256 is None):
-            raise ValueError('Core 编辑原决定必须绑定不可变预检计划')
-        if (self.refinement_request is None) != (self.refinement_proof_sha256 is None):
-            raise ValueError('疑点原请求与范围记录的联结证明必须同时保存')
-        if self.refinement_request is not None:
-            if (self.node != 'stage2.blueprint' or self.decision != 'uncertain'
-                    or self.scope != f'chapter:{self.refinement_request.chapter_ordinal}'
-                    or self.actor != self.refinement_request.actor):
-                raise ValueError('下游疑点只能作为本章待核查记录，不能授权返工或接受')
-            import hashlib
-            payload = {'request': self.refinement_request.model_dump(mode='json'),
-                       'decision_sha256': self.plot_record.decision_sha256 if self.plot_record else None}
-            digest = hashlib.sha256(json.dumps(
-                payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
-            if self.refinement_proof_sha256 != digest:
-                raise ValueError('疑点原请求与范围记录的联结证明不一致')
-        if self.node == 'stage2.blueprint':
-            if (self.plot_record is None or self.obligation_receipt is not None
-                    or self.plot_record.scope != self.scope
-                    or self.plot_record.response != self.plot_review
-                    or self.plot_record.subject_sha256 != self.review_subject_sha256):
-                raise ValueError('Blueprint 持久决定必须绑定本次范围记录')
-        elif self.plot_record is not None:
-            raise ValueError('Global 决定不能保存 Blueprint 范围记录')
-        return self
-
-
-class Stage2NodeReviewView(StrictModel):
-    plot_progress: PlotReviewProgress | None = None
-    coverage: Stage2ReviewCoverage | None = None
-    unavailable_reason: str | None = None
-    state: Literal[STAGE2_NODE_REVIEW_STATES] = 'missing'
-    current_decision: Stage2NodeReviewDecision | None = None
-    history: list[Stage2NodeReviewDecision] = Field(default_factory=list)
-
-
 class ApprovalDoc(StrictModel):
-    """公开审批面 v8：准备接受与 Stage6 最终定稿分别投影。"""
+    """公开审批面 v9：Stage2 语义审阅退役后不再携带已读/接受记录。"""
 
-    v: Literal[8] = 8
+    v: Literal[9] = 9
     sid: str = Field(min_length=1)
     gate: dict[GateKey, bool]
-    seen: dict[SeenKey, bool]
-    stage2_reviews: dict[str, Stage2NodeReviewView] = Field(default_factory=dict)
     prepare: PrepareState
     writing: bool = False
     design_review: DesignReviewView = Field(
@@ -3091,9 +2978,7 @@ class ApprovalDoc(StrictModel):
     @model_validator(mode='after')
     def _approval_state_is_complete(self) -> ApprovalDoc:
         if set(self.gate) != set(APPROVAL_GATES):
-            raise ValueError('gate must contain exactly s0,s1,s2,s4,s5,s6,s7')
-        if set(self.seen) != set(APPROVAL_SEEN):
-            raise ValueError('seen must contain exactly read/global')
+            raise ValueError('gate must contain exactly s0,s1,s4,s5,s6,s7')
         if self.gate['s4'] and self.structure.state != 'accepted':
             raise ValueError('s4 gate 只能由当前 accepted 的 typed 结构裁决打开')
         if self.gate['s5'] and self.closure.state != 'closed':
@@ -3120,22 +3005,11 @@ class InboxDecision(FrozenModel):
     subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     state: str = Field(min_length=1)
     decided_at: str = Field(min_length=1)
-    generation_disposition: Literal[GLOBAL_REVIEW_GENERATION_DISPOSITIONS] | None = None
-    generation_disposition_reason: str | None = None
 
     @model_validator(mode='after')
-    def _generation_disposition_is_explicit_unver(self) -> 'InboxDecision':
-        paired = (
-            self.generation_disposition is None,
-            self.generation_disposition_reason is None,
-        )
-        if paired[0] != paired[1]:
-            raise ValueError('generation disposition 与其 reason 必须同进同出')
-        if self.generation_disposition is not None:
-            if self.state != 'UNVER':
-                raise ValueError('只有 UNVER inbox decision 可以携带隔离处置')
-            if not self.generation_disposition_reason.strip():
-                raise ValueError('generation disposition reason 不能为空')
+    def _audit_fields(self) -> 'InboxDecision':
+        if not self.actor.strip() or not self.state.strip() or not self.decided_at.strip():
+            raise ValueError('inbox decision 的 actor/state/decided_at 不得为空')
         return self
 
 
@@ -3404,70 +3278,6 @@ class GlobalView(StrictModel):
     provenance: GlobalProvenance = Field(alias='_provenance')
 
 
-class GlobalReviewRow(GlobalReviewItem):
-    """一条复核项 **加上服务端派生的两格**：交付效果与人审卡收敛键。
-
-    ⚠ 两格都**只在服务端算**（`contracts/invariants.py::review_effect_of` 与
-    `novel/quality/global_review.py::review_group_key`）。前端复制一份分类表，
-    就出现第二个判官：某天新增一类高影响事实，界面仍按旧表把它画成「只披露」，
-    而没有任何东西会出声（判据 13）。
-    ⚠ 它们**不进产物**：`global_review.json` 的形状与版本一格没动，两格都可由
-    kind/subject_path 零成本重算。
-    """
-
-    effect: Literal[GLOBAL_REVIEW_EFFECTS]
-    group_key: str = Field(min_length=1)
-
-
-class GlobalReviewView(StrictModel):
-    """Current-subject status plus the auditable Stage2 review rows.
-
-    ``approved`` is recomputed by the read model.  It is never trusted from the
-    persisted review alone, because the current ``GlobalGrounding`` or required
-    review surface may have changed since a person decided the rows.
-
-    ⚠ ``approved`` 只回答 blocking 面是否逐项 PASS，是严格真值结论；
-    ``generation_safe`` 才回答当前写作消费面能否继续。后者允许显式隔离安全
-    UNVER 组，但绝不把它们改写成 PASS。``disclosure`` 未决项及隔离组一条
-    不少地留在 ``items`` / ``effect_counts`` / ``quarantined_groups`` 里。
-    """
-
-    review_coverage: Stage2ReviewCoverage | None = None
-    source_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    current_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    current: bool
-    approved: bool
-    generation_safe: bool
-    quarantined_groups: list[str] = Field(default_factory=list)
-    #: ``seen.global`` 的 opaque 阅读凭证；只有 review 与 grounding/MainText 都
-    #: current 时才现算，否则为 ``None``——界面不得在 ``None`` 时提供确认动作。
-    review_token: str | None = Field(
-        default=None, pattern=r'^s2gr2_[0-9a-f]{64}$')
-
-    #: ``{effect: {四态: n}}``。两层键都**恒全出**（0 也出）：
-    #: 「没有这个键」与「值是 0」不许混（同 `InboxView.counts`）。
-    effect_counts: dict[str, dict[str, int]]
-    items: list[GlobalReviewRow]
-    #: 最近一次 issues 协议范围审阅的可追溯摘要；没有则 None。
-    #: 逐项 PASS 由 ``decision_basis=scope_review`` 派生而来，
-    #: 界面据此显示“范围审阅派生通过”，不声称模型逐字段裁决。
-    scope_review: 'Stage2ScopeReviewSummary | None' = None
-
-
-class Stage2ScopeReviewSummary(FrozenModel):
-    '''issues 协议审阅事务的可追溯摘要（API 只读面）。'''
-
-    protocol: str = Field(min_length=1)
-    decision_basis: Literal['scope_review']
-    coverage_scope_id: str = Field(pattern=r'^[0-9a-f]{64}$')
-    coverage_total: int = Field(ge=0)
-    derived_pass_count: int = Field(ge=0)
-    issue_count: int = Field(ge=0)
-    node_accepted: bool
-    decided_at: str = Field(min_length=1)
-    transaction_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 二d、S-11 开篇文案（`GET /api/novels/:sid/stage6`）
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3696,7 +3506,7 @@ class ReadingView(StrictModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# 二f、Stage2 Blueprint 只读审阅工作包（暂不是审批面）
+# 二f、Stage2 Blueprint 只读阅读工作包（审阅已退役；查看与证据回源仍共用）
 # ──────────────────────────────────────────────────────────────────────────
 
 
@@ -3718,96 +3528,31 @@ class BlueprintReviewBinding(FrozenModel):
         return self
 
 
-class BlueprintReviewWorkpack(FrozenModel):
-    """V9 范围材料：原文与完整节点各一份，问题与接受引用不展开历史。"""
+class BlueprintReadingWorkpack(FrozenModel):
+    """Blueprint 范围阅读材料：原文与完整节点各一份；不携带审阅或接受语义。
+
+    Stage2 语义审阅退役后，这份只读工作包仅服务原文↔蓝图对照阅读与证据回源；
+    机械可用性由统一准入（``/admission``）与 ``/check/stage2`` 报告分别披露。
+    """
 
     sid: str = Field(min_length=1)
     title: str = Field(min_length=1)
     read_only: Literal[True] = True
-    auto_decisions: Literal[False] = False
-    review_contract_version: Literal[BLUEPRINT_REVIEW_CONTRACT] = BLUEPRINT_REVIEW_CONTRACT
     scope: ReviewScope
     review_identity_sha256: Sha256
-    validation_seal_sha256: Sha256
-    review_token: str = Field(pattern=r'^bpr5_[0-9a-f]{64}$')
     subject_sha256: Sha256
     binding_sha256: Sha256
     binding: BlueprintReviewBinding
-    dependency_manifest: DependencyManifest
-    knowledge_links: KnowledgeLinkReview
     material: dict[str, Any]
-    progress: PlotReviewProgress
+    progress: BlueprintRunProgress
     check: CompactApprovalCheck
     accounting: list[AccountingLine]
 
     @model_validator(mode='after')
-    def _binding(self) -> 'BlueprintReviewWorkpack':
-        if self.review_token != f'bpr5_{self.binding_sha256}':
-            raise ValueError('Blueprint token 必须绑定当前范围工作包')
-        if self.scope != self.material.get('scope') or self.scope != self.dependency_manifest.scope:
+    def _binding(self) -> 'BlueprintReadingWorkpack':
+        if self.scope != self.material.get('scope'):
             raise ValueError('Blueprint 范围和实际材料不一致')
         return self
-
-
-class BlueprintSeenRequest(StrictModel):
-    """把 ``seen.read`` 精确绑定到用户实际取得的 Blueprint 工作包输入。
-
-    这不是新的审批形状；它只是写现役 seen proof 前的乐观并发条件。
-    token 证明提交方拿到的是一份完整 immutable workpack。内部 SHA 仍在审计
-    面分层保存，但 Commander/UI 不再搬运五枚可相互矛盾的散装摘要。
-    """
-
-    review_token: str = Field(pattern=r'^bpr5_[0-9a-f]{64}$')
-
-
-class Stage2GlobalSeenRequest(StrictModel):
-    """把 ``seen.global`` 精确绑定到审阅者实际读过的 Global 审阅面。
-
-    ``review_token`` 由服务端从当前 Global 主体、review 字节、MainText 主体与
-    blocking scope 现算（`novel/stages/stage2/global_review.py::review_token`）；
-    review 的任何一格状态/理由变化都会换 token，旧阅读事实不能配新主体提交。
-    ``actor`` 记录是谁读完并确认的：headless 路由下它是终审席位的 logical
-    session，永远不会是提交过 GlobalEdit 的那一个会话。
-    """
-
-    review_token: str = Field(pattern=r'^s2gr2_[0-9a-f]{64}$')
-    actor: str = Field(min_length=1, max_length=256)
-
-    @field_validator('actor')
-    @classmethod
-    def _actor_not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError('seen.global 的 actor 不得只含空白')
-        return value
-
-
-class Stage2FinalReviewRequest(StrictModel):
-    """``approval close-stage2`` 的双 token 恢复请求。
-
-    名字保留给公开 CLI 输入；现役语义只核验已有的两份独立节点接受，
-    并零模型补齐 ``s0 → s1 → seen.read → seen.global → s2``。
-    本请求自身不授予任何语义接受。
-    """
-
-    actor: str = Field(min_length=1, max_length=256)
-    reason: str = Field(min_length=1, max_length=4096)
-    global_review_token: str = Field(pattern=r'^s2gr2_[0-9a-f]{64}$')
-    blueprint_review_token: str = Field(pattern=r'^bpr5_[0-9a-f]{64}$')
-
-    @model_validator(mode='after')
-    def _no_blank_audit_fields(self) -> Stage2FinalReviewRequest:
-        if not self.actor.strip() or not self.reason.strip():
-            raise ValueError('Stage2 收口请求的 actor/reason 不得只含空白')
-        return self
-
-    @property
-    def blueprint_subject(self) -> BlueprintSeenRequest:
-        return BlueprintSeenRequest(review_token=self.blueprint_review_token)
-
-    @property
-    def global_subject(self) -> Stage2GlobalSeenRequest:
-        return Stage2GlobalSeenRequest(
-            review_token=self.global_review_token, actor=self.actor)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

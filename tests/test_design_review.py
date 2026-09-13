@@ -10,8 +10,7 @@ from tests.factories import missing_prepare_state
 from pydantic import ValidationError
 
 from contracts.invariants import (
-    APPROVAL_GATES, APPROVAL_SEEN, BLIND_ALIAS_ALGORITHM,
-    DESIGN_REVIEW_CONTRACT,
+    APPROVAL_GATES, BLIND_ALIAS_ALGORITHM, DESIGN_REVIEW_CONTRACT,
 )
 from contracts.schema.api import (
     ApprovalDoc, DesignChapterSubject, DesignConstraintOperations, DesignPreflightFailure,
@@ -132,7 +131,7 @@ def _subjects(
                 'participant_aliases': [PERSON]},
                 {'alias': BEAT2, 'content': '她随后走进门内。', 'participant_aliases': [PERSON]}],
             'states': [], 'inherited_states': [], 'background_beats': [],
-            'constraints': [], 'knowledge': [], 'endpoints': [],
+            'constraints': [], 'endpoints': [],
             'entry_state_aliases': [], 'carry_out_aliases': [], 'global_subjects': [],
         },
         chapter=chapter,
@@ -263,17 +262,20 @@ def _proof(decision) -> approvals._ApprovalProof:
 
 @pytest.fixture
 def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    from novel import admission
     from novel.work_units import initialize_workflow
     initialize_workflow(tmp_path)
     book = tmp_path / f'design_{SID}'
     book.mkdir()
     base_record = approvals._fresh_record(SID)
+    # Stage2 审阅闸已退役；s4 结构裁决仍要求 s1 原文闸，夹具预置已完成的
+    # 上游 artifact proof，保持「只隔离 Stage4A/B 状态机」的原语义。
     gates = dict(base_record.gate)
     gate_proofs = dict(base_record.gate_proofs)
-    gates['s2'] = True
-    gate_proofs['s2'] = approvals._ApprovalProof(
+    gates['s1'] = True
+    gate_proofs['s1'] = approvals._ApprovalProof(
         root_clean_sha1='a' * 40,
-        artifacts={'stage2/chapter_blueprints.json': 'e' * 64},
+        artifacts={'stage1/main_text.json': 'e' * 64},
         decision_sha256='f' * 64,
     )
     state = {'record': base_record.model_copy(update={
@@ -281,6 +283,11 @@ def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     }), 'subjects': _subjects(), 'candidate_proof_sha256': 'd' * 64}
     monkeypatch.setattr(
         approvals.paths, 'resolve_novel_dir', lambda _base, _sid: book)
+    # 本文件只隔离 Stage4A 审批记录的状态机；Stage2→Stage4 的机械准入由
+    # 准入边界反例单独驱动（见 test_design_entry_requires_mechanical_admission）。
+    monkeypatch.setattr(
+        admission, 'stage4_ready',
+        lambda _base, _sid: admission.AdmissionCheck('stage4', True))
     monkeypatch.setattr(
         approvals, '_read_current', lambda _base, _sid: state['record'])
     monkeypatch.setattr(
@@ -403,6 +410,24 @@ def test_design_apply_decided_view_and_plan_authorization_are_current(isolated):
     assert approvals.authorize_plan(base, SID) == doc.design_review.current_decision
     # 回归：decided 分支必须实际 return 一个 view，不能掉进后续 helper 定义。
     assert approvals._view(base, state['record']).design_review.state == 'accepted'
+
+
+def test_design_entry_requires_mechanical_admission(isolated, monkeypatch):
+    """Stage2 语义审阅退役后，A 的前置由统一机械准入驱动，不再是 gate['s2']。"""
+    from novel import admission
+    base, _state = isolated
+    template = _template(base)
+    request = _accept_all(template)
+    blocked = admission.AdmissionCheck(
+        'stage4', False, blocking=('完整 Blueprint（stage2/chapter_blueprints.json）不存在，'
+                                   '先运行对应生成入口',))
+    monkeypatch.setattr(admission, 'stage4_ready', lambda _base, _sid: blocked)
+    with pytest.raises(ApprovalRequired, match='机械准入未通过'):
+        approvals.design_template(
+            base, SID, actor='reviewer', reviewer_kind='human',
+            review_run_id='review-1', reason='准入未通过时不能发模板')
+    with pytest.raises(ApprovalRequired, match='完整 Blueprint'):
+        approvals.approve_design(base, SID, request)
 
 
 def test_same_design_subject_only_accepts_exact_replay(isolated):
@@ -975,7 +1000,6 @@ def test_design_http_routes_keep_template_read_only_and_apply_typed(
         prepare=missing_prepare_state(),
         sid=SID,
         gate={key: False for key in APPROVAL_GATES},
-        seen={key: False for key in APPROVAL_SEEN},
         spawns={},
         structure=StructureApprovalView(
             state='unavailable', current_subject_sha256=None),

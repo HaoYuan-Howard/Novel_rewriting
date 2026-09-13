@@ -10,11 +10,10 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from novel import paths, prov
+from novel import admission, paths, prov
 from novel.api.app import create_app
 from novel.errors import ArtifactUnreadable, BlockingFindingsUnresolved, UpstreamStale
 from novel.orchestrator import delivery
-from novel.quality.global_review import GenerationSafety
 from novel.stages.stage7 import assemble
 from novel.work_units import initialize_workflow
 
@@ -36,7 +35,19 @@ def current(tmp_path, monkeypatch):
     art = SimpleNamespace(subs=subs, kept=[], book_txt=SimpleNamespace(
         chars=len(expected), chapters=2))
     (book / assemble.REL).write_text('{}', encoding='utf-8')
-    live = SimpleNamespace(code='delivery-test', items=[], safe=True)
+    # Stage2 语义审阅退役：交付前置由统一机械准入驱动。
+    # gate_ok=False 模拟准入阻断；semantic=True 模拟「机械可用但语义未审」披露。
+    live = SimpleNamespace(code='delivery-test', items=[],
+                           gate_ok=True, semantic=True)
+    def fake_stage4_ready(base, sid):
+        if not live.gate_ok:
+            return admission.AdmissionCheck(
+                'stage4', False, blocking=('准入替身：Stage2 必要产物不可用',))
+        return admission.AdmissionCheck(
+            'stage4', True,
+            semantic_unreviewed=live.semantic,
+            disclosures=(admission.SEMANTIC_UNREVIEWED_NOTE,) if live.semantic else ())
+    monkeypatch.setattr(admission, 'stage4_ready', fake_stage4_ready)
 
     class BookStore:
         def __init__(self, ctx):
@@ -60,9 +71,6 @@ def current(tmp_path, monkeypatch):
     monkeypatch.setattr(assemble, '_Upstreams', lambda *_a: up)
     monkeypatch.setattr(assemble, 'require_stage2_delivery_approved', lambda *_a: None)
     monkeypatch.setattr(assemble, '_require_mapping_current', lambda *_a: None)
-    monkeypatch.setattr(delivery.global_review, 'generation_status', lambda *_a: (
-        GenerationSafety(current=True, safe=live.safe, all_pass=live.safe,
-                         quarantined_groups=(), blocking_item_ids=() if live.safe else ('item',)), {}))
     monkeypatch.setattr(delivery, 'inbox_view', lambda *_a: SimpleNamespace(items=live.items))
     return SimpleNamespace(base=tmp_path, sid='982', book=book, target=target,
                            expected=expected, live=live)
@@ -74,7 +82,10 @@ def test_current_delivery_and_http_do_not_read_or_generate_a_markdown_report(cur
     if report is not None:
         (c.book / '交付测试_review.md').write_bytes(report)
     before = {p.relative_to(c.base): p.read_bytes() for p in c.base.rglob('*') if p.is_file()}
-    assert delivery.assess(c.base, c.sid, start_code_version=c.live.code).state == 'ready'
+    # 默认替身带语义未审披露：成书可交付，但终验如实报 ready_with_disclosures。
+    outcome = delivery.assess(c.base, c.sid, start_code_version=c.live.code)
+    assert outcome.state == 'ready_with_disclosures'
+    assert 'Stage2 语义未审' in outcome.reason
     for _ in range(2):
         with TestClient(create_app(c.base)) as api:
             response = api.get(f'/api/novels/{c.sid}/stage7/book.txt?download=true')
@@ -100,7 +111,7 @@ def test_same_length_corruption_is_refused_even_when_a_size_or_freshness_account
     assert delivery.read_deliverable_book(c.base, c.sid) == c.expected
 
 
-@pytest.mark.parametrize('change', ['book', 'approval', 'code'])
+@pytest.mark.parametrize('change', ['book', 'upstream', 'code'])
 @pytest.mark.parametrize('entry', ['assessment', 'download'])
 def test_current_surface_changes_during_delivery_cannot_return_ready(current, monkeypatch, change, entry):
     c = current
@@ -110,8 +121,8 @@ def test_current_surface_changes_during_delivery_cannot_return_ready(current, mo
         result = original(*args)
         if change == 'book':
             c.target.write_bytes(c.expected.replace('木门', '城门').encode('utf-8'))
-        elif change == 'approval':
-            path = c.book / 'stage2' / 'global_review.json'
+        elif change == 'upstream':
+            path = c.book / 'stage2' / 'global_grounding.json'
             path.parent.mkdir(exist_ok=True)
             path.write_bytes(b'{"changed":true}')
         else:
@@ -127,12 +138,12 @@ def test_current_surface_changes_during_delivery_cannot_return_ready(current, mo
         assert outcome.state == 'stopped' and '校验期间' in outcome.reason
 
 
-@pytest.mark.parametrize('blocker', ['stage2', 'inbox'])
+@pytest.mark.parametrize('blocker', ['admission', 'inbox'])
 def test_existing_book_and_old_ready_report_cannot_override_active_blockers(current, blocker):
     c = current
     (c.book / '交付测试_review.md').write_text('所有项目 PASS，可以交付', encoding='utf-8')
-    if blocker == 'stage2':
-        c.live.safe = False
+    if blocker == 'admission':
+        c.live.gate_ok = False
     else:
         c.live.items = [SimpleNamespace(delivery_effect='blocking', stage='stage5',
                                        kind='closure', rule='typed-review')]
@@ -143,6 +154,7 @@ def test_existing_book_and_old_ready_report_cannot_override_active_blockers(curr
 
 def test_nonblocking_disclosure_remains_downloadable(current):
     c = current
+    c.live.semantic = False
     c.live.items = [SimpleNamespace(delivery_effect='disclosure')]
     assert delivery.assess(c.base, c.sid, start_code_version=c.live.code).state == 'ready_with_disclosures'
     assert delivery.read_deliverable_book(c.base, c.sid) == c.expected

@@ -11,7 +11,6 @@ import type {
   Sources,
 } from './common'
 import type { Job } from './jobs'
-import type { Stage2ReviewCoverage } from './stage2Review'
 import type { AgentDeliveryOutcome } from './agent'
 
 /* ---------------------------------------------------------------- stage0 */
@@ -236,22 +235,43 @@ export interface ArtifactState {
 
 export type ReadingResponse = import('./plot.generated').ReadingView
 
-export type BlueprintReviewWorkpack = Omit<import('./plot.generated').BlueprintReviewWorkpack, 'material'> & {
-  material: import('./plot').PlotReviewMaterial
+/** 阅读材料只服务原文↔蓝图对照；审阅语义已随 Stage2 语义审阅退役。 */
+export interface BlueprintReadingMaterial {
+  scope: import('./plot').ReviewScope
+  sources: { chapter_ordinal: number; text: string }[]
+  blueprints: import('./plot.generated').PlotBlueprint[]
 }
 
-export interface BlueprintSeenRequest {
-  review_token: string
+/** 生成进度逐章投影；processing_state / checkpoint_state 取值面来自后端。 */
+export interface BlueprintChapterRunProgress {
+  chapter_ordinal: number
+  run_id: string | null
+  checkpoint_state: string
+  processing_state: string | null
+  reason: string | null
 }
 
 /**
- * seen.global 的 hash-bound 阅读身份：`review_token` 由服务端从当前 Global 主体、
- * review 字节、正文主体与 blocking scope 现算；`actor` 是读完并确认的人/席位。
- * 页面不再“打开即已读”，只把服务端下发的 token 原样交回。
+ * Stage2 语义审阅退役后的只读阅读工作包：原文与完整节点各一份；
+ * 机械可用性由统一准入与 /check/stage2 报告披露，页面不自算语义结论。
  */
-export interface Stage2GlobalSeenRequest {
-  review_token: string
-  actor: string
+export type BlueprintReadingWorkpack = Omit<
+  import('./plot.generated').BlueprintReadingWorkpack,
+  'material' | 'progress'
+> & {
+  material: BlueprintReadingMaterial
+  progress: BlueprintRunProgress
+}
+
+/** 生成与机械提交分别计数；未知不作零显示。 */
+export interface BlueprintRunProgress {
+  total_chapters: number | null
+  generated_chapters: number | null
+  checkpoint_chapters: number | null
+  submitted_chapters: number | null
+  artifact_state: 'missing' | 'formal' | 'invalid' | 'unreadable'
+  chapters: BlueprintChapterRunProgress[]
+  unavailable_reason: string | null
 }
 
 /* ------------------------------------------------- stage2 · 全局设定 */
@@ -352,103 +372,6 @@ export type SourceBlurbMaterials = {
       | { kind: 'proposed'; through_chapter: number; rationale: string; boundary_evidence: GlobalFactEvidence }
       | { kind: 'unresolved'; reason: string }
   }
-
-export interface EvidenceRef {
-  artifact: string
-  subject_sha256: string
-  start: number | null
-  end: number | null
-}
-
-export type GlobalReviewState = 'pending' | 'PASS' | 'FAIL' | 'UNVER'
-
-export type GlobalReviewKind =
-  | 'world_rule_version' | 'secret' | 'reveal'
-  | 'name_distinctiveness' | 'character_identity' | 'alias_identity'
-  | 'world_rule_kind' | 'character_set_complete' | 'relation_set_complete'
-  | 'world_rule_set_complete' | 'secret_set_complete' | 'role' | 'relation'
-  | 'setting_fact' | 'secret_setup'
-
-/** Server-side verdict: does this item hold Stage4 closed, or is it audit-only? */
-export type GlobalReviewEffect = 'blocking' | 'disclosure'
-
-export interface GlobalReviewGenerationDisposition {
-  action: 'quarantine_group'
-  reason: string
-}
-
-export interface GlobalReviewItem {
-  item_id: string
-  kind: GlobalReviewKind
-  subject_path: string
-  subject_sha256: string
-  state: GlobalReviewState
-  resolution_required: boolean
-  evidence: EvidenceRef[]
-  actor: string | null
-  decided_at: string | null
-  reason: string | null
-  /** Explicit audit decision for generation; UNVER remains UNVER. */
-  generation_disposition: GlobalReviewGenerationDisposition | null
-  /**
-   * Derived by the server. Never recompute it here: a local copy of the
-   * classification table becomes a second judge, and a newly added
-   * high-impact kind would keep rendering as audit-only with nothing
-   * making a sound.
-   */
-  effect: GlobalReviewEffect
-  /** Derived by the server; every item of one subject shares this key. */
-  group_key: string
-}
-
-export interface GlobalReviewResponse {
-  review_coverage?: Stage2ReviewCoverage | null
-  /** Hash persisted with the review artifact. */
-  source_sha256: string
-  /** Hash recomputed from the current complete GlobalGrounding. */
-  current_subject_sha256: string
-  current: boolean
-  /** Blocking surface only — the strict truth result, not the generation gate. */
-  approved: boolean
-  /** Current downstream view is safe after deterministic quarantine, if any. */
-  generation_safe: boolean
-  /** Complete fact groups omitted from generation; their raw UNVER rows remain below. */
-  quarantined_groups: string[]
-  /** seen.global 的阅读凭证；主体不 current 时为 null，此时不得提供确认动作。 */
-  review_token: string | null
-  /** `{effect: {state: n}}`; both key levels always present, zeros included. */
-  effect_counts: Record<GlobalReviewEffect, Record<GlobalReviewState, number>>
-  items: GlobalReviewItem[]
-}
-
-export interface GlobalReviewDecision {
-  item_id: string
-  expected_subject_sha256: string
-  state: Exclude<GlobalReviewState, 'pending'>
-  reason: string
-  evidence: EvidenceRef[]
-  generation_disposition?: GlobalReviewGenerationDisposition | null
-}
-
-export interface GlobalReviewBlockingScopeDecision {
-  expected_source_sha256: string
-  expected_blocking_scope_sha256: string
-  expected_workpack_sha256: string
-  expected_item_count: number
-  reviewed_chapter_ordinals: number[]
-  /** Emitted templates are UNVER; the reviewer must explicitly change this to PASS. */
-  state: 'PASS' | 'UNVER'
-  reason: string
-  evidence: EvidenceRef[]
-}
-
-export interface GlobalReviewDecisionSet {
-  /** Self-reported audit label; not an authenticated identity. */
-  actor: string
-  decisions: GlobalReviewDecision[]
-  /** Optional complete blocking-surface default; explicit decisions are exceptions. */
-  blocking_scope?: GlobalReviewBlockingScopeDecision | null
-}
 
 /* ---------------------------------------------------------------- stage4 */
 

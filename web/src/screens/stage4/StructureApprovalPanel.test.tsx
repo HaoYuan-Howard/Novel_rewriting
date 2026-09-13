@@ -59,13 +59,12 @@ const rows: Stage4IndexRow[] = [
 
 function undecided(): ApprovalDoc {
   return {
-    v: 8, prepare: missingPrepareState(),
+    v: 9, prepare: missingPrepareState(),
     sid: 'book-1',
     gate: {
-      s0: true, s1: true, s2: true,
+      s0: true, s1: true,
       s4: false, s5: false, s6: false, s7: false,
     },
-    seen: { read: true, global: true },
     writing: false,
     design_review: {
       state: 'accepted', candidate_sha256: 'c'.repeat(64),
@@ -359,7 +358,7 @@ describe('Stage4 typed 结构审批', () => {
         state: 'unavailable', current_subject_sha256: null,
         current_decision: null, history: [], binding_concerns: [],
       },
-      spawns: { s2: [], s4: [replan] },
+      spawns: { s4: [replan] },
     })
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
     const argv = 'python -m novel.cli run book-1 stage4.design --replan --yes'

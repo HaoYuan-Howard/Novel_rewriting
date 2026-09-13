@@ -32,7 +32,7 @@ from novel.run import RunContext
 from novel.stages.stage5 import closure, review, trim_resolution
 from novel.store import ArtifactStore
 
-_GATES = ('s0', 's1', 's2', 's4', 's5', 's6', 's7')
+_GATES = ('s0', 's1', 's4', 's5', 's6', 's7')
 
 
 def _finding_payload(rule: str, *, ordinal: int | None = 1,
@@ -132,14 +132,6 @@ def rig(tmp_path, monkeypatch):
 
     monkeypatch.setattr(approvals, '_make_proof', fake_make_proof)
 
-    def fake_seen_proof(_novel_dir, key):
-        return approvals._ApprovalProof(
-            root_clean_sha1='0' * 40,
-            artifacts={f'{key}.json': 'd' * 64},
-            decision_sha256='e' * 64)
-
-    monkeypatch.setattr(approvals, '_proof_for_seen', fake_seen_proof)
-
     # 公开 structure 视图按真实计划重算；本盘面没有计划文件，这里把它绑定到
     # 记录里的 typed 决定（该视图自身的语义由 test_approvals 覆盖）。
     def fake_structure_view(novel_dir, record):
@@ -152,7 +144,7 @@ def rig(tmp_path, monkeypatch):
             root_clean_sha1='0' * 40,
             artifacts={f'{gate}.json': 'a' * 64},
             decision_sha256='b' * 64)
-        for gate in ('s0', 's1', 's2', 's4')}
+        for gate in ('s0', 's1', 's4')}
 
     real_proof_for_gate = approvals._proof_for_gate
 
@@ -193,18 +185,9 @@ def _open_s4(base, sid) -> None:
             artifacts={f'{tag}.json': 'a' * 64},
             decision_sha256='b' * 64)
 
-    gates = {key: key in ('s0', 's1', 's2', 's4') for key in _GATES}
+    gates = {key: key in ('s0', 's1', 's4') for key in _GATES}
     gate_proofs = {
         key: _proof(key) if gates[key] else None for key in _GATES}
-    seen = {key: True for key in approvals.APPROVAL_SEEN}
-    # 必须与夹具 fake_seen_proof 返回值逐字一致，否则 effective 投影会
-    # 如实把 seen 关掉（那正是生产语义，不是测试障碍）。
-    seen_proofs = {
-        key: approvals._ApprovalProof(
-            root_clean_sha1='0' * 40,
-            artifacts={f'{key}.json': 'd' * 64},
-            decision_sha256='e' * 64)
-        for key in approvals.APPROVAL_SEEN}
     structure = approvals._StoredStructureDecision(
         actor='reviewer', reason='当前结构逐章核对通过',
         subject_sha256='2' * 64,
@@ -216,7 +199,6 @@ def _open_s4(base, sid) -> None:
         proof=gate_proofs['s4'])
     record = approvals._read_current(base, sid).model_copy(update={
         'gate': gates, 'gate_proofs': gate_proofs,
-        'seen': seen, 'seen_proofs': seen_proofs,
         'structure_history': [structure],
         'structure_decision': structure,
     })
@@ -851,7 +833,7 @@ def test_approve_closure_opens_gate_s5_and_unblocks_downstream(rig, monkeypatch)
 
     request = _ruling_request(store)
     doc = approvals.approve_stage5_closure(base, sid, request)
-    assert doc.v == 8
+    assert doc.v == 9
     assert doc.gate['s5'] is True
     assert doc.closure.state == 'closed'
     assert doc.closure.current_decision is not None
@@ -1090,7 +1072,7 @@ def test_new_blocker_takes_priority_over_an_expired_old_decision(
 def test_public_doc_projects_a_computable_workpack_for_fresh_records(rig):
     ctx, store = rig
     doc = approvals.get(ctx.novel_dir.parent, ctx.sid)
-    assert doc.v == 8
+    assert doc.v == 9
     # 没有 blockers 也没有回执 ⇒ ready；「missing」只留给没有 Review 的书。
     assert doc.closure.state == 'ready'
     assert doc.closure.workpack is not None

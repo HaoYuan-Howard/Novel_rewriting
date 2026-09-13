@@ -121,4 +121,5 @@ def check_plot(c: Any) -> list[Outcome]:
             ran('context_scope', [finding('context_scope', detail=str(c.prov.get('context')),
                                           evidence=[str(c.prov.get('context'))])],
                 scanned='当前产物来源上下文'),
-            unverifiable('plot_semantics', '剧情完整、归因、因果及披露由章审和跨章复核裁决')]
+            unverifiable('plot_semantics', '剧情完整、归因、因果及披露不能由形状检查证明；'
+                         '属 Stage2 语义未审披露，最终随交付披露')]

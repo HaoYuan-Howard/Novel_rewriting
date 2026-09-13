@@ -21,7 +21,6 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from contracts.schema.stage0 import Stage0CandidatePlan, Stage0EditPlan
-from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema.orchestration import (
     ReviewerActionRecord,
 )
@@ -217,63 +216,6 @@ def save_draft_edit(
         os.replace(tmp, target)
     except OSError as exc:
         raise ArtifactUnreadable(f'保存人工改稿失败：{exc!r}') from exc
-    finally:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-    return target.resolve()
-
-
-def save_stage2_issue_submission(
-    base: str | os.PathLike[str],
-    sid: str,
-    submission: 'Stage2IssueReviewSubmission',
-) -> Path:
-    """issues 协议回答的一次性保存；CLI 事务只消费这一份公开请求。"""
-    from contracts.schema.stage2_issue_review import Stage2IssueReviewSubmission
-    paths.check_sid(sid)
-    root = service_dir(base) / EDITS_DIRNAME / sid
-    root.mkdir(parents=True, exist_ok=True)
-    target = root / f'issue-review-{uuid.uuid4().hex}.json'
-    tmp = target.with_suffix('.tmp')
-    try:
-        data = submission.model_dump(mode='json', by_alias=True)
-        tmp.write_bytes((json.dumps(
-            data, ensure_ascii=False, indent=2, sort_keys=True) + '\n').encode('utf-8'))
-        os.replace(tmp, target)
-    except OSError as exc:
-        raise ArtifactUnreadable(f'保存 stage2 issues 审阅提交失败：{exc!r}') from exc
-    finally:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-    return target.resolve()
-
-
-def save_global_review_decisions(
-    base: str | os.PathLike[str],
-    sid: str,
-    decisions: GlobalReviewDecisionSet,
-) -> Path:
-    """Persist a one-shot Stage2 decision set outside the artifact tree."""
-    try:
-        paths.check_sid(sid)
-    except PathRefused as exc:
-        raise SourcePathRejected(f'复核决策的书 id 不合法：{exc}') from exc
-    root = service_dir(base) / EDITS_DIRNAME / sid
-    root.mkdir(parents=True, exist_ok=True)
-    target = root / f'global-review-{uuid.uuid4().hex}.json'
-    tmp = target.with_suffix('.tmp')
-    try:
-        payload = decisions.model_dump(mode='json', by_alias=True)
-        data = encode_artifact(STAGE2_GLOBAL_REVIEW_DECISIONS, payload)
-        tmp.write_bytes((json.dumps(
-            data, ensure_ascii=False, indent=2, sort_keys=True) + '\n').encode('utf-8'))
-        os.replace(tmp, target)
-    except OSError as exc:
-        raise ArtifactUnreadable(f'保存 stage2 复核决策失败：{exc!r}') from exc
     finally:
         try:
             tmp.unlink(missing_ok=True)

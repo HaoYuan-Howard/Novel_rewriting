@@ -17,13 +17,11 @@ from typing import Any
 from pydantic import TypeAdapter, ValidationError
 
 from contracts.schema.common import Sha256
-from contracts.schema.stage2_review import Stage2ReviewCoverage
 from novel.orchestrator import queue
 
 
 WAITING_ON = frozenset({
-    queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW, 'stage6.approve', 'stage7.approve',
-    queue.WAITING_ON_STAGE6_PREPARE,
+    'stage6.approve', 'stage7.approve', queue.WAITING_ON_STAGE6_PREPARE,
 })
 _OBJECT = TypeAdapter(dict[str, Any])
 _SHA = TypeAdapter(Sha256)
@@ -56,24 +54,12 @@ def business_identity(
                 'review_token': token,
                 'reviewer_contract_sha256': hashlib.sha256(contract.encode('utf-8')).hexdigest(),
             }
-        surface = ('blueprint' if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW
-                   else waiting_on.removesuffix('.approve'))
-        material = materials[surface]
-        identity = {
+        material = materials[waiting_on.removesuffix('.approve')]
+        return {
             'kind': 'review-material-business-v1', 'waiting_on': waiting_on,
             'review_identity_sha256': _SHA.validate_python(material['review_identity_sha256']),
             'reviewer_contract_sha256': hashlib.sha256(contract.encode('utf-8')).hexdigest(),
         }
-        if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
-            identity.update({
-                'scope': material['scope'],
-                'subject_sha256': _SHA.validate_python(material['subject_sha256']),
-                'material_sha256': _sha(material['material']),
-                'knowledge_scope_sha256': material['knowledge_links']['scope']['scope_sha256'],
-                'knowledge_decisions': material['knowledge_links']['inherited'],
-                'pending_knowledge': material['knowledge_links']['pending_obligation_ids'],
-            })
-        return identity
     except (KeyError, TypeError, ValidationError) as exc:
         raise RevalidationRefused('审阅材料缺完整业务身份或义务') from exc
 
@@ -105,10 +91,6 @@ def request_business_sha256(request: Mapping[str, Any]) -> str:
 
 
 def _token_path(action: Mapping[str, Any]) -> tuple[str | int, ...]:
-    if action.get('kind') == 'approval' and action.get('surface') == 'stage2_blueprint_review':
-        return ('payload', 'review_token')
-    if action.get('kind') == 'node' and action.get('node') == 'stage2.blueprint':
-        return ('input_payload', 'expected_cross_review_token')
     if action.get('kind') == 'node' and action.get('node') == 'stage6.prepare':
         return ('input_payload', 'review_token')
     if action.get('kind') == 'node' and action.get('node') in {'stage6.approve', 'stage7.approve'}:
@@ -153,19 +135,9 @@ def _reading(envelope: Mapping[str, Any]) -> dict[str, Any]:
             for option in result['submission_options']:
                 option['exact_request'].pop('surface_seal')
             return result
-        surface = ('blueprint' if waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW
-                   else waiting_on.removesuffix('.approve'))
-        material = result['materials'][surface]
-        for key in ('validation_seal_sha256', 'review_token',
-                    'binding_sha256' if surface == 'blueprint' else 'workpack_sha256'):
+        material = result['materials'][waiting_on.removesuffix('.approve')]
+        for key in ('validation_seal_sha256', 'review_token', 'workpack_sha256'):
             material.pop(key)
-        if surface == 'blueprint':
-            # 整书文件摘要只守本次读取竞态；实际消费内容仍全部比较。
-            for key in ('main_text_artifact_sha256', 'blueprint_artifact_sha256',
-                        'check_report_sha256'):
-                material['binding'].pop(key)
-            for key in ('main_text_sha256', 'knowledge_sha256', 'blueprint_sha256'):
-                material['knowledge_links']['scope'].pop(key)
         for option in result['submission_options']:
             exact = option['exact_request']
             exact.pop('surface_seal')
@@ -211,12 +183,6 @@ class ReviewRevalidation:
                 result = stage6_prepare_wire.assemble(original, result)
             except stage6_prepare_wire.PrepareReviewerWireError as exc:
                 raise RevalidationRefused(str(exc)) from exc
-        if self.source['waiting_on'] == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
-            from novel.orchestrator import stage2_blueprint_wire
-            try:
-                result = stage2_blueprint_wire.assemble(result)
-            except ValueError as exc:
-                raise RevalidationRefused(str(exc)) from exc
         if (set(result) != {'schema', 'surface_seal', 'waiting_on', 'action'}
                 or result['surface_seal'] != self.source['surface_seal']
                 or result['waiting_on'] != self.source['waiting_on']):
@@ -256,9 +222,6 @@ def prepare(
     same_schema = request.get('schema_sha256') == schema_sha256
     if task.waiting_on == queue.WAITING_ON_STAGE6_PREPARE:
         same_schema = _prepare_schema_bound(request, old, task, schema_sha256)
-    if not same_schema and task.waiting_on == queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW:
-        from novel.orchestrator.stage2_blueprint_wire import allows_schema_publication_revalidation
-        same_schema = allows_schema_publication_revalidation(request, schema_sha256)
     if (not same_schema or old_prefix != new_prefix
             or _reading(old) != _reading(new)):
         return None

@@ -10,16 +10,17 @@ from pydantic import ValidationError
 
 from contracts.invariants import CHAPTER_WEIGHT_RATIO, PLAN_BUDGET_BAND
 from contracts.schema.plot import (
-    PlotBlueprint, PlotChapterArrangement, PlotChapterResponse, PlotKnowledgeTrigger,
+    PlotBlueprint, PlotChapterArrangement, PlotChapterResponse,
 )
 from contracts.schema.stage4 import BlindSceneResponse, PlanChapter
 from novel.stages.stage2.plot_compile import compile_chapter
-from novel.stages.stage4 import checks
+from novel.stages.stage4 import checks, plot_checks
 from novel.stages.stage4.beats import beat_index
 from novel.stages.stage4.measure import (
     _bounded_round_shares, adopt_plan_response, identity_plan,
-    semantic_contract_of, source_chars_table, structure_metrics_of,
+    semantic_contract_of, source_chars_table,
 )
+from novel.stages.stage4.plot_measure import structure_metrics_of
 from novel.stages.stage4.plot_placements import compile_placements
 from tests import plot_fixtures as fixture
 from tests.test_plot_blueprint import blueprint, arrangement, chapter_response
@@ -147,29 +148,14 @@ def test_split_state_requires_specific_binding_and_does_not_default_to_first_sce
     assert next(b for b in compiled.bindings if b.kind == 'state').scene_ref == 's02'
 
 
-@pytest.mark.parametrize('kind,endpoint', [('state', 'established'), ('knowledge', 'trigger'),
-                                         ('constraint', 'target'), ('goal', 'open')])
+@pytest.mark.parametrize('kind,endpoint', [('state', 'established'), ('constraint', 'target'),
+                                          ('goal', 'open')])
 def test_unregistered_endpoint_cannot_create_new_truth_or_permission(kind, endpoint):
     raw = arrangement().model_dump(mode='json')
     raw['anchor_bindings'] = [{'kind': kind, 'ref': 'unregistered',
                               'endpoint': endpoint, 'scene_ref': 's01'}]
     with pytest.raises(ValueError, match='不能创造'):
         _compile(raw)
-
-
-def test_knowledge_trigger_must_bind_to_its_parent_delivery():
-    raw = arrangement(distributed=True).model_dump(mode='json')
-    knowledge = [PlotKnowledgeTrigger(knowledge_ref='k1', trigger_beat_ref='b01_02')]
-    with pytest.raises(ValueError, match='明确绑定'):
-        _compile(raw, knowledge=knowledge)
-    raw['anchor_bindings'] = [{'kind': 'knowledge', 'ref': 'k1',
-                              'endpoint': 'trigger', 'scene_ref': 's02'}]
-    compiled = _compile(raw, knowledge=knowledge)
-    assert next(b for b in compiled.bindings if b.kind == 'knowledge').scene_ref == 's02'
-    # 有显式绑定也不能把知识端点移到不呈现它的场。
-    raw['beat_placements'][1]['deliveries'] = raw['beat_placements'][1]['deliveries'][:1]
-    with pytest.raises(ValueError):
-        _compile(raw, knowledge=knowledge)
 
 
 @pytest.mark.parametrize('kind', ['cause', 'story_before', 'response_to', 'observes'])
@@ -276,7 +262,7 @@ def test_budget_allocator_postconditions_are_green_at_the_production_checker():
     bp, plan, index, main = _budget_case([37, 65, 288, 411, 73],
                                        ['minor', 'below', 'even', 'above', 'major'])
     adopt_plan_response(plan, bp, index)
-    outcomes = {o.rule: o for o in checks.check(plan, blueprints=bp, main_text=main)}
+    outcomes = {o.rule: o for o in plot_checks.check(plan, blueprints=bp, main_text=main)}
     assert not outcomes['budget_band'].findings
     assert not outcomes['plan_book_band'].findings
     assert sum(s['budget_chars'] for c in plan['output_chapters'] for s in c['scenes']) == 874

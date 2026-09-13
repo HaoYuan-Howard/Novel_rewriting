@@ -172,19 +172,14 @@ class Stage2CharactersAgent(NodeExecutorAgent[CharacterRegistry]):
     node = 'stage2.characters'
 
     def __init__(self, ctx: RunContext, *, driver: AgentDriver | None = None,
-                 max_turns: int = 4, review_token: str | None = None) -> None:
+                 max_turns: int = 4) -> None:
         super().__init__(ctx, driver=driver, max_turns=max_turns)
-        self.review_token = review_token
 
     def run(self) -> NodeAgentResult[CharacterRegistry]:
         from novel.stages.stage2 import characters
 
         try:
-            artifact = characters.run(self.ctx, self.client, review_token=self.review_token)
-            if self.review_token is not None:
-                from novel.orchestrator.approvals import mark_stage2_rework_landed
-                mark_stage2_rework_landed(
-                    self.ctx.novel_dir.parent, self.ctx.sid, self.node, self.review_token)
+            artifact = characters.run(self.ctx, self.client)
             self.client.finish(process_state='ok', delivery_state='delivered')
             return NodeAgentResult(artifact=artifact, turns=self.client.turns_used, passed=True)
         except Exception as exc:
@@ -201,18 +196,12 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
 
     def __init__(
         self, ctx: RunContext, *, driver: AgentDriver | None = None,
-        max_turns: int = 4, review_token: str | None = None,
+        max_turns: int = 4,
     ) -> None:
         super().__init__(ctx, driver=driver, max_turns=max_turns)
-        self.review_token = review_token
 
     def run(self) -> NodeAgentResult[GlobalGrounding]:
-        result = self._run_candidate()
-        if self.review_token is not None:
-            from novel.orchestrator.approvals import mark_stage2_rework_landed
-            mark_stage2_rework_landed(
-                self.ctx.novel_dir.parent, self.ctx.sid, self.node, self.review_token)
-        return result
+        return self._run_candidate()
 
     def _finish_restored(
             self, acceptance: Mapping[str, object], *,
@@ -260,8 +249,7 @@ class Stage2GlobalAgent(NodeExecutorAgent[GlobalGrounding]):
     def _run_candidate(self) -> NodeAgentResult[GlobalGrounding]:
         last_rejected: extract.GlobalCandidateEvaluation | None = None
         try:
-            prepared = extract.prepare_global_candidate(
-                self.ctx, agent_envelope=True, review_token=self.review_token)
+            prepared = extract.prepare_global_candidate(self.ctx, agent_envelope=True)
             extract.ensure_global_agent_run(self.ctx, prepared)
             extract.adopt_global_validator_resolution_checkpoint(
                 self.ctx, prepared)
@@ -913,14 +901,12 @@ class Stage2BlueprintAgent(NodeExecutorAgent[ChapterBlueprints]):
         driver_factory: BlueprintDriverFactory | None = None,
         max_turns: int = 4,
         concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
-        review_token: str | None = None,
     ) -> None:
         if ctx.node != self.node:
             raise ValueError(f'{type(self).__name__} 只接受 {self.node}，实得 {ctx.node}')
         if ctx.executor_profile is None:
             raise ValueError(f'{self.node} executor 缺 resolved profile')
         self.ctx = ctx
-        self.review_token = review_token
         self.pool = BlueprintSessionPool(
             ctx,
             driver_factory=driver_factory,
@@ -1075,9 +1061,8 @@ class Stage2BlueprintAgent(NodeExecutorAgent[ChapterBlueprints]):
 
     def run(self) -> NodeAgentResult[ChapterBlueprints]:
         try:
-            if self.review_token is not None:
-                report = extract.run_blueprint(
-                    self.ctx, self.pool, review_token=self.review_token)
+            if True:
+                report = extract.run_blueprint(self.ctx, self.pool)
                 artifact = ArtifactStore(self.ctx).read(
                     ChapterBlueprints, extract.BLUEPRINT_REL)
                 self.pool.finish_all(
@@ -3131,9 +3116,8 @@ def build_node_agent(
     if factory is None:
         raise ValueError(
             f'{ctx.node} 尚未按迁移顺序接入 executor agent；拒绝静默回退 DeepSeek')
-    if review_token is not None and ctx.node not in {
-            'stage2.characters', 'stage2.global', 'stage2.blueprint'}:
-        raise ValueError(f'{ctx.node} 不接受 Stage2 review_token 参数')
+    if review_token is not None and ctx.node != 'stage4.design':
+        raise ValueError(f'{ctx.node} 不接受 review_token 参数')
     if (ctx.node != 'stage4.design'
             and (repair_decision_sha256 is not None
                  or repair_scope is not None)):
@@ -3155,7 +3139,7 @@ def build_node_agent(
                 'stage2.blueprint 不接受 Stage5 chapters/revise/reviewer_rewrite 参数')
         return factory(
             ctx, driver_factory=driver_factory, max_turns=max_turns,
-            concurrency=concurrency, review_token=review_token)
+            concurrency=concurrency)
     if ctx.node == 'stage4.design':
         if driver is not None:
             raise ValueError(
@@ -3227,8 +3211,7 @@ def build_node_agent(
         raise ValueError(
             f'{ctx.node} 不接受 Stage5 chapters/revise/reviewer_rewrite 参数')
     if ctx.node in {'stage2.characters', 'stage2.global'}:
-        return factory(
-            ctx, driver=driver, max_turns=max_turns, review_token=review_token)
+        return factory(ctx, driver=driver, max_turns=max_turns)
     if ctx.node == 'stage4.plan':
         return factory(ctx, driver=driver, max_turns=max_turns, concurrency=concurrency)
     return factory(ctx, driver=driver, max_turns=max_turns)

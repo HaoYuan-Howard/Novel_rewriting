@@ -1,16 +1,11 @@
-"""BP10 表面身份的真实编译、编辑与 KL3 闭集；不以结构通过声称语义接受。"""
+"""BP10 表面身份的真实编译、编辑与身份闭集；不以结构通过声称语义接受。"""
 from __future__ import annotations
 
 import pytest
 
-from contracts.schema.knowledge import KnowledgeGrounding
-from contracts.schema.knowledge_links import KnowledgeLinkHistory, KnowledgeLinkSubmission
 from contracts.schema.plot import PlotChapterResponse, PlotSubjectRef
 from contracts.schema.plot_edit import PlotChapterEdit
-from contracts.schema.stage1 import MainText
-from contracts.schema.stage2 import ChapterBlueprints
-from novel.errors import HumanEditProtected
-from novel.stages.stage2 import knowledge_links, plot_edit
+from novel.stages.stage2 import plot_edit
 from novel.stages.stage2.character_refs import blueprint_character_prompt_inventory
 from novel.stages.stage2.plot_compile import (
     available_actor_bindings, compile_chapter, response_projection, state_materials,
@@ -285,49 +280,3 @@ def test_typed_presentation_replace_retires_old_id_and_reserves_next_id():
     assert result.beats[0].participants[0].presentation_ref == 'ap01_04'
     assert tombstones[0].node_id == 'ap01_01'
     assert tombstones[0].superseded_by == ['ap01_04']
-
-
-def _scope_with_local_identity():
-    chapter = compiled()
-    provenance = {'code': 'fixture', 'root_clean_sha1': '0' * 40, 'inputs': {},
-        'prompts': {'FIXTURE_ONLY': '0' * 10}, 'model': 'fixture'}
-    book = ChapterBlueprints(blueprints=[chapter, compiled(response(2))], _provenance={**provenance, 'scope_violations': [],
-        'context': {'architecture': 'plot-blueprint-v1', 'source_format': 'numbered-paragraphs-v1',
-                    'global_projection_contract': 'plot-global-scope-v2'}})
-    global_ = KnowledgeGrounding.model_validate({'characters_reference_sha256': '0' * 64,
-        'setting': {'era': None, 'social_context': None, 'era_evidence_refs': [], 'social_context_evidence_refs': []},
-        'relations': [], 'world_rules': [], 'arc_secrets': [], 'evidence_anchors': {},
-        '_provenance': {**provenance, 'evidence_locator_failures': []}})
-    main = MainText.model_validate([{'chapter_ordinal': ordinal, 'text': SOURCE} for ordinal in (1, 2)])
-    kwargs = dict(main_sha256='1' * 64, knowledge_sha256='2' * 64, blueprint_sha256='3' * 64)
-    before = knowledge_links.build_scope(main, global_, book, **kwargs)
-    submission = KnowledgeLinkSubmission(scope_sha256=before.scope_sha256, actor='test', reason='同章局部揭示',
-        decisions=[], event_operations=[{'operation': 'put', 'event_id': 'ke_identity', 'expected_event_sha256': None,
-        'event': {'kind': 'reader_reveal', 'subject_ref': {'kind': 'beat', 'ref': 'b01_02'}, 'audience': None,
-            'chapter_ordinal': 1, 'evidence_refs': [{'chapter_ordinal': 1, 'evidence_ref': 'e01_02'}]},
-        'resolution': {'kind': 'at_beats', 'trigger_beat_ref': 'b01_02',
-            'subject_refs': [{'kind': 'beat', 'ref': 'b01_02'}],
-            'identity_actors': [{'char_id': 'char_001', 'presentation_ref': 'ap01_01'},
-                                {'char_id': 'char_001', 'presentation_ref': 'ap01_02'}]}}])
-    registry = knowledge_links.event_registry([KnowledgeLinkHistory(
-        decision_sha256='4' * 64, accepted=False, submission=submission)])
-    after = knowledge_links.build_scope(main, global_, book, registered_events=registry, **kwargs)
-    return before, after, submission
-
-
-def test_same_chapter_identity_reveal_is_sparse_event_at_explicit_beat_not_global_secret():
-    before, after, submitted = _scope_with_local_identity()
-    assert before.obligations == []
-    result = knowledge_links.materialize_submission(before, after, submitted)
-    decision = result.decisions[0]
-    assert decision.resolution.trigger_beat_ref == 'b01_02'
-    assert len(decision.resolution.identity_actors) == 2
-    assert [row.kind for row in after.obligations] == ['reader_reveal']
-
-
-def test_identity_reveal_cannot_invent_or_open_unprovided_presentation():
-    before, after, submitted = _scope_with_local_identity()
-    raw = submitted.model_dump(mode='json')
-    raw['event_operations'][0]['resolution']['identity_actors'][1]['presentation_ref'] = 'ap01_99'
-    with pytest.raises(HumanEditProtected, match='未在本章'):
-        knowledge_links.materialize_submission(before, after, KnowledgeLinkSubmission.model_validate(raw))

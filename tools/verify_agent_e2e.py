@@ -7,7 +7,8 @@
 * 完成度、七层 check 与 inbox 来自同一份 operator snapshot；
 * Commander admission 已关闭，且 active claim / open execution 两面归零；
 * 交付结论调用 ``delivery.assess``，不重算第二张绿灯；
-* 产物版本与稳定性读数复用 ``tools/workflow_metrics.py``；
+* 产物版本漂移与代码身份由本工具按注册表与 ledger 现算（旧 workflow_metrics
+  读数器已随 Stage2 语义审阅退役）；
 * 审批只读当前 proof 折叠后的公开投影；
 * 成本账、session turn 与 artifact adoption 只按 ``attempt_id``
   逐项联结，不用默认模型、进程退出码或文件存在性补猜。
@@ -39,11 +40,11 @@ sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from contracts.invariants import (                                  # noqa: E402
-    AGENT_EXECUTOR_NODES, APPROVAL_GATES, APPROVAL_SEEN,
+    AGENT_EXECUTOR_NODES, APPROVAL_GATES,
     COMMANDER_MAX_ATTEMPTS_PER_SEAT, STAGES,
 )
 from novel import (                                                  # noqa: E402
-    agent_session_audit, operator_telemetry, prov,
+    agent_session_audit, operator_telemetry, paths, prov,
 )
 from novel.agent_capabilities import reported_model_matches           # noqa: E402
 from novel.llm.ledger import (                                       # noqa: E402
@@ -60,7 +61,6 @@ from novel.orchestrator.inspection import (                          # noqa: E40
     capture_operator_snapshot, read_surface_seal,
 )
 from novel.views.inbox import inbox_from_snapshot                    # noqa: E402
-from tools import workflow_metrics                                   # noqa: E402
 
 
 CHECK_STATES = ('pass', 'fail', 'unknown')
@@ -639,13 +639,10 @@ def current_approval_check(base: Path, sid: str, approval: Any) -> dict[str, Any
         gate for gate, current in producer_gates.items() if not current)
     closed = sorted(key for key, value in gates.items() if value)
     missing = sorted(set(APPROVAL_GATES) - set(closed))
-    seen = sorted(key for key, value in approval.seen.items() if value)
-    missing_seen = sorted(set(APPROVAL_SEEN) - set(seen))
-    passed = not missing and not missing_seen and not producer_missing and not projection_mismatches
+    passed = not missing and not producer_missing and not projection_mismatches
     return _check(
         'current_hash_bound_approvals', 'pass' if passed else 'fail',
         closed_gates=closed, missing_gates=missing,
-        seen=seen, missing_seen=missing_seen,
         producer_gates=producer_gates, producer_missing_gates=producer_missing,
         projection_mismatches=projection_mismatches)
 
@@ -708,11 +705,79 @@ def execution_identity_check(identity: Mapping[str, Any], outer: Any, *,
         invalid_reason_count=len(identity['experiment_invalid_reasons']))
 
 
-def _workflow_metrics_for_run(
-    base: str | Path, sid: str, run_id: str,
-) -> dict[str, Any]:
-    """本轮成本/闸/CLI/身份只认精确 run；产物与人审仍由读数器看 current snapshot。"""
-    return workflow_metrics.collect(base, sid, run_id=run_id)
+def _scoped_ledger_rows(base: str | Path, sid: str, run_id: str) -> list[dict[str, Any]]:
+    """本轮成本/身份只认精确 run；同 sid 的旧失败不得进入本轮读数。"""
+    return [
+        row for row in read_jsonl_rows(ledger_path(Path(base)))
+        if row.get('sid') == sid and row.get('run_id') == run_id
+    ]
+
+
+def _run_identity(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """代码身份与 ``experiment_valid``。只回答可复现性，不回答质量。"""
+    codes = {str(row.get('code')) for row in rows if row.get('code')}
+    reasons: list[str] = []
+    if not codes:
+        reasons.append('盘上没有任何代码身份：这次跑不能当实验臂')
+    if any(code.endswith('-dirty') for code in codes):
+        reasons.append('存在 -dirty 代码身份：工作树未提交，字节不可复现')
+    if len(codes) > 1:
+        reasons.append(f'代码身份不唯一（{len(codes)} 个）：跑中途换过代码')
+    return {
+        'code_identities': sorted(codes),
+        'experiment_valid': not reasons,
+        'experiment_invalid_reasons': reasons,
+    }
+
+
+def _ledger_readings(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """作用域内的原始账读数；reasoning 是 completion 子口径，永不与 completion 相加。"""
+    wire = [row for row in rows if row.get('cached') is False]
+    return {
+        'lines': len(rows),
+        'wire_calls': len(wire),
+        'wire_ok': sum(row.get('outcome') == 'ok' for row in wire),
+        'wire_error': sum(row.get('outcome') == 'error' for row in wire),
+        'wire_outcome_unknown': sum(
+            row.get('outcome') not in ('ok', 'error') for row in wire),
+        'cached': sum(row.get('cached') is True for row in rows),
+        'cache_state_unknown': sum(
+            row.get('cached') not in (True, False) for row in rows),
+        'prompt_tokens': sum(int(row.get('prompt_tokens') or 0) for row in rows),
+        'completion_tokens': sum(
+            int(row.get('completion_tokens') or 0) for row in rows),
+        'reasoning_tokens': sum(
+            int(row.get('reasoning_tokens') or 0) for row in rows),
+    }
+
+
+def _artifact_version_states(novel_dir: Path) -> list[dict[str, Any]]:
+    """逐份盘上 stage JSON 的注册表版本状态；未登记决策集是 unregistered。"""
+    from contracts.artifacts import RETIRED_ARTIFACT_PATHS
+    from contracts.schema import ARTIFACT_SPECS, artifact_key
+    rows: list[dict[str, Any]] = []
+    for rel in sorted(novel_dir.glob('stage*/*.json')):
+        rel_path = rel.relative_to(novel_dir).as_posix()
+        if rel_path in set(RETIRED_ARTIFACT_PATHS.values()):
+            continue
+        try:
+            payload = json.loads(rel.read_text(encoding='utf-8'))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            rows.append({'rel': rel_path, 'version_state': 'unreadable'})
+            continue
+        key = artifact_key(rel_path)
+        spec = ARTIFACT_SPECS.get(key) if key else None
+        version = payload.get('_schema_version') if isinstance(payload, dict) else None
+        rows.append({
+            'rel': rel_path,
+            'registry_key': key,
+            'schema_version': version,
+            'current_version': spec.current_version if spec else None,
+            'version_state': (
+                'unregistered' if spec is None
+                else 'current' if version == spec.current_version else 'drifted'),
+        })
+    return rows
 
 
 def collect(base: str | Path, sid: str, run_id: str, *,
@@ -787,19 +852,20 @@ def collect(base: str | Path, sid: str, run_id: str, *,
         base_path, sid, overview=snapshot.overview, code=snapshot.code)
     checks.append(current_approval_check(base_path, sid, approval))
 
-    metrics = _workflow_metrics_for_run(base_path, sid, run_id)
+    scoped_ledger = _scoped_ledger_rows(base_path, sid, run_id)
+    artifact_states = _artifact_version_states(
+        paths.resolve_novel_dir(base_path, sid))
     drifted = sorted(
-        row['rel'] for row in metrics['artifacts']['artifacts']
-        if row['version_state'] == 'drifted')
+        row['rel'] for row in artifact_states if row['version_state'] == 'drifted')
     checks.append(_check(
         'registered_artifact_versions_current',
         'pass' if not drifted else 'fail', drifted=drifted,
         registered_artifacts=sum(
             row['version_state'] != 'unregistered'
-            for row in metrics['artifacts']['artifacts'])))
-    identity = metrics['identity']
+            for row in artifact_states)))
+    identity = _run_identity(scoped_ledger)
     checks.append(execution_identity_check(
-        identity, outer, resume=resume, ledger_lines=metrics['ledger']['lines']))
+        identity, outer, resume=resume, ledger_lines=len(scoped_ledger)))
 
     if outer is None:
         checks.append(_check(
@@ -868,14 +934,12 @@ def collect(base: str | Path, sid: str, run_id: str, *,
         stable=stable))
 
     stability = {
-        'ledger': metrics['ledger'],
-        'first_call_landing': metrics['audit']['first_call_landing'],
-        'gate_by_decision': metrics['audit']['gate_by_decision'],
-        'per_node_gate_rejections': metrics['audit']['per_node_gate_rejections'],
-        'resamples': metrics['audit']['resamples'],
-        'artifact_adoptions': metrics['audit']['artifact_adoptions'],
-        'cli': metrics['cli'],
-        'human': metrics['human'],
+        # 语义审阅退役后不再有 first_call_landing / gate_by_decision 等审阅读数；
+        # 这里保留作用域内的原始账与审计行计数，分母仍不在这里自动 go/no-go。
+        'ledger': _ledger_readings(scoped_ledger),
+        'audit_rows_by_kind': dict(sorted(Counter(
+            str(row.get('kind') or '?') for row in audit_rows
+            if row.get('sid') == sid and row.get('run_id') == run_id).items())),
         'operator': {
             'parent_sessions': len(parent_sessions),
             'phase_count': sum(len(row['phases']) for row in parent_sessions),
@@ -883,14 +947,13 @@ def collect(base: str | Path, sid: str, run_id: str, *,
         },
     }
     return {
-        'schema': 'novel-agent-e2e-verification-v1',
+        'schema': 'novel-agent-e2e-verification-v2',
         'sid': sid,
         'run_id': run_id,
         'mode': 'resume' if resume else 'fresh',
         'result': _overall(checks),
         'checks': checks,
-        # 目标值不在这里自动 go/no-go；只把 TODO-32 P3 要求的
-        # 分母和原始次数原样发出。
+        # 目标值不在这里自动 go/no-go；只把分母和原始次数原样发出。
         'stability_readings': stability,
     }
 
@@ -907,7 +970,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = collect(args.base, args.sid, args.run_id, resume=args.resume)
     except Exception as exc:  # noqa: BLE001 —— 验收器崩溃不能冒充业务 fail/pass
         report = {
-            'schema': 'novel-agent-e2e-verification-v1',
+            'schema': 'novel-agent-e2e-verification-v2',
             'sid': args.sid,
             'run_id': args.run_id,
             'result': 'unknown',

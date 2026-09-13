@@ -157,11 +157,15 @@ def test_revalidate_actions_collect_audit_values_without_credential_buttons(paid
         if action['extra'] == ['--revalidate']
     }
     assert set(revalidate) == expected
-    for action in revalidate.values():
-        assert action['required_inputs'] == [
+    # stage6.prepare --revalidate 是纯只读复检，不写盘也不动审计，无需人工凭据；
+    # 其余节点的 --revalidate 都要提升/写回，必须收 actor/reason。
+    credential_free = {'stage6.prepare'}
+    for kind, action in revalidate.items():
+        expected_inputs = [] if kind in credential_free else [
             {'flag': '--actor', 'description': VALUED_FLAGS['--actor']},
             {'flag': '--reason', 'description': VALUED_FLAGS['--reason']},
         ]
+        assert action['required_inputs'] == expected_inputs
 
 
 def test_stage5_edit_publishes_one_complete_action_not_three_credential_actions(

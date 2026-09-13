@@ -14,7 +14,7 @@ from collections.abc import Collection, Mapping
 from typing import Any
 
 from contracts.invariants import BLIND_ALIAS_ALGORITHM, RESPONSE_TEMPORAL_LINKS
-from contracts.schema.plot import PlotBlueprint, PlotEndpoint, PlotKnowledgeTrigger, PlotSubjectRef
+from contracts.schema.plot import PlotBlueprint, PlotEndpoint, PlotSubjectRef
 from contracts.schema.plot_planning import PlannerChapter
 from contracts.schema.stage4 import (
     BlindBookStrategyResponse, BlindCandidateChapter, BlindChapterDesignResponse,
@@ -54,9 +54,9 @@ def _translate(value: Any, table: Mapping[str, str], field: str = '') -> Any:
 
 
 def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
-                           characters: dict, main_text: list[dict], knowledge_links: object = None,
+                           characters: dict, main_text: list[dict],
                            global_g: object = None) -> tuple[dict[str, Any], dict[str, Any]]:
-    from novel.stages.stage4.actors import ActorCatalog, actual_subject_uses
+    from novel.stages.stage4.actors import ActorCatalog
     if not re.fullmatch(r'[0-9a-f]{40}', root_clean_sha1):
         raise BlindPlanError('盲投影必须绑定正式源文 SHA-1')
     raw = blueprints.get('blueprints') if isinstance(blueprints, dict) else blueprints
@@ -82,7 +82,6 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
         return aliases[key]
 
     state_index = {s.state_id: s for b in chapters for s in b.states}
-    beat_index = {b.beat_id: b for c in chapters for b in c.beats}
     subject_chapters = {(kind, getattr(row, field)): chapter.chapter_ordinal
         for chapter in chapters for kind, rows, field in (
             ('beat', chapter.beats, 'beat_id'), ('state', chapter.states, 'state_id'))
@@ -95,15 +94,6 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
         (r['kind'], r['ref']): r['value']
         for r in plot_global_projection(global_g, len(chapters))}
     character_rows = characters['characters']
-    links_by_chapter: dict[int, list[tuple[dict, dict]]] = {}
-    if knowledge_links is not None:
-        from contracts.schema.knowledge_links import KnowledgeLinks
-        typed_links = KnowledgeLinks.model_validate(knowledge_links)
-        link_index = {r.obligation_id: r for r in typed_links.links}
-        for obligation in typed_links.scope.obligations:
-            links_by_chapter.setdefault(obligation.chapter_ordinal, []).append((
-                obligation.model_dump(mode='json'),
-                link_index[obligation.obligation_id].resolution.model_dump(mode='json')))
     projected = []
     for chapter in chapters:
         number, used = chapter.chapter_ordinal, set()
@@ -175,74 +165,12 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
                     observer = row.pop(key)
                     row['observer_alias'] = actor_alias(observer) if observer else None
             constraints.append(row)
-        knowledge, triggers, background_beats = [], [], {}
-        chapter_events = list(links_by_chapter.get(number, []))
-        own_subjects = {('beat', row.beat_id) for row in chapter.beats}
-        own_subjects.update(('state', row.state_id) for row in chapter.states)
-        own_subjects.update(('state', ref) for ref in chapter.entry_state_refs)
-        chapter_events.extend((obligation, resolution) for target, rows in links_by_chapter.items()
-            if target != number for obligation, resolution in rows
-            if obligation['kind'] in ('reader_reveal', 'character_knowledge')
-            and (obligation['subject_ref']['kind'], obligation['subject_ref']['ref']) in own_subjects)
-        available_tokens = [use(ref) for ref in chapter.relation_uses]
-        available_tokens.extend(use(state.global_ref,
-            at_chapter=subject_chapters['state', state.state_id])
-            for state in [*chapter.states, *(state_index[ref] for ref in chapter.entry_state_refs)]
-            if state.global_ref)
-        available = [subjects[token] for token in available_tokens]
-        for obligation, resolution in chapter_events:
-            sid = obligation['subject_ref']
-            try:
-                event_subjects = actual_subject_uses(sid, available)
-            except RefusedByStructure as exc:
-                raise BlindPlanError(str(exc)) from exc
-            tokens = sorted(aliases[ref.key()] if ref.kind == 'relation' else
-                            use(ref, at_chapter=obligation['chapter_ordinal'])
-                            for ref in event_subjects)
-            audience = obligation['audience']
-            if audience and audience['kind'] == 'character':
-                audience = {'kind': 'character', 'actor_alias': actor_alias(
-                    audience['actor'], obligation['chapter_ordinal'])}
-            current = obligation['chapter_ordinal'] == number
-            timing = (resolution['kind'] if current else 'at_entry'
-                      if obligation['chapter_ordinal'] < number else 'future_chapter')
-            event_key = ('knowledge', obligation['obligation_id'], 'trigger')
-            event_alias = alias(('endpoint', *event_key))
-            endpoints[event_alias] = PlotEndpoint(
-                kind='knowledge', ref=obligation['obligation_id'], endpoint='trigger'
-            ).model_dump(mode='json')
-            item = {'event_alias': event_alias, 'subject_aliases': tokens, 'kind': obligation['kind'],
-                    'audience': audience, 'timing': timing,
-                    'identity_aliases': sorted(actor_alias(a, obligation['chapter_ordinal'])
-                        for a in resolution.get('identity_actors', []))}
-            if current and resolution['kind'] == 'at_beats':
-                trigger = resolution['trigger_beat_ref']
-                triggers.append(PlotKnowledgeTrigger(
-                    knowledge_ref=obligation['obligation_id'], trigger_beat_ref=trigger))
-                item['trigger_beat_alias'] = use('beat', trigger)
-            if sid['kind'] == 'beat' and sid['ref'] not in {b.beat_id for b in chapter.beats}:
-                token = use(sid)
-                prior = beat_index.get(sid['ref'])
-                if prior is None:
-                    raise BlindPlanError('知识主体节点缺失')
-                background_beats[token] = {'alias': token, 'content': prior.content,
-                    'participant_aliases': sorted(actor_alias(a, subject_chapters['beat', prior.beat_id])
-                                                  for a in prior.participants)}
-            if sid['kind'] == 'state' and sid['ref'] not in {
-                s.state_id for s in chapter.states} | set(chapter.entry_state_refs):
-                token = use(sid)
-                state = state_index.get(sid['ref'])
-                if state is None:
-                    raise BlindPlanError('知识主体状态缺失')
-                if not any(row['alias'] == token for row in inherited):
-                    inherited.append(project_state(state, inherited=True))
-            knowledge.append(item)
+        background_beats = {}
         endpoint_rows = []
-        for key, beat in required_endpoints(chapter, triggers, ()).items():
+        for key, beat in required_endpoints(chapter).items():
             eid = alias(('endpoint', *key))
             endpoints[eid] = PlotEndpoint(kind=key[0], ref=key[1], endpoint=key[2]).model_dump(mode='json')
-            subject_tokens = ([use(key[0], key[1])] if key[0] in {'state', 'constraint'}
-                else next(item['subject_aliases'] for item in knowledge if item['event_alias'] == eid))
+            subject_tokens = [use(key[0], key[1])]
             endpoint_rows.append({'endpoint_alias': eid, 'kind': key[0], 'endpoint': key[2],
                 'trigger_beat_alias': use('beat', beat), 'subject_aliases': subject_tokens})
 
@@ -326,7 +254,6 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
                'inherited_states': sorted(inherited, key=lambda r: r['alias']),
                'background_beats': sorted(background_beats.values(), key=lambda r: r['alias']),
                'constraints': sorted(constraints, key=lambda r: r['alias']),
-               'knowledge': sorted(knowledge, key=_sha256),
                'endpoints': sorted(endpoint_rows, key=lambda r: r['endpoint_alias']),
                'entry_state_aliases': sorted(use('state', r) for r in chapter.entry_state_refs),
                'carry_out_aliases': sorted(use('state', r) for r in chapter.carry_out_refs),
@@ -422,7 +349,6 @@ def build_blind_chapter_projection(truth: object, formal_mapping: object, *,
                   'constraints', 'global_subjects'):
         projected[field].sort(key=lambda r: r['alias'])
     projected['endpoints'].sort(key=lambda r: r['endpoint_alias'])
-    projected['knowledge'].sort(key=_sha256)
     private = {'chapter_ordinal': chapter_ordinal, 'truth_sha256': mapping['truth_sha256'],
                'subject_aliases': {table[t]: t for t in sorted(tokens & set(mapping['subject_aliases']))},
                'endpoint_aliases': {table[t]: t for t in sorted(tokens & set(mapping['endpoint_aliases']))},

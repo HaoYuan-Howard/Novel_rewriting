@@ -34,6 +34,7 @@ from novel.errors import (
     UpstreamUnproven,
 )
 from novel import run_identity
+from novel import admission as mechanical_admission
 from novel.orchestrator import admission
 from novel.orchestrator import queue as Q
 from novel.orchestrator import jobs as J
@@ -53,8 +54,16 @@ def _NO_CORPUS(test):
 
 @pytest.fixture
 def queue_base(tmp_path, monkeypatch):
-    # 本组使用合成 overview；涉及审阅闸的用例另行替换当前接受判定。
-    monkeypatch.setattr(Q.approvals, 'require_stage2_review', lambda *_args: None)
+    # 本组使用合成 overview；涉及机械准入的用例另行替换准入结论。
+    def _ready(target):
+        return mechanical_admission.AdmissionCheck(target, ok=True)
+    monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
+                        lambda *_args: _ready('stage2.blueprint'))
+    monkeypatch.setattr(mechanical_admission, 'stage4_ready',
+                        lambda *_args: _ready('stage4'))
+    from novel.stages.stage2 import plot_diagnostics
+    monkeypatch.setattr(plot_diagnostics, 'read_repair_diagnostics',
+                        lambda *_args, **_kwargs: None)
     return tmp_path
 
 
@@ -129,7 +138,8 @@ def test_human_gate_uses_the_production_current_workpack_classifier(
     artifact = SimpleNamespace(approved=object())
     store = SimpleNamespace(read_own=lambda *_args: (artifact, b'{}'))
     monkeypatch.setattr(Q.paths, 'resolve_novel_dir', lambda *_args: queue_base)
-    monkeypatch.setattr(Q.st, 'readonly_ctx', lambda *_args: object())
+    monkeypatch.setattr(Q.st, 'readonly_ctx', lambda *_args, **_k: SimpleNamespace(
+        novel_dir=queue_base, sid='book-a', code='test', readonly=True))
     monkeypatch.setattr(Q, 'ArtifactStore', lambda _ctx: store)
     current = importlib.import_module(module_name)
     calls = []
@@ -264,7 +274,8 @@ def test_stage5_trim_then_closure_uses_one_state_aware_frontier_without_rerun(
             queue_base, 'book-a', overview,
             until_stage='stage6', follow_check=False,
             approval_doc=SimpleNamespace(
-                sid='book-a', closure=SimpleNamespace(state=closure_state)))
+                sid='book-a', closure=SimpleNamespace(state=closure_state),
+                prepare=SimpleNamespace(state='accepted')))
 
     # fresh Review + unresolved trim：队列不制造一次冗余 Review；同一顶部卡先由
     # reviewer task 按 blocked state 提供 batch，而 Stage6 仍不可执行。
@@ -305,8 +316,12 @@ def test_closed_stage5_closure_allows_stage6_planning(queue_base, monkeypatch):
         Q.approvals, 'stage5_closure_view',
         lambda _base, _sid: SimpleNamespace(state='closed'))
 
-    todo, blocked = Q.plan_book(
-        queue_base, 'book-a', until_stage='stage6', follow_check=False)
+    todo, blocked = Q.plan_book_from_overview(
+        queue_base, 'book-a', SimpleNamespace(stages=[]),
+        until_stage='stage6', follow_check=False,
+        approval_doc=SimpleNamespace(
+            sid='book-a', closure=SimpleNamespace(state='closed'),
+            prepare=SimpleNamespace(state='accepted')))
 
     assert blocked == [] and [item.node for item in todo] == ['stage6.hook']
 
@@ -328,8 +343,6 @@ def test_live_invalid_blocks_default_paid_rerun_without_freezing_argv(
     # 只隔离到达本节点前的 typed 闸；本用例要验证的是 live INVALID 本身
     # 不会被翻译成默认付费重跑，而不是重复测试 Stage2/Stage5 审批。
     monkeypatch.setattr(
-        Q.approvals, 'require_stage2_review', lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
         Q.approvals, 'stage5_closure_view',
         lambda *_args, **_kwargs: SimpleNamespace(state='closed'))
     artifact = ArtifactState(
@@ -349,9 +362,9 @@ def test_live_invalid_blocks_default_paid_rerun_without_freezing_argv(
     assert blocked[0].steps == []
 
 
-def test_queue_blocks_blueprint_and_downstream_until_global_acceptance(
+def test_queue_blocks_blueprint_and_downstream_on_failed_admission(
         queue_base, monkeypatch):
-    """Global 接受是 Blueprint 生产及后续节点的严格前置。"""
+    """统一机械准入未通过时 Blueprint 生产及后续节点都停在收件箱。"""
     monkeypatch.setattr(
         Q, 'nodes_up_to',
         lambda _until: [
@@ -366,11 +379,13 @@ def test_queue_blocks_blueprint_and_downstream_until_global_acceptance(
 
     checked: list[str] = []
 
-    def pending(_base, _sid, node):
-        checked.append(node)
-        raise ApprovalRequired('全局逐项复核仍有 pending')
+    def not_ready(base, sid):
+        checked.append(sid)
+        return mechanical_admission.AdmissionCheck(
+            'stage2.blueprint', ok=False, blocking=('人物登记（stage2/characters.json）不存在，'
+                                                    '先运行对应生成入口',))
 
-    monkeypatch.setattr(Q.approvals, 'require_stage2_review', pending)
+    monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready', not_ready)
 
     todo, blocked = Q.plan_book(
         queue_base, 'book-a', until_stage='stage4', follow_check=False)
@@ -379,44 +394,10 @@ def test_queue_blocks_blueprint_and_downstream_until_global_acceptance(
     assert [item.node for item in blocked] == [
         'stage2.blueprint', 'stage4.design', 'stage4.plan', 'stage4.context',
     ]
-    assert checked == ['stage2.blueprint']
-    assert all(item.waiting_on == Q.WAITING_ON_STAGE2_REVIEW for item in blocked)
+    assert checked == ['book-a']
+    assert all(item.waiting_on == Q.WAITING_ON_INBOX for item in blocked)
     assert all(item.steps == [] for item in blocked)
-    assert 'Global' in blocked[0].why
-
-
-def test_operator_projection_routes_expired_s2_proof_back_before_stage4_review(
-        queue_base, monkeypatch):
-    """真实回归：旧 seen/gate proof 不能把 Commander 送进必然拒绝的 A 模板。"""
-    monkeypatch.setattr(
-        Q, 'nodes_up_to', lambda _until: ['stage4.design', 'stage4.plan'])
-    overview = SimpleNamespace(stages=[])
-
-    def verdict(_overview, node):
-        return (
-            (Q.st.RESUME_SKIP, 'Stage4A current candidate 已落盘')
-            if node == 'stage4.design'
-            else (Q.st.RESUME_RUN, 'Stage4B plan 缺失')
-        )
-
-    monkeypatch.setattr(Q.st, 'resume_verdict', verdict)
-    monkeypatch.setattr(
-        Q.approvals, 'require_stage2_review', lambda *_args: None)
-    projection = SimpleNamespace(
-        sid='book-a', gate={'s2': False})
-
-    todo, blocked = Q.plan_book_from_overview(
-        queue_base, 'book-a', overview,
-        until_stage='stage4', follow_check=False,
-        approval_doc=projection)
-
-    assert todo == []
-    assert [item.node for item in blocked] == ['stage4.design', 'stage4.plan']
-    # 下游不可凭已存在候选跳过当前 Blueprint 交叉接受或免费审批恢复。
-    assert all(
-        item.waiting_on == Q.WAITING_ON_STAGE2_BLUEPRINT_REVIEW for item in blocked)
-    assert all(item.steps == [] for item in blocked)
-    assert 'Blueprint' in blocked[0].why
+    assert '统一机械准入未通过' in blocked[0].why
 
 
 @pytest.mark.parametrize('invalid', [False, True])
@@ -591,14 +572,14 @@ def test_queue_does_not_paid_rerun_global_invalid_after_projection_is_ready(
     assert blocked[0].waiting_on == Q.WAITING_ON_INBOX
 
 
-def test_reviewed_global_edit_invalid_recovers_final_correction_before_blueprint(
+def test_knowledge_rebind_free_step_precedes_stale_blueprint_redo(
         queue_base, monkeypatch):
-    """失败的 Commander 动作不能被 INVALID 引发的 Blueprint REDO 抢走。"""
+    """人物独立登记改变后，免费重绑排在 stale Blueprint 的付费重抽之前。"""
     monkeypatch.setattr(
         Q, 'nodes_up_to',
         lambda _until: ['stage2.global', 'stage2.blueprint'])
     monkeypatch.setattr(
-        Q.st, 'stage2_reviewed_edit_correction_needed',
+        Q.st, 'stage2_knowledge_rebind_needed',
         lambda _base, _sid, _ov: True)
     monkeypatch.setattr(
         Q.st, 'stage2_global_projection_blocked', lambda _ov: False)
@@ -609,7 +590,7 @@ def test_reviewed_global_edit_invalid_recovers_final_correction_before_blueprint
     monkeypatch.setattr(
         Q.st, 'resume_verdict',
         lambda _ov, node: (
-            (Q.st.RESUME_SKIP, 'reviewed edit INVALID 投影已就绪')
+            (Q.st.RESUME_SKIP, 'Global 投影已就绪')
             if node == 'stage2.global'
             else (Q.st.RESUME_REDO, 'Blueprint 被新投影置 stale')))
     ov = SimpleNamespace(stages=[])
@@ -617,14 +598,15 @@ def test_reviewed_global_edit_invalid_recovers_final_correction_before_blueprint
     todo, blocked = Q.plan_book_from_overview(
         queue_base, 'book-a', ov, until_stage='stage2', follow_check=False)
 
-    assert todo == []
-    assert [item.node for item in blocked] == [
-        'stage2.global', 'stage2.blueprint']
-    assert all(
-        item.waiting_on == Q.WAITING_ON_STAGE2_EDIT_CORRECTION
-        for item in blocked)
+    assert [item.node for item in todo] == ['stage2.global']
+    rebind = todo[0]
+    assert rebind.flags == ['--renormalize']
+    assert not any(step.paid for step in rebind.steps)
+    assert '免费重验已有知识引用' in rebind.why
+    # REDO 不被队列猜成可执行命令；先由免费的 Global 重绑恢复一致性。
+    assert [item.node for item in blocked] == ['stage2.blueprint']
+    assert blocked[0].waiting_on == Q.WAITING_ON_RESUME_DECISION
     assert blocked[0].steps == []
-    assert '按剩余持久预算发放同一逻辑任务' in blocked[0].why
 
 
 @pytest.mark.parametrize(
@@ -739,17 +721,9 @@ def test_queue_missing_blueprint_without_invalid_keeps_default_paid_plan(
     assert '--yes' in item.steps[0].argv
 
 
-@pytest.mark.parametrize('error', [
-    ApprovalRequired('review pending'),
-    UpstreamMissing('blueprint missing'),
-    ArtifactUnreadable('blueprint broken'),
-    GateBlocked('global invalid', invalid_path='stage2/global_grounding.INVALID.json'),
-    UpstreamStale('global stale'),
-    UpstreamUnproven('blueprint unknown'),
-    BlockingFindingsUnresolved('joint hard', rules=('joint-hard',)),
-], ids=lambda error: type(error).__name__)
-def test_queue_maps_every_expected_stage2_closure_state_to_the_same_blocker(
-        queue_base, monkeypatch, error):
+def test_stage2_live_invalid_blocks_via_admission_before_generic_classification(
+        queue_base, monkeypatch):
+    """Stage2 live `.INVALID` 先经统一机械准入给出产物级阻断，不走通用分类。"""
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage4.design'])
     monkeypatch.setattr(
         Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
@@ -757,47 +731,22 @@ def test_queue_maps_every_expected_stage2_closure_state_to_the_same_blocker(
         Q.st, 'resume_verdict',
         lambda _overview, _node: (Q.st.RESUME_RUN, 'stage4 产物缺失'))
 
-    def refuse(*_args):
-        raise error
+    def not_ready(base, sid):
+        return mechanical_admission.AdmissionCheck(
+            'stage4', ok=False,
+            blocking=('完整 Blueprint（stage2/chapter_blueprints.json）有未恢复 INVALID；'
+                      '先运行对应节点的 --revalidate 免费重判',))
 
-    monkeypatch.setattr(Q.approvals, 'require_stage2_review', refuse)
-    todo, blocked = Q.plan_book(
-        queue_base, 'book-a', until_stage='stage4', follow_check=False)
-
-    assert todo == []
-    assert len(blocked) == 1
-    assert blocked[0].waiting_on == Q.WAITING_ON_STAGE2_REVIEW
-    assert blocked[0].steps == []
-
-
-def test_stage2_invalid_is_classified_by_the_complete_stage2_closure(
-        queue_base, monkeypatch):
-    """Stage2 `.INVALID` 不得先被通用 inbox 分类抢走专用 blocker。"""
-    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage4.design'])
-    stage2 = SimpleNamespace(
-        stage='stage2',
-        artifacts=[SimpleNamespace(
-            rel='stage2/chapter_blueprints.INVALID.json', invalid=True)],
-    )
-    monkeypatch.setattr(
-        Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[stage2]))
-    monkeypatch.setattr(
-        Q.st, 'resume_verdict',
-        lambda _overview, _node: (Q.st.RESUME_RUN, 'stage4 产物缺失'))
-
-    def invalid_stage2(*_args):
-        raise GateBlocked(
-            'blueprint invalid',
-            invalid_path='stage2/chapter_blueprints.INVALID.json')
-
-    monkeypatch.setattr(Q.approvals, 'require_stage2_review', invalid_stage2)
+    monkeypatch.setattr(mechanical_admission, 'stage4_ready', not_ready)
 
     todo, blocked = Q.plan_book(
         queue_base, 'book-a', until_stage='stage4', follow_check=False)
 
     assert todo == []
     assert len(blocked) == 1
-    assert blocked[0].waiting_on == Q.WAITING_ON_STAGE2_REVIEW
+    assert blocked[0].node == 'stage4.design'
+    assert blocked[0].waiting_on == Q.WAITING_ON_INBOX
+    assert '统一机械准入未通过' in blocked[0].why
     assert blocked[0].steps == []
 
 
@@ -811,8 +760,6 @@ def test_stage4_queue_requires_a_new_preview_after_blind_design(
     monkeypatch.setattr(
         Q.st, 'resume_verdict',
         lambda _overview, node: (Q.st.RESUME_RUN, f'{node} 产物缺失'))
-    monkeypatch.setattr(
-        Q.approvals, 'require_stage2_review', lambda *_args: None)
     monkeypatch.setattr(Q, '_stage4_replan_required', lambda _base, _sid: False)
     monkeypatch.setattr(
         Q.approvals, 'design_review_is_current', lambda _base, _sid: True)
@@ -850,8 +797,6 @@ def test_stage4_queue_offers_b_only_after_a_is_current(
                 else (Q.st.RESUME_RUN, 'evidence binding 缺失'))
 
     monkeypatch.setattr(Q.st, 'resume_verdict', verdict)
-    monkeypatch.setattr(
-        Q.approvals, 'require_stage2_review', lambda *_args: None)
     monkeypatch.setattr(Q, '_stage4_replan_required', lambda _base, _sid: False)
     monkeypatch.setattr(
         Q.approvals, 'design_review_is_current', lambda _base, _sid: True)
@@ -882,8 +827,6 @@ def test_stage4_queue_hides_repeated_b_after_current_infeasible(
                 else (Q.st.RESUME_RUN, '正式计划缺失'))
 
     monkeypatch.setattr(Q.st, 'resume_verdict', verdict)
-    monkeypatch.setattr(
-        Q.approvals, 'require_stage2_review', lambda *_args: None)
     monkeypatch.setattr(Q, '_stage4_replan_required', lambda _base, _sid: True)
 
     todo, blocked = Q.plan_book(
@@ -950,10 +893,6 @@ def test_stage4_typed_design_decision_routes_to_exact_executor_recovery(
             if node == 'stage4.design'
             else (Q.st.RESUME_RUN, 'B 待重建')))
     monkeypatch.setattr(Q.st, 'stage2_global_projection_blocked', lambda _ov: False)
-    monkeypatch.setattr(
-        Q.st, 'stage2_reviewed_edit_correction_needed',
-        lambda *_args: False)
-    monkeypatch.setattr(Q.approvals, 'require_stage2_review', lambda *_args: None)
     approval_doc = SimpleNamespace(
         sid='book-a',
         design_review=SimpleNamespace(
@@ -992,9 +931,6 @@ def test_stage4_structure_replan_routes_back_to_a_resolution_not_same_b_review(
         Q.st, 'resume_verdict',
         lambda _overview, _node: (Q.st.RESUME_RUN, 'Context 尚未落盘'))
     monkeypatch.setattr(Q.st, 'stage2_global_projection_blocked', lambda _ov: False)
-    monkeypatch.setattr(
-        Q.st, 'stage2_reviewed_edit_correction_needed',
-        lambda *_args: False)
     approval_doc = SimpleNamespace(
         sid='book-a',
         design_review=SimpleNamespace(
@@ -1114,7 +1050,8 @@ def test_reviewer_rewrite_execution_preempts_stale_review_and_freezes_exact_acti
 
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])
     monkeypatch.setattr(Q.paths, 'find_novel_dir', lambda *_args: queue_base)
-    monkeypatch.setattr(Q.st, 'readonly_ctx', lambda *_args: object())
+    monkeypatch.setattr(Q.st, 'readonly_ctx', lambda *_args, **_k: SimpleNamespace(
+        novel_dir=queue_base, sid='book-a', code='test', readonly=True))
     monkeypatch.setattr(
         reviewer_rewrite, 'reviewer_rewrite_execution_state',
         lambda _ctx: _reviewer_rewrite_state(state))
@@ -1149,7 +1086,8 @@ def test_consumed_reviewer_rewrite_returns_to_free_stage5_review(
     monkeypatch.setattr(
         Q, 'nodes_up_to', lambda _until: ['stage5.write', 'stage5.review'])
     monkeypatch.setattr(Q.paths, 'find_novel_dir', lambda *_args: queue_base)
-    monkeypatch.setattr(Q.st, 'readonly_ctx', lambda *_args: object())
+    monkeypatch.setattr(Q.st, 'readonly_ctx', lambda *_args, **_k: SimpleNamespace(
+        novel_dir=queue_base, sid='book-a', code='test', readonly=True))
     monkeypatch.setattr(
         reviewer_rewrite, 'reviewer_rewrite_execution_state',
         lambda _ctx: _reviewer_rewrite_state(terminal_state))
@@ -1183,7 +1121,8 @@ def test_negative_reviewer_rewrite_routes_to_inbox_without_second_paid_action(
 
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])
     monkeypatch.setattr(Q.paths, 'find_novel_dir', lambda *_args: queue_base)
-    monkeypatch.setattr(Q.st, 'readonly_ctx', lambda *_args: object())
+    monkeypatch.setattr(Q.st, 'readonly_ctx', lambda *_args, **_k: SimpleNamespace(
+        novel_dir=queue_base, sid='book-a', code='test', readonly=True))
     monkeypatch.setattr(
         reviewer_rewrite, 'reviewer_rewrite_execution_state',
         lambda _ctx: _reviewer_rewrite_state(terminal_state))

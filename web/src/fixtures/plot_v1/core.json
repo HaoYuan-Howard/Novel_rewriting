@@ -1,11 +1,10 @@
 {
   "metadata": {
     "synthetic": true,
-    "source": "Stage2AnalyzeAgent + GlobalView/CharacterRegistryView/GlobalReviewView",
+    "source": "Stage2AnalyzeAgent + GlobalView/CharacterRegistryView",
     "schemas": {
       "characters": 2,
-      "global": 7,
-      "global_review": 3
+      "global": 7
     },
     "scope": "免费合成数据与真实 producer/Store/read model；不代表真实模型质量或成本"
   },
@@ -121,7 +120,7 @@
     "reason": "match",
     "ghosts": [],
     "_provenance": {
-      "code": "1654a0ac416f973d39f3d8f5d88e0532c502cb96-dirty.16f7ae5b008c0677",
+      "code": "8ca50439622727db8b3f904faff26aaa84f15775-dirty.c91497de39b582dd",
       "root_clean_sha1": "f5f8d47f4e86137f5b5c9a9744b1aa3205be3502",
       "inputs": {
         "stage1/main_text.json": {
@@ -132,9 +131,9 @@
       "usage": null,
       "shared_analysis_source": {
         "receipt_rel": "stage2/analyze_receipt.json",
-        "receipt_sha256": "888f947ce247574195c44c267246de64cfbd12f3d1e8c61434c937fb732f4a81",
-        "run_id": "11916418-35a4-4a64-abbe-6f71e7da0e93",
-        "attempt_id": "126f969255504483"
+        "receipt_sha256": "a62d5f008e553b2f5ac5b7d903c388893c42f35d7880d38ce337b2ab15179ee5",
+        "run_id": "23815586-e3b4-4e29-ae26-e311d84215e7",
+        "attempt_id": "f9eaabc54c3c4d63"
       },
       "revalidated": null,
       "gates_skipped": null,
@@ -144,7 +143,7 @@
       "invalid_baseline_sha256": null,
       "revalidation_audit": null,
       "prompts": {
-        "ANALYZE_SYS": "7831ae387a"
+        "ANALYZE_SYS": "fbd367887c"
       },
       "model": "gpt-5.6-sol",
       "adopted_models": [
@@ -157,12 +156,12 @@
   },
   "characters": {
     "sid": "2042",
-    "source_sha256": "4c6fbaaf42fcd038f72c33415b729418a34b2ffb96212a3887584b50ed0b3c99",
+    "source_sha256": "6d92f0e3e477b73ca70ac3e280719225c95e721432a3e09d028abd098a5fbe4f",
     "artifact": {
       "rel": "stage2/characters.json",
       "exists": true,
       "bytes": 2511,
-      "mtime": 1789224580,
+      "mtime": 1789316708,
       "freshness": "fresh",
       "display_freshness": "fresh",
       "reason": "match",
@@ -239,7 +238,7 @@
         }
       },
       "_provenance": {
-        "code": "1654a0ac416f973d39f3d8f5d88e0532c502cb96-dirty.16f7ae5b008c0677",
+        "code": "8ca50439622727db8b3f904faff26aaa84f15775-dirty.c91497de39b582dd",
         "root_clean_sha1": "f5f8d47f4e86137f5b5c9a9744b1aa3205be3502",
         "inputs": {
           "stage1/main_text.json": {
@@ -250,9 +249,9 @@
         "usage": null,
         "shared_analysis_source": {
           "receipt_rel": "stage2/analyze_receipt.json",
-          "receipt_sha256": "888f947ce247574195c44c267246de64cfbd12f3d1e8c61434c937fb732f4a81",
-          "run_id": "11916418-35a4-4a64-abbe-6f71e7da0e93",
-          "attempt_id": "126f969255504483"
+          "receipt_sha256": "a62d5f008e553b2f5ac5b7d903c388893c42f35d7880d38ce337b2ab15179ee5",
+          "run_id": "23815586-e3b4-4e29-ae26-e311d84215e7",
+          "attempt_id": "f9eaabc54c3c4d63"
         },
         "revalidated": null,
         "gates_skipped": null,
@@ -262,7 +261,7 @@
         "invalid_baseline_sha256": null,
         "revalidation_audit": null,
         "prompts": {
-          "ANALYZE_SYS": "7831ae387a"
+          "ANALYZE_SYS": "fbd367887c"
         },
         "model": "gpt-5.6-sol",
         "adopted_models": [
@@ -278,7 +277,7 @@
       "ev_cc3ebbca1058af3ebccd0267": "李宝珠把账册摊在桌上一页页翻。"
     },
     "edit_template": {
-      "source_sha256": "4c6fbaaf42fcd038f72c33415b729418a34b2ffb96212a3887584b50ed0b3c99",
+      "source_sha256": "6d92f0e3e477b73ca70ac3e280719225c95e721432a3e09d028abd098a5fbe4f",
       "operations": [
         {
           "kind": "replace",
@@ -333,650 +332,5 @@
       ]
     },
     "template_unavailable_reason": null
-  },
-  "review": {
-    "review_coverage": {
-      "scope": {
-        "contract": "stage2-review-obligations-v1",
-        "node": "stage2.global",
-        "scope_sha256": "d45289a14f9eb1c7046623af7ba1d07b7a0ded4eff5ec54f87ac5347db786a7b",
-        "obligations": [
-          {
-            "obligation_id": "alias_identity:characters.characters.char_001.aliases.alias_f80b0112c181f3c9a71f7233",
-            "subject_sha256": "42dcac0d9d78fc1b4ad64c26fa57d2723a3c3e9d4d692a6e46ec92c95c611e5d",
-            "owner": "stage2.characters",
-            "chapter_ordinals": [
-              1
-            ],
-            "subject_path": "characters.characters.char_001.aliases.alias_f80b0112c181f3c9a71f7233",
-            "kind": "global_item",
-            "context_refs": [
-              "character_identity:characters.characters.char_001",
-              "character_set_complete:characters.characters",
-              "name_distinctiveness:characters.characters.char_001.name_distinctiveness",
-              "role:characters.characters.char_001.role"
-            ],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "alias_identity:characters.characters.char_002.aliases.alias_c2113f0e998ca79ba2a8db11",
-            "subject_sha256": "5e894e8468818a2cd76fe3898be50de396e86033a5b7ed6e2deac088a899f4ad",
-            "owner": "stage2.characters",
-            "chapter_ordinals": [
-              2
-            ],
-            "subject_path": "characters.characters.char_002.aliases.alias_c2113f0e998ca79ba2a8db11",
-            "kind": "global_item",
-            "context_refs": [
-              "character_identity:characters.characters.char_002",
-              "character_set_complete:characters.characters",
-              "name_distinctiveness:characters.characters.char_002.name_distinctiveness",
-              "role:characters.characters.char_002.role"
-            ],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "character_identity:characters.characters.char_001",
-            "subject_sha256": "6c7dbb445d746a2a2d318fd91cd5a6f41387951c9819e578559c8b2fdf1399d2",
-            "owner": "stage2.characters",
-            "chapter_ordinals": [
-              1,
-              3
-            ],
-            "subject_path": "characters.characters.char_001",
-            "kind": "global_item",
-            "context_refs": [
-              "alias_identity:characters.characters.char_001.aliases.alias_f80b0112c181f3c9a71f7233",
-              "character_set_complete:characters.characters",
-              "name_distinctiveness:characters.characters.char_001.name_distinctiveness",
-              "role:characters.characters.char_001.role"
-            ],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "character_identity:characters.characters.char_002",
-            "subject_sha256": "37f202ee0731b686035edd638a1a680b66700b1cedb8aa2fe6158aec8dd1d4e2",
-            "owner": "stage2.characters",
-            "chapter_ordinals": [
-              2
-            ],
-            "subject_path": "characters.characters.char_002",
-            "kind": "global_item",
-            "context_refs": [
-              "alias_identity:characters.characters.char_002.aliases.alias_c2113f0e998ca79ba2a8db11",
-              "character_set_complete:characters.characters",
-              "name_distinctiveness:characters.characters.char_002.name_distinctiveness",
-              "role:characters.characters.char_002.role"
-            ],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "character_set_complete:characters.characters",
-            "subject_sha256": "53d86f6649bfed86983d83ec9eba6b4e8fff04ddd2ce63d350a49aa7509794d4",
-            "owner": "stage2.characters",
-            "chapter_ordinals": [],
-            "subject_path": "characters.characters",
-            "kind": "global_item",
-            "context_refs": [],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "name_distinctiveness:characters.characters.char_001.name_distinctiveness",
-            "subject_sha256": "2f7f8df5d06b3e2ad2f2ee688517de97d22e2fba8b42bab4883a60ce8a1a3a8d",
-            "owner": "stage2.characters",
-            "chapter_ordinals": [],
-            "subject_path": "characters.characters.char_001.name_distinctiveness",
-            "kind": "global_item",
-            "context_refs": [
-              "alias_identity:characters.characters.char_001.aliases.alias_f80b0112c181f3c9a71f7233",
-              "character_identity:characters.characters.char_001",
-              "character_set_complete:characters.characters",
-              "role:characters.characters.char_001.role"
-            ],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "name_distinctiveness:characters.characters.char_002.name_distinctiveness",
-            "subject_sha256": "de2b54baee7ae81e716382808e2e67712e6186fcc32e9d9cd58200c9cd6dbca5",
-            "owner": "stage2.characters",
-            "chapter_ordinals": [],
-            "subject_path": "characters.characters.char_002.name_distinctiveness",
-            "kind": "global_item",
-            "context_refs": [
-              "alias_identity:characters.characters.char_002.aliases.alias_c2113f0e998ca79ba2a8db11",
-              "character_identity:characters.characters.char_002",
-              "character_set_complete:characters.characters",
-              "role:characters.characters.char_002.role"
-            ],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "relation:global.relations.rel_01",
-            "subject_sha256": "003e8d5150c4809460dc9611dea08af076882777dac79f75ec6921070f0024ff",
-            "owner": "stage2.global",
-            "chapter_ordinals": [
-              2
-            ],
-            "subject_path": "global.relations.rel_01",
-            "kind": "global_item",
-            "context_refs": [
-              "relation_set_complete:global.relations"
-            ],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "relation_set_complete:global.relations",
-            "subject_sha256": "f332270dbe94f1aac9183edd529bb93bbc0cf3a321293cd18a8b2ec0cf8c34f3",
-            "owner": "stage2.global",
-            "chapter_ordinals": [],
-            "subject_path": "global.relations",
-            "kind": "global_item",
-            "context_refs": [],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "reveal:global.arc_secrets.secret_01.revealed_from",
-            "subject_sha256": "3881191e887c848349faa218d0c1aca95bee6e9b46a3b4a00a65b9bb31d23dbf",
-            "owner": "stage2.global",
-            "chapter_ordinals": [],
-            "subject_path": "global.arc_secrets.secret_01.revealed_from",
-            "kind": "global_item",
-            "context_refs": [
-              "secret:global.arc_secrets.secret_01",
-              "secret_set_complete:global.arc_secrets",
-              "secret_setup:global.arc_secrets.secret_01.setup_chapters"
-            ],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "role:characters.characters.char_001.role",
-            "subject_sha256": "70270acc38041b516ac93057634dc4f9c866b3509b0f08d00d5c6cb598cb7afc",
-            "owner": "stage2.characters",
-            "chapter_ordinals": [
-              3
-            ],
-            "subject_path": "characters.characters.char_001.role",
-            "kind": "global_item",
-            "context_refs": [
-              "alias_identity:characters.characters.char_001.aliases.alias_f80b0112c181f3c9a71f7233",
-              "character_identity:characters.characters.char_001",
-              "character_set_complete:characters.characters",
-              "name_distinctiveness:characters.characters.char_001.name_distinctiveness"
-            ],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "role:characters.characters.char_002.role",
-            "subject_sha256": "e8fb069da8a6b5dba4497947a95527571fb01c6543ee4dd5ccb0c22fb4fe7c76",
-            "owner": "stage2.characters",
-            "chapter_ordinals": [
-              2
-            ],
-            "subject_path": "characters.characters.char_002.role",
-            "kind": "global_item",
-            "context_refs": [
-              "alias_identity:characters.characters.char_002.aliases.alias_c2113f0e998ca79ba2a8db11",
-              "character_identity:characters.characters.char_002",
-              "character_set_complete:characters.characters",
-              "name_distinctiveness:characters.characters.char_002.name_distinctiveness"
-            ],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "secret:global.arc_secrets.secret_01",
-            "subject_sha256": "62a5798b1c1c03f73bbda907fb7d07202fc11c9162b44f5bab44a2edb15e11be",
-            "owner": "stage2.global",
-            "chapter_ordinals": [
-              1
-            ],
-            "subject_path": "global.arc_secrets.secret_01",
-            "kind": "global_item",
-            "context_refs": [
-              "reveal:global.arc_secrets.secret_01.revealed_from",
-              "secret_set_complete:global.arc_secrets",
-              "secret_setup:global.arc_secrets.secret_01.setup_chapters"
-            ],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "secret_set_complete:global.arc_secrets",
-            "subject_sha256": "2b635cf0cc4f18bd71a7221c19e6c7df0869b6713c666d011378821de4eeda3a",
-            "owner": "stage2.global",
-            "chapter_ordinals": [],
-            "subject_path": "global.arc_secrets",
-            "kind": "global_item",
-            "context_refs": [],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "secret_setup:global.arc_secrets.secret_01.setup_chapters",
-            "subject_sha256": "6668c845f86f306cea89ff47db5720917b94474c6363a7413b2d19cfd9b42be8",
-            "owner": "stage2.global",
-            "chapter_ordinals": [],
-            "subject_path": "global.arc_secrets.secret_01.setup_chapters",
-            "kind": "global_item",
-            "context_refs": [
-              "reveal:global.arc_secrets.secret_01.revealed_from",
-              "secret:global.arc_secrets.secret_01",
-              "secret_set_complete:global.arc_secrets"
-            ],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "setting_fact:global.setting.era",
-            "subject_sha256": "c803bc0fcbe80939133bb019312d1d4d9516a3cda5357b43a95aa4eac76dd943",
-            "owner": "stage2.global",
-            "chapter_ordinals": [
-              1
-            ],
-            "subject_path": "global.setting.era",
-            "kind": "global_item",
-            "context_refs": [
-              "setting_fact:global.setting.social_context"
-            ],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "setting_fact:global.setting.social_context",
-            "subject_sha256": "0fb2c30b152f431c58debe282b214743d9932164968ce8e0c4ea0e84f61c4de6",
-            "owner": "stage2.global",
-            "chapter_ordinals": [
-              2
-            ],
-            "subject_path": "global.setting.social_context",
-            "kind": "global_item",
-            "context_refs": [
-              "setting_fact:global.setting.era"
-            ],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "world_rule_kind:global.world_rules.wr_01.kind",
-            "subject_sha256": "828c9bda6c1dbecd47c445debe6b51fd386d6c9e09536d801c12e2d259d561ce",
-            "owner": "stage2.global",
-            "chapter_ordinals": [],
-            "subject_path": "global.world_rules.wr_01.kind",
-            "kind": "global_item",
-            "context_refs": [
-              "world_rule_set_complete:global.world_rules",
-              "world_rule_version:global.world_rules.wr_01.versions.v01"
-            ],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "world_rule_set_complete:global.world_rules",
-            "subject_sha256": "ef283a685649e32a2c86f72e0b04f5dc7d8bd5f070b8d94c4b7cc2c05e8b6eb0",
-            "owner": "stage2.global",
-            "chapter_ordinals": [],
-            "subject_path": "global.world_rules",
-            "kind": "global_item",
-            "context_refs": [],
-            "problem_subject_sha256": null
-          },
-          {
-            "obligation_id": "world_rule_version:global.world_rules.wr_01.versions.v01",
-            "subject_sha256": "16d3fe5fd813bf21881765c6f3440501643cd6f1b62180eba6e5ed5cde402413",
-            "owner": "stage2.global",
-            "chapter_ordinals": [
-              1
-            ],
-            "subject_path": "global.world_rules.wr_01.versions.v01",
-            "kind": "global_item",
-            "context_refs": [
-              "world_rule_kind:global.world_rules.wr_01.kind",
-              "world_rule_set_complete:global.world_rules"
-            ],
-            "problem_subject_sha256": null
-          }
-        ]
-      },
-      "inherited": [],
-      "pending_obligation_ids": [
-        "alias_identity:characters.characters.char_001.aliases.alias_f80b0112c181f3c9a71f7233",
-        "alias_identity:characters.characters.char_002.aliases.alias_c2113f0e998ca79ba2a8db11",
-        "character_identity:characters.characters.char_001",
-        "character_identity:characters.characters.char_002",
-        "character_set_complete:characters.characters",
-        "name_distinctiveness:characters.characters.char_001.name_distinctiveness",
-        "name_distinctiveness:characters.characters.char_002.name_distinctiveness",
-        "relation:global.relations.rel_01",
-        "relation_set_complete:global.relations",
-        "reveal:global.arc_secrets.secret_01.revealed_from",
-        "role:characters.characters.char_001.role",
-        "role:characters.characters.char_002.role",
-        "secret:global.arc_secrets.secret_01",
-        "secret_set_complete:global.arc_secrets",
-        "secret_setup:global.arc_secrets.secret_01.setup_chapters",
-        "setting_fact:global.setting.era",
-        "setting_fact:global.setting.social_context",
-        "world_rule_kind:global.world_rules.wr_01.kind",
-        "world_rule_set_complete:global.world_rules",
-        "world_rule_version:global.world_rules.wr_01.versions.v01"
-      ],
-      "prior_problems": []
-    },
-    "source_sha256": "470a191b2d01f5bf064d0fa8cd431c30270691f08a9beec4f7f725ef34dadafc",
-    "current_subject_sha256": "470a191b2d01f5bf064d0fa8cd431c30270691f08a9beec4f7f725ef34dadafc",
-    "current": true,
-    "approved": false,
-    "generation_safe": false,
-    "quarantined_groups": [],
-    "review_token": "s2gr2_cd8a71257a5a5ea1b04cc771a7ad88557184dba729a87cdd1284e9fb818f92e2",
-    "effect_counts": {
-      "blocking": {
-        "pending": 20,
-        "PASS": 0,
-        "FAIL": 0,
-        "UNVER": 0
-      },
-      "disclosure": {
-        "pending": 0,
-        "PASS": 0,
-        "FAIL": 0,
-        "UNVER": 0
-      }
-    },
-    "items": [
-      {
-        "item_id": "character_set_complete:characters.characters:3187ea7b4b94",
-        "kind": "character_set_complete",
-        "subject_path": "characters.characters",
-        "subject_sha256": "3187ea7b4b9477ebf7360ed0f39ecee8b054e47e8e7d60fcf5326fbfe72b4257",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "set:characters"
-      },
-      {
-        "item_id": "character_identity:characters.characters.char_001:537ae2ab415b",
-        "kind": "character_identity",
-        "subject_path": "characters.characters.char_001",
-        "subject_sha256": "537ae2ab415b592683cdcc5aabf61817c617794cdb61604dec68daac2f64f09b",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "character:char_001"
-      },
-      {
-        "item_id": "name_distinctiveness:characters.characters.char_001.name_distinctiveness:b57c4299afe3",
-        "kind": "name_distinctiveness",
-        "subject_path": "characters.characters.char_001.name_distinctiveness",
-        "subject_sha256": "b57c4299afe3cda154124bdb96ceaf618a9d8d9cd8d2c8f6580ff26faa5fe5ca",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "character:char_001"
-      },
-      {
-        "item_id": "role:characters.characters.char_001.role:634c7adca9dd",
-        "kind": "role",
-        "subject_path": "characters.characters.char_001.role",
-        "subject_sha256": "634c7adca9dd56503ddd941c3c5c52b75dff2e2e2de6fa0f9788607db4cf4179",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "character:char_001"
-      },
-      {
-        "item_id": "alias_identity:characters.characters.char_001.aliases.alias_f80b0112c181f3c9a71f7233:49801677c35f",
-        "kind": "alias_identity",
-        "subject_path": "characters.characters.char_001.aliases.alias_f80b0112c181f3c9a71f7233",
-        "subject_sha256": "49801677c35fef14ac6a4d31debc3ba10ea1409bf944ad195358ff5822c9d273",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "character:char_001"
-      },
-      {
-        "item_id": "character_identity:characters.characters.char_002:8a95b9ba27cd",
-        "kind": "character_identity",
-        "subject_path": "characters.characters.char_002",
-        "subject_sha256": "8a95b9ba27cd73cc41daa0591e5c88db7beaf53bbf73f9a92dfe55d8688502e1",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "character:char_002"
-      },
-      {
-        "item_id": "name_distinctiveness:characters.characters.char_002.name_distinctiveness:60d4c90eee5e",
-        "kind": "name_distinctiveness",
-        "subject_path": "characters.characters.char_002.name_distinctiveness",
-        "subject_sha256": "60d4c90eee5e731df8d3ef2891de541d2e755ff8ee9db358e26bdec49f6e0db9",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "character:char_002"
-      },
-      {
-        "item_id": "role:characters.characters.char_002.role:24e634f03122",
-        "kind": "role",
-        "subject_path": "characters.characters.char_002.role",
-        "subject_sha256": "24e634f031221e8f69305feb9a73c318f9523aa1129e57556af9481bd70aa6b2",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "character:char_002"
-      },
-      {
-        "item_id": "alias_identity:characters.characters.char_002.aliases.alias_c2113f0e998ca79ba2a8db11:4c2a734afcbb",
-        "kind": "alias_identity",
-        "subject_path": "characters.characters.char_002.aliases.alias_c2113f0e998ca79ba2a8db11",
-        "subject_sha256": "4c2a734afcbbe33c4fe03118c00d7c68a2783a2d4af3007e598dd740901907fc",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "character:char_002"
-      },
-      {
-        "item_id": "relation_set_complete:global.relations:1841bba3da7a",
-        "kind": "relation_set_complete",
-        "subject_path": "global.relations",
-        "subject_sha256": "1841bba3da7af07ab3379262eb981cd99dad67a943323504d43403a6ffbae984",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "set:relations"
-      },
-      {
-        "item_id": "world_rule_set_complete:global.world_rules:c9a511419386",
-        "kind": "world_rule_set_complete",
-        "subject_path": "global.world_rules",
-        "subject_sha256": "c9a5114193869518876135fcc2092743b9389ebc4bf76a9454e575330c4ee3e2",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "set:world_rules"
-      },
-      {
-        "item_id": "secret_set_complete:global.arc_secrets:df443124751c",
-        "kind": "secret_set_complete",
-        "subject_path": "global.arc_secrets",
-        "subject_sha256": "df443124751c94a06bfaf40829705366d374037c214ca0072d2d73ac34d760be",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "set:secrets"
-      },
-      {
-        "item_id": "setting_fact:global.setting.era:e2201547fdf5",
-        "kind": "setting_fact",
-        "subject_path": "global.setting.era",
-        "subject_sha256": "e2201547fdf5cc3f59334bc9d6301282ff27e5c39055f13672b239bea8d57077",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "setting"
-      },
-      {
-        "item_id": "setting_fact:global.setting.social_context:cc625c17b211",
-        "kind": "setting_fact",
-        "subject_path": "global.setting.social_context",
-        "subject_sha256": "cc625c17b21186bd84be06f487f3feebe023e122a7debdc0022e74a083edf819",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "setting"
-      },
-      {
-        "item_id": "relation:global.relations.rel_01:182dd0a0affb",
-        "kind": "relation",
-        "subject_path": "global.relations.rel_01",
-        "subject_sha256": "182dd0a0affbb10c6878cfd32283dbab926460146a154f027b385edcbcb689eb",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "relation:rel_01"
-      },
-      {
-        "item_id": "world_rule_kind:global.world_rules.wr_01.kind:4fe26eebeb64",
-        "kind": "world_rule_kind",
-        "subject_path": "global.world_rules.wr_01.kind",
-        "subject_sha256": "4fe26eebeb6424da2388e34a762e4fb0c5863c1eff8a47ae300bd2d8cbc9169e",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "world_rule:wr_01"
-      },
-      {
-        "item_id": "world_rule_version:global.world_rules.wr_01.versions.v01:be8bf8d64ed2",
-        "kind": "world_rule_version",
-        "subject_path": "global.world_rules.wr_01.versions.v01",
-        "subject_sha256": "be8bf8d64ed204a33d5ae830b56c3ace45e71d57e0ee8cc9207a95d08af696d6",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "world_rule:wr_01"
-      },
-      {
-        "item_id": "secret:global.arc_secrets.secret_01:059a02b9e730",
-        "kind": "secret",
-        "subject_path": "global.arc_secrets.secret_01",
-        "subject_sha256": "059a02b9e73010eba40aaade5d6168c61dddd03b59ef3c6ea35449df9dac91bf",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "secret:secret_01"
-      },
-      {
-        "item_id": "secret_setup:global.arc_secrets.secret_01.setup_chapters:414f95c7403e",
-        "kind": "secret_setup",
-        "subject_path": "global.arc_secrets.secret_01.setup_chapters",
-        "subject_sha256": "414f95c7403e944221a36ae4a3aca667b79173007b6aa32f5c1da2d9bb1d5f6f",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "secret:secret_01"
-      },
-      {
-        "item_id": "reveal:global.arc_secrets.secret_01.revealed_from:ab9682ee739b",
-        "kind": "reveal",
-        "subject_path": "global.arc_secrets.secret_01.revealed_from",
-        "subject_sha256": "ab9682ee739b228ae0b789181dbf35dd94d9c8c1c45ff1743c3eec3804f861dc",
-        "state": "pending",
-        "resolution_required": false,
-        "evidence": [],
-        "actor": null,
-        "decided_at": null,
-        "reason": null,
-        "generation_disposition": null,
-        "effect": "blocking",
-        "group_key": "secret:secret_01"
-      }
-    ]
   }
 }

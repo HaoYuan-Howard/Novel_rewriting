@@ -5,17 +5,15 @@ from copy import deepcopy
 import json
 
 from contracts.schema.knowledge import KnowledgeGrounding
-from contracts.schema.knowledge_links import KnowledgeLinkHistory, KnowledgeLinks, KnowledgeLinkSubmission
 from contracts.schema.plot import PlotBlueprint
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints
-from novel.stages.stage2 import knowledge_links
 from novel.stages.stage2.character_refs import blueprint_character_prompt_inventory
 from novel.stages.stage2.paragraphs import span_of
 from novel.stages.stage2.plot_compile import source_digest, validate_actors, validate_evidence
 from novel.stages.stage4.plot_design import build_blind_projection
 from novel.stages.stage4.plot_materials import chapter_materials, chapter_materials_identity
-from tests.plot_fixtures import GLOBAL, MAIN, REGISTRY, blueprint, links
+from tests.plot_fixtures import GLOBAL, MAIN, REGISTRY, blueprint
 
 
 def _validate(bps, main, registry):
@@ -77,72 +75,14 @@ def _add_later(bps, main, registry):
     return actor
 
 
-def _registered_later_knowledge(bps, main, audience):
-    """真实重放 put 登记并由当前范围编译关联，不手写候选或跳过受众闭包。"""
-    provenance = {'code': 'fixture', 'root_clean_sha1': '0' * 40, 'inputs': {},
-                  'prompts': {'FIXTURE_ONLY': '0' * 10}, 'model': 'fixture'}
-    formal = ChapterBlueprints.model_validate({**bps, '_provenance': {
-        **provenance, 'scope_violations': [], 'context': {'architecture': 'plot-blueprint-v1',
-            'source_format': 'numbered-paragraphs-v1', 'global_projection_contract': 'plot-global-scope-v2'}}})
-    grounding = KnowledgeGrounding.model_validate({**GLOBAL,
-        'characters_reference_sha256': 'a' * 64,
-        '_provenance': {**provenance, 'evidence_locator_failures': []}})
-
-    def scope(events=()):
-        return knowledge_links.build_scope(MainText.model_validate(main), grounding, formal,
-            main_sha256='1' * 64, knowledge_sha256='2' * 64, blueprint_sha256='3' * 64,
-            registered_events=events)
-
-    before = scope()
-    request = KnowledgeLinkSubmission.model_validate({'scope_sha256': before.scope_sha256,
-        'actor': 'fixture-commander', 'reason': '第二章新客才获知第一章的完整事件', 'decisions': [],
-        'event_operations': [{'operation': 'put', 'event_id': 'ke_later', 'expected_event_sha256': None,
-            'event': {'kind': 'character_knowledge', 'subject_ref': {'kind': 'beat', 'ref': 'b01_01'},
-                'audience': {'kind': 'character', 'actor': audience}, 'chapter_ordinal': 2,
-                'evidence_refs': [{'chapter_ordinal': 2, 'evidence_ref': 'e02_01'}]},
-            'resolution': {'kind': 'at_beats', 'trigger_beat_ref': 'b02_01', 'subject_refs': [
-                {'kind': 'beat', 'ref': 'b01_01'}, {'kind': 'beat', 'ref': 'b02_01'}]}}]})
-    registered = knowledge_links.event_registry([KnowledgeLinkHistory(
-        decision_sha256='4' * 64, accepted=True, submission=request)])
-    after = scope(registered)
-    applied = knowledge_links.materialize_submission(before, after, request)
-    result = KnowledgeLinks.model_validate({'scope': after.model_dump(mode='json'),
-        'links': [{**row.model_dump(mode='json'), 'actor': applied.actor, 'reason': applied.reason,
-                   'source_decision_sha256': '4' * 64} for row in applied.decisions],
-        '_provenance': links()['_provenance']})
-    assert result.scope.obligations[0].audience.actor.model_dump(mode='json') == audience
-    return result.model_dump(mode='json', by_alias=True)
-
-
 def test_later_presentation_does_not_make_earlier_valid_null_ambiguous():
     bps, main, registry, _old = _single()
-    before = chapter_materials(1, bps, GLOBAL, links(), main, [], characters=registry)
-    before_identity = chapter_materials_identity(1, bps, GLOBAL, links(), main, [], characters=registry)
+    before = chapter_materials(1, bps, GLOBAL, main, [], characters=registry)
+    before_identity = chapter_materials_identity(1, bps, GLOBAL, main, [], characters=registry)
     _add_later(bps, main, registry)
-    after = chapter_materials(1, bps, GLOBAL, links(), main, [], characters=registry)
+    after = chapter_materials(1, bps, GLOBAL, main, [], characters=registry)
     assert after == before
-    assert chapter_materials_identity(1, bps, GLOBAL, links(), main, [], characters=registry) == before_identity
-
-
-def test_future_registered_audience_uses_its_target_chapter_and_selected_proof():
-    bps, main, registry, _old = _single()
-    later = _add_later(bps, main, registry)
-    knowledge = _registered_later_knowledge(bps, main, later)
-    truth, mapping = build_blind_projection(bps, root_clean_sha1='a' * 40,
-        characters=registry, knowledge_links=knowledge, global_g=GLOBAL, main_text=main)
-    event = truth['chapters'][0]['knowledge'][0]
-    assert event['timing'] == 'future_chapter'
-    assert mapping['participant_aliases'][event['audience']['actor_alias']] == later
-    material = chapter_materials(1, bps, GLOBAL, knowledge, main, [], characters=registry)
-    assert 'ap02_01' in {row.presentation_id for row in material.actor_bindings}
-    assert 'e02_01' in {row.evidence_ref for row in material.evidence_anchors}
-    original = chapter_materials_identity(1, bps, GLOBAL, knowledge, main, [], characters=registry)
-    # 第二章只消费登记/受众证据，未选择的第三段正文不能制造第一章 B 失效。
-    main[1]['text'] = main[1]['text'].replace('新客决定留下。', '新客决定在此再住一晚。')
-    _source(bps['blueprints'][1], main[1]['text'])
-    _validate(bps, main, registry)
-    changed = _registered_later_knowledge(bps, main, later)
-    assert chapter_materials_identity(1, bps, GLOBAL, changed, main, [], characters=registry) == original
+    assert chapter_materials_identity(1, bps, GLOBAL, main, [], characters=registry) == before_identity
 
 
 def test_explicit_and_unique_null_share_one_resolved_presentation():
@@ -152,15 +92,47 @@ def test_explicit_and_unique_null_share_one_resolved_presentation():
     people = [row for row in truth['chapters'][0]['characters'] if row['surfaces'] == ['甲']]
     assert len(people) == 1
     assert mapping['participant_aliases'][people[0]['alias']] == old
-    material = chapter_materials(1, bps, GLOBAL, links(), main, [], characters=registry)
+    material = chapter_materials(1, bps, GLOBAL, main, [], characters=registry)
     people = [row for row in material.global_subjects if row.subject_ref.kind == 'character'
               and row.subject_ref.ref == 'char_001']
     assert len(people) == 1
     assert people[0].subject_ref.actor.model_dump(mode='json') == old
 
 
+def presented():
+    bps, registry = blueprint(), deepcopy(REGISTRY)
+    bp = bps['blueprints'][0]
+    text = '甲和新客收到入住邀请。\n\n乙在门口拒绝甲。\n\n新客决定留下。'
+    main = [{'chapter_ordinal': 1, 'text': text}]
+    from novel.stages.stage2.plot_compile import source_digest
+    from novel.stages.stage2.paragraphs import span_of
+    bp['source_sha256'] = source_digest(text)
+    for anchor in bp['evidence_anchors']:
+        anchor['start'], anchor['end'] = span_of(text, anchor['start_para'], anchor['end_para'])
+    registry['characters']['char_001']['role'] = '此前公开的队长'
+    registry['characters']['char_001']['aliases'].append({
+        'surface': '新客', 'identity_revealed_from': 2, 'evidence_refs': []})
+    old = {'char_id': 'char_001', 'presentation_ref': 'ap01_01'}
+    new = {'char_id': 'char_001', 'presentation_ref': 'ap01_02'}
+    bp['actor_bindings'] = [
+        {'presentation_id': ref['presentation_ref'], 'char_id': ref['char_id'],
+         'surfaces': [surface], 'evidence_refs': ['e01_01'], 'public_state_ref': None}
+        for ref, surface in ((old, '甲'), (new, '新客'))]
+    for beat in bp['beats']:
+        beat['participants'] = [old if a['char_id'] == 'char_001' else a for a in beat['participants']]
+        for context in beat['source_contexts']:
+            context['present'] = [old if a['char_id'] == 'char_001' else a for a in context['present']]
+    bp['beats'][0]['content'] = '新客出现时，人们仍惦记甲。'
+    bp['beats'][0]['participants'] = [old, new]
+    bp['beats'][0]['source_contexts'][0]['present'] = [old, new]
+    bp['states'][0].update(modality='claim', holder=new, content='新客声称自己要留下。')
+    bp['constraints'][0].update(kind='observes', observer=new)
+    bp['narration'][0].update(narrator=new, focalizer=old)
+    PlotBlueprint.model_validate(bp)
+    return bps, main, registry, old, new
+
+
 def test_two_distinct_presentations_of_one_entity_remain_distinct():
-    from tests.test_writer_actor_contract import presented
     bps, main, registry, old, new = presented()
     _validate(bps, main, registry)
     truth, mapping = build_blind_projection(bps, root_clean_sha1='a' * 40,
@@ -170,7 +142,7 @@ def test_two_distinct_presentations_of_one_entity_remain_distinct():
     actors = [mapping['participant_aliases'][ref] for ref in first['participant_aliases']]
     assert len(actors) == 2
     assert {row['presentation_ref'] for row in actors} == {old['presentation_ref'], new['presentation_ref']}
-    material = chapter_materials(1, bps, GLOBAL, links(), main, [], characters=registry)
+    material = chapter_materials(1, bps, GLOBAL, main, [], characters=registry)
     people = [row for row in material.global_subjects if row.subject_ref.kind == 'character'
               and row.subject_ref.ref == 'char_001']
     assert {row.subject_ref.actor.presentation_ref for row in people} == {'ap01_01', 'ap01_02'}
