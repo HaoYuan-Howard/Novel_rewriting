@@ -41,6 +41,7 @@ from contracts.invariants import (
 )
 from contracts.rules import REGISTRY
 from contracts.schema import artifact_key, artifact_spec
+from contracts.schema.stage2_issue_review import ISSUE_REVIEW_ACCEPTANCE_CONTRACT
 from contracts.schema.api import (
     ApprovalAction,
     ApprovalBackfillResult,
@@ -871,8 +872,10 @@ def require_stage2_review(
 def _stage2_review_identity(novel_dir: Path, node: str) -> tuple[str, str, str]:
     """token 守提交竞态，subject/contract 守长期接受；不读取审批 effective 投影。"""
     if node == 'stage2.global':
+        # v3：issues 协议切换。旧 v2 接受保留历史，不转换成新协议接受；
+        # 旧 epoch 配旧代码排空已购结果和 prepared 后再按新协议复审。
         token = _stage2_global_review_token(novel_dir)
-        return token, token.removeprefix('s2gr2_'), 'stage2-global-acceptance-v2'
+        return token, token.removeprefix('s2gr2_'), ISSUE_REVIEW_ACCEPTANCE_CONTRACT
     if node != 'stage2.blueprint':
         raise ApprovalRequired(f'未登记 Stage2 审阅节点：{node}')
     from novel.views.stage2 import blueprint_review_workpack

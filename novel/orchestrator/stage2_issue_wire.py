@@ -100,6 +100,7 @@ def _candidate_patch_type(binding: dict[str, Any], name: str) -> Any:
             continue
         delete_branches.append(create_model(
             f'{name}{str(collection).title()}Delete', __base__=GlobalCollectionDelete,
+            collection=(Literal[collection], ...),
             subject_id=(_literal(ids), ...)))
     if delete_branches:
         delete_union = reduce(or_, delete_branches)

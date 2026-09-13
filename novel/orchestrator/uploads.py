@@ -31,7 +31,6 @@ from contracts.artifacts import (
     STAGE2_BLUEPRINT_EDIT,
     STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_REVIEW_DECISIONS,
-    STAGE2_ISSUE_REVIEW_DECISIONS,
 )
 from contracts.schema.api import (
     BatchTrimResolutionRequest, Stage5ReviewerRewriteRequest,
@@ -239,9 +238,7 @@ def save_stage2_issue_submission(
     target = root / f'issue-review-{uuid.uuid4().hex}.json'
     tmp = target.with_suffix('.tmp')
     try:
-        data = encode_artifact(
-            STAGE2_ISSUE_REVIEW_DECISIONS,
-            submission.model_dump(mode='json', by_alias=True))
+        data = submission.model_dump(mode='json', by_alias=True)
         tmp.write_bytes((json.dumps(
             data, ensure_ascii=False, indent=2, sort_keys=True) + '\n').encode('utf-8'))
         os.replace(tmp, target)

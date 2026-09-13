@@ -42,8 +42,6 @@ from contracts.artifacts import (
     STAGE2_GLOBAL_EDIT_INPUT_COMMIT,
     STAGE2_GLOBAL_EDIT_FAILURE,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
-    STAGE2_CORE_REVIEW_PREPARED, STAGE2_ISSUE_REVIEW_DECISIONS,
-    STAGE2_ISSUE_REVIEW_TRANSACTIONS,
     STAGE4_BLIND_CANDIDATE, STAGE4_BLIND_CHAPTER_EDIT, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
     STAGE5_CHAPTER, STAGE5_REJECTED_REVISION,
@@ -321,14 +319,6 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # reviewed 额外绑定 failure/workpack，generic INVALID 提升可显式表达没有
     # action-owned edit identity / formal baseline；不进入 NodeSpec.produces。
     STAGE2_GLOBAL_EDIT_COMMIT: ArtifactSpec(GlobalEditCommit, 3),
-    # v1：Stage2CoreReview 的 PreparedScope（Global 工作包 v7）；调用前冻结身份、
-    # 义务与材料。新 prepared 覆盖写，旧包失效不复用。
-    STAGE2_CORE_REVIEW_PREPARED: ArtifactSpec(Stage2PreparedCoreReviewPackage),
-    # v1：issues 协议的公开提交请求；外部/服务可写，事务内只读复验。
-    STAGE2_ISSUE_REVIEW_DECISIONS: ArtifactSpec(Stage2IssueReviewSubmission),
-    # v1：审阅事务账；CLI 追加写，记录派生 PASS 的审计来源。
-    STAGE2_ISSUE_REVIEW_TRANSACTIONS: ArtifactSpec(
-        Stage2IssueReviewTransactionLedger),
     # v2：由独立人物登记免费物化；缺/坏时由人物 owner 免费重验重建。
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION: ArtifactSpec(
         BlueprintCharacterProjection, 2),

@@ -3448,6 +3448,24 @@ class GlobalReviewView(StrictModel):
     #: 「没有这个键」与「值是 0」不许混（同 `InboxView.counts`）。
     effect_counts: dict[str, dict[str, int]]
     items: list[GlobalReviewRow]
+    #: 最近一次 issues 协议范围审阅的可追溯摘要；没有则 None。
+    #: 逐项 PASS 由 ``decision_basis=scope_review`` 派生而来，
+    #: 界面据此显示“范围审阅派生通过”，不声称模型逐字段裁决。
+    scope_review: 'Stage2ScopeReviewSummary | None' = None
+
+
+class Stage2ScopeReviewSummary(FrozenModel):
+    '''issues 协议审阅事务的可追溯摘要（API 只读面）。'''
+
+    protocol: str = Field(min_length=1)
+    decision_basis: Literal['scope_review']
+    coverage_scope_id: str = Field(pattern=r'^[0-9a-f]{64}$')
+    coverage_total: int = Field(ge=0)
+    derived_pass_count: int = Field(ge=0)
+    issue_count: int = Field(ge=0)
+    node_accepted: bool
+    decided_at: str = Field(min_length=1)
+    transaction_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
 
 
 # ─────────────────────────────────────────────────────────────────────────────

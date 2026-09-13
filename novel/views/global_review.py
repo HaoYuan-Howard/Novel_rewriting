@@ -7,7 +7,9 @@ from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
 )
 from contracts.invariants import review_effect_of
-from contracts.schema.api import GlobalReviewRow, GlobalReviewView
+from contracts.schema.api import (
+    GlobalReviewRow, GlobalReviewView, Stage2ScopeReviewSummary,
+)
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import GlobalGrounding
@@ -51,6 +53,13 @@ def global_review_view(base: str, sid: str) -> GlobalReviewView:
             except NovelError:
                 review_token = None
     from novel.orchestrator.approvals import stage2_review_coverage
+    from novel.orchestrator.stage2_issue_submission import latest_scope_review_summary
+    try:
+        summary = latest_scope_review_summary(base, sid)
+    except NovelError:
+        summary = None
+    scope_review_summary = (
+        Stage2ScopeReviewSummary.model_validate(summary) if summary else None)
     return GlobalReviewView(
         review_coverage=(stage2_review_coverage(base, sid, 'stage2.global')
                          if review_token is not None else None),
@@ -71,4 +80,5 @@ def global_review_view(base: str, sid: str) -> GlobalReviewView:
             )
             for item in review.items
         ],
+        scope_review=scope_review_summary,
     )

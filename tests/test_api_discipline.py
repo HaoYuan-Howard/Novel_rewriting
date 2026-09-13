@@ -436,6 +436,7 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         # 已购联合回答按 owner 免费修复，不另起付费首抽。
         '/api/novels/{sid}/stage2/analyze-draft',
         '/api/novels/{sid}/approvals/stage2-review',
+        '/api/novels/{sid}/approvals/stage2-review-issues',
         # Blueprint 有据修订由 Stage2 持有；普通分场仍留在 Stage4。
         '/api/novels/{sid}/stage2/blueprint/edit',
         '/api/novels/{sid}/stage2/blueprint/edit/preview',

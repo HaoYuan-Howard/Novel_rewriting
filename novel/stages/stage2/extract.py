@@ -2291,6 +2291,15 @@ def run_global(
     ctx: RunContext, client: LlmClient, *, review_token: str | None = None,
 ) -> GlobalGrounding:
     """旧 LlmClient 单轮入口；agent 多轮必须显式用 prepare/evaluate/finalize 三段。"""
+    if review_token is not None:
+        # issues 协议的定向返工：只执行登记问题的局部修复，不重跑全书抽取。
+        from contracts.artifacts import STAGE2_GLOBAL_GROUNDING
+        from novel.stages.stage2 import issue_repair
+        if issue_repair.pending_jobs_for_owner(ctx, 'stage2.global'):
+            issue_repair.run_repair(ctx, client, owner='stage2.global',
+                                    review_token=review_token)
+            return grounding_io.read_own(ArtifactStore(ctx), STAGE2_GLOBAL_GROUNDING,
+                                         require_current=True)[0]
     prepared = prepare_global_candidate(ctx, review_token=review_token)
     response = client.ask_json(
         prepared.system,

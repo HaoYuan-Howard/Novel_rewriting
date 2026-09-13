@@ -30,12 +30,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from contracts.artifacts import (
-    STAGE1_MAIN_TEXT, STAGE2_CHARACTERS, STAGE2_CORE_REVIEW_PREPARED,
-    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE2_ISSUE_REVIEW_DECISIONS,
-    STAGE2_ISSUE_REVIEW_TRANSACTIONS,
+    STAGE1_MAIN_TEXT, STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING,
+    STAGE2_GLOBAL_REVIEW,
 )
 from contracts.schema.evaluation import EvidenceRef, GlobalReview
 from contracts.schema.stage1 import MainText
@@ -87,6 +87,52 @@ def _sha(value: Any) -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _review_service_dir(ctx: RunContext) -> Path:
+    """Stage2CoreReview 审阅运输 WAL 的唯一落点（``_service``）。
+
+    prepared 包、事务账与公开提交请求都是审阅运输面，不是正式产物：
+    不进产物注册表、不进 surface seal、不影响 producer freshness；
+    身份新鲜度由事务逐字节复验业务产物承担。
+    """
+    from novel.orchestrator.jobs import service_dir
+    target = service_dir(ctx.novel_dir.parent) / 'stage2_review' / ctx.sid
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _write_review_json(ctx: RunContext, name: str, payload: dict[str, Any]) -> Path:
+    import json
+    import os
+    target = _review_service_dir(ctx) / name
+    tmp = target.with_suffix('.tmp')
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+                   encoding='utf-8')
+    os.replace(tmp, target)
+    return target
+
+
+def _read_review_json(ctx: RunContext, name: str) -> dict[str, Any] | None:
+    import json
+    target = _review_service_dir(ctx) / name
+    if not target.is_file():
+        return None
+    try:
+        return json.loads(target.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    import json
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        raise TerminalState(f'issues 审阅提交不可读：{exc}') from exc
+    if not isinstance(payload, dict):
+        raise TerminalState('issues 审阅提交顶层必须是 JSON object')
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -379,23 +425,24 @@ def prepare(ctx: RunContext) -> dict[str, Any]:
         'material_source': material_source,
     }
     candidate_sha = _sha(payload)
-    existing = _read_prepared(store)
+    existing = _read_prepared(ctx)
     if existing is not None and existing.prepared_sha256 == candidate_sha:
         return existing.model_dump(mode='json', by_alias=True)
     payload['prepared_sha256'] = candidate_sha
     prepared = Stage2PreparedCoreReviewPackage.model_validate(payload)
-    store.write_sparse_input(STAGE2_CORE_REVIEW_PREPARED, prepared)
+    _write_review_json(ctx, 'core_review_prepared.json',
+                       prepared.model_dump(mode='json', by_alias=True))
     return prepared.model_dump(mode='json', by_alias=True)
 
 
-def _read_prepared(store: ArtifactStore) -> Stage2PreparedCoreReviewPackage | None:
-    from contracts.schema import ArtifactVersionError
+def _read_prepared(ctx: RunContext) -> Stage2PreparedCoreReviewPackage | None:
     from pydantic import ValidationError
-    if not store.exists(STAGE2_CORE_REVIEW_PREPARED):
+    payload = _read_review_json(ctx, 'core_review_prepared.json')
+    if payload is None:
         return None
     try:
-        return store.read(Stage2PreparedCoreReviewPackage, STAGE2_CORE_REVIEW_PREPARED)
-    except (ArtifactVersionError, ValidationError, OSError):
+        return Stage2PreparedCoreReviewPackage.model_validate(payload)
+    except ValidationError:
         return None
 
 
@@ -405,7 +452,7 @@ def require_fresh_prepared(ctx: RunContext) -> Stage2PreparedCoreReviewPackage:
     from novel.stages.stage2 import grounding as grounding_io
 
     store = ArtifactStore(ctx)
-    prepared = _read_prepared(store)
+    prepared = _read_prepared(ctx)
     if prepared is None:
         raise UpstreamMissing(
             '当前没有 prepared 审阅包；先运行 stage2.global --prepare-issue-review')
@@ -440,8 +487,7 @@ def require_fresh_prepared(ctx: RunContext) -> Stage2PreparedCoreReviewPackage:
 
 def submission_template(ctx: RunContext) -> dict[str, Any]:
     """``--review-issues`` 的公开请求骨架；token 来自当前 prepared 包。"""
-    store = ArtifactStore(ctx)
-    prepared = _read_prepared(store)
+    prepared = _read_prepared(ctx)
     if prepared is None:
         raise UpstreamMissing('当前没有 prepared 审阅包；先运行 --prepare-issue-review')
     return {
@@ -480,17 +526,13 @@ def _read_submission(
                 f'issues 审阅提交必须在当前书或 {allowed} 内：{resolved}')
         if not candidate.is_file():
             raise TerminalState(f'{candidate} 不在盘上')
-        return store.read_external(
-            Stage2IssueReviewSubmission, STAGE2_ISSUE_REVIEW_DECISIONS, candidate)
-    rel = paths.edit_rel(ctx.novel_dir, decision_path, STAGE2_ISSUE_REVIEW_DECISIONS)
-    if not store.exists(rel):
+        return Stage2IssueReviewSubmission.model_validate(_read_json_file(candidate))
+    rel = paths.edit_rel(ctx.novel_dir, decision_path, 'issue_review_decisions.json')
+    candidate = Path(ctx.novel_dir) / rel
+    if not candidate.is_file():
         raise TerminalState(
             f'{rel} 不在盘上；放入 Stage2IssueReviewSubmission（review_token/actor/issues）')
-    if rel == STAGE2_ISSUE_REVIEW_DECISIONS:
-        return store.read(Stage2IssueReviewSubmission, rel)
-    return store.read_external(
-        Stage2IssueReviewSubmission, STAGE2_ISSUE_REVIEW_DECISIONS,
-        Path(ctx.novel_dir) / rel)
+    return Stage2IssueReviewSubmission.model_validate(_read_json_file(candidate))
 
 
 def _validate_against_prepared(
@@ -678,25 +720,22 @@ def _apply_item_decisions(
     return updated
 
 
-def _read_transaction_ledger(store: ArtifactStore) -> Stage2IssueReviewTransactionLedger:
-    from contracts.schema import ArtifactVersionError
+def _read_transaction_ledger(ctx: RunContext) -> Stage2IssueReviewTransactionLedger:
     from pydantic import ValidationError
-    if not store.exists(STAGE2_ISSUE_REVIEW_TRANSACTIONS):
-        return Stage2IssueReviewTransactionLedger()
+    payload = _read_review_json(ctx, 'issue_review_transactions.json') or {}
     try:
-        return store.read(
-            Stage2IssueReviewTransactionLedger, STAGE2_ISSUE_REVIEW_TRANSACTIONS)
-    except (ArtifactVersionError, ValidationError, OSError):
+        return Stage2IssueReviewTransactionLedger.model_validate(payload)
+    except ValidationError:
         return Stage2IssueReviewTransactionLedger()
 
 
-def append_transaction(store: ArtifactStore,
+def append_transaction(ctx: RunContext,
                        transaction: Stage2IssueReviewTransaction) -> None:
-    ledger = _read_transaction_ledger(store)
-    # sparse 写口按 model_fields_set 渲染；显式传入 transactions 才不会被裁掉。
-    store.write_sparse_input(STAGE2_ISSUE_REVIEW_TRANSACTIONS,
-                             Stage2IssueReviewTransactionLedger(
-                                 transactions=[*ledger.transactions, transaction]))
+    ledger = _read_transaction_ledger(ctx)
+    _write_review_json(ctx, 'issue_review_transactions.json',
+                       Stage2IssueReviewTransactionLedger(
+                           transactions=[*ledger.transactions, transaction]).model_dump(
+                               mode='json', by_alias=True))
 
 
 def apply_review_issues(ctx: RunContext, decision_path: str, *,
@@ -720,7 +759,6 @@ def apply_review_issues(ctx: RunContext, decision_path: str, *,
     if submission.review_token != prepared.review_token:
         raise HumanEditProtected('issues 提交的 review_token 与当前 prepared 包不一致')
     targets, evidence_index = _validate_against_prepared(prepared, submission)
-    del targets
 
     plan = _plan_coverage(prepared, list(submission.issues), _review_items(ctx, store))
 
@@ -763,11 +801,35 @@ def apply_review_issues(ctx: RunContext, decision_path: str, *,
                        for index in plan['open_issue_indexes']]
         held = any(entry.basis == 'held' for entry in plan['entries'])
         can_accept = safety.safe and not open_issues and not held
-        decision = 'accept' if can_accept else 'uncertain'
+        rework_units = [entry for entry in plan['entries']
+                        if entry.basis == 'issue'
+                        and submission.issues[entry.issue_index].state == 'FAIL']
+        if can_accept:
+            decision = 'accept'
+        elif rework_units:
+            # FAIL 问题走定向修复：owner 只由代码按 Characters→Global 依赖序
+            # 计算；模型给的 repair_hint 不授予 owner 决定权。
+            decision = 'rework'
+        elif open_issues or held:
+            decision = 'uncertain'
+        else:  # pragma: no cover —— 与 can_accept 互补
+            decision = 'uncertain'
+        decision_owner: str | None = None
+        if decision == 'rework':
+            for owner in ('stage2.characters', 'stage2.global'):
+                if any(_owner_of_issue(issue, targets) == owner
+                       for issue in open_issues):
+                    decision_owner = owner
+                    break
         if decision == 'accept':
             reason = (
                 f'范围审阅派生通过：prepared 范围 {prepared.coverage_scope_id} 覆盖'
                 f' {len(plan["entries"])} 项义务，本轮未报告问题且历史问题闭合')
+        elif decision == 'rework':
+            summary = '；'.join(
+                f'issue[{issue.issue_type}]{issue.target.ref}:{issue.state} '
+                f'{issue.problem}' for issue in open_issues)
+            reason = (f'issues 局部修复派单（owner={decision_owner}）：{summary}')
         else:
             summary = '；'.join(
                 f'issue[{issue.issue_type}]{issue.target.ref}:{issue.state} '
@@ -780,7 +842,8 @@ def apply_review_issues(ctx: RunContext, decision_path: str, *,
         post_coverage = Stage2ReviewCoverage.model_validate(post_pack['review_coverage'])
         approve_stage2_review(ctx.novel_dir.parent, ctx.sid, Stage2NodeReviewRequest(
             node='stage2.global', review_token=global_review.review_token(ctx),
-            decision=decision, actor=submission.actor, reason=reason,
+            decision=decision, owner=decision_owner, actor=submission.actor,
+            reason=reason,
             review=Stage2ReviewSubmission(
                 scope_sha256=post_coverage.scope.scope_sha256,
                 default_decision='accept', exceptions=plan['exceptions'])))
@@ -801,17 +864,36 @@ def apply_review_issues(ctx: RunContext, decision_path: str, *,
         transaction_sha = _sha(transaction_payload)
         transaction = Stage2IssueReviewTransaction.model_validate({
             **transaction_payload, 'transaction_sha256': transaction_sha})
-        append_transaction(store, transaction)
-        return {
-            'decision': decision,
-            'node_accepted': decision == 'accept',
-            'derived_pass_count': sum(
-                1 for entry in plan['entries'] if entry.basis == 'derived_pass'),
-            'issue_count': len(open_issues),
-            'open_issues': [issue.model_dump(mode='json', by_alias=True)
-                            for issue in open_issues],
-            'transaction_sha256': transaction.transaction_sha256,
-        }
+        append_transaction(ctx, transaction)
+
+    # 候选 patch 在两套账落定之后应用：问题先持久化，patch 失败或未应用
+    # 都不丢失问题；owner 免费编辑路径会自行刷新受影响义务。
+    patched = []
+    from novel.stages.stage2 import issue_repair
+    for issue in submission.issues:
+        if issue.candidate_patch is None:
+            continue
+        outcome = issue_repair.apply_candidate_patch(ctx, issue.candidate_patch)
+        patched.append({'target': issue.target.ref, 'applied': bool(outcome)})
+    return {
+        'decision': decision,
+        'decision_owner': decision_owner,
+        'node_accepted': decision == 'accept',
+        'derived_pass_count': sum(
+            1 for entry in plan['entries'] if entry.basis == 'derived_pass'),
+        'issue_count': len(open_issues),
+        'open_issues': [issue.model_dump(mode='json', by_alias=True)
+                        for issue in open_issues],
+        'candidate_patches': patched,
+        'transaction_sha256': transaction.transaction_sha256,
+    }
+
+
+def _owner_of_issue(issue: Stage2Issue, targets: dict) -> str:
+    target = targets.get(issue.target.ref)
+    if target is None:
+        return 'stage2.global'
+    return str(target.owner)
 
 
 def _characters_payload(store: ArtifactStore) -> dict[str, Any]:

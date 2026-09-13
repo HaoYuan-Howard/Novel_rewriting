@@ -19,11 +19,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from contracts.artifacts import STAGE2_ISSUE_REVIEW_TRANSACTIONS
 from contracts.schema.evaluation import GlobalReview
-from contracts.schema.stage2_issue_review import (
-    Stage2IssueReviewSubmission, Stage2IssueReviewTransactionLedger,
-)
+from contracts.schema.stage2_issue_review import Stage2IssueReviewSubmission
 from novel import paths
 from novel.orchestrator import approvals, queue
 from novel.stages.stage2 import core_review, global_review
@@ -74,9 +71,8 @@ def test_empty_issues_derive_full_scope_pass_and_free_accept(tmp_path):
     assert summary['issue_count'] == 0
     approvals.require_stage2_node_accepted(tmp_path, ctx.sid, 'stage2.global')
 
-    store = ArtifactStore(ctx)
-    ledger = store.read(Stage2IssueReviewTransactionLedger,
-                        STAGE2_ISSUE_REVIEW_TRANSACTIONS)
+    from novel.stages.stage2 import core_review as core_review_io
+    ledger = core_review_io._read_transaction_ledger(ctx)
     transaction = ledger.transactions[-1]
     assert transaction.decision_basis == 'scope_review'
     assert transaction.node_accepted is True
@@ -108,7 +104,9 @@ def test_issue_on_item_records_fail_and_keeps_gate_closed(tmp_path):
     assert summary['issue_count'] == 1
     view = approvals._stage2_review_view(
         ctx.novel_dir, approvals._read_raw(tmp_path, ctx.sid), 'stage2.global')
-    assert view.state == 'uncertain'
+    assert view.state == 'rework'
+    # owner 只由代码按 Characters→Global 依赖序计算；首个目标义务属人物 owner。
+    assert view.current_decision.owner == 'stage2.characters'
 
     store = ArtifactStore(ctx)
     review = store.read(GlobalReview, global_review.REL)
@@ -284,3 +282,129 @@ def test_recovery_counters_persist_across_turns(tmp_path):
 def recovery_counters(budget):
     from novel.orchestrator import stage2_issue_recovery as recovery
     return recovery.counters(budget)
+
+
+# ---------------------------------------------------------------------------
+# B：候选 patch 后置应用与确定性失效；C：局部 Executor 与材料扩充
+# ---------------------------------------------------------------------------
+
+
+def _char_replace_row(ctx):
+    from novel.stages.stage2 import characters
+    char_ctx = ctx
+    char_ctx.node = characters.NODE
+    template = characters.edit_template(char_ctx)
+    row = template['operations'][0]
+    row['character']['role'] = '站在老宅廊下的女子'
+    row['character']['role_evidence_refs'] = [
+        {'chapter_ordinal': 1, 'locator': '李宝珠站在廊下看着落花。'}]
+    return row
+
+
+def test_candidate_patch_applied_and_subject_reopened(tmp_path):
+    """候选 patch 在两套账之后由 owner 免费应用；主体重开等待独立复审。"""
+    ctx = _seeded_ctx(tmp_path)
+    pack = core_review.prepare(ctx)
+    prepared = core_review.require_fresh_prepared(ctx)
+    char_item = next(row.obligation_id for row in prepared.targets
+                     if row.target_kind == 'item'
+                     and row.obligation_id.startswith('role:characters'))
+    row = _char_replace_row(ctx)
+    summary = core_review.apply_review_issues(ctx, str(_write_submission(
+        ctx, _submission(pack['review_token'], [{
+            'target': {'kind': 'existing_item', 'ref': char_item},
+            'state': 'FAIL', 'issue_type': 'incorrect',
+            'problem': 'role 与原文不符',
+            'evidence_refs': [], 'repair_hint': 'none',
+            'candidate_patch': {'owner': 'stage2.characters',
+                                'characters': {'replaces': [row]}},
+        }]))))
+    assert summary['decision'] == 'rework'
+    assert summary['candidate_patches'] == [
+        {'target': char_item, 'applied': True}]
+    review = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
+    item = next(item for item in review.items
+                if f'{item.kind}:{item.subject_path}' == char_item)
+    assert item.state == 'pending', '修复已改变主体，必须重开等待复审'
+
+
+class _RepairDriver:
+    """fake LLM client：回答一次 typed replace 或始终 needs_context。"""
+
+    def __init__(self, answer_factory):
+        self._answer_factory = answer_factory
+        self.calls: list[int] = []
+
+    def ask_json(self, system, user, *, model_cls, purpose, max_tokens, **_kwargs):
+        import json
+        material = json.loads(user)
+        self.calls.append(material.get('level'))
+        return model_cls.model_validate(self._answer_factory(material))
+
+
+def test_local_executor_repairs_registered_issue(tmp_path):
+    """C：Executor 只返回授权 operations；修后主体重开、返工回执落账。"""
+    ctx = _seeded_ctx(tmp_path)
+    pack = core_review.prepare(ctx)
+    prepared = core_review.require_fresh_prepared(ctx)
+    char_item = next(row.obligation_id for row in prepared.targets
+                     if row.target_kind == 'item'
+                     and row.obligation_id.startswith('role:characters'))
+    core_review.apply_review_issues(ctx, str(_write_submission(
+        ctx, _submission(pack['review_token'], [{
+            'target': {'kind': 'existing_item', 'ref': char_item},
+            'state': 'FAIL', 'issue_type': 'incorrect',
+            'problem': 'role 与原文不符', 'evidence_refs': [],
+            'repair_hint': 'needs_owner_context',
+        }]))))
+    from novel.stages.stage2 import issue_repair
+    row = _char_replace_row(ctx)
+
+    def answer_factory(_material):
+        return {'needs_context': False, 'context_request': None,
+                'characters': {'operations': [row]}, 'global': None}
+
+    driver = _RepairDriver(answer_factory)
+    token = pack['review_token']
+    summary = issue_repair.run_repair(
+        ctx, driver, owner='stage2.characters', review_token=token)
+    assert summary['applied'] == 1 and driver.calls == ['L0']
+    from novel.orchestrator import approvals as approvals_mod
+    raw = approvals_mod._read_raw(tmp_path, ctx.sid)
+    assert token in raw.stage2_rework_completed
+    review = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
+    item = next(item for item in review.items
+                if f'{item.kind}:{item.subject_path}' == char_item)
+    assert item.state == 'pending'
+
+
+def test_local_executor_context_exhausted_keeps_issue(tmp_path):
+    """L0→L1→L2 最多两次扩充；仍不可解则 context_exhausted，问题保留。"""
+    ctx = _seeded_ctx(tmp_path)
+    pack = core_review.prepare(ctx)
+    prepared = core_review.require_fresh_prepared(ctx)
+    char_item = next(row.obligation_id for row in prepared.targets
+                     if row.target_kind == 'item'
+                     and row.obligation_id.startswith('role:characters'))
+    core_review.apply_review_issues(ctx, str(_write_submission(
+        ctx, _submission(pack['review_token'], [{
+            'target': {'kind': 'existing_item', 'ref': char_item},
+            'state': 'FAIL', 'issue_type': 'unverifiable',
+            'problem': '材料不足无法核验', 'evidence_refs': [],
+            'repair_hint': 'needs_chapter',
+        }]))))
+    from novel.stages.stage2 import issue_repair
+
+    def answer_factory(_material):
+        return {'needs_context': True, 'context_request': 'chapter',
+                'characters': {'operations': []}, 'global': None}
+
+    driver = _RepairDriver(answer_factory)
+    summary = issue_repair.run_repair(
+        ctx, driver, owner='stage2.characters', review_token=pack['review_token'])
+    assert driver.calls == ['L0', 'L1', 'L2'], 'L0 之后最多两次扩充'
+    assert summary['context_exhausted'] == 1
+    review = ArtifactStore(ctx).read(GlobalReview, global_review.REL)
+    item = next(item for item in review.items
+                if f'{item.kind}:{item.subject_path}' == char_item)
+    assert item.state == 'FAIL', 'context_exhausted 保留问题，不洗成已修'

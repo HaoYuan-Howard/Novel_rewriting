@@ -13,6 +13,7 @@ from contracts.schema.api import (
     Stage2NodeReviewRequest,
     BlueprintRefinementRequest, BlueprintRefinementCatalog,
 )
+from contracts.schema.stage2_issue_review import Stage2IssueReviewSubmission
 from novel.api.deps import checked_sid, get_base
 from novel.errors import ApprovalRequired
 from novel.orchestrator import approvals, inspection
@@ -54,6 +55,25 @@ def submit_stage2_review(
             'node': request.node, 'review_token': request.review_token,
             'decision': request.decision, 'actor': request.actor}):
         return approvals.approve_stage2_review(base, sid, request)
+
+
+@router.post('/stage2-review-issues', response_model=ApprovalDoc)
+def submit_stage2_issue_review(
+    request: Stage2IssueReviewSubmission,
+    sid: str = Depends(checked_sid), base: str = Depends(get_base),
+) -> ApprovalDoc:
+    """issues 协议提交：服务只暂存请求，CLI 子进程完成两套账事务。
+
+    exit 0 表示范围审阅派生通过且已接受；exit 1 表示问题与派生决定已落账、
+    闸门保持关闭。两者都是已消费的合法回答，均返回提交后的审批视图。
+    """
+    from novel.orchestrator import stage2_issue_submission, uploads
+    path = uploads.save_stage2_issue_submission(base, sid, request)
+    with operation_scope(base, sid, operation='approval-stage2-review-issues', details={
+            'review_token': request.review_token, 'actor': request.actor,
+            'issue_count': len(request.issues)}):
+        stage2_issue_submission.apply_issue_submission(base, sid, path)
+    return approvals.get(base, sid)
 
 
 @router.get('', response_model=ApprovalDoc)

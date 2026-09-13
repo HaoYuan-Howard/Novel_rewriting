@@ -658,6 +658,12 @@ def run_legacy(ctx: RunContext, client: LlmClient, *,
     """显式 legacy backend 使用原 transport/cache/额度契约，不能接管 agent 回答。"""
     if ctx.executor_profile is not None:
         raise ProvenanceRefused('人物 legacy 入口不能接管 agent profile')
+    if review_token is not None:
+        # issues 协议的定向返工：只执行登记问题的局部修复，不下发全文重采。
+        from novel.stages.stage2 import issue_repair
+        if issue_repair.pending_jobs_for_owner(ctx, NODE):
+            issue_repair.run_repair(ctx, client, owner=NODE, review_token=review_token)
+            return ArtifactStore(ctx).read_own(CharacterRegistry, REL, require_current=True)[0]
     with ownership(ctx):
         if paths.stage2_characters_run_path(ctx.novel_dir, ctx.run_id).exists():
             raise ProvenanceRefused('当前人物 run 已有 agent 状态，必须用原 profile 恢复')
