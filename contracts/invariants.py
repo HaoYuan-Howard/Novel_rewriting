@@ -448,7 +448,7 @@ APPROVAL_STATE: Final = ('pending', 'approved')
 # state, not Stage0 current approval fields.
 # ⚠ 2026-09-13 起 Stage2 语义审阅整体退役：``gate.s2``、Stage2 已读凭证与节点
 # 接受不再是审批契约成员。Stage2 与下游之间只保留统一机械准入（见
-# ``novel/admission.py``），语义未审以报告中的 ``unver`` 披露，不产生审批待办。
+# ``novel/orchestrator/mechanical_admission.py``），语义未审以报告中的 ``unver`` 披露，不产生审批待办。
 APPROVAL_GATES: Final = ('s0', 's1', 's4', 's5', 's6', 's7')
 
 #: Stage4 v4 的章级结构决定。`retain` 是一次显式设计决定，不是“模型忘了改”；
