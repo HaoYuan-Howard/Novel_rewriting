@@ -143,6 +143,20 @@ def test_approval_projection_reuses_snapshot_overview_and_code_without_fallback(
     contexts: list[tuple] = []
 
     monkeypatch.setattr(A, '_read_current', lambda *_args: record)
+    # Stage2 复核闸退役：_spawns 的 s1/s4 分支改由统一机械准入发布；
+    # s5 的 Prepare 视图在快照投影内不得做真实盘读，一并按合成状态给。
+    from novel import admission as mechanical_admission
+    monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
+                        lambda *_args: mechanical_admission.AdmissionCheck(
+                            'stage2.blueprint', ok=False))
+    monkeypatch.setattr(mechanical_admission, 'stage4_ready',
+                        lambda *_args: mechanical_admission.AdmissionCheck('stage4', ok=False))
+    import novel.stages.stage6.prepare as prepare_stage6
+    monkeypatch.setattr(
+        prepare_stage6, 'view_state', lambda _store: SimpleNamespace(
+            pending_commit=False, state='missing'))
+    monkeypatch.setattr(
+        A.paths, 'resolve_novel_dir', lambda base, sid: tmp_path / 'book_1')
     monkeypatch.setattr(
         A.state, 'overview',
         lambda *_args: pytest.fail('快照审批投影不得再跑 overview'))
@@ -168,7 +182,9 @@ def test_approval_projection_reuses_snapshot_overview_and_code_without_fallback(
 
     assert A.get(
         tmp_path, 'book-1', overview=overview, code='code-v1') == 'approval-doc'
-    assert contexts == [(tmp_path, 'stage0.approve', 'code-v1')]
+    # _spawns 先用解析后的书目录建 ctx；外层审批投影仍用 base 本身。
+    assert contexts == [(tmp_path / 'book_1', 'stage0.approve', 'code-v1'),
+                        (tmp_path, 'stage0.approve', 'code-v1')]
     assert A._READ_CODE.get() is None
     assert A._READ_OVERVIEW.get() is None
 

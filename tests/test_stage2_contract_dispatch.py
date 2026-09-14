@@ -140,7 +140,9 @@ def test_rejected_initial_answer_stops_dependents_before_more_calls(tmp_path, da
 
 
 def test_targeted_revision_preserves_narration_and_unrelated_chapters(tmp_path):
-    book = prepare_book(tmp_path)
+    # 定向修订提交路径过统一机械准入；种子改走真实摄入/批准/分章链。
+    from tests.test_blueprint_repair_queue import prepare_complete_book
+    book = prepare_complete_book(tmp_path)
     initial, _wire = generate_plot(book)
     before = ArtifactStore(initial).read_own(ChapterBlueprints, extract.BLUEPRINT_REL)[0]
     ctx = _ctx(book, 'stage2.blueprint')

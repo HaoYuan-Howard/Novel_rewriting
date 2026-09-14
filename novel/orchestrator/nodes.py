@@ -68,9 +68,10 @@ FOLLOW_CHECK_NOTE = '自动追跑：退出码 0 也可能是残缺产物'
 #: 带值参数只以 token 入表，值仍由 ``validate_run`` 与 producer 校验。
 EXECUTOR_PROFILED_RUNS: dict[str, tuple[frozenset[str], ...]] = {
     'stage2.analyze': (frozenset(),),
-    'stage2.characters': (frozenset(), frozenset({'--review-token'})),
-    'stage2.global': (frozenset(), frozenset({'--review-token'})),
-    'stage2.blueprint': (frozenset(), frozenset({'--review-token'})),
+    # Stage2 语义审阅退役：stage2 三节点不再有 `--review-token` 跑法。
+    'stage2.characters': (frozenset(),),
+    'stage2.global': (frozenset(),),
+    'stage2.blueprint': (frozenset(),),
     'stage4.design': (
         frozenset(),
         frozenset({'--replan', '--review-token'}),

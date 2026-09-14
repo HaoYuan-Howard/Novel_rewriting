@@ -24,10 +24,9 @@ from types import MethodType, SimpleNamespace
 import pytest
 
 from contracts.invariants import (
-    FREE_ENTRIES, NODES, PAID_FLAGS, STAGES, VALUED_FLAGS, review_effect_of,
+    FREE_ENTRIES, NODES, PAID_FLAGS, STAGES, VALUED_FLAGS,
 )
 from contracts.schema import decode_artifact
-from contracts.schema.evaluation import GlobalReview, GlobalReviewDecisionSet
 from contracts.schema.orchestration import (
     AgentProfile, LegacyExecutorBackend, LegacyLlmProfile,
 )
@@ -58,17 +57,6 @@ def box():
     s = sandbox.Sandbox(sandbox.books_with_stage3()[0])
     yield s
     s.close()
-
-
-@pytest.fixture
-def current_core_review(tmp_path):
-    """当前独立人物与知识的确定性 producer 底座；CLI 反例不再依赖语料而跳过。"""
-    from novel.orchestrator.state import readonly_ctx
-    from novel.store import ArtifactStore
-    from tests.test_stage2_global_core_edits import seed as seed_current_core
-
-    ctx, _ = seed_current_core(tmp_path)
-    return ctx, ArtifactStore(readonly_ctx(ctx.novel_dir, ctx.node, ctx.code))
 
 
 def _file_bytes(root):
@@ -187,85 +175,6 @@ def test_stage6_and_stage7_rebind_flags_dispatch_only_to_zero_wire_recovery(
     assert M._run_stage6(stage6_ctx, ['--rebind-review']) == X.OK
     assert M._run_stage7(stage7_ctx, ['--rebind-review']) == X.OK
     assert calls == [('stage6', stage6_ctx), ('stage7', stage7_ctx)]
-
-
-def test_stage2_emit_review_template_binds_current_rows_and_stays_closed(
-        current_core_review, capsys):
-    """模板省掉 hash/evidence 手抄，但默认 UNVER 绝不能顺手打开事实闸。"""
-    ctx, store = current_core_review
-    before = _file_bytes(ctx.novel_dir.parent)
-    capsys.readouterr()
-    rc = _run('run', 'stage2.global', ctx.sid, '--emit-review-template',
-              '--base', str(ctx.novel_dir.parent))
-
-    assert rc == X.OK
-    template_raw = json.loads(capsys.readouterr().out)
-    assert template_raw['_schema_version'] == 3
-    template = GlobalReviewDecisionSet.model_validate(decode_artifact(
-        'stage2/global_review_decisions.json', template_raw).payload)
-    review = store.read_own(GlobalReview, 'stage2/global_review.json')[0]
-    blocking = [item for item in review.items
-                if review_effect_of(item.kind) == 'blocking']
-    assert template.decisions == []
-    assert template.blocking_scope is not None
-    assert template.blocking_scope.state == 'UNVER'
-    assert template.blocking_scope.expected_source_sha256 == review.source_sha256
-    assert template.blocking_scope.expected_workpack_sha256 == '0' * 64
-    assert template.blocking_scope.expected_item_count == len(blocking)
-    assert len(blocking) == len(review.items)
-    assert all(item.state == 'pending' for item in review.items)
-    assert _file_bytes(ctx.novel_dir.parent) == before
-
-
-def test_stage2_review_workpack_is_read_only_and_never_auto_decides(current_core_review, capsys):
-    """workpack 只缩小人工阅读面；生成它不能顺手改变任何正式字节。"""
-    from contracts.schema.stage1 import MainText
-
-    ctx, store = current_core_review
-    before = _file_bytes(ctx.novel_dir.parent)
-    capsys.readouterr()
-
-    rc = _run('run', 'stage2.global', ctx.sid, '--emit-review-workpack',
-              '--base', str(ctx.novel_dir.parent))
-
-    assert rc == X.OK
-    workpack = json.loads(capsys.readouterr().out)
-    assert workpack['kind'] == 'stage2-global-review-workpack-v6'
-    assert len(workpack['workpack_sha256']) == 64
-    assert workpack['binding']['expected_item_count'] == len(workpack['items'])
-    assert workpack['read_only'] is True and workpack['auto_decisions'] is False
-    assert workpack['items']
-    assert sorted(workpack['legend']) == [
-        'arc_secret', 'decision', 'evidence_mode', 'generation_impact',
-        'identity', 'reading_scope', 'time', 'whole_book_text']
-    main = store.read_own(MainText, 'stage1/main_text.json')[0].model_dump(mode='json')
-    assert workpack['main_text_chapters'] == [{
-        'chapter_ordinal': row['chapter_ordinal'], 'text': row['text'],
-    } for row in main]
-    assert all('current_state' in row and 'review_note' not in row
-               and row['reading_scope'] in {'whole_book', 'localized'}
-               and row['evidence_mode'] in {
-                   'unresolved_formal_evidence', 'formal_evidence',
-                   'claim_literal', 'none'}
-               and isinstance(row['exact_literal_hits'], list)
-               for row in workpack['items'])
-    assert all(row['effect'] == 'blocking' and row['current_state'] == 'pending'
-               and 'fate_companion' not in row for row in workpack['items'])
-    subject_paths = [row['subject_path'] for row in workpack['items']]
-    assert any(path.startswith('characters.characters.') for path in subject_paths)
-    assert any(path.startswith('global.') for path in subject_paths)
-    assert not any(retired in path for path in subject_paths
-                   for retired in ('fate', 'source_blurb', 'knowledge_events'))
-    assert workpack['material_source'] == {
-        key: store.full_sha256_or_none(rel) for key, rel in (
-            ('characters_sha256', 'stage2/characters.json'),
-            ('global_sha256', 'stage2/global_grounding.json'),
-            ('review_sha256', 'stage2/global_review.json'),
-            ('main_text_sha256', 'stage1/main_text.json'))}
-    assert workpack['core_edit_binding'] == {
-        'expected_characters_sha256': workpack['material_source']['characters_sha256'],
-        'expected_global_sha256': workpack['material_source']['global_sha256']}
-    assert _file_bytes(ctx.novel_dir.parent) == before
 
 
 def test_blueprint_cli_blocks_on_failed_admission_before_constructing_client(tmp_path, monkeypatch):
@@ -1009,15 +918,12 @@ def test_every_paid_stage5_cli_path_authorizes_before_dispatch(
     """手敲 CLI 与 API 共用写作授权；拒绝必须发生在任何 LLM 前。"""
     from novel.cli import main as M
     from novel.orchestrator import approvals
-    from novel.stages.stage2 import global_review
 
     ctx = _dispatch_context(tmp_path, node='stage5.write')
     authorized: list[tuple[list[int] | None, bool]] = []
     dispatched: list[str] = []
     monkeypatch.setattr(
         M, 'RunContext', SimpleNamespace(open=lambda *_args, **_kwargs: ctx))
-    monkeypatch.setattr(global_review, 'require_approved', lambda _ctx: None)
-    monkeypatch.setattr(global_review, 'require_global_accepted', lambda _ctx: None)
 
     def refuse(_base, _sid, selected, *, requires_fresh_review=False, reviewer_rewrite_request_rel=None):
         authorized.append((selected, requires_fresh_review))
@@ -1058,15 +964,11 @@ def test_zero_cost_stage5_recovery_paths_are_not_blocked_by_paid_authorization(
     """结构闸或 writing proof 未开时，人仍必须能进入零调用恢复路。"""
     from novel.cli import main as M
     from novel.orchestrator import approvals
-    from novel.stages.stage2 import global_review
 
     ctx = _dispatch_context(tmp_path, node='stage5.write')
     dispatched: list[tuple[str, list[str]]] = []
     monkeypatch.setattr(
         M, 'RunContext', SimpleNamespace(open=lambda *_args, **_kwargs: ctx))
-    monkeypatch.setattr(
-        global_review, 'require_approved',
-        lambda _ctx: pytest.fail('零成本恢复路不应被 Stage2 付费闸拦住'))
     monkeypatch.setattr(
         approvals, 'authorize_writing',
         lambda *_args, **_kwargs: pytest.fail(
@@ -1440,9 +1342,15 @@ def test_profiled_argv_round_trips_through_cli_into_run_context(
 
     monkeypatch.setattr(M, 'RunContext', SimpleNamespace(open=open_context))
     monkeypatch.setattr(M, '_dispatch', dispatch)
-    from novel.stages.stage2 import global_review
-    monkeypatch.setattr(global_review, 'require_approved', lambda _ctx: None)
-    monkeypatch.setattr(global_review, 'require_global_accepted', lambda _ctx: None)
+    from novel import admission as mechanical_admission
+    monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
+                        lambda *_args: mechanical_admission.AdmissionCheck(
+                            'stage2.blueprint', ok=True))
+    monkeypatch.setattr(mechanical_admission, 'stage4_ready',
+                        lambda *_args: mechanical_admission.AdmissionCheck(
+                            'stage4', ok=True))
+    from novel.stages.stage5 import closure as stage5_closure
+    monkeypatch.setattr(stage5_closure, 'require_stage5_closed', lambda _store: None)
     from novel.orchestrator import approvals
     monkeypatch.setattr(
         approvals, 'authorize_writing', lambda *_args, **_kwargs: None)
@@ -1550,9 +1458,15 @@ def test_profiled_dispatch_never_constructs_a_deepseek_client(
         return FakeNodeAgent(actual, kwargs)
 
     monkeypatch.setattr(node_agents, 'build_node_agent', build_agent)
-    from novel.stages.stage2 import global_review
-    monkeypatch.setattr(global_review, 'require_approved', lambda _ctx: None)
-    monkeypatch.setattr(global_review, 'require_global_accepted', lambda _ctx: None)
+    from novel import admission as mechanical_admission
+    monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
+                        lambda *_args: mechanical_admission.AdmissionCheck(
+                            'stage2.blueprint', ok=True))
+    monkeypatch.setattr(mechanical_admission, 'stage4_ready',
+                        lambda *_args: mechanical_admission.AdmissionCheck(
+                            'stage4', ok=True))
+    from novel.stages.stage5 import closure as stage5_closure
+    monkeypatch.setattr(stage5_closure, 'require_stage5_closed', lambda _store: None)
     from novel.orchestrator import approvals
     monkeypatch.setattr(
         approvals, 'authorize_writing', lambda *_args, **_kwargs: None)

@@ -61,14 +61,13 @@ def plot_contract(monkeypatch, request):
 
 
 def prepare_book(tmp_path):
-    book = tmp_path / '完整剧情测试_123'
-    book.mkdir()
-    ctx = _ctx(book, 'stage2.global')
-    ArtifactStore(ctx).write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
-    client, _ = _client(ctx, lambda _req, _index: _ok(_response_global()))
-    extract.run_global(ctx, client)
-    _accept_fixture_global(ctx)
-    return book
+    """真实摄入/批准/分章/人物/Global 链播种；蓝图响应仍由本模块合成。
+
+    定向修订与恢复路径会过统一机械准入，上游新鲜度必须可判，因此不再
+    手写裸 MainText（无来源账）。
+    """
+    from tests.test_blueprint_repair_queue import prepare_complete_book
+    return prepare_complete_book(tmp_path)
 
 
 def test_plot_blueprint_real_producer_commits_v10_and_reads_back(tmp_path):
@@ -231,7 +230,12 @@ def test_free_revalidation_does_not_accept_unregistered_presentation(tmp_path):
     candidate = artifact.model_copy(deep=True)
     chapter = candidate.blueprints[0]
     anchor = next(row for row in chapter.evidence_anchors if row.start_para == 1)
-    assert '春风' in main_text()[0]['text'][anchor.start:anchor.end]
+    # 摄入链产出的正文与手写夹具逐字一致；锚点必须落在第一章真实开头。
+    from contracts.schema.stage1 import MainText
+    chapter1 = next(row.text for row in MainText.model_validate(
+        json.loads((book / 'stage1' / 'main_text.json').read_text(
+            encoding='utf-8'))['payload']).root if row.chapter_ordinal == 1)
+    assert '春风' in chapter1[anchor.start:anchor.end]
     chapter.actor_bindings = [ActorBinding(presentation_id='ap01_01', char_id='char_001',
         surfaces=['春风'], evidence_refs=[anchor.evidence_id])]
     chapter.beats[0].participants[0] = ActorRef(char_id='char_001', presentation_ref='ap01_01')

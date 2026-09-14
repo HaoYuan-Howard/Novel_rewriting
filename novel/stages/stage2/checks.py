@@ -120,7 +120,8 @@ class _Ctx:
         self.gprov = self.gg.get('_provenance') or {}
         self.registry = characters
         self.chars = (characters or {}).get('characters') or {}
-        self.has_mt = main_text is not None
+        # 空正文与缺正文一样什么都判不了：逐章检查不允许在空坐标表上装作已查。
+        self.has_mt = bool(main_text)
         self.text_of = {row['chapter_ordinal']: row.get('text', '') for row in main_text or []}
         self.ords = list(self.text_of)
         self.n_chapters = len(self.ords)
@@ -320,11 +321,16 @@ def blueprint_projection_blockers(*, global_g, main_text):
 
 
 def check(*, global_g, blueprints, main_text, characters=None) -> list[Outcome]:
+    from novel.stages.stage2.character_checks import CHARACTER_RULES
     from novel.stages.stage2.plot_checks import check_plot
     context = _Ctx(global_g, blueprints, main_text, characters=characters)
     rows = [*_alignment(context), *check_global(global_g, main_text, characters=characters)]
-    if characters is not None and main_text is not None:
-        rows.extend(check_characters(characters, main_text))
+    if characters is not None:
+        if main_text is not None:
+            rows.extend(check_characters(characters, main_text))
+        else:
+            # 缺 MainText 时人物判据整体不可判，但登记的规则行必须照常出现。
+            rows.extend(unverifiable(rule, _NO_MAIN_TEXT) for rule in CHARACTER_RULES)
     rows.extend(check_plot(context))
     # Characters 与 Global 共用证据规则，但联合报告恰好输出一次，不吞任一侧失败。
     merged: dict[str, Outcome] = {}

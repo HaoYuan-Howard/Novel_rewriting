@@ -238,8 +238,10 @@ STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES: Final = (
 STAGE5_CLOSED_EXEMPT_FLAGS: Final = (
     '--dry-run', '--check-only', '--identity', '--recheck',
     '--revalidate', '--apply-edit', '--wontfix',
-    '--emit-edit-template', '--adopt-residual', '--validate-edit',
-    '--rebind-review',
+    # stage6.prepare 的三个 stdout 只读证据输出：人要先把材料看清楚，
+    # 才能对 stage6 审阅做决定；打印模板/workpack 不产生任何写效果。
+    '--emit-edit-template', '--emit-review-workpack', '--emit-review-template',
+    '--adopt-residual', '--validate-edit', '--rebind-review',
 )
 
 #: agent 运行配置的四个基础取值域。它们刻意做成类型别名而不是新的

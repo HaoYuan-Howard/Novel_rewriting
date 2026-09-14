@@ -88,24 +88,24 @@ def test_stage7_currentness_uses_review_identity_not_epoch_workpack_hash(
 @pytest.mark.parametrize('entry', [assemble.read_current_book, assemble.run_assemble])
 def test_r_2_15_stage2_gate_precedes_every_stage7_delivery_read_or_write(
         monkeypatch, entry):
-    """`R-2.16` 同时守组装与下载；旧 txt 的存在不能绕过后来变红的事实闸。"""
-    from novel.stages.stage2 import global_review
+    """统一机械准入同时守组装与下载；旧 txt 的存在不能绕过后来变红的准入。"""
+    import novel.admission as mechanical_admission
 
     seen: list[object] = []
 
-    def closed(ctx):
-        seen.append(ctx)
-        raise ApprovalRequired('stage2 typed review 未逐项 PASS')
+    def closed(base, sid):
+        seen.append(sid)
+        raise ApprovalRequired('Stage2 机械准入未通过：测试注入')
 
-    monkeypatch.setattr(global_review, 'require_approved', closed)
+    monkeypatch.setattr(mechanical_admission, 'stage4_ready', closed)
     monkeypatch.setattr(
         assemble, 'ArtifactStore',
         lambda _ctx: (_ for _ in ()).throw(AssertionError('Stage2 闸后才可读 Stage7')))
-    ctx = SimpleNamespace()
+    ctx = SimpleNamespace(novel_dir=Path('base') / '书名_123', sid='123')
 
-    with pytest.raises(ApprovalRequired, match='stage2 typed review'):
+    with pytest.raises(ApprovalRequired, match='机械准入'):
         entry(ctx)
-    assert seen == [ctx]
+    assert seen == ['123']
 
 
 def test_an_unadjudicated_invalid_blocks_delivery_and_says_where_the_draft_is():
@@ -365,11 +365,13 @@ def test_stage7_approve_restores_map_and_delivery_when_map_postcondition_fails(
 ])
 def test_stage7_assemble_restores_map_and_delivery_on_any_half_commit(
             monkeypatch, tmp_path, fail_map_write, book_freshness):
-    from novel.stages.stage2 import global_review
-    monkeypatch.setattr(global_review, 'require_approved', lambda _ctx: None)
-    # 本用例验证的是组装半提交回滚；Stage5 闭合闸自身由 test_stage5_closure
-    # 覆盖，这里替换为恒通过，隔离两个关注点（assemble 在调用点做延迟 import，
-    # 因此补丁打在 closure 模块属性上）。
+    # 本用例验证的是组装半提交回滚；Stage2 统一机械准入与 Stage5 闭合闸自身
+    # 各有专门覆盖，这里替换为恒通过，隔离关注点（assemble 在调用点做延迟
+    # import，因此补丁打在模块属性上）。
+    import novel.admission as mechanical_admission
+    monkeypatch.setattr(mechanical_admission, 'stage4_ready',
+                        lambda *_args: mechanical_admission.AdmissionCheck(
+                            'stage4', ok=True))
     import novel.stages.stage5.closure as _closure
     monkeypatch.setattr(_closure, 'require_stage5_closed', lambda _store: None)
     art = _atomic_map()
@@ -383,7 +385,7 @@ def test_stage7_assemble_restores_map_and_delivery_on_any_half_commit(
     monkeypatch.setattr(assemble, 'assemble_txt', lambda *_args: 'new delivery\n')
 
     with pytest.raises(ProvenanceRefused):
-        assemble.run_assemble(SimpleNamespace(novel_dir=tmp_path))
+        assemble.run_assemble(SimpleNamespace(novel_dir=tmp_path, sid='123'))
 
     assert store.art is art and store.book == 'old delivery'
     assert store.events == ['book', 'map', 'rollback']

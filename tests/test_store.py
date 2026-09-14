@@ -217,8 +217,11 @@ def _plan_ctx(base: Path, sid: str = '123', *, paid: bool = True) -> RunContext:
 
 
 def _plan(ctx: RunContext, *, marker: str = '计划一',
-          compiled: bool = False) -> PlanChapters:
-    """一份最小合法 Stage4 计划；``marker`` 是各事务测试的内容哨兵。"""
+          compiled: bool = False, inputs: dict | None = None) -> PlanChapters:
+    """一份最小合法 Stage4 计划；``marker`` 是各事务测试的内容哨兵。
+
+    ``inputs`` 显式钉来源边（现役 producer 的账由真实运行记录，测试按需复刻）。
+    """
     goal = {
         'intent': 'advance',
         'subject_refs': [{
@@ -238,6 +241,10 @@ def _plan(ctx: RunContext, *, marker: str = '计划一',
         blind_candidate_sha256=candidate_sha,
         evidence_binding_sha256=binding_sha,
     )
+    if inputs is not None:
+        from contracts.schema.common import InputEdge
+        provenance = provenance.model_copy(update={
+            'inputs': {key: InputEdge.model_validate(row) for key, row in inputs.items()}})
     return PlanChapters(
         output_chapters=[{
             'output_ordinal': 1,
@@ -735,28 +742,19 @@ def test_stage4_grounding_projection_ignores_unconsumed_source_provenance(
 def test_downstream_grounding_freshness_ignores_every_evidence_only_edit(
     node: str, rel: str,
 ):
-    """九类 SourceSpan 全改也只改整文件指纹，不得重跑 Stage4/5/6。"""
-    from novel.core.evidence import iter_global_evidence_slots
-
+    """五类共享证据锚点全改也只改整文件指纹，不得重跑 Stage4/5/6。"""
     base = _book()
     grounding = _stage4_grounding_payload()
     store = _write_grounding_projection_subject(
         base, grounding, node=node, rel=rel)
     assert store.freshness(rel).state == 'fresh'
 
-    slots = list(iter_global_evidence_slots(grounding))
-    assert len(slots) == 9, 'v3 夹具必须覆盖全部九类正式 evidence 槽'
-    for index, (_claim_path, owner, field) in enumerate(slots, 1):
-        marker = f'EVIDENCE_ONLY_{index}'
-        start = 987_654_300 + index * 100
-        owner[field] = {
-            'chapter_ordinal': 2,
-            'source': {
-                'text': marker,
-                'start': start,
-                'end': start + len(marker),
-            },
-        }
+    anchors = grounding['evidence_anchors']
+    assert len(anchors) == 5, 'v7 夹具必须覆盖全部五类共享证据锚点'
+    for index, anchor in enumerate(anchors.values(), 1):
+        anchor['start'] = 987_654_300 + index * 100
+        anchor['end'] = anchor['start'] + index
+        anchor['text_sha256'] = str(index % 10) * 64
     _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
 
     report = store.freshness(rel)
@@ -768,50 +766,51 @@ def test_downstream_grounding_freshness_ignores_every_evidence_only_edit(
 
 
 @pytest.mark.parametrize('edited', (
-    'char_id', 'canonical', 'address_surface', 'name_distinctiveness',
+    'char_id', 'canonical', 'aliases_surface', 'name_distinctiveness',
 ))
 def test_stage5_review_binds_name_baseline_without_expanding_paid_write(
     edited: str,
 ):
-    """Review 的人名判据跟随当前 Stage2；付费写作仍只绑 secrets。"""
+    """Review 的人名判据跟随当前独立人物登记；付费写作仍只绑四类知识与秘密。"""
     grounding = _stage4_grounding_payload()
+    registry = _character_subject(grounding)
     write_project = projection_for('stage5.write', STAGE2_GLOBAL_GROUNDING)
-    review_project = projection_for('stage5.review', STAGE2_GLOBAL_GROUNDING)
-    assert write_project is not None and review_project is not None
+    review_grounding = projection_for('stage5.review', STAGE2_GLOBAL_GROUNDING)
+    review_names = projection_for('stage5.review', STAGE2_CHARACTERS)
+    assert write_project is not None and review_names is not None
     write_before = write_project(grounding)
-    review_before = review_project(grounding)
+    grounding_before = review_grounding(grounding)
+    names_before = review_names(registry)
 
-    changed = copy.deepcopy(grounding)
-    character = changed['entities']['characters']['char_001']
+    changed = copy.deepcopy(registry)
+    character = changed['characters']['char_001']
     if edited == 'char_id':
-        changed['entities']['characters']['char_002'] = \
-            changed['entities']['characters'].pop('char_001')
+        changed['characters']['char_002'] = changed['characters'].pop('char_001')
     elif edited == 'canonical':
         character['canonical'] = '乙'
-    elif edited == 'address_surface':
-        character['address'][0]['surface'] = '东家'
+    elif edited == 'aliases_surface':
+        character['aliases'][1]['surface'] = '东家'
     else:
         character['name_distinctiveness'] = 'medium'
 
-    assert write_project(changed) == write_before, edited
-    assert review_project(changed) != review_before, edited
+    assert write_project(grounding) == write_before, edited
+    assert review_grounding(grounding) == grounding_before, edited
+    assert review_names(changed) != names_before, edited
 
 
 def test_stage5_review_name_projection_ignores_non_name_character_metadata():
-    grounding = _stage4_grounding_payload()
-    project = projection_for('stage5.review', STAGE2_GLOBAL_GROUNDING)
+    registry = _character_subject(_stage4_grounding_payload())
+    project = projection_for('stage5.review', STAGE2_CHARACTERS)
     assert project is not None
-    expected = project(grounding)
+    expected = project(registry)
 
-    changed = copy.deepcopy(grounding)
-    character = changed['entities']['characters']['char_001']
+    changed = copy.deepcopy(registry)
+    character = changed['characters']['char_001']
     character['role'] = '另一个身份'
-    character['fate'] = '另一个结局'
-    character['address'][0].update({
-        'by': 'narration', 'context': 'reference', 'from_chapter': 2,
-    })
-    # 顺序与重复 surface 不改变 project_character_names 的集合输入。
-    character['address'].append(copy.deepcopy(character['address'][0]))
+    character['role_evidence_refs'] = ['ev_000000000000000000000002']
+    character['aliases'][0]['identity_revealed_from'] = 2
+    # 顺序与重复 surface 不改变 stage5_characters 的集合输入。
+    character['aliases'].append(copy.deepcopy(character['aliases'][0]))
     assert project(changed) == expected
 
 
@@ -892,18 +891,21 @@ def test_blueprint_grounding_projection_only_tracks_attested_names(edited: str):
 
 
 def test_blueprint_grounding_projection_tracks_ambiguous_address_clock():
-    """同一称呼挂多人时，``from_chapter`` 会改变逐章 char_id 候选，必须 stale。"""
+    """同一称呼挂多人时，时点会改变逐章身份映射候选，必须 stale。"""
     base = _book()
     grounding = _stage4_grounding_payload()
     other = copy.deepcopy(grounding['entities']['characters']['char_001'])
     other['canonical'] = '乙'
+    other['aliases'] = [{'surface': '乙', 'identity_revealed_from': 1,
+                         'evidence_refs': ['ev_' + 'f' * 24]},
+                        other['aliases'][1]]
     grounding['entities']['characters']['char_002'] = other
     store = _write_grounding_projection_subject(
         base, grounding, node='stage2.blueprint',
         rel=STAGE2_CHAPTER_BLUEPRINTS, payload={'blueprints': []})
 
-    grounding['entities']['characters']['char_001']['address'][0][
-        'from_chapter'] = 9
+    grounding['entities']['characters']['char_001']['aliases'][1][
+        'identity_revealed_from'] = 9
     _write_character_subject(base / '书名_123', grounding)
 
     report = store.freshness(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
@@ -922,32 +924,37 @@ def test_blueprint_grounding_projection_ignores_unattested_ambiguous_clock():
     grounding = _stage4_grounding_payload()
     other = copy.deepcopy(grounding['entities']['characters']['char_001'])
     other['canonical'] = '乙'
+    other['aliases'] = [{'surface': '乙', 'identity_revealed_from': 1,
+                         'evidence_refs': ['ev_' + 'f' * 24]}]
     grounding['entities']['characters']['char_002'] = other
     store = _write_grounding_projection_subject(
         base, grounding, node='stage2.blueprint',
         rel=STAGE2_CHAPTER_BLUEPRINTS, payload={'blueprints': []},
         main_text=[{'chapter_ordinal': 1, 'text': '无人开口称呼他们。'}])
 
-    grounding['entities']['characters']['char_001']['address'][0][
-        'from_chapter'] = 9
+    grounding['entities']['characters']['char_001']['aliases'][1][
+        'identity_revealed_from'] = 9
     _write_character_subject(base / '书名_123', grounding)
 
     report = store.freshness(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
     assert (report.state, report.reason) == ('fresh', 'match')
 
 
-@pytest.mark.parametrize(('new_clock', 'expected'), [
-    (2, ('fresh', 'match')),
-    (3, ('stale', 'consumed_changed')),
+@pytest.mark.parametrize(('touched', 'expected'), [
+    ('unattested', ('fresh', 'match')),
+    ('attested', ('stale', 'consumed_changed')),
 ])
 def test_ambiguous_clock_only_stales_when_it_crosses_real_first_attestation(
-        new_clock: int, expected: tuple[str, str]):
-    """投影比较剔除 collision 后的最终候选，不比中间 inventory。"""
+        touched: str, expected: tuple[str, str]):
+    """时点只随真实出现的字面进入最终候选；从未出现的字面改时点不动任何章。"""
     base = _book()
     grounding = _stage4_grounding_payload()
-    other = copy.deepcopy(grounding['entities']['characters']['char_001'])
+    chars = grounding['entities']['characters']
+    other = copy.deepcopy(chars['char_001'])
     other['canonical'] = '乙'
-    grounding['entities']['characters']['char_002'] = other
+    other['aliases'] = [{'surface': '乙', 'identity_revealed_from': 1,
+                         'evidence_refs': ['ev_' + 'f' * 24]}]
+    chars['char_002'] = other
     main_text = [
         {'chapter_ordinal': 1, 'text': '两人都没有被点名。'},
         {'chapter_ordinal': 2, 'text': '有人喊了一声掌柜。'},
@@ -957,8 +964,8 @@ def test_ambiguous_clock_only_stales_when_it_crosses_real_first_attestation(
         rel=STAGE2_CHAPTER_BLUEPRINTS, payload={'blueprints': []},
         main_text=main_text)
 
-    grounding['entities']['characters']['char_001']['address'][0][
-        'from_chapter'] = new_clock
+    index = {'unattested': 0, 'attested': 1}[touched]
+    chars['char_001']['aliases'][index]['identity_revealed_from'] = 3
     _write_character_subject(base / '书名_123', grounding)
 
     report = store.freshness(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
@@ -966,16 +973,18 @@ def test_ambiguous_clock_only_stales_when_it_crosses_real_first_attestation(
 
 
 def test_blueprint_grounding_projection_ignores_canonical_shadowed_address_clock():
-    """canonical 与 address 是同一归一字面时，address 时点不参与真实消费。"""
+    """同一归一字面的重复称谓只剩首个候选；被遮蔽项的时点不参与真实消费。"""
     base = _book()
     grounding = _stage4_grounding_payload()
     character = grounding['entities']['characters']['char_001']
-    character['address'][0]['surface'] = character['canonical']
+    character['aliases'].append({
+        'surface': '甲 ', 'identity_revealed_from': 2,
+        'evidence_refs': ['ev_' + 'f' * 24]})
     store = _write_grounding_projection_subject(
         base, grounding, node='stage2.blueprint',
         rel=STAGE2_CHAPTER_BLUEPRINTS, payload={'blueprints': []})
 
-    character['address'][0]['from_chapter'] = 9
+    character['aliases'][2]['identity_revealed_from'] = 9
     _write_character_subject(base / '书名_123', grounding)
 
     report = store.freshness(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
@@ -1055,6 +1064,7 @@ def test_blueprint_consumer_closes_when_characters_changed_but_projection_write_
         rel=STAGE2_CHAPTER_BLUEPRINTS, payload={'blueprints': []})
 
     grounding['entities']['characters']['char_001']['canonical'] = '乙'
+    grounding['entities']['characters']['char_001']['aliases'][0]['surface'] = '乙'
     _write_character_subject(book, grounding)
     assert store.freshness(
         STAGE2_BLUEPRINT_CHARACTER_PROJECTION).state == 'stale'
@@ -1126,6 +1136,9 @@ def test_blueprint_projection_does_not_invent_a_character_id_format_gate():
             'chapter_ordinal': 1,
             'past_attested_surfaces': ['甲'],
             'visible_character_refs': {'protagonist': ['甲']},
+            'character_bindings': {'protagonist': [
+                {'surface': '甲', 'identity_revealed_from': 1},
+            ]},
         }],
     })
     assert artifact.chapters[0].visible_character_refs == {
@@ -3048,32 +3061,40 @@ def test_the_waiver_lets_unknown_through_and_still_refuses_stale(
         store = _write_grounding_projection_subject(
             base, grounding, node='stage2.blueprint', rel=rel)
         book = base / '书名_123'
-        return store, book, (book / rel).read_bytes()
+        # 计划按现役 producer 的形状钉住当前正文边；写盘后置条件才有 stale 可言。
+        plan = _plan(_plan_ctx(base), marker='计划', inputs={
+            STAGE1_MAIN_TEXT: {
+                'file': prov.fingerprint_bytes((book / STAGE1_MAIN_TEXT).read_bytes()),
+                'consumed': store._consumed_fp_of_key('stage4.plan', STAGE1_MAIN_TEXT),
+            }})
+        written = store.write(rel, plan)
+        return store, book, plan, written.read_bytes()
 
     # ① unknown：投影的上游（人物、正文）被移走 ⇒ 下游边判不出来 ⇒ 豁免放行
     base = _book()
-    store, book, plan_bytes = seeded(base)
+    store, book, plan, plan_bytes = seeded(base)
     (book / 'stage2' / 'characters.json').unlink()
     (book / 'stage1' / 'main_text.json').unlink()
     assert store.freshness(STAGE2_BLUEPRINT_CHARACTER_PROJECTION).state == 'unknown'
-    store.write(rel, json.loads(plan_bytes))
+    store.write(rel, plan)
     assert (book / rel).read_bytes() == plan_bytes, '豁免写完必须保持原字节'
 
     # ② stale：写完之后动上游（正文）⇒ 投影 stale ⇒ 照旧拒，且回滚
     base2 = _book()
-    store2, book2, plan_bytes2 = seeded(base2)
+    store2, book2, plan2, plan_bytes2 = seeded(base2)
     official = book2 / rel
     main_text = json.loads((book2 / 'stage1' / 'main_text.json').read_text(
-        encoding='utf-8'))
+        encoding='utf-8'))['payload']
+    # 改掉「掌柜」在原文的唯一出现 ⇒ 重算投影确实变化 ⇒ stale 家族照旧拒。
     main_text = [
-        {**row, 'text': row['text'] + ' 丙也来了。'} if row['chapter_ordinal'] == 1
+        {**row, 'text': '甲乙都在院里说话。'} if row['chapter_ordinal'] == 1
         else row for row in main_text]
     _write_payload(book2, STAGE1_MAIN_TEXT, main_text)
     assert store2.freshness(
         STAGE2_BLUEPRINT_CHARACTER_PROJECTION).state == 'stale'
 
     with pytest.raises(ProvenanceRefused, match='freshness 后置条件'):
-        store2.write(rel, json.loads(plan_bytes2))
+        store2.write(rel, plan2)
     assert official.read_bytes() == plan_bytes2, \
         '豁免把回滚也一起吞了——`stale` 那一支必须原样走完生产的事务'
 

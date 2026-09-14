@@ -27,14 +27,14 @@ from novel.store import ArtifactStore
 from tests.test_stage4_v3_integration import CODE, _ctx, designed  # noqa: F401
 
 
-@pytest.fixture(params=[6, 7, 8, 10], ids=['retired-v6', 'retired-v7', 'retired-v8', 'future-v10'])
+@pytest.fixture(params=[6, 7, 8, 9, 11], ids=['retired-v6', 'retired-v7', 'retired-v8', 'retired-v9', 'future-v11'])
 def incompatible(designed, request):
     book, _blueprints, design = designed
     ctx, _client, transport, _candidate, _truth, _mapping = design
     store = ArtifactStore(ctx)
     path = book / STAGE2_CHAPTER_BLUEPRINTS
     raw = json.loads(path.read_text(encoding='utf-8'))
-    assert raw['_schema_version'] == 9
+    assert raw['_schema_version'] == 10
     raw['_schema_version'] = request.param
     path.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8', newline='')
     before = {str(p.relative_to(book)): p.read_bytes()
@@ -109,7 +109,6 @@ def test_service_cli_and_download_share_closed_stage2_guard(incompatible, monkey
     box = incompatible
     ctx = _ctx(box.book, 'stage7.assemble', paid=False)
     for guard in (
-        lambda: approvals.require_stage2_review(box.base, box.sid, 'stage7.assemble'),
         lambda: assemble.require_stage2_delivery_approved(ctx),
         lambda: assemble.read_current_book(ctx),
     ):

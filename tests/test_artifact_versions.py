@@ -131,20 +131,6 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         'prepared 走本 owner 免费恢复。旧 Global 与旧批准不迁移，当前审阅重新 pending；'
         '不能把单侧修复变成重买联合首抽。',
     ),
-    'stage2/global_review.json': (
-        3,
-        '统一独立人物与四类长期事实审阅；删除源文案和场景事件义务，保留未解决问题',
-        '`stage2.global --refresh-review` 从当前人物与 Global 免费重建审阅，新增或变化主体重新 pending；'
-        '旧 Global 必须先由 producer 付费重建，不把旧决定迁移成新事实的结论',
-    ),
-    'stage2/global_review_decisions.json': (
-        3,
-        '2026-08-28：新增 hash-bound `blocking_scope`，允许 `decisions[]` 为空并只承载逐项'
-        '例外；服务端把 scope 默认决定展开回完整 blocking item 面。旧 v1 只能表达逐项决定，'
-        '也没有正文章全集与实际 workpack SHA-256 阅读声明；v3 切换独立人物/四类 Core 主体',
-        '`stage2.global --emit-review-template` 免费重发 v3 模板；人工核对 scope、正文章全集与'
-        '逐项例外后重新提交。旧 v1 文件原样保留为历史输入，不改版本号冒充新阅读声明',
-    ),
     'stage2/global_edit.json': (
         6,
         '2026-08-24：secret patch/replacement 从 `character_known_by` 换成带 locator 的 '
@@ -181,15 +167,6 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '在既有付费及外发授权下按章重建 v10，再完成章级及跨章审阅。旧版本的 INVALID、'
         '回答和检查点不能冒充 v10 来源；当前 v10 已购结果依其正式身份免费恢复',
     ),
-    'stage2/knowledge_links.json': (
-        3,
-        '2026-09-12 随 Blueprint v9 将事实关联改为现有 Beat/State/Global 主体引用；'
-        '必要知识事件显式登记、修订或撤销，以稳定事件身份和历史 CAS 管理传播及读者披露，'
-        '不从每个状态自动推导读者立即知晓。v3 人物 audience 改为 ActorRef，义务携 candidate_actors，'
-        '披露端点用 identity_actors 明确同实体的表面身份，规则精确引用 rule/version；不新增知情矩阵',
-        '旧 v1/v2 字节仅随旧根和旧代码恢复；新根在当前 Blueprint v10 审阅中登记必要事件并裁决，'
-        '由 stage2.blueprint 的关闭审阅入口免费物化 v3。旧关联与接受不自动迁入新事件时间线',
-    ),
     'stage2/blueprint_edit.json': (
         2,
         'PlotEdit 与 Blueprint v10 同步：完整章含 ActorRef/actor_bindings/relation_uses，'
@@ -198,7 +175,7 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '--apply-edit 同尺编译并保存身份历史及待审义务；旧 v1 不改版本号继承 token 或审批',
     ),
     'stage4/plan_chapters.json': (
-        6,
+        7,
         '三次破坏。2026-08-25 v2 删除 `PlanBeat`/`segments`/`from_beats`，改为原子事实 '
         '`semantic_contract` + `scenes`。2026-08-25 v3 把源序可见的一次规划拆成 '
         '`stage4.design` 盲设计与 `stage4.plan` 证据绑定，逐章新增 retain/reconstruct '
@@ -206,29 +183,33 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '权重、reconstruction_strategy、semantic_contract、FactRef.chapter、PlanParams、'
         'provenance params 与持久化 computed_change_kinds；2026-09-12 v5 以 BeatPlacement '
         '作为节点到场景唯一映射，分场 delivery 保留父节点身份，并显式绑定知识、状态和约束端点。'
-        'v6 PlanGoal 的人物主体与关系两端保留完整 ActorRef，披露端点含呈现身份，不再以 char_id 唯一代表人物使用',
-        '旧 v1～v5 仅在配对旧根/旧代码恢复；新空根在 Blueprint v10/KL v3 闭合后由 stage4.design '
+        'v6 PlanGoal 的人物主体与关系两端保留完整 ActorRef，披露端点含呈现身份，不再以 char_id 唯一代表人物使用。'
+        'v7（2026-09）随 KnowledgeLinks 退役删除逐场知识事件端点与传播许可；计划只保留 '
+        'ActorRef 主体、EvidenceAnchor 证据与显式状态端点',
+        '旧 v1～v6 仅在配对旧根/旧代码恢复；新空根在 Blueprint v10 闭合后由 stage4.design '
         '和章级 stage4.plan 重建，保留两次正式审阅。Context 免费重编译，Stage5 按实际消费变化失效；'
         '普通分场不触发 Stage2 重抽或重开已有效接受的章审',
     ),
     'stage4/plan_edit.json': (
-        6,
+        7,
         '三次破坏：v2 改为语义契约 + scenes；v3 与正式计划同步新增章级结构决定及代码复算变化；'
         'v4 与正式计划同步删除展示/过程/派生字段；2026-09-12 v5 与正式计划同步采用 '
         'BeatPlacement、presentation deliveries 和明确端点，删除逐事实编辑面；v6 完整章替换随 Plan v6 '
         '保留人物与关系端点的表面身份，不能把旧裸 char_id 当作已确认呈现',
-        '旧编辑集随旧根/旧代码恢复，不升级版本号复用；新根需要编辑时按当前 PlanEdit v6 '
+        '旧编辑集随旧根/旧代码恢复，不升级版本号复用；新根需要编辑时按当前 PlanEdit v7 '
         '重新填写，重新核验真实依赖与受影响的 Stage4 接受',
     ),
     'stage4/blind_candidate.json': (
-        5,
+        6,
         'v2 删除三个 goal 的 rationale；v3 删除退役整书拒稿采用来源，'
         '策略/单章架构改为必填，旧候选快照不得冒充当前 unit lineage；2026-09-12 v4 '
         '规划完整剧情及呈现分配，使用人物语义目录与 opaque alias，退役事实 alias 和逐事实落场。'
         'v5 participant_aliases 值为 ActorRef；subject_aliases 保留人物及关系两端呈现，'
-        '同实体不同表面身份分别映射，规划知识端点可指向全部实际主体 alias',
-        '旧 v1～v4 仅配对旧根/旧代码恢复；新根由 stage4.design 策略及章级 producer '
-        '在原授权内重建 v5，并重新完成设计审阅。当前 schema 的已保存回答和 prepared 按正式身份免费恢复',
+        '同实体不同表面身份分别映射，规划知识端点可指向全部实际主体 alias。'
+        'v6（2026-09）随 KnowledgeLinks 退役删除逐场知识事件分配与传播许可，'
+        '呈现分配只绑 ActorRef 与 EvidenceAnchor',
+        '旧 v1～v5 仅配对旧根/旧代码恢复；新根由 stage4.design 策略及章级 producer '
+        '在原授权内重建 v6，并重新完成设计审阅。当前 schema 的已保存回答和 prepared 按正式身份免费恢复',
     ),
     'stage4/blind_chapter_edit.json': (
         3,
@@ -239,21 +220,22 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '重新填写 v3，由 stage4.design 免费完整章编辑编译，设计审阅仍核验当前主体、局部 alias 及依赖身份',
     ),
     'stage4/evidence_binding.json': (
-        5,
+        6,
         '2026-08-26 v2 删除 participant_refs；2026-08-28 v3 把模型 infeasible '
         '降为待核证主张，新增非阻断 binding_concerns、代码铸造的 '
         'infeasibility_proof 与 human/llm 判别来源账；2026-09-08 v4 为按章 legacy B '
         '新增 work_unit_response 来源，绑定原内容轮、请求和回答 SHA；'
         '删除整书及缺省架构兼容，章模型必须有明确来源，正式绑定必须完整覆盖章集；'
         '2026-09-12 v5 按已接受章级设计绑定 delivery 的 EvidenceAnchor 和有据舞台，'
-        '不修改 A 的呈现分配、顺序、目标及端点，也不把证据重叠当作剧情重复',
+        '不修改 A 的呈现分配、顺序、目标及端点，也不把证据重叠当作剧情重复。'
+        'v6（2026-09）随 KnowledgeLinks 退役只绑定现存主体与共享锚点，无知识事件端点',
         '旧 base 使用冻结旧代码保留证据；当前 producer 只在新 clean base 从原始材料及 '
         '当前 A 接受后由 stage4.plan 重建，机械章零模型；可显式 --apply-binding 提交当前 '
         'EvidenceBindingResponse。旧 v1～v4 不原地迁移、不伪造工作单元来源、不手补版本号；'
         '旧根只配对其冻结旧代码恢复，绑定后保留独立结构审阅',
     ),
     'stage4/writer_context.json': (
-        9,
+        10,
         '2026-08-25 删除写手面的 `CtxBeat.events[]`，新增 chapter_rewrite_brief、'
         '四类 delta 在内的人话 semantic_contract 与可直接执行的 CtxScene；v3 随 Stage2 '
         'ArcTrack 删除 dimension/change_type；2026-08-26 v4 删除 world_facts、逐场源字数/参与者、'
@@ -265,8 +247,7 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         'opaque actor_ref，characters/global_subjects 提供公开语义而不下发反向 char_id；'
         '身份合并及 role 按场景许可消费，历史事实保留有效窗口及披露边界',
         '旧 Context 只在配对旧根/旧代码恢复；新根由 stage4.context 从 Characters v2、Global v7、'
-        'Blueprint v10、KnowledgeLinks v3 及已接受 Plan v6 免费重建 v9。新增事件先经 Blueprint '
-        'Commander 裁决及物化；不手补旧 Context，下游请求、检查和恢复按实际消费身份判 stale',
+        'Blueprint v10 及已接受 Plan v7 免费重建 v10。不手补旧 Context，下游请求、检查和恢复按实际消费身份判 stale',
     ),
     'stage5/ch{nn}.json': (
         3,

@@ -115,13 +115,13 @@ def test_blocked_recovery_gets_a_new_permit_not_the_blocker_hash(
     _stable(monkeypatch)
     current = _next(
         tmp_path, state='blocked', node='stage4.design',
-        waiting_on=Q.WAITING_ON_STAGE2_REVIEW)
+        waiting_on=Q.WAITING_ON_INBOX)
 
     got = P.permit_from_next(current, 'stage2.global', ['--renormalize'])
 
     assert got.kind == 'recovery'
     assert got.next_state == 'blocked'
-    assert got.waiting_on == Q.WAITING_ON_STAGE2_REVIEW
+    assert got.waiting_on == Q.WAITING_ON_INBOX
     assert got.operator_action_sha256 is None
     assert got.permit_sha256 != current.action.action_sha256
 
@@ -142,14 +142,14 @@ def test_blueprint_workpack_remains_reachable_for_stage4_gate_bootstrap(
         tmp_path, state='blocked', node='stage4.plan', waiting_on=waiting_on)
 
     got = P.permit_from_next(
-        current, 'stage2.blueprint', ['--emit-review-workpack'])
+        current, 'stage2.blueprint', ['--emit-edit-template'])
 
     assert got.kind == 'recovery'
     assert got.paid is False
     assert got.writes == ''
     assert got.waiting_on == waiting_on
     assert got.node == 'stage2.blueprint'
-    assert got.flags == ['--emit-review-workpack']
+    assert got.flags == ['--emit-edit-template']
 
 
 @pytest.mark.parametrize(
@@ -165,7 +165,7 @@ def test_blueprint_workpack_cannot_jump_to_a_stage5_blocker(
 
     with pytest.raises(UnsupportedRunMode, match='不能处理当前 blocker'):
         P.permit_from_next(
-            current, 'stage2.blueprint', ['--emit-review-workpack'])
+            current, 'stage2.blueprint', ['--emit-edit-template'])
 
 
 def test_pipeline_complete_and_unregistered_paid_recovery_fail_closed(
@@ -177,7 +177,7 @@ def test_pipeline_complete_and_unregistered_paid_recovery_fail_closed(
 
     blocked = _next(
         tmp_path, state='blocked', node='stage4.design',
-        waiting_on=Q.WAITING_ON_STAGE2_REVIEW)
+        waiting_on=Q.WAITING_ON_INBOX)
     with pytest.raises(UnsupportedRunMode, match='未登记'):
         P.permit_from_next(blocked, 'stage2.global', ['--resample'])
 
@@ -366,7 +366,6 @@ def test_policy_tables_are_closed_and_paid_rows_are_exactly_profiled():
         ('stage0.edit', '--apply-edit-plan'),
         ('stage0.edit', '--apply-candidate-plan'),
         ('stage2.global', '--apply-edit'),
-        ('stage2.global', '--review-decisions'),
         ('stage2.blueprint', '--validate-edit'),
         ('stage2.blueprint', '--apply-edit'),
         ('stage4.design', '--validate-edit'),
@@ -380,6 +379,8 @@ def test_policy_tables_are_closed_and_paid_rows_are_exactly_profiled():
         ('stage5.review', '--request-reviewer-rewrite'),
         ('stage5.write', '--reviewer-rewrite'),
         ('stage6.hook', '--apply-edit'),
+        ('stage6.prepare', '--apply-edit'),
+        ('stage6.prepare', '--review-decisions'),
         ('stage7.rename', '--apply-edit'),
         ('stage7.rename', '--validate-edit'),
     }
@@ -542,7 +543,7 @@ def test_claim_side_revalidation_is_lightweight_and_binds_external_bytes(
     edit.write_bytes(b'{"chapters":[]}\n')
     current = _next(
         tmp_path, state='blocked', node='stage4.design',
-        waiting_on=Q.WAITING_ON_STAGE2_REVIEW)
+        waiting_on=Q.WAITING_ON_INBOX)
     minted = P.permit_from_next(
         current, 'stage2.blueprint', ['--apply-edit', str(edit)])
 
@@ -656,82 +657,6 @@ def test_stage5_prepared_rewrite_permit_binds_target_wal_and_request_raw_bytes(
     })
     with pytest.raises(UnsupportedRunMode, match='execution state 已变化'):
         P.permit_from_next(current, 'stage5.write', flags)
-
-
-def test_stage2_review_decisions_bind_service_edit_but_reject_scratch(
-        monkeypatch, tmp_path):
-    """Reviewer 输入复用正式 service edit；scratch 不能变成第三种 producer 路径。"""
-    _stable(monkeypatch)
-    novel_dir = tmp_path / f'平台_测试书_{SID}'
-    novel_dir.mkdir()
-    current = _next(
-        tmp_path, state='blocked', node='stage4.design',
-        waiting_on=Q.WAITING_ON_STAGE2_REVIEW)
-
-    scratch = (
-        tmp_path / '_service' / 'scratch' / SID / 'epoch-1'
-        / 'reviewer-node-input.json')
-    scratch.parent.mkdir(parents=True)
-    scratch.write_bytes(b'{"_schema_version":2}\n')
-    with pytest.raises(UnsupportedRunMode, match='当前书'):
-        P.permit_from_next(
-            current, 'stage2.global',
-            ['--review-decisions', str(scratch)])
-
-    other_sid = (
-        tmp_path / '_service' / 'edits' / 'book-2'
-        / 'global-review.json')
-    other_sid.parent.mkdir(parents=True)
-    other_sid.write_bytes(b'{"_schema_version":2}\n')
-    with pytest.raises(UnsupportedRunMode, match='当前书'):
-        P.permit_from_next(
-            current, 'stage2.global',
-            ['--review-decisions', str(other_sid)])
-
-    service = (
-        tmp_path / '_service' / 'edits' / SID
-        / 'global-review.json')
-    service.parent.mkdir(parents=True)
-    service.write_bytes(b'{"_schema_version":2}\n')
-    got = P.permit_from_next(
-        current, 'stage2.global',
-        ['--review-decisions', str(service)])
-
-    assert Path(got.external_inputs[0].resolved_path) == service.resolve()
-    assert got.external_inputs[0].sha256 == hashlib.sha256(
-        service.read_bytes()).hexdigest()
-
-
-def test_stage2_global_edit_uses_the_same_sid_scoped_service_root(
-        monkeypatch, tmp_path):
-    _stable(monkeypatch)
-    (tmp_path / f'平台_测试书_{SID}').mkdir()
-    current = _next(
-        tmp_path, state='blocked', node='stage4.design',
-        waiting_on=Q.WAITING_ON_STAGE2_REVIEW)
-    edit = tmp_path / '_service' / 'edits' / SID / 'global-edit.json'
-    edit.parent.mkdir(parents=True)
-    edit.write_bytes(b'{"_schema_version":3}\n')
-
-    got = P.permit_from_next(
-        current, 'stage2.global', ['--apply-edit', str(edit)])
-    assert Path(got.external_inputs[0].resolved_path) == edit.resolve()
-
-    scratch = (
-        tmp_path / '_service' / 'scratch' / SID / 'epoch-1'
-        / 'global-edit.json')
-    scratch.parent.mkdir(parents=True)
-    scratch.write_bytes(edit.read_bytes())
-    with pytest.raises(UnsupportedRunMode, match='当前书'):
-        P.permit_from_next(
-            current, 'stage2.global', ['--apply-edit', str(scratch)])
-
-    sibling = tmp_path / '_service' / 'edits' / 'other' / 'global-edit.json'
-    sibling.parent.mkdir(parents=True)
-    sibling.write_bytes(edit.read_bytes())
-    with pytest.raises(UnsupportedRunMode, match='当前书'):
-        P.permit_from_next(
-            current, 'stage2.global', ['--apply-edit', str(sibling)])
 
 
 def test_stage2_edit_commit_permit_recovers_before_canonical_input_exists(
@@ -864,7 +789,7 @@ def test_stage4_repair_commit_permit_refuses_non_exact_operator_identity(
 
 @pytest.mark.parametrize('flags', [
     ['--renormalize'],
-    ['--review-decisions', 'stage2/global_review_decisions.json'],
+    ['--revalidate', '--actor', 'human:reviewer', '--reason', 'x'],
     ['--apply-edit', 'stage2/other_global_edit.json'],
     ['--apply-edit', '_service/edits/book-1/global-edit.json'],
 ])
@@ -897,28 +822,5 @@ def test_stage2_revalidate_commit_permit_replays_operator_exact_human_audit(
         P.permit_from_next(current, 'stage2.global', [
             '--revalidate', '--actor', 'system:other', '--reason', 'other',
         ])
-    with pytest.raises(UnsupportedRunMode, match='不能处理'):
-        P.permit_from_next(current, 'stage2.global', ['--renormalize'])
-
-
-def test_stage2_ordinary_terminal_permit_allows_human_successors_only(
-        monkeypatch, tmp_path):
-    _stable(monkeypatch)
-    novel_dir = tmp_path / f'平台_测试书_{SID}'
-    edit = novel_dir / 'stage2' / 'next-global-edit.json'
-    edit.parent.mkdir(parents=True)
-    edit.write_bytes(b'{"_schema_version":3}\n')
-    current = _next(
-        tmp_path, state='blocked', node='stage2.global', flags=[],
-        waiting_on=Q.WAITING_ON_STAGE2_EDIT_TERMINAL)
-
-    applied = P.permit_from_next(
-        current, 'stage2.global', ['--apply-edit', 'stage2/next-global-edit.json'])
-    assert applied.external_inputs[0].sha256 == hashlib.sha256(
-        edit.read_bytes()).hexdigest()
-    revalidated = P.permit_from_next(current, 'stage2.global', [
-        '--revalidate', '--actor', 'human:reviewer', '--reason', '已修 INVALID',
-    ])
-    assert revalidated.external_inputs == []
     with pytest.raises(UnsupportedRunMode, match='不能处理'):
         P.permit_from_next(current, 'stage2.global', ['--renormalize'])

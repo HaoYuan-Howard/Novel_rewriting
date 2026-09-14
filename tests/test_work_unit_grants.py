@@ -24,12 +24,12 @@ def _exhaust(base, *, accepted_last=False):
     try:
         if accepted_last:
             client.ask_json('SYS', 'TASK', model_cls=_Answer, purpose=ctx.node, max_tokens=4096,
-                            recovery_policy='stage2-knowledge-v2')
+                            recovery_policy='stage2-knowledge-v3')
             checkpoint = client.accepted_checkpoint(ctx.node)
         else:
             with pytest.raises(LlmFailed) as failure:
                 client.ask_json('SYS', 'TASK', model_cls=_Answer, purpose=ctx.node, max_tokens=4096,
-                                recovery_policy='stage2-knowledge-v2')
+                                recovery_policy='stage2-knowledge-v3')
             assert len(driver.calls) == 4, str(failure.value)
             checkpoint = None
         client.finish(process_state='ok' if accepted_last else 'failed',
@@ -79,7 +79,7 @@ def test_http_grant_survives_restart_without_reissuing_base_allowance(tmp_path):
     client = SessionAgentClient(later, _profile(), driver)
     try:
         assert client.ask_json('SYS', 'TASK', model_cls=_Answer, purpose=later.node,
-                               max_tokens=4096, recovery_policy='stage2-knowledge-v2').value == 9
+                               max_tokens=4096, recovery_policy='stage2-knowledge-v3').value == 9
         client.finish(process_state='ok', delivery_state='delivered')
     finally:
         client.close()
@@ -141,10 +141,10 @@ def test_grant_allows_fifth_logical_checkpoint_turn_without_resetting_links(tmp_
     client = SessionAgentClient(ctx, _profile(), driver)
     try:
         client.restore_checkpoint_acceptance(ctx.node, checkpoint, system='SYS', user='TASK',
-            max_tokens=4096, recovery_policy='stage2-knowledge-v2')
+            max_tokens=4096, recovery_policy='stage2-knowledge-v3')
         assert client.queue_restored_code_validation_feedback([{'rule': 'synthetic_evidence', 'count': 1}], purpose=ctx.node)
         result = client.ask_json('SYS', 'TASK', model_cls=_Answer, purpose=ctx.node,
-                                 max_tokens=4096, recovery_policy='stage2-knowledge-v2')
+                                 max_tokens=4096, recovery_policy='stage2-knowledge-v3')
         assert result.value == 5
         accepted = client.accepted_checkpoint(ctx.node)
         client.finish(process_state='ok', delivery_state='delivered')
@@ -164,7 +164,7 @@ def test_second_grant_is_cumulative_and_cannot_change_prior_authorization(tmp_pa
     try:
         with pytest.raises(LlmFailed):
             client.ask_json('SYS', 'TASK', model_cls=_Answer, purpose=next_ctx.node,
-                max_tokens=4096, recovery_policy='stage2-knowledge-v2')
+                max_tokens=4096, recovery_policy='stage2-knowledge-v3')
         client.finish(process_state='failed', delivery_state='blocked')
     finally:
         client.close()

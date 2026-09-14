@@ -111,7 +111,9 @@ def build(base):
                 client, wire = blueprint_client(ctx, lambda request, _n: _respond_blueprints(request, _response_blueprints()))
                 assert extract.run_blueprint(ctx, client).passed
                 assert len(wire.calls) == 3
-            # Stage2 语义审阅已退役：蓝图生成后直接经统一机械准入进入 Stage4。
+            # Stage2 语义审阅已退役：蓝图生成后人工批准 s1 门，经统一机械准入进入 Stage4。
+            if not _get(http, '/approvals')['gate']['s1']:
+                post(http, '/approvals/gate/s1', None)
             bp = ArtifactStore(_ctx(base, 'stage4.design')).read_own(ChapterBlueprints, 'stage2/chapter_blueprints.json')[0]
             bp_json = bp.model_dump(by_alias=True, mode='json')
             if not (book / plan.CANDIDATE_REL).is_file():
@@ -183,6 +185,11 @@ def build(base):
                     'review_token': template['review_token'], 'must_appear': [],
                     'group_acks': [{'group': row['group'], 'acknowledged': True}
                                    for row in template['group_acks']]})
+            if not (book / 'stage6/prepare.json').is_file():
+                # 独立文案准备（Stage6 前置）：真实 Prepare session + 人工接受。
+                from tests.test_plot_pipeline import complete_stage6_prepare
+                complete_stage6_prepare(book)
+                print('PREPARE_OK', flush=True)
             if not (book / hook.REL).is_file():
                 from tests.test_stage6 import _fake_client
                 ctx = _ctx(base, 'stage6.hook', paid=True)

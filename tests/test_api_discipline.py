@@ -411,7 +411,6 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         '/api/novels/{sid}/stage1/partition',
         '/api/novels/{sid}/approvals/gate/{key}',
         '/api/novels/{sid}/approvals/backfill',
-        '/api/novels/{sid}/approvals/seen/{key}',
         '/api/novels/{sid}/approvals/design',
         # Stage5 闭合回执提交：只写 _service 审批账，不启动任何付费作业。
         '/api/novels/{sid}/approvals/stage5',
@@ -431,16 +430,14 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         '/api/novels/{sid}/stage6/approve',
         '/api/novels/{sid}/stage7/approve',
         '/api/novels/{sid}/stage7/adopt-residual',
-        '/api/novels/{sid}/stage2/global-review',
+        '/api/novels/{sid}/stage2/global/edit',
+        '/api/novels/{sid}/stage2/global/edit/preview',
         '/api/novels/{sid}/stage2/characters/edit',
         # 已购联合回答按 owner 免费修复，不另起付费首抽。
         '/api/novels/{sid}/stage2/analyze-draft',
-        '/api/novels/{sid}/approvals/stage2-review',
-        '/api/novels/{sid}/approvals/stage2-review-issues',
         # Blueprint 有据修订由 Stage2 持有；普通分场仍留在 Stage4。
         '/api/novels/{sid}/stage2/blueprint/edit',
         '/api/novels/{sid}/stage2/blueprint/edit/preview',
-        '/api/novels/{sid}/approvals/blueprint-refinement',
         # agent 代跑（行为在 `tests/test_api_agent.py`；preview 是 0 成本但仍是 POST）
         '/api/agent/runs',
         '/api/agent/runs/preview',

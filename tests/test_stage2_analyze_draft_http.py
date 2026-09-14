@@ -51,10 +51,6 @@ def test_analyze_draft_http_free_cli_restart_preserves_paid_source(tmp_path, own
         payload = formal.json()
         source = (payload['registry'] if owner == 'stage2.characters' else payload)['_provenance']
         assert source['shared_analysis_source']['receipt_sha256'] == edit['source_receipt_sha256']
-        if owner == 'stage2.global':
-            review = restarted.get(f'/api/novels/{ctx.sid}/stage2/global-review')
-            assert review.status_code == 200, review.text
-            assert review.json()['current'] and not review.json()['generation_safe']
         assert restarted.post(endpoint, json=body).json()['exit_code'] == 0
     assert all(path.read_bytes() == raw for path, raw in saved.items())
     assert not ArtifactStore(free).exists('stage2/chapter_blueprints.json')

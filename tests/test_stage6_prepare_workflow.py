@@ -151,10 +151,8 @@ def test_actual_cli_templates_are_free_and_canonical_prepare_requires_stage5(tmp
     assert rc == 0, output.err
     decoded = decode_artifact(prepare.DECISIONS, json.loads(output.out))
     assert decoded.payload['source_sha256'] == pack['state']['subject_sha256']
-    # 本例验证 CLI→Stage5 的门序；独立 Prepare seed 没有 Stage2 审批。
-    # 只隔离这个更早的非被测前置，Stage5 require 和 dispatch 哨兵保持真实。
-    from novel.stages.stage2 import global_review
-    monkeypatch.setattr(global_review, 'require_approved', lambda _ctx: None)
+    # 本例验证 CLI→Stage5 的门序；Stage2 语义审阅已退役，这里只剩 Stage5
+    # require 和 dispatch 哨兵保持真实。
     monkeypatch.setattr(cli, '_dispatch', lambda *a, **k: pytest.fail('未闭Stage5不得进入driver/producer'))
     rc = cli.main([*args, '--yes'])
     failure = capsys.readouterr()

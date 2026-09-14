@@ -42,7 +42,7 @@ from contracts.invariants import (
     STAGE6_PREPARE_DECISIONS,
     STRUCTURE_APPROVAL_DECISIONS,
 )
-from contracts.schema import encode_artifact
+from contracts.schema import decode_artifact, encode_artifact
 from contracts.schema.api import (
     BatchTrimResolutionRequest,
     DesignRepairConstraint,

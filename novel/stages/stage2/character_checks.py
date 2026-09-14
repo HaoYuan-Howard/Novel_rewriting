@@ -10,15 +10,23 @@ from novel.report.findings import Outcome, ran, unverifiable
 from novel.stages.stage2.core_evidence import evidence_snippet, validate_evidence_anchors
 
 
+#: check_characters 恰好产出的规则全集。联合报告在缺 MainText 时按同集出 unver
+#: 行，不让人物规则从报告里消失（`extract._Both`：允许缺的产物，依赖它的判据
+#: 落 unver）。
+CHARACTER_RULES: tuple[str, ...] = (
+    'character_unattested', 'address_unlocatable', 'address_from_out_of_range',
+    'address_bare_pronoun', 'role_missing', 'role_leaks_fate', 'role_repeats_name',
+    'hedge_words', 'global_evidence_unlocated', 'role_fate_unverifiable',
+)
+
+
 def check_characters(registry: dict[str, Any], main_text: list[dict[str, Any]]) -> list[Outcome]:
     from novel.stages.stage2.checks import _hedge_hits
     characters = registry.get('characters') or {}
     anchors = registry.get('evidence_anchors') or {}
     ordinals = {row['chapter_ordinal'] for row in main_text}
-    problems: dict[str, list[str]] = {rule: [] for rule in (
-        'character_unattested', 'address_unlocatable', 'address_from_out_of_range',
-        'address_bare_pronoun', 'role_missing', 'role_leaks_fate', 'role_repeats_name',
-        'hedge_words', 'global_evidence_unlocated')}
+    problems: dict[str, list[str]] = {
+        rule: [] for rule in CHARACTER_RULES if rule != 'role_fate_unverifiable'}
     for path, reason in validate_evidence_anchors(characters, anchors, main_text).items():
         problems['global_evidence_unlocated'].append(f'{path}: {reason}')
     for cid, character in characters.items():

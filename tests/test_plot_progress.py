@@ -49,7 +49,9 @@ def test_progress_survives_before_formal_commit_and_rejects_damaged_checkpoint(t
             assert progress['total_chapters'] == progress['generated_chapters'] == 3
             assert progress['checkpoint_chapters'] == 3
             assert progress['submitted_chapters'] == 0
-            assert progress['artifact_state'] == 'missing' and progress['review'] is None
+            # Stage2 章审/跨章复核退役：进度面只剩产物状态，无审阅字段。
+            assert progress['artifact_state'] == 'missing'
+            assert 'review' not in progress
             snapshots.append(progress)
     assert snapshots[0] == snapshots[1]
     assert len(transport.calls) == 3

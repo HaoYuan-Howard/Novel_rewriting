@@ -167,7 +167,7 @@ def _wire(
     raw = A._fresh_record(snapshot.sid)
     frozen_approval_doc = ApprovalDoc(
         prepare=missing_prepare_state(),
-        sid=snapshot.sid, gate=raw.gate, seen=raw.seen,
+        sid=snapshot.sid, gate=raw.gate,
         structure=StructureApprovalView(state='unavailable'))
     monkeypatch.setattr(
         O.paths, 'resolve_novel_dir',

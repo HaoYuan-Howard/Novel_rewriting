@@ -97,9 +97,20 @@ def test_identity_edit_free_rebind_http_cli_restart_preserves_knowledge_cost(tmp
     from contracts.schema.knowledge import KnowledgeGrounding
     from novel.orchestrator import jobs, approvals
     from novel.store import ArtifactStore
-    from tests.test_stage2_character_rebind import seed_knowledge
     monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
-    ctx = seed_knowledge(tmp_path, shared=True)
+
+    def seed_knowledge(tmp_path):
+        from tests.test_stage2_analyze import _ctx as analyze_ctx, _driver
+        from tests.stage2_fixtures import character_response, knowledge_response
+        from novel.node_agents import Stage2AnalyzeAgent
+        ctx = analyze_ctx(tmp_path)
+        response = {'characters': character_response()['characters'],
+                    'global': knowledge_response()}
+        Stage2AnalyzeAgent(ctx, driver=_driver(ctx, response)).run()
+        ctx.node = 'stage2.global'
+        return ctx
+
+    ctx = seed_knowledge(tmp_path)
     store = ArtifactStore(ctx)
     knowledge = store.read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0]
     global_before = store.path(STAGE2_GLOBAL_GROUNDING).read_bytes()
@@ -152,11 +163,6 @@ def test_identity_edit_free_rebind_http_cli_restart_preserves_knowledge_cost(tmp
         assert view.status_code == 200, view.text
         assert view.json()['freshness'] == 'fresh'
         assert restarted.get(endpoint).json()['artifact']['freshness'] == 'fresh'
-        review = restarted.get(f'/api/novels/{ctx.sid}/stage2/global-review')
-        assert review.status_code == 200, review.text
-        assert review.json()['current'] is True and review.json()['generation_safe'] is False
-        assert approvals.get(tmp_path, ctx.sid, include_spawns=False).stage2_reviews[
-            'stage2.global'].state != 'accepted'
     after = store.read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0]
     assert (after.setting, after.world_rules, after.relations, after.arc_secrets) == (
         knowledge.setting, knowledge.world_rules, knowledge.relations, knowledge.arc_secrets)
@@ -164,42 +170,6 @@ def test_identity_edit_free_rebind_http_cli_restart_preserves_knowledge_cost(tmp
     assert after.provenance.prompts == knowledge.provenance.prompts
     assert after.provenance.shared_analysis_source == shared
     assert store.path(shared.receipt_rel).read_bytes() == receipt_before
-    assert ctx.ledger.path.read_bytes() == ledger
-
-
-@pytest.mark.real_code_version
-def test_refresh_review_http_cli_restores_missing_review_without_touching_shared_core(tmp_path, monkeypatch):
-    from contracts.artifacts import STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW
-    from novel.orchestrator import jobs, state
-    from novel.store import ArtifactStore
-    from tests.test_stage2_character_rebind import seed_knowledge
-    monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
-    ctx = seed_knowledge(tmp_path, shared=True, accept=False)
-    store = ArtifactStore(ctx)
-    original = {rel: store.path(rel).read_bytes() for rel in (STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING)}
-    ledger = ctx.ledger.path.read_bytes()
-    store.archive_round(STAGE2_GLOBAL_REVIEW)
-    assert state.stage2_global_review_refresh_needed(state.overview_at(ctx.novel_dir, ctx.code))
-    command = {'sid': ctx.sid, 'node': 'stage2.global', 'flags': ['--refresh-review']}
-    with TestClient(create_app(str(tmp_path))) as client:
-        client.headers[UI_HEADER] = '1'
-        preview = client.post('/api/jobs/preview', json=command)
-        assert preview.status_code == 200, preview.text
-        assert preview.json()['paid'] is False
-        started = client.post('/api/jobs', json=command)
-        assert started.status_code == 202, started.text
-        job_id = started.json()['job_id']
-        assert jobs.wait(job_id, 60), '免费审阅刷新 CLI 尚未结束'
-        result = client.get(f'/api/jobs/{job_id}').json()
-        assert result['exit_code'] == 0, client.get(f'/api/jobs/{job_id}/log').json()
-        assert result['start']['paid'] is False
-    with TestClient(create_app(str(tmp_path))) as restarted:
-        restarted.headers[UI_HEADER] = '1'
-        review = restarted.get(f'/api/novels/{ctx.sid}/stage2/global-review')
-        assert review.status_code == 200, review.text
-        assert review.json()['current'] is True and review.json()['generation_safe'] is False
-        assert review.json()['review_token'].startswith('s2gr2_')
-    assert {rel: store.path(rel).read_bytes() for rel in original} == original
     assert ctx.ledger.path.read_bytes() == ledger
 
 

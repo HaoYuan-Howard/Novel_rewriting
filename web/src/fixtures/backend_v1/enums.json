@@ -185,6 +185,8 @@
   "--apply-edit",
   "--wontfix",
   "--emit-edit-template",
+  "--emit-review-workpack",
+  "--emit-review-template",
   "--adopt-residual",
   "--validate-edit",
   "--rebind-review"

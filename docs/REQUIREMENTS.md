@@ -25,6 +25,14 @@
 Gate A～C 的代码仍须完整闭合，Stage4～7 以工程消费者、恢复、API/UI 与回归验证；
 不据此声称真书成稿或交付质量通过。
 
+**2026-09-14 工程基线范围更新**：用户收窄本批验收——先用一本小说跑通 stage0～stage2，
+Stage4 及以后的链路逐步重构。本批测试收口以 stage0～stage2 定向选择加被波及共享面
+（store/cli/api/permit/grants/transition）为准，完整非 corpus 回归全绿门槛顺延到
+Stage4～7 链路重构批次。V5→V6 显式迁移用例（`tests/test_workflow_transition.py` 的
+`setup_stage5` 组）依赖完整 Stage2→4→5 生产链构造合法 v5 迁移来源；现役 v7 链不再产出
+退役 review 文件与 `stage2_reviews` 历史审批键，来源证明无法通过，用例已在
+`frozen_stage5` 按来源证明守卫带原因跳过，链路迁移批次闭合后自动恢复。
+
 - [x] Gate A：一次 Analyze Executor、两个独立编译器、Characters v2 / Global v7、统一
       Global Commander；闭合 CLI/API、待审、共享首抽统计、typed 编辑及已购回答/半边失败恢复。
       已在 `f5a95aa` 完成指定小说原文核验及免费 typed 恢复，接受署名 `codex`。

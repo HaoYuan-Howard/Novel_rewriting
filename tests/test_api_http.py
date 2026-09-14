@@ -357,104 +357,96 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
     不复制页面路由；新增或退役端点必须同步调整这份清单并验证其消费者。
     """
     assert _surface(app) == {
-        '/api/enums': ['GET'],
-        # 批次四维护面：preview 只读，apply 必须带同一份 CAS token。
-        '/api/maintenance/retention/preview': ['POST'],
-        '/api/maintenance/retention/apply': ['POST'],
-        '/api/maintenance/trash/restore/preview': ['POST'],
-        '/api/maintenance/trash/restore/apply': ['POST'],
-        '/api/novels': ['GET'],
-        '/api/novels/{sid}': ['GET'],
-        '/api/novels/{sid}/operator-next': ['GET'],
-        '/api/novels/{sid}/check/{kind}': ['GET'],
-        '/api/jobs': ['GET', 'POST'],
-        '/api/jobs/{job_id}': ['GET'],
-            '/api/jobs/{job_id}/log': ['GET'],
-            '/api/jobs/{job_id}/stream': ['GET'],
-            '/api/jobs/preview': ['POST'],
-            '/api/queues': ['GET', 'POST'],
-            '/api/queues/preview': ['POST'],
-            '/api/queues/{queue_id}': ['GET'],
-            '/api/queues/{queue_id}/resume': ['POST'],
-            '/api/queues/{queue_id}/items/{item_index}/cancel': ['POST'],
-        '/api/novels/{sid}/stage0/report': ['GET'],
-        '/api/novels/{sid}/stage0/segments': ['GET'],
-        '/api/novels/{sid}/stage0/candidate': ['GET'],
-        '/api/novels/{sid}/stage0/edit': ['POST'],
-        '/api/novels/{sid}/stage0/approve': ['POST'],
-        '/api/novels/{sid}/stage0/candidate/adopt': ['POST'],
-        '/api/novels/{sid}/stage0/candidate/dismiss': ['POST'],
-        '/api/novels/{sid}/stage1/partition': ['POST'],
-        '/api/novels/{sid}/stage1': ['GET'],
-        '/api/novels/{sid}/approvals': ['GET'],
-        '/api/novels/{sid}/approvals/design/workpack': ['GET'],
-        '/api/novels/{sid}/approvals/blueprint-refinement/catalog': ['GET'],
-        '/api/novels/{sid}/approvals/blueprint-refinement': ['POST'],
-        '/api/novels/{sid}/approvals/stage6/workpack': ['GET'],
-        '/api/novels/{sid}/approvals/stage7/workpack': ['GET'],
-        '/api/novels/{sid}/approvals/design/template': ['GET'],
-        '/api/novels/{sid}/approvals/stage5': ['POST'],
-        '/api/novels/{sid}/approvals/stage5/template': ['GET'],
-        '/api/novels/{sid}/approvals/design': ['POST'],
-        '/api/novels/{sid}/approvals/gate/{key}': ['POST'],
-        '/api/novels/{sid}/approvals/backfill': ['POST'],
-        '/api/novels/{sid}/approvals/seen/{key}': ['POST'],
-        '/api/novels/{sid}/approvals/structure': ['POST'],
-        '/api/novels/{sid}/approvals/structure/workpack': ['GET'],
-        '/api/novels/{sid}/approvals/writing': ['POST'],
-            '/api/novels/{sid}/approvals/reset': ['POST'],
-            # 项目级可恢复删除：必须确认 sid，真实移动发生在零成本 CLI 子进程。
-            '/api/novels/{sid}/trash': ['POST'],
-            '/api/upload': ['POST'],
-        # ── 第二阶段 · 批 1/2：读屏（`tests/test_api_screens.py` 管行为） ──
-        '/api/novels/{sid}/stage2/global': ['GET'],
-        '/api/novels/{sid}/stage2/characters': ['GET'],
-        '/api/novels/{sid}/stage2/characters/edit': ['POST'],
-        '/api/novels/{sid}/stage2/blueprint-review-workpack': ['GET'],
-        '/api/novels/{sid}/stage2/global-review': ['GET', 'POST'],
-        '/api/novels/{sid}/approvals/stage2-review': ['POST'],
-        '/api/novels/{sid}/stage2/blueprint/edit/template': ['GET'],
-        '/api/novels/{sid}/stage2/blueprint/edit': ['POST'],
-        '/api/novels/{sid}/stage2/blueprint/edit/preview': ['POST'],
-        '/api/novels/{sid}/stage6': ['GET'],
-        '/api/novels/{sid}/stage7': ['GET'],
-        '/api/novels/{sid}/stage7/book.txt': ['GET'],
-        '/api/novels/{sid}/stage7/{ordinal}': ['GET'],
-        '/api/novels/{sid}/inbox': ['GET'],
-        '/api/novels/{sid}/reading/{ordinal}': ['GET'],
-        '/api/novels/{sid}/stage4/{ordinal}': ['GET'],
-        '/api/novels/{sid}/stage5/{ordinal}': ['GET'],
-        '/api/novels/{sid}/review/{ordinal}': ['GET'],
-        # ── 第二阶段 · 批 3：人工写回（`tests/test_api_edits.py` 管行为）。
-        #    ⚠ `stage6/edit` / `stage7/edit` 刻意不在（2026-08-17 裁决：改字走 CLI）。
-        '/api/novels/{sid}/review/{ordinal}/edit': ['POST'],
-        '/api/novels/{sid}/review/{ordinal}/edit/preview': ['POST'],
-        '/api/novels/{sid}/stage5/trim/{ordinal}/retain-pretrim': ['POST'],
-        '/api/novels/{sid}/stage5/trim/retain-pretrim-batch': ['POST'],
-        '/api/novels/{sid}/stage6/approve': ['POST'],
-        '/api/novels/{sid}/stage7/approve': ['POST'],
-        '/api/novels/{sid}/stage7/adopt-residual': ['POST'],
-        # ── agent 全链运行（`web/AGENTS.md`「路由与屏幕职责」的 `/n/:sid/run`）──
-        #    ⚠ 这五条是本条绊线**按设计逮到的**一次「顺手加端点」：路由已上线、
-        #    屏幕职责表也已登记，而这张清单没跟着改 ⇒ 接口面测试失败。
-        #    补进来就是那次「显式的决定」；它们的行为归 `tests/test_api_agent.py`。
         '/api/agent/capabilities': ['GET'],
-        # 用户偏好与 capability 产品默认分开；行为归 `tests/test_agent_settings.py`。
-        '/api/settings/agent-profiles': ['GET', 'POST'],
         '/api/agent/runs': ['GET', 'POST'],
-        '/api/agent/runs/preview': ['POST'],
-        #: 批量受理 N 本 + 队列全景。放开 agent 并发之后新增的那一面
-        #: （一本书一把锁 + `MAX_CONCURRENT` 并发闸，都在 `novel/orchestrator/agent.py`）。
         '/api/agent/runs/batch': ['POST'],
+        '/api/agent/runs/preview': ['POST'],
         '/api/agent/runs/queue': ['GET'],
-        '/api/agent/runs/{run_id}/log': ['GET'],
         '/api/agent/runs/{run_id}/continuation': ['GET'],
+        '/api/agent/runs/{run_id}/log': ['GET'],
         '/api/agent/runs/{run_id}/pause': ['POST'],
         '/api/agent/runs/{run_id}/resume': ['POST'],
         '/api/agent/runs/{run_id}/stop': ['POST'],
+        '/api/enums': ['GET'],
+        '/api/jobs': ['GET', 'POST'],
+        '/api/jobs/preview': ['POST'],
+        '/api/jobs/{job_id}': ['GET'],
+        '/api/jobs/{job_id}/log': ['GET'],
+        '/api/jobs/{job_id}/stream': ['GET'],
+        '/api/maintenance/retention/apply': ['POST'],
+        '/api/maintenance/retention/preview': ['POST'],
+        '/api/maintenance/trash/restore/apply': ['POST'],
+        '/api/maintenance/trash/restore/preview': ['POST'],
+        '/api/novels': ['GET'],
+        '/api/novels/{sid}': ['GET'],
+        '/api/novels/{sid}/approvals': ['GET'],
+        '/api/novels/{sid}/approvals/backfill': ['POST'],
+        '/api/novels/{sid}/approvals/design': ['POST'],
+        '/api/novels/{sid}/approvals/design/template': ['GET'],
+        '/api/novels/{sid}/approvals/design/workpack': ['GET'],
+        '/api/novels/{sid}/approvals/gate/{key}': ['POST'],
+        '/api/novels/{sid}/approvals/reset': ['POST'],
+        '/api/novels/{sid}/approvals/stage5': ['POST'],
+        '/api/novels/{sid}/approvals/stage5/template': ['GET'],
+        '/api/novels/{sid}/approvals/stage6/workpack': ['GET'],
+        '/api/novels/{sid}/approvals/stage7/workpack': ['GET'],
+        '/api/novels/{sid}/approvals/structure': ['POST'],
+        '/api/novels/{sid}/approvals/structure/workpack': ['GET'],
+        '/api/novels/{sid}/approvals/writing': ['POST'],
+        '/api/novels/{sid}/check/{kind}': ['GET'],
+        '/api/novels/{sid}/inbox': ['GET'],
+        '/api/novels/{sid}/operator-next': ['GET'],
+        '/api/novels/{sid}/reading/{ordinal}': ['GET'],
+        '/api/novels/{sid}/review/{ordinal}': ['GET'],
+        '/api/novels/{sid}/review/{ordinal}/edit': ['POST'],
+        '/api/novels/{sid}/review/{ordinal}/edit/preview': ['POST'],
         '/api/novels/{sid}/run': ['GET'],
         '/api/novels/{sid}/run/metrics': ['GET'],
+        '/api/novels/{sid}/stage0/approve': ['POST'],
+        '/api/novels/{sid}/stage0/candidate': ['GET'],
+        '/api/novels/{sid}/stage0/candidate/adopt': ['POST'],
+        '/api/novels/{sid}/stage0/candidate/dismiss': ['POST'],
+        '/api/novels/{sid}/stage0/edit': ['POST'],
+        '/api/novels/{sid}/stage0/report': ['GET'],
+        '/api/novels/{sid}/stage0/segments': ['GET'],
+        '/api/novels/{sid}/stage1': ['GET'],
+        '/api/novels/{sid}/stage1/partition': ['POST'],
+        '/api/novels/{sid}/stage2/analyze-draft': ['GET', 'POST'],
+        '/api/novels/{sid}/stage2/blueprint-reading-workpack': ['GET'],
+        '/api/novels/{sid}/stage2/blueprint/edit': ['POST'],
+        '/api/novels/{sid}/stage2/blueprint/edit/preview': ['POST'],
+        '/api/novels/{sid}/stage2/blueprint/edit/template': ['GET'],
+        '/api/novels/{sid}/stage2/characters': ['GET'],
+        '/api/novels/{sid}/stage2/characters/edit': ['POST'],
+        '/api/novels/{sid}/stage2/global': ['GET'],
+        '/api/novels/{sid}/stage2/global/edit': ['POST'],
+        '/api/novels/{sid}/stage2/global/edit/preview': ['POST'],
+        '/api/novels/{sid}/stage2/global/edit/template': ['GET'],
+        '/api/novels/{sid}/stage4/{ordinal}': ['GET'],
+        '/api/novels/{sid}/stage5/trim/retain-pretrim-batch': ['POST'],
+        '/api/novels/{sid}/stage5/trim/{ordinal}/retain-pretrim': ['POST'],
+        '/api/novels/{sid}/stage5/{ordinal}': ['GET'],
+        '/api/novels/{sid}/stage6': ['GET'],
+        '/api/novels/{sid}/stage6/approve': ['POST'],
+        '/api/novels/{sid}/stage6/prepare': ['GET'],
+        '/api/novels/{sid}/stage6/prepare/edit': ['POST'],
+        '/api/novels/{sid}/stage6/prepare/edit/preview': ['POST'],
+        '/api/novels/{sid}/stage6/prepare/review': ['POST'],
+        '/api/novels/{sid}/stage6/prepare/workpack': ['GET'],
+        '/api/novels/{sid}/stage7': ['GET'],
+        '/api/novels/{sid}/stage7/adopt-residual': ['POST'],
+        '/api/novels/{sid}/stage7/approve': ['POST'],
+        '/api/novels/{sid}/stage7/book.txt': ['GET'],
+        '/api/novels/{sid}/stage7/{ordinal}': ['GET'],
+        '/api/novels/{sid}/trash': ['POST'],
         '/api/novels/{sid}/work-units/{unit_id}/grant': ['GET', 'POST'],
+        '/api/queues': ['GET', 'POST'],
+        '/api/queues/preview': ['POST'],
+        '/api/queues/{queue_id}': ['GET'],
+        '/api/queues/{queue_id}/items/{item_index}/cancel': ['POST'],
+        '/api/queues/{queue_id}/resume': ['POST'],
+        '/api/settings/agent-profiles': ['GET', 'POST'],
+        '/api/upload': ['POST'],
     }
 
 
@@ -529,12 +521,10 @@ def test_preview_refuses_a_flag_that_node_does_not_have(client):
 
 
 _EXECUTOR_PROFILE_HTTP_CASES = (
+    ('stage2.analyze', (), 1),
     ('stage2.characters', (), 1),
-    ('stage2.characters', ('--review-token', 's2gr1_' + 'a' * 64), 1),
     ('stage2.global', (), 1),
-    ('stage2.global', ('--review-token', 's2gr1_' + 'a' * 64), 1),
     ('stage2.blueprint', (), 2),
-    ('stage2.blueprint', ('--review-token', 'bpr4_' + 'a' * 64), 2),
     ('stage4.design', (), 1),
     ('stage4.design', ('--replan', '--review-token', 's4rr1_' + 'a' * 64), 1),
     ('stage4.design', ('--review-token', 's4rr1_' + 'a' * 64), 1),
@@ -543,6 +533,7 @@ _EXECUTOR_PROFILE_HTTP_CASES = (
     ('stage5.write', ('--chapters', '1'), 1),
     ('stage5.write', ('--revise',), 1),
     ('stage5.write', ('--revise', '--chapters', '1'), 1),
+    ('stage6.prepare', (), 1),
     ('stage6.hook', (), 2),
     ('stage6.semantic', (), 1),
     ('stage7.rename', (), 2),
@@ -590,7 +581,8 @@ def test_executor_backend_is_identical_in_preview_and_start(
     def start_without_thread(
             run_base, node, sid, run_flags, *, steps,
             executor_backend=None, egress_authorized=None, prepare=None):
-        assert (prepare is None) is node.startswith('stage2.')
+        # Stage2 复核闸退役：只剩 stage4/5 的授权闸还产生 prepare。
+        assert (prepare is not None) == (node.split('.')[0] in {'stage4', 'stage5'})
         captured['executor_backend'] = executor_backend
         captured['egress_authorized'] = egress_authorized
         captured['steps'] = steps
@@ -861,14 +853,9 @@ def test_http_jobs_refuse_internal_reviewer_rewrite_actions(
     assert '内部 hash-bound action' in response.json()['message']
 
 
-def test_paid_blueprint_can_start_while_global_review_is_pending(
+def test_paid_blueprint_job_starts_without_a_semantic_review_gate(
         client, monkeypatch):
-    """Stage2 第二个 producer 不得被下游人审策略误判成 consumer。"""
-    checked: list[tuple] = []
-
-    monkeypatch.setattr(
-        JOB_API.approvals, 'require_stage2_review',
-        lambda *args: checked.append(args))
+    """Stage2 语义审阅退役：blueprint 的启动不再有任何下游人审前置。"""
 
     def start_without_thread(
             run_base, node, sid, run_flags, *, steps,
@@ -886,21 +873,17 @@ def test_paid_blueprint_can_start_while_global_review_is_pending(
 
     assert response.status_code == 202, response.text
     assert response.json()['start']['paid'] is True
-    assert checked == []
 
 
 @pytest.mark.parametrize('node', [
     'stage4.design', 'stage4.context', 'stage6.hook', 'stage7.assemble',
 ])
-def test_stage2_review_is_checked_for_paid_and_free_consumers_under_the_book_lock(
+def test_consumer_authorization_runs_under_the_book_lock(
         client, monkeypatch, node):
-    checked: list[tuple[str, str]] = []
+    """Stage2 复核闸退役后，consumer 只保留各自的授权闸（design/context）。"""
     contexts: list[str] = []
     initial_designs: list[str] = []
 
-    monkeypatch.setattr(
-        JOB_API.approvals, 'require_stage2_review',
-        lambda _base, sid, checked_node: checked.append((sid, checked_node)))
     monkeypatch.setattr(
         JOB_API.approvals, 'authorize_context',
         lambda _base, sid: contexts.append(sid))
@@ -911,10 +894,11 @@ def test_stage2_review_is_checked_for_paid_and_free_consumers_under_the_book_loc
     def start_without_thread(
             run_base, run_node, sid, run_flags, *, steps,
             executor_backend=None, egress_authorized=None, prepare=None):
-        assert prepare is not None
+        assert (prepare is not None) is (run_node in ('stage4.design', 'stage4.context'))
         assert executor_backend is None
         assert egress_authorized is None
-        prepare()
+        if prepare is not None:
+            prepare()
         return _started_record(run_base, run_node, sid, run_flags, steps)
 
     monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
@@ -924,7 +908,6 @@ def test_stage2_review_is_checked_for_paid_and_free_consumers_under_the_book_loc
     })
 
     assert response.status_code == 202, response.text
-    assert checked == [('42', node)]
     assert contexts == (['42'] if node == 'stage4.context' else [])
     assert initial_designs == (['42'] if node == 'stage4.design' else [])
 
@@ -939,8 +922,6 @@ def test_stage2_review_is_checked_for_paid_and_free_consumers_under_the_book_loc
 def test_stage4_plan_new_outputs_require_design_review_but_recovery_does_not(
         client, monkeypatch, flags, requires_design):
     authorized: list[str] = []
-    monkeypatch.setattr(
-        JOB_API.approvals, 'require_stage2_review', lambda *_args: None)
     monkeypatch.setattr(
         JOB_API.approvals, 'authorize_plan',
         lambda _base, sid: authorized.append(sid))
@@ -973,8 +954,6 @@ def test_stage4_design_recovery_decision_is_resolved_under_the_job_lock(
     resolved: list[tuple[str | None, str]] = []
     initials: list[str] = []
     monkeypatch.setattr(
-        JOB_API.approvals, 'require_stage2_review', lambda *_args: None)
-    monkeypatch.setattr(
         JOB_API.approvals, 'resolve_design_action',
         lambda _base, _sid, sha, *, expected: resolved.append((sha, expected)))
     monkeypatch.setattr(
@@ -1002,7 +981,6 @@ def test_paid_stage5_job_authorizes_selected_chapters_before_start(
         client, base, monkeypatch):
     """付费定向写作仍在占锁后、启动前校验 writing proof。"""
     authorized = []
-    reviewed = []
 
     def authorize(run_base, sid, chapters, *, requires_fresh_review):
         authorized.append((run_base, sid, chapters, requires_fresh_review))
@@ -1017,9 +995,6 @@ def test_paid_stage5_job_authorizes_selected_chapters_before_start(
         return _started_record(run_base, node, sid, run_flags, steps)
 
     monkeypatch.setattr(JOB_API.approvals, 'authorize_writing', authorize)
-    monkeypatch.setattr(
-        JOB_API.approvals, 'require_stage2_review',
-        lambda _base, sid, node: reviewed.append((sid, node)))
     monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
 
     response = client.post('/api/jobs', json={
@@ -1029,7 +1004,6 @@ def test_paid_stage5_job_authorizes_selected_chapters_before_start(
 
     assert response.status_code == 202, response.text
     assert response.json()['start']['paid'] is True
-    assert reviewed == [('42', 'stage5.write')]
     assert [(sid, chapters, fresh) for _, sid, chapters, fresh in authorized] == [
         ('42', [1, 3], False),
     ]

@@ -646,7 +646,6 @@ _SERVICE_MUTATORS = {
     ('uploads', 'save_prepare_input'),
     ('uploads', 'discard_edit_plan'),
     ('approvals', 'approve_gate'),
-    ('approvals', 'mark_seen'),
     ('approvals', 'approve_writing'),
     ('approvals', 'reset'),
     ('approvals', 'backfill_from_disk'),
@@ -716,7 +715,7 @@ def test_service_mutations_are_narrowly_owned_by_mutation_routes():
             ('jobs', 'start'),
         },
         'novel/api/routes/approvals.py': {
-            ('approvals', 'approve_gate'), ('approvals', 'mark_seen'),
+            ('approvals', 'approve_gate'),
             ('approvals', 'approve_writing'),
             ('approvals', 'reset'), ('approvals', 'backfill_from_disk'),
         },

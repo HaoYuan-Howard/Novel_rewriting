@@ -131,14 +131,11 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
     os.mkdir(os.path.join(base, '测试书_42'))
     actual = c.get('/api/novels/42/run').json()
     reviews = actual['resume_frontier']['review_states']
-    assert len(reviews) == 9
+    assert len(reviews) == 8
     assert {row['node'] for row in reviews} == {
         node for node, spec in NODES.items() if spec.lifecycle.review_mode == 'commander'}
-    stage2 = [row for row in reviews if row['node'].startswith('stage2.')]
-    assert next(row for row in stage2 if row['node'] == 'stage2.global')['state'] == 'missing'
-    # 源章尚不存在，不能伪造章范围或把无法建立范围审阅身份说成已知 pending。
-    assert next(row for row in stage2 if row['node'] == 'stage2.blueprint') == {
-        'node': 'stage2.blueprint', 'scope': 'cross_chapter', 'state': 'unknown'}
+    # Stage2 Commander 随语义审阅退役：run 面不再有 stage2 复核状态行。
+    assert not [row for row in reviews if row['node'].startswith('stage2.')]
     assert operator._review_state_projection(None) is None
     frontier = RunResumeFrontierView(
         state='blocked', node='stage2.blueprint', seq=list(NODES).index('stage2.blueprint') + 1,
@@ -158,5 +155,6 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
         row('stage2.blueprint', 'commander', 'chapter:1')])
     response = c.get('/api/novels/42/run')
     assert response.status_code == 200
-    assert response.json()['current_recovery_actions'] == ['book: replay_response']
+    # Stage2 Commander 退役：global 的 commander 工作单元不再进入恢复动作面。
+    assert response.json()['current_recovery_actions'] == ['chapter:1: replay_response']
     assert response.json()['resume_frontier']['next_handler'] == 'commander'
