@@ -58,7 +58,8 @@ from contracts.schema.orchestration import (
     AgentExecutorBackend, AgentProfile, ExecutorBackend, LegacyExecutorBackend,
     LegacyLlmProfile, ProgressEvent,
 )
-from novel import commander_context, paths, prov, run_identity
+from novel import paths, prov, run_identity
+from novel.commanders import context as commander_context
 from novel import exit_codes as X
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, RefusedByStructure, TerminalState,

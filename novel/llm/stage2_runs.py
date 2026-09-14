@@ -46,11 +46,15 @@ from novel.errors import (
 from novel.llm.json_text import normalize_json_text
 from novel.run_identity import check_run_id
 
-from novel.stage2_run_state import (
-    VERSION, RUN_FILE, canonical_bytes as _canonical_bytes,
-    checkpoint_sha256 as _checkpoint_hash, read_state as _read_json,
-    state_sha256 as _sha,
-)
+# 包级形式访问 stage2 公开面（M5：不深路径 import stage 内部模块）；
+# 本地别名保留原调用点写法。
+from novel.stages.stage2 import run_state as _rs
+VERSION = _rs.VERSION
+RUN_FILE = _rs.RUN_FILE
+_canonical_bytes = _rs.canonical_bytes
+_checkpoint_hash = _rs.checkpoint_sha256
+_read_json = _rs.read_state
+_sha = _rs.state_sha256
 MANIFEST_FILE = 'repair_manifest.json'
 RESOLUTION_FILE = 'batch_resolution.json'
 COMMITTED_FILE = 'committed.json'

@@ -51,7 +51,8 @@ from contracts.schema.orchestration import (
     PipelineAgentProfiles, ProgressEvent, ReviewerActionRecord, RunContractV2,
     Step,
 )
-from novel import agent_session_audit, commander_context, paths
+from novel import agent_session_audit, paths
+from novel.commanders import context as commander_context
 from novel.agents.base import AgentUsage
 from novel.commanders import (
     CodexCommanderDriver, CommanderInvocation, CommanderObservation,
@@ -1202,7 +1203,7 @@ def test_stage4_design_action_child_uses_fresh_epoch_as_producer_run(
             "from pathlib import Path; "
             "from novel import prov; "
             "prov.code_version=lambda: 'test-code-version'; "
-            "from novel import commander_context; "
+            "from novel.commanders import context as commander_context; "
             f"ctx=commander_context.load_from_environment({base!r}, '42'); "
             "assert ctx is not None; "
             f"Path({str(marker)!r}).write_text(ctx.producer_run_id, "

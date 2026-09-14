@@ -19,7 +19,8 @@ from contracts.schema.work_unit_recovery import (
     CommanderFailureRecoveryRequest,
 )
 from contracts.schema.workflow import WorkUnitBlobV1, WorkUnitContentTurn, WorkUnitLedgerV2
-from novel import agent_session_audit, commander_context, prov, work_units
+from novel import agent_session_audit, prov, work_units
+from novel.commanders import context as commander_context
 from novel.appendlog import path_transaction_lock
 from novel.agents.base import decode_wire_json
 from novel.errors import NovelError

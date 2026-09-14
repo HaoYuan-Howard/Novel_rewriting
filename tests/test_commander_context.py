@@ -9,7 +9,7 @@ from contracts.schema.orchestration import (
     AgentProfile, AgentRunRecord, AgentRunStart, ExecutionEpoch,
     PipelineAgentProfiles, RunContractV2,
 )
-from novel import commander_context
+from novel.commanders import context as commander_context
 from novel.errors import TerminalState
 
 

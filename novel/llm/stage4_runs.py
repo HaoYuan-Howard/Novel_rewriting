@@ -4639,7 +4639,7 @@ def _design_recovery_source_owner(
             f'Stage4 recovery parent={parent!r} fold 与严格生命周期不等')
     live_parent = not ended
     if live_parent and not ctx.readonly:
-        from novel import commander_context
+        from novel.commanders import context as commander_context
         from novel.orchestrator import admission
 
         current = commander_context.load_from_environment(

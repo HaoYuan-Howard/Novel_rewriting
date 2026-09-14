@@ -7,7 +7,7 @@ import json
 import pytest
 
 from contracts.schema.orchestration import AgentRunStart, ExecutionEpoch
-from novel import commander_context
+from novel.commanders import context as commander_context
 from tests.test_commander_context import _profiles
 
 

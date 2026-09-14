@@ -15,7 +15,7 @@ from novel.store import ArtifactStore
 
 
 def get(base: str, sid: str, units: list[dict] | None) -> BlueprintRunProgress:
-    from novel.stage2_run_state import plot_checkpoint_progress
+    from novel.stages.stage2 import run_state
     from novel.stages.stage2.plot_inputs import read_input_digests
 
     missing = BlueprintRunProgress(artifact_state='unreadable', chapters=[])
@@ -46,7 +46,7 @@ def get(base: str, sid: str, units: list[dict] | None) -> BlueprintRunProgress:
                     'pending', 'generated', 'mechanical', 'history_adopted',
                     'cached', 'failed', 'unknown') if processing[key]), None)
                 if str(ordinal) in inputs:
-                    checkpoint = plot_checkpoint_progress(ctx, chapter=ordinal,
+                    checkpoint = run_state.plot_checkpoint_progress(ctx, chapter=ordinal,
                         run_id=processing['run_id'], input_sha256=inputs[str(ordinal)])
                     row.update(checkpoint_state=checkpoint['state'], reason=checkpoint['reason'])
                 else:

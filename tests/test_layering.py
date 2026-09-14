@@ -249,7 +249,7 @@ _JSON_READ_ALLOWED = {
         '`_service/agent_sessions.jsonl` 是 append-only 事件流，'
         '只记 profile/session/usage/指纹与双轴终态，不进来源账或 ARTIFACTS；'
         '读侧只容忍被 kill 截断的最后一行，中间坏行关闭式失败'),
-    'novel/operator_telemetry.py': (
+    'novel/orchestrator/operator_telemetry.py': (
         'Commander / operator 阶段遥测**不是产物、节点或成本账**：'
         '`_service/operator_phases/*.jsonl` 是不含正文/提示词/token 的逐 session append-only 事件流，'
         '只记本地阶段身份、耗时与终态；读侧只容忍被 kill 截断的最后一行'),
@@ -278,7 +278,7 @@ _JSON_READ_ALLOWED = {
         '离线迁移只解码 `_service/` 的 workflow manifest、prepared/completed 与运行账，'
         '用于显式版本、全字段、原字节 CAS 和下游未启动证明；这些是服务控制账而非小说产物。'
         '人物/正文投影仍经 ArtifactStore 读取，迁移不能补造旧审批或小说知识'),
-    'novel/stage2_run_state.py': (
+    'novel/stages/stage2/run_state.py': (
         '只读解码 _service/runs 下的 Stage2 运行记录与验证后检查点；'
         '它们不是正式产物，当前版本、自哈希和输入身份不闭合即 unver，'
         '与 producer 共用载体协议，不含模型执行或 paid-response 恢复权威'),
