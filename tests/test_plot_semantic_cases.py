@@ -17,7 +17,7 @@ from contracts.schema.characters import CharacterRegistry, CharactersProvenance,
 from contracts.schema.knowledge import GlobalProvenance, KnowledgeResponse
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints
-from novel.admission import SEMANTIC_UNREVIEWED_RULES
+from novel.orchestrator.mechanical_admission import SEMANTIC_UNREVIEWED_RULES
 from novel.llm.agent_runs import canonical_sha256
 from novel.stages.stage2 import checks
 from novel.stages.stage2.plot_compile import compile_chapter, validate_book

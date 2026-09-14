@@ -153,7 +153,7 @@ def test_missing_original_raw_blocks_instead_of_minting_paid_fallback(tmp_path):
 
 def test_run_http_reads_analyze_inflight_before_provider_response_without_mutation(tmp_path):
     """实际 agent 已登记原 owner/内容轮，driver 尚未交回回答时也可读进度。"""
-    from novel.node_agents import Stage2AnalyzeAgent
+    from novel.orchestrator.node_agents import Stage2AnalyzeAgent
     from tests.test_stage2_global_agent import _Driver
 
     ctx = _ctx(tmp_path)
@@ -176,7 +176,7 @@ def test_run_http_reads_analyze_inflight_before_provider_response_without_mutati
 
 @pytest.mark.parametrize('owner', ['stage2.characters', 'stage2.global'])
 def test_uncompilable_owner_draft_blocks_paid_dispatch_and_offers_free_template(tmp_path, owner):
-    from novel.node_agents import Stage2AnalyzeAgent
+    from novel.orchestrator.node_agents import Stage2AnalyzeAgent
     from tests.test_stage2_analyze import _driver
     ctx = _ctx(tmp_path)
     response = _response()
@@ -203,7 +203,7 @@ def test_uncompilable_owner_draft_blocks_paid_dispatch_and_offers_free_template(
 
 def test_prepared_owner_draft_dispatch_binds_exact_journal_and_never_buys_again(tmp_path, monkeypatch):
     from contracts.schema.analyze_draft import AnalyzeOwnerDraftEdit
-    from novel.node_agents import Stage2AnalyzeAgent
+    from novel.orchestrator.node_agents import Stage2AnalyzeAgent
     from novel.stages.stage2 import analyze_draft_recovery
     from novel.store import ArtifactStore
     from tests.test_stage2_analyze import _driver
@@ -247,7 +247,7 @@ def test_prepared_owner_draft_dispatch_binds_exact_journal_and_never_buys_again(
 @pytest.mark.parametrize('problem', ['deleted_identity', 'unknown_evidence'])
 def test_repaired_characters_leave_uncompilable_global_for_explicit_free_edit(tmp_path, problem):
     from contracts.schema.characters import CharactersEdit
-    from novel.node_agents import Stage2AnalyzeAgent
+    from novel.orchestrator.node_agents import Stage2AnalyzeAgent
     from novel.stages.stage2 import characters
     from tests.test_stage2_analyze import _driver
     ctx = _ctx(tmp_path)

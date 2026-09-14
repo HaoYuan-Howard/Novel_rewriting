@@ -19,7 +19,7 @@ from novel import prov, run_identity
 from novel.agents import session_audit as agent_session_audit
 from novel.errors import ProvenanceRefused
 from novel.llm import stage4_runs
-from novel.node_agents import Stage4PlanSessionPool
+from novel.orchestrator.node_agents import Stage4PlanSessionPool
 from tests.test_stage4_agent_boundary import (
     _client as _boundary_client, _profile,
 )

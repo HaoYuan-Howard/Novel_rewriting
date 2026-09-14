@@ -2,7 +2,7 @@
 
 Stage2 语义审阅（Global 逐项审阅、Blueprint 章审与跨章复核、问题义务、审批继承、阅读凭证
 与 `--close-review` 免费收口）已于 2026-09 整体退役，原 `docs/schema/stage2_review.md` 删除。
-下游前置由统一机械准入承接（`novel/admission.py`）：必要产物可读、当前、无未恢复 INVALID
+下游前置由统一机械准入承接（`novel/orchestrator/mechanical_admission.py`）：必要产物可读、当前、无未恢复 INVALID
 且机械检查全部通过；语义结论只以报告 `unver` 行披露，最终随交付披露该限制。
 
 ## Blueprint v10 剧情契约
@@ -56,7 +56,7 @@ terminal 等待人工后继时存活，不计作阶段输出：
 
 ## 统一机械准入（语义审阅退役后的下游前置）
 
-Stage2 下游不再有审阅停点：Blueprint 生成前由 `novel/admission.py::blueprint_generation_ready`
+Stage2 下游不再有审阅停点：Blueprint 生成前由 `novel/orchestrator/mechanical_admission.py::blueprint_generation_ready`
 检查人物登记、Global、原文与称名投影各自可读、当前、无未恢复 INVALID，且人物/Global
 机械检查全部通过；Stage4 起由 `stage4_ready` 再要求完整 Blueprint 与联合机械检查。
 机械检查缺失、未运行或不可判仍阻断（`skipped` 与机械类 `unver` 视为不可判）；
@@ -178,7 +178,7 @@ prepared 载体和写入集合；两个 artifact 的版本、长期依赖与修�
 这是人物 producer 与 `stage2.blueprint` 之间的注册、版本化边界。由
 `novel/stages/stage2/characters.py::_projection` 从当前 MainText 和人物产物确定性重算；
 Global 不写入该投影。投影存在与 Global 正式可用共同构成 Blueprint 生成的机械准入
-（`novel/admission.py::blueprint_generation_ready`），不构成越过准入的许可。
+（`novel/orchestrator/mechanical_admission.py::blueprint_generation_ready`），不构成越过准入的许可。
 
 顶层只含 `chapters[]`；每章四格全部必填：
 

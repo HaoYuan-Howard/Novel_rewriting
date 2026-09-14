@@ -25,7 +25,7 @@ from novel.errors import ArtifactUnreadable, GateBlocked, ProvenanceRefused
 from novel.llm import agent_runs, stage6_hook_runs, stage6_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import AUDIT_REL, CostLedger, ledger_path
-from novel.node_agents import Stage6HookAgent
+from novel.orchestrator.node_agents import Stage6HookAgent
 from novel.run import RunContext
 from novel.stages.stage6 import hook, prompts
 from novel.store import ArtifactStore

@@ -12,7 +12,7 @@ from contracts.artifacts import STAGE0_CLEAN_TEXT, STAGE1_HOOK_COPY, STAGE1_MAIN
 from contracts.schema.stage1 import HookCopy
 from contracts.schema.stage6_prepare import Stage6Prepare, PrepareMutationJournal
 from novel.api.app import UI_HEADER, create_app
-from novel.node_agents import Stage6PrepareAgent
+from novel.orchestrator.node_agents import Stage6PrepareAgent
 from novel.orchestrator import jobs
 from novel.stages.stage6 import prepare
 from novel.store import ArtifactStore

@@ -544,7 +544,7 @@ def test_executor_profile_refuses_unmigrated_nodes_and_unknown_capability_pairs(
 
 def test_executor_runtime_registries_close_over_the_same_eleven_nodes():
     """能力公开面、跑法矩阵与真实 factory 缺任何一边都必须响亮地红。"""
-    from novel.node_agents import EXECUTOR_FACTORIES
+    from novel.orchestrator.node_agents import EXECUTOR_FACTORIES
 
     expected = set(AGENT_EXECUTOR_NODES)
     assert len(expected) == len(N.EXECUTOR_PROFILED_RUNS) == 11
@@ -557,7 +557,7 @@ def test_executor_runtime_registries_close_over_the_same_eleven_nodes():
 def test_node_agent_result_cannot_silently_green_a_red_report():
     """报告与 CLI 退出判定是同一事实；`passed` 不得再靠默认值猜。"""
     from contracts.schema.report import CheckReport
-    from novel.node_agents import NodeAgentResult
+    from novel.orchestrator.node_agents import NodeAgentResult
 
     report = CheckReport.model_construct(passed=False)
     assert inspect.signature(NodeAgentResult).parameters['passed'].default \

@@ -205,7 +205,7 @@ def test_completed_history_still_requires_original_paid_evidence(tmp_path, monke
 
 def test_readonly_foreign_reservation_scan_shares_the_real_commit_guard(tmp_path, monkeypatch):
     from novel.llm import stage7_runs
-    from novel.node_agents import Stage7RenameAgent
+    from novel.orchestrator.node_agents import Stage7RenameAgent
     from tests.test_stage7_rename_agent import (
         _Driver, _SimulatedProcessExit, _ctx as agent_ctx, _patch_business, _response,
     )

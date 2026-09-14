@@ -23,7 +23,7 @@ from novel.llm import stage4_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmFailed
 from novel.llm.ledger import CostLedger, ledger_path
-from novel.node_agents import (
+from novel.orchestrator.node_agents import (
     Stage4DesignAgent, Stage4DesignSessionPool, build_node_agent,
 )
 from novel.run import RunContext

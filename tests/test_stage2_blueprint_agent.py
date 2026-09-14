@@ -23,7 +23,7 @@ from novel.errors import GateBlocked, ProvenanceRefused
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmFailed
 from novel.llm.ledger import CostLedger, ledger_path
-from novel.node_agents import BlueprintSessionPool, Stage2BlueprintAgent
+from novel.orchestrator.node_agents import BlueprintSessionPool, Stage2BlueprintAgent
 from novel.run import RunContext
 from novel.stages.stage2 import extract
 from novel.store import ArtifactStore

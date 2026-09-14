@@ -4,7 +4,7 @@
 正文均为显式合成夹具，验证来源、费用与恢复，不作为语义质量验收。
 Stage2 语义审阅退役后：上传链不再有 global-review 接受、rework 派修、
 knowledge links 关闭尾与 ``--close-review``；蓝图册放行改由统一机械准入
-（``novel/admission.py``）在付费动作前判定，语义未审随报告披露。
+（``novel/orchestrator/mechanical_admission.py``）在付费动作前判定，语义未审随报告披露。
 """
 from __future__ import annotations
 

@@ -262,7 +262,7 @@ def _proof(decision) -> approvals._ApprovalProof:
 
 @pytest.fixture
 def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    from novel import admission
+    from novel.orchestrator import mechanical_admission as admission
     from novel.work_units import initialize_workflow
     initialize_workflow(tmp_path)
     book = tmp_path / f'design_{SID}'
@@ -414,7 +414,7 @@ def test_design_apply_decided_view_and_plan_authorization_are_current(isolated):
 
 def test_design_entry_requires_mechanical_admission(isolated, monkeypatch):
     """Stage2 语义审阅退役后，A 的前置由统一机械准入驱动，不再是 gate['s2']。"""
-    from novel import admission
+    from novel.orchestrator import mechanical_admission as admission
     base, _state = isolated
     template = _template(base)
     request = _accept_all(template)

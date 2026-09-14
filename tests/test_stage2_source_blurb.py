@@ -12,7 +12,7 @@ from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.stage1 import HookCopy
 from contracts.schema.stage2 import GlobalEdit
 from novel.core.evidence import without_global_evidence
-from novel.node_agents import Stage2GlobalAgent
+from novel.orchestrator.node_agents import Stage2GlobalAgent
 from novel.stages.stage2 import extract, grounding
 from novel.stages.stage2.source_blurb import (
     hook_evidence_problems, manual_hook_evidence, normalize_hook_evidence,

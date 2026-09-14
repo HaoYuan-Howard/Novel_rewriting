@@ -52,7 +52,7 @@ def _design_template_fixture(monkeypatch):
         patch.setattr(approvals.paths, 'resolve_novel_dir', lambda *_args: Path('unused'))
         # Stage2 语义审阅退役后 design_template 前置为统一机械准入；
         # 本组只测模板投影，准入结论由专用用例覆盖，这里合成 ok。
-        from novel import admission
+        from novel.orchestrator import mechanical_admission as admission
 
         patch.setattr(admission, 'stage4_ready', lambda _b, _s: admission.AdmissionCheck(
             'stage4', True))

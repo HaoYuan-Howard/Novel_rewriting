@@ -3453,7 +3453,7 @@ def test_delivery_reports_stage2_semantic_unreviewed_as_disclosure_not_failure(
         base, monkeypatch):
     """语义未审随交付如实披露；证明不了的一律不倒成 ready。"""
     from novel.orchestrator import delivery
-    from novel import admission
+    from novel.orchestrator import mechanical_admission as admission
 
     novel_dir = Path(base) / 'FQ_隔离交付_77'
     novel_dir.mkdir()

@@ -20,7 +20,7 @@ from contracts.schema.knowledge import (
 from novel import paths
 from novel.agents.session_client import SessionAgentClient, agent_json_schema
 from novel.errors import ProvenanceRefused, TerminalState
-from novel.node_agents import Stage2GlobalAgent
+from novel.orchestrator.node_agents import Stage2GlobalAgent
 from novel.llm import response_repair, stage2_global_runs
 from novel.llm.client import LlmFailed
 from novel.llm.ledger import AUDIT_REL

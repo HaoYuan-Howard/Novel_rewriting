@@ -11,7 +11,7 @@ from contracts.schema.characters import CharactersResponse
 from contracts.schema.knowledge import KnowledgeAgentTurnResponse
 from novel.errors import ProvenanceRefused
 from novel.llm import agent_runs
-from novel.node_agents import Stage2CharactersAgent
+from novel.orchestrator.node_agents import Stage2CharactersAgent
 from novel.stages.stage2 import characters
 from novel.store import ArtifactStore
 from tests.test_stage2_characters import _ctx, _response, _wire

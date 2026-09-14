@@ -7,7 +7,7 @@ from contracts.schema import decode_artifact, encode_artifact
 from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.stage2 import GlobalEditCommit
 from novel.errors import GateBlocked
-from novel.node_agents import Stage2GlobalAgent
+from novel.orchestrator.node_agents import Stage2GlobalAgent
 from novel.stages.stage2 import extract
 from novel.store import ArtifactStore
 from tests.test_stage2_global_agent import _ctx, _free_ctx, _Driver, _full, _response_global
@@ -81,7 +81,7 @@ def test_real_cli_free_edit_reports_current_core_and_replays_without_rebuy(tmp_p
 def test_joint_half_invalid_has_free_cli_template_edit_and_pending_review(
         tmp_path, capsys, monkeypatch, stop_rel):
     from novel.cli.main import _run_stage2
-    from novel.node_agents import Stage2AnalyzeAgent
+    from novel.orchestrator.node_agents import Stage2AnalyzeAgent
     from novel.stages.stage2 import analyze
     from tests.test_stage2_analyze import _ctx as analyze_ctx, _driver, _response
 

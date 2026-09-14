@@ -447,7 +447,7 @@ def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
         assert isinstance(resolved, AgentExecutorBackend)
         ctx.executor_backend = resolved
         ctx.executor_profile = resolved.profile
-        from novel.node_agents import build_node_agent
+        from novel.orchestrator.node_agents import build_node_agent
 
         kwargs: dict[str, object] = {}
         if node == 'stage4.plan' and (
@@ -1947,10 +1947,10 @@ def _cmd_run(a: argparse.Namespace) -> int:
         print(f'  parent_run_id : {parent_id}', file=sys.stderr)
     # Stage2 机械准入是**运行边界**：Blueprint 生成前要求人物/Global/原文/
     # 称名投影机械可用；Stage4 起另要求完整 Blueprint。语义结论不在这里判定，
-    # 以报告 unver 与统一准入的披露表达（`novel/admission.py`）。
+    # 以报告 unver 与统一准入的披露表达（`novel/orchestrator/mechanical_admission.py`）。
     if paid and a.node in {'stage2.blueprint', 'stage4.design', 'stage4.plan',
                            'stage4.context', 'stage7.assemble'}:
-        from novel import admission
+        from novel.orchestrator import mechanical_admission as admission
         target = 'stage2.blueprint' if a.node == 'stage2.blueprint' else 'stage4'
         gate = (admission.blueprint_generation_ready(a.base, a.sid) if target == 'stage2.blueprint'
                 else admission.stage4_ready(a.base, a.sid))

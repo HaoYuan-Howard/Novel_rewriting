@@ -560,7 +560,7 @@ def plan_book_from_overview(
         # ⚠ 先于通用 upstream-invalid 分类：Stage2 的 `.INVALID` 是明确的
         # 准入阻断，理由要精确到产物。
         if why_blocked is None and node in ('stage2.blueprint', 'stage4.design') and spec.paid:
-            from novel import admission
+            from novel.orchestrator import mechanical_admission as admission
             gate = (admission.blueprint_generation_ready(base, sid)
                     if node == 'stage2.blueprint'
                     else admission.stage4_ready(base, sid))

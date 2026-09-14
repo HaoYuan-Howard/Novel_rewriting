@@ -779,7 +779,7 @@ def final_gate_book(tmp_path, monkeypatch):
     # Stage6 prepare 是 Hook 定稿的新前置：经真实 producer + 免费独立接受建立。
     import json as _json
 
-    from novel.node_agents import Stage6PrepareAgent
+    from novel.orchestrator.node_agents import Stage6PrepareAgent
     from tests.test_stage2_global_agent import _Driver as _PrepareDriver
     from tests.test_stage2_global_agent import _profile as _prepare_profile
 

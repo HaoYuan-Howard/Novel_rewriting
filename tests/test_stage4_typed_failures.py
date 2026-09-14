@@ -31,7 +31,7 @@ from contracts.schema.stage4 import EvidenceBindingResponse, PlanChapters
 from contracts.schema.report import finding
 from novel import prov
 from novel.errors import GateBlocked, TerminalState
-from novel.node_agents import Stage4PlanSessionPool
+from novel.orchestrator.node_agents import Stage4PlanSessionPool
 from novel.llm.typed_failures import TypedFailure, WitnessCollector, make
 from novel.report.findings import ran
 from novel.stages.stage4 import checks, plan

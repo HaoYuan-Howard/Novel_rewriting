@@ -27,7 +27,7 @@ from novel.llm import stage2_global_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmFailed
 from novel.llm.ledger import AUDIT_REL, CostLedger, ledger_path
-from novel.node_agents import Stage2GlobalAgent
+from novel.orchestrator.node_agents import Stage2GlobalAgent
 from novel.run import RunContext
 from novel.stages.stage2 import extract
 from novel.store import ArtifactStore

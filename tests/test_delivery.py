@@ -10,7 +10,9 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from novel import admission, paths, prov
+from novel import paths, prov
+
+from novel.orchestrator import mechanical_admission as admission
 from novel.api.app import create_app
 from novel.errors import ArtifactUnreadable, BlockingFindingsUnresolved, UpstreamStale
 from novel.orchestrator import delivery

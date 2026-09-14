@@ -727,7 +727,7 @@ def test_stage4_design_and_plan_are_two_independent_paid_dispatches(
 def test_stage4_repair_aggregate_recovery_dispatches_before_any_model_surface(
         monkeypatch, tmp_path, capsys):
     """prepared 补交是 FREE producer；不解析旧票，不构造 agent/client。"""
-    from novel import node_agents
+    from novel.orchestrator import node_agents
     from novel.cli import main as M
     from novel.orchestrator import approvals
     from novel.stages.stage4 import plan
@@ -839,7 +839,7 @@ def test_stage4_replan_requires_a_current_strategy_rejection_and_refreshes_only_
 
 def test_profiled_stage4_replan_passes_the_resolved_scope_to_agent(
         monkeypatch, tmp_path):
-    from novel import node_agents
+    from novel.orchestrator import node_agents
     from novel.cli import main as M
     from novel.orchestrator import approvals
 
@@ -1514,7 +1514,7 @@ def test_legacy_backend_uses_provider_factory_instead_of_implicit_deepseek(
 def test_profiled_dispatch_never_constructs_a_deepseek_client(
         tmp_path, monkeypatch, node, flags, expected_agent_kwargs):
     from novel.cli import main as M
-    from novel import node_agents
+    from novel.orchestrator import node_agents
 
     contexts = []
     seen = []
@@ -1579,7 +1579,7 @@ def test_profiled_dispatch_renders_report_and_maps_passed_false_to_exit_one(
     from contracts.schema.report import (
         CheckReport, ProvenanceSection, RuleLine, StatusCounts,
     )
-    from novel import node_agents
+    from novel.orchestrator import node_agents
     from novel.cli import main as M
     from novel.llm import stage5_runs
 
@@ -1641,7 +1641,7 @@ def test_profiled_stage4_infeasible_is_landed_exit_one(
     from contracts.schema.stage4 import (
         BindingConcern, BindingInfeasibilityWitness, EvidenceBinding,
     )
-    from novel import node_agents
+    from novel.orchestrator import node_agents
     from novel.cli import main as M
     from novel.orchestrator import approvals
 
@@ -1692,7 +1692,7 @@ def test_profiled_stage4_infeasible_is_landed_exit_one(
 def test_profiled_stage4_zero_cost_recovery_never_requires_design_review(
         tmp_path, monkeypatch, flags):
     """即使未来接入 executor，旧 Plan 的免费恢复也不能追溯要求 A 人审。"""
-    from novel import node_agents
+    from novel.orchestrator import node_agents
     from novel.cli import main as M
     from novel.orchestrator import approvals
 
@@ -1723,7 +1723,7 @@ def test_profiled_stage4_zero_cost_recovery_never_requires_design_review(
 def test_profiled_gate_blocked_remains_exit_two_without_a_stack(
         tmp_path, monkeypatch, capsys):
     """agent 把候选写成 `.INVALID` 后抛 GateBlocked：没正式交付，仍是 exit 2。"""
-    from novel import node_agents
+    from novel.orchestrator import node_agents
     from novel.cli import main as M
     from novel.errors import GateBlocked
 
@@ -1845,7 +1845,7 @@ def test_profiled_preview_without_egress_approval_is_visible_but_not_executable(
 def test_profiled_cli_run_without_egress_approval_refuses_before_context(
         tmp_path, monkeypatch, capsys):
     from novel.cli import main as M
-    from novel import node_agents
+    from novel.orchestrator import node_agents
 
     opened = []
     dispatched = []

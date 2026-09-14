@@ -225,7 +225,7 @@ def test_real_design_and_structure_workpacks_are_read_only_and_zero_spawn(
                for row in design.groups[-1].items)
 
     plan_ctx = _ctx(book, 'stage4.plan')
-    from novel.node_agents import Stage4PlanSessionPool
+    from novel.orchestrator.node_agents import Stage4PlanSessionPool
     calls = []
     def refuse_unneeded_model(purpose, chapter):
         calls.append((purpose, chapter))

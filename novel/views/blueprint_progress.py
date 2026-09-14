@@ -1,7 +1,7 @@
 """Blueprint 生成检查点的轻投影；不构建 prompt、证据包或任何审阅/接受语义。
 
 Stage2 语义审阅已退役：这里只回答「每章生成检查点跑到哪了」，
-语义未审由报告 ``unver`` 行与统一准入（``novel.admission``）分别披露。
+语义未审由报告 ``unver`` 行与统一准入（``novel.orchestrator.mechanical_admission``）分别披露。
 """
 from __future__ import annotations
 

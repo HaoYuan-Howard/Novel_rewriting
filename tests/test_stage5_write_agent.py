@@ -18,7 +18,7 @@ from novel.errors import ProvenanceRefused
 from novel.llm import stage5_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, audit_path, ledger_path
-from novel.node_agents import Stage5SessionPool, build_node_agent
+from novel.orchestrator.node_agents import Stage5SessionPool, build_node_agent
 from novel.observability import RequestProgress
 from novel.run import RunContext
 from novel.stages.stage5 import write

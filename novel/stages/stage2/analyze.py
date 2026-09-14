@@ -504,7 +504,7 @@ def refresh_review(ctx: RunContext) -> None:
     """Stage2 语义审阅退役后的兼容空操作。
 
     联合首抽提交后不再有 GlobalReview 刷新面：审阅文件不再生产，也不被
-    任何闸消费（机械准入见 ``novel/admission.py``，语义未审由报告 ``unver``
+    任何闸消费（机械准入见 ``novel/orchestrator/mechanical_admission.py``，语义未审由报告 ``unver``
     行与交付披露表达）。保留函数是因为 ``analyze_recovery`` 的免费恢复
     尾窗仍调用它；旧盘上的历史审阅文件保持原样，不再续写。
     """

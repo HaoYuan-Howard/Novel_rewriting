@@ -28,7 +28,7 @@ from novel.errors import GateBlocked, ProvenanceRefused
 from novel.llm import agent_runs, stage7_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import AUDIT_REL, CostLedger, ledger_path
-from novel.node_agents import Stage7RenameAgent, build_node_agent
+from novel.orchestrator.node_agents import Stage7RenameAgent, build_node_agent
 from novel.run import RunContext
 from novel.stages.stage7 import rename
 

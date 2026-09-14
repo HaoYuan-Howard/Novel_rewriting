@@ -2706,7 +2706,7 @@ def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
 
     不支持跳章首次抽取；定向修订必须走现有蓝图的编辑/返修入口。
     正式 producer 始终写 checkpoint，checkpoint 记录实际下发状态后的请求身份。
-    Blueprint 生成前的机械准入由统一 ``novel.admission`` 在调度入口判定。
+    Blueprint 生成前的机械准入由统一 ``novel.orchestrator.mechanical_admission`` 在调度入口判定。
     """
     store = ArtifactStore(ctx)
     main_text = _read_main_text(store)
