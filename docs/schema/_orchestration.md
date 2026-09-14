@@ -271,7 +271,7 @@ argv 的形态是：
 
 ⚠ **退出码 1 不等于崩溃**：`1` 只表「跑完了，判定不通过」；
 崩溃是 **`70`（结论未知，是 bug，栈在 stderr）**，与 `jobs.py` worker 的数同源。
-取值面唯一落点 `novel/cli/exit_codes.py`（五个数）。
+取值面唯一落点 `novel/exit_codes.py`（五个数）。
 
 ### 2.4 `RunContractV2` / `ExecutionEpoch` —— headless agent 的稳定合同与可滚动执行身份
 
@@ -558,7 +558,7 @@ delivery 终验未闭合时只运行`novel/orchestrator/delivery.py` 的确定�
 > | `1`（`CHECK_FAILED`） | 产物**已经落盘**，校验报告有阻断级红行 | 打开那一层的屏看红行并裁决，**多半不必重跑** |
 > | `2` / `3` / `70` | 压根没跑成 | 修完重跑 |
 >
-> 判据的唯一落点是 `novel/cli/exit_codes.py::landed` / `landed_but_red`。
+> 判据的唯一落点是 `novel/exit_codes.py::landed` / `landed_but_red`。
 > exit 1 是独立的第五态 `landed_red`，并保留 `JobRecord.note`
 > （`jobs.LANDED_RED_NOTE`）与队列的停止理由。它仍然**停住同书 lane**等待人工裁决；
 > 状态分辨率提升不等于授权队列越过红报告继续扣费。

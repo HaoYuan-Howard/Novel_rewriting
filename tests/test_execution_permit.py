@@ -21,7 +21,7 @@ from contracts.schema.api import (
 from contracts.schema.orchestration import NovelOverview, OverviewSummary
 from contracts.schema.stage5 import ReviewerRewriteExecutionState
 from novel import paths
-from novel.cli import exit_codes as X
+from novel import exit_codes as X
 from novel.cli.main import main
 from novel.errors import ArtifactUnreadable, TerminalState, UnsupportedRunMode
 from novel.orchestrator import execution_permit as P

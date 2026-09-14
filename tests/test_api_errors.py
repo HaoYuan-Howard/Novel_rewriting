@@ -251,7 +251,7 @@ def test_path_refused_is_the_one_that_differs_from_the_exit_code():
     解法不是给异常分子类，是**在边界上先验**（路由第一件事调 `paths.check_sid`）。
     这条测试钉的是「表里那一格仍然是 500」——边界那一半由 HTTP 行为测试查。
     """
-    from novel.cli import exit_codes
+    from novel import exit_codes
     assert H.status_of(E.PathRefused('x')) == 500
     assert exit_codes.REFUSED_BY_STRUCTURE == 3
     assert H.BAD_REQUEST == 400 and H.CSRF_REFUSED == 403

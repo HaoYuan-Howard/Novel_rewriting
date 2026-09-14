@@ -32,7 +32,7 @@ from contracts.schema.orchestration import (
     AgentProfile, LegacyExecutorBackend, LegacyLlmProfile,
 )
 from contracts.schema.stage7 import NameMapEdit
-from novel.cli import exit_codes as X
+from novel import exit_codes as X
 from novel.cli.main import main
 from novel.config import DEFAULT_CONCURRENCY
 from novel.errors import ApprovalRequired, TerminalState

@@ -20,7 +20,7 @@ from contracts.artifacts import STAGE4_WRITER_CONTEXT
 from contracts.schema import encode_artifact
 from contracts.schema.stage4 import CtxProvenance, WriterContext
 from novel import prov
-from novel.cli import exit_codes as X
+from novel import exit_codes as X
 from novel.errors import (
     GateBlocked, ProvenanceRefused, ResponseRepairRequired, SourceConflict,
     TerminalState,

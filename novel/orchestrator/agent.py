@@ -63,7 +63,7 @@ from novel.agent_capabilities import (
 from novel.appendlog import (
     append_line, append_line_under_process_lock, append_transaction,
 )
-from novel.cli.exit_codes import CRASH, landed
+from novel.exit_codes import CRASH, landed
 from novel.commander_context import (
     COMMANDER_ADMISSION_ID_ENV, COMMANDER_CONTRACT_SHA256_ENV,
     COMMANDER_EPOCH_ID_ENV,

@@ -30,7 +30,7 @@ from contracts.schema.stage5 import (
 )
 from novel import agent_session_audit, paths, prov, work_units
 from novel.appendlog import path_transaction_lock
-from novel.cli.exit_codes import CRASH
+from novel.exit_codes import CRASH
 from novel.errors import ArtifactUnreadable, NovelError
 from novel.llm.agent_runs import canonical_sha256
 from novel.llm.ledger import ledger_path as cost_ledger_path, read_jsonl_rows

@@ -7,7 +7,7 @@ import pytest
 
 from novel import config
 from novel.cli import main as cli
-from novel.cli import exit_codes as X
+from novel import exit_codes as X
 from novel.llm.client import LlmClient
 from novel.llm.ledger import audit_path, ledger_path, read_jsonl_rows
 from novel.orchestrator import execution_permit, operator, queue
@@ -179,7 +179,7 @@ def test_recovery_query_of_empty_base_is_readonly(tmp_path):
 ])
 def test_cli_recovery_coordinates_are_required_and_closed_before_producer(tmp_path, monkeypatch, node, flags):
     """真实参数入口不能把漏坐标或混合命令降成默认生成；拒绝先于上下文/产物写入。"""
-    from novel.cli import exit_codes
+    from novel import exit_codes
     monkeypatch.setattr(cli, '_dispatch', lambda *_a, **_k: pytest.fail('非法恢复参数不能进入 producer'))
     monkeypatch.setattr(LlmClient, '__init__', lambda *_a, **_k: pytest.fail('非法恢复参数不能构造 client'))
     assert cli.main(['run', node, '961', '--base', str(tmp_path), *flags]) == exit_codes.TERMINAL_STATE

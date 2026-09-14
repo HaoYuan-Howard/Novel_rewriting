@@ -26,7 +26,7 @@
 - paid 回答先 durable，再验证、落决定与补提交。checkpoint、prepared、正式文件任一窗口中断，
   优先免费恢复合法已购结果；来源损坏或账未知时不得签发新调用许可。
 - 退出码 1 是已落盘但不通过，2 是显式终态未落盘，70 是崩溃未知；落盘只调用
-  `novel/cli/exit_codes.py::landed` 判断。exit 0 与 delivery ready 分别判断，公开读面共用后端证明。
+  `novel/exit_codes.py::landed` 判断。exit 0 与 delivery ready 分别判断，公开读面共用后端证明。
 
 ## 调度与模型边界
 

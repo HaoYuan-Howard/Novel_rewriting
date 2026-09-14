@@ -1710,7 +1710,7 @@ def test_failed_global_resample_keeps_the_formal_round_and_archives_the_problem(
 
 
 def test_cli_dispatches_global_resample_through_the_dedicated_entry(monkeypatch):
-    from novel.cli import exit_codes as X
+    from novel import exit_codes as X
     from novel.cli import main as cli
 
     ctx = SimpleNamespace(node='stage2.global')

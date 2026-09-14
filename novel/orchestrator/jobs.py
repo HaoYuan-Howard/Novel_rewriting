@@ -42,8 +42,8 @@ from contracts.schema.orchestration import (
 )
 from novel import prov, run_identity
 from novel.appendlog import append_line
-from novel.cli import exit_codes as X
-from novel.cli.exit_codes import CRASH
+from novel import exit_codes as X
+from novel.exit_codes import CRASH
 from novel.errors import ApprovalRequired, TerminalState
 from novel.orchestrator.nodes import (
     build_steps, child_env, resolve_executor_backend, resolve_executor_egress,

@@ -523,7 +523,7 @@ def test_the_landed_predicate_has_exactly_one_home():
     编排层根本没有 ⇒ `jobs.fold` 自己写了一遍 `code == 0`，
     于是 `1` 与 `2`/`70` 在队列那一侧同名。
     """
-    from novel.cli import exit_codes as X
+    from novel import exit_codes as X
     assert [X.landed(c) for c in (X.OK, X.CHECK_FAILED)] == [True, True]
     assert not any(X.landed(c) for c in
                    (X.TERMINAL_STATE, X.REFUSED_BY_STRUCTURE, X.CRASH, None))

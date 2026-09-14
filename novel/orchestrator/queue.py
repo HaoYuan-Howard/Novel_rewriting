@@ -50,8 +50,8 @@ from contracts.schema.stage7 import NameMap
 from contracts.artifacts import STAGE4_BLIND_CANDIDATE
 from novel import paths, prov
 from novel.appendlog import append_line
-from novel.cli import exit_codes as X
-from novel.cli.exit_codes import CRASH
+from novel import exit_codes as X
+from novel.exit_codes import CRASH
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, BlockingFindingsUnresolved,
     GateBlocked, HumanEditProtected, QueueConflict, TerminalState, UpstreamMissing, UpstreamStale,

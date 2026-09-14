@@ -160,7 +160,7 @@ class UpstreamStale(TerminalState):
 
     ⚠⚠ **它此前是 `ProvenanceRefused`，也就是「代码自相矛盾」的退出码 3。** 那是错的：
     这条拒绝**自带恢复命令**（「请先从 <producer> 重建当前根上的产物」），
-    而 `novel/cli/exit_codes.py` 对两个码的定义是「2 = 数据/流程说这一步不该继续，
+    而 `novel/exit_codes.py` 对两个码的定义是「2 = 数据/流程说这一步不该继续，
     不是 bug」「3 = 代码自相矛盾，是 bug，栈要留全」。一条人照着做就能解开的前置条件
     落进 3，等于每次都在说「这是我们的 bug」，而编排层与 agent 执行者会据此停机。
 

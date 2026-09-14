@@ -59,7 +59,7 @@ from contracts.schema.orchestration import (
     LegacyLlmProfile, ProgressEvent,
 )
 from novel import commander_context, paths, prov, run_identity
-from novel.cli import exit_codes as X
+from novel import exit_codes as X
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, RefusedByStructure, TerminalState,
     UnsupportedRunMode, UpstreamMissing,

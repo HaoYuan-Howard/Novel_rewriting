@@ -18,7 +18,7 @@ from contracts.schema.stage5 import Chapter, ChapterSegment
 from contracts.schema.stage1 import MainText
 from novel import paths, prov
 from novel.errors import ApprovalRequired
-from novel.cli import exit_codes as X
+from novel import exit_codes as X
 from novel.cli.main import main
 from novel.orchestrator.state import readonly_ctx
 from novel.run import RunContext

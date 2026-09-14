@@ -930,7 +930,7 @@ def _run(*argv: str) -> int:
 @pytest.mark.corpus
 def test_the_review_runs_on_a_current_book_and_reports_all_baselines(box):
     """端到端重算当前正式成稿，并核对退出码与 HARD 结论。"""
-    from novel.cli import exit_codes as X
+    from novel import exit_codes as X
     root, sid = box
     rc = _run('run', 'stage5.review', sid, '--base', str(root))
     rev = json.loads((root / _BOOK / 'stage5' / 'review_1.json').read_text(encoding='utf-8'))
@@ -954,7 +954,7 @@ def test_the_review_runs_on_a_current_book_and_reports_all_baselines(box):
 @pytest.mark.corpus
 def test_wontfix_refuses_a_conclusion_that_does_not_exist(box):
     """⚠ **不给不存在的结论发豁免** ⇒ 显式终态（缺省是「不知道」，不许猜）。"""
-    from novel.cli import exit_codes as X
+    from novel import exit_codes as X
     root, sid = box
     _run('run', 'stage5.review', sid, '--base', str(root))
     assert _run('run', 'stage5.review', sid, '--wontfix',
@@ -969,7 +969,7 @@ def test_wontfix_needs_a_reason_and_a_third_segment_when_ambiguous(box):
       · 同一 (章, 判据) 有多条结论时**要人写出第三段**——原型那条路把它们**一并豁免**了，
         而「换了个位置的同类问题」不是人做的决定。
     """
-    from novel.cli import exit_codes as X
+    from novel import exit_codes as X
     root, sid = box
     _run('run', 'stage5.review', sid, '--base', str(root))
     assert _run('run', 'stage5.review', sid, '--wontfix', '1|band_drift',
@@ -1005,7 +1005,7 @@ def test_wontfix_lands_and_never_deletes_the_conclusion(box):
 
     「有人看过并决定不修」与「没人看过」必须分得开——那正是加这个机制的全部理由。
     """
-    from novel.cli import exit_codes as X
+    from novel import exit_codes as X
     root, sid = box
     _run('run', 'stage5.review', sid, '--base', str(root))
     rev = json.loads((root / _BOOK / 'stage5' / 'review_1.json').read_text(encoding='utf-8'))
@@ -1055,7 +1055,7 @@ def test_recheck_is_idempotent_on_stored_drafts(box):
     ⚠ 搬错一个字符类不会报错，只会让某类输入**静默地不再归一**——而落盘闸门与验收相
     看的是同一份字节，两边会一起错成一样，**谁也不会出声**。
     """
-    from novel.cli import exit_codes as X
+    from novel import exit_codes as X
     root, sid = box
     before = {p: p.read_bytes() for p in (root / _BOOK / 'stage5').glob('ch[0-9]*.json')
               if '.INVALID.' not in p.name and '.rejected.' not in p.name}

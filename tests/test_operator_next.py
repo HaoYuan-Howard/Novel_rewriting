@@ -20,7 +20,7 @@ from contracts.schema.api import (
 from contracts.schema.orchestration import (
     NovelOverview, OverviewSummary, QueueItem, RunResumeFrontierView, Step,
 )
-from novel.cli import exit_codes as X
+from novel import exit_codes as X
 from novel.cli.main import main
 from novel.errors import ArtifactUnreadable
 from novel.orchestrator import approvals as A
