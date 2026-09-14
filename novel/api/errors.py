@@ -171,15 +171,16 @@ STATUS: dict[type[NovelError], int] = {
 #: ⚠ 那条边界哪天松了（比如有人把付费路直接接进 HTTP 层），这张表要跟着改——
 #: 而上面那条测试会逼他先来读这段话。
 UNREACHABLE_OVER_HTTP: dict[str, str] = {
+    'WorkflowTransitionRefused': (
+        '显式工作流切换只在离线 CLI 子进程内推进（`workflow transition apply/recover`，'
+        '含 store 的人物投影提交）；异常在同一进程内折叠成 typed 终态退出码，'
+        'HTTP 父进程拿不到异常对象'),
     'Stage2ReviewBudgetRefused': (
         '已退役 Stage2 独立账的只读审计解码异常；当前 API、CLI 和 Supervisor '
         '只消费 work_units，不调用旧账读取器'),
     'GlobalEditCandidateRejected': (
         'Stage2 GlobalEdit 的纯内存候选边界；canonical CLI 会把它映射为终态退出码，'
         'Agent Supervisor 预检也会先转成私有控制流并在席位账内闭合，HTTP 路由不会接到异常对象'),
-    '_Stage2ReviewerPreflightRejected': (
-        'Agent Supervisor 已持久化 Reviewer action 后的内部预检控制流；只在同一 AgentRun '
-        '内转成 Stage2 canonical_action 拒因或 unknown，不会穿过 HTTP 边界'),
     '_LaunchDeferredByControl': (
         'RunSupervisor 在 launch ticket 线性化前发现 pause/stop 的内部控制信号；'
         '它只在 Supervisor.run 内被捕获并转成 paused/stopped lifecycle，'

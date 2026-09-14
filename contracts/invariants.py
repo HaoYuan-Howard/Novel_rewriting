@@ -1812,6 +1812,8 @@ VALUED_FLAGS: Final = {
                          '可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样',
     '--review-token': ('人工审阅动作的 opaque immutable-workpack token；内部内容、'
                        '证据、validation 与 execution 摘要不再由 Commander 散装搬运'),
+    '--review-decisions': ('Stage6 Prepare 独立 typed 复核决定路径（必填；服务进程放在'
+                           ' `<base>/_service/edits/` 的可信上传路径）'),
     '--apply-binding': ('完整人工 Stage4 EvidenceBinding 路径（必填；相对路径相对书目录，'
                         '也接受书目录内的绝对路径）'),
     '--emit-prepared-recovery-workpack': (

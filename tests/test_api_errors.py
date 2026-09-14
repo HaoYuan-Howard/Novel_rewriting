@@ -58,6 +58,7 @@ def _load_unreachable_families() -> None:
         'novel.orchestrator.agent',
         'novel.orchestrator.agent_supervisor',
         'novel.orchestrator.stage2_review_ledger',
+        'novel.orchestrator.workflow_transition',
         'novel.stages.stage2.extract',
     ):
         importlib.import_module(m)

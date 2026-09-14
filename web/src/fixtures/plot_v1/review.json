@@ -4,7 +4,7 @@
       "state": "accepted",
       "reason": "全文与原钩子核对，来信支持与首章连续范围成立",
       "subject_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
-      "review_token": "s6p1_fbddef1e2305ffb32dc347f689a3c4601f37457f49c69eebc1fcdd4dafa8c7d3",
+      "review_token": "s6p1_f4f326bae963c879a442b34ee1b1c995a3e0771b9cf98ff51f3d9c5e67e45da8",
       "prepare": {
         "source_blurb": {
           "facts": [
@@ -83,7 +83,7 @@
         "source_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
         "request_sha256": "0581be281f1a3be6114b951252da3a98cb702aaf6920680971346b984383f235",
         "decision": "accept",
-        "at": "2026-09-13T16:20:19.311836+00:00"
+        "at": "2026-09-14T18:33:15.028740+00:00"
       },
       "pending_commit": false
     },
@@ -107,7 +107,7 @@
     "edit_template": {
       "actor": "operator",
       "reason": "请填写本次原文核对结论",
-      "review_token": "s6p1_fbddef1e2305ffb32dc347f689a3c4601f37457f49c69eebc1fcdd4dafa8c7d3",
+      "review_token": "s6p1_f4f326bae963c879a442b34ee1b1c995a3e0771b9cf98ff51f3d9c5e67e45da8",
       "source_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
       "main_text_sha256": "6ace0b1e2048ec3193f0d9595a740d5c37c572f441dbac92e9dfd991b0df006c",
       "hook_copy_sha256": "bcb04e32665861d445b523c0cd11761cb27b5f6af92b700c068ba21db4b6e76a",
@@ -139,7 +139,7 @@
     "decision_template": {
       "actor": "operator",
       "reason": "请填写本次原文核对结论",
-      "review_token": "s6p1_fbddef1e2305ffb32dc347f689a3c4601f37457f49c69eebc1fcdd4dafa8c7d3",
+      "review_token": "s6p1_f4f326bae963c879a442b34ee1b1c995a3e0771b9cf98ff51f3d9c5e67e45da8",
       "source_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
       "decision": "uncertain",
       "edit": null
@@ -153,10 +153,10 @@
     "kind": "stage6",
     "sid": "123",
     "review_contract_version": "stage6-final-review-v5",
-    "review_identity_sha256": "2c4bc37ea0e592bf094ef80a9c886ec02180dff566077680b5ae841a4dd5bf33",
-    "validation_seal_sha256": "41d3d0ca44069dd6aac3202994fa1fe3bf61eb2d51713751a476d5bcc2b2db25",
-    "review_token": "s6r4_ceca8b681ef9e42d43f7031bd156ebc3552c67a9a0128c20411f2b8c64c43659",
-    "artifact_subject_sha256": "a3723dd43941ad43e2e7e7c03674fef970f015f92fc3ab1f2b931d5ca760302d",
+    "review_identity_sha256": "217b4e966ecf4dae3c9fc201f10d6547b0edf5af63541c56150e9cd5f17e7a54",
+    "validation_seal_sha256": "f7f082b25d838eb3d4af3d31bfaccc18fce349bd68026577a768296dadacf757",
+    "review_token": "s6r4_e91b4d0958d5e3c416ed7b8b26d2b184e8aa0abd9a1d67763f25b6738dc957df",
+    "artifact_subject_sha256": "b840b9ab82b91502504c93393760a4b6061f3a39766b6960eee8ca25e14af324",
     "rationale": "分别呈现回城来信、母亲知情与账房日常。",
     "materials": {
       "prepare_subject_sha256": "37dfd5b51348d6cbea64852f76d312d3c7ae3640ddd4f95a96fb8e808705c619",
@@ -251,8 +251,8 @@
             "key": "stage4/writer_context.json",
             "state": "fresh",
             "reason": "match",
-            "recorded_file": "b28f4c75be",
-            "now_file": "b28f4c75be",
+            "recorded_file": "32fe791c42",
+            "now_file": "32fe791c42",
             "recorded_consumed": "3d7c6675b1",
             "now_consumed": "3d7c6675b1"
           },
@@ -1284,7 +1284,7 @@
         "quality_rank": 3
       }
     ],
-    "workpack_sha256": "ceca8b681ef9e42d43f7031bd156ebc3552c67a9a0128c20411f2b8c64c43659",
+    "workpack_sha256": "e91b4d0958d5e3c416ed7b8b26d2b184e8aa0abd9a1d67763f25b6738dc957df",
     "disposition": "already_current",
     "current_slot": "c1",
     "current_approval": {
@@ -1293,8 +1293,8 @@
       "subject_sha256": "f6d8274494e5f1eaec8d2bb0b51855ff1a2f8aa58524fa85ed0a1a8a9b87d339",
       "basis": "human_verification",
       "semantic_review_seq": 1,
-      "workpack_sha256": "ceca8b681ef9e42d43f7031bd156ebc3552c67a9a0128c20411f2b8c64c43659",
-      "review_identity_sha256": "2c4bc37ea0e592bf094ef80a9c886ec02180dff566077680b5ae841a4dd5bf33"
+      "workpack_sha256": "e91b4d0958d5e3c416ed7b8b26d2b184e8aa0abd9a1d67763f25b6738dc957df",
+      "review_identity_sha256": "217b4e966ecf4dae3c9fc201f10d6547b0edf5af63541c56150e9cd5f17e7a54"
     }
   },
   "rename": {
@@ -1302,10 +1302,10 @@
     "kind": "stage7",
     "sid": "123",
     "review_contract_version": "stage7-final-review-v4",
-    "review_identity_sha256": "9a39f9d7f274227c3f4e535bad933ecc96d9d0257495eb0ae77531236832a950",
-    "validation_seal_sha256": "3755385e6dcdc7c1b8f041364f6f082a582ca170193d43dd3d1f56dd4fd131d3",
-    "review_token": "s7r3_42cba36551523ad7ac125dcabf0098280164cf704283635cc9c5686633c131ee",
-    "artifact_subject_sha256": "01dab15bed973bec9b3760574428f69f47daf9a9d535339aa290183dc3ca119e",
+    "review_identity_sha256": "e691c46a983c42ed725a662011429eebb7dd8e9d98245bff42a577e1ada68281",
+    "validation_seal_sha256": "54a67128915d1cb1222006bac2f03d02964b5ac87b80c9299f384a10a3a160e8",
+    "review_token": "s7r3_7bd6f56b20d241fa1a95cf779714f8f020793185c91da0cf6e3f406b6c1b2320",
+    "artifact_subject_sha256": "1d72f8af7c8a861e33d02bcc04338d36739eb4276c6e93b902960fb8ee977aff",
     "decision_subject_sha256": "1b3b7a14b101cc67424ee1322ea2b85fa4c9e5bede06b49060727c403006033c",
     "check_basis": "name_map_without_approval_or_delivery",
     "check": {
@@ -1352,8 +1352,8 @@
             "key": "stage4/plan_chapters.json",
             "state": "fresh",
             "reason": "match",
-            "recorded_file": "bfa5c299b7",
-            "now_file": "bfa5c299b7",
+            "recorded_file": "d22fc49e15",
+            "now_file": "d22fc49e15",
             "recorded_consumed": "9ef50cc82a",
             "now_consumed": "9ef50cc82a"
           },
@@ -1361,8 +1361,8 @@
             "key": "stage4/writer_context.json",
             "state": "fresh",
             "reason": "match",
-            "recorded_file": "b28f4c75be",
-            "now_file": "b28f4c75be",
+            "recorded_file": "32fe791c42",
+            "now_file": "32fe791c42",
             "recorded_consumed": "f7636c4de9",
             "now_consumed": "f7636c4de9"
           },
@@ -1370,8 +1370,8 @@
             "key": "stage6/hook.json",
             "state": "fresh",
             "reason": "match",
-            "recorded_file": "0a1c749c98",
-            "now_file": "0a1c749c98",
+            "recorded_file": "4acaa6e9fb",
+            "now_file": "4acaa6e9fb",
             "recorded_consumed": "6a4ac27ec7",
             "now_consumed": "6a4ac27ec7"
           }
@@ -1764,15 +1764,15 @@
         "新名好不好——没有确定性判据，现役闸门是人定稿"
       ]
     },
-    "workpack_sha256": "42cba36551523ad7ac125dcabf0098280164cf704283635cc9c5686633c131ee",
+    "workpack_sha256": "7bd6f56b20d241fa1a95cf779714f8f020793185c91da0cf6e3f406b6c1b2320",
     "disposition": "already_current",
     "current_approval": {
       "actor": "test:改名审阅者",
       "reason": "合成角色姓名替换与亲属关系已复核",
       "subject_sha256": "1b3b7a14b101cc67424ee1322ea2b85fa4c9e5bede06b49060727c403006033c",
       "origin": "human",
-      "workpack_sha256": "42cba36551523ad7ac125dcabf0098280164cf704283635cc9c5686633c131ee",
-      "review_identity_sha256": "9a39f9d7f274227c3f4e535bad933ecc96d9d0257495eb0ae77531236832a950"
+      "workpack_sha256": "7bd6f56b20d241fa1a95cf779714f8f020793185c91da0cf6e3f406b6c1b2320",
+      "review_identity_sha256": "e691c46a983c42ed725a662011429eebb7dd8e9d98245bff42a577e1ada68281"
     }
   }
 }
