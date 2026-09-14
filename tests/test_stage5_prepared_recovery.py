@@ -30,7 +30,7 @@ from contracts.schema.stage5 import (
     PreparedRecoveryWorkpack,
 )
 from novel.errors import ArtifactUnreadable, ProvenanceRefused, UnsupportedRunMode
-from novel import agent_session_audit
+from novel.agents import session_audit as agent_session_audit
 from novel.llm import agent_runs, stage5_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path

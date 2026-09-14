@@ -50,7 +50,7 @@
 
 `AgentProfile` 只记录一次选择，不自己声明“哪些组合可用”。可选 driver、角色、model、
 reasoning effort 与 execution mode 的唯一公开来源是 `GET /api/agent/capabilities`；组合校验由
-`novel/agent_capabilities.py` 的同一份 registry 完成，前端与 argv builder 都不能各抄一张表。
+`novel/agents/capabilities.py` 的同一份 registry 完成，前端与 argv builder 都不能各抄一张表。
 
 | `AgentProfile` 字段 | 类型 | 必填 | 内容 | 证据 |
 |---|---|---|---|---|
@@ -1101,7 +1101,7 @@ legacy thinking 或 provider max tokens。
 写入与恢复都必须把 accepted attempt 唯一联到 `_service/agent_sessions.jsonl` 的 current wire
 `started + turn`，逐项核 parent run、node/chapter、profile、subject、provider session、turn index、
 prompt/schema 与 requested/actual model/effort，再与 ledger 的 attempt/fingerprint/response SHA 闭合。
-模型证据统一由 `novel/agent_model_identity.py` 重算：回显 actual 必须精确等于 profile；未回显只允许
+模型证据统一由 `novel/agents/model_identity.py` 重算：回显 actual 必须精确等于 profile；未回显只允许
 registry 登记的 `driver-enforced`，且该 session turn 必须有 CLI 版本。后一种 checkpoint 的 `model`
 记录 adopted identity，但 session actual 仍为 `null`、ledger model 仍为 `unknown`；恢复、历史采用、
 聚合和 commit 均不得把它们倒填为已回显。未登记 driver、缺 CLI 版本或任何非空冲突一律拒绝。

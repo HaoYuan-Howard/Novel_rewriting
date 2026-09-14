@@ -15,7 +15,8 @@ from contracts.schema.common import InputEdge
 from contracts.schema.orchestration import AgentProfile
 from contracts.schema.report import finding
 from contracts.schema.stage6 import Hook, HookResponse, Mech
-from novel import agent_session_audit, paths, prov
+from novel import paths, prov
+from novel.agents import session_audit as agent_session_audit
 from novel.agents import (
     AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
 )

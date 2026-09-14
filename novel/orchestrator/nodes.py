@@ -39,7 +39,7 @@ from contracts.schema.orchestration import (
     Step,
 )
 from novel import paths as novel_paths, run_identity
-from novel.agent_capabilities import (
+from novel.agents.capabilities import (
     AgentProfileRefused, validate_executor_backend, validate_profile,
 )
 from novel.errors import UnsupportedRunMode

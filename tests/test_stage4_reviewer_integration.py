@@ -26,7 +26,7 @@ from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentProfile, AgentRunRecord, AgentRunStart, ExecutionEpoch,
     PipelineAgentProfiles, RunContractV2,
 )
-from novel import agent_session_audit
+from novel.agents import session_audit as agent_session_audit
 from novel.commanders import CodexCommanderDriver
 from novel.commanders import base as commander_base
 from novel.llm.ledger import ledger_path

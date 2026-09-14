@@ -6,7 +6,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Response
 
 from contracts.schema.api import AgentCapabilitiesResponse
-from novel.agent_capabilities import get_agent_capabilities
+from novel.agents.capabilities import get_agent_capabilities
 
 router = APIRouter(prefix='/agent')
 

@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from contracts.schema.orchestration import AgentProfile
-from novel.agent_model_identity import (
+from novel.agents.model_identity import (
     AgentModelIdentityRefused, resolve_agent_model_identity,
     resolve_ledger_model_identity, validate_checkpoint_model_identity,
 )

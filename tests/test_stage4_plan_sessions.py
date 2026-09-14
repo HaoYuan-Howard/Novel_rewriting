@@ -15,7 +15,8 @@ from typing import Any
 import pytest
 
 from contracts.schema.stage4 import ChapterBindingResponse
-from novel import agent_session_audit, prov, run_identity
+from novel import prov, run_identity
+from novel.agents import session_audit as agent_session_audit
 from novel.errors import ProvenanceRefused
 from novel.llm import stage4_runs
 from novel.node_agents import Stage4PlanSessionPool

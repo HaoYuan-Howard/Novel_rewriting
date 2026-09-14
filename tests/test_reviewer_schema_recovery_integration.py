@@ -18,7 +18,7 @@ import pytest
 
 from contracts.schema.api import DesignReviewRequest
 from contracts.schema.orchestration import AgentDeliveryOutcome
-from novel import agent_session_audit
+from novel.agents import session_audit as agent_session_audit
 from novel.agents import jsonl_runner
 from novel.commanders import CodexCommanderDriver
 from novel.commanders import base as commander_base

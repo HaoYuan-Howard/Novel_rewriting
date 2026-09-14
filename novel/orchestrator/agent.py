@@ -56,8 +56,9 @@ from contracts.schema.orchestration import (
     PipelineAgentProfiles, ReviewerActionRecord, RunContractV2,
     ReviewerSchemaRecoveryProof, ReviewerSeatLedger, ReviewerSeatTurn,
 )
-from novel import agent_session_audit, paths, prov, run_identity
-from novel.agent_capabilities import (
+from novel import paths, prov, run_identity
+from novel.agents import session_audit as agent_session_audit
+from novel.agents.capabilities import (
     AgentProfileRefused, provider_for_driver, reported_model_matches, validate_pipeline_profiles,
 )
 from novel.appendlog import (

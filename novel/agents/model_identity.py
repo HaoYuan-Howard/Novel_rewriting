@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from contracts.invariants import AgentDriver, AgentModelEvidence
 from contracts.schema.orchestration import AgentProfile
-from novel.agent_capabilities import (
+from novel.agents.capabilities import (
     reported_model_matches, unreported_model_evidence_for_driver, validate_profile,
 )
 from novel.errors import AgentModelIdentityRefused

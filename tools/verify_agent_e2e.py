@@ -46,11 +46,11 @@ from contracts.invariants import (                                  # noqa: E402
 from novel import (                                                  # noqa: E402
     agent_session_audit, operator_telemetry, paths, prov,
 )
-from novel.agent_capabilities import reported_model_matches           # noqa: E402
+from novel.agents.capabilities import reported_model_matches           # noqa: E402
 from novel.llm.ledger import (                                       # noqa: E402
     audit_path, ledger_path, read_jsonl_rows,
 )
-from novel.agent_model_identity import (                             # noqa: E402
+from novel.agents.model_identity import (                             # noqa: E402
     resolve_agent_model_identity, resolve_ledger_model_identity,
 )
 from novel.errors import AgentModelIdentityRefused                    # noqa: E402

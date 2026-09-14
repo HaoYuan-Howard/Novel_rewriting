@@ -18,7 +18,8 @@ from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
     GlobalGrounding,
 )
-from novel import agent_session_audit, paths, prov
+from novel import paths, prov
+from novel.agents import session_audit as agent_session_audit
 from novel.agents import AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage
 from novel.agents.session_client import agent_json_schema
 from novel.errors import GateBlocked, ProvenanceRefused, UpstreamStale

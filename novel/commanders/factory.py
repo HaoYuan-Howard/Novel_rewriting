@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from contracts.schema.orchestration import AgentProfile
-from novel.agent_capabilities import validate_profile
+from novel.agents.capabilities import validate_profile
 from novel.commanders.base import (
     CommanderDriver,
     CommanderRunner,

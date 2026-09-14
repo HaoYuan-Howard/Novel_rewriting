@@ -13,7 +13,8 @@ from pydantic import BaseModel, ConfigDict
 from contracts.invariants import STAGE4_DESIGN_MAX_CONCURRENCY
 from contracts.schema.api import DesignRepairScope
 from contracts.schema.orchestration import AgentProfile
-from novel import agent_session_audit, prov
+from novel import prov
+from novel.agents import session_audit as agent_session_audit
 from novel.agents import (
     AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
 )

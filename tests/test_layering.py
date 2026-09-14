@@ -244,7 +244,7 @@ _JSON_READ_ALLOWED = {
         'Commander 子执行准入账**不是产物**：'
         '`_service/commander_admissions.jsonl` 是 append-only 生命周期事件，'
         '需以 LF 作提交标记并关闭式解析；它不进来源账或 ARTIFACTS'),
-    'novel/agent_session_audit.py': (
+    'novel/agents/session_audit.py': (
         'commander / executor 会话审计**不是产物**：'
         '`_service/agent_sessions.jsonl` 是 append-only 事件流，'
         '只记 profile/session/usage/指纹与双轴终态，不进来源账或 ARTIFACTS；'

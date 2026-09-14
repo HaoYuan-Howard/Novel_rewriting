@@ -26,7 +26,7 @@ from contracts.schema.api import AgentProfileSettingsView
 from contracts.schema.base import StrictModel
 from contracts.schema.orchestration import PipelineAgentProfiles
 from novel import paths
-from novel.agent_capabilities import AgentProfileRefused, validate_pipeline_profiles
+from novel.agents.capabilities import AgentProfileRefused, validate_pipeline_profiles
 from novel.appendlog import path_transaction_lock
 from novel.errors import AgentProfileSettingsConflict
 

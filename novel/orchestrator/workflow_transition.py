@@ -429,7 +429,8 @@ def _assert_downstream_empty(base: Path, files: dict[str, str], *, source_versio
 _SOURCE_PROOF = r'''
 import hashlib, json, sys
 from pathlib import Path
-from novel import paths, agent_session_audit, work_units
+from novel import paths, work_units
+from novel.agents import session_audit as agent_session_audit
 from contracts.schema import workflow as workflow_schema
 from contracts.schema.workflow import WorkUnitRegistryV1, WorkUnitLedgerV2
 from novel.orchestrator import admission, agent, approvals, beacon, jobs, queue

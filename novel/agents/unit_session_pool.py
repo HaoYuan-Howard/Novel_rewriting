@@ -26,7 +26,8 @@ from typing import Any, Generic, Protocol, TypeVar
 from pydantic import BaseModel
 
 from contracts.schema.orchestration import AgentProfile
-from novel import agent_session_audit, prov
+from novel import prov
+from novel.agents import session_audit as agent_session_audit
 from novel.agents.base import AgentDriver, AgentProbe
 from novel.agents.session_client import (
     SessionAgentClient, ValidatedCheckpointAcceptance,

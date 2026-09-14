@@ -51,7 +51,8 @@ from contracts.schema.orchestration import (
     PipelineAgentProfiles, ProgressEvent, ReviewerActionRecord, RunContractV2,
     Step,
 )
-from novel import agent_session_audit, paths
+from novel import paths
+from novel.agents import session_audit as agent_session_audit
 from novel.commanders import context as commander_context
 from novel.agents.base import AgentUsage
 from novel.commanders import (

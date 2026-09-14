@@ -10,7 +10,8 @@ import time
 from contracts.schema.run_metrics import (
     AttemptMetrics, RunMetricChoice, RunMetricsView, UnitMetrics,
 )
-from novel import agent_session_audit, work_units
+from novel import work_units
+from novel.agents import session_audit as agent_session_audit
 from novel.errors import ArtifactUnreadable, TerminalState
 from novel.orchestrator import agent, jobs
 from novel.work_unit_usage import match_attempt, nonnegative, owner, read_cost_snapshot, summarize

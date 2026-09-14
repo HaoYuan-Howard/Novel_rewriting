@@ -18,7 +18,8 @@ from contracts.artifacts import (
 from contracts.schema.orchestration import AgentProfile
 from contracts.schema.api import DesignRepairScope
 from contracts.schema.stage4 import BlindCandidate, EvidenceBinding, PlanChapters
-from novel import agent_session_audit, paths, prov
+from novel import paths, prov
+from novel.agents import session_audit as agent_session_audit
 from novel.agents import (
     AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
 )

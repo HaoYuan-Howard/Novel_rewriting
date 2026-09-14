@@ -16,7 +16,7 @@ def seed_commander_response(base, *, sid='42', node='stage5.review', scope='clos
                             business_sha256='2' * 64, profile=None):
     """保存真实 request/raw/receipt、会话与成本，供新工作单元恢复消费。"""
     from dataclasses import replace
-    from novel import agent_session_audit as audit
+    from novel.agents import session_audit as audit
     from novel.llm import ledger
     from tests.test_agent_session_audit import _start, _turn
 

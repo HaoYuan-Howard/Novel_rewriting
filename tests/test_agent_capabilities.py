@@ -17,7 +17,7 @@ from contracts.schema.orchestration import (
     AgentExecutorBackend, AgentProfile, LegacyExecutorBackend, LegacyLlmProfile,
     PipelineAgentProfiles, PipelineConcurrency,
 )
-from novel import agent_capabilities as capabilities
+from novel.agents import capabilities as capabilities
 
 
 def _profile(*, driver: str = 'codex', model: str = 'gpt-5.6-sol',

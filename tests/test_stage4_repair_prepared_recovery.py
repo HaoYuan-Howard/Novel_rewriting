@@ -18,7 +18,8 @@ from contracts.schema.orchestration import (
     PipelineAgentProfiles, RunContractV2,
 )
 from contracts.schema.stage4 import BlindCandidate
-from novel import agent_session_audit, paths, prov
+from novel import paths, prov
+from novel.agents import session_audit as agent_session_audit
 from novel.agents.session_client import SESSION_PROTOCOL_VERSION
 from novel.errors import ArtifactUnreadable, ProvenanceRefused
 from novel.llm import agent_runs, stage4_runs

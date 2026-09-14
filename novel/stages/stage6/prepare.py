@@ -18,7 +18,8 @@ from contracts.schema.stage1 import MainText, HookCopy
 from contracts.schema.stage6_prepare import (PrepareResponse, PrepareDraft, PrepareEdit,
     PrepareDecision, PrepareProvenance, PrepareEditReceipt, PrepareSourceRebuild, PreparePaidSource,
     PrepareMutationJournal, PrepareState, PrepareWorkpack, Stage6Prepare, Stage6PrepareReview)
-from novel import paths, prov, runtime_layout, agent_session_audit
+from novel import paths, prov, runtime_layout
+from novel.agents import session_audit as agent_session_audit
 from novel.appendlog import process_append_lock
 from novel.errors import GateBlocked, ProvenanceRefused, UpstreamMissing, TerminalState
 from novel.llm import agent_runs, stage6_prepare_runs as runs

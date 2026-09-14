@@ -26,7 +26,8 @@ from contracts.schema.orchestration import (
     AgentProfile, AgentRunRecord, ReviewerActionRecord,
     ReviewerProtocolRecoveryProof, ReviewerSeatLedger,
 )
-from novel import agent_session_audit, paths
+from novel import paths
+from novel.agents import session_audit as agent_session_audit
 from novel.agents.base import decode_wire_json
 from novel.commanders.codex import CodexCommanderDriver
 from novel.llm.ledger import ledger_path as cost_ledger_path, read_jsonl_rows

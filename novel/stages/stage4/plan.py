@@ -1636,7 +1636,7 @@ def _finish_restored_agent_session(
         # 批次 4 章级池：live 章由 pool.finish 记录真实最后一轮；本进程
         # 零新 wire（全部 restored）时逐章幂等收口旧 session，语义与单
         # client 路一致，不把任一章的历史 provider id 冒充可 resume。
-        from novel import agent_session_audit
+        from novel.agents import session_audit as agent_session_audit
         closed_any = False
         if isinstance(source._pool, _PlanRecoveryPool):
             for restored in source._pool._restored.values():
@@ -1672,7 +1672,7 @@ def _finish_restored_agent_session(
         return False
     checkpoint = source.accepted_checkpoint(ctx.node)
     _live_code_guard(ctx, where=f'{ctx.node}.finish_restored_session')
-    from novel import agent_session_audit
+    from novel.agents import session_audit as agent_session_audit
     return agent_session_audit.finish_restored_session(
         ctx.novel_dir.parent,
         checkpoint,

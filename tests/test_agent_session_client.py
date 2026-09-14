@@ -12,7 +12,8 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from contracts.schema.orchestration import AgentProfile
-from novel import agent_session_audit, prov, work_units
+from novel import prov, work_units
+from novel.agents import session_audit as agent_session_audit
 from novel.agents import (
     CLAUDE_STRUCTURED_DELIVERY_FOOTER_V1,
     CLAUDE_STRUCTURED_DELIVERY_V1,

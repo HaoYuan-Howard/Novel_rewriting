@@ -11,7 +11,8 @@ import pytest
 
 from contracts.schema.orchestration import AgentProfile
 from contracts.schema.stage5 import ChapterResponse
-from novel import agent_session_audit, prov
+from novel import prov
+from novel.agents import session_audit as agent_session_audit
 from novel.agents import AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage
 from novel.errors import ProvenanceRefused
 from novel.llm import stage5_runs
