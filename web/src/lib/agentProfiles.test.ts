@@ -177,4 +177,48 @@ describe('agent profile draft/materialize', () => {
       errors: [],
     })
   })
+
+  it('节点覆盖不允许与默认执行者混用 Agent / Legacy 模式', () => {
+    const capabilities = agentCapabilities(null)
+    const draft = pipelineDraftOf(READY_PROFILES)
+    draft.executor_default = withBackendKind(draft.executor_default, 'legacy')
+    draft.executor_default.legacy_profile = {
+      provider: 'deepseek',
+      model: 'deepseek-v4-pro',
+      thinking_mode: 'on',
+      reasoning_effort: 'high',
+    }
+
+    const mixed = materializePipelineAgentProfiles(capabilities, {
+      ...draft,
+      executor_overrides: {
+        'node.dynamic-a': {
+          kind: 'agent',
+          agent_profile: {
+            ...EXECUTOR_PROFILE,
+            execution_mode: EXECUTOR_PROFILE.execution_mode ?? '',
+          },
+          legacy_profile: { ...draft.executor_default.legacy_profile },
+        },
+      },
+    })
+    expect(mixed.profiles).toBeNull()
+    expect(mixed.errors.join('\n')).toMatch(/不允许 Agent \/ Legacy 混用/)
+
+    const sameKind = materializePipelineAgentProfiles(capabilities, {
+      ...draft,
+      executor_overrides: {
+        'node.dynamic-b': {
+          kind: 'legacy',
+          agent_profile: { ...draft.executor_default.agent_profile },
+          legacy_profile: { ...draft.executor_default.legacy_profile },
+        },
+      },
+    })
+    expect(sameKind.errors).toEqual([])
+    expect(sameKind.profiles?.executor_overrides['node.dynamic-b']).toEqual({
+      kind: 'legacy',
+      profile: draft.executor_default.legacy_profile,
+    })
+  })
 })

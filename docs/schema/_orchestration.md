@@ -79,14 +79,17 @@ DeepSeek base URL 后继续复用它的模型回退、tokenizer、thinking wire 
 | `legacy` | `LegacyLlmProfile` | 经 `LegacyLlmDriver` / 直接 API client 执行；当前为 DeepSeek，未来 GLM 独立登记 |
 
 两种 variant 都必须同时携带 `kind + profile`，不得再用“有没有 AgentProfile”推断模式，也不得自动
-降级到另一种 backend。一次整书代跑用 `PipelineAgentProfiles` v2：
+降级到另一种 backend。一次整书选择内 executor 只允许一种模式（2026-09-14 用户裁决）：
+`executor_default` 与全部 `executor_overrides` 的 `kind` 必须一致——整跑要么纯 `agent`、
+要么纯 `legacy`，混用两种模式在构造期即被拒绝；同模式内的逐节点差异（模型、effort、thinking）
+不受影响。一次整书代跑用 `PipelineAgentProfiles` v2：
 
 | 字段 | 类型 | 必填 | 内容 | 证据 |
 |---|---|---|---|---|
 | `schema_version` | `2` | **是** | v1 的裸 `AgentProfile` 只在读边界无损迁移为 `kind=agent`；所有新写入只发 v2 | **契·码** |
 | `commander` | `AgentProfile` | **是** | 本轮工作包内的受托语义审阅身份；Commander 本身不走 legacy API | **契·码** |
-| `executor_default` | `ExecutorBackend` | **是** | 所有未覆盖付费 executor 节点的默认 backend | **契·码** |
-| `executor_overrides` | `{node: ExecutorBackend}` | 否；默认 `{}` | 只写逐节点差异；键严格属于 `AGENT_EXECUTOR_NODES`。stage 名、代码节点与退役节点一律拒绝 | **契·码** |
+| `executor_default` | `ExecutorBackend` | **是** | 所有未覆盖付费 executor 节点的默认 backend；其 `kind` 是本次选择的唯一 executor 模式 | **契·码** |
+| `executor_overrides` | `{node: ExecutorBackend}` | 否；默认 `{}` | 只写同模式内的逐节点差异；键严格属于 `AGENT_EXECUTOR_NODES`，值的 `kind` 必须与 `executor_default` 一致。stage 名、代码节点、退役节点与跨模式混用一律拒绝 | **契·码** |
 | `concurrency` | `PipelineConcurrency` | 否 | 显式冻结逐节点并发与整书、同根供应商总上限；未配置时序列化省略，保留既有 profiles 的字节身份 | **契·码** |
 
 `PipelineConcurrency.node_overrides` 只接受 `PIPELINE_PARALLEL_NODES` 中的节点和

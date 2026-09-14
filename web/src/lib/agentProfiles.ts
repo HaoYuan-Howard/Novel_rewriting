@@ -358,6 +358,13 @@ export function materializePipelineAgentProfiles(
       const result = materializeBackend(capabilities, override, `节点 ${node}`, node)
       errors.push(...result.errors)
       if (result.backend) overrides[node] = result.backend
+      if (
+        executorDefault.backend !== null
+        && result.backend !== null
+        && result.backend.kind !== executorDefault.backend.kind
+      ) {
+        errors.push(`节点 ${node}：执行者必须与默认执行者同一模式，不允许 Agent / Legacy 混用`)
+      }
       continue
     }
     if (executorDefault.backend?.kind === 'legacy') {

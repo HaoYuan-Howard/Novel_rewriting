@@ -173,7 +173,9 @@ class PipelineAgentProfiles(FrozenModel):
     ``agent`` 携 ``AgentProfile``，``legacy`` 携 ``LegacyLlmProfile``。旧 v1
     profile 只会被无损包成 ``kind=agent``，新序列化永远写显式分辨字段。
 
-    默认 backend 覆盖付费 executor 节点；节点覆盖只写差异。键必须属于
+    默认 backend 覆盖付费 executor 节点；节点覆盖只写差异，且**只允许同一种
+    模式**：全部 backend 的 ``kind`` 必须与 ``executor_default`` 一致，整跑要么
+    纯 agent、要么纯 legacy，混用两种模式在构造期即被拒绝。键必须属于
     ``AGENT_EXECUTOR_NODES``，不能拿 stage 名、代码节点或退役节点冒充。
     角色能力与每个 backend/profile 的组合仍由 registry 校验。
     """
@@ -217,6 +219,26 @@ class PipelineAgentProfiles(FrozenModel):
             raise ValueError(
                 f'executor_overrides 含非 executor 节点 {unknown}；'
                 f'只接受 {list(AGENT_EXECUTOR_NODES)}')
+        return self
+
+    @model_validator(mode='after')
+    def _single_executor_kind(self) -> PipelineAgentProfiles:
+        """一次选择内 executor 只允许一种模式（2026-09-14 用户裁决）。
+
+        ``executor_default`` 与全部 ``executor_overrides`` 必须同 ``kind``：
+        整跑要么纯 ``agent``、要么纯 ``legacy``，不得逐节点混用两种模式。
+        同模式内的逐节点差异（模型、effort、thinking）不受影响。
+        """
+        default_kind = self.executor_default.kind
+        mixed = sorted(
+            node for node, backend in self.executor_overrides.items()
+            if backend.kind != default_kind
+        )
+        if mixed:
+            raise ValueError(
+                f'executor_overrides 不允许与 executor_default 混用模式：'
+                f'节点 {mixed} 的 backend 不是 {default_kind!r}；'
+                '一次整书选择内 executor 必须统一为 agent 或 legacy')
         return self
 
 

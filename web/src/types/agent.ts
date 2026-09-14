@@ -52,7 +52,11 @@ export interface PipelineAgentProfiles {
   schema_version: 2
   commander: AgentProfile
   executor_default: ExecutorBackend
-  /** 键同样由 capability 响应的 executor_nodes 给出，前端不保存节点副本。 */
+  /**
+   * 键同样由 capability 响应的 executor_nodes 给出，前端不保存节点副本。
+   * 值的 kind 必须与 executor_default 一致：executor 整跑只允许一种模式，
+   * 不允许 Agent / Legacy 混用（后端在构造期关闭式拒绝）。
+   */
   executor_overrides: Record<string, ExecutorBackend>
   concurrency?: PipelineConcurrency
 }

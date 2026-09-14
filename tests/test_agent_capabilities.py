@@ -30,10 +30,57 @@ def _profile(*, driver: str = 'codex', model: str = 'gpt-5.6-sol',
 
 def test_executor_nodes_cover_all_paid_llm_nodes():
     """付费节点新增/退役时，executor 配置面不能静默漏接或误接代码节点。"""
-    assert len(AGENT_EXECUTOR_NODES) == 9
+    assert len(AGENT_EXECUTOR_NODES) == 11
     assert set(AGENT_EXECUTOR_NODES) == {
         node for node, spec in NODES.items() if spec.paid
     }
+
+
+def _legacy_profile(*, model: str = 'deepseek-v4-pro',
+                    thinking: str = 'on') -> LegacyLlmProfile:
+    return LegacyLlmProfile(
+        provider='deepseek', model=model,
+        reasoning_effort='high', thinking_mode=thinking,
+    )
+
+
+def test_pipeline_profiles_reject_mixed_executor_modes():
+    """executor 整跑只允许一种模式（2026-09-14 用户裁决）。
+
+    agent 默认 + legacy 覆盖、legacy 默认 + agent 覆盖都在构造期拒绝；
+    同模式内的逐节点差异（如 legacy flash 默认 + pro 钉死节点覆盖）不受影响。
+    """
+    with pytest.raises(ValidationError, match='混用模式'):
+        PipelineAgentProfiles(
+            commander=_profile(),
+            executor_default=AgentExecutorBackend(profile=_profile()),
+            executor_overrides={
+                'stage6.semantic': LegacyExecutorBackend(
+                    profile=_legacy_profile()),
+            },
+        )
+    with pytest.raises(ValidationError, match='混用模式'):
+        PipelineAgentProfiles(
+            commander=_profile(),
+            executor_default=LegacyExecutorBackend(profile=_legacy_profile()),
+            executor_overrides={
+                'stage2.blueprint': AgentExecutorBackend(profile=_profile()),
+                'stage6.semantic': LegacyExecutorBackend(profile=_legacy_profile()),
+            },
+        )
+    unified = PipelineAgentProfiles(
+        commander=_profile(),
+        executor_default=LegacyExecutorBackend(
+            profile=_legacy_profile(model='deepseek-flash')),
+        executor_overrides={
+            node: LegacyExecutorBackend(profile=_legacy_profile())
+            for node in AGENT_EXECUTOR_NODES
+            if NODES[node].model == 'deepseek-v4-pro'
+        },
+    )
+    resolved = capabilities.validate_pipeline_profiles(unified)
+    assert resolved.executor_overrides['stage4.plan'].profile.model \
+        == 'deepseek-v4-pro'
 
 
 def test_concurrency_capability_and_full_profiles_roundtrip_preserve_exact_trial():

@@ -288,7 +288,7 @@ preview/start 都携相同 `RunContinuationSource` 并由后端复验。运行�
 | `LegacyProviderCapability` | `id` · `label` · `models[]` | 直接 LLM API adapter 的稳定身份；当前只发布 DeepSeek，模型能力里继续给出 thinking/effort 与精确 `executor_nodes[]`，前端不得按模型名猜节点适用面 |
 | `LegacyLlmProfile` | `provider` · `model` · `reasoning_effort` · `thinking_mode` | 只保存改变模型行为的稳定选择，不保存 API key、base URL、代理、超时或缓存目录 |
 | `ExecutorBackend` | `{kind:'agent',profile:AgentProfile}` 或 `{kind:'legacy',profile:LegacyLlmProfile}` | `kind` 是唯一模式选择器；两套 profile 不得混搭，运行中也不得自动降级到另一种 backend |
-| `PipelineAgentProfiles` | `schema_version=2` · `commander` · `executor_default` · `executor_overrides{node: backend}` | Commander 固定使用 AgentProfile；默认 executor 和逐节点覆盖使用 `ExecutorBackend`。override 键只接受响应中的 executor 节点 |
+| `PipelineAgentProfiles` | `schema_version=2` · `commander` · `executor_default` · `executor_overrides{node: backend}` | Commander 固定使用 AgentProfile；默认 executor 和逐节点覆盖使用 `ExecutorBackend`。override 键只接受响应中的 executor 节点，值的 `kind` 必须与 `executor_default` 一致——一次选择内 executor 只允许一种模式 |
 | `PipelineConcurrency` | `node_overrides{node: int}` · `per_book` · `per_provider` | `PipelineAgentProfiles.concurrency` 的可选精确配置；随常用配置、preview/start、batch 与原配置续跑保留。缺失时省略序列化，不改写旧身份 |
 | `PipelineConcurrencyCapability` | `nodes[]` · `node_choices[]` · `default_node` · `defaults` · `total_min` · `total_max` · `scope` | `AgentCapabilitiesResponse.concurrency` 发布的唯一选择面；当前总槽作用域为同一输出根。界面不复制节点、档位和数值边界 |
 
