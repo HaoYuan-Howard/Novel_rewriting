@@ -8,3 +8,6 @@ tests/fixtures/** -text
 
 # 历史 HTTP 证据按原始字节验 SHA，混合换行也必须在新 checkout 原样保留。
 web/src/fixtures/backend_v1/** -text
+
+# 生成的前端取值域类型按字节对账（scripts/export_backend_types.py --check）。
+web/src/types/backend.generated.ts -text

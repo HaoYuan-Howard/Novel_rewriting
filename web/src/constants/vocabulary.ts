@@ -7,22 +7,26 @@
  * 其余一切走 Tailwind class。
  *
  * 状态语言 = 色 + 形 + 文字，三者齐备。只靠颜色区分状态是不合格的。
+ *
+ * 取值域联合（Freshness / Badge / Severity / JobState / InboxKind /
+ * FreshnessDisplay / StageId）单源自 types/backend.generated.ts（由
+ * scripts/export_backend_types.py 从 contracts/invariants.py 生成，
+ * tests/test_api_enums.py 对账）。此处只 re-export；Op、DotShape 等
+ * 无直接后端元组的显示层联合仍手写在本文件。
  */
+import type {
+  Badge,
+  Freshness,
+  FreshnessDisplay,
+  InboxKind,
+  JobState,
+  Severity,
+  StageId,
+} from '../types/backend.generated'
 
-export type Freshness = 'fresh' | 'stale' | 'unknown'
-export type Badge = 'pass' | 'amber' | 'fail'
-export type Severity = 'hard' | 'info' | 'metric' | 'unver'
-export type JobState = 'running' | 'ok' | 'landed_red' | 'failed' | 'unknown'
+export type { Badge, Freshness, FreshnessDisplay, InboxKind, JobState, Severity }
+
 export type Op = 'keep' | 'compress' | 'amplify' | 'rewrite'
-export type InboxKind =
-  | 'invalid'
-  | 'rejected'
-  | 'stalled'
-  | 'repairable'
-  | 'human_only'
-  | 'verification'
-  | 'upstream'
-  | 'approval'
 
 /** 状态形状：实心圆 / 实心方块 / 虚线空心圆 / 问号 / 空集。 */
 export type DotShape = 'circle' | 'square' | 'hollow' | 'question' | 'absent'
@@ -78,8 +82,6 @@ export const MISSING: FreshnessToken = {
   desc: '这份产物还没落盘',
   shape: 'absent',
 }
-
-export type FreshnessDisplay = Freshness | 'missing'
 
 export function freshToken(f: FreshnessDisplay): FreshnessToken {
   return f === 'missing' ? MISSING : (FRESH[f] ?? FRESH.unknown)
@@ -239,7 +241,7 @@ export const AGENT_STOPPED: JobStateToken = {
 
 export interface StageDef {
   n: string
-  key: string
+  key: StageId
   label: string
 }
 
