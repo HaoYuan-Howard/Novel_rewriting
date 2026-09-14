@@ -108,7 +108,7 @@ Executor/Commander 调用；不把不同输出根或不同供应商混算。节�
 能力接口与执行校验共同消费该登记，本文件不复制机械矩阵。
 
 Agent 矩阵之外的 direct 组合仍关闭式拒绝。Legacy backend 则按 provider registry 发布的精确
-model/node 能力关闭式校验：DeepSeek V4 Flash 不承接契约钉死 Pro 的 `stage4.design`、`stage4.plan`、
+model/node 能力关闭式校验：DeepSeek V4.1 Flash 不承接契约钉死 Pro 的 `stage4.design`、`stage4.plan`、
 `stage6.semantic`，必须改用 Pro 或逐节点覆盖；DeepSeek V4 Pro 承接现役九个 executor 节点。
 
 两种 backend 共用一条身份链：`preview/start` → `Step/JobStart` → `argv` → `CLI` → `RunContext` →

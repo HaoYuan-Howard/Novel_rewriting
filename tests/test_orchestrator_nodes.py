@@ -597,7 +597,7 @@ def test_explicit_legacy_backend_freezes_provider_profile_into_argv_and_step():
 
 def test_legacy_flash_refuses_nodes_whose_contract_pins_pro():
     backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
-        provider='deepseek', model='deepseek-v4-flash',
+        provider='deepseek', model='deepseek-flash',
         reasoning_effort='high', thinking_mode='on'))
     with pytest.raises(UnsupportedRunMode, match='钉死 deepseek-v4-pro'):
         N.build_steps(

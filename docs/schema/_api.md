@@ -327,7 +327,7 @@ readback、current/fresh 终验和 accepted-attempt adoption。`kind=agent` 的�
 client 构造，不能静默回退直接 API。
 
 Legacy backend 不借用 Agent 的 flag 矩阵，而由 `LegacyLlmDriver` 对 provider/model/thinking/effort/node
-关闭式校验，并继续服从节点本身的合法 flags、schema、HARD 与提交契约。当前 DeepSeek V4 Flash 不支持
+关闭式校验，并继续服从节点本身的合法 flags、schema、HARD 与提交契约。当前 DeepSeek V4.1 Flash 不支持
 契约钉死 Pro 的 `stage4.design`、`stage4.plan`、`stage6.semantic`；V4 Pro 支持现役九个 executor 节点。
 两种 backend 任一失败都不自动切换。
 

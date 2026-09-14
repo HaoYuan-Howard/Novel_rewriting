@@ -275,7 +275,7 @@ def test_legacy_ledger_without_run_id_is_claimed_without_backfill():
         'attempt_id': attempt_id,
         'sid': '123', 'node': 'stage2.blueprint', 'purpose': 'chapter:1',
         'request_fingerprint': fingerprint,
-        'model': 'deepseek-v4-flash', 'request_model': 'deepseek-v4-flash',
+        'model': 'deepseek-flash', 'request_model': 'deepseek-flash',
         'cached': False,
         'reasoning_effort': 'high', 'thinking': True, 'json_mode': True,
         'max_tokens': 2048, 'response_sha256': 'b' * 64,
@@ -474,7 +474,7 @@ def test_gate_decisions_and_adoption_answer_which_model_was_finally_used():
     # 两行都是传输层 ok —— 单看成本账分不出谁被采纳，这正是审计账存在的理由。
     assert all(row['outcome'] == 'ok' for row in wire.values())
     assert wire[adoption['attempt_id']]['model'] == 'deepseek-v4-pro'
-    assert wire[rejected['attempt_id']]['model'] == 'deepseek-v4-flash'
+    assert wire[rejected['attempt_id']]['model'] == 'deepseek-flash'
     assert {row['reasoning_effort'] for row in wire.values()} == {'high'}
     assert client.accepted_model('p') == 'deepseek-v4-pro'
     assert client.accepted_request_fingerprint('p') == wire[
@@ -600,7 +600,7 @@ def test_one_attempt_id_cannot_be_rebound_to_another_model():
         node='stage5.write', sid='123', code='c', cached=False,
         cache_policy='default', attempt_id='same-attempt',
         request_fingerprint='a' * 64)
-    ledger.record(**common, model='deepseek-v4-flash')
+    ledger.record(**common, model='deepseek-flash')
     with pytest.raises(ProvenanceRefused, match='同时指向两个模型'):
         ledger.record(**common, model='deepseek-v4-pro')
     assert ledger.calls_made == 1
@@ -614,7 +614,7 @@ LOST = ChatResponse(
     content='', reasoning='整章正文都写在这条通道里了',
     finish_reason='stop',
     usage={'prompt_tokens': 10, 'completion_tokens': 900, 'reasoning_tokens': 900},
-    model='deepseek-v4-flash')
+    model='deepseek-flash')
 
 
 def test_the_lost_answer_is_kept_on_disk_and_the_audit_row_points_at_it():

@@ -79,15 +79,15 @@ _PINNED_PRO_NODES: Final = tuple(
 
 
 class DeepSeekLegacyDriver(LegacyLlmDriver):
-    """DeepSeek V4 直接 API driver。"""
+    """DeepSeek 直接 API driver（V4.1 Flash + V4 Pro）。"""
 
     _SPEC: Final = LegacyProviderSpec(
         id='deepseek',
         label='DeepSeek API',
         models=(
             LegacyModelSpec(
-                id='deepseek-v4-flash',
-                label='DeepSeek V4 Flash',
+                id='deepseek-flash',
+                label='DeepSeek V4.1 Flash',
                 thinking_modes=_DEEPSEEK_THINKING,
                 executor_nodes=tuple(
                     node for node in AGENT_EXECUTOR_NODES

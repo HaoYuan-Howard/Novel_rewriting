@@ -109,19 +109,19 @@ def test_gates_skipped_empty_list_survives_to_disk():
 
 def test_actual_adopted_models_are_explicit_canonical_and_backward_compatible():
     current = _llm_prov(
-        model='deepseek-v4-flash',
-        adopted_models=['deepseek-v4-flash', 'deepseek-v4-pro'])
+        model='deepseek-flash',
+        adopted_models=['deepseek-flash', 'deepseek-v4-pro'])
     assert current.adopted_model_ids() == (
-        'deepseek-v4-flash', 'deepseek-v4-pro')
+        'deepseek-flash', 'deepseek-v4-pro')
     assert current.to_disk()['adopted_models'] == [
-        'deepseek-v4-flash', 'deepseek-v4-pro']
+        'deepseek-flash', 'deepseek-v4-pro']
 
     old = _llm_prov(model='deepseek-v4-pro')
     assert 'adopted_models' not in old.to_disk()
     assert old.adopted_model_ids() == ('deepseek-v4-pro',)
 
     with pytest.raises(ValidationError, match='字典序'):
-        _llm_prov(adopted_models=['deepseek-v4-pro', 'deepseek-v4-flash'])
+        _llm_prov(adopted_models=['deepseek-v4-pro', 'deepseek-flash'])
     with pytest.raises(ValidationError, match='字典序'):
         _llm_prov(adopted_models=['deepseek-v4-pro', 'deepseek-v4-pro'])
 

@@ -1188,7 +1188,7 @@ def test_the_pinned_nodes_keep_their_model_over_the_global_default(monkeypatch):
     (base / '书名_123' / 'stage1').mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(
         config, 'load_config',
-        lambda: config.Config(api_key=None, model='deepseek-v4-flash'))
+        lambda: config.Config(api_key=None, model='deepseek-flash'))
 
     judge = M._llm_client(RunContext.open(
         base, '123', 'stage6.semantic', paid=True, write_ledger=False))
@@ -1202,7 +1202,7 @@ def test_the_pinned_nodes_keep_their_model_over_the_global_default(monkeypatch):
     assert judge.model == 'deepseek-v4-pro', '判官的 pro 是钉死的，环境变量换不掉'
     assert design.model == 'deepseek-v4-pro', 'stage4.design 的 pro 是钉死的'
     assert plan.model == 'deepseek-v4-pro', 'stage4.plan 的 pro 是钉死的，环境变量换不掉'
-    assert other.model == 'deepseek-v4-flash' == config.DEFAULT_MODEL
+    assert other.model == 'deepseek-flash' == config.DEFAULT_MODEL
 
 
 @pytest.mark.corpus

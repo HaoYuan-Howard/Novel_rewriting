@@ -1377,7 +1377,7 @@ def test_paid_provenance_refuses_to_guess_the_actual_model_from_primary_config()
     ctx = _plan_ctx(_book())
     with pytest.raises(ProvenanceRefused, match='没有 accepted model'):
         ctx.llm_provenance(
-            LlmProvenance, prompts={'TEST_SYS': 'x'}, model='deepseek-v4-flash')
+            LlmProvenance, prompts={'TEST_SYS': 'x'}, model='deepseek-flash')
 
 
 def test_each_artifact_gets_its_own_usage_not_the_whole_runs_total():

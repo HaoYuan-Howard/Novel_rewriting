@@ -64,13 +64,13 @@ def _client(ctx: RunContext, transport: FakeTransport, **kwargs) -> LlmClient:
     return LlmClient(ctx, transport, sleep=lambda _seconds: None, **kwargs)
 
 
-def _bad(model: str = 'deepseek-v4-flash') -> ChatResponse:
+def _bad(model: str = 'deepseek-flash') -> ChatResponse:
     return ChatResponse(
         content=json.dumps(BAD, ensure_ascii=False), finish_reason='stop',
         usage={'prompt_tokens': 11, 'completion_tokens': 7}, model=model)
 
 
-def _good(model: str = 'deepseek-v4-flash') -> ChatResponse:
+def _good(model: str = 'deepseek-flash') -> ChatResponse:
     return ChatResponse(
         content=json.dumps(GOOD, ensure_ascii=False), finish_reason='stop',
         usage={'prompt_tokens': 11, 'completion_tokens': 9}, model=model)
@@ -125,7 +125,7 @@ def test_an_agent_candidate_is_revalidated_and_adopted_without_a_second_wire_cal
     got = _ask(client)
     assert got.surface_habits == ['短句']
     assert second_transport.calls == [], '修复候选过原闸后不能再发 Flash/Pro'
-    assert client.accepted_model('repair.p') == 'deepseek-v4-flash'
+    assert client.accepted_model('repair.p') == 'deepseek-flash'
     usage = second_ctx.ledger.usage()
     assert usage is not None and (usage.calls_made, usage.completion_tokens) == (1, 7)
 
@@ -206,10 +206,10 @@ def test_true_legacy_chain_without_run_id_remains_resumable():
 @pytest.mark.parametrize('first', [
     ChatResponse(
         content='', reasoning='', finish_reason='stop',
-        usage={'completion_tokens': 1}, model='deepseek-v4-flash'),
+        usage={'completion_tokens': 1}, model='deepseek-flash'),
     ChatResponse(
         content='{"voice":', reasoning='', finish_reason='length',
-        usage={'completion_tokens': 1}, model='deepseek-v4-flash'),
+        usage={'completion_tokens': 1}, model='deepseek-flash'),
 ])
 def test_stage2_answer_lost_without_material_and_length_go_directly_to_pro(first):
     base = _base()
@@ -223,7 +223,7 @@ def test_stage2_answer_lost_without_material_and_length_go_directly_to_pro(first
 
     assert got.voice == GOOD['voice']
     assert [request.model for request in transport.calls] == [
-        'deepseek-v4-flash', PRO_FALLBACK_MODEL,
+        'deepseek-flash', PRO_FALLBACK_MODEL,
     ]
     assert _recovery_packet(transport.calls[1].user)['strategy'] == 'constraint_rebuild'
 
@@ -270,7 +270,7 @@ def test_stage2_validator_failure_uses_one_flash_target_then_one_pro_rebuild():
             validator=lambda _obj, _resp: 'dynamic scope mismatch')
 
     assert [request.model for request in transport.calls] == [
-        'deepseek-v4-flash', 'deepseek-v4-flash', PRO_FALLBACK_MODEL,
+        'deepseek-flash', 'deepseek-flash', PRO_FALLBACK_MODEL,
     ]
     assert [
         _recovery_packet(request.user)['strategy']
@@ -383,7 +383,7 @@ def test_stage2_batch_decline_resumes_once_without_second_human_pause(tmp_path):
 
     assert got.voice == GOOD['voice']
     assert [request.model for request in resumed_transport.calls] == [
-        'deepseek-v4-flash', PRO_FALLBACK_MODEL,
+        'deepseek-flash', PRO_FALLBACK_MODEL,
     ]
 
 
@@ -392,7 +392,7 @@ def test_a_trailing_comma_is_repaired_mechanically_before_agent_or_resampling():
     malformed = ChatResponse(
         content='{"voice":{"person":"third"},"surface_habits":["短句"],}',
         finish_reason='stop', usage={'completion_tokens': 8},
-        model='deepseek-v4-flash')
+        model='deepseek-flash')
     transport = FakeTransport.always(malformed)
     got = _ask(_client(_ctx(base), transport))
     assert got.surface_habits == ['短句']
@@ -430,7 +430,7 @@ def test_outcome_then_audit_crash_is_replayed_to_exactly_one_final_event(
             content='{"voice":{"person":"third"},'
                     '"surface_habits":["短句"],}',
             finish_reason='stop', usage={'completion_tokens': 8},
-            model='deepseek-v4-flash')
+            model='deepseek-flash')
         transport = FakeTransport.always(malformed)
         attempt_id = ''
 
@@ -515,13 +515,13 @@ def test_rejected_outcome_then_audit_crash_is_replayed_once(tmp_path, monkeypatc
     good = FakeTransport.always(ChatResponse(
         content=json.dumps(GOOD, ensure_ascii=False),
         finish_reason='stop', usage={'completion_tokens': 8},
-        model='deepseek-v4-flash'))
+        model='deepseek-flash'))
     _ask(_client(resumed, good))
     # 再 replay 一次，稳定 event_id 仍只允许一行。
     _ask(_client(_ctx(base), FakeTransport.always(ChatResponse(
         content=json.dumps(GOOD, ensure_ascii=False),
         finish_reason='stop', usage={'completion_tokens': 8},
-        model='deepseek-v4-flash'))))
+        model='deepseek-flash'))))
 
     final = [row for row in _rows(base.joinpath(*AUDIT_REL))
              if row.get('kind') == 'response_repair'
@@ -545,7 +545,7 @@ def test_a_repaired_candidate_that_still_fails_uses_flash_sample_two_before_pro(
     ctx = _ctx(base)
     got = _ask(_client(ctx, transport))
     assert got.voice == GOOD['voice']
-    assert [request.model for request in transport.calls] == ['deepseek-v4-flash']
+    assert [request.model for request in transport.calls] == ['deepseek-flash']
     packet = _recovery_packet(transport.calls[0].user)
     assert packet['strategy'] == 'targeted_repair'
     assert packet['detail_level'] == 'full'
@@ -575,7 +575,7 @@ def test_every_flash_and_pro_sample_gets_one_agent_chance_before_llmfailed():
     emitted_users: list[str] = []
 
     for expected_model in (
-            ['deepseek-v4-flash'] * MAX_SAMPLES_PER_RUNG
+            ['deepseek-flash'] * MAX_SAMPLES_PER_RUNG
             + [PRO_FALLBACK_MODEL] * MAX_SAMPLES_PER_RUNG):
         transport = FakeTransport(responder=lambda req, _index: _bad(req.model))
         with pytest.raises(ResponseRepairRequired) as stopped:
@@ -593,7 +593,7 @@ def test_every_flash_and_pro_sample_gets_one_agent_chance_before_llmfailed():
         _ask(_client(_ctx(base), final_transport))
     assert final_transport.calls == [], '四个样本均已消费后不能偷偷发第五采'
     assert emitted_models == (
-        ['deepseek-v4-flash'] * MAX_SAMPLES_PER_RUNG
+        ['deepseek-flash'] * MAX_SAMPLES_PER_RUNG
         + [PRO_FALLBACK_MODEL] * MAX_SAMPLES_PER_RUNG)
     assert emitted_users[0] == 'user'
     packets = [_recovery_packet(request_user) for request_user in emitted_users[1:]]
@@ -758,12 +758,12 @@ def test_an_accepted_dynamic_repair_cache_survives_a_crash_before_artifact_write
 def test_truncation_is_kept_but_never_pauses_for_agent_guesswork():
     base = _base()
     cut = ChatResponse(content='{"voice": {', finish_reason='length',
-                       model='deepseek-v4-flash')
+                       model='deepseek-flash')
     transport = FakeTransport(responder=lambda req, index: cut if index == 0 else _good(req.model))
     got = _ask(_client(_ctx(base), transport))
     assert got.surface_habits == ['短句']
     assert [request.model for request in transport.calls] == [
-        'deepseek-v4-flash', PRO_FALLBACK_MODEL]
+        'deepseek-flash', PRO_FALLBACK_MODEL]
     roots = list((_ctx(base).novel_dir / '_llm_rejected').glob('*/*/rejection.json'))
     rejection, = [json.loads(path.read_text('utf-8')) for path in roots]
     assert rejection['repair_eligible'] is False

@@ -119,8 +119,8 @@ export function agentCapabilities(
         label: 'DeepSeek API',
         models: [
           {
-            id: 'deepseek-v4-flash',
-            label: 'DeepSeek V4 Flash',
+            id: 'deepseek-flash',
+            label: 'DeepSeek V4.1 Flash',
             thinking_modes: [
               { id: 'on', label: '开启思考', reasoning_efforts: ['low', 'high', 'max'] },
               { id: 'off', label: '关闭思考', reasoning_efforts: ['low'] },

@@ -71,10 +71,12 @@ class BudgetEstimate:
         return self.input_tokens + self.max_tokens
 
 
+#: `deepseek-flash`（V4.1 Flash，2026-09-14 换名）沿用 V4 的保守上限与 tokenizer
+#: 标定：供应商未发布差异规格前不重标，重标须连同 tokenizer revision/SHA 一起换。
 MODEL_BUDGETS: Final[dict[str, ModelBudgetSpec]] = {
     model: ModelBudgetSpec(model=model, context_limit=1_000_000,
                            max_output_tokens=384_000)
-    for model in ('deepseek-v4-pro', 'deepseek-v4-flash')
+    for model in ('deepseek-v4-pro', 'deepseek-flash')
 }
 
 

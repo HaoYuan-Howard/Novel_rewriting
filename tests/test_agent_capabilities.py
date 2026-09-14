@@ -128,7 +128,7 @@ def test_registry_publishes_exact_ids_labels_and_model_specific_options():
     assert [provider.id for provider in response.legacy_providers] == ['deepseek']
     deepseek = response.legacy_providers[0]
     assert [model.id for model in deepseek.models] == [
-        'deepseek-v4-flash', 'deepseek-v4-pro',
+        'deepseek-flash', 'deepseek-v4-pro',
     ]
     assert set(deepseek.models[1].executor_nodes) == set(AGENT_EXECUTOR_NODES)
 
@@ -183,7 +183,7 @@ def test_legacy_backend_is_closed_over_provider_model_thinking_effort_and_node()
         pro, node='stage6.semantic') == pro
 
     flash = LegacyExecutorBackend(profile=LegacyLlmProfile(
-        provider='deepseek', model='deepseek-v4-flash',
+        provider='deepseek', model='deepseek-flash',
         reasoning_effort='high', thinking_mode='on'))
     with pytest.raises(capabilities.AgentProfileRefused, match='钉死 deepseek-v4-pro'):
         capabilities.validate_executor_backend(flash, node='stage6.semantic')

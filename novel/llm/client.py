@@ -126,7 +126,7 @@ NOTHINK_RUNGS: Final[tuple[tuple[str, bool], ...]] = (('low', False),)
 #: 模型级兜底。只允许 Flash → Pro；主模型本来就是 Pro（两个钉死节点或显式 A/B）时
 #: 不再重复调用同一个模型。未知/实验模型也不被静默改成 Pro，避免把拼错的模型 id
 #: 伪装成一次成功兜底；预算预检会在任何缓存/网络副作用之前拒绝它。
-FLASH_MODEL: Final = 'deepseek-v4-flash'
+FLASH_MODEL: Final = 'deepseek-flash'
 PRO_FALLBACK_MODEL: Final = 'deepseek-v4-pro'
 
 

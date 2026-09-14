@@ -140,7 +140,7 @@ describe('agent profile draft/materialize', () => {
     draft.executor_default = withBackendKind(draft.executor_default, 'legacy')
     draft.executor_default.legacy_profile = {
       provider: 'deepseek',
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-flash',
       thinking_mode: 'on',
       reasoning_effort: 'high',
     }

@@ -603,7 +603,7 @@ def test_a_contract_can_prefer_one_normal_resample_without_discarding_valid_salv
         content=json.dumps({'voice': {'normal': 1}, 'surface_habits': ['正文']}),
         reasoning='', finish_reason='stop',
         usage={'prompt_tokens': 10, 'completion_tokens': 5},
-        model='deepseek-v4-flash')
+        model='deepseek-flash')
     t = FakeTransport(lambda _req, i: _lost(_SALVAGEABLE) if i == 0 else normal)
     ctx = _ctx()
 
@@ -629,7 +629,7 @@ def test_a_contract_uses_valid_salvage_after_the_preferred_normal_sample_fails()
     invalid = ChatResponse(
         content='不是 JSON', reasoning='', finish_reason='stop',
         usage={'prompt_tokens': 10, 'completion_tokens': 5},
-        model='deepseek-v4-flash')
+        model='deepseek-flash')
     t = FakeTransport(lambda _req, i: _lost(_SALVAGEABLE) if i == 0 else invalid)
     ctx = _ctx()
     events: list[dict] = []
@@ -1014,7 +1014,11 @@ def test_cache_key_remains_the_legacy_prefix_of_the_full_request_identity():
 
 
 def test_request_identity_golden_vector_pins_the_legacy_cache_preimage():
-    """固定历史前像；规范化任一字节变化都必须显式改裁决。"""
+    """固定历史前像；规范化任一字节变化都必须显式改裁决。
+
+    model 保持向量落盘时的 `deepseek-v4-flash`：它钉的是规范化字节序，
+    不随 2026-09-14 默认模型改名（`deepseek-flash`）联动。
+    """
     req = ChatRequest(
         model='deepseek-v4-flash',
         system='你是闭卷改写作家。',

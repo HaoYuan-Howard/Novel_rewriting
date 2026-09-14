@@ -144,7 +144,7 @@ def _estimate(input_tokens: int, max_tokens: int = 96_000) -> BudgetEstimate:
 
 
 def test_registry_pins_both_deepseek_v4_models_to_the_product_limits():
-    assert set(MODEL_BUDGETS) == {'deepseek-v4-pro', 'deepseek-v4-flash'}
+    assert set(MODEL_BUDGETS) == {'deepseek-v4-pro', 'deepseek-flash'}
     assert {(s.context_limit, s.max_output_tokens) for s in MODEL_BUDGETS.values()} == {
         (1_000_000, 384_000),
     }

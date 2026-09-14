@@ -39,7 +39,9 @@ from contracts.schema.orchestration import PipelineConcurrency
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 #: 模型 id（生成侧默认）。2026-08-19/20 用户裁决：开发期成本不可接受
-#: （pro 约 9 元/本、flash 约 3 元/本）⇒ **生成侧默认 `deepseek-v4-flash`**。
+#: （pro 约 9 元/本、flash 约 3 元/本）⇒ 生成侧默认 flash 档；2026-09-14 用户裁决
+#: 换到 **DeepSeek V4.1 Flash，wire 名 `deepseek-flash`**（id 与 wire 名同值，
+#: 传输层直接发这个字符串）。
 #: **两个节点例外，钉死 pro**：`stage6.semantic`（判官给不出有区分度的证据，
 #: 2026-08-19/20）与 `stage4.plan`（重采粒度：全书一次调用，一次空正文重采就是
 #: 整本书，2026-08-22）。两格都在 `contracts/invariants.py::NODES`
@@ -48,7 +50,8 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 #: ⚠ 允许用 `DEEPSEEK_MODEL` 覆盖，是为了 A/B 时**显式**换一次（对照臂、诊断跑）；
 #: 换了之后 `_provenance.model` 记主模型配置，`adopted_models` 记最终真正进入
 #: 产物的 Flash / Pro 响应集合；两格分开，模型兜底才不会把 Pro 产物标成 Flash。
-DEFAULT_MODEL = 'deepseek-v4-flash'
+#: ⚠ 换 id 让旧 `deepseek-v4-flash` 响应缓存整批够不着（model 进缓存键），那是对的。
+DEFAULT_MODEL = 'deepseek-flash'
 DEFAULT_BASE_URL = 'https://api.deepseek.com'
 
 #: 思考模式。`on` = 单档 `('high', True)`；模型异常不会自动降低 effort，
