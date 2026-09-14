@@ -938,8 +938,7 @@
         "test_character_bad_locator_is_rejected_before_write_and_survives_http_cli_restart": "stage",
         "test_characters_delete_and_add_use_real_cli_and_keep_deletion_receipt": "stage",
         "test_characters_http_writes_through_real_cli_and_survives_restart": "stage",
-        "test_identity_edit_free_rebind_http_cli_restart_preserves_knowledge_cost": "stage",
-        "test_refresh_review_http_cli_restores_missing_review_without_touching_shared_core": "stage"
+        "test_identity_edit_free_rebind_http_cli_restart_preserves_knowledge_cost": "stage"
       },
       "layer": "unit_contract",
       "stages": [

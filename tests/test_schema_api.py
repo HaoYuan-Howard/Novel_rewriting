@@ -232,9 +232,10 @@ def test_plot_flow_keeps_its_synthetic_source_semantics_through_context():
     written_beat = next(row for row in context['beats'] if row['beat_ref'] == 'b02_02')
     assert written_beat['content'] == knowledge_beat['content']
     assert written_beat['participants'] == [mother['actor_ref']]
-    subject = next(row for row in context['global_subjects']
-                   if row['subject_ref']['kind'] == 'secret')
-    assert subject['value']['fact'] == secret['fact']
+    # 秘密答案不再作为 global subject 下发：同章揭示由完整 Beat 表达，
+    # secret 只能以受限引用（只有引用、没有答案）进入写手目录。
+    assert all(row['subject_ref']['kind'] != 'secret'
+               for row in context['global_subjects'])
     # KnowledgeLinks 揭示事件随语义审阅退役：同章揭示安排由现有计划表达，
     # WriterContext 不再有逐场知识许可表，也就没有 secret_reveal 事件可断言。
     assert not any(row.get('kind') == 'secret_reveal' for row in context.get('knowledge_events', []))

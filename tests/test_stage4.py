@@ -37,7 +37,7 @@ def test_identity_source_order_is_not_automatically_a_hard_violation():
     from tests import plot_fixtures as fixture
     semantic = next(row for row in plan.checks.check(_clean_plan4(),
         blueprints=fixture.blueprint(), main_text=fixture.MAIN,
-        global_g=fixture.GLOBAL, knowledge_links=fixture.links(), characters=fixture.REGISTRY)
+        global_g=fixture.GLOBAL, characters=fixture.REGISTRY)
         if row.rule == 'presentation_semantics')
     assert semantic.unver_why and not semantic.findings
 
@@ -106,13 +106,13 @@ def test_goals_require_existing_subjects_without_silently_inventing_relations():
     from tests import plot_fixtures as fixture
     from novel.stages.stage4.plot_refs import validate_plan
     candidate = fixture.plan()
-    validate_plan(candidate, fixture.blueprint(), fixture.GLOBAL, fixture.links(),
+    validate_plan(candidate, fixture.blueprint(), fixture.GLOBAL,
                   characters=fixture.REGISTRY, main_text=fixture.MAIN)
     candidate['output_chapters'][0]['chapter_goal']['subject_refs'] = [
         {'kind': 'relation', 'ref': 'rel_99', 'relation_actors': {
             'subject': {'char_id': 'char_001'}, 'object': {'char_id': 'char_002'}}}]
     with pytest.raises(RefusedByStructure, match='关闭主体'):
-        validate_plan(candidate, fixture.blueprint(), fixture.GLOBAL, fixture.links(),
+        validate_plan(candidate, fixture.blueprint(), fixture.GLOBAL,
                       characters=fixture.REGISTRY, main_text=fixture.MAIN)
     # 关系成立/读者披露/包含式截止的独立反例在 test_stage4_disclosure 当前 KL 链验证。
 
@@ -210,14 +210,14 @@ def test_context_guard_compares_the_producer_projection_after_name_replacement()
     expected = {'chapters': [CtxChapter.model_validate(row).model_dump(mode='json')
                               for row in projected['chapters']]}
     outcomes = plan.checks.check(fixture.plan(), blueprints=blueprints,
-        main_text=fixture.MAIN, global_g=fixture.GLOBAL, knowledge_links=fixture.links(),
+        main_text=fixture.MAIN, global_g=fixture.GLOBAL,
         characters=fixture.REGISTRY, ctx=expected, expected_ctx=expected)
     row = next(o for o in outcomes if o.rule == 'ctx_plot_exact')
     assert not row.findings
     altered = copy.deepcopy(expected)
     altered['chapters'][0]['beats'][0]['content'] += '未审的新剧情。'
     red = plan.checks.check(fixture.plan(), blueprints=blueprints,
-        main_text=fixture.MAIN, global_g=fixture.GLOBAL, knowledge_links=fixture.links(),
+        main_text=fixture.MAIN, global_g=fixture.GLOBAL,
         characters=fixture.REGISTRY, ctx=altered, expected_ctx=expected)
     assert next(o for o in red if o.rule == 'ctx_plot_exact').findings
 

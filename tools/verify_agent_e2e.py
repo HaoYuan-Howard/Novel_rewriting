@@ -43,9 +43,9 @@ from contracts.invariants import (                                  # noqa: E402
     AGENT_EXECUTOR_NODES, APPROVAL_GATES,
     COMMANDER_MAX_ATTEMPTS_PER_SEAT, STAGES,
 )
-from novel import (                                                  # noqa: E402
-    agent_session_audit, operator_telemetry, paths, prov,
-)
+from novel import paths, prov                                        # noqa: E402
+from novel.agents import session_audit as agent_session_audit         # noqa: E402
+from novel.orchestrator import operator_telemetry                     # noqa: E402
 from novel.agents.capabilities import reported_model_matches           # noqa: E402
 from novel.llm.ledger import (                                       # noqa: E402
     audit_path, ledger_path, read_jsonl_rows,

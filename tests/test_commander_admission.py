@@ -258,7 +258,6 @@ def test_v2_child_run_uses_epoch_producer_id_and_keeps_parent_link(
     monkeypatch.setattr(
         cli.commander_context, 'load_from_environment',
         lambda *_args, **_kwargs: parent)
-    monkeypatch.setattr(cli, 'stage2_review_required', lambda *_args, **_kwargs: False)
     captured: dict[str, object] = {}
 
     def open_context(*_args, **kwargs):

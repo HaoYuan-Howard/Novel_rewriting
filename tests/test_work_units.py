@@ -15,10 +15,10 @@ def sha(text):
 
 
 def test_rejected_responses_keep_two_original_answers_and_stop_at_subject_change(tmp_path):
-    unit = WorkUnitBudget(tmp_path, '42', 'stage2.global', 'commander', 'book')
+    unit = WorkUnitBudget(tmp_path, '42', 'stage4.design', 'commander', 'design')
     for index, business in enumerate(('old', 'current', 'current', 'current')):
         turn = unit.reserve(sha(str(index)), run_id=f'parent-{index}')
-        identity = {'business_sha256': sha(business), 'waiting_on': 'approval:stage2-global-review'}
+        identity = {'business_sha256': sha(business), 'waiting_on': 'approval:stage4-design-review'}
         response = json.dumps({'attempt': index})
         unit.save_response(turn.turn_id, {**identity, 'final_response': response})
         unit.save_feedback(turn.turn_id, {
@@ -26,23 +26,23 @@ def test_rejected_responses_keep_two_original_answers_and_stop_at_subject_change
         })
     before = unit.path.read_bytes()
     rows = unit.rejected_responses(
-        business_sha256=sha('current'), waiting_on='approval:stage2-global-review')
+        business_sha256=sha('current'), waiting_on='approval:stage4-design-review')
     assert [row['ordinal'] for row in rows] == [3, 4]
     assert [json.loads(row['final_response'])['attempt'] for row in rows] == [2, 3]
     assert unit.path.read_bytes() == before and unit.used == 4
     all_current = unit.rejected_responses(
-        business_sha256=sha('current'), waiting_on='approval:stage2-global-review', limit=4)
+        business_sha256=sha('current'), waiting_on='approval:stage4-design-review', limit=4)
     assert [row['ordinal'] for row in all_current] == [2, 3, 4]
-    assert unit.rejected_responses(business_sha256=sha('another'), waiting_on='approval:stage2-global-review') == ()
+    assert unit.rejected_responses(business_sha256=sha('another'), waiting_on='approval:stage4-design-review') == ()
     unit.mark_adopted(turn.turn_id)
-    assert unit.rejected_responses(business_sha256=sha('current'), waiting_on='approval:stage2-global-review') == ()
+    assert unit.rejected_responses(business_sha256=sha('current'), waiting_on='approval:stage4-design-review') == ()
 
 
 @pytest.mark.parametrize('damage', ['response', 'feedback', 'business'])
 def test_rejected_response_context_refuses_missing_or_mismatched_evidence(tmp_path, damage):
-    unit = WorkUnitBudget(tmp_path, '42', 'stage2.global', 'commander', 'book')
+    unit = WorkUnitBudget(tmp_path, '42', 'stage4.design', 'commander', 'design')
     turn = unit.reserve(sha('request'), run_id='original-parent')
-    identity = {'business_sha256': sha('current'), 'waiting_on': 'approval:stage2-global-review'}
+    identity = {'business_sha256': sha('current'), 'waiting_on': 'approval:stage4-design-review'}
     unit.save_response(turn.turn_id, {
         **identity, 'final_response': '{}',
         **({'business_sha256': sha('other')} if damage == 'business' else {}),
@@ -104,7 +104,7 @@ def test_budget_survives_candidate_session_and_producer_changes(tmp_path):
     initialize_workflow(tmp_path)
     ids = set()
     for index in range(4):
-        budget = WorkUnitBudget(tmp_path, '42', 'stage2.global', 'commander', 'book')
+        budget = WorkUnitBudget(tmp_path, '42', 'stage4.design', 'commander', 'design')
         ids.add(budget.unit_id)
         turn = budget.reserve(sha(str(index)), run_id=f'run-{index}', session_run_id=f's-{index}')
         budget.record_attempt(turn.turn_id, attempt_id=f'a-{index}', outcome='ok')
@@ -113,9 +113,9 @@ def test_budget_survives_candidate_session_and_producer_changes(tmp_path):
     assert len(ids) == 1
     assert budget.used == 4 and budget.remaining == 0
     with pytest.raises(WorkUnitBudgetExhausted):
-        WorkUnitBudget(tmp_path, '42', 'stage2.global', 'commander', 'book').reserve(
+        WorkUnitBudget(tmp_path, '42', 'stage4.design', 'commander', 'design').reserve(
             sha('fifth'), run_id='another-epoch')
-    assert WorkUnitBudget(tmp_path, '42', 'stage2.blueprint', 'commander', 'chapter:1').remaining == 4
+    assert WorkUnitBudget(tmp_path, '42', 'stage4.plan', 'commander', 'structure').remaining == 4
 
 
 def test_reserved_unknown_cannot_be_reissued_after_restart(tmp_path):

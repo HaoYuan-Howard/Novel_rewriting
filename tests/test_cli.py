@@ -1342,7 +1342,7 @@ def test_profiled_argv_round_trips_through_cli_into_run_context(
 
     monkeypatch.setattr(M, 'RunContext', SimpleNamespace(open=open_context))
     monkeypatch.setattr(M, '_dispatch', dispatch)
-    from novel import admission as mechanical_admission
+    from novel.orchestrator import mechanical_admission
     monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
                         lambda *_args: mechanical_admission.AdmissionCheck(
                             'stage2.blueprint', ok=True))
@@ -1458,7 +1458,7 @@ def test_profiled_dispatch_never_constructs_a_deepseek_client(
         return FakeNodeAgent(actual, kwargs)
 
     monkeypatch.setattr(node_agents, 'build_node_agent', build_agent)
-    from novel import admission as mechanical_admission
+    from novel.orchestrator import mechanical_admission
     monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
                         lambda *_args: mechanical_admission.AdmissionCheck(
                             'stage2.blueprint', ok=True))

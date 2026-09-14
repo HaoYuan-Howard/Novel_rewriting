@@ -484,11 +484,18 @@ def test_deterministic_infeasibility_witness_only_covers_closed_code_constraints
     assert re.fullmatch(r'[0-9a-f]{64}', proof[0]['proof_basis'])
 
 
-def test_nineteen_chapter_requests_only_invalidate_changed_semantic_chapter():
+def test_nineteen_chapter_requests_only_invalidate_changed_semantic_chapter(
+        tmp_path, monkeypatch):
     from novel.stages.stage4 import plan
     raw = _blueprints(19)
     strategy = BlindBookStrategyResponse.model_validate(_strategy(19))
-    ctx = SimpleNamespace(root_clean_sha1=ROOT)
+    # 正文历史根必须来自真实落盘链（artifact_body_root 关闭式拒绝无来源账的 ctx）；
+    # 章节数与投影仍由本测试的 19 章合成蓝图驱动，正文根只作稳定哈希输入。
+    from tests.test_plot_producer import prepare_book, generate_plot
+    book = prepare_book(tmp_path)
+    generate_plot(book)
+    from tests.test_stage2_generation import _ctx
+    ctx = _ctx(book, 'stage4.plan', paid=False)
     def requests():
         truth, mapping = _project(raw)
         prepared = SimpleNamespace(truth=truth, mapping=mapping, rebuild_parent=None,

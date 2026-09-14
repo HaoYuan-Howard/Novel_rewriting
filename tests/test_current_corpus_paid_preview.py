@@ -35,13 +35,12 @@ from novel.llm.client import MAX_SAMPLES_PER_RUNG
 _RUNGS = len(DEFAULT_RUNGS)
 
 
-def test_workflow_role_budget_counts_two_stage2_commanders_and_ambiguous_units():
+def test_workflow_role_budget_matches_current_seats_and_ambiguous_units():
+    """Stage2 语义审阅退役后 stage2.* 只剩 executor 席位，不再授予 Commander 预算。"""
     budget = P.workflow_role_budget(17)
     rows = budget['units']
-    stage2 = [row for row in rows if row['role'] == 'commander'
-              and row['node'].startswith('stage2.')]
-    assert {row['node'] for row in stage2} == {'stage2.global', 'stage2.blueprint'}
-    assert sum(row['content_hard_limit'] for row in stage2) == 8
+    assert not [row for row in rows if row['role'] == 'commander'
+                and row['node'].startswith('stage2.')]
     binding = next(row for row in rows if row['node'] == 'stage4.plan'
                    and row['role'] == 'executor')
     assert (binding['minimum_units'], binding['maximum_units']) == (0, 17)

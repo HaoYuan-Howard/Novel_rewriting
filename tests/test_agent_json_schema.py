@@ -462,12 +462,12 @@ def _glm_native_argv(schema, *, commander, directory, monkeypatch):
 
 
 @pytest.mark.parametrize('label', [
-    'stage2.blueprint', 'stage2.blueprint/repair', 'stage2.blueprint/commander',
+    'stage2.blueprint', 'stage2.blueprint/repair',
     'stage4.design/strategy', 'stage4.design/chapter', 'stage4.plan', 'stage4.plan/chapter',
     'stage4.design/commander', 'stage4.plan/commander',
 ])
 def test_gate_b_real_response_schemas_reach_default_glm_without_model_request(label, tmp_path, monkeypatch):
-    from novel.orchestrator import queue, stage2_blueprint_wire, stage4_reviewer_wire
+    from novel.orchestrator import queue, stage4_reviewer_wire
     from novel.stages.stage2.contract import contract_for
     from tests.test_stage4_reviewer_wire import _task
 
@@ -476,8 +476,6 @@ def test_gate_b_real_response_schemas_reach_default_glm_without_model_request(la
         model = contract_for('plot-blueprint-v1').response_model
         assert model is _models()[label], '验证真实 wrapper，不能只扫描其中一个子模型'
         schema = agent_json_schema(model)
-    elif label == 'stage2.blueprint/commander':
-        schema = stage2_blueprint_wire.response_schema()
     elif label in {'stage4.design/commander', 'stage4.plan/commander'}:
         task = _task(queue.WAITING_ON_STAGE4_DESIGN_REVIEW if label.startswith('stage4.design')
                      else queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW)

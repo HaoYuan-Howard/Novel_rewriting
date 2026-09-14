@@ -60,8 +60,8 @@ def test_manual_stages_and_real_supervisor_deliver_without_markdown(tmp_path_fac
         [sys.executable, '-X', 'utf8', '-B', '-m', 'tests.delivery_scenario', str(root / 'out')],
         cwd=repo, env=env, capture_output=True, text=True, encoding='utf-8', timeout=900)
     assert result.returncode == 0, result.stdout + result.stderr
-    for scope in ('chapter:1', 'chapter:2', 'chapter:3', 'cross_chapter'):
-        assert result.stdout.count(f'BLUEPRINT_SCOPE_OK {scope}\n') == 1, result.stdout
+    # 旧 BLUEPRINT_SCOPE_OK 逐 scope 审阅标记随 Stage2 语义审阅退役删除；
+    # 蓝图读取面由冻结夹具（blueprint-reading-workpack?scope=…）与 schema_api 覆盖。
     assert result.stdout.count('DRAFT_OK ') == 3, result.stdout
     for marker in ('MANUAL_DELIVERY_OK', 'AUTOMATIC_DELIVERY_OK', 'RESTART_DELIVERY_OK'):
         assert marker in result.stdout, result.stdout

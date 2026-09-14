@@ -76,14 +76,14 @@ def _truth(*, ordinal: int = 1) -> dict[str, object]:
     return {
         'chapter_ordinal': ordinal,
         'chapter_function': '建立回应关系',
-        'characters': [{'alias': OBSERVER, 'canonical': '来访者',
+        'characters': [{'alias': OBSERVER,
             'surfaces': ['来访者'], 'role': '敲门求见的人'}],
         'beats': [
             {'alias': A, 'content': '她敲门。', 'participant_aliases': [OBSERVER]},
             {'alias': B, 'content': '对方回应。', 'participant_aliases': [OBSERVER]},
         ],
         'states': [], 'inherited_states': [], 'background_beats': [],
-        'constraints': [], 'knowledge': [], 'endpoints': [],
+        'constraints': [], 'endpoints': [],
         'entry_state_aliases': [], 'carry_out_aliases': [], 'global_subjects': [],
     }
 
@@ -320,7 +320,7 @@ def test_strategy_replan_has_typed_cumulative_feedback_and_accepted_constraints(
             placeholder=False, decision='request_replan', reason='策略需重做。')
 
 
-def test_complete_chapter_edit_request_is_registered_v2_and_ordinal_bound():
+def test_complete_chapter_edit_request_is_registered_v3_and_ordinal_bound():
     payload = {
         'actor': 'reviewer', 'reason': '修正动作与台词回应关系。',
         'review_token': 's4er1_' + '1' * 64,
@@ -330,7 +330,7 @@ def test_complete_chapter_edit_request_is_registered_v2_and_ordinal_bound():
     request = BlindChapterEditRequest.model_validate(payload)
     spec = ARTIFACT_SPECS[STAGE4_BLIND_CHAPTER_EDIT]
     assert spec.model is BlindChapterEditRequest
-    assert spec.current_version == 2
+    assert spec.current_version == 3
     assert request.chapter.output_ordinal == 1
     assert set(request.model_dump()) == {
         'actor', 'reason', 'review_token', 'output_ordinal', 'chapter'}

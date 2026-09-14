@@ -55,25 +55,6 @@ _FOLLOW_CHECK_EXECUTORS = frozenset({
     'stage2.blueprint', 'stage4.plan', 'stage6.hook', 'stage7.rename',
 })
 
-#: ⚠ 生产登记缺口（Stage2 语义审阅退役未覆盖
-#: ``novel/orchestrator/nodes.py::EXECUTOR_PROFILED_RUNS``，缺口已上报）：
-#: 三个 stage2 节点仍登记着已退役的 ``--review-token`` 付费组合，而现役
-#: ``NodeSpec.flags`` 已不收该 flag（``validate_run`` 关闭式拒收）。矩阵只为
-#: 仍可物化的组合生成用例；生产清理登记后下面这条差集断言会红，
-#: 届时核对 ``NodeSpec.flags`` 并删除本段豁免。
-_STALE_PROFILED_RUN_COMBOS = {
-    (node, tokens)
-    for node, combinations in N.EXECUTOR_PROFILED_RUNS.items()
-    for tokens in combinations
-    if not tokens <= frozenset(NODES[node].flags)
-}
-assert _STALE_PROFILED_RUN_COMBOS == {
-    ('stage2.characters', frozenset({'--review-token'})),
-    ('stage2.global', frozenset({'--review-token'})),
-    ('stage2.blueprint', frozenset({'--review-token'})),
-}, ('EXECUTOR_PROFILED_RUNS 出现新的未登记组合，或 Stage2 退役残留已被生产清理：'
-    f'{sorted(_STALE_PROFILED_RUN_COMBOS)}——核对后收紧或删除本豁免')
-
 EXECUTOR_RUN_CASES = [
     pytest.param(
         node,
@@ -83,7 +64,6 @@ EXECUTOR_RUN_CASES = [
     )
     for node, combinations in N.EXECUTOR_PROFILED_RUNS.items()
     for tokens in combinations
-    if (node, tokens) not in _STALE_PROFILED_RUN_COMBOS
 ]
 
 

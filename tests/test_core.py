@@ -20,9 +20,9 @@ from novel.core.facts import (
 )
 from novel.core.naming import (
     attested_surname, family_groups, invented_names, is_generic_appellation,
-    name_stems, person_naming_surfaces, project_character_names,
-    rename_semantic_markers, rule_names_a_person, strip_distinguisher,
-    surface_first_chapter, surface_owners,
+    name_stems, project_character_names,
+    rename_semantic_markers, strip_distinguisher,
+    surface_owners,
 )
 from novel.core.normalize import (
     dominant_quote_style, normalize_paragraphs, normalize_punctuation, normalize_quotes,
@@ -298,12 +298,12 @@ def test_character_name_projection_keeps_display_and_distinctiveness_together():
         'char_001': {
             'canonical': '苏清杳',
             'name_distinctiveness': 'high',
-            'address': [],
+            'aliases': [],
         },
         'char_002': {
             'canonical': '模型标签',
             'name_distinctiveness': 'common',
-            'address': [{'surface': '掌柜'}],
+            'aliases': [{'surface': '掌柜'}],
         },
     }
     projected, substitutions, unattested = project_character_names(
@@ -343,15 +343,15 @@ def test_invented_names_needs_the_left_anchor():
 
 #: 六个角色，覆盖 `attested_surname` 各道过滤拦下的典型形状。
 _REG = {
-    'char_001': {'canonical': '孟青禾', 'address': [{'surface': '阿禾'}]},
-    'char_002': {'canonical': '孟青兰', 'address': []},
+    'char_001': {'canonical': '孟青禾', 'aliases': [{'surface': '阿禾'}]},
+    'char_002': {'canonical': '孟青兰', 'aliases': []},
     # ① 自造记账标签：「许言的姐姐」的「许」是**别人**的姓，碰巧对上纯属巧合
-    'char_003': {'canonical': '许言的姐姐', 'address': []},
+    'char_003': {'canonical': '许言的姐姐', 'aliases': []},
     # ③ 通用角色词：「书童」同时挂着两个 char_id
-    'char_004': {'canonical': '书童(陆明洲)', 'address': [{'surface': '书童'}]},
-    'char_005': {'canonical': '陆明洲', 'address': [{'surface': '书童'}]},
+    'char_004': {'canonical': '书童(陆明洲)', 'aliases': [{'surface': '书童'}]},
+    'char_005': {'canonical': '陆明洲', 'aliases': [{'surface': '书童'}]},
     # 外貌修饰不是姓
-    'char_006': {'canonical': '胖媒婆', 'address': []},
+    'char_006': {'canonical': '胖媒婆', 'aliases': []},
 }
 _BOOK = '孟青禾 孟青兰 许言的姐姐 书童 陆明洲 胖媒婆'
 
@@ -463,56 +463,10 @@ def test_rename_semantic_markers_preserve_rank_number_relationship_and_office():
     assert 'role:皇太女' in rename_semantic_markers('皇太女')
 
 
-# ── 叫法时点（第四组，stage4 的下发闸门）─────────────────────────────────
-
-_GATE_REG = {
-    # 通名：它被登记成了角色，而「正室高于妾室」是**纯世界规则**
-    'char_001': {'canonical': '正室', 'name_distinctiveness': 'common',
-                 'address': [{'surface': '正室', 'from_chapter': 1}]},
-    # 歧义：同一个叫法挂着两个人 ⇒ 它标识不了任何人
-    'char_010': {'canonical': '皇帝', 'name_distinctiveness': 'high',
-                 'address': [{'surface': '皇帝', 'from_chapter': 1}]},
-    'char_011': {'canonical': '太上皇', 'name_distinctiveness': 'high',
-                 'address': [{'surface': '皇帝', 'from_chapter': 1}]},
-    # 真人：正典名 ch1 就有，而**另一个别名要到 ch8 才出现**
-    'char_009': {'canonical': '谢允', 'name_distinctiveness': 'high',
-                 'address': [{'surface': '龟公', 'from_chapter': 2},
-                             {'surface': '百晓生', 'from_chapter': 8}]},
-}
-
-
-def test_a_common_noun_or_an_ambiguous_appellation_does_not_name_a_person():
-    """⭐ 两道筛各修掉一类**误杀真规则**的错。
-
-    拿「谁被这么叫过」的全集当人名探测器，「纳妾制度：正室高于妾室」
-    与「皇帝有权赐婚」都会被当成情节整条剔掉。
-    """
-    naming = person_naming_surfaces(_GATE_REG)
-    assert '正室' not in naming, '通名不是人名'
-    assert '皇帝' not in naming, '一个叫法挂着两个人时，它标识不了任何人'
-    assert naming.get('谢允') == 'char_009' and naming.get('百晓生') == 'char_009'
-
-
-def test_the_gate_is_the_appellations_first_chapter_not_the_characters():
-    """⭐⭐ **闸门用的是【叫法的时点】，不是【角色的时点】。**
-
-    某本 `wr_06`「怡红院…实为百晓生所有…龟公等人员可能是卧底」= 一条 ch8 才揭示的
-    秘密的全部内容。**按角色时点会放行**（那个角色 ch2 就在场、叫「龟公」），
-    **按叫法时点才扣得住**——泄底的是「百晓生」这个叫法，它 ch8 才出现。
-    """
-    avail = surface_first_chapter(_GATE_REG)
-    assert avail['龟公'] == 2 and avail['百晓生'] == 8
-    naming = person_naming_surfaces(_GATE_REG)
-    hit = rule_names_a_person('怡红院实为百晓生所有，龟公等人员可能是卧底。', naming)
-    assert hit and max(avail[n] for n in hit) == 8, '放行章要取命中叫法里最晚的那一个'
-    # 而一条真规则一个人都点不到 ⇒ 不扣
-    assert rule_names_a_person('纳妾制度：正室高于妾室。', naming) == []
-
-
-def test_the_naming_family_shares_one_key_space():
-    """三个函数是**串起来用的**（`naming` 的命中拿去查 `avail`）——键空间差一格，
-    闸门就会在某几个叫法上静默失效。"""
-    assert set(person_naming_surfaces(_GATE_REG)) <= set(surface_first_chapter(_GATE_REG))
+# ⚠ 旧「叫法时点下发闸门」（`person_naming_surfaces` / `surface_first_chapter` /
+# `rule_names_a_person` 与 `_GATE_REG`）已随 Stage2 语义审阅退役删除（2026-09）：
+# 现役 Characters v2 契约明确「`identity_revealed_from` 不表示称谓首次能出现的章，
+# 不能据此禁用称谓」，章内称谓出现与表面身份的选择由原文和 Blueprint 支持。
 
 
 # ── 取值面 ────────────────────────────────────────────────────────────────

@@ -32,7 +32,7 @@ def test_gate_spawns_follow_the_same_disk_resume_verdict(monkeypatch, tmp_path):
     assert not (tmp_path / '_service').exists(), 'the dynamic GET remains read-only'
 
     # Stage2 复核闸退役：blueprint 的下一步由统一机械准入发布。
-    from novel import admission as mechanical_admission
+    from novel.orchestrator import mechanical_admission
     admission_state = {'ready': False}
     monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
                         lambda *_args: mechanical_admission.AdmissionCheck(
@@ -77,7 +77,7 @@ def test_default_approval_value_is_not_mistaken_for_a_saved_human_choice(
     monkeypatch.setattr(
         approvals.state, 'resume_verdict',
         lambda _overview, node: (approvals.state.RESUME_RUN, node))
-    from novel import admission as mechanical_admission
+    from novel.orchestrator import mechanical_admission
     monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
                         lambda *_args: mechanical_admission.AdmissionCheck(
                             'stage2.blueprint', ok=False))

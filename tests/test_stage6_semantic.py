@@ -313,9 +313,8 @@ def test_approve_http_adapter_forwards_audited_optimistic_lock(monkeypatch):
         return SimpleNamespace(exit_code=2)
 
     monkeypatch.setattr(edits.jobs, 'run', run)
-    monkeypatch.setattr(
-        edits, '_stamp',
-        lambda *_args: (_ for _ in ()).throw(AssertionError('失败作业不许盖章')))
+    # 审批盖章已整体移到 novel.api.approval_stamp（jobs.run 落地之后才尽力盖章），
+    # 路由本身不再持有「失败不盖章」的缝；这里只钉参数转发的形状。
     request = HookApproveRequest(
         pick=2, actor='editor-a', reason='核验完成',
         review_token='s6r4_' + 'b' * 64)

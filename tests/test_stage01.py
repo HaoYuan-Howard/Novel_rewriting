@@ -433,7 +433,7 @@ def test_prompts_only_expose_the_reading_ordinal():
     raw = main.model_dump(mode='json')
     body, index = render_book(main)
     system, user, _candidates = build_global_request(
-        '测试书', raw, active_contract(), source_hook='人物收到来信。',
+        '测试书', raw, active_contract(),
         character_reference={'char_001': {'canonical': '甲', 'surfaces': ['甲'], 'role': '来信者'}},
         agent_envelope=True)
     rendered = '\n'.join((body, index, system, user))

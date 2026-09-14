@@ -510,8 +510,10 @@ def test_work_unit_supervisor_preserves_response_after_approval_and_retires_land
     original_action = reviewer_tasks.ReviewerApprovalAction(
         kind='approval', surface='design', payload=original['action']['payload'])
     source_profile = PROFILE.model_copy(update={'execution_mode': 'standard'})
-    source_profiles = PROFILES.model_copy(update={'commander': source_profile,
-                                                'executor_default': source_profile})
+    # ⚠ 必须走构造器：model_copy 不跑 v1→v2 迁移与判别联合校验，
+    #   裸 AgentProfile 进 executor_default 后在 `.kind` 处必然炸。
+    source_profiles = PipelineAgentProfiles(commander=source_profile,
+                                            executor_default=source_profile)
     budget, reservation, _record, _cost = seed_commander_response(
         base, sid=SID, node='stage4.design', scope='design',
         waiting_on=current.action.waiting_on, action=original_action,

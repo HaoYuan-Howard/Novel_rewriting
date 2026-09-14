@@ -179,10 +179,13 @@ def test_blueprint_candidate_finalizes_through_existing_commit_journal(tmp_path)
 
 
 def test_blueprint_full_rebuild_can_replace_stale_formal(tmp_path):
-    """上游称名投影变化后，完整 producer 必须能覆盖自己的 stale 旧稿。"""
-    book = tmp_path / '蓝图过期正式稿重建_505'
-    book.mkdir()
-    _land_global(book)
+    """上游称名投影变化后，完整 producer 必须能覆盖自己的 stale 旧稿。
+
+    定向修订提交会过统一机械准入，上游新鲜度必须可判；因此用真实
+    摄入/批准/分章链播种（同 prepare_book），不再手写裸 MainText。
+    """
+    from tests.test_blueprint_repair_queue import prepare_complete_book
+    book = prepare_complete_book(tmp_path)
 
     initial_ctx = _ctx(book, 'stage2.blueprint')
     initial_client, _initial_transport = _blueprint_client(
@@ -196,7 +199,7 @@ def test_blueprint_full_rebuild_can_replace_stale_formal(tmp_path):
     global_ctx = _ctx(book, 'stage2.global')
     store = ArtifactStore(global_ctx)
     from tests.test_stage2_generation import _edit_static_character
-    _edit_static_character(book, 'char_001', canonical='管家')
+    _edit_static_character(book, 'char_001', canonical='宝珠')
     extract.run_renormalize(_ctx(book, 'stage2.global', paid=False))
     assert ArtifactStore(_ctx(book, 'stage2.blueprint')).freshness(
         extract.BLUEPRINT_REL).state == 'stale'
@@ -233,7 +236,7 @@ def test_blueprint_candidate_rejects_naming_projection_drift_after_wire(tmp_path
     store = ArtifactStore(global_ctx)
     from tests.test_stage2_generation import _edit_static_character
     # 使用第三章真实字面，由人物 producer 发布新的称名投影。
-    _edit_static_character(book, 'char_001', canonical='管家')
+    _edit_static_character(book, 'char_001', canonical='宝珠')
     _projection, current_projection = \
         extract._require_blueprint_character_projection(store)
     assert current_projection != request_projection, '反例没有真正改变称名投影'

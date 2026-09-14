@@ -45,49 +45,9 @@ def test_agent_run_delegation_is_explicit_without_weakening_stage0_review():
     assert '不在 Stage0 判断章号顺序或连续性' in stage0
 
 
-def test_stage2_contract_closes_two_commanders_and_owner_repair():
-    global_contract = reviewer_contract.CONTRACT_TEXT['stage2']
-    blueprint = reviewer_contract.CONTRACT_TEXT['stage2-blueprint']
-    for contract in (global_contract, blueprint):
-        assert '基础四次内容额度加已生效的不可变人工追加' in contract
-        assert '模型不能自行加额' in contract
-        assert '修改或删除旧问题仍须复审' in contract
-        assert '最多四次内容调用' not in contract
-    assert '换候选、会话或进程不补预算' in global_contract
-    assert '有效历史决定由后端按义务继承' in global_contract
-    assert '有效历史范围接受由后端按实际消费依赖继承' in blueprint
-    assert '同受已授权总额度约束' in blueprint
-    assert 'collection delta 只使用 add/delete/split 的现役 schema' in global_contract
-    assert '外键必须在修后全集闭合' in global_contract
-    assert '仍存活的旧 FAIL/UNVER 要显式复判' in global_contract
-    assert '没有预审，也没有额外 Global-only 终审' in global_contract
-    assert 'owner=stage2.characters' in global_contract
-    assert 'owner=stage2.global' in global_contract
-    assert '人物静态字段不由 GlobalEdit 修改' in global_contract
-    assert '范围不明不缺省为第一章' in global_contract
-    assert '不新增人物 Commander' in global_contract
-    assert '派修 stage2.blueprint' in blueprint
-    assert '分别归 stage2.characters、stage2.global' in blueprint
-    assert 'KnowledgeLinks 仅关联当前 pending 的必要知识主体' in blueprint
-    assert '只允许开放的 entry_subject_refs' in blueprint
-    assert '删除主体不消除问题' in blueprint
-    assert '伏笔不能携带未来答案' in blueprint
-    assert '全部章审有效接受仍不替代跨章反查原文' in blueprint
-
-
-def test_blueprint_correction_keeps_scope_and_never_suggests_retired_fact_edits():
-    from types import SimpleNamespace
-    from novel.orchestrator import queue
-
-    prompt = reviewer_tasks.correction_prompt(
-        SimpleNamespace(waiting_on=queue.WAITING_ON_STAGE2_BLUEPRINT_REVIEW,
-                        prompt='本轮冻结工作包'),
-        '维度与总决定冲突', request_sha256='a' * 64, attempt=2)
-    assert '五个固定维度及实际问题' in prompt
-    assert '保留 scope_sha256、主体和证据绑定' in prompt
-    assert '不在审阅回答中直接改写节点或证据' in prompt
-    assert '证据不足保留 unver' in prompt
-    assert 'fact_patches' not in prompt and 'beat_patches' not in prompt
+# ⚠ 旧 Stage2 双 Commander 契约与蓝图审阅（CONTRACT_TEXT['stage2'/'stage2-blueprint']、
+# WAITING_ON_STAGE2_BLUEPRINT_REVIEW）已随语义审阅退役删除（2026-09）；
+# 现役 reviewer 契约覆盖由 stage0/stage4 用例与对账守卫继续钉住。
 
 
 def test_stage4_contract_inherits_only_actual_dependencies_and_preserves_budget():

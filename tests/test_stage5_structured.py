@@ -135,12 +135,12 @@ def test_final_writer_messages_keep_reference_keys_and_permitted_shared_semantic
     entry, book = _entry()
     entry = deepcopy(entry)
     entry['global_subjects'] += [{
-        'subject_ref': {'kind': 'world_rule', 'ref': 'wr_01'},
+        'subject_ref': {'kind': 'world_rule', 'ref': 'subject_' + 'a' * 24},
         'value': {'kind': 'legal_rule', 'versions': [{
             'desc': '旧城账册必须由掌柜与账房共同封存。', 'allowed_slots': ['s01']}]},
         'allowed_slots': ['s01'], 'state_permissions': [],
     }, {
-        'subject_ref': {'kind': 'secret', 'ref': 'secret_01'},
+        'subject_ref': {'kind': 'secret', 'ref': 'subject_' + 'b' * 24},
         'value': {'fact': '周衡已经调换账册末页。'},
         'allowed_slots': ['s01'], 'state_permissions': [],
     }]
@@ -149,7 +149,9 @@ def test_final_writer_messages_keep_reference_keys_and_permitted_shared_semantic
     for content in ('沈青', '周衡', '共同封存', '调换账册末页', 'allowed_slots'):
         assert content in user
     # V8 的编号连接父节点、人物与许可；不再把正常引用假标为 prompt 私密字段。
-    assert 'char_001' in user and 'b01_01' in user
+    # opaque 目录改造后写手材料只出现 actor_ 令牌，不出现内部 char_id。
+    assert 'actor_' + '1' * 24 in user and 'actor_' + '2' * 24 in user
+    assert 'char_001' not in user and 'b01_01' in user
     assert '不写进小说正文' in user
     assert_prompt_private_absent(typed, system=system, user=user)
 
@@ -181,14 +183,9 @@ def test_context_refuses_goal_that_would_bypass_a_chapter_gate():
         fixture.context(plan)
 
 
-def test_hidden_secret_withhold_goal_does_not_disclose_answer(pair):
-    from tests.test_stage4_disclosure import _inputs, _build
-    inputs = _inputs(pair, subjects=[('secret', 'secret_01')])
-    first = _build(inputs)[0]
-    answer = inputs[1]['canon']['secrets'][0]['fact']
-    assert answer not in json.dumps(first, ensure_ascii=False)
-    assert {'kind': 'secret', 'ref': 'secret_01'} in first['restricted_subject_refs']
-    assert first['chapter_goal']['intent'] == 'withhold'
+# ⚠ 旧 KnowledgeLinks 披露链（tests/test_stage4_disclosure 的 _inputs/_build）
+# 已随语义审阅退役删除；withhold 的拒绝路径由上方『关闭主体』/『只能保留未知』
+# 反例与 plot_prompts 的『未开放主体』渲染继续覆盖。
 
 
 def test_writer_system_requires_json_segments_and_user_names_each_slot():

@@ -145,7 +145,7 @@ def test_approval_projection_reuses_snapshot_overview_and_code_without_fallback(
     monkeypatch.setattr(A, '_read_current', lambda *_args: record)
     # Stage2 复核闸退役：_spawns 的 s1/s4 分支改由统一机械准入发布；
     # s5 的 Prepare 视图在快照投影内不得做真实盘读，一并按合成状态给。
-    from novel import admission as mechanical_admission
+    from novel.orchestrator import mechanical_admission
     monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
                         lambda *_args: mechanical_admission.AdmissionCheck(
                             'stage2.blueprint', ok=False))

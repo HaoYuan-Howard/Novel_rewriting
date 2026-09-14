@@ -108,7 +108,7 @@ def test_scene_resolution_keeps_parent_content_once_and_stage_boundaries():
     from novel.stages.stage4.measure import identity_plan
     plan = identity_plan(raw, fixture.MAIN)
     asm = build_writer_context(plan, fixture.GLOBAL, raw, fixture.MAIN,
-                               knowledge_links=fixture.links(), characters=fixture.REGISTRY)
+                               characters=fixture.REGISTRY)
     chapter = asm.ctx['chapters'][0]
     assert chapter['beats'][0]['content'] == raw['blueprints'][0]['beats'][0]['content']
     delivery = chapter['scenes'][0]['deliveries'][0]
@@ -209,7 +209,7 @@ def test_writer_context_excludes_every_global_source_span_byte():
     knowledge['evidence_anchors'] = {'ev_marker': {'chapter_ordinal': 1, 'start': 923456701,
         'end': 923456729, 'text_sha256': 'CONTEXT_EVIDENCE_ONLY'}}
     view = build_writer_context(fixture.plan(), knowledge, fixture.blueprint(), fixture.MAIN,
-                                knowledge_links=fixture.links(), characters=fixture.REGISTRY).ctx
+                                characters=fixture.REGISTRY).ctx
     wire = json.dumps(view)
     assert 'CONTEXT_EVIDENCE_ONLY' not in wire and '923456701' not in wire
 
@@ -235,7 +235,7 @@ def test_a_character_with_no_attested_appellation_is_a_terminal_state():
     registry['characters']['char_001'].update(canonical='春江阁女子', aliases=[])
     with pytest.raises(RefusedByStructure, match='没有当前可辨认'):
         build_writer_context(fixture.plan(), fixture.GLOBAL, fixture.blueprint(), fixture.MAIN,
-                             knowledge_links=fixture.links(), characters=registry)
+                             characters=registry)
 
 
 def test_the_chapter_level_table_withholds_a_name_the_book_level_one_would_give():
@@ -263,12 +263,20 @@ def test_a_collision_is_made_visible_not_resolved():
     assert len(cols) == 1 and cols[0][0] == '李嬷嬷' and sorted(cols[0][1]) == ['char_a', 'char_b']
 
 
+def _compile_view(bps, main, registry):
+    """现役 WriterContext 组装口：语义审阅退役后不再接收 KnowledgeLinks。"""
+    from novel.stages.stage4.measure import identity_plan
+    from tests.plot_fixtures import GLOBAL
+    return build_writer_context(identity_plan(bps, main), GLOBAL, bps, main,
+                                characters=registry).ctx
+
+
 def test_registry_label_never_replaces_distinct_presentations_in_writer_text():
     """旧全树替换已退役；称谓归属必须由显式 ActorRef 保护，不能按字串改写别人的身份。"""
-    from tests.test_writer_actor_contract import presented, compile_view
+    from tests.test_plot_actor_resolution import presented
     bps, main, registry, old, new = presented()
     registry['characters']['char_001']['canonical'] = '内部登记标签'
-    ctx = compile_view(bps, main, registry)
+    ctx = _compile_view(bps, main, registry)
     assert '内部登记标签' not in str(ctx)
     roster = ctx['chapters'][0]['characters']
     assert {'甲', '新客'} <= {row['display_name'] for row in roster}
@@ -288,10 +296,10 @@ def test_a_rule_without_any_version_text_is_a_terminal_state():
 # 叙述/视点是独立的实际人物位置，不能按 char_id 判等后丢掉不同呈现。
 
 def narrated(narrator, focalizer):
-    from tests.test_writer_actor_contract import presented, compile_view
+    from tests.test_plot_actor_resolution import presented
     bps, main, registry, old, new = presented()
     bps['blueprints'][0]['narration'][0].update(narrator=narrator, focalizer=focalizer)
-    return compile_view(bps, main, registry)['chapters'][0]['narration'][0]
+    return _compile_view(bps, main, registry)['chapters'][0]['narration'][0]
 
 
 def test_same_presentation_narrator_and_focalizer_keep_same_public_reference():

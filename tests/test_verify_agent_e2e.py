@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import json
+from collections import Counter
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -17,6 +18,7 @@ from contracts.schema.orchestration import (
 from novel.agents import session_audit as audit
 from novel.orchestrator import admission, beacon
 from novel.llm.ledger import append_commander_call, ledger_path, read_jsonl_rows
+from novel.llm.ledger import audit_path
 from tools import verify_agent_e2e as verifier
 
 
@@ -410,18 +412,28 @@ def test_workflow_readings_are_scoped_to_the_requested_run(tmp_path):
         sid=_SID, run_id=_RUN_ID, execution_id='current-execution',
         node='stage2.global', phase='end', ts=1_004, exit_code=0))
 
-    metrics = verifier._workflow_metrics_for_run(tmp_path, _SID, _RUN_ID)
-    assert metrics['run_id'] == _RUN_ID
-    assert metrics['ledger']['lines'] == 1
-    assert metrics['ledger']['wire_error'] == 0
-    assert metrics['ledger']['prompt_tokens'] == 73
-    assert metrics['audit']['gate_by_decision'] == {'accepted': 1}
-    assert metrics['audit']['resamples'] == 0
-    assert metrics['audit']['first_call_landing']['stage2.global']['first_call'] == 1
-    assert metrics['cli']['events'] == 2
-    assert metrics['cli']['per_node']['stage2.global']['exit_codes'] == {'0': 1}
-    assert metrics['identity']['code_identities'] == ['clean-code']
-    assert metrics['identity']['experiment_valid'] is True
+    # 现役读数面：stability 只认精确 (sid, run_id) 的账与审计行；
+    # 语义审阅退役后不再有 gate_by_decision / first_call_landing 等审阅读数。
+    rows = verifier._scoped_ledger_rows(tmp_path, _SID, _RUN_ID)
+    readings = verifier._ledger_readings(rows)
+    assert readings['lines'] == 1
+    assert readings['wire_calls'] == 1 and readings['wire_ok'] == 1
+    assert readings['wire_error'] == 0
+    assert readings['prompt_tokens'] == 73
+    assert readings['completion_tokens'] == 19
+    assert readings['reasoning_tokens'] == 7
+
+    identity = verifier._run_identity(rows)
+    assert identity['code_identities'] == ['clean-code']
+    assert identity['experiment_valid'] is True
+
+    audit_rows = [
+        row for row in read_jsonl_rows(audit_path(tmp_path))
+        if row.get('sid') == _SID and row.get('run_id') == _RUN_ID
+    ]
+    assert dict(sorted(Counter(
+        str(row.get('kind') or '?') for row in audit_rows).items())) == {
+        'artifact_adoption': 1, 'gate_decision': 1}
 
 
 

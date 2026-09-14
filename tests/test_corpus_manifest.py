@@ -123,7 +123,15 @@ def _manifest_raw() -> dict:
 
 
 def test_current_corpus_tracks_both_paid_stage4_phases_and_their_outputs():
-    paid_nodes = tuple(node for node, spec in NODES.items() if spec.paid)
+    """冻结语料清单是两本书硬验收的身份集，刻意不自动跟随新增付费节点。
+
+    stage2.analyze（Gate A 联合首抽）与 stage6.prepare（Gate C 文案准备）已在
+    现役付费面，但冻结语料书盘上没有这两份产物；进入 corpus 冻结清单要等
+    语料重生成批次（TODO-21/49），不在本批工程收口内。
+    """
+    deferred = {'stage2.analyze', 'stage6.prepare'}
+    paid_nodes = tuple(node for node, spec in NODES.items()
+                       if spec.paid and node not in deferred)
     assert CURRENT_CORPUS_PAID_NODES == paid_nodes
     assert tuple(
         node for node in CURRENT_CORPUS_PAID_NODES if NODES[node].stage == 'stage4'
@@ -789,7 +797,6 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
         'test_identity_source_order_is_not_automatically_a_hard_violation',
         'test_scene_compiler_refuses_incomplete_or_duplicate_placement',
         'test_split_state_requires_specific_binding_and_does_not_default_to_first_scene',
-        'test_knowledge_trigger_must_bind_to_its_parent_delivery',
         'test_budget_allocator_postconditions_are_green_at_the_production_checker',
         'test_revalidate_promotes_only_plan_without_llm_or_context',
         'test_synthetic_stage6_gate_blocks_only_when_every_candidate_is_dirty',

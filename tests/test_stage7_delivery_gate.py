@@ -89,7 +89,7 @@ def test_stage7_currentness_uses_review_identity_not_epoch_workpack_hash(
 def test_r_2_15_stage2_gate_precedes_every_stage7_delivery_read_or_write(
         monkeypatch, entry):
     """统一机械准入同时守组装与下载；旧 txt 的存在不能绕过后来变红的准入。"""
-    import novel.admission as mechanical_admission
+    from novel.orchestrator import mechanical_admission
 
     seen: list[object] = []
 
@@ -368,7 +368,7 @@ def test_stage7_assemble_restores_map_and_delivery_on_any_half_commit(
     # 本用例验证的是组装半提交回滚；Stage2 统一机械准入与 Stage5 闭合闸自身
     # 各有专门覆盖，这里替换为恒通过，隔离关注点（assemble 在调用点做延迟
     # import，因此补丁打在模块属性上）。
-    import novel.admission as mechanical_admission
+    from novel.orchestrator import mechanical_admission
     monkeypatch.setattr(mechanical_admission, 'stage4_ready',
                         lambda *_args: mechanical_admission.AdmissionCheck(
                             'stage4', ok=True))

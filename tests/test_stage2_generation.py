@@ -558,7 +558,7 @@ def _ctx(book: Path, node: str, *, paid: bool = True) -> RunContext:
     return ctx
 
 
-def _edit_static_character(book: Path, char_id: str, **changes):
+def _edit_static_character(book: Path, char_id: str, *, locator: str | None = None, **changes):
     from contracts.schema.characters import CharactersEdit
     from novel.stages.stage2 import characters
     ctx = _ctx(book, 'stage2.characters', paid=False)
@@ -573,10 +573,13 @@ def _edit_static_character(book: Path, char_id: str, **changes):
         # 别名连归属证据一起重绑到新字面在正文中的唯一命中。
         canonical = changes['canonical']
         value['aliases'][0]['surface'] = canonical
+        # 人工定位必须在章内唯一命中（compile_manual_evidence_refs 关闭式拒绝歧义）；
+        # 字面在章内出现多次时由调用方给更长的唯一 locator。
+        anchor = locator or canonical
         sections = store.read(MainText, 'stage1/main_text.json').root
-        section = next(s for s in sections if canonical in s.text)
+        section = next(s for s in sections if s.text.count(anchor) == 1)
         value['aliases'][0]['evidence_refs'] = [{
-            'chapter_ordinal': section.chapter_ordinal, 'locator': canonical}]
+            'chapter_ordinal': section.chapter_ordinal, 'locator': anchor}]
         value['aliases'][0]['identity_revealed_from'] = section.chapter_ordinal
     return characters.apply_edit(ctx, CharactersEdit.model_validate({
         'source_sha256': sha,
@@ -1406,7 +1409,7 @@ def test_name_change_with_interrupted_projection_write_closes_blueprint_and_stag
     assert blueprint_transport.calls == []
 
     # Stage4 起的统一机械准入同样拒绝：Global 的人物引用已随换名漂移。
-    import novel.admission as mechanical_admission
+    from novel.orchestrator import mechanical_admission
 
     gate = mechanical_admission.stage4_ready(book.parent, book.name.rsplit('_', 1)[-1])
     assert not gate.ok
@@ -2007,7 +2010,10 @@ def test_stage2_renormalize_rejects_wire_shaped_formal_artifact(tmp_path):
     ctx, wire = generate_plot(book)
     path = book / extract.BLUEPRINT_REL
     raw = json.loads(path.read_text(encoding='utf-8'))
-    raw['blueprints'] = [response_projection(row, main_text()[row['chapter_ordinal'] - 1]['text'])
+    # 蓝图锚定的是真实 stage1 分章文本（prepare_book 走真实摄入/分章链），
+    # 不能拿手写 main_text() 夹具当原文，否则投影在夹具侧就先撞原文漂移闸。
+    sections = ArtifactStore(ctx).read(MainText, extract.MAIN_TEXT).root
+    raw['blueprints'] = [response_projection(row, sections[row['chapter_ordinal'] - 1].text)
                          for row in raw['blueprints']]
     path.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8')
     before = path.read_bytes()

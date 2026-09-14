@@ -424,20 +424,6 @@ def _large_task(chapter_count=19):
         ordinal: {'expected_constraint_set_sha256': 'c' * 64, 'items': []}
         for ordinal in closure
     }
-    # 正常设计与异常上游转交同时下发，节点枚举仍只保存一次。
-    referral = copy.deepcopy(option['exact_request'])
-    referral['action'] = {'kind': 'approval', 'surface': 'blueprint_refinement', 'payload': {
-        'origin': 'design', 'review_token': payload['review_token'], 'actor': payload['actor'],
-        'chapter_ordinal': 1, 'dimension': 'completeness', 'subject_refs': ['chapter'],
-        'reason': '<说明疑似错漏>'}}
-    task.submission_options += ({
-        'id': 'approval:blueprint_refinement', 'exact_request': referral,
-        'allowed_values': {
-            'subjects_by_chapter': {key: ['chapter', *row['beat_aliases']] for key, row in closure.items()},
-            'beat_aliases_by_chapter': {key: row['beat_aliases'] for key, row in closure.items()},
-        },
-    },)
-
     return task
 
 
@@ -548,21 +534,6 @@ def test_local_reference_closure_rejects_other_chapter_domain_and_raw_identity(v
     assert wire.assemble(task, response)['action']['payload']['chapters'][0]['constraints'][0]['opaque_aliases'] == [_alias(2)]
 
 
-def test_referral_local_reference_restores_original_chapter_subjects_at_real_loader(tmp_path):
-    task = _large_task(11)
-    option = next(row for row in task.submission_options if row['id'] == 'approval:blueprint_refinement')
-    response = {'schema': wire.WIRE_SCHEMA, 'expected_options_sha256': wire.options_sha256(task),
-        'selection': {'option_id': option['id'], 'expected_exact_request_sha256': _sha(option['exact_request']),
-            'payload': {'chapter_ordinal': 11, 'dimension': 'completeness',
-                        'subject_refs': ['b1'], 'reason': '该节点遗漏了原文已经公开的称谓归属，需原文核查。'}}}
-    document = wire.assemble(task, response)
-    assert document['action']['payload']['subject_refs'] == [_alias(11000)]
-    action = _load(tmp_path, task, document)
-    assert action.surface == 'blueprint_refinement'
-    assert action.payload['chapter_ordinal'] == 11
-    assert action.payload['subject_refs'] == [_alias(11000)]
-
-
 def test_prompt_covers_initial_correction_and_unrelated_task():
     task = _task(queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN)
     for base in ('主提示：复制 exact_request', '订正提示：仅交回完整 JSON'):
@@ -571,7 +542,7 @@ def test_prompt_covers_initial_correction_and_unrelated_task():
         assert wire.WIRE_SCHEMA in prompt
         assert 'stop:stage4-structure-replan' in prompt
         assert '不得把 id 写到 JSON 末尾' in prompt
-    unrelated = SimpleNamespace(waiting_on=queue.WAITING_ON_STAGE2_REVIEW)
+    unrelated = SimpleNamespace(waiting_on=queue.WAITING_ON_ANALYZE_SOURCE)
     assert not wire.uses_compact_wire(unrelated)
     assert wire.output_schema_for(unrelated) is None
     assert wire.prompt_for(unrelated, '原提示') == '原提示'
@@ -594,59 +565,8 @@ def test_reference_closure_is_projection_of_typed_subject():
     }
 
 
-def test_nonparticipant_presentation_stays_in_review_native_schema_and_service_guard():
-    """真实 BP/KL 的未来受众与本章同实体呈现不同，不能被参与者列表裁掉。"""
-    from contracts.schema.api import DesignRepairConstraint
-    from contracts.schema.plot_planning import PlannerChapter
-    from novel.errors import HumanEditProtected
-    from novel.orchestrator import approvals
-    from novel.stages.stage4.plot_design import build_blind_projection
-    from tests.plot_fixtures import GLOBAL
-    from tests.test_plot_actor_resolution import _single, _add_later, _registered_later_knowledge
-
-    blueprints, main, registry, old = _single()
-    later = _add_later(blueprints, main, registry)
-    knowledge = _registered_later_knowledge(blueprints, main, later)
-    projected, mappings = build_blind_projection(blueprints, root_clean_sha1='a' * 40,
-        characters=registry, knowledge_links=knowledge, global_g=GLOBAL, main_text=main)
-    truth = PlannerChapter.model_validate(projected['chapters'][0])
-    audience = truth.knowledge[0].audience.actor_alias
-    current = next(alias for alias, actor in mappings['participant_aliases'].items() if actor == old)
-    assert mappings['participant_aliases'][audience] == later
-    assert current != audience
-    assert audience not in {alias for beat in truth.beats for alias in beat.participant_aliases}
-
-    row = SimpleNamespace(output_ordinal=1, subject=SimpleNamespace(
-        blind_truth=truth, chapter=SimpleNamespace(scenes=[SimpleNamespace(candidate_scene_id='c0001_s001')])),
-        constraints=[DesignRepairConstraint(code='scene_goal_exclude',
-            scene_refs=['c0001_s001'], opaque_aliases=[current, audience])])
-    source = SimpleNamespace(chapters=[row])
-    closure = reviewer_tasks._design_constraint_reference_closure(source)
-    assert {current, audience} <= set(closure['1']['participant_aliases'])
-    assert closure['1']['participant_aliases'] == sorted(person.alias for person in truth.characters)
-    approvals._require_design_constraint_refs(source)
-
-    # 生产原生 schema 从同一闭集编译；完整装配保留两个 opaque 呈现。
-    task = _task()
-    option = task.submission_options[0]
-    payload = option['exact_request']['action']['payload']
-    payload['chapters'] = [{**payload['chapters'][0], 'output_ordinal': 1}]
-    allowed = option['allowed_values']
-    allowed[wire.REFERENCE_CLOSURE] = closure
-    allowed[wire.CONSTRAINT_OPERATION_CATALOG] = {'1': {'expected_constraint_set_sha256': 'c' * 64, 'items': []}}
-    response = _response(task)
-    response['selection']['payload']['chapters']['1'].update(
-        decision='request_repair', constraints=[row.constraints[0].model_dump(mode='json')])
-    assembled = wire.assemble(task, _wire_response(task, response))
-    assert assembled['action']['payload']['chapters'][0]['constraints'][0]['opaque_aliases'] == [current, audience]
-
-    unknown = _alias(999999)
-    row.constraints = [row.constraints[0].model_copy(update={'opaque_aliases': [unknown]})]
-    with pytest.raises(HumanEditProtected, match='constraint 越界'):
-        approvals._require_design_constraint_refs(source)
-    response['selection']['payload']['chapters']['1']['constraints'][0]['opaque_aliases'] = [unknown]
-    with pytest.raises(wire.Stage4ReviewerWireError):
-        wire.assemble(task, _wire_response(task, response))
+# ⚠ 旧「非参与者呈现 × KnowledgeLinks 未来受众」整条链已随语义审阅退役删除（2026-09，build_blind_projection 不再接收 knowledge_links）；
+# 引用闭集与 constraint 越界守卫由 test_reference_closure_is_projection_of_typed_subject 与 test_subject_revision_* 继续覆盖。
 
 
 def test_subject_revision_keeps_schema_but_stale_binding_is_rejected():
