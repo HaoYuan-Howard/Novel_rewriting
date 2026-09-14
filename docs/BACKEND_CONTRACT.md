@@ -157,7 +157,8 @@ Stage2 语义审阅（Global 逐项审阅、Blueprint 章审与跨章复核、�
 与 `plot_semantics` 以 unver 行常驻披露且不阻断准入；表外语义维度随最终交付披露 Stage2 语义未审
 限制，不产生审批待办。统一准入由 CLI、调度、最低读取边界和交付检查共用，任何一方不复述第二套条件。
 载体和消费约定见 `docs/schema/stage2.md`；源文案与恢复反例见
-`tests/test_stage2_source_blurb.py`、`tests/test_reviewer_tasks.py`。
+`tests/test_reviewer_tasks.py` 等（原 source-blurb 专项测试文件已随语义审阅
+退役删除，反例由现役 stage2 测试面承接）。
 
 ### R-3 · 逐章 Blueprint 抽取（stage2）
 

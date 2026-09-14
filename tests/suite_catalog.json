@@ -1102,12 +1102,6 @@
         "stage2"
       ]
     },
-    "tests/test_stage2_source_blurb.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
     "tests/test_stage2_typed_edit.py": {
       "cases": {
         "test_candidate_normalization_terminal_is_business_but_io_is_unknown": "stage",
