@@ -796,25 +796,45 @@ def test_the_orchestrator_never_imports_the_view_layer():
 
 
 def test_the_artifact_mouth_cannot_reach_stage_internals():
-    """⭐ 基础设施不知道 stage：产物单口（store/consumption）不许 import `novel.stages`。
+    """⭐ 基础设施不知道 stage：产物单口不许在**模块顶层** import `novel.stages`。
 
-    依赖方向必须是 stage producer → store/paths；反向边的实例是
-    `consumption.select_scope_input` 惰性 import `stage2.paragraphs` /
-    `stage2.plot_compile`——该 scope 依赖族（含 compile/scope_is_current/
-    invalidated_scopes）随 Stage2 范围审阅退役后已无任何调用方，2026-09
-    架构迁移整族删除。本条钉住方向：将来若确需跨层投影，走显式装配
-    （组合根），不许让产物单口伸手进 stage 内部。
+    依赖方向必须是 stage producer → store/paths。`consumption.py` 完全不许
+    触达 stage（其孤儿 scope 依赖族已删除）；`store.py` 在读特定产物时确有
+    六处**函数内惰性** stage 触达（grounding/binding/character_refs 等投影
+    复算），它们登记在 M5 的跨 stage 深路径 grandfather 清单里、只减不增，
+    本条只钉住更弱但立即为真的一层：**import 时刻**产物单口不依赖任何
+    stage——store/consumption 可以被 contracts 测试与工具独立 import。
+    （2026-09 修正：本条首版对 store 断言了绝对零触达，提交时验证输出被
+    tail 截断而误报全绿；本版按事实收窄并另建 grandfather 守卫。）
     """
-    mouth = [
-        os.path.join(ROOT, 'novel', 'store.py'),
-        os.path.join(ROOT, 'novel', 'consumption.py'),
-    ]
-    bad = [(_rel(p), sorted(m for m in _full_imports(p) if m.startswith('novel.stages')))
-           for p in mouth
-           if any(m.startswith('novel.stages') for m in _full_imports(p))]
-    assert not bad, f'产物单口反向 import 了 stage 层：{bad}'
-    # 守卫的守卫：这两个文件确实存在且被扫描到。
-    assert all(os.path.isfile(p) for p in mouth)
+    mouth = {
+        'novel/consumption.py': 'any',
+        'novel/store.py': 'top_level',
+    }
+    for rel, mode in mouth.items():
+        path = os.path.join(ROOT, *rel.split('/'))
+        assert os.path.isfile(path), f'扫描目标不存在：{rel}'
+        if mode == 'any':
+            leaked = sorted(m for m in _full_imports(path)
+                            if m.startswith('novel.stages'))
+            assert not leaked, f'{rel} import 了 stage 层：{leaked}'
+        else:
+            hits = [
+                n.lineno for n in tree_body_imports(path)
+                if _import_targets_stage(n)]
+            assert not hits, f'{rel} 在模块顶层 import 了 stage 层（第 {hits} 行）'
+
+
+def tree_body_imports(path: str) -> list:
+    """只看模块顶层（`Module.body` 直接子节点）的 import 节点。"""
+    return [n for n in _tree(path).body
+            if isinstance(n, (ast.Import, ast.ImportFrom))]
+
+
+def _import_targets_stage(node) -> bool:
+    if isinstance(node, ast.Import):
+        return any(a.name.startswith('novel.stages') for a in node.names)
+    return bool(node.module) and node.module.startswith('novel.stages')
 
 
 def test_the_api_layer_has_no_second_argv_builder():
