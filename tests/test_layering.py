@@ -795,6 +795,28 @@ def test_the_orchestrator_never_imports_the_view_layer():
                if _rel(p).endswith(('operator.py', 'delivery.py')))
 
 
+def test_the_artifact_mouth_cannot_reach_stage_internals():
+    """⭐ 基础设施不知道 stage：产物单口（store/consumption）不许 import `novel.stages`。
+
+    依赖方向必须是 stage producer → store/paths；反向边的实例是
+    `consumption.select_scope_input` 惰性 import `stage2.paragraphs` /
+    `stage2.plot_compile`——该 scope 依赖族（含 compile/scope_is_current/
+    invalidated_scopes）随 Stage2 范围审阅退役后已无任何调用方，2026-09
+    架构迁移整族删除。本条钉住方向：将来若确需跨层投影，走显式装配
+    （组合根），不许让产物单口伸手进 stage 内部。
+    """
+    mouth = [
+        os.path.join(ROOT, 'novel', 'store.py'),
+        os.path.join(ROOT, 'novel', 'consumption.py'),
+    ]
+    bad = [(_rel(p), sorted(m for m in _full_imports(p) if m.startswith('novel.stages')))
+           for p in mouth
+           if any(m.startswith('novel.stages') for m in _full_imports(p))]
+    assert not bad, f'产物单口反向 import 了 stage 层：{bad}'
+    # 守卫的守卫：这两个文件确实存在且被扫描到。
+    assert all(os.path.isfile(p) for p in mouth)
+
+
 def test_the_api_layer_has_no_second_argv_builder():
     """`R-11.8`：**展示与执行共用同一个构造函数** ⇒ API 层不许自己拼一条命令。
 

@@ -29,7 +29,6 @@ from __future__ import annotations
 from contracts.schema.workflow import BudgetGrant
 from contracts.invariants import STAGE6_PREPARE_DECISIONS
 from contracts.schema.analyze_draft import AnalyzeOwnerDraftEdit, DraftOwner, DraftSourceState
-from contracts.schema.dependencies import DependencyManifest
 from contracts.schema.plot import PlotBlueprint
 from contracts.schema.plot_review import (
     ReviewScope, BlueprintRunProgress,
