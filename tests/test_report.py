@@ -180,7 +180,7 @@ def test_plot_evidence_carries_the_parsed_chapter_into_the_report(monkeypatch):
     line = next(row for row in rep.rules if row.rule == 'plot_evidence')
     assert line.fix is not None and line.fix.available
     assert line.fix.flags == ['--chapters', '11']
-    from novel.views.inbox import _report_items
+    from novel.orchestrator.inbox_projection import _report_items
     inbox = _report_items(rep, 'stage2')
     item = next(row for row in inbox if row.rule == 'plot_evidence')
     assert item.kind == 'repairable' and '--chapters 11' in item.how

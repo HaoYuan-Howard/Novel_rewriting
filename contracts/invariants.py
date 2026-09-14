@@ -2306,7 +2306,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     # ⚠ `--wontfix` 是 TODO-04 补的，形态同 `stage5.review` 那一条（**参数不是入口**）。
     #   它挂在本层的 0 成本复检节点上，理由与 stage5 一样：反查要拿到**当前**结论池，
     #   而结论池是复检算出来的。⚠⚠ 本层的两条语义判据此前**没有任何人工闭环**，
-    #   而待人工清单在建议人去跑一个这一层根本没有的 flag（见 `views/inbox.py::_human_how`）。
+    #   而待人工清单在建议人去跑一个这一层根本没有的 flag（见 `orchestrator/inbox_projection.py::_human_how`）。
     'stage6.prepare':   NodeSpec('stage6', 'R-9', True, 'stage6 文案准备',
                                  lifecycle=NodeLifecycleSpec('book', '完整源正文、原钩子与独立准备产物', 'executor', 'commander', '事实支持与连续开篇范围独立接受', ('accept', 'typed_edit', 'stop'), ('stage6.prepare',), 'executor:book / commander:prepare', ('--revalidate', '--apply-edit', '--review-decisions', '--recover-edit', '--recover-prepared', 'saved_response', 'prepared_commit'), commander_bindings=(('approval:stage6-prepare', 'prepare'),), review_actions=('accept', 'rework', 'uncertain', 'stop'), approval_projection=('prepare', 'state')),
                                  flags=('--dry-run', '--revalidate', '--emit-edit-template',

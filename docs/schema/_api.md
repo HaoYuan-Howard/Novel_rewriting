@@ -599,7 +599,7 @@ stage5 的 `counts` 字段就是这么烂掉的（稀疏 Counter，0 键消失�
 
 路由侧：对每个已移植层各跑一次 0 成本复检（stage2/4 会重算判据）——**纯读**，
 大书上是秒级。**登记不优化**：盘上 3 本无压力，全语料嫌慢时在路由层加缓存，
-别动生产者（`novel/views/inbox.py::inbox_view`）。
+别动生产者（`novel/orchestrator/inbox_projection.py::inbox_view`）。
 
 ## 五j、人工写回的请求体
 

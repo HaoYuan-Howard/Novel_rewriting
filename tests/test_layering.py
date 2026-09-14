@@ -562,6 +562,12 @@ def _view_files() -> list[str]:
     return files
 
 
+def _orchestrator_files() -> list[str]:
+    files = [p for p in _runtime_files() if _rel(p).startswith('novel/orchestrator/')]
+    assert len(files) >= 10, f'只扫到 {len(files)} 个编排层模块——路径多半错了'
+    return files
+
+
 def test_only_the_api_layer_imports_the_web_stack():
     """web 栈只许出现在白名单里那几个文件。
 
@@ -769,6 +775,24 @@ def test_the_view_layer_cannot_reach_the_judgement_layer():
         f'（`novel/api/routes/checks.py` 只做前者）')
     # 守卫的守卫：扫错目录时上面那条会静静地绿。
     assert any('contracts.schema.api' in _full_imports(p) for p in _view_files())
+
+
+def test_the_orchestrator_never_imports_the_view_layer():
+    """⭐ 单向依赖：视图层组屏读编排，编排层不许反过来 import 视图。
+
+    历史上 `operator` / `delivery` 为取 inbox 投影反向 import 过 `views.inbox`，
+    形成 views↔orchestrator 包级环；2026-09 架构迁移把八类清单生产者整体下沉到
+    `novel/orchestrator/inbox_projection.py`（输入是 operator 快照与审批投影，
+    属编排域，不是展示层组屏），下沉后以本条钉住方向。
+    """
+    bad = [(_rel(p), sorted(m for m in _full_imports(p) if m.startswith('novel.views')))
+           for p in _orchestrator_files()
+           if any(m.startswith('novel.views') for m in _full_imports(p))]
+    assert not bad, f'编排层反向 import 了视图层：{bad}'
+    # 守卫的守卫：inbox 投影确实住在编排层，扫错目录时上面那条会静静地绿。
+    assert any('novel.orchestrator.inbox_projection' in _full_imports(p)
+               for p in _orchestrator_files()
+               if _rel(p).endswith(('operator.py', 'delivery.py')))
 
 
 def test_the_api_layer_has_no_second_argv_builder():

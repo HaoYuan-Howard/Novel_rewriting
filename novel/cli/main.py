@@ -2010,7 +2010,7 @@ def _cmd_state(a: argparse.Namespace) -> int:
     ov = snapshot.overview
     inbox = None
     if getattr(a, 'with_inbox', False):
-        from novel.views.inbox import inbox_from_snapshot
+        from novel.orchestrator.inbox_projection import inbox_from_snapshot
 
         # 先把共享快照完整投影并做末端 seal，再打印任何一半；漂移时不留下
         # 一段看似完整的 state stdout。
@@ -2053,7 +2053,7 @@ def _cmd_inbox(a: argparse.Namespace) -> int:
     这里只出人读文本。**再开一个机读口就是同一事实的第二落点。**
     ⚠ 空清单也打首行——「共 0 项」是查过的 0，不打印是没查（LESSONS 第 2 条）。
     """
-    from novel.views.inbox import inbox_view
+    from novel.orchestrator.inbox_projection import inbox_view
     _print_inbox(inbox_view(a.base, a.sid))
     return X.OK
 

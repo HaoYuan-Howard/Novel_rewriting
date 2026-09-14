@@ -1999,7 +1999,7 @@ def test_state_with_inbox_reuses_the_exact_same_invocation_snapshot(
 
     cli = importlib.import_module('novel.cli.main')
     inspection = importlib.import_module('novel.orchestrator.inspection')
-    inbox_module = importlib.import_module('novel.views.inbox')
+    inbox_module = importlib.import_module('novel.orchestrator.inbox_projection')
     overview = SimpleNamespace(title='合成书', sid='123', stages=[])
     snapshot = SimpleNamespace(overview=overview)
     captures = []
@@ -2032,7 +2032,7 @@ def test_state_with_inbox_calls_one_code_one_overview_and_seven_checks(
 
     cli = importlib.import_module('novel.cli.main')
     inspection = importlib.import_module('novel.orchestrator.inspection')
-    inbox_module = importlib.import_module('novel.views.inbox')
+    inbox_module = importlib.import_module('novel.orchestrator.inbox_projection')
     code_calls: list[None] = []
     overview_calls: list[tuple] = []
     check_calls: list[str] = []

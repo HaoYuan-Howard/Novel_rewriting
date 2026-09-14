@@ -1623,7 +1623,7 @@
       "layer": "unit_contract",
       "stages": []
     },
-    "tests/test_views_inbox.py": {
+    "tests/test_inbox_projection.py": {
       "layer": "unit_contract",
       "stages": [
         "stage0",

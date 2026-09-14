@@ -28,7 +28,7 @@ from novel.stages.stage5.trim_resolution import (
 )
 from novel.store import ArtifactStore
 from tests import factories
-from novel.views.inbox import inbox_view
+from novel.orchestrator.inbox_projection import inbox_view
 from novel.views.stage5 import stage5_view
 
 

@@ -60,7 +60,7 @@ from novel.orchestrator import (                                    # noqa: E402
 from novel.orchestrator.inspection import (                          # noqa: E402
     capture_operator_snapshot, read_surface_seal,
 )
-from novel.views.inbox import inbox_from_snapshot                    # noqa: E402
+from novel.orchestrator.inbox_projection import inbox_from_snapshot                    # noqa: E402
 
 
 CHECK_STATES = ('pass', 'fail', 'unknown')

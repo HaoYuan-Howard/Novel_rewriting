@@ -29,7 +29,7 @@ from contracts.schema.plot_review import ReviewScope
 from contracts.schema.analyze_draft import DraftOwner
 from novel.api.deps import checked_sid, get_base
 from novel import paths
-from novel.views.inbox import inbox_view
+from novel.orchestrator.inbox_projection import inbox_view
 from novel.views.stage2 import (
     analyze_draft_view, blueprint_reading_workpack, character_registry_view, global_view, reading_view,
 )

@@ -248,7 +248,7 @@ def test_over_length_audit_stays_in_verification(tmp_path):
     from novel.run import RunContext
     from novel.work_units import initialize_workflow
     from novel.store import ArtifactStore
-    from novel.views.inbox import _trim_verification_items
+    from novel.orchestrator.inbox_projection import _trim_verification_items
 
     audit = TrimAudit(before_sha256='a' * 64, reason='超上限 120 字（620/500）；本仓没有自动收缩路径，保留 pretrim，转 verification')
     initialize_workflow(tmp_path)

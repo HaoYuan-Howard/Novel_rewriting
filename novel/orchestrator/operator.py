@@ -35,7 +35,7 @@ from novel.orchestrator.inspection import (
 )
 from novel.orchestrator.nodes import is_paid, write_effect
 from novel.store import readonly_snapshot_memo
-from novel.views.inbox import _OPERATOR_FINAL_CAS, inbox_from_snapshot
+from novel.orchestrator.inbox_projection import _OPERATOR_FINAL_CAS, inbox_from_snapshot
 
 
 def canonical_sha256(value: object) -> str:

@@ -42,7 +42,7 @@ from novel.llm.ledger import ledger_path                     # noqa: E402
 from novel.orchestrator.nodes import check_node              # noqa: E402
 from novel.orchestrator.state import readonly_ctx            # noqa: E402
 from novel.stages import check_only                          # noqa: E402
-from novel.views.inbox import inbox_view                     # noqa: E402
+from novel.orchestrator.inbox_projection import inbox_view                     # noqa: E402
 
 #: 判官节点。质量测量仪器与生成分账（A/B 里判官统一固定配置，成本不归臂）。
 #: ⚠ `stage5.semantic` 于 2026-08-17 下线，判官节点只剩一个。
@@ -197,7 +197,7 @@ def wall_table(rows: list[dict], gap_s: float) -> dict:
     return out
 
 
-# ── 质量（0 成本复检，纯读；照 `novel/views/inbox.py::_report_of` 的姿势） ──
+# ── 质量（0 成本复检，纯读；照 `novel/orchestrator/inbox_projection.py::_report_of` 的姿势） ──
 
 def stage_reports(base: str, sid: str) -> dict[str, dict]:
     novel_dir = paths.resolve_novel_dir(base, sid)

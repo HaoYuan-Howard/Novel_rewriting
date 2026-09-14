@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""待人工八类聚合生产者（`novel/views/inbox.py`）——BE-04 第一条的落地判据。
+"""待人工八类聚合生产者（`novel/orchestrator/inbox_projection.py`）——BE-04 第一条的落地判据。
 
 两条裁决在这里各有一条锚：
   · **UG-11**（计划轻重告警没有处置回环）→ 处置=归人判断：那两条 INFO 的
@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from novel.views.inbox import inbox_view
+from novel.orchestrator.inbox_projection import inbox_view
 from tests import corpus, sandbox
 
 STAGE6_INPUTS = ('stage1/hook_copy.json', 'stage2/global_grounding.json',
@@ -64,7 +64,7 @@ def box():
 
 def test_human_only_collects_hits_whose_remediation_is_human():
     """用受控报告钉语义；不能把某本现役语料碰巧有两条命中当成契约。"""
-    from novel.views import inbox as I
+    from novel.orchestrator import inbox_projection as I
 
     finding = SimpleNamespace(
         output_ordinal=4, wontfix=None, unresolved_rounds=0,
@@ -82,7 +82,7 @@ def test_human_only_collects_hits_whose_remediation_is_human():
 
 def test_final_approval_inbox_commands_bind_the_same_fresh_workpack():
     """恢复命令只搬运同一份 fresh workpack 的 opaque token。"""
-    from novel.views import inbox as I
+    from novel.orchestrator import inbox_projection as I
 
     candidate = SimpleNamespace(
         index=2, slot='c2', approach='scene_punchline',
@@ -118,7 +118,7 @@ def test_final_approval_inbox_commands_bind_the_same_fresh_workpack():
 
 def test_final_approval_inbox_omits_already_current_actions():
     """同一当前工作包已经盖章时不再发布重复 approve/verification 动作。"""
-    from novel.views import inbox as I
+    from novel.orchestrator import inbox_projection as I
 
     stage6_pack = SimpleNamespace(
         disposition='already_current', workpack_sha256='b' * 64,
@@ -140,7 +140,7 @@ def test_final_approval_inbox_omits_already_current_actions():
 
 def test_unavailable_design_does_not_publish_a_or_b_approval():
     """当前候选读不回来时，不发布虚假的 A/B 审批待办。"""
-    from novel.views import inbox as I
+    from novel.orchestrator import inbox_projection as I
 
     doc = SimpleNamespace(
         design_review=SimpleNamespace(
@@ -156,7 +156,7 @@ def test_unavailable_design_does_not_publish_a_or_b_approval():
 def test_structure_replan_inbox_publishes_typed_resolution_or_stop(monkeypatch):
     """B 拒绝后的清单必须同时呈现真实修订与安全停机两条出口。"""
     from novel.errors import ApprovalRequired
-    from novel.views import inbox as I
+    from novel.orchestrator import inbox_projection as I
 
     doc = SimpleNamespace(
         design_review=SimpleNamespace(
@@ -185,7 +185,7 @@ def test_structure_replan_inbox_publishes_typed_resolution_or_stop(monkeypatch):
 def test_opening_scope_valid_inbox_points_to_typed_edit_not_paid_resample():
     from contracts.rules import REGISTRY
     from novel.report.builder import remediation_of
-    from novel.views import inbox as I
+    from novel.orchestrator import inbox_projection as I
 
     rule = REGISTRY.get('opening_scope_valid')
     finding = SimpleNamespace(
@@ -207,7 +207,7 @@ def test_opening_scope_valid_inbox_points_to_typed_edit_not_paid_resample():
 
 def test_missing_blueprint_projection_inbox_points_only_to_free_materialization():
     """待办文案不能把缺伴生产物说成要重新付费抽 Global。"""
-    from novel.views import inbox as I
+    from novel.orchestrator import inbox_projection as I
 
     grounding = SimpleNamespace(
         rel='stage2/characters.json', exists=True, readable=True,
@@ -230,7 +230,7 @@ def test_missing_blueprint_projection_inbox_points_only_to_free_materialization(
 
 def test_old_blueprint_has_no_separate_migration_inbox():
     """待办层不能恢复已退役的免费迁移入口。"""
-    from novel.views import inbox as I
+    from novel.orchestrator import inbox_projection as I
     assert not hasattr(I, '_stage2_legacy_blueprint_recovery_items')
 
 
@@ -238,7 +238,7 @@ def test_unknown_input_invalid_cannot_suppress_normal_validation_inbox():
     """来源未知仍展示人工复验；是否可提升由 producer 判定。"""
     from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS
     from novel import paths
-    from novel.views import inbox as I
+    from novel.orchestrator import inbox_projection as I
 
     invalid_rel = paths.invalid_of(STAGE2_CHAPTER_BLUEPRINTS)
 
@@ -255,7 +255,7 @@ def test_unknown_input_invalid_cannot_suppress_normal_validation_inbox():
 
 def test_stage5_band_drift_is_one_book_task_with_chapter_details_preserved():
     """inbox 直接消费 CheckReport 的书级 finding，不再做第二次聚合。"""
-    from novel.views import inbox as I
+    from novel.orchestrator import inbox_projection as I
 
     aggregate = SimpleNamespace(
         output_ordinal=None, wontfix=None, unresolved_rounds=0,
@@ -279,7 +279,7 @@ def test_stage5_band_drift_is_one_book_task_with_chapter_details_preserved():
 
 def test_stage5_length_over_uses_the_finding_chapter_without_display_side_guessing():
     """inbox 只投影 Review finding 自带的章号；不在展示层做 trim join。"""
-    from novel.views import inbox as I
+    from novel.orchestrator import inbox_projection as I
 
     finding = SimpleNamespace(
         output_ordinal=3, wontfix=None, unresolved_rounds=0,
@@ -368,7 +368,7 @@ def test_plan_info_warnings_route_to_human_and_thus_into_the_inbox():
 def test_stalled_items_only_take_hard_info_at_the_stop_threshold(monkeypatch):
     """轮次到顶只升级 HARD/INFO；常驻 METRIC/UNVER 不是修复失败。"""
     from novel.stages.stage5 import review
-    from novel.views import inbox as I
+    from novel.orchestrator import inbox_projection as I
 
     def finding(rule, rounds, wontfix=None):
         return SimpleNamespace(rule=rule, detail=f'{rule} 连续未消', evidence_key='e',
@@ -425,7 +425,7 @@ def test_the_fallback_how_only_names_commands_that_can_actually_be_built():
 
     from contracts.invariants import NODES, STAGES, VALUED_FLAGS
     from novel.orchestrator.nodes import build_argv, placeholder_for
-    from novel.views.inbox import _human_how
+    from novel.orchestrator.inbox_projection import _human_how
 
     checked = 0
     for stage in STAGES:
@@ -446,7 +446,7 @@ def test_the_fallback_how_only_names_commands_that_can_actually_be_built():
 
 def test_every_revalidate_inbox_instruction_requires_audit_credentials():
     from contracts.invariants import NODES
-    from novel.views.inbox import _revalidate_how
+    from novel.orchestrator.inbox_projection import _revalidate_how
 
     nodes = [node for node, spec in NODES.items() if '--revalidate' in spec.flags]
     assert nodes
@@ -483,7 +483,7 @@ def test_generic_invalid_checks_the_producer_revalidate_flag_before_schema_versi
     """通用路由从 NODES 派生；有真实提升口时不做 Stage3 专属版本猜测。"""
     from contracts.artifacts import STAGE6_HOOK
     from novel import paths
-    from novel.views import inbox as I
+    from novel.orchestrator import inbox_projection as I
 
     invalid = paths.invalid_of(STAGE6_HOOK)
     store = _InvalidStore(
@@ -504,7 +504,7 @@ def test_every_human_only_row_offers_something_the_operator_can_actually_run():
     import re as _re
 
     from contracts.invariants import NODES
-    from novel.views import inbox as I
+    from novel.orchestrator import inbox_projection as I
 
     # 语料此刻没有 human_only 是合法盘面，不应把偶然有行当作契约。
     # 用可控报告直接验证生产路径。
@@ -527,7 +527,7 @@ def test_every_human_only_row_offers_something_the_operator_can_actually_run():
 
 
 def test_a_hard_local_hit_with_a_fix_route_is_repairable_not_human_only():
-    from novel.views import inbox as I
+    from novel.orchestrator import inbox_projection as I
 
     fix = SimpleNamespace(
         node='stage2.global', flags=['--apply-edit', 'stage2/global_edit.json'],

@@ -27,7 +27,7 @@ from contracts.schema import (
 )
 from novel.consumption import CONSUMED_PROJECTIONS
 from novel.orchestrator.state import overview
-from novel.views.inbox import inbox_view
+from novel.orchestrator.inbox_projection import inbox_view
 
 MAIN_TEXT = [
     {'chapter_ordinal': 1, 'text': '甲推门进屋。'},
