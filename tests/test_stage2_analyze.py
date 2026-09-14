@@ -11,7 +11,7 @@ from contracts.schema.characters import CharacterRegistry
 from contracts.schema.knowledge import KnowledgeGrounding
 from novel.errors import GateBlocked, ProvenanceRefused
 from novel.llm import agent_runs
-from novel.node_agents import Stage2AnalyzeAgent
+from novel.orchestrator.node_agents import Stage2AnalyzeAgent
 from novel.stages.stage2 import analyze
 from novel.store import ArtifactStore
 from tests.stage2_fixtures import character_response

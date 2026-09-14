@@ -27,7 +27,7 @@ from novel import paths, prov
 from novel.cli import main as cli
 from novel.orchestrator import approvals
 from novel.stages.stage4 import plan
-from novel.views import inbox as inbox_view
+from novel.orchestrator import inbox_projection as inbox_view
 from tests.test_design_review import _mixed_repair_subjects
 from tests.test_stage4_agent_boundary import (
     _OneTurnDriver, _book, _bound_b_response, _client, _ctx, _land_design,
@@ -225,7 +225,7 @@ def test_real_design_and_structure_workpacks_are_read_only_and_zero_spawn(
                for row in design.groups[-1].items)
 
     plan_ctx = _ctx(book, 'stage4.plan')
-    from novel.node_agents import Stage4PlanSessionPool
+    from novel.orchestrator.node_agents import Stage4PlanSessionPool
     calls = []
     def refuse_unneeded_model(purpose, chapter):
         calls.append((purpose, chapter))

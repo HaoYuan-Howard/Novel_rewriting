@@ -14,7 +14,7 @@ from contracts.schema.characters import CharactersEdit
 from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.stage2 import GlobalEdit
 from novel.errors import ProvenanceRefused, UpstreamMissing
-from novel.node_agents import Stage2GlobalAgent
+from novel.orchestrator.node_agents import Stage2GlobalAgent
 from novel.stages.stage2 import characters, extract, grounding
 from novel.store import ArtifactStore
 from tests.test_stage2_characters import _ctx, _generate

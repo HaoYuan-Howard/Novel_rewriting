@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from novel import agent_session_audit as A
+from novel.agents import session_audit as A
 
 
 _SHA_A = 'a' * 64

@@ -83,6 +83,27 @@ def test_prompt_experiment_controls_are_not_published(paid_payload):
                for action in paid_payload['actions'])
 
 
+def test_the_web_static_unions_match_current_invariants():
+    """⭐⭐ `web/src/types/backend.generated.ts` == `contracts/invariants` 取值域。
+
+    取值域联合（Freshness / Badge / Severity / JobState / InboxKind /
+    FreshnessDisplay / StageId）曾手抄在 `vocabulary.ts`，与 enums.json 夹具
+    是同一种「第 N 个落点必然分家」的病。2026-09 架构迁移将其收归后端唯一源、
+    由 `scripts/export_backend_types.py` 生成；本条是它的对账落点（子进程跑
+    生成器自带的 `--check`，口径与生成完全同源）。
+    """
+    import subprocess
+    import sys
+
+    repo = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, 'scripts/export_backend_types.py', '--check'],
+        cwd=repo, capture_output=True, text=True, encoding='utf-8')
+    assert result.returncode == 0, (
+        f'backend.generated.ts 与 invariants 分家了：\n{result.stdout}{result.stderr}'
+        f'→ 重生成：conda run -n novel_refactor python scripts/export_backend_types.py')
+
+
 def test_operator_telemetry_and_judge_internals_are_not_frontend_choices(
         paid_payload):
     assert not {

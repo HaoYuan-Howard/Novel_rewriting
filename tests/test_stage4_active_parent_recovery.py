@@ -12,11 +12,11 @@ from contracts.artifacts import STAGE4_BLIND_CANDIDATE
 from contracts.schema.orchestration import (
     AgentRunEvent, AgentRunStart, ExecutionEpoch, PipelineAgentProfiles, RunContractV2,
 )
-from novel import commander_context
+from novel.commanders import context as commander_context
 from novel.errors import ProvenanceRefused, TerminalState
 from novel.llm import design_adoption, stage4_runs
 from novel.llm.ledger import CostLedger
-from novel.node_agents import Stage4DesignSessionPool
+from novel.orchestrator.node_agents import Stage4DesignSessionPool
 from novel.orchestrator import admission, agent, queue
 from novel.stages.stage4 import design_recovery, plan
 from tests.test_stage4_agent_boundary import _ctx, _RequestDriver

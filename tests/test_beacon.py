@@ -18,7 +18,7 @@ import pytest
 
 from contracts.invariants import BEACON_STATES, NODES, PIPELINE_STEPS
 from contracts.schema.orchestration import ProgressEvent
-from novel.cli import exit_codes as X
+from novel import exit_codes as X
 from novel.cli.main import main
 from novel.errors import TerminalState
 from novel.orchestrator import admission, beacon

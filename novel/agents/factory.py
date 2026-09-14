@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from contracts.invariants import AgentRole
 from contracts.schema.orchestration import AgentProfile
-from novel.agent_capabilities import validate_profile
+from novel.agents.capabilities import validate_profile
 from novel.agents import AgentDriver, ClaudeCodeDriver, CodexDriver
 from novel.agents.glm import GlmClaudeCodeDriver
 

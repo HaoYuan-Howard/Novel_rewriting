@@ -56,15 +56,16 @@ from contracts.schema.orchestration import (
     PipelineAgentProfiles, ReviewerActionRecord, RunContractV2,
     ReviewerSchemaRecoveryProof, ReviewerSeatLedger, ReviewerSeatTurn,
 )
-from novel import agent_session_audit, paths, prov, run_identity
-from novel.agent_capabilities import (
+from novel import paths, prov, run_identity
+from novel.agents import session_audit as agent_session_audit
+from novel.agents.capabilities import (
     AgentProfileRefused, provider_for_driver, reported_model_matches, validate_pipeline_profiles,
 )
 from novel.appendlog import (
     append_line, append_line_under_process_lock, append_transaction,
 )
-from novel.cli.exit_codes import CRASH, landed
-from novel.commander_context import (
+from novel.exit_codes import CRASH, landed
+from novel.commanders.context import (
     COMMANDER_ADMISSION_ID_ENV, COMMANDER_CONTRACT_SHA256_ENV,
     COMMANDER_EPOCH_ID_ENV,
     COMMANDER_EPOCH_SHA256_ENV, COMMANDER_RUN_ID_ENV, env_with_context,

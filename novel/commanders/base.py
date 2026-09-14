@@ -584,7 +584,7 @@ class CliCommanderDriver(CommanderDriver):
         return None
 
     def _resolved_profile(self, profile: AgentProfile) -> AgentProfile:
-        from novel.agent_capabilities import (
+        from novel.agents.capabilities import (
             AgentProfileRefused,
             validate_profile,
         )

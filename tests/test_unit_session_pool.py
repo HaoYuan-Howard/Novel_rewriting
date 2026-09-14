@@ -10,7 +10,7 @@ from contracts.schema.orchestration import AgentProfile
 from novel.agents.unit_session_pool import UnitSessionPool
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger
-from novel.node_agents import (
+from novel.orchestrator.node_agents import (
     BlueprintSessionPool, SemanticSessionPool, Stage4DesignSessionPool,
     Stage4PlanSessionPool, Stage5SessionPool,
 )

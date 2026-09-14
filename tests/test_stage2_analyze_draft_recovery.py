@@ -16,7 +16,7 @@ from contracts.schema.knowledge import KnowledgeGrounding
 from novel import paths
 from novel.cli.main import _run_stage2
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
-from novel.node_agents import Stage2AnalyzeAgent, Stage2CharactersAgent
+from novel.orchestrator.node_agents import Stage2AnalyzeAgent, Stage2CharactersAgent
 from novel.orchestrator import nodes
 from novel.stages.stage2 import analyze, analyze_draft_recovery as recovery, analyze_recovery, characters
 from novel.store import ArtifactStore

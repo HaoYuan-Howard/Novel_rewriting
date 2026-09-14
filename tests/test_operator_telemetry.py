@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from novel import operator_telemetry as T
+from novel.orchestrator import operator_telemetry as T
 
 
 SID = '2007780338055790990'
@@ -24,7 +24,7 @@ SHA_B = 'b' * 64
 
 def test_module_entrypoint_actually_dispatches_the_cli():
     result = subprocess.run([sys.executable, '-X', 'utf8', '-B', '-m',
-                             'novel.operator_telemetry', '--help'],
+                             'novel.orchestrator.operator_telemetry', '--help'],
                             capture_output=True, text=True, encoding='utf-8', timeout=30)
     assert result.returncode == 0, result.stderr
     assert 'session-start' in result.stdout and 'phase-end' in result.stdout

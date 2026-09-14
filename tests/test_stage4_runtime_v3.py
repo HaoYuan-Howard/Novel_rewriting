@@ -26,7 +26,7 @@ from novel.agents import AgentRequest
 from novel.llm import stage4_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger
-from novel.node_agents import Stage4DesignSessionPool
+from novel.orchestrator.node_agents import Stage4DesignSessionPool
 from novel.run import RunContext
 from novel.stages.stage4 import plan
 from novel.store import ArtifactStore

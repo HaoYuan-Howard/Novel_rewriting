@@ -151,7 +151,7 @@ exit 0 只说明外层正常结束；结束后独立从当前盘面核代码身�
 ## 27. “是否还等人”与“是否挡交付”是正交维度
 
 人工项至少分 `attention`（pending/reviewed_retained）与 `delivery_effect`（blocking/disclosure）；已审决定
-必须有 typed actor/reason/subject 证据。落点：`contracts/schema/api.py::InboxItem`、`novel/views/inbox.py`。
+必须有 typed actor/reason/subject 证据。落点：`contracts/schema/api.py::InboxItem`、`novel/orchestrator/inbox_projection.py`。
 
 ## 28. 硬闸要落在所有调用方必经的最低边界，并与恢复材料同批交付
 

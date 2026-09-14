@@ -11,10 +11,11 @@ from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY, STAGE6_HOOK
 from contracts.schema import encode_artifact
 from contracts.schema.stage1 import MainText, HookCopy
 from contracts.schema.stage6_prepare import PrepareDraft, PrepareEdit, PrepareDecision, Stage6Prepare, PrepareMutationJournal
-from novel import agent_session_audit, paths
+from novel import paths
+from novel.agents import session_audit as agent_session_audit
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
 from novel.llm import agent_runs, stage6_prepare_runs
-from novel.node_agents import Stage6PrepareAgent
+from novel.orchestrator.node_agents import Stage6PrepareAgent
 from novel.stages.stage6 import prepare
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text

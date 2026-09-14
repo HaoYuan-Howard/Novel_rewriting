@@ -48,7 +48,8 @@ from contracts.schema.stage6 import (
     ApprovedHook, Candidate, Hook, HookApprovalResolution, HookEdit, HookParams,
     HookCandidateRetryResponse, HookProvenance, HookResponse, HookSources, Mech,
 )
-from novel import agent_session_audit, paths, prov, wontfix
+from novel import paths, prov, wontfix
+from novel.agents import session_audit as agent_session_audit
 from novel.consumption import prepare_projection, stage6_characters, stage6_grounding
 from novel.core.measure import hook_style_metrics, measure
 from novel.errors import (
@@ -417,7 +418,7 @@ def run_wontfix(ctx: RunContext, spec: str) -> CheckReport:
     `hook_candidate_contradiction` 提示）此前**没有任何人工闭环**：结论在报告渲染时
     现算、不落盘，而豁免机制只活在 stage5 里。更坏的是待人工清单**在建议人去跑
     `--wontfix`**——一个这一层根本不存在的 flag（那句兜底文案已随本轮改成按
-    `NODES` 派生，见 `novel/views/inbox.py::_human_how`）。
+    `NODES` 派生，见 `novel/orchestrator/inbox_projection.py::_human_how`）。
 
     ⚠ **本层结论一律书级**：候选是同一次调用产的三条，没有章这一维；
     候选身份在证据键里（`<候选>:<原字节>`）。写章号 ⇒ 显式终态，不静默当成 book。

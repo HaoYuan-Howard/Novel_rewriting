@@ -7,11 +7,11 @@ import subprocess
 import pytest
 
 from contracts.schema.orchestration import AgentProfile, PipelineAgentProfiles
-from novel.agent_capabilities import (
+from novel.agents.capabilities import (
     AgentProfileRefused, get_agent_capabilities, reported_model_matches,
     provider_for_driver, validate_pipeline_profiles, validate_profile,
 )
-from novel.agent_model_identity import AgentModelIdentityRefused, resolve_agent_model_identity
+from novel.agents.model_identity import AgentModelIdentityRefused, resolve_agent_model_identity
 from novel.agents import base as agent_base
 from novel.agents.factory import create_driver
 from novel.agents.glm import BIGMODEL_BASE_URL, GlmClaudeCodeDriver, bigmodel_cli_settings

@@ -15,7 +15,7 @@ from contracts.schema.api import (
     WritingApprovalRequest,
 )
 from novel.cli import main as cli
-from novel.cli import exit_codes as X
+from novel import exit_codes as X
 from novel.orchestrator import approvals
 
 

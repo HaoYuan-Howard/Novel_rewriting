@@ -30,7 +30,7 @@ from contracts.schema.stage5 import (
     PreparedRecoveryWorkpack,
 )
 from novel.errors import ArtifactUnreadable, ProvenanceRefused, UnsupportedRunMode
-from novel import agent_session_audit
+from novel.agents import session_audit as agent_session_audit
 from novel.llm import agent_runs, stage5_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
@@ -916,7 +916,7 @@ def test_recovery_zero_wire_refuses_unclosed_persistent_tail(tmp_path):
 @pytest.mark.parametrize('revise', [False, True])
 def test_direct_stage5_write_agent_refuses_before_factory_probe_turn_or_accounts(
         tmp_path, monkeypatch, revise):
-    from novel.node_agents import Stage5WriteAgent
+    from novel.orchestrator.node_agents import Stage5WriteAgent
 
     book = tmp_path / 'prepared直连执行者_2007780338055790990'
     book.mkdir()

@@ -17,12 +17,14 @@ from typing import Any, Sequence
 
 ROOT = Path(__file__).resolve().parents[2]
 
-from novel import commander_context, paths, prov, run_identity
+from novel import paths, prov, run_identity
+
+from novel.commanders import context as commander_context
 from contracts.schema.api import ExecutionPermit
 from contracts.schema.orchestration import (
     AgentExecutorBackend, LegacyExecutorBackend,
 )
-from novel.cli import exit_codes as X
+from novel import exit_codes as X
 from novel.errors import TerminalState
 from novel.orchestrator import admission
 from novel.orchestrator import execution_permit as permit_layer

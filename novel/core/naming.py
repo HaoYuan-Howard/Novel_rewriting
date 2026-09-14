@@ -4,8 +4,7 @@
 naming.py —— 人物**专名**表，以及「有没有编出新人名」那条探针。
 
 四组东西方向各不相同，别混：
-  · `KINSHIP` —— Stage5 发明检测复用的通用称谓过滤；`names_of` /
-    `spoiler_names_of` 是退役 Stage3 v1 校验留下的兼容工具，现役生产不消费；
+  · `KINSHIP` —— Stage5 发明检测复用的通用称谓过滤；
   · `name_stems` / `invented_names` —— stage5/stage6 的**发明检测**（拿本书已有的姓
     去造新人，那是闭卷写手最容易干的一件事）；
   · `attested_surname` / `family_groups` / `is_generic_appellation` —— stage7 改名的
@@ -26,61 +25,12 @@ from __future__ import annotations
 
 import re
 
-from contracts.schema.stage2 import GlobalGrounding
 from novel.core.text import norm
 
 #: 亲属/关系称谓（**语言层通用，非某本书特有**）：这类词面即使被登记为某角色的别名，
 #: 出现在风格描述里通常是在说「怎么称呼」这条**可迁移**规则，不算专名泄漏。
 KINSHIP = re.compile(r'^(我|你|他|她|前|亲|干|继|老|小)?'
                      r'(爹|娘|爸|妈|父|母|公|婆|夫|妻|君|兄|弟|姐|妹|嫂|舅|姨|叔|伯|婶|爷|奶|媳|婿|子|女|孙)')
-
-
-def names_of(gg: GlobalGrounding) -> frozenset[str]:
-    """全书事实底座 → 人物**专名**集合。
-
-    名表来源 = `canonical` + `address[].surface`（「谁怎么称呼他」的字面；
-    旧契约的 `aliases`/`titles` 已并入 `address`——头衔与别名本就是同一件事的两面）。
-
-    **两层过滤**，滤掉「通用称谓」只留真专名（都是语言/schema 层的通用规则，非逐本 hint）：
-      · 排除 `name_distinctiveness == 'common'` 的角色
-        （stage2 对该档的定义就是「纯亲属词或多实体共享词」）；
-      · 排除亲属/关系称谓词面（我娘、公爹、前夫君…）——它们常被存成高辨识角色的称呼。
-
-    ⚠ 长度 ≥2：单字词面拿去扫描全篇描述必然满屏假阳。
-    """
-    return frozenset(
-        s for c in gg.entities.characters.values()
-        if c.name_distinctiveness != 'common'
-        for s in ([c.canonical] + [a.surface for a in c.address])
-        if s and len(s) >= 2 and not KINSHIP.match(s))
-
-
-def spoiler_names_of(gg: GlobalGrounding, names: frozenset[str]) -> frozenset[str]:
-    """`names` 里哪些同时是【读者还没被揭示的秘密】的主体。**只用来给告警分轻重。**
-
-    专名泄漏本来就违约（描述换本书就不成立），但两种泄漏的严重程度差得很远：
-      · 「许言」出现在 `voice` 里 —— 不可迁移，是个坏描述；
-      · 「系统」出现在 `voice` 里 —— **同时是剧透**：它是 `secret_03` 的主体、
-        读者 ch14 才知情。退役的全书/逐章定性画像曾可能把它下发给 ch1 的闭卷写手；
-        Stage3 v2 已删除这条消费链。
-
-    ⚠ 实测两本：专名泄漏共 1 处，而那一处正好是剧透主体——**样本只有 1，
-    别据此下「泄漏 ⊂ 剧透」的结论**。这个标注的用途是让人一眼看出该不该立刻重跑，
-    **不是一条判据**（判据 32：名字不要抢跑）。
-
-    没有 secrets（如書1）时返回空集——那是「这本书没有可查的秘密」，**不是「没有剧透」**。
-    """
-    if not names:
-        return frozenset()
-    out: set[str] = set()
-    for s in gg.canon.secrets:
-        # 揭示章 > 1 才算「读者还没知道」——第 1 章就揭示的秘密写进 voice 不是剧透。
-        # ⚠ 判的是**首次**揭示章（`Secret.first_reveal`）：后续 `confirm` 事件说的是
-        #   「又提了一次」，与「读者第一次知道」无关。
-        if s.first_reveal <= 1:
-            continue
-        out |= {n for n in names if n in s.fact}
-    return frozenset(out)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

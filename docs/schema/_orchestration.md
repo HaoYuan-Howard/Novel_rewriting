@@ -50,7 +50,7 @@
 
 `AgentProfile` 只记录一次选择，不自己声明“哪些组合可用”。可选 driver、角色、model、
 reasoning effort 与 execution mode 的唯一公开来源是 `GET /api/agent/capabilities`；组合校验由
-`novel/agent_capabilities.py` 的同一份 registry 完成，前端与 argv builder 都不能各抄一张表。
+`novel/agents/capabilities.py` 的同一份 registry 完成，前端与 argv builder 都不能各抄一张表。
 
 | `AgentProfile` 字段 | 类型 | 必填 | 内容 | 证据 |
 |---|---|---|---|---|
@@ -271,7 +271,7 @@ argv 的形态是：
 
 ⚠ **退出码 1 不等于崩溃**：`1` 只表「跑完了，判定不通过」；
 崩溃是 **`70`（结论未知，是 bug，栈在 stderr）**，与 `jobs.py` worker 的数同源。
-取值面唯一落点 `novel/cli/exit_codes.py`（五个数）。
+取值面唯一落点 `novel/exit_codes.py`（五个数）。
 
 ### 2.4 `RunContractV2` / `ExecutionEpoch` —— headless agent 的稳定合同与可滚动执行身份
 
@@ -558,7 +558,7 @@ delivery 终验未闭合时只运行`novel/orchestrator/delivery.py` 的确定�
 > | `1`（`CHECK_FAILED`） | 产物**已经落盘**，校验报告有阻断级红行 | 打开那一层的屏看红行并裁决，**多半不必重跑** |
 > | `2` / `3` / `70` | 压根没跑成 | 修完重跑 |
 >
-> 判据的唯一落点是 `novel/cli/exit_codes.py::landed` / `landed_but_red`。
+> 判据的唯一落点是 `novel/exit_codes.py::landed` / `landed_but_red`。
 > exit 1 是独立的第五态 `landed_red`，并保留 `JobRecord.note`
 > （`jobs.LANDED_RED_NOTE`）与队列的停止理由。它仍然**停住同书 lane**等待人工裁决；
 > 状态分辨率提升不等于授权队列越过红报告继续扣费。
@@ -1101,7 +1101,7 @@ legacy thinking 或 provider max tokens。
 写入与恢复都必须把 accepted attempt 唯一联到 `_service/agent_sessions.jsonl` 的 current wire
 `started + turn`，逐项核 parent run、node/chapter、profile、subject、provider session、turn index、
 prompt/schema 与 requested/actual model/effort，再与 ledger 的 attempt/fingerprint/response SHA 闭合。
-模型证据统一由 `novel/agent_model_identity.py` 重算：回显 actual 必须精确等于 profile；未回显只允许
+模型证据统一由 `novel/agents/model_identity.py` 重算：回显 actual 必须精确等于 profile；未回显只允许
 registry 登记的 `driver-enforced`，且该 session turn 必须有 CLI 版本。后一种 checkpoint 的 `model`
 记录 adopted identity，但 session actual 仍为 `null`、ledger model 仍为 `unknown`；恢复、历史采用、
 聚合和 commit 均不得把它们倒填为已回显。未登记 driver、缺 CLI 版本或任何非空冲突一律拒绝。

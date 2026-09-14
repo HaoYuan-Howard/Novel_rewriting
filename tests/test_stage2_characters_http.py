@@ -53,7 +53,7 @@ def test_characters_http_writes_through_real_cli_and_survives_restart(tmp_path, 
         assert repeated.json()['exit_code'] == 0
         changed_attestation = restarted.post(endpoint + '/edit', json={**body, 'reason': '试图改写原回执'})
         assert changed_attestation.status_code == 200
-        from novel.cli.exit_codes import landed
+        from novel.exit_codes import landed
         assert not landed(changed_attestation.json()['exit_code'])
         assert restarted.get(endpoint).json()['source_sha256'] == after['source_sha256']
 

@@ -1,7 +1,7 @@
 """Stage2 审阅接受与工作包已随语义审阅整体退役（Git 保留历史反例）。
 
 原「两份 typed 接受、审批继承、跨章复核与 rework 派修」的 producer 生命周期
-由统一机械准入（``novel/admission.py``）替代；审阅接受面的用例按退役处置，
+由统一机械准入（``novel/orchestrator/mechanical_admission.py``）替代；审阅接受面的用例按退役处置，
 「蓝图册 typed 修订的重放与零模型恢复」现役反例由 ``tests/test_plot_edit.py``
 承担（同一 producer、同一故障点、等价断言）。这里保留所有审批写入口的
 旧 base 拒绝边界：任何入口都不得在缺失当前 manifest 时建立锁或写副作用。

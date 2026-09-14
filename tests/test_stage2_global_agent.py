@@ -18,7 +18,8 @@ from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
     GlobalGrounding,
 )
-from novel import agent_session_audit, paths, prov
+from novel import paths, prov
+from novel.agents import session_audit as agent_session_audit
 from novel.agents import AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage
 from novel.agents.session_client import agent_json_schema
 from novel.errors import GateBlocked, ProvenanceRefused, UpstreamStale
@@ -26,7 +27,7 @@ from novel.llm import stage2_global_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmFailed
 from novel.llm.ledger import AUDIT_REL, CostLedger, ledger_path
-from novel.node_agents import Stage2GlobalAgent
+from novel.orchestrator.node_agents import Stage2GlobalAgent
 from novel.run import RunContext
 from novel.stages.stage2 import extract
 from novel.store import ArtifactStore

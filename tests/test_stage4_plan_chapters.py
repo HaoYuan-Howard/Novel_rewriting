@@ -39,7 +39,7 @@ from novel.llm import agent_runs, stage4_runs
 from novel.llm import response_repair
 from novel.llm import typed_failures
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
-from novel.node_agents import Stage4PlanSessionPool
+from novel.orchestrator.node_agents import Stage4PlanSessionPool
 from novel.store import ArtifactStore
 from novel.stages.stage4 import plot_binding as baseline_mod
 from novel.stages.stage4 import plan
@@ -1613,7 +1613,7 @@ def test_all_historical_chapters_aggregate_without_driver_or_new_cost(prepared_d
     def forbidden(*args):
         raise AssertionError('全部采用不能创建 driver/probe/session')
     target.executor_profile = None
-    monkeypatch.setattr('novel.node_agents.Stage4PlanSessionPool', forbidden)
+    monkeypatch.setattr('novel.orchestrator.node_agents.Stage4PlanSessionPool', forbidden)
     assert plan.run_reaggregate(target).passed
     assert source.ledger.path.read_bytes() == ledger_before
     binding = ArtifactStore(target).read_own(EvidenceBinding, STAGE4_EVIDENCE_BINDING)[0]
@@ -1705,7 +1705,7 @@ def test_prepared_aggregate_is_discovered_and_recovered_by_new_execution(
     recovery.paid = False
     recovery.executor_profile = None
     recovery.executor_backend = None
-    monkeypatch.setattr('novel.node_agents.Stage4PlanSessionPool',
+    monkeypatch.setattr('novel.orchestrator.node_agents.Stage4PlanSessionPool',
                         lambda *args, **kwargs: pytest.fail('恢复禁止构造模型客户端'))
     from novel.cli.main import main
     assert main(['--run-id', recovery.run_id, 'run', 'stage4.plan', producer.sid,

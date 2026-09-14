@@ -244,12 +244,12 @@ _JSON_READ_ALLOWED = {
         'Commander 子执行准入账**不是产物**：'
         '`_service/commander_admissions.jsonl` 是 append-only 生命周期事件，'
         '需以 LF 作提交标记并关闭式解析；它不进来源账或 ARTIFACTS'),
-    'novel/agent_session_audit.py': (
+    'novel/agents/session_audit.py': (
         'commander / executor 会话审计**不是产物**：'
         '`_service/agent_sessions.jsonl` 是 append-only 事件流，'
         '只记 profile/session/usage/指纹与双轴终态，不进来源账或 ARTIFACTS；'
         '读侧只容忍被 kill 截断的最后一行，中间坏行关闭式失败'),
-    'novel/operator_telemetry.py': (
+    'novel/orchestrator/operator_telemetry.py': (
         'Commander / operator 阶段遥测**不是产物、节点或成本账**：'
         '`_service/operator_phases/*.jsonl` 是不含正文/提示词/token 的逐 session append-only 事件流，'
         '只记本地阶段身份、耗时与终态；读侧只容忍被 kill 截断的最后一行'),
@@ -278,7 +278,7 @@ _JSON_READ_ALLOWED = {
         '离线迁移只解码 `_service/` 的 workflow manifest、prepared/completed 与运行账，'
         '用于显式版本、全字段、原字节 CAS 和下游未启动证明；这些是服务控制账而非小说产物。'
         '人物/正文投影仍经 ArtifactStore 读取，迁移不能补造旧审批或小说知识'),
-    'novel/stage2_run_state.py': (
+    'novel/stages/stage2/run_state.py': (
         '只读解码 _service/runs 下的 Stage2 运行记录与验证后检查点；'
         '它们不是正式产物，当前版本、自哈希和输入身份不闭合即 unver，'
         '与 producer 共用载体协议，不含模型执行或 paid-response 恢复权威'),
@@ -562,6 +562,12 @@ def _view_files() -> list[str]:
     return files
 
 
+def _orchestrator_files() -> list[str]:
+    files = [p for p in _runtime_files() if _rel(p).startswith('novel/orchestrator/')]
+    assert len(files) >= 10, f'只扫到 {len(files)} 个编排层模块——路径多半错了'
+    return files
+
+
 def test_only_the_api_layer_imports_the_web_stack():
     """web 栈只许出现在白名单里那几个文件。
 
@@ -771,6 +777,191 @@ def test_the_view_layer_cannot_reach_the_judgement_layer():
     assert any('contracts.schema.api' in _full_imports(p) for p in _view_files())
 
 
+def test_the_orchestrator_never_imports_the_view_layer():
+    """⭐ 单向依赖：视图层组屏读编排，编排层不许反过来 import 视图。
+
+    历史上 `operator` / `delivery` 为取 inbox 投影反向 import 过 `views.inbox`，
+    形成 views↔orchestrator 包级环；2026-09 架构迁移把八类清单生产者整体下沉到
+    `novel/orchestrator/inbox_projection.py`（输入是 operator 快照与审批投影，
+    属编排域，不是展示层组屏），下沉后以本条钉住方向。
+    """
+    bad = [(_rel(p), sorted(m for m in _full_imports(p) if m.startswith('novel.views')))
+           for p in _orchestrator_files()
+           if any(m.startswith('novel.views') for m in _full_imports(p))]
+    assert not bad, f'编排层反向 import 了视图层：{bad}'
+    # 守卫的守卫：inbox 投影确实住在编排层，扫错目录时上面那条会静静地绿。
+    assert any('novel.orchestrator.inbox_projection' in _full_imports(p)
+               for p in _orchestrator_files()
+               if _rel(p).endswith(('operator.py', 'delivery.py')))
+
+
+def test_the_artifact_mouth_cannot_reach_stage_internals():
+    """⭐ 基础设施不知道 stage：产物单口不许在**模块顶层** import `novel.stages`。
+
+    依赖方向必须是 stage producer → store/paths。`consumption.py` 完全不许
+    触达 stage（其孤儿 scope 依赖族已删除）；`store.py` 在读特定产物时确有
+    六处**函数内惰性** stage 触达（grounding/binding/character_refs 等投影
+    复算），它们登记在 M5 的跨 stage 深路径 grandfather 清单里、只减不增，
+    本条只钉住更弱但立即为真的一层：**import 时刻**产物单口不依赖任何
+    stage——store/consumption 可以被 contracts 测试与工具独立 import。
+    （2026-09 修正：本条首版对 store 断言了绝对零触达，提交时验证输出被
+    tail 截断而误报全绿；本版按事实收窄并另建 grandfather 守卫。）
+    """
+    mouth = {
+        'novel/consumption.py': 'any',
+        'novel/store.py': 'top_level',
+    }
+    for rel, mode in mouth.items():
+        path = os.path.join(ROOT, *rel.split('/'))
+        assert os.path.isfile(path), f'扫描目标不存在：{rel}'
+        if mode == 'any':
+            leaked = sorted(m for m in _full_imports(path)
+                            if m.startswith('novel.stages'))
+            assert not leaked, f'{rel} import 了 stage 层：{leaked}'
+        else:
+            hits = [
+                n.lineno for n in tree_body_imports(path)
+                if _import_targets_stage(n)]
+            assert not hits, f'{rel} 在模块顶层 import 了 stage 层（第 {hits} 行）'
+
+
+def tree_body_imports(path: str) -> list:
+    """只看模块顶层（`Module.body` 直接子节点）的 import 节点。"""
+    return [n for n in _tree(path).body
+            if isinstance(n, (ast.Import, ast.ImportFrom))]
+
+
+def _import_targets_stage(node) -> bool:
+    if isinstance(node, ast.Import):
+        return any(a.name.startswith('novel.stages') for a in node.names)
+    return bool(node.module) and node.module.startswith('novel.stages')
+
+_CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
+    ('novel/api/errors.py', 'novel.stages.stage4.plot_refs'),
+    ('novel/api/routes/edits.py', 'novel.stages.stage2.extract'),
+    ('novel/cli/main.py', 'novel.stages.stage2.plot_edit'),
+    ('novel/llm/stage2_global_runs.py', 'novel.stages.stage2.analyze'),
+    ('novel/llm/stage2_global_runs.py', 'novel.stages.stage2.analyze_draft_recovery'),
+    ('novel/llm/stage4_runs.py', 'novel.stages.stage4.design_rebuild'),
+    ('novel/llm/stage4_runs.py', 'novel.stages.stage4.plot_design'),
+    ('novel/orchestrator/node_agents.py', 'novel.stages.stage2.contract'),
+    ('novel/orchestrator/node_agents.py', 'novel.stages.stage2.plot_sequence'),
+    ('novel/orchestrator/agent.py', 'novel.stages.stage4.design_rebuild'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage0.eligibility'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage1.audit'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage2.grounding'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.binding_input_contract'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.design_evolution'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.measure'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.phase_state'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.plan'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.plot_design'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.plot_materials'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.reading'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage5.closure'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage5.review'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage7.rename'),
+    ('novel/orchestrator/queue.py', 'novel.stages.stage0.eligibility'),
+    ('novel/orchestrator/queue.py', 'novel.stages.stage2.plot_diagnostics'),
+    ('novel/orchestrator/queue.py', 'novel.stages.stage4.phase_state'),
+    ('novel/orchestrator/reviewer_tasks.py', 'novel.stages.stage2.paragraphs'),
+    ('novel/orchestrator/reviewer_tasks.py', 'novel.stages.stage4.plan'),
+    ('novel/orchestrator/reviewer_tasks.py', 'novel.stages.stage5.measure'),
+    ('novel/orchestrator/state.py', 'novel.stages.stage2.character_rebind'),
+    ('novel/orchestrator/state.py', 'novel.stages.stage5.measure'),
+    ('novel/orchestrator/state.py', 'novel.stages.stage5.review'),
+    ('novel/orchestrator/workflow_transition.py', 'novel.stages.stage2.character_refs'),
+    ('novel/source_identity.py', 'novel.stages.stage1.audit'),
+    ('novel/source_identity.py', 'novel.stages.stage1.partition'),
+    ('novel/stages/stage1/partition.py', 'novel.stages.stage0.eligibility'),
+    ('novel/stages/stage4/actors.py', 'novel.stages.stage2.character_refs'),
+    ('novel/stages/stage4/actors.py', 'novel.stages.stage2.plot_compile'),
+    ('novel/stages/stage4/beats.py', 'novel.stages.stage2.plot_compile'),
+    ('novel/stages/stage6/hook.py', 'novel.stages.stage5.review'),
+    ('novel/stages/stage6/measure.py', 'novel.stages.stage5.measure'),
+    ('novel/stages/stage6/prepare.py', 'novel.stages.stage2.paragraphs'),
+    ('novel/stages/stage6/prepare_compile.py', 'novel.stages.stage2.paragraphs'),
+    ('novel/stages/stage7/assemble.py', 'novel.stages.stage5.closure'),
+    ('novel/stages/stage7/measure.py', 'novel.stages.stage5.measure'),
+    ('novel/stages/stage7/rename.py', 'novel.stages.stage5.measure'),
+    ('novel/stages/stage7/rename.py', 'novel.stages.stage5.review'),
+    ('novel/store.py', 'novel.stages.stage1.audit'),
+    ('novel/store.py', 'novel.stages.stage2.character_refs'),
+    ('novel/store.py', 'novel.stages.stage2.grounding'),
+    ('novel/store.py', 'novel.stages.stage4.binding_input_contract'),
+    ('novel/store.py', 'novel.stages.stage4.phase_binding'),
+    ('novel/views/blueprint_progress.py', 'novel.stages.stage2.plot_inputs'),
+    ('novel/views/ingest.py', 'novel.stages.stage0.eligibility'),
+    ('novel/views/ingest.py', 'novel.stages.stage1.audit'),
+    ('novel/views/stage2.py', 'novel.stages.stage2.analyze_draft_recovery'),
+    ('novel/views/stage2.py', 'novel.stages.stage2.core_evidence'),
+    ('novel/views/stage4.py', 'novel.stages.stage2.grounding'),
+    ('novel/views/stage4.py', 'novel.stages.stage4.beats'),
+    ('novel/views/stage4.py', 'novel.stages.stage4.context'),
+    ('novel/views/stage4.py', 'novel.stages.stage4.measure'),
+    ('novel/views/stage4.py', 'novel.stages.stage5.measure'),
+    ('novel/views/stage4.py', 'novel.stages.stage5.prompts'),
+    ('novel/views/stage5.py', 'novel.stages.stage5.measure'),
+    ('novel/views/stage5.py', 'novel.stages.stage5.prompts'),
+    ('novel/views/stage6.py', 'novel.stages.stage5.measure'),
+    ('novel/views/stage6.py', 'novel.stages.stage6.hook'),
+    ('novel/views/stage7.py', 'novel.stages.stage5.measure'),
+    ('novel/views/stage7.py', 'novel.stages.stage7.rename'),
+    ('novel/views/stage7.py', 'novel.stages.stage7.subs'),
+})
+
+
+def _cross_stage_deep_edges() -> set[tuple[str, str]]:
+    """(importer 仓内路径, 深路径 import 的 stage 模块)——含函数内惰性 import。"""
+    out: set[tuple[str, str]] = set()
+    for path in _runtime_files():
+        rel = _rel(path)
+        own = None
+        parts = rel.split('/')
+        if (len(parts) >= 3 and parts[0] == 'novel' and parts[1] == 'stages'
+                and parts[2].startswith('stage')):
+            own = parts[2]
+        for node in ast.walk(_tree(path)):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                modules = [node.module]
+            elif isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            else:
+                continue
+            for module in modules:
+                if not module.startswith('novel.stages.stage'):
+                    continue
+                rest = module[len('novel.stages.'):].split('.')
+                if len(rest) >= 2 and rest[0] != own:
+                    out.add((rel, module))
+    return out
+
+
+def test_cross_stage_imports_stay_on_the_package_surface():
+    """⭐ Stage 公开边界：跨 stage 只许 `from novel.stages.stageN import X`
+    （包级导出）或经 `contracts.schema.stageN`；深路径 import 别的 stage 的
+    measure / prompts / plot_compile / checks 等内部实现一律禁止。
+
+    「删一个机制为什么改几十个文件」的根源正是这些深边——StageN 的内部
+    实现被当成公共接口消费。现存 71 条深边为 2026-09 冻结基线，
+    **只减不增**：消化一条就把它从清单删掉（diff 里可见、须说理由），
+    新增深边必须先建 stageN 包级公开导出。
+    """
+    current = _cross_stage_deep_edges()
+    new = current - _CROSS_STAGE_DEEP_GRANDFATHER
+    assert not new, (
+        f'新增跨 stage 深路径 import：{sorted(new)}；'
+        f'→ 要么经 stageN 包级导出（from novel.stages.stageN import X），'
+        f'要么走 contracts.schema.stageN')
+    stale = _CROSS_STAGE_DEEP_GRANDFATHER - current
+    assert not stale, (
+        f'以下深边已消失，请同步从冻结清单删除（消化须在提交说明给理由）：{sorted(stale)}')
+    # 守卫的守卫：扫描器必须看得见冻结清单里的已知边，否则红的是探测器。
+    assert ('novel/views/stage4.py', 'novel.stages.stage5.prompts') in current
+    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 71
+
+
+
 def test_the_api_layer_has_no_second_argv_builder():
     """`R-11.8`：**展示与执行共用同一个构造函数** ⇒ API 层不许自己拼一条命令。
 
@@ -893,7 +1084,7 @@ def test_completeness_never_peeks_at_the_job_records():
 #: 而退出码正是编排层判成败的依据（`R-12.3`）。
 _SYS_EXIT_ALLOWED = {
     'novel/cli/': '节点跑法的进程入口。**全仓唯一把异常翻成退出码的地方**'
-                  '（`novel/cli/exit_codes.py` 是那五个数的唯一落点）',
+                  '（`novel/exit_codes.py` 是那五个数的唯一落点）',
     'novel/api/__main__.py': '服务进程的入口（骨架 E5 加）。`--base` 敲错时要以非零退出——'
                              '不这样的话，一个起不来的服务会以退出码 0 结束，'
                              '而「起来了但没有书」与「参数敲错了」在那一刻长得一样。'

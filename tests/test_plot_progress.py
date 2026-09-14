@@ -6,7 +6,9 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from novel import paths, stage2_run_state
+from novel import paths
+
+from novel.stages.stage2 import run_state as stage2_run_state
 from novel.api.app import create_app
 from novel.llm import stage2_runs
 from novel.stages.stage2 import extract

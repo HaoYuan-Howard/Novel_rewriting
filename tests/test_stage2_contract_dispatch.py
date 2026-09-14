@@ -203,7 +203,7 @@ def test_first_extraction_refuses_partial_book_before_any_request(tmp_path):
 
 
 def test_current_agent_uses_chapter_sessions_and_frozen_revision_validator(tmp_path):
-    from novel.node_agents import Stage2BlueprintAgent
+    from novel.orchestrator.node_agents import Stage2BlueprintAgent
     from tests.test_stage2_blueprint_agent import _ctx as agent_ctx, _Factory
     book = prepare_book(tmp_path)
     ctx = agent_ctx(tmp_path, book)

@@ -505,7 +505,7 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
         spawns['s5'] = []
     # Stage2 两份付费生成各自确认；机械准入通过后才发布下一步动作。
     # 浏览器只渲染服务端动作，不自行计算准入或语义结论。
-    from novel import admission
+    from novel.orchestrator import mechanical_admission as admission
     global_action = ApprovalAction(
         kind='stage2.global', label='生成 stage2 全局底座')
     blueprint_action = ApprovalAction(
@@ -3651,7 +3651,7 @@ def design_template(
     _validate_read_projection(sid, overview=overview, code=code)
     with _read_projection(overview=overview, code=code), _LOCK:
         record = _read_current(base, sid)
-        from novel import admission
+        from novel.orchestrator import mechanical_admission as admission
         gate = admission.stage4_ready(base, sid)
         if not gate.ok:
             raise ApprovalRequired(
@@ -3980,7 +3980,7 @@ def approve_design(
     """原子保存当前完整 A 盲审；不启动修订、B 或任何付费作业。"""
     with approval_file_lock(base, sid):
         raw, record = _read_state(base, sid)
-        from novel import admission
+        from novel.orchestrator import mechanical_admission as admission
         gate = admission.stage4_ready(base, sid)
         if not gate.ok:
             raise ApprovalRequired(

@@ -39,7 +39,7 @@ from contracts.invariants import (
 )
 from contracts.schema.orchestration import AgentProfile
 from novel import run_identity
-from novel.agent_model_identity import (
+from novel.agents.model_identity import (
     AgentModelIdentityRefused, validate_checkpoint_model_identity,
 )
 from novel.appendlog import (

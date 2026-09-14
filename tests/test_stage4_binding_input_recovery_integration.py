@@ -37,7 +37,7 @@ from contracts.schema.stage4 import (
     EvidenceBindingHumanProvenance, PlanChapters,
 )
 from novel import prov
-from novel.node_agents import Stage4PlanSessionPool
+from novel.orchestrator.node_agents import Stage4PlanSessionPool
 from novel.orchestrator import approvals, operator, queue, state
 from novel.stages.stage4 import binding_input_contract, plan
 from novel.stages.stage4.measure import structure_review_subject_sha256

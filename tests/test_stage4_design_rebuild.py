@@ -8,7 +8,7 @@ from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS, STAGE4_BLIND_CANDIDAT
 from contracts.schema.stage2 import ChapterBlueprints
 from novel.errors import ArtifactUnreadable, ProvenanceRefused
 from novel.llm import agent_runs, stage4_runs
-from novel.node_agents import Stage4DesignSessionPool
+from novel.orchestrator.node_agents import Stage4DesignSessionPool
 from novel.stages.stage4 import plan
 from novel.store import ArtifactStore
 from tests.test_stage4_agent_boundary import _ctx, _land_design, _RequestDriver
@@ -55,7 +55,7 @@ def _rebuild(book, raw, expected):
 
 def _admit_synthetic_stage2(monkeypatch):
     """合成书只有 Stage2 盘面；种子即准入事实，stage4_ready 不读 stage0/1。"""
-    from novel import admission as mechanical_admission
+    from novel.orchestrator import mechanical_admission as mechanical_admission
     monkeypatch.setattr(mechanical_admission, 'stage4_ready',
                         lambda *_args: mechanical_admission.AdmissionCheck('stage4', ok=True))
 

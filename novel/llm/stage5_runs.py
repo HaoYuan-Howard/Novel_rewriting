@@ -42,7 +42,8 @@ from contracts.schema.stage5 import (
     reviewer_rewrite_recovery_journal_sha256,
     reviewer_rewrite_successor_journal_sha256,
 )
-from novel import agent_session_audit, paths, prov
+from novel import paths, prov
+from novel.agents import session_audit as agent_session_audit
 from novel.appendlog import process_append_lock
 from novel.errors import ArtifactUnreadable, ProvenanceRefused
 from novel.llm import agent_runs, ledger as ledger_module

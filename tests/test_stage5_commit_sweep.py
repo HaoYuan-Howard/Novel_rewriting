@@ -18,7 +18,7 @@ import pytest
 
 from contracts.invariants import STAGE5_COMMIT_PHASES
 from contracts.schema import InputEdge
-from novel import agent_session_audit as audit
+from novel.agents import session_audit as audit
 from novel.errors import ProvenanceRefused
 from novel.run import RunContext
 from novel.stages.stage5 import write

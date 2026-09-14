@@ -83,7 +83,7 @@ def complete_stage6_prepare(book):
     import pytest
     from contracts.schema.stage6_prepare import PrepareDecision
     from novel.errors import ProvenanceRefused
-    from novel.node_agents import Stage6PrepareAgent
+    from novel.orchestrator.node_agents import Stage6PrepareAgent
     from novel.stages.stage6 import hook, prepare
     from tests.test_stage2_global_agent import _Driver, _profile
 

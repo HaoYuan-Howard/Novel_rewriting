@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import tempfile
 
-from novel.node_agents import Stage2AnalyzeAgent
+from novel.orchestrator.node_agents import Stage2AnalyzeAgent
 from novel.views.stage2 import character_registry_view, global_view
 from tests.stage2_fixtures import knowledge_response
 from tests.test_stage2_analyze import _ctx, _driver, _response

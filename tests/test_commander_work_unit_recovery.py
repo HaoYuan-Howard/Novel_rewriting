@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from contracts.schema.orchestration import AgentProfile, PipelineAgentProfiles
-from novel import agent_session_audit
+from novel.agents import session_audit as agent_session_audit
 from novel.orchestrator import agent
 from novel import work_units
 from tests.test_agent import (

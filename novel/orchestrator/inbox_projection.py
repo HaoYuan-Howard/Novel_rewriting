@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-inbox.py —— 「待人工」八类清单的**生产者**（BE-04 第一条；HTTP 路由属第二阶段）。
+inbox_projection.py —— 「待人工」八类清单的**生产者**（BE-04 第一条；HTTP 路由属第二阶段）。
+
+【为什么在 orchestrator 而不在 views】它的输入是 operator 快照
+（`capture_operator_snapshot`）与审批 current 投影，输出同时喂
+`operator next`（嵌进决策 DTO）、交付检查（blocking/disclosure 计数）
+与 CLI/API 读面——这是「运行状态 → 待办领域状态」的编排域投影，
+不是展示层组屏。放在 views 会让 orchestrator 反向 import 视图层，
+形成 views↔orchestrator 包级环；2026-09 架构迁移时整体下沉，
+逻辑逐字未动。views 层保持只做 DTO 组屏、单向依赖 orchestrator。
 
 它是修复路由的 `human` 落面：`deterministic` 有 `Rule.fix`、`llm` 有反哺回路，
 而「只有人能修 / 该人拍板」的那些，此前**没有生产者**——八类语义在前端登记了

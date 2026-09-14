@@ -16,13 +16,14 @@ from contracts.invariants import STAGE2_BLUEPRINT_MAX_CONCURRENCY
 from contracts.schema.orchestration import AgentProfile
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints
-from novel import agent_session_audit, paths, prov
+from novel import paths, prov
+from novel.agents import session_audit as agent_session_audit
 from novel.agents import AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage
 from novel.errors import GateBlocked, ProvenanceRefused
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmFailed
 from novel.llm.ledger import CostLedger, ledger_path
-from novel.node_agents import BlueprintSessionPool, Stage2BlueprintAgent
+from novel.orchestrator.node_agents import BlueprintSessionPool, Stage2BlueprintAgent
 from novel.run import RunContext
 from novel.stages.stage2 import extract
 from novel.store import ArtifactStore

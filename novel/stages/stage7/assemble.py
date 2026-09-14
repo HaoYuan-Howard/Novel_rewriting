@@ -156,7 +156,7 @@ def require_stage2_delivery_approved(ctx: RunContext) -> None:
     Stage2 语义审阅退役后，这里不再宣称联合语义 PASS，只要求全部必要产物
     机械可用（可读、当前、无未恢复 INVALID、机械检查通过）。
     """
-    from novel import admission
+    from novel.orchestrator import mechanical_admission as admission
     gate = admission.stage4_ready(ctx.novel_dir.parent, ctx.sid)
     if not gate.ok:
         from novel.errors import ApprovalRequired

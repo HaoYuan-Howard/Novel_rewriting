@@ -18,13 +18,13 @@ from contracts.schema.stage2 import ChapterBlueprints
 from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS
 from novel import paths, prov
 from novel.errors import ArtifactUnreadable, TerminalState
-from novel import admission
+from novel.orchestrator import mechanical_admission as admission
 from novel.orchestrator.state import readonly_ctx
 from novel.orchestrator.inspection import read_surface_seal
 from novel.prov import CODE_UNKNOWN
 from novel.stages.stage7 import assemble
 from novel.store import ArtifactStore
-from novel.views.inbox import inbox_view
+from novel.orchestrator.inbox_projection import inbox_view
 
 
 def _outcome(state: str, reason: str) -> AgentDeliveryOutcome:

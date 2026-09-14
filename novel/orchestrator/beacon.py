@@ -33,7 +33,7 @@ from novel import run_identity
 from novel.appendlog import (
     append_line_under_process_lock, append_transaction,
 )
-from novel.cli import exit_codes as X
+from novel import exit_codes as X
 from novel.errors import TerminalState
 from novel.orchestrator import append_tail_repair
 from novel.orchestrator import nodes as N

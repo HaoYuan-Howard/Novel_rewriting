@@ -1,7 +1,7 @@
 """Blueprint 生成检查点的轻投影；不构建 prompt、证据包或任何审阅/接受语义。
 
 Stage2 语义审阅已退役：这里只回答「每章生成检查点跑到哪了」，
-语义未审由报告 ``unver`` 行与统一准入（``novel.admission``）分别披露。
+语义未审由报告 ``unver`` 行与统一准入（``novel.orchestrator.mechanical_admission``）分别披露。
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from novel.store import ArtifactStore
 
 
 def get(base: str, sid: str, units: list[dict] | None) -> BlueprintRunProgress:
-    from novel.stage2_run_state import plot_checkpoint_progress
+    from novel.stages.stage2 import run_state
     from novel.stages.stage2.plot_inputs import read_input_digests
 
     missing = BlueprintRunProgress(artifact_state='unreadable', chapters=[])
@@ -46,7 +46,7 @@ def get(base: str, sid: str, units: list[dict] | None) -> BlueprintRunProgress:
                     'pending', 'generated', 'mechanical', 'history_adopted',
                     'cached', 'failed', 'unknown') if processing[key]), None)
                 if str(ordinal) in inputs:
-                    checkpoint = plot_checkpoint_progress(ctx, chapter=ordinal,
+                    checkpoint = run_state.plot_checkpoint_progress(ctx, chapter=ordinal,
                         run_id=processing['run_id'], input_sha256=inputs[str(ordinal)])
                     row.update(checkpoint_state=checkpoint['state'], reason=checkpoint['reason'])
                 else:

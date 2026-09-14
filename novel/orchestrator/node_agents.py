@@ -36,7 +36,8 @@ from contracts.schema.stage4 import (
 from contracts.schema.stage5 import ChapterResponse
 from contracts.schema.stage6 import Hook, HookSemanticReview
 from contracts.schema.stage7 import NameMap
-from novel import agent_session_audit, paths, prov
+from novel import paths, prov
+from novel.agents import session_audit as agent_session_audit
 from novel.agents import AgentDriver
 from novel.agents.factory import create_driver
 from novel.agents.session_client import (

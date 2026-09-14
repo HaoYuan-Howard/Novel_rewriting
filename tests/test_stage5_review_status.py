@@ -462,7 +462,7 @@ def test_state_view_and_inbox_forward_the_same_status_and_reasons(
     assert stage.review_state == status.state
     assert stage.review_reasons == list(status.reasons)
 
-    from novel.views import inbox as inbox_module
+    from novel.orchestrator import inbox_projection as inbox_module
     items = inbox_module._stage5_stalled(status_rig.store)
     assert len(items) == 1 and items[0].rule == 'review_status'
     assert status.state in items[0].what

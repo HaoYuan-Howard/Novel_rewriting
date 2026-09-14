@@ -13,7 +13,7 @@ wontfix.py —— 人的「这条我不修」。**全链一份机制，逐层一
     这一条留着是因为**机制搬家的理由不随它消失**——stage6 那一半仍然如此。）
   · stage6 的 `hook_semantic_contradiction` / `hook_candidate_contradiction` 同理，
     而且**这一层连 `--wontfix` 这个 flag 都没有**——待人工清单却在建议人去跑它
-    （`novel/views/inbox.py` 里那句兜底文案，已随本轮一并修掉）。
+    （`novel/orchestrator/inbox_projection.py` 里那句兜底文案，已随本轮一并修掉）。
 
 ⇒ 把机制收成一份，两层各挂一个入口、各写一份账。
 

@@ -14,7 +14,7 @@ from contracts.invariants import AGENT_EXECUTOR_NODES
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentRunEvent, AgentRunStart, ProgressEvent,
 )
-from novel import agent_session_audit as audit
+from novel.agents import session_audit as audit
 from novel.orchestrator import admission, beacon
 from novel.llm.ledger import append_commander_call, ledger_path, read_jsonl_rows
 from tools import verify_agent_e2e as verifier

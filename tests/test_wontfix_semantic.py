@@ -35,7 +35,7 @@ from novel.errors import TerminalState
 from novel.run import RunContext
 from novel.stages.stage6 import hook, semantic
 from novel.store import ArtifactStore
-from novel.views.inbox import inbox_view
+from novel.orchestrator.inbox_projection import inbox_view
 from tests import corpus, sandbox
 from tests.markers import corpus_params
 

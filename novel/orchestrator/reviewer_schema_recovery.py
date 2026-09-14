@@ -21,7 +21,8 @@ from typing import Any
 from contracts.schema.orchestration import (
     AgentProfile, AgentRunRecord, ReviewerActionRecord, ReviewerSchemaRecoveryProof, ReviewerSeatLedger,
 )
-from novel import agent_session_audit, paths
+from novel import paths
+from novel.agents import session_audit as agent_session_audit
 from novel.agents.base import decode_wire_json
 from novel.llm.ledger import ledger_path as cost_ledger_path, read_jsonl_rows
 from novel.orchestrator import queue, reviewer_tasks

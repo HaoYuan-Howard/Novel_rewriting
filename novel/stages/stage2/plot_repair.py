@@ -61,7 +61,7 @@ def finish_commit(ctx, *, chapters=(), review_token=None):
     targets = tuple(stored.get('chapters') or ())
     if (chapters and tuple(chapters) != targets) or review_token != stored.get('review_token'):
         raise ProvenanceRefused('定向修订提交恢复的目标或裁决请求不一致')
-    from novel import admission
+    from novel.orchestrator import mechanical_admission as admission
     gate = admission.blueprint_generation_ready(ctx.novel_dir.parent, ctx.sid)
     if not gate.ok:
         from novel.errors import ApprovalRequired

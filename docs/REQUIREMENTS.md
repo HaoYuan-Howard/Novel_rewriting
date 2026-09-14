@@ -191,6 +191,26 @@ WorkflowManifestV7；V6 及更早旧根不再迁移，只配对冻结旧代码�
 Stage5 写作、recheck/revalidate、Review、trim、s5 审批及 Stage6/7 只读最小主体；删字段前后 prompt、
 机械 findings、正文拼接和审批语义不变。关系若没有真实 WriterContext consumer，不复制到展示字段。
 
+## P2 · 架构债
+
+### TODO-52 · BACKEND_CONTRACT 的机器可读契约源
+
+`docs/BACKEND_CONTRACT.md` 被 `contracts/requirements.py` 在运行时解析（文档缺失即
+raise；R/Q/B 三列表格与「谁在查」记号就是解析接口）。这意味着文档排版语法是运行时
+依赖：一次看似无害的表格改写可能改变生产行为且无守卫提示。目标形态是机器可读契约源
+→ 运行时 → 生成文档（当前方向相反）。迁移涉及全部 R/Q/B 条目与
+`tests/test_coverage.py` 双向对账，属高影响面改造，不与功能批次混跑；开工前维持现状，
+改动表格语法须先改 §9.1「可执行 Markdown 语法」。
+
+### TODO-53 · 跨 stage 深路径 import grandfather 消化
+
+2026-09 架构迁移冻结了 71 条对 `novel/stages/stageN/<内部模块>` 的深路径 import
+（`tests/test_layering.py::_CROSS_STAGE_DEEP_GRANDFATHER`，含 views、orchestrator、
+store 惰性、llm、api、stages 互跨；守卫只减不增、双向断言）。消化一条 = 在 stageN
+包级导出该符号、消费方改走 `from novel.stages.stageN import X`、从清单删除并在提交
+说明给理由；验收条件是清单清零且各 stage 包级公开面有模块头说明。与 TODO-51 的
+Stage2 重构不同批，避免同一文件对撞。
+
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态、成本与受影响守卫。

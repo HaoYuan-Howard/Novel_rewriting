@@ -15,7 +15,8 @@ from contracts.schema.common import InputEdge
 from contracts.schema.orchestration import AgentProfile
 from contracts.schema.report import finding
 from contracts.schema.stage6 import Hook, HookResponse, Mech
-from novel import agent_session_audit, paths, prov
+from novel import paths, prov
+from novel.agents import session_audit as agent_session_audit
 from novel.agents import (
     AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
 )
@@ -24,7 +25,7 @@ from novel.errors import ArtifactUnreadable, GateBlocked, ProvenanceRefused
 from novel.llm import agent_runs, stage6_hook_runs, stage6_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import AUDIT_REL, CostLedger, ledger_path
-from novel.node_agents import Stage6HookAgent
+from novel.orchestrator.node_agents import Stage6HookAgent
 from novel.run import RunContext
 from novel.stages.stage6 import hook, prompts
 from novel.store import ArtifactStore

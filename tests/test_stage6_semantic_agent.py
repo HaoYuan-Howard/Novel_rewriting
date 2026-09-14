@@ -12,7 +12,8 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from contracts.schema.orchestration import AgentProfile
-from novel import agent_session_audit, paths, prov
+from novel import paths, prov
+from novel.agents import session_audit as agent_session_audit
 from novel.agents import (
     AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
 )
@@ -21,7 +22,7 @@ from novel.llm import stage6_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmFailed
 from novel.llm.ledger import CostLedger, ledger_path
-from novel.node_agents import (
+from novel.orchestrator.node_agents import (
     SemanticSessionPool, Stage6SemanticAgent, build_node_agent,
 )
 from novel.run import RunContext

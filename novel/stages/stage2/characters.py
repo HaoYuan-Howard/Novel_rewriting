@@ -29,7 +29,8 @@ from contracts.schema.characters import (
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import BlueprintCharacterProjection
 from contracts.schema.report import CheckReport
-from novel import agent_session_audit, paths, prov
+from novel import paths, prov
+from novel.agents import session_audit as agent_session_audit
 from novel.agents.session_client import SessionAgentClient
 from novel.appendlog import process_append_lock
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState, UpstreamMissing

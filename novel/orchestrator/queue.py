@@ -50,8 +50,8 @@ from contracts.schema.stage7 import NameMap
 from contracts.artifacts import STAGE4_BLIND_CANDIDATE
 from novel import paths, prov
 from novel.appendlog import append_line
-from novel.cli import exit_codes as X
-from novel.cli.exit_codes import CRASH
+from novel import exit_codes as X
+from novel.exit_codes import CRASH
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, BlockingFindingsUnresolved,
     GateBlocked, HumanEditProtected, QueueConflict, TerminalState, UpstreamMissing, UpstreamStale,
@@ -560,7 +560,7 @@ def plan_book_from_overview(
         # ⚠ 先于通用 upstream-invalid 分类：Stage2 的 `.INVALID` 是明确的
         # 准入阻断，理由要精确到产物。
         if why_blocked is None and node in ('stage2.blueprint', 'stage4.design') and spec.paid:
-            from novel import admission
+            from novel.orchestrator import mechanical_admission as admission
             gate = (admission.blueprint_generation_ready(base, sid)
                     if node == 'stage2.blueprint'
                     else admission.stage4_ready(base, sid))

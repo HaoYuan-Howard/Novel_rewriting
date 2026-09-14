@@ -24,7 +24,9 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from novel import commander_context, paths, run_identity
+from novel import paths, run_identity
+
+from novel.commanders import context as commander_context
 from novel.orchestrator import admission, jobs
 
 

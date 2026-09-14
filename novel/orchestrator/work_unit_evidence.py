@@ -5,7 +5,8 @@ from pathlib import Path
 from contracts.schema.api import WorkUnitCostView
 from contracts.schema.orchestration import AgentRunEvent
 from contracts.schema.workflow import WorkUnitLedgerV2
-from novel import agent_session_audit, paths, work_units
+from novel import paths, work_units
+from novel.agents import session_audit as agent_session_audit
 from novel.llm.ledger import ledger_path, read_strict_jsonl_objects
 from novel.orchestrator import admission, beacon, jobs
 from novel.work_unit_usage import match_attempt, summarize

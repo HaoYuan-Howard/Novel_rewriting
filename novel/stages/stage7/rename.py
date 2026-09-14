@@ -39,7 +39,8 @@ from contracts.schema.stage7 import (
     ApprovedNameMap, ExtraSub, IdentityBaseline, NameMap, NameMapEdit, NameMapParams,
     NameMapFreeProvenance, NameMapProvenance, NameMapResponse,
 )
-from novel import agent_session_audit, paths, prov
+from novel import paths, prov
+from novel.agents import session_audit as agent_session_audit
 from novel.core.naming import family_groups, registered_surfaces, strip_distinguisher, surface_owners
 from novel.errors import (
     BlockingFindingsUnresolved, GateBlocked, ProvenanceRefused, TerminalState, UpstreamMissing,

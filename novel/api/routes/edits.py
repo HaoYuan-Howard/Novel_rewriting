@@ -29,7 +29,7 @@ from contracts.schema.orchestration import JobRecord
 from contracts.schema.plot_edit import PlotEdit, PlotEditPreview
 from contracts.schema.stage5 import ChapterResponse
 from novel.api.deps import checked_sid, get_base
-from novel.cli import exit_codes as X
+from novel import exit_codes as X
 from novel.errors import (
     NovelError, SourceConflict, TerminalState,
 )

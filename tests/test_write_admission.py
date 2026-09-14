@@ -13,7 +13,8 @@ import pytest
 from contracts.schema.orchestration import (
     AgentProfile, AgentRunEvent, AgentRunStart, PipelineAgentProfiles,
 )
-from novel import commander_context, operator_telemetry as telemetry
+from novel.orchestrator import operator_telemetry as telemetry
+from novel.commanders import context as commander_context
 from novel.errors import TerminalState
 from novel.orchestrator import admission, agent, jobs, write_admission
 

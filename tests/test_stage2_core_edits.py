@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from novel.node_agents import Stage2AnalyzeAgent
+from novel.orchestrator.node_agents import Stage2AnalyzeAgent
 from novel.orchestrator import execution_permit, operator, queue
 from novel.store import ArtifactStore
 from tests.test_stage2_analyze import _awaiting_global, _ctx, _driver

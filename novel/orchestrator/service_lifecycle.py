@@ -556,7 +556,7 @@ def _ended_log_owners(base: str | Path) -> dict[str, str]:
 
 
 def _closed_telemetry(base: str | Path) -> dict[str, str]:
-    from novel import operator_telemetry
+    from novel.orchestrator import operator_telemetry
 
     return {
         f'{record.session_id}.jsonl': paths.check_sid(record.sid)

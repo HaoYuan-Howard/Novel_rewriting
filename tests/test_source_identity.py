@@ -13,7 +13,7 @@ from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.stage1 import MainText, HookCopy
 from contracts.schema.stage6_prepare import Stage6Prepare, PrepareMutationJournal
 from novel.errors import ProvenanceRefused, TerminalState, UpstreamStale
-from novel.node_agents import Stage2AnalyzeAgent, Stage6PrepareAgent
+from novel.orchestrator.node_agents import Stage2AnalyzeAgent, Stage6PrepareAgent
 from novel.stages.stage0 import removal
 from novel.stages.stage1.partition import run_partition
 from novel.stages.stage6 import prepare

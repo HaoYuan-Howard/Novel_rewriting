@@ -8,7 +8,7 @@ from contracts.artifacts import STAGE4_BLIND_CANDIDATE
 from novel import paths
 from novel.llm import agent_runs, stage4_runs
 from novel.errors import ArtifactUnreadable, ProvenanceRefused
-from novel.node_agents import Stage4DesignSessionPool
+from novel.orchestrator.node_agents import Stage4DesignSessionPool
 from novel.stages.stage4 import plan
 from novel.store import ArtifactStore
 from tests.test_stage4_agent_boundary import _ctx, _RequestDriver
@@ -137,7 +137,7 @@ def test_all_history_is_offered_by_http_without_mutating_sources_then_cli_lands(
 
     _configure_boundary(monkeypatch)
     # 合成书只有 Stage2 盘面；准入由种子保证，不读 stage0/1。
-    from novel import admission as mechanical_admission
+    from novel.orchestrator import mechanical_admission as mechanical_admission
     monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
                         lambda *_args: mechanical_admission.AdmissionCheck('stage2.blueprint', ok=True))
     monkeypatch.setattr(mechanical_admission, 'stage4_ready',

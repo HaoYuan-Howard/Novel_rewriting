@@ -34,7 +34,7 @@ from novel.errors import (
     UpstreamUnproven,
 )
 from novel import run_identity
-from novel import admission as mechanical_admission
+from novel.orchestrator import mechanical_admission as mechanical_admission
 from novel.orchestrator import admission
 from novel.orchestrator import queue as Q
 from novel.orchestrator import jobs as J

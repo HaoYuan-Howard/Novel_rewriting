@@ -38,7 +38,7 @@ def _prepare_report(base: Path, *, broken: bool):
     import json
 
     from novel.errors import GateBlocked
-    from novel.node_agents import Stage6PrepareAgent
+    from novel.orchestrator.node_agents import Stage6PrepareAgent
     from novel.stages.stage6 import prepare
     from novel.store import ArtifactStore
     from tests.test_stage6_prepare import prepare_ctx, response

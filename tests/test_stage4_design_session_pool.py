@@ -13,7 +13,8 @@ from pydantic import BaseModel, ConfigDict
 from contracts.invariants import STAGE4_DESIGN_MAX_CONCURRENCY
 from contracts.schema.api import DesignRepairScope
 from contracts.schema.orchestration import AgentProfile
-from novel import agent_session_audit, prov
+from novel import prov
+from novel.agents import session_audit as agent_session_audit
 from novel.agents import (
     AgentDriver, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
 )
@@ -22,7 +23,7 @@ from novel.llm import stage4_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmFailed
 from novel.llm.ledger import CostLedger, ledger_path
-from novel.node_agents import (
+from novel.orchestrator.node_agents import (
     Stage4DesignAgent, Stage4DesignSessionPool, build_node_agent,
 )
 from novel.run import RunContext

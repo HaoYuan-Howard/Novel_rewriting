@@ -23,7 +23,7 @@ from novel.errors import ProvenanceRefused
 from novel.llm import stage5_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
-from novel.node_agents import Stage5SessionPool
+from novel.orchestrator.node_agents import Stage5SessionPool
 from novel.orchestrator import admission, reviewer_action_evidence, reviewer_contract, queue, state
 from novel.run import RunContext
 from novel.stages.stage5 import reviewer_rewrite as rewrite, write

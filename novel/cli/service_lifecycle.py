@@ -8,7 +8,7 @@ import json
 import sys
 import traceback
 
-from novel.cli import exit_codes as X
+from novel import exit_codes as X
 from novel.errors import RefusedByStructure, TerminalState
 from novel.orchestrator import service_lifecycle
 

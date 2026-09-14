@@ -100,7 +100,7 @@ def frozen_core(tmp_path_factory, legacy_source):
     with pytest.MonkeyPatch.context() as identity:
         identity.setattr(prov, 'code_version', lambda: CODE)
         from tests.test_stage2_analyze import _ctx, _driver
-        from novel.node_agents import Stage2AnalyzeAgent
+        from novel.orchestrator.node_agents import Stage2AnalyzeAgent
         ctx = _ctx(base)
         Stage2AnalyzeAgent(ctx, driver=_driver(ctx)).run()
         _write_legacy_stage2_acceptance(base, ctx.sid)

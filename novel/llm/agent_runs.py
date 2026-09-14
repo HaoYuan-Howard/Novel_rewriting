@@ -33,9 +33,10 @@ from typing import Any, Generic, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from contracts.schema.orchestration import AgentProfile
-from novel import agent_session_audit, paths, prov, work_units
-from novel.agent_capabilities import validate_profile
-from novel.agent_model_identity import (
+from novel import paths, prov, work_units
+from novel.agents import session_audit as agent_session_audit
+from novel.agents.capabilities import validate_profile
+from novel.agents.model_identity import (
     resolve_ledger_model_identity, validate_checkpoint_model_identity,
 )
 from novel.agents.base import render_structured_agent_stdin_bytes

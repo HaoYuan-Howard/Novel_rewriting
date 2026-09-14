@@ -12,7 +12,7 @@ from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING
 from contracts.schema.characters import CharactersEdit, CharactersResponse
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
 from novel.llm import agent_runs
-from novel.node_agents import Stage2CharactersAgent, build_node_agent
+from novel.orchestrator.node_agents import Stage2CharactersAgent, build_node_agent
 from novel.stages.stage2 import characters
 from novel.store import ArtifactStore
 from tests.stage2_fixtures import character_response
