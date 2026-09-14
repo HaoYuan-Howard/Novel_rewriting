@@ -836,6 +836,131 @@ def _import_targets_stage(node) -> bool:
         return any(a.name.startswith('novel.stages') for a in node.names)
     return bool(node.module) and node.module.startswith('novel.stages')
 
+_CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
+    ('novel/api/errors.py', 'novel.stages.stage4.plot_refs'),
+    ('novel/api/routes/edits.py', 'novel.stages.stage2.extract'),
+    ('novel/cli/main.py', 'novel.stages.stage2.plot_edit'),
+    ('novel/llm/stage2_global_runs.py', 'novel.stages.stage2.analyze'),
+    ('novel/llm/stage2_global_runs.py', 'novel.stages.stage2.analyze_draft_recovery'),
+    ('novel/llm/stage4_runs.py', 'novel.stages.stage4.design_rebuild'),
+    ('novel/llm/stage4_runs.py', 'novel.stages.stage4.plot_design'),
+    ('novel/node_agents.py', 'novel.stages.stage2.contract'),
+    ('novel/node_agents.py', 'novel.stages.stage2.plot_sequence'),
+    ('novel/orchestrator/agent.py', 'novel.stages.stage4.design_rebuild'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage0.eligibility'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage1.audit'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage2.grounding'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.binding_input_contract'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.design_evolution'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.measure'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.phase_state'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.plan'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.plot_design'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.plot_materials'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.reading'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage5.closure'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage5.review'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage7.rename'),
+    ('novel/orchestrator/queue.py', 'novel.stages.stage0.eligibility'),
+    ('novel/orchestrator/queue.py', 'novel.stages.stage2.plot_diagnostics'),
+    ('novel/orchestrator/queue.py', 'novel.stages.stage4.phase_state'),
+    ('novel/orchestrator/reviewer_tasks.py', 'novel.stages.stage2.paragraphs'),
+    ('novel/orchestrator/reviewer_tasks.py', 'novel.stages.stage4.plan'),
+    ('novel/orchestrator/reviewer_tasks.py', 'novel.stages.stage5.measure'),
+    ('novel/orchestrator/state.py', 'novel.stages.stage2.character_rebind'),
+    ('novel/orchestrator/state.py', 'novel.stages.stage5.measure'),
+    ('novel/orchestrator/state.py', 'novel.stages.stage5.review'),
+    ('novel/orchestrator/workflow_transition.py', 'novel.stages.stage2.character_refs'),
+    ('novel/source_identity.py', 'novel.stages.stage1.audit'),
+    ('novel/source_identity.py', 'novel.stages.stage1.partition'),
+    ('novel/stages/stage1/partition.py', 'novel.stages.stage0.eligibility'),
+    ('novel/stages/stage4/actors.py', 'novel.stages.stage2.character_refs'),
+    ('novel/stages/stage4/actors.py', 'novel.stages.stage2.plot_compile'),
+    ('novel/stages/stage4/beats.py', 'novel.stages.stage2.plot_compile'),
+    ('novel/stages/stage6/hook.py', 'novel.stages.stage5.review'),
+    ('novel/stages/stage6/measure.py', 'novel.stages.stage5.measure'),
+    ('novel/stages/stage6/prepare.py', 'novel.stages.stage2.paragraphs'),
+    ('novel/stages/stage6/prepare_compile.py', 'novel.stages.stage2.paragraphs'),
+    ('novel/stages/stage7/assemble.py', 'novel.stages.stage5.closure'),
+    ('novel/stages/stage7/measure.py', 'novel.stages.stage5.measure'),
+    ('novel/stages/stage7/rename.py', 'novel.stages.stage5.measure'),
+    ('novel/stages/stage7/rename.py', 'novel.stages.stage5.review'),
+    ('novel/store.py', 'novel.stages.stage1.audit'),
+    ('novel/store.py', 'novel.stages.stage2.character_refs'),
+    ('novel/store.py', 'novel.stages.stage2.grounding'),
+    ('novel/store.py', 'novel.stages.stage4.binding_input_contract'),
+    ('novel/store.py', 'novel.stages.stage4.phase_binding'),
+    ('novel/views/blueprint_progress.py', 'novel.stages.stage2.plot_inputs'),
+    ('novel/views/ingest.py', 'novel.stages.stage0.eligibility'),
+    ('novel/views/ingest.py', 'novel.stages.stage1.audit'),
+    ('novel/views/stage2.py', 'novel.stages.stage2.analyze_draft_recovery'),
+    ('novel/views/stage2.py', 'novel.stages.stage2.core_evidence'),
+    ('novel/views/stage4.py', 'novel.stages.stage2.grounding'),
+    ('novel/views/stage4.py', 'novel.stages.stage4.beats'),
+    ('novel/views/stage4.py', 'novel.stages.stage4.context'),
+    ('novel/views/stage4.py', 'novel.stages.stage4.measure'),
+    ('novel/views/stage4.py', 'novel.stages.stage5.measure'),
+    ('novel/views/stage4.py', 'novel.stages.stage5.prompts'),
+    ('novel/views/stage5.py', 'novel.stages.stage5.measure'),
+    ('novel/views/stage5.py', 'novel.stages.stage5.prompts'),
+    ('novel/views/stage6.py', 'novel.stages.stage5.measure'),
+    ('novel/views/stage6.py', 'novel.stages.stage6.hook'),
+    ('novel/views/stage7.py', 'novel.stages.stage5.measure'),
+    ('novel/views/stage7.py', 'novel.stages.stage7.rename'),
+    ('novel/views/stage7.py', 'novel.stages.stage7.subs'),
+})
+
+
+def _cross_stage_deep_edges() -> set[tuple[str, str]]:
+    """(importer 仓内路径, 深路径 import 的 stage 模块)——含函数内惰性 import。"""
+    out: set[tuple[str, str]] = set()
+    for path in _runtime_files():
+        rel = _rel(path)
+        own = None
+        parts = rel.split('/')
+        if (len(parts) >= 3 and parts[0] == 'novel' and parts[1] == 'stages'
+                and parts[2].startswith('stage')):
+            own = parts[2]
+        for node in ast.walk(_tree(path)):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                modules = [node.module]
+            elif isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            else:
+                continue
+            for module in modules:
+                if not module.startswith('novel.stages.stage'):
+                    continue
+                rest = module[len('novel.stages.'):].split('.')
+                if len(rest) >= 2 and rest[0] != own:
+                    out.add((rel, module))
+    return out
+
+
+def test_cross_stage_imports_stay_on_the_package_surface():
+    """⭐ Stage 公开边界：跨 stage 只许 `from novel.stages.stageN import X`
+    （包级导出）或经 `contracts.schema.stageN`；深路径 import 别的 stage 的
+    measure / prompts / plot_compile / checks 等内部实现一律禁止。
+
+    「删一个机制为什么改几十个文件」的根源正是这些深边——StageN 的内部
+    实现被当成公共接口消费。现存 71 条深边为 2026-09 冻结基线，
+    **只减不增**：消化一条就把它从清单删掉（diff 里可见、须说理由），
+    新增深边必须先建 stageN 包级公开导出。
+    """
+    current = _cross_stage_deep_edges()
+    new = current - _CROSS_STAGE_DEEP_GRANDFATHER
+    assert not new, (
+        f'新增跨 stage 深路径 import：{sorted(new)}；'
+        f'→ 要么经 stageN 包级导出（from novel.stages.stageN import X），'
+        f'要么走 contracts.schema.stageN')
+    stale = _CROSS_STAGE_DEEP_GRANDFATHER - current
+    assert not stale, (
+        f'以下深边已消失，请同步从冻结清单删除（消化须在提交说明给理由）：{sorted(stale)}')
+    # 守卫的守卫：扫描器必须看得见冻结清单里的已知边，否则红的是探测器。
+    assert ('novel/views/stage4.py', 'novel.stages.stage5.prompts') in current
+    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 71
+
+
 
 def test_the_api_layer_has_no_second_argv_builder():
     """`R-11.8`：**展示与执行共用同一个构造函数** ⇒ API 层不许自己拼一条命令。
