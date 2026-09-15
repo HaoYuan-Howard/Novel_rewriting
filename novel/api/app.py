@@ -133,6 +133,29 @@ def _mount_ui(app: FastAPI, dist: str) -> None:
         return FileResponse(index)
 
 
+def _drain_pending_rebuilds(base: str) -> None:
+    """启动时消费各书未闭合的改选重建意图；失败不阻断服务起来。"""
+    import warnings
+
+    from novel import paths
+    from novel.orchestrator import rebuild
+    runs_root = paths.service_runs_dir(base)
+    if not runs_root.is_dir():
+        return
+    for book_dir in sorted(runs_root.iterdir()):
+        if not book_dir.is_dir():
+            continue
+        sid = book_dir.name
+        if not rebuild.pending_intents(base, sid):
+            continue
+        try:
+            rebuild.drain_with_jobs(base, sid)
+        except Exception as exc:  # noqa: BLE001 - 单书失败不拦其他书与服务
+            warnings.warn(
+                f'启动重建 reconcile 失败（sid={sid}）：{type(exc).__name__}: {exc}',
+                RuntimeWarning, stacklevel=2)
+
+
 def create_app(base: str | os.PathLike[str],
                *, ui_dist: str | os.PathLike[str] | None = None) -> FastAPI:
     """建一个服务实例。`base` = 语料根目录（`Output/`）。
@@ -158,6 +181,9 @@ def create_app(base: str | os.PathLike[str],
         # creation.  Startup only resumes those frozen commands after job and
         # artifact reconciliation; it never creates a new paid plan.
         queue_runner.resume_incomplete(app.state.base)
+        # 改选重建意图的启动 reconcile（2026-09-15 全自动裁决）：崩溃留在
+        # requested 的意图在此续消费；只进确定性白名单节点，0 模型。
+        _drain_pending_rebuilds(app.state.base)
         yield
 
     app = FastAPI(title='novel-rewriting', docs_url=None, redoc_url=None,

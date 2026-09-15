@@ -303,6 +303,9 @@ def approve_hook(
 
     正式 typed 定稿是唯一事实；公开 s6 现场读取 producer 的 current 证明，
     不再追加服务检查单写入。作业退出状态与校验报告仍各自原样返回。
+    定稿落盘后铸**重建意图**（outbox：先耐久）并尝试确定性重建
+    （stage7.assemble，0 模型）；资源忙则保持排队，服务重启 reconcile 续消费
+    ——改选不要求用户补点一次（2026-09-15 全自动裁决）。
     '''
     record = jobs.run(
         base, 'stage6.approve', sid,
@@ -310,7 +313,59 @@ def approve_hook(
          '--actor', request.actor,
          '--reason', request.reason,
          '--review-token', request.review_token])
+    if record.state == 'ok':
+        _enqueue_hook_rebuild(base, sid, request)
     return record
+
+
+@router.get('/{sid}/stage6/rebuild')
+def hook_rebuild_status(
+    sid: str = Depends(checked_sid),
+    base: str = Depends(get_base),
+) -> dict:
+    '''改选重建状态（只读）：`pending` = 有排队意图或成书尚不对应当前选择。
+
+    前端据此呈现「新选择生成中；当前下载对应旧版本」，不自行推断新鲜度。
+    '''
+    from novel.orchestrator import rebuild
+    pending = bool(rebuild.pending_intents(base, sid))
+    published = rebuild.publication_current(base, sid)
+    return {'pending': pending or not published,
+            'published': published}
+
+
+def _enqueue_hook_rebuild(base: str, sid: str, request: HookApproveRequest) -> None:
+    """铸重建意图并尽力执行；失败只告警，不改变定稿作业的返回。"""
+    import time
+
+    from contracts.artifacts import STAGE6_HOOK
+    from contracts.invariants import slot_of
+    from contracts.schema.stage6 import Hook
+    from novel import paths as novel_paths, prov
+    from novel.orchestrator import rebuild
+    from novel.orchestrator.state import readonly_ctx
+    from novel.store import ArtifactStore
+    try:
+        novel_dir = novel_paths.resolve_novel_dir(base, sid)
+        store = ArtifactStore(readonly_ctx(
+            novel_dir, 'stage6.approve', prov.code_version()))
+        art = store.read(Hook, STAGE6_HOOK)
+        slot = slot_of(request.pick)
+        approved_text = art.approved.text if art.approved is not None else ''
+        rebuild.record_requested(
+            base, sid,
+            intent_id=f'hook-{slot}-{int(time.time())}',
+            approved_slot=slot, approved_text=approved_text,
+            candidate_texts=[c.text for c in art.candidates],
+            reason=f'人工改选 {slot}（{request.actor}）')
+        rebuild.drain_with_jobs(base, sid)
+        # busy（书被占用，排队等 reconcile）与 failed（producer 确定性失败，
+        # 经 /stage6/rebuild 状态缝呈现）都是正常可观察态，不告警。
+    except Exception as exc:  # noqa: BLE001 - 重建链故障不吞改选结果，但要出声
+        warnings.warn(
+            f'改选重建链异常（见 {novel_paths.rebuild_intents_path(base, sid).name}）：'
+            f'{type(exc).__name__}: {exc}',
+            RuntimeWarning, stacklevel=2)
 
 
 @router.post('/{sid}/stage7/approve', response_model=JobRecord)

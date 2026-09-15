@@ -269,6 +269,9 @@ def test_landed_job_record_survives_a_stamp_writer_conflict(
         )
 
     monkeypatch.setattr(route.jobs, 'run', landed_then_conflict)
+    # 本条的主题是盖章竞态；改选重建链（真实 books 才会有盘面）在此是无关变量，
+    # 显式隔离，不让它的环境性告警污染「无补录警告」断言。
+    monkeypatch.setattr(route, '_enqueue_hook_rebuild', lambda *_args: None)
     monkeypatch.setattr(
         approval_stamp.approvals, 'approve_gate',
         lambda *_args: pytest.fail('同书 writer 冲突时不得进入审批写动作'))

@@ -428,6 +428,7 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/stage5/{ordinal}': ['GET'],
         '/api/novels/{sid}/stage6': ['GET'],
         '/api/novels/{sid}/stage6/approve': ['POST'],
+        '/api/novels/{sid}/stage6/rebuild': ['GET'],
         '/api/novels/{sid}/stage6/prepare': ['GET'],
         '/api/novels/{sid}/stage6/prepare/edit': ['POST'],
         '/api/novels/{sid}/stage6/prepare/edit/preview': ['POST'],

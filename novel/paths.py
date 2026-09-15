@@ -91,6 +91,11 @@ def book_budget_path(base: str | os.PathLike[str], sid: str) -> Path:
     return service_runs_dir(base) / check_sid(sid) / 'book_budget.json'
 
 
+def rebuild_intents_path(base: str | os.PathLike[str], sid: str) -> Path:
+    """改选重建意图账（append-only JSONL，outbox 语义）。"""
+    return service_runs_dir(base) / check_sid(sid) / 'rebuild_intents.jsonl'
+
+
 def derive_source_meta(path_or_name: str) -> tuple[str, str, str | None]:
     """`<platform?>_<title>[_<id>]` → `(source_id, title, platform)`。
 

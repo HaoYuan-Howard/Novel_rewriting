@@ -2531,3 +2531,35 @@ class QueueRun(StrictModel):
         if set(self.counts_by_sid) != set(self.start.sids):
             raise ValueError('queue counts must contain exactly the declared novels')
         return self
+
+
+class RebuildEventV1(FrozenModel):
+    """改选重建意图账的一条 append-only 事件（2026-09-15 全自动裁决）。
+
+    【它回答什么】「改选请求已接受」与「立即取得执行资源」分开：pick 作业落盘后
+    先持久化重建意图（outbox），资源忙则保持排队，资源释放或服务重启 reconcile
+    时由确定性 drain 消费。消费幂等——重建只进白名单节点
+    （`contracts/invariants.py::DETERMINISTIC_REBUILD_NODES`）+ 只读交付终验，
+    可安全重放。
+
+    【版本竞争】`approved_text_sha1`/`candidates_sha1` 记录意图铸成时的期望版本，
+    仅供审计与展示；drain 执行时永远以**当前盘面期望**为准（assemble 从当前
+    state 全量重放），后发选择自然胜出，迟到意图不会覆盖新选择。
+    """
+
+    schema_version: Literal[1] = 1
+    event: Literal['requested', 'consumed', 'failed']
+    sid: str = Field(min_length=1)
+    intent_id: str = Field(pattern=r'^[a-zA-Z0-9_-]{8,64}$')
+    node: Literal['stage7.assemble']
+    approved_slot: Literal['c1', 'c2', 'c3'] | None = None
+    approved_text_sha1: str = Field(pattern=r'^[0-9a-f]{10}$')
+    candidates_sha1: str = Field(pattern=r'^[0-9a-f]{10}$')
+    created_at: int = Field(ge=0)
+    reason: str = Field(default='', max_length=2000)
+
+    @model_validator(mode='after')
+    def _closed_events_carry_reason(self) -> 'RebuildEventV1':
+        if self.event == 'failed' and not self.reason.strip():
+            raise ValueError('failed 事件必须说明原因')
+        return self

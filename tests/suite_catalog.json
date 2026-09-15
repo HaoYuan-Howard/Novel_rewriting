@@ -1420,7 +1420,11 @@
         "stage7"
       ]
     },
-    "tests/test_stage7_hook_reselection.py": {
+    "tests/test_stage6_rebuild.py": {
+    "layer": "unit_contract",
+    "stages": []
+  },
+  "tests/test_stage7_hook_reselection.py": {
     "layer": "unit_contract",
     "stages": []
   },
