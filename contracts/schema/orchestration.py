@@ -25,11 +25,11 @@ import json
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, StrictInt, model_serializer, model_validator
+from pydantic import Field, StrictInt, ValidationInfo, model_serializer, model_validator
 
 from contracts.invariants import (
     AGENT_DELIVERY_OUTCOME,
-    AGENT_EXECUTOR_NODES, AGENT_RUN_CONTROLS, AGENT_RUN_EVENT_KINDS,
+    AGENT_EXECUTOR_NODES, AGENT_ONLY_EXECUTOR_NODES, AGENT_RUN_CONTROLS, AGENT_RUN_EVENT_KINDS,
     PIPELINE_CONCURRENCY_TRIALS, PIPELINE_PARALLEL_NODES,
     PIPELINE_BOOK_CONCURRENCY, PIPELINE_PROVIDER_CONCURRENCY,
     PIPELINE_TOTAL_CONCURRENCY_MIN, PIPELINE_TOTAL_CONCURRENCY_MAX,
@@ -149,6 +149,17 @@ def _backend_from_legacy_profile(value: Any) -> Any:
     return value
 
 
+#: ``AgentRunEvent.replay_validate`` 携带的 validation context 标记：这行数据来自
+#: append-only 历史账，构造期准入规则（如混用禁令）不得以今日规则重审判历史。
+#: 想再往历史账里嵌新模型并加跨字段准入规则时，同样要走这个豁免，否则账一旧就 500。
+_HISTORY_REPLAY_CONTEXT: dict[str, bool] = {'history_replay': True}
+
+
+def _is_history_replay(info: ValidationInfo) -> bool:
+    return isinstance(info.context, Mapping) and bool(
+        info.context.get('history_replay'))
+
+
 class PipelineConcurrency(FrozenModel):
     """一次运行冻结的并发策略；节点对照与两个总上限分别记录。"""
 
@@ -222,23 +233,38 @@ class PipelineAgentProfiles(FrozenModel):
         return self
 
     @model_validator(mode='after')
-    def _single_executor_kind(self) -> PipelineAgentProfiles:
+    def _single_executor_kind(self, info: ValidationInfo) -> PipelineAgentProfiles:
         """一次选择内 executor 只允许一种模式（2026-09-14 用户裁决）。
 
         ``executor_default`` 与全部 ``executor_overrides`` 必须同 ``kind``：
         整跑要么纯 ``agent``、要么纯 ``legacy``，不得逐节点混用两种模式。
         同模式内的逐节点差异（模型、effort、thinking）不受影响。
+
+        单向豁免（2026-09-15 用户裁决：legacy 整书跑通）：默认为 ``legacy``
+        时，仅 ``AGENT_ONLY_EXECUTOR_NODES``（producer 只实现 agent
+        acceptance 协议、legacy 无执行器的节点）允许 ``agent`` 覆盖；其余
+        节点仍禁止混用。默认为 ``agent`` 时不存在豁免，legacy 覆盖一律拒绝。
+        补齐这些节点的 legacy 执行器后，豁免集合随之收窄直至回到纯禁令。
+
+        ⚠ 这是**新选择的准入规则**，不是重放判据：append-only 历史账里存着
+        规则生效前合法写入的混用选择（``AgentRunEvent.replay_validate``），
+        重放不得以今日规则改判或丢弃历史，否则代跑记录、续跑与恢复全部 500。
         """
+        if _is_history_replay(info):
+            return self
         default_kind = self.executor_default.kind
         mixed = sorted(
             node for node, backend in self.executor_overrides.items()
             if backend.kind != default_kind
+            and not (default_kind == 'legacy' and backend.kind == 'agent'
+                     and node in AGENT_ONLY_EXECUTOR_NODES)
         )
         if mixed:
             raise ValueError(
                 f'executor_overrides 不允许与 executor_default 混用模式：'
                 f'节点 {mixed} 的 backend 不是 {default_kind!r}；'
-                '一次整书选择内 executor 必须统一为 agent 或 legacy')
+                '一次整书选择内 executor 必须统一为 agent 或 legacy'
+                '（默认 legacy 时仅 agent-only 节点可用 agent 覆盖）')
         return self
 
 
@@ -1760,6 +1786,18 @@ class AgentRunEvent(FrozenModel):
     捏进去就要往 `NODES` 里塞一个假节点，而那张表是完成度/贵贱/写盘效应的
     全部派生源头，塞假节点的代价是全链说假话。
     """
+
+    @classmethod
+    def replay_validate(cls, data: Any) -> AgentRunEvent:
+        """重放 `agent_runs.jsonl` 历史行的唯一入口。
+
+        与 ``model_validate`` 的差别只有一件事：validation context 标记
+        「这行来自 append-only 历史账」，构造期准入规则（如 executor 混用
+        禁令）不再以今日规则重审判历史。形状级兼容（v1 无损迁移、载荷与
+        kind 匹配）照常执行——真正坏掉的账仍然该炸。
+        **新写入永远走 ``model_validate``**，准入规则不豁免。
+        """
+        return cls.model_validate(data, context=_HISTORY_REPLAY_CONTEXT)
 
     wire_version: Literal[1, 2] = 1
     run_id: str = Field(min_length=1)

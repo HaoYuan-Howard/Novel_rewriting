@@ -372,6 +372,12 @@ describe('request-shaped cache and diagnostics', () => {
       drivers: [],
       legacy_providers: [],
       executor_nodes: [],
+      legacy_model_pins: {},
+      concurrency: {
+        nodes: [], node_choices: [], default_node: 4,
+        defaults: { node_overrides: {}, per_book: 4, per_provider: 8 },
+        total_min: 1, total_max: 32, scope: 'output_root',
+      },
       default_profiles: null,
     }
     const send = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(

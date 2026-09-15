@@ -56,7 +56,7 @@ def owner_stop_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2
                  owners: set[str], cost_rows: list[dict]) -> dict:
     from novel.orchestrator import agent
     run_rows = read_rows(agent.runs_path(budget.base), '工作单元恢复 AgentRun 账')
-    runs = agent.fold([AgentRunEvent.model_validate(row) for row in run_rows])
+    runs = agent.fold([AgentRunEvent.replay_validate(row) for row in run_rows])
     sessions = agent_session_audit.fold([
         agent_session_audit.AgentSessionEvent.from_dict(row)
         for row in read_rows(agent_session_audit.audit_path(budget.base), '工作单元恢复 session 账')])

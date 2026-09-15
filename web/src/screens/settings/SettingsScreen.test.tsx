@@ -135,6 +135,24 @@ describe('SettingsScreen', () => {
       screen.getByRole('combobox', { name: '默认执行者 · Legacy API 思考强度' }),
       'high',
     )
+    // 切到 legacy 后表单自动补覆盖：钉死节点预选 Pro；agent-only 节点预置空
+    // Agent 草稿，需要显式选 driver/模型/强度后保存才解锁。
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'node.agent-only 执行者 · Agent CLI driver' }),
+      'executor-dynamic',
+    )
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'node.agent-only 执行者 · Agent CLI 模型' }),
+      'executor-model-v7',
+    )
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'node.agent-only 执行者 · Agent CLI 思考强度' }),
+      'deep-dynamic',
+    )
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'node.agent-only 执行者 · Agent CLI 执行模式' }),
+      'worker-dynamic',
+    )
     await user.click(screen.getByRole('button', { name: '保存常用配置' }))
 
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
@@ -148,6 +166,12 @@ describe('SettingsScreen', () => {
             model: 'deepseek-v4-pro',
             reasoning_effort: 'high',
             thinking_mode: 'on',
+          },
+        },
+        executor_overrides: {
+          'node.agent-only': {
+            kind: 'agent',
+            profile: { driver: 'executor-dynamic', model: 'executor-model-v7' },
           },
         },
       },

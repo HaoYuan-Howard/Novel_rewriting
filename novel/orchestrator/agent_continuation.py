@@ -20,7 +20,7 @@ def inspect(base: str | Path, run_id: str) -> AgentRunContinuationView:
     try:
         source_path = agent.runs_path(base)
         rows = read_strict_jsonl_objects(source_path, label='原配置续跑来源账') if source_path.is_file() else []
-        events = [AgentRunEvent.model_validate(row) for row in rows]
+        events = [AgentRunEvent.replay_validate(row) for row in rows]
         matches = [row for row in agent.fold(events) if row.run_id == checked]
         if len(matches) != 1:
             raise TerminalState('历史运行不存在或身份不唯一')

@@ -903,6 +903,13 @@ class AgentCapabilitiesResponse(StrictModel):
     drivers: list[AgentDriverCapability] = Field(min_length=1)
     legacy_providers: list[LegacyProviderCapability] = Field(min_length=1)
     executor_nodes: list[str] = Field(min_length=1)
+
+    #: 节点 → 产品契约钉死的 legacy 模型 id（``NODES[node].model``）。⚠ 钉死是
+    #: **模型**约束，不是 agent/legacy 模式约束：被钉节点在 legacy 下必须经
+    #: 逐节点覆盖选该模型（质量裁决，如 stage6.semantic 判官），在 agent 下
+    #: 不受影响。没有钉死的节点不出现在这张表里。
+    legacy_model_pins: dict[str, str] = Field(default_factory=dict)
+
     concurrency: PipelineConcurrencyCapability = Field(default_factory=PipelineConcurrencyCapability)
 
     #: 服务端经真实整书验收后才能发布的产品预置；它不选择 backend 模式。
@@ -922,6 +929,22 @@ class AgentCapabilitiesResponse(StrictModel):
             raise ValueError(
                 'executor_nodes 必须按 AGENT_EXECUTOR_NODES 的完整顺序发布，'
                 '不能让前端再维护一份节点清单')
+        published_models = {
+            model.id
+            for provider in self.legacy_providers
+            for model in provider.models
+        }
+        unknown_pins = sorted(set(self.legacy_model_pins) - set(AGENT_EXECUTOR_NODES))
+        if unknown_pins:
+            raise ValueError(f'legacy_model_pins 含未知 executor 节点 {unknown_pins}')
+        unpublishable = sorted(
+            node for node, model in self.legacy_model_pins.items()
+            if model not in published_models
+        )
+        if unpublishable:
+            raise ValueError(
+                f'legacy_model_pins 指向未发布的 legacy 模型：{unpublishable}；'
+                '钉死模型必须随能力矩阵一起发布，前端才能把它预选为覆盖')
         return self
 
 

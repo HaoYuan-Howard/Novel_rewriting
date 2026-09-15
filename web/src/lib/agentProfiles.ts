@@ -184,6 +184,150 @@ export function legacyProviderForDraft(
   ) ?? null
 }
 
+function legacyModelLabel(
+  capabilities: AgentCapabilitiesResponse,
+  modelId: string,
+): string {
+  for (const provider of capabilities.legacy_providers) {
+    const model = provider.models.find((candidate) => candidate.id === modelId)
+    if (model) return model.label
+  }
+  return modelId
+}
+
+/** 钉死/覆盖预选文案用的模型展示名；未知 id 原样展示，不猜。 */
+export function legacyModelLabelById(
+  capabilities: AgentCapabilitiesResponse,
+  modelId: string,
+): string {
+  return legacyModelLabel(capabilities, modelId)
+}
+
+/**
+ * 同一 provider 内真正承接该节点的 legacy 模型：优先产品钉死模型
+ * （`legacy_model_pins`，质量裁决），没有钉死时取第一个可承接的。
+ */
+function legacyModelIdServingNode(
+  capabilities: AgentCapabilitiesResponse,
+  providerId: string,
+  node: string,
+): string | null {
+  const pin = capabilities.legacy_model_pins[node]
+  const provider = capabilities.legacy_providers.find(
+    (candidate) => candidate.id === providerId,
+  )
+  if (!provider) return null
+  const serving = provider.models.filter((model) =>
+    model.executor_nodes.includes(node),
+  )
+  if (serving.length === 0) return null
+  return serving.some((model) => model.id === pin)
+    ? pin
+    : serving[0].id
+}
+
+function clampLegacyThinking(
+  capabilities: AgentCapabilitiesResponse,
+  providerId: string,
+  modelId: string,
+  draft: LegacyLlmProfileDraft,
+): { thinking_mode: string; reasoning_effort: string } {
+  const provider = capabilities.legacy_providers.find(
+    (candidate) => candidate.id === providerId,
+  )
+  const model = provider?.models.find((candidate) => candidate.id === modelId)
+  const thinking = model?.thinking_modes.find(
+    (candidate) => candidate.id === draft.thinking_mode,
+  ) ?? model?.thinking_modes[0]
+  if (!thinking) return { thinking_mode: draft.thinking_mode, reasoning_effort: draft.reasoning_effort }
+  const effort = thinking.reasoning_efforts.includes(draft.reasoning_effort)
+    ? draft.reasoning_effort
+    : thinking.reasoning_efforts[0]
+  return { thinking_mode: thinking.id, reasoning_effort: effort }
+}
+
+/**
+ * 勾选节点覆盖时的初始草稿：默认执行者的副本，但当默认 legacy 模型承接不了
+ * 该节点时，换成同 provider 内可承接的模型（优先产品钉死），并把思考档位
+ * 夹回新模型的判定域。否则「覆盖=复制默认」会让钉死节点在勾选后继续报错，
+ * 用户只能误以为必须切换 Agent 模式。
+ */
+export function executorBackendDraftForNode(
+  capabilities: AgentCapabilitiesResponse,
+  base: ExecutorBackendDraft,
+  node: string,
+): ExecutorBackendDraft {
+  if (base.kind !== 'legacy') return { ...base }
+  const provider = base.legacy_profile.provider
+  const served = legacyModelIdServingNode(capabilities, provider, node)
+  if (!served || served === base.legacy_profile.model) return { ...base }
+  const clamped = clampLegacyThinking(capabilities, provider, served, base.legacy_profile)
+  return {
+    ...base,
+    legacy_profile: { ...base.legacy_profile, ...clamped, model: served },
+  }
+}
+
+function legacyDraftServesNode(
+  capabilities: AgentCapabilitiesResponse,
+  draft: LegacyLlmProfileDraft,
+  node: string,
+): boolean {
+  const provider = capabilities.legacy_providers.find(
+    (candidate) => candidate.id === draft.provider,
+  )
+  const model = provider?.models.find((candidate) => candidate.id === draft.model)
+  // 还没选到具体模型时不抢跑：让物化按「请选择模型」报错，不预填任何选择。
+  if (!model) return true
+  return model.executor_nodes.includes(node)
+}
+
+/**
+ * 默认执行者变化后的整份草稿：凡「继承默认」的节点若默认 legacy 模型承接
+ * 不了（产品钉死），自动补成显式覆盖并预选可承接模型。继承在本就不可行，
+ * 与其让保存报错把人推向 Agent 模式，不如把唯一合法配置直接摆上盘面
+ * （列表里看得到、可改，取消勾选会回到明确的报错）。已有覆盖不碰。
+ */
+export function withExecutorDefault(
+  capabilities: AgentCapabilitiesResponse,
+  value: PipelineAgentProfilesDraft,
+  executorDefault: ExecutorBackendDraft,
+): PipelineAgentProfilesDraft {
+  const next: PipelineAgentProfilesDraft = { ...value, executor_default: executorDefault }
+  if (executorDefault.kind !== 'legacy') return next
+  let overrides = next.executor_overrides
+  for (const node of capabilities.executor_nodes) {
+    if (overrides[node] !== undefined) continue
+    if (legacyDraftServesNode(capabilities, executorDefault.legacy_profile, node)) continue
+    overrides = {
+      ...overrides,
+      // 任何 legacy 模型都不承接（agent-only）的节点唯一合法配置是 Agent
+      // 覆盖；预置可见可改的空 Agent 草稿（不替用户猜 driver/model），
+      // 不塞一份注定失败的 legacy 副本。
+      [node]: legacyServesNodeAnywhere(capabilities, node)
+        ? executorBackendDraftForNode(capabilities, executorDefault, node)
+        : {
+          kind: 'agent',
+          agent_profile: emptyAgentProfileDraft(),
+          legacy_profile: { ...executorDefault.legacy_profile },
+        },
+    }
+  }
+  return { ...next, executor_overrides: overrides }
+}
+
+/**
+ * 任何 provider 的任何 legacy 模型都不承接该节点 ⇒ agent-only：
+ * Legacy 默认下它的唯一合法配置是 Agent 覆盖（与后端单向豁免同口径）。
+ */
+function legacyServesNodeAnywhere(
+  capabilities: AgentCapabilitiesResponse,
+  node: string,
+): boolean {
+  return capabilities.legacy_providers.some((provider) =>
+    provider.models.some((model) => model.executor_nodes.includes(node)))
+}
+
 function materializeProfile(
   capabilities: AgentCapabilitiesResponse,
   draft: AgentProfileDraft,
@@ -266,7 +410,14 @@ function materializeLegacyProfile(
     return { profile: null, errors }
   }
   if (node && !model.executor_nodes.includes(node)) {
-    errors.push(`${label}：${model.label} 不支持节点 ${node}，请为该节点配置覆盖`)
+    const pin = capabilities.legacy_model_pins[node]
+    errors.push(
+      !legacyServesNodeAnywhere(capabilities, node)
+        ? `${label}：节点 ${node} 需要 Agent 执行者（Legacy 不支持该节点），请为该节点配置 Agent 覆盖`
+        : pin
+          ? `${label}：${model.label} 无法承接节点 ${node}（产品契约钉死 ${legacyModelLabel(capabilities, pin)}）；请为该节点启用覆盖并选择 ${legacyModelLabel(capabilities, pin)}`
+          : `${label}：${model.label} 不支持节点 ${node}，请为该节点选择支持的模型`,
+    )
   }
   if (!draft.thinking_mode) {
     errors.push(`${label}：请选择思考模式`)
@@ -334,6 +485,14 @@ export function materializePipelineAgentProfiles(
   const errors = [...commander.errors, ...executorDefault.errors]
   const overrides: Record<string, ExecutorBackend> = {}
   const knownNodes = new Set(capabilities.executor_nodes)
+  // 任何 legacy 模型都不承接的节点 = agent-only：默认 legacy 时这些节点的
+  // agent 覆盖是唯一合法出路（与后端 AGENT_ONLY_EXECUTOR_NODES 单向豁免同口径，
+  // 从 capability 派生，不另抄节点清单）。
+  const legacyServedNodes = new Set(
+    capabilities.legacy_providers.flatMap((provider) =>
+      provider.models.flatMap((model) => model.executor_nodes),
+    ),
+  )
   if (draft.concurrency) {
     const policy = draft.concurrency
     const allowed = capabilities.concurrency
@@ -363,7 +522,14 @@ export function materializePipelineAgentProfiles(
         && result.backend !== null
         && result.backend.kind !== executorDefault.backend.kind
       ) {
-        errors.push(`节点 ${node}：执行者必须与默认执行者同一模式，不允许 Agent / Legacy 混用`)
+        const agentOnlyOverride = executorDefault.backend.kind === 'legacy'
+          && result.backend.kind === 'agent'
+          && !legacyServedNodes.has(node)
+        if (!agentOnlyOverride) {
+          errors.push(
+            `节点 ${node}：执行者必须与默认执行者同一模式；默认 Legacy 时仅 Legacy 不支持的节点可用 Agent 覆盖，不允许其余混用`,
+          )
+        }
       }
       continue
     }

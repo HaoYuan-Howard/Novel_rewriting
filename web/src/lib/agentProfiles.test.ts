@@ -5,13 +5,16 @@ import {
   EXECUTOR_PROFILE,
   READY_PROFILES,
 } from '@/test/agent'
+import type { ExecutorBackendDraft } from './agentProfiles'
 import {
   emptyPipelineAgentProfilesDraft,
+  executorBackendDraftForNode,
   materializePipelineAgentProfiles,
   pipelineDraftOf,
   pipelineProfilesEqual,
   clonePipelineAgentProfiles,
   withBackendKind,
+  withExecutorDefault,
   withProfileDriver,
   withProfileModel,
 } from './agentProfiles'
@@ -147,7 +150,10 @@ describe('agent profile draft/materialize', () => {
 
     const refused = materializePipelineAgentProfiles(capabilities, draft)
     expect(refused.profiles).toBeNull()
-    expect(refused.errors.join('\n')).toMatch(/不支持节点 node\.dynamic-b/)
+    // 报错必须给出唯一合法动作：钉死模型 + 启用覆盖，而不是把人推向 Agent 模式。
+    expect(refused.errors.join('\n')).toMatch(
+      /无法承接节点 node\.dynamic-b（产品契约钉死 DeepSeek V4 Pro）；请为该节点启用覆盖并选择 DeepSeek V4 Pro/,
+    )
 
     draft.executor_overrides['node.dynamic-b'] = {
       ...withBackendKind(draft.executor_default, 'legacy'),
@@ -158,6 +164,15 @@ describe('agent profile draft/materialize', () => {
         thinking_mode: 'on',
         reasoning_effort: 'high',
       },
+    }
+    // agent-only 节点没有 legacy 执行器：唯一合法配置是 agent 覆盖（单向豁免）。
+    draft.executor_overrides['node.agent-only'] = {
+      kind: 'agent',
+      agent_profile: {
+        ...EXECUTOR_PROFILE,
+        execution_mode: EXECUTOR_PROFILE.execution_mode ?? '',
+      },
+      legacy_profile: { ...draft.executor_default.legacy_profile },
     }
     expect(materializePipelineAgentProfiles(capabilities, draft)).toEqual({
       profiles: {
@@ -171,6 +186,10 @@ describe('agent profile draft/materialize', () => {
           'node.dynamic-b': {
             kind: 'legacy',
             profile: draft.executor_overrides['node.dynamic-b'].legacy_profile,
+          },
+          'node.agent-only': {
+            kind: 'agent',
+            profile: EXECUTOR_PROFILE,
           },
         },
       },
@@ -203,7 +222,27 @@ describe('agent profile draft/materialize', () => {
       },
     })
     expect(mixed.profiles).toBeNull()
-    expect(mixed.errors.join('\n')).toMatch(/不允许 Agent \/ Legacy 混用/)
+    expect(mixed.errors.join('\n')).toMatch(/默认 Legacy 时仅 Legacy 不支持的节点可用 Agent 覆盖/)
+
+    // legacy 不承接的节点豁免：agent 覆盖是 agent-only 节点的唯一合法出路。
+    const exempted = materializePipelineAgentProfiles(capabilities, {
+      ...draft,
+      executor_overrides: {
+        'node.agent-only': {
+          kind: 'agent',
+          agent_profile: {
+            ...EXECUTOR_PROFILE,
+            execution_mode: EXECUTOR_PROFILE.execution_mode ?? '',
+          },
+          legacy_profile: { ...draft.executor_default.legacy_profile },
+        },
+      },
+    })
+    expect(exempted.errors).toEqual([])
+    expect(exempted.profiles?.executor_overrides['node.agent-only']).toEqual({
+      kind: 'agent',
+      profile: EXECUTOR_PROFILE,
+    })
 
     const sameKind = materializePipelineAgentProfiles(capabilities, {
       ...draft,
@@ -213,6 +252,14 @@ describe('agent profile draft/materialize', () => {
           agent_profile: { ...draft.executor_default.agent_profile },
           legacy_profile: { ...draft.executor_default.legacy_profile },
         },
+        'node.agent-only': {
+          kind: 'agent',
+          agent_profile: {
+            ...EXECUTOR_PROFILE,
+            execution_mode: EXECUTOR_PROFILE.execution_mode ?? '',
+          },
+          legacy_profile: { ...draft.executor_default.legacy_profile },
+        },
       },
     })
     expect(sameKind.errors).toEqual([])
@@ -220,5 +267,67 @@ describe('agent profile draft/materialize', () => {
       kind: 'legacy',
       profile: draft.executor_default.legacy_profile,
     })
+  })
+
+  it('钉死节点：勾选覆盖自动预选可承接模型，默认切到 legacy 时自动补覆盖', () => {
+    const capabilities = agentCapabilities(null)
+    const flashLegacyDraft: ExecutorBackendDraft = {
+      kind: 'legacy',
+      agent_profile: { ...EXECUTOR_PROFILE, execution_mode: EXECUTOR_PROFILE.execution_mode ?? '' },
+      legacy_profile: {
+        provider: 'deepseek', model: 'deepseek-flash',
+        thinking_mode: 'on', reasoning_effort: 'high',
+      },
+    }
+
+    // 勾选钉死节点：初始草稿换成 V4 Pro，而不是复制默认 Flash 后继续报错。
+    const override = executorBackendDraftForNode(capabilities, flashLegacyDraft, 'node.dynamic-b')
+    expect(override.legacy_profile).toEqual({
+      provider: 'deepseek', model: 'deepseek-v4-pro',
+      thinking_mode: 'on', reasoning_effort: 'high',
+    })
+    // 默认模型可承接的节点与 agent 后端：原样副本。
+    expect(executorBackendDraftForNode(capabilities, flashLegacyDraft, 'node.dynamic-a'))
+      .toEqual(flashLegacyDraft)
+
+    // 默认执行者切到 legacy Flash：承接不了的 node.dynamic-b 自动补成 Pro 覆盖，
+    // agent-only 的 node.agent-only 自动补成空 Agent 草稿覆盖（不猜 driver），
+    // 可承接的 node.dynamic-a 保持继承；materialize 只差待选 driver ⇒ 纯 legacy 可整跑。
+    const draft = emptyPipelineAgentProfilesDraft()
+    draft.commander = { ...pipelineDraftOf(READY_PROFILES).commander }
+    const swept = withExecutorDefault(capabilities, draft, flashLegacyDraft)
+    expect(Object.keys(swept.executor_overrides)).toEqual(['node.dynamic-b', 'node.agent-only'])
+    expect(swept.executor_overrides['node.agent-only'].kind).toEqual('agent')
+    const materialized = materializePipelineAgentProfiles(capabilities, swept)
+    expect(materialized.errors).toEqual(['节点 node.agent-only：请选择 driver'])
+    expect(materialized.profiles).toBeNull()
+    swept.executor_overrides['node.agent-only'].agent_profile = {
+      ...EXECUTOR_PROFILE,
+      execution_mode: EXECUTOR_PROFILE.execution_mode ?? '',
+    }
+    const completed = materializePipelineAgentProfiles(capabilities, swept)
+    expect(completed.errors).toEqual([])
+    expect(completed.profiles?.executor_default).toEqual({
+      kind: 'legacy', profile: flashLegacyDraft.legacy_profile,
+    })
+    expect(completed.profiles?.executor_overrides['node.dynamic-b']).toEqual({
+      kind: 'legacy',
+      profile: override.legacy_profile,
+    })
+    expect(completed.profiles?.executor_overrides['node.agent-only']).toEqual({
+      kind: 'agent',
+      profile: EXECUTOR_PROFILE,
+    })
+
+    // 用户显式取消该覆盖后不再抢回去，物化给出唯一合法动作的报错。
+    const unchecked = {
+      ...swept,
+      executor_overrides: Object.fromEntries(
+        Object.entries(swept.executor_overrides).filter(([node]) => node !== 'node.dynamic-b'),
+      ),
+    }
+    const refused = materializePipelineAgentProfiles(capabilities, unchecked)
+    expect(refused.profiles).toBeNull()
+    expect(refused.errors.join('\n')).toMatch(/产品契约钉死 DeepSeek V4 Pro/)
   })
 })

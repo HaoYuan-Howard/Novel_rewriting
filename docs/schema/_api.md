@@ -281,7 +281,7 @@ preview/start 都携相同 `RunContinuationSource` 并由后端复验。运行�
 
 | 模型 | 字段 | 约束 |
 |---|---|---|
-| `AgentCapabilitiesResponse` | `drivers[]` · `legacy_providers[]` · `executor_nodes[]` · `default_profiles` | `executor_nodes` 按 `AGENT_EXECUTOR_NODES` 完整有序发布，前端不维护第二份节点表。`default_profiles` 是经整书验收后才可发布的产品预置配置，不是 backend 模式选择器；当前明确为 `null`，不能取任一数组首项猜 |
+| `AgentCapabilitiesResponse` | `drivers[]` · `legacy_providers[]` · `executor_nodes[]` · `legacy_model_pins{node: model}` · `default_profiles` | `executor_nodes` 按 `AGENT_EXECUTOR_NODES` 完整有序发布，前端不维护第二份节点表。`legacy_model_pins` 发布产品契约钉死的 legacy 模型（`NODES[node].model`，质量裁决）：钉死的是**模型**不是 agent/legacy 模式，被钉节点在 legacy 下经覆盖选该模型即可纯 legacy 整跑；键⊆executor 节点，值必须是已发布的 legacy 模型 id。legacy 模型的 `executor_nodes[]` 不含 `AGENT_ONLY_EXECUTOR_NODES`（无 legacy 执行器的付费节点）：默认 legacy 时这些节点必须配 `agent` 覆盖（构造期单向豁免），前端从「executor 节点减 legacy 承接面」派生，不另抄清单。`default_profiles` 是经整书验收后才可发布的产品预置配置，不是 backend 模式选择器；当前明确为 `null`，不能取任一数组首项猜 |
 | `AgentDriverCapability` | `id` · `provider` · `label` · `roles[]` · `availability` · `availability_reason` · `version` · `models[]` | `id` 是可执行 driver 身份，`provider` 只是供应商元数据，`label` 只展示。可用性四态为 `ready / missing / unknown / unauthenticated` |
 | `AgentModelCapability` | `id` · `label` · `reasoning_efforts[]` · `execution_modes[]` | 精确 `id` 进入 argv/审计，label 可改；effort 与 execution mode 正交，只能提交该 model 实际发布的组合 |
 | `AgentProfile` | `driver` · `model` · `reasoning_effort` · `execution_mode` | schema 只承载选择；driver/角色/model/effort/mode 的组合由同一个 capability registry 关闭式校验，客户端不得自造笛卡尔积 |

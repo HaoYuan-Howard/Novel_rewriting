@@ -469,7 +469,7 @@ def read_events(base: str | os.PathLike[str]) -> list[AgentRunEvent]:
             continue
         try:
             data = json.loads(line)
-            out.append(AgentRunEvent.model_validate(data))
+            out.append(AgentRunEvent.replay_validate(data))
         except Exception:                       # noqa: BLE001 —— 半截行容错
             if i == len(raw) - 1:
                 break

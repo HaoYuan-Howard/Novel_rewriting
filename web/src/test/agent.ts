@@ -139,7 +139,11 @@ export function agentCapabilities(
         ],
       },
     ],
-    executor_nodes: ['node.dynamic-a', 'node.dynamic-b'],
+    executor_nodes: ['node.dynamic-a', 'node.dynamic-b', 'node.agent-only'],
+    // node.dynamic-b 只在 V4 Pro 的 executor_nodes 里 ⇒ 前端按钉死表预选覆盖模型。
+    // node.agent-only 不在任何 legacy 模型里 ⇒ agent-only：默认 legacy 时
+    // 唯一合法的 agent 覆盖豁免节点。
+    legacy_model_pins: { 'node.dynamic-b': 'deepseek-v4-pro' },
     concurrency: { nodes: ['node.dynamic-a'], node_choices: [4, 6, 8], default_node: 4,
       defaults: { node_overrides: {}, per_book: 4, per_provider: 8 },
       total_min: 1, total_max: 32, scope: 'output_root' },

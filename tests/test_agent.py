@@ -27,13 +27,15 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 from contracts.artifacts import (
     STAGE5_REVIEWER_REWRITE_REQUEST, STAGE6_PREPARE_EDIT,
     STAGE6_PREPARE_REVIEW_DECISIONS,
 )
 from contracts.invariants import (
-    AGENT_EXECUTOR_NODES, AGENT_RUN_EXIT_ORIGINS, DESIGN_CHAPTER_DECISIONS, DESIGN_REPAIR_CODES,
+    AGENT_EXECUTOR_NODES, AGENT_ONLY_EXECUTOR_NODES, AGENT_RUN_EXIT_ORIGINS,
+    DESIGN_CHAPTER_DECISIONS, DESIGN_REPAIR_CODES,
     DESIGN_STRATEGY_DECISIONS, DESIGN_STRATEGY_REPLAN_CONSTRAINTS,
 )
 from contracts.schema import decode_artifact, encode_artifact
@@ -252,7 +254,11 @@ def test_plan_freezes_and_discloses_an_explicit_legacy_executor_backend(base):
         profiles=PipelineAgentProfiles(
             commander=_CODEX,
             executor_default=backend,
-            executor_overrides={},
+            # agent-only 节点没有 legacy 执行器：legacy 默认必须逐节点配
+            # agent 覆盖，这是 2026-09-15 单向豁免后的唯一合法混用形状。
+            executor_overrides={
+                node: _CODEX for node in AGENT_ONLY_EXECUTOR_NODES
+            },
         ),
     )
 
@@ -823,6 +829,46 @@ def test_novel_cli_exit_one_is_landed_red_not_agent_process_failure(base):
     [rec] = agent.fold(agent.read_events(base))
     assert rec.state == 'landed_red' and rec.exit_code == 1
     assert rec.note and '已经落盘' in rec.note
+
+
+def test_history_mixed_executor_modes_still_fold_but_new_inputs_stay_refused(base):
+    """混用禁令是准入规则，不是重放判据（restart 前置检查 500 反例）。
+
+    2026-09-14 裁决生效前合法写入的混用选择（legacy 默认 + agent 节点覆盖）
+    必须仍能经 ``read_events`` / ``records`` / ``queue_view`` 读回——否则代跑
+    记录 API 全体 500，`scripts/restart.cmd` 的服务身份检查直接失败。
+    同一形状走 ``model_validate``（新构造/新写入边界）仍被构造期校验拒绝。
+    """
+    started = _start().model_dump(mode='json')
+    started['profiles'] = {
+        'schema_version': 2,
+        'commander': _CODEX.model_dump(mode='json'),
+        'executor_default': {
+            'kind': 'legacy',
+            'profile': LegacyLlmProfile(
+                provider='deepseek', model='deepseek-v4-pro',
+                reasoning_effort='high', thinking_mode='on').model_dump(mode='json'),
+        },
+        'executor_overrides': {
+            'stage4.design': {'kind': 'agent', 'profile': _CLAUDE.model_dump(mode='json')},
+        },
+    }
+    agent.runs_path(base).parent.mkdir(parents=True, exist_ok=True)
+    agent.runs_path(base).write_text(json.dumps({
+        'wire_version': 2, 'run_id': 'mixed-history', 'kind': 'started',
+        'ts': 10, 'start': started,
+        # v2 started 的不可变契约携同一份混用 profiles（历史行的真实形状）。
+        'contract': dict(started),
+    }, ensure_ascii=False) + '\n', encoding='utf-8')
+
+    [rec] = agent.fold(agent.read_events(base))
+    assert rec.run_id == 'mixed-history'
+    assert rec.start.profiles.executor_default.kind == 'legacy'
+    assert rec.start.profiles.executor_overrides['stage4.design'].kind == 'agent'
+    assert agent.queue_view(base).running == []
+
+    with pytest.raises(ValidationError, match='混用模式'):
+        PipelineAgentProfiles.model_validate(started['profiles'])
 
 
 @pytest.mark.parametrize('wire_version', [1, 2])

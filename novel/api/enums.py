@@ -111,6 +111,10 @@ _WITHHELD: dict[str, str] = {
         'agent 执行节点属于 driver/model/effort/mode 组合能力面，'
         '唯一公开口是动态 `GET /api/agent/capabilities`；'
         '再经 `/api/enums` 发一份会造成两个可漂移的节点清单'),
+    'AGENT_ONLY_EXECUTOR_NODES': (
+        'agent-only 节点集合已由 capability 的 legacy executor_nodes 取补集表达，'
+        '前端按「默认 legacy 时仅 legacy 不承接的节点可用 agent 覆盖」派生；'
+        '再经 `/api/enums` 发一份会造成两个可漂移的节点清单'),
     'RETENTION_CANDIDATE_KINDS': (
         'retention preview 已随每条候选返回服务端判定出的 kind；它不是维护策略选项，'
         '浏览器不得据此重算是否应清理，另经 `/api/enums` 发布会制造第二个消费面'),

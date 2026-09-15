@@ -2420,6 +2420,16 @@ AGENT_EXECUTOR_NODES: Final = (
     'stage7.rename',
 )
 
+#: 只支持 agent executor 的付费节点。这些节点的 producer 直接消费
+#: ``SessionAgentClient`` 的 node-executor/v1 acceptance（agent_runs 的
+#: run/checkpoint/会话审计闭环），legacy 直连 API 客户端没有等价实现；
+#: legacy driver 的 capability 不得宣称这些节点，legacy 默认选择必须为它们
+#: 配 agent 覆盖（单向豁免，2026-09-15 用户裁决：legacy 整书跑通）。
+#: 补齐 legacy 执行器后把节点从这里移走，capability 与混用豁免同步收窄。
+AGENT_ONLY_EXECUTOR_NODES: Final = frozenset({
+    'stage2.analyze', 'stage6.prepare',
+})
+
 #: `(节点, 触发 flag)` → 这条跑法**额外**必填的 flag。`NodeSpec.required_flags` 的补集：
 #: 那一列管无条件必填，这张表管「跟着另一条跑法才必填」。
 #:

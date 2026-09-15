@@ -109,6 +109,12 @@ export interface AgentCapabilitiesResponse {
   drivers: AgentDriverCapability[]
   legacy_providers: LegacyProviderCapability[]
   executor_nodes: string[]
+  /**
+   * 节点 → 产品契约钉死的 legacy 模型 id。钉死的是「模型」不是 agent/legacy
+   * 模式：被钉节点在 legacy 下必须经覆盖选该模型，agent 下不受影响。
+   * 没有钉死的节点不出现。
+   */
+  legacy_model_pins: Record<string, string>
   concurrency: PipelineConcurrencyCapability
   /** null = 尚无通过整书验收的产品预置；不是 backend 开关，也不得取任一 capability 首项猜。 */
   default_profiles: PipelineAgentProfiles | null

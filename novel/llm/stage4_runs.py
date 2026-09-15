@@ -4524,7 +4524,7 @@ def _design_recovery_source_owner(
     raw_rows = _strict_jsonl_objects(
         agent.runs_path(base), label='Stage4 recovery AgentRun 账')
     try:
-        events = [AgentRunEvent.model_validate(row) for row in raw_rows]
+        events = [AgentRunEvent.replay_validate(row) for row in raw_rows]
     except ValidationError as exc:
         raise ProvenanceRefused(
             f'Stage4 recovery AgentRun 账不符合事件 schema：{exc}') from exc

@@ -20,7 +20,7 @@ from typing import Callable
 
 from contracts.invariants import (
     AGENT_EXECUTOR_NODES, AgentAvailability, AgentDriver,
-    AgentModelEvidence, AgentReasoningEffort, AgentRole,
+    AgentModelEvidence, AgentReasoningEffort, AgentRole, NODES,
 )
 from contracts.schema.api import (
     AgentCapabilitiesResponse, AgentDriverCapability, AgentModelCapability,
@@ -303,6 +303,13 @@ def get_agent_capabilities(
         drivers=drivers,
         legacy_providers=legacy_providers,
         executor_nodes=list(AGENT_EXECUTOR_NODES),
+        # 钉死的是 legacy 模型（质量裁决，见 NODES 各格注释），不是执行模式；
+        # 前端据此把被钉节点预选为覆盖，而不是把人推向另一侧模式。
+        legacy_model_pins={
+            node: NODES[node].model
+            for node in AGENT_EXECUTOR_NODES
+            if NODES[node].model
+        },
     )
 
 

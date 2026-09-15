@@ -11,8 +11,11 @@ import type {
 } from '@/lib/agentProfiles'
 import {
   driverForDraft,
+  executorBackendDraftForNode,
+  legacyModelLabelById,
   legacyProviderForDraft,
   withBackendKind,
+  withExecutorDefault,
   withLegacyModel,
   withLegacyProvider,
   withLegacyThinking,
@@ -366,21 +369,20 @@ export function PipelineAgentProfilesForm({
         idPrefix="agent-executor-default"
         value={value.executor_default}
         disabled={disabled}
-        onChange={(executorDefault) => onChange({
-          ...value,
-          executor_default: executorDefault,
-        })}
+        onChange={(executorDefault) => onChange(withExecutorDefault(capabilities, value, executorDefault))}
       />
 
       <fieldset className="m-0 rounded-block border border-line bg-sunken-2 px-13 py-11">
         <legend className="px-4 text-body font-semibold text-ink-2">逐节点执行者覆盖</legend>
         <div className="mb-8 text-tag text-ink-4">
-          未启用的节点继承默认执行者；节点清单完全来自 capability。
+          未启用的节点继承默认执行者；节点清单完全来自 capability。标了「产品契约钉死」的节点
+          在 Legacy 下必须覆盖为指定模型（质量裁决，与 Agent/Legacy 模式无关）。
         </div>
         <div className="flex flex-col gap-7">
           {capabilities.executor_nodes.map((node) => {
             const override = value.executor_overrides[node]
             const enabled = override !== undefined
+            const pinId = capabilities.legacy_model_pins[node]
             return (
               <details
                 key={node}
@@ -397,7 +399,7 @@ export function PipelineAgentProfilesForm({
                     onChange={(event) => {
                       const next = { ...value.executor_overrides }
                       if (event.target.checked) {
-                        next[node] = { ...value.executor_default }
+                        next[node] = executorBackendDraftForNode(capabilities, value.executor_default, node)
                       } else {
                         delete next[node]
                       }
@@ -405,6 +407,11 @@ export function PipelineAgentProfilesForm({
                     }}
                   />
                   <span className="font-mono text-mini text-ink-2">{node}</span>
+                  {pinId ? (
+                    <span className="text-tag text-ink-4">
+                      产品契约钉死 {legacyModelLabelById(capabilities, pinId)}
+                    </span>
+                  ) : null}
                   <span className="ml-auto text-tag text-ink-5">
                     {enabled ? '已覆盖' : '继承默认'}
                   </span>

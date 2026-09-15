@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from contracts.invariants import AGENT_ONLY_EXECUTOR_NODES
 from contracts.schema.orchestration import (
     AgentExecutorBackend, AgentProfile, LegacyExecutorBackend, LegacyLlmProfile,
     PipelineAgentProfiles,
@@ -83,7 +84,12 @@ def test_settings_persist_an_explicit_legacy_backend_without_provider_secrets(tm
     requested = PipelineAgentProfiles(
         commander=_profile(),
         executor_default=backend,
-        executor_overrides={},
+        # agent-only 节点没有 legacy 执行器：legacy 默认必须逐节点配 agent
+        # 覆盖（2026-09-15 单向豁免），否则保存即被拒。
+        executor_overrides={
+            node: AgentExecutorBackend(profile=_profile())
+            for node in sorted(AGENT_ONLY_EXECUTOR_NODES)
+        },
     )
 
     saved = agent_settings.update(
