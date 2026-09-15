@@ -43,7 +43,7 @@ def _rig(tmp_path, monkeypatch, *, cached=False):
         source_text=source_text, recs=recs, hook_text=hook_text,
         hook_art=SimpleNamespace(approved=SimpleNamespace(text=hook_text)),
         hook_sha1=None, hook_consumed=HookConsumed(
-            present=True, approved_text_sha1=prov.fingerprint_bytes(hook_text.encode())),
+            present=True, candidates_sha1=prov.fingerprint_bytes(hook_text.encode())),
         judged={}, missing=[], invalids=[], planned_chapters=2, ctx_code=ctx.code,
         pre_target='\n'.join([*(row['text'] for row in recs), hook_text, ctx.title]))
     up.mat = prompts.build_material(

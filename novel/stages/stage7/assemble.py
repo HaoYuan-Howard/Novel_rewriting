@@ -132,7 +132,7 @@ def _require_mapping_current(
         todo.append(f'把 {up.missing} 写出来（stage5.write，可能付费）')
     if not up.hook_text:
         bad.append('开篇文案还没定稿（txt 的第一段就是它）')
-        todo.append('stage6.approve --pick N（0 成本）')
+        todo.append('stage6.approve --auto 自动定稿（0 成本）；人工改选用 --pick N')
     if bad:
         # ⚠ **一次报全**：两条同时成立且互不依赖，逐条失败会让人补完一样才发现还差另一样。
         #   两项各自 typed（恢复路各不相同），消费方按字段路由而不是 parse 这段人话。

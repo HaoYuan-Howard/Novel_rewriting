@@ -563,8 +563,8 @@ def check(*, findings: list[Finding], scanned: str, baseline_line: str,
 
     if approved:
         out.append(unverifiable(
-            'rn_not_approved', '已定稿（`origin=human`）。⚠ 它仍然是「查不了」而不是绿灯：'
-                               '**定稿说明有人看过，不说明新名好**',
+            'rn_not_approved', '已定稿（`origin=auto|human`）。⚠ 它仍然是「查不了」而不是绿灯：'
+                               '**定稿（自动或人工）不说明新名好**',
             scanned='产物的 `approved` 键'))
     else:
         out.append(unverifiable(
@@ -579,7 +579,7 @@ def check(*, findings: list[Finding], scanned: str, baseline_line: str,
 
     out.append(unverifiable(
         'rn_hook_missing',
-        '开篇文案的定稿状态由 `hook_consumed.present` 记着；'
+        '开篇文案的定稿状态由 `hook_consumed.present` 记着（自动定稿或人工改选均算已定稿）；'
         '**文案未定稿时 `stage7.assemble` 会直接拒写 txt**（那道闸在组装那一步，不在这里）。'
         '⚠ 正因为那道闸挡在前面，「成书里没有文案」这一态**结构上不可达**',
         scanned='`hook_consumed` 一格'))
@@ -642,10 +642,12 @@ def _body_stale_why(stale: list[str], missing: list[str], hook_stale: bool) -> s
     if missing:
         parts.append(f'替换引用的 {len(missing)} 份成稿已不在盘上：{missing[:4]}')
     if hook_stale:
-        parts.append('`stage6/hook.json` 的**人工定稿文本**在替换之后变过——'
+        parts.append('`stage6/hook.json` 的**候选集**在替换之后变过'
+                     '（重新生成或 apply-edit 改字；候选之间改选不算）——'
                      '成书里的文案可能是旧的')
     if not parts:
-        return ('逐份成稿的 `consumed` 投影都对得上、文案定稿文本也没变过。'
+        return ('逐份成稿的 `consumed` 投影都对得上、候选集也没变过'
+                '（候选之间改选不改变本投影，组装由 assemble 免费重放）。'
                 '⚠ 它仍然登记为「查不了」而不是绿灯：整文件 `sha1` 只作审计，'
                 '而投影只覆盖本层真正消费的那几个字段')
     return '；'.join(parts)

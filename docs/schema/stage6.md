@@ -63,14 +63,14 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 破坏形状就 +1 并同批明确重建 owner。离线 workflow manifest 过渡另见 `work_units.md`，
 不能借工作流过渡给旧 Hook、审判或批准补字段：
 
-- `hook.json` 与轮次归档**都是 schema v4**。本批改为独立 Prepare / Characters / Global 来源，
+- `hook.json` 与轮次归档**都是 schema v5**（2026-09-15 全自动裁决升版：`basis ∈ {default_policy, human_selection}`、`origin ∈ {auto, human}`、判官 `semantic_review_seq` 随节点退役删除）。本批改为独立 Prepare / Characters / Global 来源，
   旧 v3 不自动继承生成、审阅或 prepared 身份。2026-09-08 取消每槽只修一次的限制：
   legacy 的 `candidate_retry_limit=4` 表示整书工作单元的内容上限，Agent 完整替换协议为 0；
   同槽 `candidate_retries.attempt` 按实际请求连续编号 1..4，不能重复或跳号。
   旧 v1/v2/v3 产物保留原代码和原账，不迁移、不手改版本标记；当前根在接受 Prepare 后，
-  `stage6.hook` 经显式付费与正文外发授权生成 v4，再经机械判据与 `stage6.approve` 自动定稿
-  （人工改选随时可做、不阻塞下游）。
-  v4 的已封存提交尾窗可走 `--recover-prepared` 免费补尾，不追认旧 schema 的提交来源。
+  `stage6.hook` 经显式付费与正文外发授权生成 v5，再经机械判据与 `stage6.approve` 自动定稿
+  （人工改选随时可做、不阻塞下游）。旧 v4（basis=human_verification）不迁移，存量半程书重跑 stage6。
+  v5 的已封存提交尾窗可走 `--recover-prepared` 免费补尾，不追认旧 schema 的提交来源。
 - 各份 `hook_edit.json` 编辑请求**都是 schema v2**。候选由位置身份 `c1/c2/c3`
   定位；本轮未改编辑形状。
   2026-08-23 的候选身份与策略名解耦仍保持：策略可重复，位置才唯一。旧实验快照只读，

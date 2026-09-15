@@ -39,13 +39,18 @@ Unit = tuple[str, str]
 
 
 def hook_consumed_of(rec: dict | None) -> HookConsumed:
-    """stage7 对 `stage6/hook.json` 的真实消费面：**文件在不在 + 人工定稿文本**。
+    """stage7 对 `stage6/hook.json` 的真实消费面：**候选集文本指纹**。
 
-    ⚠ 候选、判据、来源账那些元数据变化**不要求重做替换**——拼进成书的只有定稿那一段。
+    ⚠ 2026-09-15 免费改选裁决：替换目标面含**全部三条候选**（NameMap 生成时已对
+    候选全集做过碰撞校验）⇒ 投影绑定候选集合而不是选中的那一条——候选之间改选
+    不改变投影、不要求重做替换；候选集合本身变化（重新生成 / apply-edit 改字）
+    → 指纹变 → stale。
     """
     from novel import prov
-    text = (((rec or {}).get('approved') or {}).get('text') or '')
-    return HookConsumed(present=bool(rec), approved_text_sha1=prov.fingerprint(text))
+    texts = [c.get('text') or ''
+             for c in ((rec or {}).get('candidates') or []) if isinstance(c, dict)]
+    return HookConsumed(present=bool(rec),
+                        candidates_sha1=prov.fingerprint('\x1f'.join(texts)))
 
 
 # ── 成稿：走 `read_judged`，绝不走会记 `inputs` 的那条 ──────────────────────

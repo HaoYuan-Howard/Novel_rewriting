@@ -465,7 +465,7 @@ def _name_map() -> _NameMap:
         book_txt=None,
         judged={'stage5/ch01.json': {'sha1': 'a' * 10}},
         hook_sha1='b' * 10,
-        hook_consumed={'present': True, 'approved_text_sha1': 'c' * 10},
+        hook_consumed={'present': True, 'candidates_sha1': 'c' * 10},
         sources={'writer_context': {'state': 'fresh'}},
         book=[],
         identity=None,

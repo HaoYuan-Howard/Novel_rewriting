@@ -360,12 +360,12 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE6_PREPARE_REVIEW: ArtifactSpec(Stage6PrepareReview),
     STAGE6_PREPARE_REVIEW_DECISIONS: ArtifactSpec(PrepareDecision),
     STAGE6_PREPARE_COMMIT: ArtifactSpec(PrepareMutationJournal),
-    STAGE6_HOOK: ArtifactSpec(Hook, 4),
+    STAGE6_HOOK: ArtifactSpec(Hook, 5),
     STAGE6_HOOK_EDIT: ArtifactSpec(HookEdit, 2),
     # v2 新增判官实际看见的 Stage5 开篇成稿 `judged`绑定；
     # 旧 v1 不能证明正文改字后语义结论仍然 current。
     STAGE6_WONTFIX: ArtifactSpec(WontFix),
-    STAGE7_NAME_MAP: ArtifactSpec(NameMap, 3),
+    STAGE7_NAME_MAP: ArtifactSpec(NameMap, 4),
     STAGE7_NAME_MAP_EDIT: ArtifactSpec(NameMapEdit),
 }
 ARTIFACTS: dict[str, type[BaseModel]] = {

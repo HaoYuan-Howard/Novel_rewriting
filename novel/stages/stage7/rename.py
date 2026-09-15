@@ -299,6 +299,13 @@ class _Upstreams:
         if store.exists(HOOK):
             self.hook_art = store.read(paths_model(HOOK), HOOK)
             self.hook_raw = self.hook_art.model_dump(by_alias=True)
+        # ⚠ 免费改选裁决（2026-09-15）：本层对 stage6 的消费面是**候选集合**——
+        # 碰撞校验与新名命中计数都按三条候选整体算，改选（approved 变化）不动它们。
+        # `hook_text`（当前定稿）只服务**组装**，由 stage7.assemble 免费重放。
+        self.hook_texts: list[str] = [
+            c.get('text') or ''
+            for c in ((self.hook_raw or {}).get('candidates') or [])
+            if isinstance(c, dict)]
         self.hook_text: str = (((self.hook_raw or {}).get('approved') or {}).get('text') or '')
         self.hook_sha1: str | None = _hook_file_fp(store)
         self.hook_consumed = hook_consumed_of(self.hook_raw)
@@ -310,7 +317,8 @@ class _Upstreams:
             self.sur[cids[0]]: tuple(cids)
             for cids in groups.values() if cids and self.sur.get(cids[0])
         }
-        targets = [r.get('text') or '' for r in self.recs] + [self.hook_text, self.title]
+        targets = ([r.get('text') or '' for r in self.recs]
+                   + list(self.hook_texts) + [self.title])
         self.mat = prompts.build_material(
             title=self.title, registry=self.registry, relations=self.relations,
             era=self.era, groups=groups, sur=self.sur,
@@ -318,13 +326,16 @@ class _Upstreams:
 
     @property
     def pre_target(self) -> str:
-        """**真正的替换目标** = 成稿 ∪ 文案 ∪ 书名。
+        """**真正的替换目标** = 成稿 ∪ **全部候选文案** ∪ 书名。
 
-        ⚠ 它与 `source_text`（原作正文）是两个不同的面：新名撞上前者是 hard
-        （换完分不清哪个是换来的），撞上后者只是提示（原文不参与组装）。
+        ⚠ 免费改选裁决（2026-09-15）：目标面按**候选集合**算而不只算选中的那条——
+        NameMap 生成时就把「新名撞上任何一条候选」拦成 hard，之后三条候选之间
+        改选才有零模型调用的保证。它与 `source_text`（原作正文）是两个不同的面：
+        新名撞上前者是 hard（换完分不清哪个是换来的），撞上后者只是提示
+        （原文不参与组装）。
         """
         return '\n'.join([r.get('text') or '' for r in self.recs]
-                         + [self.hook_text, self.title])
+                         + list(self.hook_texts) + [self.title])
 
 
 def paths_model(rel: str):
@@ -552,7 +563,7 @@ def _judged_drift(art: NameMap, up: _Upstreams) -> tuple[list[str], list[str]]:
 
 
 def _hook_drift(art: NameMap, up: _Upstreams) -> bool:
-    """人工定稿文案有没有变过；只比较本层实际消费的投影。"""
+    """候选集投影变没变过（重新生成 / apply-edit 改字 ⇒ 变；候选间改选 ⇒ 不变）。"""
     return art.hook_consumed != up.hook_consumed
 
 

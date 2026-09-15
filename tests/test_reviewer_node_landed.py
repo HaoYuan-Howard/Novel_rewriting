@@ -122,7 +122,7 @@ def _seed_final(base: Path, monkeypatch) -> None:
         }], extra_subs=[], subs={'沈月': '陆月'}, kept=[],
         applied={'chapters': {}, 'hook': {'counts': {}}}, residual=[], baselines={},
         approved=None, book_txt=None, judged={}, hook_sha1=None,
-        hook_consumed={'present': False, 'approved_text_sha1': prov.fingerprint('')},
+        hook_consumed={'present': False, 'candidates_sha1': prov.fingerprint('')},
         sources={'writer_context': {'state': 'fresh', 'detail': [], 'code': ctx7.code}},
         book=[], identity=None,
         _provenance=ctx7.free_provenance(

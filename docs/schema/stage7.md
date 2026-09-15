@@ -5,7 +5,7 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 
 | 路径 | 模型 | 角色 |
 |---|---|---|
-| `stage7/name_map.json` | `NameMap` v3 | 当前正式改名产物 |
+| `stage7/name_map.json` | `NameMap` v4 | 当前正式改名产物 |
 | `stage7/_rounds/name_map.rN.json` | `NameMap` v3 | 归档轮次，与正式产物同形 |
 | `stage7/name_map_edit.json` | `NameMapEdit` v1 | 人工输入，不是节点产物 |
 | `stage7/{title}_rewriting.txt` | 纯文本 | 最终交付物。**书级参数化路径**（`contracts/artifacts.py::BOOK_SCOPED_PATHS`）：占位符由「这本书是谁」决定，每本书恰好解析出一份具名产物，落点唯一在 `novel/paths.py::book_txt_rel` |

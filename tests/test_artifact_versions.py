@@ -281,16 +281,21 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '对新空根的当前 audit 重新走免费 typed retain_pretrim 单章或整批决定；不迁移旧审批。',
     ),
     'stage6/hook.json': (
-        4,
+        5,
         'v3 同一候选机械 HARD 严格下降时可连续修订；candidate_retry_limit '
         '改为 legacy 4 / Agent 0，candidate_retries.attempt 为同槽连续唯一的 1..4；'
         '整书生成和修订仍共同占用工作单元四次内容预算，不给每槽另发预算。'
         'v4 切换实际来源契约：独立 Prepare 接受、Characters v2/Global v7 与 Writer9 公开故事地图；'
-        'judged 只绑定真实下发的开篇成稿，终审另绑定全书正文，不沿用旧 Global.source_blurb 的批准。',
+        'judged 只绑定真实下发的开篇成稿，终审另绑定全书正文，不沿用旧 Global.source_blurb 的批准。'
+        'v5（2026-09-15 全自动裁决）：HookApprovalResolution.basis 收窄为 '
+        'default_policy/human_selection（旧 human_verification 与判官 semantic_review_seq 随 '
+        'stage6.semantic 退役删除），ApprovedHook.origin 扩为 auto|human。',
         '旧 v1～v3 base 冻结原代码与原账，不迁移、不手改 schema 标记或补新来源。'
-        '新根先完成 stage6.prepare 的生成与独立接受，再由 stage6.hook 在显式付费及外发授权后生产 v4，'
+        '新根先完成 stage6.prepare 的生成与独立接受，再由 stage6.hook 在显式付费及外发授权后生产 v5，'
         '然后由 stage6.approve 自动定稿或人工改选收口（判官节点已随 2026-09-15 全自动裁决退役）。'
-        '当前 v4 已封存提交证明的尾窗走 --recover-prepared 零模型恢复；不是旧产物迁移。'
+        '旧 v4（basis=human_verification）不迁移：判官已退役，存量半程书重跑 stage6 '
+        '（stage6.prepare 保留可复用）；成书交付前的存量书整层重跑。'
+        '当前 v5 已封存提交证明的尾窗走 --recover-prepared 零模型恢复；不是旧产物迁移。'
         'HookEdit 保持 v2。',
     ),
     'stage6/hook_edit.json': (
@@ -301,15 +306,18 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '它是人工决策集不是产出物，下次写的时候按新取值面写即可',
     ),
     'stage7/name_map.json': (
-        3,
+        4,
         'v2 的 `NameDecision` 加跨字段 validator——'
         '`renamed=true` 时 `not_renamed_reason` **只准是 `null`**。'
         '契约注释早就这么写着，但 `_build` 一直原样透传 ⇒ 盘上空串合法通行，'
         '收窄之后带 `\'\'` 的存量一律读不进来。'
         '（同批的 `ExtraSub.origin=adopted` 只是扩域。）v3 切换独立 Characters v2 身份来源：'
         '唯一 aliases 含 canonical 一次，改名材料显式排除 canonical 的重复 alias；Global v7 不再代管人物。'
-        'Writer9 公开角色目录进入实际消费身份，继续保留共享称谓、排行、长词和替换冲突校验',
-        '旧 v1/v2 及交付文件保留在冻结旧根，不按新 schema 读取。新根由 stage7.rename 按当前 '
+        'Writer9 公开角色目录进入实际消费身份，继续保留共享称谓、排行、长词和替换冲突校验。'
+        'v4（2026-09-15 免费改选裁决）：HookConsumed.approved_text_sha1 改为 candidates_sha1——'
+        '投影绑定三候选文本集合而不是选中的那条，碰撞校验目标面扩为全部候选；候选间改选不 stale',
+        '旧 v1～v3 及交付文件保留在冻结旧根，不按新 schema 读取（v3 存量按新判据免费 --recheck 后 '
+        '升级为 v4 投影）。新根由 stage7.rename 按当前 '
         '人物、Global 和 WriterContext 重建（模型路线付费且须已有授权）；完整人工决策也可在没有 '
         '旧 NameMap 的新根经同 owner --apply-edit 免费编译，但不能原地读旧版本后改标记。'
         '新人物表按 stage7-final-review-v4 完成 stage7.approve，再由 stage7.assemble 免费重建交付；'
@@ -584,12 +592,12 @@ def _hook_with_ordered_retries(attempts: list[int]):
     return payload
 
 
-def test_hook_v4_keeps_four_distinct_same_slot_attempts_and_refuses_legacy_envelopes():
+def test_hook_v5_keeps_four_distinct_same_slot_attempts_and_refuses_legacy_envelopes():
     from contracts.schema.stage6 import Hook
     payload = _hook_with_ordered_retries([1, 2, 3, 4])
     artifact = Hook.model_validate(payload)
     encoded = encode_artifact('stage6/hook.json', artifact.model_dump(by_alias=True, mode='json'))
-    assert encoded['_schema_version'] == 4
+    assert encoded['_schema_version'] == 5
     assert [row.attempt for row in artifact.provenance.candidate_retries] == [1, 2, 3, 4]
     assert Hook.model_validate(decode_artifact('stage6/hook.json', encoded).payload) == artifact
     for legacy_version in (1, 2, 3):

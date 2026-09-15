@@ -354,10 +354,15 @@ def stage7_context(data: object) -> object:
 
 
 def stage7_hook(data: object) -> object:
-    """改名只消费人工定稿的开篇文案正文。"""
+    """改名对 hook 的消费投影 = **候选集文本列表**（免费改选裁决，2026-09-15）。
+
+    改选只换 `approved`，候选集合不变 ⇒ 投影不变 ⇒ NameMap 不 stale；
+    候选集合变化（重新生成 / apply-edit 改字）⇒ stale。
+    """
     if not isinstance(data, dict):
         return None
-    return ((data.get('approved') or {}).get('text') or '')
+    return [c.get('text') or ''
+            for c in (data.get('candidates') or []) if isinstance(c, dict)]
 
 
 

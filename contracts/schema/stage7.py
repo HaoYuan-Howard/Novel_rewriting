@@ -328,10 +328,16 @@ class IdentityBaseline(StrictModel):
 
 
 class HookConsumed(StrictModel):
-    """本节点**真正消费**的文案投影。⚠ **盘上 1/3 本有**——后加的键。"""
+    """本节点**真正消费**的文案投影：**三候选文本集合**（按 c1/c2/c3 顺序拼接的指纹）。
+
+    ⚠ 2026-09-15 免费改选裁决：替换目标面 = 成稿 ∪ **全部候选文案** ∪ 书名——
+    NameMap 生成时已对三条候选整体做过碰撞校验，因此**候选之间改选不改变本投影**，
+    不要求重做替换（改选后的组装由 `stage7.assemble` 免费全量重放）。
+    候选集合本身变化（stage6.hook 重新生成 / apply-edit 改字）→ 指纹变 → stale。
+    """
 
     present: bool
-    approved_text_sha1: Fp10
+    candidates_sha1: Fp10
 
 
 class NameMapSources(StrictModel):
