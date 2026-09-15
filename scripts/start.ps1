@@ -39,6 +39,8 @@
 .PARAMETER Restart
     8765 已有本审校台服务时，先确认没有 running/paused Agent、待启动 Agent 或
     running API 作业，再停止旧 Python 进程并用当前代码重新启动。默认不传时仍复用旧服务。
+    ⚠ agent 只读端点故障时（旧代码损坏正是最需要 -Restart 的时刻），agent 活动无法
+    核实：脚本会显式警告并仅以 /api/jobs 空闲为停机依据，不冒充已验证空闲。
 
 .EXAMPLE
     .\scripts\start.ps1
@@ -112,42 +114,68 @@ function Get-NovelServiceActivity([int]$p) {
     <#
       HTTP 形状同时证明「这是审校台」与「当前可安全停」。不能只凭 python.exe + 8765
       就杀进程：同一解释器可以承载别的本机服务，而进程名不是产品身份。
+
+      ⚠ 身份锚点只有 /api/jobs：形状对 ⇒ 这是审校台。agent 两个只读端点是「尽力
+      读取」——-Restart 存在的理由就是「旧代码坏了，换当前代码重起」，若旧代码恰好
+      炸在这两个端点上（如 schema 变更后重放历史账 500），把它们当身份失败会把
+      -Restart 锁死在自己唯一的适用场景外。读不到时显式警告「agent 活动未核实」，
+      绝不冒充已验证空闲；jobs 仍必须空闲，其余身份/活动拒绝路径不变。
     #>
     $root = "http://127.0.0.1:$p/api"
+    try {
+        $jobs = Invoke-RestMethod -Method Get -TimeoutSec 5 -Uri "$root/jobs"
+    } catch {
+        throw "端口 $p 上的服务无法通过审校台只读 API 验明身份：$($_.Exception.Message)"
+    }
+    if ($null -eq $jobs -or
+        -not ($jobs.PSObject.Properties.Name -contains 'jobs')) {
+        throw "端口 $p 返回的不是当前审校台 API 形状（缺 jobs）"
+    }
+    $agentRuns = $null
+    $agentQueue = $null
+    $agentReadError = $null
     try {
         $agentQueue = Invoke-RestMethod -Method Get -TimeoutSec 5 `
             -Uri "$root/agent/runs/queue"
         $agentRuns = Invoke-RestMethod -Method Get -TimeoutSec 5 `
             -Uri "$root/agent/runs"
-        $jobs = Invoke-RestMethod -Method Get -TimeoutSec 5 -Uri "$root/jobs"
     } catch {
-        throw "端口 $p 上的服务无法通过审校台只读 API 验明身份：$($_.Exception.Message)"
+        $agentReadError = $_.Exception.Message
     }
-    $shapeChecks = @(
-        [pscustomobject]@{ Value = $agentQueue; Names = @('running', 'pending') },
-        [pscustomobject]@{ Value = $agentRuns; Names = @('runs') },
-        [pscustomobject]@{ Value = $jobs; Names = @('jobs') }
-    )
-    foreach ($required in $shapeChecks) {
-        $value = $required.Value
-        foreach ($name in $required.Names) {
-            if ($null -eq $value -or
-                -not ($value.PSObject.Properties.Name -contains $name)) {
-                throw "端口 $p 返回的不是当前审校台 API 形状（缺 $name）"
+    if ($agentReadError) {
+        Write-Warn "agent 只读端点故障，agent 活动状态未核实：$agentReadError"
+        Write-Warn '仅以 /api/jobs 空闲为停机依据；若有 agent 代跑在途，先从界面安全闭合。'
+    } else {
+        foreach ($required in @(
+            [pscustomobject]@{ Value = $agentQueue; Names = @('running', 'pending') },
+            [pscustomobject]@{ Value = $agentRuns; Names = @('runs') }
+        )) {
+            $value = $required.Value
+            foreach ($name in $required.Names) {
+                if ($null -eq $value -or
+                    -not ($value.PSObject.Properties.Name -contains $name)) {
+                    throw "端口 $p 返回的不是当前审校台 API 形状（缺 $name）"
+                }
             }
         }
     }
-    $activeAgents = @($agentRuns.runs | Where-Object {
-        $_.state -in @('pending', 'running', 'paused')
-    })
-    $pendingAgents = @($agentQueue.pending)
     $activeJobs = @($jobs.jobs | Where-Object {
         $_.state -in @('pending', 'running')
     })
+    if ($agentReadError) {
+        $activeAgents = @()
+        $pendingAgents = @()
+    } else {
+        $activeAgents = @($agentRuns.runs | Where-Object {
+            $_.state -in @('pending', 'running', 'paused')
+        })
+        $pendingAgents = @($agentQueue.pending)
+    }
     return [pscustomobject]@{
         ActiveAgents = $activeAgents
         PendingAgents = $pendingAgents
         ActiveJobs = $activeJobs
+        AgentsUnverified = [bool]$agentReadError
     }
 }
 

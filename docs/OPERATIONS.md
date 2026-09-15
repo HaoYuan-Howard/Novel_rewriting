@@ -17,7 +17,8 @@ scripts\start.cmd -Restart
 ```
 
 也可双击 `scripts\restart.cmd`。重启入口只在端口确认为本项目，且没有运行/暂停中的 Agent、待启动
-Agent 或运行中的 API 作业时停止旧进程；否则关闭式拒绝。
+Agent 或运行中的 API 作业时停止旧进程；否则关闭式拒绝。agent 只读端点故障时（旧代码损坏正是最需要
+重启的时刻），agent 活动无法核实：脚本显式警告并仅以 `/api/jobs` 空闲为停机依据，不冒充已验证空闲。
 
 常用参数：
 
