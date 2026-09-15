@@ -81,14 +81,12 @@ from contracts.invariants import (
     DESIGN_STRATEGY_REPLAN_CONSTRAINTS,
     DESIGN_STRATEGY_DECISIONS,
     HOOK_APPROACHES,
-    STAGE6_JUDGE_ROLES,
     STAGE6_REVIEW_CONTRACT,
     STAGE7_REVIEW_CONTRACT,
     STAGE6_APPROVAL_CHECK_BASIS,
     STAGE7_APPROVAL_CHECK_BASIS,
     HOOK_SLOTS,
     slot_of,
-    HOOK_SEMANTIC_STATES,
     INBOX_ATTENTION,
     INBOX_DELIVERY_EFFECT,
     INBOX_KIND,
@@ -126,7 +124,6 @@ from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import Finding, HashBoundHumanApproval, Sha256
 from contracts.schema.stage6_prepare import PrepareDraft, PrepareState, PrepareWorkpack
 from contracts.schema.characters import CharacterRegistry, CharactersEdit
-from contracts.schema.evaluation import SemanticDecision
 from contracts.schema.orchestration import (
     AgentExecutorBackend, AgentProfile, AgentRunRecord, ArtifactCondition,
     ArtifactState, ExecutorBackend, Freshness, FreshnessReason, JobRecord,
@@ -151,10 +148,7 @@ from contracts.schema.stage5 import (
 )
 from contracts.schema.stage6 import (
     HookApprovalResolution,
-    HookCandidateReview,
-    HookContradiction,
     HookProvenance,
-    HookQualityScores,
     HookSources,
     Mech,
 )
@@ -192,7 +186,6 @@ ApprovalWorkpackGroupKind = Literal[APPROVAL_WORKPACK_GROUPS]
 ApprovalWorkpackKind = Literal[APPROVAL_WORKPACK_KINDS]
 ApprovalWorkpackDisposition = Literal[APPROVAL_WORKPACK_DISPOSITIONS]
 FinalApprovalWorkpackKind = Literal[FINAL_APPROVAL_WORKPACK_KINDS]
-HookSemanticState = Literal[HOOK_SEMANTIC_STATES]
 # 退役码仍在 Literal 里：盘上历史决定要能解码；新决定在 approve 闸关闭式拒绝。
 DesignRepairCode = Literal[(*DESIGN_REPAIR_CODES, *DESIGN_REPAIR_CODES_RETIRED)]
 DesignConstraintOperationKind = Literal[DESIGN_CONSTRAINT_OPERATION_KINDS]
@@ -2321,21 +2314,11 @@ class Stage6ApprovalCandidate(FrozenModel):
     subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     mech: Mech
     findings: list[Finding]
-    semantic_state: HookSemanticState
-    semantic_reason: str
-    semantic_review_seq: int | None = Field(default=None, ge=1)
-    semantic_review: HookCandidateReview | None = None
-    semantic_decision: SemanticDecision | None = None
-    quality_score: float | None = Field(default=None, ge=0, le=10)
-    quality_rank: int | None = Field(default=None, ge=1)
 
     @model_validator(mode='after')
     def _slot_matches_the_visible_index(self) -> 'Stage6ApprovalCandidate':
         if self.slot != slot_of(self.index):
             raise ValueError('候选 slot 必须与 1 起 index 使用同一位置身份')
-        if ((self.semantic_review is None)
-                != (self.semantic_decision is None)):
-            raise ValueError('semantic review 与合并 decision 必须同时出现')
         return self
 
 
@@ -2381,9 +2364,6 @@ class Stage6ApprovalWorkpack(FrozenModel):
     #: 检查固定针对去审批候选；当前接受状态只由 disposition/current_approval 表达。
     check_basis: Literal[STAGE6_APPROVAL_CHECK_BASIS] = STAGE6_APPROVAL_CHECK_BASIS
     check: CompactApprovalCheck
-    #: 两名盲评各自的原始完整排序；逐候选 verdict/reason/evidence 在
-    #: ``candidates[].semantic_decision.judges``，两者合起来才是未压扁的 A/B 证据。
-    judge_rankings: dict[Literal[STAGE6_JUDGE_ROLES], list[str]] | None = None
     candidates: list[Stage6ApprovalCandidate] = Field(min_length=3, max_length=3)
     workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     disposition: ApprovalWorkpackDisposition
@@ -2398,12 +2378,6 @@ class Stage6ApprovalWorkpack(FrozenModel):
             raise ValueError('Stage6 review_token 必须封装当前 exact workpack')
         if [row.index for row in self.candidates] != [1, 2, 3]:
             raise ValueError('Stage6 workpack 必须按产物顺序完整覆盖 1..3')
-        has_semantic = any(row.semantic_decision is not None for row in self.candidates)
-        if has_semantic != (self.judge_rankings is not None):
-            raise ValueError('当前 A/B decision 与 judge_rankings 必须同进同出')
-        if (self.judge_rankings is not None
-                and set(self.judge_rankings) != set(STAGE6_JUDGE_ROLES)):
-            raise ValueError('judge_rankings 必须恰含 A/B 两名判官')
         current = self.current_slot is not None and self.current_approval is not None
         if (self.disposition == 'already_current') != current:
             raise ValueError('already_current 必须携带当前 slot 与 approval')
@@ -3325,28 +3299,13 @@ class HookCandidateLine(FrozenModel):
     mech: Mech
     findings: list[Finding]
 
-    #: 最新质量审判按文本 sha1 映射出的状态。没有/过期审判是 unreviewed；
-    #: 判过则恒 uncertain（本仓没有自动放行门）。⚠ 两者**不是同一件事**：
-    #: 前者没有任何判官看过，后者有两名判官的带证据结论等着人读。
-    semantic_state: Literal[HOOK_SEMANTIC_STATES]
-    semantic_reason: str = Field(min_length=1)
-    contradictions: list[HookContradiction]
-    quality: HookQualityScores | None
-    quality_score: float | None = Field(default=None, ge=0, le=10)
-    quality_rank: int | None = Field(default=None, ge=1)
-    #: ⚠ 这里曾有 `selectable`（「最新审判是校准双盲 PASS，可直接定稿」）与
-    #: `human_resolvable`（「这条可由人工消解」）。前者在自动放行门下线后恒 `false`，
-    #: 后者在 `semantic_state` 收成两态后恒 `true`——一条永远走不通的捷径与一道
-    #: 永远开着的闸，误导的方向相反、形状相同。⇒ 两个都删掉；
-    #: **每一条候选都要人显式核验**，要判还用不用人看就读 `semantic_state`。
-
     #: 这一条是不是当前定稿（按**位置身份**比：`hook.approved.slot == slot_of(index)`）。
     #: ⚠ 曾按 `approach` 比。同一种策略采两条样本时，那样写会把**两条**都标成已定稿。
     approved: bool
 
 
 class HookApprovedLine(FrozenModel):
-    """定稿的视图行。`origin` 的取值由 `stage6.ApprovedHook` 收口（恒 `human`），
+    """定稿的视图行。`origin ∈ {auto, human}`：auto=流水线默认定稿，human=人工改选。
     这里不抄第二份 Literal（api.py 纪律 ①）。"""
 
     #: 从**哪一条候选**来的；`None` = 没有前身（人手写）。

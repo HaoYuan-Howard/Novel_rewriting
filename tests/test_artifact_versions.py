@@ -289,9 +289,9 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         'judged 只绑定真实下发的开篇成稿，终审另绑定全书正文，不沿用旧 Global.source_blurb 的批准。',
         '旧 v1～v3 base 冻结原代码与原账，不迁移、不手改 schema 标记或补新来源。'
         '新根先完成 stage6.prepare 的生成与独立接受，再由 stage6.hook 在显式付费及外发授权后生产 v4，'
-        '然后由 stage6.semantic 双盲审阅并经 stage6.approve 当前 typed 决定定稿。'
+        '然后由 stage6.approve 自动定稿或人工改选收口（判官节点已随 2026-09-15 全自动裁决退役）。'
         '当前 v4 已封存提交证明的尾窗走 --recover-prepared 零模型恢复；不是旧产物迁移。'
-        'HookEdit 保持 v2；Semantic 因自身参考材料契约变化升至 v3。',
+        'HookEdit 保持 v2。',
     ),
     'stage6/hook_edit.json': (
         2,
@@ -299,19 +299,6 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '`c1`/`c2`/`c3`（`None` 仍表示「写/替换定稿」）。策略名不再唯一 ⇒ 选不中那一条',
         '**盘上零存量**（全 `outputs/` 找不到一份 `hook_edit.json`）⇒ 本次代价为零。'
         '它是人工决策集不是产出物，下次写的时候按新取值面写即可',
-    ),
-    'stage6/semantic_{n}.json': (
-        3,
-        'v2 新增 `judged`，以 '
-        '`JudgedDraft.consumed.text_sha1` 绑定 A/B 判官实际看见的 Stage5 '
-        '开篇成稿。v1 只绑 hook 候选文本；Stage5 正文改字后，它无法证明'
-        '旧的矛盾证据与质量判断仍是对当前参考材料作出。v3 的原钩子事实及开篇边界改由 '
-        'Prepare 独立接受提供，truth 来自 Characters v2/Global v7，故事地图引用 Writer9 公开目录；'
-        'judged 路径集恰为实际开篇，不能把旧全书读取账冒充当前窄消费',
-        '旧 v1/v2 只配对旧根及旧代码恢复；由 stage6.semantic 对当前 Hook v4、已接受 Prepare '
-        '与实际开篇成稿重建（A/B 两次付费判官调用），当前已购回答按原来源免费恢复。'
-        '新终审必须依据当前参考材料及 stage6-final-review-v5 裁决；不迁入旧审批，也不因当前候选 '
-        '只改 approved 或下发范围外的无关正文变化而重买 A/B',
     ),
     'stage7/name_map.json': (
         3,
@@ -610,7 +597,6 @@ def test_hook_v4_keeps_four_distinct_same_slot_attempts_and_refuses_legacy_envel
         with pytest.raises(ArtifactVersionError):
             decode_artifact('stage6/hook.json', encoded)
     assert ARTIFACT_SPECS['stage6/hook_edit.json'].current_version == 2
-    assert ARTIFACT_SPECS['stage6/semantic_{n}.json'].current_version == 3
 
 
 @pytest.mark.parametrize('attempts', [[1, 1], [1, 3], [2], [1, 2, 3, 5]])

@@ -223,7 +223,7 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 > 业务证据、可见 finding 或审阅契约变化才改变人审适用性。
 >
 > Stage6 另携三条完整候选（正文、subject SHA、mech/findings、semantic 状态、合并 decision、每名 judge
-> 的 verdict/reason/evidence、质量分/名次）与 A/B 原始 `judge_rankings`；`materials` 下发原钩子、已接受
+> 与度量；判官证据已随 stage6.semantic 退役移除）；`materials` 下发原钩子、已接受
 > 独立 Prepare 的 `source_blurb`、`prepare_subject_sha256` 和按阅读序的完整 `rewritten_chapters`，各一份，纳入 review identity。
 > 审阅契约 `stage6-final-review-v5` 允许钩子独立证据，正文反证仍须核验。Stage7 另携完整
 > 内部 decision subject、surname map、characters/aliases、extra subs、kept 明细、逐旧字面的真实
@@ -537,7 +537,7 @@ text 为 Stage1 完整本章原文，blueprint 为同章 PlotBlueprint 或 null�
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `lead_upto` / `rationale` | | 是 | 开篇引到哪一章、为什么 |
-| `candidates[]` | 数组 | 是 | 恒三条，`index` 恒 `1..3`。`chars` 在 Python 侧走 `measure()` 现算。质量审判字段包括 `semantic_state`（**只有 uncertain / unreviewed 两态**）、`semantic_reason`、`contradictions[]`、六维 `quality`、代码总分 `quality_score` 与 `quality_rank`；缺失或过期审判必须显示 unreviewed，与「判过、有证据、但服务端不替人盖章」的 uncertain 分开。⚠ 曾有 `clear` / `contradiction` 两个取值与 `selectable` / `human_resolvable` 两格布尔，随自动放行门整批下线——一个恒假的「可直接定稿」和一个恒真的「可人工消解」，在界面上分别是一条走不通的捷径与一道永远开着的闸 |
+| `candidates[]` | 数组 | 是 | 恒三条，`index` 恒 `1..3`。`chars` 在 Python 侧走 `measure()` 现算；判官字段（`semantic_state`/`semantic_reason`/`contradictions`/`quality`/`quality_score`/`quality_rank`）已随 stage6.semantic 退役移除（2026-09-15），本包只含机械判据 |
 | `approved` | 对象 或 null | 是 | `null` = 还没定稿。`candidates[].approved` 与它说同一件事（后置条件）；`human_edit`（无前身）时不许有候选自称定稿 |
 | `judged` / `sources` | | 是 | 生成时使用的成稿引用与来源账，原样 |
 | `invalid_exists` / `freshness` / `reason` / `ghosts` / `_provenance` | | 是 | 来源账五格 |

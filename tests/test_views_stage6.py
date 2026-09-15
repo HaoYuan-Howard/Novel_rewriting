@@ -14,6 +14,7 @@ import os
 
 import pytest
 
+from contracts.invariants import HOOK_SLOTS
 from novel.core.measure import measure
 from novel.errors import HumanEditProtected, UpstreamMissing
 from novel.views.stage6 import stage6_view
@@ -65,27 +66,28 @@ def test_chars_walk_the_same_ruler_as_the_rules(box):
 
 
 def test_the_approved_flag_and_the_approved_block_tell_one_story(box):
-    """候选级 `approved` 是从 `hook.approved.approach` 派生的，两格说同一件事。"""
+    """候选级 `approved` 是从 `hook.approved.slot` 派生的，两格说同一件事。"""
     v = stage6_view(box.root, box.sid)
     assert [c.index for c in v.candidates] == [1, 2, 3]
     flagged = [c for c in v.candidates if c.approved]
     if v.approved is None:
         assert not flagged
-    elif v.approved.approach == 'human_edit':
-        assert not flagged, 'human_edit 是无前身的人工稿，没有候选可自称定稿'
+    elif v.approved.slot is None:
+        assert not flagged, 'slot=None 是无候选前身的人工稿，没有候选可自称定稿'
     else:
-        assert [c.approach for c in flagged] == [v.approved.approach]
+        assert [c.index for c in flagged] == [HOOK_SLOTS.index(v.approved.slot) + 1]
         assert v.approved.chars == (measure(v.approved.text).chars
                                     if measure(v.approved.text) else 0)
 
 
-def test_missing_quality_review_is_visible_and_still_needs_a_human(box):
-    """缺审不能默认放行，但必须保留明示的人工 verification 路。"""
+def test_candidate_lines_carry_mechanical_identity_only(box):
+    """判官退役（2026-09-15）后候选行只剩机械身份：subject_sha256 仍逐条绑定字节，
+    语义族字段不再出现在这一屏的形状里。"""
     v = stage6_view(box.root, box.sid)
-    assert all(candidate.semantic_state == 'unreviewed' for candidate in v.candidates)
     assert all(len(candidate.subject_sha256) == 64 for candidate in v.candidates)
-    assert all(candidate.quality is None and candidate.quality_rank is None
-               for candidate in v.candidates)
+    assert all(not hasattr(candidate, field)
+               for candidate in v.candidates
+               for field in ('semantic_state', 'quality', 'quality_rank'))
 
 
 def test_the_view_forwards_the_artifact_without_reshaping_it(box):
@@ -138,58 +140,6 @@ def test_stage6_view_reports_live_legacy_before_missing_downstream(tmp_path):
     assert _tree(tmp_path) == before
     assert not (book / 'stage6' / 'hook.json').exists()
     assert not (tmp_path / '_service' / 'ledger.jsonl').exists()
-
-
-def test_the_view_reads_only_fields_the_assessment_can_answer():
-    """⚠⚠ 这一屏的正例**全部挂在 corpus 上**，非 corpus 批只跑得到上面那条 404。
-
-    后果实测过一次：把 `CandidateAssessment.selectable` 删掉之后，默认套件全绿，
-    而 `stage6_view` 在线上 `AttributeError`。这条用最小成本堵住那个缺口。
-
-    ⚠ 它**不重拼** view 的组装逻辑——从 view 自己的源码里取出「从 assessments 上取了哪几格」，
-    再拿一个真的 `CandidateAssessment` 逐个 `getattr`。view 改了取法，这里跟着变。
-
-    ⚠⚠ **两种取法都要认**：逐格现查（`assessments[k].state`）与先绑一次再读
-    （`for a in (assessments[k],)` / `a = assessments[k]`）。只认前者时，view 一改成
-    绑定写法，这里扫出来的就是空集——而空集的表现不是漏报，是下面那句自检当场红，
-    把一次正当的重构读成缺陷。⇒ 先认出绑定了 `assessments[...]` 的局部名，再连它一起扫。
-    """
-    import ast
-    import inspect
-
-    from novel.stages.stage6.semantic import CandidateAssessment
-    from novel.views import stage6 as view
-
-    tree = ast.parse(inspect.getsource(view.stage6_view).lstrip())
-
-    def _subscripts_assessments(node: ast.AST) -> bool:
-        return (isinstance(node, ast.Subscript)
-                and getattr(node.value, 'id', None) == 'assessments')
-
-    aliases: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.comprehension):
-            target, source = node.target, node.iter
-        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target, source = node.targets[0], node.value
-        else:
-            continue
-        elts = source.elts if isinstance(source, (ast.Tuple, ast.List)) else [source]
-        if isinstance(target, ast.Name) and any(map(_subscripts_assessments, elts)):
-            aliases.add(target.id)
-
-    read = {
-        node.attr for node in ast.walk(tree)
-        if isinstance(node, ast.Attribute)
-        and (_subscripts_assessments(node.value)
-             or getattr(node.value, 'id', None) in aliases)
-    }
-    assert read, 'view 已经不从 assessments 上取值了？那这条守卫在看空气'
-    probe = CandidateAssessment(state='unreviewed', reason='合成探针')
-    missing = sorted(name for name in read if not hasattr(probe, name))
-    assert not missing, (
-        f'`stage6_view` 从 CandidateAssessment 上取了它没有的格：{missing}\n'
-        f'→ 删字段时同时改 view；这一屏的正例都在 corpus 批，默认套件不会替你发现')
 
 
 def test_the_view_writes_nothing(box):

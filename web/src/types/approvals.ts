@@ -363,44 +363,6 @@ export interface CompactApprovalCheck {
   metrics: RuleLine[]
 }
 
-export interface Stage6HookQualityScores {
-  read_on_desire: number
-  body_voice_match: number
-  concrete_scene_and_specificity: number
-  curiosity_and_payoff_promise: number
-  hook_craft: number
-  synopsis_penalty: number
-}
-
-export interface Stage6HookContradiction {
-  assertion: string
-  evidence: string
-  reason: string
-}
-
-export interface Stage6HookCandidateReview {
-  label: string
-  coverage: 'complete' | 'uncertain'
-  uncertainty_reason: string | null
-  contradictions: Stage6HookContradiction[]
-  quality: Stage6HookQualityScores
-  concise_reason: string
-  text_sha1: string
-}
-
-export interface Stage6SemanticDecision {
-  ability: string
-  subject_key: string
-  verdict: 'UNVER'
-  reason: string
-  evidence: ApprovalEvidenceRef[]
-  judges: {
-    judge: string
-    verdict: 'PASS' | 'FAIL' | 'UNVER'
-    reason: string
-    evidence: ApprovalEvidenceRef[]
-  }[]
-}
 
 export interface Stage6WorkpackCandidate {
   index: number
@@ -411,13 +373,6 @@ export interface Stage6WorkpackCandidate {
   subject_sha256: string
   mech: { punct_fixed: number; quotes_fixed: number; paras_fixed: number }
   findings: Finding[]
-  semantic_state: string
-  semantic_reason: string
-  semantic_review_seq: number | null
-  semantic_review: Stage6HookCandidateReview | null
-  semantic_decision: Stage6SemanticDecision | null
-  quality_score: number | null
-  quality_rank: number | null
 }
 
 export interface Stage6ApprovalWorkpack extends FinalApprovalWorkpack<4> {
@@ -431,13 +386,13 @@ export interface Stage6ApprovalWorkpack extends FinalApprovalWorkpack<4> {
     rewritten_chapters: { chapter_ordinal: number; text: string }[]
   }
   check: CompactApprovalCheck
-  judge_rankings: Record<'A' | 'B', string[]> | null
   candidates: Stage6WorkpackCandidate[]
   current_slot: string | null
   current_approval: {
     actor: string
     reason: string
     subject_sha256: string
+    basis?: 'default_policy' | 'human_selection'
     workpack_sha256: string | null
     review_identity_sha256: string | null
   } | null
@@ -485,6 +440,7 @@ export interface Stage7ApprovalWorkpack extends FinalApprovalWorkpack {
     actor: string
     reason: string
     subject_sha256: string
+    basis?: 'default_policy' | 'human_selection'
     workpack_sha256: string | null
     review_identity_sha256: string | null
   } | null

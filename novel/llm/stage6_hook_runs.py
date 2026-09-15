@@ -18,8 +18,10 @@ from pydantic import BaseModel
 from contracts.artifacts import STAGE6_HOOK
 from novel import paths
 from novel.errors import ProvenanceRefused
-from novel.llm import agent_runs, stage6_runs
+from novel.llm import agent_runs
+from novel.appendlog import process_append_lock
 from novel.llm.transport import ChatResponse
+from novel import runtime_layout
 
 
 M = TypeVar('M', bound=BaseModel)
@@ -94,14 +96,30 @@ def restore_checkpoint(
         max_tokens=max_tokens, validator=validator)
 
 
+def _history_files(ctx: Any, pattern: str) -> tuple[Path, ...]:
+    """只枚举当前 service 历史；旧书内布局不得参与采用或提交。"""
+    found: dict[str, Path] = {}
+    for root in runtime_layout.stage_run_roots(ctx.novel_dir, 'stage6'):
+        if not root.is_dir():
+            continue
+        for target in root.glob(pattern):
+            found.setdefault(target.relative_to(root).as_posix(), target)
+    return tuple(found[key] for key in sorted(found))
+
+
 @contextmanager
 def commit_ownership(novel_dir: Path):
-    """与 semantic 共用一本书的 Stage6 线程/进程提交锁。"""
-    key = str(paths.stage6_hook_commit_lock_path(novel_dir).resolve()).casefold()
+    """Stage6 hook 正式写盘的线程/进程所有权锁。
+
+    原与 semantic 判官账共锁（同书 lane 互斥）；判官退役（2026-09-15）后
+    hook 是 stage6 唯一正式写 lane，独立持锁。
+    """
+    target = paths.stage6_hook_commit_lock_path(novel_dir)
+    key = str(target.resolve()).casefold()
     depths = getattr(_OWNERSHIP_LOCAL, 'depths', None)
     if depths is None:
         depths = _OWNERSHIP_LOCAL.depths = {}
-    with stage6_runs.commit_ownership(Path(novel_dir)):
+    with process_append_lock(target):
         depths[key] = depths.get(key, 0) + 1
         try:
             yield
@@ -132,11 +150,8 @@ def committed(ctx: Any) -> dict[str, Any] | None:
 def refuse_foreign_commit_reservations(ctx: Any) -> None:
     """另一 hook run 的 prepared 尾窗必须先由原 run 补完。"""
     _require_ownership(ctx)
-    # hook.json 是 semantic 的冻结输入；另一 semantic run 已 prepared 时，
-    # 本节点即使拿到了活锁也不能改写它脚下的主体。
-    stage6_runs.refuse_foreign_semantic_prepared(ctx)
     current = _commit_spec().commit_path(ctx).resolve()
-    for target in stage6_runs._history_files(
+    for target in _history_files(
             ctx, f'*/hook/{agent_runs.COMMIT_FILE}'):
         run_id = target.parent.parent.name
         if run_id == ctx.run_id or target.resolve() == current:

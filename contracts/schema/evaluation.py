@@ -8,10 +8,11 @@
 它从未被标定过，那条分支一次都没走通过，现已整批下线（人读版见
 `docs/schema/evaluation.md` 顶部那段「删了什么 · 怎么恢复」）。
 
-留下来的是判官不是闸门：`JudgeDecision` 保留三态（那正是要留的证据），而合并的
-`SemanticDecision.verdict` 在**类型上**收成 `Literal['UNVER']`。选类型不选校验器，是因为
-本仓偏好让非法态不可表达而不是校验掉；一条永远不可能被触发的校验器会绿一辈子，
-而没人知道它到底还在不在。
+A/B 双盲判官（`EvaluatorFingerprint` / `JudgeDecision` / `SemanticDecision` /
+`Ability` / `SemanticVerdict`）已随 stage6.semantic 节点整批退役（2026-09-15）：
+唯一消费者 novel/quality/evaluator.py 与判官产物 schema 同批删除，本仓不再有
+语义合并决议。保留的是仍被 Stage2 事实引用消费的 `EvidenceRef`、Stage2 全局
+复核与 trim 账。
 """
 from __future__ import annotations
 
@@ -24,19 +25,6 @@ from contracts.invariants import (
 )
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance
-
-
-#: 现役唯一一类语义能力。这里曾是八元组（`event_order` / `verbatim_fidelity` /
-#: `hard_number_fidelity` / `secret_timeline` / `world_rule_consistency` /
-#: `trim_equivalence` / `style_transfer`），随标定装置一起下线——留 7 个没有生产者的取值，
-#: 就是让退役的描述以现役身份被引用。
-#:
-#: ⚠ 字段本身不能删：`ability` 是产物里**唯一**说得出「这两名判官被问的是什么问题」的一格。
-#: 单值 `Literal` 是**取值面**不是**入口**，本仓已有同形先例——`TrimResolution.action`。
-Ability = Literal['reference_boundary']
-
-#: 逐判官的三态。⚠ 它**不**服务合并决议：`SemanticDecision.verdict` 恒 `UNVER`。
-SemanticVerdict = Literal['PASS', 'FAIL', 'UNVER']
 
 
 class EvidenceRef(StrictModel):
@@ -54,42 +42,6 @@ class EvidenceRef(StrictModel):
         if self.start is not None and self.end is not None and self.end <= self.start:
             raise ValueError('evidence end must be greater than start')
         return self
-
-
-class EvaluatorFingerprint(StrictModel):
-    """这一次判官调用的确切请求面身份。
-
-    ⚠ 曾有第五格 `dataset_sha256`。ground truth 没有了之后它只能是一个恒定哨兵，而一个
-    哨兵**看起来像一个 dataset 身份、其实不是**——那正是「把不同状态压成同一个值」。
-    """
-
-    model: str = Field(min_length=1)
-    prompt_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    schema_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    decoder_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-
-
-class JudgeDecision(StrictModel):
-    judge: str = Field(min_length=1)
-    verdict: SemanticVerdict
-    evidence: list[EvidenceRef]
-    reason: str = Field(min_length=1)
-
-
-class SemanticDecision(StrictModel):
-    """两名盲评判官的合并决议。**恒是带证据的 `UNVER`。**
-
-    ⚠ 曾有 `automated: bool` 与 `profile_id: str | None` 两格，以及三态 `verdict`。
-    自动放行门下线后它们恒为 `False` / `None` / `UNVER`——恒定值不是状态。
-    逐判官的 `judges[].verdict` 仍是三态，读的人要的正是那两个数。
-    """
-
-    ability: Ability
-    subject_key: str = Field(min_length=1)
-    verdict: Literal['UNVER']
-    evidence: list[EvidenceRef]
-    reason: str = Field(min_length=1)
-    judges: list[JudgeDecision] = Field(min_length=2, max_length=2)
 
 
 GlobalReviewState = Literal['pending', 'PASS', 'FAIL', 'UNVER']

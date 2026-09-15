@@ -737,7 +737,6 @@ def test_stage4_grounding_projection_ignores_unconsumed_source_provenance(
     ('stage5.write', 'stage5/deep/ch01.json'),
     ('stage5.review', 'stage5/review_1.json'),
     ('stage6.hook', 'stage6/hook.json'),
-    ('stage6.semantic', 'stage6/semantic_1.json'),
 ))
 def test_downstream_grounding_freshness_ignores_every_evidence_only_edit(
     node: str, rel: str,

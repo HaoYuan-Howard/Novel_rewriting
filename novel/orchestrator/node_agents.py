@@ -34,7 +34,7 @@ from contracts.schema.stage4 import (
     BindingConcern, BlindCandidate, ChapterBindingResponse, EvidenceBinding,
 )
 from contracts.schema.stage5 import ChapterResponse
-from contracts.schema.stage6 import Hook, HookSemanticReview
+from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
 from novel import paths, prov
 from novel.agents import session_audit as agent_session_audit
@@ -2573,9 +2573,6 @@ class Stage5WriteAgent(NodeExecutorAgent[CheckReport]):
         return result
 
 
-SemanticDriverFactory = Callable[[str], AgentDriver]
-
-
 class Stage6PrepareAgent(NodeExecutorAgent[BaseModel]):
     """独立准备单元；正式产物落盘后交 Commander，不隐式批准。"""
 
@@ -2649,384 +2646,9 @@ class Stage6HookAgent(NodeExecutorAgent[Hook]):
             self.client.close()
 
 
-class SemanticSessionPool:
-    """``stage6.semantic`` 的 A/B 双 session 路由与恢复桥。
-
-    判官 checkpoint 是已经结束的一次历史付费事实，不是可 resume 的 live
-    provider session。pool 因此只恢复 adoption 索引；只有缺 checkpoint 的
-    role 才构造新的 driver/client/cwd。两个缺失 role 必须先全部构造并通过
-    同一份只读 probe，producer 才能启动任意一次 wire。
-    """
-
-    _ROLES = ('A', 'B')
-
-    def __init__(
-        self,
-        ctx: RunContext,
-        *,
-        driver_factory: SemanticDriverFactory | None = None,
-        max_turns: int = 4,
-    ) -> None:
-        self._sessions = UnitSessionPool[str](
-            ctx,
-            node='stage6.semantic',
-            pool_name='SemanticSessionPool',
-            max_turns=max_turns,
-            concurrency=len(self._ROLES),
-            concurrency_cap=len(self._ROLES),
-        )
-        self.ctx = self._sessions.ctx
-        self.profile = self._sessions.profile
-        self.model = self._sessions.model
-        self.max_turns = self._sessions.max_turns
-        self._driver_factory = driver_factory or (
-            lambda _role: create_driver(self.profile))
-        self._clients = self._sessions.clients
-        self._restored: dict[str, dict[str, Any]] = {}
-        self._subjects: dict[str, tuple[str, str]] = {}
-        self._failed_roles = self._sessions.isolation_failed_keys
-        self._prepared = False
-        self._lock = self._sessions.lock
-
-    @staticmethod
-    def _role_of_purpose(purpose: str) -> str:
-        prefix = 'stage6.semantic.'
-        if not purpose.startswith(prefix):
-            raise ProvenanceRefused(
-                f'stage6.semantic judge purpose 非法：{purpose!r}')
-        role = purpose.removeprefix(prefix)
-        if role not in SemanticSessionPool._ROLES:
-            raise ProvenanceRefused(
-                f'stage6.semantic judge purpose 必须精确属于 '
-                f'{tuple(prefix + value for value in SemanticSessionPool._ROLES)}')
-        return role
-
-    @staticmethod
-    def _purpose(role: str) -> str:
-        if role not in SemanticSessionPool._ROLES:
-            raise ProvenanceRefused(f'stage6.semantic 未登记 judge role={role!r}')
-        return f'stage6.semantic.{role}'
-
-    @property
-    def turns_used(self) -> int:
-        return self._sessions.turns_used()
-
-    @property
-    def driver_failed(self) -> bool:
-        return self._sessions.driver_failed
-
-    @property
-    def isolation_failed(self) -> bool:
-        return self._sessions.isolation_failed
-
-    @property
-    def session_count(self) -> int:
-        return self._sessions.session_count
-
-    def _new_client(self, role: str) -> SessionAgentClient:
-        return self._sessions.new_client(
-            role,
-            driver_factory=lambda: self._driver_factory(role),
-            chapter=None,
-            label=f'judge {role}',
-            driver_reuse_message=lambda prior, current: (
-                'stage6.semantic driver factory 把同一对象同时给了 '
-                f'judge {prior}/{current}；已在首个 model start 前拒绝'),
-        )
-
-    def prepare_initial_sessions(self) -> None:
-        """只为缺 checkpoint 的判官预建 client；完整恢复不碰 factory/probe。"""
-        with self._lock:
-            if self._prepared:
-                return
-            try:
-                for role in self._ROLES:
-                    checkpoint = paths.stage6_semantic_checkpoint_path(
-                        self.ctx.novel_dir, self.ctx.run_id, role)
-                    if checkpoint.is_file():
-                        continue
-                    self._clients[role] = self._new_client(role)
-            except Exception:
-                # 预创建阶段尚未有 model start；仍要关掉已经创建的第一名判官。
-                clients: list[SessionAgentClient] = []
-                for role in tuple(self._clients):
-                    client = self._sessions.detach_client(role)
-                    if client is not None:
-                        clients.append(client)
-                for client in clients:
-                    try:
-                        client.close()
-                    except Exception:
-                        pass
-                raise
-            self._prepared = True
-
-    def _client_for(self, role: str) -> SessionAgentClient:
-        with self._lock:
-            if not self._prepared:
-                raise ProvenanceRefused(
-                    'stage6.semantic 必须先预建全部缺失判官，才能启动任意 wire')
-            client = self._clients.get(role)
-            if client is None:
-                raise ProvenanceRefused(
-                    f'judge {role}: 启动时已有 checkpoint，不能在恢复失败后'
-                    '临时造 driver 重新付费')
-            return client
-
-    def _register_provider_owner(
-        self, role: str, logical_session_id: str,
-        provider_session_id: object,
-    ) -> None:
-        self._sessions.register_provider_owner(
-            role,
-            logical_session_id=logical_session_id,
-            provider_session_id=provider_session_id,
-            provider_reuse_message=lambda prior, _owner, provider_id: (
-                f'stage6.semantic provider session {provider_id!r} 被 judge '
-                f'{prior[0]}/{role} 或两个 logical sessions 共享；'
-                '拒绝双盲伪隔离'),
-        )
-
-    def ask_json(self, system: str, user: str, **kwargs: Any) -> Any:
-        model_cls, purpose = self._sessions.validate_json_request(
-            kwargs,
-            model_error='stage6.semantic 请求缺显式 Pydantic model_cls',
-            purpose_error='stage6.semantic 请求缺 purpose',
-        )
-        role = self._role_of_purpose(purpose)
-        recovery_policy = kwargs.get('recovery_policy')
-        if recovery_policy != 'stage6-semantic-v1':
-            raise ProvenanceRefused(
-                f'{purpose}: 未登记 semantic recovery policy '
-                f'{recovery_policy!r}')
-        client = self._client_for(role)
-        with self._lock:
-            subject = self._subjects.get(role)
-            if subject is not None and subject != (system, user):
-                raise ProvenanceRefused(
-                    f'{purpose}: 同一判官 session 的原始 system/user 漂移')
-            self._subjects[role] = (system, user)
-        return self._sessions.ask_json(
-            role,
-            client,
-            system,
-            user,
-            model_cls=model_cls,
-            kwargs=kwargs,
-            provider_reuse_message=lambda prior, _owner, provider_id: (
-                f'stage6.semantic provider session {provider_id!r} 被 judge '
-                f'{prior[0]}/{role} 或两个 logical sessions 共享；'
-                '拒绝双盲伪隔离'),
-        )
-
-    def accepted_checkpoint(self, purpose: str) -> dict[str, Any]:
-        role = self._role_of_purpose(purpose)
-        with self._lock:
-            restored = self._restored.get(role)
-            client = self._clients.get(role)
-        if restored is not None:
-            return copy.deepcopy(restored)
-        if client is None:
-            raise ProvenanceRefused(f'{purpose}: 尚无 live/restored acceptance')
-        return client.accepted_checkpoint(purpose)
-
-    def restore_checkpoint_acceptance(
-        self, purpose: str, record: Mapping[str, Any], *,
-        system: str | None = None, user: str | None = None,
-        max_tokens: int | None = None, recovery_policy: str | None = None,
-        **unsupported: object,
-    ) -> None:
-        """恢复已验证 acceptance 的 adoption 索引，不伪造 live provider session。"""
-        role = self._role_of_purpose(purpose)
-        if unsupported:
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint 恢复含未实现参数 {sorted(unsupported)}')
-        if system is None or user is None or max_tokens is None:
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint 恢复缺 system/user/requested ceiling')
-        if recovery_policy != 'stage6-semantic-v1':
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint recovery policy 漂移')
-        self._sessions.validate_checkpoint_acceptance(
-            chapter=None,
-            purpose=purpose,
-            record=record,
-            system=system,
-            user=user,
-            max_tokens=max_tokens,
-            recovery_policy=recovery_policy,
-        )
-        provider_session_id = record.get('provider_session_id')
-        logical_session_id = record.get('session_run_id')
-        with self._lock:
-            if role in self._clients:
-                raise ProvenanceRefused(
-                    f'{purpose}: 已为此 role 预建 live client，不能再恢复 checkpoint')
-            prior = self._restored.get(role)
-            normalized = copy.deepcopy(dict(record))
-            if prior is not None and prior != normalized:
-                raise ProvenanceRefused(
-                    f'{purpose}: 同一 role 被恢复为两份不同 acceptance')
-            self._restored[role] = normalized
-            self._subjects[role] = (system, user)
-        # 先保留经公共守卫复核的历史事实；若 provider id 冲突，finish_all 仍能
-        # 给两条 logical session 写出明确的 session_isolation 终态。
-        self._register_provider_owner(
-            role, logical_session_id, provider_session_id)
-
-    def accepted_attempt(self, purpose: str) -> str | None:
-        role = self._role_of_purpose(purpose)
-        with self._lock:
-            restored = self._restored.get(role)
-            client = self._clients.get(role)
-        if restored is not None:
-            value = restored.get('attempt_id')
-            return value if isinstance(value, str) and value else None
-        return None if client is None else client.accepted_attempt(purpose)
-
-    def accepted_models(self, *purposes: str) -> tuple[str, ...]:
-        selected = purposes or tuple(self._purpose(role) for role in self._ROLES)
-        models: set[str] = set()
-        for purpose in selected:
-            attempt_id = self.accepted_attempt(purpose)
-            if attempt_id is None:
-                continue
-            model = self.accepted_checkpoint(purpose).get('model')
-            if isinstance(model, str) and model:
-                models.add(model)
-        return tuple(sorted(models))
-
-    def _finish_rows(
-        self, *, delivered: bool, failure: BaseException | None,
-    ) -> tuple[BaseException, ...]:
-        with self._lock:
-            clients = dict(self._clients)
-            restored = copy.deepcopy(self._restored)
-            failed_roles = set(self._failed_roles)
-            accepted_roles = {
-                role for role, client in clients.items()
-                if client.accepted_attempt(self._purpose(role)) is not None
-            } | set(restored)
-        def state_for(
-            role: str,
-            client: SessionAgentClient | None,
-            _record: Mapping[str, Any] | None,
-        ) -> tuple[str, str, str | None]:
-            if delivered:
-                return 'ok', 'delivered', None
-            if (role in failed_roles
-                    or (client is not None and client.driver_failed)):
-                return (
-                    'failed', 'unknown',
-                    ('session_isolation' if role in failed_roles
-                     and (client is None
-                          or not client.driver_failed
-                          or client.provider_session_reused)
-                     else 'agent_driver'),
-                )
-            if len(accepted_roles) == 1 and role in accepted_roles:
-                return 'ok', 'blocked', 'peer_result_missing'
-            if role not in accepted_roles:
-                return (
-                    'ok',
-                    ('failed' if isinstance(failure, LlmFailed)
-                     else 'unknown'),
-                    ('response_validation' if isinstance(failure, LlmFailed)
-                     else 'node_executor'),
-                )
-            return (
-                'ok', 'unknown',
-                ('artifact_verification'
-                 if isinstance(failure, ProvenanceRefused)
-                 else 'node_executor'),
-            )
-
-        # 旧 run 可能已在单边失败时收成 blocked；公共桥先完整复验
-        # acceptance/turn，再只为仍开放的 crash 尾窗补 ended。
-        return self._sessions.finish_rows(
-            self._ROLES,
-            restored_records=restored,
-            state_for=state_for,
-        )
-
-    def finish_all(
-        self, *, delivered: bool, failure: BaseException | None = None,
-    ) -> None:
-        errors = self._finish_rows(delivered=delivered, failure=failure)
-        if errors:
-            raise BaseExceptionGroup(
-                'stage6.semantic 逐判官 ended 审计写入失败', list(errors))
-
-    def close(self) -> None:
-        self._sessions.close(label='stage6.semantic 逐判官')
-
-
-class Stage6SemanticAgent(NodeExecutorAgent[HookSemanticReview]):
-    """双盲判官各用一条独立 session；代码合并、校验并正式落盘。"""
-
-    node = 'stage6.semantic'
-
-    def __init__(
-        self,
-        ctx: RunContext,
-        *,
-        driver_factory: SemanticDriverFactory | None = None,
-        max_turns: int = 4,
-    ) -> None:
-        if ctx.node != self.node:
-            raise ValueError(f'{type(self).__name__} 只接受 {self.node}，实得 {ctx.node}')
-        if ctx.executor_profile is None:
-            raise ValueError(f'{self.node} executor 缺 resolved profile')
-        self.ctx = ctx
-        self.pool = SemanticSessionPool(
-            ctx, driver_factory=driver_factory, max_turns=max_turns)
-
-    @staticmethod
-    def _raise_group(
-        primary: BaseException | None, extras: Sequence[BaseException],
-    ) -> None:
-        if primary is None and not extras:
-            return
-        if primary is not None and not extras:
-            raise primary
-        errors = ([primary] if primary is not None else []) + list(extras)
-        raise BaseExceptionGroup(
-            'stage6.semantic 执行/会话收口发生多项错误', errors)
-
-    def run(self) -> NodeAgentResult[HookSemanticReview]:
-        result: NodeAgentResult[HookSemanticReview] | None = None
-        primary: BaseException | None = None
-        delivered = False
-        try:
-            prepared = semantic.prepare_semantic_candidate(self.ctx)
-            self.pool.prepare_initial_sessions()
-            responses = semantic.request_semantic_candidates(
-                self.ctx, self.pool, prepared)
-            evaluation = semantic.evaluate_semantic_candidate(
-                self.ctx, self.pool, prepared, responses)
-            artifact, report = semantic.finalize_semantic_candidate(
-                self.ctx, self.pool, prepared, evaluation)
-            delivered = True
-            result = NodeAgentResult(
-                artifact=artifact, turns=self.pool.turns_used,
-                passed=report.passed, report=report)
-        except BaseException as exc:
-            primary = exc
-
-        extras: list[BaseException] = []
-        try:
-            self.pool.finish_all(delivered=delivered, failure=primary)
-        except BaseException as exc:
-            extras.append(exc)
-        try:
-            self.pool.close()
-        except BaseException as exc:
-            extras.append(exc)
-        if primary is not None or extras:
-            self._raise_group(primary, extras)
-        assert result is not None
-        return result
-
+# ⚠ SemanticSessionPool / Stage6SemanticAgent（A/B 双盲判官执行桥）已随
+#   stage6.semantic 节点退役删除（2026-09-15，全自动裁决）；历史经冻结
+#   Git 历史检视。stage6 现役执行面只剩 prepare 与 hook 两个生成节点。
 
 class Stage7RenameAgent(NodeExecutorAgent[NameMap]):
     """单 session 完整人物表 replacement；代码 HARD 与提交尾窗均由 producer 掌管。"""
@@ -3093,7 +2715,6 @@ EXECUTOR_FACTORIES: dict[str, Callable[..., NodeExecutorAgent[BaseModel]]] = {
     'stage5.write': Stage5WriteAgent,
     'stage6.prepare': Stage6PrepareAgent,
     'stage6.hook': Stage6HookAgent,
-    'stage6.semantic': Stage6SemanticAgent,
     'stage7.rename': Stage7RenameAgent,
 }
 
@@ -3103,7 +2724,6 @@ def build_node_agent(
     driver_factory: BlueprintDriverFactory | None = None,
     stage4_design_driver_factory: Stage4DesignDriverFactory | None = None,
     stage5_driver_factory: Stage5DriverFactory | None = None,
-    semantic_driver_factory: SemanticDriverFactory | None = None,
     chapters: str | None = None,
     revise: bool = False,
     reviewer_rewrite: str | None = None,
@@ -3128,8 +2748,6 @@ def build_node_agent(
             raise ValueError(
                 'stage2.blueprint 不能让多个章节共享一个 driver；'
                 '测试注入请使用 driver_factory')
-        if semantic_driver_factory is not None:
-            raise ValueError('stage2.blueprint 不接受 semantic_driver_factory')
         if stage4_design_driver_factory is not None:
             raise ValueError(
                 'stage2.blueprint 不接受 stage4_design_driver_factory')
@@ -3147,7 +2765,7 @@ def build_node_agent(
                 'stage4.design 的 strategy/各章不能共享一个 driver；'
                 '测试注入请使用 stage4_design_driver_factory')
         if (driver_factory is not None or stage5_driver_factory is not None
-                or semantic_driver_factory is not None):
+                ):
             raise ValueError(
                 'stage4.design 只接受 stage4_design_driver_factory，'
                 '不接受其他 pool factory')
@@ -3167,7 +2785,7 @@ def build_node_agent(
             raise ValueError(
                 'stage5.write 不能让多个章节共享一个 driver；'
                 '测试注入请使用 stage5_driver_factory')
-        if (driver_factory is not None or semantic_driver_factory is not None
+        if (driver_factory is not None
                 or stage4_design_driver_factory is not None):
             raise ValueError(
                 'stage5.write 只接受 stage5_driver_factory，不接受其他 pool factory')
@@ -3180,27 +2798,6 @@ def build_node_agent(
             revise=revise,
             reviewer_rewrite=reviewer_rewrite,
         )
-    if ctx.node == 'stage6.semantic':
-        if driver is not None:
-            raise ValueError(
-                'stage6.semantic 不能让 A/B 共用一个 driver；'
-                '测试注入请使用 semantic_driver_factory')
-        if driver_factory is not None:
-            raise ValueError(
-                'stage6.semantic 不接受逐章 driver_factory；'
-                '请使用 semantic_driver_factory')
-        if stage5_driver_factory is not None:
-            raise ValueError('stage6.semantic 不接受 stage5_driver_factory')
-        if stage4_design_driver_factory is not None:
-            raise ValueError(
-                'stage6.semantic 不接受 stage4_design_driver_factory')
-        if chapters is not None or revise or reviewer_rewrite is not None:
-            raise ValueError(
-                'stage6.semantic 不接受 Stage5 chapters/revise/reviewer_rewrite 参数')
-        return factory(
-            ctx, driver_factory=semantic_driver_factory, max_turns=max_turns)
-    if semantic_driver_factory is not None:
-        raise ValueError(f'{ctx.node} 不接受 semantic_driver_factory')
     if driver_factory is not None:
         raise ValueError(f'{ctx.node} 不接受逐章 driver_factory')
     if stage4_design_driver_factory is not None:
@@ -3225,7 +2822,7 @@ __all__ = [
     'Stage4DesignSessionPool', 'Stage4PlanAgent',
     'Stage4PlanSessionPool',
     'Stage5DriverFactory', 'Stage5SessionPool',
-    'Stage5WriteAgent', 'SemanticDriverFactory', 'SemanticSessionPool',
+    'Stage5WriteAgent',
     'Stage6HookAgent',
-    'Stage6SemanticAgent', 'Stage7RenameAgent', 'build_node_agent',
+    'Stage7RenameAgent', 'build_node_agent',
 ]

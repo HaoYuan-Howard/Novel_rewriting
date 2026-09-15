@@ -29,11 +29,9 @@ from novel.llm.prompts import fill, with_json_shape
 
 #: 显式实验面；默认生产字节保持现役 pretty-v1，付费多书质量回归前不切默认。
 STAGE6_PROMPT_JSON_LAYOUT_ENV = 'NOVEL_EXPERIMENT_STAGE6_PROMPT_JSON'
-STAGE6_SEMANTIC_STAGGER_MS_ENV = 'NOVEL_EXPERIMENT_STAGE6_SEMANTIC_STAGGER_MS'
 PRETTY_JSON_LAYOUT = 'pretty-v1'
 COMPACT_JSON_LAYOUT = 'compact-v1'
 PROMPT_JSON_LAYOUTS = (PRETTY_JSON_LAYOUT, COMPACT_JSON_LAYOUT)
-MAX_SEMANTIC_STAGGER_MS = 10_000
 
 
 def prompt_json_layout(environ: Mapping[str, str] | None = None) -> str:
@@ -45,22 +43,6 @@ def prompt_json_layout(environ: Mapping[str, str] | None = None) -> str:
             f'{STAGE6_PROMPT_JSON_LAYOUT_ENV} 只接受 {PROMPT_JSON_LAYOUTS}，'
             f'实得 {layout!r}')
     return layout
-
-
-def semantic_stagger_ms(environ: Mapping[str, str] | None = None) -> int:
-    """解析双判官 B 的 opt-in 短错峰；默认 0，且绝不超过 10 秒。"""
-    source = os.environ if environ is None else environ
-    raw = source.get(STAGE6_SEMANTIC_STAGGER_MS_ENV, '0')
-    if not raw.isascii() or not raw.isdecimal():
-        raise TerminalState(
-            f'{STAGE6_SEMANTIC_STAGGER_MS_ENV} 必须是 0~'
-            f'{MAX_SEMANTIC_STAGGER_MS} 的十进制整数毫秒，实得 {raw!r}')
-    value = int(raw)
-    if value > MAX_SEMANTIC_STAGGER_MS:
-        raise TerminalState(
-            f'{STAGE6_SEMANTIC_STAGGER_MS_ENV} 不能超过 '
-            f'{MAX_SEMANTIC_STAGGER_MS}ms，实得 {value}ms')
-    return value
 
 
 def dump_prompt_json(value: Any, *, layout: str | None = None) -> str:

@@ -228,9 +228,6 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
         'stage6.hook', _t('--recover-prepared', '--subject-sha256'),
         frozenset({_PREPARED_DELIVERY})),
     RecoveryRunPolicy(
-        'stage6.semantic', _t('--recover-prepared', '--subject-sha256'),
-        frozenset({_PREPARED_DELIVERY})),
-    RecoveryRunPolicy(
         'stage7.rename', _t('--recover-prepared', '--subject-sha256'),
         frozenset({_PREPARED_DELIVERY})),
     RecoveryRunPolicy(

@@ -111,30 +111,26 @@ def test_every_registered_rule_produced_a_row(box):
 def test_the_badge_can_never_be_pass_and_that_is_by_design(box):
     """⚠ **stage6 的徽章在结构上永远不可能是 `pass`。**
 
-    3 条 `sev=unver` 每次都输出（`builder._status_of` 强制），而 `badge_of` 见 `unver`
+    unver 每次都输出（`builder._status_of` 强制），而 `badge_of` 见 `unver`
     就至少 amber。**这不是缺陷**，是本层「能查的都查了、查不了的写在脸上」的可见形态。
 
-    3 条工作流/前提 `sev=unver` 常驻；质量语义三条是否 `unver` 取决于当前审判产物。
+    判官退役（2026-09-15）后 unver 一族只剩四条：三条工作流/前提 + Prepare 的
+    语义审阅前提（`prepare_semantic_review`，由独立人工接受收口）。
     """
     rep = _check(box)
     hard_hit = any(r.sev == 'hard' and r.status == 'hit' for r in rep.rules)
     assert rep.badge == ('fail' if hard_hit else 'amber')
     assert rep.passed is (not hard_hit)
-    # ⚠ **这里曾写死 `== 3`，而注册表有 4 条 `sev=unver`** —— 断言在 main 上
-    #   对着盘上那本书恒红。漂的原因就在这条 docstring 里：2026-08-18
-    #   `hook_semantic_contradiction` 由 HARD 降为 `unver`（自动放行门下线，
-    #   它命中 Finding 的两条路都不可达），unver 一族从 3 条变成 4 条，
-    #   而这一行没跟着改。⇒ 按两族分开数，让「哪一族变了」下次一眼看得出来。
+    # 按两族分开数，让「哪一族变了」下次一眼看得出来。
     unver = {r.rule for r in rep.rules if r.sev == 'unver'}
     assert unver == {
         # 三条工作流/前提：判定的**前提**不成立时出声
         'hook_not_approved', 'hook_body_missing', 'hook_body_stale',
-        # 一条实质矛盾：查了、有证据、但本仓不替人盖章
-        'hook_semantic_contradiction',
+        # Prepare 的独立人工语义审阅前提
+        'prepare_semantic_review',
     }
     semantic_lines = [r for r in rep.rules if r.check_kind == 'semantic']
-    assert {r.rule for r in semantic_lines} == {
-        'hook_semantic_contradiction', 'hook_candidate_contradiction', 'hook_quality_rank'}
+    assert {r.rule for r in semantic_lines} == {'prepare_semantic_review'}
 
 
 # ── ⭐ 两条等价测试 ─────────────────────────────────────────────────────────
@@ -208,15 +204,14 @@ def test_chars_are_recomputed_with_the_same_ruler(box):
 
 @pytest.mark.usefixtures('current_drafts')
 def test_identity_grid_excludes_semantic_rules(box):
-    """恒等基线的格子只给**机械** hard+info——语义判据的产地是付费审判，
-    0 成本路给它们占格就是两个永远 `0/1` 的假格子。"""
+    """恒等基线的格子只给**机械** hard+info——语义判据（现为
+    `prepare_semantic_review`）的产地是独立人工审阅，0 成本路给它们
+    占格就是永远 `0/1` 的假格子。"""
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
     grid, _rep = hook.run_identity(ctx)
     semantic_rules = {r.rule for r in REGISTRY.of_stage('stage6')
                       if r.check_kind == 'semantic'}
-    assert semantic_rules == {
-        'prepare_semantic_review', 'hook_semantic_contradiction',
-        'hook_candidate_contradiction', 'hook_quality_rank'}
+    assert semantic_rules == {'prepare_semantic_review'}
     assert not semantic_rules & set(grid)
 
 
@@ -252,7 +247,7 @@ def test_identity_baseline_runs_and_excludes_the_constructed_one(box):
 # ── 定稿 ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.usefixtures('current_drafts')
-def test_approve_copies_the_candidate_and_leaves_provenance_alone(box, monkeypatch):
+def test_approve_copies_the_candidate_and_leaves_provenance_alone(box):
     """`stage6.approve --pick N`：定稿 = **候选那一份的拷贝** + `origin='human'`。
 
     ⚠⚠ **`_provenance` 一个字都不动**：不走 `llm_provenance`（0 成本的跑不许现造
@@ -260,15 +255,9 @@ def test_approve_copies_the_candidate_and_leaves_provenance_alone(box, monkeypat
     LLM 产的字节，标 `partial_rewrite` 会说假话。
     """
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.approve', paid=False)
-    from novel.stages.stage6 import semantic
     pick = _mechanically_clean_pick(box)
     before = box.read('stage6/hook.json')['_provenance']
     chosen = box.read('stage6/hook.json')['candidates'][pick - 1]
-    monkeypatch.setattr(
-        semantic, 'require_human_resolution',
-        lambda *_args, **_kw: (
-            __import__('types').SimpleNamespace(semantic_review_seq=None),
-            'human_verification'))
     new, rep = hook.run_approve(
         ctx, pick, actor='test-editor', reason='已核验',
         review_token=_approval_review_token(ctx))
@@ -276,6 +265,7 @@ def test_approve_copies_the_candidate_and_leaves_provenance_alone(box, monkeypat
     assert after['_provenance'] == before, '定稿改动了来源账'
     assert new.approved is not None
     assert new.approved.origin == 'human'
+    assert new.approved.resolution.basis == 'human_selection'
     assert new.approved.slot == slot_of(pick), (
         '定稿绑的是**位置**——`--pick N` 从一开始就是位置寻址；'
         '`approach` 已经不落盘了')
@@ -288,7 +278,8 @@ def test_approve_copies_the_candidate_and_leaves_provenance_alone(box, monkeypat
 
 
 def test_approve_checks_quality_before_archiving_or_writing(box, monkeypatch):
-    """矛盾闸必须在任何状态变化之前执行，拒绝后 hook.json 与归档目录都不动。"""
+    """定稿的人工绑定闸必须在任何状态变化之前执行，拒绝后 hook.json
+    与归档目录都不动（判官退役后这里是字节绑定/凭据校验的拒绝面）。"""
     from novel.errors import TerminalState
     from novel.stages.stage6 import semantic
 

@@ -22,7 +22,7 @@ from novel.agents import (
 )
 from novel.agents.session_client import SessionAgentClient
 from novel.errors import ArtifactUnreadable, GateBlocked, ProvenanceRefused
-from novel.llm import agent_runs, stage6_hook_runs, stage6_runs
+from novel.llm import agent_runs, stage6_hook_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import AUDIT_REL, CostLedger, ledger_path
 from novel.orchestrator.node_agents import Stage6HookAgent
@@ -498,29 +498,6 @@ def test_exhausted_bad_candidates_write_only_invalid_and_end_blocked(
     assert driver.close_calls == 1
 
 
-def _semantic_envelope(ctx: RunContext, *, state: str) -> dict:
-    record = {key: None for key in stage6_runs._COMMIT_FIELDS}
-    record.update({
-        'version': stage6_runs.VERSION,
-        'state': state,
-        'prepared_at': 'test',
-        'committed_at': ('test' if state == 'committed' else None),
-        'run_id': ctx.run_id,
-        'sid': ctx.sid,
-        'node': 'stage6.semantic',
-        'code': ctx.code,
-        'run_sha256': 'a' * 64,
-        'artifact': 'stage6/semantic_1.json',
-        'artifact_fingerprint': 'b' * 10,
-        'artifact_sha256': 'c' * 64,
-        'finalization_sha256': 'd' * 64,
-        'attempts': [],
-        'adoptions': {},
-    })
-    record['commit_sha256'] = stage6_runs._commit_hash(record)
-    return record
-
-
 def _hook_envelope(ctx: RunContext, *, state: str) -> dict:
     record = {key: None for key in agent_runs._COMMIT_FIELDS}
     record.update({
@@ -549,52 +526,30 @@ def _hook_envelope(ctx: RunContext, *, state: str) -> dict:
     return record
 
 
-def test_hook_refuses_semantic_prepared_and_damage_but_ignores_committed(tmp_path):
+def test_hook_refuses_foreign_prepared_and_damage_but_ignores_committed(tmp_path):
+    """另一 hook run 的 prepared 尾窗必须先由原 run 补完；committed 不挡、损坏拒绝。
+
+    原 semantic↔hook 的双向占用检查已随判官节点退役（2026-09-15）；
+    hook 自身的跨 run 占用拒绝仍是现役职责。"""
     ctx = _ctx(tmp_path / 'hook-side')
-    target = paths.stage6_semantic_run_path(
-        ctx.novel_dir, ctx.run_id) / stage6_runs.COMMIT_FILE
+    foreign = _ctx(tmp_path / 'hook-side', run_id='foreign-hook-run-01')
+    target = paths.stage6_hook_run_path(
+        ctx.novel_dir, foreign.run_id) / agent_runs.COMMIT_FILE
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(
-        _semantic_envelope(ctx, state='prepared')), encoding='utf-8')
+        _hook_envelope(foreign, state='prepared')), encoding='utf-8')
     with stage6_hook_runs.commit_ownership(ctx.novel_dir):
-        with pytest.raises(ProvenanceRefused, match='semantic.*prepared'):
+        with pytest.raises(ProvenanceRefused, match='prepared'):
             stage6_hook_runs.refuse_foreign_commit_reservations(ctx)
 
     target.write_text(json.dumps(
-        _semantic_envelope(ctx, state='committed')), encoding='utf-8')
+        _hook_envelope(foreign, state='committed')), encoding='utf-8')
     with stage6_hook_runs.commit_ownership(ctx.novel_dir):
         stage6_hook_runs.refuse_foreign_commit_reservations(ctx)
 
-    damaged = _semantic_envelope(ctx, state='committed')
+    damaged = _hook_envelope(foreign, state='committed')
     damaged['commit_sha256'] = '0' * 64
     target.write_text(json.dumps(damaged), encoding='utf-8')
     with stage6_hook_runs.commit_ownership(ctx.novel_dir):
         with pytest.raises(ArtifactUnreadable, match='哈希不闭合'):
             stage6_hook_runs.refuse_foreign_commit_reservations(ctx)
-
-
-def test_semantic_refuses_hook_prepared_and_damage_but_ignores_committed(tmp_path):
-    ctx = _ctx(tmp_path / 'semantic-side', node='stage6.semantic')
-    target = paths.stage6_hook_run_path(
-        ctx.novel_dir, ctx.run_id) / agent_runs.COMMIT_FILE
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(
-        _hook_envelope(ctx, state='prepared')), encoding='utf-8')
-    with stage6_runs.commit_ownership(ctx.novel_dir):
-        with pytest.raises(ProvenanceRefused, match='hook.*prepared'):
-            stage6_runs.refuse_foreign_commit_reservations(
-                ctx, 'stage6/semantic_1.json')
-
-    target.write_text(json.dumps(
-        _hook_envelope(ctx, state='committed')), encoding='utf-8')
-    with stage6_runs.commit_ownership(ctx.novel_dir):
-        stage6_runs.refuse_foreign_commit_reservations(
-            ctx, 'stage6/semantic_1.json')
-
-    damaged = _hook_envelope(ctx, state='committed')
-    damaged['commit_sha256'] = '0' * 64
-    target.write_text(json.dumps(damaged), encoding='utf-8')
-    with stage6_runs.commit_ownership(ctx.novel_dir):
-        with pytest.raises(ArtifactUnreadable, match='哈希不闭合'):
-            stage6_runs.refuse_foreign_commit_reservations(
-                ctx, 'stage6/semantic_1.json')

@@ -103,11 +103,9 @@ export function Stage6Screen() {
         {(d) => {
           const approvedIdx = d.candidates.find((c) => c.approved)?.index ?? null
           const approvalCandidates = workpackQ.data?.candidates ?? []
-          // 服务端不再产「可直接定稿」的候选，默认落点改为质量排名第一的那条。
-          // ⚠ 它是**排序读数**，不是判定：选谁仍然要人填身份与理由。
-          const recommended = [...approvalCandidates]
-            .sort((a, b) => (a.quality_rank ?? 999) - (b.quality_rank ?? 999))[0]
-          const picked = pick ?? approvedIdx ?? recommended?.index ?? approvalCandidates[0]?.index ?? 1
+          // 判官退役（2026-09-15）：不再有质量排序读数。UI 默认落点与服务端
+          // --auto 同规则——固定槽位序第一条（无 HARD 优先由服务端判定，这里只取次序）。
+          const picked = pick ?? approvedIdx ?? approvalCandidates[0]?.index ?? 1
           const cand = approvalCandidates.find((c) => c.index === picked) ?? approvalCandidates[0]
           const currentCandidate = approvalCandidates.find(
             (c) => c.slot === workpackQ.data?.current_slot,
@@ -118,8 +116,10 @@ export function Stage6Screen() {
           const finalPhase = approvalCurrent && !reopened
           const body = approvalCurrent ? currentCandidate?.text ?? '' : cand?.text ?? ''
           const origText = d.source_hook_text
-          const approvedSource = approvalCurrent && currentCandidate
+          const approvedLabel = approvalCurrent && currentCandidate
             ? `候选 ${currentCandidate.index} · ${currentCandidate.approach}`
+              + (workpackQ.data?.current_approval?.basis === 'default_policy'
+                ? '（自动定稿）' : '（人工选择）')
             : null
 
           return (
@@ -138,8 +138,8 @@ export function Stage6Screen() {
                         : { color: SEV.unver.color, background: SEV.unver.bg }
                     }
                   >
-                    {approvedSource
-                      ? `已定稿：${approvedSource}（人工核验）`
+                    {approvedLabel
+                      ? `已定稿：${approvedLabel}`
                       : d.approved
                         ? '旧定稿未绑定当前工作包 · 需重审'
                         : '还没定稿'}
@@ -181,12 +181,6 @@ export function Stage6Screen() {
                     <div className="prose-cn rounded-block border border-line-row bg-sunken-2 px-14 py-11 text-tag text-ink-3">
                       <div className="font-semibold">
                         hash-bound 终审包 · {workpackQ.data.disposition}
-                      </div>
-                      <div>
-                        A 原始排序：{workpackQ.data.judge_rankings?.A.join(' → ') ?? '没有当前 A 审判'}
-                      </div>
-                      <div>
-                        B 原始排序：{workpackQ.data.judge_rankings?.B.join(' → ') ?? '没有当前 B 审判'}
                       </div>
                       <Mono className="break-all text-micro">
                         workpack {workpackQ.data.workpack_sha256}
@@ -252,11 +246,6 @@ export function Stage6Screen() {
                             </Mono>
                             <span className="text-body font-semibold">{c.approach}</span>
                             <Mono className="text-micro text-ink-5">{c.chars} 字</Mono>
-                            {c.quality_rank != null ? (
-                              <Mono className="rounded-tag bg-inset px-7 py-1 text-mini">
-                                质量 #{c.quality_rank} · {c.quality_score?.toFixed(2)}
-                              </Mono>
-                            ) : null}
                             <span
                               className={cx(
                                 'ml-auto rounded-tag px-8 py-2 text-tag',
@@ -280,43 +269,8 @@ export function Stage6Screen() {
                             <p className="prose-cn m-0 max-h-[240px] max-w-[var(--measure-compare)] overflow-y-auto whitespace-pre-wrap text-read leading-[2.05]">
                               {c.text}
                             </p>
-                            <div className="prose-cn rounded-block bg-sunken-2 px-10 py-8 text-tag text-ink-3">
-                              质量审判：{c.semantic_state} · {c.semantic_reason}
-                            </div>
-                            {(c.semantic_review?.contradictions ?? []).map((item, i) => (
-                              <div
-                                key={'semantic-' + i}
-                                className="prose-cn rounded-block px-10 py-8 text-tag"
-                                style={{ color: SEV.unver.color, background: SEV.unver.bg }}
-                              >
-                                {/* ⚠ 曾按 `semantic_state === 'contradiction'` 分两种色与两种抬头
-                                    （校准 FAIL 画成 hard）。服务端不再产自动 FAIL，那条分支不可达；
-                                    留着它等于让界面为一个不会出现的红灯保留一套渲染。
-                                    矛盾线索恒是 UNVER 色：它**报**而不**拦**，裁决在人。 */}
-                                <div className="font-semibold">
-                                  判官线索（UNVER）：{item.assertion}
-                                </div>
-                                <div>证据：{item.evidence}</div>
-                                <div>理由：{item.reason}</div>
-                              </div>
-                            ))}
-                            {c.semantic_decision?.judges.map((judge) => (
-                              <div
-                                key={'judge-' + judge.judge}
-                                className="prose-cn rounded-block border border-line-row bg-card px-10 py-8 text-tag text-ink-2"
-                              >
-                                <div className="font-semibold">
-                                  盲评 {judge.judge} · {judge.verdict}
-                                </div>
-                                <div>{judge.reason}</div>
-                                {judge.evidence.map((evidence, index) => (
-                                  <Mono key={index} className="block break-all text-micro text-ink-4">
-                                    证据 {evidence.artifact} · subject {evidence.subject_sha256} ·
-                                    {' '}[{evidence.start ?? '全文'}, {evidence.end ?? '全文'}]
-                                  </Mono>
-                                ))}
-                              </div>
-                            ))}
+                            {/* A/B 判官随 stage6.semantic 退役（2026-09-15 全自动裁决）：
+                                本层只呈现机械判据；选择记录见卡头 origin 标签。 */}
                           </div>
 
                           <div className="flex flex-col border-t border-line-soft">
@@ -414,7 +368,7 @@ export function Stage6Screen() {
                       right={
                         <LinkButton
                           disabled
-                          title="当前不可用：把 hook_edit.json 放进书目录 stage6/ 后跑 stage6.hook --apply-edit（0 成本）；语义结论按文本 sha1 自动过期，重跑 stage6.semantic 可清"
+                          title="当前不可用：把 hook_edit.json 放进书目录 stage6/ 后跑 stage6.hook --apply-edit（0 成本）"
                         >
                           改字（走 CLI）
                         </LinkButton>

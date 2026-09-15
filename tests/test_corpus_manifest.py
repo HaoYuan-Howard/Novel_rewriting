@@ -136,7 +136,8 @@ def test_current_corpus_tracks_both_paid_stage4_phases_and_their_outputs():
     assert tuple(
         node for node in CURRENT_CORPUS_PAID_NODES if NODES[node].stage == 'stage4'
     ) == ('stage4.design', 'stage4.plan')
-    assert len(CURRENT_CORPUS_BOOKS) * len(CURRENT_CORPUS_PAID_NODES) == 18
+    # stage6.semantic 判官退役（2026-09-15）后冻结面是 2 书 × 8 付费节点。
+    assert len(CURRENT_CORPUS_BOOKS) * len(CURRENT_CORPUS_PAID_NODES) == 16
     assert ARTIFACT_PATHS['stage2.characters'] in required_current_corpus_artifacts(17)
 
     stage4_paid_outputs = {
@@ -249,10 +250,10 @@ def test_manifest_pins_the_real_run_dispatch_topology_and_required_flags():
     # ⚠ 这里曾断言「`stage6.semantic` 的命令缺 `--advisory` 必须被拒」。那个 flag 随
     #   自动放行门一并删除后，这条断的就是**一道产品明说不存在的闸**（`docs/LESSONS.md`
     #   第 21 条第二形状）——删掉它，而不是给冻结命令把 flag 补回去让它变绿。
-    #   反向由下面那条「多一个 flag 就拒」覆盖：现在 semantic 只许带 `--base --yes`。
+    #   反向由下面那条「多一个 flag 就拒」覆盖：production 命令只许带 `--base --yes`。
     raw = _manifest_raw()
     index = next(i for i, command in enumerate(raw['commands'])
-                 if 'stage6.semantic' in command)
+                 if 'stage7.rename' in command)
     raw['commands'][index] += ' --advisory'
     with pytest.raises(ValidationError, match='flags 必须恰为'):
         CorpusManifest.model_validate(raw)
@@ -774,7 +775,6 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
             'tests/test_stage4_beats.py',
             'tests/test_stage4_repair.py',
             'tests/test_stage6.py',
-            'tests/test_wontfix_semantic.py',
             'tests/test_stage7.py',
             'tests/test_api_edits.py',
             'tests/test_api_screens.py',
@@ -800,7 +800,6 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
         'test_budget_allocator_postconditions_are_green_at_the_production_checker',
         'test_revalidate_promotes_only_plan_without_llm_or_context',
         'test_synthetic_stage6_gate_blocks_only_when_every_candidate_is_dirty',
-        'test_synthetic_semantic_finding_can_be_marked_without_current_corpus',
         'test_the_current_system_prompt_is_the_rendered_prompt',
         'test_an_illegal_edit_body_is_422_from_the_carrier',
         'test_a_zero_pick_is_422_from_the_carrier',

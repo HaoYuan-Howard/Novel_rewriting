@@ -42,7 +42,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 #: （pro 约 9 元/本、flash 约 3 元/本）⇒ 生成侧默认 flash 档；2026-09-14 用户裁决
 #: 换到 **DeepSeek V4.1 Flash，wire 名 `deepseek-flash`**（id 与 wire 名同值，
 #: 传输层直接发这个字符串）。
-#: **两个节点例外，钉死 pro**：`stage6.semantic`（判官给不出有区分度的证据，
+#: 钉死 pro 的例外已随 stage6.semantic 判官退役移除；现役无钉死值。
 #: 2026-08-19/20）与 `stage4.plan`（重采粒度：全书一次调用，一次空正文重采就是
 #: 整本书，2026-08-22）。两格都在 `contracts/invariants.py::NODES`
 #: （`NodeSpec.model` 优先于本默认与环境变量），换模型是一次产品裁决

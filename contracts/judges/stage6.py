@@ -2,12 +2,10 @@
 # -*- coding: utf-8 -*-
 """Stage 6 当前判据注册表。
 
-机械检查守可用性、非抄写与形态；付费语义审判给出**带证据的矛盾线索**与吸引力排序。
-剧透、时间压缩、合成场面和重写台词本身不构成违规。
+机械检查守可用性、非抄写与形态。剧透、时间压缩、合成场面和重写台词本身不构成违规。
 
-⚠⚠ **本仓没有自动放行门。** 双盲 A/B 的合并决议恒是 ``UNVER``，因此语义层不产生任何
-自动 ``PASS``/``FAIL``：唯一的收口是 actor / reason / 当前文本完整 SHA-256 绑定的
-``human_verification``。这不是「还没做」——`evaluator profile` 那套标定装置已被裁决删除。
+⚠⚠ A/B 双盲语义审判已随 stage6.semantic 整节点退役（2026-09-15，全自动裁决）：
+本层不再有任何语义判据，定稿由 stage6.approve 自动定稿 / 人工改选收口。
 """
 from __future__ import annotations
 
@@ -187,32 +185,12 @@ _metric('hook_secret_literal', '与秘密原文的逐字重合条数（按读者
              '命中的片段来自 `secret.fact`，直接拿它当凭据展示等于把秘密原文抄进报告')
 
 
-# ── 三条语义判据：矛盾交人裁决，候选问题是提示，吸引力是读数 ──────────────
-
-_unver('hook_semantic_contradiction',
-       '定稿候选不改变人物身份、关系、关键因果或故事结果', 'R-9.19',
-       who_checks='HUMAN', check_kind='semantic',
-       note='⚠ **它曾经是 HARD**。命中 HARD 的两条路都要求候选处于 `contradiction`，'
-            '而那个状态只由 automated FAIL 产生——自动放行门随 evaluator profile 整批'
-            '下线后不可达，一条 Finding 都产不出来。继续挂 HARD 就只剩两条路：伪造一个'
-            '绕开真实契约的反例，或给 `tests/test_hard_counterexamples.py` 那条双向守卫'
-            '开豁免口，两条本仓都禁止。降为 `unver` 说的是实话——**矛盾要人自己看**：'
-            'badge 是 amber（不是绿），修复路由仍是 `human`，收口只认 actor / reason / '
-            '完整 subject SHA-256 绑定的 `human_verification`。'
-            '剧透、时间压缩、合成场面和为真实关系重写台词不算矛盾。')
-
-_info('hook_candidate_contradiction',
-      '逐候选列出实质矛盾或审判不确定项，供定稿时避开', 'R-9.20',
-      check_kind='semantic',
-      note='证据必须是候选文案的连续原字节；只报告候选自己的问题，不因另一条干净候选'
-           '存在而隐藏。')
-
-_metric('hook_quality_rank',
-        '候选吸引力六维评分、固定权重总分与匿名排序', 'R-9.21',
-        check_kind='semantic',
-        note='总分由代码计算：阅读欲 30% + 正文声线 20% + 具体场面 15% + '
-             '期待承诺 20% + 文案技法 15% - 摘要感 10%；模型不能自报总分。'
-             '剧透本身不加分也不扣分。')
+# ── 语义判据（已退役，2026-09-15）──────────────────────────────────────
+# hook_semantic_contradiction / hook_candidate_contradiction /
+# hook_quality_rank 三条随 stage6.semantic 判官整节点退役：它们只消费
+# semantic_N.json，判官不再存在后任何宿主都产不出其证据。历史经冻结 Git
+# 历史检视；不保留恒 unver 形态（一条永远够不着的判据与「查过、没问题」
+# 在报告上同形）。
 
 
 # ── 三条工作流/前提状态：常驻输出 ──────────────────────────────────────────

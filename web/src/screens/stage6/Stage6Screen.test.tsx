@@ -2,7 +2,6 @@ import { api } from '@/api/endpoints'
 import { mockApi, PLOT_SAMPLE_SID } from '@/api/mock'
 import { qk } from '@/api/queryKeys'
 import { ConfirmDialog } from '@/components/job/ConfirmDialog'
-import { SEV } from '@/constants/vocabulary'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
@@ -41,69 +40,14 @@ describe('Stage6Screen audited approval', () => {
     expect(screen.getByText('天亮后，她走出了院门。')).toBeVisible()
   })
 
-  it('shows every contradiction field as an UNVER clue the human must read', async () => {
-    const fixture = await mockApi.getStage6(PLOT_SAMPLE_SID)
-    const workpack = await pendingWorkpack()
-    vi.spyOn(api, 'getStage6').mockResolvedValue({
-      ...fixture,
-      approved: null,
-      candidates: fixture.candidates.map((row, index) =>
-        index === 0
-          ? {
-              ...row,
-              approved: false,
-              semantic_state: 'uncertain',
-              contradictions: [
-                {
-                  assertion: '旧 view 独有、不可作为审批证据',
-                  evidence: '独立 stage6 view',
-                  reason: '不属于 hash-bound 工作包',
-                },
-              ],
-            }
-          : { ...row, approved: false },
-      ),
-    })
-    vi.spyOn(api, 'getStage6ApprovalWorkpack').mockResolvedValue({
-      ...workpack,
-      candidates: workpack.candidates.map((row, index) => index === 0
-        ? {
-            ...row,
-            semantic_review: {
-              ...row.semantic_review!,
-              contradictions: [{
-                assertion: '人物动机与前文冲突',
-                evidence: '第二章的明示选择',
-                reason: '判官读到的关系与前文相反',
-              }],
-            },
-          }
-        : row),
-    })
-    vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
-
-    renderRoute(<Stage6Screen />, `/n/${PLOT_SAMPLE_SID}/stage6`)
-
-    const label = await screen.findByText('判官线索（UNVER）：人物动机与前文冲突')
-    expect(label).toBeVisible()
-    expect(screen.getByText('证据：第二章的明示选择')).toBeVisible()
-    expect(screen.getByText('理由：判官读到的关系与前文相反')).toBeVisible()
-    expect(screen.queryByText(/旧 view 独有/)).not.toBeInTheDocument()
-    // ⚠ 这里曾有第二条用例，断言 `semantic_state === 'contradiction'` 的候选画成 hard 红并
-    //   不可定稿。服务端的自动放行门下线后**产不出那个状态**，那条用例只能靠手搓一个
-    //   不可能的响应活着——那是「断言一道产品明说不存在的闸」。
-    //   换成这一条：矛盾线索恒是 UNVER 色，且它**不阻断**——按钮仍然可按。
-    expect(label.parentElement).toHaveStyle({
-      color: SEV.unver.color,
-      background: SEV.unver.bg,
-    })
-  })
+  // ⚠ 「判官矛盾线索」用例已随 stage6.semantic 判官退役删除（2026-09-15）：
+  //   服务端不再产任何判官证据，界面不再有该渲染分支。
 
   it('previews and sends actor, reason, pick, and the exact opaque review token', async () => {
     const fixture = await mockApi.getStage6(PLOT_SAMPLE_SID)
     const workpack = await pendingWorkpack()
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    const candidate = [...workpack.candidates].sort((a, b) => (a.quality_rank ?? 999) - (b.quality_rank ?? 999))[0]
+    const candidate = workpack.candidates[0]
     vi.spyOn(api, 'getStage6').mockResolvedValue({
       ...fixture,
       approved: null,
@@ -138,17 +82,8 @@ describe('Stage6Screen audited approval', () => {
       </>,
       `/n/${PLOT_SAMPLE_SID}/stage6`,
     )
-    expect(await screen.findByText('A 原始排序：' + workpack.judge_rankings!.A.join(' → '))).toBeVisible()
-    const decision = workpack.candidates[0].semantic_decision!
-    expect(decision.verdict).toBe('UNVER')
-    const judge = decision.judges.find((row) => row.judge === 'A')!
-    expect(screen.getAllByText('盲评 A · ' + judge.verdict).length).toBeGreaterThan(0)
-    const reason = judge.reason
-    expect(screen.getAllByText(reason).length)
-      .toBeGreaterThan(0)
-    expect(screen.getAllByText('证据 ' + judge.evidence[0].artifact + ' · subject ' +
-      judge.evidence[0].subject_sha256 + ' · [' + judge.evidence[0].start + ', ' + judge.evidence[0].end + ']').length)
-      .toBeGreaterThan(0)
+    // workpack 渲染屏障（原判官排序断言删除后补）：等终审包块出现再查机械核验区。
+    expect(await screen.findByText('hash-bound 终审包 · review_required')).toBeVisible()
     const quoteRows = workpack.check.metrics.find((row) => row.rule === 'hook_quote_shape')!.findings
     expect(quoteRows.filter((row) => row.evidence_key === '0/0')).toHaveLength(3)
     const checkEvidence = within(screen.getByRole('region', { name: '文案机械核验材料' }))
@@ -197,7 +132,7 @@ describe('Stage6Screen audited approval', () => {
 
     renderRoute(<Stage6Screen />, `/n/${PLOT_SAMPLE_SID}/stage6`)
 
-    expect(await screen.findByText(`已定稿：候选 1 · ${current.candidates[0].approach}（人工核验）`)).toBeVisible()
+    expect(await screen.findByText(`已定稿：候选 1 · ${current.candidates[0].approach}（人工选择）`)).toBeVisible()
     expect(current.check_basis).toBe('candidate_without_approval')
     expect(screen.getByText(/机械核验以未附审批的候选为基准/)).toBeVisible()
     expect(screen.getByText(/A\/B 审判只看开篇前.*最终定稿工作包提供完整重写正文/)).toBeVisible()
@@ -252,7 +187,7 @@ describe('Stage6Screen audited approval', () => {
     renderRoute(<Stage6Screen />, `/n/${PLOT_SAMPLE_SID}/stage6`)
 
     expect(
-      await screen.findByText('已定稿：候选 3 · scene_punchline（人工核验）'),
+      await screen.findByText('已定稿：候选 3 · scene_punchline（人工选择）'),
     ).toBeVisible()
   })
 
@@ -276,7 +211,7 @@ describe('Stage6Screen audited approval', () => {
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
 
     const { queryClient } = renderRoute(<Stage6Screen />, `/n/${PLOT_SAMPLE_SID}/stage6`)
-    const currentLabel = `已定稿：候选 1 · ${pack.candidates[0].approach}（人工核验）`
+    const currentLabel = `已定稿：候选 1 · ${pack.candidates[0].approach}（人工选择）`
     expect(await screen.findByText(currentLabel)).toBeVisible()
 
     let rejectRefresh!: (error: Error) => void

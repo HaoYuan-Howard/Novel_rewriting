@@ -213,6 +213,14 @@ store 惰性、llm、api、stages 互跨；守卫只减不增、双向断言）�
 说明给理由；验收条件是清单清零且各 stage 包级公开面有模块头说明。与 TODO-51 的
 Stage2 重构不同批，避免同一文件对撞。
 
+### TODO-54 · stage5 并发投递免费恢复的间歇性失败
+
+`tests/test_stage_responsibilities.py::test_stage5_real_delivery_tail_refuses_foreign_bytes_and_recovers_without_model`
+为间歇性 flaky：同一 HEAD 上 6 次跑约 2～3 败（2026-09-15 复现，早于全自动重构批次 A1，
+与 stage6 判官退役无关）。失败点在 stage5 并发投递的免费恢复竞态，属既有测试稳定性
+问题。验收条件：定位竞态根因（生产缺陷或测试隔离缺陷），修复后该用例连续 20 次运行
+全绿；在此之前完整回归遇到它单独失败时按本条复核，不算新回归。
+
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态、成本与受影响守卫。

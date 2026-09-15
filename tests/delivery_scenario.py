@@ -22,7 +22,7 @@ from novel.store import ArtifactStore
 from novel.stages.stage2 import extract
 from novel.stages.stage4 import plan
 from novel.stages.stage5 import write, review, measure
-from novel.stages.stage6 import hook, semantic
+from novel.stages.stage6 import hook
 from novel.stages.stage7 import rename
 from novel.orchestrator import jobs
 from tests.test_stage2_uploaded_flow import uploaded, _ctx, SID, PREFIX, _get
@@ -198,20 +198,7 @@ def build(base):
                     '父亲的归信藏进衣袖，院门外照常叫卖。李宝珠带回两个包子，等她的母亲早就知道了信里的事。',
                     '米价又涨了，管家候在门外。李宝珠翻着旧账，眼前却是父亲从前的身影；新茶烫手，她迟迟没有入口。',
                 ]))
-            if not (book / semantic.SEMANTIC_TPL.format(n=1)).is_file():
-                from tests.test_stage6_semantic import _response_review
-                ctx = _ctx(base, 'stage6.semantic', paid=True)
-                prepared = semantic.prepare_semantic_candidate(ctx)
-                payload = {
-                    'reviews': [_response_review(neutral, text=text)
-                                for neutral, _real, text in prepared.aliases],
-                    'ranking': [neutral for neutral, _real, _text in prepared.aliases],
-                }
-                client, wire = _client(ctx, payload, concurrency=2)
-                _artifact, report = semantic.run_semantic(ctx, client)
-                assert report.passed, report.model_dump(mode='json')
-                assert len(wire.calls) == 2
-                print('SEMANTIC_OK', flush=True)
+            # stage6.semantic 判官已退役（2026-09-15）：hook 落盘后直接走定稿。
             stage6 = _get(http, '/approvals/stage6/workpack')
             if stage6['disposition'] != 'already_current':
                 post(http, '/stage6/approve', {

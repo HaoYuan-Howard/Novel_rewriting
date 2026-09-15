@@ -168,7 +168,8 @@ STAGE6_PREPARE_REVIEW_DECISIONS = artifact_rel('stage6.prepare_review_decisions'
 STAGE6_PREPARE_COMMIT = artifact_rel('stage6.prepare_commit')
 STAGE6_HOOK = artifact_rel('stage6.hook')
 STAGE6_HOOK_EDIT = artifact_rel('stage6.hook_edit')
-STAGE6_SEMANTIC = artifact_rel('stage6.semantic')
+# stage6.semantic（A/B 语义审判）产物已随节点退役（2026-09-15）；
+# 旧书 semantic_N.json 不再被现役读取。
 STAGE6_WONTFIX = artifact_rel('stage6.wontfix')
 STAGE7_NAME_MAP = artifact_rel('stage7.name_map')
 STAGE7_NAME_MAP_EDIT = artifact_rel('stage7.name_map_edit')

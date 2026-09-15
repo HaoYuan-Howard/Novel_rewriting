@@ -114,7 +114,8 @@ def test_real_changed_stage_path_includes_direct_unit_tests_and_downstream_consu
     # 不存在的路径也不能给“零影响”；精确真实路径另由 imports 反例覆盖。
     assert result.modules
     result = S.plan(S.load_catalog(), changed=('novel/stages/stage6/semantic.py',))
-    assert {'tests/test_stage6_semantic.py', 'tests/test_stage7_delivery_gate.py'} <= result.modules
+    # stage6 判官测试已退役删除；现役 stage6 直连面由 test_stage6.py 承载。
+    assert {'tests/test_stage6.py', 'tests/test_stage7_delivery_gate.py'} <= result.modules
 
 
 def test_changed_schema_keeps_contract_guards_without_direct_import_edges():

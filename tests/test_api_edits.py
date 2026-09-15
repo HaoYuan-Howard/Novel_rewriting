@@ -485,14 +485,10 @@ def _approve_body(box, pick: int) -> dict:
 def _approval_target(box) -> int:
     """挑一条生产的批准谓词真能收口的候选，返回它的 `pick`。
 
-    ⚠ 这里曾分「校准 `clear` 走自动 basis」与「人工核验」两条路，并额外排除
-    `historical_fail`。自动放行门下线后 `CandidateAssessment` 上那两格都没了，
-    `basis` 在类型上只剩 `human_verification`——**服务端不替人否决任何候选**。
+    ⚠ 自动放行门与判官退役（2026-09-15）后 `basis` 在类型上只剩
+    `default_policy` / `human_selection`——**服务端不替人否决任何候选**。
     `run_approve` 唯一还会抛的候选级判据就是机械 HARD，这里**调它那把尺子**
     （`hook._sev_of`）而不是重拼一份 REGISTRY 查询。
-    ⚠ 也**不再回传当时的语义状态**：两个调用点都只断言 `basis == 'human_verification'`
-    （它在类型上就只剩这一个值），没人读那一格；为它跑一次 `current_assessments`
-    等于纯为丢弃值读一遍 `semantic_<n>.json` 并算一遍新鲜度。
     """
     from contracts.schema.stage6 import Hook
     from novel.stages.stage6 import hook as hook_node
@@ -518,10 +514,10 @@ def _approval_target(box) -> int:
 
 
 def test_picking_a_hook_candidate_approves_and_stamps_the_gate(client, box):
-    """⭐ 一条 hash-bound 的人工核验能定稿，并在前置链完成时盖上 `s6`。
+    """⭐ 一条 hash-bound 的人工改选能定稿，并在前置链完成时盖上 `s6`。
 
-    ⚠ 这里曾写「自动/人工依据都能定稿」。自动放行门下线后 `basis` 在类型上只剩
-    `human_verification`，那句话已经是假的——**没有第二种依据可写**。
+    ⚠ 判官退役后 `basis` 在类型上只剩 `human_selection`（人工改选）与
+    `default_policy`（自动定稿）——**没有第二种依据可写**。
     ⚠ 退出码契约：`0/1` 都是「定稿**落了**」（`1` 只是报告仍有红行），
     `2/3` 才是没跑成。**盖章看落没落，红不红归 check 屏。**
     """
@@ -535,10 +531,10 @@ def test_picking_a_hook_candidate_approves_and_stamps_the_gate(client, box):
 
     after = json.loads((box.dir / 'stage6' / 'hook.json').read_text(encoding='utf-8'))
     assert after['approved'] is not None
-    assert after['approved']['approach'] == before['candidates'][pick - 1]['approach']
+    assert after['approved']['slot'] == f'c{pick}'
     assert after['approved']['origin'] == 'human'
     resolution = after['approved']['resolution']
-    assert resolution['basis'] == 'human_verification'
+    assert resolution['basis'] == 'human_selection'
     assert resolution['actor'] == body['actor']
     assert resolution['reason'] == body['reason']
     assert resolution['subject_sha256'] == hashlib.sha256(
@@ -558,7 +554,7 @@ def test_an_approve_before_the_chain_still_lands_in_the_artifact(client, box):
     assert r.json()['exit_code'] in (0, 1)
     after = json.loads((box.dir / 'stage6' / 'hook.json').read_text(encoding='utf-8'))
     assert after['approved'] is not None, '定稿没落——链只是检查单，不该拦产物'
-    assert after['approved']['resolution']['basis'] == 'human_verification'
+    assert after['approved']['resolution']['basis'] == 'human_selection'
     assert after['approved']['resolution']['review_identity_sha256']
     doc = client.get(f'/api/novels/{box.sid}/approvals').json()
     assert doc['gate']['s6'] is False, '链没到位却盖了章——前置约束被绕过了'
@@ -733,7 +729,7 @@ def final_gate_book(tmp_path, monkeypatch):
     from novel.stages.stage5 import closure
     from novel.stages.stage6 import hook
     from novel.store import ArtifactStore
-    from tests.test_stage6_semantic import TEXT_A, TEXT_B, TEXT_C
+    from tests.factories import TEXT_A, TEXT_B, TEXT_C
     from tests.factories import stage6_hook as _hook
     from novel.stages.stage1.partition import partition_text
 

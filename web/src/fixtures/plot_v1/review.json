@@ -302,79 +302,6 @@
           "note": "consumed（字段投影）判过期，sha1 只作审计。当前 JudgedDraft 必须携带 consumed，逐条正文投影不一致即 stale。"
         },
         {
-          "rule": "hook_candidate_contradiction",
-          "sev": "info",
-          "status": "hit",
-          "item": "逐候选列出实质矛盾或审判不确定项，供定稿时避开",
-          "requirement": "R-9.20",
-          "check_kind": "semantic",
-          "remediation": "human",
-          "fix": null,
-          "findings": [
-            {
-              "output_ordinal": null,
-              "rule": "hook_candidate_contradiction",
-              "sev": "info",
-              "item": "逐候选列出实质矛盾或审判不确定项，供定稿时避开",
-              "detail": "[c1] 双盲合并为 UNVER：A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验；判官 A（PASS）：具体场面强，最后一击有效（T1 侧写）。 ｜ 判官 B（PASS）：具体场面强，最后一击有效（T1 侧写）。",
-              "evidence": [
-                "c1:2d52ae642e"
-              ],
-              "fix_args": {},
-              "evidence_key": "c1:2d52ae642e",
-              "owner": "stage6",
-              "actionable": false,
-              "identity_hit": false,
-              "identity_dead": null,
-              "converge": "new",
-              "unresolved_rounds": 0,
-              "wontfix": null
-            },
-            {
-              "output_ordinal": null,
-              "rule": "hook_candidate_contradiction",
-              "sev": "info",
-              "item": "逐候选列出实质矛盾或审判不确定项，供定稿时避开",
-              "detail": "[c2] 双盲合并为 UNVER：A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验；判官 A（PASS）：具体场面强，最后一击有效（T3 侧写）。 ｜ 判官 B（PASS）：具体场面强，最后一击有效（T3 侧写）。",
-              "evidence": [
-                "c2:ee94702266"
-              ],
-              "fix_args": {},
-              "evidence_key": "c2:ee94702266",
-              "owner": "stage6",
-              "actionable": false,
-              "identity_hit": false,
-              "identity_dead": null,
-              "converge": "new",
-              "unresolved_rounds": 0,
-              "wontfix": null
-            },
-            {
-              "output_ordinal": null,
-              "rule": "hook_candidate_contradiction",
-              "sev": "info",
-              "item": "逐候选列出实质矛盾或审判不确定项，供定稿时避开",
-              "detail": "[c3] 双盲合并为 UNVER：A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验；判官 A（PASS）：具体场面强，最后一击有效（T2 侧写）。 ｜ 判官 B（PASS）：具体场面强，最后一击有效（T2 侧写）。",
-              "evidence": [
-                "c3:97dc2ff35c"
-              ],
-              "fix_args": {},
-              "evidence_key": "c3:97dc2ff35c",
-              "owner": "stage6",
-              "actionable": false,
-              "identity_hit": false,
-              "identity_dead": null,
-              "converge": "new",
-              "unresolved_rounds": 0,
-              "wontfix": null
-            }
-          ],
-          "why": null,
-          "scanned": "3 份去重文本",
-          "baseline": null,
-          "note": "证据必须是候选文案的连续原字节；只报告候选自己的问题，不因另一条干净候选存在而隐藏。"
-        },
-        {
           "rule": "hook_length",
           "sev": "info",
           "status": "hit",
@@ -463,21 +390,6 @@
           "note": "定稿仍由人负责，但人现在会看到匿名质量排序，且批准路会拒绝矛盾、不确定或未经审判的候选。"
         },
         {
-          "rule": "hook_semantic_contradiction",
-          "sev": "unver",
-          "status": "unver",
-          "item": "定稿候选不改变人物身份、关系、关键因果或故事结果",
-          "requirement": "R-9.19",
-          "check_kind": "semantic",
-          "remediation": "human",
-          "fix": null,
-          "findings": [],
-          "why": "还没有定稿；三条候选的矛盾线索见 hook_candidate_contradiction。本仓没有自动放行门，实质矛盾一律由人读判官证据后裁决",
-          "scanned": "3 份去重文本",
-          "baseline": null,
-          "note": "⚠ 它曾经是 HARD。命中 HARD 的两条路都要求候选处于 contradiction，而那个状态只由 automated FAIL 产生——自动放行门随 evaluator profile 整批下线后不可达，一条 Finding 都产不出来。继续挂 HARD 就只剩两条路：伪造一个绕开真实契约的反例，或给 tests/test_hard_counterexamples.py 那条双向守卫开豁免口，两条本仓都禁止。降为 unver 说的是实话——矛盾要人自己看：badge 是 amber（不是绿），修复路由仍是 human，收口只认 actor / reason / 完整 subject SHA-256 绑定的 human_verification。剧透、时间压缩、合成场面和为真实关系重写台词不算矛盾。"
-        },
-        {
           "rule": "prepare_semantic_review",
           "sev": "unver",
           "status": "unver",
@@ -526,43 +438,6 @@
           "scanned": "3 份文本（c1, c2, c3）",
           "baseline": null,
           "note": "抽取“人物 + 送/给/赠 + 对象”，与 Stage4 故事地图事件做同人物、同对象、同赠与词的字面并排。低召回/低精度，只是度量，不是矛盾门；未同字面命中不能自动判错，须交语义审判或人工核对。"
-        },
-        {
-          "rule": "hook_quality_rank",
-          "sev": "metric",
-          "status": "ok",
-          "item": "候选吸引力六维评分、固定权重总分与匿名排序",
-          "requirement": "R-9.21",
-          "check_kind": "semantic",
-          "remediation": "none",
-          "fix": null,
-          "findings": [
-            {
-              "output_ordinal": null,
-              "rule": "hook_quality_rank",
-              "sev": "metric",
-              "item": "候选吸引力六维评分、固定权重总分与匿名排序",
-              "detail": "匿名排序 ['c1', 'c2', 'c3']；c1 总分 8.15（阅读欲 9 / 声线 8 / 场面 7 / 期待 9 / 技法 8 / 摘要罚 2） · c3 总分 8.15（阅读欲 9 / 声线 8 / 场面 7 / 期待 9 / 技法 8 / 摘要罚 2） · c2 总分 8.15（阅读欲 9 / 声线 8 / 场面 7 / 期待 9 / 技法 8 / 摘要罚 2）",
-              "evidence": [
-                "c1:8.15",
-                "c3:8.15",
-                "c2:8.15"
-              ],
-              "fix_args": {},
-              "evidence_key": "c1:8.15|c3:8.15|c2:8.15",
-              "owner": null,
-              "actionable": false,
-              "identity_hit": false,
-              "identity_dead": null,
-              "converge": "new",
-              "unresolved_rounds": 0,
-              "wontfix": null
-            }
-          ],
-          "why": null,
-          "scanned": "3 份去重文本",
-          "baseline": null,
-          "note": "总分由代码计算：阅读欲 30% + 正文声线 20% + 具体场面 15% + 期待承诺 20% + 文案技法 15% - 摘要感 10%；模型不能自报总分。剧透本身不加分也不扣分。"
         },
         {
           "rule": "hook_quote_shape",
@@ -814,18 +689,6 @@
         }
       ]
     },
-    "judge_rankings": {
-      "A": [
-        "c1",
-        "c3",
-        "c2"
-      ],
-      "B": [
-        "c1",
-        "c3",
-        "c2"
-      ]
-    },
     "candidates": [
       {
         "index": 1,
@@ -914,70 +777,7 @@
             "unresolved_rounds": 0,
             "wontfix": null
           }
-        ],
-        "semantic_state": "uncertain",
-        "semantic_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
-        "semantic_review_seq": 1,
-        "semantic_review": {
-          "label": "c1",
-          "coverage": "uncertain",
-          "uncertainty_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
-          "contradictions": [],
-          "quality": {
-            "read_on_desire": 9.0,
-            "body_voice_match": 8.0,
-            "concrete_scene_and_specificity": 7.0,
-            "curiosity_and_payoff_promise": 9.0,
-            "hook_craft": 8.0,
-            "synopsis_penalty": 2.0
-          },
-          "concise_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
-          "text_sha1": "2d52ae642e"
-        },
-        "semantic_decision": {
-          "ability": "reference_boundary",
-          "subject_key": "f6d8274494e5f1eaec8d2bb0b51855ff1a2f8aa58524fa85ed0a1a8a9b87d339",
-          "verdict": "UNVER",
-          "evidence": [
-            {
-              "artifact": "stage6/hook.json#candidate/c1",
-              "subject_sha256": "f6d8274494e5f1eaec8d2bb0b51855ff1a2f8aa58524fa85ed0a1a8a9b87d339",
-              "start": 0,
-              "end": 33
-            }
-          ],
-          "reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
-          "judges": [
-            {
-              "judge": "A",
-              "verdict": "PASS",
-              "evidence": [
-                {
-                  "artifact": "stage6/hook.json#candidate/c1",
-                  "subject_sha256": "f6d8274494e5f1eaec8d2bb0b51855ff1a2f8aa58524fa85ed0a1a8a9b87d339",
-                  "start": 0,
-                  "end": 33
-                }
-              ],
-              "reason": "具体场面强，最后一击有效（T1 侧写）。"
-            },
-            {
-              "judge": "B",
-              "verdict": "PASS",
-              "evidence": [
-                {
-                  "artifact": "stage6/hook.json#candidate/c1",
-                  "subject_sha256": "f6d8274494e5f1eaec8d2bb0b51855ff1a2f8aa58524fa85ed0a1a8a9b87d339",
-                  "start": 0,
-                  "end": 33
-                }
-              ],
-              "reason": "具体场面强，最后一击有效（T1 侧写）。"
-            }
-          ]
-        },
-        "quality_score": 8.15,
-        "quality_rank": 1
+        ]
       },
       {
         "index": 2,
@@ -1066,70 +866,7 @@
             "unresolved_rounds": 0,
             "wontfix": null
           }
-        ],
-        "semantic_state": "uncertain",
-        "semantic_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
-        "semantic_review_seq": 1,
-        "semantic_review": {
-          "label": "c2",
-          "coverage": "uncertain",
-          "uncertainty_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
-          "contradictions": [],
-          "quality": {
-            "read_on_desire": 9.0,
-            "body_voice_match": 8.0,
-            "concrete_scene_and_specificity": 7.0,
-            "curiosity_and_payoff_promise": 9.0,
-            "hook_craft": 8.0,
-            "synopsis_penalty": 2.0
-          },
-          "concise_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
-          "text_sha1": "ee94702266"
-        },
-        "semantic_decision": {
-          "ability": "reference_boundary",
-          "subject_key": "0952b6e4df07a969534dc7d579c993c7c2389aeb2f43c8496672b65096d9bd2a",
-          "verdict": "UNVER",
-          "evidence": [
-            {
-              "artifact": "stage6/hook.json#candidate/c2",
-              "subject_sha256": "0952b6e4df07a969534dc7d579c993c7c2389aeb2f43c8496672b65096d9bd2a",
-              "start": 0,
-              "end": 38
-            }
-          ],
-          "reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
-          "judges": [
-            {
-              "judge": "A",
-              "verdict": "PASS",
-              "evidence": [
-                {
-                  "artifact": "stage6/hook.json#candidate/c2",
-                  "subject_sha256": "0952b6e4df07a969534dc7d579c993c7c2389aeb2f43c8496672b65096d9bd2a",
-                  "start": 0,
-                  "end": 38
-                }
-              ],
-              "reason": "具体场面强，最后一击有效（T3 侧写）。"
-            },
-            {
-              "judge": "B",
-              "verdict": "PASS",
-              "evidence": [
-                {
-                  "artifact": "stage6/hook.json#candidate/c2",
-                  "subject_sha256": "0952b6e4df07a969534dc7d579c993c7c2389aeb2f43c8496672b65096d9bd2a",
-                  "start": 0,
-                  "end": 38
-                }
-              ],
-              "reason": "具体场面强，最后一击有效（T3 侧写）。"
-            }
-          ]
-        },
-        "quality_score": 8.15,
-        "quality_rank": 2
+        ]
       },
       {
         "index": 3,
@@ -1218,70 +955,7 @@
             "unresolved_rounds": 0,
             "wontfix": null
           }
-        ],
-        "semantic_state": "uncertain",
-        "semantic_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
-        "semantic_review_seq": 1,
-        "semantic_review": {
-          "label": "c3",
-          "coverage": "uncertain",
-          "uncertainty_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
-          "contradictions": [],
-          "quality": {
-            "read_on_desire": 9.0,
-            "body_voice_match": 8.0,
-            "concrete_scene_and_specificity": 7.0,
-            "curiosity_and_payoff_promise": 9.0,
-            "hook_craft": 8.0,
-            "synopsis_penalty": 2.0
-          },
-          "concise_reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
-          "text_sha1": "97dc2ff35c"
-        },
-        "semantic_decision": {
-          "ability": "reference_boundary",
-          "subject_key": "0b257921dc992822de747a52cf076b5ca37de084e2be030dcf6a89c9549a1bde",
-          "verdict": "UNVER",
-          "evidence": [
-            {
-              "artifact": "stage6/hook.json#candidate/c3",
-              "subject_sha256": "0b257921dc992822de747a52cf076b5ca37de084e2be030dcf6a89c9549a1bde",
-              "start": 0,
-              "end": 36
-            }
-          ],
-          "reason": "A/B 同判 PASS 且各自证据闭合；本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，交人工按 actor / reason / 完整 subject SHA-256 核验",
-          "judges": [
-            {
-              "judge": "A",
-              "verdict": "PASS",
-              "evidence": [
-                {
-                  "artifact": "stage6/hook.json#candidate/c3",
-                  "subject_sha256": "0b257921dc992822de747a52cf076b5ca37de084e2be030dcf6a89c9549a1bde",
-                  "start": 0,
-                  "end": 36
-                }
-              ],
-              "reason": "具体场面强，最后一击有效（T2 侧写）。"
-            },
-            {
-              "judge": "B",
-              "verdict": "PASS",
-              "evidence": [
-                {
-                  "artifact": "stage6/hook.json#candidate/c3",
-                  "subject_sha256": "0b257921dc992822de747a52cf076b5ca37de084e2be030dcf6a89c9549a1bde",
-                  "start": 0,
-                  "end": 36
-                }
-              ],
-              "reason": "具体场面强，最后一击有效（T2 侧写）。"
-            }
-          ]
-        },
-        "quality_score": 8.15,
-        "quality_rank": 3
+        ]
       }
     ],
     "workpack_sha256": "e91b4d0958d5e3c416ed7b8b26d2b184e8aa0abd9a1d67763f25b6738dc957df",
@@ -1291,8 +965,7 @@
       "actor": "test:文案审阅者",
       "reason": "合成候选与原文、全书成稿已对照",
       "subject_sha256": "f6d8274494e5f1eaec8d2bb0b51855ff1a2f8aa58524fa85ed0a1a8a9b87d339",
-      "basis": "human_verification",
-      "semantic_review_seq": 1,
+      "basis": "human_selection",
       "workpack_sha256": "e91b4d0958d5e3c416ed7b8b26d2b184e8aa0abd9a1d67763f25b6738dc957df",
       "review_identity_sha256": "217b4e966ecf4dae3c9fc201f10d6547b0edf5af63541c56150e9cd5f17e7a54"
     }

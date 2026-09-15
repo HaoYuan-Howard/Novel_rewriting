@@ -123,16 +123,16 @@ def test_pattern_artifacts_never_leave_a_stage_without_a_completion_anchor():
     """带 `{}` 的产物路径 = 存在性做不了一次 `is_file()`。
 
     stage5 整层都是逐份产物，完成度走逐章数那条路（`R-14.2`）；stage6 的
-    `semantic_{n}.json` 是**审计伴生产物**（与 stage5 的 `review_{n}`/`semantic_{n}`
-    同型，不进完成度），完成度仍锚在无花括号的 `hook.json` 上。
+    `semantic_{n}.json` 已随判官节点退役（2026-09-15），现役 stage6 只剩
+    无花括号的 `hook.json`，完成度锚不变。
     ⚠ 给一个层加花括号产物时，要么它有逐份判定，要么该层还留着一份可
     `is_file()` 的锚——两样都没有，那一层的 `done` 恒 `None`。
     """
     patterned = {spec.stage for spec in NODES.values()
                  for rel in spec.produces if '{' in rel}
     # stage7 自 2026-08-19 起也带模板（交付物按书名命名），但它是**书级参数化**：
-    # 解析之后仍是一份具名产物，所以它的锚点比另外两层多一个——成书自己就是锚。
-    assert patterned == {'stage5', 'stage6', 'stage7'}
+    # 解析之后仍是一份具名产物，所以它的锚点比另外一层多一个——成书自己就是锚。
+    assert patterned == {'stage5', 'stage7'}
     for stage in sorted(patterned - {'stage5'}):
         assert S.required_artifacts(stage, novel_dir=Path('FQ_测试书_42')), \
             f'{stage} 只剩逐份不定的产物，完成度失去了可 is_file() 的锚点'
@@ -753,28 +753,13 @@ def test_legacy_stage5_is_never_treated_as_missing_or_paid_resume():
         assert 'stage5/deep' in why and 'missing' in why
 
 
-def test_stage6_semantic_is_not_answered_by_the_hook_artifact():
-    """`stage6/semantic_{n}.json` 与 stage5 那两个同型，锚点不是 `hook.json`。
-
-    它当时侥幸在跑，只因为 stage6 恰好有一份 `.INVALID` 把 `done` 压成了假
-    ——**靠一个 bug 抵消另一个 bug**。hook 干净时它就会被跳过。
-    """
-    hook = ArtifactState(rel='stage6/hook.json', exists=True, bytes=1, mtime=1,
-                         freshness='fresh', reason='match', display_freshness='fresh',
-                         invalid=False, invalid_freshness=None,
-                         invalid_reason=None, readable=True, condition='ready')
-    ov = _overview(StageState(stage='stage6', artifacts=[hook], done=True,
-                              reviewable=True, rounds_done={'stage6.semantic': []}))
-    assert S.resume_verdict(ov, 'stage6.hook')[0] == S.RESUME_SKIP
-    assert S.resume_verdict(ov, 'stage6.semantic')[0] == S.RESUME_RUN
-
-
 def test_numbered_produces_covers_exactly_the_round_numbered_artifacts():
     """三条路互补：具名 / 轮次编号 / 逐章。**谁也不许拿另一条的答案顶替。**"""
     assert S.numbered_produces('stage5') == {
         'stage5.review': 'stage5/review_{n}.json'}
-    assert S.numbered_produces('stage6') == {
-        'stage6.semantic': 'stage6/semantic_{n}.json'}
+    # stage6.semantic（semantic_{n}.json）已随判官节点退役（2026-09-15）；
+    # stage6 现役产物只有具名的 hook.json，本层不再有轮次编号产物。
+    assert S.numbered_produces('stage6') == {}
     # 逐章类（目录段也带占位符）不进这张表，它归 `chapters_done`。
     assert 'stage5.write' not in S.numbered_produces('stage5')
     novel_dir = Path('FQ_测试书_42')

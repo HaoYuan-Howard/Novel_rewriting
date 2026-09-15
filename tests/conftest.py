@@ -58,7 +58,6 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_stage2_knowledge_flow.py',
     'tests/test_stage2_opening.py',
     'tests/test_work_unit_grants.py',
-    'tests/test_stage6_legacy_semantic_recovery.py',
     'tests/test_stage6_prepared_cli.py',
     'tests/test_stage6_prepare_http.py',
     'tests/test_legacy_work_unit_recovery.py',
@@ -96,8 +95,6 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_stage5_generation.py',
     'tests/test_stage5_reviewer_rewrite_batch.py',
     'tests/test_stage6_prompt_experiments.py',
-    'tests/test_stage6_semantic_agent.py',
-    'tests/test_stage6_semantic_agent_boundary.py',
     'tests/test_trash.py',
     'tests/test_write_admission.py',
 })

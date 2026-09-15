@@ -32,7 +32,7 @@ def _profiles() -> PipelineAgentProfiles:
     return PipelineAgentProfiles(
         executor_default=AgentExecutorBackend(profile=_profile()),
         executor_overrides={
-            'stage6.semantic': AgentExecutorBackend(
+            'stage7.rename': AgentExecutorBackend(
                 profile=_profile(model='gpt-5.6-terra', effort='max')),
         },
     )

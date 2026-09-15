@@ -22,7 +22,7 @@ def _profiles() -> PipelineAgentProfiles:
             driver='codex', model='gpt-5.6-sol',
             reasoning_effort='high', execution_mode='standard'),
         executor_overrides={
-            'stage6.semantic': AgentProfile(
+            'stage7.rename': AgentProfile(
                 driver='claude-code', model='claude-sonnet-5',
                 reasoning_effort='xhigh', execution_mode='standard'),
         },
@@ -67,7 +67,7 @@ def test_context_env_is_only_a_pointer_and_round_trips_the_started_snapshot(
     assert env['KEEP'] == 'yes'
     assert loaded.start == start and loaded.profiles == _profiles()
     assert loaded.executor_profile('stage2.global').driver == 'codex'
-    assert loaded.executor_profile('stage6.semantic').driver == 'claude-code'
+    assert loaded.executor_profile('stage7.rename').driver == 'claude-code'
     serialized_env = '\n'.join(f'{key}={value}' for key, value in env.items())
     assert 'claude-opus-5' not in serialized_env
     assert 'gpt-5.6-sol' not in serialized_env

@@ -575,20 +575,7 @@ export interface HookMech {
   paras_fixed: number
 }
 
-export interface HookContradiction {
-  assertion: string
-  evidence: string
-  reason: string
-}
 
-export interface HookQualityScores {
-  read_on_desire: number
-  body_voice_match: number
-  concrete_scene_and_specificity: number
-  curiosity_and_payoff_promise: number
-  hook_craft: number
-  synopsis_penalty: number
-}
 
 export interface HookCandidate {
   index: number
@@ -599,20 +586,6 @@ export interface HookCandidate {
   subject_sha256: string
   mech: HookMech
   findings: Finding[]
-  /**
-    * `unreviewed` = 没有可用的当前审判；`uncertain` = 判过、有证据、但服务端不替人盖章。
-    * ⚠ 曾有 `clear` / `contradiction` 两个取值，它们只由服务端的自动放行门产生，
-    * 而那套装置已整批下线 ⇒ 两个都不会再出现。
-    * ⚠ 随之删掉的还有两格布尔：`selectable`（「可直接定稿」，收成两态后恒 false）与
-    * `human_resolvable`（「可由人工消解」，恒 true）——一条永远走不通的捷径与一道
-    * 永远开着的闸。**每一条候选都要人显式核验**；要判还用不用人看，读这一格本身。
-    */
-  semantic_state: 'uncertain' | 'unreviewed'
-  semantic_reason: string
-  contradictions: HookContradiction[]
-  quality: HookQualityScores | null
-  quality_score: number | null
-  quality_rank: number | null
   /** 这一条是不是当前定稿 */
   approved: boolean
 }
@@ -635,10 +608,8 @@ export interface HookApproved {
     actor: string
     reason: string
     subject_sha256: string
-    /** 恒 `human_verification`：`calibrated_pass` 是被服务端裁决掉的取值。 */
-    basis: 'human_verification'
-    /** 人当时读的是哪一份审判。`null` = 定稿时没有可用审判，人是在零证据下拍的板。 */
-    semantic_review_seq: number | null
+    /** `default_policy` = 自动定稿；`human_selection` = 人工改选（判官退役后选择只证明选择）。 */
+    basis: 'default_policy' | 'human_selection'
     /** null = 旧批准；下一次终审后才可用于 already_current。 */
     workpack_sha256: string | null
   }

@@ -131,7 +131,7 @@ def complete_stage6_prepare(book):
 
 def complete_stage6(book):
     complete_stage6_prepare(book)
-    from novel.stages.stage6 import hook, semantic
+    from novel.stages.stage6 import hook
     hook_ctx = _ctx(book, 'stage6.hook')
     texts = ['来信说，父亲已经回了城。\n\n廊下的李宝珠看过残花，把那封信折进衣袖。',
              '李宝珠清早买回两个包子，母亲就在门口等着她。\n\n那封信的消息，母亲早就知道了。',
@@ -142,17 +142,7 @@ def complete_stage6(book):
     hook_art = hook.run_hook(hook_ctx, hook_client)
     assert len(hook_wire.calls) == 1
     assert set(hook_art.judged) == {'stage5/ch01.json'}, 'Hook仅绑定实际开篇章稿'
-    judge_ctx = _ctx(book, 'stage6.semantic')
-    prepared = semantic.prepare_semantic_candidate(judge_ctx)
-    from tests.test_stage6_semantic import _response_review
-    def judge(req, _index):
-        assert all(key not in req.user for key in ('fact_atoms', 'required_facts'))
-        labels = [neutral for neutral, _real, _text in prepared.aliases]
-        return _ok({'reviews': [_response_review(label) for label in labels], 'ranking': labels})
-    judge_client, judge_wire = _client(judge_ctx, judge)
-    semantic.run_semantic(judge_ctx, judge_client)
-    assert len(judge_wire.calls) == 2
-    assert set(prepared.judged) == {'stage5/ch01.json'}
+    # stage6.semantic 判官已退役（2026-09-15）：hook 落盘后直接走人工定稿。
     approve_ctx = _ctx(book, 'stage6.approve', paid=False)
     pack = hook.approval_workpack(ArtifactStore(approve_ctx))
     assert [row.chapter_ordinal for row in pack.materials.rewritten_chapters] == [1, 2, 3]

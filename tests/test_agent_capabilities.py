@@ -30,7 +30,7 @@ def _profile(*, driver: str = 'codex', model: str = 'gpt-5.6-sol',
 
 def test_executor_nodes_cover_all_paid_llm_nodes():
     """付费节点新增/退役时，executor 配置面不能静默漏接或误接代码节点。"""
-    assert len(AGENT_EXECUTOR_NODES) == 11
+    assert len(AGENT_EXECUTOR_NODES) == 10
     assert set(AGENT_EXECUTOR_NODES) == {
         node for node, spec in NODES.items() if spec.paid
     }
@@ -60,7 +60,7 @@ def test_pipeline_profiles_reject_mixed_executor_modes():
             commander=_profile(),
             executor_default=AgentExecutorBackend(profile=_profile()),
             executor_overrides={
-                'stage6.semantic': LegacyExecutorBackend(
+                'stage7.rename': LegacyExecutorBackend(
                     profile=_legacy_profile()),
             },
         )
@@ -70,7 +70,7 @@ def test_pipeline_profiles_reject_mixed_executor_modes():
             executor_default=LegacyExecutorBackend(profile=_legacy_profile()),
             executor_overrides={
                 'stage2.blueprint': AgentExecutorBackend(profile=_profile()),
-                'stage6.semantic': LegacyExecutorBackend(profile=_legacy_profile()),
+                'stage5.write': LegacyExecutorBackend(profile=_legacy_profile()),
             },
         )
     # 同模式内的逐节点差异仍合法，但 legacy 默认下 agent-only 节点没有
@@ -262,36 +262,38 @@ def test_executor_overrides_reject_code_and_approval_nodes():
         )
     profiles = PipelineAgentProfiles(
         executor_default=_profile(),
-        executor_overrides={'stage6.semantic': _profile(model='gpt-5.6-terra')},
+        executor_overrides={'stage7.rename': _profile(model='gpt-5.6-terra')},
     )
     resolved = capabilities.validate_pipeline_profiles(profiles)
     assert resolved is not profiles
     assert isinstance(resolved.executor_default, AgentExecutorBackend)
     assert resolved.executor_default.profile.execution_mode == 'standard'
-    override = resolved.executor_overrides['stage6.semantic']
+    override = resolved.executor_overrides['stage7.rename']
     assert isinstance(override, AgentExecutorBackend)
     assert override.profile.execution_mode == 'standard'
     assert profiles.executor_default.profile.execution_mode is None, '请求对象不应被原地改写'
 
 
 def test_legacy_backend_is_closed_over_provider_model_thinking_effort_and_node():
+    # stage6.semantic 的 pro 钉死例外已随判官退役移除；现役钉死值只剩
+    # stage4.design / stage4.plan 两个（NODES 各格的 model 列）。
     pro = LegacyExecutorBackend(profile=LegacyLlmProfile(
         provider='deepseek', model='deepseek-v4-pro',
         reasoning_effort='high', thinking_mode='on'))
     assert capabilities.validate_executor_backend(
-        pro, node='stage6.semantic') == pro
+        pro, node='stage4.design') == pro
 
     flash = LegacyExecutorBackend(profile=LegacyLlmProfile(
         provider='deepseek', model='deepseek-flash',
         reasoning_effort='high', thinking_mode='on'))
     with pytest.raises(capabilities.AgentProfileRefused, match='钉死 deepseek-v4-pro'):
-        capabilities.validate_executor_backend(flash, node='stage6.semantic')
+        capabilities.validate_executor_backend(flash, node='stage4.design')
     with pytest.raises(capabilities.AgentProfileRefused, match='reasoning_effort'):
         capabilities.validate_executor_backend(
             LegacyExecutorBackend(profile=LegacyLlmProfile(
                 provider='deepseek', model='deepseek-v4-pro',
                 reasoning_effort='high', thinking_mode='off')),
-            node='stage6.semantic',
+            node='stage4.design',
         )
 
 

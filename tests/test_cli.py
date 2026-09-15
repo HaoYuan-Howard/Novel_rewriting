@@ -1172,10 +1172,10 @@ def test_a_model_ladder_that_runs_out_is_a_terminal_state_not_a_crash(
 def test_the_pinned_nodes_keep_their_model_over_the_global_default(monkeypatch):
     """⭐ `_llm_client` 是全链唯一的 client 构造口：`NodeSpec.model` 在这里生效。
 
-    「除例外外全链 flash」必须长成形状而不是纪律：三个钉死节点 ⇒ `DEEPSEEK_MODEL` /
-    全局默认 flash 都换不掉它们；其余节点 `''` = 跟随全局默认（flash）。
-    ⚠ Stage4 A/B 两相共用 pro 的全书重采风险，判官则是证据力；
-    但**接线只有这一条**——所以这里一次断四个节点，不给第二条通路留缝。
+    「除例外外全链 flash」必须长成形状而不是纪律：两个钉死节点（stage4 A/B）
+    ⇒ `DEEPSEEK_MODEL` / 全局默认 flash 都换不掉它们；其余节点 `''` = 跟随
+    全局默认（flash）。判官的 pro 钉死例外已随 stage6.semantic 退役移除。
+    ⚠ Stage4 A/B 两相共用 pro 的全书重采风险；但**接线只有这一条**。
     """
     import tempfile
     from pathlib import Path
@@ -1190,8 +1190,6 @@ def test_the_pinned_nodes_keep_their_model_over_the_global_default(monkeypatch):
         config, 'load_config',
         lambda: config.Config(api_key=None, model='deepseek-flash'))
 
-    judge = M._llm_client(RunContext.open(
-        base, '123', 'stage6.semantic', paid=True, write_ledger=False))
     design = M._llm_client(RunContext.open(
         base, '123', 'stage4.design', paid=True, write_ledger=False))
     plan = M._llm_client(RunContext.open(
@@ -1199,7 +1197,6 @@ def test_the_pinned_nodes_keep_their_model_over_the_global_default(monkeypatch):
     other = M._llm_client(RunContext.open(
         base, '123', 'stage2.global', paid=True, write_ledger=False))
 
-    assert judge.model == 'deepseek-v4-pro', '判官的 pro 是钉死的，环境变量换不掉'
     assert design.model == 'deepseek-v4-pro', 'stage4.design 的 pro 是钉死的'
     assert plan.model == 'deepseek-v4-pro', 'stage4.plan 的 pro 是钉死的，环境变量换不掉'
     assert other.model == 'deepseek-flash' == config.DEFAULT_MODEL
@@ -1281,7 +1278,6 @@ _PROFILED_RUN_CASES = (
          'chapters': '5,2,5', 'revise': True, 'reviewer_rewrite': None},
         id='stage5-revise-chapters'),
     pytest.param('stage6.hook', [], {}, id='stage6-hook'),
-    pytest.param('stage6.semantic', [], {}, id='stage6-semantic'),
     pytest.param('stage7.rename', [], {}, id='stage7-rename'),
 )
 
@@ -1406,7 +1402,7 @@ def test_legacy_backend_uses_provider_factory_instead_of_implicit_deepseek(
     backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
         provider='deepseek', model='deepseek-v4-pro',
         reasoning_effort='high', thinking_mode='on'))
-    ctx = SimpleNamespace(node='stage6.semantic', executor_backend=backend)
+    ctx = SimpleNamespace(node='stage4.design', executor_backend=backend)
     sentinel = object()
     seen = []
     monkeypatch.setattr(
@@ -1672,7 +1668,6 @@ def test_profiled_gate_blocked_remains_exit_two_without_a_stack(
 @pytest.mark.parametrize(('node', 'flags'), [
     ('stage2.global', ['--purge-role']),
     ('stage2.blueprint', ['--chapters', '1']),
-    ('stage6.semantic', ['--dry-run']),
     ('stage4.context', []),
 ])
 def test_cli_refuses_profiled_flags_and_unmigrated_nodes_before_context(
@@ -1714,34 +1709,6 @@ def test_cli_refuses_a_partial_executor_profile_before_preview(tmp_path, capsys)
     err = capsys.readouterr().err
     assert '必须同时给' in err and '--executor-model' in err
     assert 'Traceback' not in err
-
-
-def test_stage6_semantic_dry_run_prints_the_exact_role_requests(
-        monkeypatch, capsys):
-    """dry-run 不得把 role suffix 错拼到 system 后再声称是真 wire。"""
-    from novel.cli import main as M
-    from novel.stages.stage6 import semantic
-
-    monkeypatch.setattr(
-        semantic,
-        'build_prompt',
-        lambda _ctx: ('COMMON-SYSTEM', 'COMMON-USER', object(), object(), [
-            ('T1', 'c1', '候选文本'),
-        ]),
-    )
-
-    assert M._run_stage6(
-        SimpleNamespace(node='stage6.semantic'), ['--dry-run']) == X.OK
-    output = capsys.readouterr().out
-    for role in ('A', 'B'):
-        exact_system, exact_user = semantic.judge_request(
-            'COMMON-SYSTEM', 'COMMON-USER', role)
-        assert f'anonymous editor {role} system' in output
-        assert exact_system in output
-        assert f'anonymous editor {role} user' in output
-        assert exact_user in output
-    assert 'COMMON-SYSTEM' + semantic.JUDGE_ROLE_SUFFIX['A'] not in output
-    assert 'COMMON-SYSTEM' + semantic.JUDGE_ROLE_SUFFIX['B'] not in output
 
 
 def test_profiled_preview_without_egress_approval_is_visible_but_not_executable(

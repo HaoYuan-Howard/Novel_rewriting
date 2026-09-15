@@ -111,23 +111,11 @@ def test_stage6_real_candidates_and_approval_survive_view_reload_without_writes(
     assert all(row.text and row.chars == measure(row.text).chars for row in view.candidates)
     assert view.approved is not None
     assert [row.approach for row in view.candidates if row.approved] == [view.approved.approach]
-    assert all(row.subject_sha256 and row.semantic_state != 'unreviewed' for row in view.candidates)
+    # 判官退役（2026-09-15）后候选行只剩机械身份：subject_sha256 逐条绑定字节。
+    assert all(len(row.subject_sha256) == 64 for row in view.candidates)
     again = stage6_view(book.parent, _ctx(book, 'stage6.hook', paid=False).sid)
     assert again.model_dump() == view.model_dump()
     assert _files(book.parent) == before
-
-
-@pytest.mark.stage_scope('stage6')
-def test_stage6_missing_semantic_evidence_stays_unreviewed_and_free_restore_recovers(produced_book):
-    book = produced_book
-    evidence = book / 'stage6' / 'semantic_1.json'
-    original = evidence.read_bytes()
-    evidence.unlink()  # 注入丢失证据，不能借准备期的质量结论补绿。
-    view = stage6_view(book.parent, _ctx(book, 'stage6.hook', paid=False).sid)
-    assert all(row.semantic_state == 'unreviewed' and row.quality is None for row in view.candidates)
-    evidence.write_bytes(original)
-    restored = stage6_view(book.parent, _ctx(book, 'stage6.hook', paid=False).sid)
-    assert all(row.semantic_state != 'unreviewed' for row in restored.candidates)
 
 
 @pytest.mark.stage_scope('stage7')

@@ -40,7 +40,7 @@ def test_prepare_semantics_and_evidence_have_separate_consumer_edges():
     changed = copy.deepcopy(original)
     changed['source_blurb']['facts'][0]['hook_evidence']['source']['start'] = 5
     changed['source_blurb']['opening']['rationale'] = '审阅说明更正'
-    for node in ('stage6.hook', 'stage6.semantic'):
+    for node in ('stage6.hook',):
         project = projection_for(node, STAGE6_PREPARE)
         assert project is prepare_projection
         assert project(original) == project(changed)
@@ -208,7 +208,7 @@ def test_hook_scope_cannot_omit_prepare_checks_or_put_them_in_text_identity_grid
     from novel.stages.stage6 import hook
 
     prepare_ids = {rule.rule for rule in PREPARE_RULES}
-    for node in ('stage6.hook', 'stage6.semantic', 'stage6.approve'):
+    for node in ('stage6.hook', 'stage6.approve'):
         report = build(sid='123', node=node, freshness=FreshnessReport('fresh', 'match'))
         assert {row.rule for row in report.rules} == {row.rule for row in REGISTRY.of_stage('stage6')}
         assert all(row.status == 'skipped' for row in report.rules if row.rule in prepare_ids)

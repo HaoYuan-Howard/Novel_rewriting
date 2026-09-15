@@ -50,7 +50,6 @@ from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import (
     Finding, HashBoundHumanApproval, LlmProvenance, Sha256,
 )
-from contracts.schema.evaluation import EvaluatorFingerprint, SemanticDecision
 from contracts.schema.stage5 import ContextSource, JudgedDraft
 
 #: ⚠ 从 stage5 借的**不是拷贝，是同一个类**：`judged` 的形状与 stage5 逐字段相同
@@ -130,15 +129,11 @@ class HookApprovalResolution(HashBoundHumanApproval):
     any archive/write so a stale browser or CLI cannot approve different text.
     """
 
-    #: 盘上恒 `'human_verification'`。**没有别的取值**——`calibrated_pass` 是**被裁决掉的
-    #: 东西**（它只能由 evaluator profile 那套自动放行装置产生，而那套已整批下线），
-    #: 不是还没做的。同 `ApprovedHook.origin` 的形状与理由。
-    #: ⚠ 盘上不需要迁移：三本书的既有 approval 本来就全是 `human_verification`，
-    #: 从来没有任何宿主产出过 `calibrated_pass`。
-    basis: Literal['human_verification']
-    #: 人当时读的是哪一份 semantic 审判。`None` = 定稿时盘上没有可用的当前审判
-    #: （那时人是在**没有判官证据**的情况下拍板的，这两件事必须分得开）。
-    semantic_review_seq: int | None = Field(default=None, ge=1)
+    #: 定稿依据只有两种（2026-09-15 全自动裁决；旧 `human_verification` 与判官
+    #: `semantic_review_seq` 随 A/B 语义审判退役，存量书按需重跑 stage6）：
+    #: `default_policy` = 流水线按固定槽位序自动定稿；`human_selection` = 人从
+    #: 三候选中改选——选择只证明选择，不证明人工验证过全文。
+    basis: Literal['default_policy', 'human_selection']
     #: 终审人实际看到的紧凑工作包。旧盘没有这一格时仍可解码，但不能据此宣称
     #: ``already_current``；下一次明确批准会补上当前摘要。
     workpack_sha256: Sha256 | None = None
@@ -168,9 +163,10 @@ class ApprovedHook(StrictModel):
 
     text: str = Field(min_length=1)
 
-    #: 盘上恒 `'human'`。**没有别的取值**——`auto_approved` 是**被裁决掉的东西**，
-    #: 不是还没做的。
-    origin: Literal['human']
+    #: `'auto'` = 流水线按固定槽位序自动定稿（2026-09-15 全自动裁决）；`'human'` =
+    #: 人在三候选中改选。同一候选上 auto→human 的改选是有效选择：内容不变、
+    #: 来源与披露更新。
+    origin: Literal['auto', 'human']
 
     #: ⚠ `stage6.approve --pick` 时是**候选那一份的拷贝**；
     #: `--apply-edit`/`--recheck` 时是重新归一算出来的。
@@ -387,122 +383,12 @@ class HookResponse(StrictModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# `stage6/semantic_<n>.json` —— 当前质量审判
+# `stage6/semantic_<n>.json` —— A/B 双盲语义审判（已退役，2026-09-15）
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-class HookSemanticResponse(StrictModel):
-    """匿名主编的一次响应：实质矛盾审查 + 吸引力评分与排序。"""
-
-    reviews: list['HookCandidateReviewResponse'] = Field(min_length=1)
-    ranking: list[str] = Field(min_length=1)
-
-
-class HookContradiction(StrictModel):
-    """会改变读者对身份、关系、关键因果或故事结果理解的一处矛盾。"""
-
-    assertion: str = Field(min_length=1)
-    evidence: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
-
-
-class HookQualityScores(StrictModel):
-    """质量六维；总分由代码按固定权重计算，不接收模型自报总分。"""
-
-    read_on_desire: float = Field(ge=0, le=10)
-    body_voice_match: float = Field(ge=0, le=10)
-    concrete_scene_and_specificity: float = Field(ge=0, le=10)
-    curiosity_and_payoff_promise: float = Field(ge=0, le=10)
-    hook_craft: float = Field(ge=0, le=10)
-    synopsis_penalty: float = Field(ge=0, le=10)
-
-
-class HookCandidateReviewResponse(StrictModel):
-    """模型对一个匿名文本标签的审阅；证据随后由代码回查原文。"""
-
-    label: str = Field(min_length=1)
-    coverage: Literal['complete', 'uncertain']
-    uncertainty_reason: str | None = None
-    contradictions: list[HookContradiction]
-    quality: HookQualityScores
-    concise_reason: str = Field(min_length=1)
-
-    @model_validator(mode='after')
-    def _uncertainty_is_explicit(self) -> 'HookCandidateReviewResponse':
-        if self.coverage == 'uncertain' and not self.uncertainty_reason:
-            raise ValueError('coverage=uncertain 必须说明 uncertainty_reason')
-        if self.coverage == 'complete' and self.uncertainty_reason:
-            raise ValueError('coverage=complete 不应携带 uncertainty_reason')
-        return self
-
-
-class HookCandidateReview(HookCandidateReviewResponse):
-    """落盘审阅 = 模型响应 + 代码绑定的文案内容指纹。"""
-
-    text_sha1: Fp10
-
-
-class HookSemanticReview(StrictModel):
-    """`stage6/semantic_<n>.json` —— 付费文案质量审判的可审计落盘形态。
-
-    ⚠ **候选文本绑定键是 `judged_texts`（label → 文本内容 sha1），不绑 hook.json 整文件**：
-    `--pick` 只改 `approved` 键、不换任何文本字节，整文件指纹绑死会让定稿动作把
-    语义结论误判过期——`R-9.17` 教训的同型。`hook_file_sha1` 只作审计。
-
-    判官同时看见 Stage5 开篇成稿。它们是被审判的参考主体，不是普通
-    `inputs`；因此必须与 Stage6 hook 一样用 `JudgedDraft` 的消费投影单独绑定。
-    否则正文改字后，旧语义审判仍可能被当成 current。
-    """
-
-    judged_texts: dict[str, Fp10] = Field(min_length=1)
-    hook_file_sha1: Fp10
-    # 排序标签使用产物里的真实标签；请求时会换成 T1/T2… 匿名标签。
-    reviews: list[HookCandidateReview] = Field(min_length=1)
-    ranking: list[str] = Field(min_length=1)
-    #: 两名盲评 judge 各自的原始排序；``ranking`` 是代码按合并决议
-    #: 与平均分确定性派生的顺序。
-    judge_rankings: dict[Literal['A', 'B'], list[str]]
-    #: 每份去重文本一条；真正的 PASS/FAIL/UNVER 只从这里读，
-    #: 不从某一名 judge 的 ``reviews`` 倒推。
-    decisions: list[SemanticDecision] = Field(min_length=1)
-    evaluator_fingerprint: EvaluatorFingerprint
-    #: `{stage5/chNN.json: 当时实际下发给 A/B 判官的成稿引用}`。
-    #: 整文件 sha1 只作审计；过期判定只比 `consumed.text_sha1`。
-    judged: dict[str, JudgedDraft]
-    provenance: LlmProvenance = Field(alias='_provenance')
-
-    @model_validator(mode='after')
-    def _double_blind_surface_is_closed(self) -> 'HookSemanticReview':
-        labels = {review.label for review in self.reviews}
-        if set(self.judged_texts) != labels:
-            raise ValueError('judged_texts 与 reviews 必须恰好覆盖同一批标签')
-        if any(self.judged_texts[review.label] != review.text_sha1
-               for review in self.reviews):
-            raise ValueError('judged_texts 与 reviews 的文本 sha1 绑定不一致')
-        if set(self.judge_rankings) != {'A', 'B'}:
-            raise ValueError('judge_rankings 必须恰有 A/B 两份')
-        for judge, ranking in self.judge_rankings.items():
-            if len(ranking) != len(set(ranking)) or set(ranking) != labels:
-                raise ValueError(f'judge {judge} ranking 未恰好覆盖合并审阅标签')
-        subjects = [decision.subject_key for decision in self.decisions]
-        if len(subjects) != len(set(subjects)) or len(subjects) != len(self.reviews):
-            raise ValueError('decisions 必须与去重文本一一对应')
-        if any(decision.ability != 'reference_boundary' for decision in self.decisions):
-            raise ValueError('Stage6 decisions 只能使用 reference_boundary 能力')
-        if any({judge.judge for judge in decision.judges} != {'A', 'B'}
-               for decision in self.decisions):
-            raise ValueError('每条 Stage6 decision 必须恰含 A/B 两名盲评 judge')
-        for decision in self.decisions:
-            refs = [ref for judge in decision.judges for ref in judge.evidence]
-            if any(ref.subject_sha256 != decision.subject_key
-                   for ref in [*refs, *decision.evidence]):
-                raise ValueError('Stage6 decision 的全部证据必须绑定它自己的完整 subject hash')
-        # ⚠ 这里曾有一支 `if decision.automated:`（自动决议只能是 PASS/FAIL，且必须 A/B
-        #   同结论 + 各自证据闭合）与它的 `elif ... != 'UNVER': raise` 对偶。自动放行门
-        #   下线后 `SemanticDecision.verdict` 在类型上就只有 `UNVER`，两支都不可达。
-        #   **不要**在这里补一条「decisions 必须全 UNVER」——那等于把刚删掉的校验器
-        #   换个地方再写一遍，而类型已经把它守住了。
-        return self
+# 全自动裁决：stage6.semantic 整节点退役，判官 schema 家族（HookSemanticResponse /
+# HookSemanticReview / HookCandidateReview(±Response) / HookContradiction /
+# HookQualityScores）与 novel/quality/evaluator.py 一并删除。存量书的
+# semantic_N.json 不再被现役读取，历史经冻结 Git 历史检视。
 
 
 class HookEdit(StrictModel):

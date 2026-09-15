@@ -293,10 +293,6 @@ _JSON_READ_ALLOWED = {
         '它们在 `_service/runs/<sid>/stage2/` 按书、run_id 关闭式恢复，读取后仍须重跑'
         '当前 schema/validator/scope/HARD；旧书内运行目录关闭式拒绝。'
         '单独成模块正是为了不给 extract.py/client.py 开裸 IO 豁免'),
-    'novel/llm/stage6_runs.py': (
-        'Stage6 双判官检查点与 prepared→committed 提交账不是正式产物；'
-        '它们在 `_service/runs/<sid>/stage6/` 按 run_id/role 关闭式恢复，读取后仍须复验'
-        '当前 schema/validator/input/profile/session/ledger/audit，正式写盘仍回 semantic producer'),
     'novel/llm/agent_runs.py': (
         '逐节点 executor 的通用 run/checkpoint/commit journal 不是正式产物；'
         '它只向 `_service/runs/<sid>/stageN/<run_id>/` 追加；关闭式拒绝旧书内'
@@ -380,11 +376,6 @@ _WRITE_ALLOWED = {
         '只写 `_service/runs/<sid>/stage2/<run_id>/blueprint/`，旧书内路径只读；'
         '正式采纳仍回 producer 的完整编译/HARD/写盘口。'
         '单独成模块是为了不把 extract.py/client.py 整体加入写盘白名单'),
-    'novel/llm/stage6_runs.py': (
-        'Stage6 双判官验证后 checkpoint 与 commit journal，只写 '
-        '`_service/runs/<sid>/stage6/<run_id>/semantic/`；它们不是正式 artifact，'
-        '正式 semantic 产物、typed readback、双 adoption 与终验仍由 producer 完成。'
-        '独立模块让恢复账的裸 IO 豁免不扩散到 semantic.py'),
     'novel/llm/agent_runs.py': (
         '逐节点 executor 的 provider-neutral 恢复核心只原子写 '
         '`_service/runs/<sid>/stageN/<run_id>/run.json`、append-only checkpoint revision 与 '

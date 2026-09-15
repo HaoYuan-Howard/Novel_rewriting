@@ -73,7 +73,6 @@ def test_retired_approval_versions_refuse_all_real_entry_points_and_restart(
     ('stage5.write', 'stage5/ch01.json'),
     ('stage5.review', 'stage5/review.json'),
     ('stage6.hook', 'stage6/hook.json'),
-    ('stage6.semantic', 'stage6/semantic_check.json'),
 ])
 @pytest.mark.parametrize('payload', [
     {'_schema_version': 2, 'measurable': {'body': {}, 'hook': {}}},

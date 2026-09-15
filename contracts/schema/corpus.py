@@ -31,7 +31,7 @@ CURRENT_CORPUS_PAID_NODES: tuple[str, ...] = (
     'stage4.plan',
     'stage5.write',
     'stage6.hook',
-    'stage6.semantic',
+    # stage6.semantic 已随判官节点退役（2026-09-15）；冻结拓扑不再派发它。
     'stage7.rename',
 )
 
@@ -57,7 +57,8 @@ def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
         # ⚠ `stage5/semantic_1.json` 随 `stage5.semantic` 节点于 2026-08-17 下线，
         #   不再是一本合格语料书的必备面。
         'stage6/hook.json',
-        'stage6/semantic_1.json',
+        # ⚠ `stage6/semantic_1.json` 已随 stage6.semantic 判官节点退役（2026-09-15），
+        #   不再是一本合格语料书的必备面；冻结书盘上已有的那份只是多余存货。
         # ⚠⚠ **成书这一条登记的是模板 rel，不是盘上那个文件名。**
         #   盘上它叫 `stage7/<书名>_rewriting.txt`，而本清单**刻意不含书名**
         #   （本模块 docstring 的 "text-free"；`docs/schema/corpus.md`）——它要能提交进 git。

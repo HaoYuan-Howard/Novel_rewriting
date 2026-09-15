@@ -1118,7 +1118,6 @@ const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
   { node: 'stage5.write', label: 'stage5 逐章写作', paid: true },
   { node: 'stage5.review', label: 'stage5 全书验收', paid: false },
   { node: 'stage6.hook', label: 'stage6 开篇文案', paid: true },
-  { node: 'stage6.semantic', label: 'stage6 文案语义审判', paid: true },
   { node: 'stage6.approve', label: 'stage6 文案定稿', paid: false },
   { node: 'stage7.rename', label: 'stage7 人名表', paid: true },
   { node: 'stage7.approve', label: 'stage7 人名表定稿', paid: false },

@@ -12,18 +12,18 @@ from novel.llm.client import LlmClient
 from novel.llm.ledger import audit_path, ledger_path, read_jsonl_rows
 from novel.orchestrator import execution_permit, operator, queue
 from novel.orchestrator.agent_supervisor import RunSupervisor, SupervisorActionResult
-from novel.stages.stage6 import hook, semantic
+from novel.stages.stage6 import hook
 from novel.stages.stage7 import rename
 from novel.store import ArtifactStore
 from novel.work_units import budget_for
 from tests.test_agent_supervisor import _epoch, _outcome
 from tests.test_stage2_generation import _ctx
 from tests.test_stage6_legacy_delivery_recovery import _crash_after_first_adoption, _rig as hook_rig
-from tests.test_stage6_legacy_semantic_recovery import _rig as semantic_rig
 from tests.test_stage7_legacy_delivery_recovery import _rig as rename_rig, _interrupt as rename_interrupt
 
 
-NODES = ['stage6.hook', 'stage6.semantic', 'stage7.rename']
+# stage6.semantic 的恢复面已随判官节点退役删除（2026-09-15）。
+NODES = ['stage6.hook', 'stage7.rename']
 
 
 @pytest.fixture(autouse=True)
@@ -35,15 +35,9 @@ def no_api_key(monkeypatch):
 
 
 def _prepared(tmp_path, monkeypatch, node, *, before_adoption=False):
-    original_report = hook._report
     if node == 'stage6.hook':
         ctx, source, _wire, _factory, _up = hook_rig(tmp_path, monkeypatch)
         producer, run = hook, hook.run_hook
-    elif node == 'stage6.semantic':
-        ctx, source, _wire, _factory, _prepared, _payload, _up = semantic_rig(tmp_path, monkeypatch)
-        # 公共 CLI 真正渲染 producer 的 CheckReport，不拿 SimpleNamespace 代替报告。
-        monkeypatch.setattr(hook, '_report', original_report)
-        producer, run = semantic, semantic.run_semantic
     else:
         ctx, source, _wire, _factory, _up = rename_rig(tmp_path, monkeypatch)
         producer, run = rename, rename.run_rename
@@ -66,12 +60,12 @@ def _prepared(tmp_path, monkeypatch, node, *, before_adoption=False):
 @pytest.mark.parametrize('node', NODES)
 def test_exact_free_recovery_is_real_queue_supervisor_cli_and_http_preview(tmp_path, monkeypatch, node):
     ctx, producer, flags = _prepared(tmp_path, monkeypatch, node)
-    scopes = ['judge:a', 'judge:b'] if node == 'stage6.semantic' else ['book']
+    scopes = ['book']
     before_budget = {scope: budget_for(ctx, scope=scope).used for scope in scopes}
     if node == 'stage6.hook':
         assert budget_for(ctx, scope='book').remaining == 0
     costs = ledger_path(tmp_path).read_bytes()
-    rel = semantic.SEMANTIC_TPL.format(n=1) if node == 'stage6.semantic' else producer.REL
+    rel = producer.REL
     formal = (ctx.novel_dir / rel).read_bytes()
     todo, blocked = queue.plan_book(tmp_path, ctx.sid, until_stage='stage7')
     assert not todo and len(blocked) == 1
@@ -93,7 +87,7 @@ def test_exact_free_recovery_is_real_queue_supervisor_cli_and_http_preview(tmp_p
         assert all('--yes' not in step['argv'] for step in body['steps'])
 
     # rig 省略了机械判据执行，真实报告为 exit 1；保存原产物不授予校验/语义通过。
-    expected_rc = X.CHECK_FAILED if node == 'stage6.semantic' else X.OK
+    expected_rc = X.OK
     called = []
     def recover(_epoch, actual, ticket):
         assert actual.action.node == node and actual.action.flags == flags
@@ -120,14 +114,11 @@ def test_exact_free_recovery_is_real_queue_supervisor_cli_and_http_preview(tmp_p
     assert called == [node]
     assert producer.inspect_prepared_recovery(ctx).state == 'complete'
     assert (ctx.novel_dir / rel).read_bytes() == formal
-    if node == 'stage6.semantic':
-        artifact = ArtifactStore(ctx).read_own(semantic.HookSemanticReview, rel)[0]
-        assert artifact.decisions and {decision.verdict for decision in artifact.decisions} == {'UNVER'}
     assert ledger_path(tmp_path).read_bytes() == costs
     assert {scope: budget_for(ctx, scope=scope).used for scope in scopes} == before_budget
     adoptions = [row for row in read_jsonl_rows(audit_path(tmp_path))
                  if row.get('kind') == 'artifact_adoption' and row.get('node') == node]
-    assert len(adoptions) == {'stage6.hook': 3, 'stage6.semantic': 2, 'stage7.rename': 1}[node]
+    assert len(adoptions) == {'stage6.hook': 3, 'stage7.rename': 1}[node]
     assert {row['run_id'] for row in adoptions} == {ctx.run_id}
     assert queue.prepared_delivery_recovery_item(tmp_path, ctx.sid, code=ctx.code) is None
 
@@ -149,7 +140,7 @@ def test_exact_free_recovery_is_real_queue_supervisor_cli_and_http_preview(tmp_p
 def test_bad_group_proof_has_no_executable_queue_or_paid_fallback(tmp_path, monkeypatch, node):
     # 原采纳已经齐全时，历史提交不依赖当前字节；此处必须制造未完成提交的 CAS 漂移。
     ctx, _producer, flags = _prepared(tmp_path, monkeypatch, node, before_adoption=True)
-    rel = semantic.SEMANTIC_TPL.format(n=1) if node == 'stage6.semantic' else _producer.REL
+    rel = _producer.REL
     target = ctx.novel_dir / rel
     target.write_bytes(target.read_bytes() + b'\n')
     costs, adoptions = ledger_path(tmp_path).read_bytes(), audit_path(tmp_path).read_bytes()

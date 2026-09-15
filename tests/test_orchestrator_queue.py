@@ -118,15 +118,15 @@ def test_an_unknown_stage_is_refused_not_silently_empty():
 
 
 def test_human_nodes_are_exactly_the_ones_a_person_does():
-    """定稿节点换候选、`--apply-edit` 改一个字——**机器替不了**。"""
+    """stage6.approve 已随判官退役移出人工闸（2026-09-15）：默认自动定稿是
+    队列的普通 todo；仍由人把守的只有 stage0/stage7 的 approve 与 stage0.edit。"""
     assert Q.HUMAN_NODES == {'stage0.approve', 'stage0.edit',
-                             'stage6.approve', 'stage7.approve'}
+                             'stage7.approve'}
 
 
 @pytest.mark.parametrize(
     ('node', 'module_name'),
     [
-        ('stage6.approve', 'novel.stages.stage6.hook'),
         ('stage7.approve', 'novel.stages.stage7.rename'),
     ],
 )
@@ -152,17 +152,23 @@ def test_human_gate_uses_the_production_current_workpack_classifier(
     assert calls == [(store, artifact)]
 
 
-def test_stale_stage6_approval_blocks_before_stage7_assemble(
+def test_unapproved_hook_lands_an_auto_approve_todo_instead_of_a_blocker(
         queue_base, monkeypatch):
-    """assemble 会拒旧 Stage6 包；queue 必须先暴露可获 permit 的批准 blocker。"""
+    """hook 已落盘但没有当前定稿时，stage6.approve 是 0 成本自动定稿 todo，
+    不再是等人的 blocked 闸（2026-09-15 全自动裁决）。"""
+    (queue_base / 'book-a').mkdir()      # build_steps 解析书目录即可，无需产物
     monkeypatch.setattr(
         Q, 'nodes_up_to',
         lambda _until: ['stage6.approve', 'stage7.approve', 'stage7.assemble'])
     overview = SimpleNamespace(stages=[
         SimpleNamespace(
-            stage='stage6', artifacts=[SimpleNamespace(exists=True, invalid=False)]),
+            stage='stage6',
+            artifacts=[SimpleNamespace(
+                rel='stage6/hook.json', exists=True, invalid=False)]),
         SimpleNamespace(
-            stage='stage7', artifacts=[SimpleNamespace(exists=True, invalid=False)]),
+            stage='stage7',
+            artifacts=[SimpleNamespace(
+                rel='stage7/name_map.json', exists=True, invalid=False)]),
     ])
     monkeypatch.setattr(Q.st, 'stage2_global_projection_blocked', lambda _ov: False)
     monkeypatch.setattr(
@@ -177,16 +183,57 @@ def test_stale_stage6_approval_blocks_before_stage7_assemble(
     monkeypatch.setattr(
         Q.approvals, 'stage5_closure_view',
         lambda *_args: SimpleNamespace(state='closed'))
+    # 盘上没有书 ⇒ `_stage6_approval_current` 只会得到 False（producer 真跑时
+    # 才给出准确理由），队列必须把它改写成 RUN 而不是照抄 SKIP。
+    monkeypatch.setattr(
+        Q, '_stage6_approval_current', lambda *_args: False)
+
+    todo, blocked = Q.plan_book_from_overview(
+        queue_base, 'book-a', overview,
+        until_stage='stage7', follow_check=False,
+        approval_doc=SimpleNamespace(
+            sid='book-a', closure=SimpleNamespace(state='closed'),
+            prepare=SimpleNamespace(state='accepted')))
+
+    assert blocked == []
+    assert [item.node for item in todo] == ['stage6.approve', 'stage7.assemble']
+    approve = todo[0]
+    assert approve.flags == []
+    assert approve.steps, '自动定稿是无凭据 0 成本命令，argv 应可冻结'
+    assert '自动定稿' in approve.why
+
+
+def test_current_stage6_approval_stays_skipped_and_downstream_runs(
+        queue_base, monkeypatch):
+    """已有当前定稿（自动或人工）时 stage6.approve 维持 SKIP，不打扰后续。"""
+    monkeypatch.setattr(
+        Q, 'nodes_up_to',
+        lambda _until: ['stage6.approve', 'stage7.assemble'])
+    overview = SimpleNamespace(stages=[
+        SimpleNamespace(
+            stage='stage6',
+            artifacts=[SimpleNamespace(
+                rel='stage6/hook.json', exists=True, invalid=False)]),
+        SimpleNamespace(
+            stage='stage7',
+            artifacts=[SimpleNamespace(
+                rel='stage7/name_map.json', exists=True, invalid=False)]),
+    ])
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _ov, node: (
+            (Q.st.RESUME_RUN, '成书缺失')
+            if node == 'stage7.assemble'
+            else (Q.st.RESUME_SKIP, '产物已存在')))
+    monkeypatch.setattr(
+        Q, '_stage6_approval_current', lambda *_args: True)
 
     todo, blocked = Q.plan_book_from_overview(
         queue_base, 'book-a', overview,
         until_stage='stage7', follow_check=False)
 
-    assert todo == []
-    assert [item.node for item in blocked] == [
-        'stage6.approve', 'stage7.approve', 'stage7.assemble']
-    assert all(item.waiting_on == 'stage6.approve' for item in blocked)
-    assert blocked[0].steps == []
+    assert blocked == []
+    assert [item.node for item in todo] == ['stage7.assemble']
 
 
 def test_upstream_stuck_never_builds_downstream_human_commands(
@@ -221,8 +268,12 @@ def test_upstream_stuck_never_builds_downstream_human_commands(
         'stage5.write', 'stage6.approve', 'stage7.approve']
     assert all(
         item.waiting_on == Q.WAITING_ON_WRITING_APPROVAL for item in blocked)
-    assert all(item.steps == [] for item in blocked)
-    assert 'stage6.approve' not in built and 'stage7.approve' not in built
+    # stage6.approve 已是自动定稿节点（0 成本、无人工凭据），上游 stuck 时
+    # 仍可冻结其 argv；真正不许构造的是仍需人给 pick/actor/reason 的人工节点。
+    by_node = {item.node: item for item in blocked}
+    assert by_node['stage5.write'].steps == []
+    assert by_node['stage7.approve'].steps == []
+    assert 'stage7.approve' not in built
 
 
 @pytest.mark.parametrize(

@@ -1144,29 +1144,30 @@ def test_missing_actual_effort_remains_unknown_but_does_not_block(tmp_path):
 
 
 def test_restored_acceptance_consumes_prior_turn_budget(tmp_path):
-    ctx = _ctx(tmp_path, 'stage6.semantic')
+    # 判官退役（2026-09-15）后用现役 stage6.hook 节点验证同一轮次预算语义。
+    ctx = _ctx(tmp_path, 'stage6.hook')
     first = SessionAgentClient(
         ctx, _profile(), _FakeDriver(['{"value":7}']),
         max_semantic_turns=1)
     first.ask_json(
-        'SYS', 'subject', model_cls=_Answer, purpose='stage6.semantic.A',
-        max_tokens=4096, recovery_policy='stage6-semantic-v1')
-    checkpoint = first.accepted_checkpoint('stage6.semantic.A')
+        'SYS', 'subject', model_cls=_Answer, purpose='stage6.hook',
+        max_tokens=4096, recovery_policy='stage6-hook-v1')
+    checkpoint = first.accepted_checkpoint('stage6.hook')
     first.finish(process_state='ok', delivery_state='delivered')
     first.close()
 
     restored = SessionAgentClient(
         ctx, _profile(), _FakeDriver([]), max_semantic_turns=1)
     restored.restore_checkpoint_acceptance(
-        'stage6.semantic.A', checkpoint, system='SYS', user='subject',
-        max_tokens=4096, recovery_policy='stage6-semantic-v1')
+        'stage6.hook', checkpoint, system='SYS', user='subject',
+        max_tokens=4096, recovery_policy='stage6-hook-v1')
 
     assert restored.turns_used == 1
     assert restored.can_resume is False
     with pytest.raises(LlmFailed, match='已用尽 1 轮语义修订上限'):
         restored.ask_json(
-            'SYS', 'subject', model_cls=_Answer, purpose='stage6.semantic.A',
-            max_tokens=4096, recovery_policy='stage6-semantic-v1')
+            'SYS', 'subject', model_cls=_Answer, purpose='stage6.hook',
+            max_tokens=4096, recovery_policy='stage6-hook-v1')
     assert restored.driver.calls == []
     restored.finish(
         process_state='ok', delivery_state='blocked',

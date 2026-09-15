@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""批 4：五类业务 adapter 必须共用 UnitSessionPool 生命周期。"""
+"""批 4：四类业务 adapter 必须共用 UnitSessionPool 生命周期。"""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -11,7 +11,7 @@ from novel.agents.unit_session_pool import UnitSessionPool
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger
 from novel.orchestrator.node_agents import (
-    BlueprintSessionPool, SemanticSessionPool, Stage4DesignSessionPool,
+    BlueprintSessionPool, Stage4DesignSessionPool,
     Stage4PlanSessionPool, Stage5SessionPool,
 )
 from novel.run import RunContext
@@ -36,7 +36,8 @@ def _ctx(base: Path, node: str) -> RunContext:
     )
 
 
-def test_all_five_adapters_share_the_common_pool_lifecycle(tmp_path: Path) -> None:
+def test_all_four_adapters_share_the_common_pool_lifecycle(tmp_path: Path) -> None:
+    # stage6.semantic 的 SemanticSessionPool 已随判官节点退役删除（2026-09-15）。
     factories: tuple[
         tuple[str, Callable[[RunContext], object]], ...
     ] = (
@@ -44,7 +45,6 @@ def test_all_five_adapters_share_the_common_pool_lifecycle(tmp_path: Path) -> No
         ('stage4.design', Stage4DesignSessionPool),
         ('stage4.plan', Stage4PlanSessionPool),
         ('stage5.write', Stage5SessionPool),
-        ('stage6.semantic', SemanticSessionPool),
     )
 
     pools = [factory(_ctx(tmp_path, node)) for node, factory in factories]

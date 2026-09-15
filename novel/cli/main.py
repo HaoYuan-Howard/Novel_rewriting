@@ -720,7 +720,7 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
 
     ⚠ `stage6.approve --pick N` 也走这里：派发按 **stage** 分，节点由 `ctx.node` 带着。
     """
-    from novel.stages.stage6 import hook, semantic
+    from novel.stages.stage6 import hook
 
     tokens = set(N.flag_tokens(flags))
 
@@ -758,59 +758,38 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
             prepare.run_prepare(ctx, _llm_client(ctx))
         return X.OK
 
-    if ctx.node in ('stage6.hook', 'stage6.semantic') and '--recover-prepared' in tokens:
-        coordinates = {
-            'source_run_id': _valued(flags, '--recover-prepared') or '',
-            'proof_sha256': _valued(flags, '--subject-sha256') or '',
-        }
-        if ctx.node == 'stage6.hook':
-            hook.recover_prepared_hook(ctx, **coordinates)
-            print('  ✓ 已按原完成组补齐 Hook 正式提交与采纳尾账（0 模型）')
-            return X.OK
-        _artifact, report = semantic.recover_prepared_semantic(ctx, **coordinates)
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if ctx.node == 'stage6.semantic':
-        if '--dry-run' in tokens:
-            system, user, _art, _up, aliases = semantic.build_prompt(ctx)
-            for role in ('A', 'B'):
-                exact_system, exact_user = semantic.judge_request(
-                    system, user, role)
-                print(
-                    f'── anonymous editor {role} system'
-                    f'（{len(exact_system)} 字）──\n{exact_system}')
-                print(
-                    f'\n── anonymous editor {role} user'
-                    f'（{len(exact_user)} 字；{len(aliases)} 份去重文本）──\n'
-                    f'{exact_user}')
-            return X.OK
-        artifact, report = semantic.run_semantic(
-            ctx, _llm_client(ctx))
-        print(f'  ✓ 文案质量审判已落盘：{len(artifact.reviews)} 份文本 · '
-              f'排序 {artifact.ranking}')
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
+    if ctx.node == 'stage6.hook' and '--recover-prepared' in tokens:
+        hook.recover_prepared_hook(ctx,
+            source_run_id=_valued(flags, '--recover-prepared') or '',
+            proof_sha256=_valued(flags, '--subject-sha256') or '')
+        print('  ✓ 已按原完成组补齐 Hook 正式提交与采纳尾账（0 模型）')
+        return X.OK
 
     if ctx.node == 'stage6.approve':
         pick = _valued(flags, '--pick')
         if pick is None:
+            auto = True          # 默认路径 = 自动定稿（队列/Supervisor 跑法）
+        elif '--auto' in tokens:
             raise TerminalState(
-                'stage6.approve 必须说出定稿选哪一条：`--pick N`（1 起）。'
-                '⚠ 这与「选了一个越界的号」是两件事——那一条会告诉你有几个候选')
-        if not pick.isdigit():
-            raise TerminalState(f'--pick {pick!r} 不是一个候选序号（1 起的整数）')
-        actor = _valued(flags, '--actor')
-        reason = _valued(flags, '--reason')
-        review_token = _valued(flags, '--review-token')
-        if not actor or not reason or not review_token:
+                'stage6.approve 的 --auto 与 --pick N 互斥；'
+                '人工改选只给 --pick N --actor --reason --review-token')
+        else:
+            auto = False
+        actor = _valued(flags, '--actor') or ''
+        reason = _valued(flags, '--reason') or ''
+        review_token = _valued(flags, '--review-token') or ''
+        if not auto and (not actor or not reason or not review_token):
             raise TerminalState(
-                'stage6.approve 必须显式给 --actor、--reason 和 '
+                '人工改选必须显式给 --actor、--reason 和 '
                 '--review-token；actor 是自报身份，opaque token 防旧页面误批')
-        _art, report = hook.run_approve(
-            ctx, int(pick), actor=actor, reason=reason,
-            review_token=review_token)
+        if pick is not None and not pick.isdigit():
+            raise TerminalState(f'--pick {pick!r} 不是一个候选序号（1 起的整数）')
+        art, report = hook.run_approve(
+            ctx, int(pick) if pick is not None else None, auto=auto,
+            actor=actor, reason=reason, review_token=review_token)
         print(render(report))
+        if art.approved is not None and art.approved.origin == 'auto':
+            print(f"  ✓ 已自动定稿 {art.approved.slot}（固定槽位序第一条可用候选）")
         return X.OK if report.passed else X.CHECK_FAILED
 
     if '--check-only' in tokens:
@@ -857,8 +836,7 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
     if '--apply-edit' in tokens:
         _art, report = hook.run_apply_edit(ctx, _valued(flags, '--apply-edit') or '')
         print(render(report))
-        print('  ✓ 人工文案修订已落为新一轮；语义结论对新文本自动过期，'
-              '重跑 stage6.semantic 可清')
+        print('  ✓ 人工文案修订已落为新一轮')
         return X.OK if report.passed else X.CHECK_FAILED
 
     if '--wontfix' in tokens:
@@ -1991,11 +1969,11 @@ def _cmd_run(a: argparse.Namespace) -> int:
     # 当前 typed closure 回执已打开 gate.s5。0 成本只读跑法（--check-only 等）
     # 仍可运行，否则人连开闸需要的证据都拿不到（R 系硬闸与恢复面同批交付）。
     prepared_delivery_recovery = (
-        a.node in ('stage6.prepare', 'stage6.hook', 'stage6.semantic', 'stage7.rename')
+        a.node in ('stage6.prepare', 'stage6.hook', 'stage7.rename')
         and run_tokens == {'--recover-prepared', '--subject-sha256'})
     prepared_delivery_recovery = prepared_delivery_recovery or (
         a.node == 'stage6.prepare' and run_tokens == {'--recover-edit'})
-    if (a.node in ('stage6.prepare', 'stage6.hook', 'stage6.semantic', 'stage7.rename', 'stage7.assemble')
+    if (a.node in ('stage6.prepare', 'stage6.hook', 'stage7.rename', 'stage7.assemble')
             and not prepared_delivery_recovery
             and not (run_tokens and run_tokens <= set(STAGE5_CLOSED_EXEMPT_FLAGS))):
         from novel.stages.stage5 import closure as stage5_closure

@@ -54,7 +54,7 @@ stage6/prepare_review_decisions.json  当前主体的 accept/rework/uncertain �
 stage6/prepare_commit.json   内部 prepared/completed 提交记录，不是创作知识库
 stage6/hook.json             生成候选、机械判定与人工定稿
 stage6/_rounds/hook.rN.json  上一轮 hook.json 的整份归档
-stage6/semantic_N.json       A/B 双盲质量审判；决议按完整 SHA-256 绑定
+# stage6/semantic_N.json    —— A/B 双盲质量审判已退役（2026-09-15）；旧书产物只读保留
 stage6/hook_edit.json        人工编辑一条候选，或修改当前定稿的候选前身
 stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 记账，纯 0 成本）
 ```
@@ -68,24 +68,16 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
   legacy 的 `candidate_retry_limit=4` 表示整书工作单元的内容上限，Agent 完整替换协议为 0；
   同槽 `candidate_retries.attempt` 按实际请求连续编号 1..4，不能重复或跳号。
   旧 v1/v2/v3 产物保留原代码和原账，不迁移、不手改版本标记；当前根在接受 Prepare 后，
-  `stage6.hook` 经显式付费与正文外发授权生成 v4，再由独立双 judge 与当前 typed pick 定稿。
+  `stage6.hook` 经显式付费与正文外发授权生成 v4，再经机械判据与 `stage6.approve` 自动定稿
+  （人工改选随时可做、不阻塞下游）。
   v4 的已封存提交尾窗可走 `--recover-prepared` 免费补尾，不追认旧 schema 的提交来源。
 - 各份 `hook_edit.json` 编辑请求**都是 schema v2**。候选由位置身份 `c1/c2/c3`
   定位；本轮未改编辑形状。
   2026-08-23 的候选身份与策略名解耦仍保持：策略可重复，位置才唯一。旧实验快照只读，
   不纳入 current-schema corpus；存量重建归属见 `tests/test_artifact_versions.py::_SHAPE_BREAKS`。
-- 各轮 `semantic_<n>.json` **都是 schema v3**，独立 Prepare 及 Writer9 公开目录参与实际请求。2026-08-27 新增 `judged`，把 A/B 判官实际
-  看见的 Stage5 开篇成稿按 `JudgedDraft.consumed.text_sha1` 绑定。旧 v1 只绑
-  hook 候选文本，正文改字后仍可被误当 current，因此不迁移、不手补；由
-  `stage6.semantic` 在当前 hook + canonical Stage5 上重跑（legacy 是 A/B 各一次调用；显式 executor
-  profile 是 A/B 各一条可多轮 session，wire 数由代码反馈轮次决定）。当前 v3 不把
-  未进入判官 prompt 的后半书稿塞进 `judged`；全书 Stage5 accepted Review 仍是既有前置门，
-  后半书改字先令 Review 暂不可用，零成本重跑 Review 后若实际 prompt 输入未变，原 v3
-  semantic 可以重新成为 current，不白做 A/B。
-  Agent 的 run、A/B acceptance 与 checkpoint 恢复共用
-  `novel/agents/session_client.py::agent_json_schema` 归一后的实际发送 schema 指纹；
-  不得用 Pydantic 原始 schema 另算一套身份。旧 run 的指纹不改写、不冒充当前请求；
-  未能落下有效 checkpoint 的历史调用保留成本证据，由前端 Agent 在当前输入上重新执行该节点。
+- `semantic_<n>.json`（schema v3）已随 A/B 判官退役（2026-09-15）：现役不再读取或
+  生成；旧书产物只读保留，存量书重跑 stage6。schema 家族（HookSemanticReview 等）
+  与 quality/evaluator 模块已删除，历史经冻结 Git 检视。
 - 五份 Prepare 载体与 `wontfix.json` **都是 schema v1**。
 
 ### 2.0 Prepare v1
@@ -147,16 +139,18 @@ Prepare 语义投影，因此纯证据订正只重开受影响审阅，不无谓
 | `mech` | `Mech` | 标点、引号、分段归一的计数 |
 | `findings` | `Finding[]` | 该候选的机械判定；候选不属于正文章，`output_ordinal` 恒为 `null` |
 
-`ApprovedHook = slot + text + origin='human' + mech + findings + resolution`。`resolution` 必须记录自报
-`actor`（不是认证身份）、非空 `reason`、定稿文本的完整 `subject_sha256`、
-刚读 workpack 的完整 `workpack_sha256`、
-恒为 `human_verification` 的判定基础，以及可用的语义审判序号
-（`semantic_review_seq` 可空——「人在零证据下拍的板」与「人读了第 3 轮判官证据」必须分得开）。`slot` 记的是**从哪一条候选来**（位置身份 `c1`/`c2`/`c3`）；
+`ApprovedHook = slot + text + origin + mech + findings + resolution`。`origin ∈ {'auto','human'}`：
+`auto` = 流水线按固定槽位序自动定稿（默认路 `--auto`，不做任何质量优选）；`human` = 人工改选。
+`resolution` 必须记录自报 `actor`（自动路恒 `system:hook-autopick`）、非空 `reason`、
+定稿文本的完整 `subject_sha256`、刚读 workpack 的完整 `workpack_sha256`，以及判定基础
+`basis ∈ {'default_policy','human_selection'}`（判官退役后**选择只证明选择**，
+不证明人工验证过全文）。`slot` 记的是**从哪一条候选来**（位置身份 `c1`/`c2`/`c3`）；
 `None` = 没有候选前身（只可能见于既有的人手写记录；当前 apply-edit 不再新造这种绕过
 三候选工作包的定稿）。⚠ 它曾是 `approach`（策略名 + 一个 `human_edit`），
 而同一种策略采两条样本时策略名**答不出「是哪一条」**——那正是定稿要回答的问题。
 策略名没有丢：由 `candidates[slot].approach` 现算（能 0 成本现算的字段不落盘）。
-「它是不是人写的」由 `origin` 回答，与「有没有前身」是两件事。
+「它是怎么定稿的」由 `origin` 回答，与「有没有前身」是两件事；同候选上 auto→human
+的改选是有效选择：内容不变、来源与披露更新。
 `hook_edit.json` 的 `subject_sha256` 必须绑定经过本书标点、引号与分段归一链后的编辑文本；
 校验发生在 `run_apply_edit` 写盘前，并复用与普通候选批准相同的字节绑定闸，
 不能用 raw 上传字节的哈希绕过。`candidate=null` 只允许修改当前定稿的候选前身：运行时把
@@ -183,52 +177,15 @@ HARD 数严格下降且文本不与另两条重复时才替换该候选和整组
 `hook.INVALID.json` 并明确报出重复槽位；人改开至少一条后走 `--revalidate` 0 LLM 提升，
 不能用一次无落盘的终态把缓存里的有效响应永久锁死。
 
-### 2.2 `semantic_N.json`
+### 2.2 `semantic_N.json`（已退役）
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `judged_texts` | `{真实标签: Fp10}` | 审过的去重文本集合 |
-| `hook_file_sha1` | `Fp10` | 整份 hook 文件的审计指纹，不作新鲜度绑定键 |
-| `reviews` | `HookCandidateReview[]` | 合并后的诊断视图（质量分取 A/B 平均） |
-| `ranking` | `str[]` | 代码从合并决议与平均分确定性派生的真实标签排序 |
-| `judge_rankings` | `{A: str[], B: str[]}` | 两名 judge 各自的原始解匿名排序 |
-| `decisions` | `SemanticDecision[]` | 每份去重文本一条带 A/B 原始证据的合并 `UNVER`；唯一运行时判定源，不存在自动 PASS/FAIL |
-| `evaluator_fingerprint` | `EvaluatorFingerprint` | 运行时 model/prompt/schema/decoder 四格指纹，**没有 dataset**；prompt SHA 只冻结 `judge_request` 产出的两份实际静态请求面，不冒充逐书动态材料身份 |
-| `judged` | `{stage5/chNN.json: JudgedDraft}` | A/B 当时真正收到的开篇成稿；整文件 sha1 审计，`consumed.text_sha1` 判过期，未下发的后半书章稿不在此表 |
-| `_provenance` | `LlmProvenance` | 本次质量审判来源账 |
-
-逐书动态身份没有丢：hook、匿名材料、story truth/map 与正文输入由 provenance、agent run/checkpoint 的
-prompt/input hash 及 `judged` 分别绑定。evaluator fingerprint 只回答静态 evaluator 是否换了 model、
-prompt 模板、响应 schema 或 decoder；把动态正文也混进这里会让“判官实现变了”和“本书输入变了”
-无法区分。
-
-实验 layout 与 B-worker stagger 都进入 semantic decoder fingerprint；默认仍为 `pretty-v1 + 0ms`。
-两名判官继续使用独立 session 并发，stagger 只在 B worker 内等待。静态公共前缀的字节数/SHA 是
-诊断 observation，不写进 semantic artifact，也不保证 provider cache hit；实际命中只认 ledger usage。
-
-`HookCandidateReview`：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `label` | `str` | 落盘时恢复成真实候选标签；请求里只见 `T1/T2/...` |
-| `text_sha1` | `Fp10` | 文本绑定键；`--pick` 不过期、改字自动过期 |
-| `coverage` | `complete \| uncertain` | `uncertain` 必须给原因且不可定稿 |
-| `contradictions` | `HookContradiction[]` | 实质矛盾；`evidence` 必须由代码回查为候选连续原字节 |
-| `quality` | `HookQualityScores` | 六维 0~10 分 |
-| `concise_reason` | `str` | 主编简评 |
-
-质量总分不接受模型字段，由代码固定计算：
-
-```text
-0.30 * read_on_desire
-+ 0.20 * body_voice_match
-+ 0.15 * concrete_scene_and_specificity
-+ 0.20 * curiosity_and_payoff_promise
-+ 0.15 * hook_craft
-- 0.10 * synopsis_penalty
-```
-
-结果裁到 0~10，保留两位小数。
+A/B 双盲质量审判已随 `stage6.semantic` 节点整体退役（2026-09-15 全自动裁决）：判据
+（`hook_semantic_contradiction` / `hook_candidate_contradiction` / `hook_quality_rank`）、
+schema 家族（`HookSemanticReview` / `HookCandidateReview(±Response)` / `HookContradiction` /
+`HookQualityScores` / `SemanticDecision` / `EvaluatorFingerprint`）与
+已删除的 quality/evaluator 模块（原 `double_blind_decision`） 一并删除。旧书 `semantic_N.json`
+只读保留、现役不读取；矛盾维与质量排序进入交付披露面（`Q-13`）。历史实现与证据经
+冻结 Git 历史检视。
 
 ## 三、候选身份与候选配方
 
@@ -272,72 +229,42 @@ producer 在归一后、落盘前再守一次正式文本唯一性。这里**不
 
 原作文案可学结构但不可抄长句：任意连续 20 个内容字符相同即命中 `hook_reuses_source`。
 
-## 五、匿名质量审判与批准
+## 五、定稿与批准
 
-本节点没有 flag（`--dry-run` 只打印下发面）。运行时先冻结这一次的请求身份
-`EvaluatorFingerprint`（`model` / `prompt_sha256` / `schema_sha256` / `decoder_sha256` 四格，
-**没有 dataset**）。其中 `prompt_sha256` 由唯一拼装口 `judge_request` 对空动态 user 生成的
-`[system, user-role-A, system, user-role-B]` 实际静态字节面计算；逐书匿名材料不在这格重复绑定。
-随后把同一份匿名材料分别以 A/B 角色后缀发给两名 judge，
-候选标签都是 `T1/T2/...`。评论、证据与质量排序必须显示在报告中，不能因为结论是 `UNVER`
-就伪装成“0 份当前审判”。
+A/B 双盲审判已退役（见 §2.2）；本层定稿是**默认自动、人工改选随时可做**：
 
-⚠⚠ **角色后缀挂在 user 末尾，不挂在 system 末尾**，两名 judge 的 system 逐字节相同
-（唯一拼装口 `novel/stages/stage6/semantic.py::judge_request`）。这是一条**成本判据**：
-供应商按 `<BOS>{system}<｜User｜>{user}…` 的字节前缀做上下文缓存，后缀一旦回到 system 末尾，
-前缀就在那里分叉、judge B 那一份约 45k token 的匿名材料**全额 miss**——而两份材料逐字节相同。
-现役显式 Agent executor backend 路径为 A/B 各建独立 driver/session/cwd/provider session，并发请求缺失角色；
-legacy `LlmClient` 包装仍按 A 后 B 顺序执行。后缀位置只保证公共前缀不会被代码确定性拆断，实际是否
-命中供应商缓存仍取决于调度和供应商，不能把并发回归写成 cache hit 实证。双盲语义由「两次独立请求」
-承担，不由后缀落在哪一侧或串并行承担。守卫见 `tests/test_stage6_semantic.py`、
-`tests/test_stage6_semantic_agent.py` 与 `tests/test_stage6_semantic_agent_boundary.py`。
+- `stage6.approve --auto`（队列/Supervisor 默认跑法）：完成全部必需机械检查后按**固定槽位序**
+  取第一条无 HARD 候选（不按 INFO 数量或任何质量读数排序——诊断条数不是候选质量，
+  新增一条 INFO 判据不应改变默认选择）；三条均不可用即拒绝，预算内修复或终态失败，
+  不默认放行。当前候选集合上已有有效用户选择（`origin='human'` 且 current）时不覆盖。
+- 人工改选 `stage6.approve --pick N --actor <id> --reason <why> --review-token <s6r4_…>`：
+  选中与当前相同的候选仍是有效选择——内容不变、来源 auto→human、披露更新
+  （「开篇文案未经人工选择」移除，「本书未执行语义质量审阅」保留）。
 
-⇒ 因此本层 `_provenance.prompts` 的三个键与 `_common.md` §1.1「system prompt 指纹」的通用
-说法有别，是本层特例：`HOOK_SEMANTIC_SYS`（两名 judge 共用的那一份）+
-`HOOK_SEMANTIC_ROLE_A` / `_B`（挂在 user 末尾的角色后缀）。产地是同一个模块的
-`judge_prompts`。⚠ 它们曾是 `HOOK_SEMANTIC_SYS_A` / `_B` 两个键、各存一份
-`SEMANTIC_SYS + 后缀`：既把同一段 SYS 存了两遍，又在后缀已经不在 system 里之后继续自称 SYS。
-validator 必须确认：
-
-1. `reviews` 与 `ranking` 恰好覆盖全部匿名标签，且无重复；
-2. 每条矛盾 evidence 是对应候选的连续原字节；唯一空白差异可回取成原字节；
-3. 所有 `complete` 且无矛盾的候选排在矛盾或 uncertain 候选之前；
-4. 六维分数都在 0~10；总分由代码计算；
-5. 当前 hook 文本集合与审判的文本 sha1 / 决议 SHA-256 集合一致；
-6. 当前 Stage5 **实际下发的开篇**成稿与 `judged` 的路径集合及 `consumed.text_sha1` 逐项一致，且
-   semantic 产物新鲜。全书 accepted Review 仍须先可用；后半书改字并零成本重跑 Review 后，若这份
-   开篇投影及其余 prompt 输入没变，不得让未下发正文继续制造假 stale。
-
-批准动作 `stage6.approve --pick N --actor <id> --reason <why>
---review-token <s6r4_…>` 在归档和写盘之前执行两道硬检查：
+两条路在归档和写盘之前执行同样的硬检查：
 
 - 该候选没有机械 HARD；
 - 服务端在同书锁内重建工作包，opaque token 必须同时绑定当前 review identity 与本次
   validation seal，不允许旧页面误批。公开 v4 工作包只输出 opaque seal，不输出
-  `code_version` / `rules_fingerprint` 原料；旧版本包不能再提交批准。
+  `code_version` / `rules_fingerprint` 原料；旧版本包不能再提交批准。自动路的工作包
+  由服务端自算，无 TOCTOU 面，同一套双读复核仍然执行。
 
 公开工作包固定 `check_basis=candidate_without_approval`：`check` 是去除 `approved`
 后的候选检查，批准后也保留同一报告中的“尚未定稿”提示，不冒充当前审批状态。当前接受只看
 `disposition/current_slot/current_approval`。基准说明进入本次 exact workpack/token，
 不改变既有报告的 `review_identity_sha256`；批准动作本身不能使授权它的审阅身份失效。
-
-⚠ 这里曾有第三道（所以上面那句原本写作“三道”）：「当前合并决议不是校准 FAIL，
-也不存在与本文本绑定的历史校准 FAIL」。
-它的输入是 automated FAIL，随自动放行门一并消失。**⇒ 没有任何机制会替人否决一个候选。**
-全部语义结论进 `verification` 清单，人逐项核对后以 actor/reason/review-token 路径记
-`human_verification`；矛盾线索仍逐条呈现（三条候选各一行，凭据键 `<候选>:<文本指纹>`，
-可逐条 wontfix），但它们**报**而不**拦**。
+review identity 的可见证据面自判官退役后只剩机械检查与候选主体。
 
 `--revalidate --actor <id> --reason <why>` 与 `--apply-edit` 不能互换：前者对活动 `.INVALID`
 重建派生字段、重判并强审计提升，保留原 prompts/model/inputs 与生成轮次，记录 raw/canonical
 SHA-256、RFC 6901 改动路径和 `edited_by_human`；后者消费 v2 `hook_edit.json`，归档当前正式
-hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本身份自动过期。两条都是 0 次 LLM
+hook 并形成一轮新的局部人工修订，改字后旧批准按字节绑定自动失效。两条都是 0 次 LLM
 调用，但 apply-edit 的人工内容工作量不等于零。
 
 ### 5.1 `stage6/wontfix.json` —— 语义结论的人工闭环
 
-本层两条语义判据（`hook_semantic_contradiction` 与 `hook_candidate_contradiction`，
-**都只提示不阻断**）的人工豁免走这里。前者曾是 HARD，随自动放行门下线降为 `unver`。
+本层判据的人工豁免走这里。两条语义判据（`hook_semantic_contradiction` /
+`hook_candidate_contradiction`）已随判官退役删除；现役豁免对象是机械判据的提示行。
 
 `stage6.hook --wontfix '<book>|<判据>[|<证据键>]=<理由>'`，形状与账本模型与 stage5 那份
 **完全相同**（`novel/wontfix.py` 是唯一的机制落点）。本层特有的三条：
@@ -345,15 +272,13 @@ hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本�
 | 约束 | 说明 |
 |---|---|
 | **一律 `book` 级** | 候选是同一次调用产的三条，没有章这一维；候选身份在证据键里（`<候选>:<原字节>`）。写章号 ⇒ 显式终态 |
-| **`coverage=uncertain` 逐条可寻址** | 它的证据是 `<候选>:<文本指纹>`。⚠ 原来是空列表 ⇒ 收敛键恒为空串 ⇒ 三条候选共用一个键，一次豁免会一并豁免三条 |
-| **豁免不是通行证** | 它只降 `actionable` 并打标，批准闸那把尺子一格不松：字节绑定照拒、`basis` 仍只能是 `human_verification`、结论照旧留在报告里。⚠ 曾写作「`require_selectable` 照旧拒绝有矛盾的候选」——那个函数已删除，且**没有任何机制会替人否决一个候选**。「有人看过并决定不修」≠「这条不再是问题」，但拦住它的是读证据的人，不是闸 |
+| **豁免不是通行证** | 它只降 `actionable` 并打标，批准闸那把尺子一格不松：字节绑定照拒、`basis` 取值面不变、结论照旧留在报告里。「有人看过并决定不修」≠「这条不再是问题」 |
 
-`at` 记的是人当时看的那一版：语义判据记 `semantic_<n>:<产物指纹>`，机械判据记
-`hook:<产物指纹>`。**它是审计账，不参与匹配**——失效由证据自身保证（文本一改键就失配）。
+`at` 记的是人当时看的那一版：机械判据记 `hook:<产物指纹>`（判官锚点已随退役移除）。**它是审计账，不参与匹配**——失效由证据自身保证（文本一改键就失配）。
 
 ## 六、现役判据
 
-当前注册表共 **25 条**：**6 hard、8 info、6 metric、5 unver**。
+当前注册表共 **22 条**：**6 hard、7 info、5 metric、4 unver**（三条语义判据随判官退役删除，2026-09-15）。
 
 | 判据 | 级别 | 作用 |
 |---|---|---|
@@ -371,26 +296,23 @@ hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本�
 | `hook_quote_style` | INFO | 引号体贴近原作文案 |
 | `hook_quote_unbalanced` | INFO | 引号配对异常不静默修 |
 | `hook_ending_shape` | INFO | 最后一击形态贴近原作文案 |
-| `hook_candidate_contradiction` | INFO/semantic | 按 A/B 合并决议逐候选列出 FAIL 矛盾与 UNVER 不确定项 |
 | `hook_report` | metric | 下发范围、各文本字数、原作文案字数 |
 | `hook_quote_shape` | metric | 引语条数、最长引语、对白比 |
 | `hook_secret_literal` | metric | 与 secret 原文的字面重合读数，不是剧透门 |
 | `hook_fact_attribution` | metric | 人物赠与类事实的弱字面归因读数 |
 | `hook_source_distance` | metric | 与原作文案段的呈现结构距离：多档窗口重合率 · 最长逐字重合 · 末行重合。**度量不是门**——它补的是 `hook_reuses_source` 看不见的那一带（逐句改写措辞、却复用信息出场顺序并落在同一句收尾上，那道 20 字闸报 0 违规）。结构贴近本身不违约（`R-9.11` 尾注明许学结构），读数是给人裁决策略去留与定稿取舍的依据 |
-| `hook_quality_rank` | metric/semantic | 六维分、代码总分与匿名排序 |
-| `hook_semantic_contradiction` | unver/semantic | ⚠ **它永远产不出 Finding**：合并决议在类型上恒 `UNVER`，实现只有一条 `unverifiable(...)` 出口。曾是 HARD（靠 automated FAIL 阻断），随自动放行门下线降级。⇒ 它报的是「这条够不着，去读判官证据」，不是「查过没问题」 |
-| `hook_not_approved` | unver | 是否已有人工定稿 |
+| `hook_not_approved` | unver | 是否已有当前定稿（自动或人工） |
 | `hook_body_missing` | unver | 连续开篇范围是否缺成稿 |
 | `hook_body_stale` | unver | 文案绑定的开篇成稿消费投影是否仍一致 |
 
 ## 9. 已封存完成组的零模型恢复
 
-legacy Hook 与双 judge 的原回答均受持久工作单元预算约束。完成组封存原 typed 目标、完整 SHA、
+legacy Hook 的原回答受持久工作单元预算约束（判官已退役）。完成组封存原 typed 目标、完整 SHA、
 原 run/parent、全部来源回答与采纳身份。`inspect_prepared_recovery` 只读验证原回答、费用、当前输入
 和提交状态；结果为 recoverable/complete/unknown，缺新工作流 manifest 不创建服务账。
-`stage6.hook` 与 `stage6.semantic` 的 `--recover-prepared <source_run_id> --subject-sha256 <proof_sha256>`
+`stage6.hook --recover-prepared <source_run_id> --subject-sha256 <proof_sha256>`
 只按 exact 原证明补正式提交和采纳，不构造模型客户端、不需要付费确认或密钥、不重发内容预算。
 
 队列与 Supervisor 在 fresh skip 和定稿之前优先处理未闭组；proof 损坏时不给 argv。完成后的旧组
 核验原审计链后退出待恢复集合，合法批准改写 Hook 或新一轮输入不会复活旧补尾任务。此入口与
-`--revalidate` 的 INVALID 原字节提升不同；它不会授予语义接受，也不替换独立 A/B judge。
+`--revalidate` 的 INVALID 原字节提升不同；它不授予任何语义接受。

@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import hashlib
-from types import SimpleNamespace
 
 import pytest
 
@@ -221,7 +220,7 @@ def test_stage6_apply_edit_normalizes_and_rejudges_the_candidate(box6):
     assert after['_provenance'].get('partial_rewrite') == '--apply-edit'
     assert after['_provenance']['prompts'] == art_before['_provenance']['prompts']
     assert list((box6.dir / 'stage6' / '_rounds').glob('hook.r*.json'))
-    # 语义结论按文本 sha1 绑定：改字之后（且盘上无语义产物）两条语义判据只能是 unver。
+    # 判官退役后本层唯一语义族只剩 prepare_semantic_review（HUMAN 前提常驻 unver）。
     semantic_rows = [r for r in report.rules if r.check_kind == 'semantic']
     assert semantic_rows and all(r.status == 'unver' for r in semantic_rows)
 
@@ -255,7 +254,7 @@ def test_stage6_formal_edit_hash_binds_normalized_text_and_checks_semantic_guard
 
     def require(_store, _art, text, label, **kwargs):
         seen.update(text=text, label=label, **kwargs)
-        return SimpleNamespace(semantic_review_seq=None), 'human_verification'
+        return 'human_selection'
 
     monkeypatch.setattr(semantic, 'require_human_resolution', require)
     box6.write('stage6/hook_edit.json', _formal_hook_edit(normalized) | {'text': raw})
@@ -265,6 +264,7 @@ def test_stage6_formal_edit_hash_binds_normalized_text_and_checks_semantic_guard
 
     assert new.approved is not None and new.approved.text == normalized
     assert new.approved.resolution.subject_sha256 == expected
+    assert new.approved.resolution.basis == 'human_selection'
     assert seen['text'] == normalized
     assert seen['expected_subject_sha256'] == expected
 

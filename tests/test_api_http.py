@@ -535,7 +535,6 @@ _EXECUTOR_PROFILE_HTTP_CASES = (
     ('stage5.write', ('--revise', '--chapters', '1'), 1),
     ('stage6.prepare', (), 1),
     ('stage6.hook', (), 2),
-    ('stage6.semantic', (), 1),
     ('stage7.rename', (), 2),
 )
 
@@ -674,8 +673,6 @@ def test_http_refuses_egress_authorization_without_an_executor_profile(client):
     ('/api/jobs', 'stage2.blueprint', ['--chapters', '1']),
     ('/api/jobs/preview', 'stage4.context', []),
     ('/api/jobs', 'stage4.context', []),
-    ('/api/jobs/preview', 'stage6.semantic', ['--dry-run']),
-    ('/api/jobs', 'stage6.semantic', ['--dry-run']),
 ])
 def test_http_executor_profile_refuses_flags_and_unmigrated_nodes(
         client, path, node, flags):

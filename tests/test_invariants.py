@@ -197,8 +197,8 @@ def test_the_three_pinned_models_are_exactly_the_decided_exceptions():
     那一格只许给产品裁决过的例外用。
     """
     pinned = {node: spec.model for node, spec in inv.NODES.items() if spec.model}
+    # stage6.semantic 判官随语义审判退役（2026-09-15）；钉死值只剩 stage4 两相。
     assert pinned == {
-        'stage6.semantic': 'deepseek-v4-pro',
         'stage4.design': 'deepseek-v4-pro',
         'stage4.plan': 'deepseek-v4-pro',
     }
@@ -387,7 +387,8 @@ def test_the_approval_union_covers_its_value_domain_exactly():
 def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
     from contracts.invariants import NODES
 
-    assert len(NODES) == 20
+    # stage6.semantic 已退役（2026-09-15）：20 → 19
+    assert len(NODES) == 19
     assert all(spec.lifecycle is not None for spec in NODES.values())
     for node, spec in NODES.items():
         life = spec.lifecycle
@@ -408,7 +409,6 @@ def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
     assert NODES['stage7.assemble'].lifecycle.review_mode == 'none'
     assert NODES['stage5.review'].lifecycle.generation_mode == 'deterministic'
     assert NODES['stage4.design'].lifecycle.session_scope != NODES['stage4.plan'].lifecycle.session_scope
-    assert NODES['stage6.semantic'].lifecycle.unit_kind == 'judge'
 
 
 def test_deterministic_rebuild_whitelist_is_free_and_deterministic():

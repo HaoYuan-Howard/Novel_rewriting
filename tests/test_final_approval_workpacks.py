@@ -19,7 +19,7 @@ from contracts.schema.stage7 import (
 )
 from novel.stages.stage6 import hook, semantic
 from novel.stages.stage7 import rename
-from tests.test_stage6_semantic import TEXT_A, TEXT_B, TEXT_C
+from tests.factories import TEXT_A, TEXT_B, TEXT_C
 from tests.factories import stage6_hook as _hook
 
 
@@ -57,15 +57,6 @@ def _stage6_materials() -> Stage6ApprovalMaterials:
 
 def _stage6_snapshot_env(monkeypatch):
     art = _hook([TEXT_A, TEXT_B, TEXT_C])
-    monkeypatch.setattr(
-        semantic, 'current_assessments',
-        lambda _store, current: {
-            semantic.text_sha1(candidate.text): semantic.CandidateAssessment(
-                state='unreviewed', reason='合成：尚无当前语义审判')
-            for candidate in current.candidates
-        })
-    monkeypatch.setattr(
-        semantic, 'current_judge_rankings', lambda _store, _art: None)
     monkeypatch.setattr(hook, '_Upstreams', lambda *_args: object())
     monkeypatch.setattr(hook, '_approval_materials', lambda *_args: _stage6_materials())
     monkeypatch.setattr(hook, '_judge_artifact', lambda *_args: [])
@@ -106,7 +97,7 @@ def test_stage6_workpack_hash_is_stable_after_approval_and_old_approval_is_not_c
     resolution = HookApprovalResolution(
         actor='reviewer-a', reason='逐项核验 A/B 与机械证据',
         subject_sha256=before.candidates[0].subject_sha256,
-        basis='human_verification',
+        basis='human_selection',
         workpack_sha256=before.workpack_sha256,
         review_identity_sha256=before.review_identity_sha256,
     )
@@ -207,7 +198,7 @@ def test_stage6_current_check_reuses_candidate_baseline_in_one_invocation(
     resolution = HookApprovalResolution(
         actor='reviewer-a', reason='逐项复核同一不可变工作包',
         subject_sha256=semantic.text_sha256(candidate.text),
-        basis='human_verification',
+        basis='human_selection',
         review_identity_sha256='e' * 64,
     )
     art = base_art.model_copy(update={'approved': ApprovedHook(
@@ -303,7 +294,7 @@ def test_stage6_exact_replay_is_idempotent_but_a_new_reason_is_a_new_statement(
     resolution = HookApprovalResolution(
         actor='reviewer-a', reason='第一份人工声明',
         subject_sha256=review_pack.candidates[0].subject_sha256,
-        basis='human_verification',
+        basis='human_selection',
         workpack_sha256=review_pack.workpack_sha256,
         review_identity_sha256=review_pack.review_identity_sha256,
     )
@@ -320,11 +311,7 @@ def test_stage6_exact_replay_is_idempotent_but_a_new_reason_is_a_new_statement(
         lambda _store, _art: (current_pack, report))
     monkeypatch.setattr(
         semantic, 'require_human_resolution',
-        lambda *_args, **_kwargs: (
-            semantic.CandidateAssessment(
-                state='unreviewed', reason='人工终审'),
-            'human_verification',
-        ))
+        lambda *_args, **_kwargs: 'human_selection')
     monkeypatch.setattr(hook, '_Upstreams', lambda *_args: object())
     monkeypatch.setattr(hook, '_judge_artifact', lambda *_args: [])
     monkeypatch.setattr(hook, '_report', lambda *_args: report)
@@ -351,10 +338,9 @@ def _legacy_stage6_approval(monkeypatch):
     pack, _report = hook._approval_workpack_snapshot(snapshot_store, art)
     candidate = art.candidates[0]
     resolution = HookApprovalResolution(
-        actor='legacy-reviewer', reason='旧契约下逐项核过三候选与语义证据',
+        actor='legacy-reviewer', reason='旧契约下逐项核过三候选与机械证据',
         subject_sha256=pack.candidates[0].subject_sha256,
-        basis='human_verification',
-        semantic_review_seq=pack.candidates[0].semantic_review_seq,
+        basis='human_selection',
         workpack_sha256=pack.workpack_sha256,
         review_identity_sha256=None,
     )
@@ -390,7 +376,6 @@ def test_stage6_legacy_rebind_only_adds_stable_identity_and_preserves_statement(
         before_resolution.subject_sha256,
     )
     assert resolution.basis == before_resolution.basis
-    assert resolution.semantic_review_seq == before_resolution.semantic_review_seq
     assert resolution.workpack_sha256 == before_resolution.workpack_sha256
     assert resolution.review_identity_sha256 is not None
     assert before_approval is not None

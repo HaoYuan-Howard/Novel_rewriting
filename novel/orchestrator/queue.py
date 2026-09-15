@@ -62,11 +62,15 @@ from novel.orchestrator.nodes import build_steps, flag_value, shell_line
 from novel.stages.stage4.phase_state import current_infeasible_binding
 from novel.store import ArtifactStore
 
-#: 人做的那几个动作。**队列永不自动排它们**——`stage6.approve` 换一条候选、
-#: `--apply-edit` 改一个字，都是「人看过之后的裁决」，机器替不了。
+#: 人做的那几个动作。**队列永不自动排它们**——`--apply-edit` 改一个字是
+#: 「人看过之后的裁决」，机器替不了。
 #: ⚠ 它们进 `blocked` 而不是被跳过：被跳过的闸门在界面上与「不需要它」长得一样。
+#: ⚠ `stage6.approve` 已移出（2026-09-15 全自动裁决）：默认槽位序自动定稿是
+#:   队列的普通 todo；人工改选（--pick）是后置动作，不再构成闸门。stage0/stage7
+#:   的 approve 闸在批次 B 随各自人工审批退役一并处理。
 HUMAN_NODES: frozenset[str] = frozenset(
-    {n for n in NODES if n.endswith('.approve')} | {'stage0.edit'})
+    {n for n in NODES if n.endswith('.approve')} - {'stage6.approve'}
+    | {'stage0.edit'})
 
 #: ``stage0.edit`` is a human capability, not a mandatory gate.  Listing it as
 #: an automatic step would make every book wait forever for an edit the user
@@ -313,7 +317,6 @@ def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> 
     """
     model_rel = {
         'stage0.approve': (Stage0Revisions, STAGE0_REVISIONS),
-        'stage6.approve': (Hook, STAGE6_HOOK),
         'stage7.approve': (NameMap, STAGE7_NAME_MAP),
     }.get(node)
     if model_rel is None:
@@ -324,9 +327,6 @@ def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> 
         store = ArtifactStore(st.readonly_ctx(
             novel_dir, node, approvals.projection_code()))
         artifact, _ = store.read_own(model, rel)
-        if node == 'stage6.approve':
-            from novel.stages.stage6 import hook
-            return hook.approval_is_current(store, artifact)
         if node == 'stage7.approve':
             from novel.stages.stage7 import rename
             return rename.approval_is_current(store, artifact)
@@ -340,6 +340,28 @@ def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> 
         stage0_revisions.verify_chain(artifact)
         return is_stage0_executable(stage0_revisions.snapshot_of(artifact))
     raise AssertionError(f'未登记的人工闸门 current 判定：{node}')
+
+
+def _stage6_approval_current(
+    base: str | os.PathLike[str], sid: str,
+) -> bool:
+    """stage6.approve（自动定稿）是否已闭合：hook.json 在盘且定稿 current。
+
+    读 typed 产物本体（approved 键不在 overview 快照里）；缺盘、不可读或
+    未定稿一律 False——producer 真跑时会给准确理由，这里只答「还要不要跑」。
+    """
+    from novel.stages.stage6 import hook as stage6_hook
+    try:
+        novel_dir = paths.resolve_novel_dir(base, sid)
+        store = ArtifactStore(st.readonly_ctx(
+            novel_dir, 'stage6.approve', approvals.projection_code()))
+        artifact, _raw = store.read_own(Hook, STAGE6_HOOK)
+    except (TerminalState, Exception):
+        return False
+    try:
+        return stage6_hook.approval_is_current(store, artifact)
+    except Exception:  # noqa: BLE001 - 判不了当作未闭合，producer 跑时再精确报错
+        return False
 
 
 def _stage4_replan_required(base: str | os.PathLike[str], sid: str) -> bool:
@@ -371,7 +393,7 @@ def prepared_delivery_recovery_item(
 ) -> QueueItem | None:
     """producer 严格检查后才发布免费补尾；此查询不补账、不因文件存在发命令。"""
     from novel.stages.stage4 import design_recovery, plan_recovery
-    from novel.stages.stage6 import hook, semantic, prepare
+    from novel.stages.stage6 import hook, prepare
     from novel.stages.stage7 import rename
     from novel.work_units import workflow_manifest
 
@@ -381,7 +403,7 @@ def prepared_delivery_recovery_item(
     if book is None:
         return None
     pending = []
-    for node, producer in (('stage4.design', design_recovery), ('stage4.plan', plan_recovery), ('stage6.prepare', prepare), ('stage6.hook', hook), ('stage6.semantic', semantic), ('stage7.rename', rename)):
+    for node, producer in (('stage4.design', design_recovery), ('stage4.plan', plan_recovery), ('stage6.prepare', prepare), ('stage6.hook', hook), ('stage7.rename', rename)):
         if STAGES.index(NODES[node].stage) > STAGES.index(until_stage):
             continue
         inspected = producer.inspect_prepared_recovery(st.readonly_ctx(book, node, code))
@@ -585,7 +607,14 @@ def plan_book_from_overview(
             if ghosts:
                 why_blocked = WAITING_ON_INBOX
 
+        stage6_approve_pending = node == 'stage6.approve'
         verdict, why = st.resume_verdict(ov, node)
+        if stage6_approve_pending and verdict == st.RESUME_SKIP:
+            if _stage6_approval_current(base, sid):
+                continue                  # 已有当前定稿（自动或人工）：无事可做
+            verdict, why = st.RESUME_RUN, (
+                '开篇文案尚无当前定稿——运行 stage6.approve 自动定稿（0 成本）；'
+                '人工改选后失配的同一条路免费重定稿')
         if blueprint_repair_reason is not None:
             why = blueprint_repair_reason
         if projection_recovery and why_blocked is None:

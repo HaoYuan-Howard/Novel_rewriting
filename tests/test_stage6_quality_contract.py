@@ -277,7 +277,7 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
 
 
 def test_current_stage6_freshness_binds_source_hook_and_measurement_contract():
-    for node in ('stage6.hook', 'stage6.semantic'):
+    for node in ('stage6.hook',):
         project = projection_for(node, 'stage1/hook_copy.json')
         assert project is not None
         assert project({'text': '原作文案'}) == {

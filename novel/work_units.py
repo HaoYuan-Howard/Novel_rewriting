@@ -378,7 +378,7 @@ class WorkUnitBudget:
                 spec.unit_kind in ('book', 'candidate_batch') and scope == 'book'
                 or spec.unit_kind in ('chapter', 'ambiguous_chapter') and chapter_scope
                 or spec.unit_kind == 'strategy_and_chapter' and (scope == 'strategy' or chapter_scope)
-                or spec.unit_kind == 'judge' and scope in ('judge:a', 'judge:b'))
+                )
         if not allowed_role or not allowed_scope:
             raise WorkUnitRefused('模型角色或工作单元范围未在节点生命周期登记')
         if not scope or len(scope) > 160 or any(ord(c) < 32 for c in scope):
@@ -1189,11 +1189,6 @@ def executor_scope(node: str, purpose: str, progress: Any = None) -> str:
         chapter = progress.get('chapter_ordinal', progress.get('chapter', chapter))
     if node == 'stage4.design' and 'strategy' in purpose:
         return 'strategy'
-    if node == 'stage6.semantic':
-        match = re.search(r'(?:judge|semantic)[.:_-]([abAB])(?:\b|[.:_-])', purpose)
-        if match:
-            return 'judge:' + match.group(1).lower()
-        raise WorkUnitRefused('语义 judge 请求缺显式 A/B 工作单元')
     if chapter is None:
         match = re.search(r'(?:chapter|ch)[.:_-]?(\d+)', purpose)
         if match is None:

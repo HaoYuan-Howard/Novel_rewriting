@@ -1464,8 +1464,8 @@ HOOK_APPROACHES: Final = ('source_architecture', 'payoff_preview', 'scene_punchl
 #: `candidates[0].approach` 就是 `source_architecture`。把它从 `Literal` 里删掉
 #: 等于再来一次形状破坏 + 该书 stage6 层当场拒读，而那三条候选正是退场裁决所依据的
 #: **对照臂**——为了让退场看上去干净而删掉判它退场的证据，是把账做没了。
-#: ⚠ 它与 `HOOK_SEMANTIC_STATES` 删掉的那两个取值**不是同一件事**：那两个取值
-#: 任何宿主都产不出来（死分支），这一个**在盘上真实存在**（历史数据）。
+#: ⚠ 退场的写法**在盘上真实存在**（历史数据），载体保留可读；
+#: 死分支枚举则直接删除（如已退役的 HOOK_SEMANTIC_STATES 两态）。
 HOOK_RETIRED_APPROACHES: Final = ('source_architecture',)
 
 #: **当前配方**：一次调用产 `len(HOOK_SLOTS)` 条候选，按位置逐条指定写法。
@@ -1498,7 +1498,6 @@ HOOK_SLOTS: Final = ('c1', 'c2', 'c3')
 
 #: Stage6 双盲判官的完整角色面。工作包、语义产物与 executor run 都只能出现这两名；
 #: API schema 不得用 ``Literal['A', 'B']`` 另抄一份取值面。
-STAGE6_JUDGE_ROLES: Final = ('A', 'B')
 
 
 def slot_of(index: int) -> str:
@@ -1521,7 +1520,6 @@ def slot_of(index: int) -> str:
 #: 绿灯保留一条渲染分支，而读的人会以为「只是这次没绿」。
 #: 现在只剩两个，而且它们答的是不同的问题：``unreviewed`` = 没有可用的当前审判，
 #: ``uncertain`` = 判过、有证据、但本仓不替人盖章。
-HOOK_SEMANTIC_STATES: Final = ('uncertain', 'unreviewed')
 
 #: **在编写法**各自的一句说明。**键必须与 `HOOK_CURRENT_APPROACHES` 逐字相等**
 #: （下面有 import 期断言）。它逐字进 `HOOK_SYS`——原型把这几句写在产地的一个 dict 里，
@@ -1695,6 +1693,9 @@ FREE_ENTRIES: Final = {
     #   ⇒ 一次**纯记账、一个请求都不发**的动作会当场要 `--yes` 二次确认。
     #   实测就是这么发现的（真跑 CLI 被拦下）。**表不全 ⇒ 系统在对用户说假话。**
     '--wontfix': '把一条「这条我不修」记进 <stage>/wontfix.json，纯记账、不调用',
+    # stage6.approve 的默认跑法（2026-09-15 全自动裁决）：固定槽位序自动定稿，
+    # 0 成本、0 模型；显式声明使 argv 自述「这是一次自动定稿」。
+    '--auto': 'stage6.approve 默认定稿跑法：按固定槽位序自动定稿（0 成本）',
     '--retain-pretrim': ('人工确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，'
                          '0 次 LLM 调用（不是 0 人工成本）'),
     '--retain-pretrim-batch': ('按显式 manifest 一次销账多章 trim；整批预检、按章幂等写'
@@ -1997,8 +1998,6 @@ NODE_WRITE_EFFECTS: Final = {
         '原 producer 已停止后，以独立免费 committer 补完 Stage4B 聚合与原采用尾账',
     ('stage6.hook', '--recover-prepared'):
         '按原完成组补 stage6/hook.json、原 run 采纳审计及工作单元提交状态（0 模型）',
-    ('stage6.semantic', '--recover-prepared'):
-        '按原双盲完成组补原序号 semantic 产物、双采纳审计及工作单元提交状态（0 模型）',
     ('stage4.design', '--close-review'):
         '_service/approvals/<sid>.json（完整继承当前 A 策略与逐章有效决定，不新增语义接受）',
     ('stage4.plan', '--close-review'):
@@ -2104,8 +2103,8 @@ class NodeSpec(NamedTuple):
     #   2026-08-19/20 用户裁决「除语义判官外全链 flash」，而例外必须长成形状
     #   而不是纪律——此前靠每条命令记得带 `DEEPSEEK_MODEL`，忘一次就静默烧成
     #   flash 判官，账本事后才看得出来。
-    # ⚠⚠ **现有两个钉死值，而它们的理由不是同一个**，不许互相援引：
-    #   · `stage6.semantic` = **判官给不出有区分度的证据**（质量死刑，2026-08-20）。
+    # ⚠⚠ 钉死值现只剩 stage4 两个（stage6.semantic 判官随语义审判退役，
+    #   2026-09-15），理由不许互相援引：
     #   · `stage4.design` = 小型整书策略 + 逐章私有 session；
     #     `stage4.plan` = 机械 baseline + 仅歧义章私有 session（最多 4 并发）。
     #     它们的模型默认是产品裁决，不得再用「两相各一次全书调用」
@@ -2316,8 +2315,9 @@ NODES: Final[dict[str, NodeSpec]] = {
     #       而书级语义判官在同一本书上 18 章里 5 章命题抽取返回 uncertain、
     #       8 条 secret 全部判不动；
     #     · 成本上它占单本实付调用的 54%、输出 token 的 55%。
-    #   ⇒ 下线的是**节点**不是能力：`stage6.semantic` 保留（2 次调用、1.7% token，
-    #   实测直接纠正过一次定稿）。要恢复请连同 `contracts/schema/stage5.py` 的
+    #   ⇒ 下线的是**节点**不是能力。`stage6.semantic` 曾据此多保留了近一个月，
+    #   也已于 2026-09-15 随全自动裁决整体退役。要恢复 stage5 那个请连同
+    #   `contracts/schema/stage5.py` 的
     #   `SemanticReview` 一族、`novel/stages/stage5/semantic.py` 与两条判据一起恢复。
     # ⚠ `--revalidate` 是 F 期移植时补的，而它是**新加那道落盘闸门的必然配套**：
     #   本层一次产三条候选，闸门拦的是「一条干净候选都没有」；不给一条 0 成本的提升路，
@@ -2343,29 +2343,17 @@ NODES: Final[dict[str, NodeSpec]] = {
                                         '--response-repair'),
                                  produces=(artifact_paths.STAGE6_HOOK,),
                                  operator_redo='canonical'),
-    # 付费语义审判是字面探针的 companion（R-9.19/R-9.20）：
-    # 不接 `--check-only`，否则一层两个复检节点、HTTP kind 路由产生歧义。
-    # ⚠ 它是全链**唯一**的语义审判节点（stage5 那一个已于 2026-08-17 下线）。
-    # 保留它的实测依据：2 次调用 / 1.7% 输出 token，而它的匿名质量排序在实跑中
-    # 直接纠正过一次定稿——性价比与被下线的那个不在一个量级。
-    # ⚠⚠ `model` 钉死 `deepseek-v4-pro`（2026-08-19/20 用户裁决，**两个钉死值中的
-    #   第一个**；另一个是 `stage4.plan`，理由完全不同，见那一格）：
-    #   flash 判官在有 ground truth 的样本上把唯一与正文矛盾的候选
-    #   判 PASS 并排成第一名，证据区间圈成候选全文（等于没有指向）——对「结论必须
-    #   绑证据」的判官是死刑。钉在本表 ⇒ `DEEPSEEK_MODEL` 换不掉它。
-    'stage6.semantic':  NodeSpec('stage6', 'R-9',  True,  'stage6 文案语义审判',
-                                 lifecycle=NodeLifecycleSpec('judge', '匿名候选与独立 A/B 证据工作包', 'executor', 'none', '只产带证据 UNVER，交 stage6.approve', ('self_correct', 'stop'), ('stage6.semantic',), 'executor:judge_A / executor:judge_B', ('--recover-prepared', 'saved_response', 'prepared_commit')),
-                                 flags=('--dry-run', '--response-repair', '--recover-prepared', '--subject-sha256'),
-                                 produces=(artifact_paths.STAGE6_SEMANTIC,),
-                                 model='deepseek-v4-pro'),
+    # ⚠ `stage6.semantic`（A/B 双盲语义审判）已于 2026-09-15 随全自动裁决整节点
+    #   退役（移入 RETIRED_NODES 保住历史账解码）：它只产带证据的 UNVER 参考，
+    #   全自动流水线不再有任何语义审判面。依赖它的三条判据
+    #   （hook_semantic_contradiction / hook_candidate_contradiction /
+    #   hook_quality_rank）同步退役；旧书 semantic_N.json 只读保留。
     # ⚠ `--pick` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`）。
     #   本节点的 `flags` 从前是空的，注释写着「候选序号是它们的参数，参数名属 F 期」。
     'stage6.approve':   NodeSpec('stage6', 'R-9',  False, 'stage6 文案定稿',
-                                 lifecycle=NodeLifecycleSpec('candidate_batch', '三候选与两名 judge 的完整 workpack', 'human_submission', 'human', '当前候选的 typed pick', ('accept', 'stop'), ('stage6.hook',), 'human:hook_approval', ('typed_replay', '--review-token'), 0, approval_bindings=(('stage6.approve', 'hook'),), approval_projection=('gate', 's6')),
-                                 flags=('--pick', '--actor', '--reason',
+                                 lifecycle=NodeLifecycleSpec('candidate_batch', '三候选与完整机械 workpack', 'deterministic', 'human', '默认槽位序自动定稿；人工改选随时可做、不阻塞下游', ('accept', 'stop'), ('stage6.hook',), 'none', ('typed_replay', '--review-token'), 0, approval_bindings=(('stage6.approve', 'hook'),), approval_projection=('gate', 's6')),
+                                 flags=('--auto', '--pick', '--actor', '--reason',
                                         '--review-token'),
-                                 required_flags=('--pick', '--actor', '--reason',
-                                                 '--review-token'),
                                  produces=(artifact_paths.STAGE6_HOOK,)),
     # ⚠ `--revalidate` 是 F2 补的：本层加了落盘闸门（**任何一条 hard ⇒ `.INVALID`**，
     #   不照 stage6——那一层一次产三份，拦的是「一条干净候选都没有」），
@@ -2430,7 +2418,7 @@ AGENT_EXECUTOR_NODES: Final = (
     'stage2.analyze', 'stage2.characters', 'stage2.global', 'stage2.blueprint',
     'stage4.design', 'stage4.plan',
     'stage5.write',
-    'stage6.prepare', 'stage6.hook', 'stage6.semantic',
+    'stage6.prepare', 'stage6.hook',
     'stage7.rename',
 )
 
@@ -2477,7 +2465,6 @@ CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
     ('stage4.design', '--recover-prepared'): ('--subject-sha256',),
     ('stage6.prepare', '--recover-prepared'): ('--subject-sha256',),
     ('stage6.hook', '--recover-prepared'): ('--subject-sha256',),
-    ('stage6.semantic', '--recover-prepared'): ('--subject-sha256',),
     ('stage7.rename', '--recover-prepared'): ('--subject-sha256',),
     ('stage7.rename', '--revalidate'): ('--actor', '--reason'),
 }
@@ -2503,7 +2490,7 @@ STAGES: Final = ('stage0', 'stage1', 'stage2', 'stage4', 'stage5', 'stage6', 'st
 
 # 只供 append-only 作业/队列历史解码。它们不进 NODES/STAGES，因此不能 preview、
 # 调度或创建新队列；删除这两个名字会让既有 jobs.jsonl / queues.jsonl 整流不可读。
-RETIRED_NODES: Final = ('stage3.style',)
+RETIRED_NODES: Final = ('stage3.style', 'stage6.semantic')
 RETIRED_STAGES: Final = ('stage3',)
 
 #: `stage` → 它的需求节。**从 `NODES` 派生，不许手抄。**

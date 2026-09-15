@@ -48,7 +48,7 @@ from contracts.artifacts import (
     STAGE5_REVIEWER_REWRITE_REQUEST,
     STAGE5_REVIEW, STAGE5_TRIM_AUDIT, STAGE5_TRIM_RESOLUTION,
     STAGE5_WONTFIX, STAGE6_HOOK,
-    STAGE6_HOOK_EDIT, STAGE6_SEMANTIC, STAGE6_WONTFIX, STAGE7_NAME_MAP,
+    STAGE6_HOOK_EDIT, STAGE6_WONTFIX, STAGE7_NAME_MAP,
     STAGE7_NAME_MAP_EDIT,
 )
 
@@ -126,8 +126,7 @@ from contracts.schema.corpus import (
     CorpusSkipExpectation, LedgerTokenSummary,
 )
 from contracts.schema.evaluation import (
-    EvaluatorFingerprint, EvidenceRef,
-    JudgeDecision, SemanticDecision,
+    EvidenceRef,
     TrimAudit, TrimResolution,
 )
 from contracts.schema.report import (
@@ -198,7 +197,7 @@ from contracts.schema.stage5 import (
 )
 from contracts.schema.stage6 import (
     ApprovedHook, Candidate, Hook, HookApprovalResolution, HookEdit,
-    HookSemanticResponse, HookSemanticReview, Mech,
+    Mech,
 )
 from contracts.artifacts import (STAGE6_PREPARE, STAGE6_PREPARE_EDIT, STAGE6_PREPARE_REVIEW,
     STAGE6_PREPARE_REVIEW_DECISIONS, STAGE6_PREPARE_COMMIT)
@@ -365,7 +364,6 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE6_HOOK_EDIT: ArtifactSpec(HookEdit, 2),
     # v2 新增判官实际看见的 Stage5 开篇成稿 `judged`绑定；
     # 旧 v1 不能证明正文改字后语义结论仍然 current。
-    STAGE6_SEMANTIC: ArtifactSpec(HookSemanticReview, 3),
     STAGE6_WONTFIX: ArtifactSpec(WontFix),
     STAGE7_NAME_MAP: ArtifactSpec(NameMap, 3),
     STAGE7_NAME_MAP_EDIT: ArtifactSpec(NameMapEdit),
@@ -495,7 +493,7 @@ __all__ = [
     'Finding', 'WontFixNote', 'WontFix', 'WontFixEntry', 'Severity', 'Owner',
     'CorpusArtifactEntry', 'CorpusBookEntry', 'CorpusLedgerSummary',
     'CorpusManifest', 'CorpusSkipExpectation', 'LedgerTokenSummary',
-    'EvidenceRef', 'EvaluatorFingerprint', 'JudgeDecision', 'SemanticDecision',
+    'EvidenceRef',
     'TrimAudit', 'TrimResolution',
     # 校验报告（`_report.md`）——**不是产物**，所以不在 `ARTIFACTS` 里
     'CheckReport', 'RuleLine', 'ProvenanceSection', 'EdgeLine',
@@ -562,7 +560,7 @@ __all__ = [
     'reviewer_rewrite_successor_journal_sha256',
     'Review', 'ReviewChapter', 'JudgedDraft', 'DraftConsumed',
     'Hook', 'Candidate', 'ApprovedHook', 'HookApprovalResolution', 'Mech',
-    'HookSemanticResponse', 'HookSemanticReview', 'HookEdit',
+    'HookEdit',
     'NameMap', 'NameDecision', 'ExtraSub', 'Residual', 'StemBaseline', 'BookTxt',
     'IdentityBaseline', 'NameMapEdit', 'CharacterPatch', 'NameMapResponse',
     # 路由表

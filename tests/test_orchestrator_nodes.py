@@ -42,8 +42,9 @@ CASES = [
 def _bare(node: str) -> list[str]:
     """这个节点「不带任何跑法 flag」时的最小可执行 flags。
 
-    ⚠ 不是空列表：两个 `*.approve` 有必填的人工凭据（`NodeSpec.required_flags`），
+    ⚠ 不是空列表：人工 approve 节点有必填的人工凭据（`NodeSpec.required_flags`），
     少一个就拼不出 argv。想测「默认路径」的那几条要的是**默认跑法**，不是**空 flags**。
+    （`stage6.approve` 已改自动定稿，默认无必填项。）
     """
     out: list[str] = []
     for extra in N.missing_required(node, out):
@@ -55,7 +56,7 @@ def _args(flag: str, node: str | None = None) -> list[str]:
     """带值 flag 补一个值——不补的话拒收的是「没给值」，测不到我们想测的那件事。
 
     ⚠ 给了 node 就把该节点的**必填项**一并补齐（`NodeSpec.required_flags`）：
-    `stage0.approve` / `stage6.approve` 少一个人工凭据就拼不出可执行 argv，
+    `stage0.approve` 少一个人工凭据就拼不出可执行 argv，
     而这张表想测的是「这条 flag 该节点认不认」，不是「必填项齐不齐」——
     后者有它自己的专测。
     """
@@ -151,7 +152,8 @@ def test_the_matrix_actually_has_rows():
     """参数化表算空时，下面几十条会**全绿**——而那正是最坏的情况。"""
     assert len(CASES) > 25, f'node × flag 只铺出 {len(CASES)} 行，节点表多半被清空了'
     # Stage3 已退役；人物独立抽取新增一个 Executor，不新增 Commander。
-    assert len(NODES) == 20, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
+    # stage6.semantic 判官节点退役（2026-09-15）后现役节点数是 19。
+    assert len(NODES) == 19, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
 
 
 # ───────────────────────── 贵贱（R-11.7 · Q-10） ─────────────────────────
@@ -258,8 +260,6 @@ def test_node_specific_write_effects_keep_all_three_identity_behaviors_distinct(
             '原 producer 已停止后，以独立免费 committer 补完 Stage4B 聚合与原采用尾账',
         ('stage6.hook', '--recover-prepared'):
             '按原完成组补 stage6/hook.json、原 run 采纳审计及工作单元提交状态（0 模型）',
-        ('stage6.semantic', '--recover-prepared'):
-            '按原双盲完成组补原序号 semantic 产物、双采纳审计及工作单元提交状态（0 模型）',
         ('stage7.rename', '--recover-prepared'):
             '按原完成组补 name_map.json、原 run 采纳及工作单元提交状态（0 模型）',
         # Stage2 语义审阅退役：两个 stage2 节点的 `--close-review` 特例随审阅席位一并删除。
@@ -310,7 +310,7 @@ def test_every_registered_run_mode_builds_a_command(node, flag):
         if (node, flag) == ('stage5.write', '--subject-sha256')
         else ['--recover-prepared', 'source-run-1', '--subject-sha256', 'a' * 64]
         if node in ('stage4.design', 'stage4.plan', 'stage6.prepare', 'stage6.hook',
-                    'stage6.semantic', 'stage7.rename') and flag in {
+                    'stage7.rename') and flag in {
             '--recover-prepared', '--subject-sha256'}
         else (_stage5_edit_flags()
               if node == 'stage5.write' and flag in _STAGE5_EDIT_FLAGS
@@ -522,15 +522,17 @@ def test_executor_profile_refuses_unmigrated_nodes_and_unknown_capability_pairs(
         )
 
 
-def test_executor_runtime_registries_close_over_the_same_eleven_nodes():
+def test_executor_runtime_registries_close_over_the_same_nodes():
     """能力公开面、跑法矩阵与真实 factory 缺任何一边都必须响亮地红。"""
     from novel.orchestrator.node_agents import EXECUTOR_FACTORIES
 
     expected = set(AGENT_EXECUTOR_NODES)
-    assert len(expected) == len(N.EXECUTOR_PROFILED_RUNS) == 11
-    # 17 = 现役登记的付费组合总数；stage2 三节点的 `--review-token` 组合
-    # 已随语义审阅退役从生产登记移除（2026-09），不再留豁免。
-    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 17
+    # stage6.semantic 判官退役（2026-09-15）后现役 executor 面是 10 个节点。
+    assert len(expected) == len(N.EXECUTOR_PROFILED_RUNS) == 10
+    # 16 = 现役登记的付费组合总数；stage2 三节点的 `--review-token` 组合
+    # 已随语义审阅退役移除（2026-09）；stage6.semantic 的默认组合已随判官
+    # 节点退役移除（2026-09-15），不再留豁免。
+    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 16
     assert set(EXECUTOR_FACTORIES) == set(N.EXECUTOR_PROFILED_RUNS) == expected
 
 
@@ -561,7 +563,7 @@ def test_explicit_legacy_backend_freezes_provider_profile_into_argv_and_step():
         provider='deepseek', model='deepseek-v4-pro',
         reasoning_effort='high', thinking_mode='on'))
     [step] = N.build_steps(
-        'stage6.semantic', SID, base=BASE,
+        'stage4.design', SID, base=BASE,
         executor_backend=backend, egress_authorized=True)
 
     assert step.executor_backend == backend
@@ -581,7 +583,7 @@ def test_legacy_flash_refuses_nodes_whose_contract_pins_pro():
         reasoning_effort='high', thinking_mode='on'))
     with pytest.raises(UnsupportedRunMode, match='钉死 deepseek-v4-pro'):
         N.build_steps(
-            'stage6.semantic', SID, base=BASE,
+            'stage4.design', SID, base=BASE,
             executor_backend=backend, egress_authorized=True)
 
 

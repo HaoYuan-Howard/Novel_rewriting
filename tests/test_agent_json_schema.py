@@ -61,7 +61,7 @@ def _models() -> dict[str, type]:
     )
     from contracts.schema.stage5 import ChapterResponse
     from contracts.schema.stage6 import (
-        HookCandidateRetryResponse, HookResponse, HookSemanticResponse,
+        HookCandidateRetryResponse, HookResponse,
     )
     from contracts.schema.stage7 import NameMapResponse
     return {
@@ -79,7 +79,6 @@ def _models() -> dict[str, type]:
         'stage5.write': ChapterResponse,
         'stage6.hook': HookResponse,
         'stage6.hook/retry': HookCandidateRetryResponse,
-        'stage6.semantic': HookSemanticResponse,
         'stage7.rename': NameMapResponse,
     }
 
@@ -172,8 +171,9 @@ def _enum_values(node: object) -> int:
 def test_every_agent_response_schema_only_uses_json_schema_keywords():
     """任何词表外的关键字都会让 CLI 整份拒收 ⇒ 真跑时一次模型都调不到。"""
     models = _models()
-    # 边界/逐事实/hinge 五种响应退役，现役抽取与显式修订分别验证。
-    assert len(models) == 16, '新增 Analyze 首抽；独立人物和知识仍分别覆盖修订 wire'
+    # 边界/逐事实/hinge 五种响应退役，现役抽取与显式修订分别验证；
+    # stage6.semantic 判官响应已随节点退役（2026-09-15）移出名单。
+    assert len(models) == 15, '新增 Analyze 首抽；独立人物和知识仍分别覆盖修订 wire'
     for label, model_cls in models.items():
         outside = sorted(_keywords(agent_json_schema(model_cls)) - _VOCABULARY)
         assert not outside, f'{label} 的 schema 含词表外关键字 {outside}'

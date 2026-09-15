@@ -164,20 +164,20 @@ def test_response_survives_failure_before_submission(tmp_path):
 
 
 def test_network_attempts_do_not_spend_content_turns(tmp_path):
-    budget = WorkUnitBudget(tmp_path, '42', 'stage6.semantic', scope='judge:a')
+    budget = WorkUnitBudget(tmp_path, '42', 'stage5.write', scope='chapter:1')
     turn = budget.reserve(sha('a'), run_id='first')
     for index in range(4):
         budget.record_attempt(turn.turn_id, attempt_id=str(index), outcome='error')
     budget.finish(turn.turn_id, outcome='failed')
     assert budget.used == 1
-    assert WorkUnitBudget(tmp_path, '42', 'stage6.semantic', scope='judge:b').used == 0
+    assert WorkUnitBudget(tmp_path, '42', 'stage5.write', scope='chapter:2').used == 0
 
 
 def test_cache_group_commit_recovers_without_granting_or_spending_content_turns(tmp_path):
-    budget = WorkUnitBudget(tmp_path, '42', 'stage6.semantic', scope='judge:a')
+    budget = WorkUnitBudget(tmp_path, '42', 'stage5.write', scope='chapter:1')
     proof = {'target': '完整合成组', 'sources': ['cache:a', 'cache:b']}
     digest = budget.save_group_producer_recovery(proof)
-    restored = WorkUnitBudget(tmp_path, '42', 'stage6.semantic', scope='judge:a')
+    restored = WorkUnitBudget(tmp_path, '42', 'stage5.write', scope='chapter:1')
     assert restored.group_producer_recovery() == proof
     assert restored.group_producer_recovery_sha256 == digest
     assert restored.group_producer_completed is False
@@ -204,7 +204,7 @@ def test_cache_group_commit_recovers_without_granting_or_spending_content_turns(
 
 
 def test_unstarted_unit_inspection_never_creates_a_lock_or_registry(tmp_path):
-    unit = WorkUnitBudget(tmp_path, '42', 'stage6.semantic', scope='judge:a')
+    unit = WorkUnitBudget(tmp_path, '42', 'stage5.write', scope='chapter:1')
     before = {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
               for path in tmp_path.rglob('*')}
     assert unit.used == 0 and unit.remaining == 4
@@ -218,7 +218,7 @@ def test_unstarted_unit_inspection_never_creates_a_lock_or_registry(tmp_path):
 
 @pytest.mark.parametrize('failure', ['missing', 'tampered', 'foreign_unit'])
 def test_group_commit_damage_never_becomes_an_empty_budget(tmp_path, failure):
-    budget = WorkUnitBudget(tmp_path, '42', 'stage6.semantic', scope='judge:a')
+    budget = WorkUnitBudget(tmp_path, '42', 'stage5.write', scope='chapter:1')
     proof = {'target': '合成组'}
     digest = budget.save_group_producer_recovery(proof)
     path = budget.directory / f'{digest}.json'
@@ -230,7 +230,7 @@ def test_group_commit_damage_never_becomes_an_empty_budget(tmp_path, failure):
             blob['payload']['target'] = '被改写'
         else:
             blob['unit_id'] = WorkUnitBudget(
-                tmp_path, '42', 'stage6.semantic', scope='judge:b').unit_id
+                tmp_path, '42', 'stage5.write', scope='chapter:2').unit_id
         path.write_text(json.dumps(blob), encoding='utf-8')
     before = budget.path.read_bytes()
     with pytest.raises(WorkUnitRefused):

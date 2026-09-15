@@ -71,24 +71,13 @@ def stage6_view(base: str | os.PathLike[str], sid: str) -> Stage6View:
         )
 
     approved_slot = art.approved.slot if art.approved is not None else None
-    assessments = semantic.current_assessments(store, art)
-    # ⚠ 一条候选的全部语义格子来自**同一条** assessment，所以按文本 sha1 只查一次。
-    #   逐格现查（曾经八次）不只是白算八遍 sha1：那样写时，「某一格悄悄查了别的 key」
-    #   在 review 里看不出来，而这一屏的每一格都要能追到同一次审判。
     candidates = [
         HookCandidateLine(
             index=i, approach=c.approach, chars=_chars(c.text), text=c.text,
             subject_sha256=semantic.text_sha256(c.text),
             mech=c.mech, findings=c.findings,
-            approved=slot_of(i) == approved_slot,
-            semantic_state=a.state,
-            semantic_reason=a.reason,
-            contradictions=list(a.review.contradictions) if a.review else [],
-            quality=a.review.quality if a.review else None,
-            quality_score=a.quality_score,
-            quality_rank=a.quality_rank)
-        for i, c in enumerate(art.candidates, start=1)
-        for a in (assessments[semantic.text_sha1(c.text)],)]
+            approved=slot_of(i) == approved_slot)
+        for i, c in enumerate(art.candidates, start=1)]
     # 策略名**现算**：定稿只记「从哪条候选来」，那条候选用的什么策略去它自己那里读。
     approved_approach = (
         art.candidates[HOOK_SLOTS.index(approved_slot)].approach

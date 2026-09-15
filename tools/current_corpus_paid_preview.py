@@ -101,10 +101,9 @@ EXISTING_AUTHORIZED = {
 
 #: 跑双盲语义判官的节点 → 它问的那一类能力。
 #: ⚠ 这里曾叫 `SEMANTIC_NODES`——那个名字说的是「依赖哪一份 evaluator profile」，
-#: 而 profile 那套装置已整批下线；现在它只回答「这一步问的是什么问题」。
-SEMANTIC_NODES = {
-    'stage6.semantic': 'reference_boundary',
-}
+#: 而 profile 那套装置已整批下线；后来它登记的是双盲判官节点。
+#: `stage6.semantic` 已随判官节点退役（2026-09-15），付费预览面不再有语义 dispatch。
+SEMANTIC_NODES: dict[str, str] = {}
 
 PREREQUISITES = {
     'stage2.characters': (
@@ -353,8 +352,6 @@ def _logical_topology(node: str, chapters: int, rung_count: int,
             f'冷缓存首次生成占 {base} 次，全部槽位共用其余 {conditional} 次 '
             'low/no-thinking 定向修订；同槽 HARD 严格下降时可继续，'
             '格式纠错也占同一预算，无进展提前停止')
-    elif node == 'stage6.semantic':
-        base = 2  # judge A/B
     base_wire = base * rung_count * model_count * MAX_SAMPLES_PER_RUNG
     return {
         'base_logical_requests': base,
@@ -388,7 +385,6 @@ def _request_envelopes(node: str, models: tuple[str, ...],
         'stage4.plan': EVIDENCE_BIND_MAX_TOKENS,
         'stage5.write': stage5_write.MAX_TOKENS,
         'stage6.hook': HOOK_MAX_TOKENS,
-        'stage6.semantic': 64_000,
         'stage7.rename': RENAME_MAX_TOKENS,
     }[node]
     rows = [{

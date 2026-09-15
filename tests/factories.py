@@ -13,6 +13,12 @@ from contracts.schema.stage1 import MainText
 from novel.core.measure import body_style_metrics, measure_body
 from novel.stages.stage5.measure import Book
 
+#: 三条互异的开篇文案样本。原定义在 `tests/test_stage6_semantic.py`（已随
+#: 判官节点退役删除，2026-09-15）；审批、视图与落地链的合成样本继续消费。
+TEXT_A = '她嫁进将军府那晚，就发现枕头下压着一封没有署名的信。\n\n信里只有一句话。'
+TEXT_B = '他在城门口等了三年，等来的却是她与仇人成亲的喜帖。'
+TEXT_C = '说书人拍醒木：这故事没人讲完过，因为讲到最后的人都死了。'
+
 
 def missing_prepare_state() -> PrepareState:
     """审批接口最小样例明确登记未运行准备，不把缺字段当成未运行。"""

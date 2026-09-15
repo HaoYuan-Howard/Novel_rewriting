@@ -2873,7 +2873,7 @@ class LlmClient:
         """
         # 双盲 A/B 的现役契约要求同时发起独立请求；不能为前缀缓存把 B 挡在 A
         # 完成之后。其余节点继续沿用原首发独占策略，不增加额外 warmup wire。
-        if not self.warmup or self.ctx.node == 'stage6.semantic':
+        if not self.warmup:
             yield
             return
         with self._warmup_lock:

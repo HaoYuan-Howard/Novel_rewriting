@@ -657,12 +657,6 @@
       "layer": "unit_contract",
       "stages": []
     },
-    "tests/test_quality_evaluator.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage6"
-      ]
-    },
     "tests/test_report.py": {
       "layer": "unit_contract",
       "stages": []
@@ -1329,12 +1323,6 @@
         "stage6"
       ]
     },
-    "tests/test_stage6_agent_runs.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage6"
-      ]
-    },
     "tests/test_stage6_core_consumption.py": {
       "cases": {
         "test_prepare_recheck_has_exact_owner_scope_and_reads_independent_decision": "stage",
@@ -1359,12 +1347,6 @@
       ]
     },
     "tests/test_stage6_legacy_delivery_recovery.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage6"
-      ]
-    },
-    "tests/test_stage6_legacy_semantic_recovery.py": {
       "layer": "unit_contract",
       "stages": [
         "stage6"
@@ -1414,25 +1396,13 @@
         "stage6"
       ]
     },
+    "tests/test_stage6_auto_approve.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage6"
+      ]
+    },
     "tests/test_stage6_retry.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage6"
-      ]
-    },
-    "tests/test_stage6_semantic.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage6"
-      ]
-    },
-    "tests/test_stage6_semantic_agent.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage6"
-      ]
-    },
-    "tests/test_stage6_semantic_agent_boundary.py": {
       "layer": "unit_contract",
       "stages": [
         "stage6"
@@ -1551,18 +1521,6 @@
     "tests/test_views_stage7.py": {
       "layer": "unit_contract",
       "stages": [
-        "stage7"
-      ]
-    },
-    "tests/test_wontfix_semantic.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage0",
-        "stage1",
-        "stage2",
-        "stage4",
-        "stage5",
-        "stage6",
         "stage7"
       ]
     },
